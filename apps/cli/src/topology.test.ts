@@ -75,7 +75,7 @@ describe('renderTopology', () => {
     expect(out).toContain('↓ 指示 1m ago   ↑ 報告・確認 30s ago');
     expect(out).toContain('返事待ち question（8s agoから）: どちらにしますか');
     expect(out).toContain('作業者 worker（種類ごとに束ねた1行）: 最後の道具 Edit（4s ago）');
-    expect(out).toContain('↓ 起動 1m ago   ↑ 報告 —（未観測）   ・ 活動 4s ago');
+    expect(out).toContain('↓ 背景で起動 1m ago   ↑ 結果が戻った —（未観測）   ・ 活動 4s ago');
     expect(out).toContain('runner r1 [connected]');
   });
 
@@ -234,6 +234,28 @@ describe('topologyCommand', () => {
     expect(urls[0]).toContain('/topology/stream');
     const lines = read().trim().split('\n');
     expect(lines.map((line) => JSON.parse(line))).toEqual([first, second]);
+  });
+
+  it('--watch: unavailable は1行の注意になり、次のスナップショットで消える（--json は type 付きの1行）', async () => {
+    const snap = view();
+    const frames = [
+      `event: snapshot\ndata: ${JSON.stringify(snap)}\n\n`,
+      'event: unavailable\ndata: {"error":"ECONNREFUSED"}\n\n',
+    ];
+    reply = { stream: frames };
+    const readText = captureStdout();
+    await expect(topologyCommand({ watch: true })).rejects.toThrow();
+    expect(readText()).toContain('理由の種別: ECONNREFUSED');
+    vi.restoreAllMocks();
+
+    reply = { stream: frames };
+    const readJson = captureStdout();
+    await expect(topologyCommand({ watch: true, json: true })).rejects.toThrow();
+    const lines = readJson()
+      .trim()
+      .split('\n')
+      .map((l) => JSON.parse(l));
+    expect(lines).toEqual([snap, { type: 'unavailable', error: 'ECONNREFUSED' }]);
   });
 
   it('--watch（端末でない出力）は届いたスナップショットを描き足す', async () => {

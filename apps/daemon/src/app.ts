@@ -237,6 +237,7 @@ import { createTopologyActivityTracker } from './topology-activity.js';
 import {
   createStorageHealthTracker,
   createTopologyService,
+  describeProbeError,
   topologySignature,
 } from './topology.js';
 import {
@@ -1866,21 +1867,24 @@ export function createApp(deps: AppDeps) {
   // 続くので解除しない。
   const topologyActivity = createTopologyActivityTracker();
   if (deps.journalEvents !== undefined) topologyActivity.attach(deps.journalEvents.subscribe);
+  const topologyStorage = createStorageHealthTracker({
+    // 接続先・パスは載せない。器の種類だけ。
+    label:
+      deps.storage === undefined
+        ? undefined
+        : deps.storage.startsWith('PostgreSQL')
+          ? 'postgres'
+          : 'fs',
+    probe: deps.storageProbe,
+    now: Date.now,
+  });
+  // 起動時に1回聞き始める（待たない）。最初のスナップショットが `unknown` になりにくくする。
+  topologyStorage.current();
   const topology = createTopologyService({
     clone,
     ...(deps.runners === undefined ? {} : { runners: deps.runners }),
     activity: topologyActivity,
-    storage: createStorageHealthTracker({
-      // 接続先・パスは載せない。器の種類だけ。
-      label:
-        deps.storage === undefined
-          ? undefined
-          : deps.storage.startsWith('PostgreSQL')
-            ? 'postgres'
-            : 'fs',
-      probe: deps.storageProbe,
-      now: Date.now,
-    }),
+    storage: topologyStorage,
   });
   const topologyTickMs = deps.topologyTickMs ?? 2000;
   const topologyDebounceMs = deps.topologyDebounceMs ?? 200;
@@ -2958,7 +2962,9 @@ export function createApp(deps: AppDeps) {
         summary: '稼働の地図の流れ（SSE）',
         description:
           '`event: snapshot` に `GET /topology` と同じ形。開いたとき1回、以後は内容が変わった' +
-          'ときだけ送る。**コメント行（`:` で始まる行）の heartbeat が周期的に流れる。**',
+          'ときだけ送る。**組めなかったときは、失敗が続く間の最初の1回だけ `event: unavailable`' +
+          '（`data: {"error": "<種別だけ>"}`。本文は載せない）を送り、立ち直った最初の組み直しは' +
+          '内容が同じでも必ず `snapshot` で送る**（黙って止まったように見えない）。**コメント行（`:` で始まる行）の heartbeat が周期的に流れる。**',
         responses: {
           200: {
             description: 'SSE ストリーム。',
@@ -2996,6 +3002,7 @@ export function createApp(deps: AppDeps) {
 
             try {
               let last: string | null = null;
+              let failing = false;
               for (;;) {
                 if (closed || credential.lost() || stream.aborted || stream.closed) break;
                 const fromEvent = dirty;
@@ -3003,17 +3010,31 @@ export function createApp(deps: AppDeps) {
                 try {
                   // 追記を受けた再計算は新しく組む。周期の再計算は直近の結果を使い回して
                   // よい（購読者が増えても台帳を読む回数を増やさない）。
+                  // **どちらも共有の結果を使う**（購読者が何人でも台帳を読む回数が窓ごとに
+                  // 高々1回）。追記を受けた再計算は待ちの長さ、周期は1秒。
                   const snapshot = topologyResponseSchema.parse(
-                    await topology.snapshot(fromEvent ? {} : { maxAgeMs: 1000 }),
+                    await topology.snapshot({
+                      maxAgeMs: fromEvent ? topologyDebounceMs : 1000,
+                    }),
                   );
+                  failing = false;
                   const signature = topologySignature(snapshot);
                   if (signature !== last) {
                     last = signature;
                     await stream.writeSSE({ event: 'snapshot', data: JSON.stringify(snapshot) });
                   }
-                } catch {
-                  // 組めなかった回は送らず、次の周期でやり直す（ストリームごと落とさない）。
-                  // 前回の内容のまま黙るので、読み手は `observedAt` の古さで気づける。
+                } catch (error) {
+                  // 失敗が続く間の最初の1回だけ知らせる（毎周期は送らない）。**理由は種別だけ**
+                  // （本文は接続先などを含みうる）。立ち直ったら内容が同じでも必ず送り直す
+                  // （`last` を捨てる）。ストリームごとは落とさず、次の周期でやり直す。
+                  last = null;
+                  if (!failing) {
+                    failing = true;
+                    await stream.writeSSE({
+                      event: 'unavailable',
+                      data: JSON.stringify({ error: describeProbeError(error) }),
+                    });
+                  }
                 }
                 // 組んでいる間に追記が来ていたら（`dirty`）待たずに回る。
                 if (!dirty) {

@@ -123,13 +123,34 @@ describe('mapJournalEntry（日誌1件 → 線の変化）', () => {
     ).toEqual([]);
   });
 
-  it('マネージャーが Agent / Task で作業者を起こすと worker 線の down と行の作成', () => {
+  it('背景（run_in_background: true）で起こすと worker 線の down と行の作成', () => {
     for (const tool of ['Agent', 'Task']) {
       const mapped = mapJournalEntry(
-        entry('tool_use', { actor: 'manager:m1', tool, input: { subagent_type: 'reviewer' } }),
+        entry('tool_use', {
+          actor: 'manager:m1',
+          tool,
+          input: { subagent_type: 'reviewer', run_in_background: true },
+        }),
       );
       expect(mapped.links).toEqual([
         { key: managerWorkerLink('m1', 'reviewer'), direction: 'down', at: T1 },
+      ]);
+      expect(mapped.workers).toEqual([{ managerId: 'm1', agentType: 'reviewer', at: T1 }]);
+    }
+  });
+
+  it('前景の呼び出し（run_in_background が無い・false・真偽値でない）は結果が戻った up。行は作る', () => {
+    for (const input of [
+      { subagent_type: 'reviewer' },
+      { subagent_type: 'reviewer', run_in_background: false },
+      { subagent_type: 'reviewer', run_in_background: 'true' },
+      { subagent_type: 'reviewer', run_in_background: 1 },
+    ]) {
+      const mapped = mapJournalEntry(
+        entry('tool_use', { actor: 'manager:m1', tool: 'Agent', input }),
+      );
+      expect(mapped.links).toEqual([
+        { key: managerWorkerLink('m1', 'reviewer'), direction: 'up', at: T1 },
       ]);
       expect(mapped.workers).toEqual([{ managerId: 'm1', agentType: 'reviewer', at: T1 }]);
     }

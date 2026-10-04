@@ -319,11 +319,24 @@ export function createTopologyService(deps: TopologyServiceDeps): TopologyServic
     return value;
   }
 
+  /** 組んでいる最中の1本。`maxAgeMs` を渡した呼び出しは、新しければこれに相乗りする。 */
+  let inflight: { at: number; promise: Promise<TopologySnapshot> } | null = null;
+
   return {
     async snapshot(options) {
       const maxAgeMs = options?.maxAgeMs ?? 0;
-      if (maxAgeMs > 0 && cached !== null && now() - cached.at < maxAgeMs) return cached.value;
-      return build();
+      if (maxAgeMs > 0) {
+        if (cached !== null && now() - cached.at < maxAgeMs) return cached.value;
+        // 同じ窓に同時に来た呼び出しは、組んでいる1本を待つ（組む回数を窓ごとに高々1回にする）。
+        if (inflight !== null && now() - inflight.at < maxAgeMs) return inflight.promise;
+      }
+      const promise = build();
+      inflight = { at: now(), promise };
+      const clear = (): void => {
+        if (inflight?.promise === promise) inflight = null;
+      };
+      promise.then(clear, clear);
+      return promise;
     },
   };
 }

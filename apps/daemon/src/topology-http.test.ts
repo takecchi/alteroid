@@ -234,13 +234,68 @@ describe('GET /topology/stream', () => {
     });
     const stream = openStream(await app.request('/topology/stream'));
     await stream.advance(100);
-    // 失敗の回が周期ごとに回っている（落ちていない）が、送るものは無い
+    // 失敗の回が周期ごとに回っている（落ちていない）が、知らせは最初の1回だけ。
+    // 理由は種別だけで、本文（boom）は載せない。
     expect(listCalls).toBeGreaterThan(1);
     expect(stream.snapshots).toHaveLength(0);
+    expect(stream.raw().match(/event: unavailable/g)).toHaveLength(1);
+    expect(stream.raw()).toContain('"error":"Error"');
+    expect(stream.raw()).not.toContain('boom');
 
     failing = false;
     await stream.advance(40);
     expect(stream.snapshots).toHaveLength(1);
+    // 立ち直ったあとの最初は、内容が（空のまま）同じでも必ず送られている
     await stream.close();
+  });
+
+  it('2つのクライアントが同じ日誌の連続を受けても、台帳を読む回数は窓ごとに高々1回', async () => {
+    let listCalls = 0;
+    const fixed = runningManager('m1');
+    const { app, journal } = setup({
+      clone: {
+        managers: {
+          list: async () => {
+            listCalls += 1;
+            return [fixed];
+          },
+        },
+      } as unknown as Partial<CloneHost>,
+    });
+    const a = openStream(await app.request('/topology/stream'));
+    const b = openStream(await app.request('/topology/stream'));
+    await a.advance(20);
+    expect(a.snapshots).toHaveLength(1);
+    expect(b.snapshots).toHaveLength(1);
+
+    const before = listCalls;
+    for (let i = 0; i < 5; i += 1) {
+      await journal.append({
+        type: 'exchange',
+        with: 'human',
+        role: 'inbound',
+        text: `発言${String(i)}`,
+      });
+    }
+    await a.advance(20); // 待ち（5ms）を過ぎて、2人とも組み直す
+    expect(listCalls - before).toBe(1);
+    // 2人とも同じ新しい内容を受け取っている
+    expect(a.snapshots).toHaveLength(2);
+    expect(b.snapshots).toHaveLength(2);
+    await a.close();
+    await b.close();
+  });
+
+  it('storageProbe は createApp の時点で聞き始める（待たない）', async () => {
+    const probe = vi.fn(async () => undefined);
+    createApp({
+      clone: fakeCloneFor([]),
+      stores: createMemoryStores(),
+      token: 'test-token',
+      shutdown: () => undefined,
+      storage: 'PostgreSQL（host/db）',
+      storageProbe: probe,
+    });
+    expect(probe).toHaveBeenCalledTimes(1);
   });
 });

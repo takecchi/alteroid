@@ -19,7 +19,13 @@ import { qualifiedToolName, WORKER_AGENT_NAME, type JournalEntry } from '@altero
  * | `human~clone` | 人間の発言（`exchange` with=human inbound） | クローンの応答（outbound） |
  * | `clone~storage` | 記憶の書き込み（`memory_update`） | 記憶・日誌を読む道具 |
  * | `clone~manager:<id>` | 委譲・追送（`exchange` with=manager outbound） | 報告の受け取り（inbound）・確認（`escalation`） |
- * | `manager:<id>~worker:<type>` | マネージャーが作業者を起こした（`Agent` / `Task`） | （上りは日誌に載らない） |
+ * | `manager:<id>~worker:<type>` | 作業者を背景で起こした（`Agent` / `Task` で `run_in_background: true`） | 前景で起こした呼び出しが終わった（結果が戻った） |
+ *
+ * **`tool_use` は道具が終わった後に書かれる**（`runner.ts` の `#onPostToolUse`）。前景の
+ * `Agent` / `Task` は作業者が終わるまで返らないので、その時刻は起こした瞬間ではなく
+ * **結果が上へ戻った瞬間**である。背景（`run_in_background: true`）は起こした直後に
+ * 返るので起こした瞬間（down）。**起こした瞬間が前景では日誌に載らない**ことは読み手が
+ * 知っておく（down が無いのは「起こしていない」ではない）。
  *
  * **作業者の線の `lastActivityAt` は作業者の道具実行**（`worker:<id>:<type>` の
  * `tool_use`）。向きの無い印である（作業者の道具実行は指示でも報告でもない）。
@@ -131,6 +137,19 @@ export function parseWorkerActor(
   return { managerId: rest.slice(0, sep), agentType: rest.slice(sep + 1) };
 }
 
+/**
+ * 背景で起こしたか。`input.run_in_background === true` のときだけ真（欠落・真偽値でない値は
+ * 前景＝結果が戻った側として扱う）。欄名は SDK 0.3.288 の `sdk-tools.d.ts` の
+ * `AgentInput.run_in_background?: boolean` に逐語で在る。
+ */
+function dispatchedInBackground(input: unknown): boolean {
+  return (
+    typeof input === 'object' &&
+    input !== null &&
+    (input as { run_in_background?: unknown }).run_in_background === true
+  );
+}
+
 /** `Agent` / `Task` の入力から、起こす作業者の種類を取り出す。 */
 function dispatchedAgentType(input: unknown): string {
   if (typeof input === 'object' && input !== null && 'subagent_type' in input) {
@@ -212,8 +231,14 @@ export function mapJournalEntry(entry: JournalEntry): EntryMapping {
         if (!SUBAGENT_DISPATCH_TOOLS.has(entry.tool)) return empty;
         const agentType = dispatchedAgentType(entry.input);
         return {
-          links: [{ key: managerWorkerLink(managerId, agentType), direction: 'down', at }],
-          // 起こした時点で行を作る（道具をまだ1本も実行していなくても、居る）。
+          links: [
+            {
+              key: managerWorkerLink(managerId, agentType),
+              direction: dispatchedInBackground(entry.input) ? 'down' : 'up',
+              at,
+            },
+          ],
+          // 向きによらず行を作る（道具をまだ1本も実行していなくても、居る）。
           workers: [{ managerId, agentType, at }],
         };
       }

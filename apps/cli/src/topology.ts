@@ -155,7 +155,7 @@ export function renderTopology(view: TopologyView, now: number = Date.now()): st
         lines.push(
           `          ${renderLink(
             linkOf(`manager:${manager.managerId}~worker:${worker.agentType}`),
-            { down: '起動', up: '報告', activity: '活動' },
+            { down: '背景で起動', up: '結果が戻った', activity: '活動' },
             now,
           )}`,
         );
@@ -171,7 +171,8 @@ export function renderTopology(view: TopologyView, now: number = Date.now()): st
   lines.push(
     '',
     '（作業者は managerId × agentType で束ねた行で、個体は見分けない。' +
-      '「作業者への報告（↑）」は日誌に載らないので未観測のまま）',
+      '作業者の線の ↓ は背景で起こした時刻、↑ は前景の呼び出しが終わって結果が戻った時刻。' +
+      '前景で起こした瞬間は日誌に載らない）',
   );
   return lines.join('\n');
 }
@@ -223,6 +224,7 @@ export async function topologyCommand(options: TopologyOptions = {}): Promise<vo
  *   **内容が変わったときだけ**届くので、経過（`3s ago`）は最後の内容を使って手元で進める。
  * - 端末でないとき（パイプ・ファイル）は、届いたスナップショットを描き足すだけ。
  *   `--json` は1スナップショット1行（NDJSON）。
+ * - デーモンが地図を組めなくなると `unavailable` が1回届く（`notice`／`--json` は `type` 付きの1行）。
  * - Ctrl-C（SIGINT）で終わる。接続が切れたら理由つきで落とす（黙って止まらない）。
  */
 async function watchTopology(
@@ -234,10 +236,15 @@ async function watchTopology(
   process.once('SIGINT', onSigint);
 
   let latest: TopologyView | null = null;
+  /** デーモンが「組めない」と知らせている間の1行（次のスナップショットで消える）。 */
+  let notice: string | null = null;
   const tty = stdout.isTTY === true;
   const paint = (): void => {
     if (latest === null) return;
-    stdout.write(`${tty ? CLEAR_SCREEN : ''}${renderTopology(latest)}\n${tty ? '' : '\n'}`);
+    const warning = notice === null ? '' : `\n${notice}`;
+    stdout.write(
+      `${tty ? CLEAR_SCREEN : ''}${renderTopology(latest)}${warning}\n${tty ? '' : '\n'}`,
+    );
   };
   const ticker = !json && tty ? setInterval(paint, 1000) : null;
 
@@ -267,9 +274,25 @@ async function watchTopology(
     }
     try {
       for await (const event of readSSE(response.body)) {
+        if (event.name === 'unavailable') {
+          // デーモンが地図を組めなくなった（失敗の最初の1回だけ届く。理由は種別だけ）。
+          // `--json` は1行の `{"type":"unavailable","error":"<種別>"}`。**スナップショットの行は
+          // `type` 欄を持たない**ので、読み手は `type` の有無で見分けられる。
+          const body = event.json<{ error?: unknown }>();
+          const kind = typeof body?.error === 'string' ? body.error : 'unknown';
+          if (json) {
+            stdout.write(`${JSON.stringify({ type: 'unavailable', error: kind })}\n`);
+          } else {
+            notice = `⚠️ デーモンが地図を組めていない（理由の種別: ${redactError(kind)}）。復旧すると続きを描く。`;
+            if (latest === null) stdout.write(`${notice}\n`);
+            else paint();
+          }
+          continue;
+        }
         if (event.name !== 'snapshot') continue;
         const view = event.json<TopologyView>();
         if (view === null) continue;
+        notice = null;
         latest = view;
         if (json) stdout.write(`${JSON.stringify(view)}\n`);
         else paint();
