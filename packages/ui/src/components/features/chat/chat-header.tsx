@@ -35,7 +35,7 @@ export function ChatHeader({
   return (
     <>
       <header
-        className={`flex shrink-0 items-center justify-between gap-4 border-b border-border py-4 ${gutter}`}
+        className={`flex shrink-0 items-center justify-between gap-4 border-b border-border py-4 md:pt-[calc(1rem+var(--safe-top))] ${gutter}`}
       >
         {onOpenList !== undefined && (
           <button

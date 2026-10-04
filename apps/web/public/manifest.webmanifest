@@ -1,9 +1,11 @@
 {
+  "id": "/",
   "name": "alteroid",
   "short_name": "alteroid",
   "description": "クローンの様子を見て、指示を出し、記憶を直す画面",
   "start_url": "/",
   "scope": "/",
+  "lang": "ja",
   "display": "standalone",
   "background_color": "#0b0e18",
   "theme_color": "#0b0e18",

@@ -56,7 +56,7 @@ export function Page({
         className={cn(
           // タブの帯があるときは、区切り線を帯の下の1本にする（線が2本続かないように）。
           tabs === undefined && 'border-b border-border',
-          'flex shrink-0 items-start justify-between gap-4 py-4 pl-[calc(1rem+var(--safe-left))] pr-[calc(1rem+var(--safe-right))] md:pl-[calc(1.5rem+var(--safe-left))] md:pr-[calc(1.5rem+var(--safe-right))]',
+          'flex shrink-0 items-start justify-between gap-4 py-4 md:pt-[calc(1rem+var(--safe-top))] pl-[calc(1rem+var(--safe-left))] pr-[calc(1rem+var(--safe-right))] md:pl-[calc(1.5rem+var(--safe-left))] md:pr-[calc(1.5rem+var(--safe-right))]',
         )}
       >
         <div className="min-w-0">

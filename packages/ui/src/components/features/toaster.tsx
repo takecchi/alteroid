@@ -24,7 +24,23 @@ export function Toaster() {
     observer.observe(root, { attributes: true, attributeFilter: ['class'] });
     return () => observer.disconnect();
   }, []);
-  return <ShadcnToaster theme={theme} position="bottom-right" />;
+  return (
+    // 切り欠き・ホームバー・横向きの角を避ける（standalone で `black-translucent` のとき、下端と右端が
+    // 画面の端まで描かれるため）。`mobileOffset` は狭い画面（下端いっぱい）の余白。
+    <ShadcnToaster
+      theme={theme}
+      position="bottom-right"
+      offset={{
+        right: 'calc(1rem + var(--safe-right))',
+        bottom: 'calc(1rem + var(--safe-bottom))',
+      }}
+      mobileOffset={{
+        left: 'calc(1rem + var(--safe-left))',
+        right: 'calc(1rem + var(--safe-right))',
+        bottom: 'calc(1rem + var(--safe-bottom))',
+      }}
+    />
+  );
 }
 
 export { toast };

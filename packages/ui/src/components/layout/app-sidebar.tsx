@@ -87,7 +87,9 @@ export function AppSidebar({
          * （加算の項の前後に空白が無い形）がそのまま出た。使われない・壊れてもいない
          * ので実害は無かったが、次にここへ角括弧つきの例を書くときは注意すること。
          */
-        inDrawer ? 'min-h-0 flex-1' : 'w-56 shrink-0 border-r border-border pl-[var(--safe-left)]',
+        inDrawer
+          ? 'min-h-0 flex-1'
+          : 'w-56 shrink-0 border-r border-border pt-[var(--safe-top)] pb-[var(--safe-bottom)] pl-[var(--safe-left)]',
       )}
     >
       <div className="px-4 pt-4 pb-3">

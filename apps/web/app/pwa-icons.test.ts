@@ -88,3 +88,23 @@ describe('manifest.webmanifest', () => {
     for (const icon of manifest.icons) expect(existsSync(publicFile(icon.src))).toBe(true);
   });
 });
+
+describe('standalone（ネイティブアプリのように開く）', () => {
+  it('iOS の状態バーは black-translucent（全画面。safe-area の手当てと対）', () => {
+    const all = meta() as { name?: string; content?: string }[];
+    expect(all.find((m) => m.name === 'apple-mobile-web-app-status-bar-style')?.content).toBe(
+      'black-translucent',
+    );
+    expect(all.find((m) => m.name === 'apple-mobile-web-app-capable')?.content).toBe('yes');
+  });
+
+  it('manifest は id・scope を持ち、orientation を固定しない', () => {
+    const m = JSON.parse(
+      readFileSync(path.join(PUBLIC_DIR, 'manifest.webmanifest'), 'utf8'),
+    ) as Record<string, unknown>;
+    expect(m.id).toBe('/');
+    expect(m.scope).toBe('/');
+    expect(m.display).toBe('standalone');
+    expect('orientation' in m).toBe(false);
+  });
+});

@@ -25,6 +25,11 @@ export function meta() {
     { name: 'apple-mobile-web-app-title', content: 'alteroid' },
     // 旧い iOS（manifest の display を読まない版）向けに standalone を明示する。
     { name: 'apple-mobile-web-app-capable', content: 'yes' },
+    // 状態バーを透明にして本文を画面の上端まで描く（ネイティブアプリの見た目）。`viewport-fit=cover` と
+    // 対で、潜る分は各部品の `--safe-*` の余白が避けている（`MobileTopBar` の上、デスクトップ幅の
+    // 見出しとサイドバー、下端のチャット入力欄・シート・トースト）。`default` / `black` は本文が
+    // 状態バーの下から始まる不透明な帯になり、全画面にならない。
+    { name: 'apple-mobile-web-app-status-bar-style', content: 'black-translucent' },
     { name: 'theme-color', content: '#0b0e18' },
   ];
 }
