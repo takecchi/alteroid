@@ -248,14 +248,22 @@ COPY packages/swr/package.json packages/swr/
 COPY apps/daemon/package.json apps/daemon/
 COPY apps/runner/package.json apps/runner/
 COPY apps/cli/package.json apps/cli/
-RUN pnpm install --prod --frozen-lockfile
+#
+# **`/app` の持ち主を node にする `chown -R` は、ここ（install と同じ層）でやる。**
+# 後段の別の `RUN chown -R node:node /app` にすると、node_modules（約 190MB）が
+# 丸ごともう一枚の層として複製される（overlay の copy-up）。実測（#2719、main の
+# run 37174761244）: その RUN だけで 15 秒、層の export と `docker load` でさらに
+# 数十秒。同じ層の中で済ませれば複製は起きず、最終的な持ち主は変わらない。
+RUN pnpm install --prod --frozen-lockfile \
+  && chown -R node:node /app
 
-COPY --from=build /app/packages/core/dist packages/core/dist
-COPY --from=build /app/packages/storage-fs/dist packages/storage-fs/dist
-COPY --from=build /app/packages/storage-pg/dist packages/storage-pg/dist
-COPY --from=build /app/apps/daemon/dist apps/daemon/dist
-COPY --from=build /app/apps/runner/dist apps/runner/dist
-COPY --from=build /app/apps/cli/dist apps/cli/dist
+# `--chown` は上の理由（後段で /app を chown -R し直さない）と対になっている。
+COPY --from=build --chown=node:node /app/packages/core/dist packages/core/dist
+COPY --from=build --chown=node:node /app/packages/storage-fs/dist packages/storage-fs/dist
+COPY --from=build --chown=node:node /app/packages/storage-pg/dist packages/storage-pg/dist
+COPY --from=build --chown=node:node /app/apps/daemon/dist apps/daemon/dist
+COPY --from=build --chown=node:node /app/apps/runner/dist apps/runner/dist
+COPY --from=build --chown=node:node /app/apps/cli/dist apps/cli/dist
 
 # `docker compose exec app alteroid chat` で入れるようにする。CLI はデーモンへの
 # 薄いクライアントであり、コンテナの中から脳に接続する手段である。
@@ -276,7 +284,7 @@ RUN chmod 0755 /usr/local/bin/alteroidd /usr/local/bin/alteroid-runner
 ENV ALTEROID_HOME=/data/alteroid
 ENV ALTEROID_WORKSPACE=/workspace
 RUN mkdir -p /data/alteroid /workspace \
-  && chown -R node:node /data /app
+  && chown -R node:node /data
 
 # マネージャーと作業者を走らせる UID。**runner 本体（root）とは別にする。**
 # 同じ UID だと、子プロセスが runner の /proc/1/environ を読み、制御面のソケットにも

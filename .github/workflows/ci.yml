@@ -627,8 +627,14 @@ jobs:
             docker export "$c" | tar -tvf - | awk '{ $4 = ""; $5 = ""; print }' | sort
             docker rm "$c" >/dev/null
           }
-          listing alteroid:ci > /tmp/final.list
-          listing alteroid:ci-runtime > /tmp/runtime.list
+          # **2つの列挙は互いに独立なので並列にする**（実測 #2719: 直列で 48 秒）。
+          # 片方でも失敗したら落とす（`wait <pid>` の終了コードを見る）。
+          listing alteroid:ci > /tmp/final.list &
+          p1=$!
+          listing alteroid:ci-runtime > /tmp/runtime.list &
+          p2=$!
+          wait "$p1" || { echo "final の列挙に失敗" >&2; exit 1; }
+          wait "$p2" || { echo "runtime の列挙に失敗" >&2; exit 1; }
           wc -l /tmp/final.list /tmp/runtime.list
           diff /tmp/runtime.list /tmp/final.list \
             || { echo "空の final が runtime とファイル系で違う" >&2; exit 1; }
