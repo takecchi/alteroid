@@ -87,7 +87,6 @@ export interface ManagerRow {
   sessionMissingSince?: string;
   /** 置き先の runner が名乗ったマネージャー層の provider。欄が無いのは「不明」（claude と推測しない。#486 S9）。 */
   managerProvider?: string;
-  appraisal?: string;
 }
 
 /** 読めない委譲の行（壊れた行。「居ない」でも「畳まれた」でもない）。 */

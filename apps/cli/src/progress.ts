@@ -19,7 +19,7 @@ import { redactError } from './redact.js';
  *
  * 失敗の扱い: 400（`windowHours` の形が不正）は daemon の文言をそのまま例外で上へ通す
  * （`index.ts` の `parseAsync(...).catch(...)` が stderr へ出して終了コード 1）。
- * それ以外は既存の読み取り系（`appraisal-stats.ts`）に揃えて stdout へ書いて戻る。
+ * それ以外は既存の読み取り系（`dropped.ts` など）に揃えて stdout へ書いて戻る。
  */
 
 export interface ProgressOptions {

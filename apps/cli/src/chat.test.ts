@@ -1,6 +1,5 @@
 import { describeManagerProvider } from '@alteroid/core/manager-provider-format';
 import {
-  appraisalSchema,
   describeReportDriftMark,
   describeToolUseStall,
   describeTurnEnd,
@@ -22,7 +21,6 @@ import {
   renderReportLine,
   renderWaitingList,
   runSlashCommand,
-  splitWorkKindFlag,
   type Listed,
 } from './chat.js';
 import type { Target } from './target.js';
@@ -1685,13 +1683,6 @@ function stubClient(
     closeBody?: unknown;
     /** `PATCH /commitments/:id` の応答。既定は 200（直せた）。 */
     editStatus?: number;
-    /** `POST /commitments/:id/appraise` / `POST /managers/:id/appraise` の応答。既定 200。 */
-    appraiseStatus?: number;
-    /**
-     * 上の appraise 2口の失敗時の本体（issue #2172）。既定は `{}`。
-     * 1テストではどちらか片方しか叩かないので共有してよい。
-     */
-    appraiseBody?: unknown;
     /** `POST /commitments` の応答コード。既定は 200（issue #2172）。 */
     commitOpenStatus?: number;
     /** `POST /commitments` の応答本体。既定は `{}`。 */
@@ -1825,15 +1816,6 @@ function stubClient(
             ),
           );
         },
-        appraise: {
-          $post: (args: unknown) => {
-            calls.push({ route: 'POST /managers/:id/appraise', args });
-            const status = options.appraiseStatus ?? 200;
-            return Promise.resolve(
-              reply(status, status === 200 ? {} : (options.appraiseBody ?? {})),
-            );
-          },
-        },
         messages: {
           $post: (args: unknown) => {
             calls.push({ route: 'POST /managers/:id/messages', args });
@@ -1874,15 +1856,6 @@ function stubClient(
             calls.push({ route: 'POST /commitments/:id/close', args });
             const status = options.closeStatus ?? 200;
             return Promise.resolve(reply(status, status === 200 ? {} : (options.closeBody ?? {})));
-          },
-        },
-        appraise: {
-          $post: (args: unknown) => {
-            calls.push({ route: 'POST /commitments/:id/appraise', args });
-            const status = options.appraiseStatus ?? 200;
-            return Promise.resolve(
-              reply(status, status === 200 ? {} : (options.appraiseBody ?? {})),
-            );
           },
         },
         $patch: (args: unknown) => {
@@ -5908,300 +5881,5 @@ describe('chat の /archive', () => {
         overrideReason: '本番障害の調査で緊急に消す必要があった',
       });
     });
-  });
-});
-
-/**
- * 評定のスラッシュコマンド（#1054）。**器（`CommitmentStore` / `ManagerPool` / HTTP）
- * の側には歯が在ったが、CLI の口そのものには無かった**（#1058 の作業中に気づいた）。
- *
- * ## ⭐ ここでいちばん守りたいもの —— 番号の置き場が混ざらないこと
- *
- * `/rate` は `listed.commitments`、`/rate-manager` は `listed.managers` を引く。
- * **1本にまとめると「`/managers` の直後の `/rate 1`」がマネージャーの id を台帳の
- * 口へ送る。** 同じ形の歯が既に在る（この下の `/reply` の項）ので、それに揃えてある。
- */
-describe('chat の /rate と /rate-manager（評定）', () => {
-  it('/rate は番号を台帳の id へ引き直し、評定と理由を送る', async () => {
-    captureStdout();
-    const { calls, client } = stubClient({
-      commitments: [commitment({ id: 'cmt-1' }), commitment({ id: 'cmt-2' })],
-    });
-    const listed = emptyListed();
-
-    await runSlashCommand('/commitments', client, listed);
-    await runSlashCommand('/rate 2 good 一発で通った', client, listed);
-
-    const call = calls.find((c) => c.route === 'POST /commitments/:id/appraise');
-    expect(call).toBeDefined();
-    expect((call?.args as { param: { id: string } }).param).toEqual({ id: 'cmt-2' });
-    expect((call?.args as { json: { appraisal: string; reason?: string } }).json).toEqual({
-      appraisal: 'good',
-      reason: '一発で通った',
-    });
-  });
-
-  /**
-   * **理由を書かなければ `reason` を送らない。** 空文字で埋めると、器の側は
-   * 「理由が在る」として受け取る（`min(1)` を通らないので 400 にもなる）。
-   * 書かなかったことと空で書いたことを混ぜない。
-   */
-  it('/rate は理由を書かなければ reason を送らない', async () => {
-    captureStdout();
-    const { calls, client } = stubClient({ commitments: [commitment({ id: 'cmt-1' })] });
-    const listed = emptyListed();
-
-    await runSlashCommand('/commitments', client, listed);
-    await runSlashCommand('/rate 1 unclear', client, listed);
-
-    const call = calls.find((c) => c.route === 'POST /commitments/:id/appraise');
-    expect((call?.args as { json: Record<string, unknown> }).json).toEqual({
-      appraisal: 'unclear',
-    });
-  });
-
-  /**
-   * **3値は器（`appraisalSchema`）が持つ。** CLI が数え直していたら、値が増えた日に
-   * ここだけ古くなる。断りの文面に3値が全部出ることで、写していないことを固定する。
-   */
-  it('/rate は既知でない評定を送らず、器が持つ3値を並べて断る', async () => {
-    const read = captureStdout();
-    const { calls, client } = stubClient({ commitments: [commitment({ id: 'cmt-1' })] });
-    const listed = emptyListed();
-
-    await runSlashCommand('/commitments', client, listed);
-    await runSlashCommand('/rate 1 brilliant', client, listed);
-
-    expect(calls.some((c) => c.route === 'POST /commitments/:id/appraise')).toBe(false);
-    const text = read();
-    for (const value of appraisalSchema.options) expect(text).toContain(value);
-  });
-
-  it('/rate-manager は番号を委譲の id へ引き直して送る', async () => {
-    captureStdout();
-    const { calls, client } = stubClient({
-      managers: [manager({ managerId: 'mgr-a' }), manager({ managerId: 'mgr-b' })],
-    });
-    const listed = emptyListed();
-
-    await runSlashCommand('/managers', client, listed);
-    await runSlashCommand('/rate-manager 2 bad 手戻りが多い', client, listed);
-
-    const call = calls.find((c) => c.route === 'POST /managers/:id/appraise');
-    expect((call?.args as { param: { id: string } }).param).toEqual({ id: 'mgr-b' });
-    expect((call?.args as { json: { appraisal: string } }).json.appraisal).toBe('bad');
-  });
-
-  /**
-   * ⭐ **番号の置き場が混ざらない。** `listed.managers` に値が在っても `/rate` は
-   * それを見ない（`listed.commitments` だけを引く）——1本にまとめていたら、ここで
-   * マネージャーの id が台帳の口へ送られる。
-   */
-  it('/managers の直後に /rate 1 を打っても、マネージャーの id が台帳の口へ行かない', async () => {
-    const read = captureStdout();
-    const { calls, client } = stubClient({ managers: [manager({ managerId: 'mgr-a' })] });
-    const listed = emptyListed();
-
-    await runSlashCommand('/managers', client, listed);
-    await runSlashCommand('/rate 1 good', client, listed);
-
-    expect(calls.some((c) => c.route === 'POST /commitments/:id/appraise')).toBe(false);
-    expect(read()).toContain('/commitments の一覧にありません');
-  });
-
-  /** 裏返しも同じ（台帳の番号が委譲の口へ行かない）。 */
-  it('/commitments の直後に /rate-manager 1 を打っても、台帳の id が委譲の口へ行かない', async () => {
-    const read = captureStdout();
-    const { calls, client } = stubClient({ commitments: [commitment({ id: 'cmt-1' })] });
-    const listed = emptyListed();
-
-    await runSlashCommand('/commitments', client, listed);
-    await runSlashCommand('/rate-manager 1 good', client, listed);
-
-    expect(calls.some((c) => c.route === 'POST /managers/:id/appraise')).toBe(false);
-    expect(read()).toContain('/managers の一覧にありません');
-  });
-
-  /**
-   * **仕事の種類（#1308）は `--kind=` の1語で渡す。** 理由は自由文の末尾なので、
-   * 印の無い語はすべて理由へ残る。書かなければ送らない（前の種類が残る）。
-   */
-  it('/rate と /rate-manager は --kind= を仕事の種類として送り、残りを理由にする', async () => {
-    captureStdout();
-    const { calls, client } = stubClient({
-      commitments: [commitment({ id: 'cmt-1' })],
-      managers: [manager({ managerId: 'mgr-a' })],
-    });
-    const listed = emptyListed();
-
-    await runSlashCommand('/commitments', client, listed);
-    await runSlashCommand('/rate 1 good --kind=実装 一発で通った', client, listed);
-    await runSlashCommand('/managers', client, listed);
-    await runSlashCommand('/rate-manager 1 bad 手戻り --kind=レビュー', client, listed);
-
-    const commitmentCall = calls.find((c) => c.route === 'POST /commitments/:id/appraise');
-    expect((commitmentCall?.args as { json: Record<string, unknown> }).json).toEqual({
-      appraisal: 'good',
-      reason: '一発で通った',
-      workKind: '実装',
-    });
-    const managerCall = calls.find((c) => c.route === 'POST /managers/:id/appraise');
-    expect((managerCall?.args as { json: Record<string, unknown> }).json).toEqual({
-      appraisal: 'bad',
-      reason: '手戻り',
-      workKind: 'レビュー',
-    });
-  });
-
-  it('splitWorkKindFlag は --kind を空白で区切った形も種類として読む（#2486）', () => {
-    expect(splitWorkKindFlag(['--kind', '実装', 'テストが通った'])).toEqual({
-      workKind: '実装',
-      rest: ['テストが通った'],
-    });
-    expect(splitWorkKindFlag(['理由', '--kind'])).toEqual({ workKind: '', rest: ['理由'] });
-    expect(splitWorkKindFlag(['--kind=実装', '理由'])).toEqual({
-      workKind: '実装',
-      rest: ['理由'],
-    });
-    expect(splitWorkKindFlag(['--kind=実装', '--kind', 'レビュー'])).toEqual({
-      workKind: 'レビュー',
-      rest: [],
-    });
-  });
-
-  it('/rate は --kind 実装 の形でも種類を送り、理由へ混ぜない（#2486）', async () => {
-    captureStdout();
-    const { calls, client } = stubClient({ commitments: [commitment({ id: 'cmt-1' })] });
-    const listed = emptyListed();
-
-    await runSlashCommand('/commitments', client, listed);
-    await runSlashCommand('/rate 1 good --kind 実装 テストが通った', client, listed);
-
-    const call = calls.find((c) => c.route === 'POST /commitments/:id/appraise');
-    expect((call?.args as { json: Record<string, unknown> }).json).toEqual({
-      appraisal: 'good',
-      reason: 'テストが通った',
-      workKind: '実装',
-    });
-  });
-
-  it('/rate は値の無い末尾の --kind を送らずに断る（#2486）', async () => {
-    const read = captureStdout();
-    const { calls, client } = stubClient({ commitments: [commitment({ id: 'cmt-1' })] });
-    const listed = emptyListed();
-
-    await runSlashCommand('/commitments', client, listed);
-    await runSlashCommand('/rate 1 good --kind', client, listed);
-
-    expect(calls.some((c) => c.route === 'POST /commitments/:id/appraise')).toBe(false);
-    expect(read()).toContain('--kind=');
-  });
-
-  it('/rate は --kind= が空なら送らずに断る', async () => {
-    const read = captureStdout();
-    const { calls, client } = stubClient({ commitments: [commitment({ id: 'cmt-1' })] });
-    const listed = emptyListed();
-
-    await runSlashCommand('/commitments', client, listed);
-    await runSlashCommand('/rate 1 good --kind=', client, listed);
-
-    expect(calls.some((c) => c.route === 'POST /commitments/:id/appraise')).toBe(false);
-    expect(read()).toContain('--kind=');
-  });
-
-  /**
-   * issue #2172。404 のときだけ従来の文言（「その id は台帳にありません」）を保ち、
-   * それ以外（400・5xx 等）はサーバの `{ error }` の文をそのまま出す
-   * （`errorDetail`。`/commit-edit` と同じ形）。
-   */
-  it('/rate は 404 のときだけ従来の文言を出す', async () => {
-    const read = captureStdout();
-    const { client } = stubClient({
-      commitments: [commitment({ id: 'cmt-1' })],
-      appraiseStatus: 404,
-    });
-    const listed = emptyListed();
-
-    await runSlashCommand('/commitments', client, listed);
-    await runSlashCommand('/rate 1 good', client, listed);
-
-    expect(read()).toContain('その id は台帳にありません');
-  });
-
-  it('/rate は 404 以外はサーバの理由（{ error }）をそのまま出す', async () => {
-    const serverError = captureStdout();
-    const { client: serverErrorClient } = stubClient({
-      commitments: [commitment({ id: 'cmt-1' })],
-      appraiseStatus: 500,
-      appraiseBody: { error: '評定の記録が失敗した（issue #2172 のテスト用）' },
-    });
-    const listedServerError = emptyListed();
-    await runSlashCommand('/commitments', serverErrorClient, listedServerError);
-    await runSlashCommand('/rate 1 good', serverErrorClient, listedServerError);
-    const serverErrorText = serverError();
-    vi.restoreAllMocks();
-
-    const badRequest = captureStdout();
-    const { client: badRequestClient } = stubClient({
-      commitments: [commitment({ id: 'cmt-1' })],
-      appraiseStatus: 400,
-      appraiseBody: { error: '評定の値が不正（issue #2172 のテスト用）' },
-    });
-    const listedBadRequest = emptyListed();
-    await runSlashCommand('/commitments', badRequestClient, listedBadRequest);
-    await runSlashCommand('/rate 1 good', badRequestClient, listedBadRequest);
-    const badRequestText = badRequest();
-
-    expect(serverErrorText).toContain('評定の記録が失敗した（issue #2172 のテスト用）');
-    expect(badRequestText).toContain('評定の値が不正（issue #2172 のテスト用）');
-    expect(serverErrorText).not.toContain('記録できませんでした');
-    expect(badRequestText).not.toContain('記録できませんでした');
-  });
-
-  /**
-   * issue #2172。`/rate` と同じ形（404 は従来の文言、それ以外はサーバの理由）。
-   */
-  it('/rate-manager は 404 のときだけ従来の文言を出す', async () => {
-    const read = captureStdout();
-    const { client } = stubClient({
-      managers: [manager({ managerId: 'mgr-a' })],
-      appraiseStatus: 404,
-    });
-    const listed = emptyListed();
-
-    await runSlashCommand('/managers', client, listed);
-    await runSlashCommand('/rate-manager 1 good', client, listed);
-
-    expect(read()).toContain('そのマネージャーは台帳にいません');
-  });
-
-  it('/rate-manager は 404 以外はサーバの理由（{ error }）をそのまま出す', async () => {
-    const serverError = captureStdout();
-    const { client: serverErrorClient } = stubClient({
-      managers: [manager({ managerId: 'mgr-a' })],
-      appraiseStatus: 500,
-      appraiseBody: { error: '評定の記録が失敗した（issue #2172 のテスト用）' },
-    });
-    const listedServerError = emptyListed();
-    await runSlashCommand('/managers', serverErrorClient, listedServerError);
-    await runSlashCommand('/rate-manager 1 good', serverErrorClient, listedServerError);
-    const serverErrorText = serverError();
-    vi.restoreAllMocks();
-
-    const badRequest = captureStdout();
-    const { client: badRequestClient } = stubClient({
-      managers: [manager({ managerId: 'mgr-a' })],
-      appraiseStatus: 400,
-      appraiseBody: { error: '評定の値が不正（issue #2172 のテスト用）' },
-    });
-    const listedBadRequest = emptyListed();
-    await runSlashCommand('/managers', badRequestClient, listedBadRequest);
-    await runSlashCommand('/rate-manager 1 good', badRequestClient, listedBadRequest);
-    const badRequestText = badRequest();
-
-    expect(serverErrorText).toContain('評定の記録が失敗した（issue #2172 のテスト用）');
-    expect(badRequestText).toContain('評定の値が不正（issue #2172 のテスト用）');
-    expect(serverErrorText).not.toContain('記録できませんでした');
-    expect(badRequestText).not.toContain('記録できませんでした');
   });
 });
