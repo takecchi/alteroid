@@ -1357,6 +1357,15 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
      * runner の応答には最初から乗らない。
      */
     askedAt: isoDateTime.optional(),
+    /**
+     * **出所の印（#486 S7）。** この確認がマネージャー自身ではなく、マネージャーが MCP `peer` で呼んだ
+     * もう一方の provider のセッションから上がったとき（`type: 'peer'`）だけ載る。
+     *
+     * **印は `summary` の先頭にも必ず書く**（`【peer: <provider>】`）。旧いデーモンはこの欄を
+     * 黙って落とす（`z.object` の既定）が、本文の印は残るので、印の無い承認は旧い版との組み合わせでも
+     * 作られない。判定はこの欄の有無で行い、文言では行わない。
+     */
+    source: z.object({ type: z.literal('peer'), provider: z.string() }).optional(),
   }),
   /** 確認が解けた（回答・中断・停止）。デーモン側の待ち行列から外す合図。 */
   z.object({

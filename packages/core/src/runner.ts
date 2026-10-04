@@ -40,6 +40,8 @@ import {
   createPeerBroker,
   PEER_MCP_SERVER_NAME,
   PEER_SYSTEM_PROMPT_APPEND,
+  peerApprovalMark,
+  type PeerApprovalSource,
   type PeerBroker,
 } from './peer-broker.js';
 import type { PeerSocketHost } from './peer-socket-host.js';
@@ -2491,6 +2493,7 @@ class RunnerSession {
   #createPeerBroker(allowed: readonly AgentProviderId[]): PeerBroker {
     return createPeerBroker({
       allowed,
+      askApproval: (source, request) => this.#onPermission(request, source),
       driverOf: (provider) =>
         provider === 'codex'
           ? new CodexManagerDriver()
@@ -2515,7 +2518,7 @@ class RunnerSession {
         model: resolveManagerModel({}),
         modelPlaced: false,
         workerModel: resolveWorkerModel({}),
-        // **承認は全部拒否する**（`peer-broker.ts` の doc）。素通しにしない。
+        // **承認は呼び出し元のマネージャーの承認としてクローンへ上げる（出所の印つき）**（`peer-broker.ts` の doc）。
         permissionMode: 'default',
         strictApprovals: true,
         systemPromptAppend: PEER_SYSTEM_PROMPT_APPEND,
@@ -4321,13 +4324,19 @@ class RunnerSession {
    * **`permissionMode` が `auto` でもこの配線は外さない。** SDK が確認を降ろして
    * きたとき（`AskUserQuestion` を含む）の行き先はここ1本である。
    */
-  async #onPermission(permission: AgentPermissionRequest): Promise<AgentPermissionDecision> {
+  async #onPermission(
+    permission: AgentPermissionRequest,
+    source?: PeerApprovalSource,
+  ): Promise<AgentPermissionDecision> {
     const { toolName, input, kind, signal } = permission;
     // 確認を出せている＝セッションは開いて手を動かしている。
     this.#markProgressed();
     // SDK は同じ確認を再送しうる。id を SDK 側の識別子に揃えて、再送では新しい
     // 待ちを積まずに同じ結果を返す（二重に消費されると片方が永久に返らない）。
-    const id = permission.requestId ?? randomUUID();
+    // **peer の確認は id に出所を前置する**（マネージャー自身の確認の id と混ざらない）。
+    const rawId = permission.requestId ?? randomUUID();
+    const id =
+      source === undefined ? rawId : `peer:${source.provider}:${source.sessionId}:${rawId}`;
     const already = this.#pending.find((request) => request.id === id);
     if (already) return already.result;
     // **解けた後の再送も同じ扱いにする。** ここを `#pending` だけで見ていたのが
@@ -4339,8 +4348,12 @@ class RunnerSession {
     // ——`daemon-answered-tool.ts`、Issue #2173。`name === 'AskUserQuestion'` と
     // 同じ真偽値）。`manager-activity.ts` の `classifyManagerActivity` も同じ分け方を
     // 使うので、判定のコピーを2つ作らない。
-    const summary =
+    const baseSummary =
       kind === 'question' ? describeQuestions(input) : `${toolName} の実行許可: ${brief(input)}`;
+    // **出所の印は要約の先頭に必ず付ける**（日誌・待ち・クローンの受信箱のどれにも出る。
+    // 旧いデーモンが `source` 欄を落としても、印は本文に残る＝印の無い経路は作らない）。
+    const summary =
+      source === undefined ? baseSummary : `${peerApprovalMark(source.provider)}${baseSummary}`;
     // **ここで1度だけ取る（#334）。** `state()` も `ask` イベントもこの値を
     // そのまま運ぶだけにする——経路ごとに取り直すと、同じ確認が経路によって
     // 違う「待ち始めた時刻」を名乗る。
@@ -4449,7 +4462,15 @@ class RunnerSession {
       unlisten = () => signal.removeEventListener('abort', onAbort);
     }
 
-    this.#emit({ type: 'ask', managerId: this.#id, requestId: id, kind, summary, askedAt });
+    this.#emit({
+      type: 'ask',
+      managerId: this.#id,
+      requestId: id,
+      kind,
+      summary,
+      askedAt,
+      ...(source === undefined ? {} : { source: { type: 'peer', provider: source.provider } }),
+    });
 
     return result;
   }

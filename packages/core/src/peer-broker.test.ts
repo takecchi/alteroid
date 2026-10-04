@@ -76,7 +76,7 @@ function scriptedDriver(
 
 function makeBroker(
   script: Parameters<typeof scriptedDriver>[0],
-  options: { reportsUsage?: boolean } = {},
+  options: { reportsUsage?: boolean; askApproval?: PeerBrokerDeps['askApproval'] } = {},
 ) {
   const seen = { specs: [] as AgentManagerSessionSpec[], closed: 0 };
   const notes: string[] = [];
@@ -94,6 +94,7 @@ function makeBroker(
     reportsUsage: () => options.reportsUsage ?? true,
     onNote: (text) => notes.push(text),
     onUsage: (report) => usage.push(report),
+    ...(options.askApproval === undefined ? {} : { askApproval: options.askApproval }),
   };
   return { broker: createPeerBroker(deps), seen, notes, usage };
 }
@@ -117,7 +118,7 @@ describe('peer-broker（マネージャーの MCP peer）', () => {
     expect(await broker.reply('peer-none', 'x')).toContain('無い');
   });
 
-  it('承認が要る操作は上げずに拒否し、結果と日誌に出す（素通しにしない）', async () => {
+  it('承認の口が無ければ、承認が要る操作は拒否し、結果と日誌に出す（素通しにしない）', async () => {
     const { broker, notes } = makeBroker(async (_turn, spec) => {
       const decision = await spec.onPermission({
         requestId: 'r1',
@@ -135,6 +136,62 @@ describe('peer-broker（マネージャーの MCP peer）', () => {
     expect(
       notes.some((note) => note.includes('拒否した') && note.includes('commandExecution')),
     ).toBe(true);
+    broker.closeAll();
+  });
+
+  const ask = async (
+    spec: AgentManagerSessionSpec,
+    kind: 'permission' | 'question' = 'permission',
+  ) =>
+    spec.onPermission({
+      requestId: 'r1',
+      kind,
+      toolName: 'commandExecution',
+      input: {},
+      signal: new AbortController().signal,
+    });
+
+  it('askApproval があれば出所つきで上げ、許可はそのまま返して結果に数える', async () => {
+    const sources: unknown[] = [];
+    const { broker } = makeBroker(
+      async (_t, spec) => {
+        expect((await ask(spec)).behavior).toBe('allow');
+        return [turnEnded('やった')];
+      },
+      {
+        askApproval: async (source) => {
+          sources.push(source);
+          return { behavior: 'allow' };
+        },
+      },
+    );
+    const result = await broker.run('codex', 'x');
+    if (typeof result === 'string') throw new Error(result);
+    expect(result.approved).toEqual(['commandExecution']);
+    expect(result.denied).toEqual([]);
+    expect(sources).toEqual([{ provider: 'codex', sessionId: result.sessionId }]);
+    broker.closeAll();
+  });
+
+  it('askApproval が投げたら拒否に倒す。質問は上げずに拒否する', async () => {
+    let asked = 0;
+    const { broker } = makeBroker(
+      async (_t, spec) => {
+        expect((await ask(spec)).behavior).toBe('deny');
+        expect((await ask(spec, 'question')).behavior).toBe('deny');
+        return [turnEnded('だめだった')];
+      },
+      {
+        askApproval: async () => {
+          asked += 1;
+          throw new Error('口が無い');
+        },
+      },
+    );
+    const result = await broker.run('codex', 'x');
+    if (typeof result === 'string') throw new Error(result);
+    expect(result.denied).toHaveLength(2);
+    expect(asked).toBe(1);
     broker.closeAll();
   });
 
