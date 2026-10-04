@@ -111,11 +111,22 @@ export interface LaidEdge {
   reverse: boolean;
 }
 
+export type ContainerState = 'ok' | 'unknown' | 'offline';
+
+/** 場面の状態から器の状態へ。走る・走らないの無い対象なので、`offline` と `unknown` 以外は `ok`。 */
+function containerState(status: TopologyStatus): ContainerState {
+  return status === 'offline' ? 'offline' : status === 'unknown' ? 'unknown' : 'ok';
+}
+
 export interface LaidContainer {
   key: string;
   box: Box;
   label: string;
-  down: boolean;
+  /**
+   * 器の状態。`offline` は切れている（赤い破線）、`unknown` は確かめられない（灰色の破線と「不明」）、
+   * `ok` は何も足さない。**`unknown` を `ok` と同じ見た目にしない**（確かめたように読ませない。#2706）。
+   */
+  state: ContainerState;
   /** 器の名前を左上・右上のどちらへ置くか。狭い配置では左の縁を線が下りるので右へ寄せる */
   labelAlign: 'start' | 'end';
 }
@@ -353,12 +364,18 @@ export function layoutWide(scene: TopologyScene): TopologyLayout {
     nodes,
     edges,
     containers: [
-      { key: 'db', box: wrap(dbBox), label: 'db', down: dbDown, labelAlign: 'start' },
+      {
+        key: 'db',
+        box: wrap(dbBox),
+        label: 'db',
+        state: containerState(scene.db.status),
+        labelAlign: 'start',
+      },
       {
         key: 'daemon',
         box: wrap(cloneBox),
         label: scene.daemon?.label ?? 'alteroidd',
-        down: false,
+        state: 'ok',
         labelAlign: 'start',
       },
       {
@@ -370,7 +387,7 @@ export function layoutWide(scene: TopologyScene): TopologyLayout {
           h: contentH + HEAD + 4,
         },
         label: scene.runner.label ?? 'manager-runner',
-        down: runnerDown,
+        state: containerState(scene.runner.status),
         labelAlign: 'start',
       },
     ],
@@ -502,19 +519,25 @@ export function layoutNarrow(scene: TopologyScene): TopologyLayout {
     nodes,
     edges,
     containers: [
-      { key: 'db', box: dbContainer, label: 'db', down: dbDown, labelAlign: 'end' },
+      {
+        key: 'db',
+        box: dbContainer,
+        label: 'db',
+        state: containerState(scene.db.status),
+        labelAlign: 'end',
+      },
       {
         key: 'daemon',
         box: daemonContainer,
         label: scene.daemon?.label ?? 'alteroidd',
-        down: false,
+        state: 'ok',
         labelAlign: 'end',
       },
       {
         key: 'runner',
         box: runnerContainer,
         label: scene.runner.label ?? 'manager-runner',
-        down: runnerDown,
+        state: containerState(scene.runner.status),
         labelAlign: 'end',
       },
     ],

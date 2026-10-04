@@ -78,6 +78,12 @@ export const busyScene: SystemTopologyProps = {
   ],
 };
 
+/** runner が1つも登録されていない（分からない）。器は破線と「— 不明」で言い、正常には見せない。 */
+export const runnerUnknownScene: SystemTopologyProps = {
+  ...busyScene,
+  runner: { status: 'unknown' },
+};
+
 export const runnerDownScene: SystemTopologyProps = {
   ...busyScene,
   clone: { status: 'waiting', task: 'runner へ繋ぎ直している' },

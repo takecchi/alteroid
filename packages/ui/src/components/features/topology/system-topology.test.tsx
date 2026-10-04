@@ -62,3 +62,25 @@ describe('SystemTopology の大きさ', () => {
     expect(viewBoxWidth(container)).toBe(360);
   });
 });
+
+describe('器の枠の状態（#2706）', () => {
+  const containerOf = (c: HTMLElement, key: string) =>
+    c.querySelector(`[data-container="${key}"]`)!;
+
+  it('runner が unknown なら「— 不明」と破線で言い、ok の器には何も足さない', () => {
+    stubFrameWidth(1000);
+    const { container } = render(<SystemTopology {...busyScene} runner={{ status: 'unknown' }} />);
+    const runner = containerOf(container, 'runner');
+    expect(runner.textContent).toContain('— 不明');
+    expect(runner.querySelector('rect')!.getAttribute('stroke-dasharray')).toBe('6 4');
+    const db = containerOf(container, 'db');
+    expect(db.textContent).not.toContain('不明');
+    expect(db.querySelector('rect')!.getAttribute('stroke-dasharray')).toBeNull();
+  });
+
+  it('offline は「— 未接続」のまま', () => {
+    stubFrameWidth(1000);
+    const { container } = render(<SystemTopology {...busyScene} runner={{ status: 'offline' }} />);
+    expect(containerOf(container, 'runner').textContent).toContain('— 未接続');
+  });
+});

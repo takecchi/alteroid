@@ -255,17 +255,27 @@ function summarize({ clone, db, runner, managers }: TopologyScene): string {
   return parts.join('。');
 }
 
-function Container({ container: { box, label, down, labelAlign } }: { container: LaidContainer }) {
+function Container({
+  container: { key, box, label, state, labelAlign },
+}: {
+  container: LaidContainer;
+}) {
+  const down = state === 'offline';
+  const unknown = state === 'unknown';
   return (
-    <g>
+    <g data-container={key} data-state={state}>
       <rect
         x={box.x}
         y={box.y}
         width={box.w}
         height={box.h}
         rx={12}
-        className={cn('fill-muted/30 stroke-border', down && 'stroke-destructive/70')}
-        strokeDasharray={down ? '6 4' : undefined}
+        className={cn(
+          'fill-muted/30 stroke-border',
+          down && 'stroke-destructive/70',
+          unknown && 'stroke-muted-foreground/60',
+        )}
+        strokeDasharray={down || unknown ? '6 4' : undefined}
       />
       <text
         x={labelAlign === 'end' ? box.x + box.w - 12 : box.x + 12}
@@ -274,7 +284,7 @@ function Container({ container: { box, label, down, labelAlign } }: { container:
         className="fill-muted-foreground font-mono text-[11px] tracking-wide"
       >
         {label}
-        {down ? ' — 未接続' : ''}
+        {down ? ' — 未接続' : unknown ? ' — 不明' : ''}
       </text>
     </g>
   );

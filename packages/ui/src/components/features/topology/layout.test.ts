@@ -154,3 +154,20 @@ describe('roundedPath', () => {
     expect(d).toBe('M 0 0 L 37 0 Q 40 0 40 3 L 40 3 Q 40 6 43 6 L 80 6');
   });
 });
+
+describe('器の状態（#2706）', () => {
+  const states = (l: TopologyLayout) =>
+    Object.fromEntries(l.containers.map((c) => [c.key, c.state]));
+
+  it.each([
+    ['wide', layoutWide],
+    ['narrow', layoutNarrow],
+  ] as const)('%s: runner / db の状態が器へ載る。unknown は ok と別', (_name, layout) => {
+    const base = scene([1]);
+    expect(states(layout(base))).toEqual({ db: 'ok', daemon: 'ok', runner: 'ok' });
+    expect(states(layout({ ...base, runner: { status: 'unknown' } })).runner).toBe('unknown');
+    expect(states(layout({ ...base, runner: { status: 'offline' } })).runner).toBe('offline');
+    expect(states(layout({ ...base, db: { status: 'unknown' } })).db).toBe('unknown');
+    expect(states(layout({ ...base, db: { status: 'offline' } })).db).toBe('offline');
+  });
+});

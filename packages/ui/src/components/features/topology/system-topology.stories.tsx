@@ -8,6 +8,7 @@ import {
   idleScene,
   liveFrames,
   runnerDownScene,
+  runnerUnknownScene,
   storageDownScene,
   unknownScene,
 } from './samples';
@@ -36,6 +37,9 @@ export const Idle: Story = { args: idleScene };
 
 /** runner へ届かない。そこへ向かう線は破線にして、光を流さない。 */
 export const RunnerOffline: Story = { args: runnerDownScene };
+
+/** runner が登録されていない。器の枠も破線にして「— 不明」と言う（正常に見せない）。 */
+export const RunnerUnknown: Story = { args: runnerUnknownScene };
 
 /** 確かめられない軸は「不明」（破線の札）。待機・正常とは描かない。 */
 export const Unknown: Story = { args: unknownScene };
