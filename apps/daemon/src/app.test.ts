@@ -1,4 +1,3 @@
-import { COMMITMENT_APPRAISAL_DECISION_PREFIX, describeAppraisal } from '@alteroid/core';
 import { FsPersonaStore } from '@alteroid/storage-fs';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -148,29 +147,6 @@ function fakeClone() {
         };
       }
       return { outcome: sendOutcome, detail: '届けた' };
-    },
-    /**
-     * 評定（#1054）。**本物と同じところまで動かす** —— 「無い id は `absent`」と
-     * 「前の値を返す」と「理由を渡さなければ前の理由を消す」の3つに、HTTP の
-     * 応答と日誌の本文が依存している。
-     */
-    async appraise(managerId, appraisal, by, reason, workKind) {
-      const found = managerList.find((entry) => entry.managerId === managerId);
-      if (!found) {
-        return { outcome: 'absent' as const, detail: `${managerId} は居ない`, previous: null };
-      }
-      const previous = describeAppraisal(found);
-      found.appraisal = appraisal;
-      found.appraisedBy = by;
-      delete found.appraisalReason;
-      if (reason !== undefined) found.appraisalReason = reason;
-      // 種類は渡されなければ前の値を残す（本物と同じ。#1308）。
-      if (workKind !== undefined) found.workKind = workKind;
-      return {
-        outcome: 'appraised' as const,
-        detail: `${managerId} の評定を ${appraisal} にした。`,
-        previous,
-      };
     },
     async abort(managerId, reason) {
       if (!managerList.some((entry) => entry.managerId === managerId)) {
@@ -493,11 +469,6 @@ describe('managerSummarySchema と ManagerSummary のキーの一致（再発防
       startedAt: true,
       updatedAt: true,
       sessionId: true,
-      appraisal: true,
-      appraisedAt: true,
-      appraisedBy: true,
-      appraisalReason: true,
-      workKind: true,
       lastReport: true,
       lastReportAt: true,
       lastReportStatus: true,
@@ -4632,146 +4603,10 @@ describe('HTTP API', () => {
   });
 
   /**
-   * 評定（#1054。自己改善の段1）。**この口の本題は「人間が覆せること」である。**
-   */
-  it('人間が評定を付けられ、片付いた行にも未了の行にも通る', async () => {
-    const opened = await app.request('/commitments', json({ body: '評定される件' }));
-    const { id } = (await opened.json()) as { id: string };
-
-    // 未了のまま付く（「片付いてから」を器が強制しない）
-    const first = await app.request(
-      `/commitments/${id}/appraise`,
-      json({ appraisal: 'unclear', reason: 'まだ材料が無い' }),
-    );
-    expect(first.status).toBe(200);
-    expect(await stores.commitments.get(id)).toMatchObject({
-      appraisal: 'unclear',
-      appraisedBy: 'human',
-      appraisalReason: 'まだ材料が無い',
-    });
-    // 評定は行を閉じない（片付いたかどうかとは別の軸である）
-    expect((await stores.commitments.get(id))?.closedAt).toBeUndefined();
-
-    await app.request(`/commitments/${id}/close`, json({ reason: '終わった' }));
-    // 片付いた行にも通る（上書き）
-    expect(
-      (await app.request(`/commitments/${id}/appraise`, json({ appraisal: 'good' }))).status,
-    ).toBe(200);
-    expect(await stores.commitments.get(id)).toMatchObject({ appraisal: 'good' });
-    // **理由を渡さない上書きは、前の理由を消す。** 残すと「うまくいった」の理由が
-    // 「まだ材料が無い」になる（値だけ入れ替わって説明が前の書き手のものになる）。
-    expect((await stores.commitments.get(id))?.appraisalReason).toBeUndefined();
-  });
-
-  it('覆した事実は日誌に残る（前の値が本文に入る＝較正の材料）', async () => {
-    const opened = await app.request('/commitments', json({ body: '覆される件' }));
-    const { id } = (await opened.json()) as { id: string };
-
-    // クローンが付けた体で1回書き、人間が覆す
-    await stores.commitments.appraise(id, '2026-01-01T00:00:00.000Z', 'good', 'clone', '通った');
-    expect(
-      (
-        await app.request(
-          `/commitments/${id}/appraise`,
-          json({ appraisal: 'bad', reason: '差し戻し' }),
-        )
-      ).status,
-    ).toBe(200);
-
-    const entries = await stores.journal.list({ types: ['decision'] });
-    const appraisal = entries.filter((entry) =>
-      entry.type === 'decision'
-        ? entry.decision.startsWith(COMMITMENT_APPRAISAL_DECISION_PREFIX)
-        : false,
-    );
-    expect(appraisal).toHaveLength(1);
-    const entry = appraisal[0];
-    const decision = entry?.type === 'decision' ? entry.decision : '';
-    expect(decision).toContain('bad');
-    // **前の値が入っていること。** 行は「いまの値」しか持たないので、ここに
-    // 落ちていなければ「クローンは good と言っていた」がどこにも残らない。
-    expect(decision).toContain('うまくいった');
-    expect(decision).toContain('通った');
-
-    // **構造欄（#1310）も同時に書かれていること。** 自由文だけに頼ると、
-    // grounds の文言を1文字変えただけで (b)/(c) の食い違いが復元できなく
-    // なる（`inferAppraisedByFromGrounds` の doc）。
-    expect(entry?.type === 'decision' ? entry.appraisal : undefined).toEqual({
-      target: 'commitment',
-      id,
-      value: 'bad',
-      by: 'human',
-      previous: 'good',
-      previousBy: 'clone',
-    });
-  });
-
-  it('仕事の種類（#1308）は人間の口では任意で、渡さない付け直しでは前の種類が残り、日誌の構造欄にも載る', async () => {
-    const opened = await app.request('/commitments', json({ body: '種類つきで評定する件' }));
-    const { id } = (await opened.json()) as { id: string };
-
-    expect(
-      (
-        await app.request(
-          `/commitments/${id}/appraise`,
-          json({ appraisal: 'good', workKind: '実装' }),
-        )
-      ).status,
-    ).toBe(200);
-    expect(await stores.commitments.get(id)).toMatchObject({ appraisal: 'good', workKind: '実装' });
-
-    // 種類を渡さずに覆す —— 種類は残る（理由と逆の扱い）。
-    expect(
-      (await app.request(`/commitments/${id}/appraise`, json({ appraisal: 'bad' }))).status,
-    ).toBe(200);
-    expect(await stores.commitments.get(id)).toMatchObject({ appraisal: 'bad', workKind: '実装' });
-
-    const structured = (await stores.journal.list({ types: ['decision'] }))
-      .map((entry) => (entry.type === 'decision' ? entry.appraisal : undefined))
-      .filter((appraisal) => appraisal?.id === id);
-    expect(structured).toHaveLength(2);
-    // **日誌には書いた結果の種類が載る**（渡されなかった回も、残った前の種類）。
-    expect(structured.map((appraisal) => appraisal?.workKind)).toEqual(['実装', '実装']);
-
-    // 空の種類は 400（器は列挙では弾かないが、空は種類ではない）。
-    expect(
-      (await app.request(`/commitments/${id}/appraise`, json({ appraisal: 'good', workKind: '' })))
-        .status,
-    ).toBe(400);
-  });
-
-  it('委譲の評定の種類（#1308）は ManagerPool へ渡り、GET /managers の応答まで落ちずに届く', async () => {
-    fake.managerList.push({
-      managerId: 'mgr-kind',
-      status: 'done',
-      live: false,
-      cwd: '/work',
-      request: '調べて',
-      startedAt: '2026-01-01T00:00:00.000Z',
-      updatedAt: '2026-01-01T00:00:00.000Z',
-      waiting: [],
-    });
-    expect(
-      (
-        await app.request(
-          '/managers/mgr-kind/appraise',
-          json({ appraisal: 'good', workKind: '調査' }),
-        )
-      ).status,
-    ).toBe(200);
-    // **`managerSummarySchema`（openapi.ts）は手書きの再宣言なので、宣言し忘れると
-    // `.parse()` がここで黙って落とす。** 応答から読むことでそれを測る。
-    const listed = (await (await app.request('/managers')).json()) as {
-      managers: { managerId: string; workKind?: string }[];
-    };
-    expect(listed.managers.find((m) => m.managerId === 'mgr-kind')?.workKind).toBe('調査');
-  });
-
-  /**
    * 疑い（管理者から）: `ManagerSummary`（core）が持つ `lastCgroupEvents`（#1517）と
    * `lastUnpushedWorkObservation`（#1266）は `managerSummarySchema`（openapi.ts）に
    * 宣言されていないように見える。`/managers` は応答を `.parse()` に通すので、
-   * 宣言に無い欄は zod が黙って落とす（直上のテストの `workKind` と同じ機構）。
+   * 宣言に無い欄は zod が黙って落とす（zod の `z.object` の既定の挙動）。
    * ここではその2欄が実際に応答へ届くかを、直で確かめる。
    */
   it('lastCgroupEvents（#1517）と lastUnpushedWorkObservation（#1266）が GET /managers の応答まで届く', async () => {
@@ -4862,79 +4697,6 @@ describe('HTTP API', () => {
       manager: { lastUnpushedWorkObservation?: unknown };
     };
     expect(single.manager.lastUnpushedWorkObservation).toEqual(observation);
-  });
-
-  it('台帳に無い id は 404（評定は「書けた」と嘘をつかない）', async () => {
-    expect(
-      (await app.request('/commitments/nope/appraise', json({ appraisal: 'good' }))).status,
-    ).toBe(404);
-  });
-
-  it('既知でない評定は 400（3値は器が持つ）', async () => {
-    const opened = await app.request('/commitments', json({ body: '不正な評定' }));
-    const { id } = (await opened.json()) as { id: string };
-    expect(
-      (await app.request(`/commitments/${id}/appraise`, json({ appraisal: 'brilliant' }))).status,
-    ).toBe(400);
-  });
-
-  /**
-   * 委譲の評定（#1054）。**クローンの `manager_appraise` と同じ `ManagerPool.appraise`
-   * を通る** —— 人間に出来てクローンに出来ないことも、その逆も作らない。
-   */
-  it('人間が委譲に評定を付けられる（上書きでき、理由を渡さなければ前の理由が消える）', async () => {
-    fake.managerList.push({
-      managerId: 'mgr-rate',
-      status: 'done',
-      live: false,
-      cwd: '/work',
-      request: '調べて',
-      startedAt: '2026-01-01T00:00:00.000Z',
-      updatedAt: '2026-01-01T00:00:00.000Z',
-      waiting: [],
-    });
-
-    expect(
-      (
-        await app.request(
-          '/managers/mgr-rate/appraise',
-          json({ appraisal: 'good', reason: '一発で通った' }),
-        )
-      ).status,
-    ).toBe(200);
-    expect(fake.managerList.find((m) => m.managerId === 'mgr-rate')).toMatchObject({
-      appraisal: 'good',
-      appraisedBy: 'human',
-      appraisalReason: '一発で通った',
-    });
-
-    // 理由を渡さない覆しは前の理由を消す（残すと説明が前の書き手のものになる）。
-    expect(
-      (await app.request('/managers/mgr-rate/appraise', json({ appraisal: 'bad' }))).status,
-    ).toBe(200);
-    const after = fake.managerList.find((m) => m.managerId === 'mgr-rate');
-    expect(after?.appraisal).toBe('bad');
-    expect(after?.appraisalReason).toBeUndefined();
-  });
-
-  it('台帳に居ないマネージャーは 404、既知でない評定は 400', async () => {
-    expect(
-      (await app.request('/managers/mgr-nope/appraise', json({ appraisal: 'good' }))).status,
-    ).toBe(404);
-    fake.managerList.push({
-      managerId: 'mgr-rate-400',
-      status: 'done',
-      live: false,
-      cwd: '/work',
-      request: '調べて',
-      startedAt: '2026-01-01T00:00:00.000Z',
-      updatedAt: '2026-01-01T00:00:00.000Z',
-      waiting: [],
-    });
-    expect(
-      (await app.request('/managers/mgr-rate-400/appraise', json({ appraisal: 'brilliant' })))
-        .status,
-    ).toBe(400);
   });
 
   it('片付けたものは既定の一覧から消え、includeClosed=true でだけ出る', async () => {
@@ -5510,8 +5272,6 @@ describe('appendJournalOrDrop を当てた残りの口: 追記が落ちても 50
       createdAt: '2026-08-12T00:00:00.000Z',
       updatedAt: '2026-08-12T00:00:00.000Z',
     });
-    const openedForAppraise = await app.request('/commitments', json({ body: '評定対象' }));
-    const { id: appraiseId } = (await openedForAppraise.json()) as { id: string };
     const openedForPatch = await app.request('/commitments', json({ body: '編集対象' }));
     const { id: patchId } = (await openedForPatch.json()) as { id: string };
     await stores.inbox.put(
@@ -5583,14 +5343,6 @@ describe('appendJournalOrDrop を当てた残りの口: 追記が落ちても 50
       {
         name: 'POST /commitments',
         request: () => withFailingJournal.request('/commitments', json({ body: '積む対象' })),
-      },
-      {
-        name: 'POST /commitments/:id/appraise',
-        request: () =>
-          withFailingJournal.request(
-            `/commitments/${appraiseId}/appraise`,
-            json({ appraisal: 'good' }),
-          ),
       },
       {
         name: 'PATCH /commitments/:id',
@@ -7382,167 +7134,6 @@ describe('GET /dropped（#242 の HTTP 面）', () => {
     const body = (await response.json()) as { traces: string[] };
 
     expect(JSON.stringify(body)).not.toContain(secret);
-  });
-});
-
-/**
- * `GET /appraisal-stats`（#1278 の HTTP 面。PRD「入口の等価性」——クローンの
- * `appraisal_stats`（MCP。`tools.test.ts`）と同じものを人間の手からも）。
- */
-describe('GET /appraisal-stats（#1278 の HTTP 面）', () => {
-  it('仕事の種類ごとの内訳（#1308 段B）が応答まで落ちずに届く', async () => {
-    await stores.journal.append({
-      type: 'decision',
-      decision: '引き受けた仕事に評定を付けた（c1）: bad',
-      grounds: '',
-      appraisal: { target: 'commitment', id: 'c1', value: 'bad', by: 'clone', workKind: '実装' },
-    });
-    const response = await app.request('/appraisal-stats');
-    expect(response.status).toBe(200);
-    const body = (await response.json()) as {
-      journal: { byWorkKind: { commitments: { workKind: string | null; total: number }[] } };
-    };
-    // 応答の schema（openapi.ts の appraisalStatsResponseSchema）が宣言していなければ、
-    // .parse() がここで黙って落とす。
-    expect(body.journal.byWorkKind.commitments).toEqual([
-      { workKind: '実装', good: 0, bad: 1, unclear: 0, other: 0, total: 1 },
-    ]);
-  });
-
-  it('日誌の2つの印を混ぜずに数え、200件超でも総数が出る（limit に縛られない）', async () => {
-    for (let i = 0; i < 210; i += 1) {
-      await stores.journal.append({
-        type: 'decision',
-        decision: `引き受けた仕事に評定を付けた（c${i}）: good`,
-        grounds: '',
-      });
-    }
-    await stores.journal.append({
-      type: 'decision',
-      decision: '委譲に評定を付けた（m1）: bad — 差し戻し',
-      grounds: '',
-    });
-
-    const response = await app.request('/appraisal-stats');
-    expect(response.status).toBe(200);
-    const body = (await response.json()) as {
-      journal: {
-        commitments: { good: number; bad: number; unclear: number; other: number; total: number };
-        jobs: { good: number; bad: number; unclear: number; other: number; total: number };
-      };
-    };
-
-    // journal_read（MCP）の limit=200 に当たれば下限へ化ける件数——ここでは
-    // ストアを直接読むので、210件全部が数えられている。
-    // ⚠️ **この歯が守っているのは「全件が数えられること」であって「`limit` を
-    // 渡していないこと」ではない**（#1342）。210件は日誌走査の1ページ
-    // （`JOURNAL_SCAN_PAGE_SIZE` ＝ 500）に収まるので、ページ送りが実際に回る側は
-    // `packages/core/src/appraisal-stats.test.ts` の歯が測る（HTTP 面では測らない）。
-    expect(body.journal.commitments.total).toBe(210);
-    expect(body.journal.commitments.good).toBe(210);
-    // 委譲側は別の印なので、台帳側の210件に引きずられず1件だけ。
-    expect(body.journal.jobs.total).toBe(1);
-    expect(body.journal.jobs.bad).toBe(1);
-  });
-
-  /**
-   * **変異試験で見つけた穴（#1278）。** `appraisalDecisionTallySchema`
-   * （`openapi.ts`）から `unclear` を1つ落としても、直上の it は red にならな
-   * かった——`good`/`bad`/`total` しか見ていなかったため、zod が未知でない
-   * だけの「宣言し忘れた」欄を黙って応答から落とす形（`z.object()` は既定で
-   * 未宣言のキーを出力から剥がす）を見逃していた。**この歯は5つのキー
-   * （good/bad/unclear/other/total）を `toEqual` で丸ごと突き合わせる**ので、
-   * どれか1つでもスキーマから抜け落ちれば必ず落ちる。
-   */
-  it('good/bad/unclear/other/total の5キーが全部、台帳・委譲の両方に出る（スキーマの欄落ちを検出する）', async () => {
-    await stores.journal.append({
-      type: 'decision',
-      decision: '引き受けた仕事に評定を付けた（c1）: good',
-      grounds: '',
-    });
-    await stores.journal.append({
-      type: 'decision',
-      decision: '引き受けた仕事に評定を付けた（c2）: bad — 差し戻し',
-      grounds: '',
-    });
-    await stores.journal.append({
-      type: 'decision',
-      decision: '引き受けた仕事に評定を付けた（c3）: unclear',
-      grounds: '',
-    });
-    await stores.journal.append({
-      type: 'decision',
-      decision: '引き受けた仕事に評定を付けた（c4）: weird',
-      grounds: '',
-    });
-    await stores.journal.append({
-      type: 'decision',
-      decision: '委譲に評定を付けた（m1）: good',
-      grounds: '',
-    });
-    await stores.journal.append({
-      type: 'decision',
-      decision: '委譲に評定を付けた（m2）: unclear',
-      grounds: '',
-    });
-
-    const response = await app.request('/appraisal-stats');
-    const body = (await response.json()) as {
-      journal: {
-        commitments: { good: number; bad: number; unclear: number; other: number; total: number };
-        jobs: { good: number; bad: number; unclear: number; other: number; total: number };
-      };
-    };
-
-    expect(body.journal.commitments).toEqual({ good: 1, bad: 1, unclear: 1, other: 1, total: 4 });
-    expect(body.journal.jobs).toEqual({ good: 1, bad: 0, unclear: 1, other: 0, total: 2 });
-  });
-
-  it('終端した委譲を状態ごとに割り、評定なしを4つ目の状態として出す', async () => {
-    await stores.jobs.putJob({
-      id: 'm-done',
-      createdAt: '2026-08-01T00:00:00.000Z',
-      updatedAt: '2026-08-01T00:00:00.000Z',
-      status: 'done',
-      summary: '完了',
-      appraisal: 'good',
-    });
-    await stores.jobs.putJob({
-      id: 'm-stopped',
-      createdAt: '2026-08-01T00:00:00.000Z',
-      updatedAt: '2026-08-01T00:00:00.000Z',
-      status: 'stopped',
-      summary: 'manager_stop で畳んだ（評定なし）',
-    });
-    await stores.jobs.putJob({
-      id: 'm-running',
-      createdAt: '2026-08-01T00:00:00.000Z',
-      updatedAt: '2026-08-01T00:00:00.000Z',
-      status: 'running',
-      summary: 'まだ走行中——対象外',
-    });
-
-    const response = await app.request('/appraisal-stats');
-    const body = (await response.json()) as {
-      jobCoverage: {
-        byStatus: Array<{ status: string; total: number; appraised: number; unappraised: number }>;
-        terminalTotal: number;
-        terminalUnappraised: number;
-        nonTerminalTotal: number;
-        unreadableJobs: number;
-      };
-    };
-
-    const byStatus = Object.fromEntries(body.jobCoverage.byStatus.map((row) => [row.status, row]));
-    expect(byStatus.done).toEqual({ status: 'done', total: 1, appraised: 1, unappraised: 0 });
-    expect(byStatus.stopped).toEqual({ status: 'stopped', total: 1, appraised: 0, unappraised: 1 });
-    // running は byStatus に現れない（対象外）が、非終端の件数として残る。
-    expect(byStatus.running).toBeUndefined();
-    expect(body.jobCoverage.nonTerminalTotal).toBe(1);
-    expect(body.jobCoverage.terminalTotal).toBe(2);
-    expect(body.jobCoverage.terminalUnappraised).toBe(1);
-    // 読めない委譲が無いときは 0 が載る（issue #2359）。
-    expect(body.jobCoverage.unreadableJobs).toBe(0);
   });
 });
 

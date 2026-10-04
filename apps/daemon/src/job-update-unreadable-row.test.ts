@@ -1,13 +1,8 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import {
-  captureStderr,
-  createManagerPool,
-  createRunnerRegistry,
-  UnreadableJobError,
-} from '@alteroid/core';
-import type { Job, Stores } from '@alteroid/core';
+import { captureStderr, UnreadableJobError } from '@alteroid/core';
+import type { Job } from '@alteroid/core';
 import { createFsStores } from '@alteroid/storage-fs';
 import { createPgStoresFromDb, tables, type Db, type PgStores } from '@alteroid/storage-pg';
 import type { PGlite } from '@electric-sql/pglite';
@@ -21,16 +16,14 @@ import { createMigratedPglite, migratedTemplate } from './pglite-template.test-s
  * 扱い（issue #2051、および「読めない」を「無い」へ倒していた穴）。
  *
  * #2051（PR #2061）で pg 実装の `ZodError` を直したとき、読めない行を
- * 「無い」と同じ `null` にそろえた。その結果、呼び出し元の
- * `ManagerPool.appraise()` が「<id> というマネージャーは台帳に居ない。」と
- * 言い切っていた（在るが読めないだけの行を「無い」と報告する）。今は
+ * 「無い」と同じ `null` にそろえた。その結果、呼び出し元が在るが読めないだけの行を
+ * 「台帳に居ない」と報告しうる形になっていた。今は
  * `UnreadableJobError` を投げて「無い」（`null`）と分ける。
  *
  * この歯は fs / pg の2実装を並べて、どちらも「読めない行では
  * `UnreadableJobError`。`mutate` は呼ばれない。行は1バイトも変わらない。
  * stderr に id だけの跡が出る（本文は出ない）」を満たすこと、そして本当に
- * 無い id は従来どおり `null` であることを確かめる。最後に `ManagerPool.
- * appraise()` まで通して、応答が「台帳に居ない」と言わないことを確かめる。
+ * 無い id は従来どおり `null` であることを確かめる。
  *
  * **メモリ実装（`createMemoryStores`）はここに並べない。** `putJob` が既に
  * `jobSchema.parse` を書き込み時に通す（issue #1715）ので、壊れた行を保持
@@ -48,19 +41,6 @@ const BAD_JOB_RAW = {
   status: 'not-a-real-status-from-a-newer-deploy',
   summary: '壊れた job の本文（この文字列は跡に出てはいけない）',
 };
-
-const NOW = '2026-09-03T00:00:00.000Z';
-
-/** 評定を書こうとして、応答が何と言うかを測る。 */
-async function appraiseThrough(stores: Stores, id: string) {
-  const pool = createManagerPool({
-    stores,
-    post: () => {},
-    runners: createRunnerRegistry([]),
-    now: () => Date.parse(NOW),
-  });
-  return pool.appraise(id, 'good', 'human');
-}
 
 describe('JobStore.updateJob() — 読めない job 行の扱い', () => {
   // PGlite の雛形（WASM の起動＋migrate）は、ワーカーで最初に呼んだ歯が払う。
@@ -120,32 +100,6 @@ describe('JobStore.updateJob() — 読めない job 行の扱い', () => {
         result = await stores.jobs.updateJob('mgr-nowhere', (current) => current);
       });
       expect(result).toBeNull();
-    });
-
-    it('ManagerPool.appraise() は読めない行を「台帳に居ない」と言わない。行は1バイトも変わらない', async () => {
-      const { jobsPath, stores } = await seed();
-      const before = await readFile(jobsPath, 'utf8');
-
-      let result: Awaited<ReturnType<typeof appraiseThrough>> | undefined;
-      await captureStderr(async () => {
-        result = await appraiseThrough(stores, BAD_JOB_RAW.id);
-      });
-
-      expect(result?.outcome).toBe('unreadable');
-      expect(result?.detail).not.toContain('台帳に居ない');
-      expect(result?.detail).toContain(BAD_JOB_RAW.id);
-      expect(result?.detail).not.toContain(BAD_JOB_RAW.summary);
-      expect(await readFile(jobsPath, 'utf8')).toBe(before);
-    });
-
-    it('ManagerPool.appraise() は本当に無い id を従来どおり absent と言う', async () => {
-      const { stores } = await seed();
-      let result: Awaited<ReturnType<typeof appraiseThrough>> | undefined;
-      await captureStderr(async () => {
-        result = await appraiseThrough(stores, 'mgr-nowhere');
-      });
-      expect(result?.outcome).toBe('absent');
-      expect(result?.detail).toContain('台帳に居ない');
     });
   });
 
@@ -209,23 +163,6 @@ describe('JobStore.updateJob() — 読めない job 行の扱い', () => {
       await seed();
       const result = await stores.jobs.updateJob('mgr-nowhere', (current) => current);
       expect(result).toBeNull();
-    });
-
-    it('ManagerPool.appraise() は読めない行を「台帳に居ない」と言わない。行は書き換えられない', async () => {
-      await seed();
-
-      let result: Awaited<ReturnType<typeof appraiseThrough>> | undefined;
-      await captureStderr(async () => {
-        result = await appraiseThrough(stores, BAD_JOB_RAW.id);
-      });
-
-      expect(result?.outcome).toBe('unreadable');
-      expect(result?.detail).not.toContain('台帳に居ない');
-      expect(result?.detail).toContain(BAD_JOB_RAW.id);
-      expect(result?.detail).not.toContain(BAD_JOB_RAW.summary);
-      const rows = await db.select().from(tables.jobs);
-      expect(rows).toHaveLength(1);
-      expect(rows[0]?.job).toEqual(BAD_JOB_RAW);
     });
   });
 });

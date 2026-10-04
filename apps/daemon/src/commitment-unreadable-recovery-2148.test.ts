@@ -16,15 +16,14 @@ import { createMigratedPglite } from './pglite-template.test-support.js';
  * issue #2148。
  *
  * 読めない約束（`UnreadableCommitmentError` になる行）を、HTTP でも道具でも
- * 直す・閉じる口が実質無かった——呼び手の5口（`PATCH /commitments/:id`・
- * `POST /commitments/:id/appraise`・道具 `commitment_close` /
- * `commitment_edit` / `commitment_appraise`）が先に `commitments.get(id)` を
+ * 直す・閉じる口が実質無かった——呼び手の口（`PATCH /commitments/:id`・道具 `commitment_close` /
+ * `commitment_edit`）が先に `commitments.get(id)` を
  * 無条件に呼んで投げていた。マネージャーの決定（issue 本文へのコメント）は:
  *
  * - (1) `POST /commitments/:id/close` と道具 `commitment_close` は、読めない
  *   約束も閉じられるようにする（fs / pg 両方）。
  * - (2) 本文の書き直し（`PATCH` / `commitment_edit`）はこの issue ではやらない。
- * - (3) 上の5口は、読めない約束を 500 / 生の isError ではなく、409 /
+ * - (3) 上の口は、読めない約束を 500 / 生の isError ではなく、409 /
  *   理由の分かる isError で名乗る。
  *
  * ここでは fs / pg の両方で、`origin` が既知の値でない（`commitmentOriginSchema`
@@ -193,7 +192,7 @@ describe.each([
       expect(close.status).toBe(404);
     });
 
-    it('commitment_close は読めない約束も閉じられる（本文は漏れない・評定は付かない）', async () => {
+    it('commitment_close は読めない約束も閉じられる（本文は漏れない）', async () => {
       const call = toolCaller(stores);
       const result = await call('commitment_close', { id: BAD_ID, reason: '閉じた' });
       expect(result.isError).toBe(false);
@@ -203,18 +202,6 @@ describe.each([
 
       const list = await stores.commitments.list({ includeClosed: true });
       expect(list.unreadable.some((row) => row.id === BAD_ID)).toBe(true);
-    });
-
-    it('commitment_close で読めない約束に appraisal を渡しても評定は記録しない（読めない欄をそれらしい値で埋めない）', async () => {
-      const call = toolCaller(stores);
-      const result = await call('commitment_close', {
-        id: BAD_ID,
-        reason: '閉じた',
-        appraisal: 'good',
-        workKind: '調査',
-      });
-      expect(result.isError).toBe(false);
-      expect(result.text).toContain('評定は付けられなかった');
     });
 
     it('commitment_close で既に閉じた読めない約束をもう一度閉じようとすると、その旨を平文で返す（isError にはしない）', async () => {
@@ -234,7 +221,7 @@ describe.each([
     });
   });
 
-  describe('(3) 名乗る（本文の書き直し・評定は通さない）', () => {
+  describe('(3) 名乗る（本文の書き直しは通さない）', () => {
     it('PATCH /commitments/:id は読めない約束で 409（本文は漏れない）', async () => {
       const patch = await app.request(`/commitments/${BAD_ID}`, {
         ...json({ body: '書き直したい' }),
@@ -242,17 +229,6 @@ describe.each([
       });
       const body = (await patch.json()) as { error: string };
       expect(patch.status, `本文: ${JSON.stringify(body)}`).toBe(409);
-      expect(body.error).toContain('close');
-      expect(body.error).not.toContain(BAD_BODY);
-    });
-
-    it('POST /commitments/:id/appraise は読めない約束で 409（本文は漏れない）', async () => {
-      const appraise = await app.request(
-        `/commitments/${BAD_ID}/appraise`,
-        json({ appraisal: 'good' }),
-      );
-      const body = (await appraise.json()) as { error: string };
-      expect(appraise.status, `本文: ${JSON.stringify(body)}`).toBe(409);
       expect(body.error).toContain('close');
       expect(body.error).not.toContain(BAD_BODY);
     });
@@ -265,29 +241,12 @@ describe.each([
       expect(result.text).not.toContain(BAD_BODY);
     });
 
-    it('commitment_appraise は読めない約束で isError（本文は漏れない）', async () => {
-      const call = toolCaller(stores);
-      const result = await call('commitment_appraise', {
-        id: BAD_ID,
-        appraisal: 'good',
-        workKind: '調査',
-      });
-      expect(result.isError).toBe(true);
-      expect(result.text).toContain('close');
-      expect(result.text).not.toContain(BAD_BODY);
-    });
-
-    it('本当に無い id は PATCH/appraise とも今までどおり 404', async () => {
+    it('本当に無い id は PATCH でも今までどおり 404', async () => {
       const patch = await app.request('/commitments/never-existed', {
         ...json({ body: 'x' }),
         method: 'PATCH',
       });
       expect(patch.status).toBe(404);
-      const appraise = await app.request(
-        '/commitments/never-existed/appraise',
-        json({ appraisal: 'good' }),
-      );
-      expect(appraise.status).toBe(404);
     });
   });
 });

@@ -3,7 +3,6 @@ import {
   agentTokenInputSchema,
   agentTokenViewSchema,
   APPROVAL_TRACE_STATES,
-  appraisalSchema,
   commitmentSchema,
   createMemoryStores,
   INBOX_EVENT_TYPE_ORDER,
@@ -981,25 +980,6 @@ export const managerSummarySchema = z.object({
   startedAt: z.string(),
   updatedAt: z.string(),
   sessionId: z.string().optional(),
-  /**
-   * **その委譲がどうだったか**（#1054）。台帳（`Job.appraisal`）をそのまま写す。
-   *
-   * **`status` とは別の軸である** —— `done` は「セッションが終わった」であって
-   * 「良かった」ではない。無いことは「まだ評定していない」であって「普通」では
-   * ないので、読む側は `good` にも `bad` にも寄せないこと。
-   *
-   * **型は `z.string()` で緩い**（既知の値は `appraisalSchema`）。台帳の
-   * `Job.appraisal` と同じ理由で、未知の値1つで応答が丸ごと壊れる側へ倒さない。
-   */
-  appraisal: z.string().optional(),
-  appraisedAt: z.string().optional(),
-  appraisedBy: z.string().optional(),
-  appraisalReason: z.string().optional(),
-  /**
-   * 評定が述べた仕事の種類（#1308。`Job.workKind`）。無ければ未分類。**宣言しなければ
-   * `.parse()` がここで黙って落とす**（この schema は手書きの再宣言である）。
-   */
-  workKind: z.string().optional(),
   lastReport: z.string().optional(),
   /**
    * `lastReport` を**デーモンが受け取った時刻**（#358）。
@@ -2093,121 +2073,6 @@ export const droppedResponseSchema = z.object({
 });
 
 // ---------------------------------------------------------------------------
-// 評定の内訳（/appraisal-stats）——#1278「評定の内訳を要るときに数える口が無い」の HTTP 面。
-// PRD「入口の等価性」（droppedResponseSchema の doc と同じ理由）。
-// ---------------------------------------------------------------------------
-
-/**
- * 評定（`good`/`bad`/`unclear`）を先頭一致で数えた内訳。**`@alteroid/core` の
- * `AppraisalDecisionTally` と同じ形**（core は zod で書いていないので、
- * ここで zod の形に写す。`droppedResponseSchema` 冒頭 doc と同じ方針）。
- *
- * `other`: 3値のどれでもない値（保存層は緩い文字列なので理論上ありうる）。
- * `total`: good + bad + unclear + other。
- */
-export const appraisalDecisionTallySchema = z.object({
-  good: z.number().int(),
-  bad: z.number().int(),
-  unclear: z.number().int(),
-  other: z.number().int(),
-  total: z.number().int(),
-});
-
-/**
- * 仕事の種類ごとの評定行（#1308 段B。`@alteroid/core` の `AppraisalWorkKindTally`）。
- * `workKind` が `null` の行は**未分類**（構造欄の無い過去の評定行・種類を述べて
- * いない評定行）であって、種類の1つではない。
- */
-export const appraisalWorkKindTallySchema = appraisalDecisionTallySchema.extend({
-  workKind: z.string().nullable(),
-});
-
-/** 1つの `JobStatus`（終端した状態だけ）について、評定の有無を数えた行。 */
-export const jobAppraisalCoverageRowSchema = z.object({
-  status: jobStatusSchema,
-  total: z.number().int(),
-  appraised: z.number().int(),
-  unappraised: z.number().int(),
-});
-
-/**
- * (クローンの値 → 人間の値) の組ごとの件数（#1310）。**`@alteroid/core` の
- * `AppraisalReconciliationTransition` と同じ形。**
- *
- * `cloneValue` / `humanValue` は3値のどれでもなければ `'other'`
- * （`appraisalDecisionTallySchema` の `other` と同じ理由）。
- */
-export const appraisalReconciliationTransitionSchema = z.object({
-  cloneValue: z.union([appraisalSchema, z.literal('other')]),
-  humanValue: z.union([appraisalSchema, z.literal('other')]),
-  count: z.number().int(),
-});
-
-/**
- * 1つの軸（台帳 or 委譲）ぶんの (b)/(c) 食い違い。**`@alteroid/core` の
- * `AppraisalReconciliation` と同じ形。**
- *
- * `undetermined` は「id または誰が付けたかが復元できず、対の判定に使えな
- * かった」評定行の件数——0件は「無かった」であって「測っていない」ではない
- * （`appraisal-stats.ts` の doc）。
- */
-export const appraisalReconciliationSchema = z.object({
-  transitions: z.array(appraisalReconciliationTransitionSchema),
-  totalPairs: z.number().int(),
-  matched: z.number().int(),
-  mismatched: z.number().int(),
-  undetermined: z.number().int(),
-});
-
-/**
- * `GET /appraisal-stats` の応答。
- *
- * - `journal.commitments` / `journal.jobs`: 日誌の `decision` 行を
- *   `COMMITMENT_APPRAISAL_DECISION_PREFIX` / `JOB_APPRAISAL_DECISION_PREFIX`
- *   それぞれの先頭一致で数えた**全期間の総数**（ページ送りで最後まで読み切って
- *   数えている。`limit` は1ページごとに掛かるが、総数か下限かとは別の軸である
- *   ——`appraisal-stats.ts` の doc、#1342）。**この2つを混ぜて読まないこと** —— 台帳の
- *   行の始末と、マネージャーに出した仕事の出来は別の軸である。
- * - `jobCoverage`: `JobStore` を終端の仕方（`done`/`failed`/`lost`/`stopped`）
- *   ごとに割った、評定の有無の内訳。`running`/`waiting_human`（まだ終端して
- *   いない）は `byStatus` に含めず、件数だけ `nonTerminalTotal` に出す。
- *   `unreadableJobs`（issue #2359）は読めない委譲の行の件数で、内訳のどこにも入れない
- *   （終端したかも評定の有無も分からない。推測で評定なし・ありに入れない）。
- * - `reconciliation`（#1310）: (b) 人間 と (c) クローンの食い違い——クローンが
- *   付けた評定を人間が後から付け直した対を `commitments` / `jobs` の軸ごとに
- *   数えたもの。台帳と委譲は混ぜない（同じ理由）。
- * - `journal.byWorkKind`（#1308 段B）: 上の2つを評定行の構造欄が述べた仕事の
- *   種類ごとに割ったもの。件数の多い順で、未分類（`workKind: null`）は必ず最後。
- *   各軸の群の `total` の和は `journal.commitments` / `journal.jobs` の `total` と一致する。
- */
-export const appraisalStatsResponseSchema = z.object({
-  journal: z.object({
-    commitments: appraisalDecisionTallySchema,
-    jobs: appraisalDecisionTallySchema,
-    byWorkKind: z.object({
-      commitments: z.array(appraisalWorkKindTallySchema),
-      jobs: z.array(appraisalWorkKindTallySchema),
-    }),
-  }),
-  jobCoverage: z.object({
-    byStatus: z.array(jobAppraisalCoverageRowSchema),
-    terminalTotal: z.number().int(),
-    terminalAppraised: z.number().int(),
-    terminalUnappraised: z.number().int(),
-    nonTerminalTotal: z.number().int(),
-    /**
-     * 読めない委譲の行の件数（issue #2359。0 も載せる）。`byStatus` と合計のどれにも入って
-     * いない——終端したかも評定の有無も分からない。0 でなければ上の数は読めた委譲だけの数。
-     */
-    unreadableJobs: z.number().int().min(0),
-  }),
-  reconciliation: z.object({
-    commitments: appraisalReconciliationSchema,
-    jobs: appraisalReconciliationSchema,
-  }),
-});
-
-// ---------------------------------------------------------------------------
 // 作業の進捗（/progress）——#2241 の 2。core の `summarizeProgress`（#2242）の出力に、
 // daemon が `observedAt` と `github` を足したもの。
 // ---------------------------------------------------------------------------
@@ -2581,8 +2446,7 @@ export const archiveRemoveManyResponseSchema = z.object({
  * 見ることになる（`inboxBacklogDedupeKey` の doc「なぜ1箇所に閉じるか」と
  * 同じ理由）。
  *
- * **core は zod で書いていないので、ここで zod の形に写す**
- * （`appraisalStatsResponseSchema` 冒頭 doc と同じ方針）。詳しい意味は
+ * **core は zod で書いていないので、ここで zod の形に写す。** 詳しい意味は
  * `@alteroid/core` の `InboxBacklogBreakdown` の doc を見ること。
  *
  * `byType` / `undeliveredByType` の `type` は `INBOX_EVENT_TYPE_ORDER`
@@ -2890,9 +2754,6 @@ export async function buildOpenApiDocument(): Promise<unknown> {
     },
     abort() {
       throw new Error('spec 生成専用のスタブ: マネージャーは止めない');
-    },
-    appraise() {
-      throw new Error('spec 生成専用のスタブ: 評定は書かない');
     },
     list() {
       throw new Error('spec 生成専用のスタブ: マネージャー一覧は持たない');
