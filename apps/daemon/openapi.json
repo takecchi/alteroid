@@ -2407,7 +2407,7 @@
         "operationId": "getTopologyStream",
         "tags": ["topology"],
         "summary": "稼働の地図の流れ（SSE）",
-        "description": "`event: snapshot` に `GET /topology` と同じ形。開いたとき1回、以後は内容が変わったときだけ送る。**コメント行（`:` で始まる行）の heartbeat が周期的に流れる。**",
+        "description": "`event: snapshot` に `GET /topology` と同じ形。開いたとき1回、以後は内容が変わったときだけ送る。**組めなかったときは、失敗が続く間の最初の1回だけ `event: unavailable`（`data: {\"error\": \"<種別だけ>\"}`。本文は載せない）を送り、立ち直った最初の組み直しは内容が同じでも必ず `snapshot` で送る**（黙って止まったように見えない）。**コメント行（`:` で始まる行）の heartbeat が周期的に流れる。**",
         "responses": {
           "200": {
             "description": "SSE ストリーム。",
