@@ -230,7 +230,12 @@ describe('runner: peer の承認をクローンへ上げる', () => {
       env: {},
       childUser: { uid: 1000, gid: 1000 },
       spawnAgentProcessFn: () => approvingAppServer(decisions),
-      peer: { host: peerHost, peers: ['codex'], childEntry: '/app/relay.js' },
+      peer: {
+        host: peerHost,
+        peers: ['codex'],
+        reportsUsage: () => true,
+        childEntry: '/app/relay.js',
+      },
     });
     await host.start({ managerId: 'mgr-1', request: 'やって', cwd: '/work' });
     const server = peerHost.factory()!();
