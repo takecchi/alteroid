@@ -26,7 +26,7 @@ export const PROPOSED_NAV_ITEMS: AppSidebarItem[] = [
   { to: '/', label: 'ホーム', icon: LayoutDashboard },
   { to: '/chat', label: '会話', icon: MessageSquare },
   { to: '/approvals', label: '承認待ち', icon: BellRing, badge: <Badge tone="warn">2</Badge> },
-  // 未了の仕事・作業の進捗・評定の内訳（同じ台帳の別の切り口）を1ページのタブへ
+  // 未了の仕事・作業の進捗（同じ台帳の別の切り口）を1ページのタブへ
   { to: '/commitments', label: '仕事', icon: ListChecks, section: '仕事' },
   { to: '/managers', label: 'マネージャー', icon: Users, section: '仕事' },
   // 握り潰しの跡・アーカイブは日誌の中のタブへ
