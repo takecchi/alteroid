@@ -1813,6 +1813,9 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
       // `never` の理由だが、`approvalId` は `journalEntrySchema` の `exchange`
       // だけが持つ欄で、対になる欄が別に無い。
       approvalId: { emit: 'tag', token: 'approvalId' },
+      // 稼働の地図（`GET /topology`）の鍵。`escalation.managerId`（下）と同じ判定基準
+      // ——デーモンが発行した id で自由文ではないので tag()。
+      managerId: { emit: 'tag', token: 'managerId' },
       // issue #847 の案B。`approvalId` と同じ判定基準（承認待ちキューの項目 id で、
       // 自由文ではない）なので tag()。
       answeredApprovalId: { emit: 'tag', token: 'answeredApprovalId' },
@@ -2236,6 +2239,7 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
       conversationId: SECRET,
       supersedes: SECRET,
       approvalId: 'ap-1',
+      managerId: 'mgr-1',
       answeredApprovalId: 'ap-2',
     },
     decision: {

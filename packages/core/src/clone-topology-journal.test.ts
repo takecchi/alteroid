@@ -25,17 +25,17 @@ describe('稼働の地図の材料（activeTurn と exchange.managerId）', () =
         createLocalRunner({ workspacePath: '/work', queryFn: fakeSdk().fn, env: {} }),
       ]),
     });
-    expect(clone.activeTurn()).toBeNull();
+    expect(clone.activeTurn?.()).toBeNull();
 
     clone.post(humanMessage('やあ', 'conv-topology'));
     await waitFor(
       () => calls.some((call) => call.inputs.some((text) => text.includes('やあ'))),
       'ターンが始まる',
     );
-    expect(clone.activeTurn()).toEqual({ conversationId: 'conv-topology', kind: 'normal' });
+    expect(clone.activeTurn?.()).toEqual({ conversationId: 'conv-topology', kind: 'normal' });
 
     release();
-    await waitFor(() => clone.activeTurn() === null, 'ターンが終わる');
+    await waitFor(() => clone.activeTurn?.() === null, 'ターンが終わる');
     await clone.stop();
   });
 

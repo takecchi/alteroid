@@ -1019,6 +1019,11 @@ export function journalEntryShape(entry: JournalEntryInput): string {
       return (
         `exchange with=${tag(entry.with)} role=${tag(entry.role)} ${size(entry.text)}` +
         (entry.approvalId === undefined ? '' : ` approvalId=${tag(entry.approvalId)}`) +
+        // **`managerId`（稼働の地図の鍵）は `escalation.managerId`（下）と同じ判定基準**
+        // ——デーモンが発行した id で、自由文ではないので `tag()` に載せてよい。
+        // 任意欄なので在るときだけ足す。**本文（`text`）の `[mgr-xxx]` から拾い出す
+        // 形ではない**（上の「本文から id 相当を拾い出さないこと」はそのまま）。
+        (entry.managerId === undefined ? '' : ` managerId=${tag(entry.managerId)}`) +
         // **`answeredApprovalId`（issue #847 の案B）も `approvalId` と同じ判定基準**
         // ——承認待ちキューの項目 id で、こちら側（`clone.ts`）が立てる値である。
         // `decision` / `tool_use` / `memory_update` にも同じ形で足してある。
