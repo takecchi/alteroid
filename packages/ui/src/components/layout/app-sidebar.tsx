@@ -12,6 +12,16 @@ export interface AppSidebarItem {
   icon: ComponentType<{ className?: string; 'aria-hidden'?: boolean }>;
   /** 右端に添えるもの（件数の札など）。 */
   badge?: ReactNode;
+  /**
+   * 属するまとまりの見出し。**直前の行と違う値になったところで区切る**（並びの順が
+   * そのまま見出しの順になる。まとまりを別の配列に分けないのは、行き先を1つ足すときに
+   * 足す場所が2か所に割れないようにするため）。
+   *
+   * - 省略 —— 見出しの無い先頭のまとまり（いつも使う行き先）
+   * - 空文字 —— 見出しを出さず、区切り線だけ引く（末尾の「設定」のように、まとまりの
+   *   名前を言うほどではないが、上と混ぜたくないもの）
+   */
+  section?: string;
 }
 
 /**
@@ -86,10 +96,12 @@ export function AppSidebar({
       </div>
 
       <ul className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
-        {items.map((item) => {
+        {items.map((item, index) => {
           const Icon = item.icon;
+          const startsSection = index > 0 && item.section !== items[index - 1]?.section;
           return (
             <li key={item.to}>
+              {startsSection ? <SectionStart label={item.section} inDrawer={inDrawer} /> : null}
               {renderLink(item, {
                 className: (isActive) => sidebarLinkClassName({ isActive, inDrawer }),
                 children: (
@@ -107,6 +119,27 @@ export function AppSidebar({
 
       {footer}
     </nav>
+  );
+}
+
+/**
+ * まとまりの始まり。見出しがあれば見出しを、空（または省略）なら区切り線だけを引く。
+ * 見出しは `aria-hidden` にしない —— 読み上げでも「いまどのまとまりか」が分かるように
+ * （リンクの並びの中に挟まる、ただの文として読まれる）。
+ */
+function SectionStart({ label, inDrawer }: { label: string | undefined; inDrawer: boolean }) {
+  if (label === undefined || label.length === 0) {
+    return <div role="separator" className="mx-2.5 my-2 border-t border-border" />;
+  }
+  return (
+    <p
+      className={cn(
+        'px-2.5 pb-1 text-[11px] tracking-wide text-muted-foreground/80',
+        inDrawer ? 'pt-4' : 'pt-3',
+      )}
+    >
+      {label}
+    </p>
   );
 }
 
