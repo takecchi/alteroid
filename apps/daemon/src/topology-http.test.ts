@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createApp } from './app.js';
 import { createJournalBus } from './journal-bus.js';
+import { createWorkerToolBus } from './topology-activity.js';
 import { topologyResponseSchema } from './openapi.js';
 
 /** 稼働の地図が読む面だけを持つクローン。**`activeTurn` は実装しない**（unknown を見るため）。 */
@@ -43,7 +44,9 @@ function setup(
     stores.jobs = { ...stores.jobs, listUnreadableJobs: async () => rows };
   }
   const bus = createJournalBus(stores.journal);
+  const workerTools = createWorkerToolBus();
   const app = createApp({
+    workerToolEvents: workerTools,
     clone: fakeCloneFor(options.managers ?? [], options.clone),
     stores: { ...stores, journal: bus.journal },
     token: 'test-token',
@@ -53,7 +56,7 @@ function setup(
     topologyDebounceMs: 5,
     sseHeartbeatMs: 20,
   });
-  return { app, journal: bus.journal };
+  return { app, journal: bus.journal, workerTools };
 }
 
 /**
@@ -221,6 +224,35 @@ describe('GET /topology/stream', () => {
     expect(topologyResponseSchema.parse(stream.snapshots[1]).links.map((l) => l.key)).toEqual([
       'human~clone',
     ]);
+    await stream.close();
+  });
+
+  it('作業者の道具の実行中の合図で内容が変わると、日誌の追記なしで新しいスナップショットが届く（#2725）', async () => {
+    const { app, workerTools } = setup({ managers: [runningManager('m1')] });
+    const stream = openStream(await app.request('/topology/stream'));
+    await stream.advance(1);
+    expect(stream.snapshots).toHaveLength(1);
+
+    const startedAt = new Date(Date.now() - 90_000).toISOString();
+    workerTools.emit({
+      type: 'tool_running',
+      managerId: 'm1',
+      actor: 'worker:m1:worker',
+      tool: 'Bash',
+      toolUseId: 'tu-1',
+      startedAt,
+    });
+    await stream.advance(20);
+    expect(stream.snapshots).toHaveLength(2);
+    expect(
+      topologyResponseSchema.parse(stream.snapshots[1]).managers[0]?.workers[0]?.runningTool,
+    ).toEqual({ tool: 'Bash', startedAt });
+
+    workerTools.emit({ type: 'tool_end', managerId: 'm1', toolUseId: 'tu-1' });
+    await stream.advance(20);
+    expect(stream.snapshots).toHaveLength(3);
+    // 日誌に1行も無い作業者なので、決着すると行ごと無くなる。
+    expect(topologyResponseSchema.parse(stream.snapshots[2]).managers[0]?.workers).toEqual([]);
     await stream.close();
   });
 
