@@ -1,4 +1,3 @@
-import { spawn } from 'node:child_process';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -7,7 +6,7 @@ import { stdin, stdout } from 'node:process';
 import { createClient, type DaemonClient } from './client.js';
 import { formatElapsedAgo, withErrorReason } from './format.js';
 import { describeAuthFailure, resolveTarget, type Target } from './target.js';
-import { describeEditorFailure, readInputFile } from './input-errors.js';
+import { openEditor, readInputFile } from './input-errors.js';
 
 /**
  * `alteroid memory` — 記憶（人格）を読む・書き換える・消す。
@@ -309,7 +308,7 @@ export async function memoryEditCommand(slug: string): Promise<void> {
   let keep = false;
   try {
     await writeFile(path, current ?? template(slug), 'utf8');
-    await openEditor(path);
+    await openEditor(path, 'alteroid memory set <slug> --file <path>');
     const edited = await readFile(path, 'utf8');
 
     if (current !== null && edited === current) {
@@ -570,27 +569,6 @@ async function readAll(): Promise<string> {
   const chunks: Buffer[] = [];
   for await (const chunk of stdin) chunks.push(chunk as Buffer);
   return Buffer.concat(chunks).toString('utf8');
-}
-
-async function openEditor(path: string): Promise<void> {
-  const editor = process.env.VISUAL ?? process.env.EDITOR ?? 'vi';
-  await new Promise<void>((resolve, reject) => {
-    const child = spawn(editor, [path], { stdio: 'inherit', shell: true });
-    child.on('error', (error) =>
-      reject(describeEditorFailure(editor, { error }, 'alteroid memory set <slug> --file <path>')),
-    );
-    child.on('close', (code, signal) => {
-      if (code === 0) resolve();
-      else
-        reject(
-          describeEditorFailure(
-            editor,
-            { code, signal },
-            'alteroid memory set <slug> --file <path>',
-          ),
-        );
-    });
-  });
 }
 
 /**

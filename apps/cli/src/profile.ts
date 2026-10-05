@@ -1,4 +1,3 @@
-import { spawn } from 'node:child_process';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -14,7 +13,7 @@ import {
 
 import { describeScope } from './credential.js';
 import { describeAuthFailure, forbiddenKindOf, resolveTarget, type Target } from './target.js';
-import { describeEditorFailure, readInputFile } from './input-errors.js';
+import { openEditor, readInputFile } from './input-errors.js';
 
 /**
  * `alteroid profile` — 実行環境プロファイル（人間の `.zprofile` に当たるもの）。
@@ -270,7 +269,7 @@ export async function profileEditCommand(
       // 中身は人間が置いた鍵そのものになりうる。一時ファイルでも絞る。
       mode: 0o600,
     });
-    await openEditor(path);
+    await openEditor(path, 'alteroid profile set <name> --file <path>');
     const edited = await readFile(path, 'utf8');
 
     // 撒く先だけを変えるのも更新である（本文が同じでも、外れる側が出る）。
@@ -387,27 +386,6 @@ async function readAll(): Promise<string> {
   const chunks: Buffer[] = [];
   for await (const chunk of stdin) chunks.push(chunk as Buffer);
   return Buffer.concat(chunks).toString('utf8');
-}
-
-async function openEditor(path: string): Promise<void> {
-  const editor = process.env.VISUAL ?? process.env.EDITOR ?? 'vi';
-  await new Promise<void>((resolve, reject) => {
-    const child = spawn(editor, [path], { stdio: 'inherit', shell: true });
-    child.on('error', (error) =>
-      reject(describeEditorFailure(editor, { error }, 'alteroid profile set <name> --file <path>')),
-    );
-    child.on('close', (code, signal) => {
-      if (code === 0) resolve();
-      else
-        reject(
-          describeEditorFailure(
-            editor,
-            { code, signal },
-            'alteroid profile set <name> --file <path>',
-          ),
-        );
-    });
-  });
 }
 
 async function request(target: Target, path: string, init: RequestInit = {}): Promise<unknown> {

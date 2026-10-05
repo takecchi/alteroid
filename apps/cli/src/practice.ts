@@ -1,4 +1,3 @@
-import { spawn } from 'node:child_process';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -7,7 +6,7 @@ import { stdin, stdout } from 'node:process';
 import { createClient, type DaemonClient } from './client.js';
 import { withErrorReason } from './format.js';
 import { describeAuthFailure, resolveTarget, type Target } from './target.js';
-import { describeEditorFailure, readInputFile } from './input-errors.js';
+import { openEditor, readInputFile } from './input-errors.js';
 
 /**
  * `alteroid practice` — 仕事のやり方を読む・書き換える・消す（#1055 段3③）。
@@ -218,7 +217,7 @@ export async function practiceEditCommand(
   let keep = false;
   try {
     await writeFile(path, current?.content ?? template(slug), 'utf8');
-    await openEditor(path);
+    await openEditor(path, 'alteroid practice set <slug> --file <path>');
     const edited = await readFile(path, 'utf8');
 
     if (
@@ -523,29 +522,6 @@ async function readAll(): Promise<string> {
   const chunks: Buffer[] = [];
   for await (const chunk of stdin) chunks.push(chunk as Buffer);
   return Buffer.concat(chunks).toString('utf8');
-}
-
-async function openEditor(path: string): Promise<void> {
-  const editor = process.env.VISUAL ?? process.env.EDITOR ?? 'vi';
-  await new Promise<void>((resolve, reject) => {
-    const child = spawn(editor, [path], { stdio: 'inherit', shell: true });
-    child.on('error', (error) =>
-      reject(
-        describeEditorFailure(editor, { error }, 'alteroid practice set <slug> --file <path>'),
-      ),
-    );
-    child.on('close', (code, signal) => {
-      if (code === 0) resolve();
-      else
-        reject(
-          describeEditorFailure(
-            editor,
-            { code, signal },
-            'alteroid practice set <slug> --file <path>',
-          ),
-        );
-    });
-  });
 }
 
 /**

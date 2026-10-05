@@ -1,4 +1,7 @@
-import { readFile } from 'node:fs/promises';
+import { spawn } from 'node:child_process';
+import { constants } from 'node:fs';
+import { access, readFile, stat } from 'node:fs/promises';
+import { delimiter, join } from 'node:path';
 
 /**
  * 入力の誤りを、利用者が打ったオプション名・引数名と、次の一手で言うための部品（#2867）。
@@ -27,7 +30,7 @@ export async function readInputFile(path: string, flag: string, how: string): Pr
           : code === 'EACCES' || code === 'EPERM'
             ? '読む権限が無い'
             : '読めなかった';
-    throw new Error(`${flag} で指したファイルを読めない（${path}: ${reason}）。${how} で渡し直す`, {
+    throw new Error(`${flag} で指したファイルを読めない（${path}: ${reason}）。${how}で渡し直す`, {
       cause: error,
     });
   }
@@ -58,4 +61,63 @@ export function describeEditorFailure(
     `エディタ「${editor}」が終了コード ${String(result.code)} で終わったので、反映していない。` +
       `使うエディタは ${setup}。エディタを使わないなら ${alternative}`,
   );
+}
+
+/**
+ * `$VISUAL` / `$EDITOR`（無ければ `vi`）でファイルを開き、閉じるまで待つ。
+ *
+ * **起こす前に、エディタのコマンドが在るかを見る。** `shell: true` で起こすので、
+ * 無いエディタを起こすとシェル自身の `/bin/sh: 1: vi: not found` が stderr に
+ * 先に出て、こちらの案内より前に読まれる（#2867 の残り）。在ると言い切れない形
+ * （シェルの構文を含む・Windows）は確かめずに起こし、127 を同じ案内で言う。
+ *
+ * @param alternative エディタを使わずに同じことをする打ち方
+ */
+export async function openEditor(path: string, alternative: string): Promise<void> {
+  const editor = process.env.VISUAL ?? process.env.EDITOR ?? 'vi';
+  if ((await editorCommandExists(editor)) === false) {
+    throw describeEditorFailure(editor, { code: 127 }, alternative);
+  }
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn(editor, [path], { stdio: 'inherit', shell: true });
+    child.on('error', (error) => reject(describeEditorFailure(editor, { error }, alternative)));
+    child.on('close', (code, signal) => {
+      if (code === 0) resolve();
+      else reject(describeEditorFailure(editor, { code, signal }, alternative));
+    });
+  });
+}
+
+/**
+ * エディタの指定の先頭の語が、実行できるファイルとして在るか。
+ *
+ * @returns 在れば true、無ければ false、確かめられない形なら undefined
+ */
+export async function editorCommandExists(
+  editor: string,
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+): Promise<boolean | undefined> {
+  if (platform === 'win32') return undefined;
+  const pathEnv = env.PATH;
+  const command = editor.trim().split(/\s+/)[0] ?? '';
+  // 引用符・変数・代入（`FOO=1 vim`）などシェルが解く形は、ここで解き直さない
+  if (command === '' || /[^\w./+@%,:-]/.test(command) || command.includes('=')) return undefined;
+  // PATH が無いときにシェルが引く既定の道は、ここでは分からない
+  if (!command.includes('/') && pathEnv === undefined) return undefined;
+  const candidates = command.includes('/')
+    ? [command]
+    : (pathEnv ?? '')
+        .split(delimiter)
+        // 空の要素はシェルと同じく今のディレクトリとして読む
+        .map((dir) => join(dir === '' ? '.' : dir, command));
+  for (const candidate of candidates) {
+    try {
+      await access(candidate, constants.X_OK);
+      if ((await stat(candidate)).isFile()) return true;
+    } catch {
+      // 次の候補へ
+    }
+  }
+  return false;
 }

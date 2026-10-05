@@ -1,4 +1,3 @@
-import { spawn } from 'node:child_process';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -9,7 +8,7 @@ import { maskUrl } from '@alteroid/core/mask-url';
 import { createClient } from './client.js';
 import { describeAuthFailure, forbiddenKindOf, resolveTarget, type Target } from './target.js';
 import { redactError } from './redact.js';
-import { describeEditorFailure, readInputFile } from './input-errors.js';
+import { openEditor, readInputFile } from './input-errors.js';
 
 /**
  * `alteroid mcp` — 人間の MCP 連携の登録（`.mcp.json` の `mcpServers` と同じ形）を
@@ -153,7 +152,7 @@ export async function mcpEditCommand(): Promise<void> {
   try {
     // 中身は人間が置いた鍵そのものになりうる。一時ファイルでも絞る。
     await writeFile(path, original, { encoding: 'utf8', mode: 0o600 });
-    await openEditor(path);
+    await openEditor(path, 'alteroid mcp set <file>');
     const edited = await readFile(path, 'utf8');
 
     if (edited === original) {
@@ -351,18 +350,4 @@ async function readAll(): Promise<string> {
   const chunks: Buffer[] = [];
   for await (const chunk of stdin) chunks.push(chunk as Buffer);
   return Buffer.concat(chunks).toString('utf8');
-}
-
-async function openEditor(path: string): Promise<void> {
-  const editor = process.env.VISUAL ?? process.env.EDITOR ?? 'vi';
-  await new Promise<void>((resolve, reject) => {
-    const child = spawn(editor, [path], { stdio: 'inherit', shell: true });
-    child.on('error', (error) =>
-      reject(describeEditorFailure(editor, { error }, 'alteroid mcp set <file>')),
-    );
-    child.on('close', (code, signal) => {
-      if (code === 0) resolve();
-      else reject(describeEditorFailure(editor, { code, signal }, 'alteroid mcp set <file>'));
-    });
-  });
 }

@@ -90,11 +90,15 @@ beforeEach(() => {
   replies = new Map();
   sent = [];
   stubFetch();
+  // `openEditor` は起こす前にエディタが在るかを見る（#2867）。`spawn` は差し替えて
+  // あるので中身は起きないが、在ると見える名前を置く（器に vi が無くても通るように）
+  vi.stubEnv('VISUAL', 'sh');
 });
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
 });
 
 /** `GET /profile` の応答の1行（本文つき）。 */
