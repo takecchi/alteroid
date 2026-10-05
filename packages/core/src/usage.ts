@@ -548,6 +548,71 @@ export function foldUsageSnapshot(
 }
 
 /**
+ * 順番札。{@link UsageRecordOrder.ticket} が返す。
+ */
+export interface UsageRecordTicket {
+  /** 自分より前に札を取った人が全員 `release` するまで待つ。 */
+  turn(): Promise<void>;
+  /** 自分の番を終える。**何度呼んでもよい**（`finally` に置く前提）。 */
+  release(): void;
+}
+
+/**
+ * **累積を台帳へ積む順番を、届いた順に揃える**（Issue #3015）。
+ *
+ * `foldUsageSnapshot` は累積を受け取り、前より小さい累積を「数え直し」として全量
+ * 積む（{@link detectReset}）。**同じ (層, managerId) の累積が逆順に届くと過大に数える**
+ * （1..10 の順なら 10、10..1 なら 55）。マネージャーは runner のイベントを並行に
+ * 処理する（`manager.ts` の `runner.connect`）ので、ターン結果の usage が
+ * `#observeForTokenRotation` の `await` で足止めされているあいだに、後から出た
+ * `#flushUsage` の usage が先に `record` へ着きうる。
+ *
+ * ## 使い方
+ *
+ * 1. イベントを受けた時点で**同期的に**（最初の `await` より前に）{@link ticket} を取る。
+ *    `await` の後で取ると、取る順が届いた順でなくなる。
+ * 2. `record` の直前に `await ticket.turn()`。
+ * 3. `record` が済んだら（成否を問わず）`ticket.release()`。**`finally` に置くこと。**
+ *    置かないと、その札より後ろの `record` が永久に止まる。
+ *
+ * ## 守っていること
+ *
+ * - **1件の失敗が後続を止めない。** 失敗は呼び出し側の `try` が今までどおり扱い、
+ *   札は `release` で必ず次へ渡る。この鎖は握り潰しも例外の変換もしない。
+ * - **キーが違えば待たない。** 無関係な manager 同士を直列にしない。
+ * - **取りこぼす側へ倒れない。** 順序だけを変え、`foldUsageSnapshot` の判定は
+ *   1文字も変えていない。本物の数え直し（累積が 0 から始まり直す）は届いた順に
+ *   見えるので、今までどおり全量が積まれる。
+ */
+export class UsageRecordOrder {
+  readonly #tails = new Map<string, Promise<void>>();
+
+  ticket(key: string): UsageRecordTicket {
+    const previous = this.#tails.get(key) ?? Promise.resolve();
+    let open!: () => void;
+    const mine = new Promise<void>((resolve) => {
+      open = resolve;
+    });
+    // 札はいつも解放で解決する（拒否にならない）ので、鎖は途切れない。
+    const tail = previous.then(() => mine);
+    this.#tails.set(key, tail);
+    let released = false;
+    return {
+      turn: () => previous,
+      release: () => {
+        if (released) return;
+        released = true;
+        open();
+        // 自分が最後尾のままなら、キーを残さない（manager が増減しても漏れない）。
+        void tail.then(() => {
+          if (this.#tails.get(key) === tail) this.#tails.delete(key);
+        });
+      },
+    };
+  }
+}
+
+/**
  * **1回で閉じる `query()`** の `result` を増分へ畳む。**純関数。**
  *
  * 蒸留のサイドクエリ（`clone.ts` の `#distillFromTranscript`）は毎回新しい

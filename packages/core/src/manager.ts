@@ -121,7 +121,7 @@ import {
   type UsageLimitNotice,
 } from './usage-limits.js';
 import type { TokenRotatorObservation } from './token-rotator.js';
-import { usageDate } from './usage.js';
+import { UsageRecordOrder, type UsageRecordTicket, usageDate } from './usage.js';
 
 /**
  * 委譲のデーモン側（docs/architecture.md「配線」）。
@@ -5585,6 +5585,9 @@ class Pool implements ManagerPool {
    * ように。終わったら自分で抜ける。
    */
   readonly #eventsInFlight = new Set<Promise<unknown>>();
+
+  /** 累積の usage を `record` へ積む順番を、届いた順に揃える（Issue #3015）。 */
+  readonly #usageOrder = new UsageRecordOrder();
   /**
    * `shutting_down` を名乗った runner の `runnerId`（Issue #2749）。**名乗りは runner ごと**
    * に覚える——名乗っていない runner（旧 runner）は `stop()` が一切待たない。新しい器の
@@ -11405,6 +11408,23 @@ class Pool implements ManagerPool {
    * 変更が答えるべき範囲を超える）。
    */
   async #onEvent(event: RunnerEvent, fromRunnerId: string): Promise<void> {
+    // **累積の usage だけ、届いた順の札を最初の `await` より前に取る**（Issue #3015）。
+    // 札の説明と理由は `UsageRecordOrder`（`usage.ts`）。`case 'usage'` が `record` の
+    // 直前に番を待ち、ここの `finally` が（早期 return・例外でも）必ず次へ渡す。
+    const usageTicket =
+      event.type === 'usage' ? this.#usageOrder.ticket(`manager:${event.managerId}`) : undefined;
+    try {
+      await this.#handleEvent(event, fromRunnerId, usageTicket);
+    } finally {
+      usageTicket?.release();
+    }
+  }
+
+  async #handleEvent(
+    event: RunnerEvent,
+    fromRunnerId: string,
+    usageTicket: UsageRecordTicket | undefined,
+  ): Promise<void> {
     if (event.type === 'shutting_down') {
       // **runner が畳み始めた**（Issue #2749）。`stop()` が待つ相手として runner ごとに覚える
       // だけで、台帳には何も書かない。**同期で立てる**（`#onEvent` は並行に走るので、
@@ -12381,6 +12401,10 @@ class Pool implements ManagerPool {
         // 降りてくるのは累積という事実で、差分にして積むのはここ（runner は
         // 記憶ストアの鍵を持たないので書けない）。読む→畳む→書くはストアの
         // 1操作に閉じてある。
+        // **ここで自分の番を待つ**（札は `#onEvent` が届いた時点で取ってある）。
+        // 上の `await` で足止めされているあいだに、後から届いた usage が先に `record`
+        // へ着くと、小さい累積が後から届いて「数え直し」と読まれ、過大に数える。
+        await usageTicket?.turn();
         const at = new Date();
         // **1回だけ引いて使い回す。** 2回引く形にすると、間に回し手が
         // `#tokenIdentities` を書き換えたときに「有無の判定」と「使う値」が
@@ -12412,6 +12436,8 @@ class Pool implements ManagerPool {
             ...(tokenIdentity === undefined ? {} : { tokenId: tokenIdentity.tokenId }),
           });
         } catch {
+          // 失敗しても番は次へ渡す（日誌の書き込みを待たせない。失敗の扱いは従来どおり）。
+          usageTicket?.release();
           // 台帳に積めないことで仕事は止めない。ただし黙って消さない。
           await this.#journal({
             type: 'exchange',
@@ -12421,6 +12447,9 @@ class Pool implements ManagerPool {
           });
           return;
         }
+
+        // `record` は済んだ。後続の番へ渡す（日誌の書き込みは待たせない）。
+        usageTicket?.release();
 
         // **ターン1回ぶんの増分を日誌へ残す。** 台帳は日 × actor × モデル ×
         // 層 × 場所に畳むので、このターンがいくらだったかは台帳のどこにも
