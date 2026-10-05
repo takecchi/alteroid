@@ -52,6 +52,12 @@ export default defineConfig({
      */
     setupFiles: ['./vitest.setup.ts'],
     /**
+     * vitest 5.0.2 が `os.tmpdir()` 直下に作って消し忘れる 21 文字名のディレクトリを、
+     * 終了時に消し、殺された回の取り残しを開始時に回収する（#3039）。中身は
+     * `vitest.tmpdir-sweep.ts`。`vitest.workspace-config.ts` 経由で全ワークスペースに継がれる。
+     */
+    globalSetup: ['./vitest.global-setup.ts'],
+    /**
      * **vitest 5 で既定が `true` に変わったものを、4 の既定（`false`）に戻して固定する**（#1574）。
      * `true` だと各テストの前に全モックの呼び出し履歴が消えるので、import 時や
      * `beforeAll`、それより前のテストで起きた呼び出しを `not.toHaveBeenCalled()` が
