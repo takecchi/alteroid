@@ -10,6 +10,7 @@ import {
   Button,
   Card,
   CardHeader,
+  ConfirmDialog,
   Empty,
   ErrorNote,
   Input,
@@ -92,6 +93,7 @@ export default function Schedule() {
   const removeSchedule = useRemoveSchedule();
   const [running, setRunning] = useState<string | undefined>(undefined);
   const [removing, setRemoving] = useState<string | undefined>(undefined);
+  const [confirmingRemove, setConfirmingRemove] = useState<string | undefined>(undefined);
   const [editing, setEditing] = useState<string | undefined>(undefined);
   const [failure, setFailure] = useState<unknown>(undefined);
   /**
@@ -230,16 +232,28 @@ export default function Schedule() {
                       size="sm"
                       variant="danger"
                       loading={removing === entry.kind}
-                      onClick={() => {
+                      onClick={() => setConfirmingRemove(entry.kind)}
+                    >
+                      外す
+                    </Button>
+                    {/* 外すと依頼の本文も周期も消えて取り消せない。押した瞬間には実行せず確認を挟む（#2781） */}
+                    <ConfirmDialog
+                      open={confirmingRemove === entry.kind}
+                      onOpenChange={(open) => {
+                        if (!open) setConfirmingRemove(undefined);
+                      }}
+                      title={`予定「${entry.kind}」を外しますか`}
+                      description="依頼の本文と周期が消え、元に戻せません。"
+                      confirmLabel="外す"
+                      destructive
+                      onConfirm={() => {
                         setRemoving(entry.kind);
                         setFailure(undefined);
                         removeSchedule(entry.kind)
                           .catch(setFailure)
                           .finally(() => setRemoving(undefined));
                       }}
-                    >
-                      外す
-                    </Button>
+                    />
                   </>
                 )}
                 {editing === entry.kind && (

@@ -327,6 +327,44 @@ describe('作成時刻', () => {
 });
 
 describe('削除', () => {
+  /** DELETE を打ったか。`openapi-fetch` は `Request` で呼ぶので、メソッドは `entries` の `request` で読む。 */
+  function deleted(stub: ReturnType<typeof stubFetch>): number {
+    return stub.entries.filter((entry) => entry.request?.method === 'DELETE').length;
+  }
+
+  it('「削除」を押しただけでは消さず、確認を出す（#2781）', async () => {
+    const stub = renderDetail('notes', docRoute(DOC));
+    await screen.findByRole('heading', { name: '見出し' });
+
+    fireEvent.click(screen.getByRole('button', { name: '削除' }));
+
+    expect(await screen.findByRole('alertdialog')).toBeTruthy();
+    expect(screen.getByText('「notes」を削除しますか')).toBeTruthy();
+    expect(screen.getByText(/この記憶は本文ごと消え、元に戻せません/)).toBeTruthy();
+    expect(deleted(stub)).toBe(0);
+  });
+
+  it('確認で「やめる」を押すと消さずに閉じる', async () => {
+    const stub = renderDetail('notes', docRoute(DOC));
+    await screen.findByRole('heading', { name: '見出し' });
+    fireEvent.click(screen.getByRole('button', { name: '削除' }));
+
+    fireEvent.click(await screen.findByRole('button', { name: 'やめる' }));
+
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+    expect(deleted(stub)).toBe(0);
+  });
+
+  it('確認で「削除する」を押したときだけ DELETE を打つ', async () => {
+    const stub = renderDetail('notes', docRoute(DOC));
+    await screen.findByRole('heading', { name: '見出し' });
+    fireEvent.click(screen.getByRole('button', { name: '削除' }));
+
+    fireEvent.click(await screen.findByRole('button', { name: '削除する' }));
+
+    await waitFor(() => expect(deleted(stub)).toBe(1));
+  });
+
   it('プレビュータブでも削除ボタンが在る', async () => {
     renderDetail('notes', docRoute(DOC));
     await screen.findByRole('heading', { name: '見出し' });
