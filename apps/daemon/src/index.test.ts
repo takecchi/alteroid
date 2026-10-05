@@ -1076,7 +1076,9 @@ describe('子プロセスの env の土台は、書き写す前のスナップ�
       'await applyAppScopedEnvVars(stores, process.env, localRunnerEnv);',
     ];
     expect(missingAnchors(source, anchors)).toEqual([]);
-    const [snapshotAt, migrateAt, applyAt] = anchors.map((anchor) => source.indexOf(anchor));
+    const snapshotAt = source.indexOf(anchors[0] ?? '');
+    const migrateAt = source.indexOf(anchors[1] ?? '');
+    const applyAt = source.indexOf(anchors[2] ?? '');
     expect(snapshotAt).toBeLessThan(migrateAt);
     expect(migrateAt).toBeLessThan(applyAt);
   });
