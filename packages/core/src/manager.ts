@@ -71,6 +71,7 @@ import type {
   RunnerEvent,
   RunnerExecutionResources,
   RunnerLegState,
+  RunnerManagerListing,
   PidsSaturation,
   RunnerLiveness,
   RunnerMcpServersFingerprint,
@@ -818,6 +819,17 @@ export interface ManagerSummary {
    * ときにしか意味を持たない材料である。
    */
   tokenGenerationUnknownReason?: TokenGenerationUnknownReason;
+  /**
+   * **runner が最後に見た、この委譲の起こしっぱなしの背景処理の本数**（Issue #2851。
+   * 10秒ごとの生存確認が `list()` から拾った `RunnerManagerState.liveBackgroundTasks`）。
+   *
+   * 世代の ⚠（{@link tokenGeneration}）が出ているとき、**なぜ runner が自動で畳み直せて
+   * いないのか**の材料になる（背景処理が残っていると境界に達しない）。**`undefined` は
+   * 「0 本」ではなく「分からない」**（まだ聞けていない・古い runner が欄を返さない）。
+   * 往復は足さない（既に名簿に立っている観測を読むだけ）ので、`send()` が畳む直前に
+   * 読み直す値とは別物で、少し古いことがある。
+   */
+  liveBackgroundTasks?: number;
   /**
    * **429の文言の`resets`時刻を、プールの各鍵の`cooldownUntil`と突き合わせた
    * 結果**（Issue #914 オーナー提案(2)。判定は{@link matchNoticeResetAgainstPool}）。
@@ -1758,6 +1770,7 @@ export type ManagerDecision = 'allow' | 'deny';
  * | `'session_missing'` | **runner がこの委譲のセッションを持っておらず、resume でも入り直せなかった。** そのものは居る | 200 |
  * | `'unknown'` | 届けられたか確かめられなかった（宛先の runner が名簿に開いていない・待ちの宛先が決められない・引き取り中 など） | `'unknown'` のみ 404 |
  * | `'unreadable'` | **台帳に行は在るが読めない形で入っている**（issue #2359）。送っていない。`'unknown'`（居ない）と分ける | 409 |
+ * | `'declined'` | **世代が食い違う done の委譲を畳んで新しい鍵で起こし直したいが、畳めない（背景処理・確認待ちが残っている・それらが分からない・畳めたと確かめられない）ので、畳まず、旧セッションへも送らなかった**（#2851）。そのものは居る | 200 |
  *
  * **`'session_missing'` を `'unknown'` へ畳まないこと。** 畳むと `app.ts` の
  * `if (result.outcome === 'unknown')` が 404 を返し、`ManagerAbortResult` の doc が
@@ -1776,7 +1789,7 @@ export type ManagerDecision = 'allow' | 'deny';
  * したことで、2つの実装は同じ入力に同じ `outcome` を返す。
  */
 export interface ManagerSendResult {
-  outcome: 'answered' | 'delivered' | 'session_missing' | 'unknown' | 'unreadable';
+  outcome: 'answered' | 'delivered' | 'session_missing' | 'unknown' | 'unreadable' | 'declined';
   detail: string;
 }
 
@@ -5851,6 +5864,24 @@ class Pool implements ManagerPool {
     }
 
     /*
+     * **認証トークンの世代が食い違った done の委譲は、旧セッションへ流さない（#2851）。**
+     *
+     * done は台帳の `attached` が true のまま runner にセッションが生きていて、下の
+     * `runner.send()` は旧プロセスへ追加指示を積むだけである。旧プロセスの env は
+     * 起動時に凍っているので、鍵が回った後でも古い鍵で走り、また枠に当たる。しかも
+     * `#tokenIdentities` が動かないので、`manager_list` の世代の ⚠ も消えない
+     * （failed は `attached` が false なので下の resume に落ちて新しい鍵になる）。
+     *
+     * ⟹ 食い違っていれば、ここで畳んで `attached` を false に戻し、**下の既存の resume
+     * 経路へ落とす**（会話は同じ sessionId で続く）。畳んでよくない理由が残っていれば
+     * 畳まずに断る（`#foldStaleTokenSession` の doc）。
+     */
+    if (record.attached && record.job.status === 'done') {
+      const declined = await this.#foldStaleTokenSession(record, runner, managerId);
+      if (declined !== undefined) return declined;
+    }
+
+    /*
      * **台帳が「繋がっている」と言っていても、それを確かめずに信じない（#563）。**
      *
      * `attached` は「runner に**生きた**セッションが在る」の意味だが、
@@ -6044,6 +6075,161 @@ class Pool implements ManagerPool {
         ? '追加指示として届けた（runner にこの委譲のセッションが無かったので、resume から入り直した）。'
         : '追加指示として届けた。',
     };
+  }
+
+  /**
+   * **done の委譲の認証トークンの世代が現役と食い違っているとき、旧セッションを畳んで
+   * 新しい鍵で起こし直せる状態にする**（Issue #2851。`send()` の呼び出し側の注記を見よ）。
+   *
+   * 戻り値が `undefined` なら「呼び出し側はそのまま進んでよい」で、2つの意味がある。
+   * (1) 世代が食い違っていない・runner が一覧にこの委譲を載せていない（下の既存の
+   * 経路が拾う）。(2) **畳んで `record.attached` を false にした**——呼び出し側の
+   * 続きの `if (!attached)` が既存の `#resumeOnce` に落ちる。**戻り値が `ManagerSendResult`
+   * のときは、何も畳まず送ってもいない**（断る・畳めたか確かめられなかった）。
+   *
+   * ## 畳んでよいのは「失うものが無い」と分かったときだけ
+   *
+   * 畳むと SDK 子プロセスごと、確認待ち（`canUseTool`）と起こしっぱなしの背景処理が
+   * 道連れになる。runner 自身の自動の畳み直し（`#atTokenRecycleBoundary`）が境界と
+   * 呼ぶ条件と同じ線で、**1つでも欠けていれば断る**（`declined`）。**古い鍵のまま流し
+   * 込むこともしない**——それが #2851 の症状だからである。
+   *
+   * - 確認待ち: 台帳（`record.waiting`）と runner の応答（`waiting`）の両方を見る
+   * - 背景処理: **runner の応答の `liveBackgroundTasks` だけが材料である。**
+   *   `report.awaitingBackground` は「失敗で終わった回」には立たない（枠で終わった回が
+   *   まさにそれ）ので代わりにならない。**欄が無い（古い runner）ときは「分からない」
+   *   として断る**——0 と読んで畳むと背景処理を黙って殺す
+   * - 会話を引き継げること: `sessionId` が無いまま畳むと会話が切れる
+   *
+   * ## 失われるものが無い順序
+   *
+   * 1. 未 push の観測を取る（`unpushedWork`。best-effort。`abort()` と同じ）
+   * 2. `runner.stop()`。runner 側の `#stopBody` が、子プロセスを閉じた後に生ログを
+   *    デーモンへ送り出し（`#shipArchive`）、未報告の本文を flush し（`#flushUnreported`）、
+   *    それから `onClosed` する。**作業ツリーは runner のディスクに残る**（畳むのは SDK
+   *    子プロセスであって、ワークスペースではない）
+   * 3. 一覧から消えたことを確かめる。**確かめられなければ resume しない**（二重に起こさない）
+   * 4. `attached` を false にする。**貸し出しは返さず握ったまま**で、呼び出し側の
+   *    `#resumeOnce` → `#claimForResume` が同じ器へ貸し直す（`abort()` を流用しない——
+   *    あれは `stopConfirmedAt` を立てて `#resume` に「止めた意思」として resume を断らせる）
+   *
+   * resume が効かない（生ログが無い・session が腐っている）ときは、既存の
+   * `resume_failed` → `#unresumable` の経路に乗る（`case 'resume_failed'`）。
+   */
+  async #foldStaleTokenSession(
+    record: ManagerRecord,
+    runner: RunnerClient,
+    managerId: string,
+  ): Promise<ManagerSendResult | undefined> {
+    const held = this.#tokenIdentities.get(managerId)?.generation;
+    const active = this.#tokenIdentity?.()?.generation;
+    // **一覧の ⚠ と同じ判定**（`tokenGenerationMismatched`）。ここで別の式を書かない。
+    if (
+      !tokenGenerationMismatched({ tokenGeneration: held, activeTokenGeneration: active }) ||
+      held === undefined ||
+      active === undefined
+    ) {
+      return undefined;
+    }
+
+    let listing: RunnerManagerListing;
+    try {
+      listing = await listRunnerManagers(runner);
+    } catch (error) {
+      return {
+        outcome: 'declined',
+        detail:
+          `${managerId} は認証トークンの世代が食い違っている（世代 ${String(held)} を抱えたまま、` +
+          `現役は世代 ${String(active)}）が、runner の状態を読めなかった（${reasonOf(error)}）ため、` +
+          '背景処理や確認待ちが残っているか分からない。畳んでいないし、古い鍵のセッションへも送っていない。' +
+          '少し置いてから送り直すこと。',
+      };
+    }
+    const state = listing.states.find((entry) => entry.managerId === managerId);
+    if (state === undefined) {
+      // 読めない形で在るなら「居る」側に数える（#1661）。数えずに通すと、下の既存の経路が
+      // 旧セッションへ送りうる。
+      if (!listing.unreadableIds.includes(managerId)) return undefined;
+      return {
+        outcome: 'declined',
+        detail:
+          `${managerId} は認証トークンの世代が食い違っているが、runner が返した状態が読めず、` +
+          '背景処理や確認待ちが残っているか分からない。送っていない。',
+      };
+    }
+
+    const blockers: string[] = [];
+    const waitingCount = Math.max(state.waiting.length, record.waiting.length);
+    if (waitingCount > 0) blockers.push(`確認待ちが ${String(waitingCount)} 件残っている`);
+    if (state.liveBackgroundTasks === undefined) {
+      blockers.push(
+        '起こしっぱなしの背景処理が残っているか分からない（この runner の版は本数を返さない）',
+      );
+    } else if (state.liveBackgroundTasks > 0) {
+      blockers.push(`起こしっぱなしの背景処理が ${String(state.liveBackgroundTasks)} 本残っている`);
+    }
+    if (record.job.sessionId === undefined) {
+      blockers.push('会話を引き継ぐ sessionId が無い（畳むと会話が切れる）');
+    }
+    if (blockers.length > 0) {
+      return {
+        outcome: 'declined',
+        detail:
+          `${managerId} は認証トークンの世代が食い違っている（世代 ${String(held)} を抱えたまま、` +
+          `現役は世代 ${String(active)}）。古い鍵のセッションへ流すとまた枠に当たるので、` +
+          '畳んで新しい鍵で起こし直したいが、畳めない理由が残っている: ' +
+          `${blockers.join('。')}。畳んでいないし、送ってもいない。` +
+          '取れる手: (1) 背景処理・確認待ちが終わるのを待ってから送り直す。' +
+          '(2) 残っているものを捨ててよいなら manager_stop → manager_start で後継を起こす' +
+          '（manager_stop は残っている仕事ごと畳む）。',
+      };
+    }
+
+    // 1. 未 push の観測（best-effort。失敗しても畳みの判断は変えない）。
+    await this.unpushedWork(managerId, {
+      signal: AbortSignal.timeout(UNPUSHED_WORK_OBSERVATION_TIMEOUT_MS),
+      source: 'stop',
+    }).catch(() => undefined);
+
+    // 2. 畳む。runner が生ログの送り出しと未報告の flush を済ませてから閉じる。
+    let stopError: unknown;
+    try {
+      await runner.stop(managerId);
+    } catch (error) {
+      stopError = error;
+    }
+    // 3. 一覧から消えたことを確かめる（`abort()` と同じ見方。読めなかった委譲は居る側）。
+    const gone = await listRunnerManagers(runner)
+      .then(
+        ({ states, unreadableIds }) =>
+          !states.some((entry) => entry.managerId === managerId) &&
+          !unreadableIds.includes(managerId),
+      )
+      .catch(() => undefined);
+    if (gone !== true) {
+      return {
+        outcome: 'declined',
+        detail:
+          `${managerId} の旧セッションを畳めたと確かめられなかった` +
+          `（${gone === false ? 'runner の一覧にまだ残っている' : '一覧を読めなかった'}` +
+          `${stopError === undefined ? '' : `。runner.stop() が例外を投げた: ${reasonOf(stopError)}`}）。` +
+          '二重に起こさないので resume していないし、送ってもいない。少し置いてから送り直すこと。',
+      };
+    }
+
+    // 4. 台帳を「セッションは無い」に揃えて、呼び出し側の既存の resume へ落とす。
+    // **書き残してから進む**（404 で訂正する経路と同じ）。畳んだ後・resume の前に
+    // daemon が落ちても、台帳が「繋がっている」のまま残らない。
+    record.attached = false;
+    await this.#persist(record);
+    await this.#journal({
+      type: 'decision',
+      decision: `[${managerId}] 認証トークンの世代が食い違った done の委譲を、畳んで新しい鍵で起こし直す`,
+      grounds:
+        `managerId=${managerId} 抱えていた世代=${String(held)} 現役の世代=${String(active)} ` +
+        'liveBackgroundTasks=0 確認待ち=0（#2851。旧セッションへ流すと古い鍵のまま走る）',
+    });
+    return undefined;
   }
 
   /**
@@ -6265,6 +6451,20 @@ class Pool implements ManagerPool {
     }
   }
 
+  /**
+   * 生存確認が名簿へ立てた観測から、その委譲の背景処理の本数を引く（#2851）。
+   * **聞けていない・欄を返さない runner のときは `undefined`**（0 ではない）。
+   */
+  #observedBackgroundTasks(runnerId: string | undefined, managerId: string): number | undefined {
+    if (runnerId === undefined) return undefined;
+    for (const entry of this.#runners.entries()) {
+      if (entry.runnerId !== runnerId) continue;
+      const tasks = entry.sessionBackgroundTasks;
+      if (tasks !== undefined && Object.hasOwn(tasks, managerId)) return tasks[managerId];
+    }
+    return undefined;
+  }
+
   async list(): Promise<ManagerSummary[]> {
     await this.#ensureConnected();
 
@@ -6346,6 +6546,15 @@ class Pool implements ManagerPool {
           runnerListedAtOf(job, silent, runnerSessions),
         ),
       );
+    }
+    // **runner が最後に見た背景処理の本数を載せる**（#2851。往復は足さない）。聞けて
+    // いない委譲には欄を作らない（0 を捏造しない）。
+    for (const record of this.#records.values()) {
+      const tasks = this.#observedBackgroundTasks(record.job.runnerId, record.job.id);
+      const summary = known.get(record.job.id);
+      if (tasks !== undefined && summary !== undefined) {
+        known.set(record.job.id, { ...summary, liveBackgroundTasks: tasks });
+      }
     }
     const summaries = [...known.values()];
     // **`isLive()` の返り値にも `status` にも触れない、独立した計器**
@@ -15235,4 +15444,25 @@ function summaryOf(
     // では欄ごと消す——`tokenGeneration` と同じ作法。
     ...(resetTimeSkewMatch === undefined ? {} : { resetTimeSkewMatch }),
   };
+}
+
+/**
+ * **この委譲が抱えている認証トークンの世代が、現役と食い違っているか**
+ * （Issue #914 提案1 の判定そのもの。Issue #931 で2つ目の読み手が付いた）。
+ *
+ * **判定を2箇所へ書かないためだけに在る。** {@link describeTokenGeneration}
+ * が ⚠ の行を出すかどうかと、{@link failureLine} が回復の見込みに但し書きを
+ * 足すかどうかは、**同じ1つの事実**である——別々に書くと、いつか片方だけが
+ * 直って「世代は食い違っているのに『時間で戻る』とだけ出る」形に戻る。
+ *
+ * **どちらかが `undefined` なら偽である。** 比べる相手が居ないときに
+ * 食い違いを捏造しない（`ManagerSummary.activeTokenGeneration` の doc と
+ * 同じ理由）。
+ */
+export function tokenGenerationMismatched(
+  manager: Pick<ManagerSummary, 'tokenGeneration' | 'activeTokenGeneration'>,
+): boolean {
+  if (manager.tokenGeneration === undefined) return false;
+  if (manager.activeTokenGeneration === undefined) return false;
+  return manager.tokenGeneration !== manager.activeTokenGeneration;
 }

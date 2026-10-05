@@ -211,6 +211,22 @@ export function parseUsageDate(raw: string | null): string {
   return isRealUsageDate(raw) ? raw : '';
 }
 
+/** 層（誰が）の表示名。知らない値は元の文字のまま出す（消さない）。 */
+const LAYER_LABELS: Record<string, string> = { clone: 'クローン', manager: 'マネージャー' };
+function layerLabel(layer: string): string {
+  return LAYER_LABELS[layer] ?? layer;
+}
+
+/** 場所（どこで）の表示名。知らない値は元の文字のまま出す（消さない）。 */
+const SITE_LABELS: Record<string, string> = {
+  session: '本体のセッション',
+  distill: '記憶への蒸留',
+  peer: 'もう一方のモデル',
+};
+function siteLabel(site: string): string {
+  return SITE_LABELS[site] ?? site;
+}
+
 export default function Usage() {
   /*
    * **絞り込みの正本は URL である（issue #2050）。** `journal.tsx`（#2029）・
@@ -316,7 +332,7 @@ export default function Usage() {
     <Page
       tabs={<SettingsTabs />}
       title="利用状況"
-      description="alteroid が使った分（トークンと費用）。SDK の推定値であり、Anthropic の請求明細ではない"
+      description="alteroid が使った分（トークンと費用）。使った量からの推定値であり、Anthropic の請求明細ではない"
     >
       <Card className="mb-4 p-4">
         {/*
@@ -341,7 +357,7 @@ export default function Usage() {
         */}
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
           <label className="flex flex-col gap-1 text-xs text-muted-foreground">
-            from
+            開始日
             <Input
               type="date"
               className="min-w-0"
@@ -350,7 +366,7 @@ export default function Usage() {
             />
           </label>
           <label className="flex flex-col gap-1 text-xs text-muted-foreground">
-            to
+            終了日
             <Input
               type="date"
               className="min-w-0"
@@ -359,9 +375,9 @@ export default function Usage() {
             />
           </label>
           <label className="flex flex-col gap-1 text-xs text-muted-foreground">
-            manager
+            マネージャー
             <Input
-              placeholder="manager id"
+              placeholder="マネージャーの番号"
               value={managerId}
               onChange={(event) => setFilter(MANAGER_ID_PARAM, event.target.value)}
             />
@@ -371,31 +387,31 @@ export default function Usage() {
             画面に値を書き写すと、値が増えたときにここだけ古くなる。
           */}
           <label className="flex flex-col gap-1 text-xs text-muted-foreground">
-            layer（誰が）
+            誰が
             <Select value={layer} onChange={(event) => setFilter(LAYER_PARAM, event.target.value)}>
               <option value="">すべて</option>
               {USAGE_LAYERS.map((value) => (
                 <option key={value} value={value}>
-                  {value}
+                  {layerLabel(value)}
                 </option>
               ))}
             </Select>
           </label>
           <label className="flex flex-col gap-1 text-xs text-muted-foreground">
-            site（どこで）
+            どこで
             <Select value={site} onChange={(event) => setFilter(SITE_PARAM, event.target.value)}>
               <option value="">すべて</option>
               {USAGE_SITES.map((value) => (
                 <option key={value} value={value}>
-                  {value}
+                  {siteLabel(value)}
                 </option>
               ))}
             </Select>
           </label>
           <label className="flex flex-col gap-1 text-xs text-muted-foreground">
-            token（どの認証トークンで）
+            認証トークン
             <Input
-              placeholder="token id"
+              placeholder="トークンの番号"
               value={tokenId}
               onChange={(event) => setFilter(TOKEN_ID_PARAM, event.target.value)}
             />
@@ -425,7 +441,7 @@ export default function Usage() {
             <>
               {/* **`$0.00` と出さない。** まだ台帳に1件も無いのを「使っていない」に見せない。 */}
               <Card>
-                <Empty>
+                <Empty inset="card">
                   台帳にはまだ1件も記録が無い。（消費の記録はこの機能を入れた時点から始まる。それより前の分は残っていない）
                 </Empty>
               </Card>
@@ -578,7 +594,7 @@ function UsageBody({
         <CardHeader title="合計" subtitle={`台帳の始点: ${since}`} />
         <div className="px-4 py-3">
           {rows.length === 0 ? (
-            <Empty>その範囲には記録が無い。</Empty>
+            <Empty inset="none">その範囲には記録が無い。</Empty>
           ) : (
             <>
               <p className="text-2xl font-semibold">{formatUsd(summary.total.costUsd)}</p>
@@ -705,13 +721,13 @@ function UsageBody({
             title="層別（誰が）"
             entries={[...summary.byLayer]
               .sort((a, b) => b.totals.costUsd - a.totals.costUsd)
-              .map((entry) => ({ label: entry.layer, costUsd: entry.totals.costUsd }))}
+              .map((entry) => ({ label: layerLabel(entry.layer), costUsd: entry.totals.costUsd }))}
           />
           <AxisCard
             title="場所別（どこで）"
             entries={[...summary.bySite]
               .sort((a, b) => b.totals.costUsd - a.totals.costUsd)
-              .map((entry) => ({ label: entry.site, costUsd: entry.totals.costUsd }))}
+              .map((entry) => ({ label: siteLabel(entry.site), costUsd: entry.totals.costUsd }))}
           />
           {/*
             **`tokenId` が null の要素を落とさない。** 落とすとこの軸だけ合計に

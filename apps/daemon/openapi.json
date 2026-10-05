@@ -7092,6 +7092,25 @@
                                 }
                               },
                               "required": ["at", "limitsAvailable", "windows"]
+                            },
+                            "refreshFailure": {
+                              "type": "object",
+                              "properties": {
+                                "since": {
+                                  "type": "string",
+                                  "format": "date-time",
+                                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                                },
+                                "at": {
+                                  "type": "string",
+                                  "format": "date-time",
+                                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                                },
+                                "reason": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": ["since", "at", "reason"]
                             }
                           },
                           "required": ["state", "usage"]
@@ -15039,6 +15058,11 @@
                               "reattached-across-restart"
                             ]
                           },
+                          "liveBackgroundTasks": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
                           "resetTimeSkewMatch": {
                             "type": "string",
                             "enum": ["active", "stale"]
@@ -15634,6 +15658,11 @@
                             "reattached-across-restart"
                           ]
                         },
+                        "liveBackgroundTasks": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
                         "resetTimeSkewMatch": {
                           "type": "string",
                           "enum": ["active", "stale"]
@@ -15882,6 +15911,7 @@
                         "stopped",
                         "not_stopped",
                         "session_missing",
+                        "declined",
                         "unknown"
                       ]
                     },
@@ -16070,7 +16100,7 @@
         "description": "これが無いと、人間の言葉はクローンを経由してしか届かない。クローンの代わりに判断するための口ではない（判断はクローンの仕事のまま）。人間が自分の言葉を自分で届けるための口である。許可確認への回答なら `requestId` を付ける。",
         "responses": {
           "200": {
-            "description": "`outcome` を読むこと。`answered` = 止まっていた確認を解いた。`delivered` = 追加指示として届けた（runner にセッションが無く resume から入り直した回も含む。`detail` がそう言う）。`session_missing` = **runner がこの委譲のセッションを持っておらず、resume でも入り直せなかった**（#563。**届いていない**）。`unknown` はここには出ない（404 になる）。⚠️ `session_missing` を 404 にしないのは、**そのものは居る**からである — 委譲は台帳に在り、時間で解ける理由（引き取り中・貸し出し期限）なら送り直しで通る。",
+            "description": "`outcome` を読むこと。`answered` = 止まっていた確認を解いた。`delivered` = 追加指示として届けた（runner にセッションが無く resume から入り直した回も含む。`detail` がそう言う）。`session_missing` = **runner がこの委譲のセッションを持っておらず、resume でも入り直せなかった**（#563。**届いていない**）。`unknown` はここには出ない（404 になる）。`declined` = **認証トークンの世代が食い違う done の委譲を畳んで新しい鍵で起こし直したいが、背景処理・確認待ちが残っている（または分からない）ため、畳まず、送らなかった**（#2851。そのものは居る。`detail` が残っているものと取れる手を言う）。⚠️ `session_missing` を 404 にしないのは、**そのものは居る**からである — 委譲は台帳に在り、時間で解ける理由（引き取り中・貸し出し期限）なら送り直しで通る。",
             "content": {
               "application/json": {
                 "schema": {
@@ -16084,6 +16114,7 @@
                         "stopped",
                         "not_stopped",
                         "session_missing",
+                        "declined",
                         "unknown"
                       ]
                     },
@@ -18400,17 +18431,34 @@
             }
           },
           "500": {
-            "description": "保存に失敗した、または**広げる側の変更（追加・有効化・値の差し替え・試す順の入れ替え）で日誌が書けなかった（保存していない）**。狭める側（削除・無効化・改名）だけの変更は、日誌が書けなくても保存して 200 を返す（issue #2742）。**理由の本文は返さない**（ドライバの例外は失敗したクエリの束縛パラメータを添えてくることがあるため）。跡は stderr に残る。",
+            "description": "保存に失敗した、または**広げる側の変更（追加・有効化・値の差し替え・試す順の入れ替え）で日誌が書けなかった（保存していない）**。狭める側（削除・無効化・改名）だけの変更は、日誌が書けなくても保存して 200 を返す（issue #2742）。**理由の本文は返さない**（ドライバの例外は失敗したクエリの束縛パラメータを添えてくることがあるため）。跡は stderr に残る。日誌が書けなかった回の本文は `{ error: \"記録（日誌）が書けなかったので、変更していません\", code: \"journal_write_failed\" }`（`code` で見分ける。保存の失敗は `code` の無い `{ error }`）。",
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        },
+                        "code": {
+                          "type": "string",
+                          "const": "journal_write_failed"
+                        }
+                      },
+                      "required": ["error", "code"]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["error"]
                     }
-                  },
-                  "required": ["error"]
+                  ]
                 }
               }
             }
@@ -18767,7 +18815,7 @@
             }
           },
           "500": {
-            "description": "日誌が書けなかった（**保存していない**。広げる側の変更のとき）。",
+            "description": "日誌が書けなかった（**保存していない**。広げる側の変更のとき）。本文は `{ error: \"記録（日誌）が書けなかったので、変更していません\", code: \"journal_write_failed\" }`。",
             "content": {
               "application/json": {
                 "schema": {
@@ -18775,9 +18823,13 @@
                   "properties": {
                     "error": {
                       "type": "string"
+                    },
+                    "code": {
+                      "type": "string",
+                      "const": "journal_write_failed"
                     }
                   },
-                  "required": ["error"]
+                  "required": ["error", "code"]
                 }
               }
             }
