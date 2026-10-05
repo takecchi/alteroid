@@ -51,3 +51,20 @@ export function hasNul(value: string): boolean {
 export function stripNul(value: string): string {
   return value.includes('\u0000') ? value.replaceAll('\u0000', '') : value;
 }
+
+/**
+ * 構造のある本文（日誌の1行など）の文字列と、オブジェクトの欄名から NUL を落とす（issue #3011）。
+ * pg の `stripNulls`（`storage-pg/src/db.ts`）と同じ規則で、fs・インメモリが同じ結果になるように置く。
+ * 鍵には使わない（鍵は {@link assertNoNul} で断る）。
+ */
+export function stripNulDeep<T>(value: T): T {
+  if (typeof value === 'string') return stripNul(value) as T;
+  if (Array.isArray(value)) return value.map((item) => stripNulDeep(item)) as T;
+  if (value !== null && typeof value === 'object') {
+    const source = value as Record<string, unknown>;
+    const mapped: Record<string, unknown> = {};
+    for (const key of Object.keys(source)) mapped[stripNul(key)] = stripNulDeep(source[key]);
+    return mapped as T;
+  }
+  return value;
+}

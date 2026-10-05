@@ -1406,6 +1406,7 @@ export {
  * {@link stripNul} で落として残す。3実装（インメモリ / fs / pg）が同じ部品を呼ぶ。
  */
 export { NulNotAllowedError, assertNoNul, hasNul, stripNul } from './nul-guard.js';
+export { stripNulDeep } from './nul-guard.js';
 export { InvalidCredentialNameError, assertValidCredentialEntries } from './credential-input.js';
 export {
   DuplicateTokenIdError,

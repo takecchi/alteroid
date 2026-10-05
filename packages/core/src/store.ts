@@ -555,6 +555,10 @@ export interface JournalStore {
    * **一覧を抜粋にするなら、全文への行き先が要る**（`manager_list` ↔
    * `manager_report` と同じ形）。無いと、抜粋にした時点で長い記録は
    * クローンから永久に読めなくなる＝能力の削除（north_star 禁止1）。
+   *
+   * **NUL（issue #3011）。** `id`・`after.id`・`q` に NUL があっても断らず、「無い」と同じ結果（`get` は `null`、
+   * `after` は `JournalAnchorNotFoundError`、`q` は0件）を返す。書き込み（`append`）は鍵を持たず（id は store が振る）、
+   * 本文の NUL は落として残す（3実装とも）。
    */
   get(id: string): Promise<JournalEntry | null>;
 
@@ -1180,6 +1184,10 @@ export interface ScheduleStore {
    * 型を導入する前から使っていたメッセージの文言はそのまま引き継いでいる
    * （変えたのは型だけ）。
    *
+   * **NUL（issue #3011）。** 読むだけの口（`get`・`remove`・`removeIfPresent`・`editRequest`・`claimRun`・`completeRun`・
+   * `getPhase`）は、NUL を含む kind でも断らず「無い」と同じ結果を返す。書き込みは、依頼の kind を入口のスキーマが弾き、
+   * 位相の kind（`putPhase`）は `NulNotAllowedError` で断る。`request`（本文）の NUL は落として残す。
+   *
    * **インメモリ実装（`testing.ts`）は投げない。** `put()` の時点で
    * `scheduledRequestSchema.parse` を通すため、壊れた行をそもそも持てない
    * ——テストで再現するときは `stores.schedules.get` を丸ごと差し替える
@@ -1520,6 +1528,10 @@ export interface CommitmentStore {
    * 投げる。呼び出し側（`commitment_list` ツール、`tools.ts`）はこれを
    * `instanceof` で捕まえ、「読めない」を text として返す——それ以外の
    * 例外（器そのものの障害）は捕まえずに上へ通す。
+   *
+   * **NUL（issue #3011）。** 読むだけの口（`get`・`close`・`closeMany`・`editBody` の id）は、NUL を含む id でも断らず
+   * 「無い」と同じ結果（`null`・`false`・閉じた id に含めない）を返す。`open` は `id` の NUL を `NulNotAllowedError` で断り、
+   * `body`・`closedReason` の NUL は落として残す（3実装とも）。`source` の NUL の扱いは未決で、ここでは揃えていない。
    */
   get(id: string): Promise<Commitment | null>;
 
@@ -2069,6 +2081,10 @@ export interface TranscriptArchive {
    * **判定するだけで、畳まない。** `continuity` が `'diverged'` /
    * `'unknown'` でも、この呼び出しの中で古い行を `remove()` したりしない
    * （`ArchiveWrite` の doc）。
+   *
+   * **NUL（issue #3011）。** `sessionId` の NUL は `InvalidArchiveSessionIdError` で断る（issue #2233）。`transcript`（本文）の NUL は
+   * 落として残す（3実装とも。指紋と連続性は落とす前の本文で取る）。読むだけの口（`read`・`readTail`・`remove`）は、
+   * NUL を含む id でも断らず `missing` を返す。
    */
   archive(sessionId: string, transcript: string): Promise<ArchiveWrite>;
   /** 新しい順（#698）。 */

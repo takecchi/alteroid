@@ -117,7 +117,7 @@ import {
   stripNulFromUsageQuery,
   stripNulFromUsageRecord,
 } from './usage-input.js';
-import { assertNoNul, stripNul } from './nul-guard.js';
+import { assertNoNul, stripNul, stripNulDeep } from './nul-guard.js';
 import { preparePermissionGrantForPut } from './permission-grant-input.js';
 import { assertProfileRowWritable } from './profile-input.js';
 import { assertValidActiveToken, prepareTokensForReplace } from './token-pool-input.js';
@@ -555,8 +555,9 @@ export function createMemoryStores(): Stores {
     async append(input: JournalEntryInput) {
       // fs（`FsJournalStore.append`）/ pg（`PgJournalStore.append`）と同じく、
       // 形の崩れた entry を書く前に拒む（issue #1668。InboxStore.put と同じ穴）。
+      // 日誌の本文の NUL は落として残す（issue #3011。pg の `stripNulls` と同じ）。
       const entry = journalEntrySchema.parse({
-        ...input,
+        ...stripNulDeep(input),
         id: nextId(),
         at: new Date().toISOString(),
       });
@@ -745,7 +746,11 @@ export function createMemoryStores(): Stores {
       // 本物（fs / pg）と同じく `scheduledRequestSchema` を通す（issue #1652）。
       // かつてはインメモリだけが何でも受け付けたので、`request` が空文字の
       // ような形式不正な entry も「書けた」として通していた。
-      schedules.set(entry.kind, isolate(scheduledRequestSchema.parse(entry)));
+      // kind の NUL は入口のスキーマが弾く。本文は落として残す（issue #3011）。
+      schedules.set(
+        entry.kind,
+        isolate(scheduledRequestSchema.parse({ ...entry, request: stripNul(entry.request) })),
+      );
     },
     async remove(kind) {
       schedules.delete(kind);
@@ -773,7 +778,7 @@ export function createMemoryStores(): Stores {
       // 同じ理由）。
       const next = scheduledRequestSchema.parse({
         ...found,
-        request: changes.request,
+        request: stripNul(changes.request),
         spec: changes.spec,
         updatedAt,
       });
@@ -800,6 +805,7 @@ export function createMemoryStores(): Stores {
       return schedulePhases.get(kind) ?? null;
     },
     async putPhase(phase) {
+      assertNoNul('schedulePhase.kind', phase.kind);
       // **本物と同じく parse を通す。** 通さないと、この足場でだけ通る形の位相を
       // 書いたテストが緑になり、fs / pg では落ちる（動くのに嘘をつくスタブ）。
       schedulePhases.set(phase.kind, schedulePhaseSchema.parse(phase));
@@ -860,7 +866,9 @@ export function createMemoryStores(): Stores {
       // ないような形式不正な entry も「開けた」として通していた。
       // ⚠️ 同期のまま最後まで判定して書く（`await` を挟まない）——`.parse()`
       // は同期なので、直上のコメント（issue #1041）の性質を壊さない。
-      const parsed = commitmentSchema.parse(entry);
+      // id（鍵）の NUL は断り、本文は落として残す（issue #3011）。
+      assertNoNul('commitment.id', entry.id);
+      const parsed = commitmentSchema.parse({ ...entry, body: stripNul(entry.body) });
       if (commitments.has(parsed.id)) return { opened: false, folded: false };
       const duplicate = findOpenManagerDuplicate([...commitments.values()], parsed);
       if (duplicate !== undefined) return { opened: false, folded: true, foldedInto: duplicate.id };
@@ -870,7 +878,12 @@ export function createMemoryStores(): Stores {
     async close(id, at, reason, by: CommitmentClosedBy) {
       const existing = commitments.get(id);
       if (!existing || existing.closedAt !== undefined) return false;
-      commitments.set(id, { ...existing, closedAt: at, closedReason: reason, closedBy: by });
+      commitments.set(id, {
+        ...existing,
+        closedAt: at,
+        closedReason: stripNul(reason),
+        closedBy: by,
+      });
       return true;
     },
     // **本物（fs / pg）と同じ意味論——実際に閉じた id だけを返す。** 存在しない
@@ -883,7 +896,12 @@ export function createMemoryStores(): Stores {
       for (const id of new Set(ids)) {
         const existing = commitments.get(id);
         if (!existing || existing.closedAt !== undefined) continue;
-        commitments.set(id, { ...existing, closedAt: at, closedReason: reason, closedBy: by });
+        commitments.set(id, {
+          ...existing,
+          closedAt: at,
+          closedReason: stripNul(reason),
+          closedBy: by,
+        });
         closedIds.push(id);
       }
       return closedIds;
@@ -893,7 +911,7 @@ export function createMemoryStores(): Stores {
     async editBody(id, body, at, by: CommitmentEditedBy) {
       const existing = commitments.get(id);
       if (!existing || existing.closedAt !== undefined) return false;
-      commitments.set(id, { ...existing, body, editedAt: at, editedBy: by });
+      commitments.set(id, { ...existing, body: stripNul(body), editedAt: at, editedBy: by });
       return true;
     },
     async clear() {
@@ -989,7 +1007,8 @@ export function createMemoryStores(): Stores {
       const previous = findPreviousArchiveForSession(sessionId);
       const fingerprint = fingerprintArchiveBody(transcript);
       const { continuity, comparedTo } = classifyArchiveContinuity(previous, transcript);
-      archives.set(id, transcript);
+      // 本文の NUL は落として残す（issue #3011。pg と同じ）。指紋と連続性は生の本文で取る（pg と同じ）。
+      archives.set(id, stripNul(transcript));
       archiveMeta.set(id, {
         sessionId,
         at,
