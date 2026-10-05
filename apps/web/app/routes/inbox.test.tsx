@@ -217,14 +217,16 @@ describe('/inbox 画面 — 受信箱の絞り込み一括削除（#972 / #1042�
     const button = screen.getByRole('button', { name: '試算する' }) as HTMLButtonElement;
     expect(button.disabled).toBe(true);
     fireEvent.click(button);
-    await new Promise((resolve) => setTimeout(resolve, 20));
     expect(sent).toHaveLength(0);
 
-    // 1つ外せば送れる。
+    // 1つ外せば送れる。**実時間では待たない**（#2146）——外した後の1回が届いた時点で
+    // ちょうど1件なら、押せなかったときのクリックは送られていない。
     checkType(/定期ジョブ/);
-    expect((screen.getByRole('button', { name: '試算する' }) as HTMLButtonElement).disabled).toBe(
-      false,
-    );
+    const enabled = screen.getByRole('button', { name: '試算する' }) as HTMLButtonElement;
+    expect(enabled.disabled).toBe(false);
+    fireEvent.click(enabled);
+    await waitFor(() => expect(sent).toHaveLength(1));
+    expect(sent[0]?.body.types).toHaveLength(6);
   });
 
   it('絞り込みを変えると、前の試算の結果を無効にする', async () => {
