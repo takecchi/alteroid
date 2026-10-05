@@ -1135,6 +1135,12 @@ export const managerSummarySchema = z.object({
    * `manager_list` にだけ出る形になる）。
    */
   runnerVanished: z.literal(true).optional(),
+  /**
+   * 宛先の runner が、最新の生存確認の一覧にこの委譲を載せていた観測時刻
+   * （`ManagerSummary.runnerListedAt`）。**観測できていなければ欄ごと無い**（推測で立てない）。
+   * 古い観測は読み手が時刻で捨てる。**ここに宣言しないと、値が在っても黙って落ちる。**
+   */
+  runnerListedAt: isoDateTimeSchema.optional(),
   runnerId: z.string().optional(),
   workspace: workspaceLocatorSchema.optional(),
   /**
@@ -1658,6 +1664,13 @@ const topologyManagerSchema = z.object({
   status: jobStatusSchema,
   live: z.boolean(),
   runnerId: z.string().optional(),
+  /**
+   * 宛先の runner が、最新の生存確認の一覧にこの委譲を載せていた観測時刻
+   * （`ManagerSummary.runnerListedAt`）。**`status` が `done` でも、これが立っていれば
+   * 地図は終端の窓（10分）に関係なく載せる**（lost / failed / stopped を除く。器ごと消えた・
+   * 黙った runner の委譲には立たない）。観測できていなければ欄ごと無い。
+   */
+  runnerListedAt: isoDateTimeSchema.optional(),
   /** 抜粋。全文は `GET /managers/:id`。 */
   request: z.string(),
   startedAt: isoDateTimeSchema,

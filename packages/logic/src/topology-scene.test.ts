@@ -18,6 +18,8 @@ afterAll(() => {
 
 import {
   FLOW_WINDOW_MS,
+  IDLE_COLLAPSE_THRESHOLD,
+  IDLE_GROUP_ID,
   topologySceneFromSnapshot,
   WORKER_RUNNING_WINDOW_MS,
 } from './topology-scene.js';
@@ -487,5 +489,54 @@ describe('unreadable（#2705）', () => {
     );
     expect(counted.unreadableCount).toBe(2);
     expect('unreadableCount' in topologySceneFromSnapshot(snapshot({}), NOW)).toBe(false);
+  });
+});
+
+describe('runner に居る手の空いたマネージャー（runnerListedAt）', () => {
+  const idle = (id: string, extra: Partial<TopologySnapshotManager> = {}): TopologySnapshotManager => ({
+    ...MANAGER,
+    managerId: id,
+    status: 'done',
+    live: true,
+    updatedAt: ago(3 * 60 * 60_000),
+    runnerListedAt: ago(5_000),
+    ...extra,
+  });
+
+  it('少ないうちは個別の札で、窓内の done と同じ「仕事なし」の描き方', () => {
+    const scene = topologySceneFromSnapshot(
+      snapshot({ managers: [idle('aaaaaaaa1'), idle('bbbbbbbb1')] }),
+      NOW,
+    );
+    expect(scene.managers.map((m) => [m.id, m.status])).toEqual([
+      ['aaaaaaaa1', 'idle'],
+      ['bbbbbbbb1', 'idle'],
+    ]);
+    expect(scene.managers[0]?.task).toBe(`完了: ${MANAGER.request}`);
+  });
+
+  it('しきい値を超えたら「仕事なし N 本」の1枚へ畳み、個別は詳細に1行ずつ残す。動いているものは畳まない', () => {
+    const ids = Array.from({ length: IDLE_COLLAPSE_THRESHOLD + 1 }, (_, i) => `idle000${i}`);
+    const scene = topologySceneFromSnapshot(
+      snapshot({
+        managers: [
+          { ...MANAGER, managerId: 'running1' },
+          ...ids.map((id) => idle(id)),
+          idle('withwork', { workers: [{ agentType: 'implementer' }] }),
+        ],
+      }),
+      NOW,
+    );
+    expect(scene.managers.map((m) => m.id)).toEqual(['running1', 'withwork', IDLE_GROUP_ID]);
+    const group = scene.managers.at(-1);
+    expect(group?.label).toBe(`仕事なし ${ids.length} 本`);
+    expect(group?.status).toBe('idle');
+    expect(group?.details?.map((row) => row.label)).toEqual(ids);
+  });
+
+  it('しきい値ちょうどは畳まない', () => {
+    const ids = Array.from({ length: IDLE_COLLAPSE_THRESHOLD }, (_, i) => `idle000${i}`);
+    const scene = topologySceneFromSnapshot(snapshot({ managers: ids.map((id) => idle(id)) }), NOW);
+    expect(scene.managers.map((m) => m.id)).toEqual(ids);
   });
 });

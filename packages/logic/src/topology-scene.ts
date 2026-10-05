@@ -333,6 +333,47 @@ function runnerStatus(runners: TopologySnapshot['runners']): SceneStatus {
 }
 
 /**
+ * 「仕事なし」のマネージャーを1枚へ畳み始める本数（これより多いとき畳む）。runner の上に居る
+ * 手の空いたマネージャーは終端の窓（10分）に関係なく載る（`runnerListedAt`）ので、数が増えても
+ * runner の箱が縦に溢れないようにする。
+ */
+export const IDLE_COLLAPSE_THRESHOLD = 3;
+/** 畳んだ札の `id`（マネージャー id と衝突しない形）。 */
+export const IDLE_GROUP_ID = 'idle-group';
+
+/**
+ * 畳んでよい札か。**「仕事なし」で、作業者が居ず、線が光っていない**もの。何かが動いている・
+ * 見せたい札は個別のまま残す。
+ */
+function isCollapsible(manager: SceneManager): boolean {
+  return manager.status === 'idle' && manager.workers.length === 0 && manager.flow === 'idle';
+}
+
+/**
+ * 仕事なしのマネージャーが `IDLE_COLLAPSE_THRESHOLD` 本を超えたら、「仕事なし N 本」の1枚へ畳む
+ * （末尾へ置く。デーモンの並びは終端が最後）。個別の内容は札の詳細に1本1行で残す——
+ * **畳んで情報を消さない**（id と依頼の抜粋は詳細から読める）。
+ */
+export function collapseIdleManagers(managers: readonly SceneManager[]): readonly SceneManager[] {
+  const idle = managers.filter(isCollapsible);
+  if (idle.length <= IDLE_COLLAPSE_THRESHOLD) return managers;
+  const rest = managers.filter((manager) => !isCollapsible(manager));
+  const group: SceneManager = {
+    id: IDLE_GROUP_ID,
+    label: `仕事なし ${idle.length} 本`,
+    task: '手が空いている。札を押すと一覧',
+    status: 'idle',
+    flow: 'idle',
+    workers: [],
+    details: idle.map((manager) => ({
+      label: manager.label,
+      value: manager.task ?? manager.id,
+    })),
+  };
+  return [...rest, group];
+}
+
+/**
  * スナップショットを描画用の場面にする。
  *
  * 委譲の並びはデーモンが決めた順のまま（返事待ち → 走行中 → 終端）。並べ直さない。
@@ -359,7 +400,7 @@ export function topologySceneFromSnapshot(
     ...((snapshot.unreadable?.length ?? 0) > 0
       ? { unreadableCount: snapshot.unreadable!.length }
       : {}),
-    managers: snapshot.managers.map((manager) => ({
+    managers: collapseIdleManagers(snapshot.managers.map((manager) => ({
       id: manager.managerId,
       label: managerLabel(manager.managerId),
       task: managerTask(manager),
@@ -403,6 +444,6 @@ export function topologySceneFromSnapshot(
           ],
         };
       }),
-    })),
+    }))),
   };
 }
