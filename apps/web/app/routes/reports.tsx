@@ -1,6 +1,7 @@
 import { useId } from 'react';
 import { Link } from 'react-router';
 
+import { LoadError } from '~/components/load-error';
 import {
   markdownComponents,
   toReact,
@@ -8,7 +9,6 @@ import {
   ListDetail,
   ListDetailItems,
   Empty,
-  ErrorNote,
   Spinner,
   cn,
 } from '@alteroid/ui';
@@ -189,7 +189,7 @@ export default function Reports({ loaderData }: Route.ComponentProps) {
   const selectedId = reportId ?? reports.find((report) => report.date === selectedDate)?.id;
   /**
    * **取れなかったのを0件と描かない**（issue #2324）。一覧をまだ一度も読めていないまま
-   * 失敗したとき、失敗は上の `ErrorNote` が言う。一覧の「まだ無い」も、右の
+   * 失敗したとき、失敗は上の `LoadError` が言う。一覧の「まだ無い」も、右の
    * 「日報が1件も無い」も並べない（どちらも一覧が空であることに乗っている）。再検証の
    * 失敗で `data` が残っているときは当たらず、一覧をそのまま出す。
    */
@@ -226,7 +226,13 @@ export default function Reports({ loaderData }: Route.ComponentProps) {
       className="overflow-hidden p-0 md:p-0"
     >
       <div className="flex h-full flex-col">
-        <ErrorNote error={list.error} className="mx-4 mt-4 shrink-0 md:mx-6" />
+        <LoadError
+          what="日報の一覧"
+          error={list.error}
+          onRetry={() => list.mutate()}
+          retrying={list.isValidating}
+          className="mx-4 mt-4 shrink-0 md:mx-6"
+        />
         <ListDetail
           className="min-h-0 flex-1"
           listLabel="日報の一覧"
@@ -333,7 +339,7 @@ export default function Reports({ loaderData }: Route.ComponentProps) {
 }
 
 function ReportBody({ date, reportId }: { date: string; reportId: string | undefined }) {
-  const { data, error, isLoading } = useReport(date);
+  const { data, error, isLoading, isValidating, mutate } = useReport(date);
 
   const reports = data?.reports ?? [];
   /*
@@ -354,7 +360,7 @@ function ReportBody({ date, reportId }: { date: string; reportId: string | undef
   const report = reports.find((entry) => entry.id === reportId) ?? reports[0];
   /**
    * **取れなかったのを「この日の日報は無い」と描かない**（issue #2324）。本文をまだ一度も
-   * 読めていないまま失敗したとき、失敗は上の `ErrorNote` が言う。再検証の失敗で `data` が
+   * 読めていないまま失敗したとき、失敗は上の `LoadError` が言う。再検証の失敗で `data` が
    * 残っているときは当たらず、本文をそのまま出す。
    */
   const bodyUnavailable = data === undefined && error !== undefined;
@@ -364,7 +370,13 @@ function ReportBody({ date, reportId }: { date: string; reportId: string | undef
       <div className="border-b border-border pb-3">
         <h2 className="text-sm font-semibold">{reportTitle(date)}</h2>
       </div>
-      <ErrorNote error={error} className="m-4" />
+      <LoadError
+        what="この日の日報"
+        error={error}
+        onRetry={() => mutate()}
+        retrying={isValidating}
+        className="my-3"
+      />
       {isLoading ? (
         <Spinner />
       ) : bodyUnavailable ? null : report === undefined ? (

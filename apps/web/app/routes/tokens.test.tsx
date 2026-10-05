@@ -1161,3 +1161,106 @@ describe('/tokens 画面 — 使用量からの行き先（issue #2109）', () =
     expect(document.getElementById('token-t-a')?.className).not.toContain('border-primary');
   });
 });
+
+/**
+ * 日誌が書けず、サーバが何も保存せずに 500 を返した回（#2886）。
+ * 本文は `{ error: "記録（日誌）が書けなかったので、変更していません", code: "journal_write_failed" }`。
+ * 保存そのものの失敗は `code` の無い `{ error }`。
+ */
+describe('/tokens 画面 — 日誌が書けず保存しなかった 500（#2886）', () => {
+  const JOURNAL_MESSAGE = '記録（日誌）が書けなかったので、変更していません';
+  const HINT =
+    /何も変更していない。もう一度試すか、記録の置き場所（ディスクの空き・書き込み権限）を確かめる/;
+
+  function stubFailingWrites(body: { error: string; code?: string }) {
+    const puts: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = input instanceof Request ? input : null;
+      const url = request?.url ?? (typeof input === 'string' ? input : String(input));
+      const method = request?.method ?? init?.method ?? 'GET';
+      if (url.includes('/journal')) return json({ entries: [] });
+      if (url.includes('/tokens')) {
+        if (method === 'PUT') {
+          puts.push(url);
+          return json(body, 500);
+        }
+        return json({
+          tokens: [
+            {
+              id: 't-1',
+              label: 'existing-token',
+              order: 0,
+              sha256: 'a'.repeat(12),
+              source: 'stored',
+            },
+          ],
+          settings: DEFAULT_SETTINGS,
+        });
+      }
+      return Promise.reject(new TypeError(`Failed to fetch: ${url}`));
+    }) as typeof fetch;
+    return { puts };
+  }
+
+  it('追加: サーバの文言と次にすることが出て、入力したラベルと値は残る', async () => {
+    const { puts } = stubFailingWrites({ error: JOURNAL_MESSAGE, code: 'journal_write_failed' });
+    renderTokens();
+    await waitForPoolLoaded();
+
+    fireEvent.change(screen.getByLabelText('ラベル（人間が読む名前。秘密ではない）'), {
+      target: { value: 'new-token' },
+    });
+    fireEvent.change(screen.getByLabelText('値（claude setup-token の出力）'), {
+      target: { value: 'sk-ant-oat01-keep-me' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '追加' }));
+
+    expect(await screen.findByText(JOURNAL_MESSAGE)).toBeTruthy();
+    expect(screen.getByText(HINT)).toBeTruthy();
+    expect(puts).toHaveLength(1);
+    // 保存していないので、貼り直しを強いない。
+    expect(screen.getByLabelText('ラベル（人間が読む名前。秘密ではない）')).toHaveProperty(
+      'value',
+      'new-token',
+    );
+    expect(screen.getByLabelText('値（claude setup-token の出力）')).toHaveProperty(
+      'value',
+      'sk-ant-oat01-keep-me',
+    );
+  });
+
+  it('有効化・無効化: 行のそばに同じ文言と次にすることが出る', async () => {
+    stubFailingWrites({ error: JOURNAL_MESSAGE, code: 'journal_write_failed' });
+    renderTokens();
+    await waitForPoolLoaded();
+
+    fireEvent.click(screen.getByRole('button', { name: '無効化する' }));
+
+    expect(await screen.findByText(JOURNAL_MESSAGE)).toBeTruthy();
+    expect(screen.getByText(HINT)).toBeTruthy();
+  });
+
+  it('切り替える条件・休止の既定: 同じ文言と次にすることが出て、変えた入力は残る', async () => {
+    stubFailingWrites({ error: JOURNAL_MESSAGE, code: 'journal_write_failed' });
+    renderTokens();
+    await waitForPoolLoaded();
+
+    fireEvent.change(screen.getByLabelText('切り替える条件を変える'), { target: { value: 'off' } });
+    fireEvent.click(screen.getByRole('button', { name: '保存' }));
+
+    expect(await screen.findByText(JOURNAL_MESSAGE)).toBeTruthy();
+    expect(screen.getByText(HINT)).toBeTruthy();
+    expect(screen.getByLabelText('切り替える条件を変える')).toHaveProperty('value', 'off');
+  });
+
+  it('code の無い失敗（保存そのものの失敗）は、サーバの文言だけで、日誌の案内は出さない', async () => {
+    stubFailingWrites({ error: 'トークンのプールを保存できなかった' });
+    renderTokens();
+    await waitForPoolLoaded();
+
+    fireEvent.click(screen.getByRole('button', { name: '無効化する' }));
+
+    expect(await screen.findByText('トークンのプールを保存できなかった')).toBeTruthy();
+    expect(screen.queryByText(HINT)).toBeNull();
+  });
+});

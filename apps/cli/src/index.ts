@@ -16,7 +16,11 @@ import {
 } from './access.js';
 import { chatCommand } from './chat.js';
 import { localizeCommander } from './commander-ja.js';
-import { conversationsListCommand, conversationsShowCommand } from './conversations.js';
+import {
+  conversationsListCommand,
+  conversationsReadCommand,
+  conversationsShowCommand,
+} from './conversations.js';
 import * as daemon from './daemon.js';
 import { droppedCommand } from './dropped.js';
 import { formatElapsedAgo } from './format.js';
@@ -79,6 +83,8 @@ import {
   tokenRemoveUnreadableCommand,
 } from './token.js';
 import { progressCommand } from './progress.js';
+import { HELP_EXAMPLES } from './help-examples.js';
+import { describeCliVersion } from './version.js';
 import { usageCommand } from './usage.js';
 import { describeCliFailure } from './failure-message.js';
 
@@ -235,7 +241,7 @@ localizeCommander(program);
 program
   .name('alteroid')
   .description('クローンと会話し、クローンに仕事を任せる')
-  .version('0.1.0', '-V, --version', 'バージョンを出す');
+  .version(describeCliVersion(), '-V, --version', 'バージョンを出す');
 
 program
   .command('init')
@@ -286,6 +292,7 @@ conversationsCommand
 
 conversationsCommand
   .command('show <id>')
+  .addHelpText('after', HELP_EXAMPLES.conversationsShow)
   .description('1つの会話の中身（古い順）')
   .option('--scan <n>', '日誌をどこまで遡って探すか（デーモンの既定 2000、最大 10000）')
   .option(
@@ -296,12 +303,20 @@ conversationsCommand
     await conversationsShowCommand(id, options);
   });
 
+conversationsCommand
+  .command('read <id>')
+  .description('会話を、いちばん新しい発言まで既読にする（既読は Web の画面と共通）')
+  .action(async (id: string) => {
+    await conversationsReadCommand(id);
+  });
+
 /**
  * 利用状況（いくら使ったか）。経路は `GET /usage` の1本だけで、chat の
  * `/usage` と Web UI の画面も同じものを見る（`apps/cli/src/usage.ts`）。
  */
 program
   .command('usage')
+  .addHelpText('after', HELP_EXAMPLES.usage)
   .description('alteroid が使った分（トークンと費用）を見る')
   .option('--from <date>', 'この日から（YYYY-MM-DD）')
   .option('--to <date>', 'この日まで（YYYY-MM-DD）')
@@ -395,6 +410,7 @@ program
  */
 program
   .command('progress')
+  .addHelpText('after', HELP_EXAMPLES.progress)
   .description('作業の進捗（積み上がり・実施中・窓の中の消化・見込み）を見る')
   .option('--window-hours <n>', '消化と見込みを数える窓の長さ（時間。既定は daemon が決める）')
   .action(async (options: { windowHours?: string }) => {
@@ -421,6 +437,7 @@ inboxCommand
 
 inboxCommand
   .command('remove')
+  .addHelpText('after', HELP_EXAMPLES.inboxRemove)
   .description(
     '受信箱の未読を、絞り込んでまとめて畳む（消す）。既定は試算で1件も消さない（実際に消すのは --execute）',
   )
@@ -506,6 +523,7 @@ accessCommand
 
 accessCommand
   .command('grant <accountId>')
+  .addHelpText('after', HELP_EXAMPLES.accessGrant)
   .description('alteroid を使う許可を与える')
   .action(async (accountId: string) => {
     await accessGrantCommand(accountId);
@@ -513,6 +531,7 @@ accessCommand
 
 accessCommand
   .command('revoke <accountId>')
+  .addHelpText('after', HELP_EXAMPLES.accessRevoke)
   .description('alteroid を使う許可を取り消す')
   .action(async (accountId: string) => {
     await accessRevokeCommand(accountId);
@@ -620,6 +639,7 @@ memoryCommand
 
 memoryCommand
   .command('set <slug>')
+  .addHelpText('after', HELP_EXAMPLES.memorySet)
   .description('ファイル（または標準入力）の内容で丸ごと置き換える')
   .option('-f, --file <path>', '読み込むファイル（省略か - で標準入力）')
   .action(async (slug: string, options: { file?: string }) => {
@@ -659,6 +679,7 @@ practiceCommand
 
 practiceCommand
   .command('show <slug>')
+  .addHelpText('after', HELP_EXAMPLES.practiceShow)
   .description('やり方の本文を出す（--version で過去の版を読む）')
   .option('--version <version>', '省略時はいまの本文。指定すると過去の版を読む')
   .action(async (slug: string, options: { version?: string }) => {
@@ -684,6 +705,7 @@ practiceCommand
 
 practiceCommand
   .command('set <slug>')
+  .addHelpText('after', HELP_EXAMPLES.practiceSet)
   .description('ファイル（または標準入力）の内容で丸ごと置き換える')
   .option('-f, --file <path>', '読み込むファイル（省略か - で標準入力）')
   .option('--kind <kind>', '仕事の種類（省略すると現在の値。新しいやり方では必須）')
@@ -745,6 +767,7 @@ profileCommand
 
 profileCommand
   .command('set [名前]')
+  .addHelpText('after', HELP_EXAMPLES.profileSet)
   .description('ファイル（または標準入力）の内容で1行を丸ごと置き換える（名前を省くと default）')
   .option('-f, --file <path>', '読み込むファイル（省略か - で標準入力）')
   .option(
@@ -806,6 +829,7 @@ mcpCommand
 
 mcpCommand
   .command('set')
+  .addHelpText('after', HELP_EXAMPLES.mcpSet)
   .description('.mcp.json（{ "mcpServers": { … } }）の内容で丸ごと置き換える')
   .argument('<file>', '読み込むファイル（- で標準入力）')
   .action(async (file: string) => {
@@ -943,6 +967,7 @@ tokenCommand
 
 tokenCommand
   .command('policy [rotateOn]')
+  .addHelpText('after', HELP_EXAMPLES.tokenPolicy)
   .description(
     '回す契機・冷却の既定を見る（引数無し）／変える（free_exhausted|overage_exhausted|off）',
   )

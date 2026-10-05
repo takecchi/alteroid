@@ -21,6 +21,8 @@ const EXISTING: ConversationSummary = {
   updatedAt: '2026-08-13T00:00:00.000Z',
   messages: 2,
   preview: '前回の続き',
+  unreadCount: 0,
+  readThrough: null,
 };
 
 const OTHER: ConversationSummary = {
@@ -29,6 +31,8 @@ const OTHER: ConversationSummary = {
   updatedAt: '2026-08-12T00:00:00.000Z',
   messages: 1,
   preview: '別の会話',
+  unreadCount: 0,
+  readThrough: null,
 };
 
 function row(conversation: ConversationSummary): string {
