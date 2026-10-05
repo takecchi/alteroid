@@ -389,7 +389,12 @@ describe('alteroid practice remove', () => {
       body: {
         error: 'やり方が読んだ後に変わっています（消していません）',
         current: {
-          practice: { slug: 'review', kind: 'レビュー', title: '題', content: 'クローンが書いた\n' },
+          practice: {
+            slug: 'review',
+            kind: 'レビュー',
+            title: '題',
+            content: 'クローンが書いた\n',
+          },
           version: 'v-now',
         },
       },

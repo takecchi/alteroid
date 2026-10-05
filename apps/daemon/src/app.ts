@@ -503,6 +503,17 @@ const MEMORY_DELETE_UNVERSIONED_WARNING =
   '削除にも読んだ版を `ifMatch`（クエリ。GET /memory/:slug の `version`）で付けてください。' +
   '今後、版のない削除は断るようになる予定です。';
 /**
+ * `DELETE /practices/:slug` のクエリ（Issue #2959。`memoryDeleteQuery` と同じ形）。`ifMatch` は
+ * 消す側が**読んだ時の版**（GET の `version`）。いまの版と違えば消さずに 409。**省略は従来どおり
+ * 消す**（段階1。Web・CLI が版を送れるようになるまでの移行。省略したときは応答に `warning` が載る）。
+ */
+const practiceDeleteQuery = z.object({ ifMatch: z.string().min(1).optional() });
+/** 版を付けない削除への警告文（段階1。応答の `warning`）。 */
+const PRACTICE_DELETE_UNVERSIONED_WARNING =
+  '版の照合なしで消しました。読んだ後に別の書き手（クローンなど）が書いた内容も消えます。' +
+  '削除にも読んだ版を `ifMatch`（クエリ。GET /practices/:slug の `version`）で付けてください。' +
+  '今後、版のない削除は断るようになる予定です。';
+/**
  * `PracticeStore.write` の入力そのまま（`slug` だけは経路から取る）。
  *
  * **`kind` に列挙を課さない。** `practiceKindSchema` は `z.string().min(1).max(128)`
@@ -3745,10 +3756,24 @@ export function createApp(deps: AppDeps) {
       describeRoute({
         tags: ['practices'],
         summary: 'やり方を1つ消す',
+        description:
+          '**読んだ版を前提にできる（Issue #2959）。** クエリ `ifMatch` に、読んだ時の版' +
+          '（`GET /practices/{slug}` の `version`）を付けると、いまの版と違うとき**何も消さず 409** で' +
+          'いまの版を返す（読んだ後にクローンが書いた内容を黙って消さない）。\n\n' +
+          '**段階的に必須にする。** いまは `ifMatch` を付けない削除も通す（Web・CLI が版を送るように' +
+          'なるまでの移行）が、応答に `warning` を載せ、デーモンの標準エラーと日誌にも「版の照合なし」と残す。' +
+          '移行が済んだら版を必須にする。**読めない形で入っている行には版が無い**ので、版なしで消せる' +
+          '（回復手段を塞がない。この場合は警告も付けない）。',
         responses: {
           200: {
-            description: '消した。',
+            description: '消した。版を付けていなければ（読めない行を除き）`warning` が載る。',
             content: { 'application/json': { schema: resolver(practiceDeleteResponseSchema) } },
+          },
+          409: {
+            description:
+              '`ifMatch`（読んだ時の版）が、いまの版と違う（読んでから消すまでの間に別の書き手が' +
+              '書いた）。**何も消していない。** `current` にいまの版を返す。',
+            content: { 'application/json': { schema: resolver(practiceConflictResponseSchema) } },
           },
           400: {
             description: 'やり方のスラッグが名前として成立しない（「無い」とは区別する）。',
@@ -3760,11 +3785,13 @@ export function createApp(deps: AppDeps) {
           },
         },
       }),
+      queryParams(practiceDeleteQuery),
       async (c) => {
         const slug = c.req.param('slug');
         if (!practiceSlugSchema.safeParse(slug).success) {
           return c.json({ error: 'やり方のスラッグが不正' as const }, 400);
         }
+        const { ifMatch } = c.req.valid('query');
         // **issue #2011。** `existing` は「無いか（404）／読めたか」の分岐に
         // 使う。以前は `read()` が壊れた行をそのまま返していたので、壊れた
         // slug への DELETE も無事に消せていた——`read()` が
@@ -3787,7 +3814,37 @@ export function createApp(deps: AppDeps) {
         if (existing === null && !wasUnreadable) {
           return c.json({ error: 'not found' as const }, 404);
         }
-        await stores.practices.remove(slug);
+        try {
+          // 版の比較は消すのと同じ排他の中で行う（`PracticeStore.remove`）。
+          await stores.practices.remove(slug, ifMatch === undefined ? undefined : { ifMatch });
+        } catch (error) {
+          // **黙って消さない（Issue #2959）。** 消していないので日誌にも積まない。
+          if (error instanceof PracticeConflictError) {
+            return c.json(
+              {
+                error: 'やり方が読んだ後に変わっています（消していません）' as const,
+                current:
+                  error.current === null
+                    ? null
+                    : { practice: error.current, version: practiceVersion(error.current) },
+              },
+              409,
+            );
+          }
+          throw error;
+        }
+        // **段階1: 版のない削除は通すが、見えるようにする。** stderr へは slug だけ
+        // （本文は出さない）。日誌にも残す。
+        // **読めない形の行（`wasUnreadable`）は警告の対象にしない。** 読めない行には版が無く、
+        // 呼び出し側は `ifMatch` を付けようが無い（`GET` も 409）。付けられない前提を促す警告は
+        // 誤案内になり、段階3で版を必須にするときも、この経路だけは版なしで通す（回復手段を塞がない）。
+        // 読めない行の日誌は、従来どおり「読めない形で入っていた」を残している。
+        const unversioned = ifMatch === undefined && !wasUnreadable;
+        if (unversioned) {
+          process.stderr.write(
+            `alteroidd: やり方の削除を版の照合なしで通しました（slug=${slug}。\`ifMatch\` を付けると、読んだ後に書かれた内容を消さずに済みます）\n`,
+          );
+        }
         // **削除自体はもう効いている**（Issue #2037）。日誌への追記だけが
         // 落ちても 500 を返さない——`appendJournalOrDrop` の doc。
         if (existing !== null) {
@@ -3796,7 +3853,8 @@ export function createApp(deps: AppDeps) {
             {
               type: 'decision',
               decision: `やり方 ${slug}（${existing.kind}）を消した: ${existing.title}`,
-              grounds: '人間が直接 API からやり方を消した',
+              grounds:
+                '人間が直接 API からやり方を消した' + (unversioned ? '（版の照合なし）' : ''),
             },
             'やり方削除の日誌',
             `slug=${slug}`,
@@ -3815,7 +3873,11 @@ export function createApp(deps: AppDeps) {
             `slug=${slug}`,
           );
         }
-        return c.json({ ok: true, slug });
+        return c.json(
+          unversioned
+            ? { ok: true as const, slug, warning: PRACTICE_DELETE_UNVERSIONED_WARNING }
+            : { ok: true as const, slug },
+        );
       },
     )
 

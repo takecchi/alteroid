@@ -310,12 +310,49 @@ export async function practiceSetCommand(
  * ない**——以前はここが「400 以外は全部『無い』」という形をしていたため、
  * 認証切れやサーバの内部エラーでも「そんなやり方はありません」と誤案内して
  * いた。
+ *
+ * **読んだ版を持ち回る（Issue #2959。`memory remove` の #2881 と同じ取り方）。** 消す直前に
+ * `GET /practices/<slug>` で読み、その `version` を `DELETE` の `ifMatch` に付ける。
+ * 読んだ後に別の書き手（クローンなど）が書いていたら、デーモンは**消さずに** 409 を返す。
+ * そのときは消さずに、いまの版と次の手（`practice show` で確かめてから再実行）を案内して失敗で終わる。
+ * 古いデーモンが `version` を返さなければ前提なしで消す（段階1。デーモンが警告を返せば出す）。
+ * **読んで無かった（404 / 400）ときも版なしで DELETE を打つ**——「無い」と「名前が不正」の
+ * 切り分けはサーバが持つので、ここで再実装しない。**読めない形で入っている行（GET が 409）も
+ * 版なしで DELETE を打つ**——版が無いので前提を付けようがなく、ここで止めると壊れた行を外す
+ * 回復手段が塞がる（`practice show` と違い、この口は 409 を失敗にしない）。
+ * `practice show` は版を出さないので `--if-match` は持たない（版を見せる口ができたときに足す）。
  */
 export async function practiceRemoveCommand(slug: string): Promise<void> {
   const conn = await connect('write');
   if (conn === null) return;
   const { client, target } = conn;
-  const response = await client.practices[':slug'].$delete({ param: { slug } });
+  const ifMatch = await readVersionForRemove(client, target, slug);
+  const response = await client.practices[':slug'].$delete({
+    param: { slug },
+    query: ifMatch === undefined ? {} : { ifMatch },
+  });
+  if (response.status === 409) {
+    const body = (await response.json()) as {
+      current?: { practice?: { content?: string }; version?: string } | null;
+    };
+    const current = body.current ?? null;
+    stdout.write(
+      [
+        `消していません: ${slug} は、あなたが読んだ後に変わっています（クローンなど別の書き手が書いたか、すでに消されました）。`,
+        current === null
+          ? '  いまのやり方: 無い（すでに消されています）'
+          : `  いまのやり方の版: ${current.version ?? '（不明）'}（${String(current.practice?.content?.length ?? 0)} 文字）`,
+        ...(current === null
+          ? []
+          : [
+              `  いまの内容を読み直す: \`alteroid practice show ${slug}\`（版そのものは GET /practices/${slug} の version）`,
+              `  確かめたうえで消してよければ、もう一度 \`alteroid practice remove ${slug}\`（いまの版を読み直して消します）。`,
+            ]),
+        '',
+      ].join('\n'),
+    );
+    throw new Error(`やり方が読んだ後に変わっていたので消しませんでした: ${slug}`);
+  }
   if (!response.ok) {
     if (response.status === 400) {
       throw new Error(`やり方の名前として成立しません: ${slug}`);
@@ -333,6 +370,37 @@ export async function practiceRemoveCommand(slug: string): Promise<void> {
     );
   }
   stdout.write(`消しました: ${slug}\n`);
+  // 版を付けずに消せたとき、デーモンは警告を返す（段階1）。握り潰さず見せる。
+  const done = (await response.json().catch(() => ({}))) as { warning?: unknown };
+  if (typeof done.warning === 'string') stdout.write(`注意: ${done.warning}\n`);
+}
+
+/**
+ * 消す直前に読んだ版。無い（404）・名前が不正（400）・読めない形で入っている（409）・古いデーモンが
+ * `version` を返さないときは `undefined`（版なしで DELETE を打ち、サーバに判断させる）。
+ * それ以外の失敗（401/403/5xx）は `read` と同じく例外で上へ通す。
+ */
+async function readVersionForRemove(
+  client: DaemonClient,
+  target: Target,
+  slug: string,
+): Promise<string | undefined> {
+  const response = await client.practices[':slug'].$get({ param: { slug } });
+  if (response.status === 404 || response.status === 400 || response.status === 409) {
+    return undefined;
+  }
+  if (!response.ok) {
+    const described = describeAuthFailure(response.status, target);
+    if (described !== null) throw new Error(described);
+    throw new Error(
+      await withErrorReason(
+        `やり方を読めませんでした: ${slug}（HTTP ${String(response.status)}）`,
+        response,
+      ),
+    );
+  }
+  const body = await response.json();
+  return 'version' in body && typeof body.version === 'string' ? body.version : undefined;
 }
 
 /**

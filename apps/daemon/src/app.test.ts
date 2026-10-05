@@ -1353,8 +1353,9 @@ describe('HTTP API', () => {
       content: '本文',
     });
 
-    const version = ((await (await app.request('/practices/to-remove')).json()) as { version: string })
-      .version;
+    const version = (
+      (await (await app.request('/practices/to-remove')).json()) as { version: string }
+    ).version;
     const del = await app.request(`/practices/to-remove?ifMatch=${version}`, { method: 'DELETE' });
     expect(del.status).toBe(200);
     expect(await del.json()).toEqual({ ok: true, slug: 'to-remove' });
