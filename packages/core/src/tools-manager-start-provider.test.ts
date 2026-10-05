@@ -52,7 +52,8 @@ function fingerprint(tool: { description: string; inputSchema: unknown }): strin
 }
 
 // origin/main（PEERS の配線前）の manager_start の指紋。空のときはこれと一致し続けなければならない。
-const BASELINE = '84b28689440b9009443cc549da2372ff7cb64b74a1ed7c274dc579d72d3062f3';
+// `cwd` の説明文を「作業ディレクトリ。…」へ直したとき（#2970）に取り直した。
+const BASELINE = 'd044f1fcaed3d6d16949fc0ecfe1e480e89fc2e239bbe4ea09fc80516c5f3b91';
 
 describe('manager_start の provider 引数', () => {
   it('PEERS が未設定・空なら、スキーマと説明文は配線前と同一（provider は見えない）', () => {
