@@ -2,15 +2,7 @@ import { useId } from 'react';
 import { Link } from 'react-router';
 
 import { LoadError } from '~/components/load-error';
-import {
-  markdownComponents,
-  toReact,
-  Page,
-  Card,
-  Empty,
-  Spinner,
-  cn,
-} from '@alteroid/ui';
+import { markdownComponents, toReact, Page, Card, Empty, Spinner, cn } from '@alteroid/ui';
 import { useReport, useReports } from '@alteroid/swr';
 import { formatDateTime, redactBody } from '@alteroid/logic';
 
