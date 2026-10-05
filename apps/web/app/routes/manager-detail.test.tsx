@@ -251,7 +251,11 @@ describe('詳細でも、lost には次の一手を添える', () => {
     // 観測の限界（これが無いと「終わった」とも「失われた」とも読まれる）。
     expect(screen.getByText(/戻れたかどうかしか見ていない/)).toBeTruthy();
     // 次の一手。起こし直す前に見に行く先を名指しする。
-    expect(screen.getByText(/リモート（PR・ブランチ・コミット）を確かめる/)).toBeTruthy();
+    expect(
+      screen.getByText(
+        /外へ出た成果（PR・コミット・送信済みのメール・登録済みの予定・投稿先など）を確かめる/,
+      ),
+    ).toBeTruthy();
   });
 
   it('lost 以外にはリモート確認の案内を出さない（雑音にしない）', async () => {
@@ -259,7 +263,7 @@ describe('詳細でも、lost には次の一手を添える', () => {
 
     expect(await screen.findByText('実行中')).toBeTruthy();
     expect(screen.queryByText(/戻れたかどうかしか見ていない/)).toBeNull();
-    expect(screen.queryByText(/リモート（PR・ブランチ・コミット）/)).toBeNull();
+    expect(screen.queryByText(/外へ出た成果（PR・コミット/)).toBeNull();
   });
 });
 

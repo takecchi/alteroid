@@ -167,7 +167,7 @@ function EnvVarRow({
             label: '値',
             mono: true,
             value: entry.secret
-              ? `（シークレット。値は表示されない。識別用の値 sha256=${entry.sha256}）`
+              ? `（シークレット。値は表示されない。識別用の値 ${entry.sha256}）`
               : (entry.value ?? '（サーバがまだ値を返していない版）'),
           },
           { label: '更新', value: formatDateTime(entry.updatedAt) },

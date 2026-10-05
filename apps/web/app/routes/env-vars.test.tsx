@@ -121,7 +121,7 @@ describe('/env-vars 画面 — 一覧', () => {
     expect(screen.getByText('GH_TOKEN')).toBeTruthy();
     expect(screen.getByText('共通')).toBeTruthy();
     expect(screen.getByText('シークレット')).toBeTruthy();
-    expect(screen.getByText(/識別用の値 sha256=a{12}/)).toBeTruthy();
+    expect(screen.getByText(/識別用の値 a{12}/)).toBeTruthy();
   });
 
   it('非 secret な行は値をそのまま出す', async () => {

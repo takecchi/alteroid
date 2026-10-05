@@ -239,7 +239,7 @@ describe('表示の文言', () => {
       }),
     );
     expect(notes[0]).toContain('返事待ち 1 件');
-    expect(notes.join(' ')).toContain('成果がリモートまで届いていることがある');
+    expect(notes.join(' ')).toContain('成果が外へ出ていることがある');
   });
 
   it('runnerVanished の警告（確かめる前に起こし直さない）は注記の先頭に置く（#2590）', () => {

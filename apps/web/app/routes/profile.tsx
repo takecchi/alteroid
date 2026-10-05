@@ -258,7 +258,7 @@ function EntryRow({
         className="mt-2"
         labelWidth="6rem"
         items={[
-          { label: '識別用の値', value: `sha256=${entry.sha256}`, mono: true },
+          { label: '識別用の値', value: entry.sha256, mono: true },
           { label: '更新', value: formatDateTime(entry.updatedAt) },
         ]}
       />

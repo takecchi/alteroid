@@ -74,7 +74,7 @@ export function managerNotes(row: ManagerRow): string[] {
   }
   if (row.status === 'lost') {
     notes.push(
-      '前のセッションへ戻れなかった。成果がリモートまで届いていることがある — 起こし直す前に確かめる',
+      '前のセッションへ戻れなかった。成果が外へ出ていることがある — 起こし直す前に確かめる',
     );
   }
   if (row.runnerLostSince !== undefined) {

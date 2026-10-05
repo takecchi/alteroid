@@ -120,10 +120,10 @@ describe('/mcp-servers 画面 — 読む', () => {
     expect(await screen.findByText('2 件')).toBeTruthy();
     expect(screen.getByText('github')).toBeTruthy();
     expect(screen.getByText('npx')).toBeTruthy();
-    expect(screen.getByText('env: GITHUB_TOKEN')).toBeTruthy();
-    expect(screen.getByText('引数（args）: 3 個（値は伏せた）')).toBeTruthy();
+    expect(screen.getByText('環境変数: GITHUB_TOKEN')).toBeTruthy();
+    expect(screen.getByText('引数: 3 個（値は伏せた）')).toBeTruthy();
     expect(screen.getByText('https://mcp.linear.app/mcp?***')).toBeTruthy();
-    expect(screen.getByText('headers: Authorization')).toBeTruthy();
+    expect(screen.getByText('ヘッダ: Authorization')).toBeTruthy();
     expect(document.body.textContent).not.toContain(SECRET);
 
     fireEvent.click(screen.getByRole('button', { name: '値を表示する' }));
@@ -218,12 +218,12 @@ describe('/mcp-servers 画面 — 差し替える', () => {
     expect(puts).toEqual([]);
 
     fireEvent.click(screen.getByRole('button', { name: '本当に保存する' }));
-    expect(await screen.findByText(/MCP 連携の登録を差し替えた（sha256 b{12}）/)).toBeTruthy();
+    expect(await screen.findByText(/MCP 連携の登録を差し替えた（確認用の値 b{12}）/)).toBeTruthy();
     expect(puts).toEqual([next]);
     expect(screen.getByText('足した: notion')).toBeTruthy();
     expect(screen.getByText('外した: linear')).toBeTruthy();
     const report = screen.getByLabelText('実行環境ごとの反映結果');
-    expect(report.textContent).toContain(`runner-1: 届いた（sha256 ${'b'.repeat(12)}）`);
+    expect(report.textContent).toContain(`runner-1: 届いた（確認用の値 ${'b'.repeat(12)}）`);
     // 届かなかった runner を小さく出さない。
     expect(report.textContent).toContain('runner-2: 届かなかった — runner に届かなかった');
     expect(screen.getByText('いつから効くか: クローンの次のセッションから')).toBeTruthy();

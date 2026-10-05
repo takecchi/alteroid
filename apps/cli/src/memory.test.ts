@@ -187,18 +187,32 @@ describe('alteroid memory remove', () => {
     expect(read()).toContain('消しました: values');
   });
 
-  it('古いデーモン（version を返さない）には版を付けずに打ち、返ってきた警告を見せる', async () => {
+  it('古いデーモン（段階1。version を返さず、版なしの削除を通す）には版を付けずに打つ', async () => {
     const read = captureStdout();
     replies.push({ status: 200, body: { document: { slug: 'values', content: 'x' } } });
-    replies.push({
-      status: 200,
-      body: { ok: true, slug: 'values', warning: '版の照合なしで消しました' },
-    });
+    replies.push({ status: 200, body: { ok: true, slug: 'values' } });
 
     await memoryRemoveCommand('values');
 
     expect(sent[1]?.url).toBe('http://127.0.0.1:4517/memory/values');
-    expect(read()).toContain('注意: 版の照合なしで消しました');
+    expect(read()).toContain('消しました: values');
+  });
+
+  it('428（版なしを断られた。版を返さない古いデーモンの先で版必須のデーモンに当たった）なら、消していないと言って失敗する（#2881）', async () => {
+    const read = captureStdout();
+    replies.push({ status: 200, body: { document: { slug: 'values', content: 'x' } } });
+    replies.push({
+      status: 428,
+      body: { error: '版が無いので消していません（消していません）', current: null },
+    });
+
+    const error = await memoryRemoveCommand('values').catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(Error);
+    expect(String(error)).toContain('消していません');
+    expect(String(error)).toContain('428');
+    expect(String(error)).toContain('--if-match');
+    expect(read()).not.toContain('消しました');
   });
 
   it('409（読んだ後に変わっていた）なら、消していないと言い、いまの版と次の手を案内して失敗する（#2881）', async () => {

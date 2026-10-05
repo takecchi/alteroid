@@ -290,7 +290,7 @@ function PracticeDetailBody({ slug }: { slug: string }) {
                 いまの内容（{formatDateTime(deleteConflict.current.practice.updatedAt)} に更新）
               </p>
               <p className="mt-1 text-xs break-words">
-                種類: {deleteConflict.current.practice.kind} / 題:{' '}
+                種類: {practiceKindLabel(deleteConflict.current.practice.kind)} / 題:{' '}
                 {deleteConflict.current.practice.title}
               </p>
               <pre className="mt-1 max-h-48 overflow-auto rounded-md bg-muted p-2 text-xs break-words whitespace-pre-wrap select-text">
@@ -321,7 +321,8 @@ function PracticeDetailBody({ slug }: { slug: string }) {
                 いまの内容（{formatDateTime(conflict.current.practice.updatedAt)} に更新）
               </p>
               <p className="mt-1 text-xs break-words">
-                種類: {conflict.current.practice.kind} / 題: {conflict.current.practice.title}
+                種類: {practiceKindLabel(conflict.current.practice.kind)} / 題:{' '}
+                {conflict.current.practice.title}
               </p>
               <pre className="mt-1 max-h-48 overflow-auto rounded-md bg-muted p-2 text-xs break-words whitespace-pre-wrap select-text">
                 {conflict.current.practice.content}
@@ -400,7 +401,7 @@ function PracticeDetailBody({ slug }: { slug: string }) {
 
           <Tabs.Content value="edit" className="flex min-h-0 flex-1 flex-col gap-3">
             <p className="shrink-0 text-xs text-muted-foreground">
-              ここで書き換えたものは日誌に残る（人間が API/画面から操作したと分かる形で）。
+              ここで書き換えたものは、人間が直した記録として日誌に残る。
               種類は自由に書ける（一覧から選ぶのではない）。
             </p>
             <label className="shrink-0 text-xs text-muted-foreground">

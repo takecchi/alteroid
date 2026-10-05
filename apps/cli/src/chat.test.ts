@@ -516,7 +516,7 @@ describe('renderManagerList', () => {
     // 観測した分（戻れなかった）は言い切り、見ていない分は言い切らない。
     expect(text).toContain('見ているのは戻れたかどうかだけ');
     // 次に確かめる先。ここを削ると「戻れなかった」だけが残って断定に読める。
-    expect(text).toContain('リモート');
+    expect(text).toContain('成果が既に外へ出ている');
     expect(text).toMatch(/PR/);
   });
 

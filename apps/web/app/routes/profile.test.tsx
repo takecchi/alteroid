@@ -161,7 +161,7 @@ describe('/profile 画面 — 読む', () => {
     expect(screen.getByText('共通')).toBeTruthy();
     expect(screen.getByText('マネージャーだけ')).toBeTruthy();
     expect(screen.getByText('41 バイト')).toBeTruthy();
-    expect(screen.getByText(/sha256=a{12}/)).toBeTruthy();
+    expect(screen.getByText(/a{12}/)).toBeTruthy();
     expect(screen.getByText('c'.repeat(12))).toBeTruthy();
     expect(screen.getByText('d'.repeat(12))).toBeTruthy();
     // 名前の辞書順につなげて効くことを画面に書く。
@@ -451,7 +451,7 @@ describe('/profile 画面 — 古いデーモン（旧形式の応答）', () =>
     expect(screen.getByText(/デーモンが古い/)).toBeTruthy();
     expect(screen.getByText('共通')).toBeTruthy();
     expect(screen.getByText('41 バイト')).toBeTruthy();
-    expect(screen.getByText(/sha256=o{12}/)).toBeTruthy();
+    expect(screen.getByText(/o{12}/)).toBeTruthy();
     // 本文は今までどおり、押すまで出さない。押せば1文字も欠けずに見える。
     expect(document.body.textContent).not.toContain('very-secret-value');
     fireEvent.click(screen.getByRole('button', { name: '本文を表示する' }));

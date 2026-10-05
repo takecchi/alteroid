@@ -386,7 +386,9 @@ export async function memorySetCommand(
  * そのときは消さずに、いまの版と次の手（`memory show` で確かめてから再実行）を案内して失敗で終わる。
  * **`--if-match <版>`（Issue #2919）を渡すと、読み直さずにその版で照合する**——`memory show` が
  * stderr に出した版を渡せば、「見て決めた内容」を前提に消せる。
- * 古いデーモンが `version` を返さなければ前提なしで消す（段階1。デーモンが警告を返せば出す）。
+ * 古いデーモン（#2917 より前。`version` を返さない）には前提なしで打つ——その段階のデーモンは
+ * 版なしの削除を通す。**版必須のデーモン（段階3）は 428 で断る**ので、そのときは消していないと
+ * 言って失敗する（`--if-match` で版を渡せば通る）。
  * **読んで無かった（404 / 400）ときも版なしで DELETE を打つ**——「無い」と「名前が不正」の
  * 切り分けはサーバが持つので、ここで再実装しない。
  */
@@ -427,6 +429,17 @@ export async function memoryRemoveCommand(
     );
     throw new Error(`記憶が読んだ後に変わっていたので消しませんでした: ${slug}`);
   }
+  if (response.status === 428) {
+    // 版必須のデーモンが、版なしの削除を断った（何も消していない）。通常は上で読んだ版を付けるので、
+    // 読めなかった（読んだ応答に version が無い）ときだけ当たる。
+    throw new Error(
+      await withErrorReason(
+        `消していません: ${slug}（HTTP 428。このデーモンは削除に読んだ版を必須としています。` +
+          `\`alteroid memory show ${slug}\` で版を確かめ、\`alteroid memory remove ${slug} --if-match <版>\` で打ち直してください）`,
+        response,
+      ),
+    );
+  }
   if (!response.ok) {
     if (response.status === 400) {
       throw new Error(`記憶の名前として成立しません: ${slug}`);
@@ -444,9 +457,6 @@ export async function memoryRemoveCommand(
     );
   }
   stdout.write(`消しました: ${slug}\n`);
-  // 版を付けずに消せたとき、デーモンは警告を返す（段階1）。握り潰さず見せる。
-  const done = (await response.json().catch(() => ({}))) as { warning?: unknown };
-  if (typeof done.warning === 'string') stdout.write(`注意: ${done.warning}\n`);
 }
 
 /**

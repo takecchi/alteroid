@@ -1020,7 +1020,7 @@ describe('HTTP API', () => {
       expect(await stores.journal.list({ types: ['memory_update'] })).toEqual([]);
     });
 
-    it('版が最新と一致していれば消せ、警告は付かない', async () => {
+    it('版が最新と一致していれば消せる', async () => {
       await stores.persona.write('values', '# 価値観\n\nV1\n');
       const res = await del(`?ifMatch=${await readVersion()}`);
       expect(res.status).toBe(200);
@@ -1028,30 +1028,38 @@ describe('HTTP API', () => {
       expect(await stores.persona.read('values')).toBeNull();
     });
 
-    it('版を付けない従来の DELETE は通る（段階1）が、応答に警告が載る', async () => {
+    it('版を付けない DELETE は 428 で断り、何も消さず、日誌にも積まない（段階3）', async () => {
       await stores.persona.write('values', '# 価値観\n\nV1\n');
-      const res = await del();
-      expect(res.status).toBe(200);
-      const body = (await res.json()) as { ok: true; slug: string; warning?: string };
-      expect(body.warning).toContain('ifMatch');
-      expect(await stores.persona.read('values')).toBeNull();
-      const entries = await stores.journal.list({ types: ['memory_update'] });
-      expect(entries[0]).toMatchObject({ action: 'remove' });
-      expect((entries[0] as { summary: string }).summary).toContain('版の照合なし');
-    });
-
-    it('版を付けない DELETE の警告は stderr にも出る（本文は出さない）', async () => {
-      await stores.persona.write('values', '# 価値観\n\n秘密っぽい本文\n');
       const spy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
       try {
-        await del();
-        const out = spy.mock.calls.map((c) => String(c[0])).join('');
-        expect(out).toContain('版の照合なし');
-        expect(out).toContain('values');
-        expect(out).not.toContain('秘密っぽい本文');
+        const res = await del();
+        expect(res.status).toBe(428);
+        const body = (await res.json()) as {
+          error: string;
+          current: { document: { content: string }; version: string } | null;
+        };
+        expect(body.error).toContain('消していません');
+        expect(body.current?.document.content).toBe('# 価値観\n\nV1\n');
+        expect(body.current?.version).toBe(await readVersion());
+        expect(spy.mock.calls.map((c) => String(c[0])).join('')).not.toContain('版の照合なし');
       } finally {
         spy.mockRestore();
       }
+      expect((await stores.persona.read('values'))?.content).toBe('# 価値観\n\nV1\n');
+      expect(await stores.journal.list({ types: ['memory_update'] })).toEqual([]);
+    });
+
+    it('版を付けない DELETE でも、スラッグが不正なら 400、無ければ 404（428 より先）', async () => {
+      expect((await app.request('/memory/..%2Fx', { method: 'DELETE' })).status).toBe(400);
+      expect((await del()).status).toBe(404);
+    });
+
+    it('版つきで消すと、日誌に「版の照合なし」は載らない', async () => {
+      await stores.persona.write('values', '# 価値観\n\nV1\n');
+      await del(`?ifMatch=${await readVersion()}`);
+      const entries = await stores.journal.list({ types: ['memory_update'] });
+      expect(entries[0]).toMatchObject({ action: 'remove' });
+      expect((entries[0] as { summary: string }).summary).not.toContain('版の照合なし');
     });
 
     it('無い記憶への版付き DELETE は 404（消すものが無い）', async () => {
@@ -5635,7 +5643,11 @@ describe('appendJournalOrDrop を当てた残りの口: 追記が落ちても 50
     }[] = [
       {
         name: 'DELETE /memory/:slug',
-        request: () => withFailingJournal.request('/memory/table-memory', { method: 'DELETE' }),
+        request: () =>
+          withFailingJournal.request(
+            `/memory/table-memory?ifMatch=${memoryVersion('# 元の内容\n')}`,
+            { method: 'DELETE' },
+          ),
       },
       {
         name: 'PUT /practices/:slug',
@@ -9054,7 +9066,12 @@ describe('会話・出来事・マネージャーへの手出し', () => {
   it('記憶は消せるし、消したことは日誌に残る', async () => {
     await stores.persona.write('habits', '朝は不機嫌');
 
-    const response = await app.request('/memory/habits', { method: 'DELETE' });
+    const response = await app.request(
+      `/memory/habits?ifMatch=${memoryVersion((await stores.persona.read('habits'))?.content ?? '')}`,
+      {
+        method: 'DELETE',
+      },
+    );
 
     expect(response.status).toBe(200);
     expect(await stores.persona.read('habits')).toBeNull();
@@ -9065,7 +9082,12 @@ describe('会話・出来事・マネージャーへの手出し', () => {
   it('人間の口（DELETE /memory/:slug）にも action: "remove" が構造として載る', async () => {
     await stores.persona.write('habits', '朝は不機嫌');
 
-    await app.request('/memory/habits', { method: 'DELETE' });
+    await app.request(
+      `/memory/habits?ifMatch=${memoryVersion((await stores.persona.read('habits'))?.content ?? '')}`,
+      {
+        method: 'DELETE',
+      },
+    );
 
     const journal = await stores.journal.list({ types: ['memory_update'] });
     expect(journal[0]).toMatchObject({ action: 'remove' });

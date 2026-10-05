@@ -645,7 +645,9 @@ export function useResetWorkspace() {
  *
  * **資格は `authenticate` だけ**（`requireOperator` は要求しない。issue
  * #1124 の (B) がその強さを「意図」として確定させている）ので、`useSetEnvVar`
- * `useDeclareOwner` と違って「宣言済みでなければ 403」という前置きは無い。
+ * `useDeclareOwner` と違って `requireOwner` の前置きは無い。ただし `requireOwner` も
+ * いまは素通しで、許可済みなら全員通る（#2862 / PR #2945）ので、403 になるのは
+ * どちらも許可の無いアカウントだけである。
  *
  * **呼んだ後にキャッシュは引き直さない。** デーモンが止まるので、この画面
  * 自身の接続もすぐ切れる——`useResetWorkspace` の `mutate(() => true)` に
@@ -662,7 +664,12 @@ export function useShutdownDaemon() {
  * 実行環境の持ち主として宣言する／取り消す（`POST /access/:id/owner`
  * `.../owner/revoke`。issue #1198）。
  *
- * **`requireOperator`。** ブラウザは構造的に operator になれない
+ * **注記: 以下の「常に 403」は #2862 以前の記述である。** 2026-10-05 のオーナー決定
+ * （#2862 / PR #2945）で、デーモンの `requireOwner` は素通しになった。許可済みで
+ * ログインできるアカウントは全員持ち主として通り、403 になるのは許可の無いアカウント
+ * （`authenticate`）だけである。この口が宣言の仕組みを残していること自体は #2948 の別件。
+ *
+ * **（以前の記述）`requireOperator`。** ブラウザは構造的に operator になれない
  * （`apps/daemon/src/app.ts` の `requireOwner` の doc の「なぜ `requireOperator`
  * と分けるのか」）ので、**Web UI から呼ぶと常に 403 になる。** それでもボタンを
  * 出す理由は `routes/access.tsx` の doc にある（`env-vars.tsx` `settings.tsx` と
@@ -710,11 +717,10 @@ export function useRevokeOwnerDeclaration() {
  * 省略すると前回の値を引き継ぐ。`secret` を既存行と違う値で渡すとサーバが
  * 400 で拒否する——`apps/cli/src/credential.ts` と同じ資格・同じ制約）。
  *
- * **注記: 宣言は資格の判断には使っていない（2026-10-05 オーナーの判断：ログインできる人＝持ち主。#2862）。いまは許可済みなら通る。以下の「宣言済み owner」は #2862 以前の記述。**
- *
- * **`requireOwner`。** 宣言済み owner（実行環境の持ち主そのもの、または
- * `ownerDeclaredAt` が入った許可済みアカウント。issue #1198）でなければ 403 が
- * 返る——呼び出し側（`env-vars.tsx`）はボタンを隠さず、失敗を `ErrorNote` で
+ * **`requireOwner`。** ただし中身は素通しで、許可済みでログインできるアカウントは全員
+ * 持ち主として通る（2026-10-05 オーナー決定、#2862 / PR #2945）。403 が返るのは許可の
+ * 無いアカウント（`authenticate`）だけ。宣言（`ownerDeclaredAt`。issue #1198）は
+ * いまは資格の判断に使っていない。呼び出し側（`env-vars.tsx`）はボタンを隠さず、失敗を `ErrorNote` で
  * 見せること（`settings.tsx` の `ResetWorkspace` と同じ「隠さない」方針）。
  */
 export function useSetEnvVar() {
@@ -762,8 +768,8 @@ export class ProfileRejectedError extends ApiError {
  * 任意コマンド実行である（`.claude/skills/env-profile/SKILL.md`）。サーバ側に
  * 確認の印は無いので、呼ぶ前の確認だけが網になる（`useShutdownDaemon` と同じ事情）。
  *
- * **`requireOwner`。** 宣言済み owner でなければ 403 になる。ボタンは隠さない。
- * （注記: 宣言は資格の判断には使っていない（2026-10-05 オーナーの判断：ログインできる人＝持ち主。#2862）。いまは許可済みなら通る。）
+ * **`requireOwner`。** ただし中身は素通しで、許可済みなら全員通る（2026-10-05 オーナー決定、
+ * #2862 / PR #2945）。403 になるのは許可の無いアカウント（`authenticate`）だけ。ボタンは隠さない。
  */
 export function useSetProfileEntry() {
   const api = useApi();

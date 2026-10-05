@@ -381,7 +381,7 @@ export function isManagerInFlight(status: JobStatus): boolean {
  * （`grep -Fn -- '**ただし `lost` は「成果が無い」ではない。**' packages/core/src/schema.ts`）し、
  * `manager_list` の但し書きも同じことを言う
  * （`grep -Fn -- '1分半後の器の作り直しで `lost` になり、この行が「途中で失われて' packages/core/src/tools.ts`）。
- * ⟹ **人間・クローンがリモート（PR・ブランチ・コミット）を確かめるまで終われない。**
+ * ⟹ **人間・クローンが外へ出た成果（PR・コミット・送信済みのメール・登録済みの予定・投稿先など）を確かめるまで終われない。**
  *
  * **`failed` / `stopped` に同じ記述は無い**（repo 内で0件）。だからここは
  * `lost` 1値だけを見る——「終端をまとめて後ろへ送る」述語ではない。

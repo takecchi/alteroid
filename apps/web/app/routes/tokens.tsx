@@ -189,9 +189,8 @@ function PoolAndSettings() {
       <Card>
         <CardHeader title="トークン一覧・切り替えの設定" />
         <div className="px-4 py-3 text-sm text-muted-foreground">
-          この一覧は alteroid を使う許可があるアカウントだけが見られる（
-          <code className="font-mono">alteroid token list</code>{' '}
-          と同じ資格）。いま繋いでいるアカウントには、この許可が無い。
+          この一覧は alteroid を使う許可があるアカウントだけが見られる。
+          いま繋いでいるアカウントには、この許可が無い。
         </div>
       </Card>
     );
@@ -1154,7 +1153,7 @@ function RotationHistory() {
         action={listUnavailable ? undefined : <Badge>{entries.length}</Badge>}
       />
       <LoadError
-        what="回転の履歴"
+        what="切り替えの履歴"
         error={error}
         onRetry={() => mutate()}
         retrying={isValidating}
