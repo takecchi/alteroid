@@ -1418,6 +1418,7 @@ export { verifyCredentialVaultContract } from './credential-contract.js';
 export { verifyTokenPoolContract } from './token-pool-contract.js';
 /** 消費の台帳の入口の NUL の扱い（issue #2927。鍵列も断らず落として残す。teto の判断、2026-10-05）。 */
 export {
+  USAGE_NUL_ONLY_TOKEN_ID,
   stripNulFromUnmeteredRecord,
   stripNulFromUsageRecord,
   stripNulFromUsageQuery,

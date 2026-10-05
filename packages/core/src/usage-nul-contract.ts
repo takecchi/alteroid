@@ -1,3 +1,4 @@
+import { USAGE_NUL_ONLY_TOKEN_ID } from './usage-input.js';
 import { ZERO_USAGE } from './usage-format.js';
 import type { UsageStore } from './store.js';
 
@@ -103,6 +104,96 @@ export async function verifyUsageNulContract(usage: UsageStore): Promise<void> {
     (none.unmeteredRows?.length ?? 0) !== 0
   ) {
     fail('一致しない絞り込みが行を返した', none);
+  }
+
+  // aggregate() の from / to に NUL を含む日付（issue #3011。teto の判断）。日付は鍵ではなく、NUL を
+  // 含む日付は「読めない範囲」。落として引かず（2026-10-05 になってしまう）、3実装とも一致なし
+  // （空の集計）にそろえる。投げない。
+  for (const range of [
+    { from: '2026-10-0\u00005' },
+    { to: '2026-10-0\u00005' },
+    { from: '2026-10-05', to: '2026-10-0\u00005' },
+    { from: '\u0000' },
+  ]) {
+    let ranged;
+    try {
+      ranged = await usage.aggregate(range);
+    } catch (error) {
+      fail(
+        `aggregate(NULを含む日付)は投げない（${error instanceof Error ? error.name : typeof error}）`,
+      );
+    }
+    if (
+      ranged.rows.length !== 0 ||
+      ranged.turnRows.length !== 0 ||
+      (ranged.unmeteredRows?.length ?? 0) !== 0
+    ) {
+      fail(`NULを含む日付の範囲は一致なし（${JSON.stringify(range)}）`, ranged);
+    }
+  }
+  // 範囲が読めないだけで、台帳は消えていない。
+  if ((await usage.aggregate({ from: '2026-10-05', to: '2026-10-05' })).rows.length !== 1) {
+    fail('NULを含む日付で引いたら台帳が変わった');
+  }
+
+  // NUL だけの tokenId（落とすと空文字になる）は、帰属なしの行に混ぜず、固定の目印で記録する。
+  // 読む側（絞り込み）も同じ置き換えを通す。
+  await usage.clear();
+  const nulOnlyInput = {
+    layer: 'manager' as const,
+    site: 'session' as const,
+    date: '2026-10-05',
+    at: '2026-10-05T00:00:00.000Z',
+    accumulation: 'cumulative' as const,
+  };
+  await usage.record({
+    ...nulOnlyInput,
+    managerId: 'mgr-a',
+    snapshot: { sessionId: 's-a', models: { m: { ...ZERO_USAGE, inputTokens: 1 } } },
+    tokenId: '\u0000\u0000',
+  });
+  await usage.record({
+    ...nulOnlyInput,
+    managerId: 'mgr-b',
+    snapshot: { sessionId: 's-b', models: { m: { ...ZERO_USAGE, inputTokens: 2 } } },
+  });
+  await usage.recordUnmetered({
+    layer: 'clone',
+    site: 'session',
+    managerId: 'cl-a',
+    date: '2026-10-05',
+    at: '2026-10-05T00:00:00.000Z',
+    provider: 'prov',
+    tokenId: '\u0000',
+  });
+  const all = await usage.aggregate({});
+  const marked = all.rows.filter((row) => row.tokenId === USAGE_NUL_ONLY_TOKEN_ID);
+  const unattributed = all.rows.filter((row) => row.tokenId === undefined);
+  if (
+    all.rows.length !== 2 ||
+    marked.length !== 1 ||
+    marked[0]?.managerId !== 'mgr-a' ||
+    unattributed.length !== 1 ||
+    unattributed[0]?.managerId !== 'mgr-b'
+  ) {
+    fail('NUL だけの tokenId が固定の目印で記録されず、帰属なしと区別がつかない', all.rows);
+  }
+  if (all.unmeteredRows?.[0]?.tokenId !== USAGE_NUL_ONLY_TOKEN_ID) {
+    fail('無報告の行の NUL だけの tokenId が固定の目印で記録されていない', all.unmeteredRows);
+  }
+  for (const tokenId of ['\u0000', '\u0000\u0000', USAGE_NUL_ONLY_TOKEN_ID]) {
+    const byMark = await usage.aggregate({ tokenId });
+    if (
+      byMark.rows.length !== 1 ||
+      byMark.rows[0]?.managerId !== 'mgr-a' ||
+      byMark.turnRows.length !== 1 ||
+      byMark.turnRows[0]?.managerId !== 'mgr-a'
+    ) {
+      fail(
+        `NUL だけの tokenId の絞り込みが目印の行だけを返さない（${JSON.stringify(tokenId)}）`,
+        byMark,
+      );
+    }
   }
 
   await usage.clear();
