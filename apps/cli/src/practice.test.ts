@@ -1,5 +1,5 @@
-import { writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -261,6 +261,77 @@ describe('alteroid practice edit', () => {
     const content = JSON.parse(sent[1]?.body ?? '{}') as { content: string };
     expect(content.content).toContain('実行される定義ではなく');
     expect(content.content).not.toContain('permissions');
+  });
+});
+
+/** Issue #2853。`practice edit` は読んだ版を `ifMatch` に付け、衝突したら人間の編集を捨てない。 */
+describe('alteroid practice edit の前提版（ifMatch）', () => {
+  it('読んだ版（version）を ifMatch として PUT に付ける', async () => {
+    captureStdout();
+    process.env.EDITOR = `sh -c 'printf "編集後の本文\\n" > "$1"' _`;
+    replies.push({ status: 200, body: { ...(practiceBody() as object), version: 'v-read' } });
+    replies.push({ status: 200, body: {} });
+
+    await practiceEditCommand('review', {});
+
+    expect(JSON.parse(sent[1]?.body ?? '{}')).toEqual({
+      kind: 'レビュー',
+      title: 'レビューの進め方',
+      content: '編集後の本文\n',
+      ifMatch: 'v-read',
+    });
+  });
+
+  it('無いやり方を作るときは ifMatch: null（読んだ時には無かった）', async () => {
+    captureStdout();
+    process.env.EDITOR = `sh -c 'printf "新しい本文\\n" > "$1"' _`;
+    replies.push({ status: 404, body: { error: 'not found' } });
+    replies.push({ status: 200, body: {} });
+
+    await practiceEditCommand('fresh', { kind: '調査', title: '調べもの' });
+
+    expect(JSON.parse(sent[1]?.body ?? '{}')).toEqual({
+      kind: '調査',
+      title: '調べもの',
+      content: '新しい本文\n',
+      ifMatch: null,
+    });
+  });
+
+  it('409 のとき、人間が書いた内容を消さずに残し、パスと次の手を示して失敗する', async () => {
+    const out = captureStdout();
+    process.env.EDITOR = `sh -c 'printf "人間の編集\\n" > "$1"' _`;
+    replies.push({ status: 200, body: { ...(practiceBody() as object), version: 'v-read' } });
+    replies.push({
+      status: 409,
+      body: {
+        error: '変わっています',
+        current: {
+          practice: {
+            slug: 'review',
+            kind: 'レビュー',
+            title: 'レビューの進め方',
+            content: 'クローンの書き直し\n',
+          },
+          version: 'v-now',
+        },
+      },
+    });
+
+    const error = await practiceEditCommand('review', {}).catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(Error);
+    expect(String(error)).toContain('書き換えませんでした');
+    const text = out();
+    const mine = /あなたの編集（残してあります）: (\S+)/.exec(text)?.[1];
+    const theirs = /いまのやり方: (\S+)/.exec(text)?.[1];
+    expect(mine).toBeDefined();
+    expect(theirs).toBeDefined();
+    expect(readFileSync(mine ?? '', 'utf8')).toBe('人間の編集\n');
+    expect(readFileSync(theirs ?? '', 'utf8')).toContain('クローンの書き直し');
+    expect(text).toContain('diff -u');
+    expect(text).toContain('alteroid practice edit review');
+    rmSync(dirname(mine ?? ''), { recursive: true, force: true });
   });
 });
 
