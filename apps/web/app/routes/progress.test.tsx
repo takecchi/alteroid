@@ -18,6 +18,7 @@
  * 待ちは `findBy*` だけで、実時間の `setTimeout` は使わない。
  */
 import { describeGithubCi } from '@alteroid/core';
+import { GITHUB_CI_COUNT_LABEL, GITHUB_CI_COUNT_ORDER } from '@alteroid/logic';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -464,7 +465,7 @@ describe('/progress 画面 — 取れない値と但し書き', () => {
       expect(
         backlog.getByText('takecchi/alteroid 開いている PR').parentElement?.textContent,
       ).toContain('0');
-      expect(backlog.getByText(/記録元 clone/)).toBeTruthy();
+      expect(backlog.getByText(/記録したのは: クローン/)).toBeTruthy();
       expect(backlog.getByText(/gh issue list --state open \/ 上限 100 件/)).toBeTruthy();
       // GitHub 全体が未観測のときの文言（句点で終わる）。CI の軸の「観測していない（0 件ではない）」とは別
       expect(backlog.queryByText(/観測していない（0 件ではない）。/)).toBeNull();
@@ -490,11 +491,11 @@ describe('/progress 画面 — 取れない値と但し書き', () => {
         ci: { pulls: 3, success: 2, failure: 1, pending: 0, checks: '必須チェックだけ' },
       });
       const text = view.getByText(/3 件の PR を確認/).textContent ?? '';
-      expect(text).toContain('success 2 / failure 1 / pending 0');
+      expect(text).toContain('成功 2 / 失敗 1 / 実行中・待ち 0');
       expect(text).toContain('必須チェックだけ');
     });
 
-    it('CI の文言は core の describeGithubCi（原本）と、先頭の「CI: 」を除いて同じ（#2608）', async () => {
+    it('CI の文言は core の describeGithubCi（原本）と、先頭の「CI: 」と件数の軸の名前（表で写す3語）を除いて同じ（#2608）', async () => {
       const cases: Record<string, unknown>[] = [
         { ci: { pulls: 5, success: 3, failure: 1, pending: 0, checks: '必須チェックだけ' } },
         { ci: { pulls: 2, success: 2, failure: 0, pending: 0, checks: 'x', truncated: true } },
@@ -518,7 +519,13 @@ describe('/progress 画面 — 取れない値と但し書き', () => {
         const view = within(await card('未完了の仕事'));
         const original = describeGithubCi(extra as Parameters<typeof describeGithubCi>[0]);
         expect(original.startsWith('CI: ')).toBe(true);
-        expect(view.getByText(original.slice('CI: '.length))).toBeTruthy();
+        // 原本の値（success / failure / pending）を、表（GITHUB_CI_COUNT_LABEL）が持つ写しだけで置き換える。
+        // 表に無い差があれば（並び・数・断り書き）、ここで落ちる。
+        let expected = original.slice('CI: '.length);
+        for (const key of GITHUB_CI_COUNT_ORDER) {
+          expected = expected.replace(`${key} `, `${GITHUB_CI_COUNT_LABEL[key]} `);
+        }
+        expect(view.getByText(expected)).toBeTruthy();
       }
     });
 
@@ -586,6 +593,11 @@ describe('/progress 画面 — 取れない値と但し書き', () => {
       // 上限に当たったので「記録が無い」とは言わず、読んだ範囲に無いと言う
       expect(stat?.textContent).toContain('読み取った範囲（新しい順 500 件）に成功した記録が無い');
       expect(backlog.getByText(/取得に失敗した回/).textContent).toContain('gh: HTTP 502');
+      // 名乗られた識別子（mgr-1）は出さず、一般的な言い方にする
+      expect(backlog.getByText(/取得に失敗した回/).textContent).toContain(
+        '記録したのは: クローン以外からの申告',
+      );
+      expect(backlog.getByText(/取得に失敗した回/).textContent).not.toContain('mgr-1');
       expect(backlog.getByText(/上限（新しい順 500 件）に達しました/)).toBeTruthy();
     });
 
@@ -731,6 +743,49 @@ describe('/progress 画面 — 割合（%）を出さない', () => {
     // Meter / shadcn Progress の role も使っていない。
     expect(screen.queryByRole('progressbar')).toBeNull();
     expect(screen.queryByRole('meter')).toBeNull();
+  });
+});
+
+describe('/progress 画面 — GitHub の欄に英語の識別子を出さない（#2785 の続き）', () => {
+  it('記録元と CI の軸の名前は日本語で出て、clone / success / failure / pending は出ない', async () => {
+    stubProgress({
+      body: baseBody({
+        github: {
+          state: 'observed',
+          repos: [
+            {
+              repo: 'x/y',
+              latestOk: {
+                observedAt: '2026-09-30T01:00:00.000Z',
+                observedBy: 'clone',
+                query: 'q',
+                openIssues: 1,
+                openPulls: 2,
+                truncated: false,
+                ci: { pulls: 3, success: 1, failure: 1, pending: 1, checks: '必須チェックだけ' },
+              },
+              latestFailed: {
+                observedAt: '2026-09-30T02:00:00.000Z',
+                observedBy: 'mgr-1',
+                query: 'q',
+                reason: 'HTTP 502',
+              },
+            },
+          ],
+          scan: { limit: 500, reachedLimit: false },
+        },
+      }),
+    });
+    renderPage();
+    const backlog = within(await card('未完了の仕事'));
+    const text =
+      backlog.getByText(/3 件の PR を確認/).closest('div')?.parentElement?.textContent ?? '';
+    const whole = document.body.textContent ?? '';
+    expect(whole).toContain('記録したのは: クローン');
+    expect(text).toContain('成功 1 / 失敗 1 / 実行中・待ち 1');
+    for (const word of ['clone', 'success', 'failure', 'pending', 'mgr-1', '記録元']) {
+      expect(whole).not.toContain(word);
+    }
   });
 });
 

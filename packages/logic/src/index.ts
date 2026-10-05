@@ -25,6 +25,7 @@ export * from './clone-provider.js';
 export * from './manager-provider.js';
 export * from './profile-compat.js';
 export * from './managers-links.js';
+export * from './progress-labels.js';
 export * from './redact.js';
 export * from './tokens-links.js';
 export * from './topology-scene.js';
