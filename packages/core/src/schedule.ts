@@ -32,8 +32,14 @@ export interface ScheduleEntry {
   description: string;
   /** `after` より後の最初の発火時刻。 */
   nextAt(after: Date): Date;
-  /** 発火時に受信箱へ積むイベント。 */
-  event(at: Date): InboxEvent;
+  /**
+   * 発火時に受信箱へ積むイベント。
+   *
+   * `scheduledAt` は `tick()` の定刻の発火だけが渡す、**予定されていた時刻**（`due`）。
+   * 止まっていたプロセスが再開した刻みでは `at`（実際に刻みが回った時刻）より大きく
+   * 前になりうる。「その予定の日」を運びたいエントリ（日報）だけが読む。
+   */
+  event(at: Date, scheduledAt?: Date): InboxEvent;
   /**
    * 落ちていた間に過ぎた予定を、起き直したときに1回だけ拾うか（省略時は拾う）。
    *
@@ -611,7 +617,7 @@ class TimerScheduler implements Scheduler {
       // 位相も post の前に進める（`#due` と同じ理由）。既定の仕込みだけが対象で、
       // 失敗しても時計は止まらない（`#recordPhase` に倒れる向きを書いてある）。
       this.#recordPhase(entry, now, 'schedule');
-      const event = entry.event(now);
+      const event = entry.event(now, new Date(due));
       // **`cause` を上書きするのは `timer` / `self_initiative` 型で、かつ本当に
       // catch-up のときだけ。** 継続中の依頼（`timer`）と発意 tick
       // （`self_initiative`）は `#seedBase` / `#reconcile` の両方が `#catchUp` を
@@ -776,8 +782,11 @@ export const DAILY_REPORT_KIND = 'daily_report';
 /**
  * 日報 — 時間起点ジョブの最初の実例（PRD「可観測性」）。
  *
- * 1日の終わりに、その日を締める。締め時刻に発火し、対象日は**発火時刻の
- * ローカル日付**である。
+ * 1日の終わりに、その日を締める。締め時刻に発火し、対象日は**予定時刻（締め時刻）の
+ * ローカル日付**である（実際に刻みが回った時刻ではない。常駐したまま予定時刻をまたいで
+ * 止まり、翌朝に再開した刻みでも、止まっていた日の日報を作る — #2740）。複数日止まった
+ * ときは、まとめ撃ちせず、最初に過ぎた予定の日（`due`）の1本だけを積む。間の日は
+ * プロセスが止まっていて記録が無く、動き直した後の記録は起動時の `missingDailyReportDates` が拾う。
  */
 export function dailyReportEntry(options: { at: TimeOfDay }): ScheduleEntry {
   const { at } = options;
@@ -797,8 +806,8 @@ export function dailyReportEntry(options: { at: TimeOfDay }): ScheduleEntry {
       const tomorrow = new Date(after.getFullYear(), after.getMonth(), after.getDate() + 1);
       return atTimeOnDay(tomorrow, at);
     },
-    event(firedAt) {
-      return dailyReportEvent(localDate(firedAt), firedAt);
+    event(firedAt, scheduledAt) {
+      return dailyReportEvent(localDate(scheduledAt ?? firedAt), firedAt);
     },
   };
 }
