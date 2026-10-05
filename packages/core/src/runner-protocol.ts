@@ -712,6 +712,30 @@ export const runnerAnswerCommandSchema = z.object({
 export type RunnerAnswerCommand = z.infer<typeof runnerAnswerCommandSchema>;
 
 /**
+ * `POST /rescue-refs/delete` の要求（Issue #1266 の後始末）。**セッションにも作業ツリーにも
+ * 結びつかない**（委譲が終わるとどちらも無い）——台帳が覚えている退避の所在
+ * （`pushed.remote` / `ref` / `commit`）を渡す。runner は子の環境（資格はここに在る）で
+ * `git push --force-with-lease=<ref>:<commit> <remote> :<ref>` を撃つ。
+ * `lease` は持たせない（`runnerAnswerCommandSchema` と同じ理由。世代を主張する命令ではない）。
+ */
+export const runnerRescueRefDeleteRequestSchema = z.object({
+  remote: z.string().min(1),
+  ref: z.string().min(1),
+  commit: z.string().min(1),
+});
+export type RunnerRescueRefDeleteRequest = z.infer<typeof runnerRescueRefDeleteRequestSchema>;
+
+/** 要求の応答。`failed.kind` は分類だけ（git の文面は運ばない）。 */
+export const runnerRescueRefDeleteResultSchema = z.discriminatedUnion('outcome', [
+  z.object({ outcome: z.literal('removed'), alreadyGone: z.boolean() }),
+  z.object({
+    outcome: z.literal('failed'),
+    kind: z.enum(['auth', 'network', 'timeout', 'moved', 'no-remote', 'other']),
+  }),
+]);
+export type RunnerRescueRefDeleteResult = z.infer<typeof runnerRescueRefDeleteResultSchema>;
+
+/**
  * `POST /managers/:id/answers` の**応答**（#322）。
  *
  * **`decision` は省略されうる。** ローリング再デプロイの窓では、まだこの変更前の
@@ -2737,6 +2761,21 @@ export interface RunnerClient {
     managerId: string,
     options?: { signal?: AbortSignal },
   ): Promise<UnpushedWorkResult | undefined>;
+  /**
+   * 退避 ref（`refs/alteroid-rescue/…`）を remote から消す（Issue #1266 の後始末）。
+   * **push の資格は runner の子の環境にしか無い**ので、消すのは runner である。デーモンは
+   * 台帳が覚えている所在（`pushed.remote` / `ref` / `commit`）を渡す。`commit` は lease
+   * （remote の ref がそれと違えば消さない）。
+   *
+   * **省略できる**（`unpushedWork` と同じ理由）。持たない実装（この口を持たない古い runner・
+   * テストの偽物）に「消した」という嘘を書かせない——呼び出し側は口が無いことを
+   * `no-runner` として残し、消したことにしない。実装していても、応答が読めない・期限切れは
+   * `failed`（`other` / `timeout`）を返してよい（**消えたとは言わない**）。
+   */
+  deleteRescueRef?(
+    request: RunnerRescueRefDeleteRequest,
+    options?: { signal?: AbortSignal },
+  ): Promise<RunnerRescueRefDeleteResult>;
   /**
    * いま runner が配っている鍵の指紋。**値は返らない。**
    *

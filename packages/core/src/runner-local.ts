@@ -17,6 +17,8 @@ import type {
   RunnerProfileFingerprint,
   RunnerProfileResult,
   RunnerResumeCommand,
+  RunnerRescueRefDeleteRequest,
+  RunnerRescueRefDeleteResult,
   RunnerSetCredentialsCommand,
   RunnerStartCommand,
   UnpushedWorkResult,
@@ -213,6 +215,14 @@ class LocalRunner implements RunnerClient {
     options?: { signal?: AbortSignal },
   ): Promise<UnpushedWorkResult | undefined> {
     return this.#host.unpushedWork(managerId, options);
+  }
+
+  /** 退避 ref の後始末（Issue #1266）。同一プロセスなので `Host` へそのまま渡す。 */
+  async deleteRescueRef(
+    request: RunnerRescueRefDeleteRequest,
+    options?: { signal?: AbortSignal },
+  ): Promise<RunnerRescueRefDeleteResult> {
+    return this.#host.deleteRescueRef(request, options);
   }
 
   async credentials(): Promise<RunnerCredentialFingerprint[]> {

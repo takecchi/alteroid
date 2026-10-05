@@ -11,6 +11,7 @@ import {
   startSseHeartbeat,
   RunnerFenceError,
   runnerAnswerCommandSchema,
+  runnerRescueRefDeleteRequestSchema,
   runnerMessageCommandSchema,
   runnerResumeCommandSchema,
   runnerSetCredentialsCommandSchema,
@@ -1342,6 +1343,27 @@ export function createRunnerApp(deps: RunnerAppDeps) {
           ok: outcome.delivered,
           ...(outcome.decision === undefined ? {} : { decision: outcome.decision }),
         });
+      },
+    )
+
+    /**
+     * 退避 ref の後始末（Issue #1266）。`:id` を持たない——委譲が終わるとセッションも
+     * 作業ツリーも無い。資格は runner の子の環境に在るので、消すのはここである。
+     * 応答は分類だけ（git の文面は運ばない）。`Host#deleteRescueRef` は投げない。
+     */
+    .post(
+      '/rescue-refs/delete',
+      zValidator('json', runnerRescueRefDeleteRequestSchema, (result, c) => {
+        if (!result.success) {
+          return c.json({ ok: false, error: '退避 ref の後始末の入力の形が不正（消していない）' }, 400);
+        }
+        return undefined;
+      }),
+      async (c) => {
+        const result = await host.deleteRescueRef(c.req.valid('json'), {
+          signal: c.req.raw.signal,
+        });
+        return c.json(result);
       },
     )
 

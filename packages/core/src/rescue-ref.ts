@@ -799,8 +799,11 @@ const RESCUE_REF_PATTERN = /^refs\/alteroid-rescue\/[A-Za-z0-9_-]+\/[A-Za-z0-9_-
 /** 台帳の `pushed.commit` として受ける形。 */
 const COMMIT_PATTERN = /^[0-9a-f]{40}$/;
 
-/** 後始末の push の期限。 */
-const DELETE_TIMEOUT_MS = 60_000;
+/**
+ * 後始末の push / ls-remote 1本あたりの期限。デーモンの HTTP 呼び出しの期限（60秒）の内側に
+ * 収める（init + push + ls-remote を足しても超えない）。
+ */
+const DELETE_TIMEOUT_MS = 20_000;
 
 export type RescueRefDeleteResult =
   | { readonly outcome: 'removed'; readonly alreadyGone: boolean }

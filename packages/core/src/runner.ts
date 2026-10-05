@@ -120,7 +120,13 @@ import type {
   RunnerStartCommand,
   UnpushedWorkResult,
 } from './runner-protocol.js';
-import { RescueMemory, resolveRescueIntervalMs, runRescue } from './rescue-ref.js';
+import {
+  deleteRescueRef,
+  RescueMemory,
+  type RescueRefDeleteResult,
+  resolveRescueIntervalMs,
+  runRescue,
+} from './rescue-ref.js';
 import { computeUnpushedWork } from './unpushed-work.js';
 import type { ContextUsageObservation, JobStatus } from './schema.js';
 // **クローン（`clone.ts`）と同じ判定を呼ぶ。** 「これは応答ではない」の見分けを
@@ -532,6 +538,16 @@ export interface RunnerHost {
     managerId: string,
     options?: { signal?: AbortSignal },
   ): Promise<UnpushedWorkResult | undefined>;
+  /**
+   * 退避 ref を remote から消す（Issue #1266 の後始末。`rescue-ref.ts` の
+   * {@link deleteRescueRef}）。**セッションにも作業ツリーにも結びつかない**——委譲が
+   * 終わると両方とも無いことがある。資格は子の環境（`GH_TOKEN` 等）に在るので、
+   * 観測の `git` と同じ子ユーザーで撃つ。投げない。
+   */
+  deleteRescueRef(
+    request: { remote: string; ref: string; commit: string },
+    options?: { signal?: AbortSignal },
+  ): Promise<RescueRefDeleteResult>;
   /** 全セッションを畳む。プロセスが消えるときだけ呼ぶ。 */
   shutdown(): Promise<void>;
   /**
@@ -644,6 +660,14 @@ function directoryExists(path: string): boolean {
   } catch {
     return false;
   }
+}
+
+interface GitSpawnOptions {
+  command: string;
+  args: string[];
+  cwd?: string;
+  env: Record<string, string | undefined>;
+  signal: AbortSignal;
 }
 
 export function createRunnerHost(options: RunnerHostOptions): RunnerHost {
@@ -1196,6 +1220,39 @@ class Host implements RunnerHost {
     const session = this.#sessions.get(managerId);
     if (session === undefined) return undefined;
     return session.unpushedWork(options);
+  }
+
+  async deleteRescueRef(
+    request: { remote: string; ref: string; commit: string },
+    options?: { signal?: AbortSignal },
+  ): Promise<RescueRefDeleteResult> {
+    // セッションの `#childEnv()` と同じ出所の env（鍵は現在値・プロファイル・伏せる鍵の順）。
+    const env: NodeJS.ProcessEnv = { ...this.#env };
+    for (const name of ROTATABLE_CREDENTIAL_KEYS) delete env[name];
+    if (this.#credentials !== undefined) {
+      Object.assign(env, this.#credentials.values(), this.#credentials.env());
+    }
+    Object.assign(env, this.#profile?.env() ?? {});
+    for (const key of this.#withheldEnvKeys) delete env[key];
+    const spawnFn =
+      this.#childUser === undefined
+        ? (spawnOptions: GitSpawnOptions) =>
+            spawn(spawnOptions.command, spawnOptions.args, {
+              ...(spawnOptions.cwd === undefined ? {} : { cwd: spawnOptions.cwd }),
+              env: spawnOptions.env,
+              signal: spawnOptions.signal,
+              stdio: ['ignore', 'pipe', 'pipe'] as const,
+            })
+        : (spawnOptions: GitSpawnOptions) =>
+            this.#spawnAsChildUser(spawnOptions);
+    return deleteRescueRef({
+      spawn: spawnFn,
+      env,
+      remote: request.remote,
+      ref: request.ref,
+      commit: request.commit,
+      ...(options?.signal === undefined ? {} : { signal: options.signal }),
+    });
   }
 
   async shutdown(): Promise<void> {

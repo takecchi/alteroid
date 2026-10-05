@@ -202,6 +202,7 @@ import type {
   MemoryDocumentMeta,
   MemoryProtectionStatus,
   RescueNotPushedReason,
+  RescueRemovalReason,
   PendingApproval,
   Practice,
   ScheduleSpec,
@@ -4032,6 +4033,13 @@ const RESCUE_NOT_PUSHED_TEXT: Record<RescueNotPushedReason, string> = {
   timeout: '期限で打ち切られた（次の周期でまた試す）',
 };
 
+const RESCUE_REMOVAL_REASON_TEXT: Record<RescueRemovalReason, string> = {
+  landed: '内容が origin の枝に入っていた',
+  done: '委譲が done のまま猶予を過ぎた',
+  failed: '委譲が failed のまま猶予を過ぎた',
+  stopped: '委譲が stopped のまま猶予を過ぎた',
+};
+
 /**
  * 走行中の退避 ref（`Job.lastRescue`。Issue #1266）の行。**台帳を写すだけ**で、
  * 新しい往復は払わない。**無ければ `null`（1文字も増えない）。** 作業ツリーごとに
@@ -4045,7 +4053,17 @@ export function describeRescue(manager: ManagerSummary): string | null {
   for (const tree of rescue.worktrees) {
     const parts: string[] = [];
     if (tree.pushed !== undefined) {
-      parts.push(`${tree.pushed.ref}（${tree.pushed.commit.slice(0, 8)}, ${tree.pushed.at}）`);
+      const removal = tree.pushed.removal;
+      // **消した ref を「在る」と読ませない。** 消した（後始末。Issue #1266）なら先頭に出す。
+      const state =
+        removal === undefined
+          ? ''
+          : removal.failureKind === undefined
+            ? `・${removal.at} に消した（${RESCUE_REMOVAL_REASON_TEXT[removal.reason]}）`
+            : `・消せなかった（${removal.failureKind}。${removal.at} 時点で ${String(removal.attempts ?? 1)} 回目。次の機会に再試行する）`;
+      parts.push(
+        `${tree.pushed.ref}（${tree.pushed.commit.slice(0, 8)}, ${tree.pushed.at}${state}）`,
+      );
     } else {
       parts.push('退避された ref は無い');
     }

@@ -37,6 +37,9 @@ import {
   runnerProfileFingerprintSchema,
   runnerProfileResultSchema,
   runnerAnswerResultSchema,
+  runnerRescueRefDeleteResultSchema,
+  type RunnerRescueRefDeleteRequest,
+  type RunnerRescueRefDeleteResult,
   runnerEventSchema,
   runnerExecutionResourcesSchema,
   noteDroppedRunnerManagers,
@@ -1874,6 +1877,29 @@ class HttpRunner implements RunnerClient {
       return parsed.success ? parsed.data : undefined;
     } catch {
       return undefined;
+    }
+  }
+
+  /**
+   * 退避 ref を消す（Issue #1266 の後始末。`RunnerClient.deleteRescueRef` の doc）。
+   * **消えたと言えるのは、runner が `removed` を返したときだけ。** 期限切れ・非2xx・
+   * 古い runner（この口を持たない）・応答が読めない、のどれも `failed` に倒す
+   * （古い runner の 404 は `no-runner` の代わりに `other`。口が無いのか経路の不調なのかを
+   * ここでは分けられない）。
+   */
+  async deleteRescueRef(
+    request: RunnerRescueRefDeleteRequest,
+    options?: { signal?: AbortSignal },
+  ): Promise<RunnerRescueRefDeleteResult> {
+    try {
+      const response = await this.#call('POST', '/rescue-refs/delete', request, options?.signal);
+      const parsed = runnerRescueRefDeleteResultSchema.safeParse(await response.json());
+      return parsed.success ? parsed.data : { outcome: 'failed', kind: 'other' };
+    } catch (error) {
+      return {
+        outcome: 'failed',
+        kind: error instanceof RunnerUnknownError ? 'timeout' : 'other',
+      };
     }
   }
 
