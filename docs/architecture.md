@@ -364,6 +364,7 @@ type WorkspaceLocator =
 生ログへは runner の API → アーカイブ → 預かったセッションの生ログ、の順で降りる。
 
 - **fs を先に作る**。記憶が Markdown ファイルであることは「人間がいつでも読んで直せる」（提供価値1）の最短の実装
+- **記憶の版は本文の sha256 である**（`memoryVersion`）。`GET /memory/{slug}` と `PUT` の応答が `version` で返し、`PUT` の任意の `ifMatch` と `PersonaStore.write(slug, content, { ifMatch })` が受ける。`updatedAt` にしないのは fs の mtime の精度に依らないため。比較は書き込みと同じ排他の中で行い（fs は `withPathLock` の内側、pg は条件付きの1文）、合わなければ `MemoryConflictError`（HTTP は 409 と `current`）。`ifMatch: null` は「読んだ時には無かった」。**省略は後勝ち**（クローンの道具・`memory set`・既存のスクリプトを壊さない）。3実装で挙動を揃える歯が `persona-contract.test.ts` / storage-fs / storage-pg にある
 - SDK セッション自体の永続化は SessionStore アダプタ（SDK 公式）で同じ PostgreSQL に載せる。デーモン再起動時は JobStore の session_id からマネージャーを resume する
 
 ## パッケージ構成
