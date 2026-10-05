@@ -16,7 +16,6 @@ import { migrate } from './migrate.js';
 import {
   createEmptyTestDb,
   createMigratedTestDb,
-  realPostgresUrl,
   type TestDbHandle,
 } from './test-db.test-support.js';
 import { PgUsageStore } from './usage.js';
@@ -351,39 +350,51 @@ describe('PgUsageStore.aggregate', () => {
 });
 
 /**
- * ⚠️ **この describe の名前・doc は #1739 以前のものである。** 「トランザクション
- * で1操作に閉じていれば直列化されている」という前提は、#1732 / #1735（`archive()`
- * の同じ形の欠陥）で実測により誤りだと分かった——PostgreSQL の既定の分離レベル
- * （READ COMMITTED）は、同じトランザクションに閉じることと「読んだ行をロックする」
- * ことを保証しない。この `describe` のタイトルにある「トランザクションで1操作に
- * 閉じる」だけでは、実際には並行 `record()` の過大計上を防げていなかった
- * （`packages/storage-pg/src/usage.ts` の `record()` doc「#1739」参照。塞いだのは
- * `(layer, managerId)` ごとの `pg_advisory_xact_lock` である）。
+ * **この describe は並行の `record()` を問う（#1739 の advisory lock の歯。#3015）。**
+ * 名前の「トランザクションで1操作に閉じる」だけでは足りず、`(layer, managerId)`
+ * ごとの `pg_advisory_xact_lock` が直列化を担う（`usage.ts` の `record()` doc）。
  *
- * **⚠️⚠️ この歯（下の `it`）は、pg 実装の並行の窓に対しては何も検出できない。**
- * PGlite（この歯が使う driver）は単一接続で全クエリを内部で直列化するため、
- * `Promise.all` で10本同時に呼んでも、PGlite 側では実質「submission 順に
- * 逐次実行」になり、実 PostgreSQL で advisory lock 無しに起きる「2つの
- * トランザクションが同じ基準を読んで両方が加算する」形の重なりがそもそも
- * 起きない。**実測（2026-09-27、advisory lock を外す変異を当てて確認）:
- * この歯は変異前後どちらでも緑のままだった。** ⟹ この歯が緑であることは
- * 「窓が塞がっている証拠」にはならない——`archive-contract.ts` の検査34/35の
- * doc と同じ限界である。pg 実装の窓が実在すること・直したことの実測は、実
- * PostgreSQL に対して手元で書いたスクリプトでしか取れない（Issue #1739 の
- * PR の報告を見よ）。**この歯自体は残す**——`(layer, managerId)` ごとの
- * 累積が「呼び出しの回数ぶん増分を失わない」という別の性質（10回呼んで
- * 10回とも `usage_daily` へ反映される）は今も測っている。測っていないのは
- * 「過大に計上しないか」のほうである。
+ * **⚠️ 並行に投げた累積スナップショットは、到着順が呼んだ順と一致しない。**
+ * 累積は順序に依存する（前より小さい累積は「数え直し」として全量が積まれる
+ * ——`foldUsageSnapshot`）ので、10本の増える累積を `Promise.all` で投げて
+ * 「合計 = 最後の累積」を期待する歯は、直列に到着する PGlite でしか成り立たない。
+ * 本物の PostgreSQL（接続が複数）では lock の取得順が前後し、store が正しく
+ * 直列化していても合計は 10 に一致しない（#3015。実測: 到着順 3,1,2,... を
+ * 直列で畳み直した値と、並行の結果が毎回一致した）。それは store の欠陥ではない。
+ * ⟹ ここの歯は到着順に依存しない形で書く:
+ *
+ * - **同一の累積を並行に送る** — どの順で届いても、合計はちょうど1回ぶん。lock が
+ *   無ければ全員が空の基準を読んで N 回ぶん積まれる（本物の PostgreSQL でだけ
+ *   効く歯。PGlite は直列化されるので変異を当てても緑のまま）。
+ * - **返り値から前任者の鎖を復元する** — 各呼び出しが読んだ基準（＝直前に commit
+ *   した呼び出しの累積）は返り値の増分から分かる。直列化されていれば全員が
+ *   別々の前任者を持つ1本の鎖になり、合計は返り値の増分の和に一致する。
+ *   lock が無ければ複数の呼び出しが同じ前任者を読む。
  */
-describe('PgUsageStore の不変条件（record はトランザクションで1操作に閉じる）', () => {
-  // #2937: 本物の PostgreSQL では落ちる（並行の record が実際に重なり、10本の累積が到着順に
-  // 前後すると増分が過大に数えられる。期待10に対し13〜15を観測。歯の前提（PGlite の直列化）が
-  // 本物では成り立たない可能性と、store 側の欠陥の可能性の両方がある。Issue #2937 に一覧済み）。
-  it.skipIf(realPostgresUrl() !== undefined)('並行に record しても増分が失われない', async () => {
-    // 累積スナップショットを模す: 各呼び出しは「その時点までの累積」を運ぶ。
-    // トランザクションが直列化していれば、最終合計は最後の累積とちょうど一致する。
+describe('PgUsageStore の不変条件（並行の record は直列化される）', () => {
+  it('同一の累積スナップショットを並行に record すると、合計はちょうど1回ぶん', async () => {
+    const results = await Promise.all(
+      Array.from({ length: 10 }, (_, i) =>
+        record({
+          managerId: 'mgr-1',
+          date: '2026-08-14',
+          at: `2026-08-14T10:00:${String(i).padStart(2, '0')}.000Z`,
+          snapshot: snapshot({ opus: totals({ outputTokens: 100, costUsd: 10 }) }),
+        }),
+      ),
+    );
+
+    // 空でない増分を返したのは、最初に基準を読めた1本だけ。
+    expect(results.filter((r) => Object.keys(r.delta).length > 0)).toHaveLength(1);
+    const { rows } = await store.aggregate({});
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.totals.costUsd).toBe(10);
+    expect(rows[0]?.totals.outputTokens).toBe(100);
+  });
+
+  it('並行に増える累積を record しても、各呼び出しは別々の前任者を読み、増分が重ならない', async () => {
     const calls = Array.from({ length: 10 }, (_, i) => i + 1);
-    await Promise.all(
+    const results = await Promise.all(
       calls.map((i) =>
         record({
           managerId: 'mgr-1',
@@ -394,8 +405,43 @@ describe('PgUsageStore の不変条件（record はトランザクションで1�
       ),
     );
 
+    // 各呼び出しが読んだ基準の cost（前任者の累積）。数え直し（前より小さい累積）なら
+    // `reset.fromCostUsd`、そうでなければ「自分の累積 - 増分」。最初の1本は基準が無い（0）。
+    const predecessors = results.map((r, k) => {
+      const own = calls[k]!;
+      return r.reset !== undefined ? r.reset.fromCostUsd : own - (r.delta['opus']?.costUsd ?? 0);
+    });
+    // 直列化されていれば、前任者は全員で重ならない（基準 0 から始まる1本の鎖になる）。
+    expect(new Set(predecessors).size).toBe(calls.length);
+    const byPredecessor = new Map(predecessors.map((p, k) => [p, calls[k]!]));
+    const chain: number[] = [];
+    for (
+      let at = 0, next = byPredecessor.get(at);
+      next !== undefined;
+      next = byPredecessor.get(at)
+    ) {
+      chain.push(next);
+      at = next;
+    }
+    expect(chain).toHaveLength(calls.length);
+
+    // 台帳の合計は、返り値の増分の和（＝実際に積まれた量）と一致する。
+    const returned = results.reduce((sum, r) => sum + (r.delta['opus']?.costUsd ?? 0), 0);
     const { rows } = await store.aggregate({});
     expect(rows).toHaveLength(1);
+    expect(rows[0]?.totals.costUsd).toBeCloseTo(returned, 10);
+  });
+
+  it('直列に増える累積なら、合計は最後の累積と一致する（呼んだ順に届く条件下の約束）', async () => {
+    for (let i = 1; i <= 10; i++) {
+      await record({
+        managerId: 'mgr-1',
+        date: '2026-08-14',
+        at: `2026-08-14T10:00:${String(i).padStart(2, '0')}.000Z`,
+        snapshot: snapshot({ opus: totals({ outputTokens: i * 10, costUsd: i }) }),
+      });
+    }
+    const { rows } = await store.aggregate({});
     expect(rows[0]?.totals.costUsd).toBe(10);
     expect(rows[0]?.totals.outputTokens).toBe(100);
   });
