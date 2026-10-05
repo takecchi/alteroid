@@ -3544,6 +3544,86 @@ export const lastUnpushedWorkObservationSchema = z.discriminatedUnion('kind', [
 export type LastUnpushedWorkObservation = z.infer<typeof lastUnpushedWorkObservationSchema>;
 
 /**
+ * 退避 ref を送らなかった（または送れなかった）理由（Issue #1266。
+ * `packages/core/src/rescue-ref.ts`）。**理由は分類であって、git の生の
+ * 文面ではない**（stderr にはパスや URL の断片が混ざりうるので運ばない）。
+ */
+export const rescueNotPushedReasonSchema = z.enum([
+  /** 追跡済みの変更も未 push のコミットも無く、送るものが無かった。 */
+  'nothing-tracked',
+  /** 差分に鍵らしい文字列があったので送らなかった（`files` に名前だけ）。 */
+  'secret-like',
+  /** 差分が判定の上限を超えた。安全側（送らない側）に倒した。 */
+  'too-large',
+  /** push に使える資格が無い（`GH_TOKEN` 無し。`scope: 'app'` の構成など）。 */
+  'no-credential',
+  /** `origin` が無い。 */
+  'no-remote',
+  /** push が失敗した（`failureKind` に分類）。 */
+  'push-failed',
+  /** 退避 commit を作る途中の git が失敗した。 */
+  'error',
+]);
+export type RescueNotPushedReason = z.infer<typeof rescueNotPushedReasonSchema>;
+
+/**
+ * 1つの作業ツリーについての、退避 ref の最後の状態（Issue #1266）。
+ *
+ * - `pushed` は**最後に成功した退避**。後の回が送らなかったり失敗したりしても
+ *   消さない（remote にはまだ在る）。
+ * - `notPushed` は**直近の回**が送らなかった理由。成功した回は省く。
+ * - `untracked` / `submoduleCount` は**退避されなかったもの**。オーナー決定
+ *   （2026-10-05）で、未追跡のパスは名前だけを出す（中身は出さない）。
+ *   `paths` は上限つきで、溢れたぶんは `omitted` に件数だけ。
+ */
+export const rescueWorktreeSchema = z.object({
+  /** `observedWorktreeBranchSchema.relativePath` と同じ（`cwd` の外は絶対パス）。 */
+  relativePath: z.string(),
+  branch: z.string().nullable(),
+  /** この状態を確かめた時刻。 */
+  at: isoDateTime,
+  pushed: z
+    .object({
+      /** `refs/alteroid-rescue/<委譲id>/<作業ツリーの短い名>`。 */
+      ref: z.string(),
+      /** 退避 commit の sha。 */
+      commit: z.string(),
+      at: isoDateTime,
+    })
+    .optional(),
+  notPushed: z
+    .object({
+      reason: rescueNotPushedReasonSchema,
+      /** `reason: 'push-failed'` の分類。 */
+      failureKind: z.enum(['auth', 'network', 'rejected', 'timeout', 'other']).optional(),
+      /** `reason: 'secret-like'` のとき、当たったファイルの名前（文字列そのものは持たない）。 */
+      files: z.array(z.string()).optional(),
+    })
+    .optional(),
+  untracked: z
+    .object({
+      /** 未追跡のファイルの総数。 */
+      count: z.number().int().positive(),
+      /** パスの名前（上限つき）。 */
+      paths: z.array(z.string()),
+      /** `paths` に載せ切れなかった件数。 */
+      omitted: z.number().int().nonnegative(),
+    })
+    .optional(),
+  /** 作業ツリーの中の submodule の件数（中の変更は退避されない）。 */
+  submoduleCount: z.number().int().positive().optional(),
+});
+export type RescueWorktree = z.infer<typeof rescueWorktreeSchema>;
+
+/** 委譲ごとの退避 ref の台帳（`Job.lastRescue`）。作業ツリーごとの最後の状態。 */
+export const lastRescueSchema = z.object({
+  /** 最後に更新した時刻。 */
+  at: isoDateTime,
+  worktrees: z.array(rescueWorktreeSchema),
+});
+export type LastRescue = z.infer<typeof lastRescueSchema>;
+
+/**
  * `unpushed-work-observation-format.ts` の
  * {@link UnpushedWorkObservationIncompletenessLike}（手書き）が、この zod
  * スキーマの `kind: 'observed'` 変種と構造的に一致することの強制
@@ -3989,6 +4069,13 @@ export const jobSchema = z.object({
    * {@link lastUnpushedWorkObservationSchema} の doc を見よ。
    */
   lastUnpushedWorkObservation: lastUnpushedWorkObservationSchema.optional(),
+  /**
+   * 走行中に定期的に退避 ref を push した記録（Issue #1266）。
+   * {@link lastRescueSchema} の doc を見よ。`lastUnpushedWorkObservation` とは
+   * 別の欄にしてある——あちらは「いま何が未 push か」の観測で新しいほうが勝つ
+   * 上書き、こちらは作業ツリーごとに積み増す。
+   */
+  lastRescue: lastRescueSchema.optional(),
 });
 
 export type Job = z.infer<typeof jobSchema>;

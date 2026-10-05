@@ -7,7 +7,7 @@ import { CREDENTIAL_NAME_MAX_LENGTH } from './credentials.js';
 import { excerptLine } from './excerpt.js';
 import type { McpServers } from './mcp-servers.js';
 import { type RunnerRevisionReport } from './revision.js';
-import { contextUsageObservationSchema, jobStatusSchema } from './schema.js';
+import { contextUsageObservationSchema, jobStatusSchema, rescueWorktreeSchema } from './schema.js';
 import { systemErrorFactsSchema } from './system-error.js';
 import { rateLimitFactsSchema, usageLimitNoticeSchema } from './usage-limits.js';
 import { usageTotalsSchema } from './usage.js';
@@ -2096,6 +2096,27 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
     type: z.literal('shutdown_unpushed_work'),
     managerId: z.string(),
     unpushedWork: runnerUnpushedWorkOutcomeSchema,
+  }),
+  /**
+   * 走行中の定期的な退避 ref の push の結果（Issue #1266。
+   * `packages/core/src/rescue-ref.ts`）。
+   *
+   * runner の中のタイマーが、作業ツリーを動かさずに（一時 index → tree →
+   * commit-tree）`refs/alteroid-rescue/<委譲id>/<短い名>` へ force push する。
+   * **走行中に届く経路で運ぶ**——`closed` / `shutdown_unpushed_work` は器が
+   * 入れ替わる最後の瞬間にしか出ず、届かないことがある（#2749 の競走）。
+   *
+   * 運ぶのは**前回から変わった作業ツリーだけ**（同じ結果の繰り返しは送らない）。
+   * 台帳側（`manager.ts` の `case 'rescue_ref'`）は `relativePath` ごとに
+   * 置き換え、`pushed` は新しい回が持たなければ前のものを残す。
+   * 未追跡のパスは名前だけを運ぶ（中身は運ばない。オーナー決定 2026-10-05）。
+   * **旧 daemon との組み合わせ**: 未知の type は daemon の `safeParse` で落ち、
+   * `RunnerDroppedEventReport` に残るだけで接続は切れない。
+   */
+  z.object({
+    type: z.literal('rescue_ref'),
+    managerId: z.string(),
+    worktrees: z.array(rescueWorktreeSchema),
   }),
   /**
    * 作業者の道具が長く実行中である（Issue #2725）。**日誌には書かない**
