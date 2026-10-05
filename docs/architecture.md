@@ -363,6 +363,13 @@ type WorkspaceLocator =
 トランスクリプトの置き場など）を台帳に持たないこと** — runner が入れ替わった瞬間に嘘になる。
 生ログへは runner の API → アーカイブ → 預かったセッションの生ログ、の順で降りる。
 
+**作業ツリーの退避 ref（#1266。`packages/core/src/rescue-ref.ts`）。** runner の器が入れ替わると、未 push の作業ツリーは消える。**走行中に runner が一定の周期（既定5分。`ALTEROID_RESCUE_INTERVAL_MS`）で、作業ツリーを動かさずに** `origin` の `refs/alteroid-rescue/<委譲id>/<作業ツリーの短い名>` へ force push する（`refs/heads/` ではない。PR も CI も起きない）。畳む直前（shutdown）にも1回撃つ。
+
+- **送るのは追跡済みの変更まで**: 未 push のコミット（HEAD）と、追跡済みファイルの未コミットの変更（`git add -u` 相当）。一時 index → `write-tree` → `commit-tree` で作るので、実 index・HEAD・reflog・作業ツリーに触れず、`index.lock` も握らない。**未追跡のファイルは送らない**（オーナー決定 2026-10-05。repo が public なので、未追跡の自動送信も可視性での出し分けもしない）。submodule の中の変更も送らない
+- **送る前の歯**: 差分（HEAD に対する差分と、origin に無い未 push コミットの差分）の追加行を、リポジトリの伏せ字の判定（`redactSecretsInBody`）に通し、鍵らしい文字列があればその回は送らない。差分が上限（2MiB）を超えたら判定を打ち切って送らない側に倒す。資格（`GH_TOKEN`）が無い構成（`scope: 'app'` 等）でも送らない
+- **台帳**（`Job.lastRescue`。`rescue_ref` イベントで走行中に届く）: 作業ツリーごとに、最後に成功した退避 ref の名前・sha・時刻、直近の回に送らなかった理由（鍵らしい文字列〔ファイル名だけ〕・資格なし・push 失敗の分類 など）、**退避されなかったもの**（未追跡の件数と、上限つきのパスの名前。中身は出さない。submodule の件数）。`manager_list` の「未push観測」の隣に出る
+- **まだやらないこと**: 再開の案内（`restartNudge` など）が退避 ref を指すこと、退避 ref の後始末（削除）は別の仕事である。退避 ref は残る
+
 - **fs を先に作る**。記憶が Markdown ファイルであることは「人間がいつでも読んで直せる」（提供価値1）の最短の実装
 - SDK セッション自体の永続化は SessionStore アダプタ（SDK 公式）で同じ PostgreSQL に載せる。デーモン再起動時は JobStore の session_id からマネージャーを resume する
 

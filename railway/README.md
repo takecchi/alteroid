@@ -47,7 +47,7 @@ M4 受け入れ基準3の「runner から Persona 用 DB へ接続できない�
 
 その代わり、次の2つが毎デプロイで消える。
 
-- マネージャーの作業ディレクトリ（コミットしていない変更は失われる）
+- マネージャーの作業ディレクトリ（コミットしていない変更は失われる。**ただし追跡済みの変更と未 push のコミットは、走行中に定期的に `origin` の `refs/alteroid-rescue/<委譲id>/…` へ退避される**〔下記〕。未追跡のファイルは退避されない）
 - `/workspace/.mcp.json`（＝MCP 連携）
 
 **MCP 連携はボリュームを付けずに渡せる**（#325）。登録（`.mcp.json` の `mcpServers` と同じ形）を `PUT /mcp-servers` で記憶ストアへ置けば、クローンへは次のセッションから、マネージャー・作業者へは runner の名乗り（`hello`）のたびにデーモンが降ろしたうえで次に開くセッションから届く（SDK の `Options.mcpServers`）。器を作り直しても正本は PostgreSQL に在るので消えない。`/workspace/.mcp.json` は従来どおり読まれるが、毎デプロイで消えるのは変わらない。人間の口は `alteroid mcp`（`railway ssh --service app -- alteroid mcp edit` など）と Web UI の「MCP 連携」。
@@ -55,6 +55,8 @@ M4 受け入れ基準3の「runner から Persona 用 DB へ接続できない�
 記憶・日誌・ジョブ・生ログは PostgreSQL にあるので、**ボリュームは1つも要らない**。`ALTEROID_HOME`（`/data/alteroid`）に残るのは `state/daemon.json` と `daemon.log` だけで、これは CLI がデーモンを見つける手段であって記憶ではない。
 
 **消えたことは黙っていない。** runner が入れ替わった後の再開では、マネージャーに「作業ディレクトリが残っているとは限らない」と伝え、クローンへの通知にも「コミット前の変更は失われている」と書く（`packages/core/src/manager.ts` の `restartNudge` / `#notifyRestored`）。黙って再開させると、消えた作業を書いたつもりで続きを進める。
+
+**退避 ref（#1266）。** 上の「消える」を減らすため、runner は走行中に既定5分ごと（`ALTEROID_RESCUE_INTERVAL_MS`、ms）と畳む直前に、各作業ツリーの**追跡済みの変更と未 push のコミット**を、作業ツリーを動かさずに `origin` の `refs/alteroid-rescue/<委譲id>/<作業ツリーの短い名>` へ force push する。使うのは runner の子に届いている `GH_TOKEN`（`/etc/gitconfig` の credential helper）で、**マネージャーに鍵が無い構成（`scope: 'app'`）では送らず**、台帳（`manager_list` の「退避 ref」）に「資格が無いので退避できなかった」と残る。差分に鍵らしい文字列があれば、その回は送らず日誌と台帳に残す。**未追跡のファイルは送られない**（件数と名前だけが台帳に残る。repo が public であることへの配慮でオーナーが決めた）。退避 ref は `refs/heads/` の外なので PR も CI も起きないが、**自動では削除されない**（後始末は別の仕事）。取り戻すには `git fetch origin 'refs/alteroid-rescue/<委譲id>/*:refs/alteroid-rescue/<委譲id>/*'` のあと、`git checkout <ref>` か `git cherry-pick` を使う。
 
 roadmap M5 受け入れ基準4の後半（「復旧不能な未永続状態を人間へ明示できる」）はこれで満たすが、**前半（workspace から継続できる）はまだ来ていない**。倒すなら `/workspace` にボリュームを付けて所有者を uid 1001 に揃える。
 
