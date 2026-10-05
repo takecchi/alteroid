@@ -454,6 +454,7 @@ describe('managerSummarySchema と ManagerSummary のキーの一致（再発防
       live: true,
       runnerLostSince: true,
       runnerVanished: true,
+      runnerListedAt: true,
       sessionMissingSince: true,
       sessionMissingKind: true,
       shutdownObservationArrivedAfterSwap: true,
