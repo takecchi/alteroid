@@ -294,6 +294,7 @@ import {
   describeUnpushedWorkObservationIncompleteness,
   describeUnpushedWorkObservationProvenance,
   describeUnpushedWorkObservationSource,
+  isEmptyCompleteUnpushedWorkObservation,
   UNPUSHED_WORK_SHUTDOWN_OBSERVATION_NOT_ARRIVED_NOTE,
 } from './unpushed-work-observation-format.js';
 import { RESCUE_NOT_PUSHED_TEXT } from './workspace-swap-hints.js';
@@ -4094,6 +4095,8 @@ function describeUnpushedWorkObservationOnly(manager: ManagerSummary): string | 
           observation.reason
         );
       }
+      // 作業ツリー0本で探索の失敗も無いなら行を省く（Issue #2970）。
+      if (isEmptyCompleteUnpushedWorkObservation(observation)) return null;
       return (
         `  未push観測: 器が止まる直前（${observation.at}）の観測: ` +
         formatUnpushedWorkObservationWorktrees(observation.worktrees) +
@@ -4111,6 +4114,8 @@ function describeUnpushedWorkObservationOnly(manager: ManagerSummary): string | 
   }
 
   if (observation === undefined) return null;
+  // 作業ツリー0本で探索の失敗も無いなら行を省く（Issue #2970。git を使わない仕事に毎回出さない）。
+  if (isEmptyCompleteUnpushedWorkObservation(observation)) return null;
   const provenance = describeUnpushedWorkObservationProvenance(observation.source, 'manager_list');
   if (observation.kind === 'unavailable') {
     return (
@@ -10984,7 +10989,8 @@ export function createCloneTools(context: ToolContext) {
           .describe(
             'いまターンの途中（status: running）の委譲でも止める。既定（false/省略）だと、' +
               'running の委譲は abort を呼ばずに断って理由を返す——畳むと、そのターンが抱えて' +
-              'いる進行中の作業（未 push の実装・起こした作業者・監視中の CI）が失われるため。' +
+              'いる進行中の作業（起こした作業者など。作業ツリーが見つかれば未 push の実装・監視中の CI も）が' +
+              '失われるため。' +
               '止める前に一覧を読めなかったとき（走行中か判定できない）も同じく断る。' +
               '断りを読んだうえで、それでも畳んでよいと判断したら true で呼び直すこと。',
           ),
@@ -11021,8 +11027,8 @@ export function createCloneTools(context: ToolContext) {
         if (beforeLookup.kind === 'unreadable' && force !== true) {
           return text(
             `[${managerId}] 止めていない。**いまの状態を一覧から読めなかった**ので、` +
-              '走行中（running）かどうか判定できない — 走行中なら、畳むと未 push の実装・' +
-              '起こした作業者・監視中の CI が失われる。\n' +
+              '走行中（running）かどうか判定できない — 走行中なら、畳むと、そのターンの' +
+              '進行中の作業（起こした作業者など）が失われる。\n' +
               `読めなかった原因: ${beforeLookup.reason}\n` +
               'manager_list で状態を確かめること。読めても判断が同じなら、🔴 force: true で' +
               '呼び直すと止まる。',
@@ -11079,9 +11085,25 @@ export function createCloneTools(context: ToolContext) {
               reason: `確かめようとして例外が飛んだ: ${reasonOf(error)}`,
             }));
 
+          // **具体（未 push・CI）は、作業ツリーが1本以上見つかったか、探索に失敗した
+          // ときだけ足す（Issue #2970）。** 作業ツリー0本で失敗も無い仕事（git を使わない
+          // 仕事）に、git/CI 前提の文面を毎回出さない。拒否する条件は変えない。
+          const gitConcrete =
+            unpushedWork.kind === 'unavailable' ||
+            !isEmptyCompleteUnpushedWorkObservation({
+              kind: 'observed',
+              worktrees: unpushedWork.result.worktrees,
+              truncatedAtCount: unpushedWork.result.truncatedAtCount,
+              stoppedEarly: unpushedWork.result.stoppedEarly,
+              scratchRootsUnknown: unpushedWork.result.scratchRootsUnknown,
+              unreadableDirCount: unpushedWork.result.unreadableDirCount,
+            });
           return text(
-            `[${managerId}] 止めていない。**いまターンの途中**（running）— 畳むと未 push の実装・` +
-              '起こした作業者・監視中の CI が失われる。🔴 force: true で止まる。\n' +
+            `[${managerId}] 止めていない。**いまターンの途中**（running）— 畳むと、そのターンの進行中の作業が失われる` +
+              (gitConcrete
+                ? '（未 push の実装・起こした作業者・監視中の CI など）'
+                : '（起こした作業者など）') +
+              '。🔴 force: true で止まる。\n' +
               `${lastReportLine} ターンの中身は manager_report で先に読めること。\n` +
               describeUnpushedWork(unpushedWork),
           );

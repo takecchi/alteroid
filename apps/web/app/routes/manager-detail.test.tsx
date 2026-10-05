@@ -1784,6 +1784,39 @@ describe('診断（クローンの manager_list / manager_report と同じ材料
   });
 
   describe('lastUnpushedWorkObservation（Issue #1266）', () => {
+    it('作業ツリー0本で探索の失敗も無い観測は「未push観測」の行を出さない（Issue #2970）', async () => {
+      renderDetail({
+        ...BASE,
+        status: 'done',
+        lastUnpushedWorkObservation: {
+          kind: 'observed',
+          at: '2026-08-16T03:50:00.000Z',
+          cwd: '/work/project',
+          worktrees: [],
+        },
+      });
+
+      expect(await screen.findByText('待機中')).toBeTruthy();
+      expect(screen.queryByText(/未push観測/)).toBeNull();
+    });
+
+    it('作業ツリー0本でも読み残しが在れば「未push観測」を出す（Issue #2970）', async () => {
+      renderDetail({
+        ...BASE,
+        status: 'done',
+        lastUnpushedWorkObservation: {
+          kind: 'observed',
+          at: '2026-08-16T03:50:00.000Z',
+          cwd: '/work/project',
+          worktrees: [],
+          unreadableDirCount: 2,
+        },
+      });
+
+      expect(await screen.findByText(/未push観測/)).toBeTruthy();
+      expect(screen.getByText(/見つかった作業ツリー0本/)).toBeTruthy();
+    });
+
     it('unavailable なら理由と時刻を出す', async () => {
       renderDetail({
         ...BASE,
@@ -1993,7 +2026,11 @@ describe('診断（クローンの manager_list / manager_report と同じ材料
         renderDetail({
           ...BASE,
           status: 'done',
-          lastUnpushedWorkObservation: STALE_OBSERVED,
+          // 作業ツリー0本の観測は行ごと省かれる（Issue #2970）ので、1本以上のものにする。
+          lastUnpushedWorkObservation: {
+            ...STALE_OBSERVED,
+            worktrees: [{ relativePath: '.', branch: 'feat/x' }],
+          },
         });
 
         expect(

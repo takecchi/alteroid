@@ -6403,6 +6403,69 @@ describe('クローンの道具', () => {
     expect(reply).toContain('force');
   });
 
+  /** Issue #2970 — 作業ツリー0本で失敗も無いなら、git/CI 前提の具体は足さない（拒否は変わらない）。 */
+  it('manager_stop の running 断りは、作業ツリー0本で失敗も無いとき「未 push」「CI」を足さない', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    h.setUnpushedWork('mgr-1', { kind: 'ok', result: { cwd: '/workspace', worktrees: [] } });
+
+    const reply = await h.call('manager_stop', { managerId: 'mgr-1', reason: '確認' });
+
+    expect(reply).toContain('止めていない');
+    expect(reply).toContain('そのターンの進行中の作業が失われる');
+    expect(reply).toContain('起こした作業者');
+    expect(reply).toContain('force: true');
+    expect(reply).not.toContain('監視中の CI');
+    expect(reply).not.toContain('未 push の実装・起こした作業者');
+    expect(h.aborted).toEqual([]);
+  });
+
+  it('manager_stop の running 断りは、作業ツリーが1本以上・探索の失敗・読み残しのとき「未 push」「CI」を足す', async () => {
+    const cases: {
+      name: string;
+      probe: Parameters<ReturnType<typeof harness>['setUnpushedWork']>[1];
+    }[] = [
+      {
+        name: '1本以上',
+        probe: {
+          kind: 'ok',
+          result: {
+            cwd: '/workspace',
+            worktrees: [
+              {
+                relativePath: 'mgr-1/repo',
+                branch: 'main',
+                unpushedCommitCount: 1,
+                uncommittedChangeCount: 0,
+              },
+            ],
+          },
+        },
+      },
+      { name: '探索の失敗', probe: { kind: 'unavailable', reason: '模擬' } },
+      {
+        name: '0本でも読み残し',
+        probe: {
+          kind: 'ok',
+          result: {
+            cwd: '/workspace',
+            worktrees: [],
+            scratchRootsUnknown: '確かめられなかった（EACCES）',
+          },
+        },
+      },
+    ];
+    for (const c of cases) {
+      const h = harness();
+      await h.call('manager_start', { request: 'A' });
+      h.setUnpushedWork('mgr-1', c.probe);
+      const reply = await h.call('manager_stop', { managerId: 'mgr-1', reason: '確認' });
+      expect(reply, c.name).toContain('そのターンの進行中の作業が失われる');
+      expect(reply, c.name).toContain('未 push の実装・起こした作業者・監視中の CI');
+      expect(h.aborted, c.name).toEqual([]);
+    }
+  });
+
   /**
    * ⭐ #1765 段2 — `scratchRootsUnknown`（`findManagerScratchRoots` が
    * `/tmp` を読めなかった）が載っているとき、見つかった作業ツリーの一覧は
@@ -7733,6 +7796,46 @@ describe('クローンの道具', () => {
     const reply = await h.call('manager_list', {});
 
     expect(reply).not.toContain('未push観測');
+  });
+
+  it('manager_list は作業ツリー0本で探索の失敗も無い観測では「未push観測」を省く・1本以上/失敗/読み残しなら出す（Issue #2970）', async () => {
+    const base = {
+      at: '2026-09-26T12:00:00.000Z',
+      source: 'report' as const,
+      cwd: '/workspace/mgr-1',
+    };
+    const cases: {
+      name: string;
+      obs: NonNullable<ManagerSummary['lastUnpushedWorkObservation']>;
+      shown: boolean;
+    }[] = [
+      { name: '0本・失敗なし', obs: { kind: 'observed', ...base, worktrees: [] }, shown: false },
+      {
+        name: '1本',
+        obs: {
+          kind: 'observed',
+          ...base,
+          worktrees: [{ relativePath: 'mgr-1/repo', branch: 'main' }],
+        },
+        shown: true,
+      },
+      { name: '取れなかった', obs: { kind: 'unavailable', ...base, reason: '模擬' }, shown: true },
+      {
+        name: '0本・読み残し',
+        obs: { kind: 'observed', ...base, worktrees: [], unreadableDirCount: 2 },
+        shown: true,
+      },
+    ];
+    for (const c of cases) {
+      const h = harness();
+      await h.call('manager_start', { request: 'A' });
+      const target = h.running[0];
+      if (!target) throw new Error('準備に失敗');
+      target.lastUnpushedWorkObservation = c.obs;
+      const reply = await h.call('manager_list', {});
+      if (c.shown) expect(reply, c.name).toContain('未push観測');
+      else expect(reply, c.name).not.toContain('未push観測');
+    }
   });
 
   /**

@@ -314,6 +314,32 @@ describe('manager_report は manager_list の3軸を継承する（Issue #1847�
     expect(reply).not.toContain('未push観測');
   });
 
+  /** Issue #2970 — 作業ツリー0本で探索の失敗も無い観測は manager_report でも省く。失敗があれば出す。 */
+  it('作業ツリー0本で探索の失敗も無い観測は manager_report でも省き、読み残しが在れば出す', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    const target = h.running[0]!;
+    target.lastReport = '途中経過';
+    target.lastUnpushedWorkObservation = {
+      kind: 'observed',
+      at: '2026-09-20T00:00:00.000Z',
+      cwd: '/workspace/mgr-1',
+      worktrees: [],
+    };
+    const empty = await h.call('manager_report', { managerId: target.managerId });
+    expect(empty).not.toContain('未push観測');
+
+    target.lastUnpushedWorkObservation = {
+      kind: 'observed',
+      at: '2026-09-20T00:00:00.000Z',
+      cwd: '/workspace/mgr-1',
+      worktrees: [],
+      unreadableDirCount: 1,
+    };
+    const incomplete = await h.call('manager_report', { managerId: target.managerId });
+    expect(incomplete).toContain('未push観測');
+  });
+
   /**
    * **報告が一度も届いていない回（body が空）でも、3軸は独立して出る。**
    * 「報告が空だからこちらも出さない」にはしない——`describeManagerSystemError`

@@ -157,3 +157,27 @@ export function describeUnpushedWorkObservationProvenance(
 export const UNPUSHED_WORK_SHUTDOWN_OBSERVATION_NOT_ARRIVED_NOTE =
   '⚠ 未push観測: 器が止まる直前の観測は届いていない' +
   '（best-effort の送信のため。未pushが無かったことを意味しない）。';
+
+/**
+ * 「作業ツリーが0本で、探索の失敗も無い」観測か（Issue #2970）。
+ * 真のとき、表示側（`manager_list` / `manager_report` / Web UI）は「未push観測」の
+ * 行を**省く**——作業ツリーを使わない（git を使わない）仕事に、git 前提の行を
+ * 毎回出さないため。`unavailable`（探索そのものの失敗）や、`observed` でも
+ * 打ち切り・読み失敗の4欄が載っているもの、作業ツリーが1本以上あるものは偽
+ * （＝今までどおり出す）。判定はここ1箇所に置く。
+ */
+export function isEmptyCompleteUnpushedWorkObservation(observation: {
+  readonly kind: string;
+  readonly worktrees?: readonly unknown[];
+  readonly truncatedAtCount?: number;
+  readonly stoppedEarly?: true;
+  readonly scratchRootsUnknown?: string;
+  readonly unreadableDirCount?: number;
+}): boolean {
+  return (
+    observation.kind === 'observed' &&
+    observation.worktrees !== undefined &&
+    observation.worktrees.length === 0 &&
+    describeUnpushedWorkObservationIncompleteness(observation) === null
+  );
+}

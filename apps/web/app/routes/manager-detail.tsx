@@ -83,6 +83,7 @@ import {
   describeUnpushedWorkObservationIncompleteness,
   describeUnpushedWorkObservationProvenance,
   describeUnpushedWorkObservationSource,
+  isEmptyCompleteUnpushedWorkObservation,
   UNPUSHED_WORK_SHUTDOWN_OBSERVATION_NOT_ARRIVED_NOTE,
 } from '@alteroid/core/unpushed-work-observation-format';
 import type { ManagerDenial, ManagerStatus, ManagerSummary } from '@alteroid/logic';
@@ -1125,7 +1126,8 @@ function resetTimeSkewText(manager: ManagerSummary): ReactNode | null {
   const value = manager.resetTimeSkewMatch;
   if (value === undefined) return null;
   if (value === 'stale') {
-    const hasUnpushedWorkObservation = manager.lastUnpushedWorkObservation !== undefined;
+    const hasUnpushedWorkObservation =
+      manager.lastUnpushedWorkObservation !== undefined && unpushedWorkText(manager) !== null;
     return (
       <>
         ⚠ 認証トークンの世代ずれの疑い（429の文言に書かれていた resets 時刻が、現役ではない鍵の
@@ -1199,6 +1201,8 @@ function unpushedWorkText(manager: ManagerSummary): ReactNode | null {
         return `未push観測: 器が止まる直前（${formatDateTime(observation.at)}）に取ろうとしたが取れなかった: ${redactBody(observation.reason)}`;
       }
       if (observation.kind === 'observed') {
+        // 作業ツリー0本で探索の失敗も無いなら行を省く（Issue #2970）。
+        if (isEmptyCompleteUnpushedWorkObservation(observation)) return null;
         return observedUnpushedWorkNode(
           `未push観測: 器が止まる直前（${formatDateTime(observation.at)}）の観測:`,
           observation,
@@ -1246,6 +1250,8 @@ function unpushedWorkText(manager: ManagerSummary): ReactNode | null {
   }
   // 以降は、器の入れ替えで応答不能ではない委譲（と、知らない kind）。
   if (observation === undefined) return null;
+  // 作業ツリー0本で探索の失敗も無いなら行を省く（Issue #2970）。
+  if (isEmptyCompleteUnpushedWorkObservation(observation)) return null;
 
   const provenance = describeUnpushedWorkObservationProvenance(observation.source);
 
