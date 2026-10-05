@@ -1428,7 +1428,32 @@ export function createMemoryStores(): Stores {
   /** 会話の既読の位置と基準時刻（インメモリ。契約は `conversation-read.ts`）。 */
   let conversationReadBaseline: string | null = null;
   const conversationReadPositions = new Map<string, ConversationReadPosition>();
+  let outboundWatermark: string | null = null;
+  const outboundLatest = new Map<string, string>();
   const conversationReads: ConversationReadStore = {
+    async readOutboundIndex() {
+      return {
+        state: 'ok',
+        watermark: outboundWatermark,
+        lastOutbound: Object.fromEntries(outboundLatest),
+      };
+    },
+    async mergeOutboundIndex(update) {
+      if (
+        update.watermark !== null &&
+        (outboundWatermark === null || compareIsoInstant(update.watermark, outboundWatermark) > 0)
+      ) {
+        outboundWatermark = update.watermark;
+      }
+      for (const [id, at] of Object.entries(update.lastOutbound)) {
+        const known = outboundLatest.get(id);
+        if (known === undefined || compareIsoInstant(at, known) > 0) outboundLatest.set(id, at);
+      }
+    },
+    async clearOutboundIndex() {
+      outboundWatermark = null;
+      outboundLatest.clear();
+    },
     async read() {
       return {
         state: 'ok',

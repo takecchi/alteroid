@@ -717,6 +717,40 @@
         ]
       }
     },
+    "/conversations/unread-count": {
+      "get": {
+        "operationId": "getConversationsUnreadCount",
+        "tags": ["conversations"],
+        "summary": "未読のある会話の数",
+        "description": "未読のある会話の数（全会話で数える。直近の一覧には限らない）。**日誌を広く遡らない** — 会話ごとの最後のクローン側発言の時刻の索引（日誌の写し）を、前回の続きから新しく積まれた分だけ足して数える。未読の会話が上限（99）を超えるとき、または長い不在のあとの取り込みが1回に収まらないときは `capped: true`（`count` は下限。UI は「N+」）。一覧の `unreadCount` との差が出うるのは、編集で畳まれた返答が会話の最後のクローン側発言のとき（その会話を開いて既読にすれば揃う）。既読の記録が読めないときは `readStateUnreadable` が載る。",
+        "responses": {
+          "200": {
+            "description": "未読のある会話の数。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "count": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "capped": {
+                      "type": "boolean"
+                    },
+                    "readStateUnreadable": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["count", "capped"]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/conversations/{id}": {
       "get": {
         "operationId": "getConversationsById",

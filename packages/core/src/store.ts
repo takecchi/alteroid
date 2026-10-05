@@ -5,6 +5,8 @@ import type { ArchiveContinuity } from './archive-continuity.js';
 import type { AuthStore } from './auth.js';
 import type {
   ConversationBaselineResult,
+  ConversationOutboundIndex,
+  ConversationOutboundIndexRead,
   ConversationReadPosition,
   ConversationReadRead,
 } from './conversation-read.js';
@@ -783,6 +785,15 @@ export interface ConversationReadStore {
    * この会話の位置で書き直す。返すのは書いた後の位置。
    */
   advance(conversationId: string, readThrough: string): Promise<ConversationReadPosition>;
+  /** 「会話ごとの最後のクローン側発言の時刻」の索引（`ConversationOutboundIndex`）。 */
+  readOutboundIndex(): Promise<ConversationOutboundIndexRead>;
+  /**
+   * 索引へ足す。**単調**——会話ごとの時刻と `watermark` は、古い値では戻らない
+   * （`watermark: null` は「進めない」）。位置・基準時刻には触れない。
+   */
+  mergeOutboundIndex(update: ConversationOutboundIndex): Promise<void>;
+  /** 索引だけを空にする（`POST /reset` が日誌を消すとき、消えた会話を未読に数え続けないため）。 */
+  clearOutboundIndex(): Promise<void>;
 }
 
 /** ジョブと承認待ちキュー。M1 では承認待ちだけを使う。 */

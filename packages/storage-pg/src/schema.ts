@@ -977,4 +977,15 @@ export const conversationRead = pgTable('conversation_read', {
 export const conversationReadBaseline = pgTable('conversation_read_baseline', {
   id: text('id').primaryKey(),
   at: timestamp('at', { withTimezone: true, mode: 'date' }).notNull(),
+  /** 索引の取り込み済みの印（`ConversationOutboundIndex.watermark`）。 */
+  scannedThrough: timestamp('scanned_through', { withTimezone: true, mode: 'date' }),
+});
+
+/**
+ * 会話ごとの最後のクローン側発言の時刻（日誌の写し。`ConversationOutboundIndex`）。
+ * 未読のある会話の数を、日誌を広く遡らずに数えるためのもの。
+ */
+export const conversationOutboundLatest = pgTable('conversation_outbound_latest', {
+  conversationId: text('conversation_id').primaryKey(),
+  at: timestamp('at', { withTimezone: true, mode: 'date' }).notNull(),
 });

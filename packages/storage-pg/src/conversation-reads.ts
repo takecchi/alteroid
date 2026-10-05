@@ -1,5 +1,7 @@
 import type {
   ConversationBaselineResult,
+  ConversationOutboundIndex,
+  ConversationOutboundIndexRead,
   ConversationReadPosition,
   ConversationReadRead,
   ConversationReadStore,
@@ -7,7 +9,11 @@ import type {
 import { eq, sql } from 'drizzle-orm';
 
 import type { Db } from './db.js';
-import { conversationRead, conversationReadBaseline } from './schema.js';
+import {
+  conversationOutboundLatest,
+  conversationRead,
+  conversationReadBaseline,
+} from './schema.js';
 
 /** 高々1行しか持たない表なので、鍵は固定でよい（`env_profile` と同じ作法）。 */
 const BASELINE_ID = 'default';
@@ -89,5 +95,56 @@ export class PgConversationReadStore implements ConversationReadStore {
     const row = rows[0];
     if (row === undefined) throw new Error('conversation_read への書き込みが行を返さなかった');
     return { readThrough: row.readThrough.toISOString(), updatedAt: row.updatedAt.toISOString() };
+  }
+
+  async readOutboundIndex(): Promise<ConversationOutboundIndexRead> {
+    const marks = await this.#db
+      .select({ scannedThrough: conversationReadBaseline.scannedThrough })
+      .from(conversationReadBaseline)
+      .where(eq(conversationReadBaseline.id, BASELINE_ID))
+      .limit(1);
+    const rows = await this.#db
+      .select({
+        conversationId: conversationOutboundLatest.conversationId,
+        at: conversationOutboundLatest.at,
+      })
+      .from(conversationOutboundLatest);
+    return {
+      state: 'ok',
+      watermark: marks[0]?.scannedThrough?.toISOString() ?? null,
+      lastOutbound: Object.fromEntries(
+        rows.map((row) => [row.conversationId, row.at.toISOString()]),
+      ),
+    };
+  }
+
+  async mergeOutboundIndex(update: ConversationOutboundIndex): Promise<void> {
+    const entries = Object.entries(update.lastOutbound);
+    if (entries.length > 0) {
+      await this.#db
+        .insert(conversationOutboundLatest)
+        .values(entries.map(([conversationId, at]) => ({ conversationId, at: new Date(at) })))
+        .onConflictDoUpdate({
+          target: conversationOutboundLatest.conversationId,
+          set: { at: sql`greatest(${conversationOutboundLatest.at}, excluded.at)` },
+        });
+    }
+    if (update.watermark !== null) {
+      // 基準時刻の行が無ければ作らない（基準時刻は `ensureBaseline` だけが決める）。
+      await this.#db
+        .update(conversationReadBaseline)
+        .set({
+          scannedThrough: sql`greatest(coalesce(${conversationReadBaseline.scannedThrough}, ${new Date(update.watermark)}), ${new Date(update.watermark)})`,
+        })
+        .where(eq(conversationReadBaseline.id, BASELINE_ID));
+    }
+  }
+
+  async clearOutboundIndex(): Promise<void> {
+    await this.#db.delete(conversationOutboundLatest);
+    await this.#db
+      .update(conversationReadBaseline)
+      .set({ scannedThrough: null })
+      .where(eq(conversationReadBaseline.id, BASELINE_ID));
   }
 }

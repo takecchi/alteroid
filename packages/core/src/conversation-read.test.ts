@@ -1,6 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  countUnreadConversations,
   loadConversationReadView,
   verifyConversationReadStoreContract,
 } from './conversation-read.js';
@@ -134,5 +135,53 @@ describe('countUnread / effectiveReadThrough / collectConversations', () => {
       unread: 1,
       readThrough: null,
     });
+  });
+});
+
+describe('countUnreadConversations', () => {
+  const T = (s: number) =>
+    new Date(Date.parse('2026-10-01T00:00:00.000Z') + s * 1000).toISOString();
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('1回の取り込みに収まらなければ capped で、次の呼び出しが続きから読んで収束する', async () => {
+    const stores = createMemoryStores();
+    await stores.conversationReads.ensureBaseline(T(0));
+    // 同じ時刻の発言だけで chunk が埋まると先へ進めないので、1件ずつ時刻をずらす。
+    vi.useFakeTimers({ toFake: ['Date'] });
+    for (let i = 0; i < 6; i += 1) {
+      vi.setSystemTime(Date.parse(T(1 + i)));
+      await stores.journal.append({
+        type: 'exchange',
+        with: 'human',
+        role: 'outbound',
+        text: 'x',
+        conversationId: `c${i}`,
+      });
+    }
+    const deps = { journal: stores.journal, reads: stores.conversationReads, now: T(1000) };
+    const first = await countUnreadConversations(deps, { chunk: 2, maxChunks: 1 });
+    expect(first.capped).toBe(true);
+    const second = await countUnreadConversations(deps, { chunk: 2, maxChunks: 10 });
+    expect(second).toEqual({ count: 6, capped: false });
+  });
+
+  it('索引を消すと（リセット後）、消えた会話を数えない', async () => {
+    const stores = createMemoryStores();
+    await stores.conversationReads.ensureBaseline(T(0));
+    await stores.journal.append({
+      type: 'exchange',
+      with: 'human',
+      role: 'outbound',
+      text: 'x',
+      conversationId: 'c',
+    });
+    const deps = { journal: stores.journal, reads: stores.conversationReads, now: T(1000) };
+    expect((await countUnreadConversations(deps)).count).toBe(1);
+    await stores.journal.clear();
+    await stores.conversationReads.clearOutboundIndex();
+    expect((await countUnreadConversations(deps)).count).toBe(0);
   });
 });
