@@ -166,6 +166,15 @@ export interface TopologyLayout {
   empty?: Box;
 }
 
+/**
+ * 器の枠に出す名前。**利用者に見える名前は日本語にする**（内部の呼び名 alteroidd・db は出さない）。
+ * 正式な英字の名前は枠のツールチップ（`system-topology.tsx` の `CONTAINER_HINT`）に残す。鍵（`db` / `daemon`）は変えない。
+ */
+export const DB_CONTAINER_LABEL = '記憶の置き場';
+export const DAEMON_CONTAINER_LABEL = 'alteroid 本体';
+/** 人間の札の補足。細い札（スマホ幅で 120 幅）に収まる短さにする。 */
+const HUMAN_TASK = '画面・端末';
+
 /** どの生きた器とも突き合わないマネージャーを入れる枠の鍵。 */
 export const UNKNOWN_RUNNER_KEY = 'unknown-runner';
 export const UNKNOWN_RUNNER_LABEL = '器の分からない委譲';
@@ -287,7 +296,7 @@ function baseNodes(scene: TopologyScene) {
       kind: 'human',
       box,
       label: scene.human?.label ?? 'あなた',
-      task: 'Web UI / CLI',
+      task: HUMAN_TASK,
       edges: ['human'],
     }),
     db: (box: Box): LaidNode => ({
@@ -304,7 +313,7 @@ function baseNodes(scene: TopologyScene) {
       key: 'clone',
       kind: 'clone',
       box,
-      label: scene.clone.label ?? 'clone',
+      label: scene.clone.label ?? 'クローン',
       task: scene.clone.task,
       status: scene.clone.status,
       details: scene.clone.details,
@@ -465,14 +474,14 @@ export function layoutWide(scene: TopologyScene): TopologyLayout {
       {
         key: 'db',
         box: wrap(dbBox),
-        label: 'db',
+        label: DB_CONTAINER_LABEL,
         state: containerState(scene.db.status),
         labelAlign: 'start',
       },
       {
         key: 'daemon',
         box: wrap(cloneBox),
-        label: scene.daemon?.label ?? 'alteroidd',
+        label: scene.daemon?.label ?? DAEMON_CONTAINER_LABEL,
         state: 'ok',
         labelAlign: 'start',
       },
@@ -631,14 +640,14 @@ export function layoutNarrow(scene: TopologyScene): TopologyLayout {
       {
         key: 'db',
         box: dbContainer,
-        label: 'db',
+        label: DB_CONTAINER_LABEL,
         state: containerState(scene.db.status),
         labelAlign: 'end',
       },
       {
         key: 'daemon',
         box: daemonContainer,
-        label: scene.daemon?.label ?? 'alteroidd',
+        label: scene.daemon?.label ?? DAEMON_CONTAINER_LABEL,
         state: 'ok',
         labelAlign: 'end',
       },

@@ -85,16 +85,10 @@ function Awaiting() {
   );
 }
 
-/** 最新の日報。全幅の枠で、長い本文は高さで切って「続きを読む」へ送る。 */
+/** 最新の日報。全幅の枠で、長い本文は高さで切り、「全文を表示」でその場に広げる。 */
 function ReportCard({ long }: { long?: boolean }) {
   return (
-    <HomeReportCard
-      icon={BookText}
-      title="最新の日報"
-      meta="2026-10-03"
-      action={link('日報一覧')}
-      footer={link('続きを読む（全文）')}
-    >
+    <HomeReportCard icon={BookText} title="最新の日報" meta="2026-10-03" action={link('日報一覧')}>
       <Markdown>{long ? LONG_REPORT_BODY : REPORT_BODY}</Markdown>
     </HomeReportCard>
   );

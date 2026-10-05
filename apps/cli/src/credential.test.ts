@@ -360,6 +360,25 @@ describe('alteroid credential set', () => {
     expect(text).not.toContain(DUMMY);
   });
 
+  it('名前の形が誤りなら、値（空の標準入力でも）より先に、名前の誤りを言う', async () => {
+    const error = await credentialSetCommand('lower_case', {
+      file: join(dir, 'does-not-exist'),
+    }).catch((e: unknown) => e);
+    const text = String(error);
+    expect(text).toContain('名前 <name> は英大文字で始まり');
+    expect(text).toContain('lower_case');
+    expect(text).not.toContain('値が空');
+    expect(sent).toEqual([]);
+  });
+
+  it('-f のファイルが無ければ、素の ENOENT ではなく日本語で言う', async () => {
+    const error = await credentialSetCommand('GOOD_NAME', {
+      file: join(dir, 'does-not-exist'),
+    }).catch((e: unknown) => e);
+    expect(String(error)).toContain('--file で指したファイルを読めない');
+    expect(String(error)).not.toContain('ENOENT');
+  });
+
   it('内側の空白は落とさない（値の一部でありうる）', async () => {
     const path = join(dir, 'value.txt');
     await writeFile(path, 'a b  c\n', 'utf8');

@@ -107,7 +107,7 @@ export default function Schedule() {
   return (
     <Page
       tabs={<ScheduleTabs />}
-      title="スケジュールと外部イベント"
+      title="予定"
       description="決まった時刻に動く依頼と、外部からの知らせを、ここで確かめたり手で起こしたりする"
     >
       <LoadError
