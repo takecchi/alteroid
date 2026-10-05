@@ -1316,6 +1316,13 @@ export interface CloneOptions {
    */
   scheduler?: () => ScheduleStatus[];
   /**
+   * 定期の依頼の発火が、引き受け（`claimRun`）の読み書きの失敗で**動かなかった**ときに呼ぶ
+   * （#2741）。デーモンは `scheduler.retrySoon(kind)` を渡す。スケジューラは発火の時点で
+   * 次回を1周期先へ進めてあるので、これが無いと再起動まで取り戻されない。
+   * 定刻の発火（`schedule`）だけが呼ぶ。手で起こした1回（`manual`）は再試行しない。
+   */
+  onScheduledRunNotStarted?: (kind: string) => void;
+  /**
    * いま自分がどう走っているかの事実（記憶の器・作業ディレクトリ・委譲先・
    * 入口・モデル帯）。システムプロンプトの自己認識の節に載る。
    *
@@ -2295,6 +2302,7 @@ class Clone implements CloneHost {
   readonly #withheldEnvKeys: readonly string[];
   readonly #accountUsage: (() => AccountUsageState) | undefined;
   readonly #scheduler: (() => ScheduleStatus[]) | undefined;
+  readonly #onScheduledRunNotStarted: ((kind: string) => void) | undefined;
   /** {@link CloneOptions.redeliveryGate}。必須（{@link CloneOptions.redeliveryGate} の doc）。 */
   readonly #redeliveryGate: RedeliveryGate;
 
@@ -2325,6 +2333,7 @@ class Clone implements CloneHost {
       mcpServerService,
       accountUsage,
       scheduler,
+      onScheduledRunNotStarted,
       self,
       providerOf,
       mcpServerFactory,
@@ -2361,6 +2370,7 @@ class Clone implements CloneHost {
     this.#withheldEnvKeys = withheldEnvKeys ?? [];
     this.#accountUsage = accountUsage;
     this.#scheduler = scheduler;
+    this.#onScheduledRunNotStarted = onScheduledRunNotStarted;
     this.#self = self;
     this.#providerOf = providerOf ?? knownProviderOf;
     this.#mcpServerFactory = mcpServerFactory ?? createCloneMcpServer;
@@ -8476,6 +8486,11 @@ class Clone implements CloneHost {
             role: 'outbound',
             text: `${EXCHANGE_KIND_DECISION_PREFIX}定期の依頼 ${event.kind} は、この発火では動かない: ${claimed.reason}`,
           });
+          // 「次の発火で読み直す」の次の発火が1周期先では遠すぎる。人間が消した
+          // （`withdrawn`）ものは再試行しない。
+          if (event.cause !== 'manual' && claimed.status !== 'withdrawn') {
+            this.#onScheduledRunNotStarted?.(event.kind);
+          }
           return;
         }
 

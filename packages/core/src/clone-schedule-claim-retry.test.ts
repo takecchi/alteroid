@@ -104,7 +104,8 @@ describe('定期の依頼 — 引き受けに失敗した発火は短い間隔�
     expect(t.scheduler.tick(t.at(due + 10_000))).toEqual([]);
     expect(t.scheduler.tick(t.at(due + MIN))).toEqual(['weekly-check']);
     await waitFor(async () => (await notRunLines(t.stores)).length === 2, '2本目');
-    expect(t.state.claims).toBe(2);
+    // 1発火あたり3回の書き直し（SCHEDULE_STORE_ATTEMPTS）× 2発火
+    expect(t.state.claims).toBe(6);
     await t.clone.stop();
   });
 });

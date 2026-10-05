@@ -111,6 +111,16 @@ export interface Scheduler {
   /** 期限が来たものを起こす。内部タイマーとテストの共通経路。 */
   tick(now?: Date): string[];
   /**
+   * 「この回は動いていない」を受け取り、次回を**短い間隔で**据え直す（#2741）。
+   *
+   * 発火の時点で `#due` は次の周期へ進めてある。引き受け（`claimRun`）が読めない・書けない
+   * で動かなかった回は保存された状態が何も変わらないので、そのままだと再起動まで
+   * 取り戻せない（週次なら1週間）。据え直す先は `SCHEDULE_RETRY_MS` 後で、本来の次回の方が
+   * 早ければそちらを残す。再試行の発火も同じ `claimRun` を通るので、動けば本来の次回へ戻る。
+   * 知らない kind・もう予定の無い kind は何もしない。
+   */
+  retrySoon(kind: string): void;
+  /**
    * 永続化された「定期の依頼」を読み直して、仕込みを合わせる。
    *
    * **クローンや人間が依頼を足す経路をここへ通す。** スケジューラへ直接 add する
@@ -197,6 +207,12 @@ function dueFromSeed(entry: ScheduleEntry, seed: Date, now: Date): { at: Date; c
     catchUp: false,
   };
 }
+
+/**
+ * 引き受けに失敗した回を据え直す間隔（`Scheduler.retrySoon`）。内部タイマーの刻み
+ * （最大1分）と同じ桁で、失敗が続いても再試行は1分に1回を超えない（回数の上限ではなく間隔）。
+ */
+export const SCHEDULE_RETRY_MS = 60_000;
 
 export function createScheduler(options: SchedulerOptions): Scheduler {
   return new TimerScheduler(options);
@@ -562,6 +578,15 @@ class TimerScheduler implements Scheduler {
 
   #entries(): ScheduleEntry[] {
     return [...this.#base, ...[...this.#requests.values()].map((held) => held.entry)];
+  }
+
+  retrySoon(kind: string): void {
+    const due = this.#due.get(kind);
+    if (due === undefined) return;
+    const retryAt = this.#now().getTime() + SCHEDULE_RETRY_MS;
+    if (due <= retryAt) return;
+    this.#due.set(kind, retryAt);
+    this.#arm();
   }
 
   tick(now: Date = this.#now()): string[] {
