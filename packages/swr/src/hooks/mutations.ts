@@ -167,12 +167,35 @@ export function useSaveMemory() {
   );
 }
 
+/**
+ * 記憶を消す。
+ *
+ * `ifMatch` は**読んだ時の版**（`GET /memory/{slug}` の `version`。クエリで送る。Issue #2916 / #2881）。
+ * 渡すと、いまの版と違えば**何も消さず** `MemoryConflictError` を投げる（`current` にいまの版）。
+ * 取り消せない操作なので、衝突しても自動では再送しない——呼び出し側がいまの内容を見せてから
+ * もう一度確認を取る。省略すると従来どおり（デーモンは応答に warning を載せて通す）。
+ */
 export function useDeleteMemory() {
   const api = useApi();
   const { mutate } = useSWRConfig();
   return useCallback(
-    async (slug: string) => {
-      await api.api.DELETE('/memory/{slug}', { params: { path: { slug } } }).then(unwrap);
+    async (slug: string, ifMatch?: string) => {
+      const result = await api.api.DELETE('/memory/{slug}', {
+        params: { path: { slug }, query: ifMatch === undefined ? {} : { ifMatch } },
+      });
+      if (result.response.status === 409 && result.error !== undefined) {
+        // 衝突のときは、画面がいまの版を見せられるようキャッシュも引き直す。
+        await Promise.all([mutate(KEY.memory), mutate(KEY.memoryDoc(slug))]);
+        const body = result.error as {
+          error?: string;
+          current?: { document: MemoryDocument; version: string } | null;
+        };
+        throw new MemoryConflictError(
+          body.error ?? '記憶が読んだ後に変わっている',
+          body.current ?? null,
+        );
+      }
+      unwrap(result);
       await mutate(KEY.memory);
     },
     [api, mutate],
@@ -664,6 +687,8 @@ export function useRevokeOwnerDeclaration() {
  * 省略すると前回の値を引き継ぐ。`secret` を既存行と違う値で渡すとサーバが
  * 400 で拒否する——`apps/cli/src/credential.ts` と同じ資格・同じ制約）。
  *
+ * **注記: 宣言は資格の判断には使っていない（2026-10-05 オーナーの判断：ログインできる人＝持ち主。#2862）。いまは許可済みなら通る。以下の「宣言済み owner」は #2862 以前の記述。**
+ *
  * **`requireOwner`。** 宣言済み owner（実行環境の持ち主そのもの、または
  * `ownerDeclaredAt` が入った許可済みアカウント。issue #1198）でなければ 403 が
  * 返る——呼び出し側（`env-vars.tsx`）はボタンを隠さず、失敗を `ErrorNote` で
@@ -715,6 +740,7 @@ export class ProfileRejectedError extends ApiError {
  * 確認の印は無いので、呼ぶ前の確認だけが網になる（`useShutdownDaemon` と同じ事情）。
  *
  * **`requireOwner`。** 宣言済み owner でなければ 403 になる。ボタンは隠さない。
+ * （注記: 宣言は資格の判断には使っていない（2026-10-05 オーナーの判断：ログインできる人＝持ち主。#2862）。いまは許可済みなら通る。）
  */
 export function useSetProfileEntry() {
   const api = useApi();

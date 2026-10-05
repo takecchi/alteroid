@@ -64,7 +64,10 @@ import type { CommitmentStore } from './store.js';
  *    （#1041 の欠陥は「読んでから書く」あいだに割り込まれることなので、割り込む
  *    隙間を作らない呼び方では、壊れた実装でも緑になる）
  */
-export async function verifyCommitmentFoldContract(store: CommitmentStore): Promise<void> {
+export async function verifyCommitmentFoldContract(
+  store: CommitmentStore,
+  options: { readonly concurrent?: boolean } = {},
+): Promise<void> {
   const fail = (message: string): never => {
     throw new Error(`CommitmentStore.open の畳み込みの契約違反: ${message}`);
   };
@@ -123,6 +126,14 @@ export async function verifyCommitmentFoldContract(store: CommitmentStore): Prom
   const sameId = await store.open(managerEntry('fold-1a', '同じ一言'));
   if (sameId.opened) fail('同じ id の2回目が開いた');
   if (sameId.folded) fail('同じ id の2回目が folded になった（畳んだのではなく既に在る）');
+
+  // **`concurrent: false` では、この 7 を飛ばす。** 同時の2件目を弾くのは DB の部分
+  // unique 索引で、`where not exists` は同じ文が同時に走ると互いの行が見えない。
+  // **索引を落とした DB では、本物の PostgreSQL は同時の2件が両方開く**
+  // （`PgCommitmentStore.open` の doc の「同時の2件目だけがすり抜ける」。手元の実測は
+  // 300回中299回）。PGlite は単一接続で重ならないので緑だった。1〜6 は直列の性質
+  // なので、索引が無くても必ず測る。
+  if (options.concurrent === false) return;
 
   // 7. ⭐ 同じ同期区間から2件でも、開くのは1件だけ
   //

@@ -1,6 +1,6 @@
 import { stdin, stdout } from 'node:process';
 
-import { CREDENTIAL_NAME } from '@alteroid/core';
+import { CREDENTIAL_NAME } from '@alteroid/core/cli-light';
 
 import { describeAuthFailure, forbiddenKindOf, resolveTarget, type Target } from './target.js';
 import { redactError } from './redact.js';

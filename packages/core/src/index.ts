@@ -1088,6 +1088,7 @@ export {
   type RunnerRegistry,
   type RunnerRegistryOptions,
   type RunnerRevisionStatus,
+  type RunnerResumeResult,
   type RunnerSessionOpenResult,
   type RunnerSource,
   type RunnerResumeCommand,
@@ -1190,6 +1191,7 @@ export {
 } from './clone-tools-transport.js';
 export {
   ALWAYS_REDELIVER,
+  DAILY_REPORT_RETRY_DELAYS_MS,
   CLONE_MODEL,
   CLONE_MODEL_ENV_KEY,
   CLONE_HUMAN_PRIORITY_ENV_KEY,

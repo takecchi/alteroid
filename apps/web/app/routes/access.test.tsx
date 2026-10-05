@@ -8,11 +8,8 @@
  * - **`grant` / `revoke`（許可の付与・取り消し）を画面から起こせる。取り消しは確認の
  *   一手を挟むまで叩かない**（Issue #213。2026-09-24 に「出さない」から反転した。
  *   `apps/web/app/routes/access.tsx` の doc）
- * - **宣言済みかどうかの印が出る**（issue #1198）
- * - **実行環境の持ち主としての宣言・取り消しのボタンは在り、押すと
- *   `POST /access/:id/owner` `.../owner/revoke` を叩く。** Web UI からは
- *   `requireOperator` を構造的に満たせないので必ず 403 になり、そのとき
- *   アカウント id 入りの端末コマンドを案内する
+ * - **持ち主の宣言のバッジ・ボタンは出さない**（#2862 / #2947。ログインできる許可済みの
+ *   アカウントは全員が持ち主として扱われるので、宣言の有無は通す・通さないに効かない）
  */
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
@@ -164,10 +161,7 @@ describe('/access 画面 — 一覧', () => {
 
     await renderAccess();
 
-    // **括弧付きの完全な形で見る。** 素の `/実行環境の持ち主/` は issue #1198 で
-    // 足した「実行環境の持ち主として宣言」という別の dt 見出しにも当たって
-    // しまい、複数要素ヒットで壊れる——ここは `grantedAt` の `dd` が持つ
-    // 「（実行環境の持ち主）」という括弧付きの形だけを狙う。
+    // `grantedAt` の `dd` が持つ「（実行環境の持ち主）」という括弧付きの形を見る。
     expect(screen.getByText(/（実行環境の持ち主）/)).toBeTruthy();
     // 伝播した許可（誰かのアカウントが grant した）は、id をそのまま出す
     // （`describeGrantedBy` の doc — 名前へ解決しない）。
@@ -176,26 +170,48 @@ describe('/access 画面 — 一覧', () => {
 });
 
 /**
- * **宣言済みかどうかの印（issue #1198）。**
+ * **持ち主の宣言の表示は出さない（#2947）。** 宣言の有無によらず、どのアカウントにも
+ * バッジも宣言の行も出ない。説明文は、許可したアカウントがすべての設定を変えられると言う。
  */
-describe('/access 画面 — owner 宣言の印', () => {
-  it('未宣言なら「持ち主として未宣言」と出す', async () => {
-    stubAccess({ body: { accounts: [account({ ownerDeclaredAt: null })] } });
-
-    await renderAccess();
-
-    expect(screen.getByText('持ち主として未宣言')).toBeTruthy();
-    expect(screen.getByText('（未宣言）')).toBeTruthy();
-  });
-
-  it('宣言済みなら「持ち主として宣言済み」と日時を出す', async () => {
+describe('/access 画面 — 持ち主の宣言は画面に出さない', () => {
+  it('宣言済み・未宣言のどちらのアカウントにも、宣言のバッジ・行が出ない', async () => {
     stubAccess({
-      body: { accounts: [account({ ownerDeclaredAt: '2026-09-18T00:00:00.000Z' })] },
+      body: {
+        accounts: [
+          account({ id: 'acct-a', ownerDeclaredAt: null }),
+          account({ id: 'acct-b', ownerDeclaredAt: '2026-09-18T00:00:00.000Z' }),
+        ],
+      },
     });
 
     await renderAccess();
 
-    expect(screen.getByText('持ち主として宣言済み')).toBeTruthy();
+    expect(screen.getByText('acct-a')).toBeTruthy();
+    expect(screen.queryByText(/宣言/)).toBeNull();
+    expect(document.body.textContent).not.toContain('持ち主として');
+  });
+
+  it('宣言する・取り消すボタンが出ず、宣言の口（/owner）を叩かない', async () => {
+    const stub = stubFetch((url) =>
+      url.includes('/access') ? json({ accounts: [account()] }) : undefined,
+    );
+
+    await renderAccess();
+
+    expect(screen.queryByRole('button', { name: /宣言/ })).toBeNull();
+    expect(stub.calls.some((url) => url.includes('/owner'))).toBe(false);
+  });
+
+  it('説明文は、ここで許可したアカウントがすべての設定を変えられると言う', async () => {
+    stubAccess({ body: { accounts: [account()] } });
+
+    await renderAccess();
+
+    expect(
+      screen.getByText(
+        /ここで許可したアカウントは、どれも環境変数・実行環境プロファイル・MCP 連携などすべての設定を変えられる/,
+      ),
+    ).toBeTruthy();
   });
 });
 
@@ -269,97 +285,6 @@ async function waitForCall(calls: readonly string[], pattern: RegExp): Promise<v
   }
   throw new Error(`${String(pattern)} が呼ばれなかった: ${calls.join(', ')}`);
 }
-
-/**
- * **実行環境の持ち主としての宣言・取り消し（issue #1198）。**
- *
- * Web UI から叩くと `requireOperator` を構造的に満たせないので必ず 403 になる
- * ——ここでは「叩く URL が正しいこと」と「403 のときアカウント id 入りの
- * 端末コマンドを案内すること」を固定する（`OwnerDeclarationControl` の doc）。
- */
-describe('/access 画面 — 実行環境の持ち主としての宣言', () => {
-  function stubAccessAndOwner(options: {
-    accounts: unknown[];
-    ownerStatus?: number;
-    ownerBody?: unknown;
-  }) {
-    const { accounts, ownerStatus = 403, ownerBody } = options;
-    const body = ownerBody ?? { error: '実行環境の持ち主だけが操作できる' };
-    return stubFetch((url) => {
-      if (url.includes('/owner')) return json(body, ownerStatus);
-      if (url.includes('/access')) return json({ accounts }, 200);
-      return undefined;
-    });
-  }
-
-  it('未宣言のアカウントには「実行環境の持ち主として宣言する」ボタンが出る', async () => {
-    stubAccessAndOwner({ accounts: [account({ id: 'acct-a', ownerDeclaredAt: null })] });
-
-    await renderAccess();
-
-    expect(screen.getByText('実行環境の持ち主として宣言する')).toBeTruthy();
-  });
-
-  it('宣言済みのアカウントには「実行環境の持ち主としての宣言を取り消す」ボタンが出る', async () => {
-    stubAccessAndOwner({
-      accounts: [account({ id: 'acct-a', ownerDeclaredAt: '2026-09-18T00:00:00.000Z' })],
-    });
-
-    await renderAccess();
-
-    expect(screen.getByText('実行環境の持ち主としての宣言を取り消す')).toBeTruthy();
-  });
-
-  it('宣言するボタンを押すと POST /access/:id/owner を叩き、403 でアカウント id 入りの案内を出す', async () => {
-    const stub = stubAccessAndOwner({
-      accounts: [account({ id: 'acct-a', ownerDeclaredAt: null })],
-    });
-
-    await renderAccess();
-    fireEvent.click(screen.getByText('実行環境の持ち主として宣言する'));
-
-    await screen.findByRole('alert');
-    const entry = stub.entries.find((e) => e.url === 'http://daemon.test/access/acct-a/owner');
-    expect(entry?.request?.method).toBe('POST');
-    expect(screen.getByText('alteroid access owner acct-a')).toBeTruthy();
-  });
-
-  it('取り消すボタンを押すと POST /access/:id/owner/revoke を叩き、403 で --revoke 付きの案内を出す', async () => {
-    const stub = stubAccessAndOwner({
-      accounts: [account({ id: 'acct-a', ownerDeclaredAt: '2026-09-18T00:00:00.000Z' })],
-    });
-
-    await renderAccess();
-    fireEvent.click(screen.getByText('実行環境の持ち主としての宣言を取り消す'));
-
-    await screen.findByRole('alert');
-    const entry = stub.entries.find(
-      (e) => e.url === 'http://daemon.test/access/acct-a/owner/revoke',
-    );
-    expect(entry?.request?.method).toBe('POST');
-    expect(screen.getByText('alteroid access owner acct-a --revoke')).toBeTruthy();
-  });
-
-  /**
-   * **404（該当するアカウントが無い）では、この案内を出さない。** `isNotOperator`
-   * は 403 だけを見る——判別できない/別の理由の失敗にまで当てずっぽうで
-   * 端末コマンドを出すと嘘の案内になる（`apps/cli/src/target.ts` の
-   * `ForbiddenKind` と同じ考え方）。
-   */
-  it('403 以外（404）では、端末コマンドの案内を出さない', async () => {
-    stubAccessAndOwner({
-      accounts: [account({ id: 'acct-a', ownerDeclaredAt: null })],
-      ownerStatus: 404,
-      ownerBody: { error: 'not found' },
-    });
-
-    await renderAccess();
-    fireEvent.click(screen.getByText('実行環境の持ち主として宣言する'));
-
-    await screen.findByRole('alert');
-    expect(screen.queryByText('alteroid access owner acct-a')).toBeNull();
-  });
-});
 
 describe('/access 画面 — 読めない行（issue #2536）', () => {
   it('読めない行が無ければ、その断りは出ない（鍵ごと無い）', async () => {

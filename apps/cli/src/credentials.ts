@@ -1,7 +1,7 @@
 import { mkdir, readFile, rename } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import { withPathLock, writeFileAtomic } from '@alteroid/storage-fs';
+import { withPathLock, writeFileAtomic } from '@alteroid/storage-fs/light';
 
 import { stateDir } from './paths.js';
 

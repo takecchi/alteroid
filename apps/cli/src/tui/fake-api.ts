@@ -6,8 +6,8 @@ import {
   describeSelectionsViolation,
   foldSelections,
   matchesJournalSearch,
-  type JournalEntry,
-} from '@alteroid/core';
+} from '@alteroid/core/cli-light';
+import type { JournalEntry } from '@alteroid/core';
 
 import { ApiError } from './api.js';
 import type {

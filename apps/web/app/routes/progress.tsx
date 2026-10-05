@@ -15,7 +15,14 @@ import {
   type KeyValueItem,
 } from '@alteroid/ui';
 import { useProgress } from '@alteroid/swr';
-import { formatDateTime, formatRelative, redactBody } from '@alteroid/logic';
+import {
+  formatDateTime,
+  formatRelative,
+  githubObservedByLabel,
+  GITHUB_CI_COUNT_LABEL,
+  GITHUB_CI_COUNT_ORDER,
+  redactBody,
+} from '@alteroid/logic';
 import type { Progress, ProgressForecast, ProgressForecastBasis } from '@alteroid/logic';
 
 /**
@@ -204,27 +211,39 @@ function GithubBlock({ github, observedAt }: { github: Progress['github']; obser
                 items={[
                   {
                     label: '記録した時刻',
-                    value: `${atText(row.latestOk.observedAt, observedAt)} / 記録元 ${row.latestOk.observedBy}`,
+                    value: `${atText(row.latestOk.observedAt, observedAt)} / 記録したのは: ${githubObservedByLabel(row.latestOk.observedBy)}`,
                   },
-                  {
-                    label: '数えた範囲',
-                    value:
-                      row.latestOk.query +
-                      (row.latestOk.limit === undefined
-                        ? ''
-                        : ` / 上限 ${count(row.latestOk.limit)} 件`) +
-                      (row.latestOk.truncated ? '（上限に達したため、実際はこれ以上）' : ''),
-                  },
+                  // **観測側が名乗った `query`（`gh issue list --state open` など）は自由文で、
+                  // 画面の言葉へ解釈できない。** 本文には出さず、下の折りたたみへ置く。
+                  // 件数の上限と「実際はこれ以上」だけは利用者の言葉で言える。
+                  ...(row.latestOk.limit === undefined && !row.latestOk.truncated
+                    ? []
+                    : [
+                        {
+                          label: '数えた範囲',
+                          value:
+                            (row.latestOk.limit === undefined
+                              ? ''
+                              : `上限 ${count(row.latestOk.limit)} 件`) +
+                            (row.latestOk.truncated ? '（上限に達したため、実際はこれ以上）' : ''),
+                        },
+                      ]),
                   { label: 'CI', value: ciText(row.latestOk) },
                 ]}
                 labelWidth="8rem"
               />
+              {/* 数えた条件の原文は開発者向けなので、折りたたみの先に置く。 */}
+              <details className="text-xs text-muted-foreground">
+                <summary className="cursor-pointer">数えた条件の詳細（開発者向け）</summary>
+                <code className="mt-1 block font-mono break-words">{row.latestOk.query}</code>
+              </details>
             </>
           )}
           {row.latestFailed !== null && (
             <p className="text-xs text-warn">
-              取得に失敗した回: {atText(row.latestFailed.observedAt, observedAt)} / 記録元{' '}
-              {row.latestFailed.observedBy} — {redactBody(row.latestFailed.reason)}
+              取得に失敗した回: {atText(row.latestFailed.observedAt, observedAt)} / 記録したのは:{' '}
+              {githubObservedByLabel(row.latestFailed.observedBy)} —{' '}
+              {redactBody(row.latestFailed.reason)}
             </p>
           )}
         </div>
@@ -487,7 +506,7 @@ function BasisList({ basis, notice }: { basis: ProgressForecastBasis; notice?: s
 
 /**
  * 成功した観測の CI の軸（#2549）。**`ci` が無いことは「観測していない」と出す**——`success 0` とは書かない。
- * `describeGithubCi`（core）と同じ文言。
+ * `describeGithubCi`（core）と同じ並び・同じ数。件数の軸の名前だけ、表示の直前に `GITHUB_CI_COUNT_LABEL` で日本語へ写す。
  */
 function ciText(ok: {
   ci?: {
@@ -504,7 +523,7 @@ function ciText(ok: {
     const ci = ok.ci;
     const counted = ci.success + ci.failure + ci.pending;
     return (
-      `${count(ci.pulls)} 件の PR を確認 — success ${count(ci.success)} / failure ${count(ci.failure)} / pending ${count(ci.pending)}` +
+      `${count(ci.pulls)} 件の PR を確認 — ${GITHUB_CI_COUNT_ORDER.map((key) => `${GITHUB_CI_COUNT_LABEL[key]} ${count(ci[key])}`).join(' / ')}` +
       (counted < ci.pulls ? `（チェックが無い等で未集計 ${count(ci.pulls - counted)} 件）` : '') +
       `（数えたもの: ${ci.checks}）` +
       (ci.truncated === true ? '（打ち切り。数は下限）' : '')

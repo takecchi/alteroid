@@ -1,5 +1,9 @@
-import { describeRevisionStatus, reportRunnerRevision, resolveBuildRevision } from '@alteroid/core';
-import type { BuildRevision } from '@alteroid/core';
+import {
+  describeRevisionStatus,
+  reportRunnerRevision,
+  resolveBuildRevision,
+} from '@alteroid/core/cli-light';
+import type { BuildRevision } from '@alteroid/core/cli-light';
 
 /**
  * `alteroid --version` が出す文字列（#2857）。

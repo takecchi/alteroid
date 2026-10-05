@@ -77,6 +77,7 @@ export const authAccountSchema = z.object({
    * 無ければ `authAccountSchema.parse` が失敗し、起動できなくなる —— 新しい
    * 欄を足すたびに、既存データがその欄を持たないことを既定値で吸収する。
    */
+  // 注記: 資格の判断には使っていない（2026-10-05 オーナーの判断：ログインできる人＝持ち主。#2862）。保存の仕組みは当面残してある。
   ownerDeclaredAt: isoDateTime.nullable().default(null),
 });
 
@@ -546,6 +547,9 @@ export function isAccountGranted(account: AuthAccount): boolean {
 
 /**
  * **実行環境の持ち主として宣言されたアカウントか。**（issue #1198。本来の形）
+ *
+ * **⚠️ 資格の判断には使っていない（2026-10-05 オーナーの判断：ログインできる人＝持ち主。#2862）。** `requireOwner` は素通しになり、この関数は
+ * いまどこの通す・通さないにも使っていない。仕組みは当面残してある。
  *
  * `ownerDeclaredAt` は operator トークンだけが立てられる（`AuthStore.
  * setAccountOwner`）ので、真になるのは「ホストのファイルを読める者が明示的に

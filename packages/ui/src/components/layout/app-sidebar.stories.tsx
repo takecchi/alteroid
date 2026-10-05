@@ -24,7 +24,17 @@ import { AppSidebar, type AppSidebarItem } from './app-sidebar';
  */
 const SAMPLE_NAV_ITEMS: AppSidebarItem[] = [
   { to: '/', label: 'ホーム', icon: LayoutDashboard },
-  { to: '/chat', label: '会話', icon: MessageSquare },
+  {
+    to: '/chat',
+    label: '会話',
+    icon: MessageSquare,
+    // 未読のある会話の数（読めていないときは danger の「?」。承認待ちの札と同じ作法）。
+    badge: (
+      <Badge tone="accent" aria-label="未読のある会話 2 件">
+        2
+      </Badge>
+    ),
+  },
   { to: '/approvals', label: '承認待ち', icon: BellRing, badge: <Badge tone="warn">3</Badge> },
   { to: '/commitments', label: '仕事', icon: ListChecks, section: '仕事' },
   { to: '/managers', label: 'マネージャー', icon: Users, section: '仕事' },

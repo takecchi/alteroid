@@ -345,6 +345,8 @@ actor から層を推定して誤った実例（PR #155・PR #1167）は `.claud
     - **⚠️ ただし「CI が green であることを確認」は、draft のままでは満たせない。** `ci.yml` は draft の `pull_request` では `ci` / `image` を回さない（逐語は `grep -Fn -- 'draft の pull_request では回さない' .github/workflows/ci.yml`）。**⟹ 実際に実行できる順序は「ready の前に自分で通すのは手元の検証一式であって CI の緑ではない。CI の緑を確かめるのは `gh pr ready` の後、本物の run に対してである」**（`pnpm check:pr-green -- <sha>`）。**この分岐が生む機構（`skipped` のまま `completed` を返す形・`mergeStateStatus: CLEAN` まで出る形）は `.claude/skills/pr-green/SKILL.md` に在る**
   - **`gh pr ready <番号>` は「自分の側の作業が終わり、依頼者が読める状態になった」という合図であって、マージの許可ではない。** マージするかどうか・誰がするかは依頼ごとに依頼者が決める — ready はその判断を待っている状態を表すだけである。**「ready にした＝マージしてよい」ではない**
 
+- **このリポジトリの PR をマージするときの規約（`--match-head-commit <sha>` を付ける・squash は本文を明示する・`--delete-branch` を付けない）は `.claude/skills/pr-merge/SKILL.md` に在る。** 以前は製品の Bash の門（`bash-wait-guard.ts`）が弾いていたが、これはこのリポジトリの運用規約であって製品の門ではない（#2884。マネージャーは Claude Code、クローンはそれを使う人間であるというオーナーの回答 2026-10-05）。**機械は見ていない。依頼文で作業者へ委ねるときは、このスキルを名指しすること。**
+
 - 器の postgres 17 / pgvector の立て方は `.claude/skills/postgres-in-container/SKILL.md` に在る
 
 ## 開発手順

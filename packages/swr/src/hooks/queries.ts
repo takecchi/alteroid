@@ -67,6 +67,7 @@ export function isKeyOfType(key: unknown, type: string): boolean {
 
 export const KEY = {
   health: { type: 'health' } as const,
+  status: { type: 'status' } as const,
   /**
    * **窓ごとに別のキーになる**（issue #670）。かつてここは
    * `{ type: 'managers' }` の1つだけで、`mutate(KEY.managers)` が呼べていた。
@@ -150,6 +151,18 @@ export function useHealth() {
     // 繋がらないときに黙って諦めない（接続先を直したらすぐ復帰してほしい）。
     errorRetryInterval: 5000,
     refreshInterval: 30_000,
+  });
+}
+
+/**
+ * デーモン自身の説明（いまは記憶の置き場）。**資格が要る**（`GET /status`。#2869）。
+ * 無認証の `/health` は置き場を返さないので、置き場はここから取る。
+ * 資格が通らない（401）ときは `error` になる——呼び出し側は例外にせず表示で受ける。
+ */
+export function useStatus() {
+  const api = useApi();
+  return useSWR(KEY.status, () => api.api.GET('/status').then(unwrap), {
+    errorRetryInterval: 5000,
   });
 }
 
@@ -575,6 +588,7 @@ export function useProfile() {
  * 人間の MCP 連携の登録（`GET /mcp-servers`。#325 段4）。
  *
  * **資格は `requireOwner`**（`/profile` と同じ）。宣言済み owner でなければ 403 が返り、
+ * （**注記: 資格の判断には使っていない（2026-10-05 オーナーの判断：ログインできる人＝持ち主。#2862）。いまは許可済みなら通る。この 403 は許可の無いアカウントだけ**）
  * 呼び出し側（`routes/mcp-servers.tsx`）がそのまま見せる。
  *
  * **フォーカス・再接続での再取得をしない**（`useProfile` と同じ理由 —— 値に鍵が

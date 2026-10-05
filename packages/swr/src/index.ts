@@ -9,6 +9,7 @@
  */
 export * from './api';
 export * from './login';
+export * from './hooks/conversation-read';
 export * from './hooks/journal-feed';
 export * from './hooks/mutations';
 export * from './hooks/queries';

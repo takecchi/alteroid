@@ -178,6 +178,16 @@ describe('新しいやり方を書く', () => {
   });
 });
 
+describe('slug 欄の補足文', () => {
+  it('書式は常時表示の補足文で、欄と aria-describedby で結ばれる（プレースホルダは短い例だけ）', async () => {
+    renderPractices([]);
+    const input = await screen.findByLabelText(/^名前/);
+    const hint = document.getElementById(input.getAttribute('aria-describedby') ?? '');
+    expect(hint?.textContent).toMatch(/128 文字まで/);
+    expect((input as HTMLInputElement).placeholder).not.toMatch(/英小文字/);
+  });
+});
+
 /** 行全体をリンクにしない（#2808）。リンクは題だけで、slug と文字数・日時の文字は `<a>` の外に在る。 */
 describe('一覧の行は題だけがリンク', () => {
   it('題はリンク、slug と文字数・日時の文字はリンクの外', async () => {

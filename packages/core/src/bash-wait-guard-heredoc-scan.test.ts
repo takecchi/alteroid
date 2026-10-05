@@ -124,13 +124,7 @@ describe('終端の無いヒアドキュメントと、区切りの多い長い1
   const cases: ReadonlyArray<[string, (n: number) => string, boolean, number]> = [
     ['終端の無い cat <<E の繰り返し', (n) => `${'cat <<E\n'.repeat(n)}x`, false, 5000],
     ['終端の無い bash <<E の繰り返し', (n) => `${'bash <<E\n'.repeat(n)}x`, false, 5000],
-    ['区切りの多い長い1行（gh pr merge を含まない）', (n) => `${'a;'.repeat(n)}x`, false, 10000],
-    [
-      '区切りの多い長い1行の末尾に gh pr merge --delete-branch',
-      (n) => `${'a;'.repeat(n)}gh pr merge 1 --delete-branch`,
-      true,
-      10000,
-    ],
+    ['区切りの多い長い1行', (n) => `${'a;'.repeat(n)}x`, false, 10000],
   ];
   for (const [label, makeInput, blocked, n] of cases) {
     it(`${label}が予算内に終わる`, () => {

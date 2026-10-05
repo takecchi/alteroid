@@ -214,9 +214,11 @@ export class PgCommitmentStore implements CommitmentStore {
    * - `inserted` が非 null ⟹ opened
    * - `folded_into` が非 null ⟹ folded（1 が効いた。畳んだ先も分かる）
    * - どちらも null で `id_seen` が真 ⟹ 同じ id が既に在った
-   * - どちらも null で `id_seen` が偽 ⟹ 2 が効いた ＝ **畳まれたが、畳んだ先は
-   *   分からない**（この文の読み取りスナップショットには相手の行がまだ無い）。
-   *   `foldedInto` を空のまま返す——**嘘の id を埋めない**
+   * - どちらも null で `id_seen` が偽 ⟹ `on conflict` が同時の相手に弾かれた（主キーか
+   *   索引かは、この文のスナップショットには相手の行が無いので分からない）。
+   *   **別の文で読み直して見分ける**（#2922）: 同じ id が在れば「既に在った」、
+   *   同文の未了が在れば「畳んだ」（その id を `foldedInto` へ）。読み直しても
+   *   居なければ `foldedInto` を空のまま返す——**嘘の id を埋めない**
    */
   async open(entry: Commitment): Promise<CommitmentOpenResult> {
     // 依頼の本文は人間かクローンが書いた自由文なので NUL が混ざりうる
@@ -265,8 +267,37 @@ export class PgCommitmentStore implements CommitmentStore {
     if (row.id_seen) return { opened: false, folded: false };
     if (row.folded_into !== null)
       return { opened: false, folded: true, foldedInto: row.folded_into };
-    // 索引が弾いた＝同時に来た2件目である。畳んだことは分かるが、畳んだ先は
-    // この文からは見えない（doc の最後の分岐）。
+    // **ここへ来たのは、`on conflict do nothing` が何かの衝突を吸ったのに、この文の
+    // スナップショットには相手の行が見えなかったときだけである。** 衝突したのは
+    // 主キー（同じ id）か、部分 unique 索引（同一マネージャー×同一本文）のどちらかで、
+    // `do nothing` は両方を区別せず吸う。**区別せずに「畳んだ」と返すと、同じ id の
+    // 並行 open が「畳んだ」と誤報される（#2922。PGlite は単一接続で並行が重ならず
+    // 出なかった）。**
+    //
+    // `on conflict` は相手の取引が終わるまで待ってから弾くので、弾かれた時点で相手の行は
+    // コミット済みである。**別の文で読み直せば（READ COMMITTED は文ごとに
+    // スナップショットを取り直す）見える。** 上の分岐と同じ順（id が先）で見分ける。
+    const reread = readOpenProbeRow(
+      await this.#db.execute(sql`
+        select
+          null::text as inserted,
+          (
+            select id from ${commitments}
+            where ${sql.raw(foldable ? 'true' : 'false')}
+              and id <> ${value.id}
+              and closed_at is null
+              and commitment->>'origin' = 'manager'
+              and commitment->>'source' = ${value.source ?? ''}
+              and commitment->>'body' = ${value.body}
+            limit 1
+          ) as folded_into,
+          exists (select 1 from ${commitments} where id = ${value.id}) as id_seen
+      `),
+    );
+    if (reread.id_seen) return { opened: false, folded: false };
+    if (reread.folded_into !== null)
+      return { opened: false, folded: true, foldedInto: reread.folded_into };
+    // 読み直しても相手が居ない（弾いた相手が直後に閉じた等）。畳んだことだけが分かる。
     return { opened: false, folded: true };
   }
 

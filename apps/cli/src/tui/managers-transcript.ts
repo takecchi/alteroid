@@ -8,7 +8,7 @@
  * 捨てずに `system` の行として残す（生ログは「日誌で足りないときの最後の拠り所」）。
  * `thinking` ブロックだけは出さない（後述の PR 本文の表に書く）。
  */
-import { codePointBoundary } from '@alteroid/core';
+import { codePointBoundary } from '@alteroid/core/cli-light';
 
 import { redactBody } from '../redact.js';
 import type { LogEntry, LogKind } from './log.js';

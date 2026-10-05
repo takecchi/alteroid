@@ -4,7 +4,17 @@ import { AlertTriangle } from 'lucide-react';
 import { useId, useState } from 'react';
 import { Link, Outlet, useNavigate, useParams } from 'react-router';
 
-import { Page, Button, Empty, Input, ListDetail, ListDetailItems, Spinner, cn } from '@alteroid/ui';
+import {
+  Page,
+  Button,
+  Empty,
+  FieldHint,
+  Input,
+  ListDetail,
+  ListDetailItems,
+  Spinner,
+  cn,
+} from '@alteroid/ui';
 import { usePractices } from '@alteroid/swr';
 import { formatRelative } from '@alteroid/logic';
 import type { UnreadablePractice } from '@alteroid/logic';
@@ -78,6 +88,7 @@ export default function Practices() {
   // **読めなかった行**（`GET /practices` の `unreadable`。issue #2346）。1件でも在るときだけ
   // 載る——無ければ空配列として扱う（0件のとき何も出さない）。
   const unreadable = data?.unreadable ?? [];
+  const hintId = useId();
   const valid = SLUG_PATTERN.test(slug) && slug.length <= 128;
   /**
    * **取れなかったのを0件と描かない**（issue #2324）。一覧をまだ一度も読めていないまま
@@ -119,6 +130,7 @@ export default function Practices() {
             <div className="flex gap-2 md:w-96">
               <Input
                 id={slugId}
+                aria-describedby={hintId}
                 value={slug}
                 placeholder="例: work-style"
                 onChange={(event) => setSlug(event.target.value)}
@@ -135,6 +147,9 @@ export default function Practices() {
               </Button>
             </div>
           </div>
+          <FieldHint id={hintId} className="mt-1.5">
+            先頭は英数字で、128 文字まで。
+          </FieldHint>
           {slug !== '' && !valid && (
             <p className="mt-1.5 text-xs text-destructive">
               使えるのは半角の英小文字・数字と . _ - で、先頭は英数字。128 文字まで。

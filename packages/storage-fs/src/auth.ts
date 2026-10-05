@@ -747,6 +747,7 @@ export class FsAuthStore implements AuthStore {
    * 同じ排他区間の内側なので、検査と書き込みの間に許可が取り消される窓は無い。
    * 取り消し（`declaredAt === null`）は行が在れば常に通す。
    */
+  // 注記: 宣言（ownerDeclaredAt）は資格の判断には使っていない（2026-10-05 オーナーの判断：ログインできる人＝持ち主。#2862）。仕組みは当面残してある。
   async setAccountOwner(accountId: string, declaredAt: string | null): Promise<OwnerOutcome> {
     return this.#mutate<OwnerOutcome>((file): { next: AuthFile | null; result: OwnerOutcome } => {
       const account = file.accounts.find((it) => it.id === accountId);

@@ -21,9 +21,11 @@ import {
   AppSidebar,
   Badge,
   Drawer,
+  MAIN_CONTENT_ID,
   MobileTopBar,
   ScreenLoading,
   ScreenState,
+  SkipLink,
   useIsMobile,
   cn,
   type AppSidebarItem,
@@ -32,6 +34,7 @@ import {
   JournalFeedProvider,
   useApprovals,
   useHealth,
+  useUnreadConversationCount,
   useAuth,
   useJournalLive,
 } from '@alteroid/swr';
@@ -193,6 +196,38 @@ function AuthedShell() {
     pending > 0 && <Badge tone="warn">{pending}</Badge>
   );
 
+  /**
+   * 左ナビ「会話」の札: 未読のある会話の数。**承認待ちの札と同じ作法**——読めていないときは
+   * 0 件（札無し）と区別できる danger の「?」にする（エラーを最優先。形の違う応答・既読の
+   * 記録が読めない旨の応答も読めていない側）。会話の一覧は取らず、軽い口（件数だけ）を使う。
+   * 数え切れていない（`capped`）ときは「N+」。
+   */
+  const { data: unread, error: unreadError } = useUnreadConversationCount();
+  const unreadMalformed =
+    unread !== undefined &&
+    (typeof unread.count !== 'number' || unread.readStateUnreadable !== undefined);
+  const conversationsUnavailable = unreadError !== undefined || unreadMalformed;
+  const unreadCount = typeof unread?.count === 'number' ? unread.count : 0;
+  const chatBadge: ReactNode = conversationsUnavailable ? (
+    <Badge tone="danger" aria-label="未読の会話を読めていない" title="未読の会話を読めていない">
+      ?
+    </Badge>
+  ) : (
+    unreadCount > 0 && (
+      <Badge
+        tone="accent"
+        aria-label={
+          unread?.capped === true
+            ? `未読のある会話 ${unreadCount} 件以上`
+            : `未読のある会話 ${unreadCount} 件`
+        }
+      >
+        {unreadCount}
+        {unread?.capped === true ? '+' : ''}
+      </Badge>
+    )
+  );
+
   // `NAV_ITEMS`（`~/lib/nav`）から `AppSidebarItem` へ写す。札は承認待ちにだけ付く。
   const items: AppSidebarItem[] = NAV_ITEMS.map((def) => ({
     to: def.to,
@@ -200,6 +235,7 @@ function AuthedShell() {
     icon: ICONS[def.to] ?? Activity,
     ...(def.section === undefined ? {} : { section: def.section }),
     ...(def.to === '/approvals' ? { badge: approvalsBadge } : {}),
+    ...(def.to === '/chat' ? { badge: chatBadge } : {}),
   }));
   const defByTo = new Map(NAV_ITEMS.map((def) => [def.to, def]));
 
@@ -248,6 +284,7 @@ function AuthedShell() {
         body がスクロールしない形を枠そのものに持たせる。
       */}
       <div className={cn('flex h-dvh overflow-hidden', isMobile ? 'flex-col' : 'flex-row')}>
+        <SkipLink />
         {isMobile ? (
           <>
             <MobileTopBar
@@ -284,7 +321,11 @@ function AuthedShell() {
           sidebar(false)
         )}
 
-        <main className="flex min-h-0 min-w-0 flex-1 flex-col">
+        <main
+          id={MAIN_CONTENT_ID}
+          tabIndex={-1}
+          className="flex min-h-0 min-w-0 flex-1 flex-col outline-none"
+        >
           <Outlet />
         </main>
       </div>

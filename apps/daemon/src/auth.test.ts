@@ -294,6 +294,13 @@ describe('認証が有効なとき', () => {
     expect((await app.request('/auth/providers')).status).toBe(200);
   });
 
+  it('GET /status（記憶の置き場）は資格が無ければ 401、持ち主のトークンなら通る（#2869）', async () => {
+    expect((await app.request('/status')).status).toBe(401);
+    const response = await app.request('/status', { headers: OPERATOR });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toHaveProperty('storage');
+  });
+
   it('実行環境の持ち主のトークンで通る（ログインせずに手元から使える）', async () => {
     const response = await app.request('/memory', { headers: OPERATOR });
     expect(response.status).toBe(200);
@@ -495,52 +502,23 @@ describe('認証が有効なとき', () => {
    * 403 の本文だけを `requireOwner` の文言へ反転した（宣言済み owner が通ることは
    * 上の ④ が撃つ）。下の長い注釈は移す前の理由として残す。
    */
-  it('実行環境プロファイルは宣言済み owner まで（許可されただけの利用者は 403）', async () => {
-    // **ここは「alteroid を使ってよい」より一段強い口である。**
-    //
-    // `PUT` の本文はデーモンの `process.env` を土台にその場で評価される ＝
-    // 記憶ストアの鍵を持つプロセスでの任意コマンド実行であり、評価中の出力は
-    // 応答にも返る（本文に `env` と1行書けば `ALTEROID_DATABASE_URL` も
-    // 制御面の合鍵も読める）。`GET` も同じ扱いにする — 本文には `GH_TOKEN` の
-    // ような鍵が丸ごと入りうるので、読み側が緩ければ書き側を締めても意味が無い。
+  it('実行環境プロファイルは許可済みなら宣言の有無にかかわらず通る（2026-10-05、#2862。許可の無い利用者は 403 のまま）', async () => {
+    // ログインできる許可済みアカウントは全員「持ち主」として扱う（#2862 のオーナー決定）。
+    // 認証（`authenticate`）は緩めていない: ログインしただけ・トークン無しは弾かれる。
     const claimed = await loginThrough(app);
+    const auth = { authorization: `Bearer ${claimed.token}` };
+
+    // 許可の前は 403（宣言以前に、使う許可が無い）。
+    expect((await app.request('/profile', { headers: auth })).status).toBe(403);
+    expect((await app.request('/profile')).status).toBe(401);
+
     await app.request(`/access/${claimed.account.id}/grant`, {
       ...post,
       headers: { ...post.headers, ...OPERATOR },
     });
-    const auth = { authorization: `Bearer ${claimed.token}` };
 
-    // 許可されている ＝ 記憶には触れる
-    expect((await app.request('/memory', { headers: auth })).status).toBe(200);
-
-    // それでもプロファイルには触れない
-    const forbidden = await app.request('/profile', { headers: auth });
-    expect(forbidden.status).toBe(403);
-
-    // **⭐ 本文まで固定する。** 2026-09-06 に `/tokens` と `/access/*` を「alteroid を
-    // 使う許可」と同格にしたので、`requireOperator` の 403 を**産む経路はこの
-    // `/profile` の2本と、下の owner 宣言の口2本（`POST /access/:accountId/owner`
-    // / `.../owner/revoke`）だけである**（他は `authenticate` の「許可が無い」403 に
-    // なる）。
-    //
-    // **⚠️ 2026-09-17〜18、`requireOwner` という別の門ができた**（issue #1195 で
-    // `requireOperatorOrDirectGrant` として入り、issue #1198 で中身を差し替えて改名
-    // した）。**この門の 403 の本文は `requireOperator` と1文字も違えていない
-    // 旧設計から一転し、意図して別の文言にしてある**（`requireOwner` の doc）——
-    // 「持ち主そのもの」と「持ち主として宣言されたアカウント」は別の状態で、CLI の
-    // 案内も別になるため。⟹ **ここの本文はいまも `requireOperator` だけの生産物**
-    // （下の describe「宣言済み owner は /credentials と /reset を通る」が、
-    // `requireOwner` 側の別の文言を固定している）。
-    //
-    // そして CLI はこの本文を見て「デーモンと同じ器の中で実行してください」と案内を
-    // 選ぶ（`apps/cli/src/target.ts` の `forbiddenKindOf`）。文言がずれると案内は
-    // 「理由を判別できなかった」側へ黙って倒れる。
-    //
-    // **値はここへ複製してある。**`app.ts` から import すると、文言がずれても歯まで
-    // 一緒にずれて自己整合し、ずれを検出できなくなる。
-    expect(await forbidden.json()).toEqual({
-      error: '実行環境の持ち主として宣言されたアカウントだけが操作できる',
-    });
+    // 許可された（owner 宣言はしていない）アカウントは GET / PUT /profile とも通る。
+    expect((await app.request('/profile', { headers: auth })).status).toBe(200);
     expect(
       (
         await app.request('/profile', {
@@ -549,9 +527,9 @@ describe('認証が有効なとき', () => {
           body: JSON.stringify({ script: 'env' }),
         })
       ).status,
-    ).toBe(403);
+    ).not.toBe(403);
 
-    // 実行環境の持ち主は通る（境界を入れて能力を消したのではない）
+    // 実行環境の持ち主も通る。
     expect((await app.request('/profile', { headers: OPERATOR })).status).toBe(200);
   });
 
@@ -1242,8 +1220,7 @@ describe('宣言と実物の一致（/auth・/access）', () => {
  * （import すると、文言がずれても歯まで一緒にずれて自己整合し、ずれを検出
  * できなくなる。CLI 側の複製は `apps/cli/src/target.ts` の `forbiddenKindOf`）。
  */
-describe('宣言済み owner（ownerDeclaredAt）は /credentials と /reset を通る', () => {
-  const NOT_OWNER_ERROR = '実行環境の持ち主として宣言されたアカウントだけが操作できる';
+describe('許可済みのアカウントは宣言の有無にかかわらず /credentials /reset /mcp-servers を通る（#2862）。宣言の口は operator のまま', () => {
   const NOT_OPERATOR_ERROR = '実行環境の持ち主だけが操作できる';
 
   /**
@@ -1364,22 +1341,18 @@ describe('宣言済み owner（ownerDeclaredAt）は /credentials と /reset を
   });
 
   /**
-   * **⭐ この歯がいちばん大事である。** 「宣言済みアカウントだけが通る」が
-   * 「許可されていれば誰でも通る」へ広がったときに鳴る唯一の場所である
-   * （広げすぎていないことの陰性対照）。
+   * **2026-10-05（#2862 のオーナー決定）で反転した。** 以前は「宣言していない許可済み
+   * アカウントは 403」を固定していた。いまは許可済みなら宣言の有無にかかわらず通る。
+   * 認証そのものを緩めていないことは、上の「ログインしただけ（未許可）は 403」と
+   * 「資格が無ければ 401」が固定している。
    */
-  it('② 宣言していない許可済みアカウントは 403 のまま（広げすぎていない）', async () => {
+  it('② 宣言していない許可済みアカウントも通る（#2862: ログインできる許可済みは全員持ち主）', async () => {
     const account = await grantedAccount();
     const auth = { authorization: `Bearer ${account.token}` };
 
-    // alteroid は使える（記憶には触れる）——許可はされている。
     expect((await vaultApp.request('/memory', { headers: auth })).status).toBe(200);
-
-    // それでも宣言していないので環境変数とリセットは通らない。
-    const forbidden = await putCredential(auth);
-    expect(forbidden.status).toBe(403);
-    expect(await forbidden.json()).toEqual({ error: NOT_OWNER_ERROR });
-    expect((await postReset(auth)).status).toBe(403);
+    expect((await putCredential(auth)).status).toBe(200);
+    expect((await postReset(auth)).status).toBe(200);
   });
 
   /**
@@ -1387,7 +1360,7 @@ describe('宣言済み owner（ownerDeclaredAt）は /credentials と /reset を
    * を1箇所も読まない実装なら、ここは自動的に通る——読んでいたら伝播した相手が
    * 「端末から直に許可された」と誤認されうる。
    */
-  it('③ 許可が伝播したアカウント（別のアカウントが通した）は 403（旧近似が広がっていた条件）', async () => {
+  it('③ 許可が伝播したアカウント（別のアカウントが通した）も通る（#2862）', async () => {
     const owner = await ownerToken();
 
     nextSubject = 'sub-2';
@@ -1397,22 +1370,13 @@ describe('宣言済み owner（ownerDeclaredAt）は /credentials と /reset を
       headers: { ...post.headers, authorization: `Bearer ${owner.token}` },
     });
     expect(granted.status).toBe(200);
-    const grantedBody = (await granted.json()) as { account: { grantedBy: string | null } };
-    // 前提: 伝播した許可である（`operator` ではなく、通したアカウントの id）。
-    expect(grantedBody.account.grantedBy).toBe(owner.accountId);
 
     const auth = { authorization: `Bearer ${second.token}` };
-    // alteroid は使える（記憶には触れる）。
-    expect((await vaultApp.request('/memory', { headers: auth })).status).toBe(200);
-
-    // それでも環境変数とリセットは通らない。
-    const forbidden = await putCredential(auth);
-    expect(forbidden.status).toBe(403);
-    expect(await forbidden.json()).toEqual({ error: NOT_OWNER_ERROR });
-    expect((await postReset(auth)).status).toBe(403);
+    expect((await putCredential(auth)).status).toBe(200);
+    expect((await postReset(auth)).status).toBe(200);
   });
 
-  it('⑥ 許可を取り消すと宣言も落ち、再 grant しても owner ではない', async () => {
+  it('⑥ 許可を取り消すと宣言も落ち（取り消し中は 403）、再 grant しても宣言は戻らない', async () => {
     const owner = await ownerToken();
     const revoked = await vaultApp.request(`/access/${owner.accountId}/revoke`, {
       ...post,
@@ -1427,7 +1391,7 @@ describe('宣言済み owner（ownerDeclaredAt）は /credentials と /reset を
     expect((await putCredential(auth)).status).toBe(403);
     expect((await postReset(auth)).status).toBe(403);
 
-    // 再 grant しても owner には戻らない（宣言は明示的な行為でしか立たない）。
+    // 再 grant しても宣言は戻らない（宣言の保存の仕組みはそのまま）。
     const regranted = await vaultApp.request(`/access/${owner.accountId}/grant`, {
       ...post,
       headers: { ...post.headers, ...OPERATOR },
@@ -1437,7 +1401,8 @@ describe('宣言済み owner（ownerDeclaredAt）は /credentials と /reset を
       account: { ownerDeclaredAt: string | null };
     };
     expect(regrantedBody.account.ownerDeclaredAt).toBeNull();
-    expect((await putCredential(auth)).status).toBe(403);
+    // 宣言が無くても、許可済みならもう一度通る（#2862）。
+    expect((await putCredential(auth)).status).toBe(200);
   });
 
   /**
@@ -1464,16 +1429,18 @@ describe('宣言済み owner（ownerDeclaredAt）は /credentials と /reset を
     expect(Object.keys(body.mcpServers)).toEqual(['github']);
   });
 
-  it('② 宣言していない許可済みアカウントは GET / PUT /mcp-servers とも 403', async () => {
+  it('② 宣言していない許可済みアカウントも GET / PUT /mcp-servers を通る（#2862）', async () => {
     const account = await grantedAccount();
     const auth = { authorization: `Bearer ${account.token}` };
-    expect((await vaultApp.request('/memory', { headers: auth })).status).toBe(200);
+    expect((await putMcpServers(auth)).status).toBe(200);
+    expect((await vaultApp.request('/mcp-servers', { headers: auth })).status).toBe(200);
+  });
 
-    const forbidden = await vaultApp.request('/mcp-servers', { headers: auth });
-    expect(forbidden.status).toBe(403);
-    expect(await forbidden.json()).toEqual({ error: NOT_OWNER_ERROR });
+  it('② 許可の無い（ログインしただけの）アカウントは /mcp-servers に触れない（403）', async () => {
+    const claimed = await loginThrough(vaultApp);
+    const auth = { authorization: `Bearer ${claimed.token}` };
+    expect((await vaultApp.request('/mcp-servers', { headers: auth })).status).toBe(403);
     expect((await putMcpServers(auth)).status).toBe(403);
-    // 弾いた側は何も置いていない。
     expect(await stores.mcpServers.read()).toBeNull();
   });
 

@@ -208,6 +208,16 @@ describe('記憶一覧の要旨の前に付く印（#821 — ⚠ をやめて数
   });
 });
 
+describe('slug 欄の補足文', () => {
+  it('書式は常時表示の補足文で、欄と aria-describedby で結ばれる（プレースホルダは短い例だけ）', async () => {
+    renderMemory([]);
+    const input = await screen.findByLabelText(/^名前/);
+    const hint = document.getElementById(input.getAttribute('aria-describedby') ?? '');
+    expect(hint?.textContent).toMatch(/128 文字まで/);
+    expect((input as HTMLInputElement).placeholder).not.toMatch(/英小文字/);
+  });
+});
+
 /**
  * 行全体をリンクにしない（#2808）。リンクで包むと slug・題名・サイズ・日時を選んでコピーできない。
  * リンクは題名だけ。slug と日時の文字は `<a>` の外に在る。

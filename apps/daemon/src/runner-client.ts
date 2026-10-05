@@ -43,6 +43,7 @@ import {
   runnerManagerStateSchema,
   runnerPlacementResourcesSchema,
   runnerSessionOpenResultSchema,
+  type RunnerResumeResult,
   unpushedWorkResultSchema,
 } from '@alteroid/core';
 
@@ -1613,15 +1614,23 @@ class HttpRunner implements RunnerClient {
   }
 
   /** 同上（`start` の doc）。 */
-  async resume(command: RunnerResumeCommand): Promise<{ cwd?: string }> {
+  async resume(command: RunnerResumeCommand): Promise<RunnerResumeResult> {
     const response = await this.#call(
       'POST',
       `/managers/${encodeURIComponent(command.managerId)}/resume`,
       command,
     );
-    const body = (await response.json()) as { cwd?: unknown };
+    const body = (await response.json()) as { cwd?: unknown; reusedLiveSession?: unknown };
     const cwd = runnerSessionOpenResultSchema.shape.cwd.safeParse(body.cwd);
-    return cwd.success && cwd.data !== undefined ? { cwd: cwd.data } : {};
+    // **1欄ずつ検める**（`cwd` と同じ作法）。欄が無い・形が崩れた回は `undefined`（分からない）で、
+    // `false` へ倒さない（#2877。古い runner は短絡したかを名乗れない）。
+    const reused = runnerSessionOpenResultSchema.shape.reusedLiveSession.safeParse(
+      body.reusedLiveSession,
+    );
+    return {
+      ...(cwd.success && cwd.data !== undefined ? { cwd: cwd.data } : {}),
+      ...(reused.success && reused.data !== undefined ? { reusedLiveSession: reused.data } : {}),
+    };
   }
 
   /**

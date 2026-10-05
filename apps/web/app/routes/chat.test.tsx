@@ -12,11 +12,13 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
   findShownConversation,
+  gate,
   json,
   Providers,
   sse,
   stubFetch,
   storeTestBaseUrl,
+  untilOpenSettled,
 } from '~/test-support';
 
 import Chat, { ownedBy, retainedBy } from './chat';
@@ -82,34 +84,6 @@ async function send(text: string) {
   const box = await screen.findByPlaceholderText(/クローンに話しかける/);
   fireEvent.change(box, { target: { value: text } });
   fireEvent.click(screen.getByRole('button', { name: /送る/ }));
-}
-
-/**
- * **次のフレームを流してよい時を、テストが決める**ための門。`sse` の枠の `after` に
- * `opened`（解決待ちの Promise）を渡し、前提が画面に出たのを見てから `release()` する。
- *
- * **`delayMs`（時計）で「前の描画が済んだ後」を作らないこと。** `open` の直後に別の
- * フレームを時計で流すと、画面は `open` が起こす描画（会話 id の確定・URL の付け替え・
- * 履歴と一覧の取得）と次のフレームの描画を、1本の `findBy`（既定1000ms）の中で
- * まとめてこなすことになり、遅い実行環境（全体実行の負荷）で予算を食う（#2900）。
- */
-function gate() {
-  let release!: () => void;
-  const opened = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  return { opened, release };
-}
-
-/**
- * `open` を受けた画面が、URL を新しい会話へ付け替えるところまで進んだこと。
- * 付け替えは `open` の処理（`chat.tsx` の `send`）の最後の1手なので、これが見えたら
- * `open` が起こす状態の更新は出し終わっている。
- */
-async function untilOpenSettled(router: ReturnType<typeof renderChat>['router']) {
-  await waitFor(() => {
-    expect(router.state.location.pathname).toBe(`/chat/${CONVERSATION_ID}`);
-  });
 }
 
 /**
@@ -268,9 +242,9 @@ describe('受信をやめる', () => {
             {
               event: 'text',
               data: { type: 'text', text: 'ここまでは届いた' },
-              after: textGate.opened,
+              after: textGate.promise,
             },
-            { event: 'thinking', data: { type: 'thinking' }, after: thinkingGate.opened },
+            { event: 'thinking', data: { type: 'thinking' }, after: thinkingGate.promise },
           ],
           // まだ考えている（`done` を送らない）
           { keepOpen: true, signal: init?.signal },
@@ -287,8 +261,8 @@ describe('受信をやめる', () => {
 
     const { router } = renderChat();
     await send('やあ');
-    await untilOpenSettled(router);
-    textGate.release();
+    await untilOpenSettled(router, CONVERSATION_ID);
+    textGate.open();
 
     /*
      * **本文が届くまで待ってから止める。**
@@ -299,7 +273,7 @@ describe('受信をやめる', () => {
      * 出どころが無い）で、止める対象を取り違えないための順番でもある。
      */
     await screen.findByText('ここまでは届いた');
-    thinkingGate.release();
+    thinkingGate.open();
     expect(await screen.findByText('考えている…')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: /受信をやめる/ }));
 
@@ -325,7 +299,7 @@ describe('受信をやめる', () => {
             {
               event: 'tool',
               data: { type: 'tool', tool: 'manager_start' },
-              after: toolGate.opened,
+              after: toolGate.promise,
             },
           ],
           { keepOpen: true, signal: init?.signal },
@@ -343,8 +317,8 @@ describe('受信をやめる', () => {
     const { router } = renderChat();
     await send('やあ');
 
-    await untilOpenSettled(router);
-    toolGate.release();
+    await untilOpenSettled(router, CONVERSATION_ID);
+    toolGate.open();
 
     expect(await screen.findByText(/manager_start を実行中/)).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: /受信をやめる/ }));
@@ -396,7 +370,7 @@ describe('考えている…の合図', () => {
         return sse(
           [
             { event: 'open', data: { conversationId: CONVERSATION_ID } },
-            { event: 'text', data: { type: 'text', text: 'こ' }, after: textGate.opened },
+            { event: 'text', data: { type: 'text', text: 'こ' }, after: textGate.promise },
           ],
           // 終わらせない。**消える理由が「本文が来たから」であることを固定する** —
           // `done` を送ると、終わったから消えたのか本文で消えたのか分からない。
@@ -416,7 +390,7 @@ describe('考えている…の合図', () => {
     await send('やあ');
 
     expect(await screen.findByText('考えている…')).toBeTruthy();
-    textGate.release();
+    textGate.open();
     await screen.findByText('こ');
     await waitFor(() => {
       expect(screen.queryByText('考えている…')).toBeNull();
@@ -446,9 +420,9 @@ describe('考えている…の合図', () => {
             {
               event: 'text',
               data: { type: 'text', text: 'ここまでは届いた' },
-              after: textGate.opened,
+              after: textGate.promise,
             },
-            { event: 'thinking', data: { type: 'thinking' }, after: thinkingGate.opened },
+            { event: 'thinking', data: { type: 'thinking' }, after: thinkingGate.promise },
           ],
           { keepOpen: true, signal: init?.signal },
         );
@@ -464,15 +438,15 @@ describe('考えている…の合図', () => {
 
     const { router } = renderChat();
     await send('やあ');
-    await untilOpenSettled(router);
-    textGate.release();
+    await untilOpenSettled(router, CONVERSATION_ID);
+    textGate.open();
 
     await screen.findByText('ここまでは届いた');
     // 本文が出て、送信時の「考えている…」が畳まれたのを見てから、サーバの `thinking` を流す。
     await waitFor(() => {
       expect(screen.queryByText('考えている…')).toBeNull();
     });
-    thinkingGate.release();
+    thinkingGate.open();
     expect(await screen.findByText('考えている…')).toBeTruthy();
   });
 });
@@ -493,7 +467,7 @@ describe('順番待ちの合図（queued）', () => {
         return sse(
           [
             { event: 'open', data: { conversationId: CONVERSATION_ID } },
-            { event: 'queued', data: { type: 'queued' }, after: queuedGate.opened },
+            { event: 'queued', data: { type: 'queued' }, after: queuedGate.promise },
           ],
           // 順番待ちのまま終わらせない（先客のターンが走っている状態）。
           { keepOpen: true, signal: init?.signal },
@@ -510,8 +484,8 @@ describe('順番待ちの合図（queued）', () => {
 
     const { router } = renderChat();
     await send('やあ');
-    await untilOpenSettled(router);
-    queuedGate.release();
+    await untilOpenSettled(router, CONVERSATION_ID);
+    queuedGate.open();
 
     expect(await screen.findByText('順番を待っている…')).toBeTruthy();
   });
@@ -525,8 +499,8 @@ describe('順番待ちの合図（queued）', () => {
         return sse(
           [
             { event: 'open', data: { conversationId: CONVERSATION_ID } },
-            { event: 'queued', data: { type: 'queued' }, after: queuedGate.opened },
-            { event: 'thinking', data: { type: 'thinking' }, after: thinkingGate.opened },
+            { event: 'queued', data: { type: 'queued' }, after: queuedGate.promise },
+            { event: 'thinking', data: { type: 'thinking' }, after: thinkingGate.promise },
           ],
           { keepOpen: true, signal: init?.signal },
         );
@@ -542,10 +516,10 @@ describe('順番待ちの合図（queued）', () => {
 
     const { router } = renderChat();
     await send('やあ');
-    await untilOpenSettled(router);
-    queuedGate.release();
+    await untilOpenSettled(router, CONVERSATION_ID);
+    queuedGate.open();
     await screen.findByText('順番を待っている…');
-    thinkingGate.release();
+    thinkingGate.open();
 
     expect(await screen.findByText('考えている…')).toBeTruthy();
     // 順番待ちの表示は残らない（進行中の合図は1つだけ）。
@@ -578,7 +552,7 @@ describe('枠が閉じている合図（usage_limited）', () => {
             {
               event: 'usage_limited',
               data: { type: 'usage_limited', message: '枠が閉じている（テスト用の文言）' },
-              after: limitedGate.opened,
+              after: limitedGate.promise,
             },
             { event: 'error', data: { type: 'error', message: 'いまは投げられない' } },
           ],
@@ -597,8 +571,8 @@ describe('枠が閉じている合図（usage_limited）', () => {
 
     const { router } = renderChat();
     await send('やあ');
-    await untilOpenSettled(router);
-    limitedGate.release();
+    await untilOpenSettled(router, CONVERSATION_ID);
+    limitedGate.open();
 
     // SDK の文言（event.message）がそのまま残っている。
     expect(await screen.findByText(/枠が閉じている（テスト用の文言）/)).toBeTruthy();

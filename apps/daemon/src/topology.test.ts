@@ -464,3 +464,77 @@ describe('runner の上に居る委譲（runnerListedAt）は窓に関係なく�
     expect(cut.managersOmitted ?? 0).toBeGreaterThan(0);
   });
 });
+
+describe('枠(利用上限)で止まっている委譲（usageStoppedAt）は窓に関係なく載る', () => {
+  const OLD = -TOPOLOGY_ENDED_WINDOW_MS - 60 * 60_000;
+  const STOPPED_AT = '2026-10-03T00:00:00.000Z';
+  const idsOf = (managers: ManagerSummary[]) =>
+    buildTopologySnapshot(inputs({ managers })).managers.map((m) => m.managerId);
+
+  it('窓の外の done でも載り、usageStoppedAt が行に出る（スキーマも通る）', () => {
+    const snapshot = buildTopologySnapshot(
+      inputs({
+        managers: [
+          manager('blocked', { status: 'done', updatedAt: iso(OLD), usageStoppedAt: STOPPED_AT }),
+        ],
+      }),
+    );
+    expect(snapshot.managers.map((m) => m.managerId)).toEqual(['blocked']);
+    expect(snapshot.managers[0]?.usageStoppedAt).toBe(STOPPED_AT);
+    expect(topologyResponseSchema.parse(snapshot)).toEqual(snapshot);
+  });
+
+  it('止まっていない done は従来どおり（窓の外なら載らず、窓の中なら載るが欄は無い）', () => {
+    expect(idsOf([manager('old', { status: 'done', updatedAt: iso(OLD) })])).toEqual([]);
+    const recent = buildTopologySnapshot(
+      inputs({ managers: [manager('recent', { status: 'done', updatedAt: iso(-1_000) })] }),
+    );
+    expect(recent.managers[0]?.managerId).toBe('recent');
+    expect(recent.managers[0]).not.toHaveProperty('usageStoppedAt');
+  });
+
+  it('鍵が回って印が下りた（欄が無い）委譲は、窓の外なら図から消える', () => {
+    expect(idsOf([manager('resumed', { status: 'done', updatedAt: iso(OLD) })])).toEqual([]);
+  });
+
+  it('lost / failed / stopped は、印が残っていても窓の外なら載らない', () => {
+    expect(
+      idsOf(
+        (['lost', 'failed', 'stopped'] as const).map((status) =>
+          manager(`t-${status}`, {
+            status,
+            live: false,
+            updatedAt: iso(OLD),
+            usageStoppedAt: STOPPED_AT,
+          }),
+        ),
+      ),
+    ).toEqual([]);
+  });
+
+  it('途中の段に置く: 終端より前に並び、予算で先に切られない', () => {
+    const big = 'あ'.repeat(TOPOLOGY_REQUEST_LIMIT);
+    const ended = Array.from({ length: 400 }, (_, i) =>
+      manager(`end-${String(i).padStart(3, '0')}`, {
+        status: 'done',
+        request: big,
+        updatedAt: iso(-1_000),
+      }),
+    );
+    const snapshot = buildTopologySnapshot(
+      inputs({
+        managers: [
+          ...ended,
+          manager('blocked', {
+            status: 'done',
+            startedAt: iso(-1_000_000),
+            updatedAt: iso(OLD),
+            usageStoppedAt: STOPPED_AT,
+          }),
+        ],
+      }),
+    );
+    expect(snapshot.managers[0]?.managerId).toBe('blocked');
+    expect(snapshot.managersOmitted ?? 0).toBeGreaterThan(0);
+  });
+});

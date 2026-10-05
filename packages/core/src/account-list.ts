@@ -37,6 +37,7 @@ function viewOf(account: AuthAccount) {
     granted: account.grantedAt !== null,
     grantedAt: account.grantedAt,
     grantedBy: account.grantedBy,
+    // 注記: 宣言は資格の判断には使っていない（2026-10-05 オーナーの判断：ログインできる人＝持ち主。#2862）。表示だけ残してある。
     ownerDeclaredAt: account.ownerDeclaredAt,
     createdAt: account.createdAt,
     lastLoginAt: account.lastLoginAt,

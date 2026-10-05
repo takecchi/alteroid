@@ -1,9 +1,19 @@
 import { MemoryTabs } from '~/components/group-tabs';
 import { LoadError } from '~/components/load-error';
 import { useId, useState } from 'react';
-import { Link, useNavigate } from 'react-router';
+import { Link, Outlet, useNavigate, useParams } from 'react-router';
 
-import { Page, Button, Card, Empty, Input, Spinner } from '@alteroid/ui';
+import {
+  Page,
+  Button,
+  Empty,
+  FieldHint,
+  Input,
+  ListDetail,
+  ListDetailItems,
+  Spinner,
+  cn,
+} from '@alteroid/ui';
 import { useMemoryDocuments } from '@alteroid/swr';
 import {
   describeMemoryDescriptionDrift,
@@ -17,13 +27,20 @@ import type { MemorySummary } from '@alteroid/logic';
 /** サーバ側と同じ規則（`memorySlugSchema`）。ここで弾いて 400 を待たない。 */
 const SLUG_PATTERN = /^[a-z0-9][a-z0-9._-]*$/;
 
+/**
+ * 記憶の一覧と中身は1画面（`ListDetail`）。この経路は `memory/:slug` の親（layout route）で、
+ * 右の中身は子の経路（`memory-detail.tsx`）が `<Outlet />` に出る。URL は今までどおり
+ * （`/memory`・`/memory/:slug`）。選択は子の `:slug` から読む。
+ */
 export default function Memory() {
   const { data, error, isLoading, isValidating, mutate } = useMemoryDocuments();
   const navigate = useNavigate();
   const slugId = useId();
   const [slug, setSlug] = useState('');
+  const { slug: selectedSlug } = useParams();
 
   const documents = data?.documents ?? [];
+  const hintId = useId();
   const valid = SLUG_PATTERN.test(slug) && slug.length <= 128;
   /**
    * **取れなかったのを0件と描かない**（issue #2324）。一覧をまだ一度も読めていないまま
@@ -33,104 +50,132 @@ export default function Memory() {
   const listUnavailable = data === undefined && error !== undefined;
 
   return (
+    /*
+      本文の余白とスクロールは外す（`overflow-hidden p-0 md:p-0`）。`ListDetail` が左右のペインを
+      それぞれスクロールさせるため。
+    */
     <Page
       tabs={<MemoryTabs />}
       title="記憶"
       description="クローンの価値観そのもの。人間がいつでも読んで直せる"
+      className="overflow-hidden p-0 md:p-0"
     >
-      <LoadError
-        what="記憶の一覧"
-        error={error}
-        onRetry={() => mutate()}
-        retrying={isValidating}
-        className="mb-4"
-      />
-
-      <Card className="mb-4 p-4">
-        <p className="mb-2 text-sm font-medium">新しい記憶を書く</p>
-        <label htmlFor={slugId} className="mb-1 block text-xs text-muted-foreground">
-          名前（半角の英小文字・数字・. _ - のみ）
-        </label>
-        <div className="flex gap-2">
-          <Input
-            id={slugId}
-            value={slug}
-            placeholder="例: work-style"
-            onChange={(event) => setSlug(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter' && valid) void navigate(`/memory/${slug}`);
-            }}
-          />
-          <Button
-            variant="primary"
-            disabled={!valid}
-            onClick={() => void navigate(`/memory/${slug}`)}
-          >
-            開く
-          </Button>
+      <div className="flex h-full flex-col">
+        {/*
+          名前を入れて開く欄は、ペイン幅（288px）に収まらないので、一覧の上の帯に置く。
+          狭い画面で記憶を開いているあいだは畳む（中身の領域を広く使う。「記憶」のタブで一覧へ戻れば出る）。
+        */}
+        <div
+          className={cn(
+            'shrink-0 border-b border-border px-4 py-3 md:px-6',
+            selectedSlug !== undefined && 'hidden md:block',
+          )}
+        >
+          <div className="md:flex md:items-end md:gap-6">
+            <div className="md:shrink-0">
+              <p className="mb-2 text-sm font-medium md:mb-1">新しい記憶を書く</p>
+              <label htmlFor={slugId} className="mb-1 block text-xs text-muted-foreground md:mb-0">
+                名前（半角の英小文字・数字・. _ - のみ）
+              </label>
+            </div>
+            <div className="flex gap-2 md:w-96">
+              <Input
+                id={slugId}
+                aria-describedby={hintId}
+                value={slug}
+                placeholder="例: work-style"
+                onChange={(event) => setSlug(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' && valid) void navigate(`/memory/${slug}`);
+                }}
+              />
+              <Button
+                variant="primary"
+                disabled={!valid}
+                onClick={() => void navigate(`/memory/${slug}`)}
+              >
+                開く
+              </Button>
+            </div>
+          </div>
+          <FieldHint id={hintId} className="mt-1.5">
+            先頭は英数字で、128 文字まで。
+          </FieldHint>
+          {slug !== '' && !valid && (
+            <p className="mt-1.5 text-xs text-destructive">
+              使えるのは半角の英小文字・数字と . _ - で、先頭は英数字。128 文字まで。
+            </p>
+          )}
         </div>
-        {slug !== '' && !valid && (
-          <p className="mt-1.5 text-xs text-destructive">
-            使えるのは半角の英小文字・数字と . _ - で、先頭は英数字。128 文字まで。
-          </p>
-        )}
-      </Card>
 
-      {isLoading ? (
-        <Spinner />
-      ) : listUnavailable ? null : documents.length === 0 ? (
-        <Card>
-          <Empty>
-            まだ空。起動直後に人間の登場が多いのは正しい動作で、価値観が溜まるほど確認は減る。
-          </Empty>
-        </Card>
-      ) : (
-        <Card>
-          <ul>
-            {documents.map((document) => (
-              <li key={document.slug} className="border-b border-border last:border-b-0">
-                {/* 行全体をリンクにしない（#2808）。リンクは題名だけにして、slug・サイズ・日時は
-                    選択・コピーできる文字にする。 */}
-                <div className="flex items-center gap-3 px-4 py-3 hover:bg-muted">
-                  <div className="min-w-0 flex-1">
-                    {/* 一覧の1行は Markdown 化の対象外（`components/markdown.tsx` の doc） */}
-                    <div className="flex items-baseline text-sm">
+        <ListDetail
+          className="min-h-0 flex-1"
+          listLabel="記憶の一覧"
+          detailLabel="記憶の中身"
+          hasSelection={selectedSlug !== undefined}
+          selectionKey={selectedSlug}
+          emptyDetail={<Empty>左の一覧から記憶を選ぶと、その中身がここに出る。</Empty>}
+          list={
+            <>
+              <LoadError
+                what="記憶の一覧"
+                error={error}
+                onRetry={() => mutate()}
+                retrying={isValidating}
+                className="m-3"
+              />
+              {isLoading ? (
+                <Spinner />
+              ) : listUnavailable ? null : documents.length === 0 ? (
+                <Empty inset="card">
+                  まだ空。起動直後に人間の登場が多いのは正しい動作で、価値観が溜まるほど確認は減る。
+                </Empty>
+              ) : (
+                <ListDetailItems
+                  label="記憶"
+                  items={documents.map((document) => ({
+                    key: document.slug,
+                    href: `/memory/${document.slug}`,
+                    current: document.slug === selectedSlug,
+                    // 行全体をリンクにしない（#2808）。リンクは題名だけにして、名前・サイズ・日時は
+                    // 選択・コピーできる文字にする（`ListDetailItems` の `lead` / `extra`）。
+                    // 一覧の1行は Markdown 化の対象外（`components/markdown.tsx` の doc）
+                    lead: (
                       <span
                         className="mr-1.5 shrink-0 text-[10px] text-muted-foreground"
                         title={kindHint(document.kind)}
                       >
                         {kindLabel(document.kind)}
                       </span>
-                      {/* 押せる範囲は題名の行いっぱい（縦は上下に 4px ずつ足して 28px。-my で行の高さは変えない） */}
-                      <Link
-                        to={`/memory/${document.slug}`}
-                        className="-my-1 block min-w-0 truncate py-1 underline-offset-2 hover:underline"
-                      >
-                        {document.title}
-                      </Link>
-                    </div>
-                    <p className="truncate font-mono text-[11px] text-muted-foreground">
-                      {document.slug}
-                    </p>
-                    {document.description !== undefined && (
-                      // 一覧の1行は Markdown 化の対象外（`components/markdown.tsx` の doc）
-                      <p className="truncate text-[11px] text-muted-foreground">
-                        {freshnessMark(document.descriptionFreshness)}
-                        {document.description}
-                      </p>
-                    )}
-                  </div>
-                  <span className="shrink-0 text-[11px] text-muted-foreground">
-                    {formatBytes(document.bytes)} · 作成{' '}
-                    {formatCreatedAtRelative(document.createdAt)} · 更新{' '}
-                    {formatRelative(document.updatedAt)}
-                  </span>
-                </div>
-              </li>
-            ))}
-          </ul>
-        </Card>
-      )}
+                    ),
+                    children: document.title,
+                    extra: (
+                      <>
+                        <p className="truncate font-mono text-[11px] text-muted-foreground">
+                          {document.slug}
+                        </p>
+                        {document.description !== undefined && (
+                          <p className="line-clamp-2 break-words text-[11px] text-muted-foreground">
+                            {freshnessMark(document.descriptionFreshness)}
+                            {document.description}
+                          </p>
+                        )}
+                        <p className="mt-0.5 truncate text-[11px] text-muted-foreground">
+                          {formatBytes(document.bytes)} · 作成{' '}
+                          {formatCreatedAtRelative(document.createdAt)} · 更新{' '}
+                          {formatRelative(document.updatedAt)}
+                        </p>
+                      </>
+                    ),
+                  }))}
+                  renderLink={({ href, ...rest }) => <Link to={href} {...rest} />}
+                />
+              )}
+            </>
+          }
+          detail={<Outlet />}
+        />
+      </div>
     </Page>
   );
 }

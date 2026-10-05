@@ -109,7 +109,7 @@
         "operationId": "getHealth",
         "tags": ["system"],
         "summary": "死活監視と本人確認",
-        "description": "デーモンが応答しているかと、その pid・記憶の置き場・認証の状態を返す。`Authorization: Bearer <state/daemon.json の token>` を添えると `operator` が true になり、CLI はこれで「自分が起こしたデーモンか」を確かめる（PID は信用しない）。**トークンそのものは返さない** — この値は許可を付与できる資格そのものなので、無認証で読める応答には置けない。",
+        "description": "デーモンが応答しているかと、その pid・認証の状態を返す。**記憶の置き場は返さない**（無認証で読める応答に、内部のホスト名・DB 名・ホームのパスを置かない。#2869）。認証の要る `GET /status` が返す。`Authorization: Bearer <state/daemon.json の token>` を添えると `operator` が true になり、CLI はこれで「自分が起こしたデーモンか」を確かめる（PID は信用しない）。**トークンそのものは返さない** — この値は許可を付与できる資格そのものなので、無認証で読める応答には置けない。",
         "security": [],
         "responses": {
           "200": {
@@ -130,9 +130,6 @@
                     },
                     "operator": {
                       "type": "boolean"
-                    },
-                    "storage": {
-                      "type": "string"
                     },
                     "auth": {
                       "type": "object",
@@ -162,7 +159,49 @@
                       "required": ["enabled", "providers"]
                     }
                   },
-                  "required": ["ok", "pid", "operator", "storage", "auth"]
+                  "required": ["ok", "pid", "operator", "auth"]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/status": {
+      "get": {
+        "operationId": "getStatus",
+        "tags": ["system"],
+        "summary": "デーモン自身の説明（記憶の置き場。資格が要る）",
+        "description": "記憶の置き場（PostgreSQL なら `host:port/db`、ファイルなら記憶ディレクトリのパス）を返す。接続情報（パスワード等）は含めない。無認証の `GET /health` は置き場を返さないので、置き場を知りたい呼び出し元はログインの後ろのここから取る。",
+        "responses": {
+          "200": {
+            "description": "認証を通った相手への説明。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "storage": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["storage"]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "資格が無い。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
                 }
               }
             }
@@ -2447,6 +2486,11 @@
                             "format": "date-time",
                             "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
                           },
+                          "usageStoppedAt": {
+                            "type": "string",
+                            "format": "date-time",
+                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                          },
                           "request": {
                             "type": "string"
                           },
@@ -2735,6 +2779,11 @@
                             "type": "string"
                           },
                           "runnerListedAt": {
+                            "type": "string",
+                            "format": "date-time",
+                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                          },
+                          "usageStoppedAt": {
                             "type": "string",
                             "format": "date-time",
                             "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
@@ -17414,7 +17463,7 @@
             }
           },
           "403": {
-            "description": "実行環境の持ち主でも、持ち主として宣言されたアカウントでもない。",
+            "description": "許可（`access grant`）の無いアカウント。",
             "content": {
               "application/json": {
                 "schema": {
@@ -17596,7 +17645,7 @@
             }
           },
           "403": {
-            "description": "実行環境の持ち主でも、持ち主として宣言されたアカウントでもない。",
+            "description": "許可（`access grant`）の無いアカウント。",
             "content": {
               "application/json": {
                 "schema": {
@@ -17795,7 +17844,7 @@
             }
           },
           "403": {
-            "description": "実行環境の持ち主でも、持ち主として宣言されたアカウントでもない。",
+            "description": "許可（`access grant`）の無いアカウント。",
             "content": {
               "application/json": {
                 "schema": {
@@ -18006,7 +18055,7 @@
             }
           },
           "403": {
-            "description": "実行環境の持ち主でも、持ち主として宣言されたアカウントでもない。",
+            "description": "許可（`access grant`）の無いアカウント。",
             "content": {
               "application/json": {
                 "schema": {
@@ -18187,7 +18236,7 @@
             }
           },
           "403": {
-            "description": "実行環境の持ち主として宣言されたアカウントではない。",
+            "description": "許可（`access grant`）の無いアカウント。",
             "content": {
               "application/json": {
                 "schema": {
@@ -18295,7 +18344,7 @@
             }
           },
           "403": {
-            "description": "実行環境の持ち主として宣言されたアカウントではない。",
+            "description": "許可（`access grant`）の無いアカウント。",
             "content": {
               "application/json": {
                 "schema": {
@@ -18612,7 +18661,7 @@
             }
           },
           "403": {
-            "description": "実行環境の持ち主として宣言されたアカウントではない（宣言していない許可済みアカウントも含む）。",
+            "description": "許可（`access grant`）の無いアカウント。",
             "content": {
               "application/json": {
                 "schema": {
@@ -22501,7 +22550,7 @@
         "operationId": "postAccessByAccountIdOwner",
         "tags": ["access"],
         "summary": "実行環境の持ち主として宣言する",
-        "description": "宣言できるのは実行環境の持ち主（operator トークン）だけ。対象は許可済み（`access grant` 済み）のアカウントに限る——未許可なら 409。運ぶ情報は無い（`{}` を送る）。宣言済みのアカウントは `PUT /credentials` `POST /reset` を通る（`requireOwner`）。",
+        "description": "（宣言は資格の判断には使っていない。ログインできる人＝持ち主。#2862）宣言できるのは実行環境の持ち主（operator トークン）だけ。対象は許可済み（`access grant` 済み）のアカウントに限る——未許可なら 409。運ぶ情報は無い（`{}` を送る）。許可済みのアカウントは宣言の有無にかかわらず `PUT /credentials` `POST /reset` を通る（2026-10-05、#2862 のオーナー決定）。",
         "requestBody": {
           "required": true,
           "description": "**中身は読まないので `{}` を送ればよい。** 本文そのものではなく `content-type: application/json` が要る。",
@@ -22711,7 +22760,7 @@
         "operationId": "postAccessByAccountIdOwnerRevoke",
         "tags": ["access"],
         "summary": "実行環境の持ち主としての宣言を取り消す",
-        "description": "宣言していなくても 200（既に取り消し済みと同じ扱い）。運ぶ情報は無い（`{}` を送る）。",
+        "description": "（宣言は資格の判断には使っていない（2026-10-05 オーナーの判断：ログインできる人＝持ち主。#2862））宣言していなくても 200（既に取り消し済みと同じ扱い）。運ぶ情報は無い（`{}` を送る）。",
         "requestBody": {
           "required": true,
           "description": "**中身は読まないので `{}` を送ればよい。** 本文そのものではなく `content-type: application/json` が要る。",
@@ -23097,7 +23146,7 @@
             }
           },
           "403": {
-            "description": "実行環境の持ち主として宣言されたアカウントではない（宣言していない許可済みアカウントも含む）。",
+            "description": "許可（`access grant`）の無いアカウント。",
             "content": {
               "application/json": {
                 "schema": {

@@ -15,6 +15,7 @@ import {
   ConfirmDialog,
   Empty,
   ErrorNote,
+  FieldHint,
   Input,
   Spinner,
   Textarea,
@@ -1104,6 +1105,7 @@ function OpenRow({
 }) {
   const closeCommitment = useCloseCommitment();
   const reasonId = useId();
+  const reasonHintId = useId();
   const [reason, setReason] = useState('');
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<unknown>(undefined);
@@ -1185,9 +1187,10 @@ function OpenRow({
       <div className="mt-1 flex items-center gap-2">
         <Input
           id={reasonId}
+          aria-describedby={reasonHintId}
           value={reason}
           aria-label={`「${snippet(commitment.body)}」を片付けた理由`}
-          placeholder="何をもって片付いたか（後から否定できるように残す）"
+          placeholder="例: 修正を入れて確認した"
           onChange={(event) => setReason(event.target.value)}
           onKeyDown={(event) => {
             // IME 変換中の Enter を拾わない。ここは Enter 単体で送るので、
@@ -1220,6 +1223,9 @@ function OpenRow({
           片付いた
         </Button>
       </div>
+      <FieldHint id={reasonHintId} className="mt-1.5">
+        何をもって片付いたかを書く。後から否定できるように残る。
+      </FieldHint>
 
       <ErrorNote error={failure} className="mt-2" />
     </li>
@@ -1321,6 +1327,7 @@ function ClosedReasonBody({ commitment }: { commitment: Commitment }) {
 function PushForm() {
   const pushCommitment = usePushCommitment();
   const inputId = useId();
+  const bodyHintId = useId();
   const [body, setBody] = useState('');
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<unknown>(undefined);
@@ -1348,8 +1355,9 @@ function PushForm() {
         </label>
         <Input
           id={inputId}
+          aria-describedby={bodyHintId}
           value={body}
-          placeholder="何を引き受けたか（全文で書く。切るのは一覧側の仕事）"
+          placeholder="例: 金曜までに週次レビューを出す"
           onChange={(event) => setBody(event.target.value)}
           onKeyDown={(event) => {
             // IME 変換中の Enter を拾わない。ここは Enter 単体で送るので、
@@ -1369,6 +1377,9 @@ function PushForm() {
             }
           }}
         />
+        <FieldHint id={bodyHintId} className="-mt-1">
+          何を引き受けたかを全文で書く。切って短く見せるのは一覧側の仕事。
+        </FieldHint>
         <div>
           <Button
             variant="primary"

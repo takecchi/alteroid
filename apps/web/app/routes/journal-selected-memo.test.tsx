@@ -22,7 +22,7 @@
  * mutation-testing/mutate.mjs` の `apply`/`restore`）で `useMemo` を外す
  * 変異を当てて確かめた（実測は PR #2081 の本文に貼ってある）。
  */
-import { fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -79,6 +79,10 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  // マウントした画面を片付ける（`@testing-library/react` の自動 cleanup は globals 無しでは効かない）。
+  // 片付けないと、テスト後も画面の SWR が購読・再検証を続け、jsdom が畳まれた後に
+  // `document` を読んで未処理の拒否になる（#2906）。
+  cleanup();
   vi.clearAllMocks();
   capturedSelected.length = 0;
 });

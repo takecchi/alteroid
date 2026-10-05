@@ -1,6 +1,6 @@
 ---
 name: pr-merge
-description: PR を squash マージする直前に読む。squash の本文は main のコミットに焼かれて消せないので、マージの口で本文を明示すること、本文が名乗った変更と実際の差分を突き合わせること（#1130）、トレーラ・フッタ・閉じるキーワードを本文から外すこと、Alteroid-Issue-Done の行、bot 名義のコミットを含む PR（SDK 更新）で GitHub が足す共著者の行（#1350）をまとめてある。
+description: PR を squash マージする直前に読む。squash の本文は main のコミットに焼かれて消せないので、マージの口で本文を明示すること、本文が名乗った変更と実際の差分を突き合わせること（#1130）、トレーラ・フッタ・閉じるキーワードを本文から外すこと、Alteroid-Issue-Done の行、bot 名義のコミットを含む PR（SDK 更新）で GitHub が足す共著者の行（#1350）をまとめてある。マージの口の規約（`--match-head-commit`・squash の本文・`--delete-branch` を付けない）は機械の門ではなく、この文書が持つ（#2884）。
 ---
 
 # PR を squash マージする直前に確かめること
@@ -39,14 +39,18 @@ description: PR を squash マージする直前に読む。squash の本文は 
 
 **緑を見た head と、マージされる head がずれうる。** PR の CI は `refs/pull/N/merge` を見ていて `strict: false` なので、見た後に push された head は機械では突き合わされていない。`gh pr merge` に `--match-head-commit <sha>`（緑を確かめた head の sha。`gh pr view <N> --json headRefOid` で取る）を付けると、head が動いていれば gh が拒む。`--auto` にも付ける。
 
-- alteroid の manager / worker の `Bash` では、付いていない `gh pr merge` は `bash-wait-guard.ts` が弾く（形は `gh-pr-merge-no-match-head-commit`）。`--disable-auto` と `--help` は弾かない
-- 弾かれたら sha を確かめ直して付ける。sha は緑を確かめたときの値を使う（マージの直前に取り直すと、ずれを機械が拒む意味が消える）
+- **これはこのリポジトリの規約で、機械の門は無い**（以前は製品の Bash の門が弾いていたが、運用規約を製品へ焼き込むのは誤りだったので外した。#2884）。付け忘れても通るので、マージする人が付ける
+- sha は緑を確かめたときの値を使う（マージの直前に取り直すと、ずれを gh が拒む意味が消える）
 
 ## 6. squash には本文（`--body` / `-b` / `--body-file` / `-F`）を付ける（#1350、#2280）
 
-§1 の決定を、Bash のガードでも見る。`gh pr merge` で `--squash`（または `-s`）を使い、本文のフラグが1つも無いものは `bash-wait-guard.ts` が弾く（形は `gh-pr-merge-squash-no-body`）。`--merge` / `--rebase` と、`--disable-auto` / `--help` は弾かない。
+§1 の決定のとおり、`gh pr merge --squash`（または `-s`）には本文のフラグを必ず付ける。**機械の門は無い**（以前は製品の Bash の門が弾いていた。#2884 で外した）。付け忘れると既定の本文で squash され、`Co-authored-by:` の行が `main` に焼かれうる。
 
 - 直し方の例: `gh pr merge <N> --squash --match-head-commit <sha> --body-file <file>`
-- `--match-head-commit` も欠けていれば、形は `gh-pr-merge-no-match-head-commit` のまま、理由に両方が書かれる
-- 効く範囲は manager / worker の `Bash` だけ。クローンと人間の操作、MCP の `merge_pull_request`、`gh api` には効かない
 - 根拠の実測（2026-09-30）: #1465 の後に main へ入った実トレーラ3件（`87eec2bb`、`39721665`、`2a275f8d`）は、どれもマージの本文が PR 本文の写し（既定の本文）だった。本文を書き直して渡した squash では、author が別の身元の PR でも行は付いていない（#1468〜#1488 の 10 本）
+
+## 7. `--delete-branch`（`-d`）を付けない
+
+`gh pr merge --delete-branch` は、その枝を base にしている PR をマージと同時に黙って閉じ、閉じたあとは `reopen` も `--base` の付け替えも拒まれる（実測 2026-09-15、PR #1008 と #1010。生出力は `.claude/skills/tool-quirks/SKILL.md`）。このリポジトリは `delete_branch_on_merge` でマージ後に枝を消すので、付けなくても枝は消える。積んだ PR が在るなら、先に依存側の base を `gh pr edit <N> --base main` で付け替えてから base 側をマージする。
+
+**機械の門は無い**（以前は製品の Bash の門が弾いていた。#2884 で外した）。付けたら取り返しが付かないので、マージする人が付けない。

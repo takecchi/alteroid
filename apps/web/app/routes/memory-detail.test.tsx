@@ -16,7 +16,7 @@
  * unmount してもデータは消えない。これを直接固定する。
  */
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { createMemoryRouter, RouterProvider } from 'react-router';
+import { createMemoryRouter, Link, RouterProvider } from 'react-router';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { MemoryDocument } from '@alteroid/logic';
@@ -68,7 +68,13 @@ afterEach(() => {
  */
 function Harness({ slug }: { slug: string }) {
   const loaderData = clientLoader({ params: { slug } } as Route.ClientLoaderArgs);
-  return <MemoryDetail {...({ loaderData } as Route.ComponentProps)} />;
+  return (
+    <>
+      {/* 離れる先のリンク（本番では左の一覧や上のタブが担う。一覧との組み合わせは memory-list-detail.test.tsx） */}
+      <Link to="/memory">記憶</Link>
+      <MemoryDetail {...({ loaderData } as Route.ComponentProps)} />
+    </>
+  );
 }
 
 /** ルーターを組んで描くだけ。`globalThis.fetch` の差し替えは呼ぶ側の責務。 */
@@ -435,15 +441,17 @@ describe('折り返しの付け忘れ（本2）', () => {
  * 持たないので、固定できるのは「そのクラス名が書かれていること」までである。
  */
 describe('横並びの積み替え（本4-D）: タイトル行の slug', () => {
-  it('slug の span に min-w-0 が付いている', async () => {
+  it('slug の見出し（h2）が break-all で幅に収まり、右のボタン群は縮まない', async () => {
     const longSlug = 'a'.repeat(80);
     renderDetail(longSlug, docRoute({ ...DOC, slug: longSlug }));
 
-    const span = await screen.findByText(longSlug);
-    const tokens = span.className.split(/\s+/);
-    expect(tokens).toContain('min-w-0');
-    // break-all（本2）も残っていること。
-    expect(tokens).toContain('break-all');
+    const heading = await screen.findByRole('heading', { level: 2, name: longSlug });
+    expect(heading.className.split(/\s+/)).toContain('break-all');
+    // 縮む側は見出しを包む div（min-w-0）。ボタン群は shrink-0。
+    expect(heading.parentElement?.className.split(/\s+/)).toContain('min-w-0');
+    expect(
+      screen.getByRole('button', { name: /保存|変更なし/ }).parentElement?.className,
+    ).toContain('shrink-0');
   });
 });
 
@@ -555,17 +563,12 @@ describe('編集欄の振る舞い（部品へ移しても変わらないもの�
 });
 
 describe('見出し（#2763）', () => {
-  it('戻る導線「記憶」は縮まず折り返さない（狭い幅で縦に割れない）', async () => {
-    // jsdom はレイアウトを持たないので、実寸（390px で 16px 幅 × 2行に割れた）は測れない。
-    // 割れを防ぐ指定そのもの（flex 子の shrink と折り返しの抑止）を固定する。
-    // 実寸はブラウザで測った値を PR に書いている。
+  it('slug は h2 で、長くても折り返せる', async () => {
+    // jsdom はレイアウトを持たないので、実寸はブラウザで測った値を PR に書いている。
     renderDetail('notes', docRoute(DOC));
 
-    const back = await screen.findByRole('link', { name: '記憶' });
-    expect(back.className).toContain('shrink-0');
-    expect(back.className).toContain('whitespace-nowrap');
-    // 縮む側は slug だけ。
-    expect(screen.getByText('notes').className).toContain('min-w-0');
+    const heading = await screen.findByRole('heading', { level: 2, name: 'notes' });
+    expect(heading.className).toContain('break-all');
   });
 });
 
@@ -753,5 +756,87 @@ describe('保存した直後に編集を再開しても、手元の版は保存�
     await waitFor(() => expect(putBodies).toHaveLength(2));
     expect(putBodies[0]).toEqual({ content: '1回目', ifMatch: V1 });
     expect(putBodies[1]).toEqual({ content: '2回目', ifMatch: V2 });
+  });
+});
+
+/**
+ * 削除は読んだ版を前提にする（#2916 / #2881）。衝突したら消さず、いまの内容を見せ、
+ * 自動では再送しない。人間がもう一度確認して消すときは、見せたいまの版を送る。
+ */
+describe('削除は読んだ版を ifMatch（クエリ）として送り、衝突しても消さない', () => {
+  const V1 = 'a'.repeat(64);
+  const V2 = 'b'.repeat(64);
+  const CLONE_DOC = {
+    ...DOC,
+    content: 'クローンが書いた本文',
+    updatedAt: '2026-08-22T02:00:00.000Z',
+  };
+
+  /** DELETE の URL を控え、`deleteResponses` を順に返す。GET は常に DOC（版 V1）。 */
+  function stubDelete(deleteResponses: Response[]) {
+    const deleteUrls: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = input instanceof Request ? input : new Request(input, init);
+      if (!request.url.includes('/memory/notes')) {
+        return Promise.reject(new TypeError(`Failed to fetch: ${request.url}`));
+      }
+      if (request.method === 'DELETE') {
+        deleteUrls.push(request.url);
+        return deleteResponses.shift() ?? json({ error: 'x' }, 500);
+      }
+      return json({ document: DOC, version: V1 });
+    }) as typeof fetch;
+    mountDetail('notes');
+    return deleteUrls;
+  }
+
+  const conflict = () =>
+    json(
+      {
+        error: '記憶が読んだ後に変わっています（消していません）',
+        current: { document: CLONE_DOC, version: V2 },
+      },
+      409,
+    );
+
+  async function askDelete() {
+    await screen.findByRole('heading', { name: '見出し' });
+    fireEvent.click(screen.getByRole('button', { name: '削除' }));
+    fireEvent.click(await screen.findByRole('button', { name: '削除する' }));
+  }
+
+  it('読んだ版を ifMatch として DELETE のクエリに付ける', async () => {
+    const urls = stubDelete([json({ ok: true, slug: 'notes' })]);
+
+    await askDelete();
+
+    await waitFor(() => expect(urls).toHaveLength(1));
+    expect(new URL(urls[0] ?? '').searchParams.get('ifMatch')).toBe(V1);
+  });
+
+  it('409 では消さず、確認を閉じて、読んだ後に変わったことといまの内容を見せる。再送しない', async () => {
+    const urls = stubDelete([conflict()]);
+
+    await askDelete();
+
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toContain('消していない');
+    expect(alert.textContent).toContain('クローンが書いた本文');
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    // この画面に留まっている（移動していない）。自動では再送していない。
+    expect(screen.getByRole('button', { name: '削除' })).toBeTruthy();
+    expect(urls).toHaveLength(1);
+  });
+
+  it('いまの内容を見たうえで、もう一度確認して削除すると、いまの版（V2）で送る', async () => {
+    const urls = stubDelete([conflict(), json({ ok: true, slug: 'notes' })]);
+    await askDelete();
+    await screen.findByRole('alert');
+
+    fireEvent.click(screen.getByRole('button', { name: '削除' }));
+    fireEvent.click(await screen.findByRole('button', { name: '削除する' }));
+
+    await waitFor(() => expect(urls).toHaveLength(2));
+    expect(new URL(urls[1] ?? '').searchParams.get('ifMatch')).toBe(V2);
   });
 });
