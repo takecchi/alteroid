@@ -29,6 +29,8 @@ export interface TopologyView {
     status: string;
     live: boolean;
     runnerId?: string;
+    /** runner の生存確認の一覧にこの委譲が載っていた観測時刻（無いときは鍵が無い）。 */
+    runnerListedAt?: string;
     request: string;
     startedAt: string;
     updatedAt: string;
@@ -131,7 +133,7 @@ export function renderTopology(view: TopologyView, now: number = Date.now()): st
   }
 
   if (view.managers.length === 0) {
-    lines.push('  └ マネージャー: 走行中・返事待ち・直近10分に終わった委譲は無い');
+    lines.push('  └ マネージャー: 走行中・返事待ち・直近10分に終わった委譲は無い（runner の上に居ると観測できた委譲も無い）');
   } else {
     lines.push(`  └ マネージャー（${String(view.managers.length)} 本）`);
     for (const manager of view.managers) {
@@ -151,6 +153,15 @@ export function renderTopology(view: TopologyView, now: number = Date.now()): st
         lines.push(
           `        完了待ち: 背景処理 ${String(tasks)} 件${breakdown === '' ? '' : `（${breakdown}）`}（${formatAge(since, now)}から）`,
         );
+      }
+      // 手が空いた（走行中でも返事待ちでもない）が、runner の一覧にはまだ載っている委譲。
+      // 地図が窓（10分）を過ぎても載せている理由を言う。欄が無ければ行ごと出さない。
+      if (
+        manager.runnerListedAt !== undefined &&
+        manager.status !== 'running' &&
+        manager.status !== 'waiting_human'
+      ) {
+        lines.push(`        runner の一覧に載っている（観測 ${formatAge(manager.runnerListedAt, now)}）`);
       }
       if (manager.lastReportAt !== undefined) {
         lines.push(`        最後の報告 ${formatAge(manager.lastReportAt, now)}`);

@@ -192,6 +192,29 @@ describe('renderTopology', () => {
     expect(renderTopology(view() as never, NOW)).not.toContain('完了待ち');
   });
 
+  it('手が空いて runner の一覧に載っている委譲は、その旨を出し、欄が無ければ出さない', () => {
+    const idle = (extra: object) =>
+      view({
+        managers: [
+          {
+            managerId: 'mgr-idle',
+            status: 'done',
+            live: true,
+            request: '終わった依頼',
+            startedAt: ago(7200),
+            updatedAt: ago(3600),
+            waiting: [],
+            workers: [],
+            ...extra,
+          },
+        ],
+      });
+    expect(renderTopology(idle({ runnerListedAt: ago(5) }) as never, NOW)).toContain(
+      'runner の一覧に載っている（観測 5s ago）',
+    );
+    expect(renderTopology(idle({}) as never, NOW)).not.toContain('runner の一覧に載っている');
+  });
+
   it('自由文（依頼・返事待ち）に混じったトークンは伏せる', () => {
     const token = `ghp_${'a1B2c3D4e5'.repeat(4)}`;
     const base = view();
