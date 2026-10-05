@@ -166,7 +166,19 @@ export interface ListDetailItem {
   current: boolean;
   /** 行に足す className（後勝ち）。 */
   className?: string;
+  /**
+   * リンクの中身。`extra` / `lead` を渡さなければ**行全体がリンク**になり、これが行の中身になる。
+   * 渡したときは**リンクは`children`（題名など）だけ**になる。
+   */
   children: ReactNode;
+  /**
+   * リンクの**外**に出す、選択・コピーできる中身（名前・日時など）。渡すと「一部だけがリンク」の形になる
+   * （行全体がリンクだと、中の文字をドラッグで選べない。#2808）。強調と区切り線は行全体に、
+   * `aria-current` はリンクに付く。
+   */
+  extra?: ReactNode;
+  /** 「一部だけがリンク」の形で、リンクの前に同じ行で並べる中身（種別の札など）。 */
+  lead?: ReactNode;
 }
 
 /** 1行ぶんのリンクを描く口。ルーターを知らない層なので、画面が `<Link>` を置く。 */
@@ -179,7 +191,8 @@ export type ListDetailRenderLink = (props: {
 }) => ReactNode;
 
 /**
- * 一覧の中身。各行がリンクで、選択中は `aria-current="page"` と強調。
+ * 一覧の中身。既定は各行が丸ごとリンク。`extra` / `lead` を渡した項目は、題名だけがリンクで残りは
+ * 選択できる文字になる（#2808）。どちらも選択中は `aria-current="page"`（リンクに）と強調（行に）。
  * 一覧の中で ↑/↓（前後）・Home/End（先頭/末尾）で焦点だけを移す（開くのは Enter）。
  * 選択中の項目が見えない位置にあるときは、初回の描画で見える位置へ寄せる（焦点は移さない）。
  */
@@ -217,21 +230,46 @@ export function ListDetailItems({
 
   return (
     <ul ref={listRef} aria-label={label} onKeyDown={onKeyDown}>
-      {items.map((item) => (
-        <li key={item.key}>
-          {renderLink({
-            href: item.href,
-            className: cn(
-              'block border-b border-border px-3 py-2 text-sm transition-colors hover:bg-muted',
+      {items.map((item) =>
+        item.extra !== undefined || item.lead !== undefined ? (
+          <li
+            key={item.key}
+            className={cn(
+              'border-b border-border px-3 py-2 text-sm transition-colors hover:bg-muted',
               item.current && 'lumen-edge bg-accent text-accent-foreground',
               item.className,
-            ),
-            children: item.children,
-            'aria-current': item.current ? 'page' : undefined,
-            onClick: onNavigate,
-          })}
-        </li>
-      ))}
+            )}
+          >
+            <div className="flex items-baseline">
+              {item.lead}
+              {/* 押せる範囲は題名の行いっぱい（縦は上下に 4px ずつ足して。-my で行の高さは変えない） */}
+              {renderLink({
+                href: item.href,
+                className:
+                  '-my-1 block min-w-0 flex-1 truncate py-1 underline-offset-2 hover:underline',
+                children: item.children,
+                'aria-current': item.current ? 'page' : undefined,
+                onClick: onNavigate,
+              })}
+            </div>
+            {item.extra}
+          </li>
+        ) : (
+          <li key={item.key}>
+            {renderLink({
+              href: item.href,
+              className: cn(
+                'block border-b border-border px-3 py-2 text-sm transition-colors hover:bg-muted',
+                item.current && 'lumen-edge bg-accent text-accent-foreground',
+                item.className,
+              ),
+              children: item.children,
+              'aria-current': item.current ? 'page' : undefined,
+              onClick: onNavigate,
+            })}
+          </li>
+        ),
+      )}
     </ul>
   );
 }
