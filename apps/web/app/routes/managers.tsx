@@ -1,8 +1,18 @@
 import { AlertTriangle } from 'lucide-react';
 import { useMemo } from 'react';
-import { Link, useSearchParams } from 'react-router';
+import { Link, Outlet, useLocation, useParams, useSearchParams } from 'react-router';
 
-import { Page, Card, Empty, ErrorNote, FilterChips, Spinner, StatusBadge, cn } from '@alteroid/ui';
+import {
+  Page,
+  Empty,
+  ErrorNote,
+  FilterChips,
+  ListDetail,
+  ListDetailItems,
+  Spinner,
+  StatusBadge,
+  cn,
+} from '@alteroid/ui';
 import { MANAGERS_PAGE, useManagers, useManagersWindow } from '@alteroid/swr';
 import {
   describeManagerProvider,
@@ -706,31 +716,64 @@ export default function Managers() {
     (all.data.unreadable ?? []).length === 0;
   const hideChips = nothingAtAll && selected.length === 0;
 
+  /**
+   * **一覧と詳細は1画面（`ListDetail`）。** この経路は `managers/:id` の親（layout route）で、
+   * 右の詳細は子の経路（`manager-detail.tsx`）が `<Outlet />` に出る。URL は今までどおり
+   * （`/managers`・`/managers/:id`・`?status=`）。選択は子の `:id` から読む。
+   */
+  const { id: selectedId } = useParams();
+  const { search } = useLocation();
+
   return (
+    /*
+      本文の余白とスクロールは外す（`overflow-hidden p-0 md:p-0`）。`ListDetail` が左右のペインを
+      それぞれスクロールさせるため。タブの題名は、詳細を開いているときだけ詳細のものにする。
+    */
     <Page
       title="マネージャー"
+      documentTitle={selectedId === undefined ? undefined : 'マネージャーの詳細'}
       description="クローンが起こした仕事。人間が Claude Code に頼んだのと同じ位置にいる"
+      className="overflow-hidden p-0 md:p-0"
     >
-      {hideChips ? null : (
-        <FilterChips
-          className="mb-4"
-          label="状態で絞り込む"
-          options={STATUSES.map((status) => ({ value: status, label: STATUS[status].label }))}
-          selected={selected}
-          onToggle={toggle}
-          onClear={clearSelected}
-        />
-      )}
+      <div className="flex h-full flex-col">
+        {hideChips ? null : (
+          <FilterChips
+            className="shrink-0 border-b border-border px-4 py-3 md:px-6"
+            label="状態で絞り込む"
+            options={STATUSES.map((status) => ({ value: status, label: STATUS[status].label }))}
+            selected={selected}
+            onToggle={toggle}
+            onClear={clearSelected}
+          />
+        )}
 
-      {/*
-        **`key={selected.join(',')}` で丸ごと作り直す。** 絞りが変われば
-        `useManagersWindow` の内部状態（読み足した分・終端の判定）を初期値へ
-        戻したいが、「prop が変わったら effect の中で reset する」形は
-        `apps/web` の eslint（`react-hooks/set-state-in-effect`）に落ちる
-        （`use-managers-window.ts` 冒頭の doc）。`journal.tsx` の
-        `JournalBody` と同じ形である。
-      */}
-      <ManagersBody key={selected.join(',')} selected={selected} />
+        <ListDetail
+          className="min-h-0 flex-1"
+          listLabel="マネージャーの一覧"
+          detailLabel="マネージャーの詳細"
+          hasSelection={selectedId !== undefined}
+          selectionKey={selectedId}
+          emptyDetail={<Empty>左の一覧からマネージャーを選ぶと、その中身がここに出る。</Empty>}
+          /*
+            **`key={selected.join(',')}` で一覧だけを作り直す。** 絞りが変われば
+            `useManagersWindow` の内部状態（読み足した分・終端の判定）を初期値へ
+            戻したいが、「prop が変わったら effect の中で reset する」形は
+            `apps/web` の eslint（`react-hooks/set-state-in-effect`）に落ちる
+            （`use-managers-window.ts` 冒頭の doc）。`journal.tsx` の
+            `JournalBody` と同じ形である。**詳細（右）は作り直さない**——絞りを変えても
+            開いている詳細の入力途中の文などを失わない。
+          */
+          list={
+            <ManagersList
+              key={selected.join(',')}
+              selected={selected}
+              selectedId={selectedId}
+              search={search}
+            />
+          }
+          detail={<Outlet />}
+        />
+      </div>
     </Page>
   );
 }
@@ -745,7 +788,17 @@ const EMPTY_ALL = (
   </>
 );
 
-function ManagersBody({ selected }: { selected: readonly ManagerStatus[] }) {
+/** 左の一覧（288px 幅）。行は詰めた形で、上の行に状態・接続・時刻、下に依頼の要旨と注記を積む。 */
+function ManagersList({
+  selected,
+  selectedId,
+  search,
+}: {
+  selected: readonly ManagerStatus[];
+  selectedId: string | undefined;
+  /** 詳細へのリンクへ引き継ぐ現在のクエリ（絞り込みを保つ）。 */
+  search: string;
+}) {
   const {
     managers,
     isLoadingInitial,
@@ -768,133 +821,129 @@ function ManagersBody({ selected }: { selected: readonly ManagerStatus[] }) {
 
   return (
     <>
-      <ErrorNote error={error} className="mb-4" />
+      <ErrorNote error={error} className="m-3" />
       {/* 一覧の上に置く。読める行の中身を見る前に、まず断りが目に入るように（issue #2345）。 */}
-      <UnreadableJobNote unreadable={unreadable} className="mb-4" />
+      <UnreadableJobNote unreadable={unreadable} className="m-3" />
       {isLoadingInitial ? (
         <Spinner />
       ) : listUnavailable ? null : managers.length === 0 ? (
-        <Card>
-          <Empty>
-            {unreadable.length > 0
-              ? selected.length === 0
-                ? '読めたマネージャーは無い（読めない行が在るので、居ないとは言えない）。'
-                : '読めた範囲では、この状態のマネージャーは無い（読めない行の状態は分からない）。'
-              : selected.length === 0
-                ? EMPTY_ALL
-                : 'この状態のマネージャーは無い（絞りを解除すれば他の状態も出る）。'}
-          </Empty>
-        </Card>
+        <Empty inset="card">
+          {unreadable.length > 0
+            ? selected.length === 0
+              ? '読めたマネージャーは無い（読めない行が在るので、居ないとは言えない）。'
+              : '読めた範囲では、この状態のマネージャーは無い（読めない行の状態は分からない）。'
+            : selected.length === 0
+              ? EMPTY_ALL
+              : 'この状態のマネージャーは無い（絞りを解除すれば他の状態も出る）。'}
+        </Empty>
       ) : (
-        <Card>
-          <ul>
-            {managers.map((manager) => (
-              <li key={manager.managerId} className="border-b border-border last:border-b-0">
-                <Link
-                  to={`/managers/${manager.managerId}`}
-                  className="flex items-start gap-3 px-4 py-3 hover:bg-muted"
-                >
-                  <div className="mt-0.5 shrink-0">
-                    <ManagerStatusBadge status={manager.status} />
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    {/* 一覧の1行は Markdown 化の対象外（`components/markdown.tsx` の doc） */}
-                    <p className="truncate text-sm">{redactBody(manager.request)}</p>
-                    <p className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground">
-                      {manager.cwd}
-                    </p>
-                    {/* 欄が無いのは「不明」。claude とは描かない（`describeManagerProvider`）。 */}
-                    <p className="mt-0.5 truncate text-[11px] text-muted-foreground">
-                      provider: {describeManagerProvider(manager.managerProvider)}
-                    </p>
-                    {manager.waiting.length > 0 && (
-                      // 一覧の1行は Markdown 化の対象外（`components/markdown.tsx` の doc）
-                      <p className="mt-1 text-[11px] text-warn">
-                        {manager.waiting.length} 件の確認待ち:{' '}
-                        {redactBody(manager.waiting[0]?.summary ?? '')}
-                      </p>
-                    )}
-                    {/*
-                      拒否は `status` に映らない。札は「実行中」のまま、その隣に
-                      添える（状態を置き換えるものではない）。
-                    */}
-                    <ManagerDenialNote
-                      denials={manager.denials ?? []}
-                      lastReportAt={manager.lastReportAt}
-                    />
-                    {/*
-                      失敗も `status` に映らない（上限に当たった回も `done` の
-                      まま）。札はそのまま残し、その隣に添える。
-                    */}
-                    <ManagerFailureNote
-                      failure={manager.lastFailure}
-                      status={manager.status}
-                      lastFoldedTurn={manager.lastFoldedTurn}
-                    />
-                    {/*
-                      これも `status` に映らない（`done` のまま）。札は差し替えず
-                      隣に添える（`ManagerAwaitingBackgroundNote` の doc）。
-                    */}
-                    <ManagerAwaitingBackgroundNote
-                      awaitingBackground={manager.awaitingBackground}
-                    />
-                    {/*
-                      `live: false` の理由を、分かる分だけ名指しする。「セッション
-                      切断」の札だけだと、セッションが終わったのか宛先の器が消えた
-                      のかが読めず、打つ手が決まらない。**CLI と `manager_list` は
-                      両方描いていて、この画面だけが両方とも描いていなかった。**
-                    */}
-                    <ManagerRunnerLostNote runnerLostSince={manager.runnerLostSince} />
-                    <ManagerRunnerVanishedNote runnerVanished={manager.runnerVanished} />
-                    {/*
-                      これも `status` に映らないし、`live` も落ちない（`sessionId`
-                      が在れば resume から入り直せる）。⟹ 右の「接続あり」の緑と
-                      **同時に**出るのが正しい形である。札は差し替えず隣に添える。
+        <ListDetailItems
+          label="マネージャー"
+          items={managers.map((manager) => ({
+            key: manager.managerId,
+            href: `/managers/${manager.managerId}${search}`,
+            current: manager.managerId === selectedId,
+            children: (
+              <>
+                <div className="flex items-center gap-2">
+                  <ManagerStatusBadge status={manager.status} />
+                  {/*
+                    `live` はデーモンが今この瞬間その runner と繋がっているか。
+                    status と別に出す — 「走っている扱いだが繋がっていない」を
+                    隠すと、再起動後の引き取りが効いたのか分からなくなる。
 
-                      **上の `ManagerRunnerLostNote` と排他ではない。** 2本並ぶ形が
-                      在る（`ManagerRunnerLostNote` の doc の到達順序）。CLI も
-                      `manager_list` も `else` を使わず2行積んでいる。
-                    */}
-                    <ManagerSessionMissingNote
-                      sessionMissingSince={manager.sessionMissingSince}
-                      sessionMissingKind={manager.sessionMissingKind}
-                    />
-                    {/*
-                      札だけでは「で、どうすればいいのか」が伝わらない。クローンは
-                      `manager_list` で同じ案内を受け取る — 人間の画面にだけ無いと、
-                      同じ状態を見て人間とクローンが違う判断をすることになる。
-                    */}
-                    {manager.status === 'lost' && (
-                      <p className="mt-1 text-[11px] text-destructive">
-                        前のセッションへ戻れなかっただけで、成果が残っているかは見ていない。起こし直す前にリモート（PR・ブランチ）を確かめること。
-                      </p>
-                    )}
-                  </div>
-                  <div className="shrink-0 text-right text-[11px] text-muted-foreground">
-                    <p>{formatRelative(manager.updatedAt)}</p>
-                    {/*
-                      `live` はデーモンが今この瞬間その runner と繋がっているか。
-                      status と別に出す — 「走っている扱いだが繋がっていない」を
-                      隠すと、再起動後の引き取りが効いたのか分からなくなる。
+                    `live && <札>` の形は書かない。それだと `live === false`
+                    を「札が無い」でしか表せず、読む側は「切断されている」と
+                    「この画面が接続状態を報告していない」を区別できない。
+                    だから両側を描く。文言はクローンの `manager_list`
+                    （`tools.ts`）と CLI（`chat.ts`）に合わせてある
+                    （どちらも `/セッション切断`）。
+                  */}
+                  {manager.live ? (
+                    <span className="text-[11px] text-ok">接続あり</span>
+                  ) : (
+                    <span className="text-[11px] text-destructive">セッション切断</span>
+                  )}
+                  <span className="ml-auto shrink-0 text-[11px] text-muted-foreground">
+                    {formatRelative(manager.updatedAt)}
+                  </span>
+                </div>
+                {/* 一覧の1行は Markdown 化の対象外（`components/markdown.tsx` の doc） */}
+                <p className="mt-1 line-clamp-2 break-words text-sm">
+                  {redactBody(manager.request)}
+                </p>
+                <p className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground">
+                  {manager.cwd}
+                </p>
+                {/* 欄が無いのは「不明」。claude とは描かない（`describeManagerProvider`）。 */}
+                <p className="mt-0.5 truncate text-[11px] text-muted-foreground">
+                  provider: {describeManagerProvider(manager.managerProvider)}
+                </p>
+                {manager.waiting.length > 0 && (
+                  // 一覧の1行は Markdown 化の対象外（`components/markdown.tsx` の doc）
+                  <p className="mt-1 text-[11px] text-warn">
+                    {manager.waiting.length} 件の確認待ち:{' '}
+                    {redactBody(manager.waiting[0]?.summary ?? '')}
+                  </p>
+                )}
+                {/*
+                  拒否は `status` に映らない。札は「実行中」のまま、その隣に
+                  添える（状態を置き換えるものではない）。
+                */}
+                <ManagerDenialNote
+                  denials={manager.denials ?? []}
+                  lastReportAt={manager.lastReportAt}
+                />
+                {/*
+                  失敗も `status` に映らない（上限に当たった回も `done` の
+                  まま）。札はそのまま残し、その隣に添える。
+                */}
+                <ManagerFailureNote
+                  failure={manager.lastFailure}
+                  status={manager.status}
+                  lastFoldedTurn={manager.lastFoldedTurn}
+                />
+                {/*
+                  これも `status` に映らない（`done` のまま）。札は差し替えず
+                  隣に添える（`ManagerAwaitingBackgroundNote` の doc）。
+                */}
+                <ManagerAwaitingBackgroundNote awaitingBackground={manager.awaitingBackground} />
+                {/*
+                  `live: false` の理由を、分かる分だけ名指しする。「セッション
+                  切断」の札だけだと、セッションが終わったのか宛先の器が消えた
+                  のかが読めず、打つ手が決まらない。**CLI と `manager_list` は
+                  両方描いていて、この画面だけが両方とも描いていなかった。**
+                */}
+                <ManagerRunnerLostNote runnerLostSince={manager.runnerLostSince} />
+                <ManagerRunnerVanishedNote runnerVanished={manager.runnerVanished} />
+                {/*
+                  これも `status` に映らないし、`live` も落ちない（`sessionId`
+                  が在れば resume から入り直せる）。⟹ 「接続あり」の緑と
+                  **同時に**出るのが正しい形である。札は差し替えず隣に添える。
 
-                      `live && <札>` の形は書かない。それだと `live === false`
-                      を「札が無い」でしか表せず、読む側は「切断されている」と
-                      「この画面が接続状態を報告していない」を区別できない。
-                      だから両側を描く。文言はクローンの `manager_list`
-                      （`tools.ts`）と CLI（`chat.ts`）に合わせてある
-                      （どちらも `/セッション切断`）。
-                    */}
-                    {manager.live ? (
-                      <p className="text-ok">接続あり</p>
-                    ) : (
-                      <p className="text-destructive">セッション切断</p>
-                    )}
-                  </div>
-                </Link>
-              </li>
-            ))}
-          </ul>
-        </Card>
+                  **上の `ManagerRunnerLostNote` と排他ではない。** 2本並ぶ形が
+                  在る（`ManagerRunnerLostNote` の doc の到達順序）。CLI も
+                  `manager_list` も `else` を使わず2行積んでいる。
+                */}
+                <ManagerSessionMissingNote
+                  sessionMissingSince={manager.sessionMissingSince}
+                  sessionMissingKind={manager.sessionMissingKind}
+                />
+                {/*
+                  札だけでは「で、どうすればいいのか」が伝わらない。クローンは
+                  `manager_list` で同じ案内を受け取る — 人間の画面にだけ無いと、
+                  同じ状態を見て人間とクローンが違う判断をすることになる。
+                */}
+                {manager.status === 'lost' && (
+                  <p className="mt-1 text-[11px] text-destructive">
+                    前のセッションへ戻れなかっただけで、成果が残っているかは見ていない。起こし直す前にリモート（PR・ブランチ）を確かめること。
+                  </p>
+                )}
+              </>
+            ),
+          }))}
+          renderLink={({ href, ...rest }) => <Link to={href} {...rest} />}
+        />
       )}
 
       {/*
@@ -904,7 +953,7 @@ function ManagersBody({ selected }: { selected: readonly ManagerStatus[] }) {
         （`use-managers-window.ts` の `ManagersOlderStatus` の doc）。
       */}
       {!isLoadingInitial && managers.length > 0 && (
-        <div className="mt-3">
+        <div className="p-3">
           {olderStatus === 'progress' && (
             <button
               type="button"
