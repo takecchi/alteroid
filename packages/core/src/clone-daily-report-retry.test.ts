@@ -1,7 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ALWAYS_REDELIVER, createClone } from './clone.js';
-import { fakeSdk, waitFor } from './clone-test-harness.js';
+import { fakeSdk } from './clone-test-harness.js';
 import { createRunnerRegistry } from './runner-protocol.js';
 import { createLocalRunner } from './runner-local.js';
 import { createMemoryStores } from './testing.js';
@@ -59,12 +59,28 @@ const post = (clone: ReturnType<typeof createClone>): void =>
     target: DATE,
   } as never);
 
+/** 偽の時計を進めながら、条件が立つのを待つ（実時間の待ちを使わない）。 */
+async function advanceUntil(check: () => Promise<boolean> | boolean, label: string): Promise<void> {
+  for (let i = 0; i < 400; i += 1) {
+    if (await check()) return;
+    await vi.advanceTimersByTimeAsync(5);
+  }
+  throw new Error(`起きなかった: ${label}`);
+}
+
 describe('クローン — 日報が枠切れ以外で失敗した回の作り直し（#2745）', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it('1回目が失敗しても、再起動なしで後から本物の日報が書かれる（印は残る）', async () => {
     const s = setupWithRetry((turn) => turn === 0, [20]);
     post(s.clone);
 
-    await waitFor(
+    await advanceUntil(
       async () => (await reportsOf(s.stores)).some((r) => r.unavailable === undefined),
       '作り直しで本物の日報が書かれる',
     );
@@ -78,8 +94,8 @@ describe('クローン — 日報が枠切れ以外で失敗した回の作り�
     const s = setupWithRetry(() => true, [10, 10]);
     post(s.clone);
 
-    await waitFor(() => turnsOf(s.calls) >= 3, '初回＋2回の作り直しが走る');
-    await new Promise((resolve) => setTimeout(resolve, 150));
+    await advanceUntil(() => turnsOf(s.calls) >= 3, '初回＋2回の作り直しが走る');
+    await vi.advanceTimersByTimeAsync(150);
     expect(turnsOf(s.calls)).toBe(3);
     const rows = await reportsOf(s.stores);
     expect(rows).toHaveLength(1);
