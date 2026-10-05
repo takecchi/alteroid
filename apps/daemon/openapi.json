@@ -624,6 +624,23 @@
                           },
                           "preview": {
                             "type": "string"
+                          },
+                          "unreadCount": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          },
+                          "readThrough": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "format": "date-time",
+                                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
                           }
                         },
                         "required": [
@@ -631,7 +648,9 @@
                           "startedAt",
                           "updatedAt",
                           "messages",
-                          "preview"
+                          "preview",
+                          "unreadCount",
+                          "readThrough"
                         ]
                       }
                     },
@@ -647,6 +666,9 @@
                       "type": "integer",
                       "minimum": -9007199254740991,
                       "maximum": 9007199254740991
+                    },
+                    "readStateUnreadable": {
+                      "type": "string"
                     }
                   },
                   "required": ["conversations", "scanned", "reachedStart", "hiddenByLimit"]
@@ -752,6 +774,26 @@
                       "type": "integer",
                       "minimum": -9007199254740991,
                       "maximum": 9007199254740991
+                    },
+                    "readThrough": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "format": "date-time",
+                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "unreadCount": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "readStateUnreadable": {
+                      "type": "string"
                     }
                   },
                   "required": [
@@ -759,7 +801,9 @@
                     "messages",
                     "scanned",
                     "reachedStart",
-                    "supersededCount"
+                    "supersededCount",
+                    "readThrough",
+                    "unreadCount"
                   ]
                 }
               }
@@ -818,6 +862,111 @@
               "enum": ["true", "false"]
             }
           },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "id",
+            "required": true
+          }
+        ]
+      }
+    },
+    "/conversations/{id}/read": {
+      "post": {
+        "operationId": "postConversationsByIdRead",
+        "tags": ["conversations"],
+        "summary": "会話を既読にする（位置を進める）",
+        "description": "既読の位置（全員で1組）を、`through` で指した発言の時刻まで進める。**`through` は発言の id**（`GET /conversations/:id` の `messages[].id`）で、時刻はサーバが日誌から引く。**戻らない**——いまの位置より古い発言を指しても何も変わらず、200 でいまの位置を返す。発言が無い・人間との往復でないときは 404、別の会話の発言のときは 400。応答は進めた後の実効の位置と未読数（一覧・詳細と同じ数え方。窓は既定の `scan`）。",
+        "responses": {
+          "200": {
+            "description": "進めた後の実効の既読の位置と未読数。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "conversationId": {
+                      "type": "string"
+                    },
+                    "readThrough": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "format": "date-time",
+                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "unreadCount": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "readStateUnreadable": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["conversationId", "readThrough", "unreadCount"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "本文が不正、または `through` の発言がこの会話のものでない。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`through` の発言が日誌に無い（人間との往復でない場合を含む）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "through": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": ["through"]
+              }
+            }
+          }
+        },
+        "parameters": [
           {
             "schema": {
               "type": "string"

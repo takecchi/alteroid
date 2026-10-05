@@ -253,7 +253,24 @@ const conversationSchema = z.object({
   messages: z.number().int(),
   /** 一覧に出す短い抜粋。全文は `GET /conversations/:id` にある。 */
   preview: z.string(),
+  /**
+   * 未読の数（既読は全員で1組）。**クローン側の発言（返答・ターンの外からの発言）だけを
+   * 数える**——人間自身の発言は未読にしない。編集で既定ビューから隠れた発言も数えない。
+   * **窓（`scan`）の中で数えた値**で、窓の外は数えていない。
+   */
+  unreadCount: z.number().int(),
+  /**
+   * 実効の既読の位置（この時刻以前の発言は既読）。会話に記録された位置があればそれ、
+   * 無ければ基準時刻。既読の記録が読めないときだけ `null`（全件を未読として数える）。
+   */
+  readThrough: isoDateTimeSchema.nullable(),
 });
+
+/**
+ * 既読の記録が読めなかったときだけ載る理由。**このとき全件を未読として数える**（知らせ
+ * すぎる側へ倒す。知らせ損ねるほうが取り返しがつかない）。
+ */
+const readStateUnreadableSchema = z.string().optional();
 
 export const conversationsResponseSchema = z.object({
   conversations: z.array(conversationSchema),
@@ -288,6 +305,7 @@ export const conversationsResponseSchema = z.object({
    * で会話15件・先頭到達。`limit` の上限 200 にも画面の既定 30 にも遠い）。
    */
   hiddenByLimit: z.number().int(),
+  readStateUnreadable: readStateUnreadableSchema,
 });
 
 const conversationMessageSchema = z.object({
@@ -338,6 +356,34 @@ export const conversationDetailResponseSchema = z.object({
    * `includeSuperseded=true` を指定する。
    */
   supersededCount: z.number().int(),
+  /**
+   * 実効の既読の位置（この時刻以前の発言は既読）。`messages` の各発言の `at` と比べれば
+   * 「どこから未読か」が引ける。記録が読めないときだけ `null`。
+   */
+  readThrough: isoDateTimeSchema.nullable(),
+  /**
+   * 未読の数。`includeSuperseded` の値によらず**既定ビューで見えている**クローン側の発言で
+   * 数える（一覧の `unreadCount` と同じ数え方）。窓（`scan`）の中の値。
+   */
+  unreadCount: z.number().int(),
+  readStateUnreadable: readStateUnreadableSchema,
+});
+
+/**
+ * `POST /conversations/:id/read` の入力。**`through` は発言の id**（`GET /conversations/:id`
+ * の `messages[].id`）で、時刻ではない。時刻はサーバが日誌から引く——クライアントが時刻を
+ * 渡せると、「いま」で既読にして、まだ見ていない分まで既読にする誤りを作れてしまう。
+ */
+export const conversationReadRequestSchema = z.object({
+  through: z.string().min(1),
+});
+
+/** `POST /conversations/:id/read` の応答。進めた後の実効の位置と未読数（一覧・詳細と同じ数え方）。 */
+export const conversationReadResponseSchema = z.object({
+  conversationId: z.string(),
+  readThrough: isoDateTimeSchema.nullable(),
+  unreadCount: z.number().int(),
+  readStateUnreadable: readStateUnreadableSchema,
 });
 
 // ---------------------------------------------------------------------------
