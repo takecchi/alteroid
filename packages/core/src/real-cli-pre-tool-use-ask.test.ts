@@ -30,6 +30,7 @@ const WORKER_MARKER = 'ASK-PROBE-WORKER-PROMPT';
 interface AskCall {
   readonly toolName: string;
   readonly agentID: string | undefined;
+  readonly decisionReason: string | undefined;
   readonly command: string | undefined;
 }
 
@@ -262,6 +263,7 @@ async function runProbe(options: {
           probe.asks.push({
             toolName,
             agentID: opts.agentID,
+            decisionReason: opts.decisionReason,
             command: typeof input.command === 'string' ? input.command : undefined,
           });
           return options.answer === 'allow'
@@ -291,7 +293,12 @@ describe('本物の本体: PreToolUse の ask は canUseTool へ届く（#2884 �
     it(`マネージャー本体の Bash: ask が canUseTool に届き、allow なら実行される（${permissionMode}）`, async () => {
       const probe = await runProbe({ target: 'main', answer: 'allow', permissionMode });
       expect(probe.asks).toEqual([
-        { toolName: 'Bash', agentID: undefined, command: 'echo ask-probe-ran' },
+        {
+          toolName: 'Bash',
+          agentID: undefined,
+          decisionReason: 'ask-probe-reason',
+          command: 'echo ask-probe-ran',
+        },
       ]);
       expect(probe.bashResults.join('\n')).toContain('ask-probe-ran');
     }, 60_000);
@@ -301,6 +308,7 @@ describe('本物の本体: PreToolUse の ask は canUseTool へ届く（#2884 �
       expect(probe.asks).toHaveLength(1);
       expect(probe.asks[0]?.command).toBe('echo ask-probe-ran');
       expect(probe.asks[0]?.agentID).toEqual(expect.any(String));
+      expect(probe.asks[0]?.decisionReason).toBe('ask-probe-reason');
       expect(probe.bashResults.join('\n')).toContain('ask-probe-ran');
     }, 60_000);
 
