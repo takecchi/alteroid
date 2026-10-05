@@ -3475,7 +3475,7 @@ export function createApp(deps: AppDeps) {
         if (ifMatch === undefined) {
           return c.json(
             {
-              error: '消す記憶の版（ifMatch）が無いので消していません（消していません）' as const,
+              error: '消す記憶の版（ifMatch）が無いので、消していません' as const,
               current: { document: existing, version: memoryVersion(existing.content) },
             },
             428,
