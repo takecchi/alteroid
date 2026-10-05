@@ -1,6 +1,7 @@
 import { compareCodeUnits } from './code-unit-order.js';
 import type { McpServers } from './mcp-servers.js';
 import type { McpServerStore } from './store.js';
+import { expectNulRejected } from './nul-contract-support.js';
 
 /**
  * `McpServerStore` の契約を、**実装1つに対して**測る（#325 段1）。
@@ -112,6 +113,68 @@ export async function verifyMcpServerStoreContract(store: McpServerStore): Promi
     const after = await store.read();
     if (after === null || Object.keys(after.mcpServers).join(',') !== 'contract-http') {
       fail(`${label}を拒んだ後に前の登録が残っていない`);
+    }
+  }
+
+  // --- 4b. NUL（issue #2927。teto の判断、2026-10-05）: 名前と env は断り、本文は落として残す ---
+  await expectNulRejected(
+    fail,
+    'サーバー名のNUL',
+    () => store.write({ 'zq\u0000yx': { command: 'x' } }),
+    'zq',
+  );
+  await expectNulRejected(
+    fail,
+    'envの値のNUL',
+    () => store.write({ ok: { command: 'x', env: { TOKEN: 'sec\u0000ret-value' } } }),
+    'ret-value',
+  );
+  await expectNulRejected(
+    fail,
+    'envの名前のNUL',
+    () => store.write({ ok: { command: 'x', env: { 'TO\u0000KEN': 'v' } } }),
+    'TOKEN',
+  );
+  {
+    const afterRejected = await store.read();
+    if (
+      afterRejected === null ||
+      Object.keys(afterRejected.mcpServers).join(',') !== 'contract-http'
+    ) {
+      fail('NULで断った後に前の登録が残っていない');
+    }
+    const stripped = await store.write({
+      'contract-nul': {
+        command: 'co\u0000mmand',
+        args: ['a\u0000rg'],
+        env: { KEEP: 'ok' },
+      },
+      'contract-nul-http': {
+        type: 'http',
+        url: 'https://exa\u0000mple.test/',
+        headers: { 'X-H': 'v\u0000al' },
+      },
+    });
+    const nul = stripped.mcpServers['contract-nul'];
+    const nulHttp = stripped.mcpServers['contract-nul-http'];
+    if (
+      nul === undefined ||
+      !('command' in nul) ||
+      nul.command !== 'command' ||
+      nul.args?.join(',') !== 'arg' ||
+      nulHttp === undefined ||
+      !('url' in nulHttp) ||
+      nulHttp.url !== 'https://example.test/' ||
+      !('headers' in nulHttp) ||
+      nulHttp.headers?.['X-H'] !== 'val'
+    ) {
+      fail('本文のNULは落として残す（返り値）');
+    }
+    const reread = await store.read();
+    if (
+      JSON.stringify(sortKeys(reread?.mcpServers)) !== JSON.stringify(sortKeys(stripped.mcpServers))
+    ) {
+      fail('本文のNULを落とした形で読み戻る');
     }
   }
 
