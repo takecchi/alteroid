@@ -91,6 +91,20 @@ import { createApp } from './app.js';
 export const errorResponseSchema = z.object({ error: z.string() });
 
 /**
+ * **日誌が書けなかったので、状態を変えずに断った** 500 の本文（issue #2742 の続き。
+ * `PUT /tokens`・`PUT /tokens/policy` の「広げる側」）。
+ *
+ * `error` は人間が読む文、`code` は機械が見分ける印（文言では見分けない）。
+ * 例外の本文は載せない（トークンの値が載りうる）。
+ */
+export const JOURNAL_WRITE_FAILED_CODE = 'journal_write_failed';
+export const JOURNAL_WRITE_FAILED_MESSAGE = '記録（日誌）が書けなかったので、変更していません';
+export const journalWriteFailedResponseSchema = z.object({
+  error: z.string(),
+  code: z.literal(JOURNAL_WRITE_FAILED_CODE),
+});
+
+/**
  * **`validationErrorResponseSchema`（`{ data, error: <issue配列>, success: false }`）は
  * ここに在ったが、いまは無い。** `hook` を渡さない `validator(...)` が検査に
  * 落ちたときの、`@hono/standard-validator` の既定 400 の形——`json` の経路は
@@ -1235,6 +1249,13 @@ export const managerSummarySchema = z.object({
     .enum(['pool-not-wired', 'not-yet-observed', 'reattached-across-restart'])
     .optional(),
   /**
+   * runner が最後に見た、この委譲の起こしっぱなしの背景処理の本数（Issue #2851。
+   * `packages/core/src/manager.ts` の `ManagerSummary.liveBackgroundTasks`）。
+   * **`undefined` は「0 本」ではなく「分からない」。** ここに宣言しないと、値が在っても
+   * 黙って落ちる（真上の `tokenGenerationUnknownReason` と同じ断り）。
+   */
+  liveBackgroundTasks: z.number().int().nonnegative().optional(),
+  /**
    * 429の文言の `resets` 時刻を、プールの各鍵の `cooldownUntil` と突き合わせた
    * 結果（Issue #914 オーナー提案(2)。`packages/core/src/manager.ts` の
    * `ManagerSummary.resetTimeSkewMatch`）。
@@ -1417,6 +1438,7 @@ export const managerActionResponseSchema = z.object({
     'stopped',
     'not_stopped',
     'session_missing',
+    'declined',
     'unknown',
   ]),
   detail: z.string(),

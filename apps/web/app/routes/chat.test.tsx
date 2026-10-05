@@ -10,7 +10,14 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { createMemoryRouter, MemoryRouter, RouterProvider, useParams } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { json, Providers, sse, stubFetch, storeTestBaseUrl } from '~/test-support';
+import {
+  findShownConversation,
+  json,
+  Providers,
+  sse,
+  stubFetch,
+  storeTestBaseUrl,
+} from '~/test-support';
 
 import Chat, { ownedBy, retainedBy } from './chat';
 
@@ -884,9 +891,9 @@ describe('会話を跨いだ手元の行の生死（配線。issue #446）', () 
     // 連続で navigate すると、次の navigate が前の render 反映より先に走り、
     // 途中の会話（ここでは conv-b）を経由したことにならない。
     await router.navigate('/chat/conv-b');
-    await screen.findByText('conv-b');
+    await findShownConversation('conv-b');
     await router.navigate('/chat/conv-a');
-    await screen.findByText('conv-a');
+    await findShownConversation('conv-a');
 
     expect(within(transcript()).getByText(LOCAL_ONLY_REPLY)).toBeTruthy();
   });
@@ -902,11 +909,11 @@ describe('会話を跨いだ手元の行の生死（配線。issue #446）', () 
     // 「いま」でも「直前」でもなくなっている（直前は conv-b）。
     // **各 navigate の後にヘッダの会話 id が切り替わるのを待つ**（上のテストと同じ理由）。
     await router.navigate('/chat/conv-b');
-    await screen.findByText('conv-b');
+    await findShownConversation('conv-b');
     await router.navigate('/chat/conv-c');
-    await screen.findByText('conv-c');
+    await findShownConversation('conv-c');
     await router.navigate('/chat/conv-a');
-    await screen.findByText('conv-a');
+    await findShownConversation('conv-a');
 
     await waitFor(() => {
       expect(screen.queryByText(LOCAL_ONLY_REPLY)).toBeNull();

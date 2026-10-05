@@ -516,7 +516,9 @@ export default function Usage() {
             <>
               {/* **`$0.00` と出さない。** まだ1件も無いのを「使っていない」に見せない。 */}
               <Card>
-                <Empty>まだ使用量の記録がありません。会話を始めると、ここに出ます。</Empty>
+                <Empty inset="card">
+                  まだ使用量の記録がありません。会話を始めると、ここに出ます。
+                </Empty>
                 <ReadingGuide>
                   <li>
                     使用量の記録は、この機能を入れた時点から始まります。それより前の分は残っていません。
@@ -719,7 +721,7 @@ function UsageBody({
         <CardHeader title="合計" subtitle={`記録の始まり: ${formatDateTime(since)}`} />
         <div className="px-4 py-3">
           {rows.length === 0 ? (
-            <Empty>この期間の使用量の記録はありません。</Empty>
+            <Empty inset="none">この期間の使用量の記録はありません。</Empty>
           ) : (
             <>
               <p className="text-2xl font-semibold">{formatUsd(summary.total.costUsd)}</p>

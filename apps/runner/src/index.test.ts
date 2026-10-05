@@ -12,6 +12,7 @@ import { makeTempDirSync } from '../../../vitest.tmpdir.js';
 import {
   RECLAIM_ENV_KEY,
   reclaimScanOf,
+  socketOwnerOf,
   tokenSha256Of,
   withTerminatedReclaimSessions,
 } from './index.js';
@@ -275,5 +276,23 @@ describe('withTerminatedReclaimSessions（観測専用の判定材料を足す�
     const scan = { childUid: 1001, reap: view };
     expect(withTerminatedReclaimSessions(scan, view)).toBe(scan);
     expect(withTerminatedReclaimSessions(undefined, view)).toBeUndefined();
+  });
+});
+
+describe('socketOwnerOf', () => {
+  it('ALTEROID_RUNNER_SOCKET_UID が未設定なら持ち主を変えない（uid 0 へ chown しに行かない）', () => {
+    expect(socketOwnerOf({})).toBeUndefined();
+    expect(socketOwnerOf({ ALTEROID_RUNNER_SOCKET_UID: '' })).toBeUndefined();
+    expect(socketOwnerOf({ ALTEROID_RUNNER_SOCKET_GID: '1000' })).toBeUndefined();
+  });
+
+  it('UID だけなら GID は UID に揃える', () => {
+    expect(socketOwnerOf({ ALTEROID_RUNNER_SOCKET_UID: '1000' })).toEqual({ uid: 1000, gid: 1000 });
+  });
+
+  it('UID と GID が別々に置かれていればそのまま使う', () => {
+    expect(
+      socketOwnerOf({ ALTEROID_RUNNER_SOCKET_UID: '1000', ALTEROID_RUNNER_SOCKET_GID: '2000' }),
+    ).toEqual({ uid: 1000, gid: 2000 });
   });
 });
