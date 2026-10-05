@@ -264,8 +264,20 @@ export const markdownComponents: Components = {
   ),
   // GFM の表。**横スクロールさせる div で包む** — 表は折り返せないので、
   // 包まないと幅の広い表がカードごと画面外まで広げる。
+  //
+  // **画面幅が `lg`（1024px）未満のとき、セル（`td`）に最小幅を持たせる**（#2805）。
+  // 広い画面では今までどおり内容に応じた列幅のまま（最小幅を常に付けると、デスクトップで
+  // 備考列が 366px から 132px へ詰まった — 実測）。コンテナクエリ（inline-size の包含を伴う指定）は
+  // 使わない: 包含を付けると、幅を持たない親（flex の子など）の中で
+  // 包みが幅 0 になりうる。`table-layout: auto` は、表が
+  // 入りきらないとき内容の長い列を 1 文字幅まで詰めて他の列（長い URL など折り返せない
+  // 列）へ幅を回す（390px で備考の日本語が 1 行 1〜2 文字・17 行になった）。最小幅が
+  // あれば、詰める代わりに表そのものが包みの幅を超え、この div の横スクロールが
+  // 働く。**表（`table`・`th`・`td`）の中だけの指定** — 表の無い本文・コード・
+  // リストの見た目は変わらない。**端の手がかり**は、はみ出した列が右端で見切れること
+  // と、細いスクロールバー（`scrollbar-width: thin`）で出す。
   table: ({ children }) => (
-    <div className="mt-2 min-w-0 overflow-x-auto first:mt-0">
+    <div className="mt-2 min-w-0 overflow-x-auto [scrollbar-width:thin] first:mt-0">
       <table className="w-full border-collapse text-sm">{children}</table>
     </div>
   ),
@@ -275,7 +287,7 @@ export const markdownComponents: Components = {
   th: ({ children }) => (
     <th className="px-2 py-1 text-left font-semibold whitespace-nowrap">{children}</th>
   ),
-  td: ({ children }) => <td className="px-2 py-1 align-top">{children}</td>,
+  td: ({ children }) => <td className="max-lg:min-w-28 px-2 py-1 align-top">{children}</td>,
   // コードブロック（`pre`）。**折り返さず横スクロール** — `docs/architecture.md`
   // の罫線図のような、折り返すと崩れる図をそのまま保つ。`overflow-x-auto` で
   // 包み、`whitespace-pre` で `styles.css` の既定（生ログ向けの `pre-wrap`）を

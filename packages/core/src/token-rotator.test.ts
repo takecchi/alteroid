@@ -3261,10 +3261,56 @@ describe('reconsider: ターンの成功（#681 (1)。usable の2本目の生産
     });
   });
 
+  it('⚠️ #2738: 回す前の鍵を測った probe の unusable は、回した後の現役へ当てない', async () => {
+    // probe は tok-a を測り始め、実行中に tok-b（世代 2）へ回った。遅れて届いた
+    // tok-a の「枠切れ」を現役 tok-b の判定として適用してはいけない。
+    const h = harness();
+    await seedTwo(h);
+    await h.stores.tokens.writeActive({
+      tokenId: 'tok-b',
+      generation: 2,
+      rotatedAt: '2026-08-25T00:01:00.000Z',
+    });
+
+    const outcome = await h.rotator.reconsider({
+      reason: 'account_probe',
+      current: {
+        verdict: { verdict: 'unusable', reason: '5時間枠を使い切っている' },
+        origin: {
+          source: 'account_probe',
+          observedBy: { tokenId: 'tok-a', generation: 1 },
+        },
+      },
+    });
+
+    expect(outcome.kind).toBe('ignored');
+    expect(h.spreadCalls).toEqual([]);
+    expect(await isCooling(h, 'tok-b')).toBe(false);
+    expect(await h.stores.tokens.readActive()).toMatchObject({ tokenId: 'tok-b', generation: 2 });
+  });
+
+  it('#2738: 測った鍵が現役のままなら、probe の unusable は従来どおり効く', async () => {
+    const h = harness();
+    await seedTwo(h);
+
+    const outcome = await h.rotator.reconsider({
+      reason: 'account_probe',
+      current: {
+        verdict: { verdict: 'unusable', reason: '5時間枠を使い切っている' },
+        origin: {
+          source: 'account_probe',
+          observedBy: { tokenId: 'tok-a', generation: 1 },
+        },
+      },
+    });
+
+    expect(outcome.kind).toBe('rotated');
+    expect(await isCooling(h, 'tok-a')).toBe(true);
+  });
+
   it('account_probe の既存の挙動は1ミリも変わっていない（回帰）', async () => {
-    // **世代の門は `turn_success` にだけ掛かる。** `account_probe` は身元を
-    // 運ばない観測なので、世代がずれていても（というより、そもそも
-    // `observedBy` を持たないので）従来どおり効く。
+    // **身元（`observedBy`）を運ばない `account_probe` には世代の門は掛からない**
+    // （#2738 は運んできた probe にだけ門を掛ける）。従来どおり効く。
     const h = harness();
     await seedTwo(h);
     await h.stores.tokens.replace(

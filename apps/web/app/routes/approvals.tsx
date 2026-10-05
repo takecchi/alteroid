@@ -354,9 +354,9 @@ function ApprovalEntry({
       jobLink={
         approval.jobId !== undefined && approval.jobId !== null ? (
           <>
-            {'job '}
+            {'委譲: '}
             <Link to={`/managers/${approval.jobId}`} className="hover:underline">
-              {approval.jobId}
+              詳細を見る
             </Link>
           </>
         ) : undefined

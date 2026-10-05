@@ -342,10 +342,41 @@ export type LimitsUnavailableCause = z.infer<typeof limitsUnavailableCauseSchema
  * である」を区別する。** 全部 `null` にすると、画面は3つとも同じ顔で見せることに
  * なり、人間もクローンも「見えていない理由」を判断できない。
  */
+/**
+ * 保持している `ok` の**あとに**取り直しが続けて失敗していること（#2752）。
+ *
+ * `usage-poller.ts` は一時的な失敗のたびに表示が消えないよう、同じ鍵で取れた最後の
+ * `ok` を保つ。**保つだけで失敗を隠すと、取れていない値を取れているように見せる**
+ * ——ので、保っている間は失敗していることを `ok` に添える。
+ *
+ * - `since`: 最初に失敗した probe の時刻（`ok` を取った後、失敗が続いているあいだ動かない）
+ * - `at`: 直近の失敗の時刻
+ * - `reason`: 直近の失敗の理由（人間が読む1行。`failed` / `unavailable` の `reason`）
+ *
+ * **値（鍵・応答の中身）は載せない**（`GET /usage` はアクセストークンで読める面）。
+ */
+export const accountUsageRefreshFailureSchema = z.object({
+  since: z.string().datetime({ offset: true }),
+  at: z.string().datetime({ offset: true }),
+  reason: z.string(),
+});
+
+export type AccountUsageRefreshFailure = z.infer<typeof accountUsageRefreshFailureSchema>;
+
 export const accountUsageStateSchema = z.discriminatedUnion('state', [
   /** 一度も取りに行っていない（起動直後）。 */
   z.object({ state: z.literal('unknown') }),
-  z.object({ state: z.literal('ok'), usage: accountUsageSchema }),
+  z.object({
+    state: z.literal('ok'),
+    usage: accountUsageSchema,
+    /**
+     * 付いていれば「`usage` は最後に取れた値で、その後の取り直しは失敗している」
+     * （{@link accountUsageRefreshFailureSchema}）。**無いことは「直近の probe は
+     * 成功した」**（版ずれで書かない daemon も同じ見え方になる。その場合は古さを
+     * `usage.at` から読むしかない）。
+     */
+    refreshFailure: accountUsageRefreshFailureSchema.optional(),
+  }),
   /** 取りに行ったが失敗した（通信断・タイムアウト・SDK の口が変わった）。 */
   z.object({
     state: z.literal('failed'),
