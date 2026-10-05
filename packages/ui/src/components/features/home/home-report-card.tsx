@@ -1,4 +1,4 @@
-import type { ComponentType, ReactNode } from 'react';
+import { useLayoutEffect, useRef, useState, type ComponentType, type ReactNode } from 'react';
 
 import { Card } from '../../common';
 
@@ -20,6 +20,7 @@ export function HomeReportCard({
   meta,
   action,
   footer,
+  moreLink,
   children,
 }: {
   icon: ComponentType<{ className?: string; 'aria-hidden'?: boolean }>;
@@ -30,8 +31,28 @@ export function HomeReportCard({
   action?: ReactNode;
   /** 本文の下の行（「続きを読む」など）。 */
   footer?: ReactNode;
+  /** 本文を切ったときだけ、本文の下の行に出す行き先（「続きを読む」など）。 */
+  moreLink?: ReactNode;
   children: ReactNode;
 }) {
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const [truncated, setTruncated] = useState(false);
+
+  // 描くたびに測る（本文が差し替わる・読み込み後に伸びる）。値が同じなら state は動かない。
+  useLayoutEffect(() => {
+    const el = bodyRef.current;
+    if (el === null) return;
+    const measure = () => setTruncated(el.scrollHeight > el.clientHeight + 1);
+    measure();
+    // 幅の変化（折り返しの増減）・画像の読み込みで本文の高さが変わっても追う。
+    // 枠自身は max-h で頭打ちなので、中身の側（子）を見る。
+    if (typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    for (const child of Array.from(el.children)) observer.observe(child);
+    return () => observer.disconnect();
+  }, [children]);
+
   return (
     <Card className="min-w-0">
       <div className="flex items-center gap-2 px-4 pt-3 text-xs text-muted-foreground">
@@ -43,18 +64,24 @@ export function HomeReportCard({
       </div>
       <div className="relative min-w-0 px-4 pt-3 pb-2">
         <div
+          ref={bodyRef}
           data-slot="home-report-body"
+          data-truncated={truncated ? 'true' : 'false'}
           className="max-h-96 min-w-0 overflow-hidden leading-relaxed [&>div]:text-base"
         >
           {children}
         </div>
-        <div
-          aria-hidden
-          className="pointer-events-none absolute inset-x-0 bottom-2 h-12"
-          style={{ backgroundImage: 'linear-gradient(to top, var(--card), transparent)' }}
-        />
+        {truncated && (
+          <div
+            aria-hidden
+            data-slot="home-report-fade"
+            className="pointer-events-none absolute inset-x-0 bottom-2 h-12"
+            style={{ backgroundImage: 'linear-gradient(to top, var(--card), transparent)' }}
+          />
+        )}
       </div>
       {footer !== undefined && <div className="px-4 pb-3 text-xs">{footer}</div>}
+      {truncated && moreLink !== undefined && <div className="px-4 pb-3 text-xs">{moreLink}</div>}
     </Card>
   );
 }

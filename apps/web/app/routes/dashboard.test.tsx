@@ -79,7 +79,7 @@ describe('ホームの構成', () => {
     // **`/journal/stream` の経路を置いていない。** 張りに行けば `stubFetch` が「繋がらない」にし、
     // `calls` に残る。
     const stub = renderHome();
-    await screen.findByText('まだ記録が無い。');
+    await screen.findByText(/^まだ記録が無い。/);
 
     expect(stub.calls.filter((url) => url.includes('/journal'))).toEqual([]);
   });
@@ -89,7 +89,7 @@ describe('「今日の利用」', () => {
   it('台帳がまだ空（since が null）なら金額を1つも出さない', async () => {
     renderHome({ usage: { rows: [], since: null, beforeLedger: false } });
 
-    expect(await screen.findByText('まだ記録が無い。')).toBeTruthy();
+    expect(await screen.findByText(/^まだ記録が無い。/)).toBeTruthy();
     // ⛔ ここは `queryByText('$0.00')` だった。**`formatUsd` は `$0.00` を
     // 原理的に出さない**（`$1` 未満は小数4桁）ので、あの行は入力が何であっても
     // 真で、金額が出たかどうかを一度も測っていなかった（#935）。
@@ -146,7 +146,7 @@ describe('「今日の利用」カードの「詳しく見る」は今日の期�
       renderHome({ usage: USAGE });
 
       // 応答の `today` が来てからリンクが出る（それまでは出さない。issue #2268）。
-      await screen.findByText('まだ記録が無い。');
+      await screen.findByText(/^まだ記録が無い。/);
       const usageLink = linkTo('/usage');
       expect(usageLink).toBeTruthy();
 
@@ -275,7 +275,28 @@ describe('「今日の利用」カードの読めずに外した行（#2427）',
   });
 });
 
+/**
+ * 日報の本文の枠が実際にはみ出しているかを、jsdom に与える。
+ *
+ * **jsdom はレイアウトを持たない**（`scrollHeight` / `clientHeight` は常に 0）ので、枠が
+ * 「切れているか」は何も入れなければ永久に偽になる。製品が読むのは枠の `scrollHeight` と
+ * `clientHeight` の2つだけなので、そこだけを枠（`data-slot="home-report-body"`）に限って
+ * 差し込む。**固定値を全要素へ返すスタブにしない**（ほかの要素の寸法まで嘘になる）。
+ */
+function stubReportOverflow(scrollHeight: number, clientHeight: number): void {
+  const forFrame = (value: number) =>
+    function (this: HTMLElement) {
+      return this.dataset.slot === 'home-report-body' ? value : 0;
+    };
+  vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockImplementation(forFrame(scrollHeight));
+  vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockImplementation(forFrame(clientHeight));
+}
+
 describe('「最新の日報」', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   const report = (extra: Record<string, unknown>) => ({
     type: 'daily_report',
     id: 'r1',
@@ -285,7 +306,8 @@ describe('「最新の日報」', () => {
     ...extra,
   });
 
-  it('本文は Markdown として描かれ（見出し・強調）、全文（その日報）へリンクする', async () => {
+  it('本文は Markdown として描かれ（見出し・強調）、切れているときは全文（その日報）へリンクする', async () => {
+    stubReportOverflow(900, 384);
     renderHome({ reports: [report({ body: '## 今日やったこと\n\n- **進捗**があった。' })] });
 
     expect(await screen.findByRole('heading', { name: '今日やったこと' })).toBeTruthy();
@@ -296,15 +318,36 @@ describe('「最新の日報」', () => {
   });
 
   it('長い本文でも、本文の枠は高さで切られ（overflow-hidden・max-h）、全文へのリンクが残る', async () => {
+    stubReportOverflow(2400, 384);
     const body = Array.from({ length: 80 }, (_, i) => `段落 ${i}`).join('\n\n');
     renderHome({ reports: [report({ body })] });
 
     await screen.findByText('段落 0');
     const frame = document.querySelector('[data-slot="home-report-body"]')!;
+    // 切れているときだけフェードを掛ける。
+    expect(frame.getAttribute('data-truncated')).toBe('true');
+    expect(document.querySelector('[data-slot="home-report-fade"]')).not.toBeNull();
     expect(frame.className).toContain('overflow-hidden');
     expect(frame.className).toContain('max-h-96');
     expect(frame.className).toContain('min-w-0');
     expect(screen.getByRole('link', { name: '続きを読む（全文）' })).toBeTruthy();
+  });
+
+  /**
+   * #2771: 1行しかない日報の本文が、薄れで読めなくなり、続きの無い「続きを読む」だけが出ていた。
+   * 切れていない（`scrollHeight` が `clientHeight` に収まっている）ときは、どちらも出さない。
+   */
+  it('短くて切れていない本文には、フェードも「続きを読む」も出さない', async () => {
+    stubReportOverflow(24, 24);
+    renderHome({ reports: [report({ body: '同日2件目の日報。' })] });
+
+    await screen.findByText('同日2件目の日報。');
+    const frame = document.querySelector('[data-slot="home-report-body"]')!;
+    expect(frame.getAttribute('data-truncated')).toBe('false');
+    expect(document.querySelector('[data-slot="home-report-fade"]')).toBeNull();
+    expect(screen.queryByRole('link', { name: /続きを読む/ })).toBeNull();
+    // 日報一覧への入口は残る。
+    expect(screen.getByRole('link', { name: '日報一覧' })).toBeTruthy();
   });
 
   it('本文の秘密は描画の直前に伏せる（偽のトークン。40桁の sha は残す）', async () => {
@@ -567,12 +610,53 @@ describe('「次の自動実行」カード', () => {
   });
 });
 
-describe('「作業の進捗」カード', () => {
-  it('実行中の委譲・未了・閉じた件数を出し、割合は出さない。詳しくは /progress', async () => {
+describe('ホームのカードの文に内部の語を出さない（#2772）', () => {
+  const INTERNAL = /委譲|台帳/;
+
+  it('作業の進捗: 大きな数字が何の件数かを言い、「委譲」「台帳」を出さない', async () => {
     renderHome();
 
-    expect(await screen.findByText('実行中の委譲')).toBeTruthy();
-    expect(screen.getByText(/未了の仕事 5 件・直近 168 時間で 12 件閉じた/)).toBeTruthy();
+    const card = (await screen.findByText('作業の進捗')).closest<HTMLElement>(
+      '[data-slot="card"]',
+    )!;
+    await within(card).findByText('実行中の任せた作業');
+    expect(card.textContent).not.toMatch(INTERNAL);
+    // 件数ごとに名前が付いている（0 件が何の 0 件か迷わない）。
+    expect(card.textContent).toContain('閉じた仕事 12 件');
+  });
+
+  it('作業の進捗が空のときは、次に何をすればよいかを言う', async () => {
+    renderHome({
+      progress: {
+        ...PROGRESS_BODY,
+        backlog: { ...PROGRESS_BODY.backlog, total: 0 },
+        inProgress: { ...PROGRESS_BODY.inProgress, running: 0 },
+      },
+    });
+
+    expect(await screen.findByText(/何かを任せると、ここに出る/)).toBeTruthy();
+  });
+
+  it('今日の利用: 記録が無いときも「台帳」と言わず、待てばよいことを言う', async () => {
+    renderHome({ usage: { rows: [], since: '2026-08-01T00:00:00.000Z', beforeLedger: true } });
+    const early = await screen.findByText(/今日の分はまだ記録が無い/);
+    expect(early.textContent).not.toMatch(INTERNAL);
+    expect(early.textContent).toContain('この先の分が記録される');
+    cleanup();
+
+    renderHome({ usage: { rows: [], since: null, beforeLedger: false } });
+    const none = await screen.findByText(/^まだ記録が無い/);
+    expect(none.textContent).not.toMatch(INTERNAL);
+    expect(none.textContent).toContain('ここに記録される');
+  });
+});
+
+describe('「作業の進捗」カード', () => {
+  it('実行中の任せた作業・未了・閉じた件数を出し、割合は出さない。詳しくは /progress', async () => {
+    renderHome();
+
+    expect(await screen.findByText('実行中の任せた作業')).toBeTruthy();
+    expect(screen.getByText(/未了の仕事 5 件・直近 7 日で閉じた仕事 12 件/)).toBeTruthy();
     expect(screen.queryByText('%')).toBeNull();
     expect(linkTo('/progress')).toBeTruthy();
   });
@@ -598,6 +682,6 @@ describe('「作業の進捗」カード', () => {
       '[data-slot="card"]',
     )!;
     expect(await within(card).findByRole('alert')).toBeTruthy();
-    expect(within(card).queryByText('実行中の委譲')).toBeNull();
+    expect(within(card).queryByText('実行中の任せた作業')).toBeNull();
   });
 });

@@ -93,7 +93,7 @@ function ReportCard({ long }: { long?: boolean }) {
       title="最新の日報"
       meta="2026-10-03"
       action={link('日報一覧')}
-      footer={link('続きを読む（全文）')}
+      moreLink={link('続きを読む（全文）')}
     >
       <Markdown>{long ? LONG_REPORT_BODY : REPORT_BODY}</Markdown>
     </HomeReportCard>

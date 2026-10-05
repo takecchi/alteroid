@@ -36,7 +36,7 @@ export function LatestReport() {
           日報一覧
         </Link>
       }
-      footer={
+      moreLink={
         readable ? (
           <Link to={href} className={HOME_LINK_CLASS}>
             続きを読む（全文）
