@@ -362,6 +362,7 @@ function fakeScheduler() {
       ran.push(kind);
       return kind === 'daily_report';
     },
+    retrySoon() {},
     tick() {
       return [];
     },

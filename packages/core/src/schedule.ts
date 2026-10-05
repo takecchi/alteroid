@@ -119,7 +119,7 @@ export interface Scheduler {
    * 早ければそちらを残す。再試行の発火も同じ `claimRun` を通るので、動けば本来の次回へ戻る。
    * 知らない kind・もう予定の無い kind は何もしない。
    */
-  retrySoon(kind: string): void;
+  retrySoon(kind: string, delayMs?: number): void;
   /**
    * 永続化された「定期の依頼」を読み直して、仕込みを合わせる。
    *
@@ -580,10 +580,10 @@ class TimerScheduler implements Scheduler {
     return [...this.#base, ...[...this.#requests.values()].map((held) => held.entry)];
   }
 
-  retrySoon(kind: string): void {
+  retrySoon(kind: string, delayMs: number = SCHEDULE_RETRY_MS): void {
     const due = this.#due.get(kind);
     if (due === undefined) return;
-    const retryAt = this.#now().getTime() + SCHEDULE_RETRY_MS;
+    const retryAt = this.#now().getTime() + delayMs;
     if (due <= retryAt) return;
     this.#due.set(kind, retryAt);
     this.#arm();
