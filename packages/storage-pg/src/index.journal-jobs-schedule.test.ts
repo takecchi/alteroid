@@ -52,14 +52,24 @@ let client: TestDbHandle;
 let db: Db;
 let stores: PgStores;
 
+/**
+ * **待ち時間の上限は、並列の負荷でテストが偽陽性に落ちないよう広く取る**（#3025）。
+ * vitest の既定（テスト5秒・フック10秒）は、複数ファイルを同時に回した器では PGlite（wasm）の
+ * 起動や本物の PostgreSQL の `CREATE DATABASE`（advisory lock で直列）が CPU を取り合って
+ * 届きうる。このファイルの判定は時刻でも待ちでもなく、行・SQL の本数と戻りの値で決まる
+ * （下の「行の版メモ」）ので、上限を広げても保証は1つも変わらない。`--testTimeout` は
+ * 触れない（`scripts/test-guard-core.mjs`）ので、個別に指定する。
+ */
+const HOOK_TIMEOUT_MS = 60_000;
+
 beforeEach(async () => {
   ({ client, db } = await createMigratedTestDb());
   stores = createPgStoresFromDb(db);
-});
+}, HOOK_TIMEOUT_MS);
 
 afterEach(async () => {
   await client.close();
-});
+}, HOOK_TIMEOUT_MS);
 
 describe('migrate', () => {
   it('二度通しても壊れない（起動のたびに走る）', async () => {
@@ -897,7 +907,7 @@ describe('PgJobStore', () => {
    * 出ること、書き換えが温かい覚えにも届くこと、壊れた行の跡が2回目でも
    * 同じ文言で出ること、そして2回目が jsonb を1行も引かないことを撃つ。
    */
-  describe('listJobs() の行の版メモ（Issue #900）', () => {
+  describe('listJobs() の行の版メモ（Issue #900）', { timeout: HOOK_TIMEOUT_MS }, () => {
     // **要素を対称にしない。** id・createdAt・status・本文をすべて違う値にし、
     // どれか2つを入れ替えたら少なくとも1つのアサーションが落ちる形にする。
     const t = (offsetMs: number) =>
@@ -982,6 +992,27 @@ describe('PgJobStore', () => {
       const mid = found.find((j) => j.id === 'mid');
       expect(mid?.status).toBe('done');
       expect(mid?.lastReport).toBe('mid の書き換え後の報告');
+    });
+
+    /**
+     * **時刻に依らないことの直接の歯（#3025）。** 版は `xmin` と `updated_at` の連結なので、
+     * 同じ `updatedAt`（同じミリ秒）で2回書いても、`xmin` が進むので覚えは古い値を返さない。
+     * 時刻を固定して同じミリ秒を決定的に作る。
+     */
+    it('同じ updatedAt（同じミリ秒）で書き換えても、覚えは古い値を返さない（xmin が版を分ける）', async () => {
+      const base = {
+        id: 'same-ms',
+        createdAt: t(0),
+        updatedAt: t(0),
+        status: 'running' as const,
+        summary: '同じ要旨',
+      };
+      await stores.jobs.putJob({ ...base, lastReport: '最初の報告' });
+      expect((await stores.jobs.listJobs())[0]?.lastReport).toBe('最初の報告'); // 覚えを温める
+
+      await stores.jobs.putJob({ ...base, lastReport: '書き換え後の報告' });
+
+      expect((await stores.jobs.listJobs())[0]?.lastReport).toBe('書き換え後の報告');
     });
 
     it('壊れた行: 2回目の呼び出しでも同じ跡が同じ文言で出る（覚えが「壊れていた」を忘れない）', async () => {
