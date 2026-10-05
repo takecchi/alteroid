@@ -73,6 +73,12 @@ jobs:
     # （2026-09-17）、警報1回のために毎回の成功で器を立てるのは釣り合わない。
     # 理由の逐語は `grep -Fn -- '閉じるのは人である' scripts/main-ci-alarm-core.mjs`。
     #
+    # **取り消された `CI` の run は、この `if:` では見分けられない。** 集約ゲート `ci` は
+    # needs の cancelled でも落ちる（必須チェックを skipped にしないため）ので、後続の
+    # push に取り消された run も conclusion は `failure` で届く（Issue #3044）。区別には
+    # jobs が要り、`if:` は jobs を見られないので、**見分けは `pnpm main-ci-alarm` の側
+    # （core の `isCancelledRun`）に置いてある。** jobs が取れないときは今までどおり鳴らす。
+    #
     # **`head_branch` で PR の run を落とす。** PR の赤は PR の画面に出ているので
     # 警報の対象ではない —— 知らせる経路が無いのは `main` のほうである。
     # ⚠️ `release/prod へ反映` を `main` 以外の枝から `workflow_dispatch` で
@@ -97,6 +103,7 @@ jobs:
           MAIN_CI_ALARM_WORKFLOW_NAME: ${{ github.event.workflow_run.name }}
           MAIN_CI_ALARM_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
           MAIN_CI_ALARM_RUN_ID: ${{ github.event.workflow_run.id }}
+          MAIN_CI_ALARM_RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
           MAIN_CI_ALARM_RUN_URL: ${{ github.event.workflow_run.html_url }}
           MAIN_CI_ALARM_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
           MAIN_CI_ALARM_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}

@@ -9,6 +9,8 @@ import { listWorkflowFiles } from './workflow-scan-core.mjs';
 
 import {
   ALARM_MARKER_PREFIX,
+  CANCEL_AWARE_WORKFLOW_NAME,
+  GATE_JOB_NAME,
   alarmKey,
   alarmMarker,
   buildCommentBody,
@@ -16,6 +18,7 @@ import {
   buildIssueTitle,
   decideAlarmAction,
   findOpenAlarmIssue,
+  isCancelledRun,
   runAlreadyMentioned,
   runMention,
   shouldAlarm,
@@ -86,6 +89,109 @@ describe('shouldAlarm', () => {
       const result = shouldAlarm({ conclusion, headBranch: 'main', defaultBranch: 'main' });
       expect(result.alarm, `conclusion=${conclusion}`).toBe(conclusion === 'failure');
     }
+  });
+});
+
+/**
+ * 取り消された run の見分け（Issue #3044）。
+ *
+ * 固定値は実測を写したもの: run 37372223779（CI、main。#3040 の偽の警報）の jobs は
+ * `checks=cancelled`・`test (1/2)=cancelled`・`test (2/2)=cancelled`・`image=success`・
+ * `ci=failure` だった（`gh api repos/takecchi/alteroid/actions/runs/37372223779/jobs`）。
+ */
+const CANCELLED_RUN_JOBS = [
+  { name: 'checks', conclusion: 'cancelled' },
+  { name: 'test (1/2)', conclusion: 'cancelled' },
+  { name: 'test (2/2)', conclusion: 'cancelled' },
+  { name: 'image', conclusion: 'success' },
+  { name: 'ci', conclusion: 'failure' },
+];
+
+const MAIN_FAILURE = {
+  conclusion: 'failure',
+  headBranch: 'main',
+  defaultBranch: 'main',
+  workflowName: 'CI',
+};
+
+describe('isCancelledRun / shouldAlarm（取り消された run は鳴らさない）', () => {
+  it('⭐ run 37372223779 型（ゲートの ci だけが failure、ほかは cancelled / success）は鳴らさない', () => {
+    expect(isCancelledRun(CANCELLED_RUN_JOBS)).toBe(true);
+    const result = shouldAlarm({ ...MAIN_FAILURE, jobs: CANCELLED_RUN_JOBS });
+    expect(result.alarm).toBe(false);
+    expect(result.reason).toContain('取り消された');
+  });
+
+  it('本物の失敗（test が failure、ゲートも failure）は鳴らす', () => {
+    const jobs = [
+      { name: 'checks', conclusion: 'success' },
+      { name: 'test (1/2)', conclusion: 'failure' },
+      { name: 'test (2/2)', conclusion: 'success' },
+      { name: 'image', conclusion: 'success' },
+      { name: 'ci', conclusion: 'failure' },
+    ];
+    expect(isCancelledRun(jobs)).toBe(false);
+    expect(shouldAlarm({ ...MAIN_FAILURE, jobs }).alarm).toBe(true);
+  });
+
+  it('⭐ 本物の失敗が cancelled と混ざっているときは鳴らす', () => {
+    const jobs = [
+      { name: 'checks', conclusion: 'failure' },
+      { name: 'test (1/2)', conclusion: 'cancelled' },
+      { name: 'test (2/2)', conclusion: 'cancelled' },
+      { name: 'ci', conclusion: 'failure' },
+    ];
+    expect(isCancelledRun(jobs)).toBe(false);
+    expect(shouldAlarm({ ...MAIN_FAILURE, jobs }).alarm).toBe(true);
+  });
+
+  it('failure 以外の非成功（timed_out など）も本物の失敗側に数える', () => {
+    const jobs = [
+      { name: 'checks', conclusion: 'timed_out' },
+      { name: 'test (1/2)', conclusion: 'cancelled' },
+      { name: 'ci', conclusion: 'failure' },
+    ];
+    expect(isCancelledRun(jobs)).toBe(false);
+  });
+
+  it('⭐ jobs を取れなかった（null）ときは今までどおり鳴らす（黙って消さない）', () => {
+    expect(isCancelledRun(null)).toBe(false);
+    expect(shouldAlarm({ ...MAIN_FAILURE, jobs: null }).alarm).toBe(true);
+  });
+
+  it('jobs を渡さない（従来の呼び方）ときも鳴らす', () => {
+    expect(shouldAlarm(MAIN_FAILURE).alarm).toBe(true);
+  });
+
+  it('jobs が空のときは鳴らす（説明のつかない赤）', () => {
+    expect(shouldAlarm({ ...MAIN_FAILURE, jobs: [] }).alarm).toBe(true);
+  });
+
+  it('cancelled が1つも無く ci だけが failure のときは鳴らす（取り消しの証拠が無い）', () => {
+    const jobs = [
+      { name: 'checks', conclusion: 'success' },
+      { name: 'ci', conclusion: 'failure' },
+    ];
+    expect(isCancelledRun(jobs)).toBe(false);
+    expect(shouldAlarm({ ...MAIN_FAILURE, jobs }).alarm).toBe(true);
+  });
+
+  it('CI 以外の workflow は、jobs が取り消しの形でも従来どおり鳴らす', () => {
+    const result = shouldAlarm({
+      ...MAIN_FAILURE,
+      workflowName: 'release/prod へ反映',
+      jobs: CANCELLED_RUN_JOBS,
+    });
+    expect(result.alarm).toBe(true);
+  });
+
+  it('取り消しの形でも、PR の枝・failure 以外の既存の判定は変わらない', () => {
+    expect(
+      shouldAlarm({ ...MAIN_FAILURE, headBranch: 'feat/x', jobs: CANCELLED_RUN_JOBS }).reason,
+    ).toContain('default branch');
+    expect(shouldAlarm({ ...MAIN_FAILURE, conclusion: 'success', jobs: [] }).reason).toContain(
+      'failure ではない',
+    );
   });
 });
 
@@ -312,5 +418,20 @@ describe('main-ci-alarm の監視対象は実在する workflow の名前であ�
           ` —— 名前を変えたなら両側を直すこと。片方だけだと静かに鳴らなくなる`,
       ).toContain(name);
     }
+  });
+});
+
+describe('取り消し判定の名前が ci.yml と一致する', () => {
+  const ciText = readFileSync(path.join(WORKFLOWS_DIR, 'ci.yml'), 'utf8');
+
+  it('workflow 名と集約ゲートの job キーが ci.yml に在る', () => {
+    expect(topLevelWorkflowName(ciText)).toBe(CANCEL_AWARE_WORKFLOW_NAME);
+    expect(ciText).toMatch(new RegExp(`^  ${GATE_JOB_NAME}:\\s*$`, 'm'));
+  });
+
+  it('集約ゲートの if: は always() のまま（! cancelled() へ変えない —— 必須チェックが skipped になりうる）', () => {
+    const gate = ciText.slice(ciText.search(new RegExp(`^  ${GATE_JOB_NAME}:`, 'm')));
+    const ifLine = /^ {4}if: (.+)$/m.exec(gate)?.[1] ?? '';
+    expect(ifLine.startsWith('always() && ')).toBe(true);
   });
 });
