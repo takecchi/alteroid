@@ -36,7 +36,6 @@ interface StubEnvVarRow {
   scope: 'all' | 'app' | 'runner';
   secret: boolean;
   value?: string;
-  shadowsCloneEnv?: boolean;
 }
 
 /**
@@ -93,12 +92,19 @@ function stubCrudScreen(initial: StubEnvVarRow[]) {
   return { puts };
 }
 
+/** ⋮ メニューを開いて項目を選ぶ。Radix の DropdownMenu は pointerdown か Enter キーで開く（jsdom は後者で足りる）。 */
+async function openMenuItem(name: string, item: '編集' | '削除'): Promise<void> {
+  const trigger = await screen.findByRole('button', { name: `「${name}」の操作` });
+  fireEvent.keyDown(trigger, { key: 'Enter' });
+  fireEvent.click(await screen.findByRole('menuitem', { name: item }));
+}
+
 async function waitForListLoaded(): Promise<void> {
   await screen.findByRole('heading', { name: '一覧' });
 }
 
 describe('/env-vars 画面 — 一覧', () => {
-  it('secret な行は値を出さず、指紋だけを出す', async () => {
+  it('secret な行は値を伏せ字にし、実値を DOM に出さない（指紋は title だけ）', async () => {
     stubCrudScreen([
       {
         name: 'GH_TOKEN',
@@ -106,6 +112,8 @@ describe('/env-vars 画面 — 一覧', () => {
         updatedAt: '2026-09-14T00:00:00.000Z',
         scope: 'all',
         secret: true,
+        // サーバは secret に値を載せないが、万一載っても描かないこと（描くかどうかは secret だけで決める）。
+        value: 'LEAKED-REAL-VALUE',
       },
     ]);
 
@@ -118,10 +126,13 @@ describe('/env-vars 画面 — 一覧', () => {
     );
     await waitForListLoaded();
 
-    expect(screen.getByText('GH_TOKEN')).toBeTruthy();
-    expect(screen.getByText('共通')).toBeTruthy();
-    expect(screen.getByText('シークレット')).toBeTruthy();
-    expect(screen.getByText(/識別用の値 a{12}/)).toBeTruthy();
+    const row = screen.getByText('GH_TOKEN').closest('[role="listitem"]') as HTMLElement;
+    // 1行に タグ・名前・値・⋮ が並ぶ
+    expect(within(row).getByText('共通')).toBeTruthy();
+    expect(within(row).getByText('******')).toBeTruthy();
+    expect(within(row).getByRole('button', { name: '「GH_TOKEN」の操作' })).toBeTruthy();
+    expect(document.body.textContent).not.toContain('LEAKED-REAL-VALUE');
+    expect(screen.queryByText('シークレット')).toBeNull();
   });
 
   it('非 secret な行は値をそのまま出す', async () => {
@@ -146,11 +157,11 @@ describe('/env-vars 画面 — 一覧', () => {
     await waitForListLoaded();
 
     expect(screen.getByText('Asia/Tokyo')).toBeTruthy();
-    expect(screen.getAllByText('クローンだけ').some((el) => el.tagName !== 'OPTION')).toBe(true);
-    expect(screen.getByText('非シークレット')).toBeTruthy();
+    expect(screen.getByText('clone')).toBeTruthy();
+    expect(screen.queryByText('******')).toBeNull();
   });
 
-  it('runner scope は「manager」と出る', async () => {
+  it('runner scope は「manager」と出る（タグは行ごとに共通・clone・manager を潰さない）', async () => {
     stubCrudScreen([
       {
         name: 'MANAGER_ONLY',
@@ -170,89 +181,7 @@ describe('/env-vars 画面 — 一覧', () => {
     );
     await waitForListLoaded();
 
-    expect(screen.getAllByText('マネージャーだけ').some((el) => el.tagName !== 'OPTION')).toBe(
-      true,
-    );
-  });
-
-  it('shadowsCloneEnv が立っている行には警告が出る', async () => {
-    stubCrudScreen([
-      {
-        name: 'GH_TOKEN',
-        sha256: 'a'.repeat(12),
-        updatedAt: '2026-09-14T00:00:00.000Z',
-        scope: 'all',
-        secret: true,
-        shadowsCloneEnv: true,
-      },
-    ]);
-
-    render(
-      <Providers>
-        <MemoryRouter>
-          <EnvVars />
-        </MemoryRouter>
-      </Providers>,
-    );
-    await waitForListLoaded();
-
-    expect(await screen.findByText(/優先して渡されている/)).toBeTruthy();
-  });
-
-  /**
-   * **scope: app は他の scope と挙動が違う（issue #1894）。** `scope: 'app'`
-   * の行は manager に配布されない（issue #1867）ので、この画面の注記にも
-   * それを言い添える——manager にはいま何も配られていないこと、そして
-   * この行を外すと manager にも配られ始めること。
-   */
-  it('shadowsCloneEnv かつ scope: app の行には、manager 向けの注記が追加で出る（issue #1894）', async () => {
-    stubCrudScreen([
-      {
-        name: 'GH_TOKEN',
-        sha256: 'a'.repeat(12),
-        updatedAt: '2026-09-14T00:00:00.000Z',
-        scope: 'app',
-        secret: true,
-        shadowsCloneEnv: true,
-      },
-    ]);
-
-    render(
-      <Providers>
-        <MemoryRouter>
-          <EnvVars />
-        </MemoryRouter>
-      </Providers>,
-    );
-    await waitForListLoaded();
-
-    expect(await screen.findByText(/マネージャーにはいま何も渡されていない/)).toBeTruthy();
-    expect(await screen.findByText(/マネージャーにも渡され始める/)).toBeTruthy();
-  });
-
-  it('shadowsCloneEnv かつ scope: all の行には、manager 向けの注記（app 専用）は出ない', async () => {
-    stubCrudScreen([
-      {
-        name: 'GH_TOKEN',
-        sha256: 'a'.repeat(12),
-        updatedAt: '2026-09-14T00:00:00.000Z',
-        scope: 'all',
-        secret: true,
-        shadowsCloneEnv: true,
-      },
-    ]);
-
-    render(
-      <Providers>
-        <MemoryRouter>
-          <EnvVars />
-        </MemoryRouter>
-      </Providers>,
-    );
-    await waitForListLoaded();
-
-    await screen.findByText(/優先して渡されている/);
-    expect(screen.queryByText(/マネージャーにはいま何も渡されていない/)).toBeNull();
+    expect(screen.getByText('manager')).toBeTruthy();
   });
 
   it('1件も無ければ、その旨を言う', async () => {
@@ -271,7 +200,7 @@ describe('/env-vars 画面 — 一覧', () => {
   });
 });
 
-describe('/env-vars 画面 — 置く・外す', () => {
+describe('/env-vars 画面 — 置く・編集・削除', () => {
   it('名前・値・渡す先・シークレット可否を指定して置くと、PUT /credentials が呼ばれ一覧に出る', async () => {
     const { puts } = stubCrudScreen([]);
 
@@ -295,7 +224,7 @@ describe('/env-vars 画面 — 置く・外す', () => {
     expect(puts).toEqual([[{ name: 'TZ', value: 'Asia/Tokyo', scope: 'app', secret: false }]]);
   });
 
-  it('外すと、空値の PUT /credentials が呼ばれ一覧から消える', async () => {
+  it('削除すると、空値の PUT /credentials が呼ばれ一覧から消える', async () => {
     const { puts } = stubCrudScreen([
       {
         name: 'NPM_TOKEN',
@@ -316,22 +245,96 @@ describe('/env-vars 画面 — 置く・外す', () => {
     await waitForListLoaded();
     expect(await screen.findByText('NPM_TOKEN')).toBeTruthy();
 
-    fireEvent.click(screen.getByRole('button', { name: '外す' }));
+    await openMenuItem('NPM_TOKEN', '削除');
     // 押しただけでは外さない（#2781）。確認を出し、まだ PUT していない。
     const dialog = await screen.findByRole('alertdialog');
-    expect(screen.getByText('環境変数「NPM_TOKEN」を外しますか')).toBeTruthy();
+    expect(screen.getByText('環境変数「NPM_TOKEN」を削除しますか')).toBeTruthy();
     expect(puts).toEqual([]);
     fireEvent.click(within(dialog).getByRole('button', { name: 'やめる' }));
     await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
     expect(puts).toEqual([]);
     expect(screen.getByText('NPM_TOKEN')).toBeTruthy();
 
-    fireEvent.click(screen.getByRole('button', { name: '外す' }));
+    await openMenuItem('NPM_TOKEN', '削除');
     fireEvent.click(
-      within(await screen.findByRole('alertdialog')).getByRole('button', { name: '外す' }),
+      within(await screen.findByRole('alertdialog')).getByRole('button', { name: '削除' }),
     );
 
     await screen.findByText('置かれた環境変数がまだ1件も無い。');
     expect(puts).toEqual([[{ name: 'NPM_TOKEN', value: '' }]]);
+  });
+
+  it('⋮→編集→値を変えて保存すると、PUT /credentials が {name, value, scope}（secret 無し）で呼ばれる', async () => {
+    const { puts } = stubCrudScreen([
+      {
+        name: 'TZ',
+        sha256: 'b'.repeat(12),
+        updatedAt: '2026-09-14T00:00:00.000Z',
+        scope: 'all',
+        secret: false,
+        value: 'UTC',
+      },
+    ]);
+
+    render(
+      <Providers>
+        <MemoryRouter>
+          <EnvVars />
+        </MemoryRouter>
+      </Providers>,
+    );
+    await waitForListLoaded();
+    await openMenuItem('TZ', '編集');
+
+    const dialog = await screen.findByRole('dialog');
+    // 名前は読み取り専用、非 secret は現在値が初期値
+    expect((within(dialog).getByLabelText('名前') as HTMLInputElement).readOnly).toBe(true);
+    expect((within(dialog).getByLabelText('値') as HTMLInputElement).value).toBe('UTC');
+    fireEvent.change(within(dialog).getByLabelText('値'), { target: { value: 'Asia/Tokyo' } });
+    fireEvent.change(within(dialog).getByLabelText('渡す先'), { target: { value: 'runner' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: '保存' }));
+
+    expect(await screen.findByText('Asia/Tokyo')).toBeTruthy();
+    expect(puts).toEqual([[{ name: 'TZ', value: 'Asia/Tokyo', scope: 'runner' }]]);
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  });
+
+  it('secret の編集は空の「新しい値」から始まり、空のままでは保存できない（空は削除の意味になるため）', async () => {
+    const { puts } = stubCrudScreen([
+      {
+        name: 'NPM_TOKEN',
+        sha256: 'a'.repeat(12),
+        updatedAt: '2026-09-14T00:00:00.000Z',
+        scope: 'all',
+        secret: true,
+      },
+    ]);
+
+    render(
+      <Providers>
+        <MemoryRouter>
+          <EnvVars />
+        </MemoryRouter>
+      </Providers>,
+    );
+    await waitForListLoaded();
+    await openMenuItem('NPM_TOKEN', '編集');
+
+    const dialog = await screen.findByRole('dialog');
+    const input = within(dialog).getByLabelText('新しい値') as HTMLInputElement;
+    expect(input.value).toBe('');
+    const save = within(dialog).getByRole('button', { name: '保存' }) as HTMLButtonElement;
+    expect(save.disabled).toBe(true);
+    fireEvent.click(save);
+    expect(puts).toEqual([]);
+
+    fireEvent.change(input, { target: { value: 'new-secret' } });
+    expect(save.disabled).toBe(false);
+    fireEvent.click(save);
+    await waitFor(() =>
+      expect(puts).toEqual([[{ name: 'NPM_TOKEN', value: 'new-secret', scope: 'all' }]]),
+    );
+    // 保存後も secret のまま（secret を送っていないので、行は伏せ字のまま）
+    expect(await screen.findByText('******')).toBeTruthy();
   });
 });
