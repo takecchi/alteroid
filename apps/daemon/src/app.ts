@@ -190,6 +190,7 @@ import {
   eventAcceptedResponseSchema,
   githubObservationRequestSchema,
   healthResponseSchema,
+  statusResponseSchema,
   inboxBacklogResponseSchema,
   inboxRemoveManyRequestSchema,
   inboxRemoveManyResponseSchema,
@@ -2323,7 +2324,9 @@ export function createApp(deps: AppDeps) {
         tags: ['system'],
         summary: '死活監視と本人確認',
         description:
-          'デーモンが応答しているかと、その pid・記憶の置き場・認証の状態を返す。' +
+          'デーモンが応答しているかと、その pid・認証の状態を返す。' +
+          '**記憶の置き場は返さない**（無認証で読める応答に、内部のホスト名・DB 名・ホームのパスを' +
+          '置かない。#2869）。認証の要る `GET /status` が返す。' +
           '`Authorization: Bearer <state/daemon.json の token>` を添えると `operator` が ' +
           'true になり、CLI はこれで「自分が起こしたデーモンか」を確かめる（PID は信用しない）。' +
           '**トークンそのものは返さない** — この値は許可を付与できる資格そのものなので、' +
@@ -2341,9 +2344,36 @@ export function createApp(deps: AppDeps) {
           ok: true,
           pid: process.pid,
           operator: isOperator(c, deps.token),
-          storage: deps.storage ?? '',
           auth: { enabled: authPlan.enabled, providers: providerList },
         }),
+    )
+
+    /**
+     * デーモン自身の説明（いまは記憶の置き場だけ）。**資格が要る**（`isPublicPath` に
+     * 入れない）。`/health` から外した `storage` の移し先（#2869）——内部のホスト名・
+     * DB 名・ホームのパスは、ログインしていない相手に読ませない。
+     */
+    .get(
+      '/status',
+      describeRoute({
+        tags: ['system'],
+        summary: 'デーモン自身の説明（記憶の置き場。資格が要る）',
+        description:
+          '記憶の置き場（PostgreSQL なら `host:port/db`、ファイルなら記憶ディレクトリのパス）を返す。' +
+          '接続情報（パスワード等）は含めない。無認証の `GET /health` は置き場を返さないので、' +
+          '置き場を知りたい呼び出し元はログインの後ろのここから取る。',
+        responses: {
+          200: {
+            description: '認証を通った相手への説明。',
+            content: { 'application/json': { schema: resolver(statusResponseSchema) } },
+          },
+          401: {
+            description: '資格が無い。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+        },
+      }),
+      (c) => c.json(statusResponseSchema.parse({ storage: deps.storage ?? '' })),
     )
 
     // --- chat（SSE） -------------------------------------------------------
