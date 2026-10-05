@@ -1,8 +1,10 @@
-import { readFile } from 'node:fs/promises';
 import { stdin, stdout } from 'node:process';
+
+import { CREDENTIAL_NAME } from '@alteroid/core';
 
 import { describeAuthFailure, forbiddenKindOf, resolveTarget, type Target } from './target.js';
 import { redactError } from './redact.js';
+import { readInputFile } from './input-errors.js';
 
 /**
  * `alteroid credential` — マネージャーへ降ろす環境変数（名前→値の袋）。
@@ -185,10 +187,17 @@ export async function credentialSetCommand(
     );
   }
 
+  // 名前の形を、値を読む前に見る（空の標準入力で「値が空」とだけ言われて、本当の誤りが隠れない）。
+  if (!CREDENTIAL_NAME.test(name)) {
+    throw new Error(
+      `名前 <name> は英大文字で始まり、英大文字・数字・_ だけで書く（渡されたのは ${name}。例: GH_TOKEN）`,
+    );
+  }
+
   const raw =
     options.file === undefined || options.file === '-'
       ? await readAll()
-      : await readFile(options.file, 'utf8');
+      : await readInputFile(options.file, '--file', '--file <path>、または標準入力（-）');
   /**
    * **末尾の改行だけを落とす。** `echo` やエディタが必ず足すので、そのまま置くと
    * 「見た目は同じなのに指紋が違う」鍵ができる。

@@ -263,6 +263,14 @@ describe('alteroid mcp set / clear', () => {
     expect(sent.filter((s) => s.method === 'PUT')).toEqual([]);
   });
 
+  it('指したファイルが無ければ、素の ENOENT ではなく、引数名と次の手を日本語で言う', async () => {
+    const error = await mcpSetCommand('/nonexistent/mcp.json').catch((e: unknown) => e);
+    expect(String(error)).toContain('引数 <file> で指したファイルを読めない');
+    expect(String(error)).toContain('標準入力（-）');
+    expect(String(error)).not.toContain('ENOENT');
+    expect(sent.filter((s) => s.method === 'PUT')).toEqual([]);
+  });
+
   it('400 なら error を出し、前の登録が残っていると言う', async () => {
     setReply('GET', '/mcp-servers', { status: 200, body: { mcpServers: {} } });
     setReply('PUT', '/mcp-servers', {

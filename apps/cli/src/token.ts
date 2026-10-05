@@ -1,8 +1,8 @@
-import { readFile } from 'node:fs/promises';
 import { stdin, stdout } from 'node:process';
 
 import { describeAuthFailure, forbiddenKindOf, resolveTarget, type Target } from './target.js';
 import { redactError } from './redact.js';
+import { readInputFile } from './input-errors.js';
 
 /**
  * `alteroid token` — 認証トークンのプール（Issue #393「PR1 プールの器」）。
@@ -335,7 +335,7 @@ export async function tokenAddCommand(options: { label: string; file?: string })
   const raw =
     options.file === undefined || options.file === '-'
       ? await readAll()
-      : await readFile(options.file, 'utf8');
+      : await readInputFile(options.file, '--file', '--file <path>、または標準入力（-）');
   const value = raw.trim();
   if (value.length === 0) {
     throw new Error('値が空である（ファイルか標準入力から、空でない値を渡す）');
@@ -391,10 +391,33 @@ async function setDisabled(id: string, disabled: boolean): Promise<void> {
 /**
  * 回す契機・冷却の既定を見る／変える。引数を1つも渡さなければいまの設定を出す。
  */
+const ROTATE_ON_VALUES: readonly string[] = ['free_exhausted', 'overage_exhausted', 'off'];
+
 export async function tokenPolicyCommand(
   value: string | undefined,
   options: { cooldownMs?: string } = {},
 ): Promise<void> {
+  const patch: { rotateOn?: string; cooldownMs?: number } = {};
+  if (value !== undefined) {
+    if (!ROTATE_ON_VALUES.includes(value)) {
+      throw new Error(
+        `token policy の第1引数は ${ROTATE_ON_VALUES.join(' / ')} のいずれか（渡されたのは ${value}）。` +
+          'free_exhausted は無料枠が尽きたら回す、overage_exhausted は課金枠まで閉じてから回す、' +
+          'off は回さない（記録だけする）',
+      );
+    }
+    patch.rotateOn = value;
+  }
+  if (options.cooldownMs !== undefined) {
+    const parsed = Number(options.cooldownMs);
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+      throw new Error(
+        `--cooldown-ms は正の数（ミリ秒）で指定する（渡されたのは ${options.cooldownMs}）`,
+      );
+    }
+    patch.cooldownMs = parsed;
+  }
+
   const target = await resolveTarget();
 
   if (value === undefined && options.cooldownMs === undefined) {
@@ -408,16 +431,6 @@ export async function tokenPolicyCommand(
     }
     printSettings(current.settings);
     return;
-  }
-
-  const patch: { rotateOn?: string; cooldownMs?: number } = {};
-  if (value !== undefined) patch.rotateOn = value;
-  if (options.cooldownMs !== undefined) {
-    const parsed = Number(options.cooldownMs);
-    if (!Number.isFinite(parsed) || parsed <= 0) {
-      throw new Error('--cooldown-ms は正の整数（ミリ秒）で指定する');
-    }
-    patch.cooldownMs = parsed;
   }
 
   const settings = (await request(target, '/tokens/policy', {

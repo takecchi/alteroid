@@ -86,3 +86,17 @@ describe('FilterChips', () => {
     expect(onChange).toHaveBeenCalledWith([]);
   });
 });
+
+describe('FilterChips の寸法', () => {
+  it('チップと「解除」は、タッチ（pointer: coarse）では 44px（min-h-11）まで広がる', () => {
+    render(
+      <FilterChips label="種別" options={[{ value: 'a' }, { value: 'b' }]} selected={['a']} />,
+    );
+    const buttons = screen.getAllByRole('button');
+    expect(buttons).toHaveLength(3);
+    for (const button of buttons) {
+      expect(button.className).toContain('min-h-7');
+      expect(button.className).toContain('pointer-coarse:min-h-11');
+    }
+  });
+});
