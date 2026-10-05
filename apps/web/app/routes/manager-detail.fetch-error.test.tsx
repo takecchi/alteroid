@@ -64,6 +64,7 @@ function renderPage() {
     [
       { path: '/managers/:id', Component: Harness },
       { path: '/journal', Component: () => null },
+      { path: '/managers', Component: () => <p>一覧の画面</p> },
     ],
     { initialEntries: ['/managers/mgr-1'] },
   );
@@ -113,7 +114,14 @@ describe('詳細の取得に失敗したとき（issue #2321）', () => {
     stubManager({ detail: () => json({ error: 'not found' }, 404) });
     renderPage();
 
-    expect(await screen.findByText('見つからない。')).toBeTruthy();
+    expect(await screen.findByText(/このマネージャーは見つかりません/)).toBeTruthy();
+    // 応答の素の英語（not found）は出さない。同じことを二重に言わない（#2791）。
+    expect(screen.queryByText(/not found/i)).toBeNull();
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.queryByText(/依頼の全文は下/)).toBeNull();
+    // 一覧へ戻る導線。
+    const back = screen.getByRole('link', { name: 'マネージャー一覧へ戻る' });
+    expect(back.getAttribute('href')).toBe('/managers');
   });
 
   it('再検証の失敗で詳細が読めたまま残っているときは、詳細を隠さない（失敗は注記で知らせる）', async () => {

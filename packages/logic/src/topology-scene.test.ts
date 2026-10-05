@@ -18,6 +18,8 @@ afterAll(() => {
 
 import {
   FLOW_WINDOW_MS,
+  IDLE_COLLAPSE_THRESHOLD,
+  IDLE_GROUP_ID,
   topologySceneFromSnapshot,
   WORKER_RUNNING_WINDOW_MS,
 } from './topology-scene.js';
@@ -369,17 +371,93 @@ describe('状態は嘘をつかない', () => {
     expect(label({ state: 'unknown' })).toBe('記憶ストア');
   });
 
-  it('runner: 1つでも connected なら ok、居るが繋がっていなければ offline、0件は unknown', () => {
+  it('runner: 生きた器（connected / vacating）だけを1台1枠で。名前は runnerId、無ければ宛先の label', () => {
     const at = (runners: TopologySnapshot['runners']) =>
-      topologySceneFromSnapshot(snapshot({ runners }), NOW).runner.status;
-    const r = (state: 'connected' | 'unreachable' | 'connecting') => ({
-      label: 'r',
-      state,
-      since: ago(1),
+      topologySceneFromSnapshot(snapshot({ runners }), NOW).runners;
+    const r = (
+      state: TopologySnapshot['runners'][number]['state'],
+      runnerId?: string,
+      label = 'http://r',
+    ) => ({ label, ...(runnerId === undefined ? {} : { runnerId }), state, since: ago(1) });
+    expect(
+      at([
+        r('connected', 'runner-primary'),
+        r('lost', 'runner-2'),
+        r('unreachable'),
+        r('connecting'),
+        r('unusable'),
+        r('vacating', 'runner-3'),
+      ]),
+    ).toEqual([
+      { id: 'runner-primary', label: 'runner-primary', status: 'ok' },
+      { id: 'runner-3', label: 'runner-3（空け中）', status: 'ok' },
+    ]);
+    // 名乗っていない器は label を名前にする。同じ runnerId の行は1枠。
+    expect(at([r('connected', undefined, 'http://x')]).map((x) => x.label)).toEqual(['http://x']);
+    expect(at([r('vacating', 'a'), r('connected', 'a')])).toEqual([
+      { id: 'a', label: 'a', status: 'ok' },
+    ]);
+    expect(at([])).toEqual([]);
+  });
+});
+
+describe('マネージャーは居る器ごとに振り分ける', () => {
+  const live = (runnerId: string) => ({
+    label: `http://${runnerId}`,
+    runnerId,
+    state: 'connected' as const,
+    since: ago(1),
+  });
+
+  it('runnerId が生きた器と突き合えば runner を付け、器の順に並べる。突き合わないものは消さずに末尾（runner 無し）', () => {
+    const scene = topologySceneFromSnapshot(
+      snapshot({
+        runners: [
+          live('runner-primary'),
+          live('runner-2'),
+          { ...live('runner-dead'), state: 'lost' },
+        ],
+        managers: [
+          { ...MANAGER, managerId: 'on-dead', runnerId: 'runner-dead' },
+          { ...MANAGER, managerId: 'on-2', runnerId: 'runner-2' },
+          { ...MANAGER, managerId: 'no-runner' },
+          { ...MANAGER, managerId: 'on-1', runnerId: 'runner-primary' },
+        ],
+      }),
+      NOW,
+    );
+    expect(scene.managers.map((m) => [m.id, m.runner])).toEqual([
+      ['on-1', 'runner-primary'],
+      ['on-2', 'runner-2'],
+      ['on-dead', undefined],
+      ['no-runner', undefined],
+    ]);
+  });
+
+  it('仕事なしの畳みは器ごと（別の器の分とは合算しない）', () => {
+    const idle = (id: string, runnerId: string) => ({
+      ...MANAGER,
+      managerId: id,
+      status: 'done' as const,
+      runnerId,
+      runnerListedAt: ago(1000),
     });
-    expect(at([r('unreachable'), r('connected')])).toBe('ok');
-    expect(at([r('unreachable'), r('connecting')])).toBe('offline');
-    expect(at([])).toBe('unknown');
+    const many = (runnerId: string, n: number) =>
+      Array.from({ length: n }, (_, i) => idle(`${runnerId}-${i}`, runnerId));
+    const scene = topologySceneFromSnapshot(
+      snapshot({
+        runners: [live('a'), live('b')],
+        managers: [
+          ...many('a', IDLE_COLLAPSE_THRESHOLD + 1),
+          ...many('b', IDLE_COLLAPSE_THRESHOLD),
+        ],
+      }),
+      NOW,
+    );
+    const ids = scene.managers.map((m) => m.id);
+    expect(ids.filter((id) => id.startsWith(IDLE_GROUP_ID))).toEqual([`${IDLE_GROUP_ID}:a`]);
+    expect(scene.managers.filter((m) => m.runner === 'b')).toHaveLength(IDLE_COLLAPSE_THRESHOLD);
+    expect(scene.managers.find((m) => m.id === `${IDLE_GROUP_ID}:a`)?.runner).toBe('a');
   });
 });
 
@@ -487,5 +565,61 @@ describe('unreadable（#2705）', () => {
     );
     expect(counted.unreadableCount).toBe(2);
     expect('unreadableCount' in topologySceneFromSnapshot(snapshot({}), NOW)).toBe(false);
+  });
+});
+
+describe('runner に居る手の空いたマネージャー（runnerListedAt）', () => {
+  const idle = (
+    id: string,
+    extra: Partial<TopologySnapshotManager> = {},
+  ): TopologySnapshotManager => ({
+    ...MANAGER,
+    managerId: id,
+    status: 'done',
+    live: true,
+    updatedAt: ago(3 * 60 * 60_000),
+    runnerListedAt: ago(5_000),
+    ...extra,
+  });
+
+  it('少ないうちは個別の札で、窓内の done と同じ「仕事なし」の描き方', () => {
+    const scene = topologySceneFromSnapshot(
+      snapshot({ managers: [idle('aaaaaaaa1'), idle('bbbbbbbb1')] }),
+      NOW,
+    );
+    expect(scene.managers.map((m) => [m.id, m.status])).toEqual([
+      ['aaaaaaaa1', 'idle'],
+      ['bbbbbbbb1', 'idle'],
+    ]);
+    expect(scene.managers[0]?.task).toBe(`完了: ${MANAGER.request}`);
+  });
+
+  it('しきい値を超えたら「仕事なし N 本」の1枚へ畳み、個別は詳細に1行ずつ残す。動いているものは畳まない', () => {
+    const ids = Array.from({ length: IDLE_COLLAPSE_THRESHOLD + 1 }, (_, i) => `idle000${i}`);
+    const scene = topologySceneFromSnapshot(
+      snapshot({
+        managers: [
+          { ...MANAGER, managerId: 'running1' },
+          ...ids.map((id) => idle(id)),
+          idle('withwork', { workers: [{ agentType: 'implementer' }] }),
+        ],
+      }),
+      NOW,
+    );
+    expect(scene.managers.map((m) => m.id)).toEqual([
+      'running1',
+      'withwork',
+      `${IDLE_GROUP_ID}:unknown`,
+    ]);
+    const group = scene.managers.at(-1);
+    expect(group?.label).toBe(`仕事なし ${ids.length} 本`);
+    expect(group?.status).toBe('idle');
+    expect(group?.details?.map((row) => row.label)).toEqual(ids);
+  });
+
+  it('しきい値ちょうどは畳まない', () => {
+    const ids = Array.from({ length: IDLE_COLLAPSE_THRESHOLD }, (_, i) => `idle000${i}`);
+    const scene = topologySceneFromSnapshot(snapshot({ managers: ids.map((id) => idle(id)) }), NOW);
+    expect(scene.managers.map((m) => m.id)).toEqual(ids);
   });
 });

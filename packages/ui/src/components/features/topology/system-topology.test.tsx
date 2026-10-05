@@ -85,12 +85,19 @@ describe('器の枠の状態（#2706）', () => {
   const containerOf = (c: HTMLElement, key: string) =>
     c.querySelector(`[data-container="${key}"]`)!;
 
-  it('runner が unknown なら「— 不明」と破線で言い、ok の器には何も足さない', () => {
+  it('器の分からない委譲は「— 不明」の破線の枠へ入れ、ok の器には何も足さない', () => {
     stubFrameWidth(1000);
-    const { container } = render(<SystemTopology {...busyScene} runner={{ status: 'unknown' }} />);
-    const runner = containerOf(container, 'runner');
+    const { container } = render(
+      <SystemTopology
+        {...busyScene}
+        managers={[{ ...busyScene.managers[0]!, runner: undefined }]}
+      />,
+    );
+    const runner = containerOf(container, 'runner:unknown-runner');
+    expect(runner.textContent).toContain('器の分からない委譲');
     expect(runner.textContent).toContain('— 不明');
     expect(runner.querySelector('rect')!.getAttribute('stroke-dasharray')).toBe('6 4');
+    expect(containerOf(container, 'runner:r1').textContent).not.toContain('不明');
     const db = containerOf(container, 'db');
     expect(db.textContent).not.toContain('不明');
     expect(db.querySelector('rect')!.getAttribute('stroke-dasharray')).toBeNull();
@@ -98,8 +105,13 @@ describe('器の枠の状態（#2706）', () => {
 
   it('offline は「— 未接続」のまま', () => {
     stubFrameWidth(1000);
-    const { container } = render(<SystemTopology {...busyScene} runner={{ status: 'offline' }} />);
-    expect(containerOf(container, 'runner').textContent).toContain('— 未接続');
+    const { container } = render(
+      <SystemTopology
+        {...busyScene}
+        runners={busyScene.runners.map((r) => ({ ...r, status: 'offline' as const }))}
+      />,
+    );
+    expect(containerOf(container, 'runner:r1').textContent).toContain('— 未接続');
   });
 });
 
@@ -111,9 +123,24 @@ describe('読めない委譲の行（#2705）', () => {
     expect(container.textContent).not.toContain('走っているマネージャーはいません');
   });
 
-  it('対照: 欄が無ければ従来の文言', () => {
+  it('対照: 欄が無ければ従来の文言（器は在る）', () => {
     stubFrameWidth(1000);
     const { container } = render(<SystemTopology {...idleScene} />);
     expect(container.textContent).toContain('走っているマネージャーはいません');
+  });
+
+  it('器が0台なら大枠を出さず「稼働中の器はありません」', () => {
+    stubFrameWidth(1000);
+    const { container } = render(<SystemTopology {...idleScene} runners={[]} />);
+    expect(container.textContent).toContain('稼働中の器（runner）はありません');
+    expect(container.querySelector('[data-container^="runner"]')).toBeNull();
+  });
+
+  it('器ごとに枠が1つずつ出る（manager-runner の大枠は無い）', () => {
+    stubFrameWidth(1000);
+    const { container } = render(<SystemTopology {...busyScene} />);
+    expect(container.textContent).toContain('runner-primary');
+    expect(container.textContent).toContain('runner-2');
+    expect(container.textContent).not.toContain('manager-runner');
   });
 });

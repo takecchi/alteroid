@@ -73,9 +73,10 @@ function scene(workerCounts: readonly number[]): TopologyScene {
     human: { flow: 'down' },
     clone: { status: 'running' },
     db: { status: 'running', flow: 'both' },
-    runner: { status: 'running' },
+    runners: [{ id: 'r1', label: 'runner-1', status: 'ok' }],
     managers: workerCounts.map((n, i) => ({
       id: `m${i}`,
+      runner: 'r1',
       label: `m${i}`,
       status: 'running',
       flow: 'down',
@@ -164,10 +165,89 @@ describe('器の状態（#2706）', () => {
     ['narrow', layoutNarrow],
   ] as const)('%s: runner / db の状態が器へ載る。unknown は ok と別', (_name, layout) => {
     const base = scene([1]);
-    expect(states(layout(base))).toEqual({ db: 'ok', daemon: 'ok', runner: 'ok' });
-    expect(states(layout({ ...base, runner: { status: 'unknown' } })).runner).toBe('unknown');
-    expect(states(layout({ ...base, runner: { status: 'offline' } })).runner).toBe('offline');
+    expect(states(layout(base))).toEqual({ db: 'ok', daemon: 'ok', 'runner:r1': 'ok' });
+    expect(
+      states(layout({ ...base, runners: [{ id: 'r1', label: 'runner-1', status: 'offline' }] }))[
+        'runner:r1'
+      ],
+    ).toBe('offline');
     expect(states(layout({ ...base, db: { status: 'unknown' } })).db).toBe('unknown');
     expect(states(layout({ ...base, db: { status: 'offline' } })).db).toBe('offline');
   });
+});
+
+describe('器ごとの枠', () => {
+  const two: TopologyScene = {
+    ...scene([0, 2, 0]),
+    runners: [
+      { id: 'r1', label: 'runner-1', status: 'ok' },
+      { id: 'r2', label: 'runner-2', status: 'ok' },
+    ],
+  };
+  const withRunners = (ids: (string | undefined)[]): TopologyScene => ({
+    ...two,
+    managers: two.managers.map((m, i) => ({ ...m, runner: ids[i] })),
+  });
+  const inside = (outer: Box, b: Box) =>
+    b.x >= outer.x &&
+    b.y >= outer.y &&
+    b.x + b.w <= outer.x + outer.w &&
+    b.y + b.h <= outer.y + outer.h;
+
+  it.each([
+    ['wide', layoutWide],
+    ['narrow', layoutNarrow],
+  ] as const)(
+    '%s: 器ごとに1枠。大枠は無く、各マネージャーと作業者は自分の器の枠の中に居る',
+    (_n, layout) => {
+      const l = layout(withRunners(['r1', 'r2', 'r1']));
+      const keys = l.containers.map((c) => c.key);
+      expect(keys).toContain('runner:r1');
+      expect(keys).toContain('runner:r2');
+      expect(keys).not.toContain('runner');
+      const box = (key: string) => l.containers.find((c) => c.key === key)!.box;
+      const node = (key: string) => l.nodes.find((n) => n.key === key)!.box;
+      expect(inside(box('runner:r1'), node('m-m0'))).toBe(true);
+      expect(inside(box('runner:r1'), node('m-m2'))).toBe(true);
+      expect(inside(box('runner:r2'), node('m-m1'))).toBe(true);
+      expect(inside(box('runner:r2'), node('w-m1w0'))).toBe(true);
+      // 枠どうしは重ならない
+      const a = box('runner:r1');
+      const b = box('runner:r2');
+      expect(a.y + a.h <= b.y || b.y + b.h <= a.y).toBe(true);
+    },
+  );
+
+  it.each([
+    ['wide', layoutWide],
+    ['narrow', layoutNarrow],
+  ] as const)(
+    '%s: 器が分からない・突き合わないマネージャーは消さず「器の分からない委譲」へ（unknown）',
+    (_n, layout) => {
+      const l = layout(withRunners(['r1', undefined, 'gone']));
+      expect(l.nodes.filter((n) => n.kind === 'manager')).toHaveLength(3);
+      const unknown = l.containers.find((c) => c.key === 'runner:unknown-runner')!;
+      expect(unknown.state).toBe('unknown');
+      expect(unknown.label).toBe('器の分からない委譲');
+      const node = (key: string) => l.nodes.find((n) => n.key === key)!.box;
+      expect(inside(unknown.box, node('m-m1'))).toBe(true);
+      expect(inside(unknown.box, node('m-m2'))).toBe(true);
+    },
+  );
+
+  it.each([
+    ['wide', layoutWide],
+    ['narrow', layoutNarrow],
+  ] as const)(
+    '%s: 器が0台でマネージャーも0本なら枠は出さず案内だけ。器が在れば空の枠と案内',
+    (_n, layout) => {
+      const none = layout({ ...two, runners: [], managers: [] });
+      expect(none.containers.map((c) => c.key).filter((k) => k.startsWith('runner'))).toEqual([]);
+      expect(none.empty).toBeDefined();
+      const idle = layout({ ...two, managers: [] });
+      expect(idle.containers.filter((c) => c.key.startsWith('runner:'))).toHaveLength(2);
+      expect(idle.empty).toBeDefined();
+      expect(idle.height).toBeGreaterThanOrEqual(idle.empty!.y + idle.empty!.h);
+    },
+  );
 });

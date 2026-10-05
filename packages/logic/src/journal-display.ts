@@ -3,7 +3,10 @@
  * （#2558）。React にも Tailwind にも依存しない — 色は名前（`'warn'` など）で持ち、どの色に
  * 塗るかは読む側が決める。
  */
-import { JOURNAL_SEARCH_UNCOVERED_LIST } from '@alteroid/core/journal-search';
+import {
+  JOURNAL_SEARCH_UNCOVERED_LIST,
+  JOURNAL_SEARCH_UNSEARCHABLE_TYPES,
+} from '@alteroid/core/journal-search';
 
 import type { JournalEntryType } from './types.js';
 
@@ -72,3 +75,37 @@ export const SEARCH_SCOPE_NOTE = `${JOURNAL_SEARCH_UNCOVERED_LIST} は探す対�
 
 /** 初期表示・1回の「もっと遡る」で読む件数。 */
 export const JOURNAL_PAGE = 100;
+
+/**
+ * 種別の日本語名（Web の種別チップと各行のバッジ。issue #2806）。**識別子（`exchange` など）は
+ * 利用者に見せない**——行を開いた先の JSON と、バッジの `title`（補足）にだけ残す。
+ * `satisfies Record<JournalEntryType, string>` で縛ってあるので、種別を足して名前を足し忘れると
+ * 型で落ちる。CLI の TUI は識別子のまま出す（開発者向けの道具）ので、こちらは読まない。
+ */
+export const JOURNAL_TYPE_LABEL = {
+  exchange: 'やりとり',
+  decision: '判断',
+  escalation: 'エスカレーション',
+  tool_use: '道具の実行',
+  memory_update: '記憶の更新',
+  daily_report: '日報',
+  external_event: '外からの出来事',
+  worker_wait: '作業者の待機',
+  turn_usage: 'ターンの消費',
+  context_usage: '文脈の占有',
+  token_rotation: 'トークンの交代',
+  subagent_stall: '作業者の空回り',
+  inbox_flow: '受信箱の流量',
+  github_observation: 'GitHub の観測',
+} satisfies Record<JournalEntryType, string>;
+
+/** 種別の日本語名。知らない種別（新しいデーモンが先に出した値）は識別子のまま返す。 */
+export function journalTypeLabel(type: string): string {
+  return (JOURNAL_TYPE_LABEL as Record<string, string>)[type] ?? type;
+}
+
+/**
+ * {@link SEARCH_SCOPE_NOTE} の Web 版。識別子の代わりに日本語名で言う（issue #2806）。
+ * 探す対象にしない種別の集合は core の `JOURNAL_SEARCH_UNSEARCHABLE_TYPES` が正本。
+ */
+export const SEARCH_SCOPE_NOTE_JA = `${['道具の入力', ...JOURNAL_SEARCH_UNSEARCHABLE_TYPES.map(journalTypeLabel)].join('・')}は探す対象に入っていない（そこにだけ書かれている語は当たらない）。`;

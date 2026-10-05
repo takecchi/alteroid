@@ -74,12 +74,12 @@ export default function ProgressPage() {
     <Page
       tabs={<WorkTabs />}
       title="作業の進捗"
-      description="積み上がっている仕事・実施中の委譲・窓の中で片付いた速度・見込み。読み取り専用。割合（分母が定まらない）は出さず、件数と時間だけを並べる"
+      description="たまっている仕事、実行中の依頼、期間内に片付いた数、完了の目安。読み取り専用で、件数と時間だけを並べます"
     >
       <div className="mb-4 flex flex-wrap items-center gap-2">
-        <span className="text-xs text-muted-foreground">速度と見込みを数える窓</span>
+        <span className="text-xs text-muted-foreground">集計する期間</span>
         <ChoiceChips
-          label="窓の長さ"
+          label="期間の長さ"
           options={WINDOWS.map((hours) => ({ value: String(hours), label: WINDOW_LABEL[hours] }))}
           value={String(windowHours)}
           onChange={(value) => selectWindow(parseWindow(value))}
@@ -113,8 +113,8 @@ function ProgressErrorNote({ error }: { error: unknown }) {
   if (error instanceof ApiError && error.status === 404) {
     return (
       <div className="px-4 py-3 text-sm text-destructive">
-        この版のデーモンにはこの口（GET /progress）が無い。デーモンを更新してください。
-        進む仕事が0件だった、という意味ではない。
+        接続先のデーモンが古く、作業の進捗を取得できません。デーモンを更新してください。
+        進んでいる仕事が0件、という意味ではありません。
       </div>
     );
   }
@@ -154,40 +154,42 @@ function GithubBlock({ github, observedAt }: { github: Progress['github']; obser
   if (github.state === 'not_observed') {
     return (
       <Stat
-        label="open の Issue / PR"
+        label="開いている Issue / PR"
         value={NONE}
-        hint={<>観測していない（0 件ではない）。{redactBody(github.reason)}</>}
+        hint={
+          <>まだ記録がありません（0 件という意味ではありません）。{redactBody(github.reason)}</>
+        }
       />
     );
   }
   if ((github.state as string) !== 'observed') {
     return (
       <Stat
-        label="open の Issue / PR"
+        label="開いている Issue / PR"
         value={NONE}
-        hint={<>この版の画面は知らない状態（{String(github.state)}）。数は出さない。</>}
+        hint={<>この画面が知らない状態です。数は出せません。</>}
       />
     );
   }
   return (
     <div className="flex flex-col gap-3">
       <p className="text-xs text-muted-foreground">
-        観測した側の申告（デーモンは GitHub を見に行かず、値を確かめていない）。古さは判定しない。
+        記録された数です（GitHub を直接確かめたものではなく、古さの判定もしていません）。
       </p>
       {github.repos.map((row) => (
         <div key={row.repo} className="flex flex-col gap-2">
           {row.latestOk === null ? (
             <Stat
-              label={`${row.repo} の open の Issue / PR`}
+              label={`${row.repo} の開いている Issue / PR`}
               value={NONE}
               hint={
                 github.scan.reachedLimit ? (
                   <>
-                    読んだ範囲（新しい順 {count(github.scan.limit)}{' '}
-                    件）には成功した観測の記録が無い（0 件ではない）。
+                    読み取った範囲（新しい順 {count(github.scan.limit)}{' '}
+                    件）に成功した記録が無いため、数は分かりません（0 件という意味ではありません）。
                   </>
                 ) : (
-                  <>成功した観測の記録が無い（0 件ではない）。</>
+                  <>成功した記録が無いため、数は分かりません（0 件という意味ではありません）。</>
                 )
               }
             />
@@ -195,12 +197,12 @@ function GithubBlock({ github, observedAt }: { github: Progress['github']; obser
             <>
               <StatRow>
                 <Stat
-                  label={`${row.repo} open Issue`}
+                  label={`${row.repo} 開いている Issue`}
                   value={count(row.latestOk.openIssues)}
                   unit="件"
                 />
                 <Stat
-                  label={`${row.repo} open PR`}
+                  label={`${row.repo} 開いている PR`}
                   value={count(row.latestOk.openPulls)}
                   unit="件"
                 />
@@ -208,17 +210,17 @@ function GithubBlock({ github, observedAt }: { github: Progress['github']; obser
               <KeyValueList
                 items={[
                   {
-                    label: '観測',
-                    value: `${atText(row.latestOk.observedAt, observedAt)} / 観測者 ${row.latestOk.observedBy}`,
+                    label: '記録した時刻',
+                    value: `${atText(row.latestOk.observedAt, observedAt)} / 記録元 ${row.latestOk.observedBy}`,
                   },
                   {
-                    label: '母集合',
+                    label: '数えた範囲',
                     value:
                       row.latestOk.query +
                       (row.latestOk.limit === undefined
                         ? ''
-                        : ` / limit ${count(row.latestOk.limit)}`) +
-                      (row.latestOk.truncated ? '（limit に達した。数は下限）' : ''),
+                        : ` / 上限 ${count(row.latestOk.limit)} 件`) +
+                      (row.latestOk.truncated ? '（上限に達したため、実際はこれ以上）' : ''),
                   },
                   { label: 'CI', value: ciText(row.latestOk) },
                 ]}
@@ -228,7 +230,7 @@ function GithubBlock({ github, observedAt }: { github: Progress['github']; obser
           )}
           {row.latestFailed !== null && (
             <p className="text-xs text-warn">
-              取れなかった回: {atText(row.latestFailed.observedAt, observedAt)} / 観測者{' '}
+              取得に失敗した回: {atText(row.latestFailed.observedAt, observedAt)} / 記録元{' '}
               {row.latestFailed.observedBy} — {redactBody(row.latestFailed.reason)}
             </p>
           )}
@@ -236,9 +238,9 @@ function GithubBlock({ github, observedAt }: { github: Progress['github']; obser
       ))}
       {github.scan.reachedLimit && (
         <p className="text-xs text-warn">
-          ⚠ 記録の読みが上限（新しい順 {count(github.scan.limit)}{' '}
-          件）に当たった。古い記録にしか現れない repo は載っていない。載っている repo
-          でも、成功・失敗の片方が読んだ範囲の外に押し出されて欠けていることがある。
+          読み取った記録が上限（新しい順 {count(github.scan.limit)}{' '}
+          件）に達しました。古い記録にしかないリポジトリは載っていません。載っているリポジトリでも、
+          成功か失敗の記録が読み取りの範囲から外れて欠けていることがあります。
         </p>
       )}
     </div>
@@ -252,44 +254,45 @@ function BacklogCard({ progress }: { progress: Progress }) {
 
   const items: KeyValueItem[] = [
     {
-      label: '起点別',
-      value: `人間 ${count(byOrigin.human)} / マネージャー ${count(byOrigin.manager)} / 外部 ${count(byOrigin.external)} / 自発 ${count(byOrigin.self)}`,
+      label: '誰からの依頼か',
+      value: `人間 ${count(byOrigin.human)} / マネージャー ${count(byOrigin.manager)} / 外部 ${count(byOrigin.external)} / 自分で始めた ${count(byOrigin.self)}`,
     },
     {
-      label: '最古',
+      label: 'いちばん古いもの',
       value:
         age.oldestAt === null
-          ? `${NONE}（未了が無いので出せない）`
+          ? `${NONE}（未完了の仕事が無いため）`
           : atText(age.oldestAt, observedAt),
     },
     {
-      label: '齢の中央値',
+      label: '経過時間の中央値',
       value:
-        age.medianHours === null ? `${NONE}（未了が無いので出せない）` : hoursText(age.medianHours),
+        age.medianHours === null ? `${NONE}（未完了の仕事が無いため）` : hoursText(age.medianHours),
     },
     {
-      label: '齢の帯',
+      label: '経過時間の内訳',
       value: `1時間未満 ${count(age.buckets.under1h)} / 24時間未満 ${count(age.buckets.under24h)} / 7日未満 ${count(age.buckets.under7d)} / 7日以上 ${count(age.buckets.over7d)}`,
     },
     {
-      label: '状態別',
-      value: `未着手 ${count(byState.untouched)} / 返答済み・未クローズ ${count(byState.responded)} / 委譲あり ${count(byState.delegated)}（他と重なりうる） / 人間起点でない ${count(byState.notApplicable)}`,
+      label: '進み具合',
+      value: `未着手 ${count(byState.untouched)} / 返答済み（まだ閉じていない） ${count(byState.responded)} / マネージャーに任せた ${count(byState.delegated)}（他の項目と重なることがあります） / 人間からの依頼ではない ${count(byState.notApplicable)}`,
     },
   ];
 
   return (
     <Card>
-      <CardHeader title="未了の仕事" subtitle="台帳（引き受けた仕事）の未了" />
+      <CardHeader title="未完了の仕事" subtitle="引き受けた仕事のうち、まだ終わっていないもの" />
       <Section>
         <StatRow>
-          <Stat label="未了" value={count(backlog.total)} unit="件" />
+          <Stat label="未完了" value={count(backlog.total)} unit="件" />
         </StatRow>
         <KeyValueList items={items} labelWidth="8rem" />
         {partial && (
           <p className="text-xs text-warn">
-            ⚠ 数が欠けうる（読めなかった行 {count(completeness.unreadable)} 件 /
-            刈り取られた片付き行 {count(completeness.trimmedClosed)}{' '}
-            件）。上の数は下限として読むこと。
+            数が実際より少ない可能性があります（読み取れなかった記録{' '}
+            {count(completeness.unreadable)} 件 / 古くて整理された完了済みの記録{' '}
+            {count(completeness.trimmedClosed)}{' '}
+            件）。上の数は「少なくともこれだけ」と読んでください。
           </p>
         )}
         <div className="border-t border-border pt-3">
@@ -309,40 +312,41 @@ function InProgressCard({ progress }: { progress: Progress }) {
     (progress.backlog.completeness as { unreadableJobs?: number }).unreadableJobs ?? 0;
   const items: KeyValueItem[] = [
     {
-      label: '最終報告（最古）',
+      label: '最後の報告（いちばん古い）',
       value:
         lastReport.oldestAt === null
-          ? `${NONE}（報告のある走行が無い）`
+          ? `${NONE}（報告のある依頼が無い）`
           : atText(lastReport.oldestAt, observedAt),
     },
     {
-      label: '最終報告（最新）',
+      label: '最後の報告（いちばん新しい）',
       value:
         lastReport.newestAt === null
-          ? `${NONE}（報告のある走行が無い）`
+          ? `${NONE}（報告のある依頼が無い）`
           : atText(lastReport.newestAt, observedAt),
     },
-    { label: '報告の無い走行', value: `${count(lastReport.withoutReport)} 件` },
+    { label: 'まだ報告が無い依頼', value: `${count(lastReport.withoutReport)} 件` },
   ];
   return (
     <Card>
-      <CardHeader title="実行中の委譲" subtitle="委譲（マネージャー）の走行" />
+      <CardHeader title="実行中の依頼" subtitle="マネージャーに任せた仕事のうち、動いているもの" />
       <Section>
         <StatRow>
           <Stat label="実行中" value={count(inProgress.running)} unit="件" />
-          <Stat label="人間待ち" value={count(inProgress.awaitingHuman)} unit="件" />
-          <Stat label="行方不明" value={count(inProgress.lost)} unit="件" />
+          <Stat label="返答待ち" value={count(inProgress.awaitingHuman)} unit="件" />
+          <Stat label="連絡が取れない" value={count(inProgress.lost)} unit="件" />
         </StatRow>
         <KeyValueList items={items} labelWidth="8rem" />
         {unreadableJobs !== 0 && (
           <p className="text-xs text-warn">
-            ⚠ 読めない委譲の行が {count(unreadableJobs)} 件ある。上の数は読めた委譲の分だけで、
-            下限として読むこと（壊れた行であって、居ないのではない）。
+            読み取れなかった依頼の記録が {count(unreadableJobs)}{' '}
+            件あります。上の数は読み取れた分だけで、
+            実際はこれ以上です（記録が壊れているだけで、依頼が無いわけではありません）。
           </p>
         )}
         <p className="text-xs text-muted-foreground">
-          「実行中」は走らせたという意味で、進んでいるとは限らない。最終報告が古い走行を見るなら
-          マネージャーの一覧へ。
+          「実行中」は動かし始めたという意味で、進んでいるとは限りません。最後の報告が古い依頼は、
+          マネージャーの一覧で確かめてください。
         </p>
       </Section>
     </Card>
@@ -359,13 +363,13 @@ function ThroughputCard({ progress }: { progress: Progress }) {
       />
       <Section>
         <StatRow>
-          <Stat label="受けた" value={count(throughput.commitmentsOpened)} unit="件" />
-          <Stat label="閉じた" value={count(throughput.commitmentsClosed)} unit="件" />
+          <Stat label="引き受けた" value={count(throughput.commitmentsOpened)} unit="件" />
+          <Stat label="完了にした" value={count(throughput.commitmentsClosed)} unit="件" />
           <Stat
-            label="委譲の終了"
+            label="終わった依頼"
             value={count(throughput.delegationsEnded.count)}
             unit="件"
-            hint="更新時刻（updatedAt）による近似。終端時刻の欄が無い"
+            hint="最後に更新された時刻からの概算です（終わった正確な時刻は記録されていません）"
           />
         </StatRow>
       </Section>
@@ -374,15 +378,17 @@ function ThroughputCard({ progress }: { progress: Progress }) {
 }
 
 const UNAVAILABLE_REASONS: Record<string, string> = {
-  closed_too_few: '窓の中で閉じた件数が少なすぎる',
-  ledger_younger_than_window: '台帳の最古の行が窓より新しい',
-  history_incomplete: '古い片付き行が刈り取られていて、窓の中の消化を数え落としうる',
+  closed_too_few: '期間内に完了した仕事が少なすぎて、計算できません。完了が増えると出ます',
+  ledger_younger_than_window:
+    '記録の始まりが選んだ期間より新しいため、計算できません。記録が期間ぶんたまるまで待つか、短い期間に切り替えてください',
+  history_incomplete:
+    '古い完了済みの記録が整理されていて、期間内の完了を数え落としている可能性があるため、計算できません。短い期間に切り替えてみてください',
 };
 
 function reasonText(reason: string): string {
   return Object.hasOwn(UNAVAILABLE_REASONS, reason)
     ? (UNAVAILABLE_REASONS[reason] ?? reason)
-    : `この版の画面は知らない理由（${reason}）`;
+    : '目安を出せない理由が、この画面では分かりません。画面かデーモンを更新してください';
 }
 
 /** 日にちを添えるのは長いときだけ（48時間以上）。 */
@@ -395,12 +401,18 @@ function ForecastCard({ progress }: { progress: Progress }) {
   const forecast = progress.forecast;
   return (
     <Card>
-      <CardHeader title="見込み" subtitle="未了が空になるまで。推定であり約束ではない" />
+      <CardHeader
+        title="見込み"
+        subtitle="未完了の仕事がなくなるまでの目安です。約束ではありません"
+      />
       <Section>
         <ForecastBody forecast={forecast} />
         {/* 版のずれで basis が欠けても落ちない。 */}
         {(forecast.basis as ProgressForecastBasis | undefined) !== undefined && (
-          <BasisList basis={forecast.basis} />
+          <BasisList
+            basis={forecast.basis}
+            {...(forecast.state === 'estimated' ? { notice: forecast.notice } : {})}
+          />
         )}
       </Section>
     </Card>
@@ -416,7 +428,9 @@ function ForecastBody({ forecast }: { forecast: ProgressForecast }) {
             <Badge tone="ok">推定</Badge>
           </div>
           <Stat label="あと約" value={drainText(forecast.hoursToDrain)} />
-          <p className="text-xs text-muted-foreground">{forecast.notice}</p>
+          <p className="text-xs text-muted-foreground">
+            目安です。期間内に新しく引き受けた分は計算に入れていません（上の件数は並べて示しているだけです）。
+          </p>
         </>
       );
     case 'not_converging':
@@ -426,7 +440,7 @@ function ForecastBody({ forecast }: { forecast: ProgressForecast }) {
           <Stat
             label="あと"
             value={NONE}
-            hint={`窓の中で受けた件数（${count(forecast.basis.openedInWindow)} 件）が閉じた件数（${count(forecast.basis.closedInWindow)} 件）以上なので、時間は出さない`}
+            hint={`期間内に引き受けた件数（${count(forecast.basis.openedInWindow)} 件）が完了にした件数（${count(forecast.basis.closedInWindow)} 件）以上なので、時間は出せません`}
           />
         </>
       );
@@ -434,48 +448,46 @@ function ForecastBody({ forecast }: { forecast: ProgressForecast }) {
       return (
         <>
           <Badge tone="neutral">見込みを出せない</Badge>
-          <Stat
-            label="あと"
-            value={NONE}
-            hint={`理由: ${reasonText(forecast.reason)}。時間は出さない`}
-          />
+          <Stat label="あと" value={NONE} hint={`${reasonText(forecast.reason)}。`} />
         </>
       );
     default: {
       // 型は網羅済み。ここに来るのは、デーモンが先に新しい状態を返したとき。
       const unknown: never = forecast;
-      const state = String((unknown as { state?: unknown }).state);
+      void unknown;
       return (
         <>
-          <Badge tone="neutral">知らない状態</Badge>
-          <Stat
-            label="あと"
-            value={NONE}
-            hint={`この版の画面は知らない状態（${state}）。時間は出さない`}
-          />
+          <Badge tone="neutral">不明な状態</Badge>
+          <Stat label="あと" value={NONE} hint="この画面が知らない状態です。時間は出せません" />
         </>
       );
     }
   }
 }
 
-function BasisList({ basis }: { basis: ProgressForecastBasis }) {
+function BasisList({ basis, notice }: { basis: ProgressForecastBasis; notice?: string }) {
   const items: KeyValueItem[] = [
-    { label: '未了', value: `${count(basis.open)} 件` },
-    { label: '窓で閉じた', value: `${count(basis.closedInWindow)} 件` },
-    { label: '窓で受けた', value: `${count(basis.openedInWindow)} 件` },
-    { label: '窓の長さ', value: `${count(basis.windowHours)} 時間` },
-    { label: '式', value: basis.method, mono: true },
+    { label: '未完了', value: `${count(basis.open)} 件` },
+    { label: '期間内に完了にした', value: `${count(basis.closedInWindow)} 件` },
+    { label: '期間内に引き受けた', value: `${count(basis.openedInWindow)} 件` },
+    { label: '期間の長さ', value: `${count(basis.windowHours)} 時間` },
   ];
   return (
     <div className="border-t border-border pt-3">
-      <p className="mb-2 text-xs text-muted-foreground">根拠</p>
+      <p className="mb-2 text-xs text-muted-foreground">計算の元になった数</p>
       <KeyValueList items={items} labelWidth="8rem" />
       {basis.unreadable !== 0 && (
         <p className="mt-2 text-xs text-warn">
-          ⚠ 読めなかった台帳の行が {count(basis.unreadable)} 件ある。未了の数は欠けうる。
+          読み取れなかった記録が {count(basis.unreadable)}{' '}
+          件あるため、未完了の数は実際より少ない可能性があります。
         </p>
       )}
+      {/* 計算式は開発者向けなので、折りたたみの先に置く。 */}
+      <details className="mt-2 text-xs text-muted-foreground">
+        <summary className="cursor-pointer">計算の詳細（開発者向け）</summary>
+        <code className="mt-1 block font-mono break-words">{basis.method}</code>
+        {notice !== undefined && <p className="mt-1 break-words">{notice}</p>}
+      </details>
     </div>
   );
 }

@@ -335,6 +335,31 @@ export interface ManagerSummary {
    */
   runnerVanished?: true;
   /**
+   * **宛先の runner が、最新の生存確認の一覧にこの委譲を載せていた観測時刻**（ISO8601。
+   * `RunnerEntry.sessionsObservedAt` の写し）。観測できていなければ**欄ごと消える**。
+   *
+   * **「居る」と言える事実だけで立てる。** 立つのは次の3つがすべて成り立つときだけで、
+   * どれかが欠ければ出さない（推測で立てない）:
+   *
+   * 1. 宛先の `runnerId` が台帳に在る
+   * 2. その runner が名簿に entry として在り、`#silentRunners()`（`lost`）に入っていない
+   * 3. `#runnerSessions()` の一覧（答えた回の観測。聞けていない回は入らない）にこの委譲
+   *    の id が載っている
+   *
+   * **ここで runner を叩かない**（10秒ごとの生存確認が名簿へ立てた観測を同期に読むだけ。
+   * `sessionMissingSince` の3つ目の契機と同じ材料の、「載っていた」側の写しである）。
+   * `#probeSessions` が持ち帰る `sessions` は `states`（読めた委譲）だけで、
+   * `unreadableIds`（スキーマに合わず読めなかった委譲）は入らない。だから読めなかった委譲は
+   * この欄が立たない（「居る」と言い切れる材料が無い側へ倒れる）。
+   *
+   * **`status` も `live` も動かさない。** `status: done` でも runner が一覧に載せていれば
+   * 立つ——「手が空いただけで、器の上にまだ居る」を名指しする欄である（稼働の地図は、これが
+   * 立った lost / failed / stopped 以外の委譲を終端の窓（10分）に関係なく載せる）。
+   * **古い観測は読み手が捨てる**——`/managers` だけが詰まった回は前の観測が残るので、
+   * 時刻を見て新しさを判断すること。
+   */
+  runnerListedAt?: string;
+  /**
    * **宛先の runner が応答したうえで、この委譲のセッションを一覧に載せなかったと
    * 観測した時刻**（ISO8601）。観測していなければ**欄ごと消える**。
    *
@@ -5641,6 +5666,7 @@ class Pool implements ManagerPool {
       // **門を通す（Issue #1212 残件2）。** `record.job.usageStoppedAt` を
       // 直接渡さない——`ManagerSummary.usageStoppedAt` の doc のとおり。
       this.#usageStopped.has(record.job.id) ? record.job.usageStoppedAt : undefined,
+      runnerListedAtOf(record.job, silent, this.#runnerSessions()),
     );
     /*
      * **`summaryOf` の一般形へは混ぜない（Issue #1814）。** `cwdConfirmed` /
@@ -6220,6 +6246,7 @@ class Pool implements ManagerPool {
     // 読んで台帳へ写すだけである（`#noteMissingSessions` / `#silentRunners`）。
     this.#noteMissingSessions();
     const silent = this.#silentRunners();
+    const runnerSessions = this.#runnerSessions();
     // **同じ理由で1回だけ引く（Issue #1212 running 側。段1）。** 一覧を作って
     // いる間に名簿が動いても、同じ応答の中では全件を同じ像で比べる
     // （`activeTokenGeneration` と同じ筋。真下の `#noteVanishedRunnerGauge` の
@@ -6257,6 +6284,7 @@ class Pool implements ManagerPool {
           this.#resetTimeSkewMatches.get(record.job.id),
           // **門を通す（Issue #1212 残件2）。** `ManagerSummary.usageStoppedAt` の doc。
           this.#usageStopped.has(record.job.id) ? record.job.usageStoppedAt : undefined,
+          runnerListedAtOf(record.job, silent, runnerSessions),
         ),
       );
     }
@@ -6289,6 +6317,7 @@ class Pool implements ManagerPool {
           this.#resetTimeSkewMatches.get(job.id),
           // **門を通す（Issue #1212 残件2）。** `ManagerSummary.usageStoppedAt` の doc。
           this.#usageStopped.has(job.id) ? job.usageStoppedAt : undefined,
+          runnerListedAtOf(job, silent, runnerSessions),
         ),
       );
     }
@@ -8415,6 +8444,7 @@ class Pool implements ManagerPool {
             // **門を通す（Issue #1212 残件2）。** この直前で `#usageStopped` は
             // 台帳の写しから組み直し済み（このループ冒頭の doc）。
             this.#usageStopped.has(record.job.id) ? record.job.usageStoppedAt : undefined,
+            undefined,
           ),
         );
         continue;
@@ -8448,9 +8478,14 @@ class Pool implements ManagerPool {
       const runner = await this.#runnerOf(record);
       if (!runner) continue;
 
+      // **ここへ来る条件そのものが「runner がこのセッションを知らない」である**
+      // （知っていれば上の `living` の分岐で attach して終わる）。それは器が入れ
+      // 替わった（作業ツリーが消えている）ことと区別できないので、cause は
+      // `'runner'` にする。`'daemon'` のままだと、枝名の clone 案内と「コミット
+      // 前の変更は失われている」が出ない（Issue #2748）。
       const nudge = restartNudge(
         job.status,
-        'daemon',
+        'runner',
         job.workspace,
         job.lastUnpushedWorkObservation,
       );
@@ -8530,7 +8565,7 @@ class Pool implements ManagerPool {
             `${EXCHANGE_KIND_RECOVERY_PREFIX}[${job.id}] （再起動後の再開）${nudge}` +
             (swapNotice === undefined ? '' : ` ${swapNotice}`),
         });
-        this.#notifyRestored(record, 'resumed');
+        this.#notifyRestored(record, 'resumed', 'runner');
         resumed.push(
           summaryOf(
             record,
@@ -8551,6 +8586,7 @@ class Pool implements ManagerPool {
             // **門を通す（Issue #1212 残件2）。** 同上——このループ冒頭で
             // `#usageStopped` は組み直し済み。
             this.#usageStopped.has(record.job.id) ? record.job.usageStoppedAt : undefined,
+            undefined,
           ),
         );
       } catch (error) {
@@ -9635,8 +9671,11 @@ class Pool implements ManagerPool {
             /*
              * **待っていることを日誌に残す（この経路が本番である）。**
              *
-             * 器の入れ替えで走るのはここであって `#restoreJobs` ではない
-             * （あちらは像に載っている委譲を先頭で見送る）。ここに何も書かないと、
+             * 器の入れ替えだけ（デーモンは生き残った）で走るのはここであって
+             * `#restoreJobs` ではない（あちらは像に載っている委譲を先頭で見送る）。
+             * デーモンと runner が同時に入れ替わった反映では `#restoreJobs` が先に
+             * 走りうるが、あちらも runner に居ないので resume する分岐は cause を
+             * `'runner'` にしてあり、同じ案内が出る（Issue #2748）。ここに何も書かないと、
              * 「待っている」と「忘れている」が記録から区別できなくなる。
              *
              * **遷移のときだけ書く**（`onLost` が1回だけ知らせるのと同じ形）。
@@ -14628,6 +14667,26 @@ function vanishedOf(
   return true;
 }
 
+/**
+ * {@link ManagerSummary.runnerListedAt} を1件ぶん判定する。`silentRunners` と
+ * `sessions`（`Pool#runnerSessions`）は呼ぶ側が一覧ごとに1回だけ引いたものを渡す。
+ *
+ * **観測できていなければ `undefined`**——宛先が無い・名簿が名乗っていない（`sessions` に
+ * entry が無い）・黙った器（`lost`）・一覧に載っていない、のどれでも立てない。
+ */
+function runnerListedAtOf(
+  job: Pick<Job, 'id' | 'runnerId'>,
+  silentRunners: ReadonlyMap<string, string>,
+  sessions: ReadonlyMap<string, { ids: ReadonlySet<string>; observedAt: string }>,
+): string | undefined {
+  const runnerId = job.runnerId;
+  if (runnerId === undefined) return undefined;
+  if (silentRunners.has(runnerId)) return undefined;
+  const observed = sessions.get(runnerId);
+  if (observed === undefined) return undefined;
+  return observed.ids.has(job.id) ? observed.observedAt : undefined;
+}
+
 function isLive(record: ManagerRecord, silentRunners: ReadonlyMap<string, string>): boolean {
   // **`lost` は何より先に見る。** 「繋がっている（`attached`）なら live」を先に
   // 置くと、両立しない組を出さないことが「両者が同時に立つ代入が無い」という
@@ -14901,6 +14960,10 @@ function summaryOf(
   // プロセス内の状態——呼ぶ側が `this.#usageStopped.has(id)` で門を通した
   // 後の値（時刻）だけをここへ渡す。`ManagerSummary.usageStoppedAt` の doc。
   usageStoppedAt: string | undefined,
+  // **`live` と同じ引数の作法で運ぶ。** 材料は名簿の観測（`#runnerSessions()`）で `record`
+  // からは読めない。呼ぶ側が `runnerListedAtOf()` の返り値を渡す。観測しない呼び出し
+  // （起動時の引き取り）は `undefined` を明示する。`ManagerSummary.runnerListedAt` の doc。
+  runnerListedAt: string | undefined,
 ): ManagerSummary {
   const { job } = record;
   const tokenGenerationUnknownReason = tokenGenerationUnknownReasonOf(
@@ -14919,6 +14982,7 @@ function summaryOf(
     // ことが「entry は名簿に残っている」という主張になって外へ出る。呼ぶ側は
     // `vanishedOf(record, registeredRunnerIds)` の返り値をそのまま渡せばよい。
     ...(runnerVanished === undefined ? {} : { runnerVanished }),
+    ...(runnerListedAt === undefined ? {} : { runnerListedAt }),
     // **同上（#563）。** 既定を置くと、足す人が考えなかったことが「runner はこの
     // 委譲のセッションを持っている」という主張になって外へ出る。呼ぶ側は
     // `record.sessionMissingSince` をそのまま渡せばよい（像が正本である）。
