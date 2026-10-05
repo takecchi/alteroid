@@ -101,6 +101,11 @@ export class FsInboxStore implements InboxStore {
 
   async put(event: InboxEvent, at: string): Promise<void> {
     const value = inboxEventSchema.parse(event);
+    // 外側の `at` は pg（`timestamptz`）と同じ `Z` 付きの ISO 表記に正規化して保存する
+    // （issue #2927 項目2）。読めない時刻は `RangeError` で拒む（pg の `new Date(at)` も同じ）。
+    // 既に `+09:00` のまま書かれた行は書き換えない——読み側は `compareIsoInstant` /
+    // `earliestIsoInstant` で実時刻を比べるので、表記の違う行と同居できる。
+    const normalizedAt = new Date(at).toISOString();
     await this.#update((file) => {
       // 同じ id があれば配達回数を引き継ぐ（無ければ初回＝0）。
       const existing = file.events.find((entry) => entry.event.id === value.id);
@@ -108,7 +113,7 @@ export class FsInboxStore implements InboxStore {
         next: {
           events: [
             ...file.events.filter((entry) => entry.event.id !== value.id),
-            { event: value, at, deliveries: existing?.deliveries ?? 0 },
+            { event: value, at: normalizedAt, deliveries: existing?.deliveries ?? 0 },
           ],
           // **書き込む id と一致する壊れた行は置き換える**（issue #1966。
           // `FsJobStore.putJob` / `FsPermissionGrantStore.put` と同じ）。
