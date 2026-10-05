@@ -7,6 +7,7 @@ import { stdin, stdout } from 'node:process';
 import { createClient, type DaemonClient } from './client.js';
 import { formatElapsedAgo, withErrorReason } from './format.js';
 import { describeAuthFailure, resolveTarget, type Target } from './target.js';
+import { describeEditorFailure, readInputFile } from './input-errors.js';
 
 /**
  * `alteroid memory` — 記憶（人格）を読む・書き換える・消す。
@@ -352,7 +353,7 @@ export async function memorySetCommand(
   const content =
     options.file === undefined || options.file === '-'
       ? await readAll()
-      : await readFile(options.file, 'utf8');
+      : await readInputFile(options.file, '--file', '--file <path>、または標準入力（-）');
   await write(conn.client, conn.target, slug, content);
 }
 
@@ -561,10 +562,19 @@ async function openEditor(path: string): Promise<void> {
   const editor = process.env.VISUAL ?? process.env.EDITOR ?? 'vi';
   await new Promise<void>((resolve, reject) => {
     const child = spawn(editor, [path], { stdio: 'inherit', shell: true });
-    child.on('error', reject);
-    child.on('close', (code) => {
+    child.on('error', (error) =>
+      reject(describeEditorFailure(editor, { error }, 'alteroid memory set <slug> --file <path>')),
+    );
+    child.on('close', (code, signal) => {
       if (code === 0) resolve();
-      else reject(new Error(`${editor} が異常終了しました (${String(code)})`));
+      else
+        reject(
+          describeEditorFailure(
+            editor,
+            { code, signal },
+            'alteroid memory set <slug> --file <path>',
+          ),
+        );
     });
   });
 }

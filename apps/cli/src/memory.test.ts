@@ -532,6 +532,26 @@ describe('alteroid memory の読み出しの失敗の理由', () => {
     }
   });
 
+  it('edit: エディタが無い（127）とき、EDITOR / VISUAL と memory set を案内する（#2867）', async () => {
+    captureStdout();
+    const savedEditor = process.env.EDITOR;
+    const savedVisual = process.env.VISUAL;
+    delete process.env.VISUAL;
+    process.env.EDITOR = 'alteroid-no-such-editor-2867';
+    replies.push({ status: 404, body: { error: 'not found' } });
+    try {
+      const error = await memoryEditCommand('values').catch((e: unknown) => e);
+      expect(String(error)).toContain('エディタ「alteroid-no-such-editor-2867」を起動できない');
+      expect(String(error)).toContain('VISUAL か EDITOR');
+      expect(String(error)).toContain('alteroid memory set <slug> --file <path>');
+      expect(String(error)).not.toContain('異常終了しました');
+    } finally {
+      if (savedEditor === undefined) delete process.env.EDITOR;
+      else process.env.EDITOR = savedEditor;
+      if (savedVisual !== undefined) process.env.VISUAL = savedVisual;
+    }
+  });
+
   /** Issue #2743: 読んだ版を持ち回り、エディタを開いている間の別の書き手を黙って消さない。 */
   describe('edit の前提の版（Issue #2743）', () => {
     let savedEditor: string | undefined;
