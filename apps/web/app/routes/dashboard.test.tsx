@@ -15,7 +15,7 @@
  *   は本ファイルの「日誌の購読を張らない」へ移した
  */
 import { USAGE_ESTIMATE_NOTICE, usageDate, ZERO_USAGE } from '@alteroid/core/usage';
-import { cleanup, screen, within } from '@testing-library/react';
+import { cleanup, fireEvent, screen, within } from '@testing-library/react';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderedMoneyTexts, storeTestBaseUrl } from '~/test-support';
@@ -306,18 +306,16 @@ describe('「最新の日報」', () => {
     ...extra,
   });
 
-  it('本文は Markdown として描かれ（見出し・強調）、切れているときは全文（その日報）へリンクする', async () => {
+  it('本文は Markdown として描かれ（見出し・強調）、日報一覧への入口を持つ', async () => {
     stubReportOverflow(900, 384);
     renderHome({ reports: [report({ body: '## 今日やったこと\n\n- **進捗**があった。' })] });
 
     expect(await screen.findByRole('heading', { name: '今日やったこと' })).toBeTruthy();
     expect(screen.getByText('進捗').tagName).toBe('STRONG');
-    const link = screen.getByRole('link', { name: '続きを読む（全文）' });
-    expect(link.getAttribute('href')).toBe('/reports/2026-08-14/r1');
     expect(screen.getByRole('link', { name: '日報一覧' }).getAttribute('href')).toBe('/reports');
   });
 
-  it('長い本文でも、本文の枠は高さで切られ（overflow-hidden・max-h）、全文へのリンクが残る', async () => {
+  it('長い本文でも、本文の枠は高さで切られ（overflow-hidden・max-h）、「全文を表示」が出る', async () => {
     stubReportOverflow(2400, 384);
     const body = Array.from({ length: 80 }, (_, i) => `段落 ${i}`).join('\n\n');
     renderHome({ reports: [report({ body })] });
@@ -330,14 +328,14 @@ describe('「最新の日報」', () => {
     expect(frame.className).toContain('overflow-hidden');
     expect(frame.className).toContain('max-h-96');
     expect(frame.className).toContain('min-w-0');
-    expect(screen.getByRole('link', { name: '続きを読む（全文）' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: '全文を表示' })).toBeTruthy();
   });
 
   /**
    * #2771: 1行しかない日報の本文が、薄れで読めなくなり、続きの無い「続きを読む」だけが出ていた。
    * 切れていない（`scrollHeight` が `clientHeight` に収まっている）ときは、どちらも出さない。
    */
-  it('短くて切れていない本文には、フェードも「続きを読む」も出さない', async () => {
+  it('短くて切れていない本文には、フェードも「全文を表示」も出さない', async () => {
     stubReportOverflow(24, 24);
     renderHome({ reports: [report({ body: '同日2件目の日報。' })] });
 
@@ -345,9 +343,38 @@ describe('「最新の日報」', () => {
     const frame = document.querySelector('[data-slot="home-report-body"]')!;
     expect(frame.getAttribute('data-truncated')).toBe('false');
     expect(document.querySelector('[data-slot="home-report-fade"]')).toBeNull();
-    expect(screen.queryByRole('link', { name: /続きを読む/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /全文を表示|畳む/ })).toBeNull();
     // 日報一覧への入口は残る。
     expect(screen.getByRole('link', { name: '日報一覧' })).toBeTruthy();
+  });
+
+  /** オーナーの依頼（2026-10-05）: 「すべて見る」で日報のページへ飛ばず、その場で全文に広げる。 */
+  it('「全文を表示」でその場に全文へ広がり、「畳む」で戻る（aria-expanded が追う）', async () => {
+    stubReportOverflow(2400, 384);
+    const body = Array.from({ length: 80 }, (_, i) => `段落 ${i}`).join('\n\n');
+    renderHome({ reports: [report({ body })] });
+
+    await screen.findByText('段落 0');
+    const frame = document.querySelector('[data-slot="home-report-body"]')!;
+    const button = screen.getByRole('button', { name: '全文を表示' });
+    expect(button.getAttribute('aria-expanded')).toBe('false');
+    expect(button.getAttribute('aria-controls')).toBe(frame.id);
+
+    fireEvent.click(button);
+    const opened = screen.getByRole('button', { name: '畳む' });
+    expect(opened.getAttribute('aria-expanded')).toBe('true');
+    expect(frame.className).not.toContain('max-h-96');
+    expect(frame.className).not.toContain('overflow-hidden');
+    expect(document.querySelector('[data-slot="home-report-fade"]')).toBeNull();
+    // 日報のページへは移らず、本文も同じ場所に在る。
+    expect(screen.getByText('段落 79')).toBeTruthy();
+
+    fireEvent.click(opened);
+    expect(screen.getByRole('button', { name: '全文を表示' }).getAttribute('aria-expanded')).toBe(
+      'false',
+    );
+    expect(frame.className).toContain('max-h-96');
+    expect(document.querySelector('[data-slot="home-report-fade"]')).not.toBeNull();
   });
 
   it('本文の秘密は描画の直前に伏せる（偽のトークン。40桁の sha は残す）', async () => {
@@ -377,7 +404,7 @@ describe('「最新の日報」', () => {
     expect(await screen.findByText('この日の日報は作れなかった')).toBeTruthy();
     expect(screen.getByText(reason)).toBeTruthy();
     // 本文としても出ない（Markdown の描画を通らない）。
-    expect(screen.queryByRole('link', { name: '続きを読む（全文）' })).toBeNull();
+    expect(screen.queryByRole('button', { name: '全文を表示' })).toBeNull();
     expect(screen.queryByText(`## ${reason}`)).toBeNull();
     expect(screen.queryByRole('heading', { name: reason })).toBeNull();
   });
