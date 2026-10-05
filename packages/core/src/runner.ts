@@ -429,7 +429,9 @@ export interface RunnerHostOptions {
    */
   scratchSweep?:
     | false
-    | (Partial<Omit<ScratchSweeperOptions, 'liveManagerIds' | 'knownManagerIds' | 'spawn' | 'env'>> & {
+    | (Partial<
+        Omit<ScratchSweeperOptions, 'liveManagerIds' | 'knownManagerIds' | 'spawn' | 'env'>
+      > & {
         intervalMs?: number;
       });
   /**
@@ -817,19 +819,22 @@ class Host implements RunnerHost {
         knownManagerIds: () => [...this.#knownManagerIds],
       });
       // 同時に走るのは1本まで（前の回が遅れていれば今回は見送る）。見張りで終了を引き延ばさない。
-      const scratchTimer = setInterval(() => {
-        if (this.#scratchRunning !== null || this.#scratchAbort.signal.aborted) return;
-        const run = sweeper
-          .sweep(this.#scratchAbort.signal, this.runnerId)
-          .then((event) => {
-            if (event !== null && !this.#scratchAbort.signal.aborted) this.#emit(event);
-          })
-          .catch(() => {})
-          .finally(() => {
-            this.#scratchRunning = null;
-          });
-        this.#scratchRunning = run;
-      }, intervalMs ?? resolveScratchSweepIntervalMs(this.#env));
+      const scratchTimer = setInterval(
+        () => {
+          if (this.#scratchRunning !== null || this.#scratchAbort.signal.aborted) return;
+          const run = sweeper
+            .sweep(this.#scratchAbort.signal, this.runnerId)
+            .then((event) => {
+              if (event !== null && !this.#scratchAbort.signal.aborted) this.#emit(event);
+            })
+            .catch(() => {})
+            .finally(() => {
+              this.#scratchRunning = null;
+            });
+          this.#scratchRunning = run;
+        },
+        intervalMs ?? resolveScratchSweepIntervalMs(this.#env),
+      );
       scratchTimer.unref?.();
       this.#scratchTimer = scratchTimer;
     }

@@ -996,7 +996,14 @@ export const scratchSweepItemSchema = z.object({
   untracked: z.object({ count: z.number().int(), names: z.array(z.string()) }).optional(),
   /** 残した項目: 理由。 */
   reason: z
-    .enum(['unpushed-commits', 'tracked-changes', 'undecidable', 'worktree-dependency', 'rm-failed'])
+    .enum([
+      'unpushed-commits',
+      'tracked-changes',
+      'undecidable',
+      'worktree-dependency',
+      'rm-failed',
+      'unsafe-target',
+    ])
     .optional(),
   /** 残した項目: 理由の件数（未 push のコミット数・変更の行数など。無ければ無い）。 */
   count: z.number().int().optional(),

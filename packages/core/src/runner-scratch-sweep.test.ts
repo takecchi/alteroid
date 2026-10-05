@@ -1,0 +1,134 @@
+import { writeFile, mkdir, rm } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import path from 'node:path';
+
+import { makeTempDir } from '../../../vitest.tmpdir.js';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { runnerEventSchema, type RunnerEvent } from './runner-protocol.js';
+import { createRunnerHost, type RunnerHost } from './runner.js';
+import { createManagerPool } from './manager.js';
+import { createRunnerRegistry, type RunnerClient } from './runner-protocol.js';
+import type { InboxEvent } from './schema.js';
+import { createMemoryStores } from './testing.js';
+
+/**
+ * runner の /tmp の片付けの配線（Issue #3039）。`scratch-sweep.test.ts` が判定の歯を持つ。
+ * ここは Host の周期が `scratch_sweep` を（境界を通る形で）emit すること、`shutdown()` で
+ * 周期が止まること、デーモン側が日誌へ残しクローンへ知らせることを固定する。
+ */
+describe('runner の周期と shutdown（#3039）', () => {
+  let tmp: string;
+  let host: RunnerHost | undefined;
+  beforeEach(async () => {
+    tmp = await makeTempDir('runner-scratch-');
+  });
+  afterEach(async () => {
+    await host?.shutdown().catch(() => undefined);
+    await rm(tmp, { recursive: true, force: true });
+  });
+
+  it('猶予の過ぎた作業場を消して scratch_sweep を出し、shutdown 後は動かない', async () => {
+    await writeFile(path.join(tmp, 'mgr-aaaa1111-x.log'), 'x');
+    const events: RunnerEvent[] = [];
+    host = createRunnerHost({
+      runnerId: 'runner-x',
+      workspacePath: '/work',
+      emit: (e) => events.push(runnerEventSchema.parse(JSON.parse(JSON.stringify(e)))),
+      env: { PATH: process.env.PATH },
+      scratchSweep: { tmpRoot: tmp, graceMs: 0, intervalMs: 20 },
+    });
+    await vi.waitFor(() => {
+      expect(events.some((e) => e.type === 'scratch_sweep')).toBe(true);
+    });
+    expect(existsSync(path.join(tmp, 'mgr-aaaa1111-x.log'))).toBe(false);
+    const sweep = events.find((e) => e.type === 'scratch_sweep');
+    expect(sweep).toMatchObject({
+      runnerId: 'runner-x',
+      removed: [{ name: 'mgr-aaaa1111-x.log' }],
+    });
+    // 何も無い回は送らない。
+    await new Promise((r) => setTimeout(r, 100));
+    expect(events.filter((e) => e.type === 'scratch_sweep')).toHaveLength(1);
+
+    await host.shutdown();
+    await mkdir(path.join(tmp, 'mgr-bbbb2222'));
+    await new Promise((r) => setTimeout(r, 100));
+    expect(existsSync(path.join(tmp, 'mgr-bbbb2222'))).toBe(true);
+  });
+});
+
+describe('デーモン側: 日誌とクローンへの知らせ（#3039）', () => {
+  function setup() {
+    let handler: ((e: RunnerEvent) => void) | null = null;
+    const stores = createMemoryStores();
+    const inbox: InboxEvent[] = [];
+    const runner = {
+      runnerId: 'runner-x',
+      runnerIdKnown: true,
+      workspacePath: '/w',
+      workspacePathKnown: true,
+      async connect(h: (e: RunnerEvent) => void) {
+        handler = h;
+      },
+      async list() {
+        return [];
+      },
+      async close() {},
+    } as unknown as RunnerClient;
+    const pool = createManagerPool({
+      stores,
+      post: (e) => inbox.push(e),
+      runners: createRunnerRegistry([runner]),
+    });
+    return { stores, inbox, pool, send: (e: RunnerEvent) => handler?.(e) };
+  }
+
+  it('消した分は日誌だけ。残した分は日誌とクローンの受信箱へ（未追跡の名前・statfs 付き）', async () => {
+    const { stores, inbox, pool, send } = setup();
+    await pool.restore();
+    send({
+      type: 'scratch_sweep',
+      runnerId: 'runner-x',
+      removed: [
+        {
+          name: 'mgr-aaaa1111',
+          kind: 'directory',
+          managerId: 'mgr-aaaa1111-0000',
+          untracked: { count: 1, names: ['repo/scratch.txt'] },
+        },
+      ],
+      kept: [],
+      statfs: { totalBytes: 100, usedBytes: 50, totalInodes: 1000, usedInodes: 900 },
+    });
+    await vi.waitFor(async () => {
+      expect((await stores.journal.list()).length).toBeGreaterThan(0);
+    });
+    const text = JSON.stringify(await stores.journal.list());
+    expect(text).toContain('mgr-aaaa1111');
+    expect(text).toContain('repo/scratch.txt');
+    expect(text).toContain('inode 900/1000');
+    expect(inbox.filter((e) => e.type === 'external')).toEqual([]);
+
+    send({
+      type: 'scratch_sweep',
+      runnerId: 'runner-x',
+      removed: [],
+      kept: [
+        {
+          name: 'mgr-bbbb2222',
+          kind: 'directory',
+          reason: 'unpushed-commits',
+          count: 2,
+          detail: '未 push 2',
+        },
+      ],
+    });
+    await vi.waitFor(() => {
+      expect(inbox.filter((e) => e.type === 'external')).toHaveLength(1);
+    });
+    const ext = inbox.find((e) => e.type === 'external');
+    expect(JSON.stringify(ext)).toContain('mgr-bbbb2222');
+    expect(JSON.stringify(await stores.journal.list())).toContain('unpushed-commits');
+  });
+});

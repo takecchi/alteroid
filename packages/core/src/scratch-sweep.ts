@@ -70,12 +70,7 @@ export const SCRATCH_SWEEP_NAME_MAX_LENGTH = 200;
 /** 片付けの git 1本の期限（ms）。 */
 export const SCRATCH_SWEEP_GIT_TIMEOUT_MS = 15_000;
 
-function resolveMs(
-  raw: string | undefined,
-  fallback: number,
-  min: number,
-  max: number,
-): number {
+function resolveMs(raw: string | undefined, fallback: number, min: number, max: number): number {
   const trimmed = raw?.trim();
   if (trimmed === undefined || trimmed === '') return fallback;
   const parsed = Number(trimmed);
@@ -150,6 +145,8 @@ interface TreeInspection {
   readonly tracked: number | 'unknown';
   readonly untracked: readonly string[] | 'unknown';
   readonly worktreePaths: readonly string[] | 'unknown';
+  /** 主リポジトリ（object を持つ側）か。linked worktree（`.git` がファイル）なら false。判定できなければ true（安全側）。 */
+  readonly isMain: boolean;
   readonly unknownDetail?: string;
 }
 
@@ -161,7 +158,12 @@ interface DirInspection {
 
 type Verdict =
   | { kind: 'remove'; untracked: string[]; untrackedCount: number }
-  | { kind: 'keep'; reason: NonNullable<ScratchSweepItem['reason']>; count?: number; detail: string };
+  | {
+      kind: 'keep';
+      reason: NonNullable<ScratchSweepItem['reason']>;
+      count?: number;
+      detail: string;
+    };
 
 function clip(text: string): string {
   return text.length <= SCRATCH_SWEEP_NAME_MAX_LENGTH
@@ -206,7 +208,28 @@ export class ScratchSweeper {
     return ids.find((id) => matchesManagerScratchDirName(name, id));
   }
 
-  async #git(args: string[], cwd: string): Promise<{ ok: true; out: string } | { ok: false; why: string }> {
+  /**
+   * 消す直前の最後の関門（変数が空・未設定でも `/` や上位へ広がらない）。基点が空でない絶対
+   * パスで `/` でないこと、対象が基点の**直下**（対象 ≠ 基点）であること、対象の名前が
+   * `mgr-` 規則に当たることを毎回確かめる。満たさなければ理由を返す（消さない）。
+   */
+  #unsafeTargetReason(target: string): string | undefined {
+    const base = this.#o.tmpRoot;
+    if (base === '' || !path.isAbsolute(base)) return `基点が空でない絶対パスでない（'${base}'）`;
+    const resolvedBase = path.resolve(base);
+    if (resolvedBase === path.parse(resolvedBase).root) return '基点が / そのものである';
+    const resolved = path.resolve(target);
+    if (resolved === resolvedBase) return '対象が基点そのものである';
+    if (path.dirname(resolved) !== resolvedBase) return `対象が基点の直下でない（${resolved}）`;
+    if (!isManagerScratchDirName(path.basename(resolved)))
+      return '対象の名前が mgr- 規則に当たらない';
+    return undefined;
+  }
+
+  async #git(
+    args: string[],
+    cwd: string,
+  ): Promise<{ ok: true; out: string } | { ok: false; why: string }> {
     const timeoutMs = this.#o.gitTimeoutMs ?? SCRATCH_SWEEP_GIT_TIMEOUT_MS;
     const r = await runGit(this.#o.spawn, args, cwd, this.#o.env, timeoutMs);
     if (r.timedOut) return { ok: false, why: `git ${args[0]} が期限切れ（${timeoutMs}ms）` };
@@ -215,11 +238,12 @@ export class ScratchSweeper {
   }
 
   async #inspectTree(root: string): Promise<TreeInspection> {
-    const [rev, status, others, wt] = [
+    const [rev, status, others, wt, gitDir] = [
       await this.#git(['rev-list', '--count', 'HEAD', '--not', '--remotes=origin'], root),
       await this.#git(['status', '--porcelain'], root),
       await this.#git(['ls-files', '--others', '--exclude-standard'], root),
       await this.#git(['worktree', 'list', '--porcelain'], root),
+      await this.#git(['rev-parse', '--git-dir'], root),
     ];
     const whys: string[] = [];
     let unpushed: number | 'unknown' = 'unknown';
@@ -248,6 +272,7 @@ export class ScratchSweeper {
       tracked,
       untracked,
       worktreePaths,
+      isMain: !gitDir.ok || gitDir.out.trim() === '.git',
       ...(whys.length > 0 ? { unknownDetail: whys.join('、') } : {}),
     };
   }
@@ -289,7 +314,12 @@ export class ScratchSweeper {
     const untracked: string[] = [];
     let untrackedCount = 0;
     for (const tree of insp.trees) {
-      if (tree.unpushed === 'unknown' || tree.tracked === 'unknown' || tree.untracked === 'unknown') {
+      if (
+        tree.unpushed === 'unknown' ||
+        tree.tracked === 'unknown' ||
+        tree.untracked === 'unknown' ||
+        tree.worktreePaths === 'unknown'
+      ) {
         unknownAt ??= `${tree.root}: ${tree.unknownDetail ?? '判定できなかった'}`;
         continue;
       }
@@ -378,7 +408,10 @@ export class ScratchSweeper {
       };
 
       // 消すと決まったもの（名前 → 項目＋任意の未追跡）。ディレクトリは判定を経る。
-      const planned = new Map<string, { entry: ScratchDirEntry; untracked?: Verdict & { kind: 'remove' } }>();
+      const planned = new Map<
+        string,
+        { entry: ScratchDirEntry; untracked?: Verdict & { kind: 'remove' } }
+      >();
       const dirInspections = new Map<string, DirInspection>();
       const dirPath = (c: ScratchDirEntry): string => path.join(this.#o.tmpRoot, c.name);
 
@@ -415,7 +448,8 @@ export class ScratchSweeper {
           if (insp === undefined) continue;
           let outside: string | undefined;
           for (const tree of insp.trees) {
-            if (tree.worktreePaths === 'unknown') continue;
+            // linked worktree 側は主の object を借りているだけ（消しても主は壊れない）。
+            if (tree.worktreePaths === 'unknown' || !tree.isMain) continue;
             for (const wtPath of tree.worktreePaths) {
               if (plannedDirs.some((d) => isWithin(wtPath, d))) continue;
               if (await exists(wtPath)) {
@@ -447,6 +481,11 @@ export class ScratchSweeper {
           continue;
         }
         const target = dirPath(p.entry);
+        const unsafe = this.#unsafeTargetReason(target);
+        if (unsafe !== undefined) {
+          kept.push({ ...itemOf(p.entry), reason: 'unsafe-target', detail: clip(unsafe) });
+          continue;
+        }
         try {
           await (this.#o.rmFn ?? ((t) => rm(t, { recursive: true, force: true })))(target);
         } catch (error) {
@@ -476,10 +515,9 @@ export class ScratchSweeper {
       scanError !== undefined && !this.#notifiedKept.has(`__scan__\u0000${scanError}`);
     const newKept = kept.filter((i) => !this.#notifiedKept.has(keptKey(i)));
     // 判定を回せなかった（中断・読めなかった）回は、前回の記憶を保つ（消すと次の回で再送になる）。
-    this.#notifiedKept =
-      signal.aborted
-        ? new Set([...this.#notifiedKept, ...currentKeys])
-        : currentKeys;
+    this.#notifiedKept = signal.aborted
+      ? new Set([...this.#notifiedKept, ...currentKeys])
+      : currentKeys;
 
     if (removed.length === 0 && newKept.length === 0 && !scanErrorIsNew) return null;
     return {
