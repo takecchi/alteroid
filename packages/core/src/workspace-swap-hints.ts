@@ -211,7 +211,7 @@ function recoveryCommand(live: LiveRescue & { kind: 'ok' }): string {
 function rescueHeadline(live: LiveRescue): string {
   return live.kind === 'ok'
     ? `退避 ref ${live.ref}（${live.commit.slice(0, 8)}, ${live.at}）が最後の退避。`
-    : `退避 ref の記録の形が不正（${live.at} に退避したことになっている）なので、手順は出さない。台帳（manager_list の退避 ref）を確かめよ。`;
+    : `退避 ref の記録の形が不正（${live.at} に退避したことになっている）なので、手順は出さない。台帳（クローンの manager_list の「退避 ref」）を確かめよ。`;
 }
 
 function recoverySteps(live: LiveRescue): string {
