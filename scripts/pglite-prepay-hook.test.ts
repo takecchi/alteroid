@@ -31,7 +31,7 @@ import { collectRepoFiles } from './repo-scan-files.js';
  * （`*.test-support.ts` と本番コードは対象外）。
  *
  * - 「雛形を使う」: コメントと文字列リテラルを除いた本文に、`createMigratedPglite(`、
- *   `new PGlite(`、`migrate(`（直呼び。`db.migrate(` のような `.` 付きは除く）のどれかが在る
+ *   `createMigratedTestDb(` / `createEmptyTestDb(`（#2937。環境変数なしでは PGlite の雛形を使う）、`new PGlite(`、`migrate(`（直呼び。`db.migrate(` のような `.` 付きは除く）のどれかが在る
  * - 「前払いがある」: 同じく除いた本文に `beforeAll(` か `beforeEach(` の呼び出しが在る
  * - 使うのに前払いが無いファイルを落とす
  * - 除外: ファイルのどこかに、行頭から `// pglite-prepay: not-needed（理由）` の1行を書く。
@@ -108,7 +108,7 @@ function stripCommentsAndStrings(src: string): string {
 }
 
 const USES_TEMPLATE =
-  /(?<![.\w])createMigratedPglite\(|(?<![.\w])new\s+PGlite\(|(?<![.\w])migrate\(/;
+  /(?<![.\w])(?:createMigratedPglite|createMigratedTestDb|createEmptyTestDb)\(|(?<![.\w])new\s+PGlite\(|(?<![.\w])migrate\(/;
 const HAS_PREPAY = /(?<![.\w])(?:beforeAll|beforeEach)\(/;
 /** 理由（全角・半角どちらの括弧でも、中身が空白だけでないこと）が要る。 */
 const OPT_OUT = /^[ \t]*\/\/[ \t]*pglite-prepay:[ \t]*not-needed[（(][ \t]*[^\s）)][^）)]*[）)]/m;
@@ -210,7 +210,7 @@ describe('実際のテストファイルの走査', () => {
       offenders,
       [
         '',
-        'PGlite の雛形（createMigratedPglite( / new PGlite( / migrate( の直呼び）を使うのに、',
+        'PGlite の雛形（createMigratedPglite( / createMigratedTestDb( / createEmptyTestDb( / new PGlite( / migrate( の直呼び）を使うのに、',
         'beforeAll / beforeEach による前払いが無いテストファイルがある:',
         ...offenders.map((f) => `  - ${f}`),
         '',
