@@ -32,16 +32,22 @@ import { collectRepoFiles } from './repo-scan-files.js';
  *
  * - 「雛形を使う」: コメントと文字列リテラルを除いた本文に、`createMigratedPglite(`、
  *   `createMigratedTestDb(` / `createEmptyTestDb(`（#2937。環境変数なしでは PGlite の雛形を使う）、`new PGlite(`、`migrate(`（直呼び。`db.migrate(` のような `.` 付きは除く）のどれかが在る
- * - 「前払いがある」: 同じく除いた本文に `beforeAll(` か `beforeEach(` の呼び出しが在る
+ * - 「前払いがある」: 同じく除いた本文に `beforeAll(` の呼び出しが在る。**`beforeEach(` は
+ *   どのパッケージでも前払いと数えない**（#3034。storage-pg は PR #3035、apps/daemon 以下は
+ *   その続き）。packages/storage-pg/src に限り、`./test-db.test-support.js` の import も
+ *   前払いと数える（その補助がファイル先頭の `beforeAll` で雛形を前払いする）
  * - 使うのに前払いが無いファイルを落とす
  * - 除外: ファイルのどこかに、行頭から `// pglite-prepay: not-needed（理由）` の1行を書く。
  *   **理由（括弧の中身）が空だと効かない**（理由の無い除外は、忘れと見分けがつかないため）
  *
  * ## 限界（測っていないもの）
  *
- * - **`beforeEach` が雛形の費用を実際に払うかは見ない。** 呼び出しが在れば通す。先例の線引き
- *   （`beforeEach` を持つファイルは最初の hook =枠 10000ms が払うので対象外）に従っている。
- *   `beforeEach` の中身が pg と無関係でも、`beforeAll` が雛形を温めない別の処理でも通る
+ * - **`beforeAll` が雛形の費用を実際に払うかは見ない。** 呼び出しが在れば通す。`beforeAll` が
+ *   雛形を温めない別の処理でも通る
+ * - （経緯）以前は先例の線引き（`beforeEach` を持つファイルは最初の hook =枠 10000ms が払うので
+ *   対象外）に従い、`beforeEach(` も前払いと数えていた。混んだ器ではその最初の1回が
+ *   12〜16 秒かかって落ちた（#3034）。PR #3035 で storage-pg だけ数えなくし、apps/daemon に
+ *   同じ形の漏れが4本残っていたので、全パッケージで数えなくした
  * - **hook の枠（30_000）や `migratedTemplate()` を呼んでいるかも見ない**
  * - 「使う」の判定は字面。`migrate(` という名前の別の関数を呼ぶだけのファイルも当たる
  *   （偽陽性。除外の印で外す）。別名 import や間接呼び（他ファイルの helper 経由）は当たらない
@@ -109,15 +115,18 @@ function stripCommentsAndStrings(src: string): string {
 
 const USES_TEMPLATE =
   /(?<![.\w])(?:createMigratedPglite|createMigratedTestDb|createEmptyTestDb)\(|(?<![.\w])new\s+PGlite\(|(?<![.\w])migrate\(/;
-const HAS_PREPAY = /(?<![.\w])(?:beforeAll|beforeEach)\(/;
 /** 理由（全角・半角どちらの括弧でも、中身が空白だけでないこと）が要る。 */
 const OPT_OUT = /^[ \t]*\/\/[ \t]*pglite-prepay:[ \t]*not-needed[（(][ \t]*[^\s）)][^）)]*[）)]/m;
 
 /**
- * **packages/storage-pg は `beforeEach` を前払いと数えない**（#3034）。`beforeEach` が払うのは
+ * **`beforeEach` はどのパッケージでも前払いと数えない**（#3034）。`beforeEach` が払うのは
  * hookTimeout（既定 10000ms）の中で、混んだ器では最初の1回が 12〜16 秒かかって落ちた。
- * 前払いと数えるのは `beforeAll(` か、`test-db.test-support.js` の import（その補助が
- * ファイル先頭の `beforeAll` で雛形を前払いする。下の「補助が前払いを持つ」が縛る）。
+ * PR #3035 は storage-pg だけを縛り、apps/daemon に `beforeEach` だけのファイルが4本漏れて
+ * いた（`commitment-unreadable-recovery-2148` / `practice-unreadable-recovery-2011` /
+ * `practice-version-unreadable-2177` / `practice-versions-slug-pg-1670`）。
+ * 前払いと数えるのは `beforeAll(` か、packages/storage-pg/src に限り
+ * `test-db.test-support.js` の import（その補助がファイル先頭の `beforeAll` で雛形を前払い
+ * する。下の「補助が前払いを持つ」が縛る）。
  */
 const STORAGE_PG_TEST = /^packages\/storage-pg\/src\//;
 const HAS_BEFORE_ALL = /(?<![.\w])beforeAll\(/;
@@ -129,12 +138,17 @@ function judgePglitePrepay(src: string, file = ''): Verdict {
   const code = stripCommentsAndStrings(src);
   if (!USES_TEMPLATE.test(code)) return 'no-use';
   if (OPT_OUT.test(src)) return 'opted-out';
-  if (STORAGE_PG_TEST.test(file)) {
-    return HAS_BEFORE_ALL.test(code) || IMPORTS_PREPAYING_SUPPORT.test(src)
-      ? 'uses-with-prepay'
-      : 'uses-without-prepay';
-  }
-  return HAS_PREPAY.test(code) ? 'uses-with-prepay' : 'uses-without-prepay';
+  if (HAS_BEFORE_ALL.test(code)) return 'uses-with-prepay';
+  if (STORAGE_PG_TEST.test(file) && IMPORTS_PREPAYING_SUPPORT.test(src)) return 'uses-with-prepay';
+  return 'uses-without-prepay';
+}
+
+/** 走査の結果から、前払いを負っていないファイルを拾う（実走査と陰性対照の両方が通る1本の道）。 */
+function findOffenders(entries: readonly { file: string; src: string }[]): string[] {
+  return entries
+    .filter(({ file, src }) => judgePglitePrepay(src, file) === 'uses-without-prepay')
+    .map(({ file }) => file)
+    .sort();
 }
 
 describe('judgePglitePrepay（判定そのもの。合成した文字列で測る）', () => {
@@ -151,10 +165,13 @@ describe('judgePglitePrepay（判定そのもの。合成した文字列で測�
     expect(judgePglitePrepay(`await migrate(db);`)).toBe('uses-without-prepay');
   });
 
-  it('beforeAll があれば通る。beforeEach でも通る（先例の線引き）', () => {
+  // 経緯: 元は「beforeEach でも通る（先例の線引き）」として uses-with-prepay を期待していた。
+  // #3034 で beforeEach は前払いと数えなくなった（storage-pg は PR #3035、全パッケージはその続き）
+  // ので、期待を反転した。
+  it('beforeAll があれば通る。beforeEach だけでは通らない（#3034）', () => {
     expect(judgePglitePrepay(`${HOOK}\nawait createMigratedPglite();`)).toBe('uses-with-prepay');
     expect(judgePglitePrepay(`beforeEach(async () => {});\nnew PGlite();`)).toBe(
-      'uses-with-prepay',
+      'uses-without-prepay',
     );
   });
 
@@ -201,13 +218,27 @@ describe('judgePglitePrepay（判定そのもの。合成した文字列で測�
   });
 });
 
-describe('storage-pg の判定（beforeEach だけでは前払いと数えない。#3034）', () => {
+describe('パッケージごとの判定（beforeEach だけでは前払いと数えない。#3034）', () => {
   const FILE = 'packages/storage-pg/src/x.test.ts';
 
-  it('beforeEach だけで createMigratedTestDb を使うファイルは落とす（他のパッケージは従来どおり通す）', () => {
+  // 経緯: PR #3035 では「他のパッケージは従来どおり通す」として apps/daemon に uses-with-prepay を
+  // 期待していた。その線の外に apps/daemon の漏れが4本残っていたので、全パッケージで落とす側へ反転した。
+  it('beforeEach だけで雛形を使うファイルは、どのパッケージでも落とす', () => {
     const src = `beforeEach(async () => { await createMigratedTestDb(); });`;
     expect(judgePglitePrepay(src, FILE)).toBe('uses-without-prepay');
-    expect(judgePglitePrepay(src, 'apps/daemon/src/x.test.ts')).toBe('uses-with-prepay');
+    expect(judgePglitePrepay(src, 'apps/daemon/src/x.test.ts')).toBe('uses-without-prepay');
+    expect(
+      judgePglitePrepay(
+        `beforeEach(async () => { ({ db } = await createMigratedPglite()); });`,
+        'apps/daemon/src/x.test.ts',
+      ),
+    ).toBe('uses-without-prepay');
+  });
+
+  it('test-db.test-support.js の import を前払いと数えるのは storage-pg だけ（その補助が前払いを持つのは storage-pg だけ）', () => {
+    const src = `import { createMigratedTestDb } from './test-db.test-support.js';\nbeforeEach(async () => { await createMigratedTestDb(); });`;
+    expect(judgePglitePrepay(src, FILE)).toBe('uses-with-prepay');
+    expect(judgePglitePrepay(src, 'apps/daemon/src/x.test.ts')).toBe('uses-without-prepay');
   });
 
   it('beforeAll か、前払いを持つ補助の import があれば通る', () => {
@@ -251,11 +282,13 @@ describe('補助が前払いを持つ（packages/storage-pg/src/test-db.test-sup
 
 describe('実際のテストファイルの走査', () => {
   const files = collectRepoFiles(ROOT, EXCLUDE_DIRS).filter((f) => TARGET.test(f));
-  const verdicts = files.map((file) => ({
+  const entries = files.map((file) => ({ file, src: readFileSync(path.join(ROOT, file), 'utf8') }));
+  const verdicts = entries.map(({ file, src }) => ({
     file,
-    verdict: judgePglitePrepay(readFileSync(path.join(ROOT, file), 'utf8'), file),
+    verdict: judgePglitePrepay(src, file),
   }));
   const users = verdicts.filter((v) => v.verdict !== 'no-use');
+  const offenders = findOffenders(entries);
 
   it('走査した数と「雛形を使う」と判定した数が下限を下回らない（空の走査で緑にならない）', () => {
     // 下限は実測より少し低く置く（テストが減っても崩れない程度、空の走査は確実に止める）。
@@ -263,22 +296,73 @@ describe('実際のテストファイルの走査', () => {
     expect(users.length).toBeGreaterThanOrEqual(40);
     // 判定の三つ組が全部現れる: 前払い付きが1本も無ければ「使う」の判定が壊れている
     expect(users.some((v) => v.verdict === 'uses-with-prepay')).toBe(true);
+    // apps/daemon も走査に入っている（#3034 の漏れはここに在った）
+    expect(
+      users.filter((v) => v.file.startsWith('apps/daemon/src/')).length,
+    ).toBeGreaterThanOrEqual(20);
   });
 
-  it('雛形を使うテストファイルは、beforeAll / beforeEach で前払いしている', () => {
-    const offenders = verdicts
-      .filter((v) => v.verdict === 'uses-without-prepay')
-      .map((v) => v.file);
+  /**
+   * **陰性対照**（#3034）。実在のファイルを1本だけ「前払いを負っていない」形
+   * （`beforeAll(` → `beforeEach(`。今回漏れていた形そのもの）へ書き換えて同じ道に通し、
+   * そのファイルが、そのファイルだけが拾われることを確かめる。拾えなければ、下の
+   * 「前払いしている」の緑は検査が見ていない緑である。
+   */
+  describe('陰性対照: 漏れたファイルが1本でもあれば拾う', () => {
+    const breakPrepay = (src: string) => src.replace(/(?<![.\w])beforeAll\(/g, 'beforeEach(');
+    const withPrepay = entries.filter(
+      ({ file, src }) =>
+        judgePglitePrepay(src, file) === 'uses-with-prepay' &&
+        judgePglitePrepay(breakPrepay(src), file) === 'uses-without-prepay',
+    );
+
+    it('#3034 で直した apps/daemon の4本は、前払いを外すとそれぞれ拾われる', () => {
+      for (const name of [
+        'commitment-unreadable-recovery-2148',
+        'practice-unreadable-recovery-2011',
+        'practice-version-unreadable-2177',
+        'practice-versions-slug-pg-1670',
+      ]) {
+        const file = `apps/daemon/src/${name}.test.ts`;
+        expect(
+          withPrepay.map((e) => e.file),
+          file,
+        ).toContain(file);
+        const mutated = entries.map((e) =>
+          e.file === file ? { file, src: breakPrepay(e.src) } : e,
+        );
+        expect(findOffenders(mutated)).toEqual([...offenders, file].sort());
+      }
+    });
+
+    it('beforeAll で前払いしているどのファイルも、前払いを外せば拾われる', () => {
+      // 対照の母数が痩せていないこと（apps/daemon と packages/storage-pg の両方に在る）
+      expect(withPrepay.length).toBeGreaterThanOrEqual(20);
+      expect(withPrepay.some((e) => e.file.startsWith('apps/daemon/src/'))).toBe(true);
+      expect(withPrepay.some((e) => e.file.startsWith('packages/storage-pg/src/'))).toBe(true);
+      // 全体を1本ずつ書き換えて走査し直すと重いので、ここは書き換えた1本だけを同じ道に通す
+      // （全体へ混ぜて拾えることは上の4本で確かめている）。
+      for (const target of withPrepay) {
+        expect(
+          findOffenders([{ file: target.file, src: breakPrepay(target.src) }]),
+          target.file,
+        ).toEqual([target.file]);
+      }
+    });
+  });
+
+  it('雛形を使うテストファイルは、beforeAll で前払いしている', () => {
     expect(
       offenders,
       [
         '',
         'PGlite の雛形（createMigratedPglite( / createMigratedTestDb( / createEmptyTestDb( / new PGlite( / migrate( の直呼び）を使うのに、',
-        'beforeAll / beforeEach による前払いが無いテストファイルがある:',
+        'beforeAll による前払いが無いテストファイルがある（beforeEach は前払いと数えない。#3034）:',
         ...offenders.map((f) => `  - ${f}`),
         '',
-        '最初に雛形を作る歯が、WASM の起動 + migrate を歯の本体（既定 5000ms）で払って時間切れになる',
-        '（#2360 → PR #2364、#2378 → PR #2384。先例 #2339 / #2364 / #2384）。',
+        '最初に雛形を作る歯が、WASM の起動 + migrate を歯の本体（既定 5000ms）か、最初の beforeEach',
+        '（hookTimeout 既定 10000ms）で払って時間切れになる',
+        '（#2360 → PR #2364、#2378 → PR #2384、#3034 → PR #3035。先例 #2339 / #2364 / #2384）。',
         '足す形（ファイル先頭、describe の外）:',
         '',
         "  import { beforeAll } from 'vitest';",
@@ -286,15 +370,16 @@ describe('実際のテストファイルの走査', () => {
         '',
         '  beforeAll(async () => {',
         '    await migratedTemplate();',
-        '  }, 30_000);',
+        '  }, 60_000);',
         '',
-        '（packages/storage-pg/src では同じ名前の補助が packages/storage-pg/src/pglite-template.test-support.ts に在る）',
+        '（packages/storage-pg/src では同じ名前の補助が packages/storage-pg/src/pglite-template.test-support.ts に在る。',
+        ' そこでは ./test-db.test-support.js を import すれば前払いが自動で掛かる）',
         '',
         '本当に要らないときは、ファイルのどこかに行頭から次の1行を書いて外す（理由が空だと効かない）:',
         '',
         '  // pglite-prepay: not-needed（理由）',
         '',
-        '限界: このテストは beforeAll / beforeEach の呼び出しが在るかだけを見る（中身が費用を払うかは見ない）。',
+        '限界: このテストは beforeAll の呼び出しが在るかだけを見る（中身が費用を払うかは見ない）。',
         '',
       ].join('\n'),
     ).toEqual([]);

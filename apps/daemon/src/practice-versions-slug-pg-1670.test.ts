@@ -1,9 +1,15 @@
 import type { CloneHost } from '@alteroid/core';
 import { createPgStoresFromDb, type Db, type PgStores } from '@alteroid/storage-pg';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { createApp } from './app.js';
-import { createMigratedPglite } from './pglite-template.test-support.js';
+import { createMigratedPglite, migratedTemplate } from './pglite-template.test-support.js';
+
+// 雛形の前払い（#3034）。最初の `beforeEach`（hookTimeout 10s）で WASM の起動 + migrate を
+// 払わせない。
+beforeAll(async () => {
+  await migratedTemplate();
+}, 60_000);
 
 /**
  * Issue #1670。
