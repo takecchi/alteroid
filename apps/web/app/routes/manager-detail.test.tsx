@@ -292,7 +292,7 @@ describe('詳細でも、拒否は状態を置き換えずに状態へ添える'
     // 観測していないことを断定しない。
     expect(screen.getByText(/この仕事が止まったかどうかは見ていない/)).toBeTruthy();
     // 「0 件」を「止められていない」と読ませない材料を渡す。
-    expect(screen.getByText(/器を作り直すと数え直しになる/)).toBeTruthy();
+    expect(screen.getByText(/実行環境を作り直すと数え直しになる/)).toBeTruthy();
   });
 
   /**
@@ -338,14 +338,16 @@ describe('詳細でも、拒否は状態を置き換えずに状態へ添える'
 
     // 2つの場合分け——器側（分類器・deny 規則）と alteroid 自身の
     // `PreToolUse` フックの両方が、条件付きの文として載る。
-    expect(text).toContain('器の分類器か deny 規則なら、この確認はクローンには回ってきていない');
+    expect(text).toContain(
+      '実行環境の分類器か deny 規則なら、この確認はクローンには回ってきていない',
+    );
     expect(text).toContain('PreToolUse');
     expect(text).toContain('bash-wait-guard.ts');
     expect(text).toContain('自力で抜けられることがある');
 
     // 「まず担い手自身の拒否文を読ませる」案内が、場合分けより前に来る。
     const guidanceAt = text.indexOf('まず担い手自身の拒否文を読ませること');
-    const branchAAt = text.indexOf('器の分類器か deny 規則なら');
+    const branchAAt = text.indexOf('実行環境の分類器か deny 規則なら');
     expect(guidanceAt).toBeGreaterThan(-1);
     expect(guidanceAt).toBeLessThan(branchAAt);
 

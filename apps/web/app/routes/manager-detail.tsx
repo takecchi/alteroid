@@ -809,7 +809,7 @@ function DenialsCard({
     <Card>
       <CardHeader
         title="確認へ上がらず止められた道具"
-        subtitle="まず担い手自身の拒否文を読ませること。出所はこの数からは取れない。(a) 器の分類器か deny 規則なら、この確認はクローンには回ってきていない。(b) alteroid 自身の PreToolUse フック（bash-wait-guard.ts 等）なら、理由と代替案は担い手へ直接返っており、自力で抜けられることがある"
+        subtitle="まず担い手自身の拒否文を読ませること。出所はこの数からは取れない。(a) 実行環境の分類器か deny 規則なら、この確認はクローンには回ってきていない。(b) alteroid 自身の PreToolUse フック（bash-wait-guard.ts 等）なら、理由と代替案は担い手へ直接返っており、自力で抜けられることがある"
       />
       <ul className="px-4 py-3 text-sm">
         {recent.map((entry) => (
@@ -833,7 +833,7 @@ function DenialsCard({
           日誌
         </Link>
         に残っている。 この件数はサーバのプロセス内にしかないので、
-        <strong className="font-medium">器を作り直すと数え直しになる</strong>— 「0
+        <strong className="font-medium">実行環境を作り直すと数え直しになる</strong>— 「0
         件」は「止められていない」ではない。
       </p>
       {followUp !== null && (
@@ -1058,7 +1058,7 @@ function systemErrorText(manager: ManagerSummary): string | null {
     return `セッションは失敗で畳まれた。${note}。`;
   }
   return (
-    'セッションは器の資源による落ち方で畳まれた可能性 ' +
+    'セッションは実行環境の資源による落ち方で畳まれた可能性 ' +
     `（${formatDateTime(manager.lastSystemError.at)}）: ` +
     formatSystemErrorFacts(manager.lastSystemError)
   );
