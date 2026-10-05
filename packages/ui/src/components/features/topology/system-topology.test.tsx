@@ -7,7 +7,7 @@
 import { cleanup, render } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { awaitingScene, busyScene, idleScene } from './samples';
+import { awaitingScene, busyScene, idleScene, usageBlockedScene } from './samples';
 import { SystemTopology, WIDE_MIN_WIDTH } from './system-topology';
 
 afterEach(() => {
@@ -78,6 +78,22 @@ describe('札の文言（#2726）', () => {
     expect(names).toContain('マネージャー mgr-c019 仕事なし');
     expect(names).toContain('作業者 implementer 不明');
     expect(container.textContent).not.toContain('待機');
+  });
+});
+
+describe('利用枠の上限で止まっている札', () => {
+  it('枠で止まったマネージャーはクローンと同じ「止まっている」で、仕事なしと区別され、読み上げに理由が出る', () => {
+    stubFrameWidth(1000);
+    const { container } = render(<SystemTopology {...usageBlockedScene} />);
+    const names = Array.from(container.querySelectorAll('button')).map((b) =>
+      b.getAttribute('aria-label'),
+    );
+    expect(names.some((n) => /^クローン .*止まっている$/.test(n ?? ''))).toBe(true);
+    expect(names).toContain('マネージャー mgr-7f3a 止まっている');
+    expect(names).toContain('マネージャー mgr-c019 仕事なし');
+    const summary = container.querySelector('figcaption')?.textContent ?? '';
+    expect(summary).toContain('マネージャー mgr-7f3a: 止まっている（利用枠の上限で止まっている:');
+    expect(summary).toContain('マネージャー mgr-c019: 仕事なし');
   });
 });
 
