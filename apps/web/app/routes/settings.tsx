@@ -39,7 +39,7 @@ export default function Settings() {
       tabs={<SettingsTabs />}
       documentTitle={settingsDocumentTitle('/settings')}
       title="設定"
-      description="この画面がどのデーモンを見ているか"
+      description="この画面がどのサーバを見ているか"
     >
       <div className="flex flex-col gap-4">
         <ConnectionCard />
@@ -67,7 +67,7 @@ function Account() {
     <Card>
       <CardHeader
         title="ログイン"
-        subtitle="この画面がデーモンに対して何者か"
+        subtitle="この画面がサーバに対して何者か"
         action={
           auth.status === 'open' ? (
             <Badge>認証なし</Badge>
@@ -81,7 +81,7 @@ function Account() {
       <div className="px-4 py-3 text-sm">
         {auth.status === 'open' ? (
           <p className="text-xs leading-relaxed text-muted-foreground">
-            このデーモンは認証を要求していない（ログインの設定が無いか、認証を切っている）。
+            接続先のサーバは認証を要求していない（ログインの設定が無いか、認証を切っている）。
             守りは待ち受け先（既定は 127.0.0.1）と、手前に置いた境界の側にある。
           </p>
         ) : (
@@ -316,7 +316,7 @@ function Runners() {
     <Card>
       <CardHeader
         title="実行環境"
-        subtitle="マネージャーが実際に動く実行環境の一覧。鍵は識別用の値だけが見える（値そのものは出ない）。「この状態になった」の時刻は保存されないので、デーモンを再起動すると記録し直される"
+        subtitle="マネージャーが実際に動く実行環境の一覧。鍵は識別用の値だけが見える（値そのものは出ない）。「この状態になった」の時刻は保存されないので、サーバを再起動すると記録し直される"
       />
       <ErrorNote error={error} className="m-4" />
       {/*
@@ -331,7 +331,7 @@ function Runners() {
       {daemonRevision === undefined ? null : (
         <div className="border-b border-border px-4 py-3">
           <div className="flex flex-wrap items-center gap-2">
-            <p className="font-mono text-sm">デーモン</p>
+            <p className="font-mono text-sm">接続先のサーバ</p>
             <Badge tone="accent">この画面が見ているプロセス</Badge>
           </div>
           <p className="mt-0.5 font-mono text-[11px] break-all text-muted-foreground">
@@ -346,7 +346,7 @@ function Runners() {
         <Spinner />
       ) : listUnavailable ? null : runners.length === 0 ? (
         <Empty>
-          登録された実行環境が無い。ローカルでは、デーモンと同じプロセスの中で動いている。
+          登録された実行環境が無い。ローカルでは、接続先のサーバと同じプロセスの中で動いている。
         </Empty>
       ) : (
         <ul>
@@ -628,7 +628,7 @@ function ShutdownDaemon() {
   return (
     <Card>
       <CardHeader
-        title="デーモンを止める"
+        title="alteroid のサーバを止める"
         subtitle="起動し直せば元に戻る。記憶・日誌・各種の記録は消さない"
       />
       <div className="px-4 py-3 text-sm">
@@ -643,7 +643,7 @@ function ShutdownDaemon() {
         </p>
         <div className="mt-3">
           <Button variant="danger" size="sm" onClick={openDialog}>
-            デーモンを止める
+            alteroid のサーバを止める
           </Button>
         </div>
       </div>
@@ -655,7 +655,7 @@ function ShutdownDaemon() {
         <div className="p-4">
           <h2 className="text-sm font-semibold">本当に止めますか？</h2>
           <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
-            デーモンを止めます。
+            alteroid のサーバを止めます。
             <strong className="text-foreground">記憶も各種の記録も消えません</strong>
             （日誌も含めて1行も消えません）。起動し直せば元の状態に戻ります。Railway
             のように自動で再起動する構成では、止めると

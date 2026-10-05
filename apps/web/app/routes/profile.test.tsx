@@ -448,7 +448,7 @@ describe('/profile 画面 — 古いデーモン（旧形式の応答）', () =>
     renderScreen();
 
     expect(await screen.findByText('default')).toBeTruthy();
-    expect(screen.getByText(/サーバが古い/)).toBeTruthy();
+    expect(screen.getByText(/サーバが古いので/)).toBeTruthy();
     expect(screen.getByText('共通')).toBeTruthy();
     expect(screen.getByText('41 バイト')).toBeTruthy();
     expect(screen.getByText(/o{12}/)).toBeTruthy();

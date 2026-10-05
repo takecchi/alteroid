@@ -386,7 +386,7 @@ function ProfileEditor({
       <CardHeader title="行を登録する" subtitle="1行を丸ごと置き換える" />
       <div className="flex flex-col gap-3 px-4 py-3 text-sm">
         <p className="text-xs leading-relaxed break-words text-muted-foreground">
-          保存すると、本文は置く前にデーモン上でその場で実行して確かめられる（記憶を扱うデーモンでの任意のコマンド実行と同じ強さ。渡す先がマネージャーだけの行は、デーモンでは確かめず、マネージャーが動く実行環境で確かめる）。実行できなければ保存も反映もせず、理由を返す（前のものが残る）。
+          保存すると、本文は置く前にサーバ上でその場で実行して確かめられる（記憶を扱うサーバでの任意のコマンド実行と同じ強さ。渡す先がマネージャーだけの行は、サーバでは確かめず、マネージャーが動く実行環境で確かめる）。実行できなければ保存も反映もせず、理由を返す（前のものが残る）。
           秘密は「環境変数」の画面へ置くこと——ここに書いた名前は、そちらの同じ名前を上書きする。
         </p>
 
@@ -394,7 +394,7 @@ function ProfileEditor({
           <div>
             {legacy && hasDefault ? (
               <span className="text-[11px] text-muted-foreground">
-                古いデーモンでは、一覧の「編集する」から本文だけ直せる。
+                接続先のサーバが古いと、一覧の「編集する」から本文だけ直せる。
               </span>
             ) : (
               <Button
@@ -467,11 +467,11 @@ function ProfileEditor({
             {confirming ? (
               <div className="flex flex-col gap-2 rounded-md border border-warn/40 bg-warn/10 px-3 py-2">
                 <p className="text-[11px] break-words text-warn">
-                  {`行 ${editor.name} を置く。本文をデーモン上で実行して確かめ、通れば${
+                  {`行 ${editor.name} を置く。本文をサーバ上で実行して確かめ、通れば${
                     editor.scope === 'all'
                       ? 'クローン・マネージャー・作業者のすべて'
                       : editor.scope === 'app'
-                        ? 'クローン（デーモン）だけ'
+                        ? 'クローンだけ'
                         : 'マネージャー・作業者だけ'
                   }へ渡す。渡す先から外れた側からは外れる。これから起こす仕事には即座に効く。`}
                 </p>

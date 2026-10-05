@@ -723,7 +723,7 @@ describe('デーモンを止める（ShutdownDaemon）', () => {
   }
 
   async function openShutdownDialog(): Promise<void> {
-    fireEvent.click(await screen.findByRole('button', { name: 'デーモンを止める' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'alteroid のサーバを止める' }));
     await screen.findByPlaceholderText('stop');
   }
 
