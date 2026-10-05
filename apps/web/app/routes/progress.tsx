@@ -394,7 +394,7 @@ const UNAVAILABLE_REASONS: Record<string, string> = {
 function reasonText(reason: string): string {
   return Object.hasOwn(UNAVAILABLE_REASONS, reason)
     ? (UNAVAILABLE_REASONS[reason] ?? reason)
-    : '目安を出せない理由が、この画面では分かりません。画面かデーモンを更新してください';
+    : '目安を出せない理由が、この画面では分かりません。画面かサーバを更新してください';
 }
 
 /** 日にちを添えるのは長いときだけ（48時間以上）。 */

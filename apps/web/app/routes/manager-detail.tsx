@@ -516,7 +516,7 @@ function DisconnectedNote({ live }: { live: boolean }) {
   if (live) return null;
   return (
     <p className="border-t border-border px-4 py-3 text-xs text-destructive">
-      このデーモンは、このマネージャーの runner と
+      このサーバは、このマネージャーの runner と
       <strong className="font-medium">繋がっていない</strong>
       。ここに出ているのは台帳に残っている最後の姿で、繋ぎ直るまで動かない。ただし
       <strong className="font-medium">送信は塞いでいない</strong>—
@@ -828,11 +828,11 @@ function DenialsCard({
       <p className="border-t border-border px-4 py-3 text-xs text-muted-foreground">
         止められた事実は数えているが、
         <strong className="font-medium">それでこの仕事が止まったかどうかは見ていない</strong>
-        （デーモンに動きを見る手が無い）。全件は
+        （サーバに動きを見る手が無い）。全件は
         <Link to="/journal" className="text-primary hover:underline">
           日誌
         </Link>
-        に残っている。 この件数はデーモンのプロセス内にしかないので、
+        に残っている。 この件数はサーバのプロセス内にしかないので、
         <strong className="font-medium">器を作り直すと数え直しになる</strong>— 「0
         件」は「止められていない」ではない。
       </p>
@@ -944,7 +944,7 @@ function toolUseStallText(manager: ManagerSummary): string | null {
       : `${formatDateTime(manager.toolUseStallAt)}（${formatRelative(manager.toolUseStallAt)}）から`;
   return (
     '道具の応答待ちのまま、誰もその応答を待っていない（矛盾）。生ログの末尾の assistant 行が ' +
-    '道具の呼び出しで終わっているのに、対応する結果が生ログに無く、かつこのデーモン側の返事待ち' +
+    '道具の呼び出しで終わっているのに、対応する結果が生ログに無く、かつこのサーバ側の返事待ち' +
     `も空である。未応答の道具: ${names}。${whenNote}。` +
     'この状態そのものは何も止めていない——委譲は動き続けてよい。長時間の作業者委譲（Agent 等）の' +
     '実行中でも同じ形になりうるので、この行だけで「壊れている」と決めつけないこと。' +
@@ -1159,7 +1159,7 @@ function resetTimeSkewText(manager: ManagerSummary): ReactNode | null {
       '世代ずれではなく、待てば戻る。'
     );
   }
-  return `認証トークンの世代ずれの判定: この画面が知らない値 "${String(value)}"（デーモンの版が新しい可能性）。`;
+  return `認証トークンの世代ずれの判定: この画面が知らない値 "${String(value)}"（サーバの版が新しい可能性）。`;
 }
 
 function ResetTimeSkewNote({ manager }: { manager: ManagerSummary }) {
@@ -1268,7 +1268,7 @@ function unpushedWorkText(manager: ManagerSummary): ReactNode | null {
   }
   // 版のずれ（新しいデーモンがこの画面の知らない kind を返した）でも落ちない。
   const unknownKind: string = (observation as { kind: string }).kind;
-  return `未push観測: この画面が知らない種類 "${unknownKind}"（デーモンの版が新しい可能性）。`;
+  return `未push観測: この画面が知らない種類 "${unknownKind}"（サーバの版が新しい可能性）。`;
 }
 
 /**
