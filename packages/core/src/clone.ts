@@ -484,7 +484,7 @@ const DAILY_REPORT_LOOKUP = 30;
  * 合計は約21時間（22:00 の日報なら翌日の日報の時刻の手前まで）。数時間の API 障害を越えられる長さにしてある。
  * 諦めても「作れなかった」の印は日誌に残る（人間に見える）。再起動時の後追いも従来どおり働く。
  */
-const DAILY_REPORT_RETRY_DELAYS_MS: readonly number[] = [
+export const DAILY_REPORT_RETRY_DELAYS_MS: readonly number[] = [
   10 * 60_000,
   30 * 60_000,
   2 * 3_600_000,
@@ -9243,7 +9243,13 @@ class Clone implements CloneHost {
             : 'この日の日報が既にあるか確かめられないまま書いた。同じ日に日報が2本ある' +
               'ならこの回の重複（消さずに日誌から辿ること）。'),
       });
-      if (outcome.status === 'failed') return;
+      if (outcome.status === 'failed') {
+        // 印を書けなかっただけで、失敗した日報であることは変わらない。再起動まで
+        // 待たずに作り直す（#2745）。作り直しが成功すれば（読めなければ重複の
+        // 可能性つきで）本物が書かれる。
+        this.#scheduleDailyReportRetry(date);
+        return;
+      }
     }
     // **印の付いた行は「日報がある」と数えない**（`schema.ts` の `unavailable` の
     // doc）。数えると、後から本物を書き直す道が閉じる。
