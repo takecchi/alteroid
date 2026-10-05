@@ -3,6 +3,7 @@ import type { ReactNode } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router';
 
 import {
+  DocumentTitle,
   Markdown,
   Badge,
   Button,
@@ -151,6 +152,7 @@ export default function ManagerDetail({ loaderData }: Route.ComponentProps) {
         （`Page`）も戻るリンクも持たない。画面の h1 は親が持ち、ここの見出しは h2。狭い画面では
         `ListDetail` の「マネージャーの一覧を開く」が一覧への戻り口になる。
       */}
+      <DocumentTitle>マネージャーの詳細</DocumentTitle>
       <header className="mb-4 flex items-start justify-between gap-4">
         <div className="min-w-0">
           <h2 className="text-base font-semibold">マネージャーの詳細</h2>

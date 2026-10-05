@@ -727,11 +727,10 @@ export default function Managers() {
   return (
     /*
       本文の余白とスクロールは外す（`overflow-hidden p-0 md:p-0`）。`ListDetail` が左右のペインを
-      それぞれスクロールさせるため。タブの題名は、詳細を開いているときだけ詳細のものにする。
+      それぞれスクロールさせるため。
     */
     <Page
       title="マネージャー"
-      documentTitle={selectedId === undefined ? undefined : 'マネージャーの詳細'}
       description="クローンが起こした仕事。人間が Claude Code に頼んだのと同じ位置にいる"
       className="overflow-hidden p-0 md:p-0"
     >
