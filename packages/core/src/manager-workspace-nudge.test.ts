@@ -740,6 +740,78 @@ describe('runner-swap の一言は作業ツリーごとの未 push・退避 ref 
     expect(message).toContain('2 コミットは失われた（origin に無い）');
   });
 
+  it('観測が無くても（未観測・unavailable）、退避 ref が在れば出す。件数や「失われた」は断定しない', async () => {
+    const unavailable: LastUnpushedWorkObservation = {
+      kind: 'unavailable',
+      at: OBSERVED_AT,
+      reason: 'runner が答えなかった',
+    };
+    for (const [id, observation] of [
+      ['mgr-rescue-only-none', undefined],
+      ['mgr-rescue-only-unavail', unavailable],
+    ] as const) {
+      const job = jobWith(
+        id,
+        unknownLocator,
+        observation,
+        rescue({
+          ...pushedAt('2026-09-24T05:00:00.000Z'),
+          untracked: { count: 2, paths: ['x.txt', 'y.txt'], omitted: 0 },
+        }),
+      );
+      const { message, cloneText } = await runnerSwapNudge(job);
+
+      expect(message).toContain(`${REF}（abcdef01, 2026-09-24T05:00:00.000Z）`);
+      expect(message).toContain(`git fetch origin ${REF}`);
+      expect(message).toContain('git switch -c <新しい枝名> FETCH_HEAD');
+      expect(message).toContain('それより後の変更と未追跡のファイルは含まない');
+      expect(message).toContain('退避の時刻より後の変更は確かめられない');
+      expect(message).toContain('未追跡 2 件（x.txt, y.txt）');
+      expect(message).toContain('未 push の観測が無い');
+      expect(message).not.toContain('失われた（origin に無い）');
+      expect(message).not.toContain('clone し直せ');
+      expect(cloneText).toContain(REF);
+      expect(cloneText).toContain('退避の時刻より後の変更は確かめられない');
+    }
+  });
+
+  it('観測に無い作業ツリーでも、退避 ref が在れば観測の作業ツリーと並べて出す', async () => {
+    const job = jobWith(
+      'mgr-rescue-extra',
+      unknownLocator,
+      observed({ unpushedCommitCount: 0, uncommittedChangeCount: 0 }),
+      {
+        at: '2026-09-24T04:59:00.000Z',
+        worktrees: [
+          {
+            relativePath: 'other',
+            branch: 'feature/o',
+            at: '2026-09-24T04:59:00.000Z',
+            ...pushedAt('2026-09-24T04:59:00.000Z'),
+          },
+        ],
+      } as LastRescue,
+    );
+    const { message } = await runnerSwapNudge(job);
+
+    expect(message).toContain('github.com/acme/widgets.git の feature/x を clone し直せ。');
+    expect(message).toContain('- other: 退避 ref');
+    expect(message).toContain(`git fetch origin ${REF}`);
+  });
+
+  it('観測が無く、退避の台帳に pushed も無い: 従来の文言のまま', async () => {
+    const job = jobWith(
+      'mgr-rescue-nopush',
+      unknownLocator,
+      undefined,
+      rescue({ notPushed: { reason: 'no-credential' } }),
+    );
+    const { message } = await runnerSwapNudge(job);
+
+    expect(message).toContain('残っているとは限らない');
+    expect(message).not.toContain('退避 ref');
+  });
+
   it('作業ツリーが多くても一覧は予算に収まり、危ない作業ツリーが先に出て、溢れは件数で言う', async () => {
     const worktrees = Array.from({ length: 60 }, (_, i) => ({
       relativePath: `repo-${String(i).padStart(2, '0')}`,

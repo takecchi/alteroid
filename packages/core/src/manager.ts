@@ -14889,7 +14889,7 @@ function workspaceAfterSwap(
             kind: 'unverified',
             path: locator.path,
             cloneHints: found.hints,
-            observedAt: found.at,
+            ...(found.at === undefined ? {} : { observedAt: found.at }),
             ...(found.incompleteNote === undefined ? {} : { incompleteNote: found.incompleteNote }),
           };
     }
@@ -14902,6 +14902,13 @@ function workspaceAfterSwap(
   }
 }
 
+/** 観測が使えないときは、その旨（件数・失われたものは言えない）を言う。 */
+function observationBasisNote(observedAt: string | undefined): string {
+  return observedAt === undefined
+    ? '未 push の観測が無い（取れなかった）ので、件数や失われたものは分からない。'
+    : `${observedAt} 時点の観測に基づく——これより後に作った枝は含まれない。`;
+}
+
 /**
  * `restartNudge` の `cause === 'runner'` の下の句。**`unrecorded` は今日と
  * 1バイトも違わないこと**（情報が無いなら新しい主張をしない）。
@@ -14911,7 +14918,7 @@ function workspaceAfterSwapClause(after: WorkspaceAfterSwap): string {
     case 'unrecorded':
       return '作業ディレクトリが残っているとは限らないので、続きに入る前に手元の状態を確かめよ。';
     case 'unverified':
-      if (after.cloneHints === undefined || after.observedAt === undefined) {
+      if (after.cloneHints === undefined) {
         return (
           `作業ディレクトリ（${after.path}）が残っているとは限らないので、` +
           '続きに入る前に手元の状態を確かめよ。'
@@ -14919,7 +14926,7 @@ function workspaceAfterSwapClause(after: WorkspaceAfterSwap): string {
       }
       return (
         `作業ディレクトリ（${after.path}）が残っているとは限らない。` +
-        `${after.observedAt} 時点の観測に基づく——これより後に作った枝は含まれない。` +
+        observationBasisNote(after.observedAt) +
         (after.incompleteNote === undefined ? '' : `${after.incompleteNote} `) +
         (anyHintHasLossRisk(after.cloneHints)
           ? 'コミット済みで未 push のものも失われている可能性がある。'
@@ -14956,14 +14963,14 @@ function cloneWorkspaceAfterSwapLine(after: WorkspaceAfterSwap): string {
         '同じ結果を期待せず、手元の状態から組み立て直させること。'
       );
     case 'unverified':
-      if (after.cloneHints === undefined || after.observedAt === undefined) {
+      if (after.cloneHints === undefined) {
         return (
           '器に永続化が無ければ、コミット前の変更は失われている。' +
           '同じ結果を期待せず、手元の状態から組み立て直させること。'
         );
       }
       return (
-        `${after.observedAt} 時点の観測に基づく——これより後に作った枝は含まれない。` +
+        observationBasisNote(after.observedAt) +
         (after.incompleteNote === undefined ? '' : `${after.incompleteNote} `) +
         (anyHintHasLossRisk(after.cloneHints)
           ? 'コミット済みで未 push のものも失われている可能性がある。'
