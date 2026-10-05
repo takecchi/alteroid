@@ -56,11 +56,7 @@ describe('#2179 の判定が、長い入力で後戻りで爆発しない', () =
   ];
   for (const [label, makeInput, n] of cases) {
     it(`${label}が予算内に終わる`, () => {
-      // factor: 16（n..16n の5点）。この歯は線形でも傾きが揺れ、既定の factor=8 では通ったときの傾きの中央値が 3 回の実測で最大 1.3 を超え、閾値 1.5 に寄った（#3017。2206 と同じ扱い）。
-      expectNotSuperlinear((command: string) => inspectBashCommand(command), makeInput, {
-        n,
-        factor: 16,
-      });
+      expectNotSuperlinear((command: string) => inspectBashCommand(command), makeInput, { n });
     });
   }
 });

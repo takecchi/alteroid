@@ -333,7 +333,7 @@ describe('tail-f の判定が、区切りの無い繰り返しで後戻りで爆
     expectNotSuperlinear(
       (command: string) => inspectBashCommand(command),
       (n) => (TAIL + ' ').repeat(n),
-      { n: 2000, factor: 16 }, // factor: 16（n..16n の5点）。この歯は線形でも傾きが揺れ、既定の factor=8 では通ったときの傾きの中央値が 3 回の実測で最大 1.3 を超え、閾値 1.5 に寄った（#3017。2206 と同じ扱い）。
+      { n: 2000 },
     );
   });
 

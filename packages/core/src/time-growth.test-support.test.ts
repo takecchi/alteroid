@@ -7,7 +7,7 @@ import { expectNotSuperlinear } from './time-growth.test-support.js';
  *
  * **測るのは「線形の関数は通り、2乗の関数は傾きで落ちる」ことそのもの。**
  * `n` に対して `n²` に比例する仕事を対照に置き、傾き（既定 factor=16 の5点で、2乗は全区間 2）
- * が既定の `maxSlope`（1.5）を超えて落ちることを確かめる——**対照が落ちなければ、
+ * が既定の `maxSlope`（1.6）を超えて落ちることを確かめる——**対照が落ちなければ、
  * この助け自体が「弱い歯」である。**
  *
  * **時計は偽物を渡す（#2240 / #2243 と同じ方針）。** 実時間（`performance.now()`）で
@@ -104,7 +104,7 @@ describe('expectNotSuperlinear', () => {
     expect(result.timesMs.map((t) => Math.round(t * 1e6) / 1e6)).toEqual([5, 10, 20, 40, 80]);
     for (const slope of result.slopes) expect(slope).toBeCloseTo(1, 9);
     expect(result.slopes).toHaveLength(4);
-    expect(result.medianSlope).toBeCloseTo(1, 9);
+    expect(result.slope).toBeCloseTo(1, 9);
     expect(result.tSmallMs).toBeCloseTo(5, 9);
     expect(result.tLargeMs).toBeCloseTo(80, 9);
     expect(result.ratio).toBeCloseTo(16, 9);
@@ -117,8 +117,8 @@ describe('expectNotSuperlinear', () => {
       identity,
       { n: 200_000, now: clock.now },
     );
-    expect(result.medianSlope).toBeGreaterThan(1);
-    expect(result.medianSlope).toBeLessThan(1.15);
+    expect(result.slope).toBeGreaterThan(1);
+    expect(result.slope).toBeLessThan(1.15);
   });
 
   it('2乗の関数（n² に比例する仕事）は落ちる。傾きは各区間 2', () => {
@@ -146,37 +146,72 @@ describe('expectNotSuperlinear', () => {
     expect(message).toMatch(
       /2000→4000: 2\.00, 4000→8000: 2\.00, 8000→16000: 2\.00, 16000→32000: 2\.00/,
     );
-    expect(message).toMatch(/中央値=2\.00/);
+    expect(message).toMatch(/最小二乗の傾き=2\.00/);
     expect(message).toMatch(/出発点 2000/);
   });
 
+  /** 点（2 倍ずつ）の時間 `times` の log2 の、番号に対する最小二乗の傾き（助けの実装とは別に書いた検算）。 */
+  const lsSlope = (times: number[]): number => {
+    const ys = times.map((t) => Math.log2(t));
+    const mx = (ys.length - 1) / 2;
+    const my = ys.reduce((x, y) => x + y, 0) / ys.length;
+    const sxy = ys.reduce((acc, y, i) => acc + (i - mx) * (y - my), 0);
+    const sxx = ys.reduce((acc, _y, i) => acc + (i - mx) ** 2, 0);
+    return sxy / sxx;
+  };
+
   it('線形に1か所だけ段差（ある大きさ以上で時間が 1.7 倍）を入れても通る。段差の位置はどこでもよい（#3017）', () => {
-    // 点は 5e6, 1e7, 2e7, 4e7, 8e7。段差は1つの区間の傾き log2(2 * 1.7) = 1.77 だけを押し上げ、
-    // 残りの3つは 1 のまま ⟹ 中央値は 1。2点の比（最大 / 最小）で、小さいほうの 4 倍を測る判定でも、
-    // 段差が間に入ると 4 * 1.7 = 6.8 になり、実測の揺れと重なれば閾値（10）を踏む。
-    for (const stepAt of [10_000_000, 20_000_000, 40_000_000, 80_000_000]) {
-      const clock = makeFakeClock();
-      const result = expectFive(steppedLinearOn(clock, 1e-6, stepAt, 1.7), identity, {
-        n: 5_000_000,
-        now: clock.now,
-      });
-      const sorted = [...result.slopes].sort((a, b) => a - b);
-      expect(sorted[0]).toBeCloseTo(1, 9);
-      expect(sorted[1]).toBeCloseTo(1, 9);
-      expect(sorted[2]).toBeCloseTo(1, 9);
-      expect(sorted[3]).toBeCloseTo(Math.log2(2 * 1.7), 9);
-      expect(result.medianSlope).toBeCloseTo(1, 9);
+    // 既定（factor=8）の点は 5e6, 1e7, 2e7, 4e7 で、段差の位置は後ろの3点のどれか（3通り）。factor=16 は 8e7 を足した4通り。
+    // 段差は最小二乗の傾きを s × (0.3, 0.4, 0.3)（s = log2(1.7) = 0.77）だけ押し上げ、最大 1 + 0.31 = 1.31 < 1.6。
+    for (const [factor, stepAts] of [
+      [8, [10_000_000, 20_000_000, 40_000_000]],
+      [16, [10_000_000, 20_000_000, 40_000_000, 80_000_000]],
+    ] as const) {
+      for (const stepAt of stepAts) {
+        const clock = makeFakeClock();
+        const result = expectNotSuperlinear(steppedLinearOn(clock, 1e-6, stepAt, 1.7), identity, {
+          n: 5_000_000,
+          factor,
+          now: clock.now,
+        });
+        expect(result.slope, `factor=${factor} stepAt=${stepAt}`).toBeCloseTo(
+          lsSlope(result.timesMs),
+          9,
+        );
+        expect(result.slope, `factor=${factor} stepAt=${stepAt}`).toBeGreaterThan(1);
+        expect(result.slope, `factor=${factor} stepAt=${stepAt}`).toBeLessThan(1.35);
+        // 段差の区間の傾きは log2(2 * 1.7) = 1.77、残りは 1（参考値）。
+        expect(Math.max(...result.slopes)).toBeCloseTo(Math.log2(2 * 1.7), 9);
+        expect(result.medianSlope).toBeCloseTo(1, 9);
+      }
     }
   });
 
-  it('#3017 の形（段差で 6.8 倍・傾き約 2.8）でも、線形は通る', () => {
+  it('#3017 の形（段差の区間で時間が 6.8 倍・区間の傾き約 2.8）の線形: 端の区間は通り、factor=8 の中央の区間は落ちる。factor=16 は全部通る', () => {
+    // s = log2(3.4) = 1.77 で、押し上げは s × (0.3, 0.4, 0.3) = (0.53, 0.71, 0.53)。factor=8 で中央の区間（段差が 2e7 から）だけ
+    // 1.71 で 1.6 を超える。factor=16（5 点）は押し上げが最大 s × 0.3 = 0.53 で、全位置が通る。
+    const slopeAt = (factor: number, stepAt: number): number => {
+      const clock = makeFakeClock();
+      return expectNotSuperlinear(steppedLinearOn(clock, 1e-6, stepAt, 3.4), identity, {
+        n: 5_000_000,
+        factor,
+        maxSlope: Number.POSITIVE_INFINITY,
+        now: clock.now,
+      }).slope;
+    };
+    expect(slopeAt(8, 10_000_000)).toBeCloseTo(1.53, 1);
+    expect(slopeAt(8, 20_000_000)).toBeCloseTo(1.71, 1);
+    expect(slopeAt(8, 40_000_000)).toBeCloseTo(1.53, 1);
+    for (const stepAt of [10_000_000, 20_000_000, 40_000_000, 80_000_000]) {
+      expect(slopeAt(16, stepAt)).toBeLessThan(1.6);
+    }
     const clock = makeFakeClock();
-    const result = expectFive(steppedLinearOn(clock, 1e-6, 20_000_000, 3.4), identity, {
-      n: 5_000_000,
-      now: clock.now,
-    });
-    expect(Math.max(...result.slopes)).toBeCloseTo(Math.log2(2 * 3.4), 9);
-    expect(result.medianSlope).toBeCloseTo(1, 9);
+    expect(() =>
+      expectNotSuperlinear(steppedLinearOn(clock, 1e-6, 20_000_000, 3.4), identity, {
+        n: 5_000_000,
+        now: clock.now,
+      }),
+    ).toThrow(/伸びの比が大きすぎる/);
   });
 
   it('段差つきの2乗は、段差があっても落ちる（段差が陰性対照を隠さない）', () => {
@@ -209,7 +244,7 @@ describe('expectNotSuperlinear', () => {
       maxSlope: 2.5,
       now: clock.now,
     });
-    expect(result.medianSlope).toBeCloseTo(2, 9);
+    expect(result.slope).toBeCloseTo(2, 9);
   });
 
   it('factor は最大の点の倍率（2 の冪）。既定 16 は5点、factor=4 なら3点・傾き2つ、2の冪でなければ投げる', () => {
@@ -278,15 +313,15 @@ describe('expectNotSuperlinear', () => {
 
     // 底上げは実際に乗っている（時間は 2.5 倍）が、傾きはどちらも 1 のまま。
     expect(withDelay.tSmallMs).toBeCloseTo(withoutDelay.tSmallMs * 2.5, 9);
-    expect(withoutDelay.medianSlope).toBeCloseTo(1, 9);
-    expect(withDelay.medianSlope).toBeCloseTo(1, 9);
+    expect(withoutDelay.slope).toBeCloseTo(1, 9);
+    expect(withDelay.slope).toBeCloseTo(1, 9);
   });
 
   it('落ちたときの文に、各点の時間と各区間の傾きが生で載る', () => {
     const clock = makeFakeClock();
     let error: unknown;
     try {
-      expectFive(quadraticOn(clock), identity, { n: 2000, now: clock.now });
+      expectFive(quadraticOn(clock), identity, { n: 2000, minSmallMs: 0, now: clock.now });
     } catch (e) {
       error = e;
     }
@@ -294,10 +329,11 @@ describe('expectNotSuperlinear', () => {
     // catch に拾われて別の文言の検査になる。#2222）。
     expect(error).toBeInstanceOf(Error);
     const message = (error as Error).message;
-    expect(message).toMatch(/t\(4000\)=16\.00ms/);
+    expect(message).toMatch(/t\(2000\)=4\.00ms/);
     expect(message).toMatch(/t\(32000\)=1024\.00ms/);
-    expect(message).toMatch(/区間ごとの傾き=\[4000→8000: 2\.00/);
-    expect(message).toMatch(/maxSlope=1\.5/);
+    expect(message).toMatch(/区間ごとの傾き=\[2000→4000: 2\.00/);
+    expect(message).toMatch(/maxSlope=1.6/);
+    expect(message).toMatch(/最小二乗の傾き=2\.00/);
   });
 
   it('t(n) が小さすぎると n を倍にする（分母が器の揺れに埋もれないように）', () => {
@@ -357,10 +393,10 @@ describe('expectNotSuperlinear', () => {
     expect(largeCalls).toBe(5);
     expect(result.tSmallMs).toBe(5);
     expect(result.tLargeMs).toBe(80);
-    expect(result.medianSlope).toBe(1);
+    expect(result.slope).toBeCloseTo(1, 9);
   });
 
-  it('最大の点が丸ごと混んでも、中央値は動かず、線形は1ラウンドで通る（外れ1つに引きずられない）', () => {
+  it('最大の点が丸ごと混んでも、線形は1ラウンドで通る（最小二乗の傾きは 1.6 を超えない。区間の中央値は 1 のまま）', () => {
     // 最大の点の全5回に 100ms が乗る（最小値でも 180ms）。傾きは 1, 1, 1, log2(180 / 40) = 2.17 で、中央値は 1。
     // 2点の比（5 → 180 で 36 倍）なら、これで落ちていた。
     const clock = makeFakeClock();
@@ -380,6 +416,7 @@ describe('expectNotSuperlinear', () => {
     expect(result.tLargeMs).toBe(180);
     expect(result.slopes[3]).toBeCloseTo(Math.log2(180 / 40), 9);
     expect(result.medianSlope).toBe(1);
+    expect(result.slope).toBeLessThan(1.6);
   });
 
   it('温めの最初の数回が遅くても、n を倍にする判定は温まった後の値で行う（#2576）', () => {
@@ -424,7 +461,7 @@ describe('expectNotSuperlinear', () => {
       now: clock.now,
     });
     expect(counters.get(40_000_000)).toBe(10); // 1ラウンド目で落ちず、2ラウンド目で通って打ち切る
-    expect(result.medianSlope).toBeCloseTo(1, 9);
+    expect(result.slope).toBeCloseTo(1, 9);
   });
 
   it('rounds=1 なら、同じ波で従来どおり1回で落ちる（ラウンドが効いていることの対照）', () => {
@@ -455,7 +492,7 @@ describe('expectNotSuperlinear', () => {
     }
     expect(error).toBeInstanceOf(Error);
     expect((error as Error).message).toMatch(
-      /累積の傾きの中央値=2\.00.*累積の傾きの中央値=2\.00.*累積の傾きの中央値=2\.00/,
+      /累積の最小二乗の傾き=2\.00.*累積の最小二乗の傾き=2\.00.*累積の最小二乗の傾き=2\.00/,
     );
   });
 
@@ -482,7 +519,7 @@ describe('expectNotSuperlinear', () => {
     }
     expect(error).toBeInstanceOf(Error);
     expect((error as Error).message).toMatch(/伸びの比が大きすぎる/);
-    expect((error as Error).message).toMatch(/中央値=2\.00/);
+    expect((error as Error).message).toMatch(/最小二乗の傾き=2\.00/);
   });
 
   it('smoke: 既定の時計（performance.now）でも例外なく動き、測った値は有限の正の数になる', () => {
@@ -497,6 +534,7 @@ describe('expectNotSuperlinear', () => {
     expect(result.n).toBe(200_000);
     expect(result.timesMs).toHaveLength(5);
     expect(result.slopes.every((x) => Number.isFinite(x))).toBe(true);
+    expect(Number.isFinite(result.slope)).toBe(true);
     expect(Number.isFinite(result.medianSlope)).toBe(true);
     expect(result.tSmallMs).toBeGreaterThan(0);
     expect(result.tLargeMs).toBeGreaterThan(0);
@@ -538,7 +576,7 @@ describe('expectNotSuperlinear', () => {
  * で hung にして expect で落とす。vm の timeout で打ち切られた場合も同じ文言）。器が遅いほど小さいほうにも
  * 混みが乗りやすいが、そのときは比ではなく上限が落とす。比の歯が働く範囲は、ほぼ手元の速さの器に残る。
  * 1 回の測定は 1 ラウンドで約 6s（3 ラウンドまで重ねても 20s 前後）なので、`it` の timeout を 90s に広げた。
- * 助けと閾値（factor=4・maxRatio=10（当時。#3017 で factor=8・maxSlope=1.5 へ替えた）・hardCapMs=2000・repeats=3・rounds）は動かしていない。
+ * 助けと閾値（factor=4・maxRatio=10（当時。#3017 で factor=8・maxSlope=1.6 へ替えた）・hardCapMs=2000・repeats=3・rounds）は動かしていない。
  *
  * **助けの側（「閾値のすぐ下の帯でも測り直す」）では直さない**（#2649 で試して捨てた）。
  * `sqrt(factor * maxRatio)` 以上で止めずに重ねる版は、この形の2乗を確かに落としたが、線形の歯
@@ -577,7 +615,7 @@ describe('陰性対照: 後戻りが爆発する正規表現を、助けは実�
     );
   }, 30_000);
 
-  it('2乗の後戻り（空白の列＋x に \\s+$）は、factor=8・既定の maxSlope=1.5 で落ちる', () => {
+  it('2乗の後戻り（空白の列＋x に \\s+$）は、factor=8・既定の maxSlope=1.6 で落ちる', () => {
     // #3017: 点は 4000, 8000, 16000, 32000（手元で約 14, 55, 220, 900ms、傾きは各区間約 2）。
     // 最大の点が hardCapMs（2000ms）に2倍の余裕を持つ大きさに選んである。
     const quadratic = /\s+$/;

@@ -22,25 +22,25 @@ import { assert, expect } from 'vitest';
  * 選んである前提のもとで、`hardCapMs` はいまの10倍の余裕（既定 2000ms）を
  * 持たせてあるので、器の揺れだけでは踏まない設計にしてある。
  *
- * **判定の形（#3017）——2点の比から、幾何級数の複数点の傾きの中央値へ。** 2点（n と n*factor）の比だけで
+ * **判定の形（#3017）——2点の比から、幾何級数の複数点の log-log の最小二乗の傾きへ。** 2点（n と n*factor）の比だけで
  * 判定すると、その2点がたまたまキャッシュや GC の段差をまたいだだけで、線形の実装でも比が跳ねる
  * （`bash-wait-guard-issue-2206.test.ts`: 64000→256000 で約 6.8 倍。前後は約 4 倍。CI で比 10.1 で落ちた）。
- * そこで、`n, 2n, 4n, ..., n*factor`（既定 factor=8 で 4 点）を測り、隣り合う点どうしの傾き
- * `log2(t(2m) / t(m))` を出して、その**中央値**を `maxSlope`（既定 1.5）と比べる。
- * 線形は約 1、n log n は約 1.1、2乗は約 2、3乗は約 3 で、1.5 は線形側と2乗側のちょうど中間。
- * 段差は1つの区間の傾きだけを押し上げる（6.8 倍なら約 2.8）ので、区間が3つ以上あれば中央値は動かない。
- * 2乗は全区間が約 2 なので、中央値も約 2 のまま落ちる。
- * 既定を 8（4 点・傾き 3 つ）にしたのは、測る量が点の大きさの総和（n*(2^k) の和）に比例するからである
- * （2点・factor=4 は 5n、factor=8 は 15n、factor=16 は 31n）。段差に対しては、傾きが3つあれば足りる。
- * **ただし入力が実装の線形性とは別に不規則に揺れるときは、factor=16（5 点・傾き 4 つ、中央値は中央2つの平均）にすること。**
- * `bash-wait-guard-issue-2206.test.ts` の線形の入力は、factor=8 で中央値が 1.11〜1.45（6 回）と閾値 1.5 に寄り、
- * factor=16 では 1.12〜1.22（6 回）に収まった（文字列が大きいほど、区間の傾きが 0.8〜1.5 で揺れる）。
- * 区間が2つ（factor=4）なら中央値は2つの平均、1つ（factor=2）ならその1つの傾きになる
- * （外れを捨てる力はなくなる。指数を見る歯は元から傾きが桁違いなので、それで足りる）。
+ * そこで、`n, 2n, 4n, ..., n*factor`（既定 factor=8 で 4 点）を測り、全点の `log2 t` を `log2 n` へ
+ * 最小二乗で当てはめた**傾き**を `maxSlope`（既定 1.6）と比べる。
+ * 線形は約 1、n log n は約 1.1、2乗は約 2、3乗は約 3。
+ * - **2乗との距離は 0.4**（2.0 − 1.6）。**線形との距離は 0.6**（1.6 − 1.0。n log n の 1.1 でも 0.5）。
+ * - **段差の影響**: 点 k 以降の時間が一様に s=log2(段差の倍率) だけ上がる段差は、傾きを
+ *   s × Σ_{j≥k}(x_j − x̄) / Σ(x_j − x̄)² だけ押し上げる（x_j = log2 のうちの点の番号）。4点（factor=8）で
+ *   中央の区間に段差があるとき最大で s × 0.4、端の区間なら s × 0.3。1.7 倍の段差（s=0.77）で +0.31 なので、
+ *   線形 + 段差は約 1.0〜1.1 + 0.31 = 1.4 以下で、1.6 に届かない。#3017 の実際の形（隣り合う2倍の区間で時間が 6.8 倍、
+ *   区間の傾き約 2.8、s=1.77）は、中央の区間で +0.71 となり 1.71 で 1.6 を超える。端の区間（+0.53）は通る。
+ *   5 点（factor=16）なら最大 s × 0.3 で、通る。
+ * - 隣り合う区間の傾き `log2(t(2m) / t(m))` は、分母の幅が 1 しかなく、数 ms の揺れが大きく出る
+ *   （実測で 0.6〜1.7）ので、判定には使わず、失敗時のメッセージと結果（`slopes` / `medianSlope`）に参考として出す。
  *
  * **使い手のオプションの扱い**: `n` / `repeats` / `rounds` / `warmups` / `minSmallMs` / `maxScale` / `floorMs` /
  * `hardCapMs` / `now` は意味を変えていない。`factor` は「最大の点は n*factor」のまま（2 の冪に限る。既定 4 → 8。
- * 点の数は log2(factor)+1）。`maxRatio`（比の上限）は廃止し、`maxSlope`（傾きの中央値の上限）へ替えた。
+ * 点の数は log2(factor)+1）。`maxRatio`（比の上限）は廃止し、`maxSlope`（最小二乗の傾きの上限）へ替えた。
  * `hardCapMs` は**どの点でも**効く（以前は最大の点だけ）。
  *
  * **揺れへの手当て（#2194 の後に B の #2214 の CI で比 10.55 が出たため）**。t(n) が 1〜2ms しか
@@ -63,7 +63,7 @@ export interface ExpectNotSuperlinearOptions {
    */
   factor?: number;
   /**
-   * 隣り合う点の傾き `log2(t(2m) / t(m))` の中央値の上限。既定 1.5
+   * 全点の `log2 t` を `log2 n` へ当てはめた最小二乗の傾きの上限。既定 1.6
    * （線形は約 1、n log n は約 1.1、2乗は約 2、3乗は約 3）。
    */
   maxSlope?: number;
@@ -76,7 +76,7 @@ export interface ExpectNotSuperlinearOptions {
   /** t(n) がこれに届くまで n を倍にする（ms）。既定 5。0 なら倍にしない。 */
   minSmallMs?: number;
   /**
-   * 測定ラウンドの最大回数（#2576）。傾きの中央値が `maxSlope` を超えている間だけ重ね、
+   * 測定ラウンドの最大回数（#2576）。最小二乗の傾きが `maxSlope` を超えている間だけ重ね、
    * 全ラウンドの最小時間どうしの比が超えたまま残ったときに落とす。既定 3。1 なら従来どおり1回で決める。
    */
   rounds?: number;
@@ -106,14 +106,30 @@ export interface GrowthMeasurement {
   timesMs: number[];
   /** 隣り合う点の傾き `log2(max(t(2m), floorMs) / max(t(m), floorMs))`。 */
   slopes: number[];
-  /** `slopes` の中央値（偶数個なら中央2つの平均）。判定に使う。 */
+  /** `slopes` の中央値（偶数個なら中央2つの平均）。参考値で、判定には使わない。 */
   medianSlope: number;
+  /** 全点の `log2(max(t, floorMs))` を `log2(大きさ)` へ当てはめた最小二乗の傾き。判定に使う。 */
+  slope: number;
   /** 最小の点の最小時間（ms）。 */
   tSmallMs: number;
   /** 最大の点（`n*factor`）の最小時間（ms）。 */
   tLargeMs: number;
   /** `tLargeMs / max(tSmallMs, floorMs)`（参考値。判定には使わない）。 */
   ratio: number;
+}
+
+/** 点（大きさが 2 倍ずつ）の `log2(max(t, floorMs))` の最小二乗の傾き。x は 0, 1, 2, ...。 */
+function leastSquaresSlope(times: number[], floorMs: number): number {
+  const ys = times.map((t) => Math.log2(Math.max(t, floorMs)));
+  const mx = (ys.length - 1) / 2;
+  const my = ys.reduce((a, y) => a + y, 0) / ys.length;
+  let sxy = 0;
+  let sxx = 0;
+  ys.forEach((y, x) => {
+    sxy += (x - mx) * (y - my);
+    sxx += (x - mx) ** 2;
+  });
+  return sxy / sxx;
 }
 
 function median(values: number[]): number {
@@ -190,7 +206,7 @@ function makeTimer<TInput>(
 
 /**
  * `run(makeInput(m))` を `m = n, 2n, 4n, ..., n * factor` で測り、隣り合う点の傾き
- * `log2(t(2m) / t(m))` の中央値が `maxSlope` 未満（かつどの点も `hardCapMs` 未満）であることを
+ * 全点の `log2 t` の `log2 n` への最小二乗の傾きが `maxSlope` 未満（かつどの点も `hardCapMs` 未満）であることを
  * `expect` する。呼び出し側は、いまの固定入力の大きさ（繰り返しの回数）が
  * `n * factor` 以下になるよう `n` を選ぶこと（t(n) が小さければ、ここで倍にする）。
  *
@@ -205,7 +221,7 @@ export function expectNotSuperlinear<TInput>(
 ): GrowthMeasurement {
   const {
     factor = 8,
-    maxSlope = 1.5,
+    maxSlope = 1.6,
     hardCapMs = 2000,
     floorMs = 1,
     repeats = 5,
@@ -266,8 +282,8 @@ export function expectNotSuperlinear<TInput>(
 
   // **傾きは、全ラウンドを通した「各点の最小時間」から出す**（#2576）。
   // 器の混みは時間を足すだけで引かないので、最小時間は測るほど真の値へ単調に近づく。
-  // ラウンドを重ねるのは、中央値が `maxSlope` を超えている間だけ（最大 `rounds` 回）。
-  // **ラウンドごとの中央値の最小を採ってはいけない**——小さいほうだけに混みが乗ったラウンドが
+  // ラウンドを重ねるのは、傾きが `maxSlope` を超えている間だけ（最大 `rounds` 回）。
+  // **ラウンドごとの傾きの最小を採ってはいけない**——小さいほうだけに混みが乗ったラウンドが
   // 1つあると傾きが下がり、2乗でも閾値を下回って通る（ラウンドごとの比の最小が2乗を通した #2576 の形）。
   // 最小時間どうしなら、混みはどの点でも「足されるだけ」なので、2乗の傾きは理論値より下がらない。
   minTimes = sizes.map(() => Infinity);
@@ -276,6 +292,7 @@ export function expectNotSuperlinear<TInput>(
   const roundLog: string[] = [];
   let slopes: number[] = [];
   let medianSlope = Number.POSITIVE_INFINITY;
+  let slope = Number.POSITIVE_INFINITY;
   let hung = false;
   for (let round = 0; round < rounds && !hung; round += 1) {
     const roundMin = sizes.map(() => Infinity);
@@ -297,17 +314,18 @@ export function expectNotSuperlinear<TInput>(
     minTimes = minTimes.map((t) => (Number.isFinite(t) ? t : hardCapMs));
     slopes = slopesOf(minTimes);
     medianSlope = median(slopes);
+    slope = leastSquaresSlope(minTimes, floorMs);
     roundLog.push(
       `#${round + 1}: 各点の最小=[${roundMin.map((t) => t.toFixed(2)).join(', ')}]ms, ` +
-        `累積の傾きの中央値=${medianSlope.toFixed(2)}`,
+        `累積の最小二乗の傾き=${slope.toFixed(2)}`,
     );
-    if (hung || medianSlope < maxSlope) break;
+    if (hung || slope < maxSlope) break;
   }
 
   const detail =
     `${sizes.map((m, k) => `t(${m})=${minTimes[k]!.toFixed(2)}ms`).join(', ')}。` +
     `区間ごとの傾き=[${slopes.map((x, k) => `${sizes[k]}→${sizes[k + 1]}: ${x.toFixed(2)}`).join(', ')}], ` +
-    `中央値=${medianSlope.toFixed(2)}（ラウンドごと [${roundLog.join(' | ')}]。` +
+    `区間の傾きの中央値（参考）=${medianSlope.toFixed(2)}, 最小二乗の傾き=${slope.toFixed(2)}（ラウンドごと [${roundLog.join(' | ')}]。` +
     `n=${n}（出発点 ${options.n}）, factor=${factor}, maxSlope=${maxSlope}, ` +
     `hardCapMs=${hardCapMs}, repeats=${repeats}, rounds=${rounds}, 最小値）`;
 
@@ -316,8 +334,8 @@ export function expectNotSuperlinear<TInput>(
     `固まり・指数的な後戻りの疑い —— hardCapMs を超えた。${detail}`,
   ).toBeLessThan(hardCapMs);
   expect(
-    medianSlope,
-    `伸びの比が大きすぎる —— 2乗以上の後戻りの疑い（傾きの中央値が maxSlope 以上）。${detail}`,
+    slope,
+    `伸びの比が大きすぎる —— 2乗以上の後戻りの疑い（最小二乗の傾きが maxSlope 以上）。${detail}`,
   ).toBeLessThan(maxSlope);
 
   const tSmallMs = minTimes[0]!;
@@ -328,6 +346,7 @@ export function expectNotSuperlinear<TInput>(
     timesMs: minTimes,
     slopes,
     medianSlope,
+    slope,
     tSmallMs,
     tLargeMs,
     ratio: tLargeMs / Math.max(tSmallMs, floorMs),

@@ -64,8 +64,7 @@ describe('run watch が何件並んでも2乗にならない（#2400）', () => 
   });
   it('閉じていない { の後ろに run watch が並ぶ', () => {
     const makeInput = (n: number) => `{ ${`${W} 1; `.repeat(n)}echo done`;
-    // factor: 16（n..16n の5点）。この歯は線形でも傾きが揺れ、既定の factor=8 では通ったときの傾きの中央値が 3 回の実測で最大 1.3 を超え、閾値 1.5 に寄った（#3017。2206 と同じ扱い）。
-    expectNotSuperlinear(inspectBashCommand, makeInput, { n: 300, factor: 16 });
+    expectNotSuperlinear(inspectBashCommand, makeInput, { n: 300 });
   });
   it('区切りの無い1行の run watch', () => {
     const makeInput = (n: number) => `${`${W} `.repeat(n)}1`;
