@@ -1,6 +1,8 @@
-import { rmSync } from 'node:fs';
-
-import { readVitestOwnTmpDir, sweepStaleVitestTmpDirs } from './vitest.tmpdir-sweep.js';
+import {
+  readVitestOwnTmpDir,
+  safeRemoveVitestTmpDir,
+  sweepStaleVitestTmpDirs,
+} from './vitest.tmpdir-sweep.js';
 
 /**
  * 全 vitest 起動に効く globalSetup（#3039）。理由と条件は `vitest.tmpdir-sweep.ts`。
@@ -21,10 +23,6 @@ export default function setup(project: unknown): () => void {
   }
   sweepStaleVitestTmpDirs(own);
   return () => {
-    try {
-      rmSync(own, { recursive: true, force: true });
-    } catch {
-      // 終了時の掃除の失敗でテストの結果を変えない。
-    }
+    safeRemoveVitestTmpDir(own);
   };
 }

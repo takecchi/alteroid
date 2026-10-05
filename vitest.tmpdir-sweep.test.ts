@@ -9,6 +9,7 @@ import { describe, expect, it } from 'vitest';
 import {
   isStaleVitestTmpDir,
   readVitestOwnTmpDir,
+  safeRemoveVitestTmpDir,
   sweepStaleVitestTmpDirs,
   VITEST_TMPDIR_NAME,
   type SweepFs,
@@ -114,7 +115,9 @@ describe('isStaleVitestTmpDir（#3039）', () => {
     for (const kind of ['dir', 'link'] as const) {
       const { dir, tree } = goodTree();
       tree[`${dir}/ssr/${HEX}`] =
-        kind === 'dir' ? { kind: 'dir', mtimeMs: OLD, children: [] } : { kind: 'link', mtimeMs: OLD };
+        kind === 'dir'
+          ? { kind: 'dir', mtimeMs: OLD, children: [] }
+          : { kind: 'link', mtimeMs: OLD };
       expect(isStaleVitestTmpDir(dir, fakeFs(tree), NOW), kind).toBe(false);
     }
   });
@@ -153,6 +156,62 @@ describe('readVitestOwnTmpDir（#3039）', () => {
   });
 });
 
+describe('safeRemoveVitestTmpDir の線（#3039）', () => {
+  const calls: string[] = [];
+  const rm = (p: string) => void calls.push(p);
+  const run = (target: unknown, base: string) => {
+    calls.length = 0;
+    const ok = safeRemoveVitestTmpDir(target, { base, rm });
+    return { ok, calls: [...calls] };
+  };
+
+  it('基点が空・/・相対パスなら rm を 1 度も呼ばない', () => {
+    for (const base of ['', '/', '//', 'tmp', './tmp', '../tmp']) {
+      expect(run(`/${NAME}`, base), base).toEqual({ ok: false, calls: [] });
+      expect(run(join(base, NAME), base), base).toEqual({ ok: false, calls: [] });
+    }
+  });
+
+  it('対象が基点の外・基点そのもの・2 階層下なら rm を呼ばない', () => {
+    for (const target of [
+      `/t/../x/${NAME}`,
+      `/other/${NAME}`,
+      '/t',
+      '/t/',
+      `/t/sub/${NAME}`,
+      `/t/${NAME}/${NAME}`,
+      `/t/..`,
+      `/t/${NAME}/..`,
+      '',
+      undefined,
+      42,
+    ]) {
+      expect(run(target, '/t'), String(target)).toEqual({ ok: false, calls: [] });
+    }
+  });
+
+  it('名前が 21 文字規則に当たらなければ呼ばない', () => {
+    expect(run('/t/not-a-vitest-dir', '/t')).toEqual({ ok: false, calls: [] });
+  });
+
+  it('基点の直下の 21 文字名だけ rm を 1 度呼ぶ', () => {
+    expect(run(`/t/${NAME}`, '/t')).toEqual({ ok: true, calls: [`/t/${NAME}`] });
+    expect(run(`/t/./${NAME}`, '/t/')).toEqual({ ok: true, calls: [`/t/${NAME}`] });
+  });
+
+  it('sweep も基点が / なら何も消さない（注入 fs と注入 rm）', () => {
+    const { tree } = goodTree();
+    calls.length = 0;
+    const fs = fakeFs({
+      ...tree,
+      '/': { kind: 'dir', mtimeMs: OLD, children: [NAME] },
+      [`/${NAME}`]: tree[`/t/${NAME}`]!,
+    });
+    expect(sweepStaleVitestTmpDirs(undefined, { root: '/', fs, nowMs: NOW, rm })).toEqual([]);
+    expect(calls).toEqual([]);
+  });
+});
+
 describe('sweepStaleVitestTmpDirs（実 fs、#3039）', () => {
   it('古い取り残しだけ消し、新しいもの・自分のもの・余計なものがあるもの・無関係なものは残す', () => {
     const root = makeTempDirSync('alteroid-sweep-test-');
@@ -185,24 +244,22 @@ describe('vitest を実際に 1 回起こして 21 文字ディレクトリが�
   it('正常終了後、専用 TMPDIR に nanoid 名のディレクトリが無い', () => {
     const repoRoot = resolve(fileURLToPath(new URL('.', import.meta.url)));
     const sandbox = makeTempDirSync('alteroid-vitest-tmpdir-e2e-');
-    {
-      const env: NodeJS.ProcessEnv = { ...process.env, TMPDIR: sandbox };
-      for (const k of Object.keys(env)) if (k.startsWith('VITEST')) delete env[k];
-      const r = spawnSync(
-        process.execPath,
-        [
-          resolve(repoRoot, 'node_modules/vitest/vitest.mjs'),
-          'run',
-          '--root',
-          repoRoot,
-          '--maxWorkers=1',
-          'vitest.config.test.ts',
-        ],
-        { env, encoding: 'utf8', timeout: 120_000, cwd: repoRoot },
-      );
-      expect(r.status, `${r.stdout}\n${r.stderr}`).toBe(0);
-      const left = readdirSync(sandbox).filter((n) => VITEST_TMPDIR_NAME.test(n));
-      expect(left, `${r.stdout}\n${r.stderr}`).toEqual([]);
-    }
+    const env: NodeJS.ProcessEnv = { ...process.env, TMPDIR: sandbox };
+    for (const k of Object.keys(env)) if (k.startsWith('VITEST')) delete env[k];
+    const r = spawnSync(
+      process.execPath,
+      [
+        resolve(repoRoot, 'node_modules/vitest/vitest.mjs'),
+        'run',
+        '--root',
+        repoRoot,
+        '--maxWorkers=1',
+        'vitest.config.test.ts',
+      ],
+      { env, encoding: 'utf8', timeout: 120_000, cwd: repoRoot },
+    );
+    expect(r.status, `${r.stdout}\n${r.stderr}`).toBe(0);
+    const left = readdirSync(sandbox).filter((n) => VITEST_TMPDIR_NAME.test(n));
+    expect(left, `${r.stdout}\n${r.stderr}`).toEqual([]);
   }, 150_000);
 });

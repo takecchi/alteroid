@@ -1,6 +1,6 @@
 import { lstatSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { basename, dirname, join, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 
 /**
  * vitest 5.0.2 が `os.tmpdir()` 直下に作って**消し忘れる**ディレクトリの後始末（#3039）。
@@ -96,13 +96,55 @@ export function isDirectChildOfTmpdirWithVitestName(p: unknown): p is string {
   );
 }
 
+export type RmFn = (path: string) => void;
+
+const realRm: RmFn = (p) => rmSync(p, { recursive: true, force: true });
+
+/**
+ * **消す直前の最後の線**（#3039）。次をすべて満たすときだけ `rm` を呼ぶ。満たさなければ
+ * 何も消さず stderr に 1 行出して false を返す。
+ * - 基点 `base`（既定 `os.tmpdir()`）が文字列で、空でなく、絶対パスで、`resolve` した結果が `/` でない
+ *   （`TMPDIR` が空・相対・`/` のとき `/` や上位へ広がらない）
+ * - `resolve(target)` が基点の**直下**（`dirname(target) === 基点`。基点そのもの・外・2 階層下は不可）
+ * - 名前が 21 文字規則に当たる
+ */
+export function safeRemoveVitestTmpDir(
+  target: unknown,
+  options: { base?: string; rm?: RmFn } = {},
+): boolean {
+  const base = options.base ?? tmpdir();
+  const rm = options.rm ?? realRm;
+  const refuse = (why: string): false => {
+    process.stderr.write(
+      `vitest.tmpdir-sweep: 消さなかった（${why}）: ${String(target)}（#3039）\n`,
+    );
+    return false;
+  };
+  if (typeof base !== 'string' || base === '' || !isAbsolute(base)) {
+    return refuse('基点が空・未設定・相対パス');
+  }
+  const resolvedBase = resolve(base);
+  if (resolvedBase === resolve('/')) return refuse('基点が /');
+  if (typeof target !== 'string' || target === '') return refuse('対象が文字列でない');
+  const resolvedTarget = resolve(target);
+  if (dirname(resolvedTarget) !== resolvedBase) return refuse('対象が基点の直下でない');
+  if (!VITEST_TMPDIR_NAME.test(basename(resolvedTarget)))
+    return refuse('名前が 21 文字規則に当たらない');
+  try {
+    rm(resolvedTarget);
+  } catch {
+    return false;
+  }
+  return true;
+}
+
 /**
  * 取り残しを消す。`own` は自分の `_tmpDir`（除く）。消したパスを返す。
  * 1 件の失敗（他人が同時に消した等）は握って次へ進む。
  */
 export function sweepStaleVitestTmpDirs(
   own: string | undefined,
-  options: { root?: string; fs?: SweepFs; nowMs?: number; maxAgeMs?: number } = {},
+  options: { root?: string; fs?: SweepFs; nowMs?: number; maxAgeMs?: number; rm?: RmFn } = {},
 ): string[] {
   const root = options.root ?? tmpdir();
   const fs = options.fs ?? realSweepFs;
@@ -119,8 +161,7 @@ export function sweepStaleVitestTmpDirs(
     if (own !== undefined && resolve(dir) === resolve(own)) continue;
     try {
       if (!isStaleVitestTmpDir(dir, fs, nowMs, options.maxAgeMs)) continue;
-      rmSync(dir, { recursive: true, force: true });
-      removed.push(dir);
+      if (safeRemoveVitestTmpDir(dir, { base: root, rm: options.rm })) removed.push(dir);
     } catch {
       // 判定中に消えた・権限が無い、など。広げて消さずに次へ。
     }
