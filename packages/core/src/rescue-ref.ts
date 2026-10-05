@@ -86,22 +86,52 @@ export function resolveRescueIntervalMs(env: NodeJS.ProcessEnv = process.env): n
 }
 
 /**
- * SIGKILL で残った一時 index（`<gitdir>/alteroid-rescue.index.*`）を消す。走っている別の回が
- * 使っているものを消さないよう、{@link STALE_INDEX_AGE_MS} より古いものだけ。
+ * いまこのプロセスで使っている一時 index（絶対パス）。**掃除は mtime で判定しない**——
+ * `cp -p` は mtime を元の index に揃えるので、実 index が長く書かれていなければ生きている
+ * 複製も「古い」。同じ cwd を複数のセッションが共有しうる（タイマーは全セッションを撃つ）ので、
+ * 別の回の掃除が複製を消すと、`GIT_INDEX_FILE=<消えたファイル> git add -u` は 0 終了のまま
+ * 空 tree を作り、前回の正しい退避 ref を空 commit で force 上書きしてしまう。
  */
-async function removeStaleIndexFiles(gitDir: string): Promise<void> {
+const liveIndexFiles = new Set<string>();
+
+function pidIsAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    // EPERM は「在るが権限が無い」＝生きている。
+    return (error as NodeJS.ErrnoException).code === 'EPERM';
+  }
+}
+
+/**
+ * SIGKILL で残った一時 index（`<gitdir>/alteroid-rescue.index.<pid>.<乱数>`）を消す。
+ * 消さないもの: このプロセスの生きている回（{@link liveIndexFiles}）と、pid が生きている
+ * 他プロセスのもの。pid の読めない旧形式の名前だけは {@link STALE_INDEX_AGE_MS} より古ければ消す。
+ */
+export async function removeStaleIndexFiles(gitDir: string): Promise<void> {
   try {
     for (const name of await readdir(gitDir)) {
-      if (!name.startsWith('alteroid-rescue.index.')) continue;
+      const match = /^alteroid-rescue\.index\.(?:(\d+)\.)?[0-9a-f]+$/.exec(name);
+      if (match === null) continue;
       const file = path.join(gitDir, name);
-      const info = await stat(file).catch(() => undefined);
-      if (info !== undefined && Date.now() - info.mtimeMs > STALE_INDEX_AGE_MS) {
-        await unlink(file).catch(() => undefined);
+      if (liveIndexFiles.has(file)) continue;
+      const pid = match[1] === undefined ? undefined : Number(match[1]);
+      if (pid !== undefined) {
+        if (pid !== process.pid && pidIsAlive(pid)) continue;
+      } else {
+        const info = await stat(file).catch(() => undefined);
+        if (info === undefined || Date.now() - info.mtimeMs <= STALE_INDEX_AGE_MS) continue;
       }
+      await unlink(file).catch(() => undefined);
     }
   } catch {
     // 掃除は best-effort。
   }
+}
+
+async function indexIsReadable(file: string): Promise<boolean> {
+  return (await stat(file).catch(() => undefined)) !== undefined;
 }
 
 /** 未追跡のパスを台帳へ載せる上限。溢れたら件数だけ（`omitted`）。 */
@@ -446,7 +476,11 @@ async function rescueOne(
     ok(branchResult) && branchResult.stdout.trim() !== '' ? branchResult.stdout.trim() : null;
 
   // 一時 index。実 index のコピーを土台にする（unborn・追跡済みの新規ファイルを落とさない）。
-  const indexFile = path.join(gitDir, `alteroid-rescue.index.${randomBytes(6).toString('hex')}`);
+  const indexFile = path.join(
+    gitDir,
+    `alteroid-rescue.index.${String(process.pid)}.${randomBytes(6).toString('hex')}`,
+  );
+  liveIndexFiles.add(indexFile);
   const indexEnv: Record<string, string | undefined> = {
     ...env,
     GIT_INDEX_FILE: indexFile,
@@ -466,6 +500,8 @@ async function rescueOne(
       ...base,
       command: 'cp',
     });
+    // `cp` が失敗して `read-tree HEAD` に倒れた回は、`git add` 済みで未コミットの新規ファイル
+    // （追跡済み）を取りこぼす（HEAD に無いため）。台帳には出さない既知の取りこぼし。
     const seeded = ok(copied);
     if (!seeded) {
       const read = await git(
@@ -483,7 +519,9 @@ async function rescueOne(
       ['diff-files', '--diff-filter=A', '--name-only', '-z'],
       idxCall,
     );
-    const itaNames = ok(itaResult) ? itaResult.stdout.split('\0').filter((n) => n !== '') : [];
+    // i-t-a を検出できなかったら、外さずに送る側へ倒れず送らない。
+    if (!ok(itaResult)) return emitIfChanged(finish({ branch, notPushed: failure() }));
+    const itaNames = itaResult.stdout.split('\0').filter((n) => n !== '');
     for (let i = 0; i < itaNames.length; i += 100) {
       const removed = await git(
         spawn,
@@ -492,8 +530,16 @@ async function rescueOne(
       );
       if (!ok(removed)) return emitIfChanged(finish({ branch, notPushed: failure() }));
     }
+    // 一時 index が消えていたら（別の回の掃除など）、`add -u` / `write-tree` は 0 終了のまま
+    // 空 tree を作る。読めないなら失敗（送らない）。
+    if (!(await indexIsReadable(indexFile))) {
+      return emitIfChanged(finish({ branch, notPushed: failure() }));
+    }
     const added = await git(spawn, ['add', '-u'], idxCall);
     if (!ok(added)) return emitIfChanged(finish({ branch, notPushed: failure() }));
+    if (!(await indexIsReadable(indexFile))) {
+      return emitIfChanged(finish({ branch, notPushed: failure() }));
+    }
     const written = await git(spawn, ['write-tree'], idxCall);
     const tree = written.stdout.trim();
     if (!ok(written) || tree === '') {
@@ -572,6 +618,11 @@ async function rescueOne(
       head === undefined
         ? EMPTY_TREE_SHA1
         : (await git(spawn, ['rev-parse', 'HEAD^{tree}'], base)).stdout.trim();
+    // 保険: 退避の tree が空で HEAD の tree が空でないなら、全部消えた（一時 index の欠落など）
+    // と見て送らない（前回の正しい退避 ref を空 commit で上書きしない）。
+    if (tree === EMPTY_TREE_SHA1 && headTree !== EMPTY_TREE_SHA1) {
+      return settle(failure(), false);
+    }
     if (tree === headTree && unpushedCount === 0) {
       return settle({ reason: 'nothing-tracked' }, true);
     }
@@ -660,6 +711,7 @@ async function rescueOne(
     entry.pushed = { ref, commit, at };
     return settle(undefined, true);
   } finally {
+    liveIndexFiles.delete(indexFile);
     await unlink(indexFile).catch(() => undefined);
     await unlink(`${indexFile}.lock`).catch(() => undefined);
   }

@@ -1,5 +1,5 @@
 import { execFileSync, spawn } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, unlinkSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -13,6 +13,7 @@ import {
   RESCUE_INTERVAL_MS_ENV_KEY,
   RESCUE_REF_PREFIX,
   RescueMemory,
+  removeStaleIndexFiles,
   rescueRefName,
   resolveRescueIntervalMs,
   runRescue,
@@ -323,6 +324,64 @@ describe('退避 ref（#1266）', () => {
     expect(commands).toContain('cp');
     expect(existsSync(stale)).toBe(false);
     expect(existsSync(young)).toBe(true);
+  });
+
+  it('N2: mtime が古い生きた複製を、別の回の掃除が消さない（空 tree で上書きしない）', async () => {
+    await writeFile(path.join(repo, 'a.txt'), 'changed\n');
+    // 実 index を古くする → `cp -p` で生きている複製の mtime も古くなる。
+    const old = new Date(Date.now() - 3 * 3600_000);
+    await utimes(path.join(repo, '.git', 'index'), old, old);
+    const gitDir = path.join(repo, '.git');
+    const [report] = await run({
+      spawn: (o) => {
+        // 複製ができた直後（別の回の掃除が来る）。
+        if (o.args[0] === 'diff-files') void removeStaleIndexFiles(gitDir);
+        return realSpawn(o);
+      },
+    });
+    expect(report?.pushed?.ref).toBeDefined();
+    expect(g(bare, 'show', `${report?.pushed?.ref as string}:a.txt`)).toBe('changed\n');
+  });
+
+  it('N2 保険: 一時 index が途中で消えたら送らない', async () => {
+    await writeFile(path.join(repo, 'a.txt'), 'changed\n');
+    const [report] = await run({
+      spawn: (o) => {
+        if (o.args[0] === 'add') unlinkSync(o.env.GIT_INDEX_FILE as string);
+        return realSpawn(o);
+      },
+    });
+    expect(report?.pushed).toBeUndefined();
+    expect(report?.notPushed?.reason).toBe('error');
+    expect(g(bare, 'for-each-ref', RESCUE_REF_PREFIX)).toBe('');
+  });
+
+  it('N2 保険: 退避の tree が空で HEAD の tree が空でなければ送らない', async () => {
+    await writeFile(path.join(repo, 'a.txt'), 'changed\n');
+    const [report] = await run({
+      spawn: (o) => {
+        if (o.args[0] === 'write-tree') unlinkSync(o.env.GIT_INDEX_FILE as string);
+        return realSpawn(o);
+      },
+    });
+    expect(report?.pushed).toBeUndefined();
+    expect(report?.notPushed?.reason).toBe('error');
+    expect(g(bare, 'for-each-ref', RESCUE_REF_PREFIX)).toBe('');
+  });
+
+  it('N1: i-t-a の検出に失敗したら、外さずに送る側へ倒れず、送らない', async () => {
+    await writeFile(path.join(repo, 'ita.txt'), 'intent to add body\n');
+    g(repo, 'add', '-N', 'ita.txt');
+    await writeFile(path.join(repo, 'a.txt'), 'changed\n');
+    const [report] = await run({
+      spawn: (o) =>
+        realSpawn(
+          o.args[0] === 'diff-files' ? { ...o, args: ['diff-files', '--bogus-option'] } : o,
+        ),
+    });
+    expect(report?.pushed).toBeUndefined();
+    expect(report?.notPushed?.reason).toBe('error');
+    expect(g(bare, 'for-each-ref', RESCUE_REF_PREFIX)).toBe('');
   });
 
   it('B3: 呼び出し元の期限切れで後続の git が失敗したら error ではなく timeout', async () => {

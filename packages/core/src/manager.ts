@@ -12771,9 +12771,20 @@ class Pool implements ManagerPool {
          * だけ。文字列そのものは持ってこない。runner が運ぶ時点で持っていない）。
          */
         const at = new Date(this.#now()).toISOString();
-        record.job.lastRescue = mergeRescue(record.job.lastRescue, event.worktrees, at);
+        const previousRescue = record.job.lastRescue;
+        record.job.lastRescue = mergeRescue(previousRescue, event.worktrees, at);
         for (const tree of event.worktrees) {
           if (tree.notPushed?.reason !== 'secret-like') continue;
+          // 運び直し（runner は変わらない結果も30分ごとに運ぶ）で同じ日誌を積まない。
+          const before = previousRescue?.worktrees.find(
+            (w) => w.relativePath === tree.relativePath,
+          )?.notPushed;
+          if (
+            before?.reason === 'secret-like' &&
+            JSON.stringify(before.files ?? []) === JSON.stringify(tree.notPushed.files ?? [])
+          ) {
+            continue;
+          }
           await this.#journal({
             type: 'decision',
             decision:

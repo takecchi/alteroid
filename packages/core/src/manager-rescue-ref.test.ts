@@ -228,6 +228,22 @@ describe('台帳の lastRescue（Issue #1266）', () => {
     await pool.stop();
   });
 
+  it('3b. 同じ理由・同じファイルの繰り返し（運び直し）では日誌を積まない', async () => {
+    const { pool, fake, stores } = await runningManualSetup('mgr-journal-dup');
+    const tree = {
+      relativePath: '.',
+      branch: 'main',
+      at: AT1,
+      notPushed: { reason: 'secret-like' as const, files: ['config/prod.env'] },
+    };
+    fake.rescueRef('mgr-journal-dup', [tree]);
+    fake.rescueRef('mgr-journal-dup', [{ ...tree, at: AT2 }]);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const entries = await stores.journal.list({ types: ['decision'] });
+    expect(entries.filter((e) => JSON.stringify(e).includes('鍵らしい文字列'))).toHaveLength(1);
+    await pool.stop();
+  });
+
   it('3. 鍵らしい文字列で止めた回は日誌へ残る（ファイル名だけ）', async () => {
     const { pool, fake, stores } = await runningManualSetup('mgr-journal');
     fake.rescueRef('mgr-journal', [
