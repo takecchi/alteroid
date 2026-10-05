@@ -455,18 +455,56 @@ describe('runner-swap の一言は job.workspace を読む（#485 の141行目�
     expect(cloneText).not.toContain('/data/work');
   });
 
-  it('cause === "daemon"（restore() だけで swap() しない経路）は locator に影響されない', async () => {
-    // **デーモンだけの再起動では作業ディレクトリは触られていない。** `restartNudge`
-    // の `cause === 'daemon'` 分岐は locator を受け取っても使わない——受け取った
-    // 引数を無視することそのものを固定する（無視し忘れて分岐してしまえば、
-    // ここが最初に赤くなる）。
-    const sharedJob = jobWith('mgr-daemon-shared', {
-      kind: 'shared-volume',
-      path: '/mnt/shared/proj',
-    });
-    const unrecordedJob = jobWith('mgr-daemon-unrecorded', undefined);
+  describe('デーモン起動時の引き取り（restore()）は、runner が持っているかで cause を分ける（#2748）', () => {
+    const observation: LastUnpushedWorkObservation = {
+      kind: 'observed',
+      at: '2026-09-24T05:00:00.000Z',
+      cwd: '/work/project',
+      worktrees: [
+        {
+          relativePath: 'repo',
+          branch: 'feature/x',
+          remoteOrigin: { host: 'github.com', path: 'acme/widgets.git' },
+        },
+      ],
+    };
+    const unknownWorkspace: WorkspaceLocator = {
+      kind: 'unknown',
+      runnerId: 'runner-primary',
+      path: '/data/work',
+      reason: '未確認',
+    };
 
-    for (const job of [sharedJob, unrecordedJob]) {
+    it('attach 分岐（runner がセッションを持っている）は cause === "daemon" のまま。作業ツリーは触られていないので clone の案内を出さない', async () => {
+      // **この前提が成り立つのは attach 分岐だけである。** runner が持っていれば
+      // 器は入れ替わっておらず、resume は呼ばれない。
+      const job = jobWith('mgr-daemon-attach', unknownWorkspace, observation);
+      const stores = createMemoryStores();
+      await stores.jobs.putJob(job);
+      const fake = swappableRunner();
+      fake.state.alive.push({
+        managerId: job.id,
+        status: 'running',
+        cwd: '/work/project',
+        request: 'DB の移行をやって',
+        waiting: [],
+        sessionId: 'sess-before-swap',
+      });
+      const s = setup(stores, fake.runner);
+
+      await s.pool.restore();
+      expect(fake.state.resumes).toHaveLength(0);
+      const notice = s.inbox.find((event) => event.type === 'manager_message') as
+        { text: string } | undefined;
+      expect(notice?.text).toContain('デーモンが再起動した');
+      expect(notice?.text).not.toContain('コミット前の変更は失われている');
+      expect(notice?.text).not.toContain('clone し直せ');
+
+      await s.pool.stop();
+    });
+
+    it('resume 分岐（runner の一覧に居なかった）は器の入れ替えとして、マネージャー向けにもクローン向けにも作業ツリーの案内を出す', async () => {
+      const job = jobWith('mgr-daemon-resume', unknownWorkspace, observation);
       const stores = createMemoryStores();
       await stores.jobs.putJob(job);
       const fake = swappableRunner();
@@ -474,11 +512,35 @@ describe('runner-swap の一言は job.workspace を読む（#485 の141行目�
 
       await s.pool.restore();
       expect(fake.state.resumes).toHaveLength(1);
-      expect(fake.state.resumes[0]?.message).toBe(
-        '[system] デーモンが再起動した。中断していた作業の続きを進めよ。',
-      );
+      const message = fake.state.resumes[0]?.message ?? '';
+      expect(message).toContain('runner の器が作り直された');
+      expect(message).not.toContain('デーモンが再起動した');
+      expect(message).toContain('github.com/acme/widgets.git の feature/x を clone し直せ');
+
+      const notice = s.inbox.find((event) => event.type === 'manager_message') as
+        { text: string } | undefined;
+      expect(notice?.text).toContain('runner の器が作り直された');
+      expect(notice?.text).toContain('コミット前の変更は失われている');
+      expect(notice?.text).toContain('github.com/acme/widgets.git の feature/x を clone し直せ');
 
       await s.pool.stop();
-    }
+    });
+
+    it('resume 分岐でも locator が shared-volume なら、中身は残っているとマネージャーへ伝える（workspaceAfterSwap の判定に従う）', async () => {
+      const job = jobWith('mgr-daemon-resume-shared', {
+        kind: 'shared-volume',
+        path: '/mnt/shared/proj',
+      });
+      const stores = createMemoryStores();
+      await stores.jobs.putJob(job);
+      const fake = swappableRunner();
+      const s = setup(stores, fake.runner);
+
+      await s.pool.restore();
+      expect(fake.state.resumes).toHaveLength(1);
+      expect(fake.state.resumes[0]?.message).toContain('中身は残っている');
+
+      await s.pool.stop();
+    });
   });
 });

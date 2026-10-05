@@ -1641,7 +1641,12 @@ describe('デーモン再起動後（M4）', () => {
     expect((s.sessions[0] as FakeSession).options.resume).toBe('sess-before-restart');
     await expect
       .poll(() => (s.sessions[0] as FakeSession).inputs, { timeout: 2000 })
-      .toEqual(['[system] デーモンが再起動した。中断していた作業の続きを進めよ。']);
+      .toEqual([
+        // **runner に居なかったので resume した分岐は器の入れ替えとして扱う（#2748）。**
+        // 「デーモンが再起動した」だけでは、作業ディレクトリが消えたことを告げない。
+        // attach 分岐が 'daemon' のまま変わらないことは manager-workspace-nudge.test.ts が持つ。
+        '[system] runner の器が作り直された。作業ディレクトリが残っているとは限らないので、続きに入る前に手元の状態を確かめよ。中断していた作業の続きを進めよ。',
+      ]);
 
     // クローンが「続きがある」ことを知る経路は受信箱ただ1つ
     const notice = s.inbox.find((event) => event.type === 'manager_message');

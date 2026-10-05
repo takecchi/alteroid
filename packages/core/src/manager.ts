@@ -8448,9 +8448,14 @@ class Pool implements ManagerPool {
       const runner = await this.#runnerOf(record);
       if (!runner) continue;
 
+      // **ここへ来る条件そのものが「runner がこのセッションを知らない」である**
+      // （知っていれば上の `living` の分岐で attach して終わる）。それは器が入れ
+      // 替わった（作業ツリーが消えている）ことと区別できないので、cause は
+      // `'runner'` にする。`'daemon'` のままだと、枝名の clone 案内と「コミット
+      // 前の変更は失われている」が出ない（Issue #2748）。
       const nudge = restartNudge(
         job.status,
-        'daemon',
+        'runner',
         job.workspace,
         job.lastUnpushedWorkObservation,
       );
@@ -8530,7 +8535,7 @@ class Pool implements ManagerPool {
             `${EXCHANGE_KIND_RECOVERY_PREFIX}[${job.id}] （再起動後の再開）${nudge}` +
             (swapNotice === undefined ? '' : ` ${swapNotice}`),
         });
-        this.#notifyRestored(record, 'resumed');
+        this.#notifyRestored(record, 'resumed', 'runner');
         resumed.push(
           summaryOf(
             record,
@@ -9635,8 +9640,11 @@ class Pool implements ManagerPool {
             /*
              * **待っていることを日誌に残す（この経路が本番である）。**
              *
-             * 器の入れ替えで走るのはここであって `#restoreJobs` ではない
-             * （あちらは像に載っている委譲を先頭で見送る）。ここに何も書かないと、
+             * 器の入れ替えだけ（デーモンは生き残った）で走るのはここであって
+             * `#restoreJobs` ではない（あちらは像に載っている委譲を先頭で見送る）。
+             * デーモンと runner が同時に入れ替わった反映では `#restoreJobs` が先に
+             * 走りうるが、あちらも runner に居ないので resume する分岐は cause を
+             * `'runner'` にしてあり、同じ案内が出る（Issue #2748）。ここに何も書かないと、
              * 「待っている」と「忘れている」が記録から区別できなくなる。
              *
              * **遷移のときだけ書く**（`onLost` が1回だけ知らせるのと同じ形）。
