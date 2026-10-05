@@ -21,9 +21,11 @@ import {
   Badge,
   Drawer,
   ErrorNote,
+  MAIN_CONTENT_ID,
   MobileTopBar,
   ScreenLoading,
   ScreenState,
+  SkipLink,
   useIsMobile,
   cn,
   type AppSidebarItem,
@@ -241,6 +243,7 @@ function AuthedShell() {
         body がスクロールしない形を枠そのものに持たせる。
       */}
       <div className={cn('flex h-dvh overflow-hidden', isMobile ? 'flex-col' : 'flex-row')}>
+        <SkipLink />
         {isMobile ? (
           <>
             <MobileTopBar
@@ -277,7 +280,11 @@ function AuthedShell() {
           sidebar(false)
         )}
 
-        <main className="flex min-h-0 min-w-0 flex-1 flex-col">
+        <main
+          id={MAIN_CONTENT_ID}
+          tabIndex={-1}
+          className="flex min-h-0 min-w-0 flex-1 flex-col outline-none"
+        >
           <Outlet />
         </main>
       </div>
