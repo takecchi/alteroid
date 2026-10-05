@@ -1,3 +1,4 @@
+import { readConversationWindow } from './conversation.js';
 import { compareIsoInstant } from './iso-instant.js';
 import type { ConversationReadStore, JournalStore } from './store.js';
 
@@ -339,10 +340,8 @@ export async function countUnreadConversations(
   let until: string | undefined;
   let complete = false;
   for (let i = 0; i < maxChunks; i += 1) {
-    const rows = await journal.list({
-      limit: chunk,
-      types: ['exchange'],
-      with: ['human'],
+    const rows = await readConversationWindow(journal, {
+      scan: chunk,
       since: from,
       ...(until === undefined ? {} : { until }),
     });
