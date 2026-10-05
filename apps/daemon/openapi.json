@@ -18090,7 +18090,7 @@
             }
           },
           "500": {
-            "description": "保存に失敗した。**理由の本文は返さない**（ドライバの例外は失敗したクエリの束縛パラメータを添えてくることがあるため）。跡は stderr に残る。",
+            "description": "保存に失敗した、または**広げる側の変更（追加・有効化・値の差し替え・試す順の入れ替え）で日誌が書けなかった（保存していない）**。狭める側（削除・無効化・改名）だけの変更は、日誌が書けなくても保存して 200 を返す（issue #2742）。**理由の本文は返さない**（ドライバの例外は失敗したクエリの束縛パラメータを添えてくることがあるため）。跡は stderr に残る。",
             "content": {
               "application/json": {
                 "schema": {
@@ -18397,7 +18397,7 @@
         "operationId": "putTokensPolicy",
         "tags": ["tokens"],
         "summary": "回す契機・冷却の既定を変える",
-        "description": "省略した項目は現状のまま変えない。",
+        "description": "省略した項目は現状のまま変えない。変更は日誌に残る（issue #2742）。回す契機を有効にする・変える・冷却を変える変更は**日誌を先に書き、書けなければ保存せず 500**。`rotateOn: off` へ狭める変更は保存が先で、日誌が書けなくても保存する。",
         "responses": {
           "200": {
             "description": "更新後の設定。",
@@ -18442,6 +18442,22 @@
           },
           "403": {
             "description": "alteroid を使う許可が無い（ログインしているが `access grant` されていない）。資格そのものが無い場合は 401。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "日誌が書けなかった（**保存していない**。広げる側の変更のとき）。",
             "content": {
               "application/json": {
                 "schema": {

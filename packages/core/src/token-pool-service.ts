@@ -94,6 +94,32 @@ export interface TokenRowsUnreadable {
   carriedOver?: true;
 }
 
+/** {@link TokenPoolService.replace} の追加の引数（issue #2742）。 */
+export interface ReplaceOptions {
+  /**
+   * 保存と決まった全文（`after`）と保存前（`before`）を、**保存する前に**渡して呼ぶ。
+   * 書き込みの鍵の中で呼ぶ。**投げたら何も保存せずに投げ直す**（広げる側の変更で日誌を先に
+   * 書き、書けなければ状態を変えない作法のための口）。狭める側では、呼び出し側が投げない
+   * ようにして、保存の後に日誌を書く。**渡す行は値を持つ（正本）。日誌へ値を書かないこと。**
+   */
+  beforeSave?: (change: {
+    before: readonly AgentToken[];
+    after: readonly AgentToken[];
+  }) => Promise<void>;
+}
+
+/** {@link TokenPoolService.setSettings} の追加の引数（issue #2742）。 */
+export interface SetSettingsOptions {
+  /**
+   * 書くと決まった設定（`after`）と現在値（`before`。読めなければ `undefined`）を、
+   * **書く前に**渡して呼ぶ。**投げたら何も書かずに投げ直す。**
+   */
+  beforeWrite?: (change: {
+    before: TokenRotationSettings | undefined;
+    after: Pick<TokenRotationSettings, 'rotateOn' | 'cooldownMs'>;
+  }) => Promise<void>;
+}
+
 /** {@link TokenPoolService.removeUnreadable} の追加の引数。 */
 export interface RemoveUnreadableOptions {
   /**
@@ -144,7 +170,7 @@ export interface TokenPoolService {
    * ——置換そのものは `settings` に触れないので、設定が壊れていることを
    * 理由にプールの置換まで止めない。
    */
-  replace(inputs: readonly AgentTokenInput[]): Promise<ReplaceResult>;
+  replace(inputs: readonly AgentTokenInput[], options?: ReplaceOptions): Promise<ReplaceResult>;
   /**
    * **読めない行を、id で指して消す**（issue #2354）。全文置換（{@link replace}）は
    * 読めない行を持ち越すので、読めない行を消す口はこれだけである。
@@ -170,10 +196,13 @@ export interface TokenPoolService {
    * **片方しか無ければ埋める元が無いので、そのまま投げる**（呼び出し側
    * ——`PUT /tokens/policy`——へエラーが届く）。
    */
-  setSettings(patch: {
-    rotateOn?: TokenRotationPolicy;
-    cooldownMs?: number;
-  }): Promise<TokenRotationSettings>;
+  setSettings(
+    patch: {
+      rotateOn?: TokenRotationPolicy;
+      cooldownMs?: number;
+    },
+    options?: SetSettingsOptions,
+  ): Promise<TokenRotationSettings>;
   /**
    * 「このトークンで止まった」を1行へ記録する（Issue #393）。
    *
@@ -407,7 +436,7 @@ export function createTokenPoolService(options: TokenPoolServiceOptions): TokenP
     // と同じ判断）。
     list: () => currentView(),
 
-    replace: (inputs: readonly AgentTokenInput[]) =>
+    replace: (inputs: readonly AgentTokenInput[], replaceOptions: ReplaceOptions = {}) =>
       serial(async () => {
         // **読み直し（`value` を省略した行の既存値を埋める元）から書き戻し
         // までを {@link writeLock} の中に収める**（Issue #2200）。ここは
@@ -419,6 +448,8 @@ export function createTokenPoolService(options: TokenPoolServiceOptions): TokenP
           // **検証に落ちたら保存しない。** `normalizeTokenPool` が投げた例外は
           // そのまま呼び出し側（HTTP 層）へ伝わり、そこで 400 として理由を返す。
           const normalized = normalizeTokenPool(inputs, existing, { now, newId });
+          // **日誌などを先に。投げたら、ここで止まり、何も保存しない**（issue #2742）。
+          await replaceOptions.beforeSave?.({ before: existing, after: normalized });
           return stores.tokens.replace(normalized);
         });
         // **ここから先は、保存した後である**（issue #2396）。読み直しの失敗を投げると、
@@ -498,12 +529,17 @@ export function createTokenPoolService(options: TokenPoolServiceOptions): TokenP
     noteUsable: (id: string) =>
       serial(async () => writeOne(id, (token) => markTokenUsable(token, now().toISOString()))),
 
-    setSettings: (patch: { rotateOn?: TokenRotationPolicy; cooldownMs?: number }) =>
+    setSettings: (
+      patch: { rotateOn?: TokenRotationPolicy; cooldownMs?: number },
+      setOptions: SetSettingsOptions = {},
+    ) =>
       serial(async () => {
         const updatedAt = now().toISOString();
         let next: TokenRotationSettings;
+        let before: TokenRotationSettings | undefined;
         try {
           const current = await stores.tokens.readSettings();
+          before = current;
           next = {
             rotateOn: patch.rotateOn ?? current.rotateOn,
             cooldownMs: patch.cooldownMs ?? current.cooldownMs,
@@ -523,6 +559,8 @@ export function createTokenPoolService(options: TokenPoolServiceOptions): TokenP
           }
           next = { rotateOn: patch.rotateOn, cooldownMs: patch.cooldownMs, updatedAt };
         }
+        // **日誌などを先に。投げたら、ここで止まり、何も書かない**（issue #2742）。
+        await setOptions.beforeWrite?.({ before, after: next });
         const written = await stores.tokens.writeSettings(next);
         // **設定も契機である。** `off` → `free_exhausted` へ戻した瞬間に、
         // 止まったまま溜まっていた状態を見直せなければ、人間は**設定を戻した後
