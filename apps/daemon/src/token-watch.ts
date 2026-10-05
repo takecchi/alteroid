@@ -174,10 +174,18 @@ export interface TokenRotationWatch {
    * 揃える唯一の方法である（別に書くと、片方だけが `undecidable` を `unusable`
    * へ丸める形が作れる）。
    *
+   * **`measuredBy`（#2738）は probe を始めた瞬間の現役の身元**（`usage-poller.ts`
+   * が控える）。あれば `origin.observedBy` として回し手へ渡り、`turn_success` と
+   * 同じ世代の門を通る（測っている間に回った後の、降りた鍵の判定を現役へ当てない）。
+   * 省略なら従来どおり身元を持たない観測として渡る。
+   *
    * **`undecidable` でも呼ぶ。** 呼ばないと、記録だけで判定する道
    * （冷却が明けたかどうか）がその回だけ走らなくなる。
    */
-  observeAccount(state: AccountUsageState): void;
+  observeAccount(
+    state: AccountUsageState,
+    measuredBy?: { tokenId: string; generation: number },
+  ): void;
   /**
    * **ターンが実際に成功したという観測**を渡す（#681 (1)。`usable` の2本目の
    * 生産者。`manager.ts` の `case 'usage':` / `clone.ts` の `case 'turn_ended':`
@@ -337,7 +345,7 @@ export function startTokenRotationWatch(options: TokenRotationWatchOptions): Tok
 
   return {
     poke,
-    observeAccount: (state: AccountUsageState) => {
+    observeAccount: (state: AccountUsageState, measuredBy) => {
       if (stopped) return;
       /**
        * **候補を測るのと同じ関数を通す**（この口の doc）。
@@ -353,9 +361,18 @@ export function startTokenRotationWatch(options: TokenRotationWatchOptions): Tok
         pending ??= 'account_probe';
         return;
       }
-      // **身元を持たない観測**（{@link TokenVerdictOrigin} の doc）。世代の門は
-      // 掛からない——照合する相手がそもそも無い。
-      void run('account_probe', { verdict, origin: { source: 'account_probe' } });
+      // **測った鍵の身元が控えられていれば運ぶ**（#2738）。無ければ身元を持たない
+      // 観測（{@link TokenVerdictOrigin} の doc）で、世代の門は掛からない。
+      void run('account_probe', {
+        verdict,
+        origin:
+          measuredBy === undefined
+            ? { source: 'account_probe' }
+            : {
+                source: 'account_probe',
+                observedBy: { tokenId: measuredBy.tokenId, generation: measuredBy.generation },
+              },
+      });
     },
     observeTurnSuccess: (observedBy) => {
       if (stopped) return;

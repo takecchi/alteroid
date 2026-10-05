@@ -260,8 +260,27 @@ describe('見張り: 枠の観測を judgeTokenCandidate へ通す', () => {
     expect(f.calls).toHaveLength(1);
     expect(f.calls[0]?.reason).toBe('account_probe');
     expect(f.calls[0]?.current?.verdict.verdict).toBe('unusable');
-    // **身元を運ばない観測**（`account_probe` は世代を照合しない）。
+    // **身元を運ばない観測**（測った鍵の身元が無ければ世代を照合しない）。
     expect(f.calls[0]?.current?.origin).toEqual({ source: 'account_probe' });
+  });
+
+  it('#2738: 測った鍵の身元（measuredBy）は origin.observedBy として回し手へ渡る', async () => {
+    const f = fake();
+    const watch = startTokenRotationWatch({
+      rotator: f.rotator,
+      onOutcome: () => Promise.resolve(),
+      tickMs: 1_000_000,
+      minGapMs: 0,
+    });
+
+    watch.observeAccount(EXHAUSTED, { tokenId: 'tok-a', generation: 3 });
+    await settle();
+    watch.stop();
+
+    expect(f.calls[0]?.current?.origin).toEqual({
+      source: 'account_probe',
+      observedBy: { tokenId: 'tok-a', generation: 3 },
+    });
   });
 
   it('通る観測は usable として渡る（止まった記録を消す材料になる）', async () => {

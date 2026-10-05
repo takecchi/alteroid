@@ -80,7 +80,7 @@ export default function Permissions() {
     <Page
       tabs={<SettingsTabs />}
       title="許可（Bash）"
-      description="人間が「許可します」と答えた Bash 許可の一覧。alteroid permission list / GET /permission-grants と同じもの。取り消しもここから行える（alteroid permission revoke と同じ）"
+      description="人間が「許可します」と答えた、コマンド実行（Bash）の許可の一覧。取り消しもここでできる"
       action={
         <Button size="sm" onClick={() => setShowAll((v) => !v)}>
           {showAll ? '有効なものだけ' : '取り消し済みも見る'}
@@ -90,7 +90,7 @@ export default function Permissions() {
       <Card>
         <CardHeader
           title="許可"
-          subtitle="alteroid permission list / GET /permission-grants と同じもの"
+          subtitle="いま効いている許可と、取り消し済みの許可"
           action={data === undefined ? undefined : <Badge>{shown.length}</Badge>}
         />
         <ErrorNote error={error} className="m-4" />
