@@ -282,7 +282,7 @@ function tokenAvailabilityAt(
  * `packages/core/src/schema.ts` の `z.enum` である）。
  */
 function describeUnknown(value: never, label: string): string {
-  return `未知の${label}（${String(value)}）。この画面より新しいデーモンが送った値である`;
+  return `未知の${label}（${String(value)}）。この画面より新しいサーバが送った値である`;
 }
 
 /**
