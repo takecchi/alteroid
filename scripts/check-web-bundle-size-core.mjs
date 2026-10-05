@@ -22,12 +22,12 @@
 export const SINGLE_CHUNK_MAX_BYTES = 262_144;
 
 /**
- * `apps/web/build/client/assets/*.js` の合計の上限（バイト）。1 MiB。
+ * `apps/web/build/client/assets/*.js` の合計の上限（バイト）。1.125 MiB（2026-10-06 に 1 MiB から上げた）。
  *
  * **この値を変えるには、ここと `check-web-bundle-size.test.ts` の固定テストの
  * 両方を直す必要がある。** 根拠は `check-web-bundle-size.mjs`。
  */
-export const TOTAL_MAX_BYTES = 1_048_576;
+export const TOTAL_MAX_BYTES = 1_179_648;
 
 /**
  * `files`（`{ path, bytes }` の配列）を閾値と突き合わせて判定する。

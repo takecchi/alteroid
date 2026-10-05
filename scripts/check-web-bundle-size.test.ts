@@ -63,11 +63,16 @@ describe('check-web-bundle-size: judgeBundleSize', () => {
   });
 
   it('総量が予算を超えると totalOver が true になり、個々のチャンクは oversized に載らないことがある', () => {
-    // 1つ1つは単一チャンクの予算未満だが、数を集めると総量の予算を超える形。
-    const files = Array.from({ length: 5 }, (_, i) => ({
-      path: `chunk-${i}.js`,
-      bytes: Math.floor(TOTAL_MAX_BYTES / 4),
-    }));
+    // 1つ1つは単一チャンクの予算ちょうど（超過ではない）だが、数を集めると総量の予算を超える形。
+    //
+    // 以前は `TOTAL_MAX_BYTES / 4` を5本並べていたが、それは「総量の 1/4 が単一チャンクの
+    // 予算未満」に暗黙に依存していた。総量の予算を 1.125 MiB へ上げた（2026-10-06）とき
+    // 1/4（294,912 B）が単一チャンクの予算（262,144 B）を超え、前提が崩れた。本数を2つの
+    // 予算から導く形にして、どちらの予算が動いても同じことを測るようにした。
+    const files = Array.from(
+      { length: Math.floor(TOTAL_MAX_BYTES / SINGLE_CHUNK_MAX_BYTES) + 1 },
+      (_, i) => ({ path: `chunk-${i}.js`, bytes: SINGLE_CHUNK_MAX_BYTES }),
+    );
     const result = judgeBundleSize(files);
     expect(result.ok).toBe(false);
     expect(result.totalOver).toBe(true);
@@ -116,6 +121,6 @@ describe('check-web-bundle-size: judgeBundleSize', () => {
    */
   it('⚠️ 閾値は固定してある（上げるにはここと -core.mjs の両方を直すこと）', () => {
     expect(SINGLE_CHUNK_MAX_BYTES).toBe(262_144);
-    expect(TOTAL_MAX_BYTES).toBe(1_048_576);
+    expect(TOTAL_MAX_BYTES).toBe(1_179_648);
   });
 });
