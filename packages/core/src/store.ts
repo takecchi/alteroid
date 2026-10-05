@@ -820,7 +820,14 @@ export interface ConversationReadStore {
   clearOutboundIndex(): Promise<void>;
 }
 
-/** ジョブと承認待ちキュー。M1 では承認待ちだけを使う。 */
+/**
+ * ジョブと承認待ちキュー。M1 では承認待ちだけを使う。
+ *
+ * **NUL（issue #3011。teto の判断、2026-10-06）。** `putJob`・`putApproval` の `id`（鍵）の NUL は `NulNotAllowedError` で断り、
+ * 本文（`summary`・`request`・`lastReport`・`question`・`context`・`answer`）の NUL は落として残す（3実装とも。`job-input.ts`）。
+ * 読むだけの口（`getApproval`・`updateJob`・`updateApproval`）は、NUL を含む `id` でも断らず `null` を返す（`mutate` は呼ばない）。
+ * 参照キー（`conversationId`・`managerId`・`jobId` など）の NUL の扱いは未決。
+ */
 export interface JobStore {
   listJobs(): Promise<Job[]>;
   /**
@@ -3156,6 +3163,10 @@ export interface PracticeStore {
    * 無ければ `null`（「読めない」は throw。`CommitmentStore.get` と同じ線）。
    * 投げるのは `UnreadablePracticeError`（本ファイル、issue #2011）——
    * `instanceof` で見分けられる。
+   *
+   * **NUL（issue #3011）。** 書く口は、slug の NUL を入口のスキーマ（`practiceSlugSchema`）が弾く（3実装とも投げる）。
+   * 本文（`kind`・`title`・`content`）の NUL は落として残す。読むだけの口（`read`・`readVersion`・`listVersions`・`remove`）は、
+   * NUL を含む slug でも断らず「無い」と同じ結果（`null`・`null`・空・何もしない）を返す。
    */
   read(slug: string): Promise<Practice | null>;
   /**

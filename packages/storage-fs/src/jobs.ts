@@ -3,6 +3,8 @@ import { join } from 'node:path';
 
 import {
   jobSchema,
+  prepareApprovalForWrite,
+  prepareJobForWrite,
   pendingApprovalSchema,
   UnreadableApprovalError,
   UnreadableJobError,
@@ -177,7 +179,9 @@ export class FsJobStore implements JobStore {
     });
   }
 
-  async putJob(job: Job): Promise<void> {
+  async putJob(rawJob: Job): Promise<void> {
+    // id（鍵）の NUL は断り、本文は落として残す（issue #3011）。
+    const job = prepareJobForWrite(rawJob);
     await this.#update((file) => {
       const jobs = file.jobs.filter((existing) => existing.id !== job.id);
       jobs.push(jobSchema.parse(job));
@@ -219,7 +223,7 @@ export class FsJobStore implements JobStore {
       }
       // 同期のまま最後まで書き換える（`mutate` に await を挟ませない——区間の
       // 外へ出ると排他の意味が崩れる。`CommitmentStore.open` の同じ注意）。
-      const next = jobSchema.parse(mutate(found));
+      const next = prepareJobForWrite(jobSchema.parse(mutate(found)));
       const jobs = file.jobs.map((entry) => (entry.id === id ? next : entry));
       await mkdir(this.#dir, { recursive: true });
       await writeFileAtomic(
@@ -263,7 +267,9 @@ export class FsJobStore implements JobStore {
     return null;
   }
 
-  async putApproval(approval: PendingApproval): Promise<void> {
+  async putApproval(rawApproval: PendingApproval): Promise<void> {
+    // id（鍵）の NUL は断り、本文は落として残す（issue #3011）。
+    const approval = prepareApprovalForWrite(rawApproval);
     await this.#update((file) => {
       const approvals = file.approvals.filter((existing) => existing.id !== approval.id);
       approvals.push(pendingApprovalSchema.parse(approval));
@@ -314,7 +320,7 @@ export class FsJobStore implements JobStore {
       // await を挟ませない）。
       const result = mutate(found);
       if (result === null) return null;
-      const next = pendingApprovalSchema.parse(result);
+      const next = prepareApprovalForWrite(pendingApprovalSchema.parse(result));
       const approvals = file.approvals.map((entry) => (entry.id === id ? next : entry));
       // 書き込む id と一致する壊れた行は置き換える（`putApproval` と同じ
       // フォローアップ。issue #1740 / #1868 / #1928）。

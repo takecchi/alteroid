@@ -1,5 +1,8 @@
 import {
+  hasNul,
   jobSchema,
+  prepareApprovalForWrite,
+  prepareJobForWrite,
   journalRowType,
   noteDroppedJournalRow,
   noteDroppedJournalRowsSummary,
@@ -347,7 +350,7 @@ export class PgJobStore implements JobStore {
 
   async putJob(job: Job): Promise<void> {
     // 依頼文や報告に NUL が混ざりうる（マネージャーの出力をそのまま持つため）
-    const value = stripNulls(jobSchema.parse(job));
+    const value = stripNulls(prepareJobForWrite(jobSchema.parse(job)));
     await this.#db
       .insert(jobs)
       .values({
@@ -389,6 +392,8 @@ export class PgJobStore implements JobStore {
    * stderr へ1行だけ残す（id とどの欄が不正かのみ。本文は出さない）。
    */
   async updateJob(id: string, mutate: (current: Job) => Job): Promise<Job | null> {
+    // 読むだけの口の NUL（issue #3011）。NUL を含む id の行は存在しえない（書き込みが断る）ので「無い」。DB に投げるとエラーになる。
+    if (hasNul(id)) return null;
     return this.#db.transaction(async (tx) => {
       const rows = await tx
         .select({ job: jobs.job })
@@ -409,7 +414,7 @@ export class PgJobStore implements JobStore {
       }
       const current = parsed.data;
       // 依頼文や報告に NUL が混ざりうる（`putJob` と同じ理由）。
-      const next = stripNulls(jobSchema.parse(mutate(current)));
+      const next = stripNulls(prepareJobForWrite(jobSchema.parse(mutate(current))));
 
       await tx
         .update(jobs)
@@ -453,6 +458,8 @@ export class PgJobStore implements JobStore {
   }
 
   async getApproval(id: string): Promise<PendingApproval | null> {
+    // 読むだけの口の NUL（issue #3011）。NUL を含む id の行は存在しえない（書き込みが断る）ので「無い」。DB に投げるとエラーになる。
+    if (hasNul(id)) return null;
     const rows = await this.#db
       .select({ approval: approvals.approval })
       .from(approvals)
@@ -470,7 +477,9 @@ export class PgJobStore implements JobStore {
     return parsed.data;
   }
 
-  async putApproval(approval: PendingApproval): Promise<void> {
+  async putApproval(rawApproval: PendingApproval): Promise<void> {
+    // id（鍵）の NUL は断り、本文は落として残す（issue #3011）。
+    const approval = prepareApprovalForWrite(rawApproval);
     const value = stripNulls(pendingApprovalSchema.parse(approval));
     const answeredAt = value.answeredAt === undefined ? null : new Date(value.answeredAt);
     const withdrawnAt = value.withdrawnAt === undefined ? null : new Date(value.withdrawnAt);
@@ -504,6 +513,8 @@ export class PgJobStore implements JobStore {
     id: string,
     mutate: (current: PendingApproval) => PendingApproval | null,
   ): Promise<PendingApproval | null> {
+    // 読むだけの口の NUL（issue #3011）。NUL を含む id の行は存在しえない（書き込みが断る）ので「無い」。DB に投げるとエラーになる。
+    if (hasNul(id)) return null;
     return this.#db.transaction(async (tx) => {
       const rows = await tx
         .select({ approval: approvals.approval })
@@ -524,7 +535,7 @@ export class PgJobStore implements JobStore {
 
       const result = mutate(parsed.data);
       if (result === null) return null;
-      const next = stripNulls(pendingApprovalSchema.parse(result));
+      const next = stripNulls(prepareApprovalForWrite(pendingApprovalSchema.parse(result)));
       const answeredAt = next.answeredAt === undefined ? null : new Date(next.answeredAt);
       const withdrawnAt = next.withdrawnAt === undefined ? null : new Date(next.withdrawnAt);
 
