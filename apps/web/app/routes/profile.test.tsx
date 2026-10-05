@@ -12,8 +12,8 @@
  * 3. **400 のときは `detail` まで見せる。** 直すのに要るのは行番号込みの `detail` で、
  *    共有の `unwrap` が拾う `error` だけでは直せない
  * 4. **外すのは行ごとの `DELETE /profile/:name`**（確認を挟む）
- * 5. **403 は本文で出し分ける。** `requireOwner` の本文のときだけ持ち主の宣言を
- *    案内し、それ以外の 403 には案内を出さない
+ * 5. **403 に宣言の案内を出さない。** 本文が何であれ（かつての `requireOwner` の本文でも）、
+ *    持ち主として宣言する手は案内しない（#2862: ログインできる許可済みの人は全員持ち主）
  * 6. **渡す先は環境変数の画面と同じ3値・同じ言い方。** 既定は共通（all）
  */
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
@@ -193,7 +193,7 @@ describe('/profile 画面 — 読む', () => {
     expect(await screen.findByText('未知の渡す先（future-scope）')).toBeTruthy();
   });
 
-  it('requireOwner の 403 なら、持ち主として宣言する手を案内する', async () => {
+  it('かつての requireOwner の本文の 403 でも、持ち主の宣言は案内しない（#2862）', async () => {
     stubProfile({
       get: {
         status: 403,
@@ -205,12 +205,13 @@ describe('/profile 画面 — 読む', () => {
     expect(
       await screen.findByText('実行環境の持ち主として宣言されたアカウントだけが操作できる'),
     ).toBeTruthy();
-    expect(screen.getByText('alteroid access owner <アカウント id>')).toBeTruthy();
+    expect(screen.queryByText('alteroid access owner <アカウント id>')).toBeNull();
+    expect(screen.queryByText(/持ち主として宣言してください/)).toBeNull();
     // 読めていないので、編集の欄も出さない。
     expect(screen.queryByRole('button', { name: '行を追加する' })).toBeNull();
   });
 
-  it('本文から理由が判別できない 403 には案内を出さない', async () => {
+  it('許可の無い 403 にも、持ち主の宣言は案内しない', async () => {
     stubProfile({
       get: { status: 403, body: { error: 'このアカウントには alteroid を使う許可が無い' } },
     });
@@ -350,7 +351,7 @@ describe('/profile 画面 — 行を置く', () => {
     expect(screen.queryByRole('button', { name: '本当に保存する' })).toBeNull();
   });
 
-  it('PUT が requireOwner の 403 なら、持ち主として宣言する手を案内する', async () => {
+  it('PUT がかつての requireOwner の本文の 403 でも、持ち主の宣言は案内しない', async () => {
     stubProfile({
       put: {
         status: 403,
@@ -366,7 +367,12 @@ describe('/profile 画面 — 行を置く', () => {
     fireEvent.click(screen.getByRole('button', { name: '保存する' }));
     fireEvent.click(screen.getByRole('button', { name: '本当に保存する' }));
 
-    expect(await screen.findAllByText('alteroid access owner <アカウント id>')).toBeTruthy();
+    expect(
+      (await screen.findAllByText('実行環境の持ち主として宣言されたアカウントだけが操作できる'))
+        .length,
+    ).toBeGreaterThan(0);
+    expect(screen.queryByText('alteroid access owner <アカウント id>')).toBeNull();
+    expect(screen.queryByText(/持ち主として宣言してください/)).toBeNull();
   });
 });
 
