@@ -1,8 +1,8 @@
 import { WorkTabs } from '~/components/group-tabs';
 import { AlertTriangle } from 'lucide-react';
-import { Fragment, useId, useState } from 'react';
+import { Fragment, useEffect, useId, useState } from 'react';
 import { Tabs } from 'radix-ui';
-import { Link } from 'react-router';
+import { Link, useBlocker } from 'react-router';
 
 import {
   Markdown,
@@ -11,6 +11,7 @@ import {
   Button,
   Card,
   CardHeader,
+  ConfirmDialog,
   Empty,
   ErrorNote,
   Input,
@@ -931,6 +932,23 @@ function CommitmentBodyEditor({
   const value = draft ?? commitment.body;
   const dirty = draft !== undefined && draft !== commitment.body;
 
+  /**
+   * **未保存の編集があるまま離れない（#2764 と同じ穴）。** アプリ内の移動（リンク・戻る）は
+   * 確認を挟み、タブを閉じる・再読み込みはブラウザの警告（beforeunload）に任せる。
+   * 保存・やめるで編集が閉じれば、この部品ごと消えるので止めない。
+   */
+  const blocker = useBlocker(dirty);
+  useEffect(() => {
+    if (!dirty) return;
+    const warn = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      // 古いブラウザは returnValue を入れないと出さない。
+      event.returnValue = '';
+    };
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  }, [dirty]);
+
   function save() {
     if (draft === undefined || draft.trim() === '') return;
     setBusy(true);
@@ -1016,6 +1034,20 @@ function CommitmentBodyEditor({
       </div>
 
       <ErrorNote error={failure} className="mx-2 mb-2" />
+
+      <ConfirmDialog
+        open={blocker.state === 'blocked'}
+        onOpenChange={(open) => {
+          if (!open && blocker.state === 'blocked') blocker.reset();
+        }}
+        title="保存していない変更があります"
+        description="このまま離れると、書きかけの内容は失われます。"
+        confirmLabel="破棄して離れる"
+        destructive
+        onConfirm={() => {
+          if (blocker.state === 'blocked') blocker.proceed();
+        }}
+      />
     </div>
   );
 }
