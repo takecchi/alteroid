@@ -101,6 +101,22 @@ interface MemoryIndexEntry {
 
 type MemoryIndex = Record<string, MemoryIndexEntry>;
 
+/** 保護状態の索引ファイル名（記憶ディレクトリの直下）。 */
+export const MEMORY_INDEX_FILENAME = '.index.json';
+
+/**
+ * 保護状態の索引の「初期状態」の中身（JSON 文字列）。`initWorkspace` が seed の記憶と一緒に置く
+ * （issue #2927 項目5）。索引が無いと `#readIndex` は「失われた」と見て組み直し、
+ * 「索引の組み直し」の decision を日誌へ書いてしまう。値の形・ハッシュは `#doRebuildIndex` が
+ * 日誌の履歴の無い文書に対して書くものと同じ（`{ contentSha256: sha256Hex(本文) }`。人が触った
+ * 履歴は無い）。
+ */
+export function initialMemoryIndexJson(docs: readonly { slug: string; content: string }[]): string {
+  const index: MemoryIndex = {};
+  for (const doc of docs) index[doc.slug] = { contentSha256: sha256Hex(doc.content) };
+  return JSON.stringify(index);
+}
+
 /**
  * 記憶 = Markdown ファイル群。
  *
@@ -171,7 +187,7 @@ export class FsPersonaStore implements PersonaStore {
    * （`.index.json` は `.md` で終わらない）。
    */
   #indexPath(): string {
-    return join(this.#dir, '.index.json');
+    return join(this.#dir, MEMORY_INDEX_FILENAME);
   }
 
   /**
@@ -596,8 +612,8 @@ export class FsPersonaStore implements PersonaStore {
   }
 
   /**
-   * 全文書を消す（`PersonaStore.clear` の doc）。**`.md` ファイルと `.index.json`
-   * の両方を消す** — 索引だけ残すと、次の起動でここに実体を持たない slug の
+   * 全文書を消す（`PersonaStore.clear` の doc）。**`.md` ファイルを消し、`.index.json`
+   * は空の索引に置き換える**（消さない。理由は本体のコメント）。古い索引を残すと、次の起動でここに実体を持たない slug の
    * 保護状態だけが残った状態になる（`#readIndex` は壊れていなければ組み直さ
    * ないので、孤児のまま拾われ続ける）。
    */
@@ -605,7 +621,10 @@ export class FsPersonaStore implements PersonaStore {
     return this.#serialize(async () => {
       const docs = await this.#listRawContents();
       for (const doc of docs) await rm(this.#path(doc.slug), { force: true });
-      await rm(this.#indexPath(), { force: true });
+      // 索引は消さず、空の索引を置く。消すと次の読み出しが「失われた」と見て組み直し、
+      // 「索引の組み直し」の decision を日誌へ書いてしまう（issue #2927 項目5）。索引が
+      // 本当に失われたときに組み直す意味は変えない（`#readIndex` は空のオブジェクトを正常と読む）。
+      await this.#writeIndex({});
       return docs.length;
     });
   }

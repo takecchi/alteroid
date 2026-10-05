@@ -12,7 +12,7 @@ import { FsConversationReadStore } from './conversation-reads.js';
 import { FsJobStore } from './jobs.js';
 import { FsJournalStore } from './journal.js';
 import { FsMcpServerStore } from './mcp-servers.js';
-import { FsPersonaStore } from './persona.js';
+import { FsPersonaStore, MEMORY_INDEX_FILENAME, initialMemoryIndexJson } from './persona.js';
 import { FsPermissionGrantStore } from './permission-grants.js';
 import { FsPracticeStore } from './practices.js';
 import { FsProfileStore } from './profile.js';
@@ -101,15 +101,32 @@ export async function initWorkspace(root?: string): Promise<InitResult> {
     await mkdir(dir, { recursive: true });
   }
 
+  const seedPath = join(paths.memory, 'about-me.md');
   const seeds: [string, string][] = [
     [join(paths.root, 'README.md'), ROOT_README],
-    [join(paths.memory, 'about-me.md'), SEED_MEMORY],
+    [seedPath, SEED_MEMORY],
   ];
 
   for (const [path, content] of seeds) {
     try {
       await writeFile(path, content, { encoding: 'utf8', flag: 'wx' });
       created.push(path);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+    }
+  }
+
+  // seed の記憶を置いたときは、保護状態の索引も一緒に置く（issue #2927 項目5）。無いと最初の
+  // `persona.write` / `protectionStatus` が索引を「失われた」と見て組み直し、「索引の組み直し」の
+  // decision を日誌へ1件書く（pg は新しい DB では書かない）。既存の索引は上書きしない。
+  // 既存の作業場（seed が既にある）には何も置かない——索引が無いならそれは本当に失われている。
+  if (created.includes(seedPath)) {
+    try {
+      await writeFile(
+        join(paths.memory, MEMORY_INDEX_FILENAME),
+        initialMemoryIndexJson([{ slug: 'about-me', content: SEED_MEMORY }]),
+        { encoding: 'utf8', flag: 'wx' },
+      );
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
     }
