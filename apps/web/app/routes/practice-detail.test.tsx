@@ -456,3 +456,122 @@ describe('未保存の編集を離れる前に確認する', () => {
     expect(dirty.defaultPrevented).toBe(true);
   });
 });
+
+/**
+ * 保存は読んだ版を前提にし、衝突しても下書きを捨てない（#2853。`memory-detail.test.tsx` と同じ形）。
+ */
+describe('保存は読んだ版を前提にし、衝突しても下書きを捨てない', () => {
+  const V1 = 'a'.repeat(64);
+  const V2 = 'b'.repeat(64);
+  const CLONE = {
+    ...PRACTICE,
+    kind: 'クローンの種類',
+    title: 'クローンが書いた題',
+    content: 'クローンが書いた本文\n',
+    updatedAt: '2026-08-22T02:00:00.000Z',
+  };
+
+  /** PUT の本文を控え、`putResponses` を順に返す。GET は `getVersions` を順に返す（最後の値を使い回す）。 */
+  function stubPut(putResponses: Response[], getVersions: string[] = [V1]) {
+    const putBodies: unknown[] = [];
+    let gets = 0;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = input instanceof Request ? input : new Request(input, init);
+      if (request.url.includes('/versions')) return json({ versions: [] });
+      if (!request.url.includes('/practices/daily-report')) {
+        return Promise.reject(new TypeError(`Failed to fetch: ${request.url}`));
+      }
+      if (request.method === 'PUT') {
+        putBodies.push(await request.json());
+        return putResponses.shift() ?? json({ error: 'x' }, 500);
+      }
+      const version = getVersions[Math.min(gets, getVersions.length - 1)];
+      gets += 1;
+      return json({ practice: PRACTICE, version });
+    }) as typeof fetch;
+    mountDetail('daily-report');
+    return putBodies;
+  }
+
+  const conflict = () =>
+    json(
+      {
+        error: 'やり方が読んだ後に変わっています（書き換えていません）',
+        current: { practice: CLONE, version: V2 },
+      },
+      409,
+    );
+
+  async function editAndSave(text = '人間の書きかけ') {
+    fireEvent.mouseDown(await screen.findByRole('tab', { name: '編集' }));
+    fireEvent.change(await screen.findByLabelText('本文'), { target: { value: text } });
+    fireEvent.click(screen.getByRole('button', { name: '保存する' }));
+  }
+
+  it('読んだ版（version）を ifMatch として送る', async () => {
+    const putBodies = stubPut([json({ practice: PRACTICE, version: V2 })]);
+
+    await editAndSave();
+
+    await waitFor(() => expect(putBodies).toHaveLength(1));
+    expect(putBodies[0]).toEqual({
+      kind: '日報',
+      title: '日報の書き方',
+      content: '人間の書きかけ',
+      ifMatch: V1,
+    });
+  });
+
+  it('409 では下書きを残し、ほかで書き換えられたことと最新の内容を見せる', async () => {
+    stubPut([conflict()]);
+
+    await editAndSave();
+
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toContain('ほかで書き換えられた');
+    expect(alert.textContent).toContain('クローンが書いた本文');
+    expect(alert.textContent).toContain('クローンが書いた題');
+    expect((screen.getByLabelText('本文') as HTMLTextAreaElement).value).toBe('人間の書きかけ');
+    expect(screen.queryByText(/^保存した/)).toBeNull();
+  });
+
+  it('「自分の内容で上書きする」は、いまの版を ifMatch にして書き直す', async () => {
+    const putBodies = stubPut([conflict(), json({ practice: PRACTICE, version: 'c'.repeat(64) })]);
+    await editAndSave();
+
+    fireEvent.click(await screen.findByRole('button', { name: '自分の内容で上書きする' }));
+
+    await waitFor(() => expect(putBodies).toHaveLength(2));
+    expect(putBodies[1]).toMatchObject({ content: '人間の書きかけ', ifMatch: V2 });
+    await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
+  });
+
+  it('「いまの内容を読み直す」は下書きを捨てて、書き込まない', async () => {
+    const putBodies = stubPut([conflict()]);
+    await editAndSave();
+
+    fireEvent.click(
+      await screen.findByRole('button', { name: '自分の下書きを捨てて、いまの内容を読み直す' }),
+    );
+
+    await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
+    expect(putBodies).toHaveLength(1);
+    expect((screen.getByLabelText('本文') as HTMLTextAreaElement).value).toBe(PRACTICE.content);
+  });
+
+  it('保存の応答が新しい版を返し、再取得がまだ古い版を返していても、次の保存の ifMatch は新しい版', async () => {
+    const putBodies = stubPut([
+      json({ practice: PRACTICE, version: V2 }),
+      json({ practice: PRACTICE, version: 'c'.repeat(64) }),
+    ]);
+
+    await editAndSave('1回目');
+    expect(await screen.findByText(/保存した/)).toBeTruthy();
+    fireEvent.change(screen.getByLabelText('本文'), { target: { value: '2回目' } });
+    fireEvent.click(screen.getByRole('button', { name: '保存する' }));
+
+    await waitFor(() => expect(putBodies).toHaveLength(2));
+    expect(putBodies[0]).toMatchObject({ content: '1回目', ifMatch: V1 });
+    expect(putBodies[1]).toMatchObject({ content: '2回目', ifMatch: V2 });
+  });
+});

@@ -1,4 +1,5 @@
 import { WorkTabs } from '~/components/group-tabs';
+import { LoadError } from '~/components/load-error';
 import { AlertTriangle } from 'lucide-react';
 import { Fragment, useCallback, useEffect, useId, useState } from 'react';
 import { Tabs } from 'radix-ui';
@@ -72,7 +73,7 @@ export default function Commitments() {
     window.addEventListener('beforeunload', warn);
     return () => window.removeEventListener('beforeunload', warn);
   }, [anyDirty]);
-  const { data, error, isLoading } = useCommitments(showClosed);
+  const { data, error, isLoading, isValidating, mutate } = useCommitments(showClosed);
 
   // 並びはデーモンが決めている（未了が古い順、片付いたものが新しい順で後ろ）。
   // **ここで並べ直さない** — 並べ直すと齢の見え方が CLI・クローンと食い違う。
@@ -88,7 +89,7 @@ export default function Commitments() {
   const trimmedClosed = data?.trimmedClosed ?? 0;
   /**
    * **取れなかったのを0件と描かない**（issue #2320）。一覧をまだ一度も読めていないまま
-   * 失敗したとき、失敗は上の `ErrorNote` が言う。ここで「引き受けたまま終わっていない仕事は
+   * 失敗したとき、失敗は `LoadError` が言う。ここで「引き受けたまま終わっていない仕事は
    * ない」を並べると、読めていないのに引き受けた仕事が無いように読め、忘れさせないための
    * 器が空に見える。再検証の失敗で `data` が残っているときは当たらず、一覧をそのまま出す
    * （#2266 と同じ）。
@@ -106,7 +107,13 @@ export default function Commitments() {
         </Button>
       }
     >
-      <ErrorNote error={error} className="mb-4" />
+      <LoadError
+        what="未了の仕事の一覧"
+        error={error}
+        onRetry={() => mutate()}
+        retrying={isValidating}
+        className="mb-4"
+      />
 
       <ConfirmDialog
         open={blocker.state === 'blocked'}

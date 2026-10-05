@@ -91,6 +91,19 @@ describe('openStorage', () => {
     await storage.close();
   });
 
+  it('起動時に会話の既読の基準時刻を決め、再起動しても変えない', async () => {
+    root = await makeTempDir('alteroid-storage-');
+
+    const first = await openStorage({ ALTEROID_HOME: root });
+    const decided = await first.stores.conversationReads.read();
+    expect(decided.state === 'ok' && decided.baseline !== null).toBe(true);
+    await first.close();
+
+    const second = await openStorage({ ALTEROID_HOME: root });
+    expect(await second.stores.conversationReads.read()).toEqual(decided);
+    await second.close();
+  });
+
   /**
    * 記憶の保護状態（human guard）の backfill。
    *

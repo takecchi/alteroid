@@ -11,6 +11,7 @@ import { deriveMemoryFrontmatter, nextDescribedState } from './memory.js';
 import { listPageByOverfetch } from './journal-page.js';
 import { matchesJournalSearch } from './journal-search.js';
 import { compareIsoInstant, earliestIsoInstant } from './iso-instant.js';
+import type { ConversationReadPosition } from './conversation-read.js';
 import type {
   Commitment,
   CommitmentClosedBy,
@@ -63,6 +64,7 @@ import type {
   InboxStore,
   JobStore,
   McpServerStore,
+  ConversationReadStore,
   PendingInboxEvent,
   JournalQuery,
   JournalStore,
@@ -91,6 +93,8 @@ import {
   JournalAnchorNotFoundError,
   MemoryConflictError,
   memoryVersionMatches,
+  PracticeConflictError,
+  practiceVersionMatches,
 } from './store.js';
 import {
   activeAgentTokenSchema,
@@ -455,8 +459,17 @@ export function createMemoryStores(): Stores {
         existing ? `${ensureTrailingNewline(existing.content)}\n${content}` : content,
       );
     },
-    async remove(slug) {
+    async remove(slug, options) {
       checkMemorySlug(slug);
+      const before = documents.get(slug);
+      if (!memoryVersionMatches(before ?? null, options?.ifMatch)) {
+        throw new MemoryConflictError(
+          slug,
+          before === undefined
+            ? null
+            : { ...before, createdAt: toMemoryCreatedAt(createdAtStore.get(slug)) },
+        );
+      }
       documents.delete(slug);
       // fs / pg と同じく、実体が消えれば派生値も消える（過去に human で書かれた
       // 事実そのものは journal に残るので、backfill が立て直す）。
@@ -1423,6 +1436,58 @@ export function createMemoryStores(): Stores {
       return count;
     },
   };
+  /** 会話の既読の位置と基準時刻（インメモリ。契約は `conversation-read.ts`）。 */
+  let conversationReadBaseline: string | null = null;
+  const conversationReadPositions = new Map<string, ConversationReadPosition>();
+  let outboundWatermark: string | null = null;
+  const outboundLatest = new Map<string, string>();
+  const conversationReads: ConversationReadStore = {
+    async readOutboundIndex() {
+      return {
+        state: 'ok',
+        watermark: outboundWatermark,
+        lastOutbound: Object.fromEntries(outboundLatest),
+      };
+    },
+    async mergeOutboundIndex(update) {
+      if (
+        update.watermark !== null &&
+        (outboundWatermark === null || compareIsoInstant(update.watermark, outboundWatermark) > 0)
+      ) {
+        outboundWatermark = update.watermark;
+      }
+      for (const [id, at] of Object.entries(update.lastOutbound)) {
+        const known = outboundLatest.get(id);
+        if (known === undefined || compareIsoInstant(at, known) > 0) outboundLatest.set(id, at);
+      }
+    },
+    async clearOutboundIndex() {
+      outboundWatermark = null;
+      outboundLatest.clear();
+    },
+    async read() {
+      return {
+        state: 'ok',
+        baseline: conversationReadBaseline,
+        positions: Object.fromEntries(
+          [...conversationReadPositions].map(([id, position]) => [id, { ...position }]),
+        ),
+      };
+    },
+    async ensureBaseline(at) {
+      conversationReadBaseline ??= at;
+      return { state: 'ok', baseline: conversationReadBaseline };
+    },
+    async advance(conversationId, readThrough) {
+      const current = conversationReadPositions.get(conversationId);
+      if (current !== undefined && compareIsoInstant(readThrough, current.readThrough) <= 0) {
+        return { ...current };
+      }
+      const next = { readThrough, updatedAt: new Date().toISOString() };
+      conversationReadPositions.set(conversationId, next);
+      return { ...next };
+    },
+  };
 
   /** 人間の MCP 連携の登録（インメモリ。契約は `mcp-server-contract.ts`）。 */
   const mcpServers: McpServerStore = {
@@ -1795,10 +1860,17 @@ export function createMemoryStores(): Stores {
       const found = practices.get(slug);
       return found === undefined ? null : isolate(found);
     },
-    async write(input) {
+    async write(input, options) {
       const content = ensureTrailingNewline(input.content);
       const now = new Date().toISOString();
       const existing = practices.get(input.slug);
+      // 前提の版（Issue #2853）。fs / pg と同じ挙動——合わなければ書かず・版も足さずに投げる。
+      if (!practiceVersionMatches(existing ?? null, options?.ifMatch)) {
+        throw new PracticeConflictError(
+          input.slug,
+          existing === undefined ? null : isolate(existing),
+        );
+      }
       const next = practiceSchema.parse({
         slug: input.slug,
         kind: input.kind,
@@ -1875,6 +1947,7 @@ export function createMemoryStores(): Stores {
     profile,
     credentials,
     mcpServers,
+    conversationReads,
     tokens,
     usage,
   };

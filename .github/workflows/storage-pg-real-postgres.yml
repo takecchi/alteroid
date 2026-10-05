@@ -1,0 +1,88 @@
+name: storage-pg を本物の PostgreSQL で
+
+# **storage-pg のテストを、PGlite ではなく本物の PostgreSQL で走らせる**（#2918）。
+#
+# 既定の CI（`ci.yml`）は storage-pg を全部 PGlite（プロセス内の PostgreSQL）で
+# 走らせる。PGlite と本物の差（照合順・NUL・timestamp・bigint の文字列化）で、本番
+# （Railway の PostgreSQL）だけ壊れうる。ここは同じテストファイルを
+# `ALTEROID_TEST_PG_URL` で本物へ向けて走らせる（テストは複製しない。口は
+# `packages/storage-pg/src/test-db.test-support.ts`）。
+#
+# **範囲:** 共通の約束テスト（`packages/core/src/*-contract.ts` の契約関数）を呼ぶ
+# storage-pg の3ファイル（`index.*.test.ts`）。契約テストは今後もこの3ファイルの中へ
+# 足されるので、足せば自動でここに乗る（#2913 の並びの契約テストも同じ）。本物で落ちる
+# 歯は一覧にして Issue へ書き、テストの側で `skipIf` にしてある（#2922）。
+#
+# **必須チェックではない。** `ci` / `image` / `no-attribution-trailers`（正本は
+# `.github/required-status-checks.json`）の構成は変えていない。`ci` の `needs` にも
+# 入れていない（別 workflow にしてあるので、`ci` の所要時間も増えない）。
+#
+# **いつ走るか:** main への push・毎晩（`ci.yml` の定時の少し後）・手動、
+# それと PR のうち storage-pg / 契約関数 / このファイルに触れたものだけ。
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - 'packages/storage-pg/**'
+      - 'packages/core/src/*-contract.ts'
+      - '.github/workflows/storage-pg-real-postgres.yml'
+  schedule:
+    - cron: '17 16 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'push' && github.ref || github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  real-postgres:
+    # draft の PR では回さない（`ci.yml` の `ci` と同じ判断）。
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    name: real-postgres (${{ matrix.collate }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        # 本番の照合順は en_US.UTF-8 でありうる（PGlite は C 相当）。両方で見る。
+        collate: ['en_US.UTF-8', 'C']
+    services:
+      postgres:
+        # 本番に近い版。リポジトリの `Dockerfile` の postgres（17）に揃える。
+        # 資格情報はこのジョブの中だけで使い捨てる値で、秘密ではない。
+        image: postgres:17
+        env:
+          POSTGRES_USER: alteroid
+          POSTGRES_PASSWORD: alteroid-ci-throwaway
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U alteroid"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PGHOST: 127.0.0.1
+      PGPORT: '5432'
+      PGUSER: alteroid
+      PGPASSWORD: alteroid-ci-throwaway
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup
+
+      # 照合順を指定した DB を作る（`template0` から。`template1` は照合順を変えられない）。
+      - name: 照合順 ${{ matrix.collate }} の DB を作る
+        run: |
+          psql -d postgres -v ON_ERROR_STOP=1 -c "create database alteroid_test template template0 encoding 'UTF8' lc_collate '${{ matrix.collate }}' lc_ctype '${{ matrix.collate }}'"
+          psql -d postgres -At -c "select version()"
+          psql -d postgres -At -c "select datname, datcollate, datctype from pg_database where datname = 'alteroid_test'"
+
+      - run: pnpm --filter @alteroid/core build
+
+      - name: 契約テストを本物の PostgreSQL で走らせる
+        env:
+          ALTEROID_TEST_PG_URL: postgres://alteroid:alteroid-ci-throwaway@127.0.0.1:5432/alteroid_test
+          ALTEROID_TEST_PG_EXPECT_COLLATE: ${{ matrix.collate }}
+        run: pnpm --filter @alteroid/storage-pg test index.journal-jobs-schedule index.commitments-inbox-archive index.sessions-tokens-credentials test-db

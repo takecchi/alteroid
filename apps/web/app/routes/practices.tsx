@@ -1,19 +1,10 @@
 import { MemoryTabs } from '~/components/group-tabs';
+import { LoadError } from '~/components/load-error';
 import { AlertTriangle } from 'lucide-react';
 import { useId, useState } from 'react';
 import { Link, Outlet, useNavigate, useParams } from 'react-router';
 
-import {
-  Page,
-  Button,
-  Empty,
-  ErrorNote,
-  Input,
-  ListDetail,
-  ListDetailItems,
-  Spinner,
-  cn,
-} from '@alteroid/ui';
+import { Page, Button, Empty, Input, ListDetail, ListDetailItems, Spinner, cn } from '@alteroid/ui';
 import { usePractices } from '@alteroid/swr';
 import { formatRelative } from '@alteroid/logic';
 import type { UnreadablePractice } from '@alteroid/logic';
@@ -77,7 +68,7 @@ const SLUG_PATTERN = /^[a-z0-9][a-z0-9._-]*$/;
  * `[種類]` タグは既に付いた値をそのまま出すだけで、選ばせる欄ではない。
  */
 export default function Practices() {
-  const { data, error, isLoading } = usePractices();
+  const { data, error, isLoading, isValidating, mutate } = usePractices();
   const navigate = useNavigate();
   const slugId = useId();
   const [slug, setSlug] = useState('');
@@ -90,7 +81,7 @@ export default function Practices() {
   const valid = SLUG_PATTERN.test(slug) && slug.length <= 128;
   /**
    * **取れなかったのを0件と描かない**（issue #2324）。一覧をまだ一度も読めていないまま
-   * 失敗したとき、失敗は上の `ErrorNote` が言う。「正常な状態」は言い切りになる。
+   * 失敗したとき、失敗は `LoadError` が言う。「正常な状態」は言い切りになる。
    * 再検証の失敗で `data` が残っているときは当たらず、一覧をそのまま出す。
    */
   const listUnavailable = data === undefined && error !== undefined;
@@ -160,7 +151,13 @@ export default function Practices() {
           emptyDetail={<Empty>左の一覧からやり方を選ぶと、その中身がここに出る。</Empty>}
           list={
             <>
-              <ErrorNote error={error} className="m-3" />
+              <LoadError
+                what="やり方の一覧"
+                error={error}
+                onRetry={() => mutate()}
+                retrying={isValidating}
+                className="m-3"
+              />
               {isLoading || listUnavailable || unreadable.length === 0 ? null : (
                 <UnreadablePracticesNote unreadable={unreadable} />
               )}
