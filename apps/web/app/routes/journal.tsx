@@ -420,7 +420,7 @@ function JournalBody({
                 type={entry.type}
                 typeLabel={journalTypeLabel(entry.type)}
                 tone={JOURNAL_TONE[entry.type]}
-                summary={summarizeJournalEntry(entry)}
+                summary={summarizeJournalEntry(entry, 'localized')}
                 links={<JournalEntryLinks entry={entry} />}
                 raw={entry}
                 isLast={entry.id === lastId}

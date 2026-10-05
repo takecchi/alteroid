@@ -154,3 +154,33 @@ describe('日誌の1行: 開いたとき', () => {
     expect(second.root.querySelector('pre')).toBeNull();
   });
 });
+
+describe('日誌の1行: github_observation は英語の識別子を要旨に出さない（#2806）', () => {
+  it('記録元と CI の軸は日本語で出る。clone / success / failure / pending は閉じた行に出ない', async () => {
+    const entry = {
+      type: 'github_observation',
+      id: 'row-gh',
+      at: '2026-08-20T11:00:00.000Z',
+      repo: 'a/b',
+      query: 'is:open',
+      observedBy: 'clone',
+      result: {
+        status: 'ok',
+        openIssues: 3,
+        openPulls: 2,
+        truncated: false,
+        ci: { pulls: 3, success: 1, failure: 1, pending: 1, checks: '必須チェックだけ' },
+      },
+    } as JournalEntry;
+    await renderRows([entry]);
+    const { root, button } = await rowOf(
+      'a/b: open Issue 3 件 / open PR 2 件（記録したのは: クローン） / CI: 3 件の PR を確認 — 成功 1 / 失敗 1 / 実行中・待ち 1（数えたもの: 必須チェックだけ）',
+    );
+    const closed = button.textContent ?? '';
+    const text = root.textContent ?? '';
+    for (const word of ['clone', 'success', 'failure', 'pending', '観測者']) {
+      expect(text).not.toContain(word);
+      expect(closed).not.toContain(word);
+    }
+  });
+});
