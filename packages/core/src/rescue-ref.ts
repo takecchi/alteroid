@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { copyFile, unlink } from 'node:fs/promises';
+import { copyFile, stat, unlink, utimes } from 'node:fs/promises';
 import path from 'node:path';
 
 import { reasonOf } from './dropped-record.js';
@@ -384,7 +384,15 @@ async function rescueOne(
   try {
     let seeded = false;
     try {
-      await copyFile(path.join(gitDir, 'index'), indexFile);
+      const source = path.join(gitDir, 'index');
+      await copyFile(source, indexFile);
+      // **コピーの mtime を元の index に合わせる（racy git。実測で踏んだ）。** git は
+      // 「index の mtime 以降に更新された entry」だけを中身で確かめ直す。コピーの
+      // mtime が「いま」になると、直前に（同じ時刻の粒の中で）同じ大きさへ書き換えた
+      // ファイルを「変わっていない」と読み、変更を取りこぼす。1μs 手前に置いて、
+      // 元の index と同じ（以上に慎重な）判定にする。
+      const { atimeNs, mtimeNs } = await stat(source, { bigint: true });
+      await utimes(indexFile, Number(atimeNs) / 1e9, Number(mtimeNs) / 1e9 - 1e-6);
       seeded = true;
     } catch {
       seeded = false;
