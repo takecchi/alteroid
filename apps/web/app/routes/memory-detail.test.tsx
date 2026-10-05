@@ -722,3 +722,36 @@ describe('保存は読んだ版を前提にし、衝突しても下書きを捨�
     expect((screen.getByRole('textbox') as HTMLTextAreaElement).value).toBe(DOC.content);
   });
 });
+
+describe('保存した直後に編集を再開しても、手元の版は保存の応答の版（偽の 409 にならない）', () => {
+  it('保存の応答が新しい版を返し、再取得がまだ古い版を返していても、次の保存の ifMatch は新しい版', async () => {
+    const V1 = 'a'.repeat(64);
+    const V2 = 'b'.repeat(64);
+    const putBodies: unknown[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = input instanceof Request ? input : new Request(input, init);
+      if (!request.url.includes('/memory/notes')) {
+        return Promise.reject(new TypeError(`Failed to fetch: ${request.url}`));
+      }
+      if (request.method === 'PUT') {
+        putBodies.push(await request.json());
+        return json({ document: { ...DOC, content: '1回目' }, version: V2 });
+      }
+      // 再取得はまだ古い版を返す（保存の反映が GET に届く前を再現する）。
+      return json({ document: DOC, version: V1 });
+    }) as typeof fetch;
+    mountDetail('notes');
+
+    fireEvent.mouseDown(await screen.findByRole('tab', { name: '編集' }));
+    fireEvent.change(await screen.findByRole('textbox'), { target: { value: '1回目' } });
+    fireEvent.click(screen.getByRole('button', { name: '保存する' }));
+    expect(await screen.findByText(/保存した/)).toBeTruthy();
+
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: '2回目' } });
+    fireEvent.click(screen.getByRole('button', { name: '保存する' }));
+
+    await waitFor(() => expect(putBodies).toHaveLength(2));
+    expect(putBodies[0]).toEqual({ content: '1回目', ifMatch: V1 });
+    expect(putBodies[1]).toEqual({ content: '2回目', ifMatch: V2 });
+  });
+});

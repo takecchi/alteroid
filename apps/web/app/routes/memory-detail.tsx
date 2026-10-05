@@ -49,6 +49,14 @@ export default function MemoryDetail({ loaderData }: Route.ComponentProps) {
    * 前提にし続けるから、衝突が検出できる。`null` は「読んだ時には無かった」。
    */
   const [baseVersion, setBaseVersion] = useState<string | null | undefined>(undefined);
+  /**
+   * 直前の保存の応答が返した版（`replaces` はそのとき前提にした版）。再取得が追いつく前に編集を
+   * 再開しても、古い `data.version` を前提にして偽の 409 を起こさないために持つ。
+   * 再取得が `replaces` 以外の版を返したら（別の書き手が書いた）、そちらを信じる。
+   */
+  const [lastSaved, setLastSaved] = useState<
+    { replaces: string | null; version: string } | undefined
+  >(undefined);
   /** 保存が 409 で断られたときの、いまの版（下書きは捨てずに残す。#2764）。 */
   const [conflict, setConflict] = useState<MemoryConflictError | undefined>(undefined);
 
@@ -86,7 +94,12 @@ export default function MemoryDetail({ loaderData }: Route.ComponentProps) {
 
   function edit(next: string) {
     // 書き始めた瞬間に、いま読んでいる版を前提として控える。
-    if (draft === undefined) setBaseVersion(data === undefined ? null : data.version);
+    if (draft === undefined) {
+      const fetched = data === undefined ? null : data.version;
+      setBaseVersion(
+        lastSaved !== undefined && lastSaved.replaces === fetched ? lastSaved.version : fetched,
+      );
+    }
     setDraft(next);
   }
 
@@ -96,8 +109,9 @@ export default function MemoryDetail({ loaderData }: Route.ComponentProps) {
     setBusy(true);
     setFailure(undefined);
     saveMemory(slug, draft, ifMatch)
-      .then(({ document }) => {
+      .then(({ document, version }) => {
         setSavedAt(document.updatedAt);
+        setLastSaved({ replaces: data === undefined ? null : data.version, version });
         // 保存できたら下書きを畳んで、またサーバの値に追従させる。
         setDraft(undefined);
         setBaseVersion(undefined);
