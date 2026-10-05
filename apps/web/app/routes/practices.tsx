@@ -1,4 +1,5 @@
 import { MemoryTabs } from '~/components/group-tabs';
+import { LoadError } from '~/components/load-error';
 import { AlertTriangle } from 'lucide-react';
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router';
@@ -60,7 +61,7 @@ const SLUG_PATTERN = /^[a-z0-9][a-z0-9._-]*$/;
  * `[種類]` タグは既に付いた値をそのまま出すだけで、選ばせる欄ではない。
  */
 export default function Practices() {
-  const { data, error, isLoading } = usePractices();
+  const { data, error, isLoading, isValidating, mutate } = usePractices();
   const navigate = useNavigate();
   const [slug, setSlug] = useState('');
 
@@ -71,7 +72,7 @@ export default function Practices() {
   const valid = SLUG_PATTERN.test(slug) && slug.length <= 128;
   /**
    * **取れなかったのを0件と描かない**（issue #2324）。一覧をまだ一度も読めていないまま
-   * 失敗したとき、失敗は上の `ErrorNote` が言う。「正常な状態」は言い切りになる。
+   * 失敗したとき、失敗は `LoadError` が言う。「正常な状態」は言い切りになる。
    * 再検証の失敗で `data` が残っているときは当たらず、一覧をそのまま出す。
    */
   const listUnavailable = data === undefined && error !== undefined;
@@ -82,7 +83,13 @@ export default function Practices() {
       title="やり方"
       description="仕事のやり方（#1055 段3）。読んで従うかどうかは毎回クローンが決める——器はこれを実行しない"
     >
-      <ErrorNote error={error} className="mb-4" />
+      <LoadError
+        what="やり方の一覧"
+        error={error}
+        onRetry={() => mutate()}
+        retrying={isValidating}
+        className="mb-4"
+      />
 
       <Card className="mb-4 p-4">
         <p className="mb-2 text-sm font-medium">新しいやり方を書く</p>

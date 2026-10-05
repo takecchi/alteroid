@@ -1,4 +1,5 @@
 import { JournalTabs } from '~/components/group-tabs';
+import { LoadError } from '~/components/load-error';
 import { useState } from 'react';
 
 import {
@@ -64,7 +65,7 @@ export default function Archive() {
  * 「1本が何度積まれているか」を個々の大きさより先に見せる。
  */
 function SessionsSummary() {
-  const { data, error, isLoading } = useArchiveSessions();
+  const { data, error, isLoading, isValidating, mutate } = useArchiveSessions();
 
   return (
     <Card>
@@ -72,7 +73,13 @@ function SessionsSummary() {
         title="sessionId ごとの集計"
         subtitle="alteroid chat の /archive sessions と同じもの"
       />
-      <ErrorNote error={error} className="m-4" />
+      <LoadError
+        what="集計"
+        error={error}
+        onRetry={() => mutate()}
+        retrying={isValidating}
+        className="m-4"
+      />
       {isLoading ? (
         <div className="p-4">
           <Spinner />
@@ -109,7 +116,7 @@ function SessionRow({ session }: { session: ArchiveSessionSummary }) {
 
 /** 一覧本体。行ごとに「本文を消す」を持つ——これが #776 の中心である。 */
 function EntryList() {
-  const { data, error, isLoading } = useArchive();
+  const { data, error, isLoading, isValidating, mutate } = useArchive();
 
   return (
     <Card>
@@ -118,7 +125,13 @@ function EntryList() {
         subtitle="alteroid chat の /archive と同じもの。新しい順"
         action={data === undefined ? undefined : <Badge>{data.entries.length}</Badge>}
       />
-      <ErrorNote error={error} className="m-4" />
+      <LoadError
+        what="生ログの一覧"
+        error={error}
+        onRetry={() => mutate()}
+        retrying={isValidating}
+        className="m-4"
+      />
       {isLoading ? (
         <div className="p-4">
           <Spinner />

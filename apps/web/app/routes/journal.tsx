@@ -1,4 +1,5 @@
 import { JournalTabs } from '~/components/group-tabs';
+import { LoadError } from '~/components/load-error';
 import { AlertTriangle, Search } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router';
@@ -9,7 +10,6 @@ import {
   JournalEntryRow,
   Card,
   Empty,
-  ErrorNote,
   FilterChips,
   Spinner,
   useMeasuredHeight,
@@ -154,6 +154,8 @@ export default function Journal() {
   const [searchParams, setSearchParams] = useSearchParams();
   const committed = searchParams.get(SEARCH_PARAM) ?? '';
   const [draft, setDraft] = useState(committed);
+  /** 初回の読み込みの失敗から「もう一度試す」で取り直すたびに増やす（`JournalBody` の `key`）。 */
+  const [retryNonce, setRetryNonce] = useState(0);
   /**
    * **`useMemo` で包み、生の文字列（`rawTypes`）が変わらない限り同じ参照を
    * 返す（issue #2055）。** `parseSelectedTypes` を描画のたびに呼ぶだけだと、
@@ -281,7 +283,8 @@ export default function Journal() {
         リセットになる。
       */}
       <JournalBody
-        key={`${selected.join(',')}\u0000${committed}`}
+        key={`${selected.join(',')}\u0000${committed}\u0000${retryNonce}`}
+        onRetry={() => setRetryNonce((n) => n + 1)}
         selected={selected}
         q={committed}
         scrollAreaRef={scrollAreaRef}
@@ -322,7 +325,10 @@ function JournalBody({
   q,
   scrollAreaRef,
   startMargin,
+  onRetry,
 }: {
+  /** 初回の読み込みの失敗から取り直す（`key` を変えて作り直してもらう）。 */
+  onRetry: () => void;
   selected: readonly JournalEntryType[];
   q: string;
   scrollAreaRef: React.RefObject<HTMLDivElement | null>;
@@ -371,7 +377,7 @@ function JournalBody({
   const lastId = entries.at(-1)?.id;
   /**
    * **取れなかったのを0件と描かない**（issue #2322）。日誌をまだ1件も読めていないまま
-   * 失敗したとき、失敗は上の `ErrorNote` が言う。ここで「何も記録されていない」を並べると、
+   * 失敗したとき、失敗は上の `LoadError` が言う。ここで「何も記録されていない」を並べると、
    * 読めていないのに記録が無いように読める。フックは `error` を初回の失敗と後続の失敗で
    * 共用するが、後続は行が在って初めて起こるので、`error` と0件の組は初回の失敗を指す。
    * 一覧が残っているときは当たらず、そのまま出す。
@@ -380,53 +386,62 @@ function JournalBody({
 
   return (
     <>
-      <ErrorNote error={error} className="mb-4" />
+      <LoadError
+        what="日誌"
+        error={error}
+        // 取り直しは作り直し（行の読み足しが消える）なので、行が残っているときは出さない。
+        {...(listUnavailable ? { onRetry } : {})}
+        className="mb-4"
+      />
       {journalWindow.newerBlocked && (
         <BlockedNote className="mb-4">
           新着の取りこぼし確認が、同じ時刻の記録の詰まりで止まった。この画面を開き直すと直る場合がある。
         </BlockedNote>
       )}
 
-      <Card>
-        {isLoadingInitial ? (
-          <Spinner />
-        ) : listUnavailable ? null : entries.length === 0 ? (
-          <Empty>{journalEmptyMessage(selected, q)}</Empty>
-        ) : (
-          <Virtualizer
-            ref={virtualizerRef}
-            scrollRef={scrollAreaRef}
-            startMargin={startMargin}
-            // **決定そのものは `shiftForPrepend` が持つ**（`packages/logic/src/journal-window.ts`）。
-            // ここでインラインの `&&`/`!` 式を書かない — 書くと、測れるはず
-            // の決定まで JSX の中に埋もれて測れなくなる（人間の指示、
-            // 2026-08-23）。
-            shift={shiftForPrepend(journalWindow.prepended, atTop)}
-            onScroll={handleScroll}
-          >
-            {entries.map((entry) => (
-              <JournalEntryRow
-                key={entry.id}
-                atLabel={formatDateTime(entry.at)}
-                // **`time` で渡す（`at` / `relativeLabel` にしない）。** 部品の既定の
-                // `Timestamp` は JST 固定の tooltip と焦点を受ける `<time>` を持つ。この画面の
-                // 時刻は `@alteroid/logic` の整形で閲覧者の端末の時間帯のまま出しており、
-                // 開閉の `<button>` の中に Tab の停止点も増やさない。
-                time={formatRelative(entry.at)}
-                type={entry.type}
-                tone={JOURNAL_TONE[entry.type]}
-                summary={summarizeJournalEntry(entry)}
-                links={<JournalEntryLinks entry={entry} />}
-                raw={entry}
-                isLast={entry.id === lastId}
-                // 種別は行の頭の札に出ている。帯（種別の名前と「写す」ボタン）を出すと、
-                // 開いた行で種別の文字が2箇所に出て、この画面に無かった操作も増える。
-                rawBar={false}
-              />
-            ))}
-          </Virtualizer>
-        )}
-      </Card>
+      {/* 読めていないときは空の枠線を残さない（issue #2799）。失敗は上の `LoadError` が言う。 */}
+      {listUnavailable && !isLoadingInitial ? null : (
+        <Card>
+          {isLoadingInitial ? (
+            <Spinner />
+          ) : entries.length === 0 ? (
+            <Empty>{journalEmptyMessage(selected, q)}</Empty>
+          ) : (
+            <Virtualizer
+              ref={virtualizerRef}
+              scrollRef={scrollAreaRef}
+              startMargin={startMargin}
+              // **決定そのものは `shiftForPrepend` が持つ**（`packages/logic/src/journal-window.ts`）。
+              // ここでインラインの `&&`/`!` 式を書かない — 書くと、測れるはず
+              // の決定まで JSX の中に埋もれて測れなくなる（人間の指示、
+              // 2026-08-23）。
+              shift={shiftForPrepend(journalWindow.prepended, atTop)}
+              onScroll={handleScroll}
+            >
+              {entries.map((entry) => (
+                <JournalEntryRow
+                  key={entry.id}
+                  atLabel={formatDateTime(entry.at)}
+                  // **`time` で渡す（`at` / `relativeLabel` にしない）。** 部品の既定の
+                  // `Timestamp` は JST 固定の tooltip と焦点を受ける `<time>` を持つ。この画面の
+                  // 時刻は `@alteroid/logic` の整形で閲覧者の端末の時間帯のまま出しており、
+                  // 開閉の `<button>` の中に Tab の停止点も増やさない。
+                  time={formatRelative(entry.at)}
+                  type={entry.type}
+                  tone={JOURNAL_TONE[entry.type]}
+                  summary={summarizeJournalEntry(entry)}
+                  links={<JournalEntryLinks entry={entry} />}
+                  raw={entry}
+                  isLast={entry.id === lastId}
+                  // 種別は行の頭の札に出ている。帯（種別の名前と「写す」ボタン）を出すと、
+                  // 開いた行で種別の文字が2箇所に出て、この画面に無かった操作も増える。
+                  rawBar={false}
+                />
+              ))}
+            </Virtualizer>
+          )}
+        </Card>
+      )}
 
       {!isLoadingInitial && entries.length > 0 && (
         <div className="mt-3">

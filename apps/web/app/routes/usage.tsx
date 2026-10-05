@@ -1,4 +1,5 @@
 import { SettingsTabs } from '~/components/group-tabs';
+import { LoadError } from '~/components/load-error';
 import { AlertTriangle } from 'lucide-react';
 import {
   ACCOUNT_USAGE_TITLE,
@@ -29,7 +30,6 @@ import {
   CardHeader,
   cn,
   Empty,
-  ErrorNote,
   Input,
   Select,
   Spinner,
@@ -269,7 +269,7 @@ export default function Usage() {
     ...(site === '' ? {} : { site }),
     ...(tokenId === '' ? {} : { tokenId }),
   };
-  const { data, error, isLoading } = useUsage(query);
+  const { data, error, isLoading, isValidating, mutate } = useUsage(query);
 
   /**
    * **黙って捨てない（issue #2133）。** `layer` / `site` は捨てて終わりだが
@@ -409,7 +409,13 @@ export default function Usage() {
         </p>
       ))}
 
-      <ErrorNote error={error} className="mb-4" />
+      <LoadError
+        what="使用量"
+        error={error}
+        onRetry={() => mutate()}
+        retrying={isValidating}
+        className="mb-4"
+      />
 
       {isLoading ? (
         <Spinner />

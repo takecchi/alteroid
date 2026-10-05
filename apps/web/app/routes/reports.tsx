@@ -1,6 +1,7 @@
 import { Link } from 'react-router';
 
-import { Markdown, Page, Card, Empty, ErrorNote, Spinner, cn } from '@alteroid/ui';
+import { LoadError } from '~/components/load-error';
+import { Markdown, Page, Card, Empty, Spinner, cn } from '@alteroid/ui';
 import { useReport, useReports } from '@alteroid/swr';
 import { formatDateTime, formatTime, redactBody } from '@alteroid/logic';
 
@@ -143,7 +144,7 @@ export default function Reports({ loaderData }: Route.ComponentProps) {
   const selectedId = reportId ?? reports.find((report) => report.date === selectedDate)?.id;
   /**
    * **取れなかったのを0件と描かない**（issue #2324）。一覧をまだ一度も読めていないまま
-   * 失敗したとき、失敗は上の `ErrorNote` が言う。一覧の「まだ無い」も、右の
+   * 失敗したとき、失敗は `LoadError` が言う。一覧の「まだ無い」も、右の
    * 「日報が1件も無い」も並べない（どちらも一覧が空であることに乗っている）。再検証の
    * 失敗で `data` が残っているときは当たらず、一覧をそのまま出す。
    */
@@ -151,7 +152,13 @@ export default function Reports({ loaderData }: Route.ComponentProps) {
 
   return (
     <Page title="日報" description="普段の接点はほぼこれだけでよい。掘りたくなったら日誌へ降りる">
-      <ErrorNote error={list.error} className="mb-4" />
+      <LoadError
+        what="日報の一覧"
+        error={list.error}
+        onRetry={() => list.mutate()}
+        retrying={list.isValidating}
+        className="mb-4"
+      />
 
       {/*
         `lg` 未満にはこの容器へ `grid-template-columns` の指定が1つも無かった
@@ -174,22 +181,31 @@ export default function Reports({ loaderData }: Route.ComponentProps) {
         テストでは確かめられない。** 下のテストが保証するのはクラスが当たって
         いることまでである。
       */}
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-[16rem_1fr]">
-        <Card className="h-fit">
-          {list.isLoading ? (
-            <Spinner />
-          ) : listUnavailable ? null : reports.length === 0 ? (
-            <Empty>まだ無い。</Empty>
-          ) : (
-            <>
-              <ul>
-                {reports.map((report, index) => (
-                  <li key={report.id}>
-                    <Link
-                      to={`/reports/${report.date}/${encodeURIComponent(report.id)}`}
-                      className={cn(
-                        'block px-4 py-2 text-sm hover:bg-muted',
-                        /*
+      {/*
+        **一覧を読めていないときは、空の枠線（一覧の Card）を残さない**（issue #2799）。失敗は上の
+        `LoadError` が言う。URL で日付が指定されているときだけ、本文は独立に読めるので出す。
+      */}
+      {listUnavailable ? (
+        selectedDate === undefined ? null : (
+          <ReportBody date={selectedDate} reportId={selectedId} />
+        )
+      ) : (
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-[16rem_1fr]">
+          <Card className="h-fit">
+            {list.isLoading ? (
+              <Spinner />
+            ) : reports.length === 0 ? (
+              <Empty>まだ無い。</Empty>
+            ) : (
+              <>
+                <ul>
+                  {reports.map((report, index) => (
+                    <li key={report.id}>
+                      <Link
+                        to={`/reports/${report.date}/${encodeURIComponent(report.id)}`}
+                        className={cn(
+                          'block px-4 py-2 text-sm hover:bg-muted',
+                          /*
                           **罫線は日付の変わり目にだけ引く。** 同じ日のものが1つの塊に
                           見えるので、時刻だけが違う行が並んでいることが形から分かる
                           （1日1件の日は今までと同じ見え方になる）。
@@ -199,57 +215,61 @@ export default function Reports({ loaderData }: Route.ComponentProps) {
                           別の日付を挟んで離れると、同じ日に何本も罫線が引かれた。
                           保証は `apps/daemon/src/reports.ts` が持つ（日付の新しい順）。
                         */
-                        reports[index + 1]?.date !== report.date && 'border-b border-border',
-                        report.id === selectedId && 'bg-muted text-primary',
-                      )}
-                    >
-                      {reportLabel(report)}
-                      {/*
+                          reports[index + 1]?.date !== report.date && 'border-b border-border',
+                          report.id === selectedId && 'bg-muted text-primary',
+                        )}
+                      >
+                        {reportLabel(report)}
+                        {/*
                         **印の付いた行は、開く前に分かる形にする。** 印を出さないと
                         「日報がある行」と同じ顔になり、人間は開くまで気づけない
                         （本文がエラー文だった穴と同じ形が、一覧の側に残る）。
                       */}
-                      {isUnavailable(report) && (
-                        <span className="ml-1 text-destructive" title="この日の日報は作れなかった">
-                          ⚠
-                        </span>
-                      )}
-                    </Link>
-                  </li>
-                ))}
-              </ul>
-              {/*
+                        {isUnavailable(report) && (
+                          <span
+                            className="ml-1 text-destructive"
+                            title="この日の日報は作れなかった"
+                          >
+                            ⚠
+                          </span>
+                        )}
+                      </Link>
+                    </li>
+                  ))}
+                </ul>
+                {/*
                 **`GET /reports` は総件数を返さないので `TruncationNote` は
                 使えない**（あちらは正確な `total` が要る）。取れた件数が
                 要求した上限とちょうど一致するときだけ、「これより古い日報が
                 あるかもしれない」と明示する——黙って切り捨てない
                 （`tokens.tsx` の `RotationHistory` と同じ形。Issue #426 の G3）。
               */}
-              {isReportsWindowFull(reports.length) && (
-                <p className="border-t border-border px-4 py-2 text-[11px] text-muted-foreground">
-                  直近 {REPORTS_LIMIT} 件のみ表示している。これより古い日報があるかもしれない。
-                </p>
-              )}
-            </>
-          )}
-        </Card>
-
-        {selectedDate === undefined && listUnavailable ? null : selectedDate === undefined ? (
-          <Card className="min-w-0">
-            <Empty>
-              日報が1件も無い。クローンが締め時刻にまとめる（スケジュールから今すぐ回せる）。
-            </Empty>
+                {isReportsWindowFull(reports.length) && (
+                  <p className="border-t border-border px-4 py-2 text-[11px] text-muted-foreground">
+                    直近 {REPORTS_LIMIT} 件のみ表示している。これより古い日報があるかもしれない。
+                  </p>
+                )}
+              </>
+            )}
           </Card>
-        ) : (
-          <ReportBody date={selectedDate} reportId={selectedId} />
-        )}
-      </div>
+
+          {selectedDate === undefined ? (
+            <Card className="min-w-0">
+              <Empty>
+                日報が1件も無い。クローンが締め時刻にまとめる（スケジュールから今すぐ回せる）。
+              </Empty>
+            </Card>
+          ) : (
+            <ReportBody date={selectedDate} reportId={selectedId} />
+          )}
+        </div>
+      )}
     </Page>
   );
 }
 
 function ReportBody({ date, reportId }: { date: string; reportId: string | undefined }) {
-  const { data, error, isLoading } = useReport(date);
+  const { data, error, isLoading, isValidating, mutate } = useReport(date);
 
   const reports = data?.reports ?? [];
   /*
@@ -270,7 +290,7 @@ function ReportBody({ date, reportId }: { date: string; reportId: string | undef
   const report = reports.find((entry) => entry.id === reportId) ?? reports[0];
   /**
    * **取れなかったのを「この日の日報は無い」と描かない**（issue #2324）。本文をまだ一度も
-   * 読めていないまま失敗したとき、失敗は上の `ErrorNote` が言う。再検証の失敗で `data` が
+   * 読めていないまま失敗したとき、失敗は `LoadError` が言う。再検証の失敗で `data` が
    * 残っているときは当たらず、本文をそのまま出す。
    */
   const bodyUnavailable = data === undefined && error !== undefined;
@@ -282,7 +302,13 @@ function ReportBody({ date, reportId }: { date: string; reportId: string | undef
           {report === undefined ? date : reportLabel(report)}
         </h2>
       </div>
-      <ErrorNote error={error} className="m-4" />
+      <LoadError
+        what="この日の日報"
+        error={error}
+        onRetry={() => mutate()}
+        retrying={isValidating}
+        className="m-4"
+      />
       {isLoading ? (
         <Spinner />
       ) : bodyUnavailable ? null : report === undefined ? (

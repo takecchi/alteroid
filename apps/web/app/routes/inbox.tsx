@@ -1,4 +1,5 @@
 import { ScheduleTabs } from '~/components/group-tabs';
+import { LoadError } from '~/components/load-error';
 import { AlertTriangle } from 'lucide-react';
 import { useMemo, useState } from 'react';
 
@@ -160,7 +161,7 @@ function splitList(value: string): string[] {
  * `summarizeInboxBacklog` 1箇所。`GET /inbox` の doc）。
  */
 function InboxBacklogCard() {
-  const { data, error, isLoading } = useInboxBacklog();
+  const { data, error, isLoading, isValidating, mutate } = useInboxBacklog();
 
   return (
     <Card>
@@ -169,7 +170,12 @@ function InboxBacklogCard() {
         subtitle="alteroid inbox show / GET /inbox と同じもの（読み取り専用）"
       />
       <div className="flex flex-col gap-3 px-4 py-3 text-sm">
-        <ErrorNote error={error} />
+        <LoadError
+          what="受信箱の内訳"
+          error={error}
+          onRetry={() => mutate()}
+          retrying={isValidating}
+        />
         {isLoading && data === undefined && (
           <p className="text-xs text-muted-foreground">読み込み中…</p>
         )}

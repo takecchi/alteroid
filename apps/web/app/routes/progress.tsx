@@ -1,4 +1,5 @@
 import { WorkTabs } from '~/components/group-tabs';
+import { LoadError } from '~/components/load-error';
 import { useMemo, type ReactNode } from 'react';
 import { useSearchParams } from 'react-router';
 
@@ -7,14 +8,13 @@ import {
   Card,
   CardHeader,
   ChoiceChips,
-  ErrorNote,
   KeyValueList,
   Page,
   Spinner,
   Stat,
   type KeyValueItem,
 } from '@alteroid/ui';
-import { ApiError, useProgress } from '@alteroid/swr';
+import { useProgress } from '@alteroid/swr';
 import { formatDateTime, formatRelative, redactBody } from '@alteroid/logic';
 import type { Progress, ProgressForecast, ProgressForecastBasis } from '@alteroid/logic';
 
@@ -57,7 +57,7 @@ export default function ProgressPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const rawWindow = searchParams.get(WINDOW_PARAM);
   const windowHours = useMemo(() => parseWindow(rawWindow), [rawWindow]);
-  const { data, error, isLoading } = useProgress(windowHours);
+  const { data, error, isLoading, isValidating, mutate } = useProgress(windowHours);
 
   function selectWindow(next: WindowHours) {
     setSearchParams(
@@ -88,7 +88,13 @@ export default function ProgressPage() {
 
       {error !== undefined && data === undefined ? (
         <Card>
-          <ProgressErrorNote error={error} />
+          <LoadError
+            what="作業の進捗"
+            error={error}
+            onRetry={() => mutate()}
+            retrying={isValidating}
+            className="m-4"
+          />
         </Card>
       ) : data === undefined ? (
         <Card>
@@ -106,19 +112,6 @@ export default function ProgressPage() {
       )}
     </Page>
   );
-}
-
-/** 404 は「この口を持たない古いデーモン」専用の文言にする。 */
-function ProgressErrorNote({ error }: { error: unknown }) {
-  if (error instanceof ApiError && error.status === 404) {
-    return (
-      <div className="px-4 py-3 text-sm text-destructive">
-        この版のデーモンにはこの口（GET /progress）が無い。デーモンを更新してください。
-        進む仕事が0件だった、という意味ではない。
-      </div>
-    );
-  }
-  return <ErrorNote error={error} className="m-4" />;
 }
 
 /** 件数。`null` になりうる量にはこれを使わない（0 と区別できなくなる）。 */

@@ -21,6 +21,7 @@ export * from './format.js';
 export * from './journal-display.js';
 export * from './journal-summary.js';
 export * from './journal-window.js';
+export * from './load-error.js';
 export * from './clone-provider.js';
 export * from './manager-provider.js';
 export * from './profile-compat.js';

@@ -1,6 +1,7 @@
 // URL の伏せ字は CLI と同じ1つの実装（`@alteroid/core/mask-url`。issue #1622 ——
 // 2つが別々に同じ判定を持ち、どちらも password だけの userinfo を素通ししていた）。
 import { SettingsTabs } from '~/components/group-tabs';
+import { LoadError } from '~/components/load-error';
 import { maskUrl } from '@alteroid/core/mask-url';
 import { useState } from 'react';
 
@@ -51,7 +52,7 @@ import type {
  * 送る前に止める（CLI の `parseMcpJson` と同じ線）。
  */
 export default function McpServersPage() {
-  const { data, error, isLoading } = useMcpServers();
+  const { data, error, isLoading, isValidating, mutate } = useMcpServers();
 
   return (
     <Page
@@ -66,7 +67,12 @@ export default function McpServersPage() {
             subtitle="alteroid mcp list / show / GET /mcp-servers と同じもの"
           />
           <div className="flex flex-col gap-3 px-4 py-3">
-            <ErrorNote error={error} />
+            <LoadError
+              what="MCP 連携の登録内容"
+              error={error}
+              onRetry={() => mutate()}
+              retrying={isValidating}
+            />
             <NotOwnerHint failure={error} subject="MCP 連携の登録" />
             {isLoading ? <Spinner /> : data !== undefined && <McpServersView state={data} />}
           </div>

@@ -11,6 +11,7 @@ import {
   STATUS_SEARCH_PARAM,
 } from '@alteroid/logic';
 import { terminalFailureNote } from '~/lib/manager-failure-note';
+import { LoadError } from '~/components/load-error';
 import type { ManagerDenial, ManagerStatus, ManagerSummary, UnreadableJob } from '@alteroid/logic';
 
 /** 読めない委譲の id を並べる上限（これを超えたら件数で言う）。 */
@@ -729,20 +730,28 @@ function ManagersBody({ selected }: { selected: readonly ManagerStatus[] }) {
     isLoadingOlder,
     olderError,
     loadOlder,
+    reload,
+    isReloading,
   } = useManagersWindow(selected);
   /**
    * **取れなかったのを0件と描かない**（issue #2322）。一覧をまだ1件も読めていないまま
-   * 失敗したとき、失敗は上の `ErrorNote` が言う。ここで「まだ1体も起きていない」を並べると、
+   * 失敗したとき、失敗は上の `LoadError` が言う。ここで「まだ1体も起きていない」を並べると、
    * 読めていないのにマネージャーが居ないように読める。フックは「1度も成功していない」を
    * 別の値では返さないので、`error` と0件の組で言う。0件で成功した後の再検証の失敗も
-   * これに当たり、空の文言は消えて `ErrorNote` だけが残る（読めた0件を隠す害は小さい）。
+   * これに当たり、空の文言は消えて `LoadError` だけが残る（読めた0件を隠す害は小さい）。
    * 一覧が残っているときは当たらず、そのまま出す。
    */
   const listUnavailable = error !== undefined && managers.length === 0;
 
   return (
     <>
-      <ErrorNote error={error} className="mb-4" />
+      <LoadError
+        what="マネージャー一覧"
+        error={error}
+        onRetry={reload}
+        retrying={isReloading}
+        className="mb-4"
+      />
       {/* 一覧の上に置く。読める行の中身を見る前に、まず断りが目に入るように（issue #2345）。 */}
       <UnreadableJobNote unreadable={unreadable} className="mb-4" />
       {isLoadingInitial ? (
