@@ -25,6 +25,12 @@ type TopologyManager = TopologySnapshot['managers'][number];
 
 /** 終端した委譲を地図に残す窓。画面が「畳まれていく」のを見せるための猶予。 */
 export const TOPOLOGY_ENDED_WINDOW_MS = 10 * 60 * 1000;
+/**
+ * runner の生存確認の一覧に載っていた観測（`runnerListedAt`）を「いま居る」の根拠にしてよい
+ * 古さの上限。生存確認は10秒周期なので、6周ぶん取りこぼしても居る側へ倒す。`/managers` だけが
+ * 詰まると前の観測が残る（`RunnerEntry.sessions` の doc）ので、古い観測では居座らせない。
+ */
+export const TOPOLOGY_RUNNER_LISTING_FRESH_MS = 60 * 1000;
 /** `request` の抜粋の長さ。 */
 export const TOPOLOGY_REQUEST_LIMIT = 200;
 /** 返事待ち1件の `summary` の抜粋の長さ。 */
@@ -57,13 +63,32 @@ function isActiveStatus(status: ManagerSummary['status']): boolean {
 }
 
 /**
- * 地図に載せる委譲か（走行中・返事待ち・背景処理待ち、または直近に終わったもの）。
+ * runner が実際に抱えていると観測できている委譲か（`ManagerSummary.runnerListedAt`）。
+ * **観測だけを根拠にする**——欄が無い（聞けていない・一覧に載っていない・黙った器・名簿から
+ * 消えた器）、古い、または `lost` / `failed` / `stopped`（デーモンが確かめた終端）なら false。
+ */
+function isListedOnRunner(manager: ManagerSummary, nowMs: number): boolean {
+  if (manager.runnerListedAt === undefined) return false;
+  if (manager.status === 'lost' || manager.status === 'failed' || manager.status === 'stopped') {
+    return false;
+  }
+  const listed = Date.parse(manager.runnerListedAt);
+  if (Number.isNaN(listed)) return false;
+  return nowMs - listed <= TOPOLOGY_RUNNER_LISTING_FRESH_MS;
+}
+
+/**
+ * 地図に載せる委譲か（走行中・返事待ち・背景処理待ち・runner の上に居ると観測できているもの、
+ * または直近に終わったもの）。
  * **背景処理待ち（`awaitingBackground`）は終端の窓（10分）に関係なく載せる**——待っている間は
  * 台帳の `status` が `done` でも仕事の途中で、窓で落とすと下の作業者ごと地図から消える（#2724）。
+ * **runner の生存確認の一覧に載っている委譲も窓に関係なく載せる**——手が空いた（`done`）だけで、
+ * 器の上にはまだ居る（`runnerListedAt`。使っているかどうかを問わない）。
  */
 export function isOnTopology(manager: ManagerSummary, nowMs: number): boolean {
   if (isActiveStatus(manager.status)) return true;
   if (manager.awaitingBackground !== undefined) return true;
+  if (isListedOnRunner(manager, nowMs)) return true;
   const updated = Date.parse(manager.updatedAt);
   // 読めない時刻は「直近」と決めない（古いものを居座らせない）。
   if (Number.isNaN(updated)) return false;
@@ -114,6 +139,7 @@ function topologyManagerOf(
     status: manager.status,
     live: manager.live,
     ...(manager.runnerId === undefined ? {} : { runnerId: manager.runnerId }),
+    ...(manager.runnerListedAt === undefined ? {} : { runnerListedAt: manager.runnerListedAt }),
     request: clipLine(manager.request, TOPOLOGY_REQUEST_LIMIT),
     startedAt: manager.startedAt,
     updatedAt: manager.updatedAt,
@@ -137,7 +163,8 @@ function topologyManagerOf(
 /**
  * 載せる順。返事待ち → 走行中・背景処理待ち → 終端（新しい順）。**背景処理待ちは走行中と
  * 同じ段**（予算で切られるのは終端が先。クローンの「完了待ち」判定が、載らなかった委譲に
- * 途中のものが混じらない前提を置く）。
+ * 途中のものが混じらない前提を置く）。**窓の外で runner に居るだけの `done`
+ * （`runnerListedAt`）は終端の段のまま**——最後に置かれ、途中のものより先に切られる。
  */
 function rank(manager: ManagerSummary): number {
   if (manager.status === 'waiting_human') return 0;

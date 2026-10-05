@@ -319,6 +319,24 @@ export function journalHorizonNote(
   );
 }
 
+/**
+ * {@link journalHorizonNote} の Web 版（issue #2806）。出す条件は同じ。時刻は
+ * 呼び出し側が渡す整形（`formatDateTime`＝閲覧者の端末の時間帯）で出し、UTC の ISO 文字列と
+ * 内部の言葉（記憶ストア）は見せない。
+ */
+export function journalHorizonNoteForHuman(
+  outcome: PageOutcome,
+  oldestAt: string | null | undefined,
+  crossesHorizon: boolean | undefined,
+  formatTime: (iso: string) => string,
+): string | undefined {
+  if (journalHorizonNote(outcome, oldestAt, crossesHorizon) === undefined) return undefined;
+  return (
+    `記録は ${formatTime(oldestAt as string)} より前には遡れない。それより前に本当に何も無かったのか、` +
+    '記録が残っていないだけなのかは、この一覧だけからは区別できない。'
+  );
+}
+
 /** `since` で撃った1ページ、または SSE の `recent` を先頭へ適用する。 */
 export function applyNewerPage(
   existing: JournalEntry[],

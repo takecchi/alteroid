@@ -21,7 +21,8 @@ import {
   formatRelative,
   JOURNAL_TONE,
   JOURNAL_TYPES,
-  SEARCH_SCOPE_NOTE,
+  journalTypeLabel,
+  SEARCH_SCOPE_NOTE_JA,
   shiftForPrepend,
 } from '@alteroid/logic';
 import { JournalEntryLinks } from '~/lib/journal-links';
@@ -245,7 +246,7 @@ export default function Journal() {
               type="search"
               value={draft}
               onChange={(event) => setDraft(event.target.value)}
-              placeholder="本文を語で探す（大文字小文字を区別しない部分一致）"
+              placeholder="本文を語で探す"
               aria-label="日誌を語で探す"
               className="w-full rounded border border-border bg-background py-1.5 pr-2 pl-8 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none"
             />
@@ -259,12 +260,12 @@ export default function Journal() {
           ときの目印にならない（`memory_read` の注記と同じ倒し方）。
         */}
         {committed !== '' && (
-          <p className="mb-3 text-[11px] text-muted-foreground">{SEARCH_SCOPE_NOTE}</p>
+          <p className="mb-3 text-[11px] text-muted-foreground">{SEARCH_SCOPE_NOTE_JA}</p>
         )}
         <FilterChips
           className="mb-4"
           label="種別で絞り込む"
-          options={JOURNAL_TYPES.map((type) => ({ value: type }))}
+          options={JOURNAL_TYPES.map((type) => ({ value: type, label: journalTypeLabel(type) }))}
           selected={selected}
           onToggle={toggle}
           onClear={clearSelected}
@@ -304,17 +305,20 @@ export default function Journal() {
  * （`journal.test.tsx`「当たらなかったら、その語では無いと言う」）。
  */
 function journalEmptyMessage(selected: readonly JournalEntryType[], q: string): string {
-  const typeLabel = selected.length > 0 ? `type=${selected.join(',')}` : undefined;
+  const typeLabel =
+    selected.length > 0
+      ? selected.map((type) => `「${journalTypeLabel(type)}」`).join('')
+      : undefined;
   if (typeLabel === undefined && q === '') {
     return 'この条件では何も記録されていない。';
   }
   if (typeLabel === undefined) {
-    return `「${q}」に当たる記録は無い（この条件の中では）。`;
+    return `「${q}」に当たる記録はありません（この条件の中では）。`;
   }
   if (q === '') {
-    return `${typeLabel} に当たる記録は無い（絞り込みを外せば見えるかもしれない）。`;
+    return `${typeLabel}の記録はありません（絞り込みを外せば見えるかもしれません）。`;
   }
-  return `${typeLabel} に絞った上で、「${q}」に当たる記録は無い（絞り込みを外せば見えるかもしれない）。`;
+  return `${typeLabel}に絞った上で、「${q}」に当たる記録はありません（絞り込みを外せば見えるかもしれません）。`;
 }
 
 function JournalBody({
@@ -442,6 +446,7 @@ function JournalBody({
                   // 開閉の `<button>` の中に Tab の停止点も増やさない。
                   time={formatRelative(entry.at)}
                   type={entry.type}
+                  typeLabel={journalTypeLabel(entry.type)}
                   tone={JOURNAL_TONE[entry.type]}
                   summary={summarizeJournalEntry(entry)}
                   links={<JournalEntryLinks entry={entry} />}
