@@ -146,7 +146,7 @@ describe('/env-vars 画面 — 一覧', () => {
     await waitForListLoaded();
 
     expect(screen.getByText('Asia/Tokyo')).toBeTruthy();
-    expect(screen.getByText('clone')).toBeTruthy();
+    expect(screen.getAllByText('クローンだけ').some((el) => el.tagName !== 'OPTION')).toBe(true);
     expect(screen.getByText('非シークレット')).toBeTruthy();
   });
 
@@ -170,7 +170,9 @@ describe('/env-vars 画面 — 一覧', () => {
     );
     await waitForListLoaded();
 
-    expect(screen.getByText('manager')).toBeTruthy();
+    expect(screen.getAllByText('マネージャーだけ').some((el) => el.tagName !== 'OPTION')).toBe(
+      true,
+    );
   });
 
   it('shadowsCloneEnv が立っている行には警告が出る', async () => {
@@ -224,8 +226,8 @@ describe('/env-vars 画面 — 一覧', () => {
     );
     await waitForListLoaded();
 
-    expect(await screen.findByText(/manager にはいま何も配られていない/)).toBeTruthy();
-    expect(await screen.findByText(/manager にも配られ始める/)).toBeTruthy();
+    expect(await screen.findByText(/マネージャーにはいま何も渡されていない/)).toBeTruthy();
+    expect(await screen.findByText(/マネージャーにも渡され始める/)).toBeTruthy();
   });
 
   it('shadowsCloneEnv かつ scope: all の行には、manager 向けの注記（app 専用）は出ない', async () => {
@@ -250,7 +252,7 @@ describe('/env-vars 画面 — 一覧', () => {
     await waitForListLoaded();
 
     await screen.findByText(/優先して配られている/);
-    expect(screen.queryByText(/manager にはいま何も配られていない/)).toBeNull();
+    expect(screen.queryByText(/マネージャーにはいま何も渡されていない/)).toBeNull();
   });
 
   it('1件も無ければ、その旨を言う', async () => {

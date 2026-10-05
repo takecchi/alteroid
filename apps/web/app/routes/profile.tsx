@@ -99,7 +99,7 @@ export default function Profile() {
     <Page
       tabs={<SettingsTabs />}
       title="実行環境プロファイル"
-      description="クローン・マネージャー・作業者に効くシェルスクリプトの行（~/.zprofile 相当。行ごとに撒く先を選べる）"
+      description="クローン・マネージャー・作業者に効くシェルスクリプトの行（~/.zprofile 相当。行ごとに渡す先を選べる）"
     >
       <div className="flex flex-col gap-4">
         <Card>

@@ -61,15 +61,15 @@ function describeScope(scope: EnvVarScope): { label: string; tone: 'neutral' | '
     case 'all':
       return { label: '共通', tone: 'accent' };
     case 'app':
-      return { label: 'clone', tone: 'neutral' };
+      return { label: 'クローンだけ', tone: 'neutral' };
     case 'runner':
-      return { label: 'manager', tone: 'neutral' };
+      return { label: 'マネージャーだけ', tone: 'neutral' };
     default:
       // **送られてくる値である**（デーモンが `GET /credentials` で載せる）。
       // `apps/web` は Vercel、デーモンは Railway で別に配られるので、
       // サーバのほうが新しい窓が必ず在る——投げずに「未知」とそのまま出す
       // （`tokens.tsx` の `describeUnknown` と同じ判断）。
-      return { label: `未知の撒く先（${String(scope)}）`, tone: 'neutral' };
+      return { label: `未知の渡す先（${String(scope)}）`, tone: 'neutral' };
   }
 }
 
@@ -178,9 +178,9 @@ function EnvVarRow({
             // manager にはこの名前が何も配られていない。そして「配られていない」
             // からといってこの行を外すと、その名前は manager にも配られ始める
             // （scope で閉じた先へ届く）。
-            ' scope: app（clone だけ）のこの名前は、manager にはいま何も配られて' +
-              'いない。この行を外すと、器の環境変数の値が manager にも配られ始める' +
-              '（scope で閉じた先へ届く）。'}
+            ' 渡す先が「クローンだけ」のこの名前は、マネージャーにはいま何も渡されて' +
+              'いない。この行を外すと、器の環境変数の値がマネージャーにも渡され始める' +
+              '（渡す先を閉じていた分が外れるため）。'}
         </p>
       )}
 
@@ -204,9 +204,9 @@ function EnvVarRow({
 }
 
 const SCOPE_OPTIONS: { value: EnvVarScope; label: string }[] = [
-  { value: 'all', label: '共通（clone・manager 両方。既定）' },
-  { value: 'app', label: 'clone だけ' },
-  { value: 'runner', label: 'manager だけ' },
+  { value: 'all', label: '共通（クローン・マネージャー両方。既定）' },
+  { value: 'app', label: 'クローンだけ' },
+  { value: 'runner', label: 'マネージャーだけ' },
 ];
 
 function AddEnvVarForm() {
