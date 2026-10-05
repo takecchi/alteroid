@@ -41,7 +41,7 @@ import { cn } from '@/lib/utils';
  * 置き換えた**（`text-muted` → `text-muted-foreground` など。意味は同じ）。
  */
 export const TAB_TRIGGER_CLASS =
-  'border-b-2 border-transparent px-3 py-1.5 text-sm font-medium text-muted-foreground transition-colors hover:text-foreground';
+  'border-b-2 border-transparent px-3 py-1.5 text-sm font-medium text-muted-foreground transition-colors hover:text-foreground pointer-coarse:py-3';
 export const TAB_TRIGGER_ACTIVE_CLASS = 'border-primary text-foreground';
 
 /**

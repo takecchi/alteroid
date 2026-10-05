@@ -1,4 +1,5 @@
 import { SettingsTabs } from '~/components/group-tabs';
+import { settingsDocumentTitle } from '~/lib/nav';
 import { AlertTriangle } from 'lucide-react';
 import {
   describeUnmeteredUsage,
@@ -397,6 +398,7 @@ export default function Usage() {
   return (
     <Page
       tabs={<SettingsTabs />}
+      documentTitle={settingsDocumentTitle('/usage')}
       title="利用状況"
       description="alteroid が使った分（トークンと費用）。推定値であり、Anthropic の請求明細ではありません"
     >

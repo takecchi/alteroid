@@ -151,7 +151,7 @@ export default function PracticeDetail({ loaderData }: Route.ComponentProps) {
         <span className="flex items-baseline gap-2">
           <Link
             to="/practices"
-            className="shrink-0 whitespace-nowrap text-muted-foreground hover:text-foreground"
+            className="shrink-0 whitespace-nowrap text-muted-foreground hover:text-foreground pointer-coarse:-mx-2 pointer-coarse:-my-2.5 pointer-coarse:px-2 pointer-coarse:py-2.5"
           >
             やり方
           </Link>

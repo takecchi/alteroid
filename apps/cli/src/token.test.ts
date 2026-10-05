@@ -677,6 +677,17 @@ describe('alteroid token policy', () => {
     expect(put?.body).toEqual({ rotateOn: 'overage_exhausted' });
   });
 
+  it('token policy の値が3つのどれでもなければ、通信の前に許される値と意味を日本語で言う（rotateOn を出さない）', async () => {
+    const error = await tokenPolicyCommand('bogus', {}).catch((e: unknown) => e);
+    const text = String(error);
+    expect(text).toContain(
+      'free_exhausted / overage_exhausted / off のいずれか（渡されたのは bogus）',
+    );
+    expect(text).toContain('無料枠が尽きたら回す');
+    expect(text).not.toContain('rotateOn');
+    expect(sent.some((call) => call.method === 'PUT')).toBe(false);
+  });
+
   it('--cooldown-ms も渡せる。0以下や非数は投げる', async () => {
     setReply('PUT', '/tokens/policy', {
       status: 200,

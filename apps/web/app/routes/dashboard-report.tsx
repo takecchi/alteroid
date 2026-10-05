@@ -13,7 +13,7 @@ import { isUnavailable, UnavailableNote } from './reports';
 /**
  * 最新の日報。ホームの主役のひとつなので、小さなカードの抜粋ではなく **全幅の枠で本文を
  * Markdown として描く**（`/reports` と同じ `Markdown` 部品と `redactBody`）。長い本文は
- * 枠の側（`HomeReportCard`）が高さで切り、「続きを読む」で日報のページへ送る。
+ * 枠の側（`HomeReportCard`）が高さで切り、本文の下のボタンでその場に全文へ広げる。日報のページへの入口は右上の「日報一覧」に残す。
  *
  * **印の付いた行（日報が書けなかった日）を日報として描かない**（`reports.tsx` の
  * `isUnavailable` / `UnavailableNote` の doc が経緯）。ここは人間が最初に開く面なので、
@@ -23,8 +23,6 @@ import { isUnavailable, UnavailableNote } from './reports';
 export function LatestReport() {
   const reports = useReports(1);
   const latest = reports.data?.reports[0];
-  const href =
-    latest === undefined ? '/reports' : `/reports/${latest.date}/${encodeURIComponent(latest.id)}`;
   const readable = latest !== undefined && !isUnavailable(latest);
   return (
     <HomeReportCard
@@ -35,13 +33,6 @@ export function LatestReport() {
         <Link to="/reports" className={HOME_LINK_CLASS}>
           日報一覧
         </Link>
-      }
-      footer={
-        readable ? (
-          <Link to={href} className={HOME_LINK_CLASS}>
-            続きを読む（全文）
-          </Link>
-        ) : undefined
       }
     >
       {reports.error !== undefined ? (

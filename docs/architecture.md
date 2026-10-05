@@ -18,7 +18,7 @@
 │   └ 記憶ストア ← **このプロセスだけが接続情報を持つ**       │   │   持たない      │
 │                                                          │   └───────────────┘
 │  スケジューラ / 外部イベント入口 / 承認待ちキュー           │
-│  HTTP API（hono）─ chat(SSE)・jobs・承認                  │
+│  HTTP API（hono）─ chat(SSE)・managers・承認                  │
 │                    日報・日誌・セッションログ（可観測性3層）  │
 │  RunnerRegistry ─ 委譲の宛先を決める間接層                 │
 └──────┬───────────────────────────────────────────┘
@@ -91,8 +91,10 @@
 
 | 向き | 経路 |
 |---|---|
-| デーモン → runner | `POST /managers`（start） / `POST /managers/:id/resume` / `POST /managers/:id/messages` / `POST /managers/:id/answers` / `DELETE /managers/:id` / `GET /managers` / `GET /managers/:id/transcript` / `GET /health`（runner_id を名乗る） |
-| runner → デーモン | `GET /events`（SSE）。`session` / `project_key` / `report` / `ask` / `settled` / `tool_use` / `mirror`（生ログ） / `archive` / `closed` |
+| デーモン → runner | `POST /managers`（start） / `POST /managers/:id/resume` / `POST /managers/:id/messages` / `POST /managers/:id/answers` / `DELETE /managers/:id` / `GET /managers` / `GET /managers/:id/transcript` / `GET /managers/:id/unpushed-work`（未 push の成果の観測。`manager_stop` が使う） / `GET /health`（runner_id を名乗る） / 降ろす口: `POST /credentials`（マネージャーへ降ろす環境変数）・`POST /profile`（実行環境プロファイル）・`POST /mcp-servers`（MCP 登録）。`GET /profile` と `GET /mcp-servers` は指紋を返す |
+| runner → デーモン | `GET /events`（SSE）。種別は `hello`（名乗り） / `session` / `project_key` / `report` / `worker_wait` / `ask` / `settled` / `note` / `tool_use` / `tool_running` / `tool_end` / `permission_denied` / `usage` / `peer_usage` / `context_usage` / `usage_notice` / `rate_limit` / `mirror`（生ログ） / `archive` / `closed` / `resume_failed` / `shutdown_unpushed_work` |
+
+**この表は写しである。正本は `packages/core/src/runner-protocol.ts` の `runnerEventSchema`（上りの種別）と `apps/runner/src/app.ts` のルート定義（下りの口）で、食い違ったら正本が勝つ。** 口を足すときは、`control`（合鍵）の内側に置くこと（下の「制御面の保護」）。
 
 **`/livez` 以外はすべて合鍵（Bearer）を要求する。** 下の「制御面の保護」のとおり、この口は
 マネージャーが走っている器の中にあるので、鍵の無い呼び出しを通すと権限境界が迂回できる。
@@ -189,13 +191,18 @@ runner 本体とは別の UID で走らせる**（`spawnClaudeCodeProcess` で�
 
 ## 同時実行の宛先 — RunnerRegistry
 
-委譲の宛先は `RunnerRegistry`（`list` / `get` / `select`）を通して決める。M4 で登録されるのは
-1台（`runner-primary`）で、`select` は常にそれを返す。間接層を最初から置くのは、宛先の決定が
-呼び出し側に散らばると M5（複数 runner）で全部書き直しになるからである。
+委譲の宛先は `RunnerRegistry`（`list` / `get` / `select` と、名簿の `register` / `unregister`）を通して決める。
+名簿は動的で、`ALTEROID_RUNNER_URLS`（カンマ区切りで複数）か `ALTEROID_RUNNER_URL` で登録した複数台の runner
+を持てる（runner が無くてもデーモンは起動し、後から載る）。`select` は、`runnerId` の指名が無ければ
+runner が報告する資源（pids の現在値と上限など）と直近の失敗を見て置き先を選び（`chooseByResources`）、
+`runnerId` が指名されればその器へ置く（開けていて使えないときは自動配置へ落とさず、理由を添えて失敗する）。
+繋がっている runner が無ければ短い猶予のあいだ待ち、過ぎたら宛先ごとの状態を添えて失敗する。
+`cwd` は受け取るが置き先の材料にはまだしていない。間接層を最初から置くのは、宛先の決定が
+呼び出し側に散らばると複数 runner で全部書き直しになるからである。
 
 - `select` に**人工的な上限を入れない**。「同時に何本まで」は能力の削除であって配置の判断では
-  ない（禁止2）。将来ここで見てよいのは、runner が報告する CPU・メモリ・稼働セッション数と
-  いった**実行環境の資源**である
+  ない（禁止2）。ここで見てよいのは、runner が報告する CPU・メモリ・稼働セッション数と
+  いった**実行環境の資源**である（いま見ているのは上の資源と直近の失敗）
 - 走行中のマネージャーの宛先は JobStore に残る（下の対応関係）。`manager_send` は
   `manager_id` から runner を引いて届ける（sticky routing）
 
@@ -385,7 +392,7 @@ type WorkspaceLocator =
 生ログへは runner の API → アーカイブ → 預かったセッションの生ログ、の順で降りる。
 
 - **fs を先に作る**。記憶が Markdown ファイルであることは「人間がいつでも読んで直せる」（提供価値1）の最短の実装
-- **記憶の版は本文の sha256 である**（`memoryVersion`）。`GET /memory/{slug}` と `PUT` の応答が `version` で返し、`PUT` の任意の `ifMatch` と `PersonaStore.write(slug, content, { ifMatch })` が受ける。`updatedAt` にしないのは fs の mtime の精度に依らないため。比較は書き込みと同じ排他の中で行い（fs は `withPathLock` の内側、pg は条件付きの1文）、合わなければ `MemoryConflictError`（HTTP は 409 と `current`）。`ifMatch: null` は「読んだ時には無かった」。**省略は後勝ち**（クローンの道具・`memory set`・既存のスクリプトを壊さない）。3実装で挙動を揃える歯が `persona-contract.test.ts` / storage-fs / storage-pg にある
+- **記憶の版は本文の sha256 である**（`memoryVersion`）。`GET /memory/{slug}` と `PUT` の応答が `version` で返し、`PUT` の任意の `ifMatch` と `PersonaStore.write(slug, content, { ifMatch })` が受ける。`updatedAt` にしないのは fs の mtime の精度に依らないため。比較は書き込みと同じ排他の中で行い（fs は `withPathLock` の内側、pg は条件付きの1文）、合わなければ `MemoryConflictError`（HTTP は 409 と `current`）。`ifMatch: null` は「読んだ時には無かった」。**省略は後勝ち**（`memory set`・既存のスクリプトを壊さない）。**クローンの全文を書き直す口は省略を許さない**（Issue #2809）: `memory_read` / `memory_outline` / `memory_write` の応答の末尾が `base_version` を返し、`memory_write` は既存の文書にはそれを引数で受けて `ifMatch` に渡す（読んでから書くまでが別の道具呼び出しで、ターンをまたぎうるので、道具の内側だけで比べても足りない）。無ければ書かず `memory_read` を促し、合わなければ書かず・日誌にも積まず「その間に変わった」といまの版を返す。新規作成は `ifMatch: null` 相当。`memory_frontmatter_set` も `memory_write` と同じく引数 `base_version` を**必須**で受けて `ifMatch` に渡す（読んでから呼ぶまでの間に人間が要旨を直すと、渡したキーで上書きされうるため。無ければ書かず読み直しを促し、合わなければ書かず「その間に変わった」と返す）。断る文はどれも「何も書いていない」と言う。`memory_section_move` の出どころの切り取りは、同じ呼び出しの中で読んだ版を `ifMatch` に渡す（衝突したときは移し先に足した後なので「何も書いていない」とは言わず、足した／切っていない＝重複で消失ではない、と言う）（切り取りが落ちても先に足した移し先は残る＝重複で、消失ではない）。`memory_append` は原子的な追記で置換しないので前提を持たない。3実装で挙動を揃える歯が `persona-contract.test.ts` / storage-fs / storage-pg にある
 - SDK セッション自体の永続化は SessionStore アダプタ（SDK 公式）で同じ PostgreSQL に載せる。デーモン再起動時は JobStore の session_id からマネージャーを resume する
 
 ## パッケージ構成
@@ -398,9 +405,15 @@ packages/storage-pg  クラウド用ドライバ（PostgreSQL / drizzle）
 apps/daemon          alteroidd = core をホストする常駐プロセス + HTTP API（hono）
 apps/runner          alteroid-runner = manager-runner。SDK を隔離して走らせる
 apps/cli             alteroid = daemon への薄いクライアント（hono/client で型共有）
-apps/web             公式の画面。React Router v7 の SPA。@alteroid/api-client 経由で
-                     デーモンの API だけを見る（独自の経路を持たない）
-packages/api-client  生成 spec から起こした外部向けクライアント。apps/web が最初の消費者
+apps/web             公式の画面。React Router v7 の SPA。packages/swr（→ api-client）
+                     経由でデーモンの API だけを見る（独自の経路を持たない）
+packages/api-client  生成 spec から起こした外部向けクライアント。packages/swr が最初の消費者
+packages/logic       Web UI の純ロジック（表示の整形・接続先と資格情報の置き場・日誌の窓・
+                     画面の型）。React も SWR も知らない
+packages/swr         Web UI から API を叩く層（ApiProvider と SWR の hooks）。型と呼び出しの
+                     出どころは api-client
+packages/ui          Web UI の見た目の部品（shadcn の部品・汎用の表示部品・テーマの CSS）。
+                     API もデーモンも知らない
 ```
 
 境界の両側が `core` に居るのは、**プロトコルと型を1か所に置くため**である。実際に動くときは

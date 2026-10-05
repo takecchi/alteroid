@@ -99,7 +99,7 @@ export default function Commitments() {
     <Page
       tabs={<WorkTabs />}
       title="未了の仕事"
-      description="受信箱でも日誌でもここには残らない。忘れさせないための器であって、やることの一覧ではない"
+      description="受信箱でも日誌でもここには残らない。忘れさせないための場所であって、やることの一覧ではない"
       action={
         <Button size="sm" onClick={() => setShowClosed((v) => !v)}>
           {showClosed ? '未了だけ' : '片付けたものも見る'}
@@ -1149,7 +1149,7 @@ function OpenRow({
         <span>({formatRelative(commitment.at)})</span>
         <button
           type="button"
-          className="ml-auto text-[11px] text-muted-foreground underline hover:text-foreground"
+          className="ml-auto text-[11px] text-muted-foreground underline hover:text-foreground pointer-coarse:-my-3.5 pointer-coarse:-mr-3 pointer-coarse:px-3 pointer-coarse:py-3.5"
           onClick={() => setEditing((current) => !current)}
         >
           {editing ? '編集をやめる' : '本文を編集'}
