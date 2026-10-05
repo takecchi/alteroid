@@ -447,7 +447,7 @@ export default function Usage() {
             <>
               {/* **`$0.00` と出さない。** まだ台帳に1件も無いのを「使っていない」に見せない。 */}
               <Card>
-                <Empty>
+                <Empty inset="card">
                   台帳にはまだ1件も記録が無い。（消費の記録はこの機能を入れた時点から始まる。それより前の分は残っていない）
                 </Empty>
               </Card>
@@ -600,7 +600,7 @@ function UsageBody({
         <CardHeader title="合計" subtitle={`台帳の始点: ${since}`} />
         <div className="px-4 py-3">
           {rows.length === 0 ? (
-            <Empty>その範囲には記録が無い。</Empty>
+            <Empty inset="none">その範囲には記録が無い。</Empty>
           ) : (
             <>
               <p className="text-2xl font-semibold">{formatUsd(summary.total.costUsd)}</p>

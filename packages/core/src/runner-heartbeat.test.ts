@@ -48,6 +48,8 @@ class FakeRunner implements RunnerClient {
   listReply: 'ok' | 'error' | 'hang' = 'ok';
   /** `listReply === 'ok'` のとき `list()` が返す managerId の一覧。 */
   sessionsToReturn: string[] = [];
+  /** `list()` が欄 `liveBackgroundTasks` を載せる委譲と本数（載せない委譲は古い runner の形）。 */
+  backgroundToReturn: Record<string, number> = {};
   /** `list()` を叩かれた回数。 */
   listCalls = 0;
   /** 直近の `list()` 呼び出しへ渡された `signal`（期限で中断されるかを見る）。 */
@@ -94,6 +96,9 @@ class FakeRunner implements RunnerClient {
       cwd: '/work/project',
       request: '',
       waiting: [],
+      ...(Object.hasOwn(this.backgroundToReturn, managerId)
+        ? { liveBackgroundTasks: this.backgroundToReturn[managerId] }
+        : {}),
     }));
   }
   async transcript(): Promise<string | null> {
@@ -389,6 +394,24 @@ describe('runner の生存判定', () => {
  * 仕事を取り上げないことを、ここで直接固定する。
  */
 describe('runner が抱えているセッションの観測（#579）', () => {
+  it('list() が返した背景処理の本数を、欄を名乗った委譲だけ sessionBackgroundTasks に載せる（#2851。0 を捏造しない）', async () => {
+    vi.setSystemTime(new Date('2026-10-05T00:00:00.000Z'));
+    const runner = new FakeRunner('runner-a');
+    runner.sessionsToReturn = ['mgr-new', 'mgr-zero', 'mgr-old'];
+    runner.backgroundToReturn = { 'mgr-new': 2, 'mgr-zero': 0 };
+    const registry = createRunnerRegistry([]);
+    await registry.register({ label: 'http://runner:4518', open: async () => runner });
+
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    const [entry] = registry.entries();
+    expect(entry?.sessionBackgroundTasks).toEqual({ 'mgr-new': 2, 'mgr-zero': 0 });
+    // 欄を返さない古い runner の委譲は、キー自体が無い（分からない）。
+    expect(entry?.sessionBackgroundTasks).not.toHaveProperty('mgr-old');
+
+    await registry.stop();
+  });
+
   it('10秒ごとの beat が list() も叩き、entries() に sessions と sessionsObservedAt が載る（観測時刻は beat の時刻）', async () => {
     vi.setSystemTime(new Date('2026-08-27T09:00:00.000Z'));
     const runner = new FakeRunner('runner-a');

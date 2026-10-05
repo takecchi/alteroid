@@ -9297,6 +9297,31 @@ describe('クローンの道具', () => {
     });
 
     /**
+     * **Issue #2851。** 食い違いの ⚠ に、runner が最後に見た背景処理の本数を添える。
+     * 背景処理が残っていると runner は境界に達せず自動では畳み直さないので、
+     * 「なぜ ⚠ が消えないか」の材料になる。**聞けていないときは 0 と言わず「分からない」**。
+     */
+    it('世代が食い違う ⚠ に、runner が見た背景処理の本数（1本以上・0本・分からない）を添える', async () => {
+      const h = harness();
+      await h.call('manager_start', { request: 'A' });
+      const target = h.running[0];
+      if (!target) throw new Error('準備に失敗');
+      target.tokenGeneration = 3;
+      target.activeTokenGeneration = 5;
+
+      target.liveBackgroundTasks = 2;
+      expect(await h.call('manager_list', {})).toContain('背景処理は 2 本');
+
+      target.liveBackgroundTasks = 0;
+      expect(await h.call('manager_list', {})).toContain('背景処理は 0 本');
+
+      delete target.liveBackgroundTasks;
+      const unknown = await h.call('manager_list', {});
+      expect(unknown).toContain('背景処理の本数は分からない');
+      expect(unknown).not.toContain('背景処理は 0 本');
+    });
+
+    /**
      * **比べる相手が取れないときは、一致とも不一致とも言わない。**
      * `activeTokenGeneration` が無い（現役の身元をまだ確認できていない）のに
      * 「一致」と偽らない——`ManagerSummary.activeTokenGeneration` の doc と

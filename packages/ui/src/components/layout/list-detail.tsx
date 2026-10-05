@@ -38,7 +38,7 @@ const DETAIL_PADDING =
  * - `list` —— 一覧の中身（`ListDetailItems` など）
  * - `detail` —— 詳細の中身
  * - `hasSelection` —— 詳細に何か選ばれているか
- * - `selectionKey` —— 選択の識別子。スマホで変わったら詳細の先頭へ焦点を移す
+ * - `selectionKey` —— 選択の識別子。変わったら詳細のスクロールを先頭へ戻す（スマホではさらに詳細の先頭へ焦点を移す）
  * - `detailLabel` —— 詳細の領域の名前（既定は「〈一覧の名前〉の詳細」）
  * - `emptyDetail` —— 広い画面で未選択のときの案内
  * - `listFooter` —— 一覧の下端（「さらに読む」など。一覧のスクロールの外に固定される）
@@ -68,6 +68,7 @@ export function ListDetail({
   const [drawerOpen, setDrawerOpen] = useState(false);
   const detailRef = useRef<HTMLElement>(null);
   const firstRender = useRef(true);
+  const shownKey = useRef(selectionKey);
 
   // 広い画面へ変わったらドロワーは要らない。
   const drawerShown = drawerOpen && isMobile && hasSelection;
@@ -83,6 +84,13 @@ export function ListDetail({
     const id = requestAnimationFrame(() => detailRef.current?.focus());
     return () => cancelAnimationFrame(id);
   }, [selectionKey, isMobile, hasSelection]);
+
+  // 別の項目へ切り替えたら詳細を先頭から見せる（初回描画は触らない。焦点の処理とは独立）。
+  useEffect(() => {
+    if (shownKey.current === selectionKey) return;
+    shownKey.current = selectionKey;
+    if (detailRef.current) detailRef.current.scrollTop = 0;
+  }, [selectionKey]);
 
   const listPane = (inDrawer: boolean) => (
     <aside
@@ -152,6 +160,8 @@ export interface ListDetailItem {
   href: string;
   /** いま詳細に開いている項目か。 */
   current: boolean;
+  /** 行に足す className（後勝ち）。 */
+  className?: string;
   children: ReactNode;
 }
 
@@ -210,6 +220,7 @@ export function ListDetailItems({
             className: cn(
               'block border-b border-border px-3 py-2 text-sm transition-colors hover:bg-muted',
               item.current && 'lumen-edge bg-accent text-accent-foreground',
+              item.className,
             ),
             children: item.children,
             'aria-current': item.current ? 'page' : undefined,

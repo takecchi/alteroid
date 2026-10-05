@@ -46,6 +46,7 @@ function Demo({ initial }: { initial: string | undefined }) {
             key: item.key,
             href: item.href,
             current: item.key === selected,
+            className: item.key === 'b' ? 'border-b-0' : undefined,
             children: item.label,
           }))}
           renderLink={(props) => (
@@ -146,5 +147,35 @@ describe('ListDetail: 狭い画面', () => {
     await vi.waitFor(() =>
       expect(document.activeElement).toBe(screen.getByRole('region', { name: '日報の詳細' })),
     );
+  });
+});
+
+describe.each([false, true])('ListDetail: 切り替え（スマホ=%s）', (mobile) => {
+  it('項目を切り替えたら詳細の scrollTop が 0 に戻り、初回描画では触らない', () => {
+    viewport.mobile = mobile;
+    const scrollTop = vi.spyOn(HTMLElement.prototype, 'scrollTop', 'set');
+    render(<Demo initial="a" />);
+    expect(scrollTop).not.toHaveBeenCalled();
+    scrollTop.mockRestore();
+
+    const detail = screen.getByRole('region', { name: '日報の詳細' });
+    detail.scrollTop = 120;
+    expect(detail.scrollTop).toBe(120);
+    if (mobile) {
+      fireEvent.click(screen.getByRole('button', { name: '日報を開く' }));
+      fireEvent.click(within(screen.getByRole('dialog')).getByRole('link', { name: '項目b' }));
+    } else {
+      fireEvent.click(screen.getByRole('link', { name: '項目b' }));
+    }
+    expect(screen.getByRole('region', { name: '日報の詳細' }).scrollTop).toBe(0);
+  });
+});
+
+describe('ListDetailItems: 項目の className', () => {
+  it('項目の className が行に後勝ちで乗る', () => {
+    render(<Demo initial="a" />);
+    const b = screen.getByRole('link', { name: '項目b' }).className;
+    expect(b).toContain('border-b-0');
+    expect(screen.getByRole('link', { name: '項目c' }).className).not.toContain('border-b-0');
   });
 });

@@ -65,7 +65,7 @@ function DroppedBody({ state }: { state: DroppedState }) {
         件数: {state.total}（{describeDroppedTraceRetentionNote(state.limit)}）
       </p>
       {state.total === 0 ? (
-        <Empty>{describeDroppedTraceEmptyNote()}</Empty>
+        <Empty inset="none">{describeDroppedTraceEmptyNote()}</Empty>
       ) : (
         // 古い順（末尾が最新）。`GET /dropped` が返す順のまま並べる。
         <ul className="flex flex-col gap-1">
