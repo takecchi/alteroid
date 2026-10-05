@@ -94,6 +94,21 @@ function SessionsSummary() {
   );
 }
 
+/**
+ * 直前の退避との関係（core の `ArchiveContinuity`）の利用者向けの言い方。
+ * 型で網羅を守る——値が増えたらここが型エラーになる。知らない値は識別子を出さない。
+ */
+const CONTINUITY_LABELS = {
+  first: '最初の退避',
+  continues: '前回の続き',
+  diverged: '前回と内容が異なる',
+  unknown: '前回との関係は不明',
+} satisfies Record<NonNullable<ArchiveEntry['continuity']>, string>;
+
+function continuityLabel(value: string): string {
+  return (CONTINUITY_LABELS as Record<string, string | undefined>)[value] ?? '前回との関係は不明';
+}
+
 /** 識別子（UUID 等）は利用者向けの見出しに出さず、開いた先に置く。 */
 function TechnicalIds({ rows }: { rows: { label: string; value: string }[] }) {
   return (
@@ -195,7 +210,11 @@ function EntryRow({ entry }: { entry: ArchiveEntry }) {
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
         <span className="font-medium">{formatDateTime(entry.at)} の会話</span>
         {removed && <Badge tone="warn">本文は削除済み</Badge>}
-        {entry.continuity !== undefined && <Badge tone="neutral">{entry.continuity}</Badge>}
+        {entry.continuity !== undefined && (
+          <Badge tone="neutral" title={entry.continuity}>
+            {continuityLabel(entry.continuity)}
+          </Badge>
+        )}
       </div>
       <div className="mt-1 text-muted-foreground">使用量 {entry.storedBytes}バイト</div>
       <TechnicalIds
@@ -208,15 +227,8 @@ function EntryRow({ entry }: { entry: ArchiveEntry }) {
       {removed ? (
         <div className="mt-1 text-muted-foreground">
           削除: {entry.removedAt === undefined ? '' : formatDateTime(entry.removedAt)}
-          {
-            // **保存量（`storedBytes`）と同じ「バイト」で並べない**（issue #2270）。
-            // `removedBytes` は消した本文の素の UTF-8 バイト数で、置き場が使って
-            // いた量（pg では圧縮後）とは単位が違う。core の doc
-            // （`ArchiveEntry` / `ArchiveRemoval`、PR #2076）と、`archive_remove_many`
-            // の結果の文言に合わせた言い回しにする。
-            entry.removedBytes !== undefined &&
-              `（消した本文の素の UTF-8 バイト数 ${entry.removedBytes}。使用量とは単位が違い、置き場で解放した量ではない）`
-          }
+          {entry.removedBytes !== undefined &&
+            `（消した本文は ${entry.removedBytes}バイト。使用量とは数え方が違うため、空いた容量とは一致しません）`}
         </div>
       ) : (
         <>
