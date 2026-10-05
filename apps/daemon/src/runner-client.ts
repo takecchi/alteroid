@@ -720,11 +720,16 @@ class HttpRunner implements RunnerClient {
    * のに相手には届いていなかった1件（無音切断。Issue #275 本文）を拾う
    * ための唯一の入口である。
    *
-   * **runner が入れ替わっても壊れない。** 新しい runner の連番も1から
-   * 数え直す（`Outbox` の doc）ので、古い（高い）値を申告しても
-   * `sentSince` は単に何も返さない——「復元できない」へ倒れるだけで、
-   * 今後配られる分を取りこぼす方向には効かない。だから instanceId で
-   * 突き合わせて破棄する、といった手当ては意図的に入れていない。
+   * **runner が入れ替わると、古い値は貼り付く——だから接続ごとの最初の `id:`
+   * では max を取らず、その値に置き換える（#3036）。** 新しい runner の連番は
+   * 1から数え直す（`Outbox` の doc）。max を取り続けると、前の runner の高い値が
+   * 残ったまま `Last-Event-ID` に乗り、新しい runner の `sentSince` は何も返さず、
+   * 無音切断で届かなかった分を取りこぼす。同じ runner への繋ぎ直しなら最初の
+   * `id:` は申告値より必ず大きい（控えの配り直しも新規も申告より新しい連番）ので、
+   * 置き換えても何も失わない。小さければ入れ替わったと読める。接続の中では従来どおり
+   * 進む方向にだけ動く。入れ替わり後、まだ1つも `id:` を受け取れていない間は古い値を
+   * 申告し続けるが、runner 側（`Outbox.sentSince`）が「自分の箱の外の値」を見分けて
+   * 控えを全部返す。そのぶん取りこぼしは無い。
    */
   #lastEventId: number | null = null;
 
@@ -1507,6 +1512,8 @@ class HttpRunner implements RunnerClient {
   ): Promise<void> {
     const decoder = new TextDecoder();
     let buffer = '';
+    /** この接続で `id:` を1つでも受け取ったか（#3036）。 */
+    let firstIdSeen = false;
     for (;;) {
       const { value, done } = await reader.read();
       if (done) return;
@@ -1536,12 +1543,13 @@ class HttpRunner implements RunnerClient {
         const idLine = lines.find((line) => line.startsWith('id:'));
         if (idLine !== undefined) {
           const seq = Number(idLine.slice(3).trim());
-          if (
-            Number.isInteger(seq) &&
-            seq >= 0 &&
-            (this.#lastEventId === null || seq > this.#lastEventId)
-          ) {
-            this.#lastEventId = seq;
+          if (Number.isInteger(seq) && seq >= 0) {
+            // 接続ごとの最初の `id:` は置き換える（runner の入れ替わりで古い高い値が
+            // 貼り付かない。#3036。`#lastEventId` の doc）。以降は進む方向にだけ動く。
+            if (!firstIdSeen || this.#lastEventId === null || seq > this.#lastEventId) {
+              this.#lastEventId = seq;
+            }
+            firstIdSeen = true;
           }
         }
 

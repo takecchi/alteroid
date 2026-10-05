@@ -3761,6 +3761,75 @@ describe('Last-Event-ID の申告（#275）', () => {
     expect(headersSeen()[1]).toBe('7');
   });
 
+  const sessionFrame = (seq: number): string =>
+    `event: session\ndata: {"type":"session","managerId":"m1","sessionId":"s${String(seq)}"}\nid: ${String(seq)}\n\n`;
+
+  /**
+   * #3036: runner が入れ替わると連番は1から数え直す。max を取り続けると前の runner の
+   * 高い値が貼り付き、無音切断の取り戻し（#275）が新しい runner の控えに届かない。
+   */
+  it('runner が入れ替わって連番が小さくなったら、接続の最初の id で申告を置き換える（#3036）', async () => {
+    const { fetchFn, headersSeen } = eventsFetchRecordingLastEventId((callIndex) => {
+      if (callIndex === 0) return [sessionFrame(50)]; // 前の runner
+      if (callIndex === 1) return [sessionFrame(1)]; // 入れ替わった新しい runner（1から）
+      if (callIndex === 2) return [];
+      return null;
+    });
+    const events: unknown[] = [];
+    const client = await createHttpRunner({
+      baseUrl: 'http://runner.test',
+      token: TOKEN,
+      fetchFn,
+      sleepFn: async () => undefined,
+    });
+    await client.connect((event) => events.push(event));
+    await expect.poll(() => headersSeen().length >= 3, { timeout: 2000 }).toBe(true);
+    await client.close();
+
+    expect(headersSeen().slice(0, 3)).toEqual([undefined, '50', '1']);
+    // 置き換えは配送を増減させない（各フレームは1回ずつ届く）。
+    expect(events).toHaveLength(2);
+  });
+
+  it('同じ接続の中では、小さい id が来ても申告は戻らない（置き換えは接続の最初の id だけ）', async () => {
+    const { fetchFn, headersSeen } = eventsFetchRecordingLastEventId((callIndex) => {
+      if (callIndex === 0) return [sessionFrame(5), sessionFrame(3)];
+      if (callIndex === 1) return [];
+      return null;
+    });
+    const client = await createHttpRunner({
+      baseUrl: 'http://runner.test',
+      token: TOKEN,
+      fetchFn,
+      sleepFn: async () => undefined,
+    });
+    await client.connect(() => undefined);
+    await expect.poll(() => headersSeen().length >= 2, { timeout: 2000 }).toBe(true);
+    await client.close();
+
+    expect(headersSeen()[1]).toBe('5');
+  });
+
+  it('同じ runner の繋ぎ直し（最初の id が申告より大きい）では進む', async () => {
+    const { fetchFn, headersSeen } = eventsFetchRecordingLastEventId((callIndex) => {
+      if (callIndex === 0) return [sessionFrame(7)];
+      if (callIndex === 1) return [sessionFrame(8), sessionFrame(9)]; // 控えの配り直し＋新規
+      if (callIndex === 2) return [];
+      return null;
+    });
+    const client = await createHttpRunner({
+      baseUrl: 'http://runner.test',
+      token: TOKEN,
+      fetchFn,
+      sleepFn: async () => undefined,
+    });
+    await client.connect(() => undefined);
+    await expect.poll(() => headersSeen().length >= 3, { timeout: 2000 }).toBe(true);
+    await client.close();
+
+    expect(headersSeen().slice(0, 3)).toEqual([undefined, '7', '9']);
+  });
+
   it('id の無いフレーム（hello・heartbeat 相当）は申告を進めない', async () => {
     const { fetchFn, headersSeen } = eventsFetchRecordingLastEventId((callIndex) => {
       if (callIndex === 0) return ['data: {"type":"hello","runnerId":"r1"}\n\n'];

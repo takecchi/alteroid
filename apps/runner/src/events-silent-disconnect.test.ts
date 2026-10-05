@@ -214,19 +214,107 @@ describe('runner の /events: 無音切断（writeSSE が投げずに戻る）�
   });
 });
 
+describe('runner の入れ替わり後の無音切断（#3036）', () => {
+  it('前の runner の高い Last-Event-ID を申告されても、新しい runner（連番1から）の控えを1回ずつ配り直す', async () => {
+    const host = newHost();
+    // **新しい runner の箱**——連番は1から数え直す。
+    const outbox = new Outbox();
+    const lost: RunnerEvent = { type: 'session', managerId: 'mgr-swap', sessionId: 'sess-lost' };
+    const seq = outbox.push(lost);
+    expect(seq).toBe(1);
+
+    const realWriteSSE = SSEStreamingApi.prototype.writeSSE;
+    let wroteEvent = false;
+    let cancelFirst: (() => Promise<void>) | null = null;
+    let cancelled = false;
+    const spy = vi.spyOn(SSEStreamingApi.prototype, 'writeSSE').mockImplementation(async function (
+      this: SSEStreamingApi,
+      message: SSEMessage,
+    ) {
+      if (message.event !== 'hello' && !cancelled) {
+        cancelled = true;
+        await cancelFirst?.();
+      }
+      const result = await realWriteSSE.call(this, message);
+      if (message.event !== 'hello') wroteEvent = true;
+      return result;
+    });
+
+    try {
+      const app = createRunnerApp({
+        host,
+        outbox,
+        tokenSha256: TOKEN_SHA256,
+        sseHeartbeatMs: 60_000,
+      });
+      const first = await app.request('/events', { headers: bearer() });
+      const firstBody = first.body;
+      if (firstBody === null) throw new Error('SSE の応答に本文が無い');
+      const firstReader = firstBody.getReader();
+      cancelFirst = () => firstReader.cancel();
+      await expect.poll(() => wroteEvent, { timeout: 1000 }).toBe(true);
+      await expect.poll(() => outbox.pending, { timeout: 1000 }).toBe(0);
+
+      // デーモンは前の runner の連番 50 を握ったまま繋ぎ直す。
+      const second = await app.request('/events', {
+        headers: bearer({ 'Last-Event-ID': '50' }),
+      });
+      const secondBody = second.body;
+      if (secondBody === null) throw new Error('SSE の応答に本文が無い');
+      const secondReader = secondBody.getReader();
+
+      const seen = await readUntil(secondReader, JSON.stringify(lost), 1000);
+      expect(seen).toContain(JSON.stringify(lost));
+      // 二重配信にならない: 同じ出来事のフレームは1本だけ。
+      expect(seen.split(JSON.stringify(lost)).length - 1).toBe(1);
+      await secondReader.cancel();
+    } finally {
+      spy.mockRestore();
+      await host.shutdown();
+    }
+  });
+});
+
 describe('Outbox.recordSent / sentSince（#275）', () => {
   it('sentSince は lastEventId より新しい分だけを古い順に返す', () => {
     const outbox = new Outbox();
     const e1: RunnerEvent = { type: 'session', managerId: 'a', sessionId: '1' };
     const e2: RunnerEvent = { type: 'session', managerId: 'a', sessionId: '2' };
     const e3: RunnerEvent = { type: 'session', managerId: 'a', sessionId: '3' };
-    outbox.recordSent(e1, 10, '2026-01-01T00:00:00.000Z');
-    outbox.recordSent(e2, 11, '2026-01-01T00:00:01.000Z');
-    outbox.recordSent(e3, 12, '2026-01-01T00:00:02.000Z');
+    // 連番は箱が振ったものだけを使う（箱の外の連番は #3036 で別扱い）。
+    const record = (event: RunnerEvent): number => {
+      const seq = outbox.push(event);
+      outbox.recordSent(event, seq, '2026-01-01T00:00:00.000Z');
+      return seq;
+    };
+    const s1 = record(e1);
+    const s2 = record(e2);
+    const s3 = record(e3);
 
-    expect(outbox.sentSince(10).map((i) => i.seq)).toEqual([11, 12]);
-    expect(outbox.sentSince(12)).toEqual([]);
-    expect(outbox.sentSince(0).map((i) => i.seq)).toEqual([10, 11, 12]);
+    expect(outbox.sentSince(s1).map((i) => i.seq)).toEqual([s2, s3]);
+    expect(outbox.sentSince(s3)).toEqual([]);
+    expect(outbox.sentSince(0).map((i) => i.seq)).toEqual([s1, s2, s3]);
+  });
+
+  /**
+   * **#3036: 箱が一度も振っていない連番（前の runner の高い値）を申告されたら、控えを
+   * 全部返す。** 返さないと、runner が入れ替わって連番が1から数え直しになったあと、
+   * 無音切断で消えた分が配り直されない。**境界**: 振った最大（`nextSeq - 1`）ちょうどは
+   * 「箱の中」であり、何も返さない（取れた分を二重に配らない）。
+   */
+  it('箱が振っていない連番の申告は、控えを全部返す。振った最大ちょうどは何も返さない（#3036）', () => {
+    const outbox = new Outbox();
+    const e1: RunnerEvent = { type: 'session', managerId: 'a', sessionId: '1' };
+    const e2: RunnerEvent = { type: 'session', managerId: 'a', sessionId: '2' };
+    const s1 = outbox.push(e1);
+    outbox.recordSent(e1, s1, '2026-01-01T00:00:00.000Z');
+    const s2 = outbox.push(e2);
+    outbox.recordSent(e2, s2, '2026-01-01T00:00:01.000Z');
+
+    expect(outbox.sentSince(50).map((i) => i.seq)).toEqual([s1, s2]);
+    expect(outbox.sentSince(s2 + 1).map((i) => i.seq)).toEqual([s1, s2]);
+    expect(outbox.sentSince(s2)).toEqual([]);
+    expect(outbox.sentSince(s1).map((i) => i.seq)).toEqual([s2]);
   });
 
   /**

@@ -384,6 +384,14 @@ export class Outbox {
    * 悪くはならない、という上限の設計そのものである。
    */
   sentSince(lastEventId: OutboxSeq): { event: RunnerEvent; queuedAt: string; seq: OutboxSeq }[] {
+    // **この箱が一度も振っていない連番を申告されたら、前の runner の連番である**（#3036）。
+    // 連番は runner が入れ替わると1から数え直すので、デーモンが握っていた古い高い値が
+    // 新しい箱の最大より大きいことがある。そのまま比べると控えは全部「古い」ことになり、
+    // 新しい runner が渡したはずの分が1件も返らない（無音切断の取りこぼし）。
+    // 申告が「この箱の外」なら、デーモンはこの箱の分を1件も受け取っていない（デーモンは
+    // 接続ごとの最初の `id:` で申告値を置き換える。`runner-client.ts` の `#lastEventId`）ので、
+    // 控えを全部返す。二重にはならない: 受け取っていない分だけを返している。
+    if (lastEventId >= this.#nextSeq) return [...this.#sent];
     return this.#sent.filter((item) => item.seq > lastEventId);
   }
 
