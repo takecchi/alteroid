@@ -327,8 +327,8 @@ const HELP = `/report [日付]        日報（既定は直近。日付は YYYY-
                      なら送る（2本以上なら送らずに候補を出す）
 /archive             セッションの生ログ一覧（大きさ・時刻つき）
 /archive <id>        生ログの中身
-/archive sessions    sessionId ごとの行数・使用量の集計（#698）
-/archive remove <id> [理由]  生ログの本文だけを消す（tombstone。行は残る。#776）
+/archive sessions    セッションごとの行数・使用量の集計
+/archive remove <id> [理由]  生ログの本文だけを消す（行は残り、本文だけが消えた印になる）
                      走行中のマネージャーの退避は既定で拒まれる——理由を付けて
                      もう一度打つと、その理由を記録した上で消せる
 /approvals           承認待ち（番号付き）

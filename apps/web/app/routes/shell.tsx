@@ -313,12 +313,7 @@ function HealthFooter() {
       ) : data === undefined ? (
         <span>確認中…</span>
       ) : (
-        <>
-          <span className="block truncate" title={data.storage}>
-            記憶: {data.storage}
-          </span>
-          <span className="block truncate">pid {data.pid}</span>
-        </>
+        <span>接続中</span>
       )}
 
       {/* 認証を要求していないデーモンでは、居ない人を出さない。 */}

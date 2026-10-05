@@ -336,6 +336,15 @@ describe('shiftForPrepend（新着を先頭に足すとき shift に何を渡す
   it('足された・上端に居ない（遡って読んでいる） → shift する（読んでいる行が動かない）', () => {
     expect(shiftForPrepend(true, false)).toBe(true);
   });
+
+  it('足された・上端に居る・読んでいる（行を展開中／文章を選択中） → shift する（#2774）', () => {
+    expect(shiftForPrepend(true, true, true)).toBe(true);
+  });
+
+  it('何も足されていなければ、読んでいても shift しない', () => {
+    expect(shiftForPrepend(false, true, true)).toBe(false);
+    expect(shiftForPrepend(false, false, true)).toBe(false);
+  });
 });
 
 /**

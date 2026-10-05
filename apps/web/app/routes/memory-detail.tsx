@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { Link, useNavigate } from 'react-router';
+import { useEffect, useRef, useState } from 'react';
+import { Link, useBlocker, useNavigate } from 'react-router';
 
 import {
   MarkdownEditor,
@@ -10,7 +10,12 @@ import {
   ErrorNote,
   Spinner,
 } from '@alteroid/ui';
-import { useDeleteMemory, useSaveMemory, useMemoryDocument } from '@alteroid/swr';
+import {
+  MemoryConflictError,
+  useDeleteMemory,
+  useSaveMemory,
+  useMemoryDocument,
+} from '@alteroid/swr';
 import { formatCreatedAt, formatDateTime } from '@alteroid/logic';
 
 import type { Route } from './+types/memory-detail';
@@ -38,6 +43,22 @@ export default function MemoryDetail({ loaderData }: Route.ComponentProps) {
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [failure, setFailure] = useState<unknown>(undefined);
   const [savedAt, setSavedAt] = useState<string | undefined>(undefined);
+  /**
+   * 下書きを書き始めた時点で読んでいた版（`ifMatch` に送る。#2743）。`undefined` は下書き無し。
+   * **取得した版へ追従させない**——クローンが書いた後に再取得が走っても、人間が見て書き始めた版を
+   * 前提にし続けるから、衝突が検出できる。`null` は「読んだ時には無かった」。
+   */
+  const [baseVersion, setBaseVersion] = useState<string | null | undefined>(undefined);
+  /**
+   * 直前の保存の応答が返した版（`replaces` はそのとき前提にした版）。再取得が追いつく前に編集を
+   * 再開しても、古い `data.version` を前提にして偽の 409 を起こさないために持つ。
+   * 再取得が `replaces` 以外の版を返したら（別の書き手が書いた）、そちらを信じる。
+   */
+  const [lastSaved, setLastSaved] = useState<
+    { replaces: string | null; version: string } | undefined
+  >(undefined);
+  /** 保存が 409 で断られたときの、いまの版（下書きは捨てずに残す。#2764）。 */
+  const [conflict, setConflict] = useState<MemoryConflictError | undefined>(undefined);
 
   const loaded = data?.document.content ?? '';
   const value = draft ?? loaded;
@@ -71,19 +92,61 @@ export default function MemoryDetail({ loaderData }: Route.ComponentProps) {
   const [tab, setTab] = useState<MarkdownEditorMode | undefined>(undefined);
   const defaultTab: MarkdownEditorMode = missing || loaded.trim() === '' ? 'edit' : 'preview';
 
-  function save() {
+  function edit(next: string) {
+    // 書き始めた瞬間に、いま読んでいる版を前提として控える。
+    if (draft === undefined) {
+      const fetched = data === undefined ? null : data.version;
+      setBaseVersion(
+        lastSaved !== undefined && lastSaved.replaces === fetched ? lastSaved.version : fetched,
+      );
+    }
+    setDraft(next);
+  }
+
+  /** `ifMatch` を渡して保存する。衝突したら下書きを残して、いまの版を見せる。 */
+  function save(ifMatch: string | null | undefined = baseVersion) {
     if (draft === undefined) return;
     setBusy(true);
     setFailure(undefined);
-    saveMemory(slug, draft)
-      .then((document) => {
+    saveMemory(slug, draft, ifMatch)
+      .then(({ document, version }) => {
         setSavedAt(document.updatedAt);
+        setLastSaved({ replaces: data === undefined ? null : data.version, version });
         // 保存できたら下書きを畳んで、またサーバの値に追従させる。
         setDraft(undefined);
+        setBaseVersion(undefined);
+        setConflict(undefined);
       })
-      .catch(setFailure)
+      .catch((caught: unknown) => {
+        if (caught instanceof MemoryConflictError) setConflict(caught);
+        else setFailure(caught);
+      })
       .finally(() => setBusy(false));
   }
+
+  /** 最新を読み直す＝自分の下書きを捨てて、いまの版に追従する。 */
+  function discardDraft() {
+    setDraft(undefined);
+    setBaseVersion(undefined);
+    setConflict(undefined);
+  }
+
+  /**
+   * **未保存の変更があるまま離れない（#2764）。** アプリ内の移動（リンク・戻る）は確認を挟み、
+   * タブを閉じる・再読み込みはブラウザの警告に任せる。削除が通った後の移動は止めない。
+   */
+  const leaving = useRef(false);
+  const blocker = useBlocker(() => dirty && !leaving.current);
+  useEffect(() => {
+    if (!dirty) return;
+    const warn = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      // 古いブラウザは returnValue を入れないと出さない。
+      event.returnValue = '';
+    };
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  }, [dirty]);
 
   return (
     <Page
@@ -146,7 +209,10 @@ export default function MemoryDetail({ loaderData }: Route.ComponentProps) {
                 onConfirm={() => {
                   setBusy(true);
                   deleteMemory(slug)
-                    .then(() => navigate('/memory'))
+                    .then(() => {
+                      leaving.current = true;
+                      navigate('/memory');
+                    })
                     .catch(setFailure)
                     .finally(() => setBusy(false));
                 }}
@@ -154,7 +220,13 @@ export default function MemoryDetail({ loaderData }: Route.ComponentProps) {
             </>
           )}
           {!loadFailed && (
-            <Button variant="primary" size="sm" loading={busy} disabled={!dirty} onClick={save}>
+            <Button
+              variant="primary"
+              size="sm"
+              loading={busy}
+              disabled={!dirty}
+              onClick={() => save()}
+            >
               {dirty ? '保存する' : '変更なし'}
             </Button>
           )}
@@ -164,14 +236,59 @@ export default function MemoryDetail({ loaderData }: Route.ComponentProps) {
     >
       {!missing && <ErrorNote error={error} className="mb-3" />}
       <ErrorNote error={failure} className="mb-3" />
+      {conflict !== undefined && (
+        <div role="alert" className="mb-3 rounded-lg border border-destructive/50 p-3 text-sm">
+          <p className="font-medium text-destructive">
+            {conflict.current === null
+              ? '読んだ後に、この記憶がほかで消された。保存していない（下書きはそのまま残してある）。'
+              : '読んだ後に、この記憶がほかで書き換えられた。保存していない（下書きはそのまま残してある）。'}
+          </p>
+          {conflict.current !== null && (
+            <>
+              <p className="mt-2 text-xs text-muted-foreground">
+                いまの内容（{formatDateTime(conflict.current.document.updatedAt)} に更新）
+              </p>
+              <pre className="mt-1 max-h-48 overflow-auto rounded-md bg-muted p-2 text-xs break-words whitespace-pre-wrap select-text">
+                {conflict.current.document.content}
+              </pre>
+            </>
+          )}
+          <div className="mt-3 flex flex-wrap gap-2">
+            <Button
+              size="sm"
+              variant="danger"
+              disabled={busy}
+              onClick={() => save(conflict.current === null ? null : conflict.current.version)}
+            >
+              自分の内容で上書きする
+            </Button>
+            <Button size="sm" disabled={busy} onClick={discardDraft}>
+              自分の下書きを捨てて、いまの内容を読み直す
+            </Button>
+          </div>
+        </div>
+      )}
+      <ConfirmDialog
+        open={blocker.state === 'blocked'}
+        onOpenChange={(open) => {
+          if (!open && blocker.state === 'blocked') blocker.reset();
+        }}
+        title="保存していない変更があります"
+        description="このまま離れると、書きかけの内容は失われます。"
+        confirmLabel="破棄して離れる"
+        destructive
+        onConfirm={() => {
+          if (blocker.state === 'blocked') blocker.proceed();
+        }}
+      />
 
       {isLoading && !missing ? (
         <Spinner />
       ) : loadFailed ? null : (
         <MarkdownEditor
           value={value}
-          onChange={setDraft}
-          onSave={save}
+          onChange={edit}
+          onSave={() => save()}
           // 出すタブとその並びは今の画面のまま（プレビュー → 編集）。並べては出さない。
           modes={['preview', 'edit']}
           mode={tab}
