@@ -131,7 +131,7 @@ export async function verifyCommitmentFoldContract(
   // 8. NUL（issue #3011。teto の判断、2026-10-06）。3実装で同じになること。
   //    - 書き込みの口: id（鍵）は NulNotAllowedError で断る（値は文に載せない）。本文（body・closedReason）は落として残す
   //    - 読むだけの口（get・close・closeMany・editBody の id）: 断らず「無い」と同じ結果を返す（get は null、close・editBody は false）
-  //    - `source`（出所の注記）の NUL の扱いは未決なので、ここでは測らない
+  //    - `source`（出所の注記。鍵ではない）の NUL は、3実装とも落として残す。畳み込みも落とした値で揃う
   {
     const nulId = 'commit-nul-8\u0000id';
     const nulEntry = {
@@ -206,6 +206,37 @@ export async function verifyCommitmentFoldContract(
     if ((await store.get(reasonId))?.closedReason !== '閉じ') fail('close の理由の NUL が残る');
 
     if ((await store.get(nulId)) !== null) fail('断ったはずのNUL idの行が在る');
+    // source（出所の注記）は鍵ではないので、断らず落として残す（teto の判断、2026-10-06）。
+    // 畳み込み（同一マネージャー×同一本文×未了）も、落とした値で3実装が揃う。
+    const srcA = await store.open({
+      id: 'commit-nul-8-src-a',
+      at: '2026-01-02T00:00:03.000Z',
+      origin: 'manager',
+      source: 'mgr-nul-\u0000src',
+      body: 'source の NUL の一言',
+    });
+    if (!srcA.opened) fail('sourceにNULを含む行が開かない');
+    const srcRow = await store.get('commit-nul-8-src-a');
+    if (srcRow?.source !== 'mgr-nul-src')
+      fail(`source の NUL が残る: ${JSON.stringify(srcRow?.source)}`);
+    const srcB = await store.open({
+      id: 'commit-nul-8-src-b',
+      at: '2026-01-02T00:00:04.000Z',
+      origin: 'manager',
+      source: 'mgr-nul-src',
+      body: 'source の NUL の一言',
+    });
+    if (srcB.opened || !srcB.folded)
+      fail(`NULを落とした source が同じ行を畳まない: ${JSON.stringify(srcB)}`);
+    const srcC = await store.open({
+      id: 'commit-nul-8-src-c',
+      at: '2026-01-02T00:00:05.000Z',
+      origin: 'manager',
+      source: 'mgr-nul-\u0000src',
+      body: 'source の NUL の一言',
+    });
+    if (srcC.opened || !srcC.folded)
+      fail(`NULを含む source が同じ行を畳まない: ${JSON.stringify(srcC)}`);
   }
 
   // **`concurrent: false` では、この 7 を飛ばす。** 同時の2件目を弾くのは DB の部分
