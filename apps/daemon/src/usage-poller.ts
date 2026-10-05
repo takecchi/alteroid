@@ -209,6 +209,19 @@ export interface UsagePollerOptions {
   ) => void;
 }
 
+/**
+ * 同じ鍵か（`tokenId` で見る。冷却明けに同じ鍵がもう一度選ばれて世代だけ増えても、
+ * 測っているアカウントは同じである）。**どちらも身元を持たない構成は同じ鍵として
+ * 扱う**（箱が空＝器の環境変数の鍵のまま。回せない構成）。片方だけ持つなら別の鍵。
+ */
+function sameKey(
+  a: { tokenId: string; generation: number } | undefined,
+  b: { tokenId: string; generation: number } | undefined,
+): boolean {
+  if (a === undefined || b === undefined) return a === b;
+  return a.tokenId === b.tokenId;
+}
+
 export interface UsagePoller {
   /** いま分かっていること。**「まだ取っていない」も状態として返る。** */
   state(): AccountUsageState;
@@ -222,6 +235,8 @@ export function startUsagePolling(options: UsagePollerOptions): UsagePoller {
   const unavailableInterval = options.unavailableIntervalMs ?? USAGE_POLL_UNAVAILABLE_INTERVAL_MS;
 
   let current: AccountUsageState = { state: 'unknown' };
+  /** `current` を測った鍵の身元（#2752）。**保持が効くのは同じ鍵のときだけ。** */
+  let currentKey: { tokenId: string; generation: number } | undefined;
   let inFlight: Promise<AccountUsageState> | null = null;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let stopped = false;
@@ -276,10 +291,36 @@ export function startUsagePolling(options: UsagePollerOptions): UsagePoller {
           }, 0);
           handoff.unref?.();
         }
-        // **取れなかったことで、取れていた値を捨てない。** 一時的な失敗のたびに
-        // 表示が消えると、人間もクローンも「使い切ったのか観測できないのか」を
-        // 区別できない。ok を保ち続け、次に ok が来たら差し替える。
-        if (next.state === 'ok' || current.state !== 'ok') current = next;
+        // **取れなかったことで、取れていた値を捨てない — ただし「同じ鍵での一時的な
+        // 失敗」に限る**（#2752）。一時的な失敗のたびに表示が消えると、人間も
+        // クローンも「使い切ったのか観測できないのか」を区別できない。
+        //
+        // - 次に ok が来たら差し替える（失敗の印も消える）
+        // - 現役の鍵が変わっていたら、古い ok は**捨てる**（降りた鍵の枠を、いまの
+        //   枠として語らない）
+        // - 同じ鍵なら ok を保つが、**失敗していること（いつから・理由）を載せる**
+        //   （取れない値を取れているように見せない）
+        if (next.state === 'ok') {
+          current = next;
+          currentKey = measuredBy;
+        } else if (
+          current.state === 'ok' &&
+          next.state !== 'unknown' &&
+          sameKey(currentKey, measuredBy)
+        ) {
+          current = {
+            state: 'ok',
+            usage: current.usage,
+            refreshFailure: {
+              since: current.refreshFailure?.since ?? next.at,
+              at: next.at,
+              reason: next.reason,
+            },
+          };
+        } else {
+          current = next;
+          currentKey = measuredBy;
+        }
         return current;
       })
       .catch(() => current) // fetchAccountUsage は投げない契約だが、ここでも塞ぐ
@@ -314,7 +355,14 @@ export function startUsagePolling(options: UsagePollerOptions): UsagePoller {
   void refresh().then((state) => schedule(nextInterval(state)));
 
   return {
-    state: () => current,
+    state: () => {
+      // **回した後に、降りた鍵の `ok` を返さない**（#2752）。次の probe を待つ間
+      // （最大 5 分）も、現役の鍵で測れていない事実は「まだ分からない」と言う。
+      if (current.state === 'ok' && !sameKey(currentKey, options.identity?.())) {
+        return { state: 'unknown' };
+      }
+      return current;
+    },
     refresh,
     stop,
   };

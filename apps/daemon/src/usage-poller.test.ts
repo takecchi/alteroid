@@ -323,6 +323,89 @@ describe('usage-poller — withheldEnvKeys を fetchAccountUsage まで届ける
  * **回した後は「降りたトークンのアカウント」を測り続け、`GET /usage` の `account`
  * とクローンが見る `accountUsage` は降りた鍵の枠を報告していた。**
  */
+describe('#2752: 保持は「同じ鍵での一時的な失敗」に限る', () => {
+  const KEY_A = { tokenId: 'tok-a', generation: 1 };
+  const KEY_B = { tokenId: 'tok-b', generation: 2 };
+
+  it('ok の後に鍵が替わり、新しい鍵で取れなかったら、古い ok を返さない', async () => {
+    let ok = true;
+    let identity = KEY_A;
+    const { queryFn } = probe(() => (ok ? LOGGED_IN : { account: undefined, usage: undefined }));
+    const poller = startUsagePolling({
+      queryFn,
+      cwd: '/work',
+      intervalMs: 10_000,
+      identity: () => identity,
+    });
+
+    await poller.refresh();
+    expect(poller.state().state).toBe('ok');
+
+    // 回った。新しい鍵では枠が取れない。
+    identity = KEY_B;
+    ok = false;
+    await poller.refresh();
+    poller.stop();
+
+    // **降りた鍵の ok を、現役の枠として返さない。**
+    expect(poller.state().state).not.toBe('ok');
+  });
+
+  it('鍵が替わったら、取り直す前から古い ok を返さない（0 でも「取れている」でもなく分からない）', async () => {
+    let identity = KEY_A;
+    const { queryFn } = probe(() => LOGGED_IN);
+    const poller = startUsagePolling({
+      queryFn,
+      cwd: '/work',
+      intervalMs: 10_000,
+      identity: () => identity,
+    });
+
+    await poller.refresh();
+    expect(poller.state().state).toBe('ok');
+    identity = KEY_B;
+    expect(poller.state()).toEqual({ state: 'unknown' });
+    poller.stop();
+  });
+
+  it('同じ鍵での失敗は ok を保つが、失敗していること（いつから・理由）を状態に載せる', async () => {
+    let ok = true;
+    const { queryFn } = probe(() => (ok ? LOGGED_IN : { account: undefined, usage: undefined }));
+    const poller = startUsagePolling({
+      queryFn,
+      cwd: '/work',
+      intervalMs: 10_000,
+      identity: () => KEY_A,
+    });
+
+    await poller.refresh();
+    const first = poller.state();
+    expect(first.state === 'ok' && first.refreshFailure).toBeFalsy();
+
+    ok = false;
+    await poller.refresh();
+    const after = poller.state();
+    expect(after.state).toBe('ok');
+    if (after.state !== 'ok') return;
+    expect(after.refreshFailure?.reason).toEqual(expect.any(String));
+    const since = after.refreshFailure?.since;
+    expect(since).toEqual(expect.any(String));
+
+    // 失敗が続いても「いつから」は動かない。
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    await poller.refresh();
+    const again = poller.state();
+    expect(again.state === 'ok' && again.refreshFailure?.since).toBe(since);
+
+    // 取れたら失敗の印は消える。
+    ok = true;
+    await poller.refresh();
+    poller.stop();
+    const recovered = poller.state();
+    expect(recovered.state === 'ok' && recovered.refreshFailure).toBeFalsy();
+  });
+});
+
 describe('usage-poller — 現役のトークンで測る', () => {
   it('env を渡すと、probe へ渡す Options.env にその値が載る', async () => {
     const { queryFn, captured } = capturingProbe();
