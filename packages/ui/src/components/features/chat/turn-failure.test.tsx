@@ -22,6 +22,10 @@ describe('classifyTurnFailure', () => {
     ).toBe('auth');
     expect(classifyTurnFailure("You've hit your org's monthly spend limit")).toBe('quota');
     expect(classifyTurnFailure('something broke')).toBe('other');
+    // 混雑は利用者の上限ではない（「利用上限に当たっていて」は嘘になる）。
+    expect(classifyTurnFailure('API Error: Overloaded')).toBe('other');
+    expect(classifyTurnFailure('結果なしで終了: overloaded（assistant_error） / x')).toBe('other');
+    expect(classifyTurnFailure('結果なしで終了: rate_limit（assistant_error） / x')).toBe('quota');
   });
 });
 

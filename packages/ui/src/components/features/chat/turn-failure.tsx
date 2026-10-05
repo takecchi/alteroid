@@ -27,6 +27,11 @@ export type TurnFailureKind = 'auth' | 'quota' | 'other';
  * `result_is_error`）。**CLI の文言が変わると `other` に落ちる**——そのときも
  * 文面（`summary`）は「返事を作れなかった」を言うので、嘘にはならず、次の一手の
  * 案内が汎用になるだけである。
+ *
+ * **`overloaded` は `quota` に入れない。** サーバ側の一時的な混雑で、利用者の上限ではない
+ * （「利用上限に当たっていて」は嘘になる）ので `other` に落とす。`rate_limit` は入れてある:
+ * SDK の `assistant.error` の `rate_limit` は利用者の枠（時間窓の使用量。`usage-limits.ts` の
+ * `limitRecoveryOfAssistantError` が `time`＝待てば開くと扱っている側）で、混雑ではない。
  */
 export function classifyTurnFailure(message: string): TurnFailureKind {
   if (
@@ -36,11 +41,7 @@ export function classifyTurnFailure(message: string): TurnFailureKind {
   ) {
     return 'auth';
   }
-  if (
-    /hit your .*limit|usage limit|spend limit|rate[_ ]limit|quota|billing_error|overloaded/i.test(
-      message,
-    )
-  ) {
+  if (/hit your .*limit|usage limit|spend limit|rate[_ ]limit|quota|billing_error/i.test(message)) {
     return 'quota';
   }
   return 'other';
