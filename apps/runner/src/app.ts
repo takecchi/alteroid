@@ -738,6 +738,7 @@ export function createRunnerApp(deps: RunnerAppDeps) {
     .use('/credentials', control)
     .use('/profile', control)
     .use('/mcp-servers', control)
+    .use('/rescue-refs/*', control)
 
     .get('/health', async (c) => {
       /**
