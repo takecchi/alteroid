@@ -768,7 +768,12 @@ async function rescueOne(
  */
 export function redactRemoteUrl(raw: string): string | undefined {
   const trimmed = raw.trim();
-  if (trimmed === '' || trimmed.length > 2048 || /[\s\u0000-\u001f]/.test(trimmed))
+  if (
+    trimmed === '' ||
+    trimmed.length > 2048 ||
+    /\s/.test(trimmed) ||
+    [...trimmed].some((ch) => ch.charCodeAt(0) < 0x20)
+  )
     return undefined;
   if (trimmed.startsWith('-')) return undefined;
   if (/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(trimmed)) {

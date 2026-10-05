@@ -8257,8 +8257,10 @@ class Pool implements ManagerPool {
       const next = mutate(current.lastRescue);
       if (next === null || (next === undefined && !allowRemove)) return current;
       changed = true;
-      const { lastRescue: _dropped, ...rest } = current;
-      return next === undefined ? rest : { ...rest, lastRescue: next };
+      if (next !== undefined) return { ...current, lastRescue: next };
+      const rest = { ...current };
+      delete rest.lastRescue;
+      return rest;
     });
     return changed;
   }
