@@ -807,7 +807,7 @@ function UsageBody({
         // 道具（Playwright / Storybook / Chromatic）も無く、Vercel の
         // preview は release/prod へ push されるまで出ない。詳細と再オープ
         // ン条件は #295。
-        <div className="grid gap-4 lg:grid-cols-3">
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
           <AxisCard
             title="日別"
             entries={[...summary.byDate]
