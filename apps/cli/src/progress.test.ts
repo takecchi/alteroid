@@ -190,13 +190,22 @@ describe('progressCommand', () => {
     expect(readTwo()).toContain('※ 読めない委譲の行が 2 件ある');
   });
 
-  it('400 は daemon の文言で失敗する（stdout には書かない）', async () => {
-    replies.push({ status: 400, body: { error: 'windowHours は有限の正数（時間）で指定する' } });
+  it('400 は daemon の文言で失敗する（欄名は --window-hours に打ち替える。stdout には書かない）', async () => {
+    replies.push({ status: 400, body: { error: 'windowHours は 8760 以下で指定する' } });
     const read = captureStdout();
-    await expect(progressCommand({ windowHours: 'abc' })).rejects.toThrow(
-      'windowHours は有限の正数（時間）で指定する',
+    await expect(progressCommand({ windowHours: '99999' })).rejects.toThrow(
+      '--window-hours は 8760 以下で指定する',
     );
     expect(read()).toBe('');
+  });
+
+  it('--window-hours の形が不正なら、通信の前に、打ったオプション名で断る（欄名を出さない）', async () => {
+    const error = await progressCommand({ windowHours: 'abc' }).catch((e: unknown) => e);
+    expect(String(error)).toContain('--window-hours は正の数（時間）で指定する（渡されたのは abc');
+    expect(String(error)).not.toContain('windowHours は');
+    expect(sent).toHaveLength(0);
+    await expect(progressCommand({ windowHours: '0' })).rejects.toThrow('--window-hours');
+    await expect(progressCommand({ windowHours: '' })).rejects.toThrow('--window-hours');
   });
 
   it('401 は describeAuthFailure の文言を書いて戻る', async () => {

@@ -7554,6 +7554,8 @@ class Clone implements CloneHost {
     // 実測ではそちらのほうが多い（24件中15件）が、依頼元の判定が「2×2 の右下1マス
     // だけ」であり、そこは範囲の外である。**⟹ 「長さで落ちる回は全部直った」と
     // 読まないこと。**
+    // 画面が「失敗の知らせ」と見分けるための印（`turnFailure` の doc）。文面は見ない。
+    const turnFailure = this.#usageBlocked === null ? ('failed' as const) : ('held' as const);
     const humanText =
       (this.#usageBlocked === null
         ? 'この発言には返せなかった（ターンが失敗した）。失敗の理由は日誌に残してある。'
@@ -7603,6 +7605,7 @@ class Clone implements CloneHost {
       role: 'outbound',
       text: humanText,
       conversationId,
+      turnFailure,
     });
   }
 
