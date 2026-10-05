@@ -97,6 +97,9 @@ const ALLOWED_CUSTOM_CLASSES = new Set<string>([
   'UnreadableApprovalError',
   'CredentialEntryRejectedError',
   'TokenPoolInputError',
+  // #2927。文は欄名（呼び手が書く固定のリテラル）と定型の説明だけで、名前・値を載せない。
+  'NulNotAllowedError',
+  'InvalidCredentialNameError',
 ]);
 /**
  * **絞りとして認める `<id>.name === '<リテラル>'` のリテラルの許可リスト**（#2606）。

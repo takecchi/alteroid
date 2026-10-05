@@ -7177,11 +7177,13 @@ export function createApp(deps: AppDeps) {
            * 判断した。teto の判断）。
            */
           const reason =
-            error instanceof CredentialEntryRejectedError ||
-            error instanceof NulNotAllowedError ||
-            error instanceof InvalidCredentialNameError
+            error instanceof CredentialEntryRejectedError
               ? error.message
-              : `鍵の差し替えに失敗した（${kindOfError(error)}）。詳細は値が載りうるので返さない`;
+              : error instanceof NulNotAllowedError
+                ? error.message
+                : error instanceof InvalidCredentialNameError
+                  ? error.message
+                  : `鍵の差し替えに失敗した（${kindOfError(error)}）。詳細は値が載りうるので返さない`;
           await appendJournalOrDrop(
             deps.stores,
             {
