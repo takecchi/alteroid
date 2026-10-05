@@ -144,3 +144,47 @@ describe('読めない委譲の行（#2705）', () => {
     expect(container.textContent).not.toContain('manager-runner');
   });
 });
+
+describe('器と札の名前（#2772）', () => {
+  /** 図が見せる文字（枠の名前の <text> と札のボタン）。ツールチップ（<title>）と読み上げは含めない。 */
+  const visibleText = (container: HTMLElement) =>
+    [
+      ...container.querySelectorAll('[data-container] text'),
+      ...container.querySelectorAll('button'),
+    ]
+      .map((e) => e.textContent)
+      .join(' ');
+
+  it.each([
+    ['広い配置', 1000],
+    ['狭い配置', 300],
+  ])('%s: 内部の英字の名前（alteroidd・db・clone・Web UI / CLI）を見せない', (_, w) => {
+    stubFrameWidth(w);
+    const { container } = render(<SystemTopology {...busyScene} />);
+    const text = visibleText(container);
+    expect(text).toContain('alteroid 本体');
+    expect(text).toContain('記憶の置き場');
+    expect(text).not.toContain('alteroidd');
+    expect(text).not.toMatch(/\bdb\b/);
+    expect(text).not.toContain('clone');
+    expect(text).not.toContain('Web UI');
+    expect(text).not.toContain('CLI');
+    expect(text).not.toContain('manager-runner');
+  });
+
+  it('runner の枠の名前（runner-N）はそのまま出る', () => {
+    stubFrameWidth(1000);
+    const { container } = render(<SystemTopology {...busyScene} />);
+    expect(visibleText(container)).toContain('runner-primary');
+    expect(visibleText(container)).toContain('runner-2');
+  });
+
+  it('英字の正式名はツールチップに残し、枠の鍵は変えない', () => {
+    stubFrameWidth(1000);
+    const { container } = render(<SystemTopology {...busyScene} />);
+    expect(container.querySelector('[data-container="daemon"] title')!.textContent).toContain(
+      'alteroidd',
+    );
+    expect(container.querySelector('[data-container="db"] title')!.textContent).toContain('db');
+  });
+});

@@ -13,9 +13,9 @@ const TONES = {
 /**
  * 1つの量（今日の費用・承認待ちの件数・稼働中の数）。
  *
- * 数字は `font-display`（Michroma）で出す——**画面の中で幅広の書体を使うのは印と
- * ここだけ**なので、数字が並ぶ場所がそのまま「計器」に見える。桁は揃える
- * （`tabular-nums`）。
+ * 数字は本文の書体（`font-sans`、IBM Plex Sans JP）の太さ500・`tabular-nums` で出す。
+ * **`font-display`（Michroma）は使わない** — 0 と O が同じ形で見分けられず、件数・金額・
+ * id を読み違える（#2843）。装飾の書体はブランドの印（`brand-mark`）だけに残す。
  *
  * **取れなかった量に 0 を出さないこと。** `value` に `—` などを渡し、`hint` で
  * 取れない理由を書く（AGENTS.md の地雷「取れない軸に 0 の行を作る」）。
@@ -42,7 +42,7 @@ export function Stat({
       <p className="mt-1.5 flex items-baseline gap-1.5">
         <span
           data-numeric
-          className={cn('font-display text-2xl leading-none tabular-nums', TONES[tone])}
+          className={cn('text-2xl leading-none font-medium tabular-nums', TONES[tone])}
         >
           {value}
         </span>

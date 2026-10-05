@@ -266,6 +266,12 @@ function summarize({ clone, db, runners, managers }: TopologyScene): string {
   return parts.join('。');
 }
 
+/** 枠の名前の補足（ツールチップ）。表示の名前は日本語で、正式な英字の名前はここにだけ残す。 */
+const CONTAINER_HINT: Record<string, string> = {
+  db: '記憶の置き場（db）',
+  daemon: 'alteroid 本体（alteroidd）',
+};
+
 function Container({
   container: { key, box, label, state, labelAlign },
 }: {
@@ -275,6 +281,7 @@ function Container({
   const unknown = state === 'unknown';
   return (
     <g data-container={key} data-state={state}>
+      {CONTAINER_HINT[key] ? <title>{CONTAINER_HINT[key]}</title> : null}
       <rect
         x={box.x}
         y={box.y}

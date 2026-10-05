@@ -4,7 +4,7 @@ import { Card, CardHeader } from '../common';
 
 import { Stat } from './stat';
 
-/** 1つの量。数字は印字の書体（Michroma）で桁を揃えて出す。 */
+/** 1つの量。数字は本文の書体（IBM Plex Sans JP）の等幅数字（tabular-nums）で出す。0 と O を見分けられる。 */
 const meta = {
   title: 'Features/Stat',
   component: Stat,

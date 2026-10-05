@@ -34,7 +34,7 @@ export const MEMORY_TABS: readonly NavTab[] = [
 
 /** 予定と受信箱: 自律の起点と、その受け皿。 */
 export const SCHEDULE_TABS: readonly NavTab[] = [
-  { to: '/schedule', label: 'スケジュール' },
+  { to: '/schedule', label: '予定' },
   { to: '/inbox', label: '受信箱' },
 ];
 
@@ -112,4 +112,18 @@ export function isUnder(pathname: string, base: string): boolean {
 /** サイドバーの行 `item` が、いま `pathname` に居るときの選択中か。 */
 export function isNavItemActive(item: NavItemDef, pathname: string): boolean {
   return item.paths.some((base) => isUnder(pathname, base));
+}
+
+/** 設定のまとまりの名前（左ナビの「設定」、設定の各ページの題名の頭）。 */
+export const SETTINGS_GROUP_LABEL = '設定';
+
+/**
+ * 設定のまとまりの各ページのタブの題名（`document.title` の画面名）。`設定 — 接続` のように
+ * まとまりの名前とタブの名前を並べる。タブの名前は `SETTINGS_TABS` から引く（別に書かない）。
+ * h1 は変えない（`/settings` は「設定」、ほかはタブの名前のまま）。
+ */
+export function settingsDocumentTitle(to: string): string {
+  const tab = SETTINGS_TABS.find((t) => t.to === to);
+  if (tab === undefined) throw new Error(`設定のタブに無い経路: ${to}`);
+  return `${SETTINGS_GROUP_LABEL} — ${tab.label}`;
 }
