@@ -241,6 +241,17 @@ async function fmBased(h: Harness, args: Record<string, unknown>): Promise<strin
   });
 }
 
+/** memory_delete 版。いまの版を base_version として付ける（#2881。writeBased と同じ趣旨）。 */
+async function delBased(h: Harness, args: Record<string, unknown>): Promise<string> {
+  const current = await h.stores.persona.read(String(args.slug));
+  return h.call('memory_delete', {
+    ...args,
+    ...(current !== null && args.base_version === undefined
+      ? { base_version: memoryVersion(current.content) }
+      : {}),
+  });
+}
+
 function harness(runtime?: () => CloneRuntimeFacts, scheduler?: () => ScheduleStatus[]): Harness {
   const stores = createMemoryStores();
   const emitted: ChatStreamEvent[] = [];
@@ -2569,7 +2580,7 @@ describe('クローンの道具', () => {
       const h = harness();
       await h.stores.persona.write('temp-note', '# 一時的なメモ\n\n本文');
 
-      await h.call('memory_delete', { slug: 'temp-note', summary: 'もう要らない' });
+      await delBased(h, { slug: 'temp-note', summary: 'もう要らない' });
 
       expect(await h.stores.persona.read('temp-note')).toBeNull();
       const list = await h.stores.persona.list();
@@ -2594,7 +2605,7 @@ describe('クローンの道具', () => {
       const body = '# メモ\n\n' + 'あ'.repeat(42) + '\n';
       await h.stores.persona.write('temp-note', body);
 
-      await h.call('memory_delete', { slug: 'temp-note', summary: '片付け' });
+      await delBased(h, { slug: 'temp-note', summary: '片付け' });
 
       const [entry] = await h.stores.journal.list({ types: ['memory_update'] });
       expect(entry).toMatchObject({ type: 'memory_update', slug: 'temp-note' });
@@ -2605,7 +2616,7 @@ describe('クローンの道具', () => {
       const h = harness();
       await h.stores.persona.write('temp-note', '12345');
 
-      await h.call('memory_delete', { slug: 'temp-note', summary: '片付け' });
+      await delBased(h, { slug: 'temp-note', summary: '片付け' });
 
       const [entry] = await h.stores.journal.list({ types: ['memory_update'] });
       // `12345` は `12345\n`（6バイト）として保存される（#370）。
@@ -2617,7 +2628,7 @@ describe('クローンの道具', () => {
       const secretBody = '# メモ\n\n他人に見せたくない値: SECRET-XYZ-999';
       await h.stores.persona.write('temp-note', secretBody);
 
-      await h.call('memory_delete', { slug: 'temp-note', summary: '片付け' });
+      await delBased(h, { slug: 'temp-note', summary: '片付け' });
 
       const [entry] = await h.stores.journal.list({ types: ['memory_update'] });
       expect((entry as { summary: string }).summary).not.toContain('SECRET-XYZ-999');
@@ -2627,7 +2638,7 @@ describe('クローンの道具', () => {
       const h = harness();
       await h.stores.persona.write('temp-note', '本文');
 
-      await h.call('memory_delete', { slug: 'temp-note', summary: '片付け' });
+      await delBased(h, { slug: 'temp-note', summary: '片付け' });
 
       const [entry] = await h.stores.journal.list({ types: ['memory_update'] });
       expect(entry).toMatchObject({ action: 'remove' });
@@ -16091,7 +16102,7 @@ describe('journal_read — memory_update の action / バイト数（#339）', (
   it('head のバイト表示（bytes=）が、summary 由来の文字数（body の自由文）の側へ紛れ込まない', async () => {
     const h = harness();
     await h.stores.persona.write('temp-note', '12345');
-    await h.call('memory_delete', { slug: 'temp-note', summary: '片付け' });
+    await delBased(h, { slug: 'temp-note', summary: '片付け' });
     const [entry] = await h.stores.journal.list({ types: ['memory_update'] });
     if (entry === undefined) throw new Error('memory_delete が日誌へ記録していない');
 
@@ -20949,7 +20960,7 @@ describe('journal.append が失敗したとき（跡が消えない・isError �
     // 削除対象は直接ストアへ仕込む——`memory_write` 経由だと、その道具自身の
     // memory_update が1件混ざり、この歯が数えたい範囲がずれる。
     await h.stores.persona.write('doc-to-delete', '消される文書\n');
-    await h.call('memory_delete', { slug: 'doc-to-delete', summary: '削除' });
+    await delBased(h, { slug: 'doc-to-delete', summary: '削除' });
 
     await h.call('ask_human', { question: '質問' });
 
@@ -21019,6 +21030,7 @@ describe('journal.append が失敗したとき（跡が消えない・isError �
       const { isError, text } = await callExpectingError(tools, 'memory_delete', {
         slug: 'temp-note',
         summary: '整理',
+        base_version: memoryVersion((await stores.persona.read('temp-note'))!.content),
       });
 
       // (e) 副作用は実際に完了している——文書は消えている。
@@ -22385,6 +22397,7 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
         return callExpectingError(tools, 'memory_delete', {
           slug: 'doc-to-delete',
           summary: '整理',
+          base_version: memoryVersion((await stores.persona.read('doc-to-delete'))!.content),
         });
       },
     },
