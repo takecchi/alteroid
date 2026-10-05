@@ -9,7 +9,8 @@ import type { JobStore } from './store.js';
  *   「無い」と同じ結果（`null`。`mutate` は呼ばない）を返す。pg は DB に投げる前に短絡する
  * - **書き込みの口**: `putJob`・`putApproval` の `id`（鍵）の NUL は `NulNotAllowedError` で断る（値は文に載せない）。
  *   本文（ジョブの `summary`・`request`・`lastReport`、承認待ちの `question`・`context`・`answer`）の NUL は落として残す
- * - 参照キー（`conversationId`・`managerId`・`jobId` など）の NUL の扱いは未決なので、ここでは測らない
+ * - 参照キー・印（`conversationId`・`managerId`・`jobId`・`requestId` など）と、承認待ちの `questions` / `selections` の中の
+ *   文字列も、断らず落として残す（自分の行を指す鍵ではなく、記録が丸ごと落ちるほうが害が大きい。commitments の `source` と同じ）
  *
  * 書いたものは残さない（`clear` はしない。使い捨てのストアを渡すこと）。vitest に依存しない。
  */
@@ -80,6 +81,63 @@ export async function verifyJobNulContract(store: JobStore): Promise<void> {
     fail(`updateApprovalの返り値に NUL が残る: ${JSON.stringify(answered)}`);
   if ((await store.getApproval('approval-nul-body'))?.answer !== '答え') {
     fail('updateApprovalの本文の NUL が残る');
+  }
+
+  // 参照キー・印・構造化された欄（teto の判断、2026-10-06）。自分の行を指す鍵ではなく、よそへの参照や印なので、
+  // 断らず落として残す（記録が丸ごと落ちるほうが害が大きい。commitments の source と同じ）。
+  await store.putJob({
+    id: 'job-nul-refs',
+    createdAt: at,
+    updatedAt: at,
+    status: 'running',
+    summary: 's',
+    conversationId: 'c\u0000onv',
+    managerId: 'm\u0000gr',
+    sessionId: 's\u0000ess',
+    projectKey: 'p\u0000roj',
+    runnerId: 'r\u0000unner',
+  });
+  const refJob = (await store.listJobs()).find((entry) => entry.id === 'job-nul-refs');
+  if (
+    refJob?.conversationId !== 'conv' ||
+    refJob.managerId !== 'mgr' ||
+    refJob.sessionId !== 'sess' ||
+    refJob.projectKey !== 'proj' ||
+    refJob.runnerId !== 'runner'
+  ) {
+    fail(`ジョブの参照キーの NUL が残る・記録が落ちる: ${JSON.stringify(refJob)}`);
+  }
+  await store.putApproval({
+    id: 'approval-nul-refs',
+    createdAt: at,
+    question: 'q',
+    jobId: 'j\u0000ob',
+    requestId: 'r\u0000eq',
+    questions: [
+      {
+        id: 'q\u00001',
+        prompt: '問\u0000い',
+        options: [{ id: 'o\u00001', label: '選\u0000択', description: '説\u0000明' }],
+      },
+    ],
+    selections: [{ questionId: 'q\u00001', optionIds: ['o\u00001'], other: '他\u0000' }],
+  });
+  const refApproval = await store.getApproval('approval-nul-refs');
+  if (
+    refApproval?.jobId !== 'job' ||
+    refApproval.requestId !== 'req' ||
+    refApproval.questions?.[0]?.id !== 'q1' ||
+    refApproval.questions[0].prompt !== '問い' ||
+    refApproval.questions[0].options[0]?.id !== 'o1' ||
+    refApproval.questions[0].options[0].label !== '選択' ||
+    refApproval.questions[0].options[0].description !== '説明' ||
+    refApproval.selections?.[0]?.questionId !== 'q1' ||
+    refApproval.selections[0].optionIds[0] !== 'o1' ||
+    refApproval.selections[0].other !== '他'
+  ) {
+    fail(
+      `承認待ちの参照・構造化された欄の NUL が残る・記録が落ちる: ${JSON.stringify(refApproval)}`,
+    );
   }
 
   // 読むだけの口: 「無い」と同じ結果。投げない。mutate も呼ばない。
