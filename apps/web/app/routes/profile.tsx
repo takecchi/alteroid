@@ -1,4 +1,5 @@
 import { SettingsTabs } from '~/components/group-tabs';
+import { settingsDocumentTitle } from '~/lib/nav';
 import { useState } from 'react';
 
 import { NotOwnerHint } from '~/components/not-owner-hint';
@@ -98,6 +99,7 @@ export default function Profile() {
   return (
     <Page
       tabs={<SettingsTabs />}
+      documentTitle={settingsDocumentTitle('/profile')}
       title="実行環境プロファイル"
       description="クローン・マネージャー・作業者が仕事を始めるときに読み込まれる、環境を整えるスクリプトの行。行ごとに渡す先を選べる（シェルの ~/.zprofile に相当）"
     >
