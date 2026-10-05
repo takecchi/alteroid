@@ -4,7 +4,7 @@
  * **「日報の本文が描画経路を通ること」だけ**（Markdown が正しく描かれるかは
  * `markdown.test.tsx` の仕事）。
  */
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -468,6 +468,42 @@ describe('日報', () => {
     expect(tokens).toContain('lg:grid-cols-[16rem_1fr]');
   });
 
+  it('読み込み中は右側に「1件も無い」を出さない（#2803）', async () => {
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let requested = false;
+    const reports = [
+      {
+        type: 'daily_report',
+        id: 'r1',
+        at: '2026-08-14T22:00:00.000Z',
+        date: '2026-08-14',
+        body: '進捗があった。',
+      },
+    ];
+    stubFetch((url) => {
+      if (url.includes('/reports')) {
+        requested = true;
+        return gate.then(() => json({ reports }));
+      }
+      return undefined;
+    });
+
+    renderReports();
+
+    // 一覧が未着の間（要求は出たが応答が返っていない）、右側は「1件も無い」と言わない。
+    // 実時間で待たず、要求が出たことを待つ（#2146）。
+    await waitFor(() => expect(requested).toBe(true));
+    expect(screen.queryByText(/日報が1件も無い/)).toBeNull();
+    expect(screen.queryByText('まだ無い。')).toBeNull();
+
+    release();
+    expect(await screen.findByText('進捗があった。')).toBeTruthy();
+    expect(screen.queryByText(/日報が1件も無い/)).toBeNull();
+  });
+
   /**
    * `lg:grid-cols-[16rem_1fr]` の生の `1fr` は `minmax(auto,1fr)` に展開される
    * （#265 で特定済み）ので、`lg` 以上でも2つ目の列（1fr側）の自動最小サイズは
@@ -482,37 +518,6 @@ describe('日報', () => {
    * **これも視覚回帰試験ではない。** 押さえられるのはクラスが当たっている
    * ことまでである（上のテストの doc と同じ理由）。
    */
-  it('読み込み中は右側に「1件も無い」を出さない（#2803）', async () => {
-    let release: () => void = () => {};
-    const gate = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    const reports = [
-      {
-        type: 'daily_report',
-        id: 'r1',
-        at: '2026-08-14T22:00:00.000Z',
-        date: '2026-08-14',
-        body: '進捗があった。',
-      },
-    ];
-    stubFetch((url) => {
-      if (url.includes('/reports')) return gate.then(() => json({ reports }));
-      return undefined;
-    });
-
-    renderReports();
-
-    // 一覧が未着の間、右側は「1件も無い」と言わない。
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    expect(screen.queryByText(/日報が1件も無い/)).toBeNull();
-    expect(screen.queryByText('まだ無い。')).toBeNull();
-
-    release();
-    expect(await screen.findByText('進捗があった。')).toBeTruthy();
-    expect(screen.queryByText(/日報が1件も無い/)).toBeNull();
-  });
-
   it('日報が1件も無いときの本文側 Card は min-w-0 を持つ', async () => {
     stubFetch((url) => {
       if (url.includes('/reports')) return json({ reports: [] });
