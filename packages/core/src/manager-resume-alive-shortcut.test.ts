@@ -46,7 +46,15 @@ const JOB: Job = {
 };
 
 /** `Host#resume` と同じく、生きたセッションが居れば新しい SDK を起こさず message を流して返す偽 runner。 */
-function shortcutRunner(report: 'true' | 'false' | 'absent' = 'true', live = true) {
+function shortcutRunner(
+  report: 'true' | 'false' | 'absent' = 'true',
+  live = true,
+  session: {
+    tokenFingerprint?: string;
+    liveBackgroundTasks?: number;
+    waiting?: RunnerManagerState['waiting'];
+  } = {},
+) {
   const alive: RunnerManagerState[] = live
     ? [
         {
@@ -54,11 +62,18 @@ function shortcutRunner(report: 'true' | 'false' | 'absent' = 'true', live = tru
           status: 'done',
           cwd: '/work/project',
           request: '調べておいて',
-          waiting: [],
+          waiting: session.waiting ?? [],
           sessionId: 'sess-1',
+          ...(session.tokenFingerprint === undefined
+            ? {}
+            : { tokenFingerprint: session.tokenFingerprint }),
+          ...(session.liveBackgroundTasks === undefined
+            ? {}
+            : { liveBackgroundTasks: session.liveBackgroundTasks }),
         },
       ]
     : [];
+  const stops: string[] = [];
   const pushedToLiveProcess: string[] = [];
   const spawned: RunnerResumeCommand[] = [];
   const runner: RunnerClient = {
@@ -81,6 +96,15 @@ function shortcutRunner(report: 'true' | 'false' | 'absent' = 'true', live = tru
         };
       }
       spawned.push(command);
+      // 新しい SDK が起きた＝一覧に載る（鍵はいまのものなので、旧い指紋は持たない）。
+      alive.push({
+        managerId: command.managerId,
+        status: 'running',
+        cwd: command.cwd,
+        request: command.request,
+        waiting: [],
+        sessionId: command.sessionId,
+      });
       return report === 'absent' ? {} : { reusedLiveSession: false };
     },
     async send() {
@@ -89,8 +113,10 @@ function shortcutRunner(report: 'true' | 'false' | 'absent' = 'true', live = tru
     async answer(): Promise<RunnerAnswerOutcome> {
       return { delivered: false };
     },
-    async stop() {
-      /* この検証では使わない */
+    async stop(managerId) {
+      stops.push(managerId);
+      const at = alive.findIndex((state) => state.managerId === managerId);
+      if (at >= 0) alive.splice(at, 1);
     },
     async list() {
       return [...alive];
@@ -114,21 +140,34 @@ function shortcutRunner(report: 'true' | 'false' | 'absent' = 'true', live = tru
       /* この検証では使わない */
     },
   };
-  return { runner, pushedToLiveProcess, spawned };
+  return { runner, pushedToLiveProcess, spawned, stops };
 }
 
 /** デーモン再起動後の done へ send する（台帳は `attached=false`、runner の旧プロセスは生きている／いない）。 */
-async function sendAfterRestart(report: 'true' | 'false' | 'absent', live: boolean) {
+async function sendAfterRestart(
+  report: 'true' | 'false' | 'absent',
+  live: boolean,
+  options: {
+    session?: Parameters<typeof shortcutRunner>[2];
+    activeFingerprint?: string;
+  } = {},
+) {
   const stores = createMemoryStores();
   await stores.jobs.putJob(JOB);
-  const fake = shortcutRunner(report, live);
+  const fake = shortcutRunner(report, live, options.session);
   const registry = createRunnerRegistry([fake.runner]);
   const pool = createManagerPool({
     stores,
     post: () => undefined,
     runners: registry,
     profile: createProfileService({ stores, runners: registry }),
-    tokenIdentity: () => ({ tokenId: 'tok-b', generation: 60 }),
+    tokenIdentity: () => ({
+      tokenId: 'tok-b',
+      generation: 60,
+      ...(options.activeFingerprint === undefined
+        ? {}
+        : { fingerprint: options.activeFingerprint }),
+    }),
   });
   await pool.restore();
   const before = (await pool.list()).find((s) => s.managerId === 'mgr-alive');
@@ -170,6 +209,123 @@ describe('resume が生きた旧プロセスへ短絡したとき、世代を「
     // 古い runner の間は偽の一致を防げない。これは限界であって、期待ではない。
     expect(s.after?.tokenGeneration).toBe(60);
     expect(s.result.detail).not.toContain('旧プロセス');
+    await s.pool.stop();
+  });
+});
+
+/**
+ * **指紋で見る（#2877 PR2）。** 台帳が「繋がっていない」done（デーモン再起動後）でも、runner の
+ * 旧プロセスが起動時に掴んだ鍵の指紋（`RunnerManagerState.tokenFingerprint`。`token_list` と
+ * 同じ形で、値は載せない）を現役の指紋と比べ、食い違えば #2851 と同じく畳んで起こし直す。
+ */
+describe('再起動後の done を、起動時に掴んだ鍵の指紋で見る（#2877 PR2）', () => {
+  const OLD_FP = 'aaaaaaaaaaaa';
+  const NEW_FP = 'bbbbbbbbbbbb';
+
+  it('⭐ 指紋が食い違い・背景処理 0 本・確認待ち無し: 畳んで新しい鍵で起こし直し、世代を書く', async () => {
+    const s = await sendAfterRestart('false', true, {
+      session: { tokenFingerprint: OLD_FP, liveBackgroundTasks: 0 },
+      activeFingerprint: NEW_FP,
+    });
+
+    expect(s.result.outcome).toBe('delivered');
+    // 旧プロセスへは流さず、畳んで、同じ会話（sessionId）で新しい SDK を起こして message を渡す。
+    expect(s.fake.pushedToLiveProcess).toHaveLength(0);
+    expect(s.fake.stops).toEqual(['mgr-alive']);
+    expect(s.fake.spawned).toHaveLength(1);
+    expect(s.fake.spawned[0]?.sessionId).toBe('sess-1');
+    expect(s.fake.spawned[0]?.message).toBe('続きを');
+    expect(s.after?.tokenGeneration).toBe(60);
+    await s.pool.stop();
+  });
+
+  it('⚠️ 指紋が食い違い、背景処理が残っていれば、畳まず・流さず断る（detail に指紋以外の鍵の情報は出ない）', async () => {
+    const s = await sendAfterRestart('true', true, {
+      session: { tokenFingerprint: OLD_FP, liveBackgroundTasks: 2 },
+      activeFingerprint: NEW_FP,
+    });
+
+    expect(s.result.outcome).toBe('declined');
+    expect(s.result.detail).toContain('2 本');
+    expect(s.result.detail).toContain(OLD_FP);
+    expect(s.result.detail).toContain(NEW_FP);
+    expect(s.result.detail).toContain('manager_stop');
+    expect(s.fake.stops).toHaveLength(0);
+    expect(s.fake.spawned).toHaveLength(0);
+    expect(s.fake.pushedToLiveProcess).toHaveLength(0);
+    await s.pool.stop();
+  });
+
+  it('⚠️ 指紋が食い違い、背景処理の本数が分からない（欄の無い runner）なら、「分からない」と言って断る', async () => {
+    const s = await sendAfterRestart('true', true, {
+      session: { tokenFingerprint: OLD_FP },
+      activeFingerprint: NEW_FP,
+    });
+
+    expect(s.result.outcome).toBe('declined');
+    expect(s.result.detail).toContain('分からない');
+    expect(s.fake.stops).toHaveLength(0);
+    expect(s.fake.pushedToLiveProcess).toHaveLength(0);
+    await s.pool.stop();
+  });
+
+  it('⚠️ 指紋が食い違い、確認待ちが残っていれば断る', async () => {
+    const s = await sendAfterRestart('true', true, {
+      session: {
+        tokenFingerprint: OLD_FP,
+        liveBackgroundTasks: 0,
+        waiting: [
+          {
+            requestId: 'req-1',
+            summary: 'Bash を許可するか',
+            kind: 'permission',
+            askedAt: '2026-10-05T01:00:00.000Z',
+          },
+        ],
+      },
+      activeFingerprint: NEW_FP,
+    });
+
+    expect(s.result.outcome).toBe('declined');
+    expect(s.result.detail).toContain('確認待ち');
+    expect(s.fake.stops).toHaveLength(0);
+    await s.pool.stop();
+  });
+
+  it('指紋が一致: 旧プロセスの鍵は現役なので流し、世代を書いてよい（「確かめていない」とは言わない）', async () => {
+    const s = await sendAfterRestart('true', true, {
+      session: { tokenFingerprint: NEW_FP, liveBackgroundTasks: 0 },
+      activeFingerprint: NEW_FP,
+    });
+
+    expect(s.result.outcome).toBe('delivered');
+    expect(s.fake.pushedToLiveProcess).toEqual(['続きを']);
+    expect(s.fake.stops).toHaveLength(0);
+    expect(s.after?.tokenGeneration).toBe(60);
+    expect(s.result.detail).not.toContain('確かめていない');
+    await s.pool.stop();
+  });
+
+  it('版の混在: セッションの指紋が読めない（欄の無い古い runner）なら、断らず流し、世代は書かない', async () => {
+    const s = await sendAfterRestart('true', true, { activeFingerprint: NEW_FP });
+
+    expect(s.result.outcome).toBe('delivered');
+    expect(s.fake.pushedToLiveProcess).toEqual(['続きを']);
+    expect(s.fake.stops).toHaveLength(0);
+    expect(s.after?.tokenGeneration).toBeUndefined();
+    expect(s.result.detail).toContain('確かめていない');
+    await s.pool.stop();
+  });
+
+  it('版の混在: 現役の指紋が分からないなら、断らず流し、世代は書かない', async () => {
+    const s = await sendAfterRestart('true', true, {
+      session: { tokenFingerprint: OLD_FP, liveBackgroundTasks: 0 },
+    });
+
+    expect(s.result.outcome).toBe('delivered');
+    expect(s.fake.pushedToLiveProcess).toEqual(['続きを']);
+    expect(s.fake.stops).toHaveLength(0);
+    expect(s.after?.tokenGeneration).toBeUndefined();
     await s.pool.stop();
   });
 });

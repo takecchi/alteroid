@@ -69,7 +69,7 @@ import {
   noteUnreadableRecord,
   reasonOf,
 } from './dropped-record.js';
-import { ROTATABLE_CREDENTIAL_KEYS } from './credentials.js';
+import { fingerprintOf, ROTATABLE_CREDENTIAL_KEYS } from './credentials.js';
 import type { CredentialEntry, CredentialFingerprint, CredentialStore } from './credentials.js';
 import { codePointBoundary, excerptLine } from './excerpt.js';
 import { mcpServerNames, mcpServersFingerprintOf, parseMcpServers } from './mcp-servers.js';
@@ -612,6 +612,15 @@ function fingerprintFor(
   name: string,
 ): string | undefined {
   return fingerprints.find((fingerprint) => fingerprint.name === name)?.sha256;
+}
+
+/**
+ * 子プロセスへ渡す env が持つ認証トークンの指紋（`token_list` の `sha256` と同じ
+ * `fingerprintOf`）。**値は返さない。** 鍵が無い・空なら `undefined`（0 や空文字の指紋を作らない）。
+ */
+function tokenFingerprintOf(env: NodeJS.ProcessEnv): string | undefined {
+  const value = env[AGENT_TOKEN_CREDENTIAL_NAME];
+  return value === undefined || value === '' ? undefined : fingerprintOf(value);
 }
 
 /**
@@ -1864,6 +1873,12 @@ class RunnerSession {
    */
   readonly #resumeState = new RunnerResumeState();
   /**
+   * このセッションの子プロセスが**起動時に掴んだ** `CLAUDE_CODE_OAUTH_TOKEN` の指紋
+   * （`#buildSpec` が控える。Issue #2877 PR2）。**値は持たない。** まだ一度も開いていない・鍵を
+   * 掴んでいない間は `undefined`。
+   */
+  #tokenFingerprint: string | undefined;
+  /**
    * **作業者を待つ窓の状態3フィールド**（`#openTasks` / `#window` /
    * `#windowClosing`）の器（Issue #1190 案X で `runner-worker-wait-window.ts`
    * へ切り出した。前例は PR #1565 / #1551 / #1550 / #1523）。**`worker_wait` を
@@ -2068,6 +2083,8 @@ class RunnerSession {
       // よいか」を決める材料で、畳むと道連れになるものの本数である
       // （`#atTokenRecycleBoundary` と同じ数え方）。
       liveBackgroundTasks: this.#sdkSession.liveBackgroundTasks.length,
+      // **起動時に掴んだ鍵の指紋**（Issue #2877 PR2。`runnerManagerStateSchema.tokenFingerprint` の doc）。
+      ...(this.#tokenFingerprint === undefined ? {} : { tokenFingerprint: this.#tokenFingerprint }),
     };
   }
 
@@ -2581,6 +2598,11 @@ class RunnerSession {
   }
 
   #buildSpec(resume?: string, forPeer = false): AgentManagerSessionSpec {
+    // **子プロセスへ実際に渡す env を1回だけ作り、そこから鍵の指紋を控える**（Issue #2877 PR2）。
+    // 指紋は `token_list` と同じ `fingerprintOf`（sha256 の先頭12桁）で、値そのものは持たない。
+    // **プロファイルが上書きした後の値を見る**（子が実際に掴む鍵）。peer のセッションは別物なので控えない。
+    const childEnv = this.#childEnv();
+    if (!forPeer) this.#tokenFingerprint = tokenFingerprintOf(childEnv);
     return {
       input: this.#inputStream(),
       // 既定は `opus`。人間が `ALTEROID_MANAGER_MODEL` に置いていればそれを使う
@@ -2606,7 +2628,7 @@ class RunnerSession {
       // 省けばマネージャーを差し替えた人が作業者まで巻き添えで動かすことになる。
       workerModel: resolveWorkerModel(this.#placedModelApplies ? this.#env : {}),
       cwd: this.#cwd,
-      env: this.#childEnv(),
+      env: childEnv,
       // 既定は閉じる。人間が `ALTEROID_MANAGER_AUTO_MEMORY=true` を置いたときだけ
       // 開く（north_star 禁止2「方針は設定で開けられなければならない」）。
       managerAutoMemoryEnabled: resolveManagerAutoMemoryEnabled(this.#env),

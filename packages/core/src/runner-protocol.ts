@@ -144,6 +144,19 @@ export const runnerManagerStateSchema = z.object({
    * 欄付きの応答を古いデーモンが読んでも壊れない。
    */
   liveBackgroundTasks: z.number().int().nonnegative().optional(),
+  /**
+   * **このセッションの子プロセスが起動時に掴んだ認証トークンの指紋**（Issue #2877 PR2。
+   * `token_list` の `sha256` と同じ `fingerprintOf`——sha256 の先頭12桁。**値そのものは載せない**）。
+   *
+   * 読み手は `manager.ts` の `send()` で、**台帳が「繋がっていない」のに runner に旧プロセスが
+   * 生きているとき**（デーモン再起動後の done など）、その鍵が現役かを確かめる。食い違えば #2875 と
+   * 同じく畳んで起こし直す（背景処理・確認待ちが残っていれば断る）。
+   *
+   * **`undefined` は「分からない」。** 欄を持たない古い runner・まだ鍵を掴んでいないセッション。
+   * デーモンはそのとき**断らず、流して世代は書かない**（再起動後の done へ送れなくなるのは能力の
+   * 削除になる）。古いデーモンの schema は未知の欄を捨てるだけで落ちない。
+   */
+  tokenFingerprint: z.string().optional(),
 });
 
 /**

@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { makeTempDirSync } from '../../../vitest.tmpdir.js';
 
-import { createCredentialStore } from './credentials.js';
+import { createCredentialStore, fingerprintOf } from './credentials.js';
 import { createRunnerHost, type RunnerHost } from './runner.js';
 import type { RunnerEvent } from './runner-protocol.js';
 
@@ -884,5 +884,46 @@ describe('resume が生きた旧プロセスへ短絡したかを応答で名乗
     opened.finish('終わり');
     expect(s.startedOptions[0]?.resume).toBe('sess-9');
     expect(s.startedOptions[0]?.env?.CLAUDE_CODE_OAUTH_TOKEN).toBe(OLD_TOKEN);
+  });
+});
+
+/**
+ * **セッションが起動時に掴んだ鍵の指紋を、`list()` で運ぶ**（Issue #2877 PR2）。
+ * デーモンが、台帳が「繋がっていない」のに生きている旧プロセスの鍵が現役かを確かめる材料。
+ * 指紋は `token_list` と同じ `fingerprintOf`（値は載せない）。
+ */
+describe('list() が、セッションが起動時に掴んだ鍵の指紋を運ぶ（#2877 PR2）', () => {
+  it('起動時の鍵の指紋を返す。値そのものは載せない', async () => {
+    const s = setup();
+    await s.host.start({ managerId: 'mgr-1', request: '調べて', cwd: '/work/project' });
+    const first = await nthSession(s.sessions, 0);
+
+    const [state] = s.host.list();
+
+    expect(state?.tokenFingerprint).toBe(fingerprintOf(OLD_TOKEN));
+    expect(JSON.stringify(s.host.list())).not.toContain(OLD_TOKEN);
+    first.finish('終わり');
+  });
+
+  it('⚠️ 鍵が回っても、境界に達していない旧セッションは古い指紋のまま。畳み直した後は新しい指紋', async () => {
+    // 入力を伴わない背景処理の完了で畳み直す形は、入力と対にならない偽 SDK でしか作れない。
+    const s = setupOutOfBand();
+    await s.host.start({ managerId: 'mgr-1', request: '調べて', cwd: '/work/project' });
+    const first = await nthOutOfBandSession(s.sessions, 0);
+    first.backgroundTasksChanged([{ id: 'bg-1', taskType: 'shell' }]);
+    first.say('完了を待つ');
+    first.finish('完了を待つ');
+    await reportEvents(s.events, 1);
+    const NEW_TOKEN = 'token-fake-new-2877-fp';
+    await s.host.setCredentials([{ name: 'CLAUDE_CODE_OAUTH_TOKEN', value: NEW_TOKEN }]);
+
+    // 背景処理が残っているので旧プロセスのまま（古い指紋）。
+    expect(s.host.list()[0]?.tokenFingerprint).toBe(fingerprintOf(OLD_TOKEN));
+
+    // 片付くと境界に達して畳み直され、新しい鍵で開き直す。
+    first.backgroundTasksChanged([]);
+    await nthOutOfBandSession(s.sessions, 1);
+    expect(s.host.list()[0]?.tokenFingerprint).toBe(fingerprintOf(NEW_TOKEN));
+    expect(JSON.stringify(s.host.list())).not.toContain(NEW_TOKEN);
   });
 });
