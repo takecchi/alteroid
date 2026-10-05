@@ -4326,7 +4326,7 @@ function describeMemoryConflict(
       : `いまの版は base_version=${memoryVersion(current.content)}（${current.content.length} 文字）。`;
   return (
     `記憶 ${slug} は、読んだ後にその間に変わった（人間または別のターンが書いた）ので、${action}を**書かなかった**。` +
-    `${now}何も変わっていない（あなたの内容は書かれていない。人間の内容も消えていない）。` +
+    `${now}**何も書いていない**（あなたの内容は書かれておらず、いまの内容は1文字も変わっていない）。` +
     `memory_read slug=${slug} で読み直し、いまの内容に対してやりたいことが変わらないか判断し直してから、` +
     '読み直した版の base_version を付けて書き直すこと。'
   );
@@ -4946,6 +4946,7 @@ export function createCloneTools(context: ToolContext) {
       'memory_write',
       [
         '記憶の文書を全文置換する（無ければ作る）。',
+        '**既存の文書を書き換えるときは、先に memory_read（または memory_outline）で読んで、応答に出る base_version を渡すこと。焼き込みの索引（プロンプトに載った premise のカード等）だけでは書けない**（読んだ後に人間や別のターンが書いていたら、何も書かずに「その間に変わった」と返す。読み直して判断し直すこと）。**新しい文書の作成は版なしで通る。**',
         '人間がこのファイルを直接開いて読むことを前提に、Markdown として読みやすく書くこと。',
         '人間が手で書いた記述を、整形の都合で消さないこと。',
         '先頭に frontmatter を置ける（無くてもよい。無ければ premise として扱う——安全側の既定）。',
@@ -4973,7 +4974,7 @@ export function createCloneTools(context: ToolContext) {
           .describe(
             '読んだ時点の版（memory_read / memory_outline / 直前の memory_write の応答に出る base_version）。' +
               '**既存の文書を書き換えるときは必須。** 読んだ後に人間や別のターンが書いていたら、書かずに「その間に変わった」と返す。' +
-              '新規作成（その slug がまだ無い）では省略する。',
+              '新規作成（その slug がまだ無い）では省略してよい（版なしで通る）。焼き込みの索引だけでは版は分からない——先に memory_read か memory_outline を呼ぶこと。',
           ),
       },
       async ({ slug, content, summary, base_version: baseVersion }) => {
@@ -4995,7 +4996,7 @@ export function createCloneTools(context: ToolContext) {
           return text(
             `記憶 ${slug} は既に在る。全文を書き直すには、先に memory_read slug=${slug} で読み、` +
               '応答に出る base_version をこの呼び出しの base_version に渡すこと' +
-              '（読んだ後に人間や別のターンが書いた内容を、気づかずに消さないため）。何も変わっていない。',
+              '（読んだ後に人間や別のターンが書いた内容を、気づかずに消さないため。焼き込みの索引だけでは書けない）。**何も書いていない。**',
           );
         }
         let written;
@@ -5241,6 +5242,7 @@ export function createCloneTools(context: ToolContext) {
         'この道具の呼び出しの中に本文が現れることは無いので、本文が途中で切れることも構造的に起こりえない。',
         'description・type・parent の値に改行（\\n / \\r）を含む値は渡せない（断る）——値から本文へ文字列が混ざる経路を構造的に無くすため。',
         '既に在る文書にしか使えない（存在しない slug には断る。新規作成は memory_write を使うこと）。',
+        '**先に memory_read（または memory_outline）で読んで、応答に出る base_version を渡すこと（必須）。焼き込みの索引（プロンプトに載った premise のカード等）だけでは書けない**——読んだ後に人間が要旨などを直していたら、何も書かずに「その間に変わった」と返す（渡したキーで人間の直しを上書きしないため）。',
         'frontmatter が無い文書には、先頭に新しく frontmatter を作って足す（type を渡さなければ premise のまま——載り方は変わらない）。',
         'frontmatter が壊れている（malformed）文書には断る（機械が推測して組み直すと本文を食う経路ができるため）。',
         'memory_write で全文を書き直すか、人間に確認を通すこと。',
@@ -5264,8 +5266,14 @@ export function createCloneTools(context: ToolContext) {
           ),
         parent: z.string().optional().describe('親文書の slug（階層）。渡さなければ既存の値のまま'),
         summary: z.string().describe('何を直したかの一行要約（日誌に残る）'),
+        base_version: z
+          .string()
+          .optional()
+          .describe(
+            '読んだ時点の版（memory_read / memory_outline / 直前の書き込みの応答に出る base_version）。**必須**——無ければ何も書かずに読み直しを促す。焼き込みの索引だけでは版は分からない。',
+          ),
       },
-      async ({ slug, description, type, parent, summary }) => {
+      async ({ slug, description, type, parent, summary, base_version: baseVersion }) => {
         // **issue #1662。** `memory_read` と同じ門（doc はそちらにある）。
         if (!memorySlugSchema.safeParse(slug).success) {
           return text(`記憶のスラッグが不正: ${slug}（英小文字・数字・. _ - のみ）。`);
@@ -5338,6 +5346,15 @@ export function createCloneTools(context: ToolContext) {
         const denial = await guardFullReplace(stores, slug, cause, 'frontmatter の更新');
         if (denial !== null) return text(denial);
 
+        // **Issue #2809。** 版なしでは書かない（全文置換の口と同じ線）。
+        if (baseVersion === undefined) {
+          return text(
+            `記憶 ${slug} の frontmatter を直すには、先に memory_read slug=${slug} で読み、` +
+              '応答に出る base_version をこの呼び出しの base_version に渡すこと' +
+              '（読んだ後に人間が要旨などを直していても、渡したキーで上書きしないため。焼き込みの索引だけでは書けない）。**何も書いていない。**',
+          );
+        }
+
         const priorFrontmatter = parseMemoryFrontmatter(existing.content);
         if (priorFrontmatter.kind === 'malformed') {
           return text(
@@ -5357,9 +5374,7 @@ export function createCloneTools(context: ToolContext) {
         // **Issue #2809。** 読んだ（existing）から書くまでの間に変わっていたら書かない。
         let written;
         try {
-          written = await stores.persona.write(slug, nextContent, {
-            ifMatch: memoryVersion(existing.content),
-          });
+          written = await stores.persona.write(slug, nextContent, { ifMatch: baseVersion });
         } catch (error) {
           if (error instanceof MemoryConflictError) {
             return text(describeMemoryConflict(slug, 'frontmatter の更新', error.current));
