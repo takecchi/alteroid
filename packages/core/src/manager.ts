@@ -6218,7 +6218,10 @@ class Pool implements ManagerPool {
     }
 
     // 4. 台帳を「セッションは無い」に揃えて、呼び出し側の既存の resume へ落とす。
+    // **書き残してから進む**（404 で訂正する経路と同じ）。畳んだ後・resume の前に
+    // daemon が落ちても、台帳が「繋がっている」のまま残らない。
     record.attached = false;
+    await this.#persist(record);
     await this.#journal({
       type: 'decision',
       decision: `[${managerId}] 認証トークンの世代が食い違った done の委譲を、畳んで新しい鍵で起こし直す`,
