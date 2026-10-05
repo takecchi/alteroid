@@ -53,10 +53,10 @@ describe('先頭の timeout は、区切りの後ろのコマンドを有界に�
 describe('timeout の単純コマンド判定は長い入力で2乗にならない（#2399）', () => {
   it('区切りの無い長い引数列', () => {
     const makeInput = (n: number) => `timeout 60 tail -f ${'x '.repeat(n)}`;
-    expectNotSuperlinear(inspectBashCommand, makeInput, { n: 500, factor: 4 });
+    expectNotSuperlinear(inspectBashCommand, makeInput, { n: 500 });
   });
   it('リダイレクトの & の繰り返し', () => {
     const makeInput = (n: number) => `timeout 60 tail -f x ${'2>&1 '.repeat(n)}`;
-    expectNotSuperlinear(inspectBashCommand, makeInput, { n: 500, factor: 4 });
+    expectNotSuperlinear(inspectBashCommand, makeInput, { n: 500 });
   });
 });

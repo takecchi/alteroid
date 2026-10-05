@@ -44,10 +44,10 @@ describe('単体の & と <( は、引用符を潰す区間を分ける・潰さ
 describe('& で区切った長い入力で2乗にならない（#2401）', () => {
   it('echo の繰り返しを & で繋ぐ', () => {
     const makeInput = (n: number) => `${'echo "a b" & '.repeat(n)}echo done`;
-    expectNotSuperlinear(inspectBashCommand, makeInput, { n: 500, factor: 4 });
+    expectNotSuperlinear(inspectBashCommand, makeInput, { n: 500 });
   });
   it('<( の繰り返し', () => {
     const makeInput = (n: number) => `grep x ${'<(echo a) '.repeat(n)}`;
-    expectNotSuperlinear(inspectBashCommand, makeInput, { n: 500, factor: 4 });
+    expectNotSuperlinear(inspectBashCommand, makeInput, { n: 500 });
   });
 });

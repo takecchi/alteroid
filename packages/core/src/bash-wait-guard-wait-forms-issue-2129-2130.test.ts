@@ -148,7 +148,7 @@ describe('ファイルに書くだけのヒアドキュメントの本文では�
 
 describe('#2129 / #2130 の新しい判定が、長い入力で後戻りで爆発しない', () => {
   // issue #2187 —— 壁時計の絶対値（`TIME_BUDGET_MS = 200`）から伸びの比へ
-  // 替えた。`n * factor`（既定 factor=4）を、直す前にテストしていた
+  // 替えた。`n * factor`（#3017 前の既定は factor=4、いまは 8）を、直す前にテストしていた
   // 繰り返し回数（8000 / 4000 / 8000 / 2000+8000）に揃えてある。
   const cases: ReadonlyArray<[string, (n: number) => string, number]> = [
     ['setsid のオプションの繰り返し', (n) => `setsid ${'-f '.repeat(n)}${W} 1 --x`, 2000],

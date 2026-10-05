@@ -52,22 +52,22 @@ describe('2件目以降の run watch も、背景かを見る（#2400）', () =>
 describe('run watch が何件並んでも2乗にならない（#2400）', () => {
   it('区切りごとに前景の run watch（全部前景）', () => {
     const makeInput = (n: number) => `${`${W} 1; `.repeat(n)}echo done`;
-    expectNotSuperlinear(inspectBashCommand, makeInput, { n: 300, factor: 4 });
+    expectNotSuperlinear(inspectBashCommand, makeInput, { n: 300 });
   });
   it('| で繋いだ run watch（制御演算子が無い）', () => {
     const makeInput = (n: number) => `${`${W} 1 | `.repeat(n)}cat`;
-    expectNotSuperlinear(inspectBashCommand, makeInput, { n: 300, factor: 4 });
+    expectNotSuperlinear(inspectBashCommand, makeInput, { n: 300 });
   });
   it('波括弧のグループが並ぶ（背景ではない）', () => {
     const makeInput = (n: number) => `${`{ ${W} 1; }; `.repeat(n)}echo done`;
-    expectNotSuperlinear(inspectBashCommand, makeInput, { n: 300, factor: 4 });
+    expectNotSuperlinear(inspectBashCommand, makeInput, { n: 300 });
   });
   it('閉じていない { の後ろに run watch が並ぶ', () => {
     const makeInput = (n: number) => `{ ${`${W} 1; `.repeat(n)}echo done`;
-    expectNotSuperlinear(inspectBashCommand, makeInput, { n: 300, factor: 4 });
+    expectNotSuperlinear(inspectBashCommand, makeInput, { n: 300 });
   });
   it('区切りの無い1行の run watch', () => {
     const makeInput = (n: number) => `${`${W} `.repeat(n)}1`;
-    expectNotSuperlinear(inspectBashCommand, makeInput, { n: 300, factor: 4 });
+    expectNotSuperlinear(inspectBashCommand, makeInput, { n: 300 });
   });
 });

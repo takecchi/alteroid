@@ -22,6 +22,27 @@ import { assert, expect } from 'vitest';
  * 選んである前提のもとで、`hardCapMs` はいまの10倍の余裕（既定 2000ms）を
  * 持たせてあるので、器の揺れだけでは踏まない設計にしてある。
  *
+ * **判定の形（#3017）——2点の比から、幾何級数の複数点の傾きの中央値へ。** 2点（n と n*factor）の比だけで
+ * 判定すると、その2点がたまたまキャッシュや GC の段差をまたいだだけで、線形の実装でも比が跳ねる
+ * （`bash-wait-guard-issue-2206.test.ts`: 64000→256000 で約 6.8 倍。前後は約 4 倍。CI で比 10.1 で落ちた）。
+ * そこで、`n, 2n, 4n, ..., n*factor`（既定 factor=8 で 4 点）を測り、隣り合う点どうしの傾き
+ * `log2(t(2m) / t(m))` を出して、その**中央値**を `maxSlope`（既定 1.5）と比べる。
+ * 線形は約 1、n log n は約 1.1、2乗は約 2、3乗は約 3 で、1.5 は線形側と2乗側のちょうど中間。
+ * 段差は1つの区間の傾きだけを押し上げる（6.8 倍なら約 2.8）ので、区間が3つ以上あれば中央値は動かない。
+ * 2乗は全区間が約 2 なので、中央値も約 2 のまま落ちる。
+ * 既定を 8（4 点・傾き 3 つ）にしたのは、測る量が点の大きさの総和（n*(2^k) の和）に比例するからである
+ * （2点・factor=4 は 5n、factor=8 は 15n、factor=16 は 31n）。段差に対しては、傾きが3つあれば足りる。
+ * **ただし入力が実装の線形性とは別に不規則に揺れるときは、factor=16（5 点・傾き 4 つ、中央値は中央2つの平均）にすること。**
+ * `bash-wait-guard-issue-2206.test.ts` の線形の入力は、factor=8 で中央値が 1.11〜1.45（6 回）と閾値 1.5 に寄り、
+ * factor=16 では 1.12〜1.22（6 回）に収まった（文字列が大きいほど、区間の傾きが 0.8〜1.5 で揺れる）。
+ * 区間が2つ（factor=4）なら中央値は2つの平均、1つ（factor=2）ならその1つの傾きになる
+ * （外れを捨てる力はなくなる。指数を見る歯は元から傾きが桁違いなので、それで足りる）。
+ *
+ * **使い手のオプションの扱い**: `n` / `repeats` / `rounds` / `warmups` / `minSmallMs` / `maxScale` / `floorMs` /
+ * `hardCapMs` / `now` は意味を変えていない。`factor` は「最大の点は n*factor」のまま（2 の冪に限る。既定 4 → 8。
+ * 点の数は log2(factor)+1）。`maxRatio`（比の上限）は廃止し、`maxSlope`（傾きの中央値の上限）へ替えた。
+ * `hardCapMs` は**どの点でも**効く（以前は最大の点だけ）。
+ *
  * **揺れへの手当て（#2194 の後に B の #2214 の CI で比 10.55 が出たため）**。t(n) が 1〜2ms しか
  * 無いと、分母が器の混み具合でぶれて、線形でも比が跳ねた（t(1000)=1.74ms, t(4000)=18.39ms。
  * 手元では同じ形が n を倍にするごとにきっちり倍になる線形である）。そこで次の3つを入れた。
@@ -36,24 +57,26 @@ import { assert, expect } from 'vitest';
 export interface ExpectNotSuperlinearOptions {
   /** 小さいほうの入力の大きさ（出発点。t(n) が `minSmallMs` に届くまで倍にする）。 */
   n: number;
-  /** 大きいほうの入力の大きさは `n * factor`。既定 4。 */
+  /**
+   * いちばん大きい入力の大きさは `n * factor`。2 の冪（2, 4, 8, ...）に限る。測る点は
+   * `n, 2n, 4n, ..., n*factor`（点の数 = log2(factor)+1）。既定 8（4 点・傾き 3 つ）。
+   */
   factor?: number;
   /**
-   * `t(n*factor) / max(t(n), floorMs)` の上限。既定 10
-   * （線形なら約 factor、2乗なら約 factor²、3乗なら約 factor³ になるので、
-   * 既定の factor=4 なら 2乗の 16 にも余裕を持って届かない 10 で切る）。
+   * 隣り合う点の傾き `log2(t(2m) / t(m))` の中央値の上限。既定 1.5
+   * （線形は約 1、n log n は約 1.1、2乗は約 2、3乗は約 3）。
    */
-  maxRatio?: number;
-  /** `t(n*factor)` の絶対上限（ms）。指数的な後戻りや完全な固まりを捕まえる。既定 2000。 */
+  maxSlope?: number;
+  /** どの点でも、1回の測定がこれ（ms）を超えたら固まりとして落とす。指数的な後戻りや完全な固まりを捕まえる。既定 2000。 */
   hardCapMs?: number;
-  /** 比を取るときの分母の下限（ms）。`t(n)` が 0 に近いときの比の暴れを抑える。既定 1。 */
+  /** 傾きを取るとき、時間をこれ（ms）で下から切る。時間が 0 に近いときの傾きの暴れを抑える。既定 1。 */
   floorMs?: number;
-  /** 最小値を取るための試行回数（小さいほうと大きいほうを交互に測る）。既定 5。 */
+  /** 最小値を取るための試行回数（全部の点を、小さいほうから順に1周ずつ測る）。既定 5。 */
   repeats?: number;
   /** t(n) がこれに届くまで n を倍にする（ms）。既定 5。0 なら倍にしない。 */
   minSmallMs?: number;
   /**
-   * 測定ラウンドの最大回数（#2576）。比が `maxRatio` を超えている間だけ重ね、
+   * 測定ラウンドの最大回数（#2576）。傾きの中央値が `maxSlope` を超えている間だけ重ね、
    * 全ラウンドの最小時間どうしの比が超えたまま残ったときに落とす。既定 3。1 なら従来どおり1回で決める。
    */
   rounds?: number;
@@ -75,14 +98,28 @@ export interface ExpectNotSuperlinearOptions {
 
 /** 測定結果——助け自身の歯や、呼び出し側の追加の検算に使う（全ラウンドの最小時間による）。 */
 export interface GrowthMeasurement {
-  /** 実際に測った小さいほうの入力の大きさ（倍にした後）。 */
+  /** 実際に測った最小の入力の大きさ（倍にした後）。 */
   n: number;
-  /** `t(n)` の最小値（ms）。 */
+  /** 各点の入力の大きさ（`n, 2n, ..., n*factor`）。 */
+  sizes: number[];
+  /** 各点の最小時間（ms）。`sizes` と同じ順。 */
+  timesMs: number[];
+  /** 隣り合う点の傾き `log2(max(t(2m), floorMs) / max(t(m), floorMs))`。 */
+  slopes: number[];
+  /** `slopes` の中央値（偶数個なら中央2つの平均）。判定に使う。 */
+  medianSlope: number;
+  /** 最小の点の最小時間（ms）。 */
   tSmallMs: number;
-  /** `t(n*factor)` の最小値（ms）。 */
+  /** 最大の点（`n*factor`）の最小時間（ms）。 */
   tLargeMs: number;
-  /** `tLargeMs / max(tSmallMs, floorMs)`。 */
+  /** `tLargeMs / max(tSmallMs, floorMs)`（参考値。判定には使わない）。 */
   ratio: number;
+}
+
+function median(values: number[]): number {
+  const sorted = [...values].sort((x, y) => x - y);
+  const mid = sorted.length >> 1;
+  return sorted.length % 2 === 1 ? sorted[mid]! : (sorted[mid - 1]! + sorted[mid]!) / 2;
 }
 
 /** hardCapMs で打ち切られたことを、測定の外側（assertion を組み立てる所）へ運ぶ印。 */
@@ -152,12 +189,12 @@ function makeTimer<TInput>(
 }
 
 /**
- * `run(makeInput(n))` と `run(makeInput(n * factor))` を測り、伸びの比が
- * `maxRatio` 未満（かつ `t(n*factor)` が `hardCapMs` 未満）であることを
+ * `run(makeInput(m))` を `m = n, 2n, 4n, ..., n * factor` で測り、隣り合う点の傾き
+ * `log2(t(2m) / t(m))` の中央値が `maxSlope` 未満（かつどの点も `hardCapMs` 未満）であることを
  * `expect` する。呼び出し側は、いまの固定入力の大きさ（繰り返しの回数）が
- * `n * factor` と同じになるよう `n` を選ぶこと（t(n) が小さければ、ここで倍にする）。
+ * `n * factor` 以下になるよう `n` を選ぶこと（t(n) が小さければ、ここで倍にする）。
  *
- * 落ちたときの assertion メッセージに `t(n)` / `t(n*factor)` / 比を載せる
+ * 落ちたときの assertion メッセージに、各点の時間と各区間の傾きを生で載せる
  * ——読んだ人が「揺れで落ちたのか、本物の後退か」を、この文だけで見分け
  * られるようにするため。
  */
@@ -167,8 +204,8 @@ export function expectNotSuperlinear<TInput>(
   options: ExpectNotSuperlinearOptions,
 ): GrowthMeasurement {
   const {
-    factor = 4,
-    maxRatio = 10,
+    factor = 8,
+    maxSlope = 1.5,
     hardCapMs = 2000,
     floorMs = 1,
     repeats = 5,
@@ -178,15 +215,25 @@ export function expectNotSuperlinear<TInput>(
     maxScale = factor >= 4 ? 16 : 1,
     now = () => performance.now(),
   } = options;
+  const steps = Math.log2(factor);
+  if (!Number.isInteger(steps) || steps < 1) {
+    throw new RangeError(`factor は 2 の冪（2, 4, 8, ...）であること: ${factor}`);
+  }
+  const pointCount = steps + 1;
 
   // JIT の温め——温まる前の最初の数回は捨てる（ここで測りたいのは「温まった後」の伸び方である）。
   // **n を倍にするかどうかも、温まった後の値で決める**（#2576）。以前は最初の2回（まだ遅い）で
   // 決めていたので、混んだ器では「5ms に届いている」と誤読して倍にせず、1〜2ms の分母で比を
   // 取ることになった（CI run 36798057082: t(500)=1.79ms, t(2000)=18.35ms, 比 10.23）。
-  let tSmallMs = Infinity;
-  let tLargeMs = Infinity;
-  let ratio = Number.POSITIVE_INFINITY;
+  let n = options.n;
+  let minTimes: number[] = [];
   const timeCapped = makeTimer(run, now, hardCapMs);
+  const describeTimes = (): string =>
+    minTimes.some((t) => Number.isFinite(t))
+      ? `それまでの最小: ${minTimes
+          .map((t, i) => `t(${n * 2 ** i})=${Number.isFinite(t) ? `${t.toFixed(2)}ms` : '未測定'}`)
+          .join(', ')}。`
+      : 'まだ最小を測り終えていない。';
   // hardCapMs で打ち切られたら（#2579）、固まりの assertion として落とす。`run` の他の例外はそのまま伝わる。
   const timeOnce = (input: TInput, phase: string, size: number): number => {
     try {
@@ -196,10 +243,8 @@ export function expectNotSuperlinear<TInput>(
       return assert.fail(
         `固まり・指数的な後戻りの疑い —— hardCapMs を超えた。${phase}の入力 n=${size} の1回が ` +
           `hardCapMs=${hardCapMs}ms で打ち切られた（node:vm の timeout で割り込み、終わるのを待たなかった）。` +
-          (Number.isFinite(tSmallMs)
-            ? `それまでの最小: t(small)=${tSmallMs.toFixed(2)}ms, t(large)=${tLargeMs.toFixed(2)}ms。`
-            : 'まだ最小を測り終えていない。') +
-          `n=${n}（出発点 ${options.n}）, factor=${factor}, maxRatio=${maxRatio}`,
+          describeTimes() +
+          `n=${n}（出発点 ${options.n}）, factor=${factor}, maxSlope=${maxSlope}`,
       );
     }
   };
@@ -208,62 +253,83 @@ export function expectNotSuperlinear<TInput>(
     for (let i = 0; i < warmups; i += 1) min = Math.min(min, timeOnce(input, '温め', size));
     return min;
   };
-  let n = options.n;
-  let small = makeInput(n);
-  let tWarm = warmedMs(small, n);
+  let inputs: TInput[] = [makeInput(n)];
+  let tWarm = warmedMs(inputs[0]!, n);
   // t(n) が小さすぎると、分母が器の混み具合でぶれる。届くまで n を倍にする。
   while (tWarm < minSmallMs && n * 2 <= options.n * maxScale) {
     n *= 2;
-    small = makeInput(n);
-    tWarm = warmedMs(small, n);
+    inputs = [makeInput(n)];
+    tWarm = warmedMs(inputs[0]!, n);
   }
-  const large = makeInput(n * factor);
+  for (let k = 1; k < pointCount; k += 1) inputs.push(makeInput(n * 2 ** k));
+  const sizes = inputs.map((_, k) => n * 2 ** k);
 
-  // **比は、全ラウンドを通した「小さいほうの最小時間」と「大きいほうの最小時間」で取る**（#2576）。
+  // **傾きは、全ラウンドを通した「各点の最小時間」から出す**（#2576）。
   // 器の混みは時間を足すだけで引かないので、最小時間は測るほど真の値へ単調に近づく。
-  // ラウンドを重ねるのは、比が `maxRatio` を超えている間だけ（最大 `rounds` 回）。
-  // **ラウンドごとの比の最小を採ってはいけない**——小さいほうだけに混みが乗ったラウンドが1つ
-  // あると分母が膨らみ、2乗（理論値 factor²）でも比が閾値を下回って通る（最初の版が CI の
-  // 陰性対照 `\s+$` で2乗を通した）。最小時間どうしの比なら、混みはどちらの側でも
-  // 「足されるだけ」なので、2乗の比は理論値より下がらない。
+  // ラウンドを重ねるのは、中央値が `maxSlope` を超えている間だけ（最大 `rounds` 回）。
+  // **ラウンドごとの中央値の最小を採ってはいけない**——小さいほうだけに混みが乗ったラウンドが
+  // 1つあると傾きが下がり、2乗でも閾値を下回って通る（ラウンドごとの比の最小が2乗を通した #2576 の形）。
+  // 最小時間どうしなら、混みはどの点でも「足されるだけ」なので、2乗の傾きは理論値より下がらない。
+  minTimes = sizes.map(() => Infinity);
+  const slopesOf = (times: number[]): number[] =>
+    times.slice(1).map((t, k) => Math.log2(Math.max(t, floorMs) / Math.max(times[k]!, floorMs)));
   const roundLog: string[] = [];
+  let slopes: number[] = [];
+  let medianSlope = Number.POSITIVE_INFINITY;
   let hung = false;
   for (let round = 0; round < rounds && !hung; round += 1) {
-    let roundSmallMs = Infinity;
-    let roundLargeMs = Infinity;
-    for (let i = 0; i < repeats; i += 1) {
-      const tSmall = timeOnce(small, '小さいほう', n);
-      roundSmallMs = Math.min(roundSmallMs, tSmall);
-      tSmallMs = Math.min(tSmallMs, tSmall);
-      const tLarge = timeOnce(large, '大きいほう', n * factor);
-      roundLargeMs = Math.min(roundLargeMs, tLarge);
-      tLargeMs = Math.min(tLargeMs, tLarge);
-      // 大きいほうが1回でも上限を超えたら、残りは測らない（最小値も上限を超えているとは
-      // 限らないので、超えた1回の値で落とす）。
-      if (tLarge >= hardCapMs) {
-        tLargeMs = tLarge;
-        hung = true;
-        break;
+    const roundMin = sizes.map(() => Infinity);
+    for (let i = 0; i < repeats && !hung; i += 1) {
+      for (let k = 0; k < pointCount; k += 1) {
+        const t = timeOnce(inputs[k]!, k === 0 ? '小さいほう' : '大きいほう', sizes[k]!);
+        roundMin[k] = Math.min(roundMin[k]!, t);
+        minTimes[k] = Math.min(minTimes[k]!, t);
+        // どの点でも1回でも上限を超えたら、残りは測らない（最小値も上限を超えているとは
+        // 限らないので、超えた1回の値で落とす）。
+        if (t >= hardCapMs) {
+          minTimes[k] = t;
+          hung = true;
+          break;
+        }
       }
     }
-    ratio = tLargeMs / Math.max(tSmallMs, floorMs);
+    // 打ち切りで測り終えていない点は Infinity のまま残る。表示と傾きのために、上限の値で埋める。
+    minTimes = minTimes.map((t) => (Number.isFinite(t) ? t : hardCapMs));
+    slopes = slopesOf(minTimes);
+    medianSlope = median(slopes);
     roundLog.push(
-      `#${round + 1}: t(small)最小=${roundSmallMs.toFixed(2)}ms, t(large)最小=${roundLargeMs.toFixed(2)}ms, ` +
-        `累積の比=${ratio.toFixed(2)}`,
+      `#${round + 1}: 各点の最小=[${roundMin.map((t) => t.toFixed(2)).join(', ')}]ms, ` +
+        `累積の傾きの中央値=${medianSlope.toFixed(2)}`,
     );
-    if (hung || ratio < maxRatio) break;
+    if (hung || medianSlope < maxSlope) break;
   }
 
   const detail =
-    `t(${n})=${tSmallMs.toFixed(2)}ms, t(${n * factor})=${tLargeMs.toFixed(2)}ms, ` +
-    `ratio=${ratio.toFixed(2)}（ラウンドごと [${roundLog.join(' | ')}]。` +
-    `n=${n}（出発点 ${options.n}）, factor=${factor}, maxRatio=${maxRatio}, ` +
+    `${sizes.map((m, k) => `t(${m})=${minTimes[k]!.toFixed(2)}ms`).join(', ')}。` +
+    `区間ごとの傾き=[${slopes.map((x, k) => `${sizes[k]}→${sizes[k + 1]}: ${x.toFixed(2)}`).join(', ')}], ` +
+    `中央値=${medianSlope.toFixed(2)}（ラウンドごと [${roundLog.join(' | ')}]。` +
+    `n=${n}（出発点 ${options.n}）, factor=${factor}, maxSlope=${maxSlope}, ` +
     `hardCapMs=${hardCapMs}, repeats=${repeats}, rounds=${rounds}, 最小値）`;
 
-  expect(tLargeMs, `固まり・指数的な後戻りの疑い —— hardCapMs を超えた。${detail}`).toBeLessThan(
-    hardCapMs,
-  );
-  expect(ratio, `伸びの比が大きすぎる —— 2乗以上の後戻りの疑い。${detail}`).toBeLessThan(maxRatio);
+  expect(
+    Math.max(...minTimes),
+    `固まり・指数的な後戻りの疑い —— hardCapMs を超えた。${detail}`,
+  ).toBeLessThan(hardCapMs);
+  expect(
+    medianSlope,
+    `伸びの比が大きすぎる —— 2乗以上の後戻りの疑い（傾きの中央値が maxSlope 以上）。${detail}`,
+  ).toBeLessThan(maxSlope);
 
-  return { n, tSmallMs, tLargeMs, ratio };
+  const tSmallMs = minTimes[0]!;
+  const tLargeMs = minTimes[pointCount - 1]!;
+  return {
+    n,
+    sizes,
+    timesMs: minTimes,
+    slopes,
+    medianSlope,
+    tSmallMs,
+    tLargeMs,
+    ratio: tLargeMs / Math.max(tSmallMs, floorMs),
+  };
 }

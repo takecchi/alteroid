@@ -47,10 +47,10 @@ describe('書いたファイルを走らせる形は、本文を消さない（#
 describe('シェルの後ろのオプション列が長くても後戻りで爆発しない（#2398）', () => {
   it('bash の後ろの -x の繰り返し', () => {
     const makeInput = (n: number) => `${WRITE}bash ${'-x '.repeat(n)}`;
-    expectNotSuperlinear(inspectBashCommand, makeInput, { n: 500, factor: 4 });
+    expectNotSuperlinear(inspectBashCommand, makeInput, { n: 500 });
   });
   it('| bash -x の繰り返し', () => {
     const makeInput = (n: number) => `${WRITE}${'cat r.sh | bash -x -x; '.repeat(n)}`;
-    expectNotSuperlinear(inspectBashCommand, makeInput, { n: 200, factor: 4 });
+    expectNotSuperlinear(inspectBashCommand, makeInput, { n: 200 });
   });
 });

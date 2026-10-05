@@ -117,7 +117,7 @@ describe('findHeredocs / stripHeredocs —— 元の HEREDOC_RE と同じ一致�
  * 2026-09-29T04:4xZ）。区切りの多い長い1行（`GH_WORD_SRC` の `\S*` が区切りを
  * 跨いで読んでいた）も同じ族の2乗だった（`'a;'.repeat(16000)` で 327.9ms）。
  *
- * `n * factor`（既定 factor=4）を、直す前にテストしていた繰り返し回数
+ * `n * factor`（#3017 前の既定は factor=4、いまは 8）を、直す前にテストしていた繰り返し回数
  * （20000 / 40000）に揃えてある。
  */
 describe('終端の無いヒアドキュメントと、区切りの多い長い1行で2乗にならない（issue #2115）', () => {
@@ -128,7 +128,7 @@ describe('終端の無いヒアドキュメントと、区切りの多い長い1
   ];
   for (const [label, makeInput, blocked, n] of cases) {
     it(`${label}が予算内に終わる`, () => {
-      // n * factor（既定4）の大きさで、直す前と同じ入力に対する blocked を確かめる。
+      // n * factor（#3017 前の既定は4）の大きさで、直す前と同じ入力に対する blocked を確かめる。
       expect(inspectBashCommand(makeInput(n * 4)).blocked).toBe(blocked);
       expectNotSuperlinear((command: string) => inspectBashCommand(command), makeInput, { n });
       // 明示のタイムアウト（vitest の既定 5000ms ではなく）。この歯は n が大きく、助けが5回×ラウンドで

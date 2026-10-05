@@ -5,9 +5,9 @@ import { expectNotSuperlinear } from './time-growth.test-support.js';
 /**
  * `expectNotSuperlinear`（issue #2187）自身の歯。
  *
- * **測るのは「線形の関数は通り、2乗の関数は比で落ちる」ことそのもの。**
- * `n` に対して `n²` に比例する仕事を対照に置き、伸びの比（既定 factor=4 なら2乗は
- * 16倍）が既定の `maxRatio`（10）を超えて落ちることを確かめる——**対照が落ちなければ、
+ * **測るのは「線形の関数は通り、2乗の関数は傾きで落ちる」ことそのもの。**
+ * `n` に対して `n²` に比例する仕事を対照に置き、傾き（既定 factor=16 の5点で、2乗は全区間 2）
+ * が既定の `maxSlope`（1.5）を超えて落ちることを確かめる——**対照が落ちなければ、
  * この助け自体が「弱い歯」である。**
  *
  * **時計は偽物を渡す（#2240 / #2243 と同じ方針）。** 実時間（`performance.now()`）で
@@ -51,44 +51,190 @@ function quadraticOn(clock: ReturnType<typeof makeFakeClock>) {
   return (n: number): void => clock.advance((n * n) / 1_000_000);
 }
 
+/** 仕事量 `units(n)`（偽の時計で ms）を、呼ばれるたびに時計へ足す関数。 */
+function workOn(clock: ReturnType<typeof makeFakeClock>, units: (n: number) => number) {
+  return (n: number): void => clock.advance(units(n));
+}
+
+/**
+ * 線形の仕事に、`stepAt` 以上の大きさでだけ時間が `stepFactor` 倍に跳ねる段差を入れたもの（#3017）。
+ * キャッシュや GC の段差の模型。**実時間では作らない**（ぶれる）——偽の時計へ足す仕事量を、
+ * 大きさで切り替えて決定的に作る（`stepAt` 以上では1単位あたりの仕事を `stepFactor` 倍にする）。
+ */
+function steppedLinearOn(
+  clock: ReturnType<typeof makeFakeClock>,
+  msPerUnit: number,
+  stepAt: number,
+  stepFactor: number,
+) {
+  return workOn(clock, (n) => n * msPerUnit * (n >= stepAt ? stepFactor : 1));
+}
+
+/**
+ * 下の偽の時計の歯は、特に断らない限り factor=16（5 点・傾き 4 つ）で測る。既定（8）の形は、先頭の1本が見る。
+ */
+const expectFive = <TInput>(
+  run: (input: TInput) => unknown,
+  makeInput: (n: number) => TInput,
+  options: Parameters<typeof expectNotSuperlinear>[2],
+): ReturnType<typeof expectNotSuperlinear> =>
+  expectNotSuperlinear(run, makeInput, { factor: 16, ...options });
+
 describe('expectNotSuperlinear', () => {
-  it('線形の関数は通り、伸びの比はちょうど factor になる', () => {
+  it('既定は factor=8（n, 2n, 4n, 8n の4点・傾き3つ）', () => {
     const clock = makeFakeClock();
-    // n=5,000,000 で 5ms（minSmallMs 既定 5 に届くので倍にならない）、n*4 で 20ms。
     const result = expectNotSuperlinear(linearOn(clock, 1e-6), identity, {
+      n: 5_000_000,
+      now: clock.now,
+    });
+    expect(result.sizes).toEqual([5_000_000, 10_000_000, 20_000_000, 40_000_000]);
+    expect(result.slopes).toHaveLength(3);
+    expect(result.medianSlope).toBeCloseTo(1, 9);
+  });
+
+  it('線形の関数は通り、傾きは各区間ちょうど 1、点は n, 2n, 4n, 8n, 16n になる', () => {
+    const clock = makeFakeClock();
+    // n=5,000,000 で 5ms（minSmallMs 既定 5 に届くので倍にならない）。点は 5, 10, 20, 40, 80ms。
+    const result = expectFive(linearOn(clock, 1e-6), identity, {
+      n: 5_000_000,
+      now: clock.now,
+    });
+    expect(result.n).toBe(5_000_000);
+    expect(result.sizes).toEqual([5_000_000, 10_000_000, 20_000_000, 40_000_000, 80_000_000]);
+    expect(result.timesMs.map((t) => Math.round(t * 1e6) / 1e6)).toEqual([5, 10, 20, 40, 80]);
+    for (const slope of result.slopes) expect(slope).toBeCloseTo(1, 9);
+    expect(result.slopes).toHaveLength(4);
+    expect(result.medianSlope).toBeCloseTo(1, 9);
+    expect(result.tSmallMs).toBeCloseTo(5, 9);
+    expect(result.tLargeMs).toBeCloseTo(80, 9);
+    expect(result.ratio).toBeCloseTo(16, 9);
+  });
+
+  it('n log n の関数も通る（傾きは約 1.1）', () => {
+    const clock = makeFakeClock();
+    const result = expectFive(
+      workOn(clock, (n) => (n * Math.log2(n)) / 4e6),
+      identity,
+      { n: 200_000, now: clock.now },
+    );
+    expect(result.medianSlope).toBeGreaterThan(1);
+    expect(result.medianSlope).toBeLessThan(1.15);
+  });
+
+  it('2乗の関数（n² に比例する仕事）は落ちる。傾きは各区間 2', () => {
+    const clock = makeFakeClock();
+    let error: unknown;
+    try {
+      expectFive(quadraticOn(clock), identity, {
+        n: 2000,
+        minSmallMs: 0,
+        now: clock.now,
+      });
+    } catch (e) {
+      error = e;
+    }
+    expect(error).toBeInstanceOf(Error);
+    const message = (error as Error).message;
+    // 伸びの比の文言のまま落ち（既存の使い手の歯が `2乗以上の後戻り` に頼っている）、
+    // hardCapMs（2000ms）の側ではない。n=2000 の2乗は 4ms。点は 2000, 4000, 8000, 16000, 32000 で
+    // 4, 16, 64, 256, 1024ms、傾きは 2, 2, 2, 2。
+    expect(message).toMatch(/伸びの比が大きすぎる —— 2乗以上の後戻り/);
+    expect(message).not.toMatch(/hardCapMs を超えた/);
+    expect(message).toMatch(
+      /t\(2000\)=4\.00ms, t\(4000\)=16\.00ms, t\(8000\)=64\.00ms, t\(16000\)=256\.00ms, t\(32000\)=1024\.00ms/,
+    );
+    expect(message).toMatch(
+      /2000→4000: 2\.00, 4000→8000: 2\.00, 8000→16000: 2\.00, 16000→32000: 2\.00/,
+    );
+    expect(message).toMatch(/中央値=2\.00/);
+    expect(message).toMatch(/出発点 2000/);
+  });
+
+  it('線形に1か所だけ段差（ある大きさ以上で時間が 1.7 倍）を入れても通る。段差の位置はどこでもよい（#3017）', () => {
+    // 点は 5e6, 1e7, 2e7, 4e7, 8e7。段差は1つの区間の傾き log2(2 * 1.7) = 1.77 だけを押し上げ、
+    // 残りの3つは 1 のまま ⟹ 中央値は 1。2点の比（最大 / 最小）で、小さいほうの 4 倍を測る判定でも、
+    // 段差が間に入ると 4 * 1.7 = 6.8 になり、実測の揺れと重なれば閾値（10）を踏む。
+    for (const stepAt of [10_000_000, 20_000_000, 40_000_000, 80_000_000]) {
+      const clock = makeFakeClock();
+      const result = expectFive(steppedLinearOn(clock, 1e-6, stepAt, 1.7), identity, {
+        n: 5_000_000,
+        now: clock.now,
+      });
+      const sorted = [...result.slopes].sort((a, b) => a - b);
+      expect(sorted[0]).toBeCloseTo(1, 9);
+      expect(sorted[1]).toBeCloseTo(1, 9);
+      expect(sorted[2]).toBeCloseTo(1, 9);
+      expect(sorted[3]).toBeCloseTo(Math.log2(2 * 1.7), 9);
+      expect(result.medianSlope).toBeCloseTo(1, 9);
+    }
+  });
+
+  it('#3017 の形（段差で 6.8 倍・傾き約 2.8）でも、線形は通る', () => {
+    const clock = makeFakeClock();
+    const result = expectFive(steppedLinearOn(clock, 1e-6, 20_000_000, 3.4), identity, {
+      n: 5_000_000,
+      now: clock.now,
+    });
+    expect(Math.max(...result.slopes)).toBeCloseTo(Math.log2(2 * 3.4), 9);
+    expect(result.medianSlope).toBeCloseTo(1, 9);
+  });
+
+  it('段差つきの2乗は、段差があっても落ちる（段差が陰性対照を隠さない）', () => {
+    const clock = makeFakeClock();
+    expect(() =>
+      expectFive(
+        workOn(clock, (n) => ((n * n) / 1_000_000) * (n >= 8000 ? 0.6 : 1)),
+        identity,
+        { n: 2000, minSmallMs: 0, now: clock.now },
+      ),
+    ).toThrow(/伸びの比が大きすぎる/);
+  });
+
+  it('3乗の関数も落ちる', () => {
+    const clock = makeFakeClock();
+    expect(() =>
+      expectFive(
+        workOn(clock, (n) => (n * n * n) / 1e9),
+        identity,
+        { n: 1000, minSmallMs: 0, factor: 8, now: clock.now },
+      ),
+    ).toThrow(/伸びの比が大きすぎる/);
+  });
+
+  it('maxSlope は使い手が動かせる（傾き 2 の2乗も、maxSlope=2.5 なら通る）', () => {
+    const clock = makeFakeClock();
+    const result = expectFive(quadraticOn(clock), identity, {
+      n: 2000,
+      minSmallMs: 0,
+      maxSlope: 2.5,
+      now: clock.now,
+    });
+    expect(result.medianSlope).toBeCloseTo(2, 9);
+  });
+
+  it('factor は最大の点の倍率（2 の冪）。既定 16 は5点、factor=4 なら3点・傾き2つ、2の冪でなければ投げる', () => {
+    const clock = makeFakeClock();
+    const result = expectFive(linearOn(clock, 1e-6), identity, {
       n: 5_000_000,
       factor: 4,
       now: clock.now,
     });
-    expect(result.n).toBe(5_000_000);
-    expect(result.tSmallMs).toBeCloseTo(5, 9);
-    expect(result.tLargeMs).toBeCloseTo(20, 9);
-    expect(result.ratio).toBeCloseTo(4, 9);
-  });
-
-  it('2乗の関数（n² に比例する仕事）は比で落ちる', () => {
-    const clock = makeFakeClock();
-    // maxRatio は既定の10のまま——2乗の比は16なので、hardCapMs ではなく
-    // 「伸びの比が大きすぎる」の側で落ちることも合わせて確かめる。
+    expect(result.sizes).toEqual([5_000_000, 10_000_000, 20_000_000]);
+    expect(result.slopes).toHaveLength(2);
     expect(() =>
-      expectNotSuperlinear(quadraticOn(clock), identity, {
-        n: 2000,
-        factor: 4,
-        now: clock.now,
-      }),
-    ).toThrow(/伸びの比が大きすぎる/);
+      expectFive(linearOn(clock, 1e-6), identity, { n: 10, factor: 6, now: clock.now }),
+    ).toThrow(RangeError);
   });
 
   it('固まり・指数的な後戻り（hardCapMs 超過）は、比とは別の文言で落ちる', () => {
     const clock = makeFakeClock();
-    // n が大きいときだけ、比の判定より先に hardCapMs 自体を超える待ち（50ms）を作る。
+    // n が大きいときだけ、傾きの判定より先に hardCapMs 自体を超える待ち（50ms）を作る。
     const hang = (n: number): void => {
       if (n > 100) clock.advance(50);
     };
     const run = (): unknown =>
-      expectNotSuperlinear(hang, identity, {
+      expectFive(hang, identity, {
         n: 50,
-        factor: 4,
         hardCapMs: 20,
         minSmallMs: 0,
         now: clock.now,
@@ -97,42 +243,50 @@ describe('expectNotSuperlinear', () => {
     expect(run).not.toThrow(/伸びの比が大きすぎる/);
   });
 
-  it('壁時計が一様に遅くなっても（線形の関数へ n 比例の追加の待ちを足しても）比は保たれる', () => {
+  it('hardCapMs は最大の点だけでなく、どの点でも効く', () => {
+    const clock = makeFakeClock();
+    // 点は 50, 100, 200, 400。200 の点だけが 50ms かかる（400 は速い）。
+    const run = (): unknown =>
+      expectFive(
+        (n: number) => {
+          if (n === 200) clock.advance(50);
+        },
+        identity,
+        { n: 50, hardCapMs: 20, minSmallMs: 0, now: clock.now },
+      );
+    expect(run).toThrow(/hardCapMs を超えた/);
+  });
+
+  it('壁時計が一様に遅くなっても（線形の関数へ n 比例の追加の待ちを足しても）傾きは保たれる', () => {
     // 本物の CI 混雑は再現できないので、代わりに「1単位あたりのコストが一様に底上げされた」
     // 状態を、線形の仕事へ n に比例する追加の待ちを足す形で模す——全体が遅くなっても、
-    // 追加した分もやはり n に比例するので、比そのものは動かないはずである。
+    // 追加した分もやはり n に比例するので、傾きそのものは動かないはずである。
     const clockA = makeFakeClock();
-    const withoutDelay = expectNotSuperlinear(linearOn(clockA, 1e-6), identity, {
+    const withoutDelay = expectFive(linearOn(clockA, 1e-6), identity, {
       n: 5_000_000,
-      factor: 4,
       now: clockA.now,
     });
     const clockB = makeFakeClock();
-    const withDelay = expectNotSuperlinear(
+    const withDelay = expectFive(
       (n: number) => {
         clockB.advance(n * 1.5e-6); // 追加の待ち（n 比例）
         clockB.advance(n * 1e-6); // もとの仕事
       },
       identity,
-      { n: 5_000_000, factor: 4, now: clockB.now },
+      { n: 5_000_000, now: clockB.now },
     );
 
-    // 底上げは実際に乗っている（時間は 2.5 倍）が、比はどちらも 4 のまま。
+    // 底上げは実際に乗っている（時間は 2.5 倍）が、傾きはどちらも 1 のまま。
     expect(withDelay.tSmallMs).toBeCloseTo(withoutDelay.tSmallMs * 2.5, 9);
-    expect(withoutDelay.ratio).toBeCloseTo(4, 9);
-    expect(withDelay.ratio).toBeCloseTo(4, 9);
-    expect(withDelay.ratio).toBeCloseTo(withoutDelay.ratio, 9);
+    expect(withoutDelay.medianSlope).toBeCloseTo(1, 9);
+    expect(withDelay.medianSlope).toBeCloseTo(1, 9);
   });
 
-  it('落ちたときの文に t(n) / t(n*factor) / 比が載る', () => {
+  it('落ちたときの文に、各点の時間と各区間の傾きが生で載る', () => {
     const clock = makeFakeClock();
     let error: unknown;
     try {
-      expectNotSuperlinear(quadraticOn(clock), identity, {
-        n: 2000,
-        factor: 4,
-        now: clock.now,
-      });
+      expectFive(quadraticOn(clock), identity, { n: 2000, now: clock.now });
     } catch (e) {
       error = e;
     }
@@ -140,18 +294,16 @@ describe('expectNotSuperlinear', () => {
     // catch に拾われて別の文言の検査になる。#2222）。
     expect(error).toBeInstanceOf(Error);
     const message = (error as Error).message;
-    // n=2000 の2乗は 4ms で minSmallMs(5) に届かず、1回倍にされて n=4000（16ms）。
-    // 大きいほうは n=16000（256ms）、比は 16。
     expect(message).toMatch(/t\(4000\)=16\.00ms/);
-    expect(message).toMatch(/t\(16000\)=256\.00ms/);
-    expect(message).toMatch(/出発点 2000/);
-    expect(message).toMatch(/ratio=16\.00/);
+    expect(message).toMatch(/t\(32000\)=1024\.00ms/);
+    expect(message).toMatch(/区間ごとの傾き=\[4000→8000: 2\.00/);
+    expect(message).toMatch(/maxSlope=1\.5/);
   });
 
   it('t(n) が小さすぎると n を倍にする（分母が器の揺れに埋もれないように）', () => {
     const clock = makeFakeClock();
     // n=1000 で 0.1ms。5ms（minSmallMs 既定）に届くまで倍にする: 0.1 * 2^6 = 6.4ms ⟹ n=64000。
-    const result = expectNotSuperlinear(linearOn(clock, 1e-4), identity, {
+    const result = expectFive(linearOn(clock, 1e-4), identity, {
       n: 1000,
       maxScale: 1024,
       now: clock.now,
@@ -162,7 +314,7 @@ describe('expectNotSuperlinear', () => {
   it('n の倍加は maxScale で止まる（届かない仕事で無限に倍にしない）', () => {
     const clock = makeFakeClock();
     // n=1000 で 0.001ms。maxScale=1024 まで倍にしても 5ms に届かない ⟹ n=1000*1024 で止まる。
-    const result = expectNotSuperlinear(linearOn(clock, 1e-6), identity, {
+    const result = expectFive(linearOn(clock, 1e-6), identity, {
       n: 1000,
       maxScale: 1024,
       now: clock.now,
@@ -170,32 +322,31 @@ describe('expectNotSuperlinear', () => {
     expect(result.n).toBe(1000 * 1024);
   });
 
-  it('factor が 4 未満（指数を見る歯）なら、既定では n を倍にしない', () => {
+  it('factor が 4 未満（指数を見る歯）なら、既定では n を倍にしない。点は2つ・傾きは1つ', () => {
     const clock = makeFakeClock();
     // t(n)=0.1ms は minSmallMs(5) に届かないが、factor=2 の既定 maxScale=1 で倍にしない。
-    const result = expectNotSuperlinear(linearOn(clock, 1e-4), identity, {
+    const result = expectFive(linearOn(clock, 1e-4), identity, {
       n: 1000,
       factor: 2,
       now: clock.now,
     });
     expect(result.n).toBe(1000);
+    expect(result.sizes).toEqual([1000, 2000]);
+    expect(result.slopes).toHaveLength(1);
   });
 
-  it('大きいほうの測定の何回かに混みの波が乗っても、最小値を取るので線形は落ちない（#2214 の揺れ）', () => {
-    // 小さいほうと大きいほうを交互に測る。大きいほうの最初の3回にだけ 30ms の待ちを足す
-    // （器が混んだ波が大きいほうにだけ乗った状態を模す）。中央値なら比が跳ねるが、最小値は動かない。
+  it('最大の点の測定の何回かに混みの波が乗っても、最小値を取るので線形は落ちない（#2214 の揺れ）', () => {
+    // 全部の点を小さいほうから順に1周ずつ測る。最大の点の最初の3回にだけ 30ms の待ちを足す
+    // （器が混んだ波が最大の点にだけ乗った状態を模す）。中央値（時間の）なら跳ねるが、最小値は動かない。
     //
-    // 時計は偽物を渡す（#2240）。実時間で測っていたころは、既定の repeats=5 のうち波の乗らない
-    // 大きいほうが2回しか残らず、その2回にも CI の混みが乗って比 9.70 で落ちた。ここで確かめたいのは
-    // 「波が乗った回を最小値が捨てること」という算術で、器の速さではない。
-    // 偽の時計では、仕事の長さは n / 1,000,000 ms ちょうど（小さいほう 5ms・大きいほう 20ms）で、
-    // 波の乗った回だけ 30ms 足す（50ms）。
+    // 時計は偽物を渡す（#2240）。偽の時計では、仕事の長さは n / 1,000,000 ms ちょうど
+    // （最小の点 5ms・最大の点 80ms）で、波の乗った回だけ 30ms 足す。
     let clock = 0;
     let largeCalls = 0;
-    const result = expectNotSuperlinear(
+    const result = expectFive(
       (n: number) => {
         clock += n / 1_000_000;
-        if (n >= 20_000_000) {
+        if (n >= 80_000_000) {
           largeCalls += 1;
           if (largeCalls <= 3) clock += 30;
         }
@@ -203,12 +354,32 @@ describe('expectNotSuperlinear', () => {
       identity,
       { n: 5_000_000, minSmallMs: 0, now: () => clock },
     );
-    // 波は実際に乗っている（大きいほうを5回測り、最初の3回が 50ms）。中央値なら 50 / 5 = 10 で
-    // 既定の maxRatio=10 を踏む。
     expect(largeCalls).toBe(5);
     expect(result.tSmallMs).toBe(5);
-    expect(result.tLargeMs).toBe(20);
-    expect(result.ratio).toBe(4);
+    expect(result.tLargeMs).toBe(80);
+    expect(result.medianSlope).toBe(1);
+  });
+
+  it('最大の点が丸ごと混んでも、中央値は動かず、線形は1ラウンドで通る（外れ1つに引きずられない）', () => {
+    // 最大の点の全5回に 100ms が乗る（最小値でも 180ms）。傾きは 1, 1, 1, log2(180 / 40) = 2.17 で、中央値は 1。
+    // 2点の比（5 → 180 で 36 倍）なら、これで落ちていた。
+    const clock = makeFakeClock();
+    let largeCalls = 0;
+    const result = expectFive(
+      (n: number) => {
+        clock.advance(n / 1_000_000);
+        if (n >= 80_000_000) {
+          largeCalls += 1;
+          clock.advance(100);
+        }
+      },
+      identity,
+      { n: 5_000_000, minSmallMs: 0, now: clock.now },
+    );
+    expect(largeCalls).toBe(5);
+    expect(result.tLargeMs).toBe(180);
+    expect(result.slopes[3]).toBeCloseTo(Math.log2(180 / 40), 9);
+    expect(result.medianSlope).toBe(1);
   });
 
   it('温めの最初の数回が遅くても、n を倍にする判定は温まった後の値で行う（#2576）', () => {
@@ -217,7 +388,7 @@ describe('expectNotSuperlinear', () => {
     // 偽の時計で、最初の2回だけ 10ms 足す。温めの3回目は 0.1ms ⟹ 5ms に届くまで倍にする。
     const clock = makeFakeClock();
     let calls = 0;
-    const result = expectNotSuperlinear(
+    const result = expectFive(
       (n: number) => {
         calls += 1;
         clock.advance(n * 1e-4);
@@ -229,117 +400,104 @@ describe('expectNotSuperlinear', () => {
     expect(result.n).toBe(64_000);
   });
 
-  it('1ラウンドが丸ごと混んでも、次のラウンドが静かなら線形は通る。比は全ラウンドの最小時間で取る（#2576）', () => {
-    // CI run 36798057082 の形（比 10.23）を、偽の時計で作る。大きいほうの最初の5回（=1ラウンド目）
-    // にだけ 100ms の待ちが乗る。1ラウンド目の比は (20+100)/5 = 24、2ラウンド目は 20/5 = 4。
+  /**
+   * 傾きの中央値まで動く混み。1ラウンド目の全5回だけ、仕事が 2乗（`(n / 1e6)²` ms の追加）になる。
+   * factor=8 の点は 5e6, 1e7, 2e7, 4e7 で、1ラウンド目の時間は 30, 110, 420, 1640ms、傾きは約 1.9 〜 2.0。
+   * 2ラウンド目以降は静か（線形で 5, 10, 20, 40ms）。
+   */
+  function crowdedRound1(clock: ReturnType<typeof makeFakeClock>, counters: Map<number, number>) {
+    return (n: number): void => {
+      clock.advance(n / 1_000_000);
+      const calls = (counters.get(n) ?? 0) + 1;
+      counters.set(n, calls);
+      if (calls <= 5) clock.advance((n / 1_000_000) ** 2);
+    };
+  }
+
+  it('1ラウンドが丸ごと混んで中央値まで動いても、次のラウンドが静かなら線形は通る。傾きは全ラウンドの最小時間で取る（#2576）', () => {
     const clock = makeFakeClock();
-    let largeCalls = 0;
-    const result = expectNotSuperlinear(
-      (n: number) => {
-        clock.advance(n / 1_000_000);
-        if (n >= 20_000_000) {
-          largeCalls += 1;
-          if (largeCalls <= 5) clock.advance(100);
-        }
-      },
-      identity,
-      { n: 5_000_000, minSmallMs: 0, now: clock.now },
-    );
-    expect(largeCalls).toBe(10); // 1ラウンド目で落ちず、2ラウンド目で通って打ち切る
-    expect(result.ratio).toBe(4);
+    const counters = new Map<number, number>();
+    const result = expectFive(crowdedRound1(clock, counters), identity, {
+      n: 5_000_000,
+      minSmallMs: 0,
+      factor: 8,
+      now: clock.now,
+    });
+    expect(counters.get(40_000_000)).toBe(10); // 1ラウンド目で落ちず、2ラウンド目で通って打ち切る
+    expect(result.medianSlope).toBeCloseTo(1, 9);
   });
 
   it('rounds=1 なら、同じ波で従来どおり1回で落ちる（ラウンドが効いていることの対照）', () => {
     const clock = makeFakeClock();
-    let largeCalls = 0;
-    const run = (): unknown =>
-      expectNotSuperlinear(
-        (n: number) => {
-          clock.advance(n / 1_000_000);
-          if (n >= 20_000_000) {
-            largeCalls += 1;
-            if (largeCalls <= 5) clock.advance(100);
-          }
-        },
-        identity,
-        { n: 5_000_000, minSmallMs: 0, rounds: 1, now: clock.now },
-      );
-    expect(run).toThrow(/伸びの比が大きすぎる/);
+    const counters = new Map<number, number>();
+    expect(() =>
+      expectFive(crowdedRound1(clock, counters), identity, {
+        n: 5_000_000,
+        minSmallMs: 0,
+        factor: 8,
+        rounds: 1,
+        now: clock.now,
+      }),
+    ).toThrow(/伸びの比が大きすぎる/);
   });
 
-  it('2乗は、どのラウンドも大きいままなので、ラウンドを重ねても落ちる（閾値は動いていない）', () => {
+  it('2乗は、どのラウンドも傾きが大きいままなので、ラウンドを重ねても落ちる（閾値は動いていない）', () => {
     const clock = makeFakeClock();
     let error: unknown;
     try {
-      expectNotSuperlinear(quadraticOn(clock), identity, { n: 4000, now: clock.now });
+      expectFive(quadraticOn(clock), identity, {
+        n: 2000,
+        minSmallMs: 0,
+        now: clock.now,
+      });
     } catch (e) {
       error = e;
     }
     expect(error).toBeInstanceOf(Error);
-    expect((error as Error).message).toMatch(/累積の比=16\.00.*累積の比=16\.00.*累積の比=16\.00/);
+    expect((error as Error).message).toMatch(
+      /累積の傾きの中央値=2\.00.*累積の傾きの中央値=2\.00.*累積の傾きの中央値=2\.00/,
+    );
   });
 
-  it('小さいほうだけに混みが乗ったラウンドが混じっても、2乗は落ちる（ラウンドごとの比の最小なら通ってしまう筋書き）', () => {
-    // 最初の版（ラウンドごとの比の最小）が CI の陰性対照で2乗を通した形。n=4000 の2乗は 16ms、
-    // n=16000 は 256ms（理論値 16 倍）。小さいほうの 9 回目以降（2・3ラウンド目）にだけ 100ms
-    // の混みが乗る。ラウンドごとの比の最小なら 256/116 = 2.2 で通るが、最小時間どうしなら
-    // 小さいほうの最小は 16ms のままで、比は 16。
+  it('最小の点だけに混みが乗ったラウンドが混じっても、2乗は落ちる（ラウンドごとの最小なら通ってしまう筋書き）', () => {
+    // n=2000 の2乗は 4ms（点は 4, 16, 64, 256, 1024ms）。最小の点の 9 回目以降（2・3ラウンド目）にだけ
+    // 100ms の混みが乗る。最小時間どうしなら最小の点の最小は 4ms のままで、傾きは 2 のまま。
     const clock = makeFakeClock();
     let smallCalls = 0;
     let error: unknown;
     try {
-      expectNotSuperlinear(
+      expectFive(
         (n: number) => {
           clock.advance((n * n) / 1_000_000);
-          if (n === 4000) {
+          if (n === 2000) {
             smallCalls += 1;
             if (smallCalls >= 9) clock.advance(100);
           }
         },
         identity,
-        { n: 4000, minSmallMs: 0, now: clock.now },
+        { n: 2000, minSmallMs: 0, now: clock.now },
       );
     } catch (e) {
       error = e;
     }
     expect(error).toBeInstanceOf(Error);
     expect((error as Error).message).toMatch(/伸びの比が大きすぎる/);
-    expect((error as Error).message).toMatch(/ratio=16\.00/);
-  });
-
-  it('大きいほうだけに混みが乗ったラウンドが混じっても、線形は通る', () => {
-    // 大きいほうの最初の7回（1ラウンド目の全部と2ラウンド目の前半）に 100ms が乗る。
-    // 2ラウンド目の後半に静かな測定があるので、大きいほうの最小は 20ms、比は 4。
-    const clock = makeFakeClock();
-    let largeCalls = 0;
-    const result = expectNotSuperlinear(
-      (n: number) => {
-        clock.advance(n / 1_000_000);
-        if (n >= 20_000_000) {
-          largeCalls += 1;
-          if (largeCalls <= 7) clock.advance(100);
-        }
-      },
-      identity,
-      { n: 5_000_000, minSmallMs: 0, now: clock.now },
-    );
-    expect(result.ratio).toBe(4);
-    expect(largeCalls).toBe(10);
+    expect((error as Error).message).toMatch(/中央値=2\.00/);
   });
 
   it('smoke: 既定の時計（performance.now）でも例外なく動き、測った値は有限の正の数になる', () => {
-    // 実時間で動くことだけを見る。比の閾値・hardCapMs は無効にしてある（Infinity）ので、
+    // 実時間で動くことだけを見る。傾きの閾値・hardCapMs は無効にしてある（Infinity）ので、
     // 器がどれだけ混んでも揺れない。閾値の判定は上の偽の時計のテストが持つ。
-    const result = expectNotSuperlinear(linearWork, identity, {
+    const result = expectFive(linearWork, identity, {
       n: 200_000,
       minSmallMs: 0,
-      maxRatio: Number.POSITIVE_INFINITY,
+      maxSlope: Number.POSITIVE_INFINITY,
       hardCapMs: Number.POSITIVE_INFINITY,
     });
     expect(result.n).toBe(200_000);
-    expect(Number.isFinite(result.tSmallMs)).toBe(true);
-    expect(Number.isFinite(result.tLargeMs)).toBe(true);
-    expect(Number.isFinite(result.ratio)).toBe(true);
+    expect(result.timesMs).toHaveLength(5);
+    expect(result.slopes.every((x) => Number.isFinite(x))).toBe(true);
+    expect(Number.isFinite(result.medianSlope)).toBe(true);
     expect(result.tSmallMs).toBeGreaterThan(0);
     expect(result.tLargeMs).toBeGreaterThan(0);
     expect(result.ratio).toBeGreaterThan(0);
@@ -380,7 +538,7 @@ describe('expectNotSuperlinear', () => {
  * で hung にして expect で落とす。vm の timeout で打ち切られた場合も同じ文言）。器が遅いほど小さいほうにも
  * 混みが乗りやすいが、そのときは比ではなく上限が落とす。比の歯が働く範囲は、ほぼ手元の速さの器に残る。
  * 1 回の測定は 1 ラウンドで約 6s（3 ラウンドまで重ねても 20s 前後）なので、`it` の timeout を 90s に広げた。
- * 助けと閾値（factor=4・maxRatio=10・hardCapMs=2000・repeats=3・rounds）は動かしていない。
+ * 助けと閾値（factor=4・maxRatio=10（当時。#3017 で factor=8・maxSlope=1.5 へ替えた）・hardCapMs=2000・repeats=3・rounds）は動かしていない。
  *
  * **助けの側（「閾値のすぐ下の帯でも測り直す」）では直さない**（#2649 で試して捨てた）。
  * `sqrt(factor * maxRatio)` 以上で止めずに重ねる版は、この形の2乗を確かに落としたが、線形の歯
@@ -404,7 +562,7 @@ function expectGrowthDetected(
   }
   expect(
     thrown,
-    `後戻りを助けが通した。測定値: ${JSON.stringify(measured)}（n・t(small)・t(large)・ratio）`,
+    `後戻りを助けが通した。測定値: ${JSON.stringify(measured)}（sizes・timesMs・slopes・medianSlope ほか）`,
   ).toBeInstanceOf(Error);
   expect((thrown as Error).message).toMatch(/伸びの比が大きすぎる|hardCapMs を超えた/);
 }
@@ -419,12 +577,14 @@ describe('陰性対照: 後戻りが爆発する正規表現を、助けは実�
     );
   }, 30_000);
 
-  it('2乗の後戻り（空白の列＋x に \\s+$）は、既定の factor=4・maxRatio=10 で落ちる', () => {
+  it('2乗の後戻り（空白の列＋x に \\s+$）は、factor=8・既定の maxSlope=1.5 で落ちる', () => {
+    // #3017: 点は 4000, 8000, 16000, 32000（手元で約 14, 55, 220, 900ms、傾きは各区間約 2）。
+    // 最大の点が hardCapMs（2000ms）に2倍の余裕を持つ大きさに選んである。
     const quadratic = /\s+$/;
     expectGrowthDetected(
       (input) => quadratic.test(input),
       (n) => `${' '.repeat(n)}x`,
-      { n: 10_000, minSmallMs: 0, repeats: 3 },
+      { n: 4000, factor: 8, minSmallMs: 0, repeats: 3 },
     );
   }, 90_000);
 });

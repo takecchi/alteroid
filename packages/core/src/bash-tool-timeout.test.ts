@@ -53,7 +53,7 @@ describe('commandTimeoutTotalMs — コマンドの中の timeout の合計', ()
   it('長い繰り返しでも後戻りで爆発しない', () => {
     // issue #2187 —— 直す前はここを壁時計の絶対値（200ms）で測っていた。
     // 器が混むと差分と無関係に落ちるため、伸びの比（`expectNotSuperlinear`）
-    // に替えた。`n=1250, factor=4` で、いまの入力の大きさ（5000回）と揃えてある。
+    // に替えた。`n=1250, factor=4`（#3017 前の既定。いまの既定は 8）で、いまの入力の大きさ（5000回）と揃えてある。
     expectNotSuperlinear(
       (command: string) => commandTimeoutTotalMs(command),
       (n: number) => `${'timeout -k 5 -v '.repeat(n)}x`,
