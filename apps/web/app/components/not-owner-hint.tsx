@@ -1,8 +1,9 @@
 import { ApiError } from '@alteroid/swr';
 
 /**
- * デーモンの `requireOwner` が返す本文（逐語は
- * `grep -Fn -- '実行環境の持ち主として宣言されたアカウントだけが操作できる' apps/daemon/src/app.ts`）。
+ * デーモンの `requireOwner` がかつて返した本文。**デーモンはもうこの 403 を返さない**
+ * （#2862: 2026-10-05 オーナーの判断で `requireOwner` を素通しにし、この文言は `app.ts` から消えた。
+ * この部品を畳むのは #2946）。
  * CLI の `apps/cli/src/target.ts` の `forbiddenKindOf` が見る値と同じ。
  */
 const NOT_OWNER_ERROR = '実行環境の持ち主として宣言されたアカウントだけが操作できる';

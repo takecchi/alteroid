@@ -180,8 +180,9 @@ async function remoteTarget(baseUrl: string): Promise<Target> {
 const NOT_OPERATOR_ERROR = '実行環境の持ち主だけが操作できる';
 const NOT_GRANTED_ERROR = 'このアカウントには alteroid を使う許可が無い';
 /**
- * `requireOwner`（issue #1198）が返す本文。`apps/daemon/src/app.ts` の
- * `requireOwner` の逐語（`grep -Fn -- '実行環境の持ち主として宣言されたアカウントだけが操作できる' apps/daemon/src/app.ts`）。
+ * `requireOwner`（issue #1198）がかつて返した本文。**デーモンはもうこの 403 を返さない**
+ * （#2862: 2026-10-05 オーナーの判断で `requireOwner` を素通しにし、この文言は `app.ts` から消えた）。
+ * 古いデーモンへ繋いだときのために判定だけ残す（畳むのは #2948）。
  * `NOT_OPERATOR_ERROR` とは別の状態を指す——こちらは「ログインして許可も
  * 得ているが、その端末から宣言されていない」であり、直し方も別
  * （`alteroid access owner <id>`。器の中で実行しろ、ではない）。
