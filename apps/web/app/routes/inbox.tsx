@@ -200,8 +200,7 @@ function InboxBacklogView({ backlog }: { backlog: InboxBacklog }) {
       {backlog.humanOriginated.total > 0 && (
         <div className="flex flex-col gap-1 rounded-md border border-warn/40 bg-warn/10 px-3 py-2 text-xs text-warn">
           <p>
-            ⚠ 人間からの合図（発言・回答）が溜まっている: {backlog.humanOriginated.total}{' '}
-            件（
+            ⚠ 人間からの合図（発言・回答）が溜まっている: {backlog.humanOriginated.total} 件（
             {backlog.humanOriginated.byType
               .map((entry) => `${inboxTypeLabel(entry.type)} ${entry.count}`)
               .join(' / ')}
@@ -217,7 +216,8 @@ function InboxBacklogView({ backlog }: { backlog: InboxBacklog }) {
 
       <p className="text-xs">
         計 {backlog.total} 件
-        {backlog.oldestAt !== undefined && ` （最も古いものは ${formatDateTime(backlog.oldestAt)} から）`}
+        {backlog.oldestAt !== undefined &&
+          ` （最も古いものは ${formatDateTime(backlog.oldestAt)} から）`}
       </p>
 
       <BreakdownSection
@@ -230,7 +230,10 @@ function InboxBacklogView({ backlog }: { backlog: InboxBacklog }) {
 
       <BreakdownSection
         title={`送信元（多い順に上位5件。送り主が分かる種類のみ。載り切らない送信元 ${backlog.bySourceOverflowKinds} 種 ${backlog.bySourceOverflowCount} 件 / 送り主が分からない種類 ${backlog.bySourceUnknownCount} 件）`}
-        rows={backlog.bySource.map((entry) => ({ label: inboxSourceLabel(entry.source), count: entry.count }))}
+        rows={backlog.bySource.map((entry) => ({
+          label: inboxSourceLabel(entry.source),
+          count: entry.count,
+        }))}
         empty="（送り主が分かる種類の合図は無い）"
       />
 
@@ -391,10 +394,7 @@ function InboxRemoveCard() {
 
   return (
     <Card>
-      <CardHeader
-        title="絞り込み"
-        subtitle="消す合図の条件を選ぶ"
-      />
+      <CardHeader title="絞り込み" subtitle="消す合図の条件を選ぶ" />
       <div className="flex flex-col gap-4 px-4 py-3 text-sm">
         <div>
           <p className="mb-1 text-xs text-muted-foreground">種類（最低1つ）</p>
@@ -415,7 +415,8 @@ function InboxRemoveCard() {
 
         <label className="flex flex-col gap-1">
           <span className="text-xs text-muted-foreground">
-            送信元（完全一致・カンマ区切り。外部の通知は external:名前、マネージャーは manager:名前 の形。任意）
+            送信元（完全一致・カンマ区切り。外部の通知は external:名前、マネージャーは manager:名前
+            の形。任意）
           </span>
           <Input
             value={sourcesText}
@@ -533,7 +534,8 @@ function ResultView({ result }: { result: InboxRemoveManyResult }) {
       ) : (
         <>
           <p className="mt-2">
-            {result.dryRun ? '消える予定の合図の id' : '消した合図の id'}（{result.removedIds.length}件）:
+            {result.dryRun ? '消える予定の合図の id' : '消した合図の id'}（
+            {result.removedIds.length}件）:
           </p>
           <ul className="mt-1 flex flex-col gap-0.5 font-mono break-all">
             {result.removedIds.map((id) => (
