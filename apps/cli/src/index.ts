@@ -4,7 +4,6 @@ import { stdout } from 'node:process';
 import { pathToFileURL } from 'node:url';
 
 import { REMOVE_MANY_LIMIT_DEFAULT, REMOVE_MANY_LIMIT_MAX } from '@alteroid/core/cli-light';
-import { initWorkspace } from '@alteroid/storage-fs';
 import { Command } from 'commander';
 
 import {
@@ -102,7 +101,7 @@ import { describeCliFailure } from './failure-message.js';
  * `program` 側は `await initCommand()` を呼ぶだけの薄い配線に変わっただけである。
  */
 export async function initCommand(): Promise<void> {
-  const { paths, created } = await initWorkspace();
+  const { paths, created } = await (await import('@alteroid/storage-fs')).initWorkspace();
   stdout.write(`${paths.root} を初期化しました\n`);
   for (const path of created) stdout.write(`  作成: ${path}\n`);
   if (created.length === 0)
