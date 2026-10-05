@@ -152,7 +152,7 @@ import {
   buildSelfInitiativePrompt,
   buildTimerPrompt,
 } from './prompt.js';
-import { DAILY_REPORT_KIND, localDate, localDayRange } from './schedule.js';
+import { DAILY_REPORT_KIND, dailyReportEvent, localDate, localDayRange } from './schedule.js';
 import type { ScheduleStatus } from './schedule.js';
 import {
   commitmentClosedBySchema,
@@ -477,6 +477,13 @@ function roundToOneDecimal(value: number): number {
 
 /** 日報が既に書かれたかを確かめるときに遡る件数。 */
 const DAILY_REPORT_LOOKUP = 30;
+
+/**
+ * 日報のターンが枠切れ（`heldForUsage`）以外で失敗したとき、自分で作り直すまでの間隔（#2745）。
+ * 要素の数が作り直しの回数の上限で、使い切ったら諦める（恒常的な失敗で回り続けない）。
+ * 諦めても「作れなかった」の印は日誌に残る（人間に見える）。再起動時の後追いも従来どおり働く。
+ */
+const DAILY_REPORT_RETRY_DELAYS_MS: readonly number[] = [10 * 60_000, 30 * 60_000, 2 * 3_600_000];
 
 /**
  * 外部イベントの中身をクローンに見せる上限（プロンプト・台帳の本文）。
@@ -1238,6 +1245,11 @@ export interface CloneOptions {
    */
   mergedBatchLimit?: number;
   /**
+   * 日報のターンが枠切れ以外で失敗したあと、作り直すまでの間隔の列（ms。#2745）。
+   * 要素数が作り直しの上限回数。省略時は {@link DAILY_REPORT_RETRY_DELAYS_MS}。主にテスト用。
+   */
+  dailyReportRetryDelaysMs?: readonly number[];
+  /**
    * 実行環境プロファイル（`.zprofile` 相当）。
    *
    * **クローンにも効かせる。** 人間の `.zshenv` は、その人が Claude Code に頼む
@@ -1674,6 +1686,11 @@ class Clone implements CloneHost {
   readonly #humanPriority: boolean;
   /** 1ターンへ束ねる合図の最大件数（`MERGED_BATCH_SIZE_LIMIT_ENV_KEY`）。 */
   readonly #mergedBatchLimit: number;
+  /** 日報の作り直しの間隔（#2745）。 */
+  readonly #dailyReportRetryDelays: readonly number[];
+  /** 日付ごとの作り直しの回数。プロセス内だけで数える（再起動は後追いが拾う）。 */
+  readonly #dailyReportRetries = new Map<string, number>();
+  readonly #dailyReportRetryTimers = new Set<ReturnType<typeof setTimeout>>();
   /** 道具の MCP サーバを組み立てる関数。既定は本物、テストでは差し替えられる。 */
   readonly #mcpServerFactory: typeof createCloneMcpServer;
   /**
@@ -2326,6 +2343,7 @@ class Clone implements CloneHost {
       permissionMode,
       humanPriority,
       mergedBatchLimit,
+      dailyReportRetryDelaysMs,
       profile,
       profileService,
       credentialService,
@@ -2359,6 +2377,7 @@ class Clone implements CloneHost {
     this.#permissionMode = permissionMode ?? resolveClonePermissionMode(envSource);
     this.#humanPriority = humanPriority ?? resolveCloneHumanPriority(envSource);
     this.#mergedBatchLimit = mergedBatchLimit ?? resolveMergedBatchSizeLimit(envSource);
+    this.#dailyReportRetryDelays = dailyReportRetryDelaysMs ?? DAILY_REPORT_RETRY_DELAYS_MS;
     this.#env = envSource;
     this.#credentials = credentials;
     this.#tokenIdentity = tokenIdentity;
@@ -3215,6 +3234,8 @@ class Clone implements CloneHost {
   }
 
   async stop(): Promise<void> {
+    for (const timer of this.#dailyReportRetryTimers) clearTimeout(timer);
+    this.#dailyReportRetryTimers.clear();
     // **`#inbox.closed` も見る**（Issue #564 (a)）。読み切りのあいだ `#stopped` はまだ
     // 立っていないので、ここを `#stopped` だけで守ると2度目の呼びが本体をもう一度
     // 走らせる。受信箱を閉じるのはこの関数だけなので、閉じている＝もう入っている。
@@ -9173,18 +9194,23 @@ class Clone implements CloneHost {
       // 印は1日1件でよい。**積むと人間が読む唯一の層が「作れなかった」で埋まる。**
       // 失敗が続いた回数は日誌（`#reportFailure`）に全部残っているので、ここで
       // 数える必要は無い。
-      if (existing.length > 0) return;
-      await this.#journal({
-        type: 'daily_report',
-        date,
-        // **SDK の文言をそのまま残す**（人間が検索できる形。`usage-limits.ts` の
-        // 「言い換えないこと」と同じ約束）。ただし日報の本文としてではなく、
-        // 書けなかった理由として置く。
-        body: `（この日の日報は作れなかった。日誌から直接辿ること。理由: ${outcome.reason}）`,
-        unavailable: outcome.reason,
-      });
+      if (existing.length === 0)
+        await this.#journal({
+          type: 'daily_report',
+          date,
+          // **SDK の文言をそのまま残す**（人間が検索できる形。`usage-limits.ts` の
+          // 「言い換えないこと」と同じ約束）。ただし日報の本文としてではなく、
+          // 書けなかった理由として置く。
+          body: `（この日の日報は作れなかった。日誌から直接辿ること。理由: ${outcome.reason}）`,
+          unavailable: outcome.reason,
+        });
+      // **印を書いて終わりにしない**（#2745）。枠切れ以外の失敗は一時的なことが多く、
+      // 後追い（`missingDailyReportDates`）は起動時に1回しか走らない。有限回、間を置いて
+      // 作り直す。印は本物の日報が書かれるまで残る（`isWrittenDailyReport`）。
+      this.#scheduleDailyReportRetry(date);
       return;
     }
+    this.#dailyReportRetries.delete(date);
 
     await this.#journal({
       type: 'daily_report',
@@ -9194,6 +9220,23 @@ class Clone implements CloneHost {
           ? outcome.text
           : '（クローンがこの日の日報を残さなかった。日誌から直接辿ること。）',
     });
+  }
+
+  /**
+   * 失敗した日報を、間を置いて作り直す合図を積む（#2745）。回数は
+   * `#dailyReportRetryDelays` の長さで頭打ち。使い切ったら何もしない（印は残っている）。
+   */
+  #scheduleDailyReportRetry(date: string): void {
+    const done = this.#dailyReportRetries.get(date) ?? 0;
+    const delay = this.#dailyReportRetryDelays[done];
+    if (delay === undefined) return;
+    this.#dailyReportRetries.set(date, done + 1);
+    const timer = setTimeout(() => {
+      this.#dailyReportRetryTimers.delete(timer);
+      this.post(dailyReportEvent(date, new Date(), 'schedule_catchup'));
+    }, delay);
+    timer.unref();
+    this.#dailyReportRetryTimers.add(timer);
   }
 
   /**

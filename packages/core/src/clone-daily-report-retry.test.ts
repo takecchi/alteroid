@@ -22,7 +22,11 @@ type Row = { type: 'daily_report'; date: string; body: string; unavailable?: str
 function setupWithRetry(
   failTurns: (turnIndex: number) => boolean,
   retryDelaysMs: number[],
-): { clone: ReturnType<typeof createClone>; stores: ReturnType<typeof createMemoryStores>; calls: unknown[] } {
+): {
+  clone: ReturnType<typeof createClone>;
+  stores: ReturnType<typeof createMemoryStores>;
+  calls: { inputs: string[] }[];
+} {
   const stores = createMemoryStores();
   const { fn, calls } = fakeSdk(() => '今日はログイン周りを直した。', {
     resultFor: (turnIndex) =>
@@ -74,12 +78,15 @@ describe('クローン — 日報が枠切れ以外で失敗した回の作り�
     const s = setupWithRetry(() => true, [10, 10]);
     post(s.clone);
 
-    await waitFor(() => s.calls.length >= 3, '初回＋2回の作り直しが走る');
+    await waitFor(() => turnsOf(s.calls) >= 3, '初回＋2回の作り直しが走る');
     await new Promise((resolve) => setTimeout(resolve, 150));
-    expect(s.calls.length).toBe(3);
+    expect(turnsOf(s.calls)).toBe(3);
     const rows = await reportsOf(s.stores);
     expect(rows).toHaveLength(1);
     expect(rows[0]?.unavailable).toBeDefined();
     await s.clone.stop();
   });
 });
+
+const turnsOf = (calls: { inputs: string[] }[]): number =>
+  calls.reduce((sum, call) => sum + call.inputs.length, 0);
