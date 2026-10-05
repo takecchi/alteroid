@@ -7,6 +7,12 @@ import {
   authIdentitySchema,
   loginRequestSchema,
   UnreadableAccountError,
+  assertNoNul,
+  hasNul,
+  prepareAccessTokenForWrite,
+  prepareAccountForWrite,
+  prepareIdentityForWrite,
+  prepareLoginRequestForWrite,
 } from '@alteroid/core';
 import type {
   AccessTokenRecord,
@@ -315,7 +321,7 @@ export class FsAuthStore implements AuthStore {
   }
 
   async putAccount(account: AuthAccount): Promise<void> {
-    const parsed = authAccountSchema.parse(account);
+    const parsed = prepareAccountForWrite(authAccountSchema.parse(account));
     await this.#update((file) => {
       // **書き込む id と一致する壊れた行は置き換える**（`FsJobStore.putJob` /
       // `FsCredentialVaultStore.put` と同じフォローアップ。issue #1942）。
@@ -367,6 +373,8 @@ export class FsAuthStore implements AuthStore {
    * 余計に通ることは無い（fail-closed のまま）。
    */
   async revokeAccountAccess(accountId: string): Promise<void> {
+    // NUL を含む id の行は書き込みで断るので存在しない。手で直した読めない行にも一致させない（#3011）。
+    if (hasNul(accountId)) return;
     await this.#mutate<null>((file): { next: AuthFile | null; result: null } => {
       const account = file.accounts.find((it) => it.id === accountId);
       if (account === undefined) {
@@ -404,12 +412,13 @@ export class FsAuthStore implements AuthStore {
     options: RemoveUnreadableRowsOptions = {},
   ): Promise<RemoveUnreadableRowsResult> {
     const wanted = [...new Set(ids)];
+    // NUL を含む id は「無い」と同じ扱い（unknown）。読めない行の id に NUL があっても一致させない（#3011）。
     return withPathLock(this.#path, async () => {
       const file = await this.#read();
       const present = new Set(
         file.invalidAccountsRaw.flatMap((raw) => {
           const id = extractRowId(raw);
-          return id === undefined ? [] : [id];
+          return id === undefined || hasNul(id) ? [] : [id];
         }),
       );
       const unknown = wanted.filter((id) => !present.has(id));
@@ -458,7 +467,7 @@ export class FsAuthStore implements AuthStore {
   }
 
   async putIdentity(identity: AuthIdentity): Promise<void> {
-    const parsed = authIdentitySchema.parse(identity);
+    const parsed = prepareIdentityForWrite(authIdentitySchema.parse(identity));
     await this.#update((file) => {
       // **書き込む鍵（provider, subject）と一致する壊れた行は置き換える**
       // （`putAccount` と同じフォローアップ。issue #1942）。`identities` は
@@ -507,8 +516,8 @@ export class FsAuthStore implements AuthStore {
           needle !== null &&
           file.accounts.some((it) => it.email !== null && it.email.toLowerCase() === needle);
         const accountInput = emailCollides ? { ...input.account, email: null } : input.account;
-        const account = authAccountSchema.parse(accountInput);
-        const identity = authIdentitySchema.parse(input.identity);
+        const account = prepareAccountForWrite(authAccountSchema.parse(accountInput));
+        const identity = prepareIdentityForWrite(authIdentitySchema.parse(input.identity));
         // **fail-closed（issue #1942）。** `existing` が `undefined` なのは
         // 「本当に初めて見る identity」だけでなく、**同じ (provider, subject)
         // の行が壊れていて `file.identities`（検査を通った行）に居ないとき
@@ -542,7 +551,7 @@ export class FsAuthStore implements AuthStore {
   }
 
   async putAccessToken(token: AccessTokenRecord): Promise<void> {
-    const parsed = accessTokenRecordSchema.parse(token);
+    const parsed = prepareAccessTokenForWrite(accessTokenRecordSchema.parse(token));
     await this.#update((file) => {
       // **書き込む id と一致する壊れた行は置き換える**（`putAccount` と同じ
       // フォローアップ。issue #1942）。
@@ -623,7 +632,7 @@ export class FsAuthStore implements AuthStore {
   }
 
   async putLoginRequest(request: LoginRequest): Promise<void> {
-    const parsed = loginRequestSchema.parse(request);
+    const parsed = prepareLoginRequestForWrite(loginRequestSchema.parse(request));
     const horizon = Date.now() - LOGIN_REQUEST_RETENTION_MS;
     await this.#update((file) => {
       // **書き込む id と一致する壊れた行は置き換える**（`putAccount` と同じ
@@ -698,7 +707,7 @@ export class FsAuthStore implements AuthStore {
         return { next: null, result: null };
       }
       const consumed: LoginRequest = { ...found, status: 'consumed' };
-      const token = accessTokenRecordSchema.parse(issue(consumed));
+      const token = prepareAccessTokenForWrite(accessTokenRecordSchema.parse(issue(consumed)));
       return {
         next: {
           ...file,
@@ -721,6 +730,8 @@ export class FsAuthStore implements AuthStore {
    * 上書きを防ぐためである（理由は `AuthStore.grantAccess` の doc）。
    */
   async grantAccess(accountId: string, at: string, by: string): Promise<GrantOutcome> {
+    if (hasNul(accountId)) return { status: 'not_found' };
+    assertNoNul('authAccount.grantedBy', by);
     return this.#mutate<GrantOutcome>((file): { next: AuthFile | null; result: GrantOutcome } => {
       const account = file.accounts.find((it) => it.id === accountId);
       if (account === undefined) return { next: null, result: { status: 'not_found' as const } };

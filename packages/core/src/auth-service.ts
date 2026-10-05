@@ -17,6 +17,7 @@ import {
   type OwnerOutcome,
 } from './auth.js';
 import type { AuthProviderRegistry } from './auth-providers.js';
+import { hasNul } from './nul-guard.js';
 import type { RemoveUnreadableRowsOptions, RemoveUnreadableRowsResult } from './store.js';
 
 /**
@@ -241,6 +242,14 @@ export function createAuthService(options: AuthServiceOptions): AuthService {
           redirectUri: claimedForExchange.redirectUri,
         });
       } catch {
+        await fail(claimedForExchange, 'exchange_failed');
+        return { status: 'error', reason: 'exchange_failed' };
+      }
+
+      // プロバイダの返した subject は外から来る値で、identity の鍵になる。NUL を含むものは
+      // ストアが書き込みで断る（`NulNotAllowedError`。#3011）ので、ここで交換の失敗として降りる
+      // （400 の画面になる。401 とは別。要求を `processing` のまま残さない）。
+      if (hasNul(profile.subject)) {
         await fail(claimedForExchange, 'exchange_failed');
         return { status: 'error', reason: 'exchange_failed' };
       }
