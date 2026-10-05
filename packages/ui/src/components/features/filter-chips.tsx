@@ -75,7 +75,7 @@ export function FilterChips<V extends string>({
             aria-pressed={on}
             onClick={() => toggle(option.value)}
             className={cn(
-              'inline-flex min-h-7 items-center gap-1.5 rounded-md border px-2.5 text-[11px] transition-colors',
+              'inline-flex min-h-7 items-center gap-1.5 rounded-md border px-2.5 text-[11px] pointer-coarse:min-h-11 transition-colors',
               on
                 ? 'border-primary bg-primary/15 text-foreground'
                 : 'border-border text-muted-foreground hover:border-foreground/30 hover:text-foreground',
@@ -92,7 +92,7 @@ export function FilterChips<V extends string>({
         <button
           type="button"
           onClick={clear}
-          className="inline-flex min-h-7 items-center gap-1 rounded-md px-2 text-[11px] text-muted-foreground hover:text-foreground"
+          className="inline-flex min-h-7 items-center gap-1 rounded-md px-2 text-[11px] pointer-coarse:min-h-11 text-muted-foreground hover:text-foreground"
         >
           <X className="size-3" aria-hidden />
           {clearLabel}

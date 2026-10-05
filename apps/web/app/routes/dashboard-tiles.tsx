@@ -43,15 +43,23 @@ export function HomeTiles() {
   );
 }
 
-/** 数が欠けうるか（読めなかった行・刈られた行・読めなかった委譲）。欠けうるなら下限として言う。 */
+/** 数が欠けうるか（読めなかった行・刈られた行・読めなかった作業）。欠けうるなら下限として言う。 */
 function progressPartial(progress: Progress): boolean {
   const { completeness } = progress.backlog;
-  // 読めない委譲の行（#2345）は古いデーモンだと欄が無い。無いことは 0 件ではないが、言えることが無い。
+  // 読めない作業の行（#2345）は古いデーモンだと欄が無い。無いことは 0 件ではないが、言えることが無い。
   const unreadableJobs = (completeness as { unreadableJobs?: number }).unreadableJobs ?? 0;
   return completeness.unreadable !== 0 || completeness.trimmedClosed !== 0 || unreadableJobs !== 0;
 }
 
-/** 作業の進捗。実行中の委譲・未了の仕事・窓の中で閉じた件数。**割合は出さない**（分母が無い）。 */
+/** 窓の時間数を、日で割り切れるときは日で言う（168 時間 → 7 日）。 */
+function windowText(hours: number): string {
+  return hours >= 24 && hours % 24 === 0 ? `${hours / 24} 日` : `${hours} 時間`;
+}
+
+/**
+ * 作業の進捗。任せた作業のうち実行中の件数・未了の仕事・窓の中で閉じた件数。**割合は出さない**
+ * （分母が無い）。大きな数字が何の件数かは `label` で言い、ほかの2つの件数は `hint` に名前付きで置く。
+ */
 function ProgressTile() {
   const progress = useProgress();
   const data = progress.data;
@@ -72,11 +80,16 @@ function ProgressTile() {
       ) : (
         <>
           <Stat
-            label="実行中の委譲"
+            label="実行中の任せた作業"
             value={String(data.inProgress.running)}
             unit="件"
-            hint={`未了の仕事 ${data.backlog.total} 件・直近 ${data.window.hours} 時間で ${data.throughput.commitmentsClosed} 件閉じた`}
+            hint={`未了の仕事 ${data.backlog.total} 件・直近 ${windowText(data.window.hours)}で閉じた仕事 ${data.throughput.commitmentsClosed} 件`}
           />
+          {data.inProgress.running === 0 && data.backlog.total === 0 && (
+            <HomeTileNote>
+              いま動いている作業も未了の仕事も無い。何かを任せると、ここに出る。
+            </HomeTileNote>
+          )}
           {progressPartial(data) && (
             <HomeTileNote tone="warn">読めなかった行があり、数は下限として読むこと。</HomeTileNote>
           )}
@@ -149,7 +162,7 @@ function NextRunTile() {
  * - **「今日」はデーモンの TZ の日**（応答の `today`）。ブラウザの今日の前後 `USAGE_WINDOW_DAYS`
  *   日の窓で1回だけ引き、`today` の行だけを使う（issue #2268）。`today` が無いとき（読み込み中・
  *   古いデーモン）に黙ってブラウザの今日にしない
- * - 台帳が空（`since` が null）・台帳の始点より前は `$0.00` と出さない（使っていない、に見せない）
+ * - 記録が空（`since` が null）・記録の始点より前は `$0.00` と出さない（使っていない、に見せない）
  * - 金額には必ず但し書き（`notice`）を添える。省略・要約しない
  * - 読めずに集計から外した行が在れば、合計に入っていないと言う（Issue #2427）。窓から今日の行か
  *   日が取れない行だけに絞る
@@ -187,11 +200,13 @@ function UsageTile() {
         // 0 や記録なしと出さない。デーモンが今日を返さないので、どの行が今日かを決められない。
         <Empty>デーモンの今日が分からない（デーモンが古い可能性がある）。</Empty>
       ) : usage.data.since === null ? (
-        // `$0.00` と出さない。まだ台帳に1件も無いのを「使っていない」に見せない。
-        <Empty>まだ記録が無い。</Empty>
+        // `$0.00` と出さない。まだ記録が1件も無いのを「使っていない」に見せない。
+        <Empty>まだ記録が無い。作業が動き出すと、使った分がここに記録される。</Empty>
       ) : usage.data.beforeLedger && todayRows.length === 0 ? (
         // 0 と出さない。`beforeLedger` は窓（今日の前後2日）に対する判定で、今日そのものではない。
-        <Empty>今日の分はまだ記録が無い（台帳の始点より前にかかっている可能性がある）。</Empty>
+        <Empty>
+          今日の分はまだ記録が無い。記録は途中から始まったので、その前の分は残っていない。作業が動けば、この先の分が記録される。
+        </Empty>
       ) : (
         <>
           <Stat
