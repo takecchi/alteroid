@@ -805,6 +805,16 @@ export function describeAccountUsage(
     );
   }
   lines.push(`観測時刻: ${usage.at}`);
+  if (state.refreshFailure !== undefined) {
+    // **保っている値の古さを隠さない**（#2752）。取り直しが失敗している間、上の値は
+    // 「最後に取れたとき」のものであって、いまのものではない。
+    lines.push(
+      plain(
+        `**⚠️ 上の値は最後に取れたときのもの。${state.refreshFailure.since} から取り直しが失敗している` +
+          `（直近 ${state.refreshFailure.at}: ${state.refreshFailure.reason}）。いまの枠は分からない。**`,
+      ),
+    );
+  }
   return lines;
 }
 

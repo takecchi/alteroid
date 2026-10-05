@@ -1,9 +1,18 @@
+import { useId } from 'react';
 import { Link } from 'react-router';
 
 import { LoadError } from '~/components/load-error';
-import { Markdown, Page, Card, Empty, Spinner, cn } from '@alteroid/ui';
+import {
+  markdownComponents,
+  toReact,
+  Page,
+  Card,
+  Empty,
+  Spinner,
+  cn,
+} from '@alteroid/ui';
 import { useReport, useReports } from '@alteroid/swr';
-import { formatDateTime, formatTime, redactBody } from '@alteroid/logic';
+import { formatDateTime, redactBody } from '@alteroid/logic';
 
 import type { DailyReport } from '@alteroid/logic';
 
@@ -86,8 +95,43 @@ export function UnavailableNote({ reason }: { reason: string }) {
  * だから日は `date`（その日報が何日について書かれたか）、時刻は `at`（いつ書か
  * れたか）で、2つは別の軸として並べる。
  */
-function reportLabel(report: DailyReport): string {
-  return `${report.date} ${formatTime(report.at)}`;
+function reportTitle(date: string): string {
+  return `${date} の日報`;
+}
+
+/**
+ * 「いつ書かれたか」。**日付つきで出す**（時:分だけだと、翌日に書かれた1件が
+ * 日報の日の 00:30 に書かれたように読める。#2779）。端末の時間帯の時刻で出す
+ * （`formatDateTime`）。
+ */
+function writtenAt(report: DailyReport): string {
+  return `${formatDateTime(report.at)} に書かれた`;
+}
+
+/**
+ * 本文の見出しを**1段下げて**描く。画面の見出し（h1「日報」）・カードの見出し（h2）
+ * の下に本文の `#` が h1 で並ばないようにする（#2780）。`Markdown`（共通部品）は
+ * 本文の見出しを書かれたとおりの段で描くので、この画面だけ見出しの部品を差し替える
+ * （共通部品は変えていない）。h1→h3 … h4→h6、h5・h6 は h6 に畳む（HTML に h7 は無い）。
+ * 見た目は差し替え先の段の部品のものになる。
+ */
+const reportMarkdownComponents: typeof markdownComponents = {
+  ...markdownComponents,
+  h1: markdownComponents.h3,
+  h2: markdownComponents.h4,
+  h3: markdownComponents.h5,
+  h4: markdownComponents.h6,
+  h5: markdownComponents.h6,
+  h6: markdownComponents.h6,
+};
+
+function ReportMarkdown({ children }: { children: string }) {
+  const prefix = 'md' + useId().replace(/[^A-Za-z0-9_-]/g, '') + '-';
+  return (
+    <div className="min-w-0 text-sm break-words">
+      {toReact(children, reportMarkdownComponents, prefix)}
+    </div>
+  );
 }
 
 /**
@@ -144,7 +188,7 @@ export default function Reports({ loaderData }: Route.ComponentProps) {
   const selectedId = reportId ?? reports.find((report) => report.date === selectedDate)?.id;
   /**
    * **取れなかったのを0件と描かない**（issue #2324）。一覧をまだ一度も読めていないまま
-   * 失敗したとき、失敗は `LoadError` が言う。一覧の「まだ無い」も、右の
+   * 失敗したとき、失敗は上の `LoadError` が言う。一覧の「まだ無い」も、右の
    * 「日報が1件も無い」も並べない（どちらも一覧が空であることに乗っている）。再検証の
    * 失敗で `data` が残っているときは当たらず、一覧をそのまま出す。
    */
@@ -181,31 +225,22 @@ export default function Reports({ loaderData }: Route.ComponentProps) {
         テストでは確かめられない。** 下のテストが保証するのはクラスが当たって
         いることまでである。
       */}
-      {/*
-        **一覧を読めていないときは、空の枠線（一覧の Card）を残さない**（issue #2799）。失敗は上の
-        `LoadError` が言う。URL で日付が指定されているときだけ、本文は独立に読めるので出す。
-      */}
-      {listUnavailable ? (
-        selectedDate === undefined ? null : (
-          <ReportBody date={selectedDate} reportId={selectedId} />
-        )
-      ) : (
-        <div className="grid grid-cols-1 gap-4 lg:grid-cols-[16rem_1fr]">
-          <Card className="h-fit">
-            {list.isLoading ? (
-              <Spinner />
-            ) : reports.length === 0 ? (
-              <Empty>まだ無い。</Empty>
-            ) : (
-              <>
-                <ul>
-                  {reports.map((report, index) => (
-                    <li key={report.id}>
-                      <Link
-                        to={`/reports/${report.date}/${encodeURIComponent(report.id)}`}
-                        className={cn(
-                          'block px-4 py-2 text-sm hover:bg-muted',
-                          /*
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-[16rem_1fr]">
+        <Card className="h-fit">
+          {list.isLoading ? (
+            <Spinner />
+          ) : listUnavailable ? null : reports.length === 0 ? (
+            <Empty>まだ無い。</Empty>
+          ) : (
+            <>
+              <ul>
+                {reports.map((report, index) => (
+                  <li key={report.id}>
+                    <Link
+                      to={`/reports/${report.date}/${encodeURIComponent(report.id)}`}
+                      className={cn(
+                        'block px-4 py-2 text-sm hover:bg-muted',
+                        /*
                           **罫線は日付の変わり目にだけ引く。** 同じ日のものが1つの塊に
                           見えるので、時刻だけが違う行が並んでいることが形から分かる
                           （1日1件の日は今までと同じ見え方になる）。
@@ -215,55 +250,75 @@ export default function Reports({ loaderData }: Route.ComponentProps) {
                           別の日付を挟んで離れると、同じ日に何本も罫線が引かれた。
                           保証は `apps/daemon/src/reports.ts` が持つ（日付の新しい順）。
                         */
-                          reports[index + 1]?.date !== report.date && 'border-b border-border',
-                          report.id === selectedId && 'bg-muted text-primary',
-                        )}
-                      >
-                        {reportLabel(report)}
+                        reports[index + 1]?.date !== report.date && 'border-b border-border',
+                        report.id === selectedId && 'bg-muted text-primary',
+                      )}
+                      aria-current={report.id === selectedId ? 'page' : undefined}
+                    >
+                      <span className="block">{reportTitle(report.date)}</span>
+                      <span className="block text-xs text-muted-foreground">
+                        {writtenAt(report)}
                         {/*
+                          同じ日が複数あるとき、**並びの先頭（書かれたのが最も新しい）に
+                          だけ**「最新」を付ける。並びはデーモンが決めている（上）。
+                        */}
+                        {reports[index - 1]?.date !== report.date &&
+                          reports[index + 1]?.date === report.date && (
+                            <span className="ml-1 rounded border border-border px-1 text-[11px]">
+                              最新
+                            </span>
+                          )}
+                      </span>
+                      {/*
                         **印の付いた行は、開く前に分かる形にする。** 印を出さないと
                         「日報がある行」と同じ顔になり、人間は開くまで気づけない
                         （本文がエラー文だった穴と同じ形が、一覧の側に残る）。
                       */}
-                        {isUnavailable(report) && (
-                          <span
-                            className="ml-1 text-destructive"
-                            title="この日の日報は作れなかった"
-                          >
-                            ⚠
-                          </span>
-                        )}
-                      </Link>
-                    </li>
-                  ))}
-                </ul>
-                {/*
+                      {isUnavailable(report) && (
+                        <span className="ml-1 text-destructive" title="この日の日報は作れなかった">
+                          ⚠
+                        </span>
+                      )}
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+              {/*
                 **`GET /reports` は総件数を返さないので `TruncationNote` は
                 使えない**（あちらは正確な `total` が要る）。取れた件数が
                 要求した上限とちょうど一致するときだけ、「これより古い日報が
                 あるかもしれない」と明示する——黙って切り捨てない
                 （`tokens.tsx` の `RotationHistory` と同じ形。Issue #426 の G3）。
               */}
-                {isReportsWindowFull(reports.length) && (
-                  <p className="border-t border-border px-4 py-2 text-[11px] text-muted-foreground">
-                    直近 {REPORTS_LIMIT} 件のみ表示している。これより古い日報があるかもしれない。
-                  </p>
-                )}
-              </>
-            )}
-          </Card>
-
-          {selectedDate === undefined ? (
-            <Card className="min-w-0">
-              <Empty>
-                日報が1件も無い。クローンが締め時刻にまとめる（スケジュールから今すぐ回せる）。
-              </Empty>
-            </Card>
-          ) : (
-            <ReportBody date={selectedDate} reportId={selectedId} />
+              {isReportsWindowFull(reports.length) && (
+                <p className="border-t border-border px-4 py-2 text-[11px] text-muted-foreground">
+                  直近 {REPORTS_LIMIT} 件のみ表示している。これより古い日報があるかもしれない。
+                </p>
+              )}
+            </>
           )}
-        </div>
-      )}
+        </Card>
+
+        {selectedDate === undefined && listUnavailable ? null : selectedDate === undefined &&
+          list.isLoading ? (
+          /*
+            **読み込み中に「1件も無い」と言わない**（#2803）。一覧がまだ来ていないだけで
+            `selectedDate` が無いので、「無い」と区別できない。一覧の取得が終わって0件だった
+            ときだけ下の「1件も無い」を出す。
+          */
+          <Card className="min-w-0">
+            <Spinner />
+          </Card>
+        ) : selectedDate === undefined ? (
+          <Card className="min-w-0">
+            <Empty>
+              日報が1件も無い。クローンが締め時刻にまとめる（スケジュールから今すぐ回せる）。
+            </Empty>
+          </Card>
+        ) : (
+          <ReportBody date={selectedDate} reportId={selectedId} />
+        )}
+      </div>
     </Page>
   );
 }
@@ -290,7 +345,7 @@ function ReportBody({ date, reportId }: { date: string; reportId: string | undef
   const report = reports.find((entry) => entry.id === reportId) ?? reports[0];
   /**
    * **取れなかったのを「この日の日報は無い」と描かない**（issue #2324）。本文をまだ一度も
-   * 読めていないまま失敗したとき、失敗は `LoadError` が言う。再検証の失敗で `data` が
+   * 読めていないまま失敗したとき、失敗は上の `LoadError` が言う。再検証の失敗で `data` が
    * 残っているときは当たらず、本文をそのまま出す。
    */
   const bodyUnavailable = data === undefined && error !== undefined;
@@ -298,9 +353,7 @@ function ReportBody({ date, reportId }: { date: string; reportId: string | undef
   return (
     <Card className="min-w-0">
       <div className="border-b border-border px-4 py-3">
-        <h2 className="text-sm font-semibold">
-          {report === undefined ? date : reportLabel(report)}
-        </h2>
+        <h2 className="text-sm font-semibold">{reportTitle(date)}</h2>
       </div>
       <LoadError
         what="この日の日報"
@@ -327,7 +380,7 @@ function ReportBody({ date, reportId }: { date: string; reportId: string | undef
           {isUnavailable(report) ? (
             <UnavailableNote reason={report.unavailable} />
           ) : (
-            <Markdown>{redactBody(report.body)}</Markdown>
+            <ReportMarkdown>{redactBody(report.body)}</ReportMarkdown>
           )}
         </article>
       )}

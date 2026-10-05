@@ -1,7 +1,7 @@
 import { ScheduleTabs } from '~/components/group-tabs';
 import { LoadError } from '~/components/load-error';
 import { AlertTriangle } from 'lucide-react';
-import { useState } from 'react';
+import { useId, useState } from 'react';
 import { Tabs } from 'radix-ui';
 
 import {
@@ -108,7 +108,7 @@ export default function Schedule() {
     <Page
       tabs={<ScheduleTabs />}
       title="スケジュールと外部イベント"
-      description="時間起点と外部イベント起点を手で起こす"
+      description="決まった時刻に動く依頼と、外部からの知らせを、ここで確かめたり手で起こしたりする"
     >
       <LoadError
         what="スケジュール"
@@ -130,7 +130,7 @@ export default function Schedule() {
           <Empty>
             {(data?.unreadable ?? []).length > 0
               ? '読めた範囲では、登録された定期ジョブが無い。'
-              : '登録された定期ジョブが無い（`off` にしている可能性がある）。'}
+              : '登録された定期ジョブが無い（定期ジョブをすべて止めている場合もある）。'}
           </Empty>
         ) : (
           <ul>
@@ -168,9 +168,12 @@ export default function Schedule() {
                 */}
                 <div className="min-w-[min(14rem,100%)] flex-1">
                   <p className="text-sm">{entry.description}</p>
-                  <p className="mt-0.5 font-mono text-[11px] break-words text-muted-foreground">
-                    {entry.kind}
-                  </p>
+                  {/* 既定の仕込みの kind（内部の識別子）は出さない。利用者が付けた名前だけ出す（#2782）。 */}
+                  {entry.request !== undefined && (
+                    <p className="mt-0.5 text-[11px] break-words text-muted-foreground">
+                      名前: <span className="font-mono break-words">{entry.kind}</span>
+                    </p>
+                  )}
                   {/*
                     **継続中の依頼だけが持つもの。** `request` があるかどうかが
                     「人間かクローンが仕込んだ依頼」と「既定の仕込み
@@ -427,11 +430,14 @@ function RequestEditor({
   onChange,
   initialValue,
   placeholder,
+  label,
 }: {
   value: string;
   onChange: (value: string) => void;
   initialValue: string;
   placeholder?: string;
+  /** 本文の欄の名前（入力するとプレースホルダは消えるので、名前は別に持つ）。 */
+  label: string;
 }) {
   const [tab, setTab] = useState<string | undefined>(undefined);
   const activeTab = tab ?? (initialValue.trim() === '' ? 'edit' : 'preview');
@@ -472,6 +478,7 @@ function RequestEditor({
 
       <Tabs.Content value="edit">
         <Textarea
+          aria-label={label}
           rows={6}
           className="max-h-64 min-h-24 resize-y font-mono text-xs leading-relaxed"
           value={value}
@@ -540,7 +547,7 @@ function ScheduleEditForm({
       className="mt-2 w-full rounded-md border border-border bg-muted p-3"
     >
       <div className="mb-2 flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
-        <span>kind（変更不可。別の名前にしたいなら外して新しく仕込む）:</span>
+        <span>名前（変更不可。別の名前にしたいなら外して新しく仕込む）:</span>
         <span className="font-mono break-words">{entry.kind}</span>
       </div>
       {specUnknown ? (
@@ -563,6 +570,7 @@ function ScheduleEditForm({
         value={request}
         onChange={setRequest}
         initialValue={entry.request ?? ''}
+        label="依頼の本文"
         placeholder="依頼の本文（時刻が来たらそのままクローンへ渡る）"
       />
       <div className="mt-2 flex items-center gap-2">
@@ -596,6 +604,7 @@ function ScheduleEditForm({
  */
 function ScheduleForm() {
   const createSchedule = useCreateSchedule();
+  const kindId = useId();
   const [kind, setKind] = useState('');
   const [request, setRequest] = useState('');
   const [specDraft, setSpecDraft] = useState<ScheduleSpecDraft>(DEFAULT_SPEC_DRAFT);
@@ -628,9 +637,13 @@ function ScheduleForm() {
         subtitle="時刻が来れば必ず届く（記憶に書くだけでは、思い出せるかどうかの賭けになる）"
       />
       <div className="flex flex-col gap-2 px-4 py-3">
+        <label htmlFor={kindId} className="text-xs font-medium text-muted-foreground">
+          依頼の名前（半角の英小文字・数字・. _ - が使える）
+        </label>
         <Input
+          id={kindId}
           value={kind}
-          placeholder="kind（英小文字・数字・. _ -。例: morning-issues）"
+          placeholder="例: morning-issues"
           onChange={(event) => setKind(event.target.value)}
         />
         <ScheduleSpecFields draft={specDraft} onChange={setSpecDraft} />
@@ -638,6 +651,7 @@ function ScheduleForm() {
           value={request}
           onChange={setRequest}
           initialValue=""
+          label="依頼の本文"
           placeholder="依頼の本文（時刻が来たらそのままクローンへ渡る）"
         />
         <div className="flex items-center gap-2">
@@ -656,6 +670,8 @@ function ScheduleForm() {
 
 function EventForm() {
   const postEvent = usePostEvent();
+  const sourceId = useId();
+  const payloadId = useId();
   const [source, setSource] = useState('');
   const [payload, setPayload] = useState('');
   const [busy, setBusy] = useState(false);
@@ -693,16 +709,24 @@ function EventForm() {
         subtitle="MCP 経由の通知・CI の失敗・レビュー依頼を、人間の手で再現する"
       />
       <div className="flex flex-col gap-2 px-4 py-3">
+        <label htmlFor={sourceId} className="text-xs font-medium text-muted-foreground">
+          送り元の名前
+        </label>
         <Input
+          id={sourceId}
           value={source}
-          placeholder="source（例: github, slack, ci）"
+          placeholder="例: github, slack, ci"
           onChange={(event) => setSource(event.target.value)}
         />
+        <label htmlFor={payloadId} className="text-xs font-medium text-muted-foreground">
+          知らせの内容
+        </label>
         <Textarea
+          id={payloadId}
           rows={4}
           value={payload}
           className="font-mono text-xs"
-          placeholder="payload（JSON でも素のテキストでもよい）"
+          placeholder="JSON でも素のテキストでもよい"
           onChange={(event) => setPayload(event.target.value)}
         />
         <div className="flex items-center gap-2">
@@ -710,7 +734,7 @@ function EventForm() {
             送る
           </Button>
           {sent !== undefined && (
-            <span className="font-mono text-[11px] text-muted-foreground">受け付けた: {sent}</span>
+            <span className="text-[11px] text-muted-foreground">受け付けた</span>
           )}
         </div>
         <ErrorNote error={failure} />

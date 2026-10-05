@@ -99,13 +99,13 @@ export default function Profile() {
     <Page
       tabs={<SettingsTabs />}
       title="実行環境プロファイル"
-      description="クローン・マネージャー・作業者に効くシェルスクリプトの行（~/.zprofile 相当。行ごとに撒く先を選べる）。alteroid profile と同じもの"
+      description="クローン・マネージャー・作業者に効くシェルスクリプトの行（~/.zprofile 相当。行ごとに渡す先を選べる）"
     >
       <div className="flex flex-col gap-4">
         <Card>
           <CardHeader
             title="現在の登録内容"
-            subtitle="alteroid profile list / status / GET /profile と同じもの"
+            subtitle="いま登録されている行と、届いているかどうか"
             action={data === undefined ? undefined : <Badge>{data.entries.length}</Badge>}
           />
           <div className="flex flex-col gap-3 px-4 py-3">
@@ -209,7 +209,7 @@ function ProfileList({
         ))}
       </ul>
       <p className="text-[11px] break-words text-muted-foreground">
-        各 runner へ届いているか（alteroid profile status の後半）は「設定」の runner 欄に出る。
+        各 runner へ届いているかは、「設定」の runner の欄に出る。
       </p>
     </div>
   );
@@ -290,8 +290,7 @@ function EntryRow({
       {confirming && (
         <div className="mt-2 flex flex-col gap-2 rounded-md border border-warn/40 bg-warn/10 px-3 py-2">
           <p className="text-[11px] break-words text-warn">
-            行 {entry.name} を外す（alteroid profile rm
-            と同じ）。他の行は変えない。これから起こす仕事から、
+            行 {entry.name} を外す。他の行は変えない。これから起こす仕事から、
             この行に書いてあった環境は無くなる。
           </p>
           <div className="flex flex-wrap items-center gap-2">
@@ -386,10 +385,7 @@ function ProfileEditor({
 
   return (
     <Card>
-      <CardHeader
-        title="行を登録する"
-        subtitle="alteroid profile edit / set / PUT /profile/:name と同じもの。1行を丸ごと置き換える"
-      />
+      <CardHeader title="行を登録する" subtitle="1行を丸ごと置き換える" />
       <div className="flex flex-col gap-3 px-4 py-3 text-sm">
         <p className="text-xs leading-relaxed break-words text-muted-foreground">
           保存すると、本文は置く前にデーモンのプロセスでその場で評価される（記憶ストアの鍵を持つ

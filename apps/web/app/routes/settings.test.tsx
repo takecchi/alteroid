@@ -175,12 +175,12 @@ describe('runner の since（この状態になった時刻）', () => {
    * 曖昧になる。この一覧のヘッダに添えた注記の文そのもの（一意な言い回し）で
    * 探す。
    */
-  it('名簿がインメモリで、再起動で作り直されることを添える', async () => {
+  it('名簿は保存されず、再起動で作り直されることを添える', async () => {
     renderSettings({ runners: [BASE], daemonRevision: DAEMON_UNKNOWN });
 
     expect(
       await screen.findByText(
-        /「この状態になった」は名簿の値.*インメモリ.*再起動すると作り直される/,
+        /「この状態になった」は名簿の値.*保存されない.*再起動すると作り直される/,
       ),
     ).toBeTruthy();
   });

@@ -599,3 +599,31 @@ describe('describeUnmeteredUsage（消費を報告しない provider のター�
     ]);
   });
 });
+
+describe('describeAccountUsage — 保持している ok の後に取り直しが失敗している（#2752）', () => {
+  const usage = {
+    at: '2026-08-14T10:00:00.000Z',
+    limitsAvailable: true,
+    windows: [],
+  };
+
+  it('失敗していること（いつから・理由）と、値が最後に取れたときのものであることを出す', () => {
+    const text = describeAccountUsage({
+      state: 'ok',
+      usage,
+      refreshFailure: {
+        since: '2026-08-14T10:05:00.000Z',
+        at: '2026-08-14T10:20:00.000Z',
+        reason: '通信断',
+      },
+    }).join('\n');
+    expect(text).toContain('最後に取れたときのもの');
+    expect(text).toContain('2026-08-14T10:05:00.000Z');
+    expect(text).toContain('通信断');
+  });
+
+  it('失敗していない ok には、その行が出ない（今日の見え方を変えない）', () => {
+    const text = describeAccountUsage({ state: 'ok', usage }).join('\n');
+    expect(text).not.toContain('最後に取れたときのもの');
+  });
+});

@@ -58,14 +58,11 @@ export default function McpServersPage() {
     <Page
       tabs={<SettingsTabs />}
       title="MCP 連携"
-      description="クローン・マネージャー・作業者に渡す MCP サーバの登録（.mcp.json 相当）。alteroid mcp と同じもの"
+      description="クローン・マネージャー・作業者に渡す MCP サーバの登録（.mcp.json 相当）"
     >
       <div className="flex flex-col gap-4">
         <Card>
-          <CardHeader
-            title="現在の登録内容"
-            subtitle="alteroid mcp list / show / GET /mcp-servers と同じもの"
-          />
+          <CardHeader title="現在の登録内容" subtitle="いま登録されている MCP サーバ" />
           <div className="flex flex-col gap-3 px-4 py-3">
             <LoadError
               what="MCP 連携の登録内容"
@@ -242,10 +239,7 @@ function McpServersEditor({ current }: { current: McpServersState }) {
 
   return (
     <Card>
-      <CardHeader
-        title="登録内容を置き換える"
-        subtitle="alteroid mcp edit / set / clear / PUT /mcp-servers と同じもの。丸ごと置き換える"
-      />
+      <CardHeader title="登録内容を置き換える" subtitle="登録内容を丸ごと置き換える" />
       <div className="flex flex-col gap-3 px-4 py-3 text-sm">
         <p className="text-xs leading-relaxed break-words text-muted-foreground">
           .mcp.json をそのまま貼れる形（{'{ "mcpServers": { … } }'}）。保存する前にデーモンが
@@ -328,7 +322,7 @@ function McpServersEditor({ current }: { current: McpServersState }) {
         {confirming === 'clear' && !editing && (
           <div className="flex flex-col gap-2 rounded-md border border-warn/40 bg-warn/10 px-3 py-2">
             <p className="text-[11px] break-words text-warn">
-              MCP 連携の登録を全部外す（alteroid mcp clear と同じ）。次のセッションから、
+              MCP 連携の登録を全部外す。次のセッションから、
               クローン・マネージャー・作業者はこれらの連携を使えなくなる。
             </p>
             <div className="flex flex-wrap items-center gap-2">
