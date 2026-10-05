@@ -4,6 +4,7 @@
 // 人間は疑う先を取り違える。**ブラウザが読めるのは subpath の側だけである**
 // （`revision.ts` は焼き込んだ正典と zod を読むので初期チャンクへ入れられない）。
 import { SettingsTabs } from '~/components/group-tabs';
+import { settingsDocumentTitle } from '~/lib/nav';
 import { describeRevisionStatus } from '@alteroid/core/revision';
 import { Fragment, useRef, useState } from 'react';
 
@@ -34,7 +35,12 @@ import type { RunnerPushOutcome, RunnerSummary } from '@alteroid/logic';
 
 export default function Settings() {
   return (
-    <Page tabs={<SettingsTabs />} title="設定" description="この画面がどのデーモンを見ているか">
+    <Page
+      tabs={<SettingsTabs />}
+      documentTitle={settingsDocumentTitle('/settings')}
+      title="設定"
+      description="この画面がどのデーモンを見ているか"
+    >
       <div className="flex flex-col gap-4">
         <ConnectionCard />
         <Account />
