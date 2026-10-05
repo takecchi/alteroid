@@ -697,12 +697,6 @@ export function resolveMergedBatchSizeLimit(env: NodeJS.ProcessEnv = process.env
 }
 
 /**
- * 継続中の依頼の器に触るときの試行回数と間隔（読み取りと発火の記録の両方）。
- *
- * **これは回数制限ではない**（AGENTS.md 地雷2）。器が一瞬揺れただけで1周期ぶんの
- * 仕事を落とさないための拾い直しであって、仕事の量を絞るものではない。
- */
-/**
  * ターンが失敗で終わった定期の発火を、同じプロセスの中で配り直す間隔（#2739）。失敗のたびに
  * 後退する（毎分1ターンにしない）。使い切ったら印を残したまま次の周期か再起動に任せる。
  * 本来の次回より遠くには置かれない（`Scheduler.retrySoon`）。
@@ -711,6 +705,12 @@ const FAILED_TURN_RETRY_DELAYS_MS: readonly number[] = [10, 30, 120, 360, 720].m
   (minutes) => minutes * 60_000,
 );
 
+/**
+ * 継続中の依頼の器に触るときの試行回数と間隔（読み取りと発火の記録の両方）。
+ *
+ * **これは回数制限ではない**（AGENTS.md 地雷2）。器が一瞬揺れただけで1周期ぶんの
+ * 仕事を落とさないための拾い直しであって、仕事の量を絞るものではない。
+ */
 const SCHEDULE_STORE_ATTEMPTS = 3;
 const SCHEDULE_STORE_RETRY_MS = 200;
 
