@@ -466,7 +466,16 @@ describe('/progress 画面 — 取れない値と但し書き', () => {
         backlog.getByText('takecchi/alteroid 開いている PR').parentElement?.textContent,
       ).toContain('0');
       expect(backlog.getByText(/記録したのは: クローン/)).toBeTruthy();
-      expect(backlog.getByText(/gh issue list --state open \/ 上限 100 件/)).toBeTruthy();
+      expect(backlog.getByText('上限 100 件')).toBeTruthy();
+      // 数えた条件の原文（CLI の文字列）は、閉じた折りたたみの外に出さない
+      const clone = document.body.cloneNode(true) as HTMLElement;
+      clone.querySelectorAll('details').forEach((el) => el.remove());
+      const outside = clone.textContent ?? '';
+      expect(outside).not.toContain('gh ');
+      expect(outside).not.toContain('--state');
+      // 折りたたみの中には残る（開発者が確かめられる）
+      const details = backlog.getByText('数えた条件の詳細（開発者向け）').closest('details');
+      expect(details?.textContent).toContain('gh issue list --state open');
       // GitHub 全体が未観測のときの文言（句点で終わる）。CI の軸の「観測していない（0 件ではない）」とは別
       expect(backlog.queryByText(/観測していない（0 件ではない）。/)).toBeNull();
     });

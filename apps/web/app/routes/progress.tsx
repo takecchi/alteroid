@@ -213,19 +213,30 @@ function GithubBlock({ github, observedAt }: { github: Progress['github']; obser
                     label: '記録した時刻',
                     value: `${atText(row.latestOk.observedAt, observedAt)} / 記録したのは: ${githubObservedByLabel(row.latestOk.observedBy)}`,
                   },
-                  {
-                    label: '数えた範囲',
-                    value:
-                      row.latestOk.query +
-                      (row.latestOk.limit === undefined
-                        ? ''
-                        : ` / 上限 ${count(row.latestOk.limit)} 件`) +
-                      (row.latestOk.truncated ? '（上限に達したため、実際はこれ以上）' : ''),
-                  },
+                  // **観測側が名乗った `query`（`gh issue list --state open` など）は自由文で、
+                  // 画面の言葉へ解釈できない。** 本文には出さず、下の折りたたみへ置く。
+                  // 件数の上限と「実際はこれ以上」だけは利用者の言葉で言える。
+                  ...(row.latestOk.limit === undefined && !row.latestOk.truncated
+                    ? []
+                    : [
+                        {
+                          label: '数えた範囲',
+                          value:
+                            (row.latestOk.limit === undefined
+                              ? ''
+                              : `上限 ${count(row.latestOk.limit)} 件`) +
+                            (row.latestOk.truncated ? '（上限に達したため、実際はこれ以上）' : ''),
+                        },
+                      ]),
                   { label: 'CI', value: ciText(row.latestOk) },
                 ]}
                 labelWidth="8rem"
               />
+              {/* 数えた条件の原文は開発者向けなので、折りたたみの先に置く。 */}
+              <details className="text-xs text-muted-foreground">
+                <summary className="cursor-pointer">数えた条件の詳細（開発者向け）</summary>
+                <code className="mt-1 block font-mono break-words">{row.latestOk.query}</code>
+              </details>
             </>
           )}
           {row.latestFailed !== null && (
