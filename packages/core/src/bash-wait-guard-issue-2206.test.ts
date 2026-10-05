@@ -88,12 +88,15 @@ describe('引用を外した写しの判定が、長い入力で2乗にならな
       const calls = Math.max(1, Math.round(command.length / 64000));
       for (let i = 0; i < calls; i += 1) inspectBashCommand(command);
     };
+    // CI の器が遅いと、傾きを測る前に hardCapMs で打ち切られ「hardCapMs を超えた」で投げる（#3043）。
+    // どちらも検出器が超線形を捕まえた文言なので、この2つに限って受け入れる。引数の誤りや型の誤りなど
+    // 検出器と無関係の例外はどちらにも合わず落ちる（線形の関数が投げないことは上の線形の歯が守る）。
     expect(() =>
       expectNotSuperlinear(quadratic, (n) => `${T} ${'\\-n '.repeat(n)}x`, {
         n: 8000,
         repeats: 3,
         rounds: 1,
       }),
-    ).toThrow(/2乗以上の後戻り/);
+    ).toThrow(/2乗以上の後戻り|hardCapMs を超えた/);
   });
 });
