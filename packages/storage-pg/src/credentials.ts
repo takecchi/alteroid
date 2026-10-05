@@ -7,6 +7,7 @@ import {
 } from '@alteroid/core';
 import { asc, inArray } from 'drizzle-orm';
 
+import { byteOrder } from './db.js';
 import type { Db } from './db.js';
 import { managerCredentials } from './schema.js';
 
@@ -31,7 +32,7 @@ export class PgCredentialVaultStore implements CredentialVaultStore {
     const rows = await this.#db
       .select()
       .from(managerCredentials)
-      .orderBy(asc(managerCredentials.name));
+      .orderBy(asc(byteOrder(managerCredentials.name)));
     const kept: StoredCredential[] = [];
     rows.forEach((row, index) => {
       /**

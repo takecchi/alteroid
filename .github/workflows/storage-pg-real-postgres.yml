@@ -85,4 +85,4 @@ jobs:
         env:
           ALTEROID_TEST_PG_URL: postgres://alteroid:alteroid-ci-throwaway@127.0.0.1:5432/alteroid_test
           ALTEROID_TEST_PG_EXPECT_COLLATE: ${{ matrix.collate }}
-        run: pnpm --filter @alteroid/storage-pg test index.journal-jobs-schedule index.commitments-inbox-archive index.sessions-tokens-credentials test-db
+        run: pnpm --filter @alteroid/storage-pg test index.journal-jobs-schedule index.commitments-inbox-archive index.sessions-tokens-credentials list-order-contract test-db

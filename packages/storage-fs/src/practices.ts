@@ -8,6 +8,7 @@ import {
   practiceVersionMatches,
   practiceVersionSchema,
   UnreadablePracticeError,
+  compareCodeUnits,
 } from '@alteroid/core';
 import type {
   Practice,
@@ -259,7 +260,7 @@ export class FsPracticeStore implements PracticeStore {
     const { practices, invalidPracticesRaw } = await this.#read();
     return {
       entries: [...practices]
-        .sort((a, b) => a.slug.localeCompare(b.slug))
+        .sort((a, b) => compareCodeUnits(a.slug, b.slug))
         .map((entry) => toMeta(entry)),
       unreadable: invalidPracticesRaw.map((raw): UnreadablePractice => {
         const slug = extractSlug(raw);

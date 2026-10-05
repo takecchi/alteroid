@@ -201,7 +201,6 @@ import type {
   MemoryDocKind,
   MemoryDocumentMeta,
   MemoryProtectionStatus,
-  RescueNotPushedReason,
   RescueRemovalReason,
   PendingApproval,
   Practice,
@@ -297,6 +296,7 @@ import {
   describeUnpushedWorkObservationSource,
   UNPUSHED_WORK_SHUTDOWN_OBSERVATION_NOT_ARRIVED_NOTE,
 } from './unpushed-work-observation-format.js';
+import { RESCUE_NOT_PUSHED_TEXT } from './workspace-swap-hints.js';
 
 /**
  * クローンの道具（インプロセス MCP）。
@@ -4020,18 +4020,6 @@ function describeUnpushedWorkObservation(manager: ManagerSummary): string | null
   if (rescue === null) return observation;
   return observation === null ? rescue : `${observation}\n${rescue}`;
 }
-
-/** 退避されなかった理由の言い方（`rescueNotPushedReasonSchema`）。 */
-const RESCUE_NOT_PUSHED_TEXT: Record<RescueNotPushedReason, string> = {
-  'nothing-tracked': '追跡済みの変更・未 push のコミットが無く送るものが無かった',
-  'secret-like': '鍵らしい文字列のため送らなかった',
-  'too-large': '差分が判定の上限を超えたため送らなかった',
-  'no-credential': '資格が無いので退避できなかった',
-  'no-remote': 'origin が無いので退避できなかった',
-  'push-failed': 'push に失敗した',
-  error: '退避 commit を作れなかった',
-  timeout: '期限で打ち切られた（次の周期でまた試す）',
-};
 
 const RESCUE_REMOVAL_REASON_TEXT: Record<RescueRemovalReason, string> = {
   landed: '内容が origin の枝に入っていた',

@@ -5,6 +5,7 @@ import {
   UnreadableScheduleError,
   schedulePhaseSchema,
   scheduledRequestSchema,
+  compareCodeUnits,
 } from '@alteroid/core';
 import type {
   SchedulePhase,
@@ -162,7 +163,7 @@ export class FsScheduleStore implements ScheduleStore {
   async list(): Promise<ScheduleList> {
     const { schedules, invalidSchedulesRaw } = await this.#read();
     return {
-      entries: [...schedules].sort((a, b) => a.kind.localeCompare(b.kind)),
+      entries: [...schedules].sort((a, b) => compareCodeUnits(a.kind, b.kind)),
       unreadable: invalidSchedulesRaw.map((raw): UnreadableSchedule => {
         const kind = extractKind(raw);
         const result = scheduledRequestSchema.safeParse(raw);

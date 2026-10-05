@@ -23,7 +23,7 @@ import type {
 import { and, asc, eq, sql } from 'drizzle-orm';
 
 import type { Db } from './db.js';
-import { stripNulls, toIso } from './db.js';
+import { byteOrder, stripNulls, toIso } from './db.js';
 import { practices, practiceVersions } from './schema.js';
 
 /**
@@ -127,7 +127,7 @@ export class PgPracticeStore implements PracticeStore {
         chars: charsExpr,
       })
       .from(practices)
-      .orderBy(asc(practices.slug));
+      .orderBy(asc(byteOrder(practices.slug)));
     const entries: PracticeMeta[] = [];
     const unreadable: UnreadablePractice[] = [];
     for (const row of rows) {

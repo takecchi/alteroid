@@ -21,7 +21,7 @@ import type {
 import { and, asc, eq, isNull, lt, or, sql } from 'drizzle-orm';
 
 import type { Db } from './db.js';
-import { stripNulls, toIso } from './db.js';
+import { byteOrder, stripNulls, toIso } from './db.js';
 import { memory } from './schema.js';
 
 /**
@@ -59,7 +59,7 @@ export class PgPersonaStore implements PersonaStore {
         createdAt: memory.createdAt,
       })
       .from(memory)
-      .orderBy(asc(memory.slug));
+      .orderBy(asc(byteOrder(memory.slug)));
     return rows.map((row) => stripContent(toDocument(row)));
   }
 
@@ -472,7 +472,7 @@ export class PgPersonaStore implements PersonaStore {
         createdAt: memory.createdAt,
       })
       .from(memory)
-      .orderBy(asc(memory.slug));
+      .orderBy(asc(byteOrder(memory.slug)));
     return rows.map(toDocument);
   }
 

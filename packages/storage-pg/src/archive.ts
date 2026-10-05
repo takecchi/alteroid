@@ -15,7 +15,7 @@ import {
 import { and, desc, eq, isNull, sql } from 'drizzle-orm';
 
 import type { Db } from './db.js';
-import { stripNulls, toIso, toNumber } from './db.js';
+import { byteOrder, stripNulls, toIso, toNumber } from './db.js';
 import { archive } from './schema.js';
 
 /**
@@ -292,7 +292,7 @@ export class PgTranscriptArchive implements TranscriptArchive {
       })
       .from(archive)
       .groupBy(archive.sessionId)
-      .orderBy(sql`sum(pg_column_size(${archive.body})) desc`, archive.sessionId);
+      .orderBy(sql`sum(pg_column_size(${archive.body})) desc`, byteOrder(archive.sessionId));
     return rows.map((row) => ({
       sessionId: row.sessionId,
       rows: row.rows,

@@ -14,7 +14,7 @@ import type {
 import { and, asc, eq, sql } from 'drizzle-orm';
 
 import type { Db } from './db.js';
-import { stripNulls } from './db.js';
+import { byteOrder, stripNulls } from './db.js';
 import { schedulePhases, schedules } from './schema.js';
 
 /**
@@ -101,7 +101,7 @@ export class PgScheduleStore implements ScheduleStore {
     const rows = await this.#db
       .select({ kind: schedules.kind, plan: schedules.plan })
       .from(schedules)
-      .orderBy(asc(schedules.kind));
+      .orderBy(asc(byteOrder(schedules.kind)));
     const entries: ScheduledRequest[] = [];
     const unreadable: UnreadableSchedule[] = [];
     for (const row of rows) {
