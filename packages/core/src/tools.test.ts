@@ -24458,3 +24458,57 @@ describe('クローンの記憶の全文書き直しは読んだ版を前提に�
     expect((await h.stores.persona.read('src'))?.content).toContain('人間が直した節');
   });
 });
+
+/**
+ * Issue #2881: クローンの文書ごと消す口 `memory_delete` も、読んだ版を前提にする
+ * （人間の `DELETE /memory/:slug` と同じ穴。クローンには移行の事情が無いので必須）。
+ */
+describe('クローンの記憶の削除は読んだ版を前提にする（#2881）', () => {
+  const versionOf = (readResult: string): string => {
+    const m = /base_version[=:：]\s*([0-9a-f]{64})/.exec(readResult);
+    if (m === null) throw new Error(`memory_read の応答に版が無い: ${readResult}`);
+    return m[1]!;
+  };
+
+  it('読んだ後に人間が直した記憶を、版付きの memory_delete は消さずに「変わった」と返す（再現）', async () => {
+    const h = harness();
+    await h.stores.persona.write('ops', '# 運用\n\n元の内容\n');
+    const read = await h.call('memory_read', { slug: 'ops' });
+    await h.stores.persona.write('ops', '# 運用\n\n人間が直した内容\n');
+
+    const result = await h.call('memory_delete', {
+      slug: 'ops',
+      summary: '整理',
+      base_version: versionOf(read),
+    });
+
+    expect((await h.stores.persona.read('ops'))?.content).toContain('人間が直した内容');
+    expect(result).toContain('その間に変わった');
+    expect(result).toContain('何も消していない');
+    expect(result).toContain('memory_read');
+    expect(await h.stores.journal.list({ types: ['memory_update'] })).toHaveLength(0);
+  });
+
+  it('版を持たない memory_delete は、消さずに memory_read を促す（何も消していない）', async () => {
+    const h = harness();
+    await h.stores.persona.write('ops', '# 運用\n\n内容\n');
+    const result = await h.call('memory_delete', { slug: 'ops', summary: '整理' });
+    expect(await h.stores.persona.read('ops')).not.toBeNull();
+    expect(result).toContain('base_version');
+    expect(result).toContain('memory_read');
+    expect(result).toContain('何も消していない');
+  });
+
+  it('版が合えば消せる', async () => {
+    const h = harness();
+    await h.stores.persona.write('ops', '# 運用\n\n内容\n');
+    const read = await h.call('memory_read', { slug: 'ops' });
+    const result = await h.call('memory_delete', {
+      slug: 'ops',
+      summary: '整理',
+      base_version: versionOf(read),
+    });
+    expect(result).toContain('消した');
+    expect(await h.stores.persona.read('ops')).toBeNull();
+  });
+});
