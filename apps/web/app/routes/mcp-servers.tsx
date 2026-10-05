@@ -116,8 +116,8 @@ function McpServersView({ state }: { state: McpServersState }) {
       {!empty && (
         <div className="flex flex-col gap-2">
           <p className="text-[11px] break-words text-warn">
-            ⚠ 環境変数・ヘッダ・引数（env / headers /
-            args）には鍵が丸ごと入っていることがある。表示するのは、周りに 見られない場所で。
+            ⚠ 環境変数・ヘッダ・引数
+            には鍵が丸ごと入っていることがある。表示するのは、周りに見られない場所で。
           </p>
           <div>
             <Button size="sm" onClick={() => setShown((value) => !value)}>
@@ -153,9 +153,9 @@ function EntrySummary({ name, entry }: { name: string; entry: McpServerEntry | u
   const args = 'args' in entry ? (entry.args ?? []) : [];
   const keys =
     'headers' in entry
-      ? { label: 'headers', names: Object.keys(entry.headers ?? {}).sort() }
+      ? { label: 'ヘッダ', names: Object.keys(entry.headers ?? {}).sort() }
       : 'env' in entry
-        ? { label: 'env', names: Object.keys(entry.env ?? {}).sort() }
+        ? { label: '環境変数', names: Object.keys(entry.env ?? {}).sort() }
         : { label: '', names: [] };
 
   return (
@@ -166,7 +166,7 @@ function EntrySummary({ name, entry }: { name: string; entry: McpServerEntry | u
       </div>
       <span className="font-mono break-all text-muted-foreground">{where}</span>
       {args.length > 0 && (
-        <span className="text-muted-foreground">{`引数（args）: ${String(args.length)} 個（値は伏せた）`}</span>
+        <span className="text-muted-foreground">{`引数: ${String(args.length)} 個（値は伏せた）`}</span>
       )}
       {keys.names.length > 0 && (
         <span className="font-mono break-all text-muted-foreground">{`${keys.label}: ${keys.names.join(', ')}`}</span>
@@ -367,7 +367,7 @@ function UpdateReport({ before, update }: { before: string[]; update: McpServers
       <p className="font-medium text-ok">
         {cleared
           ? 'MCP 連携の登録を外した。'
-          : `MCP 連携の登録を差し替えた（sha256 ${update.sha256 ?? '?'}）。`}
+          : `MCP 連携の登録を差し替えた（確認用の値 ${update.sha256 ?? '?'}）。`}
       </p>
       {added.length > 0 && <p className="break-words">足した: {added.join(', ')}</p>}
       {removed.length > 0 && <p className="break-words">外した: {removed.join(', ')}</p>}
@@ -397,7 +397,7 @@ function UpdateReport({ before, update }: { before: string[]; update: McpServers
                 ）
               </span>
             ) : (
-              <span className="text-ok">届いた（sha256 {runner.mcpServers.sha256}）</span>
+              <span className="text-ok">届いた（確認用の値 {runner.mcpServers.sha256}）</span>
             )}
           </li>
         ))}
