@@ -32,3 +32,4 @@ export * from './tokens-links.js';
 export * from './topology-scene.js';
 export * from './types.js';
 export * from './usage-links.js';
+export * from './usage-view.js';

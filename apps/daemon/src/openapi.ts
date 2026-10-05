@@ -134,13 +134,28 @@ export const healthResponseSchema = z.object({
    * 本人確認する（PID の再利用検知としても同じ強さがある）。
    */
   operator: z.boolean(),
-  /** 記憶の置き場（ローカルのパス / PostgreSQL）。接続情報は含めない。 */
-  storage: z.string(),
   /** 認証の状態。CLI がログインの要否と手段を知るために読む。 */
   auth: z.object({
     enabled: z.boolean(),
     providers: z.array(z.object({ id: z.string(), label: z.string(), kind: z.string() })),
   }),
+});
+
+// ---------------------------------------------------------------------------
+// /status（認証の後ろの、デーモン自身の説明）
+// ---------------------------------------------------------------------------
+
+/**
+ * `GET /status` の応答。**`/health` から外した、外へ見せたくない項目の置き場**（#2869）。
+ *
+ * `storage` は記憶の置き場の1行説明で、PostgreSQL なら `host:port/db`、ファイルなら
+ * 記憶ディレクトリの絶対パスになる。接続情報（パスワード等）は含めない。
+ * 無認証の `/health` に置くと、公開の構成で内部のホスト名・DB 名・ホームのパスが
+ * ログインしていない相手に読める。
+ */
+export const statusResponseSchema = z.object({
+  /** 記憶の置き場（ローカルのパス / PostgreSQL）。接続情報は含めない。 */
+  storage: z.string(),
 });
 
 // ---------------------------------------------------------------------------

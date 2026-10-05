@@ -9,8 +9,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { makeTempDirSync } from '../../../vitest.tmpdir.js';
 
+import { BASH_GUARD_ENV } from './bash-guard-mode.js';
 import { createRunnerHost, type RunnerHost } from './runner.js';
 import { runnerEventSchema, type RunnerEvent } from './runner-protocol.js';
+
+/**
+ * この試験が固定するのは、Bash の門を `deny`（止める）にした設定の挙動である（`ALTEROID_BASH_GUARD=deny`）。
+ * 既定（`ask`）の挙動は `runner-bash-guard-ask.test.ts` が固定する（issue #2884）。
+ */
+const DENY_ENV = { [BASH_GUARD_ENV]: 'deny' };
 
 /**
  * issue #1105 P1 — 分類器（auto mode classifier）に拒否された道具の呼び出しへ、
@@ -159,7 +166,11 @@ afterEach(async () => {
   await host?.shutdown().catch(() => undefined);
 });
 
-function setup(): { host: RunnerHost; events: RunnerEvent[]; started: Started[] } {
+function setup(env: NodeJS.ProcessEnv = DENY_ENV): {
+  host: RunnerHost;
+  events: RunnerEvent[];
+  started: Started[];
+} {
   const events: RunnerEvent[] = [];
   const { fn, started } = fakeRunnerSdk();
   host = createRunnerHost({
@@ -167,17 +178,17 @@ function setup(): { host: RunnerHost; events: RunnerEvent[]; started: Started[] 
     workspacePath: dir,
     emit: (event) => events.push(event),
     queryFn: fn,
-    env: {},
+    env,
   });
   return { host, events, started };
 }
 
-async function startSession(): Promise<{
+async function startSession(env: NodeJS.ProcessEnv = DENY_ENV): Promise<{
   started: Started;
   events: RunnerEvent[];
   host: RunnerHost;
 }> {
-  const s = setup();
+  const s = setup(env);
   await s.host.start({ managerId: 'mgr-1', request: '走る', cwd: dir });
   const started = s.started[0];
   if (started === undefined) throw new Error('セッションが開いていない');
@@ -511,7 +522,7 @@ describe('畳んで解いた確認は取り下げとして残し、クローン�
   });
 });
 
-describe('bash-wait-guard の deny が1回だけの許可より先に効く（issue #1105 P1）', () => {
+describe('bash-wait-guard の deny が1回だけの許可より先に効く（issue #1105 P1。`ALTEROID_BASH_GUARD=deny` の設定）', () => {
   it('無限に待つだけの Bash は、1回だけの許可が出ていても弾く', async () => {
     const { started, events, host: h } = await startSession();
     const waitingCommand =
@@ -545,6 +556,36 @@ describe('bash-wait-guard の deny が1回だけの許可より先に効く（is
 
     // **1回だけの許可を消費した形跡（「上書きした」の note）が無い。**
     expect(noteEvents(events).some((n) => n.text.includes('上書きした'))).toBe(false);
+  });
+});
+
+describe('bash-wait-guard の確認（ask、既定）は、クローンの1回だけの許可が開ける（issue #2884）', () => {
+  it('1回だけの許可が出ていれば、同じ入力の撃ち直しは確認に上げず allow で通す。許可は1回で使い切る', async () => {
+    const { started, host: h } = await startSession({});
+    const waitingCommand = 'tail -f /tmp/run-2884.log';
+
+    const denialPromise = firePermissionDenied(started.options, {
+      hook_event_name: 'PermissionDenied',
+      tool_name: 'Bash',
+      tool_input: { command: waitingCommand },
+      tool_use_id: 'tu-ask-1',
+      reason: '分類器が拒否した（テスト）',
+    });
+    await tick();
+    await h.answer('mgr-1', { requestId: 'tu-ask-1', decision: 'allow', message: '見張ってよい' });
+    await denialPromise;
+
+    const fire = () =>
+      firePreToolUse(started.options, {
+        hook_event_name: 'PreToolUse',
+        tool_name: 'Bash',
+        tool_input: { command: waitingCommand },
+        tool_use_id: 'tu-ask-1-retry',
+      }) as Promise<{ hookSpecificOutput?: Record<string, unknown> }>;
+
+    expect((await fire()).hookSpecificOutput?.permissionDecision).toBe('allow');
+    // 使い切った後は、また確認に上がる（門が黙って開きっぱなしにならない）。
+    expect((await fire()).hookSpecificOutput?.permissionDecision).toBe('ask');
   });
 });
 

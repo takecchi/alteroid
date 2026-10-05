@@ -67,6 +67,12 @@ export interface AgentPermissionRequest {
   readonly kind: 'question' | 'permission';
   readonly toolName: string;
   readonly input: Record<string, unknown>;
+  /**
+   * なぜ確認に上がったか（provider が持っていれば）。Claude では `canUseTool` の
+   * `decisionReason`——`PreToolUse` の `ask`（Bash の門、issue #2884）の理由はここに載る。
+   * 確認を受けるクローンが、操作の中身だけでなく**止まった理由と代替**を読めるようにする。
+   */
+  readonly reason?: string;
   /** provider 側が要求を取り下げたとき（中断）に abort される。 */
   readonly signal: AbortSignal;
 }

@@ -109,7 +109,7 @@
         "operationId": "getHealth",
         "tags": ["system"],
         "summary": "死活監視と本人確認",
-        "description": "デーモンが応答しているかと、その pid・記憶の置き場・認証の状態を返す。`Authorization: Bearer <state/daemon.json の token>` を添えると `operator` が true になり、CLI はこれで「自分が起こしたデーモンか」を確かめる（PID は信用しない）。**トークンそのものは返さない** — この値は許可を付与できる資格そのものなので、無認証で読める応答には置けない。",
+        "description": "デーモンが応答しているかと、その pid・認証の状態を返す。**記憶の置き場は返さない**（無認証で読める応答に、内部のホスト名・DB 名・ホームのパスを置かない。#2869）。認証の要る `GET /status` が返す。`Authorization: Bearer <state/daemon.json の token>` を添えると `operator` が true になり、CLI はこれで「自分が起こしたデーモンか」を確かめる（PID は信用しない）。**トークンそのものは返さない** — この値は許可を付与できる資格そのものなので、無認証で読める応答には置けない。",
         "security": [],
         "responses": {
           "200": {
@@ -130,9 +130,6 @@
                     },
                     "operator": {
                       "type": "boolean"
-                    },
-                    "storage": {
-                      "type": "string"
                     },
                     "auth": {
                       "type": "object",
@@ -162,7 +159,49 @@
                       "required": ["enabled", "providers"]
                     }
                   },
-                  "required": ["ok", "pid", "operator", "storage", "auth"]
+                  "required": ["ok", "pid", "operator", "auth"]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/status": {
+      "get": {
+        "operationId": "getStatus",
+        "tags": ["system"],
+        "summary": "デーモン自身の説明（記憶の置き場。資格が要る）",
+        "description": "記憶の置き場（PostgreSQL なら `host:port/db`、ファイルなら記憶ディレクトリのパス）を返す。接続情報（パスワード等）は含めない。無認証の `GET /health` は置き場を返さないので、置き場を知りたい呼び出し元はログインの後ろのここから取る。",
+        "responses": {
+          "200": {
+            "description": "認証を通った相手への説明。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "storage": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["storage"]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "資格が無い。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
                 }
               }
             }
