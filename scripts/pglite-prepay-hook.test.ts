@@ -113,12 +113,27 @@ const HAS_PREPAY = /(?<![.\w])(?:beforeAll|beforeEach)\(/;
 /** 理由（全角・半角どちらの括弧でも、中身が空白だけでないこと）が要る。 */
 const OPT_OUT = /^[ \t]*\/\/[ \t]*pglite-prepay:[ \t]*not-needed[（(][ \t]*[^\s）)][^）)]*[）)]/m;
 
+/**
+ * **packages/storage-pg は `beforeEach` を前払いと数えない**（#3034）。`beforeEach` が払うのは
+ * hookTimeout（既定 10000ms）の中で、混んだ器では最初の1回が 12〜16 秒かかって落ちた。
+ * 前払いと数えるのは `beforeAll(` か、`test-db.test-support.js` の import（その補助が
+ * ファイル先頭の `beforeAll` で雛形を前払いする。下の「補助が前払いを持つ」が縛る）。
+ */
+const STORAGE_PG_TEST = /^packages\/storage-pg\/src\//;
+const HAS_BEFORE_ALL = /(?<![.\w])beforeAll\(/;
+const IMPORTS_PREPAYING_SUPPORT = /from\s+'\.\/test-db\.test-support\.js'/;
+
 type Verdict = 'uses-with-prepay' | 'uses-without-prepay' | 'opted-out' | 'no-use';
 
-function judgePglitePrepay(src: string): Verdict {
+function judgePglitePrepay(src: string, file = ''): Verdict {
   const code = stripCommentsAndStrings(src);
   if (!USES_TEMPLATE.test(code)) return 'no-use';
   if (OPT_OUT.test(src)) return 'opted-out';
+  if (STORAGE_PG_TEST.test(file)) {
+    return HAS_BEFORE_ALL.test(code) || IMPORTS_PREPAYING_SUPPORT.test(src)
+      ? 'uses-with-prepay'
+      : 'uses-without-prepay';
+  }
   return HAS_PREPAY.test(code) ? 'uses-with-prepay' : 'uses-without-prepay';
 }
 
@@ -186,11 +201,59 @@ describe('judgePglitePrepay（判定そのもの。合成した文字列で測�
   });
 });
 
+describe('storage-pg の判定（beforeEach だけでは前払いと数えない。#3034）', () => {
+  const FILE = 'packages/storage-pg/src/x.test.ts';
+
+  it('beforeEach だけで createMigratedTestDb を使うファイルは落とす（他のパッケージは従来どおり通す）', () => {
+    const src = `beforeEach(async () => { await createMigratedTestDb(); });`;
+    expect(judgePglitePrepay(src, FILE)).toBe('uses-without-prepay');
+    expect(judgePglitePrepay(src, 'apps/daemon/src/x.test.ts')).toBe('uses-with-prepay');
+  });
+
+  it('beforeAll か、前払いを持つ補助の import があれば通る', () => {
+    expect(
+      judgePglitePrepay(`beforeAll(async () => {});\nawait createMigratedTestDb();`, FILE),
+    ).toBe('uses-with-prepay');
+    expect(
+      judgePglitePrepay(
+        `import { createMigratedTestDb } from './test-db.test-support.js';\nbeforeEach(async () => { await createMigratedTestDb(); });`,
+        FILE,
+      ),
+    ).toBe('uses-with-prepay');
+  });
+});
+
+describe('補助が前払いを持つ（packages/storage-pg/src/test-db.test-support.ts。#3034）', () => {
+  const code = stripCommentsAndStrings(
+    readFileSync(path.join(ROOT, 'packages/storage-pg/src/test-db.test-support.ts'), 'utf8'),
+  );
+
+  it('ファイル先頭（行頭）の beforeAll が、雛形を作る（PGlite は migratedTemplate、本物は ensureTemplate）', () => {
+    const match = /^beforeAll\(async \(\) => \{([\s\S]*?)^\}, ([\w]+)\);/m.exec(code);
+    expect(
+      match,
+      'test-db.test-support.ts に行頭の beforeAll(async () => {...}, <枠>) が無い',
+    ).not.toBeNull();
+    expect(match![1]).toMatch(/migratedTemplate\(\)/);
+    expect(match![1]).toMatch(/ensureTemplate\(/);
+  });
+
+  it('枠は hookTimeout の既定（10000ms）より大きい', () => {
+    const src = readFileSync(
+      path.join(ROOT, 'packages/storage-pg/src/test-db.test-support.ts'),
+      'utf8',
+    );
+    const m = /TEMPLATE_PREPAY_TIMEOUT_MS = ([\d_]+);/.exec(src);
+    expect(m).not.toBeNull();
+    expect(Number(m![1]!.replaceAll('_', ''))).toBeGreaterThanOrEqual(30_000);
+  });
+});
+
 describe('実際のテストファイルの走査', () => {
   const files = collectRepoFiles(ROOT, EXCLUDE_DIRS).filter((f) => TARGET.test(f));
   const verdicts = files.map((file) => ({
     file,
-    verdict: judgePglitePrepay(readFileSync(path.join(ROOT, file), 'utf8')),
+    verdict: judgePglitePrepay(readFileSync(path.join(ROOT, file), 'utf8'), file),
   }));
   const users = verdicts.filter((v) => v.verdict !== 'no-use');
 

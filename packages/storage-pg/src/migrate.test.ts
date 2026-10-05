@@ -1,3 +1,4 @@
+// pglite-prepay: not-needed（migrate そのものを測るので、各テストが冷えた new PGlite() から全 migrate を自分で流す。雛形は共有できず、前払いで消せる固定費が無い。#3034）
 import { ZERO_USAGE } from '@alteroid/core';
 import { PGlite } from '@electric-sql/pglite';
 import { eq, isNull, sql } from 'drizzle-orm';

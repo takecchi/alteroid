@@ -6,10 +6,11 @@ import { drizzle as drizzlePg } from 'drizzle-orm/node-postgres';
 import { drizzle as drizzlePglite } from 'drizzle-orm/pglite';
 import type { Logger } from 'drizzle-orm/logger';
 import pg from 'pg';
+import { beforeAll } from 'vitest';
 
 import type { Db } from './db.js';
 import { migrate } from './migrate.js';
-import { createMigratedPglite } from './pglite-template.test-support.js';
+import { createMigratedPglite, migratedTemplate } from './pglite-template.test-support.js';
 
 /**
  * テスト用の補助: 「空の、migrate 済みの、自分専用の DB」を返す。**PGlite か本物の
@@ -201,6 +202,33 @@ function pgliteHandle(client: PGlite): TestDbHandle {
     withLogger: (logger) => drizzlePglite(client, { logger }),
   };
 }
+
+/**
+ * **雛形の前払い（#3034）。この補助を import したテストファイルすべてに、ファイル先頭の
+ * `beforeAll` として掛かる**（import した時点でそのファイルの suite へ登録される）。
+ *
+ * **なぜここに置くか。** 雛形（PGlite の WASM 起動 + 全 migrate。本物の PostgreSQL では雛形
+ * DB の作成）はファイルごとに最初の1回だけ作る。前払いが無いと、その1回を最初のテストの
+ * `beforeEach`（hookTimeout 既定 10000ms）が払う。混んだ器では `usage.test.ts` 16.5 秒、
+ * `usage-unmetered.test.ts` 12.4 秒、`index.auth.test.ts` の最初の `beforeEach` 4.6 秒に
+ * なり、上限を越えた。`scripts/pglite-prepay-hook.test.ts` は `beforeEach` があれば前払いと
+ * 数えていたため、約50本が前払い無しのまま通っていた。**ファイルごとに `beforeAll` を
+ * 書く形にしない**のは、忘れが再発する形だから（この補助を import すれば自動で掛かる。
+ * 静的な縛りは同じ scripts のテストが持つ）。
+ *
+ * 枠は 60_000ms（hookTimeout の外。ここで時間切れになるなら器の側が尋常でない）。
+ */
+export const TEMPLATE_PREPAY_TIMEOUT_MS = 60_000;
+
+beforeAll(async () => {
+  const url = realPostgresUrl();
+  if (url !== undefined) {
+    templateName ??= ensureTemplate(url);
+    await templateName;
+    return;
+  }
+  await migratedTemplate();
+}, TEMPLATE_PREPAY_TIMEOUT_MS);
 
 /**
  * 空の、migrate 済みの、自分専用の DB を返す。呼び手が `client.close()` する。
