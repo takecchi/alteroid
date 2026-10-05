@@ -566,7 +566,7 @@ packages/ui          Web UI の見た目の部品（shadcn の部品・汎用の
 - **作業者（サブエージェント）の `Bash` でも確認は `canUseTool` に届く。** 本物の本体で確かめてあり、歯は `real-cli-pre-tool-use-ask.test.ts`（本体の更新で挙動が変われば赤くなる）
 - **設定で開け閉めできる。** `ALTEROID_BASH_GUARD` = `ask`（既定）/ `deny`（確認に上げずに止める）/ `off`（門を掛けない）。綴り違いは起動時に落とす（`ALTEROID_MEMORY_GUARD` と同じ作法）。これは能力の削減ではなく実行環境の設定である（north_star 禁止2「方針は設定で開けられなければならない」）。門の判定そのものが例外で終わったときも、既定では確認に倒れる（上がらずに止めない）
 - **本番デプロイの起動（`release-prod`）も確認に上げる。** `gh workflow run … release-prod…` と `gh api …/workflows/…release-prod…/dispatches` は、マネージャー・作業者の `Bash` で `ask` になる（`bash-release-prod-guard.ts`）。クローンが許可すれば通り、断れば止まる。`ALTEROID_BASH_GUARD=off` でもこれだけは確認に残し（取り返しがつきにくい操作を黙って通す設定にしない）、`deny` の設定では止める。以前は `docker/gh`（`gh` のシム）が uid（`ALTEROID_RUNNER_CHILD_UID`）で見分けて exit 1 にしていたが、確認に上がらずクローンの許可でも通らなかったので外した（#2884、#865 の決定の置き換え）。シムは鍵の読み場所を挟む役目だけを残している
-  - ⚠️ **これは守りではなく見分けである。** 文字列しか見ないので、スクリプトファイルの中・変数で組んだ `gh`・`eval`・workflow の数値 ID 指定・`curl` での REST 呼び出し・`git push origin main:release/prod`・`gh run rerun` は拾えない。旧シムは `gh` を通る限りこれらの一部も止めていたので、捕まえる範囲は狭くなった。**硬い境界は `release/prod` の ruleset（誰が push・起動できるか）側に置く判断で、未設定である**（別 Issue。設定するかはオーナー判断）
+  - ⚠️ **これは守りではなく見分けである。** 文字列しか見ないので、スクリプトファイルの中・変数で組んだ `gh`・`eval`・workflow の数値 ID 指定・`curl` での REST 呼び出し・`git push origin main:release/prod`・`gh run rerun` は拾えない。旧シムは `gh` を通る限りこれらの一部も止めていたので、捕まえる範囲は狭くなった。**硬い境界は `release/prod` の ruleset 側にしか置けないが、いまの ruleset は削除と force push を止めるだけで、早送りの直 push は止めていない**（#889 の受容の決定。再検討は #2953。設定するかはオーナー判断）
 - **この門に載せないもの。** 特定のリポジトリの運用規約（`gh pr merge` の形など）は、製品の門ではなく、そのリポジトリの指示（`AGENTS.md`・依頼文）で表す
 - **Codex の層には、この門は掛からない。** Codex の駆動役は `PreToolUse` に相当するフックを呼ばない（provider の能力の欠落である。`provider-gaps.ts` の欠落の一覧には、この門を表す能力がまだ無く、日報・`self_status` には出ない）
 

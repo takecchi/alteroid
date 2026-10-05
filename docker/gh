@@ -5,7 +5,7 @@
 # **以前は、マネージャー・作業者の uid からの release-prod（本番デプロイ）の起動を exit 1 で止める門が
 # ここに在った（#865）。外した（#2884）。** 止めるだけで確認に上がらず、クローンが許可しても通らなかった。
 # いまは Bash の `PreToolUse`（`packages/core/src/bash-release-prod-guard.ts` と `runner.ts` の
-# `#onPreToolUse`）が確認（ask）に上げる。硬い境界は `release/prod` の ruleset 側にある（別 Issue）。
+# `#onPreToolUse`）が確認（ask）に上げる。硬い境界は `release/prod` の ruleset 側にしか置けない（現状の扱いは #889 と #2953）。
 #
 # 鍵は毎回ファイルから読む（走行中の差し替えを届かせるため）。
 # **扱う鍵ぜんぶを読む。** 片方だけ読むと「回せる」と言いながら回らない鍵ができる。

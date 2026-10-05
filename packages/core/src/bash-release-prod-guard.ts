@@ -28,7 +28,7 @@ import { stripDataHeredocsForWaitForms } from './bash-wait-guard.js';
  * - workflow を数値 ID で指定する形
  * - `curl` で REST を直接叩く、`git push origin main:release/prod`、`gh run rerun <過去の run-id>`
  *
- * 硬い境界は `release/prod` の ruleset（誰が push・起動できるか）側に置く判断で、未設定である（別 Issue）。
+ * 硬い境界は `release/prod` の ruleset 側にしか置けないが、いまの ruleset は削除と force push を止めるだけで、早送りの直 push は止めていない（#889 の受容の決定。再検討は #2953）。
  */
 
 export type ReleaseProdVerdict =
