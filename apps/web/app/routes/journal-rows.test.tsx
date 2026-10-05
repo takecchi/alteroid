@@ -108,7 +108,9 @@ describe('日誌の1行: 閉じているとき', () => {
       root.querySelectorAll('button, a[href], input, select, textarea, [tabindex]'),
     ).toHaveLength(1);
     // 種別の札の文字は行に1回だけ。
-    expect(within(root).getAllByText('decision')).toHaveLength(1);
+    expect(within(root).getAllByText('判断')).toHaveLength(1);
+    // 識別子は札の本文には出さず、補足（title）に回す。
+    expect(within(root).getByText('判断').getAttribute('title')).toBe('decision');
     // 閉じている間は生の中身を出さない。
     expect(root.querySelector('pre')).toBeNull();
   });
@@ -127,7 +129,9 @@ describe('日誌の1行: 開いたとき', () => {
     const pre = root.querySelector('pre');
     expect(pre?.textContent).toBe(JSON.stringify(DECISION, null, 2));
     // 開いても、種別の文字は行に1回だけ（`getByText` が多重に一致しない）。
-    expect(within(root).getAllByText('decision')).toHaveLength(1);
+    expect(within(root).getAllByText('判断')).toHaveLength(1);
+    // 識別子は札の本文には出さず、補足（title）に回す。
+    expect(within(root).getByText('判断').getAttribute('title')).toBe('decision');
     // この画面に無かった操作（生の中身を写すボタン）を足さない。
     expect(screen.queryByText('写す')).toBeNull();
     // 開いた行の停止点は、開閉のボタンとリンクだけ。

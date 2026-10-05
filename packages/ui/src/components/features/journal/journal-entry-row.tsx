@@ -34,6 +34,7 @@ export function JournalEntryRow({
   relativeLabel,
   time,
   type,
+  typeLabel,
   tone = 'neutral',
   summary,
   links,
@@ -51,6 +52,11 @@ export function JournalEntryRow({
   /** 右端に差し込むもの。渡すと `Timestamp`（相対の表示と JST/UTC の tooltip）の代わりに出る。 */
   time?: ReactNode;
   type: string;
+  /**
+   * 札に出す名前（日本語名など）。省略すると `type` をそのまま出す。渡すと識別子（`type`）は
+   * 札の `title`（補足）に回る。開いた先の帯（`rawBar`）の名前は `type` のまま。
+   */
+  typeLabel?: string;
   tone?: JournalEntryTone;
   summary: string;
   links?: ReactNode;
@@ -93,7 +99,9 @@ export function JournalEntryRow({
           <span className="w-24 shrink-0 font-mono text-[11px] text-muted-foreground">
             {atLabel}
           </span>
-          <Badge tone={tone}>{type}</Badge>
+          <Badge tone={tone} title={typeLabel === undefined ? undefined : type}>
+            {typeLabel ?? type}
+          </Badge>
         </button>
         <span className="ml-auto shrink-0 text-[11px] text-muted-foreground sm:order-3 sm:ml-0">
           {time !== undefined ? (

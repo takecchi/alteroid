@@ -6,7 +6,14 @@
 import { JOURNAL_ENTRY_TYPES } from '@alteroid/core';
 import { describe, expect, it } from 'vitest';
 
-import { JOURNAL_PAGE, JOURNAL_TONE, JOURNAL_TYPES, SEARCH_SCOPE_NOTE } from './journal-display.js';
+import {
+  JOURNAL_PAGE,
+  JOURNAL_TONE,
+  JOURNAL_TYPES,
+  journalTypeLabel,
+  SEARCH_SCOPE_NOTE,
+  SEARCH_SCOPE_NOTE_JA,
+} from './journal-display.js';
 
 const OLD_TONE_IN_ORDER = [
   ['exchange', 'neutral'],
@@ -46,5 +53,26 @@ describe('日誌の表示の定数', () => {
 
   it('頁の大きさは移す前と同じ 100', () => {
     expect(JOURNAL_PAGE).toBe(100);
+  });
+});
+
+describe('種別の日本語名（issue #2806）', () => {
+  it('全種別に名前があり、識別子のままの名前は無い', () => {
+    for (const type of JOURNAL_TYPES) {
+      const label = journalTypeLabel(type);
+      expect(label).not.toBe(type);
+      expect(label).not.toMatch(/^[a-z_]+$/);
+    }
+  });
+
+  it('知らない種別は識別子のまま返す（落とさない）', () => {
+    expect(journalTypeLabel('no-such-type')).toBe('no-such-type');
+  });
+
+  it('探す対象外の断りは日本語名で言い、識別子を含まない', () => {
+    expect(SEARCH_SCOPE_NOTE_JA).toBe(
+      '道具の入力・作業者の待機・ターンの消費・文脈の占有・受信箱の流量・GitHub の観測は探す対象に入っていない（そこにだけ書かれている語は当たらない）。',
+    );
+    expect(SEARCH_SCOPE_NOTE_JA).not.toMatch(/[a-z]+_[a-z]+/);
   });
 });
