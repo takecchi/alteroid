@@ -125,23 +125,24 @@ export default function Memory() {
                     key: document.slug,
                     href: `/memory/${document.slug}`,
                     current: document.slug === selectedSlug,
-                    children: (
+                    // 行全体をリンクにしない（#2808）。リンクは題名だけにして、名前・サイズ・日時は
+                    // 選択・コピーできる文字にする（`ListDetailItems` の `lead` / `extra`）。
+                    // 一覧の1行は Markdown 化の対象外（`components/markdown.tsx` の doc）
+                    lead: (
+                      <span
+                        className="mr-1.5 shrink-0 text-[10px] text-muted-foreground"
+                        title={kindHint(document.kind)}
+                      >
+                        {kindLabel(document.kind)}
+                      </span>
+                    ),
+                    children: document.title,
+                    extra: (
                       <>
-                        {/* 一覧の1行は Markdown 化の対象外（`components/markdown.tsx` の doc） */}
-                        <div className="flex items-baseline">
-                          <span
-                            className="mr-1.5 shrink-0 text-[10px] text-muted-foreground"
-                            title={kindHint(document.kind)}
-                          >
-                            {kindLabel(document.kind)}
-                          </span>
-                          <span className="min-w-0 flex-1 truncate">{document.title}</span>
-                        </div>
                         <p className="truncate font-mono text-[11px] text-muted-foreground">
                           {document.slug}
                         </p>
                         {document.description !== undefined && (
-                          // 一覧の1行は Markdown 化の対象外（`components/markdown.tsx` の doc）
                           <p className="line-clamp-2 break-words text-[11px] text-muted-foreground">
                             {freshnessMark(document.descriptionFreshness)}
                             {document.description}
