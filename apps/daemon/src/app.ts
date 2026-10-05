@@ -85,7 +85,6 @@ import {
   INBOX_EVENT_TYPE_ORDER,
   isAccountGranted,
   isDailyReport,
-  isDeclaredOwner,
   jobStatusSchema,
   journalEntrySchema,
   journalWindowCrossesHorizon,
@@ -2172,7 +2171,7 @@ export function createApp(deps: AppDeps) {
    *
    * **⚠️ 2026-09-17、この門から `PUT /credentials` と `POST /reset` が外れた**
    * （issue #1195）。外れた先は「無し」ではなく、下の `requireOwner`
-   * ——**一段弱いが `authenticate` よりは強い**門である。⟹ **ここに残っているのは
+   * ——（2026-10-05 以降は `authenticate` と同じ強さの素通しの門になった。下の `requireOwner`）。⟹ **ここに残っているのは
    * `/profile` の読み書き2本と、下の owner 宣言の口2本で、いずれも応答本文に鍵が
    * 丸ごと載るか実行環境そのものを差し替える口だからである**（2026-09-06 の
    * 同格化でも名指しで外された。逐語は `git show f285737 --format=%B -s`）。
@@ -2185,47 +2184,32 @@ export function createApp(deps: AppDeps) {
   });
 
   /**
-   * **宣言済み owner だけに絞る門。**（issue #1198。本来の形）
+   * **「持ち主」の門。ログインできる（許可済みの）アカウントは全員、持ち主として通す。**
    *
-   * 通すのは2つ —— ①実行環境の持ち主（状態ファイルの token を提示できる）
-   * ②**`ownerDeclaredAt` が入った、許可済みのアカウント**（`isDeclaredOwner`）。
+   * **⚠️ 2026-10-05、オーナー決定（#2862 のオーナー回答）で、宣言済み owner だけに
+   * 絞っていた門（issue #1198）を緩めた。** 回答の要点は「alteroid にログイン出来る
+   * のが持ち主という認識。環境変数や実行環境プロファイルなども全部許可してほしい」。
+   * ⟹ 許可済み（`access grant` 済み）のアカウントなら、`PUT /credentials`
+   * `POST /reset` `/profile` `/mcp-servers` を含め、この門を通る経路をすべて通す。
    *
-   * **⚠️ 2026-09-18、`requireOperatorOrDirectGrant`（issue #1195。`grantedBy ===
-   * 'operator'` による近似）をここで置き換えた。** 近似は「持ち主が端末から直に
-   * 許可した」という*別の事実*からの推測で、破れる条件を持っていた（issue #1198
-   * 本文）。**ここは推測をやめ、`ownerDeclaredAt` という独立の欄を見る** ——
-   * 立てられるのは operator トークンだけ（下の `POST /access/:accountId/owner`）
-   * なので、旗を持てる者は常にホストへ到達できる者に限られる。
+   * **この門は何も弾かない。** 弾く仕事は上の `authenticate` がする（未ログインは
+   * 401、許可の無いアカウントは 403。ここまで来た時点で principal は operator か
+   * 許可済みのアカウントである）。**`authenticate` は緩めていない。**
    *
-   * **なぜ `requireOperator` と分けるのか。** ブラウザは絶対に①になれない
-   * （①は「サーバ上のファイルを読めること」であって、秘密の提示ではない
-   * —— `auth.ts` の `isOperator`）。⟹ **Web UI にログインした人間は、それが箱の
-   * 持ち主本人であっても `requireOperator` を構造的に通れない。** 実際に人間が
-   * 環境変数の操作とリセットで弾かれた（#1195）。
+   * **なぜ配線から外さず、中身だけ素通しにしたのか。** 戻すのが1箇所で済む
+   * （下の本体を、`principal.kind === 'operator' || isDeclaredOwner(principal.account)`
+   * なら `next()`、でなければ 403 `'実行環境の持ち主として宣言されたアカウントだけが
+   * 操作できる'` に戻すだけ）。配線を外すと、戻すときに経路ごとに付け直す羽目になり、
+   * 付け忘れが静かに「許可済みなら誰でも」へ落ちる。経路の一覧を測る歯
+   * （`scripts/require-operator-routes.test.ts` の `EXPECTED_OWNER_ROUTES`）も、
+   * 配線を保つので変えずに済む。
    *
-   * **なぜ「許可されている」では足りないのか。** 正典が線を引いている —— 逐語は
-   * `grep -Fn -- '実行環境そのものを差し替える資格までは含めない' docs/architecture.md`。
-   * ⟹ 2026-09-06 の同格化（`/tokens` `/access/*`）をそのままこの門へ広げることは
-   * しない。**足したのは「単に許可された」より一段強い資格のほうである。**
-   *
-   * **403 の本文は `requireOperator` とは違える** ——「持ち主そのもの」と「持ち主
-   * として宣言されたアカウント」は別の状態であり、CLI の案内も別になる（`alteroid
-   * access owner <id>` を打てば直る、という導線が要るのはこちら側だけ）。
-   * `apps/cli/src/target.ts` の `forbiddenKindOf` が3種類目として区別する。
-   *
-   * **この門を通る経路の一覧を持つのは歯である。本数をここで数え直さないこと**
-   * —— 数え上げの持ち主は `scripts/require-operator-routes.test.ts` の
-   * `EXPECTED_OWNER_ROUTES` で、そこは配線と一覧の一致を測っている。
+   * **変えていないもの。** `requireOperator`（状態ファイルの token。持ち主の宣言の口
+   * `/access/:accountId/owner*`）は別の概念で、そのまま。宣言（`ownerDeclaredAt`）の
+   * 保存・`isDeclaredOwner` もそのまま残してある（いまは通す・通さないに効かない）。
+   * 正典は `docs/architecture.md`「デーモンの API に入る資格」。
    */
-  const requireOwner = createMiddleware<{ Variables: AuthVariables }>(async (c, next) => {
-    const principal = c.get('principal');
-    const allowed = principal.kind === 'operator' || isDeclaredOwner(principal.account);
-    if (!allowed) {
-      return c.json(
-        { error: '実行環境の持ち主として宣言されたアカウントだけが操作できる' as const },
-        403,
-      );
-    }
+  const requireOwner = createMiddleware<{ Variables: AuthVariables }>(async (_c, next) => {
     await next();
   });
 
@@ -6506,7 +6490,7 @@ export function createApp(deps: AppDeps) {
             content: { 'application/json': { schema: resolver(profileResponseSchema) } },
           },
           403: {
-            description: '実行環境の持ち主でも、持ち主として宣言されたアカウントでもない。',
+            description: '許可（`access grant`）の無いアカウント。',
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
         },
@@ -6558,7 +6542,7 @@ export function createApp(deps: AppDeps) {
             content: { 'application/json': { schema: resolver(profileErrorResponseSchema) } },
           },
           403: {
-            description: '実行環境の持ち主でも、持ち主として宣言されたアカウントでもない。',
+            description: '許可（`access grant`）の無いアカウント。',
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
         },
@@ -6620,7 +6604,7 @@ export function createApp(deps: AppDeps) {
             content: { 'application/json': { schema: resolver(profileErrorResponseSchema) } },
           },
           403: {
-            description: '実行環境の持ち主でも、持ち主として宣言されたアカウントでもない。',
+            description: '許可（`access grant`）の無いアカウント。',
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
         },
@@ -6674,7 +6658,7 @@ export function createApp(deps: AppDeps) {
             content: { 'application/json': { schema: resolver(profileErrorResponseSchema) } },
           },
           403: {
-            description: '実行環境の持ち主でも、持ち主として宣言されたアカウントでもない。',
+            description: '許可（`access grant`）の無いアカウント。',
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
           404: {
@@ -6722,8 +6706,8 @@ export function createApp(deps: AppDeps) {
      * `Options.mcpServers` で渡す（`packages/core/src/mcp-servers.ts` の doc）。
      * 置き場が器の外にある以上、人間が置く口がここに要る。
      *
-     * **宣言済み owner だけ**（`requireOwner`。`PUT /credentials` と同じ強さ）。
-     * 登録の `env` / `headers` には鍵が丸ごと入りうるので、`GET` も `PUT` と同じ
+     * **許可済みのアカウントなら通る**（`requireOwner`。2026-10-05 の #2862 の
+     * オーナー決定で、宣言済み owner だけから緩めた）。登録の `env` / `headers` には鍵が丸ごと入りうるので、`GET` も `PUT` と同じ
      * 門にする（読み側が緩ければ書き側を締めても意味が無い —— `/profile` と同じ
      * 理由）。
      *
@@ -6753,7 +6737,7 @@ export function createApp(deps: AppDeps) {
             content: { 'application/json': { schema: resolver(mcpServersResponseSchema) } },
           },
           403: {
-            description: '実行環境の持ち主として宣言されたアカウントではない。',
+            description: '許可（`access grant`）の無いアカウント。',
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
         },
@@ -6826,7 +6810,7 @@ export function createApp(deps: AppDeps) {
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
           403: {
-            description: '実行環境の持ち主として宣言されたアカウントではない。',
+            description: '許可（`access grant`）の無いアカウント。',
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
         },
@@ -7004,7 +6988,9 @@ export function createApp(deps: AppDeps) {
      * あちらは受け取って走っている runner へ降ろすだけ（器を作り直すと消える）。
      * ここは正本へ置くので、**器が入れ替わっても `hello` のときに降り直す。**
      *
-     * **宣言済み owner だけ**（`requireOwner`）。任意の名前で任意の値を、これから
+     * **許可済みのアカウントなら通る**（`requireOwner`。2026-10-05 の #2862 の
+     * オーナー決定で、宣言済み owner だけから緩めた）。以下の「宣言済み」は緩める前の
+     * 記述である。任意の名前で任意の値を、これから
      * 起こすマネージャーの環境へ永続的に置ける口であり、**`PATH` のような名前も
      * 置ける**——`access grant` を通っただけのアカウントに渡す強さではない。
      *
@@ -7020,10 +7006,9 @@ export function createApp(deps: AppDeps) {
      * ⟹ **意図した非対称である** —— ここの資格が漏れて起きるのは「今後の鍵が
      * 書き換わる」で、「いま在る鍵が流出する」ではない。
      *
-     * **⚠️ `POST /runners/credentials` の資格（`authenticate` だけ）はこの PR では
-     * 変えていない。** あちらの緩さは以前から在るもので、締めるかどうかは方針の
-     * 判断（人間の決定）である。ここで勝手に揃えると、いま通っている運用が黙って
-     * 止まる。
+     * **`POST /runners/credentials` の資格（`authenticate` だけ）とは、2026-10-05 の
+     * オーナー決定（#2862。許可済みのアカウントは全員持ち主）で食い違いが消えた。**
+     * どちらも許可済みなら通る。
      *
      * **能力を広げる口（issue #2123。teto の判断）。** マネージャーに鍵を降ろす
      * 口なので、`/access/:accountId/grant` と同じ扱い——**日誌を先に書き、
@@ -7062,9 +7047,7 @@ export function createApp(deps: AppDeps) {
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
           403: {
-            description:
-              '実行環境の持ち主として宣言されたアカウントではない（宣言していない' +
-              '許可済みアカウントも含む）。',
+            description: '許可（`access grant`）の無いアカウント。',
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
           503: {
@@ -8321,8 +8304,8 @@ export function createApp(deps: AppDeps) {
      * **資格は `authenticate` だけ（`requireOperator` は付けない）。**
      * `POST /commitments/:id/close` `DELETE /archive/:id` と同じ強さ——
      * これらも台帳・退避の中身を操作するが `requireOperator` を要求していない。
-     * `/profile` `/runners/credentials` のように鍵そのものを扱う口だけが
-     * その一段上の強さを持つ。
+     * `/profile` は鍵そのものを扱うが、2026-10-05 の #2862 のオーナー決定で
+     * 許可済みなら通る。`requireOperator` を持つのはいま owner 宣言の口だけである。
      */
     .post(
       '/inbox/remove',
@@ -8573,7 +8556,7 @@ export function createApp(deps: AppDeps) {
      *
      * **資格は `authenticate` だけ（`requireOperator` は付けない）。** 理由は
      * `/journal` `/managers` `/conversations` `/tokens` `/access/*` と同じ強さに
-     * してあることで、**`/profile`（`requireOwner`。持ち主と、持ち主として宣言されたアカウントだけ）**
+     * してあることで、**`/profile`（`requireOwner`。2026-10-05 以降は許可済みなら通る）**
      * とは違う扱いにしている。（`/tokens` `/access/*` は 2026-09-06 のオーナー
      * 決定——alteroid を使う許可を実行環境の持ち主と同格にする——より前は
      * `requireOperator` 側にいたが、いまはここと同じ側である。）この跡は本文を
@@ -9389,6 +9372,8 @@ export function createApp(deps: AppDeps) {
     /**
      * **実行環境の持ち主として宣言する。**（issue #1198。本来の形）
      *
+     * **注記: 宣言は資格の判断には使っていない（2026-10-05 オーナーの判断：ログインできる人＝持ち主。#2862）。仕組みは当面残してある（`requireOwner` は素通し）。**
+     *
      * **`requireOperator`。** `/access/grant` `/access/revoke` とは違い、ここは
      * 許可されたアカウントからは叩けない——**旗を立てられる者を常にホストへ到達
      * できる者へ限る**ことが、この機能の「伝播しない」という性質そのものである
@@ -9403,10 +9388,11 @@ export function createApp(deps: AppDeps) {
         tags: ['access'],
         summary: '実行環境の持ち主として宣言する',
         description:
+          '（宣言は資格の判断には使っていない。ログインできる人＝持ち主。#2862）' +
           '宣言できるのは実行環境の持ち主（operator トークン）だけ。対象は許可済み' +
           '（`access grant` 済み）のアカウントに限る——未許可なら 409。運ぶ情報は無い' +
-          '（`{}` を送る）。宣言済みのアカウントは `PUT /credentials` `POST /reset` を' +
-          '通る（`requireOwner`）。',
+          '（`{}` を送る）。許可済みのアカウントは宣言の有無にかかわらず ' +
+          '`PUT /credentials` `POST /reset` を通る（2026-10-05、#2862 のオーナー決定）。',
         requestBody: noBodyPostRequestBody(
           '**中身は読まないので `{}` を送ればよい。** 本文そのものではなく ' +
             '`content-type: application/json` が要る。',
@@ -9503,6 +9489,8 @@ export function createApp(deps: AppDeps) {
     /**
      * **実行環境の持ち主としての宣言を取り消す。**（issue #1198）
      *
+     * **注記: 宣言は資格の判断には使っていない（2026-10-05 オーナーの判断：ログインできる人＝持ち主。#2862）。仕組みは当面残してある。**
+     *
      * **`requireOperator`。** 取り消しは対象の許可状態を問わない
      * （`AuthStore.setAccountOwner` の doc）——行が在れば常に通る。
      */
@@ -9512,6 +9500,7 @@ export function createApp(deps: AppDeps) {
         tags: ['access'],
         summary: '実行環境の持ち主としての宣言を取り消す',
         description:
+          '（宣言は資格の判断には使っていない（2026-10-05 オーナーの判断：ログインできる人＝持ち主。#2862））' +
           '宣言していなくても 200（既に取り消し済みと同じ扱い）。運ぶ情報は無い' +
           '（`{}` を送る）。',
         requestBody: noBodyPostRequestBody(
@@ -9618,7 +9607,8 @@ export function createApp(deps: AppDeps) {
      * `TRUNCATE` を行った（2026-09-14）。ここはその「同条件」を alteroid
      * 自身の機能として持たせたもの。
      *
-     * **宣言済み owner だけ**（`requireOwner`。`PUT /credentials` と同じ強さ）
+     * **許可済みのアカウントなら通る**（`requireOwner`。2026-10-05 の #2862 の
+     * オーナー決定で、宣言済み owner だけから緩めた。以下の「宣言済み」は緩める前の記述）
      * ——`access grant` だけのアカウントに、記憶そのものを消せる資格までは渡さない。
      *
      * **⚠️ 2026-09-17、ここは `requireOperator` から一段緩めた**（issue #1195）。
@@ -9661,9 +9651,7 @@ export function createApp(deps: AppDeps) {
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
           403: {
-            description:
-              '実行環境の持ち主として宣言されたアカウントではない（宣言していない' +
-              '許可済みアカウントも含む）。',
+            description: '許可（`access grant`）の無いアカウント。',
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
         },

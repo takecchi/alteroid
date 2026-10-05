@@ -119,6 +119,56 @@ describe('alteroid memory set', () => {
   });
 });
 
+describe('alteroid memory show の版と remove --if-match（#2919）', () => {
+  it('show は版を stderr に1行出し、stdout は本文だけのまま（パイプを壊さない）', async () => {
+    const read = captureStdout();
+    const err = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    replies.push({
+      status: 200,
+      body: { document: { slug: 'values', content: '# 価値観\n' }, version: 'v-shown' },
+    });
+
+    await memoryShowCommand('values');
+
+    expect(read()).toBe('# 価値観\n');
+    const errText = err.mock.calls.map((c) => String(c[0])).join('');
+    expect(errText).toContain('v-shown');
+    expect(errText).toContain('--if-match v-shown');
+    expect(errText.trimEnd().split('\n')).toHaveLength(1);
+  });
+
+  it('show で読んだ後に別の書き手が書いたなら、remove --if-match <show の版> は消さずに失敗する（再現）', async () => {
+    const read = captureStdout();
+    // 先に GET して直前の版を取り直したりしない（渡された版だけで照合する）。
+    replies.push({
+      status: 409,
+      body: {
+        error: 'x',
+        current: { document: { slug: 'values', content: '新' }, version: 'v-now' },
+      },
+    });
+
+    const error = await memoryRemoveCommand('values', { ifMatch: 'v-shown' }).catch(
+      (e: unknown) => e,
+    );
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.method).toBe('DELETE');
+    expect(sent[0]?.url).toBe('http://127.0.0.1:4517/memory/values?ifMatch=v-shown');
+    expect(error).toBeInstanceOf(Error);
+    expect(String(error)).toContain('消しませんでした');
+    expect(read()).toContain('消していません: values');
+  });
+
+  it('remove --if-match で版が合えば消せる', async () => {
+    const read = captureStdout();
+    replies.push({ status: 200, body: { ok: true, slug: 'values' } });
+    await memoryRemoveCommand('values', { ifMatch: 'v-shown' });
+    expect(sent).toHaveLength(1);
+    expect(read()).toContain('消しました: values');
+  });
+});
+
 describe('alteroid memory remove', () => {
   it('読んだ版を ifMatch に付けて DELETE /memory/<slug> を打つ（#2881）', async () => {
     const read = captureStdout();

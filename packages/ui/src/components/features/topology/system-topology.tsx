@@ -260,7 +260,9 @@ function summarize({ clone, db, runners, managers }: TopologyScene): string {
       : `runner: ${runners.map((r) => `${r.label} ${STATUS[r.status].label}`).join('、')}`,
     ...managers.map((m) => {
       const ws = (m.workers ?? []).map((w) => `${w.label} ${STATUS[w.status].label}`).join('、');
-      return `マネージャー ${m.label}: ${STATUS[m.status].label}${ws ? `。作業者 ${ws}` : ''}`;
+      // 止まっている札は理由（利用枠の上限・返事待ち）を言う（クローンと同じ）。
+      const why = m.status === 'waiting' && m.task ? `（${m.task}）` : '';
+      return `マネージャー ${m.label}: ${STATUS[m.status].label}${why}${ws ? `。作業者 ${ws}` : ''}`;
     }),
   ];
   return parts.join('。');

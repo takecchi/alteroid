@@ -1,7 +1,7 @@
 import { createInterface } from 'node:readline/promises';
 import { stdin, stdout } from 'node:process';
 
-import { RESET_CONFIRM_GROUPS } from '@alteroid/core';
+import { RESET_CONFIRM_GROUPS } from '@alteroid/core/cli-light';
 
 import { describeAuthFailure, forbiddenKindOf, resolveTarget, type Target } from './target.js';
 import { redactError } from './redact.js';

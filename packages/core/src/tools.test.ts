@@ -43,7 +43,7 @@ import {
 } from './schema.js';
 import type { ScheduleStatus } from './schedule.js';
 import { CLONE_RUNTIME_ITEM_LABELS, describeCloneRuntime, type CloneRuntimeFacts } from './self.js';
-import { memoryVersion, UnreadableApprovalError } from './store.js';
+import { memoryVersion, practiceVersion, UnreadableApprovalError } from './store.js';
 import type { Stores } from './store.js';
 import {
   UnreadableActiveTokenError,
@@ -22929,7 +22929,7 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
       firstLine: ACT_COMPLETED,
       async run() {
         const stores = createMemoryStores();
-        await stores.practices.write({
+        const written = await stores.practices.write({
           slug: 'daily',
           kind: '日報',
           title: '日報のやり方',
@@ -22942,7 +22942,10 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
           memoryCause: () => 'clone',
           conversationId: () => undefined,
         });
-        return callExpectingError(tools, 'practice_remove', { slug: 'daily' });
+        return callExpectingError(tools, 'practice_remove', {
+          slug: 'daily',
+          base_version: practiceVersion(written),
+        });
       },
     },
     {

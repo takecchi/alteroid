@@ -290,7 +290,7 @@ probe が読むのは**アカウントの枠**（`five_hour` / `seven_day` / …
 - **起こし直すのは「世代が食い違う（`manager_list` の ⚠ と同じ `tokenGenerationMismatched`）・done・`attached`」の3つが揃い、かつ runner の `GET /managers` が返す `liveBackgroundTasks` が 0 本・確認待ちが無い・`sessionId` が在るときだけ。** 順序は 未 push の観測 → `runner.stop()`（runner が生ログの送り出しと未報告の flush を済ませて閉じる）→ 一覧から消えたことの確認 → 既存の `#resumeOnce`。貸し出しは握ったまま。確かめられなければ resume しない。
 - **残っていれば畳まず、旧セッションへも送らず `outcome: 'declined'` で断る。** detail が何が残っているかと取れる手を言う。**`liveBackgroundTasks` が無い古い runner は「分からない」として断る**（0 と読まない）。**force は無い。**
 - **`manager_list` の ⚠ の行にも、runner が最後に見た背景処理の本数（`ManagerSummary.liveBackgroundTasks`。10秒ごとの生存確認の観測）を添える。** 背景処理が残っていると runner 自身の境界（`#atTokenRecycleBoundary`）にも達しないので、「なぜ自動で畳み直されないか」の材料になる。
-- **残る穴（別 Issue 候補）**: `Host.resume`（`runner.ts`）は alive なセッションが居ると、そこへ message を push して返す。台帳が `attached=false` でも runner に旧プロセスが居れば旧 env に押し込み、しかも daemon の `#resume` が世代を現役へ書き換えるので、⚠ が消えて見える。
+- **短絡の穴は塞いだ（#2877）**: `Host.resume`（`runner.ts`）は alive なセッションが居ると、そこへ message を push して返す。resume の応答の `reusedLiveSession`（短絡した回だけ true）を見て、daemon の `#resume` は **true の回は世代を現役へ書き換えない**（⚠ が偽って消えない。`send` の detail が「生きた旧プロセスへ流した。鍵が現役か確かめていない」と言う）。**欄の無い古い runner は短絡を見分けられず、従来どおり世代を書く**（版が混ざる窓の限界）。
 
 ## 再接続の瞬間に、現役が降りる（撒く先が無かった回も追いつく）
 

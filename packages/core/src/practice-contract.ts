@@ -307,6 +307,58 @@ export async function verifyPracticeStoreContract(
     if ((await practices.read(slug))?.content !== '後勝ち\n') fail('後勝ちの本文が読めない');
   }
 
+  // --- 9c. 削除の前提の版（ifMatch。Issue #2923）。3実装とも同じ挙動であること ---
+  {
+    const slug = 'contract-r';
+    const input = { slug, kind: '実装', title: '削除の版の照合' };
+    const conflictOf = async (run: () => Promise<unknown>) => {
+      try {
+        await run();
+        return undefined;
+      } catch (error) {
+        if (error instanceof PracticeConflictError) return error;
+        throw error;
+      }
+    };
+    const v1 = practiceVersion(await practices.write({ ...input, content: '最初' }));
+    await practices.write({ ...input, content: '人間の直し' });
+    // 古い版を前提にした削除は、消さずに衝突する（current はいまのやり方）。
+    const stale = await conflictOf(() => practices.remove(slug, { ifMatch: v1 }));
+    if (stale === undefined) fail('古い版を前提にした削除が断られない');
+    if (stale.current?.content !== '人間の直し\n') fail('削除の衝突の current が最新でない');
+    if ((await practices.read(slug))?.content !== '人間の直し\n') fail('衝突したのに消えた');
+    // 無い slug へ版つきで消すと current: null の衝突。
+    const ghost = await conflictOf(() =>
+      practices.remove('contract-ghost-r', { ifMatch: 'x'.repeat(64) }),
+    );
+    if (ghost === undefined || ghost.current !== null) {
+      fail('無い slug への版つきの削除が、current: null の衝突にならない');
+    }
+    // 同じ版を前提にした書き込みと削除が重なっても、勝つのは1つだけ。
+    const v2 = practiceVersion((await practices.read(slug)) ?? fail('読めない'));
+    const settled = await Promise.allSettled([
+      practices.write({ ...input, content: '競合する書き込み' }, { ifMatch: v2 }),
+      practices.remove(slug, { ifMatch: v2 }),
+    ]);
+    if (settled.filter((r) => r.status === 'fulfilled').length !== 1) {
+      fail('同じ版を前提にした書き込みと削除が、勝つのが1つだけになっていない');
+    }
+    const loser = settled.find((r) => r.status === 'rejected');
+    if (!(loser?.status === 'rejected' && loser.reason instanceof PracticeConflictError)) {
+      fail('競合に負けた側が PracticeConflictError ではない');
+    }
+    // 合う版なら消える。版の履歴は残る（#1309）。
+    await practices.write({ ...input, content: '消す前' });
+    const v3 = practiceVersion((await practices.read(slug)) ?? fail('読めない'));
+    await practices.remove(slug, { ifMatch: v3 });
+    if ((await practices.read(slug)) !== null) fail('合う版を前提にした削除で消えない');
+    if ((await practices.listVersions(slug)).length === 0) fail('削除で版の履歴が消えた');
+    // 省略は従来どおり無条件。
+    await practices.write({ ...input, content: '無条件' });
+    await practices.remove(slug);
+    if ((await practices.read(slug)) !== null) fail('ifMatch 省略の削除が消さない');
+  }
+
   if (options.verifyClear !== true) {
     for (const slug of ['contract-a', 'contract-b', 'contract-c', 'contract-v', 'contract-m']) {
       await practices.remove(slug);

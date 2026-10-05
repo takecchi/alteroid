@@ -16,7 +16,8 @@
  *   追従に戻る。
  * - 持つ量は**文字数の予算**で締める（`JOURNAL_RETAIN_CHARS`）。超えたら古い側を捨てて、そう言う。
  */
-import { matchesJournalSearch, type JournalEntry } from '@alteroid/core';
+import { matchesJournalSearch } from '@alteroid/core/cli-light';
+import type { JournalEntry } from '@alteroid/core';
 import {
   JOURNAL_MAX_LIMIT,
   JOURNAL_PAGE,

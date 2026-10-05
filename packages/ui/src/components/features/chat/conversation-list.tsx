@@ -1,4 +1,4 @@
-import { Plus } from 'lucide-react';
+import { BellDot, Plus } from 'lucide-react';
 import type { ReactNode } from 'react';
 
 import { cn } from '@/lib/utils';
@@ -13,6 +13,8 @@ export interface ConversationListItem {
   updatedLabel: string;
   /** 人間との往復の数。 */
   messages: number;
+  /** 未読の数（クローン側の発言のうち、まだ読んでいないもの）。省略・0 は未読なし。 */
+  unread?: number;
 }
 
 /**
@@ -108,7 +110,17 @@ export function ConversationList({
                     children: (
                       <>
                         {/* 一覧の1行は Markdown 化の対象外（`components/markdown.tsx` の doc） */}
-                        <p className="truncate text-xs">{item.preview}</p>
+                        <div className="flex items-center gap-2">
+                          <p
+                            className={cn(
+                              'min-w-0 flex-1 truncate text-xs',
+                              unreadOf(item) > 0 && 'font-semibold',
+                            )}
+                          >
+                            {item.preview}
+                          </p>
+                          {unreadOf(item) > 0 && <UnreadMark count={unreadOf(item)} />}
+                        </div>
                         <p className="mt-0.5 text-[11px] text-muted-foreground">
                           {item.updatedLabel} · <span data-numeric>{item.messages}</span> 往復
                         </p>
@@ -131,5 +143,28 @@ export function ConversationList({
         </p>
       ))}
     </aside>
+  );
+}
+
+function unreadOf(item: ConversationListItem): number {
+  return item.unread ?? 0;
+}
+
+/**
+ * 未読の印。**色だけに頼らない**（通知の記号と件数の数字を並べる）。読み上げには
+ * 「未読 N 件」を1回だけ言う——視覚用の記号と数字は `aria-hidden` にして二重に読ませない。
+ */
+function UnreadMark({ count }: { count: number }) {
+  return (
+    <>
+      <span
+        aria-hidden
+        className="inline-flex shrink-0 items-center gap-1 rounded-full bg-primary px-1.5 py-0.5 text-[10px] font-semibold text-primary-foreground"
+      >
+        <BellDot className="size-3" aria-hidden />
+        <span data-numeric>{count}</span>
+      </span>
+      <span className="sr-only">未読 {count} 件</span>
+    </>
   );
 }

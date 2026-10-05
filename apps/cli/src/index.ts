@@ -3,8 +3,7 @@ import { realpathSync } from 'node:fs';
 import { stdout } from 'node:process';
 import { pathToFileURL } from 'node:url';
 
-import { REMOVE_MANY_LIMIT_DEFAULT, REMOVE_MANY_LIMIT_MAX } from '@alteroid/core';
-import { initWorkspace } from '@alteroid/storage-fs';
+import { REMOVE_MANY_LIMIT_DEFAULT, REMOVE_MANY_LIMIT_MAX } from '@alteroid/core/cli-light';
 import { Command } from 'commander';
 
 import {
@@ -14,7 +13,6 @@ import {
   accessRemoveUnreadableCommand,
   accessRevokeCommand,
 } from './access.js';
-import { chatCommand } from './chat.js';
 import { localizeCommander } from './commander-ja.js';
 import {
   conversationsListCommand,
@@ -24,7 +22,6 @@ import {
 import * as daemon from './daemon.js';
 import { droppedCommand } from './dropped.js';
 import { formatElapsedAgo } from './format.js';
-import { inboxRemoveCommand, inboxShowCommand } from './inbox.js';
 import { loginCommand, logoutCommand, whoamiCommand } from './login.js';
 import {
   memoryEditCommand,
@@ -85,7 +82,6 @@ import {
 import { progressCommand } from './progress.js';
 import { HELP_EXAMPLES } from './help-examples.js';
 import { describeCliVersion } from './version.js';
-import { usageCommand } from './usage.js';
 import { describeCliFailure } from './failure-message.js';
 
 /**
@@ -105,7 +101,7 @@ import { describeCliFailure } from './failure-message.js';
  * `program` 側は `await initCommand()` を呼ぶだけの薄い配線に変わっただけである。
  */
 export async function initCommand(): Promise<void> {
-  const { paths, created } = await initWorkspace();
+  const { paths, created } = await (await import('@alteroid/storage-fs')).initWorkspace();
   stdout.write(`${paths.root} を初期化しました\n`);
   for (const path of created) stdout.write(`  作成: ${path}\n`);
   if (created.length === 0)
@@ -262,7 +258,7 @@ program
   .command('chat')
   .description('クローンと会話する（デーモンが居なければ起こす）')
   .action(async () => {
-    await chatCommand();
+    await (await import('./chat.js')).chatCommand();
   });
 
 program
@@ -343,7 +339,7 @@ program
       site?: string;
       token?: string;
     }) => {
-      await usageCommand(options);
+      await (await import('./usage.js')).usageCommand(options);
     },
   );
 
@@ -440,7 +436,7 @@ inboxCommand
   .command('show')
   .description('受信箱の滞留の内訳を読む（読み取り専用。何も変更しない）')
   .action(async () => {
-    await inboxShowCommand();
+    await (await import('./inbox.js')).inboxShowCommand();
   });
 
 inboxCommand
@@ -474,7 +470,7 @@ inboxCommand
       execute?: boolean;
       limit?: string;
     }) => {
-      await inboxRemoveCommand(options);
+      await (await import('./inbox.js')).inboxRemoveCommand(options);
     },
   );
 
@@ -556,6 +552,8 @@ accessCommand
   });
 
 /**
+ * **注記: 資格の判断には使っていない（2026-10-05 オーナーの判断：ログインできる人＝持ち主。#2862）。** 下の「通すのに要る」は #2862 以前の記述。仕組みは当面残してある。
+ *
  * 実行環境の持ち主としての宣言（issue #1198）。**`access grant` とは別の資格**
  * ——`alteroid credential set` / `alteroid reset` を通すのに要る。デーモンが
  * 動いているのと同じ環境（実行環境の持ち主）でしか実行できない
@@ -564,7 +562,7 @@ accessCommand
 accessCommand
   .command('owner <accountId>')
   .description(
-    '実行環境の持ち主として宣言する／取り消す（alteroid credential set・alteroid reset を通すのに要る）',
+    '実行環境の持ち主として宣言する／取り消す（資格の判断には使っていない。ログインできる人＝持ち主。#2862）',
   )
   .option('--revoke', '宣言を取り消す')
   .action(async (accountId: string, options: { revoke?: boolean }) => {
@@ -657,8 +655,12 @@ memoryCommand
 memoryCommand
   .command('remove <slug>')
   .description('記憶を1つ消す（消した事実は日誌に残る）')
-  .action(async (slug: string) => {
-    await memoryRemoveCommand(slug);
+  .option(
+    '--if-match <version>',
+    '読んだ版（memory show が stderr に出す版）。いまの版と違えば消さずに失敗する。省略すると消す直前に読んだ版で照合する',
+  )
+  .action(async (slug: string, options: { ifMatch?: string }) => {
+    await memoryRemoveCommand(slug, options);
   });
 
 /**

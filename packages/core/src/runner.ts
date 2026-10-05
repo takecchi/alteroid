@@ -28,6 +28,7 @@ import type {
 import { DEFAULT_AGENT_PROVIDER_ID, type AgentProviderId } from './agent-ports.js';
 import { describeBashToolTimeoutRaise, planBashToolTimeoutRaise } from './bash-tool-timeout.js';
 import { resolveBashGuardMode, type BashGuardMode } from './bash-guard-mode.js';
+import { inspectReleaseProdDispatch } from './bash-release-prod-guard.js';
 import { inspectBashCommand } from './bash-wait-guard.js';
 import { cgroupEventsDeltaOf } from './cgroup-events.js';
 import { ClaudeManagerDriver, type ClaudeQueryFn } from './claude-manager-driver.js';
@@ -503,7 +504,7 @@ export interface RunnerHost {
    * `RunnerFenceError` を投げうる（世代が古い。呼び出し側は 409 へ変換すること）。
    * 戻り値の `cwd` は `start` と同じ約束（Issue #1814）。
    */
-  resume(command: RunnerResumeCommand): Promise<{ cwd: string }>;
+  resume(command: RunnerResumeCommand): Promise<{ cwd: string; reusedLiveSession: boolean }>;
   send(managerId: string, text: string): Promise<boolean>;
   /**
    * `delivered: false` = その確認は runner 側に無い。`decision` は確定した
@@ -1092,13 +1093,13 @@ class Host implements RunnerHost {
    * 合流先のセッションが `#create()` の時点で解決した値をそのまま返す——
    * 新しく作り直したわけではないので `#resolveCwd` を呼び直す理由が無い。
    */
-  async resume(command: RunnerResumeCommand): Promise<{ cwd: string }> {
+  async resume(command: RunnerResumeCommand): Promise<{ cwd: string; reusedLiveSession: boolean }> {
     const alive = this.#sessions.get(command.managerId);
     if (alive) {
       alive.checkFence(command.lease);
       if (!alive.stopping) {
         if (command.message !== undefined) alive.push(command.message);
-        return { cwd: alive.cwd };
+        return { cwd: alive.cwd, reusedLiveSession: true };
       }
       try {
         await alive.stop('resume 待ちのため、畳み中のセッションの完了を待った。');
@@ -1111,7 +1112,7 @@ class Host implements RunnerHost {
         if (!afterWait.stopping) {
           // 並行した resume が先に新しいセッションを作っていた。合流する。
           if (command.message !== undefined) afterWait.push(command.message);
-          return { cwd: afterWait.cwd };
+          return { cwd: afterWait.cwd, reusedLiveSession: true };
         }
         // 畳みが途中の例外で `#onClosed()` まで届かず、畳み済みの古い
         // セッションが名簿に残ったままだった。手で取り除いて作り直す。
@@ -1125,7 +1126,7 @@ class Host implements RunnerHost {
     // （`start` と同じ形）。
     session.checkFence(command.lease);
     session.resume(command.sessionId, command.entries, command.message);
-    return { cwd: session.cwd };
+    return { cwd: session.cwd, reusedLiveSession: false };
   }
 
   async send(managerId: string, text: string): Promise<boolean> {
@@ -4895,7 +4896,7 @@ class RunnerSession {
     // は `ALTEROID_BASH_GUARD` が決める（issue #2884。`bash-guard-mode.ts`）。`ask` で返した呼び出しは
     // この関数の最後で、クローンの1回だけの許可を見たうえで返す（`guardAsk`）。
     let guardAsk: { reason: string } | undefined;
-    if (record.toolName === 'Bash' && this.#bashGuard !== 'off') {
+    if (record.toolName === 'Bash') {
       const toolInput = record.toolInput as
         { command?: unknown; run_in_background?: unknown } | null | undefined;
       const command = toolInput?.command;
@@ -4904,11 +4905,19 @@ class RunnerSession {
         // ことを判定器へ渡せる経路はここだけである（`bash-wait-guard.ts` の
         // `isBackgroundedGhRunWatch` の doc）。**`=== true` で受ける** ——
         // 欠けていても形が崩れていても `false`（＝前景）になり、通す側へ倒れる。
-        let verdict: ReturnType<typeof inspectBashCommand>;
+        let verdict:
+          ReturnType<typeof inspectBashCommand> | { blocked: true; form: string; reason: string };
         try {
-          verdict = inspectBashCommand(command, {
-            backgrounded: toolInput?.run_in_background === true,
-          });
+          // **本番デプロイの起動（release-prod）は、`off` でも確認に残す**（`bash-release-prod-guard.ts`）。
+          // 待つ形の門（`inspectBashCommand`）だけが `off` で外れる。
+          const releaseProd = inspectReleaseProdDispatch(command);
+          verdict = releaseProd.matched
+            ? { blocked: true, form: releaseProd.form, reason: releaseProd.reason }
+            : this.#bashGuard === 'off'
+              ? { blocked: false }
+              : inspectBashCommand(command, {
+                  backgrounded: toolInput?.run_in_background === true,
+                });
         } catch (error) {
           // 判定できなかった呼び出しは、素通しにしない（issue #1960）。**倒れる先は確認である**
           // （issue #2884。上がらずに止めて誰も開けられない形にしない）。`deny` を選んだ人にだけ止める。
@@ -4928,7 +4937,8 @@ class RunnerSession {
             record.agentId === undefined
               ? `manager:${this.#id}`
               : `worker:${this.#id}:${record.agentType ?? WORKER_AGENT_NAME}`;
-          const asked = this.#bashGuard === 'ask';
+          // `off` でここに来るのは本番デプロイの起動だけで、確認に残す（`deny` の設定でだけ止める）。
+          const asked = this.#bashGuard !== 'deny';
 
           this.#tryObservation('ガードの note の送り出し', () => {
             this.#emit({

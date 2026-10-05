@@ -17,6 +17,12 @@
 import { describeGithubCi } from '@alteroid/core';
 import { describe, expect, it } from 'vitest';
 
+import {
+  GITHUB_CI_COUNT_LABEL,
+  GITHUB_CI_COUNT_ORDER,
+  GITHUB_OPEN_LABEL,
+  GITHUB_TRUNCATED_NOTE,
+} from './progress-labels.js';
 import type { JournalEntry } from './types.js';
 
 import { describeGithubCiText, summarizeJournalEntry } from './journal-summary.js';
@@ -322,5 +328,100 @@ describe('summarizeJournalEntry — github_observation の CI（#2608）', () =>
       result: { status: 'failed', reason: 'HTTP 502' },
     };
     expect(summarizeJournalEntry(failed)).toBe('a/b: 取れなかった（観測者 clone）: HTTP 502');
+  });
+});
+
+describe('summarizeJournalEntry — localized（Web の表示。core の字面は raw のまま）', () => {
+  type Ok = Extract<
+    Extract<JournalEntry, { type: 'github_observation' }>['result'],
+    { status: 'ok' }
+  >;
+  const observed = (extra: Partial<Ok>): JournalEntry => ({
+    type: 'github_observation',
+    id: 'gh-1',
+    at: '2026-10-02T00:00:00.000Z',
+    repo: 'a/b',
+    query: 'is:open',
+    observedBy: 'clone',
+    result: { status: 'ok', openIssues: 3, openPulls: 2, truncated: false, ...extra },
+  });
+  const cases: [string, Partial<Ok>][] = [
+    [
+      'ci あり',
+      { ci: { pulls: 5, success: 3, failure: 1, pending: 0, checks: '必須チェックだけ' } },
+    ],
+    [
+      'ci あり・打ち切り',
+      { ci: { pulls: 2, success: 2, failure: 0, pending: 0, checks: 'x', truncated: true } },
+    ],
+    ['ciUnavailable', { ciUnavailable: 'HTTP 403' }],
+    ['ci も ciUnavailable も無い古い行', {}],
+  ];
+
+  it('raw が既定で、字面は変わらない（CLI の TUI が使う）', () => {
+    const entry: JournalEntry = {
+      type: 'github_observation',
+      id: 'gh-3',
+      at: '2026-10-02T00:00:00.000Z',
+      repo: 'a/b',
+      query: 'q',
+      observedBy: 'clone',
+      result: {
+        status: 'ok',
+        openIssues: 1,
+        openPulls: 1,
+        truncated: false,
+        ci: { pulls: 1, success: 1, failure: 0, pending: 0, checks: 'x' },
+      },
+    };
+    expect(summarizeJournalEntry(entry)).toBe(summarizeJournalEntry(entry, 'raw'));
+    expect(summarizeJournalEntry(entry)).toContain('（観測者 clone）');
+    expect(summarizeJournalEntry(entry)).toContain('success 1 / failure 0 / pending 0');
+  });
+
+  // #2608 と同じ歯: 原本（core）を、表が持つ写しだけで置換したものと一致すること。
+  it.each(cases)('%s: localized は core の原本から表の3語を写しただけ', (_label, extra) => {
+    const ok = { status: 'ok', openIssues: 3, openPulls: 2, truncated: false, ...extra } as const;
+    let expected = describeGithubCi(ok);
+    for (const key of GITHUB_CI_COUNT_ORDER) {
+      expected = expected.replace(`${key} `, `${GITHUB_CI_COUNT_LABEL[key]} `);
+    }
+    expect(describeGithubCiText(ok, 'localized')).toBe(expected);
+    const line = summarizeJournalEntry(observed(extra), 'localized');
+    expect(line).toBe(
+      `a/b: ${GITHUB_OPEN_LABEL.issue.localized} 3 件 / ${GITHUB_OPEN_LABEL.pull.localized} 2 件（記録したのは: クローン） / ${expected}`,
+    );
+    expect(line).not.toMatch(/clone|success|failure|pending|open|limit/);
+    // 件数の行も core 側の言い回し（raw）から表の写しだけで導ける
+    const rawLine = summarizeJournalEntry(observed(extra), 'raw');
+    expect(
+      rawLine
+        .replace(GITHUB_OPEN_LABEL.issue.raw, GITHUB_OPEN_LABEL.issue.localized)
+        .replace(GITHUB_OPEN_LABEL.pull.raw, GITHUB_OPEN_LABEL.pull.localized)
+        .replace('（観測者 clone）', '（記録したのは: クローン）')
+        .replace(describeGithubCi(ok), expected),
+    ).toBe(line);
+  });
+
+  it('打ち切りの断りは「上限」で出し、raw は limit のまま', () => {
+    const entry = observed({ truncated: true });
+    expect(summarizeJournalEntry(entry, 'localized')).toContain(GITHUB_TRUNCATED_NOTE.localized);
+    expect(summarizeJournalEntry(entry, 'localized')).not.toContain('limit');
+    expect(summarizeJournalEntry(entry, 'raw')).toContain('（limit に達した。下限）');
+  });
+
+  it('取れなかった回・知らない記録元は識別子を出さない', () => {
+    const failed: JournalEntry = {
+      type: 'github_observation',
+      id: 'gh-4',
+      at: '2026-10-02T00:00:00.000Z',
+      repo: 'a/b',
+      query: 'q',
+      observedBy: 'mgr-1',
+      result: { status: 'failed', reason: 'HTTP 502' },
+    };
+    expect(summarizeJournalEntry(failed, 'localized')).toBe(
+      'a/b: 取れなかった（記録したのは: クローン以外からの申告）: HTTP 502',
+    );
   });
 });

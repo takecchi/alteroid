@@ -17,7 +17,7 @@
  * （`packages/core/src/format-elapsed.ts`）に引き上げた——進捗の文（`describeProgress`）を
  * クローンの道具と共有するため。字面・分岐・doc は逐語のまま移した。
  */
-export { formatElapsedAgo } from '@alteroid/core';
+export { formatElapsedAgo } from '@alteroid/core/cli-light';
 import { redactError } from './redact.js';
 
 /**

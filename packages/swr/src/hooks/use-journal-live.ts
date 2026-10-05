@@ -170,6 +170,7 @@ function invalidate(entry: JournalEntry, mutate: ReturnType<typeof useSWRConfig>
       }
       if (entry.with === 'human') {
         void mutate((key) => isKeyOfType(key, 'conversations'));
+        void mutate((key) => isKeyOfType(key, 'conversationUnreadCount'));
         // **一覧だけでなく本文も落とす。** ここを忘れると、会話の画面を開いた
         // ときに一度読んだ履歴のまま止まり、裏で進んだ往復が追いつかない。
         void mutate((key) => isKeyOfType(key, 'conversation'));

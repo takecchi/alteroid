@@ -281,9 +281,29 @@ export type RunnerResumeCommand = z.infer<typeof runnerResumeCommandSchema>;
 export const runnerSessionOpenResultSchema = z.object({
   ok: z.boolean(),
   cwd: z.string().optional(),
+  /**
+   * **`resume` が、新しい SDK を起こさずに生きていた旧セッションへ message を流して返した
+   * か**（Issue #2877。`Host#resume` の「生きたセッションへの短絡」。`stopping` を待った後の
+   * 短絡も含む）。
+   *
+   * `true` のとき、message が届いたのは**起動時の env（鍵）が凍った旧プロセス**であって、
+   * 鍵が現役かどうかは分からない。デーモンは `true` の回に抱えている世代を現役へ書き換えない
+   * （`manager.ts` の `#resume`）。`false` は新しい SDK を起こした（＝いまの鍵で起きた）。
+   *
+   * **`undefined` は「分からない」。** この欄を持たない古い runner は短絡したかを名乗れない——
+   * デーモンは従来どおり世代を書く（**古い runner の間は短絡を見分けられない**。版が混ざる窓の
+   * 限界である）。`start` の応答には出ない（常に新しい SDK）。
+   */
+  reusedLiveSession: z.boolean().optional(),
 });
 
 export type RunnerSessionOpenResult = z.infer<typeof runnerSessionOpenResultSchema>;
+
+/** `RunnerClient#resume` の戻り値。`cwd` と `reusedLiveSession` はどちらも省略されうる（版の混在）。 */
+export interface RunnerResumeResult {
+  cwd?: string;
+  reusedLiveSession?: boolean;
+}
 
 /**
  * **`lease` を持たせない。** これは既に開いている（＝ `start` / `resume` を通って
@@ -2575,7 +2595,7 @@ export interface RunnerClient {
    */
   start(command: RunnerStartCommand): Promise<{ cwd?: string }>;
   /** `RunnerFenceError` を投げうる（世代が古い。呼び出し側は 409 へ変換すること）。 */
-  resume(command: RunnerResumeCommand): Promise<{ cwd?: string }>;
+  resume(command: RunnerResumeCommand): Promise<RunnerResumeResult>;
   /**
    * 追加の1文をセッションへ流す。**戻り値は「届いたか」——`answer()` の
    * `delivered` と同じ意味である（#899）。

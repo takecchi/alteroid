@@ -13,7 +13,8 @@
  * 400 で返す — ここで二重に判定しない。ただし UI の側で作らない形（単一選択の複数選び、
  * `allowOther:false` の「その他」）は、そもそも作れないようにしてある。
  */
-import { foldSelections, type ApprovalQuestion, type ApprovalSelection } from '@alteroid/core';
+import { foldSelections } from '@alteroid/core/cli-light';
+import type { ApprovalQuestion, ApprovalSelection } from '@alteroid/core';
 
 import type { ApprovalAnswerBody } from './api.js';
 

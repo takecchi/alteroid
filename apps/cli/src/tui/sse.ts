@@ -4,7 +4,7 @@
  * `chat.ts` 内の `readSSE` は export されていない（他の担当と衝突しないよう chat.ts は
  * 触らない）ので、フレームを切る薄い読み手だけをここに置く。
  */
-import { parseSSEChunk, type SSEEvent } from '../chat.js';
+import { parseSSEChunk, type SSEEvent } from '../sse-frame.js';
 
 export async function* readSSE(body: ReadableStream<Uint8Array>): AsyncGenerator<SSEEvent> {
   const decoder = new TextDecoder();
