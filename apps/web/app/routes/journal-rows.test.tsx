@@ -82,12 +82,13 @@ async function renderRows(entries: JournalEntry[]) {
   await waitFor(() => expect(screen.queryByText('読み込み中')).toBeNull());
 }
 
-/** 要旨の文字から、その行の開閉ボタンと行の根を引く。 */
+/** 要旨の文字から、その行の開閉ボタンと行の根を引く（要旨は開閉ボタンの外にある。#2756）。 */
 async function rowOf(summary: string) {
   const summaryNode = await screen.findByText(summary);
-  const button = summaryNode.closest('button');
-  if (button === null) throw new Error('要旨が開閉のボタンの中に無い');
-  return { button, root: button.parentElement as HTMLElement };
+  const root = summaryNode.parentElement?.parentElement as HTMLElement;
+  const button = root.querySelector('button');
+  if (button === null) throw new Error('行に開閉のボタンが無い');
+  return { button, root };
 }
 
 describe('日誌の1行: 閉じているとき', () => {
@@ -98,7 +99,7 @@ describe('日誌の1行: 閉じているとき', () => {
     // 行頭の絶対時刻: 閲覧者の端末の時間帯のまま（JST 固定にしない）。
     expect(within(button).getByText(formatDateTime(DECISION.at, NOW.getTime()))).toBeTruthy();
     // 右端の相対の表示。
-    expect(within(button).getByText('3分前')).toBeTruthy();
+    expect(within(root).getByText('3分前')).toBeTruthy();
     // JST/UTC の tooltip を持つ `<time>` を出さない。開閉のボタンの中に焦点を受ける物を足さない。
     expect(root.querySelector('time')).toBeNull();
     expect(root.querySelectorAll('[tabindex]')).toHaveLength(0);
