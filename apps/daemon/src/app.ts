@@ -1422,6 +1422,9 @@ function describeTokenPolicyChanges(changes: readonly TokenPolicyChange[]): stri
  * 型のまま `appendJournalOrDrop` を当てていたが、能力を広げる口はそちら
  * ではなく閉じる側に倒す）・`POST /runners/credentials`（issue #2198。登録
  * されている全 runner へ鍵を配る口で、以前は日誌を1行も書いていなかった）。
+ * `PUT /tokens`・`PUT /tokens/policy`（issue #2742。決定 2026-10-05、teto＝takecchi の代理。
+ * 以前は日誌を書いていなかった。**能力の向きで分ける**——広げる側は日誌先、狭める側
+ * （削除・無効化・改名・`rotateOn: off`）は保存先で、日誌は後にこの関数で書く）。
  * **`PUT /credentials`・`PUT /profile` は検証と実際の状態変更が同じ1呼び
  * （`apply`）の中にあり分けられないので、検証で断られた回も同じ「打ち消し」
  * の扱いにする**（同じ理由——記録が多すぎる側を選ぶ）。
