@@ -387,6 +387,14 @@ export function matchesManagerScratchDirName(name: string, managerId: string): b
   return managerId.startsWith(`mgr-${hex}`);
 }
 
+/**
+ * 名前が「マネージャーの作業場」の規則（`mgr-<hex 4桁以上>…`）に当たるか。特定の
+ * 委譲 id を問わない版（`/tmp` の片付け `scratch-sweep.ts` が候補を選ぶのに使う）。
+ */
+export function isManagerScratchDirName(name: string): boolean {
+  return MANAGER_SCRATCH_DIR_NAME_PATTERN.test(name);
+}
+
 /** {@link findManagerScratchRoots} の戻り値。 */
 export interface FindManagerScratchRootsResult {
   /** 当たったディレクトリの絶対パス。`unknownReason` が載っているときは常に空。 */
@@ -529,14 +537,14 @@ async function findGitDirsAcrossRoots(
   };
 }
 
-interface GitRunResult {
+export interface GitRunResult {
   readonly stdout: string;
   readonly exitCode: number | null;
   readonly timedOut: boolean;
 }
 
 /** `git` を1回、期限つきで起こして出力を集める。例外は投げない。 */
-async function runGit(
+export async function runGit(
   spawnFn: ProcessSpawnFn,
   args: string[],
   cwd: string,

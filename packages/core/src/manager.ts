@@ -6,6 +6,7 @@ import {
   type AgentProviderId,
 } from './agent-ports.js';
 import { describeArchiveContinuityForJournal } from './archive-continuity.js';
+import { DAEMON_RUNNER_REGISTRY_SOURCE } from './daemon-self-notice.js';
 import { redactSecretsInText } from './denial-input-head.js';
 import { denialInputAbsence, denialInputShape } from './denial-shape.js';
 import {
@@ -70,6 +71,7 @@ import type {
   RunnerClient,
   RunnerCredentialFingerprint,
   RunnerEvent,
+  ScratchSweepItem,
   RunnerExecutionResources,
   RunnerLegState,
   RunnerManagerListing,
@@ -11463,6 +11465,13 @@ class Pool implements ManagerPool {
       return;
     }
 
+    if (event.type === 'scratch_sweep') {
+      // **runner の /tmp の片付け**（Issue #3039）。委譲に結びつかない（runner 単位）ので、
+      // `shutting_down` と同じく record を引く前に処理する。
+      await this.#onScratchSweep(event, fromRunnerId);
+      return;
+    }
+
     const record = this.#records.get(event.managerId) ?? (await this.#load(event.managerId));
     if (!record) return;
 
@@ -15089,6 +15098,68 @@ class Pool implements ManagerPool {
       });
     }
     this.#rateLimitJournalFolds.clear();
+  }
+
+  /**
+   * runner の `scratch_sweep`（Issue #3039）を日誌へ残し、**残したものがある回は
+   * クローンの受信箱へも知らせる**（`runner-registry` の `external`。`postToClone` と
+   * 同じ口）。片付けて消しただけの回は日誌だけ（人の手が要らない）。
+   * 消したものも未追跡の名前も、残した理由も日誌に載せる（黙って消さない）。
+   */
+  async #onScratchSweep(
+    event: Extract<RunnerEvent, { type: 'scratch_sweep' }>,
+    fromRunnerId: string,
+  ): Promise<void> {
+    const runnerId = event.runnerId.length > 0 ? event.runnerId : fromRunnerId;
+    const label = (i: ScratchSweepItem): string =>
+      `${i.name}（${i.kind}${i.managerId === undefined ? '' : `、委譲 ${i.managerId}`}）`;
+    const removedLines = event.removed.map((i) => {
+      const untracked =
+        i.untracked === undefined
+          ? ''
+          : ` 未追跡 ${String(i.untracked.count)} 件を捨てた: ${i.untracked.names.join(', ')}`;
+      return `  - 消した ${label(i)}${untracked}`;
+    });
+    const keptLines = event.kept.map(
+      (i) => `  - 残した ${label(i)} 理由 ${i.reason ?? '(不明)'}: ${i.detail ?? ''}`,
+    );
+    const statfsLine =
+      event.statfs === undefined
+        ? '/tmp の余力: (未観測)'
+        : 'unavailable' in event.statfs
+          ? `/tmp の余力: 取れなかった（${event.statfs.unavailable}）`
+          : `/tmp の余力: inode ${String(event.statfs.usedInodes)}/${String(event.statfs.totalInodes)}、` +
+            `バイト ${String(event.statfs.usedBytes)}/${String(event.statfs.totalBytes)}`;
+    const grounds = [
+      ...(event.scanError === undefined ? [] : [`走査の失敗: ${event.scanError}`]),
+      ...removedLines,
+      ...keptLines,
+      statfsLine,
+    ].join('\n');
+    await this.#journal({
+      type: 'decision',
+      decision:
+        `runner ${runnerId} が /tmp の委譲の作業場を片付けた（消した ${String(event.removed.length)} 件、` +
+        `新しく残した ${String(event.kept.length)} 件）。`,
+      grounds,
+    });
+    if (event.kept.length === 0 && event.scanError === undefined) return;
+    try {
+      this.#post({
+        type: 'external',
+        id: randomUUID(),
+        at: new Date(this.#now()).toISOString(),
+        source: DAEMON_RUNNER_REGISTRY_SOURCE,
+        payload: {
+          text:
+            `runner ${runnerId} の /tmp の片付けで、片付けずに残した作業場があります（未 push のコミット・` +
+            `未コミットの変更・判定できないもの）。runner の一時領域が埋まる前に、人間か該当の委譲で確かめてください。\n` +
+            grounds,
+        },
+      });
+    } catch (error) {
+      noteDroppedRecord('受信箱', `scratch_sweep runner=${runnerId}`, error);
+    }
   }
 
   async #journal(entry: JournalEntryInput): Promise<void> {

@@ -126,6 +126,12 @@ import {
   resolveRescueIntervalMs,
   runRescue,
 } from './rescue-ref.js';
+import {
+  ScratchSweeper,
+  resolveScratchSweepGraceMs,
+  resolveScratchSweepIntervalMs,
+  type ScratchSweeperOptions,
+} from './scratch-sweep.js';
 import { computeUnpushedWork } from './unpushed-work.js';
 import type { ContextUsageObservation, JobStatus } from './schema.js';
 // **クローン（`clone.ts`）と同じ判定を呼ぶ。** 「これは応答ではない」の見分けを
@@ -416,6 +422,16 @@ export interface RunnerHostOptions {
    * （環境変数 `ALTEROID_RESCUE_INTERVAL_MS`、既定5分）。主にテスト用の口。
    */
   rescueIntervalMs?: number;
+  /**
+   * `/tmp` の委譲の作業場の片付け（Issue #3039。`scratch-sweep.ts`）。**省略は既定で有効**
+   * （周期・猶予は環境変数 `ALTEROID_SCRATCH_SWEEP_INTERVAL_MS` / `ALTEROID_SCRATCH_SWEEP_GRACE_MS`）。
+   * `false` で止める。主にテスト用の口（`tmpRoot`・時計・fs の差し替え）。
+   */
+  scratchSweep?:
+    | false
+    | (Partial<Omit<ScratchSweeperOptions, 'liveManagerIds' | 'knownManagerIds' | 'spawn' | 'env'>> & {
+        intervalMs?: number;
+      });
   /**
    * 貸し出し期限（lease）の自己失効を有効にする（roadmap M5 PR4）。**既定は
    * false。**
@@ -724,6 +740,12 @@ class Host implements RunnerHost {
   #leaseWatcher: ReturnType<typeof setInterval> | null = null;
   /** 退避 ref の周期の1本（Issue #1266）。**`shutdown()` で必ず畳む。** */
   #rescueTimer: ReturnType<typeof setInterval> | null = null;
+  /** `/tmp` の片付けの周期の1本（Issue #3039）。**`shutdown()` で必ず畳む。** */
+  #scratchTimer: ReturnType<typeof setInterval> | null = null;
+  readonly #scratchAbort = new AbortController();
+  #scratchRunning: Promise<void> | null = null;
+  /** この runner が起こした委譲 id（片付けの記録に委譲 id を付けるため）。 */
+  readonly #knownManagerIds = new Set<string>();
   /**
    * 委譲の Claude Code プロセスの pid 帳（#1334 段1）。
    * {@link RunnerHost.delegationSessionPids} の doc を見よ。
@@ -774,6 +796,43 @@ class Host implements RunnerHost {
     );
     rescueTimer.unref?.();
     this.#rescueTimer = rescueTimer;
+    if (options.scratchSweep !== false) {
+      const { intervalMs, ...sweepOptions } = options.scratchSweep ?? {};
+      const sweeper = new ScratchSweeper({
+        tmpRoot: '/tmp',
+        graceMs: resolveScratchSweepGraceMs(this.#env),
+        startedAt: Date.now(),
+        ...sweepOptions,
+        spawn: (spawnOptions) =>
+          this.#childUser === undefined
+            ? spawn(spawnOptions.command, spawnOptions.args, {
+                ...(spawnOptions.cwd === undefined ? {} : { cwd: spawnOptions.cwd }),
+                env: spawnOptions.env,
+                signal: spawnOptions.signal,
+                stdio: ['ignore', 'pipe', 'pipe'],
+              })
+            : this.#spawnAsChildUser(spawnOptions),
+        env: this.#baseChildEnv(),
+        liveManagerIds: () => [...this.#sessions.keys()],
+        knownManagerIds: () => [...this.#knownManagerIds],
+      });
+      // 同時に走るのは1本まで（前の回が遅れていれば今回は見送る）。見張りで終了を引き延ばさない。
+      const scratchTimer = setInterval(() => {
+        if (this.#scratchRunning !== null || this.#scratchAbort.signal.aborted) return;
+        const run = sweeper
+          .sweep(this.#scratchAbort.signal, this.runnerId)
+          .then((event) => {
+            if (event !== null && !this.#scratchAbort.signal.aborted) this.#emit(event);
+          })
+          .catch(() => {})
+          .finally(() => {
+            this.#scratchRunning = null;
+          });
+        this.#scratchRunning = run;
+      }, intervalMs ?? resolveScratchSweepIntervalMs(this.#env));
+      scratchTimer.unref?.();
+      this.#scratchTimer = scratchTimer;
+    }
     if (this.#enforceLease) {
       const watcher = setInterval(() => this.#checkLeaseExpiry(), LEASE_WATCH_INTERVAL_MS);
       // 見張りでプロセスの終了を引き延ばさない（このリポジトリの既存のタイマーが
@@ -1079,6 +1138,7 @@ class Host implements RunnerHost {
         : { workerToolWatchClock: this.#workerToolWatchClock }),
     });
     this.#sessions.set(managerId, session);
+    this.#knownManagerIds.add(managerId);
     return session;
   }
 
@@ -1276,6 +1336,11 @@ class Host implements RunnerHost {
     this.#leaseWatcher = null;
     if (this.#rescueTimer !== null) clearInterval(this.#rescueTimer);
     this.#rescueTimer = null;
+    if (this.#scratchTimer !== null) clearInterval(this.#scratchTimer);
+    this.#scratchTimer = null;
+    // 走行中の片付けは止める（候補の境目で止まる。途中で止まっても、消すのは「消してよい」と
+    // 決まった候補だけなので壊れない）。
+    this.#scratchAbort.abort();
     // **`captureUnpushedWork: true`（Issue #1266 候補(C)）。** ここ（器の
     // 入れ替え・日常の redeploy）だけが、未 push の観測を
     // `shutdown_unpushed_work` イベントとして運ぶ——`Host#stop(managerId)`

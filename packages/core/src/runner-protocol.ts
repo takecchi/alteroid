@@ -982,6 +982,51 @@ export const runnerUnpushedWorkOutcomeSchema = z.discriminatedUnion('kind', [
 ]);
 export type RunnerUnpushedWorkOutcome = z.infer<typeof runnerUnpushedWorkOutcomeSchema>;
 
+/**
+ * `scratch_sweep` の1項目（片付けた／残した）。**中身（ファイルの内容）は持たない**——
+ * 名前と件数だけ。
+ */
+export const scratchSweepItemSchema = z.object({
+  /** `/tmp` 直下のエントリ名。 */
+  name: z.string(),
+  kind: z.enum(['directory', 'file', 'symlink']),
+  /** この runner が過去に走らせた委譲のうち、名前の規則に当たったもの。知らなければ無い。 */
+  managerId: z.string().optional(),
+  /** 片付けた項目: 未追跡のため捨てたファイル（件数と、上限つきの名前）。 */
+  untracked: z.object({ count: z.number().int(), names: z.array(z.string()) }).optional(),
+  /** 残した項目: 理由。 */
+  reason: z
+    .enum(['unpushed-commits', 'tracked-changes', 'undecidable', 'worktree-dependency', 'rm-failed'])
+    .optional(),
+  /** 残した項目: 理由の件数（未 push のコミット数・変更の行数など。無ければ無い）。 */
+  count: z.number().int().optional(),
+  /** 残した項目: 人が読む補足（どの作業ツリー・何が判定できなかったか）。 */
+  detail: z.string().optional(),
+});
+export type ScratchSweepItem = z.infer<typeof scratchSweepItemSchema>;
+
+export const scratchSweepEventSchema = z.object({
+  type: z.literal('scratch_sweep'),
+  runnerId: z.string(),
+  removed: z.array(scratchSweepItemSchema),
+  kept: z.array(scratchSweepItemSchema),
+  /** `/tmp` を読めなかったときの理由（読めた回は無い）。 */
+  scanError: z.string().optional(),
+  /** `fs.statfs('/tmp')` の観測。取れなければ `unavailable` に理由。 */
+  statfs: z
+    .union([
+      z.object({
+        totalBytes: z.number(),
+        usedBytes: z.number(),
+        totalInodes: z.number(),
+        usedInodes: z.number(),
+      }),
+      z.object({ unavailable: z.string() }),
+    ])
+    .optional(),
+});
+export type ScratchSweepEvent = z.infer<typeof scratchSweepEventSchema>;
+
 export const runnerEventSchema = z.discriminatedUnion('type', [
   /**
    * ストリームの先頭。どの runner に繋がったかを名乗る。
@@ -2245,6 +2290,17 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
     managerId: z.string(),
     toolUseId: z.string(),
   }),
+  /**
+   * runner が `/tmp` 直下の委譲の作業場（`mgr-<委譲idの先頭>…`）を片付けた／片付けずに
+   * 残した、という知らせ（Issue #3039。`packages/core/src/scratch-sweep.ts`）。
+   *
+   * **何も消さず、新しく残したものも無い回は送らない。** 同じ「残した」（名前と理由が
+   * 同じ）は、残し続けている間は再送しない（一度でも片付いて、また残ると再び載る）。
+   * `statfs` は余力の観測（inode とバイト）であって、**警告の閾値ではない**。
+   * **旧 daemon との組み合わせ**: 未知の type は daemon の `safeParse` で落ち、
+   * `RunnerDroppedEventReport` に残るだけで接続は切れない（`rescue_ref` と同じ扱い）。
+   */
+  scratchSweepEventSchema,
 ]);
 
 export type RunnerEvent = z.infer<typeof runnerEventSchema>;
