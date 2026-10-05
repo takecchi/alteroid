@@ -66,9 +66,11 @@ on:
 #   jobs を見て、失敗が集約ゲート `ci` だけでほかに cancelled が在るときだけ「取り消された
 #   run」として鳴らさない。本物の失敗が混ざる・jobs を取れないときは今までどおり鳴らす。
 #   release/prod の記録（`record-release-prod-ci-core.mjs`）は run ではなく job 単位で読む
-#   （`evaluatePrGreen`）ので、ゲートの failure を `red` と数える。切られた run が最新世代
-#   として当たると、取り消しを `cancelled` ではなく `red` と書きうる（未対応。反映するのは
-#   その夜の `main` の先端なので、ふつうは切られていない側の run が当たる）
+#   （`evaluatePrGreen`）ので、ゲートの failure を `red` と数える。**PR 側の判定
+#   （`evaluatePrGreen` / `check-pr-green`）は取り消しを通さないよう変えず、記録の側だけが**
+#   `refineVerdictForCancelledRuns` で、`red` のうち取り消された `CI` の run だけを見ていたもの
+#   を `cancelled`（判定に至れなかった。health=unknown）へ倒す。本物の失敗が混ざる・jobs を
+#   取れないときは `red` のまま（Refs #3049）
 # - 定時実行・手動起動は `github.run_id` に落とす。実行ごとに必ず違うので**群を
 #   共有せず、main の push とも切り合わない**（上流ドリフトを見る回が、マージの
 #   たびに切られて一度も最後まで走らない、を防ぐ）

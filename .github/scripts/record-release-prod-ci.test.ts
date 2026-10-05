@@ -8,6 +8,7 @@ import {
   RECORD_LINE_PREFIX,
   recordCommentMarker,
   redWorkflowNames,
+  refineVerdictForCancelledRuns,
   // @ts-expect-error -- 素の .mjs（型宣言を持たない build 用スクリプト）を読む
 } from './record-release-prod-ci-core.mjs';
 import {
@@ -216,6 +217,66 @@ describe('記録行の health= 欄', () => {
       expect(buildRecordLine({ ...base, verdict: v })).toContain(
         `verdict=${v} health=${healthOf(v)} prod_sha=`,
       );
+    }
+  });
+});
+
+describe('refineVerdictForCancelledRuns（取り消された CI の red を cancelled へ倒す。Issue #3049）', () => {
+  const run = (id: number, name = 'CI') => ({ id, name });
+  const job = (name: string, conclusion: string) => ({ name, conclusion });
+  // 実測（run 37372223779）: checks / test が cancelled、image が success、ci だけが failure
+  const CANCELLED_CI = [
+    job('checks', 'cancelled'),
+    job('test (1/2)', 'cancelled'),
+    job('test (2/2)', 'cancelled'),
+    job('image', 'success'),
+    job('ci', 'failure'),
+  ];
+  const refine = (latestRuns: unknown, jobsByRunId: unknown, verdict = 'red') =>
+    refineVerdictForCancelledRuns({ verdict, latestRuns, jobsByRunId });
+
+  it('⭐ run 37372223779 型は cancelled（health=unknown）になり、green にも red にもならない', () => {
+    const verdict = refine([run(37372223779)], { 37372223779: CANCELLED_CI });
+    expect(verdict).toBe('cancelled');
+    expect(verdict).not.toBe('green');
+    expect(verdict).not.toBe('red');
+    expect(healthOf(verdict)).toBe('unknown');
+  });
+
+  it('本物の失敗（test が failure、ゲートも failure）は red のまま', () => {
+    const jobs = [job('checks', 'success'), job('test (1/2)', 'failure'), job('ci', 'failure')];
+    expect(refine([run(1)], { 1: jobs })).toBe('red');
+  });
+
+  it('⭐ 本物の失敗が cancelled と混ざっていれば red のまま', () => {
+    const jobs = [job('checks', 'failure'), job('test (1/2)', 'cancelled'), job('ci', 'failure')];
+    expect(refine([run(1)], { 1: jobs })).toBe('red');
+  });
+
+  it('timed_out は red のまま', () => {
+    const jobs = [job('checks', 'timed_out'), job('test (1/2)', 'cancelled'), job('ci', 'failure')];
+    expect(refine([run(1)], { 1: jobs })).toBe('red');
+  });
+
+  it('別の workflow の run に本物の失敗が在れば red のまま', () => {
+    expect(refine([run(1), run(2, 'Other')], { 1: CANCELLED_CI, 2: [job('x', 'failure')] })).toBe(
+      'red',
+    );
+  });
+
+  it('別の workflow の run の jobs を取れていなければ red のまま', () => {
+    expect(refine([run(1), run(2, 'Other')], { 1: CANCELLED_CI })).toBe('red');
+  });
+
+  it('⭐ jobs が取れない（無い・null・空）ときは今までどおり red（取り消しと見なさない）', () => {
+    expect(refine([run(1)], {})).toBe('red');
+    expect(refine([run(1)], null)).toBe('red');
+    expect(refine([run(1)], { 1: [] })).toBe('red');
+  });
+
+  it('red 以外の verdict には触らない', () => {
+    for (const verdict of ['green', 'out-of-scope', 'cancelled', 'pending', 'unknown']) {
+      expect(refine([run(1)], { 1: CANCELLED_CI }, verdict)).toBe(verdict);
     }
   });
 });

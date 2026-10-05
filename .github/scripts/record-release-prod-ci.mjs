@@ -105,6 +105,7 @@ import {
   buildRecordLine,
   describeVerdict,
   redWorkflowNames,
+  refineVerdictForCancelledRuns,
 } from './record-release-prod-ci-core.mjs';
 
 function log(text) {
@@ -360,7 +361,14 @@ function main() {
     return;
   }
 
-  const verdict = judged.result.verdict;
+  // `red` のうち、取り消された CI の run を見ていただけのものは `cancelled`
+  // （判定に至れなかった）へ倒す（Issue #3049）。`judgeSha` / `evaluatePrGreen` は
+  // 触らない——倒すのは記録の側だけで、PR の緑の判定は緩めていない。
+  const verdict = refineVerdictForCancelledRuns({
+    verdict: judged.result.verdict,
+    latestRuns: judged.latestRuns,
+    jobsByRunId: judged.jobsByRunId,
+  });
   emitRecordLine({ verdict, prodSha, mainSha, reflectOutcome, observedAt });
   log(formatVerdict(prodSha, judged.result));
   log(`record-release-prod-ci: ${describeVerdict(verdict)}`);
