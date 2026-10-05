@@ -675,7 +675,7 @@ describe('古いデーモン（旧形式の応答）', () => {
     bytes: 20,
   };
 
-  it('list: 落ちず、default 1行として見せ、デーモンが古い旨を出す', async () => {
+  it('list: 落ちず、default 1行として見せ、サーバが古い旨を出す', async () => {
     setReply('GET', '/profile', { status: 200, body: OLD });
     const read = captureStdout();
 
@@ -683,7 +683,7 @@ describe('古いデーモン（旧形式の応答）', () => {
 
     const text = read();
     expect(text).toContain('default  all（共通）  20 バイト  更新 2026-08-01T00:00:00Z');
-    expect(text).toContain('デーモンが古い');
+    expect(text).toContain('サーバが古い');
   });
 
   it('show: 従来の script をそのまま出す（本文だけ）', async () => {
@@ -725,7 +725,7 @@ describe('古いデーモン（旧形式の応答）', () => {
 
     const text = read();
     expect(text).toContain('default  all（共通）');
-    expect(text).toContain('デーモンが古い');
+    expect(text).toContain('サーバが古い');
     expect(text).toContain('runner-a: sha256 old111 (T)（runner 用の合成と一致）');
     // 旧形式では合成後の指紋は分からないので出さない。
     expect(text).not.toContain('合成後）');
@@ -749,22 +749,22 @@ describe('古いデーモン（旧形式の応答）', () => {
     expect(JSON.parse(String(put?.body))).toEqual({ script: 'export NEW=1\n' });
     const text = read();
     expect(text).toContain('sha256 new222');
-    expect(text).toContain('デーモンが古い');
+    expect(text).toContain('サーバが古い');
   });
 
-  it('default 以外の名前・default 以外の撒く先は、「デーモンが古い」と分かる文言で落ちる（生の 404 にしない）', async () => {
+  it('default 以外の名前・default 以外の撒く先は、「サーバが古い」と分かる文言で落ちる（生の 404 にしない）', async () => {
     setReply('GET', '/profile', { status: 200, body: OLD });
     captureStdout();
     const dir = await makeTempDir('alteroid-profile-legacy-');
     const path = join(dir, 'p.sh');
     await writeFile(path, 'export A=1\n', 'utf8');
 
-    await expect(profileSetCommand('rust', { file: path })).rejects.toThrow('デーモンが古い');
+    await expect(profileSetCommand('rust', { file: path })).rejects.toThrow('サーバが古い');
     await expect(profileSetCommand(undefined, { file: path, scope: 'runner' })).rejects.toThrow(
-      'デーモンが古い',
+      'サーバが古い',
     );
-    await expect(profileRemoveCommand('rust')).rejects.toThrow('デーモンが古い');
-    await expect(profileEditCommand('rust')).rejects.toThrow('デーモンが古い');
+    await expect(profileRemoveCommand('rust')).rejects.toThrow('サーバが古い');
+    await expect(profileEditCommand('rust')).rejects.toThrow('サーバが古い');
     expect(sent.some((entry) => entry.method === 'PUT' || entry.method === 'DELETE')).toBe(false);
   });
 

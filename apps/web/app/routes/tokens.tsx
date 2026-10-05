@@ -1127,6 +1127,53 @@ function describeRecoveredSource(
   }
 }
 
+type RotationSignal = NonNullable<TokenRotationEntry['signal']>;
+type RotationReason = NonNullable<TokenRotationEntry['reason']>;
+
+/**
+ * 日誌の行の `signal`（何を見て決めたか）の言い方。
+ *
+ * **`Record` にしてあるので、schema の enum に値が増えると型検査が落ちる**
+ * （足し忘れに気づける）。ただし**送られてくる値**はこの画面より新しいことがある
+ * ので、表に無い値は {@link rotationLabel} が素の値のまま出す（捨てない）。
+ */
+const ROTATION_SIGNAL_LABELS: Record<RotationSignal, string> = {
+  reached: '利用枠に達して、仕事が止まった',
+  quota_rejected: '利用枠が尽きた（従量課金枠は見ていない）',
+  overage_closed: '利用枠が尽き、従量課金枠も閉じている',
+  entered_overage: '従量課金枠から使い始めた（まだ動く）',
+  org_policy: '組織の方針で止められている（利用枠の話ではない）',
+  warning: '利用枠が近づいている',
+  none: '切り替える材料が無かった',
+  stranded: '使っているトークンは通らないのに、通る候補が在る',
+  settings_unreadable: '切り替えの設定が読めなかった',
+};
+
+/** 日誌の行の `reason`（なぜこの瞬間に見直したか）の言い方。`Record` の理由は上と同じ。 */
+const ROTATION_REASON_LABELS: Record<RotationReason, string> = {
+  pool_changed: 'トークンの一覧が変わった',
+  settings_changed: '切り替えの設定が変わった',
+  tick: '定期の見張り',
+  runner_connected: '実行環境が繋がった',
+  account_probe: '利用枠を直接確かめた結果が届いた',
+  startup: '起動した直後',
+  turn_succeeded: '使っているトークンで応答が成功した',
+  trial_succeeded: '試しに使った候補が通った',
+};
+
+/** 表にある値は言葉に、無い値（この画面より新しい値）は素の値のまま見せる。 */
+function rotationLabel(labels: Record<string, string>, value: string): string {
+  return Object.hasOwn(labels, value) ? labels[value]! : `${value}（この画面にまだ言い方が無い値）`;
+}
+
+function describeRotationSignal(signal: RotationSignal): string {
+  return rotationLabel(ROTATION_SIGNAL_LABELS, signal);
+}
+
+function describeRotationReason(reason: RotationReason): string {
+  return rotationLabel(ROTATION_REASON_LABELS, reason);
+}
+
 function RotationHistory() {
   const { data, error, isLoading, isValidating, mutate } = useJournal(JOURNAL_LIMIT, [
     'token_rotation',
@@ -1197,7 +1244,9 @@ function RotationRow({ entry }: { entry: TokenRotationEntry }) {
         <Badge tone={event.tone}>{event.label}</Badge>
         <span className="text-xs text-muted-foreground">{formatDateTime(entry.at)}</span>
         {entry.signal !== undefined && (
-          <span className="text-xs text-muted-foreground">きっかけ: {entry.signal}</span>
+          <span className="text-xs text-muted-foreground">
+            きっかけ: {describeRotationSignal(entry.signal)}
+          </span>
         )}
         {entry.freshness !== undefined && (
           <span className="text-xs text-muted-foreground">
@@ -1210,12 +1259,16 @@ function RotationRow({ entry }: { entry: TokenRotationEntry }) {
           畳むと「休止が明けたので見直した」と「記録の上で現役が通らない」が
           同じ顔になる。
 
-          **素の値をそのまま出す。** `signal` の隣が既にそうなっており、
-          **訳語を1つ置くと、増えた値だけが訳されないまま並ぶ**（この enum は
-          実際に増えている。{@link describeUnknown} の doc）。
+          **既知の値は人間の言葉にし、未知の値は素の値のまま出す**
+          （{@link describeRotationReason}）。この enum は実際に増えている
+          （{@link describeUnknown} の doc）が、対応表は `Record` なので、
+          増えたら型検査が落ちて気づく。送られてくる値が先に増えても、
+          行から消えず素の値が見える。
         */}
         {entry.reason !== undefined && (
-          <span className="text-xs text-muted-foreground">見直したきっかけ: {entry.reason}</span>
+          <span className="text-xs text-muted-foreground">
+            見直したきっかけ: {describeRotationReason(entry.reason)}
+          </span>
         )}
         {/*
           **`recovered` の行にだけ付く**（#681 (1)）。無い回は「観測していない」

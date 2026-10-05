@@ -7,7 +7,7 @@
  * - **既定は試算**——開いた直後は何も送らない。「試算する」で `dryRun: true` を送る
  * - 試算の結果（一致件数・対象件数・持ち越し件数・消える id の一覧）が出る
  * - **「実行する」で `dryRun: false` を送る**（同じ絞り込みのまま）
- * - **サーバの400文言をそのまま出す**（クライアント側で言い換えない）
+ * - **7種類すべてを選んだ状態では送らない**（サーバが 400 で断る条件。ボタンを押せず、理由を画面で言う）
  * - **絞り込みを変えたら、前の試算の結果を無効にする**（古い件数のまま
  *   「実行する」を押せる形を作らない）
  */
@@ -196,17 +196,8 @@ describe('/inbox 画面 — 受信箱の絞り込み一括削除（#972 / #1042�
     expect(await screen.findByText(/実行しました/)).toBeTruthy();
   });
 
-  it('サーバの400文言をそのまま出す（7種類全部を選んだ呼び）', async () => {
-    const errorText =
-      'types に在る7種類（human_message, human_answer, distill, timer, external, ' +
-      'self_initiative, manager_message）を全部並べた呼びは断る——それは絞り込みが' +
-      '無いのと同じで、1回で受信箱を空にできてしまう。消したい種類だけを名指しする' +
-      'こと（例 types: ["manager_message"]）。**1件も消していない。**';
-    stubInboxRemove((body) => {
-      const coversAllSeven = ALL_SEVEN_TYPES.every((type) => body.types.includes(type));
-      if (coversAllSeven) return { status: 400, payload: { error: errorText } };
-      return { status: 200, payload: dryRunPayload() };
-    });
+  it('7種類すべてを選んだ状態では送らない（押せず、理由を人間の言葉で言う）', async () => {
+    const sent = stubInboxRemove(() => ({ status: 200, payload: dryRunPayload() }));
     renderInbox();
 
     for (const label of [
@@ -220,14 +211,20 @@ describe('/inbox 画面 — 受信箱の絞り込み一括削除（#972 / #1042�
     ]) {
       checkType(label);
     }
-    // クライアント側の事前の注意（断るのはサーバ、注意はUI）。
-    expect(screen.getByText(/7種類すべてを選んでいる/)).toBeTruthy();
-
     fillReason('全部畳みたい');
-    fireEvent.click(screen.getByRole('button', { name: '試算する' }));
 
-    // サーバの断り文言がそのまま出る——言い換えていない。
-    expect(await screen.findByText(errorText)).toBeTruthy();
+    expect(screen.getByText(/7種類すべてを選んでいる/)).toBeTruthy();
+    const button = screen.getByRole('button', { name: '試算する' }) as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+    fireEvent.click(button);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(sent).toHaveLength(0);
+
+    // 1つ外せば送れる。
+    checkType(/定期ジョブ/);
+    expect((screen.getByRole('button', { name: '試算する' }) as HTMLButtonElement).disabled).toBe(
+      false,
+    );
   });
 
   it('絞り込みを変えると、前の試算の結果を無効にする', async () => {

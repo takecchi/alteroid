@@ -116,9 +116,9 @@ export const SUMMARY_LABELS: [keyof ResetSummary, string][] = [
   ['profile', '実行環境プロファイル'],
   ['usageDaily', '利用状況（日次）'],
   ['usageBaseline', '利用状況（基準）'],
-  ['usageLedger', '利用状況（台帳の開始時刻）'],
+  ['usageLedger', '利用状況（記録の開始時刻）'],
   ['usageTurns', '利用状況（回数）'],
-  ['sessionLog', 'SDK セッション生ログ'],
+  ['sessionLog', 'セッションの生ログ'],
 ];
 
 function report(cleared: ResetSummary): void {

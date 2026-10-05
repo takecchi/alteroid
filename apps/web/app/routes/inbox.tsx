@@ -41,15 +41,17 @@ import type {
  * 能力が落ちる**（AGENTS.md「範囲外でも気づいたことは上げる」の対になる、
  * north_star の禁止1「能力の削除」）。
  *
- * ## 「絞り込みが無い」の判定はサーバに任せる
+ * ## 7種類すべてを選んだ状態では送らない（サーバと同じ条件を画面にも持つ）
  *
- * `types` に在る7種類を全部並べた呼びは 400 で断られる（絞り込みが無いのと
- * 同じで、1回で受信箱を空にできてしまうため——それは `POST /reset` の役目）。
- * **その判定をここで複製しない。** `useInboxRemoveMany`（`hooks/mutations.ts`）が
- * サーバの `{error}` をそのまま `ApiError.message` へ載せるので、ここは
- * `ErrorNote` に渡すだけでよい（`apps/cli/src/inbox.ts` の `post()` と同じ
- * 役割分担）。**ただし7種類全部を選んだ時点で「この呼びは断られる」と事前に
- * 注意するのは良い**（断るのはサーバ、注意は UI ——下の `AllSelectedWarning`）。
+ * `types` に在る7種類を全部並べた呼びは、サーバ（`POST /inbox/remove`）が 400 で
+ * 断る（絞り込みが無いのと同じで、1回で受信箱を空にできてしまうため——それは
+ * `POST /reset` の役目）。断る本文には欄名（`types`）と識別子が入っていて、
+ * 持ち主の読む言葉ではない。**だから画面で先に防ぐ**: 全部選んだ状態では
+ * `canRun` を偽にして「試算する」「実行する」を押せなくし、理由は
+ * `AllSelectedWarning` が人間の言葉で言う。条件（`INBOX_TYPES` を全部選ぶ）は
+ * サーバの `INBOX_EVENT_TYPE_ORDER.every(...)` と同じものである。
+ * **サーバの断りは残る**（別の入口・古い画面の最後の網）ので、それが返ったときは
+ * 従来どおり `ErrorNote` に渡す。
  *
  * ## 既定は試算。実行は明示の一手
  *
@@ -331,7 +333,8 @@ function InboxRemoveCard() {
   const limit = limitTrimmed === '' || !limitValid ? undefined : limitNumber;
 
   const allSelected = types.length === INBOX_TYPE_ORDER.length;
-  const canRun = types.length > 0 && reason.trim() !== '' && limitValid && !busy;
+  // 7種類すべては送らない（サーバが 400 で断る条件。上の doc）。
+  const canRun = types.length > 0 && !allSelected && reason.trim() !== '' && limitValid && !busy;
 
   /**
    * 絞り込みを変えたときだけ呼ぶ。**前の試算・実行結果を無効にする** ——
@@ -501,16 +504,14 @@ function InboxRemoveCard() {
 }
 
 /**
- * 7種類全部を選んだときの事前の注意。**断るのはサーバ、注意は UI**
- * ——ここでは「渡せば必ず400になる」という判定を複製せず、選んだ時点で
- * 気づけるようにするだけ（サーバ側の条件が変わってもここは古い判定のまま
- * 残らない。実際に断るかどうかは常にサーバに聞きに行く）。
+ * 7種類全部を選んだときの説明。このとき実行ボタンは押せない（`canRun`）ので、
+ * 押せない理由をここで言う。
  */
 function AllSelectedWarning({ show }: { show: boolean }) {
   if (!show) return null;
   return (
     <p className="mt-2 text-xs text-warn">
-      7種類すべてを選んでいる。これは「絞り込みが無い」のと同じなので、断られる
+      7種類すべてを選んでいる。これは「絞り込みが無い」のと同じなので、試算も実行もできない
       （1回で受信箱を空にできてしまうのを防ぐため。全部消したいときは「設定」画面の
       ワークスペースのリセットを使う）。消したい種類だけを選ぶこと。
     </p>

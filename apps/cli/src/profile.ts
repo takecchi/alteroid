@@ -113,12 +113,12 @@ function noteLegacy(profile: ProfileView): void {
 
 /**
  * 古いデーモンで行ごとの操作（名前が default でない・撒く先を指定する）をしようとしたとき、
- * 生の 404 / 400 にせず「デーモンが古い」と分かる文言で落とす。
+ * 生の 404 / 400 にせず「サーバが古い」と分かる文言で落とす。
  */
 function assertLegacySupports(profile: ProfileView, name: string, scope?: ProfileScope): void {
   if (!profile.legacy) return;
   if (name !== 'default' || (scope !== undefined && scope !== 'all')) {
-    throw new Error(`デーモンが古いので、この操作はできない。${LEGACY_PROFILE_NOTICE}`);
+    throw new Error(LEGACY_PROFILE_NOTICE);
   }
 }
 

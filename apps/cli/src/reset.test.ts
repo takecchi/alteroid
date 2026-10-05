@@ -189,4 +189,13 @@ describe('確認の文（buildConfirmMessage） — issue #2196', () => {
     // 安心してしまう可能性がある）も見る。
     expect(covered.size).toBe(labelKeys.length);
   });
+
+  it('報告の見出しは画面（/settings）と同じ言い方で、内部の呼び名（SDK・runner）を出さない', () => {
+    const labels = Object.fromEntries(SUMMARY_LABELS) as Record<string, string>;
+    expect(labels.sessionLog).toBe('セッションの生ログ');
+    expect(labels.usageLedger).toBe('利用状況（記録の開始時刻）');
+    for (const label of Object.values(labels)) {
+      expect(label).not.toMatch(/SDK|runner/);
+    }
+  });
 });

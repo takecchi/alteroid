@@ -65,4 +65,4 @@ export function normalizeProfile(raw: ProfileState): NormalizedProfile {
 
 /** 古いデーモンに繋がっているときの案内（画面・CLI で同じ文言）。 */
 export const LEGACY_PROFILE_NOTICE =
-  'デーモンが古いので、行ごとの操作（追加・削除・撒く先の変更）はできない。デーモンが新しくなってから使える（置かれている本文は default 行として見えている）。';
+  '接続先のサーバが古いので、行ごとの操作（追加・削除・渡す先の変更）はできない。サーバが新しくなってから使える（置かれている本文は「default」という名前の1行として見えている）。';
