@@ -9,7 +9,7 @@
  * 持つこと（`memory` は `content` だけなので、ここが違いの本体）。
  */
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { createMemoryRouter, RouterProvider } from 'react-router';
+import { createMemoryRouter, Link, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import type { Practice, PracticeVersionSummary } from '@alteroid/logic';
@@ -38,7 +38,13 @@ afterEach(() => {
  */
 function Harness({ slug }: { slug: string }) {
   const loaderData = clientLoader({ params: { slug } } as Route.ClientLoaderArgs);
-  return <PracticeDetail {...({ loaderData } as Route.ComponentProps)} />;
+  return (
+    <>
+      {/* 離れる先のリンク（本番では左の一覧や上のタブが担う。一覧との組み合わせは practices-list-detail.test.tsx） */}
+      <Link to="/practices">やり方</Link>
+      <PracticeDetail {...({ loaderData } as Route.ComponentProps)} />
+    </>
+  );
 }
 
 function mountDetail(slug: string) {
@@ -405,14 +411,16 @@ describe('生 HTML の扱い', () => {
 });
 
 describe('見出し（#2763 と同じ作り）', () => {
-  it('戻る導線「やり方」は縮まず折り返さない（狭い幅で縦に割れない）', async () => {
-    // jsdom はレイアウトを持たないので実寸は測れない。割れを防ぐ指定そのものを固定する。
+  it('slug は h2 で、長くても折り返せる（縮む側は見出しを包む div、ボタン群は縮まない）', async () => {
+    // jsdom はレイアウトを持たないので実寸は測れない。指定そのものを固定する。
     renderDetail('daily-report', docRoute(PRACTICE));
 
-    const back = await screen.findByRole('link', { name: 'やり方' });
-    expect(back.className).toContain('shrink-0');
-    expect(back.className).toContain('whitespace-nowrap');
-    expect(screen.getByText('daily-report').className).toContain('min-w-0');
+    const heading = await screen.findByRole('heading', { level: 2, name: 'daily-report' });
+    expect(heading.className).toContain('break-all');
+    expect(heading.parentElement?.className.split(/\s+/)).toContain('min-w-0');
+    expect(
+      screen.getByRole('button', { name: /保存|変更なし/ }).parentElement?.className,
+    ).toContain('shrink-0');
   });
 });
 
@@ -421,7 +429,7 @@ describe('未保存の編集を離れる前に確認する', () => {
   it('書きかけのまま他の画面へのリンクを押すと確認が出る。やめれば留まる', async () => {
     renderDetail('daily-report', docRoute(PRACTICE));
     fireEvent.mouseDown(await screen.findByRole('tab', { name: '編集' }));
-    fireEvent.change(await screen.findByLabelText('題（title）'), {
+    fireEvent.change(await screen.findByLabelText('題'), {
       target: { value: '書きかけ' },
     });
 
@@ -430,13 +438,13 @@ describe('未保存の編集を離れる前に確認する', () => {
     expect(await screen.findByRole('alertdialog')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'やめる' }));
     await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
-    expect((screen.getByLabelText('題（title）') as HTMLInputElement).value).toBe('書きかけ');
+    expect((screen.getByLabelText('題') as HTMLInputElement).value).toBe('書きかけ');
   });
 
   it('変更が無ければ確認なしで移動し、書きかけのときだけ beforeunload の警告を出す', async () => {
     renderDetail('daily-report', docRoute(PRACTICE));
     fireEvent.mouseDown(await screen.findByRole('tab', { name: '編集' }));
-    const input = await screen.findByLabelText('題（title）');
+    const input = await screen.findByLabelText('題');
 
     const clean = new Event('beforeunload', { cancelable: true });
     window.dispatchEvent(clean);

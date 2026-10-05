@@ -178,16 +178,20 @@ describe('新しいやり方を書く', () => {
   });
 });
 
-/** 行全体をリンクにしない（#2808）。リンクは題名だけで、slug と日時の文字は `<a>` の外に在る。 */
-describe('一覧の行は題名だけがリンク', () => {
-  it('題名はリンク、slug と文字数・日時の文字はリンクの外', async () => {
+/**
+ * 一覧は左のペインの項目で、1行が丸ごと1本のリンク（`ListDetailItems`。日誌・マネージャーと同じ）。
+ * 行の中に別のリンクを入れ子にしない。
+ */
+describe('一覧の行は1本のリンク', () => {
+  it('題・slug・文字数・日時が1本のリンクに入り、行の中のリンクは1つだけ', async () => {
     renderPractices([practice({ slug: 'daily-report', title: '日報の書き方' })]);
 
-    const link = await screen.findByRole('link', { name: '日報の書き方' });
-    expect(link.getAttribute('href')).toBe('/practices/daily-report');
-    expect(link.closest('li')?.querySelectorAll('a')).toHaveLength(1);
-    expect(screen.getByText('daily-report').closest('a')).toBeNull();
-    expect(screen.getByText(/作成 3日前/).closest('a')).toBeNull();
+    await screen.findByText('日報の書き方');
+    const link = screen.getByText('日報の書き方').closest('a');
+    expect(link?.getAttribute('href')).toBe('/practices/daily-report');
+    expect(link?.closest('li')?.querySelectorAll('a')).toHaveLength(1);
+    expect(screen.getByText('daily-report').closest('a')).toBe(link);
+    expect(screen.getByText(/作成 3日前/).closest('a')).toBe(link);
   });
 });
 

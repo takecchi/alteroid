@@ -96,7 +96,11 @@ export function ListDetail({
     <aside
       className={cn(
         'flex min-h-0 flex-col bg-card',
-        inDrawer ? 'flex-1' : isMobile ? 'flex-1' : 'w-64 shrink-0 border-r border-border md:w-72',
+        inDrawer
+          ? 'flex-1'
+          : isMobile
+            ? 'min-w-0 flex-1'
+            : 'w-64 shrink-0 border-r border-border md:w-72',
       )}
     >
       <h2 className="shrink-0 border-b border-border px-3 py-3 text-sm font-semibold">

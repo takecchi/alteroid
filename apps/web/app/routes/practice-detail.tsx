@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
-import { Link, useBlocker, useNavigate } from 'react-router';
+import { useBlocker, useNavigate } from 'react-router';
 import { Tabs } from 'radix-ui';
 
 import {
+  DocumentTitle,
   Markdown,
-  Page,
   Button,
   ConfirmDialog,
   ErrorNote,
@@ -48,8 +48,17 @@ export function clientLoader({ params }: Route.ClientLoaderArgs) {
  * 置かない**——版を戻す操作は結局 `write()`（全文置換）を1回呼ぶのと同じなので、
  * 人間は中身を見て「編集」タブへ手でコピーすればよく、専用の口を増やす理由が無い。
  */
+/**
+ * 一覧の右のペインに出る（親の経路 `practices.tsx` の `ListDetail`）。**親は同じままで子の `:slug` だけが
+ * 変わる**ので、素のままだと別のやり方へ移っても同じ部品が使い回され、下書き・保存時刻・開いていた版・
+ * タブが次のやり方へ持ち越される。**`key={slug}` で作り直す。** 未保存の編集があるときは、作り直しの前に
+ * `useBlocker` が移動そのものを止めて確認を出す（「破棄して離れる」を選んだときだけ移り、作り直される）。
+ */
 export default function PracticeDetail({ loaderData }: Route.ComponentProps) {
-  const { slug } = loaderData;
+  return <PracticeDetailBody key={loaderData.slug} slug={loaderData.slug} />;
+}
+
+function PracticeDetailBody({ slug }: { slug: string }) {
   const { data, error, isLoading } = usePractice(slug);
   const savePractice = useSavePractice();
   const deletePractice = useDeletePractice();
@@ -144,33 +153,33 @@ export default function PracticeDetail({ loaderData }: Route.ComponentProps) {
       .finally(() => setBusy(false));
   }
 
+  const description =
+    savedAt !== undefined
+      ? `保存した（${formatDateTime(savedAt)}）` +
+        (data !== undefined ? ` · 作成 ${formatDateTime(data.practice.createdAt)}` : '')
+      : data !== undefined
+        ? `作成 ${formatDateTime(data.practice.createdAt)} · 更新 ${formatDateTime(data.practice.updatedAt)}`
+        : missing
+          ? 'まだ無いやり方。書けば作られる'
+          : undefined;
+
   return (
-    <Page
-      documentTitle={`${slug} - やり方`}
-      title={
-        <span className="flex items-baseline gap-2">
-          <Link
-            to="/practices"
-            className="shrink-0 whitespace-nowrap text-muted-foreground hover:text-foreground"
-          >
-            やり方
-          </Link>
-          <span className="shrink-0 text-muted-foreground">/</span>
-          <span className="min-w-0 font-mono text-sm break-all">{slug}</span>
-        </span>
-      }
-      description={
-        savedAt !== undefined
-          ? `保存した（${formatDateTime(savedAt)}）` +
-            (data !== undefined ? ` · 作成 ${formatDateTime(data.practice.createdAt)}` : '')
-          : data !== undefined
-            ? `作成 ${formatDateTime(data.practice.createdAt)} · 更新 ${formatDateTime(data.practice.updatedAt)}`
-            : missing
-              ? 'まだ無いやり方。書けば作られる'
-              : undefined
-      }
-      action={
-        <div className="flex items-center gap-2">
+    <div className="flex min-h-full flex-col">
+      {/*
+        中身は一覧の右のペインに出る（親の経路 `practices.tsx` の `ListDetail`）ので、画面の枠
+        （`Page`）も戻るリンクも持たない。画面の h1 は親が持ち、ここの見出しは h2。狭い画面では
+        `ListDetail` の「やり方の一覧を開く」が一覧への戻り口になる。
+      */}
+      <DocumentTitle>{`${slug} - やり方`}</DocumentTitle>
+      <header className="mb-4 flex shrink-0 items-start justify-between gap-4">
+        <div className="min-w-0">
+          {/* 名前は最大128文字・空白なし。`break-all` で幅に収める（#2763） */}
+          <h2 className="font-mono text-base font-semibold break-all">{slug}</h2>
+          {description !== undefined && (
+            <p className="mt-0.5 text-xs text-muted-foreground">{description}</p>
+          )}
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
           {!missing && data !== undefined && (
             <>
               <Button
@@ -208,9 +217,8 @@ export default function PracticeDetail({ loaderData }: Route.ComponentProps) {
             </Button>
           )}
         </div>
-      }
-      className="flex flex-col"
-    >
+      </header>
+
       {!missing && <ErrorNote error={error} className="mb-3" />}
       <ErrorNote error={failure} className="mb-3" />
       <ConfirmDialog
@@ -308,8 +316,11 @@ export default function PracticeDetail({ loaderData }: Route.ComponentProps) {
             </label>
           </Tabs.Content>
 
-          <Tabs.Content value="history" className="flex min-h-0 flex-1 gap-4 overflow-y-auto">
-            <div className="w-64 shrink-0 overflow-y-auto border-r border-border pr-3">
+          <Tabs.Content
+            value="history"
+            className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto md:flex-row"
+          >
+            <div className="shrink-0 overflow-y-auto border-b border-border pb-3 md:w-64 md:border-r md:border-b-0 md:pr-3 md:pb-0">
               <p className="mb-2 text-xs text-muted-foreground">
                 保存のたびに版が1つ増える。削除しても版は消えない。
               </p>
@@ -389,6 +400,6 @@ export default function PracticeDetail({ loaderData }: Route.ComponentProps) {
           </Tabs.Content>
         </Tabs.Root>
       )}
-    </Page>
+    </div>
   );
 }

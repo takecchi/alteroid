@@ -1,9 +1,19 @@
 import { MemoryTabs } from '~/components/group-tabs';
 import { AlertTriangle } from 'lucide-react';
 import { useId, useState } from 'react';
-import { Link, useNavigate } from 'react-router';
+import { Link, Outlet, useNavigate, useParams } from 'react-router';
 
-import { Page, Button, Card, Empty, ErrorNote, Input, Spinner } from '@alteroid/ui';
+import {
+  Page,
+  Button,
+  Empty,
+  ErrorNote,
+  Input,
+  ListDetail,
+  ListDetailItems,
+  Spinner,
+  cn,
+} from '@alteroid/ui';
 import { usePractices } from '@alteroid/swr';
 import { formatRelative } from '@alteroid/logic';
 import type { UnreadablePractice } from '@alteroid/logic';
@@ -19,7 +29,7 @@ function UnreadablePracticesNote({ unreadable }: { unreadable: readonly Unreadab
   return (
     <div
       role="status"
-      className="mb-4 flex items-start gap-2 rounded-md border border-warn/40 bg-warn/10 px-3 py-2 text-sm text-warn"
+      className="m-3 flex items-start gap-2 rounded-md border border-warn/40 bg-warn/10 px-3 py-2 text-sm text-warn"
     >
       <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden />
       <div className="min-w-0 break-words">
@@ -71,6 +81,7 @@ export default function Practices() {
   const navigate = useNavigate();
   const slugId = useId();
   const [slug, setSlug] = useState('');
+  const { slug: selectedSlug } = useParams();
 
   const practices = data?.practices ?? [];
   // **読めなかった行**（`GET /practices` の `unreadable`。issue #2346）。1件でも在るときだけ
@@ -85,97 +96,124 @@ export default function Practices() {
   const listUnavailable = data === undefined && error !== undefined;
 
   return (
+    /*
+      一覧と中身は1画面（`ListDetail`）。この経路は `practices/:slug` の親（layout route）で、右の中身は
+      子の経路（`practice-detail.tsx`）が `<Outlet />` に出る。URL は今までどおり。本文の余白と
+      スクロールは外す（`overflow-hidden p-0 md:p-0`）。左右のペインがそれぞれスクロールする。
+    */
     <Page
       tabs={<MemoryTabs />}
       title="やり方"
       description="仕事のやり方の控え。読んで従うかどうかは毎回クローンが決める。alteroid が自動で実行するものではない"
+      className="overflow-hidden p-0 md:p-0"
     >
-      <ErrorNote error={error} className="mb-4" />
-
-      <Card className="mb-4 p-4">
-        <p className="mb-2 text-sm font-medium">新しいやり方を書く</p>
-        <label htmlFor={slugId} className="mb-1 block text-xs text-muted-foreground">
-          名前（半角の英小文字・数字・. _ - のみ）
-        </label>
-        <div className="flex gap-2">
-          <Input
-            id={slugId}
-            value={slug}
-            placeholder="例: work-style"
-            onChange={(event) => setSlug(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter' && valid) void navigate(`/practices/${slug}`);
-            }}
-          />
-          <Button
-            variant="primary"
-            disabled={!valid}
-            onClick={() => void navigate(`/practices/${slug}`)}
-          >
-            開く
-          </Button>
-        </div>
-        {slug !== '' && !valid && (
-          <p className="mt-1.5 text-xs text-destructive">
-            使えるのは半角の英小文字・数字と . _ - で、先頭は英数字。128 文字まで。
-          </p>
-        )}
-      </Card>
-
-      {isLoading || listUnavailable || unreadable.length === 0 ? null : (
-        <UnreadablePracticesNote unreadable={unreadable} />
-      )}
-
-      {isLoading ? (
-        <Spinner />
-      ) : listUnavailable ? null : practices.length === 0 ? (
-        <Card>
-          {unreadable.length > 0 ? (
-            // **「まだ1件も無い」「正常」と言えるのは、読めない行が0件のときだけ**
-            // （issue #2346）。読めない行が在れば、読めた行が無いとしか言えない。
-            <Empty>読めたやり方は無い。無いとも、正常だとも言えない（読めない行が在る）。</Empty>
-          ) : (
-            <Empty>まだ1件も無い。これは正常な状態——やり方が書かれていない仕事も普通に進む。</Empty>
+      <div className="flex h-full flex-col">
+        {/*
+          名前を入れて開く欄は、ペイン幅（288px）に収まらないので、一覧の上の帯に置く。
+          狭い画面でやり方を開いているあいだは畳む（中身の領域を広く使う。「やり方」のタブで一覧へ戻れば出る）。
+        */}
+        <div
+          className={cn(
+            'shrink-0 border-b border-border px-4 py-3 md:px-6',
+            selectedSlug !== undefined && 'hidden md:block',
           )}
-        </Card>
-      ) : (
-        <Card>
-          <ul>
-            {practices.map((practice) => (
-              <li key={practice.slug} className="border-b border-border last:border-b-0">
-                {/* 行全体をリンクにしない（#2808）。リンクは題名だけにして、slug・サイズ・日時は
-                    選択・コピーできる文字にする。 */}
-                <div className="flex items-center gap-3 px-4 py-3 hover:bg-muted">
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-baseline text-sm">
-                      <span className="mr-1.5 shrink-0 text-[10px] text-muted-foreground">
-                        {practiceKindLabel(practice.kind)}
-                      </span>
-                      {/* 押せる範囲は題名の行いっぱい（縦は上下に 4px ずつ足して 28px。-my で行の高さは変えない） */}
-                      <Link
-                        to={`/practices/${practice.slug}`}
-                        className="-my-1 block min-w-0 truncate py-1 underline-offset-2 hover:underline"
-                      >
-                        {practice.title}
-                      </Link>
-                    </div>
-                    <p className="truncate font-mono text-[11px] text-muted-foreground">
-                      {practice.slug}
-                    </p>
-                  </div>
-                  <span className="shrink-0 text-[11px] text-muted-foreground">
-                    {/* `chars` は本文の文字数（コードポイント数。`practiceMetaSchema` の
-                        doc）。`formatBytes` を当てると「B / KB」と名乗ってしまっていた
-                        （#1340）。CLI とクローンの道具と同じく「文字」と刷る。 */}
-                    {practice.chars} 文字 · 作成 {formatRelative(practice.createdAt)} · 更新{' '}
-                    {formatRelative(practice.updatedAt)}
-                  </span>
-                </div>
-              </li>
-            ))}
-          </ul>
-        </Card>
-      )}
+        >
+          <div className="md:flex md:items-end md:gap-6">
+            <div className="md:shrink-0">
+              <p className="mb-2 text-sm font-medium md:mb-1">新しいやり方を書く</p>
+              <label htmlFor={slugId} className="mb-1 block text-xs text-muted-foreground md:mb-0">
+                名前（半角の英小文字・数字・. _ - のみ）
+              </label>
+            </div>
+            <div className="flex gap-2 md:w-96">
+              <Input
+                id={slugId}
+                value={slug}
+                placeholder="例: work-style"
+                onChange={(event) => setSlug(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' && valid) void navigate(`/practices/${slug}`);
+                }}
+              />
+              <Button
+                variant="primary"
+                disabled={!valid}
+                onClick={() => void navigate(`/practices/${slug}`)}
+              >
+                開く
+              </Button>
+            </div>
+          </div>
+          {slug !== '' && !valid && (
+            <p className="mt-1.5 text-xs text-destructive">
+              使えるのは半角の英小文字・数字と . _ - で、先頭は英数字。128 文字まで。
+            </p>
+          )}
+        </div>
+
+        <ListDetail
+          className="min-h-0 flex-1"
+          listLabel="やり方の一覧"
+          detailLabel="やり方の中身"
+          hasSelection={selectedSlug !== undefined}
+          selectionKey={selectedSlug}
+          emptyDetail={<Empty>左の一覧からやり方を選ぶと、その中身がここに出る。</Empty>}
+          list={
+            <>
+              <ErrorNote error={error} className="m-3" />
+              {isLoading || listUnavailable || unreadable.length === 0 ? null : (
+                <UnreadablePracticesNote unreadable={unreadable} />
+              )}
+              {isLoading ? (
+                <Spinner />
+              ) : listUnavailable ? null : practices.length === 0 ? (
+                unreadable.length > 0 ? (
+                  // **「まだ1件も無い」「正常」と言えるのは、読めない行が0件のときだけ**
+                  // （issue #2346）。読めない行が在れば、読めた行が無いとしか言えない。
+                  <Empty inset="card">
+                    読めたやり方は無い。無いとも、正常だとも言えない（読めない行が在る）。
+                  </Empty>
+                ) : (
+                  <Empty inset="card">
+                    まだ1件も無い。これは正常な状態——やり方が書かれていない仕事も普通に進む。
+                  </Empty>
+                )
+              ) : (
+                <ListDetailItems
+                  label="やり方"
+                  items={practices.map((practice) => ({
+                    key: practice.slug,
+                    href: `/practices/${practice.slug}`,
+                    current: practice.slug === selectedSlug,
+                    children: (
+                      <>
+                        <div className="flex items-baseline">
+                          <span className="mr-1.5 shrink-0 text-[10px] text-muted-foreground">
+                            {practiceKindLabel(practice.kind)}
+                          </span>
+                          <span className="min-w-0 flex-1 truncate">{practice.title}</span>
+                        </div>
+                        <p className="truncate font-mono text-[11px] text-muted-foreground">
+                          {practice.slug}
+                        </p>
+                        <p className="mt-0.5 truncate text-[11px] text-muted-foreground">
+                          {/* `chars` は本文の文字数（コードポイント数。`practiceMetaSchema` の
+                              doc）。`formatBytes` を当てると「B / KB」と名乗ってしまっていた
+                              （#1340）。CLI とクローンの道具と同じく「文字」と刷る。 */}
+                          {practice.chars} 文字 · 作成 {formatRelative(practice.createdAt)} · 更新{' '}
+                          {formatRelative(practice.updatedAt)}
+                        </p>
+                      </>
+                    ),
+                  }))}
+                  renderLink={({ href, ...rest }) => <Link to={href} {...rest} />}
+                />
+              )}
+            </>
+          }
+          detail={<Outlet />}
+        />
+      </div>
     </Page>
   );
 }
