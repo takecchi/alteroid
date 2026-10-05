@@ -8,6 +8,7 @@ import {
   Button,
   Card,
   CardHeader,
+  ConfirmDialog,
   Empty,
   ErrorNote,
   Input,
@@ -146,6 +147,7 @@ function EnvVarRow({
   onRemove: () => void;
 }) {
   const scope = describeScope(entry.scope);
+  const [confirmingRemove, setConfirmingRemove] = useState(false);
 
   return (
     <li className="border-b border-border px-4 py-3 last:border-b-0">
@@ -190,9 +192,19 @@ function EnvVarRow({
       )}
 
       <div className="mt-2">
-        <Button variant="danger" size="sm" loading={busy} onClick={onRemove}>
+        <Button variant="danger" size="sm" loading={busy} onClick={() => setConfirmingRemove(true)}>
           外す
         </Button>
+        {/* 外すと置いた値が消えて取り消せない。押した瞬間には実行せず確認を挟む（#2781） */}
+        <ConfirmDialog
+          open={confirmingRemove}
+          onOpenChange={setConfirmingRemove}
+          title={`環境変数「${entry.name}」を外しますか`}
+          description="置いた値が消え、元に戻せません。これを受け取っていた仕事には、以後この値が配られません。"
+          confirmLabel="外す"
+          destructive
+          onConfirm={onRemove}
+        />
       </div>
     </li>
   );

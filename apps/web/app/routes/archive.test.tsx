@@ -139,7 +139,7 @@ describe('/archive 画面 — 一覧・集計・削除（#776）', () => {
     await renderArchive();
 
     expect(await screen.findByText('sess-1-a.jsonl')).toBeTruthy();
-    expect(screen.getByText(/session sess-1/)).toBeTruthy();
+    expect(screen.getByText(/会話 sess-1/)).toBeTruthy();
     expect(screen.getByText(/1234バイト/)).toBeTruthy();
   });
 
@@ -161,6 +161,18 @@ describe('/archive 画面 — 一覧・集計・削除（#776）', () => {
 
     expect(await screen.findByText('sess-repeated')).toBeTruthy();
     expect(screen.getByText('行数 68')).toBeTruthy();
+  });
+
+  it('空のとき、何が起きるとここに出るかを言い、コマンド名・パス・内部の語を出さない（#2792）', async () => {
+    stubArchiveScreen([]);
+
+    await renderArchive();
+
+    expect((await screen.findAllByText(/退避された生ログはまだありません/)).length).toBe(2);
+    const text = document.body.textContent ?? '';
+    for (const word of [/alteroid chat/, /\/archive/, /sessionId/, /GET /]) {
+      expect(text).not.toMatch(word);
+    }
   });
 
   it('既に削除済みの行には「本文を消す」を出さない', async () => {

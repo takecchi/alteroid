@@ -2,6 +2,7 @@ import { OctagonPause, PanelLeft } from 'lucide-react';
 import type { ReactNode } from 'react';
 
 import { Button } from '../../common';
+import { DocumentTitle } from '../../document-title';
 
 /**
  * 会話の見出しの帯。
@@ -48,6 +49,7 @@ export function ChatHeader({
           </button>
         )}
         <div className="min-w-0 flex-1">
+          <DocumentTitle>クローンと話す</DocumentTitle>
           <h1 className="text-base font-semibold">クローンと話す</h1>
           <p className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground">
             {conversationId ?? '新しい会話'}

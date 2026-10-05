@@ -6,6 +6,7 @@ import {
   type MarkdownEditorMode,
   Page,
   Button,
+  ConfirmDialog,
   ErrorNote,
   Spinner,
 } from '@alteroid/ui';
@@ -34,6 +35,7 @@ export default function MemoryDetail({ loaderData }: Route.ComponentProps) {
    */
   const [draft, setDraft] = useState<string | undefined>(undefined);
   const [busy, setBusy] = useState(false);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [failure, setFailure] = useState<unknown>(undefined);
   const [savedAt, setSavedAt] = useState<string | undefined>(undefined);
 
@@ -85,6 +87,7 @@ export default function MemoryDetail({ loaderData }: Route.ComponentProps) {
 
   return (
     <Page
+      documentTitle={`${slug} - 記憶`}
       title={
         // `Page` の title は h1 の親（div）が既に `min-w-0` を持つので、この
         // flex 行自体は絞られる側に居る。slug は `break-all` 済み（最大128
@@ -96,12 +99,16 @@ export default function MemoryDetail({ loaderData }: Route.ComponentProps) {
         // に揃えた。`flex-wrap` は付けていない: 折り返すと1行に収まる
         // 「記憶 / slug」の見た目が崩れ、items-center との組み合わせで
         // リンクが複数行の slug の縦中央に浮く見た目になる（stackingの利点が
-        // 無いのに見た目だけ悪くなる）。
-        <span className="flex items-center gap-2">
-          <Link to="/memory" className="text-muted-foreground hover:text-foreground">
+        // 無いのに見た目だけ悪くなる）。見出しの「記憶」「/」は `shrink-0 whitespace-nowrap`
+        // で狭い幅でも縦に割らず、slug が複数行になっても先頭行の基線に揃える（#2763）。
+        <span className="flex items-baseline gap-2">
+          <Link
+            to="/memory"
+            className="shrink-0 whitespace-nowrap text-muted-foreground hover:text-foreground"
+          >
             記憶
           </Link>
-          <span className="text-muted-foreground">/</span>
+          <span className="shrink-0 text-muted-foreground">/</span>
           <span className="min-w-0 font-mono text-sm break-all">{slug}</span>
         </span>
       }
@@ -119,20 +126,32 @@ export default function MemoryDetail({ loaderData }: Route.ComponentProps) {
       action={
         <div className="flex items-center gap-2">
           {!missing && data !== undefined && (
-            <Button
-              variant="danger"
-              size="sm"
-              disabled={busy}
-              onClick={() => {
-                setBusy(true);
-                deleteMemory(slug)
-                  .then(() => navigate('/memory'))
-                  .catch(setFailure)
-                  .finally(() => setBusy(false));
-              }}
-            >
-              削除
-            </Button>
+            <>
+              <Button
+                variant="danger"
+                size="sm"
+                disabled={busy}
+                onClick={() => setConfirmingDelete(true)}
+              >
+                削除
+              </Button>
+              {/* 取り消せない操作（本文ごと消える）なので、押した瞬間には実行せず確認を挟む（#2781） */}
+              <ConfirmDialog
+                open={confirmingDelete}
+                onOpenChange={setConfirmingDelete}
+                title={`「${slug}」を削除しますか`}
+                description="この記憶は本文ごと消え、元に戻せません。"
+                confirmLabel="削除する"
+                destructive
+                onConfirm={() => {
+                  setBusy(true);
+                  deleteMemory(slug)
+                    .then(() => navigate('/memory'))
+                    .catch(setFailure)
+                    .finally(() => setBusy(false));
+                }}
+              />
+            </>
           )}
           {!loadFailed && (
             <Button variant="primary" size="sm" loading={busy} disabled={!dirty} onClick={save}>

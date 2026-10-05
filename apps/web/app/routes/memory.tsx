@@ -84,21 +84,26 @@ export default function Memory() {
           <ul>
             {documents.map((document) => (
               <li key={document.slug} className="border-b border-border last:border-b-0">
-                <Link
-                  to={`/memory/${document.slug}`}
-                  className="flex items-center gap-3 px-4 py-3 hover:bg-muted"
-                >
+                {/* 行全体をリンクにしない（#2808）。リンクは題名だけにして、slug・サイズ・日時は
+                    選択・コピーできる文字にする。 */}
+                <div className="flex items-center gap-3 px-4 py-3 hover:bg-muted">
                   <div className="min-w-0 flex-1">
                     {/* 一覧の1行は Markdown 化の対象外（`components/markdown.tsx` の doc） */}
-                    <p className="truncate text-sm">
+                    <div className="flex items-baseline text-sm">
                       <span
-                        className="mr-1.5 text-[10px] text-muted-foreground"
+                        className="mr-1.5 shrink-0 text-[10px] text-muted-foreground"
                         title={kindHint(document.kind)}
                       >
                         [{document.kind}]
                       </span>
-                      {document.title}
-                    </p>
+                      {/* 押せる範囲は題名の行いっぱい（縦は上下に 4px ずつ足して 28px。-my で行の高さは変えない） */}
+                      <Link
+                        to={`/memory/${document.slug}`}
+                        className="-my-1 block min-w-0 truncate py-1 underline-offset-2 hover:underline"
+                      >
+                        {document.title}
+                      </Link>
+                    </div>
                     <p className="truncate font-mono text-[11px] text-muted-foreground">
                       {document.slug}
                     </p>
@@ -115,7 +120,7 @@ export default function Memory() {
                     {formatCreatedAtRelative(document.createdAt)} · 更新{' '}
                     {formatRelative(document.updatedAt)}
                   </span>
-                </Link>
+                </div>
               </li>
             ))}
           </ul>

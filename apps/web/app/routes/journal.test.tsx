@@ -47,6 +47,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { JournalFeedProvider, summarizeJournalEntry } from '@alteroid/swr';
 import type { JournalLive } from '@alteroid/swr';
+import { formatDateTime, JOURNAL_TYPE_LABEL } from '@alteroid/logic';
 import type { JournalEntry } from '@alteroid/logic';
 import { json, Providers, stubFetch, storeTestBaseUrl } from '~/test-support';
 
@@ -246,7 +247,7 @@ describe('絞り込みチップが日誌の全種別を尽くす', () => {
     await screen.findByRole('heading', { name: '日誌' });
 
     for (const type of JOURNAL_ENTRY_TYPES) {
-      expect(screen.getByRole('button', { name: type })).toBeTruthy();
+      expect(screen.getByRole('button', { name: JOURNAL_TYPE_LABEL[type] })).toBeTruthy();
     }
     // 種別チップの総数が JOURNAL_ENTRY_TYPES の件数と一致する（多すぎても
     // 少なすぎても落ちる）。選択が無い間は「すべて解除」ボタンは出ないので、
@@ -309,7 +310,7 @@ describe('recent を履歴に重ねる', () => {
     // 絞り込み前は何も画面に出ない（virtua が jsdom で描かないため）。
     expect(screen.queryByText(summarizeJournalEntry(HISTORY_ONLY))).toBeNull();
 
-    fireEvent.click(screen.getByRole('button', { name: 'exchange' }));
+    fireEvent.click(screen.getByRole('button', { name: 'やりとり' }));
 
     // exchange だけに絞る `type=exchange` が実際にサーバへ撃たれる
     // （`JournalBody` が `key` で作り直され、新しい初期取得が走る）。
@@ -350,7 +351,7 @@ describe('worker_wait — 種別フィルタと1行の文言', () => {
     // 絞り込み前も画面には何も出ない（virtua が jsdom で描かないため）。
     expect(screen.queryByText(summarizeJournalEntry(WORKER_WAIT))).toBeNull();
 
-    fireEvent.click(screen.getByRole('button', { name: 'worker_wait' }));
+    fireEvent.click(screen.getByRole('button', { name: '作業者の待機' }));
 
     await waitFor(() => {
       expect(
@@ -385,7 +386,7 @@ describe('turn_usage — 種別フィルタと1行の文言', () => {
 
     expect(screen.queryByText(summarizeJournalEntry(TURN_USAGE))).toBeNull();
 
-    fireEvent.click(screen.getByRole('button', { name: 'turn_usage' }));
+    fireEvent.click(screen.getByRole('button', { name: 'ターンの消費' }));
 
     await waitFor(() => {
       expect(
@@ -563,7 +564,10 @@ describe('日誌の地平（issue #1510 の積み残し）', () => {
     });
 
     expect(await screen.findByText(/これより古い記録は無い/)).toBeTruthy();
-    expect(await screen.findByText(new RegExp(OLDEST_AT))).toBeTruthy();
+    // 時刻は端末の時間帯の書式で出す。UTC の ISO 文字列と「記憶ストア」は見せない（#2806）。
+    expect(await screen.findByText(new RegExp(formatDateTime(OLDEST_AT)))).toBeTruthy();
+    expect(screen.queryByText(new RegExp(OLDEST_AT))).toBeNull();
+    expect(screen.queryByText(/記憶ストア/)).toBeNull();
     expect(screen.getByText(/区別できない/)).toBeTruthy();
   });
 
@@ -620,7 +624,10 @@ describe('日誌の地平（issue #1510 の積み残し）', () => {
     expect(screen.queryByRole('button', { name: /もっと遡る/ })).toBeNull();
 
     expect(await screen.findByText(/これより古い記録は無い/)).toBeTruthy();
-    expect(await screen.findByText(new RegExp(OLDEST_AT))).toBeTruthy();
+    // 時刻は端末の時間帯の書式で出す。UTC の ISO 文字列と「記憶ストア」は見せない（#2806）。
+    expect(await screen.findByText(new RegExp(formatDateTime(OLDEST_AT)))).toBeTruthy();
+    expect(screen.queryByText(new RegExp(OLDEST_AT))).toBeNull();
+    expect(screen.queryByText(/記憶ストア/)).toBeNull();
     expect(screen.getByText(/区別できない/)).toBeTruthy();
 
     // 初期読み込みの1回目の呼びに horizon=true が乗っていたことも確かめる
@@ -804,7 +811,7 @@ describe('日誌画面の検索欄（issue #250）', () => {
     await waitForLoaded();
 
     expect(
-      screen.getByText('「当たらない語」に当たる記録は無い（この条件の中では）。'),
+      screen.getByText('「当たらない語」に当たる記録はありません（この条件の中では）。'),
     ).toBeTruthy();
     expect(screen.queryByText('この条件では何も記録されていない。')).toBeNull();
   });
@@ -825,7 +832,7 @@ describe('日誌画面の検索欄（issue #250）', () => {
     await waitForLoaded();
 
     expect(
-      screen.getByText('type=exchange に当たる記録は無い（絞り込みを外せば見えるかもしれない）。'),
+      screen.getByText('「やりとり」の記録はありません（絞り込みを外せば見えるかもしれません）。'),
     ).toBeTruthy();
     expect(screen.queryByText('この条件では何も記録されていない。')).toBeNull();
   });
@@ -846,7 +853,7 @@ describe('日誌画面の検索欄（issue #250）', () => {
 
     expect(
       screen.getByText(
-        'type=exchange に絞った上で、「当たらない語」に当たる記録は無い（絞り込みを外せば見えるかもしれない）。',
+        '「やりとり」に絞った上で、「当たらない語」に当たる記録はありません（絞り込みを外せば見えるかもしれません）。',
       ),
     ).toBeTruthy();
     expect(screen.queryByText('この条件では何も記録されていない。')).toBeNull();
@@ -890,7 +897,7 @@ describe('日誌画面の検索欄（issue #250）', () => {
     });
 
     const NOTE =
-      'tool_use の input・worker_wait・turn_usage・context_usage・inbox_flow・github_observation は探す対象に入っていない（そこにだけ書かれている語は当たらない）。';
+      '道具の入力・作業者の待機・ターンの消費・文脈の占有・受信箱の流量・GitHub の観測は探す対象に入っていない（そこにだけ書かれている語は当たらない）。';
     const { unmount } = renderJournal({ status: 'live', recent: [] }, [
       `/?q=${encodeURIComponent('当たらない語')}`,
     ]);
@@ -971,11 +978,11 @@ describe('日誌画面の検索欄（issue #250）', () => {
     renderJournal({ status: 'live', recent: [] }, [`/?q=${encodeURIComponent('トマト')}`]);
     await waitForLoaded();
 
-    expect(screen.getByText(/tool_use の input/)).toBeTruthy();
-    // core の `journal-search.ts` が1欄も探さない種別（#2562）。CLI の `/journal` と同じ並び。
+    expect(screen.getByText(/道具の入力/)).toBeTruthy();
+    // core の `journal-search.ts` が1欄も探さない種別（#2562）。日本語名で、同じ並び。
     expect(
       screen.getByText(
-        /tool_use の input・worker_wait・turn_usage・context_usage・inbox_flow・github_observation/,
+        /道具の入力・作業者の待機・ターンの消費・文脈の占有・受信箱の流量・GitHub の観測/,
       ),
     ).toBeTruthy();
   });
@@ -996,14 +1003,14 @@ describe('種別チップの選択が URL に載る（issue #2029）', () => {
     const { router } = renderJournal({ status: 'live', recent: [] });
     await screen.findByRole('heading', { name: '日誌' });
 
-    fireEvent.click(screen.getByRole('button', { name: 'exchange' }));
+    fireEvent.click(screen.getByRole('button', { name: 'やりとり' }));
 
     await waitFor(() => {
       expect(new URLSearchParams(router.state.location.search).get('types')).toBe('exchange');
     });
 
     // もう1つ押すとカンマ区切りで増える。
-    fireEvent.click(screen.getByRole('button', { name: 'decision' }));
+    fireEvent.click(screen.getByRole('button', { name: '判断' }));
     await waitFor(() => {
       expect(new URLSearchParams(router.state.location.search).get('types')).toBe(
         'exchange,decision',
@@ -1011,7 +1018,7 @@ describe('種別チップの選択が URL に載る（issue #2029）', () => {
     });
 
     // 押し直すと外れる。
-    fireEvent.click(screen.getByRole('button', { name: 'exchange' }));
+    fireEvent.click(screen.getByRole('button', { name: 'やりとり' }));
     await waitFor(() => {
       expect(new URLSearchParams(router.state.location.search).get('types')).toBe('decision');
     });
@@ -1032,9 +1039,9 @@ describe('種別チップの選択が URL に載る（issue #2029）', () => {
     // `aria-pressed` を持つようになった（この上の文は移す前の事実）。下の assert は
     // className だけを見ており、`FilterChips` も押した状態に `border-primary` を付けるので
     // 変えていない。
-    expect(screen.getByRole('button', { name: 'exchange' }).className).toContain('border-primary');
-    expect(screen.getByRole('button', { name: 'decision' }).className).toContain('border-primary');
-    expect(screen.getByRole('button', { name: 'escalation' }).className).not.toContain(
+    expect(screen.getByRole('button', { name: 'やりとり' }).className).toContain('border-primary');
+    expect(screen.getByRole('button', { name: '判断' }).className).toContain('border-primary');
+    expect(screen.getByRole('button', { name: 'エスカレーション' }).className).not.toContain(
       'border-primary',
     );
 
@@ -1058,7 +1065,7 @@ describe('種別チップの選択が URL に載る（issue #2029）', () => {
 
     // 画面ごと落ちない。既知のチップは変わらず出る。
     expect(await screen.findByRole('heading', { name: '日誌' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'exchange' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'やりとり' })).toBeTruthy();
     // 知らない種別のボタンは無い（チップは既知の種別ぶんしか無い）。
     expect(screen.queryByRole('button', { name: 'no-such-type' })).toBeNull();
   });
@@ -1073,7 +1080,7 @@ describe('種別チップの選択が URL に載る（issue #2029）', () => {
     await screen.findByRole('heading', { name: '日誌' });
     const initialIndex = router.state.location.key;
 
-    fireEvent.click(screen.getByRole('button', { name: 'exchange' }));
+    fireEvent.click(screen.getByRole('button', { name: 'やりとり' }));
     await waitFor(() => {
       expect(new URLSearchParams(router.state.location.search).get('types')).toBe('exchange');
     });

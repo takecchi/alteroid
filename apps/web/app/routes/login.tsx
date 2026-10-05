@@ -3,7 +3,16 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Navigate, useNavigate } from 'react-router';
 
 import { ConnectionCard } from '~/components/connection';
-import { Badge, Button, Card, ErrorNote, Input, KeyValueList, Spinner } from '@alteroid/ui';
+import {
+  Badge,
+  Button,
+  Card,
+  DocumentTitle,
+  ErrorNote,
+  Input,
+  KeyValueList,
+  Spinner,
+} from '@alteroid/ui';
 import {
   useAuth,
   useApiContext,
@@ -23,6 +32,7 @@ export default function Login() {
   if (auth.error !== undefined) {
     return (
       <Shell>
+        <DocumentTitle>デーモンに繋がらない</DocumentTitle>
         <h1 className="text-sm font-semibold">デーモンに繋がらない</h1>
         <ErrorNote error={auth.error} className="mt-3" />
       </Shell>
@@ -169,6 +179,7 @@ function SignIn() {
 
   return (
     <Shell>
+      <DocumentTitle>ログイン</DocumentTitle>
       <h1 className="text-sm font-semibold">ログイン</h1>
       <p className="mt-1 text-xs text-muted-foreground">
         接続先: <span className="font-mono">{baseUrl}</span>
@@ -257,6 +268,7 @@ function Ungranted() {
 
   return (
     <Shell>
+      <DocumentTitle>まだ使う許可が無い</DocumentTitle>
       <h1 className="text-sm font-semibold">まだ使う許可が無い</h1>
       {/*
           **「単一の持ち主のもの」と書かないこと。** 2026-09-09 のオーナー決定で

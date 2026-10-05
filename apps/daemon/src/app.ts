@@ -29,6 +29,8 @@ import type {
   TokenPoolService,
 } from '@alteroid/core';
 import {
+  MemoryConflictError,
+  memoryVersion,
   ARCHIVE_REMOVED_BYTES_UNIT_NOTE,
   JOURNAL_SEARCH_UNCOVERED_LIST_MD,
   MCP_SERVER_NAME,
@@ -187,6 +189,7 @@ import {
   managersListResponseSchema,
   memoryDeleteResponseSchema,
   memoryListResponseSchema,
+  memoryConflictResponseSchema,
   memoryReadResponseSchema,
   meResponseSchema,
   okResponseSchema,
@@ -468,7 +471,12 @@ const chatBody = z.object({
   supersedes: z.string().min(1).optional(),
 });
 
-const memoryBody = z.object({ content: z.string() });
+/**
+ * `ifMatch`（任意、Issue #2743）は、書き換える側が**読んだ時の版**（GET の `version`）。
+ * 書く瞬間の版と違えば書かずに 409。`null` は「読んだ時には無かった」。
+ * **省略は従来どおり後勝ち**——既存の呼び出し（`memory set`、スクリプト）を壊さない。
+ */
+const memoryBody = z.object({ content: z.string(), ifMatch: z.string().nullable().optional() });
 /**
  * `PracticeStore.write` の入力そのまま（`slug` だけは経路から取る）。
  *
@@ -3129,7 +3137,7 @@ export function createApp(deps: AppDeps) {
         }
         const doc = await stores.persona.read(slug);
         if (!doc) return c.json({ error: 'not found' as const }, 404);
-        return c.json({ document: doc });
+        return c.json({ document: doc, version: memoryVersion(doc.content) });
       },
     )
 
@@ -3148,6 +3156,12 @@ export function createApp(deps: AppDeps) {
             description: '記憶のスラッグが不正、または本文が JSON として不正。',
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
+          409: {
+            description:
+              '`ifMatch`（読んだ時の版）が、いまの版と違う（読んでから書くまでの間に別の書き手が' +
+              '書いた、または消した）。**何も書いていない。** `current` にいまの版を返す。',
+            content: { 'application/json': { schema: resolver(memoryConflictResponseSchema) } },
+          },
         },
       }),
       jsonBody(memoryBody, (where) => ({
@@ -3159,7 +3173,26 @@ export function createApp(deps: AppDeps) {
           return c.json({ error: '記憶のスラッグが不正' as const }, 400);
         }
         const before = await stores.persona.read(slug);
-        const doc = await stores.persona.write(slug, c.req.valid('json').content);
+        const { content, ifMatch } = c.req.valid('json');
+        let doc;
+        try {
+          doc = await stores.persona.write(slug, content, { ifMatch });
+        } catch (error) {
+          // **黙って上書きしない（Issue #2743）。** 書いていないので日誌にも積まない。
+          if (error instanceof MemoryConflictError) {
+            return c.json(
+              {
+                error: '記憶が読んだ後に変わっています（書き換えていません）' as const,
+                current:
+                  error.current === null
+                    ? null
+                    : { document: error.current, version: memoryVersion(error.current.content) },
+              },
+              409,
+            );
+          }
+          throw error;
+        }
         // **書き換え自体はもう効いている**（Issue #2037）。日誌への追記だけが
         // 落ちても 500 を返さない——`appendJournalOrDrop` の doc。
         const entry = await appendJournalOrDrop(
@@ -3189,7 +3222,7 @@ export function createApp(deps: AppDeps) {
         if (entry !== undefined) {
           await stores.persona.markHumanTouched(slug, entry.at);
         }
-        return c.json({ document: doc });
+        return c.json({ document: doc, version: memoryVersion(doc.content) });
       },
     )
 
