@@ -1847,7 +1847,7 @@ export async function main(): Promise<void> {
     // 呼ばれるより先に両方とも作られていれば壊れない）。
     scheduler: () => scheduler.list(),
     // 引き受けに失敗して動かなかった定期の発火を、再起動を待たず短い間隔で据え直す（#2741）。
-    onScheduledRunNotStarted: (kind) => scheduler.retrySoon(kind),
+    onScheduledRunNotStarted: (kind, delayMs) => scheduler.retrySoon(kind, delayMs),
     cwd: paths.root,
     runners,
     profile,
