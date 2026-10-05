@@ -1,4 +1,5 @@
 import { SettingsTabs } from '~/components/group-tabs';
+import { settingsDocumentTitle } from '~/lib/nav';
 import { useState } from 'react';
 
 import { NotOwnerHint } from '~/components/not-owner-hint';
@@ -41,21 +42,21 @@ function describeScope(scope: ProfileScope): { label: string; tone: 'neutral' | 
     case 'all':
       return { label: '共通', tone: 'accent' };
     case 'app':
-      return { label: 'clone', tone: 'neutral' };
+      return { label: 'クローンだけ', tone: 'neutral' };
     case 'runner':
-      return { label: 'manager', tone: 'neutral' };
+      return { label: 'マネージャーだけ', tone: 'neutral' };
     default:
       // **送られてくる値である**（`apps/web` は Vercel、デーモンは Railway で別に配られ
       // るので、サーバのほうが新しい窓が必ず在る）。投げずに「未知」とそのまま出す
       // （`env-vars.tsx` と同じ判断）。
-      return { label: `未知の撒く先（${String(scope)}）`, tone: 'neutral' };
+      return { label: `未知の渡す先（${String(scope)}）`, tone: 'neutral' };
   }
 }
 
 const SCOPE_OPTIONS: { value: ProfileScope; label: string }[] = [
-  { value: 'all', label: '共通（clone・manager 両方。既定）' },
-  { value: 'app', label: 'clone だけ' },
-  { value: 'runner', label: 'manager だけ' },
+  { value: 'all', label: '共通（クローン・マネージャー両方。既定）' },
+  { value: 'app', label: 'クローンだけ' },
+  { value: 'runner', label: 'マネージャーだけ' },
 ];
 
 /** 行の名前の形（`packages/core/src/store.ts` の `PROFILE_ENTRY_NAME` と揃える。ずれてもデーモンが 400 で弾く）。 */
@@ -98,8 +99,9 @@ export default function Profile() {
   return (
     <Page
       tabs={<SettingsTabs />}
+      documentTitle={settingsDocumentTitle('/profile')}
       title="実行環境プロファイル"
-      description="クローン・マネージャー・作業者に効くシェルスクリプトの行（~/.zprofile 相当。行ごとに渡す先を選べる）"
+      description="クローン・マネージャー・作業者が仕事を始めるときに読み込まれる、環境を整えるスクリプトの行。行ごとに渡す先を選べる（シェルの ~/.zprofile に相当）"
     >
       <div className="flex flex-col gap-4">
         <Card>
@@ -110,7 +112,7 @@ export default function Profile() {
           />
           <div className="flex flex-col gap-3 px-4 py-3">
             <p className="text-[11px] break-words text-muted-foreground">
-              行は名前の辞書順（コード単位順。/etc/profile.d と同じ）につなげて効く。
+              行は名前の辞書順につなげて効く（Linux の /etc/profile.d と同じ並べ方）。
             </p>
             <ErrorNote error={error} />
             <NotOwnerHint failure={error} subject="実行環境プロファイル" />
@@ -190,7 +192,7 @@ function ProfileList({
               mono: true,
             },
             {
-              label: 'runner 用の合成',
+              label: 'マネージャー用の合成',
               value: profile.runner.sha256 ?? '（掛かる行なし）',
               mono: true,
             },
@@ -209,7 +211,7 @@ function ProfileList({
         ))}
       </ul>
       <p className="text-[11px] break-words text-muted-foreground">
-        各 runner へ届いているかは、「設定」の runner の欄に出る。
+        各実行環境へ届いているかは、「設定」の実行環境の欄に出る。
       </p>
     </div>
   );
@@ -259,7 +261,7 @@ function EntryRow({
         className="mt-2"
         labelWidth="6rem"
         items={[
-          { label: '指紋', value: `sha256=${entry.sha256}`, mono: true },
+          { label: '識別用の値', value: `sha256=${entry.sha256}`, mono: true },
           { label: '更新', value: formatDateTime(entry.updatedAt) },
         ]}
       />
@@ -388,9 +390,7 @@ function ProfileEditor({
       <CardHeader title="行を登録する" subtitle="1行を丸ごと置き換える" />
       <div className="flex flex-col gap-3 px-4 py-3 text-sm">
         <p className="text-xs leading-relaxed break-words text-muted-foreground">
-          保存すると、本文は置く前にデーモンのプロセスでその場で評価される（記憶ストアの鍵を持つ
-          プロセスでの任意コマンド実行と同じ強さ。撒く先が manager だけの行は、デーモンでは評価 せず
-          runner が評価する）。読めなければ保存も配布もせず、理由を返す（前のものが残る）。
+          保存すると、本文は置く前にデーモン上でその場で実行して確かめられる（記憶を扱うデーモンでの任意のコマンド実行と同じ強さ。渡す先がマネージャーだけの行は、デーモンでは確かめず、マネージャーが動く実行環境で確かめる）。実行できなければ保存も反映もせず、理由を返す（前のものが残る）。
           秘密は「環境変数」の画面へ置くこと——ここに書いた名前は、そちらの同じ名前を上書きする。
         </p>
 
@@ -436,9 +436,9 @@ function ProfileEditor({
               />
             </label>
             <label className="flex flex-col gap-1">
-              <span className="text-xs text-muted-foreground">撒く先</span>
+              <span className="text-xs text-muted-foreground">渡す先</span>
               <Select
-                aria-label="プロファイルの撒く先"
+                aria-label="プロファイルの渡す先"
                 value={editor.scope}
                 disabled={legacy}
                 onChange={(event) => {
@@ -471,13 +471,13 @@ function ProfileEditor({
             {confirming ? (
               <div className="flex flex-col gap-2 rounded-md border border-warn/40 bg-warn/10 px-3 py-2">
                 <p className="text-[11px] break-words text-warn">
-                  {`行 ${editor.name} を置く。本文をデーモンのプロセスで評価し、通れば${
+                  {`行 ${editor.name} を置く。本文をデーモン上で実行して確かめ、通れば${
                     editor.scope === 'all'
                       ? 'クローン・マネージャー・作業者のすべて'
                       : editor.scope === 'app'
                         ? 'クローン（デーモン）だけ'
                         : 'マネージャー・作業者だけ'
-                  }へ配る。撒く先から外れた側からは外れる。これから起こす仕事には即座に効く。`}
+                  }へ渡す。渡す先から外れた側からは外れる。これから起こす仕事には即座に効く。`}
                 </p>
                 <div className="flex flex-wrap items-center gap-2">
                   <Button
@@ -565,7 +565,7 @@ function UpdateReport({ label, update }: { label: string; update: ProfileUpdateR
       <p className="font-mono text-[11px] break-all text-muted-foreground">
         {composed === undefined
           ? null
-          : `合成後の指紋: クローン用 ${composed.clone.sha256 ?? '掛かる行なし'} / runner 用 ${composed.runner.sha256 ?? '掛かる行なし'}`}
+          : `合成後の識別値: クローン用 ${composed.clone.sha256 ?? '掛かる行なし'} / マネージャー用 ${composed.runner.sha256 ?? '掛かる行なし'}`}
       </p>
       <ul className="flex flex-col gap-1">
         {rows.map(({ label: rowLabel, outcome }) => (
@@ -590,8 +590,8 @@ function UpdateReport({ label, update }: { label: string; update: ProfileUpdateR
         ))}
       </ul>
       <p className="text-[11px] text-muted-foreground">
-        これから起こす仕事には即座に効く。走行中の仕事は gh / git だけが次の呼び出しから拾う
-        ——それ以外は次の仕事から。
+        これから起こす仕事には即座に効く。動いている最中の仕事には、gh と git
+        だけが次の呼び出しから反映される。それ以外は次の仕事から。
       </p>
     </div>
   );

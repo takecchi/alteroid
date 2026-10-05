@@ -677,6 +677,17 @@ describe('alteroid token policy', () => {
     expect(put?.body).toEqual({ rotateOn: 'overage_exhausted' });
   });
 
+  it('token policy の値が3つのどれでもなければ、通信の前に許される値と意味を日本語で言う（rotateOn を出さない）', async () => {
+    const error = await tokenPolicyCommand('bogus', {}).catch((e: unknown) => e);
+    const text = String(error);
+    expect(text).toContain(
+      'free_exhausted / overage_exhausted / off のいずれか（渡されたのは bogus）',
+    );
+    expect(text).toContain('無料枠が尽きたら回す');
+    expect(text).not.toContain('rotateOn');
+    expect(sent.some((call) => call.method === 'PUT')).toBe(false);
+  });
+
   it('--cooldown-ms も渡せる。0以下や非数は投げる', async () => {
     setReply('PUT', '/tokens/policy', {
       status: 200,
@@ -822,3 +833,56 @@ describe('403（本文で理由を分ける）', () => {
  * `alteroid token remove` の describe の中で、`'stored'` の行だけを使う形で
  * そのまま測っている。
  */
+
+/**
+ * 日誌が書けなかった `PUT /tokens`・`PUT /tokens/policy` の 500（issue #2742 の続き）。
+ * 素の `/tokens が失敗しました (500)` ではなく、「変更していない」と次にすることを言う。
+ */
+describe('日誌が書けなかった 500 の見せ方', () => {
+  const JOURNAL_DOWN = {
+    status: 500,
+    body: {
+      error: '記録（日誌）が書けなかったので、変更していません',
+      code: 'journal_write_failed',
+    },
+  };
+
+  it('token add: 「記録（日誌）が書けなかったので、変更していません」と言う', async () => {
+    const file = join(await makeTempDir('alteroid-token-'), 'v.txt');
+    await writeFile(file, 'dummy-value\n');
+    setReply('GET', '/tokens', { status: 200, body: { tokens: [], settings: EMPTY_SETTINGS } });
+    setReply('PUT', '/tokens', JOURNAL_DOWN);
+    captureStdout();
+
+    const error = await tokenAddCommand({ label: 'x', file }).catch((e: unknown) => e as Error);
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain('記録（日誌）が書けなかったので、変更していません');
+    expect((error as Error).message).not.toContain('(500)');
+  });
+
+  it('token enable / token policy: 同じ言い方', async () => {
+    setReply('GET', '/tokens', {
+      status: 200,
+      body: {
+        tokens: [{ id: 'tok-a', label: 'a', order: 0, disabledAt: '2026-01-01T00:00:00.000Z' }],
+        settings: EMPTY_SETTINGS,
+      },
+    });
+    setReply('PUT', '/tokens', JOURNAL_DOWN);
+    setReply('PUT', '/tokens/policy', JOURNAL_DOWN);
+    captureStdout();
+
+    await expect(tokenEnableCommand('tok-a')).rejects.toThrow('変更していません');
+    await expect(tokenPolicyCommand('overage_exhausted')).rejects.toThrow('変更していません');
+  });
+
+  it('本文の無い 500（日誌の失敗を言えない版）は、変更されたか分からないと言い、確かめ方を出す', async () => {
+    setReply('PUT', '/tokens/policy', { status: 500, body: 'Internal Server Error' });
+    captureStdout();
+
+    const error = await tokenPolicyCommand('off').catch((e: unknown) => e as Error);
+    expect((error as Error).message).toContain('変更されたかどうかは分かりません');
+    expect((error as Error).message).toContain('alteroid token list');
+    expect((error as Error).message).not.toContain('Internal Server Error');
+  });
+});

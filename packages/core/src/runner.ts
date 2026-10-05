@@ -2054,6 +2054,11 @@ class RunnerSession {
       ...(this.#resumeState.sessionId === undefined
         ? {}
         : { sessionId: this.#resumeState.sessionId }),
+      // **背景処理の本数を運ぶ**（Issue #2851。`runnerManagerStateSchema.
+      // liveBackgroundTasks` の doc）。デーモンが「畳んで新しい鍵で起こし直して
+      // よいか」を決める材料で、畳むと道連れになるものの本数である
+      // （`#atTokenRecycleBoundary` と同じ数え方）。
+      liveBackgroundTasks: this.#sdkSession.liveBackgroundTasks.length,
     };
   }
 

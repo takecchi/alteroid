@@ -30,7 +30,15 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { createMemoryRouter, RouterProvider, useParams } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { json, Providers, sse, storeTestBaseUrl, stubFetch, type Route } from '~/test-support';
+import {
+  findShownConversation,
+  json,
+  Providers,
+  sse,
+  storeTestBaseUrl,
+  stubFetch,
+  type Route,
+} from '~/test-support';
 
 import Chat from './chat';
 
@@ -116,7 +124,7 @@ describe('会話ごとの下書き（#1618）', () => {
 
     // 送らずに B へ切り替える。
     await router.navigate(`/chat/${CONVERSATION_B}`);
-    expect(await screen.findByText(CONVERSATION_B)).toBeTruthy();
+    expect(await findShownConversation(CONVERSATION_B)).toBeTruthy();
 
     const boxAfterSwitch = await draftBox();
     // あるべき形: B の入力欄は空（A の下書きが漏れていない）。
@@ -133,13 +141,13 @@ describe('会話ごとの下書き（#1618）', () => {
     fireEvent.change(box, { target: { value: 'Aの下書き' } });
 
     await router.navigate(`/chat/${CONVERSATION_B}`);
-    expect(await screen.findByText(CONVERSATION_B)).toBeTruthy();
+    expect(await findShownConversation(CONVERSATION_B)).toBeTruthy();
 
     const boxInB = await draftBox();
     fireEvent.change(boxInB, { target: { value: 'Bの下書き' } });
 
     await router.navigate(`/chat/${CONVERSATION_A}`);
-    expect(await screen.findByText(CONVERSATION_A)).toBeTruthy();
+    expect(await findShownConversation(CONVERSATION_A)).toBeTruthy();
 
     const boxBackInA = await draftBox();
     // あるべき形: A へ戻ったら A の下書き「Aの下書き」が復元される。
@@ -164,7 +172,7 @@ describe('会話ごとの下書き（#1618）', () => {
     const boxInA = await draftBox();
     fireEvent.change(boxInA, { target: { value: 'Aの下書き（送らない）' } });
     await router.navigate(`/chat/${CONVERSATION_B}`);
-    expect(await screen.findByText(CONVERSATION_B)).toBeTruthy();
+    expect(await findShownConversation(CONVERSATION_B)).toBeTruthy();
 
     // B で書いて実際に送る。
     const boxInB = await draftBox();
@@ -179,7 +187,7 @@ describe('会話ごとの下書き（#1618）', () => {
 
     // A へ戻ると、A の下書きは B の送信に影響されずそのまま残っている。
     await router.navigate(`/chat/${CONVERSATION_A}`);
-    expect(await screen.findByText(CONVERSATION_A)).toBeTruthy();
+    expect(await findShownConversation(CONVERSATION_A)).toBeTruthy();
     expect((await draftBox()).value).toBe('Aの下書き（送らない）');
   });
 
@@ -195,7 +203,7 @@ describe('会話ごとの下書き（#1618）', () => {
 
     // 既存の会話 A へ切り替える。
     await router.navigate(`/chat/${CONVERSATION_A}`);
-    expect(await screen.findByText(CONVERSATION_A)).toBeTruthy();
+    expect(await findShownConversation(CONVERSATION_A)).toBeTruthy();
     expect((await draftBox()).value).toBe('');
 
     // 新しい会話へ戻る。
@@ -248,7 +256,7 @@ describe('会話ごとの下書き（#1618）', () => {
     // 新しい会話で書きかけ、送らずに A へ移る（鍵 undefined にしまわれる）。
     fireEvent.change(await draftBox(), { target: { value: '新しい会話から送る発言' } });
     await router.navigate(`/chat/${CONVERSATION_A}`);
-    expect(await screen.findByText(CONVERSATION_A)).toBeTruthy();
+    expect(await findShownConversation(CONVERSATION_A)).toBeTruthy();
     expect((await draftBox()).value).toBe('');
 
     // 新しい会話へ戻ると下書きが戻る（直前の歯と同じ前提）。
@@ -267,7 +275,7 @@ describe('会話ごとの下書き（#1618）', () => {
 
     // 別の会話へ移ってから、もう一度「新しい会話」を開く。
     await router.navigate(`/chat/${CONVERSATION_A}`);
-    expect(await screen.findByText(CONVERSATION_A)).toBeTruthy();
+    expect(await findShownConversation(CONVERSATION_A)).toBeTruthy();
     await router.navigate('/chat');
     expect(await screen.findByText('新しい会話')).toBeTruthy();
     // あるべき形: 送った文章は下書きとして戻らない。
