@@ -9,14 +9,16 @@ import { assertNoNul, stripNul } from './nul-guard.js';
  *   値になる（id・`accountId`・`grantedBy`・`subject`・トークンの `sha256`・ログイン要求の
  *   `nonce`／`codeVerifier`／`claimSha256`／`redirectUri`）。
  * - **本文は NUL を落として残す**（`displayName`・`label`・`error`）。
- * - **メールアドレス（`AuthAccount.email`・`AuthIdentity.email`）はここでは扱わない。**
- *   鍵（`findAccountByEmail`・一意索引）とも本文（表示用）とも言えるので、判断待ち（issue #3011）。
+ * - **メールアドレス（teto の判断、2026-10-06）**: `AuthAccount.email` は一意の索引と衝突の検査に使う
+ *   ので鍵として断る。`AuthIdentity.email` は本文として落として残す。
  *
  * 例外の文には欄名だけを載せ、値は載せない。入力は書き換えず、整えた写しを返す。
  */
 export function prepareAccountForWrite(account: AuthAccount): AuthAccount {
   assertNoNul('authAccount.id', account.id);
   if (account.grantedBy !== null) assertNoNul('authAccount.grantedBy', account.grantedBy);
+  // 検証済みメールの一意の索引と衝突の検査に使う値。落とすと別のアカウントと一致しうるので断る（teto の判断、2026-10-06）。
+  if (account.email !== null) assertNoNul('authAccount.email', account.email);
   return {
     ...account,
     displayName: account.displayName === null ? null : stripNul(account.displayName),
@@ -26,7 +28,8 @@ export function prepareAccountForWrite(account: AuthAccount): AuthAccount {
 export function prepareIdentityForWrite(identity: AuthIdentity): AuthIdentity {
   assertNoNul('authIdentity.subject', identity.subject);
   assertNoNul('authIdentity.accountId', identity.accountId);
-  return identity;
+  // プロバイダの申告で、ログインのたびに上書きされる表示用の本文。落として残す（teto の判断、2026-10-06）。
+  return { ...identity, email: identity.email === null ? null : stripNul(identity.email) };
 }
 
 export function prepareAccessTokenForWrite(token: AccessTokenRecord): AccessTokenRecord {

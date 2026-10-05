@@ -253,6 +253,16 @@ export function createAuthService(options: AuthServiceOptions): AuthService {
         await fail(claimedForExchange, 'exchange_failed');
         return { status: 'error', reason: 'exchange_failed' };
       }
+      // 検証済みのメールは account.email に載り、一意の索引と衝突の検査に使われる。NUL を含むものは
+      // ストアが断る（teto の判断、2026-10-06）ので、閉じる側（ログイン失敗）に倒す。
+      // 断った理由は stderr に残す——欄名と固定の文だけで、メールの値は載せない。
+      if (profile.emailVerified && profile.email !== null && hasNul(profile.email)) {
+        process.stderr.write(
+          'alteroid: ログインを断った（auth.email に NUL を含むので断った。プロバイダが返した検証済みメール）\n',
+        );
+        await fail(claimedForExchange, 'exchange_failed');
+        return { status: 'error', reason: 'exchange_failed' };
+      }
 
       const at = now().toISOString();
       const existing = await store.findIdentity(provider.id, profile.subject);

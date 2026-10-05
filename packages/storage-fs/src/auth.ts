@@ -310,6 +310,7 @@ export class FsAuthStore implements AuthStore {
   }
 
   async findAccountByEmail(email: string): Promise<AuthAccount | null> {
+    if (hasNul(email)) return null;
     const { accounts } = await this.#read();
     // 大小文字を区別しない（#1702）。memory / pg の実装と同じ規約。
     const needle = email.toLowerCase();

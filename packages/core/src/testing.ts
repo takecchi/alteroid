@@ -1224,6 +1224,7 @@ export function createMemoryStores(): Stores {
       return accounts.get(id) ?? null;
     },
     async findAccountByEmail(email) {
+      if (hasNul(email)) return null;
       // 大小文字を区別しない（#1702）。fs / pg の実装と同じ規約。
       const needle = email.toLowerCase();
       return (

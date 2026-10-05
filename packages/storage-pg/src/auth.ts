@@ -109,6 +109,8 @@ export class PgAuthStore implements AuthStore {
   }
 
   async findAccountByEmail(email: string): Promise<AuthAccount | null> {
+    // NUL を含むメールは DB に投げる前に「無い」と答える（#3011）。
+    if (hasNul(email)) return null;
     // 大小文字を区別しない（#1702）。一意索引（auth_accounts_email_lower_idx）
     // と同じ `lower()` で比べる——`eq` のままだと索引に乗らない上に、
     // memory / fs の実装と判定が食い違う。
