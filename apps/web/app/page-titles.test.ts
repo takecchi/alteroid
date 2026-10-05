@@ -9,6 +9,8 @@ import { resolve } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
+import { NAV_ITEMS, SCHEDULE_TABS, SETTINGS_TABS, settingsDocumentTitle } from '~/lib/nav';
+
 const APP = resolve(__dirname);
 const read = (rel: string) => readFileSync(resolve(APP, rel), 'utf8');
 
@@ -57,5 +59,36 @@ describe('全 route が題名を持つ', () => {
 
   it('404 の h1 は「ページが見つかりません」', () => {
     expect(read('routes/not-found.tsx')).toContain('title="ページが見つかりません"');
+  });
+});
+
+describe('設定のまとまりの題名（#2844）', () => {
+  it('タブの題名は「設定 — タブの名前」で、タブの名前は SETTINGS_TABS から引く', () => {
+    expect(settingsDocumentTitle('/settings')).toBe('設定 — 接続');
+    expect(settingsDocumentTitle('/usage')).toBe('設定 — 利用状況');
+    expect(settingsDocumentTitle('/mcp-servers')).toBe('設定 — MCP 連携');
+    for (const tab of SETTINGS_TABS) {
+      expect(settingsDocumentTitle(tab.to)).toBe(`設定 — ${tab.label}`);
+    }
+  });
+
+  for (const tab of SETTINGS_TABS) {
+    it(`${tab.to} の画面は settingsDocumentTitle で題名を渡す`, () => {
+      const src = read(`routes/${tab.to.slice(1)}.tsx`);
+      expect(src).toContain(`documentTitle={settingsDocumentTitle('${tab.to}')}`);
+    });
+  }
+
+  it('/settings の h1 は「設定」のまま（まとまりの名前）', () => {
+    expect(read('routes/settings.tsx')).toContain('title="設定"');
+  });
+});
+
+describe('予定のまとまりの名前（#2844）', () => {
+  it('左ナビのまとまり・タブ・h1 が「予定」の語で揃う（スケジュールの語を使わない）', () => {
+    expect(SCHEDULE_TABS[0]).toEqual({ to: '/schedule', label: '予定' });
+    expect(NAV_ITEMS.find((i) => i.to === '/schedule')?.label).toBe('予定と受信箱');
+    expect(read('routes/schedule.tsx')).toContain('title="予定"');
+    expect(read('routes/schedule.tsx')).not.toContain('title="スケジュールと外部イベント"');
   });
 });

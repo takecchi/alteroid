@@ -7,6 +7,7 @@ import { stdin, stdout } from 'node:process';
 import { createClient, type DaemonClient } from './client.js';
 import { withErrorReason } from './format.js';
 import { describeAuthFailure, resolveTarget, type Target } from './target.js';
+import { describeEditorFailure, readInputFile } from './input-errors.js';
 
 /**
  * `alteroid practice` — 仕事のやり方を読む・書き換える・消す（#1055 段3③）。
@@ -143,8 +144,7 @@ export async function practiceShowCommand(
 
   const found = await read(client, conn.target, slug);
   if (found === null) {
-    stdout.write(`そんなやり方はありません: ${slug}\n`);
-    return;
+    throw new Error(`そんなやり方はありません: ${slug}`);
   }
   const content = found.content;
   stdout.write(content.endsWith('\n') ? content : `${content}\n`);
@@ -208,8 +208,14 @@ export async function practiceEditCommand(
     return;
   }
 
+  // **読んだ時の版を持ち回る（Issue #2853。`memory edit` と同じ）。** エディタを開いている間に
+  // クローンが同じやり方へ書くと、版が変わっていて 409 になる（黙って上書きしない）。無い slug は
+  // `null`（「読んだ時には無かった」）。古いデーモンが `version` を返さなければ前提なしで書く。
+  const ifMatch = current === null ? null : current.version;
   const dir = await mkdtemp(join(tmpdir(), 'alteroid-practice-'));
   const path = join(dir, `${slug}.md`);
+  // **衝突したときだけ、人間が書いた内容を含む一時ディレクトリを消さない。**
+  let keep = false;
   try {
     await writeFile(path, current?.content ?? template(slug), 'utf8');
     await openEditor(path);
@@ -227,9 +233,33 @@ export async function practiceEditCommand(
       stdout.write('変更はありません。\n');
       return;
     }
-    await write(client, target, slug, kind, title, edited);
+    try {
+      await write(client, target, slug, kind, title, edited, ifMatch);
+    } catch (error) {
+      if (!(error instanceof PracticeConflictCliError)) throw error;
+      // **人間が書いた内容を失わない。** 消さずに残し、いまの版も隣へ置いて、見比べる道具と次の手を案内する。
+      keep = true;
+      const theirs = join(dir, `${slug}.current.md`);
+      if (error.current !== null) await writeFile(theirs, error.current.content, 'utf8');
+      stdout.write(
+        [
+          `書き換えていません: ${slug} は、あなたが読んだ後に変わっています（クローンなど別の書き手が書いたか、消されました）。`,
+          `  あなたの編集（残してあります）: ${path}`,
+          error.current === null
+            ? '  いまのやり方: 無い（消されています）'
+            : `  いまのやり方: ${theirs}`,
+          ...(error.current === null ? [] : [`  見比べる: diff -u ${theirs} ${path}`]),
+          `  取り込んだら \`alteroid practice edit ${slug}\` で開き直して直してください。`,
+          `  そのまま置き換えてよいなら \`alteroid practice set ${slug} --file ${path}\`（先の書き込みを消します）。`,
+          '',
+        ].join('\n'),
+      );
+      throw new Error(`やり方が読んだ後に変わっていたので書き換えませんでした: ${slug}`, {
+        cause: error,
+      });
+    }
   } finally {
-    await rm(dir, { recursive: true, force: true });
+    if (!keep) await rm(dir, { recursive: true, force: true });
   }
 }
 
@@ -261,7 +291,7 @@ export async function practiceSetCommand(
   const content =
     options.file === undefined || options.file === '-'
       ? await readAll()
-      : await readFile(options.file, 'utf8');
+      : await readInputFile(options.file, '--file', '--file <path>、または標準入力（-）');
   await write(client, target, slug, kind, title, content);
 }
 
@@ -336,7 +366,7 @@ async function read(
   client: DaemonClient,
   target: Target,
   slug: string,
-): Promise<{ kind: string; title: string; content: string } | null> {
+): Promise<{ kind: string; title: string; content: string; version?: string } | null> {
   const response = await client.practices[':slug'].$get({ param: { slug } });
   if (response.status === 404 || response.status === 400) return null;
   if (!response.ok) {
@@ -350,9 +380,23 @@ async function read(
     );
   }
   const body = await response.json();
-  return 'practice' in body
-    ? { kind: body.practice.kind, title: body.practice.title, content: body.practice.content }
-    : null;
+  if (!('practice' in body)) return null;
+  return {
+    kind: body.practice.kind,
+    title: body.practice.title,
+    content: body.practice.content,
+    // 古いデーモンは `version` を返さない（その場合は前提なし＝従来どおり後勝ちで書く）。
+    ...('version' in body && typeof body.version === 'string' ? { version: body.version } : {}),
+  };
+}
+
+/** `PUT` が 409（読んだ後に変わっていた。Issue #2853）を返した。`current` はいまの本文（消えていれば null）。 */
+class PracticeConflictCliError extends Error {
+  readonly current: { kind: string; title: string; content: string } | null;
+  constructor(slug: string, current: { kind: string; title: string; content: string } | null) {
+    super(`やり方が読んだ後に変わっています: ${slug}`);
+    this.current = current;
+  }
 }
 
 /**
@@ -371,11 +415,24 @@ async function write(
   kind: string,
   title: string,
   content: string,
+  ifMatch?: string | null,
 ): Promise<void> {
   const response = await client.practices[':slug'].$put({
     param: { slug },
-    json: { kind, title, content },
+    json: ifMatch === undefined ? { kind, title, content } : { kind, title, content, ifMatch },
   });
+  if (response.status === 409) {
+    const body = (await response.json()) as {
+      current?: { practice?: { kind?: string; title?: string; content?: string } } | null;
+    };
+    const now = body.current?.practice;
+    throw new PracticeConflictCliError(
+      slug,
+      now === undefined
+        ? null
+        : { kind: now.kind ?? '', title: now.title ?? '', content: now.content ?? '' },
+    );
+  }
   if (!response.ok) {
     if (response.status === 400) {
       throw new Error(
@@ -404,10 +461,21 @@ async function openEditor(path: string): Promise<void> {
   const editor = process.env.VISUAL ?? process.env.EDITOR ?? 'vi';
   await new Promise<void>((resolve, reject) => {
     const child = spawn(editor, [path], { stdio: 'inherit', shell: true });
-    child.on('error', reject);
-    child.on('close', (code) => {
+    child.on('error', (error) =>
+      reject(
+        describeEditorFailure(editor, { error }, 'alteroid practice set <slug> --file <path>'),
+      ),
+    );
+    child.on('close', (code, signal) => {
       if (code === 0) resolve();
-      else reject(new Error(`${editor} が異常終了しました (${String(code)})`));
+      else
+        reject(
+          describeEditorFailure(
+            editor,
+            { code, signal },
+            'alteroid practice set <slug> --file <path>',
+          ),
+        );
     });
   });
 }

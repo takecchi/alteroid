@@ -109,7 +109,15 @@ describe('ConversationList: 枠・空・但し書き', () => {
 });
 
 describe('ChatHeader', () => {
-  it('会話が無ければ操作は出ず、「新しい会話」と出る。決まっていれば id と2つの操作', () => {
+  it('見出し（h1）と題名は「会話」で、「クローンと話す」は見出しの下の説明に回る（#2844）', () => {
+    render(<ChatHeader conversationId="c" subtitle="10/01 10:00 に開始" />);
+    expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('会話');
+    expect(document.title).toBe('会話 - alteroid');
+    expect(screen.getByText(/クローンと話す/).tagName).toBe('P');
+    expect(screen.getByText('10/01 10:00 に開始')).toBeTruthy();
+  });
+
+  it('会話が無ければ操作は出ず、「新しい会話」と出る。決まっていれば2つの操作（id は出さない）', () => {
     const { rerender } = render(
       <ChatHeader
         conversationId={undefined}
@@ -122,9 +130,22 @@ describe('ChatHeader', () => {
     rerender(
       <ChatHeader conversationId="conv_1" onInterrupt={() => undefined} onEnd={() => undefined} />,
     );
-    expect(screen.getByText('conv_1')).toBeTruthy();
+    expect(screen.queryByText('conv_1')).toBeNull();
     expect(screen.getByRole('button', { name: 'クローンのターンを止める' })).toBeTruthy();
     expect(screen.getByRole('button', { name: '会話を終える' })).toBeTruthy();
+  });
+
+  it('subtitle を渡すと見出しの下に出す。「会話を終える」は確認を挟み、「終える」で初めて onEnd を呼ぶ', () => {
+    const onEnd = vi.fn();
+    render(
+      <ChatHeader conversationId="c" subtitle="10/01 10:00 に開始 · 発言 8 件" onEnd={onEnd} />,
+    );
+    expect(screen.getByText('10/01 10:00 に開始 · 発言 8 件')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: '会話を終える' }));
+    expect(onEnd).not.toHaveBeenCalled();
+    expect(screen.getByText(/学びを記憶にまとめます/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: '終える' }));
+    expect(onEnd).toHaveBeenCalledTimes(1);
   });
 
   it('帯と notice は同じ safe-area の余白を持つ', () => {

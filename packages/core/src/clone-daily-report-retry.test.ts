@@ -102,6 +102,31 @@ describe('クローン — 日報が枠切れ以外で失敗した回の作り�
     expect(rows[0]?.unavailable).toBeDefined();
     await s.clone.stop();
   });
+
+  it('既存確認が読めずに印を書けなかった失敗の回も、作り直す', async () => {
+    const s = setupWithRetry((turn) => turn === 0, [20]);
+    // 日報の既存確認（types が daily_report だけの list）だけが、最初の1回投げる。
+    const rawList = s.stores.journal.list.bind(s.stores.journal);
+    let lookups = 0;
+    s.stores.journal.list = ((query) => {
+      const only = query?.types;
+      if (only?.length === 1 && only[0] === 'daily_report') {
+        lookups += 1;
+        if (lookups === 1) return Promise.reject(new Error('lookup timed out'));
+      }
+      return rawList(query);
+    }) as typeof s.stores.journal.list;
+    post(s.clone);
+
+    await advanceUntil(
+      async () =>
+        ((await rawList({ types: ['daily_report'] })) as Row[]).some(
+          (r) => r.unavailable === undefined,
+        ),
+      '作り直しで本物の日報が書かれる',
+    );
+    await s.clone.stop();
+  });
 });
 
 const turnsOf = (calls: { inputs: string[] }[]): number =>

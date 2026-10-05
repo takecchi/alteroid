@@ -125,6 +125,15 @@ describe('安全性: javascript: リンクが実行可能な URL にならない
     expect(link.getAttribute('rel')).toBe('noreferrer noopener');
   });
 
+  it('文中のリンクは、タッチでは疑似要素で上下に押せる範囲が広がる（行の高さは動かさない）', async () => {
+    render(<Markdown>{'[click](https://example.com/path)'}</Markdown>);
+
+    const link = await screen.findByRole('link', { name: 'click' });
+    expect(link.className).toContain('pointer-coarse:relative');
+    expect(link.className).toContain('pointer-coarse:after:-inset-y-3');
+    expect(link.className).not.toMatch(/(^| )(py-|my-|inline-block|block)/);
+  });
+
   it('data: リンクの href も javascript: と同じく空へ潰れる', async () => {
     render(
       <Markdown>{'[click](data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==)'}</Markdown>,
@@ -498,5 +507,51 @@ describe('壊れた・未完成の Markdown でも例外を投げない', () => 
     }).not.toThrow();
 
     expect(screen.getByText(/まだ閉じていないコードブロック/)).toBeTruthy();
+  });
+});
+
+describe('見出しの段下げ（headingOffset、#2842）', () => {
+  const md = ['# a', '## b', '### c', '#### d', '##### e', '###### f'].join('\n\n');
+  const tagsOf = (container: HTMLElement) =>
+    Array.from(container.querySelectorAll('h1,h2,h3,h4,h5,h6')).map((h) => h.tagName);
+
+  it('省略すると書かれた段のまま（今までどおり）', () => {
+    const { container } = render(<Markdown>{md}</Markdown>);
+    expect(tagsOf(container)).toEqual(['H1', 'H2', 'H3', 'H4', 'H5', 'H6']);
+  });
+
+  it('0 や負の値も段を変えない', () => {
+    const zero = render(<Markdown headingOffset={0}>{md}</Markdown>);
+    expect(tagsOf(zero.container)).toEqual(['H1', 'H2', 'H3', 'H4', 'H5', 'H6']);
+    const negative = render(<Markdown headingOffset={-1}>{md}</Markdown>);
+    expect(tagsOf(negative.container)).toEqual(['H1', 'H2', 'H3', 'H4', 'H5', 'H6']);
+  });
+
+  it('2 を渡すと # は h3、## は h4、h5 と h6 は h6 に畳む（日報の画面の差し替えと同じ結果）', () => {
+    const { container } = render(<Markdown headingOffset={2}>{md}</Markdown>);
+    expect(tagsOf(container)).toEqual(['H3', 'H4', 'H5', 'H6', 'H6', 'H6']);
+  });
+
+  it('大きな値でも h6 を超えない', () => {
+    const { container } = render(<Markdown headingOffset={9}>{md}</Markdown>);
+    expect(tagsOf(container)).toEqual(['H6', 'H6', 'H6', 'H6', 'H6', 'H6']);
+  });
+
+  it('見た目は下がり先の段のものになり、h1 は残らない', () => {
+    const { container } = render(<Markdown headingOffset={2}>{'# 題'}</Markdown>);
+    const heading = container.querySelector('h3');
+    expect(heading?.className).toContain('text-xs');
+    expect(container.querySelector('h1')).toBeNull();
+  });
+
+  it('脚注節の見出し（sr-only）は下がっても sr-only のまま、id も保つ', () => {
+    const { container } = render(
+      <Markdown headingOffset={2} idPrefix="t-">
+        {'本文[^1]\n\n[^1]: 注'}
+      </Markdown>,
+    );
+    const label = container.querySelector('[id$="footnote-label"]');
+    expect(label?.tagName).toBe('H4');
+    expect(label?.classList.contains('sr-only')).toBe(true);
   });
 });

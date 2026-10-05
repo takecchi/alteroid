@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { Link, useNavigate } from 'react-router';
+import { useEffect, useRef, useState } from 'react';
+import { Link, useBlocker, useNavigate } from 'react-router';
 import { Tabs } from 'radix-ui';
 
 import {
@@ -17,6 +17,7 @@ import {
 } from '@alteroid/ui';
 import {
   useDeletePractice,
+  PracticeConflictError,
   useSavePractice,
   usePractice,
   usePracticeVersion,
@@ -80,10 +81,37 @@ export default function PracticeDetail({ loaderData }: Route.ComponentProps) {
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [failure, setFailure] = useState<unknown>(undefined);
   const [savedAt, setSavedAt] = useState<string | undefined>(undefined);
+  /**
+   * 下書きを書き始めた時点で読んでいた版（`ifMatch` に送る。#2853。`memory-detail.tsx` と同じ）。
+   * 取得した版へ追従させない——別の書き手が書いた後に再取得が走っても、人間が見て書き始めた版を
+   * 前提にし続けるから、衝突が検出できる。`null` は「読んだ時には無かった」。
+   */
+  const [baseVersion, setBaseVersion] = useState<string | null | undefined>(undefined);
+  /**
+   * 直前の保存の応答が返した版（`replaces` はそのとき前提にした版）。再取得が追いつく前に編集を
+   * 再開しても、古い `data.version` を前提にして偽の 409 を起こさないために持つ。
+   * 再取得が `replaces` 以外の版を返したら（別の書き手が書いた）、そちらを信じる。
+   */
+  const [lastSaved, setLastSaved] = useState<
+    { replaces: string | null; version: string } | undefined
+  >(undefined);
+  /** 保存が 409 で断られたときの、いまの版（下書きは捨てずに残す）。 */
+  const [conflict, setConflict] = useState<PracticeConflictError | undefined>(undefined);
 
   const loadedKind = data?.practice.kind ?? '';
   const loadedTitle = data?.practice.title ?? '';
   const loadedContent = data?.practice.content ?? '';
+
+  const hasDraft =
+    draftKind !== undefined || draftTitle !== undefined || draftContent !== undefined;
+  /** 書き始めた瞬間に、いま読んでいる版を前提として控える。 */
+  function touch() {
+    if (hasDraft) return;
+    const fetched = data === undefined ? null : data.version;
+    setBaseVersion(
+      lastSaved !== undefined && lastSaved.replaces === fetched ? lastSaved.version : fetched,
+    );
+  }
 
   const kind = draftKind ?? loadedKind;
   const title = draftTitle ?? loadedTitle;
@@ -111,20 +139,50 @@ export default function PracticeDetail({ loaderData }: Route.ComponentProps) {
   const [tab, setTab] = useState<string | undefined>(undefined);
   const activeTab = tab ?? (missing || content.trim() === '' ? 'edit' : 'preview');
 
-  function save() {
-    if (!canSave) return;
+  /**
+   * **未保存の変更があるまま離れない（#2764。`memory-detail.tsx` と同じ穴）。** アプリ内の移動
+   * （リンク・戻る）は確認を挟み、タブを閉じる・再読み込みはブラウザの警告に任せる。
+   * 削除が通った後の移動は止めない。
+   */
+  const leaving = useRef(false);
+  const blocker = useBlocker(() => dirty && !leaving.current);
+  useEffect(() => {
+    if (!dirty) return;
+    const warn = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  }, [dirty]);
+
+  /** `ifMatch` を渡して保存する。衝突したら下書きを残して、いまの版を見せる。 */
+  function save(ifMatch: string | null | undefined = baseVersion) {
+    // 衝突のあとは、再取得で「変更なし」に見えても、人間が選んだ上書きは通す。
+    if (!canSave && !(conflict !== undefined && hasDraft && kind.trim() !== '')) return;
     setBusy(true);
     setFailure(undefined);
-    savePractice(slug, kind, title, content)
-      .then((practice) => {
+    savePractice(slug, kind, title, content, ifMatch)
+      .then(({ practice, version }) => {
         setSavedAt(practice.updatedAt);
+        setLastSaved({ replaces: data === undefined ? null : data.version, version });
         // 保存できたら下書きを畳んで、またサーバの値に追従させる。
-        setDraftKind(undefined);
-        setDraftTitle(undefined);
-        setDraftContent(undefined);
+        discardDraft();
       })
-      .catch(setFailure)
+      .catch((caught: unknown) => {
+        if (caught instanceof PracticeConflictError) setConflict(caught);
+        else setFailure(caught);
+      })
       .finally(() => setBusy(false));
+  }
+
+  /** 最新を読み直す＝自分の下書きを捨てて、いまの版に追従する。 */
+  function discardDraft() {
+    setDraftKind(undefined);
+    setDraftTitle(undefined);
+    setDraftContent(undefined);
+    setBaseVersion(undefined);
+    setConflict(undefined);
   }
 
   return (
@@ -134,7 +192,7 @@ export default function PracticeDetail({ loaderData }: Route.ComponentProps) {
         <span className="flex items-baseline gap-2">
           <Link
             to="/practices"
-            className="shrink-0 whitespace-nowrap text-muted-foreground hover:text-foreground"
+            className="shrink-0 whitespace-nowrap text-muted-foreground hover:text-foreground pointer-coarse:-mx-2 pointer-coarse:-my-2.5 pointer-coarse:px-2 pointer-coarse:py-2.5"
           >
             やり方
           </Link>
@@ -175,7 +233,10 @@ export default function PracticeDetail({ loaderData }: Route.ComponentProps) {
                 onConfirm={() => {
                   setBusy(true);
                   deletePractice(slug)
-                    .then(() => navigate('/practices'))
+                    .then(() => {
+                      leaving.current = true;
+                      navigate('/practices');
+                    })
                     .catch(setFailure)
                     .finally(() => setBusy(false));
                 }}
@@ -183,7 +244,13 @@ export default function PracticeDetail({ loaderData }: Route.ComponentProps) {
             </>
           )}
           {!loadFailed && (
-            <Button variant="primary" size="sm" loading={busy} disabled={!canSave} onClick={save}>
+            <Button
+              variant="primary"
+              size="sm"
+              loading={busy}
+              disabled={!canSave}
+              onClick={() => save()}
+            >
               {dirty ? '保存する' : '変更なし'}
             </Button>
           )}
@@ -193,6 +260,54 @@ export default function PracticeDetail({ loaderData }: Route.ComponentProps) {
     >
       {!missing && <ErrorNote error={error} className="mb-3" />}
       <ErrorNote error={failure} className="mb-3" />
+      {conflict !== undefined && (
+        <div role="alert" className="mb-3 rounded-lg border border-destructive/50 p-3 text-sm">
+          <p className="font-medium text-destructive">
+            {conflict.current === null
+              ? '読んだ後に、このやり方がほかで消された。保存していない（下書きはそのまま残してある）。'
+              : '読んだ後に、このやり方がほかで書き換えられた。保存していない（下書きはそのまま残してある）。'}
+          </p>
+          {conflict.current !== null && (
+            <>
+              <p className="mt-2 text-xs text-muted-foreground">
+                いまの内容（{formatDateTime(conflict.current.practice.updatedAt)} に更新）
+              </p>
+              <p className="mt-1 text-xs break-words">
+                種類: {conflict.current.practice.kind} / 題: {conflict.current.practice.title}
+              </p>
+              <pre className="mt-1 max-h-48 overflow-auto rounded-md bg-muted p-2 text-xs break-words whitespace-pre-wrap select-text">
+                {conflict.current.practice.content}
+              </pre>
+            </>
+          )}
+          <div className="mt-3 flex flex-wrap gap-2">
+            <Button
+              size="sm"
+              variant="danger"
+              disabled={busy}
+              onClick={() => save(conflict.current === null ? null : conflict.current.version)}
+            >
+              自分の内容で上書きする
+            </Button>
+            <Button size="sm" disabled={busy} onClick={discardDraft}>
+              自分の下書きを捨てて、いまの内容を読み直す
+            </Button>
+          </div>
+        </div>
+      )}
+      <ConfirmDialog
+        open={blocker.state === 'blocked'}
+        onOpenChange={(open) => {
+          if (!open && blocker.state === 'blocked') blocker.reset();
+        }}
+        title="保存していない変更があります"
+        description="このまま離れると、書きかけの内容は失われます。"
+        confirmLabel="破棄して離れる"
+        destructive
+        onConfirm={() => {
+          if (blocker.state === 'blocked') blocker.proceed();
+        }}
+      />
 
       {isLoading && !missing ? (
         <Spinner />
@@ -246,7 +361,10 @@ export default function PracticeDetail({ loaderData }: Route.ComponentProps) {
                 className="mt-1"
                 value={kind}
                 placeholder="例: 実装・調査・相談・レビュー・日報"
-                onChange={(event) => setDraftKind(event.target.value)}
+                onChange={(event) => {
+                  touch();
+                  setDraftKind(event.target.value);
+                }}
               />
             </label>
             <label className="shrink-0 text-xs text-muted-foreground">
@@ -255,7 +373,10 @@ export default function PracticeDetail({ loaderData }: Route.ComponentProps) {
                 className="mt-1"
                 value={title}
                 placeholder="一覧で見る短い題"
-                onChange={(event) => setDraftTitle(event.target.value)}
+                onChange={(event) => {
+                  touch();
+                  setDraftTitle(event.target.value);
+                }}
               />
             </label>
             <label className="flex min-h-0 flex-1 flex-col text-xs text-muted-foreground">
@@ -264,7 +385,10 @@ export default function PracticeDetail({ loaderData }: Route.ComponentProps) {
                 className="mt-1 min-h-[50vh] flex-1 font-mono text-xs leading-relaxed"
                 value={content}
                 spellCheck={false}
-                onChange={(event) => setDraftContent(event.target.value)}
+                onChange={(event) => {
+                  touch();
+                  setDraftContent(event.target.value);
+                }}
                 onKeyDown={(event) => {
                   if ((event.metaKey || event.ctrlKey) && event.key === 's') {
                     event.preventDefault();

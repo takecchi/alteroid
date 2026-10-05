@@ -136,7 +136,33 @@ export function ApiProvider({ children }: { children: ReactNode }) {
     return { client, controller, baseUrl, token };
   }, [baseUrl, token]);
 
-  useEffect(() => () => generation.controller.abort(), [generation]);
+  /**
+   * 世代の紐を打ち切る。
+   *
+   * **cleanup で即座に abort しない**（#2768）。StrictMode（dev）は mount → cleanup →
+   * mount を同じ世代のまま続けて行うので、cleanup で abort すると、最初の mount で
+   * 始めた通信が中断され、同じ紐が abort 済みのまま次の mount 以降の全通信に残る
+   * （全リクエストが「signal is aborted without reason」で落ちる）。
+   *
+   * だから cleanup では打ち切りを1拍遅らせて予約し、同じ世代の effect がすぐ
+   * 張り直されたら取り消す。**世代が代わったとき（別の世代の effect が張られたとき）
+   * は前の世代をその場で打ち切る**ので、「切り替えた後に古い相手の応答が届く」
+   * 余地は増えない。本当に外れた（unmount）ときは予約が実行される。
+   */
+  const pendingAbort = useRef<{
+    generation: typeof generation;
+    timer: ReturnType<typeof setTimeout> | null;
+  }>({ generation, timer: null });
+  useEffect(() => {
+    const pending = pendingAbort.current;
+    if (pending.timer !== null) clearTimeout(pending.timer);
+    if (pending.generation !== generation) pending.generation.controller.abort();
+    pendingAbort.current = { generation, timer: null };
+    return () => {
+      const timer = setTimeout(() => generation.controller.abort(), 0);
+      pendingAbort.current = { generation, timer };
+    };
+  }, [generation]);
 
   /**
    * 接続先を切り替えたら、画面に残っているキャッシュを引き直す。
@@ -315,19 +341,36 @@ export function useApi(): AlteroidClient {
  */
 export class ApiError extends Error {
   readonly status: number;
+  /**
+   * サーバが本文に載せた機械向けの印（`{ error, code }` の `code`）。無い応答では `undefined`。
+   * 画面は文言（`message`）ではなくこの印で場合分けする（例: `journal_write_failed`）。
+   */
+  readonly code: string | undefined;
 
-  constructor(status: number, message: string) {
+  constructor(status: number, message: string, code?: string) {
     // 画面へ出る前に伏せる（issue #2600。`ErrorNote` ほか `error.message` を出す口すべてに効く）。
     super(redactError(message));
     this.name = 'ApiError';
     this.status = status;
+    this.code = code;
   }
+}
+
+/** 応答本文の `code`（文字列のときだけ）。 */
+function errorCode(error: unknown): string | undefined {
+  if (typeof error !== 'object' || error === null) return undefined;
+  const { code } = error as { code?: unknown };
+  return typeof code === 'string' ? code : undefined;
 }
 
 /** `openapi-fetch` の `{data, error, response}` を SWR が扱える形に均す。 */
 export function unwrap<T>(result: { data?: T; error?: unknown; response: Response }): T {
   if (result.error !== undefined || result.data === undefined) {
-    throw new ApiError(result.response.status, describeError(result.error, result.response));
+    throw new ApiError(
+      result.response.status,
+      describeError(result.error, result.response),
+      errorCode(result.error),
+    );
   }
   return result.data;
 }

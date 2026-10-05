@@ -15,11 +15,12 @@
  */
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { StrictMode } from 'react';
 
 import { useHealth } from './hooks/queries';
 import { json, Providers, stubFetch, storeTestBaseUrl, TEST_BASE_URL } from './test-support';
 
-import { useApiContext } from './api';
+import { ApiError, unwrap, useApiContext } from './api';
 
 const OTHER_BASE_URL = 'http://daemon-2.test';
 
@@ -90,5 +91,99 @@ describe('ApiError の message の伏せ字（issue #2600）', () => {
     const { ApiError } = await import('./api');
     const token = `ghp_${'A1b2C3d4E5'.repeat(4)}`;
     expect(new ApiError(500, `failed ${token}`).message).not.toContain(token);
+  });
+});
+
+describe('世代の紐（issue #2768）', () => {
+  it('StrictMode で包んでも、通信が中断済みの紐で始まらない', async () => {
+    stubFetch((url, init) => {
+      if (url !== `${TEST_BASE_URL}/health`) return undefined;
+      // 本物の fetch と同じく、応答が届く前に中断されたら（呼ばれた時点で
+      // 中断済みでも）落とす。
+      return new Promise<Response>((resolve, reject) => {
+        setTimeout(() => {
+          if (init?.signal?.aborted === true) {
+            reject(new DOMException('signal is aborted without reason', 'AbortError'));
+          } else {
+            resolve(json(health(1, '/old')));
+          }
+        }, 5);
+      });
+    });
+
+    render(
+      <StrictMode>
+        <Providers>
+          <Probe />
+        </Providers>
+      </StrictMode>,
+    );
+
+    await waitFor(() => expect(screen.getByTestId('pid').textContent).toBe('1'));
+  });
+
+  it('接続先を切り替えたら、前の接続先への通信は打ち切られ、新しい側は生きている', async () => {
+    const signals: Record<string, AbortSignal | null | undefined> = {};
+    stubFetch((url, init) => {
+      if (url === `${TEST_BASE_URL}/health`) {
+        signals.old = init?.signal;
+        // 返事が来ないまま残る（切り替えの後に届く古い応答の役）。
+        return new Promise<Response>(() => {});
+      }
+      if (url === `${OTHER_BASE_URL}/health`) {
+        signals.next = init?.signal;
+        return json(health(2, '/new'));
+      }
+      return undefined;
+    });
+
+    render(
+      <StrictMode>
+        <Providers>
+          <Probe />
+        </Providers>
+      </StrictMode>,
+    );
+    await waitFor(() => expect(signals.old).toBeDefined());
+    expect(signals.old?.aborted).toBe(false);
+
+    screen.getByRole('button', { name: 'switch' }).click();
+
+    await waitFor(() => expect(screen.getByTestId('pid').textContent).toBe('2'));
+    expect(signals.old?.aborted).toBe(true);
+    expect(signals.next?.aborted).toBe(false);
+  });
+});
+
+describe('ApiError の code（#2886）', () => {
+  const response = (status: number) => new Response(null, { status });
+
+  it('本文の code（文字列）を運ぶ。文言は error のまま', () => {
+    try {
+      unwrap({
+        error: {
+          error: '記録（日誌）が書けなかったので、変更していません',
+          code: 'journal_write_failed',
+        },
+        response: response(500),
+      });
+      expect.unreachable();
+    } catch (caught) {
+      expect(caught).toBeInstanceOf(ApiError);
+      expect((caught as ApiError).code).toBe('journal_write_failed');
+      expect((caught as ApiError).message).toBe('記録（日誌）が書けなかったので、変更していません');
+      expect((caught as ApiError).status).toBe(500);
+    }
+  });
+
+  it('code が無い・文字列でない応答では undefined（既存の呼び出しは変わらない）', () => {
+    for (const error of [{ error: '保存できなかった' }, { error: 'x', code: 42 }, 'text']) {
+      try {
+        unwrap({ error, response: response(500) });
+        expect.unreachable();
+      } catch (caught) {
+        expect((caught as ApiError).code).toBeUndefined();
+      }
+    }
   });
 });

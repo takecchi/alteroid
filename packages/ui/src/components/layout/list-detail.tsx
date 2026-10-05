@@ -38,7 +38,7 @@ const DETAIL_PADDING =
  * - `list` —— 一覧の中身（`ListDetailItems` など）
  * - `detail` —— 詳細の中身
  * - `hasSelection` —— 詳細に何か選ばれているか
- * - `selectionKey` —— 選択の識別子。スマホで変わったら詳細の先頭へ焦点を移す
+ * - `selectionKey` —— 選択の識別子。変わったら詳細のスクロールを先頭へ戻す（スマホではさらに詳細の先頭へ焦点を移す）
  * - `detailLabel` —— 詳細の領域の名前（既定は「〈一覧の名前〉の詳細」）
  * - `emptyDetail` —— 広い画面で未選択のときの案内
  * - `listFooter` —— 一覧の下端（「さらに読む」など。一覧のスクロールの外に固定される）
@@ -68,6 +68,7 @@ export function ListDetail({
   const [drawerOpen, setDrawerOpen] = useState(false);
   const detailRef = useRef<HTMLElement>(null);
   const firstRender = useRef(true);
+  const shownKey = useRef(selectionKey);
 
   // 広い画面へ変わったらドロワーは要らない。
   const drawerShown = drawerOpen && isMobile && hasSelection;
@@ -84,11 +85,22 @@ export function ListDetail({
     return () => cancelAnimationFrame(id);
   }, [selectionKey, isMobile, hasSelection]);
 
+  // 別の項目へ切り替えたら詳細を先頭から見せる（初回描画は触らない。焦点の処理とは独立）。
+  useEffect(() => {
+    if (shownKey.current === selectionKey) return;
+    shownKey.current = selectionKey;
+    if (detailRef.current) detailRef.current.scrollTop = 0;
+  }, [selectionKey]);
+
   const listPane = (inDrawer: boolean) => (
     <aside
       className={cn(
         'flex min-h-0 flex-col bg-card',
-        inDrawer ? 'flex-1' : isMobile ? 'flex-1' : 'w-64 shrink-0 border-r border-border md:w-72',
+        inDrawer
+          ? 'flex-1'
+          : isMobile
+            ? 'min-w-0 flex-1'
+            : 'w-64 shrink-0 border-r border-border md:w-72',
       )}
     >
       <h2 className="shrink-0 border-b border-border px-3 py-3 text-sm font-semibold">
@@ -152,7 +164,21 @@ export interface ListDetailItem {
   href: string;
   /** いま詳細に開いている項目か。 */
   current: boolean;
+  /** 行に足す className（後勝ち）。 */
+  className?: string;
+  /**
+   * リンクの中身。`extra` / `lead` を渡さなければ**行全体がリンク**になり、これが行の中身になる。
+   * 渡したときは**リンクは`children`（題名など）だけ**になる。
+   */
   children: ReactNode;
+  /**
+   * リンクの**外**に出す、選択・コピーできる中身（名前・日時など）。渡すと「一部だけがリンク」の形になる
+   * （行全体がリンクだと、中の文字をドラッグで選べない。#2808）。強調と区切り線は行全体に、
+   * `aria-current` はリンクに付く。
+   */
+  extra?: ReactNode;
+  /** 「一部だけがリンク」の形で、リンクの前に同じ行で並べる中身（種別の札など）。 */
+  lead?: ReactNode;
 }
 
 /** 1行ぶんのリンクを描く口。ルーターを知らない層なので、画面が `<Link>` を置く。 */
@@ -165,7 +191,8 @@ export type ListDetailRenderLink = (props: {
 }) => ReactNode;
 
 /**
- * 一覧の中身。各行がリンクで、選択中は `aria-current="page"` と強調。
+ * 一覧の中身。既定は各行が丸ごとリンク。`extra` / `lead` を渡した項目は、題名だけがリンクで残りは
+ * 選択できる文字になる（#2808）。どちらも選択中は `aria-current="page"`（リンクに）と強調（行に）。
  * 一覧の中で ↑/↓（前後）・Home/End（先頭/末尾）で焦点だけを移す（開くのは Enter）。
  * 選択中の項目が見えない位置にあるときは、初回の描画で見える位置へ寄せる（焦点は移さない）。
  */
@@ -203,20 +230,46 @@ export function ListDetailItems({
 
   return (
     <ul ref={listRef} aria-label={label} onKeyDown={onKeyDown}>
-      {items.map((item) => (
-        <li key={item.key}>
-          {renderLink({
-            href: item.href,
-            className: cn(
-              'block border-b border-border px-3 py-2 text-sm transition-colors hover:bg-muted',
+      {items.map((item) =>
+        item.extra !== undefined || item.lead !== undefined ? (
+          <li
+            key={item.key}
+            className={cn(
+              'border-b border-border px-3 py-2 text-sm transition-colors hover:bg-muted',
               item.current && 'lumen-edge bg-accent text-accent-foreground',
-            ),
-            children: item.children,
-            'aria-current': item.current ? 'page' : undefined,
-            onClick: onNavigate,
-          })}
-        </li>
-      ))}
+              item.className,
+            )}
+          >
+            <div className="flex items-baseline">
+              {item.lead}
+              {/* 押せる範囲は題名の行いっぱい（縦は上下に 4px ずつ足して。-my で行の高さは変えない） */}
+              {renderLink({
+                href: item.href,
+                className:
+                  '-my-1 block min-w-0 flex-1 truncate py-1 underline-offset-2 hover:underline',
+                children: item.children,
+                'aria-current': item.current ? 'page' : undefined,
+                onClick: onNavigate,
+              })}
+            </div>
+            {item.extra}
+          </li>
+        ) : (
+          <li key={item.key}>
+            {renderLink({
+              href: item.href,
+              className: cn(
+                'block border-b border-border px-3 py-2 text-sm transition-colors hover:bg-muted',
+                item.current && 'lumen-edge bg-accent text-accent-foreground',
+                item.className,
+              ),
+              children: item.children,
+              'aria-current': item.current ? 'page' : undefined,
+              onClick: onNavigate,
+            })}
+          </li>
+        ),
+      )}
     </ul>
   );
 }

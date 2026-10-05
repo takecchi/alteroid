@@ -169,14 +169,16 @@ function Typography() {
     <div className="space-y-5 rounded-lg bg-card p-5 ring-1 ring-foreground/10">
       <div className="space-y-1">
         <p className="text-xs text-muted-foreground">
-          印と大きな数字：Michroma（<code className="font-mono">font-display</code>）
+          印：Michroma（<code className="font-mono">font-display</code>
+          、ブランドの印だけ）。右の数字は本文の書体の等幅数字（
+          <code className="font-mono">tabular-nums</code>）— Michroma では 0 と O の見分けがつかない
         </p>
         <div className="flex flex-wrap items-baseline gap-6">
           <BrandMark className="[&>span:last-child]:text-2xl [&>svg]:size-8" />
-          <span data-numeric className="font-display text-3xl">
+          <span data-numeric className="text-3xl font-medium">
             $4.18
           </span>
-          <span data-numeric className="font-display text-3xl text-warn">
+          <span data-numeric className="text-3xl font-medium text-warn">
             03
           </span>
         </div>

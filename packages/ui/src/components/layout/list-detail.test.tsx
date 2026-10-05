@@ -46,6 +46,7 @@ function Demo({ initial }: { initial: string | undefined }) {
             key: item.key,
             href: item.href,
             current: item.key === selected,
+            className: item.key === 'b' ? 'border-b-0' : undefined,
             children: item.label,
           }))}
           renderLink={(props) => (
@@ -146,5 +147,114 @@ describe('ListDetail: 狭い画面', () => {
     await vi.waitFor(() =>
       expect(document.activeElement).toBe(screen.getByRole('region', { name: '日報の詳細' })),
     );
+  });
+});
+
+describe.each([false, true])('ListDetail: 切り替え（スマホ=%s）', (mobile) => {
+  it('項目を切り替えたら詳細の scrollTop が 0 に戻り、初回描画では触らない', () => {
+    viewport.mobile = mobile;
+    const scrollTop = vi.spyOn(HTMLElement.prototype, 'scrollTop', 'set');
+    render(<Demo initial="a" />);
+    expect(scrollTop).not.toHaveBeenCalled();
+    scrollTop.mockRestore();
+
+    const detail = screen.getByRole('region', { name: '日報の詳細' });
+    detail.scrollTop = 120;
+    expect(detail.scrollTop).toBe(120);
+    if (mobile) {
+      fireEvent.click(screen.getByRole('button', { name: '日報を開く' }));
+      fireEvent.click(within(screen.getByRole('dialog')).getByRole('link', { name: '項目b' }));
+    } else {
+      fireEvent.click(screen.getByRole('link', { name: '項目b' }));
+    }
+    expect(screen.getByRole('region', { name: '日報の詳細' }).scrollTop).toBe(0);
+  });
+});
+
+describe('ListDetailItems: 項目の className', () => {
+  it('項目の className が行に後勝ちで乗る', () => {
+    render(<Demo initial="a" />);
+    const b = screen.getByRole('link', { name: '項目b' }).className;
+    expect(b).toContain('border-b-0');
+    expect(screen.getByRole('link', { name: '項目c' }).className).not.toContain('border-b-0');
+  });
+});
+
+describe('ListDetailItems: 一部だけがリンク（extra / lead）', () => {
+  function Partial({ initial }: { initial: string | undefined }) {
+    const [selected, setSelected] = useState(initial);
+    return (
+      <ListDetail
+        listLabel="記憶"
+        hasSelection={selected !== undefined}
+        selectionKey={selected}
+        detail={<h2>詳細 {selected}</h2>}
+        list={
+          <ListDetailItems
+            label="記憶の一覧"
+            items={['a', 'b', 'c'].map((key) => ({
+              key,
+              href: `#${key}`,
+              current: key === selected,
+              lead: <span>札{key}</span>,
+              children: `題名${key}`,
+              extra: <p>名前-{key}</p>,
+            }))}
+            renderLink={(props) => (
+              <a
+                {...props}
+                onClick={(event) => {
+                  event.preventDefault();
+                  setSelected(props.href.slice(1));
+                  props.onClick(event);
+                }}
+              >
+                {props.children}
+              </a>
+            )}
+          />
+        }
+      />
+    );
+  }
+
+  it('リンクは題名だけで、札と extra はリンクの外（選択できる文字）', () => {
+    render(<Partial initial="a" />);
+    const link = screen.getByRole('link', { name: '題名b' });
+    expect(link.textContent).toBe('題名b');
+    expect(screen.getByText('名前-b').closest('a')).toBeNull();
+    expect(screen.getByText('札b').closest('a')).toBeNull();
+    expect(link.closest('li')?.querySelectorAll('a')).toHaveLength(1);
+  });
+
+  it('aria-current はリンクに、強調は行全体（li）に付く', () => {
+    render(<Partial initial="b" />);
+    const link = screen.getByRole('link', { name: '題名b' });
+    expect(link.getAttribute('aria-current')).toBe('page');
+    expect(link.closest('li')?.className).toContain('bg-accent');
+    expect(screen.getByRole('link', { name: '題名a' }).closest('li')?.className).not.toContain(
+      'bg-accent',
+    );
+  });
+
+  it('↑/↓・Home/End で焦点が項目のリンクを辿る', () => {
+    render(<Partial initial="a" />);
+    const a = screen.getByRole('link', { name: '題名a' });
+    a.focus();
+    fireEvent.keyDown(a, { key: 'ArrowDown' });
+    expect(document.activeElement).toBe(screen.getByRole('link', { name: '題名b' }));
+    fireEvent.keyDown(document.activeElement as HTMLElement, { key: 'End' });
+    expect(document.activeElement).toBe(screen.getByRole('link', { name: '題名c' }));
+    fireEvent.keyDown(document.activeElement as HTMLElement, { key: 'Home' });
+    expect(document.activeElement).toBe(a);
+  });
+
+  it('スマホのドロワーで題名を押すと閉じる', () => {
+    viewport.mobile = true;
+    render(<Partial initial="a" />);
+    fireEvent.click(screen.getByRole('button', { name: '記憶を開く' }));
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('link', { name: '題名b' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(screen.getByRole('heading', { name: '詳細 b' })).toBeTruthy();
   });
 });

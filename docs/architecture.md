@@ -18,7 +18,7 @@
 │   └ 記憶ストア ← **このプロセスだけが接続情報を持つ**       │   │   持たない      │
 │                                                          │   └───────────────┘
 │  スケジューラ / 外部イベント入口 / 承認待ちキュー           │
-│  HTTP API（hono）─ chat(SSE)・jobs・承認                  │
+│  HTTP API（hono）─ chat(SSE)・managers・承認              │
 │                    日報・日誌・セッションログ（可観測性3層）  │
 │  RunnerRegistry ─ 委譲の宛先を決める間接層                 │
 └──────┬───────────────────────────────────────────┘
@@ -30,7 +30,7 @@
 │ manager-runner（別プロセス・既定では別コンテナ）             │
 │  ・SDK セッションを N 本並行で持つ（人工上限なし）           │
 │  ・**記憶ストアへ到達する鍵を持たない**                     │
-│  ・待ち受けは Unix ソケットだけ（合鍵つき。TCP を開かない）  │
+│  ・待ち受けは Unix ソケット（合鍵つき。compose。Railway は TCP）│
 │  ├ マネージャー（Opus / tools 省略 = preset 全部）× N ← 別UID│
 │  │  └ 作業者（Sonnet / agents 定義, tools 省略 = 全継承）× N │
 │  │     workspace / MCP 設定 / OAuth トークンはここが持つ     │
@@ -91,8 +91,10 @@
 
 | 向き | 経路 |
 |---|---|
-| デーモン → runner | `POST /managers`（start） / `POST /managers/:id/resume` / `POST /managers/:id/messages` / `POST /managers/:id/answers` / `DELETE /managers/:id` / `GET /managers` / `GET /managers/:id/transcript` / `GET /health`（runner_id を名乗る） |
-| runner → デーモン | `GET /events`（SSE）。`session` / `project_key` / `report` / `ask` / `settled` / `tool_use` / `mirror`（生ログ） / `archive` / `closed` |
+| デーモン → runner | `POST /managers`（start） / `POST /managers/:id/resume` / `POST /managers/:id/messages` / `POST /managers/:id/answers` / `DELETE /managers/:id` / `GET /managers` / `GET /managers/:id/transcript` / `GET /managers/:id/unpushed-work`（未 push の成果の観測。`manager_stop` が使う） / `GET /health`（runner_id を名乗る） / 降ろす口: `POST /credentials`（マネージャーへ降ろす環境変数）・`POST /profile`（実行環境プロファイル）・`POST /mcp-servers`（MCP 登録）。`GET /profile` と `GET /mcp-servers` は指紋を返す |
+| runner → デーモン | `GET /events`（SSE）。種別は `hello`（名乗り） / `session` / `project_key` / `report` / `worker_wait` / `ask` / `settled` / `note` / `tool_use` / `tool_running` / `tool_end` / `permission_denied` / `usage` / `peer_usage` / `context_usage` / `usage_notice` / `rate_limit` / `mirror`（生ログ） / `archive` / `closed` / `resume_failed` / `shutdown_unpushed_work` |
+
+**この表は写しである。正本は `packages/core/src/runner-protocol.ts` の `runnerEventSchema`（上りの種別）と `apps/runner/src/app.ts` のルート定義（下りの口）で、食い違ったら正本が勝つ。** 口を足すときは、`control`（合鍵）の内側に置くこと（下の「制御面の保護」）。
 
 **`/livez` 以外はすべて合鍵（Bearer）を要求する。** 下の「制御面の保護」のとおり、この口は
 マネージャーが走っている器の中にあるので、鍵の無い呼び出しを通すと権限境界が迂回できる。
@@ -113,7 +115,9 @@
   あり、`ALTEROID_GOOGLE_*` は runner へ配っていないので、マネージャーにはトークンを得る
   経路が無い。`/auth/*` は開いているが、その先は人間の `access grant` を通らないと何も持てない
 - **これは受け入れた劣化であって、設計の意図ではない**（2026-08-14、人間の判断）。外から
-  叩かせるには待ち受けを開けるほかなく、開くのは**認証が立つときだけ**である。公開しない
+  叩かせるには待ち受けを開けるほかなく、開くのは**認証が立つときだけ**である（**これは `railway/setup.sh` の分岐が守っている運用で、
+  デーモン自身は強制せず、認証が無効のまま開いたときは起動時に警告を出すだけである。
+  強制するかは判断待ち — #2892**）。公開しない
   構成では 127.0.0.1 のままで、この経路は開かない
 - **失った守りを書いておく。「経路が無い」は多層防御の1枚だった。** 経路が無ければ、認証に
   穴が空いても記憶へは届かない。公開構成ではその1枚が抜けて**認証だけが砦になっている** —
@@ -125,6 +129,27 @@
   runner に残り、マネージャーが永久に待つ
 - デーモンの停止は runner のセッションを止めない。**デーモンの都合で人の仕事を殺さない** —
   再起動後は生きているセッションへ繋ぎ直し、runner ごと落ちていた分だけ resume する
+- **認証トークンが回った後、done の委譲へ話しかけるときは、旧セッションへ流さない**（Issue #2851）。
+  走行中のセッションの子プロセスは起動時の環境変数（鍵）を持ったままなので、runner は鍵が
+  回るとターンの境界でセッションを畳んで resume で開き直す。**境界に達しなかった done の
+  セッション**（背景処理や確認待ちが残っていた回）は、旧プロセスが生きたまま台帳が「繋がっている」
+  と言っているので、`send` は resume ではなく旧プロセスへ追加指示を積み、また古い鍵で枠に当たる。
+  ⟹ デーモンは done の委譲へ送るとき、**抱えている鍵の世代が現役と食い違っていれば**
+  （`manager_list` の ⚠ と同じ判定）、runner の `GET /managers` が返す背景処理の本数
+  （`liveBackgroundTasks`）と確認待ちを見て、**どちらも無いときだけ**旧セッションを畳み、
+  既存の resume で同じ会話（`session_id`）を新しい鍵で起こし直して追加指示を渡す。**新しい命令は
+  足さない**（`DELETE /managers/:id` と `POST /managers/:id/resume` と `GET /managers` の既存の口だけ）
+  - **失わない順序。** 未 push の観測を取る → runner が子プロセスを閉じて生ログをデーモンへ
+    送り出し、未報告の本文を flush してから畳む → 一覧から消えたことを確かめる → resume。
+    畳むのは SDK の子プロセスであって workspace ではない（作業ツリーは同じ器に残る）。
+    貸し出しは返さず握ったまま resume する。確かめられなければ resume しない（二重に起こさない）。
+    resume が効かないときは既存の「戻れない」の経路（`#unresumable`）に乗る
+  - **残っていれば畳まず、旧セッションへも送らず、断る**（`outcome: 'declined'`）。背景処理や確認待ちは
+    子プロセスごと道連れになり、黙って捨てるのは「デーモンの都合で人の仕事を殺す」ことになる。
+    detail は何が残っているか（本数・確認待ちの件数）と取れる手（終わるのを待って送り直す／
+    `manager_stop` → `manager_start`）を言う。**force は無い**
+  - **`liveBackgroundTasks` が無い（古い runner）ときは「分からない」として断る。** 0 とは読まない。
+    デーモンと runner は別々にデプロイされるので、この欄は optional で、無い版と混ざる窓でも壊れない
 
 ### 制御面の保護 — マネージャーは自分の許可確認に答えられない
 
@@ -134,20 +159,33 @@ runner API はマネージャーにとって**自分が走っている器の中�
 生ログ閲覧も同じである。**「マネージャーから見たユーザーはクローン」という配線は、
 制御面が触れる時点で成立していない。**
 
-塞ぎ方は3枚重ねで、どれも能力の削除ではない（マネージャーの道具は1つも減らない）。
+塞ぎ方は重ねで、どれも能力の削除ではない（マネージャーの道具は1つも減らない）。
 
-| 枚 | 何を | なぜそれで塞がるか |
-|---|---|---|
-| 1 | **TCP の口を開かない**（待ち受けは共有 volume 上の Unix ソケットだけ） | `curl http://127.0.0.1:4518` の宛先が存在しない |
-| 2 | **ソケットは mode 0600・所有者はデーモンの UID** | 別 UID の子プロセスは connect できない |
-| 3 | **runner のプロセスには合鍵の sha256 しか残さない** | 環境を読めても鍵は作れない。鍵が無ければ 401 |
+| 行 | 何を | なぜそれで塞がるか | compose | Railway |
+|---|---|---|---|---|
+| 1 | **TCP の口を開かない**（待ち受けは共有 volume 上の Unix ソケットだけ） | `curl http://127.0.0.1:4518` の宛先が存在しない | 成り立つ | **外れる**（runner が TCP で待つ） |
+| 2 | **ソケットは mode 0600・所有者はデーモンの UID** | 別 UID の子プロセスは connect できない | 成り立つ | **外れる**（ソケットが無い） |
+| 3 | **runner のプロセスには合鍵の sha256 しか残さない** | 環境を読めても鍵は作れない。鍵が無ければ 401 | 成り立つ | 成り立つ |
+| 4 | **SDK の子プロセス（マネージャー・作業者）は runner 本体とは別の UID** | 子は runner の環境（`/proc/1/environ`）を読めず、ソケットにも繋げない | 成り立つ | 成り立つ |
 
-3枚目が要るのは、1・2 が UID の分離に依存しているからである。**SDK の子プロセスは
+**成り立つ構成と、成り立たない構成を分けて読むこと。** 1〜4 が全部揃うのは compose
+（runner と daemon が共有 volume の Unix ソケットで繋がる構成）だけである。**Railway では
+サービス間で volume を共有できないので、runner は TCP で待ち**（`ALTEROID_RUNNER_BIND` を
+`::`、ポートを `ALTEROID_RUNNER_PORT` にする。`railway/setup.sh`）、**1 と 2 が外れる。** 残るのは
+3 と 4 で、制御面の全経路が `Bearer` を要求し（`apps/runner/src/app.ts` の `control`）、
+子は鍵を作れないので、「マネージャーが自分宛の許可確認に自分で `allow` を返せない」は
+Railway でも保たれる。ただし **TCP の口は同じ器の子プロセスからも、同じ private network の
+他のサービスからも届く**（鍵が無ければ 401 が返るだけで、守りは鍵の1枚になっている）。
+この対比の数え方と運用上の内訳は [railway/README.md](../railway/README.md)「先に読む」1 が持つ。
+※ 実機の Railway は叩いていない。上の「外れる」は `railway/setup.sh` の設定値と
+`apps/runner/src/index.ts` の待ち受けの分岐（`ALTEROID_RUNNER_SOCKET` が無ければ TCP）を読んだものである。
+
+3 が要るのは、1・2 が 4（UID の分離）に依存しているからである。**SDK の子プロセスは
 runner 本体とは別の UID で走らせる**（`spawnClaudeCodeProcess` で降ろす。降ろす特権が
 要るので runner 本体は root、降りた先は非特権）。同じ UID なら子は `/proc/1/environ` を
 読み、ソケットにも繋げてしまう。
 
-- **素の鍵を runner のプロセスに残さないこと。** 残った瞬間、3枚目が1・2 と同じ前提に
+- **素の鍵を runner のプロセスに残さないこと。** 残った瞬間、3 が 1・2 と同じ前提に
   戻る（今回避けたはずの `/proc/1/environ` がまた効く）
   - **人間が置く値は app と runner で同じでよい。** 器の起動スクリプトが、`exec` の
     前に sha256 へ畳んで素の値を環境から落とす。守りは「配り方」ではなく
@@ -168,13 +206,18 @@ runner 本体とは別の UID で走らせる**（`spawnClaudeCodeProcess` で�
 
 ## 同時実行の宛先 — RunnerRegistry
 
-委譲の宛先は `RunnerRegistry`（`list` / `get` / `select`）を通して決める。M4 で登録されるのは
-1台（`runner-primary`）で、`select` は常にそれを返す。間接層を最初から置くのは、宛先の決定が
-呼び出し側に散らばると M5（複数 runner）で全部書き直しになるからである。
+委譲の宛先は `RunnerRegistry`（`list` / `get` / `select` と、名簿の `register` / `unregister`）を通して決める。
+名簿は動的で、`ALTEROID_RUNNER_URLS`（カンマ区切りで複数）か `ALTEROID_RUNNER_URL` で登録した複数台の runner
+を持てる（runner が無くてもデーモンは起動し、後から載る）。`select` は、`runnerId` の指名が無ければ
+runner が報告する資源（pids の現在値と上限など）と直近の失敗を見て置き先を選び（`chooseByResources`）、
+`runnerId` が指名されればその器へ置く（開けていて使えないときは自動配置へ落とさず、理由を添えて失敗する）。
+繋がっている runner が無ければ短い猶予のあいだ待ち、過ぎたら宛先ごとの状態を添えて失敗する。
+`cwd` は受け取るが置き先の材料にはまだしていない。間接層を最初から置くのは、宛先の決定が
+呼び出し側に散らばると複数 runner で全部書き直しになるからである。
 
 - `select` に**人工的な上限を入れない**。「同時に何本まで」は能力の削除であって配置の判断では
-  ない（禁止2）。将来ここで見てよいのは、runner が報告する CPU・メモリ・稼働セッション数と
-  いった**実行環境の資源**である
+  ない（禁止2）。ここで見てよいのは、runner が報告する CPU・メモリ・稼働セッション数と
+  いった**実行環境の資源**である（いま見ているのは上の資源と直近の失敗）
 - 走行中のマネージャーの宛先は JobStore に残る（下の対応関係）。`manager_send` は
   `manager_id` から runner を引いて届ける（sticky routing）
 
@@ -325,6 +368,7 @@ core にストアのインターフェースを切り、ドライバを差し替
 | ProfileStore | 実行環境プロファイル（`.zprofile` 相当。名前付きのシェルスクリプトの行ごとに撒く先を持つ） | `profile.d/<name>.sh`（0600）＋`<name>.scope` | PostgreSQL（1名前1行。旧 `env_profile` は消さず `default` 行へ1度だけ写す） |
 | McpServerStore | 人間の MCP サーバの登録（`.mcp.json` の `mcpServers` と同じ形。#325） | `mcp-servers.json`（0600） | PostgreSQL（1行） |
 | CredentialVaultStore | マネージャーへ降ろす環境変数の正本（名前→値。鍵も身元も同じ形で持つ） | `credentials.json`（0600） | PostgreSQL（1名前1行） |
+| ConversationReadStore | 会話の既読（会話ごとの位置と、全体で1つの基準時刻。全員で1組） | `jobs/conversation-reads.json` | PostgreSQL（会話ごとに1行＋基準時刻の1行） |
 
 - **記憶の文書は種別を持ち、毎ターンの焼き込みへの載り方が種別で決まる**（frontmatter の `type`。無指定・読めない・未知の値は `premise` へ倒れる — 取り返しがつく側である）。**本文はどの種別でも載らない。** 開く口は `memory_read` / `memory_outline` / `memory_section_read` である
   - `premise`（既定） — **要旨と節の目次**が載る。節id が載るので、節を名指しして直接開ける
@@ -335,6 +379,24 @@ core にストアのインターフェースを切り、ドライバを差し替
 - **CommitmentStore に順序・優先度の列を足さないこと。** 足した瞬間に「何を先にやるか」の判断が器へ移り、PRD「自律」が禁じている「やることの一覧」になる。溜まっているものはクローンへ毎ターン件数と齢で渡し、順序はそのつど決め直させる
 - **仕込みの真実はストア側だけに置く。** スケジューラへ直接足す口を作ると、デーモン再起動で仕込みが消える（スケジューラはストアを読み直すだけの側である）
 - **発火の合図に依頼の本文を載せない。** 載せた瞬間に発火時点の写しになり、人間が本文を直しても古い依頼で走る。運ぶのは名前だけで、本文は処理する瞬間に読む
+
+### 会話の既読 — 全員で1組、位置は戻らない
+
+会話そのものは日誌の `exchange`（`with: 'human'`）の射影で、新しく持つ状態は「どこまで読んだか」だけである（`ConversationReadStore`）。
+
+- **全員で1組。** アカウントごとに分けない（PRD「非ゴール」の「利用者ごとにデータを分けない」。認証を無効にした構成にはそもそもアカウントが無い）。誰がどの入口（Web・CLI・API）で読んでも、同じ位置が進む
+- **位置は「最後に読んだ発言の時刻」で、後戻りしない。** 古い発言を指して既読にしても何も変わらない（2つの入口がほぼ同時に既読にしても、遅れて届いた古い位置で巻き戻らない）。既読にする口（`POST /conversations/:id/read`）は**発言の id**を受け取り、時刻はサーバが日誌から引く——「いま」で既読にして、まだ見ていない発言まで既読にする誤りを作らせない
+- **未読になるのはクローン側の発言だけ** — 返答、失敗したターンの返答、ターンの外からの発言（`conversation_post`）。人間自身の発言は未読にしない。チャットの編集で既定ビューから畳まれた発言も数えない。数えるのは遡った窓（`scan`）の中だけである
+- **記録の無い会話は、導入時の基準時刻で判定する。** 基準時刻は全体で1つ、無ければ「いま」を入れ、在れば変えない（デーモンの起動時と読み出しの両方で決める）。基準時刻以前の発言は既読、以後は未読——導入した瞬間に過去の会話が未読だらけにならず、導入後にクローンが新しく始めた会話は（位置が無くても）未読になる。会話に位置が記録されたら、位置と基準時刻の遅いほうで判定する（基準時刻が床。基準時刻より前の古い発言を指して既読にしても、間の返答が未読へ戻らない）
+- **未読のある会話の数（左ナビの札）は、日誌を広く遡らずに数える。** 会話ごとの「最後のクローン側発言の時刻」の索引（日誌の写し。`ConversationReadStore` が持ち、リセットで日誌と一緒に消す）に、前回から新しく積まれた分だけを日誌から足し、位置と基準時刻の遅いほうと比べる。未読の会話が上限（99）を超えるか、長い不在のあとの取り込みが1回に収まらないときだけ `capped`。一覧の未読数との差が出うるのは、編集で畳まれた返答が会話の最後のクローン側発言のときだけで、その会話を開いて既読にすれば揃う
+- **既読の記録が読めないときは、「無い」と混ぜずに理由を返し、全件を未読として数える**（知らせ損ねるほうが取り返しがつかない）
+- **既読にするのは次の2つのとき**
+  1. 会話の画面を開き、タブが見えている状態で発言が表示されたとき。裏のタブで届いた分は、表に戻ったとき
+  2. 人間が送信し、返答の完了まで画面に居続け、返答が画面に表示されたとき。完了前に離れた・タブを裏にした・接続が切れて返答が表示されなかった場合は、未読のまま残る
+
+  完了前にタブを裏にした返答は、完了の時点では既読にしない。表に戻って返答が画面に見えた時点で既読になる（見ていなかった分は、見えた時点で既読）。
+
+  Web ではこの2つを「**見えているタブで画面に表示された発言まで既読にする**」という1つの規則で実現する。表示していない発言を既読にしない（位置を進める相手は、いつも画面に出た最新の発言である）
 
 ### JobStore が持つ対応関係 — 委譲を復元するための鎖
 
@@ -364,7 +426,7 @@ type WorkspaceLocator =
 生ログへは runner の API → アーカイブ → 預かったセッションの生ログ、の順で降りる。
 
 - **fs を先に作る**。記憶が Markdown ファイルであることは「人間がいつでも読んで直せる」（提供価値1）の最短の実装
-- **記憶の版は本文の sha256 である**（`memoryVersion`）。`GET /memory/{slug}` と `PUT` の応答が `version` で返し、`PUT` の任意の `ifMatch` と `PersonaStore.write(slug, content, { ifMatch })` が受ける。`updatedAt` にしないのは fs の mtime の精度に依らないため。比較は書き込みと同じ排他の中で行い（fs は `withPathLock` の内側、pg は条件付きの1文）、合わなければ `MemoryConflictError`（HTTP は 409 と `current`）。`ifMatch: null` は「読んだ時には無かった」。**省略は後勝ち**（クローンの道具・`memory set`・既存のスクリプトを壊さない）。3実装で挙動を揃える歯が `persona-contract.test.ts` / storage-fs / storage-pg にある
+- **記憶の版は本文の sha256 である**（`memoryVersion`）。`GET /memory/{slug}` と `PUT` の応答が `version` で返し、`PUT` の任意の `ifMatch` と `PersonaStore.write(slug, content, { ifMatch })` が受ける。**削除も同じ版を前提にできる**（Issue #2881）: `DELETE /memory/{slug}` の任意のクエリ `ifMatch` と `PersonaStore.remove(slug, { ifMatch })` が受け（比較は消すのと同じ排他の中。pg は版つきの条件付き DELETE 1文）、合わなければ**何も消さず・日誌にも積まず** `MemoryConflictError`（HTTP は 409 と `current`。PUT と同じ形）。**版を付けない HTTP の削除は段階的に必須にする**: 段階1（いま）は Web の削除ボタンが版を送らないので通すが、応答に `warning` を載せ、デーモンの標準エラーと日誌の summary に「版の照合なし」と残す。段階2で Web が版を送り、段階3で API を版必須にする。CLI の `memory remove` は消す直前に `GET` で読んだ `version` を `ifMatch` に付け、409 なら消さずに案内して失敗終了する。`updatedAt` にしないのは fs の mtime の精度に依らないため。比較は書き込みと同じ排他の中で行い（fs は `withPathLock` の内側、pg は条件付きの1文）、合わなければ `MemoryConflictError`（HTTP は 409 と `current`）。`ifMatch: null` は「読んだ時には無かった」。**省略は後勝ち**（`memory set`・既存のスクリプトを壊さない）。**クローンの全文を書き直す口は省略を許さない**（Issue #2809）: `memory_read` / `memory_outline` / `memory_write` の応答の末尾が `base_version` を返し、`memory_write` は既存の文書にはそれを引数で受けて `ifMatch` に渡す（読んでから書くまでが別の道具呼び出しで、ターンをまたぎうるので、道具の内側だけで比べても足りない）。無ければ書かず `memory_read` を促し、合わなければ書かず・日誌にも積まず「その間に変わった」といまの版を返す。新規作成は `ifMatch: null` 相当。`memory_frontmatter_set` も `memory_write` と同じく引数 `base_version` を**必須**で受けて `ifMatch` に渡す（読んでから呼ぶまでの間に人間が要旨を直すと、渡したキーで上書きされうるため。無ければ書かず読み直しを促し、合わなければ書かず「その間に変わった」と返す）。断る文はどれも「何も書いていない」と言う。`memory_section_move` の出どころの切り取りは、同じ呼び出しの中で読んだ版を `ifMatch` に渡す（衝突したときは移し先に足した後なので「何も書いていない」とは言わず、足した／切っていない＝重複で消失ではない、と言う）（切り取りが落ちても先に足した移し先は残る＝重複で、消失ではない）。`memory_delete`（文書ごと消す）も `base_version` を**必須**で受けて `PersonaStore.remove` の `ifMatch` に渡す（読んでいない内容を消さないため。クローンには移行の事情が無いので段階を踏まない。無ければ消さず `memory_read` を促し、合わなければ消さず・日誌にも積まず「その間に変わった」と返し、断る文は「何も消していない」と言う）。`memory_append` は原子的な追記で置換しないので前提を持たない。3実装で挙動を揃える歯が `persona-contract.test.ts` / storage-fs / storage-pg にある
 - SDK セッション自体の永続化は SessionStore アダプタ（SDK 公式）で同じ PostgreSQL に載せる。デーモン再起動時は JobStore の session_id からマネージャーを resume する
 
 ## パッケージ構成
@@ -377,9 +439,15 @@ packages/storage-pg  クラウド用ドライバ（PostgreSQL / drizzle）
 apps/daemon          alteroidd = core をホストする常駐プロセス + HTTP API（hono）
 apps/runner          alteroid-runner = manager-runner。SDK を隔離して走らせる
 apps/cli             alteroid = daemon への薄いクライアント（hono/client で型共有）
-apps/web             公式の画面。React Router v7 の SPA。@alteroid/api-client 経由で
-                     デーモンの API だけを見る（独自の経路を持たない）
-packages/api-client  生成 spec から起こした外部向けクライアント。apps/web が最初の消費者
+apps/web             公式の画面。React Router v7 の SPA。packages/swr（→ api-client）
+                     経由でデーモンの API だけを見る（独自の経路を持たない）
+packages/api-client  生成 spec から起こした外部向けクライアント。packages/swr が最初の消費者
+packages/logic       Web UI の純ロジック（表示の整形・接続先と資格情報の置き場・日誌の窓・
+                     画面の型）。React も SWR も知らない
+packages/swr         Web UI から API を叩く層（ApiProvider と SWR の hooks）。型と呼び出しの
+                     出どころは api-client
+packages/ui          Web UI の見た目の部品（shadcn の部品・汎用の表示部品・テーマの CSS）。
+                     API もデーモンも知らない
 ```
 
 境界の両側が `core` に居るのは、**プロトコルと型を1か所に置くため**である。実際に動くときは

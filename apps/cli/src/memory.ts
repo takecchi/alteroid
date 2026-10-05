@@ -7,6 +7,7 @@ import { stdin, stdout } from 'node:process';
 import { createClient, type DaemonClient } from './client.js';
 import { formatElapsedAgo, withErrorReason } from './format.js';
 import { describeAuthFailure, resolveTarget, type Target } from './target.js';
+import { describeEditorFailure, readInputFile } from './input-errors.js';
 
 /**
  * `alteroid memory` — 記憶（人格）を読む・書き換える・消す。
@@ -269,8 +270,7 @@ export async function memoryShowCommand(slug: string): Promise<void> {
   if (conn === null) return;
   const doc = await readDoc(conn.client, conn.target, slug);
   if (doc === null) {
-    stdout.write(`そんな記憶はありません: ${slug}\n`);
-    return;
+    throw new Error(`そんな記憶はありません: ${slug}`);
   }
   const content = doc.content;
   stdout.write(content.endsWith('\n') ? content : `${content}\n`);
@@ -352,7 +352,7 @@ export async function memorySetCommand(
   const content =
     options.file === undefined || options.file === '-'
       ? await readAll()
-      : await readFile(options.file, 'utf8');
+      : await readInputFile(options.file, '--file', '--file <path>、または標準入力（-）');
   await write(conn.client, conn.target, slug, content);
 }
 
@@ -372,12 +372,47 @@ export async function memorySetCommand(
  * **それ以外（401/403/5xx）を、この2つのどちらかだと取り違えない**——
  * 以前はここが「400 以外は全部『無い』」という形をしていたため、認証切れや
  * サーバの内部エラーでも「そんな記憶はありません」と誤案内していた。
+ *
+ * **読んだ版を持ち回る（Issue #2881。`memory edit` と同じ取り方）。** 消す直前に
+ * `GET /memory/<slug>` で読み、その `version` を `DELETE` の `ifMatch` に付ける。
+ * 読んだ後に別の書き手（クローンなど）が書いていたら、デーモンは**消さずに** 409 を返す。
+ * そのときは消さずに、いまの版と次の手（`memory show` で確かめてから再実行）を案内して失敗で終わる。
+ * 古いデーモンが `version` を返さなければ前提なしで消す（段階1。デーモンが警告を返せば出す）。
+ * **読んで無かった（404 / 400）ときも版なしで DELETE を打つ**——「無い」と「名前が不正」の
+ * 切り分けはサーバが持つので、ここで再実装しない。
  */
 export async function memoryRemoveCommand(slug: string): Promise<void> {
   const conn = await connect('write');
   if (conn === null) return;
   const { client, target } = conn;
-  const response = await client.memory[':slug'].$delete({ param: { slug } });
+  const doc = await readDoc(client, target, slug);
+  const ifMatch = doc?.version;
+  const response = await client.memory[':slug'].$delete({
+    param: { slug },
+    query: ifMatch === undefined ? {} : { ifMatch },
+  });
+  if (response.status === 409) {
+    const body = (await response.json()) as {
+      current?: { document?: { content?: string }; version?: string } | null;
+    };
+    const current = body.current ?? null;
+    stdout.write(
+      [
+        `消していません: ${slug} は、あなたが読んだ後に変わっています（クローンなど別の書き手が書いたか、すでに消されました）。`,
+        current === null
+          ? '  いまの記憶: 無い（すでに消されています）'
+          : `  いまの記憶の版: ${current.version ?? '（不明）'}（${String(current.document?.content?.length ?? 0)} 文字）`,
+        ...(current === null
+          ? []
+          : [
+              `  いまの内容を読み直す: \`alteroid memory show ${slug}\`（版そのものは GET /memory/${slug} の version）`,
+              `  確かめたうえで消してよければ、もう一度 \`alteroid memory remove ${slug}\`（いまの版を読み直して消します）。`,
+            ]),
+        '',
+      ].join('\n'),
+    );
+    throw new Error(`記憶が読んだ後に変わっていたので消しませんでした: ${slug}`);
+  }
   if (!response.ok) {
     if (response.status === 400) {
       throw new Error(`記憶の名前として成立しません: ${slug}`);
@@ -395,6 +430,9 @@ export async function memoryRemoveCommand(slug: string): Promise<void> {
     );
   }
   stdout.write(`消しました: ${slug}\n`);
+  // 版を付けずに消せたとき、デーモンは警告を返す（段階1）。握り潰さず見せる。
+  const done = (await response.json().catch(() => ({}))) as { warning?: unknown };
+  if (typeof done.warning === 'string') stdout.write(`注意: ${done.warning}\n`);
 }
 
 /**
@@ -523,10 +561,19 @@ async function openEditor(path: string): Promise<void> {
   const editor = process.env.VISUAL ?? process.env.EDITOR ?? 'vi';
   await new Promise<void>((resolve, reject) => {
     const child = spawn(editor, [path], { stdio: 'inherit', shell: true });
-    child.on('error', reject);
-    child.on('close', (code) => {
+    child.on('error', (error) =>
+      reject(describeEditorFailure(editor, { error }, 'alteroid memory set <slug> --file <path>')),
+    );
+    child.on('close', (code, signal) => {
       if (code === 0) resolve();
-      else reject(new Error(`${editor} が異常終了しました (${String(code)})`));
+      else
+        reject(
+          describeEditorFailure(
+            editor,
+            { code, signal },
+            'alteroid memory set <slug> --file <path>',
+          ),
+        );
     });
   });
 }

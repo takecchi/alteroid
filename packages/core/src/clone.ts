@@ -697,12 +697,6 @@ export function resolveMergedBatchSizeLimit(env: NodeJS.ProcessEnv = process.env
 }
 
 /**
- * 継続中の依頼の器に触るときの試行回数と間隔（読み取りと発火の記録の両方）。
- *
- * **これは回数制限ではない**（AGENTS.md 地雷2）。器が一瞬揺れただけで1周期ぶんの
- * 仕事を落とさないための拾い直しであって、仕事の量を絞るものではない。
- */
-/**
  * ターンが失敗で終わった定期の発火を、同じプロセスの中で配り直す間隔（#2739）。失敗のたびに
  * 後退する（毎分1ターンにしない）。使い切ったら印を残したまま次の周期か再起動に任せる。
  * 本来の次回より遠くには置かれない（`Scheduler.retrySoon`）。
@@ -711,6 +705,12 @@ const FAILED_TURN_RETRY_DELAYS_MS: readonly number[] = [10, 30, 120, 360, 720].m
   (minutes) => minutes * 60_000,
 );
 
+/**
+ * 継続中の依頼の器に触るときの試行回数と間隔（読み取りと発火の記録の両方）。
+ *
+ * **これは回数制限ではない**（AGENTS.md 地雷2）。器が一瞬揺れただけで1周期ぶんの
+ * 仕事を落とさないための拾い直しであって、仕事の量を絞るものではない。
+ */
 const SCHEDULE_STORE_ATTEMPTS = 3;
 const SCHEDULE_STORE_RETRY_MS = 200;
 
@@ -7554,6 +7554,8 @@ class Clone implements CloneHost {
     // 実測ではそちらのほうが多い（24件中15件）が、依頼元の判定が「2×2 の右下1マス
     // だけ」であり、そこは範囲の外である。**⟹ 「長さで落ちる回は全部直った」と
     // 読まないこと。**
+    // 画面が「失敗の知らせ」と見分けるための印（`turnFailure` の doc）。文面は見ない。
+    const turnFailure = this.#usageBlocked === null ? ('failed' as const) : ('held' as const);
     const humanText =
       (this.#usageBlocked === null
         ? 'この発言には返せなかった（ターンが失敗した）。失敗の理由は日誌に残してある。'
@@ -7603,6 +7605,7 @@ class Clone implements CloneHost {
       role: 'outbound',
       text: humanText,
       conversationId,
+      turnFailure,
     });
   }
 
@@ -8586,7 +8589,10 @@ class Clone implements CloneHost {
         // `#firstDue` と、次の周期の刻み（`#resumable`）で元の発火として配り直される。
         // 受信箱の合図は失敗として settle される（決定的に失敗する合図を起動のたびに
         // 焼かない線）ので、配り直しを担うのは印の側である。枠での保持（`heldForUsage`）は
-        // 従来どおり `#pump` の `defer` が配り直す。
+        // 従来どおり `#pump` の `defer` が配り直す。保持した合図は受信箱に未読で残るので、
+        // 保持中に器が落ちても再起動の `#restoreUnread` が元の回として配り直す（#2814）。
+        // **ここで印を残さないこと** — 残すと `#firstDue` と未読の両方から同じ回が届き、
+        // 走っていない回に `unfinishedAt` が付く（`clone-schedule-held-for-usage.test.ts`）。
         if (plan !== null) {
           if (outcome.status === 'failed' && !outcome.heldForUsage) {
             await this.#journal({
@@ -9237,7 +9243,13 @@ class Clone implements CloneHost {
             : 'この日の日報が既にあるか確かめられないまま書いた。同じ日に日報が2本ある' +
               'ならこの回の重複（消さずに日誌から辿ること）。'),
       });
-      if (outcome.status === 'failed') return;
+      if (outcome.status === 'failed') {
+        // 印を書けなかっただけで、失敗した日報であることは変わらない。再起動まで
+        // 待たずに作り直す（#2745）。作り直しが成功すれば（読めなければ重複の
+        // 可能性つきで）本物が書かれる。
+        this.#scheduleDailyReportRetry(date);
+        return;
+      }
     }
     // **印の付いた行は「日報がある」と数えない**（`schema.ts` の `unavailable` の
     // doc）。数えると、後から本物を書き直す道が閉じる。

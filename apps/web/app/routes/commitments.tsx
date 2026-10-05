@@ -1,8 +1,9 @@
 import { WorkTabs } from '~/components/group-tabs';
+import { LoadError } from '~/components/load-error';
 import { AlertTriangle } from 'lucide-react';
-import { Fragment, useId, useState } from 'react';
+import { Fragment, useCallback, useEffect, useId, useState } from 'react';
 import { Tabs } from 'radix-ui';
-import { Link } from 'react-router';
+import { Link, useBlocker } from 'react-router';
 
 import {
   Markdown,
@@ -11,6 +12,7 @@ import {
   Button,
   Card,
   CardHeader,
+  ConfirmDialog,
   Empty,
   ErrorNote,
   Input,
@@ -43,7 +45,35 @@ import type { Commitment, UnreadableCommitment, UnreadableJob } from '@alteroid/
  */
 export default function Commitments() {
   const [showClosed, setShowClosed] = useState(false);
-  const { data, error, isLoading } = useCommitments(showClosed);
+  /**
+   * **書きかけの編集欄の id の集合（#2764）。** 行ごとに「本文を編集」を同時に開けるので、
+   * 離れる前の確認（`useBlocker`・beforeunload）は編集欄ごとではなくここに1つだけ置く
+   * （ルーターは同時に1つのブロッカーしか扱わず、最後に登録されたものだけで判定する）。
+   * どれか1つでも書きかけなら止める。
+   */
+  const [dirtyIds, setDirtyIds] = useState<ReadonlySet<string>>(new Set());
+  const setRowDirty = useCallback((id: string, dirty: boolean) => {
+    setDirtyIds((current) => {
+      if (current.has(id) === dirty) return current;
+      const next = new Set(current);
+      if (dirty) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  }, []);
+  const anyDirty = dirtyIds.size > 0;
+  const blocker = useBlocker(anyDirty);
+  useEffect(() => {
+    if (!anyDirty) return;
+    const warn = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      // 古いブラウザは returnValue を入れないと出さない。
+      event.returnValue = '';
+    };
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  }, [anyDirty]);
+  const { data, error, isLoading, isValidating, mutate } = useCommitments(showClosed);
 
   // 並びはデーモンが決めている（未了が古い順、片付いたものが新しい順で後ろ）。
   // **ここで並べ直さない** — 並べ直すと齢の見え方が CLI・クローンと食い違う。
@@ -59,7 +89,7 @@ export default function Commitments() {
   const trimmedClosed = data?.trimmedClosed ?? 0;
   /**
    * **取れなかったのを0件と描かない**（issue #2320）。一覧をまだ一度も読めていないまま
-   * 失敗したとき、失敗は上の `ErrorNote` が言う。ここで「引き受けたまま終わっていない仕事は
+   * 失敗したとき、失敗は `LoadError` が言う。ここで「引き受けたまま終わっていない仕事は
    * ない」を並べると、読めていないのに引き受けた仕事が無いように読め、忘れさせないための
    * 器が空に見える。再検証の失敗で `data` が残っているときは当たらず、一覧をそのまま出す
    * （#2266 と同じ）。
@@ -70,14 +100,34 @@ export default function Commitments() {
     <Page
       tabs={<WorkTabs />}
       title="未了の仕事"
-      description="受信箱でも日誌でもここには残らない。忘れさせないための器であって、やることの一覧ではない"
+      description="受信箱でも日誌でもここには残らない。忘れさせないための場所であって、やることの一覧ではない"
       action={
         <Button size="sm" onClick={() => setShowClosed((v) => !v)}>
           {showClosed ? '未了だけ' : '片付けたものも見る'}
         </Button>
       }
     >
-      <ErrorNote error={error} className="mb-4" />
+      <LoadError
+        what="未了の仕事の一覧"
+        error={error}
+        onRetry={() => mutate()}
+        retrying={isValidating}
+        className="mb-4"
+      />
+
+      <ConfirmDialog
+        open={blocker.state === 'blocked'}
+        onOpenChange={(open) => {
+          if (!open && blocker.state === 'blocked') blocker.reset();
+        }}
+        title="保存していない変更があります"
+        description="このまま離れると、書きかけの内容は失われます。"
+        confirmLabel="破棄して離れる"
+        destructive
+        onConfirm={() => {
+          if (blocker.state === 'blocked') blocker.proceed();
+        }}
+      />
 
       <PushForm />
 
@@ -100,7 +150,11 @@ export default function Commitments() {
             ) : (
               <ul>
                 {open.map((commitment) => (
-                  <OpenRow key={commitment.id} commitment={commitment} />
+                  <OpenRow
+                    key={commitment.id}
+                    commitment={commitment}
+                    onDirtyChange={setRowDirty}
+                  />
                 ))}
               </ul>
             )}
@@ -918,9 +972,11 @@ const EDITOR_TAB_TRIGGER_ACTIVE_CLASS = 'border-primary text-foreground';
 function CommitmentBodyEditor({
   commitment,
   onCancel,
+  onDirtyChange,
 }: {
   commitment: Commitment;
   onCancel: () => void;
+  onDirtyChange: (id: string, dirty: boolean) => void;
 }) {
   const editCommitment = useEditCommitment();
   const [draft, setDraft] = useState<string | undefined>(undefined);
@@ -930,6 +986,17 @@ function CommitmentBodyEditor({
 
   const value = draft ?? commitment.body;
   const dirty = draft !== undefined && draft !== commitment.body;
+
+  /**
+   * 書きかけかどうかをページへ知らせる（離れる前の確認はページが1つだけ持つ。#2764）。
+   * 編集欄が閉じたら（保存・やめる）書きかけでなくなる。
+   */
+  // `onDirtyChange` はページが安定した関数（useCallback）で渡す。
+  const id = commitment.id;
+  useEffect(() => {
+    onDirtyChange(id, dirty);
+  }, [id, dirty, onDirtyChange]);
+  useEffect(() => () => onDirtyChange(id, false), [id, onDirtyChange]);
 
   function save() {
     if (draft === undefined || draft.trim() === '') return;
@@ -1028,7 +1095,13 @@ function snippet(body: string): string {
   return flat.length > SNIPPET_MAX ? `${flat.slice(0, SNIPPET_MAX)}…` : flat;
 }
 
-function OpenRow({ commitment }: { commitment: Commitment }) {
+function OpenRow({
+  commitment,
+  onDirtyChange,
+}: {
+  commitment: Commitment;
+  onDirtyChange: (id: string, dirty: boolean) => void;
+}) {
   const closeCommitment = useCloseCommitment();
   const reasonId = useId();
   const [reason, setReason] = useState('');
@@ -1083,7 +1156,7 @@ function OpenRow({ commitment }: { commitment: Commitment }) {
         <span>({formatRelative(commitment.at)})</span>
         <button
           type="button"
-          className="ml-auto text-[11px] text-muted-foreground underline hover:text-foreground"
+          className="ml-auto text-[11px] text-muted-foreground underline hover:text-foreground pointer-coarse:-my-3.5 pointer-coarse:-mr-3 pointer-coarse:px-3 pointer-coarse:py-3.5"
           onClick={() => setEditing((current) => !current)}
         >
           {editing ? '編集をやめる' : '本文を編集'}
@@ -1097,7 +1170,11 @@ function OpenRow({ commitment }: { commitment: Commitment }) {
         開いている1件だけにする（`CommitmentBodyEditor` の doc）。
       */}
       {editing ? (
-        <CommitmentBodyEditor commitment={commitment} onCancel={() => setEditing(false)} />
+        <CommitmentBodyEditor
+          commitment={commitment}
+          onCancel={() => setEditing(false)}
+          onDirtyChange={onDirtyChange}
+        />
       ) : (
         <CommitmentBody commitment={commitment} />
       )}

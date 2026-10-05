@@ -10,6 +10,7 @@ import {
   decodeState,
   renderMemoryDocuments,
   verifyCommitmentFoldContract,
+  verifyConversationReadStoreContract,
   verifyMcpServerStoreContract,
   verifyProfileStoreContract,
   verifyPermissionGrantStoreContract,
@@ -133,6 +134,49 @@ describe('FsPersonaStore', () => {
       expect((await stores.persona.read('values'))?.content).toBe('# 価値観\n\nV3\n');
     });
   });
+
+  describe('remove の前提の版 ifMatch（Issue #2881。fs・pg・インメモリで同じ挙動）', () => {
+    it('読んだ後に別の書き手が書いたなら、消さずに MemoryConflictError（current は書かれている文書）', async () => {
+      await stores.persona.write('values', '# 価値観\n\nV1\n');
+      const v1 = memoryVersion((await stores.persona.read('values'))?.content ?? '');
+      await stores.persona.write('values', '# 価値観\n\nV1\n\nクローンの判断\n');
+
+      const error = await stores.persona.remove('values', { ifMatch: v1 }).catch((e: unknown) => e);
+
+      expect(error).toBeInstanceOf(MemoryConflictError);
+      expect((error as MemoryConflictError).current?.content).toContain('クローンの判断');
+      expect((await stores.persona.read('values'))?.content).toContain('クローンの判断');
+    });
+
+    it('版が合えば消せる。無い文書に版を指定したら MemoryConflictError（current は null）', async () => {
+      await stores.persona.write('values', '# 価値観\n\nV1\n');
+      const v = memoryVersion((await stores.persona.read('values'))?.content ?? '');
+      await stores.persona.remove('values', { ifMatch: v });
+      expect(await stores.persona.read('values')).toBeNull();
+
+      const error = await stores.persona.remove('values', { ifMatch: v }).catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(MemoryConflictError);
+      expect((error as MemoryConflictError).current).toBeNull();
+    });
+
+    it('同じ版を前提にした書き込みと削除が重なっても、勝つのは1つだけ', async () => {
+      await stores.persona.write('values', '# 価値観\n');
+      const v = memoryVersion((await stores.persona.read('values'))?.content ?? '');
+      const results = await Promise.allSettled([
+        stores.persona.write('values', '# 一\n', { ifMatch: v }),
+        stores.persona.remove('values', { ifMatch: v }),
+      ]);
+      expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+      expect(results.filter((r) => r.status === 'rejected')).toHaveLength(1);
+    });
+
+    it('ifMatch を付けなければ従来どおり無条件に消す（後方互換）', async () => {
+      await stores.persona.write('values', '# 価値観\n');
+      await stores.persona.remove('values');
+      expect(await stores.persona.read('values')).toBeNull();
+    });
+  });
+
   it('書いて読める', async () => {
     await stores.persona.write('values', '# 価値観\n\n速さより正しさ\n');
 
@@ -4823,3 +4867,43 @@ describe('AuthStore', () => {
 function neverIssued(): never {
   throw new Error('引き取れないはずの要求でトークンを作ろうとした');
 }
+
+/**
+ * 会話の既読の位置と基準時刻。契約は3実装で同じ関数を通す
+ * （`conversation-read.ts` の `verifyConversationReadStoreContract`）。ここで足すのは
+ * fs だけが持つ形 —— 器を作り直しても残ることと、壊れたファイルの読み方。
+ */
+describe('FsConversationReadStore', () => {
+  it('器の契約（3実装で同じことを測る）', async () => {
+    await verifyConversationReadStoreContract(stores.conversationReads);
+  });
+
+  it('器を作り直しても基準時刻と位置が残る', async () => {
+    await stores.conversationReads.ensureBaseline('2026-10-01T00:00:00.000Z');
+    await stores.conversationReads.advance('c1', '2026-10-01T00:00:01.000Z');
+    const reopened = createFsStores(root);
+    expect(await reopened.conversationReads.read()).toMatchObject({
+      state: 'ok',
+      baseline: '2026-10-01T00:00:00.000Z',
+      positions: { c1: { readThrough: '2026-10-01T00:00:01.000Z' } },
+    });
+  });
+
+  it('壊れたファイルは「無い」ではなく「読めない」。基準時刻は書き換えず、進めれば書き直す', async () => {
+    await mkdir(join(root, 'jobs'), { recursive: true });
+    await writeFile(join(root, 'jobs', 'conversation-reads.json'), '{ not json', 'utf8');
+    expect((await stores.conversationReads.read()).state).toBe('unreadable');
+    expect((await stores.conversationReads.ensureBaseline('2026-10-01T00:00:00.000Z')).state).toBe(
+      'unreadable',
+    );
+    expect(await readFile(join(root, 'jobs', 'conversation-reads.json'), 'utf8')).toBe(
+      '{ not json',
+    );
+
+    await stores.conversationReads.advance('c1', '2026-10-01T00:00:01.000Z');
+    expect(await stores.conversationReads.read()).toMatchObject({
+      state: 'ok',
+      positions: { c1: { readThrough: '2026-10-01T00:00:01.000Z' } },
+    });
+  });
+});

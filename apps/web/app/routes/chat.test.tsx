@@ -10,7 +10,14 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { createMemoryRouter, MemoryRouter, RouterProvider, useParams } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { json, Providers, sse, stubFetch, storeTestBaseUrl } from '~/test-support';
+import {
+  findShownConversation,
+  json,
+  Providers,
+  sse,
+  stubFetch,
+  storeTestBaseUrl,
+} from '~/test-support';
 
 import Chat, { ownedBy, retainedBy } from './chat';
 
@@ -75,6 +82,34 @@ async function send(text: string) {
   const box = await screen.findByPlaceholderText(/クローンに話しかける/);
   fireEvent.change(box, { target: { value: text } });
   fireEvent.click(screen.getByRole('button', { name: /送る/ }));
+}
+
+/**
+ * **次のフレームを流してよい時を、テストが決める**ための門。`sse` の枠の `after` に
+ * `opened`（解決待ちの Promise）を渡し、前提が画面に出たのを見てから `release()` する。
+ *
+ * **`delayMs`（時計）で「前の描画が済んだ後」を作らないこと。** `open` の直後に別の
+ * フレームを時計で流すと、画面は `open` が起こす描画（会話 id の確定・URL の付け替え・
+ * 履歴と一覧の取得）と次のフレームの描画を、1本の `findBy`（既定1000ms）の中で
+ * まとめてこなすことになり、遅い実行環境（全体実行の負荷）で予算を食う（#2900）。
+ */
+function gate() {
+  let release!: () => void;
+  const opened = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  return { opened, release };
+}
+
+/**
+ * `open` を受けた画面が、URL を新しい会話へ付け替えるところまで進んだこと。
+ * 付け替えは `open` の処理（`chat.tsx` の `send`）の最後の1手なので、これが見えたら
+ * `open` が起こす状態の更新は出し終わっている。
+ */
+async function untilOpenSettled(router: ReturnType<typeof renderChat>['router']) {
+  await waitFor(() => {
+    expect(router.state.location.pathname).toBe(`/chat/${CONVERSATION_ID}`);
+  });
 }
 
 /**
@@ -222,13 +257,20 @@ describe('受信をやめる', () => {
    * ものを動いているように見せ続けることになる。
    */
   it('進行中の合図が消え、それまでの本文は残る', async () => {
+    // `text` は `open` の後始末の後、`thinking` は本文が画面に出た後に流す（`gate` の doc）。
+    const textGate = gate();
+    const thinkingGate = gate();
     stubFetch((url, init) => {
       if (url.endsWith('/chat')) {
         return sse(
           [
             { event: 'open', data: { conversationId: CONVERSATION_ID } },
-            { event: 'text', data: { type: 'text', text: 'ここまでは届いた' } },
-            { event: 'thinking', data: { type: 'thinking' } },
+            {
+              event: 'text',
+              data: { type: 'text', text: 'ここまでは届いた' },
+              after: textGate.opened,
+            },
+            { event: 'thinking', data: { type: 'thinking' }, after: thinkingGate.opened },
           ],
           // まだ考えている（`done` を送らない）
           { keepOpen: true, signal: init?.signal },
@@ -243,8 +285,10 @@ describe('受信をやめる', () => {
       return undefined;
     });
 
-    renderChat();
+    const { router } = renderChat();
     await send('やあ');
+    await untilOpenSettled(router);
+    textGate.release();
 
     /*
      * **本文が届くまで待ってから止める。**
@@ -255,6 +299,7 @@ describe('受信をやめる', () => {
      * 出どころが無い）で、止める対象を取り違えないための順番でもある。
      */
     await screen.findByText('ここまでは届いた');
+    thinkingGate.release();
     expect(await screen.findByText('考えている…')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: /受信をやめる/ }));
 
@@ -270,12 +315,18 @@ describe('受信をやめる', () => {
   });
 
   it('ツール実行中の表示でも同じ', async () => {
+    // `tool` は `open` の後始末（URL の付け替え）が済んでから流す（`gate` の doc）。
+    const toolGate = gate();
     stubFetch((url, init) => {
       if (url.endsWith('/chat')) {
         return sse(
           [
             { event: 'open', data: { conversationId: CONVERSATION_ID } },
-            { event: 'tool', data: { type: 'tool', tool: 'manager_start' } },
+            {
+              event: 'tool',
+              data: { type: 'tool', tool: 'manager_start' },
+              after: toolGate.opened,
+            },
           ],
           { keepOpen: true, signal: init?.signal },
         );
@@ -289,8 +340,11 @@ describe('受信をやめる', () => {
       return undefined;
     });
 
-    renderChat();
+    const { router } = renderChat();
     await send('やあ');
+
+    await untilOpenSettled(router);
+    toolGate.release();
 
     expect(await screen.findByText(/manager_start を実行中/)).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: /受信をやめる/ }));
@@ -335,12 +389,14 @@ describe('考えている…の合図', () => {
   });
 
   it('本文が1文字でも来たら消える（受信はまだ続いている）', async () => {
+    // 本文は「考えている…」が画面に出たのを見てから流す（出ていたものが消える、を測るため）。
+    const textGate = gate();
     stubFetch((url, init) => {
       if (url.endsWith('/chat')) {
         return sse(
           [
             { event: 'open', data: { conversationId: CONVERSATION_ID } },
-            { event: 'text', data: { type: 'text', text: 'こ' } },
+            { event: 'text', data: { type: 'text', text: 'こ' }, after: textGate.opened },
           ],
           // 終わらせない。**消える理由が「本文が来たから」であることを固定する** —
           // `done` を送ると、終わったから消えたのか本文で消えたのか分からない。
@@ -360,6 +416,7 @@ describe('考えている…の合図', () => {
     await send('やあ');
 
     expect(await screen.findByText('考えている…')).toBeTruthy();
+    textGate.release();
     await screen.findByText('こ');
     await waitFor(() => {
       expect(screen.queryByText('考えている…')).toBeNull();
@@ -377,13 +434,21 @@ describe('考えている…の合図', () => {
    * 終わった実行を映したまま止まる。）
    */
   it('本文の後にサーバの thinking が来たら、また出る', async () => {
+    // `text` は `open` の後始末の後、`thinking` は本文が画面に出た後に流す（`gate` の doc）。
+    // 本文が出る前の「考えている…」と、本文の後にサーバから来たものを取り違えないための順序でもある。
+    const textGate = gate();
+    const thinkingGate = gate();
     stubFetch((url, init) => {
       if (url.endsWith('/chat')) {
         return sse(
           [
             { event: 'open', data: { conversationId: CONVERSATION_ID } },
-            { event: 'text', data: { type: 'text', text: 'ここまでは届いた' } },
-            { event: 'thinking', data: { type: 'thinking' } },
+            {
+              event: 'text',
+              data: { type: 'text', text: 'ここまでは届いた' },
+              after: textGate.opened,
+            },
+            { event: 'thinking', data: { type: 'thinking' }, after: thinkingGate.opened },
           ],
           { keepOpen: true, signal: init?.signal },
         );
@@ -397,10 +462,17 @@ describe('考えている…の合図', () => {
       return undefined;
     });
 
-    renderChat();
+    const { router } = renderChat();
     await send('やあ');
+    await untilOpenSettled(router);
+    textGate.release();
 
     await screen.findByText('ここまでは届いた');
+    // 本文が出て、送信時の「考えている…」が畳まれたのを見てから、サーバの `thinking` を流す。
+    await waitFor(() => {
+      expect(screen.queryByText('考えている…')).toBeNull();
+    });
+    thinkingGate.release();
     expect(await screen.findByText('考えている…')).toBeTruthy();
   });
 });
@@ -415,12 +487,13 @@ describe('考えている…の合図', () => {
  */
 describe('順番待ちの合図（queued）', () => {
   it('queued が来たら「順番を待っている…」へ差し替わる', async () => {
+    const queuedGate = gate();
     stubFetch((url, init) => {
       if (url.endsWith('/chat')) {
         return sse(
           [
             { event: 'open', data: { conversationId: CONVERSATION_ID } },
-            { event: 'queued', data: { type: 'queued' } },
+            { event: 'queued', data: { type: 'queued' }, after: queuedGate.opened },
           ],
           // 順番待ちのまま終わらせない（先客のターンが走っている状態）。
           { keepOpen: true, signal: init?.signal },
@@ -435,20 +508,25 @@ describe('順番待ちの合図（queued）', () => {
       return undefined;
     });
 
-    renderChat();
+    const { router } = renderChat();
     await send('やあ');
+    await untilOpenSettled(router);
+    queuedGate.release();
 
     expect(await screen.findByText('順番を待っている…')).toBeTruthy();
   });
 
   it('順番が来たら「考えている…」へ移る（queued を置き換えるのではなく後に続く）', async () => {
+    // `queued` は `open` の後始末の後、`thinking` は「順番を待っている…」が出た後に流す。
+    const queuedGate = gate();
+    const thinkingGate = gate();
     stubFetch((url, init) => {
       if (url.endsWith('/chat')) {
         return sse(
           [
             { event: 'open', data: { conversationId: CONVERSATION_ID } },
-            { event: 'queued', data: { type: 'queued' } },
-            { event: 'thinking', data: { type: 'thinking' } },
+            { event: 'queued', data: { type: 'queued' }, after: queuedGate.opened },
+            { event: 'thinking', data: { type: 'thinking' }, after: thinkingGate.opened },
           ],
           { keepOpen: true, signal: init?.signal },
         );
@@ -462,8 +540,12 @@ describe('順番待ちの合図（queued）', () => {
       return undefined;
     });
 
-    renderChat();
+    const { router } = renderChat();
     await send('やあ');
+    await untilOpenSettled(router);
+    queuedGate.release();
+    await screen.findByText('順番を待っている…');
+    thinkingGate.release();
 
     expect(await screen.findByText('考えている…')).toBeTruthy();
     // 順番待ちの表示は残らない（進行中の合図は1つだけ）。
@@ -485,6 +567,9 @@ describe('順番待ちの合図（queued）', () => {
  */
 describe('枠が閉じている合図（usage_limited）', () => {
   it('直後に届く error・受信終了後も画面に残る（transient として消えない）', async () => {
+    // `usage_limited` は `open` の後始末の後に流す。直後の `error` は続けて流れる
+    // （「直後に届く」ことがこの筋書きの前提なので、ここは間を空けない）。
+    const limitedGate = gate();
     stubFetch((url, init) => {
       if (url.endsWith('/chat')) {
         return sse(
@@ -493,6 +578,7 @@ describe('枠が閉じている合図（usage_limited）', () => {
             {
               event: 'usage_limited',
               data: { type: 'usage_limited', message: '枠が閉じている（テスト用の文言）' },
+              after: limitedGate.opened,
             },
             { event: 'error', data: { type: 'error', message: 'いまは投げられない' } },
           ],
@@ -509,8 +595,10 @@ describe('枠が閉じている合図（usage_limited）', () => {
       return undefined;
     });
 
-    renderChat();
+    const { router } = renderChat();
     await send('やあ');
+    await untilOpenSettled(router);
+    limitedGate.release();
 
     // SDK の文言（event.message）がそのまま残っている。
     expect(await screen.findByText(/枠が閉じている（テスト用の文言）/)).toBeTruthy();
@@ -884,9 +972,9 @@ describe('会話を跨いだ手元の行の生死（配線。issue #446）', () 
     // 連続で navigate すると、次の navigate が前の render 反映より先に走り、
     // 途中の会話（ここでは conv-b）を経由したことにならない。
     await router.navigate('/chat/conv-b');
-    await screen.findByText('conv-b');
+    await findShownConversation('conv-b');
     await router.navigate('/chat/conv-a');
-    await screen.findByText('conv-a');
+    await findShownConversation('conv-a');
 
     expect(within(transcript()).getByText(LOCAL_ONLY_REPLY)).toBeTruthy();
   });
@@ -902,11 +990,11 @@ describe('会話を跨いだ手元の行の生死（配線。issue #446）', () 
     // 「いま」でも「直前」でもなくなっている（直前は conv-b）。
     // **各 navigate の後にヘッダの会話 id が切り替わるのを待つ**（上のテストと同じ理由）。
     await router.navigate('/chat/conv-b');
-    await screen.findByText('conv-b');
+    await findShownConversation('conv-b');
     await router.navigate('/chat/conv-c');
-    await screen.findByText('conv-c');
+    await findShownConversation('conv-c');
     await router.navigate('/chat/conv-a');
-    await screen.findByText('conv-a');
+    await findShownConversation('conv-a');
 
     await waitFor(() => {
       expect(screen.queryByText(LOCAL_ONLY_REPLY)).toBeNull();
