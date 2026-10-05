@@ -139,6 +139,8 @@ import {
   type ArchiveRemoveManyFilter,
   type AuthAccount,
   type AuthService,
+  NulNotAllowedError,
+  InvalidCredentialNameError,
   type TokenPolicyChange,
   type TokenPoolChange,
   type InboxRemoveManyFilter,
@@ -7166,13 +7168,18 @@ export function createApp(deps: AppDeps) {
            * 値が載りうる（drizzle は `Failed query: … params: <値>` を複数行で添える）。
            * こちらは `name` だけを、応答にも日誌にも載せる。見分けは文言でなく型で行う。
            *
+           * **ストアの入口の断り（`NulNotAllowedError`・`InvalidCredentialNameError`。#2927）も
+           * 理由を返す**——文は欄名と固定の説明だけで、名前・値を載せない（型で見分ける）。
+           *
            * 日誌には「差し替えようとしている」が残っているので、打ち消す（grant の
            * 「アクセス許可付与の打ち消しの日誌」と同じ形。**検証で断られた回も同じ
            * 扱いにする**——記録が多すぎる側の穴で、記録の無い差し替えより安全側と
            * 判断した。teto の判断）。
            */
           const reason =
-            error instanceof CredentialEntryRejectedError
+            error instanceof CredentialEntryRejectedError ||
+            error instanceof NulNotAllowedError ||
+            error instanceof InvalidCredentialNameError
               ? error.message
               : `鍵の差し替えに失敗した（${kindOfError(error)}）。詳細は値が載りうるので返さない`;
           await appendJournalOrDrop(

@@ -6,6 +6,8 @@ import {
 } from '@alteroid/core';
 import type { CloneHost, Stores } from '@alteroid/core';
 import { createPgStoresFromDb } from '@alteroid/storage-pg';
+import type { Db } from '@alteroid/storage-pg';
+import { sql } from 'drizzle-orm';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createApp } from './app.js';
@@ -15,8 +17,8 @@ import { createMigratedPglite, migratedTemplate } from './pglite-template.test-s
  * issue #2415。`PUT /credentials` と `PUT /profile` が、失敗した error を素の
  * `String(error)` で応答と日誌へ載せていた（鍵の値が出うる）。
  *
- * 値の出る経路は、実物の pg ストア（PGlite）で確かめてある: 値に NUL（`\u0000`）を
- * 含めると INSERT が落ち、drizzle の例外は `Failed query: … params: <値>` を
+ * 値の出る経路は、実物の pg ストア（PGlite）で確かめてある: 表を落としておくと INSERT が
+ * 落ち（NUL は #2927 で入口の断りになったので、失敗の起こし方に使えない）、drizzle の例外は `Failed query: … params: <値>` を
  * メッセージに持つ。応答と日誌に載るのは `error.name` だけ（`kindOfError`、#2396）。
  * 入力の形（サービスの検証）で断ったときの文は、値を含まないので今までどおり返す。
  *
@@ -25,8 +27,12 @@ import { createMigratedPglite, migratedTemplate } from './pglite-template.test-s
  */
 
 const FAKE_VALUE = 'FAKE_SECRET_VALUE_2415';
-/** NUL を含めると PG の text 列への INSERT が落ちる（実物のストアの失敗を起こす）。 */
-const FAILING_VALUE = `${FAKE_VALUE}\u0000`;
+/** NUL を含む値。入口で断られる（#2927）ので、ストアの失敗は起こさない。 */
+const NUL_VALUE = `${FAKE_VALUE}\u0000`;
+/** 実物のストアの失敗を起こす手段: 書き込み先の表を落とす（INSERT が `Failed query … params` で落ちる）。 */
+async function breakCredentialsTable(db: Db): Promise<void> {
+  await db.execute(sql`drop table manager_credentials`);
+}
 
 function fakeCloneHost(stores: Stores): CloneHost {
   return {
@@ -65,10 +71,11 @@ describe('PUT /credentials・PUT /profile の失敗は、値の出うる String(
   }, 30_000);
 
   let stores: Stores;
+  let db: Db;
   let stderr: ReturnType<typeof vi.spyOn>;
 
   beforeEach(async () => {
-    const { db } = await createMigratedPglite();
+    ({ db } = await createMigratedPglite());
     stores = createPgStoresFromDb(db);
     stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
   });
@@ -121,9 +128,10 @@ describe('PUT /credentials・PUT /profile の失敗は、値の出うる String(
 
   it('PUT /credentials: 実物のストアの失敗（drizzle の Failed query … params）の値が、応答にも日誌にも出ない', async () => {
     const app = credentialsApp();
+    await breakCredentialsTable(db);
 
     const response = await putJson(app, '/credentials', {
-      credentials: [{ name: 'NPM_TOKEN', value: FAILING_VALUE }],
+      credentials: [{ name: 'NPM_TOKEN', value: FAKE_VALUE }],
     });
 
     expect(response.status).toBe(400);
@@ -138,6 +146,28 @@ describe('PUT /credentials・PUT /profile の失敗は、値の出うる String(
     const journal = await journalText(stores);
     expect(journal).toContain('環境変数（鍵）を差し替えられなかった');
     expect(journal).toContain('状態の変更が失敗');
+  });
+
+  it('PUT /credentials: 鍵・値の NUL と不正な名前は、入力の誤りとして 400。欄名だけを返し、値は含まない（#2927）', async () => {
+    const app = credentialsApp();
+
+    const nulValue = await putJson(app, '/credentials', {
+      credentials: [{ name: 'NPM_TOKEN', value: NUL_VALUE }],
+    });
+    expect(nulValue.status).toBe(400);
+    const nulValueBody = await nulValue.text();
+    expect(nulValueBody).toContain('credential.value に NUL');
+    expect(nulValueBody).not.toContain(FAKE_VALUE);
+
+    const nulName = await putJson(app, '/credentials', {
+      credentials: [{ name: `NPM_\u0000TOKEN`, value: FAKE_VALUE }],
+    });
+    expect(nulName.status).toBe(400);
+    expect(await nulName.text()).not.toContain(FAKE_VALUE);
+
+    expect(await journalText(stores)).not.toContain(FAKE_VALUE);
+    expect(stderrText()).not.toContain(FAKE_VALUE);
+    expect(await stores.credentials.list()).toEqual([]);
   });
 
   it('PUT /credentials: 入力の形の誤り（サービスの検証）は、今までどおり人が直せる文で 400。値は含まない', async () => {
@@ -197,7 +227,7 @@ describe('PUT /credentials・PUT /profile の失敗は、値の出うる String(
     const app = profileApp();
 
     const response = await putJson(app, '/profile', {
-      script: `export GH_TOKEN=${FAILING_VALUE}`,
+      script: `export GH_TOKEN=${NUL_VALUE}`,
     });
 
     expect(response.status).toBe(500);
