@@ -1003,7 +1003,7 @@ describe('HTTP API', () => {
       expect(await stores.persona.read('values')).toBeNull();
       const entries = await stores.journal.list({ types: ['memory_update'] });
       expect(entries[0]).toMatchObject({ action: 'remove' });
-      expect(entries[0]?.summary).toContain('版の照合なし');
+      expect((entries[0] as { summary: string }).summary).toContain('版の照合なし');
     });
 
     it('版を付けない DELETE の警告は stderr にも出る（本文は出さない）', async () => {

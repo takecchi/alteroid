@@ -95,9 +95,7 @@ describe('PersonaStore の契約（インメモリ実装）', () => {
       const v1 = memoryVersion((await stores.persona.read('values'))?.content ?? '');
       await stores.persona.write('values', '# 価値観\n\nV1\n\nクローンの判断\n');
 
-      const error = await stores.persona
-        .remove('values', { ifMatch: v1 })
-        .catch((e: unknown) => e);
+      const error = await stores.persona.remove('values', { ifMatch: v1 }).catch((e: unknown) => e);
 
       expect(error).toBeInstanceOf(MemoryConflictError);
       expect((error as MemoryConflictError).current?.content).toContain('クローンの判断');
@@ -111,9 +109,7 @@ describe('PersonaStore の契約（インメモリ実装）', () => {
       await stores.persona.remove('values', { ifMatch: v });
       expect(await stores.persona.read('values')).toBeNull();
 
-      const error = await stores.persona
-        .remove('values', { ifMatch: v })
-        .catch((e: unknown) => e);
+      const error = await stores.persona.remove('values', { ifMatch: v }).catch((e: unknown) => e);
       expect(error).toBeInstanceOf(MemoryConflictError);
       expect((error as MemoryConflictError).current).toBeNull();
     });

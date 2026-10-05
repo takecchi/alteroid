@@ -372,12 +372,47 @@ export async function memorySetCommand(
  * **それ以外（401/403/5xx）を、この2つのどちらかだと取り違えない**——
  * 以前はここが「400 以外は全部『無い』」という形をしていたため、認証切れや
  * サーバの内部エラーでも「そんな記憶はありません」と誤案内していた。
+ *
+ * **読んだ版を持ち回る（Issue #2881。`memory edit` と同じ取り方）。** 消す直前に
+ * `GET /memory/<slug>` で読み、その `version` を `DELETE` の `ifMatch` に付ける。
+ * 読んだ後に別の書き手（クローンなど）が書いていたら、デーモンは**消さずに** 409 を返す。
+ * そのときは消さずに、いまの版と次の手（`memory show` で確かめてから再実行）を案内して失敗で終わる。
+ * 古いデーモンが `version` を返さなければ前提なしで消す（段階1。デーモンが警告を返せば出す）。
+ * **読んで無かった（404 / 400）ときも版なしで DELETE を打つ**——「無い」と「名前が不正」の
+ * 切り分けはサーバが持つので、ここで再実装しない。
  */
 export async function memoryRemoveCommand(slug: string): Promise<void> {
   const conn = await connect('write');
   if (conn === null) return;
   const { client, target } = conn;
-  const response = await client.memory[':slug'].$delete({ param: { slug } });
+  const doc = await readDoc(client, target, slug);
+  const ifMatch = doc?.version;
+  const response = await client.memory[':slug'].$delete({
+    param: { slug },
+    query: ifMatch === undefined ? {} : { ifMatch },
+  });
+  if (response.status === 409) {
+    const body = (await response.json()) as {
+      current?: { document?: { content?: string }; version?: string } | null;
+    };
+    const current = body.current ?? null;
+    stdout.write(
+      [
+        `消していません: ${slug} は、あなたが読んだ後に変わっています（クローンなど別の書き手が書いたか、すでに消されました）。`,
+        current === null
+          ? '  いまの記憶: 無い（すでに消されています）'
+          : `  いまの記憶の版: ${current.version ?? '（不明）'}（${String(current.document?.content?.length ?? 0)} 文字）`,
+        ...(current === null
+          ? []
+          : [
+              `  いまの内容を読み直す: \`alteroid memory show ${slug}\`（版そのものは GET /memory/${slug} の version）`,
+              `  確かめたうえで消してよければ、もう一度 \`alteroid memory remove ${slug}\`（いまの版を読み直して消します）。`,
+            ]),
+        '',
+      ].join('\n'),
+    );
+    throw new Error(`記憶が読んだ後に変わっていたので消しませんでした: ${slug}`);
+  }
   if (!response.ok) {
     if (response.status === 400) {
       throw new Error(`記憶の名前として成立しません: ${slug}`);
@@ -395,6 +430,9 @@ export async function memoryRemoveCommand(slug: string): Promise<void> {
     );
   }
   stdout.write(`消しました: ${slug}\n`);
+  // 版を付けずに消せたとき、デーモンは警告を返す（段階1）。握り潰さず見せる。
+  const done = (await response.json().catch(() => ({}))) as { warning?: unknown };
+  if (typeof done.warning === 'string') stdout.write(`注意: ${done.warning}\n`);
 }
 
 /**
