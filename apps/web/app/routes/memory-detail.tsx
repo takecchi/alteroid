@@ -99,20 +99,12 @@ export default function MemoryDetail({ loaderData }: Route.ComponentProps) {
         // に揃えた。`flex-wrap` は付けていない: 折り返すと1行に収まる
         // 「記憶 / slug」の見た目が崩れ、items-center との組み合わせで
         // リンクが複数行の slug の縦中央に浮く見た目になる（stackingの利点が
-<<<<<<< HEAD
-        // 無いのに見た目だけ悪くなる）。
-        <span className="flex items-center gap-2">
-          <Link
-            to="/memory"
-            className="text-muted-foreground hover:text-foreground pointer-coarse:-mx-2 pointer-coarse:-my-2.5 pointer-coarse:px-2 pointer-coarse:py-2.5"
-=======
         // 無いのに見た目だけ悪くなる）。見出しの「記憶」「/」は `shrink-0 whitespace-nowrap`
         // で狭い幅でも縦に割らず、slug が複数行になっても先頭行の基線に揃える（#2763）。
         <span className="flex items-baseline gap-2">
           <Link
             to="/memory"
-            className="shrink-0 whitespace-nowrap text-muted-foreground hover:text-foreground"
->>>>>>> origin/main
+            className="shrink-0 whitespace-nowrap text-muted-foreground hover:text-foreground pointer-coarse:-mx-2 pointer-coarse:-my-2.5 pointer-coarse:px-2 pointer-coarse:py-2.5"
           >
             記憶
           </Link>

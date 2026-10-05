@@ -130,17 +130,10 @@ export default function PracticeDetail({ loaderData }: Route.ComponentProps) {
     <Page
       documentTitle={`${slug} - やり方`}
       title={
-<<<<<<< HEAD
-        <span className="flex items-center gap-2">
-          <Link
-            to="/practices"
-            className="text-muted-foreground hover:text-foreground pointer-coarse:-mx-2 pointer-coarse:-my-2.5 pointer-coarse:px-2 pointer-coarse:py-2.5"
-=======
         <span className="flex items-baseline gap-2">
           <Link
             to="/practices"
-            className="shrink-0 whitespace-nowrap text-muted-foreground hover:text-foreground"
->>>>>>> origin/main
+            className="shrink-0 whitespace-nowrap text-muted-foreground hover:text-foreground pointer-coarse:-mx-2 pointer-coarse:-my-2.5 pointer-coarse:px-2 pointer-coarse:py-2.5"
           >
             やり方
           </Link>
