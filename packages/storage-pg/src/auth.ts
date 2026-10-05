@@ -1,8 +1,14 @@
 import {
   accessTokenRecordSchema,
+  assertNoNul,
   authAccountSchema,
   authIdentitySchema,
+  hasNul,
   loginRequestSchema,
+  prepareAccessTokenForWrite,
+  prepareAccountForWrite,
+  prepareIdentityForWrite,
+  prepareLoginRequestForWrite,
 } from '@alteroid/core';
 import type {
   AccessTokenRecord,
@@ -95,12 +101,16 @@ export class PgAuthStore implements AuthStore {
   }
 
   async getAccount(id: string): Promise<AuthAccount | null> {
+    // NUL を含む鍵は DB に投げる前に「無い」と答える（DB は NUL を含む text を受け付けず投げる。#3011）。
+    if (hasNul(id)) return null;
     const rows = await this.#db.select().from(authAccounts).where(eq(authAccounts.id, id)).limit(1);
     const row = rows[0];
     return row === undefined ? null : this.#toAccount(row);
   }
 
   async findAccountByEmail(email: string): Promise<AuthAccount | null> {
+    // NUL を含むメールは DB に投げる前に「無い」と答える（#3011）。
+    if (hasNul(email)) return null;
     // 大小文字を区別しない（#1702）。一意索引（auth_accounts_email_lower_idx）
     // と同じ `lower()` で比べる——`eq` のままだと索引に乗らない上に、
     // memory / fs の実装と判定が食い違う。
@@ -114,7 +124,7 @@ export class PgAuthStore implements AuthStore {
   }
 
   async putAccount(account: AuthAccount): Promise<void> {
-    const value = stripNulls(authAccountSchema.parse(account));
+    const value = stripNulls(prepareAccountForWrite(authAccountSchema.parse(account)));
     const set = {
       displayName: value.displayName,
       email: value.email,
@@ -138,6 +148,8 @@ export class PgAuthStore implements AuthStore {
    * 更新になる（投げない）。
    */
   async markAccountLoggedIn(accountId: string, at: string): Promise<void> {
+    // NUL を含む鍵は DB に投げる前に「無い」と答える（DB は NUL を含む text を受け付けず投げる。#3011）。
+    if (hasNul(accountId)) return;
     await this.#db
       .update(authAccounts)
       .set({ lastLoginAt: new Date(at) })
@@ -162,6 +174,8 @@ export class PgAuthStore implements AuthStore {
    * のと同じ形）。無い id では0行の更新になる（投げない）。
    */
   async revokeAccountAccess(accountId: string): Promise<void> {
+    // NUL を含む鍵は DB に投げる前に「無い」と答える（DB は NUL を含む text を受け付けず投げる。#3011）。
+    if (hasNul(accountId)) return;
     await this.#db
       .update(authAccounts)
       .set({ grantedAt: null, grantedBy: null, ownerDeclaredAt: null })
@@ -169,6 +183,8 @@ export class PgAuthStore implements AuthStore {
   }
 
   async findIdentity(provider: string, subject: string): Promise<AuthIdentity | null> {
+    // NUL を含む鍵は DB に投げる前に「無い」と答える（DB は NUL を含む text を受け付けず投げる。#3011）。
+    if (hasNul(provider) || hasNul(subject)) return null;
     const rows = await this.#db
       .select()
       .from(authIdentities)
@@ -179,6 +195,8 @@ export class PgAuthStore implements AuthStore {
   }
 
   async listIdentities(accountId: string): Promise<AuthIdentity[]> {
+    // NUL を含む鍵は DB に投げる前に「無い」と答える（DB は NUL を含む text を受け付けず投げる。#3011）。
+    if (hasNul(accountId)) return [];
     // **2次キーに `provider` → `subject` を持つ**（issue #1688。`(provider,
     // subject)` は一意なので、これで完全に決まった順になる）。**2次キーは照合順を
     // C に固定する**（issue #2458。`byteOrder` の doc）。
@@ -195,7 +213,7 @@ export class PgAuthStore implements AuthStore {
   }
 
   async putIdentity(identity: AuthIdentity): Promise<void> {
-    const value = stripNulls(authIdentitySchema.parse(identity));
+    const value = stripNulls(prepareIdentityForWrite(authIdentitySchema.parse(identity)));
     const set = {
       accountId: value.accountId,
       email: value.email,
@@ -259,8 +277,8 @@ export class PgAuthStore implements AuthStore {
     account: AuthAccount;
     identity: AuthIdentity;
   }): Promise<CreateAccountWithIdentityOutcome> {
-    const account = stripNulls(authAccountSchema.parse(input.account));
-    const identity = stripNulls(authIdentitySchema.parse(input.identity));
+    const account = stripNulls(prepareAccountForWrite(authAccountSchema.parse(input.account)));
+    const identity = stripNulls(prepareIdentityForWrite(authIdentitySchema.parse(input.identity)));
 
     return this.#db.transaction(async (tx) => {
       const identityRows = await tx
@@ -402,7 +420,7 @@ export class PgAuthStore implements AuthStore {
   }
 
   async putAccessToken(token: AccessTokenRecord): Promise<void> {
-    const value = stripNulls(accessTokenRecordSchema.parse(token));
+    const value = stripNulls(prepareAccessTokenForWrite(accessTokenRecordSchema.parse(token)));
     const set = {
       accountId: value.accountId,
       sha256: value.sha256,
@@ -424,6 +442,8 @@ export class PgAuthStore implements AuthStore {
    * そのあいだに完了したログアウトを踏みつぶす。失効済み・無い id では0行の更新になる。
    */
   async markAccessTokenUsed(id: string, at: string): Promise<void> {
+    // NUL を含む鍵は DB に投げる前に「無い」と答える（DB は NUL を含む text を受け付けず投げる。#3011）。
+    if (hasNul(id)) return;
     await this.#db
       .update(authAccessTokens)
       .set({ lastUsedAt: new Date(at) })
@@ -431,6 +451,8 @@ export class PgAuthStore implements AuthStore {
   }
 
   async findAccessTokenBySha256(hash: string): Promise<AccessTokenRecord | null> {
+    // NUL を含む鍵は DB に投げる前に「無い」と答える（DB は NUL を含む text を受け付けず投げる。#3011）。
+    if (hasNul(hash)) return null;
     const rows = await this.#db
       .select()
       .from(authAccessTokens)
@@ -441,6 +463,8 @@ export class PgAuthStore implements AuthStore {
   }
 
   async listAccessTokens(accountId: string): Promise<AccessTokenRecord[]> {
+    // NUL を含む鍵は DB に投げる前に「無い」と答える（DB は NUL を含む text を受け付けず投げる。#3011）。
+    if (hasNul(accountId)) return [];
     // **2次キーに `id` を持つ**（issue #1688。`id` は一意なので、これで完全に
     // 決まった順になる）。**2次キーは照合順を C に固定する**（issue #2458。
     // `byteOrder` の doc）。
@@ -461,6 +485,8 @@ export class PgAuthStore implements AuthStore {
    * その id の行が無いかのどちらかなので、読み直して区別する。
    */
   async revokeAccessToken(id: string, at: string): Promise<RevokeAccessTokenOutcome> {
+    // NUL を含む鍵は DB に投げる前に「無い」と答える（DB は NUL を含む text を受け付けず投げる。#3011）。
+    if (hasNul(id)) return { status: 'not_found' };
     const rows = await this.#db
       .update(authAccessTokens)
       .set({ revokedAt: new Date(at) })
@@ -482,7 +508,7 @@ export class PgAuthStore implements AuthStore {
   }
 
   async putLoginRequest(request: LoginRequest): Promise<void> {
-    const value = stripNulls(loginRequestSchema.parse(request));
+    const value = stripNulls(prepareLoginRequestForWrite(loginRequestSchema.parse(request)));
     const expiresAt = new Date(value.expiresAt);
     await this.#db
       .insert(authLoginRequests)
@@ -498,6 +524,8 @@ export class PgAuthStore implements AuthStore {
   }
 
   async getLoginRequest(id: string): Promise<LoginRequest | null> {
+    // NUL を含む鍵は DB に投げる前に「無い」と答える（DB は NUL を含む text を受け付けず投げる。#3011）。
+    if (hasNul(id)) return null;
     const rows = await this.#db
       .select({ request: authLoginRequests.request })
       .from(authLoginRequests)
@@ -515,6 +543,8 @@ export class PgAuthStore implements AuthStore {
    * 更新行数が「交換へ進む権利を取れたのは自分だけか」の判定になる。
    */
   async beginLoginExchange(id: string): Promise<LoginRequest | null> {
+    // NUL を含む鍵は DB に投げる前に「無い」と答える（DB は NUL を含む text を受け付けず投げる。#3011）。
+    if (hasNul(id)) return null;
     const rows = await this.#db
       .update(authLoginRequests)
       .set({
@@ -547,6 +577,7 @@ export class PgAuthStore implements AuthStore {
     id: string,
     issue: (request: LoginRequest) => AccessTokenRecord,
   ): Promise<{ request: LoginRequest; token: AccessTokenRecord } | null> {
+    if (hasNul(id)) return null;
     return this.#db.transaction(async (tx) => {
       const rows = await tx
         .update(authLoginRequests)
@@ -566,7 +597,9 @@ export class PgAuthStore implements AuthStore {
       const parsed = loginRequestSchema.safeParse(row.request);
       if (!parsed.success) return null;
 
-      const token = accessTokenRecordSchema.parse(stripNulls(issue(parsed.data)));
+      const token = stripNulls(
+        prepareAccessTokenForWrite(accessTokenRecordSchema.parse(issue(parsed.data))),
+      );
       await tx.insert(authAccessTokens).values({
         id: token.id,
         accountId: token.accountId,
@@ -597,6 +630,9 @@ export class PgAuthStore implements AuthStore {
    * （理由は `AuthStore.grantAccess` の doc）。
    */
   async grantAccess(accountId: string, at: string, by: string): Promise<GrantOutcome> {
+    // NUL を含む鍵は DB に投げる前に「無い」と答える（DB は NUL を含む text を受け付けず投げる。#3011）。
+    if (hasNul(accountId)) return { status: 'not_found' };
+    assertNoNul('authAccount.grantedBy', by);
     const account = await this.getAccount(accountId);
     if (account === null) return { status: 'not_found' };
     if (account.grantedAt !== null) return { status: 'granted', account };
@@ -626,6 +662,8 @@ export class PgAuthStore implements AuthStore {
    * （`AuthService.revoke` が両方を落とす）経路があるため。
    */
   async setAccountOwner(accountId: string, declaredAt: string | null): Promise<OwnerOutcome> {
+    // NUL を含む鍵は DB に投げる前に「無い」と答える（DB は NUL を含む text を受け付けず投げる。#3011）。
+    if (hasNul(accountId)) return { status: 'not_found' };
     if (declaredAt === null) {
       const rows = await this.#db
         .update(authAccounts)
