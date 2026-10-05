@@ -79,7 +79,7 @@ import {
 } from './token.js';
 import { progressCommand } from './progress.js';
 import { usageCommand } from './usage.js';
-import { redactError } from './redact.js';
+import { describeCliFailure } from './failure-message.js';
 
 /**
  * alteroid — デーモンへの薄いクライアント。
@@ -1013,7 +1013,7 @@ if (invokedDirectly()) {
     ? launchTui()
     : program.parseAsync(process.argv);
   run.catch((error: unknown) => {
-    process.stderr.write(`alteroid: ${redactError(String(error))}\n`);
+    process.stderr.write(`alteroid: ${describeCliFailure(error)}\n`);
     process.exit(1);
   });
 }
