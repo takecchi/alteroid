@@ -8586,7 +8586,10 @@ class Clone implements CloneHost {
         // `#firstDue` と、次の周期の刻み（`#resumable`）で元の発火として配り直される。
         // 受信箱の合図は失敗として settle される（決定的に失敗する合図を起動のたびに
         // 焼かない線）ので、配り直しを担うのは印の側である。枠での保持（`heldForUsage`）は
-        // 従来どおり `#pump` の `defer` が配り直す。
+        // 従来どおり `#pump` の `defer` が配り直す。保持した合図は受信箱に未読で残るので、
+        // 保持中に器が落ちても再起動の `#restoreUnread` が元の回として配り直す（#2814）。
+        // **ここで印を残さないこと** — 残すと `#firstDue` と未読の両方から同じ回が届き、
+        // 走っていない回に `unfinishedAt` が付く（`clone-schedule-held-for-usage.test.ts`）。
         if (plan !== null) {
           if (outcome.status === 'failed' && !outcome.heldForUsage) {
             await this.#journal({
