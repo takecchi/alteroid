@@ -56,7 +56,9 @@ function renderPage() {
 
 /** runner のカード（他のカードの注記と混ざらないよう、ここだけを見る）。 */
 function runnersCard(): HTMLElement {
-  const card = screen.getByRole('heading', { name: '実行環境（runner）' }).closest('[data-slot="card"]');
+  const card = screen
+    .getByRole('heading', { name: '実行環境（runner）' })
+    .closest('[data-slot="card"]');
   if (!(card instanceof HTMLElement)) throw new Error('runner のカードが見つからない');
   return card;
 }
