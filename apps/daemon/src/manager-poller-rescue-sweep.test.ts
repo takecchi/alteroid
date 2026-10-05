@@ -35,11 +35,8 @@ describe('ManagerPoller と退避 ref の後始末（#1266）', () => {
       managers: poolWith(() => new Promise<void>(() => undefined)),
       intervalMs: 3_600_000,
     });
-    const outcome = await Promise.race([
-      poller.refresh().then(() => 'refreshed'),
-      new Promise<string>((resolve) => setTimeout(() => resolve('blocked'), 1500)),
-    ]);
-    expect(outcome).toBe('refreshed');
+    // 待たされるなら、ここで終わらずテストの期限で落ちる（実時間の待ちは置かない）。
+    await expect(poller.refresh()).resolves.toBeUndefined();
     poller.stop();
   });
 
