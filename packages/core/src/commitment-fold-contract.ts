@@ -1,3 +1,4 @@
+import { expectNulRejected } from './nul-contract-support.js';
 import type { CommitmentStore } from './store.js';
 
 /**
@@ -126,6 +127,117 @@ export async function verifyCommitmentFoldContract(
   const sameId = await store.open(managerEntry('fold-1a', '同じ一言'));
   if (sameId.opened) fail('同じ id の2回目が開いた');
   if (sameId.folded) fail('同じ id の2回目が folded になった（畳んだのではなく既に在る）');
+
+  // 8. NUL（issue #3011。teto の判断、2026-10-06）。3実装で同じになること。
+  //    - 書き込みの口: id（鍵）は NulNotAllowedError で断る（値は文に載せない）。本文（body・closedReason）は落として残す
+  //    - 読むだけの口（get・close・closeMany・editBody の id）: 断らず「無い」と同じ結果を返す（get は null、close・editBody は false）
+  //    - `source`（出所の注記。鍵ではない）の NUL は、3実装とも落として残す。畳み込みも落とした値で揃う
+  {
+    const nulId = 'commit-nul-8\u0000id';
+    const nulEntry = {
+      id: nulId,
+      at: '2026-01-02T00:00:00.000Z',
+      origin: 'human',
+      body: '本文',
+    } as const;
+    await expectNulRejected(fail, 'open(NULを含むid)', () => store.open(nulEntry), 'commit-nul-8');
+    const bodyId = 'commit-nul-8-body';
+    const opened = await store.open({
+      id: bodyId,
+      at: '2026-01-02T00:00:01.000Z',
+      origin: 'human',
+      body: '本\u0000文',
+    });
+    if (!opened.opened) fail('本文にNULを含む行が開かない');
+    const readBody = await store.get(bodyId);
+    if (readBody?.body !== '本文')
+      fail(`open の本文の NUL が残る: ${JSON.stringify(readBody?.body)}`);
+
+    const readOutcomes: Array<[string, () => Promise<unknown>, unknown]> = [
+      ['get(NULを含むid)はnull', () => store.get(nulId), null],
+      [
+        'close(NULを含むid)はfalse',
+        () => store.close(nulId, '2026-01-03T00:00:00.000Z', 'r', 'clone'),
+        false,
+      ],
+      [
+        'editBody(NULを含むid)はfalse',
+        () => store.editBody(nulId, 'x', '2026-01-03T00:00:00.000Z', 'clone'),
+        false,
+      ],
+    ];
+    for (const [label, call, expected] of readOutcomes) {
+      let outcome: unknown;
+      try {
+        outcome = await call();
+      } catch (error) {
+        fail(`${label}（投げた: ${error instanceof Error ? error.name : typeof error}）`);
+      }
+      if (outcome !== expected) fail(`${label}（実際: ${JSON.stringify(outcome)}）`);
+    }
+
+    const edited = await store.editBody(bodyId, '直\u0000し', '2026-01-03T00:00:00.000Z', 'clone');
+    if (!edited) fail('editBody が通らない');
+    if ((await store.get(bodyId))?.body !== '直し') fail('editBody の本文の NUL が残る');
+
+    let closedMany: string[] = [];
+    try {
+      closedMany = await store.closeMany(
+        [nulId, bodyId],
+        '2026-01-04T00:00:00.000Z',
+        '終\u0000わり',
+        'clone',
+      );
+    } catch (error) {
+      fail(
+        `closeMany(NULを含むidを混ぜる)は投げない（${error instanceof Error ? error.name : typeof error}）`,
+      );
+    }
+    if (JSON.stringify(closedMany) !== JSON.stringify([bodyId]))
+      fail(`closeMany がNULを含むidを無いものとして扱わない: ${JSON.stringify(closedMany)}`);
+    const closedRow = await store.get(bodyId);
+    if (closedRow?.closedReason !== '終わり')
+      fail(`closeMany の理由の NUL が残る: ${JSON.stringify(closedRow?.closedReason)}`);
+
+    const reasonId = 'commit-nul-8-reason';
+    await store.open({ id: reasonId, at: '2026-01-02T00:00:02.000Z', origin: 'human', body: 'r' });
+    if (!(await store.close(reasonId, '2026-01-04T00:00:00.000Z', '閉\u0000じ', 'clone')))
+      fail('close が通らない');
+    if ((await store.get(reasonId))?.closedReason !== '閉じ') fail('close の理由の NUL が残る');
+
+    if ((await store.get(nulId)) !== null) fail('断ったはずのNUL idの行が在る');
+    // source（出所の注記）は鍵ではないので、断らず落として残す（teto の判断、2026-10-06）。
+    // 畳み込み（同一マネージャー×同一本文×未了）も、落とした値で3実装が揃う。
+    const srcA = await store.open({
+      id: 'commit-nul-8-src-a',
+      at: '2026-01-02T00:00:03.000Z',
+      origin: 'manager',
+      source: 'mgr-nul-\u0000src',
+      body: 'source の NUL の一言',
+    });
+    if (!srcA.opened) fail('sourceにNULを含む行が開かない');
+    const srcRow = await store.get('commit-nul-8-src-a');
+    if (srcRow?.source !== 'mgr-nul-src')
+      fail(`source の NUL が残る: ${JSON.stringify(srcRow?.source)}`);
+    const srcB = await store.open({
+      id: 'commit-nul-8-src-b',
+      at: '2026-01-02T00:00:04.000Z',
+      origin: 'manager',
+      source: 'mgr-nul-src',
+      body: 'source の NUL の一言',
+    });
+    if (srcB.opened || !srcB.folded)
+      fail(`NULを落とした source が同じ行を畳まない: ${JSON.stringify(srcB)}`);
+    const srcC = await store.open({
+      id: 'commit-nul-8-src-c',
+      at: '2026-01-02T00:00:05.000Z',
+      origin: 'manager',
+      source: 'mgr-nul-\u0000src',
+      body: 'source の NUL の一言',
+    });
+    if (srcC.opened || !srcC.folded)
+      fail(`NULを含む source が同じ行を畳まない: ${JSON.stringify(srcC)}`);
+  }
 
   // **`concurrent: false` では、この 7 を飛ばす。** 同時の2件目を弾くのは DB の部分
   // unique 索引で、`where not exists` は同じ文が同時に走ると互いの行が見えない。

@@ -1,4 +1,4 @@
-import { commitmentSchema, UnreadableCommitmentError } from '@alteroid/core';
+import { assertNoNul, commitmentSchema, hasNul, UnreadableCommitmentError } from '@alteroid/core';
 import type {
   Commitment,
   CommitmentClosedBy,
@@ -155,6 +155,8 @@ export class PgCommitmentStore implements CommitmentStore {
   }
 
   async get(id: string): Promise<Commitment | null> {
+    // 読むだけの口の NUL（issue #3011）。NUL を含む鍵の行は存在しえない（書き込みが断る）ので「無い」。DB に投げると NUL を含む text を受け付けずエラーになる。
+    if (hasNul(id)) return null;
     const rows = await this.#db
       .select({ commitment: commitments.commitment })
       .from(commitments)
@@ -221,6 +223,8 @@ export class PgCommitmentStore implements CommitmentStore {
    *   居なければ `foldedInto` を空のまま返す——**嘘の id を埋めない**
    */
   async open(entry: Commitment): Promise<CommitmentOpenResult> {
+    // id（鍵）の NUL は断る（issue #3011）。落とすと別の行を指すので、`stripNulls` の前に見る。
+    assertNoNul('commitment.id', entry.id);
     // 依頼の本文は人間かクローンが書いた自由文なので NUL が混ざりうる
     const value = stripNulls(commitmentSchema.parse(entry));
     // 畳み込みの対象はマネージャー起因の行だけである（`findOpenManagerDuplicate`）。
@@ -342,6 +346,8 @@ export class PgCommitmentStore implements CommitmentStore {
    * 作りになっている、その一点だけである。
    */
   async close(id: string, at: string, reason: string, by: CommitmentClosedBy): Promise<boolean> {
+    // 読むだけの口の NUL（issue #3011）。NUL を含む鍵の行は存在しえない（書き込みが断る）ので「無い」。DB に投げると NUL を含む text を受け付けずエラーになる。
+    if (hasNul(id)) return false;
     const closedReason = stripNulls(reason);
     const closed = sql`jsonb_set(jsonb_set(jsonb_set(${commitments.commitment}, '{closedAt}', ${JSON.stringify(at)}::jsonb, true), '{closedReason}', ${JSON.stringify(closedReason)}::jsonb, true), '{closedBy}', ${JSON.stringify(by)}::jsonb, true)`;
 
@@ -387,14 +393,16 @@ export class PgCommitmentStore implements CommitmentStore {
     reason: string,
     by: CommitmentClosedBy,
   ): Promise<string[]> {
-    if (ids.length === 0) return [];
+    // NUL を含む id は「無い」ものとして数えない（issue #3011）。DB へは投げない。
+    const queryable = ids.filter((id) => !hasNul(id));
+    if (queryable.length === 0) return [];
     const closedReason = stripNulls(reason);
     const closed = sql`jsonb_set(jsonb_set(jsonb_set(${commitments.commitment}, '{closedAt}', ${JSON.stringify(at)}::jsonb, true), '{closedReason}', ${JSON.stringify(closedReason)}::jsonb, true), '{closedBy}', ${JSON.stringify(by)}::jsonb, true)`;
 
     const updated = await this.#db
       .update(commitments)
       .set({ closedAt: new Date(at), commitment: closed })
-      .where(and(inArray(commitments.id, [...ids]), isNull(commitments.closedAt)))
+      .where(and(inArray(commitments.id, [...queryable]), isNull(commitments.closedAt)))
       .returning({ id: commitments.id });
     return updated.map((row) => row.id);
   }
@@ -420,6 +428,8 @@ export class PgCommitmentStore implements CommitmentStore {
    * `stripNulls` を通す（NUL が混ざりうる）。
    */
   async editBody(id: string, body: string, at: string, by: CommitmentEditedBy): Promise<boolean> {
+    // 読むだけの口の NUL（issue #3011）。NUL を含む鍵の行は存在しえない（書き込みが断る）ので「無い」。DB に投げると NUL を含む text を受け付けずエラーになる。
+    if (hasNul(id)) return false;
     const editedBody = stripNulls(body);
     const edited = sql`jsonb_set(jsonb_set(jsonb_set(${commitments.commitment}, '{body}', ${JSON.stringify(editedBody)}::jsonb, true), '{editedAt}', ${JSON.stringify(at)}::jsonb, true), '{editedBy}', ${JSON.stringify(by)}::jsonb, true)`;
 

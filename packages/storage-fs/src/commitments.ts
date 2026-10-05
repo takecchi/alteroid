@@ -2,10 +2,12 @@ import { mkdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import {
+  assertNoNul,
   commitmentClosedBySchema,
   commitmentSchema,
   compareIsoInstant,
   findOpenManagerDuplicate,
+  stripNul,
   UnreadableCommitmentError,
   unreadableCommitmentSchema,
 } from '@alteroid/core';
@@ -384,7 +386,14 @@ export class FsCommitmentStore implements CommitmentStore {
    * `PgCommitmentStore.open` とは強さが違う。本番の記憶ストアは PostgreSQL
    * なので、そちらは常に DB 側の保証で閉じている。
    */
-  async open(entry: Commitment): Promise<CommitmentOpenResult> {
+  async open(rawEntry: Commitment): Promise<CommitmentOpenResult> {
+    // id（鍵）の NUL は断り、本文と source（出所の注記。鍵ではない）は落として残す（issue #3011）。
+    assertNoNul('commitment.id', rawEntry.id);
+    const entry = {
+      ...rawEntry,
+      body: stripNul(rawEntry.body),
+      ...(rawEntry.source === undefined ? {} : { source: stripNul(rawEntry.source) }),
+    };
     return this.#update<CommitmentOpenResult>((file) => {
       // 閉じた行・読めない行も含めて見る（片付いたものを開き直さない／
       // 読めない行と同じ id を二重に持たない）
@@ -467,7 +476,8 @@ export class FsCommitmentStore implements CommitmentStore {
    * 必ず `get(id)` を呼んでいたのを、`UnreadableCommitmentError` を
    * `instanceof` で捕まえてから `close()` へ進む形にした。
    */
-  async close(id: string, at: string, reason: string, by: CommitmentClosedBy): Promise<boolean> {
+  async close(id: string, at: string, rawReason: string, by: CommitmentClosedBy): Promise<boolean> {
+    const reason = stripNul(rawReason);
     return this.#update((file) => {
       const found = file.entries.find((entry) => entry.id === id);
       if (found !== undefined) {
@@ -539,9 +549,10 @@ export class FsCommitmentStore implements CommitmentStore {
   async closeMany(
     ids: readonly string[],
     at: string,
-    reason: string,
+    rawReason: string,
     by: CommitmentClosedBy,
   ): Promise<string[]> {
+    const reason = stripNul(rawReason);
     if (ids.length === 0) return [];
     const targets = new Set(ids);
     return this.#update((file) => {
@@ -575,7 +586,13 @@ export class FsCommitmentStore implements CommitmentStore {
    * **`trimClosed` は呼ばない。** 編集は既存の未了行を書き換えるだけで、
    * 新しく片付いた行を作らないので、切り詰めの対象が増えない。
    */
-  async editBody(id: string, body: string, at: string, by: CommitmentEditedBy): Promise<boolean> {
+  async editBody(
+    id: string,
+    rawBody: string,
+    at: string,
+    by: CommitmentEditedBy,
+  ): Promise<boolean> {
+    const body = stripNul(rawBody);
     return this.#update((file) => {
       const found = file.entries.find((entry) => entry.id === id);
       // 無い / 既に閉じている。どちらも書き換えない

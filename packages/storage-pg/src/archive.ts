@@ -1,6 +1,7 @@
 import {
   archiveIdBranch,
   assertArchivableSessionId,
+  hasNul,
   classifyArchiveContinuity,
   compareArchiveEntriesNewestFirst,
   fingerprintArchiveBody,
@@ -313,6 +314,8 @@ export class PgTranscriptArchive implements TranscriptArchive {
   }
 
   async read(id: string): Promise<ArchiveRead> {
+    // 読むだけの口の NUL（issue #3011）。NUL を含む鍵の行は存在しえない（書き込みが断る）ので「無い」。DB に投げると NUL を含む text を受け付けずエラーになる。
+    if (hasNul(id)) return { kind: 'missing' };
     const rows = await this.#db
       .select({
         body: archive.body,
@@ -372,6 +375,7 @@ export class PgTranscriptArchive implements TranscriptArchive {
         `archive.readTail(): maxChars は正の整数でなければならない（渡された値: ${String(maxChars)}）`,
       );
     }
+    if (hasNul(id)) return { kind: 'missing' };
     const rows = await this.#db
       .select({
         tail: sql<string>`right(${archive.body}, ${maxChars + 1})`,
@@ -410,6 +414,7 @@ export class PgTranscriptArchive implements TranscriptArchive {
    * 測る）。
    */
   async remove(id: string): Promise<ArchiveRemoval> {
+    if (hasNul(id)) return { kind: 'missing' };
     const updated = await this.#db
       .update(archive)
       .set({

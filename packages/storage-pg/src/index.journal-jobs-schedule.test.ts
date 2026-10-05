@@ -12,6 +12,7 @@ import {
   verifyJournalStoreWithContract,
   verifyPermissionGrantStoreContract,
   verifyPracticeStoreContract,
+  verifyScheduleNulContract,
   verifyStoreIsolationContract,
 } from '@alteroid/core';
 import type { Job, JournalEntry, ManagerSummary } from '@alteroid/core';
@@ -1245,6 +1246,10 @@ describe('PgPermissionGrantStore（issue #863）', () => {
 });
 
 describe('PgScheduleStore', () => {
+  it('NUL の契約（issue #3011。3実装で同じことを測る）', async () => {
+    await verifyScheduleNulContract(stores.schedules);
+  });
+
   const plan = {
     kind: 'issue-round',
     spec: { type: 'daily' as const, at: '09:00' },

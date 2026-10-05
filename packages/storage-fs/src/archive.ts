@@ -5,6 +5,8 @@ import {
   MAX_UTF8_BYTES_PER_CODE_POINT,
   archiveIdBranch,
   assertArchivableSessionId,
+  hasNul,
+  stripNul,
   classifyArchiveContinuity,
   compareArchiveEntriesNewestFirst,
   createUnreadableRowOnce,
@@ -137,7 +139,8 @@ export class FsTranscriptArchive implements TranscriptArchive {
       const { continuity, comparedTo } = classifyArchiveContinuity(previous, transcript);
       const stamp = at.toISOString().replace(/[:.]/g, '-');
       const base = `${sanitize(sessionId)}-${stamp}`;
-      const name = await this.#writeBodyExclusively(base, transcript);
+      // 本文の NUL は落として残す（issue #3011。pg と同じ）。指紋と連続性は生の本文で取る（pg と同じ）。
+      const name = await this.#writeBodyExclusively(base, stripNul(transcript));
       // **本体より先に meta を書かない理由は無い**（`remove()` の
       // 「印を書いてから本体を切り詰める」とは違い、こちらは新規作成で
       // 競合が無い）。実測上の心配は要らないが、本体が読めればこの id は
@@ -315,7 +318,8 @@ export class FsTranscriptArchive implements TranscriptArchive {
    * `.` と `-` を許すため、`'..'` は sanitize しても変わらない）。
    */
   async read(id: string): Promise<ArchiveRead> {
-    if (!isWithinArchiveDir(this.#dir, id)) return { kind: 'missing' };
+    // NUL を含む id の行は存在しえない（issue #3011）。fs の呼び出しに渡すと投げるので、「無い」と答える。
+    if (hasNul(id) || !isWithinArchiveDir(this.#dir, id)) return { kind: 'missing' };
     const marker = await this.#readMarker(id);
     if (marker !== null)
       return { kind: 'removed', removedAt: marker.removedAt, bytes: marker.bytes };
@@ -375,7 +379,8 @@ export class FsTranscriptArchive implements TranscriptArchive {
         `archive.readTail(): maxChars は正の整数でなければならない（渡された値: ${String(maxChars)}）`,
       );
     }
-    if (!isWithinArchiveDir(this.#dir, id)) return { kind: 'missing' };
+    // NUL を含む id の行は存在しえない（issue #3011）。fs の呼び出しに渡すと投げるので、「無い」と答える。
+    if (hasNul(id) || !isWithinArchiveDir(this.#dir, id)) return { kind: 'missing' };
     const marker = await this.#readMarker(id);
     if (marker !== null)
       return { kind: 'removed', removedAt: marker.removedAt, bytes: marker.bytes };
@@ -417,7 +422,8 @@ export class FsTranscriptArchive implements TranscriptArchive {
    * `UPDATE ... WHERE removed_at IS NULL` と同じ理由)。
    */
   async remove(id: string): Promise<ArchiveRemoval> {
-    if (!isWithinArchiveDir(this.#dir, id)) return { kind: 'missing' };
+    // NUL を含む id の行は存在しえない（issue #3011）。fs の呼び出しに渡すと投げるので、「無い」と答える。
+    if (hasNul(id) || !isWithinArchiveDir(this.#dir, id)) return { kind: 'missing' };
     const existingMarker = await this.#readMarker(id);
     if (existingMarker !== null) {
       return { kind: 'already', removedAt: existingMarker.removedAt, bytes: existingMarker.bytes };

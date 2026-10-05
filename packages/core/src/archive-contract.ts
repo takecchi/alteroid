@@ -1156,4 +1156,38 @@ export async function verifyTranscriptArchiveContract(
       body: astralTruncateTail.body,
     });
   }
+
+  // issue #3011（teto の判断、2026-10-06）。
+  // 読むだけの口（read・readTail・remove）: NUL を含む id は、断らず「無い」（missing）と同じ結果を返す。投げない。
+  // 書き込み: sessionId（鍵）の NUL は上の #2233 のとおり断る。本文の NUL は落として残す（fs・インメモリも pg に揃える）。
+  {
+    const nulId = 'archive-contract-n\u0000ul-id.jsonl';
+    const outcomes: Array<[string, () => Promise<{ kind: string }>]> = [
+      ['read(NULを含むid)', () => archive.read(nulId)],
+      ['readTail(NULを含むid)', () => archive.readTail(nulId, 10)],
+      ['remove(NULを含むid)', () => archive.remove(nulId)],
+    ];
+    for (const [label, call] of outcomes) {
+      let outcome: { kind: string };
+      try {
+        outcome = await call();
+      } catch (error) {
+        fail(`${label}はmissingで投げない`, {
+          投げた: error instanceof Error ? error.name : typeof error,
+        });
+      }
+      if (outcome.kind !== 'missing') fail(`${label}はmissing`, outcome);
+    }
+
+    const written = await archive.archive('archive-contract-session-nulbody', 'A\u0000B\n');
+    const readNul = await archive.read(written.id);
+    if (readNul.kind !== 'body' || readNul.body !== 'AB\n')
+      fail('本文のNULは落として残す(read)', readNul);
+    const tailNul = await archive.readTail(written.id, 100);
+    if (tailNul.kind !== 'body' || tailNul.body !== 'AB\n')
+      fail('本文のNULは落として残す(readTail)', tailNul);
+    const removedNul = await archive.remove(written.id);
+    if (removedNul.kind !== 'removed' || removedNul.bytes !== 3)
+      fail('本文のNULを落とした後のバイト数で消える', removedNul);
+  }
 }

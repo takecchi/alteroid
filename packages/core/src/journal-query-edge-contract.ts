@@ -1,4 +1,5 @@
 import type { JournalStore } from './store.js';
+import { JournalAnchorNotFoundError } from './store.js';
 
 /**
  * `JournalStore` の `types` / `limit` に渡す**退化した値**（空配列・`0`）の
@@ -45,7 +46,7 @@ import type { JournalStore } from './store.js';
  * `append` した行は呼び出し側のストアへ実際に残る（後始末はしない）。
  * 使い捨てのストアを渡すこと（各テストファイルは毎回新しいストアを作っている）。
  */
-export type JournalStoreQueryEdgeContractSubject = Pick<JournalStore, 'append' | 'list'>;
+export type JournalStoreQueryEdgeContractSubject = Pick<JournalStore, 'append' | 'list' | 'get'>;
 
 export async function verifyJournalStoreQueryEdgeContract(
   journal: JournalStoreQueryEdgeContractSubject,
@@ -140,5 +141,65 @@ export async function verifyJournalStoreQueryEdgeContract(
         `types: [] と with: [] を同時に渡すと ${bothEmpty.length} 件返した（実際に返った行: ` +
         `${JSON.stringify(bothEmpty.map((entry) => entry.id))}）。`,
     );
+  }
+
+  // --- 契約7: NUL（issue #3011。teto の判断、2026-10-06） ---
+  // 書き込み: 日誌は id を store が振るので断る鍵が無い。本文の NUL は落として残す（記録を失わない）。
+  // 読むだけの口: id・全文検索 q に NUL があっても断らず、「無い」と同じ結果（get は null、q は0件、
+  // 錨は見つからない）を返す。投げない。
+  {
+    const fail = (label: string, detail: unknown): never => {
+      throw new Error(
+        `JournalStore の NUL の契約（7: ${label}）が破れている — ${JSON.stringify(detail)}`,
+      );
+    };
+    const nulAppended = await journal.append({
+      type: 'decision',
+      decision: 'journal-nul: dec\u0000ision',
+      grounds: 'journal-nul: gro\u0000unds',
+    });
+    if (nulAppended.type !== 'decision' || nulAppended.decision !== 'journal-nul: decision') {
+      fail('appendの返り値の本文の NUL を落とす', nulAppended);
+    }
+    const nulRead = await journal.get(nulAppended.id);
+    if (
+      nulRead?.type !== 'decision' ||
+      nulRead.decision !== 'journal-nul: decision' ||
+      nulRead.grounds !== 'journal-nul: grounds'
+    ) {
+      fail('読み戻しの本文の NUL を落として残す', nulRead);
+    }
+
+    const nulId = `${nulAppended.id}\u0000`;
+    const countBefore = (await journal.list()).length;
+    const queries: Array<[string, () => Promise<unknown>, unknown]> = [
+      ['get(NULを含むid)はnull', () => journal.get(nulId), null],
+      [
+        'q に NUL を含む値は0件',
+        async () => (await journal.list({ q: 'journal-query-edge-contract\u0000' })).length,
+        0,
+      ],
+    ];
+    for (const [label, call, expected] of queries) {
+      let outcome: unknown;
+      try {
+        outcome = await call();
+      } catch (error) {
+        fail(label, { 投げた: error instanceof Error ? error.name : typeof error });
+      }
+      if (outcome !== expected) fail(label, { 実際: outcome });
+    }
+    let anchorThrown: unknown;
+    try {
+      await journal.list({ after: { id: nulId, at: nulAppended.at } });
+    } catch (error) {
+      anchorThrown = error;
+    }
+    if (!(anchorThrown instanceof JournalAnchorNotFoundError)) {
+      fail('after.id に NUL を含む錨は JournalAnchorNotFoundError', {
+        実際: anchorThrown === undefined ? '投げなかった' : String(anchorThrown),
+      });
+    }
+    if ((await journal.list()).length !== countBefore) fail('読んだだけなのに行が変わった', null);
   }
 }

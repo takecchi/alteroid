@@ -1,5 +1,8 @@
 import {
   UnreadableScheduleError,
+  assertNoNul,
+  hasNul,
+  stripNul,
   schedulePhaseSchema,
   scheduledRequestSchema,
 } from '@alteroid/core';
@@ -118,6 +121,8 @@ export class PgScheduleStore implements ScheduleStore {
   }
 
   async get(kind: string): Promise<ScheduledRequest | null> {
+    // 読むだけの口の NUL（issue #3011）。NUL を含む鍵の行は存在しえない（書き込みが断る）ので「無い」。DB に投げると NUL を含む text を受け付けずエラーになる。
+    if (hasNul(kind)) return null;
     const rows = await this.#db
       .select({ plan: schedules.plan })
       .from(schedules)
@@ -131,7 +136,10 @@ export class PgScheduleStore implements ScheduleStore {
 
   async put(entry: ScheduledRequest): Promise<void> {
     // 依頼の本文は人間かクローンが書いた自由文なので NUL が混ざりうる
-    const value = stripNulls(scheduledRequestSchema.parse(entry));
+    // kind の NUL は入口のスキーマが弾く。本文は、空になるものも含めて、落としてから検証する（issue #3011）。
+    const value = stripNulls(
+      scheduledRequestSchema.parse({ ...entry, request: stripNul(entry.request) }),
+    );
     await this.#db
       .insert(schedules)
       .values({
@@ -152,6 +160,8 @@ export class PgScheduleStore implements ScheduleStore {
   }
 
   async remove(kind: string): Promise<void> {
+    // 読むだけの口の NUL（issue #3011）。NUL を含む鍵の行は存在しえない（書き込みが断る）ので「無い」。DB に投げると NUL を含む text を受け付けずエラーになる。
+    if (hasNul(kind)) return;
     await this.#db.delete(schedules).where(eq(schedules.kind, kind));
   }
 
@@ -165,6 +175,8 @@ export class PgScheduleStore implements ScheduleStore {
    * 隙間を作らないため）。
    */
   async removeIfPresent(kind: string): Promise<ScheduledRequest | 'unreadable' | null> {
+    // 読むだけの口の NUL（issue #3011）。NUL を含む鍵の行は存在しえない（書き込みが断る）ので「無い」。DB に投げると NUL を含む text を受け付けずエラーになる。
+    if (hasNul(kind)) return null;
     const rows = await this.#db
       .delete(schedules)
       .where(eq(schedules.kind, kind))
@@ -187,6 +199,8 @@ export class PgScheduleStore implements ScheduleStore {
     changes: { readonly request: string; readonly spec: ScheduleSpec },
     updatedAt: string,
   ): Promise<ScheduledRequest | null> {
+    // 読むだけの口の NUL（issue #3011）。NUL を含む鍵の行は存在しえない（書き込みが断る）ので「無い」。DB に投げると NUL を含む text を受け付けずエラーになる。
+    if (hasNul(kind)) return null;
     return this.#db.transaction(async (tx) => {
       const rows = await tx
         .select({ plan: schedules.plan })
@@ -202,7 +216,7 @@ export class PgScheduleStore implements ScheduleStore {
       const next = stripNulls(
         scheduledRequestSchema.parse({
           ...plan,
-          request: changes.request,
+          request: stripNul(changes.request),
           spec: changes.spec,
           updatedAt,
         }),
@@ -234,6 +248,8 @@ export class PgScheduleStore implements ScheduleStore {
     at: string,
     cause: 'schedule' | 'manual',
   ): Promise<ScheduledRequest | null> {
+    // 読むだけの口の NUL（issue #3011）。NUL を含む鍵の行は存在しえない（書き込みが断る）ので「無い」。DB に投げると NUL を含む text を受け付けずエラーになる。
+    if (hasNul(kind)) return null;
     return this.#db.transaction(async (tx) => {
       const rows = await tx
         .select({ plan: schedules.plan })
@@ -264,6 +280,8 @@ export class PgScheduleStore implements ScheduleStore {
   }
 
   async completeRun(kind: string, at: string, cause: 'schedule' | 'manual'): Promise<void> {
+    // 読むだけの口の NUL（issue #3011）。NUL を含む鍵の行は存在しえない（書き込みが断る）ので「無い」。DB に投げると NUL を含む text を受け付けずエラーになる。
+    if (hasNul(kind)) return;
     const cleared =
       cause === 'schedule'
         ? sql`jsonb_set(${schedules.plan} - 'pendingRun', '{lastScheduledRunAt}', ${JSON.stringify(at)}::jsonb, true)`
@@ -283,6 +301,8 @@ export class PgScheduleStore implements ScheduleStore {
    * `null` を返すと「まだ一度も動いていない」と区別が付かず、位相が静かに捨てられる）。
    */
   async getPhase(kind: string): Promise<SchedulePhase | null> {
+    // 読むだけの口の NUL（issue #3011）。NUL を含む鍵の行は存在しえない（書き込みが断る）ので「無い」。DB に投げると NUL を含む text を受け付けずエラーになる。
+    if (hasNul(kind)) return null;
     const rows = await this.#db
       .select({ phase: schedulePhases.phase })
       .from(schedulePhases)
@@ -298,6 +318,8 @@ export class PgScheduleStore implements ScheduleStore {
   }
 
   async putPhase(phase: SchedulePhase): Promise<void> {
+    // 位相の kind（鍵）の NUL は断る（issue #3011）。
+    assertNoNul('schedulePhase.kind', phase.kind);
     const value = schedulePhaseSchema.parse(phase);
     const updatedAt = new Date(value.lastRunAt ?? value.lastScheduledRunAt ?? Date.now());
     await this.#db
