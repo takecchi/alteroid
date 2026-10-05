@@ -22,7 +22,7 @@
 import { cleanup, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { Badge, Button } from './common';
+import { Badge, Button, FieldHint, Input } from './common';
 
 afterEach(() => {
   cleanup();
@@ -83,6 +83,24 @@ describe('Badge の潰れ（flex 行の中で縮まない）', () => {
     const tokens = badge.className.split(/\s+/);
 
     expect(tokens).toContain('shrink-0');
+    expect(tokens).not.toContain('whitespace-nowrap');
+  });
+});
+
+describe('FieldHint（入力欄の補足文）', () => {
+  it('id で欄の aria-describedby と結べ、折り返せる（nowrap・truncate を持たない）', () => {
+    render(
+      <>
+        <Input aria-label="欄" aria-describedby="h1" />
+        <FieldHint id="h1">書式の説明</FieldHint>
+      </>,
+    );
+    const input = screen.getByLabelText('欄');
+    const hint = document.getElementById(input.getAttribute('aria-describedby') ?? '');
+    expect(hint?.textContent).toBe('書式の説明');
+    const tokens = (hint as HTMLElement).className.split(/\s+/);
+    expect(tokens).toContain('break-words');
+    expect(tokens).not.toContain('truncate');
     expect(tokens).not.toContain('whitespace-nowrap');
   });
 });
