@@ -3,6 +3,11 @@ import { createHash } from 'node:crypto';
 
 import type { ArchiveContinuity } from './archive-continuity.js';
 import type { AuthStore } from './auth.js';
+import type {
+  ConversationBaselineResult,
+  ConversationReadPosition,
+  ConversationReadRead,
+} from './conversation-read.js';
 import type { CredentialEntry } from './credentials.js';
 import type { McpServers, StoredMcpServers } from './mcp-servers.js';
 import type { ActiveAgentToken, AgentToken, TokenRotationSettings } from './token-pool.js';
@@ -754,6 +759,30 @@ export function describeUnreadableManagerRow(id: string, reason: string): string
     `マネージャー ${id} は読めない形で入っている（消されたのでも、畳まれたのでもない）。` +
     `理由: ${reason}。本文はここでは取れない。`
   );
+}
+
+/**
+ * 会話の既読の位置と基準時刻（`conversation-read.ts` の doc）。**全員で1組**——PRD
+ * 「非ゴール」の「利用者ごとにデータを分けない」の線で、アカウントごとの既読は持たない。
+ *
+ * **`clear()` を持たない**（`POST /reset` はここに触れない。リセットで会話の日誌は消え、
+ * 残った位置が既読にする相手は居ない。基準時刻が残るので、リセット後に始まった会話は
+ * 基準時刻より新しく、未読になる）。
+ */
+export interface ConversationReadStore {
+  /** 基準時刻と位置のすべて。読めなければ `unreadable`（「無い」と混ぜない）。 */
+  read(): Promise<ConversationReadRead>;
+  /**
+   * 基準時刻が無ければ `at` で決め、在れば**何もしない**。決まった基準時刻を返す。
+   * 並行して呼ばれても1つに決まる。記録が読めないときは書き換えず `unreadable` を返す。
+   */
+  ensureBaseline(at: string): Promise<ConversationBaselineResult>;
+  /**
+   * 会話 `conversationId` の位置を `readThrough` まで進める。**戻らない**——いまの位置より
+   * 古い値を渡すと何もせず、いまの位置を返す（並行2本でも単調）。記録が読めない状態なら
+   * この会話の位置で書き直す。返すのは書いた後の位置。
+   */
+  advance(conversationId: string, readThrough: string): Promise<ConversationReadPosition>;
 }
 
 /** ジョブと承認待ちキュー。M1 では承認待ちだけを使う。 */
@@ -3112,6 +3141,13 @@ export interface Stores {
    * という能力差が生まれる（north_star 禁止1）。
    */
   mcpServers: McpServerStore;
+  /**
+   * 会話の既読の位置と基準時刻（全員で1組）。
+   *
+   * **省略可能にしないこと**（`mcpServers` と同じ理由。ここが任意だと、片方の器でだけ
+   * 既読がデーモンの作り直しで消えるという能力差が生まれる）。
+   */
+  conversationReads: ConversationReadStore;
   /**
    * 認証トークンのプール（Issue #393）。
    *

@@ -30,6 +30,8 @@
  * — 片方だけ規則を直し忘れる余地 — が生まれる。
  */
 
+import type { ConversationReadView } from './conversation-read.js';
+import { compareIsoInstant } from './iso-instant.js';
 import type { JournalEntry } from './schema.js';
 import type { JournalStore } from './store.js';
 
@@ -61,6 +63,46 @@ export interface ConversationSummary {
   /** 遡った窓の中で数えた発言数。**窓の外は数えていない。** */
   messages: number;
   preview: string;
+  /**
+   * 未読の数（`countUnread`）。**窓（`scan`）の中で数えた値である**（窓の外は数えていない）。
+   * 既読の記録を渡さずに作った要約では、位置が無いものとして数える。
+   */
+  unread: number;
+  /**
+   * 実効の既読の位置（`effectiveReadThrough`）。**この時刻以前の発言は既読。**
+   * 基準時刻も決まっていない（記録が読めない）ときだけ `null`。
+   */
+  readThrough: string | null;
+}
+
+/**
+ * 会話の実効の既読の位置。**会話に記録された位置があればそれ、無ければ基準時刻**
+ * （基準時刻以前の発言は既読、以後は未読）。どちらも無ければ `null`（全件未読）。
+ */
+export function effectiveReadThrough(
+  view: ConversationReadView,
+  conversationId: string,
+): string | null {
+  return view.positions[conversationId]?.readThrough ?? view.baseline;
+}
+
+/**
+ * 未読の数。**クローン側の発言（`with: 'human'` の `outbound` ——返答・失敗ターンの返答・
+ * `conversation_post`）だけを数える。** 人間自身の発言（`inbound`）は未読にしない。
+ *
+ * 入力は**既定ビューで見えている**発言（編集で隠れていないもの）にすること——隠れた発言を
+ * 数えると、画面に出ない発言が未読として残る。`at` が `readThrough` より後のものを数える
+ * （同時刻は既読）。`readThrough` が `null` なら全件を数える。
+ */
+export function countUnread(
+  visible: readonly { role: 'inbound' | 'outbound'; at: string }[],
+  readThrough: string | null,
+): number {
+  return visible.filter(
+    (message) =>
+      message.role === 'outbound' &&
+      (readThrough === null || compareIsoInstant(message.at, readThrough) > 0),
+  ).length;
 }
 
 export interface ConversationMessage {
@@ -194,6 +236,8 @@ export function bySpeaker(exchanges: Exchange[], speaker: 'human' | 'clone' | 'b
   return exchanges.filter((entry) => entry.role === role);
 }
 
+const EMPTY_VIEW: ConversationReadView = { baseline: null, positions: {} };
+
 /**
  * 新しい順に並んだ `exchange` を会話ごとに畳む（新しい順のまま返す）。
  *
@@ -206,7 +250,10 @@ export function bySpeaker(exchanges: Exchange[], speaker: 'human' | 'clone' | 'b
  * 会話ごとに古い順へ組み直してから畳み込みを適用し、残った発言だけで
  * `startedAt` / `updatedAt` / `messages` / `preview` を数える。
  */
-export function collectConversations(entries: JournalEntry[]): ConversationSummary[] {
+export function collectConversations(
+  entries: JournalEntry[],
+  readView: ConversationReadView = EMPTY_VIEW,
+): ConversationSummary[] {
   // 会話ごとに、新しい順のまま束ねる（`order` は「最初に出会った」＝最新発言の
   // 順を保つ——元の Map 実装と同じ並びにするため）。
   const byConversation = new Map<string, Exchange[]>();
@@ -233,6 +280,7 @@ export function collectConversations(entries: JournalEntry[]): ConversationSumma
     if (visible.length === 0) continue; // 畳んだ結果、残る発言が無い（起こらないはずだが防御的に）
     // 直前の `length === 0` 判定で非空は分かっているが、`noUncheckedIndexedAccess`
     // は添字アクセスからは境界を証明できないため非null断定で通す。
+    const readThrough = effectiveReadThrough(readView, id);
     const first = visible[0]!;
     const last = visible[visible.length - 1]!;
     summaries.push({
@@ -241,6 +289,8 @@ export function collectConversations(entries: JournalEntry[]): ConversationSumma
       updatedAt: last.at,
       messages: visible.length,
       preview: preview(last.text),
+      unread: countUnread(visible, readThrough),
+      readThrough,
     });
   }
   return summaries;

@@ -757,6 +757,20 @@ export const STATEMENTS = [
    )`,
   `create unique index if not exists usage_unmetered_key_idx
      on usage_unmetered (date, manager_id, layer, site, provider, token_id)`,
+  // --- 会話の既読の位置と基準時刻 ----------------------------------------------
+  // 新しい表を足すだけなので既存行の意味は1ビットも変わらず、同名の `drop` をどこにも
+  // 置いていないので `create table if not exists` は2周目以降も本当の no-op である。
+  // **基準時刻の行はここでは入れない**（`ConversationReadStore.ensureBaseline` が
+  // デーモンの起動時と読み出しで「無ければ入れる」。空の器で契約を測れるようにするため）。
+  `create table if not exists conversation_read (
+     conversation_id text primary key,
+     read_through timestamptz not null,
+     updated_at timestamptz not null
+   )`,
+  `create table if not exists conversation_read_baseline (
+     id text primary key,
+     at timestamptz not null
+   )`,
 ] as const;
 
 /** `ensureOpenManagerBodyIndex` が作る部分 unique 索引の名前（issue #1041）。 */

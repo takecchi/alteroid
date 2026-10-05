@@ -351,6 +351,8 @@ export {
   collectConversations,
   computeSupersededIds,
   conversationMessages,
+  countUnread,
+  effectiveReadThrough,
   humanExchanges,
   preview,
   reachedStart,
@@ -361,6 +363,16 @@ export {
   type ConversationSummary,
   type Exchange,
 } from './conversation.js';
+/** 会話の既読の位置と基準時刻（保存の型・契約・読み出し）。全員で1組。 */
+export {
+  EMPTY_CONVERSATION_READ_VIEW,
+  loadConversationReadView,
+  verifyConversationReadStoreContract,
+  type ConversationBaselineResult,
+  type ConversationReadPosition,
+  type ConversationReadRead,
+  type ConversationReadView,
+} from './conversation-read.js';
 /**
  * `JournalStore` の `with` 絞りの契約（issue #418）。3実装（インメモリ /
  * `storage-fs` / `storage-pg`）それぞれの歯がこれを呼んで揃っていることを測る
