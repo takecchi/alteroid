@@ -488,8 +488,6 @@ export const practiceConflictResponseSchema = z.object({
 export const practiceDeleteResponseSchema = z.object({
   ok: z.literal(true),
   slug: z.string(),
-  /** 版（`ifMatch`）を付けない削除に載る警告（Issue #2959。段階的に必須にする）。 */
-  warning: z.string().optional(),
 });
 
 /**

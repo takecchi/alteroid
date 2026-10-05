@@ -261,7 +261,7 @@ export function useSavePractice() {
  * `ifMatch` は**読んだ時の版**（`GET /practices/{slug}` の `version`。クエリで送る。Issue #2959 / #2881）。
  * 渡すと、いまの版と違えば**何も消さず** `PracticeConflictError` を投げる（`current` にいまの版）。
  * 取り消せない操作なので、衝突しても自動では再送しない——呼び出し側がいまの内容を見せてから
- * もう一度確認を取る。省略すると従来どおり（デーモンは応答に warning を載せて通す）。
+ * もう一度確認を取る。**省略すると、デーモンは 428 で断る（何も消さない。段階2）**——読めない形で入っている行だけは版なしで消せる。
  */
 export function useDeletePractice() {
   const api = useApi();

@@ -315,7 +315,9 @@ export async function practiceSetCommand(
  * `GET /practices/<slug>` で読み、その `version` を `DELETE` の `ifMatch` に付ける。
  * 読んだ後に別の書き手（クローンなど）が書いていたら、デーモンは**消さずに** 409 を返す。
  * そのときは消さずに、いまの版と次の手（`practice show` で確かめてから再実行）を案内して失敗で終わる。
- * 古いデーモンが `version` を返さなければ前提なしで消す（段階1。デーモンが警告を返せば出す）。
+ * 古いデーモン（#2959 より前。`version` を返さない）には前提なしで打つ——その段階のデーモンは
+ * 版なしの削除を通す。**版必須のデーモン（段階2）は 428 で断る**ので、そのときは消していないと
+ * 言って失敗する（`practice show` で確かめて打ち直せば、版を読み直して付ける）。
  * **読んで無かった（404 / 400）ときも版なしで DELETE を打つ**——「無い」と「名前が不正」の
  * 切り分けはサーバが持つので、ここで再実装しない。**読めない形で入っている行（GET が 409）も
  * 版なしで DELETE を打つ**——版が無いので前提を付けようがなく、ここで止めると壊れた行を外す
@@ -353,6 +355,18 @@ export async function practiceRemoveCommand(slug: string): Promise<void> {
     );
     throw new Error(`やり方が読んだ後に変わっていたので消しませんでした: ${slug}`);
   }
+  if (response.status === 428) {
+    // 版必須のデーモンが、版なしの削除を断った（何も消していない）。通常は上で読んだ版を付けるので、
+    // 読んだ応答に version が無かったときだけ当たる。
+    throw new Error(
+      await withErrorReason(
+        `消していません: ${slug}（HTTP 428。このデーモンは削除に読んだ版を必須としています。` +
+          `\`alteroid practice show ${slug}\` で確かめ、\`alteroid practice remove ${slug}\` を打ち直してください。` +
+          '打ち直すと版を読み直して付けます）',
+        response,
+      ),
+    );
+  }
   if (!response.ok) {
     if (response.status === 400) {
       throw new Error(`やり方の名前として成立しません: ${slug}`);
@@ -370,9 +384,6 @@ export async function practiceRemoveCommand(slug: string): Promise<void> {
     );
   }
   stdout.write(`消しました: ${slug}\n`);
-  // 版を付けずに消せたとき、デーモンは警告を返す（段階1）。握り潰さず見せる。
-  const done = (await response.json().catch(() => ({}))) as { warning?: unknown };
-  if (typeof done.warning === 'string') stdout.write(`注意: ${done.warning}\n`);
 }
 
 /**
