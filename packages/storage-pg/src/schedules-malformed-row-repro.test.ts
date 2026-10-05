@@ -6,7 +6,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import type { Db } from './db.js';
 import { createPgStoresFromDb, type PgStores } from './index.js';
 import { schedules } from './schema.js';
-import { createMigratedPglite } from './pglite-template.test-support.js';
+import { createMigratedTestDb } from './test-db.test-support.js';
 
 /**
  * issue #1944（#1868 / #1928 の線を継続中の依頼にそろえる）。`PgScheduleStore.list()`
@@ -25,7 +25,7 @@ let db: Db;
 let stores: PgStores;
 
 beforeEach(async () => {
-  ({ db } = await createMigratedPglite());
+  ({ db } = await createMigratedTestDb());
   stores = createPgStoresFromDb(db);
 });
 

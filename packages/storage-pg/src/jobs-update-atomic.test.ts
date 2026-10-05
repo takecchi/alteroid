@@ -1,10 +1,9 @@
 import type { Job } from '@alteroid/core';
-import { PGlite } from '@electric-sql/pglite';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import type { Db } from './db.js';
 import { createPgStoresFromDb, type PgStores } from './index.js';
-import { createMigratedPglite } from './pglite-template.test-support.js';
+import { createMigratedTestDb, type TestDbHandle } from './test-db.test-support.js';
 
 /**
  * Issue #1674。fs 版（`packages/storage-fs/src/jobs-update-atomic.test.ts`）と
@@ -12,7 +11,7 @@ import { createMigratedPglite } from './pglite-template.test-support.js';
  * 作らない別のストアなので、両方が同じ形で直っていることを確かめる。
  */
 describe('JobStore.updateJob()（pg 実装）', () => {
-  let client: PGlite;
+  let client: TestDbHandle;
   let db: Db;
   let stores: PgStores;
 
@@ -27,7 +26,7 @@ describe('JobStore.updateJob()（pg 実装）', () => {
   };
 
   beforeEach(async () => {
-    ({ client, db } = await createMigratedPglite());
+    ({ client, db } = await createMigratedTestDb());
     stores = createPgStoresFromDb(db);
   });
 

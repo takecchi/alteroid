@@ -1,10 +1,9 @@
-import { PGlite } from '@electric-sql/pglite';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import type { Db } from './db.js';
 import { createPgStoresFromDb, type PgStores } from './index.js';
 import { sessionEntries } from './schema.js';
-import { createMigratedPglite } from './pglite-template.test-support.js';
+import { createMigratedTestDb, type TestDbHandle } from './test-db.test-support.js';
 
 /**
  * issue #1962。`PgSessionStore.append(key, entries)` は最大3つの insert を
@@ -22,14 +21,14 @@ import { createMigratedPglite } from './pglite-template.test-support.js';
  * 実装では、どちらも確定してしまっている（冪等かどうかに関わらず両方残る）
  * ことを見るため。
  */
-let client: PGlite;
+let client: TestDbHandle;
 let db: Db;
 let stores: PgStores;
 
 const KEY = { projectKey: 'proj-1', sessionId: 'sess-1' };
 
 beforeEach(async () => {
-  ({ client, db } = await createMigratedPglite());
+  ({ client, db } = await createMigratedTestDb());
   stores = createPgStoresFromDb(db);
 
   // sessions への insert だけを確実に失敗させる（BEFORE INSERT トリガ）。

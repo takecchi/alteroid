@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import type { Db } from './db.js';
 import { createPgStoresFromDb, type PgStores } from './index.js';
 import { practices, practiceVersions } from './schema.js';
-import { createMigratedPglite } from './pglite-template.test-support.js';
+import { createMigratedTestDb } from './test-db.test-support.js';
 
 /**
  * issue #2011（#1975 の pg 側。fs の practices を直した issue #1967 の続き）。
@@ -37,7 +37,7 @@ let db: Db;
 let stores: PgStores;
 
 beforeEach(async () => {
-  ({ db } = await createMigratedPglite());
+  ({ db } = await createMigratedTestDb());
   stores = createPgStoresFromDb(db);
 });
 

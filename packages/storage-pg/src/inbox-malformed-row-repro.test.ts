@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import type { Db } from './db.js';
 import { createPgStoresFromDb, type PgStores } from './index.js';
 import { inboxEvents } from './schema.js';
-import { createMigratedPglite } from './pglite-template.test-support.js';
+import { createMigratedTestDb } from './test-db.test-support.js';
 
 /**
  * pg の `PgInboxStore` は、`peekPending()` / `claimPending()` の `.map()` の中で
@@ -21,7 +21,7 @@ let db: Db;
 let stores: PgStores;
 
 beforeEach(async () => {
-  ({ db } = await createMigratedPglite());
+  ({ db } = await createMigratedTestDb());
   stores = createPgStoresFromDb(db);
 });
 

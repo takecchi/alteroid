@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 
 import type { Db } from './db.js';
 import { createPgStoresFromDb, type PgStores } from './index.js';
-import { createMigratedPglite } from './pglite-template.test-support.js';
+import { createMigratedTestDb } from './test-db.test-support.js';
 import { managerCredentials } from './schema.js';
 
 /**
@@ -25,7 +25,7 @@ const FAKE_BAD_VALUE = 'ghp_FAKEFAKE2222222222222222222222222222';
 const BAD_NAME = '../../etc/bad-name';
 
 beforeEach(async () => {
-  ({ db } = await createMigratedPglite());
+  ({ db } = await createMigratedTestDb());
   stores = createPgStoresFromDb(db);
 });
 

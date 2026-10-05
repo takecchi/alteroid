@@ -1,11 +1,10 @@
 import type { UsageSnapshot } from '@alteroid/core';
-import { PGlite } from '@electric-sql/pglite';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import type { Db } from './db.js';
 import { createPgStoresFromDb, type PgStores } from './index.js';
 import { usageBaseline, usageDaily, usageLedger } from './schema.js';
-import { createMigratedPglite } from './pglite-template.test-support.js';
+import { createMigratedTestDb, type TestDbHandle } from './test-db.test-support.js';
 
 /**
  * issue #1955（#1929 の同じ形の残り）。`UsageStore.clear()` の契約は「台帳
@@ -20,7 +19,7 @@ import { createMigratedPglite } from './pglite-template.test-support.js';
  * `PgUsageStore.clear()`）は、先の3表の DELETE を確定させたあとで usage_turns
  * の DELETE に失敗するので、この歯は赤くなる。
  */
-let client: PGlite;
+let client: TestDbHandle;
 let db: Db;
 let stores: PgStores;
 
@@ -38,7 +37,7 @@ const SNAPSHOT: UsageSnapshot = {
 };
 
 beforeEach(async () => {
-  ({ client, db } = await createMigratedPglite());
+  ({ client, db } = await createMigratedTestDb());
   stores = createPgStoresFromDb(db);
 
   // usage_turns への DELETE だけを確実に失敗させる（BEFORE DELETE トリガ）。

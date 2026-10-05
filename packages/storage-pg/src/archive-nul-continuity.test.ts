@@ -1,10 +1,9 @@
 import { createMemoryStores, type ArchiveContinuity } from '@alteroid/core';
-import { PGlite } from '@electric-sql/pglite';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import type { Db } from './db.js';
 import { createPgStoresFromDb, type PgStores } from './index.js';
-import { createMigratedPglite } from './pglite-template.test-support.js';
+import { createMigratedTestDb, type TestDbHandle } from './test-db.test-support.js';
 
 /**
  * **NUL の位置だけが違う本文は、pg でも「続いていない」と読む（#1709）。** pg は NUL を
@@ -13,12 +12,12 @@ import { createMigratedPglite } from './pglite-template.test-support.js';
  * 材料なので、オーナーの判断で安全側（続いていない＝畳まない）に揃えた。値はすべて偽物。
  */
 describe('pg の archive() の連続性の判定は、NUL を含む本文で fs / インメモリと揃う（#1709）', () => {
-  let client: PGlite;
+  let client: TestDbHandle;
   let db: Db;
   let pgStores: PgStores;
 
   beforeEach(async () => {
-    ({ client, db } = await createMigratedPglite());
+    ({ client, db } = await createMigratedTestDb());
     pgStores = createPgStoresFromDb(db);
   });
 

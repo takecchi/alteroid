@@ -1,9 +1,8 @@
 import type { Commitment, InboxEvent, PermissionGrant } from '@alteroid/core';
-import type { PGlite } from '@electric-sql/pglite';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { createPgStoresFromDb, type PgStores } from './index.js';
-import { createMigratedPglite } from './pglite-template.test-support.js';
+import { createMigratedTestDb, type TestDbHandle } from './test-db.test-support.js';
 
 /**
  * **issue #2451。** 経緯とインメモリ側の対の歯は
@@ -51,11 +50,11 @@ const event = (id: string, at: string): InboxEvent => ({
   text: id,
 });
 
-let client: PGlite;
+let client: TestDbHandle;
 let stores: PgStores;
 
 beforeEach(async () => {
-  const migrated = await createMigratedPglite();
+  const migrated = await createMigratedTestDb();
   client = migrated.client;
   stores = createPgStoresFromDb(migrated.db);
 });

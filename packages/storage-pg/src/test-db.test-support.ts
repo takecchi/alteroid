@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 
-import type { PGlite } from '@electric-sql/pglite';
+import { PGlite } from '@electric-sql/pglite';
 import { drizzle as drizzlePg } from 'drizzle-orm/node-postgres';
 import { drizzle as drizzlePglite } from 'drizzle-orm/pglite';
 import type { Logger } from 'drizzle-orm/logger';
@@ -38,7 +38,12 @@ import { createMigratedPglite } from './pglite-template.test-support.js';
  */
 export interface TestDbHandle {
   /** `PGlite#query` と同じ形の素の SQL。`rows` だけを使う。 */
-  query(sql: string): Promise<{ rows: unknown[] }>;
+  query<T = unknown>(sql: string): Promise<{ rows: T[] }>;
+  /**
+   * 複数文を1回で流す（`PGlite#exec` と同じ）。本物では node-postgres の simple query
+   * （パラメータ無しの文字列は複数文を受ける）。結果は返さない。
+   */
+  exec(sql: string): Promise<void>;
   close(): Promise<void>;
   /** 同じ DB へ繋ぐ、SQL ログ付きのハンドル（drizzle の `logger`）。 */
   withLogger(logger: Logger): Db;
@@ -128,14 +133,30 @@ async function ensureTemplate(url: string): Promise<string> {
   });
 }
 
-async function createRealDb(url: string): Promise<{ client: TestDbHandle; db: Db }> {
-  templateName ??= ensureTemplate(url);
-  const template = await templateName;
+/**
+ * 別の DATABASE を切って、そこへ繋ぐハンドルを返す。`template` が無ければ空
+ * （`template0` から。migrate していない。接続先と同じ照合順・文字コード）。
+ */
+async function createRealDb(
+  url: string,
+  template: string | undefined,
+): Promise<{ client: TestDbHandle; db: Db }> {
   const name = `alteroid_t_${process.pid}_${randomBytes(4).toString('hex')}`;
   await adminQuery(url, async (admin) => {
     await admin.query('select pg_advisory_lock($1)', [ADMIN_LOCK]);
     try {
-      await admin.query(`create database ${quoteIdent(name)} template ${quoteIdent(template)}`);
+      if (template === undefined) {
+        const current = await admin.query<{ datcollate: string; datctype: string }>(
+          'select datcollate, datctype from pg_database where datname = current_database()',
+        );
+        const { datcollate, datctype } = current.rows[0]!;
+        await admin.query(
+          `create database ${quoteIdent(name)} template template0 encoding 'UTF8' ` +
+            `lc_collate ${quoteLiteral(datcollate)} lc_ctype ${quoteLiteral(datctype)}`,
+        );
+      } else {
+        await admin.query(`create database ${quoteIdent(name)} template ${quoteIdent(template)}`);
+      }
     } finally {
       await admin.query('select pg_advisory_unlock($1)', [ADMIN_LOCK]);
     }
@@ -147,9 +168,12 @@ async function createRealDb(url: string): Promise<{ client: TestDbHandle; db: Db
   pool.on('error', () => {});
   const extra: pg.Pool[] = [];
   const client: TestDbHandle = {
-    async query(sql) {
+    async query<T = unknown>(sql: string) {
       const result = await pool.query(sql);
-      return { rows: result.rows };
+      return { rows: result.rows as T[] };
+    },
+    async exec(sql) {
+      await pool.query(sql);
     },
     withLogger(logger) {
       const loggingPool = new pg.Pool({ connectionString: testUrl, max: 1 });
@@ -169,7 +193,10 @@ async function createRealDb(url: string): Promise<{ client: TestDbHandle; db: Db
 
 function pgliteHandle(client: PGlite): TestDbHandle {
   return {
-    query: (sql) => client.query(sql),
+    query: <T = unknown>(sql: string) => client.query<T>(sql),
+    exec: async (sql) => {
+      await client.exec(sql);
+    },
     close: () => client.close(),
     withLogger: (logger) => drizzlePglite(client, { logger }),
   };
@@ -181,7 +208,24 @@ function pgliteHandle(client: PGlite): TestDbHandle {
  */
 export async function createMigratedTestDb(): Promise<{ client: TestDbHandle; db: Db }> {
   const url = realPostgresUrl();
-  if (url !== undefined) return createRealDb(url);
+  if (url !== undefined) {
+    templateName ??= ensureTemplate(url);
+    return createRealDb(url, await templateName);
+  }
   const { client, db } = await createMigratedPglite();
   return { client: pgliteHandle(client), db };
+}
+
+/**
+ * **空の（migrate していない）、自分専用の DB** を返す。呼び手が `client.close()` する。
+ * 旧スキーマを手で作ってから `migrate` を通す歯向け。`ALTEROID_TEST_PG_URL` があれば
+ * 本物の PostgreSQL に**別の DATABASE**（`template0` から。接続先と同じ照合順・文字
+ * コード）を切り、無ければ素の `new PGlite()`。
+ */
+export async function createEmptyTestDb(): Promise<{ client: TestDbHandle; db: Db }> {
+  const url = realPostgresUrl();
+  if (url !== undefined) return createRealDb(url, undefined);
+  const client = new PGlite();
+  await client.waitReady;
+  return { client: pgliteHandle(client), db: drizzlePglite(client) };
 }

@@ -1,9 +1,8 @@
-import { PGlite } from '@electric-sql/pglite';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import type { Db } from './db.js';
 import { createPgStoresFromDb, type PgStores } from './index.js';
-import { createMigratedPglite } from './pglite-template.test-support.js';
+import { createMigratedTestDb, type TestDbHandle } from './test-db.test-support.js';
 
 /**
  * Issue #1654。fs 版（`packages/storage-fs/src/schedule-edit-keeps-claim
@@ -12,7 +11,7 @@ import { createMigratedPglite } from './pglite-template.test-support.js';
  * 同じ形で直っていることを確かめる。
  */
 describe('ScheduleStore.editRequest() — claimRun 済みの印を消さない（pg 実装）', () => {
-  let client: PGlite;
+  let client: TestDbHandle;
   let db: Db;
   let stores: PgStores;
 
@@ -25,7 +24,7 @@ describe('ScheduleStore.editRequest() — claimRun 済みの印を消さない�
   };
 
   beforeEach(async () => {
-    ({ client, db } = await createMigratedPglite());
+    ({ client, db } = await createMigratedTestDb());
     stores = createPgStoresFromDb(db);
   });
 

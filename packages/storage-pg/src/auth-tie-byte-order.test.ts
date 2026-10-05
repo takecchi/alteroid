@@ -1,11 +1,14 @@
 import type { AccessTokenRecord, AuthAccount, AuthIdentity } from '@alteroid/core';
-import type { PGlite } from '@electric-sql/pglite';
 import { sql } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import type { Db } from './db.js';
 import { createPgStoresFromDb, type PgStores } from './index.js';
-import { createMigratedPglite } from './pglite-template.test-support.js';
+import {
+  createMigratedTestDb,
+  realPostgresUrl,
+  type TestDbHandle,
+} from './test-db.test-support.js';
 
 /**
  * **issue #2458。** 経緯とインメモリ側の対の歯は
@@ -58,12 +61,12 @@ const token = (id: string, n: number): AccessTokenRecord => ({
   revokedAt: null,
 });
 
-let client: PGlite;
+let client: TestDbHandle;
 let db: Db;
 let stores: PgStores;
 
 beforeEach(async () => {
-  ({ client, db } = await createMigratedPglite());
+  ({ client, db } = await createMigratedTestDb());
   stores = createPgStoresFromDb(db);
 });
 
@@ -117,7 +120,9 @@ function defineTieCases(): void {
 }
 
 describe('AuthStore の同着の2次キーはバイト順（pg 実装・既定の照合順、issue #2458）', () => {
-  it('前提: この DB の既定の照合順は C', async () => {
+  // #2937: 本物の PostgreSQL の照合順は接続先（CI は en_US.UTF-8 と C）で決まるので、
+  // 「既定が C」の前提は PGlite でだけ成り立つ。
+  it.skipIf(realPostgresUrl() !== undefined)('前提: この DB の既定の照合順は C', async () => {
     const result = await client.query<{ datcollate: string }>(
       'select datcollate from pg_database where datname = current_database()',
     );

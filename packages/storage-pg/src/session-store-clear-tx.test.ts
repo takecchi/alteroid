@@ -1,10 +1,9 @@
-import { PGlite } from '@electric-sql/pglite';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import type { Db } from './db.js';
 import { createPgStoresFromDb, type PgStores } from './index.js';
 import { sessionEntries } from './schema.js';
-import { createMigratedPglite } from './pglite-template.test-support.js';
+import { createMigratedTestDb, type TestDbHandle } from './test-db.test-support.js';
 
 /**
  * issue #1961。`PgSessionStore.clearAll()` の契約は「session_entries と索引の
@@ -16,14 +15,14 @@ import { createMigratedPglite } from './pglite-template.test-support.js';
  * （直す前の `PgSessionStore.clearAll()`）は、session_entries の DELETE を
  * 確定させたあとで sessions の DELETE に失敗するので、この歯は赤くなる。
  */
-let client: PGlite;
+let client: TestDbHandle;
 let db: Db;
 let stores: PgStores;
 
 const KEY = { projectKey: 'proj-1', sessionId: 'sess-1' };
 
 beforeEach(async () => {
-  ({ client, db } = await createMigratedPglite());
+  ({ client, db } = await createMigratedTestDb());
   stores = createPgStoresFromDb(db);
 
   // sessions への DELETE だけを確実に失敗させる（BEFORE DELETE トリガ）。
