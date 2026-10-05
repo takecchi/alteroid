@@ -31,6 +31,7 @@ import {
 import {
   JournalFeedProvider,
   useApprovals,
+  useConversations,
   useHealth,
   useAuth,
   useJournalLive,
@@ -186,6 +187,33 @@ function AuthedShell() {
     pending > 0 && <Badge tone="warn">{pending}</Badge>
   );
 
+  /**
+   * 左ナビ「会話」の札: 未読のある会話の数。**承認待ちの札と同じ作法**——読めていないときは
+   * 0 件（札無し）と区別できる danger の「?」にする（エラーを最優先。形の違う応答も読めていない側）。
+   * 一覧は会話の画面と同じ `useConversations(30)`（SWR が同じ取得を共有する）。
+   * 一覧が返す窓の中で数えた値なので、窓の外の未読は数えていない。
+   */
+  const { data: conversations, error: conversationsError } = useConversations(30);
+  const conversationList = Array.isArray(conversations?.conversations)
+    ? conversations.conversations
+    : undefined;
+  const conversationsUnavailable =
+    conversationsError !== undefined ||
+    (conversations !== undefined && conversationList === undefined);
+  const unreadConversations =
+    conversationList?.filter((conversation) => conversation.unreadCount > 0).length ?? 0;
+  const chatBadge: ReactNode = conversationsUnavailable ? (
+    <Badge tone="danger" aria-label="未読の会話を読めていない" title="未読の会話を読めていない">
+      ?
+    </Badge>
+  ) : (
+    unreadConversations > 0 && (
+      <Badge tone="accent" aria-label={`未読のある会話 ${unreadConversations} 件`}>
+        {unreadConversations}
+      </Badge>
+    )
+  );
+
   // `NAV_ITEMS`（`~/lib/nav`）から `AppSidebarItem` へ写す。札は承認待ちにだけ付く。
   const items: AppSidebarItem[] = NAV_ITEMS.map((def) => ({
     to: def.to,
@@ -193,6 +221,7 @@ function AuthedShell() {
     icon: ICONS[def.to] ?? Activity,
     ...(def.section === undefined ? {} : { section: def.section }),
     ...(def.to === '/approvals' ? { badge: approvalsBadge } : {}),
+    ...(def.to === '/chat' ? { badge: chatBadge } : {}),
   }));
   const defByTo = new Map(NAV_ITEMS.map((def) => [def.to, def]));
 
