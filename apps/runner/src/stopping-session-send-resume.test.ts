@@ -186,7 +186,12 @@ describe('畳み中のセッションへの送信・resume（#1660）', () => {
     expect(res.status).toBe(200);
     // **`cwd` は runner が実際に開いた値（Issue #1814）。** 明示の `cwd` が
     // 実在するので倒れず、頼んだ値がそのまま返る。
-    expect(await res.json()).toEqual({ ok: true, cwd: '/work/project' });
+    // 畳み終わりを待った後に新しいセッションを開いた回なので、短絡していない（#2877）。
+    expect(await res.json()).toEqual({
+      ok: true,
+      cwd: '/work/project',
+      reusedLiveSession: false,
+    });
     await waitUntil(() => s.consumed.includes('追加の一言（畳み中の resume）'));
     expect(s.opened()).toBe(2);
     expect(s.host.list().filter((m) => m.managerId === 'mgr-resume')).toHaveLength(1);

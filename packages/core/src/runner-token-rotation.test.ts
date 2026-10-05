@@ -825,16 +825,17 @@ describe('認証トークンを回した後、走行中のマネージャーの�
 });
 
 /**
- * **`Host#resume` の「生きたセッションへの短絡」と、古い鍵**（Issue #2877）。
+ * **`Host#resume` の「生きたセッションへの短絡」を、応答で名乗る**（Issue #2877）。
  *
  * `Host#resume` は同じ managerId の生きたセッションが居ると、新しい SDK を起こさずに
  * message をそこへ push して返す。旧プロセスの env は起動時に凍っているので、鍵が回った
  * 後で境界に達していない（背景処理が残っている）セッションへ短絡すると、**message は
- * 古い鍵のプロセスへ届き、新しい鍵で起こし直されない**。応答（`{ cwd }`）にはどちらを
- * 通ったかが無いので、デーモンは区別できない（`manager-resume-alive-shortcut.test.ts`）。
+ * 古い鍵のプロセスへ届く**。応答の `reusedLiveSession: true` がそれを言い、デーモンは
+ * その回に世代を現役へ書き換えない（`manager-resume-alive-shortcut.test.ts`）。
+ * 新しい SDK を起こした回は `false`。
  */
-describe('resume が生きた旧プロセスへ短絡する（#2877）', () => {
-  it('⚠️ 境界に達していない旧セッションへ resume すると、message は旧プロセスに届き、新しい鍵で起きない', async () => {
+describe('resume が生きた旧プロセスへ短絡したかを応答で名乗る（#2877）', () => {
+  it('⚠️ 境界に達していない旧セッションへ resume すると、旧プロセスへ流れ、reusedLiveSession: true が返る', async () => {
     const s = setup();
     await s.host.start({ managerId: 'mgr-1', request: '調べて', cwd: '/work/project' });
     const first = await nthSession(s.sessions, 0);
@@ -847,28 +848,41 @@ describe('resume が生きた旧プロセスへ短絡する（#2877）', () => {
       { name: 'CLAUDE_CODE_OAUTH_TOKEN', value: 'token-fake-new-2877' },
     ]);
 
-    await s.host.resume({
+    const resumed = await s.host.resume({
       managerId: 'mgr-1',
       sessionId: 'sess-1',
       cwd: '/work/project',
       request: '調べて',
       message: '続けて',
     });
-    // 後始末: 背景処理を片付け、旧セッションが畳める状態にしておく（落ちたときの shutdown 待ちを避ける）。
-    first.backgroundTasksChanged([]);
 
-    // 旧プロセスへ流れたか、新しい SDK が起きたか、どちらかが起きるまで待つ。
+    expect(resumed.reusedLiveSession).toBe(true);
+    // 旧プロセスへ流れた（新しい SDK は起きていない）。
     await vi.waitFor(() => {
-      if (!first.inputs.includes('続けて') && s.startedOptions.length < 2) {
-        throw new Error('message がどこにも届いていない');
-      }
+      if (!first.inputs.includes('続けて')) throw new Error('旧プロセスに届いていない');
     });
-    // 後始末: 旧セッションの未完のターンを閉じる（落ちたときの shutdown 待ちを避ける）。
+    expect(s.startedOptions).toHaveLength(1);
+    // 後始末: 背景処理を片付け、旧セッションの未完のターンを閉じる（shutdown 待ちを避ける）。
+    first.backgroundTasksChanged([]);
     first.finish('終わり');
-    // 新しい鍵で SDK が起きていること（いまは起きない）。
-    expect(s.startedOptions).toHaveLength(2);
-    expect(s.startedOptions[1]?.env?.CLAUDE_CODE_OAUTH_TOKEN).toBe('token-fake-new-2877');
-    // 旧プロセスへは流れていない。
-    expect(first.inputs).not.toContain('続けて');
+  });
+
+  it('生きたセッションが居なければ新しい SDK が起き、reusedLiveSession: false が返る', async () => {
+    const s = setup();
+
+    const resumed = await s.host.resume({
+      managerId: 'mgr-9',
+      sessionId: 'sess-9',
+      cwd: '/work/project',
+      request: '調べて',
+      message: '続けて',
+    });
+
+    expect(resumed.reusedLiveSession).toBe(false);
+    const opened = await nthSession(s.sessions, 0);
+    // 後始末: resume の message が始めたターンを閉じる（shutdown 待ちを避ける）。
+    opened.finish('終わり');
+    expect(s.startedOptions[0]?.resume).toBe('sess-9');
+    expect(s.startedOptions[0]?.env?.CLAUDE_CODE_OAUTH_TOKEN).toBe(OLD_TOKEN);
   });
 });

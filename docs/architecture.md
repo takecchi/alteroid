@@ -91,7 +91,7 @@
 
 | 向き | 経路 |
 |---|---|
-| デーモン → runner | `POST /managers`（start） / `POST /managers/:id/resume` / `POST /managers/:id/messages` / `POST /managers/:id/answers` / `DELETE /managers/:id` / `GET /managers` / `GET /managers/:id/transcript` / `GET /managers/:id/unpushed-work`（未 push の成果の観測。`manager_stop` が使う） / `GET /health`（runner_id を名乗る） / 降ろす口: `POST /credentials`（マネージャーへ降ろす環境変数）・`POST /profile`（実行環境プロファイル）・`POST /mcp-servers`（MCP 登録）。`GET /profile` と `GET /mcp-servers` は指紋を返す |
+| デーモン → runner | `POST /managers`（start） / `POST /managers/:id/resume`（応答は `cwd` と `reusedLiveSession` — 新しい SDK を起こさず生きた旧セッションへ message を流して返した回だけ true。#2877） / `POST /managers/:id/messages` / `POST /managers/:id/answers` / `DELETE /managers/:id` / `GET /managers` / `GET /managers/:id/transcript` / `GET /managers/:id/unpushed-work`（未 push の成果の観測。`manager_stop` が使う） / `GET /health`（runner_id を名乗る） / 降ろす口: `POST /credentials`（マネージャーへ降ろす環境変数）・`POST /profile`（実行環境プロファイル）・`POST /mcp-servers`（MCP 登録）。`GET /profile` と `GET /mcp-servers` は指紋を返す |
 | runner → デーモン | `GET /events`（SSE）。種別は `hello`（名乗り） / `session` / `project_key` / `report` / `worker_wait` / `ask` / `settled` / `note` / `tool_use` / `tool_running` / `tool_end` / `permission_denied` / `usage` / `peer_usage` / `context_usage` / `usage_notice` / `rate_limit` / `mirror`（生ログ） / `archive` / `closed` / `resume_failed` / `shutdown_unpushed_work` |
 
 **この表は写しである。正本は `packages/core/src/runner-protocol.ts` の `runnerEventSchema`（上りの種別）と `apps/runner/src/app.ts` のルート定義（下りの口）で、食い違ったら正本が勝つ。** 口を足すときは、`control`（合鍵）の内側に置くこと（下の「制御面の保護」）。
@@ -150,6 +150,7 @@
     `manager_stop` → `manager_start`）を言う。**force は無い**
   - **`liveBackgroundTasks` が無い（古い runner）ときは「分からない」として断る。** 0 とは読まない。
     デーモンと runner は別々にデプロイされるので、この欄は optional で、無い版と混ざる窓でも壊れない
+- **台帳が「繋がっていない」のに runner に旧プロセスが生きているとき（デーモン再起動後の done など）の resume は、短絡を名乗らせる**（Issue #2877）。`Host#resume` は生きたセッションが居ると新しい SDK を起こさず message をそこへ流して返す。旧プロセスの鍵は凍っているので、**デーモンが抱えている世代を現役へ書き換えると、古い鍵のまま走っているのに ⚠ が消える**。⟹ resume の応答に optional の `reusedLiveSession` を持たせ（短絡した回だけ true。`stopping` を待った後の短絡も含む）、デーモンは **true の回は世代を書かず「分からない」のまま残す**。`send` の detail が「生きた旧プロセスへ流した。鍵が現役か確かめていない」と言う。**欄を持たない古い runner（undefined）は従来どおり世代を書く——古い runner の間は短絡を見分けられない**（版が混ざる窓の限界）。古いデーモンの zod は未知の欄を捨てるだけで落ちない。旧プロセスの鍵を確かめて畳み直すところまでは、別の変更（セッションが起動時に掴んだ鍵の指紋を `GET /managers` で運ぶ）で扱う
 
 ### 制御面の保護 — マネージャーは自分の許可確認に答えられない
 

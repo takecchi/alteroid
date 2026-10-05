@@ -503,7 +503,7 @@ export interface RunnerHost {
    * `RunnerFenceError` を投げうる（世代が古い。呼び出し側は 409 へ変換すること）。
    * 戻り値の `cwd` は `start` と同じ約束（Issue #1814）。
    */
-  resume(command: RunnerResumeCommand): Promise<{ cwd: string }>;
+  resume(command: RunnerResumeCommand): Promise<{ cwd: string; reusedLiveSession: boolean }>;
   send(managerId: string, text: string): Promise<boolean>;
   /**
    * `delivered: false` = その確認は runner 側に無い。`decision` は確定した
@@ -1092,13 +1092,13 @@ class Host implements RunnerHost {
    * 合流先のセッションが `#create()` の時点で解決した値をそのまま返す——
    * 新しく作り直したわけではないので `#resolveCwd` を呼び直す理由が無い。
    */
-  async resume(command: RunnerResumeCommand): Promise<{ cwd: string }> {
+  async resume(command: RunnerResumeCommand): Promise<{ cwd: string; reusedLiveSession: boolean }> {
     const alive = this.#sessions.get(command.managerId);
     if (alive) {
       alive.checkFence(command.lease);
       if (!alive.stopping) {
         if (command.message !== undefined) alive.push(command.message);
-        return { cwd: alive.cwd };
+        return { cwd: alive.cwd, reusedLiveSession: true };
       }
       try {
         await alive.stop('resume 待ちのため、畳み中のセッションの完了を待った。');
@@ -1111,7 +1111,7 @@ class Host implements RunnerHost {
         if (!afterWait.stopping) {
           // 並行した resume が先に新しいセッションを作っていた。合流する。
           if (command.message !== undefined) afterWait.push(command.message);
-          return { cwd: afterWait.cwd };
+          return { cwd: afterWait.cwd, reusedLiveSession: true };
         }
         // 畳みが途中の例外で `#onClosed()` まで届かず、畳み済みの古い
         // セッションが名簿に残ったままだった。手で取り除いて作り直す。
@@ -1125,7 +1125,7 @@ class Host implements RunnerHost {
     // （`start` と同じ形）。
     session.checkFence(command.lease);
     session.resume(command.sessionId, command.entries, command.message);
-    return { cwd: session.cwd };
+    return { cwd: session.cwd, reusedLiveSession: false };
   }
 
   async send(managerId: string, text: string): Promise<boolean> {

@@ -1088,6 +1088,7 @@ export {
   type RunnerRegistry,
   type RunnerRegistryOptions,
   type RunnerRevisionStatus,
+  type RunnerResumeResult,
   type RunnerSessionOpenResult,
   type RunnerSource,
   type RunnerResumeCommand,

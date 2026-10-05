@@ -168,7 +168,9 @@ class LocalRunner implements RunnerClient {
   }
 
   /** 同上（`start` の doc）。 */
-  async resume(command: RunnerResumeCommand): Promise<{ cwd: string }> {
+  async resume(
+    command: RunnerResumeCommand,
+  ): Promise<{ cwd: string; reusedLiveSession: boolean }> {
     return this.#host.resume(command);
   }
 
