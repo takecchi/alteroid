@@ -9,7 +9,7 @@ import {
   SELF_JOURNALING_CLONE_TOOLS,
   TRACELESS_CLONE_TOOLS,
 } from './tools.js';
-import type { Stores } from './store.js';
+import { practiceVersion, type Stores } from './store.js';
 
 /**
  * `practice_*`（#1055 段3②）——クローンが「仕事のやり方」を読み書きする道具。
@@ -38,7 +38,18 @@ function harness(): Harness {
     async call(name, args) {
       const found = tools.find((entry) => entry.name === name);
       if (!found) throw new Error(`ツール ${name} が無い`);
-      const result = await found.handler(args as never, {});
+      // #2923: 版の照合は practice-base-version-2923.test.ts が見る。ここは別の関心の歯なので、
+      // 既存のやり方への書き換え・削除には「読んだ直後の版」を自動で添える。
+      const current =
+        (name === 'practice_write' || name === 'practice_remove') &&
+        args.base_version === undefined &&
+        typeof args.slug === 'string' &&
+        /^[a-z0-9._-]+$/.test(args.slug)
+          ? await stores.practices.read(args.slug)
+          : null;
+      const withVersion =
+        current === null ? args : { ...args, base_version: practiceVersion(current) };
+      const result = await found.handler(withVersion as never, {});
       return (result.content ?? [])
         .map((block) => (block.type === 'text' ? block.text : ''))
         .join('');
