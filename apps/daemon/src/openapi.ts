@@ -392,7 +392,20 @@ export const practiceListResponseSchema = z.object({
    */
   unreadable: z.array(unreadablePracticeSchema).optional(),
 });
-export const practiceReadResponseSchema = z.object({ practice: practiceSchema });
+/**
+ * `version` は `kind` / `title` / 本文（保存された形）の sha256 hex（`practiceVersion`、Issue #2853）。
+ * 書き換える側が持ち回り、`PUT /practices/{slug}` の `ifMatch` へ渡す。
+ * **版の履歴（`/versions`）の番号ではない。**
+ */
+export const practiceReadResponseSchema = z.object({
+  practice: practiceSchema,
+  version: z.string(),
+});
+/** `PUT /practices/{slug}` の 409。`current` は**いまの版**（読んだ後に消されていれば null）。 */
+export const practiceConflictResponseSchema = z.object({
+  error: z.string(),
+  current: practiceReadResponseSchema.nullable(),
+});
 export const practiceDeleteResponseSchema = z.object({ ok: z.literal(true), slug: z.string() });
 
 /**

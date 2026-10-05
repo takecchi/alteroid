@@ -31,6 +31,8 @@ import type {
 import {
   MemoryConflictError,
   memoryVersion,
+  PracticeConflictError,
+  practiceVersion,
   ARCHIVE_REMOVED_BYTES_UNIT_NOTE,
   JOURNAL_SEARCH_UNCOVERED_LIST_MD,
   MCP_SERVER_NAME,
@@ -201,6 +203,7 @@ import {
   permissionGrantsResponseSchema,
   practiceDeleteResponseSchema,
   practiceListResponseSchema,
+  practiceConflictResponseSchema,
   practiceReadResponseSchema,
   practiceVersionListResponseSchema,
   practiceVersionReadResponseSchema,
@@ -492,6 +495,12 @@ const practiceBody = z.object({
   kind: practiceKindSchema,
   title: z.string(),
   content: z.string(),
+  /**
+   * 任意（Issue #2853）。書き換える側が**読んだ時の版**（GET の `version`）。書く瞬間の版と
+   * 違えば書かずに 409。`null` は「読んだ時には無かった」。**省略は従来どおり後勝ち**
+   * （クローンの道具・CLI を壊さない）。`memoryBody.ifMatch` と同じ形。
+   */
+  ifMatch: z.string().nullable().optional(),
 });
 /**
  * 承認待ちへの回答の本体（`answer` と `selections` の少なくとも一方）。
@@ -3415,7 +3424,7 @@ export function createApp(deps: AppDeps) {
           );
         }
         if (!practice) return c.json({ error: 'not found' as const }, 404);
-        return c.json({ practice });
+        return c.json({ practice, version: practiceVersion(practice) });
       },
     )
 
@@ -3436,6 +3445,13 @@ export function createApp(deps: AppDeps) {
             description: 'やり方のスラッグが不正、または本文が JSON として不正。',
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
+          409: {
+            description:
+              '`ifMatch`（読んだ時の版）が、いまの版と違う（読んでから書くまでの間に別の書き手が' +
+              '書いた、または消した）。**何も書いていない**（版の履歴にも足していない）。' +
+              '`current` にいまの版を返す。',
+            content: { 'application/json': { schema: resolver(practiceConflictResponseSchema) } },
+          },
         },
       }),
       jsonBody(practiceBody, (where) => ({
@@ -3446,7 +3462,7 @@ export function createApp(deps: AppDeps) {
         if (!practiceSlugSchema.safeParse(slug).success) {
           return c.json({ error: 'やり方のスラッグが不正' as const }, 400);
         }
-        const { kind, title, content } = c.req.valid('json');
+        const { kind, title, content, ifMatch } = c.req.valid('json');
         // **issue #2011。** `before` は「作ったか書き直したか」の分岐にしか
         // 使わない（`write()` 自体は `before` の値に依存しない）。以前は
         // `read()` が壊れた行をそのまま返していたので、壊れた slug への PUT
@@ -3465,7 +3481,25 @@ export function createApp(deps: AppDeps) {
           before = null;
           beforeWasUnreadable = true;
         }
-        const practice = await stores.practices.write({ slug, kind, title, content });
+        let practice: Practice;
+        try {
+          practice = await stores.practices.write({ slug, kind, title, content }, { ifMatch });
+        } catch (error) {
+          // **黙って上書きしない（Issue #2853）。** 書いていないので日誌にも積まない。
+          if (error instanceof PracticeConflictError) {
+            return c.json(
+              {
+                error: 'やり方が読んだ後に変わっています（書き換えていません）' as const,
+                current:
+                  error.current === null
+                    ? null
+                    : { practice: error.current, version: practiceVersion(error.current) },
+              },
+              409,
+            );
+          }
+          throw error;
+        }
         // **書き換え自体はもう効いている**（Issue #2037）。日誌への追記だけが
         // 落ちても 500 を返さない——`appendJournalOrDrop` の doc。
         await appendJournalOrDrop(
@@ -3486,7 +3520,7 @@ export function createApp(deps: AppDeps) {
           'やり方書き換えの日誌',
           `slug=${slug}`,
         );
-        return c.json({ practice });
+        return c.json({ practice, version: practiceVersion(practice) });
       },
     )
 

@@ -4106,9 +4106,12 @@
                         "chars",
                         "content"
                       ]
+                    },
+                    "version": {
+                      "type": "string"
                     }
                   },
-                  "required": ["practice"]
+                  "required": ["practice", "version"]
                 }
               }
             }
@@ -4231,9 +4234,12 @@
                         "chars",
                         "content"
                       ]
+                    },
+                    "version": {
+                      "type": "string"
                     }
                   },
-                  "required": ["practice"]
+                  "required": ["practice", "version"]
                 }
               }
             }
@@ -4250,6 +4256,84 @@
                     }
                   },
                   "required": ["error"]
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`ifMatch`（読んだ時の版）が、いまの版と違う（読んでから書くまでの間に別の書き手が書いた、または消した）。**何も書いていない**（版の履歴にも足していない）。`current` にいまの版を返す。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "current": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "practice": {
+                              "type": "object",
+                              "properties": {
+                                "slug": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 128,
+                                  "pattern": "^[a-z0-9][a-z0-9._-]*$"
+                                },
+                                "kind": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 128
+                                },
+                                "title": {
+                                  "type": "string"
+                                },
+                                "createdAt": {
+                                  "type": "string",
+                                  "format": "date-time",
+                                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                                },
+                                "updatedAt": {
+                                  "type": "string",
+                                  "format": "date-time",
+                                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                                },
+                                "chars": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                "content": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "slug",
+                                "kind",
+                                "title",
+                                "createdAt",
+                                "updatedAt",
+                                "chars",
+                                "content"
+                              ]
+                            },
+                            "version": {
+                              "type": "string"
+                            }
+                          },
+                          "required": ["practice", "version"]
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": ["error", "current"]
                 }
               }
             }
@@ -4272,6 +4356,9 @@
                   },
                   "content": {
                     "type": "string"
+                  },
+                  "ifMatch": {
+                    "type": ["string", "null"]
                   }
                 },
                 "required": ["kind", "title", "content"]

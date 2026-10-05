@@ -1164,6 +1164,79 @@ describe('HTTP API', () => {
     expect(put.status).toBe(400);
   });
 
+  /**
+   * Issue #2853。やり方の書き換え（PUT）も、読んだ版を前提に付けられる（`ifMatch`。
+   * 記憶の #2743 と同じ形）。衝突したら書かず・日誌にも版の履歴にも積まず 409、いまの版を返す。
+   */
+  describe('PUT /practices/:slug の前提版（ifMatch、Issue #2853）', () => {
+    const put = (body: unknown) =>
+      app.request('/practices/daily-report', { ...json(body), method: 'PUT' });
+    const base = { kind: '日報', title: '日報の書き方' };
+    const readVersion = async () =>
+      ((await (await app.request('/practices/daily-report')).json()) as { version: string })
+        .version;
+
+    it('読んだ後に別の書き手が書いたなら、ifMatch 付きの PUT は 409 で、先の書き込みは消えない', async () => {
+      await stores.practices.write({ slug: 'daily-report', ...base, content: 'V1' });
+      const version = await readVersion();
+      // 人間が編集画面を開いている間に、クローンが同じやり方を書く。
+      await stores.practices.write({ slug: 'daily-report', ...base, content: 'クローンが書いた' });
+      const journalBefore = await stores.journal.list({ types: ['decision'] });
+
+      const res = await put({ ...base, content: '人間の書き直し', ifMatch: version });
+
+      expect(res.status).toBe(409);
+      const body = (await res.json()) as {
+        error: string;
+        current: { practice: { content: string }; version: string } | null;
+      };
+      expect(body.current?.practice.content).toBe('クローンが書いた\n');
+      expect(body.error).toContain('書き換えていません');
+      expect((await stores.practices.read('daily-report'))?.content).toBe('クローンが書いた\n');
+      // 版の履歴にも日誌にも積まれない。
+      expect(await stores.practices.listVersions('daily-report')).toHaveLength(2);
+      expect(await stores.journal.list({ types: ['decision'] })).toEqual(journalBefore);
+    });
+
+    it('ifMatch が最新と一致していれば書ける。応答の version は次の ifMatch に使える', async () => {
+      await stores.practices.write({ slug: 'daily-report', ...base, content: 'V1' });
+      const version = await readVersion();
+
+      const first = await put({ ...base, content: 'V2', ifMatch: version });
+      expect(first.status).toBe(200);
+      const next = ((await first.json()) as { version: string }).version;
+      expect(next).not.toBe(version);
+      expect((await put({ ...base, content: 'V3', ifMatch: next })).status).toBe(200);
+    });
+
+    it('ifMatch: null は「読んだ時は無かった」。その間に作られていれば 409、無ければ作れる', async () => {
+      expect((await put({ ...base, content: '新しい', ifMatch: null })).status).toBe(200);
+      const again = await put({ ...base, content: '別の内容', ifMatch: null });
+      expect(again.status).toBe(409);
+      expect((await stores.practices.read('daily-report'))?.content).toBe('新しい\n');
+    });
+
+    it('読んだ後に消されていたら、ifMatch 付きの PUT は 409（current は null）', async () => {
+      await stores.practices.write({ slug: 'daily-report', ...base, content: 'V1' });
+      const version = await readVersion();
+      await stores.practices.remove('daily-report');
+
+      const res = await put({ ...base, content: '人間', ifMatch: version });
+
+      expect(res.status).toBe(409);
+      expect(((await res.json()) as { current: unknown }).current).toBeNull();
+      expect(await stores.practices.read('daily-report')).toBeNull();
+    });
+
+    it('ifMatch を付けない従来の PUT は、これまでどおり後勝ちで書ける（後方互換）', async () => {
+      await stores.practices.write({ slug: 'daily-report', ...base, content: 'V1' });
+      await stores.practices.write({ slug: 'daily-report', ...base, content: 'V2' });
+      const res = await put({ ...base, content: '全文置換' });
+      expect(res.status).toBe(200);
+      expect((await stores.practices.read('daily-report'))?.content).toBe('全文置換\n');
+    });
+  });
+
   it('存在しないやり方は 404', async () => {
     expect((await app.request('/practices/nope')).status).toBe(404);
   });
