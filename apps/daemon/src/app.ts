@@ -61,6 +61,7 @@ import {
   chatStreamEventSchema,
   collectConversations,
   countUnread,
+  countUnreadConversations,
   effectiveReadThrough,
   loadConversationReadView,
   commitmentActiveDelegationIds,
@@ -175,6 +176,7 @@ import {
   conversationReadRequestSchema,
   conversationReadResponseSchema,
   conversationsResponseSchema,
+  unreadConversationCountResponseSchema,
   credentialsResponseSchema,
   credentialsUpdateRequestSchema,
   credentialsUpdateResponseSchema,
@@ -2714,6 +2716,41 @@ export function createApp(deps: AppDeps) {
            */
           hiddenByLimit: allConversations.length - conversations.length,
         });
+      },
+    )
+
+    /**
+     * 未読のある会話の数だけを返す軽い口（左ナビの札用。全ページから呼ばれる）。
+     * **`/conversations/:id` より前に置くこと**（`:id` に `unread-count` が食われる）。
+     */
+    .get(
+      '/conversations/unread-count',
+      describeRoute({
+        tags: ['conversations'],
+        summary: '未読のある会話の数',
+        description:
+          '未読のある会話の数（全会話で数える。直近の一覧には限らない）。**日誌を広く遡らない** — ' +
+          '会話ごとの最後のクローン側発言の時刻の索引（日誌の写し）を、前回の続きから' +
+          '新しく積まれた分だけ足して数える。未読の会話が上限（99）を超えるとき、または長い' +
+          '不在のあとの取り込みが1回に収まらないときは `capped: true`（`count` は下限。UI は「N+」）。' +
+          '一覧の `unreadCount` との差が出うるのは、編集で畳まれた返答が会話の最後のクローン側発言のとき' +
+          '（その会話を開いて既読にすれば揃う）。既読の記録が読めないときは `readStateUnreadable` が載る。',
+        responses: {
+          200: {
+            description: '未読のある会話の数。',
+            content: {
+              'application/json': { schema: resolver(unreadConversationCountResponseSchema) },
+            },
+          },
+        },
+      }),
+      async (c) => {
+        const result = await countUnreadConversations({
+          journal: stores.journal,
+          reads: stores.conversationReads,
+          now: (deps.now ?? (() => new Date()))().toISOString(),
+        });
+        return c.json(result);
       },
     )
 

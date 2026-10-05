@@ -1,5 +1,6 @@
+import { readConversationWindow } from './conversation.js';
 import { compareIsoInstant } from './iso-instant.js';
-import type { ConversationReadStore } from './store.js';
+import type { ConversationReadStore, JournalStore } from './store.js';
 
 /**
  * 会話の既読の位置（保存の型と、器の契約テスト）。
@@ -43,6 +44,23 @@ export type ConversationReadRead =
       positions: Record<string, ConversationReadPosition>;
     }
   | { state: 'unreadable'; reason: string };
+
+/**
+ * 「会話ごとの、最後のクローン側発言の時刻」の索引（未読のある会話の数を、日誌を広く
+ * 遡らずに数えるためのもの）。
+ *
+ * **日誌の写しであって真実ではない**（日誌から作り直せる）。`watermark` は「これ以前
+ * （の少し手前まで）の日誌は索引へ取り込み済み」の印で、数えるたびに前回の続きから
+ * 新しく積まれた分だけを日誌から読んで足す。基準時刻より前は取り込まない。
+ */
+export interface ConversationOutboundIndex {
+  watermark: string | null;
+  /** conversationId → その会話の最後のクローン側発言（`role: 'outbound'`）の `at`。 */
+  lastOutbound: Record<string, string>;
+}
+
+export type ConversationOutboundIndexRead =
+  ({ state: 'ok' } & ConversationOutboundIndex) | { state: 'unreadable'; reason: string };
 
 /** `ensureBaseline` の結果。記録が読めないときは書き換えず、そう返す。 */
 export type ConversationBaselineResult =
@@ -206,4 +224,162 @@ export async function verifyConversationReadStoreContract(
   ) {
     fail(`位置を進めたら基準時刻が変わった: ${JSON.stringify(afterRace)}`);
   }
+
+  // --- 8. 索引（会話ごとの最後のクローン側発言の時刻）: 空 → 足す → 単調 → 消す ---
+  const emptyIndex = await store.readOutboundIndex();
+  if (
+    emptyIndex.state !== 'ok' ||
+    emptyIndex.watermark !== null ||
+    Object.keys(emptyIndex.lastOutbound).length !== 0
+  ) {
+    fail(`空の器の索引が空でない: ${JSON.stringify(emptyIndex)}`);
+  }
+  await store.mergeOutboundIndex({
+    watermark: '2026-10-01T00:01:00.000Z',
+    lastOutbound: { 'c-a': '2026-10-01T00:00:50.000Z' },
+  });
+  await store.mergeOutboundIndex({
+    watermark: '2026-10-01T00:00:30.000Z',
+    lastOutbound: { 'c-a': '2026-10-01T00:00:40.000Z', 'c-b': '2026-10-01T00:00:45.000Z' },
+  });
+  await store.mergeOutboundIndex({ watermark: null, lastOutbound: {} });
+  const merged = await store.readOutboundIndex();
+  if (
+    merged.state !== 'ok' ||
+    merged.watermark === null ||
+    compareIsoInstant(merged.watermark, '2026-10-01T00:01:00.000Z') !== 0 ||
+    compareIsoInstant(
+      merged.lastOutbound['c-a'] ?? '1970-01-01T00:00:00.000Z',
+      '2026-10-01T00:00:50.000Z',
+    ) !== 0 ||
+    compareIsoInstant(
+      merged.lastOutbound['c-b'] ?? '1970-01-01T00:00:00.000Z',
+      '2026-10-01T00:00:45.000Z',
+    ) !== 0
+  ) {
+    fail(`索引が単調に足されない（古い値で戻った・足した分が消えた）: ${JSON.stringify(merged)}`);
+  }
+  // 索引は位置・基準時刻に触れない
+  const afterIndex = await store.read();
+  if (
+    afterIndex.state !== 'ok' ||
+    afterIndex.baseline === null ||
+    compareIsoInstant(afterIndex.baseline, b1) !== 0 ||
+    afterIndex.positions['c-a'] === undefined
+  ) {
+    fail('索引を足したら位置か基準時刻が変わった');
+  }
+  await store.clearOutboundIndex();
+  const cleared = await store.readOutboundIndex();
+  if (
+    cleared.state !== 'ok' ||
+    cleared.watermark !== null ||
+    Object.keys(cleared.lastOutbound).length !== 0
+  ) {
+    fail(`clearOutboundIndex() の後に索引が残る: ${JSON.stringify(cleared)}`);
+  }
+}
+
+/** 未読のある会話の数の応答。 */
+export interface UnreadConversationCount {
+  count: number;
+  /** 数え切れていない（`count` は下限）。 */
+  capped: boolean;
+  readStateUnreadable?: string;
+}
+
+/** 数えて返す会話数の上限。これを超えたら `capped`（UI は「N+」と出す）。 */
+export const UNREAD_CONVERSATION_COUNT_CAP = 99;
+/** 索引へ取り込むとき、日誌を1回に読む件数と、1回の呼び出しで読む回数の上限。 */
+const INDEX_CHUNK = 500;
+const INDEX_MAX_CHUNKS = 40;
+/** 取り込み済みの印を「いま」より手前に置く幅（書き込みの完了が `at` より遅れても取りこぼさない）。 */
+const WATERMARK_LAG_MS = 60_000;
+
+function laterIso(a: string, b: string): string {
+  return compareIsoInstant(a, b) >= 0 ? a : b;
+}
+
+/**
+ * 未読のある会話の数（全会話で数える。左ナビの札用で、全ページから呼ばれる）。
+ *
+ * **日誌を広く遡らない。** 費用は「前回から新しく積まれた発言」の件数で決まる:
+ * 1. 索引（会話ごとの最後のクローン側発言の時刻）の続きだけを日誌から読んで足す
+ *    （`since` = 取り込み済みの印）。日誌が育っても、1回の費用は新しい分だけである
+ * 2. 索引と既読の記録（位置と基準時刻の遅いほう）だけで数える
+ *
+ * 一覧の `unreadCount`（窓の中で見える発言を数える）との差が出うる条件: 編集で既定ビュー
+ * から畳まれた返答が会話の最後のクローン側発言のとき（索引は畳みを知らない）。その会話を
+ * 開いて既読にすれば揃う。
+ *
+ * `capped` になるのは、未読の会話が上限（`UNREAD_CONVERSATION_COUNT_CAP`）を超えるとき、または
+ * 長い不在のあとの取り込みが1回の上限に収まらなかったとき（続きは次の呼び出しで読む）。
+ */
+export async function countUnreadConversations(
+  deps: { journal: Pick<JournalStore, 'list'>; reads: ConversationReadStore; now: string },
+  options: { cap?: number; chunk?: number; maxChunks?: number } = {},
+): Promise<UnreadConversationCount> {
+  const cap = options.cap ?? UNREAD_CONVERSATION_COUNT_CAP;
+  const chunk = options.chunk ?? INDEX_CHUNK;
+  const maxChunks = options.maxChunks ?? INDEX_MAX_CHUNKS;
+  const { journal, reads, now } = deps;
+
+  const view = await loadConversationReadView(reads, now);
+  if (view.unreadable !== undefined || view.baseline === null) {
+    return { count: 0, capped: false, readStateUnreadable: view.unreadable ?? '基準時刻が無い' };
+  }
+  const before = await reads.readOutboundIndex();
+  if (before.state === 'unreadable') {
+    return { count: 0, capped: false, readStateUnreadable: before.reason };
+  }
+
+  // 前回の続きから。基準時刻より前は取り込まない。
+  const from =
+    before.watermark === null ? view.baseline : laterIso(before.watermark, view.baseline);
+  const found: Record<string, string> = {};
+  let until: string | undefined;
+  let complete = false;
+  for (let i = 0; i < maxChunks; i += 1) {
+    const rows = await readConversationWindow(journal, {
+      scan: chunk,
+      since: from,
+      ...(until === undefined ? {} : { until }),
+    });
+    for (const row of rows) {
+      if (row.type !== 'exchange' || row.role !== 'outbound' || row.conversationId === undefined) {
+        continue;
+      }
+      const known = found[row.conversationId];
+      if (known === undefined || compareIsoInstant(row.at, known) > 0) {
+        found[row.conversationId] = row.at;
+      }
+    }
+    if (rows.length < chunk) {
+      complete = true;
+      break;
+    }
+    const oldest = rows[rows.length - 1]!.at;
+    // 同じ時刻だけで chunk が埋まると先へ進めない（起こらないはずの防御）。
+    if (until !== undefined && compareIsoInstant(oldest, until) >= 0) break;
+    until = oldest;
+  }
+  const lagged = new Date(Date.parse(now) - WATERMARK_LAG_MS).toISOString();
+  await reads.mergeOutboundIndex({
+    // 全部読み切ったときだけ印を進める。読み切れなかった回は、次の呼び出しがもう一度同じ所から読む。
+    watermark: complete ? laterIso(from, lagged) : null,
+    lastOutbound: found,
+  });
+
+  const index = await reads.readOutboundIndex();
+  if (index.state === 'unreadable') {
+    return { count: 0, capped: false, readStateUnreadable: index.reason };
+  }
+  let count = 0;
+  for (const [conversationId, lastAt] of Object.entries(index.lastOutbound)) {
+    const position = view.positions[conversationId]?.readThrough;
+    const floor = position === undefined ? view.baseline : laterIso(position, view.baseline);
+    if (compareIsoInstant(lastAt, floor) > 0) count += 1;
+  }
+  const over = count > cap;
+  return { count: over ? cap : count, capped: over || !complete };
 }

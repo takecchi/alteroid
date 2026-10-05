@@ -771,6 +771,12 @@ export const STATEMENTS = [
      id text primary key,
      at timestamptz not null
    )`,
+  // 未読のある会話の数のための索引（日誌の写し）。列の追加と新しい表だけで、既存行の意味は変わらない。
+  `alter table conversation_read_baseline add column if not exists scanned_through timestamptz`,
+  `create table if not exists conversation_outbound_latest (
+     conversation_id text primary key,
+     at timestamptz not null
+   )`,
 ] as const;
 
 /** `ensureOpenManagerBodyIndex` が作る部分 unique 索引の名前（issue #1041）。 */

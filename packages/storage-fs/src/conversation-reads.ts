@@ -4,6 +4,8 @@ import { dirname, join } from 'node:path';
 import { compareIsoInstant } from '@alteroid/core';
 import type {
   ConversationBaselineResult,
+  ConversationOutboundIndex,
+  ConversationOutboundIndexRead,
   ConversationReadPosition,
   ConversationReadRead,
   ConversationReadStore,
@@ -21,9 +23,16 @@ const positionSchema = z.object({
 const fileSchema = z.object({
   baseline: z.string().datetime({ offset: true }).nullable(),
   conversations: z.record(z.string(), positionSchema),
+  /** 会話ごとの最後のクローン側発言の時刻の索引（日誌の写し）。古いファイルには無い。 */
+  outbound: z
+    .object({
+      watermark: z.string().datetime({ offset: true }).nullable(),
+      lastOutbound: z.record(z.string(), z.string().datetime({ offset: true })),
+    })
+    .default({ watermark: null, lastOutbound: {} }),
 });
 
-type FileContent = z.infer<typeof fileSchema>;
+type FileContent = z.output<typeof fileSchema>;
 
 /**
  * 会話の既読の位置と基準時刻（既定 `~/.alteroid/jobs/conversation-reads.json`）。
@@ -48,7 +57,14 @@ export class FsConversationReadStore implements ConversationReadStore {
       raw = await readFile(this.#path, 'utf8');
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-        return { state: 'ok', content: { baseline: null, conversations: {} } };
+        return {
+          state: 'ok',
+          content: {
+            baseline: null,
+            conversations: {},
+            outbound: { watermark: null, lastOutbound: {} },
+          },
+        };
       }
       return { state: 'unreadable', reason: describeError(error) };
     }
@@ -98,7 +114,11 @@ export class FsConversationReadStore implements ConversationReadStore {
       const content: FileContent =
         loaded.state === 'ok'
           ? loaded.content
-          : { baseline: new Date().toISOString(), conversations: {} };
+          : {
+              baseline: new Date().toISOString(),
+              conversations: {},
+              outbound: { watermark: null, lastOutbound: {} },
+            };
       const current = content.conversations[conversationId];
       if (current !== undefined && compareIsoInstant(readThrough, current.readThrough) <= 0) {
         return current;
@@ -112,6 +132,42 @@ export class FsConversationReadStore implements ConversationReadStore {
         conversations: { ...content.conversations, [conversationId]: next },
       });
       return next;
+    });
+  }
+
+  async readOutboundIndex(): Promise<ConversationOutboundIndexRead> {
+    const loaded = await this.#load();
+    if (loaded.state === 'unreadable') return loaded;
+    return { state: 'ok', ...loaded.content.outbound };
+  }
+
+  async mergeOutboundIndex(update: ConversationOutboundIndex): Promise<void> {
+    await mkdir(dirname(this.#path), { recursive: true });
+    await withPathLock(this.#path, async () => {
+      const loaded = await this.#load();
+      // 読めないファイルは書き換えない（位置の手がかりを黙って消さない）。
+      if (loaded.state === 'unreadable') return;
+      const current = loaded.content.outbound;
+      const watermark =
+        update.watermark !== null &&
+        (current.watermark === null || compareIsoInstant(update.watermark, current.watermark) > 0)
+          ? update.watermark
+          : current.watermark;
+      const lastOutbound = { ...current.lastOutbound };
+      for (const [id, at] of Object.entries(update.lastOutbound)) {
+        const known = lastOutbound[id];
+        if (known === undefined || compareIsoInstant(at, known) > 0) lastOutbound[id] = at;
+      }
+      await this.#write({ ...loaded.content, outbound: { watermark, lastOutbound } });
+    });
+  }
+
+  async clearOutboundIndex(): Promise<void> {
+    await mkdir(dirname(this.#path), { recursive: true });
+    await withPathLock(this.#path, async () => {
+      const loaded = await this.#load();
+      if (loaded.state === 'unreadable') return;
+      await this.#write({ ...loaded.content, outbound: { watermark: null, lastOutbound: {} } });
     });
   }
 

@@ -172,4 +172,74 @@ describe('会話の既読', () => {
     expect(unreadOf(await list(), 'c')).toBe(0);
     expect(unreadOf(await list(), 'd')).toBe(1);
   });
+
+  describe('GET /conversations/unread-count', () => {
+    const count = async () =>
+      (await (await app.request('/conversations/unread-count')).json()) as {
+        count: number;
+        capped: boolean;
+      };
+
+    it('全会話で数える（一覧の既定の件数を超えても）。:id に食われない', async () => {
+      tick(1);
+      await count(); // 基準時刻が決まる
+      tick(2);
+      for (let i = 0; i < 35; i += 1) await say(`c${i}`, 'outbound', '返答');
+      tick(3);
+      const res = await app.request('/conversations/unread-count');
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ count: 35, capped: false });
+      expect((await list()).conversations).toHaveLength(20); // 一覧は既定 20 件まで
+    });
+
+    it('基準時刻以前は数えず、導入後の返答は数え、既読で減る', async () => {
+      await say('old', 'outbound', '前の返答');
+      tick(10);
+      expect(await count()).toEqual({ count: 0, capped: false });
+      tick(11);
+      const fresh = await say('old', 'outbound', '後の返答');
+      await say('new', 'outbound', '新しい会話');
+      tick(12);
+      expect(await count()).toEqual({ count: 2, capped: false });
+      await app.request('/conversations/old/read', post({ through: fresh.id }));
+      expect(await count()).toEqual({ count: 1, capped: false });
+    });
+
+    it('人間自身の発言だけの会話は数えない', async () => {
+      tick(1);
+      await count();
+      tick(2);
+      await say('mine', 'inbound', '私の発言');
+      tick(3);
+      expect(await count()).toEqual({ count: 0, capped: false });
+    });
+
+    it('2回目以降は前回の続きだけを日誌から読む（遡りが広がらない）', async () => {
+      tick(1);
+      await count();
+      tick(200);
+      await say('a', 'outbound', '返答');
+      await count();
+      const sinces: (string | undefined)[] = [];
+      const list = stores.journal.list.bind(stores.journal);
+      stores.journal.list = (query) => {
+        sinces.push(query?.since);
+        return list(query);
+      };
+      tick(300);
+      await count();
+      expect(sinces).toHaveLength(1);
+      // 取り込み済みの印（約 200 秒時点）より前へは戻らない
+      expect(Date.parse(sinces[0] ?? '')).toBeGreaterThanOrEqual(T0 + 100 * 1000);
+    });
+
+    it('上限（99）を超えたら capped で、count は上限', async () => {
+      tick(1);
+      await count();
+      tick(2);
+      for (let i = 0; i < 100; i += 1) await say(`c${i}`, 'outbound', '返答');
+      tick(3);
+      expect(await count()).toEqual({ count: 99, capped: true });
+    });
+  });
 });

@@ -378,6 +378,15 @@ export const conversationReadRequestSchema = z.object({
   through: z.string().min(1),
 });
 
+/** `GET /conversations/unread-count` の応答（左ナビの札用）。 */
+export const unreadConversationCountResponseSchema = z.object({
+  /** 未読のある会話の数（全会話で数える）。`capped` のときは下限。 */
+  count: z.number().int(),
+  /** 数え切れていない（上限を超えた、または日誌からの取り込みが1回に収まらなかった）。UI は「N+」と出す。 */
+  capped: z.boolean(),
+  readStateUnreadable: readStateUnreadableSchema,
+});
+
 /** `POST /conversations/:id/read` の応答。進めた後の実効の位置と未読数（一覧・詳細と同じ数え方）。 */
 export const conversationReadResponseSchema = z.object({
   conversationId: z.string(),
