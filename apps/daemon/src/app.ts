@@ -31,6 +31,8 @@ import type {
 import {
   MemoryConflictError,
   memoryVersion,
+  PracticeConflictError,
+  practiceVersion,
   ARCHIVE_REMOVED_BYTES_UNIT_NOTE,
   JOURNAL_SEARCH_UNCOVERED_LIST_MD,
   MCP_SERVER_NAME,
@@ -60,6 +62,10 @@ import {
   approvalUpdatedAt,
   chatStreamEventSchema,
   collectConversations,
+  countUnread,
+  countUnreadConversations,
+  effectiveReadThrough,
+  loadConversationReadView,
   commitmentActiveDelegationIds,
   commitmentPosition,
   commitmentRespondedAt,
@@ -169,7 +175,10 @@ import {
   progressResponseSchema,
   commitmentOpenedResponseSchema,
   conversationDetailResponseSchema,
+  conversationReadRequestSchema,
+  conversationReadResponseSchema,
   conversationsResponseSchema,
+  unreadConversationCountResponseSchema,
   credentialsResponseSchema,
   credentialsUpdateRequestSchema,
   credentialsUpdateResponseSchema,
@@ -201,6 +210,7 @@ import {
   permissionGrantsResponseSchema,
   practiceDeleteResponseSchema,
   practiceListResponseSchema,
+  practiceConflictResponseSchema,
   practiceReadResponseSchema,
   practiceVersionListResponseSchema,
   practiceVersionReadResponseSchema,
@@ -481,6 +491,18 @@ const chatBody = z.object({
  */
 const memoryBody = z.object({ content: z.string(), ifMatch: z.string().nullable().optional() });
 /**
+ * `DELETE /memory/:slug` のクエリ（Issue #2881）。`ifMatch` は消す側が**読んだ時の版**
+ * （GET の `version`）。いまの版と違えば消さずに 409。**省略は従来どおり消す**（段階1。
+ * Web の削除ボタンが版を送れるようになるまでの移行。省略したときは応答に `warning` が載る）。
+ * 削除は「無い」ものを消す意味が無いので、PUT と違って `null` は受けない。
+ */
+const memoryDeleteQuery = z.object({ ifMatch: z.string().min(1).optional() });
+/** 版を付けない削除への警告文（段階1。応答の `warning`）。 */
+const MEMORY_DELETE_UNVERSIONED_WARNING =
+  '版の照合なしで消しました。読んだ後に別の書き手（クローンなど）が書いた内容も消えます。' +
+  '削除にも読んだ版を `ifMatch`（クエリ。GET /memory/:slug の `version`）で付けてください。' +
+  '今後、版のない削除は断るようになる予定です。';
+/**
  * `PracticeStore.write` の入力そのまま（`slug` だけは経路から取る）。
  *
  * **`kind` に列挙を課さない。** `practiceKindSchema` は `z.string().min(1).max(128)`
@@ -492,6 +514,12 @@ const practiceBody = z.object({
   kind: practiceKindSchema,
   title: z.string(),
   content: z.string(),
+  /**
+   * 任意（Issue #2853）。書き換える側が**読んだ時の版**（GET の `version`）。書く瞬間の版と
+   * 違えば書かずに 409。`null` は「読んだ時には無かった」。**省略は従来どおり後勝ち**
+   * （クローンの道具・CLI を壊さない）。`memoryBody.ifMatch` と同じ形。
+   */
+  ifMatch: z.string().nullable().optional(),
 });
 /**
  * 承認待ちへの回答の本体（`answer` と `selections` の少なくとも一方）。
@@ -2677,10 +2705,24 @@ export function createApp(deps: AppDeps) {
          * なった欠陥そのものである。日誌の順序をそのまま会話の順序にする理由
          * （同じミリ秒の前後は時刻からは決められない）も、移設先に書いてある。
          */
-        const allConversations = collectConversations(entries);
-        const conversations = allConversations.slice(0, limit);
+        /**
+         * 既読の記録は全員で1組（`ConversationReadStore`）。基準時刻が無ければここで決める
+         * （どの経路でも決まる）。数え方は `collectConversations` が持つ——ここで数え直さない。
+         */
+        const readView = await loadConversationReadView(
+          stores.conversationReads,
+          (deps.now ?? (() => new Date()))().toISOString(),
+        );
+        const allConversations = collectConversations(entries, readView);
+        const conversations = allConversations.slice(0, limit).map(({ unread, ...summary }) => ({
+          ...summary,
+          unreadCount: unread,
+        }));
         return c.json({
           conversations,
+          ...(readView.unreadable === undefined
+            ? {}
+            : { readStateUnreadable: readView.unreadable }),
           /**
            * 遡った範囲。**#418 より前は「日誌の `exchange` を何件見たか」
            * だったが、いまは「人間との往復を何件見たか」である**
@@ -2714,6 +2756,41 @@ export function createApp(deps: AppDeps) {
            */
           hiddenByLimit: allConversations.length - conversations.length,
         });
+      },
+    )
+
+    /**
+     * 未読のある会話の数だけを返す軽い口（左ナビの札用。全ページから呼ばれる）。
+     * **`/conversations/:id` より前に置くこと**（`:id` に `unread-count` が食われる）。
+     */
+    .get(
+      '/conversations/unread-count',
+      describeRoute({
+        tags: ['conversations'],
+        summary: '未読のある会話の数',
+        description:
+          '未読のある会話の数（全会話で数える。直近の一覧には限らない）。**日誌を広く遡らない** — ' +
+          '会話ごとの最後のクローン側発言の時刻の索引（日誌の写し）を、前回の続きから' +
+          '新しく積まれた分だけ足して数える。未読の会話が上限（99）を超えるとき、または長い' +
+          '不在のあとの取り込みが1回に収まらないときは `capped: true`（`count` は下限。UI は「N+」）。' +
+          '一覧の `unreadCount` との差が出うるのは、編集で畳まれた返答が会話の最後のクローン側発言のとき' +
+          '（その会話を開いて既読にすれば揃う）。既読の記録が読めないときは `readStateUnreadable` が載る。',
+        responses: {
+          200: {
+            description: '未読のある会話の数。',
+            content: {
+              'application/json': { schema: resolver(unreadConversationCountResponseSchema) },
+            },
+          },
+        },
+      }),
+      async (c) => {
+        const result = await countUnreadConversations({
+          journal: stores.journal,
+          reads: stores.conversationReads,
+          now: (deps.now ?? (() => new Date()))().toISOString(),
+        });
+        return c.json(result);
       },
     )
 
@@ -2831,9 +2908,23 @@ export function createApp(deps: AppDeps) {
         if (messages.length === 0 && reached) {
           return c.json({ error: 'not found' as const }, 404);
         }
+        const readView = await loadConversationReadView(
+          stores.conversationReads,
+          (deps.now ?? (() => new Date()))().toISOString(),
+        );
+        const readThrough = effectiveReadThrough(readView, id);
         return c.json({
           conversationId: id,
           messages,
+          readThrough,
+          // 既定ビューで見えている発言で数える（`includeSuperseded` に左右されない）。
+          unreadCount: countUnread(
+            allMessages.filter((message) => message.supersededBy === undefined),
+            readThrough,
+          ),
+          ...(readView.unreadable === undefined
+            ? {}
+            : { readStateUnreadable: readView.unreadable }),
           /** 人間との往復を何件遡ったか（`scanned` の意味は上のコメントに書いた）。 */
           scanned: entries.length,
           reachedStart: reached,
@@ -2843,6 +2934,73 @@ export function createApp(deps: AppDeps) {
            * クローンだけでなく人間の側の器も畳まれた版の存在に気づけない）。
            */
           supersededCount,
+        });
+      },
+    )
+
+    /**
+     * 会話を既読にする。**`through` は発言の id で、時刻は日誌から引く**（クライアントから
+     * 時刻を受け取らない——「いま」で既読にして、見ていない分まで既読にする誤りを構造で防ぐ）。
+     */
+    .post(
+      '/conversations/:id/read',
+      describeRoute({
+        tags: ['conversations'],
+        summary: '会話を既読にする（位置を進める）',
+        description:
+          '既読の位置（全員で1組）を、`through` で指した発言の時刻まで進める。**`through` は' +
+          '発言の id**（`GET /conversations/:id` の `messages[].id`）で、時刻はサーバが日誌から' +
+          '引く。**戻らない**——いまの位置より古い発言を指しても何も変わらず、200 でいまの' +
+          '位置を返す。発言が無い・人間との往復でないときは 404、別の会話の発言のときは 400。' +
+          '応答は進めた後の実効の位置と未読数（一覧・詳細と同じ数え方。窓は既定の `scan`）。',
+        responses: {
+          200: {
+            description: '進めた後の実効の既読の位置と未読数。',
+            content: { 'application/json': { schema: resolver(conversationReadResponseSchema) } },
+          },
+          400: {
+            description: '本文が不正、または `through` の発言がこの会話のものでない。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+          404: {
+            description: '`through` の発言が日誌に無い（人間との往復でない場合を含む）。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+        },
+      }),
+      jsonBody(conversationReadRequestSchema),
+      async (c) => {
+        const id = c.req.param('id');
+        const { through } = c.req.valid('json');
+        const target = await stores.journal.get(through);
+        if (target === null || target.type !== 'exchange' || target.with !== 'human') {
+          return c.json({ error: `発言 ${through} は見つからない` as const }, 404);
+        }
+        if (target.conversationId !== id) {
+          return c.json(
+            {
+              error: `発言 ${through} はこの会話のものではない。**既読の位置は動かしていない。**`,
+            },
+            400,
+          );
+        }
+        const now = (deps.now ?? (() => new Date()))().toISOString();
+        // 基準時刻が無ければ先に決める（位置より後に基準時刻が決まる順を作らない）。
+        await stores.conversationReads.ensureBaseline(now);
+        await stores.conversationReads.advance(id, target.at);
+        const readView = await loadConversationReadView(stores.conversationReads, now);
+        const entries = await readConversationWindow(stores.journal, {
+          scan: conversationsQuery.shape.scan.parse(undefined),
+        });
+        const readThrough = effectiveReadThrough(readView, id);
+        const visible = conversationMessages(entries, id);
+        return c.json({
+          conversationId: id,
+          readThrough,
+          unreadCount: countUnread(visible, readThrough),
+          ...(readView.unreadable === undefined
+            ? {}
+            : { readStateUnreadable: readView.unreadable }),
         });
       },
     )
@@ -3260,11 +3418,23 @@ export function createApp(deps: AppDeps) {
         summary: '記憶文書を消す',
         description:
           '書けるのに消せないと、間違って作った記憶が永久に判断の材料に残る。消した事実は' +
-          '日誌に残る（`cause: human`）ので、記憶から消えても記録からは消えない。',
+          '日誌に残る（`cause: human`）ので、記憶から消えても記録からは消えない。\n\n' +
+          '**読んだ版を前提にできる（Issue #2881）。** クエリ `ifMatch` に、読んだ時の版' +
+          '（`GET /memory/{slug}` の `version`）を付けると、いまの版と違うとき**何も消さず 409** で' +
+          'いまの版を返す（読んだ後にクローンが書いた内容を黙って消さない）。\n\n' +
+          '**段階的に必須にする。** いまは `ifMatch` を付けない削除も通る（Web の削除が版を送るように' +
+          'なるまでの移行）が、応答に `warning` を載せ、デーモンの標準エラーと日誌にも「版の照合なし」と残す。' +
+          '移行が済んだら版を必須にする。',
         responses: {
           200: {
-            description: '消した。',
+            description: '消した。版を付けていなければ `warning` が載る。',
             content: { 'application/json': { schema: resolver(memoryDeleteResponseSchema) } },
+          },
+          409: {
+            description:
+              '`ifMatch`（読んだ時の版）が、いまの版と違う（読んでから消すまでの間に別の書き手が' +
+              '書いた）。**何も消していない。** `current` にいまの版を返す。',
+            content: { 'application/json': { schema: resolver(memoryConflictResponseSchema) } },
           },
           400: {
             description: '記憶のスラッグが名前として成立しない（「無い」とは区別する）。',
@@ -3276,11 +3446,13 @@ export function createApp(deps: AppDeps) {
           },
         },
       }),
+      queryParams(memoryDeleteQuery),
       async (c) => {
         const slug = c.req.param('slug');
         if (!memorySlugSchema.safeParse(slug).success) {
           return c.json({ error: '記憶のスラッグが不正' as const }, 400);
         }
+        const { ifMatch } = c.req.valid('query');
         const existing = await stores.persona.read(slug);
         if (existing === null) return c.json({ error: 'not found' as const }, 404);
         // **`markHumanTouched` はここでは呼ばない。** `PersonaStore.remove` は
@@ -3291,7 +3463,32 @@ export function createApp(deps: AppDeps) {
         // `action:'remove'` のこのエントリからは印を立て直さない（`storage.ts` の
         // backfill の doc）——delete は「人間の意思で消した」であって、
         // 将来ここに書かれる新しい内容を無条件に保護する理由にはならない。
-        await stores.persona.remove(slug);
+        try {
+          // 版の比較は消すのと同じ排他の中で行う（`PersonaStore.remove`）。
+          await stores.persona.remove(slug, ifMatch === undefined ? undefined : { ifMatch });
+        } catch (error) {
+          // **黙って消さない（Issue #2881）。** 消していないので日誌にも積まない。
+          if (error instanceof MemoryConflictError) {
+            return c.json(
+              {
+                error: '記憶が読んだ後に変わっています（消していません）' as const,
+                current:
+                  error.current === null
+                    ? null
+                    : { document: error.current, version: memoryVersion(error.current.content) },
+              },
+              409,
+            );
+          }
+          throw error;
+        }
+        // **段階1: 版のない削除は通すが、見えるようにする。** stderr へは slug だけ
+        // （本文は出さない。`base.onError` と同じ書式）。日誌の summary にも残す。
+        if (ifMatch === undefined) {
+          process.stderr.write(
+            `alteroidd: 記憶の削除を版の照合なしで通しました（slug=${slug}。\`ifMatch\` を付けると、読んだ後に書かれた内容を消さずに済みます）\n`,
+          );
+        }
         // **削除自体はもう効いている**（Issue #2037）。日誌への追記だけが
         // 落ちても 500 を返さない——`appendJournalOrDrop` の doc。
         await appendJournalOrDrop(
@@ -3303,12 +3500,18 @@ export function createApp(deps: AppDeps) {
             action: 'remove',
             bytesBefore: Buffer.byteLength(existing.content, 'utf8'),
             bytesAfter: 0,
-            summary: 'HTTP API 経由で人間が記憶を削除した',
+            summary:
+              'HTTP API 経由で人間が記憶を削除した' +
+              (ifMatch === undefined ? '（版の照合なし）' : ''),
           },
           '記憶削除の日誌',
           `slug=${slug}`,
         );
-        return c.json({ ok: true, slug });
+        return c.json(
+          ifMatch === undefined
+            ? { ok: true as const, slug, warning: MEMORY_DELETE_UNVERSIONED_WARNING }
+            : { ok: true as const, slug },
+        );
       },
     )
 
@@ -3416,7 +3619,7 @@ export function createApp(deps: AppDeps) {
           );
         }
         if (!practice) return c.json({ error: 'not found' as const }, 404);
-        return c.json({ practice });
+        return c.json({ practice, version: practiceVersion(practice) });
       },
     )
 
@@ -3437,6 +3640,13 @@ export function createApp(deps: AppDeps) {
             description: 'やり方のスラッグが不正、または本文が JSON として不正。',
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
+          409: {
+            description:
+              '`ifMatch`（読んだ時の版）が、いまの版と違う（読んでから書くまでの間に別の書き手が' +
+              '書いた、または消した）。**何も書いていない**（版の履歴にも足していない）。' +
+              '`current` にいまの版を返す。',
+            content: { 'application/json': { schema: resolver(practiceConflictResponseSchema) } },
+          },
         },
       }),
       jsonBody(practiceBody, (where) => ({
@@ -3447,7 +3657,7 @@ export function createApp(deps: AppDeps) {
         if (!practiceSlugSchema.safeParse(slug).success) {
           return c.json({ error: 'やり方のスラッグが不正' as const }, 400);
         }
-        const { kind, title, content } = c.req.valid('json');
+        const { kind, title, content, ifMatch } = c.req.valid('json');
         // **issue #2011。** `before` は「作ったか書き直したか」の分岐にしか
         // 使わない（`write()` 自体は `before` の値に依存しない）。以前は
         // `read()` が壊れた行をそのまま返していたので、壊れた slug への PUT
@@ -3466,7 +3676,25 @@ export function createApp(deps: AppDeps) {
           before = null;
           beforeWasUnreadable = true;
         }
-        const practice = await stores.practices.write({ slug, kind, title, content });
+        let practice: Practice;
+        try {
+          practice = await stores.practices.write({ slug, kind, title, content }, { ifMatch });
+        } catch (error) {
+          // **黙って上書きしない（Issue #2853）。** 書いていないので日誌にも積まない。
+          if (error instanceof PracticeConflictError) {
+            return c.json(
+              {
+                error: 'やり方が読んだ後に変わっています（書き換えていません）' as const,
+                current:
+                  error.current === null
+                    ? null
+                    : { practice: error.current, version: practiceVersion(error.current) },
+              },
+              409,
+            );
+          }
+          throw error;
+        }
         // **書き換え自体はもう効いている**（Issue #2037）。日誌への追記だけが
         // 落ちても 500 を返さない——`appendJournalOrDrop` の doc。
         await appendJournalOrDrop(
@@ -3487,7 +3715,7 @@ export function createApp(deps: AppDeps) {
           'やり方書き換えの日誌',
           `slug=${slug}`,
         );
-        return c.json({ practice });
+        return c.json({ practice, version: practiceVersion(practice) });
       },
     )
 

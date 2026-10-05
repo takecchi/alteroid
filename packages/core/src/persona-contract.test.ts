@@ -87,6 +87,53 @@ describe('PersonaStore の契約（インメモリ実装）', () => {
       expect((await stores.persona.read('values'))?.content).toBe('# 価値観\n\nV3\n');
     });
   });
+
+  describe('remove の前提の版 ifMatch（Issue #2881。fs・pg・インメモリで同じ挙動）', () => {
+    it('読んだ後に別の書き手が書いたなら、消さずに MemoryConflictError（current は書かれている文書）', async () => {
+      const stores = createMemoryStores();
+      await stores.persona.write('values', '# 価値観\n\nV1\n');
+      const v1 = memoryVersion((await stores.persona.read('values'))?.content ?? '');
+      await stores.persona.write('values', '# 価値観\n\nV1\n\nクローンの判断\n');
+
+      const error = await stores.persona.remove('values', { ifMatch: v1 }).catch((e: unknown) => e);
+
+      expect(error).toBeInstanceOf(MemoryConflictError);
+      expect((error as MemoryConflictError).current?.content).toContain('クローンの判断');
+      expect((await stores.persona.read('values'))?.content).toContain('クローンの判断');
+    });
+
+    it('版が合えば消せる。無い文書に版を指定したら MemoryConflictError（current は null）', async () => {
+      const stores = createMemoryStores();
+      await stores.persona.write('values', '# 価値観\n\nV1\n');
+      const v = memoryVersion((await stores.persona.read('values'))?.content ?? '');
+      await stores.persona.remove('values', { ifMatch: v });
+      expect(await stores.persona.read('values')).toBeNull();
+
+      const error = await stores.persona.remove('values', { ifMatch: v }).catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(MemoryConflictError);
+      expect((error as MemoryConflictError).current).toBeNull();
+    });
+
+    it('同じ版を前提にした書き込みと削除が重なっても、勝つのは1つだけ', async () => {
+      const stores = createMemoryStores();
+      await stores.persona.write('values', '# 価値観\n');
+      const v = memoryVersion((await stores.persona.read('values'))?.content ?? '');
+      const results = await Promise.allSettled([
+        stores.persona.write('values', '# 一\n', { ifMatch: v }),
+        stores.persona.remove('values', { ifMatch: v }),
+      ]);
+      expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+      expect(results.filter((r) => r.status === 'rejected')).toHaveLength(1);
+    });
+
+    it('ifMatch を付けなければ従来どおり無条件に消す（後方互換）', async () => {
+      const stores = createMemoryStores();
+      await stores.persona.write('values', '# 価値観\n');
+      await stores.persona.remove('values');
+      expect(await stores.persona.read('values')).toBeNull();
+    });
+  });
+
   it('write した本文は、末尾の改行が正規化されて読み戻る', async () => {
     const stores = createMemoryStores();
 

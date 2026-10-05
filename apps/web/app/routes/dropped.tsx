@@ -1,6 +1,7 @@
 import { JournalTabs } from '~/components/group-tabs';
-import { Page, Badge, Card, CardHeader, Empty, ErrorNote, Spinner } from '@alteroid/ui';
-import { useDropped, ApiError } from '@alteroid/swr';
+import { LoadError } from '~/components/load-error';
+import { Page, Badge, Card, CardHeader, Empty, Spinner } from '@alteroid/ui';
+import { useDropped } from '@alteroid/swr';
 import { formatDateTime } from '@alteroid/logic';
 import type { DroppedState } from '@alteroid/logic';
 
@@ -27,7 +28,7 @@ import type { DroppedState } from '@alteroid/logic';
  *    混ぜない）。
  */
 export default function Dropped() {
-  const { data, error, isLoading } = useDropped();
+  const { data, error, isLoading, isValidating, mutate } = useDropped();
 
   return (
     <Page
@@ -41,29 +42,17 @@ export default function Dropped() {
           subtitle="古いものが上、新しいものが下に並びます"
           action={data === undefined ? undefined : <Badge>{data.total}</Badge>}
         />
-        <DroppedErrorNote error={error} />
+        <LoadError
+          what="失敗の一覧"
+          error={error}
+          onRetry={() => mutate()}
+          retrying={isValidating}
+          className="m-4"
+        />
         {isLoading ? <Spinner /> : data === undefined ? null : <DroppedBody state={data} />}
       </Card>
     </Page>
   );
-}
-
-/**
- * **404 は「この口を持たない古いデーモン」専用の文言にする。** `tokens.tsx`
- * の 403 専用文言と同じ判断——汎用の `ErrorNote` に投げっぱなしにすると、
- * 「跡が無い」（0件）と「この版のデーモンにこの口が無い」の違いが読み手に
- * 伝わらない。
- */
-function DroppedErrorNote({ error }: { error: unknown }) {
-  if (error instanceof ApiError && error.status === 404) {
-    return (
-      <div className="px-4 pt-3 text-sm text-destructive">
-        この本体には、記録の失敗を見る機能がありません（版が古い可能性があります。本体を更新してください）。
-        失敗が0件だった、という意味ではありません。
-      </div>
-    );
-  }
-  return <ErrorNote error={error} className="m-4" />;
 }
 
 function DroppedBody({ state }: { state: DroppedState }) {

@@ -41,6 +41,7 @@ import {
   droppedTraceLedgerSince,
   fingerprintOf,
   mcpServersFingerprintOf,
+  memoryVersion,
   noteDroppedRecord,
   parseMcpServers,
   RunnerMcpServersUnsupportedError,
@@ -956,6 +957,75 @@ describe('HTTP API', () => {
     });
   });
 
+  /**
+   * Issue #2881。人間の削除（DELETE）も、読んだ版を前提に付けられる（`ifMatch`、クエリ）。
+   * 読んでから消すまでの間にクローンが書いていたら、**消さず** 409 でいまの版を返す。
+   */
+  describe('DELETE /memory/:slug の前提版（ifMatch、Issue #2881）', () => {
+    const del = (query = '') => app.request(`/memory/values${query}`, { method: 'DELETE' });
+    const readVersion = async () =>
+      ((await (await app.request('/memory/values')).json()) as { version: string }).version;
+
+    it('読んだ後にクローンが書いたなら、版付きの DELETE は 409 で、何も消さない', async () => {
+      await stores.persona.write('values', '# 価値観\n\nV1\n');
+      const version = await readVersion();
+      await stores.persona.write('values', '# 価値観\n\nV1\n\nクローンが蒸留した判断\n');
+
+      const res = await del(`?ifMatch=${version}`);
+      expect(res.status).toBe(409);
+      const body = (await res.json()) as {
+        error: string;
+        current: { document: { content: string }; version: string } | null;
+      };
+      expect(body.error).toContain('消していません');
+      expect(body.current?.document.content).toContain('クローンが蒸留した判断');
+      expect(body.current?.version).toBe(
+        memoryVersion((await stores.persona.read('values'))?.content ?? ''),
+      );
+      expect((await stores.persona.read('values'))?.content).toContain('クローンが蒸留した判断');
+      expect(await stores.journal.list({ types: ['memory_update'] })).toEqual([]);
+    });
+
+    it('版が最新と一致していれば消せ、警告は付かない', async () => {
+      await stores.persona.write('values', '# 価値観\n\nV1\n');
+      const res = await del(`?ifMatch=${await readVersion()}`);
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ ok: true, slug: 'values' });
+      expect(await stores.persona.read('values')).toBeNull();
+    });
+
+    it('版を付けない従来の DELETE は通る（段階1）が、応答に警告が載る', async () => {
+      await stores.persona.write('values', '# 価値観\n\nV1\n');
+      const res = await del();
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { ok: true; slug: string; warning?: string };
+      expect(body.warning).toContain('ifMatch');
+      expect(await stores.persona.read('values')).toBeNull();
+      const entries = await stores.journal.list({ types: ['memory_update'] });
+      expect(entries[0]).toMatchObject({ action: 'remove' });
+      expect((entries[0] as { summary: string }).summary).toContain('版の照合なし');
+    });
+
+    it('版を付けない DELETE の警告は stderr にも出る（本文は出さない）', async () => {
+      await stores.persona.write('values', '# 価値観\n\n秘密っぽい本文\n');
+      const spy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+      try {
+        await del();
+        const out = spy.mock.calls.map((c) => String(c[0])).join('');
+        expect(out).toContain('版の照合なし');
+        expect(out).toContain('values');
+        expect(out).not.toContain('秘密っぽい本文');
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it('無い記憶への版付き DELETE は 404（消すものが無い）', async () => {
+      const res = await del('?ifMatch=deadbeef');
+      expect(res.status).toBe(404);
+    });
+  });
+
   it('人間の書き換え（PUT）にも action: "write" が構造として載る', async () => {
     await app.request('/memory/values', {
       ...json({ content: '本文' }),
@@ -1162,6 +1232,79 @@ describe('HTTP API', () => {
       method: 'PUT',
     });
     expect(put.status).toBe(400);
+  });
+
+  /**
+   * Issue #2853。やり方の書き換え（PUT）も、読んだ版を前提に付けられる（`ifMatch`。
+   * 記憶の #2743 と同じ形）。衝突したら書かず・日誌にも版の履歴にも積まず 409、いまの版を返す。
+   */
+  describe('PUT /practices/:slug の前提版（ifMatch、Issue #2853）', () => {
+    const put = (body: unknown) =>
+      app.request('/practices/daily-report', { ...json(body), method: 'PUT' });
+    const base = { kind: '日報', title: '日報の書き方' };
+    const readVersion = async () =>
+      ((await (await app.request('/practices/daily-report')).json()) as { version: string })
+        .version;
+
+    it('読んだ後に別の書き手が書いたなら、ifMatch 付きの PUT は 409 で、先の書き込みは消えない', async () => {
+      await stores.practices.write({ slug: 'daily-report', ...base, content: 'V1' });
+      const version = await readVersion();
+      // 人間が編集画面を開いている間に、クローンが同じやり方を書く。
+      await stores.practices.write({ slug: 'daily-report', ...base, content: 'クローンが書いた' });
+      const journalBefore = await stores.journal.list({ types: ['decision'] });
+
+      const res = await put({ ...base, content: '人間の書き直し', ifMatch: version });
+
+      expect(res.status).toBe(409);
+      const body = (await res.json()) as {
+        error: string;
+        current: { practice: { content: string }; version: string } | null;
+      };
+      expect(body.current?.practice.content).toBe('クローンが書いた\n');
+      expect(body.error).toContain('書き換えていません');
+      expect((await stores.practices.read('daily-report'))?.content).toBe('クローンが書いた\n');
+      // 版の履歴にも日誌にも積まれない。
+      expect(await stores.practices.listVersions('daily-report')).toHaveLength(2);
+      expect(await stores.journal.list({ types: ['decision'] })).toEqual(journalBefore);
+    });
+
+    it('ifMatch が最新と一致していれば書ける。応答の version は次の ifMatch に使える', async () => {
+      await stores.practices.write({ slug: 'daily-report', ...base, content: 'V1' });
+      const version = await readVersion();
+
+      const first = await put({ ...base, content: 'V2', ifMatch: version });
+      expect(first.status).toBe(200);
+      const next = ((await first.json()) as { version: string }).version;
+      expect(next).not.toBe(version);
+      expect((await put({ ...base, content: 'V3', ifMatch: next })).status).toBe(200);
+    });
+
+    it('ifMatch: null は「読んだ時は無かった」。その間に作られていれば 409、無ければ作れる', async () => {
+      expect((await put({ ...base, content: '新しい', ifMatch: null })).status).toBe(200);
+      const again = await put({ ...base, content: '別の内容', ifMatch: null });
+      expect(again.status).toBe(409);
+      expect((await stores.practices.read('daily-report'))?.content).toBe('新しい\n');
+    });
+
+    it('読んだ後に消されていたら、ifMatch 付きの PUT は 409（current は null）', async () => {
+      await stores.practices.write({ slug: 'daily-report', ...base, content: 'V1' });
+      const version = await readVersion();
+      await stores.practices.remove('daily-report');
+
+      const res = await put({ ...base, content: '人間', ifMatch: version });
+
+      expect(res.status).toBe(409);
+      expect(((await res.json()) as { current: unknown }).current).toBeNull();
+      expect(await stores.practices.read('daily-report')).toBeNull();
+    });
+
+    it('ifMatch を付けない従来の PUT は、これまでどおり後勝ちで書ける（後方互換）', async () => {
+      await stores.practices.write({ slug: 'daily-report', ...base, content: 'V1' });
+      await stores.practices.write({ slug: 'daily-report', ...base, content: 'V2' });
+      const res = await put({ ...base, content: '全文置換' });
+      expect(res.status).toBe(200);
+      expect((await stores.practices.read('daily-report'))?.content).toBe('全文置換\n');
+    });
   });
 
   it('存在しないやり方は 404', async () => {
