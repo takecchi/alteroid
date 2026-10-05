@@ -82,8 +82,8 @@ export interface CredentialService {
    * **runner は記憶ストアを読めない**ので、器が作り直されたときに降ろすのはこちら
    * の責任である（`ProfileService#syncRunner` と同じ位置・同じ理由）。
    *
-   * **差があるものだけを降ろす。** 全部降ろし直すと、`CLAUDE_CODE_OAUTH_TOKEN`
-   * の指紋が変わったときにセッションを畳む仕組み（`recycleForToken`）を、
+   * **差があるものだけを降ろす。** 全部降ろし直すと、指紋が変わったときに
+   * セッションを畳む仕組み（`recycleForToken`。どの名前でも効く）を、
    * 再接続のたびに無意味に叩きうる。
    *
    * 降ろすものが無ければ `null`。
@@ -391,7 +391,9 @@ function changedCloneNames(
   after: readonly StoredCredential[],
 ): string[] {
   const view = (rows: readonly StoredCredential[]): Map<string, string> =>
-    new Map(resolveCredentialRows(rows, 'clone').map((row) => [row.name, fingerprintOf(row.value)]));
+    new Map(
+      resolveCredentialRows(rows, 'clone').map((row) => [row.name, fingerprintOf(row.value)]),
+    );
   const was = view(before);
   const now = view(after);
   const names = new Set([...was.keys(), ...now.keys()]);

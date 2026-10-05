@@ -579,6 +579,8 @@ alteroid credential remove SOME_OLD_KEY               # 外す（runner の器�
 
 **⚠️ `CLAUDE_CODE_OAUTH_TOKEN` はここへは置けない**（400 で断る）。正本はプールの側（`alteroid token add`）で、こちらへ置くと**名乗り直しのたびに回した鍵を巻き戻す**。
 
+**`GH_TOKEN` / `GITHUB_TOKEN` / `CODEX_API_KEY` も、他の普通の名前と同じ扱いである**（2026-10-06）。正本が唯一の出所で、**デーモンの環境変数（Shared Variables）は最後の土台ではない**。以前から Variables にだけ置いている器は、**起動時に1度だけ**正本へ移る（`scope: all`・シークレット。移した名前は stderr と日誌に出る。値は出ない）。以後は `alteroid credential set` / 画面で更新・削除でき、**即時に届く**（走行中の `gh` / `git` は呼ばれるたびに、マネージャーとクローンは次のターンの境界で畳んで resume する）。1度移った後で Variables を書き換えても正本は変わらない。
+
 **Codex（OpenAI）の API キー `CODEX_API_KEY`（Issue #486 M7）は置ける。** `GH_TOKEN` と同じ扱いで、値は空のまま Service Variables に置かない（置くなら `alteroid credential set CODEX_API_KEY -f -`）。Codex CLI の版は `Dockerfile` の `ARG CODEX_VERSION` が持つ。ChatGPT ログインの `auth.json`（`CODEX_HOME`）は別の経路で、ここでは扱わない。
 
 **⚠️ 移行の順序。** 正本へ置いて `alteroid credential list` と `GET /runners` の指紋が揃うのを見てから、Shared Variables の側を消す。**逆順にすると、消した瞬間から次に降ろすまでのあいだ、器の環境変数にも正本にも無い状態ができる**（`GIT_AUTHOR_NAME` が無いと commit が `empty ident name` で即落ちる）。**空文字で残さないこと** —— 空は未設定より悪い。

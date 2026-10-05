@@ -19322,9 +19322,6 @@
                           "updatedAt": {
                             "type": "string"
                           },
-                          "shadowsCloneEnv": {
-                            "type": "boolean"
-                          },
                           "scope": {
                             "type": "string",
                             "enum": ["all", "app", "runner"]
@@ -19389,9 +19386,6 @@
                           },
                           "updatedAt": {
                             "type": "string"
-                          },
-                          "shadowsCloneEnv": {
-                            "type": "boolean"
                           },
                           "scope": {
                             "type": "string",

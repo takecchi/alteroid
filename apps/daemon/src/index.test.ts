@@ -1058,6 +1058,48 @@ describe('describeReopenedTokenNotice', () => {
  */
 
 /**
+ * **環境変数の「器の env」の取り違えを塞ぐ配線**（2026-10-06）。`main()` の中の配線は
+ * 実行時に触れないので、原文で固定する（隣の describe と同じ理由）。
+ *
+ * 守るのは4つ: (1) 子プロセスへ渡す土台のスナップショットは、**正本を `process.env` へ書き写す前に**
+ * 取る (2) 器の env の鍵の1度だけの移行も、書き写す前のスナップショットから行う (3) クローンと
+ * 同一プロセスの runner の子の env は、書き写し後の `process.env` ではなくスナップショット由来を渡す
+ * (4) 正本の更新（`onApplied`）でクローンのセッションを畳む。
+ */
+describe('子プロセスの env の土台は、書き写す前のスナップショットである（2026-10-06）', () => {
+  const source = readFileSync(new URL('./index.ts', import.meta.url), 'utf8');
+
+  it('スナップショット → 移行 → 書き写し の順に並ぶ', () => {
+    const anchors = [
+      'const bootEnvSnapshot: NodeJS.ProcessEnv = { ...process.env };',
+      'await migrateEnvBaseCredentialsOnce(stores, bootEnvSnapshot);',
+      'await applyAppScopedEnvVars(stores, process.env, localRunnerEnv);',
+    ];
+    expect(missingAnchors(source, anchors)).toEqual([]);
+    const [snapshotAt, migrateAt, applyAt] = anchors.map((anchor) => source.indexOf(anchor));
+    expect(snapshotAt).toBeLessThan(migrateAt);
+    expect(migrateAt).toBeLessThan(applyAt);
+  });
+
+  it('クローンの子の土台と、同一プロセスの runner の env に、スナップショット由来を渡す', () => {
+    expect(
+      missingAnchors(source, [
+        'childEnvBase: bootEnvSnapshot,',
+        'env: localRunnerEnv,',
+        'env: options.env,',
+      ]),
+    ).toEqual([]);
+  });
+
+  it('正本の更新が成功したら、クローンのセッションをターンの境界で畳む（onApplied）', () => {
+    const at = source.indexOf('onApplied: () => {');
+    expect(at).toBeGreaterThan(-1);
+    const body = source.slice(at, source.indexOf('},', at));
+    expect(body).toContain('clone.recycleSessionForToken()');
+  });
+});
+
+/**
  * **クローンの門は `wake()` の中の `clone.post(...)` だけを絞る**（Issue #783）。
  *
  * `restore()` / `resumeStoppedByUsage()` はこの門と無関係に呼ぶ——マネージャーは

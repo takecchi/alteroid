@@ -1586,7 +1586,7 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
       .optional(),
     /**
      * **任意欄（Issue #914 提案1）。** 立っているのは、この `note` が
-     * `runner.ts` の `#reopenForTokenRotation`（認証トークンの差し替えで、
+     * `runner.ts` の `#reopenForTokenRotation`（認証トークン〔2026-10-06 から任意の名前の鍵・環境変数〕の差し替えで、
      * ターンの境界を認めてセッションを畳んで開き直した）から来た回だけ。
      *
      * **`manager.ts` の `case 'note'` はこれを見て `#rememberTokenIdentity`

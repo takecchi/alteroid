@@ -573,6 +573,84 @@ describe('認証トークンを回した後、走行中のマネージャーの�
     expect(s.sessions).toHaveLength(1);
   });
 
+  /**
+   * **どの名前でも、値（指紋）・有無が変われば、ターンの境界で畳んで開き直す**
+   * （2026-10-06 のオーナー決定「環境変数を即時反映にしてほしい」。以前は
+   * `CLAUDE_CODE_OAUTH_TOKEN` の指紋が変わったときだけだった）。SDK 子プロセスの env は
+   * 起動時に凍るので、これが無いと任意の名前の更新・削除は走行中のマネージャーに届かない。
+   */
+  it('認証トークン以外の名前（任意の名前・GH_TOKEN）が増えても、ターンの境界で畳んで新しい env で開き直す', async () => {
+    const s = setup();
+    await s.host.start({ managerId: 'mgr-1', request: '調べて', cwd: '/work/project' });
+    const first = await nthSession(s.sessions, 0);
+    first.say('わかった');
+    first.finish('わかった');
+    await reportEvents(s.events, 1);
+    expect(s.sessions).toHaveLength(1);
+
+    await s.host.setCredentials([
+      { name: 'GH_TOKEN', value: 'ghp-fake-new-1' },
+      { name: 'MY_CUSTOM_VAR', value: 'custom-1' },
+    ]);
+
+    await nthSession(s.sessions, 1);
+    expect(s.startedOptions[1]?.env?.GH_TOKEN).toBe('ghp-fake-new-1');
+    expect(s.startedOptions[1]?.env?.MY_CUSTOM_VAR).toBe('custom-1');
+    expect(s.startedOptions[1]?.resume).toBe('sess-1');
+  });
+
+  it('認証トークン以外の名前の値が変わっても畳む。同じ値の書き直しでは畳まない', async () => {
+    const s = setup();
+    await s.host.setCredentials([{ name: 'GH_TOKEN', value: 'ghp-fake-v1' }]);
+    await s.host.start({ managerId: 'mgr-1', request: '調べて', cwd: '/work/project' });
+    const first = await nthSession(s.sessions, 0);
+    first.say('わかった');
+    first.finish('わかった');
+    await reportEvents(s.events, 1);
+
+    await s.host.setCredentials([{ name: 'GH_TOKEN', value: 'ghp-fake-v1' }]);
+    await tick(40);
+    expect(s.sessions).toHaveLength(1);
+
+    await s.host.setCredentials([{ name: 'GH_TOKEN', value: 'ghp-fake-v2' }]);
+    await nthSession(s.sessions, 1);
+    expect(s.startedOptions[1]?.env?.GH_TOKEN).toBe('ghp-fake-v2');
+  });
+
+  it('削除（空値）も変更として畳む。開き直した env からその名前は消えている', async () => {
+    const s = setup();
+    await s.host.setCredentials([{ name: 'GH_TOKEN', value: 'ghp-fake-v1' }]);
+    await s.host.start({ managerId: 'mgr-1', request: '調べて', cwd: '/work/project' });
+    const first = await nthSession(s.sessions, 0);
+    first.say('わかった');
+    first.finish('わかった');
+    await reportEvents(s.events, 1);
+    expect(s.startedOptions[0]?.env?.GH_TOKEN).toBe('ghp-fake-v1');
+
+    await s.host.setCredentials([{ name: 'GH_TOKEN', value: '' }]);
+
+    await nthSession(s.sessions, 1);
+    expect(s.startedOptions[1]?.env).not.toHaveProperty('GH_TOKEN');
+  });
+
+  it('ターンの途中では、認証トークン以外の更新でも畳まない（走っているターンは最後まで走る）', async () => {
+    const s = setup({ abortOnInputClose: true });
+    await s.host.start({ managerId: 'mgr-1', request: '調べて', cwd: '/work/project' });
+    const first = await nthSession(s.sessions, 0);
+    await tick(10);
+
+    await s.host.setCredentials([{ name: 'MY_CUSTOM_VAR', value: 'custom-1' }]);
+    await tick();
+    expect(s.sessions).toHaveLength(1);
+
+    first.say('わかった');
+    first.finish('わかった');
+    const [report] = await reportEvents(s.events, 1);
+    expect(report?.text).toContain('わかった');
+    await nthSession(s.sessions, 1);
+    expect(s.startedOptions[1]?.env?.MY_CUSTOM_VAR).toBe('custom-1');
+  });
+
   it('確認待ちが在るあいだは畳まない。答えて片付いた境界で畳む', async () => {
     const s = setup();
     await s.host.start({ managerId: 'mgr-1', request: '調べて', cwd: '/work/project' });

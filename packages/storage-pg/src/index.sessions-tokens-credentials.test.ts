@@ -1,6 +1,7 @@
 import {
   captureStderr,
   verifyConversationReadStoreContract,
+  verifyCredentialSeedOnceContract,
   verifyCredentialVaultContract,
   verifyTokenPoolContract,
   NulNotAllowedError,
@@ -220,6 +221,10 @@ describe('PgProfileStore', () => {
 describe('PgCredentialVaultStore', () => {
   it('入口の契約（issue #2927。3実装で同じことを測る）', async () => {
     await verifyCredentialVaultContract(stores.credentials);
+  });
+
+  it('seedOnce の契約（印つきの1度だけの書き込み。3実装で同じことを測る）', async () => {
+    await verifyCredentialSeedOnceContract(stores.credentials);
   });
 
   it('往復（put → list）で値まで戻り、name 昇順で並ぶ', async () => {

@@ -27,7 +27,8 @@
 #   docker compose exec app alteroid credential set GIT_AUTHOR_NAME -f - <<< '...'
 #
 # こちらは記憶ストアが正本で、器を作り直しても runner が名乗り直したときに降り直す。
-# 下の `.env` へ置く形も引き続き効く（app の環境変数が最後の土台になる。詳細は
+# 下の `.env` へ置く形も引き続き効く（起動時に1度だけ、正本に無い `GH_TOKEN` は
+# 正本へ移る。以後は正本が唯一の出所で、画面・CLI で更新・削除できる。詳細は
 # x-shared-env の GH_TOKEN の節）:
 #
 #   GH_TOKEN=github_pat_...      # fine-grained PAT: Contents RW / Pull requests RW
@@ -265,8 +266,11 @@ x-shared-env: &shared-env
   # **⚠️ ここは app（クローン）にだけ在れば足りる。runner には要らない。**
   # runner は自分の環境変数から鍵を1文字も拾わない（`apps/runner/src/index.ts` の
   # `seed: {}`）ので、置いてもマネージャーには渡らない。配るのは常にクローンで、
-  # 出所は「正本（`alteroid credential`）→ 無ければ app の環境変数」である。
-  # ⟹ **この5行は app 側の土台として効く。** runner 側からは消してよい
+  # 出所は正本（`alteroid credential`）だけである（2026-10-06。app の環境変数は最後の
+  # 土台ではない）。**起動時に1度だけ**、正本に無い `GH_TOKEN` / `GITHUB_TOKEN` /
+  # `CODEX_API_KEY` を app の環境変数から正本へ移す（以後の更新・削除は正本で行う）。
+  # `GIT_*` は移さない（app の環境変数のまま、クローンの子プロセスに届く）。
+  # ⟹ **この5行は app 側の初期値として効く。** runner 側からは消してよい
   # （空文字で残すのは未設定より悪いので、行ごと消すこと）。
   GH_TOKEN:
   GIT_AUTHOR_NAME:
@@ -274,7 +278,8 @@ x-shared-env: &shared-env
   GIT_COMMITTER_NAME:
   GIT_COMMITTER_EMAIL:
   # Codex（OpenAI）の API キー（Issue #486 M7）。使うときだけ `.env` に置く。正本は
-  # `alteroid credential set CODEX_API_KEY` が先で、これは正本に無いときの土台。
+  # `alteroid credential set CODEX_API_KEY` が先で、これは正本に無いときの初期値
+  # （起動時に1度だけ正本へ移る）。
   # ChatGPT ログインの認証（`auth.json`）は別の経路である。
   CODEX_API_KEY:
 

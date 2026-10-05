@@ -475,10 +475,10 @@ export interface RunnerHost {
   /**
    * 鍵を差し替える。器を作り直さずに鍵を回すための唯一の口である。
    *
-   * **`CLAUDE_CODE_OAUTH_TOKEN` の指紋が変わったときだけ、生きている全
+   * **どの名前でも、値（指紋）か有無が変わったときだけ、生きている全
    * セッションへ「ターンの境界で畳んで開き直せ」の印を立てる**（`#childEnv()`
-   * が起動時にしか読まれない穴の直し。詳しくは `AGENT_TOKEN_CREDENTIAL_NAME`
-   * の doc）。**指紋が同じなら何もしない** —— `#connectTo` / `#reattach`
+   * が起動時にしか読まれない穴の直し。2026-10-06 に `CLAUDE_CODE_OAUTH_TOKEN`
+   * だけから一般化した。削除〔空値〕も変更である。`AGENT_TOKEN_CREDENTIAL_NAME` の doc も見ること）。**指紋が同じなら何もしない** —— `#connectTo` / `#reattach`
    * （再接続の追いつかせ）は繋ぎ直しのたびに同じ値を降ろすので、無条件に
    * 畳むと再接続のたびにセッションが畳まれてしまう。
    */
@@ -635,10 +635,7 @@ function fingerprintsByName(
 }
 
 /** 2つの写しが、名前の集合も各 sha256 も同じか。 */
-function sameFingerprints(
-  a: ReadonlyMap<string, string>,
-  b: ReadonlyMap<string, string>,
-): boolean {
+function sameFingerprints(a: ReadonlyMap<string, string>, b: ReadonlyMap<string, string>): boolean {
   if (a.size !== b.size) return false;
   for (const [name, sha256] of a) if (b.get(name) !== sha256) return false;
   return true;

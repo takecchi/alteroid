@@ -86,7 +86,8 @@ export const ROTATABLE_CREDENTIAL_KEYS = [
    * （`runner.ts` の `Host#setCredentials` / `#reopenForTokenRotation`）ので、
    * **次のターンから**新しい値で走る。効くのが即座なのは
    * **これから起こす**マネージャーと作業者で、**走行中のマネージャーは
-   * 次のターンの境界から**である。
+   * 次のターンの境界から**である（2026-10-06 から、この畳み直しはどの名前の
+   * 更新・削除でも起きる）。
    */
   'CLAUDE_CODE_OAUTH_TOKEN',
   /**
