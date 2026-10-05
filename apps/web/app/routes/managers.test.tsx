@@ -176,14 +176,18 @@ describe('一覧の札は、観測した分しか言わない', () => {
     expect(screen.queryByText('復旧不能')).toBeNull();
     // 札だけでは次の一手が分からない。クローンが `manager_list` で受け取るのと
     // 同じ案内を、人間の画面にも出す。
-    expect(screen.getByText(/リモート（PR・ブランチ）を確かめる/)).toBeTruthy();
+    expect(
+      screen.getByText(
+        /外へ出た成果（PR・コミット・送信済みのメール・登録済みの予定・投稿先など）を確かめる/,
+      ),
+    ).toBeTruthy();
   });
 
   it('lost 以外にリモート確認の案内を出さない（雑音にしない）', async () => {
     renderManagers([{ ...BASE, status: 'running' }]);
 
     expect(await screen.findByText('実行中')).toBeTruthy();
-    expect(screen.queryByText(/リモート（PR・ブランチ）/)).toBeNull();
+    expect(screen.queryByText(/外へ出た成果（PR・コミット/)).toBeNull();
   });
 
   /**

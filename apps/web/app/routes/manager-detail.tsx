@@ -566,7 +566,9 @@ function LostNote({ status }: { status: ManagerStatus }) {
       を通し、マージまで届いていた仕事がこの札を貼られた実例がある。
       <br />
       起こし直す前に、まず
-      <strong className="font-medium">リモート（PR・ブランチ・コミット）を確かめること</strong>
+      <strong className="font-medium">
+        外へ出た成果（PR・コミット・送信済みのメール・登録済みの予定・投稿先など）を確かめること
+      </strong>
       。どこまで進んでいたかは、下の「最後の報告」とセッションログ（生）にも残っていることがある。続きが要ると判断したときだけ起こし直す。
     </p>
   );
