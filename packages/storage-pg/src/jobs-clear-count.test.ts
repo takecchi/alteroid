@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import type { Db } from './db.js';
 import { createPgStoresFromDb, type PgStores } from './index.js';
 import { jobs } from './schema.js';
-import { createMigratedPglite } from './pglite-template.test-support.js';
+import { createMigratedTestDb } from './test-db.test-support.js';
 
 /**
  * issue #1892。`JobStore.clear()` が返す件数は、**行の中身が壊れているかに
@@ -20,7 +20,7 @@ let db: Db;
 let stores: PgStores;
 
 beforeEach(async () => {
-  ({ db } = await createMigratedPglite());
+  ({ db } = await createMigratedTestDb());
   stores = createPgStoresFromDb(db);
 });
 

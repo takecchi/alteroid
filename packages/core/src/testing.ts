@@ -63,6 +63,12 @@ import {
   type AuthStore,
   type LoginRequest,
 } from './auth.js';
+import {
+  prepareAccessTokenForWrite,
+  prepareAccountForWrite,
+  prepareIdentityForWrite,
+  prepareLoginRequestForWrite,
+} from './auth-input.js';
 import type {
   CredentialVaultStore,
   EnvProfileEntry,
@@ -117,7 +123,7 @@ import {
   stripNulFromUsageQuery,
   stripNulFromUsageRecord,
 } from './usage-input.js';
-import { assertNoNul, stripNul, stripNulDeep } from './nul-guard.js';
+import { assertNoNul, hasNul, stripNul, stripNulDeep } from './nul-guard.js';
 import { preparePermissionGrantForPut } from './permission-grant-input.js';
 import { assertProfileRowWritable } from './profile-input.js';
 import { assertValidActiveToken, prepareTokensForReplace } from './token-pool-input.js';
@@ -1237,9 +1243,11 @@ export function createMemoryStores(): Stores {
       return [];
     },
     async getAccount(id) {
+      if (hasNul(id)) return null;
       return accounts.get(id) ?? null;
     },
     async findAccountByEmail(email) {
+      if (hasNul(email)) return null;
       // 大小文字を区別しない（#1702）。fs / pg の実装と同じ規約。
       const needle = email.toLowerCase();
       return (
@@ -1250,10 +1258,12 @@ export function createMemoryStores(): Stores {
     },
     async putAccount(account) {
       // 本物（fs / pg）と同じく `authAccountSchema` を通す（issue #1715）。
-      accounts.set(account.id, authAccountSchema.parse(account));
+      const parsed = prepareAccountForWrite(authAccountSchema.parse(account));
+      accounts.set(parsed.id, parsed);
     },
     // 検査から書き込みまでの間に await を挟まない（他の1操作と同じ理由。issue #1870）。
     async markAccountLoggedIn(accountId, at) {
+      if (hasNul(accountId)) return;
       const account = accounts.get(accountId);
       if (account === undefined) return;
       accounts.set(accountId, authAccountSchema.parse({ ...account, lastLoginAt: at }));
@@ -1265,6 +1275,7 @@ export function createMemoryStores(): Stores {
       return { kind: 'unknown', count: new Set(ids).size };
     },
     async revokeAccountAccess(accountId) {
+      if (hasNul(accountId)) return;
       const account = accounts.get(accountId);
       if (account === undefined) return;
       accounts.set(
@@ -1278,9 +1289,11 @@ export function createMemoryStores(): Stores {
       );
     },
     async findIdentity(provider, subject) {
+      if (hasNul(provider) || hasNul(subject)) return null;
       return identities.get(identityKey(provider, subject)) ?? null;
     },
     async listIdentities(accountId) {
+      if (hasNul(accountId)) return [];
       // fs と同じ理由で明示的に並べる（`compareIdentityOrder` の doc）。
       return [...identities.values()]
         .filter((identity) => identity.accountId === accountId)
@@ -1288,7 +1301,7 @@ export function createMemoryStores(): Stores {
     },
     async putIdentity(identity) {
       // 本物（fs / pg）と同じく `authIdentitySchema` を通す（issue #1715）。
-      const parsed = authIdentitySchema.parse(identity);
+      const parsed = prepareIdentityForWrite(authIdentitySchema.parse(identity));
       identities.set(identityKey(parsed.provider, parsed.subject), parsed);
     },
     // 検査から書き込みまでの間に await を挟まない（他の1操作と同じ理由——
@@ -1310,27 +1323,30 @@ export function createMemoryStores(): Stores {
       const accountToSave = emailCollides ? { ...account, email: null } : account;
       // 本物（fs / pg）と同じく `authAccountSchema` / `authIdentitySchema` を
       // 通す（issue #1715。fs と同じ並び——account を先に parse する）。
-      const parsedAccount = authAccountSchema.parse(accountToSave);
-      const parsedIdentity = authIdentitySchema.parse(identity);
+      const parsedAccount = prepareAccountForWrite(authAccountSchema.parse(accountToSave));
+      const parsedIdentity = prepareIdentityForWrite(authIdentitySchema.parse(identity));
       accounts.set(parsedAccount.id, parsedAccount);
       identities.set(key, parsedIdentity);
       return { created: true, account: parsedAccount };
     },
     async putAccessToken(token) {
       // 本物（fs / pg）と同じく `accessTokenRecordSchema` を通す（issue #1715）。
-      const parsed = accessTokenRecordSchema.parse(token);
+      const parsed = prepareAccessTokenForWrite(accessTokenRecordSchema.parse(token));
       accessTokens.set(parsed.id, parsed);
     },
     // 検査から書き込みまでの間に await を挟まない（他の1操作と同じ理由。issue #1782）。
     async markAccessTokenUsed(id, at) {
+      if (hasNul(id)) return;
       const token = accessTokens.get(id);
       if (token === undefined || token.revokedAt !== null) return;
       accessTokens.set(id, accessTokenRecordSchema.parse({ ...token, lastUsedAt: at }));
     },
     async findAccessTokenBySha256(hash) {
+      if (hasNul(hash)) return null;
       return [...accessTokens.values()].find((token) => token.sha256 === hash) ?? null;
     },
     async listAccessTokens(accountId) {
+      if (hasNul(accountId)) return [];
       // fs と同じ理由で明示的に並べる（`compareAccessTokenOrder` の doc）。
       return [...accessTokens.values()]
         .filter((token) => token.accountId === accountId)
@@ -1338,6 +1354,7 @@ export function createMemoryStores(): Stores {
     },
     // 検査から書き込みまでの間に await を挟まない（他の1操作と同じ理由。issue #1757）。
     async revokeAccessToken(id, at) {
+      if (hasNul(id)) return { status: 'not_found' };
       const token = accessTokens.get(id);
       if (token === undefined) return { status: 'not_found' };
       if (token.revokedAt !== null) return { status: 'already_revoked', token };
@@ -1348,13 +1365,15 @@ export function createMemoryStores(): Stores {
     },
     async putLoginRequest(request) {
       // 本物（fs / pg）と同じく `loginRequestSchema` を通す（issue #1715）。
-      const parsed = loginRequestSchema.parse(request);
+      const parsed = prepareLoginRequestForWrite(loginRequestSchema.parse(request));
       loginRequests.set(parsed.id, parsed);
     },
     async getLoginRequest(id) {
+      if (hasNul(id)) return null;
       return loginRequests.get(id) ?? null;
     },
     async beginLoginExchange(id) {
+      if (hasNul(id)) return null;
       // 検査から書き込みまでの間に await を挟まない（挟むと2本目が割り込む）。
       const found = loginRequests.get(id);
       if (found === undefined || found.status !== 'pending') return null;
@@ -1363,18 +1382,21 @@ export function createMemoryStores(): Stores {
       return processing;
     },
     async claimLoginRequest(id, issue) {
+      if (hasNul(id)) return null;
       // 検査から書き込みまでの間に await を挟まない（挟むと他の claim が割り込む）。
       const found = loginRequests.get(id);
       if (found === undefined || found.status !== 'authenticated') return null;
       const consumed = { ...found, status: 'consumed' as const };
       // 本物（fs / pg）と同じく、issue() が返した値も `accessTokenRecordSchema`
       // を通す（issue #1715）。
-      const token = accessTokenRecordSchema.parse(issue(consumed));
+      const token = prepareAccessTokenForWrite(accessTokenRecordSchema.parse(issue(consumed)));
       loginRequests.set(id, consumed);
       accessTokens.set(token.id, token);
       return { request: consumed, token };
     },
     async grantAccess(accountId, at, by) {
+      if (hasNul(accountId)) return { status: 'not_found' };
+      assertNoNul('authAccount.grantedBy', by);
       const account = accounts.get(accountId);
       if (account === undefined) return { status: 'not_found' };
       if (account.grantedAt !== null) return { status: 'granted', account };
@@ -1384,6 +1406,7 @@ export function createMemoryStores(): Stores {
       return { status: 'granted', account: granted };
     },
     async setAccountOwner(accountId, declaredAt) {
+      if (hasNul(accountId)) return { status: 'not_found' };
       // 検査から書き込みまでの間に await を挟まない（他の実装と同じ理由——
       // 挟むと「読む→検査→書く」に割れて、宣言と許可の不変条件が崩れる窓ができる）。
       const account = accounts.get(accountId);

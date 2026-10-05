@@ -8,10 +8,14 @@ name: storage-pg を本物の PostgreSQL で
 # `ALTEROID_TEST_PG_URL` で本物へ向けて走らせる（テストは複製しない。口は
 # `packages/storage-pg/src/test-db.test-support.ts`）。
 #
-# **範囲:** 共通の約束テスト（`packages/core/src/*-contract.ts` の契約関数）を呼ぶ
-# storage-pg の3ファイル（`index.*.test.ts`）。契約テストは今後もこの3ファイルの中へ
-# 足されるので、足せば自動でここに乗る（#2913 の並びの契約テストも同じ）。本物で落ちる
-# 歯は一覧にして Issue へ書き、テストの側で `skipIf` にしてある（#2922）。
+# **範囲:** `packages/storage-pg/src/*.test.ts` のうち、`test-db.test-support.ts`（`createMigratedTestDb` /
+# `createEmptyTestDb`）を import するファイルすべて（#2937）。**ファイル名は列挙せず、import で
+# 拾う**——storage-pg のテストを `createMigratedTestDb` で書けば自動でここに乗る（追加漏れが
+# 起きない）。拾われないのは PGlite 固有のもの（`migrate.test.ts` と `pglite-template.test.ts`。
+# どちらも本物へ向ける口を使わない）だけで、新しい PGlite 直結のテストを足すと、ここには
+# 乗らない。共通の約束テスト（`packages/core/src/*-contract.ts` の契約関数）を呼ぶ
+# `index.*.test.ts` もこの中に入る。本物で落ちる歯は一覧にして Issue へ書き、テストの側で
+# `skipIf` にしてある（#2922、#2937）。
 #
 # **必須チェックではない。** `ci` / `image` / `no-attribution-trailers`（正本は
 # `.github/required-status-checks.json`）の構成は変えていない。`ci` の `needs` にも
@@ -81,8 +85,14 @@ jobs:
 
       - run: pnpm --filter @alteroid/core build
 
-      - name: 契約テストを本物の PostgreSQL で走らせる
+      - name: storage-pg のテストを本物の PostgreSQL で走らせる
         env:
           ALTEROID_TEST_PG_URL: postgres://alteroid:alteroid-ci-throwaway@127.0.0.1:5432/alteroid_test
           ALTEROID_TEST_PG_EXPECT_COLLATE: ${{ matrix.collate }}
-        run: pnpm --filter @alteroid/storage-pg test index.journal-jobs-schedule index.commitments-inbox-archive index.sessions-tokens-credentials list-order-contract test-db
+        run: |
+          # `test-db.test-support` を import するテストを拾う（範囲は冒頭のコメント）。
+          files=$(grep -l "test-db\.test-support" packages/storage-pg/src/*.test.ts)
+          test -n "$files" || { echo "対象のテストが1本も見つからない" >&2; exit 1; }
+          echo "$files" | wc -l
+          # vitest のフィルタは部分一致なので、拡張子まで含めた相対パスで渡す。
+          pnpm --filter @alteroid/storage-pg test $(echo "$files" | sed "s#^packages/storage-pg/##")

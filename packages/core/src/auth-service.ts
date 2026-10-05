@@ -17,6 +17,7 @@ import {
   type OwnerOutcome,
 } from './auth.js';
 import type { AuthProviderRegistry } from './auth-providers.js';
+import { hasNul } from './nul-guard.js';
 import type { RemoveUnreadableRowsOptions, RemoveUnreadableRowsResult } from './store.js';
 
 /**
@@ -241,6 +242,24 @@ export function createAuthService(options: AuthServiceOptions): AuthService {
           redirectUri: claimedForExchange.redirectUri,
         });
       } catch {
+        await fail(claimedForExchange, 'exchange_failed');
+        return { status: 'error', reason: 'exchange_failed' };
+      }
+
+      // プロバイダの返した subject は外から来る値で、identity の鍵になる。NUL を含むものは
+      // ストアが書き込みで断る（`NulNotAllowedError`。#3011）ので、ここで交換の失敗として降りる
+      // （400 の画面になる。401 とは別。要求を `processing` のまま残さない）。
+      if (hasNul(profile.subject)) {
+        await fail(claimedForExchange, 'exchange_failed');
+        return { status: 'error', reason: 'exchange_failed' };
+      }
+      // 検証済みのメールは account.email に載り、一意の索引と衝突の検査に使われる。NUL を含むものは
+      // ストアが断る（teto の判断、2026-10-06）ので、閉じる側（ログイン失敗）に倒す。
+      // 断った理由は stderr に残す——欄名と固定の文だけで、メールの値は載せない。
+      if (profile.emailVerified && profile.email !== null && hasNul(profile.email)) {
+        process.stderr.write(
+          'alteroid: ログインを断った（auth.email に NUL を含むので断った。プロバイダが返した検証済みメール）\n',
+        );
         await fail(claimedForExchange, 'exchange_failed');
         return { status: 'error', reason: 'exchange_failed' };
       }

@@ -1,10 +1,9 @@
-import { PGlite } from '@electric-sql/pglite';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import type { Db } from './db.js';
 import { createPgStoresFromDb, type PgStores } from './index.js';
 import { practices } from './schema.js';
-import { createMigratedPglite } from './pglite-template.test-support.js';
+import { createMigratedTestDb, type TestDbHandle } from './test-db.test-support.js';
 
 /**
  * issue #1955（#1929 の同じ形の残り）。`PracticeStore.clear()` の契約は「やり方の
@@ -17,12 +16,12 @@ import { createMigratedPglite } from './pglite-template.test-support.js';
  * `PgPracticeStore.clear()`）は、practices の DELETE を確定させたあとで
  * practice_versions の DELETE に失敗するので、この歯は赤くなる。
  */
-let client: PGlite;
+let client: TestDbHandle;
 let db: Db;
 let stores: PgStores;
 
 beforeEach(async () => {
-  ({ client, db } = await createMigratedPglite());
+  ({ client, db } = await createMigratedTestDb());
   stores = createPgStoresFromDb(db);
 
   // practice_versions への DELETE だけを確実に失敗させる（BEFORE DELETE トリガ）。

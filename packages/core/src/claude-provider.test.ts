@@ -25,8 +25,10 @@ import {
   buildCloneSessionOptions,
   buildManagerSessionOptions,
   foldClaudeMessage,
+  SUBAGENT_STOP_HOOK_TIMEOUT_SECONDS,
 } from './claude-provider.js';
 import { DEFAULT_PERMISSION_MODE } from './permission-mode.js';
+import { SUBAGENT_BACKGROUND_WAIT_MS } from './runner-subagent-stop-state.js';
 import { WORKER_AGENT_NAME } from './runner.js';
 import { captureStderr } from './testing.js';
 
@@ -1149,6 +1151,46 @@ describe('観測専用フックの包み直し（#486 中立の口2本目）', (
     expect(captured).toEqual({ signal });
     expect(captured).not.toHaveProperty('transcriptPath');
     expect(captured).not.toHaveProperty('sessionId');
+  });
+
+  /**
+   * **待つフックの timeout は、待ちの上限より長くなければならない（Issue #3008）。**
+   * `SubagentStop` のフックは背景処理の完了を最大 `SUBAGENT_BACKGROUND_WAIT_MS` まで待つ。
+   * SDK の timeout が先に来ると、SDK は答え無しで作業者を畳み、`limit_reached` の経路
+   * （`recordCutOff`）を通らないので、#1563 / #2387 の配達が働かない。
+   * 定数どうしの不等式だけでなく、**実際に `Options.hooks.SubagentStop` の matcher へ渡した値**を見る
+   * （定数が正しくても、matcher へ渡し忘れれば SDK の既定に切られるため）。
+   */
+  it('buildManagerSessionOptions: SubagentStop の matcher の timeout は、待ちの上限より長い', () => {
+    const options = buildManagerSessionOptions({
+      model: 'opus',
+      permissionMode: DEFAULT_PERMISSION_MODE,
+      systemPromptAppend: '追記',
+      workerAgentName: WORKER_AGENT_NAME,
+      workerPrompt: '作業者のプロンプト',
+      workerModel: 'sonnet',
+      cwd: '/work',
+      env: {},
+      sessionStore,
+      canUseTool,
+      onPostToolUse: () => ({ kind: 'continue' }),
+      onPostToolUseFailure: () => {},
+      onPreCompact: () => {},
+      onUserPromptSubmit: () => {},
+      onSubagentStop: () => ({ kind: 'continue' }),
+      onStop: () => {},
+      onPreToolUse: () => ({ kind: 'continue' }),
+      onPermissionDenied: async () => ({ kind: 'no-retry' }),
+      managerAutoMemoryEnabled: false,
+    });
+
+    const timeoutSeconds = options.hooks?.SubagentStop?.[0]?.timeout;
+    expect(timeoutSeconds).toBe(SUBAGENT_STOP_HOOK_TIMEOUT_SECONDS);
+    if (timeoutSeconds === undefined) throw new Error('SubagentStop の timeout が渡っていない');
+    // 待ちの上限（ミリ秒）より、フックの timeout（秒）が長い。
+    expect(SUBAGENT_BACKGROUND_WAIT_MS).toBeLessThan(timeoutSeconds * 1000);
+    // 後始末（note・recordCutOff）の余裕として、少なくとも60秒は長い。
+    expect(timeoutSeconds * 1000 - SUBAGENT_BACKGROUND_WAIT_MS).toBeGreaterThanOrEqual(60_000);
   });
 
   it('buildManagerSessionOptions: PreCompact も同じ中立の記録として渡り、{ continue: true } を返す', async () => {

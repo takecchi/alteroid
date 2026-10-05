@@ -1,10 +1,9 @@
-import { PGlite } from '@electric-sql/pglite';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import type { Db } from './db.js';
 import { createPgStoresFromDb, type PgStores } from './index.js';
 import { schedules } from './schema.js';
-import { createMigratedPglite } from './pglite-template.test-support.js';
+import { createMigratedTestDb, type TestDbHandle } from './test-db.test-support.js';
 
 /**
  * issue #1955（#1929 の同じ形の残り）。`ScheduleStore.clear()` の契約は「継続中の
@@ -17,7 +16,7 @@ import { createMigratedPglite } from './pglite-template.test-support.js';
  * `PgScheduleStore.clear()`）は、schedules の DELETE を確定させたあとで
  * schedule_phases の DELETE に失敗するので、この歯は赤くなる。
  */
-let client: PGlite;
+let client: TestDbHandle;
 let db: Db;
 let stores: PgStores;
 
@@ -30,7 +29,7 @@ const PLAN = {
 };
 
 beforeEach(async () => {
-  ({ client, db } = await createMigratedPglite());
+  ({ client, db } = await createMigratedTestDb());
   stores = createPgStoresFromDb(db);
 
   // schedule_phases への DELETE だけを確実に失敗させる（BEFORE DELETE トリガ）。

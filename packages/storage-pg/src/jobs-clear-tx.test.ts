@@ -1,11 +1,10 @@
 import type { Job } from '@alteroid/core';
-import { PGlite } from '@electric-sql/pglite';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import type { Db } from './db.js';
 import { createPgStoresFromDb, type PgStores } from './index.js';
 import { jobs } from './schema.js';
-import { createMigratedPglite } from './pglite-template.test-support.js';
+import { createMigratedTestDb, type TestDbHandle } from './test-db.test-support.js';
 
 /**
  * issue #1929。`JobStore.clear()` の契約は「jobs と approvals を一緒に1操作で
@@ -17,7 +16,7 @@ import { createMigratedPglite } from './pglite-template.test-support.js';
  * （直す前の `PgJobStore.clear()`）は、jobs の DELETE を確定させたあとで
  * approvals の DELETE に失敗するので、この歯は赤くなる。
  */
-let client: PGlite;
+let client: TestDbHandle;
 let db: Db;
 let stores: PgStores;
 
@@ -30,7 +29,7 @@ const GOOD_JOB: Job = {
 };
 
 beforeEach(async () => {
-  ({ client, db } = await createMigratedPglite());
+  ({ client, db } = await createMigratedTestDb());
   stores = createPgStoresFromDb(db);
 
   // approvals への DELETE だけを確実に失敗させる（BEFORE DELETE トリガ）。

@@ -55,6 +55,8 @@ import { runnerEventSchema, type RunnerEvent } from './runner-protocol.js';
 interface Started {
   options: Options;
   finish: () => void;
+  /** `system/task_notification` を1件流す（Issue #3008。フックは背景処理の完了を待つ）。 */
+  notify: (taskId: string) => void;
 }
 
 function fakeRunnerSdk(): { fn: typeof sdkQuery; started: Started[] } {
@@ -64,6 +66,17 @@ function fakeRunnerSdk(): { fn: typeof sdkQuery; started: Started[] } {
     const record: Started = {
       options: input.options,
       finish: () => emit?.(null),
+      notify: (taskId: string) =>
+        emit?.({
+          type: 'system',
+          subtype: 'task_notification',
+          task_id: taskId,
+          status: 'completed',
+          output_file: '/tmp/does-not-exist.txt',
+          summary: '完了',
+          session_id: `sess-${started.length}`,
+          uuid: `uuid-task-notification-${taskId}`,
+        } as unknown as SDKMessage),
     };
     started.push(record);
 
@@ -405,7 +418,10 @@ describe('歯5: 所有者の控えを作らない（材料が無い。#929 の�
       agent_type: 'worker',
     });
 
-    const result = await fireSubagentStop(started.options, {
+    // **フックは背景処理の完了を待つ**（Issue #3008）。控えが生きていれば `mine` に入って待つので、
+    // 返らないことを先に確かめ（控えが無ければ即 `{ continue: true }` で返ってしまう）、完了通知を
+    // 流してから起こし直しを確かめる。
+    const pending = fireSubagentStop(started.options, {
       ...STOP_BASE,
       agent_id: 'agent-2',
       background_tasks: [
@@ -419,6 +435,16 @@ describe('歯5: 所有者の控えを作らない（材料が無い。#929 の�
         },
       ],
     });
+
+    let returned = false;
+    void pending.then(() => {
+      returned = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(returned).toBe(false);
+
+    started.notify('bg-2');
+    const result = await pending;
 
     expect(result).toMatchObject({
       continue: true,

@@ -1,9 +1,8 @@
-import { PGlite } from '@electric-sql/pglite';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import type { Db } from './db.js';
 import { createPgStoresFromDb, type PgStores } from './index.js';
-import { createMigratedPglite } from './pglite-template.test-support.js';
+import { createMigratedTestDb, type TestDbHandle } from './test-db.test-support.js';
 
 /**
  * 許可の記録（`PermissionGrantStore`）の lost update。fs 版
@@ -13,7 +12,7 @@ import { createMigratedPglite } from './pglite-template.test-support.js';
  * 確かめる。
  */
 describe('PermissionGrantStore.revoke() / markUsed() — lost update を作らない（pg 実装）', () => {
-  let client: PGlite;
+  let client: TestDbHandle;
   let db: Db;
   let stores: PgStores;
 
@@ -29,7 +28,7 @@ describe('PermissionGrantStore.revoke() / markUsed() — lost update を作ら�
   };
 
   beforeEach(async () => {
-    ({ client, db } = await createMigratedPglite());
+    ({ client, db } = await createMigratedTestDb());
     stores = createPgStoresFromDb(db);
   });
 

@@ -1431,3 +1431,11 @@ export { preparePermissionGrantForPut } from './permission-grant-input.js';
 export { verifySessionRegistryNulContract } from './session-registry-nul-contract.js';
 export { verifyPersonaNulContract } from './persona-nul-contract.js';
 export { verifyScheduleNulContract } from './schedule-nul-contract.js';
+/** auth（accounts・identities・accessTokens・loginRequests）の入口の NUL の扱い（issue #3011）。 */
+export {
+  prepareAccessTokenForWrite,
+  prepareAccountForWrite,
+  prepareIdentityForWrite,
+  prepareLoginRequestForWrite,
+} from './auth-input.js';
+export { verifyAuthNulContract } from './auth-nul-contract.js';

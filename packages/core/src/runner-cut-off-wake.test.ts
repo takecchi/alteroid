@@ -7,7 +7,7 @@ import type {
 } from '@anthropic-ai/claude-agent-sdk';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { createRunnerHost, type RunnerHost, SUBAGENT_WAKEUP_LIMIT_PER_TASK } from './runner.js';
+import { createRunnerHost, type RunnerHost, SUBAGENT_BACKGROUND_WAIT_MS } from './runner.js';
 import type { RunnerEvent } from './runner-protocol.js';
 
 /**
@@ -179,7 +179,11 @@ const managerTool = {
   tool_response: { content: 'ok' },
 };
 
-/** 作業者を上限まで起こし直させて打ち切り、その作業者が背景の Bash を1本残した状態にする。 */
+/**
+ * 作業者が背景処理を残したまま畳もうとし、完了を待つ上限（30分。偽の時計で進める）に達して
+ * 打ち切られ、その作業者が背景の Bash を1本残した状態にする（Issue #3008。以前は起こし直しの
+ * 回数を使い切らせていた）。
+ */
 async function cutOffWithBackgroundBash(
   options: Options,
   agentId: string,
@@ -189,8 +193,9 @@ async function cutOffWithBackgroundBash(
     ...bashByWorker(`bg-${agentId}`, agentId),
     tool_input: { command: 'sleep 90', run_in_background: true },
   });
-  for (let n = 0; n <= SUBAGENT_WAKEUP_LIMIT_PER_TASK; n += 1) {
-    await fire(options, 'SubagentStop', {
+  vi.useFakeTimers();
+  try {
+    const stopped = fire(options, 'SubagentStop', {
       hook_event_name: 'SubagentStop',
       stop_hook_active: false,
       agent_transcript_path: '/tmp/does-not-exist.jsonl',
@@ -202,6 +207,11 @@ async function cutOffWithBackgroundBash(
         { id: `bg-${agentId}`, type: 'monitor', status: 'running', command: 'sleep 90' },
       ],
     });
+    await vi.advanceTimersByTimeAsync(SUBAGENT_BACKGROUND_WAIT_MS);
+    // 打ち切り（起こし直さない）なので、追加の文脈は無い。
+    expect(await stopped).toEqual({ continue: true });
+  } finally {
+    vi.useRealTimers();
   }
   await fire(options, 'PostToolUse', bashByWorker(taskId, agentId));
 }

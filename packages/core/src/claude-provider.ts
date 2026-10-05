@@ -42,6 +42,7 @@ import type {
 import { noteBackgroundFailure } from './dropped-record.js';
 import { excerpt } from './excerpt.js';
 import type { PermissionModeName } from './permission-mode.js';
+import { SUBAGENT_BACKGROUND_WAIT_MS } from './runner-subagent-stop-state.js';
 import { resultErrorLines, resultFailureOf } from './sdk-failure.js';
 import { CLONE_ALLOWED_TOOLS, MCP_SERVER_NAME } from './tools.js';
 import { classifyUsageNotice, toRateLimitFacts } from './usage-limits.js';
@@ -67,6 +68,23 @@ import { isSuccessResult, modelUsageOf } from './usage.js';
  */
 
 /** PreCompact フック内の蒸留に許す時間（秒）。超えたら compaction を待たせない。 */
+
+/**
+ * マネージャーセッションの `SubagentStop` フックの matcher に明示する timeout（秒。Issue #3008）。
+ *
+ * **フックは、作業者が起こした背景処理の完了を最大 `SUBAGENT_BACKGROUND_WAIT_MS` まで
+ * 待つ**（`RunnerSession#onSubagentStop`）。SDK のフックの timeout は、超えると
+ * `SDK host SubagentStop callback hook timed out after …ms; continuing without its answer`
+ * （SDK 0.3.289 のバイナリを静的に走査した文言）で**答え無しのまま作業者を畳む**。そうなると
+ * `limit_reached` の経路（`recordCutOff`）を通らず、完了の配達（#1563 / #2387）が働かない。
+ * だから **待ちの上限 < この timeout** を必ず守る（`claude-provider.test.ts` が不等式を固定）。
+ * 120 秒は、待ちが時間切れになってから note・`recordCutOff` を終えるまでの余裕。
+ *
+ * ⚠️ SDK の既定値は未確認（バイナリ上は、汎用のフックの既定が 600 秒の定数らしいと読めるだけ）。
+ * だから既定に頼らず明示する。
+ */
+export const SUBAGENT_STOP_HOOK_TIMEOUT_SECONDS =
+  Math.ceil(SUBAGENT_BACKGROUND_WAIT_MS / 1000) + 120;
 export const PRE_COMPACT_HOOK_TIMEOUT_SECONDS = 120;
 
 /** いま alteroid が実際に使っている唯一の provider。capabilities は10個すべて true。 */
@@ -881,8 +899,8 @@ export interface ManagerSessionOptionsRequest {
    * （#357 の実測口）。
    *
    * **`AgentContextHook` に載せる（#486 中立の口の4本目）。** `runner.ts` の
-   * `#onSubagentStop` は、当人が起こした背景処理が残っていて通し上限・
-   * 1本あたりの上限のどちらも超えていない回に、作業者を起こし直す文脈を
+   * `#onSubagentStop` は、当人が起こした背景処理が残っていて、その完了を待ち終えた回に（待ちの
+   * 上限 30分。Issue #3008）、作業者を起こし直す文脈を
    * 返す（`addContext`）——「起きたことをただ記録する」を超えた判断なので
    * `AgentObservationHook` には載らない。`wrapContextHook` が SDK の
    * `hookSpecificOutput.additionalContext` へ包み直す。optional にしない。理由は直上の `onUserPromptSubmit` と
@@ -1149,7 +1167,11 @@ export function buildManagerSessionOptions(request: ManagerSessionOptionsRequest
       // 起こし直しの文脈を返すことがある（`ManagerSessionOptionsRequest.onSubagentStop`
       // の doc）。`wrapContextHook` が SDK の形へ包み直す。
       SubagentStop: [
-        { hooks: [wrapContextHook('SubagentStop', onSubagentStop, toAgentSubagentStopRecord)] },
+        {
+          // **待つフック**（`SUBAGENT_STOP_HOOK_TIMEOUT_SECONDS` の doc）。待ちの上限より長く明示する。
+          timeout: SUBAGENT_STOP_HOOK_TIMEOUT_SECONDS,
+          hooks: [wrapContextHook('SubagentStop', onSubagentStop, toAgentSubagentStopRecord)],
+        },
       ],
       // **観測専用**（#861）。`{ continue: true }` を返すだけで、`decision` も
       // `hookSpecificOutput` も返さない —— 直上の `SubagentStop` は起こし直し

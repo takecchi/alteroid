@@ -1,8 +1,6 @@
 import { createAuthProviderRegistry, createAuthService, decodeState } from '@alteroid/core';
 import type { OAuthProfile, OAuthProvider } from '@alteroid/core';
-import { PGlite } from '@electric-sql/pglite';
 import { sql } from 'drizzle-orm';
-import { drizzle } from 'drizzle-orm/pglite';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import type { Db } from './db.js';
@@ -13,7 +11,11 @@ import {
   type PgStores,
 } from './index.js';
 import { AUTH_ACCOUNTS_EMAIL_LOWER_INDEX } from './migrate.js';
-import { createMigratedPglite } from './pglite-template.test-support.js';
+import {
+  createEmptyTestDb,
+  createMigratedTestDb,
+  type TestDbHandle,
+} from './test-db.test-support.js';
 
 /**
  * pg ドライバの受け入れ確認。
@@ -35,12 +37,12 @@ import { createMigratedPglite } from './pglite-template.test-support.js';
  * を複製している（分岐は生まない——共有モジュールへ切り出すほどの複雑さが
  * 無かったため、各ファイルへ同じ短い足場を複製する側を選んだ）。
  */
-let client: PGlite;
+let client: TestDbHandle;
 let db: Db;
 let stores: PgStores;
 
 beforeEach(async () => {
-  ({ client, db } = await createMigratedPglite());
+  ({ client, db } = await createMigratedTestDb());
   stores = createPgStoresFromDb(db);
 });
 
@@ -1135,8 +1137,7 @@ describe('AuthStore', () => {
      * 重複ができないことまでは保証しない——ここでは重複の有無を assert しない。
      */
     it('#1702 の重複状態（旧索引だけの DB）でも、別々の identity・大小文字違いの候補メールで並行に呼んでも投げない', async () => {
-      const localClient = new PGlite();
-      const localDb = drizzle(localClient);
+      const { client: localClient, db: localDb } = await createEmptyTestDb();
       await migrate(localDb);
       await localDb.execute(sql.raw(`drop index if exists ${AUTH_ACCOUNTS_EMAIL_LOWER_INDEX}`));
       await localDb.execute(

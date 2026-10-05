@@ -1,15 +1,13 @@
 import { randomBytes } from 'node:crypto';
 
 import type { Commitment } from '@alteroid/core';
-import { PGlite } from '@electric-sql/pglite';
 import { sql } from 'drizzle-orm';
-import { drizzle } from 'drizzle-orm/pglite';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import type { Db } from './db.js';
 import { measureStorageFootprint, STATEMENT_TIMEOUT_MS, type TableSizeStats } from './footprint.js';
 import { archive, commitments, inboxEvents, jobs, journal } from './schema.js';
-import { createMigratedPglite } from './pglite-template.test-support.js';
+import { createMigratedTestDb, type TestDbHandle } from './test-db.test-support.js';
 
 /**
  * `pg_column_size` は**保存された（圧縮後の）**サイズを見る。`'x'.repeat(n)`
@@ -83,11 +81,11 @@ function emptyJournalWindow(): { rows: number; storedBytes: number; textBytes: n
  * の2つを歯にする。**打ち切りが実際に発火することそのものは、この環境の
  * PGlite では歯にできない。**
  */
-let client: PGlite;
+let client: TestDbHandle;
 let db: Db;
 
 beforeEach(async () => {
-  ({ client, db } = await createMigratedPglite());
+  ({ client, db } = await createMigratedTestDb());
 });
 
 afterEach(async () => {
@@ -360,9 +358,7 @@ describe('measureStorageFootprint（本文は Node のメモリへ載せない�
    */
   it('5表分の SELECT は、本文の列を pg_column_size(...) / octet_length(...::text) の中でしか参照しない', async () => {
     const queries: string[] = [];
-    const loggingDb = drizzle(client, {
-      logger: { logQuery: (query: string) => queries.push(query) },
-    });
+    const loggingDb = client.withLogger({ logQuery: (query: string) => queries.push(query) });
 
     await measureStorageFootprint(loggingDb);
 
@@ -394,9 +390,7 @@ describe('measureStorageFootprint（本文は Node のメモリへ載せない�
 
   it("5表それぞれの測定が set_config('statement_timeout', …) を撃っている（配線の確認）", async () => {
     const queries: string[] = [];
-    const loggingDb = drizzle(client, {
-      logger: { logQuery: (query: string) => queries.push(query) },
-    });
+    const loggingDb = client.withLogger({ logQuery: (query: string) => queries.push(query) });
 
     await measureStorageFootprint(loggingDb, STATEMENT_TIMEOUT_MS);
 

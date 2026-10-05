@@ -1,5 +1,6 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 
+import { migratedTemplate } from './pglite-template.test-support.js';
 import {
   createMigratedTestDb,
   realPostgresCollation,
@@ -20,6 +21,11 @@ import {
  */
 const real = realPostgresUrl() !== undefined;
 const opened: TestDbHandle[] = [];
+
+// PGlite の側（本物を向けないとき）の雛形作りの費用は、歯の本体ではなくここで払う。
+beforeAll(async () => {
+  if (!real) await migratedTemplate();
+}, 30_000);
 
 afterEach(async () => {
   await Promise.all(opened.splice(0).map((client) => client.close()));

@@ -1,5 +1,5 @@
 /**
- * `RunnerSession`（`runner.ts`）が持っていた **起こし直しの上限で打ち切った
+ * `RunnerSession`（`runner.ts`）が持っていた **背景処理の待ちの上限（30分）で打ち切った
  * 作業者を追う2フィールド**（`#cutOffWorkers` / `#pendingCutOffNotifications`。
  * #901）を、独立の単位として切り出したもの（Issue #1190 段0）。
  *
@@ -11,7 +11,7 @@
  *
  * ## 何を持っているか
  *
- * - **`#cutOffWorkers`**——起こし直しの上限で打ち切った作業者の `agent_id`
+ * - **`#cutOffWorkers`**——背景処理の待ちの上限（30分）で打ち切った作業者の `agent_id`
  *   （{@link RunnerCutOffWorkers.recordCutOff} で記録し、
  *   {@link RunnerCutOffWorkers.consumeCutOff} で「在ったか」を見ながら消費する）。
  *   詳しい経路・SDK 側の相関の根拠は {@link RunnerCutOffWorkers.recordCutOff} /
@@ -109,7 +109,7 @@
  */
 export class RunnerCutOffWorkers {
   /**
-   * 起こし直しの上限で打ち切った作業者の `agent_id`（#901）。
+   * 背景処理の待ちの上限（30分）で打ち切った作業者の `agent_id`（#901）。
    *
    * `Task` の結果（`AgentOutput`）は打ち切りも正常な完了も同じ `status: 'completed'`
    * の顔で返る（#901 の段0の実測）。打ち切ったのは alteroid 自身
@@ -127,7 +127,7 @@ export class RunnerCutOffWorkers {
   readonly #cutOffWorkers = new Set<string>();
 
   /**
-   * `task_notification` 経由で「起こし直しの上限で打ち切られていた」と判明したが、
+   * `task_notification` 経由で「背景処理の待ちの上限（30分）で打ち切られていた」と判明したが、
    * まだマネージャー自身の次の `PostToolUse` へ注記していない作業者の `agent_id`
    * （#901）。
    *
@@ -215,7 +215,7 @@ export class RunnerCutOffWorkers {
   readonly #pendingBackgroundTaskOutputs: PendingBackgroundTaskOutput[] = [];
 
   /**
-   * `agentId` を「起こし直しの上限で打ち切った」と記録する
+   * `agentId` を「背景処理の待ちの上限（30分）で打ち切った」と記録する
    * （`RunnerSession#onSubagentStop` の上限到達の分岐から呼ぶ）。
    *
    * 既に在っても一度 `delete` してから `add` し直す——同じ鍵の挿入順を
@@ -357,7 +357,7 @@ export class RunnerCutOffWorkers {
 }
 
 /**
- * `#cutOffWorkers`（起こし直しの上限で打ち切った作業者）を控える件数の上限
+ * `#cutOffWorkers`（背景処理の待ちの上限（30分）で打ち切った作業者）を控える件数の上限
  * （#901）。長寿のセッションで表が際限なく育たないための蓋。
  */
 export const CUT_OFF_WORKERS_LIMIT = 500;

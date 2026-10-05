@@ -5,14 +5,16 @@ import {
   summarizeUsage,
   type UsageSnapshot,
 } from '@alteroid/core';
-import { PGlite } from '@electric-sql/pglite';
 import { sql } from 'drizzle-orm';
-import { drizzle } from 'drizzle-orm/pglite';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import type { Db } from './db.js';
 import { STATEMENTS, migrate } from './migrate.js';
-import { createMigratedPglite } from './pglite-template.test-support.js';
+import {
+  createEmptyTestDb,
+  createMigratedTestDb,
+  type TestDbHandle,
+} from './test-db.test-support.js';
 import { PgUsageStore } from './usage.js';
 
 /**
@@ -23,12 +25,12 @@ import { PgUsageStore } from './usage.js';
  *   `usage_daily` / `usage_turns` の行と合計は1つも増えない（0 を積まない）
  * - 既存の4表は1バイトも変わらない（migrate 前の状態から通して確かめる）
  */
-let client: PGlite;
+let client: TestDbHandle;
 let db: Db;
 let store: PgUsageStore;
 
 beforeEach(async () => {
-  ({ client, db } = await createMigratedPglite());
+  ({ client, db } = await createMigratedTestDb());
   store = new PgUsageStore(db);
 });
 
@@ -230,12 +232,11 @@ describe('PgUsageStore.recordUnmetered（無報告の provider のターン）',
 });
 
 describe('既存の行の集計値は、S3 の migrate を通しても変わらない（pg）', () => {
-  let legacyClient: PGlite;
+  let legacyClient: TestDbHandle;
   let legacyDb: Db;
 
   beforeEach(async () => {
-    legacyClient = new PGlite();
-    legacyDb = drizzle(legacyClient);
+    ({ client: legacyClient, db: legacyDb } = await createEmptyTestDb());
     // S3 より前のスキーマ: usage_unmetered を作る文だけを除いて通す。
     for (const statement of STATEMENTS.filter((s) => !s.includes('usage_unmetered'))) {
       await legacyDb.execute(sql.raw(statement));
