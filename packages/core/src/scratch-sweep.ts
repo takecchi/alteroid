@@ -45,10 +45,7 @@ import {
  *    `rm` の最中は止められない）。消す直前にもう一度、生きた委譲と突き合わせる。
  *
  * ## 既知の限界
- * - 探索の深さ上限（既定3）より深い所にだけ `.git` が在る作業場は見えない
- *   （`findGitDirs` と同じ）。マネージャーの作業場は `/tmp/mgr-x/<repo>` の深さ1が通例。
- * - 消す直前の突き合わせと `rm` の完了のあいだに再開された委譲は守れない（`rm` は
- *   短い。再開は猶予が先に効くので、通常は猶予の内側で起きる）。
+ * - 探索は深さ12まで。それより下に降りなかった枝があれば「判定できない」で残す。
  * - `rm` が途中で止まった（失敗・プロセス終了）作業場は、半分壊れたまま残る。次の回は
  *   git が失敗するので「判定できない」で残る（消し切らない）。
  */
@@ -67,6 +64,11 @@ export const MAX_SCRATCH_SWEEP_MS = 2_147_483_647;
 /** 未追跡の名前を記録へ残す件数の上限と、1件の長さの上限。 */
 export const SCRATCH_SWEEP_UNTRACKED_NAMES_LIMIT = 20;
 export const SCRATCH_SWEEP_NAME_MAX_LENGTH = 200;
+/**
+ * 作業ツリーを探す深さ。`.git` を見落として「無い」と判定しないよう、実質外す値にし、
+ * それでも降りなかった枝があれば「判定できない」で残す。
+ */
+export const SCRATCH_SWEEP_MAX_DEPTH = 12;
 /** 片付けの git 1本の期限（ms）。 */
 export const SCRATCH_SWEEP_GIT_TIMEOUT_MS = 15_000;
 
@@ -133,6 +135,8 @@ export interface ScratchSweeperOptions {
   readdirFn?: (dir: string) => Promise<readonly ScratchDirEntry[]>;
   /** `findGitDirs` が使う readdir（既定は本物）。 */
   gitReaddirFn?: ReaddirFn;
+  /** 作業ツリーを探す深さ（既定 {@link SCRATCH_SWEEP_MAX_DEPTH}。テスト用の口）。 */
+  maxDepth?: number;
   existsFn?: (p: string) => Promise<boolean>;
   rmFn?: (p: string) => Promise<void>;
   statfsFn?: (p: string) => Promise<ScratchSweepStatfs>;
@@ -279,6 +283,8 @@ export class ScratchSweeper {
 
   async #inspectDir(dir: string, signal: AbortSignal): Promise<DirInspection> {
     const found = await findGitDirs(dir, {
+      maxDepth: this.#o.maxDepth ?? SCRATCH_SWEEP_MAX_DEPTH,
+      reportDepthLimit: true,
       ...(this.#o.gitReaddirFn === undefined ? {} : { readdirFn: this.#o.gitReaddirFn }),
     });
     if (found.rootUnreadable !== undefined) {
@@ -287,6 +293,8 @@ export class ScratchSweeper {
     let searchUnknown: string | undefined;
     if (found.truncatedAtCount !== undefined) {
       searchUnknown = `作業ツリーの探索を ${String(found.truncatedAtCount)} 件で打ち切った`;
+    } else if (found.depthLimitedCount !== undefined) {
+      searchUnknown = `深さ上限より下に降りなかった子ディレクトリが ${String(found.depthLimitedCount)} 個（${found.depthLimitedSample ?? ''}）`;
     } else if (found.unreadableDirCount !== undefined) {
       searchUnknown = `読めない子ディレクトリが ${String(found.unreadableDirCount)} 個（${found.unreadableDirSample ?? ''}）`;
     }

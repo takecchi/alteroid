@@ -243,6 +243,33 @@ describe('/tmp の委譲の作業場の片付け（#3039）', () => {
     expect(event?.kept).toMatchObject([{ reason: 'undecidable' }]);
   });
 
+  it('深さ5に .git（未 push のコミット付き）がある作業場は消えない。深さ上限を超える枝は判定できないとして残す', async () => {
+    const deep = path.join(root, 'mgr-aaaa1111', 'a', 'b', 'c', 'd');
+    await mkdir(path.dirname(deep), { recursive: true });
+    await mkdir(deep, { recursive: true });
+    const repo = path.join(deep, 'repo');
+    await mkdir(repo);
+    const bare = path.join(origins, 'deep.git');
+    g(origins, 'init', '-q', '--bare', bare);
+    g(repo, 'init', '-q', '-b', 'main');
+    g(repo, 'remote', 'add', 'origin', bare);
+    await writeFile(path.join(repo, 'a.txt'), 'one\n');
+    g(repo, 'add', 'a.txt');
+    g(repo, 'commit', '-qm', 'unpushed');
+    const s = sweeper();
+    await expire(s);
+    const event = await s.sweep(ctl.signal, 'r1');
+    expect(existsSync(path.join(repo, 'a.txt'))).toBe(true);
+    expect(event?.kept).toMatchObject([{ name: 'mgr-aaaa1111', reason: 'unpushed-commits' }]);
+
+    // 深さ上限そのものを小さくすると、降りなかった枝として「判定できない」で残す。
+    const s2 = sweeper({ maxDepth: 2 });
+    await expire(s2);
+    const event2 = await s2.sweep(ctl.signal, 'r1');
+    expect(existsSync(path.join(repo, 'a.txt'))).toBe(true);
+    expect(event2?.kept).toMatchObject([{ reason: 'undecidable' }]);
+  });
+
   it('主リポジトリが clean でも、残す linked worktree が依存していれば主を残す', async () => {
     const main = await makeClone('mgr-aaaa1111');
     const wt = path.join(root, 'mgr-bbbb2222', 'wt');
