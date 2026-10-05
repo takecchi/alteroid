@@ -22,7 +22,7 @@
 import { cleanup, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { Badge, Button, FieldHint, Input } from './common';
+import { Badge, Button, Empty, FieldHint, Input } from './common';
 
 afterEach(() => {
   cleanup();
@@ -102,5 +102,28 @@ describe('FieldHint（入力欄の補足文）', () => {
     expect(tokens).toContain('break-words');
     expect(tokens).not.toContain('truncate');
     expect(tokens).not.toContain('whitespace-nowrap');
+  });
+});
+
+describe('Empty の余白', () => {
+  const tokens = (el: HTMLElement) => el.className.split(/\s+/);
+
+  it('省略時は従来どおり p-6（既存の呼び出しを変えない）', () => {
+    render(<Empty>空</Empty>);
+    expect(tokens(screen.getByText('空'))).toContain('p-6');
+  });
+
+  it("inset='card' は見出しと同じ左端（px-4）で、上下を詰める（p-6 を持たない）", () => {
+    render(<Empty inset="card">空</Empty>);
+    const t = tokens(screen.getByText('空'));
+    expect(t).toContain('px-4');
+    expect(t).toContain('py-3');
+    expect(t).not.toContain('p-6');
+  });
+
+  it("inset='none' は余白を持たない", () => {
+    render(<Empty inset="none">空</Empty>);
+    const t = tokens(screen.getByText('空'));
+    expect(t.filter((c) => /^p[xy]?-/.test(c))).toEqual([]);
   });
 });
