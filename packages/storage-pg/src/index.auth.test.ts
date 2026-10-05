@@ -11,11 +11,7 @@ import {
   type PgStores,
 } from './index.js';
 import { AUTH_ACCOUNTS_EMAIL_LOWER_INDEX } from './migrate.js';
-import {
-  createEmptyTestDb,
-  createMigratedTestDb,
-  type TestDbHandle,
-} from './test-db.test-support.js';
+import { createMigratedTestDb, type TestDbHandle } from './test-db.test-support.js';
 
 /**
  * pg ドライバの受け入れ確認。
@@ -1137,8 +1133,14 @@ describe('AuthStore', () => {
      * 重複ができないことまでは保証しない——ここでは重複の有無を assert しない。
      */
     it('#1702 の重複状態（旧索引だけの DB）でも、別々の identity・大小文字違いの候補メールで並行に呼んでも投げない', async () => {
-      const { client: localClient, db: localDb } = await createEmptyTestDb();
-      await migrate(localDb);
+      // **`beforeEach` が用意した migrate 済みの自分専用 DB をそのまま使う**（#3029）。
+      // 以前はここで `createEmptyTestDb()` ＋ `migrate` を通していた——テスト本体の中で
+      // PGlite をもう1つ冷えた状態から起こして全 migrate を流すので、並列で混むと
+      // 本体だけで 5 秒の上限（vitest 既定）を食い潰した（load average 約 64 で
+      // 起動 3.1 秒 ＋ migrate 0.3 秒、並行呼び出し本体は 47ms）。空の DB へ migrate
+      // した直後の状態と、雛形から起こした migrate 済みの状態は同じ中身なので、
+      // 旧索引だけの DB の作り方（新索引を drop して旧索引を作り直す）は変わらない。
+      const localDb = db;
       await localDb.execute(sql.raw(`drop index if exists ${AUTH_ACCOUNTS_EMAIL_LOWER_INDEX}`));
       await localDb.execute(
         sql.raw(
@@ -1179,8 +1181,6 @@ describe('AuthStore', () => {
           ),
         ]),
       ).resolves.toBeDefined();
-
-      await localClient.close();
     });
   });
 
