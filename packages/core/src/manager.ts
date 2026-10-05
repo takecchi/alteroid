@@ -14226,7 +14226,7 @@ class Pool implements ManagerPool {
           : '再開の指示は送信済みなので、報告を待てばよい。' +
             '返事待ちだった確認は器と一緒に失われているので、必要ならマネージャーが聞き直してくる。',
         // **作業ディレクトリが空かもしれないことを黙っていない。** 器に永続化が
-        // 無ければコミット前の変更は消えている（roadmap M5「workspace 復旧」）。
+        // 無ければ外へ保存していない作業は消えている（roadmap M5「workspace 復旧」）。
         // **判定は `workspaceAfterSwap` に委ねる**（`restartNudge` と同じ判定を
         // 二重に書かない）。**path は出さない** — 直前の行で既に
         // `作業ディレクトリ: ${job.cwd ?? '(不明)'}` を出しているので、重ねると
@@ -15254,7 +15254,7 @@ function cloneWorkspaceAfterSwapLine(after: WorkspaceAfterSwap): string {
       );
     case 'kept':
       return (
-        '作業ディレクトリは器を跨いで共有されているので、コミット前の変更も残っている。' +
+        '作業ディレクトリは器を跨いで共有されているので、外へ保存していない作業も残っている。' +
         'ただし書きかけで落ちた可能性はあるので、手元を確かめさせること。'
       );
     case 'rebuild':

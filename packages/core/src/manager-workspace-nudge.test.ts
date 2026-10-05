@@ -393,11 +393,11 @@ describe('runner-swap の一言は job.workspace を読む（#485 の141行目�
     );
   });
 
-  it('shared-volume: クローン向け（manager_message）は「コミット前の変更も残っている」を含む', async () => {
+  it('shared-volume: クローン向け（manager_message）は「外へ保存していない作業も残っている」を含む', async () => {
     const job = jobWith('mgr-shared-clone', { kind: 'shared-volume', path: '/mnt/shared/proj' });
     const { cloneText } = await runnerSwapNudge(job);
 
-    expect(cloneText).toContain('コミット前の変更も残っている');
+    expect(cloneText).toContain('外へ保存していない作業も残っている');
     // **path は出さない** — 同じ報告が既に `作業ディレクトリ: ${job.cwd}` を
     // 出しているので、重ねると読む側が2つの値を突き合わせることになる。
     expect(cloneText).not.toContain('/mnt/shared/proj');

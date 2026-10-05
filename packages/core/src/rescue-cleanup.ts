@@ -31,7 +31,7 @@ import type { Job, LastRescue, RescueRemovalReason, RescueWorktree } from './sch
  *    - `failed` / `stopped`: 14日。失敗・停止した仕事は、人間が原因を調べて取り戻しに来る
  *      のが数日〜週の単位で起きる。
  *    - **`lost` は時間では消さない。** `lost` は「戻れなかった」であって「成果が無い」では
- *      ない（`jobStatusSchema` の doc）。起こし直すかどうかはリモートを確かめて決める——退避 ref は
+ *      ない（`jobStatusSchema` の doc）。起こし直すかどうかは外へ出た成果（PR・コミット・送信済みのメール・登録済みの予定・投稿先など）を確かめて決める——退避 ref は
  *      その材料である。長期放置された `lost` の ref は溜まるが、1作業ツリーにつき1本で、
  *      人間が `lost` を `stopped` へ畳めば14日で消える。`running` / `waiting_human` も時間では
  *      消さない。

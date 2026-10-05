@@ -1673,7 +1673,9 @@ describe('診断（クローンの manager_list / manager_report と同じ材料
       expect(await screen.findByText(/認証トークンの世代ずれの疑い/)).toBeTruthy();
       // (1) 確かめろ、確かめ先の主（リモート）を名指しする。`LostNote` と同じ語。
       expect(
-        screen.getByText(/止める前に、まずリモート（PR・ブランチ・コミット）を確かめること/),
+        screen.getByText(
+          /止める前に、まず外へ出た成果（PR・コミット・送信済みのメール・登録済みの予定・投稿先など）を確かめること/,
+        ),
       ).toBeTruthy();
       // (2) #914 が名指しした過小な言い方（「会話は失われる」）へ戻っていない。
       expect(screen.getByText(/失われるのは会話だけではない/)).toBeTruthy();
@@ -1698,7 +1700,9 @@ describe('診断（クローンの manager_list / manager_report と同じ材料
       expect(await screen.findByText(/認証トークンの世代ずれの疑い/)).toBeTruthy();
       // 主（リモート）は観測の有無に関わらず出る。
       expect(
-        screen.getByText(/止める前に、まずリモート（PR・ブランチ・コミット）を確かめること/),
+        screen.getByText(
+          /止める前に、まず外へ出た成果（PR・コミット・送信済みのメール・登録済みの予定・投稿先など）を確かめること/,
+        ),
       ).toBeTruthy();
       // 補助（未push観測）は在るときだけ、かつ「いまの状態ではない」の断りごと出る。
       expect(

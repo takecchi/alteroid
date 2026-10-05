@@ -1099,7 +1099,7 @@ function SystemErrorNote({ manager }: { manager: ManagerSummary }) {
  *   断りに相当する確認の一手が無い）。定数をそのまま転記すると、押しても
  *   出てこない道具名を人間に読ませることになる
  * - **`LostNote`（このファイル、上）が既に採っている作法に倣う**——
- *   確かめ先の主は「起こし直す前に、まずリモート（PR・ブランチ・コミット）を
+ *   確かめ先の主は「起こし直す前に、まず外へ出た成果（PR・コミット・送信済みのメール・登録済みの予定・投稿先など）を
  *   確かめること」と同じ語にする。**`UnpushedWorkObservationNote`
  *   （「未push観測」）は主ではなく補助——最初のレビューでは確かめ先の主に
  *   据えたが、2つ理由で降格した**:
@@ -1137,7 +1137,7 @@ function resetTimeSkewText(manager: ManagerSummary): ReactNode | null {
         鍵が通る状態へ戻っても、このセッション自身はターンの境界に達するまで戻らない。
         この行が消えないまま 429 が続くようなら、
         <strong className="font-medium">
-          止める前に、まずリモート（PR・ブランチ・コミット）を確かめること
+          止める前に、まず外へ出た成果（PR・コミット・送信済みのメール・登録済みの予定・投稿先など）を確かめること
         </strong>
         。
         {hasUnpushedWorkObservation && (

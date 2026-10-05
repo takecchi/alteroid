@@ -1066,7 +1066,9 @@ describe('renderManagerList', () => {
         manager({ status: 'running', tokenGenerationUnknownReason: 'reattached-across-restart' }),
       ]);
       expect(text).toContain('デーモンの再起動をまたいで');
-      expect(text).toContain('まずリモート（PR・ブランチ・コミット）を確かめること');
+      expect(text).toContain(
+        'まず外へ出た成果（PR・コミット・送信済みのメール・登録済みの予定・投稿先など）を確かめること',
+      );
       expect(text).toContain('失われるのは会話だけではない');
       // core の助言定数（`STALE_TOKEN_RESTART_ADVICE`）の逐語は
       // `pnpm check:stale-token-restart-advice` が生成元の外を禁じている
@@ -1107,7 +1109,9 @@ describe('renderManagerList', () => {
     it('stale: 起こし直す前にリモートを確かめるよう言い、会話以外も失われうると言う', () => {
       const text = renderManagerList([manager({ status: 'running', resetTimeSkewMatch: 'stale' })]);
       expect(text).toContain('世代ずれの疑い');
-      expect(text).toContain('まずリモート（PR・ブランチ・コミット）を確かめること');
+      expect(text).toContain(
+        'まず外へ出た成果（PR・コミット・送信済みのメール・登録済みの予定・投稿先など）を確かめること',
+      );
       expect(text).toContain('失われるのは会話だけではない');
       expect(text).not.toContain('manager_start');
     });
@@ -1121,7 +1125,7 @@ describe('renderManagerList', () => {
             kind: 'observed',
             at: '2026-09-23T00:00:00.000Z',
             cwd: '/workspace',
-            worktrees: [],
+            worktrees: [{ relativePath: 'repo', branch: 'fix/123' }],
           },
         }),
       ]);
@@ -1180,7 +1184,7 @@ describe('renderManagerList', () => {
             at: '2026-09-24T00:00:00.000Z',
             source: 'closed',
             cwd: '/workspace',
-            worktrees: [],
+            worktrees: [{ relativePath: 'repo', branch: 'fix/123' }],
           },
         }),
       ]);
@@ -1195,7 +1199,7 @@ describe('renderManagerList', () => {
             kind: 'observed',
             at: '2026-09-24T00:00:00.000Z',
             cwd: '/workspace',
-            worktrees: [],
+            worktrees: [{ relativePath: 'repo', branch: 'fix/123' }],
           },
         }),
       ]);
@@ -1218,7 +1222,7 @@ describe('renderManagerList', () => {
       expect(text).toContain('git が無い');
     });
 
-    it('worktrees が0本なら「見つかった作業ツリー0本」と言う', () => {
+    it('作業ツリー0本で探索の失敗も無い観測は「未push観測」の行を出さない（Issue #2970）', () => {
       const text = renderManagerList([
         manager({
           status: 'done',
@@ -1230,7 +1234,65 @@ describe('renderManagerList', () => {
           },
         }),
       ]);
-      expect(text).toContain('見つかった作業ツリー0本');
+      expect(text).not.toContain('未push観測');
+    });
+
+    it('0本でも読み残し（打ち切り・読み失敗）が在れば「未push観測」を出す（Issue #2970）', () => {
+      for (const extra of [
+        { truncatedAtCount: 50 },
+        { stoppedEarly: true as const },
+        { scratchRootsUnknown: '読めない' },
+        { unreadableDirCount: 2 },
+      ]) {
+        const text = renderManagerList([
+          manager({
+            status: 'done',
+            lastUnpushedWorkObservation: {
+              kind: 'observed',
+              at: '2026-09-24T00:00:00.000Z',
+              cwd: '/workspace',
+              worktrees: [],
+              ...extra,
+            },
+          }),
+        ]);
+        expect(text, JSON.stringify(extra)).toContain('未push観測');
+        expect(text, JSON.stringify(extra)).toContain('探しきっていない');
+      }
+    });
+
+    it('0本の観測を stale の案内が指さない（Issue #2970）', () => {
+      const empty = renderManagerList([
+        manager({
+          status: 'running',
+          resetTimeSkewMatch: 'stale',
+          lastUnpushedWorkObservation: {
+            kind: 'observed',
+            at: '2026-09-24T00:00:00.000Z',
+            cwd: '/workspace',
+            worktrees: [],
+          },
+        }),
+      ]);
+      expect(empty).toContain('世代ずれの疑い');
+      expect(empty).not.toContain('未push観測');
+    });
+
+    it('器の入れ替えで応答不能でも、届いた観測が0本・失敗なしなら行を出さない（Issue #2970）', () => {
+      const text = renderManagerList([
+        manager({
+          status: 'running',
+          sessionMissingSince: '2026-09-24T00:00:00.000Z',
+          shutdownObservationArrivedAfterSwap: true,
+          lastUnpushedWorkObservation: {
+            kind: 'observed',
+            at: '2026-09-24T00:00:00.000Z',
+            cwd: '/workspace',
+            worktrees: [],
+          },
+        }),
+      ]);
+      expect(text).not.toContain('未push観測');
     });
 
     it('branch が null なら「取れなかった」と言う（隠さない）', () => {

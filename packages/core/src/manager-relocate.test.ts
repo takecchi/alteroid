@@ -455,7 +455,7 @@ describe('落ちた runner の委譲を、別の runner へ移送する（#485 M
    * **workspace の1行を出す条件が `'runner'` だけに戻っても気づけない**
    * ——移送のときだけ黙る、という壊れ方をする。ここでその1行を固定する。
    */
-  it('クローンへの報告に workspace の1行も出る：shared-volume なら「コミット前の変更も残っている」', async () => {
+  it('クローンへの報告に workspace の1行も出る：shared-volume なら「外へ保存していない作業も残っている」', async () => {
     const stores = createMemoryStores();
     await stores.jobs.putJob(
       jobWith('mgr-10', 'runner-a', {
@@ -477,7 +477,7 @@ describe('落ちた runner の委譲を、別の runner へ移送する（#485 M
     );
     expect(reports).toHaveLength(1);
     expect(reports[0]?.text).toContain('別の器で開き直した');
-    expect(reports[0]?.text).toContain('コミット前の変更も残っている');
+    expect(reports[0]?.text).toContain('外へ保存していない作業も残っている');
 
     await pool.stop();
   });
@@ -485,7 +485,7 @@ describe('落ちた runner の委譲を、別の runner へ移送する（#485 M
   /**
    * **やりすぎよけ（#1376）: `shared-volume` の移送では、作り直させる文言を出さない。**
    *
-   * 上の `shared-volume` の2本は「中身は残っている」「コミット前の変更も残っている」を
+   * 上の `shared-volume` の2本は「中身は残っている」「外へ保存していない作業も残っている」を
    * 含むことしか見ていないので、`shared-volume` の句にまで「clone し直して」が
    * 混ざっても素通りする（変異で確かめた）。中身が残っている器で作り直させると、
    * 残っている未コミットの変更を捨てさせることになる。
@@ -591,7 +591,7 @@ describe('落ちた runner の委譲を、別の runner へ移送する（#485 M
       'https://github.com/example/proj.git の feature/relocate から作り直させること。',
     );
     expect(reports[0]?.text).toContain('コミットしていなかった変更は残っていない');
-    expect(reports[0]?.text).not.toContain('コミット前の変更も残っている');
+    expect(reports[0]?.text).not.toContain('外へ保存していない作業も残っている');
 
     await pool.stop();
   });

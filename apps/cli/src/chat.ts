@@ -53,6 +53,7 @@ import {
   describeUnpushedWorkObservationIncompleteness,
   describeUnpushedWorkObservationProvenance,
   describeUnpushedWorkObservationSource,
+  isEmptyCompleteUnpushedWorkObservation,
 } from '@alteroid/core/unpushed-work-observation-format';
 import type { InferResponseType } from 'hono/client';
 
@@ -2326,7 +2327,7 @@ function cgroupEventsLine(
  * （`scripts/check-stale-token-restart-advice-core.mjs` の `BANNED_PHRASES`）
  * ——生成元の外でその逐語を持ってよいのは `*.test.ts` だけである。Web の
  * `resetTimeSkewText` も同じ理由で言い換えている（`manager-detail.tsx` の
- * doc）ので、ここも同じ2つの核（(1) 止める前にリモートを確かめる (2) 失われる
+ * doc）ので、ここも同じ2つの核（(1) 止める前に外へ出た成果を確かめる (2) 失われる
  * のは会話だけではない）を CLI の言葉（`/stop` ではなく `/msg` — この委譲は
  * まだ止まっていない）で運ぶ。
  */
@@ -2355,7 +2356,7 @@ function tokenGenerationUnknownReasonLine(
       '触れていないので、抱えている世代を確かめる材料が無い——一致でも不一致でもない、' +
       '正直な「分からない」である）。この委譲へ daemon が次に明示的に触れば' +
       '（送信・回転のどちらでも）自動で埋まるが、429 が続くなど気になるようなら、' +
-      '止める前に、まずリモート（PR・ブランチ・コミット）を確かめること。' +
+      '止める前に、まず外へ出た成果（PR・コミット・送信済みのメール・登録済みの予定・投稿先など）を確かめること。' +
       '確かめずに止めると、失われるのは会話だけではない——そのターンで進行中だった' +
       '作業も一緒に失われうる。確かめたうえで、/msg で送ると resume を試みる。'
     );
@@ -2386,20 +2387,20 @@ function tokenGenerationUnknownReasonLine(
  */
 function resetTimeSkewLine(
   resetTimeSkewMatch: ManagerListItem['resetTimeSkewMatch'],
-  lastUnpushedWorkObservation: ManagerListItem['lastUnpushedWorkObservation'],
+  hasUnpushedWorkObservationLine: boolean,
 ): string | null {
   if (resetTimeSkewMatch === undefined) return null;
   if (resetTimeSkewMatch === 'stale') {
-    const unpushedNote =
-      lastUnpushedWorkObservation === undefined
-        ? ''
-        : '下の「未push観測」にも最後の観測が出ている（いまの状態ではない）ので、合わせて見ること。';
+    // 「下の『未push観測』」は、その行が実際に出るときだけ指す（0本で省かれた行を指さない）。
+    const unpushedNote = !hasUnpushedWorkObservationLine
+      ? ''
+      : '下の「未push観測」にも最後の観測が出ている（いまの状態ではない）ので、合わせて見ること。';
     return (
       '      ⚠ 認証トークンの世代ずれの疑い（429の文言に書かれていた resets 時刻が、' +
       '現役ではない鍵の冷却期限と一致した）。このセッションは古い鍵を掴んだまま' +
       '走っている可能性がある——鍵が通る状態へ戻っても、このセッション自身は' +
       'ターンの境界に達するまで戻らない。この行が消えないまま 429 が続くようなら、' +
-      '止める前に、まずリモート（PR・ブランチ・コミット）を確かめること。' +
+      '止める前に、まず外へ出た成果（PR・コミット・送信済みのメール・登録済みの予定・投稿先など）を確かめること。' +
       unpushedNote +
       '確かめずに止めると、失われるのは会話だけではない——そのターンで進行中だった' +
       '作業も一緒に失われうる。確かめたうえで、/msg で送ると resume を試みる。'
@@ -2481,6 +2482,8 @@ function unpushedWorkObservationLine(manager: ManagerListItem): string | null {
           redactBody(observation.reason)
         );
       }
+      // 作業ツリー0本で探索の失敗も無いなら行を省く（Issue #2970）。
+      if (isEmptyCompleteUnpushedWorkObservation(observation)) return null;
       return (
         `      未push観測: 器が止まる直前（${observation.at}）の観測: ` +
         formatUnpushedWorkObservationWorktrees(observation.worktrees) +
@@ -2502,6 +2505,8 @@ function unpushedWorkObservationLine(manager: ManagerListItem): string | null {
   }
 
   if (observation === undefined) return null;
+  // 作業ツリー0本で探索の失敗も無いなら行を省く（Issue #2970）。
+  if (isEmptyCompleteUnpushedWorkObservation(observation)) return null;
   const provenance = describeUnpushedWorkObservationProvenance(observation.source, 'この一覧');
   if (observation.kind === 'unavailable') {
     return (
@@ -2767,7 +2772,7 @@ export function renderManagerList(
     // 突き合わせた結果を添える（`resetTimeSkewLine` の doc）。
     const resetTimeSkew = resetTimeSkewLine(
       manager.resetTimeSkewMatch,
-      manager.lastUnpushedWorkObservation,
+      unpushedWorkObservationLine(manager) !== null,
     );
     if (resetTimeSkew !== null) lines.push(resetTimeSkew);
     // **Issue #1883**: `/stop`（running・非force）の断りが最後に取った、
