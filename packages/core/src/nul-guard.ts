@@ -9,6 +9,10 @@
  *   投げて断る。** 鍵に NUL が混ざると、pg だけ落として除くと fs / インメモリと
  *   同じ文字列が別の行を指す。環境変数の値に NUL は入れられない（`execve` が
  *   途中で切る）ので、落として残すと別の値になる。
+ * - **読むだけの口（`get`・`revoke`・`markUsed` など、鍵で引く口）は断らず、「無い」と同じ結果を返す**
+ *   （issue #3005）。書き込みで NUL の鍵を断るので、NUL を含む鍵の行はどの器にも存在しえない。
+ *   pg は DB に投げる前に入口で短絡する（DB は NUL を含む text を受け付けず、エラーで投げる）。
+ *   例外は `UsageStore.aggregate()` の絞り込みで、書き込みが落として残している以上、落としてから引く。
  * - **それ以外の本文は、fs も含めて NUL を落として残す**（{@link stripNul}）。
  *   pg の `stripNulls`（`storage-pg/src/db.ts`）の「器の都合で記録を失うくらいなら、
  *   1文字を落として残す」に揃える。
@@ -36,6 +40,11 @@ export class NulNotAllowedError extends Error {
 /** `value` に NUL が含まれるなら `NulNotAllowedError(field)` を投げる。 */
 export function assertNoNul(field: string, value: string): void {
   if (value.includes('\u0000')) throw new NulNotAllowedError(field);
+}
+
+/** `value` に NUL が含まれるか。読むだけの口が、DB へ投げる前に「無い」と答えるのに使う（issue #3005）。 */
+export function hasNul(value: string): boolean {
+  return value.includes('\u0000');
 }
 
 /** 本文から NUL を落とす（無ければ同じ文字列をそのまま返す）。 */
