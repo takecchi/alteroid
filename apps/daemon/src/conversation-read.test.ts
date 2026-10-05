@@ -124,6 +124,22 @@ describe('会話の既読', () => {
     expect(unreadOf(await list(), 'c')).toBe(0);
   });
 
+  it('基準時刻より前の会話で古い発言を read しても、未読数は 0 のまま（後戻りしない）', async () => {
+    const first = await say('old', 'inbound', '前の質問');
+    tick(1);
+    await say('old', 'outbound', '前の返答');
+    tick(10);
+    expect(unreadOf(await list(), 'old')).toBe(0);
+    const res = await app.request('/conversations/old/read', post({ through: first.id }));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      conversationId: 'old',
+      readThrough: at(10),
+      unreadCount: 0,
+    });
+    expect(unreadOf(await list(), 'old')).toBe(0);
+  });
+
   it('時刻をクライアントから受け取らない。他の会話の発言・無い発言・人間との往復でない発言は拒む', async () => {
     tick(1);
     await list();

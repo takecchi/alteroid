@@ -76,14 +76,20 @@ export interface ConversationSummary {
 }
 
 /**
- * 会話の実効の既読の位置。**会話に記録された位置があればそれ、無ければ基準時刻**
- * （基準時刻以前の発言は既読、以後は未読）。どちらも無ければ `null`（全件未読）。
+ * 会話の実効の既読の位置。**会話に記録された位置と基準時刻の遅いほう**（基準時刻は床）。
+ * 位置が無ければ基準時刻、基準時刻が無ければ位置、どちらも無ければ `null`（全件未読）。
+ *
+ * 基準時刻を床にするのは、基準時刻より前の古い発言を指して既読にしたとき、位置が基準時刻より
+ * 古くなって、間の返答が未読へ戻る（後戻りする）のを防ぐため。
  */
 export function effectiveReadThrough(
   view: ConversationReadView,
   conversationId: string,
 ): string | null {
-  return view.positions[conversationId]?.readThrough ?? view.baseline;
+  const position = view.positions[conversationId]?.readThrough ?? null;
+  if (position === null) return view.baseline;
+  if (view.baseline === null) return position;
+  return compareIsoInstant(position, view.baseline) >= 0 ? position : view.baseline;
 }
 
 /**

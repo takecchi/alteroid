@@ -81,9 +81,13 @@ describe('countUnread / effectiveReadThrough / collectConversations', () => {
     expect(countUnread(messages, null)).toBe(2);
   });
 
-  it('実効位置は会話の位置があればそれ、無ければ基準時刻', () => {
-    const v = view(base, { c1: '2026-10-02T00:00:00.000Z' });
+  it('実効位置は位置と基準時刻の遅いほう（基準時刻が床）。位置が無ければ基準時刻、基準時刻が無ければ位置', () => {
+    const v = view(base, { c1: '2026-10-02T00:00:00.000Z', c2: '2026-09-01T00:00:00.000Z' });
     expect(effectiveReadThrough(v, 'c1')).toBe('2026-10-02T00:00:00.000Z');
+    expect(effectiveReadThrough(v, 'c2')).toBe(base);
+    expect(effectiveReadThrough(view(null, { c1: '2026-09-01T00:00:00.000Z' }), 'c1')).toBe(
+      '2026-09-01T00:00:00.000Z',
+    );
     expect(effectiveReadThrough(v, 'other')).toBe(base);
     expect(effectiveReadThrough(view(null), 'other')).toBeNull();
   });
@@ -103,12 +107,15 @@ describe('countUnread / effectiveReadThrough / collectConversations', () => {
     expect(summaries.find((s) => s.conversationId === 'new')).toMatchObject({ unread: 1 });
   });
 
-  it('会話の位置が基準時刻より優先される（位置が基準より前でも位置で判定）', () => {
+  it('位置が基準時刻より前でも基準時刻が床になる（古い発言を指しても間の返答は未読に戻らない）', () => {
     const summaries = collectConversations(
       entries,
       view(base, { old: '2026-09-30T00:00:01.000Z' }),
     );
-    expect(summaries.find((s) => s.conversationId === 'old')).toMatchObject({ unread: 1 });
+    expect(summaries.find((s) => s.conversationId === 'old')).toMatchObject({
+      unread: 0,
+      readThrough: base,
+    });
   });
 
   it('編集で隠れた outbound は数えない', () => {
