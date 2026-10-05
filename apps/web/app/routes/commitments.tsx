@@ -994,7 +994,7 @@ function OpenRow({ commitment }: { commitment: Commitment }) {
         <span>({formatRelative(commitment.at)})</span>
         <button
           type="button"
-          className="ml-auto text-[11px] text-muted-foreground underline hover:text-foreground"
+          className="ml-auto text-[11px] text-muted-foreground underline hover:text-foreground pointer-coarse:-my-3.5 pointer-coarse:-mr-3 pointer-coarse:px-3 pointer-coarse:py-3.5"
           onClick={() => setEditing((current) => !current)}
         >
           {editing ? '編集をやめる' : '本文を編集'}

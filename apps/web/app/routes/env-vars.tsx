@@ -254,9 +254,10 @@ function AddEnvVarForm() {
             ))}
           </Select>
         </label>
-        <label className="flex items-center gap-2 text-xs text-muted-foreground">
+        <label className="flex items-center gap-2 text-xs text-muted-foreground pointer-coarse:min-h-11">
           <input
             type="checkbox"
+            className="pointer-coarse:size-5 pointer-coarse:shrink-0"
             checked={secret}
             onChange={(event) => setSecret(event.target.checked)}
           />

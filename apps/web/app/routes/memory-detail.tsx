@@ -98,7 +98,10 @@ export default function MemoryDetail({ loaderData }: Route.ComponentProps) {
         // リンクが複数行の slug の縦中央に浮く見た目になる（stackingの利点が
         // 無いのに見た目だけ悪くなる）。
         <span className="flex items-center gap-2">
-          <Link to="/memory" className="text-muted-foreground hover:text-foreground">
+          <Link
+            to="/memory"
+            className="text-muted-foreground hover:text-foreground pointer-coarse:-mx-2 pointer-coarse:-my-2.5 pointer-coarse:px-2 pointer-coarse:py-2.5"
+          >
             記憶
           </Link>
           <span className="text-muted-foreground">/</span>
