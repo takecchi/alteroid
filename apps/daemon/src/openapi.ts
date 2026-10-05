@@ -134,13 +134,28 @@ export const healthResponseSchema = z.object({
    * 本人確認する（PID の再利用検知としても同じ強さがある）。
    */
   operator: z.boolean(),
-  /** 記憶の置き場（ローカルのパス / PostgreSQL）。接続情報は含めない。 */
-  storage: z.string(),
   /** 認証の状態。CLI がログインの要否と手段を知るために読む。 */
   auth: z.object({
     enabled: z.boolean(),
     providers: z.array(z.object({ id: z.string(), label: z.string(), kind: z.string() })),
   }),
+});
+
+// ---------------------------------------------------------------------------
+// /status（認証の後ろの、デーモン自身の説明）
+// ---------------------------------------------------------------------------
+
+/**
+ * `GET /status` の応答。**`/health` から外した、外へ見せたくない項目の置き場**（#2869）。
+ *
+ * `storage` は記憶の置き場の1行説明で、PostgreSQL なら `host:port/db`、ファイルなら
+ * 記憶ディレクトリの絶対パスになる。接続情報（パスワード等）は含めない。
+ * 無認証の `/health` に置くと、公開の構成で内部のホスト名・DB 名・ホームのパスが
+ * ログインしていない相手に読める。
+ */
+export const statusResponseSchema = z.object({
+  /** 記憶の置き場（ローカルのパス / PostgreSQL）。接続情報は含めない。 */
+  storage: z.string(),
 });
 
 // ---------------------------------------------------------------------------
@@ -1784,6 +1799,12 @@ const topologyManagerSchema = z.object({
    * 黙った runner の委譲には立たない）。観測できていなければ欄ごと無い。
    */
   runnerListedAt: isoDateTimeSchema.optional(),
+  /**
+   * 枠（利用上限）で止まった印が立った時刻（`ManagerSummary.usageStoppedAt`。`GET /managers` と
+   * 同じ出どころ・同じ形）。**これが立っていれば、地図は終端の窓に関係なく載せる**（lost / failed /
+   * stopped を除く）。鍵が回って起こし直されると欄ごと無くなる。止まっていなければ欄ごと無い。
+   */
+  usageStoppedAt: jobSchema.shape.usageStoppedAt,
   /** 抜粋。全文は `GET /managers/:id`。 */
   request: z.string(),
   startedAt: isoDateTimeSchema,

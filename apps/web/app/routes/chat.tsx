@@ -25,6 +25,7 @@ import {
   useConversation,
   useConversationApprovals,
   useConversations,
+  useMarkConversationRead,
   getChatStream,
   postChat,
   useApi,
@@ -32,6 +33,8 @@ import {
 } from '@alteroid/swr';
 import { formatDateTime, formatRelative, redactError } from '@alteroid/logic';
 import type { ConversationMessage } from '@alteroid/logic';
+
+import { usePageVisible } from '~/lib/use-page-visible';
 
 import type { Route } from './+types/chat';
 
@@ -404,6 +407,7 @@ function ConversationList({
         preview: conversation.preview,
         updatedLabel: formatRelative(conversation.updatedAt),
         messages: conversation.messages,
+        unread: conversation.unreadCount,
       }))}
       activeId={activeId}
       loading={isLoading}
@@ -969,6 +973,23 @@ export function ChatPane({
    * 読むだけである。
    */
   const conversationApprovals = useConversationApprovals(shownId ?? null);
+
+  /**
+   * **既読にする（1つの規則）: この画面が表示されていて、タブが見えているとき、画面に出ている
+   * 日誌由来の発言の最後のものまで。** 開いたとき・裏のタブで届いた分が表に戻ったとき・送信して
+   * 完了まで居た後に返答が出たとき、のどれもこの1か所で済む。
+   *
+   * 見るのは `history`（`GET /conversations/:id`）だけで、受信の途中の一時的な文字（transient）や
+   * 手元の `lines` は見ない——日誌の発言ではないので、それで既読にすると、返答が日誌に載る前に
+   * 離れた（接続が切れた）ときも既読になってしまう。送るかどうかの判定と重複の抑止は
+   * `useMarkConversationRead` が持つ。画面を離れれば（アンマウント）効果が止まり、送らない。
+   */
+  const pageVisible = usePageVisible();
+  const markRead = useMarkConversationRead();
+  useEffect(() => {
+    if (!pageVisible || shownId === undefined || history.data === undefined) return;
+    markRead(shownId, history.data);
+  }, [pageVisible, shownId, history.data, markRead]);
 
   /**
    * 履歴（日誌から再構成されたもの）＋確認（承認の台帳）を時刻順に1本へ

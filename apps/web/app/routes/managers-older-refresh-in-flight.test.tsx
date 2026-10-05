@@ -34,8 +34,27 @@ import { json, Providers, sse, stubFetch, storeTestBaseUrl } from '~/test-suppor
 
 import Managers from './managers';
 
+/**
+ * 一覧（`<ul>`）の中だけを探す。**`getByRole('list')` にしない**: ロール照会は全要素の
+ * 役割・可視性を計算するので、100 行規模の画面では 1 回が数十 ms かかり、`waitFor` の繰り返しごとに
+ * 払うと、器が混んだ時にテストの 5 秒の枠を食い潰す（#2901）。
+ */
 function row() {
-  return within(screen.getByRole('list'));
+  const list = document.querySelector('ul');
+  if (list === null) throw new Error('一覧（ul）がまだ描かれていない');
+  return within(list);
+}
+
+/** 画面の文字列全体。`waitFor` で繰り返す条件は、要素を走査する照会ではなくこれで見る（理由は `row()` と同じ）。 */
+function pageText(): string {
+  return document.body.textContent ?? '';
+}
+
+/** ボタンを文言で見つける（`getByRole('button', { name })` は重い。理由は `row()` と同じ）。 */
+function buttonByText(label: RegExp): HTMLButtonElement {
+  const button = screen.getByText(label).closest('button');
+  if (button === null) throw new Error('ボタンとして描かれていない: ' + String(label));
+  return button;
 }
 
 const BASE: ManagerSummary = {
@@ -177,13 +196,13 @@ describe('背景の取り直しが走っている間の分は取りこぼさな�
 
     // 頁1が出る。
     await waitFor(() => {
-      expect(row().getByText('req-mgr-0')).toBeTruthy();
+      expect(pageText()).toContain('req-mgr-0');
     });
 
     // 「もっと見る」で頁2（mgr-50、running）を読み足す（afterId= の1本目）。
-    fireEvent.click(screen.getByRole('button', { name: /もっと見る/ }));
+    fireEvent.click(buttonByText(/^もっと見る（いま \d+ 件）$/));
     await waitFor(() => {
-      expect(row().getByText(`req-mgr-${MANAGERS_PAGE}`)).toBeTruthy();
+      expect(pageText()).toContain(`req-mgr-${MANAGERS_PAGE}`);
     });
     expect(afterIdCallCount).toBe(1);
 

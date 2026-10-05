@@ -8,6 +8,13 @@
 import { summarizeJournalDiagnosticsEntry } from '@alteroid/core/journal-diagnostics-format';
 
 import { redactBody } from './redact.js';
+import {
+  GITHUB_CI_COUNT_LABEL,
+  GITHUB_CI_COUNT_ORDER,
+  GITHUB_OPEN_LABEL,
+  GITHUB_TRUNCATED_NOTE,
+  githubObservedByLabel,
+} from './progress-labels.js';
 import type { JournalEntry } from './types.js';
 
 /**
@@ -18,22 +25,38 @@ import type { JournalEntry } from './types.js';
  * （`@alteroid/core/journal-search` の分離の経緯）ので、ここへ写して持つ。
  * 文言を結ぶ歯は `journal-summary.test.ts` が持つ（core の関数と突き合わせる）。
  */
-export function describeGithubCiText(ok: {
-  ci?: {
-    pulls: number;
-    success: number;
-    failure: number;
-    pending: number;
-    checks: string;
-    truncated?: boolean;
-  };
-  ciUnavailable?: string;
-}): string {
+/**
+ * 表示の言い方。`'raw'`（既定）は core の原本と同じ字面（CLI の TUI が使う）。`'localized'` は
+ * Web の表示用で、値（success など・observedBy）を `progress-labels.ts` の表で日本語へ写す。
+ * 並び・件数・断り書きは同じで、写すのは表に載った語だけ。
+ */
+export type JournalSummaryStyle = 'raw' | 'localized';
+
+export function describeGithubCiText(
+  ok: {
+    ci?: {
+      pulls: number;
+      success: number;
+      failure: number;
+      pending: number;
+      checks: string;
+      truncated?: boolean;
+    };
+    ciUnavailable?: string;
+  },
+  style: JournalSummaryStyle = 'raw',
+): string {
   if (ok.ci !== undefined) {
     const ci = ok.ci;
     const counted = ci.success + ci.failure + ci.pending;
+    const axes =
+      style === 'localized'
+        ? GITHUB_CI_COUNT_ORDER.map((k) => `${GITHUB_CI_COUNT_LABEL[k]} ${String(ci[k])}`).join(
+            ' / ',
+          )
+        : `success ${String(ci.success)} / failure ${String(ci.failure)} / pending ${String(ci.pending)}`;
     return (
-      `CI: ${String(ci.pulls)} 件の PR を確認 — success ${String(ci.success)} / failure ${String(ci.failure)} / pending ${String(ci.pending)}` +
+      `CI: ${String(ci.pulls)} 件の PR を確認 — ${axes}` +
       (counted < ci.pulls ? `（チェックが無い等で未集計 ${String(ci.pulls - counted)} 件）` : '') +
       `（数えたもの: ${ci.checks}）` +
       (ci.truncated === true ? '（打ち切り。数は下限）' : '')
@@ -45,7 +68,11 @@ export function describeGithubCiText(ok: {
 }
 
 /** 伏せる前の1行（外へ出さない。出口は {@link summarizeJournalEntry}）。 */
-function summarizeJournalEntryRaw(entry: JournalEntry): string {
+function summarizeJournalEntryRaw(entry: JournalEntry, style: JournalSummaryStyle): string {
+  const by = (observedBy: string) =>
+    style === 'localized'
+      ? `（記録したのは: ${githubObservedByLabel(observedBy)}）`
+      : `（観測者 ${observedBy}）`;
   switch (entry.type) {
     case 'exchange':
       return `${entry.with} ${entry.role === 'inbound' ? '←' : '→'} ${entry.text}`;
@@ -119,13 +146,13 @@ function summarizeJournalEntryRaw(entry: JournalEntry): string {
     case 'github_observation':
       // **申告であることを落とさない**（`observedBy`）。取れなかった回は数を作らない。
       return entry.result.status === 'ok'
-        ? `${entry.repo}: open Issue ${entry.result.openIssues} 件 / open PR ${entry.result.openPulls} 件` +
-            (entry.result.truncated ? '（limit に達した。下限）' : '') +
-            `（観測者 ${entry.observedBy}）` +
+        ? `${entry.repo}: ${GITHUB_OPEN_LABEL.issue[style]} ${entry.result.openIssues} 件 / ${GITHUB_OPEN_LABEL.pull[style]} ${entry.result.openPulls} 件` +
+            (entry.result.truncated ? GITHUB_TRUNCATED_NOTE[style] : '') +
+            by(entry.observedBy) +
             // **CI の軸を落とさない（#2608）。** `ci` が無いのは「観測していない」、
             // `ciUnavailable` は「取れなかった」で、どちらも 0 件ではない。
-            ` / ${describeGithubCiText(entry.result)}`
-        : `${entry.repo}: 取れなかった（観測者 ${entry.observedBy}）: ${entry.result.reason}`;
+            ` / ${describeGithubCiText(entry.result, style)}`
+        : `${entry.repo}: 取れなかった${by(entry.observedBy)}: ${entry.result.reason}`;
     case 'subagent_stall': {
       // **`token_rotation` と違い、`text` をそのまま出さない。** `entry.text`
       // は `runner.ts` の `#onSubagentStop` が組み立てた `note.text` そのままで、
@@ -161,10 +188,13 @@ function summarizeJournalEntryRaw(entry: JournalEntry): string {
  * 通してから返す**（issue #2600。`redactBody`）。Web の一覧・ダッシュボードと TUI が共有する
  * 出口で、ここで掛ければ全部に効く。
  */
-export function summarizeJournalEntry(entry: JournalEntry): string {
+export function summarizeJournalEntry(
+  entry: JournalEntry,
+  style: JournalSummaryStyle = 'raw',
+): string {
   // 知らない種別（新しいデーモンが流した種別を古い画面が受ける）では、switch がどこにも
   // 合わず実行時に `undefined` が返る。その形は呼ぶ側（TUI の `journal-format.ts` の包み）が
   // 受けて種別を言うので、伏せ字に渡して例外にせず、そのまま返す。
-  const raw: string | undefined = summarizeJournalEntryRaw(entry);
+  const raw: string | undefined = summarizeJournalEntryRaw(entry, style);
   return raw === undefined ? (raw as unknown as string) : redactBody(raw);
 }

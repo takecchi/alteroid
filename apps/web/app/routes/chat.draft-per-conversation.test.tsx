@@ -26,18 +26,20 @@
  * Issue #2453 で1本足した: 新しい会話で送った文章が、次に新しい会話を開いた
  * ときに下書きとして戻らない。
  */
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider, useParams } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
   findShownConversation,
+  gate,
   json,
   Providers,
   sse,
   storeTestBaseUrl,
   stubFetch,
   type Route,
+  untilOpenSettled,
 } from '~/test-support';
 
 import Chat from './chat';
@@ -237,9 +239,11 @@ describe('会話ごとの下書き（#1618）', () => {
    */
   it('新しい会話で送る → 別の会話 → 新しい会話 で、送った文章が下書きとして戻らない（#2453）', async () => {
     const CONVERSATION_NEW = 'conv-draft-new';
+    const reply = gate();
     const STREAM_NEW = [
       { event: 'open', data: { conversationId: CONVERSATION_NEW } },
-      { event: 'text', data: { type: 'text', text: '受け取った' } },
+      // 本文は、`open` の後始末（URL の付け替え）が済んでから流す（`test-support.tsx` の `gate` の doc）。
+      { event: 'text', data: { type: 'text', text: '受け取った' }, after: reply.promise },
       { event: 'done', data: { type: 'done' } },
     ];
     const route: Route = (url, init) => {
@@ -267,10 +271,9 @@ describe('会話ごとの下書き（#1618）', () => {
     // それを送る。`open` で id が確定し、URL が `/chat/<新しい id>` へ追いつく。
     fireEvent.click(screen.getByRole('button', { name: /送る/ }));
     expect((await draftBox()).value).toBe('');
+    await untilOpenSettled(router, CONVERSATION_NEW);
+    reply.open();
     await screen.findByText('受け取った');
-    await waitFor(() => {
-      expect(router.state.location.pathname).toBe(`/chat/${CONVERSATION_NEW}`);
-    });
     expect((await draftBox()).value).toBe('');
 
     // 別の会話へ移ってから、もう一度「新しい会話」を開く。

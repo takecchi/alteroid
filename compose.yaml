@@ -170,6 +170,11 @@ x-shared-env: &shared-env
   # なので、実行環境プロファイルでも DB 正本の環境変数でも届かない。**この行が無いと
   # compose で建てた器では開けようが無い**（`x-shared-env` に無い変数は降りない）。
   ALTEROID_MANAGER_AUTO_MEMORY: ${ALTEROID_MANAGER_AUTO_MEMORY:-}
+  # Bash の門（待つだけのループ・`tail -f`・背景の `gh run watch`）に当たった呼び出しの扱い
+  # （#2884）: ask（既定。確認に上げる＝クローンが許可できる）/ deny（止める）/ off（掛けない）。
+  # 方針であって能力の削減ではない（north_star 禁止2）。**runner のプロセス自身の `process.env`
+  # を読む**（`packages/core/src/bash-guard-mode.ts`）ので、auto-memory と同じくここに要る。
+  ALTEROID_BASH_GUARD: ${ALTEROID_BASH_GUARD:-}
   # 予約された定期ジョブの既定は環境変数で開け閉めできる。これは方針であって
   # 実行回数の制限ではない（north_star 禁止2）。
   #

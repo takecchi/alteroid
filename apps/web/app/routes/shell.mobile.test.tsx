@@ -72,6 +72,7 @@ function renderShell() {
 function stubAuthedShell(pendingApprovals: unknown[] = [], approvalsFail = false) {
   return stubFetch((url, init) => {
     if (url.endsWith('/health')) return json(HEALTH);
+    if (url.includes('/conversations/unread-count')) return json({ count: 0, capped: false });
     if (url.includes('/approvals')) {
       return approvalsFail
         ? json({ error: 'internal' }, 500)
@@ -194,6 +195,7 @@ describe('サイドバーのフッター', () => {
     const storage = '/tmp/mgr-secret/home';
     setViewportWidth(DEFAULT_VIEWPORT_WIDTH);
     stubFetch((url, init) => {
+      if (url.includes('/conversations/unread-count')) return json({ count: 0, capped: false });
       if (url.endsWith('/health')) return json({ ...HEALTH, pid: 927, storage });
       if (url.includes('/approvals')) return json({ approvals: [] });
       if (url.endsWith('/journal/stream')) return sse([], { keepOpen: true, signal: init?.signal });

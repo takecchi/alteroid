@@ -1896,7 +1896,15 @@ export function createMemoryStores(): Stores {
       practiceVersions.set(input.slug, [...history, isolate(version)]);
       return isolate(next);
     },
-    async remove(slug) {
+    async remove(slug, options) {
+      // 前提の版（Issue #2923）。合わなければ消さずに投げる（同期の区間なので排他の中）。
+      const existing = practices.get(slug);
+      if (
+        options?.ifMatch !== undefined &&
+        !practiceVersionMatches(existing ?? null, options.ifMatch)
+      ) {
+        throw new PracticeConflictError(slug, existing === undefined ? null : isolate(existing));
+      }
       // **版は消さない**（`PracticeStore.remove` の doc、#1309）。`practices`
       // からだけ消す——`practiceVersions` には触れない。
       practices.delete(slug);

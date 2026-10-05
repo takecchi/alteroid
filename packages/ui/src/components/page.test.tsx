@@ -14,8 +14,8 @@
  * `MobileTopBar` が持つ）が、左右は本文と同じ幅を占めるので、本文だけに当てると
  * 見出しの文字だけが切り欠きにかぶることになる。だから帯にも当てた。
  */
-import { cleanup, render, screen } from '@testing-library/react';
-import { afterEach, describe, expect, it } from 'vitest';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { Page } from './page';
 
@@ -69,5 +69,56 @@ describe('Page の本文は位置の基準になる（body がスクロールし
     );
     const scroller = screen.getByTestId('inner').parentElement!;
     expect(classesOf(scroller)).toEqual(expect.arrayContaining(['relative', 'overflow-y-auto']));
+  });
+});
+
+describe('Page の説明文は内部スクロール枠にしない（#2810）', () => {
+  it('説明文の要素は overflow-y-auto を持たず、tabindex も持たない', () => {
+    render(
+      <Page title="見出し" description="説明">
+        {null}
+      </Page>,
+    );
+    const p = screen.getByText('説明');
+    const classes = classesOf(p);
+    expect(classes).not.toContain('overflow-y-auto');
+    expect(classes).not.toContain('overflow-auto');
+    expect(classes.some((c) => c.startsWith('max-h-'))).toBe(false);
+    expect(p.hasAttribute('tabindex')).toBe(false);
+  });
+
+  it('畳まれて切れているときだけ「詳しく」が出て、開くと全文（畳みなし）になる', () => {
+    const scrollHeight = vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get');
+    const clientHeight = vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get');
+    try {
+      scrollHeight.mockReturnValue(100);
+      clientHeight.mockReturnValue(48);
+      render(
+        <Page title="見出し" description="長い説明">
+          {null}
+        </Page>,
+      );
+      const p = screen.getByText('長い説明');
+      expect(classesOf(p)).toContain('line-clamp-3');
+      const button = screen.getByRole('button', { name: '詳しく' });
+      expect(button.getAttribute('aria-expanded')).toBe('false');
+      fireEvent.click(button);
+      expect(classesOf(p)).not.toContain('line-clamp-3');
+      expect(screen.getByRole('button', { name: 'たたむ' }).getAttribute('aria-expanded')).toBe(
+        'true',
+      );
+    } finally {
+      scrollHeight.mockRestore();
+      clientHeight.mockRestore();
+    }
+  });
+
+  it('切れていない短い説明にはボタンを出さない', () => {
+    render(
+      <Page title="見出し" description="短い">
+        {null}
+      </Page>,
+    );
+    expect(screen.queryByRole('button')).toBeNull();
   });
 });

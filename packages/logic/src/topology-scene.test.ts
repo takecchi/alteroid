@@ -623,3 +623,73 @@ describe('runner に居る手の空いたマネージャー（runnerListedAt）'
     expect(scene.managers.map((m) => m.id)).toEqual(ids);
   });
 });
+
+describe('枠(利用上限)で止まっているマネージャー（usageStoppedAt）', () => {
+  const STOPPED_AT = ago(2 * 60 * 60_000);
+  const done = (
+    id: string,
+    extra: Partial<TopologySnapshotManager> = {},
+  ): TopologySnapshotManager => ({
+    ...MANAGER,
+    managerId: id,
+    status: 'done',
+    live: true,
+    updatedAt: ago(3 * 60 * 60_000),
+    ...extra,
+  });
+  const sceneOf = (managers: TopologySnapshotManager[], clone?: TopologySnapshot['clone']) =>
+    topologySceneFromSnapshot(snapshot({ managers, ...(clone ? { clone } : {}) }), NOW);
+
+  it('止まった札は、クローンの usage_blocked と同じ「止まっている」(waiting) と同じ文言で、仕事なしと分かれる', () => {
+    const scene = sceneOf([done('blocked01', { usageStoppedAt: STOPPED_AT }), done('quiet001')], {
+      state: 'usage_blocked',
+    });
+    const [blocked, quiet] = scene.managers;
+    expect(blocked?.status).toBe('waiting');
+    expect(blocked?.status).toBe(scene.clone.status);
+    expect(blocked?.task).toContain(scene.clone.task);
+    expect(blocked?.details?.some((d) => d.label === '利用枠')).toBe(true);
+    expect(quiet?.status).toBe('idle');
+    expect(quiet?.details?.some((d) => d.label === '利用枠')).toBe(false);
+  });
+
+  it('走行中で live の札にも立つ。完了待ち（awaitingBackground）より先', () => {
+    const scene = sceneOf([
+      { ...MANAGER, managerId: 'run00001', usageStoppedAt: STOPPED_AT },
+      done('await001', {
+        usageStoppedAt: STOPPED_AT,
+        awaitingBackground: { tasks: 1, withheldReports: 0, breakdown: 'x', since: ago(1000) },
+      }),
+    ]);
+    expect(scene.managers.map((m) => m.status)).toEqual(['waiting', 'waiting']);
+  });
+
+  it('終端・プロセスが居ない running は、その状態のまま（枠で止まっていると言い切らない）', () => {
+    const scene = sceneOf([
+      done('failed01', { status: 'failed', usageStoppedAt: STOPPED_AT }),
+      done('lost0001', { status: 'lost', usageStoppedAt: STOPPED_AT }),
+      done('nolive01', { status: 'running', live: false, usageStoppedAt: STOPPED_AT }),
+    ]);
+    expect(scene.managers.map((m) => m.status)).toEqual(['error', 'offline', 'offline']);
+  });
+
+  it('「仕事なし N 本」の畳みに入れない（枠で止まった札は個別のまま残る）', () => {
+    const quiet = Array.from({ length: IDLE_COLLAPSE_THRESHOLD + 1 }, (_, i) => `idle000${i}`);
+    const scene = sceneOf([
+      ...quiet.map((id) => done(id, { runnerListedAt: ago(5_000) })),
+      done('blocked01', { usageStoppedAt: STOPPED_AT }),
+    ]);
+    expect(scene.managers.map((m) => m.id)).toEqual(['blocked01', `${IDLE_GROUP_ID}:unknown`]);
+    expect(scene.managers[0]?.status).toBe('waiting');
+    expect(scene.managers.at(-1)?.details?.map((row) => row.label)).toEqual(quiet);
+  });
+
+  it('印が下りた（欄が無い）done は仕事なしに戻る', () => {
+    expect(sceneOf([done('resumed1')]).managers[0]?.status).toBe('idle');
+  });
+
+  it('クローンのターンの外でも、止まった委譲は仕事なしではなく完了待ちに数える', () => {
+    const scene = sceneOf([done('blocked01', { usageStoppedAt: STOPPED_AT })], { state: 'idle' });
+    expect(scene.clone.status).toBe('awaiting');
+  });
+});

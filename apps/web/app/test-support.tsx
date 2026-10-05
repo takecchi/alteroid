@@ -261,3 +261,37 @@ export async function findShownConversation(conversationId: string): Promise<Ele
     return element;
   });
 }
+
+/**
+ * **次のフレームを流してよい時を、テストが決める**ための門。`sse` の枠の `after` に
+ * `promise` を渡し、前提が画面に出たのを見てから `open()` する。
+ *
+ * **`delayMs`（時計）で「前の描画が済んだ後」を作らないこと。** 新しい会話で `open` の
+ * 直後に別のフレームを時計で流すと、画面は `open` が起こす描画（会話 id の確定・URL の
+ * 付け替え・履歴と一覧の取得）と次のフレームの描画を、1本の `findBy`（既定1000ms）の中で
+ * まとめてこなすことになり、遅い実行環境（全体実行の負荷）で予算を食う（#2900）。
+ */
+export function gate(): { promise: Promise<void>; open: () => void } {
+  let open: () => void = () => {};
+  const promise = new Promise<void>((resolve) => {
+    open = resolve;
+  });
+  return { promise, open };
+}
+
+/**
+ * 新しい会話の `open` を受けた画面が、URL を新しい会話へ付け替えるところまで進んだこと。
+ * 付け替えは `open` の処理（`chat.tsx` の `send`）の最後の1手なので、これが見えたら
+ * `open` が起こす状態の更新は出し終わっている。
+ */
+export async function untilOpenSettled(
+  router: { state: { location: { pathname: string } } },
+  conversationId: string,
+): Promise<void> {
+  await waitFor(() => {
+    const actual = router.state.location.pathname;
+    if (actual !== `/chat/${conversationId}`) {
+      throw new Error(`URL がまだ新しい会話へ付け替わっていない: ${actual}`);
+    }
+  });
+}

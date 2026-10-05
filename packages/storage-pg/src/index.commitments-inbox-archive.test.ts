@@ -10,11 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Db } from './db.js';
 import { createPgStoresFromDb, type PgStores } from './index.js';
 import { archive, commitments } from './schema.js';
-import {
-  createMigratedTestDb,
-  realPostgresUrl,
-  type TestDbHandle,
-} from './test-db.test-support.js';
+import { createMigratedTestDb, type TestDbHandle } from './test-db.test-support.js';
 
 /**
  * pg ドライバの受け入れ確認。
@@ -164,7 +160,10 @@ describe('PgCommitmentStore の畳み込みの索引（#1041。pg だけが持�
    */
   it('⭐ 索引を落としても、畳み込みの契約は満たされる（where not exists が索引と独立に効いている）', async () => {
     await db.execute(sql.raw('drop index commitments_open_manager_body_idx'));
-    await verifyCommitmentFoldContract(stores.commitments);
+    // **同時の2件（性質 7）は測らない。** 索引が無い DB では、本物の PostgreSQL の並行
+    // は両方開く（同時の2件目を弾くのは索引だけ。`open` の doc）。PGlite は単一接続で
+    // 重ならないので、これまで緑だった。同時の側は索引の在る状態で測っている。
+    await verifyCommitmentFoldContract(stores.commitments, { concurrent: false });
   });
 
   it('⭐ 8000 文字の本文でも開ける（鍵が md5 でなければ落ちる）', async () => {
@@ -623,31 +622,50 @@ describe('PgCommitmentStore', () => {
     ).toEqual(['c-old', 'c-new', 'c-b', 'c-a']);
   });
 
-  // **本物の PostgreSQL（ALTEROID_TEST_PG_URL。#2918）では落ちるので止めている。**
-  // 並行 open の2件目が `folded: true` を返す（同じ id の衝突は「畳んだ」ではない）。
-  // PGlite は単一接続で並行を再現できないので、ここまで緑だった。
-  // 直したらこの skipIf を外す。Issue: #2922
-  it.skipIf(realPostgresUrl() !== undefined)(
-    '同じ id の並行 open は1件しか入らない（読んでから書く形にしていない）',
-    async () => {
-      const results = await Promise.all([
-        stores.commitments.open(commitment('c-1', '2026-08-12T00:00:00.000Z', '最初の依頼')),
-        stores.commitments.open(commitment('c-1', '2026-08-12T00:00:01.000Z', '二度目')),
-        stores.commitments.open(commitment('c-1', '2026-08-12T00:00:02.000Z', '三度目')),
-      ]);
+  it('同じ id の並行 open は1件しか入らない（読んでから書く形にしていない）', async () => {
+    const bodies = ['最初の依頼', '二度目', '三度目'];
+    const results = await Promise.all(
+      bodies.map((body, index) =>
+        stores.commitments.open(commitment('c-1', `2026-08-12T00:00:0${index}.000Z`, body)),
+      ),
+    );
 
-      // 「いま自分が開いた」と言えるのは1本だけ。**`filter(Boolean)` で数えないこと**
-      // （#1041）—— `open` の戻りはオブジェクトになったので、開けなかった回も truthy
-      // である。数えるのは `opened` そのものでなければならない。
-      expect(results.filter((result) => result.opened)).toHaveLength(1);
-      // 同じ id の衝突は「畳んだ」ではない（畳み込みは本文で決まる）
-      expect(results.filter((result) => result.folded)).toHaveLength(0);
-      const rows = (await stores.commitments.list()).entries;
-      expect(rows).toHaveLength(1);
-      // 後から来たものが先の行を上書きしていない（上書きすると片付いた仕事が蘇る）
-      expect(rows[0]?.body).toBe('最初の依頼');
-    },
-  );
+    // 「いま自分が開いた」と言えるのは1本だけ。**`filter(Boolean)` で数えないこと**
+    // （#1041）—— `open` の戻りはオブジェクトになったので、開けなかった回も truthy
+    // である。数えるのは `opened` そのものでなければならない。
+    expect(results.filter((result) => result.opened)).toHaveLength(1);
+    // 同じ id の衝突は「畳んだ」ではない（「既に在る」。畳み込みは本文で決まる）。
+    // 本物の PostgreSQL（並行が実際に重なる）でも `folded` は偽でなければならない（#2922）。
+    expect(results.filter((result) => result.folded)).toHaveLength(0);
+    const rows = (await stores.commitments.list()).entries;
+    expect(rows).toHaveLength(1);
+    // 後から来たものが先の行を上書きしていない（上書きすると片付いた仕事が蘇る）。
+    // **どの1本が勝つかは決まらない**（本物の並行では順序が不定）ので、開いた1本の本文と比べる。
+    const winner = results.findIndex((result) => result.opened);
+    expect(rows[0]?.body).toBe(bodies[winner]);
+  });
+
+  it('同一マネージャー×同一本文の並行 open は1件しか入らず、負けた側は勝った行へ畳まれる', async () => {
+    const manager = (id: string): Commitment => ({
+      id,
+      at: '2026-08-12T00:00:00.000Z',
+      origin: 'manager',
+      source: 'mgr-race',
+      body: '同じ一言',
+    });
+    const ids = ['r-1', 'r-2', 'r-3'];
+    const results = await Promise.all(ids.map((id) => stores.commitments.open(manager(id))));
+
+    expect(results.filter((result) => result.opened)).toHaveLength(1);
+    // 別 id の衝突は「畳んだ」である。id の衝突（既に在る）ではない。
+    expect(results.filter((result) => result.folded)).toHaveLength(2);
+    const winnerId = ids[results.findIndex((result) => result.opened)]!;
+    expect((await stores.commitments.list()).entries.map((entry) => entry.id)).toEqual([winnerId]);
+    // 畳んだ先が分かるなら、それは勝った行でなければならない（嘘の id を埋めない）。
+    for (const result of results.filter((r) => r.folded)) {
+      if (result.foldedInto !== undefined) expect(result.foldedInto).toBe(winnerId);
+    }
+  });
 
   it('同じ id の並行 close で true は1回だけ返る', async () => {
     await stores.commitments.open(commitment('c-1', '2026-08-12T00:00:00.000Z', 'PR を出す'));

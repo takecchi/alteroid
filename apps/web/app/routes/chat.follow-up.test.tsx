@@ -16,7 +16,14 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { createMemoryRouter, RouterProvider, useParams } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { json, Providers, sse, storeTestBaseUrl, stubFetch } from '~/test-support';
+import {
+  json,
+  Providers,
+  sse,
+  storeTestBaseUrl,
+  stubFetch,
+  untilOpenSettled,
+} from '~/test-support';
 
 import Chat from './chat';
 
@@ -210,6 +217,8 @@ describe('順番待ちのあいだの追送', () => {
 
   it('新しい会話では、id が決まるまで追送を待たせてから投函する', async () => {
     const opened = gate();
+    // 本文は、`open` の後始末（URL の付け替え）が済んでから流す（`test-support.tsx` の `gate` の doc）。
+    const reply = gate();
     let chatCalls = 0;
 
     stubFetch((url, init) => {
@@ -224,7 +233,11 @@ describe('順番待ちのあいだの追送', () => {
                 data: { conversationId: CONVERSATION_ID },
                 after: opened.promise,
               },
-              { event: 'text', data: { type: 'text', text: 'まとめて答える' } },
+              {
+                event: 'text',
+                data: { type: 'text', text: 'まとめて答える' },
+                after: reply.promise,
+              },
               { event: 'done', data: { type: 'done' } },
             ],
             { signal: init?.signal },
@@ -239,7 +252,7 @@ describe('順番待ちのあいだの追送', () => {
     });
     const bodies = captureChatBodies();
 
-    renderChat('/chat');
+    const { router } = renderChat('/chat');
     await send('一つ目');
     await send('二つ目');
 
@@ -258,6 +271,8 @@ describe('順番待ちのあいだの追送', () => {
       conversationId: CONVERSATION_ID,
     });
 
+    await untilOpenSettled(router, CONVERSATION_ID);
+    reply.open();
     expect(await screen.findByText('まとめて答える')).toBeTruthy();
     expect(within(transcript()).getByText('一つ目')).toBeTruthy();
     expect(within(transcript()).getByText('二つ目')).toBeTruthy();

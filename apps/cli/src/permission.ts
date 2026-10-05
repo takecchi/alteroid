@@ -4,8 +4,8 @@ import {
   assessPermissionGrantStaleness,
   describePermissionRuleBreadth,
   PERMISSION_GRANT_STALE_DAYS,
-  type PermissionGrant,
-} from '@alteroid/core';
+} from '@alteroid/core/cli-light';
+import type { PermissionGrant } from '@alteroid/core';
 
 import { createClient } from './client.js';
 import { describeUnreadableRowsList, withErrorReason } from './format.js';

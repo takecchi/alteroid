@@ -31,6 +31,8 @@ export interface TopologyView {
     runnerId?: string;
     /** runner の生存確認の一覧にこの委譲が載っていた観測時刻（無いときは鍵が無い）。 */
     runnerListedAt?: string;
+    /** 枠(利用上限)で止まった印の時刻（`GET /managers` の `usageStoppedAt` と同じ。止まっていなければ鍵が無い）。 */
+    usageStoppedAt?: string;
     request: string;
     startedAt: string;
     updatedAt: string;
@@ -106,6 +108,15 @@ function renderStorage(storage: TopologyView['storage'], now: number): string {
   return `${label}${storage.state}${checked}${note}${error}`;
 }
 
+/** 「枠(利用上限)で止まっている」の1行。文言は `manager_list` / `/managers` の注記に揃える。 */
+function usageStoppedNote(usageStoppedAt: string, status: string, now: number): string {
+  const head = `        ⚠ 枠(利用上限)で止まっている（${usageStoppedAt} から・${formatAge(usageStoppedAt, now)}）。`;
+  if (status === 'failed' || status === 'lost' || status === 'stopped') {
+    return `${head}ただし status: ${status}——既に終端している。「鍵が回れば続く」は成り立たない。`;
+  }
+  return `${head}セッションは生きているので、鍵が回ればこの委譲は続く。`;
+}
+
 /**
  * 地図を端末向けの木にする。**純粋関数**（`now` を引数で受け、時刻に依らず同じ入力から
  * 同じ出力を返す）。自由文（`request` と返事待ちの `summary`）には伏せ字を掛ける。
@@ -162,6 +173,11 @@ export function renderTopology(view: TopologyView, now: number = Date.now()): st
           now,
         )}`,
       );
+      // 枠(利用上限)で止まっている委譲。終端（failed / lost / stopped）は言い切らない側へ
+      // 倒す（`manager_list` / `/managers` の注記と同じ線）。
+      if (manager.usageStoppedAt !== undefined) {
+        lines.push(usageStoppedNote(manager.usageStoppedAt, manager.status, now));
+      }
       if (manager.awaitingBackground !== undefined) {
         const { tasks, breakdown, since } = manager.awaitingBackground;
         lines.push(

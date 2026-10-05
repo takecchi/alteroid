@@ -196,12 +196,9 @@ RUN git config --system credential.https://github.com.helper '!gh auth git-crede
 #
 # 能力は1つも減っていない。`gh` の版も引数もそのままで、変えたのは鍵の読み場所だけ。
 #
-# **中身は `docker/gh` に在る（#865）。** 以前はここに `printf` で焼いていたが、
-# マネージャー・作業者の層が `gh` 経由で release-prod（本番デプロイ）を起動しない
-# ようにする門を足すにあたり、独立ファイルへ出した方が歯（`docker/gh.test.ts`）を
-# 書きやすいのでそうしてある。門の中身・迂回できる経路・見分けの根拠は
-# `docker/gh` 自身のコメントに書いてある（Dockerfile の中の文字列には歯を掛けにくい
-# ので、二重管理を避けてそちらだけを正本にする）。
+# **中身は `docker/gh` に在る（#865）。** 独立ファイルにして歯（`docker/gh.test.ts`）を掛けている。
+# 以前は、マネージャー・作業者の層が `gh` 経由で release-prod（本番デプロイ）を起動するのを止める門も
+# ここに在ったが、外した（#2884）。確認は Bash の `PreToolUse`（`bash-release-prod-guard.ts`）が持つ。
 COPY docker/gh /usr/local/bin/gh
 RUN chmod 0755 /usr/local/bin/gh; \
   test -x /usr/bin/gh

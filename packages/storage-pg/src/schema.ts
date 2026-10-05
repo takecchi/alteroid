@@ -492,6 +492,7 @@ export const authAccounts = pgTable(
      * （`packages/storage-pg/src/auth.ts` の `setAccountOwner`、
      * `where granted_at is not null` の条件付き UPDATE）。
      */
+    // 注記: 資格の判断には使っていない（2026-10-05 オーナーの判断：ログインできる人＝持ち主。#2862）。列は当面残してある。
     ownerDeclaredAt: timestamp('owner_declared_at', { withTimezone: true, mode: 'date' }),
   },
   (table) => [

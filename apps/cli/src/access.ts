@@ -41,6 +41,8 @@ interface AccountView {
   granted: boolean;
   /**
    * 実行環境の持ち主として宣言された日時（issue #1198）。`null` なら未宣言。
+   * **注記: 資格の判断には使っていない（2026-10-05 オーナーの判断：ログインできる人＝持ち主。#2862）。**
+   * 下の「宣言済みなら…通る」は #2862 以前の記述（いまは許可済みなら宣言の有無によらず通る）。
    * 立てる／解くのは `alteroid access owner <id>` / `--revoke`
    * （`POST /access/:accountId/owner` / `.../owner/revoke`。`requireOperator`
    * で非伝播——許可されたアカウントからは叩けない）。宣言済みなら
@@ -95,6 +97,7 @@ export async function accessListCommand(now: number = Date.now()): Promise<void>
 
   for (const account of accounts) {
     const name = account.email ?? account.displayName ?? '(名前なし)';
+    // **注記: `[owner]` は資格の判断には使っていない（2026-10-05 オーナーの判断：ログインできる人＝持ち主。#2862）。表示だけ残してある。**
     // **宣言済みかどうかの印を足す**（issue #1198）。`[owner]` は
     // `ownerDeclaredAt !== null` のときだけ——`granted` とは独立の印である
     // （宣言は許可の上位互換ではなく別の資格なので、`[許可]` の隣に並べる）。

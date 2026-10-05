@@ -23,7 +23,16 @@ import { createMemoryRouter, RouterProvider, useParams } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { useJournalLive } from '@alteroid/swr';
-import { json, Providers, sse, stubFetch, storeTestBaseUrl, type Route } from '~/test-support';
+import {
+  gate,
+  json,
+  Providers,
+  sse,
+  stubFetch,
+  storeTestBaseUrl,
+  untilOpenSettled,
+  type Route,
+} from '~/test-support';
 
 import Chat from './chat';
 
@@ -51,11 +60,14 @@ function renderChat(initial: string) {
     ],
     { initialEntries: [initial] },
   );
-  return render(
-    <Providers>
-      <RouterProvider router={router} />
-    </Providers>,
-  );
+  return {
+    router,
+    ...render(
+      <Providers>
+        <RouterProvider router={router} />
+      </Providers>,
+    ),
+  };
 }
 
 let originalFetch: typeof fetch;
@@ -105,6 +117,12 @@ describe('枠（利用上限）で待たされた発言の返信は、同じタ�
       releaseRetryNotice = resolve;
     });
 
+    /**
+     * 枠に当たった合図（`usage_limited`）は、`open` の後始末（URL の付け替え）が済んでから流す。
+     * 直後の `error` は続けて流れる（「直後に届く」ことがこの筋書きの前提）。
+     */
+    const limited = gate();
+
     const route: Route = (url, init) => {
       if (url.endsWith('/journal/stream')) {
         return sse(
@@ -136,7 +154,11 @@ describe('枠（利用上限）で待たされた発言の返信は、同じタ�
         return sse(
           [
             { event: 'open', data: { conversationId: CONVERSATION_ID } },
-            { event: 'usage_limited', data: { type: 'usage_limited', message: LIMIT_MESSAGE } },
+            {
+              event: 'usage_limited',
+              data: { type: 'usage_limited', message: LIMIT_MESSAGE },
+              after: limited.promise,
+            },
             { event: 'error', data: { type: 'error', message: LIMIT_MESSAGE } },
           ],
           { signal: init?.signal },
@@ -172,8 +194,10 @@ describe('枠（利用上限）で待たされた発言の返信は、同じタ�
     stubFetch(route);
 
     // **新しい会話としてこの画面で始める**（`/chat`。id は `open` で決まる）。
-    renderChat('/chat');
+    const { router } = renderChat('/chat');
     await send('待たされる発言');
+    await untilOpenSettled(router, CONVERSATION_ID);
+    limited.open();
 
     // 枠に当たったことは画面に出ている（`usage_limited` の**行**）。
     //

@@ -16,6 +16,7 @@ import type {
   PracticeMeta,
   PracticeStore,
   PracticeVersion,
+  RemovePracticeOptions,
   WritePracticeOptions,
   PracticeVersionMeta,
   UnreadablePractice,
@@ -414,15 +415,28 @@ export class FsPracticeStore implements PracticeStore {
    * `invalidPracticesRaw` からだけ間引き、`practiceVersions` /
    * `invalidPracticeVersionsRaw` には触れない。
    */
-  async remove(slug: string): Promise<void> {
-    await this.#update((file) => ({
-      next: {
-        ...file,
-        practices: file.practices.filter((entry) => entry.slug !== slug),
-        invalidPracticesRaw: file.invalidPracticesRaw.filter((raw) => extractSlug(raw) !== slug),
-      },
-      result: undefined,
-    }));
+  async remove(slug: string, options?: RemovePracticeOptions): Promise<void> {
+    await this.#update((file) => {
+      // 前提の版（Issue #2923）。`#update`（`withPathLock` の内側）で消す直前に比べる。
+      // 読めない形の行は「無い」側に数える（`write` と同じ）。
+      if (options?.ifMatch !== undefined) {
+        const existing = file.practices.find((entry) => entry.slug === slug);
+        if (!practiceVersionMatches(existing ?? null, options.ifMatch)) {
+          throw new PracticeConflictError(
+            slug,
+            existing === undefined ? null : toPractice(existing),
+          );
+        }
+      }
+      return {
+        next: {
+          ...file,
+          practices: file.practices.filter((entry) => entry.slug !== slug),
+          invalidPracticesRaw: file.invalidPracticesRaw.filter((raw) => extractSlug(raw) !== slug),
+        },
+        result: undefined,
+      };
+    });
   }
 
   /**

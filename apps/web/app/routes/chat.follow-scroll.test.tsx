@@ -72,7 +72,14 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { createMemoryRouter, RouterProvider, useParams } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { json, Providers, sse, storeTestBaseUrl, stubFetch } from '~/test-support';
+import {
+  json,
+  Providers,
+  sse,
+  storeTestBaseUrl,
+  stubFetch,
+  untilOpenSettled,
+} from '~/test-support';
 
 import Chat from './chat';
 
@@ -196,13 +203,15 @@ afterEach(() => {
 
 describe('会話画面のスクロール追従（#247 の 1）', () => {
   it('最下部にいるとき、新しい行が来たら追従する', async () => {
+    // 最初の一文は、`open` の後始末（URL の付け替え）が済んでから流す（`test-support.tsx` の `gate` の doc）。
+    const chunk1 = gate();
     const chunk2 = gate();
     stubFetch((url, init) => {
       if (url.endsWith('/chat')) {
         return sse(
           [
             { event: 'open', data: { conversationId: CONVERSATION_ID } },
-            { event: 'text', data: { type: 'text', text: '最初の一文' } },
+            { event: 'text', data: { type: 'text', text: '最初の一文' }, after: chunk1.promise },
             { event: 'text', data: { type: 'text', text: '、続きの一文' }, after: chunk2.promise },
             { event: 'done', data: { type: 'done' } },
           ],
@@ -212,8 +221,10 @@ describe('会話画面のスクロール追従（#247 の 1）', () => {
       return background(url);
     });
 
-    renderChat('/chat');
+    const { router } = renderChat('/chat');
     await send('質問');
+    await untilOpenSettled(router, CONVERSATION_ID);
+    chunk1.open();
     expect(await screen.findByText('最初の一文')).toBeTruthy();
 
     // 最下部にいる、と器に言わせる（余裕 32px 以内）。
@@ -234,13 +245,15 @@ describe('会話画面のスクロール追従（#247 の 1）', () => {
   });
 
   it('最下部にいないとき、新しい行が来ても追従しない', async () => {
+    // 最初の一文は、`open` の後始末（URL の付け替え）が済んでから流す（`test-support.tsx` の `gate` の doc）。
+    const chunk1 = gate();
     const chunk2 = gate();
     stubFetch((url, init) => {
       if (url.endsWith('/chat')) {
         return sse(
           [
             { event: 'open', data: { conversationId: CONVERSATION_ID } },
-            { event: 'text', data: { type: 'text', text: '最初の一文' } },
+            { event: 'text', data: { type: 'text', text: '最初の一文' }, after: chunk1.promise },
             { event: 'text', data: { type: 'text', text: '、続きの一文' }, after: chunk2.promise },
             { event: 'done', data: { type: 'done' } },
           ],
@@ -250,8 +263,10 @@ describe('会話画面のスクロール追従（#247 の 1）', () => {
       return background(url);
     });
 
-    renderChat('/chat');
+    const { router } = renderChat('/chat');
     await send('質問');
+    await untilOpenSettled(router, CONVERSATION_ID);
+    chunk1.open();
     expect(await screen.findByText('最初の一文')).toBeTruthy();
 
     // 遡って読んでいる、と器に言わせる（最下部まで 800px の隙間）。
@@ -273,12 +288,13 @@ describe('会話画面のスクロール追従（#247 の 1）', () => {
   });
 
   it('遡って読んでいても、自分が送った直後は追従する', async () => {
+    const reply = gate();
     const stub = stubFetch((url, init) => {
       if (url.endsWith('/chat')) {
         return sse(
           [
             { event: 'open', data: { conversationId: CONVERSATION_ID } },
-            { event: 'text', data: { type: 'text', text: '最初の応答' } },
+            { event: 'text', data: { type: 'text', text: '最初の応答' }, after: reply.promise },
             { event: 'done', data: { type: 'done' } },
           ],
           { signal: init?.signal },
@@ -287,11 +303,13 @@ describe('会話画面のスクロール追従（#247 の 1）', () => {
       return background(url);
     });
 
-    renderChat('/chat');
+    const { router } = renderChat('/chat');
     await send('一つ目');
     await waitFor(() => {
       expect(stub.calls.some((url) => url.includes('/chat'))).toBe(true);
     });
+    await untilOpenSettled(router, CONVERSATION_ID);
+    reply.open();
     await screen.findByText('最初の応答');
 
     // 会話を遡って読んでいる状態を作る。

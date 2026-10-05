@@ -14,6 +14,7 @@ import {
   storageDownScene,
   unknownScene,
   unreadableEmptyScene,
+  usageBlockedScene,
 } from './samples';
 import { SystemTopology } from './system-topology';
 
@@ -52,6 +53,7 @@ export const UnreadableRows: Story = { args: unreadableEmptyScene };
 
 /** 「完了待ち」（実行中と同じ系統）と「仕事なし」を分ける。確かめられない作業者は「不明」。 */
 export const Awaiting: Story = { args: awaitingScene };
+export const UsageBlocked: Story = { args: usageBlockedScene };
 
 /** 確かめられない軸は「不明」（破線の札）。仕事なし・正常とは描かない。 */
 export const Unknown: Story = { args: unknownScene };

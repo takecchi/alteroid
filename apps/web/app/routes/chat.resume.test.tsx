@@ -14,7 +14,15 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { createMemoryRouter, RouterProvider, useParams } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { json, Providers, sse, stubFetch, storeTestBaseUrl, type Route } from '~/test-support';
+import {
+  json,
+  Providers,
+  sse,
+  stubFetch,
+  storeTestBaseUrl,
+  untilOpenSettled,
+  type Route,
+} from '~/test-support';
 
 import Chat from './chat';
 
@@ -277,11 +285,13 @@ describe('画面に戻ったとき、処理中の会話の途中経過に戻る'
 
   it('自分の送信中は張らない（新しい会話で送っても、再生の口は 1 回も叩かれない）', async () => {
     const finish = gate();
+    // 本文は、`open` の後始末（URL の付け替え）が済んでから流す（`test-support.tsx` の `gate` の doc）。
+    const reply = gate();
     const { streamCalls } = setup({
       replays: [],
       chat: [
         { event: 'open', data: { conversationId: ID } },
-        { event: 'text', data: { type: 'text', text: 'へんじ' } },
+        { event: 'text', data: { type: 'text', text: 'へんじ' }, after: reply.promise },
         { event: 'done', data: { type: 'done' }, after: finish.promise },
       ],
     });
@@ -292,6 +302,8 @@ describe('画面に戻ったとき、処理中の会話の途中経過に戻る'
     fireEvent.click(screen.getByRole('button', { name: /送る/ }));
 
     // 送信の途中（open で会話 id が決まり、URL が追いついた後）に数える
+    await untilOpenSettled(router, ID);
+    reply.open();
     expect(await within(transcript()).findByText('へんじ')).toBeTruthy();
     await waitFor(() => expect(router.state.location.pathname).toBe(`/chat/${ID}`));
     expect(streamCalls()).toBe(0);
