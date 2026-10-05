@@ -96,7 +96,7 @@ export function workspaceCloneHintsFrom(
   const rescueOnly: WorkspaceCloneHint[] = (rescue?.worktrees ?? [])
     .filter(
       (tree) =>
-        tree.pushed !== undefined &&
+        liveRescueRef(tree) !== undefined &&
         !observedTrees.some((worktree) => worktree.relativePath === tree.relativePath),
     )
     .map((tree) => ({
@@ -107,7 +107,13 @@ export function workspaceCloneHintsFrom(
       rescue: tree,
     }));
   if (observation === undefined || observation.kind !== 'observed' || observedTrees.length === 0) {
-    return rescueOnly.length === 0 ? undefined : { hints: rescueOnly };
+    return rescueOnly.length === 0
+      ? undefined
+      : {
+          // 観測が `observed`（作業ツリー0本）なら、その時刻は言える。
+          ...(observation?.kind === 'observed' ? { at: observation.at } : {}),
+          hints: rescueOnly,
+        };
   }
   const hints: WorkspaceCloneHint[] = observation.worktrees.map((worktree) => {
     const rescued = rescue?.worktrees.find((tree) => tree.relativePath === worktree.relativePath);
@@ -170,12 +176,69 @@ function countText(hint: WorkspaceCloneHint): string {
   return parts.join('・');
 }
 
-function isStale(hint: WorkspaceCloneHint, observedAt: string | undefined): boolean {
-  const pushed = hint.rescue?.pushed;
-  if (pushed === undefined || observedAt === undefined) return false;
-  const pushedAt = Date.parse(pushed.at);
+/**
+ * 「在る退避 ref」を返す**唯一の述語**。`tree.pushed` を直接読まず、ここを通すこと。
+ * 後で `pushed.removal`（削除済みの印。#2841）が入ったら、ここだけを直せばよい。
+ *
+ * ref と commit は**コマンドとして案内に埋め込む**ので、形を確かめる。外れたら
+ * `invalid`（手順は出さない）。値そのものは案内へ出さない（台帳の中身を信用しない）。
+ */
+type LiveRescue =
+  | { readonly kind: 'ok'; readonly ref: string; readonly commit: string; readonly at: string }
+  | { readonly kind: 'invalid'; readonly at: string };
+
+const RESCUE_REF_PATTERN = /^refs\/alteroid-rescue\/[A-Za-z0-9_./-]+$/;
+const RESCUE_COMMIT_PATTERN = /^[0-9a-f]{7,64}$/;
+
+function liveRescueRef(tree: RescueWorktree | undefined): LiveRescue | undefined {
+  const pushed = tree?.pushed;
+  if (pushed === undefined) return undefined;
+  return RESCUE_REF_PATTERN.test(pushed.ref) && RESCUE_COMMIT_PATTERN.test(pushed.commit)
+    ? { kind: 'ok', ref: pushed.ref, commit: pushed.commit, at: pushed.at }
+    : { kind: 'invalid', at: pushed.at };
+}
+
+/** シェルの単一引用符でクオートする（`'` は `'\''`）。案内に埋め込む値は必ずこれを通す。 */
+function shq(value: string): string {
+  return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+/** 取り戻すコマンド。`short` は1行だけ。 */
+function recoveryCommand(live: LiveRescue & { kind: 'ok' }): string {
+  return `git fetch origin ${shq(live.ref)} && git switch -c <新しい枝名> FETCH_HEAD`;
+}
+
+function rescueHeadline(live: LiveRescue): string {
+  return live.kind === 'ok'
+    ? `退避 ref ${live.ref}（${live.commit.slice(0, 8)}, ${live.at}）が最後の退避。`
+    : `退避 ref の記録の形が不正（${live.at} に退避したことになっている）なので、手順は出さない。台帳（manager_list の退避 ref）を確かめよ。`;
+}
+
+function recoverySteps(live: LiveRescue): string {
+  if (live.kind !== 'ok') return '';
+  return (
+    `取り戻す手順: ${recoveryCommand(live)}（または git checkout ${live.commit}）。` +
+    'その ref が無ければ、退避は失われている。' +
+    '退避 commit は最後の退避の時点の HEAD + 追跡済みの未コミットの変更で、' +
+    'それより後の変更と未追跡のファイルは含まない。'
+  );
+}
+
+/**
+ * 退避が観測より古く、かつ「その間の変更」が在りうるとき。退避は周期（既定5分）なので
+ * 古いこと自体はほぼ常に起きる——観測の未コミットも未 push も 0 と確かめられているなら言わない。
+ */
+function mayHaveChangedSinceRescue(
+  hint: WorkspaceCloneHint,
+  observedAt: string | undefined,
+): boolean {
+  const live = liveRescueRef(hint.rescue);
+  if (live === undefined || observedAt === undefined) return false;
+  const pushedAt = Date.parse(live.at);
   const seenAt = Date.parse(observedAt);
-  return Number.isFinite(pushedAt) && Number.isFinite(seenAt) && pushedAt < seenAt;
+  if (!(Number.isFinite(pushedAt) && Number.isFinite(seenAt) && pushedAt < seenAt)) return false;
+  const nothing = (count: HintCount) => count?.kind === 'known' && count.n === 0;
+  return !(nothing(hint.uncommitted) && nothing(hint.unpushed));
 }
 
 /** 退避されなかったもの。`describeRescue` と同じ見せ方（名前は5件まで、溢れは件数）。 */
@@ -215,19 +278,17 @@ const SHORT_LINE_BUDGET = 1500;
 /** 観測に無い作業ツリー。退避 ref の手順と、退避されなかったものだけ。件数は断定しない。 */
 function rescueOnlyText(hint: WorkspaceCloneHint, short = false): string {
   const tree = hint.rescue;
-  const pushed = tree?.pushed;
-  if (tree === undefined || pushed === undefined) return '';
+  const live = liveRescueRef(tree);
+  if (tree === undefined || live === undefined) return '';
   const parts: string[] = [];
   if (short) {
-    parts.push(`退避 ref あり（${pushed.ref}, ${pushed.commit.slice(0, 8)}, ${pushed.at}）。`);
-  } else {
     parts.push(
-      `退避 ref ${pushed.ref}（${pushed.commit.slice(0, 8)}, ${pushed.at}）が最後の退避。` +
-        `取り戻す手順: git fetch origin ${pushed.ref} → git switch -c <新しい枝名> FETCH_HEAD` +
-        `（または git checkout ${pushed.commit}）。` +
-        '退避 commit は最後の退避の時点の HEAD + 追跡済みの未コミットの変更で、' +
-        'それより後の変更と未追跡のファイルは含まない。',
+      live.kind === 'ok'
+        ? `退避 ref あり（${live.at}, ${live.commit.slice(0, 8)}）。取り戻す: ${recoveryCommand(live)}。`
+        : '退避 ref の記録の形が不正なので手順は出さない。',
     );
+  } else {
+    parts.push(rescueHeadline(live) + recoverySteps(live));
   }
   parts.push('退避の時刻より後の変更は確かめられない（この作業ツリーの未 push の観測が無い）。');
   const unsaved = unsavedText(tree);
@@ -245,25 +306,20 @@ function fullLine(hint: WorkspaceCloneHint, observedAt: string | undefined): str
   if (hint.kind === 'rescue-only') return head + rescueOnlyText(hint);
   const counts = countText(hint);
   const risk = hasLossRisk(hint);
-  const pushed = hint.rescue?.pushed;
+  const live = liveRescueRef(hint.rescue);
   const clone = hint.kind === 'clone' ? `${hint.host}/${hint.path} の ${hint.branch}` : undefined;
   const sentences: string[] = [];
   if (counts !== '') sentences.push(`${counts}。`);
-  if (pushed !== undefined) {
-    sentences.push(
-      `退避 ref ${pushed.ref}（${pushed.commit.slice(0, 8)}, ${pushed.at}）が最後の退避。` +
-        `取り戻す手順: git fetch origin ${pushed.ref} → git switch -c <新しい枝名> FETCH_HEAD` +
-        `（または git checkout ${pushed.commit}）。` +
-        '退避 commit は最後の退避の時点の HEAD + 追跡済みの未コミットの変更で、' +
-        'それより後の変更と未追跡のファイルは含まない。',
-    );
-    if (isStale(hint, observedAt)) {
+  if (live !== undefined) {
+    sentences.push(rescueHeadline(live) + recoverySteps(live));
+    if (mayHaveChangedSinceRescue(hint, observedAt)) {
       sentences.push(
-        `この退避（${pushed.at}）は観測（${observedAt}）より古い——その間の変更は失われている。`,
+        `この退避（${live.at}）は観測（${observedAt}）より古い——その間の変更は失われた可能性がある。`,
       );
     }
-    if (clone !== undefined)
-      sentences.push(`origin に在るコミットまでは ${clone} を clone し直せる。`);
+    if (clone !== undefined) {
+      sentences.push(`origin に枝が在れば、そこまでのコミットは ${clone} を clone し直せる。`);
+    }
   } else if (risk) {
     const lost =
       hint.unpushed?.kind === 'known'
@@ -272,7 +328,8 @@ function fullLine(hint: WorkspaceCloneHint, observedAt: string | undefined): str
     if (clone !== undefined) {
       sentences.push(
         '退避 ref は無い。clone し直す前に ' +
-          `git ls-remote origin ${hint.branch} で枝が origin に在るか確かめよ。` +
+          `git ls-remote origin -- ${shq(`refs/heads/${hint.branch}`)} で枝が origin に在るか確かめよ` +
+          '（何も出なければ無い）。' +
           `在れば ${clone} を clone し直せるが、origin の枝に入っていないコミットは戻らない。` +
           `無ければ${lost}。`,
       );
@@ -296,14 +353,14 @@ function fullLine(hint: WorkspaceCloneHint, observedAt: string | undefined): str
   return head + sentences.join('');
 }
 
-/** クローン向け。件数と退避 ref の有無だけ。手順は書かない（マネージャーが持つ）。 */
+/** クローン向け。件数と、取り戻す手順の1行まで。 */
 function shortLine(hint: WorkspaceCloneHint, observedAt: string | undefined): string {
   if (hint.kind === 'rescue-only') return `- ${hint.relativePath}: ${rescueOnlyText(hint, true)}`;
   const risk = hasLossRisk(hint);
-  const pushed = hint.rescue?.pushed;
+  const live = liveRescueRef(hint.rescue);
   const unsaved = hint.rescue === undefined ? null : unsavedText(hint.rescue);
   const uncommittedKnown = hint.uncommitted?.kind === 'known' && hint.uncommitted.n > 0;
-  if (!risk && pushed === undefined && unsaved === null && !uncommittedKnown) {
+  if (!risk && live === undefined && unsaved === null && !uncommittedKnown) {
     return hint.kind === 'clone'
       ? `- ${hint.relativePath}: ${hint.host}/${hint.path} の ${hint.branch} を clone し直せ。`
       : `- ${hint.relativePath}: 確かめよ（${hint.reason}）。`;
@@ -311,11 +368,15 @@ function shortLine(hint: WorkspaceCloneHint, observedAt: string | undefined): st
   const sentences: string[] = [];
   const counts = countText(hint);
   if (counts !== '') sentences.push(`${counts}。`);
-  if (pushed !== undefined) {
+  if (live !== undefined) {
     sentences.push(
-      `退避 ref あり（${pushed.ref}, ${pushed.commit.slice(0, 8)}, ${pushed.at}）。` +
-        (isStale(hint, observedAt) ? 'ただし観測より古く、その間の変更は失われた。' : ''),
+      live.kind === 'ok'
+        ? `退避 ref あり（${live.at}, ${live.commit.slice(0, 8)}）。取り戻す: ${recoveryCommand(live)}。`
+        : '退避 ref の記録の形が不正なので手順は出さない。',
     );
+    if (mayHaveChangedSinceRescue(hint, observedAt)) {
+      sentences.push('ただし観測より古く、その間の変更は失われた可能性がある。');
+    }
   } else if (risk) {
     sentences.push('退避 ref は無い（origin に無ければ失われた）。');
   } else if (hint.kind === 'clone') {
@@ -326,8 +387,27 @@ function shortLine(hint: WorkspaceCloneHint, observedAt: string | undefined): st
 }
 
 /**
- * 作業ツリーごとに1行へ描く。**危ない作業ツリー（未 push の可能性）を先に**
- * 出し、予算を超えたぶんは件数と続きの取り方を言う。
+ * 予算で切るときの優先度（小さいほど先）。0 未 push の可能性（Unknown・>0・rescue-only）、
+ * 1 退避されなかったもの（未追跡・submodule・送らなかった理由）、2 未コミット、3 その他。
+ */
+function priorityOf(hint: WorkspaceCloneHint): number {
+  if (hasLossRisk(hint)) return 0;
+  if (
+    hint.rescue !== undefined &&
+    (unsavedText(hint.rescue) !== null || notPushedText(hint.rescue) !== null)
+  ) {
+    return 1;
+  }
+  if (hint.uncommitted?.kind === 'unknown') return 2;
+  if (hint.uncommitted?.kind === 'known' && hint.uncommitted.n > 0) return 2;
+  return 3;
+}
+
+/**
+ * 作業ツリーごとに1行へ描く。{@link priorityOf} の順に出し、予算を超えたぶんは
+ * 件数と続きの取り方を言う。**省略した作業ツリーの全部は、クローンの `manager_list`
+ * （未push観測・退避 ref）に在る**——マネージャーは `manager_list` を持たないので、
+ * クローンへ聞く形で書く。
  */
 export function formatWorkspaceCloneHintLines(
   hints: readonly WorkspaceCloneHint[],
@@ -335,7 +415,10 @@ export function formatWorkspaceCloneHintLines(
   mode: 'full' | 'short' = 'full',
 ): string {
   const budget = mode === 'full' ? FULL_LINE_BUDGET : SHORT_LINE_BUDGET;
-  const ordered = [...hints.filter(hasLossRisk), ...hints.filter((hint) => !hasLossRisk(hint))];
+  const ordered = hints
+    .map((hint, index) => ({ hint, index, priority: priorityOf(hint) }))
+    .sort((x, y) => x.priority - y.priority || x.index - y.index)
+    .map((entry) => entry.hint);
   const lines: string[] = [];
   let used = 0;
   for (const hint of ordered) {
@@ -347,7 +430,7 @@ export function formatWorkspaceCloneHintLines(
   const rest = ordered.length - lines.length;
   if (rest > 0) {
     lines.push(
-      `…ほか ${rest} 本は省略（全 ${ordered.length} 本。manager_list の未push観測と退避 ref で見よ）。`,
+      `…ほか ${rest} 本は省略（全 ${ordered.length} 本。全部はクローンの manager_list の「未push観測」「退避 ref」にある）。`,
     );
   }
   return lines.join('\n');
