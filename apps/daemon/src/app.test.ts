@@ -1418,29 +1418,42 @@ describe('HTTP API', () => {
       expect(await stores.practices.read('daily-report')).toBeNull();
     });
 
-    it('版を付けない従来の DELETE は通る（段階1）が、応答に警告が載り、日誌に「版の照合なし」と残る', async () => {
+    it('版を付けない DELETE は 428 で断り、何も消さず・日誌にも積まず、いまの版を current に返す（段階2）', async () => {
       await stores.practices.write({ ...base, content: 'V1' });
-      const res = await del();
-      expect(res.status).toBe(200);
-      const body = (await res.json()) as { ok: true; slug: string; warning?: string };
-      expect(body.warning).toContain('ifMatch');
-      expect(await stores.practices.read('daily-report')).toBeNull();
-      const entries = await stores.journal.list({ types: ['decision'] });
-      expect(JSON.stringify(entries[0])).toContain('版の照合なし');
-    });
-
-    it('版を付けない DELETE の警告は stderr にも出る（slug だけで、本文は出さない）', async () => {
-      await stores.practices.write({ ...base, content: '秘密っぽい本文' });
+      const journalBefore = await stores.journal.list({ types: ['decision'] });
       const spy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
       try {
-        await del();
-        const out = spy.mock.calls.map((c) => String(c[0])).join('');
-        expect(out).toContain('版の照合なし');
-        expect(out).toContain('daily-report');
-        expect(out).not.toContain('秘密っぽい本文');
+        const res = await del();
+
+        expect(res.status).toBe(428);
+        const body = (await res.json()) as {
+          error: string;
+          current: { practice: { content: string }; version: string } | null;
+        };
+        expect(body.error).toContain('消していません');
+        expect(body.error.match(/消していません/g)).toHaveLength(1);
+        expect(body.current?.practice.content).toBe('V1\n');
+        expect(body.current?.version).toBe(await readVersion());
+        expect(spy.mock.calls.map((c) => String(c[0])).join('')).not.toContain('版の照合なし');
       } finally {
         spy.mockRestore();
       }
+      expect((await stores.practices.read('daily-report'))?.content).toBe('V1\n');
+      expect(await stores.journal.list({ types: ['decision'] })).toEqual(journalBefore);
+    });
+
+    it('428 で返した current の version を付けて打ち直せば消せる', async () => {
+      await stores.practices.write({ ...base, content: 'V1' });
+      const refused = (await (await del()).json()) as { current: { version: string } };
+      const res = await del(`?ifMatch=${refused.current.version}`);
+      expect(res.status).toBe(200);
+      expect(await stores.practices.read('daily-report')).toBeNull();
+    });
+
+    it('順序は 400（スラッグ不正）、404（無い）、そのあと版の有無: 無いやり方への版なし DELETE は 404', async () => {
+      expect((await del()).status).toBe(404);
+      const bad = await app.request('/practices/Bad_Slug', { method: 'DELETE' });
+      expect(bad.status).toBe(400);
     });
 
     it('無いやり方への版付き DELETE は 404（消すものが無い）', async () => {
@@ -1505,6 +1518,15 @@ describe('HTTP API', () => {
    * `GET /practices/:slug/versions` と `GET /practices/:slug/versions/:version`。
    */
   describe('やり方の版の履歴（#1309）', () => {
+    /** 読んだ版を付けて消す（版なしの DELETE は 428 で断られる。#2959）。消えたことまで確かめる。 */
+    const removeWithVersion = async (slug: string) => {
+      const { version } = (await (await app.request(`/practices/${slug}`)).json()) as {
+        version: string;
+      };
+      const res = await app.request(`/practices/${slug}?ifMatch=${version}`, { method: 'DELETE' });
+      expect(res.status).toBe(200);
+    };
+
     it('write のたびに版が増え、一覧は本文を含まない', async () => {
       await stores.practices.write({
         slug: 'history-check',
@@ -1547,7 +1569,7 @@ describe('HTTP API', () => {
         title: '題',
         content: '本文',
       });
-      await app.request('/practices/history-survives-remove', { method: 'DELETE' });
+      await removeWithVersion('history-survives-remove');
 
       const list = await app.request('/practices/history-survives-remove/versions');
       const parsed = practiceVersionListResponseSchema.parse(await list.json());
@@ -1564,7 +1586,7 @@ describe('HTTP API', () => {
         title: '題1',
         content: '本文1',
       });
-      await app.request('/practices/history-recreate', { method: 'DELETE' });
+      await removeWithVersion('history-recreate');
       await stores.practices.write({
         slug: 'history-recreate',
         kind: '実装',

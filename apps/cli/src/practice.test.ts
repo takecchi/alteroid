@@ -355,18 +355,34 @@ describe('alteroid practice remove', () => {
     expect(read()).toContain('消しました: review');
   });
 
-  it('古いデーモン（version を返さない）には版を付けずに打ち、返ってきた警告を見せる', async () => {
+  it('古いデーモン（段階1。version を返さず、版なしの削除を通す）には版を付けずに打つ', async () => {
     const read = captureStdout();
     replies.push({ status: 200, body: practiceBody() });
-    replies.push({
-      status: 200,
-      body: { ok: true, slug: 'review', warning: '版の照合なしで消しました' },
-    });
+    replies.push({ status: 200, body: { ok: true, slug: 'review' } });
 
     await practiceRemoveCommand('review');
 
     expect(sent[1]?.url).toBe('http://127.0.0.1:4517/practices/review');
-    expect(read()).toContain('注意: 版の照合なしで消しました');
+    expect(read()).toContain('消しました: review');
+  });
+
+  it('428（版なしを断られた）なら、消していないと言い、次の手を案内して失敗する（#2959）', async () => {
+    const read = captureStdout();
+    replies.push({ status: 200, body: practiceBody() });
+    replies.push({
+      status: 428,
+      body: { error: '消すやり方の版（ifMatch）が無いので、消していません', current: null },
+    });
+
+    const error = await practiceRemoveCommand('review').catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(Error);
+    const message = String(error);
+    expect(message).toContain('消していません');
+    expect(message).toContain('428');
+    expect(message).toContain('alteroid practice show review');
+    expect(message).toContain('alteroid practice remove review');
+    expect(read()).not.toContain('消しました');
   });
 
   it('読めない形で入っている行（GET が 409）は版なしで DELETE を打つ（回復手段を塞がない）', async () => {
