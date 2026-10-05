@@ -1,4 +1,4 @@
-import { stripNul } from './nul-guard.js';
+import { hasNul, stripNul } from './nul-guard.js';
 import type { UsageSnapshot } from './usage.js';
 
 /**
@@ -13,6 +13,16 @@ import type { UsageSnapshot } from './usage.js';
  * できない（`normalizeTokenPool` は既存の行に無い id を断る）。丸括弧は UUID に現れないので衝突しない。
  */
 export const USAGE_NUL_ONLY_TOKEN_ID = '(nul-only)';
+
+/**
+ * 鍵列の `tokenId` から NUL を落とす。**落とした結果が空文字になる（NUL だけの）ものは
+ * {@link USAGE_NUL_ONLY_TOKEN_ID} に置き換える**（帰属なしの行と区別するため）。
+ * 書く側（record・recordUnmetered）と読む側（aggregate の絞り込み）が同じ関数を通す。
+ */
+function stripNulFromTokenId(tokenId: string): string {
+  const stripped = stripNul(tokenId);
+  return stripped === '' && hasNul(tokenId) ? USAGE_NUL_ONLY_TOKEN_ID : stripped;
+}
 
 /**
  * 消費の台帳（`UsageStore`）の入口で、鍵列と本文の NUL を落とす（issue #2927。
@@ -44,7 +54,7 @@ export function stripNulFromUsageRecord<
   return {
     ...input,
     managerId: stripNul(input.managerId),
-    ...(input.tokenId === undefined ? {} : { tokenId: stripNul(input.tokenId) }),
+    ...(input.tokenId === undefined ? {} : { tokenId: stripNulFromTokenId(input.tokenId) }),
     snapshot: stripNulFromUsageSnapshot(input.snapshot),
   };
 }
@@ -57,7 +67,7 @@ export function stripNulFromUnmeteredRecord<
     ...input,
     managerId: stripNul(input.managerId),
     provider: stripNul(input.provider),
-    ...(input.tokenId === undefined ? {} : { tokenId: stripNul(input.tokenId) }),
+    ...(input.tokenId === undefined ? {} : { tokenId: stripNulFromTokenId(input.tokenId) }),
   };
 }
 
@@ -67,12 +77,20 @@ export function stripNulFromUnmeteredRecord<
  * 3実装（インメモリ / fs / pg）が同じ関数を通す。pg は NUL を含む text を DB に投げると
  * エラーになるので、これを通さないと pg だけ投げる。
  */
-export function stripNulFromUsageQuery<T extends { managerId?: string; tokenId?: string }>(
-  query: T,
-): T {
+export function stripNulFromUsageQuery<
+  T extends { from?: string; to?: string; managerId?: string; tokenId?: string },
+>(query: T): T {
+  // 日付は鍵ではない。NUL を含む日付は「読めない範囲」で、落として引くと別の日（`2026-10-0\0 5` が
+  // `2026-10-05`）に一致してしまう。どの日付も含まない範囲に置き換え、3実装とも一致なし（空の集計）にする
+  // （issue #3011。teto の判断）。日付は text で持ち、文字列の順で比べる（pg も `byteOrder`）ので、
+  // 本物の日付（`0001-01-01` 以上 `9999-12-31` 以下）はどちらにも入らない。
+  const unreadableRange =
+    (query.from !== undefined && hasNul(query.from)) ||
+    (query.to !== undefined && hasNul(query.to));
   return {
     ...query,
+    ...(unreadableRange ? { from: '9999-12-31', to: '0000-01-01' } : {}),
     ...(query.managerId === undefined ? {} : { managerId: stripNul(query.managerId) }),
-    ...(query.tokenId === undefined ? {} : { tokenId: stripNul(query.tokenId) }),
+    ...(query.tokenId === undefined ? {} : { tokenId: stripNulFromTokenId(query.tokenId) }),
   };
 }

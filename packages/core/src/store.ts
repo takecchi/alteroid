@@ -2551,6 +2551,15 @@ export class UnreadableActiveTokenError extends Error {
  *
  * **`aggregate()` の絞り込み（`managerId`・`tokenId`）の NUL は、落としてから引く**（issue #3005。3実装とも）。
  * 書き込みが落として残しているので、引くほうも落とすのが対称になる。投げず、一致しなければ空の集計を返す。
+ *
+ * **NUL だけの `tokenId`（落とすと空文字になるもの）は、固定の目印 `'(nul-only)'`
+ * （`USAGE_NUL_ONLY_TOKEN_ID`）に置き換えて記録する**（issue #3011。teto の判断）。pg の空文字は
+ * 「帰属なし」の行なので、そのまま落とすと混ざる。記録は残しつつ区別がつくようにする。`aggregate()` の
+ * 絞り込みも同じ置き換えを通す。目印を選んだ理由: 本物のトークン id は `randomUUID()`（16進とハイフン）で
+ * 作られ、呼び出し側は新しい id を指定できない。丸括弧は UUID に現れないので衝突しない。
+ *
+ * **`aggregate()` の `from` / `to` に NUL を含む日付は「読めない範囲」で、3実装とも一致なし（空の集計）。**
+ * 日付は鍵ではなく、落として引くと別の日に一致してしまう。
  */
 export interface UsageStore {
   /**
