@@ -92,7 +92,7 @@ describe('引用を外した写しの判定が、長い入力で2乗にならな
     // どちらも検出器が超線形を捕まえた文言なので、この2つに限って受け入れる。引数の誤りや型の誤りなど
     // 検出器と無関係の例外はどちらにも合わず落ちる（線形の関数が投げないことは上の線形の歯が守る）。
     expect(() =>
-      expectNotSuperlinear(quadratic,(n) => `${T} ${'\\-n '.repeat(n)}x`, {
+      expectNotSuperlinear(quadratic, (n) => `${T} ${'\\-n '.repeat(n)}x`, {
         n: 8000,
         repeats: 3,
         rounds: 1,
