@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createManagerPool } from './manager.js';
 import { createProfileService } from './profile-service.js';
@@ -74,6 +74,7 @@ function shortcutRunner(
       ]
     : [];
   const stops: string[] = [];
+  let listCalls = 0;
   const pushedToLiveProcess: string[] = [];
   const spawned: RunnerResumeCommand[] = [];
   const runner: RunnerClient = {
@@ -118,8 +119,12 @@ function shortcutRunner(
       const at = alive.findIndex((state) => state.managerId === managerId);
       if (at >= 0) alive.splice(at, 1);
     },
+    async ping() {
+      /* 生存確認（名簿が10秒ごとに叩く）に応える */
+    },
     async list() {
-      return [...alive];
+      listCalls += 1;
+      return alive.map((state) => ({ ...state }));
     },
     async transcript() {
       return null;
@@ -140,7 +145,20 @@ function shortcutRunner(
       /* この検証では使わない */
     },
   };
-  return { runner, pushedToLiveProcess, spawned, stops };
+  return {
+    runner,
+    pushedToLiveProcess,
+    spawned,
+    stops,
+    get listCalls() {
+      return listCalls;
+    },
+    /** 旧セッションの runner 側の状態を、観測の後で変える（観測が古くなった状況を作る）。 */
+    mutateSession(patch: Partial<RunnerManagerState>) {
+      const state = alive.find((entry) => entry.managerId === 'mgr-alive');
+      if (state !== undefined) Object.assign(state, patch);
+    },
+  };
 }
 
 /** デーモン再起動後の done へ send する（台帳は `attached=false`、runner の旧プロセスは生きている／いない）。 */
@@ -150,12 +168,22 @@ async function sendAfterRestart(
   options: {
     session?: Parameters<typeof shortcutRunner>[2];
     activeFingerprint?: string;
+    /** 10秒ごとの生存確認の観測を send の前に済ませるか（既定 true）。 */
+    observe?: boolean;
+    /** 観測の後、send の前に runner 側の状態を変える。 */
+    afterObserve?: (fake: ReturnType<typeof shortcutRunner>) => void;
+    /** 引き取り（`restore()`）の後、send の前に runner 側の状態を変える。 */
+    beforeSend?: (fake: ReturnType<typeof shortcutRunner>) => void;
   } = {},
 ) {
   const stores = createMemoryStores();
   await stores.jobs.putJob(JOB);
   const fake = shortcutRunner(report, live, options.session);
-  const registry = createRunnerRegistry([fake.runner]);
+  // 本物の名簿を使い、10秒ごとの生存確認の観測（sessions / tokenFingerprint）を立てる。
+  const registry = createRunnerRegistry([]);
+  await registry.register({ label: 'http://runner:4518', open: async () => fake.runner });
+  if (options.observe !== false) await vi.advanceTimersByTimeAsync(10_000);
+  options.afterObserve?.(fake);
   const pool = createManagerPool({
     stores,
     post: () => undefined,
@@ -173,10 +201,21 @@ async function sendAfterRestart(
   const before = (await pool.list()).find((s) => s.managerId === 'mgr-alive');
   // 再起動後は、旧プロセスがどの世代かをデーモンは知らない。
   expect(before?.tokenGeneration).toBeUndefined();
+  options.beforeSend?.(fake);
+  const listsBeforeSend = fake.listCalls;
   const result = await pool.send('mgr-alive', '続きを');
+  const listsDuringSend = fake.listCalls - listsBeforeSend;
   const after = (await pool.list()).find((s) => s.managerId === 'mgr-alive');
-  return { pool, fake, result, after };
+  return { pool, fake, result, after, listsDuringSend, registry };
 }
+
+beforeEach(() => {
+  vi.useFakeTimers();
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 describe('resume が生きた旧プロセスへ短絡したとき、世代を「一致」にしない（#2877）', () => {
   it('⚠️ 欄あり true: デーモン再起動後の done へ send して旧プロセスへ流れた回は、世代を現役と名乗らず、detail で言う', async () => {
@@ -290,6 +329,63 @@ describe('再起動後の done を、起動時に掴んだ鍵の指紋で見る�
     expect(s.result.detail).toContain('確認待ち');
     expect(s.fake.stops).toHaveLength(0);
     await s.pool.stop();
+  });
+
+  it('⭐ 観測が食い違いを示したときだけ list を1回取り直す。観測が古く実際は一致していたら畳まない', async () => {
+    const s = await sendAfterRestart('true', true, {
+      session: { tokenFingerprint: OLD_FP, liveBackgroundTasks: 0 },
+      activeFingerprint: NEW_FP,
+      // 観測（10秒前）の後、旧セッションは畳み直されて新しい鍵になっていた。
+      afterObserve: (fake) => fake.mutateSession({ tokenFingerprint: NEW_FP }),
+    });
+
+    expect(s.listsDuringSend).toBe(1);
+    expect(s.fake.stops).toHaveLength(0);
+    expect(s.fake.spawned).toHaveLength(0);
+    expect(s.fake.pushedToLiveProcess).toEqual(['続きを']);
+    expect(s.after?.tokenGeneration).toBe(60);
+    await s.pool.stop();
+  });
+
+  it('⚠️ 取り直したらターンが走っていた: 畳まず・流さず断る', async () => {
+    const s = await sendAfterRestart('true', true, {
+      session: { tokenFingerprint: OLD_FP, liveBackgroundTasks: 0 },
+      activeFingerprint: NEW_FP,
+      beforeSend: (fake) => fake.mutateSession({ status: 'running' }),
+    });
+
+    expect(s.listsDuringSend).toBe(1);
+    expect(s.result.outcome).toBe('declined');
+    expect(s.result.detail).toContain('ターンが走っている');
+    expect(s.fake.stops).toHaveLength(0);
+    expect(s.fake.pushedToLiveProcess).toHaveLength(0);
+    await s.pool.stop();
+  });
+
+  it('普段の経路（食い違いが無い・確かめられない）では list の往復を足さない', async () => {
+    // 観測がまだ来ていない。
+    const none = await sendAfterRestart('true', true, {
+      session: { tokenFingerprint: OLD_FP, liveBackgroundTasks: 0 },
+      activeFingerprint: NEW_FP,
+      observe: false,
+    });
+    expect(none.listsDuringSend).toBe(0);
+    expect(none.fake.pushedToLiveProcess).toEqual(['続きを']);
+    expect(none.after?.tokenGeneration).toBeUndefined();
+    await none.pool.stop();
+
+    // 観測が一致。
+    const same = await sendAfterRestart('true', true, {
+      session: { tokenFingerprint: NEW_FP, liveBackgroundTasks: 0 },
+      activeFingerprint: NEW_FP,
+    });
+    expect(same.listsDuringSend).toBe(0);
+    await same.pool.stop();
+
+    // 観測に指紋が無い（古い runner）。
+    const old = await sendAfterRestart('true', true, { activeFingerprint: NEW_FP });
+    expect(old.listsDuringSend).toBe(0);
+    await old.pool.stop();
   });
 
   it('指紋が一致: 旧プロセスの鍵は現役なので流し、世代を書いてよい（「確かめていない」とは言わない）', async () => {

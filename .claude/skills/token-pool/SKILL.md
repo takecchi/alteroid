@@ -291,7 +291,7 @@ probe が読むのは**アカウントの枠**（`five_hour` / `seven_day` / …
 - **残っていれば畳まず、旧セッションへも送らず `outcome: 'declined'` で断る。** detail が何が残っているかと取れる手を言う。**`liveBackgroundTasks` が無い古い runner は「分からない」として断る**（0 と読まない）。**force は無い。**
 - **`manager_list` の ⚠ の行にも、runner が最後に見た背景処理の本数（`ManagerSummary.liveBackgroundTasks`。10秒ごとの生存確認の観測）を添える。** 背景処理が残っていると runner 自身の境界（`#atTokenRecycleBoundary`）にも達しないので、「なぜ自動で畳み直されないか」の材料になる。
 - **短絡の穴は塞いだ（#2877）**: `Host.resume`（`runner.ts`）は alive なセッションが居ると、そこへ message を push して返す。resume の応答の `reusedLiveSession`（短絡した回だけ true）を見て、daemon の `#resume` は **true の回は世代を現役へ書き換えない**（⚠ が偽って消えない。`send` の detail が「生きた旧プロセスへ流した。鍵が現役か確かめていない」と言う）。**欄の無い古い runner は短絡を見分けられず、従来どおり世代を書く**（版が混ざる窓の限界）。
-- **旧プロセスの鍵は指紋で確かめる（#2877 PR2）**: `GET /managers` の `tokenFingerprint`（セッションが起動時に掴んだ鍵の指紋。`token_list` の `sha256` と同じ `fingerprintOf`。値は載せない）を、台帳が「繋がっていない」done（再起動後など）へ `send` するときに現役の指紋と比べる。一致なら流して世代を書き、食い違えば #2851 と同じ畳み直し（残っていれば `declined`）。**読めない（古い runner・現役の指紋が不明）ときは断らず、流して世代は書かない。**
+- **旧プロセスの鍵は指紋で確かめる（#2877 PR2）**: `GET /managers` の `tokenFingerprint`（セッションが起動時に掴んだ鍵の指紋。`token_list` の `sha256` と同じ `fingerprintOf`。値は載せない）を、台帳が「繋がっていない」done（再起動後など）へ `send` するとき、**10秒ごとの生存確認の観測**（registry の `sessionTokenFingerprints`。往復なし）で現役の指紋と比べる。観測が一致なら流して世代を書く。**観測が食い違ったときだけ `GET /managers` を1回取り直して確かめ**、食い違いのままなら #2851 と同じ畳み直し（走っているターン・背景処理・確認待ちが残っていれば `declined`）、一致・居ない・読めないなら畳まない。**読めない（古い runner・現役の指紋が不明）ときは断らず、流して世代は書かない。**
 
 ## 再接続の瞬間に、現役が降りる（撒く先が無かった回も追いつく）
 
