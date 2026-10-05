@@ -11,8 +11,10 @@ export interface ConversationListItem {
   preview: string;
   /** 最後に動いた時刻の表示（「3 分前」など。整形は呼ぶ側）。 */
   updatedLabel: string;
-  /** 人間との往復の数。 */
+  /** 窓の中で数えた発言の数（実数の下限になりうる。往復の数ではない）。 */
   messages: number;
+  /** 真なら窓が先頭まで届いていない（古い発言が窓の外に残りうる）ので「発言 N 件以上」と出す。省略は実数として出す。 */
+  messagesAtLeast?: boolean;
   /** 未読の数（クローン側の発言のうち、まだ読んでいないもの）。省略・0 は未読なし。 */
   unread?: number;
 }
@@ -122,7 +124,8 @@ export function ConversationList({
                           {unreadOf(item) > 0 && <UnreadMark count={unreadOf(item)} />}
                         </div>
                         <p className="mt-0.5 text-[11px] text-muted-foreground">
-                          {item.updatedLabel} · <span data-numeric>{item.messages}</span> 往復
+                          {item.updatedLabel} · 発言 <span data-numeric>{item.messages}</span> 件
+                          {item.messagesAtLeast === true ? '以上' : ''}
                         </p>
                       </>
                     ),

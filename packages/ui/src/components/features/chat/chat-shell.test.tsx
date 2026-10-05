@@ -32,7 +32,7 @@ function row(preview: string): HTMLElement {
 }
 
 describe('ConversationList: 行の見た目（既定）', () => {
-  it('往復の数を data-numeric で包み、選択中は lumen-edge bg-accent', () => {
+  it('発言数を data-numeric で包み、選択中は lumen-edge bg-accent', () => {
     render(<ConversationList items={items} activeId="a" renderLink={renderLink} />);
     const active = row('選んでいる');
     expect(active.querySelector('[data-numeric]')?.textContent).toBe('4');
