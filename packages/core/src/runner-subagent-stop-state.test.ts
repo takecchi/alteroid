@@ -3,8 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   BACKGROUND_TASK_OWNER_LIMIT,
   RunnerSubagentStopState,
-  SUBAGENT_WAKEUP_LIMIT_PER_AGENT,
-  SUBAGENT_WAKEUP_LIMIT_PER_TASK,
+  SUBAGENT_BACKGROUND_WAIT_MS,
 } from './runner-subagent-stop-state.js';
 
 /**
@@ -139,62 +138,39 @@ describe('RunnerSubagentStopState — Stop の発火回数（観測専用の通�
   });
 });
 
-describe('RunnerSubagentStopState — 起こし直しの予算（subagentWakeupCount / subagentWakeupTotal / recordSubagentWakeup）', () => {
-  it('起こし直す前は per-task も per-agent も 0', () => {
+describe('RunnerSubagentStopState — 起こし直した回数の通算（観測専用。回数の上限は Issue #3008 で外した）', () => {
+  it('起こし直す前の通算は 0', () => {
     const state = new RunnerSubagentStopState();
-    expect(state.subagentWakeupCount('agent-a', 'task-1')).toBe(0);
     expect(state.subagentWakeupTotal('agent-a')).toBe(0);
   });
 
-  it('recordSubagentWakeup は通算を+1し、渡した全件の per-task カウントも+1する。新しい通算値を返す', () => {
+  it('recordSubagentWakeup は通算を+1し、新しい通算値を返す', () => {
     const state = new RunnerSubagentStopState();
-    const newTotal = state.recordSubagentWakeup('agent-a', ['task-1', 'task-2']);
-    expect(newTotal).toBe(1);
+    expect(state.recordSubagentWakeup('agent-a')).toBe(1);
     expect(state.subagentWakeupTotal('agent-a')).toBe(1);
-    expect(state.subagentWakeupCount('agent-a', 'task-1')).toBe(1);
-    expect(state.subagentWakeupCount('agent-a', 'task-2')).toBe(1);
-    // 渡していない背景処理は増えない。
-    expect(state.subagentWakeupCount('agent-a', 'task-3')).toBe(0);
-  });
-
-  it('同じ背景処理を繰り返し渡すと per-task カウントが積み上がるが、通算は呼んだ回数ぶんだけ進む', () => {
-    const state = new RunnerSubagentStopState();
-    state.recordSubagentWakeup('agent-a', ['task-1']);
-    state.recordSubagentWakeup('agent-a', ['task-1']);
-    const total = state.recordSubagentWakeup('agent-a', ['task-1']);
-    expect(total).toBe(3);
-    expect(state.subagentWakeupCount('agent-a', 'task-1')).toBe(3);
   });
 
   it('別の agentId は独立に数えられる', () => {
     const state = new RunnerSubagentStopState();
-    state.recordSubagentWakeup('agent-a', ['task-1']);
-    state.recordSubagentWakeup('agent-b', ['task-1']);
-    expect(state.subagentWakeupTotal('agent-a')).toBe(1);
+    state.recordSubagentWakeup('agent-a');
+    state.recordSubagentWakeup('agent-b');
+    state.recordSubagentWakeup('agent-a');
+    expect(state.subagentWakeupTotal('agent-a')).toBe(2);
     expect(state.subagentWakeupTotal('agent-b')).toBe(1);
-    // 同じ taskId 文字列でも agentId が違えば鍵が違うので混ざらない。
-    state.recordSubagentWakeup('agent-a', ['task-1']);
-    expect(state.subagentWakeupCount('agent-a', 'task-1')).toBe(2);
-    expect(state.subagentWakeupCount('agent-b', 'task-1')).toBe(1);
   });
 
-  it(`per-task の枝刈りは FIFO である（${SUBAGENT_WAKEUP_LIMIT_PER_TASK} 件目以降も積める。上限そのものの判定は呼び出し側 = RunnerSession が持つ）`, () => {
-    // ここは枝刈りの「器の性質」だけを固定する — 上限判定（起こし直すか
-    // どうか）は RunnerSession#onSubagentStop の責務であり、この器は
-    // 「上限に達しても値そのものは増え続ける」ことを保証するだけである。
+  it('旧い通し上限（8）を超えても数えは止まらない・何も拒まない（上限は無い）', () => {
     const state = new RunnerSubagentStopState();
-    for (let n = 1; n <= SUBAGENT_WAKEUP_LIMIT_PER_TASK + 3; n += 1) {
-      state.recordSubagentWakeup('agent-a', ['task-1']);
+    for (let n = 1; n <= 50; n += 1) {
+      expect(state.recordSubagentWakeup('agent-a')).toBe(n);
     }
-    expect(state.subagentWakeupCount('agent-a', 'task-1')).toBe(SUBAGENT_WAKEUP_LIMIT_PER_TASK + 3);
+    expect(state.subagentWakeupTotal('agent-a')).toBe(50);
   });
+});
 
-  it(`SUBAGENT_WAKEUP_LIMIT_PER_AGENT（${SUBAGENT_WAKEUP_LIMIT_PER_AGENT}）を超えても通算は増え続ける（上限判定自体は呼び出し側の責務）`, () => {
-    const state = new RunnerSubagentStopState();
-    for (let n = 1; n <= SUBAGENT_WAKEUP_LIMIT_PER_AGENT + 2; n += 1) {
-      state.recordSubagentWakeup('agent-a', [`task-${n}`]);
-    }
-    expect(state.subagentWakeupTotal('agent-a')).toBe(SUBAGENT_WAKEUP_LIMIT_PER_AGENT + 2);
+describe('SUBAGENT_BACKGROUND_WAIT_MS（背景処理の完了を待つ1回あたりの上限）', () => {
+  it('30分である（#1554 の実例を待ち切れ、終わらない処理は時間で切れる。doc が根拠）', () => {
+    expect(SUBAGENT_BACKGROUND_WAIT_MS).toBe(30 * 60_000);
   });
 });
 

@@ -95,8 +95,7 @@ import { RunnerSdkSession } from './runner-sdk-session.js';
 import {
   BACKGROUND_TASK_OWNER_LIMIT,
   RunnerSubagentStopState,
-  SUBAGENT_WAKEUP_LIMIT_PER_AGENT,
-  SUBAGENT_WAKEUP_LIMIT_PER_TASK,
+  SUBAGENT_BACKGROUND_WAIT_MS,
 } from './runner-subagent-stop-state.js';
 import {
   recoverFromFailedResume,
@@ -161,12 +160,12 @@ import { describeProbeError } from './usage-probe.js';
  */
 
 /**
- * `SUBAGENT_WAKEUP_LIMIT_PER_TASK` / `SUBAGENT_WAKEUP_LIMIT_PER_AGENT` の
- * 定義は `runner-subagent-stop-state.ts` へ切り出した（Issue #1190 段1）。
- * 既存のテスト（`runner-subagent-stop.test.ts`）が `from './runner.js'` で
- * 直書きしているので、ここで再輸出して公開面を変えない。
+ * `SUBAGENT_BACKGROUND_WAIT_MS`（`SubagentStop` のフックの中で背景処理の完了を待つ1回あたりの
+ * 上限。Issue #3008）の定義は `runner-subagent-stop-state.ts` に在る。テストが
+ * `from './runner.js'` で読むので、ここで再輸出する。回数の上限（旧
+ * `SUBAGENT_WAKEUP_LIMIT_PER_TASK` / `_PER_AGENT`）は外した。
  */
-export { SUBAGENT_WAKEUP_LIMIT_PER_AGENT, SUBAGENT_WAKEUP_LIMIT_PER_TASK };
+export { SUBAGENT_BACKGROUND_WAIT_MS };
 
 /** マネージャーのモデル帯の既定。変更には人間の承認が要る（AGENTS.md 地雷5）。 */
 export const MANAGER_MODEL = 'opus';
@@ -1993,7 +1992,7 @@ class RunnerSession {
   readonly #nonWorkerTaskIds = new Set<string>();
 
   /**
-   * **起こし直しの上限で打ち切った作業者を追う2フィールドの器**（Issue #1190
+   * **背景処理の待ちの上限（30分）で打ち切った作業者を追う2フィールドの器**（Issue #1190
    * 段0で `runner-cut-off-workers.ts` へ切り出した。前例は PR #1523 / #1433 /
    * #1532）。`#cutOffWorkers`（同期の `Task` 経路）と
    * `#pendingCutOffNotifications`（`task_notification` 経路）を持つ。**注記の
@@ -3891,7 +3890,7 @@ class RunnerSession {
    * `task_notification`。開いている委譲から1件外し、全部片付いたら閉じ待ちにする。
    *
    * **併せて #901 を見る。** `task_id` が「打ち切った」と控えられていれば
-   * （＝起こし直しの上限で打ち切られていて、まだ同期の `Task` 結果として
+   * （＝背景処理の待ちの上限（30分）で打ち切られていて、まだ同期の `Task` 結果として
    * 消費されていない）、`RunnerCutOffWorkers#consumeCutOff` で消して
    * `recordPendingNotification` で付け替える——`task_notification` 自体には
    * `additionalContext` を注げないので（`RunnerCutOffWorkers` の
@@ -3929,6 +3928,16 @@ class RunnerSession {
     // 切り出した**（Issue #1190 案X）。対応の無い通知（本来起きない想定だが
     // 防御的に見る）で誤って閉じ待ちを立てないのは、あちら側の doc を見よ。
     this.#workerWaitWindow.notified(taskId);
+    // **Issue #3008: `SubagentStop` のフックの中で完了を待っている者の補助の合図。**
+    // 主は `background_tasks`（`liveBackgroundTasks`）だが、あちらは id 空間が同じかを
+    // 誰も実測していない（`RunnerBackgroundWaiters` の doc）ので、背景処理自身の完了
+    // 通知（`task_id` ＝ `background_tasks[].id`。#1554 の節）も「終わった」として控える。
+    if (taskId !== undefined) {
+      this.#sdkSession.backgroundWaiters.noteFinished(
+        taskId,
+        typeof event.outputFile === 'string' ? event.outputFile : null,
+      );
+    }
     // **作業者ではないタスク（`local_bash` 等）の通知は、下の2つの数え上げ
     // （`notifications`・failed 通知）に入れない**（Issue #2113 の続き。
     // `task_started` 側だけを直すと、Bash の失敗が「作業者の failed 通知」に
@@ -5535,7 +5544,7 @@ class RunnerSession {
   }
 
   /**
-   * `Task` の結果が、起こし直しの上限で打ち切った作業者のものなら、マネージャーへ
+   * `Task` の結果が、背景処理の待ちの上限（30分）で打ち切った作業者のものなら、マネージャーへ
    * 渡す注記を返す（#901）。そうでなければ `null`。**同期の `Task`
    * （`status:'completed'`）の経路。** `async_launched` の経路は
    * `#drainPendingCutOffNotifications` が持つ。
@@ -5562,11 +5571,11 @@ class RunnerSession {
     this.#emit({
       type: 'note',
       managerId: this.#id,
-      text: `Task の結果に注記した（#901）: agent_id=${agentId} は起こし直しの上限で打ち切られていた`,
+      text: `Task の結果に注記した（#901）: agent_id=${agentId} は背景処理の待ちの上限（30分）で打ち切られていた`,
     });
     return [
       `⚠️ この作業者（agent_id=${agentId}）は、自分で起こした背景処理を残したまま` +
-        '畳もうとする回が起こし直しの上限に達したため、alteroid が打ち切った。' +
+        '畳もうとした後、背景処理の完了を待つ上限（30分）に達したため、alteroid が打ち切った。' +
         '**上の報告は完結していない可能性がある**（最後の発言が「待っています」の類でも、' +
         'その待ちはもう誰も続けない）。成果（commit / push / 検証）が実際に在るかを確かめてから次を決めること。',
       // **Issue #1554: 打ち切られた瞬間に残っていた背景処理を id / command で
@@ -5599,14 +5608,14 @@ class RunnerSession {
         managerId: this.#id,
         text:
           `Task の結果に注記した（#901・task_notification 経由）: ` +
-          `agent_id=${agentId} は起こし直しの上限で打ち切られていた`,
+          `agent_id=${agentId} は背景処理の待ちの上限（30分）で打ち切られていた`,
       });
     }
     return agentIds
       .map((agentId) =>
         [
           `⚠️ 作業者（agent_id=${agentId}）は、自分で起こした背景処理を残したまま` +
-            '畳もうとする回が起こし直しの上限に達したため、alteroid が打ち切った。' +
+            '畳もうとした後、背景処理の完了を待つ上限（30分）に達したため、alteroid が打ち切った。' +
             '**先に届いたその完了通知（task-notification）の報告は完結していない可能性がある**' +
             '（最後の発言が「待っています」の類でも、その待ちはもう誰も続けない）。' +
             '成果（commit / push / 検証）が実際に在るかを確かめてから次を決めること。',
@@ -5893,43 +5902,31 @@ class RunnerSession {
    * いるのに数えていた」ほうだけである。
    *
    * **`remaining.length > 0` のとき（当人が自分で起こした背景処理が、まだ
-   * 終わっていない形で残っている）は、予算を2段で見て2つに割る**
-   * （#570 の追跡の続き。単位を「作業者」から「作業者 × 背景処理」へ
-   * 変えたのがこの PR の本体——詳細は `SUBAGENT_WAKEUP_LIMIT_PER_TASK` /
-   * `SUBAGENT_WAKEUP_LIMIT_PER_AGENT` の doc）:
+   * 終わっていない形で残っている）は、フックの中で完了を待つ**（Issue #3008。
+   * 回数の上限 `SUBAGENT_WAKEUP_LIMIT_PER_TASK` / `_PER_AGENT` はこの Issue で外した。
+   * 回数で暴走を止める形は AGENTS.md の地雷に当たり、8 の根拠は実測ではなかった）:
    *
-   * 1. **通し上限未満、かつ、残っている背景処理の少なくとも1本が1本あたりの
-   *    上限未満 —— 起こし直す。** 通算（`#subagentWakeupTotals`）を +1、
-   *    残っている**全件**の per-task カウント（`#subagentWakeups`）も +1
-   *    したうえで `note` を出し、`hookSpecificOutput.additionalContext` を
-   *    返す。本文には (a) 残っている背景処理の件数と各件の
-   *    type/status/description（`command` があれば要点）に加えて、**その
-   *    背景処理では何回目か**（`#renderSubagentStopTaskLines`） (b) 「その
-   *    完了通知は親のセッションへ届く。あなたは自動では再開しない」 (c) どう
-   *    すればよいか（前景で待ち直す／諦めるなら「背景処理を残したまま終える」
-   *    と報告に明記する。**黙って畳まない**） (d) この作業者の通算が何回目・
-   *    通し上限は何回かを必ず入れる。
-   * 2. **どちらかの上限に達していたら —— 起こし直さない。**
-   *    `additionalContext` は返さず（＝ `{ continue: true }` のみ）、
-   *    `note` を出す。理由（`limitReason`）は「通し上限に達した
-   *    （`'per-agent'`）」と「残っている背景処理はどれも1本あたりの上限に
-   *    達した（`'per-task'`）」の2つに割り、両方成り立つときは通し上限の
-   *    ほうが重い歯なので `'per-agent'` を名乗る。`manager.ts` の
-   *    `case 'note'` はこれを見て、日誌には毎回書く。**クローンの受信箱へは
-   *    間引いて上げる**（#1385。`escalate: true` を立てるのは、この
-   *    agentId で `limit_reached` の `note` を出した通算回数が 1・3・9・27…
-   *    のときだけ——`#subagentLimitReachedNotes` /
-   *    `shouldEscalateSubagentLimitReachedNote` の doc。**上限に達したまま
-   *    畳もうとするたびに同じ report が積まれ続けるのを防ぐためで、
-   *    `note` 自体は間引かない**（日誌には全件残る）。
+   * 1. **待つ。** SDK は `SubagentStop` のフックの Promise を待つので、`remaining` の
+   *    背景処理が全部終わるまで返さない（`#waitForBackgroundTasks`。足場は
+   *    `RunnerBackgroundWaiters`）。待つ間、作業者のターンは進まない（⚠️ 実 SDK で
+   *    トークンを使わないことまでは測っていない）。
+   * 2. **終わった（`'settled'`） —— 1回だけ起こし直す。** `additionalContext` に、終わった
+   *    背景処理の id・command・出力の置き場所（`task_notification` の `output_file`）を載せ、
+   *    「結果を読んでから畳め」と伝える。`note` は `outcome: 'woken'`。通算は観測専用
+   *    （`#subagentWakeupTotals`。`stall.wakeupCount` の出所）で、可否には使わない。
+   * 3. **待ちの上限（`SUBAGENT_BACKGROUND_WAIT_MS`、30分）に達した（`'timeout'`） —— 起こし直さず
+   *    打ち切る。** 旧い `limit_reached` の経路をそのまま使う: `note`（`outcome:
+   *    'limit_reached'`）、1・3・9…の回だけ `escalate`（#1385。実行の制限ではなく知らせの
+   *    間引き）、`#cutOffWorkers.recordCutOff`。⟹ その後に背景処理が終わったときの
+   *    #1475 / #1502 / #1554 / #1563 / #2387 の配達と起こしが働く。`outcome` のスキーマは
+   *    変えていない（旧デーモンとの互換）。
+   * 4. **待ちの途中でセッションが畳まれた（`'released'`）—— 起こし直さずに返す。** 畳まれつつある
+   *    世代で作業者にモデルを1ターン回させても、結果は誰にも届かない。打ち切りでもないので
+   *    `recordCutOff` は通さない。跡は stall を持たない `note` で残す。
    *
-   * **同じ背景処理を残したまま2回目の `SubagentStop` が来た**（＝ 起こし
-   * 直しても作業者が進まなかった）ときは、`note` の「この背景処理では n
-   * 回目」の数字が変わることで「起こし直しても進まなかった」と「起こし
-   * 直して初めて進んだ」を区別できるようにしてある。**通算の側
-   * （`#subagentWakeupTotals`）は、対象が別の背景処理へ変わっても
-   * 増え続ける**——「毎回違う背景処理を起こして空転する」を捕まえるのは
-   * こちらの役目（穴A。`SUBAGENT_WAKEUP_LIMIT_PER_AGENT` の doc）。
+   * **穴A（起こされるたびに新しい背景処理を起こして畳む作業者）を回数で止めない。** 各回は
+   * 「背景処理が実際に終わった後の1ターン」なので、空転ではなく仕事である
+   * （`SUBAGENT_BACKGROUND_WAIT_MS` の doc）。終わらない背景処理は30分で切れる。
    *
    * ## ⚠️ この `note`（および `additionalContext`）が出ないことは「空転が無かった」を意味しない
    *
@@ -6034,52 +6031,51 @@ class RunnerSession {
           : `⚠️ 上のうち ${unknownStatusCount}件 は status が既知の語彙のどちらでもない —— ` +
             '「走っている」へ倒して数えた（分からないものを「終わった」へ倒さない）。' +
             'この行が出たら計器のほうを疑う — SDK が status の語彙を変えた見込みが高い。';
-
-      // **予算の判定は2段になる（この PR の本体）。**
-      // 1段目（per-task）: 残っている各背景処理を、それぞれの `id` で
-      // `#subagentWakeups` を引いて「1本あたりの上限未満か」を見る。
-      // 2段目（per-agent）: この作業者の通算を `#subagentWakeupTotals` で見る。
-      // **起こし直す条件は両方 —— 通し上限未満、かつ、残っている背景処理の
-      // うち少なくとも1本が1本あたりの上限未満であること。**
+      // **背景処理の完了まで、フックの中で待つ（Issue #3008）。** 待つ対象は `remaining`
+      // （当人が起こした、まだ走っている背景処理）の id。回数の上限は外した——
+      // `SUBAGENT_BACKGROUND_WAIT_MS` の doc が、時間の上限を置いた理由と、穴A（起こされる
+      // たびに新しい背景処理を起こして畳む作業者）を回数で止めない理由を持つ。
       //
-      // `remaining` の各要素の `id` は `mine` の filter（`typeof id ===
-      // 'string'` かつ所有者が一致）を通っているので既に文字列のはずだが、
-      // **防御的にもう一度 `typeof` で絞る**（この前提が崩れても、ここが
-      // 例外で落ちない側へ倒す）。
+      // `remaining` の各要素の `id` は `mine` の filter（`typeof id === 'string'` かつ所有者が
+      // 一致）を通っているので既に文字列のはずだが、**防御的にもう一度 `typeof` で絞る**
+      // （この前提が崩れても、ここが例外で落ちない側へ倒す）。
       const remainingIds = remaining
         .map((task) => (task as { id?: unknown }).id)
         .filter((id): id is string => typeof id === 'string');
-      const perTaskCount = (id: string): number => this.#stopState.subagentWakeupCount(agentId, id);
-      const total = this.#stopState.subagentWakeupTotal(agentId);
-      const underPerTask = remainingIds.filter(
-        (id) => perTaskCount(id) < SUBAGENT_WAKEUP_LIMIT_PER_TASK,
-      );
-      const shouldWake = total < SUBAGENT_WAKEUP_LIMIT_PER_AGENT && underPerTask.length > 0;
-      // **両方の上限に同時に達したときは `'per-agent'` を名乗る**
-      // （`SUBAGENT_WAKEUP_LIMIT_PER_AGENT` の doc「優先順位」）—— 通し上限の
-      // ほうが重い歯なので、通し上限に達している回はそちらを理由にする。
-      const limitReason: 'per-agent' | 'per-task' =
-        total >= SUBAGENT_WAKEUP_LIMIT_PER_AGENT ? 'per-agent' : 'per-task';
+      const waitOutcome = await this.#waitForBackgroundTasks(remainingIds);
 
-      if (shouldWake) {
-        // **起こし直す —— 通算を +1、残っている全件の per-task カウントも
-        // +1 する。** 「全件」（`underPerTask` だけではない）なのは、その回に
-        // 「待たされた」のは残っている背景処理の全部だからである —— 上限未満の
-        // 1本だけを対象に選んでも、他の背景処理が同じ回に一緒に残っていた
-        // という事実は変わらない。
-        const newTotal = this.#stopState.recordSubagentWakeup(agentId, remainingIds);
+      // **待ちの途中でセッションが stop / 畳み / 世代交代した —— 起こし直さずに返す。**
+      // 理由: 起こし直すと、畳まれつつあるセッションの中で作業者がモデルを1ターン回す。
+      // その結果は誰にも届かない（マネージャーは resume で開き直す新しい世代で、古い世代の
+      // 作業者の続きを受け取らない）ので、トークンを無駄にするだけである。**また、これは
+      // 「打ち切り」ではない**——背景処理は終わっていないが、alteroid が打ち切ったのでは
+      // ないので `recordCutOff` は通さない（通すと、新しい世代で「打ち切った作業者」の注記を
+      // 誤って出す）。跡は note として残す。
+      if (waitOutcome === 'released') {
+        this.#emit({
+          type: 'note',
+          managerId: this.#id,
+          text: this.#truncateSubagentStopText(
+            `SubagentStop（作業者: ${record.agentType ?? '(不明)'} / agent_id=${agentId}）: ` +
+              `**この作業者が自分で起こした背景処理が ${remaining.length}件 残ったまま畳もうとした** ` +
+              '— 完了を待っている途中でセッションが畳まれた（stop / 畳み直し / 世代交代）ので、' +
+              `起こし直さずに返した。${stopHookActiveText}`,
+          ),
+        });
+        return { kind: 'continue' };
+      }
 
-        // **加算の後で組み立てる。** 各行に載る「この背景処理では何回目か」
-        // は、この加算を終えた後の値でなければ「今回を含む」にならない。
-        const taskLines = this.#renderSubagentStopTaskLines(agentId, remaining);
+      if (waitOutcome === 'settled') {
+        // **起こし直す — 背景処理が実際に終わった後の1回である。** 通算（観測専用）を +1 する。
+        const newTotal = this.#stopState.recordSubagentWakeup(agentId);
+        const taskLines = this.#renderSubagentStopTaskLines(remaining);
 
         const noteLines = [
           `SubagentStop（作業者: ${record.agentType ?? '(不明)'} / agent_id=${agentId}）: ` +
             `**この作業者が自分で起こした背景処理が ${remaining.length}件 残ったまま畳もうとした**` +
             settledText +
             `（この瞬間のセッション全体の在庫=${tasks.length}件、session_crons=${crons.length}件）。` +
-            `**起こし直した**（この作業者の通算 ${newTotal}回目 / 通し上限 ` +
-            `${SUBAGENT_WAKEUP_LIMIT_PER_AGENT}）。${stopHookActiveText}`,
+            `**完了を待ってから起こし直した**（この作業者の通算 ${newTotal}回目）。${stopHookActiveText}`,
           ...taskLines,
           ...(unknownText === '' ? [] : [unknownText]),
           disclaimer,
@@ -6096,64 +6092,69 @@ class RunnerSession {
             ...(record.agentType === undefined ? {} : { agentType: record.agentType }),
             ownedTaskCount: remaining.length,
             sessionTaskCount: tasks.length,
-            // **スキーマは変えていない**（`runner-protocol.ts` /
-            // `schema.ts` の `stall.wakeupCount` は今までどおり「この
-            // `agent_id` を起こし直した回数（今回を含む）」）。単位を
-            // 背景処理にしたのはこのイベント自体の判定であって、この欄が
-            // 運ぶ値は `#subagentWakeupTotals`（`agent_id` の通算）である。
+            // **スキーマは変えていない**（`stall.wakeupCount` は今までどおり「この
+            // `agent_id` を起こし直した回数（今回を含む）」。値は `#subagentWakeupTotals`）。
             wakeupCount: newTotal,
             outcome: 'woken',
           },
         });
 
+        // **終わった背景処理を、id・command・出力の置き場所つきで渡す。** 出力の置き場所は
+        // `task_notification` の `output_file`（届いていれば）。取れなければ「取れなかった」と
+        // 書く（作り物のパスを主張しない）。
+        const snapshotCommands = new Map<string, string>();
+        for (const task of remaining) {
+          const t = task as { id?: unknown; command?: unknown };
+          if (typeof t.id === 'string' && typeof t.command === 'string') {
+            snapshotCommands.set(t.id, t.command);
+          }
+        }
+        const finishedLines = remainingIds.map((id) => {
+          // 畳もうとした瞬間の `command`（note と同じ出所）を先に、無ければ起こした瞬間の控え。
+          const command = snapshotCommands.get(id) ?? this.#stopState.backgroundTaskCommand(id);
+          const outputFile = this.#sdkSession.backgroundWaiters.outputFileOf(id);
+          return (
+            `- id=${id}${command === undefined ? '' : ` command=${command}`} ` +
+            `出力: ${outputFile === null ? '取れなかった（完了通知の output_file が無い）' : outputFile}`
+          );
+        });
         const contextLines = [
-          `あなたが自分で起こした背景処理が ${remaining.length}件、残ったまま畳もうとした ` +
+          `あなたが自分で起こした背景処理が ${remaining.length}件、残ったまま畳もうとしたので、` +
+            '**終わるまで待ってから**起こし直した。**背景処理は終わった。**' +
             settledText +
             `（この瞬間のセッション全体の在庫=${tasks.length}件、session_crons=${crons.length}件）。`,
-          ...taskLines,
+          ...finishedLines,
           ...(unknownText === '' ? [] : [unknownText]),
-          'この完了通知は**親のセッション**（マネージャー）へ届く。**あなたは自動では再開しない** — ' +
-            'このまま黙って畳むと、委譲がここで止まる。',
-          'どうすればよいか: 前景で待ち直す（出力ファイルの行数が増えるかを見る、等）。' +
-            '諦めて畳むなら、報告に「背景処理を残したまま終える」と明記すること。' +
-            'どちらでもよいが、黙って畳まないこと。',
-          `これはこの作業者の通算 ${newTotal}回目（通し上限 ${SUBAGENT_WAKEUP_LIMIT_PER_AGENT}）。` +
-            `各背景処理には別々に1本あたりの上限（${SUBAGENT_WAKEUP_LIMIT_PER_TASK}回）があり、` +
-            '達した背景処理はその背景処理としては自動では起こされなくなる。' +
-            `通し上限（${SUBAGENT_WAKEUP_LIMIT_PER_AGENT}回）に達すると、` +
-            'この作業者はどの背景処理についても自動では起こされなくなる。',
+          '**結果（出力）を読んでから畳むこと。** 出力の置き場所は上の行のとおり。' +
+            'まだ続きの背景処理を起こすなら、畳む前にまた最大 ' +
+            `${String(SUBAGENT_BACKGROUND_WAIT_MS / 60_000)} 分は完了を待つ（それを超えると打ち切られる）。`,
+          `これはこの作業者の通算 ${newTotal}回目の起こし直し。`,
         ];
-        const additionalContext = this.#truncateSubagentStopText(contextLines.join('\n'));
-
-        return { kind: 'addContext', text: additionalContext };
+        return {
+          kind: 'addContext',
+          text: this.#truncateSubagentStopText(contextLines.join('\n')),
+        };
       }
 
-      // **起こし直さない —— 理由は2つに割れる（`limitReason`）。**
-      // `note` は今までどおり毎回 emit する（日誌には全件残る）。
-      // `escalate` は間引く（#1385）—— `manager.ts` の `case 'note'` は
-      // `escalate === true` のときだけクローンの受信箱へ report を積むので、
-      // 毎回立てたままだと同じ agentId が上限に達したまま何度も
-      // `SubagentStop` を送ってくるたびに同じ report が積まれ続ける。
-      // **間引きの規則は `RunnerSubagentStopState.recordSubagentLimitReachedNote`
-      // の doc（`manager.ts` の `shouldEscalateDenial` と同じ、1・3・9・27…）。**
-      // **ここでは何も加算していないので、`#renderSubagentStopTaskLines` が
-      // 読む値は現在値のままである。**
+      // **待ちの上限（`SUBAGENT_BACKGROUND_WAIT_MS`）に達した —— 起こし直さず、打ち切る。**
+      // `note` は毎回 emit する（日誌には全件残る）。`escalate` は間引く（#1385）——
+      // `manager.ts` の `case 'note'` は `escalate === true` のときだけクローンの受信箱へ
+      // report を積むので、毎回立てたままだと同じ agentId が何度も `SubagentStop` を
+      // 送ってくるたびに同じ report が積まれ続ける。**間引きは知らせの間引きであって、
+      // 実行の制限ではない**（`RunnerSubagentStopState.recordSubagentLimitReachedNote` の doc）。
+      const total = this.#stopState.subagentWakeupTotal(agentId);
       const { count: limitNoteCount, shouldEscalate: shouldEscalateLimitNote } =
         this.#stopState.recordSubagentLimitReachedNote(agentId);
 
-      const taskLines = this.#renderSubagentStopTaskLines(agentId, remaining);
+      const taskLines = this.#renderSubagentStopTaskLines(remaining);
       const limitReasonText =
-        limitReason === 'per-agent'
-          ? `**この作業者の通し上限（${SUBAGENT_WAKEUP_LIMIT_PER_AGENT}回）に達したため、` +
-            `起こし直さなかった**（既に ${total}回 起こし直し済み）。`
-          : `**残っている背景処理はどれも1本あたりの上限（${SUBAGENT_WAKEUP_LIMIT_PER_TASK}回）に` +
-            `達したため、起こし直さなかった**（この作業者の通算 ${total}回 / 通し上限 ` +
-            `${SUBAGENT_WAKEUP_LIMIT_PER_AGENT}）。`;
+        `**背景処理の完了を ${String(SUBAGENT_BACKGROUND_WAIT_MS / 60_000)} 分（待ちの上限）まで待ったが、` +
+        `終わらなかったため、起こし直さずに打ち切った**（この作業者の通算 ${total}回 起こし直し済み）。`;
       // **クローンが読んだとき「これが何回目か」「なぜ次がすぐ来ないか」が
       // 分かる1行**（#1385）。日誌には毎回このまま載るので、間引かれた回
       // （`escalate` が立たない回）も、日誌を辿れば抜け無く追える。
       const limitNoteCountText =
-        `上限に達してから ${limitNoteCount}回目（1・3・9…回目だけクローンへ上げる）。` +
+        `打ち切ってから ${limitNoteCount}回目（1・3・9…回目だけクローンへ上げる）。` +
         (shouldEscalateLimitNote ? '' : ' この回はクローンの受信箱へは上げない — 日誌には残る。');
       const noteLines = [
         `SubagentStop（作業者: ${record.agentType ?? '(不明)'} / agent_id=${agentId}）: ` +
@@ -6184,12 +6185,9 @@ class RunnerSession {
           ...(record.agentType === undefined ? {} : { agentType: record.agentType }),
           ownedTaskCount: remaining.length,
           sessionTaskCount: tasks.length,
-          // 起こし直していないので、このイベント自身は積算に足されない
-          // （既存のスキーマ・doc のまま —— `#onSubagentStop` の doc の
-          // 「上限に達していたら」節）。**この欄は `wakeupCount`（起こし
-          // 直した回数）のままで、間引きの回数（`limitNoteCount`）を運ばない
-          // ——スキーマの doc「この `agent_id` を起こし直した回数」の意味を
-          // 変えないため。**
+          // 起こし直していないので、このイベント自身は積算に足されない。**この欄は
+          // `wakeupCount`（起こし直した回数）のままで、間引きの回数（`limitNoteCount`）を
+          // 運ばない**——スキーマの doc の意味を変えないため。
           wakeupCount: total,
           outcome: 'limit_reached',
         },
@@ -6228,22 +6226,52 @@ class RunnerSession {
   }
 
   /**
+   * 作業者が起こした背景処理 `ids` が**全部終わる**まで待つ（Issue #3008。
+   * `#onSubagentStop` の「待つ」の本体）。結末は `'settled'`（終わった）／ `'timeout'`
+   * （`SUBAGENT_BACKGROUND_WAIT_MS` を超えた）／ `'released'`（待ちの途中で、または待つ前に、
+   * セッションが stop / 畳み / 世代交代した）。
+   *
+   * **「終わった」の判定**（`RunnerBackgroundWaiters` の doc が根拠を持つ）: 各 id が、
+   * (1) `task_notification` が届いた、または (2) `liveBackgroundTasks`（`background_tasks_changed`）
+   * に**載っているのを見たあとで載らなくなった**。⚠️ 載ったことの無い id を「載っていない」だけで
+   * 終わりとはしない（id 空間が違えば常に真になり、待たずに毎回起こし直す＝空転が無限になる）。
+   * **別の作業者の背景処理は `ids` に入らない**（`mine` の絞り込みが先にある）ので、待ちの条件にならない。
+   *
+   * **`stopped` / 世代は、待つ前にも待った後にも見る。** 待っている者は
+   * `RunnerSdkSession#markStopped` / `teardownForRecreate` が解く（`'released'`）が、その解きより
+   * 後に始まった待ちは誰も解かないので、始める前に `stopped` を見て待たない。待った後に
+   * 世代が替わっていれば、`'settled'` でも `'released'` に倒す（古い世代の作業者を起こさない）。
+   */
+  async #waitForBackgroundTasks(
+    ids: readonly string[],
+  ): Promise<'settled' | 'timeout' | 'released'> {
+    if (this.#sdkSession.stopped) return 'released';
+    const generation = this.#sdkSession.generation;
+    const waiters = this.#sdkSession.backgroundWaiters;
+    const seenLive = new Set<string>();
+    const outcome = await waiters.wait(() => {
+      const live = new Set(this.#sdkSession.liveBackgroundTasks.map((task) => task.id));
+      return ids.every((id) => {
+        if (waiters.isFinished(id)) return true;
+        if (live.has(id)) {
+          seenLive.add(id);
+          return false;
+        }
+        return seenLive.has(id);
+      });
+    }, SUBAGENT_BACKGROUND_WAIT_MS);
+    if (
+      outcome === 'settled' &&
+      (this.#sdkSession.stopped || generation !== this.#sdkSession.generation)
+    ) {
+      return 'released';
+    }
+    return outcome;
+  }
+
+  /**
    * `remaining`（当人が起こした背景処理のうち、まだ終わっていないもの）の
    * 各要素を、人間が読める1行へ変換する（`#onSubagentStop`）。
-   *
-   * **末尾に「この背景処理では何回目か」を付ける**（この PR の本体 ——
-   * 単位が背景処理になったことが出力から読めないと、この PR で足した軸が
-   * 観測から消える。AGENTS.md 地雷「取れない軸に0の行を作る」の裏面）。
-   * 値は呼び出し時点の `#subagentWakeups` をそのまま読むだけで、**この
-   * 関数自身は加算しない**（副作用を持たない）—— 起こし直す分岐は呼ぶ前に
-   * 加算を終えているので「今回を含む」回数になり、起こし直さない分岐は
-   * 加算していないのでそのまま現在値になる。**どちらの意味になるかは
-   * 呼び出し側の責務であり、この関数の doc としてはどちらも「呼び出し時点の
-   * 値」としか言えない。**
-   *
-   * `id` が取れない（`mine` の filter を通っているので実際には起きない
-   * はずだが、防御的に想定する）要素には回数を付けない——取れない軸に
-   * 0の行を作らないため。
    *
    * **先頭に `id=` を付け、`command` も先頭寄りへ動かす（Issue #1554）。**
    * 打ち切った後、この背景処理の完了（`task_notification`）をマネージャー
@@ -6257,7 +6285,7 @@ class RunnerSession {
    * `description` の側になる（AGENTS.md「stall の note は長さの上限で
    * 切られる。id と command が切られて消えないようにする」）。
    */
-  #renderSubagentStopTaskLines(agentId: string, tasks: readonly unknown[]): string[] {
+  #renderSubagentStopTaskLines(tasks: readonly unknown[]): string[] {
     return tasks.map((task) => {
       const t = task as {
         id?: unknown;
@@ -6275,13 +6303,8 @@ class RunnerSession {
       const status = typeof t.status === 'string' ? t.status : '(不明)';
       const description = typeof t.description === 'string' ? t.description : '(不明)';
       const command = typeof t.command === 'string' ? ` command=${t.command}` : '';
-      const perTaskSuffix =
-        typeof t.id === 'string'
-          ? `（この背景処理では ${this.#stopState.subagentWakeupCount(agentId, t.id)}` +
-            `回目 / 1本あたりの上限 ${SUBAGENT_WAKEUP_LIMIT_PER_TASK}）`
-          : '';
       // **`id` と `command` を `description` より前に置く**（直上の doc）。
-      return `- id=${id}${command} type=${type} status=${status} description=${description}${perTaskSuffix}`;
+      return `- id=${id}${command} type=${type} status=${status} description=${description}`;
     });
   }
 

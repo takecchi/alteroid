@@ -1,4 +1,5 @@
 import type { AgentManagerSession, AgentUserInput } from './agent-session.js';
+import { RunnerBackgroundWaiters } from './runner-background-waiters.js';
 import { RunnerFenceError, type RunnerLease } from './runner-protocol.js';
 import type { JobStatus } from './schema.js';
 
@@ -145,6 +146,8 @@ export class RunnerSdkSession {
    */
   teardownForRecreate(): void {
     this.#generation += 1;
+    // 世代が替わるので、古い世代の `SubagentStop` の待ちは解く（Issue #3008）。
+    this.#backgroundWaiters.releaseAll();
     this.closeQuery();
     this.#query = null;
     this.#reader = null;
@@ -164,6 +167,8 @@ export class RunnerSdkSession {
   /** `#stopped` を立てる。一度立てたら二度と下ろさない（元と同じ一方向の遷移）。 */
   markStopped(): void {
     this.#stopped = true;
+    // 畳み中のセッションで待ち続けない（Issue #3008）。
+    this.#backgroundWaiters.releaseAll();
   }
 
   get status(): JobStatus {
@@ -217,6 +222,20 @@ export class RunnerSdkSession {
   /** `background_tasks` イベントの REPLACE 意味論そのもの。丸ごと入れ替える。 */
   replaceLiveBackgroundTasks(tasks: readonly { id: string; taskType: string }[]): void {
     this.#liveBackgroundTasks = tasks;
+    // `SubagentStop` のフックの中で完了を待っている者の条件を見直す（Issue #3008）。
+    this.#backgroundWaiters.recheck();
+  }
+
+  /**
+   * `SubagentStop` のフックの中で、作業者が起こした背景処理の完了を待つ足場（Issue #3008）。
+   * **このセッションの寿命に結ぶ**——`markStopped` / `teardownForRecreate`（世代交代）で
+   * 待っている者を全員解く（解かれた側は起こし直さずに返す。`RunnerBackgroundWaiters` の doc と
+   * `RunnerSession#onSubagentStop` の doc）。
+   */
+  readonly #backgroundWaiters = new RunnerBackgroundWaiters();
+
+  get backgroundWaiters(): RunnerBackgroundWaiters {
+    return this.#backgroundWaiters;
   }
 
   // ---------------------------------------------------------------------

@@ -12026,9 +12026,8 @@ class Pool implements ManagerPool {
         // **文字列で本文を嗅いで判定しない。欄（`event.escalate`）で判定する**
         // （`runner-protocol.ts` の `note` スキーマの doc）。`case
         // 'permission_denied'` の escalation と同じ口（`#emit(..., 'report',
-        // …)`）でクローンの受信箱へ上げる —— 起こし直しの上限（#570 の
-        // 追跡。`runner.ts` の `SUBAGENT_WAKEUP_LIMIT_PER_TASK` /
-        // `SUBAGENT_WAKEUP_LIMIT_PER_AGENT`）に達し、この作業者を
+        // …)`）でクローンの受信箱へ上げる —— 背景処理の完了を待つ上限（Issue #3008。
+        // `runner.ts` の `SUBAGENT_BACKGROUND_WAIT_MS`、30分）に達し、この作業者を
         // 自動では再開できなくなったことを、クローンが見に行かなくても
         // 気づける形にするためである。
         if (event.escalate === true) {
@@ -12036,7 +12035,7 @@ class Pool implements ManagerPool {
             event.managerId,
             'report',
             `[${event.managerId}] 作業者が自分で起こした背景処理を残したまま畳もうとする回が、` +
-              '起こし直しの上限に達した。**この作業者は自動では再開しない**（委譲がここで止まっている）。\n' +
+              '背景処理の完了を待つ上限（30分）に達して打ち切った。**この作業者は自動では再開しない**（委譲がここで止まっている）。\n' +
               `詳細（何が残っているか・何回目だったか）: ${event.text}\n` +
               '全件は日誌に残っている（`journal_read` で辿れる）。',
           );

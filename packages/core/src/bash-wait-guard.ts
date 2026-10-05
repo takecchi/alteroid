@@ -2004,7 +2004,7 @@ function inspectWaitForms(trimmed: string, invocation: BashInvocation): WaitGuar
       reason:
         '`gh run watch` を背景へ置いている' +
         '（`&` か `Bash` の `run_in_background`）。**待ちが自分の手から外れる形**で、' +
-        '背景処理を残したまま作業者が畳むと起こし直しの上限に達して委譲そのものが止まる' +
+        '背景処理を残したまま作業者が畳むと、完了を待つ上限（30分）を超えた時点で打ち切られて委譲そのものが止まる' +
         '（実測 2026-09-17: 作業者2人が同じ形で停止した）。' +
         '代わりに次のいずれかを使うこと: ' +
         '(1) 前景で `timeout <秒> gh run watch <id> --exit-status` と書き、待ち自体に上限を持たせる。 ' +
