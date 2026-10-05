@@ -1,4 +1,4 @@
-import { createMemoryStores, type Clone, type Stores } from '@alteroid/core';
+import { createMemoryStores, type CloneHost, type Stores } from '@alteroid/core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createApp } from './app.js';
@@ -22,7 +22,7 @@ beforeEach(() => {
   tick(0);
   stores = createMemoryStores();
   app = createApp({
-    clone: {} as unknown as Clone,
+    clone: {} as unknown as CloneHost,
     stores,
     token: 'test-token',
     shutdown: () => undefined,

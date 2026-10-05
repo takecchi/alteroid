@@ -76,6 +76,9 @@ export function useRecordOwnMessage() {
               updatedAt: now,
               messages: 1,
               preview: shortened,
+              // 自分の発言は未読にならない（既読の位置は次の再取得で正しい値に戻る）。
+              unreadCount: 0,
+              readThrough: now,
             };
             // `scanned`（日誌をどこまで遡ったか）はここでは動いていないので触らない。
             // 先頭へ足すだけで末尾は切らない。次の再取得で正しい件数に戻る。
