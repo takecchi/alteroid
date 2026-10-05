@@ -562,7 +562,6 @@ describe('usageCommand', () => {
   });
 
   it('--layer が許された値でなければ、そう書いて叩かない', async () => {
-
     // 引数の誤りは例外（終了コードが 0 でなくなる。#2856）。
     const error = await failureOf(usageCommand({ layer: 'not-a-layer' }));
 
@@ -572,7 +571,6 @@ describe('usageCommand', () => {
   });
 
   it('--site が許された値でなければ、そう書いて叩かない', async () => {
-
     const error = await failureOf(usageCommand({ site: 'not-a-site' }));
 
     expect(sent).toHaveLength(0);

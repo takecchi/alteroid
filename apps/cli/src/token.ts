@@ -356,7 +356,9 @@ export async function tokenRemoveCommand(id: string): Promise<void> {
   const target = await resolveTarget();
   const current = (await request(target, '/tokens')) as TokensView;
   if (!current.tokens.some((token) => token.id === id)) {
-    throw new Error(`id ${id} のトークンは見つかりません（alteroid token list で id を確かめてください）`);
+    throw new Error(
+      `id ${id} のトークンは見つかりません（alteroid token list で id を確かめてください）`,
+    );
   }
   const inputs = current.tokens.filter((token) => token.id !== id).map(toInput);
   const view = await putTokens(target, inputs);
@@ -376,7 +378,9 @@ async function setDisabled(id: string, disabled: boolean): Promise<void> {
   const target = await resolveTarget();
   const current = (await request(target, '/tokens')) as TokensView;
   if (!current.tokens.some((token) => token.id === id)) {
-    throw new Error(`id ${id} のトークンは見つかりません（alteroid token list で id を確かめてください）`);
+    throw new Error(
+      `id ${id} のトークンは見つかりません（alteroid token list で id を確かめてください）`,
+    );
   }
   const inputs = current.tokens.map((token) =>
     token.id === id ? { ...toInput(token), disabled } : toInput(token),
