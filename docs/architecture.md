@@ -18,7 +18,7 @@
 │   └ 記憶ストア ← **このプロセスだけが接続情報を持つ**       │   │   持たない      │
 │                                                          │   └───────────────┘
 │  スケジューラ / 外部イベント入口 / 承認待ちキュー           │
-│  HTTP API（hono）─ chat(SSE)・jobs・承認                  │
+│  HTTP API（hono）─ chat(SSE)・managers・承認                  │
 │                    日報・日誌・セッションログ（可観測性3層）  │
 │  RunnerRegistry ─ 委譲の宛先を決める間接層                 │
 └──────┬───────────────────────────────────────────┘
@@ -91,8 +91,10 @@
 
 | 向き | 経路 |
 |---|---|
-| デーモン → runner | `POST /managers`（start） / `POST /managers/:id/resume` / `POST /managers/:id/messages` / `POST /managers/:id/answers` / `DELETE /managers/:id` / `GET /managers` / `GET /managers/:id/transcript` / `GET /health`（runner_id を名乗る） |
-| runner → デーモン | `GET /events`（SSE）。`session` / `project_key` / `report` / `ask` / `settled` / `tool_use` / `mirror`（生ログ） / `archive` / `closed` |
+| デーモン → runner | `POST /managers`（start） / `POST /managers/:id/resume` / `POST /managers/:id/messages` / `POST /managers/:id/answers` / `DELETE /managers/:id` / `GET /managers` / `GET /managers/:id/transcript` / `GET /managers/:id/unpushed-work`（未 push の成果の観測。`manager_stop` が使う） / `GET /health`（runner_id を名乗る） / 降ろす口: `POST /credentials`（マネージャーへ降ろす環境変数）・`POST /profile`（実行環境プロファイル）・`POST /mcp-servers`（MCP 登録）。`GET /profile` と `GET /mcp-servers` は指紋を返す |
+| runner → デーモン | `GET /events`（SSE）。種別は `hello`（名乗り） / `session` / `project_key` / `report` / `worker_wait` / `ask` / `settled` / `note` / `tool_use` / `tool_running` / `tool_end` / `permission_denied` / `usage` / `peer_usage` / `context_usage` / `usage_notice` / `rate_limit` / `mirror`（生ログ） / `archive` / `closed` / `resume_failed` / `shutdown_unpushed_work` |
+
+**この表は写しである。正本は `packages/core/src/runner-protocol.ts` の `runnerEventSchema`（上りの種別）と `apps/runner/src/app.ts` のルート定義（下りの口）で、食い違ったら正本が勝つ。** 口を足すときは、`control`（合鍵）の内側に置くこと（下の「制御面の保護」）。
 
 **`/livez` 以外はすべて合鍵（Bearer）を要求する。** 下の「制御面の保護」のとおり、この口は
 マネージャーが走っている器の中にあるので、鍵の無い呼び出しを通すと権限境界が迂回できる。
@@ -125,6 +127,27 @@
   runner に残り、マネージャーが永久に待つ
 - デーモンの停止は runner のセッションを止めない。**デーモンの都合で人の仕事を殺さない** —
   再起動後は生きているセッションへ繋ぎ直し、runner ごと落ちていた分だけ resume する
+- **認証トークンが回った後、done の委譲へ話しかけるときは、旧セッションへ流さない**（Issue #2851）。
+  走行中のセッションの子プロセスは起動時の環境変数（鍵）を持ったままなので、runner は鍵が
+  回るとターンの境界でセッションを畳んで resume で開き直す。**境界に達しなかった done の
+  セッション**（背景処理や確認待ちが残っていた回）は、旧プロセスが生きたまま台帳が「繋がっている」
+  と言っているので、`send` は resume ではなく旧プロセスへ追加指示を積み、また古い鍵で枠に当たる。
+  ⟹ デーモンは done の委譲へ送るとき、**抱えている鍵の世代が現役と食い違っていれば**
+  （`manager_list` の ⚠ と同じ判定）、runner の `GET /managers` が返す背景処理の本数
+  （`liveBackgroundTasks`）と確認待ちを見て、**どちらも無いときだけ**旧セッションを畳み、
+  既存の resume で同じ会話（`session_id`）を新しい鍵で起こし直して追加指示を渡す。**新しい命令は
+  足さない**（`DELETE /managers/:id` と `POST /managers/:id/resume` と `GET /managers` の既存の口だけ）
+  - **失わない順序。** 未 push の観測を取る → runner が子プロセスを閉じて生ログをデーモンへ
+    送り出し、未報告の本文を flush してから畳む → 一覧から消えたことを確かめる → resume。
+    畳むのは SDK の子プロセスであって workspace ではない（作業ツリーは同じ器に残る）。
+    貸し出しは返さず握ったまま resume する。確かめられなければ resume しない（二重に起こさない）。
+    resume が効かないときは既存の「戻れない」の経路（`#unresumable`）に乗る
+  - **残っていれば畳まず、旧セッションへも送らず、断る**（`outcome: 'declined'`）。背景処理や確認待ちは
+    子プロセスごと道連れになり、黙って捨てるのは「デーモンの都合で人の仕事を殺す」ことになる。
+    detail は何が残っているか（本数・確認待ちの件数）と取れる手（終わるのを待って送り直す／
+    `manager_stop` → `manager_start`）を言う。**force は無い**
+  - **`liveBackgroundTasks` が無い（古い runner）ときは「分からない」として断る。** 0 とは読まない。
+    デーモンと runner は別々にデプロイされるので、この欄は optional で、無い版と混ざる窓でも壊れない
 
 ### 制御面の保護 — マネージャーは自分の許可確認に答えられない
 
@@ -168,13 +191,18 @@ runner 本体とは別の UID で走らせる**（`spawnClaudeCodeProcess` で�
 
 ## 同時実行の宛先 — RunnerRegistry
 
-委譲の宛先は `RunnerRegistry`（`list` / `get` / `select`）を通して決める。M4 で登録されるのは
-1台（`runner-primary`）で、`select` は常にそれを返す。間接層を最初から置くのは、宛先の決定が
-呼び出し側に散らばると M5（複数 runner）で全部書き直しになるからである。
+委譲の宛先は `RunnerRegistry`（`list` / `get` / `select` と、名簿の `register` / `unregister`）を通して決める。
+名簿は動的で、`ALTEROID_RUNNER_URLS`（カンマ区切りで複数）か `ALTEROID_RUNNER_URL` で登録した複数台の runner
+を持てる（runner が無くてもデーモンは起動し、後から載る）。`select` は、`runnerId` の指名が無ければ
+runner が報告する資源（pids の現在値と上限など）と直近の失敗を見て置き先を選び（`chooseByResources`）、
+`runnerId` が指名されればその器へ置く（開けていて使えないときは自動配置へ落とさず、理由を添えて失敗する）。
+繋がっている runner が無ければ短い猶予のあいだ待ち、過ぎたら宛先ごとの状態を添えて失敗する。
+`cwd` は受け取るが置き先の材料にはまだしていない。間接層を最初から置くのは、宛先の決定が
+呼び出し側に散らばると複数 runner で全部書き直しになるからである。
 
 - `select` に**人工的な上限を入れない**。「同時に何本まで」は能力の削除であって配置の判断では
-  ない（禁止2）。将来ここで見てよいのは、runner が報告する CPU・メモリ・稼働セッション数と
-  いった**実行環境の資源**である
+  ない（禁止2）。ここで見てよいのは、runner が報告する CPU・メモリ・稼働セッション数と
+  いった**実行環境の資源**である（いま見ているのは上の資源と直近の失敗）
 - 走行中のマネージャーの宛先は JobStore に残る（下の対応関係）。`manager_send` は
   `manager_id` から runner を引いて届ける（sticky routing）
 
@@ -377,9 +405,15 @@ packages/storage-pg  クラウド用ドライバ（PostgreSQL / drizzle）
 apps/daemon          alteroidd = core をホストする常駐プロセス + HTTP API（hono）
 apps/runner          alteroid-runner = manager-runner。SDK を隔離して走らせる
 apps/cli             alteroid = daemon への薄いクライアント（hono/client で型共有）
-apps/web             公式の画面。React Router v7 の SPA。@alteroid/api-client 経由で
-                     デーモンの API だけを見る（独自の経路を持たない）
-packages/api-client  生成 spec から起こした外部向けクライアント。apps/web が最初の消費者
+apps/web             公式の画面。React Router v7 の SPA。packages/swr（→ api-client）
+                     経由でデーモンの API だけを見る（独自の経路を持たない）
+packages/api-client  生成 spec から起こした外部向けクライアント。packages/swr が最初の消費者
+packages/logic       Web UI の純ロジック（表示の整形・接続先と資格情報の置き場・日誌の窓・
+                     画面の型）。React も SWR も知らない
+packages/swr         Web UI から API を叩く層（ApiProvider と SWR の hooks）。型と呼び出しの
+                     出どころは api-client
+packages/ui          Web UI の見た目の部品（shadcn の部品・汎用の表示部品・テーマの CSS）。
+                     API もデーモンも知らない
 ```
 
 境界の両側が `core` に居るのは、**プロトコルと型を1か所に置くため**である。実際に動くときは

@@ -160,7 +160,7 @@ function EnvVarRow({
             label: '値',
             mono: true,
             value: entry.secret
-              ? `（シークレット。値は表示されない。指紋 sha256=${entry.sha256}）`
+              ? `（シークレット。値は表示されない。識別用の値 sha256=${entry.sha256}）`
               : (entry.value ?? '（サーバがまだ値を返していない版）'),
           },
           { label: '更新', value: formatDateTime(entry.updatedAt) },
@@ -169,8 +169,9 @@ function EnvVarRow({
 
       {entry.shadowsCloneEnv === true && (
         <p className="mt-2 text-[11px] break-words text-warn">
-          ⚠ GitHub の名前で、デーモン（クローン）の器の環境変数の値が優先して配られている
-          （正本のこの行はどこにも配られていない）。
+          ⚠ GitHub
+          用の名前のため、デーモン（クローン）が動いている環境側の同じ名前の環境変数の値が優先して渡されている
+          （この画面に登録したこの行の値は、どこにも渡されていない）。
           {entry.scope === 'app' &&
             // **scope: app は他の scope と挙動が違う（issue #1894）。** この行は
             // manager に配布されない（issue #1867）ので、上の一文だけでは
@@ -179,8 +180,8 @@ function EnvVarRow({
             // からといってこの行を外すと、その名前は manager にも配られ始める
             // （scope で閉じた先へ届く）。
             ' 渡す先が「クローンだけ」のこの名前は、マネージャーにはいま何も渡されて' +
-              'いない。この行を外すと、器の環境変数の値がマネージャーにも渡され始める' +
-              '（渡す先を閉じていた分が外れるため）。'}
+              'いない。この行を外すと、動いている環境側の環境変数の値がマネージャーにも渡され始める' +
+              '（渡す先を限っていた分が外れるため）。'}
         </p>
       )}
 
@@ -257,7 +258,7 @@ function AddEnvVarForm() {
           <Input value={value} onChange={(event) => setValue(event.target.value)} />
         </label>
         <label className="flex flex-col gap-1">
-          <span className="text-xs text-muted-foreground">撒く先</span>
+          <span className="text-xs text-muted-foreground">渡す先</span>
           <Select value={scope} onChange={(event) => setScope(event.target.value as EnvVarScope)}>
             {SCOPE_OPTIONS.map((option) => (
               <option key={option.value} value={option.value}>
@@ -273,7 +274,7 @@ function AddEnvVarForm() {
             onChange={(event) => setSecret(event.target.checked)}
           />
           シークレット扱いにする（値を
-          API/CLI/この画面に表示しない。新規行にのみ効き、後から変更できない）
+          この画面にも他の経路にも表示しない。新規行にのみ効き、後から変更できない）
         </label>
 
         <ErrorNote error={failure} />

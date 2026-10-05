@@ -167,7 +167,7 @@ function AccountRow({ account }: { account: AccessAccount }) {
         </Badge>
         {/* 宣言済みかどうかの印（issue #1198）。`granted` とは独立の資格である。 */}
         <Badge tone={account.ownerDeclaredAt !== null ? 'ok' : 'neutral'}>
-          {account.ownerDeclaredAt !== null ? 'owner 宣言済み' : 'owner 未宣言'}
+          {account.ownerDeclaredAt !== null ? '持ち主として宣言済み' : '持ち主として未宣言'}
         </Badge>
       </div>
 
@@ -330,7 +330,7 @@ function OwnerDeclarationControl({ account }: { account: AccessAccount }) {
       <ErrorNote error={failure} />
       {isNotOperator(failure) && (
         <p className="text-[11px] break-words text-muted-foreground">
-          デーモンが動いている環境（実行環境の持ち主）で、次を実行してください:
+          この操作は、デーモンが動いている環境（実行環境の持ち主）からしかできない。そこで次のコマンドを実行する（コマンドは補足）:
           <br />
           <code className="font-mono">
             alteroid access owner {account.id}

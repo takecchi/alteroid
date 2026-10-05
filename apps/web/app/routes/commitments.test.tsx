@@ -11,8 +11,8 @@
  * 4. CLI（`/commitments` `/commit` `/done`）と同じ経路を叩く — 片方でしかできない
  *    ことを作らない
  */
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { createMemoryRouter, MemoryRouter, RouterProvider } from 'react-router';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import type { CommitmentOrigin } from '@alteroid/core';
@@ -87,14 +87,21 @@ afterEach(() => {
   globalThis.fetch = originalFetch;
 });
 
+/** 編集欄が `useBlocker` を使うので、データルーターで包む（実アプリと同じ）。 */
 function renderPage() {
+  const router = createMemoryRouter(
+    [
+      { path: '/', Component: Commitments },
+      { path: '/elsewhere', Component: () => <p>別の画面</p> },
+    ],
+    { initialEntries: ['/'] },
+  );
   render(
     <Providers>
-      <MemoryRouter>
-        <Commitments />
-      </MemoryRouter>
+      <RouterProvider router={router} />
     </Providers>,
   );
+  return router;
 }
 
 /**
@@ -1319,5 +1326,103 @@ describe('入力欄の補足文', () => {
     const reasonHint = document.getElementById(reason.getAttribute('aria-describedby') ?? '');
     expect(reasonHint?.textContent).toMatch(/後から否定できる/);
     expect((reason as HTMLInputElement).placeholder).not.toMatch(/否定/);
+  });
+});
+
+/** 未保存の編集があるまま離れない（#2764 と同じ穴）。 */
+describe('本文の編集: 未保存のまま離れる前に確認する（#2764）', () => {
+  async function startEditing() {
+    stubCommitments([commitment({ origin: 'human', source: 'conv-1' })]);
+    const router = renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: '本文を編集' }));
+    fireEvent.mouseDown(await screen.findByRole('tab', { name: '編集' }));
+    const textarea = (await screen.findByLabelText('仕事の本文')) as HTMLTextAreaElement;
+    fireEvent.change(textarea, { target: { value: '書きかけ' } });
+    return router;
+  }
+
+  it('書きかけのままアプリ内で移動しようとすると確認が出る。やめれば留まり下書きが残る', async () => {
+    const router = await startEditing();
+
+    await act(async () => {
+      void router.navigate('/elsewhere');
+    });
+
+    expect(await screen.findByRole('alertdialog')).toBeTruthy();
+    expect(screen.getByText('保存していない変更があります')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'やめる' }));
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+    expect(router.state.location.pathname).toBe('/');
+    expect((screen.getByLabelText('仕事の本文') as HTMLTextAreaElement).value).toBe('書きかけ');
+  });
+
+  it('「破棄して離れる」を押すと移動する', async () => {
+    const router = await startEditing();
+    await act(async () => {
+      void router.navigate('/elsewhere');
+    });
+
+    fireEvent.click(await screen.findByRole('button', { name: '破棄して離れる' }));
+
+    await waitFor(() => expect(router.state.location.pathname).toBe('/elsewhere'));
+  });
+
+  it('変更が無ければ確認なしで移動し、beforeunload も警告しない。書きかけのときだけ警告する', async () => {
+    stubCommitments([commitment({ origin: 'human', source: 'conv-1' })]);
+    const router = renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: '本文を編集' }));
+    const clean = new Event('beforeunload', { cancelable: true });
+    window.dispatchEvent(clean);
+    expect(clean.defaultPrevented).toBe(false);
+
+    fireEvent.mouseDown(await screen.findByRole('tab', { name: '編集' }));
+    fireEvent.change(await screen.findByLabelText('仕事の本文'), { target: { value: '書きかけ' } });
+    const dirty = new Event('beforeunload', { cancelable: true });
+    window.dispatchEvent(dirty);
+    expect(dirty.defaultPrevented).toBe(true);
+
+    // 元の本文に戻せば、また警告しない。
+    fireEvent.change(screen.getByLabelText('仕事の本文'), {
+      target: { value: 'ドキュメントの誤りを直す' },
+    });
+    const back = new Event('beforeunload', { cancelable: true });
+    window.dispatchEvent(back);
+    expect(back.defaultPrevented).toBe(false);
+    await act(async () => {
+      void router.navigate('/elsewhere');
+    });
+    await waitFor(() => expect(router.state.location.pathname).toBe('/elsewhere'));
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+  });
+
+  it('2行同時に編集を開き、先の行だけ書きかけでも移動は止まる（ブロッカーはページに1つ）', async () => {
+    stubCommitments([
+      commitment({ id: 'a', body: '先の仕事' }),
+      commitment({ id: 'b', body: '後の仕事' }),
+    ]);
+    const router = renderPage();
+    const openers = await screen.findAllByRole('button', { name: '本文を編集' });
+    // 先の行を開いて書きかけにする。
+    fireEvent.click(openers[0]!);
+    fireEvent.mouseDown(await screen.findByRole('tab', { name: '編集' }));
+    fireEvent.change(await screen.findByLabelText('仕事の本文'), {
+      target: { value: '書きかけ' },
+    });
+    // 後の行も開く（こちらは触らない）。
+    fireEvent.click(openers[1]!);
+
+    await waitFor(() =>
+      expect(screen.getAllByRole('button', { name: '編集をやめる' })).toHaveLength(2),
+    );
+
+    await act(async () => {
+      void router.navigate('/elsewhere');
+    });
+
+    expect(await screen.findByRole('alertdialog')).toBeTruthy();
+    expect(router.state.location.pathname).toBe('/');
+    const event = new Event('beforeunload', { cancelable: true });
+    window.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(true);
   });
 });

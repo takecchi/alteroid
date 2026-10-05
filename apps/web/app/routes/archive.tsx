@@ -94,11 +94,40 @@ function SessionsSummary() {
   );
 }
 
+/**
+ * 直前の退避との関係（core の `ArchiveContinuity`）の利用者向けの言い方。
+ * 型で網羅を守る——値が増えたらここが型エラーになる。知らない値は識別子を出さない。
+ */
+const CONTINUITY_LABELS = {
+  first: '最初の退避',
+  continues: '前回の続き',
+  diverged: '前回と内容が異なる',
+  unknown: '前回との関係は不明',
+} satisfies Record<NonNullable<ArchiveEntry['continuity']>, string>;
+
+function continuityLabel(value: string): string {
+  return (CONTINUITY_LABELS as Record<string, string | undefined>)[value] ?? '前回との関係は不明';
+}
+
+/** 識別子（UUID 等）は利用者向けの見出しに出さず、開いた先に置く。 */
+function TechnicalIds({ rows }: { rows: { label: string; value: string }[] }) {
+  return (
+    <details className="mt-1 text-muted-foreground">
+      <summary className="cursor-pointer">詳しい情報（開発者向け）</summary>
+      {rows.map((row) => (
+        <div key={row.label} className="mt-1 min-w-0">
+          {row.label}: <span className="font-mono break-all">{row.value}</span>
+        </div>
+      ))}
+    </details>
+  );
+}
+
 function SessionRow({ session }: { session: ArchiveSessionSummary }) {
   return (
     <li className="border-b border-border px-4 py-2 text-xs last:border-b-0">
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-        <span className="font-mono break-all">{session.sessionId}</span>
+        <span className="font-medium">{formatDateTime(session.firstAt)} からの会話</span>
         <Badge>行数 {session.rows}</Badge>
         <span className="text-muted-foreground">
           使用量合計 {session.storedBytes}バイト（最大1行 {session.maxStoredBytes}バイト）
@@ -107,6 +136,7 @@ function SessionRow({ session }: { session: ArchiveSessionSummary }) {
       <div className="mt-1 text-muted-foreground">
         {formatDateTime(session.firstAt)} 〜 {formatDateTime(session.lastAt)}
       </div>
+      <TechnicalIds rows={[{ label: '会話の識別子', value: session.sessionId }]} />
     </li>
   );
 }
@@ -178,26 +208,27 @@ function EntryRow({ entry }: { entry: ArchiveEntry }) {
   return (
     <li className="border-b border-border px-4 py-3 text-xs last:border-b-0">
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-        <span className="font-mono break-all">{entry.id}</span>
+        <span className="font-medium">{formatDateTime(entry.at)} の会話</span>
         {removed && <Badge tone="warn">本文は削除済み</Badge>}
-        {entry.continuity !== undefined && <Badge tone="neutral">{entry.continuity}</Badge>}
+        {entry.continuity !== undefined && (
+          <Badge tone="neutral" title={entry.continuity}>
+            {continuityLabel(entry.continuity)}
+          </Badge>
+        )}
       </div>
-      <div className="mt-1 text-muted-foreground">
-        会話 {entry.sessionId} ・ 使用量 {entry.storedBytes}バイト ・ {formatDateTime(entry.at)}
-      </div>
+      <div className="mt-1 text-muted-foreground">使用量 {entry.storedBytes}バイト</div>
+      <TechnicalIds
+        rows={[
+          { label: '退避の識別子', value: entry.id },
+          { label: '会話の識別子', value: entry.sessionId },
+        ]}
+      />
 
       {removed ? (
         <div className="mt-1 text-muted-foreground">
           削除: {entry.removedAt === undefined ? '' : formatDateTime(entry.removedAt)}
-          {
-            // **保存量（`storedBytes`）と同じ「バイト」で並べない**（issue #2270）。
-            // `removedBytes` は消した本文の素の UTF-8 バイト数で、置き場が使って
-            // いた量（pg では圧縮後）とは単位が違う。core の doc
-            // （`ArchiveEntry` / `ArchiveRemoval`、PR #2076）と、`archive_remove_many`
-            // の結果の文言に合わせた言い回しにする。
-            entry.removedBytes !== undefined &&
-              `（消した本文の素の UTF-8 バイト数 ${entry.removedBytes}。使用量とは単位が違い、置き場で解放した量ではない）`
-          }
+          {entry.removedBytes !== undefined &&
+            `（消した本文は ${entry.removedBytes}バイト。使用量とは数え方が違うため、空いた容量とは一致しません）`}
         </div>
       ) : (
         <>

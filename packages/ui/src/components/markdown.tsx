@@ -173,6 +173,27 @@ function heading(tag: HeadingTag) {
   };
 }
 
+const HEADING_TAGS: readonly HeadingTag[] = ['h1', 'h2', 'h3', 'h4', 'h5', 'h6'];
+
+/**
+ * 見出しを `offset` 段下げた部品の組を返す（#2842）。画面の見出し（h1）の下で本文を
+ * 描く画面が、本文の `#` を h1 のまま並べないために使う。`h1` → `h{1+offset}`、…、
+ * 下がり先が h6 を超える見出しは h6 に畳む（HTML に h7 は無い）。**タグも見た目も
+ * 下がり先の段の部品のもの**になる（`sr-only` の素通しも同じ）。`offset` が省略・0・
+ * 負・非数のときは、渡された組をそのまま返す（既定の動きは変わらない）。
+ */
+export function offsetHeadings(components: Components, offset?: number): Components {
+  if (offset === undefined || !Number.isFinite(offset)) return components;
+  const steps = Math.trunc(offset);
+  if (steps <= 0) return components;
+  const shifted: Components = { ...components };
+  HEADING_TAGS.forEach((tag, index) => {
+    const target = HEADING_TAGS[Math.min(index + steps, HEADING_TAGS.length - 1)] ?? tag;
+    shifted[tag] = components[target];
+  });
+  return shifted;
+}
+
 export const markdownComponents: Components = {
   p: ({ children }) => <p className="mt-2 leading-relaxed first:mt-0">{children}</p>,
   h1: heading('h1'),
@@ -328,13 +349,25 @@ export const markdownComponents: Components = {
  * 英数字・`_`・`-` 以外を落として使う — CSS セレクタ（`#id`）でエスケープ
  * せずに引ける形にしておくため。`idPrefix` を渡せばそれを使う（空文字列で
  * 旧実装と同じ id になる。1画面に1つしか描かないと分かっているときだけ使うこと）。
+ *
+ * **`headingOffset`（省略可。省略は今までどおり）** — 本文の見出しを何段下げるか。
+ * 画面の h1 の下で描くときに `2`（`#`→h3、`##`→h4、h5・h6→h6）を渡すと、
+ * 1画面の h1 が画面の見出しだけになる。詳しくは `offsetHeadings`。
  */
-export function Markdown({ children, idPrefix }: { children: string; idPrefix?: string }) {
+export function Markdown({
+  children,
+  idPrefix,
+  headingOffset,
+}: {
+  children: string;
+  idPrefix?: string;
+  headingOffset?: number;
+}) {
   const reactId = useId();
   const prefix = idPrefix ?? 'md' + reactId.replace(/[^A-Za-z0-9_-]/g, '') + '-';
   return (
     <div className="min-w-0 text-sm break-words">
-      {toReact(children, markdownComponents, prefix)}
+      {toReact(children, offsetHeadings(markdownComponents, headingOffset), prefix)}
     </div>
   );
 }

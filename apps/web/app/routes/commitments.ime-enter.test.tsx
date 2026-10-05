@@ -20,7 +20,7 @@
  * `event.nativeEvent.isComposing` / `event.nativeEvent.keyCode` に出る）。
  */
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { MemoryRouter } from 'react-router';
+import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import type { Commitment } from '@alteroid/core';
@@ -67,9 +67,7 @@ function recordRequests(): Request[] {
 function renderPage() {
   render(
     <Providers>
-      <MemoryRouter>
-        <Commitments />
-      </MemoryRouter>
+      <RouterProvider router={createMemoryRouter([{ path: '/', Component: Commitments }])} />
     </Providers>,
   );
 }
