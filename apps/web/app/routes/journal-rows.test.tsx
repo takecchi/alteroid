@@ -174,11 +174,11 @@ describe('日誌の1行: github_observation は英語の識別子を要旨に出
     } as JournalEntry;
     await renderRows([entry]);
     const { root, button } = await rowOf(
-      'a/b: open Issue 3 件 / open PR 2 件（記録したのは: クローン） / CI: 3 件の PR を確認 — 成功 1 / 失敗 1 / 実行中・待ち 1（数えたもの: 必須チェックだけ）',
+      'a/b: 開いている Issue 3 件 / 開いている PR 2 件（記録したのは: クローン） / CI: 3 件の PR を確認 — 成功 1 / 失敗 1 / 実行中・待ち 1（数えたもの: 必須チェックだけ）',
     );
     const closed = button.textContent ?? '';
     const text = root.textContent ?? '';
-    for (const word of ['clone', 'success', 'failure', 'pending', '観測者']) {
+    for (const word of ['clone', 'success', 'failure', 'pending', '観測者', 'open']) {
       expect(text).not.toContain(word);
       expect(closed).not.toContain(word);
     }

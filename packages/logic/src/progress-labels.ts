@@ -34,3 +34,16 @@ export function githubObservedByLabel(observedBy: string): string {
     ? (GITHUB_OBSERVED_BY_LABEL[observedBy] as string)
     : GITHUB_OBSERVED_BY_UNKNOWN;
 }
+
+/**
+ * `github_observation` の要旨（日誌）の「open」と「limit」の写し。`/progress` の Stat の見出し
+ * （「開いている Issue」「開いている PR」。#2835）と同じ言い方に揃える。
+ */
+export const GITHUB_OPEN_LABEL = {
+  issue: { raw: 'open Issue', localized: '開いている Issue' },
+  pull: { raw: 'open PR', localized: '開いている PR' },
+} as const;
+export const GITHUB_TRUNCATED_NOTE = {
+  raw: '（limit に達した。下限）',
+  localized: '（上限に達した。下限）',
+} as const;

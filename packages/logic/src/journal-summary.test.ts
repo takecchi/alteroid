@@ -17,7 +17,12 @@
 import { describeGithubCi } from '@alteroid/core';
 import { describe, expect, it } from 'vitest';
 
-import { GITHUB_CI_COUNT_LABEL, GITHUB_CI_COUNT_ORDER } from './progress-labels.js';
+import {
+  GITHUB_CI_COUNT_LABEL,
+  GITHUB_CI_COUNT_ORDER,
+  GITHUB_OPEN_LABEL,
+  GITHUB_TRUNCATED_NOTE,
+} from './progress-labels.js';
 import type { JournalEntry } from './types.js';
 
 import { describeGithubCiText, summarizeJournalEntry } from './journal-summary.js';
@@ -384,9 +389,25 @@ describe('summarizeJournalEntry — localized（Web の表示。core の字面�
     expect(describeGithubCiText(ok, 'localized')).toBe(expected);
     const line = summarizeJournalEntry(observed(extra), 'localized');
     expect(line).toBe(
-      `a/b: open Issue 3 件 / open PR 2 件（記録したのは: クローン） / ${expected}`,
+      `a/b: ${GITHUB_OPEN_LABEL.issue.localized} 3 件 / ${GITHUB_OPEN_LABEL.pull.localized} 2 件（記録したのは: クローン） / ${expected}`,
     );
-    expect(line).not.toMatch(/clone|success|failure|pending/);
+    expect(line).not.toMatch(/clone|success|failure|pending|open|limit/);
+    // 件数の行も core 側の言い回し（raw）から表の写しだけで導ける
+    const rawLine = summarizeJournalEntry(observed(extra), 'raw');
+    expect(
+      rawLine
+        .replace(GITHUB_OPEN_LABEL.issue.raw, GITHUB_OPEN_LABEL.issue.localized)
+        .replace(GITHUB_OPEN_LABEL.pull.raw, GITHUB_OPEN_LABEL.pull.localized)
+        .replace('（観測者 clone）', '（記録したのは: クローン）')
+        .replace(describeGithubCi(ok), expected),
+    ).toBe(line);
+  });
+
+  it('打ち切りの断りは「上限」で出し、raw は limit のまま', () => {
+    const entry = observed({ truncated: true });
+    expect(summarizeJournalEntry(entry, 'localized')).toContain(GITHUB_TRUNCATED_NOTE.localized);
+    expect(summarizeJournalEntry(entry, 'localized')).not.toContain('limit');
+    expect(summarizeJournalEntry(entry, 'raw')).toContain('（limit に達した。下限）');
   });
 
   it('取れなかった回・知らない記録元は識別子を出さない', () => {

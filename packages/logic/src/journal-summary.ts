@@ -11,6 +11,8 @@ import { redactBody } from './redact.js';
 import {
   GITHUB_CI_COUNT_LABEL,
   GITHUB_CI_COUNT_ORDER,
+  GITHUB_OPEN_LABEL,
+  GITHUB_TRUNCATED_NOTE,
   githubObservedByLabel,
 } from './progress-labels.js';
 import type { JournalEntry } from './types.js';
@@ -144,8 +146,8 @@ function summarizeJournalEntryRaw(entry: JournalEntry, style: JournalSummaryStyl
     case 'github_observation':
       // **申告であることを落とさない**（`observedBy`）。取れなかった回は数を作らない。
       return entry.result.status === 'ok'
-        ? `${entry.repo}: open Issue ${entry.result.openIssues} 件 / open PR ${entry.result.openPulls} 件` +
-            (entry.result.truncated ? '（limit に達した。下限）' : '') +
+        ? `${entry.repo}: ${GITHUB_OPEN_LABEL.issue[style]} ${entry.result.openIssues} 件 / ${GITHUB_OPEN_LABEL.pull[style]} ${entry.result.openPulls} 件` +
+            (entry.result.truncated ? GITHUB_TRUNCATED_NOTE[style] : '') +
             by(entry.observedBy) +
             // **CI の軸を落とさない（#2608）。** `ci` が無いのは「観測していない」、
             // `ciUnavailable` は「取れなかった」で、どちらも 0 件ではない。
