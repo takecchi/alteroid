@@ -44,12 +44,16 @@ import type { ArchiveEntry, ArchiveSessionSummary } from '@alteroid/logic';
  * 動機だったものと同じである。本文を読みたいときは CLI の `/archive <id>`
  * か `GET /archive/:id` を使うこと。
  */
+/** 空のときの文言。何が起きるとここに出て、出たあと何ができるかを言う（#2792）。 */
+const ARCHIVE_EMPTY =
+  '退避された生ログはまだありません。会話の生ログが退避されるとここに並び、容量が増えたときに本文を消せます。';
+
 export default function Archive() {
   return (
     <Page
       tabs={<JournalTabs />}
       title="アーカイブ"
-      description="セッション生ログの退避。本文だけを消せる（行は残る）"
+      description="退避した会話の生ログです。容量が増えたときに、本文だけを消せます（消しても一覧の行は残ります）"
     >
       <div className="flex flex-col gap-4">
         <SessionsSummary />
@@ -69,8 +73,8 @@ function SessionsSummary() {
   return (
     <Card>
       <CardHeader
-        title="sessionId ごとの集計"
-        subtitle="alteroid chat の /archive sessions と同じもの"
+        title="会話ごとの集計"
+        subtitle="同じ会話が何度退避されたかを、1件ずつの大きさより先に見られます"
       />
       <ErrorNote error={error} className="m-4" />
       {isLoading ? (
@@ -78,7 +82,11 @@ function SessionsSummary() {
           <Spinner />
         </div>
       ) : data === undefined ? null : data.sessions.length === 0 ? (
+<<<<<<< HEAD
         <Empty inset="card">（生ログはまだありません）</Empty>
+=======
+        <Empty>{ARCHIVE_EMPTY}</Empty>
+>>>>>>> origin/main
       ) : (
         <ul>
           {data.sessions.map((session) => (
@@ -115,7 +123,7 @@ function EntryList() {
     <Card>
       <CardHeader
         title="一覧"
-        subtitle="alteroid chat の /archive と同じもの。新しい順"
+        subtitle="新しい順"
         action={data === undefined ? undefined : <Badge>{data.entries.length}</Badge>}
       />
       <ErrorNote error={error} className="m-4" />
@@ -124,7 +132,11 @@ function EntryList() {
           <Spinner />
         </div>
       ) : data === undefined ? null : data.entries.length === 0 ? (
+<<<<<<< HEAD
         <Empty inset="card">（生ログはまだありません）</Empty>
+=======
+        <Empty>{ARCHIVE_EMPTY}</Empty>
+>>>>>>> origin/main
       ) : (
         <ul>
           {data.entries.map((entry) => (
@@ -179,7 +191,7 @@ function EntryRow({ entry }: { entry: ArchiveEntry }) {
         {entry.continuity !== undefined && <Badge tone="neutral">{entry.continuity}</Badge>}
       </div>
       <div className="mt-1 text-muted-foreground">
-        session {entry.sessionId} ・ 使用量 {entry.storedBytes}バイト ・ {formatDateTime(entry.at)}
+        会話 {entry.sessionId} ・ 使用量 {entry.storedBytes}バイト ・ {formatDateTime(entry.at)}
       </div>
 
       {removed ? (

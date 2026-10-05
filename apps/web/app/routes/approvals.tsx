@@ -173,12 +173,19 @@ export default function Approvals() {
     <Page
       title="承認待ち"
       description="記憶に根拠が無かったこと。ここで答えると、同じ判断は次から聞かれなくなる"
-      action={
+    >
+      {/*
+        **表示の切り替えは見出しの `action` ではなく本文の先頭に置く（#2765）。**
+        `Page` の見出し帯は横並び1行固定で、`action` は `shrink-0` のまま幅を取る。
+        390px では「回答済み・取り下げ済みも見る」（194px）が居座り、題と説明文が
+        残りの約148pxに押し込まれて説明文が4行（末尾が1文字残り）になった。
+        これは一覧の絞り込みであって見出しの操作ではないので、本文の側で右寄せにする。
+      */}
+      <div className="mb-4 flex justify-end">
         <Button size="sm" onClick={() => setShowAnswered((v) => !v)}>
           {showAnswered ? '未回答だけ' : '回答済み・取り下げ済みも見る'}
         </Button>
-      }
-    >
+      </div>
       <ErrorNote error={error} className="mb-4" />
       <UnreadableApprovalNote unreadable={unreadable} />
 
