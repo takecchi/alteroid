@@ -1,7 +1,9 @@
 import {
+  assertValidActiveToken,
   activeAgentTokenSchema,
   cooldownSourceSchema,
   DEFAULT_TOKEN_ROTATION_SETTINGS,
+  prepareTokensForReplace,
   tokenRotationPolicySchema,
   UnreadableActiveTokenError,
   UnreadableTokenSettingsError,
@@ -150,10 +152,11 @@ export class PgTokenPoolStore implements TokenPoolStore {
    * 失う読めない行は無く、意味は実装間で食い違わない。
    */
   async replace(tokens: readonly AgentToken[]): Promise<AgentToken[]> {
+    const prepared = prepareTokensForReplace(tokens);
     await this.#db.transaction(async (tx) => {
       await tx.delete(agentTokens);
-      if (tokens.length > 0) {
-        await tx.insert(agentTokens).values(tokens.map(toRow));
+      if (prepared.length > 0) {
+        await tx.insert(agentTokens).values(prepared.map(toRow));
       }
     });
     return this.list();
@@ -223,6 +226,7 @@ export class PgTokenPoolStore implements TokenPoolStore {
   }
 
   async writeActive(active: ActiveAgentToken): Promise<ActiveAgentToken> {
+    assertValidActiveToken(active);
     const rotatedAt = new Date(active.rotatedAt);
     await this.#db
       .insert(agentTokenActive)

@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import type { Db } from './db.js';
 import { createPgStoresFromDb, type PgStores } from './index.js';
 import { createMigratedPglite } from './pglite-template.test-support.js';
+import { managerCredentials } from './schema.js';
 
 /**
  * issue #1740。pg 実装は元から `list()` の中で `CREDENTIAL_NAME` に合わない行を
@@ -13,9 +14,8 @@ import { createMigratedPglite } from './pglite-template.test-support.js';
  * `packages/storage-fs/src/credentials-skip-bad-row.test.ts` の冒頭コメント）。
  *
  * DB は人間が直接 `insert` できる（`PgCredentialVaultStore.list()` の doc）ので、
- * ここでは `put()` を使って名前の形式検査を経由せずに不正な行を作る——
- * `PgCredentialVaultStore.put()` 自体は `CREDENTIAL_NAME` を検査しない
- * （検査は読みの `list()` 側にしかない）。
+ * ここでは表へ直接 `insert` して不正な行を作る。`put()` は入口で
+ * `CREDENTIAL_NAME` に合わない名前を断る（issue #2927）ので、もう経由できない。
  */
 let db: Db;
 let stores: PgStores;
@@ -31,10 +31,10 @@ beforeEach(async () => {
 
 describe('PgCredentialVaultStore.list() — 不正な1行を読み飛ばす（issue #1740）', () => {
   async function seedRows(): Promise<void> {
-    await stores.credentials.put([
-      { name: 'GH_TOKEN', value: FAKE_GOOD_VALUE },
-      { name: BAD_NAME, value: FAKE_BAD_VALUE },
-    ]);
+    await stores.credentials.put([{ name: 'GH_TOKEN', value: FAKE_GOOD_VALUE }]);
+    await db
+      .insert(managerCredentials)
+      .values({ name: BAD_NAME, value: FAKE_BAD_VALUE, updatedAt: new Date() });
   }
 
   it('list() は不正な行を飛ばし、正しい行だけを返す', async () => {
@@ -63,7 +63,6 @@ describe('PgCredentialVaultStore.list() — 不正な1行を読み飛ばす（is
     await seedRows();
     await stores.credentials.list();
 
-    const { managerCredentials } = await import('./schema.js');
     const raw = await db.select().from(managerCredentials);
 
     expect(raw.map((row) => row.name).sort()).toEqual([BAD_NAME, 'GH_TOKEN']);

@@ -106,6 +106,8 @@ import {
   type AgentToken,
   type TokenRotationSettings,
 } from './token-pool.js';
+import { assertValidCredentialEntries } from './credential-input.js';
+import { assertValidActiveToken, prepareTokensForReplace } from './token-pool-input.js';
 import {
   addUnreadableCounts,
   foldOneshotUsage,
@@ -1513,6 +1515,7 @@ export function createMemoryStores(): Stores {
       return [...credentialRows.values()].sort((a, b) => compareCodeUnits(a.name, b.name));
     },
     async put(entries) {
+      assertValidCredentialEntries(entries);
       const at = new Date().toISOString();
       for (const entry of entries) {
         if (entry.value.length === 0) {
@@ -1558,7 +1561,7 @@ export function createMemoryStores(): Stores {
       // **本物（fs の `agentTokenRowSchema` / pg の `order` 列の SQL 整数型）と
       // 同じ検査を掛ける。** かつてはインメモリだけが何でも受け付けたので、
       // `order` が非整数の行を「書けた」として通していた（issue #1652）。
-      tokenPool = next.map((token) => agentTokenSchema.parse(token));
+      tokenPool = prepareTokensForReplace(next).map((token) => agentTokenSchema.parse(token));
       return tokens.list();
     },
     async readSettings() {
@@ -1576,6 +1579,7 @@ export function createMemoryStores(): Stores {
       return activeAgentToken;
     },
     async writeActive(active) {
+      assertValidActiveToken(active);
       // 本物（fs）と同じく `activeAgentTokenSchema` を通す（#1652）。
       activeAgentToken = activeAgentTokenSchema.parse(active);
       return activeAgentToken;

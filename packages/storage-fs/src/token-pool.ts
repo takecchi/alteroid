@@ -2,9 +2,11 @@ import { mkdir, readFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
 import {
+  assertValidActiveToken,
   activeAgentTokenSchema,
   agentTokenSchema,
   DEFAULT_TOKEN_ROTATION_SETTINGS,
+  prepareTokensForReplace,
   tokenRotationSettingsSchema,
   UnreadableActiveTokenError,
   UnreadableTokenSettingsError,
@@ -239,7 +241,7 @@ export class FsTokenPoolStore implements TokenPoolStore {
    * （id で指す）を使う。
    */
   async replace(tokens: readonly AgentToken[]): Promise<AgentToken[]> {
-    const parsed = tokens.map((token) => agentTokenRowSchema.parse(token));
+    const parsed = prepareTokensForReplace(tokens).map((token) => agentTokenRowSchema.parse(token));
     await this.#update((file) => ({ ...file, tokens: parsed }));
     return this.list();
   }
@@ -318,6 +320,7 @@ export class FsTokenPoolStore implements TokenPoolStore {
    * （`invalidActiveRaw`）を新しい値で置き換える。
    */
   async writeActive(active: ActiveAgentToken): Promise<ActiveAgentToken> {
+    assertValidActiveToken(active);
     const parsed = activeAgentTokenSchema.parse(active);
     await this.#update((file) => ({ ...file, active: parsed, invalidActiveRaw: undefined }));
     return parsed;

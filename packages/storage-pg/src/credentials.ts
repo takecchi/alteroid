@@ -1,4 +1,5 @@
 import {
+  assertValidCredentialEntries,
   CREDENTIAL_NAME,
   describeSkippedCredentialRow,
   type CredentialEntry,
@@ -70,6 +71,7 @@ export class PgCredentialVaultStore implements CredentialVaultStore {
   }
 
   async put(entries: readonly CredentialEntry[]): Promise<StoredCredential[]> {
+    assertValidCredentialEntries(entries);
     const at = new Date();
     // **空文字は「外す」。** 器（`CredentialStore#set`）と同じ約束である。
     const removed = entries.filter((entry) => entry.value.length === 0).map((entry) => entry.name);

@@ -2,6 +2,7 @@ import { mkdir, readFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
 import {
+  assertValidCredentialEntries,
   CREDENTIAL_NAME,
   describeSkippedCredentialRow,
   type CredentialEntry,
@@ -119,6 +120,7 @@ export class FsCredentialVaultStore implements CredentialVaultStore {
   }
 
   async put(entries: readonly CredentialEntry[]): Promise<StoredCredential[]> {
+    assertValidCredentialEntries(entries);
     const at = new Date().toISOString();
     const written = await this.#update((file) => {
       const rows = new Map(file.credentials.map((row) => [row.name, row]));

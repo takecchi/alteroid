@@ -2357,6 +2357,10 @@ export interface CredentialVaultStore {
    *
    * 返すのは**置き換えた後の全行**。呼ぶ側（`CredentialService`）はそれをそのまま
    * 配るので、部分更新のつもりが一部しか降りない、という形を作らない。
+   *
+   * **入口で断る（3実装とも同じ型付きの例外。issue #2927。teto の判断、2026-10-05）**:
+   * 名前・値に NUL があれば `NulNotAllowedError`、`CREDENTIAL_NAME` に合わない名前
+   * （空文字を含む）は `InvalidCredentialNameError`。1件でも断れば何も書かない。
    */
   put(entries: readonly CredentialEntry[]): Promise<StoredCredential[]>;
 }
@@ -2413,6 +2417,11 @@ export interface TokenPoolStore {
    * `settings` / `active` が壊れていても道連れにしない（`list()` の doc と
    * 同じ理由。issue #2053）——この操作が全文置換するのは `tokens` だけで、
    * `settings` / `active` の値には触れない。
+   *
+   * **入口で断る（3実装とも同じ型付きの例外。issue #2927。teto の判断、2026-10-05）**:
+   * 同じ `id` が2行以上なら `DuplicateTokenIdError`、`id`・`value`（資格）に NUL があれば
+   * `NulNotAllowedError`。1件でも断れば何も変えない。`label`・`lastRejectedReason` などの
+   * 本文の NUL は、fs も含めて落として残す。
    */
   replace(tokens: readonly AgentToken[]): Promise<AgentToken[]>;
   /**
@@ -2456,7 +2465,10 @@ export interface TokenPoolStore {
    * 上書きできる。
    */
   readActive(): Promise<ActiveAgentToken | null>;
-  /** 現役を指名し直す。**世代を増やすのは呼ぶ側**（この口は受けた値を書くだけ）。 */
+  /**
+   * 現役を指名し直す。**世代を増やすのは呼ぶ側**（この口は受けた値を書くだけ）。
+   * `tokenId` は鍵なので、NUL があれば `NulNotAllowedError`（issue #2927）で断る。
+   */
   writeActive(active: ActiveAgentToken): Promise<ActiveAgentToken>;
 }
 
