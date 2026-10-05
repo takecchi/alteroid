@@ -22,7 +22,7 @@
  */
 import { useState } from 'react';
 
-import { useHealth, useApiContext } from '@alteroid/swr';
+import { useHealth, useStatus, useApiContext } from '@alteroid/swr';
 import {
   hasStoredApiBaseUrl,
   looksLikeUrl,
@@ -76,6 +76,7 @@ function describeEndpoint(endpoint: Endpoint): string {
 export function ConnectionCard({ compact = false }: { compact?: boolean }) {
   const { baseUrl, setBaseUrl, endpoints, saveEndpoint, removeEndpoint } = useApiContext();
   const health = useHealth();
+  const status = useStatus();
   const canResetToDefault = hasStoredApiBaseUrl();
 
   // **必ず見つかる。** `listEndpoints` が「選んでいる先は一覧に必ず入れる」ことを
@@ -180,7 +181,17 @@ export function ConnectionCard({ compact = false }: { compact?: boolean }) {
           <KeyValueList
             labelWidth="6rem"
             items={[
-              { label: '記憶', value: health.data.storage, mono: true },
+              // 置き場は無認証の `/health` では返らない（#2869）。ログインの後ろの
+              // `GET /status` から取る。取れないときは例外にせず、値が無いと分かる文にする。
+              status.data !== undefined
+                ? { label: '記憶', value: status.data.storage, mono: true }
+                : {
+                    label: '記憶',
+                    value:
+                      status.error !== undefined
+                        ? '取得できません（ログインが要る場合があります）'
+                        : '確認中',
+                  },
               {
                 label: 'pid',
                 // pid は `z.number().int()`（apps/daemon/src/openapi.ts）＝ process.pid。

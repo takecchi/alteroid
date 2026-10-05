@@ -4,7 +4,7 @@ import {
   type SessionRegistry,
   type TranscriptGrave,
 } from '@alteroid/core';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, inArray } from 'drizzle-orm';
 
 import type { Db } from './db.js';
 import { daemonState } from './schema.js';
@@ -222,13 +222,26 @@ export class PgSessionRegistry implements SessionRegistry {
   }
 
   /**
-   * 全件を消す（`SessionRegistry.clear` の doc）。**`daemon_state` テーブル全体
-   * を消す** — 現時点でこのテーブルを使うのはこのクラスの4つの欄だけである
-   * （`grep -rln daemonState packages/storage-pg/src` で確認できる）。将来
-   * 別の用途がこのテーブルへ相乗りしたら、ここも見直すこと。
+   * ここが持つ4つの欄だけを消す（`SessionRegistry.clear` の doc）。
+   *
+   * **`daemon_state` テーブル全体を消さないこと。** この表には migrate が置く
+   * 「旧 `env_profile` を `env_profile_entries` へ写し終えた」印
+   * （`env_profile_entries_migrated`、`migrate.ts`）も入っている。全件を消すと、
+   * 返す件数にその印が混ざり（契約は0〜4）、印も消えて次の起動の migrate が旧表を
+   * 写し直しうる。だから4つの鍵を名指しして消す。欄が増えたらここの配列へ足すこと。
    */
   async clear(): Promise<number> {
-    const removed = await this.#db.delete(daemonState).returning({ key: daemonState.key });
+    const removed = await this.#db
+      .delete(daemonState)
+      .where(
+        inArray(daemonState.key, [
+          CLONE_SESSION_KEY,
+          CLONE_TRANSCRIPT_GRAVE_KEY,
+          CLONE_LOST_SESSION_KEY,
+          CLONE_PROJECT_KEY,
+        ]),
+      )
+      .returning({ key: daemonState.key });
     return removed.length;
   }
 }

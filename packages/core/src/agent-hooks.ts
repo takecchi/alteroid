@@ -289,15 +289,16 @@ export interface AgentPreToolRecord {
  *   なかったコマンドは素通し」の両方がここへ落ちる。
  * - `allow`: 確認なしで進めてよい（`clone.ts` の `#onPreToolUse`、人間が
  *   承認した Bash 許可に一致したとき。Issue #863）。
- * - `deny`: 実行そのものを止める（`runner.ts` の `#onPreToolUse`、
- *   `bash-wait-guard.ts` が「無限に待つだけの形」と判定したとき。
- *   Issue #894）。
+ * - `ask`: 確認に上げる。provider は確認の経路（Claude では `canUseTool`）へ流し、
+ *   `reason` は確認を受ける側（クローン）に見える（Claude では `decisionReason`）。
+ *   `runner.ts` の `#onPreToolUse` が、`bash-wait-guard.ts` の門に当たった Bash に返す
+ *   既定の扱い（issue #2884。`ALTEROID_BASH_GUARD`、`bash-guard-mode.ts`）。**マネージャー本体でも
+ *   作業者（サブエージェント）の呼び出しでも `canUseTool` に届く**ことは、本物の本体で
+ *   `real-cli-pre-tool-use-ask.test.ts` が固定している。
+ * - `deny`: 実行そのものを止める（`ALTEROID_BASH_GUARD=deny` のとき。以前の既定。Issue #894）。
+ *   確認に上げないので、誰も開けられない。既定にしないこと。
  *
- * **`ask` は持たない。** いまの実装のどちらも `ask` を一度も返していない
- * ——語彙を先回りして作らない（`agent-events.ts` の `AgentPermissionDenial`
- * と同じ流儀）。要るようになったら、そのときの実装を確かめてから足す。
- *
- * **`continue` と `allow` は、任意で `rewrite`（入力の書き換え）を持てる**
+ * **`continue` と `allow` と `ask` は、任意で `rewrite`（入力の書き換え）を持てる**
  * （issue #2088）。`runner.ts` の `#onPreToolUse` が、`Bash` のツールの
  * `timeout` 引数をコマンドの中の寿命に合わせて引き上げるとき
  * （`bash-tool-timeout.ts`）に使う。**書き換えは判断ではない** ——
@@ -307,6 +308,7 @@ export interface AgentPreToolRecord {
 export type AgentPreToolDecision =
   | { kind: 'continue'; rewrite?: AgentPreToolRewrite }
   | { kind: 'allow'; reason: string; rewrite?: AgentPreToolRewrite }
+  | { kind: 'ask'; reason: string; rewrite?: AgentPreToolRewrite }
   | { kind: 'deny'; reason: string };
 
 /**

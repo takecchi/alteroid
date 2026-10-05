@@ -9,8 +9,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { makeTempDirSync } from '../../../vitest.tmpdir.js';
 
+import { BASH_GUARD_ENV } from './bash-guard-mode.js';
 import { createRunnerHost, type RunnerHost } from './runner.js';
 import { runnerEventSchema, type RunnerEvent } from './runner-protocol.js';
+
+/**
+ * この試験が固定するのは、Bash の門を `deny`（止める）にした設定の挙動である（`ALTEROID_BASH_GUARD=deny`）。
+ * 既定（`ask`）の挙動は `runner-bash-guard-ask.test.ts` が固定する（issue #2884）。
+ */
+const DENY_ENV = { [BASH_GUARD_ENV]: 'deny' };
 import {
   WORKER_TOOL_RUNNING_AFTER_MS,
   type WorkerToolWatchClock,
@@ -146,7 +153,7 @@ async function startSession() {
     workspacePath: dir,
     emit: (event) => events.push(event),
     queryFn: fn,
-    env: {},
+    env: DENY_ENV,
     workerToolWatchClock: clock,
   });
   await host.start({ managerId: 'mgr-1', request: '走る', cwd: dir });
