@@ -68,7 +68,7 @@ function renderAt(url: string) {
       return found === undefined ? undefined : json({ document: found });
     }
     if (u.includes('/memory')) {
-      return json({ documents: DOCS.map(({ content: _content, ...rest }) => rest) });
+      return json({ documents: DOCS.map((d) => ({ ...d, content: undefined })) });
     }
     return undefined;
   });

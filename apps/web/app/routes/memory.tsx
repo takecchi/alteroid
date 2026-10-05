@@ -11,6 +11,7 @@ import {
   ListDetail,
   ListDetailItems,
   Spinner,
+  cn,
 } from '@alteroid/ui';
 import { useMemoryDocuments } from '@alteroid/swr';
 import {
@@ -58,29 +59,41 @@ export default function Memory() {
       className="overflow-hidden p-0 md:p-0"
     >
       <div className="flex h-full flex-col">
-        {/* 名前を入れて開く欄は、ペイン幅（288px）に収まらないので、一覧の上の帯に置く。 */}
-        <div className="shrink-0 border-b border-border px-4 py-3 md:px-6">
-          <p className="mb-2 text-sm font-medium">新しい記憶を書く</p>
-          <label htmlFor={slugId} className="mb-1 block text-xs text-muted-foreground">
-            名前（半角の英小文字・数字・. _ - のみ）
-          </label>
-          <div className="flex gap-2 md:max-w-md">
-            <Input
-              id={slugId}
-              value={slug}
-              placeholder="例: work-style"
-              onChange={(event) => setSlug(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter' && valid) void navigate(`/memory/${slug}`);
-              }}
-            />
-            <Button
-              variant="primary"
-              disabled={!valid}
-              onClick={() => void navigate(`/memory/${slug}`)}
-            >
-              開く
-            </Button>
+        {/*
+          名前を入れて開く欄は、ペイン幅（288px）に収まらないので、一覧の上の帯に置く。
+          狭い画面で記憶を開いているあいだは畳む（中身の領域を広く使う。「記憶」のタブで一覧へ戻れば出る）。
+        */}
+        <div
+          className={cn(
+            'shrink-0 border-b border-border px-4 py-3 md:px-6',
+            selectedSlug !== undefined && 'hidden md:block',
+          )}
+        >
+          <div className="md:flex md:items-end md:gap-6">
+            <div className="md:shrink-0">
+              <p className="mb-2 text-sm font-medium md:mb-1">新しい記憶を書く</p>
+              <label htmlFor={slugId} className="mb-1 block text-xs text-muted-foreground md:mb-0">
+                名前（半角の英小文字・数字・. _ - のみ）
+              </label>
+            </div>
+            <div className="flex gap-2 md:w-96">
+              <Input
+                id={slugId}
+                value={slug}
+                placeholder="例: work-style"
+                onChange={(event) => setSlug(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' && valid) void navigate(`/memory/${slug}`);
+                }}
+              />
+              <Button
+                variant="primary"
+                disabled={!valid}
+                onClick={() => void navigate(`/memory/${slug}`)}
+              >
+                開く
+              </Button>
+            </div>
           </div>
           {slug !== '' && !valid && (
             <p className="mt-1.5 text-xs text-destructive">
