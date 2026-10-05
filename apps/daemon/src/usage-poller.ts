@@ -178,6 +178,13 @@ export interface UsagePollerOptions {
    */
   env?: () => NodeJS.ProcessEnv;
   /**
+   * **いま測る鍵の身元**（#2738。`AgentTokenHolder.identity()`）。`env` と**同じ瞬間**に
+   * 読み、結果と一緒に `onState` へ渡す。probe は数百ms〜締め切りかかるので、その間に
+   * 回ると結果は降りた鍵のものになる——回し手が世代の門で見分けるための印である。
+   * **値（鍵そのもの）は持たない。** 身元を返せなければ `undefined`（門は掛からない）。
+   */
+  identity?: () => { tokenId: string; generation: number } | undefined;
+  /**
    * **1回ぶんの観測が終わるたびに呼ぶ**（人間の決定 2026-09-07）。
    *
    * ## なぜ要るか —— セッションが1本も走っていなくても届く唯一の観測である
@@ -196,7 +203,10 @@ export interface UsagePollerOptions {
    *
    * **投げても・遅くてもポーリングを止めない**（下の実装が `void` で切り離す）。
    */
-  onState?: (state: AccountUsageState) => void;
+  onState?: (
+    state: AccountUsageState,
+    measuredBy?: { tokenId: string; generation: number },
+  ) => void;
 }
 
 export interface UsagePoller {
@@ -232,6 +242,9 @@ export function startUsagePolling(options: UsagePollerOptions): UsagePoller {
     // 空なら渡さない —— 空の `env` を渡すと `fetchAccountUsage` が `env` を
     // 組み立ててしまい、既定の構成の挙動が変わりうる。
     const env = options.env?.();
+    // **`env` と同じ瞬間に身元を控える**（#2738）。結果が届く頃の現役ではなく、
+    // **測り始めた鍵**の身元である。
+    const measuredBy = options.identity?.();
     inFlight = fetchAccountUsage(options.queryFn, {
       cwd: options.cwd,
       ...(options.signal === undefined ? {} : { signal: options.signal }),
@@ -254,7 +267,7 @@ export function startUsagePolling(options: UsagePollerOptions): UsagePoller {
             // **投げてもポーリングを止めない。** ここは probe の後始末であって、
             // 聞き手の失敗はこの観測の失敗ではない。**黙らせない**（跡を残す）。
             try {
-              notify(next);
+              notify(next, measuredBy);
             } catch (error) {
               process.stderr.write(
                 `alteroidd: 枠の観測を見張りへ渡せませんでした: ${reasonOf(error)}\n`,
