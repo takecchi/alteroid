@@ -181,3 +181,48 @@ describe('綴り違いは落とす', () => {
     ).toThrow(/ALTEROID_BASH_GUARD の値が不正/);
   });
 });
+
+const RELEASE_PROD = 'gh workflow run release-prod.yml';
+
+describe('本番デプロイの起動（release-prod）は、off でも確認に上げる（#2884）', () => {
+  for (const env of [{}, { [BASH_GUARD_ENV]: 'ask' }, { [BASH_GUARD_ENV]: 'off' }]) {
+    it(`ALTEROID_BASH_GUARD=${env[BASH_GUARD_ENV] ?? '(未設定)'}: ask を返し、理由に release-prod を含める`, async () => {
+      const { options, events } = await startSession(env);
+      const result = (await firePreToolUse(options, bash(RELEASE_PROD))) as {
+        hookSpecificOutput?: Record<string, unknown>;
+      };
+      expect(result.hookSpecificOutput?.permissionDecision).toBe('ask');
+      expect(String(result.hookSpecificOutput?.permissionDecisionReason)).toContain('release-prod');
+      const asked = notes(events).filter((n) => n.text.includes('確認に上げた'));
+      expect(asked).toHaveLength(1);
+      expect(asked[0]?.text).toContain('形=gh-release-prod');
+    });
+  }
+
+  it('deny の設定では deny を返す', async () => {
+    const { options } = await startSession({ [BASH_GUARD_ENV]: 'deny' });
+    const result = (await firePreToolUse(options, bash(RELEASE_PROD))) as {
+      hookSpecificOutput?: Record<string, unknown>;
+    };
+    expect(result.hookSpecificOutput?.permissionDecision).toBe('deny');
+  });
+
+  it('作業者の呼び出しでも ask（actor は worker:）', async () => {
+    const { options, events } = await startSession({ [BASH_GUARD_ENV]: 'off' });
+    const result = (await firePreToolUse(
+      options,
+      bash(RELEASE_PROD, { agent_id: 'agent-xyz', agent_type: 'worker' }),
+    )) as { hookSpecificOutput?: Record<string, unknown> };
+    expect(result.hookSpecificOutput?.permissionDecision).toBe('ask');
+    expect(notes(events).find((n) => n.text.includes('確認に上げた'))?.text).toContain(
+      'worker:mgr-1:worker',
+    );
+  });
+
+  it('別のワークフローの起動は、off なら何も決めない', async () => {
+    const { options } = await startSession({ [BASH_GUARD_ENV]: 'off' });
+    expect(await firePreToolUse(options, bash('gh workflow run ci.yml'))).toEqual({
+      continue: true,
+    });
+  });
+});

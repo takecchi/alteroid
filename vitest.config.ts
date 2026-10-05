@@ -56,9 +56,8 @@ export default defineConfig({
       // scripts/ も同じ理由。`pnpm verify` の「無料で返す」判定は、間違えると
       // **検証を一度も走らせないまま緑を名乗る**ので、ここで固定する
       'scripts/**/*.test.ts',
-      // docker/ も同じ理由（#865）。`docker/gh` は release-prod の起動を止める門を
-      // 持つシェルスクリプトで、静かにずれても Dockerfile の COPY は落ちないので
-      // ここで固定する。
+      // docker/ も同じ理由（#865）。`docker/gh` は鍵の読み場所を挟むシェルスクリプトで、
+      // 静かにずれても Dockerfile の COPY は落ちないのでここで固定する。
       'docker/**/*.test.ts',
     ],
   },

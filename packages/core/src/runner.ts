@@ -28,6 +28,7 @@ import type {
 import { DEFAULT_AGENT_PROVIDER_ID, type AgentProviderId } from './agent-ports.js';
 import { describeBashToolTimeoutRaise, planBashToolTimeoutRaise } from './bash-tool-timeout.js';
 import { resolveBashGuardMode, type BashGuardMode } from './bash-guard-mode.js';
+import { inspectReleaseProdDispatch } from './bash-release-prod-guard.js';
 import { inspectBashCommand } from './bash-wait-guard.js';
 import { cgroupEventsDeltaOf } from './cgroup-events.js';
 import { ClaudeManagerDriver, type ClaudeQueryFn } from './claude-manager-driver.js';
@@ -4895,7 +4896,7 @@ class RunnerSession {
     // は `ALTEROID_BASH_GUARD` が決める（issue #2884。`bash-guard-mode.ts`）。`ask` で返した呼び出しは
     // この関数の最後で、クローンの1回だけの許可を見たうえで返す（`guardAsk`）。
     let guardAsk: { reason: string } | undefined;
-    if (record.toolName === 'Bash' && this.#bashGuard !== 'off') {
+    if (record.toolName === 'Bash') {
       const toolInput = record.toolInput as
         { command?: unknown; run_in_background?: unknown } | null | undefined;
       const command = toolInput?.command;
@@ -4904,11 +4905,19 @@ class RunnerSession {
         // ことを判定器へ渡せる経路はここだけである（`bash-wait-guard.ts` の
         // `isBackgroundedGhRunWatch` の doc）。**`=== true` で受ける** ——
         // 欠けていても形が崩れていても `false`（＝前景）になり、通す側へ倒れる。
-        let verdict: ReturnType<typeof inspectBashCommand>;
+        let verdict:
+          ReturnType<typeof inspectBashCommand> | { blocked: true; form: string; reason: string };
         try {
-          verdict = inspectBashCommand(command, {
-            backgrounded: toolInput?.run_in_background === true,
-          });
+          // **本番デプロイの起動（release-prod）は、`off` でも確認に残す**（`bash-release-prod-guard.ts`）。
+          // 待つ形の門（`inspectBashCommand`）だけが `off` で外れる。
+          const releaseProd = inspectReleaseProdDispatch(command);
+          verdict = releaseProd.matched
+            ? { blocked: true, form: releaseProd.form, reason: releaseProd.reason }
+            : this.#bashGuard === 'off'
+              ? { blocked: false }
+              : inspectBashCommand(command, {
+                  backgrounded: toolInput?.run_in_background === true,
+                });
         } catch (error) {
           // 判定できなかった呼び出しは、素通しにしない（issue #1960）。**倒れる先は確認である**
           // （issue #2884。上がらずに止めて誰も開けられない形にしない）。`deny` を選んだ人にだけ止める。
@@ -4928,7 +4937,8 @@ class RunnerSession {
             record.agentId === undefined
               ? `manager:${this.#id}`
               : `worker:${this.#id}:${record.agentType ?? WORKER_AGENT_NAME}`;
-          const asked = this.#bashGuard === 'ask';
+          // `off` でここに来るのは本番デプロイの起動だけで、確認に残す（`deny` の設定でだけ止める）。
+          const asked = this.#bashGuard !== 'deny';
 
           this.#tryObservation('ガードの note の送り出し', () => {
             this.#emit({
