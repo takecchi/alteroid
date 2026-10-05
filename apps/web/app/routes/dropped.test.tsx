@@ -122,7 +122,7 @@ describe('/dropped 画面 — 「取りに行けなかった」は0件と違う�
     await renderDropped();
 
     expect(screen.queryByText(describeDroppedTraceEmpty())).toBeNull();
-    expect(screen.getByText(/版が古い可能性がある/)).toBeTruthy();
+    expect(screen.getByRole('alert').textContent).toMatch(/版が古い可能性/);
   });
 
   it('404 以外の失敗（500 等）でも、0件の文言とは別の文言を出す', async () => {
