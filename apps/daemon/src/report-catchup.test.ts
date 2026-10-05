@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createMemoryStores } from '@alteroid/core';
 
@@ -8,6 +8,23 @@ import { startDailyReportCatchup } from './report-catchup.js';
  * issue #2908 の歯。起動時の日報の後追いが日誌を読めなかったとき、stderr だけで
  * 終わらず、日誌に跡を残し、有限回、間を置いて調べ直す。
  */
+
+/**
+ * 日報の時刻（`at`）と `now` は器のローカル時刻で読む（`new Date(年, 月, …)`）。器の TZ に
+ * 依らず同じ日付になるよう、このファイルの TZ を固定する（`scripts/check-test-tz-fixed.test.ts`。
+ * 書き方は `apps/web/app/routes/reports.test.tsx` に倣う: import より先に効かせるため
+ * vi.hoisted の中で代入し、他のファイルへ漏らさないよう戻す）。
+ */
+const tzBeforeThisFile = vi.hoisted(() => {
+  const before = process.env.TZ;
+  process.env.TZ = 'Asia/Tokyo';
+  return before;
+});
+
+afterAll(() => {
+  if (tzBeforeThisFile === undefined) delete process.env.TZ;
+  else process.env.TZ = tzBeforeThisFile;
+});
 
 const AT = { hour: 22, minute: 0 };
 
