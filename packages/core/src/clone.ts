@@ -3252,7 +3252,7 @@ class Clone implements CloneHost {
     });
   }
 
-  async stop(): Promise<void> {
+  async stop(options?: { farewellDeadlineAt?: number }): Promise<void> {
     for (const timer of this.#dailyReportRetryTimers) clearTimeout(timer);
     this.#dailyReportRetryTimers.clear();
     // **`#inbox.closed` も見る**（Issue #564 (a)）。読み切りのあいだ `#stopped` はまだ
@@ -3351,7 +3351,8 @@ class Clone implements CloneHost {
     this.#sdkSession.closeQuery();
     await this.#sdkSession.reader?.catch(() => undefined);
     // 走行中のマネージャーも畳む。返事待ちで宙吊りのまま消えない。
-    await this.#managers.stop().catch(() => undefined);
+    // **畳み始めた runner の最後の出来事を受け取る待ちの締切を渡す**（Issue #2749）。
+    await this.#managers.stop(options).catch(() => undefined);
     // **クローンの道具の中継のホストも、デーモンが実際に落ちるこの1点で畳む**
     // （Issue #486 48(a) PR2。`#ensureCloneToolRelayHost` の doc「デーモンの
     // 寿命で1つ」の対）。`stdio` のセッションを1度も組んでいなければ

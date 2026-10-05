@@ -14,6 +14,7 @@ import {
   noteDroppedRecord,
   noteManagerIdCollision,
   noteResumeAfterStopFoldFailed,
+  noteRunnerFarewellGaveUp,
   noteUnreadableRecord,
   noteWithheldReportsDiscarded,
   reasonOf,
@@ -2621,8 +2622,31 @@ export interface ManagerPool {
    * 積んだ知らせは `setTimeout` が二度と発火しないので失われる——ここが
    * その逃げ道である（`#queueSynthesizedNotice` / `#flushSynthesizedNotices`
    * の doc）。
+   *
+   * **`shutting_down` を名乗った runner だけ、最後の出来事を受け取り切るまで待つ**
+   * （Issue #2749。{@link ManagerPoolStopOptions}）。
    */
-  stop(): Promise<void>;
+  stop(options?: ManagerPoolStopOptions): Promise<void>;
+}
+
+/**
+ * 畳み始めた runner（`shutting_down` を名乗った）の最後の出来事を待つ上限の既定（ms）。
+ *
+ * **デーモンの forced exit（SIGTERM から 55 秒。`apps/daemon/src/index.ts` の
+ * `FORCED_EXIT_MS`）の内側に収める値**で、`stop()` が自分の起点から数える。デーモン本体は
+ * SIGTERM を起点にした締切（`farewellDeadlineAt`）を渡すので、この既定は渡さない呼び手の
+ * ための保険である。待ったあとに、台帳への書き込みの完了待ちと `storage.close()` が残る
+ * ので、55 秒には届かせない。
+ */
+export const RUNNER_FAREWELL_WAIT_MS = 45_000;
+
+export interface ManagerPoolStopOptions {
+  /**
+   * `shutting_down` を名乗った runner を待つ**絶対の締切**（`now()` と同じ時計の ms）。
+   * 省略すると `stop()` の呼び出し時刻から {@link RUNNER_FAREWELL_WAIT_MS}。
+   * 達したら待つのをやめて閉じる側に倒し、受け取れなかったものを1行残す。
+   */
+  farewellDeadlineAt?: number;
 }
 
 /**
@@ -4923,6 +4947,30 @@ const RESCUE_REMOVAL_REASON_JOURNAL: Record<RescueRemovalReason, string> = {
   stopped: '委譲が stopped のまま猶予（14日）を過ぎたため',
 };
 
+/**
+ * `work` が `ms` 以内に終わったら true、時間切れなら false（Issue #2749）。
+ * `work` が拒否で終わっても「終わった」として true（失敗は別の経路が跡を残す）。
+ * `undefined` は即座に終わった扱い。**待ちのタイマーは必ず畳む**（残すとプロセスが終わらない）。
+ */
+async function settledWithin(work: Promise<unknown> | undefined, ms: number): Promise<boolean> {
+  if (work === undefined) return true;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<false>((resolve) => {
+    timer = setTimeout(() => resolve(false), ms);
+  });
+  try {
+    return await Promise.race([
+      work.then(
+        () => true as const,
+        () => true as const,
+      ),
+      timeout,
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 class Pool implements ManagerPool {
   readonly #stores: Stores;
   readonly #post: (event: InboxEvent) => void;
@@ -5531,6 +5579,18 @@ class Pool implements ManagerPool {
   /** 名簿の購読を解く（`stop` で外す。外し忘れると止めたプールが後から動く）。 */
   readonly #unsubscribe: () => void;
   #stopped = false;
+  /**
+   * 走行中の `#onEvent` の Promise（Issue #2749）。**`void this.#onEvent(...)` が捨てて
+   * いた Promise を追う**——`stop()` が「受けた出来事の台帳への書き込みが済んだ」を待てる
+   * ように。終わったら自分で抜ける。
+   */
+  readonly #eventsInFlight = new Set<Promise<unknown>>();
+  /**
+   * `shutting_down` を名乗った runner の `runnerId`（Issue #2749）。**名乗りは runner ごと**
+   * に覚える——名乗っていない runner（旧 runner）は `stop()` が一切待たない。新しい器の
+   * `hello` が来たら消す（古い名乗りで新しい器を待たない）。
+   */
+  readonly #farewellRunners = new Set<string>();
   /** 退避 ref の後始末が走っている（重ねない）。 */
   #rescueSweeping = false;
   /** 退避 ref の後始末の走査を最後に始めた時刻（ms）。 */
@@ -9747,7 +9807,9 @@ class Pool implements ManagerPool {
     return { outcome, detail, ...(sessionGone === undefined ? {} : { sessionGone }) };
   }
 
-  async stop(): Promise<void> {
+  async stop(options?: ManagerPoolStopOptions): Promise<void> {
+    // **締切の既定は、待つ相手が居るときだけ時計を読んで決める**（`#awaitRunnerFarewells`）。
+    // 待たない stop（旧 runner・名乗りなし）に、時計を読む新しい口を増やさない。
     this.#stopped = true;
     for (const unsubscribe of this.#unsubscribeDirectPushes.splice(0)) unsubscribe();
     // **窓の中でデーモンが落ちると、積んだ知らせが失われる。** ここで flush
@@ -9774,12 +9836,60 @@ class Pool implements ManagerPool {
     this.#pushRetryTimers.clear();
     this.#pushRetryDelays.clear();
     this.#unresumable.clear();
+    // **畳み始めた runner の最後の出来事を、閉じる前に受け取る**（Issue #2749）。
+    // `runner.close()` が SSE を自分で切るので、待つならこの手前でなければ効かない。
+    await this.#awaitRunnerFarewells(options?.farewellDeadlineAt);
     // **runner のマネージャーは止めない。** デーモンの都合で人の仕事を殺さない
     // （インプロセス runner だけは、プロセスが消えるので中で畳まれる）。
     for (const runner of await this.#runners.list().catch(() => [])) {
       await runner.close().catch(() => undefined);
     }
     this.#records.clear();
+  }
+
+  /**
+   * `shutting_down` を名乗った runner について、**その SSE が閉じる（＝runner が exit
+   * する）まで**、続けて**受けた出来事の台帳への書き込みが済むまで**、締切まで待つ
+   * （Issue #2749）。
+   *
+   * - **名乗っていない runner、ストリームを持たない runner（`awaitStreamEnd` が無い）は
+   *   待たない。** 旧 runner・デーモンだけの反映は今までどおり即座に進む。
+   * - `awaitStreamEnd` は**繋ぎ直しを止める**ので、待っているあいだに新しい器へ繋がって
+   *   `hello` → 引き取りが畳み中のデーモンで走ることは無い。万一 `hello` が届いても
+   *   `#onEvent` が `#stopped` で捨てる。
+   * - 締切に達したら待つのをやめる（閉じる側に倒す）。受け取れなかったものは1行残す。
+   *   runner は互いに独立に待つ（1台の遅れが他を待たせない。締切は共通）。
+   */
+  async #awaitRunnerFarewells(farewellDeadlineAt: number | undefined): Promise<void> {
+    if (this.#farewellRunners.size === 0) return;
+    const deadlineAt = farewellDeadlineAt ?? this.#now() + RUNNER_FAREWELL_WAIT_MS;
+    const runners = (await this.#runners.list().catch(() => [])).filter(
+      (runner) => this.#farewellRunners.has(runner.runnerId) && runner.awaitStreamEnd !== undefined,
+    );
+    await Promise.all(
+      runners.map(async (runner) => {
+        const remaining = (): number => Math.max(0, deadlineAt - this.#now());
+        const streamEnded = await settledWithin(runner.awaitStreamEnd?.(), remaining());
+        const eventsSettled =
+          streamEnded && (await settledWithin(this.#settleEventsInFlight(), remaining()));
+        if (streamEnded && eventsSettled) return;
+        const managerIds = [...this.#records.values()]
+          .filter((record) => record.job.runnerId === runner.runnerId)
+          .map((record) => record.job.id);
+        noteRunnerFarewellGaveUp(
+          runner.runnerId,
+          streamEnded ? 'events-unsettled' : 'stream-open',
+          managerIds,
+        );
+      }),
+    );
+  }
+
+  /** 走行中の `#onEvent` が全部終わる（失敗を含む）まで。 */
+  async #settleEventsInFlight(): Promise<void> {
+    while (this.#eventsInFlight.size > 0) {
+      await Promise.allSettled([...this.#eventsInFlight]);
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -9994,13 +10104,21 @@ class Pool implements ManagerPool {
       // 見分けに載せるのは列挙値とこちらが発行した id だけ（`dropped-record.ts` の
       // 判定基準は「自由文かどうか」ではなく「**値を誰が決めるか**」）。`report` の
       // 本文・`ask` の要旨・`closed` の理由は外から来るので載せない。
-      await runner.connect(
-        (event) =>
-          void this.#onEvent(event, runner.runnerId).catch((error: unknown) => {
-            noteBackgroundFailure('runner からの合図の処理', runnerEventShape(event), error);
-            throw error;
-          }),
-      );
+      await runner.connect((event) => {
+        // **Promise を捨てない**（Issue #2749）。`stop()` が終わりを待てるよう追う。
+        const running = this.#onEvent(event, runner.runnerId).catch((error: unknown) => {
+          noteBackgroundFailure('runner からの合図の処理', runnerEventShape(event), error);
+          throw error;
+        });
+        const tracked: Promise<unknown> = running.finally(() => {
+          this.#eventsInFlight.delete(tracked);
+        });
+        this.#eventsInFlight.add(tracked);
+        // 従来の `void` と同じく、失敗は上の `noteBackgroundFailure` が跡を残したうえで
+        // 未処理の拒否になって死ぬ（落ち方は変えない）。追跡用の枝は拒否を握る。
+        tracked.catch(() => undefined);
+        void running;
+      });
       // **委譲を始める前に環境を整える。** ここを名乗り（`hello`）任せにすると、
       // 最初のマネージャーがプロファイルの届く前に走り出しうる。届いていない
       // ことは本人には見えないので、「たまに鍵が無い」という形で現れる。
@@ -11282,7 +11400,22 @@ class Pool implements ManagerPool {
    * 変更が答えるべき範囲を超える）。
    */
   async #onEvent(event: RunnerEvent, fromRunnerId: string): Promise<void> {
+    if (event.type === 'shutting_down') {
+      // **runner が畳み始めた**（Issue #2749）。`stop()` が待つ相手として runner ごとに覚える
+      // だけで、台帳には何も書かない。**同期で立てる**（`#onEvent` は並行に走るので、
+      // 先頭の `await` より前でなければ `stop()` の判定に間に合わない）。
+      this.#farewellRunners.add(fromRunnerId);
+      return;
+    }
     if (event.type === 'hello') {
+      // **新しい器の名乗りが古い名乗りを消す**（Issue #2749）。畳んだ器の `shutting_down` を
+      // 覚えたまま、繋ぎ直した先の新しい器を `stop()` が待たないように。
+      this.#farewellRunners.delete(fromRunnerId);
+      this.#farewellRunners.delete(event.runnerId);
+      // **畳み中のデーモンでは、引き取りも能力の更新も走らせない**（Issue #2749）。
+      // 待っているあいだは `awaitStreamEnd` が繋ぎ直しを止めているので通常は来ないが、
+      // 来ても reattach / resume を始めない。
+      if (this.#stopped) return;
       // 能力の名乗り（#1394 段(C)）。欄を送らない旧い runner は空集合 ——
       // 前の名乗りを持ち越さない（同じ runnerId の器が入れ替わって版が下がりうる）。
       this.#runnerCapabilities.set(event.runnerId, new Set(event.capabilities ?? []));

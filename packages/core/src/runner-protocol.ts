@@ -2195,6 +2195,30 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
     worktrees: z.array(rescueWorktreeSchema),
   }),
   /**
+   * runner が畳み始めた（Issue #2749）。**畳みの最初に1回だけ送る**——`Host#shutdown()`
+   * の頭で、`closed` / `archive` / `shutdown_unpushed_work` など畳みの出来事を出す
+   * **より前**に積む。
+   *
+   * **なぜ要るか。** デーモンと runner が同じ反映で SIGTERM を受けると、デーモンが
+   * 先に終わり、runner が畳みの最後に積む `archive`（生ログ）と
+   * `shutdown_unpushed_work` が購読者の居ない outbox に残って台帳へ届かない。
+   * デーモンはこの名乗りを聞いた runner についてだけ、自分が畳むとき（`ManagerPool#stop`）
+   * に**その runner の SSE が閉じる（＝runner が exit する）まで上限付きで待ち**、
+   * 受けた出来事の台帳への書き込みが済んでから runner の口を閉じる。
+   * **名乗らない runner（旧 runner）は今までどおり一切待たない。**
+   *
+   * `vacate`（デーモンが runner を意図して空ける操作）とは別物である。これは
+   * runner 自身が自分のプロセスを畳み始めたという事実の通知で、デーモンの操作を伴わない。
+   *
+   * **旧 daemon との組み合わせ**: 未知の type は daemon の `safeParse` で落ち、
+   * `RunnerDroppedEventReport` に残るだけで接続は切れない（`rescue_ref` と同じ扱い）。
+   * 旧 daemon は今までどおり待たない。
+   */
+  z.object({
+    type: z.literal('shutting_down'),
+    runnerId: z.string(),
+  }),
+  /**
    * 作業者の道具が長く実行中である（Issue #2725）。**日誌には書かない**
    * （`manager.ts` の `case 'tool_running'` は `#journal` を呼ばず、稼働の地図の
    * メモリへ渡すだけ。`ask` / `settled` と同じ先例）。
@@ -2829,6 +2853,19 @@ export interface RunnerClient {
    * 走り続ける — デーモンの再起動で人の仕事を殺さない。
    */
   close(): Promise<void>;
+  /**
+   * 畳み始めた runner（`shutting_down` を名乗った）の最後の出来事を受け切るための口
+   * （Issue #2749）。**デーモンが畳むとき（`ManagerPool#stop`）だけ呼ぶ。**
+   *
+   * 呼ばれたら、この client は**それ以上繋ぎ直さない**（新しい器へ繋がって `hello` →
+   * 引き取りが畳み中のデーモンで走らないように）。返す Promise は、**いま開いている
+   * イベントのストリームが終わったとき**（runner が exit したとき）に解く。開いて
+   * いなければ即座に解く。**ストリームを自分から切らない**——切るのは `close()` である。
+   *
+   * **省略できる。** ストリームを持たない実装（`LocalRunner`）は実装しない。
+   * 省略した実装は待たれない。
+   */
+  awaitStreamEnd?(): Promise<void>;
 }
 
 /**

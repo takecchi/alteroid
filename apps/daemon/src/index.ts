@@ -208,6 +208,19 @@ const SHUTDOWN_GRACE_MS = 60_000;
 const FORCED_EXIT_MS = SHUTDOWN_GRACE_MS - 5_000;
 
 /**
+ * SIGTERM から、畳み始めた runner の最後の出来事（生ログ・未 push の観測）を待つ締切まで
+ * （Issue #2749。`ManagerPool#stop` の `farewellDeadlineAt`）。
+ *
+ * **forced exit（`FORCED_EXIT_MS` = 55 秒）の内側に収める。** 待ったあとに、受けた出来事の
+ * 台帳への書き込みの完了待ち・runner の口を閉じる・`storage.close()` が残るので、
+ * 10 秒の余裕を引いて 45 秒とした。**締切は SIGTERM を起点にした絶対時刻である**——
+ * 最後の蒸留（クローンのターン）が長引いたぶんは待ちから引かれ、足し算で 55 秒を超えない。
+ * 達したら待つのをやめて閉じる側に倒す。**猶予（`SHUTDOWN_GRACE_MS`）や強制 exit を
+ * 変えるなら、ここも合わせること**（`railway/README.md`「畳む時間を渡す」）。
+ */
+const RUNNER_FAREWELL_DEADLINE_MS = FORCED_EXIT_MS - 10_000;
+
+/**
  * TCP keepalive の初回プローブまでの待ち時間（ms）。
  *
  * **`server.timeout`（Node の socket アイドルタイムアウト）は入れない。** あれは
@@ -2539,6 +2552,9 @@ export async function main(): Promise<void> {
   async function shutdown(): Promise<void> {
     if (stopping) return;
     stopping = true;
+    // **畳み始めた runner を待つ締切の起点は、SIGTERM（この関数に入った瞬間）である**
+    // （`RUNNER_FAREWELL_DEADLINE_MS`）。
+    const farewellDeadlineAt = Date.now() + RUNNER_FAREWELL_DEADLINE_MS;
 
     // 先に受け口を閉じて runtime 情報を消す。クローンの後片付け（最後の蒸留）が
     // 長引いても、CLI からは「止まった」と見えるようにする。
@@ -2572,7 +2588,7 @@ export async function main(): Promise<void> {
     const forced = setTimeout(() => process.exit(0), FORCED_EXIT_MS);
     forced.unref();
     try {
-      await clone.stop();
+      await clone.stop({ farewellDeadlineAt });
     } catch {
       // 片付けに失敗しても落ちる
     }

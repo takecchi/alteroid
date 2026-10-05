@@ -234,6 +234,11 @@ export interface CloneHost {
    */
   recycleSessionForToken(): void;
 
-  /** 走行中のターンを止めて片付ける。 */
-  stop(): Promise<void>;
+  /**
+   * 走行中のターンを止めて片付ける。
+   *
+   * `farewellDeadlineAt`（Issue #2749）は、畳み始めた runner の最後の出来事を待つ絶対の
+   * 締切（`ManagerPool#stop` の同名の欄）。デーモンが SIGTERM を起点に渡す。
+   */
+  stop(options?: { farewellDeadlineAt?: number }): Promise<void>;
 }

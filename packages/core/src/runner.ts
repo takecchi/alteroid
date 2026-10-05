@@ -1255,6 +1255,12 @@ class Host implements RunnerHost {
   }
 
   async shutdown(): Promise<void> {
+    // **畳み始めたことを、畳みの出来事より先に名乗る**（Issue #2749）。ここ（頭）で
+    // 積むのは、`apps/runner/src/index.ts` 以外の入口（インプロセスの host、テスト）も
+    // 同じ順序を守るため——入口ごとに積み忘れる形を作らない。デーモンは、これを聞いた
+    // runner の SSE が閉じるまで（上限付きで）待ってから自分の口を閉じる。
+    // 下の `session.stop()` が出す `archive` / `shutdown_unpushed_work` はこの後に積まれる。
+    this.#emit({ type: 'shutting_down', runnerId: this.runnerId });
     // **見張りを先に畳む。** 畳み残すと、この後 `#sessions.clear()` で空になった
     // 名簿を、止まったはずの見張りが叩き続ける（名簿は空なので実害は無いが、
     // テストならタイマーが残ってハングする — `runner-protocol.ts` の `Registry#stop`

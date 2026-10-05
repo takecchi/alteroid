@@ -3841,3 +3841,74 @@ describe('RunnerHttpError の message は本文を伏せて切る（issue #2415�
     expect(error.message).not.toContain('1234567890abcdef');
   });
 });
+
+describe('awaitStreamEnd（Issue #2749。畳み始めた runner の最後の出来事を受け切る）', () => {
+  function streamingFetch(): {
+    fetchFn: typeof fetch;
+    eventsCalls: () => number;
+    endStream: () => void;
+  } {
+    let controllerRef: ReadableStreamDefaultController<Uint8Array> | undefined;
+    let calls = 0;
+    const fetchFn = (async (input: string | URL | Request) => {
+      const path = new URL(
+        typeof input === 'string' ? input : 'url' in input ? input.url : input.href,
+      ).pathname;
+      if (path === '/health') {
+        return Response.json({ runnerId: 'runner-farewell', workspacePath: '/workspace' });
+      }
+      if (path === '/events') {
+        calls += 1;
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            start: (controller) => {
+              controllerRef = controller;
+            },
+          }),
+          { status: 200, headers: { 'content-type': 'text/event-stream' } },
+        );
+      }
+      throw new Error(`想定していない path: ${path}`);
+    }) as typeof fetch;
+    return { fetchFn, eventsCalls: () => calls, endStream: () => controllerRef?.close() };
+  }
+
+  it('ストリームが開いている間は解けず、閉じたら解ける。閉じたあとは繋ぎ直さない', async () => {
+    const { fetchFn, eventsCalls, endStream } = streamingFetch();
+    const client = await createHttpRunner({
+      baseUrl: 'http://runner.test',
+      token: 'tok',
+      fetchFn,
+      sleepFn: async () => undefined,
+    });
+    await client.connect(() => undefined);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(eventsCalls()).toBe(1);
+
+    let ended = false;
+    const waiting = client.awaitStreamEnd?.().then(() => (ended = true));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(ended).toBe(false); // runner が exit するまで、自分からは切らない
+
+    endStream(); // runner が exit した
+    await waiting;
+    expect(ended).toBe(true);
+
+    // 繋ぎ直しは止まっている（新しい器へ繋がって hello が畳み中のデーモンで走らない）。
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(eventsCalls()).toBe(1);
+    await client.close();
+  });
+
+  it('ストリームが開いていなければ即座に解ける', async () => {
+    const { fetchFn } = streamingFetch();
+    const client = await createHttpRunner({
+      baseUrl: 'http://runner.test',
+      token: 'tok',
+      fetchFn,
+    });
+    // connect していない（ストリームは無い）。
+    await client.awaitStreamEnd?.();
+    await client.close();
+  });
+});

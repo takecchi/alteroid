@@ -204,6 +204,32 @@ export function noteDroppedRunnerManagers(
 }
 
 /**
+ * 畳み始めた runner（`shutting_down` を名乗った）の最後の出来事を、待ち切れずに
+ * 閉じへ倒したことを stderr へ1行だけ残す（Issue #2749。`ManagerPool#stop`）。
+ *
+ * 失われうるのは、その runner が畳みの最後に積む `archive`（生ログ）と
+ * `shutdown_unpushed_work`（未 push の観測）である。**どの出来事が実際に落ちたかは
+ * こちらからは分からない**（届いていないので）ため、「受け取れなかった可能性がある」
+ * 出来事の種別と、その runner で走っていた委譲の id（`managerIds`。デーモンが知る範囲）
+ * を名指しする。本文は出さない（id と列挙値だけ）。
+ *
+ * @param reason 待ちを諦めた理由。`stream-open`＝上限までに SSE が閉じなかった、
+ *   `events-unsettled`＝閉じたが受けた出来事の台帳への書き込みが上限までに終わらなかった。
+ */
+export function noteRunnerFarewellGaveUp(
+  runnerId: string,
+  reason: 'stream-open' | 'events-unsettled',
+  managerIds: readonly string[],
+): void {
+  note(
+    `runner ${tag(runnerId)} が畳み始めたあとの最後の出来事（archive / shutdown_unpushed_work）を、` +
+      `上限までに受け取り切れなかった（${reason}）。この runner で走っていた委譲 ` +
+      `${managerIds.length === 0 ? '（デーモンは把握していない）' : managerIds.map(tag).join(',')} の` +
+      `生ログ・未 push の観測が台帳に届いていない可能性がある`,
+  );
+}
+
+/**
  * 発行した id が既に使われていて、引き直したことを stderr へ1行だけ残す（#238）。
  *
  * **`noteDroppedRecord` を流用しないのは、あれが「記録できませんでした」と

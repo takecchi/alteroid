@@ -630,6 +630,15 @@ class HttpRunner implements RunnerClient {
   readonly #onDroppedEvent: ((report: RunnerDroppedEventReport) => void) | undefined;
   #controller: AbortController | null = null;
   #closed = false;
+  /**
+   * 畳み始めた runner の最後の出来事を受け切るために、これ以上繋ぎ直さない印
+   * （{@link awaitStreamEnd}。Issue #2749）。立てたら降ろさない。
+   */
+  #noReconnect = false;
+  /** いま `#stream()` が走っているか（{@link awaitStreamEnd} が見る）。 */
+  #streamActive = false;
+  /** `#stream()` が終わるのを待っている分。終わった瞬間に全部起こす。 */
+  #streamEndWaiters: Array<() => void> = [];
   /** 次に失敗したときに待つ長さ。失敗のたびに倍々に伸び、成功で基準へ戻る。 */
   #nextDelayMs: number;
   /** 直前の接続が失敗していて、まだ繋ぎ直せていないか。 */
@@ -1142,10 +1151,11 @@ class HttpRunner implements RunnerClient {
    * 最大1行に保たれる。**
    */
   async #pump(onEvent: (event: RunnerEvent) => void): Promise<void> {
-    while (!this.#closed) {
+    while (!this.#closed && !this.#noReconnect) {
       let failed = false;
       let failure: unknown;
       let healthy = false;
+      this.#streamActive = true;
       try {
         await this.#stream(onEvent, () => {
           healthy = true;
@@ -1160,11 +1170,16 @@ class HttpRunner implements RunnerClient {
           }
         });
       } catch (error) {
-        if (this.#closed) return;
+        if (this.#closed || this.#noReconnect) return;
         failed = true;
         failure = error;
+      } finally {
+        this.#streamActive = false;
+        for (const wake of this.#streamEndWaiters.splice(0)) wake();
       }
-      if (this.#closed) return;
+      // **繋ぎ直さない**（{@link awaitStreamEnd}）。失敗の行も書かない——畳み始めた
+      // runner が exit したのは失敗ではない。
+      if (this.#closed || this.#noReconnect) return;
 
       const waitMs = healthy ? this.#retryBaseMs : this.#nextDelayMs;
 
@@ -1901,6 +1916,20 @@ class HttpRunner implements RunnerClient {
         kind: error instanceof RunnerUnknownError ? 'timeout' : 'other',
       };
     }
+  }
+
+  /**
+   * 畳み始めた runner の最後の出来事を受け切るための口（Issue #2749。
+   * `RunnerClient#awaitStreamEnd` の doc）。**呼んだ瞬間から繋ぎ直さない。**
+   * いま開いている `/events` が終わったとき（runner が exit したとき）に解く。
+   * 開いていなければ即座に解く。**自分からストリームは切らない。**
+   */
+  awaitStreamEnd(): Promise<void> {
+    this.#noReconnect = true;
+    if (!this.#streamActive) return Promise.resolve();
+    return new Promise<void>((resolve) => {
+      this.#streamEndWaiters.push(resolve);
+    });
   }
 
   /**
