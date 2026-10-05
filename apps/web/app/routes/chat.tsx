@@ -300,7 +300,7 @@ export function describeCloneInterruptOutcome(
     case 'idle':
       return '走っているターンは無かった（止めるものが無い）。';
     case 'unsupported':
-      return 'このデーモンのクローンは、ターンを止める口を持っていない。';
+      return 'このサーバのクローンは、ターンを止められない。';
   }
 }
 

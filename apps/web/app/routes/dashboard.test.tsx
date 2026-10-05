@@ -227,7 +227,7 @@ describe('「今日の利用」の今日はデーモンの応答の today で決
         },
       });
 
-      expect(await screen.findByText(/デーモンの今日が分からない/)).toBeTruthy();
+      expect(await screen.findByText(/サーバの今日が分からない/)).toBeTruthy();
       // ブラウザの今日の行の金額を出さず、ブラウザの今日へのリンクも作らない。
       expect(renderedMoneyTexts()).toEqual(new Set());
       expect(linkTo('/usage')).toBeUndefined();

@@ -177,7 +177,7 @@ function EnvVarRow({
       {entry.shadowsCloneEnv === true && (
         <p className="mt-2 text-[11px] break-words text-warn">
           ⚠ GitHub
-          用の名前のため、デーモン（クローン）が動いている環境側の同じ名前の環境変数の値が優先して渡されている
+          用の名前のため、サーバが動いている環境側の同じ名前の環境変数の値が優先して渡されている
           （この画面に登録したこの行の値は、どこにも渡されていない）。
           {entry.scope === 'app' &&
             // **scope: app は他の scope と挙動が違う（issue #1894）。** この行は

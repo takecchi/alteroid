@@ -137,7 +137,7 @@ describe('describeCloneInterruptOutcome（CLI と文言を揃える単体試験�
 
   it('unsupported', () => {
     expect(describeCloneInterruptOutcome('unsupported')).toBe(
-      'このデーモンのクローンは、ターンを止める口を持っていない。',
+      'このサーバのクローンは、ターンを止められない。',
     );
   });
 });
@@ -213,9 +213,7 @@ describe('「ターンを止める」ボタン', () => {
     renderChat(`/chat/${CONVERSATION_ID}`);
     fireEvent.click(await findInterruptButton());
 
-    expect(
-      await screen.findByText('このデーモンのクローンは、ターンを止める口を持っていない。'),
-    ).toBeTruthy();
+    expect(await screen.findByText('このサーバのクローンは、ターンを止められない。')).toBeTruthy();
   });
 
   it('呼べなかった失敗（403）は結果ではなく ErrorNote に出る。「止めた」とは言わない', async () => {
@@ -234,9 +232,7 @@ describe('「ターンを止める」ボタン', () => {
     // 3値のどの文言も出ていない——失敗を結果と取り違えていない。
     expect(screen.queryByText(/いま走っていたクローンのターンを止めた/)).toBeNull();
     expect(screen.queryByText('走っているターンは無かった（止めるものが無い）。')).toBeNull();
-    expect(
-      screen.queryByText('このデーモンのクローンは、ターンを止める口を持っていない。'),
-    ).toBeNull();
+    expect(screen.queryByText('このサーバのクローンは、ターンを止められない。')).toBeNull();
   });
 });
 

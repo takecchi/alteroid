@@ -130,7 +130,7 @@ describe('ログイン画面のどの分岐からでも接続先を変えられ�
         <Login />
       </Providers>,
     );
-    expect(await screen.findByText('デーモンに繋がらない')).toBeTruthy();
+    expect(await screen.findByText('接続先のサーバに繋がらない')).toBeTruthy();
     expect(screen.getAllByLabelText('接続先')).toHaveLength(1);
     // **「適用」ボタンは無くなった**（接続先は一覧から選ぶ形になり、選んだ
     // 時点で切り替わる）。カードが二重に出ていないことを測るという役目は変えず、
@@ -351,7 +351,7 @@ describe('コンソールから手で設定した接続先が、描画しただ�
 
     // (a) 実際にその接続先へ問い合わせている（同一オリジンの /api や既定値では
     //     ない——このデーモンにしか応答を用意していないので、届いていなければ
-    //     「デーモンに繋がらない」のまま止まる）。
+    //     「接続先のサーバに繋がらない」のまま止まる）。
     const input = await screen.findByLabelText<HTMLInputElement>('接続先');
     expect(stub.calls.some((url) => url.startsWith(CONSOLE_SET_URL))).toBe(true);
 

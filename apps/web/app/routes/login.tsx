@@ -32,8 +32,8 @@ export default function Login() {
   if (auth.error !== undefined) {
     return (
       <Shell>
-        <DocumentTitle>デーモンに繋がらない</DocumentTitle>
-        <h1 className="text-sm font-semibold">デーモンに繋がらない</h1>
+        <DocumentTitle>接続先のサーバに繋がらない</DocumentTitle>
+        <h1 className="text-sm font-semibold">接続先のサーバに繋がらない</h1>
         <ErrorNote error={auth.error} className="mt-3" />
       </Shell>
     );
@@ -43,7 +43,7 @@ export default function Login() {
   if (auth.status === 'checking') {
     return (
       <Shell>
-        <Spinner label="デーモンを確認中" />
+        <Spinner label="接続先のサーバを確認中" />
       </Shell>
     );
   }
@@ -191,8 +191,8 @@ function SignIn() {
         <div className="mt-4 rounded-md border border-border bg-background p-3 text-xs leading-relaxed text-muted-foreground">
           <p className="mb-1.5 font-medium text-foreground">ログイン手段が設定されていない</p>
           <p>
-            このデーモンは認証を要求しているが、ログインできるプロバイダが1つも登録されていない。
-            デーモン側に <code className="font-mono">ALTEROID_GOOGLE_CLIENT_ID</code> と{' '}
+            接続先のサーバは認証を要求しているが、ログインできるプロバイダが1つも登録されていない。
+            サーバ側に <code className="font-mono">ALTEROID_GOOGLE_CLIENT_ID</code> と{' '}
             <code className="font-mono">ALTEROID_GOOGLE_CLIENT_SECRET</code>{' '}
             を設定するか、認証を切る（<code className="font-mono">ALTEROID_AUTH=off</code>）。
           </p>
@@ -298,7 +298,7 @@ function Ungranted() {
         ]}
       />
 
-      <p className="mt-3 text-xs text-muted-foreground">デーモンと同じ環境で次を実行する:</p>
+      <p className="mt-3 text-xs text-muted-foreground">接続先のサーバと同じ環境で次を実行する:</p>
       <Input readOnly value={command} className="mt-1.5 font-mono text-xs" />
 
       <div className="mt-4 flex items-center gap-2">
