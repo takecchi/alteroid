@@ -238,8 +238,34 @@ export function Spinner({ label = '読み込み中' }: { label?: string }) {
   );
 }
 
-export function Empty({ children }: { children: ReactNode }) {
-  return <p className="p-6 text-sm text-muted-foreground">{children}</p>;
+/**
+ * 空状態の文言。
+ *
+ * `inset` で余白を選ぶ（省略時は従来どおり `p-6`。既存の呼び出しは変わらない）。
+ * - 省略（`'default'`）: `p-6`。従来の形。
+ * - `'card'`: `px-4 py-3`。`CardHeader` の直下に置くとき、見出し・説明（`px-4`）と
+ *   左端をそろえ、上下を詰める。
+ * - `'none'`: 余白なし。すでに `px-4 py-3` などを持つ入れ物の中に置くとき
+ *   （余白が二重にならない）。
+ */
+export function Empty({
+  children,
+  inset = 'default',
+}: {
+  children: ReactNode;
+  inset?: 'default' | 'card' | 'none';
+}) {
+  return (
+    <p
+      className={cn(
+        'text-sm text-muted-foreground',
+        inset === 'default' && 'p-6',
+        inset === 'card' && 'px-4 py-3',
+      )}
+    >
+      {children}
+    </p>
+  );
 }
 
 /**
