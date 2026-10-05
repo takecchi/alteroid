@@ -245,7 +245,7 @@ export const markdownComponents: Components = {
       rel={href?.startsWith('#') ? undefined : 'noreferrer noopener'}
       // 押せる範囲（タッチ端末だけ）: 文中のリンクは行の高さ（約21px）しか無く押しにくい。
       // 見た目の行の高さ・段落の間隔は動かさず、疑似要素で上下へ 12px ずつ当たり判定だけ広げる（約44px）。
-      className="break-words text-primary hover:underline pointer-coarse:relative pointer-coarse:after:absolute pointer-coarse:after:-inset-x-1 pointer-coarse:after:-inset-y-3 pointer-coarse:after:content-['']"
+      className="break-words text-primary hover:underline pointer-coarse:relative pointer-coarse:after:absolute pointer-coarse:after:-inset-x-1 pointer-coarse:after:-inset-y-3"
     >
       {children}
     </a>
