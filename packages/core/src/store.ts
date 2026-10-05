@@ -3298,6 +3298,25 @@ export interface Stores {
    *
    * **これは「誰がこの API に触れるか」の話であって、PRD「権限境界」（クローンが
    * 記憶を根拠に何を人間へ確認するか）とは別の層である。** 混ぜてはいけない。
+   *
+   * **NUL（issue #3011。teto の判断、2026-10-05・10-06。3実装とも）。**
+   *
+   * **読むだけの口は、NUL を含む鍵で引かれても断らず、「無い」と同じ結果を返す。**
+   * `getAccount`・`findIdentity`・`findAccessTokenBySha256`・`getLoginRequest`・`findAccountByEmail` は `null`、
+   * `listIdentities`・`listAccessTokens` は空配列、`markAccountLoggedIn`・`revokeAccountAccess`・`markAccessTokenUsed` は何もしない（投げない）、
+   * `removeUnreadableAccounts` は `unknown`、`revokeAccessToken`・`grantAccess`・`setAccountOwner` は `not_found`、
+   * `beginLoginExchange`・`claimLoginRequest` は `null`（`claimLoginRequest` は `issue` を呼ばない）。
+   * 書き込みで NUL の鍵を断るので、NUL を含む鍵の行はどの器にも存在しえない。既存の鍵に NUL を足した値でも一致させない。pg は DB に投げる前に短絡する。
+   *
+   * **書く口は、鍵・参照キー・突き合わせに使う値の NUL を `NulNotAllowedError` で断り、本文の NUL は落として残す。**
+   * - 断る: アカウントの `id`・`grantedBy`・`email`、identity の `subject`・`accountId`、トークンの `id`・`accountId`・`sha256`、
+   *   ログイン要求の `id`・`nonce`・`codeVerifier`・`claimSha256`・`redirectUri`・`accountId`、`grantAccess` の `by`
+   *   （`createAccountWithIdentity` と `claimLoginRequest` が発行するトークンも同じ）。
+   * - 落として残す: `displayName`、トークンの `label`、ログイン要求の `label`・`error`、identity の `email`。
+   *
+   * **メールアドレス。** `AuthAccount.email` は一意の索引と衝突の検査に使うので鍵として断る（落とすと別のアカウントと一致しうる）。
+   * `AuthIdentity.email` はプロバイダの申告で毎回上書きされる本文なので落として残す。`findAccountByEmail` は NUL を含めば `null`。
+   * 例外の文には欄名だけを載せ、値は載せない。部品は `auth-input.ts`。
    */
   auth: AuthStore;
   /**
