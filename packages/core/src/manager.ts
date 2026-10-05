@@ -947,16 +947,6 @@ function unpushedWorkObservationOf(
 }
 
 /**
- * `candidate` は `existing`（既に台帳に乗っている観測。無ければ何でも通す）
- * より古くないか——**古ければ `false`**（＝上書きしない。Issue #1266
- * 候補(2)）。
- *
- * `at`（ISO8601・UTC・`Z` 終端）の辞書式比較がそのまま時系列の比較になる
- * ——`runnerBacklog()` の `observedAt` 比較（`candidate.observedAt >
- * existing.observedAt`）と同じ作法。**同点は勝たせる**（`existing.at`
- * が `candidate.at` より**厳密に**新しいときだけ弾く）。
- */
-/**
  * runner から届いた退避の結果を台帳へ重ねる（Issue #1266）。`relativePath` ごとに
  * 置き換え、届かなかった作業ツリーは前のまま残す。`pushed` は新しい回が持たなければ
  * 前のものを引き継ぐ。
@@ -979,6 +969,16 @@ export function mergeRescue(
   return { at, worktrees: [...byPath.values()] };
 }
 
+/**
+ * `candidate` は `existing`（既に台帳に乗っている観測。無ければ何でも通す）
+ * より古くないか——**古ければ `false`**（＝上書きしない。Issue #1266
+ * 候補(2)）。
+ *
+ * `at`（ISO8601・UTC・`Z` 終端）の辞書式比較がそのまま時系列の比較になる
+ * ——`runnerBacklog()` の `observedAt` 比較（`candidate.observedAt >
+ * existing.observedAt`）と同じ作法。**同点は勝たせる**（`existing.at`
+ * が `candidate.at` より**厳密に**新しいときだけ弾く）。
+ */
 function isUnpushedWorkObservationAtLeastAsNewAs(
   candidate: LastUnpushedWorkObservation,
   existing: LastUnpushedWorkObservation | undefined,

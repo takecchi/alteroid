@@ -1716,8 +1716,8 @@ class RunnerSession {
    */
   /** 退避 ref の記憶（作業ツリーごとの前回の結果）。Issue #1266。 */
   readonly #rescueMemory = new RescueMemory();
-  /** 退避が走っている間 `true`。**同時に走るのは1本まで。** */
-  #rescueInFlight = false;
+  /** 走っている退避の回（無ければ `null`）。**同時に走るのは1本まで。** */
+  #rescueRunning: Promise<void> | null = null;
   readonly #finishUnpushedWorkFn: (options?: {
     signal?: AbortSignal;
   }) => Promise<UnpushedWorkResult>;
@@ -2231,25 +2231,40 @@ class RunnerSession {
    * 無ければ黙る）。変化のあった作業ツリーがあるときだけ `rescue_ref` を emit する。
    * 資格は `#childEnv()`（観測の git と同じ env）に在る。
    */
-  async rescueRef(options: { signal?: AbortSignal } = {}): Promise<void> {
-    if (this.#rescueInFlight) return;
-    this.#rescueInFlight = true;
-    try {
-      const worktrees = await runRescue(this.#cwd, {
-        managerId: this.#id,
-        spawn: this.#gitSpawnFn(),
-        env: this.#childEnv(),
-        memory: this.#rescueMemory,
-        ...(options.signal === undefined ? {} : { signal: options.signal }),
+  async rescueRef(options: { signal?: AbortSignal; waitForRunning?: boolean } = {}): Promise<void> {
+    if (this.#rescueRunning !== null) {
+      // 周期の回が走行中。周期からの呼び出しは見送る（重ねない）。**畳む直前の回**
+      // （`waitForRunning`）は、走行中の回の終わりを待ってから自分の回を走らせる——
+      // 見送ると、畳む直前の変更が退避されないまま器が消える。待ちも `signal`
+      // （畳む直前の期限）の内側で、期限が来たら諦める。
+      if (options.waitForRunning !== true) return;
+      const running = this.#rescueRunning;
+      const aborted = new Promise<void>((resolve) => {
+        options.signal?.addEventListener('abort', () => resolve(), { once: true });
       });
-      if (worktrees.length > 0) {
-        this.#emit({ type: 'rescue_ref', managerId: this.#id, worktrees });
-      }
-    } catch {
-      // 退避は best-effort。この1回の失敗でセッションを巻き込まない。
-    } finally {
-      this.#rescueInFlight = false;
+      await Promise.race([running, aborted]);
+      if (this.#rescueRunning !== null || options.signal?.aborted === true) return;
     }
+    const run = (async (): Promise<void> => {
+      try {
+        const worktrees = await runRescue(this.#cwd, {
+          managerId: this.#id,
+          spawn: this.#gitSpawnFn(),
+          env: this.#childEnv(),
+          memory: this.#rescueMemory,
+          ...(options.signal === undefined ? {} : { signal: options.signal }),
+        });
+        if (worktrees.length > 0) {
+          this.#emit({ type: 'rescue_ref', managerId: this.#id, worktrees });
+        }
+      } catch {
+        // 退避は best-effort。この1回の失敗でセッションを巻き込まない。
+      } finally {
+        this.#rescueRunning = null;
+      }
+    })();
+    this.#rescueRunning = run;
+    await run;
   }
 
   /**
@@ -2434,8 +2449,16 @@ class RunnerSession {
     // セッションを並行に畳むので、セッション数に関わらずこの1本ぶんしか
     // 上乗せしない。
     if (options.captureUnpushedWork === true) {
-      // 畳む直前にも1回退避する（Issue #1266）。観測と並行に走らせ、期限を切る。
-      const rescued = this.rescueRef({ signal: AbortSignal.timeout(STOP_RESCUE_TIMEOUT_MS) });
+      // 畳む直前にも1回退避する（Issue #1266）。**観測の emit は退避を待たない**
+      // （待たせると #2749 の競走の窓が広がる）。観測と並行に走らせ、観測を先に emit
+      // してから退避の終わりを待つ。走行中の周期の回が居ればその終わりを待つ
+      // （`waitForRunning`）。待ちと実行は同じ期限 `STOP_RESCUE_TIMEOUT_MS` の内側。
+      // **合計の見積もり**: 観測は最大 `STOP_UNPUSHED_WORK_TIMEOUT_MS`（5秒）と退避の
+      // 20秒は並行なので、畳みに足されるのは最大20秒——`FORCED_EXIT_MS`（55秒）の内側。
+      const rescued = this.rescueRef({
+        signal: AbortSignal.timeout(STOP_RESCUE_TIMEOUT_MS),
+        waitForRunning: true,
+      });
       const unpushedWork = await this.#finishUnpushedWorkFn({
         signal: AbortSignal.timeout(STOP_UNPUSHED_WORK_TIMEOUT_MS),
       })
@@ -2444,8 +2467,8 @@ class RunnerSession {
           kind: 'unavailable',
           reason: `確かめようとして例外が飛んだ: ${reasonOf(error)}`,
         }));
-      await rescued;
       this.#emit({ type: 'shutdown_unpushed_work', managerId: this.#id, unpushedWork });
+      await rescued;
     }
     this.#onClosed();
   }

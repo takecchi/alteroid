@@ -146,6 +146,9 @@ describe('走行中の退避 ref の配線（Issue #1266）', () => {
 
     await host.shutdown();
 
+    // B3: 既存の shutdown_unpushed_work は退避（最大20秒）を待たず、先に emit する（#2749 の窓を広げない）。
+    const types = events.map((e) => e.type);
+    expect(types.indexOf('shutdown_unpushed_work')).toBeLessThan(types.indexOf('rescue_ref'));
     const found = rescueEvents(events);
     expect(found).toHaveLength(1);
     expect(g(bare, 'show', `${found[0]?.worktrees[0]?.pushed?.ref as string}:a.txt`)).toBe(

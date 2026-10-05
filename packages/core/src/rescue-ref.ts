@@ -33,8 +33,9 @@ import { listWorktreeRoots, type ProcessSpawnFn } from './unpushed-work.js';
  *
  * ## 作業ツリーを動かさない作り方
  *
- * 実 index のコピー（無ければ `read-tree HEAD`）を `<gitdir>/alteroid-rescue.index.*` に
- * 作り、`GIT_INDEX_FILE` をそれに向けて `git add -u` → `git write-tree` → `git commit-tree
+ * 実 index のコピー（git と同じ子ユーザーの `cp -p`。無ければ `read-tree HEAD`）を
+ * `<gitdir>/alteroid-rescue.index.*` に作り（SIGKILL で残ったものは次の回が掃除する）、
+ * `git add -N` の項目は一時 index から外して未追跡として数え、`GIT_INDEX_FILE` をそれに向けて `git add -u` → `git write-tree` → `git commit-tree
  * [-p HEAD]`。実 index・HEAD・reflog・作業ツリーを動かさず、`.git/index.lock` を握らない
  * （別プロセスの add / commit と並走しても衝突しない）。`git stash create` は実 index を
  * 書き換えるので使わない。**実 index のコピーを土台にする**のは、`git add` 済みで未コミットの
@@ -352,6 +353,10 @@ function defaultHasCredential(env: Record<string, string | undefined>): boolean 
   return [env.GH_TOKEN, env.GITHUB_TOKEN].some((v) => v !== undefined && v.trim() !== '');
 }
 
+function isAborted(signal: AbortSignal | undefined): boolean {
+  return signal?.aborted === true;
+}
+
 function clipPath(name: string): string {
   return name.length > PATH_NAME_MAX_LENGTH ? `${name.slice(0, PATH_NAME_MAX_LENGTH)}…` : name;
 }
@@ -381,7 +386,7 @@ export async function runRescue(cwd: string, options: RunRescueOptions): Promise
         branch: null,
         at: (options.now?.() ?? new Date()).toISOString(),
         ...(entry.pushed === undefined ? {} : { pushed: entry.pushed }),
-        notPushed: { reason: options.signal?.aborted === true ? 'timeout' : 'error' },
+        notPushed: { reason: isAborted(options.signal) ? 'timeout' : 'error' },
       };
       const signature = JSON.stringify({ ...report, at: undefined });
       if (resend || entry.signature !== signature) {
