@@ -37,5 +37,22 @@ export async function verifyPersonaNulContract(persona: PersonaStore): Promise<v
     if (thrown === undefined) fail('NULを含む slug を受け付けた');
   }
 
+  // 読む口・消す口・追記の口も、slug の NUL は入口のスキーマが弾く。3実装とも投げる（issue #3011）。
+  const nulSlug = 'persona-\u0000-nul';
+  const slugCalls: Array<[string, () => Promise<unknown>]> = [
+    ['read(NULを含むslug)', () => persona.read(nulSlug)],
+    ['append(NULを含むslug)', () => persona.append(nulSlug, 'x\n')],
+    ['remove(NULを含むslug)', () => persona.remove(nulSlug)],
+  ];
+  for (const [label, call] of slugCalls) {
+    let thrown: unknown;
+    try {
+      await call();
+    } catch (error) {
+      thrown = error;
+    }
+    if (thrown === undefined) fail(`${label}が投げない（入口のスキーマが弾くこと）`);
+  }
+
   await persona.remove(slug);
 }

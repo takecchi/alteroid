@@ -15,6 +15,7 @@ import {
   verifyCredentialVaultContract,
   verifyTokenPoolContract,
   verifyPersonaNulContract,
+  verifyJobNulContract,
   verifyScheduleNulContract,
   verifySessionRegistryNulContract,
   verifyProfileStoreContract,
@@ -1728,6 +1729,10 @@ describe('FsJournalStore', () => {
 });
 
 describe('FsJobStore', () => {
+  it('NUL の契約（issue #3011。3実装で同じことを測る）', async () => {
+    await verifyJobNulContract(stores.jobs);
+  });
+
   it('承認待ちを積んで回答できる', async () => {
     await stores.jobs.putApproval({
       id: 'ap-1',
