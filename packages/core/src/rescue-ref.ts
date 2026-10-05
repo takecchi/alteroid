@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { readdir, stat, unlink } from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 
 import { reasonOf } from './dropped-record.js';
@@ -428,6 +429,24 @@ export async function runRescue(cwd: string, options: RunRescueOptions): Promise
   return reports;
 }
 
+/** 「入った」を探す、origin の remote-tracking の直近の commit の数。 */
+export const RESCUE_LANDED_SCAN_COMMITS = 300;
+
+/** この tree が、origin の remote-tracking の直近の commit のどれかの tree と同じか。 */
+async function treeIsInOrigin(
+  spawn: ProcessSpawnFn,
+  call: GitCall,
+  tree: string,
+): Promise<boolean> {
+  const log = await git(
+    spawn,
+    ['log', `-n`, String(RESCUE_LANDED_SCAN_COMMITS), '--format=%T', '--remotes=origin'],
+    call,
+  );
+  // 読めなかったら「入っていない」（消さない側）。
+  return ok(log) && log.stdout.split('\n').includes(tree);
+}
+
 async function rescueOne(
   repoRoot: string,
   relativePath: string,
@@ -580,6 +599,16 @@ async function rescueOne(
         ...(submoduleCount === undefined ? {} : { submoduleCount }),
       });
 
+    // 送った退避の中身が、もう origin の枝に入ったか。ネットワークは使わない（ローカルの
+    // remote-tracking の直近の commit の tree と比べる）。入っていれば後始末が即座に消せる。
+    // 退避の結果（`definitiveKey`）が変わらないあいだも、push や fetch で remote-tracking が
+    // 進むので、`landedAt` が付くまでは毎回見る（git log 1本）。
+    if (entry.pushed?.tree !== undefined && entry.pushed.landedAt === undefined) {
+      if (await treeIsInOrigin(spawn, base, entry.pushed.tree)) {
+        entry.pushed = { ...entry.pushed, landedAt: at };
+      }
+    }
+
     const key = `${head ?? 'unborn'}:${tree}`;
     if (entry.definitiveKey === key) return emitIfChanged(withExtras(entry.definitiveNotPushed));
 
@@ -708,11 +737,165 @@ async function rescueOne(
         false,
       );
     }
-    entry.pushed = { ref, commit, at };
+    const remoteUrl = redactRemoteUrl(remote.stdout);
+    entry.pushed = {
+      ref,
+      commit,
+      at,
+      tree,
+      ...(remoteUrl === undefined ? {} : { remote: remoteUrl }),
+    };
     return settle(undefined, true);
   } finally {
     liveIndexFiles.delete(indexFile);
     await unlink(indexFile).catch(() => undefined);
     await unlink(`${indexFile}.lock`).catch(() => undefined);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 後始末（Issue #1266。docs/architecture.md「退避 ref」）
+// ---------------------------------------------------------------------------
+
+/**
+ * remote の URL から**資格を落とした**文字列を作る（台帳の `pushed.remote`）。
+ *
+ * - `scheme://[userinfo@]host/path` は userinfo・クエリ・フラグメントを落として組み直す。
+ * - scp 形式（`git@host:owner/repo.git`）は、ユーザー名が `git` のときだけ残す（それ以外は
+ *   資格の断片でありうるので `host:path` に落とす）。
+ * - ローカルのパス（`/…`）はそのまま（資格を持たない。主にテストの bare リポジトリ）。
+ * - 解釈できない形は `undefined`（台帳に所在を残さない＝後始末は `no-remote` で消さない）。
+ */
+export function redactRemoteUrl(raw: string): string | undefined {
+  const trimmed = raw.trim();
+  if (trimmed === '' || trimmed.length > 2048 || /[\s\u0000-\u001f]/.test(trimmed))
+    return undefined;
+  if (trimmed.startsWith('-')) return undefined;
+  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(trimmed)) {
+    let url: URL;
+    try {
+      url = new URL(trimmed);
+    } catch {
+      return undefined;
+    }
+    if (url.protocol === 'file:') return `file://${url.pathname}`;
+    if (url.hostname === '') return undefined;
+    const port = url.port === '' ? '' : `:${url.port}`;
+    return `${url.protocol}//${url.hostname}${port}${url.pathname}`;
+  }
+  if (trimmed.startsWith('/')) return trimmed;
+  const scp = /^(?:([^@\s/]+)@)?([^@:\s/]+):(.+)$/.exec(trimmed);
+  if (scp !== null) {
+    const rest = (scp[3] ?? '').split(/[?#]/)[0] ?? '';
+    if (rest === '') return undefined;
+    return `${scp[1] === 'git' ? 'git@' : ''}${scp[2] ?? ''}:${rest}`;
+  }
+  return undefined;
+}
+
+/** 後始末が消してよい ref の形。**退避の名前空間の中の2階層だけ**（他の ref を消す口にしない）。 */
+const RESCUE_REF_PATTERN = /^refs\/alteroid-rescue\/[A-Za-z0-9_-]+\/[A-Za-z0-9_-]+$/;
+
+/** 台帳の `pushed.commit` として受ける形。 */
+const COMMIT_PATTERN = /^[0-9a-f]{40}$/;
+
+/** 後始末の push の期限。 */
+const DELETE_TIMEOUT_MS = 60_000;
+
+export type RescueRefDeleteResult =
+  | { readonly outcome: 'removed'; readonly alreadyGone: boolean }
+  | {
+      readonly outcome: 'failed';
+      readonly kind: 'auth' | 'network' | 'timeout' | 'moved' | 'no-remote' | 'other';
+    };
+
+export interface DeleteRescueRefOptions {
+  readonly spawn: ProcessSpawnFn;
+  /** 子（git）の env。`GH_TOKEN` はここに在る。 */
+  readonly env: Record<string, string | undefined>;
+  readonly remote: string;
+  readonly ref: string;
+  /** 台帳が覚えている退避 commit。**remote の ref がこれと違えば消さない**（lease）。 */
+  readonly commit: string;
+  readonly signal?: AbortSignal;
+  readonly tmpRootDir?: string;
+  readonly hasCredential?: (env: Record<string, string | undefined>) => boolean;
+}
+
+/**
+ * 退避 ref を remote から消す。**作業ツリーも委譲のセッションも要らない**（委譲が終わると
+ * どちらも無いことがある）——ここが撃つのは `git push <url> --delete` で、git が
+ * リポジトリを要求するので、子ユーザーが作る空の bare を一時的に `--git-dir` に使う。
+ *
+ * - **lease**: `--force-with-lease=<ref>:<commit>`。台帳より新しい退避が remote に在れば
+ *   消さない（`moved`）。「判定できない」を「消してよい」へ倒さない。
+ * - 消そうとしたら既に無かった（lease が stale を返し、`ls-remote` が空）なら `removed`
+ *   （`alreadyGone`）。
+ * - hook 無効・`GIT_TERMINAL_PROMPT=0`・期限付き。投げない。
+ * - 消してよい ref の形は {@link RESCUE_REF_PATTERN} だけ。**呼び出し元が何を渡しても**
+ *   退避の名前空間の外は消さない。
+ */
+export async function deleteRescueRef(
+  options: DeleteRescueRefOptions,
+): Promise<RescueRefDeleteResult> {
+  const { spawn, env, remote, ref, commit } = options;
+  if (!RESCUE_REF_PATTERN.test(ref) || !COMMIT_PATTERN.test(commit)) {
+    return { outcome: 'failed', kind: 'other' };
+  }
+  // 台帳に載せた形（資格を落とした形）そのものだけを受ける。`ext::` 等の transport も弾く。
+  if (redactRemoteUrl(remote) !== remote || remote.includes('::')) {
+    return { outcome: 'failed', kind: 'no-remote' };
+  }
+  const hasCredential = options.hasCredential ?? defaultHasCredential;
+  // ローカルのパスは資格が要らない。それ以外で資格が無ければ撃たない。
+  if (!remote.startsWith('/') && !remote.startsWith('file://') && !hasCredential(env)) {
+    return { outcome: 'failed', kind: 'auth' };
+  }
+  const tmpRoot = options.tmpRootDir ?? os.tmpdir();
+  const scratch = path.join(
+    tmpRoot,
+    `alteroid-rescue-del.${String(process.pid)}.${randomBytes(6).toString('hex')}.git`,
+  );
+  if (!path.isAbsolute(scratch)) return { outcome: 'failed', kind: 'other' };
+  const call: GitCall = {
+    cwd: tmpRoot,
+    env,
+    ...(options.signal === undefined ? {} : { signal: options.signal }),
+  };
+  try {
+    const init = await git(spawn, ['init', '--bare', '--quiet', scratch], call);
+    if (!ok(init)) return { outcome: 'failed', kind: init.timedOut ? 'timeout' : 'other' };
+    const pushed = await git(
+      spawn,
+      [
+        `--git-dir=${scratch}`,
+        '-c',
+        'core.hooksPath=/dev/null',
+        'push',
+        '--no-verify',
+        '--no-recurse-submodules',
+        `--force-with-lease=${ref}:${commit}`,
+        remote,
+        `:${ref}`,
+      ],
+      { ...call, timeoutMs: DELETE_TIMEOUT_MS },
+    );
+    if (ok(pushed)) return { outcome: 'removed', alreadyGone: false };
+    const kind = classifyPushFailure(pushed);
+    if (kind !== 'rejected') {
+      return { outcome: 'failed', kind };
+    }
+    // lease が外れた。無いのか（消えている）、別の commit に動いたのか。
+    const listed = await git(spawn, ['ls-remote', remote, ref], {
+      ...call,
+      timeoutMs: DELETE_TIMEOUT_MS,
+    });
+    if (!ok(listed)) {
+      return { outcome: 'failed', kind: listed.timedOut ? 'timeout' : 'other' };
+    }
+    if (listed.stdout.trim() === '') return { outcome: 'removed', alreadyGone: true };
+    return { outcome: 'failed', kind: 'moved' };
+  } finally {
+    await git(spawn, ['-rf', scratch], { ...call, command: 'rm' }).catch(() => undefined);
   }
 }
