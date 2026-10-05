@@ -56,12 +56,22 @@ export interface SceneWorker {
 
 export interface SceneManager {
   id: string;
+  /** 居る器（`TopologySceneData.runners[].id`）。生きた器と突き合わないときは無い。 */
+  runner?: string;
   label: string;
   task?: string;
   status: SceneStatus;
   flow: SceneFlow;
   workers: readonly SceneWorker[];
   details?: readonly SceneDetail[];
+}
+
+export interface SceneRunner {
+  /** `managers[].runner` と突き合わせる鍵（runnerId。名乗っていなければ宛先の label） */
+  id: string;
+  /** 枠の名前（runnerId。名乗っていなければ宛先の label） */
+  label: string;
+  status: SceneStatus;
 }
 
 export interface TopologySceneData {
@@ -74,7 +84,8 @@ export interface TopologySceneData {
     flow: SceneFlow;
     details?: readonly SceneDetail[];
   };
-  runner: { status: SceneStatus };
+  /** 生きている runner（名簿で connected / vacating）。1台に1枠。死んだ器は入れない。 */
+  runners: readonly SceneRunner[];
   managers: readonly SceneManager[];
   /** 読めず地図に載せられなかった委譲の件数。1件以上のときだけ（`snapshot.unreadable` の長さ）。 */
   unreadableCount?: number;
@@ -327,9 +338,28 @@ function storageScene(storage: TopologySnapshot['storage'], nowMs: number) {
   }
 }
 
-function runnerStatus(runners: TopologySnapshot['runners']): SceneStatus {
-  if (runners.length === 0) return 'unknown';
-  return runners.some((runner) => runner.state === 'connected') ? 'ok' : 'offline';
+/**
+ * 生きている器だけを、1台1枠で。**生きている = 名簿で `connected`（繋がっている）か `vacating`
+ * （意図して空けている最中。名乗りは続いている）。** `connecting` / `unreachable` / `unusable` /
+ * `lost` は出さない（まだ開けていない・名乗りが止まった器を「居る」と描かない）。
+ * 同じ runnerId の行は1枠にまとめる（畳まれつつある旧い器と新しい器が並びうる）。
+ */
+export function liveRunnersOf(runners: TopologySnapshot['runners']): SceneRunner[] {
+  const out = new Map<string, SceneRunner>();
+  for (const runner of runners) {
+    if (runner.state !== 'connected' && runner.state !== 'vacating') continue;
+    const id = runner.runnerId ?? `label:${runner.label}`;
+    const name = runner.runnerId ?? runner.label;
+    const before = out.get(id);
+    // 繋がっている行が1つでも在れば、空け中の行より優先する。
+    if (before !== undefined && runner.state !== 'connected') continue;
+    out.set(id, {
+      id,
+      label: runner.state === 'vacating' ? `${name}（空け中）` : name,
+      status: 'ok',
+    });
+  }
+  return [...out.values()];
 }
 
 /**
@@ -354,12 +384,17 @@ function isCollapsible(manager: SceneManager): boolean {
  * （末尾へ置く。デーモンの並びは終端が最後）。個別の内容は札の詳細に1本1行で残す——
  * **畳んで情報を消さない**（id と依頼の抜粋は詳細から読める）。
  */
-export function collapseIdleManagers(managers: readonly SceneManager[]): readonly SceneManager[] {
+export function collapseIdleManagers(
+  managers: readonly SceneManager[],
+  /** 畳む単位の鍵（器ごとに畳むので、札の id を器ごとに分ける） */
+  groupKey?: string,
+): readonly SceneManager[] {
   const idle = managers.filter(isCollapsible);
   if (idle.length <= IDLE_COLLAPSE_THRESHOLD) return managers;
   const rest = managers.filter((manager) => !isCollapsible(manager));
   const group: SceneManager = {
-    id: IDLE_GROUP_ID,
+    id: groupKey === undefined ? IDLE_GROUP_ID : `${IDLE_GROUP_ID}:${groupKey}`,
+    ...(idle[0]?.runner === undefined ? {} : { runner: idle[0].runner }),
     label: `仕事なし ${idle.length} 本`,
     task: '手が空いている。札を押すと一覧',
     status: 'idle',
@@ -387,6 +422,8 @@ export function topologySceneFromSnapshot(
   const links = new Map(snapshot.links.map((link) => [link.key, link]));
   const clone = cloneScene(snapshot.clone, snapshot.managers, snapshot.observedAt, nowMs);
   const storage = storageScene(snapshot.storage, nowMs);
+  const runners = liveRunnersOf(snapshot.runners);
+  const scenes = managerScenes(snapshot, new Set(runners.map((runner) => runner.id)), links, nowMs);
 
   return {
     human: { flow: flowOfLink(links.get('human~clone'), nowMs) },
@@ -396,54 +433,71 @@ export function topologySceneFromSnapshot(
       ...storage,
       flow: flowOfLink(links.get('clone~storage'), nowMs),
     },
-    runner: { status: runnerStatus(snapshot.runners) },
+    runners,
     ...((snapshot.unreadable?.length ?? 0) > 0
       ? { unreadableCount: snapshot.unreadable!.length }
       : {}),
-    managers: collapseIdleManagers(snapshot.managers.map((manager) => ({
-      id: manager.managerId,
-      label: managerLabel(manager.managerId),
-      task: managerTask(manager),
-      status: managerStatus(manager),
-      flow: flowOfLink(links.get(`clone~manager:${manager.managerId}`), nowMs),
-      details: managerDetails(manager, nowMs),
-      workers: manager.workers.map((worker) => {
-        const link = links.get(`manager:${manager.managerId}~worker:${worker.agentType}`);
-        const status = workerStatus(link, manager, nowMs, worker.runningTool);
-        const task = worker.runningTool?.tool ?? worker.lastTool;
-        return {
-          id: `${manager.managerId}:${worker.agentType}`,
-          label: worker.agentType,
-          ...(task === undefined ? {} : { task }),
-          status,
-          flow: flowOfLink(link, nowMs),
-          details: [
-            { label: '種類', value: worker.agentType, mono: true },
-            ...(worker.runningTool === undefined
-              ? []
-              : [
-                  {
-                    label: '実行中の道具',
-                    value: `${worker.runningTool.tool}（${formatRunningFor(worker.runningTool.startedAt, nowMs)}）`,
-                  },
-                ]),
-            ...(status === 'unknown'
-              ? [{ label: '状態の根拠', value: '長い道具の実行中か、終わったかは観測できない' }]
-              : []),
-            ...(worker.lastToolAt === undefined
-              ? []
-              : [
-                  {
-                    label: '最後の道具',
-                    value:
-                      status === 'unknown'
-                        ? `${formatRelative(worker.lastToolAt, nowMs)}（${formatDateTime(worker.lastToolAt, nowMs)}）`
-                        : formatDateTime(worker.lastToolAt, nowMs),
-                  },
-                ]),
-          ],
-        };
-      }),
-    }))),
+    managers: [...runners.map((runner) => runner.id), undefined].flatMap((key) =>
+      collapseIdleManagers(
+        scenes.filter((scene) => scene.runner === key),
+        key ?? 'unknown',
+      ),
+    ),
   };
+}
+
+function managerScenes(
+  snapshot: TopologySnapshot,
+  runnerKeys: ReadonlySet<string>,
+  links: ReadonlyMap<string, Link>,
+  nowMs: number,
+): SceneManager[] {
+  return snapshot.managers.map((manager) => ({
+    id: manager.managerId,
+    ...(manager.runnerId !== undefined && runnerKeys.has(manager.runnerId)
+      ? { runner: manager.runnerId }
+      : {}),
+    label: managerLabel(manager.managerId),
+    task: managerTask(manager),
+    status: managerStatus(manager),
+    flow: flowOfLink(links.get(`clone~manager:${manager.managerId}`), nowMs),
+    details: managerDetails(manager, nowMs),
+    workers: manager.workers.map((worker) => {
+      const link = links.get(`manager:${manager.managerId}~worker:${worker.agentType}`);
+      const status = workerStatus(link, manager, nowMs, worker.runningTool);
+      const task = worker.runningTool?.tool ?? worker.lastTool;
+      return {
+        id: `${manager.managerId}:${worker.agentType}`,
+        label: worker.agentType,
+        ...(task === undefined ? {} : { task }),
+        status,
+        flow: flowOfLink(link, nowMs),
+        details: [
+          { label: '種類', value: worker.agentType, mono: true },
+          ...(worker.runningTool === undefined
+            ? []
+            : [
+                {
+                  label: '実行中の道具',
+                  value: `${worker.runningTool.tool}（${formatRunningFor(worker.runningTool.startedAt, nowMs)}）`,
+                },
+              ]),
+          ...(status === 'unknown'
+            ? [{ label: '状態の根拠', value: '長い道具の実行中か、終わったかは観測できない' }]
+            : []),
+          ...(worker.lastToolAt === undefined
+            ? []
+            : [
+                {
+                  label: '最後の道具',
+                  value:
+                    status === 'unknown'
+                      ? `${formatRelative(worker.lastToolAt, nowMs)}（${formatDateTime(worker.lastToolAt, nowMs)}）`
+                      : formatDateTime(worker.lastToolAt, nowMs),
+                },
+              ]),
+        ],
+      };
+    }),
+  }));
 }
