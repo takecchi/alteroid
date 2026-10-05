@@ -100,10 +100,10 @@ env:
 # 紐付かない経路（直 push・手動起動・定時）を見る」役目は、**既存の2ジョブが
 # そのまま持っているので、別に無条件ジョブを立てる理由が無い。**
 jobs:
-  # **`ci` は、下の検査 job（static / build-checks / typecheck / lint / mutation-selftest / test）を
-  # 束ねる門である。** required のチェック名は `ci`（`.github/required-status-checks.json`）の
+  # **`ci` は、下の検査 job（checks / test）を束ねる門である。** required のチェック名は `ci`（`.github/required-status-checks.json`）の
   # まま変えていない。以前は `ci` 1本の job が全 step を直列に回していた（PR で約17分）。
   # 検査は1つも減らしていない: 元の `ci` の step は、すべて下のどれかの job で走っている。
+  # 検査 job を `checks` 1本にまとめた理由は `checks` の直上の doc（Issue #2966）。
   #
   # **この job は `needs` の全 job が `success` のときだけ success になる。** `if: always()` を
   # 付けているのは、needs の job が失敗・cancelled のとき、既定の挙動（needs が失敗した
@@ -113,7 +113,7 @@ jobs:
   # **`always()` を付けると draft でも走ってしまうので、`if:` の `always()` の後ろへ、元の
   # `ci` の条件（下の doc）をそのまま続けてある。**
   ci:
-    needs: [static, build-checks, typecheck, lint, mutation-selftest, test]
+    needs: [checks, test]
     # **定時の回は回さない。** あの回が訊いているのは「上流が動いて器が焼けなく
     # なっていないか」だけである。ここまで毎晩回すと、別の主張（依存の更新で単体
     # テストが落ちないか）を黙って足すことになる。手動起動では回す。
@@ -165,17 +165,45 @@ jobs:
             exit 1
           fi
 
-  # **build 不要の静的な検査と format。**
-  static:
+  # **検査は1本の `checks` job にまとめてある（Issue #2966）。** 以前は static /
+  # build-checks / typecheck / lint / mutation-selftest の5本に分けていた（#2707）が、
+  # **同時ジョブ上限（GitHub Free は20）の下では、job を分けると準備（setup 約24秒・
+  # `pnpm build` 約40秒）を job の数だけ重複して払うぶん、総 runner 時間と枠を食って
+  # 待ちが増える。** 実測（2026-10-05）: PR の run の壁時計の中央値21分のうち大半が待ち
+  # （空いているときは約6分）。1 PR あたりの runner 時間は中央値27.9分だった。
+  #
+  # **検査は1つも減らしていない。** 元の5本の step は、すべてこの job のどこかで走る。
+  # `pnpm build` は1回だけ払う（`id: build`）。
+  #
+  # **各 step は最後まで走らせ、落ちた検査が1回の run で全部見えるようにしてある**
+  # （分けていたときは、5本が独立に走って全部の結果が出ていた。その性質を保つ）。
+  #
+  # - すべての step に `if: ${{ !cancelled() }}` を付ける。**`success()` が既定なので、
+  #   付けないと前の step の失敗で後ろが skip され、1回の run で1つしか見えなくなる**
+  # - build の生成物を読む step（build-checks・typecheck・lint・selftest）は
+  #   `if: ${{ !cancelled() && steps.build.outcome == 'success' }}`。build が落ちたのに
+  #   生成物の無いまま走らせると、無関係な赤が並んで本当の原因が埋もれる
+  # - **`continue-on-error` は使っていない。** 使うと失敗した step があっても job が
+  #   緑になる。ここは落ちた step が1つでもあれば job が failure になる（`!cancelled()` は
+  #   結果を変えず、走らせるかどうかだけを決める）
+  #
+  # **selftest は最後に置く。** ツリーを意図的に動かす（`packages/core/src/index.ts` に
+  # 足場を足し、`@alteroid/core` を build し直す）ので、戻し損ねても他の検査を巻き込まない
+  # 位置である。**selftest を「ハーネスを触った PR のときだけ」に絞ることはしていない**
+  # （`delivery` / `rebuild-failure` が実物の `packages/core` の barrel・tsup・build に
+  # 依存するため。根拠は Issue #2966 の PR 本文）。
+  checks:
     # `if:` の意図（schedule では回さない・draft の pull_request では回さない・`!=` で
     # 書く理由）は、上の `ci` job の直上の doc がそのまま当てはまる。この job は
-    # 元は `ci` の step だったので、条件を1文字も変えずに引き継いでいる。
+    # 元は5本の job（static / build-checks / typecheck / lint / mutation-selftest）だったが、
+    # どれも元は `ci` の step だったので、条件を1文字も変えずに引き継いでいる。
     if: github.event_name != 'schedule' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup
 
+      # ── 1. build 不要の静的な検査と format（元の `static`）。`pnpm build` より前に置く ──
       # **AGENTS.md のバイト数にラチェットを置く歯（Issue #1192）。** 静的検査
       # （ビルド済み成果物を読まない）なので、`pnpm build` より前に置く——
       # 落ちるなら他の重い検査より先に、速く落ちるべきである。
@@ -185,6 +213,7 @@ jobs:
       # 変えない分担にしてある。verify への組み込みは #1191 が着地した後の
       # 別便にする——いまはこの ci.yml の1行だけが門である。
       - run: pnpm check:agents-md-size
+        if: ${{ !cancelled() }}
 
       # **Dockerfile に Railway で通らない書き方（いまは `RUN --mount`）が無いか
       # （Issue #2685）。** #2678 の `RUN --mount=type=bind` は下の `image`（buildx）では
@@ -194,6 +223,7 @@ jobs:
       # `pnpm check:*` の配線の歯（`scripts/check-scripts-wired.test.ts`）がこの job の形
       # （`run: pnpm check:…`）を前提にしている。以前は `image` の grep 1行だった（#2683）。
       - run: pnpm check:dockerfile-railway
+        if: ${{ !cancelled() }}
 
       # **同梱 SDK から逐語で引いたコメントが、いまの版でも逐語であることを当てる。**
       # 引き写した先はこの repo のソースなので、SDK の版を上げても差分には出ない —— #639
@@ -205,6 +235,7 @@ jobs:
       # script は在り、`scripts/verify-core.mjs` の STEPS にも ci.yml にも無かった）。
       # 在るのに効いていない道具は、静かに失敗する（`AGENTS.md`「静かに失敗する道具」）。
       - run: pnpm check:sdk-quotes
+        if: ${{ !cancelled() }}
 
       # **世代ずれの起こし直しの助言の生成元を1つに保つ歯（Issue #1175）。**
       # `scripts/verify-core.mjs` の STEPS にも在るが、**STEPS だけでは PR の CI で
@@ -220,6 +251,7 @@ jobs:
       # 持たない。⟹ `pnpm test` 経由でも実物の repo には当たらない。**実物へ当たる
       # 経路はこの1行だけである。**
       - run: pnpm check:stale-token-restart-advice
+        if: ${{ !cancelled() }}
 
       # **逆向きの助言（「確かめる前に manager_start で起こし直すな」）の生成元を
       # 1つに保つ歯（Issue #1287）。** 直上の `check:stale-token-restart-advice`
@@ -229,6 +261,7 @@ jobs:
       # だけである**（`scripts/check-restart-before-check-advice.test.ts` は純
       # 関数を合成入力で測るだけで、実物の repo には当たらない）。
       - run: pnpm check:restart-before-check-advice
+        if: ${{ !cancelled() }}
 
       # **#1854 系の直し（子プロセスへ親の env を丸ごと渡さない）が、直す前の形へ
       # 戻っていないことを見る歯（Issue #1935）。** 直しそのものは PR #1903 /
@@ -240,19 +273,16 @@ jobs:
       # （上の2本と同じ理由・同じ配線の形——`scripts/verify-core.mjs` の STEPS
       # だけでは PR の CI で一度も走らない）。
       - run: pnpm check:no-env-passthrough
+        if: ${{ !cancelled() }}
       - run: pnpm format:check
+        if: ${{ !cancelled() }}
 
-  # **build の生成物を読む検査（`apps/web` の生成物・OpenAPI spec）。**
-  build-checks:
-    # `if:` の意図（schedule では回さない・draft の pull_request では回さない・`!=` で
-    # 書く理由）は、上の `ci` job の直上の doc がそのまま当てはまる。この job は
-    # 元は `ci` の step だったので、条件を1文字も変えずに引き継いでいる。
-    if: github.event_name != 'schedule' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: ./.github/actions/setup
+      # ── 2. build（この job で1回だけ払う）。生成物を要る step は、これが成功したときだけ走る ──
       - run: pnpm build
+        id: build
+        if: ${{ !cancelled() }}
+
+      # ── 3. build の生成物を読む検査（元の `build-checks`。`apps/web` の生成物・OpenAPI spec） ──
 
       # **`apps/web` の生成物に Node 専用の痕跡が無いことを見る（結果側の歯）。**
       # `@alteroid/core`（サーバ専用のドメイン層まで丸ごと再エクスポートするバレル）
@@ -268,6 +298,7 @@ jobs:
       # 検査語の選び方・言えないことは `scripts/check-web-bundle-node-traces.mjs` の
       # doc を見よ。
       - run: pnpm check:web-bundle-node-traces
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
 
       # **`apps/web` の生成物のバイト数が閾値を超えていないことを見る（大きさ側の歯）。**
       # 上の歯（node-traces）と `eslint.config.js` の import 制限は、どちらも
@@ -278,6 +309,7 @@ jobs:
       # （https://github.com/takecchi/alteroid/issues/335）が再発すれば必ず捕まえる。
       # 閾値の根拠・言えないことは `scripts/check-web-bundle-size.mjs` の doc を見よ。
       - run: pnpm check:web-bundle-size
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
 
       # **`apps/web` の生成物の CSS に、コメントの誤拾いで生まれた不正な宣言が
       # 入っていないことを見る（もう1つの結果側の歯）。**
@@ -296,6 +328,7 @@ jobs:
       # 静かに失敗する（`AGENTS.md`「静かに失敗する道具」— #646 の
       # `check:sdk-quotes` と同じ形の穴だった）。**
       - run: pnpm check:web-css-comment-classnames
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
 
       # **`apps/web` の生成物の CSS に、フォントの base64 埋め込み（`data:font/`）が
       # 無いことを見る（原因を直接塞ぐ歯）。**
@@ -305,6 +338,7 @@ jobs:
       # `apps/web/vite.config.ts` の `build.assetsInlineLimit` を疑う。
       # 詳細は `scripts/check-web-css-no-inline-fonts-core.mjs` の doc を見よ。
       - run: pnpm check:web-css-no-inline-fonts
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
 
       # **コードと OpenAPI spec がずれたまま気づかない状態を作らない。**
       # spec は経路の zod スキーマから機械生成され、`pnpm build` が毎回書き直す。
@@ -336,73 +370,22 @@ jobs:
       # 計器の側に「この数字が言えないこと」を貼ってあるのは、#129 / #131 と同じ形で
       # ある。**言えないことを書いていない計器は、読む側が言えると思い込む。**
       - name: OpenAPI spec がコードと一致しているか
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: |
           git diff --exit-code -- apps/daemon/openapi.json || {
             echo "::error::apps/daemon/openapi.json が古い。pnpm build して差分をコミットすること" >&2
             exit 1
           }
 
-  typecheck:
-    # `if:` の意図（schedule では回さない・draft の pull_request では回さない・`!=` で
-    # 書く理由）は、上の `ci` job の直上の doc がそのまま当てはまる。この job は
-    # 元は `ci` の step だったので、条件を1文字も変えずに引き継いでいる。
-    if: github.event_name != 'schedule' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: ./.github/actions/setup
-
-      - run: pnpm build
+      # ── 4. 型検査（元の `typecheck`） ──
       - run: pnpm typecheck
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
 
-  lint:
-    # `if:` の意図（schedule では回さない・draft の pull_request では回さない・`!=` で
-    # 書く理由）は、上の `ci` job の直上の doc がそのまま当てはまる。この job は
-    # 元は `ci` の step だったので、条件を1文字も変えずに引き継いでいる。
-    if: github.event_name != 'schedule' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: ./.github/actions/setup
-
-      - run: pnpm build
+      # ── 5. lint（元の `lint`） ──
       - run: pnpm lint
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
 
-  # **`pnpm test` は vitest の `--shard` で 4 つに分ける。**
-  # 分母は `strategy.job-total`（matrix の本数）から取るので、matrix の本数を変えても
-  # 「全シャードを合わせると全テスト」が崩れない。vitest の `--shard=i/n` は i=1..n の
-  # 全部で全ファイルを漏れも重なりも無く割り当てる。`fail-fast: false` は、1つ落ちても
-  # 他のシャードの結果を最後まで見るため（どのテストが落ちたかを1回で全部出す）。
-  # `scripts/test.mjs` の歯（skip・観測用テストの期限など）は各シャードで走る。
-  test:
-    # `if:` の意図（schedule では回さない・draft の pull_request では回さない・`!=` で
-    # 書く理由）は、上の `ci` job の直上の doc がそのまま当てはまる。この job は
-    # 元は `ci` の step だったので、条件を1文字も変えずに引き継いでいる。
-    if: github.event_name != 'schedule' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
-    name: test (${{ matrix.shard }}/${{ strategy.job-total }})
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: [1, 2, 3, 4]
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: ./.github/actions/setup
-
-      - run: pnpm build
-      - run: pnpm test --shard=${{ matrix.shard }}/${{ strategy.job-total }}
-
-  mutation-selftest:
-    # `if:` の意図（schedule では回さない・draft の pull_request では回さない・`!=` で
-    # 書く理由）は、上の `ci` job の直上の doc がそのまま当てはまる。この job は
-    # 元は `ci` の step だったので、条件を1文字も変えずに引き継いでいる。
-    if: github.event_name != 'schedule' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: ./.github/actions/setup
-
-      - run: pnpm build
+      # ── 6. 変異試験ハーネスの自己検査（元の `mutation-selftest`）。ツリーを動かすので最後 ──
       # **変異試験ハーネスの自己検査（#1096）。** 本体の変異試験ではなく、
       # `mutate-selftest.mjs` のシナリオ（ハーネス自身の受け入れ条件と、
       # レビューで見つかった欠陥の回帰確認）だけを回す。
@@ -533,6 +516,33 @@ jobs:
       # **覆る条件:** selftest の赤が「手元で緑、CI で赤」の形で実際に踏まれたら、
       # 見直す。
       - run: node .claude/skills/mutation-testing/mutate.mjs selftest --scenario all
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+
+  # **`pnpm test` は vitest の `--shard` で 2 つに分ける。** 以前は 4 つだったが、
+  # 同時ジョブ上限の下で job 数と重複する準備（setup・`pnpm build`）を減らすために 2 つに
+  # した（Issue #2966。理由は `checks` の直上の doc）。
+  # 分母は `strategy.job-total`（matrix の本数）から取るので、matrix の本数を変えても
+  # 「全シャードを合わせると全テスト」が崩れない。vitest の `--shard=i/n` は i=1..n の
+  # 全部で全ファイルを漏れも重なりも無く割り当てる。`fail-fast: false` は、1つ落ちても
+  # 他のシャードの結果を最後まで見るため（どのテストが落ちたかを1回で全部出す）。
+  # `scripts/test.mjs` の歯（skip・観測用テストの期限など）は各シャードで走る。
+  test:
+    # `if:` の意図（schedule では回さない・draft の pull_request では回さない・`!=` で
+    # 書く理由）は、上の `ci` job の直上の doc がそのまま当てはまる。この job は
+    # 元は `ci` の step だったので、条件を1文字も変えずに引き継いでいる。
+    if: github.event_name != 'schedule' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    name: test (${{ matrix.shard }}/${{ strategy.job-total }})
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup
+
+      - run: pnpm build
+      - run: pnpm test --shard=${{ matrix.shard }}/${{ strategy.job-total }}
 
   # イメージもここで焼く。**マネージャーの道具は版を固定していない**（人間の手元より
   # 古い `gh` を配らないため）ので、上流が変わって壊れたことに気づく場所が要る。

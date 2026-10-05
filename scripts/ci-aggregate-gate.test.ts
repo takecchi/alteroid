@@ -14,7 +14,7 @@ const CI_YML = readFileSync(path.join(ROOT, '.github/workflows/ci.yml'), 'utf8')
 /**
  * **`ci` 門 job の歯（#2707）。**
  *
- * `ci` は、検査の job（static / build-checks / typecheck / lint / mutation-selftest / test）を
+ * `ci` は、検査の job（checks / test。#2966 で static / build-checks / typecheck / lint / mutation-selftest を `checks` 1本にまとめた）を
  * `needs` で束ね、全部が `success` のときだけ success になる門である。required のチェック名は
  * `ci` のまま（`.github/required-status-checks.json`）なので、**この門が緩むと、分けた検査の
  * どれかが落ちても `ci` が緑になる。** 以前は `ci` 1本が全 step を回していたので、step の
@@ -214,5 +214,48 @@ describe('test のシャード分割', () => {
 
   it('fail-fast: false（落ちたシャードだけでなく、全シャードの結果を出す）', () => {
     expect(block).toMatch(/^ {6}fail-fast:\s*false\s*$/m);
+  });
+});
+
+/**
+ * **`checks` job の歯（#2966）。** 5本の job を1本にまとめたあとも、「落ちた検査が1回の run で
+ * 全部見える」「落ちた step があれば job は failure」を保つ。
+ */
+describe('checks job: 各 step を最後まで走らせ、落ちた検査を全部見せる', () => {
+  const block = jobBlock('checks');
+  /** `- ` で始まる step ごとの本文。 */
+  const steps = block
+    .split(/\n {6}- /)
+    .slice(1)
+    .map((s) => s.replace(/^\s+/, ''));
+  const stepsBody = steps.filter((s) => !s.startsWith('uses:'));
+
+  it('前提: checks job が在り、setup 以外の step が複数ある', () => {
+    expect(stepsBody.length).toBeGreaterThan(10);
+  });
+
+  it('pnpm build は1回だけで、id: build を持つ', () => {
+    const builds = steps.filter((s) => /^run: pnpm build\s*$/m.test(s));
+    expect(builds.length).toBe(1);
+    expect(builds[0]).toMatch(/^ {8}id: build\s*$/m);
+  });
+
+  it('checkout と setup 以外の全 step が if: に !cancelled() を持つ（前の失敗で後ろが skip されない）', () => {
+    for (const s of stepsBody) {
+      expect(s, s.split('\n')[0]).toMatch(/^ {8}if: \$\{\{ !cancelled\(\)/m);
+    }
+  });
+
+  it('build の生成物を要る step は steps.build.outcome == success を条件に持つ', () => {
+    for (const { gate, needsBuild } of ORIGINAL_GATES) {
+      if (!needsBuild || gate === 'pnpm test') continue;
+      const s = stepsBody.find((x) => x.includes(gate));
+      expect(s, gate).toBeDefined();
+      expect(s, gate).toContain("steps.build.outcome == 'success'");
+    }
+  });
+
+  it('continue-on-error を使わない（失敗した step を緑に化かさない）', () => {
+    expect(block).not.toMatch(/^\s*continue-on-error:/m);
   });
 });
