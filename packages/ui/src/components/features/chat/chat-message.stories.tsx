@@ -93,3 +93,33 @@ export const Editing: Story = {
     );
   },
 };
+
+/** 鉛筆を押すと編集欄に切り替わる実際の流れ。編集欄は元の吹き出しより小さくならない。 */
+export const EditFlow: Story = {
+  args: { role: 'human', text: '' },
+  render: function Render() {
+    const original =
+      '来週の登壇資料、構成案だけ先に作っておいて。\n背景・設計・運用の3部構成で、各部に図を1枚ずつ入れたい。\n長めの文章でも、編集欄が1〜2行に潰れないことを確かめるための見本。\n4行目。\n5行目。';
+    const [editing, setEditing] = useState(false);
+    const [draft, setDraft] = useState(original);
+    return (
+      <ChatMessage
+        role="human"
+        text={original}
+        onEdit={() => {
+          setDraft(original);
+          setEditing(true);
+        }}
+      >
+        {editing ? (
+          <ChatMessageEditor
+            value={draft}
+            onChange={setDraft}
+            onConfirm={() => setEditing(false)}
+            onCancel={() => setEditing(false)}
+          />
+        ) : undefined}
+      </ChatMessage>
+    );
+  },
+};

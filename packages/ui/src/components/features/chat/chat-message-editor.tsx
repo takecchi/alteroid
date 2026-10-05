@@ -32,12 +32,15 @@ export function ChatMessageEditor({
    * ので、いつでも同じ下書きから開き直せる。
    */
   return (
-    <div className="flex min-w-64 flex-col gap-2">
+    <div className="flex w-full min-w-64 flex-col gap-2">
       <Textarea
         autoFocus
-        rows={2}
+        // 元の吹き出しの高さを下回らない: 行数ぶん（最低2行）で開き、
+        // `field-sizing-content` に対応した描画系では折り返しも含めて本文に
+        // 合わせて伸びる（`Textarea` 既定の `field-sizing-fixed` を上書き）。
+        rows={Math.max(2, value.split('\n').length)}
         value={value}
-        className="text-foreground"
+        className="field-sizing-content max-h-[60vh] w-full text-primary-foreground"
         aria-label="発言を編集する下書き"
         onChange={(event) => onChange(event.target.value)}
         onKeyDown={(event) => {

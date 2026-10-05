@@ -180,3 +180,62 @@ describe('ChatMessageEditor: キー操作', () => {
     expect(onCancel).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('ChatMessage: 範囲選択と編集欄の大きさ（実寸は jsdom で測れないのでクラスで固定）', () => {
+  const classes = (el: Element) => el.className.split(/\s+/);
+
+  it('人間の吹き出しは選択を潰さず、選択色が地（bg-primary）に溶けない', () => {
+    render(<ChatMessage role="human" text="選べる本文" onEdit={() => undefined} />);
+    const bubble = screen.getByText('選べる本文');
+    const all = [bubble, ...Array.from(bubble.closest('li')!.querySelectorAll('*'))];
+    for (const el of all) {
+      expect(classes(el)).not.toContain('select-none');
+      expect(el.className).not.toMatch(/user-select|pointer-events-none/);
+      expect(el.getAttribute('draggable')).toBeNull();
+    }
+    // 既定の `::selection`（主色35%）は bg-primary の上で見えない。反転色で上書きする。
+    expect(classes(bubble)).toEqual(
+      expect.arrayContaining(['bg-primary', 'selection:bg-primary-foreground']),
+    );
+  });
+
+  it('クローンの本文にも選択を潰す指定は無い', () => {
+    render(<ChatMessage role="clone" text="応答" />);
+    const li = screen.getByText('応答').closest('li')!;
+    for (const el of [li, ...Array.from(li.querySelectorAll('*'))]) {
+      expect(classes(el)).not.toContain('select-none');
+    }
+  });
+
+  it('編集中は外側が読む幅の上限まで広がり、吹き出しがそれを埋める', () => {
+    render(
+      <ChatMessage role="human" text="やあ" onEdit={() => undefined}>
+        <span>下書き</span>
+      </ChatMessage>,
+    );
+    const bubble = screen.getByText('下書き').closest('[data-role]')!;
+    expect(classes(bubble)).toContain('flex-1');
+    expect(classes(bubble.parentElement!)).toEqual(
+      expect.arrayContaining(['w-full', 'max-w-[46rem]']),
+    );
+  });
+
+  it('編集欄は幅いっぱい・本文に合わせて伸びる（field-sizing-content、行数ぶんの rows）', () => {
+    const { rerender } = render(
+      <ChatMessageEditor value="1行" onChange={vi.fn()} onConfirm={vi.fn()} onCancel={vi.fn()} />,
+    );
+    const area = screen.getByRole('textbox') as HTMLTextAreaElement;
+    expect(classes(area)).toEqual(expect.arrayContaining(['field-sizing-content', 'w-full']));
+    expect(classes(area)).not.toContain('field-sizing-fixed');
+    expect(area.rows).toBe(2);
+    rerender(
+      <ChatMessageEditor
+        value={'a\nb\nc\nd\ne'}
+        onChange={vi.fn()}
+        onConfirm={vi.fn()}
+        onCancel={vi.fn()}
+      />,
+    );
+    expect(area.rows).toBe(5);
+  });
+});
