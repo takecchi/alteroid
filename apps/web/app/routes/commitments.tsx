@@ -1,6 +1,6 @@
 import { WorkTabs } from '~/components/group-tabs';
 import { AlertTriangle } from 'lucide-react';
-import { Fragment, useEffect, useId, useState } from 'react';
+import { Fragment, useCallback, useEffect, useId, useState } from 'react';
 import { Tabs } from 'radix-ui';
 import { Link, useBlocker } from 'react-router';
 
@@ -44,6 +44,34 @@ import type { Commitment, UnreadableCommitment, UnreadableJob } from '@alteroid/
  */
 export default function Commitments() {
   const [showClosed, setShowClosed] = useState(false);
+  /**
+   * **書きかけの編集欄の id の集合（#2764）。** 行ごとに「本文を編集」を同時に開けるので、
+   * 離れる前の確認（`useBlocker`・beforeunload）は編集欄ごとではなくここに1つだけ置く
+   * （ルーターは同時に1つのブロッカーしか扱わず、最後に登録されたものだけで判定する）。
+   * どれか1つでも書きかけなら止める。
+   */
+  const [dirtyIds, setDirtyIds] = useState<ReadonlySet<string>>(new Set());
+  const setRowDirty = useCallback((id: string, dirty: boolean) => {
+    setDirtyIds((current) => {
+      if (current.has(id) === dirty) return current;
+      const next = new Set(current);
+      if (dirty) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  }, []);
+  const anyDirty = dirtyIds.size > 0;
+  const blocker = useBlocker(anyDirty);
+  useEffect(() => {
+    if (!anyDirty) return;
+    const warn = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      // 古いブラウザは returnValue を入れないと出さない。
+      event.returnValue = '';
+    };
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  }, [anyDirty]);
   const { data, error, isLoading } = useCommitments(showClosed);
 
   // 並びはデーモンが決めている（未了が古い順、片付いたものが新しい順で後ろ）。
@@ -80,6 +108,20 @@ export default function Commitments() {
     >
       <ErrorNote error={error} className="mb-4" />
 
+      <ConfirmDialog
+        open={blocker.state === 'blocked'}
+        onOpenChange={(open) => {
+          if (!open && blocker.state === 'blocked') blocker.reset();
+        }}
+        title="保存していない変更があります"
+        description="このまま離れると、書きかけの内容は失われます。"
+        confirmLabel="破棄して離れる"
+        destructive
+        onConfirm={() => {
+          if (blocker.state === 'blocked') blocker.proceed();
+        }}
+      />
+
       <PushForm />
 
       {isLoading ? (
@@ -101,7 +143,11 @@ export default function Commitments() {
             ) : (
               <ul>
                 {open.map((commitment) => (
-                  <OpenRow key={commitment.id} commitment={commitment} />
+                  <OpenRow
+                    key={commitment.id}
+                    commitment={commitment}
+                    onDirtyChange={setRowDirty}
+                  />
                 ))}
               </ul>
             )}
@@ -919,9 +965,11 @@ const EDITOR_TAB_TRIGGER_ACTIVE_CLASS = 'border-primary text-foreground';
 function CommitmentBodyEditor({
   commitment,
   onCancel,
+  onDirtyChange,
 }: {
   commitment: Commitment;
   onCancel: () => void;
+  onDirtyChange: (id: string, dirty: boolean) => void;
 }) {
   const editCommitment = useEditCommitment();
   const [draft, setDraft] = useState<string | undefined>(undefined);
@@ -933,21 +981,15 @@ function CommitmentBodyEditor({
   const dirty = draft !== undefined && draft !== commitment.body;
 
   /**
-   * **未保存の編集があるまま離れない（#2764 と同じ穴）。** アプリ内の移動（リンク・戻る）は
-   * 確認を挟み、タブを閉じる・再読み込みはブラウザの警告（beforeunload）に任せる。
-   * 保存・やめるで編集が閉じれば、この部品ごと消えるので止めない。
+   * 書きかけかどうかをページへ知らせる（離れる前の確認はページが1つだけ持つ。#2764）。
+   * 編集欄が閉じたら（保存・やめる）書きかけでなくなる。
    */
-  const blocker = useBlocker(dirty);
+  // `onDirtyChange` はページが安定した関数（useCallback）で渡す。
+  const id = commitment.id;
   useEffect(() => {
-    if (!dirty) return;
-    const warn = (event: BeforeUnloadEvent) => {
-      event.preventDefault();
-      // 古いブラウザは returnValue を入れないと出さない。
-      event.returnValue = '';
-    };
-    window.addEventListener('beforeunload', warn);
-    return () => window.removeEventListener('beforeunload', warn);
-  }, [dirty]);
+    onDirtyChange(id, dirty);
+  }, [id, dirty, onDirtyChange]);
+  useEffect(() => () => onDirtyChange(id, false), [id, onDirtyChange]);
 
   function save() {
     if (draft === undefined || draft.trim() === '') return;
@@ -1034,20 +1076,6 @@ function CommitmentBodyEditor({
       </div>
 
       <ErrorNote error={failure} className="mx-2 mb-2" />
-
-      <ConfirmDialog
-        open={blocker.state === 'blocked'}
-        onOpenChange={(open) => {
-          if (!open && blocker.state === 'blocked') blocker.reset();
-        }}
-        title="保存していない変更があります"
-        description="このまま離れると、書きかけの内容は失われます。"
-        confirmLabel="破棄して離れる"
-        destructive
-        onConfirm={() => {
-          if (blocker.state === 'blocked') blocker.proceed();
-        }}
-      />
     </div>
   );
 }
@@ -1060,7 +1088,13 @@ function snippet(body: string): string {
   return flat.length > SNIPPET_MAX ? `${flat.slice(0, SNIPPET_MAX)}…` : flat;
 }
 
-function OpenRow({ commitment }: { commitment: Commitment }) {
+function OpenRow({
+  commitment,
+  onDirtyChange,
+}: {
+  commitment: Commitment;
+  onDirtyChange: (id: string, dirty: boolean) => void;
+}) {
   const closeCommitment = useCloseCommitment();
   const reasonId = useId();
   const [reason, setReason] = useState('');
@@ -1129,7 +1163,11 @@ function OpenRow({ commitment }: { commitment: Commitment }) {
         開いている1件だけにする（`CommitmentBodyEditor` の doc）。
       */}
       {editing ? (
-        <CommitmentBodyEditor commitment={commitment} onCancel={() => setEditing(false)} />
+        <CommitmentBodyEditor
+          commitment={commitment}
+          onCancel={() => setEditing(false)}
+          onDirtyChange={onDirtyChange}
+        />
       ) : (
         <CommitmentBody commitment={commitment} />
       )}

@@ -1377,4 +1377,35 @@ describe('本文の編集: 未保存のまま離れる前に確認する（#2764
     await waitFor(() => expect(router.state.location.pathname).toBe('/elsewhere'));
     expect(screen.queryByRole('alertdialog')).toBeNull();
   });
+
+  it('2行同時に編集を開き、先の行だけ書きかけでも移動は止まる（ブロッカーはページに1つ）', async () => {
+    stubCommitments([
+      commitment({ id: 'a', body: '先の仕事' }),
+      commitment({ id: 'b', body: '後の仕事' }),
+    ]);
+    const router = renderPage();
+    const openers = await screen.findAllByRole('button', { name: '本文を編集' });
+    // 先の行を開いて書きかけにする。
+    fireEvent.click(openers[0]!);
+    fireEvent.mouseDown(await screen.findByRole('tab', { name: '編集' }));
+    fireEvent.change(await screen.findByLabelText('仕事の本文'), {
+      target: { value: '書きかけ' },
+    });
+    // 後の行も開く（こちらは触らない）。
+    fireEvent.click(openers[1]!);
+
+    await waitFor(() =>
+      expect(screen.getAllByRole('button', { name: '編集をやめる' })).toHaveLength(2),
+    );
+
+    await act(async () => {
+      void router.navigate('/elsewhere');
+    });
+
+    expect(await screen.findByRole('alertdialog')).toBeTruthy();
+    expect(router.state.location.pathname).toBe('/');
+    const event = new Event('beforeunload', { cancelable: true });
+    window.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(true);
+  });
 });
