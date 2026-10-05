@@ -215,10 +215,18 @@ export async function daemonStatusCommand(now: number = Date.now()): Promise<voi
   } else {
     stdout.write('停止中\n');
   }
-  // 記憶がどこにあるかは**デーモンに聞く**。クラウド構成では PostgreSQL に
-  // あるので、CLI 側のパスを表示すると人間が器を取り違える。
-  const storage = presence === 'present' ? await daemon.storageOf(info) : null;
-  stdout.write(`  記憶: ${storage ?? alteroidRoot()}\n`);
+  // 記憶がどこにあるかは**デーモンに聞く**（資格が要る `GET /status`。無認証の
+  // `/health` は返さない。#2869）。クラウド構成では PostgreSQL にあるので、CLI 側の
+  // パスを表示すると人間が器を取り違える。**稼働中なのに聞けなかったときは、ローカルの
+  // パスへ落とさず「取得できません」と言う**（落とすと取り違えを起こす）。
+  if (presence === 'present') {
+    const storage = await daemon.storageOf(info);
+    stdout.write(
+      `  記憶: ${storage ?? '取得できません（デーモンが答えない、または資格が通らない）'}\n`,
+    );
+  } else {
+    stdout.write(`  記憶: ${alteroidRoot()}\n`);
+  }
 }
 
 /**
