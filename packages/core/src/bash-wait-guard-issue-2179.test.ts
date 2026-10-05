@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { inspectBashCommand } from './bash-wait-guard-delete-branch.test-support.js';
+import { inspectBashCommand } from './bash-wait-guard.js';
 import { expectNotSuperlinear } from './time-growth.test-support.js';
 
 /**
@@ -13,45 +13,6 @@ import { expectNotSuperlinear } from './time-growth.test-support.js';
  * 誤検知で弾かれるため。#2130）。
  */
 const W = ['gh', 'run', 'watch'].join(' ');
-
-describe('行の継続（\\ + 改行）で折り返した gh pr merge --delete-branch を弾く（#2179 A）', () => {
-  const blocked: ReadonlyArray<[string, string]> = [
-    ['フラグだけを次の行へ', 'gh pr merge 1 \\\n  --delete-branch'],
-    ['-d を次の行へ', 'gh pr merge 1 --squash \\\n  -d'],
-    ['merge を次の行へ', 'gh pr \\\n  merge 1 -d'],
-    ['pr を次の行へ', 'gh \\\n  pr merge 1 -d'],
-    ['前置きの後ろで折り返す', 'timeout 60 \\\n  gh pr merge 1 -d'],
-    ['&& の後ろで2回折り返す', 'cd x && gh pr merge 1 \\\n  --squash \\\n  --delete-branch'],
-    ['CRLF の継続', 'gh pr merge 1 \\\r\n  --delete-branch'],
-    // 行の継続を取り除いた写しだけにかけると、単一引用符のヒアドキュメントの本文の `\` + 改行で
-    // 1つ目の終端が消え、2つ目の終端まで本文として読んで、間の本物のコマンドを消してしまう。
-    // 元の文字列にもかけるので弾く。
-    [
-      'ヒアドキュメントの本文の \\ + 改行（写しだけでは消える形）',
-      "cat > f <<'EOF'\na \\\nEOF\ngh pr merge 1 -d\ncat > g <<'EOF'\nb\nEOF",
-    ],
-  ];
-  for (const [label, command] of blocked) {
-    it(`${label}: 弾く`, () => {
-      const verdict = inspectBashCommand(command);
-      expect(verdict.blocked).toBe(true);
-      if (!verdict.blocked) throw new Error('unreachable');
-      expect(verdict.form).toBe('gh-pr-merge-delete-branch');
-    });
-  }
-
-  const passing: ReadonlyArray<[string, string]> = [
-    ['-d の無い折り返し', 'gh pr merge 1 \\\n  --squash'],
-    ['折り返しの後ろが件名', "gh pr merge 1 --squash \\\n  --subject 'x'"],
-    ['継続ではない改行の後ろの echo', 'gh pr merge 1 --squash\necho --delete-branch'],
-    ['ヒアドキュメントの本文の \\ + 改行（書くだけ）', "cat > f <<'EOF'\na \\\nEOF\necho ok"],
-  ];
-  for (const [label, command] of passing) {
-    it(`${label}: 通す`, () => {
-      expect(inspectBashCommand(command).blocked).toBe(false);
-    });
-  }
-});
 
 describe('{ …; } & と coproc で背景へ置いた run watch を弾く（#2179 B）', () => {
   const blocked: ReadonlyArray<[string, string]> = [
