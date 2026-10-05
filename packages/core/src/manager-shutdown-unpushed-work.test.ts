@@ -250,7 +250,11 @@ describe('台帳の lastUnpushedWorkObservation が、shutdown_unpushed_work（I
         ],
       },
     });
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await vi.waitFor(async () => {
+      expect((await listedOf(pool, 'mgr-counts')).lastUnpushedWorkObservation?.kind).toBe(
+        'observed',
+      );
+    });
 
     const listed = await listedOf(pool, 'mgr-counts');
     expect(listed.lastUnpushedWorkObservation).toMatchObject({

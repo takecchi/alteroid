@@ -15758,6 +15758,22 @@
                                             }
                                           },
                                           "required": ["host", "path"]
+                                        },
+                                        "unpushedCommitCount": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "unpushedCommitCountUnknown": {
+                                          "type": "string"
+                                        },
+                                        "uncommittedChangeCount": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "uncommittedChangeCountUnknown": {
+                                          "type": "string"
                                         }
                                       },
                                       "required": ["relativePath", "branch"]
@@ -16468,6 +16484,22 @@
                                           }
                                         },
                                         "required": ["host", "path"]
+                                      },
+                                      "unpushedCommitCount": {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 9007199254740991
+                                      },
+                                      "unpushedCommitCountUnknown": {
+                                        "type": "string"
+                                      },
+                                      "uncommittedChangeCount": {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 9007199254740991
+                                      },
+                                      "uncommittedChangeCountUnknown": {
+                                        "type": "string"
                                       }
                                     },
                                     "required": ["relativePath", "branch"]
