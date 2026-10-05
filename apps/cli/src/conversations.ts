@@ -30,6 +30,8 @@ export interface ConversationSummary {
   updatedAt: string;
   messages: number;
   preview: string;
+  /** 未読の数（クローン側の発言だけ。無ければ未読なし）。 */
+  unreadCount?: number;
 }
 
 /** 1つの会話の中の1発言（`GET /conversations/:id` の要素）。 */
@@ -131,7 +133,8 @@ export function renderConversationsList(
         `  [${index + 1}] ${conversation.conversationId}` +
           `  作成: ${conversation.startedAt}（${formatElapsedAgo(conversation.startedAt, now)}）` +
           `  更新: ${conversation.updatedAt}（${formatElapsedAgo(conversation.updatedAt, now)}）` +
-          `  (${conversation.messages}件)`,
+          `  (${conversation.messages}件)` +
+          unreadMark(conversation.unreadCount),
       );
       lines.push(`      ${redactBody(conversation.preview)}`);
     });
@@ -160,6 +163,11 @@ export function renderConversationsList(
   }
   lines.push('中身を読むには: alteroid conversations show <id>');
   return lines.join('\n');
+}
+
+/** 未読があるときだけ付ける小さな印。 */
+function unreadMark(unreadCount: number | undefined): string {
+  return unreadCount !== undefined && unreadCount > 0 ? `  未読 ${unreadCount}` : '';
 }
 
 export interface ConversationsShowOptions {
@@ -274,6 +282,59 @@ export function renderConversationDetail(
     );
   }
   return lines.join('\n');
+}
+
+/**
+ * `alteroid conversations read <id>` — 会話を、いちばん新しい発言まで既読にする。
+ *
+ * 既読の位置は全員で1組で、Web の画面と同じものを進める（入口によって未読が違って見えない）。
+ * **進めるのは、いま読み出した最新の発言まで**——読み出した後に届いた発言は未読のまま残る。
+ */
+export async function conversationsReadCommand(id: string): Promise<void> {
+  const client = await connect();
+  if (client === null) return;
+  const detail = await client.conversations[':id'].$get({ param: { id }, query: {} });
+  if (detail.status === 404) {
+    stdout.write(`そんな会話はありません: ${id}\n`);
+    return;
+  }
+  if (!detail.ok) {
+    stdout.write(
+      `${await withErrorReason(
+        `会話を読めませんでした（HTTP ${String(detail.status)}）`,
+        detail,
+      )}\n`,
+    );
+    return;
+  }
+  const { messages } = await detail.json();
+  const latest = messages[messages.length - 1];
+  if (latest === undefined) {
+    stdout.write(
+      '既読にする発言が見つかりませんでした（古すぎて見える範囲の外にあるのかもしれません。' +
+        `alteroid conversations show ${id} --scan で範囲を広げて確かめてください）\n`,
+    );
+    return;
+  }
+  const response = await client.conversations[':id'].read.$post({
+    param: { id },
+    json: { through: latest.id },
+  });
+  if (!response.ok) {
+    stdout.write(
+      `${await withErrorReason(
+        `既読にできませんでした（HTTP ${String(response.status)}）`,
+        response,
+      )}\n`,
+    );
+    return;
+  }
+  const { unreadCount } = await response.json();
+  stdout.write(
+    unreadCount === 0
+      ? `既読にしました: ${id}\n`
+      : `既読にしました: ${id}（まだ未読が ${unreadCount} 件あります）\n`,
+  );
 }
 
 /**

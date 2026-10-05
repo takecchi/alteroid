@@ -15,7 +15,8 @@ vi.mock('./target.js', () => ({
   describeAuthFailure: () => null,
 }));
 
-const { conversationsListCommand, conversationsShowCommand } = await import('./conversations.js');
+const { conversationsListCommand, conversationsReadCommand, conversationsShowCommand } =
+  await import('./conversations.js');
 
 interface Sent {
   url: string;
@@ -294,6 +295,80 @@ describe('alteroid conversations list', () => {
     await conversationsListCommand();
 
     expect(read().endsWith('\n')).toBe(true);
+  });
+});
+
+describe('alteroid conversations list の未読', () => {
+  const row = (conversationId: string, unreadCount: number) => ({
+    conversationId,
+    startedAt: '2026-08-16T10:00:00.000Z',
+    updatedAt: '2026-08-16T10:05:00.000Z',
+    messages: 3,
+    preview: '相談',
+    unreadCount,
+  });
+
+  it('未読がある会話の行にだけ「未読 N」を出す', async () => {
+    const read = captureStdout();
+    replies.push({
+      status: 200,
+      body: {
+        conversations: [row('conv-unread', 2), row('conv-read', 0)],
+        scanned: 5,
+        reachedStart: true,
+        hiddenByLimit: 0,
+      },
+    });
+    await conversationsListCommand();
+    const lines = read().split('\n');
+    expect(lines.find((l) => l.includes('conv-unread'))).toContain('未読 2');
+    expect(lines.find((l) => l.includes('conv-read'))).not.toContain('未読');
+  });
+});
+
+describe('alteroid conversations read', () => {
+  const detail = {
+    conversationId: 'conv-1',
+    messages: [
+      { id: 'm1', at: '2026-08-16T10:00:00.000Z', role: 'inbound', text: '質問' },
+      { id: 'm2', at: '2026-08-16T10:01:00.000Z', role: 'outbound', text: '返答' },
+    ],
+    scanned: 2,
+    reachedStart: true,
+    supersededCount: 0,
+    readThrough: null,
+    unreadCount: 1,
+  };
+
+  it('最新の発言の id を指して既読にする', async () => {
+    const read = captureStdout();
+    replies.push({ status: 200, body: detail });
+    replies.push({
+      status: 200,
+      body: { conversationId: 'conv-1', readThrough: '2026-08-16T10:01:00.000Z', unreadCount: 0 },
+    });
+    await conversationsReadCommand('conv-1');
+    expect(sent.map((s) => `${s.method} ${s.url}`)).toEqual([
+      'GET http://127.0.0.1:4517/conversations/conv-1',
+      'POST http://127.0.0.1:4517/conversations/conv-1/read',
+    ]);
+    expect(read()).toBe('既読にしました: conv-1\n');
+  });
+
+  it('無い会話は、そう言って既読の呼びを打たない', async () => {
+    const read = captureStdout();
+    replies.push({ status: 404, body: { error: 'not found' } });
+    await conversationsReadCommand('nope');
+    expect(sent).toHaveLength(1);
+    expect(read()).toContain('そんな会話はありません');
+  });
+
+  it('見える範囲に発言が無いときは、既読にせず理由を言う', async () => {
+    const read = captureStdout();
+    replies.push({ status: 200, body: { ...detail, messages: [], reachedStart: false } });
+    await conversationsReadCommand('conv-1');
+    expect(sent).toHaveLength(1);
+    expect(read()).toContain('既読にする発言が見つかりませんでした');
   });
 });
 

@@ -15,7 +15,11 @@ import {
   accessRevokeCommand,
 } from './access.js';
 import { chatCommand } from './chat.js';
-import { conversationsListCommand, conversationsShowCommand } from './conversations.js';
+import {
+  conversationsListCommand,
+  conversationsReadCommand,
+  conversationsShowCommand,
+} from './conversations.js';
 import * as daemon from './daemon.js';
 import { droppedCommand } from './dropped.js';
 import { formatElapsedAgo } from './format.js';
@@ -287,6 +291,13 @@ conversationsCommand
   )
   .action(async (id: string, options: { scan?: string; includeSuperseded?: boolean }) => {
     await conversationsShowCommand(id, options);
+  });
+
+conversationsCommand
+  .command('read <id>')
+  .description('会話を、いちばん新しい発言まで既読にする（既読は Web の画面と共通）')
+  .action(async (id: string) => {
+    await conversationsReadCommand(id);
   });
 
 /**
