@@ -107,6 +107,8 @@ describe('マネージャーの一覧＋詳細', () => {
     expect(
       within(detail).getByRole('heading', { level: 2, name: 'マネージャーの詳細' }),
     ).toBeTruthy();
+    // 式の断片が文字として出ていない（コメントの閉じ違いで起きた）。
+    expect(detail.textContent).not.toContain('undefined');
     // 画面の h1 は親の1つだけ。
     expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1);
     // 広い画面ではスマホ用のボタンは出ない。

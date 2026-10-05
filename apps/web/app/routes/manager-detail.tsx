@@ -194,24 +194,24 @@ export default function ManagerDetail({ loaderData }: Route.ComponentProps) {
             残っている `manager !== undefined` は**状態のガードではなく存在の
             ガード**である（読み込み中はまだ何も描けない）。
           */}
-          manager !== undefined ? (
-          <Button
-            variant="danger"
-            size="sm"
-            loading={busy}
-            onClick={() => {
-              setBusy(true);
-              setFailure(undefined);
-              // 本文が要る（サーバ側に json バリデータが付いている）。
-              abortManager(id, '人間が画面から停止した')
-                .then(() => navigate({ pathname: '/managers', search }))
-                .catch(setFailure)
-                .finally(() => setBusy(false));
-            }}
-          >
-            停止する
-          </Button>
-          ) : undefined
+          {manager !== undefined ? (
+            <Button
+              variant="danger"
+              size="sm"
+              loading={busy}
+              onClick={() => {
+                setBusy(true);
+                setFailure(undefined);
+                // 本文が要る（サーバ側に json バリデータが付いている）。
+                abortManager(id, '人間が画面から停止した')
+                  .then(() => navigate({ pathname: '/managers', search }))
+                  .catch(setFailure)
+                  .finally(() => setBusy(false));
+              }}
+            >
+              停止する
+            </Button>
+          ) : undefined}
         </div>
       </header>
 
