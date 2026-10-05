@@ -187,7 +187,9 @@ describe('ChatMessage: 範囲選択と編集欄の大きさ（実寸は jsdom �
   it('人間の吹き出しは選択を潰さず、選択色が地（bg-primary）に溶けない', () => {
     render(<ChatMessage role="human" text="選べる本文" onEdit={() => undefined} />);
     const bubble = screen.getByText('選べる本文');
-    const all = [bubble, ...Array.from(bubble.closest('li')!.querySelectorAll('*'))];
+    // 鉛筆（shadcn の Button は select-none を持つ）は対象外。本文の面とその祖先だけを見る。
+    const all = [bubble, ...Array.from(bubble.querySelectorAll('*'))];
+    for (let up: Element | null = bubble; up !== null; up = up.parentElement) all.push(up);
     for (const el of all) {
       expect(classes(el)).not.toContain('select-none');
       expect(el.className).not.toMatch(/user-select|pointer-events-none/);
