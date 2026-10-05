@@ -280,6 +280,51 @@ describe('renderTopology', () => {
     expect(out.match(/器: 分からない/g)).toHaveLength(2);
   });
 
+  it('居ない旨は runner ごとに言う（runner-a は空・runner-b は居る）。枠で止まっている委譲は居る側', () => {
+    const m = (managerId: string, runnerId: string, extra: Record<string, unknown> = {}) => ({
+      managerId,
+      status: 'done',
+      live: true,
+      runnerId,
+      request: 'x',
+      startedAt: ago(60),
+      updatedAt: ago(5),
+      waiting: [],
+      workers: [],
+      ...extra,
+    });
+    const runners = [
+      { label: 'http://a', runnerId: 'runner-a', state: 'connected', since: ago(9) },
+      { label: 'http://b', runnerId: 'runner-b', state: 'connected', since: ago(9) },
+    ];
+    const none = 'マネージャー: 走っているマネージャーはいません';
+    const lines = (out: string) => out.split('\n');
+
+    // runner-a は空、runner-b は居る
+    const some = renderTopology(view({ runners, managers: [m('m-b', 'runner-b')] }) as never, NOW);
+    const a = lines(some).findIndex((l) => l.includes('runner runner-a'));
+    expect(lines(some)[a + 1]).toContain(none);
+    expect(lines(some)[a + 2]).toContain('runner runner-b');
+    expect(lines(some)[a + 3]).not.toContain(none);
+    expect(some.match(/走っているマネージャーはいません/g)).toHaveLength(1);
+
+    // 全部空なら、それぞれに出る
+    const all = renderTopology(view({ runners, managers: [] }) as never, NOW);
+    expect(
+      all.match(/runner-[ab] \[connected\][^\n]*\n[^\n]*走っているマネージャーはいません/g),
+    ).toHaveLength(2);
+
+    // 枠で止まっている委譲だけの runner は、居ない側に数えない
+    const stopped = renderTopology(
+      view({ runners, managers: [m('m-a', 'runner-a', { usageStoppedAt: ago(120) })] }) as never,
+      NOW,
+    );
+    const idx = lines(stopped).findIndex((l) => l.includes('runner runner-a'));
+    expect(lines(stopped)[idx + 1]).toContain('runner runner-b');
+    expect(lines(stopped)[idx + 2]).toContain(none);
+    expect(stopped.match(/走っているマネージャーはいません/g)).toHaveLength(1);
+  });
+
   it('自由文（依頼・返事待ち）に混じったトークンは伏せる', () => {
     const token = `ghp_${'a1B2c3D4e5'.repeat(4)}`;
     const base = view();

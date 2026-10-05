@@ -145,6 +145,70 @@ describe('読めない委譲の行（#2705）', () => {
     expect(container.textContent).toContain('走っているマネージャーはいません');
   });
 
+  describe('居ない旨は器（runner）の枠ごと', () => {
+    const NONE = '走っているマネージャーはいません';
+    const two = {
+      ...idleScene,
+      runners: [
+        { id: 'r1', label: 'runner-primary', status: 'ok' as const },
+        { id: 'r2', label: 'runner-2', status: 'ok' as const },
+      ],
+    };
+    const mgr = (status: 'running' | 'waiting', runner: string) => ({
+      id: `m-${runner}`,
+      runner,
+      label: `mgr-${runner}`,
+      status,
+    });
+    const frame = (c: HTMLElement, key: string) =>
+      c.querySelector(`[data-container="runner:${key}"]`)!;
+    // 枠の中の案内かどうかは、案内の箱が枠の矩形に収まるかで測る
+    const noteInside = (c: HTMLElement, key: string) => {
+      const rect = frame(c, key).querySelector('rect')!;
+      const [x, y, w, h] = ['x', 'y', 'width', 'height'].map((a) => Number(rect.getAttribute(a)));
+      return [...c.querySelectorAll('foreignObject')].filter((fo) => {
+        const fx = Number(fo.getAttribute('x'));
+        const fy = Number(fo.getAttribute('y'));
+        return fo.textContent === NONE && fx >= x! && fy >= y! && fy <= y! + h! && fx <= x! + w!;
+      }).length;
+    };
+
+    it.each([1000, 360])(
+      'primary が空で runner-2 に居る（%ipx）: 案内は primary の枠にだけ',
+      (w) => {
+        stubFrameWidth(w);
+        const { container } = render(<SystemTopology {...two} managers={[mgr('running', 'r2')]} />);
+        expect(noteInside(container, 'r1')).toBe(1);
+        expect(noteInside(container, 'r2')).toBe(0);
+        expect(container.textContent!.split(NONE)).toHaveLength(2);
+        expect(frame(container, 'r2').textContent).toContain('runner-2');
+      },
+    );
+
+    it('全部の器で居なければ、器ごとに1つずつ出る', () => {
+      stubFrameWidth(1000);
+      const { container } = render(<SystemTopology {...two} managers={[]} />);
+      expect(noteInside(container, 'r1')).toBe(1);
+      expect(noteInside(container, 'r2')).toBe(1);
+      expect(container.textContent!.split(NONE)).toHaveLength(3);
+    });
+
+    it('枠で止まっている札だけの器には出さない（止まっている札を図に出す側）', () => {
+      stubFrameWidth(1000);
+      const { container } = render(<SystemTopology {...two} managers={[mgr('waiting', 'r1')]} />);
+      expect(noteInside(container, 'r1')).toBe(0);
+      expect(noteInside(container, 'r2')).toBe(1);
+      expect(container.textContent).toContain('止まっている');
+    });
+
+    it('読めない行が在れば、空の器ごとに「居ないとは限らない」と言い、居ないと言い切らない', () => {
+      stubFrameWidth(1000);
+      const { container } = render(<SystemTopology {...two} managers={[]} unreadableCount={2} />);
+      expect(container.textContent).not.toContain(NONE);
+      expect(container.textContent!.split('居ないとは限らない')).toHaveLength(3);
+    });
+  });
+
   it('器が0台なら大枠を出さず「稼働中の器はありません」', () => {
     stubFrameWidth(1000);
     const { container } = render(<SystemTopology {...idleScene} runners={[]} />);

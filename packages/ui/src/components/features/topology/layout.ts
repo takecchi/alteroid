@@ -154,6 +154,12 @@ export interface LaidContainer {
   state: ContainerState;
   /** 器の名前を左上・右上のどちらへ置くか。狭い配置では左の縁を線が下りるので右へ寄せる */
   labelAlign: 'start' | 'end';
+  /**
+   * この器にマネージャーが1本も居ないときの案内の枠（枠の中に置く）。**器ごとに持つ**
+   * （図全体で1つではない。ある器が空でも、別の器に居れば居る側は札を出す）。
+   * 枠で止まっている札（`waiting`）も `scene.managers` に居るので、居ない側には数えない。
+   */
+  empty?: Box;
 }
 
 export interface TopologyLayout {
@@ -162,7 +168,7 @@ export interface TopologyLayout {
   nodes: LaidNode[];
   edges: LaidEdge[];
   containers: LaidContainer[];
-  /** マネージャーが1本も無いときの案内の枠（枠が在れば、その下に置く） */
+  /** 器（runner）が0台のときの案内の枠。器が在れば案内は各器の枠の中（`LaidContainer.empty`） */
   empty?: Box;
 }
 
@@ -333,8 +339,8 @@ export function layoutWide(scene: TopologyScene): TopologyLayout {
   const rows = scene.managers.map((m) => Math.max(1, m.workers?.length ?? 0));
   const groups = groupManagers(scene);
   const GROUP_GAP = 12;
-  /** 空の枠（マネージャーが居ない器）の中身の高さ。名前の行だけ。 */
-  const EMPTY_BODY = 8;
+  /** 空の枠（マネージャーが居ない器）の中身の高さ。案内の枠（`NODE_H`）と余白。 */
+  const EMPTY_BODY = NODE_H + 8;
 
   // 器ごとの枠を縦に積む。枠の上端は名前の行（HEAD + 4）の分だけ行の開始より上。
   let stackY = TOP;
@@ -347,16 +353,18 @@ export function layoutWide(scene: TopologyScene): TopologyLayout {
       h: HEAD + 4 + (g.members.length === 0 ? EMPTY_BODY : bodyH),
     };
     const rowTop = stackY;
+    const empty: Box | undefined =
+      g.members.length === 0
+        ? { x: COL.manager, y: rowTop, w: COL.worker + W - COL.manager, h: NODE_H }
+        : undefined;
     stackY = box.y + box.h + GROUP_GAP + HEAD + 4;
-    return { group: g, box, rowTop };
+    return { group: g, box, rowTop, empty };
   });
   const stackBottom =
     laidGroups.length === 0 ? TOP : laidGroups.at(-1)!.box.y + laidGroups.at(-1)!.box.h;
   const empty: Box | undefined =
-    scene.managers.length === 0
-      ? laidGroups.length === 0
-        ? { x: COL.manager, y: TOP + ROW_H, w: COL.worker + W - COL.manager, h: NODE_H }
-        : { x: COL.manager, y: stackBottom + GROUP_GAP, w: COL.worker + W - COL.manager, h: NODE_H }
+    laidGroups.length === 0
+      ? { x: COL.manager, y: TOP + ROW_H, w: COL.worker + W - COL.manager, h: NODE_H }
       : undefined;
   const contentH = Math.max(3 * ROW_H, stackBottom - TOP);
   const height = Math.max(TOP + contentH, empty ? empty.y + empty.h : 0) + PAD + 8;
@@ -485,12 +493,13 @@ export function layoutWide(scene: TopologyScene): TopologyLayout {
         state: 'ok',
         labelAlign: 'start',
       },
-      ...laidGroups.map(({ group, box }): LaidContainer => ({
+      ...laidGroups.map(({ group, box, empty: groupEmpty }): LaidContainer => ({
         key: `runner:${group.key}`,
         box,
         label: group.label,
         state: group.state,
         labelAlign: 'start',
+        empty: groupEmpty,
       })),
     ],
     empty,
@@ -541,20 +550,23 @@ export function layoutNarrow(scene: TopologyScene): TopologyLayout {
       });
       managerBoxes[i] = { box, workerBoxes };
     }
-    if (g.members.length === 0) rowY += 8;
+    let groupEmpty: Box | undefined;
+    if (g.members.length === 0) {
+      groupEmpty = { x: 16, y: rowY, w: 328, h: NODE_H };
+      rowY += NODE_H + 8;
+    }
     runnerContainers.push({
       key: `runner:${g.key}`,
       box: { x: 8, y: top, w: 344, h: rowY - top },
       label: g.label,
       state: g.state,
       labelAlign: 'end',
+      empty: groupEmpty,
     });
     rowY += GAP / 2;
   }
   const emptyBox: Box | undefined =
-    scene.managers.length === 0
-      ? { x: 16, y: groups.length === 0 ? rowY + HEAD : rowY, w: 328, h: NODE_H }
-      : undefined;
+    groups.length === 0 ? { x: 16, y: rowY + HEAD, w: 328, h: NODE_H } : undefined;
   const height = Math.max(rowY - GAP / 2, emptyBox ? emptyBox.y + emptyBox.h : 0) + 8;
 
   const nodes: LaidNode[] = [];

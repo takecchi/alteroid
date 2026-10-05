@@ -244,10 +244,47 @@ describe('器ごとの枠', () => {
       const none = layout({ ...two, runners: [], managers: [] });
       expect(none.containers.map((c) => c.key).filter((k) => k.startsWith('runner'))).toEqual([]);
       expect(none.empty).toBeDefined();
+      // 器が在れば案内は図全体で1つではなく、空の器の枠ごとに、その枠の中へ置く
       const idle = layout({ ...two, managers: [] });
-      expect(idle.containers.filter((c) => c.key.startsWith('runner:'))).toHaveLength(2);
-      expect(idle.empty).toBeDefined();
-      expect(idle.height).toBeGreaterThanOrEqual(idle.empty!.y + idle.empty!.h);
+      const runnerBoxes = idle.containers.filter((c) => c.key.startsWith('runner:'));
+      expect(runnerBoxes).toHaveLength(2);
+      expect(idle.empty).toBeUndefined();
+      for (const c of runnerBoxes) {
+        expect(c.empty).toBeDefined();
+        expect(inside(c.box, c.empty!)).toBe(true);
+      }
+      expect(idle.height).toBeGreaterThanOrEqual(
+        Math.max(...runnerBoxes.map((c) => c.box.y + c.box.h)),
+      );
+    },
+  );
+
+  it.each([
+    ['wide', layoutWide],
+    ['narrow', layoutNarrow],
+  ] as const)(
+    '%s: 案内の枠は居ない器にだけ付く（r1 空・r2 に居る）。止まっている札だけの器は空に数えない',
+    (_n, layout) => {
+      const mgr = (id: string, runner: string, status: 'running' | 'waiting') => ({
+        id,
+        runner,
+        label: id,
+        status,
+      });
+      const emptyOf = (l: ReturnType<typeof layout>, key: string) =>
+        l.containers.find((c) => c.key === `runner:${key}`)!.empty;
+
+      const half = layout({ ...two, managers: [mgr('a', 'r2', 'running')] });
+      expect(emptyOf(half, 'r1')).toBeDefined();
+      expect(emptyOf(half, 'r2')).toBeUndefined();
+
+      const stopped = layout({ ...two, managers: [mgr('a', 'r1', 'waiting')] });
+      expect(emptyOf(stopped, 'r1')).toBeUndefined();
+      expect(emptyOf(stopped, 'r2')).toBeDefined();
+
+      const all = layout({ ...two, managers: [] });
+      expect(emptyOf(all, 'r1')).toBeDefined();
+      expect(emptyOf(all, 'r2')).toBeDefined();
     },
   );
 });

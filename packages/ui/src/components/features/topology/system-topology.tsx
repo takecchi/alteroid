@@ -128,6 +128,7 @@ export function SystemTopology({ layout = 'auto', className, ...rawScene }: Syst
       ? frameWidth < WIDE_MIN_WIDTH
       : layout === 'narrow' || sheet;
   const laid = narrow ? layoutNarrow(scene) : layoutWide(scene);
+  const unreadable = rawScene.unreadableCount ?? 0;
 
   const [hovered, setHovered] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
@@ -174,22 +175,13 @@ export function SystemTopology({ layout = 'auto', className, ...rawScene }: Syst
             />
           ))}
 
-          {laid.empty ? (
-            <foreignObject
-              x={laid.empty.x}
-              y={laid.empty.y}
-              width={laid.empty.w}
-              height={laid.empty.h}
-            >
-              <div className="flex h-full items-center justify-center rounded-md border border-dashed px-2 text-center text-xs text-muted-foreground">
-                {(rawScene.unreadableCount ?? 0) > 0
-                  ? `読めたマネージャーはいません（読めない行が ${rawScene.unreadableCount} 件ある。居ないとは限らない）`
-                  : rawScene.runners.length === 0
-                    ? '稼働中の器（runner）はありません'
-                    : '走っているマネージャーはいません'}
-              </div>
-            </foreignObject>
-          ) : null}
+          {/* 案内は器（runner）の枠ごと。居ない器にだけ出し、居る器には札が出る */}
+          {laid.containers.map((c) =>
+            c.empty ? (
+              <EmptyNote key={`empty-${c.key}`} box={c.empty} text={emptyText(false, unreadable)} />
+            ) : null,
+          )}
+          {laid.empty ? <EmptyNote box={laid.empty} text={emptyText(true, unreadable)} /> : null}
         </svg>
         <figcaption id={summaryId} className="sr-only">
           {summarize(scene)}
@@ -249,6 +241,23 @@ function redactScene(scene: TopologyScene, body: (text: string) => string): Topo
       })),
     })),
   };
+}
+
+/** 居ない旨の案内。読めない行が在れば、居ないと言い切らない。器が0台のときは器が無い旨。 */
+function emptyText(noRunners: boolean, unreadable: number): string {
+  if (unreadable > 0)
+    return `読めたマネージャーはいません（読めない行が ${unreadable} 件ある。居ないとは限らない）`;
+  return noRunners ? '稼働中の器（runner）はありません' : '走っているマネージャーはいません';
+}
+
+function EmptyNote({ box, text }: { box: LaidContainer['box']; text: string }) {
+  return (
+    <foreignObject x={box.x} y={box.y} width={box.w} height={box.h}>
+      <div className="flex h-full items-center justify-center rounded-md border border-dashed px-2 text-center text-xs text-muted-foreground">
+        {text}
+      </div>
+    </foreignObject>
+  );
 }
 
 function summarize({ clone, db, runners, managers }: TopologyScene): string {

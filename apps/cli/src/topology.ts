@@ -140,6 +140,16 @@ export function renderTopology(view: TopologyView, now: number = Date.now()): st
       lines.push(
         `  ├ runner ${runner.runnerId ?? runner.label} [${runner.state}] ${formatAge(runner.since, now)}からこの状態`,
       );
+      // 図（Web の稼働の地図）と同じく、居ない旨は runner ごとに言う（全体で1つではない）。
+      // 枠(利用上限)で止まっている委譲も `view.managers` に居るので、居ない側には数えない。
+      // runnerId が無い器は委譲と突き合わせられない・死んだ器（図に枠が出ない）は言わない。
+      if (
+        runner.runnerId !== undefined &&
+        (runner.state === 'connected' || runner.state === 'vacating') &&
+        !view.managers.some((manager) => manager.runnerId === runner.runnerId)
+      ) {
+        lines.push('  │   └ マネージャー: 走っているマネージャーはいません');
+      }
     }
   }
 
