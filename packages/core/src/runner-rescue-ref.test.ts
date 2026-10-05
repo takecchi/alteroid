@@ -129,7 +129,9 @@ describe('走行中の退避 ref の配線（Issue #1266）', () => {
     expect(tree?.untracked?.paths).toEqual(['scratch.txt']);
     expect(g(bare, 'show', `${tree?.pushed?.ref as string}:a.txt`)).toBe('edited\n');
 
-    // 何も変わらない周期は黙る。
+    // 何も変わらない周期は黙る。周期は本物の git の子プロセスを起こすので偽の時計では回せず、
+    // ここだけ実時間で待つ（scripts/wallclock-waits-baseline.json に1件として載せてある。#2146）。
+    // 器が混んで周期が回りきらなくても、落ちる側ではなく「確かめが弱まる」側に倒れる。
     await new Promise((resolve) => setTimeout(resolve, 300));
     expect(rescueEvents(events)).toHaveLength(1);
 

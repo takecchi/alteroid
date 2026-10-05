@@ -187,7 +187,9 @@ describe('台帳の lastRescue（Issue #1266）', () => {
         untracked: { count: 2, paths: ['a.txt', 'b.txt'], omitted: 0 },
       },
     ]);
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await vi.waitFor(async () => {
+      expect((await listedOf(pool, 'mgr-rescue')).lastRescue?.worktrees).toHaveLength(1);
+    });
 
     const listed = await listedOf(pool, 'mgr-rescue');
     expect(listed.status).toBe('running');
@@ -218,7 +220,10 @@ describe('台帳の lastRescue（Issue #1266）', () => {
         notPushed: { reason: 'secret-like', files: ['x.env'] },
       },
     ]);
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await vi.waitFor(async () => {
+      const worktrees = (await listedOf(pool, 'mgr-keep')).lastRescue?.worktrees ?? [];
+      expect(worktrees.find((w) => w.relativePath === '.')?.at).toBe(AT2);
+    });
 
     const listed = await listedOf(pool, 'mgr-keep');
     const byPath = new Map(listed.lastRescue?.worktrees.map((w) => [w.relativePath, w]));
@@ -238,7 +243,11 @@ describe('台帳の lastRescue（Issue #1266）', () => {
     };
     fake.rescueRef('mgr-journal-dup', [tree]);
     fake.rescueRef('mgr-journal-dup', [{ ...tree, at: AT2 }]);
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    // 2回目（運び直し）が台帳へ届いたのを見てから日誌を数える（実時間で待たない。#2146）。
+    await vi.waitFor(async () => {
+      const worktrees = (await listedOf(pool, 'mgr-journal-dup')).lastRescue?.worktrees ?? [];
+      expect(worktrees[0]?.at).toBe(AT2);
+    });
     const entries = await stores.journal.list({ types: ['decision'] });
     expect(entries.filter((e) => JSON.stringify(e).includes('鍵らしい文字列'))).toHaveLength(1);
     await pool.stop();
@@ -254,7 +263,10 @@ describe('台帳の lastRescue（Issue #1266）', () => {
         notPushed: { reason: 'secret-like', files: ['config/prod.env'] },
       },
     ]);
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await vi.waitFor(async () => {
+      const found = await stores.journal.list({ types: ['decision'] });
+      expect(JSON.stringify(found)).toContain('鍵らしい文字列');
+    });
     const entries = await stores.journal.list({ types: ['decision'] });
     expect(JSON.stringify(entries)).toContain('鍵らしい文字列');
     expect(JSON.stringify(entries)).toContain('config/prod.env');
