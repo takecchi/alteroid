@@ -335,6 +335,94 @@ describe('alteroid practice edit の前提版（ifMatch）', () => {
   });
 });
 
+describe('alteroid practice show の版と remove --if-match（#2984）', () => {
+  it('show は版を stderr に1行出し、stdout は本文だけのまま（パイプを壊さない）', async () => {
+    const read = captureStdout();
+    const err = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    replies.push({
+      status: 200,
+      body: { ...(practiceBody() as object), version: 'v-shown' },
+    });
+
+    await practiceShowCommand('review');
+
+    expect(read()).toBe('# レビュー\n\n差分より先に Issue を読む。\n');
+    const errText = err.mock.calls.map((c) => String(c[0])).join('');
+    expect(errText).toContain('v-shown');
+    expect(errText).toContain('alteroid practice remove review --if-match v-shown');
+    expect(errText.trimEnd().split('\n')).toHaveLength(1);
+  });
+
+  it('古いデーモンが version を返さなければ、stderr に何も出さない', async () => {
+    captureStdout();
+    const err = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    replies.push({ status: 200, body: practiceBody() });
+
+    await practiceShowCommand('review');
+
+    expect(err).not.toHaveBeenCalled();
+  });
+
+  it('show --version（過去の版の本文）は stderr に版を出さない', async () => {
+    captureStdout();
+    const err = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    replies.push({ status: 200, body: { version: { version: 1, content: '古い\n' } } });
+
+    await practiceShowCommand('review', { version: 1 });
+
+    expect(err).not.toHaveBeenCalled();
+  });
+
+  it('remove --if-match <版> は、その版で DELETE を打つ（事前の GET をしない）', async () => {
+    const read = captureStdout();
+    replies.push({ status: 200, body: { ok: true, slug: 'review' } });
+
+    await practiceRemoveCommand('review', { ifMatch: 'v-shown' });
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.method).toBe('DELETE');
+    expect(sent[0]?.url).toBe('http://127.0.0.1:4517/practices/review?ifMatch=v-shown');
+    expect(read()).toContain('消しました: review');
+  });
+
+  it('show で読んだ後に別の書き手が書いたなら、remove --if-match <show の版> は消さずに失敗する（再現）', async () => {
+    const read = captureStdout();
+    replies.push({
+      status: 409,
+      body: {
+        error: 'x',
+        current: {
+          practice: { slug: 'review', kind: 'レビュー', title: '題', content: '新' },
+          version: 'v-now',
+        },
+      },
+    });
+
+    const error = await practiceRemoveCommand('review', { ifMatch: 'v-shown' }).catch(
+      (e: unknown) => e,
+    );
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.url).toBe('http://127.0.0.1:4517/practices/review?ifMatch=v-shown');
+    expect(error).toBeInstanceOf(Error);
+    expect(String(error)).toContain('消しませんでした');
+    expect(read()).toContain('消していません: review');
+  });
+
+  it('428 の案内は --if-match の使い方を含む', async () => {
+    captureStdout();
+    replies.push({ status: 200, body: { practice: { slug: 'review' } } });
+    replies.push({
+      status: 428,
+      body: { error: '消すやり方の版（ifMatch）が無いので、消していません', current: null },
+    });
+
+    const error = await practiceRemoveCommand('review').catch((e: unknown) => e);
+
+    expect(String(error)).toContain('alteroid practice remove review --if-match <版>');
+  });
+});
+
 describe('alteroid practice remove', () => {
   const practiceBody = (version?: string) => ({
     practice: { slug: 'review', kind: 'レビュー', title: '題', content: '本文\n' },
