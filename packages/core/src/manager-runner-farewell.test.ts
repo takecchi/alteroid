@@ -8,7 +8,7 @@ import type {
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createManagerPool, type ManagerPool } from './manager.js';
 import { createRunnerHost, type RunnerHost } from './runner.js';
@@ -92,14 +92,20 @@ interface HostBackedRunner {
 }
 
 let hosts: RunnerHost[] = [];
+/** 失敗した回でも、止めた観測を解いて後始末（host.shutdown）が詰まらないようにする。 */
+let releaseGateForCleanup: () => void = () => undefined;
 afterEach(async () => {
+  vi.useRealTimers();
+  releaseGateForCleanup();
+  releaseGateForCleanup = () => undefined;
   await Promise.all(hosts.map((host) => host.shutdown().catch(() => undefined)));
   hosts = [];
 });
 
 function hostBackedRunner(options: {
   runnerId: string;
-  unpushedDelayMs: number;
+  /** 畳みの最後の観測を出してよい合図。解くまで `finishUnpushedWorkFn` は返らない。 */
+  unpushedGate: Promise<void>;
   /** false なら `awaitStreamEnd` を持たない client（ストリームを持たない実装）。 */
   withAwaitStreamEnd?: boolean;
 }): HostBackedRunner & { sessions: { postToolUse(input: unknown): Promise<unknown> }[] } {
@@ -124,9 +130,9 @@ function hostBackedRunner(options: {
     queryFn: fn,
     env: { PATH: '/usr/bin' },
     readCgroupEventCountersFn: async () => ({}),
-    // 畳みの最後に出る観測を、デーモンが先に終わりうるほど遅らせる。
+    // 畳みの最後に出る観測を、テストが解くまで止める（デーモンが先に終わりうる形）。
     finishUnpushedWorkFn: async () => {
-      await new Promise((resolve) => setTimeout(resolve, options.unpushedDelayMs));
+      await options.unpushedGate;
       return { cwd: '/work/project', worktrees: [{ relativePath: '.', branch: 'feat/farewell' }] };
     },
   });
@@ -210,7 +216,8 @@ interface Setup {
 
 async function setup(options: {
   managerId: string;
-  unpushedDelayMs?: number;
+  /** 渡すと、解くまで畳みの最後の観測が出ない。省略すると即座に出る。 */
+  unpushedGate?: Promise<void>;
   withAwaitStreamEnd?: boolean;
 }): Promise<Setup> {
   const job: Job = {
@@ -229,7 +236,7 @@ async function setup(options: {
 
   const fake = hostBackedRunner({
     runnerId: 'runner-primary',
-    unpushedDelayMs: options.unpushedDelayMs ?? 150,
+    unpushedGate: options.unpushedGate ?? Promise.resolve(),
     ...(options.withAwaitStreamEnd === undefined
       ? {}
       : { withAwaitStreamEnd: options.withAwaitStreamEnd }),
@@ -262,15 +269,28 @@ async function ledgerOf(stores: Stores, managerId: string): Promise<Job> {
   return job;
 }
 
-const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+/** 待っている側が進めるだけ進む（時間は進めない）。`setImmediate` は偽の時計の対象外。 */
+const flush = async (): Promise<void> => {
+  for (let i = 0; i < 10; i += 1) await new Promise((resolve) => setImmediate(resolve));
+};
+
+beforeEach(() => {
+  // 実時間で待たない。締切（`settledWithin` の setTimeout と `Date.now()`）だけを偽の時計にする。
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+});
 
 describe('畳み始めた runner の最後の出来事を、デーモンの stop が待って受け取る（Issue #2749）', () => {
   it('(a) 名乗った runner を待つ: 遅れて出る archive と shutdown_unpushed_work が、stop() の返る時点で台帳に書かれている', async () => {
-    const { pool, stores, fake } = await setup({ managerId: 'mgr-a', unpushedDelayMs: 150 });
+    let releaseUnpushed!: () => void;
+    const unpushedGate = new Promise<void>((resolve) => {
+      releaseUnpushed = resolve;
+    });
+    const { pool, stores, fake } = await setup({ managerId: 'mgr-a', unpushedGate });
+    releaseGateForCleanup = releaseUnpushed;
     const archivedBefore = (await stores.archive.list()).length;
 
     // runner が畳み始める: `shutting_down` は即座に、`archive` / `shutdown_unpushed_work` は
-    // 遅れて（`unpushedDelayMs` のあと）出る。SSE が閉じるのは、それらを出し終えたあと。
+    // 遅れて（`releaseUnpushed()` のあと）出る。SSE が閉じるのは、それらを出し終えたあと。
     const runnerShutdown = fake.host.shutdown();
     let stopped = false;
     const stopping = pool
@@ -278,13 +298,14 @@ describe('畳み始めた runner の最後の出来事を、デーモンの stop
       .then(() => (stopped = true));
 
     // 畳みの最後の出来事がまだ出ていない間、stop は待っている（先に返らない）。
-    await sleep(60);
+    await flush();
     expect(stopped).toBe(false);
     expect((await ledgerOf(stores, 'mgr-a')).lastUnpushedWorkObservation).toBeUndefined();
 
+    releaseUnpushed();
     await runnerShutdown;
     // runner が出し切って exit する（SSE が閉じる）。
-    await sleep(20);
+    await flush();
     fake.exit();
     await stopping;
 
@@ -301,19 +322,27 @@ describe('畳み始めた runner の最後の出来事を、デーモンの stop
   });
 
   it('(b) 名乗ったが閉じない runner は、上限で諦めて閉じる側に倒れる。受け取れなかったものを1行残す', async () => {
-    const { pool, stores, fake } = await setup({ managerId: 'mgr-b', unpushedDelayMs: 0 });
+    const { pool, stores, fake } = await setup({ managerId: 'mgr-b' });
 
     void fake.host.shutdown(); // `shutting_down` を名乗る。`exit()` は呼ばない（閉じない）。
-    await sleep(10);
+    await flush();
 
-    const startedAt = Date.now();
+    const deadlineAt = Date.now() + 200;
+    let stopped = false;
+    let stopping!: Promise<void>;
     const lines = await captureStderr(async () => {
-      await pool.stop({ farewellDeadlineAt: startedAt + 200 });
+      stopping = pool.stop({ farewellDeadlineAt: deadlineAt }).then(() => {
+        stopped = true;
+      });
+      // 締切の直前までは返らない。
+      await vi.advanceTimersByTimeAsync(199);
+      await flush();
+      expect(stopped).toBe(false);
+      // 締切で返る。
+      await vi.advanceTimersByTimeAsync(1);
+      await stopping;
     });
-    const elapsed = Date.now() - startedAt;
-
-    expect(elapsed).toBeGreaterThanOrEqual(150);
-    expect(elapsed).toBeLessThan(2_000);
+    expect(stopped).toBe(true);
     const gaveUp = lines.filter(
       (line) => line.includes('runner-primary') && line.includes('stream-open'),
     );
@@ -326,13 +355,11 @@ describe('畳み始めた runner の最後の出来事を、デーモンの stop
   it('(c) 名乗らない runner は待たない: stop が即座に返り、awaitStreamEnd も呼ばない', async () => {
     const { pool, fake } = await setup({ managerId: 'mgr-c' });
 
-    const startedAt = Date.now();
     const lines = await captureStderr(async () => {
-      // 締切は十分に遠い。待つなら、ここで長くかかるはず。
-      await pool.stop({ farewellDeadlineAt: startedAt + 30_000 });
+      // 締切は遠い。時計は進めない——待つなら、ここで返らずテストが時間切れになる。
+      await pool.stop({ farewellDeadlineAt: Date.now() + 30_000 });
     });
 
-    expect(Date.now() - startedAt).toBeLessThan(1_000);
     expect(fake.awaitStreamEndCalls).toBe(0);
     expect(lines.filter((line) => line.includes('stream-open'))).toEqual([]);
   });
@@ -340,24 +367,23 @@ describe('畳み始めた runner の最後の出来事を、デーモンの stop
   it('(c2) 名乗ったが、ストリームを持たない client（awaitStreamEnd が無い）も待たない', async () => {
     const { pool, fake } = await setup({ managerId: 'mgr-c2', withAwaitStreamEnd: false });
     void fake.host.shutdown();
-    await sleep(10);
+    await flush();
 
-    const startedAt = Date.now();
-    await pool.stop({ farewellDeadlineAt: startedAt + 30_000 });
-    expect(Date.now() - startedAt).toBeLessThan(1_000);
+    // 時計は進めない。待つなら、ここで返らずテストが時間切れになる。
+    await pool.stop({ farewellDeadlineAt: Date.now() + 30_000 });
   });
 
   it('(d) 待っているあいだに hello が来ても、畳み中のデーモンでは引き取りを走らせない', async () => {
-    const { pool, fake } = await setup({ managerId: 'mgr-d', unpushedDelayMs: 0 });
+    const { pool, fake } = await setup({ managerId: 'mgr-d' });
     const listSpy = vi.spyOn(fake.runner, 'list');
 
     void fake.host.shutdown();
-    await sleep(10);
+    await flush();
     const stopping = pool.stop({ farewellDeadlineAt: Date.now() + 5_000 });
-    await sleep(10);
+    await flush();
     const listedBefore = listSpy.mock.calls.length;
     fake.send({ type: 'hello', runnerId: 'runner-primary' });
-    await sleep(20);
+    await flush();
     // `#reattach` は runner に生死を聞く（`list()`）。畳み中は聞かない。
     expect(listSpy.mock.calls.length).toBe(listedBefore);
 
