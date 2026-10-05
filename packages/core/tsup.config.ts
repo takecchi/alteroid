@@ -6,6 +6,9 @@ export default defineConfig({
    *
    * - `index.ts` — デーモン・runner・CLI が読む本体（Node の組み込みと
    *   Claude Agent SDK を含む）
+   * - `cli-light.ts` — **CLI の起動用の軽い口**（issue #2860。
+   *   `@alteroid/core/cli-light`）。SDK・zod を推移的に読まない純粋な関数と定数だけ
+   *   を再 export する。`cli-light.test.ts` が推移的な import を検査する
    * - `usage-format.ts` — **ブラウザが読む軽い口**（`@alteroid/core/usage`）。
    *   実行時の依存を1つも持たない。ここを分けないと、金額を整形して足すために
    *   core 全体（gzip 約 300KB）がダッシュボードの初期チャンクへ入る
@@ -139,6 +142,7 @@ export default defineConfig({
    */
   entry: [
     'src/index.ts',
+    'src/cli-light.ts',
     'src/usage-format.ts',
     'src/revision-format.ts',
     'src/journal-search.ts',

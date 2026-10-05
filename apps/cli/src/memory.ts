@@ -274,6 +274,14 @@ export async function memoryShowCommand(slug: string): Promise<void> {
   }
   const content = doc.content;
   stdout.write(content.endsWith('\n') ? content : `${content}\n`);
+  // **版は stderr へ1行（Issue #2919）。** stdout は本文をそのまま出す口で、パイプや
+  // リダイレクトで使う人がいる（版を混ぜると本文が壊れる）。端末では両方見える。
+  // 古いデーモンが `version` を返さなければ出さない。
+  if (doc.version !== undefined) {
+    process.stderr.write(
+      `版: ${doc.version}（読んだ版を前提に消すなら: alteroid memory remove ${slug} --if-match ${doc.version}）\n`,
+    );
+  }
 }
 
 /**
@@ -377,16 +385,23 @@ export async function memorySetCommand(
  * `GET /memory/<slug>` で読み、その `version` を `DELETE` の `ifMatch` に付ける。
  * 読んだ後に別の書き手（クローンなど）が書いていたら、デーモンは**消さずに** 409 を返す。
  * そのときは消さずに、いまの版と次の手（`memory show` で確かめてから再実行）を案内して失敗で終わる。
+ * **`--if-match <版>`（Issue #2919）を渡すと、読み直さずにその版で照合する**——`memory show` が
+ * stderr に出した版を渡せば、「見て決めた内容」を前提に消せる。
  * 古いデーモンが `version` を返さなければ前提なしで消す（段階1。デーモンが警告を返せば出す）。
  * **読んで無かった（404 / 400）ときも版なしで DELETE を打つ**——「無い」と「名前が不正」の
  * 切り分けはサーバが持つので、ここで再実装しない。
  */
-export async function memoryRemoveCommand(slug: string): Promise<void> {
+export async function memoryRemoveCommand(
+  slug: string,
+  options: { ifMatch?: string } = {},
+): Promise<void> {
   const conn = await connect('write');
   if (conn === null) return;
   const { client, target } = conn;
-  const doc = await readDoc(client, target, slug);
-  const ifMatch = doc?.version;
+  // **`--if-match` があれば、それだけで照合する**（Issue #2919）。人間が判断の根拠にしたのは
+  // `memory show` で読んだ内容なので、消す直前に読み直した版へ差し替えない。
+  // 無ければ、消す直前に読んだ版を前提にする（上の段落）。
+  const ifMatch = options.ifMatch ?? (await readDoc(client, target, slug))?.version;
   const response = await client.memory[':slug'].$delete({
     param: { slug },
     query: ifMatch === undefined ? {} : { ifMatch },

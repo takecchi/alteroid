@@ -186,7 +186,12 @@ describe('畳み中のセッションへの送信・resume（#1660）', () => {
     expect(res.status).toBe(200);
     // **`cwd` は runner が実際に開いた値（Issue #1814）。** 明示の `cwd` が
     // 実在するので倒れず、頼んだ値がそのまま返る。
-    expect(await res.json()).toEqual({ ok: true, cwd: '/work/project' });
+    // 畳み終わりを待った後に新しいセッションを開いた回なので、短絡していない（#2877）。
+    expect(await res.json()).toEqual({
+      ok: true,
+      cwd: '/work/project',
+      reusedLiveSession: false,
+    });
     await waitUntil(() => s.consumed.includes('追加の一言（畳み中の resume）'));
     expect(s.opened()).toBe(2);
     expect(s.host.list().filter((m) => m.managerId === 'mgr-resume')).toHaveLength(1);
@@ -211,6 +216,11 @@ describe('畳み中のセッションへの送信・resume（#1660）', () => {
     await s.stopped;
 
     expect([a.status, b.status]).toEqual([200, 200]);
+    // 畳み終わりを待った後に1本が新しいセッションを開き（false）、もう1本はそこへ合流する（true。
+    // 短絡の一種なので、デーモンへは「生きた旧プロセスへ流した」と名乗る。#2877）。
+    const bodies = (await Promise.all([a.json(), b.json()])) as { reusedLiveSession: boolean }[];
+    const reused = bodies.map((body) => body.reusedLiveSession);
+    expect(reused.sort()).toEqual([false, true]);
     await waitUntil(() => s.consumed.includes('一言目') && s.consumed.includes('二言目'));
     expect(s.opened()).toBe(2);
     expect(s.host.list().filter((m) => m.managerId === 'mgr-race')).toHaveLength(1);

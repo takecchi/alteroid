@@ -11,7 +11,7 @@
  * 単純な形（並行性の無い、最後の頁がそのまま取り直る/失敗する）は
  * `managers-older-status.test.tsx` を見よ。
  */
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
@@ -21,8 +21,16 @@ import { json, Providers, sse, stubFetch, storeTestBaseUrl, type Route } from '~
 
 import Managers from './managers';
 
-function row() {
-  return within(screen.getByRole('list'));
+/** 画面の文字列全体。`waitFor` で繰り返す条件は、要素を走査する照会ではなくこれで見る（ロール照会は全要素を走査するので 100 行規模では重い。#2901）。 */
+function pageText(): string {
+  return document.body.textContent ?? '';
+}
+
+/** ボタンを文言で見つける（`getByRole('button', { name })` は重い。理由は `row()` と同じ）。 */
+function buttonByText(label: RegExp): HTMLButtonElement {
+  const button = screen.getByText(label).closest('button');
+  if (button === null) throw new Error('ボタンとして描かれていない: ' + String(label));
+  return button;
 }
 
 const BASE: ManagerSummary = {
@@ -128,7 +136,7 @@ function renderManagers(route: Route) {
 
 async function waitForFirstPage() {
   await waitFor(() => {
-    expect(row().getByText('req-mgr-0')).toBeTruthy();
+    expect(pageText()).toContain('req-mgr-0');
   });
 }
 
@@ -174,9 +182,9 @@ describe('runOlderRefresh は loadOlder() との競合を持ち込まない（is
     await waitForFirstPage();
 
     // 1回目の「もっと見る」— 頁A（50件、progress）。
-    fireEvent.click(screen.getByRole('button', { name: /もっと見る/ }));
+    fireEvent.click(buttonByText(/^もっと見る（いま \d+ 件）$/));
     await waitFor(() => {
-      expect(screen.getByText(`もっと見る（いま ${MANAGERS_PAGE * 2} 件）`)).toBeTruthy();
+      expect(pageText()).toContain(`もっと見る（いま ${MANAGERS_PAGE * 2} 件）`);
     });
 
     // SSE → 頁1の再検証が終わり、背景の取り直し R1（頁Aの再取得）が始まる。
@@ -188,9 +196,9 @@ describe('runOlderRefresh は loadOlder() との競合を持ち込まない（is
 
     // R1 が保留のうちに、2回目の「もっと見る」を押す
     // （`isLoadingOlder` はまだ false なのでボタンは押せる）。
-    fireEvent.click(screen.getByRole('button', { name: /もっと見る/ }));
+    fireEvent.click(buttonByText(/^もっと見る（いま \d+ 件）$/));
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /読み込み中/ })).toBeTruthy();
+      expect(buttonByText(/^読み込み中/)).toBeTruthy();
     });
 
     // R1 の応答を返す——頁Aが 49 件になったという内容。
@@ -204,7 +212,7 @@ describe('runOlderRefresh は loadOlder() との競合を持ち込まない（is
       expect(stub.calls.some((u) => afterIdOf(u) === 'mgr-49')).toBe(true);
     });
     expect(screen.queryByText(/これより古い委譲は無い/)).toBeNull();
-    expect(screen.getByRole('button', { name: /読み込み中/ })).toBeTruthy();
+    expect(buttonByText(/^読み込み中/)).toBeTruthy();
 
     // `loadOlder()` の応答を返す——頁C、50件。これは明示の呼び出しなので
     // `lastOlderCount` を権威的に上書きしてよい。
@@ -259,9 +267,9 @@ describe('runOlderRefresh は loadOlder() との競合を持ち込まない（is
     await waitForFirstPage();
 
     // 1回目の「もっと見る」— 頁A（50件、progress）。
-    fireEvent.click(screen.getByRole('button', { name: /もっと見る/ }));
+    fireEvent.click(buttonByText(/^もっと見る（いま \d+ 件）$/));
     await waitFor(() => {
-      expect(screen.getByText(`もっと見る（いま ${MANAGERS_PAGE * 2} 件）`)).toBeTruthy();
+      expect(pageText()).toContain(`もっと見る（いま ${MANAGERS_PAGE * 2} 件）`);
     });
 
     // SSE → 頁1の再検証が終わり、背景の取り直し R1（頁Aの再取得）が始まる。
@@ -274,10 +282,10 @@ describe('runOlderRefresh は loadOlder() との競合を持ち込まない（is
     // R1 が保留のうちに、2回目の「もっと見る」を押す——`loadOlder()` は
     // 即座に完了し、頁C（錨 a-49）が足される。この時点で `isLoadingOlder`
     // は false に戻っている（R1 が保留であることとは無関係）。
-    fireEvent.click(screen.getByRole('button', { name: /もっと見る/ }));
+    fireEvent.click(buttonByText(/^もっと見る（いま \d+ 件）$/));
     await waitFor(() => {
       // 合計 = 頁1(50) + 頁A(50) + 頁C(50) = 150
-      expect(screen.getByText(`もっと見る（いま ${MANAGERS_PAGE * 3} 件）`)).toBeTruthy();
+      expect(pageText()).toContain(`もっと見る（いま ${MANAGERS_PAGE * 3} 件）`);
     });
 
     // ここで R1 の応答を返す——頁Aはもう「最後の頁」ではない
