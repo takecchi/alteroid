@@ -15,9 +15,7 @@ import {
   verifyStoreIsolationContract,
 } from '@alteroid/core';
 import type { Job, JournalEntry, ManagerSummary } from '@alteroid/core';
-import { PGlite } from '@electric-sql/pglite';
 import { eq, sql } from 'drizzle-orm';
-import { drizzle } from 'drizzle-orm/pglite';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import type { Db } from './db.js';
@@ -1022,21 +1020,13 @@ describe('PgJobStore', () => {
      * 費用の歯: 2回目の呼び出しは jsonb を1行も引かない。
      *
      * **時間では測らない**（器の混雑で偽陽性・偽陰性になる。AGENTS.md
-     * 「速くなったを時間で測る歯にしないこと」）。`drizzle(client, { logger })`
+     * 「速くなったを時間で測る歯にしないこと」）。`client.withLogger({ logQuery })`
      * で実際に発行された SQL 文字列を捕まえ、`job` 列（jsonb）を選ぶ
      * クエリが2回目には1本も出ていないことを見る。
      */
     it('費用の歯: 2回目の呼び出しは jsonb を1行も引かない（発行された SQL で見る）', async () => {
       const queries: string[] = [];
-      const localClient = new PGlite();
-      const localDb = drizzle(localClient, {
-        logger: {
-          logQuery(query: string) {
-            queries.push(query);
-          },
-        },
-      });
-      await migrate(localDb);
+      const localDb = client.withLogger({ logQuery: (query: string) => queries.push(query) });
       const localStores = createPgStoresFromDb(localDb);
 
       await localStores.jobs.putJob({
@@ -1067,8 +1057,6 @@ describe('PgJobStore', () => {
       // 2回目は段1（id/xmin/updated_at だけ）しか出ない——jsonb 列を選ぶ形が無い。
       expect(secondCallQueries.some((q) => /select .*"job".* from "jobs"/i.test(q))).toBe(false);
       expect(secondCallQueries.length).toBe(1);
-
-      await localClient.close();
     });
 
     /**
@@ -1081,15 +1069,7 @@ describe('PgJobStore', () => {
      */
     it('段2の分岐: 全行stale(冷たい起動)はWHERE無し・一部staleはWHERE付きのSQLが出る', async () => {
       const queries: string[] = [];
-      const localClient = new PGlite();
-      const localDb = drizzle(localClient, {
-        logger: {
-          logQuery(query: string) {
-            queries.push(query);
-          },
-        },
-      });
-      await migrate(localDb);
+      const localDb = client.withLogger({ logQuery: (query: string) => queries.push(query) });
       const localStores = createPgStoresFromDb(localDb);
 
       await localStores.jobs.putJob({
@@ -1133,8 +1113,6 @@ describe('PgJobStore', () => {
       );
       expect(partialStage2).toHaveLength(1);
       expect(partialStage2[0]).toMatch(/where "jobs"\."id" in/i);
-
-      await localClient.close();
     });
 
     /**
