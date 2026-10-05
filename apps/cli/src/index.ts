@@ -727,8 +727,12 @@ practiceCommand
 practiceCommand
   .command('remove <slug>')
   .description('やり方を1つ消す（消した事実は日誌に残る）')
-  .action(async (slug: string) => {
-    await practiceRemoveCommand(slug);
+  .option(
+    '--if-match <version>',
+    '読んだ版（practice show が stderr に出す版）。いまの版と違えば消さずに失敗する。省略すると消す直前に読んだ版で照合する',
+  )
+  .action(async (slug: string, options: { ifMatch?: string }) => {
+    await practiceRemoveCommand(slug, options);
   });
 
 /**

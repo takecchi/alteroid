@@ -147,6 +147,14 @@ export async function practiceShowCommand(
   }
   const content = found.content;
   stdout.write(content.endsWith('\n') ? content : `${content}\n`);
+  // **版は stderr へ1行（Issue #2984。`memory show` と同じ）。** stdout は本文をそのまま出す口で、
+  // パイプやリダイレクトで使う人がいる（版を混ぜると本文が壊れる）。端末では両方見える。
+  // 古いデーモンが `version` を返さなければ出す版が無い。
+  if (found.version !== undefined) {
+    process.stderr.write(
+      `版: ${found.version}（読んだ版を前提に消すなら: alteroid practice remove ${slug} --if-match ${found.version}）\n`,
+    );
+  }
 }
 
 /**
@@ -316,18 +324,25 @@ export async function practiceSetCommand(
  * そのときは消さずに、いまの版と次の手（`practice show` で確かめてから再実行）を案内して失敗で終わる。
  * 古いデーモン（#2959 より前。`version` を返さない）には前提なしで打つ——その段階のデーモンは
  * 版なしの削除を通す。**版必須のデーモン（段階2）は 428 で断る**ので、そのときは消していないと
- * 言って失敗する（`practice show` で確かめて打ち直せば、版を読み直して付ける）。
+ * 言って失敗する（`--if-match` で版を渡せば通る）。
  * **読んで無かった（404 / 400）ときも版なしで DELETE を打つ**——「無い」と「名前が不正」の
  * 切り分けはサーバが持つので、ここで再実装しない。**読めない形で入っている行（GET が 409）も
  * 版なしで DELETE を打つ**——版が無いので前提を付けようがなく、ここで止めると壊れた行を外す
  * 回復手段が塞がる（`practice show` と違い、この口は 409 を失敗にしない）。
- * `practice show` は版を出さないので `--if-match` は持たない（版を見せる口ができたときに足す）。
+ * **`--if-match <版>`（Issue #2984）を渡すと、読み直さずにその版だけで照合する**——`practice show` が
+ * stderr に出した版を渡せば、「見て決めた内容」を前提に消せる（`memory remove` と同じ）。
  */
-export async function practiceRemoveCommand(slug: string): Promise<void> {
+export async function practiceRemoveCommand(
+  slug: string,
+  options: { ifMatch?: string } = {},
+): Promise<void> {
   const conn = await connect('write');
   if (conn === null) return;
   const { client, target } = conn;
-  const ifMatch = await readVersionForRemove(client, target, slug);
+  // **`--if-match` があれば、それだけで照合する**（Issue #2984）。人間が判断の根拠にしたのは
+  // `practice show` で読んだ内容なので、消す直前に読み直した版へ差し替えない。
+  // 無ければ、消す直前に読んだ版を前提にする（上の段落）。
+  const ifMatch = options.ifMatch ?? (await readVersionForRemove(client, target, slug));
   const response = await client.practices[':slug'].$delete({
     param: { slug },
     query: ifMatch === undefined ? {} : { ifMatch },
@@ -360,8 +375,7 @@ export async function practiceRemoveCommand(slug: string): Promise<void> {
     throw new Error(
       await withErrorReason(
         `消していません: ${slug}（HTTP 428。このデーモンは削除に読んだ版を必須としています。` +
-          `\`alteroid practice show ${slug}\` で確かめ、\`alteroid practice remove ${slug}\` を打ち直してください。` +
-          '打ち直すと版を読み直して付けます）',
+          `\`alteroid practice show ${slug}\` で版を確かめ、\`alteroid practice remove ${slug} --if-match <版>\` で打ち直してください）`,
         response,
       ),
     );
