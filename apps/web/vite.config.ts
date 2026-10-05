@@ -45,9 +45,34 @@ const dropWoff1FromFontFace = {
   },
 };
 
+/** `react/jsx-runtime` の差し替え先（`jsx-runtime-esm.ts` の doc を見よ）。 */
+const JSX_RUNTIME_ESM = fileURLToPath(new URL('./jsx-runtime-esm.ts', import.meta.url));
+
+/**
+ * クライアントのビルドでだけ、`react/jsx-runtime` を ESM の包み（`jsx-runtime-esm.ts`）へ向ける。
+ *
+ * 予算（`scripts/check-web-bundle-size.mjs`）の余裕を稼ぐための差し替えである。JSX の呼び出しが
+ * `(0,M.jsx)(…)` から `t(…)` の形に縮む（理由と実測は `jsx-runtime-esm.ts` の doc）。
+ *
+ * - `resolve.alias` にしないのは、包み自身が `react/jsx-runtime` を import するからである
+ *   （alias は importer を見ないので、包みが自分自身を指して循環する）。
+ * - 開発サーバ（`apply: 'build'`）と SSR のビルド（`options.ssr`）には効かせない。
+ *   どちらも大きさの予算の対象ではなく、Vite の依存の事前束ねと食い違う余地を残さない。
+ */
+const jsxRuntimeAsEsm = {
+  name: 'alteroid-jsx-runtime-esm',
+  apply: 'build' as const,
+  enforce: 'pre' as const,
+  resolveId(source: string, importer: string | undefined, options?: { ssr?: boolean }) {
+    if (source !== 'react/jsx-runtime') return null;
+    if (options?.ssr === true || importer === JSX_RUNTIME_ESM) return null;
+    return JSX_RUNTIME_ESM;
+  },
+};
+
 export default defineConfig({
   // `tailwindcss()` は `reactRouter()` より前（CSS の変換が先に要る）。
-  plugins: [tailwindcss(), reactRouter()],
+  plugins: [jsxRuntimeAsEsm, tailwindcss(), reactRouter()],
   css: { postcss: { plugins: [dropWoff1FromFontFace] } },
   // `~/*` を tsconfig の paths から解く（vite 8 の native 解決。専用プラグインは要らない）。
   resolve: {
