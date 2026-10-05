@@ -29,7 +29,8 @@ import {
  *    持つ。起動時に既に在ったものは起動時刻から数える。`stopped` から再開されうる
  *    委譲を、閉じた直後に消さないための猶予である。
  * 3. **消す前に守る**（ディレクトリ）。下の作業ツリーを `findGitDirs` と同じ探索で探し、
- *    各ツリーを子 UID の git で調べる。未 push のコミット・追跡済みの未コミットの変更が
+ *    各ツリーを子 UID の git で調べる。未 push のコミット（全ローカル枝と HEAD）・`git stash`
+ *    （`refs/stash`）・追跡済みの未コミットの変更が
  *    あれば残す。未追跡のファイルが1つでもあれば残す（`.gitignore` 除外後に残るのは書きかけの成果である見込みが高い）（名前を記録に残す）。
  *    **判定できない（探索の打ち切り・読めない子ディレクトリ・git の失敗/期限切れ）は
  *    残す**——「判定できない」を「消してよい」へ倒さない。
@@ -145,10 +146,17 @@ export interface ScratchSweeperOptions {
 interface TreeInspection {
   /** 作業ツリーのパス（絶対）。 */
   readonly root: string;
+  /**
+   * 未 push のコミット数。意味は「**全ローカル枝と HEAD（detached でも）のうち、origin に無い
+   * コミット**」（`rev-list --count HEAD --branches --not --remotes=origin`）。チェックアウトして
+   * いない別の枝の未 push も数える（HEAD だけを見ると作業場ごと消えて失われる）。
+   */
   readonly unpushed: number | 'unknown';
   readonly tracked: number | 'unknown';
   readonly untracked: readonly string[] | 'unknown';
   readonly worktreePaths: readonly string[] | 'unknown';
+  /** `refs/stash` が在るか（`git stash` の変更）。 */
+  readonly stash: boolean | 'unknown';
   /** 主リポジトリ（object を持つ側）か。linked worktree（`.git` がファイル）なら false。判定できなければ true（安全側）。 */
   readonly isMain: boolean;
   readonly unknownDetail?: string;
@@ -249,13 +257,34 @@ export class ScratchSweeper {
     return { ok: true, out: r.stdout };
   }
 
+  /** `refs/stash` が在るか。`rev-parse --verify --quiet` は無ければ exit 1（それ以外・期限切れは判定できない）。 */
+  async #stash(root: string): Promise<{ ok: true; present: boolean } | { ok: false; why: string }> {
+    const timeoutMs = this.#o.gitTimeoutMs ?? SCRATCH_SWEEP_GIT_TIMEOUT_MS;
+    const r = await runGit(
+      this.#o.spawn,
+      ['rev-parse', '--verify', '--quiet', 'refs/stash'],
+      root,
+      this.#o.env,
+      timeoutMs,
+    );
+    if (r.timedOut)
+      return { ok: false, why: `git rev-parse refs/stash が期限切れ（${timeoutMs}ms）` };
+    if (r.exitCode === 0) return { ok: true, present: true };
+    if (r.exitCode === 1) return { ok: true, present: false };
+    return { ok: false, why: `git rev-parse refs/stash が exit ${String(r.exitCode)}` };
+  }
+
   async #inspectTree(root: string): Promise<TreeInspection> {
-    const [rev, status, others, wt, gitDir] = [
-      await this.#git(['rev-list', '--count', 'HEAD', '--not', '--remotes=origin'], root),
+    const [rev, status, others, wt, gitDir, stashRef] = [
+      await this.#git(
+        ['rev-list', '--count', 'HEAD', '--branches', '--not', '--remotes=origin'],
+        root,
+      ),
       await this.#git(['status', '--porcelain'], root),
       await this.#git(['ls-files', '--others', '--exclude-standard'], root),
       await this.#git(['worktree', 'list', '--porcelain'], root),
       await this.#git(['rev-parse', '--git-dir'], root),
+      await this.#stash(root),
     ];
     const whys: string[] = [];
     let unpushed: number | 'unknown' = 'unknown';
@@ -271,6 +300,9 @@ export class ScratchSweeper {
     let untracked: string[] | 'unknown' = 'unknown';
     if (others.ok) untracked = others.out.split('\n').filter((l) => l.length > 0);
     else whys.push(others.why);
+    let stash: boolean | 'unknown' = 'unknown';
+    if (stashRef.ok) stash = stashRef.present;
+    else whys.push(stashRef.why);
     let worktreePaths: string[] | 'unknown' = 'unknown';
     if (wt.ok) {
       worktreePaths = wt.out
@@ -284,6 +316,7 @@ export class ScratchSweeper {
       tracked,
       untracked,
       worktreePaths,
+      stash,
       isMain: !gitDir.ok || gitDir.out.trim() === '.git',
       ...(whys.length > 0 ? { unknownDetail: whys.join('、') } : {}),
     };
@@ -326,6 +359,7 @@ export class ScratchSweeper {
     let unpushedAt: string | undefined;
     let trackedTotal = 0;
     let trackedAt: string | undefined;
+    let stashAt: string | undefined;
     let unknownAt: string | undefined;
     const untracked: string[] = [];
     let untrackedCount = 0;
@@ -334,6 +368,7 @@ export class ScratchSweeper {
         tree.unpushed === 'unknown' ||
         tree.tracked === 'unknown' ||
         tree.untracked === 'unknown' ||
+        tree.stash === 'unknown' ||
         tree.worktreePaths === 'unknown'
       ) {
         unknownAt ??= `${tree.root}: ${tree.unknownDetail ?? '判定できなかった'}`;
@@ -347,6 +382,7 @@ export class ScratchSweeper {
         trackedTotal += tree.tracked;
         trackedAt ??= tree.root;
       }
+      if (tree.stash) stashAt ??= tree.root;
       untrackedCount += tree.untracked.length;
       for (const file of tree.untracked) {
         if (untracked.length >= SCRATCH_SWEEP_UNTRACKED_NAMES_LIMIT) break;
@@ -368,6 +404,13 @@ export class ScratchSweeper {
         reason: 'tracked-changes',
         count: trackedTotal,
         detail: `追跡済みの未コミットの変更 ${String(trackedTotal)} 行（${trackedAt ?? ''}）`,
+      };
+    }
+    if (stashAt !== undefined) {
+      return {
+        kind: 'keep',
+        reason: 'stash',
+        detail: `git stash の変更が在る（${stashAt}）`,
       };
     }
     // 未追跡（`.gitignore` 除外後）が残るのは書きかけの成果である見込みが高いので、残す。

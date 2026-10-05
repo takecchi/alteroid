@@ -1003,6 +1003,7 @@ export const scratchSweepItemSchema = z.object({
       'worktree-dependency',
       'rm-failed',
       'untracked-files',
+      'stash',
       'unsafe-target',
     ])
     .optional(),

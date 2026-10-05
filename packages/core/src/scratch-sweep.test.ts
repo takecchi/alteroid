@@ -175,6 +175,45 @@ describe('/tmp の委譲の作業場の片付け（#3039）', () => {
     ]);
   });
 
+  it('HEAD は push 済みで、別のローカル枝にだけ未 push のコミットがあれば残す', async () => {
+    const repo = await makeClone('mgr-aaaa1111');
+    g(repo, 'checkout', '-q', '-b', 'other');
+    await writeFile(path.join(repo, 'o.txt'), 'other\n');
+    g(repo, 'add', 'o.txt');
+    g(repo, 'commit', '-qm', 'only on other');
+    g(repo, 'checkout', '-q', 'main');
+    const s = sweeper();
+    await expire(s);
+    const event = await s.sweep(ctl.signal, 'r1');
+    expect(existsSync(path.join(repo, 'a.txt'))).toBe(true);
+    expect(event?.kept).toMatchObject([{ reason: 'unpushed-commits', count: 1 }]);
+  });
+
+  it('detached HEAD の未 push のコミットは残す（枝に載っていない）', async () => {
+    const repo = await makeClone('mgr-aaaa1111');
+    g(repo, 'checkout', '-q', '--detach');
+    await writeFile(path.join(repo, 'd.txt'), 'detached\n');
+    g(repo, 'add', 'd.txt');
+    g(repo, 'commit', '-qm', 'detached');
+    const s = sweeper();
+    await expire(s);
+    const event = await s.sweep(ctl.signal, 'r1');
+    expect(existsSync(path.join(repo, 'd.txt'))).toBe(true);
+    expect(event?.kept).toMatchObject([{ reason: 'unpushed-commits' }]);
+  });
+
+  it('git stash の変更だけがある作業場は残す', async () => {
+    const repo = await makeClone('mgr-aaaa1111');
+    await writeFile(path.join(repo, 'a.txt'), 'stashed\n');
+    g(repo, 'stash', 'push', '-q');
+    const s = sweeper();
+    await expire(s);
+    const event = await s.sweep(ctl.signal, 'r1');
+    expect(existsSync(path.join(repo, 'a.txt'))).toBe(true);
+    expect(event?.removed).toEqual([]);
+    expect(event?.kept).toMatchObject([{ name: 'mgr-aaaa1111', reason: 'stash' }]);
+  });
+
   it('追跡済みの未コミットの変更があれば残す', async () => {
     const repo = await makeClone('mgr-aaaa1111');
     await writeFile(path.join(repo, 'a.txt'), 'changed\n');
@@ -302,17 +341,17 @@ describe('/tmp の委譲の作業場の片付け（#3039）', () => {
     const wt = path.join(root, 'mgr-bbbb2222', 'wt');
     await mkdir(path.dirname(wt), { recursive: true });
     g(main, 'worktree', 'add', '-q', '-b', 'feat', wt);
-    await writeFile(path.join(wt, 'c.txt'), 'three\n');
-    g(wt, 'add', 'c.txt');
-    g(wt, 'commit', '-qm', 'only in worktree');
+    // 注: linked の枝にコミットすると、主からも `--branches` で未 push と数えられる。
+    // 依存の歯は「主は clean・linked は未コミットの変更」で見る。
+    await writeFile(path.join(wt, 'a.txt'), 'dirty in worktree\n');
     const s = sweeper();
     await expire(s);
     const event = await s.sweep(ctl.signal, 'r1');
-    expect(existsSync(path.join(wt, 'c.txt'))).toBe(true);
+    expect(existsSync(path.join(wt, 'a.txt'))).toBe(true);
     expect(existsSync(path.join(main, 'a.txt'))).toBe(true);
     expect(event?.kept.map((i) => `${i.name}:${i.reason ?? ''}`).sort()).toEqual([
       'mgr-aaaa1111:worktree-dependency',
-      'mgr-bbbb2222:unpushed-commits',
+      'mgr-bbbb2222:tracked-changes',
     ]);
     expect(event?.removed).toEqual([]);
   });
