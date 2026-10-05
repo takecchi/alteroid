@@ -43,7 +43,16 @@ import {
 import { createMemoryRouter, RouterProvider, useParams } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { json, Providers, sse, storeTestBaseUrl, stubFetch, type Route } from '~/test-support';
+import {
+  findShownConversation,
+  queryShownConversation,
+  json,
+  Providers,
+  sse,
+  storeTestBaseUrl,
+  stubFetch,
+  type Route,
+} from '~/test-support';
 
 import Chat from './chat';
 
@@ -221,7 +230,7 @@ describe('送信ストリームの error イベント（会話を見ずに立つ
 
     let releasedInWindow = false;
     const observer = new MutationObserver(() => {
-      if (releasedInWindow || screen.queryByText(OTHER_CONVERSATION_ID) === null) return;
+      if (releasedInWindow || queryShownConversation(OTHER_CONVERSATION_ID) === null) return;
       releasedInWindow = true;
       observer.disconnect();
       releaseError();
@@ -229,7 +238,7 @@ describe('送信ストリームの error イベント（会話を見ずに立つ
     observer.observe(document.body, { childList: true, subtree: true, characterData: true });
 
     await router.navigate(`/chat/${OTHER_CONVERSATION_ID}`);
-    expect(await screen.findByText(OTHER_CONVERSATION_ID)).toBeTruthy();
+    expect(await findShownConversation(OTHER_CONVERSATION_ID)).toBeTruthy();
     expect(releasedInWindow).toBe(true);
 
     /*
@@ -320,7 +329,7 @@ describe('追送（followUp）の失敗（投函先を見ずに立つ、#1576-2�
 
     // B への切り替えを完全に終わらせる（受動効果も含めて流す）。
     await router.navigate(`/chat/${OTHER_CONVERSATION_ID}`);
-    expect(await screen.findByText(OTHER_CONVERSATION_ID)).toBeTruthy();
+    expect(await findShownConversation(OTHER_CONVERSATION_ID)).toBeTruthy();
     await act(async () => {});
 
     // ここで、追送の失敗を遅れて起こす。

@@ -89,6 +89,14 @@ async function findEndButton() {
   return screen.findByRole('button', { name: '会話を終える' });
 }
 
+/**
+ * 「会話を終える」を押し、確認の「終える」まで押す（#2759。押しただけでは実行しない）。
+ */
+async function pressEnd() {
+  fireEvent.click(await findEndButton());
+  fireEvent.click(await screen.findByRole('button', { name: '終える' }));
+}
+
 /** 同期版。`waitFor` の中で使う（`disabled` が畳まれたかを見るため）。 */
 function endButton() {
   return screen.getByRole('button', { name: '会話を終える' });
@@ -104,7 +112,7 @@ describe('「会話を終える」ボタン', () => {
     });
 
     const { router } = renderChat(`/chat/${CONVERSATION_ID}`);
-    fireEvent.click(await findEndButton());
+    await pressEnd();
 
     expect(await screen.findByRole('alert')).toBeTruthy();
     expect(screen.getByRole('alert').textContent).toContain('許可が無い');
@@ -130,7 +138,7 @@ describe('「会話を終える」ボタン', () => {
     });
 
     renderChat(`/chat/${CONVERSATION_ID}`);
-    fireEvent.click(await findEndButton());
+    await pressEnd();
 
     // 失敗が返り、ErrorNote が出る（ベースライン、(a) と同じ）。
     expect(await screen.findByRole('alert')).toBeTruthy();
@@ -142,6 +150,7 @@ describe('「会話を終える」ボタン', () => {
 
     // もう一度押せる——二度目のクリックが実際に `/end` を叩く。
     fireEvent.click(endButton());
+    fireEvent.click(await screen.findByRole('button', { name: '終える' }));
     await waitFor(() => {
       const calls = stub.entries.filter((entry) => entry.url.endsWith('/end'));
       expect(calls).toHaveLength(2);
@@ -162,7 +171,7 @@ describe('「会話を終える」ボタン', () => {
     const stub = stubFetch(route);
 
     renderChat(`/chat/${CONVERSATION_ID}`);
-    fireEvent.click(await findEndButton());
+    await pressEnd();
 
     await waitFor(() => {
       expect((endButton() as HTMLButtonElement).disabled).toBe(true);
@@ -189,10 +198,71 @@ describe('「会話を終える」ボタン', () => {
     });
 
     const { router } = renderChat(`/chat/${CONVERSATION_ID}`);
-    fireEvent.click(await findEndButton());
+    await pressEnd();
 
     await waitFor(() => {
       expect(router.state.location.pathname).toBe('/chat');
     });
+    // 結果を見せる（#2759）。何も出ないまま空の新しい会話へ切り替わらない。
+    expect(
+      (await screen.findByText(/会話を終えました。ここまでの学びを記憶にまとめます/)).textContent,
+    ).toContain('一覧に残って');
+  });
+
+  it('(e) 確認で「やめる」を押すと、終えない（/end は飛ばない）', async () => {
+    const stub = stubFetch((url) => {
+      const conversation = conversationRoutes(url);
+      if (conversation !== undefined) return conversation;
+      if (url.endsWith('/end')) return json({});
+      return undefined;
+    });
+
+    const { router } = renderChat(`/chat/${CONVERSATION_ID}`);
+    fireEvent.click(await findEndButton());
+    // 押しただけでは実行されず、何が起きるかの一文が出る。
+    expect(await screen.findByText(/クローンがここまでの学びを記憶にまとめます/)).toBeTruthy();
+    expect(stub.entries.filter((entry) => entry.url.endsWith('/end'))).toHaveLength(0);
+
+    fireEvent.click(screen.getByRole('button', { name: 'やめる' }));
+    await act(async () => {});
+    expect(stub.entries.filter((entry) => entry.url.endsWith('/end'))).toHaveLength(0);
+    expect(router.state.location.pathname).toBe(`/chat/${CONVERSATION_ID}`);
+  });
+
+  it('(f) 副題は会話 id ではなく開始日時と往復数を出す。新しい会話は「新しい会話」', async () => {
+    stubFetch((url) => {
+      if (url.includes(`/conversations/${CONVERSATION_ID}`)) {
+        return json({
+          conversationId: CONVERSATION_ID,
+          reachedStart: true,
+          scanned: 2,
+          messages: [
+            {
+              id: 'm1',
+              at: '2026-10-01T01:00:00.000Z',
+              role: 'inbound',
+              text: 'こんにちは',
+              conversationId: CONVERSATION_ID,
+            },
+            {
+              id: 'm2',
+              at: '2026-10-01T01:00:05.000Z',
+              role: 'outbound',
+              text: 'はい',
+              conversationId: CONVERSATION_ID,
+            },
+          ],
+        });
+      }
+      return conversationRoutes(url);
+    });
+
+    const { router } = renderChat(`/chat/${CONVERSATION_ID}`);
+    expect(await screen.findByText(/に開始 · 2 往復/)).toBeTruthy();
+    expect(screen.queryByText(CONVERSATION_ID)).toBeNull();
+    await act(async () => {
+      await router.navigate('/chat');
+    });
+    expect(await screen.findByText('新しい会話')).toBeTruthy();
   });
 });

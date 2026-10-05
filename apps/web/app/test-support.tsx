@@ -11,6 +11,7 @@
  * `@alteroid/swr` の側に在る（その層のテストも同じものを使うため）。
  * 画面のテストは今までどおりここから import すればよい。
  */
+import { waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
 
 import { Providers as SwrProviders } from '@alteroid/swr/test-support';
@@ -241,4 +242,22 @@ export function Providers({ children }: { children: ReactNode }) {
       <WebDisplayTextProvider>{children}</WebDisplayTextProvider>
     </SwrProviders>
   );
+}
+
+/**
+ * チャットの見出し（`ChatHeader` の `<header>`）が、いまその会話を見せているか。
+ *
+ * 見出しは会話 ID を画面の字面として出さない（利用者に意味が無い）。だが「いま
+ * どの会話が出ているか」を待つ試験は多いので、`data-conversation-id` を目印にする。
+ */
+export function queryShownConversation(conversationId: string): Element | null {
+  return document.querySelector(`header[data-conversation-id="${conversationId}"]`);
+}
+
+export async function findShownConversation(conversationId: string): Promise<Element> {
+  return waitFor(() => {
+    const element = queryShownConversation(conversationId);
+    if (element === null) throw new Error(`会話 ${conversationId} の見出しが出ていない`);
+    return element;
+  });
 }
