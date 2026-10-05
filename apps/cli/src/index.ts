@@ -15,6 +15,7 @@ import {
   accessRevokeCommand,
 } from './access.js';
 import { chatCommand } from './chat.js';
+import { localizeCommander } from './commander-ja.js';
 import {
   conversationsListCommand,
   conversationsReadCommand,
@@ -83,7 +84,7 @@ import {
 } from './token.js';
 import { progressCommand } from './progress.js';
 import { usageCommand } from './usage.js';
-import { redactError } from './redact.js';
+import { describeCliFailure } from './failure-message.js';
 
 /**
  * alteroid — デーモンへの薄いクライアント。
@@ -232,7 +233,13 @@ export async function daemonStatusCommand(now: number = Date.now()): Promise<voi
  */
 export const program = new Command();
 
-program.name('alteroid').description('クローンと会話し、クローンに仕事を任せる').version('0.1.0');
+// サブコマンドは作った時点の親の設定を引き継ぐので、`.command()` を足す前に掛ける（#2857）。
+localizeCommander(program);
+
+program
+  .name('alteroid')
+  .description('クローンと会話し、クローンに仕事を任せる')
+  .version('0.1.0', '-V, --version', 'バージョンを出す');
 
 program
   .command('init')
@@ -251,7 +258,7 @@ program
 program
   .command('tui')
   .description(
-    '全画面の TUI を開く（いまは会話の画面。承認待ち・委譲・日誌・記憶は #2528 で順に足す。端末でだけ動く）',
+    '全画面の TUI を開く（いまは会話の画面。承認待ち・委譲・日誌・記憶は順に足していく。端末でだけ動く）',
   )
   .action(async () => {
     await launchTui();
@@ -414,7 +421,7 @@ program
  */
 const inboxCommand = program
   .command('inbox')
-  .description('受信箱（inbox_events）— 未処理の合図の器');
+  .description('受信箱（クローンの未処理の合図をためておく場所）');
 
 inboxCommand
   .command('show')
@@ -426,7 +433,7 @@ inboxCommand
 inboxCommand
   .command('remove')
   .description(
-    '受信箱の未読を、絞り込んでまとめて畳む（消す）。既定は試算（dryRun）で1件も消さない',
+    '受信箱の未読を、絞り込んでまとめて畳む（消す）。既定は試算で1件も消さない（実際に消すのは --execute）',
   )
   .requiredOption(
     '--types <種類>',
@@ -559,7 +566,7 @@ accessCommand
 const permissionCommand = program
   .command('permission')
   .description(
-    '人間が承認した Bash 許可（Issue #863）を棚卸しする（一覧・取り消し。記録そのものはクローンの request_permission が行う）',
+    '人間が承認した Bash 許可を棚卸しする（一覧・取り消し。許可の記録そのものは、クローンが承認を受けて残す）',
   );
 
 permissionCommand
@@ -663,7 +670,7 @@ practiceCommand
 
 practiceCommand
   .command('show <slug>')
-  .description('やり方の本文を出す（--version で過去の版を読む。#1309）')
+  .description('やり方の本文を出す（--version で過去の版を読む）')
   .option('--version <version>', '省略時はいまの本文。指定すると過去の版を読む')
   .action(async (slug: string, options: { version?: string }) => {
     const version = options.version === undefined ? undefined : Number(options.version);
@@ -672,7 +679,7 @@ practiceCommand
 
 practiceCommand
   .command('history <slug>')
-  .description('やり方の版の履歴を出す（メタだけ。本文は show --version で。#1309）')
+  .description('やり方の版の履歴を出す（メタだけ。本文は show --version で）')
   .action(async (slug: string) => {
     await practiceHistoryCommand(slug);
   });
@@ -950,7 +957,7 @@ tokenCommand
   .description(
     '回す契機・冷却の既定を見る（引数無し）／変える（free_exhausted|overage_exhausted|off）',
   )
-  .option('--cooldown-ms <N>', 'resetsAt が取れないときの冷却の既定（ミリ秒）')
+  .option('--cooldown-ms <N>', '枠が戻る時刻が取れないときの冷却の既定（ミリ秒）')
   .action(async (rotateOn: string | undefined, options: { cooldownMs?: string }) => {
     await tokenPolicyCommand(rotateOn, options);
   });
@@ -962,7 +969,7 @@ daemonCommand
   .description('デーモンを起こす')
   .option(
     '--force',
-    '本人確認できない（unknown）状態ファイルを退避してから起こし直す（二重起動の危険を引き受ける。Issue #1851）',
+    '本人確認できない（unknown）状態ファイルを退避してから起こし直す（二重起動の危険を引き受ける）',
   )
   .action(async (options: { force?: boolean }) => {
     await daemonStartCommand(options);
@@ -1024,7 +1031,7 @@ if (invokedDirectly()) {
     ? launchTui()
     : program.parseAsync(process.argv);
   run.catch((error: unknown) => {
-    process.stderr.write(`alteroid: ${redactError(String(error))}\n`);
+    process.stderr.write(`alteroid: ${describeCliFailure(error)}\n`);
     process.exit(1);
   });
 }

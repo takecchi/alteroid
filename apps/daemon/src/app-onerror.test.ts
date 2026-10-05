@@ -95,7 +95,8 @@ describe('.onError（Issue #249: Hono の既定エラーハンドラの console.
 
     // **応答（500 / Internal Server Error）は既定と同じに保つ。**
     expect(res.status).toBe(500);
-    expect(await res.text()).toBe('Internal Server Error');
+    expect(res.headers.get('content-type')).toContain('application/json');
+    expect(await res.json()).toEqual({ error: 'Internal Server Error' });
 
     const matching = stderrLines(stderr).filter((line) => line.includes('alteroidd:'));
     expect(matching).toHaveLength(1);
@@ -128,7 +129,30 @@ describe('.onError（Issue #249: Hono の既定エラーハンドラの console.
     const res = await app.request('/access');
 
     expect(res.status).toBe(418);
-    expect(await res.text()).toBe('teapot');
+    expect(await res.json()).toEqual({ error: 'teapot' });
     expect(stderrLines(stderr).some((line) => line.includes('alteroidd:'))).toBe(false);
+  });
+
+  it('壊れた JSON 本文の 400・存在しない経路の 404 も { error } の JSON で返す（issue #2849）', async () => {
+    const app = createApp({
+      clone: fakeCloneHost(stores),
+      stores,
+      token: 'test-token',
+      shutdown: () => {},
+    });
+
+    const broken = await app.request('/memory/x', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: '{',
+    });
+    expect(broken.status).toBe(400);
+    expect(broken.headers.get('content-type')).toContain('application/json');
+    expect(await broken.json()).toEqual({ error: 'Malformed JSON in request body' });
+
+    const missing = await app.request('/nope');
+    expect(missing.status).toBe(404);
+    expect(missing.headers.get('content-type')).toContain('application/json');
+    expect(await missing.json()).toEqual({ error: 'not found' });
   });
 });

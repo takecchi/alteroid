@@ -411,6 +411,9 @@ export function filterRecent(
  *
  * - 利用者が **上端に居る**（新着をそのまま見ている） → `shift: false`。
  *   新着がそのまま視界に増える。**これは仮想化する前の挙動と同じ**
+ * - 利用者が **上端に居ても、行を展開している・文章を選択している（`reading`）** →
+ *   `shift: true`。上端のすぐ下（スクロール量が数 px のうち）でも、読んでいる最中の行を
+ *   新着で動かさない（issue #2774。選択して写そうとしている文章が動くと狙いを外す）
  * - 利用者が **下へ遡って読んでいる** → `shift: true`。読んでいる行が
  *   新着の追加でずれない（virtua の doc: 「useful for reverse infinite
  *   scrolling」）
@@ -423,6 +426,6 @@ export function filterRecent(
  * あと virtua が実際にスクロール位置を保つかどうかは、jsdom が layout を
  * 持たないため測れない（`journal.test.tsx` 冒頭のコメント）。
  */
-export function shiftForPrepend(wasPrepend: boolean, atTop: boolean): boolean {
-  return wasPrepend && !atTop;
+export function shiftForPrepend(wasPrepend: boolean, atTop: boolean, reading = false): boolean {
+  return wasPrepend && (!atTop || reading);
 }

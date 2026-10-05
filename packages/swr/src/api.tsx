@@ -136,7 +136,33 @@ export function ApiProvider({ children }: { children: ReactNode }) {
     return { client, controller, baseUrl, token };
   }, [baseUrl, token]);
 
-  useEffect(() => () => generation.controller.abort(), [generation]);
+  /**
+   * 世代の紐を打ち切る。
+   *
+   * **cleanup で即座に abort しない**（#2768）。StrictMode（dev）は mount → cleanup →
+   * mount を同じ世代のまま続けて行うので、cleanup で abort すると、最初の mount で
+   * 始めた通信が中断され、同じ紐が abort 済みのまま次の mount 以降の全通信に残る
+   * （全リクエストが「signal is aborted without reason」で落ちる）。
+   *
+   * だから cleanup では打ち切りを1拍遅らせて予約し、同じ世代の effect がすぐ
+   * 張り直されたら取り消す。**世代が代わったとき（別の世代の effect が張られたとき）
+   * は前の世代をその場で打ち切る**ので、「切り替えた後に古い相手の応答が届く」
+   * 余地は増えない。本当に外れた（unmount）ときは予約が実行される。
+   */
+  const pendingAbort = useRef<{
+    generation: typeof generation;
+    timer: ReturnType<typeof setTimeout> | null;
+  }>({ generation, timer: null });
+  useEffect(() => {
+    const pending = pendingAbort.current;
+    if (pending.timer !== null) clearTimeout(pending.timer);
+    if (pending.generation !== generation) pending.generation.controller.abort();
+    pendingAbort.current = { generation, timer: null };
+    return () => {
+      const timer = setTimeout(() => generation.controller.abort(), 0);
+      pendingAbort.current = { generation, timer };
+    };
+  }, [generation]);
 
   /**
    * 接続先を切り替えたら、画面に残っているキャッシュを引き直す。

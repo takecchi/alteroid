@@ -122,6 +122,8 @@ curl -X PUT http://127.0.0.1:4517/tokens \
 
 **⚠️ 測っている間に回ると、結果は降りた鍵のものになる**（#2738）。probe は数百ms〜締め切りかかる。**`usage-poller.ts` は `env` と同じ瞬間に現役の身元（`tokenId` と世代。鍵の値は持たない）を控え、結果と一緒に `onState` → `observeAccount` → `reconsider` の `origin.observedBy` へ渡す。** `reconsider` は `turn_success` と同じ `observationFreshness` を通し、`stale`（測った鍵がもう現役でない）なら `ignored` で捨てる（降りた鍵の `unusable` でまだ試していない新しい現役を冷却へ入れない。逆向きの `usable` が新しい現役の冷却を消さない）。身元を控えられなかった probe（箱が空の構成）は従来どおり門を掛けない。
 
+**⚠️ 表示（`GET /usage` の `account` / `alteroid usage` / Web / `usage_read`）の保持は「同じ鍵での一時的な失敗」に限る**（#2752）。`usage-poller.ts` は一時的な失敗で表示が消えないよう最後の `ok` を保つが、(1) **現役の鍵（`tokenId`）が変わったら古い `ok` は捨てる**（`state()` も、測った鍵が現役でなくなった `ok` は返さず `unknown` を返す。降りた鍵の枠をいまの枠として語らない）、(2) **同じ鍵で保っている間に失敗が続くなら `ok.refreshFailure`（`since` / `at` / `reason`）を載せ**、`describeAccountUsage` が「上の値は最後に取れたときのもの」と出す。回し手へ渡る `onState` は保持と無関係に「この回の実観測」のままである。
+
 ### ⚠️ 復帰の下限は目盛りの60秒ではなく、probe の周期である（実運用のレビューで判明。2026-09-07。**周期は5分とは限らない** —— 下の但し書き）
 
 **「記録の上で現役が `ready`」の状態からは、目盛りは何回鳴っても動かない**（それが「健全な鍵から勝手に移らない」の歯止めそのもの）。記録を `ready` から動かせるのは2つだけである:
@@ -282,6 +284,13 @@ probe が読むのは**アカウントの枠**（`five_hour` / `seven_day` / …
 **⚠️ そして runner が1台も繋がっていなければ、撒く先が無い。** そのことも日誌に出る（成功に畳んでいない）。**ただしそれで永久に届かないのではない** —— 後から上がってきた runner には次の節の導線で届く。
 
 **⟹ 2026-09-15（#914 提案1）から、`manager_list` / `runner_list` に「その委譲が抱えている鍵の世代」が出る。** 現役の世代と食い違っていれば ⚠ が立つ（`manager_list` は詳しい文、`runner_list` は `⚠世代N≠現役M` の短い印）。**材料は daemon 側の記録（`ManagerPool` の `#tokenIdentities`）であって、runner の子プロセスの env を直接覗いてはいない**——daemon がこの委譲へ向けて最後に撒いた／撒いたと確認できた世代である。ターンの境界に達して自動で畳み直した回（`#reopenForTokenRotation` が立てる `note.tokenRotation`）はこの記録も追いつくので、境界に達しないまま古い鍵で走り続けている委譲だけに ⚠ が残る——**まさに人間が2026-09-15 に手で「3箇所の時刻を突き合わせて」確かめていたものを、機械が名指しする形である。**
+
+**⟹ 2026-10-05（#2851）から、done の委譲へ `manager_send` すると、世代が食い違っていれば畳んで新しい鍵で起こし直す。** それまでは done（台帳 `attached` が true のまま runner に旧プロセスが生きている）へ送ると `runner.send()` で旧プロセスへ追加指示を積むだけで、鍵が回っても古い鍵で走り、また枠（429）に当たり、⚠ も消えなかった（failed は `attached` が false なので resume に落ちて新しい鍵になる）。いまは `ManagerPool#send` が `#foldStaleTokenSession`（`packages/core/src/manager.ts`）を通る。
+
+- **起こし直すのは「世代が食い違う（`manager_list` の ⚠ と同じ `tokenGenerationMismatched`）・done・`attached`」の3つが揃い、かつ runner の `GET /managers` が返す `liveBackgroundTasks` が 0 本・確認待ちが無い・`sessionId` が在るときだけ。** 順序は 未 push の観測 → `runner.stop()`（runner が生ログの送り出しと未報告の flush を済ませて閉じる）→ 一覧から消えたことの確認 → 既存の `#resumeOnce`。貸し出しは握ったまま。確かめられなければ resume しない。
+- **残っていれば畳まず、旧セッションへも送らず `outcome: 'declined'` で断る。** detail が何が残っているかと取れる手を言う。**`liveBackgroundTasks` が無い古い runner は「分からない」として断る**（0 と読まない）。**force は無い。**
+- **`manager_list` の ⚠ の行にも、runner が最後に見た背景処理の本数（`ManagerSummary.liveBackgroundTasks`。10秒ごとの生存確認の観測）を添える。** 背景処理が残っていると runner 自身の境界（`#atTokenRecycleBoundary`）にも達しないので、「なぜ自動で畳み直されないか」の材料になる。
+- **残る穴（別 Issue 候補）**: `Host.resume`（`runner.ts`）は alive なセッションが居ると、そこへ message を push して返す。台帳が `attached=false` でも runner に旧プロセスが居れば旧 env に押し込み、しかも daemon の `#resume` が世代を現役へ書き換えるので、⚠ が消えて見える。
 
 ## 再接続の瞬間に、現役が降りる（撒く先が無かった回も追いつく）
 

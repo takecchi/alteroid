@@ -260,13 +260,13 @@ describe('/usage 画面', () => {
 
     await screen.findByRole('heading', { name: '層別（誰が）' });
     const layers = axisCard('層別（誰が）');
-    expect(within(layers).getByText('clone')).toBeTruthy();
-    expect(within(layers).getByText('manager')).toBeTruthy();
+    expect(within(layers).getByText('クローン')).toBeTruthy();
+    expect(within(layers).getByText('マネージャー')).toBeTruthy();
     expect(within(layers).getByText('$2.00')).toBeTruthy();
     expect(within(layers).getByText('$1.00')).toBeTruthy();
     const sites = axisCard('場所別（どこで）');
-    expect(within(sites).getByText('session')).toBeTruthy();
-    expect(within(sites).getByText('distill')).toBeTruthy();
+    expect(within(sites).getByText('本体のセッション')).toBeTruthy();
+    expect(within(sites).getByText('記憶への蒸留')).toBeTruthy();
     // **モデル軸では分けられない。** 同じモデル帯なので1件に畳まれ、$3.00 がまとめて
     // 出る — 層の軸が無ければ「誰が使ったか」はこの画面から読めない。
     const models = axisCard('モデル別');
@@ -289,8 +289,8 @@ describe('/usage 画面', () => {
 
     await screen.findByRole('heading', { name: '場所別（どこで）' });
     const sites = axisCard('場所別（どこで）');
-    expect(within(sites).getByText('session')).toBeTruthy();
-    expect(within(sites).getByText('peer')).toBeTruthy();
+    expect(within(sites).getByText('本体のセッション')).toBeTruthy();
+    expect(within(sites).getByText('もう一方のモデル')).toBeTruthy();
     expect(within(sites).getByText('future-site')).toBeTruthy();
     expect(within(sites).getByText('$4.00')).toBeTruthy();
     expect(within(sites).getByText('$2.00')).toBeTruthy();
@@ -441,14 +441,14 @@ describe('/usage 画面', () => {
     renderUsage();
 
     await screen.findByText(/その範囲には記録が無い/);
-    const layerSelect = screen.getByLabelText(/layer/);
+    const layerSelect = screen.getByLabelText(/誰が/);
     layerSelect.dispatchEvent(new Event('change', { bubbles: true }));
     // 選択肢が core の一覧から作られていること（画面に書き写していない）。
-    expect(within(layerSelect).getByText('clone')).toBeTruthy();
-    expect(within(layerSelect).getByText('manager')).toBeTruthy();
-    const siteSelect = screen.getByLabelText(/site/);
-    expect(within(siteSelect).getByText('session')).toBeTruthy();
-    expect(within(siteSelect).getByText('distill')).toBeTruthy();
+    expect(within(layerSelect).getByText('クローン')).toBeTruthy();
+    expect(within(layerSelect).getByText('マネージャー')).toBeTruthy();
+    const siteSelect = screen.getByLabelText(/どこで/);
+    expect(within(siteSelect).getByText('本体のセッション')).toBeTruthy();
+    expect(within(siteSelect).getByText('記憶への蒸留')).toBeTruthy();
   });
 
   /**
@@ -469,7 +469,7 @@ describe('/usage 画面', () => {
 
     renderUsage();
 
-    const fromInput = await screen.findByLabelText(/from/);
+    const fromInput = await screen.findByLabelText(/開始日/);
     // grid の直接の子ではなく label なので、容器は label の親。
     const grid = fromInput.closest('label')?.parentElement;
     if (grid === null || grid === undefined) throw new Error('絞り込みの容器が見つからない');
@@ -486,8 +486,8 @@ describe('/usage 画面', () => {
     // **ラベルは前後を固定して当てる。** `/to/` は部分一致なので、`token` という
     // ラベルが増えた瞬間に2件へ当たって落ちた。**緩めるのではなく、どのラベルか
     // を言う** — 前後を固定すれば、似た名前のラベルが増えても当たり続ける。
-    const fromInput = await screen.findByLabelText(/^from$/);
-    const toInput = screen.getByLabelText(/^to$/);
+    const fromInput = await screen.findByLabelText(/^開始日$/);
+    const toInput = screen.getByLabelText(/^終了日$/);
     for (const input of [fromInput, toInput]) {
       const tokens = input.className.split(/\s+/);
       expect(tokens).toContain('min-w-0');
@@ -520,12 +520,12 @@ describe('/usage 画面の絞り込みが URL に載る（issue #2050）', () =>
     await screen.findByText(/その範囲には記録が無い/);
 
     // 入力欄そのものに復元されている。
-    expect((screen.getByLabelText(/^from$/) as HTMLInputElement).value).toBe('2026-08-01');
-    expect((screen.getByLabelText(/^to$/) as HTMLInputElement).value).toBe('2026-08-20');
-    expect((screen.getByLabelText(/^manager$/) as HTMLInputElement).value).toBe('m1');
-    expect((screen.getByLabelText(/layer/) as HTMLSelectElement).value).toBe('clone');
-    expect((screen.getByLabelText(/site/) as HTMLSelectElement).value).toBe('distill');
-    expect((screen.getByLabelText(/^token/) as HTMLInputElement).value).toBe('tok-1');
+    expect((screen.getByLabelText(/^開始日$/) as HTMLInputElement).value).toBe('2026-08-01');
+    expect((screen.getByLabelText(/^終了日$/) as HTMLInputElement).value).toBe('2026-08-20');
+    expect((screen.getByLabelText(/^マネージャー$/) as HTMLInputElement).value).toBe('m1');
+    expect((screen.getByLabelText(/誰が/) as HTMLSelectElement).value).toBe('clone');
+    expect((screen.getByLabelText(/どこで/) as HTMLSelectElement).value).toBe('distill');
+    expect((screen.getByLabelText(/^認証トークン/) as HTMLInputElement).value).toBe('tok-1');
     // 読める日付なので、読めなかった旨の注記は出ない（issue #2133）。
     expect(screen.queryByText(/読めないので、絞り込みに使っていない/)).toBeNull();
 
@@ -547,32 +547,32 @@ describe('/usage 画面の絞り込みが URL に載る（issue #2050）', () =>
     const { router } = renderUsage();
     await screen.findByText(/その範囲には記録が無い/);
 
-    fireEvent.change(screen.getByLabelText(/^from$/), { target: { value: '2026-08-01' } });
+    fireEvent.change(screen.getByLabelText(/^開始日$/), { target: { value: '2026-08-01' } });
     await waitFor(() => {
       expect(new URLSearchParams(router.state.location.search).get('from')).toBe('2026-08-01');
     });
 
-    fireEvent.change(screen.getByLabelText(/^to$/), { target: { value: '2026-08-20' } });
+    fireEvent.change(screen.getByLabelText(/^終了日$/), { target: { value: '2026-08-20' } });
     await waitFor(() => {
       expect(new URLSearchParams(router.state.location.search).get('to')).toBe('2026-08-20');
     });
 
-    fireEvent.change(screen.getByLabelText(/^manager$/), { target: { value: 'mgr-9' } });
+    fireEvent.change(screen.getByLabelText(/^マネージャー$/), { target: { value: 'mgr-9' } });
     await waitFor(() => {
       expect(new URLSearchParams(router.state.location.search).get('managerId')).toBe('mgr-9');
     });
 
-    fireEvent.change(screen.getByLabelText(/layer/), { target: { value: 'manager' } });
+    fireEvent.change(screen.getByLabelText(/誰が/), { target: { value: 'manager' } });
     await waitFor(() => {
       expect(new URLSearchParams(router.state.location.search).get('layer')).toBe('manager');
     });
 
-    fireEvent.change(screen.getByLabelText(/site/), { target: { value: 'session' } });
+    fireEvent.change(screen.getByLabelText(/どこで/), { target: { value: 'session' } });
     await waitFor(() => {
       expect(new URLSearchParams(router.state.location.search).get('site')).toBe('session');
     });
 
-    fireEvent.change(screen.getByLabelText(/^token/), { target: { value: 'tok-2' } });
+    fireEvent.change(screen.getByLabelText(/^認証トークン/), { target: { value: 'tok-2' } });
     await waitFor(() => {
       expect(new URLSearchParams(router.state.location.search).get('tokenId')).toBe('tok-2');
     });
@@ -593,8 +593,8 @@ describe('/usage 画面の絞り込みが URL に載る（issue #2050）', () =>
     // 画面ごと落ちない。
     await screen.findByText(/その範囲には記録が無い/);
     // 選択肢は既知のものしか無いので、不正な値は「すべて」（空文字）に落ちる。
-    expect((screen.getByLabelText(/layer/) as HTMLSelectElement).value).toBe('');
-    expect((screen.getByLabelText(/site/) as HTMLSelectElement).value).toBe('');
+    expect((screen.getByLabelText(/誰が/) as HTMLSelectElement).value).toBe('');
+    expect((screen.getByLabelText(/どこで/) as HTMLSelectElement).value).toBe('');
 
     // 不正な値のまま `GET /usage` へ渡さない（API へ変な問い合わせを投げない）。
     await waitFor(() => {
@@ -635,7 +635,7 @@ describe('/usage 画面の絞り込みが URL に載る（issue #2050）', () =>
 
     // 読めない値は入力欄にも出さない（絞り込みが効いているように見えるのに
     // 入力欄が空、という食い違いを作らない側——両方とも空にする）。
-    expect((screen.getByLabelText(/^from$/) as HTMLInputElement).value).toBe('');
+    expect((screen.getByLabelText(/^開始日$/) as HTMLInputElement).value).toBe('');
 
     // 読めない値のまま `GET /usage` へ渡さない。
     await waitFor(() => {
@@ -664,8 +664,8 @@ describe('/usage 画面の絞り込みが URL に載る（issue #2050）', () =>
     ).toBeTruthy();
     // from は読めているので、こちらは注記が出ない。
     expect(screen.queryByText(/URL の from=.*は日付として読めない/)).toBeNull();
-    expect((screen.getByLabelText(/^from$/) as HTMLInputElement).value).toBe('2026-08-01');
-    expect((screen.getByLabelText(/^to$/) as HTMLInputElement).value).toBe('');
+    expect((screen.getByLabelText(/^開始日$/) as HTMLInputElement).value).toBe('2026-08-01');
+    expect((screen.getByLabelText(/^終了日$/) as HTMLInputElement).value).toBe('');
 
     await waitFor(() => {
       const call = stub.calls.find((url) => url.includes('/usage'));
@@ -710,7 +710,7 @@ describe('/usage 画面の絞り込みが URL に載る（issue #2050）', () =>
         /URL の from=2026-02-30 は日付として読めないので、絞り込みに使っていない/,
       ),
     ).toBeTruthy();
-    expect((screen.getByLabelText(/^from$/) as HTMLInputElement).value).toBe('');
+    expect((screen.getByLabelText(/^開始日$/) as HTMLInputElement).value).toBe('');
 
     await waitFor(() => {
       const call = stub.calls.find((url) => url.includes('/usage'));
@@ -732,14 +732,14 @@ describe('/usage 画面の絞り込みが URL に載る（issue #2050）', () =>
     await screen.findByText(/その範囲には記録が無い/);
     expect(await screen.findByText(/読めないので、絞り込みに使っていない/)).toBeTruthy();
 
-    fireEvent.change(screen.getByLabelText(/^from$/), { target: { value: '2026-08-05' } });
+    fireEvent.change(screen.getByLabelText(/^開始日$/), { target: { value: '2026-08-05' } });
 
     await waitFor(() => {
       expect(new URLSearchParams(router.state.location.search).get('from')).toBe('2026-08-05');
     });
     // 注記が消える。
     expect(screen.queryByText(/読めないので、絞り込みに使っていない/)).toBeNull();
-    expect((screen.getByLabelText(/^from$/) as HTMLInputElement).value).toBe('2026-08-05');
+    expect((screen.getByLabelText(/^開始日$/) as HTMLInputElement).value).toBe('2026-08-05');
 
     await waitFor(() => {
       const call = stub.calls.findLast((url) => url.includes('/usage'));
@@ -757,12 +757,12 @@ describe('/usage 画面の絞り込みが URL に載る（issue #2050）', () =>
     expect(new URLSearchParams(router.state.location.search).get('managerId')).toBe('m1');
     expect(new URLSearchParams(router.state.location.search).get('tokenId')).toBe('tok-1');
 
-    fireEvent.change(screen.getByLabelText(/^manager$/), { target: { value: '' } });
+    fireEvent.change(screen.getByLabelText(/^マネージャー$/), { target: { value: '' } });
     await waitFor(() => {
       expect(new URLSearchParams(router.state.location.search).has('managerId')).toBe(false);
     });
 
-    fireEvent.change(screen.getByLabelText(/^token/), { target: { value: '' } });
+    fireEvent.change(screen.getByLabelText(/^認証トークン/), { target: { value: '' } });
     await waitFor(() => {
       expect(new URLSearchParams(router.state.location.search).has('tokenId')).toBe(false);
     });

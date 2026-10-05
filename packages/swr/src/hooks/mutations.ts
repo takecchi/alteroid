@@ -23,6 +23,7 @@ import type {
   InboxEventType,
   InboxRemoveManyResult,
   McpServers,
+  MemoryDocument,
   McpServersUpdateResult,
   ProfileScope,
   ProfileUpdateResult,
@@ -113,17 +114,53 @@ function roughPreview(text: string): string {
   return flat.length <= 80 ? flat : `${flat.slice(0, 80)}…`;
 }
 
-/** 記憶を書き換える（人間の直接編集）。 */
+/**
+ * 読んだ後に別の書き手が記憶を書き換えていた（`PUT /memory/{slug}` の 409、Issue #2743）。
+ *
+ * **何も書いていない。** 人間の下書きは呼び出し側が持っているので、捨てずに「いまの版」を
+ * 見せて選ばせるために、デーモンが返した `current` を載せて投げる。`current` が `null` なら、
+ * 読んだ後にその記憶が消された。`ApiError` を継承するので、`status` で分岐する読み手はそのまま動く。
+ */
+export class MemoryConflictError extends ApiError {
+  readonly current: { document: MemoryDocument; version: string } | null;
+
+  constructor(message: string, current: { document: MemoryDocument; version: string } | null) {
+    super(409, message);
+    this.name = 'MemoryConflictError';
+    this.current = current;
+  }
+}
+
+/**
+ * 記憶を書き換える（人間の直接編集）。
+ *
+ * `ifMatch` は**読んだ時の版**（`GET /memory/{slug}` の `version`。読んだ時に無かったなら `null`）。
+ * 渡すと、いまの版と違えば何も書かずに `MemoryConflictError` を投げる。省略すると従来どおり後勝ち。
+ * 衝突のときは、画面がいまの版を見せられるよう記憶のキャッシュも引き直す。
+ */
 export function useSaveMemory() {
   const api = useApi();
   const { mutate } = useSWRConfig();
   return useCallback(
-    async (slug: string, content: string) => {
-      const result = await api.api
-        .PUT('/memory/{slug}', { params: { path: { slug } }, body: { content } })
-        .then(unwrap);
+    async (slug: string, content: string, ifMatch?: string | null) => {
+      const result = await api.api.PUT('/memory/{slug}', {
+        params: { path: { slug } },
+        body: ifMatch === undefined ? { content } : { content, ifMatch },
+      });
+      if (result.response.status === 409 && result.error !== undefined) {
+        await Promise.all([mutate(KEY.memory), mutate(KEY.memoryDoc(slug))]);
+        const body = result.error as {
+          error?: string;
+          current?: { document: MemoryDocument; version: string } | null;
+        };
+        throw new MemoryConflictError(
+          body.error ?? '記憶が読んだ後に変わっている',
+          body.current ?? null,
+        );
+      }
+      const saved = unwrap(result);
       await Promise.all([mutate(KEY.memory), mutate(KEY.memoryDoc(slug))]);
-      return result.document;
+      return { document: saved.document, version: saved.version };
     },
     [api, mutate],
   );

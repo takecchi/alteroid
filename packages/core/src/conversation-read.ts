@@ -337,13 +337,18 @@ export async function countUnreadConversations(
   const from =
     before.watermark === null ? view.baseline : laterIso(before.watermark, view.baseline);
   const found: Record<string, string> = {};
-  let until: string | undefined;
+  // **古い順に、印から前へ向かって読む。** チャンクごとに確実に前進するので、不在の間に
+  // 溜まった分が1回の上限の何倍あっても、呼び出しを重ねれば追いつく。印の時刻ちょうどの
+  // 発言は再び読む（`since` は含む。索引への足し込みは冪等）。
+  let after: { id: string; at: string } | undefined;
+  let lastAt: string | null = null;
   let complete = false;
   for (let i = 0; i < maxChunks; i += 1) {
     const rows = await readConversationWindow(journal, {
       scan: chunk,
       since: from,
-      ...(until === undefined ? {} : { until }),
+      order: 'asc',
+      ...(after === undefined ? {} : { after }),
     });
     for (const row of rows) {
       if (row.type !== 'exchange' || row.role !== 'outbound' || row.conversationId === undefined) {
@@ -354,19 +359,21 @@ export async function countUnreadConversations(
         found[row.conversationId] = row.at;
       }
     }
+    const last = rows[rows.length - 1];
+    if (last !== undefined) {
+      lastAt = last.at;
+      after = { id: last.id, at: last.at };
+    }
     if (rows.length < chunk) {
       complete = true;
       break;
     }
-    const oldest = rows[rows.length - 1]!.at;
-    // 同じ時刻だけで chunk が埋まると先へ進めない（起こらないはずの防御）。
-    if (until !== undefined && compareIsoInstant(oldest, until) >= 0) break;
-    until = oldest;
   }
   const lagged = new Date(Date.parse(now) - WATERMARK_LAG_MS).toISOString();
   await reads.mergeOutboundIndex({
-    // 全部読み切ったときだけ印を進める。読み切れなかった回は、次の呼び出しがもう一度同じ所から読む。
-    watermark: complete ? laterIso(from, lagged) : null,
+    // 読み切ったら「いま」の少し手前まで、読み切れなかったら読めた最後の発言の時刻まで進める
+    // （次の呼び出しはそこから続ける）。
+    watermark: complete ? laterIso(from, lagged) : lastAt,
     lastOutbound: found,
   });
 

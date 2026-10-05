@@ -43,7 +43,7 @@ import {
 } from './schema.js';
 import type { ScheduleStatus } from './schedule.js';
 import { CLONE_RUNTIME_ITEM_LABELS, describeCloneRuntime, type CloneRuntimeFacts } from './self.js';
-import { UnreadableApprovalError } from './store.js';
+import { memoryVersion, UnreadableApprovalError } from './store.js';
 import type { Stores } from './store.js';
 import {
   UnreadableActiveTokenError,
@@ -213,6 +213,32 @@ interface Harness {
    */
   setQueuedInMemory(value: number | undefined): void;
   call(name: string, args: Record<string, unknown>): Promise<string>;
+}
+
+/**
+ * 既存の文書への memory_write には、いまの版を base_version として付ける（#2809）。
+ * 版の持ち回りそのものを測らない既存の歯が、書き込みの別の性質を測り続けるための薄い手。
+ * 版の持ち回りを測る歯は、末尾の #2809 の describe が `h.call` で直接呼ぶ。
+ */
+async function writeBased(h: Harness, args: Record<string, unknown>): Promise<string> {
+  const current = await h.stores.persona.read(String(args.slug));
+  return h.call('memory_write', {
+    ...args,
+    ...(current !== null && args.base_version === undefined
+      ? { base_version: memoryVersion(current.content) }
+      : {}),
+  });
+}
+
+/** memory_frontmatter_set 版。いまの版を base_version として付ける（#2809。writeBased と同じ趣旨）。 */
+async function fmBased(h: Harness, args: Record<string, unknown>): Promise<string> {
+  const current = await h.stores.persona.read(String(args.slug));
+  return h.call('memory_frontmatter_set', {
+    ...args,
+    ...(current !== null && args.base_version === undefined
+      ? { base_version: memoryVersion(current.content) }
+      : {}),
+  });
 }
 
 function harness(runtime?: () => CloneRuntimeFacts, scheduler?: () => ScheduleStatus[]): Harness {
@@ -539,13 +565,13 @@ describe('クローンの道具', () => {
 
   it('memory_write は本文の数字・識別子の増減を応答に添え、増減が無ければ何も足さない（#1306）', async () => {
     const h = harness();
-    await h.call('memory_write', {
+    await writeBased(h, {
       slug: 'ops',
       content: '# 運用\n\n必須チェックは 4本: `ci` / `pr-title-type`\n',
       summary: '初版',
     });
 
-    const changed = await h.call('memory_write', {
+    const changed = await writeBased(h, {
       slug: 'ops',
       content: '# 運用\n\n必須チェックは 3本: `ci`\n',
       summary: '門を1本外した',
@@ -553,7 +579,7 @@ describe('クローンの道具', () => {
     expect(changed).toContain('本文の数字・識別子の増減（#1306）');
     expect(changed).toContain('`pr-title-type`');
 
-    const same = await h.call('memory_write', {
+    const same = await writeBased(h, {
       slug: 'ops',
       content: '# 運用\n\n必須チェックは 3本: `ci`（書き直した）\n',
       summary: '言い回しだけ',
@@ -564,7 +590,7 @@ describe('クローンの道具', () => {
   it('memory_write は記憶を更新し、日誌に memory_update を残す', async () => {
     const h = harness();
 
-    await h.call('memory_write', {
+    await writeBased(h, {
       slug: 'values',
       content: '# 価値観\n\n速さより正しさ\n',
       summary: '価値観を書いた',
@@ -578,7 +604,7 @@ describe('クローンの道具', () => {
   it('memory_write の日誌には action: "write" が構造として載る（文言だけに頼らない）', async () => {
     const h = harness();
 
-    await h.call('memory_write', { slug: 'values', content: '本文', summary: '書いた' });
+    await writeBased(h, { slug: 'values', content: '本文', summary: '書いた' });
 
     const [entry] = await h.stores.journal.list({ types: ['memory_update'] });
     expect(entry).toMatchObject({ action: 'write' });
@@ -589,8 +615,8 @@ describe('クローンの道具', () => {
   // 保証を確かめない」の裏側——ここでは逆に、別々の it() で別々に測る）。
   it('memory_write の日誌には bytesBefore / bytesAfter が数として記録される', async () => {
     const h = harness();
-    await h.call('memory_write', { slug: 'values', content: '12345', summary: '最初' });
-    await h.call('memory_write', { slug: 'values', content: '1234567890', summary: '書き換え' });
+    await writeBased(h, { slug: 'values', content: '12345', summary: '最初' });
+    await writeBased(h, { slug: 'values', content: '1234567890', summary: '書き換え' });
 
     // 新しい順に返るので、先頭が2回目の書き込み。
     const [second, first] = await h.stores.journal.list({ types: ['memory_update'] });
@@ -621,7 +647,7 @@ describe('クローンの道具', () => {
     it('新規作成のときは「前」が無いので、増減ではなく新規作成と分かる形で返す', async () => {
       const h = harness();
 
-      const reply = await h.call('memory_write', {
+      const reply = await writeBased(h, {
         slug: 'new-doc',
         content: '12345',
         summary: '新規',
@@ -637,9 +663,9 @@ describe('クローンの道具', () => {
 
     it('書き換えでは前後の文字数と増減が文字単位で出る（Issue #318 の例と同じ桁）', async () => {
       const h = harness();
-      await h.call('memory_write', { slug: 'values', content: 'a'.repeat(12345), summary: '最初' });
+      await writeBased(h, { slug: 'values', content: 'a'.repeat(12345), summary: '最初' });
 
-      const reply = await h.call('memory_write', {
+      const reply = await writeBased(h, {
         slug: 'values',
         content: 'b'.repeat(4567),
         summary: '書き換え',
@@ -657,9 +683,9 @@ describe('クローンの道具', () => {
     it('全角文字では文字数とバイト数が一致しない。応答は文字数（バイトではない）', async () => {
       const h = harness();
       // 全角1文字は UTF-8 で3バイト。文字数なら 4、バイト数なら 12 になる。
-      await h.call('memory_write', { slug: 'values', content: '', summary: '空' });
+      await writeBased(h, { slug: 'values', content: '', summary: '空' });
 
-      const reply = await h.call('memory_write', {
+      const reply = await writeBased(h, {
         slug: 'values',
         content: '価値観です',
         summary: '書いた',
@@ -676,9 +702,9 @@ describe('クローンの道具', () => {
 
     it('増える書き換えは + 付きで出る', async () => {
       const h = harness();
-      await h.call('memory_write', { slug: 'values', content: '12345', summary: '最初' });
+      await writeBased(h, { slug: 'values', content: '12345', summary: '最初' });
 
-      const reply = await h.call('memory_write', {
+      const reply = await writeBased(h, {
         slug: 'values',
         content: '1234567890',
         summary: '増やした',
@@ -690,13 +716,13 @@ describe('クローンの道具', () => {
 
     it('消えた見出しを名指しで列挙する', async () => {
       const h = harness();
-      await h.call('memory_write', {
+      await writeBased(h, {
         slug: 'doc',
         content: '# 総論\n\n本文\n\n## 旧仕様\n\n消える節\n\n## 現行仕様\n\n残る節\n',
         summary: '最初',
       });
 
-      const reply = await h.call('memory_write', {
+      const reply = await writeBased(h, {
         slug: 'doc',
         content: '# 総論\n\n本文\n\n## 現行仕様\n\n残る節\n',
         summary: '旧仕様を削除',
@@ -708,13 +734,13 @@ describe('クローンの道具', () => {
 
     it('見出しがまったく消えていないときは「なし」と分かる形で返す', async () => {
       const h = harness();
-      await h.call('memory_write', {
+      await writeBased(h, {
         slug: 'doc',
         content: '# 総論\n\n本文\n',
         summary: '最初',
       });
 
-      const reply = await h.call('memory_write', {
+      const reply = await writeBased(h, {
         slug: 'doc',
         content: '# 総論\n\n書き足した本文\n',
         summary: '本文だけ変えた',
@@ -726,14 +752,14 @@ describe('クローンの道具', () => {
 
     it('見出しの抽出は行頭の # に限る。行の途中の # は見出しとして数えない', async () => {
       const h = harness();
-      await h.call('memory_write', {
+      await writeBased(h, {
         slug: 'doc',
         content: '# 総論\n\n価格は $100 くらい # メモ\n',
         summary: '最初',
       });
 
       // 見出しではない行（行頭が # でない）が消えても、消えた見出しには数えない。
-      const reply = await h.call('memory_write', {
+      const reply = await writeBased(h, {
         slug: 'doc',
         content: '# 総論\n',
         summary: '本文行を削った',
@@ -764,7 +790,7 @@ describe('クローンの道具', () => {
     it('末尾の行が見出しの文書へ追記しても、その見出しは消えた見出しに出ない（説明文の「常に0件」の根拠）', async () => {
       const h = harness();
       // 末尾に改行が無く、最後の行が見出しである文書（いちばん薄いところ）。
-      await h.call('memory_write', {
+      await writeBased(h, {
         slug: 'doc',
         content: '# 総論\n\n本文\n\n## 最後の節',
         summary: '最初',
@@ -801,14 +827,14 @@ describe('クローンの道具', () => {
      */
     it('同じ見出しが他所に残っていれば節を丸ごと消しても名指しされない（集合で比べる設計。文字数の減少だけが手がかりになる）', async () => {
       const h = harness();
-      await h.call('memory_write', {
+      await writeBased(h, {
         slug: 'doc',
         content: '# 私について\n### だから\n本文A\n## 経歴\n### だから\n本文B\n',
         summary: '最初',
       });
 
       // 2つ目の `### だから` の節（見出し＋本文B）を丸ごと消す。
-      const reply = await h.call('memory_write', {
+      const reply = await writeBased(h, {
         slug: 'doc',
         content: '# 私について\n### だから\n本文A\n## 経歴\n',
         summary: '節を1つ落とした',
@@ -825,13 +851,13 @@ describe('クローンの道具', () => {
       const h = harness();
       // 600 文字の予算に対して十分多い見出しを用意する（1件あたり十数文字）。
       const headings = Array.from({ length: 80 }, (_, i) => `## 見出し番号${i}`);
-      await h.call('memory_write', {
+      await writeBased(h, {
         slug: 'doc',
         content: headings.join('\n\n'),
         summary: '最初',
       });
 
-      const reply = await h.call('memory_write', {
+      const reply = await writeBased(h, {
         slug: 'doc',
         content: '# 総論だけ残す\n',
         summary: '全部消した',
@@ -863,7 +889,7 @@ describe('クローンの道具', () => {
 
     it('memory_append は既存を消さないので、消えた見出しは常に0件のはず（0でないなら異常）', async () => {
       const h = harness();
-      await h.call('memory_write', {
+      await writeBased(h, {
         slug: 'notes',
         content: '# 総論\n\n## 節1\n\n本文\n',
         summary: '最初',
@@ -909,7 +935,7 @@ describe('クローンの道具', () => {
     it('⭐ premise を新規作成すると、区分・床の遷移（文字）・「毎ターン要旨＋節の目次が焼かれる」の3つが出る', async () => {
       const h = harness();
 
-      const reply = await h.call('memory_write', {
+      const reply = await writeBased(h, {
         slug: 'about-me-core',
         content: '# 私の芯\n\n'.concat('大事にしていること。'.repeat(50)),
         summary: '新しい芯を作った',
@@ -936,13 +962,13 @@ describe('クローンの道具', () => {
      */
     it('⭐ premise を新規作成すると、いま最大の premise の名指しと、縮める3手順の道具名が出る', async () => {
       const h = harness();
-      await h.call('memory_write', {
+      await writeBased(h, {
         slug: 'small-premise',
         content: '# 小さい前提\n短い',
         summary: '先に小さい premise を作る',
       });
 
-      const reply = await h.call('memory_write', {
+      const reply = await writeBased(h, {
         slug: 'about-me-core',
         content: '# 私の芯\n\n'.concat('大事にしていること。'.repeat(50)),
         summary: '新しい芯を作った',
@@ -964,7 +990,7 @@ describe('クローンの道具', () => {
     it('fact を新規作成しても「要旨＋節の目次が焼かれる」の1行は出ない', async () => {
       const h = harness();
 
-      const reply = await h.call('memory_write', {
+      const reply = await writeBased(h, {
         slug: 'fact-doc',
         content: '---\ntype: fact\ndescription: 事実\n---\n# 事実\n本文',
         summary: '新規',
@@ -1002,7 +1028,7 @@ describe('クローンの道具', () => {
       const h = harness();
       await h.stores.persona.write('values', '---\ntype: premise\n---\n# 価値観\n本文');
 
-      const reply = await h.call('memory_frontmatter_set', {
+      const reply = await fmBased(h, {
         slug: 'values',
         description: '要旨を足した',
         summary: '要旨だけ',
@@ -1018,7 +1044,7 @@ describe('クローンの道具', () => {
     it('単位は文字である（bytes を出していない）', async () => {
       const h = harness();
 
-      const reply = await h.call('memory_write', {
+      const reply = await writeBased(h, {
         slug: 'zenkaku',
         content: '価値観です',
         summary: '全角',
@@ -1041,7 +1067,7 @@ describe('クローンの道具', () => {
       const appendSpy = vi.spyOn(h.stores.persona, 'append');
       const removeSpy = vi.spyOn(h.stores.persona, 'remove');
 
-      await h.call('memory_write', {
+      await writeBased(h, {
         slug: 'doc',
         content: '# 総論\n本文を増やした',
         summary: 'x',
@@ -1068,7 +1094,7 @@ describe('クローンの道具', () => {
     it('⭐ memory_write（premise）は、renderMemoryDocuments([書いた後の文書]) と一致する文字数を返す', async () => {
       const h = harness();
 
-      const reply = await h.call('memory_write', {
+      const reply = await writeBased(h, {
         slug: 'about-me-core',
         content: '# 私の芯\n\n'.concat('大事にしていること。'.repeat(50)),
         summary: '新しい芯を作った',
@@ -1092,7 +1118,7 @@ describe('クローンの道具', () => {
       const h = harness();
 
       const bigBody = '事実の記録。'.repeat(2000);
-      const reply = await h.call('memory_write', {
+      const reply = await writeBased(h, {
         slug: 'fact-doc',
         content: `---\ntype: fact\ndescription: 事実\n---\n# 事実\n${bigBody}`,
         summary: '新規',
@@ -1124,7 +1150,7 @@ describe('クローンの道具', () => {
     it('memory_frontmatter_set にも同じ行が出て、type を fact に変えると数値が小さくなる', async () => {
       const h = harness();
       await h.stores.persona.write('values', `# 価値観\n${'大事にしていること。'.repeat(50)}`);
-      const beforeReply = await h.call('memory_frontmatter_set', {
+      const beforeReply = await fmBased(h, {
         slug: 'values',
         description: '要旨だけ足す',
         summary: '要旨だけ',
@@ -1141,7 +1167,7 @@ describe('クローンの道具', () => {
       // ので、差分は「カードの変わった範囲だけ」である——ラベルもそう名乗る。
       expect(beforeReply).toContain('premise・カードの変わった範囲だけ');
 
-      const afterReply = await h.call('memory_frontmatter_set', {
+      const afterReply = await fmBased(h, {
         slug: 'values',
         type: 'fact',
         summary: '区分を変えた',
@@ -1171,6 +1197,7 @@ describe('クローンの道具', () => {
       // 見込みの検算にも同じ材料が要る。
       const fromBefore = ['# 私について', '本文', '', '## 事例', '事例の本文'].join('\n');
       await h.stores.persona.write('about-me', fromBefore);
+
       const outline = await h.call('memory_outline', { slug: 'about-me' });
       const idMatch = /\[([0-9a-f]{8}-[0-9a-f]{8})\] ## 事例 — /.exec(outline);
       expect(idMatch).not.toBeNull();
@@ -1202,7 +1229,7 @@ describe('クローンの道具', () => {
 
     it('単一文書への書き込みでは「移動元と移動先の両方」の注記は出ない', async () => {
       const h = harness();
-      const reply = await h.call('memory_write', {
+      const reply = await writeBased(h, {
         slug: 'solo',
         content: '# 独立\n本文',
         summary: '単独',
@@ -1246,7 +1273,7 @@ describe('クローンの道具', () => {
     it('⭐ runtime が在れば、セッション構築時点との差（文字と割合）が出る', async () => {
       const h = harness(() => ({ ...RUNTIME_BASE, injectedMemoryChars: heuristicChars(100) }));
 
-      const reply = await h.call('memory_write', {
+      const reply = await writeBased(h, {
         slug: 'about-me-core',
         content: '# 私の芯\n\n'.concat('大事にしていること。'.repeat(50)),
         summary: '新しい芯を作った',
@@ -1270,12 +1297,12 @@ describe('クローンの道具', () => {
       let injected: HeuristicChars = heuristicChars(0);
       const h = harness(() => ({ ...RUNTIME_BASE, injectedMemoryChars: injected }));
 
-      await h.call('memory_write', { slug: 'stable', content: '固定の本文', summary: '初回' });
+      await writeBased(h, { slug: 'stable', content: '固定の本文', summary: '初回' });
       const docs = await h.stores.persona.documents();
       injected = measureMemoryFloor(docs).totalChars;
 
       // 同じ内容で書き直す——記憶全体の総文字数は変わらない。
-      const reply = await h.call('memory_write', {
+      const reply = await writeBased(h, {
         slug: 'stable',
         content: '固定の本文',
         summary: '同じ内容で書き直した',
@@ -1289,7 +1316,7 @@ describe('クローンの道具', () => {
     it('runtime を渡していない場面（既定の harness）では、現在値であることを明記して現在値を出す', async () => {
       const h = harness(); // runtime 省略——本番では起こらないが、型としては省略できる口
 
-      const reply = await h.call('memory_write', {
+      const reply = await writeBased(h, {
         slug: 'about-me-core',
         content: '# 私の芯\n本文',
         summary: '新規',
@@ -1301,14 +1328,14 @@ describe('クローンの道具', () => {
 
     it('⭐ premise が複数あれば、大きい順に順位が出る', async () => {
       const h = harness(() => RUNTIME_BASE);
-      await h.call('memory_write', { slug: 'doc-small', content: '# 小\n短い', summary: 's' });
-      await h.call('memory_write', {
+      await writeBased(h, { slug: 'doc-small', content: '# 小\n短い', summary: 's' });
+      await writeBased(h, {
         slug: 'doc-large',
         content: '# 大\n'.concat('長い本文。'.repeat(100)),
         summary: 's',
       });
 
-      const reply = await h.call('memory_write', {
+      const reply = await writeBased(h, {
         slug: 'doc-medium',
         content: '# 中\n'.concat('本文。'.repeat(10)),
         summary: 's',
@@ -1325,7 +1352,7 @@ describe('クローンの道具', () => {
 
     it('premise がまだ無ければ、順位ではなくその旨を出す', async () => {
       const h = harness(() => RUNTIME_BASE);
-      const reply = await h.call('memory_write', {
+      const reply = await writeBased(h, {
         slug: 'fact-only',
         content: '---\ntype: fact\ndescription: 事実\n---\n# 事実\n本文',
         summary: '新規',
@@ -1347,7 +1374,7 @@ describe('クローンの道具', () => {
         await h.stores.persona.write(`p${i.toString().padStart(3, '0')}`, `# 前提${i}\n本文`);
       }
 
-      const reply = await h.call('memory_write', {
+      const reply = await writeBased(h, {
         slug: 'latest',
         content: '# 最新\n本文',
         summary: '最後の1件',
@@ -1373,7 +1400,7 @@ describe('クローンの道具', () => {
       const h = harness(() => RUNTIME_BASE);
       await h.stores.persona.write('values', '# 価値観\n本文');
 
-      const reply = await h.call('memory_frontmatter_set', {
+      const reply = await fmBased(h, {
         slug: 'values',
         description: '要旨',
         summary: 's',
@@ -1411,7 +1438,7 @@ describe('クローンの道具', () => {
      */
     it('⭐ 既存の2行を置き換えていない——4つの数がそれぞれ別の文言で区別できる', async () => {
       const h = harness(() => RUNTIME_BASE);
-      const reply = await h.call('memory_write', {
+      const reply = await writeBased(h, {
         slug: 'x',
         content: '# 見出し\n本文',
         summary: 's',
@@ -1433,7 +1460,7 @@ describe('クローンの道具', () => {
   describe('memory_list（要旨・鮮度・区分・階層を出す）', () => {
     it('区分と要旨が出る', async () => {
       const h = harness();
-      await h.call('memory_write', {
+      await writeBased(h, {
         slug: 'runbook',
         content: '---\ndescription: 費用の推移\ntype: fact\n---\n# 定点観測\n本文\n',
         summary: '定点観測を書いた',
@@ -1447,7 +1474,7 @@ describe('クローンの道具', () => {
 
     it('premise（既定）の文書も一覧には出る', async () => {
       const h = harness();
-      await h.call('memory_write', {
+      await writeBased(h, {
         slug: 'about-me',
         content: '# 私\n\n前提の本文\n',
         summary: '前提を書いた',
@@ -1460,12 +1487,12 @@ describe('クローンの道具', () => {
 
     it('階層は parent から組み立てて、インデントで表す', async () => {
       const h = harness();
-      await h.call('memory_write', {
+      await writeBased(h, {
         slug: 'parent-doc',
         content: '---\ndescription: 親\ntype: fact\n---\n# 親\n本文\n',
         summary: '親を書いた',
       });
-      await h.call('memory_write', {
+      await writeBased(h, {
         slug: 'child-doc',
         content: '---\ndescription: 子\ntype: fact\nparent: parent-doc\n---\n# 子\n本文\n',
         summary: '子を書いた',
@@ -2519,7 +2546,7 @@ describe('クローンの道具', () => {
 
   it('memory_append の日誌には bytesBefore / bytesAfter が数として記録される', async () => {
     const h = harness();
-    await h.call('memory_write', { slug: 'values', content: '12345', summary: '最初' });
+    await writeBased(h, { slug: 'values', content: '12345', summary: '最初' });
     await h.call('memory_append', { slug: 'values', content: '67890', summary: '追記' });
 
     const [entry] = await h.stores.journal.list({ types: ['memory_update'], limit: 1 });
@@ -2649,7 +2676,7 @@ describe('クローンの道具', () => {
     it('存在しない slug には断り、作られていない', async () => {
       const h = harness();
 
-      const reply = await h.call('memory_frontmatter_set', {
+      const reply = await fmBased(h, {
         slug: 'nope',
         description: '要旨',
         summary: '直したつもり',
@@ -2664,7 +2691,7 @@ describe('クローンの道具', () => {
       const original = `---\ndescription: 元の要旨\n---\n${longBody}`;
       await h.stores.persona.write('values', original);
 
-      const reply = await h.call('memory_frontmatter_set', { slug: 'values', summary: '直す' });
+      const reply = await fmBased(h, { slug: 'values', summary: '直す' });
 
       expect(reply).toMatch(/断|少なくとも1つ/);
       expect((await h.stores.persona.read('values'))?.content).toBe(original);
@@ -2674,7 +2701,7 @@ describe('クローンの道具', () => {
       const h = harness();
       await h.stores.persona.write('values', longBody);
 
-      await h.call('memory_frontmatter_set', {
+      await fmBased(h, {
         slug: 'values',
         description: '新しい要旨',
         summary: '要旨を足した',
@@ -2691,7 +2718,7 @@ describe('クローンの道具', () => {
       const original = `---\ndescription: 古い要旨\ntype: premise\n---\n${longBody}`;
       await h.stores.persona.write('values', original);
 
-      await h.call('memory_frontmatter_set', {
+      await fmBased(h, {
         slug: 'values',
         type: 'fact',
         summary: '区分を変えた',
@@ -2714,7 +2741,7 @@ describe('クローンの道具', () => {
       const h = harness();
       await h.stores.persona.write('values', '---\ndescription: 元の要旨\n---\n');
 
-      await h.call('memory_frontmatter_set', {
+      await fmBased(h, {
         slug: 'values',
         type: 'fact',
         summary: '区分を付けた',
@@ -2730,7 +2757,7 @@ describe('クローンの道具', () => {
       const original = `---\ndescription: 元の要旨\ntype: fact\nparent: root\n---\n${longBody}`;
       await h.stores.persona.write('values', original);
 
-      await h.call('memory_frontmatter_set', {
+      await fmBased(h, {
         slug: 'values',
         description: '新しい要旨',
         summary: '要旨だけ直した',
@@ -2766,7 +2793,7 @@ describe('クローンの道具', () => {
         // formatMemoryStaleness の秒の桁で区別できる（語ではなく数で測る、#821）。
         expect(staleListing).toContain('要旨は本文より1秒古い');
 
-        await h.call('memory_frontmatter_set', {
+        await fmBased(h, {
           slug: 'values',
           description: '本文に合わせた新しい要旨',
           summary: '要旨を直した',
@@ -2785,7 +2812,7 @@ describe('クローンの道具', () => {
       const h = harness();
       await h.stores.persona.write('values', `---\ntype: premise\n---\n${longBody}`);
 
-      const reply = await h.call('memory_frontmatter_set', {
+      const reply = await fmBased(h, {
         slug: 'values',
         type: 'fact',
         summary: '区分を下げた',
@@ -2800,7 +2827,7 @@ describe('クローンの道具', () => {
       const h = harness();
       await h.stores.persona.write('values', `---\ntype: premise\n---\n${longBody}`);
 
-      const reply = await h.call('memory_frontmatter_set', {
+      const reply = await fmBased(h, {
         slug: 'values',
         description: '要旨だけ',
         summary: '要旨だけ',
@@ -2826,7 +2853,7 @@ describe('クローンの道具', () => {
       const original = `---\ndescription: 旧\ntype: premise\n---\n${longBody}`;
       await h.stores.persona.write('values', original);
 
-      const reply = await h.call('memory_frontmatter_set', {
+      const reply = await fmBased(h, {
         slug: 'values',
         type: 'Fact', // 綴り違い（正しくは小文字の 'fact'）
         summary: '区分を変えたつもり',
@@ -2858,7 +2885,7 @@ describe('クローンの道具', () => {
         const original = `---\ndescription: 旧\n---\n${longBody}`;
         await h.stores.persona.write('values', original);
 
-        const reply = await h.call('memory_frontmatter_set', {
+        const reply = await fmBased(h, {
           slug: 'values',
           description: 'a\n---\nb',
           type: 'fact',
@@ -2875,7 +2902,7 @@ describe('クローンの道具', () => {
         const original = `---\ndescription: 旧\n---\n${longBody}`;
         await h.stores.persona.write('values', original);
 
-        const reply = await h.call('memory_frontmatter_set', {
+        const reply = await fmBased(h, {
           slug: 'values',
           description: 'a\rb',
           summary: '混ぜようとした',
@@ -2902,7 +2929,7 @@ describe('クローンの道具', () => {
         const after = 'い'.repeat(10);
         const value = `${before}\n${after}`; // 全21文字、11文字目が \n
 
-        const reply = await h.call('memory_frontmatter_set', {
+        const reply = await fmBased(h, {
           slug: 'values',
           description: value,
           summary: '混ぜようとした',
@@ -2924,7 +2951,7 @@ describe('クローンの道具', () => {
         const original = `---\ndescription: 旧\nparent: root\n---\n${longBody}`;
         await h.stores.persona.write('values', original);
 
-        const reply = await h.call('memory_frontmatter_set', {
+        const reply = await fmBased(h, {
           slug: 'values',
           parent: 'root\ndescription: hijacked',
           summary: '混ぜようとした',
@@ -2939,7 +2966,7 @@ describe('クローンの道具', () => {
         const h = harness();
         await h.stores.persona.write('values', `---\ndescription: 旧\n---\n${longBody}`);
 
-        const reply = await h.call('memory_frontmatter_set', {
+        const reply = await fmBased(h, {
           slug: 'values',
           description: 'a---b（1行のまま）',
           summary: '1行のまま直した',
@@ -2966,7 +2993,7 @@ describe('クローンの道具', () => {
         expect(longDescription.length).toBeGreaterThan(400);
         expect(longDescription).not.toMatch(/[\r\n]/);
 
-        const reply = await h.call('memory_frontmatter_set', {
+        const reply = await fmBased(h, {
           slug: 'values',
           description: longDescription,
           summary: '長い要旨に差し替えた',
@@ -2984,7 +3011,7 @@ describe('クローンの道具', () => {
       const malformed = '---\nno colon here\n---\n本文\n';
       await h.stores.persona.write('values', malformed);
 
-      const reply = await h.call('memory_frontmatter_set', {
+      const reply = await fmBased(h, {
         slug: 'values',
         description: '直したい',
         summary: '直したつもり',
@@ -2998,7 +3025,7 @@ describe('クローンの道具', () => {
       const h = harness();
       await h.stores.persona.write('values', `---\ndescription: 旧\n---\n${longBody}`);
 
-      const reply = await h.call('memory_frontmatter_set', {
+      const reply = await fmBased(h, {
         slug: 'values',
         description: '新',
         summary: '要旨を直した',
@@ -3011,7 +3038,7 @@ describe('クローンの道具', () => {
       const h = harness();
       await h.stores.persona.write('values', `---\ndescription: 旧\n---\n${longBody}`);
 
-      await h.call('memory_frontmatter_set', {
+      await fmBased(h, {
         slug: 'values',
         description: '新しい要旨（長め）',
         summary: '要旨を直した',
@@ -3031,7 +3058,7 @@ describe('クローンの道具', () => {
         await markHuman(h, 'values', original);
         h.setMemoryCause('distill');
 
-        const reply = await h.call('memory_frontmatter_set', {
+        const reply = await fmBased(h, {
           slug: 'values',
           description: '蒸留が書き換えたい要旨',
           summary: '直したつもり',
@@ -3060,7 +3087,7 @@ describe('クローンの道具', () => {
         await markHuman(h, 'values', original);
         h.setMemoryCause('distill');
 
-        const reply = await h.call('memory_frontmatter_set', {
+        const reply = await fmBased(h, {
           slug: 'values',
           description: '書き換えたい',
           summary: '直したつもり',
@@ -3084,7 +3111,7 @@ describe('クローンの道具', () => {
         await markHuman(h, 'values', original);
         h.setMemoryCause('clone');
 
-        const reply = await h.call('memory_frontmatter_set', {
+        const reply = await fmBased(h, {
           slug: 'values',
           description: '会話の中で直した要旨',
           summary: '直した',
@@ -3096,11 +3123,11 @@ describe('クローンの道具', () => {
 
       it('対照 — clone-only の文書には distill からも通る（検出器が非0を出せること）', async () => {
         const h = harness();
-        await h.call('memory_write', { slug: 'notes', content: longBody, summary: '作成' });
+        await writeBased(h, { slug: 'notes', content: longBody, summary: '作成' });
         expect(await h.stores.persona.protectionStatus('notes')).toEqual({ kind: 'clone-only' });
 
         h.setMemoryCause('distill');
-        const reply = await h.call('memory_frontmatter_set', {
+        const reply = await fmBased(h, {
           slug: 'notes',
           description: '蒸留が付けた要旨',
           summary: '蒸留で要旨を付けた',
@@ -3119,7 +3146,7 @@ describe('クローンの道具', () => {
         const before = process.env.ALTEROID_MEMORY_GUARD;
         process.env.ALTEROID_MEMORY_GUARD = 'off';
         try {
-          const reply = await h.call('memory_frontmatter_set', {
+          const reply = await fmBased(h, {
             slug: 'values',
             description: 'off にしたので通る',
             summary: '直した',
@@ -3233,7 +3260,7 @@ describe('クローンの道具', () => {
     }
 
     async function seed(h: Harness, slug = 'about-me', content = source): Promise<void> {
-      await h.call('memory_write', { slug, content, summary: '作成' });
+      await writeBased(h, { slug, content, summary: '作成' });
     }
 
     describe('memory_outline（読むだけ）', () => {
@@ -4302,7 +4329,7 @@ describe('クローンの道具', () => {
         await markHuman(h, 'about-me', source);
         h.setMemoryCause('distill');
 
-        const reply = await h.call('memory_write', {
+        const reply = await writeBased(h, {
           slug: 'about-me',
           content: '# 私について\n書き換えたつもり',
           summary: '書き換えたつもり',
@@ -4425,7 +4452,7 @@ describe('クローンの道具', () => {
 
           const reply =
             action === '全文置換'
-              ? await h.call('memory_write', {
+              ? await writeBased(h, {
                   slug: 'about-me',
                   content: '# 私について\n書き換えたつもり',
                   summary: '書き換えたつもり',
@@ -4591,7 +4618,7 @@ describe('クローンの道具', () => {
 
         // 正の対照（この走行で守りが生きていること）。ここが断られなければ、
         // 下の「移せた」は「守りが無効だから移せた」の空振りである。
-        const denied = await h.call('memory_write', {
+        const denied = await writeBased(h, {
           slug: 'about-me',
           content: '# 私について\n書き換えたつもり',
           summary: '書き換えたつもり',
@@ -4725,7 +4752,7 @@ describe('クローンの道具', () => {
     ].join('\n');
 
     async function seed(h: Harness, slug = 'about-me', content = doc): Promise<void> {
-      await h.call('memory_write', { slug, content, summary: '作成' });
+      await writeBased(h, { slug, content, summary: '作成' });
     }
 
     /**
@@ -5096,17 +5123,17 @@ describe('クローンの道具', () => {
       expect(await h.stores.persona.protectionStatus('values')).toEqual({ kind: 'human' });
 
       h.setMemoryCause('clone');
-      await h.call('memory_write', {
+      await writeBased(h, {
         slug: 'values',
         content: '# 価値観\n\nクローンが書いた1',
         summary: '1',
       });
-      await h.call('memory_write', {
+      await writeBased(h, {
         slug: 'values',
         content: '# 価値観\n\nクローンが書いた2',
         summary: '2',
       });
-      await h.call('memory_write', {
+      await writeBased(h, {
         slug: 'values',
         content: '# 価値観\n\nクローンが書いた3',
         summary: '3',
@@ -5119,7 +5146,7 @@ describe('クローンの道具', () => {
       const h = harness();
       h.setMemoryCause('distill');
 
-      const reply = await h.call('memory_write', {
+      const reply = await writeBased(h, {
         slug: 'fresh-doc',
         content: '# 新規\n\n本文',
         summary: '新規に書く',
@@ -5138,7 +5165,7 @@ describe('クローンの道具', () => {
         const h = harness();
         h.setMemoryCause('distill');
 
-        const reply = await h.call('memory_write', {
+        const reply = await writeBased(h, {
           slug: 'fresh-doc',
           content: '# 新規\n\n本文',
           summary: '新規に書く',
@@ -5161,7 +5188,7 @@ describe('クローンの道具', () => {
         await markHuman(h, 'values', '# 価値観\n\n人間が書いた\n');
         h.setMemoryCause('distill');
 
-        const reply = await h.call('memory_write', {
+        const reply = await writeBased(h, {
           slug: 'values',
           content: '# 価値観\n\ndistill が上書き',
           summary: '畳んだ',
@@ -5199,7 +5226,7 @@ describe('クローンの道具', () => {
       await markHuman(h, 'values', '# 価値観\n\n人間が書いた\n');
 
       h.setMemoryCause('clone');
-      const reply = await h.call('memory_write', {
+      const reply = await writeBased(h, {
         slug: 'values',
         content: '# 価値観\n\n会話の中で書き換えた',
         summary: '書き換え',
@@ -5238,7 +5265,7 @@ describe('クローンの道具', () => {
     it('clone-only の文書には distill の全文置換・削除が通る（対照 — 検出器が非0を出せること）', async () => {
       const h = harness();
       // クローンが書いた文書（human 印なし）は clone-only になる。
-      await h.call('memory_write', {
+      await writeBased(h, {
         slug: 'notes',
         content: '# ノート\n\n最初の版',
         summary: '1',
@@ -5246,7 +5273,7 @@ describe('クローンの道具', () => {
       expect(await h.stores.persona.protectionStatus('notes')).toEqual({ kind: 'clone-only' });
 
       h.setMemoryCause('distill');
-      const reply = await h.call('memory_write', {
+      const reply = await writeBased(h, {
         slug: 'notes',
         content: '# ノート\n\n畳んだ版',
         summary: '畳んだ',
@@ -5264,7 +5291,7 @@ describe('クローンの道具', () => {
       const before = process.env.ALTEROID_MEMORY_GUARD;
       process.env.ALTEROID_MEMORY_GUARD = 'off';
       try {
-        const reply = await h.call('memory_write', {
+        const reply = await writeBased(h, {
           slug: 'values',
           content: '# 価値観\n\ndistill が上書き',
           summary: '畳んだ',
@@ -9294,6 +9321,31 @@ describe('クローンの道具', () => {
       expect(reply).toContain('世代 3');
       expect(reply).toContain('現役は世代 5');
       expect(reply).toContain('manager_stop → manager_start');
+    });
+
+    /**
+     * **Issue #2851。** 食い違いの ⚠ に、runner が最後に見た背景処理の本数を添える。
+     * 背景処理が残っていると runner は境界に達せず自動では畳み直さないので、
+     * 「なぜ ⚠ が消えないか」の材料になる。**聞けていないときは 0 と言わず「分からない」**。
+     */
+    it('世代が食い違う ⚠ に、runner が見た背景処理の本数（1本以上・0本・分からない）を添える', async () => {
+      const h = harness();
+      await h.call('manager_start', { request: 'A' });
+      const target = h.running[0];
+      if (!target) throw new Error('準備に失敗');
+      target.tokenGeneration = 3;
+      target.activeTokenGeneration = 5;
+
+      target.liveBackgroundTasks = 2;
+      expect(await h.call('manager_list', {})).toContain('背景処理は 2 本');
+
+      target.liveBackgroundTasks = 0;
+      expect(await h.call('manager_list', {})).toContain('背景処理は 0 本');
+
+      delete target.liveBackgroundTasks;
+      const unknown = await h.call('manager_list', {});
+      expect(unknown).toContain('背景処理の本数は分からない');
+      expect(unknown).not.toContain('背景処理は 0 本');
     });
 
     /**
@@ -15357,12 +15409,12 @@ describe('self_status（いま自分がどう走っているか）', () => {
 
   it('記憶の文書数といまの総文字数が出る。焼き込んだ時点の文字数とは別々に出る', async () => {
     const h = harness(() => RUNTIME);
-    await h.call('memory_write', {
+    await writeBased(h, {
       slug: 'values',
       content: '# 価値観\n\n人間が手で書いた方針',
       summary: '書いた',
     });
-    await h.call('memory_write', {
+    await writeBased(h, {
       slug: 'habits',
       content: '# 習慣\n\n毎朝記憶を見直す',
       summary: '書いた',
@@ -15380,10 +15432,10 @@ describe('self_status（いま自分がどう走っているか）', () => {
 
   it('記憶を書き換えたあとに呼んでも、いまの総文字数は読み直した値が出る', async () => {
     const h = harness(() => RUNTIME);
-    await h.call('memory_write', { slug: 'values', content: '# 価値観\n\n最初の版', summary: '1' });
+    await writeBased(h, { slug: 'values', content: '# 価値観\n\n最初の版', summary: '1' });
     await h.call('self_status', {}); // 1回目（内容は見ない。副作用が無いことの前提づくり）
 
-    await h.call('memory_write', {
+    await writeBased(h, {
       slug: 'values',
       content: '# 価値観\n\n書き換えた後のもっと長い方針の本文',
       summary: '2',
@@ -15406,7 +15458,7 @@ describe('self_status（いま自分がどう走っているか）', () => {
   describe('記憶内訳の区分ごとの小計（premise 合計 / fact 目次合計。記憶の肥大への恒久対策）', () => {
     it('既存の「総文字数」の行の文言は変わっていない', async () => {
       const h = harness(() => RUNTIME);
-      await h.call('memory_write', { slug: 'a', content: '# A\n本文', summary: '1' });
+      await writeBased(h, { slug: 'a', content: '# A\n本文', summary: '1' });
       const totalMemory = renderMemoryDocuments(await h.stores.persona.documents());
 
       const reply = await h.call('self_status', {});
@@ -15436,7 +15488,7 @@ describe('self_status（いま自分がどう走っているか）', () => {
       ).join('\n');
       const content = `---\ntype: premise\ndescription: ${'あ'.repeat(3_000)}\n---\n\n${body}`;
       for (let i = 0; i < 12; i += 1) {
-        await h.call('memory_write', { slug: `big-${i}`, content, summary: String(i) });
+        await writeBased(h, { slug: `big-${i}`, content, summary: String(i) });
       }
       const floor = measureMemoryFloor(await h.stores.persona.documents());
       // 前提: 足場が実際に蓋を噛ませている（噛んでいなければこの歯は空振りである）。
@@ -15454,12 +15506,12 @@ describe('self_status（いま自分がどう走っているか）', () => {
 
     it('premise 合計・fact 目次合計が、measureMemoryFloor が返す値と一致する', async () => {
       const h = harness(() => RUNTIME);
-      await h.call('memory_write', {
+      await writeBased(h, {
         slug: 'premise-doc',
         content: '# 前提\n判断の基準になる本文',
         summary: '1',
       });
-      await h.call('memory_write', {
+      await writeBased(h, {
         slug: 'fact-doc',
         content: '---\ntype: fact\ndescription: 事実の要旨\n---\n# 事実\n本文',
         summary: '2',
@@ -15478,12 +15530,12 @@ describe('self_status（いま自分がどう走っているか）', () => {
 
     it('文書ごとの行に [premise] / [fact] と、bytes・文字の両方の単位ラベルが出る（bytes は消さない）', async () => {
       const h = harness(() => RUNTIME);
-      await h.call('memory_write', {
+      await writeBased(h, {
         slug: 'premise-doc',
         content: '# 前提\n本文',
         summary: '1',
       });
-      await h.call('memory_write', {
+      await writeBased(h, {
         slug: 'fact-doc',
         content: '---\ntype: fact\ndescription: 要旨\n---\n# 事実\n本文',
         summary: '2',
@@ -16009,7 +16061,7 @@ describe('journal_read — inbox_flow.retained（Issue #1264）', () => {
 describe('journal_read — memory_update の action / バイト数（#339）', () => {
   it('action と前後バイト数を出す（新形式のエントリ）', async () => {
     const h = harness();
-    await h.call('memory_write', { slug: 'values', content: '12345', summary: '最初の書き込み' });
+    await writeBased(h, { slug: 'values', content: '12345', summary: '最初の書き込み' });
     const [entry] = await h.stores.journal.list({ types: ['memory_update'] });
     if (entry === undefined) throw new Error('memory_write が日誌へ記録していない');
 
@@ -16806,6 +16858,13 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
         content: '---\ndescription: 畳んだ\ntype: fact\n---\n# 残した節\n\n本文',
         summary: '節を1つへ畳んだ',
       },
+      // 既存の文書の全文置換は読んだ版が要る（#2809）。足場を積んだ後の版を使う。
+      argsOf: async (h) => ({
+        slug: OUTLINE_FLOOD_SLUG,
+        content: '---\ndescription: 畳んだ\ntype: fact\n---\n# 残した節\n\n本文',
+        summary: '節を1つへ畳んだ',
+        base_version: memoryVersion((await h.stores.persona.read(OUTLINE_FLOOD_SLUG))!.content),
+      }),
       mark: /…ほか \d+ 件は省略（消えた見出しは全 \d+ 件のうち \d+ 件だけ出した）。/,
     },
     /*
@@ -18236,7 +18295,9 @@ describe('一覧を抜粋にしたものには、全文の行き先がある', (
 
     const reply = await h.call('memory_read', { slug: 'small' });
 
-    expect(reply).toBe('# 題\n\n短い本文\n');
+    // 注記（頁の見出し・続きの取り方）は付かない。付くのは末尾の版（#2809）だけ。
+    expect(reply).toMatch(/^# 題\n\n短い本文\n\n\n（版 base_version=[0-9a-f]{64} /);
+    expect(reply).not.toContain('ここで切れている');
   });
 
   it('self_read は長い正典を切って返し、続きの取り方を示す', async () => {
@@ -22343,6 +22404,7 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
           slug: 'doc-fm',
           description: '新しい要旨',
           summary: '要旨を直した',
+          base_version: memoryVersion((await stores.persona.read('doc-fm'))!.content),
         });
       },
     },
@@ -24196,5 +24258,203 @@ describe('account_list（読むだけ。id・許可の状態・時刻だけで�
     const second = await h.call('account_list', { from: Number(next) });
     expect(second).toContain(`- acct-${String(next).padStart(2, '0')} `);
     expect(second).not.toContain('- acct-00 ');
+  });
+});
+
+/**
+ * Issue #2809: クローンの全文を書き直す口が、読んだ後に人間が直した内容を黙って消す。
+ * memory_read（別の道具呼び出し）→ 人間が書く → memory_write、の順。
+ * 版は memory_read の応答にある `base_version` の値をそのまま持ち回る。
+ */
+describe('クローンの記憶の全文書き直しは読んだ版を前提にする（#2809）', () => {
+  const versionOf = (readResult: string): string => {
+    const m = /base_version[=:：]\s*([0-9a-f]{64})/.exec(readResult);
+    if (m === null) throw new Error(`memory_read の応答に版が無い: ${readResult}`);
+    return m[1]!;
+  };
+
+  it('人間が同じ大きさの別の内容に直した後の memory_write は、書かずに「変わった」と返す', async () => {
+    const h = harness();
+    await h.stores.persona.write('ops', '# 運用\n\n人間の元の内容AAAA\n');
+    const read = await h.call('memory_read', { slug: 'ops' });
+    // 人間が（PUT と同じ persona.write で）同じ長さの別の内容へ直す
+    await h.stores.persona.write('ops', '# 運用\n\n人間が直した内容BBB\n');
+    await h.stores.persona.markHumanTouched('ops', new Date().toISOString());
+
+    const result = await h.call('memory_write', {
+      slug: 'ops',
+      content: '# 運用\n\nクローンの書き直しCCCCC\n',
+      summary: '書き直し',
+      base_version: versionOf(read),
+    });
+
+    expect((await h.stores.persona.read('ops'))?.content).toContain('人間が直した内容BBB');
+    expect(result).toContain('その間に変わった');
+    expect(result).toContain('memory_read');
+    expect(await h.stores.journal.list({ types: ['memory_update'] })).toHaveLength(0);
+  });
+
+  it('版が合えば書ける（応答に次の版が付き、続けて書ける）', async () => {
+    const h = harness();
+    await h.stores.persona.write('ops', '# 運用\n\n初版\n');
+    const read = await h.call('memory_read', { slug: 'ops' });
+    const first = await h.call('memory_write', {
+      slug: 'ops',
+      content: '# 運用\n\n二版\n',
+      summary: '二版',
+      base_version: versionOf(read),
+    });
+    const second = await h.call('memory_write', {
+      slug: 'ops',
+      content: '# 運用\n\n三版\n',
+      summary: '三版',
+      base_version: versionOf(first),
+    });
+    expect(second).toContain('更新した');
+    expect((await h.stores.persona.read('ops'))?.content).toContain('三版');
+  });
+
+  it('読んだ後に人間が別内容へ直し、版を持たずに memory_write すると、書かずに memory_read を促す（再現）', async () => {
+    const h = harness();
+    await h.stores.persona.write('ops', '# 運用\n\n人間の元AAAA\n');
+    await h.call('memory_read', { slug: 'ops' });
+    await h.stores.persona.write('ops', '# 運用\n\n人間の内容\n');
+    await h.stores.persona.markHumanTouched('ops', new Date().toISOString());
+    const result = await h.call('memory_write', {
+      slug: 'ops',
+      content: '上書き',
+      summary: 'x',
+    });
+    expect((await h.stores.persona.read('ops'))?.content).toContain('人間の内容');
+    expect(result).toContain('base_version');
+    expect(result).toContain('memory_read');
+  });
+
+  it('新規作成は版なしで書けるが、読んだ後に誰かが作っていれば書かない', async () => {
+    const h = harness();
+    expect(await h.call('memory_write', { slug: 'fresh', content: '新', summary: 'n' })).toContain(
+      '更新した',
+    );
+  });
+
+  it('memory_frontmatter_set は、読んだ後に人間が直していれば書かず、「何も書いていない」と返す', async () => {
+    const h = harness();
+    await h.stores.persona.write('ops', '---\ndescription: 旧\n---\n# 運用\n\n本文\n');
+    const read = await h.call('memory_read', { slug: 'ops' });
+    await h.stores.persona.write('ops', '---\ndescription: 人間の要旨\n---\n# 運用\n\n本文\n');
+    const result = await h.call('memory_frontmatter_set', {
+      slug: 'ops',
+      type: 'fact',
+      summary: 'd',
+      base_version: versionOf(read),
+    });
+    expect(result).toContain('その間に変わった');
+    expect(result).toContain('何も書いていない');
+    expect(result).toContain('memory_read');
+    const after = (await h.stores.persona.read('ops'))!.content;
+    expect(after).toContain('description: 人間の要旨');
+    expect(after).not.toContain('type: fact');
+  });
+
+  it('memory_frontmatter_set は版なしでは書かず、「何も書いていない」と読み直しを返す', async () => {
+    const h = harness();
+    await h.stores.persona.write('ops', '---\ndescription: 旧\n---\n# 運用\n');
+    const result = await h.call('memory_frontmatter_set', {
+      slug: 'ops',
+      description: '新',
+      summary: 'd',
+    });
+    expect(result).toContain('何も書いていない');
+    expect(result).toContain('base_version');
+    expect(result).toContain('memory_read');
+    expect((await h.stores.persona.read('ops'))?.content).toContain('description: 旧');
+  });
+
+  it('memory_write の断り（版なし・衝突）は「何も書いていない」と言う', async () => {
+    const h = harness();
+    await h.stores.persona.write('ops', '# 運用\n\n人間の内容\n');
+    const noVersion = await h.call('memory_write', { slug: 'ops', content: 'x', summary: 's' });
+    expect(noVersion).toContain('何も書いていない');
+    const stale = await h.call('memory_write', {
+      slug: 'ops',
+      content: 'x',
+      summary: 's',
+      base_version: 'f'.repeat(64),
+    });
+    expect(stale).toContain('何も書いていない');
+    expect(stale).toContain('その間に変わった');
+  });
+
+  it('統合の走行（distill）でも、版が無い・食い違うと断られ、読み直した版を付ければ通る（clone-only の文書）', async () => {
+    const h = harness();
+    // clone-only の文書（人間は書いていない）。human / unknown の歯とぶつからない。
+    await h.stores.persona.write('notes', '# 覚え書き\n\n初版\n');
+    h.setMemoryCause('distill');
+
+    const noVersion = await h.call('memory_write', {
+      slug: 'notes',
+      content: '# 覚え書き\n\n蒸留の版\n',
+      summary: '蒸留',
+    });
+    expect(noVersion).toContain('memory_read');
+    expect(noVersion).toContain('base_version');
+    expect(noVersion).toContain('何も書いていない');
+
+    const read = await h.call('memory_read', { slug: 'notes' });
+    // 読んだ後に別の書き手（clone-only のまま）が書く
+    await h.stores.persona.write('notes', '# 覚え書き\n\n別ターンの追記\n');
+    const stale = await h.call('memory_write', {
+      slug: 'notes',
+      content: '# 覚え書き\n\n蒸留の版\n',
+      summary: '蒸留',
+      base_version: versionOf(read),
+    });
+    expect(stale).toContain('その間に変わった');
+    expect(stale).toContain('memory_read');
+    expect(stale).toContain('base_version');
+    expect(stale).toContain('何も書いていない');
+    expect((await h.stores.persona.read('notes'))?.content).toContain('別ターンの追記');
+
+    const reread = await h.call('memory_read', { slug: 'notes' });
+    const ok = await h.call('memory_write', {
+      slug: 'notes',
+      content: '# 覚え書き\n\n別ターンの追記\n蒸留の版\n',
+      summary: '蒸留',
+      base_version: versionOf(reread),
+    });
+    expect(ok).toContain('更新した');
+    expect((await h.stores.persona.read('notes'))?.content).toContain('蒸留の版');
+  });
+
+  it('memory_section_move は、出どころを読んでから切り取るまでの間に変わっていれば切り取らない（重複は失われない側）', async () => {
+    const h = harness();
+    await h.stores.persona.write('src', '# 親\n\n## 動かす\n\n事例\n\n## 残す\n\n元の残す節\n');
+    const { sections } = scanMemorySections((await h.stores.persona.read('src'))!.content);
+    const target = sections.find((x) => x.heading.includes('動かす'))!;
+    const realRead = h.stores.persona.read.bind(h.stores.persona);
+    let first = true;
+    h.stores.persona.read = async (slug: string) => {
+      const doc = await realRead(slug);
+      if (first && slug === 'src') {
+        first = false;
+        await h.stores.persona.write(
+          'src',
+          '# 親\n\n## 動かす\n\n事例\n\n## 残す\n\n人間が直した節\n',
+        );
+      }
+      return doc;
+    };
+    const result = await h.call('memory_section_move', {
+      fromSlug: 'src',
+      sections: [target.id],
+      toSlug: 'dst',
+      summary: '移す',
+    });
+    expect(result).toContain('その間に変わった');
+    // 移し先へは足した・出どころからは切っていない（重複で消失ではない）。「何も書いていない」とは言わない。
+    expect(result).toContain('重複しているが、失われてはいない');
+    expect(result).not.toContain('何も書いていない');
+    expect((await h.stores.persona.read('dst'))?.content).toContain('事例');
+    expect((await h.stores.persona.read('src'))?.content).toContain('人間が直した節');
   });
 });

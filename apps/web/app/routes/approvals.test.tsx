@@ -763,7 +763,7 @@ describe('横並びの積み替え（本4-B）: flex-wrap の付け忘れ', () =
     renderPage();
 
     // `job-abc` の部分は `<Link>` になったので（issue #2041）、行はリンクから辿る。
-    const jobLink = await screen.findByRole('link', { name: 'job-abc' });
+    const jobLink = await screen.findByRole('link', { name: '詳細を見る' });
     const row = jobLink.closest('div');
     expect(row).not.toBeNull();
     const tokens = row!.className.split(/\s+/);
@@ -789,13 +789,14 @@ describe('横並びの積み替え（本4-B）: flex-wrap の付け忘れ', () =
  * 作法で、文言は変えない——行の文字列は引き続き `job <id>` と読める。
  */
 describe('メタ行の job id が委譲の詳細へのリンクになる（issue #2041）', () => {
-  it('jobId を持つカードは id が /managers/<id> への Link になり、文言は job <id> のまま', async () => {
+  it('jobId を持つカードは id が /managers/<id> への Link になり、id は文字として出ない（#2782）', async () => {
     stubApprovals([approval({ id: 'a-1', jobId: 'mgr-42' })]);
     renderPage();
 
-    const link = await screen.findByRole('link', { name: 'mgr-42' });
+    const link = await screen.findByRole('link', { name: '詳細を見る' });
     expect(link.getAttribute('href')).toBe('/managers/mgr-42');
-    expect(link.parentElement?.textContent).toBe('job mgr-42');
+    expect(link.parentElement?.textContent).toBe('委譲: 詳細を見る');
+    expect(document.body.textContent).not.toContain('mgr-42');
   });
 
   it('jobId を持たないカードにはリンクを出さない', async () => {

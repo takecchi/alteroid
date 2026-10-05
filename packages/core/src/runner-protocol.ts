@@ -125,6 +125,25 @@ export const runnerManagerStateSchema = z.object({
   request: z.string(),
   waiting: z.array(runnerWaitingSchema),
   sessionId: z.string().optional(),
+  /**
+   * **runner がいま見ている、起こしっぱなしの背景処理の本数**（Issue #2851。
+   * `runner.ts` の `#liveBackgroundTasks` の写し）。
+   *
+   * 読み手は `manager.ts` の `send()` で、**認証トークンの世代が食い違う done の委譲を
+   * 畳んで新しい鍵で起こし直してよいか**を決める。背景処理が残っていれば畳むと道連れ
+   * になるので、1本でも在れば（あるいは本数が分からなければ）畳まずに断る。
+   *
+   * **`undefined` は「0 本」ではなく「分からない」である。** 欄を持たない古い runner
+   * と、この欄を名乗る新しい runner が混ざる窓がある（デーモンと runner は別々に
+   * デプロイされる）。**欄が無いときに 0 を捏造しない**——0 と読めば、背景処理を
+   * 抱えた古い runner のセッションを黙って畳む（AGENTS.md「取れない軸に 0 の行を
+   * 作る」）。
+   *
+   * **新旧の噛み合わせ。** 古いデーモンの schema はこの欄を知らないが、`z.object` は
+   * 未知の欄を捨てるだけで落とさない（`.strict()` ではない）ので、新しい runner の
+   * 欄付きの応答を古いデーモンが読んでも壊れない。
+   */
+  liveBackgroundTasks: z.number().int().nonnegative().optional(),
 });
 
 /**
@@ -2921,6 +2940,12 @@ export interface RunnerEntry {
   /** `sessions` を観測できた時刻（ISO8601）。`sessions` と対でだけ載る。 */
   sessionsObservedAt?: string;
   /**
+   * `sessions` と同じ観測で、各委譲の背景処理の本数（`RunnerManagerState.liveBackgroundTasks`。
+   * Issue #2851）。**欄を名乗った委譲だけが載る**——古い runner の委譲はキーが無い（0 ではなく
+   * 「分からない」）。`sessionsObservedAt` と対で読むこと。
+   */
+  sessionBackgroundTasks?: Readonly<Record<string, number>>;
+  /**
    * runner→デーモンの `/events` の脚（このデーモン自身の側の端）の状態
    * （{@link RunnerLegState}）。`entry.client.legState` の写し——**`entries()`
    * が呼ばれるたびに読み直す。** 過去の観測を保持するフィールドではないので、
@@ -3491,6 +3516,8 @@ interface RegistryEntry {
   sessions?: ReadonlySet<string>;
   /** `sessions` をいつ観測できたか（heartbeat の `at`。ISO8601）。 */
   sessionsObservedAt?: string;
+  /** `RunnerEntry.sessionBackgroundTasks` の正本。`sessions` と同じ観測から書く（#2851）。 */
+  sessionBackgroundTasks?: ReadonlyMap<string, number>;
   /**
    * `list()` の探りがいま飛んでいるか。**周期より遅い応答を積み上げない**ための
    * 錠で、`true` の間はこの entry へ次の探りを投げない（`#probeSessions`）。
@@ -3656,6 +3683,9 @@ class Registry implements RunnerRegistry {
       ...(entry.sessions === undefined || entry.sessionsObservedAt === undefined
         ? {}
         : { sessions: [...entry.sessions], sessionsObservedAt: entry.sessionsObservedAt }),
+      ...(entry.sessionBackgroundTasks === undefined || entry.sessionsObservedAt === undefined
+        ? {}
+        : { sessionBackgroundTasks: Object.fromEntries(entry.sessionBackgroundTasks) }),
       // runner→デーモンの脚の状態。**`entry.client` からその場で読む——
       // 保存も間引きもしない**（`RunnerEntry.legState` の doc）。`client` が
       // 無い、または `legState` を持たない実装では出ない。
@@ -4213,6 +4243,7 @@ class Registry implements RunnerRegistry {
        */
       if (identity?.managers === 0) {
         entry.sessions = new Set();
+        entry.sessionBackgroundTasks = new Map();
         entry.sessionsObservedAt = new Date(at).toISOString();
         return;
       }
@@ -4261,6 +4292,13 @@ class Registry implements RunnerRegistry {
       if (this.#stopped) return;
       if (this.#entries.get(entry.source.label) !== entry || entry.client !== client) return;
       entry.sessions = new Set(states.map((state) => state.managerId));
+      entry.sessionBackgroundTasks = new Map(
+        states.flatMap((state): [string, number][] =>
+          state.liveBackgroundTasks === undefined
+            ? []
+            : [[state.managerId, state.liveBackgroundTasks]],
+        ),
+      );
       entry.sessionsObservedAt = new Date(at).toISOString();
     } catch {
       // 上の doc のとおり、**何も書かない**（前の観測をそのまま残す）。

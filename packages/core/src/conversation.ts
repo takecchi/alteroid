@@ -131,6 +131,11 @@ export interface ConversationMessage {
    * で取り出したときにだけ、どの編集がこれを隠したかを示す。
    */
   supersededBy?: string;
+  /**
+   * 返信ではなく「返せなかった」知らせである印（`schema.ts` の `exchange.turnFailure` を
+   * そのまま写す）。付いていなければ通常の発言（または印を持たない古い行）。
+   */
+  turnFailure?: 'failed' | 'held';
 }
 
 /**
@@ -224,10 +229,20 @@ export function humanExchanges(entries: JournalEntry[]): Exchange[] {
  */
 export async function readConversationWindow(
   journal: Pick<JournalStore, 'list'>,
-  options: { scan: number; since?: string; until?: string },
+  options: {
+    scan: number;
+    since?: string;
+    until?: string;
+    /** 古い順で読む（既定は新しい順）。取り込みが前へ向かって進むための形。 */
+    order?: 'asc' | 'desc';
+    /** 頁の継続点（`JournalQuery.after`）。 */
+    after?: { id: string; at: string };
+  },
 ): Promise<JournalEntry[]> {
   return journal.list({
     limit: options.scan,
+    ...(options.order === undefined ? {} : { order: options.order }),
+    ...(options.after === undefined ? {} : { after: options.after }),
     types: ['exchange'],
     with: ['human'],
     ...(options.since === undefined ? {} : { since: options.since }),
@@ -289,12 +304,15 @@ export function collectConversations(
     const readThrough = effectiveReadThrough(readView, id);
     const first = visible[0]!;
     const last = visible[visible.length - 1]!;
+    // **一覧の題は、失敗の知らせではない最後の発言から取る。** 失敗した会話が全部同じ固定文の題で
+    // 並ぶのを避ける（`turnFailure` の doc）。知らせしか無い会話だけが、知らせを題にする。
+    const titled = [...visible].reverse().find((entry) => entry.turnFailure === undefined) ?? last;
     summaries.push({
       conversationId: id,
       startedAt: first.at,
       updatedAt: last.at,
       messages: visible.length,
-      preview: preview(last.text),
+      preview: preview(titled.text),
       unread: countUnread(visible, readThrough),
       readThrough,
     });
@@ -361,6 +379,7 @@ export function toMessage(entry: Exchange): ConversationMessage {
     text: entry.text,
     conversationId: entry.conversationId,
     ...(entry.supersedes === undefined ? {} : { supersedes: entry.supersedes }),
+    ...(entry.turnFailure === undefined ? {} : { turnFailure: entry.turnFailure }),
   };
 }
 

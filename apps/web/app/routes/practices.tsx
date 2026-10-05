@@ -1,6 +1,6 @@
 import { MemoryTabs } from '~/components/group-tabs';
 import { AlertTriangle } from 'lucide-react';
-import { useState } from 'react';
+import { useId, useState } from 'react';
 import { Link, useNavigate } from 'react-router';
 
 import { Page, Button, Card, Empty, ErrorNote, Input, Spinner } from '@alteroid/ui';
@@ -31,7 +31,7 @@ function UnreadablePracticesNote({ unreadable }: { unreadable: readonly Unreadab
           {unreadable.map((row, index) => (
             <li key={`${row.slug ?? ''}:${index}`}>
               {row.slug === undefined ? (
-                '（slug も取れない）'
+                '（名前も取れない）'
               ) : (
                 <Link to={`/practices/${row.slug}`} className="font-mono underline break-all">
                   {row.slug}
@@ -48,6 +48,13 @@ function UnreadablePracticesNote({ unreadable }: { unreadable: readonly Unreadab
 }
 
 /** サーバ側と同じ規則（`practiceSlugSchema`）。ここで弾いて 400 を待たない。 */
+/** やり方の種類。知っている内部の語は利用者向けの名前にし、自由に付けられた種類はそのまま出す。 */
+export function practiceKindLabel(kind: string): string {
+  if (kind === 'procedure') return '手順';
+  if (kind === 'routine') return '定例';
+  return kind;
+}
+
 const SLUG_PATTERN = /^[a-z0-9][a-z0-9._-]*$/;
 
 /**
@@ -62,6 +69,7 @@ const SLUG_PATTERN = /^[a-z0-9][a-z0-9._-]*$/;
 export default function Practices() {
   const { data, error, isLoading } = usePractices();
   const navigate = useNavigate();
+  const slugId = useId();
   const [slug, setSlug] = useState('');
 
   const practices = data?.practices ?? [];
@@ -80,16 +88,20 @@ export default function Practices() {
     <Page
       tabs={<MemoryTabs />}
       title="やり方"
-      description="仕事のやり方（#1055 段3）。読んで従うかどうかは毎回クローンが決める——器はこれを実行しない"
+      description="仕事のやり方の控え。読んで従うかどうかは毎回クローンが決める。alteroid が自動で実行するものではない"
     >
       <ErrorNote error={error} className="mb-4" />
 
       <Card className="mb-4 p-4">
         <p className="mb-2 text-sm font-medium">新しいやり方を書く</p>
+        <label htmlFor={slugId} className="mb-1 block text-xs text-muted-foreground">
+          名前（半角の英小文字・数字・. _ - のみ）
+        </label>
         <div className="flex gap-2">
           <Input
+            id={slugId}
             value={slug}
-            placeholder="slug（英小文字・数字・. _ - のみ）"
+            placeholder="例: work-style"
             onChange={(event) => setSlug(event.target.value)}
             onKeyDown={(event) => {
               if (event.key === 'Enter' && valid) void navigate(`/practices/${slug}`);
@@ -105,7 +117,7 @@ export default function Practices() {
         </div>
         {slug !== '' && !valid && (
           <p className="mt-1.5 text-xs text-destructive">
-            使えるのは英小文字・数字・`.` `_` `-` で、先頭は英数字。128 文字まで。
+            使えるのは半角の英小文字・数字と . _ - で、先頭は英数字。128 文字まで。
           </p>
         )}
       </Card>
@@ -137,7 +149,7 @@ export default function Practices() {
                   <div className="min-w-0 flex-1">
                     <div className="flex items-baseline text-sm">
                       <span className="mr-1.5 shrink-0 text-[10px] text-muted-foreground">
-                        [{practice.kind}]
+                        {practiceKindLabel(practice.kind)}
                       </span>
                       {/* 押せる範囲は題名の行いっぱい（縦は上下に 4px ずつ足して 28px。-my で行の高さは変えない） */}
                       <Link

@@ -134,7 +134,9 @@ describe('runner の札は、いま応えているプロセスを出す', () => 
   it('名乗らない器では「判定できない」と書く', async () => {
     renderSettings({ runners: [BASE], daemonRevision: DAEMON_UNKNOWN });
 
-    expect(await screen.findByText(/名乗っていない（入れ替わりを判定できない）/)).toBeTruthy();
+    expect(
+      await screen.findByText(/名乗っていない（入れ替わったかどうか判定できない）/),
+    ).toBeTruthy();
   });
 });
 
@@ -175,12 +177,12 @@ describe('runner の since（この状態になった時刻）', () => {
    * 曖昧になる。この一覧のヘッダに添えた注記の文そのもの（一意な言い回し）で
    * 探す。
    */
-  it('名簿がインメモリで、再起動で作り直されることを添える', async () => {
+  it('名簿は保存されず、再起動で作り直されることを添える', async () => {
     renderSettings({ runners: [BASE], daemonRevision: DAEMON_UNKNOWN });
 
     expect(
       await screen.findByText(
-        /「この状態になった」は名簿の値.*インメモリ.*再起動すると作り直される/,
+        /「この状態になった」の時刻は保存されない.*再起動すると記録し直される/,
       ),
     ).toBeTruthy();
   });
@@ -226,11 +228,11 @@ describe('版の表示 — 人間もクローンと同じ材料を読める', ()
    */
   it('クローンの provider を出す。欄が無ければ claude と推測せず「不明」と書く', async () => {
     renderSettings({ runners: [], daemonRevision: KNOWN_DAEMON, cloneProvider: 'claude' });
-    expect(await screen.findByText(/クローンの provider: claude/)).toBeTruthy();
+    expect(await screen.findByText(/クローンが使うモデル提供元: claude/)).toBeTruthy();
     cleanup();
 
     renderSettings({ runners: [], daemonRevision: KNOWN_DAEMON });
-    const unknown = await screen.findByText(/クローンの provider: 不明/);
+    const unknown = await screen.findByText(/クローンが使うモデル提供元: 不明/);
     expect(unknown.textContent).not.toContain('claude');
   });
 
@@ -415,11 +417,11 @@ describe('runner の押し込み結果（pushHealth）', () => {
       daemonRevision: DAEMON_UNKNOWN,
     });
 
-    expect(await screen.findByText(/プロファイル: 押し込み済み/)).toBeTruthy();
-    expect(await screen.findByText(/環境変数: 押し込み失敗/)).toBeTruthy();
+    expect(await screen.findByText(/プロファイル: 反映済み/)).toBeTruthy();
+    expect(await screen.findByText(/環境変数: 反映に失敗/)).toBeTruthy();
     expect(await screen.findByText(/ECONNRESET: 途中で切れた/)).toBeTruthy();
     // #325 段4: MCP の登録も独立の軸として出る。
-    expect(await screen.findByText(/MCP の登録: 押し込み済み/)).toBeTruthy();
+    expect(await screen.findByText(/MCP の登録: 反映済み/)).toBeTruthy();
     // **3つ目（認証トークン）は一度も試みていない——出ないことを確かめる。**
     // （`認証トークン` 単独は他の静的文言にも現れるので、押し込みバッジの
     // 文言そのもの——コロン区切り——で絞る）
@@ -690,7 +692,7 @@ describe('Account のログアウト（issue #1757）', () => {
  * 2. 一致すると押せて、押すと `POST /shutdown` を1回呼ぶ
  * 3.（陽性対照）`ResetWorkspace` の確認語（`reset`）を打っても、止めるボタンは
  *    押せない——2つの確認が混ざらない
- * 4. 文言に「記憶も台帳も消さない」と「Railway では再起動として働く」が載る
+ * 4. 文言に「記憶も各種の記録も消さない」と「Railway では再起動として働く」が載る
  */
 describe('デーモンを止める（ShutdownDaemon）', () => {
   function renderWithShutdownStub(options: { shutdownStatus?: number } = {}) {
@@ -725,10 +727,10 @@ describe('デーモンを止める（ShutdownDaemon）', () => {
     await screen.findByPlaceholderText('stop');
   }
 
-  it('【歯4】文言に「記憶も台帳も消さない」と Railway の再起動が載る', async () => {
+  it('【歯4】文言に「記憶も各種の記録も消さない」と Railway の再起動が載る', async () => {
     renderWithShutdownStub();
 
-    expect(await screen.findByText(/記憶も台帳も消さない/)).toBeTruthy();
+    expect(await screen.findByText(/記憶も各種の記録も消さない/)).toBeTruthy();
     expect(await screen.findByText(/再起動として働く/)).toBeTruthy();
   });
 
@@ -857,16 +859,18 @@ describe('runner を空ける（vacate）', () => {
   it('確認の一手を挟むまで叩かず、確認したら runnerId を渡して POST /runners/vacate を叩く', async () => {
     const stub = renderWithVacate([BASE]);
 
-    fireEvent.click(await screen.findByText('この器を空ける'));
+    fireEvent.click(await screen.findByText('この実行環境から仕事を移す'));
     expect(stub.calls.some((url) => url.includes('/runners/vacate'))).toBe(false);
 
     // やめれば戻り、叩かない。
-    fireEvent.click(screen.getByText('空けるのをやめる'));
+    fireEvent.click(screen.getByText('移すのをやめる'));
     expect(stub.calls.some((url) => url.includes('/runners/vacate'))).toBe(false);
 
-    fireEvent.click(screen.getByText('この器を空ける'));
-    fireEvent.click(screen.getByText('本当に空ける'));
-    expect(await screen.findByText(/空けると立てた。まだ空き終わってはいない/)).toBeTruthy();
+    fireEvent.click(screen.getByText('この実行環境から仕事を移す'));
+    fireEvent.click(screen.getByText('本当に移す'));
+    expect(
+      await screen.findByText(/仕事を他へ移す指示を出した。まだ終わってはいない/),
+    ).toBeTruthy();
 
     const entry = stub.entries.find((e) => e.url.includes('/runners/vacate'));
     expect(entry).toBeDefined();
@@ -875,10 +879,12 @@ describe('runner を空ける（vacate）', () => {
 
   it('普通の成功には、握手を飛ばしたとは言わない（対照。#2376）', async () => {
     renderWithVacate([BASE]);
-    fireEvent.click(await screen.findByText('この器を空ける'));
-    fireEvent.click(screen.getByText('本当に空ける'));
-    expect(await screen.findByText(/空けると立てた。まだ空き終わってはいない/)).toBeTruthy();
-    expect(screen.queryByText(/握手は飛ばした/)).toBeNull();
+    fireEvent.click(await screen.findByText('この実行環境から仕事を移す'));
+    fireEvent.click(screen.getByText('本当に移す'));
+    expect(
+      await screen.findByText(/仕事を他へ移す指示を出した。まだ終わってはいない/),
+    ).toBeTruthy();
+    expect(screen.queryByText(/引き継ぎの連絡は飛ばした/)).toBeNull();
   });
 
   it('握手を飛ばした応答（handshakeSkipped）には、飛ばしたことと呼び直しを言う（#2376）', async () => {
@@ -890,21 +896,21 @@ describe('runner を空ける（vacate）', () => {
         retry: true,
       },
     });
-    fireEvent.click(await screen.findByText('この器を空ける'));
-    fireEvent.click(screen.getByText('本当に空ける'));
+    fireEvent.click(await screen.findByText('この実行環境から仕事を移す'));
+    fireEvent.click(screen.getByText('本当に移す'));
     expect(
-      await screen.findByText(/握手は飛ばした（一覧を読めなかったので握手を飛ばした）/),
+      await screen.findByText(/引き継ぎの連絡は飛ばした（一覧を読めなかったので握手を飛ばした）/),
     ).toBeTruthy();
   });
 
-  it('空けている最中の器と、名乗っていない器には出さない', async () => {
+  it('仕事を他へ移している最中の器と、名乗っていない器には出さない', async () => {
     renderWithVacate([
       { ...BASE, state: 'vacating' },
       { ...BASE, label: 'http://runner-2:4518', runnerId: undefined, state: 'connecting' },
     ]);
 
-    await screen.findByText('空けている最中');
-    expect(screen.queryByText('この器を空ける')).toBeNull();
+    await screen.findByText('仕事を他へ移している最中');
+    expect(screen.queryByText('この実行環境から仕事を移す')).toBeNull();
   });
 });
 
@@ -959,6 +965,6 @@ describe('知らない runner の state に倒れ先がある（#2010）', () =>
       daemonRevision: DAEMON_UNKNOWN,
     });
 
-    expect(await screen.findByText('繋がらない（挑み直し中）')).toBeTruthy();
+    expect(await screen.findByText('繋がらない（つなぎ直しを試している）')).toBeTruthy();
   });
 });

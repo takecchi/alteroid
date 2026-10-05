@@ -505,8 +505,24 @@ async function request(target: Target, path: string, init: RequestInit = {}): Pr
     }
     const described = describeAuthFailure(response.status, target);
     if (described !== null) throw new Error(described);
-    const body = (await response.json().catch(() => ({}))) as { error?: unknown };
+    const body = (await response.json().catch(() => ({}))) as { error?: unknown; code?: unknown };
+    // **日誌が書けなかったので、デーモンは何も変えずに断った**（issue #2742 の続き。`code` で
+    // 見分ける——文言では見分けない）。「変更していない」ことと、次にすることを言う。
+    if (response.status === 500 && body.code === 'journal_write_failed') {
+      throw new Error(
+        '記録（日誌）が書けなかったので、変更していません。\n' +
+          'デーモンの記憶ディレクトリ（日誌の置き場所）に書けるか確かめてから、もう一度実行してください。',
+      );
+    }
     if (typeof body.error === 'string') throw new Error(redactError(body.error));
+    // 本文が無い 500（素の `Internal Server Error`。日誌の失敗を言えない版のデーモンを含む）。
+    // 書き換えの口では、変更されたかどうかを言えないので、確かめ方を言う。
+    if (response.status >= 500 && init.method === 'PUT') {
+      throw new Error(
+        `デーモンが失敗を返しました（${String(response.status)}、${path}）。変更されたかどうかは分かりません。\n` +
+          'alteroid token list で今の姿を確かめてください（デーモンの標準エラーに理由の跡があります）。',
+      );
+    }
     throw new Error(`${path} が失敗しました (${String(response.status)})`);
   }
   return response.json();

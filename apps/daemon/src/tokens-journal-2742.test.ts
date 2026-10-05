@@ -259,3 +259,38 @@ describe('PUT /tokens/policy の日誌（#2742）', () => {
     expect(await stores.tokens.readSettings()).toEqual(before);
   });
 });
+
+/**
+ * 日誌が書けなくて保存しなかった 500 は、素の `Internal Server Error` ではなく、
+ * 「記録（日誌）が書けなかったので、変更していません」と機械が読める印（`code`）を返す
+ * （CLI と Web が利用者に言える形にするため）。例外の本文（値が載りうる）は返さない。
+ */
+describe('日誌が書けなかった 500 の本文（#2742 の続き）', () => {
+  const MESSAGE = '記録（日誌）が書けなかったので、変更していません';
+
+  async function expectJournalFailure(response: Response): Promise<void> {
+    expect(response.status).toBe(500);
+    expect(response.headers.get('content-type')).toContain('application/json');
+    const text = await response.text();
+    expect(JSON.parse(text)).toEqual({ error: MESSAGE, code: 'journal_write_failed' });
+    for (const value of ALL_VALUES) expect(text).not.toContain(value);
+    expect(text).not.toContain('journal down');
+  }
+
+  it('PUT /tokens（追加）', async () => {
+    const { app } = await seed({ journalDown: true });
+    await expectJournalFailure(
+      await put(app, '/tokens', { tokens: [...KEEP, { label: 'added', value: V_NEW }] }),
+    );
+  });
+
+  it('PUT /tokens/policy（契機を変える）', async () => {
+    const { app } = await seed({ journalDown: true });
+    await expectJournalFailure(await put(app, '/tokens/policy', { rotateOn: 'overage_exhausted' }));
+  });
+
+  it('PUT /tokens/policy（冷却を変える）', async () => {
+    const { app } = await seed({ journalDown: true });
+    await expectJournalFailure(await put(app, '/tokens/policy', { cooldownMs: 1234 }));
+  });
+});

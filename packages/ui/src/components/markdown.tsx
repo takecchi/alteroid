@@ -173,6 +173,27 @@ function heading(tag: HeadingTag) {
   };
 }
 
+const HEADING_TAGS: readonly HeadingTag[] = ['h1', 'h2', 'h3', 'h4', 'h5', 'h6'];
+
+/**
+ * 見出しを `offset` 段下げた部品の組を返す（#2842）。画面の見出し（h1）の下で本文を
+ * 描く画面が、本文の `#` を h1 のまま並べないために使う。`h1` → `h{1+offset}`、…、
+ * 下がり先が h6 を超える見出しは h6 に畳む（HTML に h7 は無い）。**タグも見た目も
+ * 下がり先の段の部品のもの**になる（`sr-only` の素通しも同じ）。`offset` が省略・0・
+ * 負・非数のときは、渡された組をそのまま返す（既定の動きは変わらない）。
+ */
+export function offsetHeadings(components: Components, offset?: number): Components {
+  if (offset === undefined || !Number.isFinite(offset)) return components;
+  const steps = Math.trunc(offset);
+  if (steps <= 0) return components;
+  const shifted: Components = { ...components };
+  HEADING_TAGS.forEach((tag, index) => {
+    const target = HEADING_TAGS[Math.min(index + steps, HEADING_TAGS.length - 1)] ?? tag;
+    shifted[tag] = components[target];
+  });
+  return shifted;
+}
+
 export const markdownComponents: Components = {
   p: ({ children }) => <p className="mt-2 leading-relaxed first:mt-0">{children}</p>,
   h1: heading('h1'),
@@ -243,7 +264,9 @@ export const markdownComponents: Components = {
       data-footnote-backref={dataFootnoteBackref}
       target={href?.startsWith('#') ? undefined : '_blank'}
       rel={href?.startsWith('#') ? undefined : 'noreferrer noopener'}
-      className="break-words text-primary hover:underline"
+      // 押せる範囲（タッチ端末だけ）: 文中のリンクは行の高さ（約21px）しか無く押しにくい。
+      // 見た目の行の高さ・段落の間隔は動かさず、疑似要素で上下へ 12px ずつ当たり判定だけ広げる（約44px）。
+      className="break-words text-primary hover:underline pointer-coarse:relative pointer-coarse:after:absolute pointer-coarse:after:-inset-x-1 pointer-coarse:after:-inset-y-3"
     >
       {children}
     </a>
@@ -262,8 +285,20 @@ export const markdownComponents: Components = {
   ),
   // GFM の表。**横スクロールさせる div で包む** — 表は折り返せないので、
   // 包まないと幅の広い表がカードごと画面外まで広げる。
+  //
+  // **画面幅が `lg`（1024px）未満のとき、セル（`td`）に最小幅を持たせる**（#2805）。
+  // 広い画面では今までどおり内容に応じた列幅のまま（最小幅を常に付けると、デスクトップで
+  // 備考列が 366px から 132px へ詰まった — 実測）。コンテナクエリ（inline-size の包含を伴う指定）は
+  // 使わない: 包含を付けると、幅を持たない親（flex の子など）の中で
+  // 包みが幅 0 になりうる。`table-layout: auto` は、表が
+  // 入りきらないとき内容の長い列を 1 文字幅まで詰めて他の列（長い URL など折り返せない
+  // 列）へ幅を回す（390px で備考の日本語が 1 行 1〜2 文字・17 行になった）。最小幅が
+  // あれば、詰める代わりに表そのものが包みの幅を超え、この div の横スクロールが
+  // 働く。**表（`table`・`th`・`td`）の中だけの指定** — 表の無い本文・コード・
+  // リストの見た目は変わらない。**端の手がかり**は、はみ出した列が右端で見切れること
+  // と、細いスクロールバー（`scrollbar-width: thin`）で出す。
   table: ({ children }) => (
-    <div className="mt-2 min-w-0 overflow-x-auto first:mt-0">
+    <div className="mt-2 min-w-0 overflow-x-auto [scrollbar-width:thin] first:mt-0">
       <table className="w-full border-collapse text-sm">{children}</table>
     </div>
   ),
@@ -273,7 +308,7 @@ export const markdownComponents: Components = {
   th: ({ children }) => (
     <th className="px-2 py-1 text-left font-semibold whitespace-nowrap">{children}</th>
   ),
-  td: ({ children }) => <td className="px-2 py-1 align-top">{children}</td>,
+  td: ({ children }) => <td className="max-lg:min-w-28 px-2 py-1 align-top">{children}</td>,
   // コードブロック（`pre`）。**折り返さず横スクロール** — `docs/architecture.md`
   // の罫線図のような、折り返すと崩れる図をそのまま保つ。`overflow-x-auto` で
   // 包み、`whitespace-pre` で `styles.css` の既定（生ログ向けの `pre-wrap`）を
@@ -316,13 +351,25 @@ export const markdownComponents: Components = {
  * 英数字・`_`・`-` 以外を落として使う — CSS セレクタ（`#id`）でエスケープ
  * せずに引ける形にしておくため。`idPrefix` を渡せばそれを使う（空文字列で
  * 旧実装と同じ id になる。1画面に1つしか描かないと分かっているときだけ使うこと）。
+ *
+ * **`headingOffset`（省略可。省略は今までどおり）** — 本文の見出しを何段下げるか。
+ * 画面の h1 の下で描くときに `2`（`#`→h3、`##`→h4、h5・h6→h6）を渡すと、
+ * 1画面の h1 が画面の見出しだけになる。詳しくは `offsetHeadings`。
  */
-export function Markdown({ children, idPrefix }: { children: string; idPrefix?: string }) {
+export function Markdown({
+  children,
+  idPrefix,
+  headingOffset,
+}: {
+  children: string;
+  idPrefix?: string;
+  headingOffset?: number;
+}) {
   const reactId = useId();
   const prefix = idPrefix ?? 'md' + reactId.replace(/[^A-Za-z0-9_-]/g, '') + '-';
   return (
     <div className="min-w-0 text-sm break-words">
-      {toReact(children, markdownComponents, prefix)}
+      {toReact(children, offsetHeadings(markdownComponents, headingOffset), prefix)}
     </div>
   );
 }

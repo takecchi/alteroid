@@ -541,3 +541,42 @@ describe('接続先を足す・直す・消す', () => {
     expect(screen.queryByRole('button', { name: '一覧から削除' })).toBeNull();
   });
 });
+
+/**
+ * 説明文に内部語を出さない（#2782）。環境変数名は括弧の補足としてだけ残し、
+ * CORS・ヘッダ名・API のパスは「開発者向けの詳細」の先に置く。
+ */
+describe('説明文の言い方（#2782）', () => {
+  function visibleText(): string {
+    const clone = document.body.cloneNode(true) as HTMLElement;
+    // 開いた先でしか読めない部分は、本文として数えない。
+    clone.querySelectorAll('details > :not(summary)').forEach((el) => el.remove());
+    return clone.textContent ?? '';
+  }
+
+  it('本文に CORS・ヘッダ名・API のパス・ビルド時の環境変数が出ない', async () => {
+    renderCard({ storage: '/data', pid: 4242 });
+    await screen.findByText('4242');
+
+    const text = visibleText();
+    for (const word of ['CORS', 'Authorization', 'Bearer', 'curl', 'VITE_']) {
+      expect(text).not.toContain(word);
+    }
+    // 環境変数名は括弧の補足で残る。
+    expect(text).toContain('（ALTEROID_ALLOWED_ORIGINS）');
+    expect(text).toContain('この画面を開いているブラウザの場所');
+    // 値として出すものは残る（#2762）。
+    expect(text).toContain('/data');
+    expect(text).toContain('4242');
+  });
+
+  it('開発者向けの詳細の先には、従来の技術的な説明が残る', async () => {
+    renderCard({ storage: '/data', pid: 4242 });
+    await screen.findByText('4242');
+
+    const details = document.querySelector('details');
+    expect(details?.querySelector('summary')?.textContent).toBe('開発者向けの詳細');
+    expect(details?.textContent).toContain('CORS');
+    expect(details?.textContent).toContain('VITE_ALTEROID_API_URL');
+  });
+});
