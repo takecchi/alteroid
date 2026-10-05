@@ -143,12 +143,13 @@ async function verify(info: DaemonRuntimeInfo): Promise<Presence> {
 
 /**
  * 記憶がどこにあるかをデーモンに聞く（ローカルのパス / PostgreSQL）。
- * 応答に無い（古いデーモン）なら null。接続情報そのものは返らない。
+ * **資格が要る `GET /status` から取る**（無認証の `/health` は置き場を返さない。#2869）。
+ * 取れなければ（古いデーモン・資格が通らない・応答が無い）null。接続情報そのものは返らない。
  */
 export async function storageOf(info: DaemonRuntimeInfo | null): Promise<string | null> {
   if (!info) return null;
   try {
-    const response = await fetch(`${baseUrl(info)}/health`, {
+    const response = await fetch(`${baseUrl(info)}/status`, {
       headers: { authorization: `Bearer ${info.token}` },
       signal: AbortSignal.timeout(1500),
     });

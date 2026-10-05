@@ -4,16 +4,14 @@ import {
   verifyMcpServerStoreContract,
   verifyProfileStoreContract,
 } from '@alteroid/core';
-import { PGlite } from '@electric-sql/pglite';
 import { sql } from 'drizzle-orm';
-import { drizzle } from 'drizzle-orm/pglite';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import type { Db } from './db.js';
 import { createPgStoresFromDb, migrate, type PgStores } from './index.js';
 import { agentTokens, sessionEntries } from './schema.js';
 import { PgSessionStore } from './session-store.js';
-import { createMigratedPglite } from './pglite-template.test-support.js';
+import { createMigratedTestDb, type TestDbHandle } from './test-db.test-support.js';
 
 /**
  * pg ドライバの受け入れ確認。
@@ -36,12 +34,12 @@ import { createMigratedPglite } from './pglite-template.test-support.js';
  * 同じものを複製している（分岐は生まない——共有モジュールへ切り出すほどの
  * 複雑さが無かったため、各ファイルへ同じ短い足場を複製する側を選んだ）。
  */
-let client: PGlite;
+let client: TestDbHandle;
 let db: Db;
 let stores: PgStores;
 
 beforeEach(async () => {
-  ({ client, db } = await createMigratedPglite());
+  ({ client, db } = await createMigratedTestDb());
   stores = createPgStoresFromDb(db);
 });
 
@@ -982,9 +980,7 @@ describe('PgSessionStore（SDK のセッション永続化）', () => {
       await stores.sessionStore.append(sqlKey, [{ type: 'user', uuid: 'q1', body: 'hi' }]);
 
       const queries: string[] = [];
-      const loggingDb = drizzle(client, {
-        logger: { logQuery: (query: string) => queries.push(query) },
-      });
+      const loggingDb = client.withLogger({ logQuery: (query: string) => queries.push(query) });
       const loggedStore = new PgSessionStore(loggingDb);
 
       await loggedStore.measureSize(sqlKey);
@@ -1087,9 +1083,7 @@ describe('PgSessionStore（SDK のセッション永続化）', () => {
       await stores.sessionStore.append(sqlKey, [{ type: 'user', uuid: 't1', body: 'hi' }]);
 
       const queries: string[] = [];
-      const loggingDb = drizzle(client, {
-        logger: { logQuery: (query: string) => queries.push(query) },
-      });
+      const loggingDb = client.withLogger({ logQuery: (query: string) => queries.push(query) });
       await new PgSessionStore(loggingDb).measureSize(sqlKey);
 
       const timeoutQueries = queries.filter((query) =>
