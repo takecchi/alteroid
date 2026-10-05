@@ -14901,7 +14901,8 @@
                                             "no-credential",
                                             "no-remote",
                                             "push-failed",
-                                            "error"
+                                            "error",
+                                            "timeout"
                                           ]
                                         },
                                         "failureKind": {
@@ -15600,7 +15601,8 @@
                                           "no-credential",
                                           "no-remote",
                                           "push-failed",
-                                          "error"
+                                          "error",
+                                          "timeout"
                                         ]
                                       },
                                       "failureKind": {
