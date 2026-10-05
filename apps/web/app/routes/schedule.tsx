@@ -10,6 +10,7 @@ import {
   Button,
   Card,
   CardHeader,
+  ConfirmDialog,
   Empty,
   ErrorNote,
   FieldHint,
@@ -93,6 +94,7 @@ export default function Schedule() {
   const removeSchedule = useRemoveSchedule();
   const [running, setRunning] = useState<string | undefined>(undefined);
   const [removing, setRemoving] = useState<string | undefined>(undefined);
+  const [confirmingRemove, setConfirmingRemove] = useState<string | undefined>(undefined);
   const [editing, setEditing] = useState<string | undefined>(undefined);
   const [failure, setFailure] = useState<unknown>(undefined);
   /**
@@ -148,7 +150,16 @@ export default function Schedule() {
                 */
                 className="flex flex-wrap items-center gap-3 border-b border-border px-4 py-3 last:border-b-0"
               >
-                <div className="min-w-0 flex-1">
+                {/*
+                  **説明文の列には最小幅を持たせる（#2755）。** `min-w-0 flex-1`
+                  （flex-basis 0）のままだと、折り返しの判定で「幅 0 の項目」として
+                  数えられ、時刻・ボタンが同じ行に居座ったまま説明文だけが 46px ほどに
+                  潰れた（390px で1行 2〜3 文字）。最小幅 14rem（上限は行の幅）を
+                  持たせると、残りの幅がそれに満たないとき時刻・ボタンの側が次の段へ
+                  折り返し、説明文は行の幅いっぱいを使える。広い幅では従来どおり
+                  `flex-1` で余りを取る。
+                */}
+                <div className="min-w-[min(14rem,100%)] flex-1">
                   <p className="text-sm">{entry.description}</p>
                   <p className="mt-0.5 font-mono text-[11px] break-words text-muted-foreground">
                     {entry.kind}
@@ -231,16 +242,28 @@ export default function Schedule() {
                       size="sm"
                       variant="danger"
                       loading={removing === entry.kind}
-                      onClick={() => {
+                      onClick={() => setConfirmingRemove(entry.kind)}
+                    >
+                      外す
+                    </Button>
+                    {/* 外すと依頼の本文も周期も消えて取り消せない。押した瞬間には実行せず確認を挟む（#2781） */}
+                    <ConfirmDialog
+                      open={confirmingRemove === entry.kind}
+                      onOpenChange={(open) => {
+                        if (!open) setConfirmingRemove(undefined);
+                      }}
+                      title={`予定「${entry.kind}」を外しますか`}
+                      description="依頼の本文と周期が消え、元に戻せません。"
+                      confirmLabel="外す"
+                      destructive
+                      onConfirm={() => {
                         setRemoving(entry.kind);
                         setFailure(undefined);
                         removeSchedule(entry.kind)
                           .catch(setFailure)
                           .finally(() => setRemoving(undefined));
                       }}
-                    >
-                      外す
-                    </Button>
+                    />
                   </>
                 )}
                 {editing === entry.kind && (

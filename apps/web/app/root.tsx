@@ -10,6 +10,7 @@ import type { ReactNode } from 'react';
 
 import { redactError } from '@alteroid/logic';
 import { ApiProvider } from '@alteroid/swr';
+import { DocumentTitle } from '@alteroid/ui';
 
 import { WebDisplayTextProvider } from '~/lib/display-text';
 
@@ -17,7 +18,8 @@ import './app.css';
 
 export function meta() {
   return [
-    { title: 'alteroid' },
+    // 題名（`<title>`）はここに置かない。各画面の見出しを描く部品（`@alteroid/ui` の `DocumentTitle`）が出す。
+    // ここに固定の題名を置くと全画面が同じ題名になり、画面の側のものと重なる（#2754）。
     { name: 'description', content: 'クローンの様子を見て、指示を出し、記憶を直す画面' },
     // 単一ユーザーの道具であって公開物ではない。検索に載せない。
     { name: 'robots', content: 'noindex, nofollow' },
@@ -95,6 +97,7 @@ export function ErrorBoundary({ error }: { error: unknown }) {
 
   return (
     <main className="mx-auto max-w-2xl p-8">
+      <DocumentTitle>{title}</DocumentTitle>
       <h1 className="text-lg font-semibold text-destructive">{title}</h1>
       {/*
         スタックまで出すのは、これが作者ひとりの道具だからである。隠すと

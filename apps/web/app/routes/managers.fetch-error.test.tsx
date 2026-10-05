@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 /**
- * マネージャー一覧の取得に失敗したとき、「まだ1体も起きていない」を並べない（issue #2322）。
+ * マネージャー一覧の取得に失敗したとき、「まだマネージャーはいません」を並べない（issue #2322）。
  *
  * 失敗したのに0件の文言が並ぶと、読めていないのにマネージャーが居ないように読める
  * （AGENTS.md の地雷「取れない軸に 0 の行を作る」）。後続ページの失敗（`olderError`）は別扱いで、
@@ -48,20 +48,20 @@ function renderPage(initialEntry = '/') {
 }
 
 describe('マネージャー一覧の取得に失敗したとき（issue #2322）', () => {
-  it('サーバの失敗（500）: エラーは出し、「まだ1体も起きていない」は出さない', async () => {
+  it('サーバの失敗（500）: エラーは出し、「まだマネージャーはいません」は出さない', async () => {
     stubManagers(() => json({ error: 'internal' }, 500));
     renderPage();
 
     expect(await screen.findByRole('alert')).toBeTruthy();
-    expect(screen.queryByText(/まだ1体も起きていない/)).toBeNull();
+    expect(screen.queryByText(/まだマネージャーはいません/)).toBeNull();
   });
 
-  it('通信の失敗: エラーは出し、「まだ1体も起きていない」は出さない', async () => {
+  it('通信の失敗: エラーは出し、「まだマネージャーはいません」は出さない', async () => {
     stubManagers(() => Promise.reject(new TypeError('Failed to fetch')));
     renderPage();
 
     expect(await screen.findByRole('alert')).toBeTruthy();
-    expect(screen.queryByText(/まだ1体も起きていない/)).toBeNull();
+    expect(screen.queryByText(/まだマネージャーはいません/)).toBeNull();
   });
 
   it('絞り込み中の失敗: エラーは出し、「この状態のマネージャーは無い」は出さない', async () => {
@@ -70,14 +70,14 @@ describe('マネージャー一覧の取得に失敗したとき（issue #2322�
 
     expect(await screen.findByRole('alert')).toBeTruthy();
     expect(screen.queryByText(/この状態のマネージャーは無い/)).toBeNull();
-    expect(screen.queryByText(/まだ1体も起きていない/)).toBeNull();
+    expect(screen.queryByText(/まだマネージャーはいません/)).toBeNull();
   });
 
-  it('本当に0件なら、いままでどおり「まだ1体も起きていない」と言う', async () => {
+  it('本当に0件なら、いままでどおり「まだマネージャーはいません」と言う', async () => {
     stubManagers(() => json({ managers: [] }));
     renderPage();
 
-    expect(await screen.findByText(/まだ1体も起きていない/)).toBeTruthy();
+    expect(await screen.findByText(/まだマネージャーはいません/)).toBeTruthy();
     expect(screen.queryByRole('alert')).toBeNull();
   });
 

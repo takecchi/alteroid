@@ -188,3 +188,16 @@ describe('slug 欄の補足文', () => {
     expect((input as HTMLInputElement).placeholder).not.toMatch(/英小文字/);
   });
 });
+
+/** 行全体をリンクにしない（#2808）。リンクは題名だけで、slug と日時の文字は `<a>` の外に在る。 */
+describe('一覧の行は題名だけがリンク', () => {
+  it('題名はリンク、slug と文字数・日時の文字はリンクの外', async () => {
+    renderPractices([practice({ slug: 'daily-report', title: '日報の書き方' })]);
+
+    const link = await screen.findByRole('link', { name: '日報の書き方' });
+    expect(link.getAttribute('href')).toBe('/practices/daily-report');
+    expect(link.closest('li')?.querySelectorAll('a')).toHaveLength(1);
+    expect(screen.getByText('daily-report').closest('a')).toBeNull();
+    expect(screen.getByText(/作成 3日前/).closest('a')).toBeNull();
+  });
+});

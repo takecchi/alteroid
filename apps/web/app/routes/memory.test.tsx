@@ -218,3 +218,19 @@ describe('slug 欄の補足文', () => {
     expect((input as HTMLInputElement).placeholder).not.toMatch(/英小文字/);
   });
 });
+
+/**
+ * 行全体をリンクにしない（#2808）。リンクで包むと slug・題名・サイズ・日時を選んでコピーできない。
+ * リンクは題名だけ。slug と日時の文字は `<a>` の外に在る。
+ */
+describe('一覧の行は題名だけがリンク', () => {
+  it('題名はリンク、slug とサイズ・日時の文字はリンクの外', async () => {
+    renderMemory([doc({ slug: 'about-me', title: '私について' })]);
+
+    const link = await screen.findByRole('link', { name: '私について' });
+    expect(link.getAttribute('href')).toBe('/memory/about-me');
+    expect(link.closest('li')?.querySelectorAll('a')).toHaveLength(1);
+    expect(screen.getByText('about-me').closest('a')).toBeNull();
+    expect(screen.getByText(/作成 3日前/).closest('a')).toBeNull();
+  });
+});

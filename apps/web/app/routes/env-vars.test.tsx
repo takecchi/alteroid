@@ -8,7 +8,7 @@
  * 「置く・外すは既存の `PUT /credentials`（`GET`/`PUT /credentials` と同じ経路）
  * を呼ぶ」の各点。
  */
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
@@ -315,6 +315,19 @@ describe('/env-vars 画面 — 置く・外す', () => {
     expect(await screen.findByText('NPM_TOKEN')).toBeTruthy();
 
     fireEvent.click(screen.getByRole('button', { name: '外す' }));
+    // 押しただけでは外さない（#2781）。確認を出し、まだ PUT していない。
+    const dialog = await screen.findByRole('alertdialog');
+    expect(screen.getByText('環境変数「NPM_TOKEN」を外しますか')).toBeTruthy();
+    expect(puts).toEqual([]);
+    fireEvent.click(within(dialog).getByRole('button', { name: 'やめる' }));
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+    expect(puts).toEqual([]);
+    expect(screen.getByText('NPM_TOKEN')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: '外す' }));
+    fireEvent.click(
+      within(await screen.findByRole('alertdialog')).getByRole('button', { name: '外す' }),
+    );
 
     await screen.findByText('置かれた環境変数がまだ1件も無い。');
     expect(puts).toEqual([[{ name: 'NPM_TOKEN', value: '' }]]);
