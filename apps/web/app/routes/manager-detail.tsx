@@ -121,6 +121,8 @@ export function clientLoader({ params }: Route.ClientLoaderArgs) {
  */
 const PAGE_DESCRIPTION = 'この仕事1本の状態と、走行中に割り込む口。依頼の全文は下';
 
+const NOT_FOUND_DESCRIPTION = '指定されたマネージャーはありません';
+
 export default function ManagerDetail({ loaderData }: Route.ComponentProps) {
   const { id } = loaderData;
   const { data, error, isLoading } = useManager(id);
@@ -139,10 +141,8 @@ export default function ManagerDetail({ loaderData }: Route.ComponentProps) {
    * **409（委譲の行は在るが、読めない形で入っている。issue #2359）も「見つからない」ではない。**
    * 居ないのではなく壊れているだけなので、デーモンの言い分（理由つき）を `ErrorNote` が出す。
    */
-  const detailUnavailable =
-    data === undefined &&
-    error !== undefined &&
-    !(error instanceof ApiError && error.status === 404);
+  const notFound = data === undefined && error instanceof ApiError && error.status === 404;
+  const detailUnavailable = data === undefined && error !== undefined && !notFound;
 
   return (
     <Page
@@ -155,7 +155,7 @@ export default function ManagerDetail({ loaderData }: Route.ComponentProps) {
           <span className="font-mono text-sm">{id}</span>
         </span>
       }
-      description={PAGE_DESCRIPTION}
+      description={notFound ? NOT_FOUND_DESCRIPTION : PAGE_DESCRIPTION}
       action={
         /*
           **状態で出し分けない。** ここはかつて `running` / `waiting_human` の
@@ -209,13 +209,19 @@ export default function ManagerDetail({ loaderData }: Route.ComponentProps) {
         ) : undefined
       }
     >
-      <ErrorNote error={error ?? failure} className="mb-4" />
+      {/* 404 は下のカードが日本語で言う。応答の素の文（英語の `not found`）を重ねて出さない（#2791）。 */}
+      <ErrorNote error={notFound ? failure : (error ?? failure)} className="mb-4" />
 
       {isLoading ? (
         <Spinner />
       ) : detailUnavailable ? null : manager === undefined ? (
         <Card>
-          <Empty>見つからない。</Empty>
+          <Empty>
+            このマネージャーは見つかりません（削除されたか、id が違います）。
+            <Link to="/managers" className="ml-2 underline">
+              マネージャー一覧へ戻る
+            </Link>
+          </Empty>
         </Card>
       ) : (
         <div className="flex flex-col gap-4">

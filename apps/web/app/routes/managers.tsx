@@ -3,7 +3,7 @@ import { useMemo } from 'react';
 import { Link, useSearchParams } from 'react-router';
 
 import { Page, Card, Empty, ErrorNote, FilterChips, Spinner, StatusBadge, cn } from '@alteroid/ui';
-import { useManagersWindow } from '@alteroid/swr';
+import { MANAGERS_PAGE, useManagers, useManagersWindow } from '@alteroid/swr';
 import {
   describeManagerProvider,
   formatRelative,
@@ -692,19 +692,35 @@ export default function Managers() {
     );
   }
 
+  /**
+   * **全体が0件のときは絞り込みのチップを出さない**（issue #2789）。1体もいないのに
+   * 押せるチップが並ぶと、押して初めて「他の状態も0件」と分かる。判定は絞らない一覧
+   * （`useManagersWindow([])` の先頭の頁と同じ鍵なので、絞っていなければ通信は増えない）。
+   * 読めない行が在るときは「居ない」と言えないので隠さない。絞りが掛かっているときも
+   * 隠さない（解除の手を残す）。
+   */
+  const all = useManagers({ status: [], limit: MANAGERS_PAGE });
+  const nothingAtAll =
+    all.data !== undefined &&
+    all.data.managers.length === 0 &&
+    (all.data.unreadable ?? []).length === 0;
+  const hideChips = nothingAtAll && selected.length === 0;
+
   return (
     <Page
       title="マネージャー"
       description="クローンが起こした仕事。人間が Claude Code に頼んだのと同じ位置にいる"
     >
-      <FilterChips
-        className="mb-4"
-        label="状態で絞り込む"
-        options={STATUSES.map((status) => ({ value: status, label: STATUS[status].label }))}
-        selected={selected}
-        onToggle={toggle}
-        onClear={clearSelected}
-      />
+      {hideChips ? null : (
+        <FilterChips
+          className="mb-4"
+          label="状態で絞り込む"
+          options={STATUSES.map((status) => ({ value: status, label: STATUS[status].label }))}
+          selected={selected}
+          onToggle={toggle}
+          onClear={clearSelected}
+        />
+      )}
 
       {/*
         **`key={selected.join(',')}` で丸ごと作り直す。** 絞りが変われば
@@ -718,6 +734,16 @@ export default function Managers() {
     </Page>
   );
 }
+
+const EMPTY_ALL = (
+  <>
+    まだマネージャーはいません。
+    <Link to="/chat" className="underline">
+      会話
+    </Link>
+    で作業を頼むと、ここに出ます。
+  </>
+);
 
 function ManagersBody({ selected }: { selected: readonly ManagerStatus[] }) {
   const {
@@ -755,7 +781,7 @@ function ManagersBody({ selected }: { selected: readonly ManagerStatus[] }) {
                 ? '読めたマネージャーは無い（読めない行が在るので、居ないとは言えない）。'
                 : '読めた範囲では、この状態のマネージャーは無い（読めない行の状態は分からない）。'
               : selected.length === 0
-                ? 'まだ1体も起きていない。会話で依頼するか、発意 tick を待つ。'
+                ? EMPTY_ALL
                 : 'この状態のマネージャーは無い（絞りを解除すれば他の状態も出る）。'}
           </Empty>
         </Card>
