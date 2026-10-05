@@ -760,10 +760,14 @@ async function rescueOne(
 /**
  * remote の URL から**資格を落とした**文字列を作る（台帳の `pushed.remote`）。
  *
- * - `scheme://[userinfo@]host/path` は userinfo・クエリ・フラグメントを落として組み直す。
- * - scp 形式（`git@host:owner/repo.git`）は、ユーザー名が `git` のときだけ残す（それ以外は
- *   資格の断片でありうるので `host:path` に落とす）。
- * - ローカルのパス（`/…`）はそのまま（資格を持たない。主にテストの bare リポジトリ）。
+ * - `https://` / `http://` は userinfo を**全部**落とす（ユーザー名に token が入る形がある）。
+ * - `ssh://` は**パスワードだけ**を落とし、ユーザー名（`git@` など）は残す。scp 形式
+ *   （`user@host:path`）もユーザー名は残す（ssh の接続に要る。`tok@en@host:…` のように `@` が
+ *   2個以上ある形は解釈しない）。
+ * - クエリ・フラグメントは落とす。ホスト・ユーザー名が `-` で始まるものは解釈しない
+ *   （オプション注入）。
+ * - ローカルのパス（`/…`）・`file://` は記録のためだけにそのまま通す（資格を持たない。
+ *   主にテストの bare）。**消す側は受け付けない**（{@link isDeletableRemote}）。
  * - 解釈できない形は `undefined`（台帳に所在を残さない＝後始末は `no-remote` で消さない）。
  */
 export function redactRemoteUrl(raw: string): string | undefined {
@@ -784,18 +788,43 @@ export function redactRemoteUrl(raw: string): string | undefined {
       return undefined;
     }
     if (url.protocol === 'file:') return `file://${url.pathname}`;
-    if (url.hostname === '') return undefined;
+    if (url.hostname === '' || url.hostname.startsWith('-')) return undefined;
     const port = url.port === '' ? '' : `:${url.port}`;
-    return `${url.protocol}//${url.hostname}${port}${url.pathname}`;
+    const user =
+      url.protocol === 'ssh:' && url.username !== '' && !url.username.startsWith('-')
+        ? `${decodeURIComponent(url.username)}@`
+        : '';
+    if (url.protocol === 'ssh:' && url.username.startsWith('-')) return undefined;
+    return `${url.protocol}//${user}${url.hostname}${port}${url.pathname}`;
   }
   if (trimmed.startsWith('/')) return trimmed;
   const scp = /^(?:([^@\s/]+)@)?([^@:\s/]+):(.+)$/.exec(trimmed);
   if (scp !== null) {
+    const user = scp[1];
+    const host = scp[2] ?? '';
+    if (host.startsWith('-') || user?.startsWith('-') === true) return undefined;
     const rest = (scp[3] ?? '').split(/[?#]/)[0] ?? '';
     if (rest === '') return undefined;
-    return `${scp[1] === 'git' ? 'git@' : ''}${scp[2] ?? ''}:${rest}`;
+    return `${user === undefined ? '' : `${user}@`}${host}:${rest}`;
   }
   return undefined;
+}
+
+/**
+ * 後始末が**撃ってよい**送り先か。`https://`・`ssh://`・scp 形（`[user@]host:path`）だけ。
+ * `file://`・ローカルのパス・`http://`・`ext::` 等・ホストやユーザーが `-` で始まるものは、
+ * spawn せずに弾く（runner は任意の URL を撃つ口にならない）。台帳に載せた形
+ * （{@link redactRemoteUrl} の出力）そのものであることも要る。
+ */
+export function isDeletableRemote(remote: string): boolean {
+  if (redactRemoteUrl(remote) !== remote || remote.includes('::')) return false;
+  const host = '[A-Za-z0-9][A-Za-z0-9.-]*';
+  const user = '[A-Za-z0-9_][A-Za-z0-9._-]*';
+  return (
+    new RegExp(`^https://${host}(?::\\d+)?/[^\\s?#@]+$`).test(remote) ||
+    new RegExp(`^ssh://(?:${user}@)?${host}(?::\\d+)?/[^\\s?#]+$`).test(remote) ||
+    new RegExp(`^(?:${user}@)?${host}:(?!/?/)[^\\s?#:][^\\s?#]*$`).test(remote)
+  );
 }
 
 /** 後始末が消してよい ref の形。**退避の名前空間の中の2階層だけ**（他の ref を消す口にしない）。 */
@@ -828,6 +857,11 @@ export interface DeleteRescueRefOptions {
   readonly signal?: AbortSignal;
   readonly tmpRootDir?: string;
   readonly hasCredential?: (env: Record<string, string | undefined>) => boolean;
+  /**
+   * **テスト専用。** ローカルのパス（bare リポジトリ）を送り先として受ける。`Host` は
+   * 立てない（本番の口は `https://` / `ssh://` / scp 形だけ）。
+   */
+  readonly allowLocalRemote?: boolean;
 }
 
 /**
@@ -850,21 +884,23 @@ export async function deleteRescueRef(
   if (!RESCUE_REF_PATTERN.test(ref) || !COMMIT_PATTERN.test(commit)) {
     return { outcome: 'failed', kind: 'other' };
   }
-  // 台帳に載せた形（資格を落とした形）そのものだけを受ける。`ext::` 等の transport も弾く。
-  if (redactRemoteUrl(remote) !== remote || remote.includes('::')) {
-    return { outcome: 'failed', kind: 'no-remote' };
-  }
+  // 台帳に載せた形（資格を落とした形）で、`https://` / `ssh://` / scp 形のものだけ撃つ。
+  const local =
+    options.allowLocalRemote === true &&
+    remote.startsWith('/') &&
+    redactRemoteUrl(remote) === remote;
+  if (!local && !isDeletableRemote(remote)) return { outcome: 'failed', kind: 'no-remote' };
   const hasCredential = options.hasCredential ?? defaultHasCredential;
-  // ローカルのパスは資格が要らない。それ以外で資格が無ければ撃たない。
-  if (!remote.startsWith('/') && !remote.startsWith('file://') && !hasCredential(env)) {
-    return { outcome: 'failed', kind: 'auth' };
-  }
+  if (!local && !hasCredential(env)) return { outcome: 'failed', kind: 'auth' };
   const tmpRoot = options.tmpRootDir ?? os.tmpdir();
   const scratch = path.join(
     tmpRoot,
     `alteroid-rescue-del.${String(process.pid)}.${randomBytes(6).toString('hex')}.git`,
   );
   if (!path.isAbsolute(scratch)) return { outcome: 'failed', kind: 'other' };
+  // 前の回が殺されて残した一時 bare を片付ける（生きている回のものは消さない）。
+  await removeStaleScratch(spawn, env, tmpRoot);
+  liveScratchDirs.add(scratch);
   const call: GitCall = {
     cwd: tmpRoot,
     env,
@@ -904,6 +940,49 @@ export async function deleteRescueRef(
     if (listed.stdout.trim() === '') return { outcome: 'removed', alreadyGone: true };
     return { outcome: 'failed', kind: 'moved' };
   } finally {
-    await git(spawn, ['-rf', scratch], { ...call, command: 'rm' }).catch(() => undefined);
+    liveScratchDirs.delete(scratch);
+    // **呼び出し元の signal を引き継がない。** abort された回でも、ここが殺されて一時 bare が
+    // 残ると（実測: 20回中20回）溜まる。短い固定の期限で撃つ。
+    await git(spawn, ['-rf', scratch], {
+      cwd: tmpRoot,
+      env,
+      command: 'rm',
+      timeoutMs: SCRATCH_RM_TIMEOUT_MS,
+    }).catch(() => undefined);
+  }
+}
+
+const SCRATCH_NAME = /^alteroid-rescue-del\.(\d+)\.[0-9a-f]+\.git$/;
+/** 一時 bare の後始末の期限（呼び出し元の signal とは無関係）。 */
+const SCRATCH_RM_TIMEOUT_MS = 10_000;
+/** このプロセスで使っている一時 bare（掃除で消さない）。 */
+const liveScratchDirs = new Set<string>();
+
+/**
+ * 殺された回が残した一時 bare（`alteroid-rescue-del.<pid>.<乱数>.git`）を消す。**pid が生きている
+ * 他プロセスのものと、このプロセスで使用中のものは消さない**（#2818 の一時 index の掃除と同じ考え方）。
+ */
+async function removeStaleScratch(
+  spawn: ProcessSpawnFn,
+  env: Record<string, string | undefined>,
+  tmpRoot: string,
+): Promise<void> {
+  try {
+    for (const name of await readdir(tmpRoot)) {
+      const match = SCRATCH_NAME.exec(name);
+      if (match === null) continue;
+      const dir = path.join(tmpRoot, name);
+      if (liveScratchDirs.has(dir)) continue;
+      const pid = Number(match[1]);
+      if (pid !== process.pid && pidIsAlive(pid)) continue;
+      await git(spawn, ['-rf', dir], {
+        cwd: tmpRoot,
+        env,
+        command: 'rm',
+        timeoutMs: SCRATCH_RM_TIMEOUT_MS,
+      });
+    }
+  } catch {
+    // 掃除は best-effort。
   }
 }

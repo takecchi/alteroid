@@ -4058,9 +4058,11 @@ export function describeRescue(manager: ManagerSummary): string | null {
       const state =
         removal === undefined
           ? ''
-          : removal.failureKind === undefined
-            ? `・${removal.at} に消した（${RESCUE_REMOVAL_REASON_TEXT[removal.reason]}）`
-            : `・消せなかった（${removal.failureKind}。${removal.at} 時点で ${String(removal.attempts ?? 1)} 回目。次の機会に再試行する）`;
+          : removal.failureKind === 'no-remote'
+            ? '・送り先が台帳に無いので自動では消せない（手で消す）'
+            : removal.failureKind === undefined
+              ? `・${removal.at} に消した（${RESCUE_REMOVAL_REASON_TEXT[removal.reason]}）`
+              : `・消せなかった（${removal.failureKind}。${removal.at} 時点で ${String(removal.attempts ?? 1)} 回目。次の機会に再試行する）`;
       parts.push(
         `${tree.pushed.ref}（${tree.pushed.commit.slice(0, 8)}, ${tree.pushed.at}${state}）`,
       );

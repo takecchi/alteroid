@@ -34,7 +34,12 @@ function jobOf(
   quietDays: number,
   worktrees: RescueWorktree[],
   runnerId = 'runner-primary',
+  terminalDays = quietDays,
 ): Job {
+  const terminal =
+    status === 'done' || status === 'failed' || status === 'stopped'
+      ? { terminal: { status, seenAt: iso(-terminalDays * DAY) } }
+      : {};
   return {
     id,
     createdAt: '2026-09-01T00:00:00.000Z',
@@ -43,7 +48,7 @@ function jobOf(
     summary: '調べ物',
     cwd: '/work/project',
     runnerId,
-    lastRescue: { at: iso(-quietDays * DAY), worktrees },
+    lastRescue: { at: iso(-quietDays * DAY), worktrees, ...terminal },
   };
 }
 
@@ -103,10 +108,10 @@ async function setup(jobs: Job[], runners: Fake[] = [fakeRunner()]) {
 }
 
 describe('退避 ref の後始末の走査（#1266）', () => {
-  it('done が猶予（3日）を過ぎていたら runner に消させ、pushed を残して removal を付け、日誌へ書く', async () => {
+  it('done が猶予（7日）を過ぎていたら runner に消させ、pushed を残して removal を付け、日誌へ書く', async () => {
     const fake = fakeRunner();
     const { pool, jobOfId, journal } = await setup(
-      [jobOf('mgr-x', 'done', 4, [wt(pushedOf())])],
+      [jobOf('mgr-x', 'done', 8, [wt(pushedOf())])],
       [fake],
     );
     await pool.sweepRescueRefs?.();
@@ -120,11 +125,11 @@ describe('退避 ref の後始末の走査（#1266）', () => {
     await pool.stop();
   });
 
-  it('猶予の手前の done と、何日放置された lost は消さない', async () => {
+  it('猶予の手前の done（6日）と、何日放置された lost は消さない', async () => {
     const fake = fakeRunner();
     const { pool, jobOfId } = await setup(
       [
-        jobOf('mgr-done', 'done', 2, [wt(pushedOf())]),
+        jobOf('mgr-done', 'done', 6, [wt(pushedOf())]),
         jobOf('mgr-lost', 'lost', 400, [wt(pushedOf())]),
         jobOf('mgr-failed', 'failed', 13, [wt(pushedOf())]),
       ],
@@ -185,7 +190,7 @@ describe('退避 ref の後始末の走査（#1266）', () => {
     const fake = fakeRunner();
     fake.next.result = { outcome: 'failed', kind: 'auth' };
     const { pool, jobOfId, journal } = await setup(
-      [jobOf('mgr-x', 'done', 4, [wt(pushedOf())])],
+      [jobOf('mgr-x', 'done', 8, [wt(pushedOf())])],
       [fake],
     );
     await pool.sweepRescueRefs?.();
@@ -218,7 +223,7 @@ describe('退避 ref の後始末の走査（#1266）', () => {
   it('runner が投げたら other。消したことにしない', async () => {
     const fake = fakeRunner();
     fake.next.result = 'throw';
-    const { pool, jobOfId } = await setup([jobOf('mgr-x', 'done', 4, [wt(pushedOf())])], [fake]);
+    const { pool, jobOfId } = await setup([jobOf('mgr-x', 'done', 8, [wt(pushedOf())])], [fake]);
     await pool.sweepRescueRefs?.();
     expect((await jobOfId('mgr-x')).lastRescue?.worktrees[0]?.pushed?.removal?.failureKind).toBe(
       'other',
@@ -228,7 +233,7 @@ describe('退避 ref の後始末の走査（#1266）', () => {
 
   it('後始末の口を持つ runner が1台も無ければ no-runner（消したことにしない）', async () => {
     const { pool, jobOfId } = await setup(
-      [jobOf('mgr-x', 'done', 4, [wt(pushedOf())])],
+      [jobOf('mgr-x', 'done', 8, [wt(pushedOf())])],
       [fakeRunner('runner-primary', false)],
     );
     await pool.sweepRescueRefs?.();
@@ -241,7 +246,7 @@ describe('退避 ref の後始末の走査（#1266）', () => {
   it('委譲の runner が名簿に居なくても、別の開いている runner で消す（器の入れ替わり）', async () => {
     const other = fakeRunner('runner-other');
     const { pool } = await setup(
-      [jobOf('mgr-x', 'done', 4, [wt(pushedOf())], 'runner-gone')],
+      [jobOf('mgr-x', 'done', 8, [wt(pushedOf())], 'runner-gone')],
       [other],
     );
     await pool.sweepRescueRefs?.();
@@ -254,7 +259,7 @@ describe('退避 ref の後始末の走査（#1266）', () => {
     const noRemote = { ...pushedOf() } as Partial<ReturnType<typeof pushedOf>>;
     delete noRemote.remote;
     const { pool, jobOfId } = await setup(
-      [jobOf('mgr-x', 'done', 4, [wt(noRemote as ReturnType<typeof pushedOf>)])],
+      [jobOf('mgr-x', 'done', 8, [wt(noRemote as ReturnType<typeof pushedOf>)])],
       [fake],
     );
     await pool.sweepRescueRefs?.();
@@ -288,11 +293,129 @@ describe('退避 ref の後始末の走査（#1266）', () => {
     await pool.stop();
   });
 
+  it('lost のまま20日放置→stopped になった直後は猶予ゼロで消さない。終端を見た時刻から14日で消す', async () => {
+    const fake = fakeRunner();
+    const stoppedNow = jobOf('mgr-x', 'stopped', 20, [wt(pushedOf())]);
+    delete stoppedNow.lastRescue?.terminal; // 走査はまだ stopped を見ていない
+    const { pool, jobOfId } = await setup([stoppedNow], [fake]);
+    await pool.sweepRescueRefs?.();
+    expect(fake.calls).toEqual([]);
+    const marked = (await jobOfId('mgr-x')).lastRescue?.terminal;
+    expect(marked).toEqual({ status: 'stopped', seenAt: iso(0) });
+    nowMs += 14 * DAY - 5 * 60_000;
+    await pool.sweepRescueRefs?.();
+    expect(fake.calls).toEqual([]);
+    nowMs += 11 * 60_000;
+    await pool.sweepRescueRefs?.();
+    expect(fake.calls).toHaveLength(1);
+    await pool.stop();
+  });
+
+  it('変わらない委譲へは台帳の書き込みを打たない（印の付け直し・片付け・削除のどれも無いとき）', async () => {
+    const fake = fakeRunner();
+    const { pool, stores } = await setup(
+      [
+        jobOf('mgr-run', 'running', 90, [wt(pushedOf())]),
+        jobOf('mgr-lost', 'lost', 90, [wt(pushedOf())]),
+        jobOf('mgr-done', 'done', 1, [wt(pushedOf())]),
+      ],
+      [fake],
+    );
+    let writes = 0;
+    const original = stores.jobs.updateJob.bind(stores.jobs);
+    stores.jobs.updateJob = (...args) => {
+      writes += 1;
+      return original(...args);
+    };
+    await pool.sweepRescueRefs?.();
+    expect(writes).toBe(0);
+    expect(fake.calls).toEqual([]);
+    await pool.stop();
+  });
+
+  it('1回の走査で撃つ削除は20本まで。残りは次の回へ回す', async () => {
+    const fake = fakeRunner();
+    const jobs = Array.from({ length: 25 }, (_, i) =>
+      jobOf(`mgr-${String(i).padStart(2, '0')}`, 'done', 30, [
+        wt(pushedOf({ ref: `${REF}${String(i).padStart(2, '0')}` })),
+      ]),
+    );
+    const { pool } = await setup(jobs, [fake]);
+    await pool.sweepRescueRefs?.();
+    expect(fake.calls).toHaveLength(20);
+    nowMs += 11 * 60_000;
+    await pool.sweepRescueRefs?.();
+    expect(fake.calls).toHaveLength(25);
+    expect(new Set(fake.calls.map((c) => c.ref)).size).toBe(25);
+    await pool.stop();
+  });
+
+  it('旧 runner（other）なら次の runner へ進む。auth など他でも同じ結果になるものはそこで止める', async () => {
+    const old = fakeRunner('runner-primary');
+    old.next.result = { outcome: 'failed', kind: 'other' };
+    const fresh = fakeRunner('runner-new');
+    const { pool, jobOfId } = await setup(
+      [jobOf('mgr-x', 'done', 8, [wt(pushedOf())])],
+      [old, fresh],
+    );
+    await pool.sweepRescueRefs?.();
+    expect(old.calls).toHaveLength(1);
+    expect(fresh.calls).toHaveLength(1);
+    expect(
+      (await jobOfId('mgr-x')).lastRescue?.worktrees[0]?.pushed?.removal?.failureKind,
+    ).toBeUndefined();
+    await pool.stop();
+
+    const a = fakeRunner('runner-primary');
+    a.next.result = { outcome: 'failed', kind: 'auth' };
+    const b = fakeRunner('runner-new');
+    const second = await setup([jobOf('mgr-y', 'done', 8, [wt(pushedOf())])], [a, b]);
+    await second.pool.sweepRescueRefs?.();
+    expect(b.calls).toEqual([]);
+    expect(
+      (await second.jobOfId('mgr-y')).lastRescue?.worktrees[0]?.pushed?.removal?.failureKind,
+    ).toBe('auth');
+    await second.pool.stop();
+  });
+
+  it('送り先の無い古い台帳は no-remote を1回だけ書き、以後は何も書かない。manager_list は手で消すと言う', async () => {
+    const fake = fakeRunner();
+    const noRemote = { ...pushedOf() } as Partial<ReturnType<typeof pushedOf>>;
+    delete noRemote.remote;
+    const { pool, stores, jobOfId, journal } = await setup(
+      [jobOf('mgr-x', 'done', 30, [wt(noRemote as ReturnType<typeof pushedOf>)])],
+      [fake],
+    );
+    await pool.sweepRescueRefs?.();
+    let writes = 0;
+    const original = stores.jobs.updateJob.bind(stores.jobs);
+    stores.jobs.updateJob = (...args) => {
+      writes += 1;
+      return original(...args);
+    };
+    for (const days of [1, 3, 10]) {
+      nowMs += days * DAY;
+      await pool.sweepRescueRefs?.();
+    }
+    expect(writes).toBe(0);
+    expect(fake.calls).toEqual([]);
+    expect((await journal()).split('消せなかった').length - 1).toBe(1);
+    const text = describeRescue({ lastRescue: (await jobOfId('mgr-x')).lastRescue } as never);
+    expect(text).toContain('自動では消せない');
+    await pool.stop();
+  });
+
   it('mergeRescue は、同じ退避 commit のあいだ removal を引き継ぎ、新しい退避には付けない', () => {
     const removal = { at: iso(0), reason: 'done' as const };
     const before = { at: iso(0), worktrees: [wt(pushedOf({ removal }))] };
     const same = mergeRescue(before, [wt(pushedOf())], iso(1));
     expect(same.worktrees[0]?.pushed?.removal).toEqual(removal);
+    const withMark = mergeRescue(
+      { ...before, terminal: { status: 'stopped', seenAt: iso(-DAY) } },
+      [wt(pushedOf())],
+      iso(1),
+    );
+    expect(withMark.terminal).toEqual({ status: 'stopped', seenAt: iso(-DAY) });
     const fresh = mergeRescue(before, [wt(pushedOf({ commit: 'b'.repeat(40) }))], iso(1));
     expect(fresh.worktrees[0]?.pushed?.removal).toBeUndefined();
   });

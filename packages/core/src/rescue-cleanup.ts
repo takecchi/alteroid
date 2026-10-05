@@ -15,11 +15,15 @@ import type { Job, LastRescue, RescueRemovalReason, RescueWorktree } from './sch
  *    即座に**消す。tree の一致で見るので、「未コミットの変更を捨てただけ」（HEAD が
  *    origin に在るだけ）では当たらない。
  * 2. **委譲が終端して、猶予を過ぎた。** 退避 ref は「作業ツリーが消えたとき」の唯一の写しに
- *    なりうる。猶予は**終端してからの時間**で測り、その印は `lastRescue.at`（runner から最後に
- *    届いた時刻）を使う——`Job.updatedAt` は台帳へ書くたびに進む（この後始末自身の書き込み
- *    でも）ので使えない。生きているセッションは 30 分ごとに運び直すので、`lastRescue.at` が
- *    古いのは「セッションがもう無い」ことと同じ意味になる。
- *    - `done`: {@link RESCUE_GRACE_MS}.done（3日）。`done` は死ではなく待機（`schema.ts` の
+ *    なりうる。 猶予は**終端してからの時間**で測る。起点は
+ *    `max(lastRescue.at, lastRescue.terminal.seenAt)`——`terminal.seenAt` は、後始末の走査が
+ *    その委譲の終端（done / failed / stopped）を**初めて見た**時刻で、状態が変われば作り直す
+ *    （{@link syncTerminalMark}）。`lastRescue.at` だけだと、`lost` のまま20日放置されたものが
+ *    人間の abort で `stopped` になった瞬間に猶予ゼロで消える（唯一の写しが消える）。
+ *    `Job.updatedAt` は台帳へ書くたびに進む（この後始末自身の書き込みでも）ので使えない。
+ *    生きているセッションは 30 分ごとに運び直し `lastRescue.at` が進むので、その間は猶予が
+ *    始まらない。**終端を見ていない（印が無い）ものは消さない**（次の走査で印を付ける）。
+ *    - `done`: {@link RESCUE_GRACE_MS}.done（7日。週末をまたいでも残す）。`done` は死ではなく待機（`schema.ts` の
  *      `jobStatusSchema`）で、話しかければ続く。**即時にしない**のは、`done` で畳んだ
  *      委譲の作業ツリーが器の入れ替わりで消えても、退避 ref が唯一の写しとして残るため
  *      （#1266 の動機そのもの）。ただし生きているセッションは `lastRescue.at` が進み続けるので
@@ -35,9 +39,9 @@ import type { Job, LastRescue, RescueRemovalReason, RescueWorktree } from './sch
 
 const DAY_MS = 24 * 60 * 60_000;
 
-/** 終端した委譲の退避 ref を消すまでの猶予（`lastRescue.at` から）。`lost` は無い（時間では消さない）。 */
+/** 終端した委譲の退避 ref を消すまでの猶予（`max(lastRescue.at, terminal.seenAt)` から）。`lost` は無い（時間では消さない）。 */
 export const RESCUE_GRACE_MS = {
-  done: 3 * DAY_MS,
+  done: 7 * DAY_MS,
   failed: 14 * DAY_MS,
   stopped: 14 * DAY_MS,
 } as const;
@@ -69,7 +73,7 @@ export function rescueRetryAfterMs(attempts: number): number {
  */
 export function rescueRemovalDue(
   status: Job['status'],
-  rescueAt: string,
+  rescue: LastRescue,
   tree: RescueWorktree,
   nowMs: number,
 ): RescueRemovalReason | undefined {
@@ -79,6 +83,9 @@ export function rescueRemovalDue(
   if (removal !== undefined) {
     // 消した。もう何もしない。
     if (removal.failureKind === undefined) return undefined;
+    // 送り先が台帳に無い（`#2818` の形の古い台帳）。同じ commit では所在は増えないので確定扱い
+    // （再試行も台帳の書き込みもしない）。新しい退避が `remote` つきで届けば別の `pushed` になる。
+    if (removal.failureKind === 'no-remote') return undefined;
     // 消せなかった回。間隔が空くまで撃たない。時刻が読めなければ撃つ（lease があるので
     // 消してはいけないものは消えない）。
     const at = Date.parse(removal.at);
@@ -88,10 +95,33 @@ export function rescueRemovalDue(
   }
   if (pushed.landedAt !== undefined) return 'landed';
   if (!isGraceStatus(status)) return undefined;
-  const quietSince = Date.parse(rescueAt);
+  // 終端を見ていない（印が無い・別の状態の印）なら消さない。次の走査が印を付ける。
+  if (rescue.terminal?.status !== status) return undefined;
+  const at = Date.parse(rescue.at);
+  const seenAt = Date.parse(rescue.terminal.seenAt);
   // 時刻が読めないものは判定しない（消さない）。
-  if (Number.isNaN(quietSince)) return undefined;
-  return nowMs - quietSince >= RESCUE_GRACE_MS[status] ? status : undefined;
+  if (Number.isNaN(at) || Number.isNaN(seenAt)) return undefined;
+  return nowMs - Math.max(at, seenAt) >= RESCUE_GRACE_MS[status] ? status : undefined;
+}
+
+/**
+ * 委譲の状態に合わせて `lastRescue.terminal`（終端を初めて見た時刻）を付け直す。終端
+ * （done / failed / stopped）で印が無い・別の状態の印なら今の時刻で付け、終端でなければ外す。
+ * 変わらなければ `null`。
+ */
+export function syncTerminalMark(
+  status: Job['status'],
+  rescue: LastRescue,
+  nowIso: string,
+): LastRescue | null {
+  if (isGraceStatus(status)) {
+    if (rescue.terminal?.status === status) return null;
+    return { ...rescue, terminal: { status, seenAt: nowIso } };
+  }
+  if (rescue.terminal === undefined) return null;
+  const rest = { ...rescue };
+  delete rest.terminal;
+  return rest;
 }
 
 /**

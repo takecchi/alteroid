@@ -3699,9 +3699,18 @@ export type RescueWorktree = z.infer<typeof rescueWorktreeSchema>;
 
 /** 委譲ごとの退避 ref の台帳（`Job.lastRescue`）。作業ツリーごとの最後の状態。 */
 export const lastRescueSchema = z.object({
-  /** 最後に更新した時刻。 */
+  /** runner から最後に届いた時刻（後始末が書き換えても進めない）。 */
   at: isoDateTime,
   worktrees: z.array(rescueWorktreeSchema),
+  /**
+   * **デーモンが書く。** 後始末の走査が、この委譲が `done` / `failed` / `stopped` のいずれかで
+   * あることを**初めて見た**時刻（Issue #1266）。猶予は `max(at, terminal.seenAt)` から数える
+   * ——`at` だけだと、`lost` のまま長く放置されたものが `stopped` へ畳まれた瞬間に猶予ゼロで
+   * 消える。状態が変われば（別の終端・終端でなくなる）作り直す／外す。
+   */
+  terminal: z
+    .object({ status: z.enum(['done', 'failed', 'stopped']), seenAt: isoDateTime })
+    .optional(),
 });
 export type LastRescue = z.infer<typeof lastRescueSchema>;
 

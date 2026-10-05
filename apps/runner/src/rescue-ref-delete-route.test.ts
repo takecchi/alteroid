@@ -68,17 +68,21 @@ describe('POST /rescue-refs/delete', () => {
     await host.shutdown();
   });
 
-  it('台帳の所在（remote・ref・commit）で、子の環境から退避 ref を消す', async () => {
-    const res = await post({ remote: bare, ref, commit });
-    expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ outcome: 'removed', alreadyGone: false });
-    expect(g(bare, 'for-each-ref', 'refs/alteroid-rescue/')).toBe('');
-    // 退避の名前空間の外には触れない。
-    expect(g(bare, 'for-each-ref', 'refs/heads/')).toContain('refs/heads/main');
+  it('ローカルのパス・file:// は口からも撃たない（https / ssh / scp 形だけ）。ref は残る', async () => {
+    for (const remote of [bare, `file://${bare}`]) {
+      const res = await post({ remote, ref, commit });
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ outcome: 'failed', kind: 'no-remote' });
+    }
+    expect(g(bare, 'for-each-ref', 'refs/alteroid-rescue/')).toContain(ref);
   });
 
   it('名前空間の外の ref は、口からも消せない', async () => {
-    const res = await post({ remote: bare, ref: 'refs/heads/main', commit });
+    const res = await post({
+      remote: 'https://example.invalid/o/r.git',
+      ref: 'refs/heads/main',
+      commit,
+    });
     expect(await res.json()).toEqual({ outcome: 'failed', kind: 'other' });
     expect(g(bare, 'for-each-ref', 'refs/heads/')).toContain('refs/heads/main');
   });

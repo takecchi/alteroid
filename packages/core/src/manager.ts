@@ -99,7 +99,7 @@ import type {
   WorkspaceLocator,
 } from './schema.js';
 import { describeUnreadableManagerRow, type Stores } from './store.js';
-import { pruneRescueLedger, rescueRemovalDue } from './rescue-cleanup.js';
+import { pruneRescueLedger, rescueRemovalDue, syncTerminalMark } from './rescue-cleanup.js';
 import { withCgroupEventsNote } from './cgroup-events.js';
 import { withSystemErrorNote } from './system-error.js';
 import { describeUnpushedWorkObservationIncompleteness } from './unpushed-work-observation-format.js';
@@ -1023,7 +1023,12 @@ export function mergeRescue(
           : { pushed: { ...tree.pushed, ...carried } }),
     });
   }
-  return { at, worktrees: [...byPath.values()] };
+  // 後始末の走査が付けた終端の印はデーモンが書くもの。runner の運び直しで消さない。
+  return {
+    at,
+    worktrees: [...byPath.values()],
+    ...(previous?.terminal === undefined ? {} : { terminal: previous.terminal }),
+  };
 }
 
 /**
@@ -4890,9 +4895,13 @@ async function probeRunnerResources(
 const RESCUE_SWEEP_INTERVAL_MS = 10 * 60_000;
 /** runner へ撃つ削除1本の期限（HTTP の期限 60 秒の内側）。 */
 const RESCUE_DELETE_DEADLINE_MS = 55_000;
+/** 1回の走査で撃つ削除の本数の上限。残りは次の回へ。 */
+const RESCUE_SWEEP_MAX_DELETES = 20;
+/** 1回の走査の時間の上限（ms）。 */
+const RESCUE_SWEEP_BUDGET_MS = 5 * 60_000;
 const RESCUE_REMOVAL_REASON_JOURNAL: Record<RescueRemovalReason, string> = {
   landed: '内容がもう origin の枝に入っているため',
-  done: '委譲が done のまま猶予（3日）を過ぎたため',
+  done: '委譲が done のまま猶予（7日）を過ぎたため',
   failed: '委譲が failed のまま猶予（14日）を過ぎたため',
   stopped: '委譲が stopped のまま猶予（14日）を過ぎたため',
 };
@@ -8147,11 +8156,17 @@ class Pool implements ManagerPool {
         return;
       }
       this.#rescueSweptAt = startedAt;
+      // 1回あたりの上限（本数と時間）。GitHub 障害の初回などで削除が溜まっていても、
+      // 残りは次の回へ回す。
+      const budget = {
+        deletesLeft: RESCUE_SWEEP_MAX_DELETES,
+        until: startedAt + RESCUE_SWEEP_BUDGET_MS,
+      };
       for (const job of jobs) {
-        if (this.#stopped) break;
+        if (this.#stopped || budget.deletesLeft <= 0 || this.#now() >= budget.until) break;
         if (job.lastRescue === undefined) continue;
         try {
-          await this.#sweepRescueOf(job.id, job);
+          await this.#sweepRescueOf(job.id, job, budget);
         } catch (error) {
           // 1件の失敗で残りを止めない（`probeTurnEnds` と同じ形）。
           noteDroppedRecord('退避 ref の後始末', `managerId=${job.id}`, error);
@@ -8162,18 +8177,36 @@ class Pool implements ManagerPool {
     }
   }
 
-  async #sweepRescueOf(managerId: string, listed: Job): Promise<void> {
+  async #sweepRescueOf(
+    managerId: string,
+    listed: Job,
+    budget: { deletesLeft: number; until: number },
+  ): Promise<void> {
     // 生きた像が在るなら、そちらが正（書き戻しで台帳を上書きされないため）。
     const record = this.#records.get(managerId);
     const job = record?.job ?? listed;
-    const rescue = job.lastRescue;
+    let rescue = job.lastRescue;
     if (rescue === undefined) return;
+    // 終端を初めて見た時刻を台帳に残す（猶予の起点。`rescue-cleanup.ts`）。変わらなければ書かない。
+    const nowIso = new Date(this.#now()).toISOString();
+    const marked = syncTerminalMark(job.status, rescue, nowIso);
+    if (marked !== null) {
+      const wrote = await this.#updateRescueLedger(
+        managerId,
+        (current) => syncTerminalMark(job.status, current, nowIso),
+        false,
+        rescue,
+      );
+      if (!wrote) return;
+      rescue = marked;
+    }
     const now = this.#now();
     for (const tree of rescue.worktrees) {
-      if (this.#stopped) return;
-      const reason = rescueRemovalDue(job.status, rescue.at, tree, now);
+      if (this.#stopped || budget.deletesLeft <= 0 || this.#now() >= budget.until) return;
+      const reason = rescueRemovalDue(job.status, rescue, tree, now);
       const pushed = tree.pushed;
       if (reason === undefined || pushed === undefined) continue;
+      budget.deletesLeft -= 1;
       const outcome = await this.#deleteRescueRefVia(job, pushed);
       const at = new Date(this.#now()).toISOString();
       const attempts = outcome.ok
@@ -8221,11 +8254,13 @@ class Pool implements ManagerPool {
         });
       }
     }
-    // 台帳から、もう要らない作業ツリーの項目を落とす（C3）。
+    // 台帳から、もう要らない作業ツリーの項目を落とす（C3）。**先に同期で評価し、変わるときだけ
+    // 書く**（変わらない委譲へ10分ごとに UPDATE を打たない）。
     await this.#updateRescueLedger(
       managerId,
       (current) => pruneRescueLedger(job.status, current, this.#now()),
       true,
+      job.lastRescue,
     );
   }
 
@@ -8239,6 +8274,7 @@ class Pool implements ManagerPool {
     managerId: string,
     mutate: (current: LastRescue) => LastRescue | undefined | null,
     allowRemove = false,
+    snapshot?: LastRescue,
   ): Promise<boolean> {
     const record = this.#records.get(managerId);
     if (record !== undefined) {
@@ -8250,6 +8286,11 @@ class Pool implements ManagerPool {
       else record.job.lastRescue = next;
       await this.#persist(record);
       return true;
+    }
+    // 手元の像で「変わらない」と分かるなら、台帳を開かない（行ロック・キャッシュ無効化を避ける）。
+    if (snapshot !== undefined) {
+      const probe = mutate(snapshot);
+      if (probe === null || (probe === undefined && !allowRemove)) return false;
     }
     let changed = false;
     await this.#stores.jobs.updateJob(managerId, (current) => {
@@ -8277,22 +8318,33 @@ class Pool implements ManagerPool {
     if (pushed.remote === undefined) return { ok: false, kind: 'no-remote' };
     const primary = await this.#runnerOf({ job, waiting: [], attached: false });
     const open = await this.#runners.list().catch(() => []);
-    const runner = [primary, ...open].find(
-      (candidate): candidate is RunnerClient =>
-        candidate !== null && candidate.deleteRescueRef !== undefined,
-    );
-    if (runner?.deleteRescueRef === undefined) return { ok: false, kind: 'no-runner' };
-    try {
-      const result = await runner.deleteRescueRef(
-        { remote: pushed.remote, ref: pushed.ref, commit: pushed.commit },
-        { signal: AbortSignal.timeout(RESCUE_DELETE_DEADLINE_MS) },
-      );
-      return result.outcome === 'removed'
-        ? { ok: true, alreadyGone: result.alreadyGone }
-        : { ok: false, kind: result.kind };
-    } catch {
-      return { ok: false, kind: 'other' };
+    const seen = new Set<string>();
+    const candidates = [primary, ...open].filter((candidate): candidate is RunnerClient => {
+      if (candidate === null || candidate.deleteRescueRef === undefined) return false;
+      if (seen.has(candidate.runnerId)) return false;
+      seen.add(candidate.runnerId);
+      return true;
+    });
+    if (candidates.length === 0) return { ok: false, kind: 'no-runner' };
+    // 旧 runner が混在するとき（口が 404 → `other`）は次の runner へ進む。`auth` / `moved` /
+    // `network` / `timeout` は他の runner でも同じ結果になるか、別の runner が消してはいけない
+    // もの（lease）なので、そこで止める。
+    let last: RescueRemovalFailureKind = 'no-runner';
+    for (const runner of candidates) {
+      try {
+        const result = await runner.deleteRescueRef?.(
+          { remote: pushed.remote, ref: pushed.ref, commit: pushed.commit },
+          { signal: AbortSignal.timeout(RESCUE_DELETE_DEADLINE_MS) },
+        );
+        if (result === undefined) continue;
+        if (result.outcome === 'removed') return { ok: true, alreadyGone: result.alreadyGone };
+        last = result.kind;
+        if (result.kind !== 'other') break;
+      } catch {
+        last = 'other';
+      }
     }
+    return { ok: false, kind: last };
   }
 
   /**

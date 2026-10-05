@@ -30,6 +30,19 @@ describe('ManagerPoller と退避 ref の後始末（#1266）', () => {
     poller.stop();
   });
 
+  it('sweep が終わらなくても、他の関心事の1周（refresh）は待たされない', async () => {
+    const poller = startManagerPolling({
+      managers: poolWith(() => new Promise<void>(() => undefined)),
+      intervalMs: 3_600_000,
+    });
+    const outcome = await Promise.race([
+      poller.refresh().then(() => 'refreshed'),
+      new Promise<string>((resolve) => setTimeout(() => resolve('blocked'), 1500)),
+    ]);
+    expect(outcome).toBe('refreshed');
+    poller.stop();
+  });
+
   it('口を持たない実装でも回る', async () => {
     const poller = startManagerPolling({ managers: poolWith(undefined), intervalMs: 3_600_000 });
     await expect(poller.refresh()).resolves.toBeUndefined();

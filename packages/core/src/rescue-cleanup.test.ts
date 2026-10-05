@@ -9,6 +9,7 @@ import {
   RESCUE_RETRY_MAX_MS,
   rescueRemovalDue,
   rescueRetryAfterMs,
+  syncTerminalMark,
 } from './rescue-cleanup.js';
 import type { Job, LastRescue, RescueWorktree } from './schema.js';
 
@@ -36,6 +37,21 @@ function tree(pushed: Partial<NonNullable<RescueWorktree['pushed']>> | null): Re
   };
 }
 
+/** `at`（runner から最後に届いた時刻）と、終端を初めて見た時刻（`terminalSeen`）。 */
+function rescue(
+  atAgo: number,
+  terminal?: { status: 'done' | 'failed' | 'stopped'; seenAgo: number },
+  worktrees: RescueWorktree[] = [tree({})],
+): LastRescue {
+  return {
+    at: iso(-atAgo),
+    worktrees,
+    ...(terminal === undefined
+      ? {}
+      : { terminal: { status: terminal.status, seenAt: iso(-terminal.seenAgo) } }),
+  };
+}
+
 describe('退避 ref の後始末の判定（#1266）', () => {
   describe('終端の猶予', () => {
     const grace = RESCUE_GRACE_MS;
@@ -43,38 +59,99 @@ describe('退避 ref の後始末の判定（#1266）', () => {
       ['done', grace.done],
       ['failed', grace.failed],
       ['stopped', grace.stopped],
-    ] as const)('%s は猶予の手前では消さず、過ぎたら理由つきで消す', (status, ms) => {
-      expect(rescueRemovalDue(status, iso(-(ms - 1)), tree({}), NOW)).toBeUndefined();
-      expect(rescueRemovalDue(status, iso(-ms), tree({}), NOW)).toBe(status);
-    });
+    ] as const)(
+      '%s は猶予の手前では消さず、過ぎたら理由つきで消す（起点は終端を見た時刻）',
+      (status, ms) => {
+        const wt = tree({});
+        const before = rescue(ms + DAY, { status, seenAgo: ms - 1 }, [wt]);
+        const after = rescue(ms + DAY, { status, seenAgo: ms }, [wt]);
+        expect(rescueRemovalDue(status, before, wt, NOW)).toBeUndefined();
+        expect(rescueRemovalDue(status, after, wt, NOW)).toBe(status);
+      },
+    );
 
-    it('猶予は done < failed = stopped（done は待機で話しかければ続く。失敗・停止は取り戻しに来る）', () => {
-      expect(grace.done).toBe(3 * DAY);
+    it('猶予は done 7日 < failed = stopped 14日（done は週末をまたいでも残す）', () => {
+      expect(grace.done).toBe(7 * DAY);
       expect(grace.failed).toBe(14 * DAY);
       expect(grace.stopped).toBe(14 * DAY);
     });
 
+    it('lost のまま20日放置→stopped になった直後は、猶予ゼロでは消さない（起点は終端を見た時刻）', () => {
+      const wt = tree({});
+      // lastRescue.at は20日前で止まっているが、stopped を見たのはいまさっき。
+      const justStopped = rescue(20 * DAY, { status: 'stopped', seenAgo: 1000 }, [wt]);
+      expect(rescueRemovalDue('stopped', justStopped, wt, NOW)).toBeUndefined();
+    });
+
+    it('終端を見ていない（印が無い）ものは消さない。別の状態の印も使わない', () => {
+      const wt = tree({});
+      expect(
+        rescueRemovalDue('failed', rescue(400 * DAY, undefined, [wt]), wt, NOW),
+      ).toBeUndefined();
+      const doneMark = rescue(400 * DAY, { status: 'done', seenAgo: 400 * DAY }, [wt]);
+      expect(rescueRemovalDue('failed', doneMark, wt, NOW)).toBeUndefined();
+    });
+
+    it('lastRescue.at が新しければ（生きたセッション）そちらを起点にする', () => {
+      const wt = tree({});
+      const live = rescue(DAY, { status: 'done', seenAgo: 30 * DAY }, [wt]);
+      expect(rescueRemovalDue('done', live, wt, NOW)).toBeUndefined();
+    });
+
     it('lost は何日放置されても時間では消さない', () => {
-      expect(rescueRemovalDue('lost', iso(-365 * DAY), tree({}), NOW)).toBeUndefined();
+      const wt = tree({});
+      expect(rescueRemovalDue('lost', rescue(365 * DAY, undefined, [wt]), wt, NOW)).toBeUndefined();
     });
 
     it('running / waiting_human は時間では消さない', () => {
+      const wt = tree({});
       for (const status of ['running', 'waiting_human'] as const) {
-        expect(rescueRemovalDue(status, iso(-365 * DAY), tree({}), NOW)).toBeUndefined();
+        expect(
+          rescueRemovalDue(status, rescue(365 * DAY, undefined, [wt]), wt, NOW),
+        ).toBeUndefined();
       }
     });
 
-    it('lastRescue.at が読めなければ判定しない（消さない）', () => {
-      expect(rescueRemovalDue('failed', 'not-a-date', tree({}), NOW)).toBeUndefined();
+    it('時刻が読めなければ判定しない（消さない）', () => {
+      const wt = tree({});
+      const broken = {
+        ...rescue(400 * DAY, { status: 'failed', seenAgo: 400 * DAY }, [wt]),
+        at: 'x',
+      };
+      expect(rescueRemovalDue('failed', broken, wt, NOW)).toBeUndefined();
     });
 
     it('退避された ref が無い項目は消すものが無い', () => {
-      expect(rescueRemovalDue('failed', iso(-365 * DAY), tree(null), NOW)).toBeUndefined();
+      const wt = tree(null);
+      const r = rescue(365 * DAY, { status: 'failed', seenAgo: 365 * DAY }, [wt]);
+      expect(rescueRemovalDue('failed', r, wt, NOW)).toBeUndefined();
+    });
+  });
+
+  describe('終端の印', () => {
+    it('終端で印が無ければ付け、同じ状態なら動かさず、別の終端なら作り直す', () => {
+      const base = rescue(DAY);
+      const marked = syncTerminalMark('stopped', base, iso(0));
+      expect(marked?.terminal).toEqual({ status: 'stopped', seenAt: iso(0) });
+      expect(syncTerminalMark('stopped', marked as LastRescue, iso(5000))).toBeNull();
+      expect(syncTerminalMark('failed', marked as LastRescue, iso(5000))?.terminal).toEqual({
+        status: 'failed',
+        seenAt: iso(5000),
+      });
+    });
+
+    it('終端でなくなったら（lost・running へ戻った）外す。印の無い非終端は何もしない', () => {
+      const marked = rescue(DAY, { status: 'done', seenAgo: DAY });
+      for (const status of ['lost', 'running', 'waiting_human'] as const) {
+        expect(syncTerminalMark(status, marked, iso(0))?.terminal).toBeUndefined();
+        expect(syncTerminalMark(status, rescue(DAY), iso(0))).toBeNull();
+      }
     });
   });
 
   describe('内容が origin に入った', () => {
-    it('landedAt があれば、状態によらず（lost も running も）即座に消す', () => {
+    it('landedAt があれば、状態によらず（lost も running も・印が無くても）即座に消す', () => {
+      const wt = tree({ landedAt: iso(-1000) });
       for (const status of [
         'running',
         'waiting_human',
@@ -83,17 +160,15 @@ describe('退避 ref の後始末の判定（#1266）', () => {
         'lost',
         'stopped',
       ] as const) {
-        expect(rescueRemovalDue(status, iso(0), tree({ landedAt: iso(-1000) }), NOW)).toBe(
-          'landed',
-        );
+        expect(rescueRemovalDue(status, rescue(0, undefined, [wt]), wt, NOW)).toBe('landed');
       }
     });
   });
 
   describe('記録と再試行', () => {
     it('消した記録があれば二度と消さない', () => {
-      const t = tree({ landedAt: iso(-1000), removal: { at: iso(-1), reason: 'landed' } });
-      expect(rescueRemovalDue('failed', iso(-365 * DAY), t, NOW)).toBeUndefined();
+      const wt = tree({ landedAt: iso(-1000), removal: { at: iso(-1), reason: 'landed' } });
+      expect(rescueRemovalDue('failed', rescue(0, undefined, [wt]), wt, NOW)).toBeUndefined();
     });
 
     it('消せなかった回は、間隔（回数で倍々、上限つき）が空くまで撃たない', () => {
@@ -102,56 +177,63 @@ describe('退避 ref の後始末の判定（#1266）', () => {
           landedAt: iso(-5000),
           removal: { at: iso(-ago), reason: 'landed', failureKind: 'network', attempts },
         });
-      expect(
-        rescueRemovalDue('done', iso(0), failed(1, RESCUE_RETRY_BASE_MS - 1), NOW),
-      ).toBeUndefined();
-      expect(rescueRemovalDue('done', iso(0), failed(1, RESCUE_RETRY_BASE_MS), NOW)).toBe('landed');
-      expect(
-        rescueRemovalDue('done', iso(0), failed(3, RESCUE_RETRY_BASE_MS * 3), NOW),
-      ).toBeUndefined();
-      expect(rescueRemovalDue('done', iso(0), failed(3, RESCUE_RETRY_BASE_MS * 4), NOW)).toBe(
-        'landed',
-      );
+      const due = (wt: RescueWorktree) =>
+        rescueRemovalDue('done', rescue(0, undefined, [wt]), wt, NOW);
+      expect(due(failed(1, RESCUE_RETRY_BASE_MS - 1))).toBeUndefined();
+      expect(due(failed(1, RESCUE_RETRY_BASE_MS))).toBe('landed');
+      expect(due(failed(3, RESCUE_RETRY_BASE_MS * 3))).toBeUndefined();
+      expect(due(failed(3, RESCUE_RETRY_BASE_MS * 4))).toBe('landed');
       expect(rescueRetryAfterMs(1000)).toBe(RESCUE_RETRY_MAX_MS);
       expect(rescueRetryAfterMs(0)).toBe(RESCUE_RETRY_BASE_MS);
     });
 
+    it('送り先が台帳に無い（no-remote）は確定扱い。何日たっても再試行しない', () => {
+      const wt = tree({
+        landedAt: iso(-5000),
+        removal: { at: iso(-300 * DAY), reason: 'landed', failureKind: 'no-remote', attempts: 1 },
+      });
+      expect(rescueRemovalDue('done', rescue(0, undefined, [wt]), wt, NOW)).toBeUndefined();
+    });
+
     it('再試行のとき、猶予が過ぎていなければ（landed でもなければ）消さない', () => {
-      const t = tree({
+      const wt = tree({
         removal: { at: iso(-DAY), reason: 'failed', failureKind: 'auth', attempts: 1 },
       });
-      expect(rescueRemovalDue('failed', iso(-DAY), t, NOW)).toBeUndefined();
+      const r = rescue(DAY, { status: 'failed', seenAgo: DAY }, [wt]);
+      expect(rescueRemovalDue('failed', r, wt, NOW)).toBeUndefined();
     });
   });
 
   describe('台帳の片付け（C3）', () => {
-    const rescue = (at: string, worktrees: RescueWorktree[]): LastRescue => ({ at, worktrees });
     const removed = (agoMs: number) => tree({ removal: { at: iso(-agoMs), reason: 'done' } });
 
     it('消して一定期間が過ぎた項目と、退避の無い古い項目を落とす', () => {
       const keepRemovedMs = RESCUE_LEDGER_REMOVED_KEEP_MS;
-      const quiet = iso(-keepRemovedMs);
       const out = pruneRescueLedger(
         'done',
-        rescue(quiet, [removed(keepRemovedMs), removed(keepRemovedMs - 1000)]),
+        rescue(keepRemovedMs, undefined, [removed(keepRemovedMs), removed(keepRemovedMs - 1000)]),
         NOW,
       );
       expect(out?.worktrees).toHaveLength(1);
       expect(
-        pruneRescueLedger('done', rescue(iso(-RESCUE_LEDGER_NOTHING_KEEP_MS), [tree(null)]), NOW),
+        pruneRescueLedger(
+          'done',
+          rescue(RESCUE_LEDGER_NOTHING_KEEP_MS, undefined, [tree(null)]),
+          NOW,
+        ),
       ).toBeUndefined();
     });
 
     it('消せなかった記録・まだ消していない ref は残す', () => {
       const t1 = tree({ removal: { at: iso(-90 * DAY), reason: 'failed', failureKind: 'auth' } });
       const t2 = tree({});
-      expect(pruneRescueLedger('failed', rescue(iso(-90 * DAY), [t1, t2]), NOW)).toBeNull();
+      expect(pruneRescueLedger('failed', rescue(90 * DAY, undefined, [t1, t2]), NOW)).toBeNull();
     });
 
     it('running / waiting_human の台帳には触らない', () => {
       for (const status of ['running', 'waiting_human'] as const) {
         expect(
-          pruneRescueLedger(status, rescue(iso(-90 * DAY), [removed(90 * DAY)]), NOW),
+          pruneRescueLedger(status, rescue(90 * DAY, undefined, [removed(90 * DAY)]), NOW),
         ).toBeNull();
       }
     });
@@ -160,7 +242,7 @@ describe('退避 ref の後始末の判定（#1266）', () => {
       expect(
         pruneRescueLedger(
           'lost',
-          rescue(iso(-(RESCUE_LEDGER_NOTHING_KEEP_MS - 1)), [tree(null)]),
+          rescue(RESCUE_LEDGER_NOTHING_KEEP_MS - 1, undefined, [tree(null)]),
           NOW,
         ),
       ).toBeNull();

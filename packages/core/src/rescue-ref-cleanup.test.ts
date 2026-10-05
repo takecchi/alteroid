@@ -8,6 +8,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { makeTempDir } from '../../../vitest.tmpdir.js';
 import {
   deleteRescueRef,
+  isDeletableRemote,
   redactRemoteUrl,
   RescueMemory,
   rescueRefName,
@@ -68,6 +69,7 @@ describe('退避 ref の後始末（runner 側。#1266）', () => {
       ref,
       commit,
       tmpRootDir: tmp,
+      allowLocalRemote: true,
     });
   const refsInBare = (): string => g(bare, 'for-each-ref', 'refs/alteroid-rescue/');
 
@@ -226,16 +228,92 @@ describe('退避 ref の後始末（runner 側。#1266）', () => {
     expect(redactRemoteUrl('https://github.com/o/r.git?token=abc#frag')).toBe(
       'https://github.com/o/r.git',
     );
-    expect(redactRemoteUrl('ssh://git@example.com:2222/o/r.git')).toBe(
-      'ssh://example.com:2222/o/r.git',
+    expect(redactRemoteUrl('https://tokenuser@github.com/o/r.git')).toBe(
+      'https://github.com/o/r.git',
+    );
+    // ssh はパスワードだけ落とし、ユーザー名は残す。
+    expect(redactRemoteUrl('ssh://git:pw@example.com:2222/o/r.git')).toBe(
+      'ssh://git@example.com:2222/o/r.git',
     );
     expect(redactRemoteUrl('git@github.com:o/r.git')).toBe('git@github.com:o/r.git');
     expect(redactRemoteUrl('tok@en@github.com:o/r.git')).toBeUndefined();
-    expect(redactRemoteUrl('someone@github.com:o/r.git')).toBe('github.com:o/r.git');
+    expect(redactRemoteUrl('someone@github.com:o/r.git')).toBe('someone@github.com:o/r.git');
+    expect(redactRemoteUrl('git@-oProxyCommand:o/r.git')).toBeUndefined();
+    expect(redactRemoteUrl('ssh://-oProxy@example.com/o/r.git')).toBeUndefined();
     expect(redactRemoteUrl('/srv/git/r.git')).toBe('/srv/git/r.git');
     expect(redactRemoteUrl('-oProxyCommand=x')).toBeUndefined();
     expect(redactRemoteUrl('has space')).toBeUndefined();
     expect(redactRemoteUrl('')).toBeUndefined();
+  });
+
+  it('撃ってよい送り先は https:// / ssh:// / scp 形だけ（file・ローカル・http・ホストが - で始まる形は spawn せず弾く）', async () => {
+    for (const ok of [
+      'https://github.com/o/r.git',
+      'ssh://git@github.com/o/r.git',
+      'git@github.com:o/r.git',
+      'github.com:o/r.git',
+    ]) {
+      expect(isDeletableRemote(ok), ok).toBe(true);
+    }
+    const commit = 'a'.repeat(40);
+    for (const bad of [
+      bare,
+      `file://${bare}`,
+      'http://github.com/o/r.git',
+      'git://github.com/o/r.git',
+      'git@-evil:o/r.git',
+      'ssh://-evil/o/r.git',
+      'ext::sh',
+    ]) {
+      expect(isDeletableRemote(bad), bad).toBe(false);
+      spawnCount = 0;
+      const result = await deleteRescueRef({
+        spawn: realSpawn,
+        env: { ...GIT_ENV, GH_TOKEN: 'x' },
+        remote: bad,
+        ref: 'refs/alteroid-rescue/a/b',
+        commit,
+        tmpRootDir: tmp,
+      });
+      expect(result, bad).toEqual({ outcome: 'failed', kind: 'no-remote' });
+      expect(spawnCount, bad).toBe(0);
+    }
+  });
+
+  it('abort されても一時 bare を残さない（後始末は呼び出し元の signal を引き継がない）', async () => {
+    await writeFile(path.join(repo, 'a.txt'), 'edited\n');
+    const [report] = await run();
+    const pushed = report?.pushed as NonNullable<typeof report>['pushed'] & object;
+    const controller = new AbortController();
+    // push を撃つ瞬間に abort する（一時 bare は init で出来上がっている）。
+    const abortingSpawn: ProcessSpawnFn = (o) => {
+      if (o.args.includes('push')) controller.abort();
+      return realSpawn(o);
+    };
+    const result = await deleteRescueRef({
+      spawn: abortingSpawn,
+      env: GIT_ENV,
+      remote: bare,
+      ref: pushed.ref,
+      commit: pushed.commit,
+      tmpRootDir: tmp,
+      allowLocalRemote: true,
+      signal: controller.signal,
+    });
+    expect(result.outcome).toBe('failed');
+    expect(await readdir(tmp)).toEqual([]);
+  });
+
+  it('殺された回の残骸（pid が死んでいる）は次の回の冒頭で掃除し、生きている pid のものは消さない', async () => {
+    const dead = path.join(tmp, 'alteroid-rescue-del.2147483646.abcdef012345.git');
+    const alive = path.join(tmp, `alteroid-rescue-del.${String(process.ppid)}.abcdef012345.git`);
+    const unrelated = path.join(tmp, 'keep-me');
+    for (const dir of [dead, alive, unrelated]) await mkdir(dir);
+    await writeFile(path.join(repo, 'a.txt'), 'edited\n');
+    const [report] = await run();
+    const pushed = report?.pushed as NonNullable<typeof report>['pushed'] & object;
+    await del(pushed.ref, pushed.commit);
+    expect((await readdir(tmp)).sort()).toEqual([path.basename(alive), 'keep-me'].sort());
   });
 
   it('退避 ref の名前は後始末が受ける形に収まる', () => {
