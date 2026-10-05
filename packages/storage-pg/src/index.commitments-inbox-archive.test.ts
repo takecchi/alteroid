@@ -164,7 +164,10 @@ describe('PgCommitmentStore の畳み込みの索引（#1041。pg だけが持�
    */
   it('⭐ 索引を落としても、畳み込みの契約は満たされる（where not exists が索引と独立に効いている）', async () => {
     await db.execute(sql.raw('drop index commitments_open_manager_body_idx'));
-    await verifyCommitmentFoldContract(stores.commitments);
+    // **同時の2件（性質 7）は測らない。** 索引が無い DB では、本物の PostgreSQL の並行
+    // は両方開く（同時の2件目を弾くのは索引だけ。`open` の doc）。PGlite は単一接続で
+    // 重ならないので、これまで緑だった。同時の側は索引の在る状態で測っている。
+    await verifyCommitmentFoldContract(stores.commitments, { concurrent: false });
   });
 
   it('⭐ 8000 文字の本文でも開ける（鍵が md5 でなければ落ちる）', async () => {
