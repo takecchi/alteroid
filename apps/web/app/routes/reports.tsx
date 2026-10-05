@@ -370,7 +370,7 @@ function ReportBody({ date, reportId }: { date: string; reportId: string | undef
       ) : bodyUnavailable ? null : report === undefined ? (
         <Empty>この日の日報は無い。</Empty>
       ) : (
-        <article className="min-w-0 px-4 py-3">
+        <article className="min-w-0 pt-3">
           {/*
             **「書かれたのは」を省かないこと。** 見出しは「何日ぶんの日報か」
             （`date`）で、ここは「いつ書かれたか」（`at`）である。遡り生成では
