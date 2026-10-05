@@ -3843,6 +3843,9 @@ describe('RunnerHttpError の message は本文を伏せて切る（issue #2415�
 });
 
 describe('awaitStreamEnd（Issue #2749。畳み始めた runner の最後の出来事を受け切る）', () => {
+  const flush = async (): Promise<void> => {
+    for (let i = 0; i < 5; i += 1) await new Promise((resolve) => setImmediate(resolve));
+  };
   function streamingFetch(): {
     fetchFn: typeof fetch;
     eventsCalls: () => number;
@@ -3882,12 +3885,12 @@ describe('awaitStreamEnd（Issue #2749。畳み始めた runner の最後の出�
       sleepFn: async () => undefined,
     });
     await client.connect(() => undefined);
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await vi.waitFor(() => expect(eventsCalls()).toBe(1));
     expect(eventsCalls()).toBe(1);
 
     let ended = false;
     const waiting = client.awaitStreamEnd?.().then(() => (ended = true));
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await flush(); // 開いている間は解けない
     expect(ended).toBe(false); // runner が exit するまで、自分からは切らない
 
     endStream(); // runner が exit した
@@ -3895,7 +3898,7 @@ describe('awaitStreamEnd（Issue #2749。畳み始めた runner の最後の出�
     expect(ended).toBe(true);
 
     // 繋ぎ直しは止まっている（新しい器へ繋がって hello が畳み中のデーモンで走らない）。
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await flush();
     expect(eventsCalls()).toBe(1);
     await client.close();
   });

@@ -5,8 +5,7 @@ import type {
   Query,
   SDKMessage,
 } from '@anthropic-ai/claude-agent-sdk';
-import { mkdtempSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -23,6 +22,7 @@ import {
 import type { InboxEvent, Job } from './schema.js';
 import type { Stores } from './store.js';
 import { captureStderr, createMemoryStores } from './testing.js';
+import { makeTempDirSync } from '../../../vitest.tmpdir.js';
 
 /**
  * **Issue #2749: デーモンと runner が同じ反映で SIGTERM を受けたとき、runner が畳みの
@@ -238,7 +238,7 @@ async function setup(options: {
   const session = fake.sessions[0];
   if (session === undefined) throw new Error('セッションが開いていない');
   // 畳むときに生ログを渡せるよう、transcript の場所を runner に覚えさせる。
-  const dir = mkdtempSync(join(tmpdir(), 'farewell-'));
+  const dir = makeTempDirSync('farewell-');
   const transcriptPath = join(dir, 'transcript.jsonl');
   writeFileSync(transcriptPath, '畳む直前の生ログ（#2749）', 'utf8');
   await session.postToolUse({ tool_name: 'Bash', tool_input: {}, transcript_path: transcriptPath });
