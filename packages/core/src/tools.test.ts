@@ -6417,6 +6417,7 @@ describe('クローンの道具', () => {
     expect(reply).toContain('force: true');
     expect(reply).not.toContain('監視中の CI');
     expect(reply).not.toContain('未 push の実装・起こした作業者');
+    expect(reply).not.toContain('作業ツリーが見つからなかった');
     expect(h.aborted).toEqual([]);
   });
 

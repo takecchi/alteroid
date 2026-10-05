@@ -11104,8 +11104,8 @@ export function createCloneTools(context: ToolContext) {
                 ? '（未 push の実装・起こした作業者・監視中の CI など）'
                 : '（起こした作業者など）') +
               '。🔴 force: true で止まる。\n' +
-              `${lastReportLine} ターンの中身は manager_report で先に読めること。\n` +
-              describeUnpushedWork(unpushedWork),
+              `${lastReportLine} ターンの中身は manager_report で先に読めること。` +
+              (gitConcrete ? `\n${describeUnpushedWork(unpushedWork)}` : ''),
           );
         }
 
