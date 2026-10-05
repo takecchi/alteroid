@@ -3055,6 +3055,12 @@ export class PracticeConflictError extends Error {
   }
 }
 
+/** `PracticeStore.remove` の任意の引数（Issue #2923）。 */
+export interface RemovePracticeOptions {
+  /** 前提の版（`practiceVersion` の値）。合わなければ消さず `PracticeConflictError`。省略は無条件。 */
+  ifMatch?: string;
+}
+
 /** 前提の版 `ifMatch` が、いまのやり方と合うか（`undefined` は前提なし＝常に合う）。 */
 export function practiceVersionMatches(
   current: Pick<Practice, 'kind' | 'title' | 'content'> | null,
@@ -3120,11 +3126,17 @@ export interface PracticeStore {
     options?: WritePracticeOptions,
   ): Promise<Practice>;
   /**
+   * **`options.ifMatch`（Issue #2923）で前提の版を持てる。** 合わなければ何も消さず
+   * `PracticeConflictError`（`current` はいまのやり方。無ければ `null`）。比較は消すのと同じ
+   * 排他の中で行う（fs: `withPathLock` 内、pg: 行ロックつきのトランザクション内、
+   * インメモリ: 同期の区間）。**省略は従来どおり無条件**（HTTP の `DELETE` を壊さない）。
+   * 読めない形の行は版が無いので「無い」側に数える（`write` と同じ）。
+   *
    * **版は消さない（#1309）。** `remove()` が消すのは「いまのやり方」の1件だけで、
    * `listVersions` / `readVersion` で読める追記専用の履歴は、消した後もそのまま
    * 残る——同じ slug を後で作り直したときに、前の系統の版を失わないためである。
    */
-  remove(slug: string): Promise<void>;
+  remove(slug: string, options?: RemovePracticeOptions): Promise<void>;
   /**
    * 全部消す（ワークスペースのリセット専用。`PersonaStore.clear` と同じ形）。
    * 消した件数を返す —— `WorkspaceResetSummary` が申告に使う。**消したのに申告に

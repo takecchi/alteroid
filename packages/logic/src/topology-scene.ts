@@ -121,17 +121,37 @@ function isAwaitingBackground(manager: TopologySnapshotManager): boolean {
   return manager.status === 'done' && manager.awaitingBackground !== undefined;
 }
 
+/** クローンの `usage_blocked` と同じ文言（札の task に出す）。 */
+const USAGE_BLOCKED_TASK = '利用枠の上限で止まっている';
+
 /**
- * 仕事の途中か（地図の上の委譲として）。走行中（プロセスが居る）・背景処理待ち・人間の返事待ち。
+ * 枠（利用上限）で止まっている委譲か（`usageStoppedAt`。`manager_list` の「枠(利用上限)で
+ * 止まっている」と同じ出どころ）。**生きている札（走行中で live / 手が空いた done）だけ。**
+ * 人間の返事待ちは返事待ちのまま（既に「止まっている」）、プロセスが居ない running / lost /
+ * failed / stopped は、その状態を言う（枠で止まっていると言い切らない）。
+ * 本当に仕事の無い `done`（`usageStoppedAt` が無い）とは別物で、「仕事なし」には倒さない。
+ */
+function isUsageBlocked(manager: TopologySnapshotManager): boolean {
+  if (manager.usageStoppedAt === undefined) return false;
+  if (manager.status === 'running') return manager.live;
+  return manager.status === 'done';
+}
+
+/**
+ * 仕事の途中か（地図の上の委譲として）。走行中（プロセスが居る）・背景処理待ち・人間の返事待ち・
+ * 枠で止まっている（仕事の途中で鍵を待っている）。
  * クローンの「完了待ち」と作業者の「確かめられない」の判定が使う。
  */
 function isInProgress(manager: TopologySnapshotManager): boolean {
   if (manager.status === 'running') return manager.live;
   if (manager.status === 'waiting_human') return true;
+  if (isUsageBlocked(manager)) return true;
   return manager.awaitingBackground !== undefined;
 }
 
 function managerStatus(manager: TopologySnapshotManager): SceneStatus {
+  // クローンの `usage_blocked` と同じ `waiting`（止まっている）。完了待ち・仕事なしより先。
+  if (isUsageBlocked(manager)) return 'waiting';
   if (isAwaitingBackground(manager)) return 'awaiting';
   switch (manager.status) {
     case 'running':
@@ -157,6 +177,7 @@ function managerStatus(manager: TopologySnapshotManager): SceneStatus {
 }
 
 function managerTask(manager: TopologySnapshotManager): string {
+  if (isUsageBlocked(manager)) return `${USAGE_BLOCKED_TASK}: ${manager.request}`;
   const awaiting = manager.awaitingBackground;
   if (isAwaitingBackground(manager) && awaiting !== undefined) {
     // 「完了:」とは言わない（まだ終わっていない）。何を待っているかを頭に言う。
@@ -184,6 +205,17 @@ function managerDetails(manager: TopologySnapshotManager, nowMs: number): SceneD
   }
   if (manager.lastReportAt !== undefined) {
     rows.push({ label: '最後の報告', value: formatDateTime(manager.lastReportAt, nowMs) });
+  }
+  if (
+    manager.usageStoppedAt !== undefined &&
+    manager.status !== 'failed' &&
+    manager.status !== 'lost' &&
+    manager.status !== 'stopped'
+  ) {
+    rows.push({
+      label: '利用枠',
+      value: `${USAGE_BLOCKED_TASK}（${formatDateTime(manager.usageStoppedAt, nowMs)} から）`,
+    });
   }
   const awaiting = manager.awaitingBackground;
   if (isAwaitingBackground(manager) && awaiting !== undefined) {
@@ -285,7 +317,7 @@ function cloneScene(
     case 'usage_blocked':
       return {
         status: 'waiting' as const,
-        task: '利用枠の上限で止まっている',
+        task: USAGE_BLOCKED_TASK,
         details: [observed],
       };
     case 'unknown':

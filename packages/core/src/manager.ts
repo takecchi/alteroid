@@ -5370,6 +5370,12 @@ class Pool implements ManagerPool {
   /** いま resume を投げている最中のマネージャー（同じ session を二本起こさない）。 */
   readonly #resuming = new Set<string>();
   /**
+   * 直近の resume が「生きていた旧プロセスへ流しただけ」だったマネージャー（#2877。
+   * `runnerSessionOpenResultSchema.reusedLiveSession`）。`send()` が detail で言うための控えで、
+   * 次の resume が新しい SDK を起こした回に消える。
+   */
+  readonly #resumedIntoLiveProcess = new Set<string>();
+  /**
    * 自動では戻せないと分かったマネージャー。
    *
    * **`retry` は runner 単位、この判定はジョブ単位である。** 同じ runner に一時
@@ -6100,9 +6106,15 @@ class Pool implements ManagerPool {
       // 呼び手へ言う。`outcome` は `'delivered'` のままで正しい（届いたのだから）
       // が、**届き方が違った**ことは読み手の次の一手に効く——同じ委譲へ続けて
       // 送る側は、器が入れ替わった後の文脈で走っていることを知っておく必要がある。
-      detail: reentered
-        ? '追加指示として届けた（runner にこの委譲のセッションが無かったので、resume から入り直した）。'
-        : '追加指示として届けた。',
+      detail:
+        // **短絡した回は、そう言う**（#2877）。新しい SDK を起こしていないので、message が届いたのは
+        // 起動時の鍵が凍った旧プロセスである。
+        !attached && this.#resumedIntoLiveProcess.has(managerId)
+          ? '追加指示として届けた（生きた旧プロセスへ流した。新しい SDK は起こしていない。' +
+            'その鍵が現役かどうかは確かめていないので、この委譲の認証トークンの世代は「分からない」のままにしてある）。'
+          : reentered
+            ? '追加指示として届けた（runner にこの委譲のセッションが無かったので、resume から入り直した）。'
+            : '追加指示として届けた。',
     };
   }
 
@@ -6136,7 +6148,9 @@ class Pool implements ManagerPool {
    * 2. `runner.stop()`。runner 側の `#stopBody` が、子プロセスを閉じた後に生ログを
    *    デーモンへ送り出し（`#shipArchive`）、未報告の本文を flush し（`#flushUnreported`）、
    *    それから `onClosed` する。**作業ツリーは runner のディスクに残る**（畳むのは SDK
-   *    子プロセスであって、ワークスペースではない）
+   *    子プロセスであって、ワークスペースではない）。**この順序には依存している**——崩れると
+   *    `runner-stop-finish-order.test.ts`（#1533。経路A・(a)・(c)・「query.close() の直後には
+   *    まだ archive が出ない」・「報告は #reader の終わりの後」）が落ちる
    * 3. 一覧から消えたことを確かめる。**確かめられなければ resume しない**（二重に起こさない）
    * 4. `attached` を false にする。**貸し出しは返さず握ったまま**で、呼び出し側の
    *    `#resumeOnce` → `#claimForResume` が同じ器へ貸し直す（`abort()` を流用しない——
@@ -10805,7 +10819,19 @@ class Pool implements ManagerPool {
     //    （#393 受け入れ基準6 が、引き取られた委譲についてだけ答えられない）
     //
     // **どちらも合計を変えないので、出力を見ても気づけない。**
-    this.#rememberTokenIdentity(record.job.id);
+    //
+    // **ただし、生きていた旧プロセスへ流しただけの回は覚えない**（Issue #2877）。`Host#resume` は
+    // 生きたセッションが居ると新しい SDK を起こさず message をそこへ流して返す。旧プロセスの env は
+    // 起動時に凍っているので、**いまの現役の世代を「抱えている世代」として書くと、古い鍵のまま走って
+    // いるのに `manager_list` の ⚠ が消える（偽の一致）。** 世代は「分からない」のまま残す。
+    // **欄を名乗らない古い runner（`undefined`）は従来どおり書く**——短絡を見分けられない（版が混ざる
+    // 窓の限界）。
+    if (resumed.reusedLiveSession === true) {
+      this.#resumedIntoLiveProcess.add(record.job.id);
+    } else {
+      this.#resumedIntoLiveProcess.delete(record.job.id);
+      this.#rememberTokenIdentity(record.job.id);
+    }
     // 戻れたなら諦めを忘れる（人間やクローンが起こし直した後も自動で拾える）。
     this.#unresumable.delete(record.job.id);
     return 'resumed';

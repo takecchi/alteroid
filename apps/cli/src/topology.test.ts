@@ -215,6 +215,44 @@ describe('renderTopology', () => {
     expect(renderTopology(idle({}) as never, NOW)).not.toContain('runner の一覧に載っている');
   });
 
+  it('枠(利用上限)で止まっている委譲は注記を出し、仕事なしの委譲には出さない。終端は言い切らない', () => {
+    const row = (managerId: string, extra: object) => ({
+      managerId,
+      status: 'done',
+      live: true,
+      request: '依頼',
+      startedAt: ago(7200),
+      updatedAt: ago(3600),
+      waiting: [],
+      workers: [],
+      ...extra,
+    });
+    const out = renderTopology(
+      view({
+        managers: [
+          row('mgr-blocked', { usageStoppedAt: ago(120) }),
+          row('mgr-quiet', {}),
+          row('mgr-failed', { status: 'failed', live: false, usageStoppedAt: ago(120) }),
+        ],
+      }) as never,
+      NOW,
+    );
+    const lines = out.split('\n');
+    const block = (id: string) =>
+      lines
+        .slice(lines.findIndex((l) => l.includes(id)) + 1)
+        .findIndex((l) => l.includes('枠(利用上限)で止まっている'));
+    expect(out).toContain('⚠ 枠(利用上限)で止まっている（');
+    expect(out).toContain('2分前');
+    expect(out).toContain('セッションは生きているので、鍵が回ればこの委譲は続く');
+    // 注記は止まった委譲の直下の行で、仕事なしの委譲の行には現れない。
+    expect(block('mgr-blocked')).toBeGreaterThanOrEqual(0);
+    const quietStart = lines.findIndex((l) => l.includes('mgr-quiet'));
+    const quietEnd = lines.findIndex((l, i) => i > quietStart && l.includes('mgr-failed'));
+    expect(lines.slice(quietStart, quietEnd).join('\n')).not.toContain('枠(利用上限)');
+    expect(out).toContain('ただし status: failed——既に終端している');
+  });
+
   it('マネージャーの居る器を言う。生きた器と突き合わなければ「分からない」と言い、落とさない', () => {
     const m = (managerId: string, runnerId?: string) => ({
       managerId,

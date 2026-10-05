@@ -8,7 +8,8 @@
  * 一覧の 1 行・詳細の本文の組み立て。
  */
 import { formatDateTime, summarizeJournalEntry as summarizeLogic } from '@alteroid/logic';
-import { codePointBoundary, type JournalEntry } from '@alteroid/core';
+import { codePointBoundary } from '@alteroid/core/cli-light';
+import type { JournalEntry } from '@alteroid/core';
 
 import { JOURNAL_DETAIL_CHARS } from './journal-window.js';
 import { redactBody } from '../redact.js';

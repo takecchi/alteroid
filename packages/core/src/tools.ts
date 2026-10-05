@@ -239,7 +239,13 @@ import {
   describeUnreadableSchedules,
   describeUnreadableTokens,
 } from './store.js';
-import { MemoryConflictError, memoryVersion, PROFILE_ENTRY_NAME } from './store.js';
+import {
+  MemoryConflictError,
+  memoryVersion,
+  PracticeConflictError,
+  practiceVersion,
+  PROFILE_ENTRY_NAME,
+} from './store.js';
 import type { ArchiveEntry, InboxPeek, JournalStore, Stores } from './store.js';
 import {
   RESTART_BEFORE_CHECK_ADVICE,
@@ -1815,8 +1821,9 @@ const CLOSE_MANY_SOURCES_SHOWN = 8;
  * **`REMOVE_MANY_JOURNAL_ID_CHARS` の意味も同じ**——#972 の要求（「消した id
  * は全部日誌に残す」）を「予算は件数ではなく文字数」の形で満たす。
  */
-export const REMOVE_MANY_LIMIT_DEFAULT = 500;
-export const REMOVE_MANY_LIMIT_MAX = 2_000;
+import { REMOVE_MANY_LIMIT_DEFAULT, REMOVE_MANY_LIMIT_MAX } from './remove-many-limit.js';
+
+export { REMOVE_MANY_LIMIT_DEFAULT, REMOVE_MANY_LIMIT_MAX };
 export const REMOVE_MANY_JOURNAL_ID_CHARS = 3_600;
 /** 一括削除の戻り値に並べる id の件数の上限（`CLOSE_MANY_IDS_SHOWN` と同じ理由）。 */
 const REMOVE_MANY_IDS_SHOWN = 20;
@@ -4403,6 +4410,46 @@ function describeMemoryConflict(
     `記憶 ${slug} は、読んだ後にその間に変わった（人間または別のターンが書いた）ので、${action}を**書かなかった**。` +
     `${now}**何も書いていない**（あなたの内容は書かれておらず、いまの内容は1文字も変わっていない）。` +
     `memory_read slug=${slug} で読み直し、いまの内容に対してやりたいことが変わらないか判断し直してから、` +
+    '読み直した版の base_version を付けて書き直すこと。'
+  );
+}
+
+/**
+ * **Issue #2923。** 読んだやり方の版（`practiceVersion`。#2853）を、クローンが次の
+ * 書き込みへ持ち回るための1行。`practice_read` / `practice_write` の応答の末尾に付く。
+ * 欄の名前は `practice_write` / `practice_remove` の引数 `base_version` と同じ。
+ */
+function practiceVersionLine(practice: Pick<Practice, 'kind' | 'title' | 'content'>): string {
+  return `（版 base_version=${practiceVersion(practice)} ——このやり方を全文で書き直す practice_write と、消す practice_remove には、これを base_version に渡すこと）`;
+}
+
+/**
+ * 読んだ版と違っていて、**書かなかった／消さなかった**ときにクローンへ返す文
+ * （`describeMemoryConflict` のやり方版）。`current` は書く瞬間のやり方（無ければ
+ * `null` ＝ 読んだ後に消えた）。
+ */
+function describePracticeConflict(
+  slug: string,
+  action: string,
+  current: Pick<Practice, 'kind' | 'title' | 'content'> | null,
+  kind: 'write' | 'remove' = 'write',
+): string {
+  const now =
+    current === null
+      ? 'いまそのやり方は無い（読んだ後に消された）。'
+      : `いまの版は base_version=${practiceVersion(current)}（${current.content.length} 文字）。`;
+  if (kind === 'remove') {
+    return (
+      `やり方 ${slug} は、読んだ後にその間に変わった（人間または別のターンが書いた）ので、${action}を**しなかった**。` +
+      `${now}**何も消していない**（読んでいない内容を消さないため。いまの内容は1文字も変わっていない）。` +
+      `practice_read slug=${slug} で読み直し、いまの内容でも消してよいか判断し直してから、` +
+      '読み直した版の base_version を付けて practice_remove し直すこと。'
+    );
+  }
+  return (
+    `やり方 ${slug} は、読んだ後にその間に変わった（人間または別のターンが書いた）ので、${action}を**書かなかった**。` +
+    `${now}**何も書いていない**（あなたの内容は書かれておらず、いまの内容は1文字も変わっていない）。` +
+    `practice_read slug=${slug} で読み直し、いまの内容に対してやりたいことが変わらないか判断し直してから、` +
     '読み直した版の base_version を付けて書き直すこと。'
   );
 }
@@ -10121,6 +10168,8 @@ export function createCloneTools(context: ToolContext) {
             `作成: ${found.createdAt} / 更新: ${found.updatedAt} / ${String(found.chars)} 文字`,
             '',
             found.content,
+            '',
+            practiceVersionLine(found),
           ].join('\n'),
         );
       },
@@ -10183,14 +10232,23 @@ export function createCloneTools(context: ToolContext) {
         'これは実行される定義ではない——読んで従うかどうかは、そのときのあなたが決める' +
           '（従わせる道具はここには無い）。人間もこの3入口のどこからでも同じものを読み書きできる。',
         '本文の末尾改行は正規化される（無ければ足す。既に在れば増やさない）。',
+        '**既存のやり方を書き換えるときは、先に practice_read で読んで、応答に出る base_version を渡すこと。焼き込みの索引だけでは書けない**（読んだ後に人間や別のターンが書いていたら、何も書かずに「その間に変わった」と返す。読み直して判断し直すこと）。**新規作成は版なしで通る。**',
       ].join(' '),
       {
         slug: z.string().describe('やり方のスラッグ（英小文字・数字・. _ - のみ）'),
         kind: z.string().describe('仕事の種類（自由文字列。例: 実装・調査・相談・レビュー・日報）'),
         title: z.string().describe('一覧で見る短い題'),
         content: z.string().describe('本文（人間もこのまま読む。Markdown を想定）'),
+        base_version: z
+          .string()
+          .optional()
+          .describe(
+            '読んだ時点の版（practice_read / 直前の practice_write の応答に出る base_version）。' +
+              '**既存のやり方を書き換えるときは必須。** 読んだ後に人間や別のターンが書いていたら、書かずに「その間に変わった」と返す。' +
+              '新規作成（その slug がまだ無い）では省略してよい（版なしで通る）。焼き込みの索引だけでは版は分からない——先に practice_read を呼ぶこと。',
+          ),
       },
-      async ({ slug, kind, title, content }) => {
+      async ({ slug, kind, title, content, base_version: baseVersion }) => {
         // **issue #1651。** `practice_read` と同じ門（doc はそちらにある）。
         // `PUT /practices/:slug`（HTTP）も書く前に同じ検査を通す。
         if (!practiceSlugSchema.safeParse(slug).success) {
@@ -10224,7 +10282,31 @@ export function createCloneTools(context: ToolContext) {
           before = null;
           beforeWasUnreadable = true;
         }
-        const written = await stores.practices.write({ slug, kind, title, content });
+        // **Issue #2923。** 版なしで既存のやり方は書けない（`memory_write`（#2809）と
+        // 同じ線）。新規作成は「無かった」を前提にする。**読めない形で入っていた
+        // 行には版が無い**（`practiceVersion` は読めた値からしか出せない）ので、
+        // 書き直しの回復手段を塞がないよう、その場合だけ前提なしで通す（#2011）。
+        if (before !== null && baseVersion === undefined) {
+          return text(
+            `やり方 ${slug} は既に在る。全文を書き直すには、先に practice_read slug=${slug} で読み、` +
+              '応答に出る base_version をこの呼び出しの base_version に渡すこと' +
+              '（読んだ後に人間や別のターンが書いた内容を、気づかずに消さないため。焼き込みの索引だけでは書けない）。**何も書いていない。**',
+          );
+        }
+        let written;
+        try {
+          written = await stores.practices.write(
+            { slug, kind, title, content },
+            beforeWasUnreadable
+              ? undefined
+              : { ifMatch: before === null ? (baseVersion ?? null) : baseVersion! },
+          );
+        } catch (error) {
+          if (error instanceof PracticeConflictError) {
+            return text(describePracticeConflict(slug, '書き直し', error.current));
+          }
+          throw error;
+        }
         await appendJournalOrThrow(
           'practice_write',
           stores.journal,
@@ -10255,7 +10337,8 @@ export function createCloneTools(context: ToolContext) {
             'practice_list で一覧に出る。' +
             ((note) => (note === null ? '' : `\n${note}`))(
               describeTokenDiff(before === null ? null : before.content, content),
-            ),
+            ) +
+            `\n\n${practiceVersionLine(written)}`,
         );
       },
     ),
@@ -10265,11 +10348,18 @@ export function createCloneTools(context: ToolContext) {
       [
         '仕事のやり方を1件消す。',
         '**無い slug を指定しても失敗しない（冪等）**——その場合は何もしていないとだけ返す。',
+        '**既存のやり方を消すときは、先に practice_read で読んで、応答に出る base_version を渡すこと（必須）。焼き込みの索引だけでは消せない**——読んだ後に人間や別のターンが書いていたら、何も消さずに「その間に変わった」と返す（読んでいない内容まで消さないため）。',
       ].join(' '),
       {
         slug: z.string().describe('やり方のスラッグ（practice_list に出ている slug）'),
+        base_version: z
+          .string()
+          .optional()
+          .describe(
+            '読んだ時点の版（practice_read / 直前の practice_write の応答に出る base_version）。**必須**——無ければ何も消さずに読み直しを促す。焼き込みの索引だけでは版は分からない。',
+          ),
       },
-      async ({ slug }) => {
+      async ({ slug, base_version: baseVersion }) => {
         // **issue #1651。** `practice_read` と同じ門（doc はそちらにある）。
         if (!practiceSlugSchema.safeParse(slug).success) {
           return text(`やり方のスラッグが不正: ${slug}（英小文字・数字・. _ - のみ）。`);
@@ -10292,7 +10382,6 @@ export function createCloneTools(context: ToolContext) {
           before = null;
           wasUnreadable = true;
         }
-        await stores.practices.remove(slug);
         // **無かったときは日誌を書かない。** 何も起きていないのに「消した」という
         // 判断の跡を残すと、日誌が実際の変化と食い違う（`PracticeStore.remove`
         // の doc「冪等」——冪等であることと、無かった呼び出しを記録することは別）。
@@ -10300,6 +10389,29 @@ export function createCloneTools(context: ToolContext) {
         // ここでは書き進める。
         if (before === null && !wasUnreadable) {
           return text(`やり方 ${slug} はもともと無かった（何もしていない）。`);
+        }
+        // **Issue #2923。** 版なしでは消さない（`memory_delete`（#2881）と同じ線）。
+        // 読めない形の行には版が無いので前提なしで消せる（回復手段を塞がない。#2011）。
+        // 比較は `PracticeStore.remove(slug, { ifMatch })` が消すのと同じ排他の中で行う。
+        if (before !== null) {
+          if (baseVersion === undefined) {
+            return text(
+              `やり方 ${slug} を消すには、先に practice_read slug=${slug} で読み、` +
+                '応答に出る base_version をこの呼び出しの base_version に渡すこと' +
+                '（読んだ後に人間や別のターンが書いた内容を、気づかずに消さないため。焼き込みの索引だけでは消せない）。**何も消していない。**',
+            );
+          }
+        }
+        try {
+          await stores.practices.remove(
+            slug,
+            before === null ? undefined : { ifMatch: baseVersion },
+          );
+        } catch (error) {
+          if (error instanceof PracticeConflictError) {
+            return text(describePracticeConflict(slug, '削除', error.current, 'remove'));
+          }
+          throw error;
         }
         if (before !== null) {
           await appendJournalOrThrow(

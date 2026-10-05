@@ -5,7 +5,7 @@
  * 取り直し: ヘッダの `HeaderFeed.onEvent`（journal の SSE）の `memory_update`（と繋ぎ直しの `open`）を
  * 合図に、まとめて取り直す。まだ一度も開いていなければ読まない。
  */
-import { codePointBoundary } from '@alteroid/core';
+import { codePointBoundary } from '@alteroid/core/cli-light';
 
 import type { MemoryDoc, MemoryRow, TuiApi } from './api.js';
 import type { HeaderFeed } from './header-feed.js';

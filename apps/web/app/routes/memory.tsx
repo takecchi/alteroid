@@ -3,7 +3,7 @@ import { LoadError } from '~/components/load-error';
 import { useId, useState } from 'react';
 import { Link, useNavigate } from 'react-router';
 
-import { Page, Button, Card, Empty, Input, Spinner } from '@alteroid/ui';
+import { Page, Button, Card, Empty, FieldHint, Input, Spinner } from '@alteroid/ui';
 import { useMemoryDocuments } from '@alteroid/swr';
 import {
   describeMemoryDescriptionDrift,
@@ -24,6 +24,7 @@ export default function Memory() {
   const [slug, setSlug] = useState('');
 
   const documents = data?.documents ?? [];
+  const hintId = useId();
   const valid = SLUG_PATTERN.test(slug) && slug.length <= 128;
   /**
    * **取れなかったのを0件と描かない**（issue #2324）。一覧をまだ一度も読めていないまま
@@ -54,6 +55,7 @@ export default function Memory() {
         <div className="flex gap-2">
           <Input
             id={slugId}
+            aria-describedby={hintId}
             value={slug}
             placeholder="例: work-style"
             onChange={(event) => setSlug(event.target.value)}
@@ -69,6 +71,9 @@ export default function Memory() {
             開く
           </Button>
         </div>
+        <FieldHint id={hintId} className="mt-1.5">
+          先頭は英数字で、128 文字まで。
+        </FieldHint>
         {slug !== '' && !valid && (
           <p className="mt-1.5 text-xs text-destructive">
             使えるのは半角の英小文字・数字と . _ - で、先頭は英数字。128 文字まで。

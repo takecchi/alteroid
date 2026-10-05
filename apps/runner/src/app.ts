@@ -1270,7 +1270,7 @@ export function createRunnerApp(deps: RunnerAppDeps) {
         if (command.managerId !== c.req.param('id')) {
           return c.json({ error: 'manager_id が経路と本文で食い違っている' as const }, 400);
         }
-        let resumed: { cwd: string };
+        let resumed: { cwd: string; reusedLiveSession: boolean };
         try {
           resumed = await host.resume(command);
         } catch (error) {
@@ -1290,7 +1290,8 @@ export function createRunnerApp(deps: RunnerAppDeps) {
           }
           throw error;
         }
-        return c.json({ ok: true, cwd: resumed.cwd });
+        // **短絡したかを運ぶ**（#2877。`runnerSessionOpenResultSchema.reusedLiveSession` の doc）。
+        return c.json({ ok: true, cwd: resumed.cwd, reusedLiveSession: resumed.reusedLiveSession });
       },
     )
 

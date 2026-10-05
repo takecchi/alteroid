@@ -78,15 +78,30 @@ function isListedOnRunner(manager: ManagerSummary, nowMs: number): boolean {
 }
 
 /**
+ * 枠（利用上限）で止まっている委譲か（`ManagerSummary.usageStoppedAt`）。出どころは
+ * `manager_list` の「枠で止まっている」と同じ印で、`ManagerPool` が `#usageStopped` の門を
+ * 通してから運ぶ（鍵が回って起こし直されると下りる）。新しい判定は作らない。
+ * `lost` / `failed` / `stopped` は終端で、鍵が回っても続かない（CLI の `usageStoppedLine` の
+ * 注記と同じ線）ので除く。
+ */
+export function isStoppedByUsage(manager: ManagerSummary): boolean {
+  if (manager.usageStoppedAt === undefined) return false;
+  return manager.status !== 'lost' && manager.status !== 'failed' && manager.status !== 'stopped';
+}
+
+/**
  * 地図に載せる委譲か（走行中・返事待ち・背景処理待ち・runner の上に居ると観測できているもの、
  * または直近に終わったもの）。
  * **背景処理待ち（`awaitingBackground`）は終端の窓（10分）に関係なく載せる**——待っている間は
  * 台帳の `status` が `done` でも仕事の途中で、窓で落とすと下の作業者ごと地図から消える（#2724）。
  * **runner の生存確認の一覧に載っている委譲も窓に関係なく載せる**——手が空いた（`done`）だけで、
  * 器の上にはまだ居る（`runnerListedAt`。使っているかどうかを問わない）。
+ * **枠（利用上限）で止まっている委譲も窓に関係なく載せる**——仕事の途中で止まっているだけで、
+ * 窓で落とすと「枠で止まっている」が図から消える（`usageStoppedAt`）。
  */
 export function isOnTopology(manager: ManagerSummary, nowMs: number): boolean {
   if (isActiveStatus(manager.status)) return true;
+  if (isStoppedByUsage(manager)) return true;
   if (manager.awaitingBackground !== undefined) return true;
   if (isListedOnRunner(manager, nowMs)) return true;
   const updated = Date.parse(manager.updatedAt);
@@ -140,6 +155,7 @@ function topologyManagerOf(
     live: manager.live,
     ...(manager.runnerId === undefined ? {} : { runnerId: manager.runnerId }),
     ...(manager.runnerListedAt === undefined ? {} : { runnerListedAt: manager.runnerListedAt }),
+    ...(manager.usageStoppedAt === undefined ? {} : { usageStoppedAt: manager.usageStoppedAt }),
     request: clipLine(manager.request, TOPOLOGY_REQUEST_LIMIT),
     startedAt: manager.startedAt,
     updatedAt: manager.updatedAt,
@@ -163,12 +179,19 @@ function topologyManagerOf(
 /**
  * 載せる順。返事待ち → 走行中・背景処理待ち → 終端（新しい順）。**背景処理待ちは走行中と
  * 同じ段**（予算で切られるのは終端が先。クローンの「完了待ち」判定が、載らなかった委譲に
- * 途中のものが混じらない前提を置く）。**窓の外で runner に居るだけの `done`
+ * 途中のものが混じらない前提を置く）。**枠で止まっている委譲も同じ段**
+ * （仕事の途中で止まっているので、予算で先に切られないようにする）。**窓の外で runner に居るだけの `done`
  * （`runnerListedAt`）は終端の段のまま**——最後に置かれ、途中のものより先に切られる。
  */
 function rank(manager: ManagerSummary): number {
   if (manager.status === 'waiting_human') return 0;
-  if (manager.status === 'running' || manager.awaitingBackground !== undefined) return 1;
+  if (
+    manager.status === 'running' ||
+    manager.awaitingBackground !== undefined ||
+    isStoppedByUsage(manager)
+  ) {
+    return 1;
+  }
   return 2;
 }
 

@@ -4,8 +4,8 @@ import {
   describeDroppedTraceEmpty,
   describeDroppedTraceOrigin,
   describeDroppedTraceRetention,
-  type DroppedTraceOrigin,
-} from '@alteroid/core';
+} from '@alteroid/core/cli-light';
+import type { DroppedTraceOrigin } from '@alteroid/core';
 
 import { createClient } from './client.js';
 import { withErrorReason } from './format.js';
