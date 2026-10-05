@@ -18419,17 +18419,34 @@
             }
           },
           "500": {
-            "description": "保存に失敗した、または**広げる側の変更（追加・有効化・値の差し替え・試す順の入れ替え）で日誌が書けなかった（保存していない）**。狭める側（削除・無効化・改名）だけの変更は、日誌が書けなくても保存して 200 を返す（issue #2742）。**理由の本文は返さない**（ドライバの例外は失敗したクエリの束縛パラメータを添えてくることがあるため）。跡は stderr に残る。",
+            "description": "保存に失敗した、または**広げる側の変更（追加・有効化・値の差し替え・試す順の入れ替え）で日誌が書けなかった（保存していない）**。狭める側（削除・無効化・改名）だけの変更は、日誌が書けなくても保存して 200 を返す（issue #2742）。**理由の本文は返さない**（ドライバの例外は失敗したクエリの束縛パラメータを添えてくることがあるため）。跡は stderr に残る。日誌が書けなかった回の本文は `{ error: \"記録（日誌）が書けなかったので、変更していません\", code: \"journal_write_failed\" }`（`code` で見分ける。保存の失敗は `code` の無い `{ error }`）。",
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        },
+                        "code": {
+                          "type": "string",
+                          "const": "journal_write_failed"
+                        }
+                      },
+                      "required": ["error", "code"]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["error"]
                     }
-                  },
-                  "required": ["error"]
+                  ]
                 }
               }
             }
@@ -18786,7 +18803,7 @@
             }
           },
           "500": {
-            "description": "日誌が書けなかった（**保存していない**。広げる側の変更のとき）。",
+            "description": "日誌が書けなかった（**保存していない**。広げる側の変更のとき）。本文は `{ error: \"記録（日誌）が書けなかったので、変更していません\", code: \"journal_write_failed\" }`。",
             "content": {
               "application/json": {
                 "schema": {
@@ -18794,9 +18811,13 @@
                   "properties": {
                     "error": {
                       "type": "string"
+                    },
+                    "code": {
+                      "type": "string",
+                      "const": "journal_write_failed"
                     }
                   },
-                  "required": ["error"]
+                  "required": ["error", "code"]
                 }
               }
             }

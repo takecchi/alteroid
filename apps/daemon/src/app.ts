@@ -175,6 +175,9 @@ import {
   credentialsUpdateResponseSchema,
   droppedResponseSchema,
   errorResponseSchema,
+  JOURNAL_WRITE_FAILED_CODE,
+  JOURNAL_WRITE_FAILED_MESSAGE,
+  journalWriteFailedResponseSchema,
   eventAcceptedResponseSchema,
   githubObservationRequestSchema,
   healthResponseSchema,
@@ -1449,6 +1452,11 @@ async function appendJournalOrDrop(
     noteDroppedRecord(what, detail, error);
     return undefined;
   }
+}
+
+/** 日誌が書けず、状態を変えずに断った 500 の本文（`journalWriteFailedResponseSchema`）。 */
+function journalWriteFailedBody(): { error: string; code: typeof JOURNAL_WRITE_FAILED_CODE } {
+  return { error: JOURNAL_WRITE_FAILED_MESSAGE, code: JOURNAL_WRITE_FAILED_CODE };
 }
 
 /**
@@ -7016,8 +7024,14 @@ export function createApp(deps: AppDeps) {
               '日誌が書けなかった（保存していない）**。狭める側（削除・無効化・改名）だけの変更は、' +
               '日誌が書けなくても保存して 200 を返す（issue #2742）。' +
               '**理由の本文は返さない**（ドライバの例外は失敗した' +
-              'クエリの束縛パラメータを添えてくることがあるため）。跡は stderr に残る。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+              'クエリの束縛パラメータを添えてくることがあるため）。跡は stderr に残る。' +
+              '日誌が書けなかった回の本文は `{ error: "記録（日誌）が書けなかったので、変更していません", code: "journal_write_failed" }`' +
+              '（`code` で見分ける。保存の失敗は `code` の無い `{ error }`）。',
+            content: {
+              'application/json': {
+                schema: resolver(z.union([journalWriteFailedResponseSchema, errorResponseSchema])),
+              },
+            },
           },
           403: {
             description:
@@ -7084,8 +7098,17 @@ export function createApp(deps: AppDeps) {
             },
           });
         } catch (error) {
-          // 日誌が書けなかった回は、状態を変えていない。投げ直して `base.onError` の 500 に任せる。
-          if (state.journalError !== undefined) throw error;
+          // 日誌が書けなかった回は、状態を変えていない。素の 500（`Internal Server Error`）には
+          // せず、「記録が書けなかったので変更していない」と言う本文を返す。**例外の本文は
+          // 返さない**（値が載りうる。種類だけ跡に残す）。
+          if (state.journalError !== undefined) {
+            noteDroppedRecord(
+              '認証トークンのプールの変更の日誌（保存していない）',
+              `count=${String(requestedCount)}`,
+              kindOfError(state.journalError.cause),
+            );
+            return c.json(journalWriteFailedBody(), 500);
+          }
           // **返してよい例外だけを返す。型で分ける。**
           //
           // `TokenPoolInputError` は「`message` をそのまま応答へ返してよい」と
@@ -7378,8 +7401,10 @@ export function createApp(deps: AppDeps) {
             content: { 'application/json': { schema: resolver(tokenRotationSettingsSchema) } },
           },
           500: {
-            description: '日誌が書けなかった（**保存していない**。広げる側の変更のとき）。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+            description:
+              '日誌が書けなかった（**保存していない**。広げる側の変更のとき）。本文は ' +
+              '`{ error: "記録（日誌）が書けなかったので、変更していません", code: "journal_write_failed" }`。',
+            content: { 'application/json': { schema: resolver(journalWriteFailedResponseSchema) } },
           },
           400: {
             description: 'トークンのプールの器が配線されていない。',
@@ -7410,6 +7435,7 @@ export function createApp(deps: AppDeps) {
           changes: TokenPolicyChange[];
           widens: boolean;
           written: boolean;
+          journalError?: { cause: unknown };
         } = { changes: [], widens: false, written: false };
         let settings: Awaited<ReturnType<TokenPoolService['setSettings']>>;
         try {
@@ -7419,17 +7445,30 @@ export function createApp(deps: AppDeps) {
               policyState.changes = classified.changes;
               policyState.widens = classified.widens;
               if (!classified.widens) return;
-              await deps.stores.journal.append({
-                type: 'decision',
-                decision: `トークンを回す設定を変えようとしている（${describeTokenPolicyChanges(classified.changes)}）`,
-                grounds:
-                  `${describeActor(c.get('principal'))}（PUT /tokens/policy）。` +
-                  '回す契機を有効にする・変える（または冷却を変える）操作なので、日誌を先に書いた。',
-              });
+              try {
+                await deps.stores.journal.append({
+                  type: 'decision',
+                  decision: `トークンを回す設定を変えようとしている（${describeTokenPolicyChanges(classified.changes)}）`,
+                  grounds:
+                    `${describeActor(c.get('principal'))}（PUT /tokens/policy）。` +
+                    '回す契機を有効にする・変える（または冷却を変える）操作なので、日誌を先に書いた。',
+                });
+              } catch (cause) {
+                policyState.journalError = { cause };
+                throw cause;
+              }
               policyState.written = true;
             },
           });
         } catch (error) {
+          if (policyState.journalError !== undefined) {
+            noteDroppedRecord(
+              'トークンを回す設定の変更の日誌（保存していない）',
+              policyState.changes.map((change) => change.field).join(','),
+              kindOfError(policyState.journalError.cause),
+            );
+            return c.json(journalWriteFailedBody(), 500);
+          }
           if (policyState.written) {
             await appendJournalOrDrop(
               deps.stores,

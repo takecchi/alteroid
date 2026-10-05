@@ -91,6 +91,20 @@ import { createApp } from './app.js';
 export const errorResponseSchema = z.object({ error: z.string() });
 
 /**
+ * **日誌が書けなかったので、状態を変えずに断った** 500 の本文（issue #2742 の続き。
+ * `PUT /tokens`・`PUT /tokens/policy` の「広げる側」）。
+ *
+ * `error` は人間が読む文、`code` は機械が見分ける印（文言では見分けない）。
+ * 例外の本文は載せない（トークンの値が載りうる）。
+ */
+export const JOURNAL_WRITE_FAILED_CODE = 'journal_write_failed';
+export const JOURNAL_WRITE_FAILED_MESSAGE = '記録（日誌）が書けなかったので、変更していません';
+export const journalWriteFailedResponseSchema = z.object({
+  error: z.string(),
+  code: z.literal(JOURNAL_WRITE_FAILED_CODE),
+});
+
+/**
  * **`validationErrorResponseSchema`（`{ data, error: <issue配列>, success: false }`）は
  * ここに在ったが、いまは無い。** `hook` を渡さない `validator(...)` が検査に
  * 落ちたときの、`@hono/standard-validator` の既定 400 の形——`json` の経路は
