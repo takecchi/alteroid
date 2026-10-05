@@ -149,7 +149,10 @@ describe('runner: peer の承認をクローンへ上げる', () => {
           if (id !== undefined && id === approvalId) {
             decisions.push((message['result'] as Json | undefined)?.['decision']);
             for (const item of toolItems) {
-              send({ method: 'item/completed', params: { threadId: 'thr-peer', turnId: 'turn-1', item } });
+              send({
+                method: 'item/completed',
+                params: { threadId: 'thr-peer', turnId: 'turn-1', item },
+              });
             }
             send({
               method: 'item/completed',
@@ -315,7 +318,11 @@ describe('runner: peer の承認をクローンへ上げる', () => {
       },
     ]);
     const ask = s.asks()[0]!;
-    await s.host.answer('mgr-1', { requestId: ask.requestId, message: 'いいよ', decision: 'allow' });
+    await s.host.answer('mgr-1', {
+      requestId: ask.requestId,
+      message: 'いいよ',
+      decision: 'allow',
+    });
     await s.call;
     const toolUses = s.events.filter((e) => e.type === 'tool_use');
     expect(toolUses).toHaveLength(1);

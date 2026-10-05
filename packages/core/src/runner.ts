@@ -2509,7 +2509,7 @@ class RunnerSession {
           models: report.models,
           ...(report.unmetered ? { unmetered: true } : {}),
         }),
-      makeSpec: (_provider, parts) => ({
+      makeSpec: (provider, parts) => ({
         // cwd・env・子プロセスの起こし方・人間の MCP 連携（peer 自身は除く）はマネージャーと同じ。
         ...this.#buildSpec(undefined, true),
         input: parts.input,
@@ -2528,13 +2528,41 @@ class RunnerSession {
         onNote: parts.onNote,
         onPreToolUse: () => ({ kind: 'continue' }),
         onPermissionDenied: async () => ({ kind: 'no-retry' }),
-        onPostToolUse: () => ({ kind: 'continue' }),
-        onPostToolUseFailure: () => undefined,
+        // **peer の実行も日誌に残す**（#2753。「全ツール実行の記録」は監査の層の約束）。出所は
+        // `actor: peer:<provider>`。マネージャー本体の帳面（`#preToolInputHeads` 等）には触れない。
+        onPostToolUse: (record) => {
+          this.#emit({
+            type: 'tool_use',
+            managerId: this.#id,
+            actor: `peer:${provider}`,
+            tool: record.toolName ?? '(不明)',
+            input: record.toolInput,
+          });
+          return { kind: 'continue' };
+        },
+        onPostToolUseFailure: (record) => this.#notePeerToolUseFailure(provider, record),
         onPreCompact: () => undefined,
         onUserPromptSubmit: () => undefined,
         onSubagentStop: () => ({ kind: 'continue' }),
         onStop: () => undefined,
       }),
+    });
+  }
+
+  /**
+   * peer の失敗した道具呼び出しを日誌へ（#2753）。形は `#onPostToolUseFailure`（マネージャー本体）と
+   * 同じ `note`（`TOOL_USE_FAILURE_NOTE_PREFIX`）で、`actor` だけ `peer:<provider>`。`tool_use` に
+   * しない理由（旧 daemon が未知の欄を落とす）も `#onPostToolUseFailure` の doc のとおり。
+   */
+  #notePeerToolUseFailure(provider: AgentProviderId, record: AgentToolAuditFailureRecord): void {
+    const error =
+      typeof record.error === 'string'
+        ? excerptLine(redactErrorText(record.error, process.env), TOOL_USE_FAILURE_ERROR_EXCERPT)
+        : '(不明)';
+    this.#emit({
+      type: 'note',
+      managerId: this.#id,
+      text: `${TOOL_USE_FAILURE_NOTE_PREFIX} 道具=${record.toolName ?? '(不明)'}・actor=peer:${provider}・error=${error}`,
     });
   }
 
