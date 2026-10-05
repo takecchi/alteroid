@@ -268,3 +268,57 @@ export function buildRecordComment({
     recordCommentMarker({ sha, runId }),
   ].join('\n');
 }
+
+/**
+ * `judgeSha` が `red` と言った verdict のうち、**後続の push に取り消された
+ * CI の run を見ていただけのもの**を `cancelled`（判定に至れなかった。
+ * `healthOf` で `unknown`）へ倒す（Issue #3049。#3044 / #3047 の続き）。
+ *
+ * ## なぜ記録の側で直すか
+ *
+ * `ci.yml` の集約ゲート `ci` は needs が cancelled でも `exit 1` する。取り消された
+ * run は job 単位では checks / test が `cancelled`、`ci` だけが `failure` になり、
+ * `evaluatePrGreen` は「cancelled でも skipped でもない非 success が1本でも在れば
+ * red」なのでこれを `red` と読む。**この判定は PR の緑の判定そのものなので、
+ * `evaluatePrGreen` / `check-pr-green` は1行も変えない**（取り消しを通す方向へ
+ * 緩める経路を作らない）。記録は「止めない・記録するだけ」の道具なので、記録の側
+ * だけが、判定に使った jobs を見て `red` を `cancelled` へ倒す。
+ *
+ * ## 倒すのは次のすべてが成り立つときだけ（それ以外は `red` のまま）
+ *
+ * 1. `verdict === 'red'`（ほかの verdict には触らない）
+ * 2. `latestRuns` のうち `CI` の run が1つ以上在り、その jobs が `isCancelledRun`
+ *    （失敗がすべて集約ゲート `ci` で、cancelled が1つ以上）
+ * 3. すべての `latestRuns` の jobs を取れている（`jobsByRunId` に配列が在る）
+ * 4. 取り消された `CI` の run のゲート `ci` を除き、success / skipped /
+ *    cancelled 以外の job が1つも無い（failure / timed_out / neutral 等は本物の失敗側）
+ *
+ * ⛔ jobs が取れない・渡されないときは倒さない（今までどおり `red`）。
+ *
+ * @param {{
+ *   verdict: string,
+ *   latestRuns: {id:number|null, name:string}[] | null | undefined,
+ *   jobsByRunId: Record<number, {name:string, conclusion:string|null}[]> | null | undefined,
+ * }} input
+ * @returns {string}
+ */
+export function refineVerdictForCancelledRuns({ verdict, latestRuns, jobsByRunId }) {
+  if (verdict !== 'red') return verdict;
+  if (!Array.isArray(latestRuns) || latestRuns.length === 0) return verdict;
+  if (jobsByRunId === null || typeof jobsByRunId !== 'object') return verdict;
+
+  let sawCancelledCi = false;
+  for (const run of latestRuns) {
+    const jobs = run.id === null ? undefined : jobsByRunId[run.id];
+    if (!Array.isArray(jobs)) return verdict;
+    const cancelledCi = run.name === CANCEL_AWARE_WORKFLOW_NAME && isCancelledRun(jobs);
+    if (cancelledCi) sawCancelledCi = true;
+    for (const job of jobs) {
+      const c = job.conclusion ?? '';
+      if (c === 'success' || c === 'skipped' || c === 'cancelled') continue;
+      if (cancelledCi && job.name === GATE_JOB_NAME) continue;
+      return verdict;
+    }
+  }
+  return sawCancelledCi ? 'cancelled' : verdict;
+}
