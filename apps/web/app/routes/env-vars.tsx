@@ -1,4 +1,5 @@
 import { SettingsTabs } from '~/components/group-tabs';
+import { settingsDocumentTitle } from '~/lib/nav';
 import { useState } from 'react';
 
 import {
@@ -45,6 +46,7 @@ export default function EnvVars() {
   return (
     <Page
       tabs={<SettingsTabs />}
+      documentTitle={settingsDocumentTitle('/env-vars')}
       title="環境変数"
       description="alteroid 自身の運用設定と、マネージャーへ渡す環境変数。渡す先は「共通」「クローン」「マネージャー」から選べる"
     >
@@ -267,9 +269,10 @@ function AddEnvVarForm() {
             ))}
           </Select>
         </label>
-        <label className="flex items-center gap-2 text-xs text-muted-foreground">
+        <label className="flex items-center gap-2 text-xs text-muted-foreground pointer-coarse:min-h-11">
           <input
             type="checkbox"
+            className="pointer-coarse:size-5 pointer-coarse:shrink-0"
             checked={secret}
             onChange={(event) => setSecret(event.target.checked)}
           />
