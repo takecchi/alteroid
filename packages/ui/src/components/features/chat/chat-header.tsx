@@ -9,7 +9,7 @@ import { ConfirmDialog } from '../confirm-dialog';
 /**
  * 会話の見出しの帯。
  *
- * - 副題は呼ぶ側が渡す利用者向けの情報（開始日時・往復数）。会話 id は出さない
+ * - 副題は呼ぶ側が渡す利用者向けの情報（開始日時・発言数）。会話 id は出さない
  *   （利用者に意味が無く、狭い画面で切れる）。まだ決まっていなければ「新しい会話」
  * - `onOpenList` を渡すと、左に会話一覧を開く口を出す（狭い画面）
  * - 会話が決まっているときだけ「ターンを止める」「会話を終える」を出す。
@@ -31,7 +31,7 @@ export function ChatHeader({
   notice,
 }: {
   conversationId: string | undefined;
-  /** 見出しの下の1行（開始日時・往復数など）。無ければ出さない。 */
+  /** 見出しの下の1行（開始日時・発言数など）。無ければ出さない。 */
   subtitle?: string | undefined;
   onOpenList?: () => void;
   onInterrupt?: () => void;

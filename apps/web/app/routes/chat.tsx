@@ -2000,7 +2000,7 @@ export function ChatPane({
       : undefined;
 
   /**
-   * 見出しの下の1行（#2760）。会話 id ではなく、見分けに役立つ開始日時と往復数を出す。
+   * 見出しの下の1行（#2760）。会話 id ではなく、見分けに役立つ開始日時と発言数（人間とクローンの発言の合計。畳まれた旧発言は除く）を出す。
    * **遡った窓の中でしか数えていない**（`history.data.reachedStart`）ので、先頭に
    * 届いていないときは「以降」「以上」と言い、実際の開始を言い切らない。
    * 履歴がまだ読めていない間は何も出さない（嘘の数を出さない）。
@@ -2016,7 +2016,7 @@ export function ChatPane({
       first.at,
     );
     const open = data.reachedStart === false;
-    return `${formatDateTime(startedAt)}${open ? ' 以降' : ' に開始'} · ${visible.length}${open ? ' 往復以上' : ' 往復'}`;
+    return `${formatDateTime(startedAt)}${open ? ' 以降' : ' に開始'} · 発言 ${visible.length} 件${open ? '以上' : ''}`;
   })();
 
   return (

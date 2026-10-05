@@ -16,7 +16,7 @@ type Story = StoryObj<typeof meta>;
 export const Default: Story = {
   args: {
     conversationId: 'conv_01J8ZK4Q3M7R2D9XW5T6YB0HNE',
-    subtitle: '10/04 21:30 に開始 · 8 往復',
+    subtitle: '10/04 21:30 に開始 · 発言 8 件',
     onInterrupt: () => undefined,
     onEnd: () => undefined,
   },
@@ -28,7 +28,7 @@ export const NewConversation: Story = { args: { conversationId: undefined } };
 export const MobileWithNotice: Story = {
   args: {
     conversationId: 'conv_01J8ZK4Q3M7R2D9XW5T6YB0HNE',
-    subtitle: '10/04 21:30 に開始 · 8 往復',
+    subtitle: '10/04 21:30 に開始 · 発言 8 件',
     onOpenList: () => undefined,
     onInterrupt: () => undefined,
     onEnd: () => undefined,

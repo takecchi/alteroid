@@ -229,7 +229,7 @@ describe('「会話を終える」ボタン', () => {
     expect(router.state.location.pathname).toBe(`/chat/${CONVERSATION_ID}`);
   });
 
-  it('(f) 副題は会話 id ではなく開始日時と往復数を出す。新しい会話は「新しい会話」', async () => {
+  it('(f) 副題は会話 id ではなく開始日時と発言数を出す。新しい会話は「新しい会話」', async () => {
     stubFetch((url) => {
       if (url.includes(`/conversations/${CONVERSATION_ID}`)) {
         return json({
@@ -258,7 +258,7 @@ describe('「会話を終える」ボタン', () => {
     });
 
     const { router } = renderChat(`/chat/${CONVERSATION_ID}`);
-    expect(await screen.findByText(/に開始 · 2 往復/)).toBeTruthy();
+    expect(await screen.findByText(/に開始 · 発言 2 件/)).toBeTruthy();
     expect(screen.queryByText(CONVERSATION_ID)).toBeNull();
     await act(async () => {
       await router.navigate('/chat');

@@ -129,8 +129,10 @@ describe('ChatHeader', () => {
 
   it('subtitle を渡すと見出しの下に出す。「会話を終える」は確認を挟み、「終える」で初めて onEnd を呼ぶ', () => {
     const onEnd = vi.fn();
-    render(<ChatHeader conversationId="c" subtitle="10/01 10:00 に開始 · 4 往復" onEnd={onEnd} />);
-    expect(screen.getByText('10/01 10:00 に開始 · 4 往復')).toBeTruthy();
+    render(
+      <ChatHeader conversationId="c" subtitle="10/01 10:00 に開始 · 発言 8 件" onEnd={onEnd} />,
+    );
+    expect(screen.getByText('10/01 10:00 に開始 · 発言 8 件')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: '会話を終える' }));
     expect(onEnd).not.toHaveBeenCalled();
     expect(screen.getByText(/学びを記憶にまとめます/)).toBeTruthy();
