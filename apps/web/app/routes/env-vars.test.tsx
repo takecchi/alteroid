@@ -121,7 +121,7 @@ describe('/env-vars 画面 — 一覧', () => {
     expect(screen.getByText('GH_TOKEN')).toBeTruthy();
     expect(screen.getByText('共通')).toBeTruthy();
     expect(screen.getByText('シークレット')).toBeTruthy();
-    expect(screen.getByText(/指紋 sha256=a{12}/)).toBeTruthy();
+    expect(screen.getByText(/識別用の値 sha256=a{12}/)).toBeTruthy();
   });
 
   it('非 secret な行は値をそのまま出す', async () => {
@@ -196,7 +196,7 @@ describe('/env-vars 画面 — 一覧', () => {
     );
     await waitForListLoaded();
 
-    expect(await screen.findByText(/優先して配られている/)).toBeTruthy();
+    expect(await screen.findByText(/優先して渡されている/)).toBeTruthy();
   });
 
   /**
@@ -251,7 +251,7 @@ describe('/env-vars 画面 — 一覧', () => {
     );
     await waitForListLoaded();
 
-    await screen.findByText(/優先して配られている/);
+    await screen.findByText(/優先して渡されている/);
     expect(screen.queryByText(/マネージャーにはいま何も渡されていない/)).toBeNull();
   });
 
@@ -272,7 +272,7 @@ describe('/env-vars 画面 — 一覧', () => {
 });
 
 describe('/env-vars 画面 — 置く・外す', () => {
-  it('名前・値・撒く先・シークレット可否を指定して置くと、PUT /credentials が呼ばれ一覧に出る', async () => {
+  it('名前・値・渡す先・シークレット可否を指定して置くと、PUT /credentials が呼ばれ一覧に出る', async () => {
     const { puts } = stubCrudScreen([]);
 
     render(
@@ -286,7 +286,7 @@ describe('/env-vars 画面 — 置く・外す', () => {
 
     fireEvent.change(screen.getByPlaceholderText('TZ'), { target: { value: 'tz' } });
     fireEvent.change(screen.getByLabelText('値'), { target: { value: 'Asia/Tokyo' } });
-    fireEvent.change(screen.getByLabelText('撒く先'), { target: { value: 'app' } });
+    fireEvent.change(screen.getByLabelText('渡す先'), { target: { value: 'app' } });
     fireEvent.click(screen.getByLabelText(/シークレット扱いにする/));
     fireEvent.click(screen.getByRole('button', { name: '置く' }));
 

@@ -1804,6 +1804,15 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
           'この関数はその検証の外に立つ。足すなら `inboxEventShape` の' +
           '`human_message.supersedes` と2か所同時、`tag()` は禁止。',
       },
+      // 返信ではなく「返せなかった」知らせの印（`turnFailure`）。`failed` / `held` の2語だけの
+      // 列挙で自由文ではない（毒を運べない）が、記録の跡を読む人に要る情報でもない
+      // （文面は `text` が持ち、`text` は `size-unnamed` で桁だけ出ている）ので載せない。
+      turnFailure: {
+        emit: 'never',
+        why:
+          '`failed` / `held` の2語の列挙。`role` と同じく自由文を運べないが、' +
+          '落ちた行の形を追うのに要らない（文面側は `text` が桁だけ持つ）。',
+      },
       // issue #782 の1。`escalation.approvalId`（直下）・`inboxEventShape` の
       // `human_answer.approvalId` と同じ判断——承認待ちキューの項目 id で、
       // 自由文ではない（呼び出し側が組み立てる文章の一部にはならない）ので
@@ -2224,6 +2233,7 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
       text: SECRET,
       conversationId: SECRET,
       supersedes: SECRET,
+      turnFailure: 'failed',
       approvalId: 'ap-1',
       managerId: 'mgr-1',
       answeredApprovalId: 'ap-2',

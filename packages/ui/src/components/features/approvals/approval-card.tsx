@@ -143,7 +143,7 @@ export function ApprovalCard({
         改行を `<br>` にするので、行区切りはこれまでどおり保たれる
         （`packages/ui/src/components/markdown.tsx` の doc に理由が逐語で在る）。
       */}
-      <Markdown>{body(question)}</Markdown>
+      <Markdown headingOffset={2}>{body(question)}</Markdown>
 
       {context !== undefined && context !== '' && (
         /*
@@ -160,7 +160,7 @@ export function ApprovalCard({
           落とす — `Markdown` のルートが `text-sm` を持つので、外から掛けても効かない。
         */
         <div className="mt-2 max-h-48 min-w-0 overflow-y-auto rounded-md border border-border bg-background p-2 text-muted-foreground">
-          <Markdown>{body(context)}</Markdown>
+          <Markdown headingOffset={2}>{body(context)}</Markdown>
         </div>
       )}
 

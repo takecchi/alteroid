@@ -14,6 +14,7 @@ import {
 
 import { describeScope } from './credential.js';
 import { describeAuthFailure, forbiddenKindOf, resolveTarget, type Target } from './target.js';
+import { describeEditorFailure, readInputFile } from './input-errors.js';
 
 /**
  * `alteroid profile` — 実行環境プロファイル（人間の `.zprofile` に当たるもの）。
@@ -240,7 +241,7 @@ export async function profileSetCommand(
   const script =
     options.file === undefined || options.file === '-'
       ? await readAll()
-      : await readFile(options.file, 'utf8');
+      : await readInputFile(options.file, '--file', '--file <path>、または標準入力（-）');
   // 空の本文は通信の前に断る（`put` も同じ検査を持つ）。
   if (script.trim().length === 0) throw new Error(EMPTY_BODY_MESSAGE);
   const target = await resolveTarget();
@@ -392,10 +393,19 @@ async function openEditor(path: string): Promise<void> {
   const editor = process.env.VISUAL ?? process.env.EDITOR ?? 'vi';
   await new Promise<void>((resolve, reject) => {
     const child = spawn(editor, [path], { stdio: 'inherit', shell: true });
-    child.on('error', reject);
-    child.on('close', (code) => {
+    child.on('error', (error) =>
+      reject(describeEditorFailure(editor, { error }, 'alteroid profile set <name> --file <path>')),
+    );
+    child.on('close', (code, signal) => {
       if (code === 0) resolve();
-      else reject(new Error(`${editor} が異常終了しました (${String(code)})`));
+      else
+        reject(
+          describeEditorFailure(
+            editor,
+            { code, signal },
+            'alteroid profile set <name> --file <path>',
+          ),
+        );
     });
   });
 }

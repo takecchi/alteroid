@@ -179,23 +179,23 @@ describe('/access 画面 — 一覧', () => {
  * **宣言済みかどうかの印（issue #1198）。**
  */
 describe('/access 画面 — owner 宣言の印', () => {
-  it('未宣言なら「owner 未宣言」と出す', async () => {
+  it('未宣言なら「持ち主として未宣言」と出す', async () => {
     stubAccess({ body: { accounts: [account({ ownerDeclaredAt: null })] } });
 
     await renderAccess();
 
-    expect(screen.getByText('owner 未宣言')).toBeTruthy();
+    expect(screen.getByText('持ち主として未宣言')).toBeTruthy();
     expect(screen.getByText('（未宣言）')).toBeTruthy();
   });
 
-  it('宣言済みなら「owner 宣言済み」と日時を出す', async () => {
+  it('宣言済みなら「持ち主として宣言済み」と日時を出す', async () => {
     stubAccess({
       body: { accounts: [account({ ownerDeclaredAt: '2026-09-18T00:00:00.000Z' })] },
     });
 
     await renderAccess();
 
-    expect(screen.getByText('owner 宣言済み')).toBeTruthy();
+    expect(screen.getByText('持ち主として宣言済み')).toBeTruthy();
   });
 });
 

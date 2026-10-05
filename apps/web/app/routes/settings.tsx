@@ -4,6 +4,7 @@
 // 人間は疑う先を取り違える。**ブラウザが読めるのは subpath の側だけである**
 // （`revision.ts` は焼き込んだ正典と zod を読むので初期チャンクへ入れられない）。
 import { SettingsTabs } from '~/components/group-tabs';
+import { settingsDocumentTitle } from '~/lib/nav';
 import { describeRevisionStatus } from '@alteroid/core/revision';
 import { Fragment, useRef, useState } from 'react';
 
@@ -34,7 +35,12 @@ import type { RunnerPushOutcome, RunnerSummary } from '@alteroid/logic';
 
 export default function Settings() {
   return (
-    <Page tabs={<SettingsTabs />} title="設定" description="この画面がどのデーモンを見ているか">
+    <Page
+      tabs={<SettingsTabs />}
+      documentTitle={settingsDocumentTitle('/settings')}
+      title="設定"
+      description="この画面がどのデーモンを見ているか"
+    >
       <div className="flex flex-col gap-4">
         <ConnectionCard />
         <Account />
@@ -99,8 +105,7 @@ function Account() {
                 ログアウト
               </Button>
               <span className="text-[11px] text-muted-foreground">
-                サーバ側のアクセストークンも失効させる。アカウントごと締め出すなら{' '}
-                <code className="font-mono">alteroid access revoke</code>
+                サーバ側のログイン用の鍵も無効にする。アカウントごと締め出すなら「アクセス許可」の画面で取り消す。
               </span>
             </div>
             {logoutError !== null && (
@@ -134,16 +139,16 @@ function Account() {
 const RUNNER_STATES = {
   connecting: { label: '接続中', tone: 'neutral' },
   connected: { label: '接続済み', tone: 'ok' },
-  unreachable: { label: '繋がらない（挑み直し中）', tone: 'warn' },
-  unusable: { label: '使えない（挑み直さない）', tone: 'danger' },
+  unreachable: { label: '繋がらない（つなぎ直しを試している）', tone: 'warn' },
+  unusable: { label: '使えない（つなぎ直しは試さない）', tone: 'danger' },
   // 一度は繋がったのに名乗らなくなった器。**「まだ繋がらない」とは別に見せる** —
   // こちらは走っていた仕事ごと黙った可能性がある。
-  lost: { label: '名乗らない（落ちた可能性）', tone: 'danger' },
+  lost: { label: '応答しない（止まった可能性）', tone: 'danger' },
   // 意図して空けている最中（drain。#485 PR-1）。**`lost` と違って黙ったのでは
   // ない** — 空けると決めた結果なので `warn` に留める（`danger` にすると
   // 「落ちた」と誤読される）。この値を立てる口はまだ無い（PR-2）ので、いまは
   // 表示だけが先に存在する。
-  vacating: { label: '空けている最中', tone: 'warn' },
+  vacating: { label: '仕事を他へ移している最中', tone: 'warn' },
 } as const;
 
 /**
@@ -181,14 +186,14 @@ function Credentials({ runner }: { runner: RunnerSummary }) {
   if (runner.credentialsProbe.status === 'unheard') {
     return (
       <span className="text-[11px] text-muted-foreground">
-        鍵は確かめていない（繋がっていないので聞いていない）
+        渡している鍵は確かめていない（繋がっていないので聞いていない）
       </span>
     );
   }
   if (runner.credentialsProbe.status === 'failed') {
     return (
       <span className="text-[11px] break-words text-destructive">
-        鍵を確かめられなかった: {runner.credentialsProbe.error}
+        渡している鍵を確かめられなかった: {runner.credentialsProbe.error}
       </span>
     );
   }
@@ -244,7 +249,7 @@ function PushHealth({ runner }: { runner: RunnerSummary }) {
       {attempted.map(([label, outcome]) => (
         <div key={label} className="flex flex-wrap items-center gap-1.5">
           <Badge tone={outcome.status === 'ok' ? 'ok' : 'danger'}>
-            {label}: {outcome.status === 'ok' ? '押し込み済み' : '押し込み失敗'}（
+            {label}: {outcome.status === 'ok' ? '反映済み' : '反映に失敗'}（
             {formatDateTime(outcome.at)}）
           </Badge>
           {outcome.status === 'failed' && outcome.error !== undefined ? (
@@ -290,7 +295,7 @@ function Profile({ runner }: { runner: RunnerSummary }) {
   // 揃え、`updatedAt` も添えて「いつの内容か」を分かるようにする。
   return (
     <span className="font-mono text-[11px] break-all text-muted-foreground">
-      プロファイル: 置いてある（指紋 {runner.profile.sha256}、
+      プロファイル: 置いてある（内容の識別値 {runner.profile.sha256}、
       {formatDateTime(runner.profile.updatedAt)} 更新）
     </span>
   );
@@ -310,8 +315,8 @@ function Runners() {
   return (
     <Card>
       <CardHeader
-        title="runner"
-        subtitle="マネージャーが実際に走る器。鍵は指紋だけが見える（値は返らない）。「この状態になった」は名簿の値——名簿は保存されないので、デーモンを再起動すると作り直される"
+        title="実行環境（runner）"
+        subtitle="マネージャーが実際に動く実行環境の一覧。鍵は識別用の値だけが見える（値そのものは出ない）。「この状態になった」の時刻は保存されないので、デーモンを再起動すると記録し直される"
       />
       <ErrorNote error={error} className="m-4" />
       {/*
@@ -333,14 +338,16 @@ function Runners() {
             版: {describeRevisionStatus(daemonRevision)}
           </p>
           <p className="mt-0.5 font-mono text-[11px] break-all text-muted-foreground">
-            クローンの provider: {describeCloneProvider(data?.cloneProvider)}
+            クローンが使うモデル提供元: {describeCloneProvider(data?.cloneProvider)}
           </p>
         </div>
       )}
       {isLoading ? (
         <Spinner />
       ) : listUnavailable ? null : runners.length === 0 ? (
-        <Empty>登録された runner が無い。ローカルでは同一プロセスの runner に落ちている。</Empty>
+        <Empty>
+          登録された実行環境が無い。ローカルでは、デーモンと同じプロセスの中で動いている。
+        </Empty>
       ) : (
         <ul>
           {runners.map((runner) => (
@@ -379,7 +386,7 @@ function Runners() {
               */}
               <p className="mt-0.5 font-mono text-[11px] break-words text-muted-foreground">
                 {runner.instanceId === undefined
-                  ? 'プロセス: 名乗っていない（入れ替わりを判定できない）'
+                  ? 'プロセス: 名乗っていない（入れ替わったかどうか判定できない）'
                   : `プロセス: ${runner.instanceId}${
                       runner.instanceSince === undefined
                         ? ''
@@ -441,10 +448,10 @@ function VacateRunner({ runnerId }: { runnerId: string }) {
   if (done !== null) {
     return (
       <p className="mt-2 text-[11px] break-words text-muted-foreground">
-        空けると立てた。まだ空き終わってはいない——載っている委譲は他の器へ移る。進み具合はこの一覧の状態で見える。
+        仕事を他へ移す指示を出した。まだ終わってはいない——この実行環境で動いている委譲は他の実行環境へ移る。進み具合はこの一覧の状態で見える。
         {done.skipped === null
           ? ''
-          : ` ⚠️ 載っている委譲への握手は飛ばした（${done.skipped}）。空けるのをもう一度指示すると握手をやり直す（この一覧は空けている最中の器には押す口を出さないので、コマンドラインから指示し直す）。`}
+          : ` ⚠️ 動いている委譲への引き継ぎの連絡は飛ばした（${done.skipped}）。もう一度指示すると連絡をやり直す（この一覧は移している最中の実行環境には押すボタンを出さないので、コマンドラインから指示し直す）。`}
       </p>
     );
   }
@@ -453,7 +460,7 @@ function VacateRunner({ runnerId }: { runnerId: string }) {
       {confirming ? (
         <>
           <p className="text-[11px] text-muted-foreground">
-            載っている委譲を止めて他の器へ移す。本当に空けるか。
+            この実行環境で動いている委譲を止めて、他の実行環境へ移す。本当に移すか。
           </p>
           <Button
             size="sm"
@@ -467,15 +474,15 @@ function VacateRunner({ runnerId }: { runnerId: string }) {
                 .finally(() => setBusy(false));
             }}
           >
-            本当に空ける
+            本当に移す
           </Button>
           <Button size="sm" variant="ghost" disabled={busy} onClick={() => setConfirming(false)}>
-            空けるのをやめる
+            移すのをやめる
           </Button>
         </>
       ) : (
         <Button size="sm" variant="ghost" onClick={() => setConfirming(true)}>
-          この器を空ける
+          この実行環境から仕事を移す
         </Button>
       )}
       <ErrorNote error={error} />
@@ -499,7 +506,7 @@ export const RESET_SUMMARY_LABELS: [keyof WorkspaceResetSummary, string][] = [
   ['profile', '実行環境プロファイル'],
   ['usageDaily', '利用状況（日次）'],
   ['usageBaseline', '利用状況（基準）'],
-  ['usageLedger', '利用状況（台帳の開始時刻）'],
+  ['usageLedger', '利用状況（記録の開始時刻）'],
   ['usageTurns', '利用状況（回数）'],
   ['sessionLog', 'SDK セッション生ログ'],
 ];
@@ -622,15 +629,15 @@ function ShutdownDaemon() {
     <Card>
       <CardHeader
         title="デーモンを止める"
-        subtitle="起動し直せば元に戻る。記憶・日誌・台帳は消さない"
+        subtitle="起動し直せば元に戻る。記憶・日誌・各種の記録は消さない"
       />
       <div className="px-4 py-3 text-sm">
         <p className="text-xs leading-relaxed text-muted-foreground">
           止めても、
-          <strong className="text-foreground">記憶も台帳も消さない</strong>
+          <strong className="text-foreground">記憶も各種の記録も消さない</strong>
           （日誌も含めて1行も消えない）。起動し直せば元に戻る——
-          「ワークスペースのリセット」（記憶そのものを消す操作）とは違う。 Railway
-          では、止めると再起動の方針により
+          「ワークスペースのリセット」（記憶そのものを消す操作）とは違う。Railway
+          のように自動で再起動する構成では、止めると
           <strong className="text-foreground">再起動として働く</strong>
           （止まったままにはならない）。止めた瞬間、この画面自身の接続も切れる。
         </p>
@@ -648,9 +655,10 @@ function ShutdownDaemon() {
         <div className="p-4">
           <h2 className="text-sm font-semibold">本当に止めますか？</h2>
           <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
-            デーモンを止めます。<strong className="text-foreground">記憶も台帳も消えません</strong>
-            （日誌も含めて1行も消えません）。起動し直せば元の状態に戻ります。Railway では
-            止めると再起動の方針により
+            デーモンを止めます。
+            <strong className="text-foreground">記憶も各種の記録も消えません</strong>
+            （日誌も含めて1行も消えません）。起動し直せば元の状態に戻ります。Railway
+            のように自動で再起動する構成では、止めると
             <strong className="text-foreground">再起動として働きます</strong>
             （止まったままにはなりません）。止めた直後、この画面の接続も切れます。
           </p>
@@ -764,7 +772,7 @@ function ResetWorkspace() {
         <p className="text-xs leading-relaxed text-muted-foreground">
           {RESET_CONFIRM_SUMMARY}を全部消す。
           <strong className="text-foreground">
-            認証トークンのプール・マネージャーへ 降ろす環境変数・このログインアカウントは消さない。
+            登録した認証トークン・マネージャーへ渡す環境変数・このログインアカウントは消さない。
           </strong>
         </p>
         <div className="mt-3">
@@ -782,7 +790,7 @@ function ResetWorkspace() {
           <h2 className="text-sm font-semibold">本当に削除しますか？</h2>
           <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
             {RESET_CONFIRM_SUMMARY}
-            を全部消します。認証トークンのプール・マネージャーへ降ろす環境変数・この
+            を全部消します。登録した認証トークン・マネージャーへ渡す環境変数・この
             ログインアカウントは消しません。
             <strong className="text-foreground">取り消せません。</strong>
           </p>

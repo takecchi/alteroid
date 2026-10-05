@@ -1,4 +1,5 @@
 import { SettingsTabs } from '~/components/group-tabs';
+import { settingsDocumentTitle } from '~/lib/nav';
 import { AlertTriangle } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router';
@@ -38,13 +39,13 @@ import type {
 } from '@alteroid/logic';
 
 /**
- * `/tokens` — 認証トークンのプール一覧・回転の設定・回転の履歴（エラー状況）。
+ * `/tokens` — 認証トークンのトークン一覧・切り替えの設定・切り替えの履歴（エラー状況）。
  *
  * **追加・削除・無効化/有効化はこの画面からも行える**（2026-09-14。Issue #464
  * が埋めた「読み取り専用」の形をここで解いた——人間の決定により、CLI
  * （`alteroid token add` / `remove` / `disable` / `enable`）と同じ資格・同じ
- * `PUT /tokens`（全置換）をこの画面からも呼べるようにしてある）。**回す契機・
- * 冷却の設定（`policy`）も、2026-09-20 からこの画面から変えられる**
+ * `PUT /tokens`（全置換）をこの画面からも呼べるようにしてある）。**切り替える条件・
+ * 休止の設定（`policy`）も、2026-09-20 からこの画面から変えられる**
  * （Issue #1123。CLI（`alteroid token policy`）と同じ資格・同じ
  * `PUT /tokens/policy` をこの画面からも呼ぶ——`mutations.ts` の
  * `useSetTokenPolicy`）。
@@ -52,7 +53,7 @@ import type {
  * **値（`value`）はどこにも出さない。** サーバ側の型（`AgentTokenView`）が
  * そもそも `value` を持たないので、この画面が「消し忘れて出す」形は作れない。
  * 追加フォームで受け取った値は送信直後に捨てる（コンポーネントの state に
- * 残さない）。出してよいのは id / label / 指紋（`sha256`、salt 無し sha256
+ * 残さない）。出してよいのは id / label / 識別用の値（`sha256`、salt 無し sha256
  * の先頭12hex）/ 状態 / 時刻 / 断られた・失効した理由の文言までである
  * （`.claude/skills/token-pool/SKILL.md`）。
  */
@@ -60,8 +61,9 @@ export default function Tokens() {
   return (
     <Page
       tabs={<SettingsTabs />}
+      documentTitle={settingsDocumentTitle('/tokens')}
       title="認証トークン"
-      description="プールの一覧・追加・削除・無効化/有効化・回転の設定・回転の履歴（エラー状況）"
+      description="登録した認証トークンの一覧・追加・削除・無効化/有効化、トークンを切り替える条件の設定、切り替えの履歴（エラー状況）"
     >
       <div className="flex flex-col gap-4">
         <PoolAndSettings />
@@ -140,7 +142,7 @@ function AddTokenForm() {
 }
 
 // ---------------------------------------------------------------------------
-// プール一覧・回転の設定（GET /tokens）
+// トークン一覧・切り替えの設定（GET /tokens）
 // ---------------------------------------------------------------------------
 
 function PoolAndSettings() {
@@ -162,7 +164,7 @@ function PoolAndSettings() {
   if (error instanceof ApiError && error.status === 403) {
     return (
       <Card>
-        <CardHeader title="プール一覧・回転の設定" />
+        <CardHeader title="トークン一覧・切り替えの設定" />
         <div className="px-4 py-3 text-sm text-muted-foreground">
           この一覧は alteroid を使う許可があるアカウントだけが見られる（
           <code className="font-mono">alteroid token list</code>{' '}
@@ -187,7 +189,7 @@ function PoolAndSettings() {
             rowsUnreadable={data.rowsUnreadable}
           />
           {data.settings === undefined ? (
-            // **issue #2096（#2095 の表示側）。** 回す契機・冷却の設定が壊れて
+            // **issue #2096（#2095 の表示側）。** 切り替える条件・休止の設定が壊れて
             // いて読めないとき、デーモンは `settings` を省いて
             // `settingsUnreadable.reason` を返す——既定値では埋めない
             // （`off` にしてあった回転を既定として見せることになる）。
@@ -273,7 +275,7 @@ function describeAvailability(state: TokenAvailability): {
     case 'ready':
       return { label: '使用可能', tone: 'ok' };
     case 'cooling':
-      return { label: '冷却中', tone: 'warn' };
+      return { label: '休止中', tone: 'warn' };
     case 'disabled':
       return { label: '無効化済み（人間が外した。戻らない）', tone: 'neutral' };
     case 'invalidated':
@@ -284,12 +286,12 @@ function describeAvailability(state: TokenAvailability): {
 }
 
 /**
- * 冷却の期限の出所（#683）。
+ * 休止の期限の出所（#683）。
  *
  * **3値を2値へ潰さない**（枠と課金枠の食い違いが画面から消える）。
  *
  * **無い回は「記録が無い」と出す。** 無いのは
- * (a) #683 より前に冷却が書かれた行 (b) この欄を返さない版のデーモンに
+ * (a) #683 より前に休止が書かれた行 (b) この欄を返さない版のデーモンに
  * 繋がっている、のどちらかで、**どちらも「権威ある値である」ではない。**
  *
  * **未知の語は `describeUnknown` へ落とす。** `apps/web` は Vercel、デーモンは
@@ -308,22 +310,22 @@ function describeCooldownSource(source: AgentTokenView['cooldownSource']): strin
     case 'default':
       return '設定の既定（ただの推測である）';
     default:
-      return describeUnknown(source, '冷却の期限の出所');
+      return describeUnknown(source, '休止の期限の出所');
   }
 }
 
 /**
- * 指紋の欄。**「不明」で埋めない。**
+ * 識別用の値の欄。**「不明」で埋めない。**
  *
  * **⚠️ かつては `source: 'env'` の行（器の環境変数を指す、値を持たない行）が
- * あり、その行だけ指紋も無かった。** その概念自体を廃止した（トークンプールは
- * 100% DB 駆動——登録された行は必ず値を持つ）ので、いまは常に指紋が付く。
+ * あり、その行だけ識別用の値も無かった。** その概念自体を廃止した（トークンプールは
+ * 100% DB 駆動——登録された行は必ず値を持つ）ので、いまは常に識別用の値が付く。
  */
 function describeFingerprint(token: AgentTokenView): string {
   if (token.sha256 !== undefined) return token.sha256;
-  // 実装上ここには来ないはず（`stored` は値を持つので必ず指紋が付く）——
+  // 実装上ここには来ないはず（`stored` は値を持つので必ず識別用の値が付く）——
   // それでも「不明」ではなく、想定外であることを名指しする。
-  return '（指紋が無い。想定外の行）';
+  return '（識別用の値が無い。想定外の行）';
 }
 
 /**
@@ -381,7 +383,7 @@ function PoolCard({
   return (
     <Card>
       <CardHeader
-        title="プール一覧"
+        title="トークン一覧"
         subtitle="登録済みのトークン。値そのものは出ない"
         action={<Badge>{sorted.length}</Badge>}
       />
@@ -396,7 +398,7 @@ function PoolCard({
           <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden />
           <span className="min-w-0 break-words">
             <code className="font-mono break-all">{targetTokenId}</code>{' '}
-            はいまのプールに無い（外したか、別の器のもの）。
+            はいまの一覧に無い（外したか、別の実行環境のもの）。
           </span>
         </div>
       )}
@@ -413,7 +415,7 @@ function PoolCard({
           // 「何は変わらないか」）。「まだ取れていない」との混同を避けるため、
           // 正常な既定構成でもありうると添える。
           <Empty>
-            登録された認証トークンがまだ1件も無い。（器の環境変数1本だけの既定構成でも、これは正常）
+            登録された認証トークンがまだ1件も無い。（実行環境の環境変数1本だけの既定構成でも、これは正常）
           </Empty>
         )
       ) : (
@@ -432,7 +434,7 @@ function PoolCard({
  *
  * **「消えたのではなく、読めない形で入っている」と言う**（`UnreadableSettingsCard` と同じ
  * 向き）。識別は id とラベルだけで、トークンの値は出ない（デーモンが返さない）。
- * **プールを書き換える操作（追加・削除・無効化/戻す）はこの行を捨てずに持ち越す**
+ * **一覧を書き換える操作（追加・削除・無効化/戻す）はこの行を捨てずに持ち越す**
  * （issue #2354 の決定。`PUT /tokens` は全文置換だが読めない行は残す。
  * `FsTokenPoolStore.replace` の doc）。消すのは、id を指す消すボタン
  * （`POST /tokens/unreadable/remove`）だけである。id が取れない行にはボタンが無い
@@ -497,7 +499,7 @@ function UnreadableRowsNote({ unreadable }: { unreadable: TokensRowsUnreadable }
           ))}
         </ul>
         <p className="mt-1">
-          プールを書き換える操作（追加・削除・無効化/戻す）は、この行を捨てずに持ち越す。
+          一覧を書き換える操作（追加・削除・無効化/戻す）は、この行を捨てずに持ち越す。
           消すには、行ごとの「この行を消す」を使う。番号が取れない行は、ここでは消せない。
         </p>
         <ErrorNote error={failure} />
@@ -584,7 +586,7 @@ function TokenRow({
         className="mt-2"
         labelWidth="9rem"
         items={[
-          { label: '指紋', value: describeFingerprint(token), mono: true },
+          { label: '識別用の値', value: describeFingerprint(token), mono: true },
           {
             label: '作成',
             value:
@@ -622,13 +624,13 @@ function TokenRow({
             : []),
           ...(token.cooldownUntil !== undefined
             ? [
-                // **冷却は絶対時刻を必ず出す。** 実測で「冷却が5時間なのに断られた
+                // **休止は絶対時刻を必ず出す。** 実測で「休止が5時間なのに断られた
                 // 理由の原文は『weekly limit resets 5pm』と言っていた」という桁の
                 // 食い違いが観測されている——相対表現（「あと◯時間」）だけでは
                 // この食い違いに気づけない。絶対時刻を主に、相対は括弧で添えるだけ
                 // にする。
                 {
-                  label: '冷却の期限',
+                  label: '休止の期限',
                   value: `${formatEpochMs(token.cooldownUntil)}（${formatEpochMsRelative(token.cooldownUntil)}）`,
                 },
                 // **出所を必ず出す（#683）。** 絶対時刻を出しても、**それが権威ある
@@ -706,19 +708,19 @@ function TokenRow({
 function describeRotateOn(policy: TokenRotationSettings['rotateOn']): string {
   switch (policy) {
     case 'free_exhausted':
-      return '無料枠が尽きたら回す（既定）';
+      return '無料枠が尽きたら切り替える（既定）';
     case 'overage_exhausted':
-      return '課金枠まで閉じてから回す';
+      return '課金枠まで使い切ってから切り替える';
     case 'off':
-      return '回さない（記録だけする）';
+      return '切り替えない（記録だけする）';
     default:
       // **送られてくる値である**（`GET /tokens` の `settings.rotateOn`）。⟹ 投げない。
-      return describeUnknown(policy, '回す契機');
+      return describeUnknown(policy, '切り替える条件');
   }
 }
 
 /**
- * `<select>` に出す回す契機の数え上げ（`tokenRotationPolicySchema`（core）と同じ3値）。
+ * `<select>` に出す切り替える条件の数え上げ（`tokenRotationPolicySchema`（core）と同じ3値）。
  *
  * **`satisfies Record<…, true>` で縛ってあるのは、網羅をコンパイル時に守るためである**
  * （`packages/core/src/schema.ts` の `journalEntryTypeNames` と同じ形）。**配列リテラルに
@@ -770,14 +772,14 @@ function SettingsCard({ settings }: { settings: TokenRotationSettings }) {
 
   return (
     <Card>
-      <CardHeader title="回転の設定" subtitle="トークンを切り替える条件と、冷却の既定" />
+      <CardHeader title="切り替えの設定" subtitle="トークンを切り替える条件と、休止の既定" />
       <KeyValueList
         className="px-4 py-3"
         labelWidth="9rem"
         items={[
-          { label: '回す契機', value: describeRotateOn(settings.rotateOn) },
+          { label: '切り替える条件', value: describeRotateOn(settings.rotateOn) },
           {
-            label: '冷却の既定',
+            label: '休止の既定',
             value: (
               <>
                 {(settings.cooldownMs / (60 * 60 * 1000)).toLocaleString('ja-JP', {
@@ -787,7 +789,7 @@ function SettingsCard({ settings }: { settings: TokenRotationSettings }) {
                 <br />
                 <span className="text-xs text-muted-foreground">
                   利用枠の復活時刻が分からなかったときだけ使う目安。分かっているときは、行ごとの
-                  「冷却の期限」が優先される。
+                  「休止の期限」が優先される。
                 </span>
               </>
             ),
@@ -800,7 +802,7 @@ function SettingsCard({ settings }: { settings: TokenRotationSettings }) {
 
       <div className="flex flex-col gap-3 border-t border-border px-4 py-3 text-sm">
         <label className="flex flex-col gap-1">
-          <span className="text-xs text-muted-foreground">回す契機を変える</span>
+          <span className="text-xs text-muted-foreground">切り替える条件を変える</span>
           <Select
             value={rotateOn}
             onChange={(event) =>
@@ -815,7 +817,7 @@ function SettingsCard({ settings }: { settings: TokenRotationSettings }) {
           </Select>
         </label>
         <label className="flex flex-col gap-1">
-          <span className="text-xs text-muted-foreground">冷却の既定を変える（ミリ秒）</span>
+          <span className="text-xs text-muted-foreground">休止の既定を変える（ミリ秒）</span>
           <Input
             type="number"
             value={cooldownMsText}
@@ -842,7 +844,7 @@ function SettingsCard({ settings }: { settings: TokenRotationSettings }) {
 }
 
 /**
- * 回す契機・冷却の設定が壊れていて読めないときの直し方（issue #2096。#2095 の
+ * 切り替える条件・休止の設定が壊れていて読めないときの直し方（issue #2096。#2095 の
  * 表示側）。
  *
  * **`reason` はそのまま出す。** 「消えたのではなく、読めない形で入っている」と
@@ -900,17 +902,17 @@ function UnreadableSettingsCard({ reason }: { reason: string }) {
 
   return (
     <Card>
-      <CardHeader title="回転の設定" subtitle="トークンを切り替える条件と、冷却の既定" />
+      <CardHeader title="切り替えの設定" subtitle="トークンを切り替える条件と、休止の既定" />
       <div className="px-4 py-3 text-sm text-muted-foreground">
-        回転の設定は読めない（消えたのではなく、読めない形で入っている）: {reason}
+        切り替えの設定は読めない（消えたのではなく、読めない形で入っている）: {reason}
       </div>
       <div className="flex flex-col gap-3 border-t border-border px-4 py-3 text-sm">
         <p className="text-xs text-muted-foreground">
-          直すには、回す契機と冷却の既定の両方を選び直して保存する（片方だけでは保存できない ——
-          読めない現在値は、両方揃った入力でしか上書きできない）。
+          直すには、切り替える条件と休止の既定の両方を選び直して保存する（片方だけでは保存できない
+          —— 読めない現在値は、両方揃った入力でしか上書きできない）。
         </p>
         <label className="flex flex-col gap-1">
-          <span className="text-xs text-muted-foreground">回す契機を選ぶ</span>
+          <span className="text-xs text-muted-foreground">切り替える条件を選ぶ</span>
           <Select
             value={rotateOnDraft ?? ''}
             onChange={(event) =>
@@ -932,7 +934,7 @@ function UnreadableSettingsCard({ reason }: { reason: string }) {
           </Select>
         </label>
         <label className="flex flex-col gap-1">
-          <span className="text-xs text-muted-foreground">冷却の既定を選ぶ（ミリ秒）</span>
+          <span className="text-xs text-muted-foreground">休止の既定を選ぶ（ミリ秒）</span>
           <Input
             type="number"
             value={cooldownMsText}
@@ -959,14 +961,14 @@ function UnreadableSettingsCard({ reason }: { reason: string }) {
 }
 
 // ---------------------------------------------------------------------------
-// 回転の履歴（エラー状況） — GET /journal?type=token_rotation
+// 切り替えの履歴（エラー状況） — GET /journal?type=token_rotation
 // ---------------------------------------------------------------------------
 
 /** 表示上限。**打ち切ったら必ずそう書く**（黙って切り捨てない）。 */
 const JOURNAL_LIMIT = 50;
 
 /**
- * 回転の `event` を人間の1行にする。
+ * 切り替えの `event` を人間の1行にする。
  *
  * **ここだけ `assertNever` を使わない。理由は「版のずれ」である。**
  *
@@ -1013,7 +1015,11 @@ function describeEvent(
 } {
   switch (event) {
     case 'rotated':
-      return { label: '回した（撒いた。走行中のセッションには未反映）', tone: 'warn' };
+      return {
+        label:
+          '切り替えた（次のトークンを渡した。動いている最中のセッションにはまだ反映されていない）',
+        tone: 'warn',
+      };
     case 'exhausted':
       return { label: '候補が無い（全層が止まる）', tone: 'danger' };
     case 'sweep_stopped':
@@ -1027,34 +1033,34 @@ function describeEvent(
       // なので、「契機に当たらなかった」と書くと嘘になる。
       return freshness === 'stale'
         ? {
-            label: '回さなかった（もう回した後の通知。契機には当たっている）',
+            label: '切り替えなかった（すでに切り替えた後の通知。条件には当たっている）',
             tone: 'neutral',
           }
-        : { label: '回さなかった（契機に当たらなかった。正常）', tone: 'neutral' };
+        : { label: '切り替えなかった（条件に当たらなかった。正常）', tone: 'neutral' };
     case 'parked':
       // **`rotated` と同じ `warn` にしない。** 撒けてはいるが、**いま通る鍵は
       // 1本も無い**（`earliestAt` まで全層が止まる）。そこは `exhausted` と同じ
       // 重さなので `danger` である —— 違うのは「開いた瞬間にそのまま通る」ことで、
       // それは `label` の側で言う。
       return {
-        label: 'いま通る鍵が無い（いちばん早く戻る鍵を撒いて待っている）',
+        label: 'いま使える鍵が無い（いちばん早く戻る鍵を渡して待っている）',
         tone: 'danger',
       };
     case 'recovered':
       // **止まっていた鍵が開いた。** 良い知らせなので `ok` である。
-      return { label: '止まっていた現役が、また通ることを観測できた', tone: 'ok' };
+      return { label: '止まっていた使用中のトークンが、また通ることを確認できた', tone: 'ok' };
     case 'reopened':
       // **`recovered` と同じ `ok` だが、label は別である**（#833）。あちらは
       // **観測**、こちらは**時計**（記録した期限を過ぎただけで、通ることは誰も
       // 確かめていない）。**同じ文にすると、読む側は observed だと思う。**
       return {
-        label: '現役の冷却が明けた（時計。通ることは観測していない）',
+        label: '使用中のトークンの休止が明けた（時刻が過ぎただけ。通ることまでは確認していない）',
         tone: 'ok',
       };
     case 'restored':
-      return { label: '起動時に現役を撒き直した', tone: 'neutral' };
+      return { label: '起動時に使用中のトークンを渡し直した', tone: 'neutral' };
     case 'restore_failed':
-      return { label: '起動時の撒き直しに失敗', tone: 'danger' };
+      return { label: '起動時の渡し直しに失敗', tone: 'danger' };
     default:
       // **落とさない**（`describeUnknown` の doc）。網羅性は引数の `never` が守る。
       return { label: describeUnknown(event, '切り替えの出来事'), tone: 'neutral' };
@@ -1113,7 +1119,7 @@ function RotationHistory() {
   return (
     <Card>
       <CardHeader
-        title="回転の履歴（エラー状況）"
+        title="切り替えの履歴（エラー状況）"
         subtitle="トークンの切り替えの記録を新しい順に表示する。出来事は省かずに全部出す"
         action={listUnavailable ? undefined : <Badge>{entries.length}</Badge>}
       />
@@ -1121,7 +1127,7 @@ function RotationHistory() {
       {isLoading ? (
         <Spinner />
       ) : listUnavailable ? null : entries.length === 0 ? (
-        <Empty>回転の記録がまだ1件も無い。</Empty>
+        <Empty>切り替えの記録がまだ1件も無い。</Empty>
       ) : (
         <ul>
           {entries.map((entry) => (
@@ -1156,7 +1162,7 @@ function RotationRow({ entry }: { entry: TokenRotationEntry }) {
         <Badge tone={event.tone}>{event.label}</Badge>
         <span className="text-xs text-muted-foreground">{formatDateTime(entry.at)}</span>
         {entry.signal !== undefined && (
-          <span className="text-xs text-muted-foreground">契機: {entry.signal}</span>
+          <span className="text-xs text-muted-foreground">きっかけ: {entry.signal}</span>
         )}
         {entry.freshness !== undefined && (
           <span className="text-xs text-muted-foreground">
@@ -1166,7 +1172,7 @@ function RotationRow({ entry }: { entry: TokenRotationEntry }) {
         {/*
           **`signal` とは別の欄である**（`schema.ts` の `reason` の doc）。
           `signal` は「何を見て決めたか」、こちらは「なぜこの瞬間に見たか」——
-          畳むと「冷却が明けたので見直した」と「記録の上で現役が通らない」が
+          畳むと「休止が明けたので見直した」と「記録の上で現役が通らない」が
           同じ顔になる。
 
           **素の値をそのまま出す。** `signal` の隣が既にそうなっており、
@@ -1174,7 +1180,7 @@ function RotationRow({ entry }: { entry: TokenRotationEntry }) {
           実際に増えている。{@link describeUnknown} の doc）。
         */}
         {entry.reason !== undefined && (
-          <span className="text-xs text-muted-foreground">見直しの契機: {entry.reason}</span>
+          <span className="text-xs text-muted-foreground">見直したきっかけ: {entry.reason}</span>
         )}
         {/*
           **`recovered` の行にだけ付く**（#681 (1)）。無い回は「観測していない」
@@ -1197,7 +1203,7 @@ function RotationRow({ entry }: { entry: TokenRotationEntry }) {
         items={[
           ...(entry.label !== undefined ? [{ label: 'ラベル', value: entry.label }] : []),
           ...(entry.tokenId !== undefined
-            ? [{ label: '移った先・配った先', value: entry.tokenId, mono: true }]
+            ? [{ label: '移った先・渡した先', value: entry.tokenId, mono: true }]
             : []),
           ...(entry.fromTokenId !== undefined
             ? [{ label: '降りた側', value: entry.fromTokenId, mono: true }]

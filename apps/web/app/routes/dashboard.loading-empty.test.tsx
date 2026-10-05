@@ -56,7 +56,7 @@ describe('ホームの読み込み中', () => {
     renderHome({ hold: ['approvals'] });
 
     // 他のカードが取れ終わるまで待つ（保留の側だけが読み込み中のまま残る）。
-    await screen.findByText('まだ記録が無い。');
+    await screen.findByText(/^まだ記録が無い。/);
 
     expect(screen.queryByText(CALM)).toBeNull();
     expect(within(cardOf('承認待ち一覧')).getByText('読み込み中')).toBeTruthy();
@@ -72,7 +72,7 @@ describe('ホームの読み込み中', () => {
     });
 
     // 他のカードが取れ終わるまで待つ（地図の側だけが読み込み中のまま残る）。
-    await screen.findByText('まだ記録が無い。');
+    await screen.findByText(/^まだ記録が無い。/);
     const card = cardOf('稼働状況');
     expect(within(card).getByText('稼働状況の図を読み込み中')).toBeTruthy();
     expect(within(card).queryByText(NO_MANAGERS)).toBeNull();
