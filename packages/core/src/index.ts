@@ -1429,3 +1429,4 @@ export { assertProfileRowWritable } from './profile-input.js';
 export { preparePermissionGrantForPut } from './permission-grant-input.js';
 export { verifySessionRegistryNulContract } from './session-registry-nul-contract.js';
 export { verifyPersonaNulContract } from './persona-nul-contract.js';
+export { verifyScheduleNulContract } from './schedule-nul-contract.js';
