@@ -185,14 +185,16 @@ export default function Practices() {
                     key: practice.slug,
                     href: `/practices/${practice.slug}`,
                     current: practice.slug === selectedSlug,
-                    children: (
+                    // 行全体をリンクにしない（#2808）。リンクは題だけにして、名前・文字数・日時は
+                    // 選択・コピーできる文字にする（`ListDetailItems` の `lead` / `extra`）。
+                    lead: (
+                      <span className="mr-1.5 shrink-0 text-[10px] text-muted-foreground">
+                        {practiceKindLabel(practice.kind)}
+                      </span>
+                    ),
+                    children: practice.title,
+                    extra: (
                       <>
-                        <div className="flex items-baseline">
-                          <span className="mr-1.5 shrink-0 text-[10px] text-muted-foreground">
-                            {practiceKindLabel(practice.kind)}
-                          </span>
-                          <span className="min-w-0 flex-1 truncate">{practice.title}</span>
-                        </div>
                         <p className="truncate font-mono text-[11px] text-muted-foreground">
                           {practice.slug}
                         </p>
