@@ -4805,19 +4805,33 @@ class RunnerSession {
   }
 
   /**
-   * `Bash` へ渡すコマンドが「無限に待つだけの形」なら実行そのものを止める
-   * （#894 段1・案(A)）。
+   * `Bash` へ渡すコマンドが「無限に待つだけの形」なら、**確認に上げる**
+   * （#894 段1・案(A)。既定の扱いは #2884 で deny から ask へ変えた）。
    *
-   * ## なぜここだけが実際にブロックする
+   * ## なぜここだけが判断を返す
    *
    * このクラスの他のフック（`#onPostToolUse` 以下・`#onSubagentStop` /
    * `#onStop` 等）はすべて観測専用で、`{ continue: true }` を返すだけである。
    * ここは違う —— #894 が実測したのは「システムプロンプトへ逐語で書いても
    * 守られない」ということそのものなので、対策を「もっと強く書く」側へは
-   * 倒さず、**能力そのものを弾く**側へ倒す（Issue #894 の候補(a)）。判定の
+   * 倒さず、**機械の門**へ倒す（Issue #894 の候補(a)）。判定の
    * 中身（何を弾き、何を通すか）は `bash-wait-guard.ts` の
    * `inspectBashCommand` の doc を見よ —— ここは SDK への配線と、弾いた
    * ことを日誌へ残す役目だけを持つ。
+   *
+   * ## 門に当たったときの扱いは設定で決まる（issue #2884）
+   *
+   * マネージャーは Claude Code で、クローンはそれを使う人間である（オーナーの回答 2026-10-05）。
+   * 人間は Claude Code で、確認に上がってきた操作を自分の判断で許可できる。最初の実装（#894）は
+   * 確認に上げずに **deny** を返し、誰も開けられなかった（north_star 禁止2「方針は設定で
+   * 開けられなければならない」に反する）。いまは `ALTEROID_BASH_GUARD`（`bash-guard-mode.ts`）が決める:
+   *
+   * - `ask`（既定）: `permissionDecision: 'ask'` を返す。SDK が `canUseTool` へ流し、`#onPermission` が
+   *   クローンへ上げる（理由は `decisionReason` として summary に載る）。クローンは `manager_send` の
+   *   `decision` で許可できる。**作業者（サブエージェント）の Bash でも同じ**（本物の本体で確かめてある。
+   *   `real-cli-pre-tool-use-ask.test.ts`）
+   * - `deny`: 従来どおり止める（確認に上げない）。人間が選んだときだけ
+   * - `off`: 判定器を呼ばない
    *
    * ## `Bash` 以外・`command` が文字列でない入力は素通しする
    *
@@ -4826,7 +4840,7 @@ class RunnerSession {
    * 他のツールまで巻き込むと、この PreToolUse が「何でも弾きうる門」に
    * 見えてしまい、地雷表「確認が要る行為の一覧を作る」に近づく。
    *
-   * ## 拒否は中立の `{ kind: 'deny' }` で返す
+   * ## 判断は中立の `{ kind: 'ask' }`（既定）か `{ kind: 'deny' }`（設定）で返す
    *
    * `decision: 'block'`（セッション全体を止める側の口）ではなく、この
    * ツール呼び出し1件だけを拒否する口を使う（SDK の型定義。逐語は
@@ -4854,9 +4868,10 @@ class RunnerSession {
    *
    * ## 末尾で1回だけの許可を消費する（issue #1105 P1）
    *
-   * `bash-wait-guard` の deny（直上）より**後**に置く——`#consumeOneShotAllow`
-   * の doc が言うとおり、クローンの1回だけの許可で alteroid 自身の門（#894）
-   * を上書きしないため。`Bash` が弾かれなかった回・`Bash` 以外の全道具が
+   * `bash-wait-guard` の deny（直上）より**後**に置く——`ALTEROID_BASH_GUARD=deny` では、
+   * クローンの1回だけの許可で門（#894）を上書きしない。`ask`（既定）では門は確認であって
+   * 禁止ではないので、クローンが同じ呼び出しに出した1回だけの許可がそれを開ける（#2884。
+   * 関数の最後で `ask` と突き合わせる）。`Bash` が弾かれなかった回・`Bash` 以外の全道具が
    * ここへ落ちる。
    *
    * ## 判定の周りの例外で deny を消さない（issue #1960）
@@ -4868,7 +4883,8 @@ class RunnerSession {
    *
    * - 入力の頭の控え（`#capturePreToolInputHead`）と note の送り出し（`#emit`）は
    *   観測のための副作用なので、失敗しても判定を止めない（stderr へ1行だけ残す）
-   * - `Bash` の判定（`inspectBashCommand`）そのものが投げたら、閉じる側（deny）へ倒す
+   * - `Bash` の判定（`inspectBashCommand`）そのものが投げたら、確認（ask）へ倒す。
+   *   上がらずに止めて誰も開けられない形にしない（#2884）。`deny` の設定でだけ止める
    */
   async #onPreToolUse(record: AgentPreToolRecord): Promise<AgentPreToolDecision> {
     this.#tryObservation('PreToolUse の入力の頭の控え', () => {
@@ -5026,12 +5042,16 @@ class RunnerSession {
    * P1）を、同じ `(actor, tool, 入力の完全一致のダイジェスト)` であれば
    * 1回だけ使う。
    *
-   * ## 呼び出し順序で「alteroid 自身の門」を上書きしない
+   * ## 呼び出し順序: `deny` の設定では、門を上書きしない
    *
    * `#onPreToolUse` からは、`bash-wait-guard`（#894）の deny が**確定した後**
-   * にしか呼ばれない。⟹ 待つだけの `Bash` はクローンの許可があっても通らない
-   * ——issue #1105 本文の設計判断3「既存の `PreToolUse` の deny は、1回限りの
-   * 許可より先に効かせる」をこの順序そのもので担保する。
+   * にしか呼ばれない。⟹ `ALTEROID_BASH_GUARD=deny` では、待つだけの `Bash` はクローンの
+   * 許可があっても通らない——issue #1105 本文の設計判断3「既存の `PreToolUse` の deny は、
+   * 1回限りの許可より先に効かせる」をこの順序そのもので担保する。
+   *
+   * **既定（`ask`）では、門は確認である**（#2884）。`#onPreToolUse` は門の `ask` を持ったまま
+   * ここを呼び、許可が在れば `allow` を返す（クローンが同じ呼び出しに明示した許可は、確認に上げた
+   * 答えと同じ重さである）。許可が無ければ `ask` のまま返る。
    *
    * ## 全道具が対象（`Bash` に絞らない）
    *
