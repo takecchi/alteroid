@@ -826,7 +826,8 @@ export interface ConversationReadStore {
  * **NUL（issue #3011。teto の判断、2026-10-06）。** `putJob`・`putApproval` の `id`（鍵）の NUL は `NulNotAllowedError` で断り、
  * 本文（`summary`・`request`・`lastReport`・`question`・`context`・`answer`）の NUL は落として残す（3実装とも。`job-input.ts`）。
  * 読むだけの口（`getApproval`・`updateJob`・`updateApproval`）は、NUL を含む `id` でも断らず `null` を返す（`mutate` は呼ばない）。
- * 参照キー（`conversationId`・`managerId`・`jobId` など）の NUL の扱いは未決。
+ * 参照キー・印（`conversationId`・`managerId`・`jobId`・`requestId` など）と、`questions` / `selections` の中の文字列も、
+ * 断らず落として残す（3実装とも。自分の行を指す鍵ではなく、よそへの参照や印で、断ると記録が丸ごと落ちる）。
  */
 export interface JobStore {
   listJobs(): Promise<Job[]>;
@@ -2572,6 +2573,7 @@ export class UnreadableActiveTokenError extends Error {
  * 日誌に残すだけ）。害が大きいのは記録を失うほうである。他のストアが鍵の NUL を断るのとは逆の
  * 向きの例外である（`nul-guard.ts`）。同じ理由の例外がもう1つある: 台帳 `CommitmentStore` の `source`（出所の注記。
  * issue #3011。teto の判断、2026-10-06）。断ると引き受けた仕事が台帳から消えるので、落として残す。
+ * ジョブと承認待ち（`JobStore`）の参照キー・印と `questions` / `selections` の中の文字列も同じ（`id` 自身は断る）。
  *
  * **`aggregate()` の絞り込み（`managerId`・`tokenId`）の NUL は、落としてから引く**（issue #3005。3実装とも）。
  * 書き込みが落として残しているので、引くほうも落とすのが対称になる。投げず、一致しなければ空の集計を返す。
