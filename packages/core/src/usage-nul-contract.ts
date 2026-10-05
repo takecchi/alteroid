@@ -9,6 +9,7 @@ import type { UsageStore } from './store.js';
  * 外から来る鍵でも、記録そのものを失わない種類の台帳では落として残す（断ると消費が台帳から消える）。
  *
  * - `record`: 鍵列の NUL を落とした行として積まれる。例外は投げない
+ * - `aggregate`: 絞り込み（`managerId`・`tokenId`）は NUL を落としてから引く。投げず、一致なしは空の集計（issue #3005）
  * - `baseline` / `recordedManagerIds`: NUL を落とした managerId で引ける（NUL つきで引いても同じ）
  * - `recordUnmetered`: 例外を投げない
  *
@@ -66,6 +67,43 @@ export async function verifyUsageNulContract(usage: UsageStore): Promise<void> {
     provider: 'prov-\u0000x',
     tokenId: 'tok-\u0000id',
   });
+
+  // aggregate() の絞り込み（issue #3005）: 書き込みで落として残したのと対称に、落としてから引く。
+  // NUL つきで引いても、落とした値で引いても同じ行が出る。投げない。
+  for (const query of [
+    { managerId: 'mgr-nul' },
+    { managerId: 'mgr-\u0000nul' },
+    { tokenId: 'tok-\u0000id' },
+    { managerId: 'mgr-\u0000nul', tokenId: 'tok-\u0000id' },
+  ]) {
+    const filtered = await usage.aggregate(query);
+    if (
+      filtered.rows.length !== 1 ||
+      filtered.rows[0]?.managerId !== 'mgr-nul' ||
+      filtered.turnRows.length !== 1
+    ) {
+      fail(
+        `aggregate の絞り込みが NUL を落として引いていない（${JSON.stringify(query)}）`,
+        filtered,
+      );
+    }
+  }
+  const filteredClone = await usage.aggregate({ managerId: 'cl-\u0000one' });
+  if (
+    filteredClone.unmeteredRows?.length !== 1 ||
+    filteredClone.unmeteredRows[0]?.managerId !== 'cl-one'
+  ) {
+    fail('aggregate の絞り込み（無報告の行）が NUL を落として引いていない', filteredClone);
+  }
+  // 書いていない値で引けば一致なし（NUL を落とした結果が空文字でも投げない）。
+  const none = await usage.aggregate({ managerId: 'no-such\u0000mgr' });
+  if (
+    none.rows.length !== 0 ||
+    none.turnRows.length !== 0 ||
+    (none.unmeteredRows?.length ?? 0) !== 0
+  ) {
+    fail('一致しない絞り込みが行を返した', none);
+  }
 
   await usage.clear();
 }

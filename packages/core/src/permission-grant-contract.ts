@@ -270,4 +270,47 @@ export async function verifyPermissionGrantStoreContract(
   ) {
     fail('本文のNULは落として残す', readBody);
   }
+
+  // 9. 読むだけの口（issue #3005）: 鍵に NUL を含む id で引かれたら、3実装とも「無い」と同じ結果を返す
+  // （get は null・revoke は null・markUsed は false・removeUnreadable は unknown）。投げない。
+  // 書き込みでは NUL の鍵を断るので、NUL を含む id の行はどの器にも存在しえない。何も書かない。
+  const listBeforeRead = await store.list();
+  const nulId = 'permission-grant-contract-n\u0000ul';
+  const readOutcomes: Array<[string, () => Promise<unknown>, unknown]> = [
+    ['get(NULを含むid)はnull', () => store.get(nulId), null],
+    ['revoke(NULを含むid)はnull', () => store.revoke(nulId, '2026-03-01T00:00:00.000Z'), null],
+    [
+      'markUsed(NULを含むid)はfalse',
+      () => store.markUsed(nulId, '2026-03-01T00:00:00.000Z'),
+      false,
+    ],
+  ];
+  for (const [label, call, expected] of readOutcomes) {
+    let outcome: unknown;
+    try {
+      outcome = await call();
+    } catch (error) {
+      fail(`${label}（投げた: ${error instanceof Error ? error.name : typeof error}）`, null);
+    }
+    if (outcome !== expected) fail(label, outcome);
+  }
+  let removeOutcome: unknown;
+  try {
+    removeOutcome = await store.removeUnreadable([nulId]);
+  } catch (error) {
+    fail(
+      `removeUnreadable(NULを含むid)は投げない（${error instanceof Error ? error.name : typeof error}）`,
+      null,
+    );
+  }
+  if (
+    typeof removeOutcome !== 'object' ||
+    removeOutcome === null ||
+    (removeOutcome as { kind?: unknown }).kind !== 'unknown'
+  ) {
+    fail('removeUnreadable(NULを含むid)はunknown', removeOutcome);
+  }
+  if (JSON.stringify(await store.list()) !== JSON.stringify(listBeforeRead)) {
+    fail('NULを含むidで読んだだけなのに行が変わった', null);
+  }
 }
