@@ -336,16 +336,85 @@ describe('alteroid practice edit の前提版（ifMatch）', () => {
 });
 
 describe('alteroid practice remove', () => {
-  it('DELETE /practices/<slug> を打つ', async () => {
+  const practiceBody = (version?: string) => ({
+    practice: { slug: 'review', kind: 'レビュー', title: '題', content: '本文\n' },
+    ...(version === undefined ? {} : { version }),
+  });
+
+  it('読んだ版を ifMatch に付けて DELETE /practices/<slug> を打つ（#2959）', async () => {
     const read = captureStdout();
+    replies.push({ status: 200, body: practiceBody('v-read') });
     replies.push({ status: 200, body: { ok: true, slug: 'review' } });
 
     await practiceRemoveCommand('review');
 
-    expect(sent).toHaveLength(1);
-    expect(sent[0]?.method).toBe('DELETE');
-    expect(sent[0]?.url).toBe('http://127.0.0.1:4517/practices/review');
+    expect(sent).toHaveLength(2);
+    expect(sent[0]?.method).toBe('GET');
+    expect(sent[1]?.method).toBe('DELETE');
+    expect(sent[1]?.url).toBe('http://127.0.0.1:4517/practices/review?ifMatch=v-read');
     expect(read()).toContain('消しました: review');
+  });
+
+  it('古いデーモン（version を返さない）には版を付けずに打ち、返ってきた警告を見せる', async () => {
+    const read = captureStdout();
+    replies.push({ status: 200, body: practiceBody() });
+    replies.push({
+      status: 200,
+      body: { ok: true, slug: 'review', warning: '版の照合なしで消しました' },
+    });
+
+    await practiceRemoveCommand('review');
+
+    expect(sent[1]?.url).toBe('http://127.0.0.1:4517/practices/review');
+    expect(read()).toContain('注意: 版の照合なしで消しました');
+  });
+
+  it('読めない形で入っている行（GET が 409）は版なしで DELETE を打つ（回復手段を塞がない）', async () => {
+    const read = captureStdout();
+    replies.push({ status: 409, body: { error: '読めない形で入っている' } });
+    replies.push({ status: 200, body: { ok: true, slug: 'review' } });
+
+    await practiceRemoveCommand('review');
+
+    expect(sent[1]?.method).toBe('DELETE');
+    expect(sent[1]?.url).toBe('http://127.0.0.1:4517/practices/review');
+    expect(read()).toContain('消しました: review');
+  });
+
+  it('409（読んだ後に変わっていた）なら、消していないと言い、いまの版と次の手を案内して失敗する', async () => {
+    const read = captureStdout();
+    replies.push({ status: 200, body: practiceBody('v-read') });
+    replies.push({
+      status: 409,
+      body: {
+        error: 'やり方が読んだ後に変わっています（消していません）',
+        current: {
+          practice: { slug: 'review', kind: 'レビュー', title: '題', content: 'クローンが書いた\n' },
+          version: 'v-now',
+        },
+      },
+    });
+
+    const error = await practiceRemoveCommand('review').catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(Error);
+    expect(String(error)).toContain('消しませんでした');
+    const text = read();
+    expect(text).toContain('消していません: review');
+    expect(text).toContain('v-now');
+    expect(text).toContain('alteroid practice show review');
+    expect(text).toContain('alteroid practice remove review');
+    expect(text).not.toContain('消しました');
+  });
+
+  it('409 で current が null（読んだ後に消されていた）なら、そう言う', async () => {
+    const read = captureStdout();
+    replies.push({ status: 200, body: practiceBody('v') });
+    replies.push({ status: 409, body: { error: 'x', current: null } });
+
+    await practiceRemoveCommand('review').catch(() => undefined);
+
+    expect(read()).toContain('すでに消されています');
   });
 
   /**
@@ -357,10 +426,13 @@ describe('alteroid practice remove', () => {
    * 消さず、見る先を「書いた文字列」から「投げた例外の文言」へ反転した。
    */
   it('「無い」と「名前として不正」を混ぜない（どちらも例外を投げる。#1641）', async () => {
+    // 先に読む（GET）。無いものは版なしで DELETE を打ち、サーバの 404 / 400 をそのまま伝える。
+    replies.push({ status: 404, body: { error: 'not found' } });
     replies.push({ status: 404, body: { error: 'not found' } });
     const missing = await practiceRemoveCommand('missing').catch((e: unknown) => e);
     expect(String(missing)).toContain('そんなやり方はありません');
 
+    replies.push({ status: 400, body: { error: 'やり方のスラッグが不正' } });
     replies.push({ status: 400, body: { error: 'やり方のスラッグが不正' } });
     const invalid = await practiceRemoveCommand('..').catch((e: unknown) => e);
     expect(String(invalid)).toContain('名前として成立しません');
@@ -385,6 +457,10 @@ describe('#1641 の再現（Issue 本文）', () => {
   });
 
   it('practice remove: DELETE が 500 なら投げる（「そんなやり方はありません」に化けない）', async () => {
+    replies.push({
+      status: 200,
+      body: { practice: { slug: 'some-slug', kind: 'x', title: 'y', content: 'z' }, version: 'v' },
+    });
     replies.push({ status: 500, body: { error: '内部エラー' } });
 
     const error = await practiceRemoveCommand('some-slug').catch((e: unknown) => e);
