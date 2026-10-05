@@ -82,11 +82,7 @@ function SessionsSummary() {
           <Spinner />
         </div>
       ) : data === undefined ? null : data.sessions.length === 0 ? (
-<<<<<<< HEAD
-        <Empty inset="card">（生ログはまだありません）</Empty>
-=======
-        <Empty>{ARCHIVE_EMPTY}</Empty>
->>>>>>> origin/main
+        <Empty inset="card">{ARCHIVE_EMPTY}</Empty>
       ) : (
         <ul>
           {data.sessions.map((session) => (
@@ -132,11 +128,7 @@ function EntryList() {
           <Spinner />
         </div>
       ) : data === undefined ? null : data.entries.length === 0 ? (
-<<<<<<< HEAD
-        <Empty inset="card">（生ログはまだありません）</Empty>
-=======
-        <Empty>{ARCHIVE_EMPTY}</Empty>
->>>>>>> origin/main
+        <Empty inset="card">{ARCHIVE_EMPTY}</Empty>
       ) : (
         <ul>
           {data.entries.map((entry) => (
