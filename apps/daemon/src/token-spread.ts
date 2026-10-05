@@ -1,5 +1,6 @@
 import {
   credentialNamesShadowedByProfile,
+  fingerprintOf,
   ROTATABLE_CREDENTIAL_KEYS,
   type RunnerRegistry,
   type TokenCredential,
@@ -49,7 +50,7 @@ export interface AgentTokenHolder {
    * クローンがセッションを起こす瞬間にこれを捕まえ、そのセッションの観測へ添える
    * （世代の照合。`observationFreshness`）。
    */
-  identity(): { tokenId: string; generation: number } | undefined;
+  identity(): { tokenId: string; generation: number; fingerprint?: string } | undefined;
   set(value: string, identity?: { tokenId: string; generation: number }): void;
   /**
    * 値を落とす（撒く値そのものが取れなかったときの手当て）。
@@ -72,7 +73,11 @@ export function createAgentTokenHolder(): AgentTokenHolder {
   return {
     values: (): Record<string, string> =>
       current === undefined ? {} : { CLAUDE_CODE_OAUTH_TOKEN: current },
-    identity: () => currentIdentity,
+    // **指紋を添える**（#2877 PR2。`token_list` と同じ `fingerprintOf`。値は載せない）。
+    identity: () =>
+      currentIdentity === undefined || current === undefined
+        ? currentIdentity
+        : { ...currentIdentity, fingerprint: fingerprintOf(current) },
     clear: (identity?: { tokenId: string; generation: number }) => {
       current = undefined;
       if (identity !== undefined) currentIdentity = identity;

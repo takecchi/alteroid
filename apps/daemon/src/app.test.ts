@@ -492,6 +492,7 @@ describe('managerSummarySchema と ManagerSummary のキーの一致（再発防
       liveBackgroundTasks: true,
       resetTimeSkewMatch: true,
       lastUnpushedWorkObservation: true,
+      lastRescue: true,
     };
 
     const schemaKeys = new Set(Object.keys(managerSummarySchema.shape));

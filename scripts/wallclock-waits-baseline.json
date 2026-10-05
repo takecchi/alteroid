@@ -50,6 +50,7 @@
   "packages/core/src/profile-service.test.ts": 2,
   "packages/core/src/restore-double-delivery.test.ts": 1,
   "packages/core/src/runner-registry.test.ts": 3,
+  "packages/core/src/runner-rescue-ref.test.ts": 1,
   "packages/core/src/runner-stop-finish-order.test.ts": 9,
   "packages/core/src/runner-unreported.test.ts": 3,
   "packages/core/src/schedule.test.ts": 1,

@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { spawn, type ChildProcess } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { statSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
@@ -70,7 +70,7 @@ import {
   noteUnreadableRecord,
   reasonOf,
 } from './dropped-record.js';
-import { ROTATABLE_CREDENTIAL_KEYS } from './credentials.js';
+import { fingerprintOf, ROTATABLE_CREDENTIAL_KEYS } from './credentials.js';
 import type { CredentialEntry, CredentialFingerprint, CredentialStore } from './credentials.js';
 import { codePointBoundary, excerptLine } from './excerpt.js';
 import { mcpServerNames, mcpServersFingerprintOf, parseMcpServers } from './mcp-servers.js';
@@ -120,6 +120,7 @@ import type {
   RunnerStartCommand,
   UnpushedWorkResult,
 } from './runner-protocol.js';
+import { RescueMemory, resolveRescueIntervalMs, runRescue } from './rescue-ref.js';
 import { computeUnpushedWork } from './unpushed-work.js';
 import type { ContextUsageObservation, JobStatus } from './schema.js';
 // **クローン（`clone.ts`）と同じ判定を呼ぶ。** 「これは応答ではない」の見分けを
@@ -406,6 +407,11 @@ export interface RunnerHostOptions {
    */
   profile?: ProfileVessel;
   /**
+   * 退避 ref を push する周期（ms。Issue #1266）。**省略は `resolveRescueIntervalMs(env)`**
+   * （環境変数 `ALTEROID_RESCUE_INTERVAL_MS`、既定5分）。主にテスト用の口。
+   */
+  rescueIntervalMs?: number;
+  /**
    * 貸し出し期限（lease）の自己失効を有効にする（roadmap M5 PR4）。**既定は
    * false。**
    *
@@ -616,6 +622,15 @@ function fingerprintFor(
 }
 
 /**
+ * 子プロセスへ渡す env が持つ認証トークンの指紋（`token_list` の `sha256` と同じ
+ * `fingerprintOf`）。**値は返さない。** 鍵が無い・空なら `undefined`（0 や空文字の指紋を作らない）。
+ */
+function tokenFingerprintOf(env: NodeJS.ProcessEnv): string | undefined {
+  const value = env[AGENT_TOKEN_CREDENTIAL_NAME];
+  return value === undefined || value === '' ? undefined : fingerprintOf(value);
+}
+
+/**
  * `path` がディレクトリとして実在するかを確かめる（Issue #1783）。
  *
  * **`Host#cwdExistsFn` の既定実装。** `statSync` が投げる理由（無い・親が
@@ -679,6 +694,8 @@ class Host implements RunnerHost {
   #lastDaemonContact = Date.now();
   /** 貸し出し期限の自己失効を見張る1本。**`shutdown()` で必ず畳む。** */
   #leaseWatcher: ReturnType<typeof setInterval> | null = null;
+  /** 退避 ref の周期の1本（Issue #1266）。**`shutdown()` で必ず畳む。** */
+  #rescueTimer: ReturnType<typeof setInterval> | null = null;
   /**
    * 委譲の Claude Code プロセスの pid 帳（#1334 段1）。
    * {@link RunnerHost.delegationSessionPids} の doc を見よ。
@@ -718,6 +735,17 @@ class Host implements RunnerHost {
     this.#readCgroupEventCountersFn = options.readCgroupEventCountersFn;
     this.#finishUnpushedWorkFn = options.finishUnpushedWorkFn;
     this.#cwdExistsFn = options.cwdExistsFn ?? directoryExists;
+    // **走行中の各セッションを、一定の周期で退避する**（Issue #1266。`rescue-ref.ts`）。
+    // セッション内で同時に走るのは1本まで（`RunnerSession#rescueRef`）。重ねて撃たず、
+    // 前の回が遅れていれば今回は見送る。見張りでプロセスの終了を引き延ばさない。
+    const rescueTimer = setInterval(
+      () => {
+        for (const session of [...this.#sessions.values()]) void session.rescueRef();
+      },
+      options.rescueIntervalMs ?? resolveRescueIntervalMs(this.#env),
+    );
+    rescueTimer.unref?.();
+    this.#rescueTimer = rescueTimer;
     if (this.#enforceLease) {
       const watcher = setInterval(() => this.#checkLeaseExpiry(), LEASE_WATCH_INTERVAL_MS);
       // 見張りでプロセスの終了を引き延ばさない（このリポジトリの既存のタイマーが
@@ -1177,6 +1205,8 @@ class Host implements RunnerHost {
     // と同じ理由）。
     if (this.#leaseWatcher !== null) clearInterval(this.#leaseWatcher);
     this.#leaseWatcher = null;
+    if (this.#rescueTimer !== null) clearInterval(this.#rescueTimer);
+    this.#rescueTimer = null;
     // **`captureUnpushedWork: true`（Issue #1266 候補(C)）。** ここ（器の
     // 入れ替え・日常の redeploy）だけが、未 push の観測を
     // `shutdown_unpushed_work` イベントとして運ぶ——`Host#stop(managerId)`
@@ -1641,6 +1671,13 @@ const FINISH_UNPUSHED_WORK_TIMEOUT_MS = 5_000;
 const STOP_UNPUSHED_WORK_TIMEOUT_MS = 5_000;
 
 /**
+ * `RunnerSession#stop()` が畳む直前に撃つ退避 ref（Issue #1266）の期限。
+ * `FORCED_EXIT_MS`（SIGTERM から55秒）の内側に収める。push が間に合わなければ
+ * 打ち切る（前回までの周期の退避は remote に残っている）。
+ */
+const STOP_RESCUE_TIMEOUT_MS = 20_000;
+
+/**
  * `RunnerSession#finish()` が `closed` イベントへ、`RunnerSession#stop()` が
  * `shutdown_unpushed_work` イベントへ運ぶ、未 push の観測1回分の結果（Issue
  * #1266 候補(2)・候補(C)。**2つの呼び出し元で共有する**——どちらも同じ
@@ -1695,6 +1732,10 @@ class RunnerSession {
    * `computeUnpushedWork`）——`RunnerSessionOptions.finishUnpushedWorkFn` の
    * doc を見よ。
    */
+  /** 退避 ref の記憶（作業ツリーごとの前回の結果）。Issue #1266。 */
+  readonly #rescueMemory = new RescueMemory();
+  /** 走っている退避の回（無ければ `null`）。**同時に走るのは1本まで。** */
+  #rescueRunning: Promise<void> | null = null;
   readonly #finishUnpushedWorkFn: (options?: {
     signal?: AbortSignal;
   }) => Promise<UnpushedWorkResult>;
@@ -1864,6 +1905,12 @@ class RunnerSession {
    * `RunnerResumeState` 自身の doc を見よ。
    */
   readonly #resumeState = new RunnerResumeState();
+  /**
+   * このセッションの子プロセスが**起動時に掴んだ** `CLAUDE_CODE_OAUTH_TOKEN` の指紋
+   * （`#buildSpec` が控える。Issue #2877 PR2）。**値は持たない。** まだ一度も開いていない・鍵を
+   * 掴んでいない間は `undefined`。
+   */
+  #tokenFingerprint: string | undefined;
   /**
    * **作業者を待つ窓の状態3フィールド**（`#openTasks` / `#window` /
    * `#windowClosing`）の器（Issue #1190 案X で `runner-worker-wait-window.ts`
@@ -2069,6 +2116,8 @@ class RunnerSession {
       // よいか」を決める材料で、畳むと道連れになるものの本数である
       // （`#atTokenRecycleBoundary` と同じ数え方）。
       liveBackgroundTasks: this.#sdkSession.liveBackgroundTasks.length,
+      // **起動時に掴んだ鍵の指紋**（Issue #2877 PR2。`runnerManagerStateSchema.tokenFingerprint` の doc）。
+      ...(this.#tokenFingerprint === undefined ? {} : { tokenFingerprint: this.#tokenFingerprint }),
     };
   }
 
@@ -2169,28 +2218,7 @@ class RunnerSession {
    * **⚠️ これで UID の問題が解けるかは未検証。**
    */
   async unpushedWork(options?: { signal?: AbortSignal }): Promise<UnpushedWorkResult> {
-    const spawnFn =
-      this.#childUser === undefined
-        ? (spawnOptions: {
-            command: string;
-            args: string[];
-            cwd?: string;
-            env: Record<string, string | undefined>;
-            signal: AbortSignal;
-          }) =>
-            spawn(spawnOptions.command, spawnOptions.args, {
-              ...(spawnOptions.cwd === undefined ? {} : { cwd: spawnOptions.cwd }),
-              env: spawnOptions.env,
-              signal: spawnOptions.signal,
-              stdio: ['ignore', 'pipe', 'pipe'],
-            })
-        : (spawnOptions: {
-            command: string;
-            args: string[];
-            cwd?: string;
-            env: Record<string, string | undefined>;
-            signal: AbortSignal;
-          }) => this.#spawnAsChildUser(spawnOptions);
+    const spawnFn = this.#gitSpawnFn();
     // **`options.signal` は「次の作業ツリーへ進む前」だけを止める。** 既に
     // 始めた1本の git 呼び出しは、`computeUnpushedWork` 自身のタイムアウトが
     // 満ちるまで走らせる——`apps/daemon/src/runner-client.ts` の `#call` と
@@ -2201,6 +2229,74 @@ class RunnerSession {
       managerId: this.#id,
       ...(options?.signal === undefined ? {} : { signal: options.signal }),
     });
+  }
+
+  /**
+   * 観測用の `git` を起こす口。SDK の子プロセスと同じ `#spawnAsChildUser` を通す
+   * （`childUser` が無い構成——ローカル実行——では素の `spawn`）。`unpushedWork`
+   * と `rescueRef` が共有する。
+   */
+  #gitSpawnFn(): (spawnOptions: {
+    command: string;
+    args: string[];
+    cwd?: string;
+    env: Record<string, string | undefined>;
+    signal: AbortSignal;
+  }) => ChildProcess {
+    return this.#childUser === undefined
+      ? (spawnOptions) =>
+          spawn(spawnOptions.command, spawnOptions.args, {
+            ...(spawnOptions.cwd === undefined ? {} : { cwd: spawnOptions.cwd }),
+            env: spawnOptions.env,
+            signal: spawnOptions.signal,
+            stdio: ['ignore', 'pipe', 'pipe'],
+          })
+      : (spawnOptions) => this.#spawnAsChildUser(spawnOptions);
+  }
+
+  /**
+   * 退避 ref を1回 push する（Issue #1266。`rescue-ref.ts`）。`Host` の周期と、
+   * 畳む直前（`stop()` の `captureUnpushedWork`）から呼ばれる。
+   *
+   * **同時に走るのは1本まで**——走っている間に呼ばれたら見送る（重ねない）。
+   * **投げない**（失敗は`rescue_ref` の `notPushed` として運ぶか、運ぶ変化が
+   * 無ければ黙る）。変化のあった作業ツリーがあるときだけ `rescue_ref` を emit する。
+   * 資格は `#childEnv()`（観測の git と同じ env）に在る。
+   */
+  async rescueRef(options: { signal?: AbortSignal; waitForRunning?: boolean } = {}): Promise<void> {
+    if (this.#rescueRunning !== null) {
+      // 周期の回が走行中。周期からの呼び出しは見送る（重ねない）。**畳む直前の回**
+      // （`waitForRunning`）は、走行中の回の終わりを待ってから自分の回を走らせる——
+      // 見送ると、畳む直前の変更が退避されないまま器が消える。待ちも `signal`
+      // （畳む直前の期限）の内側で、期限が来たら諦める。
+      if (options.waitForRunning !== true) return;
+      const running = this.#rescueRunning;
+      const aborted = new Promise<void>((resolve) => {
+        options.signal?.addEventListener('abort', () => resolve(), { once: true });
+      });
+      await Promise.race([running, aborted]);
+      if (this.#rescueRunning !== null || options.signal?.aborted === true) return;
+    }
+    const run = (async (): Promise<void> => {
+      try {
+        const worktrees = await runRescue(this.#cwd, {
+          managerId: this.#id,
+          spawn: this.#gitSpawnFn(),
+          env: this.#childEnv(),
+          memory: this.#rescueMemory,
+          ...(options.signal === undefined ? {} : { signal: options.signal }),
+        });
+        if (worktrees.length > 0) {
+          this.#emit({ type: 'rescue_ref', managerId: this.#id, worktrees });
+        }
+      } catch {
+        // 退避は best-effort。この1回の失敗でセッションを巻き込まない。
+      } finally {
+        this.#rescueRunning = null;
+      }
+    })();
+    this.#rescueRunning = run;
+    await run;
   }
 
   /**
@@ -2385,6 +2481,16 @@ class RunnerSession {
     // セッションを並行に畳むので、セッション数に関わらずこの1本ぶんしか
     // 上乗せしない。
     if (options.captureUnpushedWork === true) {
+      // 畳む直前にも1回退避する（Issue #1266）。**観測の emit は退避を待たない**
+      // （待たせると #2749 の競走の窓が広がる）。観測と並行に走らせ、観測を先に emit
+      // してから退避の終わりを待つ。走行中の周期の回が居ればその終わりを待つ
+      // （`waitForRunning`）。待ちと実行は同じ期限 `STOP_RESCUE_TIMEOUT_MS` の内側。
+      // **合計の見積もり**: 観測は最大 `STOP_UNPUSHED_WORK_TIMEOUT_MS`（5秒）と退避の
+      // 20秒は並行なので、畳みに足されるのは最大20秒——`FORCED_EXIT_MS`（55秒）の内側。
+      const rescued = this.rescueRef({
+        signal: AbortSignal.timeout(STOP_RESCUE_TIMEOUT_MS),
+        waitForRunning: true,
+      });
       const unpushedWork = await this.#finishUnpushedWorkFn({
         signal: AbortSignal.timeout(STOP_UNPUSHED_WORK_TIMEOUT_MS),
       })
@@ -2394,6 +2500,7 @@ class RunnerSession {
           reason: `確かめようとして例外が飛んだ: ${reasonOf(error)}`,
         }));
       this.#emit({ type: 'shutdown_unpushed_work', managerId: this.#id, unpushedWork });
+      await rescued;
     }
     this.#onClosed();
   }
@@ -2582,6 +2689,11 @@ class RunnerSession {
   }
 
   #buildSpec(resume?: string, forPeer = false): AgentManagerSessionSpec {
+    // **子プロセスへ実際に渡す env を1回だけ作り、そこから鍵の指紋を控える**（Issue #2877 PR2）。
+    // 指紋は `token_list` と同じ `fingerprintOf`（sha256 の先頭12桁）で、値そのものは持たない。
+    // **プロファイルが上書きした後の値を見る**（子が実際に掴む鍵）。peer のセッションは別物なので控えない。
+    const childEnv = this.#childEnv();
+    if (!forPeer) this.#tokenFingerprint = tokenFingerprintOf(childEnv);
     return {
       input: this.#inputStream(),
       // 既定は `opus`。人間が `ALTEROID_MANAGER_MODEL` に置いていればそれを使う
@@ -2607,7 +2719,7 @@ class RunnerSession {
       // 省けばマネージャーを差し替えた人が作業者まで巻き添えで動かすことになる。
       workerModel: resolveWorkerModel(this.#placedModelApplies ? this.#env : {}),
       cwd: this.#cwd,
-      env: this.#childEnv(),
+      env: childEnv,
       // 既定は閉じる。人間が `ALTEROID_MANAGER_AUTO_MEMORY=true` を置いたときだけ
       // 開く（north_star 禁止2「方針は設定で開けられなければならない」）。
       managerAutoMemoryEnabled: resolveManagerAutoMemoryEnabled(this.#env),

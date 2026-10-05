@@ -88,6 +88,7 @@ import type {
   Job,
   JobStatus,
   JournalEntryInput,
+  LastRescue,
   LastUnpushedWorkObservation,
   TextMarkup,
   UnpushedWorkObservationSource,
@@ -862,6 +863,11 @@ export interface ManagerSummary {
    * {@link lastUnpushedWorkObservationSchema}（`schema.ts`）の doc を見よ。
    */
   lastUnpushedWorkObservation?: LastUnpushedWorkObservation;
+  /**
+   * 走行中の定期的な退避 ref の push の記録（Issue #1266）。台帳
+   * （`Job.lastRescue`）をそのまま写すだけ。{@link lastRescueSchema}（`schema.ts`）。
+   */
+  lastRescue?: LastRescue;
 }
 
 /**
@@ -975,6 +981,29 @@ function unpushedWorkObservationOf(
         ...(source === undefined ? {} : { source }),
         reason: outcome.reason,
       };
+}
+
+/**
+ * runner から届いた退避の結果を台帳へ重ねる（Issue #1266）。`relativePath` ごとに
+ * 置き換え、届かなかった作業ツリーは前のまま残す。`pushed` は新しい回が持たなければ
+ * 前のものを引き継ぐ。
+ */
+export function mergeRescue(
+  previous: LastRescue | undefined,
+  incoming: LastRescue['worktrees'],
+  at: string,
+): LastRescue {
+  const byPath = new Map((previous?.worktrees ?? []).map((w) => [w.relativePath, w]));
+  for (const tree of incoming) {
+    const before = byPath.get(tree.relativePath);
+    byPath.set(tree.relativePath, {
+      ...tree,
+      ...(tree.pushed === undefined && before?.pushed !== undefined
+        ? { pushed: before.pushed }
+        : {}),
+    });
+  }
+  return { at, worktrees: [...byPath.values()] };
 }
 
 /**
@@ -2826,7 +2855,7 @@ export interface ManagerPoolOptions {
    * いま撒かれている認証トークンの身元（Issue #393 PR3）。**マネージャーの
    * セッションを起こす瞬間に1度だけ読む。**
    */
-  tokenIdentity?: () => { tokenId: string; generation: number } | undefined;
+  tokenIdentity?: () => { tokenId: string; generation: number; fingerprint?: string } | undefined;
   /**
    * 枠の観測を回し手へ渡す口（Issue #393 PR3）。**このプールは回すかどうかを
    * 判断しない。**
@@ -4893,7 +4922,8 @@ class Pool implements ManagerPool {
    * {@link Pool.resumeStoppedByUsage} の印が #914 で同じ「揮発してよい」を誤りと
    * 認めて台帳の写しを入れたのと同じ形になる）。
    */
-  readonly #tokenIdentity: (() => { tokenId: string; generation: number } | undefined) | undefined;
+  readonly #tokenIdentity:
+    (() => { tokenId: string; generation: number; fingerprint?: string } | undefined) | undefined;
   readonly #syncRunnerToken: ((runner: RunnerClient) => Promise<void>) | undefined;
   readonly #onWorkerToolEvent: ((event: WorkerToolEvent) => void) | undefined;
   readonly #onUsageObservation:
@@ -5882,9 +5912,13 @@ class Pool implements ManagerPool {
      * 経路へ落とす**（会話は同じ sessionId で続く）。畳んでよくない理由が残っていれば
      * 畳まずに断る（`#foldStaleTokenSession` の doc）。
      */
-    if (record.attached && record.job.status === 'done') {
-      const declined = await this.#foldStaleTokenSession(record, runner, managerId);
-      if (declined !== undefined) return declined;
+    // **台帳が「繋がっていない」done（デーモン再起動後など）も通す**（#2877 PR2）。runner に旧プロセスが
+    // 生きていれば、その鍵の指紋で見る。
+    let fingerprintMatched = false;
+    if (record.job.status === 'done') {
+      const folded = await this.#foldStaleTokenSession(record, runner, managerId);
+      if (folded.declined !== undefined) return folded.declined;
+      fingerprintMatched = folded.fingerprintMatched === true;
     }
 
     /*
@@ -6023,6 +6057,12 @@ class Pool implements ManagerPool {
         record.sessionMissingKind = undefined;
         reentered = true;
       }
+      // **旧プロセスの鍵が現役と指紋で確かめられた回は、世代を書いてよい**（#2877 PR2）。`#resume` は
+      // 短絡した回に世代を書かないので、ここで追いつかせ、「確かめていない」の断りも外す。
+      if (fingerprintMatched) {
+        this.#rememberTokenIdentity(managerId);
+        this.#resumedIntoLiveProcess.delete(managerId);
+      }
     }
 
     /*
@@ -6134,42 +6174,97 @@ class Pool implements ManagerPool {
     record: ManagerRecord,
     runner: RunnerClient,
     managerId: string,
-  ): Promise<ManagerSendResult | undefined> {
+  ): Promise<{ declined?: ManagerSendResult; fingerprintMatched?: true }> {
     const held = this.#tokenIdentities.get(managerId)?.generation;
-    const active = this.#tokenIdentity?.()?.generation;
-    // **一覧の ⚠ と同じ判定**（`tokenGenerationMismatched`）。ここで別の式を書かない。
-    if (
-      !tokenGenerationMismatched({ tokenGeneration: held, activeTokenGeneration: active }) ||
-      held === undefined ||
-      active === undefined
-    ) {
-      return undefined;
+    const identity = this.#tokenIdentity?.();
+    const active = identity?.generation;
+    const activeFingerprint = identity?.fingerprint;
+
+    // **台帳が「繋がっている」とき（#2851）は、世代の食い違いで見る。** 一覧の ⚠ と同じ判定
+    // （`tokenGenerationMismatched`）。ここで別の式を書かない。
+    if (record.attached) {
+      if (
+        !tokenGenerationMismatched({ tokenGeneration: held, activeTokenGeneration: active }) ||
+        held === undefined ||
+        active === undefined
+      ) {
+        return {};
+      }
+    } else {
+      /*
+       * **台帳が「繋がっていない」done（デーモン再起動後など）は、まず10秒ごとの生存確認の観測で見る**
+       * （#2877 PR2。往復を足さない——普段の経路で `runner.list()` を増やさないこと。
+       * `manager-lease.test.ts` の #669 が固定している）。観測は最大10秒古い。
+       *
+       * - 観測に指紋が無い（欄の無い古い runner・まだ観測が来ていない）・現役の指紋が分からない:
+       *   確かめられない。**断らず流して、世代は書かない**
+       * - 観測が現役と一致: 流して世代を書く（旧プロセスの鍵が凍っている以上、いま現役と一致して
+       *   いるなら、その後も一致している）
+       * - 観測が食い違い: **その場で `runner.list()` を1回取り直して確かめる**（観測は古く、走っている
+       *   セッションを畳まないため）
+       */
+      const observed = this.#observedTokenFingerprint(record.job.runnerId, managerId);
+      if (observed === undefined || activeFingerprint === undefined) return {};
+      if (observed === activeFingerprint) return { fingerprintMatched: true };
     }
 
     let listing: RunnerManagerListing;
     try {
       listing = await listRunnerManagers(runner);
     } catch (error) {
+      // 台帳が「繋がっていない」側は、一覧が読めなくても従来どおり進める（何も悪化させない）。
+      if (!record.attached) return {};
       return {
-        outcome: 'declined',
-        detail:
-          `${managerId} は認証トークンの世代が食い違っている（世代 ${String(held)} を抱えたまま、` +
-          `現役は世代 ${String(active)}）が、runner の状態を読めなかった（${reasonOf(error)}）ため、` +
-          '背景処理や確認待ちが残っているか分からない。畳んでいないし、古い鍵のセッションへも送っていない。' +
-          '少し置いてから送り直すこと。',
+        declined: {
+          outcome: 'declined',
+          detail:
+            `${managerId} は認証トークンの世代が食い違っている（世代 ${String(held)} を抱えたまま、` +
+            `現役は世代 ${String(active)}）が、runner の状態を読めなかった（${reasonOf(error)}）ため、` +
+            '背景処理や確認待ちが残っているか分からない。畳んでいないし、古い鍵のセッションへも送っていない。' +
+            '少し置いてから送り直すこと。',
+        },
       };
     }
     const state = listing.states.find((entry) => entry.managerId === managerId);
     if (state === undefined) {
+      // runner に生きたセッションが居ない。下の既存の経路（resume で新しい鍵で起きる）が拾う。
+      if (!listing.unreadableIds.includes(managerId)) return {};
       // 読めない形で在るなら「居る」側に数える（#1661）。数えずに通すと、下の既存の経路が
       // 旧セッションへ送りうる。
-      if (!listing.unreadableIds.includes(managerId)) return undefined;
+      if (!record.attached) return {};
       return {
-        outcome: 'declined',
-        detail:
-          `${managerId} は認証トークンの世代が食い違っているが、runner が返した状態が読めず、` +
-          '背景処理や確認待ちが残っているか分からない。送っていない。',
+        declined: {
+          outcome: 'declined',
+          detail:
+            `${managerId} は認証トークンの世代が食い違っているが、runner が返した状態が読めず、` +
+            '背景処理や確認待ちが残っているか分からない。送っていない。',
+        },
       };
+    }
+
+    /*
+     * **台帳が「繋がっていない」のに runner に旧プロセスが生きている**（デーモン再起動後の done
+     * など。#2877 PR2）。世代は再起動で失われているので、**セッションが起動時に掴んだ鍵の指紋**
+     * （`token_list` と同じ `fingerprintOf`。値は持たない）と現役の指紋で比べる。
+     *
+     * - 一致: 旧プロセスの鍵は現役である。流してよく、世代を書いてよい（`fingerprintMatched`）
+     * - 読めない（欄の無い古い runner・現役の指紋が分からない）: **断らず、流して世代は書かない**
+     *   （再起動後の done へ送れなくなるのは能力の削除になる。世代は `#resume` が書かない）
+     * - 食い違い: #2851 と同じ畳み直し。残っていれば断る
+     */
+    let staleness: string;
+    if (record.attached) {
+      staleness =
+        `認証トークンの世代が食い違っている（世代 ${String(held)} を抱えたまま、` +
+        `現役は世代 ${String(active)}）`;
+    } else {
+      const sessionFingerprint = state.tokenFingerprint;
+      if (sessionFingerprint === undefined || activeFingerprint === undefined) return {};
+      if (sessionFingerprint === activeFingerprint) return { fingerprintMatched: true };
+      // 指紋は秘密ではない（sha256 の先頭12桁。`token_list` に出るものと同じ）。値は出さない。
+      staleness =
+        '生きている旧セッションが起動時に掴んだ鍵の指紋が現役と食い違っている' +
+        `（セッション ${sessionFingerprint} / 現役 ${activeFingerprint}）`;
     }
 
     const blockers: string[] = [];
@@ -6185,17 +6280,22 @@ class Pool implements ManagerPool {
     if (record.job.sessionId === undefined) {
       blockers.push('会話を引き継ぐ sessionId が無い（畳むと会話が切れる）');
     }
+    // 観測は最大10秒古いので、取り直した結果でターンが走っていれば畳まない（#2877 PR2）。
+    if (!record.attached && state.status === 'running') {
+      blockers.push('runner のセッションはいまターンが走っている（畳むと走っている仕事を失う）');
+    }
     if (blockers.length > 0) {
       return {
-        outcome: 'declined',
-        detail:
-          `${managerId} は認証トークンの世代が食い違っている（世代 ${String(held)} を抱えたまま、` +
-          `現役は世代 ${String(active)}）。古い鍵のセッションへ流すとまた枠に当たるので、` +
-          '畳んで新しい鍵で起こし直したいが、畳めない理由が残っている: ' +
-          `${blockers.join('。')}。畳んでいないし、送ってもいない。` +
-          '取れる手: (1) 背景処理・確認待ちが終わるのを待ってから送り直す。' +
-          '(2) 残っているものを捨ててよいなら manager_stop → manager_start で後継を起こす' +
-          '（manager_stop は残っている仕事ごと畳む）。',
+        declined: {
+          outcome: 'declined',
+          detail:
+            `${managerId} は${staleness}。古い鍵のセッションへ流すとまた枠に当たるので、` +
+            '畳んで新しい鍵で起こし直したいが、畳めない理由が残っている: ' +
+            `${blockers.join('。')}。畳んでいないし、送ってもいない。` +
+            '取れる手: (1) 背景処理・確認待ちが終わるのを待ってから送り直す。' +
+            '(2) 残っているものを捨ててよいなら manager_stop → manager_start で後継を起こす' +
+            '（manager_stop は残っている仕事ごと畳む）。',
+        },
       };
     }
 
@@ -6222,28 +6322,27 @@ class Pool implements ManagerPool {
       .catch(() => undefined);
     if (gone !== true) {
       return {
-        outcome: 'declined',
-        detail:
-          `${managerId} の旧セッションを畳めたと確かめられなかった` +
-          `（${gone === false ? 'runner の一覧にまだ残っている' : '一覧を読めなかった'}` +
-          `${stopError === undefined ? '' : `。runner.stop() が例外を投げた: ${reasonOf(stopError)}`}）。` +
-          '二重に起こさないので resume していないし、送ってもいない。少し置いてから送り直すこと。',
+        declined: {
+          outcome: 'declined',
+          detail:
+            `${managerId} の旧セッションを畳めたと確かめられなかった` +
+            `（${gone === false ? 'runner の一覧にまだ残っている' : '一覧を読めなかった'}` +
+            `${stopError === undefined ? '' : `。runner.stop() が例外を投げた: ${reasonOf(stopError)}`}）。` +
+            '二重に起こさないので resume していないし、送ってもいない。少し置いてから送り直すこと。',
+        },
       };
     }
 
     // 4. 台帳を「セッションは無い」に揃えて、呼び出し側の既存の resume へ落とす。
-    // **書き残してから進む**（404 で訂正する経路と同じ）。畳んだ後・resume の前に
-    // daemon が落ちても、台帳が「繋がっている」のまま残らない。
     record.attached = false;
-    await this.#persist(record);
     await this.#journal({
       type: 'decision',
-      decision: `[${managerId}] 認証トークンの世代が食い違った done の委譲を、畳んで新しい鍵で起こし直す`,
+      decision: `[${managerId}] done の委譲を、畳んで新しい鍵で起こし直す（${staleness}）`,
       grounds:
-        `managerId=${managerId} 抱えていた世代=${String(held)} 現役の世代=${String(active)} ` +
-        'liveBackgroundTasks=0 確認待ち=0（#2851。旧セッションへ流すと古い鍵のまま走る）',
+        `managerId=${managerId} liveBackgroundTasks=0 確認待ち=0` +
+        '（#2851 / #2877。旧セッションへ流すと古い鍵のまま走る）',
     });
-    return undefined;
+    return {};
   }
 
   /**
@@ -6463,6 +6562,23 @@ class Pool implements ManagerPool {
         record.sessionMissingKind = 'unlisted';
       }
     }
+  }
+
+  /**
+   * 生存確認が名簿へ立てた観測から、その委譲のセッションが起動時に掴んだ鍵の**指紋**を引く
+   * （#2877 PR2。往復は足さない。最大10秒古い）。**聞けていない・欄を返さない runner のときは
+   * `undefined`**（「分からない」）。値は持たない。
+   */
+  #observedTokenFingerprint(runnerId: string | undefined, managerId: string): string | undefined {
+    if (runnerId === undefined) return undefined;
+    for (const entry of this.#runners.entries()) {
+      if (entry.runnerId !== runnerId) continue;
+      const fingerprints = entry.sessionTokenFingerprints;
+      if (fingerprints !== undefined && Object.hasOwn(fingerprints, managerId)) {
+        return fingerprints[managerId];
+      }
+    }
+    return undefined;
   }
 
   /**
@@ -13023,6 +13139,49 @@ class Pool implements ManagerPool {
         return;
       }
 
+      case 'rescue_ref': {
+        /*
+         * **走行中の退避 ref の結果（Issue #1266）。** runner のタイマーが
+         * 作業ツリーを動かさずに `refs/alteroid-rescue/…` へ push した結果を
+         * 台帳（`Job.lastRescue`）へ積む。`relativePath` ごとに置き換え、
+         * `pushed`（最後に成功した退避）は新しい回が持たなければ前のものを残す
+         * （後の回が「送らなかった」でも、remote の ref はまだ在る）。
+         *
+         * **`closed` / `shutdown_unpushed_work` と違い、走行中に届く**——器が
+         * 入れ替わる最後の瞬間に頼らない。`status` / `lease` には触れない。
+         *
+         * 鍵らしい文字列で止めた回（`secret-like`）は日誌へ残す（ファイル名
+         * だけ。文字列そのものは持ってこない。runner が運ぶ時点で持っていない）。
+         */
+        const at = new Date(this.#now()).toISOString();
+        const previousRescue = record.job.lastRescue;
+        record.job.lastRescue = mergeRescue(previousRescue, event.worktrees, at);
+        for (const tree of event.worktrees) {
+          if (tree.notPushed?.reason !== 'secret-like') continue;
+          // 運び直し（runner は変わらない結果も30分ごとに運ぶ）で同じ日誌を積まない。
+          const before = previousRescue?.worktrees.find(
+            (w) => w.relativePath === tree.relativePath,
+          )?.notPushed;
+          if (
+            before?.reason === 'secret-like' &&
+            JSON.stringify(before.files ?? []) === JSON.stringify(tree.notPushed.files ?? [])
+          ) {
+            continue;
+          }
+          await this.#journal({
+            type: 'decision',
+            decision:
+              `作業ツリー ${tree.relativePath} の退避 ref は、鍵らしい文字列を差分に ` +
+              '見つけたので送らなかった。',
+            grounds:
+              `当たったファイル: ${(tree.notPushed.files ?? []).join(', ') || '(不明)'}。` +
+              '文字列そのものは記録しない。取り除くか伏せれば次の周期で送られる。',
+          });
+        }
+        await this.#persist(record);
+        return;
+      }
+
       case 'tool_running':
       case 'tool_end': {
         // **日誌に書かない（Issue #2725）。`#journal` を呼ばない。** 稼働の地図の
@@ -13481,7 +13640,11 @@ class Pool implements ManagerPool {
   #rememberTokenIdentity(managerId: string): void {
     const identity = this.#tokenIdentity?.();
     if (identity === undefined) return;
-    this.#tokenIdentities.set(managerId, identity);
+    // **指紋は持ち込まない**（観測に添える身元は tokenId と世代だけ。指紋は `send()` が現役の側から読む）。
+    this.#tokenIdentities.set(managerId, {
+      tokenId: identity.tokenId,
+      generation: identity.generation,
+    });
     const record = this.#records.get(managerId);
     if (record !== undefined) record.reattachedAcrossRestart = undefined;
   }
@@ -15442,6 +15605,7 @@ function summaryOf(
     ...(job.lastUnpushedWorkObservation === undefined
       ? {}
       : { lastUnpushedWorkObservation: job.lastUnpushedWorkObservation }),
+    ...(job.lastRescue === undefined ? {} : { lastRescue: job.lastRescue }),
     /*
      * **`live` と同じ引数の作法で運ぶ（省略可能な引数にしない）。** 材料は台帳
      * ではなく `Pool` の在庫（`#withheldReports`）なので、`record` からは読め

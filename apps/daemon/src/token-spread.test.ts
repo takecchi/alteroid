@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   createMemoryStores,
+  fingerprintOf,
   createTokenRotator,
   type RunnerClient,
   type RunnerRegistry,
@@ -351,5 +352,31 @@ describe('現役が戻らなくなっても、資格箱を勝手に書き換え�
 
     // **`exhausted` は何も撒かないので、runner の資格箱は1回も呼ばれていない。**
     expect(runner.calls).toEqual([]);
+  });
+});
+
+/**
+ * **箱の `identity()` が現役の鍵の指紋を添える**（Issue #2877 PR2）。マネージャーの台帳が、
+ * runner の旧セッションが起動時に掴んだ鍵（`RunnerManagerState.tokenFingerprint`）と比べる相手。
+ * `token_list` と同じ `fingerprintOf`（sha256 の先頭12桁）で、値そのものは載せない。
+ */
+describe('AgentTokenHolder#identity() は現役の鍵の指紋を添える（#2877 PR2）', () => {
+  it('値を置いたら指紋が付き、値そのものは載らない。置き直せば指紋も変わる', () => {
+    const holder = createAgentTokenHolder();
+    holder.set(SECRET, { tokenId: 'tok-a', generation: 3 });
+
+    const identity = holder.identity();
+
+    expect(identity?.tokenId).toBe('tok-a');
+    expect(identity?.generation).toBe(3);
+    expect(identity?.fingerprint).toBe(fingerprintOf(SECRET));
+    expect(JSON.stringify(identity)).not.toContain(SECRET);
+
+    holder.set('sk-ant-oat-another', { tokenId: 'tok-b', generation: 4 });
+    expect(holder.identity()?.fingerprint).toBe(fingerprintOf('sk-ant-oat-another'));
+  });
+
+  it('まだ何も置いていなければ身元は undefined（指紋を捏造しない）', () => {
+    expect(createAgentTokenHolder().identity()).toBeUndefined();
   });
 });

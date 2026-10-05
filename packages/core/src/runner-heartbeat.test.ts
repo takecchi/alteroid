@@ -50,6 +50,8 @@ class FakeRunner implements RunnerClient {
   sessionsToReturn: string[] = [];
   /** `list()` が欄 `liveBackgroundTasks` を載せる委譲と本数（載せない委譲は古い runner の形）。 */
   backgroundToReturn: Record<string, number> = {};
+  /** `list()` が欄 `tokenFingerprint` を載せる委譲と指紋（載せない委譲は古い runner の形）。 */
+  fingerprintToReturn: Record<string, string> = {};
   /** `list()` を叩かれた回数。 */
   listCalls = 0;
   /** 直近の `list()` 呼び出しへ渡された `signal`（期限で中断されるかを見る）。 */
@@ -98,6 +100,9 @@ class FakeRunner implements RunnerClient {
       waiting: [],
       ...(Object.hasOwn(this.backgroundToReturn, managerId)
         ? { liveBackgroundTasks: this.backgroundToReturn[managerId] }
+        : {}),
+      ...(Object.hasOwn(this.fingerprintToReturn, managerId)
+        ? { tokenFingerprint: this.fingerprintToReturn[managerId] }
         : {}),
     }));
   }
@@ -394,6 +399,24 @@ describe('runner の生存判定', () => {
  * 仕事を取り上げないことを、ここで直接固定する。
  */
 describe('runner が抱えているセッションの観測（#579）', () => {
+  it('list() が返した鍵の指紋を、欄を名乗った委譲だけ sessionTokenFingerprints に載せる（#2877 PR2。値は持たない）', async () => {
+    vi.setSystemTime(new Date('2026-10-05T00:00:00.000Z'));
+    const runner = new FakeRunner('runner-a');
+    runner.sessionsToReturn = ['mgr-new', 'mgr-old'];
+    runner.fingerprintToReturn = { 'mgr-new': 'aaaaaaaaaaaa' };
+    const registry = createRunnerRegistry([]);
+    await registry.register({ label: 'http://runner:4518', open: async () => runner });
+
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    const [entry] = registry.entries();
+    expect(entry?.sessionTokenFingerprints).toEqual({ 'mgr-new': 'aaaaaaaaaaaa' });
+    // 欄を返さない古い runner の委譲は、キー自体が無い（分からない）。
+    expect(entry?.sessionTokenFingerprints).not.toHaveProperty('mgr-old');
+
+    await registry.stop();
+  });
+
   it('list() が返した背景処理の本数を、欄を名乗った委譲だけ sessionBackgroundTasks に載せる（#2851。0 を捏造しない）', async () => {
     vi.setSystemTime(new Date('2026-10-05T00:00:00.000Z'));
     const runner = new FakeRunner('runner-a');

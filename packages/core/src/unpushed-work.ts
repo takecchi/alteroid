@@ -39,6 +39,11 @@ import type { UnpushedWorkResult, UnpushedWorkTree } from './runner-protocol.js'
  * 3. **出す粒度** — 作業ツリーのパス（相対）・枝名・未 push コミット数・
  *    未コミットの変更の件数まで。**⛔ ファイル名・差分の中身・コミット
  *    メッセージ・author は一切出さない。**
+ *    **例外が1つある（オーナー決定 2026-10-05、Issue #1266）: 未追跡の
+ *    パスは、退避されなかったものとして名前だけを出す**（`rescue-ref.ts`
+ *    が `Job.lastRescue.worktrees[].untracked` へ。件数と、上限つきのパスの
+ *    名前。中身は出さない。この `computeUnpushedWork` の戻り値の形は変えて
+ *    いない——名前を出すのは退避 ref の台帳だけである）。
  *
  * ## 3.5. Issue #1376 B2 で、上の境界に1点だけ穴を開けた
  *
@@ -908,5 +913,45 @@ export async function computeUnpushedWork(
     ...(scratchRoots.unknownReason === undefined
       ? {}
       : { scratchRootsUnknown: scratchRoots.unknownReason }),
+  };
+}
+
+/**
+ * 退避 ref（`rescue-ref.ts`、Issue #1266）が作業ツリーを列挙する口。
+ * `computeUnpushedWork` と**同じ探索**（`cwd` と、`managerId` に当たる `/tmp`
+ * スクラッチ）で、絶対パスと `describeWorktreePath` の相対パスの組を返す。
+ * `computeUnpushedWork` は絶対パスを返さない約束なので別の口にした。
+ * `cwd` が読めなければ `unreadable` に理由を載せて空で返す（投げない）。
+ */
+export async function listWorktreeRoots(
+  cwd: string,
+  options: {
+    managerId: string;
+    tmpRootDir?: string;
+    maxWorktrees?: number;
+    readdirFn?: ReaddirFn;
+  },
+): Promise<{
+  worktrees: { repoRoot: string; relativePath: string }[];
+  truncatedAtCount?: number;
+  unreadable?: string;
+}> {
+  const scratchRoots = await findManagerScratchRoots(
+    options.tmpRootDir ?? MANAGER_SCRATCH_TMP_ROOT,
+    options.managerId,
+  );
+  const found = await findGitDirsAcrossRoots([cwd, ...scratchRoots.paths], {
+    maxCount: options.maxWorktrees,
+    readdirFn: options.readdirFn,
+  });
+  if (found.rootUnreadable !== undefined) {
+    return { worktrees: [], unreadable: found.rootUnreadable };
+  }
+  return {
+    worktrees: found.paths.map((repoRoot) => ({
+      repoRoot,
+      relativePath: describeWorktreePath(cwd, repoRoot),
+    })),
+    ...(found.truncatedAtCount === undefined ? {} : { truncatedAtCount: found.truncatedAtCount }),
   };
 }

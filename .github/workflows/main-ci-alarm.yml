@@ -54,6 +54,7 @@ on:
     workflows:
       - CI
       - release/prod へ反映
+      - storage-pg を本物の PostgreSQL で
     types: [completed]
 
 # **同じ run に対して二重に走らせない。** `workflow_run` は再実行でも起きる。

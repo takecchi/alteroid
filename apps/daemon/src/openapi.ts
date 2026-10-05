@@ -1386,6 +1386,11 @@ export const managerSummarySchema = z.object({
    * `resetTimeSkewMatch` と同じ断り）。
    */
   lastUnpushedWorkObservation: jobSchema.shape.lastUnpushedWorkObservation,
+  /**
+   * 走行中の定期的な退避 ref の push の記録（Issue #1266。`Job.lastRescue`）。
+   * **ここに宣言しないと、値が在っても黙って落ちる。**
+   */
+  lastRescue: jobSchema.shape.lastRescue,
   waiting: z.array(managerWaitingSchema),
   /**
    * 確認へ上がらずに止められた道具と件数（**古い順**）。

@@ -2,12 +2,13 @@ import { join } from 'node:path';
 
 import type { Options, Query, SDKMessage, query as sdkQuery } from '@anthropic-ai/claude-agent-sdk';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { z } from 'zod';
 
 import { makeTempDirSync } from '../../../vitest.tmpdir.js';
 
-import { createCredentialStore } from './credentials.js';
+import { createCredentialStore, fingerprintOf } from './credentials.js';
 import { createRunnerHost, type RunnerHost } from './runner.js';
-import type { RunnerEvent } from './runner-protocol.js';
+import { runnerManagerStateSchema, type RunnerEvent } from './runner-protocol.js';
 
 /**
  * **走行中のマネージャーのセッションに、回した認証トークンを届ける**
@@ -884,5 +885,115 @@ describe('resume が生きた旧プロセスへ短絡したかを応答で名乗
     opened.finish('終わり');
     expect(s.startedOptions[0]?.resume).toBe('sess-9');
     expect(s.startedOptions[0]?.env?.CLAUDE_CODE_OAUTH_TOKEN).toBe(OLD_TOKEN);
+  });
+});
+
+/**
+ * **セッションが起動時に掴んだ鍵の指紋を、`list()` で運ぶ**（Issue #2877 PR2）。
+ * デーモンが、台帳が「繋がっていない」のに生きている旧プロセスの鍵が現役かを確かめる材料。
+ * 指紋は `token_list` と同じ `fingerprintOf`（値は載せない）。
+ */
+describe('list() が、セッションが起動時に掴んだ鍵の指紋を運ぶ（#2877 PR2）', () => {
+  it('起動時の鍵の指紋を返す。値そのものは載せない', async () => {
+    const s = setup();
+    await s.host.start({ managerId: 'mgr-1', request: '調べて', cwd: '/work/project' });
+    const first = await nthSession(s.sessions, 0);
+
+    const [state] = s.host.list();
+
+    expect(state?.tokenFingerprint).toBe(fingerprintOf(OLD_TOKEN));
+    expect(JSON.stringify(s.host.list())).not.toContain(OLD_TOKEN);
+    first.finish('終わり');
+  });
+
+  it('⚠️ 鍵が回っても、境界に達していない旧セッションは古い指紋のまま。畳み直した後は新しい指紋', async () => {
+    // 入力を伴わない背景処理の完了で畳み直す形は、入力と対にならない偽 SDK でしか作れない。
+    const s = setupOutOfBand();
+    await s.host.start({ managerId: 'mgr-1', request: '調べて', cwd: '/work/project' });
+    const first = await nthOutOfBandSession(s.sessions, 0);
+    first.backgroundTasksChanged([{ id: 'bg-1', taskType: 'shell' }]);
+    first.say('完了を待つ');
+    first.finish('完了を待つ');
+    await reportEvents(s.events, 1);
+    const NEW_TOKEN = 'token-fake-new-2877-fp';
+    await s.host.setCredentials([{ name: 'CLAUDE_CODE_OAUTH_TOKEN', value: NEW_TOKEN }]);
+
+    // 背景処理が残っているので旧プロセスのまま（古い指紋）。
+    expect(s.host.list()[0]?.tokenFingerprint).toBe(fingerprintOf(OLD_TOKEN));
+
+    // 片付くと境界に達して畳み直され、新しい鍵で開き直す。
+    first.backgroundTasksChanged([]);
+    await nthOutOfBandSession(s.sessions, 1);
+    expect(s.host.list()[0]?.tokenFingerprint).toBe(fingerprintOf(NEW_TOKEN));
+    expect(JSON.stringify(s.host.list())).not.toContain(NEW_TOKEN);
+  });
+});
+
+/**
+ * **古い daemon が、`tokenFingerprint` 付きの runner の応答を落とさず読める**（#2877 PR2）。
+ *
+ * daemon と runner は別々にデプロイされる。新しい runner の `GET /managers`（＝ `host.list()`）に
+ * 古い daemon がまだ知らない欄が載っても、古い daemon の読み口が落ちてはならない。
+ * **本物の `schema` が strict でないことには頼らない**——PR2 より前の形（`tokenFingerprint` の欄が
+ * 無い。`liveBackgroundTasks` は main の形に合わせて在る）を、ここに手で再現する。
+ * 本物の新しい runner の `state()` の出力を食わせ、既存の欄が欠けずに読めることを確かめる。
+ */
+describe('古い daemon の schema が、tokenFingerprint 付きの応答を落とさず読める（#2877 PR2）', () => {
+  // PR2 より前の `runnerManagerStateSchema` の写し（手書き。本物の schema を `omit` しない）。
+  const legacyRunnerManagerStateSchema = z.object({
+    managerId: z.string(),
+    status: z.string(),
+    cwd: z.string(),
+    request: z.string(),
+    waiting: z.array(
+      z.object({
+        requestId: z.string(),
+        summary: z.string(),
+        kind: z.string(),
+        askedAt: z.string(),
+      }),
+    ),
+    sessionId: z.string().optional(),
+    liveBackgroundTasks: z.number().int().nonnegative().optional(),
+  });
+
+  it('本物の新しい runner の state()（tokenFingerprint 付き）を、古い schema がそのまま読める', async () => {
+    const s = setup();
+    await s.host.start({ managerId: 'mgr-1', request: '調べて', cwd: '/work/project' });
+    const first = await nthSession(s.sessions, 0);
+    const listed = s.host.list();
+    // 前提: 新しい runner は指紋を載せている（古い daemon にとっては未知の欄）。
+    expect(listed[0]?.tokenFingerprint).toBe(fingerprintOf(OLD_TOKEN));
+
+    const parsed = z.array(legacyRunnerManagerStateSchema).safeParse(listed);
+
+    expect(parsed.success).toBe(true);
+    expect(parsed.data?.[0]).toMatchObject({
+      managerId: 'mgr-1',
+      status: listed[0]?.status,
+      cwd: '/work/project',
+      request: '調べて',
+      waiting: [],
+    });
+    first.finish('終わり');
+  });
+
+  it('将来だれかが本物の schema を .strict() にしたら落ちる（未知の欄を捨てて読めること自体を固定する）', () => {
+    // 古い daemon は「自分の知らない欄を捨てて読む」本物の schema を持っている。
+    // 本物の schema に未知の欄が付いた応答を食わせて、成功することを要求する。
+    const withFutureField = {
+      managerId: 'mgr-1',
+      status: 'running',
+      cwd: '/work/project',
+      request: '調べて',
+      waiting: [],
+      tokenFingerprint: 'aaaaaaaaaaaa',
+      someFutureField: 'まだ誰も知らない欄',
+    };
+
+    const parsed = runnerManagerStateSchema.safeParse(withFutureField);
+
+    expect(parsed.success).toBe(true);
+    expect(parsed.data).toMatchObject({ managerId: 'mgr-1', cwd: '/work/project' });
   });
 });

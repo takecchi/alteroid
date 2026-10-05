@@ -1193,7 +1193,7 @@ export interface CloneOptions {
    * これが無いと、回し手は「もう回した後の通知」を見分けられない
    * （`observationFreshness` が `unknown` へ落ちる）。
    */
-  tokenIdentity?: () => { tokenId: string; generation: number } | undefined;
+  tokenIdentity?: () => { tokenId: string; generation: number; fingerprint?: string } | undefined;
   /**
    * 枠の観測を回し手へ渡す口（Issue #393 PR3）。
    *
@@ -2261,7 +2261,8 @@ class Clone implements CloneHost {
    * なる。
    */
   readonly #credentials: (() => Record<string, string>) | undefined;
-  readonly #tokenIdentity: (() => { tokenId: string; generation: number } | undefined) | undefined;
+  readonly #tokenIdentity:
+    (() => { tokenId: string; generation: number; fingerprint?: string } | undefined) | undefined;
   /** {@link CloneOptions.provider}。 */
   readonly #provider: Pick<AgentProvider, 'id' | 'capabilities'>;
   readonly #onUsageObservation:

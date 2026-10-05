@@ -201,6 +201,7 @@ import type {
   MemoryDocKind,
   MemoryDocumentMeta,
   MemoryProtectionStatus,
+  RescueNotPushedReason,
   PendingApproval,
   Practice,
   ScheduleSpec,
@@ -4013,6 +4014,68 @@ function unpushedWorkObservationIncompleteSuffix(
 }
 
 function describeUnpushedWorkObservation(manager: ManagerSummary): string | null {
+  const observation = describeUnpushedWorkObservationOnly(manager);
+  const rescue = describeRescue(manager);
+  if (rescue === null) return observation;
+  return observation === null ? rescue : `${observation}\n${rescue}`;
+}
+
+/** 退避されなかった理由の言い方（`rescueNotPushedReasonSchema`）。 */
+const RESCUE_NOT_PUSHED_TEXT: Record<RescueNotPushedReason, string> = {
+  'nothing-tracked': '追跡済みの変更・未 push のコミットが無く送るものが無かった',
+  'secret-like': '鍵らしい文字列のため送らなかった',
+  'too-large': '差分が判定の上限を超えたため送らなかった',
+  'no-credential': '資格が無いので退避できなかった',
+  'no-remote': 'origin が無いので退避できなかった',
+  'push-failed': 'push に失敗した',
+  error: '退避 commit を作れなかった',
+  timeout: '期限で打ち切られた（次の周期でまた試す）',
+};
+
+/**
+ * 走行中の退避 ref（`Job.lastRescue`。Issue #1266）の行。**台帳を写すだけ**で、
+ * 新しい往復は払わない。**無ければ `null`（1文字も増えない）。** 作業ツリーごとに
+ * 退避 ref の名前と sha・時刻、直近に送らなかった理由、「退避されなかったもの」
+ * （未追跡の件数と名前・submodule）を出す。名前だけで中身は出さない。
+ */
+export function describeRescue(manager: ManagerSummary): string | null {
+  const rescue = manager.lastRescue;
+  if (rescue === undefined || rescue.worktrees.length === 0) return null;
+  const lines = [`  退避 ref（走行中に自動で push。${rescue.at} に最後に更新）:`];
+  for (const tree of rescue.worktrees) {
+    const parts: string[] = [];
+    if (tree.pushed !== undefined) {
+      parts.push(`${tree.pushed.ref}（${tree.pushed.commit.slice(0, 8)}, ${tree.pushed.at}）`);
+    } else {
+      parts.push('退避された ref は無い');
+    }
+    if (tree.notPushed !== undefined) {
+      const extra =
+        tree.notPushed.reason === 'push-failed' && tree.notPushed.failureKind !== undefined
+          ? `（${tree.notPushed.failureKind}）`
+          : tree.notPushed.reason === 'secret-like' && (tree.notPushed.files?.length ?? 0) > 0
+            ? `（${(tree.notPushed.files ?? []).join(', ')}）`
+            : '';
+      parts.push(`直近の回: ${RESCUE_NOT_PUSHED_TEXT[tree.notPushed.reason]}${extra}`);
+    }
+    lines.push(`    ${tree.relativePath}: ${parts.join('。')}`);
+    const unsaved: string[] = [];
+    if (tree.untracked !== undefined) {
+      const shown = tree.untracked.paths.slice(0, 5).join(', ');
+      const rest = tree.untracked.count - Math.min(5, tree.untracked.paths.length);
+      unsaved.push(
+        `未追跡 ${tree.untracked.count} 件（${shown}${rest > 0 ? ` ほか ${rest} 件` : ''}）`,
+      );
+    }
+    if (tree.submoduleCount !== undefined) {
+      unsaved.push(`submodule ${tree.submoduleCount} 本（中の変更は退避されない）`);
+    }
+    if (unsaved.length > 0) lines.push(`      退避されなかったもの: ${unsaved.join('、')}`);
+  }
+  return lines.join('\n');
+}
+
+function describeUnpushedWorkObservationOnly(manager: ManagerSummary): string | null {
   const observation = manager.lastUnpushedWorkObservation;
 
   if (manager.sessionMissingSince !== undefined) {
