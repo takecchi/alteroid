@@ -4028,7 +4028,7 @@ const RESCUE_NOT_PUSHED_TEXT: Record<RescueNotPushedReason, string> = {
  * 退避 ref の名前と sha・時刻、直近に送らなかった理由、「退避されなかったもの」
  * （未追跡の件数と名前・submodule）を出す。名前だけで中身は出さない。
  */
-function describeRescue(manager: ManagerSummary): string | null {
+export function describeRescue(manager: ManagerSummary): string | null {
   const rescue = manager.lastRescue;
   if (rescue === undefined || rescue.worktrees.length === 0) return null;
   const lines = [`  退避 ref（走行中に自動で push。${rescue.at} に最後に更新）:`];

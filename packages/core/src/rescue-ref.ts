@@ -122,6 +122,7 @@ async function git(spawn: ProcessSpawnFn, args: string[], call: GitCall): Promis
   }, call.timeoutMs ?? GIT_TIMEOUT_MS);
   timer.unref?.();
   const maxBytes = call.maxBytes ?? LIST_MAX_BYTES;
+  let overflow = false;
   try {
     const child = spawn({
       command: 'git',
@@ -136,7 +137,6 @@ async function git(spawn: ProcessSpawnFn, args: string[], call: GitCall): Promis
     });
     let stdout = '';
     let stderr = '';
-    let overflow = false;
     child.stdout?.on('data', (chunk: Buffer) => {
       if (overflow) return;
       stdout += chunk.toString('utf8');
@@ -156,7 +156,7 @@ async function git(spawn: ProcessSpawnFn, args: string[], call: GitCall): Promis
     });
     return { stdout, stderr, exitCode, timedOut, overflow };
   } catch {
-    return { stdout: '', stderr: '', exitCode: null, timedOut, overflow: false };
+    return { stdout: '', stderr: '', exitCode: null, timedOut, overflow };
   } finally {
     clearTimeout(timer);
     call.signal?.removeEventListener('abort', onCallerAbort);
