@@ -1600,6 +1600,51 @@ describe('PreToolUse の中立の判断の包み直し（#486 中立の口の3�
     });
   });
 
+  it('buildManagerSessionOptions: ask を返すと、permissionDecision: ask と理由を運ぶ（確認に上がる。#2884）', async () => {
+    const options = buildManagerSessionOptions({
+      model: 'opus',
+      permissionMode: DEFAULT_PERMISSION_MODE,
+      systemPromptAppend: '追記',
+      workerAgentName: WORKER_AGENT_NAME,
+      workerPrompt: '作業者のプロンプト',
+      workerModel: 'sonnet',
+      cwd: '/work',
+      env: {},
+      sessionStore,
+      canUseTool,
+      onPostToolUse: () => ({ kind: 'continue' }),
+      onPostToolUseFailure: () => {},
+      onPreCompact: () => {},
+      onUserPromptSubmit: () => {},
+      onSubagentStop: () => ({ kind: 'continue' }),
+      onStop: () => {},
+      onPreToolUse: () => ({
+        kind: 'ask',
+        reason: '無限に待つだけの形（代替: timeout でラップする）',
+      }),
+      onPermissionDenied: async () => ({ kind: 'no-retry' }),
+      managerAutoMemoryEnabled: false,
+    });
+
+    const result = await invokeHook(options.hooks?.PreToolUse?.[0]?.hooks[0], {
+      hook_event_name: 'PreToolUse',
+      session_id: 's',
+      cwd: '/work',
+      tool_name: 'Bash',
+      tool_input: { command: 'until true; do sleep 1; done' },
+      tool_use_id: 'tu-4a',
+    });
+
+    expect(result).toEqual({
+      continue: true,
+      hookSpecificOutput: {
+        hookEventName: 'PreToolUse',
+        permissionDecision: 'ask',
+        permissionDecisionReason: '無限に待つだけの形（代替: timeout でラップする）',
+      },
+    });
+  });
+
   it('未知の kind が渡ったら安全側（{ continue: true }）へ倒し、跡を1本残す（実行時の倒れ先。型では弾かれるはずの値が渡ったときの防御）', async () => {
     const options = buildManagerSessionOptions({
       model: 'opus',
@@ -1622,7 +1667,7 @@ describe('PreToolUse の中立の判断の包み直し（#486 中立の口の3�
       // `AgentPreToolDecision` に無い `kind` を返す実装ミスを模す
       // （`memory.test.ts` の `bogus` と同じ流儀。`wrapPreToolHook` の doc
       // 「実行時にここへ来るのは型で弾かれたはずの値が渡ったとき」）。
-      onPreToolUse: () => ({ kind: 'ask' }) as unknown as AgentPreToolDecision,
+      onPreToolUse: () => ({ kind: 'bogus' }) as unknown as AgentPreToolDecision,
       onPermissionDenied: async () => ({ kind: 'no-retry' }),
       managerAutoMemoryEnabled: false,
     });

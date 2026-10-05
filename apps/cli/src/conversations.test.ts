@@ -363,12 +363,10 @@ describe('alteroid conversations read', () => {
     expect(read()).toBe('既読にしました: conv-1\n');
   });
 
-  it('無い会話は、そう言って既読の呼びを打たない', async () => {
-    const read = captureStdout();
+  it('無い会話は、そう言って既読の呼びを打たない（終了コードは非 0。#2856）', async () => {
     replies.push({ status: 404, body: { error: 'not found' } });
-    await conversationsReadCommand('nope');
+    await expect(conversationsReadCommand('nope')).rejects.toThrow('そんな会話はありません');
     expect(sent).toHaveLength(1);
-    expect(read()).toContain('そんな会話はありません');
   });
 
   it('見える範囲に発言が無いときは、既読にせず理由を言う', async () => {

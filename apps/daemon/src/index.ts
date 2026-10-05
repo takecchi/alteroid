@@ -30,13 +30,12 @@ import {
   createTokenPoolWriteLock,
   createTokenRotator,
   noteDroppedRecord,
+  DAILY_REPORT_RETRY_DELAYS_MS,
   tokenRestoreEntry,
   tokenRotationEntry,
   probeTokenCandidate,
   runTokenTrial,
-  dailyReportEvent,
   installUncaughtNet,
-  missingDailyReportDates,
   placedClonePermissionMode,
   placedManagerModels,
   CLONE_PEERS_ENV_KEY,
@@ -101,6 +100,8 @@ import {
 import { clearRuntimeInfo, writeRuntimeInfo } from './runtime.js';
 import { noteRunnerSwap } from './runner-swap-notice.js';
 import { buildSchedule, readScheduleConfig } from './schedule.js';
+import { startDailyReportCatchup } from './report-catchup.js';
+import type { DailyReportCatchup } from './report-catchup.js';
 import {
   createAgentTokenHolder,
   createRunnerTokenSync,
@@ -2533,6 +2534,7 @@ export async function main(): Promise<void> {
     });
   }
 
+  let dailyReportCatchup: DailyReportCatchup | undefined;
   let stopping = false;
   async function shutdown(): Promise<void> {
     if (stopping) return;
@@ -2541,6 +2543,7 @@ export async function main(): Promise<void> {
     // 先に受け口を閉じて runtime 情報を消す。クローンの後片付け（最後の蒸留）が
     // 長引いても、CLI からは「止まった」と見えるようにする。
     scheduler.stop();
+    dailyReportCatchup?.stop();
     usagePoller.stop();
     managerPoller.stop();
     // 自動で畳む周期も止める（止めたはずのデーモンが背景で `archive.list()` を
@@ -2604,32 +2607,15 @@ export async function main(): Promise<void> {
   // 締め時刻に自分が動いていなければ、その日の日報は誰も作らない。「日報は毎日
   // 生成される」は要件なので、動いていなかった日の分を起動時に拾い直す。
   if (schedule.dailyReportAt !== null) {
-    // 日誌を読めないだけで起動は止めない。**ただし黙って飛ばさない** — 黙って
-    // `[]` を返すと「取りこぼしは無かった」と見分けが付かず、日報の欠落だけが
-    // 後に残る（`scheduler.refresh` と同じ扱い）。
-    //
-    // 理由は `reasonOf` を通す。**ここは日誌を読んだ失敗である**ので、素の
-    // `String(error)` を残すと、本文入りの例外を投げるストア実装が現れた日に
-    // ここだけが無防備なまま漏らす（そして誰も気づかない）。
-    const missed = await missingDailyReportDates({
+    // 日誌を読めないだけで起動は止めない。**黙って飛ばさない** — 読めなかった跡は
+    // stderr と日誌に残し、有限回の調べ直しを積む（#2908。`report-catchup.ts`）。
+    dailyReportCatchup = startDailyReportCatchup({
       journal: stores.journal,
       at: schedule.dailyReportAt,
-      now: new Date(),
       lookbackDays: schedule.reportLookbackDays,
-    }).catch((error: unknown) => {
-      process.stderr.write(
-        `alteroidd: 取りこぼした日報を調べられませんでした（この起動では拾い直しません）: ${reasonOf(error)}\n`,
-      );
-      return [];
+      post: (event) => clone.post(event),
+      retryDelaysMs: DAILY_REPORT_RETRY_DELAYS_MS,
     });
-    // **後追いだと日誌の上で分かるように `schedule_catchup` を運ぶ。** 定刻の発火
-    // （`dailyReportEntry.event`）は `cause` を渡さない ＝ 省略時の既定
-    // （`schedule`）のまま。ここだけが後追いの発生源（`missingDailyReportDates`）
-    // なので、区別する印を付けられるのもここだけである。
-    for (const date of missed) clone.post(dailyReportEvent(date, new Date(), 'schedule_catchup'));
-    if (missed.length > 0) {
-      process.stdout.write(`alteroidd: 取りこぼした日報を作ります: ${missed.join(', ')}\n`);
-    }
   }
 
   process.stdout.write(
