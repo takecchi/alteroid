@@ -47,3 +47,19 @@ export function stripNulFromUnmeteredRecord<
     ...(input.tokenId === undefined ? {} : { tokenId: stripNul(input.tokenId) }),
   };
 }
+
+/**
+ * `aggregate` の絞り込み（`managerId`・`tokenId`）の NUL を落とす（issue #3005）。書き込み
+ * （{@link stripNulFromUsageRecord}）が鍵列を落として残すので、引くほうも落としてから引くと対称になる。
+ * 3実装（インメモリ / fs / pg）が同じ関数を通す。pg は NUL を含む text を DB に投げると
+ * エラーになるので、これを通さないと pg だけ投げる。
+ */
+export function stripNulFromUsageQuery<T extends { managerId?: string; tokenId?: string }>(
+  query: T,
+): T {
+  return {
+    ...query,
+    ...(query.managerId === undefined ? {} : { managerId: stripNul(query.managerId) }),
+    ...(query.tokenId === undefined ? {} : { tokenId: stripNul(query.tokenId) }),
+  };
+}

@@ -112,7 +112,11 @@ import {
   type TokenRotationSettings,
 } from './token-pool.js';
 import { assertValidCredentialEntries } from './credential-input.js';
-import { stripNulFromUnmeteredRecord, stripNulFromUsageRecord } from './usage-input.js';
+import {
+  stripNulFromUnmeteredRecord,
+  stripNulFromUsageQuery,
+  stripNulFromUsageRecord,
+} from './usage-input.js';
 import { assertNoNul, stripNul } from './nul-guard.js';
 import { preparePermissionGrantForPut } from './permission-grant-input.js';
 import { assertProfileRowWritable } from './profile-input.js';
@@ -1381,6 +1385,8 @@ export function createMemoryStores(): Stores {
       // 読めない行は持てない（`put` がスキーマを通す）。常に空。
       return [];
     },
+    // 読むだけの口の NUL（issue #3005）: NUL を含む id の行は存在しえない（`put` が断る）ので、
+    // `Map` を引けば自然に「無い」になる。pg は DB に投げる前に短絡して揃える。
     async get(id) {
       return permissionGrantRows.get(id) ?? null;
     },
@@ -1715,7 +1721,9 @@ export function createMemoryStores(): Stores {
       }
       return { delta: fold.delta, baseline: nextBaseline, reset: fold.reset };
     },
-    async aggregate(query) {
+    async aggregate(rawQuery) {
+      // 書き込みが鍵列の NUL を落として残すので、絞り込みも落としてから引く（issue #3005）。
+      const query = stripNulFromUsageQuery(rawQuery);
       const rows = [...usageRows.values()]
         .filter((row) => {
           if (query.from !== undefined && row.date < query.from) return false;

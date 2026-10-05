@@ -1405,7 +1405,7 @@ export {
  * 鍵・環境変数になる値の NUL は {@link NulNotAllowedError} で断り、それ以外の本文は
  * {@link stripNul} で落として残す。3実装（インメモリ / fs / pg）が同じ部品を呼ぶ。
  */
-export { NulNotAllowedError, assertNoNul, stripNul } from './nul-guard.js';
+export { NulNotAllowedError, assertNoNul, hasNul, stripNul } from './nul-guard.js';
 export { InvalidCredentialNameError, assertValidCredentialEntries } from './credential-input.js';
 export {
   DuplicateTokenIdError,
@@ -1419,6 +1419,7 @@ export { verifyTokenPoolContract } from './token-pool-contract.js';
 export {
   stripNulFromUnmeteredRecord,
   stripNulFromUsageRecord,
+  stripNulFromUsageQuery,
   stripNulFromUsageSnapshot,
 } from './usage-input.js';
 export { verifyUsageNulContract } from './usage-nul-contract.js';
