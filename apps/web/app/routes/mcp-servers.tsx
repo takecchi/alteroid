@@ -1,6 +1,7 @@
 // URL の伏せ字は CLI と同じ1つの実装（`@alteroid/core/mask-url`。issue #1622 ——
 // 2つが別々に同じ判定を持ち、どちらも password だけの userinfo を素通ししていた）。
 import { SettingsTabs } from '~/components/group-tabs';
+import { settingsDocumentTitle } from '~/lib/nav';
 import { maskUrl } from '@alteroid/core/mask-url';
 import { useState } from 'react';
 
@@ -56,6 +57,7 @@ export default function McpServersPage() {
   return (
     <Page
       tabs={<SettingsTabs />}
+      documentTitle={settingsDocumentTitle('/mcp-servers')}
       title="MCP 連携"
       description="クローン・マネージャー・作業者に渡す MCP サーバの登録（.mcp.json 相当）"
     >

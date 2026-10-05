@@ -1,4 +1,5 @@
 import { SettingsTabs } from '~/components/group-tabs';
+import { settingsDocumentTitle } from '~/lib/nav';
 import { AlertTriangle } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router';
@@ -60,6 +61,7 @@ export default function Tokens() {
   return (
     <Page
       tabs={<SettingsTabs />}
+      documentTitle={settingsDocumentTitle('/tokens')}
       title="認証トークン"
       description="プールの一覧・追加・削除・無効化/有効化・回転の設定・回転の履歴（エラー状況）"
     >
