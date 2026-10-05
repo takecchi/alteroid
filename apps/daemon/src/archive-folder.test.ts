@@ -432,6 +432,45 @@ describe('foldArchiveOnce（issue #698）', () => {
   });
 });
 
+describe('foldArchiveOnce — 日誌の追記が落ちたとき（issue #2746）', () => {
+  // 1塊に1件しか入らない長い id（`ARCHIVE_REMOVE_MANY_JOURNAL_ID_CHARS` = 3600 を超えて2件は入らない）。
+  const longId = (n: number) => `${n}`.padEnd(2_000, 'x');
+  const rowsOf = (): ArchiveEntry[] =>
+    [1, 2, 3, 4].map((n) => ({
+      id: longId(n),
+      sessionId: 'sess-j',
+      at: `2026-01-01T00:0${n}:00.000Z`,
+      storedBytes: 100,
+      continuity: 'continues' as const,
+    }));
+
+  it('ある塊の journal.append が落ちても reject せず、残りの塊も畳み、日誌に書けなかった id を返す', async () => {
+    const base = createMemoryStores();
+    let appendCalls = 0;
+    const stores: Stores = {
+      ...base,
+      archive: fakeArchiveEntries(rowsOf()),
+      journal: {
+        ...base.journal,
+        async append(entry) {
+          appendCalls += 1;
+          if (appendCalls === 1) throw new Error('pg down');
+          return base.journal.append(entry);
+        },
+      },
+    };
+
+    const result = await foldArchiveOnce({ stores, managers: noRunningManagers, now: FAR_FUTURE });
+    assertInvariant(result);
+
+    // 古い3件（最新の1件は残る）がすべて畳まれ、3塊ぶん日誌を試みた。
+    expect(result.folded).toBe(3);
+    expect(appendCalls).toBe(3);
+    expect(result.journalDroppedIds).toEqual([longId(1)]);
+    expect((await stores.journal.list({ types: ['decision'] })).length).toBe(2);
+  });
+});
+
 describe('readArchiveFoldConfig（issue #698）', () => {
   it('既定は DEFAULT_ARCHIVE_FOLD_EVERY_MINUTES', () => {
     const config = readArchiveFoldConfig({});
