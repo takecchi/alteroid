@@ -9240,7 +9240,13 @@ class Clone implements CloneHost {
             : 'この日の日報が既にあるか確かめられないまま書いた。同じ日に日報が2本ある' +
               'ならこの回の重複（消さずに日誌から辿ること）。'),
       });
-      if (outcome.status === 'failed') return;
+      if (outcome.status === 'failed') {
+        // 印を書けなかっただけで、失敗した日報であることは変わらない。再起動まで
+        // 待たずに作り直す（#2745）。作り直しが成功すれば（読めなければ重複の
+        // 可能性つきで）本物が書かれる。
+        this.#scheduleDailyReportRetry(date);
+        return;
+      }
     }
     // **印の付いた行は「日報がある」と数えない**（`schema.ts` の `unavailable` の
     // doc）。数えると、後から本物を書き直す道が閉じる。
