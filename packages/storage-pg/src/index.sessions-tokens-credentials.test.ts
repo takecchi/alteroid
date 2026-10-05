@@ -1,5 +1,6 @@
 import {
   captureStderr,
+  verifyConversationReadStoreContract,
   verifyMcpServerStoreContract,
   verifyProfileStoreContract,
 } from '@alteroid/core';
@@ -1097,6 +1098,28 @@ describe('PgSessionStore（SDK のセッション永続化）', () => {
       expect(timeoutQueries, queries.join(' | ')).toHaveLength(1);
       // 第3引数 `is_local` が `true` ＝ トランザクションを抜ければ既定へ戻る。
       expect(timeoutQueries[0]).toContain('true');
+    });
+  });
+});
+
+/**
+ * 会話の既読の位置と基準時刻。**Railway ではここが唯一の置き場になる**（volume が無い）。
+ * 契約は3実装で同じ関数を通す（`conversation-read.ts`）。
+ */
+describe('PgConversationReadStore', () => {
+  it('器の契約（3実装で同じことを測る）', async () => {
+    await verifyConversationReadStoreContract(stores.conversationReads);
+  });
+
+  it('migrate を2回通しても基準時刻と位置が残る（create table if not exists が no-op）', async () => {
+    await stores.conversationReads.ensureBaseline('2026-10-01T00:00:00.000Z');
+    await stores.conversationReads.advance('c1', '2026-10-01T00:00:01.000Z');
+    await migrate(db);
+    await migrate(db);
+    expect(await stores.conversationReads.read()).toMatchObject({
+      state: 'ok',
+      baseline: '2026-10-01T00:00:00.000Z',
+      positions: { c1: { readThrough: '2026-10-01T00:00:01.000Z' } },
     });
   });
 });

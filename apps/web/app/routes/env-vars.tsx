@@ -1,4 +1,5 @@
 import { SettingsTabs } from '~/components/group-tabs';
+import { LoadError } from '~/components/load-error';
 import { settingsDocumentTitle } from '~/lib/nav';
 import { useState } from 'react';
 
@@ -76,7 +77,7 @@ function describeScope(scope: EnvVarScope): { label: string; tone: 'neutral' | '
 }
 
 function EnvVarList() {
-  const { data, error, isLoading } = useCredentials();
+  const { data, error, isLoading, isValidating, mutate } = useCredentials();
   const removeEnvVar = useRemoveEnvVar();
   const [removingName, setRemovingName] = useState<string | null>(null);
   const [removeFailure, setRemoveFailure] = useState<unknown>(undefined);
@@ -96,7 +97,7 @@ function EnvVarList() {
   const credentials = data?.credentials ?? [];
   /**
    * **取れなかったのを0件と描かない**（issue #2324）。一覧をまだ一度も読めていないまま
-   * 失敗したとき、失敗は下の `ErrorNote` が言う。再検証の失敗で `data` が残っているときは
+   * 失敗したとき、失敗は `LoadError` が言う。再検証の失敗で `data` が残っているときは
    * 当たらず、一覧をそのまま出す。
    */
   const listUnavailable = data === undefined && error !== undefined;
@@ -108,7 +109,13 @@ function EnvVarList() {
         subtitle="登録済みの環境変数"
         action={listUnavailable ? undefined : <Badge>{credentials.length}</Badge>}
       />
-      <ErrorNote error={error} className="m-4" />
+      <LoadError
+        what="環境変数の一覧"
+        error={error}
+        onRetry={() => mutate()}
+        retrying={isValidating}
+        className="m-4"
+      />
       <ErrorNote error={removeFailure} className="m-4" />
       {isLoading ? (
         <Spinner />
