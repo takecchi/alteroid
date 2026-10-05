@@ -18,7 +18,9 @@ import { expectNulRejected } from './nul-contract-support.js';
  * - **書き込みの口**は、鍵・参照キー・突き合わせに使う値（id・`accountId`・`grantedBy`・`subject`・
  *   トークンの `sha256`・ログイン要求の `nonce` など）の NUL を `NulNotAllowedError` で断り、何も書かない。
  *   本文（`displayName`・`label`・`error`）は NUL を落として残す。例外の文に値を載せない。
- * - メールアドレスは、鍵とも本文とも言えるので、ここでは縛らない（判断待ち）。
+ * - メールアドレス（teto の判断、2026-10-06）: `AuthAccount.email` は一意の索引と衝突の検査に使う鍵なので
+ *   `NulNotAllowedError` で断る。`AuthIdentity.email` は本文なので落として残す。`findAccountByEmail` は
+ *   NUL を含めば「無い」（null）。
  *
  * 呼ぶ前の器は空であること。vitest に依存しない。
  */
@@ -32,7 +34,7 @@ export async function verifyAuthNulContract(store: AuthStore): Promise<void> {
   const account: AuthAccount = {
     id: 'auth-nul-account',
     displayName: 'Owner',
-    email: null,
+    email: 'owner@example.test',
     createdAt: base,
     lastLoginAt: base,
     grantedAt: null,
@@ -110,6 +112,9 @@ export async function verifyAuthNulContract(store: AuthStore): Promise<void> {
   for (const key of nulOf(identity.subject)) {
     outcomes.push(['findIdentity(subject)', () => store.findIdentity('google', key), null]);
   }
+  for (const key of nulOf(account.email ?? '')) {
+    outcomes.push(['findAccountByEmail', () => store.findAccountByEmail(key), null]);
+  }
   outcomes.push([
     'findIdentity(provider)',
     () => store.findIdentity('goo\u0000gle', identity.subject),
@@ -159,6 +164,15 @@ export async function verifyAuthNulContract(store: AuthStore): Promise<void> {
   const rejected: Array<[string, () => Promise<unknown>]> = [
     ['putAccount.id', () => store.putAccount({ ...account, id: nul })],
     ['putAccount.grantedBy', () => store.putAccount({ ...account, grantedBy: nul })],
+    ['putAccount.email', () => store.putAccount({ ...account, email: nul })],
+    [
+      'createAccountWithIdentity.account.email',
+      () =>
+        store.createAccountWithIdentity({
+          account: { ...account, id: 'auth-nul-other-account', email: nul },
+          identity: { ...identity, subject: 'auth-nul-other', accountId: 'auth-nul-other-account' },
+        }),
+    ],
     ['putIdentity.subject', () => store.putIdentity({ ...identity, subject: nul })],
     ['putIdentity.accountId', () => store.putIdentity({ ...identity, accountId: nul })],
     [
@@ -211,6 +225,23 @@ export async function verifyAuthNulContract(store: AuthStore): Promise<void> {
   }
 
   // 3. 本文の NUL は落として残す。
+  await store.putIdentity({ ...identity, email: 'id\u0000@example.test' });
+  if ((await store.findIdentity('google', identity.subject))?.email !== 'id@example.test') {
+    fail('identity.emailのNULは落として残す');
+  }
+  const created = await store.createAccountWithIdentity({
+    account: { ...account, id: 'auth-nul-third', email: null },
+    identity: {
+      ...identity,
+      subject: 'auth-nul-third-sub',
+      accountId: 'auth-nul-third',
+      email: 'th\u0000ird@example.test',
+    },
+  });
+  if (!created.created) fail('createAccountWithIdentityが作れなかった');
+  if ((await store.findIdentity('google', 'auth-nul-third-sub'))?.email !== 'third@example.test') {
+    fail('createAccountWithIdentityのidentity.emailのNULは落として残す');
+  }
   await store.putAccount({ ...account, displayName: 'Own\u0000er' });
   if ((await store.getAccount(account.id))?.displayName !== 'Owner')
     fail('displayNameのNULは落として残す');
