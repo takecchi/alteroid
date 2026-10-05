@@ -24198,3 +24198,101 @@ describe('account_list（読むだけ。id・許可の状態・時刻だけで�
     expect(second).not.toContain('- acct-00 ');
   });
 });
+
+/**
+ * Issue #2809: クローンの全文を書き直す口が、読んだ後に人間が直した内容を黙って消す。
+ * memory_read（別の道具呼び出し）→ 人間が書く → memory_write、の順。
+ * 版は memory_read の応答にある `base_version` の値をそのまま持ち回る。
+ */
+describe('クローンの記憶の全文書き直しは読んだ版を前提にする（#2809）', () => {
+  const versionOf = (readResult: string): string => {
+    const m = /base_version[=:：]\s*([0-9a-f]{64})/.exec(readResult);
+    if (m === null) throw new Error(`memory_read の応答に版が無い: ${readResult}`);
+    return m[1]!;
+  };
+
+  it('人間が同じ大きさの別の内容に直した後の memory_write は、書かずに「変わった」と返す', async () => {
+    const h = harness();
+    await h.stores.persona.write('ops', '# 運用\n\n人間の元の内容AAAA\n');
+    const read = await h.call('memory_read', { slug: 'ops' });
+    // 人間が（PUT と同じ persona.write で）同じ長さの別の内容へ直す
+    await h.stores.persona.write('ops', '# 運用\n\n人間が直した内容BBB\n');
+    await h.stores.persona.markHumanTouched('ops', new Date().toISOString());
+
+    const result = await h.call('memory_write', {
+      slug: 'ops',
+      content: '# 運用\n\nクローンの書き直しCCCCC\n',
+      summary: '書き直し',
+      base_version: versionOf(read),
+    });
+
+    expect((await h.stores.persona.read('ops'))?.content).toContain('人間が直した内容BBB');
+    expect(result).toContain('その間に変わった');
+    expect(result).toContain('memory_read');
+    expect(await h.stores.journal.list({ types: ['memory_update'] })).toHaveLength(0);
+  });
+
+  it('版が合えば書ける（応答に次の版が付き、続けて書ける）', async () => {
+    const h = harness();
+    await h.stores.persona.write('ops', '# 運用\n\n初版\n');
+    const read = await h.call('memory_read', { slug: 'ops' });
+    const first = await h.call('memory_write', {
+      slug: 'ops',
+      content: '# 運用\n\n二版\n',
+      summary: '二版',
+      base_version: versionOf(read),
+    });
+    const second = await h.call('memory_write', {
+      slug: 'ops',
+      content: '# 運用\n\n三版\n',
+      summary: '三版',
+      base_version: versionOf(first),
+    });
+    expect(second).toContain('更新した');
+    expect((await h.stores.persona.read('ops'))?.content).toContain('三版');
+  });
+
+  it('既存の文書に版なしで memory_write すると、書かずに memory_read を促す', async () => {
+    const h = harness();
+    await h.stores.persona.write('ops', '# 運用\n\n人間の内容\n');
+    const result = await h.call('memory_write', {
+      slug: 'ops',
+      content: '上書き',
+      summary: 'x',
+    });
+    expect((await h.stores.persona.read('ops'))?.content).toContain('人間の内容');
+    expect(result).toContain('base_version');
+    expect(result).toContain('memory_read');
+  });
+
+  it('新規作成は版なしで書けるが、読んだ後に誰かが作っていれば書かない', async () => {
+    const h = harness();
+    expect(await h.call('memory_write', { slug: 'fresh', content: '新', summary: 'n' })).toContain(
+      '更新した',
+    );
+  });
+
+  it('memory_frontmatter_set は、読んでから書くまでの間に変わっていれば書かない', async () => {
+    const h = harness();
+    await h.stores.persona.write('ops', '---\ndescription: 旧\n---\n# 運用\n\n本文\n');
+    // 読んだ直後に人間が直す、を再現するため persona.read を差し替える
+    const realRead = h.stores.persona.read.bind(h.stores.persona);
+    let first = true;
+    h.stores.persona.read = async (slug: string) => {
+      const doc = await realRead(slug);
+      if (first && slug === 'ops') {
+        first = false;
+        await h.stores.persona.write('ops', '---\ndescription: 旧\n---\n# 運用\n\n人間が直した\n');
+      }
+      return doc;
+    };
+    const result = await h.call('memory_frontmatter_set', {
+      slug: 'ops',
+      description: '新',
+      summary: 'd',
+    });
+    expect(result).toContain('その間に変わった');
+    expect((await h.stores.persona.read('ops'))?.content).toContain('人間が直した');
+    expect((await h.stores.persona.read('ops'))?.content).not.toContain('description: 新');
+  });
+});
