@@ -46,7 +46,7 @@ export default function EnvVars() {
     <Page
       tabs={<SettingsTabs />}
       title="環境変数"
-      description="alteroid 自身の運用設定・マネージャーへ降ろす環境変数。撒く先は共通/clone/manager から選べる"
+      description="alteroid 自身の運用設定と、マネージャーへ渡す環境変数。渡す先は「共通」「クローン」「マネージャー」から選べる"
     >
       <div className="flex flex-col gap-4">
         <EnvVarList />
@@ -103,7 +103,7 @@ function EnvVarList() {
     <Card>
       <CardHeader
         title="一覧"
-        subtitle="alteroid credential list / GET /credentials と同じもの"
+        subtitle="登録済みの環境変数"
         action={listUnavailable ? undefined : <Badge>{credentials.length}</Badge>}
       />
       <ErrorNote error={error} className="m-4" />
@@ -241,7 +241,7 @@ function AddEnvVarForm() {
     <Card>
       <CardHeader
         title="登録する"
-        subtitle="alteroid credential set / PUT /credentials と同じもの。シークレット可否は作成時に決まり、後から変更できない"
+        subtitle="秘密の値にするかどうかは登録するときに決まり、後から変えられない"
       />
       <div className="flex flex-col gap-3 px-4 py-3 text-sm">
         <label className="flex flex-col gap-1">

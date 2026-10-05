@@ -105,7 +105,7 @@ function AddTokenForm() {
 
   return (
     <Card>
-      <CardHeader title="追加" subtitle="alteroid token add / PUT /tokens と同じもの" />
+      <CardHeader title="追加" subtitle="使うトークンを足す" />
       <div className="flex flex-col gap-3 px-4 py-3 text-sm">
         <label className="flex flex-col gap-1">
           <span className="text-xs text-muted-foreground">
@@ -298,11 +298,11 @@ function describeAvailability(state: TokenAvailability): {
 function describeCooldownSource(source: AgentTokenView['cooldownSource']): string {
   switch (source) {
     case undefined:
-      return '記録が無い（この期限が権威ある値かどうかは言えない）';
+      return '記録が無い（この期限が確かな値かどうかは言えない）';
     case 'quota_reset':
-      return '枠の resetsAt（権威ある値）';
+      return '利用枠の復活時刻（確かな値）';
     case 'overage_reset':
-      return '課金枠の overageResetsAt（権威ある値。枠そのものではない）';
+      return '従量課金枠の復活時刻（確かな値。利用枠そのものではない）';
     case 'notice_text':
       return '上限の文言に書かれていた時刻（推測。ただし既定よりは良い）';
     case 'default':
@@ -337,7 +337,7 @@ function describeRecovery(recovery: TokenRecovery): string {
     case 'action':
       return '分類: 人の対応が要る見込み（入金・管理者の設定・座席種別の変更など）';
     case 'unknown':
-      return '分類: どちらとも言えない（time でも action でもない。捨てる判断の根拠にしないこと）';
+      return '分類: どちらとも言えない（時間で戻るとも、人の対応が要るとも言えない。捨てる判断の根拠にしないこと）';
     default:
       // **送られてくる値である**（`agentTokenViewSchema` の `recovery` は
       // デーモンが `limitRecoveryOf` で導いて載せる）。⟹ 投げない。
@@ -382,7 +382,7 @@ function PoolCard({
     <Card>
       <CardHeader
         title="プール一覧"
-        subtitle="alteroid token list / GET /tokens と同じもの。値は出ない"
+        subtitle="登録済みのトークン。値そのものは出ない"
         action={<Badge>{sorted.length}</Badge>}
       />
       {targetMissing && (
@@ -498,8 +498,7 @@ function UnreadableRowsNote({ unreadable }: { unreadable: TokensRowsUnreadable }
         </ul>
         <p className="mt-1">
           プールを書き換える操作（追加・削除・無効化/戻す）は、この行を捨てずに持ち越す。
-          消すには、行ごとの「この行を消す」を使う（alteroid token remove-unreadable と同じ）。id
-          が取れない行は、ここでは消せない。
+          消すには、行ごとの「この行を消す」を使う。番号が取れない行は、ここでは消せない。
         </p>
         <ErrorNote error={failure} />
       </div>
@@ -773,7 +772,7 @@ function SettingsCard({ settings }: { settings: TokenRotationSettings }) {
     <Card>
       <CardHeader
         title="回転の設定"
-        subtitle="alteroid token policy / PUT /tokens/policy と同じもの"
+        subtitle="トークンを切り替える条件と、冷却の既定"
       />
       <KeyValueList
         className="px-4 py-3"
@@ -787,11 +786,11 @@ function SettingsCard({ settings }: { settings: TokenRotationSettings }) {
                 {(settings.cooldownMs / (60 * 60 * 1000)).toLocaleString('ja-JP', {
                   maximumFractionDigits: 2,
                 })}
-                時間（{settings.cooldownMs.toLocaleString('en-US')} ミリ秒）。
+                時間。
                 <br />
                 <span className="text-xs text-muted-foreground">
-                  `resetsAt` が取れなかったときだけ使うフォールバック。権威ある期限は行ごとの
-                  「冷却の期限」のほう。
+                  利用枠の復活時刻が分からなかったときだけ使う目安。分かっているときは、行ごとの
+                  「冷却の期限」が優先される。
                 </span>
               </>
             ),
@@ -906,7 +905,7 @@ function UnreadableSettingsCard({ reason }: { reason: string }) {
     <Card>
       <CardHeader
         title="回転の設定"
-        subtitle="alteroid token policy / PUT /tokens/policy と同じもの"
+        subtitle="トークンを切り替える条件と、冷却の既定"
       />
       <div className="px-4 py-3 text-sm text-muted-foreground">
         回転の設定は読めない（消えたのではなく、読めない形で入っている）: {reason}
@@ -1064,7 +1063,7 @@ function describeEvent(
       return { label: '起動時の撒き直しに失敗', tone: 'danger' };
     default:
       // **落とさない**（`describeUnknown` の doc）。網羅性は引数の `never` が守る。
-      return { label: describeUnknown(event, '回転の event'), tone: 'neutral' };
+      return { label: describeUnknown(event, '切り替えの出来事'), tone: 'neutral' };
   }
 }
 
@@ -1075,7 +1074,7 @@ function describeFreshness(freshness: NonNullable<TokenRotationEntry['freshness'
     case 'stale':
       return '古い観測';
     case 'unknown':
-      return '不明（身元を運べない検知点由来。stale とは別の意味）';
+      return '不明（どのトークンの観測か分からない箇所からの記録。「古い観測」とは別の意味）';
     default:
       // **送られてくる値である**（日誌の行の `freshness`）。⟹ 投げない。
       return describeUnknown(freshness, '観測の新しさ');
@@ -1093,9 +1092,9 @@ function describeRecoveredSource(
 ): string {
   switch (source) {
     case 'account_probe':
-      return 'セッションを使わない枠の probe が観測した';
+      return 'セッションを使わずに、利用枠を直接確かめて観測した';
     case 'turn_success':
-      return 'ターンが実際に成功したので観測できた（session limit にも効く）';
+      return '実際の応答が成功したので観測できた（セッション単位の上限にも効く）';
     default:
       return describeUnknown(source, '回復の観測元');
   }
@@ -1121,7 +1120,7 @@ function RotationHistory() {
     <Card>
       <CardHeader
         title="回転の履歴（エラー状況）"
-        subtitle="日誌の token_rotation を新しい順で表示。event は潰さない"
+        subtitle="トークンの切り替えの記録を新しい順に表示する。出来事は省かずに全部出す"
         action={listUnavailable ? undefined : <Badge>{entries.length}</Badge>}
       />
       <ErrorNote error={error} className="m-4" />
@@ -1144,8 +1143,8 @@ function RotationHistory() {
       */}
       {entries.length === JOURNAL_LIMIT && (
         <p className="border-t border-border px-4 py-2 text-[11px] text-muted-foreground">
-          直近 {JOURNAL_LIMIT} 件のみ表示している。これより古い記録は日誌の画面（種別:
-          token_rotation で絞り込み）で確認する。
+          直近 {JOURNAL_LIMIT} 件のみ表示している。これより古い記録は、日誌の画面で
+          トークンの切り替えの記録に絞り込んで確認する。
         </p>
       )}
     </Card>
@@ -1204,10 +1203,10 @@ function RotationRow({ entry }: { entry: TokenRotationEntry }) {
         items={[
           ...(entry.label !== undefined ? [{ label: 'ラベル', value: entry.label }] : []),
           ...(entry.tokenId !== undefined
-            ? [{ label: '移った先/撒いた先 id', value: entry.tokenId, mono: true }]
+            ? [{ label: '移った先・配った先', value: entry.tokenId, mono: true }]
             : []),
           ...(entry.fromTokenId !== undefined
-            ? [{ label: '降りた側 id', value: entry.fromTokenId, mono: true }]
+            ? [{ label: '降りた側', value: entry.fromTokenId, mono: true }]
             : []),
           ...(entry.generation !== undefined ? [{ label: '世代', value: entry.generation }] : []),
           ...(entry.earliestAt !== undefined
