@@ -146,6 +146,7 @@ export default function ManagerDetail({ loaderData }: Route.ComponentProps) {
 
   return (
     <Page
+      documentTitle="マネージャーの詳細"
       title={
         <span className="flex items-center gap-2">
           <Link to="/managers" className="text-muted-foreground hover:text-foreground">

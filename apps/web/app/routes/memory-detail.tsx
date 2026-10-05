@@ -85,6 +85,7 @@ export default function MemoryDetail({ loaderData }: Route.ComponentProps) {
 
   return (
     <Page
+      documentTitle={`${slug} - 記憶`}
       title={
         // `Page` の title は h1 の親（div）が既に `min-w-0` を持つので、この
         // flex 行自体は絞られる側に居る。slug は `break-all` 済み（最大128
