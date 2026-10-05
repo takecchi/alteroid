@@ -17,6 +17,18 @@ import { createMemoryStores } from './testing.js';
  * ここは Host の周期が `scratch_sweep` を（境界を通る形で）emit すること、`shutdown()` で
  * 周期が止まること、デーモン側が日誌へ残しクローンへ知らせることを固定する。
  */
+/**
+ * 偽の時計の下では `vi.waitFor` を使わない（確かめるたびに偽の時計を自分で進め、runner の周期を
+ * 余分に回して回数がずれる）。時計を進めずに、`setImmediate` で I/O を回して条件を待つ。
+ */
+async function settle(condition: () => boolean, maxTurns = 5000): Promise<void> {
+  for (let i = 0; i < maxTurns; i += 1) {
+    if (condition()) return;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
+  throw new Error('条件が満たされなかった');
+}
+
 describe('runner の周期と shutdown（#3039）', () => {
   let tmp: string;
   let host: RunnerHost | undefined;
@@ -34,6 +46,7 @@ describe('runner の周期と shutdown（#3039）', () => {
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
     await writeFile(path.join(tmp, 'mgr-aaaa1111-x.log'), 'x');
     let readdirCalls = 0;
+    let readdirDone = 0;
     const events: RunnerEvent[] = [];
     host = createRunnerHost({
       runnerId: 'runner-x',
@@ -46,25 +59,30 @@ describe('runner の周期と shutdown（#3039）', () => {
         intervalMs: 20,
         readdirFn: async (dir) => {
           readdirCalls += 1;
-          return readdir(dir, { withFileTypes: true });
+          try {
+            return await readdir(dir, { withFileTypes: true });
+          } finally {
+            readdirDone += 1;
+          }
         },
       },
     });
     await vi.advanceTimersByTimeAsync(20);
-    await vi.waitFor(() => {
-      expect(events.some((e) => e.type === 'scratch_sweep')).toBe(true);
-    });
+    await settle(() => events.some((e) => e.type === 'scratch_sweep'));
     expect(existsSync(path.join(tmp, 'mgr-aaaa1111-x.log'))).toBe(false);
     const sweep = events.find((e) => e.type === 'scratch_sweep');
     expect(sweep).toMatchObject({
       runnerId: 'runner-x',
       removed: [{ name: 'mgr-aaaa1111-x.log' }],
     });
-    // 何も無い回は送らない（周期を3回進め、readdir が増えても出来事は増えない）。
+    // 何も無い回は送らない。周期を1つ進めるごとに、その回の片付け（readdir の完了）が終わるのを
+    // 待ってから次を進める（重ねて撃たない仕様なので、終わる前に進めると回数がずれる）。
+    await settle(() => readdirDone === readdirCalls);
+    await new Promise((r) => setImmediate(r));
     const before = readdirCalls;
     for (let i = 0; i < 3; i += 1) {
       await vi.advanceTimersByTimeAsync(20);
-      await vi.waitFor(() => expect(readdirCalls).toBe(before + i + 1));
+      await settle(() => readdirCalls === before + i + 1 && readdirDone === readdirCalls);
       await new Promise((r) => setImmediate(r));
     }
     expect(events.filter((e) => e.type === 'scratch_sweep')).toHaveLength(1);
