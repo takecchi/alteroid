@@ -1187,6 +1187,11 @@ describe('クローンの道具', () => {
       const fromBefore = ['# 私について', '本文', '', '## 事例', '事例の本文'].join('\n');
       await h.stores.persona.write('about-me', fromBefore);
 
+      const outline = await h.call('memory_outline', { slug: 'about-me' });
+      const idMatch = /\[([0-9a-f]{8}-[0-9a-f]{8})\] ## 事例 — /.exec(outline);
+      expect(idMatch).not.toBeNull();
+      const id = (idMatch as RegExpExecArray)[1];
+
       const reply = await h.call('memory_section_move', {
         fromSlug: 'about-me',
         sections: [id],
@@ -24322,10 +24327,6 @@ describe('クローンの記憶の全文書き直しは読んだ版を前提に�
   it('memory_section_move は、出どころを読んでから切り取るまでの間に変わっていれば切り取らない（重複は失われない側）', async () => {
     const h = harness();
     await h.stores.persona.write('src', '# 親\n\n## 動かす\n\n事例\n\n## 残す\n\n元の残す節\n');
-    const outline = await h.call('memory_outline', { slug: 'src' });
-    const id = /([0-9a-f]{8,})/.exec(
-      outline.split('動かす')[0]! + outline.split('動かす')[1]!,
-    )?.[1];
     const { sections } = scanMemorySections((await h.stores.persona.read('src'))!.content);
     const target = sections.find((x) => x.heading.includes('動かす'))!;
     const realRead = h.stores.persona.read.bind(h.stores.persona);
