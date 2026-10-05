@@ -3587,6 +3587,45 @@ export const rescueNotPushedReasonSchema = z.enum([
 ]);
 export type RescueNotPushedReason = z.infer<typeof rescueNotPushedReasonSchema>;
 
+/** 退避 ref を消した（消そうとした）理由。 */
+export const rescueRemovalReasonSchema = z.enum([
+  /** 内容が origin の枝に入っていた（runner が `landedAt` を付けた）。 */
+  'landed',
+  /** 委譲が `done` のまま猶予を過ぎた。 */
+  'done',
+  /** 委譲が `failed` のまま猶予を過ぎた。 */
+  'failed',
+  /** 委譲が `stopped` のまま猶予を過ぎた。 */
+  'stopped',
+]);
+export type RescueRemovalReason = z.infer<typeof rescueRemovalReasonSchema>;
+
+/** 消せなかった理由の分類（git の文面は運ばない）。 */
+export const rescueRemovalFailureKindSchema = z.enum([
+  'auth',
+  'network',
+  'timeout',
+  /** 台帳の commit と remote の ref が食い違う（その後に別の退避が送られた）。消さない。 */
+  'moved',
+  /** 送った先の URL が台帳に無い、または使えない形。 */
+  'no-remote',
+  /** 宛先の runner が名簿に開いていない、または後始末の口を持たない。 */
+  'no-runner',
+  'other',
+]);
+export type RescueRemovalFailureKind = z.infer<typeof rescueRemovalFailureKindSchema>;
+
+/** 退避 ref の後始末の記録（デーモンが書く）。{@link rescueWorktreeSchema} の `pushed.removal`。 */
+export const rescueRemovalSchema = z.object({
+  /** 消した時刻、または（`failureKind` があれば）最後に試して失敗した時刻。 */
+  at: isoDateTime,
+  reason: rescueRemovalReasonSchema,
+  failureKind: rescueRemovalFailureKindSchema.optional(),
+  /** 失敗した回数（再試行の間隔を伸ばす材料）。 */
+  attempts: z.number().int().positive().optional(),
+});
+export type RescueRemoval = z.infer<typeof rescueRemovalSchema>;
+
 /**
  * 1つの作業ツリーについての、退避 ref の最後の状態（Issue #1266）。
  *
@@ -3610,6 +3649,28 @@ export const rescueWorktreeSchema = z.object({
       /** 退避 commit の sha。 */
       commit: z.string(),
       at: isoDateTime,
+      /**
+       * 送った先の remote（`origin`）の URL。**userinfo・クエリ・フラグメントは落としてある**
+       * （資格を台帳へ持ち込まない）。後始末（Issue #1266）が、委譲のセッションも作業ツリーも
+       * 無いところから `git push <url> --delete <ref>` を撃つための所在。読めなければ省く
+       * （＝後始末は消さずに `no-remote` と残す）。
+       */
+      remote: z.string().optional(),
+      /** 退避 commit の tree の sha。「内容がもう origin の枝に入ったか」の比較に使う。 */
+      tree: z.string().optional(),
+      /**
+       * runner が、この退避 commit の tree と同じ tree を origin の枝（作業ツリーの
+       * remote-tracking）の直近の commit に見つけた時刻。**ローカルの remote-tracking
+       * しか見ていない**（ネットワークは使わない。最後の fetch/push 時点の像）。
+       * 後始末は「内容は origin に在る」として即座に消してよい。
+       */
+      landedAt: isoDateTime.optional(),
+      /**
+       * **デーモンが書く**後始末の記録。runner は書かない。`pushed` を消さず印を付ける
+       * （消した事実と、いつ・なぜを残す）。`failureKind` があれば消せなかった回で、
+       * 次の機会に再試行する。
+       */
+      removal: rescueRemovalSchema.optional(),
     })
     .optional(),
   notPushed: z
