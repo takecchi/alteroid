@@ -3,7 +3,9 @@ import {
   verifyConversationReadStoreContract,
   verifyCredentialVaultContract,
   verifyTokenPoolContract,
+  NulNotAllowedError,
   verifyMcpServerStoreContract,
+  verifySessionRegistryNulContract,
   verifyProfileStoreContract,
 } from '@alteroid/core';
 import { sql } from 'drizzle-orm';
@@ -482,6 +484,10 @@ describe('PgTokenPoolStore', () => {
 });
 
 describe('PgSessionRegistry', () => {
+  it('NUL の契約（issue #2927。3実装で同じことを測る）', async () => {
+    await verifySessionRegistryNulContract(stores.sessions);
+  });
+
   /**
    * 墓標の compare-and-set（issue #1157 段2）。
    *
@@ -690,6 +696,28 @@ describe('PgSessionStore（SDK のセッション永続化）', () => {
 
   it('一度も書かれていない key は null（空配列ではない）', async () => {
     expect(await stores.sessionStore.load(key)).toBeNull();
+  });
+
+  it('鍵列（projectKey / sessionId / subpath / uuid）の NUL は NulNotAllowedError で断り、何も積まない（issue #2927）', async () => {
+    const entry = { type: 'user', uuid: 'u1', body: 'b' };
+    for (const bad of [
+      { projectKey: 'pro\u0000j', sessionId: 'sess-1' },
+      { projectKey: 'proj', sessionId: 'sess\u0000-1' },
+      { projectKey: 'proj', sessionId: 'sess-1', subpath: 'sub\u0000path' },
+    ]) {
+      await expect(stores.sessionStore.append(bad, [entry])).rejects.toBeInstanceOf(
+        NulNotAllowedError,
+      );
+    }
+    await expect(
+      stores.sessionStore.append(key, [{ type: 'user', uuid: 'u\u00001', body: 'b' }]),
+    ).rejects.toBeInstanceOf(NulNotAllowedError);
+    expect(await stores.sessionStore.load(key)).toBeNull();
+    // 本文（entry）の NUL は、これまでどおり落として残す。
+    await stores.sessionStore.append(key, [{ type: 'user', uuid: 'u2', body: 'bo\u0000dy' }]);
+    expect(await stores.sessionStore.load(key)).toEqual([
+      { type: 'user', uuid: 'u2', body: 'body' },
+    ]);
   });
 
   /**

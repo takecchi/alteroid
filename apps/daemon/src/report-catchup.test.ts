@@ -55,6 +55,11 @@ function setup(failScans: number, delays: number[]) {
 describe('日報の起動時の後追いが日誌を読めなかった回（#2908）', () => {
   beforeEach(() => {
     vi.useFakeTimers();
+    // **偽の時計の「現在」を、`now`（10/5 23:00）と同じ日の日報の時刻より前に固定する。** 固定しないと、
+    // 日誌へ積む活動の `at` が実際の時計の時刻になり、実際の日付が `now` の翌日以降になった回
+    // （CI が JST の 0 時を越えて走った回）は、活動が `now` より後の日になって後追いの対象から外れ、
+    // `posted` が空になる（main d6149b1e の CI run 37328947897）。
+    vi.setSystemTime(new Date(2026, 9, 5, 12, 0, 0));
   });
   afterEach(() => {
     vi.useRealTimers();

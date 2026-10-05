@@ -2,6 +2,7 @@ import { mkdir, readdir, readFile, rm, stat, utimes } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import {
+  assertProfileRowWritable,
   compareProfileEntryNames,
   PROFILE_ENTRY_NAME,
   type EnvProfileEntry,
@@ -153,6 +154,7 @@ export class FsProfileStore implements ProfileStore {
   }
 
   async set(name: string, script: string, scope: EnvProfileScope): Promise<EnvProfileEntry> {
+    assertProfileRowWritable({ name, script });
     await this.#migrateLegacy();
     const at = new Date();
     await this.#writeRow(name, script, scope, at);
@@ -175,6 +177,7 @@ export class FsProfileStore implements ProfileStore {
    * 進めると、成功していない更新が最後の変更として表示される。
    */
   async replaceAll(previous: readonly EnvProfileEntry[]): Promise<void> {
+    for (const row of previous) assertProfileRowWritable(row);
     const keep = new Set(previous.map((row) => row.name));
     for (const row of await this.#readAll()) {
       if (!keep.has(row.name)) await this.remove(row.name);

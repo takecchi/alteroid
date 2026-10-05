@@ -3,6 +3,9 @@ import { join } from 'node:path';
 
 import {
   USAGE_ESTIMATE_NOTICE,
+  stripNul,
+  stripNulFromUnmeteredRecord,
+  stripNulFromUsageRecord,
   addUnreadableCounts,
   foldOneshotUsage,
   foldUsageSnapshot,
@@ -471,7 +474,7 @@ export class FsUsageStore implements UsageStore {
    * （`store.ts` の `UsageStore.record` 契約）。差分の計算そのものは
    * `foldUsageSnapshot` に任せ、ここでロジックを二重に持たない。
    */
-  async record(input: {
+  async record(rawInput: {
     layer: UsageLayer;
     site: UsageSite;
     managerId: string;
@@ -481,6 +484,7 @@ export class FsUsageStore implements UsageStore {
     accumulation: UsageAccumulation;
     tokenId?: string;
   }): Promise<UsageFold> {
+    const input = stripNulFromUsageRecord(rawInput);
     return this.#mutate((file) => {
       // **累積の器は `query()` 呼び出しの寿命で閉じる**（`usage.ts` の
       // `usageAccumulationSchema`）。1回で閉じる呼び出しに基準を持たせると、
@@ -576,7 +580,7 @@ export class FsUsageStore implements UsageStore {
    * `UsageStore.recordUnmetered`）。**`unmetered` の1エントリだけを足す。**
    * `rows` / `turns` / `baselines` / 台帳の始点には触らない（0 を積まない）。
    */
-  async recordUnmetered(input: {
+  async recordUnmetered(rawInput: {
     layer: UsageLayer;
     site: UsageSite;
     managerId: string;
@@ -585,6 +589,7 @@ export class FsUsageStore implements UsageStore {
     provider: string;
     tokenId?: string;
   }): Promise<void> {
+    const input = stripNulFromUnmeteredRecord(rawInput);
     await this.#mutate((file) => {
       const key = unmeteredKey(
         input.date,
@@ -705,6 +710,7 @@ export class FsUsageStore implements UsageStore {
   }
 
   async baseline(layer: UsageLayer, managerId: string): Promise<UsageBaseline | null> {
+    managerId = stripNul(managerId);
     const file = await this.#read();
     return file.baselines[baselineKey(layer, managerId)] ?? null;
   }

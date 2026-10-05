@@ -1,4 +1,4 @@
-import { countCodePoints } from '@alteroid/core';
+import { assertNoNul, countCodePoints } from '@alteroid/core';
 import type { LostSessionGrave, SessionTranscriptTail } from '@alteroid/core';
 import type { SessionKey, SessionStore, SessionStoreEntry } from '@anthropic-ai/claude-agent-sdk';
 import { and, asc, desc, eq, ne, sql } from 'drizzle-orm';
@@ -46,6 +46,12 @@ export class PgSessionStore implements SessionStore, SessionTranscriptTail {
   async append(key: SessionKey, entries: SessionStoreEntry[]): Promise<void> {
     if (entries.length === 0) return;
     const subpath = key.subpath ?? '';
+    assertNoNul('sessionStore.projectKey', key.projectKey);
+    assertNoNul('sessionStore.sessionId', key.sessionId);
+    assertNoNul('sessionStore.subpath', subpath);
+    for (const entry of entries) {
+      if (typeof entry.uuid === 'string') assertNoNul('sessionStore.entry.uuid', entry.uuid);
+    }
 
     // uuid 付きは冪等に、無いものはそのまま。まとめて1文にすると、片方の
     // 衝突指定が他方に効いてしまう（uuid 無しの行が黙って落ちる）。

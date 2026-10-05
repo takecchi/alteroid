@@ -1,5 +1,6 @@
 import type { PermissionGrant } from './schema.js';
 import type { PermissionGrantStore } from './store.js';
+import { expectNulRejected } from './nul-contract-support.js';
 
 /**
  * `PermissionGrantStore`（Issue #863。doc は `store.ts`）の契約を、
@@ -214,5 +215,59 @@ export async function verifyPermissionGrantStoreContract(
   }
   if (readCAfter.revokedAt !== revokedC.revokedAt) {
     fail('markUsed(取り消し済み)はrevokedAtを変えない', readCAfter);
+  }
+
+  // 8. NUL（issue #2927。teto の判断、2026-10-05）: 鍵・参照キー（id / approvalId /
+  // route.accountId）は NulNotAllowedError で断り、何も書かない。本文（rule / allows /
+  // denies / answer）は NUL を落として残す。
+  const before = (await store.list()).length;
+  for (const [label, grant, secret] of [
+    [
+      'idのNUL',
+      { ...makeGrant('permission-grant-contract-n\u0000ul', '2026-02-01T00:00:00.000Z') },
+      'contract-n',
+    ],
+    [
+      'approvalIdのNUL',
+      {
+        ...makeGrant('permission-grant-contract-ap', '2026-02-01T00:00:00.000Z'),
+        approvalId: 'ap-\u0000-x',
+      },
+      'ap-',
+    ],
+    [
+      'route.accountIdのNUL',
+      {
+        ...makeGrant('permission-grant-contract-ac', '2026-02-01T00:00:00.000Z'),
+        route: { principalKind: 'account' as const, accountId: 'acc-\u0000-x' },
+      },
+      'acc-',
+    ],
+  ] as const) {
+    await expectNulRejected(
+      (message) => fail(message, null),
+      label,
+      () => store.put(grant),
+      secret,
+    );
+  }
+  if ((await store.list()).length !== before) fail('NULで断ったのに何かを書いた', before);
+  const bodyNul: PermissionGrant = {
+    ...makeGrant('permission-grant-contract-body', '2026-02-02T00:00:00.000Z'),
+    rule: 'Bash(gh \u0000release:*)',
+    allows: ['gh re\u0000lease'],
+    denies: ['rm\u0000 -rf'],
+    answer: '許可\u0000します',
+  };
+  await store.put(bodyNul);
+  const readBody = await store.get(bodyNul.id);
+  if (
+    readBody === null ||
+    readBody.rule !== 'Bash(gh release:*)' ||
+    readBody.allows.join() !== 'gh release' ||
+    readBody.denies.join() !== 'rm -rf' ||
+    readBody.answer !== '許可します'
+  ) {
+    fail('本文のNULは落として残す', readBody);
   }
 }

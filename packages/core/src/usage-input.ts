@@ -1,0 +1,49 @@
+import { stripNul } from './nul-guard.js';
+import type { UsageSnapshot } from './usage.js';
+
+/**
+ * 消費の台帳（`UsageStore`）の入口で、鍵列と本文の NUL を落とす（issue #2927。
+ * teto の判断、2026-10-05）。3実装（インメモリ / fs / pg）が同じ関数を通す。
+ *
+ * **ここだけは鍵でも断らず、落として残す。** `managerId`・`model`・`tokenId`・
+ * `provider` は集計の切り口で、特定の1行を指して書き換える鍵ではない。`model` は SDK の
+ * `modelUsage` のキー（外から来る）で、断ると消費の記録が丸ごと消える（呼び出し側は失敗を
+ * 握りつぶして日誌に残すだけ）。害が大きいのは記録を失うほうである。pg は元から落として
+ * 記録を残していた（`stripNulls`）ので、fs とインメモリがそれに揃える。
+ *
+ * 落とした結果、同じ名前になるモデル（`a\0b` と `ab`）は1つに畳まれる（後のものが残る）。
+ * 実際には起きない入力なので、足し合わせはしていない。
+ */
+export function stripNulFromUsageSnapshot(snapshot: UsageSnapshot): UsageSnapshot {
+  return {
+    ...snapshot,
+    ...(snapshot.sessionId === undefined ? {} : { sessionId: stripNul(snapshot.sessionId) }),
+    models: Object.fromEntries(
+      Object.entries(snapshot.models).map(([model, totals]) => [stripNul(model), totals]),
+    ),
+  };
+}
+
+/** `record` の入力の鍵列（managerId・tokenId・model・sessionId）の NUL を落とす。 */
+export function stripNulFromUsageRecord<
+  T extends { managerId: string; tokenId?: string; snapshot: UsageSnapshot },
+>(input: T): T {
+  return {
+    ...input,
+    managerId: stripNul(input.managerId),
+    ...(input.tokenId === undefined ? {} : { tokenId: stripNul(input.tokenId) }),
+    snapshot: stripNulFromUsageSnapshot(input.snapshot),
+  };
+}
+
+/** `recordUnmetered` の入力の鍵列（managerId・tokenId・provider）の NUL を落とす。 */
+export function stripNulFromUnmeteredRecord<
+  T extends { managerId: string; tokenId?: string; provider: string },
+>(input: T): T {
+  return {
+    ...input,
+    managerId: stripNul(input.managerId),
+    provider: stripNul(input.provider),
+    ...(input.tokenId === undefined ? {} : { tokenId: stripNul(input.tokenId) }),
+  };
+}

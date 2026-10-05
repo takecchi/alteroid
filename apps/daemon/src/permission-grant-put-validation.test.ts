@@ -15,9 +15,9 @@ import { createMigratedPglite, migratedTemplate } from './pglite-template.test-s
  *
  * fs / pg の `put()` は、書く前に `permissionGrantSchema.parse(grant)` を
  * 通す——fs は
- * `grep -Fn -- 'grants.push(permissionGrantSchema.parse(grant));' packages/storage-fs/src/permission-grants.ts`、
+ * `grep -Fn -- 'const prepared = preparePermissionGrantForPut(permissionGrantSchema.parse(grant));' packages/storage-fs/src/permission-grants.ts`、
  * pg は
- * `grep -Fn -- 'const value = permissionGrantSchema.parse(grant);' packages/storage-pg/src/permission-grants.ts`。
+ * `grep -Fn -- 'const value = preparePermissionGrantForPut(permissionGrantSchema.parse(grant));' packages/storage-pg/src/permission-grants.ts`。
  * **インメモリ実装（`packages/core/src/testing.ts` の `createMemoryStores`）
  * だけが検査を持たず**、`permissionGrantRows.set(grant.id, grant);` を素通しで
  * 呼ぶだけだった——同じストアの `revoke` / `markUsed` は既に

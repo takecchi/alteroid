@@ -1,4 +1,5 @@
 import {
+  assertProfileRowWritable,
   compareProfileEntryNames,
   type EnvProfileEntry,
   type EnvProfileScope,
@@ -50,6 +51,7 @@ export class PgProfileStore implements ProfileStore {
   }
 
   async set(name: string, script: string, scope: EnvProfileScope): Promise<EnvProfileEntry> {
+    assertProfileRowWritable({ name, script });
     const at = new Date();
     await this.#db
       .insert(envProfileEntries)
@@ -77,6 +79,7 @@ export class PgProfileStore implements ProfileStore {
    * 1つのトランザクションで入れ替える（途中で落ちて集合が半端に残らない）。
    */
   async replaceAll(previous: readonly EnvProfileEntry[]): Promise<void> {
+    for (const row of previous) assertProfileRowWritable(row);
     await this.#db.transaction(async (tx) => {
       await tx.delete(envProfileEntries);
       if (previous.length === 0) return;
