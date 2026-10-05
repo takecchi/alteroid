@@ -11,7 +11,7 @@
  * 3. **400 のときは不正な欄の位置（`error`）を出し、前のものが残ると言う**
  * 4. **外すのは空の `mcpServers` の `PUT`**（`alteroid mcp clear` と同じ）
  * 5. **403 は本文で出し分ける。** `requireOwner` の本文のときだけ持ち主の宣言を案内する
- * 6. **保存したら runner ごとの配布結果を出す**（配り損ねを小さく出さない）
+ * 6. **保存したら 実行環境ごとの反映結果を出す**（配り損ねを小さく出さない）
  */
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
@@ -121,7 +121,7 @@ describe('/mcp-servers 画面 — 読む', () => {
     expect(screen.getByText('github')).toBeTruthy();
     expect(screen.getByText('npx')).toBeTruthy();
     expect(screen.getByText('env: GITHUB_TOKEN')).toBeTruthy();
-    expect(screen.getByText('args: 3 個（値は伏せた）')).toBeTruthy();
+    expect(screen.getByText('引数（args）: 3 個（値は伏せた）')).toBeTruthy();
     expect(screen.getByText('https://mcp.linear.app/mcp?***')).toBeTruthy();
     expect(screen.getByText('headers: Authorization')).toBeTruthy();
     expect(document.body.textContent).not.toContain(SECRET);
@@ -221,7 +221,7 @@ describe('/mcp-servers 画面 — 差し替える', () => {
     expect(puts).toEqual([next]);
     expect(screen.getByText('足した: notion')).toBeTruthy();
     expect(screen.getByText('外した: linear')).toBeTruthy();
-    const report = screen.getByLabelText('runner ごとの配布結果');
+    const report = screen.getByLabelText('実行環境ごとの反映結果');
     expect(report.textContent).toContain(`runner-1: 届いた（sha256 ${'b'.repeat(12)}）`);
     // 届かなかった runner を小さく出さない。
     expect(report.textContent).toContain('runner-2: 届かなかった — runner に届かなかった');
@@ -312,7 +312,7 @@ describe('/mcp-servers 画面 — 差し替える', () => {
     expect(await screen.findByText('MCP 連携の登録を外した。')).toBeTruthy();
     expect(puts).toEqual([{ mcpServers: {} }]);
     expect(screen.getByText('外した: github, linear')).toBeTruthy();
-    expect(screen.getByLabelText('runner ごとの配布結果').textContent).toContain(
+    expect(screen.getByLabelText('実行環境ごとの反映結果').textContent).toContain(
       'runner-1: 外した',
     );
   });

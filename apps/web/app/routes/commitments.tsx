@@ -70,7 +70,7 @@ export default function Commitments() {
     <Page
       tabs={<WorkTabs />}
       title="未了の仕事"
-      description="受信箱でも日誌でもここには残らない。忘れさせないための器であって、やることの一覧ではない"
+      description="受信箱でも日誌でもここには残らない。忘れさせないための場所であって、やることの一覧ではない"
       action={
         <Button size="sm" onClick={() => setShowClosed((v) => !v)}>
           {showClosed ? '未了だけ' : '片付けたものも見る'}

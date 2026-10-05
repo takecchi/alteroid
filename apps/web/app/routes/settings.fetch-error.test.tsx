@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 /**
- * runner の名簿（`GET /runners`）の取得に失敗したとき、「登録された runner が無い」を並べない
+ * runner の名簿（`GET /runners`）の取得に失敗したとき、「登録された実行環境が無い」を並べない
  * （issue #2324）。
  *
  * 読めていないのに runner が0台だと言い切ることになる（状態の断定。AGENTS.md の地雷「取れない軸に
@@ -56,33 +56,33 @@ function renderPage() {
 
 /** runner のカード（他のカードの注記と混ざらないよう、ここだけを見る）。 */
 function runnersCard(): HTMLElement {
-  const card = screen.getByRole('heading', { name: 'runner' }).closest('[data-slot="card"]');
+  const card = screen.getByRole('heading', { name: '実行環境（runner）' }).closest('[data-slot="card"]');
   if (!(card instanceof HTMLElement)) throw new Error('runner のカードが見つからない');
   return card;
 }
 
 describe('runner の名簿の取得に失敗したとき（issue #2324）', () => {
-  it('サーバの失敗（500）: エラーは出し、「登録された runner が無い」は出さない', async () => {
+  it('サーバの失敗（500）: エラーは出し、「登録された実行環境が無い」は出さない', async () => {
     stubRunners(() => json({ error: 'internal' }, 500));
     renderPage();
 
     await waitFor(() => expect(within(runnersCard()).getByRole('alert')).toBeTruthy());
-    expect(screen.queryByText(/登録された runner が無い/)).toBeNull();
+    expect(screen.queryByText(/登録された実行環境が無い/)).toBeNull();
   });
 
-  it('通信の失敗: エラーは出し、「登録された runner が無い」は出さない', async () => {
+  it('通信の失敗: エラーは出し、「登録された実行環境が無い」は出さない', async () => {
     stubRunners(() => Promise.reject(new TypeError('Failed to fetch')));
     renderPage();
 
     await waitFor(() => expect(within(runnersCard()).getByRole('alert')).toBeTruthy());
-    expect(screen.queryByText(/登録された runner が無い/)).toBeNull();
+    expect(screen.queryByText(/登録された実行環境が無い/)).toBeNull();
   });
 
-  it('本当に0台なら、いままでどおり「登録された runner が無い」と言う', async () => {
+  it('本当に0台なら、いままでどおり「登録された実行環境が無い」と言う', async () => {
     stubRunners(() => json({ runners: [], daemonRevision: { status: 'unknown' } }));
     renderPage();
 
-    expect(await screen.findByText(/登録された runner が無い。/)).toBeTruthy();
+    expect(await screen.findByText(/登録された実行環境が無い。/)).toBeTruthy();
     expect(within(runnersCard()).queryByRole('alert')).toBeNull();
   });
 });

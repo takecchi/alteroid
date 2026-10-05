@@ -1,10 +1,10 @@
 // @vitest-environment jsdom
 /**
- * `/tokens` — 認証トークンのプール一覧・追加・削除・無効化/有効化・回転の設定・
- * 回転の履歴を見る画面（2026-09-14 から読み取り専用ではない）。
+ * `/tokens` — 認証トークンのトークン一覧・追加・削除・無効化/有効化・切り替えの設定・
+ * 切り替えの履歴を見る画面（2026-09-14 から読み取り専用ではない）。
  *
  * ここで固定したいのは「値は追加フォーム以外へ出さない」「4状態を潰さない」
- * 「不明と、そもそも無いを混ぜない」「冷却は原文と絶対時刻の両方を出す」
+ * 「不明と、そもそも無いを混ぜない」「休止は原文と絶対時刻の両方を出す」
  * 「403 に専用の文言がある」「追加・削除・無効化/有効化は既存の一覧を土台に
  * `PUT /tokens` を全置換で呼ぶ」の各点。文言の細部より、この規律が壊れていないかを見る。
  */
@@ -44,7 +44,7 @@ function stubScreen(options: {
   settings?: unknown;
   /**
    * issue #2095。渡すと応答から `settings` を省き、代わりにこれを積む——
-   * `GET /tokens` が回す契機・冷却の設定を読めなかったときと同じ形
+   * `GET /tokens` が切り替える条件・休止の設定を読めなかったときと同じ形
    * （`settings` を省いて `settingsUnreadable: { reason }` を返す。既定値では
    * 埋めない）。
    */
@@ -84,7 +84,7 @@ function stubScreen(options: {
 }
 
 async function waitForPoolLoaded(): Promise<void> {
-  await screen.findByRole('heading', { name: 'プール一覧' });
+  await screen.findByRole('heading', { name: 'トークン一覧' });
 }
 
 /**
@@ -195,7 +195,7 @@ function stubCrudScreen(
 }
 
 describe('/tokens 画面 — プールの4状態', () => {
-  it('使用可能・冷却中・無効化済み・失効を、それぞれ区別して出す', async () => {
+  it('使用可能・休止中・無効化済み・失効を、それぞれ区別して出す', async () => {
     const future = Date.now() + 60 * 60 * 1000;
     stubScreen({
       tokens: [
@@ -233,7 +233,7 @@ describe('/tokens 画面 — プールの4状態', () => {
     await waitForPoolLoaded();
 
     expect(screen.getByText('使用可能')).toBeTruthy();
-    expect(screen.getByText('冷却中')).toBeTruthy();
+    expect(screen.getByText('休止中')).toBeTruthy();
     expect(screen.getByText('無効化済み（人間が外した。戻らない）')).toBeTruthy();
     expect(screen.getByText('失効（通らないと確定。人間が外すまで戻らない）')).toBeTruthy();
     // 4状態が4つとも別の label に付いていること（同じトークンに畳まれていない）。
@@ -379,7 +379,7 @@ describe('/tokens 画面 — 知らない値が届いても落ちない', () => 
     expect(screen.getByText(/a_value_this_bundle_does_not_know/)).toBeTruthy();
   });
 
-  it('回転の event が知らない値でも、履歴は出る', async () => {
+  it('切り替えの event が知らない値でも、履歴は出る', async () => {
     stubScreen({
       tokens: [{ id: 't-1', label: 'token-1', order: 0, sha256: 'a'.repeat(12) }],
       journalEntries: [
@@ -402,9 +402,9 @@ describe('/tokens 画面 — 知らない値が届いても落ちない', () => 
   });
 });
 
-describe('/tokens 画面 — 冷却は原文と絶対時刻の両方を出す', () => {
+describe('/tokens 画面 — 休止は原文と絶対時刻の両方を出す', () => {
   it('cooldownUntil の絶対時刻と lastRejectedReason の原文が両方出る', async () => {
-    // 実測で報告されている桁の食い違い（冷却は5時間なのに理由の原文は
+    // 実測で報告されている桁の食い違い（休止は5時間なのに理由の原文は
     // 「weekly limit resets 5pm」）を再現する fixture。相対表現だけでは
     // この食い違いに気づけないので、絶対時刻が出ることを固定する。
     const cooldownUntil = Date.parse('2026-08-25T05:00:00.000Z');
@@ -440,7 +440,7 @@ describe('/tokens 画面 — 冷却は原文と絶対時刻の両方を出す', 
    * #678 の調査は「文言が 22:10 と言っているのに 01:42 と出ている」を人間が目で
    * 見つけたところから始まっている —— 行が出所を持てば、その1行で終わる。
    */
-  it('冷却の期限の出所を3値で言い分ける（推測のときだけ言う形にしない）', async () => {
+  it('休止の期限の出所を3値で言い分ける（推測のときだけ言う形にしない）', async () => {
     const cooldownUntil = Date.parse('2026-08-25T05:00:00.000Z');
     const cases = [
       { source: 'quota_reset' as const, text: /利用枠の復活時刻（確かな値）/ },
@@ -518,7 +518,7 @@ describe('/tokens 画面 — 空のプール', () => {
     expect(screen.getByText(/id もラベルも取れない/)).toBeTruthy();
     expect(screen.getByText('first')).toBeTruthy();
     // 設定は読めているので、設定の直し方のカードは出ない。
-    expect(screen.queryByText(/回転の設定は読めない/)).toBeNull();
+    expect(screen.queryByText(/切り替えの設定は読めない/)).toBeNull();
   });
 
   /**
@@ -646,7 +646,7 @@ describe('/tokens 画面 — 403', () => {
   });
 });
 
-describe('/tokens 画面 — 回転の履歴（エラー状況）', () => {
+describe('/tokens 画面 — 切り替えの履歴（エラー状況）', () => {
   it('journal の token_rotation が出る', async () => {
     stubScreen({
       tokens: [],
@@ -668,12 +668,12 @@ describe('/tokens 画面 — 回転の履歴（エラー状況）', () => {
     expect(screen.getByText('候補が無い（全層が止まる）')).toBeTruthy();
   });
 
-  it('回転の記録が0件なら、その旨を言う', async () => {
+  it('切り替えの記録が0件なら、その旨を言う', async () => {
     stubScreen({ tokens: [], journalEntries: [] });
 
     renderTokens();
 
-    expect(await screen.findByText('回転の記録がまだ1件も無い。')).toBeTruthy();
+    expect(await screen.findByText('切り替えの記録がまだ1件も無い。')).toBeTruthy();
   });
 });
 
@@ -833,27 +833,27 @@ function stubPolicyScreen(initial: { rotateOn: string; cooldownMs: number } = DE
   };
 }
 
-describe('/tokens 画面 — 回転の設定を書き込む（Issue #1123）', () => {
-  it('回す契機を変えて保存すると、その値だけで PUT /tokens/policy が呼ばれ、表示に反映される', async () => {
+describe('/tokens 画面 — 切り替えの設定を書き込む（Issue #1123）', () => {
+  it('切り替える条件を変えて保存すると、その値だけで PUT /tokens/policy が呼ばれ、表示に反映される', async () => {
     const { puts } = stubPolicyScreen();
 
     renderTokens();
     await waitForPoolLoaded();
 
-    fireEvent.change(screen.getByLabelText('回す契機を変える'), { target: { value: 'off' } });
+    fireEvent.change(screen.getByLabelText('切り替える条件を変える'), { target: { value: 'off' } });
     fireEvent.click(screen.getByRole('button', { name: '保存' }));
 
-    expect(await screen.findByText('回さない（記録だけする）')).toBeTruthy();
+    expect(await screen.findByText('切り替えない（記録だけする）')).toBeTruthy();
     expect(puts).toEqual([{ rotateOn: 'off', cooldownMs: DEFAULT_SETTINGS.cooldownMs }]);
   });
 
-  it('冷却の既定（ミリ秒）を変えて保存すると PUT /tokens/policy が呼ばれ、表示に反映される', async () => {
+  it('休止の既定（ミリ秒）を変えて保存すると PUT /tokens/policy が呼ばれ、表示に反映される', async () => {
     const { puts } = stubPolicyScreen();
 
     renderTokens();
     await waitForPoolLoaded();
 
-    fireEvent.change(screen.getByLabelText('冷却の既定を変える（ミリ秒）'), {
+    fireEvent.change(screen.getByLabelText('休止の既定を変える（ミリ秒）'), {
       target: { value: '3600000' },
     });
     fireEvent.click(screen.getByRole('button', { name: '保存' }));
@@ -873,7 +873,7 @@ describe('/tokens 画面 — 回転の設定を書き込む（Issue #1123）', (
 
     expect(screen.getByRole('button', { name: '変更なし' })).toHaveProperty('disabled', true);
 
-    fireEvent.change(screen.getByLabelText('回す契機を変える'), {
+    fireEvent.change(screen.getByLabelText('切り替える条件を変える'), {
       target: { value: 'overage_exhausted' },
     });
 
@@ -891,7 +891,7 @@ describe('/tokens 画面 — 回転の設定を書き込む（Issue #1123）', (
     renderTokens();
     await waitForPoolLoaded();
 
-    fireEvent.change(screen.getByLabelText('冷却の既定を変える（ミリ秒）'), {
+    fireEvent.change(screen.getByLabelText('休止の既定を変える（ミリ秒）'), {
       target: { value: '-1' },
     });
     fireEvent.click(screen.getByRole('button', { name: '保存' }));
@@ -900,7 +900,7 @@ describe('/tokens 画面 — 回転の設定を書き込む（Issue #1123）', (
       await screen.findByText(/設定の入力の形が不正: cooldownMs は正の整数である必要がある/),
     ).toBeTruthy();
     // 断られた値は画面に残る（黙って元に戻さない——人間が直して再送できる）。
-    expect(screen.getByLabelText('冷却の既定を変える（ミリ秒）')).toHaveProperty('value', '-1');
+    expect(screen.getByLabelText('休止の既定を変える（ミリ秒）')).toHaveProperty('value', '-1');
   });
 });
 
@@ -974,13 +974,13 @@ function stubUnreadableScreen(
 }
 
 /**
- * issue #2096（#2095 の表示側）。回す契機・冷却の設定（`GET /tokens` の
+ * issue #2096（#2095 の表示側）。切り替える条件・休止の設定（`GET /tokens` の
  * `settings`）が壊れて読めないとき、デーモンは `settings` を省いて
  * `settingsUnreadable.reason` を返す。**この画面は理由を出したうえで、両方
  * 選ばせて直す導線を持つ**（片方だけの保存は `PUT /tokens/policy` 側が
  * 500 で断るので、画面側も両方揃うまで保存を押せなくする）。
  */
-describe('/tokens 画面 — 回転の設定が読めない（issue #2096）', () => {
+describe('/tokens 画面 — 切り替えの設定が読めない（issue #2096）', () => {
   it('reason と「消えたのではない」旨が出て、一覧は道連れにならない。既定値は出ない', async () => {
     const REASON = 'rotateOn が enum の外（テスト用）';
     stubScreen({
@@ -997,11 +997,11 @@ describe('/tokens 画面 — 回転の設定が読めない（issue #2096）', (
     expect(screen.getByText('ready-token')).toBeTruthy();
     // 理由が出て、「消えたのではなく、読めない形で入っている」ことが伝わる。
     expect(
-      await screen.findByText(new RegExp(`回転の設定は読めない（消えたのではなく.*${REASON}`)),
+      await screen.findByText(new RegExp(`切り替えの設定は読めない（消えたのではなく.*${REASON}`)),
     ).toBeTruthy();
     // 既定値（`free_exhausted` 等）へすり替わっていない——未選択から始まる。
-    expect(screen.getByLabelText('回す契機を選ぶ')).toHaveProperty('value', '');
-    expect(screen.getByLabelText('冷却の既定を選ぶ（ミリ秒）')).toHaveProperty('value', '');
+    expect(screen.getByLabelText('切り替える条件を選ぶ')).toHaveProperty('value', '');
+    expect(screen.getByLabelText('休止の既定を選ぶ（ミリ秒）')).toHaveProperty('value', '');
     // 選ぶまで保存は押せない。
     expect(screen.getByRole('button', { name: '保存' })).toHaveProperty('disabled', true);
   });
@@ -1020,7 +1020,7 @@ describe('/tokens 画面 — 回転の設定が読めない（issue #2096）', (
     renderTokens();
     await waitForPoolLoaded();
 
-    expect(await screen.findByText(/回転の設定は読めない.*理由不明/)).toBeTruthy();
+    expect(await screen.findByText(/切り替えの設定は読めない.*理由不明/)).toBeTruthy();
   });
 
   it('片方しか選んでいないと保存が押せない。両方選んで初めて押せる', async () => {
@@ -1029,12 +1029,12 @@ describe('/tokens 画面 — 回転の設定が読めない（issue #2096）', (
     renderTokens();
     await waitForPoolLoaded();
 
-    fireEvent.change(screen.getByLabelText('回す契機を選ぶ'), {
+    fireEvent.change(screen.getByLabelText('切り替える条件を選ぶ'), {
       target: { value: 'off' },
     });
     expect(screen.getByRole('button', { name: '保存' })).toHaveProperty('disabled', true);
 
-    fireEvent.change(screen.getByLabelText('冷却の既定を選ぶ（ミリ秒）'), {
+    fireEvent.change(screen.getByLabelText('休止の既定を選ぶ（ミリ秒）'), {
       target: { value: '3600000' },
     });
     expect(screen.getByRole('button', { name: '保存' })).toHaveProperty('disabled', false);
@@ -1046,17 +1046,17 @@ describe('/tokens 画面 — 回転の設定が読めない（issue #2096）', (
     renderTokens();
     await waitForPoolLoaded();
 
-    fireEvent.change(screen.getByLabelText('回す契機を選ぶ'), {
+    fireEvent.change(screen.getByLabelText('切り替える条件を選ぶ'), {
       target: { value: 'overage_exhausted' },
     });
-    fireEvent.change(screen.getByLabelText('冷却の既定を選ぶ（ミリ秒）'), {
+    fireEvent.change(screen.getByLabelText('休止の既定を選ぶ（ミリ秒）'), {
       target: { value: '3600000' },
     });
     fireEvent.click(screen.getByRole('button', { name: '保存' }));
 
-    // 通常の SettingsCard（読み取り表示 + 「回す契機を変える」欄）に戻る。
-    expect(await screen.findByLabelText('回す契機を変える')).toBeTruthy();
-    expect(screen.queryByLabelText('回す契機を選ぶ')).toBeNull();
+    // 通常の SettingsCard（読み取り表示 + 「切り替える条件を変える」欄）に戻る。
+    expect(await screen.findByLabelText('切り替える条件を変える')).toBeTruthy();
+    expect(screen.queryByLabelText('切り替える条件を選ぶ')).toBeNull();
     expect(puts).toEqual([{ rotateOn: 'overage_exhausted', cooldownMs: 3_600_000 }]);
   });
 
@@ -1067,10 +1067,10 @@ describe('/tokens 画面 — 回転の設定が読めない（issue #2096）', (
     renderTokens();
     await waitForPoolLoaded();
 
-    fireEvent.change(screen.getByLabelText('回す契機を選ぶ'), {
+    fireEvent.change(screen.getByLabelText('切り替える条件を選ぶ'), {
       target: { value: 'off' },
     });
-    fireEvent.change(screen.getByLabelText('冷却の既定を選ぶ（ミリ秒）'), {
+    fireEvent.change(screen.getByLabelText('休止の既定を選ぶ（ミリ秒）'), {
       target: { value: '3600000' },
     });
     fireEvent.click(screen.getByRole('button', { name: '保存' }));
@@ -1079,7 +1079,7 @@ describe('/tokens 画面 — 回転の設定が読めない（issue #2096）', (
       await screen.findByText(/読めない現在値は両方揃った patch でしか埋められない/),
     ).toBeTruthy();
     // 通常の設定カードには切り替わっていない（読めないまま）。
-    expect(screen.getByLabelText('回す契機を選ぶ')).toHaveProperty('value', 'off');
+    expect(screen.getByLabelText('切り替える条件を選ぶ')).toHaveProperty('value', 'off');
   });
 });
 
@@ -1104,7 +1104,7 @@ describe('/tokens 画面 — 使用量からの行き先（issue #2109）', () =
     expect(targetRow?.className).toContain('border-primary');
     expect(otherRow?.className).not.toContain('border-primary');
     // 「プールに無い」の注記は出ない——id は実在する。
-    expect(screen.queryByText(/はいまのプールに無い/)).toBeNull();
+    expect(screen.queryByText(/はいまの一覧に無い/)).toBeNull();
   });
 
   it('?tokenId=<id> で飛んでくると、その行へ scrollIntoView する', async () => {
@@ -1130,7 +1130,7 @@ describe('/tokens 画面 — 使用量からの行き先（issue #2109）', () =
     scrollIntoView.mockRestore();
   });
 
-  it('プールに無い id で飛んでくると、頭に着地しつつ「いまのプールに無い」旨を出す', async () => {
+  it('プールに無い id で飛んでくると、頭に着地しつつ「いまの一覧に無い」旨を出す', async () => {
     stubScreen({
       tokens: [{ id: 't-a', label: 'row-a', order: 0, sha256: 'a'.repeat(12), source: 'stored' }],
     });
@@ -1138,8 +1138,10 @@ describe('/tokens 画面 — 使用量からの行き先（issue #2109）', () =
     renderTokens(['/?tokenId=t-removed']);
     await waitForPoolLoaded();
 
-    // 事実だけを言う——なぜ無いかは断定しない（「外したか、別の器のもの」）。
-    expect(await screen.findByText(/はいまのプールに無い（外したか、別の器のもの）/)).toBeTruthy();
+    // 事実だけを言う——なぜ無いかは断定しない（「外したか、別の実行環境のもの」）。
+    expect(
+      await screen.findByText(/はいまの一覧に無い（外したか、別の実行環境のもの）/),
+    ).toBeTruthy();
     expect(screen.getByText('t-removed')).toBeTruthy();
     // 残っている行はそのまま出る——道連れになっていない。
     expect(screen.getByText('row-a')).toBeTruthy();
@@ -1155,7 +1157,7 @@ describe('/tokens 画面 — 使用量からの行き先（issue #2109）', () =
     renderTokens();
     await waitForPoolLoaded();
 
-    expect(screen.queryByText(/はいまのプールに無い/)).toBeNull();
+    expect(screen.queryByText(/はいまの一覧に無い/)).toBeNull();
     expect(document.getElementById('token-t-a')?.className).not.toContain('border-primary');
   });
 });

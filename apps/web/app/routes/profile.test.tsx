@@ -8,13 +8,13 @@
  * 1. **本文は既定で出さない。**「本文を表示する」を押すまで、鍵が入りうる本文を
  *    1文字も描かない（`GET /profile` は本文を丸ごと返すため）
  * 2. **保存は2段。**「保存する」だけでは `PUT /profile/:name` を叩かず、「本当に保存する」
- *    で初めて、編集した本文・撒く先をそのまま送る
+ *    で初めて、編集した本文・渡す先をそのまま送る
  * 3. **400 のときは `detail` まで見せる。** 直すのに要るのは行番号込みの `detail` で、
  *    共有の `unwrap` が拾う `error` だけでは直せない
  * 4. **外すのは行ごとの `DELETE /profile/:name`**（確認を挟む）
  * 5. **403 は本文で出し分ける。** `requireOwner` の本文のときだけ持ち主の宣言を
  *    案内し、それ以外の 403 には案内を出さない
- * 6. **撒く先は環境変数の画面と同じ3値・同じ言い方。** 既定は共通（all）
+ * 6. **渡す先は環境変数の画面と同じ3値・同じ言い方。** 既定は共通（all）
  */
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
@@ -151,15 +151,15 @@ function renderScreen() {
 }
 
 describe('/profile 画面 — 読む', () => {
-  it('行の一覧（名前・撒く先・バイト数・指紋）と合成後の指紋を出すが、本文は「本文を表示する」を押すまで出さない', async () => {
+  it('行の一覧（名前・渡す先・バイト数・識別用の値）と合成後の識別用の値を出すが、本文は「本文を表示する」を押すまで出さない', async () => {
     stubProfile();
     renderScreen();
 
     expect(await screen.findByText('base')).toBeTruthy();
     expect(screen.getByText('rust')).toBeTruthy();
-    // 撒く先は環境変数の画面と同じ言い方。
+    // 渡す先は環境変数の画面と同じ言い方。
     expect(screen.getByText('共通')).toBeTruthy();
-    expect(screen.getByText('manager')).toBeTruthy();
+    expect(screen.getByText('マネージャーだけ')).toBeTruthy();
     expect(screen.getByText('41 バイト')).toBeTruthy();
     expect(screen.getByText(/sha256=a{12}/)).toBeTruthy();
     expect(screen.getByText('c'.repeat(12))).toBeTruthy();
@@ -186,11 +186,11 @@ describe('/profile 画面 — 読む', () => {
     expect(screen.getByRole('button', { name: '行を追加する' })).toBeTruthy();
   });
 
-  it('知らない撒く先でも落ちず、そのまま出す（サーバのほうが新しい窓が在る）', async () => {
+  it('知らない渡す先でも落ちず、そのまま出す（サーバのほうが新しい窓が在る）', async () => {
     stubProfile({ rows: [{ ...BASE, scope: 'future-scope' }] });
     renderScreen();
 
-    expect(await screen.findByText('未知の撒く先（future-scope）')).toBeTruthy();
+    expect(await screen.findByText('未知の渡す先（future-scope）')).toBeTruthy();
   });
 
   it('requireOwner の 403 なら、持ち主として宣言する手を案内する', async () => {
@@ -222,7 +222,7 @@ describe('/profile 画面 — 読む', () => {
 });
 
 describe('/profile 画面 — 行を置く', () => {
-  it('「編集する」は、その行の本文・撒く先を流し込み、名前は変えられない', async () => {
+  it('「編集する」は、その行の本文・渡す先を流し込み、名前は変えられない', async () => {
     stubProfile();
     renderScreen();
 
@@ -231,13 +231,13 @@ describe('/profile 画面 — 行を置く', () => {
     expect(screen.getByLabelText<HTMLTextAreaElement>('プロファイルの新しい本文').value).toBe(
       RUST.script,
     );
-    expect(screen.getByLabelText<HTMLSelectElement>('プロファイルの撒く先').value).toBe('runner');
+    expect(screen.getByLabelText<HTMLSelectElement>('プロファイルの渡す先').value).toBe('runner');
     const name = screen.getByLabelText<HTMLInputElement>('プロファイルの行の名前');
     expect(name.value).toBe('rust');
     expect(name.disabled).toBe(true);
   });
 
-  it('「保存する」だけでは PUT を叩かず、「本当に保存する」で名前・撒く先・本文をそのまま送る', async () => {
+  it('「保存する」だけでは PUT を叩かず、「本当に保存する」で名前・渡す先・本文をそのまま送る', async () => {
     const { puts } = stubProfile({ rows: [] });
     renderScreen();
 
@@ -249,19 +249,19 @@ describe('/profile 画面 — 行を置く', () => {
     fireEvent.change(screen.getByLabelText('プロファイルの新しい本文'), {
       target: { value: next },
     });
-    fireEvent.change(screen.getByLabelText('プロファイルの撒く先'), {
+    fireEvent.change(screen.getByLabelText('プロファイルの渡す先'), {
       target: { value: 'runner' },
     });
     fireEvent.click(screen.getByRole('button', { name: '保存する' }));
     expect(puts).toEqual([]);
-    expect(screen.getByText(/マネージャー・作業者だけへ配る/)).toBeTruthy();
+    expect(screen.getByText(/マネージャー・作業者だけへ渡す/)).toBeTruthy();
 
     fireEvent.click(screen.getByRole('button', { name: '本当に保存する' }));
 
     expect(await screen.findByText(/プロファイルの行 rust を更新した。/)).toBeTruthy();
     expect(puts).toEqual([{ name: 'rust', body: { script: next, scope: 'runner' } }]);
-    // 合成後の指紋と、反映できなかった runner を小さく出さない。
-    expect(screen.getByText(/クローン用 e{12} \/ runner 用 f{12}/)).toBeTruthy();
+    // 合成後の識別用の値と、反映できなかった runner を小さく出さない。
+    expect(screen.getByText(/クローン用 e{12} \/ マネージャー用 f{12}/)).toBeTruthy();
     expect(screen.getByText(/反映できなかった — runner に届かなかった/)).toBeTruthy();
   });
 
@@ -291,14 +291,14 @@ describe('/profile 画面 — 行を置く', () => {
     expect(save()).toBe(true);
   });
 
-  it('本文を変えなくても、撒く先を変えれば保存できる（外れる側が出るので更新である）', async () => {
+  it('本文を変えなくても、渡す先を変えれば保存できる（外れる側が出るので更新である）', async () => {
     stubProfile();
     renderScreen();
 
     fireEvent.click((await screen.findAllByRole('button', { name: '編集する' }))[0]!);
     expect(screen.getByRole('button', { name: '保存する' }).hasAttribute('disabled')).toBe(true);
 
-    fireEvent.change(screen.getByLabelText('プロファイルの撒く先'), { target: { value: 'app' } });
+    fireEvent.change(screen.getByLabelText('プロファイルの渡す先'), { target: { value: 'app' } });
 
     expect(screen.getByRole('button', { name: '保存する' }).hasAttribute('disabled')).toBe(false);
   });
@@ -437,7 +437,7 @@ describe('/profile 画面 — 古いデーモン（旧形式の応答）', () =>
     return { calls };
   }
 
-  it('落ちずに default 1行として本文が見え、デーモンが古い旨を出す。指紋・撒く先は消さない', async () => {
+  it('落ちずに default 1行として本文が見え、デーモンが古い旨を出す。識別用の値・渡す先は消さない', async () => {
     stubOldDaemon();
     renderScreen();
 
@@ -464,13 +464,13 @@ describe('/profile 画面 — 古いデーモン（旧形式の応答）', () =>
     expect(screen.queryByRole('button', { name: '行を追加する' })).toBeNull();
   });
 
-  it('本文の編集は従来の PUT /profile {script} へ倒れる（名前・撒く先は固定）', async () => {
+  it('本文の編集は従来の PUT /profile {script} へ倒れる（名前・渡す先は固定）', async () => {
     const { calls } = stubOldDaemon();
     renderScreen();
 
     fireEvent.click(await screen.findByRole('button', { name: '編集する' }));
     expect(screen.getByLabelText<HTMLInputElement>('プロファイルの行の名前').disabled).toBe(true);
-    expect(screen.getByLabelText<HTMLSelectElement>('プロファイルの撒く先').disabled).toBe(true);
+    expect(screen.getByLabelText<HTMLSelectElement>('プロファイルの渡す先').disabled).toBe(true);
     const next = 'export NEW=1\n';
     fireEvent.change(screen.getByLabelText('プロファイルの新しい本文'), {
       target: { value: next },
