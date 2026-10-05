@@ -6161,6 +6161,22 @@ class Pool implements ManagerPool {
       ) {
         return {};
       }
+    } else {
+      /*
+       * **台帳が「繋がっていない」done（デーモン再起動後など）は、まず10秒ごとの生存確認の観測で見る**
+       * （#2877 PR2。往復を足さない——普段の経路で `runner.list()` を増やさないこと。
+       * `manager-lease.test.ts` の #669 が固定している）。観測は最大10秒古い。
+       *
+       * - 観測に指紋が無い（欄の無い古い runner・まだ観測が来ていない）・現役の指紋が分からない:
+       *   確かめられない。**断らず流して、世代は書かない**
+       * - 観測が現役と一致: 流して世代を書く（旧プロセスの鍵が凍っている以上、いま現役と一致して
+       *   いるなら、その後も一致している）
+       * - 観測が食い違い: **その場で `runner.list()` を1回取り直して確かめる**（観測は古く、走っている
+       *   セッションを畳まないため）
+       */
+      const observed = this.#observedTokenFingerprint(record.job.runnerId, managerId);
+      if (observed === undefined || activeFingerprint === undefined) return {};
+      if (observed === activeFingerprint) return { fingerprintMatched: true };
     }
 
     let listing: RunnerManagerListing;
@@ -6234,6 +6250,10 @@ class Pool implements ManagerPool {
     }
     if (record.job.sessionId === undefined) {
       blockers.push('会話を引き継ぐ sessionId が無い（畳むと会話が切れる）');
+    }
+    // 観測は最大10秒古いので、取り直した結果でターンが走っていれば畳まない（#2877 PR2）。
+    if (!record.attached && state.status === 'running') {
+      blockers.push('runner のセッションはいまターンが走っている（畳むと走っている仕事を失う）');
     }
     if (blockers.length > 0) {
       return {
@@ -6513,6 +6533,23 @@ class Pool implements ManagerPool {
         record.sessionMissingKind = 'unlisted';
       }
     }
+  }
+
+  /**
+   * 生存確認が名簿へ立てた観測から、その委譲のセッションが起動時に掴んだ鍵の**指紋**を引く
+   * （#2877 PR2。往復は足さない。最大10秒古い）。**聞けていない・欄を返さない runner のときは
+   * `undefined`**（「分からない」）。値は持たない。
+   */
+  #observedTokenFingerprint(runnerId: string | undefined, managerId: string): string | undefined {
+    if (runnerId === undefined) return undefined;
+    for (const entry of this.#runners.entries()) {
+      if (entry.runnerId !== runnerId) continue;
+      const fingerprints = entry.sessionTokenFingerprints;
+      if (fingerprints !== undefined && Object.hasOwn(fingerprints, managerId)) {
+        return fingerprints[managerId];
+      }
+    }
+    return undefined;
   }
 
   /**

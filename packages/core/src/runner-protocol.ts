@@ -2979,6 +2979,13 @@ export interface RunnerEntry {
    */
   sessionBackgroundTasks?: Readonly<Record<string, number>>;
   /**
+   * `sessions` と同じ観測で、各委譲のセッションが起動時に掴んだ鍵の**指紋**
+   * （`RunnerManagerState.tokenFingerprint`。Issue #2877 PR2）。**欄を名乗った委譲だけが載る**——
+   * 古い runner・まだ鍵を掴んでいないセッションはキーが無い（「分からない」）。**値は持たない。**
+   * `sessionsObservedAt` と対で読むこと（最大10秒古い）。
+   */
+  sessionTokenFingerprints?: Readonly<Record<string, string>>;
+  /**
    * runner→デーモンの `/events` の脚（このデーモン自身の側の端）の状態
    * （{@link RunnerLegState}）。`entry.client.legState` の写し——**`entries()`
    * が呼ばれるたびに読み直す。** 過去の観測を保持するフィールドではないので、
@@ -3551,6 +3558,8 @@ interface RegistryEntry {
   sessionsObservedAt?: string;
   /** `RunnerEntry.sessionBackgroundTasks` の正本。`sessions` と同じ観測から書く（#2851）。 */
   sessionBackgroundTasks?: ReadonlyMap<string, number>;
+  /** `RunnerEntry.sessionTokenFingerprints` の正本。`sessions` と同じ観測から書く（#2877 PR2）。 */
+  sessionTokenFingerprints?: ReadonlyMap<string, string>;
   /**
    * `list()` の探りがいま飛んでいるか。**周期より遅い応答を積み上げない**ための
    * 錠で、`true` の間はこの entry へ次の探りを投げない（`#probeSessions`）。
@@ -3719,6 +3728,9 @@ class Registry implements RunnerRegistry {
       ...(entry.sessionBackgroundTasks === undefined || entry.sessionsObservedAt === undefined
         ? {}
         : { sessionBackgroundTasks: Object.fromEntries(entry.sessionBackgroundTasks) }),
+      ...(entry.sessionTokenFingerprints === undefined || entry.sessionsObservedAt === undefined
+        ? {}
+        : { sessionTokenFingerprints: Object.fromEntries(entry.sessionTokenFingerprints) }),
       // runner→デーモンの脚の状態。**`entry.client` からその場で読む——
       // 保存も間引きもしない**（`RunnerEntry.legState` の doc）。`client` が
       // 無い、または `legState` を持たない実装では出ない。
@@ -4277,6 +4289,7 @@ class Registry implements RunnerRegistry {
       if (identity?.managers === 0) {
         entry.sessions = new Set();
         entry.sessionBackgroundTasks = new Map();
+        entry.sessionTokenFingerprints = new Map();
         entry.sessionsObservedAt = new Date(at).toISOString();
         return;
       }
@@ -4330,6 +4343,11 @@ class Registry implements RunnerRegistry {
           state.liveBackgroundTasks === undefined
             ? []
             : [[state.managerId, state.liveBackgroundTasks]],
+        ),
+      );
+      entry.sessionTokenFingerprints = new Map(
+        states.flatMap((state): [string, string][] =>
+          state.tokenFingerprint === undefined ? [] : [[state.managerId, state.tokenFingerprint]],
         ),
       );
       entry.sessionsObservedAt = new Date(at).toISOString();
