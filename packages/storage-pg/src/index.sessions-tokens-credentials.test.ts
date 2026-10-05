@@ -1,6 +1,8 @@
 import {
   captureStderr,
   verifyConversationReadStoreContract,
+  verifyCredentialVaultContract,
+  verifyTokenPoolContract,
   verifyMcpServerStoreContract,
   verifyProfileStoreContract,
 } from '@alteroid/core';
@@ -214,6 +216,10 @@ describe('PgProfileStore', () => {
  * という壊れ方をする。
  */
 describe('PgCredentialVaultStore', () => {
+  it('入口の契約（issue #2927。3実装で同じことを測る）', async () => {
+    await verifyCredentialVaultContract(stores.credentials);
+  });
+
   it('往復（put → list）で値まで戻り、name 昇順で並ぶ', async () => {
     expect(await stores.credentials.list()).toEqual([]);
 
@@ -305,6 +311,10 @@ describe('PgCredentialVaultStore', () => {
  * 器の振る舞い（往復・設定の既定・トランザクションでの全文置換）だけである。
  */
 describe('PgTokenPoolStore', () => {
+  it('入口の契約（issue #2927。3実装で同じことを測る）', async () => {
+    await verifyTokenPoolContract(stores.tokens);
+  });
+
   it('往復（replace → list）で値まで戻る。order 昇順で返す', async () => {
     expect(await stores.tokens.list()).toEqual([]);
 

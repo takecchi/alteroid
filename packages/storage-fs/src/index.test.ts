@@ -12,6 +12,8 @@ import {
   verifyCommitmentFoldContract,
   verifyConversationReadStoreContract,
   verifyMcpServerStoreContract,
+  verifyCredentialVaultContract,
+  verifyTokenPoolContract,
   verifyProfileStoreContract,
   verifyPermissionGrantStoreContract,
   verifyPracticeStoreContract,
@@ -3528,6 +3530,10 @@ describe('FsMcpServerStore', () => {
  * 器の振る舞い（往復・0600・既定の設定）だけで、検知・切替は無い。
  */
 describe('FsTokenPoolStore', () => {
+  it('入口の契約（issue #2927。3実装で同じことを測る）', async () => {
+    await verifyTokenPoolContract(stores.tokens);
+  });
+
   it('往復（replace → list）で値まで戻る', async () => {
     expect(await stores.tokens.list()).toEqual([]);
 
@@ -3685,6 +3691,10 @@ describe('FsTokenPoolStore', () => {
  * **部分更新**であり、全文置換ではない。
  */
 describe('FsCredentialVaultStore', () => {
+  it('入口の契約（issue #2927。3実装で同じことを測る）', async () => {
+    await verifyCredentialVaultContract(stores.credentials);
+  });
+
   it('往復（put → list）で値まで戻り、name 昇順で並ぶ', async () => {
     expect(await stores.credentials.list()).toEqual([]);
 

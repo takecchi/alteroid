@@ -1399,3 +1399,18 @@ export {
   type PeerTurnResult,
   type PeerUsageReport,
 } from './peer-broker.js';
+/**
+ * ストアの入口の NUL・不正入力の断り方（issue #2927。teto の判断、2026-10-05）。
+ * 鍵・環境変数になる値の NUL は {@link NulNotAllowedError} で断り、それ以外の本文は
+ * {@link stripNul} で落として残す。3実装（インメモリ / fs / pg）が同じ部品を呼ぶ。
+ */
+export { NulNotAllowedError, assertNoNul, stripNul } from './nul-guard.js';
+export { InvalidCredentialNameError, assertValidCredentialEntries } from './credential-input.js';
+export {
+  DuplicateTokenIdError,
+  assertValidActiveToken,
+  prepareTokensForReplace,
+} from './token-pool-input.js';
+/** `CredentialVaultStore` / `TokenPoolStore` の入口の契約（issue #2927）。3実装が呼ぶ。 */
+export { verifyCredentialVaultContract } from './credential-contract.js';
+export { verifyTokenPoolContract } from './token-pool-contract.js';
