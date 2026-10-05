@@ -1,9 +1,9 @@
 import { execFileSync, spawn } from 'node:child_process';
 import { existsSync, unlinkSync } from 'node:fs';
-import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from 'node:fs/promises';
-import os from 'node:os';
+import { mkdir, readFile, rm, utimes, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
+import { makeTempDir } from '../../../vitest.tmpdir.js';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
@@ -61,7 +61,7 @@ describe('退避 ref（#1266）', () => {
     });
 
   beforeEach(async () => {
-    root = await mkdtemp(path.join(os.tmpdir(), 'rescue-test-'));
+    root = await makeTempDir('rescue-test-');
     repo = path.join(root, 'repo');
     bare = path.join(root, 'origin.git');
     await mkdir(repo);

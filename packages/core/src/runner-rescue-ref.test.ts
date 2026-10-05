@@ -1,9 +1,9 @@
 import { execFileSync } from 'node:child_process';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
-import os from 'node:os';
+import { mkdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import type { Query, SDKMessage, query as sdkQuery } from '@anthropic-ai/claude-agent-sdk';
+import { makeTempDir } from '../../../vitest.tmpdir.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createCredentialStore } from './credentials.js';
@@ -64,7 +64,7 @@ let repo: string;
 let bare: string;
 
 beforeEach(async () => {
-  root = await mkdtemp(path.join(os.tmpdir(), 'runner-rescue-'));
+  root = await makeTempDir('runner-rescue-');
   repo = path.join(root, 'repo');
   bare = path.join(root, 'origin.git');
   await mkdir(repo);
