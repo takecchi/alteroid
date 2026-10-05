@@ -1,10 +1,11 @@
 import { execFileSync, spawn } from 'node:child_process';
-import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
-import os from 'node:os';
+import { mkdir, readdir, writeFile } from 'node:fs/promises';
+
 import path from 'node:path';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 
+import { makeTempDir } from '../../../vitest.tmpdir.js';
 import {
   deleteRescueRef,
   redactRemoteUrl,
@@ -71,7 +72,7 @@ describe('退避 ref の後始末（runner 側。#1266）', () => {
   const refsInBare = (): string => g(bare, 'for-each-ref', 'refs/alteroid-rescue/');
 
   beforeEach(async () => {
-    root = await mkdtemp(path.join(os.tmpdir(), 'rescue-cleanup-test-'));
+    root = await makeTempDir('rescue-cleanup-test-');
     repo = path.join(root, 'repo');
     bare = path.join(root, 'origin.git');
     tmp = path.join(root, 'tmp');
@@ -86,10 +87,6 @@ describe('退避 ref の後始末（runner 側。#1266）', () => {
     g(repo, 'push', '-q', 'origin', 'main');
     g(repo, 'fetch', '-q', 'origin');
     spawnCount = 0;
-  });
-
-  afterEach(async () => {
-    await rm(root, { recursive: true, force: true });
   });
 
   it('退避の記録に、送った先（資格を落とした URL）と退避 commit の tree が付く', async () => {
