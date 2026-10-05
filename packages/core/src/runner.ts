@@ -3065,7 +3065,18 @@ class RunnerSession {
       // **provider の綴りを読むのは駆動役の中までである**（Claude は
       // `claude-manager-driver.ts` の `foldClaudeMessage`）。ここへ流れるのは中立
       // イベントだけで、次の provider を足しても `#apply` は1本のままになる（#486）。
-      await session.readEvents((event) => this.#apply(event));
+      // **畳まれた世代の出来事は、新しい世代へ通さない**（Issue #3022 仮説2）。復帰
+      // （`#recoverFromFailedResume`）は `#apply` の `result`（失敗）の中でも起きるので、世代が
+      // 進んだ後も、この古いストリームの `for await` は回り続けうる。実 SDK が `close()` の後に
+      // メッセージを出すかは確かめられないが、**出すなら、その `result` の累積は新しい世代の
+      // 累積（resume で 0 から数え直し）の後ろに届き、台帳では逆順になって過大に数える**
+      // （歯: `runner-usage-generation.test.ts`）。**取りこぼさない根拠:** 復帰するのは
+      // resume が効かず手が動いていない（`progressed` が偽）世代だけで、その世代に積むべき
+      // 消費は無い。`usage` を出す `result` は `#markProgressed()` と同じ同期の区間で出す
+      // ので、消費を出した世代は復帰の対象にならない。
+      await session.readEvents((event) =>
+        generation !== this.#sdkSession.generation ? Promise.resolve() : this.#apply(event),
+      );
       if (this.#sdkSession.stopped || generation !== this.#sdkSession.generation) return;
       // **認証トークンの畳み直しで、自分から入力ストリームを終えた回。**
       // 判定は `#endedInputForTokenRotation` だけで行う（`#recycleForToken`

@@ -246,4 +246,24 @@ describe('累積の usage は届いた順に積む（#3015）', () => {
 
     await s.pool.stop();
   });
+
+  it('同じ累積が隣り合って二重に届いても（runner の SSE の差し戻し・再送の形）、二重に数えない（#3022 仮説3）', async () => {
+    // runner の `Outbox` は、接続が落ちたとき書きかけの1件と未送の分を、古い順のまま新しい連番で
+    // 差し戻す（`requeue`）。書きかけの1件が実は相手に届いていれば、同じ出来事が**隣り合って**
+    // 2回届く。累積なので、同じ累積の再送は増分 0 になる（`runner-protocol.ts` の `usage` の doc）。
+    // 非隣接の逆順（5,6,5）は、runner が古い順を保つので届かない（`events-stale-subscriber-handoff.test.ts`
+    // の「二重に戻らない」が `superseded` の旗で塞いでいる）。
+    const stores = createMemoryStores();
+    const s = await setup({ stores });
+
+    s.fake.usage({ opus: totals({ costUsd: 5 }) });
+    s.fake.usage({ opus: totals({ costUsd: 5 }) });
+    s.fake.usage({ opus: totals({ costUsd: 9 }) });
+    s.fake.usage({ opus: totals({ costUsd: 9 }) });
+    await expect.poll(() => costOf(stores), { timeout: 2000 }).toBe(9);
+    await settle();
+    expect(await costOf(stores)).toBe(9);
+
+    await s.pool.stop();
+  });
 });
