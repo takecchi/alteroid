@@ -108,6 +108,15 @@ describe('安全性: javascript: リンクが実行可能な URL にならない
     expect(link.getAttribute('rel')).toBe('noreferrer noopener');
   });
 
+  it('文中のリンクは、タッチでは疑似要素で上下に押せる範囲が広がる（行の高さは動かさない）', async () => {
+    render(<Markdown>{'[click](https://example.com/path)'}</Markdown>);
+
+    const link = await screen.findByRole('link', { name: 'click' });
+    expect(link.className).toContain('pointer-coarse:relative');
+    expect(link.className).toContain('pointer-coarse:after:-inset-y-3');
+    expect(link.className).not.toMatch(/(^| )(py-|my-|inline-block|block)/);
+  });
+
   it('data: リンクの href も javascript: と同じく空へ潰れる', async () => {
     render(
       <Markdown>{'[click](data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==)'}</Markdown>,
