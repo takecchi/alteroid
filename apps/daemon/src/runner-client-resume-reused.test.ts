@@ -68,3 +68,51 @@ describe('HttpRunner#resume() の reusedLiveSession（#2877）', () => {
     expect(legacy.safeParse({ ok: true, cwd: '/w', reusedLiveSession: true }).success).toBe(true);
   });
 });
+
+/**
+ * **`HttpRunner#list()`（古い daemon も使う読み口）は、`tokenFingerprint` や、まだ誰も知らない欄が
+ * 付いた応答を、委譲ごと飛ばさずに読む**（#2877 PR2）。strict な schema に変えると、新しい runner の
+ * 委譲が「runner に居ない」側に落ちる（`#1661`）ので、ここで落ちる形にしてある。
+ */
+describe('HttpRunner#list() は未知の欄が付いた応答を読む（#2877 PR2）', () => {
+  it('tokenFingerprint と未知の欄が付いていても、委譲を飛ばさず、既存の欄が欠けない', async () => {
+    const managers = [
+      {
+        managerId: 'mgr-1',
+        status: 'done',
+        cwd: '/workspace',
+        request: '調べて',
+        waiting: [],
+        sessionId: 'sess-1',
+        liveBackgroundTasks: 0,
+        tokenFingerprint: 'aaaaaaaaaaaa',
+        someFutureField: 'まだ誰も知らない欄',
+      },
+    ];
+    const client = await createHttpRunner({
+      baseUrl: 'http://runner.test',
+      token: 'test-runner-token',
+      fetchFn: (async (input: string | URL | Request) => {
+        const path = new URL(typeof input === 'string' ? input : input.toString()).pathname;
+        if (path === '/health')
+          return Response.json({ runnerId: 'r', workspacePath: '/workspace' });
+        if (path === '/managers') return Response.json({ managers });
+        throw new Error(`想定していないパス: ${path}`);
+      }) as typeof fetch,
+    });
+
+    const listed = await client.list();
+
+    expect(listed).toHaveLength(1);
+    expect(listed[0]).toMatchObject({
+      managerId: 'mgr-1',
+      status: 'done',
+      cwd: '/workspace',
+      request: '調べて',
+      waiting: [],
+      sessionId: 'sess-1',
+      liveBackgroundTasks: 0,
+      tokenFingerprint: 'aaaaaaaaaaaa',
+    });
+  });
+});
