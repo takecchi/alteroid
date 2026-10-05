@@ -10110,14 +10110,19 @@ class Pool implements ManagerPool {
           noteBackgroundFailure('runner からの合図の処理', runnerEventShape(event), error);
           throw error;
         });
-        const tracked: Promise<unknown> = running.finally(() => {
+        // 追跡用の枝は拒否を握る（`stop()` の待ちは成否を問わない）。
+        const tracked: Promise<void> = running.then(
+          () => undefined,
+          () => undefined,
+        );
+        this.#eventsInFlight.add(tracked);
+        // **従来の `void` と同じく、失敗は上の `noteBackgroundFailure` が跡を残したうえで
+        // 未処理の拒否になって死ぬ（落ち方は変えない。`uncaught-net.ts`）。** `running` には
+        // 上の `then` で受け手が付いてしまうので、受け手の無い枝をもう1本出して、拒否を
+        // そちらへ流す。この枝に `.catch` を付けないこと——付けると失敗が黙って消える。
+        void running.finally(() => {
           this.#eventsInFlight.delete(tracked);
         });
-        this.#eventsInFlight.add(tracked);
-        // 従来の `void` と同じく、失敗は上の `noteBackgroundFailure` が跡を残したうえで
-        // 未処理の拒否になって死ぬ（落ち方は変えない）。追跡用の枝は拒否を握る。
-        tracked.catch(() => undefined);
-        void running;
       });
       // **委譲を始める前に環境を整える。** ここを名乗り（`hello`）任せにすると、
       // 最初のマネージャーがプロファイルの届く前に走り出しうる。届いていない
