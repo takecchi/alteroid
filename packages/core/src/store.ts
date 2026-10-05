@@ -986,6 +986,10 @@ export interface PermissionGrantStore {
    * `clone.ts` の `answerApproval` の1箇所だけで、常に新しい `id` を渡す。
    *
    * `id`・`approvalId`・`route.accountId`（鍵・参照キー）に NUL があれば `NulNotAllowedError` で断る。`rule`・`allows`・`denies`・`answer`（本文）の NUL は落として残す（issue #2927）。
+   *
+   * **読むだけの口（`get`・`revoke`・`markUsed`・`removeUnreadable`）は、NUL を含む `id` で引かれても断らず、「無い」と同じ結果を返す**
+   * （`get` は `null`、`revoke` は `null`、`markUsed` は `false`、`removeUnreadable` は `unknown`。3実装とも。issue #3005）。
+   * 書き込みで NUL の鍵を断るので、NUL を含む `id` の行はどの器にも存在しえない。pg は DB に投げる前に短絡する。
    */
   put(grant: PermissionGrant): Promise<void>;
 
@@ -2544,6 +2548,9 @@ export class UnreadableActiveTokenError extends Error {
  * ない。断ると、NUL を含む `model` のターンの消費が台帳から丸ごと消える（呼び出し側は失敗を握りつぶして
  * 日誌に残すだけ）。害が大きいのは記録を失うほうである。他のストアが鍵の NUL を断るのとは逆の
  * 向きの例外である（`nul-guard.ts`）。
+ *
+ * **`aggregate()` の絞り込み（`managerId`・`tokenId`）の NUL は、落としてから引く**（issue #3005。3実装とも）。
+ * 書き込みが落として残しているので、引くほうも落とすのが対称になる。投げず、一致しなければ空の集計を返す。
  */
 export interface UsageStore {
   /**

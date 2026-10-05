@@ -1,5 +1,6 @@
 import {
   createUnreadableRowOnce,
+  hasNul,
   permissionGrantSchema,
   preparePermissionGrantForPut,
   UnreadablePermissionGrantError,
@@ -119,6 +120,9 @@ export class PgPermissionGrantStore implements PermissionGrantStore {
   }
 
   async get(id: string): Promise<PermissionGrant | null> {
+    // 読むだけの口の NUL（issue #3005）。NUL を含む id の行は存在しえない（`put` が断る）ので「無い」。
+    // DB に投げると NUL を含む text を受け付けずエラーになる。
+    if (hasNul(id)) return null;
     const rows = await this.#db
       .select({ record: permissionGrants.record })
       .from(permissionGrants)
@@ -171,6 +175,8 @@ export class PgPermissionGrantStore implements PermissionGrantStore {
    * stderr へ1行だけ残す（id とどの欄が不正かのみ。本文は出さない）。
    */
   async revoke(id: string, at: string): Promise<PermissionGrant | null> {
+    // NUL を含む id は「無い」（`get` と同じ。issue #3005）。
+    if (hasNul(id)) return null;
     return this.#db.transaction(async (tx) => {
       const rows = await tx
         .select({ record: permissionGrants.record })
@@ -224,11 +230,14 @@ export class PgPermissionGrantStore implements PermissionGrantStore {
   ): Promise<RemoveUnreadableRowsResult> {
     const wanted = [...new Set(ids)];
     if (wanted.length === 0) return { kind: 'unknown', count: 0 };
+    // NUL を含む id の行は存在しえない（issue #3005）ので、DB へは投げず、読めない行に「無い」ものとして数える。
+    const queryable = wanted.filter((id) => !hasNul(id));
     const unknownCount = async (executor: Pick<Db, 'select'>, lock: boolean): Promise<number> => {
+      if (queryable.length === 0) return wanted.length;
       const query = executor
         .select({ id: permissionGrants.id, record: permissionGrants.record })
         .from(permissionGrants)
-        .where(inArray(permissionGrants.id, wanted));
+        .where(inArray(permissionGrants.id, queryable));
       const rows = await (lock ? query.for('update') : query);
       const unreadable = new Set(
         rows
@@ -259,6 +268,8 @@ export class PgPermissionGrantStore implements PermissionGrantStore {
    * （issue #2158。`revoke` の doc と同じ理由）。
    */
   async markUsed(id: string, at: string): Promise<boolean> {
+    // NUL を含む id は「無い」（`get` と同じ。issue #3005）。
+    if (hasNul(id)) return false;
     return this.#db.transaction(async (tx) => {
       const rows = await tx
         .select({ record: permissionGrants.record })

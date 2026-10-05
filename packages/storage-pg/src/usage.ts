@@ -2,6 +2,7 @@ import {
   USAGE_ESTIMATE_NOTICE,
   stripNul,
   stripNulFromUnmeteredRecord,
+  stripNulFromUsageQuery,
   stripNulFromUsageRecord,
   foldOneshotUsage,
   foldUsageSnapshot,
@@ -461,7 +462,10 @@ export class PgUsageStore implements UsageStore {
       });
   }
 
-  async aggregate(query: UsageQuery): Promise<UsageAggregate> {
+  async aggregate(rawQuery: UsageQuery): Promise<UsageAggregate> {
+    // 書き込みが鍵列の NUL を落として残すので、絞り込みも落としてから引く（issue #3005）。
+    // 落とさずに渡すと、PostgreSQL が NUL を含む text を受け付けずエラーで投げる。
+    const query = stripNulFromUsageQuery(rawQuery);
     const conditions = [
       ...(query.from === undefined ? [] : [gte(usageDaily.date, query.from)]),
       ...(query.to === undefined ? [] : [lte(usageDaily.date, query.to)]),

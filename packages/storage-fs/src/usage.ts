@@ -5,6 +5,7 @@ import {
   USAGE_ESTIMATE_NOTICE,
   stripNul,
   stripNulFromUnmeteredRecord,
+  stripNulFromUsageQuery,
   stripNulFromUsageRecord,
   addUnreadableCounts,
   foldOneshotUsage,
@@ -622,7 +623,9 @@ export class FsUsageStore implements UsageStore {
     });
   }
 
-  async aggregate(query: UsageQuery): Promise<UsageAggregate> {
+  async aggregate(rawQuery: UsageQuery): Promise<UsageAggregate> {
+    // 書き込みが鍵列の NUL を落として残すので、絞り込みも落としてから引く（issue #3005）。
+    const query = stripNulFromUsageQuery(rawQuery);
     const { file, unreadable } = await this.#readAll();
     const rows = Object.values(file.rows)
       .filter((row) => {
