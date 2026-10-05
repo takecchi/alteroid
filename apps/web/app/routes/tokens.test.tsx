@@ -642,7 +642,7 @@ describe('/tokens 画面 — 403', () => {
     renderTokens();
 
     expect(await screen.findByText(/使う許可があるアカウントだけが見られる/)).toBeTruthy();
-    expect(screen.getByText('alteroid token list')).toBeTruthy();
+    expect(screen.queryByText('alteroid token list')).toBeNull();
   });
 });
 

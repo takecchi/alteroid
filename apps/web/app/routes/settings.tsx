@@ -315,7 +315,7 @@ function Runners() {
   return (
     <Card>
       <CardHeader
-        title="実行環境（runner）"
+        title="実行環境"
         subtitle="マネージャーが実際に動く実行環境の一覧。鍵は識別用の値だけが見える（値そのものは出ない）。「この状態になった」の時刻は保存されないので、デーモンを再起動すると記録し直される"
       />
       <ErrorNote error={error} className="m-4" />
@@ -508,7 +508,7 @@ export const RESET_SUMMARY_LABELS: [keyof WorkspaceResetSummary, string][] = [
   ['usageBaseline', '利用状況（基準）'],
   ['usageLedger', '利用状況（記録の開始時刻）'],
   ['usageTurns', '利用状況（回数）'],
-  ['sessionLog', 'SDK セッション生ログ'],
+  ['sessionLog', 'セッションの生ログ'],
 ];
 
 /**
