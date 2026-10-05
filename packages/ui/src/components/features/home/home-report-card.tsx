@@ -101,7 +101,7 @@ export function HomeReportCard({
             aria-expanded={expanded}
             aria-controls={bodyId}
             onClick={() => setExpanded((v) => !v)}
-            className="rounded-sm text-primary hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+            className="rounded-sm text-primary hover:underline outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
           >
             {expanded ? '畳む' : '全文を表示'}
           </button>
