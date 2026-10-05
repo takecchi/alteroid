@@ -176,7 +176,7 @@ export default function MemoryDetail({ loaderData }: Route.ComponentProps) {
           mode={tab}
           defaultMode={defaultTab}
           onModeChange={setTab}
-          hint="ここで書き換えたものは `memory_update`（cause: human）として日誌に残る。"
+          hint="ここで書き換えたものは、人間が直した記録として日誌に残る。"
           // 今の画面に無かったものは出さない（文言は変えない）。
           saveHint={null}
           emptyPreview={null}

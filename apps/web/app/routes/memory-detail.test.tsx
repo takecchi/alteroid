@@ -500,7 +500,7 @@ describe('編集欄の振る舞い（部品へ移しても変わらないもの�
     fireEvent.mouseDown(await screen.findByRole('tab', { name: '編集' }));
     const textarea = await screen.findByRole('textbox');
     expect(
-      screen.getByText('ここで書き換えたものは `memory_update`（cause: human）として日誌に残る。'),
+      screen.getByText('ここで書き換えたものは、人間が直した記録として日誌に残る。'),
     ).toBeTruthy();
     expect(screen.queryByText(/Ctrl \+ S/)).toBeNull();
     expect(textarea.getAttribute('placeholder') ?? '').toBe('');

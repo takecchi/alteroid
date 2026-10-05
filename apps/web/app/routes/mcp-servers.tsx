@@ -61,10 +61,7 @@ export default function McpServersPage() {
     >
       <div className="flex flex-col gap-4">
         <Card>
-          <CardHeader
-            title="現在の登録内容"
-            subtitle="いま登録されている MCP サーバ"
-          />
+          <CardHeader title="現在の登録内容" subtitle="いま登録されている MCP サーバ" />
           <div className="flex flex-col gap-3 px-4 py-3">
             <ErrorNote error={error} />
             <NotOwnerHint failure={error} subject="MCP 連携の登録" />
@@ -236,10 +233,7 @@ function McpServersEditor({ current }: { current: McpServersState }) {
 
   return (
     <Card>
-      <CardHeader
-        title="登録内容を置き換える"
-        subtitle="登録内容を丸ごと置き換える"
-      />
+      <CardHeader title="登録内容を置き換える" subtitle="登録内容を丸ごと置き換える" />
       <div className="flex flex-col gap-3 px-4 py-3 text-sm">
         <p className="text-xs leading-relaxed break-words text-muted-foreground">
           .mcp.json をそのまま貼れる形（{'{ "mcpServers": { … } }'}）。保存する前にデーモンが

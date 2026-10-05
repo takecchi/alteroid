@@ -770,10 +770,7 @@ function SettingsCard({ settings }: { settings: TokenRotationSettings }) {
 
   return (
     <Card>
-      <CardHeader
-        title="回転の設定"
-        subtitle="トークンを切り替える条件と、冷却の既定"
-      />
+      <CardHeader title="回転の設定" subtitle="トークンを切り替える条件と、冷却の既定" />
       <KeyValueList
         className="px-4 py-3"
         labelWidth="9rem"
@@ -903,10 +900,7 @@ function UnreadableSettingsCard({ reason }: { reason: string }) {
 
   return (
     <Card>
-      <CardHeader
-        title="回転の設定"
-        subtitle="トークンを切り替える条件と、冷却の既定"
-      />
+      <CardHeader title="回転の設定" subtitle="トークンを切り替える条件と、冷却の既定" />
       <div className="px-4 py-3 text-sm text-muted-foreground">
         回転の設定は読めない（消えたのではなく、読めない形で入っている）: {reason}
       </div>

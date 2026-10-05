@@ -385,10 +385,7 @@ function ProfileEditor({
 
   return (
     <Card>
-      <CardHeader
-        title="行を登録する"
-        subtitle="1行を丸ごと置き換える"
-      />
+      <CardHeader title="行を登録する" subtitle="1行を丸ごと置き換える" />
       <div className="flex flex-col gap-3 px-4 py-3 text-sm">
         <p className="text-xs leading-relaxed break-words text-muted-foreground">
           保存すると、本文は置く前にデーモンのプロセスでその場で評価される（記憶ストアの鍵を持つ

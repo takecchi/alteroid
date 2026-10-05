@@ -75,10 +75,8 @@ function Account() {
       <div className="px-4 py-3 text-sm">
         {auth.status === 'open' ? (
           <p className="text-xs leading-relaxed text-muted-foreground">
-            このデーモンは認証を要求していない（
-            <code className="font-mono">ALTEROID_GOOGLE_CLIENT_ID</code> が未設定か{' '}
-            <code className="font-mono">ALTEROID_AUTH=off</code>）。守りは待ち受け先（既定は
-            127.0.0.1）と、手前に置いた境界の側にある。
+            このデーモンは認証を要求していない（ログインの設定が無いか、認証を切っている）。
+            守りは待ち受け先（既定は 127.0.0.1）と、手前に置いた境界の側にある。
           </p>
         ) : (
           <>
@@ -446,7 +444,7 @@ function VacateRunner({ runnerId }: { runnerId: string }) {
         空けると立てた。まだ空き終わってはいない——載っている委譲は他の器へ移る。進み具合はこの一覧の状態で見える。
         {done.skipped === null
           ? ''
-          : ` ⚠️ 載っている委譲への握手は飛ばした（${done.skipped}）。vacate を呼び直すと握手をやり直す（この一覧は空けている最中の器に押す口を出さないので、alteroid runners vacate ${runnerId} で呼び直す）。`}
+          : ` ⚠️ 載っている委譲への握手は飛ばした（${done.skipped}）。空けるのをもう一度指示すると握手をやり直す（この一覧は空けている最中の器には押す口を出さないので、コマンドラインから指示し直す）。`}
       </p>
     );
   }
@@ -628,10 +626,10 @@ function ShutdownDaemon() {
       />
       <div className="px-4 py-3 text-sm">
         <p className="text-xs leading-relaxed text-muted-foreground">
-          <code className="font-mono">alteroid daemon stop</code> と同じ操作。止めても、
+          止めても、
           <strong className="text-foreground">記憶も台帳も消さない</strong>
           （日誌も含めて1行も消えない）。起動し直せば元に戻る——
-          <code className="font-mono">POST /reset</code>（記憶そのものを消す操作）とは違う。 Railway
+          「ワークスペースのリセット」（記憶そのものを消す操作）とは違う。 Railway
           では、止めると再起動の方針により
           <strong className="text-foreground">再起動として働く</strong>
           （止まったままにはならない）。止めた瞬間、この画面自身の接続も切れる。
