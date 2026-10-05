@@ -268,6 +268,21 @@ describe('alteroid daemon status', () => {
     expect(text).toContain('起動: 2026-08-24T00:00:00.000Z（1日前）');
   });
 
+  it('稼働中でも記憶の場所を聞けなかったら、ローカルのパスへ落とさず「取得できません」と言う', async () => {
+    vi.mocked(daemon.status).mockResolvedValue({
+      presence: 'present',
+      info: { pid: 99, port: 4517, startedAt: '2026-08-24T00:00:00.000Z', token: 't' },
+    });
+    vi.mocked(daemon.storageOf).mockResolvedValue(null);
+    const read = captureStdout();
+
+    await daemonStatusCommand();
+
+    const text = read();
+    expect(text).toContain('記憶: 取得できません');
+    expect(text).not.toContain('/home/test/.alteroid');
+  });
+
   it('停止中（presence: absent）なら「停止中」と言い、記憶の場所はローカルの alteroidRoot() に落ちる', async () => {
     vi.mocked(daemon.status).mockResolvedValue({ presence: 'absent', info: null });
     const read = captureStdout();
