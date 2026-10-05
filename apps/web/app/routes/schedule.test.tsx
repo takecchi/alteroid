@@ -118,7 +118,7 @@ function renderSchedule(): void {
 
 describe('継続する依頼を仕込む', () => {
   async function fill(kind: string, request: string): Promise<void> {
-    const kindBox = await screen.findByPlaceholderText(/kind/);
+    const kindBox = await screen.findByLabelText('kind');
     fireEvent.change(kindBox, { target: { value: kind } });
     const requestBox = screen.getByPlaceholderText(/依頼の本文/);
     fireEvent.change(requestBox, { target: { value: request } });
@@ -432,5 +432,16 @@ describe('/schedule 画面: 読めない継続中の依頼の断り', () => {
 
     expect(await screen.findByText(/登録された定期ジョブが無い（/)).toBeTruthy();
     expect(screen.queryByText(/読めない/)).toBeNull();
+  });
+});
+
+describe('kind 欄の補足文', () => {
+  it('書式は常時表示の補足文で、欄と aria-describedby で結ばれる（プレースホルダは短い例だけ）', async () => {
+    stubSchedule([DEFAULT_ENTRY]);
+    renderSchedule();
+    const input = await screen.findByLabelText('kind');
+    const hint = document.getElementById(input.getAttribute('aria-describedby') ?? '');
+    expect(hint?.textContent).toMatch(/英小文字・数字/);
+    expect((input as HTMLInputElement).placeholder).not.toMatch(/英小文字/);
   });
 });

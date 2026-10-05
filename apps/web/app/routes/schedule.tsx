@@ -1,6 +1,6 @@
 import { ScheduleTabs } from '~/components/group-tabs';
 import { AlertTriangle } from 'lucide-react';
-import { useState } from 'react';
+import { useId, useState } from 'react';
 import { Tabs } from 'radix-ui';
 
 import {
@@ -12,6 +12,7 @@ import {
   CardHeader,
   Empty,
   ErrorNote,
+  FieldHint,
   Input,
   Select,
   Spinner,
@@ -565,6 +566,7 @@ function ScheduleEditForm({
  */
 function ScheduleForm() {
   const createSchedule = useCreateSchedule();
+  const kindHintId = useId();
   const [kind, setKind] = useState('');
   const [request, setRequest] = useState('');
   const [specDraft, setSpecDraft] = useState<ScheduleSpecDraft>(DEFAULT_SPEC_DRAFT);
@@ -599,9 +601,14 @@ function ScheduleForm() {
       <div className="flex flex-col gap-2 px-4 py-3">
         <Input
           value={kind}
-          placeholder="kind（英小文字・数字・. _ -。例: morning-issues）"
+          aria-label="kind"
+          aria-describedby={kindHintId}
+          placeholder="例: morning-issues"
           onChange={(event) => setKind(event.target.value)}
         />
+        <FieldHint id={kindHintId} className="-mt-1">
+          kind の書式: 英小文字・数字・`.` `_` `-` のみ。
+        </FieldHint>
         <ScheduleSpecFields draft={specDraft} onChange={setSpecDraft} />
         <RequestEditor
           value={request}

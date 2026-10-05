@@ -1,9 +1,9 @@
 import { MemoryTabs } from '~/components/group-tabs';
 import { AlertTriangle } from 'lucide-react';
-import { useState } from 'react';
+import { useId, useState } from 'react';
 import { Link, useNavigate } from 'react-router';
 
-import { Page, Button, Card, Empty, ErrorNote, Input, Spinner } from '@alteroid/ui';
+import { Page, Button, Card, Empty, ErrorNote, FieldHint, Input, Spinner } from '@alteroid/ui';
 import { usePractices } from '@alteroid/swr';
 import { formatRelative } from '@alteroid/logic';
 import type { UnreadablePractice } from '@alteroid/logic';
@@ -68,6 +68,7 @@ export default function Practices() {
   // **読めなかった行**（`GET /practices` の `unreadable`。issue #2346）。1件でも在るときだけ
   // 載る——無ければ空配列として扱う（0件のとき何も出さない）。
   const unreadable = data?.unreadable ?? [];
+  const hintId = useId();
   const valid = SLUG_PATTERN.test(slug) && slug.length <= 128;
   /**
    * **取れなかったのを0件と描かない**（issue #2324）。一覧をまだ一度も読めていないまま
@@ -89,7 +90,9 @@ export default function Practices() {
         <div className="flex gap-2">
           <Input
             value={slug}
-            placeholder="slug（英小文字・数字・. _ - のみ）"
+            aria-label="slug"
+            aria-describedby={hintId}
+            placeholder="例: weekly-review"
             onChange={(event) => setSlug(event.target.value)}
             onKeyDown={(event) => {
               if (event.key === 'Enter' && valid) void navigate(`/practices/${slug}`);
@@ -103,6 +106,9 @@ export default function Practices() {
             開く
           </Button>
         </div>
+        <FieldHint id={hintId} className="mt-1.5">
+          slug の書式: 英小文字・数字・`.` `_` `-` のみ。先頭は英数字、128 文字まで。
+        </FieldHint>
         {slug !== '' && !valid && (
           <p className="mt-1.5 text-xs text-destructive">
             使えるのは英小文字・数字・`.` `_` `-` で、先頭は英数字。128 文字まで。

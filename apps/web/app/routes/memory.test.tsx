@@ -207,3 +207,14 @@ describe('記憶一覧の要旨の前に付く印（#821 — ⚠ をやめて数
     expect(screen.queryByText(/動いていない/)).toBeNull();
   });
 });
+
+describe('slug 欄の補足文', () => {
+  it('書式は常時表示の補足文で、欄と aria-describedby で結ばれる（プレースホルダは短い例だけ）', async () => {
+    renderMemory([]);
+    const input = await screen.findByLabelText('slug');
+    const hint = document.getElementById(input.getAttribute('aria-describedby') ?? '');
+    expect(hint?.textContent).toMatch(/英小文字・数字/);
+    expect(hint?.textContent).toMatch(/128 文字まで/);
+    expect((input as HTMLInputElement).placeholder).not.toMatch(/英小文字/);
+  });
+});

@@ -1,6 +1,6 @@
 import { WorkTabs } from '~/components/group-tabs';
 import { AlertTriangle } from 'lucide-react';
-import { Fragment, useState } from 'react';
+import { Fragment, useId, useState } from 'react';
 import { Tabs } from 'radix-ui';
 import { Link } from 'react-router';
 
@@ -13,6 +13,7 @@ import {
   CardHeader,
   Empty,
   ErrorNote,
+  FieldHint,
   Input,
   Spinner,
   Textarea,
@@ -942,6 +943,7 @@ function CommitmentBodyEditor({
 
 function OpenRow({ commitment }: { commitment: Commitment }) {
   const closeCommitment = useCloseCommitment();
+  const reasonHintId = useId();
   const [reason, setReason] = useState('');
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<unknown>(undefined);
@@ -1016,7 +1018,9 @@ function OpenRow({ commitment }: { commitment: Commitment }) {
       <div className="mt-2 flex items-center gap-2">
         <Input
           value={reason}
-          placeholder="何をもって片付いたか（後から否定できるように残す）"
+          aria-label="片付いた理由"
+          aria-describedby={reasonHintId}
+          placeholder="例: 修正を入れて確認した"
           onChange={(event) => setReason(event.target.value)}
           onKeyDown={(event) => {
             // IME 変換中の Enter を拾わない。ここは Enter 単体で送るので、
@@ -1049,6 +1053,9 @@ function OpenRow({ commitment }: { commitment: Commitment }) {
           片付いた
         </Button>
       </div>
+      <FieldHint id={reasonHintId} className="mt-1.5">
+        何をもって片付いたかを書く。後から否定できるように残る。
+      </FieldHint>
 
       <ErrorNote error={failure} className="mt-2" />
     </li>
@@ -1149,6 +1156,7 @@ function ClosedReasonBody({ commitment }: { commitment: Commitment }) {
  */
 function PushForm() {
   const pushCommitment = usePushCommitment();
+  const bodyHintId = useId();
   const [body, setBody] = useState('');
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<unknown>(undefined);
@@ -1173,7 +1181,9 @@ function PushForm() {
       <div className="flex flex-col gap-2 px-4 py-3">
         <Input
           value={body}
-          placeholder="何を引き受けたか（全文で書く。切るのは一覧側の仕事）"
+          aria-label="引き受けた仕事"
+          aria-describedby={bodyHintId}
+          placeholder="例: 金曜までに週次レビューを出す"
           onChange={(event) => setBody(event.target.value)}
           onKeyDown={(event) => {
             // IME 変換中の Enter を拾わない。ここは Enter 単体で送るので、
@@ -1193,6 +1203,9 @@ function PushForm() {
             }
           }}
         />
+        <FieldHint id={bodyHintId} className="-mt-1">
+          何を引き受けたかを全文で書く。切って短く見せるのは一覧側の仕事。
+        </FieldHint>
         <div>
           <Button
             variant="primary"

@@ -331,7 +331,7 @@ describe('/commitments 画面', () => {
     expect((close as HTMLButtonElement).disabled).toBe(true);
 
     // 空白だけでも通さない（見た目上は書いたように見えるので、ここが抜けやすい）。
-    fireEvent.change(screen.getByPlaceholderText(/何をもって片付いたか/), {
+    fireEvent.change(screen.getByLabelText('片付いた理由'), {
       target: { value: '   ' },
     });
     expect((screen.getByRole('button', { name: '片付いた' }) as HTMLButtonElement).disabled).toBe(
@@ -345,7 +345,7 @@ describe('/commitments 画面', () => {
     renderPage();
 
     await screen.findByText('ドキュメントの誤りを直す');
-    fireEvent.change(screen.getByPlaceholderText(/何をもって片付いたか/), {
+    fireEvent.change(screen.getByLabelText('片付いた理由'), {
       target: { value: 'PR #99 をマージした' },
     });
     fireEvent.click(screen.getByRole('button', { name: '片付いた' }));
@@ -369,7 +369,7 @@ describe('/commitments 画面', () => {
     renderPage();
 
     await screen.findByText('未了の仕事はない。');
-    fireEvent.change(screen.getByPlaceholderText(/何を引き受けたか/), {
+    fireEvent.change(screen.getByLabelText('引き受けた仕事'), {
       target: { value: '週明けに設計を見直す' },
     });
     fireEvent.click(screen.getByRole('button', { name: '積む' }));
@@ -1216,5 +1216,22 @@ describe('本文の編集（未了の行すべて。origin では隠さない）
 
     await screen.findByText('編集していない本文');
     expect(screen.queryByText(/編集済み/)).toBeNull();
+  });
+});
+
+describe('入力欄の補足文', () => {
+  it('登録欄・片付ける欄の条件は常時表示の補足文で、欄と aria-describedby で結ばれる', async () => {
+    stubCommitments([commitment()]);
+    renderPage();
+
+    const body = await screen.findByLabelText('引き受けた仕事');
+    const bodyHint = document.getElementById(body.getAttribute('aria-describedby') ?? '');
+    expect(bodyHint?.textContent).toMatch(/一覧側の仕事/);
+    expect((body as HTMLInputElement).placeholder).not.toMatch(/一覧側/);
+
+    const reason = screen.getByLabelText('片付いた理由');
+    const reasonHint = document.getElementById(reason.getAttribute('aria-describedby') ?? '');
+    expect(reasonHint?.textContent).toMatch(/後から否定できる/);
+    expect((reason as HTMLInputElement).placeholder).not.toMatch(/否定/);
   });
 });

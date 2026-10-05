@@ -106,7 +106,7 @@ describe('片付ける（OpenRow）の理由欄 — IME 変換中の Enter', () 
     renderPage();
 
     await screen.findByText('ドキュメントの誤りを直す');
-    const input = screen.getByPlaceholderText(/何をもって片付いたか/);
+    const input = screen.getByLabelText('片付いた理由');
     fireEvent.change(input, { target: { value: 'PR #99 をマージした' } });
 
     fireEvent.keyDown(input, { key: 'Enter', isComposing: true });
@@ -120,7 +120,7 @@ describe('片付ける（OpenRow）の理由欄 — IME 変換中の Enter', () 
     renderPage();
 
     await screen.findByText('ドキュメントの誤りを直す');
-    const input = screen.getByPlaceholderText(/何をもって片付いたか/);
+    const input = screen.getByLabelText('片付いた理由');
     fireEvent.change(input, { target: { value: 'PR #99 をマージした' } });
 
     fireEvent.keyDown(input, { key: 'Enter', isComposing: false, keyCode: 229 });
@@ -134,7 +134,7 @@ describe('片付ける（OpenRow）の理由欄 — IME 変換中の Enter', () 
     renderPage();
 
     await screen.findByText('ドキュメントの誤りを直す');
-    const input = screen.getByPlaceholderText(/何をもって片付いたか/);
+    const input = screen.getByLabelText('片付いた理由');
     fireEvent.change(input, { target: { value: 'PR #99 をマージした' } });
 
     fireEvent.keyDown(input, { key: 'Enter', isComposing: false });
@@ -156,7 +156,7 @@ describe('積む（PushForm）の本文欄 — IME 変換中の Enter', () => {
     renderPage();
 
     await screen.findByText('未了の仕事はない。');
-    const input = screen.getByPlaceholderText(/何を引き受けたか/);
+    const input = screen.getByLabelText('引き受けた仕事');
     fireEvent.change(input, { target: { value: '週明けに設計を見直す' } });
 
     fireEvent.keyDown(input, { key: 'Enter', isComposing: true });
@@ -172,7 +172,7 @@ describe('積む（PushForm）の本文欄 — IME 変換中の Enter', () => {
     renderPage();
 
     await screen.findByText('未了の仕事はない。');
-    const input = screen.getByPlaceholderText(/何を引き受けたか/);
+    const input = screen.getByLabelText('引き受けた仕事');
     fireEvent.change(input, { target: { value: '週明けに設計を見直す' } });
 
     fireEvent.keyDown(input, { key: 'Enter', isComposing: false, keyCode: 229 });
@@ -188,7 +188,7 @@ describe('積む（PushForm）の本文欄 — IME 変換中の Enter', () => {
     renderPage();
 
     await screen.findByText('未了の仕事はない。');
-    const input = screen.getByPlaceholderText(/何を引き受けたか/);
+    const input = screen.getByLabelText('引き受けた仕事');
     fireEvent.change(input, { target: { value: '週明けに設計を見直す' } });
 
     fireEvent.keyDown(input, { key: 'Enter', isComposing: false });

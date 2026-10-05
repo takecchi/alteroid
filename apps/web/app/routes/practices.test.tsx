@@ -168,12 +168,23 @@ describe('新しいやり方を書く', () => {
     renderPractices([]);
     await screen.findByText(/まだ1件も無い/);
 
-    const input = screen.getByPlaceholderText(/slug/);
+    const input = screen.getByLabelText('slug');
     const button = screen.getByRole('button', { name: '開く' });
     expect((button as HTMLButtonElement).disabled).toBe(true);
 
     fireEvent.change(input, { target: { value: 'new-practice' } });
 
     expect((button as HTMLButtonElement).disabled).toBe(false);
+  });
+});
+
+describe('slug 欄の補足文', () => {
+  it('書式は常時表示の補足文で、欄と aria-describedby で結ばれる（プレースホルダは短い例だけ）', async () => {
+    renderPractices([]);
+    const input = await screen.findByLabelText('slug');
+    const hint = document.getElementById(input.getAttribute('aria-describedby') ?? '');
+    expect(hint?.textContent).toMatch(/英小文字・数字/);
+    expect(hint?.textContent).toMatch(/128 文字まで/);
+    expect((input as HTMLInputElement).placeholder).not.toMatch(/英小文字/);
   });
 });
