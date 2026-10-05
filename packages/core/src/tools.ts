@@ -234,7 +234,7 @@ import {
   describeUnreadableSchedules,
   describeUnreadableTokens,
 } from './store.js';
-import { PROFILE_ENTRY_NAME } from './store.js';
+import { MemoryConflictError, memoryVersion, PROFILE_ENTRY_NAME } from './store.js';
 import type { ArchiveEntry, InboxPeek, JournalStore, Stores } from './store.js';
 import {
   RESTART_BEFORE_CHECK_ADVICE,
@@ -4301,6 +4301,37 @@ function seenBefore(
   return before === null ? new Map() : new Map([[slug, before.content]]);
 }
 
+/**
+ * **Issue #2809。** 読んだ版（`memoryVersion`）を、クローンが次の書き込みへ持ち回る
+ * ための1行。`memory_read` / `memory_outline` / 書き込み系の応答の末尾に付く。
+ * 欄の名前は `memory_write` の引数 `base_version` と同じ。
+ */
+function versionLine(content: string): string {
+  return `（版 base_version=${memoryVersion(content)} ——この文書を全文で書き直す memory_write には、これを base_version に渡すこと）`;
+}
+
+/**
+ * 読んだ版と違っていて、**書かなかった**ときにクローンへ返す文。黙って捨てない——
+ * 何が起きたか・何も書いていないこと・次の手（読み直して判断し直す）を言う。
+ * `current` は書く瞬間の文書（無ければ `null` ＝ 読んだ後に消えた）。
+ */
+function describeMemoryConflict(
+  slug: string,
+  action: string,
+  current: { readonly content: string } | null,
+): string {
+  const now =
+    current === null
+      ? 'いまその文書は無い（読んだ後に消された）。'
+      : `いまの版は base_version=${memoryVersion(current.content)}（${current.content.length} 文字）。`;
+  return (
+    `記憶 ${slug} は、読んだ後にその間に変わった（人間または別のターンが書いた）ので、${action}を**書かなかった**。` +
+    `${now}何も変わっていない（あなたの内容は書かれていない。人間の内容も消えていない）。` +
+    `memory_read slug=${slug} で読み直し、いまの内容に対してやりたいことが変わらないか判断し直してから、` +
+    '読み直した版の base_version を付けて書き直すこと。'
+  );
+}
+
 function memoryFloorNote(
   memoryBefore: readonly MemoryPart[],
   memoryAfter: readonly MemoryPart[],
@@ -4905,8 +4936,9 @@ export function createCloneTools(context: ToolContext) {
           : '';
         // **切れていないときは注記を出さない。** 毎回付けると、本当に切れている
         // ときの目印が効かなくなる（`excerpt` と同じ理由）。
-        if (part.from === 0 && !part.more) return text(part.body);
-        return text(`（${describePage(part)}）\n\n${part.body}${tail}`);
+        const version = `\n\n${versionLine(doc.content)}`;
+        if (part.from === 0 && !part.more) return text(`${part.body}${version}`);
+        return text(`（${describePage(part)}）\n\n${part.body}${tail}${version}`);
       },
     ),
 
@@ -4935,8 +4967,16 @@ export function createCloneTools(context: ToolContext) {
         slug: z.string().describe('文書のスラッグ（英小文字・数字・-・_）'),
         content: z.string().describe('Markdown 全文'),
         summary: z.string().describe('何を更新したかの一行要約（日誌に残る）'),
+        base_version: z
+          .string()
+          .optional()
+          .describe(
+            '読んだ時点の版（memory_read / memory_outline / 直前の memory_write の応答に出る base_version）。' +
+              '**既存の文書を書き換えるときは必須。** 読んだ後に人間や別のターンが書いていたら、書かずに「その間に変わった」と返す。' +
+              '新規作成（その slug がまだ無い）では省略する。',
+          ),
       },
-      async ({ slug, content, summary }) => {
+      async ({ slug, content, summary, base_version: baseVersion }) => {
         // **issue #1662。** `memory_read` と同じ門（doc はそちらにある）。
         if (!memorySlugSchema.safeParse(slug).success) {
           return text(`記憶のスラッグが不正: ${slug}（英小文字・数字・. _ - のみ）。`);
@@ -4948,7 +4988,27 @@ export function createCloneTools(context: ToolContext) {
           stores.persona.read(slug),
           stores.persona.documents(),
         ]);
-        const written = await stores.persona.write(slug, content);
+        // **Issue #2809。** 版なしで既存の文書は書けない（全文置換は、読んだ時点の
+        // 版を前提にする）。読んでから書くまでが別の道具呼び出し（ターンをまたぐこと
+        // もある）なので、版は引数で持ち回る。新規作成は「無かった」を前提にする。
+        if (before !== null && baseVersion === undefined) {
+          return text(
+            `記憶 ${slug} は既に在る。全文を書き直すには、先に memory_read slug=${slug} で読み、` +
+              '応答に出る base_version をこの呼び出しの base_version に渡すこと' +
+              '（読んだ後に人間や別のターンが書いた内容を、気づかずに消さないため）。何も変わっていない。',
+          );
+        }
+        let written;
+        try {
+          written = await stores.persona.write(slug, content, {
+            ifMatch: before === null ? (baseVersion ?? null) : baseVersion!,
+          });
+        } catch (error) {
+          if (error instanceof MemoryConflictError) {
+            return text(describeMemoryConflict(slug, '全文置換', error.current));
+          }
+          throw error;
+        }
         const memoryAfter = await stores.persona.documents();
         await appendJournalOrThrow(
           'memory_write',
@@ -4989,7 +5049,7 @@ export function createCloneTools(context: ToolContext) {
         return text(
           `記憶 ${slug} を更新した。\n\n${diff}` +
             (tokenDiff === null ? '' : `\n${tokenDiff}`) +
-            `\n\n${floor}\n\n${reinjection}\n\n${growth}`,
+            `\n\n${floor}\n\n${reinjection}\n\n${growth}\n\n${versionLine(written.content)}`,
         );
       },
     ),
@@ -5294,7 +5354,18 @@ export function createCloneTools(context: ToolContext) {
           parent,
         });
         const memoryBefore = await stores.persona.documents();
-        const written = await stores.persona.write(slug, nextContent);
+        // **Issue #2809。** 読んだ（existing）から書くまでの間に変わっていたら書かない。
+        let written;
+        try {
+          written = await stores.persona.write(slug, nextContent, {
+            ifMatch: memoryVersion(existing.content),
+          });
+        } catch (error) {
+          if (error instanceof MemoryConflictError) {
+            return text(describeMemoryConflict(slug, 'frontmatter の更新', error.current));
+          }
+          throw error;
+        }
         const memoryAfter = await stores.persona.documents();
         const nextKind = resolveMemoryDocKind(parseMemoryFrontmatter(written.content));
 
@@ -5504,7 +5575,7 @@ export function createCloneTools(context: ToolContext) {
             : '';
         return text(
           `記憶 ${slug} の目次（${sections.length} 節）。本文は含まない。\n\n` +
-            `${renderMemoryOutline(sections, { side, q, offset })}${malformedNote}`,
+            `${renderMemoryOutline(sections, { side, q, offset })}${malformedNote}\n\n${versionLine(doc.content)}`,
         );
       },
     ),
@@ -6014,9 +6085,17 @@ export function createCloneTools(context: ToolContext) {
 
         let fromWritten;
         try {
-          fromWritten = await stores.persona.write(fromSlug, nextContent);
+          // **Issue #2809。** 切り取りは出どころの全文置換なので、読んだ（existing）後に
+          // 変わっていたら書かない（人間の編集を消さない）。先に足してあるので、
+          // 落ちたときは下の分岐が「重複しているが失われていない」と返す。
+          fromWritten = await stores.persona.write(fromSlug, nextContent, {
+            ifMatch: memoryVersion(existing.content),
+          });
         } catch (error) {
-          const reason = reasonOf(error);
+          const reason =
+            error instanceof MemoryConflictError
+              ? `${fromSlug} が読んだ後にその間に変わった（人間または別のターンが書いた）ので、書かなかった`
+              : reasonOf(error);
           if (toAppend.length > 0) {
             // **ここで嘘をつかない。** 「移した」と返すと、呼び手は重複に
             // 気づけない。落ちたのは2手目なので、1手目（移し先への追記）は
