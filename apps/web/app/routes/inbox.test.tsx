@@ -31,6 +31,9 @@ const ALL_SEVEN_TYPES = [
   'manager_message',
 ] as const;
 
+// 日時の境界（利用者の地域の時刻 → UTC）を固定する。
+process.env.TZ = 'Asia/Tokyo';
+
 let originalFetch: typeof fetch;
 
 beforeEach(() => {
@@ -209,16 +212,16 @@ describe('/inbox 画面 — 受信箱の絞り込み一括削除（#972 / #1042�
     for (const label of [
       /人間の発言/,
       /人間の回答/,
-      /要約/,
-      /タイマー/,
-      /外部イベント/,
-      /自発/,
+      /記憶の整理/,
+      /定期ジョブ/,
+      /外からの通知/,
+      /クローンの自発/,
       /マネージャーの報告/,
     ]) {
       checkType(label);
     }
     // クライアント側の事前の注意（断るのはサーバ、注意はUI）。
-    expect(screen.getByText(/7種類全部を選んでいる/)).toBeTruthy();
+    expect(screen.getByText(/7種類すべてを選んでいる/)).toBeTruthy();
 
     fillReason('全部畳みたい');
     fireEvent.click(screen.getByRole('button', { name: '試算する' }));
@@ -239,7 +242,7 @@ describe('/inbox 画面 — 受信箱の絞り込み一括削除（#972 / #1042�
     expect(screen.getByRole('button', { name: /実行する/ })).toBeTruthy();
 
     // 種類の選択を変える（絞り込みの変更）——前の結果は消え、「実行する」も消える。
-    checkType(/タイマー/);
+    checkType(/定期ジョブ/);
 
     expect(screen.queryByText(/未読 120 件中 40 件が絞り込みに一致/)).toBeNull();
     expect(screen.queryByRole('button', { name: /実行する/ })).toBeNull();
@@ -307,7 +310,7 @@ describe('知らない受信箱の種類に倒れ先がある（#2010）', () =>
     expect(await screen.findByText('マネージャーの報告')).toBeTruthy();
     // 「種類」（byType）と「いまの器になってから積まれた分」（undeliveredByType）の
     // 両方の内訳が同じ helper（`inboxTypeLabel`）を通るので、2箇所に出る。
-    expect(screen.getAllByText('知らない種類（draining）')).toHaveLength(2);
+    expect(screen.getAllByText('その他の種類')).toHaveLength(2);
   });
 
   /** 継承したキー（`constructor`）は `INBOX_TYPE_LABELS[...]` が `undefined` にならないので別に測る。 */
@@ -321,7 +324,7 @@ describe('知らない受信箱の種類に倒れ先がある（#2010）', () =>
     );
     renderInbox();
 
-    expect(await screen.findByText('知らない種類（constructor）')).toBeTruthy();
+    expect(await screen.findByText('その他の種類')).toBeTruthy();
   });
 
   it('既知の type は今までどおりのラベルで出す', async () => {
@@ -387,5 +390,74 @@ describe('読めない受信箱の行を「未処理の合図は無い」と言�
 
     expect(await screen.findByText('マネージャーの報告')).toBeTruthy();
     expect(screen.queryByText(/読めない合図/)).toBeNull();
+  });
+});
+
+/**
+ * 内部の語を出さない・日時の入力欄（#2782）。送る値の形（UTC の ISO 8601）は変えない。
+ */
+describe('利用者の言葉で出す・日時は地域の時刻で入れる（#2782）', () => {
+  it('内部の語（inbox_events・CLI 名・API パス・種類の識別子）が画面に出ない', async () => {
+    stubInboxBacklog(backlogFixture());
+    renderInbox();
+    await screen.findByText('マネージャーの報告');
+    const text = document.body.textContent ?? '';
+    for (const word of [
+      'inbox_events',
+      'alteroid inbox',
+      '/inbox',
+      'ISO8601',
+      // 'external' は送信元の入力書式（external:名前）の説明にだけ残る。
+      ...ALL_SEVEN_TYPES.filter((type) => type !== 'external'),
+    ]) {
+      expect(text).not.toContain(word);
+    }
+  });
+
+  it('最古時刻と観測時刻は UTC の ISO ではなく利用者の地域の時刻で出る', async () => {
+    stubInboxBacklog(backlogFixture({ oldestAt: '2026-09-14T15:00:00.000Z' }));
+    renderInbox();
+    await screen.findByText(/最も古いものは/);
+    expect(document.body.textContent).not.toMatch(/\d{4}-\d{2}-\d{2}T\d{2}:/);
+  });
+
+  it('「この日時より古い」は datetime-local で、送る値は今までと同じ UTC の ISO 8601（TZ=Asia/Tokyo）', async () => {
+    const sent = stubInboxRemove(() => ({ status: 200, payload: dryRunPayload() }));
+    renderInbox();
+
+    const input = screen.getByLabelText(/この日時より古い合図だけ/) as HTMLInputElement;
+    expect(input.type).toBe('datetime-local');
+    expect(input.placeholder).toBe('');
+
+    checkType(/マネージャーの報告/);
+    fillReason('古いものを畳む');
+    fireEvent.change(input, { target: { value: '2026-09-15T00:00' } });
+    fireEvent.click(screen.getByRole('button', { name: '試算する' }));
+
+    await waitFor(() => expect(sent).toHaveLength(1));
+    // 東京の 9/15 00:00 は UTC では前日 15:00。
+    expect(sent[0]?.body.before).toBe('2026-09-14T15:00:00.000Z');
+    expect(sent[0]?.body.before).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+  });
+
+  it('日時を入れなければ before を送らない', async () => {
+    const sent = stubInboxRemove(() => ({ status: 200, payload: dryRunPayload() }));
+    renderInbox();
+    checkType(/マネージャーの報告/);
+    fillReason('x');
+    fireEvent.click(screen.getByRole('button', { name: '試算する' }));
+    await waitFor(() => expect(sent).toHaveLength(1));
+    expect(sent[0]?.body.before).toBeUndefined();
+  });
+
+  it('送る types は識別子のまま（表示だけ日本語）', async () => {
+    const sent = stubInboxRemove(() => ({ status: 200, payload: dryRunPayload() }));
+    renderInbox();
+    checkType(/記憶の整理/);
+    checkType(/クローンの自発/);
+    fillReason('x');
+    fireEvent.click(screen.getByRole('button', { name: '試算する' }));
+    await waitFor(() => expect(sent).toHaveLength(1));
+    expect(sent[0]?.body.types).toEqual(['distill', 'self_initiative']);
   });
 });
