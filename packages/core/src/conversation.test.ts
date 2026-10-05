@@ -642,3 +642,68 @@ describe('collectConversations（supersedes を畳んだ後で preview / message
     });
   });
 });
+
+describe('collectConversations（失敗の知らせは一覧の題にしない）', () => {
+  const failureNotice = 'この発言には返せなかった（ターンが失敗した）。';
+
+  it('最後が失敗の知らせでも、題は失敗ではない最後の発言から取る', () => {
+    const entries: JournalEntry[] = [
+      exchange({
+        id: 'f',
+        at: '2026-08-20T00:02:00.000Z',
+        conversationId: 'c1',
+        role: 'outbound',
+        text: failureNotice,
+        turnFailure: 'failed',
+      }),
+      exchange({ id: 'h', at: '2026-08-20T00:01:00.000Z', conversationId: 'c1', text: '来週の件' }),
+    ];
+
+    expect(collectConversations(entries)).toMatchObject([
+      { preview: '来週の件', messages: 2, updatedAt: '2026-08-20T00:02:00.000Z' },
+    ]);
+  });
+
+  it('文面が同じでも、印が無ければ題から外さない（文面では見分けない）', () => {
+    const entries: JournalEntry[] = [
+      exchange({
+        id: 'f',
+        at: '2026-08-20T00:02:00.000Z',
+        conversationId: 'c1',
+        role: 'outbound',
+        text: failureNotice,
+      }),
+      exchange({ id: 'h', at: '2026-08-20T00:01:00.000Z', conversationId: 'c1', text: '来週の件' }),
+    ];
+
+    expect(collectConversations(entries)[0]?.preview).toBe(failureNotice);
+  });
+
+  it('知らせしか無い会話は、知らせを題にする（題が空にならない）', () => {
+    const entries: JournalEntry[] = [
+      exchange({
+        id: 'f',
+        at: '2026-08-20T00:02:00.000Z',
+        conversationId: 'c1',
+        role: 'outbound',
+        text: failureNotice,
+        turnFailure: 'held',
+      }),
+    ];
+
+    expect(collectConversations(entries)[0]?.preview).toBe(failureNotice);
+  });
+
+  it('toMessage は印を写す（付いていなければ欄ごと無い）', () => {
+    const marked = exchange({
+      id: 'f',
+      at: '2026-08-20T00:02:00.000Z',
+      role: 'outbound',
+      turnFailure: 'failed',
+    });
+    const plain = exchange({ id: 'p', at: '2026-08-20T00:01:00.000Z' });
+
+    expect(toMessage(marked).turnFailure).toBe('failed');
+    expect('turnFailure' in toMessage(plain)).toBe(false);
+  });
+});

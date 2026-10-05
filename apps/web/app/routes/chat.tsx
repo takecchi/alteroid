@@ -2247,21 +2247,20 @@ export function ChatPane({
         sending={sending}
         onStopReceiving={() => streamRef.current?.controller.abort()}
         error={
-          shownFailure === undefined || shownFailure === null ? undefined : (
-            shownFailure instanceof TurnFailedError ? (
-              <TurnFailureNote
-                message={shownFailure.message}
-                action={(kind) =>
-                  kind === 'auth' ? (
-                    <Link to="/tokens" className="text-xs underline underline-offset-2">
-                      認証トークンの画面を開く
-                    </Link>
-                  ) : undefined
-                }
-              />
-            ) : (
-              <ErrorNote error={shownFailure} />
-            )
+          shownFailure === undefined || shownFailure === null ? undefined : shownFailure instanceof
+            TurnFailedError ? (
+            <TurnFailureNote
+              message={shownFailure.message}
+              action={(kind) =>
+                kind === 'auth' ? (
+                  <Link to="/tokens" className="text-xs underline underline-offset-2">
+                    認証トークンの画面を開く
+                  </Link>
+                ) : undefined
+              }
+            />
+          ) : (
+            <ErrorNote error={shownFailure} />
           )
         }
       />
