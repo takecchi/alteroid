@@ -102,7 +102,7 @@ export type WaitGuardVerdict =
 const ALTERNATIVES =
   '代わりに次のいずれかを使うこと: ' +
   '(1) 起動した処理の完了を待つなら、待ち自体が終わる呼び出しにする ' +
-  '（例: `gh run watch <id> --exit-status` を**前景で**）。 ' +
+  '（例: 対象の完了を返すコマンドを**前景で**。CI なら `gh run watch <id> --exit-status`）。 ' +
   '(2) 待ちに上限が要るなら `timeout <秒> <コマンド>` で自分から終わらせる。 ' +
   '(3) 完了通知を待つのではなく、成果物が在るかを前景の呼び出しで見に行く。';
 

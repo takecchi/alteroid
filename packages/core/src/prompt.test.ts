@@ -205,7 +205,7 @@ describe('器が共有であることの告知', () => {
     // ——この項は #1753 で `AGENTS.md`「静かに失敗する道具」から移った）。
     // 性質を名指しする短い断片で見る。
     const prompt = buildManagerSystemPrompt({ managerId: 'mgr-test', workerName: 'worker' });
-    expect(prompt).toContain('そのものを作業ツリーにしない');
+    expect(prompt).toContain('そのものを使わない');
     expect(prompt).toContain('自分専用のディレクトリ');
   });
 
@@ -230,8 +230,11 @@ describe('器が共有であることの告知', () => {
     const prompt = buildManagerSystemPrompt({ managerId: REAL_ID, workerName: 'worker' });
     expect(prompt).toContain('/tmp/mgr-7305184d');
     expect(prompt).toContain('/tmp/mgr-7305184d-<何か>');
-    // 理由（器が消えたとき台帳から引ける場所はここだけ）まで書いている。
-    expect(prompt).toContain('台帳から引ける');
+    // 理由（器が消えたあとデーモンが成果を探せる場所はここだけ）まで書いている。
+    expect(prompt).toContain('デーモンが成果を探せる');
+    // 保存（push）を促すヒントは弱めない。
+    expect(prompt).toContain('区切りごとに外へ保存');
+    expect(prompt).toContain('git なら push');
   });
 
   it('⭐ プロンプトが例として書く置き場所は、未 push 観測の探索の規則に実際に当たる（#1266）', () => {

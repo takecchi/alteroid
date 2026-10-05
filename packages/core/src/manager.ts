@@ -14959,7 +14959,7 @@ function leaseRefusalDecision(
  * 何が作り直されたか。**マネージャーから見える景色が違う。**
  *
  * デーモンだけなら作業ディレクトリはそのまま残っている。runner ごとなら、
- * 器に永続化が無ければコミット前の変更は消えている。
+ * 器に永続化が無ければ外へ保存していない作業は消えている。
  */
 /**
  * resume が `'resumed'` にならなかったときに `manager_send` が返す1行。
@@ -15232,13 +15232,13 @@ function cloneWorkspaceAfterSwapLine(after: WorkspaceAfterSwap): string {
   switch (after.kind) {
     case 'unrecorded':
       return (
-        '器に永続化が無ければ、コミット前の変更は失われている。' +
+        '器に永続化が無ければ、外へ保存していない作業は失われている。' +
         '同じ結果を期待せず、手元の状態から組み立て直させること。'
       );
     case 'unverified':
       if (after.cloneHints === undefined) {
         return (
-          '器に永続化が無ければ、コミット前の変更は失われている。' +
+          '器に永続化が無ければ、外へ保存していない作業は失われている。' +
           '同じ結果を期待せず、手元の状態から組み立て直させること。'
         );
       }
@@ -15248,7 +15248,7 @@ function cloneWorkspaceAfterSwapLine(after: WorkspaceAfterSwap): string {
         (anyHintHasLossRisk(after.cloneHints)
           ? 'コミット済みで未 push のものも失われている可能性がある。'
           : '') +
-        'コミット前の変更は失われている前提で、見つかった作業ツリーごとに' +
+        '外へ保存していない作業は失われている前提で、見つかった作業ツリーごとに' +
         '次のとおり組み立て直させること:\n' +
         formatWorkspaceCloneHintLines(after.cloneHints, after.observedAt, 'short')
       );

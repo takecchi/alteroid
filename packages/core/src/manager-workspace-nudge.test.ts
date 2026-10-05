@@ -505,7 +505,7 @@ describe('runner-swap の一言は job.workspace を読む（#485 の141行目�
       const notice = s.inbox.find((event) => event.type === 'manager_message') as
         { text: string } | undefined;
       expect(notice?.text).toContain('デーモンが再起動した');
-      expect(notice?.text).not.toContain('コミット前の変更は失われている');
+      expect(notice?.text).not.toContain('外へ保存していない作業は失われている');
       expect(notice?.text).not.toContain('clone し直せ');
 
       await s.pool.stop();
@@ -528,7 +528,7 @@ describe('runner-swap の一言は job.workspace を読む（#485 の141行目�
       const notice = s.inbox.find((event) => event.type === 'manager_message') as
         { text: string } | undefined;
       expect(notice?.text).toContain('runner の器が作り直された');
-      expect(notice?.text).toContain('コミット前の変更は失われている');
+      expect(notice?.text).toContain('外へ保存していない作業は失われている');
       expect(notice?.text).toContain('github.com/acme/widgets.git の feature/x を clone し直せ');
 
       await s.pool.stop();
