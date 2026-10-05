@@ -94,11 +94,25 @@ function SessionsSummary() {
   );
 }
 
+/** 識別子（UUID 等）は利用者向けの見出しに出さず、開いた先に置く。 */
+function TechnicalIds({ rows }: { rows: { label: string; value: string }[] }) {
+  return (
+    <details className="mt-1 text-muted-foreground">
+      <summary className="cursor-pointer">詳しい情報（開発者向け）</summary>
+      {rows.map((row) => (
+        <div key={row.label} className="mt-1 min-w-0">
+          {row.label}: <span className="font-mono break-all">{row.value}</span>
+        </div>
+      ))}
+    </details>
+  );
+}
+
 function SessionRow({ session }: { session: ArchiveSessionSummary }) {
   return (
     <li className="border-b border-border px-4 py-2 text-xs last:border-b-0">
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-        <span className="font-mono break-all">{session.sessionId}</span>
+        <span className="font-medium">{formatDateTime(session.firstAt)} からの会話</span>
         <Badge>行数 {session.rows}</Badge>
         <span className="text-muted-foreground">
           使用量合計 {session.storedBytes}バイト（最大1行 {session.maxStoredBytes}バイト）
@@ -107,6 +121,7 @@ function SessionRow({ session }: { session: ArchiveSessionSummary }) {
       <div className="mt-1 text-muted-foreground">
         {formatDateTime(session.firstAt)} 〜 {formatDateTime(session.lastAt)}
       </div>
+      <TechnicalIds rows={[{ label: '会話の識別子', value: session.sessionId }]} />
     </li>
   );
 }
@@ -178,13 +193,17 @@ function EntryRow({ entry }: { entry: ArchiveEntry }) {
   return (
     <li className="border-b border-border px-4 py-3 text-xs last:border-b-0">
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-        <span className="font-mono break-all">{entry.id}</span>
+        <span className="font-medium">{formatDateTime(entry.at)} の会話</span>
         {removed && <Badge tone="warn">本文は削除済み</Badge>}
         {entry.continuity !== undefined && <Badge tone="neutral">{entry.continuity}</Badge>}
       </div>
-      <div className="mt-1 text-muted-foreground">
-        会話 {entry.sessionId} ・ 使用量 {entry.storedBytes}バイト ・ {formatDateTime(entry.at)}
-      </div>
+      <div className="mt-1 text-muted-foreground">使用量 {entry.storedBytes}バイト</div>
+      <TechnicalIds
+        rows={[
+          { label: '退避の識別子', value: entry.id },
+          { label: '会話の識別子', value: entry.sessionId },
+        ]}
+      />
 
       {removed ? (
         <div className="mt-1 text-muted-foreground">

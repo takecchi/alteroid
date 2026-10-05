@@ -138,8 +138,10 @@ describe('/archive 画面 — 一覧・集計・削除（#776）', () => {
 
     await renderArchive();
 
-    expect(await screen.findByText('sess-1-a.jsonl')).toBeTruthy();
-    expect(screen.getByText(/会話 sess-1/)).toBeTruthy();
+    expect(await screen.findByText(/ の会話$/)).toBeTruthy();
+    // 識別子は「詳しい情報」の先にだけ在る
+    expect(screen.getByText('sess-1-a.jsonl').closest('details')).not.toBeNull();
+    expect(screen.getByText('sess-1').closest('details')).not.toBeNull();
     expect(screen.getByText(/1234バイト/)).toBeTruthy();
   });
 
@@ -159,8 +161,36 @@ describe('/archive 画面 — 一覧・集計・削除（#776）', () => {
 
     await renderArchive();
 
-    expect(await screen.findByText('sess-repeated')).toBeTruthy();
+    expect(await screen.findByText(/からの会話/)).toBeTruthy();
+    expect(screen.getByText('sess-repeated').closest('details')).not.toBeNull();
     expect(screen.getByText('行数 68')).toBeTruthy();
+  });
+
+  it('折りたたみの外に UUID の形の文字列を出さない', async () => {
+    const uuid = '3f2b8c1e-9a4d-4e6f-8b1a-0c2d3e4f5a6b';
+    stubArchiveScreen(
+      [{ id: `${uuid}-1.jsonl`, sessionId: uuid, at: '2026-09-01T00:00:00.000Z', storedBytes: 10 }],
+      {
+        sessions: [
+          {
+            sessionId: uuid,
+            rows: 1,
+            storedBytes: 10,
+            maxStoredBytes: 10,
+            firstAt: '2026-09-01T00:00:00.000Z',
+            lastAt: '2026-09-01T00:00:00.000Z',
+          },
+        ],
+      },
+    );
+
+    await renderArchive();
+    await screen.findAllByText(/の会話$/);
+
+    const clone = document.body.cloneNode(true) as HTMLElement;
+    clone.querySelectorAll('details').forEach((el) => el.remove());
+    expect(clone.textContent).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-/);
+    expect(document.body.textContent).toMatch(uuid);
   });
 
   it('空のとき、何が起きるとここに出るかを言い、コマンド名・パス・内部の語を出さない（#2792）', async () => {
