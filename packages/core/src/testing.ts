@@ -107,6 +107,8 @@ import {
   type TokenRotationSettings,
 } from './token-pool.js';
 import { assertValidCredentialEntries } from './credential-input.js';
+import { stripNul } from './nul-guard.js';
+import { stripNulFromUnmeteredRecord, stripNulFromUsageRecord } from './usage-input.js';
 import { assertValidActiveToken, prepareTokensForReplace } from './token-pool-input.js';
 import {
   addUnreadableCounts,
@@ -1620,7 +1622,9 @@ export function createMemoryStores(): Stores {
   let usageTurnsAt: string | null = null;
 
   const usage: UsageStore = {
-    async record({ layer, site, managerId, date, at, snapshot, accumulation, tokenId }) {
+    async record(input) {
+      const { layer, site, managerId, date, at, snapshot, accumulation, tokenId } =
+        stripNulFromUsageRecord(input);
       // 累積の器は `query()` 呼び出しの寿命で閉じる（`usage.ts` の
       // `usageAccumulationSchema`）。1回で閉じる呼び出しに基準を持たせると、
       // 前回より高くついた回だけが差に縮んで黙って目減りする。
@@ -1791,7 +1795,9 @@ export function createMemoryStores(): Stores {
         notice: USAGE_ESTIMATE_NOTICE,
       };
     },
-    async recordUnmetered({ layer, site, managerId, date, at, provider, tokenId }) {
+    async recordUnmetered(input) {
+      const { layer, site, managerId, date, at, provider, tokenId } =
+        stripNulFromUnmeteredRecord(input);
       const key = [date, managerId, layer, site, provider, tokenId ?? ''].join('\u0000');
       const existing = usageUnmetered.get(key);
       usageUnmetered.set(key, {
@@ -1806,7 +1812,7 @@ export function createMemoryStores(): Stores {
       });
     },
     async baseline(layer, managerId) {
-      return usageBaselines.get(usageBaselineKey(layer, managerId)) ?? null;
+      return usageBaselines.get(usageBaselineKey(layer, stripNul(managerId))) ?? null;
     },
     /**
      * **ドライバと同じく、引数を持たず全期間から作る**（`store.ts` の

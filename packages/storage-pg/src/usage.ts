@@ -1,5 +1,8 @@
 import {
   USAGE_ESTIMATE_NOTICE,
+  stripNul,
+  stripNulFromUnmeteredRecord,
+  stripNulFromUsageRecord,
   foldOneshotUsage,
   foldUsageSnapshot,
   isRealUsageDate,
@@ -193,7 +196,7 @@ export class PgUsageStore implements UsageStore {
     this.#db = db;
   }
 
-  async record(input: {
+  async record(rawInput: {
     layer: UsageLayer;
     site: UsageSite;
     managerId: string;
@@ -203,6 +206,7 @@ export class PgUsageStore implements UsageStore {
     accumulation: UsageAccumulation;
     tokenId?: string;
   }): Promise<UsageFold> {
+    const input = stripNulFromUsageRecord(rawInput);
     return this.#db.transaction(async (tx) => {
       // **同じ (layer, managerId) への cumulative record() を直列化する
       // （#1739）。** oneshot は基準を読まないのでロックを取らない——クラス doc
@@ -421,7 +425,7 @@ export class PgUsageStore implements UsageStore {
    * `UsageStore.recordUnmetered`）。**`usage_unmetered` の1行だけを足す。**
    * `usage_daily` / `usage_turns` / 基準 / 台帳の始点には触らない（0 を積まない）。
    */
-  async recordUnmetered(input: {
+  async recordUnmetered(rawInput: {
     layer: UsageLayer;
     site: UsageSite;
     managerId: string;
@@ -430,6 +434,7 @@ export class PgUsageStore implements UsageStore {
     provider: string;
     tokenId?: string;
   }): Promise<void> {
+    const input = stripNulFromUnmeteredRecord(rawInput);
     const updatedAt = new Date(input.at);
     await this.#db
       .insert(usageUnmetered)
@@ -584,6 +589,7 @@ export class PgUsageStore implements UsageStore {
   }
 
   async baseline(layer: UsageLayer, managerId: string): Promise<UsageBaseline | null> {
+    managerId = stripNul(managerId);
     const rows = await this.#db
       .select()
       .from(usageBaseline)

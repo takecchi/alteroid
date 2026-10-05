@@ -2523,6 +2523,13 @@ export class UnreadableActiveTokenError extends Error {
  * **持つのはデーモンだけである。** runner に持たせると記憶ストアの鍵が要る
  * （M4 受け入れ基準3）。runner から降りてくるのは累積スナップショットという
  * 事実だけで、差分にして積むのはここ。
+ *
+ * **鍵列（`managerId`・`model`・`tokenId`・`provider`・`sessionId`）の NUL は、断らずに落として残す
+ * （issue #2927。teto の判断、2026-10-05。3実装とも）。** 外から来る鍵でも、記録そのものを失わない
+ * 種類の台帳（消費）では落として残す——これらは集計の切り口で、特定の1行を指して書き換える鍵では
+ * ない。断ると、NUL を含む `model` のターンの消費が台帳から丸ごと消える（呼び出し側は失敗を握りつぶして
+ * 日誌に残すだけ）。害が大きいのは記録を失うほうである。他のストアが鍵の NUL を断るのとは逆の
+ * 向きの例外である（`nul-guard.ts`）。
  */
 export interface UsageStore {
   /**
