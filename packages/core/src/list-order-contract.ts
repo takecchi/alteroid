@@ -23,10 +23,16 @@ export async function verifyListOrderContract(stores: Stores): Promise<void> {
     throw new Error(`一覧の並びの契約違反: ${message}`);
   }
 
-  function expectOrder(label: string, actual: readonly string[], inserted: readonly string[]): void {
+  function expectOrder(
+    label: string,
+    actual: readonly string[],
+    inserted: readonly string[],
+  ): void {
     const expected = [...inserted].sort(compareCodeUnits);
     if (JSON.stringify(actual) !== JSON.stringify(expected)) {
-      fail(`${label} の並びがコード単位の順でない: 実際 ${JSON.stringify(actual)} / 期待 ${JSON.stringify(expected)}`);
+      fail(
+        `${label} の並びがコード単位の順でない: 実際 ${JSON.stringify(actual)} / 期待 ${JSON.stringify(expected)}`,
+      );
     }
   }
 
