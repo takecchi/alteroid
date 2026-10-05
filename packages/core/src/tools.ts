@@ -10328,8 +10328,7 @@ export function createCloneTools(context: ToolContext) {
         }
         // **Issue #2923。** 版なしでは消さない（`memory_delete`（#2881）と同じ線）。
         // 読めない形の行には版が無いので前提なしで消せる（回復手段を塞がない。#2011）。
-        // ⚠️ 比較は読んだ直後に道具側でする（`PracticeStore.remove` は前提の版を
-        // 持たない）。`practice_write` と違い、比較と削除は1つの排他の中ではない。
+        // 比較は `PracticeStore.remove(slug, { ifMatch })` が消すのと同じ排他の中で行う。
         if (before !== null) {
           if (baseVersion === undefined) {
             return text(
@@ -10338,11 +10337,18 @@ export function createCloneTools(context: ToolContext) {
                 '（読んだ後に人間や別のターンが書いた内容を、気づかずに消さないため。焼き込みの索引だけでは消せない）。**何も消していない。**',
             );
           }
-          if (practiceVersion(before) !== baseVersion) {
-            return text(describePracticeConflict(slug, '削除', before, 'remove'));
-          }
         }
-        await stores.practices.remove(slug);
+        try {
+          await stores.practices.remove(
+            slug,
+            before === null ? undefined : { ifMatch: baseVersion },
+          );
+        } catch (error) {
+          if (error instanceof PracticeConflictError) {
+            return text(describePracticeConflict(slug, '削除', error.current, 'remove'));
+          }
+          throw error;
+        }
         if (before !== null) {
           await appendJournalOrThrow(
             'practice_remove',

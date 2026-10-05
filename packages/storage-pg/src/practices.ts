@@ -16,6 +16,7 @@ import type {
   PracticeStore,
   PracticeVersion,
   PracticeVersionMeta,
+  RemovePracticeOptions,
   UnreadablePractice,
   WritePracticeOptions,
 } from '@alteroid/core';
@@ -328,10 +329,31 @@ export class PgPracticeStore implements PracticeStore {
     }
   }
 
-  async remove(slug: string): Promise<void> {
+  async remove(slug: string, options?: RemovePracticeOptions): Promise<void> {
+    const key = this.#slug(slug);
+    const ifMatch = options?.ifMatch;
     // **版は消さない**（`PracticeStore.remove` の doc、#1309）——`practices`
     // からだけ消し、`practiceVersions` には触れない。
-    await this.#db.delete(practices).where(eq(practices.slug, this.#slug(slug)));
+    if (ifMatch === undefined) {
+      await this.#db.delete(practices).where(eq(practices.slug, key));
+      return;
+    }
+    // 前提の版つき（Issue #2923）。`write` と同じく、行をロックして比べてから消すのを
+    // 1つのトランザクションに畳む（版は kind / title / content の JSON のハッシュで、
+    // SQL の1文では書けないため。比較と DELETE の間に別の書き手は割り込めない）。
+    const current = await this.#db.transaction(async (tx) => {
+      const locked = await tx
+        .select({ kind: practices.kind, title: practices.title, content: practices.content })
+        .from(practices)
+        .where(eq(practices.slug, key))
+        .for('update');
+      if (!practiceVersionMatches(locked[0] ?? null, ifMatch)) return { conflict: true as const };
+      await tx.delete(practices).where(eq(practices.slug, key));
+      return { conflict: false as const };
+    });
+    if (current.conflict) {
+      throw new PracticeConflictError(slug, await this.#readOrNull(slug));
+    }
   }
 
   async clear(): Promise<number> {
