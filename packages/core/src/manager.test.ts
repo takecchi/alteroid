@@ -12142,7 +12142,10 @@ describe('生存確認が観測した sessions から sessionMissingSince を立
       } as Job);
       const a = new FakePoolRunner('runner-a', { managers: 0 });
       const real = createRunnerRegistry([a]);
-      const patches = new Map<string, { sessions: readonly string[]; sessionsObservedAt: string }>();
+      const patches = new Map<
+        string,
+        { sessions: readonly string[]; sessionsObservedAt: string }
+      >();
       if (patch !== null) {
         patches.set('runner-a', {
           ...patch,

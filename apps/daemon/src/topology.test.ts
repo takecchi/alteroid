@@ -393,9 +393,9 @@ describe('runner の上に居る委譲（runnerListedAt）は窓に関係なく�
   });
 
   it('観測が無ければ（欄が無い）窓の外の done は載らない', () => {
-    expect(idsOf([manager('no-obs', { status: 'done', updatedAt: iso(OLD), runnerId: 'r1' })])).toEqual(
-      [],
-    );
+    expect(
+      idsOf([manager('no-obs', { status: 'done', updatedAt: iso(OLD), runnerId: 'r1' })]),
+    ).toEqual([]);
   });
 
   it('lost / failed / stopped は、runner の一覧に載っていても窓の外なら載らない', () => {
