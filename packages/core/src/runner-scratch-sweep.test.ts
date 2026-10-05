@@ -1,4 +1,4 @@
-import { writeFile, mkdir, rm } from 'node:fs/promises';
+import { writeFile, mkdir, readdir, rm } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 
@@ -24,20 +24,33 @@ describe('runner の周期と shutdown（#3039）', () => {
     tmp = await makeTempDir('runner-scratch-');
   });
   afterEach(async () => {
+    vi.useRealTimers();
     await host?.shutdown().catch(() => undefined);
     await rm(tmp, { recursive: true, force: true });
   });
 
   it('猶予の過ぎた作業場を消して scratch_sweep を出し、shutdown 後は動かない', async () => {
+    // 周期（setInterval）だけを偽の時計にし、I/O は実物のまま。実時間では待たない。
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
     await writeFile(path.join(tmp, 'mgr-aaaa1111-x.log'), 'x');
+    let readdirCalls = 0;
     const events: RunnerEvent[] = [];
     host = createRunnerHost({
       runnerId: 'runner-x',
       workspacePath: '/work',
       emit: (e) => events.push(runnerEventSchema.parse(JSON.parse(JSON.stringify(e)))),
       env: { PATH: process.env.PATH },
-      scratchSweep: { tmpRoot: tmp, graceMs: 0, intervalMs: 20 },
+      scratchSweep: {
+        tmpRoot: tmp,
+        graceMs: 0,
+        intervalMs: 20,
+        readdirFn: async (dir) => {
+          readdirCalls += 1;
+          return readdir(dir, { withFileTypes: true });
+        },
+      },
     });
+    await vi.advanceTimersByTimeAsync(20);
     await vi.waitFor(() => {
       expect(events.some((e) => e.type === 'scratch_sweep')).toBe(true);
     });
@@ -47,13 +60,21 @@ describe('runner の周期と shutdown（#3039）', () => {
       runnerId: 'runner-x',
       removed: [{ name: 'mgr-aaaa1111-x.log' }],
     });
-    // 何も無い回は送らない。
-    await new Promise((r) => setTimeout(r, 100));
+    // 何も無い回は送らない（周期を3回進め、readdir が増えても出来事は増えない）。
+    const before = readdirCalls;
+    for (let i = 0; i < 3; i += 1) {
+      await vi.advanceTimersByTimeAsync(20);
+      await vi.waitFor(() => expect(readdirCalls).toBe(before + i + 1));
+      await new Promise((r) => setImmediate(r));
+    }
     expect(events.filter((e) => e.type === 'scratch_sweep')).toHaveLength(1);
 
     await host.shutdown();
     await mkdir(path.join(tmp, 'mgr-bbbb2222'));
-    await new Promise((r) => setTimeout(r, 100));
+    const afterShutdown = readdirCalls;
+    await vi.advanceTimersByTimeAsync(200);
+    await new Promise((r) => setImmediate(r));
+    expect(readdirCalls).toBe(afterShutdown);
     expect(existsSync(path.join(tmp, 'mgr-bbbb2222'))).toBe(true);
   });
 });

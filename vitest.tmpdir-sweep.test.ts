@@ -244,8 +244,12 @@ describe('vitest を実際に 1 回起こして 21 文字ディレクトリが�
   it('正常終了後、専用 TMPDIR に nanoid 名のディレクトリが無い', () => {
     const repoRoot = resolve(fileURLToPath(new URL('.', import.meta.url)));
     const sandbox = makeTempDirSync('alteroid-vitest-tmpdir-e2e-');
-    const env: NodeJS.ProcessEnv = { ...process.env, TMPDIR: sandbox };
-    for (const k of Object.keys(env)) if (k.startsWith('VITEST')) delete env[k];
+    // 親の env を丸ごと渡さず、vitest の子が起動に要る鍵だけを明示する。
+    const env: NodeJS.ProcessEnv = {
+      PATH: process.env.PATH ?? '',
+      HOME: process.env.HOME ?? sandbox,
+      TMPDIR: sandbox,
+    };
     const r = spawnSync(
       process.execPath,
       [
