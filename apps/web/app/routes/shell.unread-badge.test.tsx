@@ -27,24 +27,12 @@ const HEALTH = {
   auth: { enabled: false, providers: [] },
 };
 
-function conversation(id: string, unreadCount: number) {
-  return {
-    conversationId: id,
-    startedAt: '2026-08-20T00:00:00.000Z',
-    updatedAt: '2026-08-20T00:01:00.000Z',
-    messages: 2,
-    preview: id,
-    unreadCount,
-    readThrough: '2026-08-20T00:00:00.000Z',
-  };
-}
-
 function stubShell(conversations: () => Response) {
   stubFetch((url, init) => {
     if (url.endsWith('/health')) return json(HEALTH);
     if (url.includes('/approvals')) return json({ approvals: [] });
     if (url.endsWith('/journal/stream')) return sse([], { keepOpen: true, signal: init?.signal });
-    if (url.includes('/conversations')) return conversations();
+    if (url.endsWith('/conversations/unread-count')) return conversations();
     return undefined;
   });
 }
@@ -81,22 +69,31 @@ afterEach(() => {
   globalThis.fetch = originalFetch;
 });
 
-const list = (conversations: unknown[]) =>
-  json({ conversations, scanned: 5, reachedStart: true, hiddenByLimit: 0 });
+const count = (body: unknown) => json(body);
 
 describe('左ナビ「会話」の未読の札', () => {
   it('未読のある会話の数が札に出て、リンクの名前にも入る', async () => {
-    stubShell(() => list([conversation('a', 2), conversation('b', 0), conversation('c', 1)]));
+    stubShell(() => count({ count: 2, capped: false }));
 
     renderShell();
 
     const link = await screen.findByRole('link', { name: /未読のある会話 2 件/ });
     expect(link.getAttribute('href')).toBe('/chat');
     expect(link.textContent).toContain('2');
+    expect(link.textContent).not.toContain('+');
+  });
+
+  it('数え切れていない（capped）ときは「N+」で、名前は「N 件以上」', async () => {
+    stubShell(() => count({ count: 99, capped: true }));
+
+    renderShell();
+
+    const link = await screen.findByRole('link', { name: /未読のある会話 99 件以上/ });
+    expect(link.textContent).toContain('99+');
   });
 
   it('未読が無ければ札を出さない', async () => {
-    stubShell(() => list([conversation('a', 0)]));
+    stubShell(() => count({ count: 0, capped: false }));
 
     renderShell();
 
@@ -105,8 +102,14 @@ describe('左ナビ「会話」の未読の札', () => {
     expect(screen.queryByLabelText(/未読/)).toBeNull();
   });
 
-  it('一覧を読めていないときは、札無し（0 件）と区別できる「読めていない」印を出す', async () => {
-    stubShell(() => json({ error: 'internal' }, 500));
+  it.each([
+    ['取得の失敗', () => json({ error: 'internal' }, 500)],
+    [
+      '既読の記録が読めない旨の応答',
+      () => count({ count: 3, capped: false, readStateUnreadable: 'x' }),
+    ],
+  ])('%s は、札無し（0 件）と区別できる「読めていない」印にする', async (_n, respond) => {
+    stubShell(respond);
 
     renderShell();
 

@@ -31,8 +31,8 @@ import {
 import {
   JournalFeedProvider,
   useApprovals,
-  useConversations,
   useHealth,
+  useUnreadConversationCount,
   useAuth,
   useJournalLive,
 } from '@alteroid/swr';
@@ -189,27 +189,32 @@ function AuthedShell() {
 
   /**
    * 左ナビ「会話」の札: 未読のある会話の数。**承認待ちの札と同じ作法**——読めていないときは
-   * 0 件（札無し）と区別できる danger の「?」にする（エラーを最優先。形の違う応答も読めていない側）。
-   * 一覧は会話の画面と同じ `useConversations(30)`（SWR が同じ取得を共有する）。
-   * 一覧が返す窓の中で数えた値なので、窓の外の未読は数えていない。
+   * 0 件（札無し）と区別できる danger の「?」にする（エラーを最優先。形の違う応答・既読の
+   * 記録が読めない旨の応答も読めていない側）。会話の一覧は取らず、軽い口（件数だけ）を使う。
+   * 数え切れていない（`capped`）ときは「N+」。
    */
-  const { data: conversations, error: conversationsError } = useConversations(30);
-  const conversationList = Array.isArray(conversations?.conversations)
-    ? conversations.conversations
-    : undefined;
-  const conversationsUnavailable =
-    conversationsError !== undefined ||
-    (conversations !== undefined && conversationList === undefined);
-  const unreadConversations =
-    conversationList?.filter((conversation) => conversation.unreadCount > 0).length ?? 0;
+  const { data: unread, error: unreadError } = useUnreadConversationCount();
+  const unreadMalformed =
+    unread !== undefined &&
+    (typeof unread.count !== 'number' || unread.readStateUnreadable !== undefined);
+  const conversationsUnavailable = unreadError !== undefined || unreadMalformed;
+  const unreadCount = typeof unread?.count === 'number' ? unread.count : 0;
   const chatBadge: ReactNode = conversationsUnavailable ? (
     <Badge tone="danger" aria-label="未読の会話を読めていない" title="未読の会話を読めていない">
       ?
     </Badge>
   ) : (
-    unreadConversations > 0 && (
-      <Badge tone="accent" aria-label={`未読のある会話 ${unreadConversations} 件`}>
-        {unreadConversations}
+    unreadCount > 0 && (
+      <Badge
+        tone="accent"
+        aria-label={
+          unread?.capped === true
+            ? `未読のある会話 ${unreadCount} 件以上`
+            : `未読のある会話 ${unreadCount} 件`
+        }
+      >
+        {unreadCount}
+        {unread?.capped === true ? '+' : ''}
       </Badge>
     )
   );

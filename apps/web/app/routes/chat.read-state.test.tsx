@@ -313,7 +313,7 @@ describe('送信して、返答の完了まで居たとき', () => {
     expect(await readThroughs()).toEqual([]);
   });
 
-  it('完了前にタブを裏にしたら、裏のあいだは返答の id で送らない', async () => {
+  it('完了前にタブを裏にしたら、裏のあいだは返答の id で送らず、表に戻って見えた時点で送る', async () => {
     const { chatDone, replyLands } = sendScenario();
     renderChat(`/chat/${ID}`);
     await screen.findByText(M_HUMAN.text);
@@ -327,6 +327,10 @@ describe('送信して、返答の完了まで居たとき', () => {
 
     await screen.findByText(M_LATE.text);
     expect(await readThroughs()).toEqual([]);
+
+    // 表に戻って見えた時点で既読にする（1つの規則: 見えているタブで、画面に出ている発言まで）。
+    act(becomeVisible);
+    await vi.waitFor(async () => expect(await readThroughs()).toEqual(['m3']));
   });
 
   it('接続が切れて返答が出なかったら、送らない', async () => {

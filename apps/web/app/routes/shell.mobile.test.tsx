@@ -72,8 +72,7 @@ function renderShell() {
 function stubAuthedShell(pendingApprovals: unknown[] = [], approvalsFail = false) {
   return stubFetch((url, init) => {
     if (url.endsWith('/health')) return json(HEALTH);
-    if (url.includes('/conversations'))
-      return json({ conversations: [], scanned: 0, reachedStart: true, hiddenByLimit: 0 });
+    if (url.includes('/conversations/unread-count')) return json({ count: 0, capped: false });
     if (url.includes('/approvals')) {
       return approvalsFail
         ? json({ error: 'internal' }, 500)
@@ -204,8 +203,7 @@ describe('サイドバーの記憶ストレージ説明', () => {
     // `stubAuthedShell` の既定の `HEALTH` は短い値なので、この試験だけ差し替える。
     stubFetch((url, init) => {
       if (url.endsWith('/health')) return json({ ...HEALTH, storage: longStorage });
-      if (url.includes('/conversations'))
-        return json({ conversations: [], scanned: 0, reachedStart: true, hiddenByLimit: 0 });
+      if (url.includes('/conversations/unread-count')) return json({ count: 0, capped: false });
       if (url.includes('/approvals')) return json({ approvals: [] });
       if (url.endsWith('/journal/stream')) return sse([], { keepOpen: true, signal: init?.signal });
       return undefined;

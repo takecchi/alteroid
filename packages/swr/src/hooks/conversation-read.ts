@@ -12,12 +12,24 @@
  * 返答が日誌へ載って詳細を取り直したとき、はじめて対象になる。
  */
 import { useCallback, useRef } from 'react';
-import { useSWRConfig } from 'swr';
+import useSWR, { useSWRConfig } from 'swr';
 
 import { unwrap, useApi } from '../api';
 import type { ConversationDetail, ConversationSummary } from '@alteroid/logic';
 
 import { isKeyOfType } from './queries';
+
+/** 未読のある会話の数（左ナビの札）。一覧とは別のキー——一覧は日誌を遡るので重い。 */
+export const UNREAD_COUNT_KEY = { type: 'conversationUnreadCount' } as const;
+
+/**
+ * 未読のある会話の数（`GET /conversations/unread-count`）。`capped` なら「この数以上」。
+ * 既読にした後と、会話の発言が日誌に載ったとき（`use-journal-live.ts`）に取り直す。
+ */
+export function useUnreadConversationCount() {
+  const api = useApi();
+  return useSWR(UNREAD_COUNT_KEY, () => api.api.GET('/conversations/unread-count').then(unwrap));
+}
 
 /** 時刻の前後。比較できない値は「後ではない」側へ倒す（送らない側。取り返しがつく）。 */
 function isAfter(a: string, b: string): boolean {
@@ -74,6 +86,7 @@ export function useMarkConversationRead() {
         })
         .then(unwrap)
         .then((result) => {
+          void mutate(UNREAD_COUNT_KEY);
           void mutate(
             (key) => isKeyOfType(key, 'conversations'),
             (current: { conversations: ConversationSummary[] } | undefined) =>
