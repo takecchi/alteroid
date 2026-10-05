@@ -138,20 +138,27 @@ describe('PUT /tokens の日誌（#2742）', () => {
     expect((await stores.tokens.list()).map((t) => t.id)).toEqual(['tok-a', 'tok-b', 'tok-c']);
   });
 
-  it.each([['有効化', true]])('広げる側（%s）: 日誌が書けなければ保存せず 500', async () => {
-    const { stores, app } = await seed();
-    await put(app, '/tokens', {
-      tokens: [KEEP[0], { ...KEEP[1], disabled: true }, KEEP[2]],
-    });
-    const down = await seed({ journalDown: true });
-    await down.stores.tokens.replace(await stores.tokens.list());
-    const response = await put(down.app, '/tokens', {
-      tokens: [KEEP[0], { ...KEEP[1], disabled: false }, KEEP[2]],
-    });
-    expect(response.status).toBe(500);
+  it('広げる側（有効化）: 日誌が書けなければ保存せず 500。書ければ「有効化」', async () => {
+    const disabledPool = async (journalDown: boolean) => {
+      const made = await seed({ journalDown });
+      const rows = await made.stores.tokens.list();
+      await made.stores.tokens.replace(
+        rows.map((row) =>
+          row.id === 'tok-b' ? { ...row, disabledAt: '2026-01-01T00:00:00.000Z' } : row,
+        ),
+      );
+      return made;
+    };
+    const enable = { tokens: [KEEP[0], { ...KEEP[1], disabled: false }, KEEP[2]] };
+    const down = await disabledPool(true);
+    expect((await put(down.app, '/tokens', enable)).status).toBe(500);
     expect(
       (await down.stores.tokens.list()).find((t) => t.id === 'tok-b')?.disabledAt,
     ).toBeDefined();
+
+    const ok = await disabledPool(false);
+    expect((await put(ok.app, '/tokens', enable)).status).toBe(200);
+    expect(await journalText(ok.stores)).toContain('有効化');
   });
 
   it('広げる側（並べ替え＝現役が変わりうる）: 日誌が書けなければ保存せず 500。書ければ「切替」', async () => {
@@ -233,8 +240,6 @@ describe('PUT /tokens/policy の日誌（#2742）', () => {
   });
 
   it('回す契機を有効にする（off → free_exhausted）: 日誌が書けなければ保存せず 500', async () => {
-    const { stores, app } = await seed();
-    await put(app, '/tokens/policy', { rotateOn: 'off' });
     const down = await seed({ journalDown: true });
     await down.stores.tokens.writeSettings({
       rotateOn: 'off',
@@ -244,7 +249,6 @@ describe('PUT /tokens/policy の日誌（#2742）', () => {
     const response = await put(down.app, '/tokens/policy', { rotateOn: 'free_exhausted' });
     expect(response.status).toBe(500);
     expect((await down.stores.tokens.readSettings()).rotateOn).toBe('off');
-    expect(stores).toBeDefined();
   });
 
   it('契機を変える・冷却を変える: 日誌が先（書けなければ 500、保存しない）', async () => {
