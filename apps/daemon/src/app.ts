@@ -2198,9 +2198,9 @@ export function createApp(deps: AppDeps) {
    * Hono の既定のエラーハンドラを、本文を出さない規律に合わせて置き換える
    * （Issue #249）。
    *
-   * **応答（500 / `Internal Server Error`）と `HTTPException` の分岐
-   * （`getResponse()` を返す枝）は既定と同じに保つ。** 変えるのは
-   * `console.error(err)` の枝だけである。実物（`hono@4.13.1`、
+   * **変えるのは `console.error(err)` の枝と、失敗本文の形である**（issue #2849:
+   * 既定の `text/plain` の本文は `{ error }` の JSON へ揃えた。状態コードは既定と同じ）。
+   * `HTTPException` が `res` を明示していて JSON などのときは既定どおり通す。実物（`hono@4.13.1`、
    * `node_modules/.pnpm/hono@4.13.1/node_modules/hono/dist/hono-base.js` の
    * `errorHandler`）は逐語で:
    *
@@ -2223,16 +2223,27 @@ export function createApp(deps: AppDeps) {
    * **`reasonOf` は `dropped-record.ts` の既存の口をそのまま使う。** 同じ
    * 判断（1行目だけ・200字で切る）を2箇所に持つと必ずずれる。
    */
-  base.onError((err, c) => {
+  base.onError(async (err, c) => {
     if ('getResponse' in err) {
       const res = err.getResponse();
+      // **失敗の本文は `{ error }` の JSON に揃える（issue #2849）。** hono の
+      // validator が壊れた JSON に投げる `HTTPException`（`Malformed JSON in request
+      // body`）は `text/plain` で、`jsonBody` の `hook` には届かない。`text/plain`
+      // のときだけ畳み、`res` を明示した例外（JSON など）はそのまま通す。
+      if ((res.headers.get('content-type') ?? '').startsWith('text/plain')) {
+        const message = await res.text();
+        return c.json({ error: message === '' ? res.statusText : message }, res.status as 400);
+      }
       return c.newResponse(res.body, res);
     }
     process.stderr.write(
       `alteroidd: HTTP 経路で例外を捕まえました（本文は出しません）: ${reasonOf(err)}\n`,
     );
-    return c.text('Internal Server Error', 500);
+    return c.json({ error: 'Internal Server Error' }, 500);
   });
+
+  // **存在しない経路・メソッドも `{ error }` の JSON で返す（issue #2849）。**
+  base.notFound((c) => c.json({ error: 'not found' }, 404));
 
   // **CORS は認証より先に登録する。** ブラウザの preflight（OPTIONS）は
   // `Authorization` を積んで来ないので、門番が先に立つと preflight が 401 になり、
