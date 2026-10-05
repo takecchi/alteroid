@@ -2,22 +2,16 @@
 /**
  * `/dropped` 画面。ここで固定したいのは:
  *
- * - 0件のとき `describeDroppedTraceEmpty()` の文言が出る
+ * - 0件のとき `describeDroppedTraceEmptyNote()` の文言が出る
  * - 件数があるとき跡が（サーバが返した順のまま）全件出る
- * - runner の跡はここに出ない、という文言（`describeDroppedTraceOrigin`）が
+ * - runner の跡はここに出ない、という文言（`describeDroppedTraceOriginNote`）が
  *   0件でも件数があっても常に出る
  * - 取得に失敗したとき（404 = 古いデーモン／それ以外の失敗）、0件の文言とは
  *   別の文言が出る
- * - Web 側の複製（`describeDroppedTraceOriginNote` 等）が core の実装と
- *   文字列として一致する（#242 系の先例 #579 と同じ形の歯）
+ * - 説明に CLI 名・パス・内部の語が出ず、時刻は地域の時刻で出る（#2792）。
+ *   core の文言とは揃えない（core は CLI・クローン向け）
  */
-import {
-  describeDroppedTraceEmpty,
-  describeDroppedTraceOrigin,
-  describeDroppedTraceRetention,
-  RECENT_TRACE_LIMIT,
-  type DroppedTraceOrigin,
-} from '@alteroid/core';
+import { formatDateTime } from '@alteroid/logic';
 import { cleanup, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -53,8 +47,8 @@ function stubDropped(options: { status?: number; body?: unknown }) {
   });
 }
 
-async function renderDropped(): Promise<void> {
-  render(
+async function renderDropped() {
+  const view = render(
     <Providers>
       <MemoryRouter>
         <Dropped />
@@ -62,15 +56,16 @@ async function renderDropped(): Promise<void> {
     </Providers>,
   );
   await screen.findByText('失敗の一覧');
+  return view;
 }
 
 describe('/dropped 画面 — 0件・件数あり・runner の非表示を混ぜない', () => {
-  it('0件なら describeDroppedTraceEmpty() の文言を出す', async () => {
+  it('0件なら describeDroppedTraceEmptyNote() の文言を出す', async () => {
     stubDropped({ body: { origin: 'daemon', since: SINCE, limit: 200, total: 0, traces: [] } });
 
     await renderDropped();
 
-    expect(screen.getByText(describeDroppedTraceEmpty())).toBeTruthy();
+    expect(screen.getByText(describeDroppedTraceEmptyNote())).toBeTruthy();
   });
 
   it('件数があるとき、跡を全件出す', async () => {
@@ -85,7 +80,7 @@ describe('/dropped 画面 — 0件・件数あり・runner の非表示を混ぜ
     expect(screen.getByText(traces[0]!)).toBeTruthy();
     expect(screen.getByText(traces[1]!)).toBeTruthy();
     // 0件の文言は出ない。
-    expect(screen.queryByText(describeDroppedTraceEmpty())).toBeNull();
+    expect(screen.queryByText(describeDroppedTraceEmptyNote())).toBeNull();
   });
 
   /**
@@ -97,7 +92,7 @@ describe('/dropped 画面 — 0件・件数あり・runner の非表示を混ぜ
 
     await renderDropped();
 
-    expect(screen.getByText(describeDroppedTraceOrigin('daemon'))).toBeTruthy();
+    expect(screen.getByText(describeDroppedTraceOriginNote('daemon'))).toBeTruthy();
   });
 
   it('runner の跡が出ない旨は、件数があっても出る', async () => {
@@ -107,22 +102,22 @@ describe('/dropped 画面 — 0件・件数あり・runner の非表示を混ぜ
 
     await renderDropped();
 
-    expect(screen.getByText(describeDroppedTraceOrigin('daemon'))).toBeTruthy();
+    expect(screen.getByText(describeDroppedTraceOriginNote('daemon'))).toBeTruthy();
   });
 });
 
 describe('/dropped 画面 — 「取りに行けなかった」は0件と違う文言', () => {
   /**
    * **404 は「この口を持たない古いデーモン」であって「跡が無い」ではない。**
-   * 0件の文言（`describeDroppedTraceEmpty()`）とは別の文字列を出す。
+   * 0件の文言（`describeDroppedTraceEmptyNote()`）とは別の文字列を出す。
    */
   it('404（この口を持たない古いデーモン）は、0件の文言とは別の文言を出す', async () => {
     stubDropped({ status: 404, body: {} });
 
     await renderDropped();
 
-    expect(screen.queryByText(describeDroppedTraceEmpty())).toBeNull();
-    expect(screen.getByText(/版が古い可能性がある/)).toBeTruthy();
+    expect(screen.queryByText(describeDroppedTraceEmptyNote())).toBeNull();
+    expect(screen.getByText(/版が古い可能性があります/)).toBeTruthy();
   });
 
   it('404 以外の失敗（500 等）でも、0件の文言とは別の文言を出す', async () => {
@@ -130,58 +125,58 @@ describe('/dropped 画面 — 「取りに行けなかった」は0件と違う�
 
     await renderDropped();
 
-    expect(screen.queryByText(describeDroppedTraceEmpty())).toBeNull();
+    expect(screen.queryByText(describeDroppedTraceEmptyNote())).toBeNull();
     expect(screen.getByRole('alert')).toBeTruthy();
   });
 });
 
 /**
- * **由来・0件・保持のしかたの字面が、core（`packages/core/src/dropped-record.ts`）
- * と Web の複製で一致していること。**
- *
- * **なぜ要るか — 2箇所に在るからである。** Web が core の関数をそのまま呼べない
- * 理由は正当で（`packages/core` の値 import はブラウザバンドルへサーバ専用の
- * ドメイン層を引き込む。`eslint.config.js` の該当ルールと #294 / #306 の事故）、
- * 統合するつもりは無い。**問題は、揃っていることを規約でしか守っていなかった
- * ことである** —— 両ファイルの doc は「直すときは両方見ること」と書いているが、
- * 面ごとのテストはそれぞれ自分の literal を assert しているので、**片方だけ
- * 直しても両方緑のまま通る。**
- *
- * **テストファイルからの値 import は禁止の対象外である**（`eslint.config.js`
- * の `no-restricted-imports` の doc が逐語で `*.test.{ts,tsx}` を外している）。
- * 先例は `managers.test.tsx`「sessionMissingKind の字面が core と一致する（#579）」。
- *
- * **`ALL_ORIGINS` を `Record` で持つのは、値が増えたときにここが型で落ちるため。**
- * 配列だと2値目が足されても素通りする（＝新しい値の字面が測られないまま増える）。
- * これはビルド時の網羅性であって、実行時に測っているのは下の一致だけである。
+ * **利用者に内部の語を見せない（#2792）。** CLI 名・HTTP のパス・実装の語は、画面の説明に出さない。
+ * 時刻は他の画面と同じ書式（端末の地域の時刻）で、UTC の ISO 文字列のままにしない。
  */
-describe('字面が core と一致する', () => {
-  const ALL_ORIGINS: Record<DroppedTraceOrigin, true> = {
-    daemon: true,
-  };
+describe('/dropped 画面 — 利用者の言葉で書く（#2792）', () => {
+  const FORBIDDEN = [
+    /alteroid dropped/,
+    /GET \/dropped/,
+    /帳面/,
+    /stderr/,
+    /握り潰し/,
+    /runner/,
+    /プロセス/,
+  ];
 
-  it('全ての origin で、core の describeDroppedTraceOrigin と文字列として等しい', () => {
-    const origins = Object.keys(ALL_ORIGINS) as DroppedTraceOrigin[];
-    // **空でないことを先に確かめる。** `Object.keys` が空なら下の forEach は
-    // 1回も回らず、この歯は何も測らずに緑になる。
-    expect(origins.length).toBeGreaterThan(0);
-    for (const origin of origins) {
-      expect(describeDroppedTraceOriginNote(origin)).toBe(describeDroppedTraceOrigin(origin));
-    }
+  it('0件の画面に、コマンド・パス・内部の語が出ない', async () => {
+    stubDropped({ body: { origin: 'daemon', since: SINCE, limit: 200, total: 0, traces: [] } });
+
+    const { container } = await renderDropped();
+
+    for (const word of FORBIDDEN) expect(container.textContent).not.toMatch(word);
+    expect(screen.getByText(/日誌に書き損ねた記録は、いまは0件です/)).toBeTruthy();
   });
 
-  it('origin が無いときも一致する（どちらも空文字）', () => {
-    expect(describeDroppedTraceOriginNote(undefined)).toBe(describeDroppedTraceOrigin(undefined));
+  it('404 の文言にも、パスと内部の語が出ない', async () => {
+    stubDropped({ status: 404, body: {} });
+
+    const { container } = await renderDropped();
+
+    for (const word of FORBIDDEN) expect(container.textContent).not.toMatch(word);
+  });
+
+  it('数え始めた時刻は、UTC の ISO 文字列ではなく地域の時刻の書式で出る', async () => {
+    stubDropped({ body: { origin: 'daemon', since: SINCE, limit: 200, total: 0, traces: [] } });
+
+    const { container } = await renderDropped();
+
+    expect(container.textContent).toContain(`数え始めた時刻: ${formatDateTime(SINCE)}`);
+    expect(container.textContent).not.toContain(SINCE);
+  });
+
+  it('保持の説明は limit をサーバの値のまま言い、stderr を指さない', () => {
+    expect(describeDroppedTraceRetentionNote(200)).toContain('直近 200 件');
+    expect(describeDroppedTraceRetentionNote(7)).toContain('直近 7 件');
+  });
+
+  it('origin が無いとき（古い版）は空文字', () => {
     expect(describeDroppedTraceOriginNote(undefined)).toBe('');
-  });
-
-  it('0件のときの文言が、core の describeDroppedTraceEmpty と文字列として等しい', () => {
-    expect(describeDroppedTraceEmptyNote()).toBe(describeDroppedTraceEmpty());
-  });
-
-  it('保持のしかたの文言が、複数の limit で core の describeDroppedTraceRetention と等しい', () => {
-    for (const limit of [0, 1, RECENT_TRACE_LIMIT]) {
-      expect(describeDroppedTraceRetentionNote(limit)).toBe(describeDroppedTraceRetention(limit));
-    }
   });
 });
