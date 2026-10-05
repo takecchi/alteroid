@@ -1,6 +1,7 @@
 import {
   USAGE_ESTIMATE_NOTICE,
   ZERO_USAGE,
+  verifyUsageNulContract,
   type UsageAccumulation,
   type UsageLayer,
   type UsageSite,
@@ -1543,5 +1544,11 @@ describe('PgUsageStore.recordedManagerIds', () => {
     });
 
     expect(await store.recordedManagerIds()).toEqual(new Set(['mgr-1', 'mgr-2']));
+  });
+});
+
+describe('PgUsageStore の鍵列の NUL（issue #2927。3実装で同じことを測る）', () => {
+  it('鍵列の NUL は断らず、落として残す', async () => {
+    await verifyUsageNulContract(store);
   });
 });
