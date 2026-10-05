@@ -1,6 +1,33 @@
+import { availableParallelism } from 'node:os';
 import { fileURLToPath } from 'node:url';
 
 import { defineConfig } from 'vitest/config';
+
+/**
+ * **`--maxWorkers` を渡さなかったときの worker 数の上限**（#2905）。
+ *
+ * vitest の既定は `availableParallelism() - 1`（`run` のとき。vitest 5.0.2 の
+ * `getDefaultThreadsCount`）である。共有の runner の器では（#2905 の調査時の観測）`availableParallelism()` が
+ * 32 なので既定は 31 になり、jsdom で画面を描く Web UI のテストが 31 本同時に走る。
+ * **器には他の担当のビルドやテストも載っている**（load average が CPU 数を超える）ので、
+ * CPU を取り合って非同期の表示の待ちが既定の上限（`findBy` の1秒・テストの5秒）に届き、
+ * **落ちるテストが回ごとに変わる**（個々のテストの不具合ではない）。`--maxWorkers=4` で
+ * 全件通った（#2905 の観測）。全スイートが `write EPIPE` で集計行を出さずに死ぬ形
+ * （`.claude/skills/this-container/SKILL.md`）も、同じ既定から起きる。
+ *
+ * **CI の並列度は変わらない。** GitHub の `ubuntu-latest`（公開リポジトリ）は 4 vCPU なので
+ * 既定はもともと 3 で、この上限を下回る。上限が効くのは、6 CPU 以上の器で `--maxWorkers` を
+ * 渡さずに回したときだけである。
+ *
+ * **`--maxWorkers=<n>` を渡せば、そちらが優先される**（CLI の指定は設定より強い）。
+ * 空いている器で速く回したいなら、上げて渡せばよい。
+ */
+export const MAX_WORKERS_CAP = 4;
+
+/** vitest 自身の既定（`run` のとき）を `MAX_WORKERS_CAP` で頭打ちにした値。 */
+export function defaultMaxWorkers(parallelism: number = availableParallelism()): number {
+  return Math.min(MAX_WORKERS_CAP, Math.max(parallelism - 1, 1));
+}
 
 export default defineConfig({
   resolve: {
@@ -34,6 +61,8 @@ export default defineConfig({
      * 別の変更として入れること。
      */
     clearMocks: false,
+    /** 上限の値と理由は `MAX_WORKERS_CAP` の doc（#2905）。 */
+    maxWorkers: defaultMaxWorkers(),
     include: [
       // root 直下に置く共通の足場（`vitest.tmpdir.ts` など、#1436 案B）自身の
       // 単体テスト。`*` は `/` を跨がないので、他の階層向けの `*.test.ts` とは
