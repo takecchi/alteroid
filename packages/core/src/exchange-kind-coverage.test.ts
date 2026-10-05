@@ -277,7 +277,10 @@ const EXPECTED_SITE_COUNT: Record<string, number> = {
   // 出し切ったときに1本、`EXCHANGE_KIND_THINNING_PREFIX` で書く）。
   // + 1（#486 S7。`case 'peer_usage'` が peer の消費を台帳へ積めなかったことを
   // `EXCHANGE_KIND_FAILURE_PREFIX` で書く）。
-  'manager.ts': 48,
+  // - 5 + 4（#1311。押し込みの失敗の5箇所（`#pushProfile` 2・`#pushCredentials`・`#pushMcpServers`・
+  // `#pushAgentToken`）を `#journalPushFailure` の `EXCHANGE_KIND_FAILURE_PREFIX` 1箇所と、
+  // 畳みの要約3箇所（`EXCHANGE_KIND_THINNING_PREFIX`）にまとめた）。
+  'manager.ts': 47,
 };
 
 describe('type: exchange の書き込み全箇所が kind 接頭辞を持つ（issue #1332）', () => {

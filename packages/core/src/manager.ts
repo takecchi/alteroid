@@ -9163,7 +9163,7 @@ class Pool implements ManagerPool {
       await this.#journalPushFailure(
         runnerId,
         'profile',
-        `${EXCHANGE_KIND_FAILURE_PREFIX}${runnerId} に実行環境プロファイルを置けなかった（前のものが残っている）: ` +
+        `${runnerId} に実行環境プロファイルを置けなかった（前のものが残っている）: ` +
           `${result.error ?? '理由不明'}` +
           (outputChars === 0
             ? ''
@@ -9195,7 +9195,7 @@ class Pool implements ManagerPool {
       await this.#journalPushFailure(
         runnerId,
         'profile',
-        `${EXCHANGE_KIND_FAILURE_PREFIX}${runnerId} へ実行環境プロファイルを降ろせなかった: ${reasonOf(error)}`,
+        `${runnerId} へ実行環境プロファイルを降ろせなかった: ${reasonOf(error)}`,
       );
     }
   }
@@ -9230,7 +9230,7 @@ class Pool implements ManagerPool {
       await this.#journalPushFailure(
         runnerId,
         'credentials',
-        `${EXCHANGE_KIND_FAILURE_PREFIX}${runnerId} へマネージャーの環境変数を降ろせなかった（この runner で起こすマネージャーは、器の環境変数に在るものだけで走る）: ${reasonOf(error)}`,
+        `${runnerId} へマネージャーの環境変数を降ろせなかった（この runner で起こすマネージャーは、器の環境変数に在るものだけで走る）: ${reasonOf(error)}`,
       );
     }
   }
@@ -9270,7 +9270,7 @@ class Pool implements ManagerPool {
       await this.#journalPushFailure(
         runnerId,
         'mcpServers',
-        `${EXCHANGE_KIND_FAILURE_PREFIX}${runnerId} へ MCP サーバの登録を降ろせなかった（この runner で起こすマネージャー・作業者は、記憶ストアの登録を持たずに走る）: ${reasonOf(error)}`,
+        `${runnerId} へ MCP サーバの登録を降ろせなかった（この runner で起こすマネージャー・作業者は、記憶ストアの登録を持たずに走る）: ${reasonOf(error)}`,
       );
     }
   }
@@ -12926,7 +12926,7 @@ class Pool implements ManagerPool {
       await this.#journalPushFailure(
         runner.runnerId,
         'agentToken',
-        `${EXCHANGE_KIND_FAILURE_PREFIX}${runner.runnerId} に認証トークンを降ろせなかった（この runner で起こすマネージャーは、器の環境変数に認証トークンが入っていればそれで走り、入っていなければ資格を1つも持たずに走る——どちらになるかは器の env 次第で、ここからは分からない）: ${reasonOf(error)}`,
+        `${runner.runnerId} に認証トークンを降ろせなかった（この runner で起こすマネージャーは、器の環境変数に認証トークンが入っていればそれで走り、入っていなければ資格を1つも持たずに走る——どちらになるかは器の env 次第で、ここからは分からない）: ${reasonOf(error)}`,
       );
     }
   }
@@ -12963,8 +12963,10 @@ class Pool implements ManagerPool {
   async #journalPushFailure(
     runnerId: string,
     kind: keyof RunnerPushHealth,
-    text: string,
+    body: string,
   ): Promise<void> {
+    // 接頭辞は書く箇所の字面に置く（`exchange-kind-coverage.test.ts` の静的検査が読む）。
+    const text = `${EXCHANGE_KIND_FAILURE_PREFIX}${body}`;
     const key = `${runnerId}\u0000${kind}`;
     let fold = this.#pushFailureFolds.get(key);
     if (fold === undefined) {
@@ -12984,7 +12986,12 @@ class Pool implements ManagerPool {
       });
     }
     if (folded.write) {
-      await this.#journal({ type: 'exchange', with: 'self', role: 'outbound', text });
+      await this.#journal({
+        type: 'exchange',
+        with: 'self',
+        role: 'outbound',
+        text: `${EXCHANGE_KIND_FAILURE_PREFIX}${body}`,
+      });
     }
   }
 
