@@ -36,7 +36,7 @@ description: 器の中で PostgreSQL 17 と pgvector を立てて挙動を確か
 
 storage-pg のテストは既定で PGlite（プロセス内の PostgreSQL）で走る。**本物の PostgreSQL へ向けるには `ALTEROID_TEST_PG_URL` を渡す**（口は `packages/storage-pg/src/test-db.test-support.ts` の `createMigratedTestDb`。無ければ従来どおり PGlite）。CI では `.github/workflows/storage-pg-real-postgres.yml` が同じことを service コンテナ（`postgres:17`）で、照合順 `en_US.UTF-8` と `C` の2通り走らせる（必須チェックではない）。
 
-- **向けられるのは `createMigratedTestDb` を使うテストだけ**（いまは共通の約束テストを呼ぶ3ファイル: `index.journal-jobs-schedule` / `index.commitments-inbox-archive` / `index.sessions-tokens-credentials`、と `test-db.test.ts`）。他の storage-pg のテストは `createMigratedPglite` のままで、環境変数を渡しても PGlite で走る。
+- **向けられるのは `createMigratedTestDb` を使うテストだけ**（いまは共通の約束テストを呼ぶ3ファイルと並びの契約 `list-order-contract`: `index.journal-jobs-schedule` / `index.commitments-inbox-archive` / `index.sessions-tokens-credentials`、と `test-db.test.ts`）。他の storage-pg のテストは `createMigratedPglite` のままで、環境変数を渡しても PGlite で走る。
 - **テストごとに別の DATABASE を切る。** 接続先の DB の照合順・文字コードを引き継いだ雛形 DB（`alteroid_tpl_<照合順>_<migrate/schema のハッシュ>`）を1つ作り、各テストは `CREATE DATABASE ... TEMPLATE` で起こして、閉じるときに `DROP DATABASE ... WITH (FORCE)` する。接続のユーザーは `CREATEDB` が要る。**雛形 DB は消さない**ので、自分で立てたクラスタは使い終わったら `pg_ctl stop` してディレクトリごと消す。
 - **照合順を指定した接続先は自分で作る**（`template0` から）。手順（上の「実際に通った手順」の続き。ポートは自分専用の値にする）:
   ```
@@ -44,7 +44,7 @@ storage-pg のテストは既定で PGlite（プロセス内の PostgreSQL）で
   $ cd packages/storage-pg
   $ ALTEROID_TEST_PG_URL=postgres://postgres@127.0.0.1:55968/alteroid_c \
     ALTEROID_TEST_PG_EXPECT_COLLATE=C \
-    pnpm test --maxWorkers=2 index.journal-jobs-schedule index.commitments-inbox-archive index.sessions-tokens-credentials test-db
+    pnpm test --maxWorkers=2 index.journal-jobs-schedule index.commitments-inbox-archive index.sessions-tokens-credentials list-order-contract test-db
   ```
   `ALTEROID_TEST_PG_EXPECT_COLLATE` は任意で、渡すと `test-db.test.ts` が「その照合順で本当に繋がっているか」を確かめる。**この器の `locale -a` は `C` / `C.utf8` / `POSIX` だけ**（2026-10-05 観測）で、`en_US.UTF-8` の DB は器の中では作れない。en_US の側は CI だけが見る。
 - **本物でだけ落ちる歯は、その場で直さずテストの側で `it.skipIf(realPostgresUrl() !== undefined)` にして、Issue 番号をコメントに残す**（例: #2922 の同じ id の並行 open。PGlite は単一接続なので並行は再現できない）。直したら skipIf を外す。
