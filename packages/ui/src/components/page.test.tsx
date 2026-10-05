@@ -102,16 +102,16 @@ describe('Page の操作（action）の置き場（#2763・#2765）', () => {
 
   it('DOM の順は 見出し → 説明 → 操作 → 本文（Tab の順が変わらない）', () => {
     const header = renderWith();
-    const order = [
+    const order: HTMLElement[] = [
       screen.getByRole('heading', { name: '見出し' }),
       screen.getByText('説明文'),
       screen.getByRole('button', { name: '操作' }),
       screen.getByRole('button', { name: '本文の操作' }),
     ];
-    expect(header.contains(order[2])).toBe(true);
+    expect(header.contains(order[2]!)).toBe(true);
     for (let i = 0; i < order.length - 1; i++) {
       expect(
-        order[i].compareDocumentPosition(order[i + 1]) & Node.DOCUMENT_POSITION_FOLLOWING,
+        order[i]!.compareDocumentPosition(order[i + 1]!) & Node.DOCUMENT_POSITION_FOLLOWING,
       ).toBeTruthy();
     }
   });
