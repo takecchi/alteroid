@@ -520,6 +520,39 @@ describe('HTTP API', () => {
     expect(await response.json()).toMatchObject({ ok: true, operator: true });
   });
 
+  describe('記憶の置き場（#2869）', () => {
+    const STORAGE = 'PostgreSQL secret-host.internal:5432/alteroid';
+    function appWithStorage() {
+      return createApp({
+        clone: fake.clone,
+        stores,
+        token: 'test-token',
+        shutdown: () => undefined,
+        storage: STORAGE,
+        journalEvents: journalBus,
+      });
+    }
+
+    it('/health は無認証でも持ち主でも storage を返さない', async () => {
+      const withStorage = appWithStorage();
+      for (const init of [undefined, { headers: { authorization: 'Bearer test-token' } }]) {
+        const response = await withStorage.request('/health', init);
+        expect(response.status).toBe(200);
+        const text = await response.text();
+        expect(JSON.parse(text)).not.toHaveProperty('storage');
+        expect(text).not.toContain('secret-host');
+      }
+    });
+
+    it('GET /status は資格があれば storage を返す', async () => {
+      const response = await appWithStorage().request('/status', {
+        headers: { authorization: 'Bearer test-token' },
+      });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ storage: STORAGE });
+    });
+  });
+
   it('/chat は SSE でクローンの応答を流す', async () => {
     const response = await app.request('/chat', json({ text: 'やあ' }));
 
