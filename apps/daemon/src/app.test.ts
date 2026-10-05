@@ -5569,7 +5569,11 @@ describe('appendJournalOrDrop を当てた残りの口: 追記が落ちても 50
     }[] = [
       {
         name: 'DELETE /memory/:slug',
-        request: () => withFailingJournal.request('/memory/table-memory', { method: 'DELETE' }),
+        request: () =>
+          withFailingJournal.request(
+            `/memory/table-memory?ifMatch=${memoryVersion('# 元の内容\n')}`,
+            { method: 'DELETE' },
+          ),
       },
       {
         name: 'PUT /practices/:slug',
@@ -8988,7 +8992,12 @@ describe('会話・出来事・マネージャーへの手出し', () => {
   it('記憶は消せるし、消したことは日誌に残る', async () => {
     await stores.persona.write('habits', '朝は不機嫌');
 
-    const response = await app.request('/memory/habits', { method: 'DELETE' });
+    const response = await app.request(
+      `/memory/habits?ifMatch=${memoryVersion((await stores.persona.read('habits'))?.content ?? '')}`,
+      {
+        method: 'DELETE',
+      },
+    );
 
     expect(response.status).toBe(200);
     expect(await stores.persona.read('habits')).toBeNull();
@@ -8999,7 +9008,12 @@ describe('会話・出来事・マネージャーへの手出し', () => {
   it('人間の口（DELETE /memory/:slug）にも action: "remove" が構造として載る', async () => {
     await stores.persona.write('habits', '朝は不機嫌');
 
-    await app.request('/memory/habits', { method: 'DELETE' });
+    await app.request(
+      `/memory/habits?ifMatch=${memoryVersion((await stores.persona.read('habits'))?.content ?? '')}`,
+      {
+        method: 'DELETE',
+      },
+    );
 
     const journal = await stores.journal.list({ types: ['memory_update'] });
     expect(journal[0]).toMatchObject({ action: 'remove' });

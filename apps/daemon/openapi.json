@@ -4145,10 +4145,10 @@
         "operationId": "deleteMemoryBySlug",
         "tags": ["memory"],
         "summary": "記憶文書を消す",
-        "description": "書けるのに消せないと、間違って作った記憶が永久に判断の材料に残る。消した事実は日誌に残る（`cause: human`）ので、記憶から消えても記録からは消えない。\n\n**読んだ版を前提にできる（Issue #2881）。** クエリ `ifMatch` に、読んだ時の版（`GET /memory/{slug}` の `version`）を付けると、いまの版と違うとき**何も消さず 409** でいまの版を返す（読んだ後にクローンが書いた内容を黙って消さない）。\n\n**段階的に必須にする。** いまは `ifMatch` を付けない削除も通る（Web の削除が版を送るようになるまでの移行）が、応答に `warning` を載せ、デーモンの標準エラーと日誌にも「版の照合なし」と残す。移行が済んだら版を必須にする。",
+        "description": "書けるのに消せないと、間違って作った記憶が永久に判断の材料に残る。消した事実は日誌に残る（`cause: human`）ので、記憶から消えても記録からは消えない。\n\n**読んだ版を前提にできる（Issue #2881）。** クエリ `ifMatch` に、読んだ時の版（`GET /memory/{slug}` の `version`）を付けると、いまの版と違うとき**何も消さず 409** でいまの版を返す（読んだ後にクローンが書いた内容を黙って消さない）。\n\n**版は必須。** `ifMatch` を付けない削除は **428** で断り、何も消さず・日誌にも積まず、いまの版を `current` に返す（読み直して、その `version` を付けて打ち直す）。スラッグが不正なら 400、記憶が無ければ 404 を先に返す。",
         "responses": {
           "200": {
-            "description": "消した。版を付けていなければ `warning` が載る。",
+            "description": "消した。",
             "content": {
               "application/json": {
                 "schema": {
@@ -4159,9 +4159,6 @@
                       "const": true
                     },
                     "slug": {
-                      "type": "string"
-                    },
-                    "warning": {
                       "type": "string"
                     }
                   },
@@ -4204,6 +4201,287 @@
           },
           "409": {
             "description": "`ifMatch`（読んだ時の版）が、いまの版と違う（読んでから消すまでの間に別の書き手が書いた）。**何も消していない。** `current` にいまの版を返す。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "current": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "document": {
+                              "type": "object",
+                              "properties": {
+                                "slug": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 128,
+                                  "pattern": "^[a-z0-9][a-z0-9._-]*$"
+                                },
+                                "title": {
+                                  "type": "string"
+                                },
+                                "updatedAt": {
+                                  "type": "string",
+                                  "format": "date-time",
+                                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                                },
+                                "createdAt": {
+                                  "oneOf": [
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "kind": {
+                                          "type": "string",
+                                          "const": "known"
+                                        },
+                                        "at": {
+                                          "type": "string",
+                                          "format": "date-time",
+                                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                                        }
+                                      },
+                                      "required": ["kind", "at"]
+                                    },
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "kind": {
+                                          "type": "string",
+                                          "const": "unknown"
+                                        }
+                                      },
+                                      "required": ["kind"]
+                                    }
+                                  ]
+                                },
+                                "bytes": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                "frontmatter": {
+                                  "oneOf": [
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "kind": {
+                                          "type": "string",
+                                          "const": "none"
+                                        }
+                                      },
+                                      "required": ["kind"]
+                                    },
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "kind": {
+                                          "type": "string",
+                                          "const": "malformed"
+                                        }
+                                      },
+                                      "required": ["kind"]
+                                    },
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "kind": {
+                                          "type": "string",
+                                          "const": "parsed"
+                                        },
+                                        "description": {
+                                          "type": "string"
+                                        },
+                                        "type": {
+                                          "type": "string"
+                                        },
+                                        "parent": {
+                                          "type": "string"
+                                        }
+                                      },
+                                      "required": ["kind"]
+                                    }
+                                  ]
+                                },
+                                "kind": {
+                                  "type": "string",
+                                  "enum": ["premise", "fact", "indexed"]
+                                },
+                                "description": {
+                                  "type": "string"
+                                },
+                                "parent": {
+                                  "type": "string"
+                                },
+                                "descriptionFreshness": {
+                                  "oneOf": [
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "kind": {
+                                          "type": "string",
+                                          "const": "fresh"
+                                        }
+                                      },
+                                      "required": ["kind"]
+                                    },
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "kind": {
+                                          "type": "string",
+                                          "const": "stale"
+                                        },
+                                        "staleForMs": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "drift": {
+                                          "oneOf": [
+                                            {
+                                              "type": "object",
+                                              "properties": {
+                                                "kind": {
+                                                  "type": "string",
+                                                  "const": "measured"
+                                                },
+                                                "describedBytes": {
+                                                  "type": "integer",
+                                                  "minimum": 0,
+                                                  "maximum": 9007199254740991
+                                                },
+                                                "currentBytes": {
+                                                  "type": "integer",
+                                                  "minimum": 0,
+                                                  "maximum": 9007199254740991
+                                                },
+                                                "deltaBytes": {
+                                                  "type": "integer",
+                                                  "minimum": -9007199254740991,
+                                                  "maximum": 9007199254740991
+                                                }
+                                              },
+                                              "required": [
+                                                "kind",
+                                                "describedBytes",
+                                                "currentBytes",
+                                                "deltaBytes"
+                                              ]
+                                            },
+                                            {
+                                              "type": "object",
+                                              "properties": {
+                                                "kind": {
+                                                  "type": "string",
+                                                  "const": "at-least"
+                                                },
+                                                "baselineBytes": {
+                                                  "type": "integer",
+                                                  "minimum": 0,
+                                                  "maximum": 9007199254740991
+                                                },
+                                                "baselineAt": {
+                                                  "type": "string",
+                                                  "format": "date-time",
+                                                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                                                },
+                                                "currentBytes": {
+                                                  "type": "integer",
+                                                  "minimum": 0,
+                                                  "maximum": 9007199254740991
+                                                },
+                                                "deltaBytes": {
+                                                  "type": "integer",
+                                                  "minimum": -9007199254740991,
+                                                  "maximum": 9007199254740991
+                                                }
+                                              },
+                                              "required": [
+                                                "kind",
+                                                "baselineBytes",
+                                                "baselineAt",
+                                                "currentBytes",
+                                                "deltaBytes"
+                                              ]
+                                            },
+                                            {
+                                              "type": "object",
+                                              "properties": {
+                                                "kind": {
+                                                  "type": "string",
+                                                  "const": "unrecorded"
+                                                }
+                                              },
+                                              "required": ["kind"]
+                                            }
+                                          ]
+                                        }
+                                      },
+                                      "required": ["kind", "staleForMs", "drift"]
+                                    },
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "kind": {
+                                          "type": "string",
+                                          "const": "unknown"
+                                        }
+                                      },
+                                      "required": ["kind"]
+                                    },
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "kind": {
+                                          "type": "string",
+                                          "const": "absent"
+                                        }
+                                      },
+                                      "required": ["kind"]
+                                    }
+                                  ]
+                                },
+                                "content": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "slug",
+                                "title",
+                                "updatedAt",
+                                "createdAt",
+                                "bytes",
+                                "frontmatter",
+                                "kind",
+                                "descriptionFreshness",
+                                "content"
+                              ]
+                            },
+                            "version": {
+                              "type": "string"
+                            }
+                          },
+                          "required": ["document", "version"]
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": ["error", "current"]
+                }
+              }
+            }
+          },
+          "428": {
+            "description": "`ifMatch`（読んだ時の版）が無い。**何も消していない。** `current` にいまの版を返す（409 と同じ形）。",
             "content": {
               "application/json": {
                 "schema": {
