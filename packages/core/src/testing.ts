@@ -93,6 +93,8 @@ import {
   JournalAnchorNotFoundError,
   MemoryConflictError,
   memoryVersionMatches,
+  PracticeConflictError,
+  practiceVersionMatches,
 } from './store.js';
 import {
   activeAgentTokenSchema,
@@ -457,8 +459,17 @@ export function createMemoryStores(): Stores {
         existing ? `${ensureTrailingNewline(existing.content)}\n${content}` : content,
       );
     },
-    async remove(slug) {
+    async remove(slug, options) {
       checkMemorySlug(slug);
+      const before = documents.get(slug);
+      if (!memoryVersionMatches(before ?? null, options?.ifMatch)) {
+        throw new MemoryConflictError(
+          slug,
+          before === undefined
+            ? null
+            : { ...before, createdAt: toMemoryCreatedAt(createdAtStore.get(slug)) },
+        );
+      }
       documents.delete(slug);
       // fs / pg と同じく、実体が消えれば派生値も消える（過去に human で書かれた
       // 事実そのものは journal に残るので、backfill が立て直す）。
@@ -1849,10 +1860,17 @@ export function createMemoryStores(): Stores {
       const found = practices.get(slug);
       return found === undefined ? null : isolate(found);
     },
-    async write(input) {
+    async write(input, options) {
       const content = ensureTrailingNewline(input.content);
       const now = new Date().toISOString();
       const existing = practices.get(input.slug);
+      // 前提の版（Issue #2853）。fs / pg と同じ挙動——合わなければ書かず・版も足さずに投げる。
+      if (!practiceVersionMatches(existing ?? null, options?.ifMatch)) {
+        throw new PracticeConflictError(
+          input.slug,
+          existing === undefined ? null : isolate(existing),
+        );
+      }
       const next = practiceSchema.parse({
         slug: input.slug,
         kind: input.kind,

@@ -117,6 +117,8 @@ export function useAuth() {
     operator: query.data?.operator ?? false,
     error: query.error as unknown,
     isLoading: query.isLoading,
+    /** 取り直しの最中（接続の失敗画面の「もう一度試す」が押せなくなる印）。 */
+    isValidating: query.isValidating,
     revalidate: query.mutate,
     /**
      * ログアウト（issue #1757）。**先にサーバ側のトークンを失効させてから**

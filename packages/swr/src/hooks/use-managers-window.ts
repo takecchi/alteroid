@@ -204,6 +204,10 @@ export interface ManagersWindow {
    */
   olderError: unknown;
   loadOlder: () => void;
+  /** 先頭の頁を取り直す（読み込みの失敗からの「もう一度試す」。issue #2799）。 */
+  reload: () => void;
+  /** 取り直しの最中。 */
+  isReloading: boolean;
 }
 
 /** 「もっと見る」で読み足した1頁。錨とその頁の中身を組で持つ。 */
@@ -411,6 +415,8 @@ export function useManagersWindow(status: readonly ManagerStatus[]): ManagersWin
     isLoadingOlder,
     olderError,
     loadOlder,
+    reload: () => void first.mutate(),
+    isReloading: first.isValidating,
   };
 }
 

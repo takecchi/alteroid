@@ -54,6 +54,16 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+/** 失敗（reject）した Error を取り出す。resolve したらテストを落とす。 */
+async function failureOf(promise: Promise<unknown>): Promise<Error> {
+  try {
+    await promise;
+  } catch (error) {
+    return error as Error;
+  }
+  throw new Error('reject するはずが resolve した');
+}
+
 describe('alteroid conversations list', () => {
   it('GET /conversations を打ち、scanned を必ず出す（黙って打ち切らない）', async () => {
     const read = captureStdout();
@@ -247,12 +257,10 @@ describe('alteroid conversations list', () => {
   });
 
   it('クエリが不正（400）なら、読めなかったと言う', async () => {
-    const read = captureStdout();
     replies.push({ status: 400, body: { error: 'invalid' } });
 
-    await conversationsListCommand({ limit: '0' });
-
-    expect(read()).toContain('読めませんでした');
+    // 失敗は例外で上へ通す（終了コードが 0 でなくなる。#2856）。
+    await expect(conversationsListCommand({ limit: '0' })).rejects.toThrow('読めませんでした');
   });
 
   /**
@@ -536,12 +544,11 @@ describe('alteroid conversations show', () => {
   });
 
   it('404（遡り切れたうえで無い）なら、そう言う', async () => {
-    const read = captureStdout();
     replies.push({ status: 404, body: { error: 'not found' } });
 
-    await conversationsShowCommand('conv-missing');
-
-    expect(read()).toContain('そんな会話はありません: conv-missing');
+    await expect(conversationsShowCommand('conv-missing')).rejects.toThrow(
+      'そんな会話はありません: conv-missing',
+    );
   });
 
   /**
@@ -587,35 +594,28 @@ describe('alteroid conversations show', () => {
  */
 describe('alteroid conversations の失敗の理由', () => {
   it('list: 500 + { error } なら、状態コードと理由を出す', async () => {
-    const read = captureStdout();
     replies.push({ status: 500, body: { error: '一覧が読めない（conversations のテスト用）' } });
 
-    await conversationsListCommand();
-
-    const text = read();
+    const error = await failureOf(conversationsListCommand());
+    const text = error.message;
     expect(text).toContain('会話の一覧を読めませんでした');
     expect(text).toContain('HTTP 500');
     expect(text).toContain('一覧が読めない（conversations のテスト用）');
   });
 
   it('show: 500 + { error } なら、状態コードと理由を出す', async () => {
-    const read = captureStdout();
     replies.push({ status: 500, body: { error: '会話が読めない（conversations のテスト用）' } });
 
-    await conversationsShowCommand('conv-1');
-
-    const text = read();
+    const error = await failureOf(conversationsShowCommand('conv-1'));
+    const text = error.message;
     expect(text).toContain('会話を読めませんでした');
     expect(text).toContain('HTTP 500');
     expect(text).toContain('会話が読めない（conversations のテスト用）');
   });
 
   it('show: 本文が読めない 500 でも、状態コードは出す', async () => {
-    const read = captureStdout();
     replies.push({ status: 500, body: null });
 
-    await conversationsShowCommand('conv-1');
-
-    expect(read()).toContain('HTTP 500');
+    await expect(conversationsShowCommand('conv-1')).rejects.toThrow('HTTP 500');
   });
 });

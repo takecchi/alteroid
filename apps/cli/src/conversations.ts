@@ -2,7 +2,7 @@ import { stdout } from 'node:process';
 
 import { createClient, type DaemonClient } from './client.js';
 import { formatElapsedAgo, withErrorReason } from './format.js';
-import { resolveTarget } from './target.js';
+import { describeAuthFailure, resolveTarget, type Target } from './target.js';
 import { redactBody } from './redact.js';
 
 /**
@@ -67,8 +67,9 @@ export async function conversationsListCommand(
   options: ConversationsListOptions = {},
   now: number = Date.now(),
 ): Promise<void> {
-  const client = await connect();
-  if (client === null) return;
+  const conn = await connect();
+  if (conn === null) return;
+  const { client, target } = conn;
   // **`query` は常に渡す。** 型上は省略できない（デーモン側のクエリ検査が
   // `.default()` 付きでも hono/client の型は `query` キー自体を必須にする）。
   // 中身が空でも URL に意味の無い `?` が付くだけで、サーバ側には無害である。
@@ -79,13 +80,15 @@ export async function conversationsListCommand(
     },
   });
   if (!response.ok) {
-    stdout.write(
-      `${await withErrorReason(
+    // 失敗は例外で上へ通す（＝終了コードが 0 でなくなる。#2856）。
+    const described = describeAuthFailure(response.status, target);
+    if (described !== null) throw new Error(described);
+    throw new Error(
+      await withErrorReason(
         `会話の一覧を読めませんでした（HTTP ${String(response.status)}。--limit / --scan の値を確かめてください）`,
         response,
-      )}\n`,
+      ),
     );
-    return;
   }
   const { conversations, scanned, reachedStart, hiddenByLimit } = await response.json();
   // `renderConversationsList` は改行で終わらずに返す（末尾に改行が無いことは
@@ -189,8 +192,9 @@ export async function conversationsShowCommand(
   id: string,
   options: ConversationsShowOptions = {},
 ): Promise<void> {
-  const client = await connect();
-  if (client === null) return;
+  const conn = await connect();
+  if (conn === null) return;
+  const { client, target } = conn;
   const response = await client.conversations[':id'].$get({
     param: { id },
     query: {
@@ -203,17 +207,17 @@ export async function conversationsShowCommand(
   if (response.status === 404) {
     // **遡り切れている場合だけ 404 が返る**（デーモン側の約束）。判定できない
     // ときは 200 に空の `messages` と `reachedStart: false` が来る。
-    stdout.write(`そんな会話はありません: ${id}\n`);
-    return;
+    throw new Error(`そんな会話はありません: ${id}`);
   }
   if (!response.ok) {
-    stdout.write(
-      `${await withErrorReason(
+    const described = describeAuthFailure(response.status, target);
+    if (described !== null) throw new Error(described);
+    throw new Error(
+      await withErrorReason(
         `会話を読めませんでした（HTTP ${String(response.status)}。--scan の値を確かめてください）`,
         response,
-      )}\n`,
+      ),
     );
-    return;
   }
   const { messages, scanned, reachedStart, supersededCount } = await response.json();
   // `renderConversationDetail` も改行で終わらずに返す（理由は上の
@@ -341,11 +345,11 @@ export async function conversationsReadCommand(id: string): Promise<void> {
  * 繋ぎ先を決めて型付きクライアントを作る。**繋げない理由はそのまま出す。**
  * `memory.ts` の同名関数と同じ理由（例外にすると人間向けの案内が例外の見た目になる）。
  */
-async function connect(): Promise<DaemonClient | null> {
+async function connect(): Promise<{ client: DaemonClient; target: Target } | null> {
   const target = await resolveTarget();
   if (target.note !== null) {
     stdout.write(`${target.note}\n`);
     return null;
   }
-  return createClient(target.baseUrl, target.headers);
+  return { client: createClient(target.baseUrl, target.headers), target };
 }
