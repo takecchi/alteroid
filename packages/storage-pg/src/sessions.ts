@@ -1,4 +1,5 @@
 import {
+  assertNoNul,
   noteSessionMaterialUnreadable,
   type LostSessionGrave,
   type SessionRegistry,
@@ -76,6 +77,7 @@ export class PgSessionRegistry implements SessionRegistry {
   }
 
   async setCloneSessionId(sessionId: string | null): Promise<void> {
+    if (sessionId !== null) assertNoNul('session.cloneSessionId', sessionId);
     if (sessionId === null) {
       await this.#db.delete(daemonState).where(eq(daemonState.key, CLONE_SESSION_KEY));
       return;
@@ -215,6 +217,7 @@ export class PgSessionRegistry implements SessionRegistry {
   }
 
   async setProjectKey(projectKey: string): Promise<void> {
+    assertNoNul('session.projectKey', projectKey);
     await this.#db
       .insert(daemonState)
       .values({ key: CLONE_PROJECT_KEY, value: projectKey })

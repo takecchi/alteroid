@@ -1,4 +1,4 @@
-import { parseMcpServers, sortMcpServers } from '@alteroid/core';
+import { parseMcpServers, prepareMcpServersForWrite, sortMcpServers } from '@alteroid/core';
 import type { McpServers, McpServerStore, StoredMcpServers } from '@alteroid/core';
 import { eq } from 'drizzle-orm';
 
@@ -41,7 +41,7 @@ export class PgMcpServerStore implements McpServerStore {
   async write(input: McpServers): Promise<StoredMcpServers> {
     // **書く前に検査する**（`McpServerStore.write` の doc）。不正ならここで投げ、
     // 表には触れない（前のものが残る）。
-    const servers = parseMcpServers(input);
+    const servers = parseMcpServers(prepareMcpServersForWrite(input));
     const at = new Date();
     if (Object.keys(servers).length === 0) {
       await this.#db.delete(mcpServers).where(eq(mcpServers.id, MCP_SERVERS_ID));

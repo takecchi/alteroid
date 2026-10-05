@@ -32,7 +32,12 @@ import type {
   SchedulePhase,
   ScheduledRequest,
 } from './schema.js';
-import { parseMcpServers, sortMcpServers, type StoredMcpServers } from './mcp-servers.js';
+import {
+  parseMcpServers,
+  prepareMcpServersForWrite,
+  sortMcpServers,
+  type StoredMcpServers,
+} from './mcp-servers.js';
 import {
   commitmentSchema,
   inboxEventSchema,
@@ -107,8 +112,10 @@ import {
   type TokenRotationSettings,
 } from './token-pool.js';
 import { assertValidCredentialEntries } from './credential-input.js';
-import { stripNul } from './nul-guard.js';
 import { stripNulFromUnmeteredRecord, stripNulFromUsageRecord } from './usage-input.js';
+import { assertNoNul, stripNul } from './nul-guard.js';
+import { preparePermissionGrantForPut } from './permission-grant-input.js';
+import { assertProfileRowWritable } from './profile-input.js';
 import { assertValidActiveToken, prepareTokensForReplace } from './token-pool-input.js';
 import {
   addUnreadableCounts,
@@ -395,7 +402,7 @@ export function createMemoryStores(): Stores {
       // ハッシュ）も本物と同じく正規化した後の本文から作る——`bytes` は fs では
       // ファイルの `stats.size` なので、正規化前の長さを数えると本物と1バイト
       // ずれる。
-      const body = ensureTrailingNewline(content);
+      const body = ensureTrailingNewline(stripNul(content));
       // **write() と append()（下）の唯一の通り道。** fs / pg と同じく、誰が
       // 書いたかを問わずここでハッシュ・describedAt/describedBytes を更新する。
       // human 印には触らない。describedAt/describedBytes は書き手が書けない
@@ -1095,6 +1102,7 @@ export function createMemoryStores(): Stores {
       return cloneSessionId;
     },
     async setCloneSessionId(sessionId) {
+      if (sessionId !== null) assertNoNul('session.cloneSessionId', sessionId);
       cloneSessionId = sessionId;
     },
     async getTranscriptGrave() {
@@ -1127,6 +1135,7 @@ export function createMemoryStores(): Stores {
       return projectKey;
     },
     async setProjectKey(value) {
+      assertNoNul('session.projectKey', value);
       projectKey = value;
     },
     async clear() {
@@ -1381,7 +1390,8 @@ export function createMemoryStores(): Stores {
       // 欠落など）もここでは例外無しで保存できていた——同じストアの
       // `revoke` / `markUsed` は既に `permissionGrantSchema.parse` を通して
       // いるので、`put` だけが食い違って残っていた。
-      permissionGrantRows.set(grant.id, permissionGrantSchema.parse(grant));
+      const parsed = preparePermissionGrantForPut(permissionGrantSchema.parse(grant));
+      permissionGrantRows.set(parsed.id, parsed);
     },
     // fs / pg と同じ形（lost update・#1654 と同型）——現在値（この in-memory
     // 実装では常に最新の `Map` の値そのもの）から判断する。プロセス内の
@@ -1419,6 +1429,7 @@ export function createMemoryStores(): Stores {
         .map((row) => ({ ...row }));
     },
     async set(name, script, scope) {
+      assertProfileRowWritable({ name, script });
       const row: EnvProfileEntry = { name, script, scope, updatedAt: new Date().toISOString() };
       envProfile.set(name, row);
       return { ...row };
@@ -1427,6 +1438,7 @@ export function createMemoryStores(): Stores {
       return envProfile.delete(name);
     },
     async replaceAll(previous) {
+      for (const row of previous) assertProfileRowWritable(row);
       envProfile = new Map(previous.map((row) => [row.name, { ...row }]));
     },
     async clear() {
@@ -1449,6 +1461,7 @@ export function createMemoryStores(): Stores {
       };
     },
     async mergeOutboundIndex(update) {
+      for (const id of Object.keys(update.lastOutbound)) assertNoNul('conversation.id', id);
       if (
         update.watermark !== null &&
         (outboundWatermark === null || compareIsoInstant(update.watermark, outboundWatermark) > 0)
@@ -1478,6 +1491,7 @@ export function createMemoryStores(): Stores {
       return { state: 'ok', baseline: conversationReadBaseline };
     },
     async advance(conversationId, readThrough) {
+      assertNoNul('conversation.id', conversationId);
       const current = conversationReadPositions.get(conversationId);
       if (current !== undefined && compareIsoInstant(readThrough, current.readThrough) <= 0) {
         return { ...current };
@@ -1500,7 +1514,7 @@ export function createMemoryStores(): Stores {
     },
     async write(input) {
       // **書く前に検査する**（3実装が同じ関数を通す。`McpServerStore.write` の doc）。
-      const servers = parseMcpServers(input);
+      const servers = parseMcpServers(prepareMcpServersForWrite(input));
       const updatedAt = new Date().toISOString();
       storedMcpServers =
         Object.keys(servers).length === 0 ? null : { mcpServers: servers, updatedAt };

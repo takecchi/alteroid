@@ -1,6 +1,7 @@
 import {
   createUnreadableRowOnce,
   permissionGrantSchema,
+  preparePermissionGrantForPut,
   UnreadablePermissionGrantError,
   unreadableRowKey,
 } from '@alteroid/core';
@@ -140,7 +141,7 @@ export class PgPermissionGrantStore implements PermissionGrantStore {
   }
 
   async put(grant: PermissionGrant): Promise<void> {
-    const value = permissionGrantSchema.parse(grant);
+    const value = preparePermissionGrantForPut(permissionGrantSchema.parse(grant));
     const set = {
       grantedAt: new Date(value.grantedAt),
       revokedAt: value.revokedAt === undefined ? null : new Date(value.revokedAt),

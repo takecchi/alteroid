@@ -14,6 +14,8 @@ import {
   verifyMcpServerStoreContract,
   verifyCredentialVaultContract,
   verifyTokenPoolContract,
+  verifyPersonaNulContract,
+  verifySessionRegistryNulContract,
   verifyProfileStoreContract,
   verifyPermissionGrantStoreContract,
   verifyPracticeStoreContract,
@@ -77,6 +79,10 @@ describe('initWorkspace', () => {
 });
 
 describe('FsPersonaStore', () => {
+  it('本文の NUL の契約（issue #2927。3実装で同じことを測る）', async () => {
+    await verifyPersonaNulContract(stores.persona);
+  });
+
   describe('write の前提の版 ifMatch（Issue #2743。fs・pg・インメモリで同じ挙動）', () => {
     it('読んだ版と同じなら書ける。違えば書かずに MemoryConflictError（current は書かれている文書）', async () => {
       await stores.persona.write('values', '# 価値観\n\nV1\n');
@@ -3800,6 +3806,10 @@ describe('FsCredentialVaultStore', () => {
 });
 
 describe('FsSessionRegistry', () => {
+  it('NUL の契約（issue #2927。3実装で同じことを測る）', async () => {
+    await verifySessionRegistryNulContract(stores.sessions);
+  });
+
   it('セッション id を覚えて忘れられる', async () => {
     expect(await stores.sessions.getCloneSessionId()).toBeNull();
 

@@ -33,6 +33,10 @@ const NUL_VALUE = `${FAKE_VALUE}\u0000`;
 async function breakCredentialsTable(db: Db): Promise<void> {
   await db.execute(sql`drop table manager_credentials`);
 }
+/** プロファイルの書き込み先の表を落とす（INSERT が `Failed query … params` で落ちる）。 */
+async function breakProfileTable(db: Db): Promise<void> {
+  await db.execute(sql`drop table env_profile_entries`);
+}
 
 function fakeCloneHost(stores: Stores): CloneHost {
   return {
@@ -225,9 +229,10 @@ describe('PUT /credentials・PUT /profile の失敗は、値の出うる String(
 
   it('PUT /profile: 実物のストアの失敗（drizzle の Failed query … params）の値が、日誌にも stderr にも応答にも出ない', async () => {
     const app = profileApp();
+    await breakProfileTable(db);
 
     const response = await putJson(app, '/profile', {
-      script: `export GH_TOKEN=${NUL_VALUE}`,
+      script: `export GH_TOKEN=${FAKE_VALUE}`,
     });
 
     expect(response.status).toBe(500);
@@ -237,6 +242,48 @@ describe('PUT /credentials・PUT /profile の失敗は、値の出うる String(
     expect(journal).toContain('実行環境プロファイルを差し替えられなかった');
     expect(journal).toContain('状態の変更が失敗');
     expect(stderrText()).not.toContain(FAKE_VALUE);
+  });
+
+  it('PUT /profile: script・行の名前の NUL は入力の誤りとして 400。欄名だけを返し、値は含まない（#2927）', async () => {
+    const app = profileApp();
+
+    const nulScript = await putJson(app, '/profile', { script: `export GH_TOKEN=${NUL_VALUE}` });
+    expect(nulScript.status).toBe(400);
+    const nulScriptBody = await nulScript.text();
+    expect(nulScriptBody).toContain('profile.script に NUL');
+    expect(nulScriptBody).not.toContain(FAKE_VALUE);
+
+    const nulEntry = await putJson(app, '/profile/team', {
+      script: `export GH_TOKEN=${NUL_VALUE}`,
+      scope: 'all',
+    });
+    expect(nulEntry.status).toBe(400);
+    expect(await nulEntry.text()).not.toContain(FAKE_VALUE);
+
+    expect(await journalText(stores)).not.toContain(FAKE_VALUE);
+    expect(stderrText()).not.toContain(FAKE_VALUE);
+    expect(await stores.profile.list()).toEqual([]);
+  });
+
+  it('PUT /mcp-servers: env の値・名前の NUL は入力の誤りとして 400。欄名だけを返し、値は含まない（#2927）', async () => {
+    const app = createApp({
+      clone: fakeCloneHost(stores),
+      stores,
+      token: 'test-token',
+      shutdown: () => undefined,
+    });
+
+    const response = await putJson(app, '/mcp-servers', {
+      mcpServers: { demo: { command: 'x', env: { TOKEN: NUL_VALUE } } },
+    });
+
+    expect(response.status).toBe(400);
+    const text = await response.text();
+    expect(text).toContain('mcpServer.env.value に NUL');
+    expect(text).not.toContain(FAKE_VALUE);
+    expect(await journalText(stores)).not.toContain(FAKE_VALUE);
+    expect(stderrText()).not.toContain(FAKE_VALUE);
+    expect(await stores.mcpServers.read()).toBeNull();
   });
 
   it('PUT /profile: 対照——成功したときは今までどおり 200', async () => {

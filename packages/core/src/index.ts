@@ -1422,3 +1422,9 @@ export {
   stripNulFromUsageSnapshot,
 } from './usage-input.js';
 export { verifyUsageNulContract } from './usage-nul-contract.js';
+/** 残りのストアの入口の NUL の扱い（issue #2927 PR-A2。teto の判断、2026-10-05）。 */
+export { prepareMcpServersForWrite } from './mcp-servers.js';
+export { assertProfileRowWritable } from './profile-input.js';
+export { preparePermissionGrantForPut } from './permission-grant-input.js';
+export { verifySessionRegistryNulContract } from './session-registry-nul-contract.js';
+export { verifyPersonaNulContract } from './persona-nul-contract.js';

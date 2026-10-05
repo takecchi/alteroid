@@ -1,4 +1,9 @@
-import { MemoryConflictError, memoryVersion, renderMemoryDocuments } from '@alteroid/core';
+import {
+  MemoryConflictError,
+  memoryVersion,
+  renderMemoryDocuments,
+  verifyPersonaNulContract,
+} from '@alteroid/core';
 import { PGlite } from '@electric-sql/pglite';
 import { eq, sql } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -43,6 +48,10 @@ afterEach(async () => {
 });
 
 describe('PgPersonaStore', () => {
+  it('本文の NUL の契約（issue #2927。3実装で同じことを測る）', async () => {
+    await verifyPersonaNulContract(stores.persona);
+  });
+
   describe('write の前提の版 ifMatch（Issue #2743。fs・pg・インメモリで同じ挙動）', () => {
     it('読んだ版と同じなら書ける。違えば書かずに MemoryConflictError（current は書かれている文書）', async () => {
       await stores.persona.write('values', '# 価値観\n\nV1\n');

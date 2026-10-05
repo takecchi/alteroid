@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { z } from 'zod';
 
 import { compareCodeUnits } from './code-unit-order.js';
+import { assertNoNul, stripNul } from './nul-guard.js';
 import { MCP_SERVER_NAME } from './tools.js';
 
 /**
@@ -192,4 +193,56 @@ function canonicalJson(value: unknown): string {
     return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${canonicalJson(v)}`).join(',')}}`;
   }
   return JSON.stringify(value);
+}
+
+/**
+ * `McpServerStore.write` の入口の NUL の扱い（issue #2927。teto の判断、2026-10-05）。
+ * **3実装が `parseMcpServers` の前にこれを通す。**
+ *
+ * - **サーバー名**と **`env` の名前・値**は断る（`NulNotAllowedError`）。名前は鍵で、`env` は環境変数に
+ *   なる（NUL は入れられない）。
+ * - それ以外の本文（`command`・`args`・`url`・`headers` など）は NUL を落として残す。pg の jsonb は
+ *   NUL を持てないので、fs も含めて落とす。
+ *
+ * 入力は書き換えず、整えた写しを返す。形の検査（`parseMcpServers`）は呼び手が続けて行う。
+ */
+export function prepareMcpServersForWrite(input: unknown): unknown {
+  if (!isPlainObject(input)) return input;
+  const out: Record<string, unknown> = {};
+  for (const [name, config] of Object.entries(input)) {
+    assertNoNul('mcpServer.name', name);
+    if (!isPlainObject(config)) {
+      out[name] = config;
+      continue;
+    }
+    const prepared: Record<string, unknown> = {};
+    for (const [field, value] of Object.entries(config)) {
+      if (field === 'env' && isPlainObject(value)) {
+        for (const [envName, envValue] of Object.entries(value)) {
+          assertNoNul('mcpServer.env.name', envName);
+          if (typeof envValue === 'string') assertNoNul('mcpServer.env.value', envValue);
+        }
+        prepared[field] = { ...value };
+      } else {
+        prepared[field] = stripNulDeep(value);
+      }
+    }
+    out[name] = prepared;
+  }
+  return out;
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function stripNulDeep(value: unknown): unknown {
+  if (typeof value === 'string') return stripNul(value);
+  if (Array.isArray(value)) return value.map(stripNulDeep);
+  if (isPlainObject(value)) {
+    return Object.fromEntries(
+      Object.entries(value).map(([k, v]) => [stripNul(k), stripNulDeep(v)]),
+    );
+  }
+  return value;
 }

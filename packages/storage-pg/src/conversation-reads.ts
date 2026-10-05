@@ -1,3 +1,4 @@
+import { assertNoNul } from '@alteroid/core';
 import type {
   ConversationBaselineResult,
   ConversationOutboundIndex,
@@ -72,6 +73,7 @@ export class PgConversationReadStore implements ConversationReadStore {
   }
 
   async advance(conversationId: string, readThrough: string): Promise<ConversationReadPosition> {
+    assertNoNul('conversation.id', conversationId);
     const rows = await this.#db
       .insert(conversationRead)
       .values({
@@ -119,6 +121,7 @@ export class PgConversationReadStore implements ConversationReadStore {
   }
 
   async mergeOutboundIndex(update: ConversationOutboundIndex): Promise<void> {
+    for (const id of Object.keys(update.lastOutbound)) assertNoNul('conversation.id', id);
     const entries = Object.entries(update.lastOutbound);
     if (entries.length > 0) {
       await this.#db

@@ -1,4 +1,5 @@
 import type { ProfileStore } from './store.js';
+import { expectNulRejected } from './nul-contract-support.js';
 
 /**
  * `ProfileStore` の契約を、**実装1つに対して**測る（2026-10-03。名前付きの行の形）。
@@ -85,5 +86,48 @@ export async function verifyProfileStoreContract(store: ProfileStore): Promise<v
   await store.set('x', 'export X=2\n', 'all');
   const again = (await store.list())[0];
   if (again?.scope !== 'all') fail('外したあとに置いた行へ古い撒く先が残った');
+  await store.clear();
+
+  // --- 9. NUL（issue #2927。teto の判断、2026-10-05）: name と script は断り、何も書かない ---
+  await store.set('keep', 'export KEEP=1\n', 'all');
+  await expectNulRejected(
+    fail,
+    'nameのNUL',
+    () => store.set('ke\u0000ep', 'export K=1\n', 'all'),
+    'ke',
+  );
+  await expectNulRejected(
+    fail,
+    'scriptのNUL',
+    () => store.set('keep', 'export GH_TOKEN=sec\u0000ret-value\n', 'all'),
+    'ret-value',
+  );
+  await expectNulRejected(
+    fail,
+    'replaceAllのscriptのNUL',
+    () =>
+      store.replaceAll([
+        { name: 'other', script: 'export O=1\n', scope: 'all', updatedAt: LONG_AGO },
+        { name: 'bad', script: 'export B=sec\u0000ret-value\n', scope: 'all', updatedAt: LONG_AGO },
+      ]),
+    'ret-value',
+  );
+  await expectNulRejected(
+    fail,
+    'replaceAllのnameのNUL',
+    () =>
+      store.replaceAll([
+        { name: 'ba\u0000d', script: 'export B=1\n', scope: 'all', updatedAt: LONG_AGO },
+      ]),
+    'ba',
+  );
+  const afterNul = await store.list();
+  if (
+    afterNul.length !== 1 ||
+    afterNul[0]?.name !== 'keep' ||
+    afterNul[0].script !== 'export KEEP=1\n'
+  ) {
+    fail('NULで断った後に前の行が残っていない（断ったのに何かを書いた）');
+  }
   await store.clear();
 }

@@ -1,5 +1,6 @@
 import { readConversationWindow } from './conversation.js';
 import { compareIsoInstant } from './iso-instant.js';
+import { expectNulRejected } from './nul-contract-support.js';
 import type { ConversationReadStore, JournalStore } from './store.js';
 
 /**
@@ -278,6 +279,37 @@ export async function verifyConversationReadStoreContract(
   ) {
     fail(`clearOutboundIndex() の後に索引が残る: ${JSON.stringify(cleared)}`);
   }
+
+  // --- 9. NUL（issue #2927。teto の判断、2026-10-05）: 会話 id は鍵なので断り、何も書かない ---
+  const beforeNul = await store.read();
+  await expectNulRejected(
+    fail,
+    'advanceの会話idのNUL',
+    () => store.advance('c-\u0000-nul', '2026-10-01T00:05:00.000Z'),
+    'c-',
+  );
+  await expectNulRejected(
+    fail,
+    'mergeOutboundIndexの会話idのNUL',
+    () =>
+      store.mergeOutboundIndex({
+        watermark: null,
+        lastOutbound: {
+          'c-ok': '2026-10-01T00:05:00.000Z',
+          'c-\u0000-nul': '2026-10-01T00:05:00.000Z',
+        },
+      }),
+    'c-',
+  );
+  const afterNul = await store.read();
+  const indexAfterNul = await store.readOutboundIndex();
+  if (
+    JSON.stringify(afterNul) !== JSON.stringify(beforeNul) ||
+    indexAfterNul.state !== 'ok' ||
+    Object.keys(indexAfterNul.lastOutbound).length !== 0
+  ) {
+    fail('NULで断ったのに何かを書いた');
+  }
 }
 
 /** 未読のある会話の数の応答。 */
@@ -354,6 +386,9 @@ export async function countUnreadConversations(
       if (row.type !== 'exchange' || row.role !== 'outbound' || row.conversationId === undefined) {
         continue;
       }
+      // **NUL を含む会話 id は索引へ入れない**（issue #2927。ストアは鍵の NUL を断る）。日誌から導く
+      // 索引が1件の不正な id で毎回落ちると、全会話の未読数が出なくなる——その会話だけ数えない。
+      if (row.conversationId.includes('\u0000')) continue;
       const known = found[row.conversationId];
       if (known === undefined || compareIsoInstant(row.at, known) > 0) {
         found[row.conversationId] = row.at;

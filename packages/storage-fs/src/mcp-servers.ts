@@ -1,7 +1,7 @@
 import { mkdir, readFile, rm, stat } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
-import { parseMcpServers, sortMcpServers } from '@alteroid/core';
+import { parseMcpServers, prepareMcpServersForWrite, sortMcpServers } from '@alteroid/core';
 import type { McpServers, McpServerStore, StoredMcpServers } from '@alteroid/core';
 
 import { writeFileAtomic } from './atomic.js';
@@ -61,7 +61,7 @@ export class FsMcpServerStore implements McpServerStore {
   async write(input: McpServers): Promise<StoredMcpServers> {
     // **書く前に検査する**（`McpServerStore.write` の doc）。不正ならここで投げ、
     // ファイルには1バイトも触れない（前のものが残る）。
-    const servers = parseMcpServers(input);
+    const servers = parseMcpServers(prepareMcpServersForWrite(input));
     const at = new Date().toISOString();
     await withPathLock(this.#path, async () => {
       if (Object.keys(servers).length === 0) {
