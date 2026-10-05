@@ -391,10 +391,16 @@ describe('#2752: 保持は「同じ鍵での一時的な失敗」に限る', () 
     const since = after.refreshFailure?.since;
     expect(since).toEqual(expect.any(String));
 
-    // 失敗が続いても「いつから」は動かない。
-    await new Promise((resolve) => setTimeout(resolve, 5));
-    await poller.refresh();
+    // 失敗が続いても「いつから」は動かない。時計だけを進める（実時間では待たない。#2146）。
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(Date.now() + 5_000);
+      await poller.refresh();
+    } finally {
+      vi.useRealTimers();
+    }
     const again = poller.state();
+    expect(again.state === 'ok' && again.refreshFailure?.at).not.toBe(since);
     expect(again.state === 'ok' && again.refreshFailure?.since).toBe(since);
 
     // 取れたら失敗の印は消える。
