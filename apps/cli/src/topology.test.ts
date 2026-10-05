@@ -215,6 +215,33 @@ describe('renderTopology', () => {
     expect(renderTopology(idle({}) as never, NOW)).not.toContain('runner の一覧に載っている');
   });
 
+  it('マネージャーの居る器を言う。生きた器と突き合わなければ「分からない」と言い、落とさない', () => {
+    const m = (managerId: string, runnerId?: string) => ({
+      managerId,
+      status: 'running',
+      live: true,
+      ...(runnerId === undefined ? {} : { runnerId }),
+      request: 'x',
+      startedAt: ago(60),
+      updatedAt: ago(5),
+      waiting: [],
+      workers: [],
+    });
+    const out = renderTopology(
+      view({
+        runners: [
+          { label: 'http://a', runnerId: 'runner-a', state: 'connected', since: ago(9) },
+          { label: 'http://b', runnerId: 'runner-b', state: 'lost', since: ago(9) },
+        ],
+        managers: [m('m-a', 'runner-a'), m('m-b', 'runner-b'), m('m-none')],
+      }) as never,
+      NOW,
+    );
+    expect(out).toContain('器: runner-a');
+    expect(out).not.toContain('器: runner-b');
+    expect(out.match(/器: 分からない/g)).toHaveLength(2);
+  });
+
   it('自由文（依頼・返事待ち）に混じったトークンは伏せる', () => {
     const token = `ghp_${'a1B2c3D4e5'.repeat(4)}`;
     const base = view();

@@ -133,13 +133,27 @@ export function renderTopology(view: TopologyView, now: number = Date.now()): st
   }
 
   if (view.managers.length === 0) {
-    lines.push('  └ マネージャー: 走行中・返事待ち・直近10分に終わった委譲は無い（runner の上に居ると観測できた委譲も無い）');
+    lines.push(
+      '  └ マネージャー: 走行中・返事待ち・直近10分に終わった委譲は無い（runner の上に居ると観測できた委譲も無い）',
+    );
   } else {
     lines.push(`  └ マネージャー（${String(view.managers.length)} 本）`);
+    // 図（Web の稼働の地図）と同じ振り分け: 生きた器（connected / vacating）の runnerId と
+    // 突き合えばその器、突き合わなければ「器が分からない」と言う（委譲を落とさない）。
+    const liveRunnerIds = new Set(
+      view.runners
+        .filter((r) => r.state === 'connected' || r.state === 'vacating')
+        .flatMap((r) => (r.runnerId === undefined ? [] : [r.runnerId])),
+    );
     for (const manager of view.managers) {
       const live = manager.live ? 'live' : 'not live';
       lines.push(
         `      ${manager.managerId} [${manager.status}・${live}]  ${redactBody(manager.request)}`,
+      );
+      lines.push(
+        manager.runnerId !== undefined && liveRunnerIds.has(manager.runnerId)
+          ? `        器: ${manager.runnerId}`
+          : '        器: 分からない（生きた runner の一覧と突き合わない）',
       );
       lines.push(
         `        ${renderLink(
@@ -161,7 +175,9 @@ export function renderTopology(view: TopologyView, now: number = Date.now()): st
         manager.status !== 'running' &&
         manager.status !== 'waiting_human'
       ) {
-        lines.push(`        runner の一覧に載っている（観測 ${formatAge(manager.runnerListedAt, now)}）`);
+        lines.push(
+          `        runner の一覧に載っている（観測 ${formatAge(manager.runnerListedAt, now)}）`,
+        );
       }
       if (manager.lastReportAt !== undefined) {
         lines.push(`        最後の報告 ${formatAge(manager.lastReportAt, now)}`);
