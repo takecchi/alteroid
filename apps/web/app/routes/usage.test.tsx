@@ -89,6 +89,8 @@ function stubUsage(body: {
   layersSince?: string | null;
   beforeLedger: boolean;
   beforeLayers?: boolean;
+  /** 認証トークンの軸の始点より前にかかるか。渡さなければ鍵ごと無い。 */
+  beforeTokens?: boolean;
   notice?: string;
   /**
    * アカウント全体の残り。**既定は `unknown`（まだ取りに行っていない）。**
@@ -98,7 +100,7 @@ function stubUsage(body: {
    */
   account?: unknown;
   /**
-   * 台帳に1行も無い委譲（Issue #98）。**既定は空配列**——この軸を測るテストだけが
+   * 記録の無い委譲（Issue #98）。**既定は空配列**——この軸を測るテストだけが
    * 自分で渡す（他の軸と同じ形）。
    */
   unrecordedManagers?: unknown[];
@@ -119,13 +121,19 @@ function stubUsage(body: {
    * 例外で落ちる）。
    */
   turnRows?: unknown[];
+  /** 絞り込みの候補・軸の名前引きに使う委譲の一覧（`GET /managers`）。既定は空。 */
+  managers?: { managerId: string; request: string; startedAt: string }[];
+  /** 同じく認証トークンの一覧（`GET /tokens`）。既定は空。 */
+  tokens?: { id: string; label: string }[];
 }) {
   // **`account` は spread から外して組み立てる。** `...body` に混ぜると、
   // 「応答に無い」を作るために `null` を渡した場合、その `null` が応答へ残る
   // （「無い」と「null が入っている」は別物である）。
-  const { account, ...rest } = body;
-  return stubFetch((url) =>
-    url.includes('/usage')
+  const { account, managers, tokens, ...rest } = body;
+  return stubFetch((url) => {
+    if (url.includes('/managers')) return json({ managers: managers ?? [] });
+    if (url.includes('/tokens')) return json({ tokens: tokens ?? [] });
+    return url.includes('/usage')
       ? json({
           ...rest,
           layersSince: body.layersSince === undefined ? body.since : body.layersSince,
@@ -136,8 +144,8 @@ function stubUsage(body: {
           turnRows: body.turnRows ?? [],
           ...(account === null ? {} : { account: account ?? { state: 'unknown' } }),
         })
-      : undefined,
-  );
+      : undefined;
+  });
 }
 
 /**
@@ -163,7 +171,7 @@ describe('/usage 画面', () => {
 
     renderUsage();
 
-    expect(await screen.findByText(/台帳にはまだ1件も記録が無い/)).toBeTruthy();
+    expect(await screen.findByText(/まだ使用量の記録がありません/)).toBeTruthy();
     // ⛔ ここは `queryByText('$0.00')` だった（#935。理由は `renderedMoneyTexts` の doc）。
     expect(renderedMoneyTexts()).toEqual(new Set());
   });
@@ -177,8 +185,8 @@ describe('/usage 画面', () => {
 
     renderUsage();
 
-    expect(await screen.findByText(/その範囲には記録が無い/)).toBeTruthy();
-    expect(await screen.findByText(/照会した範囲は台帳の始点より前にかかっている/)).toBeTruthy();
+    expect(await screen.findByText(/この期間の使用量の記録はありません/)).toBeTruthy();
+    expect(await screen.findByText(/記録が始まる前の期間にかかっています/)).toBeTruthy();
     // 「合計」の見出し自体は出るが、金額は出ない（記録が無いと言うだけ）。
     expect(renderedMoneyTexts()).toEqual(new Set());
   });
@@ -227,6 +235,10 @@ describe('/usage 画面', () => {
       ],
       since: '2026-08-01T00:00:00.000Z',
       beforeLedger: false,
+      managers: [
+        { managerId: 'm1', request: '一つ目の依頼', startedAt: '2026-08-13T01:00:00.000Z' },
+        { managerId: 'm2', request: '二つ目の依頼', startedAt: '2026-08-14T01:00:00.000Z' },
+      ],
     });
 
     renderUsage();
@@ -240,8 +252,10 @@ describe('/usage 画面', () => {
     expect(screen.getByText('日別')).toBeTruthy();
     expect(screen.getByText('マネージャー別')).toBeTruthy();
     expect(screen.getByText('モデル別')).toBeTruthy();
-    expect(screen.getByText('m1')).toBeTruthy();
-    expect(screen.getByText('m2')).toBeTruthy();
+    const managers = axisCard('マネージャー別');
+    expect(within(managers).getByText(/^一つ目の依頼（/)).toBeTruthy();
+    expect(within(managers).getByText(/^二つ目の依頼（/)).toBeTruthy();
+    expect(within(managers).queryByText('m1')).toBeNull();
   });
 
   it('層別（誰が）と場所別（どこで）の内訳も出す', async () => {
@@ -258,15 +272,15 @@ describe('/usage 画面', () => {
 
     renderUsage();
 
-    await screen.findByRole('heading', { name: '層別（誰が）' });
-    const layers = axisCard('層別（誰が）');
+    await screen.findByRole('heading', { name: '誰が使ったか' });
+    const layers = axisCard('誰が使ったか');
     expect(within(layers).getByText('クローン')).toBeTruthy();
-    expect(within(layers).getByText('マネージャー')).toBeTruthy();
+    expect(within(layers).getByText('マネージャー（作業者の分を含む）')).toBeTruthy();
     expect(within(layers).getByText('$2.00')).toBeTruthy();
     expect(within(layers).getByText('$1.00')).toBeTruthy();
-    const sites = axisCard('場所別（どこで）');
-    expect(within(sites).getByText('本体のセッション')).toBeTruthy();
-    expect(within(sites).getByText('記憶への蒸留')).toBeTruthy();
+    const sites = axisCard('どこで使ったか');
+    expect(within(sites).getByText('会話そのもの')).toBeTruthy();
+    expect(within(sites).getByText('記憶への書き出し（要約の直前）')).toBeTruthy();
     // **モデル軸では分けられない。** 同じモデル帯なので1件に畳まれ、$3.00 がまとめて
     // 出る — 層の軸が無ければ「誰が使ったか」はこの画面から読めない。
     const models = axisCard('モデル別');
@@ -287,10 +301,10 @@ describe('/usage 画面', () => {
 
     renderUsage();
 
-    await screen.findByRole('heading', { name: '場所別（どこで）' });
-    const sites = axisCard('場所別（どこで）');
-    expect(within(sites).getByText('本体のセッション')).toBeTruthy();
-    expect(within(sites).getByText('もう一方のモデル')).toBeTruthy();
+    await screen.findByRole('heading', { name: 'どこで使ったか' });
+    const sites = axisCard('どこで使ったか');
+    expect(within(sites).getByText('会話そのもの')).toBeTruthy();
+    expect(within(sites).getByText('もう一方の AI への相談')).toBeTruthy();
     expect(within(sites).getByText('future-site')).toBeTruthy();
     expect(within(sites).getByText('$4.00')).toBeTruthy();
     expect(within(sites).getByText('$2.00')).toBeTruthy();
@@ -308,9 +322,10 @@ describe('/usage 画面', () => {
 
     renderUsage();
 
-    expect(await screen.findByText(/既定値であって観測ではない/)).toBeTruthy();
+    expect(await screen.findByText(/実際に観測した値ではありません/)).toBeTruthy();
     // 層の始点を台帳の始点と混ぜない（2つの始点が別物であることを画面が言う）。
-    expect(screen.getByText(/2026-08-19T00:00:00\.000Z/)).toBeTruthy();
+    expect(screen.getByText(/記録し始める前（.*08.*19.*）/)).toBeTruthy();
+    expect(screen.queryByText(/2026-08-19T00:00:00\.000Z/)).toBeNull();
   });
 
   /**
@@ -328,13 +343,23 @@ describe('/usage 画面', () => {
       rows: [row(1, { managerId: longManagerId })],
       since: '2026-08-01T00:00:00.000Z',
       beforeLedger: false,
+      managers: [
+        {
+          managerId: longManagerId,
+          request: '長い依頼文'.repeat(10),
+          startedAt: '2026-08-14T01:00:00.000Z',
+        },
+      ],
     });
 
     renderUsage();
 
     await screen.findByRole('heading', { name: 'マネージャー別' });
     const managers = axisCard('マネージャー別');
-    expect(within(managers).getByTitle(longManagerId)).toBeTruthy();
+    const label = `${'長い依頼文'.repeat(10).slice(0, 28)}…（`;
+    expect(within(managers).getByTitle(new RegExp(`^${label}`))).toBeTruthy();
+    // 識別子（id）は軸に出さない。
+    expect(within(managers).queryByText(longManagerId)).toBeNull();
   });
 
   /**
@@ -349,15 +374,18 @@ describe('/usage 画面', () => {
       ],
       since: '2026-08-01T00:00:00.000Z',
       beforeLedger: false,
+      managers: [
+        { managerId: 'job-7f3a', request: '記事の下書き', startedAt: '2026-08-14T01:00:00.000Z' },
+      ],
     });
 
     renderUsage();
 
     await screen.findByRole('heading', { name: 'マネージャー別' });
     const managers = axisCard('マネージャー別');
-    const link = within(managers).getByRole('link', { name: 'job-7f3a' });
+    const link = within(managers).getByRole('link', { name: /^記事の下書き（/ });
     expect(link.getAttribute('href')).toBe('/managers/job-7f3a');
-    expect(within(managers).queryByRole('link', { name: 'clone' })).toBeNull();
+    expect(within(managers).queryByRole('link', { name: 'クローン' })).toBeNull();
     expect(within(managers).getAllByRole('link')).toHaveLength(1);
   });
 
@@ -374,18 +402,21 @@ describe('/usage 画面', () => {
       ],
       since: '2026-08-01T00:00:00.000Z',
       beforeLedger: false,
+      managers: [
+        { managerId: 'mgr-42', request: '週次の調査', startedAt: '2026-08-14T01:00:00.000Z' },
+      ],
     });
 
     renderUsage();
 
     await screen.findByRole('heading', { name: 'マネージャー別' });
     const managers = axisCard('マネージャー別');
-    const link = within(managers).getByRole('link', { name: 'mgr-42' });
+    const link = within(managers).getByRole('link', { name: /^週次の調査（/ });
     expect(link.getAttribute('href')).toBe('/managers/mgr-42');
-    expect(within(managers).getByTitle('mgr-42')).toBeTruthy();
+    expect(within(managers).getByTitle(/^週次の調査（/)).toBeTruthy();
 
-    expect(within(managers).getByTitle('clone').textContent).toBe('clone');
-    expect(within(managers).queryByRole('link', { name: 'clone' })).toBeNull();
+    expect(within(managers).getByTitle('クローン').textContent).toBe('クローン');
+    expect(within(managers).queryByRole('link', { name: 'クローン' })).toBeNull();
     expect(within(managers).getAllByRole('link')).toHaveLength(1);
   });
 
@@ -404,17 +435,18 @@ describe('/usage 画面', () => {
       rows: [row(2, { tokenId: 'tok-42' }), row(1, {})],
       since: '2026-08-01T00:00:00.000Z',
       beforeLedger: false,
+      tokens: [{ id: 'tok-42', label: '個人の鍵' }],
     });
 
     renderUsage();
 
     await screen.findByRole('heading', { name: '認証トークン別' });
     const tokens = axisCard('認証トークン別');
-    const link = within(tokens).getByRole('link', { name: 'tok-42' });
+    const link = within(tokens).getByRole('link', { name: '個人の鍵' });
     expect(link.getAttribute('href')).toBe('/tokens?tokenId=tok-42');
-    expect(within(tokens).getByTitle('tok-42')).toBeTruthy();
+    expect(within(tokens).getByTitle('個人の鍵')).toBeTruthy();
 
-    const noAttribution = '（トークンの帰属が無い分）';
+    const noAttribution = '（認証トークンの分からない分）';
     expect(within(tokens).getByTitle(noAttribution).textContent).toBe(noAttribution);
     expect(within(tokens).queryByRole('link', { name: noAttribution })).toBeNull();
     expect(within(tokens).getAllByRole('link')).toHaveLength(1);
@@ -440,15 +472,15 @@ describe('/usage 画面', () => {
 
     renderUsage();
 
-    await screen.findByText(/その範囲には記録が無い/);
-    const layerSelect = screen.getByLabelText(/誰が/);
+    await screen.findByText(/この期間の使用量の記録はありません/);
+    const layerSelect = screen.getByLabelText('誰が');
     layerSelect.dispatchEvent(new Event('change', { bubbles: true }));
     // 選択肢が core の一覧から作られていること（画面に書き写していない）。
     expect(within(layerSelect).getByText('クローン')).toBeTruthy();
-    expect(within(layerSelect).getByText('マネージャー')).toBeTruthy();
-    const siteSelect = screen.getByLabelText(/どこで/);
-    expect(within(siteSelect).getByText('本体のセッション')).toBeTruthy();
-    expect(within(siteSelect).getByText('記憶への蒸留')).toBeTruthy();
+    expect(within(layerSelect).getByText('マネージャー（作業者の分を含む）')).toBeTruthy();
+    const siteSelect = screen.getByLabelText('どこで');
+    expect(within(siteSelect).getByText('会話そのもの')).toBeTruthy();
+    expect(within(siteSelect).getByText('記憶への書き出し（要約の直前）')).toBeTruthy();
   });
 
   /**
@@ -469,9 +501,9 @@ describe('/usage 画面', () => {
 
     renderUsage();
 
-    const fromInput = await screen.findByLabelText(/開始日/);
-    // grid の直接の子ではなく label なので、容器は label の親。
-    const grid = fromInput.closest('label')?.parentElement;
+    const fromInput = await screen.findByLabelText('開始日');
+    // 入力欄は欄ごとの箱（FilterField）に入っているので、容器はその箱の親。
+    const grid = fromInput.parentElement?.parentElement;
     if (grid === null || grid === undefined) throw new Error('絞り込みの容器が見つからない');
     const tokens = grid.className.split(/\s+/);
     expect(tokens).toContain('grid-cols-1');
@@ -486,8 +518,8 @@ describe('/usage 画面', () => {
     // **ラベルは前後を固定して当てる。** `/to/` は部分一致なので、`token` という
     // ラベルが増えた瞬間に2件へ当たって落ちた。**緩めるのではなく、どのラベルか
     // を言う** — 前後を固定すれば、似た名前のラベルが増えても当たり続ける。
-    const fromInput = await screen.findByLabelText(/^開始日$/);
-    const toInput = screen.getByLabelText(/^終了日$/);
+    const fromInput = await screen.findByLabelText('開始日');
+    const toInput = screen.getByLabelText('終了日');
     for (const input of [fromInput, toInput]) {
       const tokens = input.className.split(/\s+/);
       expect(tokens).toContain('min-w-0');
@@ -517,17 +549,17 @@ describe('/usage 画面の絞り込みが URL に載る（issue #2050）', () =>
       '/?from=2026-08-01&to=2026-08-20&managerId=m1&layer=clone&site=distill&tokenId=tok-1',
     ]);
 
-    await screen.findByText(/その範囲には記録が無い/);
+    await screen.findByText(/この期間の使用量の記録はありません/);
 
     // 入力欄そのものに復元されている。
-    expect((screen.getByLabelText(/^開始日$/) as HTMLInputElement).value).toBe('2026-08-01');
-    expect((screen.getByLabelText(/^終了日$/) as HTMLInputElement).value).toBe('2026-08-20');
-    expect((screen.getByLabelText(/^マネージャー$/) as HTMLInputElement).value).toBe('m1');
-    expect((screen.getByLabelText(/誰が/) as HTMLSelectElement).value).toBe('clone');
-    expect((screen.getByLabelText(/どこで/) as HTMLSelectElement).value).toBe('distill');
-    expect((screen.getByLabelText(/^認証トークン/) as HTMLInputElement).value).toBe('tok-1');
+    expect((screen.getByLabelText('開始日') as HTMLInputElement).value).toBe('2026-08-01');
+    expect((screen.getByLabelText('終了日') as HTMLInputElement).value).toBe('2026-08-20');
+    expect((screen.getByLabelText('マネージャー') as HTMLInputElement).value).toBe('m1');
+    expect((screen.getByLabelText('誰が') as HTMLSelectElement).value).toBe('clone');
+    expect((screen.getByLabelText('どこで') as HTMLSelectElement).value).toBe('distill');
+    expect((screen.getByLabelText('認証トークン') as HTMLInputElement).value).toBe('tok-1');
     // 読める日付なので、読めなかった旨の注記は出ない（issue #2133）。
-    expect(screen.queryByText(/読めないので、絞り込みに使っていない/)).toBeNull();
+    expect(screen.queryByText(/読めないので、絞り込みに使っていません/)).toBeNull();
 
     // `GET /usage` への問い合わせにも同じ値が載る。
     await waitFor(() => {
@@ -543,36 +575,45 @@ describe('/usage 画面の絞り込みが URL に載る（issue #2050）', () =>
   });
 
   it('入力欄を変えると URL に載る', async () => {
-    stubUsage({ rows: [], since: '2026-08-01T00:00:00.000Z', beforeLedger: false });
+    stubUsage({
+      rows: [],
+      since: '2026-08-01T00:00:00.000Z',
+      beforeLedger: false,
+      managers: [{ managerId: 'mgr-9', request: '調査', startedAt: '2026-08-14T01:00:00.000Z' }],
+      tokens: [{ id: 'tok-2', label: '予備の鍵' }],
+    });
     const { router } = renderUsage();
-    await screen.findByText(/その範囲には記録が無い/);
+    await screen.findByText(/この期間の使用量の記録はありません/);
 
-    fireEvent.change(screen.getByLabelText(/^開始日$/), { target: { value: '2026-08-01' } });
+    fireEvent.change(screen.getByLabelText('開始日'), { target: { value: '2026-08-01' } });
     await waitFor(() => {
       expect(new URLSearchParams(router.state.location.search).get('from')).toBe('2026-08-01');
     });
 
-    fireEvent.change(screen.getByLabelText(/^終了日$/), { target: { value: '2026-08-20' } });
+    fireEvent.change(screen.getByLabelText('終了日'), { target: { value: '2026-08-20' } });
     await waitFor(() => {
       expect(new URLSearchParams(router.state.location.search).get('to')).toBe('2026-08-20');
     });
 
-    fireEvent.change(screen.getByLabelText(/^マネージャー$/), { target: { value: 'mgr-9' } });
+    // 候補は名前で出て、id は見せない。
+    await screen.findByRole('option', { name: /^調査（/ });
+    await screen.findByRole('option', { name: '予備の鍵' });
+    fireEvent.change(screen.getByLabelText('マネージャー'), { target: { value: 'mgr-9' } });
     await waitFor(() => {
       expect(new URLSearchParams(router.state.location.search).get('managerId')).toBe('mgr-9');
     });
 
-    fireEvent.change(screen.getByLabelText(/誰が/), { target: { value: 'manager' } });
+    fireEvent.change(screen.getByLabelText('誰が'), { target: { value: 'manager' } });
     await waitFor(() => {
       expect(new URLSearchParams(router.state.location.search).get('layer')).toBe('manager');
     });
 
-    fireEvent.change(screen.getByLabelText(/どこで/), { target: { value: 'session' } });
+    fireEvent.change(screen.getByLabelText('どこで'), { target: { value: 'session' } });
     await waitFor(() => {
       expect(new URLSearchParams(router.state.location.search).get('site')).toBe('session');
     });
 
-    fireEvent.change(screen.getByLabelText(/^認証トークン/), { target: { value: 'tok-2' } });
+    fireEvent.change(screen.getByLabelText('認証トークン'), { target: { value: 'tok-2' } });
     await waitFor(() => {
       expect(new URLSearchParams(router.state.location.search).get('tokenId')).toBe('tok-2');
     });
@@ -591,10 +632,10 @@ describe('/usage 画面の絞り込みが URL に載る（issue #2050）', () =>
     renderUsage(['/?layer=no-such-layer&site=no-such-site']);
 
     // 画面ごと落ちない。
-    await screen.findByText(/その範囲には記録が無い/);
+    await screen.findByText(/この期間の使用量の記録はありません/);
     // 選択肢は既知のものしか無いので、不正な値は「すべて」（空文字）に落ちる。
-    expect((screen.getByLabelText(/誰が/) as HTMLSelectElement).value).toBe('');
-    expect((screen.getByLabelText(/どこで/) as HTMLSelectElement).value).toBe('');
+    expect((screen.getByLabelText('誰が') as HTMLSelectElement).value).toBe('');
+    expect((screen.getByLabelText('どこで') as HTMLSelectElement).value).toBe('');
 
     // 不正な値のまま `GET /usage` へ渡さない（API へ変な問い合わせを投げない）。
     await waitFor(() => {
@@ -623,19 +664,19 @@ describe('/usage 画面の絞り込みが URL に載る（issue #2050）', () =>
     renderUsage(['/?from=not-a-date']);
 
     // 画面ごと落ちない。
-    await screen.findByText(/その範囲には記録が無い/);
+    await screen.findByText(/この期間の使用量の記録はありません/);
 
     // 捨てたことが分かる（値そのものも出る——人間が書いた URL の値であって
     // 秘密ではない）。
     expect(
       await screen.findByText(
-        /URL の from=not-a-date は日付として読めないので、絞り込みに使っていない/,
+        /開始日に指定された値（not-a-date）は日付として読めないので、絞り込みに使っていません/,
       ),
     ).toBeTruthy();
 
     // 読めない値は入力欄にも出さない（絞り込みが効いているように見えるのに
     // 入力欄が空、という食い違いを作らない側——両方とも空にする）。
-    expect((screen.getByLabelText(/^開始日$/) as HTMLInputElement).value).toBe('');
+    expect((screen.getByLabelText('開始日') as HTMLInputElement).value).toBe('');
 
     // 読めない値のまま `GET /usage` へ渡さない。
     await waitFor(() => {
@@ -655,17 +696,17 @@ describe('/usage 画面の絞り込みが URL に載る（issue #2050）', () =>
 
     renderUsage(['/?from=2026-08-01&to=2026-02-30-ish']);
 
-    await screen.findByText(/その範囲には記録が無い/);
+    await screen.findByText(/この期間の使用量の記録はありません/);
 
     expect(
       await screen.findByText(
-        /URL の to=2026-02-30-ish は日付として読めないので、絞り込みに使っていない/,
+        /終了日に指定された値（2026-02-30-ish）は日付として読めないので、絞り込みに使っていません/,
       ),
     ).toBeTruthy();
     // from は読めているので、こちらは注記が出ない。
-    expect(screen.queryByText(/URL の from=.*は日付として読めない/)).toBeNull();
-    expect((screen.getByLabelText(/^開始日$/) as HTMLInputElement).value).toBe('2026-08-01');
-    expect((screen.getByLabelText(/^終了日$/) as HTMLInputElement).value).toBe('');
+    expect(screen.queryByText(/開始日に指定された値.*は日付として読めない/)).toBeNull();
+    expect((screen.getByLabelText('開始日') as HTMLInputElement).value).toBe('2026-08-01');
+    expect((screen.getByLabelText('終了日') as HTMLInputElement).value).toBe('');
 
     await waitFor(() => {
       const call = stub.calls.find((url) => url.includes('/usage'));
@@ -704,13 +745,13 @@ describe('/usage 画面の絞り込みが URL に載る（issue #2050）', () =>
 
     renderUsage(['/?from=2026-02-30']);
 
-    await screen.findByText(/その範囲には記録が無い/);
+    await screen.findByText(/この期間の使用量の記録はありません/);
     expect(
       await screen.findByText(
-        /URL の from=2026-02-30 は日付として読めないので、絞り込みに使っていない/,
+        /開始日に指定された値（2026-02-30）は日付として読めないので、絞り込みに使っていません/,
       ),
     ).toBeTruthy();
-    expect((screen.getByLabelText(/^開始日$/) as HTMLInputElement).value).toBe('');
+    expect((screen.getByLabelText('開始日') as HTMLInputElement).value).toBe('');
 
     await waitFor(() => {
       const call = stub.calls.find((url) => url.includes('/usage'));
@@ -729,17 +770,17 @@ describe('/usage 画面の絞り込みが URL に載る（issue #2050）', () =>
 
     const { router } = renderUsage(['/?from=not-a-date']);
 
-    await screen.findByText(/その範囲には記録が無い/);
-    expect(await screen.findByText(/読めないので、絞り込みに使っていない/)).toBeTruthy();
+    await screen.findByText(/この期間の使用量の記録はありません/);
+    expect(await screen.findByText(/読めないので、絞り込みに使っていません/)).toBeTruthy();
 
-    fireEvent.change(screen.getByLabelText(/^開始日$/), { target: { value: '2026-08-05' } });
+    fireEvent.change(screen.getByLabelText('開始日'), { target: { value: '2026-08-05' } });
 
     await waitFor(() => {
       expect(new URLSearchParams(router.state.location.search).get('from')).toBe('2026-08-05');
     });
     // 注記が消える。
-    expect(screen.queryByText(/読めないので、絞り込みに使っていない/)).toBeNull();
-    expect((screen.getByLabelText(/^開始日$/) as HTMLInputElement).value).toBe('2026-08-05');
+    expect(screen.queryByText(/読めないので、絞り込みに使っていません/)).toBeNull();
+    expect((screen.getByLabelText('開始日') as HTMLInputElement).value).toBe('2026-08-05');
 
     await waitFor(() => {
       const call = stub.calls.findLast((url) => url.includes('/usage'));
@@ -752,17 +793,17 @@ describe('/usage 画面の絞り込みが URL に載る（issue #2050）', () =>
   it('絞り込みを空にすると URL からそのパラメタが消える', async () => {
     stubUsage({ rows: [], since: '2026-08-01T00:00:00.000Z', beforeLedger: false });
     const { router } = renderUsage(['/?managerId=m1&tokenId=tok-1']);
-    await screen.findByText(/その範囲には記録が無い/);
+    await screen.findByText(/この期間の使用量の記録はありません/);
 
     expect(new URLSearchParams(router.state.location.search).get('managerId')).toBe('m1');
     expect(new URLSearchParams(router.state.location.search).get('tokenId')).toBe('tok-1');
 
-    fireEvent.change(screen.getByLabelText(/^マネージャー$/), { target: { value: '' } });
+    fireEvent.change(screen.getByLabelText('マネージャー'), { target: { value: '' } });
     await waitFor(() => {
       expect(new URLSearchParams(router.state.location.search).has('managerId')).toBe(false);
     });
 
-    fireEvent.change(screen.getByLabelText(/^認証トークン/), { target: { value: '' } });
+    fireEvent.change(screen.getByLabelText('認証トークン'), { target: { value: '' } });
     await waitFor(() => {
       expect(new URLSearchParams(router.state.location.search).has('tokenId')).toBe(false);
     });
@@ -777,6 +818,35 @@ describe('/usage 画面の絞り込みが URL に載る（issue #2050）', () =>
  * 「その範囲には記録が無い。」に潰れる。`dateNotices` と同じ置き場・同じ
  * 見た目で1行足す——「記録が無い」自体は削らない（0件は事実として正しい）。
  */
+describe('/usage 画面の絞り込み欄（issue #2795）', () => {
+  it('欄の名前が日本語で、ラベルが入力欄に結びついている（for/id）', async () => {
+    stubUsage({ rows: [], since: '2026-08-01T00:00:00.000Z', beforeLedger: false });
+    renderUsage();
+    await screen.findByText(/この期間の使用量の記録はありません/);
+
+    for (const name of ['開始日', '終了日', 'マネージャー', '誰が', 'どこで', '認証トークン']) {
+      const field = screen.getByLabelText(name);
+      const label = document.querySelector(`label[for="${field.id}"]`);
+      expect(field.id).not.toBe('');
+      expect(label?.textContent).toBe(name);
+    }
+    // 英語の欄名・id の手入力の名残が無い。
+    expect(screen.queryByPlaceholderText('manager id')).toBeNull();
+    expect(screen.queryByPlaceholderText('token id')).toBeNull();
+  });
+
+  it('URL の id が一覧に無くても、選択を「すべて」に見せず保つ', async () => {
+    stubUsage({ rows: [], since: '2026-08-01T00:00:00.000Z', beforeLedger: false });
+    renderUsage(['/?managerId=gone-1&tokenId=gone-2']);
+    await screen.findByText(/この期間の使用量の記録はありません/);
+
+    const manager = screen.getByLabelText('マネージャー') as HTMLSelectElement;
+    expect(manager.value).toBe('gone-1');
+    expect(within(manager).getByText('（一覧に無い委譲）')).toBeTruthy();
+    expect((screen.getByLabelText('認証トークン') as HTMLSelectElement).value).toBe('gone-2');
+  });
+});
+
 describe('/usage 画面: to が from より前（issue #2155）', () => {
   it('to が from より前なら、絞り込みが逆だと注記する（「記録が無い」は残す）', async () => {
     stubUsage({ rows: [], since: '2026-08-01T00:00:00.000Z', beforeLedger: false });
@@ -789,7 +859,7 @@ describe('/usage 画面: to が from より前（issue #2155）', () => {
       ),
     ).toBeTruthy();
     // 削らない側の判断: 0件であること自体は事実として正しいので残す。
-    expect(await screen.findByText(/その範囲には記録が無い/)).toBeTruthy();
+    expect(await screen.findByText(/この期間の使用量の記録はありません/)).toBeTruthy();
   });
 
   it('to と from が同じ日なら注記を出さない', async () => {
@@ -797,7 +867,7 @@ describe('/usage 画面: to が from より前（issue #2155）', () => {
 
     renderUsage(['/?from=2026-09-10&to=2026-09-10']);
 
-    await screen.findByText(/その範囲には記録が無い/);
+    await screen.findByText(/この期間の使用量の記録はありません/);
     expect(screen.queryByText(/より前なので、この範囲には1日も入らない/)).toBeNull();
   });
 
@@ -806,7 +876,7 @@ describe('/usage 画面: to が from より前（issue #2155）', () => {
 
     renderUsage(['/?from=2026-09-01&to=2026-09-10']);
 
-    await screen.findByText(/その範囲には記録が無い/);
+    await screen.findByText(/この期間の使用量の記録はありません/);
     expect(screen.queryByText(/より前なので、この範囲には1日も入らない/)).toBeNull();
   });
 });
@@ -1008,12 +1078,12 @@ describe('/usage 画面の無報告の provider（unmeteredRows）', () => {
 });
 
 /**
- * 台帳に1行も無い委譲（Issue #98「台帳が取りこぼした委譲」）。
+ * 記録の無い委譲（Issue #98「台帳が取りこぼした委譲」）。
  *
  * 文言そのものの試験は core（`describeUnrecordedManagers`）が持つ。ここで見るのは
  * 「この画面に出ていること」と「合計値の隣であること」と「0件でも省略しないこと」。
  */
-describe('/usage 画面の台帳に1行も無い委譲', () => {
+describe('/usage 画面の記録の無い委譲', () => {
   it('1件以上あれば、この画面にも出す', async () => {
     stubUsage({
       rows: [row(1)],
@@ -1022,13 +1092,23 @@ describe('/usage 画面の台帳に1行も無い委譲', () => {
       unrecordedManagers: [
         { managerId: 'mgr-unrecorded', status: 'running', startedAt: '2026-08-25T12:00:00.000Z' },
       ],
+      managers: [
+        {
+          managerId: 'mgr-unrecorded',
+          request: '未記録の依頼',
+          startedAt: '2026-08-25T12:00:00.000Z',
+        },
+      ],
     });
 
     renderUsage();
 
-    expect(await screen.findByText(/台帳に1行も無い委譲/)).toBeTruthy();
-    expect(await screen.findByText(/mgr-unrecorded/)).toBeTruthy();
-    expect(screen.getByText(/mgr-unrecorded/).textContent).toContain('running');
+    expect(await screen.findByText(/記録の無い委譲/)).toBeTruthy();
+    const link = await screen.findByRole('link', { name: /^未記録の依頼（/ });
+    expect(link.getAttribute('href')).toBe('/managers/mgr-unrecorded');
+    // 内部の識別子と状態名は見せない。
+    expect(screen.queryByText(/mgr-unrecorded/)).toBeNull();
+    expect(screen.queryByText(/running/)).toBeNull();
   });
 
   /**
@@ -1045,9 +1125,9 @@ describe('/usage 画面の台帳に1行も無い委譲', () => {
 
     renderUsage();
 
-    const heading = await screen.findByText(/台帳に1行も無い委譲/);
+    const heading = await screen.findByText(/記録の無い委譲/);
     expect(heading).toBeTruthy();
-    expect(await screen.findByText(/0件/)).toBeTruthy();
+    expect(await screen.findByText(/記録が1件も無い委譲は、ありません/)).toBeTruthy();
   });
 
   it('台帳がまだ空（since が null）でも、取りこぼしがあれば出す', async () => {
@@ -1062,12 +1142,12 @@ describe('/usage 画面の台帳に1行も無い委譲', () => {
 
     renderUsage();
 
-    expect(await screen.findByText(/台帳にはまだ1件も記録が無い/)).toBeTruthy();
-    expect(await screen.findByText(/mgr-unrecorded/)).toBeTruthy();
+    expect(await screen.findByText(/まだ使用量の記録がありません/)).toBeTruthy();
+    expect(await screen.findByText(/（一覧に無い委譲）/)).toBeTruthy();
   });
 
   /**
-   * **合計値の隣。** 「合計」カードのすぐ後に「台帳に1行も無い委譲」カードが
+   * **合計値の隣。** 「合計」カードのすぐ後に「記録の無い委譲」カードが
    * 続くことを、DOM 上の並びで確かめる。
    */
   it('「合計」カードの直後に置く', async () => {
@@ -1086,7 +1166,7 @@ describe('/usage 画面の台帳に1行も無い委譲', () => {
     const totalCard = totalHeading.closest('[data-slot="card"]');
     if (totalCard === null) throw new Error('合計カードが見つからない');
     const nextCard = totalCard.nextElementSibling;
-    expect(nextCard?.textContent).toContain('台帳に1行も無い委譲');
+    expect(nextCard?.textContent).toContain('記録の無い委譲');
   });
 });
 
@@ -1163,8 +1243,66 @@ describe('/usage 画面のアカウント全体の残り', () => {
 
     renderUsage();
 
-    expect(await screen.findByText(/取れなかった/)).toBeTruthy();
+    expect(await screen.findByText(/取得できませんでした/)).toBeTruthy();
     expect(screen.queryByText(/0% 使用/)).toBeNull();
+  });
+
+  it('ログインしていないときは、次にすることを利用者の言葉で言い、診断の行は折りたたみへ寄せる', async () => {
+    stubUsage({
+      rows: [],
+      since: null,
+      beforeLedger: false,
+      account: {
+        state: 'unavailable',
+        at: '2026-08-14T10:00:00.000Z',
+        reason: 'claude.ai にログインしていない（鍵が届けば取れる）',
+        cause: 'not_logged_in',
+        accountKeys: ['apiProvider', 'tokenSource'],
+      },
+    });
+
+    renderUsage();
+
+    expect(await screen.findByText(/Claude にログインすると、残りが見えます/)).toBeTruthy();
+    const details = screen.getByText('詳しい情報（開発者向け）').closest('details');
+    expect(details).not.toBeNull();
+    expect(details?.open).toBe(false);
+    // 診断の行（識別子・生の時刻）は折りたたみの中にだけ在る。
+    const raw = screen.getByText(/apiKeySource/);
+    expect(details?.contains(raw)).toBe(true);
+    expect(screen.queryByText(/2026-08-14T10:00:00\.000Z/)).toBeNull();
+  });
+
+  it('記録が1件も無いとき、橙の注意を並べず、読み方は折りたたみへ寄せる', async () => {
+    stubUsage({ rows: [], since: null, beforeLedger: false });
+
+    renderUsage();
+
+    expect(
+      await screen.findByText(/まだ使用量の記録がありません。会話を始めると、ここに出ます/),
+    ).toBeTruthy();
+    const guide = screen.getByText('記録の読み方').closest('details');
+    expect(guide?.open).toBe(false);
+    expect(document.querySelectorAll('.text-warn').length).toBe(0);
+  });
+
+  it('範囲に記録が無いとき、始点の注記3本は橙で並べず「記録の読み方」の中へ入る', async () => {
+    stubUsage({
+      rows: [],
+      since: '2026-08-01T00:00:00.000Z',
+      layersSince: null,
+      beforeLedger: true,
+      beforeLayers: true,
+      beforeTokens: true,
+    });
+
+    renderUsage();
+
+    await screen.findByText(/この期間の使用量の記録はありません/);
+    const guide = screen.getByText('記録の読み方').closest('details');
+    expect(guide?.open).toBe(false);
+    expect(guide?.querySelectorAll('li').length).toBe(3);
+    expect(document.querySelectorAll('.text-warn').length).toBe(0);
   });
 
   it('応答に入っていなければ、白い画面にせず「返さないデーモン」と言う', async () => {

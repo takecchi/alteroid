@@ -484,7 +484,7 @@ const DAILY_REPORT_LOOKUP = 30;
  * 合計は約21時間（22:00 の日報なら翌日の日報の時刻の手前まで）。数時間の API 障害を越えられる長さにしてある。
  * 諦めても「作れなかった」の印は日誌に残る（人間に見える）。再起動時の後追いも従来どおり働く。
  */
-const DAILY_REPORT_RETRY_DELAYS_MS: readonly number[] = [
+export const DAILY_REPORT_RETRY_DELAYS_MS: readonly number[] = [
   10 * 60_000,
   30 * 60_000,
   2 * 3_600_000,

@@ -110,6 +110,9 @@ export class ClaudeManagerDriver implements AgentManagerDriver {
             kind: isDaemonAnsweredTool(toolName) ? 'question' : 'permission',
             toolName,
             input,
+            ...(typeof extra.decisionReason === 'string' && extra.decisionReason.length > 0
+              ? { reason: extra.decisionReason }
+              : {}),
             signal: extra.signal,
           }),
         ),

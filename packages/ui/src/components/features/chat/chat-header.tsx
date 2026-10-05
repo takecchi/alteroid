@@ -7,7 +7,7 @@ import { DocumentTitle } from '../../document-title';
 import { ConfirmDialog } from '../confirm-dialog';
 
 /**
- * 会話の見出しの帯。
+ * 会話の見出しの帯。見出し（と題名）は「会話」——左ナビ・会話一覧と同じ名前（#2844）。
  *
  * - 副題は呼ぶ側が渡す利用者向けの情報（開始日時・発言数）。会話 id は出さない
  *   （利用者に意味が無く、狭い画面で切れる）。まだ決まっていなければ「新しい会話」
@@ -60,13 +60,18 @@ export function ChatHeader({
           </button>
         )}
         <div className="min-w-0 flex-1">
-          <DocumentTitle>クローンと話す</DocumentTitle>
-          <h1 className="text-base font-semibold">クローンと話す</h1>
-          {(conversationId === undefined || subtitle !== undefined) && (
-            <p className="mt-0.5 text-[11px] text-muted-foreground">
-              {conversationId === undefined ? '新しい会話' : subtitle}
-            </p>
-          )}
+          <DocumentTitle>会話</DocumentTitle>
+          <h1 className="text-base font-semibold">会話</h1>
+          {/* 名前は左ナビ・会話一覧と同じ「会話」（#2844）。「クローンと話す」は説明の側へ回した。 */}
+          <p className="mt-0.5 text-[11px] text-muted-foreground">
+            クローンと話す
+            {(conversationId === undefined || subtitle !== undefined) && (
+              <>
+                {' · '}
+                <span>{conversationId === undefined ? '新しい会話' : subtitle}</span>
+              </>
+            )}
+          </p>
         </div>
         {conversationId !== undefined && (onInterrupt !== undefined || onEnd !== undefined) && (
           <div className="flex shrink-0 items-center gap-3">
