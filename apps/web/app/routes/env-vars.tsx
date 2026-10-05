@@ -154,6 +154,9 @@ function EnvVarList() {
 function EnvVarRow({ entry, onRemove }: { entry: EnvVarView; onRemove: () => Promise<void> }) {
   const scope = describeScope(entry.scope);
   const [editing, setEditing] = useState(false);
+  // 開くたびに編集ダイアログを作り直す鍵。開く操作はメニューから来るので Dialog の onOpenChange(true) は
+  // 呼ばれない——作り直さないと、前回やめたときの入力途中の値が次に開いたときに残る。
+  const [editSession, setEditSession] = useState(0);
   const [confirmingRemove, setConfirmingRemove] = useState(false);
   const shownValue = entry.secret ? MASK : (entry.value ?? '（サーバがまだ値を返していない版）');
 
@@ -172,21 +175,31 @@ function EnvVarRow({ entry, onRemove }: { entry: EnvVarView; onRemove: () => Pro
       >
         {shownValue}
       </span>
-      <DropdownMenu>
+      {/* modal={false}: メニューの項目からダイアログを開くと、Radix のモーダルなメニューが閉じるときに
+          body の pointer-events: none を戻し損ねて画面が押せなくなることがある。メニュー自体は
+          モーダルである必要が無いので外す。 */}
+      <DropdownMenu modal={false}>
         <DropdownMenuTrigger asChild>
           <ShadcnButton variant="ghost" size="icon-sm" aria-label={`「${entry.name}」の操作`}>
             <EllipsisVertical aria-hidden />
           </ShadcnButton>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end">
-          <DropdownMenuItem onSelect={() => setEditing(true)}>編集</DropdownMenuItem>
+          <DropdownMenuItem
+            onSelect={() => {
+              setEditSession((n) => n + 1);
+              setEditing(true);
+            }}
+          >
+            編集
+          </DropdownMenuItem>
           <DropdownMenuItem variant="destructive" onSelect={() => setConfirmingRemove(true)}>
             削除
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
 
-      <EditEnvVarDialog entry={entry} open={editing} onOpenChange={setEditing} />
+      <EditEnvVarDialog key={editSession} entry={entry} open={editing} onOpenChange={setEditing} />
       {/* 削除すると置いた値が消えて取り消せない。押した瞬間には実行せず確認を挟む（#2781） */}
       <ConfirmDialog
         open={confirmingRemove}

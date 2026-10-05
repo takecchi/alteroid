@@ -337,4 +337,39 @@ describe('/env-vars 画面 — 置く・編集・削除', () => {
     // 保存後も secret のまま（secret を送っていないので、行は伏せ字のまま）
     expect(await screen.findByText('******')).toBeTruthy();
   });
+
+  it('編集をやめて開き直すと、入力途中の値を持ち越さず、いまの登録内容から始まる', async () => {
+    const { puts } = stubCrudScreen([
+      {
+        name: 'TZ',
+        sha256: 'b'.repeat(12),
+        updatedAt: '2026-09-14T00:00:00.000Z',
+        scope: 'all',
+        secret: false,
+        value: 'UTC',
+      },
+    ]);
+
+    render(
+      <Providers>
+        <MemoryRouter>
+          <EnvVars />
+        </MemoryRouter>
+      </Providers>,
+    );
+    await waitForListLoaded();
+
+    await openMenuItem('TZ', '編集');
+    let dialog = await screen.findByRole('dialog');
+    fireEvent.change(within(dialog).getByLabelText('値'), { target: { value: 'half-typed' } });
+    fireEvent.change(within(dialog).getByLabelText('渡す先'), { target: { value: 'app' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'やめる' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+
+    await openMenuItem('TZ', '編集');
+    dialog = await screen.findByRole('dialog');
+    expect((within(dialog).getByLabelText('値') as HTMLInputElement).value).toBe('UTC');
+    expect((within(dialog).getByLabelText('渡す先') as HTMLSelectElement).value).toBe('all');
+    expect(puts).toEqual([]);
+  });
 });
