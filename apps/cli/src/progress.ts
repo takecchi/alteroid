@@ -17,17 +17,25 @@ import { redactError } from './redact.js';
  * 分母が定まらないので、率は嘘になる。**取れないものは 0 と書かない**（`null` は「—」、
  * 見込みが `unavailable` / `not_converging` なら状態と理由を言って、時間は作らない）。
  *
- * 失敗の扱い: 400（`windowHours` の形が不正）は daemon の文言をそのまま例外で上へ通す
+ * 失敗の扱い: 400（daemon が断る範囲外）は daemon の文言（欄名は --window-hours に打ち替える）を例外で上へ通す
  * （`index.ts` の `parseAsync(...).catch(...)` が stderr へ出して終了コード 1）。
  * それ以外は既存の読み取り系（`dropped.ts` など）に揃えて stdout へ書いて戻る。
  */
 
 export interface ProgressOptions {
-  /** 素の文字列のまま daemon へ渡す。検査は daemon の 400 に任せる（二重に持たない）。 */
+  /** 利用者が打った文字列。形（正の数）はここで先に見て、daemon の 400（上限など）は欄名を打ち替えて出す。 */
   windowHours?: string;
 }
 
 export async function progressCommand(options: ProgressOptions = {}): Promise<void> {
+  if (options.windowHours !== undefined) {
+    const hours = Number(options.windowHours);
+    if (options.windowHours.trim() === '' || !Number.isFinite(hours) || hours <= 0) {
+      throw new Error(
+        `--window-hours は正の数（時間）で指定する（渡されたのは ${options.windowHours}。例: --window-hours 5）`,
+      );
+    }
+  }
   const target = await resolveTarget();
   if (target.note !== null) {
     stdout.write(`${target.note}\n`);
@@ -43,8 +51,8 @@ export async function progressCommand(options: ProgressOptions = {}): Promise<vo
       const errorBody = (await response.json().catch(() => ({}))) as { error?: string };
       throw new Error(
         errorBody.error === undefined
-          ? '進捗を読めませんでした（windowHours の形が不正です）'
-          : redactError(errorBody.error),
+          ? '進捗を読めませんでした（--window-hours の形が不正です。正の数（時間）で指定する）'
+          : redactError(errorBody.error).replaceAll('windowHours', '--window-hours'),
       );
     }
     const described = describeAuthFailure(response.status, target);

@@ -167,7 +167,7 @@ export function ChatMessage({
                * が受信の途中では正しく解釈されず、閉じた瞬間に表示が
                * 変わって見える揺れが起きうる**（受信が終われば安定する）。
                */
-              <Markdown>{shown}</Markdown>
+              <Markdown headingOffset={2}>{shown}</Markdown>
             )
           ) : transient ? (
             <span className="inline-flex items-center gap-2">
