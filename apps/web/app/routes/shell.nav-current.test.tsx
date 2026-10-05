@@ -74,6 +74,8 @@ beforeEach(() => {
   setViewportWidth(DEFAULT_VIEWPORT_WIDTH);
   stubFetch((url, init) => {
     if (url.endsWith('/health')) return json(HEALTH);
+    if (url.includes('/conversations'))
+      return json({ conversations: [], scanned: 0, reachedStart: true, hiddenByLimit: 0 });
     if (url.includes('/approvals')) return json({ approvals: [] });
     if (url.endsWith('/journal/stream')) return sse([], { keepOpen: true, signal: init?.signal });
     return undefined;

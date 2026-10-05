@@ -52,6 +52,8 @@ function renderShell() {
 function stubApprovalsBody(body: unknown) {
   return stubFetch((url, init) => {
     if (url.endsWith('/health')) return json(HEALTH);
+    if (url.includes('/conversations'))
+      return json({ conversations: [], scanned: 0, reachedStart: true, hiddenByLimit: 0 });
     if (url.includes('/approvals')) return json(body);
     if (url.endsWith('/journal/stream')) return sse([], { keepOpen: true, signal: init?.signal });
     return undefined;
