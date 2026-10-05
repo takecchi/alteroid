@@ -1243,8 +1243,7 @@ class Host implements RunnerHost {
               signal: spawnOptions.signal,
               stdio: ['ignore', 'pipe', 'pipe'] as const,
             })
-        : (spawnOptions: GitSpawnOptions) =>
-            this.#spawnAsChildUser(spawnOptions);
+        : (spawnOptions: GitSpawnOptions) => this.#spawnAsChildUser(spawnOptions);
     return deleteRescueRef({
       spawn: spawnFn,
       env,

@@ -1355,7 +1355,10 @@ export function createRunnerApp(deps: RunnerAppDeps) {
       '/rescue-refs/delete',
       zValidator('json', runnerRescueRefDeleteRequestSchema, (result, c) => {
         if (!result.success) {
-          return c.json({ ok: false, error: '退避 ref の後始末の入力の形が不正（消していない）' }, 400);
+          return c.json(
+            { ok: false, error: '退避 ref の後始末の入力の形が不正（消していない）' },
+            400,
+          );
         }
         return undefined;
       }),

@@ -90,11 +90,16 @@ import type {
   JournalEntryInput,
   LastRescue,
   LastUnpushedWorkObservation,
+  RescueRemoval,
+  RescueWorktree,
+  RescueRemovalFailureKind,
+  RescueRemovalReason,
   TextMarkup,
   UnpushedWorkObservationSource,
   WorkspaceLocator,
 } from './schema.js';
 import { describeUnreadableManagerRow, type Stores } from './store.js';
+import { pruneRescueLedger, rescueRemovalDue } from './rescue-cleanup.js';
 import { withCgroupEventsNote } from './cgroup-events.js';
 import { withSystemErrorNote } from './system-error.js';
 import { describeUnpushedWorkObservationIncompleteness } from './unpushed-work-observation-format.js';
@@ -996,11 +1001,26 @@ export function mergeRescue(
   const byPath = new Map((previous?.worktrees ?? []).map((w) => [w.relativePath, w]));
   for (const tree of incoming) {
     const before = byPath.get(tree.relativePath);
+    // **後始末の記録（`pushed.removal`）はデーモンが書く**ので、runner が運んでくる `pushed` には
+    // 無い。同じ退避 commit のあいだは引き継ぐ（生きているセッションは変わらない `pushed` を
+    // 運び直す）。commit が変われば新しい退避なので引き継がない（消した印を新しい ref に
+    // 付けない）。
+    const carried: Partial<NonNullable<RescueWorktree['pushed']>> =
+      tree.pushed !== undefined &&
+      before?.pushed !== undefined &&
+      before.pushed.commit === tree.pushed.commit &&
+      before.pushed.ref === tree.pushed.ref &&
+      tree.pushed.removal === undefined &&
+      before.pushed.removal !== undefined
+        ? { removal: before.pushed.removal }
+        : {};
     byPath.set(tree.relativePath, {
       ...tree,
       ...(tree.pushed === undefined && before?.pushed !== undefined
         ? { pushed: before.pushed }
-        : {}),
+        : tree.pushed === undefined
+          ? {}
+          : { pushed: { ...tree.pushed, ...carried } }),
     });
   }
   return { at, worktrees: [...byPath.values()] };
@@ -2555,6 +2575,22 @@ export interface ManagerPool {
    * **1件の失敗で残りを止めない**（`probeTurnEnds` と同じ形）。
    */
   renotifyStalledDenials(): Promise<void>;
+  /**
+   * 退避 ref（`refs/alteroid-rescue/…`。Issue #1266）の後始末を1周する。**省略できる**
+   * （`unpushedWork` の口と同じ。外部実装・テストの偽物は持たなくてよい）。
+   *
+   * 台帳（`Job.lastRescue`）の `pushed` を見て、{@link rescueRemovalDue}（`rescue-cleanup.ts`）が
+   * 「いま消す」と判定したものを、runner の `deleteRescueRef`（資格は runner の子の環境に在る）
+   * で remote から消し、**消した時刻・理由を `pushed.removal` に残し**（`pushed` は消さない）、
+   * 日誌へ書く。消せなかったら分類を残して間隔を空けて再試行する。台帳には書くが、
+   * `origin` の ref を**台帳に無いまま**消すことは無い（台帳に無い ref＝孤児は触らない）。
+   * 併せて、もう要らない作業ツリーの項目を台帳から落とす（{@link pruneRescueLedger}）。
+   *
+   * 呼ぶのは `apps/daemon/src/manager-poller.ts`（60秒周期）。**走査の間隔はここで空ける**
+   * （10分に1回。全委譲の台帳を読むので毎分は撃たない）。重ねて走らない。1件の失敗で
+   * 残りを止めない。
+   */
+  sweepRescueRefs?(): Promise<void>;
   /**
    * このプールを止める。
    *
@@ -4850,6 +4886,17 @@ async function probeRunnerResources(
   }
 }
 
+/** 退避 ref の後始末の走査の間隔。台帳の全委譲を読むので毎分は撃たない。 */
+const RESCUE_SWEEP_INTERVAL_MS = 10 * 60_000;
+/** runner へ撃つ削除1本の期限（HTTP の期限 60 秒の内側）。 */
+const RESCUE_DELETE_DEADLINE_MS = 55_000;
+const RESCUE_REMOVAL_REASON_JOURNAL: Record<RescueRemovalReason, string> = {
+  landed: '内容がもう origin の枝に入っているため',
+  done: '委譲が done のまま猶予（3日）を過ぎたため',
+  failed: '委譲が failed のまま猶予（14日）を過ぎたため',
+  stopped: '委譲が stopped のまま猶予（14日）を過ぎたため',
+};
+
 class Pool implements ManagerPool {
   readonly #stores: Stores;
   readonly #post: (event: InboxEvent) => void;
@@ -5458,6 +5505,10 @@ class Pool implements ManagerPool {
   /** 名簿の購読を解く（`stop` で外す。外し忘れると止めたプールが後から動く）。 */
   readonly #unsubscribe: () => void;
   #stopped = false;
+  /** 退避 ref の後始末が走っている（重ねない）。 */
+  #rescueSweeping = false;
+  /** 退避 ref の後始末の走査を最後に始めた時刻（ms）。 */
+  #rescueSweptAt: number | undefined;
 
   constructor({
     stores,
@@ -8072,6 +8123,174 @@ class Pool implements ManagerPool {
       }
     }
     return nudged;
+  }
+
+  /**
+   * 退避 ref の後始末（Issue #1266）。doc は `ManagerPool#sweepRescueRefs` を参照。
+   */
+  async sweepRescueRefs(): Promise<void> {
+    if (this.#stopped || this.#rescueSweeping) return;
+    const startedAt = this.#now();
+    if (
+      this.#rescueSweptAt !== undefined &&
+      startedAt - this.#rescueSweptAt < RESCUE_SWEEP_INTERVAL_MS
+    ) {
+      return;
+    }
+    this.#rescueSweeping = true;
+    try {
+      let jobs: Job[];
+      try {
+        jobs = await this.#stores.jobs.listJobs();
+      } catch (error) {
+        noteDroppedRecord('退避 ref の後始末', '台帳を読めなかった', error);
+        return;
+      }
+      this.#rescueSweptAt = startedAt;
+      for (const job of jobs) {
+        if (this.#stopped) break;
+        if (job.lastRescue === undefined) continue;
+        try {
+          await this.#sweepRescueOf(job.id, job);
+        } catch (error) {
+          // 1件の失敗で残りを止めない（`probeTurnEnds` と同じ形）。
+          noteDroppedRecord('退避 ref の後始末', `managerId=${job.id}`, error);
+        }
+      }
+    } finally {
+      this.#rescueSweeping = false;
+    }
+  }
+
+  async #sweepRescueOf(managerId: string, listed: Job): Promise<void> {
+    // 生きた像が在るなら、そちらが正（書き戻しで台帳を上書きされないため）。
+    const record = this.#records.get(managerId);
+    const job = record?.job ?? listed;
+    const rescue = job.lastRescue;
+    if (rescue === undefined) return;
+    const now = this.#now();
+    for (const tree of rescue.worktrees) {
+      if (this.#stopped) return;
+      const reason = rescueRemovalDue(job.status, rescue.at, tree, now);
+      const pushed = tree.pushed;
+      if (reason === undefined || pushed === undefined) continue;
+      const outcome = await this.#deleteRescueRefVia(job, pushed);
+      const at = new Date(this.#now()).toISOString();
+      const attempts = outcome.ok
+        ? undefined
+        : (pushed.removal?.failureKind === undefined ? 0 : (pushed.removal.attempts ?? 1)) + 1;
+      const removal: RescueRemoval = outcome.ok
+        ? { at, reason }
+        : {
+            at,
+            reason,
+            failureKind: outcome.kind,
+            ...(attempts === undefined ? {} : { attempts }),
+          };
+      const applied = await this.#updateRescueLedger(managerId, (current) => {
+        const index = current.worktrees.findIndex(
+          (w) =>
+            w.relativePath === tree.relativePath &&
+            w.pushed?.commit === pushed.commit &&
+            w.pushed.ref === pushed.ref,
+        );
+        const target = current.worktrees[index];
+        if (index < 0 || target?.pushed === undefined) return null;
+        const worktrees = [...current.worktrees];
+        worktrees[index] = { ...target, pushed: { ...target.pushed, removal } };
+        return { ...current, worktrees };
+      });
+      if (!applied) continue;
+      // 日誌。消した回は必ず。消せなかった回は初回と分類が変わった回だけ（再試行のたびに積まない）。
+      if (outcome.ok) {
+        await this.#journal({
+          type: 'decision',
+          decision: `退避 ref ${pushed.ref} を origin から消した（${RESCUE_REMOVAL_REASON_JOURNAL[reason]}）。`,
+          grounds:
+            `作業ツリー ${tree.relativePath}、退避 commit ${pushed.commit.slice(0, 8)}。` +
+            (outcome.alreadyGone ? '消そうとしたときには既に無かった。' : '') +
+            '台帳の pushed は残し、消した時刻と理由を removal に付けた。',
+        });
+      } else if (pushed.removal?.failureKind !== outcome.kind) {
+        await this.#journal({
+          type: 'decision',
+          decision: `退避 ref ${pushed.ref} を消せなかった（${outcome.kind}）。`,
+          grounds:
+            `理由の分類のみ記録（${RESCUE_REMOVAL_REASON_JOURNAL[reason]}ので消そうとした）。` +
+            '間隔を空けて再試行する。台帳の pushed.removal に回数が残る。',
+        });
+      }
+    }
+    // 台帳から、もう要らない作業ツリーの項目を落とす（C3）。
+    await this.#updateRescueLedger(
+      managerId,
+      (current) => pruneRescueLedger(job.status, current, this.#now()),
+      true,
+    );
+  }
+
+  /**
+   * 台帳の `lastRescue` を書き換える。`mutate` は同期で、`null` は「変えない」、
+   * `undefined` は「欄ごと外す」（`allowRemove` のときだけ）。変えたら `true`。
+   * 生きた像（`#records`）が在るならそちらを書いて `#persist`、無ければ台帳を
+   * 排他区間の中で読み直して書く（`updateJob`）。
+   */
+  async #updateRescueLedger(
+    managerId: string,
+    mutate: (current: LastRescue) => LastRescue | undefined | null,
+    allowRemove = false,
+  ): Promise<boolean> {
+    const record = this.#records.get(managerId);
+    if (record !== undefined) {
+      const current = record.job.lastRescue;
+      if (current === undefined) return false;
+      const next = mutate(current);
+      if (next === null || (next === undefined && !allowRemove)) return false;
+      if (next === undefined) delete record.job.lastRescue;
+      else record.job.lastRescue = next;
+      await this.#persist(record);
+      return true;
+    }
+    let changed = false;
+    await this.#stores.jobs.updateJob(managerId, (current) => {
+      if (current.lastRescue === undefined) return current;
+      const next = mutate(current.lastRescue);
+      if (next === null || (next === undefined && !allowRemove)) return current;
+      changed = true;
+      const { lastRescue: _dropped, ...rest } = current;
+      return next === undefined ? rest : { ...rest, lastRescue: next };
+    });
+    return changed;
+  }
+
+  /**
+   * runner の `deleteRescueRef` で撃つ。宛先は委譲の runner、無ければ（器が入れ替わった・
+   * 古い）名簿に開いている別の runner——資格は器ごとに降りているので、どれも消せる。
+   * **口を持たない・答えない・投げる runner に「消した」を書かせない**（`failed` へ倒す）。
+   */
+  async #deleteRescueRefVia(
+    job: Job,
+    pushed: NonNullable<RescueWorktree['pushed']>,
+  ): Promise<{ ok: true; alreadyGone: boolean } | { ok: false; kind: RescueRemovalFailureKind }> {
+    if (pushed.remote === undefined) return { ok: false, kind: 'no-remote' };
+    const primary = await this.#runnerOf({ job, waiting: [], attached: false });
+    const open = await this.#runners.list().catch(() => []);
+    const runner = [primary, ...open].find(
+      (candidate): candidate is RunnerClient =>
+        candidate !== null && candidate.deleteRescueRef !== undefined,
+    );
+    if (runner?.deleteRescueRef === undefined) return { ok: false, kind: 'no-runner' };
+    try {
+      const result = await runner.deleteRescueRef(
+        { remote: pushed.remote, ref: pushed.ref, commit: pushed.commit },
+        { signal: AbortSignal.timeout(RESCUE_DELETE_DEADLINE_MS) },
+      );
+      return result.outcome === 'removed'
+        ? { ok: true, alreadyGone: result.alreadyGone }
+        : { ok: false, kind: result.kind };
+    } catch {
+      return { ok: false, kind: 'other' };
+    }
   }
 
   /**

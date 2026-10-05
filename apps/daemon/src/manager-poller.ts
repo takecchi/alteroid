@@ -98,6 +98,10 @@ export function startManagerPolling(options: ManagerPollerOptions): ManagerPolle
       // 同じ理由で `.catch()` により二重に握る——止まった委譲へ知らせ直す
       // 逃げ道が、このポーラー自身の失敗でデーモンごと落ちることはない。
       .then(() => options.managers.renotifyStalledDenials().catch(() => undefined))
+      // **さらにその後ろに `sweepRescueRefs()`（Issue #1266。退避 ref の後始末）。** 他の関心事と
+      // 順序の依存は無い（読む像は `job.lastRescue` だけ）。走査の間隔はプール側が10分に空ける。
+      // 口を持たない実装（テストの偽物）は飛ばす。
+      .then(() => options.managers.sweepRescueRefs?.().catch(() => undefined))
       // **戻り値（起こせた managerId の一覧）はこのポーラーからは捨てる。**
       // `probe()` の型は `Promise<void>` で揃えてある——呼び出し元
       // （テストの `refresh()`）は「1周した」ことだけを知ればよい。
