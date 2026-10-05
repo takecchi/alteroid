@@ -44,10 +44,10 @@ function renderCard(health: { storage: string; pid: number }) {
         ok: true,
         pid: health.pid,
         operator: false,
-        storage: health.storage,
         auth: { enabled: false, providers: [] },
       });
     }
+    if (url.includes('/status')) return json({ storage: health.storage });
     return undefined;
   });
   render(
@@ -189,7 +189,6 @@ describe('接続先の出どころを画面で区別する（本3）', () => {
           ok: true,
           pid: 1,
           operator: false,
-          storage: '/data',
           auth: { enabled: false, providers: [] },
         });
       }
@@ -233,7 +232,6 @@ describe('「既定に戻す」の表示（本3-3）', () => {
           ok: true,
           pid: 1,
           operator: false,
-          storage: '/data',
           auth: { enabled: false, providers: [] },
         });
       }
@@ -300,7 +298,6 @@ function renderWithEndpoints(options: { buildTime?: string; respondTo?: string }
       ok: true,
       pid: 1,
       operator: false,
-      storage: '/data',
       auth: { enabled: false, providers: [] },
     });
   });
@@ -578,5 +575,29 @@ describe('説明文の言い方（#2782）', () => {
     expect(details?.querySelector('summary')?.textContent).toBe('開発者向けの詳細');
     expect(details?.textContent).toContain('CORS');
     expect(details?.textContent).toContain('VITE_ALTEROID_API_URL');
+  });
+});
+
+describe('記憶の行は認証の後ろの /status から取る（#2869）', () => {
+  it('取れたとき、/status の storage を出す（/health には storage が無い）', async () => {
+    renderCard({ storage: '/srv/alteroid', pid: 1 });
+    expect(await screen.findByText('/srv/alteroid')).toBeTruthy();
+  });
+
+  it('取れないとき（401）は例外にせず「取得できません」と言い、カードは残る', async () => {
+    stubFetch((url) => {
+      if (url.includes('/health')) {
+        return json({ ok: true, pid: 1, operator: false, auth: { enabled: true, providers: [] } });
+      }
+      if (url.includes('/status')) return json({ error: 'unauthorized' }, 401);
+      return undefined;
+    });
+    render(
+      <Providers>
+        <ConnectionCard />
+      </Providers>,
+    );
+    expect(await screen.findByText('取得できません（ログインが要る場合があります）')).toBeTruthy();
+    expect(screen.getByText('応答あり')).toBeTruthy();
   });
 });
