@@ -52,24 +52,14 @@ let client: TestDbHandle;
 let db: Db;
 let stores: PgStores;
 
-/**
- * **待ち時間の上限は、並列の負荷でテストが偽陽性に落ちないよう広く取る**（#3025）。
- * vitest の既定（テスト5秒・フック10秒）は、複数ファイルを同時に回した器では PGlite（wasm）の
- * 起動や本物の PostgreSQL の `CREATE DATABASE`（advisory lock で直列）が CPU を取り合って
- * 届きうる。このファイルの判定は時刻でも待ちでもなく、行・SQL の本数と戻りの値で決まる
- * （下の「行の版メモ」）ので、上限を広げても保証は1つも変わらない。`--testTimeout` は
- * 触れない（`scripts/test-guard-core.mjs`）ので、個別に指定する。
- */
-const HOOK_TIMEOUT_MS = 60_000;
-
 beforeEach(async () => {
   ({ client, db } = await createMigratedTestDb());
   stores = createPgStoresFromDb(db);
-}, HOOK_TIMEOUT_MS);
+});
 
 afterEach(async () => {
   await client.close();
-}, HOOK_TIMEOUT_MS);
+});
 
 describe('migrate', () => {
   it('二度通しても壊れない（起動のたびに走る）', async () => {
@@ -907,11 +897,18 @@ describe('PgJobStore', () => {
    * 出ること、書き換えが温かい覚えにも届くこと、壊れた行の跡が2回目でも
    * 同じ文言で出ること、そして2回目が jsonb を1行も引かないことを撃つ。
    */
-  describe('listJobs() の行の版メモ（Issue #900）', { timeout: HOOK_TIMEOUT_MS }, () => {
+  describe('listJobs() の行の版メモ（Issue #900）', () => {
     // **要素を対称にしない。** id・createdAt・status・本文をすべて違う値にし、
     // どれか2つを入れ替えたら少なくとも1つのアサーションが落ちる形にする。
     const t = (offsetMs: number) =>
       new Date(Date.parse('2026-01-01T00:00:00.000Z') + offsetMs).toISOString();
+
+    /**
+     * SQL を数えるアサーションの失敗メッセージ（#3025）。落ちたとき、実際に出た本数と文だけで
+     * 切り分けられるようにする。**文だけでパラメータは載せない。**
+     */
+    const dump = (label: string, qs: readonly string[]): string =>
+      `${label}: ${qs.length} 本\n${qs.map((q, i) => `  [${i}] ${q}`).join('\n')}`;
 
     async function seedFour(): Promise<void> {
       await stores.jobs.putJob({
@@ -1090,10 +1087,16 @@ describe('PgJobStore', () => {
       const secondCallQueries = [...queries];
 
       // 1回目は段2（jsonb を引く SELECT）が出る。
-      expect(firstCallQueries.some((q) => /select .*"job".* from "jobs"/i.test(q))).toBe(true);
+      expect(
+        firstCallQueries.some((q) => /select .*"job".* from "jobs"/i.test(q)),
+        dump('1回目', firstCallQueries),
+      ).toBe(true);
       // 2回目は段1（id/xmin/updated_at だけ）しか出ない——jsonb 列を選ぶ形が無い。
-      expect(secondCallQueries.some((q) => /select .*"job".* from "jobs"/i.test(q))).toBe(false);
-      expect(secondCallQueries.length).toBe(1);
+      expect(
+        secondCallQueries.some((q) => /select .*"job".* from "jobs"/i.test(q)),
+        dump('2回目', secondCallQueries),
+      ).toBe(false);
+      expect(secondCallQueries.length, dump('2回目', secondCallQueries)).toBe(1);
     });
 
     /**
@@ -1129,8 +1132,8 @@ describe('PgJobStore', () => {
       await localStores.jobs.listJobs();
       const coldCallQueries = [...queries];
       const coldStage2 = coldCallQueries.filter((q) => /select .*"job".* from "jobs"/i.test(q));
-      expect(coldStage2).toHaveLength(1);
-      expect(coldStage2[0]).not.toMatch(/where/i);
+      expect(coldStage2, dump('冷たい1回目', coldCallQueries)).toHaveLength(1);
+      expect(coldStage2[0], dump('冷たい1回目', coldCallQueries)).not.toMatch(/where/i);
 
       // b だけ書き換える ⟹ 2回目は a が温かい・b だけ stale(一部)。
       await localStores.jobs.putJob({
@@ -1148,8 +1151,10 @@ describe('PgJobStore', () => {
       const partialStage2 = partialCallQueries.filter((q) =>
         /select .*"job".* from "jobs"/i.test(q),
       );
-      expect(partialStage2).toHaveLength(1);
-      expect(partialStage2[0]).toMatch(/where "jobs"\."id" in/i);
+      expect(partialStage2, dump('一部 stale の2回目', partialCallQueries)).toHaveLength(1);
+      expect(partialStage2[0], dump('一部 stale の2回目', partialCallQueries)).toMatch(
+        /where "jobs"\."id" in/i,
+      );
     });
 
     /**
