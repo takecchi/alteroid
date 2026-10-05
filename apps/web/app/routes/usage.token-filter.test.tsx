@@ -70,7 +70,7 @@ describe('/usage 画面の token 欄（issue #2059）', () => {
     renderUsage();
 
     await screen.findByText(/その範囲には記録が無い/);
-    fireEvent.change(screen.getByPlaceholderText('token id'), { target: { value: 'tok-1' } });
+    fireEvent.change(screen.getByPlaceholderText('トークンの番号'), { target: { value: 'tok-1' } });
 
     await waitFor(() => {
       expect(calls.some((url) => url.searchParams.get('tokenId') === 'tok-1')).toBe(true);
@@ -86,7 +86,9 @@ describe('/usage 画面の token 欄（issue #2059）', () => {
     renderUsage();
 
     await screen.findByText(/その範囲には記録が無い/);
-    fireEvent.change(screen.getByPlaceholderText('manager id'), { target: { value: 'mgr-1' } });
+    fireEvent.change(screen.getByPlaceholderText('マネージャーの番号'), {
+      target: { value: 'mgr-1' },
+    });
 
     await waitFor(() => {
       expect(calls.some((url) => url.searchParams.get('managerId') === 'mgr-1')).toBe(true);

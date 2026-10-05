@@ -77,3 +77,13 @@ describe('ChoiceChips', () => {
     expect(onChange).toHaveBeenCalledWith('b');
   });
 });
+
+describe('ChoiceChips の寸法', () => {
+  it('タッチ（pointer: coarse）では 44px（min-h-11）まで広がる', () => {
+    render(<ChoiceChips label="窓" options={OPTIONS} value="a" onChange={() => {}} />);
+    for (const radio of screen.getAllByRole('radio')) {
+      expect(radio.className).toContain('min-h-7');
+      expect(radio.className).toContain('pointer-coarse:min-h-11');
+    }
+  });
+});

@@ -15,6 +15,7 @@
  */
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { StrictMode } from 'react';
 
 import { useHealth } from './hooks/queries';
 import { json, Providers, stubFetch, storeTestBaseUrl, TEST_BASE_URL } from './test-support';
@@ -90,5 +91,66 @@ describe('ApiError の message の伏せ字（issue #2600）', () => {
     const { ApiError } = await import('./api');
     const token = `ghp_${'A1b2C3d4E5'.repeat(4)}`;
     expect(new ApiError(500, `failed ${token}`).message).not.toContain(token);
+  });
+});
+
+describe('世代の紐（issue #2768）', () => {
+  it('StrictMode で包んでも、通信が中断済みの紐で始まらない', async () => {
+    stubFetch((url, init) => {
+      if (url !== `${TEST_BASE_URL}/health`) return undefined;
+      // 本物の fetch と同じく、応答が届く前に中断されたら（呼ばれた時点で
+      // 中断済みでも）落とす。
+      return new Promise<Response>((resolve, reject) => {
+        setTimeout(() => {
+          if (init?.signal?.aborted === true) {
+            reject(new DOMException('signal is aborted without reason', 'AbortError'));
+          } else {
+            resolve(json(health(1, '/old')));
+          }
+        }, 5);
+      });
+    });
+
+    render(
+      <StrictMode>
+        <Providers>
+          <Probe />
+        </Providers>
+      </StrictMode>,
+    );
+
+    await waitFor(() => expect(screen.getByTestId('pid').textContent).toBe('1'));
+  });
+
+  it('接続先を切り替えたら、前の接続先への通信は打ち切られ、新しい側は生きている', async () => {
+    const signals: Record<string, AbortSignal | null | undefined> = {};
+    stubFetch((url, init) => {
+      if (url === `${TEST_BASE_URL}/health`) {
+        signals.old = init?.signal;
+        // 返事が来ないまま残る（切り替えの後に届く古い応答の役）。
+        return new Promise<Response>(() => {});
+      }
+      if (url === `${OTHER_BASE_URL}/health`) {
+        signals.next = init?.signal;
+        return json(health(2, '/new'));
+      }
+      return undefined;
+    });
+
+    render(
+      <StrictMode>
+        <Providers>
+          <Probe />
+        </Providers>
+      </StrictMode>,
+    );
+    await waitFor(() => expect(signals.old).toBeDefined());
+    expect(signals.old?.aborted).toBe(false);
+
+    screen.getByRole('button', { name: 'switch' }).click();
+
+    await waitFor(() => expect(screen.getByTestId('pid').textContent).toBe('2'));
+    expect(signals.old?.aborted).toBe(true);
+    expect(signals.next?.aborted).toBe(false);
   });
 });

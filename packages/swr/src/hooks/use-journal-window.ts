@@ -6,8 +6,8 @@
  * `GET /journal` の実際の呼び出しに配線するだけの層である。
  *
  * `journal.tsx` はこのフックが返す `entries` をそのまま `Virtualizer` の
- * 子として並べる。`prepended` は「先頭に何か足された直後の1回の描画」を
- * 示す — virtua の `shift` prop に何を渡すかは、これと「いま上端に居るか」
+ * 子として並べる。`prepended` は「直近の `entries` の更新が先頭への足しだったか」を
+ * 示す（次の更新まで残る）— virtua の `shift` prop に何を渡すかは、これと「いま上端に居るか」
  * （scroll 位置。ここでは持たない）を `packages/logic/src/journal-window.ts` の
  * `shiftForPrepend` へ渡して決める（呼び出し側 = `journal.tsx` の仕事）。
  *
@@ -89,17 +89,12 @@ export interface JournalWindow {
   refreshNewer: () => void;
 
   /**
-   * 先頭に何か足された直後の1回の描画だけ `true`。
+   * 直近の `entries` の更新が、先頭に何か足された（新着）ものだったとき `true`。次の更新まで残る。
    *
-   * ref ではなく「前回の描画と比べて調整する」React 公式パターン
-   * （https://react.dev/learn/you-might-not-need-an-effect#adjusting-some-state-when-a-prop-changes）
-   * で作る — `apps/web` の eslint（`react-hooks/refs`）は、レンダー中に
-   * ref の `current` を読むこと自体を検出して落とす（先頭に足す/足さない
-   * で値が変わるはずなのに、React が re-render を要求されていない ref の
-   * 変化を追いかけられず、古い値のまま描画され得るため）。「先頭の1件目の
-   * id が前回の描画と変わったか」で判定する — 末尾へ足す（`mergeBack`）
-   * 操作は先頭の id を絶対に変えないので、この条件は「先頭に足された」
-   * ことの誤検出の無い代理になる。
+   * 更新と同じ state に載せてある（`setEntries`）。レンダー中に前回と比べて `setState` で調整する形は、
+   * その描画の結果を捨てて描き直すので、コミットされる描画では常に `false` になる（issue #2774）。
+   * 「先頭の1件目の id が変わり、かつ件数が増えた」で判定する — 末尾へ足す（`mergeBack`）操作は
+   * 先頭の id を絶対に変えない。
    *
    * **`shift` そのものではない。** `shift` に何を渡すかは
    * `packages/logic/src/journal-window.ts` の `shiftForPrepend(prepended, atTop)` が
@@ -126,7 +121,6 @@ export function useJournalWindow(selected: readonly JournalEntryType[], q = ''):
   const { recent } = useJournalFeed();
   const joined = selected.join(',');
 
-  const [entries, setEntries] = useState<JournalEntry[]>([]);
   const [isLoadingInitial, setLoadingInitial] = useState(true);
   const [error, setError] = useState<unknown>(undefined);
   const [olderStatus, setOlderStatus] = useState<PageOutcome>('progress');
@@ -140,17 +134,32 @@ export function useJournalWindow(selected: readonly JournalEntryType[], q = ''):
   // 上書きしておく（次に `'end'` になったとき古い応答の値を見せない）。
   const [horizonNote, setHorizonNote] = useState<string | undefined>(undefined);
 
-  // --- prepended（先頭に足された直後の1回の描画だけ true）------------------
-  // 「前回の描画からの差分」を state として持ち、レンダー中に比べて
-  // 調整する（effect ではない。上のクラス doc を参照）。
-  const [prevFrontId, setPrevFrontId] = useState<string | undefined>(entries[0]?.id);
-  const [prevLength, setPrevLength] = useState(entries.length);
-  const frontId = entries[0]?.id;
-  let prepended = false;
-  if (frontId !== prevFrontId) {
-    prepended = prevLength > 0 && entries.length > prevLength;
-    setPrevFrontId(frontId);
-    setPrevLength(entries.length);
+  // --- prepended（直近の `entries` の更新が「先頭に足された」ものだったか）---
+  // **更新と同じ state に載せる**（`setEntries` の中で決める）。かつては「前回の描画と
+  // 比べて、レンダー中に `setState` で調整する」形だった（React 公式の
+  // 「prop が変わったら state を調整する」）が、その形は `setState` を呼んだ描画の結果を
+  // **捨てて**描き直す——先頭に足された描画では `true` が立ち、捨てられた描画の側にしか
+  // 無かった。コミットされる描画では常に `false` になり、virtua の `shift` が1度も効かず、
+  // 読んでいる行が新着のたびに押し流されていた（issue #2774。実機で行の位置が新着1件ごとに
+  // 約39px 下がるのを測った）。
+  // **次の更新が来るまで `true` のまま残る**（更新が末尾への足し・初回読み込みなら `false`
+  // に戻る）。`shift` は virtua が「件数が変わった描画」でだけ見るので、残っていても
+  // 再描画（scroll・状態の更新）では何も起きない。
+  const [state, setState] = useState<{ entries: JournalEntry[]; prepended: boolean }>({
+    entries: [],
+    prepended: false,
+  });
+  const { entries, prepended } = state;
+  function setEntries(next: JournalEntry[]): void {
+    setState((previous) => ({
+      entries: next,
+      // 先頭の id が変わり、かつ件数が増えた＝先頭に足された。末尾へ足す
+      // （`mergeBack`）操作は先頭の id を絶対に変えない。
+      prepended:
+        previous.entries.length > 0 &&
+        next.length > previous.entries.length &&
+        next[0]?.id !== previous.entries[0]?.id,
+    }));
   }
 
   // `entries` の最新値を非同期コールバックから読むための ref。

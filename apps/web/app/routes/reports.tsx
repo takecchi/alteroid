@@ -1,8 +1,18 @@
+import { useId } from 'react';
 import { Link } from 'react-router';
 
-import { Markdown, Page, Card, Empty, ErrorNote, Spinner, cn } from '@alteroid/ui';
+import {
+  markdownComponents,
+  toReact,
+  Page,
+  Card,
+  Empty,
+  ErrorNote,
+  Spinner,
+  cn,
+} from '@alteroid/ui';
 import { useReport, useReports } from '@alteroid/swr';
-import { formatDateTime, formatTime, redactBody } from '@alteroid/logic';
+import { formatDateTime, redactBody } from '@alteroid/logic';
 
 import type { DailyReport } from '@alteroid/logic';
 
@@ -85,8 +95,43 @@ export function UnavailableNote({ reason }: { reason: string }) {
  * だから日は `date`（その日報が何日について書かれたか）、時刻は `at`（いつ書か
  * れたか）で、2つは別の軸として並べる。
  */
-function reportLabel(report: DailyReport): string {
-  return `${report.date} ${formatTime(report.at)}`;
+function reportTitle(date: string): string {
+  return `${date} の日報`;
+}
+
+/**
+ * 「いつ書かれたか」。**日付つきで出す**（時:分だけだと、翌日に書かれた1件が
+ * 日報の日の 00:30 に書かれたように読める。#2779）。端末の時間帯の時刻で出す
+ * （`formatDateTime`）。
+ */
+function writtenAt(report: DailyReport): string {
+  return `${formatDateTime(report.at)} に書かれた`;
+}
+
+/**
+ * 本文の見出しを**1段下げて**描く。画面の見出し（h1「日報」）・カードの見出し（h2）
+ * の下に本文の `#` が h1 で並ばないようにする（#2780）。`Markdown`（共通部品）は
+ * 本文の見出しを書かれたとおりの段で描くので、この画面だけ見出しの部品を差し替える
+ * （共通部品は変えていない）。h1→h3 … h4→h6、h5・h6 は h6 に畳む（HTML に h7 は無い）。
+ * 見た目は差し替え先の段の部品のものになる。
+ */
+const reportMarkdownComponents: typeof markdownComponents = {
+  ...markdownComponents,
+  h1: markdownComponents.h3,
+  h2: markdownComponents.h4,
+  h3: markdownComponents.h5,
+  h4: markdownComponents.h6,
+  h5: markdownComponents.h6,
+  h6: markdownComponents.h6,
+};
+
+function ReportMarkdown({ children }: { children: string }) {
+  const prefix = 'md' + useId().replace(/[^A-Za-z0-9_-]/g, '') + '-';
+  return (
+    <div className="min-w-0 text-sm break-words">
+      {toReact(children, reportMarkdownComponents, prefix)}
+    </div>
+  );
 }
 
 /**
@@ -202,8 +247,22 @@ export default function Reports({ loaderData }: Route.ComponentProps) {
                         reports[index + 1]?.date !== report.date && 'border-b border-border',
                         report.id === selectedId && 'bg-muted text-primary',
                       )}
+                      aria-current={report.id === selectedId ? 'page' : undefined}
                     >
-                      {reportLabel(report)}
+                      <span className="block">{reportTitle(report.date)}</span>
+                      <span className="block text-xs text-muted-foreground">
+                        {writtenAt(report)}
+                        {/*
+                          同じ日が複数あるとき、**並びの先頭（書かれたのが最も新しい）に
+                          だけ**「最新」を付ける。並びはデーモンが決めている（上）。
+                        */}
+                        {reports[index - 1]?.date !== report.date &&
+                          reports[index + 1]?.date === report.date && (
+                            <span className="ml-1 rounded border border-border px-1 text-[11px]">
+                              最新
+                            </span>
+                          )}
+                      </span>
                       {/*
                         **印の付いた行は、開く前に分かる形にする。** 印を出さないと
                         「日報がある行」と同じ顔になり、人間は開くまで気づけない
@@ -234,7 +293,17 @@ export default function Reports({ loaderData }: Route.ComponentProps) {
           )}
         </Card>
 
-        {selectedDate === undefined && listUnavailable ? null : selectedDate === undefined ? (
+        {selectedDate === undefined && listUnavailable ? null : selectedDate === undefined &&
+          list.isLoading ? (
+          /*
+            **読み込み中に「1件も無い」と言わない**（#2803）。一覧がまだ来ていないだけで
+            `selectedDate` が無いので、「無い」と区別できない。一覧の取得が終わって0件だった
+            ときだけ下の「1件も無い」を出す。
+          */
+          <Card className="min-w-0">
+            <Spinner />
+          </Card>
+        ) : selectedDate === undefined ? (
           <Card className="min-w-0">
             <Empty>
               日報が1件も無い。クローンが締め時刻にまとめる（スケジュールから今すぐ回せる）。
@@ -278,9 +347,7 @@ function ReportBody({ date, reportId }: { date: string; reportId: string | undef
   return (
     <Card className="min-w-0">
       <div className="border-b border-border px-4 py-3">
-        <h2 className="text-sm font-semibold">
-          {report === undefined ? date : reportLabel(report)}
-        </h2>
+        <h2 className="text-sm font-semibold">{reportTitle(date)}</h2>
       </div>
       <ErrorNote error={error} className="m-4" />
       {isLoading ? (
@@ -301,7 +368,7 @@ function ReportBody({ date, reportId }: { date: string; reportId: string | undef
           {isUnavailable(report) ? (
             <UnavailableNote reason={report.unavailable} />
           ) : (
-            <Markdown>{redactBody(report.body)}</Markdown>
+            <ReportMarkdown>{redactBody(report.body)}</ReportMarkdown>
           )}
         </article>
       )}

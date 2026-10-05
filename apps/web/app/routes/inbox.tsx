@@ -430,9 +430,10 @@ function InboxRemoveCard() {
           <p className="mb-1 text-xs text-muted-foreground">種類（最低1つ）</p>
           <div className="flex flex-col gap-1">
             {INBOX_TYPE_ORDER.map((type) => (
-              <label key={type} className="flex items-center gap-2 text-xs">
+              <label key={type} className="flex items-center gap-2 text-xs pointer-coarse:min-h-11">
                 <input
                   type="checkbox"
+                  className="pointer-coarse:size-5"
                   checked={selectedTypes.has(type)}
                   onChange={() => toggleType(type)}
                 />

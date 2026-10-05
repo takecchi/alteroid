@@ -748,7 +748,7 @@ function LastReportBody({
   lastFailure: ManagerSummary['lastFailure'] | undefined;
 }) {
   if (lastFailure === undefined || lastFailure === null) {
-    return <Markdown>{redactBody(lastReport)}</Markdown>;
+    return <Markdown headingOffset={2}>{redactBody(lastReport)}</Markdown>;
   }
   return (
     <pre className="overflow-x-auto rounded border border-border bg-background p-2 text-[11px] break-words whitespace-pre-wrap text-muted-foreground">

@@ -8,12 +8,14 @@ import {
   ChatMessage,
   ChatMessageEditor,
   ChatMessageList,
+  ChatTurnFailure,
   ConversationList as UiConversationList,
   Drawer,
   Card,
   Empty,
   ErrorNote,
   Spinner,
+  TurnFailureNote,
   useIsMobile,
 } from '@alteroid/ui';
 import {
@@ -28,7 +30,7 @@ import {
   useApi,
   type ChatStreamEvent,
 } from '@alteroid/swr';
-import { formatRelative, redactError } from '@alteroid/logic';
+import { formatDateTime, formatRelative, redactError } from '@alteroid/logic';
 import type { ConversationMessage } from '@alteroid/logic';
 
 import type { Route } from './+types/chat';
@@ -50,6 +52,12 @@ export function clientLoader({ params }: Route.ClientLoaderArgs) {
  * しない、の両方に転びうる）。
  */
 const BOTTOM_THRESHOLD_PX = 32;
+
+/**
+ * ストリームの `error` イベント（ターンが失敗した）由来の失敗。入力欄の上の帯が、ネットワーク断・
+ * 403 のような「呼べなかった」失敗（ただの `Error`）と見分けて、利用者向けの文で描くための型。
+ */
+class TurnFailedError extends Error {}
 
 /** 画面に出す1行。届いた順に並べる。 */
 interface Line {
@@ -82,6 +90,12 @@ interface Line {
    * 唯一の根拠がこれ——`role === 'human'` だけで判定すると、まだサーバに
    * 存在しない行にも編集の入口が出てしまう。
    */
+  /**
+   * この行が「返信ではなく、返せなかった知らせ」であれば、その種類（サーバの
+   * `ConversationMessage.turnFailure` をそのまま写す。**文面では見分けない**）。
+   * `failed` はもう一度送れば試し直せる、`held` は枠が開けばクローンが自分で試し直す。
+   */
+  turnFailure?: 'failed' | 'held';
   journalId?: string;
 }
 
@@ -597,6 +611,13 @@ export function ChatPane({
    */
   const [endingConversation, setEndingConversation] = useState(false);
   /**
+   * 「会話を終える」が成功した結果（#2759）。終えた会話の id を持つ。成功すると画面は
+   * 新しい会話（`/chat`）へ移るので、**移った先の見出しの下に1行で出す**——何も
+   * 出さないと、押した人には空の画面へ切り替わっただけに見える。出すのは新しい会話
+   * （`shownId` が無い）の間だけで、別の会話へ移ったら捨てる（下の render 時の判断）。
+   */
+  const [endNotice, setEndNotice] = useState<{ fromId: string } | undefined>(undefined);
+  /**
    * `handleEndConversation` の失敗（ネットワーク断・403 等）。`interruptFailure`
    * と同じ理由・同じ形で押した時点の会話 id を持つ（Issue #2171）——`ChatPane` は
    * 会話を切り替えても作り直されない（このファイル冒頭の doc）ので、応答が
@@ -990,6 +1011,7 @@ export function ChatPane({
           // ——編集の入口を出すかは呼び出し側が `role === 'human'` も併せて
           // 見るので、ここでは単に「サーバ確定済みの発言である」ことを表す。
           journalId: message.id,
+          ...(message.turnFailure === undefined ? {} : { turnFailure: message.turnFailure }),
         },
       }));
 
@@ -1536,7 +1558,7 @@ export function ChatPane({
          */
         case 'error':
           settleReply();
-          setFailures((prev) => new Map(prev).set(stream.id, new Error(event.message)));
+          setFailures((prev) => new Map(prev).set(stream.id, new TurnFailedError(event.message)));
           break;
         case 'done':
           settleReply();
@@ -1927,8 +1949,10 @@ export function ChatPane({
     async (pressedConversationId: string) => {
       setEndingConversation(true);
       setEndFailure(undefined);
+      setEndNotice(undefined);
       try {
         await endConversation(pressedConversationId);
+        setEndNotice({ fromId: pressedConversationId });
         navigate('/chat');
       } catch (caught) {
         setEndFailure({ conversationId: pressedConversationId, error: caught });
@@ -1977,10 +2001,44 @@ export function ChatPane({
 
   const shownFailure = visibleFailure ?? visibleInterruptFailure ?? visibleEndFailure;
 
+  /**
+   * 「会話を終える」の結果の文を出してよいか（#2759）。終えた直後の新しい会話
+   * （`shownId` が無い）だけで出す。**終えた会話とは別の会話へ移ったら捨てる**
+   * ——render 時に state を直すのは、この画面の他の箇所（`routeId !== shownId`）と同じ形。
+   */
+  if (endNotice !== undefined && shownId !== undefined && shownId !== endNotice.fromId) {
+    setEndNotice(undefined);
+  }
+  const visibleEndNotice =
+    endNotice !== undefined && shownId === undefined
+      ? '会話を終えました。ここまでの学びを記憶にまとめます。終えた会話は左の一覧に残っていて、開けば続きを話せます。'
+      : undefined;
+
+  /**
+   * 見出しの下の1行（#2760）。会話 id ではなく、見分けに役立つ開始日時と発言数（人間とクローンの発言の合計。畳まれた旧発言は除く）を出す。
+   * **遡った窓の中でしか数えていない**（`history.data.reachedStart`）ので、先頭に
+   * 届いていないときは「以降」「以上」と言い、実際の開始を言い切らない。
+   * 履歴がまだ読めていない間は何も出さない（嘘の数を出さない）。
+   */
+  const headerSubtitle = (() => {
+    const data = history.data;
+    if (shownId === undefined || data === undefined) return undefined;
+    const visible = (data.messages ?? []).filter((message) => message.supersededBy === undefined);
+    const first = visible[0];
+    if (first === undefined) return 'まだ発言が無い';
+    const startedAt = visible.reduce(
+      (earliest, message) => (message.at < earliest ? message.at : earliest),
+      first.at,
+    );
+    const open = data.reachedStart === false;
+    return `${formatDateTime(startedAt)}${open ? ' 以降' : ' に開始'} · 発言 ${visible.length} 件${open ? '以上' : ''}`;
+  })();
+
   return (
     <div className="flex min-w-0 flex-1 flex-col">
       <ChatHeader
         conversationId={shownId}
+        subtitle={headerSubtitle}
         onOpenList={onOpenList}
         onInterrupt={shownId === undefined ? undefined : () => void handleInterrupt(shownId)}
         interrupting={interrupting}
@@ -1993,7 +2051,7 @@ export function ChatPane({
          * 会話（`shownId`）が押した時点の会話と一致するときだけ出す**
          * （`visibleInterruptNotice` の doc）。
          */
-        notice={visibleInterruptNotice}
+        notice={visibleInterruptNotice ?? visibleEndNotice}
       />
 
       <div
@@ -2061,7 +2119,32 @@ export function ChatPane({
               </Card>
             ) : (
               <ChatMessageList>
-                {all.map((line) => {
+                {all.map((line, index) => {
+                  /*
+                   * **失敗の知らせは返信と別の部品で描く**（サーバが付けた `turnFailure` の印で
+                   * 判定する。文面は見ない）。「もう一度送る」は、**いちばん後ろの**失敗で、
+                   * **すぐ前が自分の発言**のときだけ出す——承認への回答から起きた失敗（間に確認の
+                   * 行が挟まる）では、前の発言が失敗の原因とは限らないので出さない。送信中も出さない。
+                   */
+                  if (line.turnFailure !== undefined) {
+                    const previous = index > 0 ? all[index - 1] : undefined;
+                    const retryText =
+                      line.turnFailure === 'failed' &&
+                      index === all.length - 1 &&
+                      !sending &&
+                      previous?.role === 'human' &&
+                      previous.text.trim() !== ''
+                        ? previous.text
+                        : undefined;
+                    return (
+                      <ChatTurnFailure
+                        key={line.key}
+                        kind={line.turnFailure}
+                        text={line.text}
+                        onRetry={retryText === undefined ? undefined : () => void send(retryText)}
+                      />
+                    );
+                  }
                   /*
                    * **編集の入口（鉛筆）は、本物の日誌エントリ id を持つ人間の
                    * 発言だけに出す（チャットのメッセージ編集、#1010。制約C）。**
@@ -2164,7 +2247,19 @@ export function ChatPane({
         sending={sending}
         onStopReceiving={() => streamRef.current?.controller.abort()}
         error={
-          shownFailure === undefined || shownFailure === null ? undefined : (
+          shownFailure === undefined || shownFailure === null ? undefined : shownFailure instanceof
+            TurnFailedError ? (
+            <TurnFailureNote
+              message={shownFailure.message}
+              action={(kind) =>
+                kind === 'auth' ? (
+                  <Link to="/tokens" className="text-xs underline underline-offset-2">
+                    認証トークンの画面を開く
+                  </Link>
+                ) : undefined
+              }
+            />
+          ) : (
             <ErrorNote error={shownFailure} />
           )
         }

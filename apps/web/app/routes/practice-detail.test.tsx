@@ -93,8 +93,8 @@ describe('既定タブ', () => {
     renderDetail('empty', docRoute({ ...PRACTICE, slug: 'empty', content: '' }));
 
     // kind / title / content の3つの入力欄が編集タブに出る。
-    expect(((await screen.findByLabelText('種類（kind）')) as HTMLInputElement).value).toBe('日報');
-    expect((screen.getByLabelText('題（title）') as HTMLInputElement).value).toBe('日報の書き方');
+    expect(((await screen.findByLabelText('種類')) as HTMLInputElement).value).toBe('日報');
+    expect((screen.getByLabelText('題') as HTMLInputElement).value).toBe('日報の書き方');
     expect(screen.getByRole('tab', { name: 'プレビュー' })).toBeTruthy();
   });
 
@@ -115,9 +115,9 @@ describe('編集タブ', () => {
     renderDetail('daily-report', docRoute(PRACTICE));
 
     fireEvent.mouseDown(await screen.findByRole('tab', { name: '編集' }));
-    const kindInput = (await screen.findByLabelText('種類（kind）')) as HTMLInputElement;
+    const kindInput = (await screen.findByLabelText('種類')) as HTMLInputElement;
     expect(kindInput.value).toBe('日報');
-    const titleInput = screen.getByLabelText('題（title）') as HTMLInputElement;
+    const titleInput = screen.getByLabelText('題') as HTMLInputElement;
     expect(titleInput.value).toBe('日報の書き方');
   });
 });
@@ -126,7 +126,7 @@ describe('種類（kind）はプルダウンではなく自由入力である', 
   it('<select> を1つも置いていない', async () => {
     renderDetail('daily-report', docRoute(PRACTICE));
     fireEvent.mouseDown(await screen.findByRole('tab', { name: '編集' }));
-    await screen.findByLabelText('種類（kind）');
+    await screen.findByLabelText('種類');
     expect(document.querySelector('select')).toBeNull();
   });
 });
@@ -136,14 +136,14 @@ describe('タブ切り替えと書きかけ', () => {
     renderDetail('daily-report', docRoute(PRACTICE));
 
     fireEvent.mouseDown(await screen.findByRole('tab', { name: '編集' }));
-    const titleInput = (await screen.findByLabelText('題（title）')) as HTMLInputElement;
+    const titleInput = (await screen.findByLabelText('題')) as HTMLInputElement;
     fireEvent.change(titleInput, { target: { value: '書きかけの題' } });
 
     fireEvent.mouseDown(screen.getByRole('tab', { name: 'プレビュー' }));
     await screen.findByText('書きかけの題');
 
     fireEvent.mouseDown(screen.getByRole('tab', { name: '編集' }));
-    const titleAgain = (await screen.findByLabelText('題（title）')) as HTMLInputElement;
+    const titleAgain = (await screen.findByLabelText('題')) as HTMLInputElement;
     expect(titleAgain.value).toBe('書きかけの題');
   });
 });
@@ -170,7 +170,7 @@ describe('保存', () => {
     mountDetail('daily-report');
 
     fireEvent.mouseDown(await screen.findByRole('tab', { name: '編集' }));
-    const contentBox = (await screen.findByLabelText('本文（content）')) as HTMLTextAreaElement;
+    const contentBox = (await screen.findByLabelText('本文')) as HTMLTextAreaElement;
     expect(contentBox.value).toBe('# 見出し\n\n本文だよ');
 
     expect((screen.getByRole('button', { name: '変更なし' }) as HTMLButtonElement).disabled).toBe(
@@ -194,7 +194,7 @@ describe('保存', () => {
     renderDetail('daily-report', docRoute(PRACTICE));
 
     fireEvent.mouseDown(await screen.findByRole('tab', { name: '編集' }));
-    const kindInput = (await screen.findByLabelText('種類（kind）')) as HTMLInputElement;
+    const kindInput = (await screen.findByLabelText('種類')) as HTMLInputElement;
     fireEvent.change(kindInput, { target: { value: '' } });
 
     const saveButton = screen.getByRole('button', { name: '保存する' }) as HTMLButtonElement;
@@ -312,7 +312,7 @@ describe('履歴タブ（#1309）', () => {
 
     await screen.findByText(/旧本文/);
     // 読み取り専用——textarea を持たない（編集タブの本文欄と区別する）。
-    expect(screen.queryByLabelText('本文（content）')).toBeNull();
+    expect(screen.queryByLabelText('本文')).toBeNull();
   });
 
   it('版が1件も無い slug では「まだ版が無い」と言う', async () => {
@@ -413,5 +413,38 @@ describe('見出し（#2763 と同じ作り）', () => {
     expect(back.className).toContain('shrink-0');
     expect(back.className).toContain('whitespace-nowrap');
     expect(screen.getByText('daily-report').className).toContain('min-w-0');
+  });
+});
+
+/** 未保存の編集があるまま離れない（#2764。`memory-detail.test.tsx` と同じ穴）。 */
+describe('未保存の編集を離れる前に確認する', () => {
+  it('書きかけのまま他の画面へのリンクを押すと確認が出る。やめれば留まる', async () => {
+    renderDetail('daily-report', docRoute(PRACTICE));
+    fireEvent.mouseDown(await screen.findByRole('tab', { name: '編集' }));
+    fireEvent.change(await screen.findByLabelText('題（title）'), {
+      target: { value: '書きかけ' },
+    });
+
+    fireEvent.click(screen.getByRole('link', { name: 'やり方' }));
+
+    expect(await screen.findByRole('alertdialog')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'やめる' }));
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+    expect((screen.getByLabelText('題（title）') as HTMLInputElement).value).toBe('書きかけ');
+  });
+
+  it('変更が無ければ確認なしで移動し、書きかけのときだけ beforeunload の警告を出す', async () => {
+    renderDetail('daily-report', docRoute(PRACTICE));
+    fireEvent.mouseDown(await screen.findByRole('tab', { name: '編集' }));
+    const input = await screen.findByLabelText('題（title）');
+
+    const clean = new Event('beforeunload', { cancelable: true });
+    window.dispatchEvent(clean);
+    expect(clean.defaultPrevented).toBe(false);
+
+    fireEvent.change(input, { target: { value: '書きかけ' } });
+    const dirty = new Event('beforeunload', { cancelable: true });
+    window.dispatchEvent(dirty);
+    expect(dirty.defaultPrevented).toBe(true);
   });
 });

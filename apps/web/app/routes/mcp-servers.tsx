@@ -1,6 +1,7 @@
 // URL の伏せ字は CLI と同じ1つの実装（`@alteroid/core/mask-url`。issue #1622 ——
 // 2つが別々に同じ判定を持ち、どちらも password だけの userinfo を素通ししていた）。
 import { SettingsTabs } from '~/components/group-tabs';
+import { settingsDocumentTitle } from '~/lib/nav';
 import { maskUrl } from '@alteroid/core/mask-url';
 import { useState } from 'react';
 
@@ -56,15 +57,13 @@ export default function McpServersPage() {
   return (
     <Page
       tabs={<SettingsTabs />}
+      documentTitle={settingsDocumentTitle('/mcp-servers')}
       title="MCP 連携"
-      description="クローン・マネージャー・作業者に渡す MCP サーバの登録（.mcp.json 相当）。alteroid mcp と同じもの"
+      description="クローン・マネージャー・作業者がつなぐ MCP サーバ（外部の道具や情報源につなぐ仕組み）の登録。書き方は .mcp.json と同じ"
     >
       <div className="flex flex-col gap-4">
         <Card>
-          <CardHeader
-            title="現在の登録内容"
-            subtitle="alteroid mcp list / show / GET /mcp-servers と同じもの"
-          />
+          <CardHeader title="現在の登録内容" subtitle="いま登録されている MCP サーバ" />
           <div className="flex flex-col gap-3 px-4 py-3">
             <ErrorNote error={error} />
             <NotOwnerHint failure={error} subject="MCP 連携の登録" />
@@ -112,8 +111,8 @@ function McpServersView({ state }: { state: McpServersState }) {
       {!empty && (
         <div className="flex flex-col gap-2">
           <p className="text-[11px] break-words text-warn">
-            ⚠ env / headers / args には鍵が丸ごと入っていることがある。表示するのは、周りに
-            見られない場所で。
+            ⚠ 環境変数・ヘッダ・引数（env / headers /
+            args）には鍵が丸ごと入っていることがある。表示するのは、周りに 見られない場所で。
           </p>
           <div>
             <Button size="sm" onClick={() => setShown((value) => !value)}>
@@ -132,7 +131,7 @@ function McpServersView({ state }: { state: McpServersState }) {
       )}
 
       <p className="text-[11px] break-words text-muted-foreground">
-        各 runner へ届いているかは「設定」の runner 欄（直近の押し込み）に出る。
+        各実行環境へ届いているかは「設定」の実行環境の欄（直近の反映）に出る。
       </p>
     </div>
   );
@@ -162,7 +161,7 @@ function EntrySummary({ name, entry }: { name: string; entry: McpServerEntry | u
       </div>
       <span className="font-mono break-all text-muted-foreground">{where}</span>
       {args.length > 0 && (
-        <span className="text-muted-foreground">{`args: ${String(args.length)} 個（値は伏せた）`}</span>
+        <span className="text-muted-foreground">{`引数（args）: ${String(args.length)} 個（値は伏せた）`}</span>
       )}
       {keys.names.length > 0 && (
         <span className="font-mono break-all text-muted-foreground">{`${keys.label}: ${keys.names.join(', ')}`}</span>
@@ -236,15 +235,11 @@ function McpServersEditor({ current }: { current: McpServersState }) {
 
   return (
     <Card>
-      <CardHeader
-        title="登録内容を置き換える"
-        subtitle="alteroid mcp edit / set / clear / PUT /mcp-servers と同じもの。丸ごと置き換える"
-      />
+      <CardHeader title="登録内容を置き換える" subtitle="登録内容を丸ごと置き換える" />
       <div className="flex flex-col gap-3 px-4 py-3 text-sm">
         <p className="text-xs leading-relaxed break-words text-muted-foreground">
-          .mcp.json をそのまま貼れる形（{'{ "mcpServers": { … } }'}）。保存する前にデーモンが
-          形を検査し、通らなければ保存も配布もしない（前のものが残る）。stdio の登録は、次の
-          セッションでクローンやマネージャーが起こすコマンドになる。
+          登録内容を JSON で書く（.mcp.json をそのまま貼れる形。{'{ "mcpServers": { … } }'}
+          ）。保存する前にデーモンが形を確かめ、通らなければ保存も反映もしない（前のものが残る）。コマンドで起動する形（stdio）の登録は、次のセッションでクローンやマネージャーが起動するコマンドになる。
         </p>
 
         {!editing ? (
@@ -261,7 +256,9 @@ function McpServersEditor({ current }: { current: McpServersState }) {
         ) : (
           <>
             <label className="flex flex-col gap-1">
-              <span className="text-xs text-muted-foreground">登録（.mcp.json）</span>
+              <span className="text-xs text-muted-foreground">
+                登録内容（JSON。.mcp.json と同じ形）
+              </span>
               <Textarea
                 aria-label="MCP サーバの新しい登録"
                 className="min-h-64 font-mono text-xs"
@@ -301,7 +298,7 @@ function McpServersEditor({ current }: { current: McpServersState }) {
             <p className="text-[11px] break-words text-warn">
               {draftClears
                 ? 'MCP 連携の登録を全部外す。次のセッションから、クローン・マネージャー・作業者はこれらの連携を使えなくなる。'
-                : 'この登録で丸ごと置き換え、繋がっている runner へ配る。クローンは次のセッションから、マネージャー・作業者は次に開くセッションから使う。'}
+                : 'この登録で丸ごと置き換え、繋がっている実行環境へ渡す。クローンは次のセッションから、マネージャー・作業者は次に開くセッションから使う。'}
             </p>
             <div className="flex flex-wrap items-center gap-2">
               <Button
@@ -322,7 +319,7 @@ function McpServersEditor({ current }: { current: McpServersState }) {
         {confirming === 'clear' && !editing && (
           <div className="flex flex-col gap-2 rounded-md border border-warn/40 bg-warn/10 px-3 py-2">
             <p className="text-[11px] break-words text-warn">
-              MCP 連携の登録を全部外す（alteroid mcp clear と同じ）。次のセッションから、
+              MCP 連携の登録を全部外す。次のセッションから、
               クローン・マネージャー・作業者はこれらの連携を使えなくなる。
             </p>
             <div className="flex flex-wrap items-center gap-2">
@@ -370,10 +367,10 @@ function UpdateReport({ before, update }: { before: string[]; update: McpServers
       </p>
       {added.length > 0 && <p className="break-words">足した: {added.join(', ')}</p>}
       {removed.length > 0 && <p className="break-words">外した: {removed.join(', ')}</p>}
-      <ul className="flex flex-col gap-1" aria-label="runner ごとの配布結果">
+      <ul className="flex flex-col gap-1" aria-label="実行環境ごとの反映結果">
         {update.runners.length === 0 && (
           <li className="text-muted-foreground">
-            いま配った runner は無い（繋がった runner へは、名乗り直したときに降ろす）。
+            いま渡した実行環境は無い（繋がった実行環境へは、つなぎ直したときに渡す）。
           </li>
         )}
         {update.runners.map((runner) => (
@@ -381,14 +378,19 @@ function UpdateReport({ before, update }: { before: string[]; update: McpServers
             <span className="font-mono break-all">{runner.runnerId}</span>:{' '}
             {!runner.ok ? (
               <span className="text-destructive">
-                {runner.unsupported === true ? '受け取る口が無い（古い runner）' : '届かなかった'} —{' '}
-                {runner.error ?? '理由不明'}
+                {runner.unsupported === true
+                  ? '受け取る機能が無い（古い実行環境）'
+                  : '届かなかった'}{' '}
+                — {runner.error ?? '理由不明'}
               </span>
             ) : runner.mcpServers === undefined ? (
-              <span className="text-ok">{cleared ? '外した' : '届いた（指紋は返らなかった）'}</span>
+              <span className="text-ok">
+                {cleared ? '外した' : '届いた（確認用の値は返らなかった）'}
+              </span>
             ) : update.sha256 !== undefined && runner.mcpServers.sha256 !== update.sha256 ? (
               <span className="text-destructive">
-                届いたが指紋が違う（runner {runner.mcpServers.sha256} / 保存 {update.sha256}）
+                届いたが確認用の値が違う（実行環境 {runner.mcpServers.sha256} / 保存 {update.sha256}
+                ）
               </span>
             ) : (
               <span className="text-ok">届いた（sha256 {runner.mcpServers.sha256}）</span>

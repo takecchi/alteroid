@@ -27,7 +27,15 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { createMemoryRouter, RouterProvider, useParams } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { json, Providers, sse, storeTestBaseUrl, stubFetch, type Route } from '~/test-support';
+import {
+  findShownConversation,
+  json,
+  Providers,
+  sse,
+  storeTestBaseUrl,
+  stubFetch,
+  type Route,
+} from '~/test-support';
 
 import Chat from './chat';
 
@@ -145,7 +153,7 @@ describe('#1585: 送信/追送の失敗は会話ごとに持ち、切り替え�
 
     // B へ切り替える。
     await router.navigate(`/chat/${CONVERSATION_B}`);
-    expect(await screen.findByText(CONVERSATION_B)).toBeTruthy();
+    expect(await findShownConversation(CONVERSATION_B)).toBeTruthy();
     // B には A の追送失敗が出ない（#1576 で直った性質。ここでは前提として確かめる）。
     expect(screen.queryByText(FOLLOW_UP_ERROR_MESSAGE)).toBeNull();
 
@@ -179,7 +187,7 @@ describe('#1585: 送信/追送の失敗は会話ごとに持ち、切り替え�
 
     // B へ切り替える。
     await router.navigate(`/chat/${CONVERSATION_B}`);
-    expect(await screen.findByText(CONVERSATION_B)).toBeTruthy();
+    expect(await findShownConversation(CONVERSATION_B)).toBeTruthy();
     expect(screen.queryByText(ERROR_MESSAGE)).toBeNull();
 
     // A へ戻る。
@@ -253,7 +261,7 @@ describe('#1585: 送信/追送の失敗は会話ごとに持ち、切り替え�
     expect(await screen.findByText(ERROR_MESSAGE)).toBeTruthy();
 
     await router.navigate(`/chat/${CONVERSATION_A}`);
-    expect(await screen.findByText(CONVERSATION_A)).toBeTruthy();
+    expect(await findShownConversation(CONVERSATION_A)).toBeTruthy();
     expect(screen.queryByText(ERROR_MESSAGE)).toBeNull();
   });
 });
@@ -282,9 +290,9 @@ describe('#2460: 新しい会話（鍵 undefined）の失敗は、別の白紙�
     expect(await screen.findByText(NEW_CONVERSATION_ERROR)).toBeTruthy();
 
     await router.navigate(`/chat/${CONVERSATION_B}`);
-    expect(await screen.findByText(CONVERSATION_B)).toBeTruthy();
+    expect(await findShownConversation(CONVERSATION_B)).toBeTruthy();
     await router.navigate(`/chat/${CONVERSATION_C}`);
-    expect(await screen.findByText(CONVERSATION_C)).toBeTruthy();
+    expect(await findShownConversation(CONVERSATION_C)).toBeTruthy();
 
     await router.navigate('/chat');
     expect(await screen.findByPlaceholderText(/クローンに話しかける/)).toBeTruthy();

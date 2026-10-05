@@ -1,4 +1,5 @@
 import { SettingsTabs } from '~/components/group-tabs';
+import { settingsDocumentTitle } from '~/lib/nav';
 import { useState } from 'react';
 
 import {
@@ -45,8 +46,9 @@ export default function EnvVars() {
   return (
     <Page
       tabs={<SettingsTabs />}
+      documentTitle={settingsDocumentTitle('/env-vars')}
       title="環境変数"
-      description="alteroid 自身の運用設定・マネージャーへ降ろす環境変数。撒く先は共通/clone/manager から選べる"
+      description="alteroid 自身の運用設定と、マネージャーへ渡す環境変数。渡す先は「共通」「クローン」「マネージャー」から選べる"
     >
       <div className="flex flex-col gap-4">
         <EnvVarList />
@@ -61,15 +63,15 @@ function describeScope(scope: EnvVarScope): { label: string; tone: 'neutral' | '
     case 'all':
       return { label: '共通', tone: 'accent' };
     case 'app':
-      return { label: 'clone', tone: 'neutral' };
+      return { label: 'クローンだけ', tone: 'neutral' };
     case 'runner':
-      return { label: 'manager', tone: 'neutral' };
+      return { label: 'マネージャーだけ', tone: 'neutral' };
     default:
       // **送られてくる値である**（デーモンが `GET /credentials` で載せる）。
       // `apps/web` は Vercel、デーモンは Railway で別に配られるので、
       // サーバのほうが新しい窓が必ず在る——投げずに「未知」とそのまま出す
       // （`tokens.tsx` の `describeUnknown` と同じ判断）。
-      return { label: `未知の撒く先（${String(scope)}）`, tone: 'neutral' };
+      return { label: `未知の渡す先（${String(scope)}）`, tone: 'neutral' };
   }
 }
 
@@ -103,7 +105,7 @@ function EnvVarList() {
     <Card>
       <CardHeader
         title="一覧"
-        subtitle="alteroid credential list / GET /credentials と同じもの"
+        subtitle="登録済みの環境変数"
         action={listUnavailable ? undefined : <Badge>{credentials.length}</Badge>}
       />
       <ErrorNote error={error} className="m-4" />
@@ -160,7 +162,7 @@ function EnvVarRow({
             label: '値',
             mono: true,
             value: entry.secret
-              ? `（シークレット。値は表示されない。指紋 sha256=${entry.sha256}）`
+              ? `（シークレット。値は表示されない。識別用の値 sha256=${entry.sha256}）`
               : (entry.value ?? '（サーバがまだ値を返していない版）'),
           },
           { label: '更新', value: formatDateTime(entry.updatedAt) },
@@ -169,8 +171,9 @@ function EnvVarRow({
 
       {entry.shadowsCloneEnv === true && (
         <p className="mt-2 text-[11px] break-words text-warn">
-          ⚠ GitHub の名前で、デーモン（クローン）の器の環境変数の値が優先して配られている
-          （正本のこの行はどこにも配られていない）。
+          ⚠ GitHub
+          用の名前のため、デーモン（クローン）が動いている環境側の同じ名前の環境変数の値が優先して渡されている
+          （この画面に登録したこの行の値は、どこにも渡されていない）。
           {entry.scope === 'app' &&
             // **scope: app は他の scope と挙動が違う（issue #1894）。** この行は
             // manager に配布されない（issue #1867）ので、上の一文だけでは
@@ -178,9 +181,9 @@ function EnvVarRow({
             // manager にはこの名前が何も配られていない。そして「配られていない」
             // からといってこの行を外すと、その名前は manager にも配られ始める
             // （scope で閉じた先へ届く）。
-            ' scope: app（clone だけ）のこの名前は、manager にはいま何も配られて' +
-              'いない。この行を外すと、器の環境変数の値が manager にも配られ始める' +
-              '（scope で閉じた先へ届く）。'}
+            ' 渡す先が「クローンだけ」のこの名前は、マネージャーにはいま何も渡されて' +
+              'いない。この行を外すと、動いている環境側の環境変数の値がマネージャーにも渡され始める' +
+              '（渡す先を限っていた分が外れるため）。'}
         </p>
       )}
 
@@ -204,9 +207,9 @@ function EnvVarRow({
 }
 
 const SCOPE_OPTIONS: { value: EnvVarScope; label: string }[] = [
-  { value: 'all', label: '共通（clone・manager 両方。既定）' },
-  { value: 'app', label: 'clone だけ' },
-  { value: 'runner', label: 'manager だけ' },
+  { value: 'all', label: '共通（クローン・マネージャー両方。既定）' },
+  { value: 'app', label: 'クローンだけ' },
+  { value: 'runner', label: 'マネージャーだけ' },
 ];
 
 function AddEnvVarForm() {
@@ -241,7 +244,7 @@ function AddEnvVarForm() {
     <Card>
       <CardHeader
         title="登録する"
-        subtitle="alteroid credential set / PUT /credentials と同じもの。シークレット可否は作成時に決まり、後から変更できない"
+        subtitle="秘密の値にするかどうかは登録するときに決まり、後から変えられない"
       />
       <div className="flex flex-col gap-3 px-4 py-3 text-sm">
         <label className="flex flex-col gap-1">
@@ -257,7 +260,7 @@ function AddEnvVarForm() {
           <Input value={value} onChange={(event) => setValue(event.target.value)} />
         </label>
         <label className="flex flex-col gap-1">
-          <span className="text-xs text-muted-foreground">撒く先</span>
+          <span className="text-xs text-muted-foreground">渡す先</span>
           <Select value={scope} onChange={(event) => setScope(event.target.value as EnvVarScope)}>
             {SCOPE_OPTIONS.map((option) => (
               <option key={option.value} value={option.value}>
@@ -266,14 +269,15 @@ function AddEnvVarForm() {
             ))}
           </Select>
         </label>
-        <label className="flex items-center gap-2 text-xs text-muted-foreground">
+        <label className="flex items-center gap-2 text-xs text-muted-foreground pointer-coarse:min-h-11">
           <input
             type="checkbox"
+            className="pointer-coarse:size-5 pointer-coarse:shrink-0"
             checked={secret}
             onChange={(event) => setSecret(event.target.checked)}
           />
           シークレット扱いにする（値を
-          API/CLI/この画面に表示しない。新規行にのみ効き、後から変更できない）
+          この画面にも他の経路にも表示しない。新規行にのみ効き、後から変更できない）
         </label>
 
         <ErrorNote error={failure} />
