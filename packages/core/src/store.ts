@@ -2959,6 +2959,58 @@ export function describeUnreadableTokens(
  * `PracticeList.unreadable`）。読めない行を飛ばして「1件も無い。正常」と言うと、
  * 壊れた行が在るのに無いと見せることになる。
  */
+/**
+ * やり方の「版」（Issue #2853。記憶の `memoryVersion` と同じ考え方）。**保存された
+ * `kind` / `title` / `content`（正規化後。`read()` が返す値）の sha256 hex。**
+ * 読んだ側が持ち回り、書くときに `WritePracticeOptions.ifMatch` へ渡す。
+ *
+ * ⚠️ **版の履歴の番号（`listVersions` の `version`。1 始まりの連番）ではない。**
+ * 履歴の番号は読み口（`GET /practices/:slug`）が持たず、履歴の整合（壊れた行・
+ * `remove()` 後の続き番号）に依存する。本文のハッシュなら、3実装（fs / pg /
+ * インメモリ）が同じ式で同じ値を出せ、比較を書き込みと同じ排他の中で行える。
+ * `updatedAt` を使わないのも `memoryVersion` と同じ理由（時刻の精度に依らない）。
+ */
+export function practiceVersion(practice: Pick<Practice, 'kind' | 'title' | 'content'>): string {
+  return createHash('sha256')
+    .update(JSON.stringify([practice.kind, practice.title, practice.content]))
+    .digest('hex');
+}
+
+/** `PracticeStore.write` の任意の引数。 */
+export interface WritePracticeOptions {
+  /**
+   * 前提の版（`practiceVersion` の値）。**書く瞬間の版がこれと違えば書かず、
+   * `PracticeConflictError` を投げる**（比較と書き込みは1つの排他の中で行う）。
+   * `null` は「読んだ時には無かった」——いまも無いときだけ書ける。
+   * **省略（`undefined`）は従来どおり後勝ち**（クローンの道具・CLI など、前提を
+   * 持たない書き手のため）。`WriteMemoryOptions.ifMatch` と同じ形。
+   */
+  ifMatch?: string | null;
+}
+
+/**
+ * 前提の版が合わず、書かなかった。`current` は**いまのやり方**（無ければ `null`。
+ * 読めない形で入っているときも `null`）——書き手が自分の内容を捨てずに見比べられる。
+ */
+export class PracticeConflictError extends Error {
+  readonly current: Practice | null;
+  constructor(slug: string, current: Practice | null) {
+    super(`やり方が読んだ後に変わっています: ${slug}`);
+    this.name = 'PracticeConflictError';
+    this.current = current;
+  }
+}
+
+/** 前提の版 `ifMatch` が、いまのやり方と合うか（`undefined` は前提なし＝常に合う）。 */
+export function practiceVersionMatches(
+  current: Pick<Practice, 'kind' | 'title' | 'content'> | null,
+  ifMatch: string | null | undefined,
+): boolean {
+  if (ifMatch === undefined) return true;
+  if (ifMatch === null) return current === null;
+  return current !== null && practiceVersion(current) === ifMatch;
+}
+
 export interface PracticeStore {
   /**
    * **`entries` は slug の昇順。**（`PersonaStore.list` と同じ理由で契約にしてある ——
@@ -3003,7 +3055,16 @@ export interface PracticeStore {
    * この追記は `write()` と同じ操作の中で行うこと——別操作に割ると、途中で
    * 落ちたときに「本体は書き変わったが版は増えていない」という食い違いが生まれる。
    */
-  write(input: { slug: string; kind: string; title: string; content: string }): Promise<Practice>;
+  /**
+   * **`options.ifMatch`（Issue #2853）で前提の版を持てる。** 合わなければ何も書かず
+   * （版の履歴にも足さず）`PracticeConflictError`。比較は書き込みと同じ排他の中で行う
+   * （fs: `withPathLock` 内、pg: 行ロックつきのトランザクション内、インメモリ: 同期の区間）。
+   * 3実装とも同じ挙動で、`verifyPracticeStoreContract` が3つに同じ歯を当てる。
+   */
+  write(
+    input: { slug: string; kind: string; title: string; content: string },
+    options?: WritePracticeOptions,
+  ): Promise<Practice>;
   /**
    * **版は消さない（#1309）。** `remove()` が消すのは「いまのやり方」の1件だけで、
    * `listVersions` / `readVersion` で読める追記専用の履歴は、消した後もそのまま

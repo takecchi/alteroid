@@ -1,3 +1,4 @@
+import { PracticeConflictError, practiceVersion } from './store.js';
 import type { PracticeStore } from './store.js';
 
 /**
@@ -244,8 +245,70 @@ export async function verifyPracticeStoreContract(
     }
   }
 
+  // --- 9b. 前提の版（ifMatch。Issue #2853）。3実装とも同じ挙動であること ---
+  {
+    const slug = 'contract-m';
+    const input = { slug, kind: '実装', title: '版の照合' };
+    const attempt = async (content: string, ifMatch?: string | null) => {
+      try {
+        return { ok: await practices.write({ ...input, content }, { ifMatch }) };
+      } catch (error) {
+        if (error instanceof PracticeConflictError) return { conflict: error };
+        throw error;
+      }
+    };
+
+    // 無いものへ `ifMatch: null` は書ける。2回目（もう在る）は衝突で、何も書き換わらない。
+    const first = await attempt('最初', null);
+    if (first.ok === undefined) fail('ifMatch: null が、無い slug への初回の書き込みで断られた');
+    const second = await attempt('二番目', null);
+    if (second.conflict === undefined) fail('ifMatch: null が、在る slug への書き込みを断らない');
+    if (second.conflict.current?.content !== '最初\n') {
+      fail('衝突の current が、いまの本文ではない');
+    }
+    // 無い slug へ版つきで書くと、「読んだ後に消された」衝突（current は null）。
+    let ghost: unknown;
+    try {
+      await practices.write(
+        { slug: 'contract-ghost', kind: '実装', title: 'ゆうれい', content: 'ゆうれい' },
+        { ifMatch: 'x'.repeat(64) },
+      );
+    } catch (error) {
+      ghost = error;
+    }
+    if (!(ghost instanceof PracticeConflictError) || ghost.current !== null) {
+      fail('無い slug への版つきの書き込みが、current: null の衝突にならない');
+    }
+    if ((await practices.read('contract-ghost')) !== null) fail('衝突したのに行ができている');
+
+    // 読んだ版つきなら書ける。版は本文・kind・title から決まる（practiceVersion）。
+    const v1 = practiceVersion(first.ok);
+    const third = await attempt('三番目', v1);
+    if (third.ok === undefined) fail('いまの版を前提にした書き込みが断られた');
+    // 古い版（v1）を前提にした書き込みは、書かずに衝突する。
+    const versionsBefore = (await practices.listVersions(slug)).length;
+    const stale = await attempt('古い版からの書き込み', v1);
+    if (stale.conflict === undefined) fail('古い版を前提にした書き込みが断られない');
+    if (stale.conflict.current?.content !== '三番目\n') fail('衝突の current が最新でない');
+    if ((await practices.read(slug))?.content !== '三番目\n')
+      fail('衝突したのに本文が書き換わった');
+    if ((await practices.listVersions(slug)).length !== versionsBefore) {
+      fail('衝突したのに版の履歴が増えた');
+    }
+    // 題名だけ変わっていても、版は変わる（別の書き手の直しを見逃さない）。
+    const renamed = await practices.write({ ...input, title: '別の題', content: '三番目' });
+    const titleStale = await attempt('四番目', practiceVersion(third.ok));
+    if (titleStale.conflict === undefined || renamed.title !== '別の題') {
+      fail('題名の変更が、版の照合に効いていない');
+    }
+    // 省略は従来どおり後勝ち。
+    const last = await attempt('後勝ち');
+    if (last.ok === undefined) fail('ifMatch 省略の書き込みが断られた（後勝ちでなくなった）');
+    if ((await practices.read(slug))?.content !== '後勝ち\n') fail('後勝ちの本文が読めない');
+  }
+
   if (options.verifyClear !== true) {
-    for (const slug of ['contract-a', 'contract-b', 'contract-c', 'contract-v']) {
+    for (const slug of ['contract-a', 'contract-b', 'contract-c', 'contract-v', 'contract-m']) {
       await practices.remove(slug);
     }
     return;
