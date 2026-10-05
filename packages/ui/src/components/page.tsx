@@ -18,6 +18,7 @@ export function Page({
   documentTitle,
   description,
   action,
+  actionPlacement = 'below-on-narrow',
   className,
   scrollRef,
   tabs,
@@ -32,6 +33,13 @@ export function Page({
   documentTitle?: string;
   description?: ReactNode;
   action?: ReactNode;
+  /**
+   * `action` を置く場所。**既定は `'below-on-narrow'`**: 狭い幅（`md` 未満）では見出し・説明の
+   * **下の段**へ回し、説明文が幅いっぱいで折り返せるようにする（#2763・#2765）。`md` 以上は
+   * 従来どおり右に並ぶ。`'side'` は狭い幅でも右に並べたままにする（短い印だけの `action` 用）。
+   * DOM の順は変えない（見出し → 説明 → 操作 → 本文）ので、Tab の順も同じ。
+   */
+  actionPlacement?: 'below-on-narrow' | 'side';
   className?: string;
   /**
    * スクロールする本文の div へそのまま渡す。**既定は無し**（渡さない画面は
@@ -67,7 +75,11 @@ export function Page({
         className={cn(
           // タブの帯があるときは、区切り線を帯の下の1本にする（線が2本続かないように）。
           tabs === undefined && 'border-b border-border',
-          'flex shrink-0 items-start justify-between gap-4 py-4 md:pt-[calc(1rem+var(--safe-top))] pl-[calc(1rem+var(--safe-left))] pr-[calc(1rem+var(--safe-right))] md:pl-[calc(1.5rem+var(--safe-left))] md:pr-[calc(1.5rem+var(--safe-right))]',
+          'flex shrink-0 gap-4 py-4 md:pt-[calc(1rem+var(--safe-top))] pl-[calc(1rem+var(--safe-left))] pr-[calc(1rem+var(--safe-right))] md:pl-[calc(1.5rem+var(--safe-left))] md:pr-[calc(1.5rem+var(--safe-right))]',
+          // 狭い幅で操作を下の段へ回すときは縦並び。説明文の列が細くならない。
+          actionPlacement === 'side'
+            ? 'items-start justify-between'
+            : 'flex-col md:flex-row md:items-start md:justify-between',
         )}
       >
         <div className="min-w-0">

@@ -71,3 +71,48 @@ describe('Page の本文は位置の基準になる（body がスクロールし
     expect(classesOf(scroller)).toEqual(expect.arrayContaining(['relative', 'overflow-y-auto']));
   });
 });
+
+describe('Page の操作（action）の置き場（#2763・#2765）', () => {
+  function renderWith(placement?: 'below-on-narrow' | 'side') {
+    render(
+      <Page
+        title="見出し"
+        description="説明文"
+        action={<button type="button">操作</button>}
+        actionPlacement={placement}
+      >
+        <button type="button">本文の操作</button>
+      </Page>,
+    );
+    return screen.getByRole('banner');
+  }
+
+  it('既定は狭い幅で縦並び（下の段）、md 以上は横並び（クラス名の存在のみ。jsdom は配置を測れない）', () => {
+    const classes = classesOf(renderWith());
+    expect(classes).toContain('flex-col');
+    expect(classes).toContain('md:flex-row');
+    expect(classes).not.toContain('justify-between');
+  });
+
+  it("'side' は狭い幅でも従来どおり横並び", () => {
+    const classes = classesOf(renderWith('side'));
+    expect(classes).not.toContain('flex-col');
+    expect(classes).toContain('justify-between');
+  });
+
+  it('DOM の順は 見出し → 説明 → 操作 → 本文（Tab の順が変わらない）', () => {
+    const header = renderWith();
+    const order = [
+      screen.getByRole('heading', { name: '見出し' }),
+      screen.getByText('説明文'),
+      screen.getByRole('button', { name: '操作' }),
+      screen.getByRole('button', { name: '本文の操作' }),
+    ];
+    expect(header.contains(order[2])).toBe(true);
+    for (let i = 0; i < order.length - 1; i++) {
+      expect(
+        order[i].compareDocumentPosition(order[i + 1]) & Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+    }
+  });
+});
