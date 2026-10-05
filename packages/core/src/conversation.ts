@@ -224,10 +224,20 @@ export function humanExchanges(entries: JournalEntry[]): Exchange[] {
  */
 export async function readConversationWindow(
   journal: Pick<JournalStore, 'list'>,
-  options: { scan: number; since?: string; until?: string },
+  options: {
+    scan: number;
+    since?: string;
+    until?: string;
+    /** 古い順で読む（既定は新しい順）。取り込みが前へ向かって進むための形。 */
+    order?: 'asc' | 'desc';
+    /** 頁の継続点（`JournalQuery.after`）。 */
+    after?: { id: string; at: string };
+  },
 ): Promise<JournalEntry[]> {
   return journal.list({
     limit: options.scan,
+    ...(options.order === undefined ? {} : { order: options.order }),
+    ...(options.after === undefined ? {} : { after: options.after }),
     types: ['exchange'],
     with: ['human'],
     ...(options.since === undefined ? {} : { since: options.since }),
