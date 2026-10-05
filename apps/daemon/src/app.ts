@@ -7047,8 +7047,7 @@ export function createApp(deps: AppDeps) {
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
           403: {
-            description:
-              '許可（`access grant`）の無いアカウント。',
+            description: '許可（`access grant`）の無いアカウント。',
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
           503: {
@@ -9646,8 +9645,7 @@ export function createApp(deps: AppDeps) {
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
           403: {
-            description:
-              '許可（`access grant`）の無いアカウント。',
+            description: '許可（`access grant`）の無いアカウント。',
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
         },
