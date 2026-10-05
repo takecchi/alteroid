@@ -141,7 +141,8 @@ describe('progressCommand', () => {
     expect(text).toContain('basis: updatedAt');
     expect(text).toContain('あと約 336時間');
     expect(text).toContain('推定であり約束ではない');
-    expect(text).toContain('観測していない（0 件ではない）');
+    // 記録が1件も無い間は GitHub の段を出さない（#2970）
+    expect(text).not.toContain('GitHub');
     expect(text).not.toContain('%');
     expect(text).not.toContain('数が欠けうる');
   });

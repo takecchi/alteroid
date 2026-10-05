@@ -9,7 +9,7 @@
  *   時間を作らず理由を出す。知らない state / reason でも落ちない（版のずれ）
  * - 取れない値（`null`）は「—」で、0 とは書かない
  * - `completeness` が 0 でないとき、数が欠けうる但し書きを出す
- * - GitHub は「観測していない（0 件ではない）」と `github.reason` をそのまま出す
+ * - GitHub は記録が1件も無い間は欄ごと出さない（#2970）。1件以上あれば従来どおり
  * - 期間の切替が URL（`?windowHours=`）と要求の `windowHours` の両方を変える
  * - 404（この版のデーモンにこの口が無い）と一般のエラーが分かれる
  * - **描いた文字に `%` が1つも無い**（分母が定まらないので割合は出さない）
@@ -421,17 +421,45 @@ describe('/progress 画面 — 取れない値と但し書き', () => {
     expect(within(await card('実行中の依頼')).queryByText(/読み取れなかった依頼/)).toBeNull();
   });
 
-  it('GitHub は「まだ記録がありません（0 件という意味ではありません）」と reason を出し、0 を作らない', async () => {
+  it('GitHub の記録が1件も無い間は、欄も区切りも出さない（#2970。0 を作らず、未観測の文も出さない）', async () => {
     stubProgress();
     renderPage();
 
     const backlog = within(await card('未完了の仕事'));
-    const label = backlog.getByText('開いている Issue / PR');
-    const stat = label.parentElement;
-    expect(stat?.textContent).toContain('まだ記録がありません（0 件という意味ではありません）');
-    expect(stat?.textContent).toContain(GITHUB_REASON);
-    expect(stat?.textContent).toContain('—');
-    expect(stat?.textContent).not.toMatch(/(^|[^\d])0 ?件(?!という)/);
+    expect(backlog.queryByText('開いている Issue / PR')).toBeNull();
+    expect(backlog.queryByText(/まだ記録がありません/)).toBeNull();
+    expect(backlog.queryByText(/記録された数です/)).toBeNull();
+    expect(document.body.textContent).not.toContain(GITHUB_REASON);
+  });
+
+  it('GitHub の記録が1件以上あれば欄を出す（#2970）', async () => {
+    stubProgress({
+      body: baseBody({
+        github: {
+          state: 'observed',
+          repos: [
+            {
+              repo: 'x/y',
+              latestOk: {
+                openIssues: 3,
+                openPulls: 1,
+                truncated: false,
+                observedAt: '2026-09-30T02:00:00.000Z',
+                observedBy: 'clone',
+                query: 'gh issue list --state open',
+              },
+              latestFailed: null,
+            },
+          ],
+          scan: { limit: 500, reachedLimit: false },
+        },
+      }),
+    });
+    renderPage();
+
+    const backlog = within(await card('未完了の仕事'));
+    expect(backlog.getByText(/記録された数です/)).toBeTruthy();
+    expect(document.body.textContent).toContain('x/y');
   });
 
   describe('観測の記録がある（#2245 段1）', () => {

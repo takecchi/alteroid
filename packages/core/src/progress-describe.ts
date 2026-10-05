@@ -141,9 +141,8 @@ export function describeProgress(view: ProgressViewInput): string {
     );
   }
 
-  if (github.state === 'not_observed') {
-    lines.push('', `GitHub: 観測していない（0 件ではない）— ${github.reason}`);
-  } else {
+  // 記録が1件も無い間は GitHub の段を出さない（#2970。GitHub に限らない作業に毎回出さない）。
+  if (github.state !== 'not_observed') {
     lines.push(
       '',
       'GitHub: 観測した側の申告（デーモンは GitHub を見に行かず、値を確かめていない。古さは判定しない）',

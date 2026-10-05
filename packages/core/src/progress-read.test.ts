@@ -95,10 +95,24 @@ describe('progress_read — 作業の進捗を読む道具（#2241 の 3）', ()
     expect(listed).toBe(false);
   });
 
-  it('github は観測していない（0 件ではない）と書く', async () => {
+  it('github の記録が1件も無い間は GitHub の段を出さない（0 とも書かない。#2970）', async () => {
     const reply = await progressTool(await seed())({});
-    expect(reply).toContain('GitHub: 観測していない（0 件ではない）');
+    expect(reply).not.toContain('GitHub');
     expect(reply).not.toMatch(/GitHub: 0/);
+  });
+
+  it('github の記録が1件以上あれば GitHub の段を出す（#2970）', async () => {
+    const stores = await seed();
+    await stores.journal.append({
+      type: 'github_observation',
+      observedBy: 'clone',
+      repo: 'x/y',
+      query: 'gh issue list --state open',
+      result: { status: 'ok', openIssues: 2, openPulls: 1, truncated: false },
+    });
+    const reply = await progressTool(stores)({});
+    expect(reply).toContain('GitHub: 観測した側の申告');
+    expect(reply).toContain('open Issue 2 件 / open PR 1 件');
   });
 
   it('取れない値を 0 と書かない（空の台帳の見込みは時間を作らず、齢は —）', async () => {

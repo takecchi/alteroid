@@ -151,17 +151,9 @@ function StatRow({ children }: { children: ReactNode }) {
  * 取れなかった回は数を作らず `—` と理由を出し、0 とは書かない。
  */
 function GithubBlock({ github, observedAt }: { github: Progress['github']; observedAt: string }) {
-  if (github.state === 'not_observed') {
-    return (
-      <Stat
-        label="開いている Issue / PR"
-        value={NONE}
-        hint={
-          <>まだ記録がありません（0 件という意味ではありません）。{redactBody(github.reason)}</>
-        }
-      />
-    );
-  }
+  // 記録が1件も無い間は欄ごと載せない（#2970）。alteroid の作業は GitHub に限らないので、
+  // 観測していない欄を毎回出さない。呼び出し側（`BacklogCard`）が区切り線ごと外す。
+  if (github.state === 'not_observed') return null;
   if ((github.state as string) !== 'observed') {
     return (
       <Stat
@@ -307,9 +299,11 @@ function BacklogCard({ progress }: { progress: Progress }) {
             件）。上の数は「少なくともこれだけ」と読んでください。
           </p>
         )}
-        <div className="border-t border-border pt-3">
-          <GithubBlock github={github} observedAt={observedAt} />
-        </div>
+        {github.state !== 'not_observed' && (
+          <div className="border-t border-border pt-3">
+            <GithubBlock github={github} observedAt={observedAt} />
+          </div>
+        )}
       </Section>
     </Card>
   );
