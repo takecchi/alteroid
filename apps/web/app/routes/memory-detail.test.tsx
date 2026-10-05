@@ -515,3 +515,18 @@ describe('編集欄の振る舞い（部品へ移しても変わらないもの�
     expect(puts).toEqual([]);
   });
 });
+
+describe('見出し（#2763）', () => {
+  it('戻る導線「記憶」は縮まず折り返さない（狭い幅で縦に割れない）', async () => {
+    // jsdom はレイアウトを持たないので、実寸（390px で 16px 幅 × 2行に割れた）は測れない。
+    // 割れを防ぐ指定そのもの（flex 子の shrink と折り返しの抑止）を固定する。
+    // 実寸はブラウザで測った値を PR に書いている。
+    renderDetail('notes', docRoute(DOC));
+
+    const back = await screen.findByRole('link', { name: '記憶' });
+    expect(back.className).toContain('shrink-0');
+    expect(back.className).toContain('whitespace-nowrap');
+    // 縮む側は slug だけ。
+    expect(screen.getByText('notes').className).toContain('min-w-0');
+  });
+});

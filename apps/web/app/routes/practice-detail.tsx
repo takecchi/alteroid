@@ -127,11 +127,14 @@ export default function PracticeDetail({ loaderData }: Route.ComponentProps) {
   return (
     <Page
       title={
-        <span className="flex items-center gap-2">
-          <Link to="/practices" className="text-muted-foreground hover:text-foreground">
+        <span className="flex items-baseline gap-2">
+          <Link
+            to="/practices"
+            className="shrink-0 whitespace-nowrap text-muted-foreground hover:text-foreground"
+          >
             やり方
           </Link>
-          <span className="text-muted-foreground">/</span>
+          <span className="shrink-0 text-muted-foreground">/</span>
           <span className="min-w-0 font-mono text-sm break-all">{slug}</span>
         </span>
       }

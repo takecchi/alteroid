@@ -365,3 +365,15 @@ describe('生 HTML の扱い', () => {
     expect(document.body.textContent).toContain('onerror="alert(1)"');
   });
 });
+
+describe('見出し（#2763 と同じ作り）', () => {
+  it('戻る導線「やり方」は縮まず折り返さない（狭い幅で縦に割れない）', async () => {
+    // jsdom はレイアウトを持たないので実寸は測れない。割れを防ぐ指定そのものを固定する。
+    renderDetail('daily-report', docRoute(PRACTICE));
+
+    const back = await screen.findByRole('link', { name: 'やり方' });
+    expect(back.className).toContain('shrink-0');
+    expect(back.className).toContain('whitespace-nowrap');
+    expect(screen.getByText('daily-report').className).toContain('min-w-0');
+  });
+});
