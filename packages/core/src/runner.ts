@@ -27,6 +27,7 @@ import type {
 } from './agent-hooks.js';
 import { DEFAULT_AGENT_PROVIDER_ID, type AgentProviderId } from './agent-ports.js';
 import { describeBashToolTimeoutRaise, planBashToolTimeoutRaise } from './bash-tool-timeout.js';
+import { resolveBashGuardMode, type BashGuardMode } from './bash-guard-mode.js';
 import { inspectBashCommand } from './bash-wait-guard.js';
 import { cgroupEventsDeltaOf } from './cgroup-events.js';
 import { ClaudeManagerDriver, type ClaudeQueryFn } from './claude-manager-driver.js';
@@ -644,6 +645,8 @@ class Host implements RunnerHost {
   readonly #childUser: RunnerChildUser | undefined;
   readonly #credentials: CredentialStore | undefined;
   readonly #permissionMode: ManagerPermissionMode;
+  /** Bash の門の扱い（`ALTEROID_BASH_GUARD`。`bash-guard-mode.ts`）。起動時に読み、不正な値は落とす。 */
+  readonly #bashGuard: BashGuardMode;
   readonly #peer: RunnerPeerOptions | undefined;
   /**
    * 実行環境プロファイル。
@@ -708,6 +711,7 @@ class Host implements RunnerHost {
     this.#peer = options.peer;
     this.#credentials = options.credentials;
     this.#permissionMode = options.permissionMode ?? resolvePermissionMode(this.#env);
+    this.#bashGuard = resolveBashGuardMode(this.#env);
     this.#enforceLease = options.enforceLease ?? false;
     this.#spawnAgentProcessFn = options.spawnAgentProcessFn;
     this.#readCgroupEventCountersFn = options.readCgroupEventCountersFn;
@@ -994,6 +998,7 @@ class Host implements RunnerHost {
       ...(this.#childUser === undefined ? {} : { childUser: this.#childUser }),
       ...(this.#credentials === undefined ? {} : { credentials: this.#credentials }),
       permissionMode: this.#permissionMode,
+      bashGuard: this.#bashGuard,
       ...(this.#peer === undefined ? {} : { peer: this.#peer }),
       profileEnv: () => this.#profile?.env() ?? {},
       mcpServers: () => this.#mcpServers?.servers,
@@ -1537,6 +1542,8 @@ interface RunnerSessionOptions {
   childUser?: RunnerChildUser;
   credentials?: CredentialStore;
   permissionMode: ManagerPermissionMode;
+  /** `RunnerHost` が起動時に読んだ Bash の門の扱い。 */
+  bashGuard: BashGuardMode;
   /**
    * プロファイル由来の env（評価済みの差分＋`BASH_ENV` などの所在）。
    *
@@ -1668,6 +1675,7 @@ class RunnerSession {
   readonly #childUser: RunnerChildUser | undefined;
   readonly #credentials: CredentialStore | undefined;
   readonly #permissionMode: ManagerPermissionMode;
+  readonly #bashGuard: BashGuardMode;
   readonly #peer: RunnerPeerOptions | undefined;
   /** MCP `peer` の仲買（最初に要ったときに1度だけ作る）。 */
   readonly #provider: AgentProviderId;
@@ -1948,6 +1956,7 @@ class RunnerSession {
     this.#queryFn = options.queryFn;
     this.#credentials = options.credentials;
     this.#permissionMode = options.permissionMode;
+    this.#bashGuard = options.bashGuard;
     this.#profileEnv = options.profileEnv;
     this.#mcpServers = options.mcpServers;
     this.#onClosed = options.onClosed;
@@ -4361,7 +4370,7 @@ class RunnerSession {
     permission: AgentPermissionRequest,
     source?: PeerApprovalSource,
   ): Promise<AgentPermissionDecision> {
-    const { toolName, input, kind, signal } = permission;
+    const { toolName, input, kind, signal, reason } = permission;
     // 確認を出せている＝セッションは開いて手を動かしている。
     this.#markProgressed();
     // SDK は同じ確認を再送しうる。id を SDK 側の識別子に揃えて、再送では新しい
@@ -4382,7 +4391,9 @@ class RunnerSession {
     // 同じ真偽値）。`manager-activity.ts` の `classifyManagerActivity` も同じ分け方を
     // 使うので、判定のコピーを2つ作らない。
     const baseSummary =
-      kind === 'question' ? describeQuestions(input) : `${toolName} の実行許可: ${brief(input)}`;
+      kind === 'question'
+        ? describeQuestions(input)
+        : `${toolName} の実行許可: ${brief(input)}${reason === undefined ? '' : `\n理由: ${reason}`}`;
     // **出所の印は要約の先頭に必ず付ける**（日誌・待ち・クローンの受信箱のどれにも出る。
     // 旧いデーモンが `source` 欄を落としても、印は本文に残る＝印の無い経路は作らない）。
     const summary =
@@ -4864,7 +4875,11 @@ class RunnerSession {
       this.#capturePreToolInputHead(record);
     });
 
-    if (record.toolName === 'Bash') {
+    // **門に当たった Bash を、確認に上げる（`ask`、既定）か、止める（`deny`）か、掛けない（`off`）か**
+    // は `ALTEROID_BASH_GUARD` が決める（issue #2884。`bash-guard-mode.ts`）。`ask` で返した呼び出しは
+    // この関数の最後で、クローンの1回だけの許可を見たうえで返す（`guardAsk`）。
+    let guardAsk: { reason: string } | undefined;
+    if (record.toolName === 'Bash' && this.#bashGuard !== 'off') {
       const toolInput = record.toolInput as
         { command?: unknown; run_in_background?: unknown } | null | undefined;
       const command = toolInput?.command;
@@ -4879,29 +4894,38 @@ class RunnerSession {
             backgrounded: toolInput?.run_in_background === true,
           });
         } catch (error) {
-          // 判定できなかった呼び出しは通さない（issue #1960。閉じる側へ倒す）。
+          // 判定できなかった呼び出しは、素通しにしない（issue #1960）。**倒れる先は確認である**
+          // （issue #2884。上がらずに止めて誰も開けられない形にしない）。`deny` を選んだ人にだけ止める。
           // reason は CLI・モデル側へ出る。伏せ字を通す（issue #2559。#2509 と同じ扱い）。
           const message = reasonOf(error);
-          return {
-            kind: 'deny',
-            reason: `Bash のガードの判定が例外で終わったので、安全側で拒否した（${message}）。形を変えずに打ち直さず、依頼者へ報告すること。`,
-          };
+          const reason = `Bash のガードの判定が例外で終わったので、安全側で確認に上げた（${message}）。形を変えずに打ち直さず、依頼者へ報告すること。`;
+          if (this.#bashGuard === 'deny') {
+            return {
+              kind: 'deny',
+              reason: `Bash のガードの判定が例外で終わったので、安全側で拒否した（${message}）。形を変えずに打ち直さず、依頼者へ報告すること。`,
+            };
+          }
+          return { kind: 'ask', reason };
         }
         if (verdict.blocked) {
           const actor =
             record.agentId === undefined
               ? `manager:${this.#id}`
               : `worker:${this.#id}:${record.agentType ?? WORKER_AGENT_NAME}`;
+          const asked = this.#bashGuard === 'ask';
 
           this.#tryObservation('ガードの note の送り出し', () => {
             this.#emit({
               type: 'note',
               managerId: this.#id,
-              text: `Bash の呼び出しを弾いた（${actor}・形=${verdict.form}）。${verdict.reason}`,
+              text: asked
+                ? `Bash の呼び出しを確認に上げた（${actor}・形=${verdict.form}）。${verdict.reason}`
+                : `Bash の呼び出しを弾いた（${actor}・形=${verdict.form}）。${verdict.reason}`,
             });
           });
 
-          return { kind: 'deny', reason: verdict.reason };
+          if (!asked) return { kind: 'deny', reason: verdict.reason };
+          guardAsk = { reason: verdict.reason };
         }
       }
     }
@@ -4923,8 +4947,15 @@ class RunnerSession {
     // 将来 `deny` を返すように変われば、`tsc` がここで落ちる。
     const decision = this.#consumeOneShotAllow(record);
     const rewrite = this.#planBashToolTimeoutRewrite(record);
-    if (rewrite === undefined) return decision;
-    return { ...decision, rewrite };
+    // **門の確認（`ask`）は、クローンの1回だけの許可が在れば、その許可が開ける**（issue #2884）。
+    // 許可はクローンが同じ呼び出しに明示して出したもので、確認に上げた答えと同じ重さである
+    // （`deny` の設定では、これまでどおり門が先に効く＝上の `return` で終わっている）。
+    const resolved: Exclude<AgentPreToolDecision, { kind: 'deny' }> =
+      guardAsk !== undefined && decision.kind === 'continue'
+        ? { kind: 'ask', reason: guardAsk.reason }
+        : decision;
+    if (rewrite === undefined) return resolved;
+    return { ...resolved, rewrite };
   }
 
   /**
@@ -5037,7 +5068,7 @@ class RunnerSession {
    */
   #consumeOneShotAllow(
     record: AgentPreToolRecord,
-  ): Exclude<AgentPreToolDecision, { kind: 'deny' }> {
+  ): Extract<AgentPreToolDecision, { kind: 'continue' | 'allow' }> {
     const toolName = record.toolName;
     if (toolName === undefined) return { kind: 'continue' };
     const matchInput = matchInputOf(record.toolInput);
