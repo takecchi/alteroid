@@ -4,6 +4,7 @@ import {
   tallyArchiveContinuity,
   type ArchiveContinuity,
 } from './archive-continuity.js';
+import { compareCodeUnits } from './code-unit-order.js';
 import { assertArchivableSessionId } from './archive-session-id.js';
 import { setStderrSinkForTesting } from './dropped-record.js';
 import { tailByCodePoints } from './excerpt.js';
@@ -357,7 +358,7 @@ export function createMemoryStores(): Stores {
             descriptionFreshness,
           }),
         )
-        .sort((a, b) => a.slug.localeCompare(b.slug));
+        .sort((a, b) => compareCodeUnits(a.slug, b.slug));
     },
     async read(slug) {
       checkMemorySlug(slug);
@@ -702,7 +703,9 @@ export function createMemoryStores(): Stores {
     async list() {
       // 読めない行は持てない（`put` がスキーマを通す）ので `unreadable` は常に空。
       return {
-        entries: [...schedules.values()].sort((a, b) => a.kind.localeCompare(b.kind)).map(isolate),
+        entries: [...schedules.values()]
+          .sort((a, b) => compareCodeUnits(a.kind, b.kind))
+          .map(isolate),
         unreadable: [],
       };
     },
@@ -1158,14 +1161,6 @@ export function createMemoryStores(): Stores {
     compareCreatedAt(a, b) || compareCodeUnits(a.id, b.id);
 
   /**
-   * 2次キーの比較。**UTF-16 のコード単位の順**（issue #2458。fs 版と同じ形——
-   * `packages/storage-fs/src/auth.ts` の `compareCodeUnits` の doc）。
-   * **`localeCompare` を使わないこと**——大文字と小文字、`-` と `_` の前後が、
-   * pg の `COLLATE "C"` の順と逆になる。
-   */
-  const compareCodeUnits = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
-
-  /**
    * `listIdentities` の並び全体（issue #1688）。
    * `createdAt` の実時刻 → `provider` → `subject`。
    */
@@ -1450,7 +1445,7 @@ export function createMemoryStores(): Stores {
 
   const credentials: CredentialVaultStore = {
     async list() {
-      return [...credentialRows.values()].sort((a, b) => a.name.localeCompare(b.name));
+      return [...credentialRows.values()].sort((a, b) => compareCodeUnits(a.name, b.name));
     },
     async put(entries) {
       const at = new Date().toISOString();
@@ -1641,11 +1636,11 @@ export function createMemoryStores(): Stores {
         })
         .sort(
           (a, b) =>
-            a.date.localeCompare(b.date) ||
-            a.managerId.localeCompare(b.managerId) ||
-            a.model.localeCompare(b.model) ||
-            a.layer.localeCompare(b.layer) ||
-            a.site.localeCompare(b.site) ||
+            compareCodeUnits(a.date, b.date) ||
+            compareCodeUnits(a.managerId, b.managerId) ||
+            compareCodeUnits(a.model, b.model) ||
+            compareCodeUnits(a.layer, b.layer) ||
+            compareCodeUnits(a.site, b.site) ||
             // 帰属の無い行は最後（ドライバ2つと同じ向き。`@alteroid/storage-fs` の
             // `compareTokenId` / pg の `nullif(...) asc nulls last`）。
             (a.tokenId === b.tokenId
@@ -1654,7 +1649,7 @@ export function createMemoryStores(): Stores {
                 ? 1
                 : b.tokenId === undefined
                   ? -1
-                  : a.tokenId.localeCompare(b.tokenId)),
+                  : compareCodeUnits(a.tokenId, b.tokenId)),
         );
       // **`rows` と同じ述語で絞る**（ドライバ2つと同じ——`UsageQuery` はモデルの
       // 絞りを持たないので、この2つの照会は完全に同じ条件になる）。
@@ -1670,17 +1665,17 @@ export function createMemoryStores(): Stores {
         })
         .sort(
           (a, b) =>
-            a.date.localeCompare(b.date) ||
-            a.managerId.localeCompare(b.managerId) ||
-            a.layer.localeCompare(b.layer) ||
-            a.site.localeCompare(b.site) ||
+            compareCodeUnits(a.date, b.date) ||
+            compareCodeUnits(a.managerId, b.managerId) ||
+            compareCodeUnits(a.layer, b.layer) ||
+            compareCodeUnits(a.site, b.site) ||
             (a.tokenId === b.tokenId
               ? 0
               : a.tokenId === undefined
                 ? 1
                 : b.tokenId === undefined
                   ? -1
-                  : a.tokenId.localeCompare(b.tokenId)),
+                  : compareCodeUnits(a.tokenId, b.tokenId)),
         );
       const unmeteredRows = [...usageUnmetered.values()]
         .filter((row) => {
@@ -1694,12 +1689,12 @@ export function createMemoryStores(): Stores {
         })
         .sort(
           (a, b) =>
-            a.date.localeCompare(b.date) ||
-            a.managerId.localeCompare(b.managerId) ||
-            a.layer.localeCompare(b.layer) ||
-            a.site.localeCompare(b.site) ||
-            a.provider.localeCompare(b.provider) ||
-            (a.tokenId ?? '\uffff').localeCompare(b.tokenId ?? '\uffff'),
+            compareCodeUnits(a.date, b.date) ||
+            compareCodeUnits(a.managerId, b.managerId) ||
+            compareCodeUnits(a.layer, b.layer) ||
+            compareCodeUnits(a.site, b.site) ||
+            compareCodeUnits(a.provider, b.provider) ||
+            compareCodeUnits(a.tokenId ?? '\uffff', b.tokenId ?? '\uffff'),
         );
       return {
         rows,
@@ -1777,7 +1772,7 @@ export function createMemoryStores(): Stores {
       // 読めない行は持てない（`write` がスキーマを通す）ので `unreadable` は常に空。
       return {
         entries: [...practices.values()]
-          .sort((a, b) => a.slug.localeCompare(b.slug))
+          .sort((a, b) => compareCodeUnits(a.slug, b.slug))
           .map((entry) =>
             isolate({
               slug: entry.slug,

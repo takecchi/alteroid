@@ -6,6 +6,7 @@ import {
   describeSkippedCredentialRow,
   type CredentialEntry,
   type StoredCredential,
+  compareCodeUnits,
 } from '@alteroid/core';
 import type { CredentialVaultStore } from '@alteroid/core';
 import { z } from 'zod';
@@ -114,7 +115,7 @@ export class FsCredentialVaultStore implements CredentialVaultStore {
 
   async list(): Promise<StoredCredential[]> {
     const file = await this.#read();
-    return [...file.credentials].sort((a, b) => a.name.localeCompare(b.name));
+    return [...file.credentials].sort((a, b) => compareCodeUnits(a.name, b.name));
   }
 
   async put(entries: readonly CredentialEntry[]): Promise<StoredCredential[]> {
@@ -160,7 +161,7 @@ export class FsCredentialVaultStore implements CredentialVaultStore {
       });
       return { credentials: [...rows.values()], invalidRaw };
     });
-    return [...written.credentials].sort((a, b) => a.name.localeCompare(b.name));
+    return [...written.credentials].sort((a, b) => compareCodeUnits(a.name, b.name));
   }
 
   /**

@@ -1,3 +1,4 @@
+import { sql, type SQL, type SQLWrapper } from 'drizzle-orm';
 import type { PgDatabase, PgQueryResultHKT } from 'drizzle-orm/pg-core';
 
 /**
@@ -50,4 +51,14 @@ export function stripNulls<T>(value: T): T {
     return mapped as T;
   }
   return value;
+}
+
+/**
+ * 並びのキーを**照合順 C（バイト順）で**比べる式（#2913。`auth.ts` の `byteOrder` と
+ * 同じ考え方）。列の既定の照合順に任せると、PGlite（C）と本番（`en_US.UTF-8` など）で
+ * `_` `-` `.` や大文字小文字の前後が変わり、fs / インメモリ（`compareCodeUnits`）とも
+ * 食い違う。`ORDER BY` の式に付けるだけなのでスキーマは変えない。
+ */
+export function byteOrder(column: SQLWrapper): SQL {
+  return sql`${column} collate "C"`;
 }

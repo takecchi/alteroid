@@ -26,7 +26,7 @@ import type {
 import { and, asc, eq, gte, lte, sql } from 'drizzle-orm';
 
 import type { Db } from './db.js';
-import { stripNulls, toIso, toNumber } from './db.js';
+import { byteOrder, stripNulls, toIso, toNumber } from './db.js';
 import { usageBaseline, usageDaily, usageLedger, usageTurns, usageUnmetered } from './schema.js';
 
 /** `usage_ledger` は単一行。id はこの値に固定する。 */
@@ -471,11 +471,11 @@ export class PgUsageStore implements UsageStore {
       .from(usageDaily)
       .where(conditions.length === 0 ? undefined : and(...conditions))
       .orderBy(
-        asc(usageDaily.date),
-        asc(usageDaily.managerId),
-        asc(usageDaily.model),
-        asc(usageDaily.layer),
-        asc(usageDaily.site),
+        asc(byteOrder(usageDaily.date)),
+        asc(byteOrder(usageDaily.managerId)),
+        asc(byteOrder(usageDaily.model)),
+        asc(byteOrder(usageDaily.layer)),
+        asc(byteOrder(usageDaily.site)),
         // **帰属の無い行を最後に置く。`asc(tokenId)` だけでは先頭に来る** —
         // 列は `not null default ''` なので、空文字は昇順のいちばん小さい値である
         // （null なら `asc` の既定が nulls last で最後に来るが、null は使えない
@@ -484,7 +484,7 @@ export class PgUsageStore implements UsageStore {
         //
         // **fs 側（`@alteroid/storage-fs` の `compareTokenId`）と向きを揃えること。**
         // 器が違うだけで行の並びが変わると、同じ照会が口によって違う順で出る。
-        sql`nullif(${usageDaily.tokenId}, '') asc nulls last`,
+        sql`nullif(${usageDaily.tokenId}, '') collate "C" asc nulls last`,
       );
 
     // **`usage_daily` と同じ述語で引く。** `UsageQuery` はモデルの絞りを持たない
@@ -504,11 +504,11 @@ export class PgUsageStore implements UsageStore {
       .from(usageTurns)
       .where(turnConditions.length === 0 ? undefined : and(...turnConditions))
       .orderBy(
-        asc(usageTurns.date),
-        asc(usageTurns.managerId),
-        asc(usageTurns.layer),
-        asc(usageTurns.site),
-        sql`nullif(${usageTurns.tokenId}, '') asc nulls last`,
+        asc(byteOrder(usageTurns.date)),
+        asc(byteOrder(usageTurns.managerId)),
+        asc(byteOrder(usageTurns.layer)),
+        asc(byteOrder(usageTurns.site)),
+        sql`nullif(${usageTurns.tokenId}, '') collate "C" asc nulls last`,
       );
 
     const unmeteredConditions = [
@@ -524,12 +524,12 @@ export class PgUsageStore implements UsageStore {
       .from(usageUnmetered)
       .where(unmeteredConditions.length === 0 ? undefined : and(...unmeteredConditions))
       .orderBy(
-        asc(usageUnmetered.date),
-        asc(usageUnmetered.managerId),
-        asc(usageUnmetered.layer),
-        asc(usageUnmetered.site),
-        asc(usageUnmetered.provider),
-        sql`nullif(${usageUnmetered.tokenId}, '') asc nulls last`,
+        asc(byteOrder(usageUnmetered.date)),
+        asc(byteOrder(usageUnmetered.managerId)),
+        asc(byteOrder(usageUnmetered.layer)),
+        asc(byteOrder(usageUnmetered.site)),
+        asc(byteOrder(usageUnmetered.provider)),
+        sql`nullif(${usageUnmetered.tokenId}, '') collate "C" asc nulls last`,
       );
 
     const ledgerRows = await this.#db

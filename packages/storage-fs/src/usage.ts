@@ -15,6 +15,7 @@ import {
   usageSiteSchema,
   usageTurnRowSchema,
   usageUnmeteredRowSchema,
+  compareCodeUnits,
 } from '@alteroid/core';
 import type {
   UnreadableUsageRow,
@@ -370,7 +371,7 @@ function compareTokenId(a: string | undefined, b: string | undefined): number {
   if (a === b) return 0;
   if (a === undefined) return 1;
   if (b === undefined) return -1;
-  return a.localeCompare(b);
+  return compareCodeUnits(a, b);
 }
 
 function addTotals(a: UsageTotals, b: UsageTotals): UsageTotals {
@@ -630,11 +631,11 @@ export class FsUsageStore implements UsageStore {
       })
       .sort(
         (a, b) =>
-          a.date.localeCompare(b.date) ||
-          a.managerId.localeCompare(b.managerId) ||
-          a.model.localeCompare(b.model) ||
-          a.layer.localeCompare(b.layer) ||
-          a.site.localeCompare(b.site) ||
+          compareCodeUnits(a.date, b.date) ||
+          compareCodeUnits(a.managerId, b.managerId) ||
+          compareCodeUnits(a.model, b.model) ||
+          compareCodeUnits(a.layer, b.layer) ||
+          compareCodeUnits(a.site, b.site) ||
           compareTokenId(a.tokenId, b.tokenId),
       );
 
@@ -652,10 +653,10 @@ export class FsUsageStore implements UsageStore {
       })
       .sort(
         (a, b) =>
-          a.date.localeCompare(b.date) ||
-          a.managerId.localeCompare(b.managerId) ||
-          a.layer.localeCompare(b.layer) ||
-          a.site.localeCompare(b.site) ||
+          compareCodeUnits(a.date, b.date) ||
+          compareCodeUnits(a.managerId, b.managerId) ||
+          compareCodeUnits(a.layer, b.layer) ||
+          compareCodeUnits(a.site, b.site) ||
           compareTokenId(a.tokenId, b.tokenId),
       );
 
@@ -672,11 +673,11 @@ export class FsUsageStore implements UsageStore {
       })
       .sort(
         (a, b) =>
-          a.date.localeCompare(b.date) ||
-          a.managerId.localeCompare(b.managerId) ||
-          a.layer.localeCompare(b.layer) ||
-          a.site.localeCompare(b.site) ||
-          a.provider.localeCompare(b.provider) ||
+          compareCodeUnits(a.date, b.date) ||
+          compareCodeUnits(a.managerId, b.managerId) ||
+          compareCodeUnits(a.layer, b.layer) ||
+          compareCodeUnits(a.site, b.site) ||
+          compareCodeUnits(a.provider, b.provider) ||
           compareTokenId(a.tokenId, b.tokenId),
       );
 
