@@ -609,11 +609,27 @@ function sinkArguments(node: ts.Node, rel: string): readonly ts.Node[] {
 }
 
 /**
+ * 口が1つも在り得ないソースを、AST を作る前に弾く（#3006）。リポジトリ全体（約240ファイル・約6MB）の
+ * パースと走査が、混んだ器で vitest の既定の 5 秒を超えていた。口の判定（`isStderrWrite` /
+ * `CLONE_SINK_NAMES` / `TOOLS_FILE` / `kind: 'deny'` / `HTTP_FILES`）はどれも、ソースに特定の語が
+ * 字面で在ることを要する。その語が1つも無いファイルは、必ず 0 件になる。
+ * **HTTP の 2 ファイルと tools.ts は語に依らず常に走査する**（口の条件が語でなくファイルで決まるため）。
+ * 口を足したら、ここの語も足すこと（口ごとの検出テストが足し忘れを拾う）。
+ */
+const SINK_NEEDLES = ['stderr', 'writeStderrSync', ...CLONE_SINK_NAMES, 'deny'];
+
+function mayContainSink(source: string, rel: string): boolean {
+  if (HTTP_FILES.has(rel) || rel === TOOLS_FILE) return true;
+  return SINK_NEEDLES.some((needle) => source.includes(needle));
+}
+
+/**
  * 外へ出る口（stderr・クローンへ届く知らせ・道具の応答・deny の理由）の引数の中にある、
  * 素のエラーの文字列化（直接と、変数へ入れてから）を返す。
  * `rel` は、そのソースの repo 相対パス（`text(...)` を口とみなすのは `tools.ts` だけ）。
  */
 function findBareErrorSinkWrites(source: string, rel = ''): BareErrorHit[] {
+  if (!mayContainSink(source, rel)) return [];
   const file = ts.createSourceFile('scan.ts', source, ts.ScriptTarget.Latest, true);
   collectErrorAliases(file);
   const tainted = collectTaintedNames(file);
@@ -1157,6 +1173,21 @@ describe('findBareErrorSinkWrites（純粋関数）: 別名・分割代入・配
   });
 });
 
+describe('findBareErrorSinkWrites: 語の事前判定（#3006）', () => {
+  it('口の語が1つも無いソースは、素のエラーの文字列化が在っても走査しない（口が無いので 0 件）', () => {
+    const body = 'try { f(); } catch (error) { const m = String(error); g(m); }';
+    expect(count(body)).toBe(0);
+    expect(count(`${body} process.stderr.write(String(error));`)).toBe(1);
+  });
+
+  it('語の事前判定は、各種の口の語（stderr / writeStderrSync / announce / postToClone / deny）を落とさない', () => {
+    expect(count('try {} catch (e) { writeStderrSync(String(e)); }')).toBe(1);
+    expect(count('try {} catch (e) { announce(String(e)); }')).toBe(1);
+    expect(count('try {} catch (e) { postToClone(String(e)); }')).toBe(1);
+    expect(count("try {} catch (e) { return { kind: 'deny', reason: String(e) }; }")).toBe(1);
+  });
+});
+
 describe('外へ出る口へ置く例外の文は reasonOf / redactErrorText を通す（#2512 / #2538 / #2565）', () => {
   it('stderr・announce・postToClone・tools.ts の text・deny の理由に、素の String(error) / error.message が無い（HTTP の応答は daemon / runner の app.ts、#2570）', () => {
     const files = collectRepoFiles(ROOT, EXCLUDE_DIRS).filter(isScannedSource);
@@ -1171,5 +1202,7 @@ describe('外へ出る口へ置く例外の文は reasonOf / redactErrorText を
       offenders,
       '素のエラーの文字列化が外へ出ている。reasonOf(error)（packages/core/src/dropped-record.ts）か redactErrorText を通すこと（使い分けは両方の doc）',
     ).toEqual([]);
-  });
+    // 口の語が在る約55ファイルのパースと走査は正当な仕事で、直した後も2.4秒前後かかる。混んだ器で既定の5秒に
+    // 迫らないよう、この1本だけ上限を15秒にする（#3006）。
+  }, 15_000);
 });
