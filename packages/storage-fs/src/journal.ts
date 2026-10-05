@@ -7,6 +7,7 @@ import {
   JournalAnchorNotFoundError,
   journalRowType,
   listPageByOverfetch,
+  stripNulDeep,
   matchesJournalSearch,
   noteDroppedJournalRow,
   noteDroppedJournalRowsSummary,
@@ -35,8 +36,9 @@ export class FsJournalStore implements JournalStore {
   }
 
   async append(input: JournalEntryInput): Promise<JournalEntry> {
+    // 日誌の本文の NUL は落として残す（issue #3011。pg の `stripNulls` と同じ）。
     const entry = journalEntrySchema.parse({
-      ...input,
+      ...stripNulDeep(input),
       id: randomUUID(),
       at: new Date().toISOString(),
     });

@@ -1406,6 +1406,7 @@ export {
  * {@link stripNul} で落として残す。3実装（インメモリ / fs / pg）が同じ部品を呼ぶ。
  */
 export { NulNotAllowedError, assertNoNul, hasNul, stripNul } from './nul-guard.js';
+export { stripNulDeep } from './nul-guard.js';
 export { InvalidCredentialNameError, assertValidCredentialEntries } from './credential-input.js';
 export {
   DuplicateTokenIdError,
@@ -1429,6 +1430,7 @@ export { assertProfileRowWritable } from './profile-input.js';
 export { preparePermissionGrantForPut } from './permission-grant-input.js';
 export { verifySessionRegistryNulContract } from './session-registry-nul-contract.js';
 export { verifyPersonaNulContract } from './persona-nul-contract.js';
+export { verifyScheduleNulContract } from './schedule-nul-contract.js';
 /** auth（accounts・identities・accessTokens・loginRequests）の入口の NUL の扱い（issue #3011）。 */
 export {
   prepareAccessTokenForWrite,

@@ -176,6 +176,15 @@ function isBeforeTurns(turnsSince: string | null, from: string | undefined): boo
  * 重なりやすいとは読んでいない（デーモンに脳は1つ——architecture
  * 「脳は1インスタンス」）。
  *
+ * **⚠️ lock が保証するのは「直列化」であって「呼んだ順」ではない（#3015）。**
+ * 2つの `record()` が重なれば、どちらが先に lock を取るかは呼んだ順と一致しない。
+ * 累積は順序に依存し（前より小さい累積は数え直しとして全量が積まれる——
+ * `foldUsageSnapshot`）、fs 版も同じ畳み方なので、**呼び手が前後して到着させた
+ * 累積は、store の欠陥ではなく入力の順序の問題として過大に数えられうる**
+ * （本物の PostgreSQL での実測: 到着順を直列で畳み直した値と毎回一致した）。
+ * 呼び手が同じ `(layer, managerId)` の累積を並行に発行するときは、発行の順を
+ * 呼び手の側で保つこと。
+ *
  * **`accumulation: 'oneshot'` はこの窓の外である。** 基準を読まない
  * （`baselineRows` は `[]` に固定）ので、比べる相手がそもそも無い——並行に
  * 積んでも、`usage_daily` / `usage_turns` の `onConflictDoUpdate` が

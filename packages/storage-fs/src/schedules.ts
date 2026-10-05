@@ -3,6 +3,8 @@ import { join } from 'node:path';
 
 import {
   UnreadableScheduleError,
+  assertNoNul,
+  stripNul,
   schedulePhaseSchema,
   scheduledRequestSchema,
   compareCodeUnits,
@@ -205,7 +207,8 @@ export class FsScheduleStore implements ScheduleStore {
     await this.#update((file) => {
       const schedules = [
         ...file.schedules.filter((existing) => existing.kind !== entry.kind),
-        scheduledRequestSchema.parse(entry),
+        // kind の NUL は入口のスキーマが弾く。本文は落として残す（issue #3011）。
+        scheduledRequestSchema.parse({ ...entry, request: stripNul(entry.request) }),
       ];
       // **書き込む kind と一致する壊れた行は置き換える**（`FsJobStore.putJob`
       // と同じフォローアップ。issue #1944）。直したはずの kind の壊れた行が
@@ -301,7 +304,7 @@ export class FsScheduleStore implements ScheduleStore {
       if (found === undefined) return { next: file, result: null };
       const next = scheduledRequestSchema.parse({
         ...found,
-        request: changes.request,
+        request: stripNul(changes.request),
         spec: changes.spec,
         updatedAt,
       });
@@ -333,6 +336,7 @@ export class FsScheduleStore implements ScheduleStore {
   }
 
   async putPhase(phase: SchedulePhase): Promise<void> {
+    assertNoNul('schedulePhase.kind', phase.kind);
     await this.#update((file) => {
       const phases = [
         ...file.phases.filter((existing) => existing.kind !== phase.kind),

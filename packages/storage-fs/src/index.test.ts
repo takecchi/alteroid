@@ -15,6 +15,7 @@ import {
   verifyCredentialVaultContract,
   verifyTokenPoolContract,
   verifyPersonaNulContract,
+  verifyScheduleNulContract,
   verifySessionRegistryNulContract,
   verifyProfileStoreContract,
   verifyPermissionGrantStoreContract,
@@ -1890,6 +1891,10 @@ describe('FsPermissionGrantStore（issue #863）', () => {
 });
 
 describe('FsScheduleStore', () => {
+  it('NUL の契約（issue #3011。3実装で同じことを測る）', async () => {
+    await verifyScheduleNulContract(stores.schedules);
+  });
+
   const plan = {
     kind: 'issue-round',
     spec: { type: 'daily' as const, at: '09:00' },

@@ -21,6 +21,10 @@
  *   特定の1行を指して書き換える鍵ではない。`model` は SDK の `modelUsage` のキー（外から来る）で、
  *   断ると消費の記録が丸ごと台帳から消える（呼び出し側は失敗を握りつぶして日誌に残すだけ）。
  *   害が大きいのは記録を失うほうである。部品は `usage-input.ts`。
+ * - **同じ例外: 引き受けた仕事の台帳（`CommitmentStore`）の `source`**（teto の判断、2026-10-06。issue #3011）。
+ *   マネージャー id・会話 id・承認 id などの出所の注記で、行を指す鍵ではない（行を指すのは `id` で、こちらは断る）。
+ *   断ると引き受けた仕事が台帳から消える。落として残し、畳み込み（同一マネージャー×同一本文）の判定も
+ *   落とした値で3実装が揃う。
  *
  * **例外の文に値を載せない。** どこから来た値か分からない（資格かもしれない）ので、
  * 何が入っているかをログへ流さない。載せるのは「どの欄か」だけ。型で見分けること
@@ -50,4 +54,21 @@ export function hasNul(value: string): boolean {
 /** 本文から NUL を落とす（無ければ同じ文字列をそのまま返す）。 */
 export function stripNul(value: string): string {
   return value.includes('\u0000') ? value.replaceAll('\u0000', '') : value;
+}
+
+/**
+ * 構造のある本文（日誌の1行など）の文字列と、オブジェクトの欄名から NUL を落とす（issue #3011）。
+ * pg の `stripNulls`（`storage-pg/src/db.ts`）と同じ規則で、fs・インメモリが同じ結果になるように置く。
+ * 鍵には使わない（鍵は {@link assertNoNul} で断る）。
+ */
+export function stripNulDeep<T>(value: T): T {
+  if (typeof value === 'string') return stripNul(value) as T;
+  if (Array.isArray(value)) return value.map((item) => stripNulDeep(item)) as T;
+  if (value !== null && typeof value === 'object') {
+    const source = value as Record<string, unknown>;
+    const mapped: Record<string, unknown> = {};
+    for (const key of Object.keys(source)) mapped[stripNul(key)] = stripNulDeep(source[key]);
+    return mapped as T;
+  }
+  return value;
 }

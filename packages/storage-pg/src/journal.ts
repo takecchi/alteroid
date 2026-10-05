@@ -5,6 +5,8 @@ import {
   JournalAnchorNotFoundError,
   journalRowType,
   JOURNAL_SEARCH_FIELDS,
+  hasNul,
+  stripNulDeep,
   noteDroppedJournalRow,
   noteDroppedJournalRowsSummary,
 } from '@alteroid/core';
@@ -80,8 +82,9 @@ export class PgJournalStore implements JournalStore {
   }
 
   async append(input: JournalEntryInput): Promise<JournalEntry> {
+    // 本文の NUL は落として残す（issue #3011）。返り値も fs・インメモリと同じく落とした後の形にする。
     const entry = journalEntrySchema.parse({
-      ...input,
+      ...stripNulDeep(input),
       id: randomUUID(),
       at: new Date().toISOString(),
     });
@@ -132,6 +135,12 @@ export class PgJournalStore implements JournalStore {
     let afterSeq: number | undefined;
     if (query.after !== undefined) {
       const after = query.after;
+      // 読むだけの口の NUL（issue #3011）。NUL を含む鍵の行は存在しえない（書き込みが断る）ので「無い」。DB に投げると NUL を含む text を受け付けずエラーになる。
+      if (hasNul(after.id)) {
+        throw new JournalAnchorNotFoundError(
+          `after で指定された行（id=${after.id}, at=${after.at}）が見つからない`,
+        );
+      }
       const rows = await this.#db
         .select({ seq: journal.seq })
         .from(journal)
@@ -171,7 +180,10 @@ export class PgJournalStore implements JournalStore {
       ...(query.with === undefined ? [] : [inArray(sql`(${journal.entry}->>'with')`, query.with)]),
       // **`q` も `where` 節（＝ `limit` より前）で効かせる**（issue #250。`with` と
       // 同じ段）。組み立ては `journalSearchTextSql` / `likePattern`。
-      ...(query.q === undefined ? [] : [journalSearchMatches(query.q)]),
+      // NUL を含む q に一致する行は存在しえない（書き込みが落とす。issue #3011）ので0件。
+      ...(query.q === undefined
+        ? []
+        : [hasNul(query.q) ? sql`false` : journalSearchMatches(query.q)]),
       // **`order` の向きに応じて `gt` / `lt` を切り替える。** `desc` は錨より
       // 古い側（`seq` が小さい側）、`asc` は錨より新しい側（`seq` が大きい側）。
       ...(afterSeq === undefined
@@ -231,6 +243,8 @@ export class PgJournalStore implements JournalStore {
 
   /** id で1件引く（`id` は一意索引なので1行で当たる）。 */
   async get(id: string): Promise<JournalEntry | null> {
+    // 読むだけの口の NUL（issue #3011）。NUL を含む鍵の行は存在しえない（書き込みが断る）ので「無い」。DB に投げると NUL を含む text を受け付けずエラーになる。
+    if (hasNul(id)) return null;
     const rows = await this.#db
       .select(ROW_SELECTION)
       .from(journal)
