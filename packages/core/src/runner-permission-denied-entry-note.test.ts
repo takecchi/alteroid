@@ -14,6 +14,7 @@ function fakeSdk(): { fn: typeof sdkQuery; options: Options[] } {
   const options: Options[] = [];
   const fn = ((input: { options: Options }) => {
     options.push(input.options);
+    let stop: () => void = () => undefined;
     async function* generate(): AsyncGenerator<SDKMessage, void> {
       yield {
         type: 'system',
@@ -21,10 +22,12 @@ function fakeSdk(): { fn: typeof sdkQuery; options: Options[] } {
         session_id: 'sess-1',
         uuid: 'uuid-1',
       } as unknown as SDKMessage;
-      await new Promise<void>(() => undefined);
+      await new Promise<void>((resolve) => {
+        stop = resolve;
+      });
     }
     return Object.assign(generate(), {
-      close: () => undefined,
+      close: () => stop(),
       interrupt: async () => undefined,
     }) as unknown as Query;
   }) as unknown as typeof sdkQuery;
