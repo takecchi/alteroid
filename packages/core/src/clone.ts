@@ -2261,7 +2261,8 @@ class Clone implements CloneHost {
    * なる。
    */
   readonly #credentials: (() => Record<string, string>) | undefined;
-  readonly #tokenIdentity: (() => { tokenId: string; generation: number; fingerprint?: string } | undefined) | undefined;
+  readonly #tokenIdentity:
+    (() => { tokenId: string; generation: number; fingerprint?: string } | undefined) | undefined;
   /** {@link CloneOptions.provider}。 */
   readonly #provider: Pick<AgentProvider, 'id' | 'capabilities'>;
   readonly #onUsageObservation:
