@@ -1,9 +1,28 @@
 import { Send, Square } from 'lucide-react';
-import type { ReactNode } from 'react';
+import { type ReactNode, useLayoutEffect, useRef } from 'react';
 
 import { Button, Textarea } from '../../common';
 
 import { isSubmitShortcut } from './ime';
+
+/**
+ * 入力欄の高さの上限。画面の高さの 40% と 15rem の小さいほう。
+ *
+ * スマホでソフトキーボードが出ると見える領域は 844px の端末でも 500px 前後になる
+ * （Chrome は dvh ごと縮む。iOS は縮まないので上限を 40% に抑えて余裕を見る）。
+ * 15rem は 1 行 24px で約 10 行、デスクトップ（1 行 20px）で 12 行。これを超えたら内側をスクロールする。
+ */
+const MAX_HEIGHT_CLASS = 'max-h-[min(40dvh,15rem)]';
+
+/**
+ * 中身に合わせて `textarea` の高さを決める。`field-sizing: content` は Firefox などが
+ * 対応していないので使わず、`scrollHeight` から決める（上限は CSS の `max-height`）。
+ * 空に戻れば `auto` から測り直すので元の高さに戻る。
+ */
+function fitHeight(el: HTMLTextAreaElement): void {
+  el.style.height = 'auto';
+  el.style.height = `${el.scrollHeight + (el.offsetHeight - el.clientHeight)}px`;
+}
 
 /**
  * 話しかける欄（画面の下端）。
@@ -14,6 +33,8 @@ import { isSubmitShortcut } from './ime';
  *   送る口を消すと、続けて送るにはいったん受信を捨てるしかなくなる
  * - 「受信をやめる」は画面の購読を切るだけで、クローンのターンは止まらない
  *   （止めるのは見出しの「ターンを止める」）
+ * - **入力に合わせて高さが伸びる**（上限つき。超えたら内側をスクロール）。伸びるので
+ *   リサイズのつまみは出さない（タッチでは掴めず、デスクトップでも自動の高さと競う）
  * - 狭い画面ではボタンの文言を隠して記号だけにする（入力欄と幅を取り合うため）。
  *   読み上げの名前は `aria-label` で持つ
  *
@@ -40,11 +61,21 @@ export function ChatComposer({
   placeholder?: string;
 }) {
   const empty = value.trim() === '';
+  const box = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const el = box.current?.querySelector('textarea');
+    if (el == null) return;
+    fitHeight(el);
+    // 幅が変わると折り返しが変わるので、向きの変更や窓の大きさの変更でも測り直す。
+    const refit = () => fitHeight(el);
+    window.addEventListener('resize', refit);
+    return () => window.removeEventListener('resize', refit);
+  }, [value]);
   return (
     <div className="shrink-0 border-t border-border bg-background pt-3 pb-[calc(0.75rem+var(--safe-bottom))] pl-[calc(1rem+var(--safe-left))] pr-[calc(1rem+var(--safe-right))] md:pl-[calc(1.5rem+var(--safe-left))] md:pr-[calc(1.5rem+var(--safe-right))]">
       {error !== undefined && <div className="mb-2">{error}</div>}
       <div className="flex items-end gap-2">
-        <div className="min-w-0 flex-1">
+        <div ref={box} className="min-w-0 flex-1">
           {/*
             **受信中も打てる。** 塞ぐと、順番待ちのあいだに言い足したいことが
             あっても待つしかなく、サーバ側にある「まとめて1ターンで読む」機構
@@ -52,6 +83,7 @@ export function ChatComposer({
           */}
           <Textarea
             rows={2}
+            className={`resize-none overflow-y-auto ${MAX_HEIGHT_CLASS}`}
             value={value}
             placeholder={placeholder}
             onChange={(event) => onChange(event.target.value)}

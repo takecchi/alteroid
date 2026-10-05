@@ -6,6 +6,7 @@ import {
   Markdown,
   Page,
   Button,
+  ConfirmDialog,
   ErrorNote,
   Input,
   Spinner,
@@ -75,6 +76,7 @@ export default function PracticeDetail({ loaderData }: Route.ComponentProps) {
   const [draftTitle, setDraftTitle] = useState<string | undefined>(undefined);
   const [draftContent, setDraftContent] = useState<string | undefined>(undefined);
   const [busy, setBusy] = useState(false);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [failure, setFailure] = useState<unknown>(undefined);
   const [savedAt, setSavedAt] = useState<string | undefined>(undefined);
 
@@ -126,15 +128,23 @@ export default function PracticeDetail({ loaderData }: Route.ComponentProps) {
 
   return (
     <Page
+      documentTitle={`${slug} - やり方`}
       title={
+<<<<<<< HEAD
         <span className="flex items-center gap-2">
           <Link
             to="/practices"
             className="text-muted-foreground hover:text-foreground pointer-coarse:-mx-2 pointer-coarse:-my-2.5 pointer-coarse:px-2 pointer-coarse:py-2.5"
+=======
+        <span className="flex items-baseline gap-2">
+          <Link
+            to="/practices"
+            className="shrink-0 whitespace-nowrap text-muted-foreground hover:text-foreground"
+>>>>>>> origin/main
           >
             やり方
           </Link>
-          <span className="text-muted-foreground">/</span>
+          <span className="shrink-0 text-muted-foreground">/</span>
           <span className="min-w-0 font-mono text-sm break-all">{slug}</span>
         </span>
       }
@@ -151,20 +161,32 @@ export default function PracticeDetail({ loaderData }: Route.ComponentProps) {
       action={
         <div className="flex items-center gap-2">
           {!missing && data !== undefined && (
-            <Button
-              variant="danger"
-              size="sm"
-              disabled={busy}
-              onClick={() => {
-                setBusy(true);
-                deletePractice(slug)
-                  .then(() => navigate('/practices'))
-                  .catch(setFailure)
-                  .finally(() => setBusy(false));
-              }}
-            >
-              削除
-            </Button>
+            <>
+              <Button
+                variant="danger"
+                size="sm"
+                disabled={busy}
+                onClick={() => setConfirmingDelete(true)}
+              >
+                削除
+              </Button>
+              {/* 取り消せない操作（本文ごと消える）なので、押した瞬間には実行せず確認を挟む（#2781） */}
+              <ConfirmDialog
+                open={confirmingDelete}
+                onOpenChange={setConfirmingDelete}
+                title={`「${slug}」を削除しますか`}
+                description="このやり方は本文ごと消え、元に戻せません。"
+                confirmLabel="削除する"
+                destructive
+                onConfirm={() => {
+                  setBusy(true);
+                  deletePractice(slug)
+                    .then(() => navigate('/practices'))
+                    .catch(setFailure)
+                    .finally(() => setBusy(false));
+                }}
+              />
+            </>
           )}
           {!loadFailed && (
             <Button variant="primary" size="sm" loading={busy} disabled={!canSave} onClick={save}>

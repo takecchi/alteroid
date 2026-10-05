@@ -199,11 +199,29 @@ describe('継続する依頼を仕込む', () => {
 });
 
 describe('継続中の依頼を外す', () => {
-  it('依頼には「外す」があり、DELETE を打つ', async () => {
+  it('「外す」を押しただけでは外さず、確認を出す。やめれば外さない（#2781）', async () => {
     stubSchedule([REQUEST_ENTRY]);
     renderSchedule();
 
     fireEvent.click(await screen.findByRole('button', { name: '外す' }));
+
+    expect(await screen.findByRole('alertdialog')).toBeTruthy();
+    expect(screen.getByText('予定「morning-issues」を外しますか')).toBeTruthy();
+    expect(sent).toHaveLength(0);
+
+    fireEvent.click(screen.getByRole('button', { name: 'やめる' }));
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+    expect(sent).toHaveLength(0);
+  });
+
+  it('依頼には「外す」があり、確認で外すと DELETE を打つ', async () => {
+    stubSchedule([REQUEST_ENTRY]);
+    renderSchedule();
+
+    fireEvent.click(await screen.findByRole('button', { name: '外す' }));
+    fireEvent.click(
+      within(await screen.findByRole('alertdialog')).getByRole('button', { name: '外す' }),
+    );
 
     await waitFor(() => {
       expect(sent).toHaveLength(1);
@@ -432,5 +450,19 @@ describe('/schedule 画面: 読めない継続中の依頼の断り', () => {
 
     expect(await screen.findByText(/登録された定期ジョブが無い（/)).toBeTruthy();
     expect(screen.queryByText(/読めない/)).toBeNull();
+  });
+});
+
+describe('定期ジョブの行の説明文の列（#2755）', () => {
+  it('説明文の列は最小幅を持つ（flex-basis 0 のまま 46px に潰れない）', async () => {
+    // jsdom はレイアウトを持たず折り返しを測れない（390px で説明文の列が約46px、
+    // 1行2〜3文字に潰れた実寸はブラウザで測った）。潰れを防ぐ指定そのもの＝
+    // 最小幅を持つこと、`min-w-0`（最小幅を0にする指定）に戻らないことを固定する。
+    stubSchedule([DEFAULT_ENTRY]);
+    renderSchedule();
+
+    const column = (await screen.findByText(DEFAULT_ENTRY.description)).parentElement;
+    expect(column?.className).toContain('min-w-[min(14rem,100%)]');
+    expect(column?.className).not.toMatch(/(^|\s)min-w-0(\s|$)/);
   });
 });

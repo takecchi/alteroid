@@ -1,14 +1,14 @@
 import type { query as sdkQuery, Options, Query, SDKMessage } from '@anthropic-ai/claude-agent-sdk';
 import { describe, expect, it } from 'vitest';
 
-import { waitFor } from './clone-test-harness.js';
+import { setup, waitFor } from './clone-test-harness.js';
 import { ALWAYS_REDELIVER, createClone } from './clone.js';
 import type { CloneHost } from './host.js';
 import { createLocalRunner } from './runner-local.js';
 import { createRunnerRegistry } from './runner-protocol.js';
 import type { InboxEvent, PendingApproval } from './schema.js';
 import type { Stores } from './store.js';
-import { createMemoryStores } from './testing.js';
+import { createMemoryStores, humanMessage } from './testing.js';
 
 /**
  * issue #1977 の直し（回答済みで未配達の承認を、起動時に拾い直す）。
@@ -649,5 +649,38 @@ describe('配達済みの印は、読んだ写しで行を丸ごと書き戻さ�
     const approval = await base.jobs.getApproval('ap-1');
     expect(interleaved).toBe(true);
     expect(approval?.withdrawnAt).toBe('2999-01-01T00:06:00.000Z');
+  });
+});
+
+describe('枠で保持した human_answer の再配達（issue #2744）', () => {
+  const spendLimitMessage = "You've hit your individual spend limit for this account.";
+
+  it('回答のターンが枠で失敗して保持されても、解除後の再配達でターンが起き、二重配達として捨てられない', async () => {
+    const stores = createMemoryStores();
+    await stores.jobs.putApproval(seedApproval());
+    // 1ターン目（回答の初回）だけ枠で失敗させ、以降は成功させる。
+    const s = setup(undefined, stores, {
+      resultFor: (turnIndex) =>
+        turnIndex < 1 ? { subtype: 'error_during_execution', text: spendLimitMessage } : undefined,
+    });
+
+    await s.clone.answerApproval('ap-1', '許可します');
+    await waitFor(() => (s.calls[0]?.inputs.length ?? 0) >= 1, '回答の初回のターンが起きる');
+    await waitFor(async () => {
+      const pending = await stores.inbox.claimPending();
+      return pending.some((p) => p.event.type === 'human_answer');
+    }, '枠で失敗した human_answer が未読のまま保持される');
+
+    // 次の合図の到着が解除の試行を起こす。保持した human_answer が先頭へ戻る。
+    s.clone.post(humanMessage('次の合図'));
+
+    // 回答の本文を含む入力が2回（初回の失敗 + 再配達）SDK へ渡ること。
+    await waitFor(
+      () =>
+        (s.calls[0]?.inputs.filter((text) => text.includes('回答: 許可します')).length ?? 0) >= 2,
+      '保持した human_answer の再配達でターンが起きる',
+    );
+
+    await s.clone.stop();
   });
 });

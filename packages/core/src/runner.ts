@@ -4572,6 +4572,21 @@ class RunnerSession {
         : `worker:${this.#id}:${record.agentType ?? WORKER_AGENT_NAME}`;
     const toolName = record.toolName;
 
+    // **入口の1行（issue #1766）。** PermissionDenied フックが呼ばれたこと自体を
+    // 日誌に残す（マネージャー本人の拒否で確認が届かない原因が、フックが来て
+    // いないのか呼ばれて落ちたのかを区別するため）。返り値・ask・順序は変えない。
+    // 理由は先頭だけ（改行は潰す）。tool_input は載せない。
+    const reasonHead = Array.from((record.reason ?? '').replace(/\s+/g, ' ').trim());
+    this.#emit({
+      type: 'note',
+      managerId: this.#id,
+      text:
+        `分類器の拒否のフックが届いた（${actor}・${toolName ?? '道具名なし'}・` +
+        `tool_use_id=${record.toolUseId ?? '無し'}）。理由の先頭: ` +
+        `${reasonHead.length === 0 ? '(無し)' : reasonHead.slice(0, 80).join('')}` +
+        `${reasonHead.length > 80 ? '…' : ''}（issue #1766）`,
+    });
+
     if (toolName === undefined) {
       this.#emit({
         type: 'note',

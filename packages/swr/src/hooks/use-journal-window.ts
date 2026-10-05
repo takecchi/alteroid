@@ -32,9 +32,10 @@ import {
   applyNewerPage,
   applyOlderPage,
   filterRecent,
+  formatDateTime,
   JOURNAL_MAX_LIMIT,
   JOURNAL_PAGE,
-  journalHorizonNote,
+  journalHorizonNoteForHuman,
   newerPageQuery,
   olderPageQuery,
   readThroughUnreadable,
@@ -236,7 +237,11 @@ export function useJournalWindow(selected: readonly JournalEntryType[], q = ''):
         // のおかげである（以前はここを送らず、その形だけ注記が出ない
         // 非対称があった）。常に上書きしておく——`journalHorizonNote` は
         // `undefined` を「地平にかかっていない」と同じ扱いで注記を出さない。
-        setHorizonNote(journalHorizonNote(applied.outcome, data.oldestAt, data.crossesHorizon));
+        setHorizonNote(
+          journalHorizonNoteForHuman(applied.outcome, data.oldestAt, data.crossesHorizon, (iso) =>
+            formatDateTime(iso),
+          ),
+        );
         setLoadingInitial(false);
       })
       .catch((caught: unknown) => {
@@ -299,7 +304,11 @@ export function useJournalWindow(selected: readonly JournalEntryType[], q = ''):
           return;
         }
         setOlderStatus(applied.outcome);
-        setHorizonNote(journalHorizonNote(applied.outcome, data.oldestAt, data.crossesHorizon));
+        setHorizonNote(
+          journalHorizonNoteForHuman(applied.outcome, data.oldestAt, data.crossesHorizon, (iso) =>
+            formatDateTime(iso),
+          ),
+        );
         setLoadingOlder(false);
       })
       .catch((caught: unknown) => {

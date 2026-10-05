@@ -1,4 +1,5 @@
 import type { SessionStore } from '@anthropic-ai/claude-agent-sdk';
+import { createHash } from 'node:crypto';
 
 import type { ArchiveContinuity } from './archive-continuity.js';
 import type { AuthStore } from './auth.js';
@@ -65,6 +66,52 @@ export function ensureTrailingNewline(text: string): string {
   return text.endsWith('\n') ? text : `${text}\n`;
 }
 
+/**
+ * 記憶文書の「版」。**保存された本文（正規化後。`read()` が返す `content`）の
+ * sha256 hex。** 読んだ側が持ち回り、書くときに `WriteMemoryOptions.ifMatch` へ
+ * 渡す（Issue #2743）。`updatedAt` でなく本文のハッシュにしたのは、fs の mtime の
+ * 精度（同じ時刻内の2回の書き込みを区別できない）に依らないため、
+ * かつ3実装（fs / pg / インメモリ）が同じ式で同じ値を出せるためである。
+ */
+export function memoryVersion(content: string): string {
+  return createHash('sha256').update(content).digest('hex');
+}
+
+/** `PersonaStore.write` の任意の引数。 */
+export interface WriteMemoryOptions {
+  /**
+   * 前提の版（`memoryVersion` の値）。**書く瞬間の版がこれと違えば書かず、
+   * `MemoryConflictError` を投げる**（比較と書き込みは1つの排他の中で行う）。
+   * `null` は「読んだ時には無かった」——いまも無いときだけ書ける。
+   * **省略（`undefined`）は従来どおり後勝ち**（クローンの道具など、前提を
+   * 持たない書き手のため）。`ScheduleStore.claimRun` の `expectedUpdatedAt` と同じ形。
+   */
+  ifMatch?: string | null;
+}
+
+/**
+ * 前提の版が合わず、書かなかった。`current` は**いまの文書**（無ければ `null`）
+ * ——書き手が自分の内容を捨てずに見比べられるよう、呼び出し側へ返す。
+ */
+export class MemoryConflictError extends Error {
+  readonly current: MemoryDocument | null;
+  constructor(slug: string, current: MemoryDocument | null) {
+    super(`記憶が読んだ後に変わっています: ${slug}`);
+    this.name = 'MemoryConflictError';
+    this.current = current;
+  }
+}
+
+/** 前提の版 `ifMatch` が、いまの文書と合うか（`undefined` は前提なし＝常に合う）。 */
+export function memoryVersionMatches(
+  current: { content: string } | null,
+  ifMatch: string | null | undefined,
+): boolean {
+  if (ifMatch === undefined) return true;
+  if (ifMatch === null) return current === null;
+  return current !== null && memoryVersion(current.content) === ifMatch;
+}
+
 /** 記憶 = 人間がいつでも読んで直せる Markdown 文書群（提供価値1）。 */
 export interface PersonaStore {
   /**
@@ -109,8 +156,13 @@ export interface PersonaStore {
    * `packages/core/src/persona-contract.test.ts`）。**4つ目を足すときは、
    * その歯も4つ目にする。** 1つで測って3つとも測ったことにしないのが、
    * この Issue の主題そのものである。
+   *
+   * **`options.ifMatch`（Issue #2743）で前提の版を持てる。** 合わなければ
+   * 何も書かず `MemoryConflictError`。比較は書き込みと同じ排他の中で行う
+   * （fs: `#serialize` の内側、pg: 条件付きの1文）。3実装とも同じ挙動で、
+   * `persona-contract.test.ts` / fs / pg の各テストに歯がある。
    */
-  write(slug: string, content: string): Promise<MemoryDocument>;
+  write(slug: string, content: string, options?: WriteMemoryOptions): Promise<MemoryDocument>;
   /**
    * 末尾に追記。存在しなければ作る。
    *

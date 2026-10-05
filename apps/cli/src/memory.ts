@@ -267,11 +267,12 @@ export function freshnessMarker(freshness: MemorySummary['descriptionFreshness']
 export async function memoryShowCommand(slug: string): Promise<void> {
   const conn = await connect('read');
   if (conn === null) return;
-  const content = await read(conn.client, conn.target, slug);
-  if (content === null) {
+  const doc = await readDoc(conn.client, conn.target, slug);
+  if (doc === null) {
     stdout.write(`そんな記憶はありません: ${slug}\n`);
     return;
   }
+  const content = doc.content;
   stdout.write(content.endsWith('\n') ? content : `${content}\n`);
 }
 
@@ -286,10 +287,18 @@ export async function memoryEditCommand(slug: string): Promise<void> {
   const conn = await connect('write');
   if (conn === null) return;
   const { client, target } = conn;
-  const current = await read(client, target, slug);
+  const doc = await readDoc(client, target, slug);
+  const current = doc === null ? null : doc.content;
+  // **読んだ時の版を持ち回る（Issue #2743）。** エディタを開いている間にクローンが
+  // 同じ記憶へ書くと、版が変わっていて 409 になる（黙って上書きしない）。無い slug は
+  // `null`（「読んだ時には無かった」）。古いデーモンが `version` を返さないときは
+  // 前提なし（従来どおり後勝ち）で書く。
+  const ifMatch = doc === null ? null : doc.version;
 
   const dir = await mkdtemp(join(tmpdir(), 'alteroid-memory-'));
   const path = join(dir, `${slug}.md`);
+  // **衝突したときだけ、人間が書いた内容を含む一時ディレクトリを消さない。**
+  let keep = false;
   try {
     await writeFile(path, current ?? template(slug), 'utf8');
     await openEditor(path);
@@ -302,9 +311,34 @@ export async function memoryEditCommand(slug: string): Promise<void> {
       stdout.write('変更はありません。\n');
       return;
     }
-    await write(client, target, slug, edited);
+    try {
+      await write(client, target, slug, edited, ifMatch);
+    } catch (error) {
+      if (!(error instanceof MemoryConflictCliError)) throw error;
+      // **人間が書いた内容を失わない。** 消さずに残し、いまの版も隣へ置いて、
+      // 見比べる道具（`diff`）と次の手を案内する。
+      keep = true;
+      const theirs = join(dir, `${slug}.current.md`);
+      if (error.current !== null) await writeFile(theirs, error.current, 'utf8');
+      stdout.write(
+        [
+          `書き換えていません: ${slug} は、あなたが読んだ後に変わっています（クローンなど別の書き手が書いたか、消されました）。`,
+          `  あなたの編集（残してあります）: ${path}`,
+          error.current === null
+            ? '  いまの記憶: 無い（消されています）'
+            : `  いまの記憶: ${theirs}`,
+          ...(error.current === null ? [] : [`  見比べる: diff -u ${theirs} ${path}`]),
+          `  取り込んだら \`alteroid memory edit ${slug}\` で開き直して直してください。`,
+          `  そのまま置き換えてよいなら \`alteroid memory set ${slug} --file ${path}\`（クローンの書き込みを消します）。`,
+          '',
+        ].join('\n'),
+      );
+      throw new Error(`記憶が読んだ後に変わっていたので書き換えませんでした: ${slug}`, {
+        cause: error,
+      });
+    }
   } finally {
-    await rm(dir, { recursive: true, force: true });
+    if (!keep) await rm(dir, { recursive: true, force: true });
   }
 }
 
@@ -398,7 +432,12 @@ async function connect(
  * `edit` は**あるはずの記憶を読めていないのに空のひな形でエディタを開く**（保存すれば
  * 既存の中身を上書きする）。読めなかった理由は例外で上へ通す。
  */
-async function read(client: DaemonClient, target: Target, slug: string): Promise<string | null> {
+/** 本文と、その版（`GET /memory/:slug` の `version`。古いデーモンでは `undefined`）。 */
+async function readDoc(
+  client: DaemonClient,
+  target: Target,
+  slug: string,
+): Promise<{ content: string; version: string | undefined } | null> {
   const response = await client.memory[':slug'].$get({ param: { slug } });
   if (response.status === 404 || response.status === 400) return null;
   if (!response.ok) {
@@ -412,7 +451,20 @@ async function read(client: DaemonClient, target: Target, slug: string): Promise
     );
   }
   const body = await response.json();
-  return 'document' in body ? body.document.content : null;
+  if (!('document' in body)) return null;
+  return {
+    content: body.document.content,
+    version: 'version' in body && typeof body.version === 'string' ? body.version : undefined,
+  };
+}
+
+/** `PUT` が 409（読んだ後に変わっていた）を返した。`current` はいまの本文（消えていれば null）。 */
+class MemoryConflictCliError extends Error {
+  readonly current: string | null;
+  constructor(slug: string, current: string | null) {
+    super(`記憶が読んだ後に変わっています: ${slug}`);
+    this.current = current;
+  }
 }
 
 /**
@@ -430,8 +482,18 @@ async function write(
   target: Target,
   slug: string,
   content: string,
+  ifMatch?: string | null,
 ): Promise<void> {
-  const response = await client.memory[':slug'].$put({ param: { slug }, json: { content } });
+  const response = await client.memory[':slug'].$put({
+    param: { slug },
+    json: ifMatch === undefined ? { content } : { content, ifMatch },
+  });
+  if (response.status === 409) {
+    const body = (await response.json()) as {
+      current?: { document?: { content?: string } } | null;
+    };
+    throw new MemoryConflictCliError(slug, body.current?.document?.content ?? null);
+  }
   if (!response.ok) {
     if (response.status === 400) {
       throw new Error(`書き換えられませんでした: ${slug}（記憶の名前が不正かもしれません）`);
