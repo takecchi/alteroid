@@ -202,13 +202,6 @@ describe('MCP の登録の押し込みの挑み直し', () => {
     await vi.advanceTimersByTimeAsync(180_000);
     expect(attempts).toBe(afterConnect);
 
-    // 日誌には1度だけ残り、値は書かない。
-    const lines = (await s.stores.journal.list({})).filter(
-      (e) => e.type === 'exchange' && e.text.includes('MCP サーバの登録を降ろせなかった'),
-    );
-    expect(lines).toHaveLength(afterConnect);
-    expect(JSON.stringify(lines)).not.toContain('SECRET');
-
     // runner を上げた（口ができた）後の名乗り直しで降りる。
     s.runner.setMcpServers = async () => ({
       sha256: mcpServersFingerprintOf(REGISTRATION),
@@ -217,6 +210,25 @@ describe('MCP の登録の押し込みの挑み直し', () => {
     });
     await s.pool.reattachRunner('runner-test');
     expect(s.pool.pushHealthOf('runner-test')?.mcpServers?.status).toBe('ok');
+
+    // 日誌には生の行が1度だけ残り、値は書かない。同じ本文の2回目以降は畳まれ（#1311）、
+    // 直った後（名乗り直し）に出る要約の件数と合わせて試行の回数に一致する（1回も失っていない）。
+    const lines = (await s.stores.journal.list({})).filter(
+      (e) => e.type === 'exchange' && e.text.includes('MCP サーバの登録を降ろせなかった'),
+    );
+    const isSummary = (t: string) => t.includes('同じ合図が続いたので畳んだ');
+    const raw = lines.filter((e) => e.type === 'exchange' && !isSummary(e.text));
+    const suppressed = lines.reduce(
+      (sum, e) =>
+        sum +
+        (e.type === 'exchange' && isSummary(e.text)
+          ? Number(/2回目以降を (\d+) 回ぶん/.exec(e.text)?.[1] ?? 0)
+          : 0),
+      0,
+    );
+    expect(raw).toHaveLength(1);
+    expect(raw.length + suppressed).toBe(afterConnect);
+    expect(JSON.stringify(lines)).not.toContain('SECRET');
 
     await s.pool.stop();
   });

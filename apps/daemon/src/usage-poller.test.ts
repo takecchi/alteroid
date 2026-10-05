@@ -1,6 +1,6 @@
 import { fetchAccountUsage } from '@alteroid/core';
 import type { UsageProbeHandle, UsageProbeQuery } from '@alteroid/core';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { intervalForState, startUsagePolling } from './usage-poller.js';
 
@@ -403,6 +403,50 @@ describe('usage-poller — 現役のトークンで測る', () => {
     expect(seen).toEqual(['ok', 'failed']);
     // 覚えているほうは `ok` のまま（既存の約束）。
     expect(poller.state().state).toBe('ok');
+  });
+
+  it('#2738: 測り始めた瞬間の身元を、結果と一緒に onState へ渡す（結果が届く頃の現役ではない）', async () => {
+    // probe の実行中に A → B へ回る。onState へ届く身元は A（測った鍵）のままでなければ
+    // ならない。onState は setTimeout(0) で後から届くので、偽の時計で進める（#2146）。
+    vi.useFakeTimers();
+    let identity = { tokenId: 'tok-a', generation: 1 };
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const queryFn: UsageProbeQuery = () => ({
+      async *[Symbol.asyncIterator]() {
+        /* 何も流れない */
+      },
+      accountInfo: async () => {
+        await gate;
+        return LOGGED_IN.account;
+      },
+      usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: async () => LOGGED_IN.usage,
+    });
+    const seen: Array<{ tokenId: string; generation: number } | undefined> = [];
+    const poller = startUsagePolling({
+      queryFn,
+      cwd: '/work',
+      intervalMs: 10_000,
+      identity: () => identity,
+      onState: (_state, measuredBy) => {
+        seen.push(measuredBy);
+      },
+    });
+
+    // 起動直後の probe が走り始めている。測っている間に回る。
+    identity = { tokenId: 'tok-b', generation: 2 };
+    release();
+    try {
+      await poller.refresh();
+      await vi.advanceTimersByTimeAsync(5);
+    } finally {
+      poller.stop();
+      vi.useRealTimers();
+    }
+
+    expect(seen[0]).toEqual({ tokenId: 'tok-a', generation: 1 });
   });
 
   it('onState が投げてもポーリングを止めない', async () => {

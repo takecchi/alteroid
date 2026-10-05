@@ -123,6 +123,7 @@ export interface Scheduler {
    * で動かなかった回は保存された状態が何も変わらないので、そのままだと再起動まで
    * 取り戻せない（週次なら1週間）。据え直す先は `SCHEDULE_RETRY_MS` 後で、本来の次回の方が
    * 早ければそちらを残す。再試行の発火も同じ `claimRun` を通るので、動けば本来の次回へ戻る。
+   * `delayMs` で間隔を変えられる（#2739: ターンが失敗で終わった回は後退させる）。
    * 知らない kind・もう予定の無い kind は何もしない。
    */
   retrySoon(kind: string, delayMs?: number): void;
@@ -589,7 +590,10 @@ class TimerScheduler implements Scheduler {
   retrySoon(kind: string, delayMs: number = SCHEDULE_RETRY_MS): void {
     const due = this.#due.get(kind);
     if (due === undefined) return;
-    const retryAt = this.#now().getTime() + delayMs;
+    // 明示の再試行なので、同じ回の配り直しを「もう配った」と数えない（#2739。数えると、
+    // 配り直した回がまた失敗したとき、次の刻みが元の回ではなく新しい回になる）。
+    this.#redelivered.delete(kind);
+    const retryAt = this.#now().getTime() + Math.max(delayMs, 0);
     if (due <= retryAt) return;
     this.#due.set(kind, retryAt);
     this.#arm();
