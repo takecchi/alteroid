@@ -687,6 +687,8 @@ export function useRevokeOwnerDeclaration() {
  * 省略すると前回の値を引き継ぐ。`secret` を既存行と違う値で渡すとサーバが
  * 400 で拒否する——`apps/cli/src/credential.ts` と同じ資格・同じ制約）。
  *
+ * **注記: 宣言は資格の判断には使っていない（2026-10-05 オーナーの判断：ログインできる人＝持ち主。#2862）。いまは許可済みなら通る。以下の「宣言済み owner」は #2862 以前の記述。**
+ *
  * **`requireOwner`。** 宣言済み owner（実行環境の持ち主そのもの、または
  * `ownerDeclaredAt` が入った許可済みアカウント。issue #1198）でなければ 403 が
  * 返る——呼び出し側（`env-vars.tsx`）はボタンを隠さず、失敗を `ErrorNote` で
@@ -738,6 +740,7 @@ export class ProfileRejectedError extends ApiError {
  * 確認の印は無いので、呼ぶ前の確認だけが網になる（`useShutdownDaemon` と同じ事情）。
  *
  * **`requireOwner`。** 宣言済み owner でなければ 403 になる。ボタンは隠さない。
+ * （注記: 宣言は資格の判断には使っていない（2026-10-05 オーナーの判断：ログインできる人＝持ち主。#2862）。いまは許可済みなら通る。）
  */
 export function useSetProfileEntry() {
   const api = useApi();

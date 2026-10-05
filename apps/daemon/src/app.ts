@@ -9372,6 +9372,8 @@ export function createApp(deps: AppDeps) {
     /**
      * **実行環境の持ち主として宣言する。**（issue #1198。本来の形）
      *
+     * **注記: 宣言は資格の判断には使っていない（2026-10-05 オーナーの判断：ログインできる人＝持ち主。#2862）。仕組みは当面残してある（`requireOwner` は素通し）。**
+     *
      * **`requireOperator`。** `/access/grant` `/access/revoke` とは違い、ここは
      * 許可されたアカウントからは叩けない——**旗を立てられる者を常にホストへ到達
      * できる者へ限る**ことが、この機能の「伝播しない」という性質そのものである
@@ -9386,6 +9388,7 @@ export function createApp(deps: AppDeps) {
         tags: ['access'],
         summary: '実行環境の持ち主として宣言する',
         description:
+          '（宣言は資格の判断には使っていない。ログインできる人＝持ち主。#2862）' +
           '宣言できるのは実行環境の持ち主（operator トークン）だけ。対象は許可済み' +
           '（`access grant` 済み）のアカウントに限る——未許可なら 409。運ぶ情報は無い' +
           '（`{}` を送る）。許可済みのアカウントは宣言の有無にかかわらず ' +
@@ -9486,6 +9489,8 @@ export function createApp(deps: AppDeps) {
     /**
      * **実行環境の持ち主としての宣言を取り消す。**（issue #1198）
      *
+     * **注記: 宣言は資格の判断には使っていない（2026-10-05 オーナーの判断：ログインできる人＝持ち主。#2862）。仕組みは当面残してある。**
+     *
      * **`requireOperator`。** 取り消しは対象の許可状態を問わない
      * （`AuthStore.setAccountOwner` の doc）——行が在れば常に通る。
      */
@@ -9495,6 +9500,7 @@ export function createApp(deps: AppDeps) {
         tags: ['access'],
         summary: '実行環境の持ち主としての宣言を取り消す',
         description:
+          '（宣言は資格の判断には使っていない（2026-10-05 オーナーの判断：ログインできる人＝持ち主。#2862））' +
           '宣言していなくても 200（既に取り消し済みと同じ扱い）。運ぶ情報は無い' +
           '（`{}` を送る）。',
         requestBody: noBodyPostRequestBody(

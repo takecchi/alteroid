@@ -572,6 +572,7 @@ export const STATEMENTS = [
   `alter table approvals add column if not exists withdrawn_at timestamptz`,
 
   // --- オーナー本人の宣言（#1198）------------------------------------------
+  // 注記: 宣言は資格の判断には使っていない（2026-10-05 オーナーの判断：ログインできる人＝持ち主。#2862）。列は当面残してある。
   // `null` は「宣言されていない」——既存行は全部これになるので、マージ直後も
   // `requireOwner` を通す行は無い（今日と1ビットも変わらない）。単純な列追加
   // なので、このファイル冒頭の「危ないのは drop index と対の create index

@@ -535,7 +535,7 @@ packages/ui          Web UI の見た目の部品（shadcn の部品・汎用の
 | 実行環境の持ち主のトークン | `state/daemon.json` を読める者 | 上の全部 ＋ 持ち主の宣言の口（`/access/:id/owner*`） |
 
 - **緩めたのは「持ち主か否か」の線だけである。** 認証（`authenticate`）は変えていない —— ログインしていない（401）・許可されていない（403）アカウントは、これらの口にも触れない。`requireOwner` は配線に残し中身だけを素通しにした（戻すのは1箇所）
-- **持ち主の宣言（`alteroid access owner <id>`、`ownerDeclaredAt`）は、いま通す・通さないに効かない。** 宣言の口は `requireOperator`（状態ファイルの token）のまま残してあり、宣言の保存も消していない。この仕組みを畳むかは別に決める
+- **持ち主の宣言（`alteroid access owner <id>`、`ownerDeclaredAt`）は、いま通す・通さないに効かない。** 注記: 資格の判断には使っていない（2026-10-05 オーナーの判断：ログインできる人＝持ち主。#2862）。仕組み（宣言の口・保存・`access list` の `[owner]` 表示）は当面残してある。 宣言の口は `requireOperator`（状態ファイルの token）のまま残してあり、宣言の保存も消していない。この仕組みを畳むかは別に決める
 - **許可を取り消すと宣言も落ちる。** 許可が無ければ `authenticate` で弾かれる
 
 - **どちらの資格も要らずに通る経路が7本ある。** ログインそのものの経路（`/auth` とその配下。ただし `/auth/me` は認証が要る）と、`/health` `/openapi.json` `/docs` である。**上の表は「資格を持つ者に何ができるか」を言っているだけで、「資格が要る経路の一覧」ではない。** 正本は `isPublicPath`（`grep -Fn -- 'function isPublicPath' apps/daemon/src/app.ts`）で、本数はそこから数え直せる

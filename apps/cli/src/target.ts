@@ -197,6 +197,8 @@ const NOT_DECLARED_OWNER_ERROR = '実行環境の持ち主として宣言され�
  * `unknown` は「本文からはどちらとも判別できない」——当てずっぽうで片方を
  * 出すと、状況によっては必ず嘘の案内になる。
  */
+// 注記: `not_declared_owner` は資格の判断には使っていない（2026-10-05 オーナーの判断：ログインできる人＝持ち主。#2862）。
+// デーモンはこの 403 を返さなくなった（分岐は当面残してある）。
 export type ForbiddenKind = 'not_operator' | 'not_granted' | 'not_declared_owner' | 'unknown';
 
 /**

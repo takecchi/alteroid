@@ -556,6 +556,8 @@ accessCommand
   });
 
 /**
+ * **注記: 資格の判断には使っていない（2026-10-05 オーナーの判断：ログインできる人＝持ち主。#2862）。** 下の「通すのに要る」は #2862 以前の記述。仕組みは当面残してある。
+ *
  * 実行環境の持ち主としての宣言（issue #1198）。**`access grant` とは別の資格**
  * ——`alteroid credential set` / `alteroid reset` を通すのに要る。デーモンが
  * 動いているのと同じ環境（実行環境の持ち主）でしか実行できない
@@ -564,7 +566,7 @@ accessCommand
 accessCommand
   .command('owner <accountId>')
   .description(
-    '実行環境の持ち主として宣言する／取り消す（alteroid credential set・alteroid reset を通すのに要る）',
+    '実行環境の持ち主として宣言する／取り消す（資格の判断には使っていない。ログインできる人＝持ち主。#2862）',
   )
   .option('--revoke', '宣言を取り消す')
   .action(async (accountId: string, options: { revoke?: boolean }) => {
