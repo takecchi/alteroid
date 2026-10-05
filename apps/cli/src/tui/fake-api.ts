@@ -2,7 +2,11 @@
  * 試験用の偽の `TuiApi`。`chat()` は呼び出しごとに「台本」（イベント列）を 1 つ消費し、
  * 台本の途中に `Promise` を置くと、そこで止まって試験が好きな時に再開できる。
  */
-import { describeSelectionsViolation, foldSelections, matchesJournalSearch } from '@alteroid/core/cli-light';
+import {
+  describeSelectionsViolation,
+  foldSelections,
+  matchesJournalSearch,
+} from '@alteroid/core/cli-light';
 import type { JournalEntry } from '@alteroid/core';
 
 import { ApiError } from './api.js';

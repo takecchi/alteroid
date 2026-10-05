@@ -1,6 +1,10 @@
 import { stdout } from 'node:process';
 
-import { describeDroppedTraceEmpty, describeDroppedTraceOrigin, describeDroppedTraceRetention } from '@alteroid/core/cli-light';
+import {
+  describeDroppedTraceEmpty,
+  describeDroppedTraceOrigin,
+  describeDroppedTraceRetention,
+} from '@alteroid/core/cli-light';
 import type { DroppedTraceOrigin } from '@alteroid/core';
 
 import { createClient } from './client.js';

@@ -1,6 +1,10 @@
 import { stdout } from 'node:process';
 
-import { assessPermissionGrantStaleness, describePermissionRuleBreadth, PERMISSION_GRANT_STALE_DAYS } from '@alteroid/core/cli-light';
+import {
+  assessPermissionGrantStaleness,
+  describePermissionRuleBreadth,
+  PERMISSION_GRANT_STALE_DAYS,
+} from '@alteroid/core/cli-light';
 import type { PermissionGrant } from '@alteroid/core';
 
 import { createClient } from './client.js';
