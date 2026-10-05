@@ -8,12 +8,14 @@ import {
   ChatMessage,
   ChatMessageEditor,
   ChatMessageList,
+  ChatTurnFailure,
   ConversationList as UiConversationList,
   Drawer,
   Card,
   Empty,
   ErrorNote,
   Spinner,
+  TurnFailureNote,
   useIsMobile,
 } from '@alteroid/ui';
 import {
@@ -51,6 +53,12 @@ export function clientLoader({ params }: Route.ClientLoaderArgs) {
  */
 const BOTTOM_THRESHOLD_PX = 32;
 
+/**
+ * ストリームの `error` イベント（ターンが失敗した）由来の失敗。入力欄の上の帯が、ネットワーク断・
+ * 403 のような「呼べなかった」失敗（ただの `Error`）と見分けて、利用者向けの文で描くための型。
+ */
+class TurnFailedError extends Error {}
+
 /** 画面に出す1行。届いた順に並べる。 */
 interface Line {
   key: string;
@@ -82,6 +90,12 @@ interface Line {
    * 唯一の根拠がこれ——`role === 'human'` だけで判定すると、まだサーバに
    * 存在しない行にも編集の入口が出てしまう。
    */
+  /**
+   * この行が「返信ではなく、返せなかった知らせ」であれば、その種類（サーバの
+   * `ConversationMessage.turnFailure` をそのまま写す。**文面では見分けない**）。
+   * `failed` はもう一度送れば試し直せる、`held` は枠が開けばクローンが自分で試し直す。
+   */
+  turnFailure?: 'failed' | 'held';
   journalId?: string;
 }
 
@@ -997,6 +1011,7 @@ export function ChatPane({
           // ——編集の入口を出すかは呼び出し側が `role === 'human'` も併せて
           // 見るので、ここでは単に「サーバ確定済みの発言である」ことを表す。
           journalId: message.id,
+          ...(message.turnFailure === undefined ? {} : { turnFailure: message.turnFailure }),
         },
       }));
 
@@ -1543,7 +1558,7 @@ export function ChatPane({
          */
         case 'error':
           settleReply();
-          setFailures((prev) => new Map(prev).set(stream.id, new Error(event.message)));
+          setFailures((prev) => new Map(prev).set(stream.id, new TurnFailedError(event.message)));
           break;
         case 'done':
           settleReply();
@@ -2104,7 +2119,32 @@ export function ChatPane({
               </Card>
             ) : (
               <ChatMessageList>
-                {all.map((line) => {
+                {all.map((line, index) => {
+                  /*
+                   * **失敗の知らせは返信と別の部品で描く**（サーバが付けた `turnFailure` の印で
+                   * 判定する。文面は見ない）。「もう一度送る」は、**いちばん後ろの**失敗で、
+                   * **すぐ前が自分の発言**のときだけ出す——承認への回答から起きた失敗（間に確認の
+                   * 行が挟まる）では、前の発言が失敗の原因とは限らないので出さない。送信中も出さない。
+                   */
+                  if (line.turnFailure !== undefined) {
+                    const previous = index > 0 ? all[index - 1] : undefined;
+                    const retryText =
+                      line.turnFailure === 'failed' &&
+                      index === all.length - 1 &&
+                      !sending &&
+                      previous?.role === 'human' &&
+                      previous.text.trim() !== ''
+                        ? previous.text
+                        : undefined;
+                    return (
+                      <ChatTurnFailure
+                        key={line.key}
+                        kind={line.turnFailure}
+                        text={line.text}
+                        onRetry={retryText === undefined ? undefined : () => void send(retryText)}
+                      />
+                    );
+                  }
                   /*
                    * **編集の入口（鉛筆）は、本物の日誌エントリ id を持つ人間の
                    * 発言だけに出す（チャットのメッセージ編集、#1010。制約C）。**
@@ -2208,7 +2248,20 @@ export function ChatPane({
         onStopReceiving={() => streamRef.current?.controller.abort()}
         error={
           shownFailure === undefined || shownFailure === null ? undefined : (
-            <ErrorNote error={shownFailure} />
+            shownFailure instanceof TurnFailedError ? (
+              <TurnFailureNote
+                message={shownFailure.message}
+                action={(kind) =>
+                  kind === 'auth' ? (
+                    <Link to="/tokens" className="text-xs underline underline-offset-2">
+                      認証トークンの画面を開く
+                    </Link>
+                  ) : undefined
+                }
+              />
+            ) : (
+              <ErrorNote error={shownFailure} />
+            )
           )
         }
       />

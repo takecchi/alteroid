@@ -309,6 +309,12 @@ const conversationMessageSchema = z.object({
    * ときにだけ、どの編集がこれを隠したかを示す。
    */
   supersededBy: z.string().optional(),
+  /**
+   * 返信ではなく「返せなかった」知らせである印。`failed` はターンの失敗（もう一度送れば
+   * 試し直せる）、`held` は利用上限での保持（枠が開けばクローンが自分で試し直す）。
+   * 付いていない発言は通常の発言（または印を持たない古い行）。
+   */
+  turnFailure: z.enum(['failed', 'held']).optional(),
 });
 
 export const conversationDetailResponseSchema = z.object({
