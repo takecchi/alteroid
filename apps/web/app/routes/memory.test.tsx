@@ -14,7 +14,7 @@
  * 依存するので、`commitments.test.tsx` の `commitment()` と同じやり方で
  * 「テスト実行時点からの相対オフセット」で ISO を作る（時計を固定しない）。
  */
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
@@ -108,8 +108,8 @@ describe('記憶の区分タグ（[premise]/[fact]/[indexed]）に人間向け�
   it('indexed のタグには「要旨だけが焼かれ、節の目次は焼かれない」旨の説明が付く', async () => {
     renderMemory([doc({ slug: 'proj-only', title: 'プロジェクト専用の記憶', kind: 'indexed' })]);
 
-    const tag = await screen.findByText('[indexed]');
-    expect(tag.getAttribute('title')).toContain('節の目次は焼かれない');
+    const tag = await screen.findByText('特定の作業用');
+    expect(tag.getAttribute('title')).toContain('要旨だけを見ている');
   });
 
   it('premise / fact のタグにも説明が付く（indexed だけの特別扱いにしない）', async () => {
@@ -118,8 +118,8 @@ describe('記憶の区分タグ（[premise]/[fact]/[indexed]）に人間向け�
       doc({ slug: 'fact-doc', title: '事実の記憶', kind: 'fact' }),
     ]);
 
-    const premiseTag = await screen.findByText('[premise]');
-    const factTag = await screen.findByText('[fact]');
+    const premiseTag = await screen.findByText('前提');
+    const factTag = await screen.findByText('事実');
     expect(premiseTag.getAttribute('title')).not.toBe('');
     expect(factTag.getAttribute('title')).not.toBe('');
   });
@@ -211,9 +211,8 @@ describe('記憶一覧の要旨の前に付く印（#821 — ⚠ をやめて数
 describe('slug 欄の補足文', () => {
   it('書式は常時表示の補足文で、欄と aria-describedby で結ばれる（プレースホルダは短い例だけ）', async () => {
     renderMemory([]);
-    const input = await screen.findByLabelText('slug');
+    const input = await screen.findByLabelText(/^名前/);
     const hint = document.getElementById(input.getAttribute('aria-describedby') ?? '');
-    expect(hint?.textContent).toMatch(/英小文字・数字/);
     expect(hint?.textContent).toMatch(/128 文字まで/);
     expect((input as HTMLInputElement).placeholder).not.toMatch(/英小文字/);
   });
@@ -232,5 +231,30 @@ describe('一覧の行は題名だけがリンク', () => {
     expect(link.closest('li')?.querySelectorAll('a')).toHaveLength(1);
     expect(screen.getByText('about-me').closest('a')).toBeNull();
     expect(screen.getByText(/作成 3日前/).closest('a')).toBeNull();
+  });
+});
+
+describe('利用者に内部の語を見せない（#2782 / #2787）', () => {
+  it('種別は「前提」「事実」「特定の作業用」と出し、[premise] のような内部の語や「提供価値」を出さない', async () => {
+    renderMemory([
+      doc({ slug: 'p', title: '前提の記憶', kind: 'premise' }),
+      doc({ slug: 'f', title: '事実の記憶', kind: 'fact' }),
+      doc({ slug: 'i', title: '専用の記憶', kind: 'indexed' }),
+    ]);
+
+    await screen.findByText(/前提の記憶/);
+    const text = document.body.textContent ?? '';
+    for (const word of ['[premise]', '[fact]', '[indexed]', '提供価値']) {
+      expect(text).not.toContain(word);
+    }
+  });
+
+  it('名前の入力欄にラベルが在り、入力後も残る', async () => {
+    renderMemory([]);
+
+    const input = await screen.findByLabelText(/^名前/);
+    fireEvent.change(input, { target: { value: 'abc' } });
+    expect(screen.getByLabelText(/^名前/)).toBe(input);
+    expect(screen.queryByLabelText(/slug/)).toBeNull();
   });
 });

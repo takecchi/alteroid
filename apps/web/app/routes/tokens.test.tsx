@@ -329,7 +329,7 @@ describe('/tokens 画面 — recovery（回復の見込み）を潰さない', (
     ).toBeTruthy();
     expect(
       screen.getByText(
-        '分類: どちらとも言えない（time でも action でもない。捨てる判断の根拠にしないこと）',
+        '分類: どちらとも言えない（時間で戻るとも、人の対応が要るとも言えない。捨てる判断の根拠にしないこと）',
       ),
     ).toBeTruthy();
   });
@@ -397,7 +397,7 @@ describe('/tokens 画面 — 知らない値が届いても落ちない', () => 
 
     await waitForPoolLoaded();
 
-    expect(await screen.findByText(/未知の回転の event/)).toBeTruthy();
+    expect(await screen.findByText(/未知の切り替えの出来事/)).toBeTruthy();
     expect(screen.getByText(/a_future_event/)).toBeTruthy();
   });
 });
@@ -430,8 +430,8 @@ describe('/tokens 画面 — 冷却は原文と絶対時刻の両方を出す', 
     expect(screen.getByText(new RegExp(expectedAbsolute.replace(/[/:]/g, '\\$&')))).toBeTruthy();
     expect(screen.getByText('weekly limit resets 5pm')).toBeTruthy();
     // **#683**: この fixture は出所を持っていない（デーモンが返さなかった）。
-    // **黙らない** —— 何も書かないと「権威ある値である」と読まれる。
-    expect(screen.getByText(/記録が無い（この期限が権威ある値かどうかは言えない）/)).toBeTruthy();
+    // **黙らない** —— 何も書かないと「確かな値である」と読まれる。
+    expect(screen.getByText(/記録が無い（この期限が確かな値かどうかは言えない）/)).toBeTruthy();
   });
 
   /**
@@ -443,8 +443,8 @@ describe('/tokens 画面 — 冷却は原文と絶対時刻の両方を出す', 
   it('冷却の期限の出所を3値で言い分ける（推測のときだけ言う形にしない）', async () => {
     const cooldownUntil = Date.parse('2026-08-25T05:00:00.000Z');
     const cases = [
-      { source: 'quota_reset' as const, text: /枠の resetsAt（権威ある値）/ },
-      { source: 'overage_reset' as const, text: /課金枠の overageResetsAt/ },
+      { source: 'quota_reset' as const, text: /利用枠の復活時刻（確かな値）/ },
+      { source: 'overage_reset' as const, text: /従量課金枠の復活時刻/ },
       { source: 'default' as const, text: /設定の既定（ただの推測である）/ },
     ];
     for (const one of cases) {
@@ -541,7 +541,7 @@ describe('/tokens 画面 — 空のプール', () => {
 
     expect(await screen.findByText(/捨てずに持ち越す/)).toBeTruthy();
     expect(screen.queryByText(/一緒に捨てる/)).toBeNull();
-    expect(screen.getByText(/id が取れない行は、ここでは消せない/)).toBeTruthy();
+    expect(screen.getByText(/番号が取れない行は、ここでは消せない/)).toBeTruthy();
     expect(screen.getAllByRole('button', { name: 'この行を消す' })).toHaveLength(1);
   });
 

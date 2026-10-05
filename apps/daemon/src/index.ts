@@ -1746,8 +1746,11 @@ export async function main(): Promise<void> {
     // 既定の構成では空を返すので、器の環境変数がそのまま効く（受け入れ基準7）。
     env: () => agentTokenHolder.values(),
     // **測った結果を見張りへ渡す。** 判定（`judgeTokenCandidate`）は見張りが通す。
-    onState: (state) => {
-      tokenWatch?.observeAccount(state);
+    // **測り始めた鍵の身元を控えて、結果と一緒に渡す**（#2738）。回し手が世代の門で
+    // 「測っている間に回った」結果を捨てる。値は渡さない（id と世代だけ）。
+    identity: () => agentTokenHolder.identity(),
+    onState: (state, measuredBy) => {
+      tokenWatch?.observeAccount(state, measuredBy);
     },
     // **記憶ストアへ到達する鍵を probe の子プロセスへ渡さない（#431）。**
     // `Runner` / `createProfileVessel` へ渡しているのと同じ `storage.withheldEnvKeys`。
@@ -1847,7 +1850,7 @@ export async function main(): Promise<void> {
     // 呼ばれるより先に両方とも作られていれば壊れない）。
     scheduler: () => scheduler.list(),
     // 引き受けに失敗して動かなかった定期の発火を、再起動を待たず短い間隔で据え直す（#2741）。
-    onScheduledRunNotStarted: (kind) => scheduler.retrySoon(kind),
+    onScheduledRunNotStarted: (kind, delayMs) => scheduler.retrySoon(kind, delayMs),
     cwd: paths.root,
     runners,
     profile,

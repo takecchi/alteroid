@@ -77,7 +77,7 @@ describe('一覧の行', () => {
     renderPractices([practice()]);
 
     await screen.findByText('日報の書き方');
-    expect(screen.getByText('[日報]')).toBeTruthy();
+    expect(screen.getByText('日報')).toBeTruthy();
     expect(screen.getByText('daily-report')).toBeTruthy();
     expect(screen.getByText(/作成 3日前/)).toBeTruthy();
     expect(screen.getByText(/更新 1日前/)).toBeTruthy();
@@ -89,7 +89,7 @@ describe('一覧の行', () => {
     // を確かめる（固定リストへ倒れていないことの最小限の歯）。
     renderPractices([practice({ kind: '調査' })]);
 
-    await screen.findByText('[調査]');
+    await screen.findByText('調査');
     expect(document.querySelector('select')).toBeNull();
   });
 });
@@ -159,7 +159,7 @@ describe('0件のとき', () => {
 
     expect(await screen.findByText('日報の書き方')).toBeTruthy();
     expect(screen.getByText(/読めないやり方が 1 件ある/)).toBeTruthy();
-    expect(screen.getByText(/slug も取れない/)).toBeTruthy();
+    expect(screen.getByText(/名前も取れない/)).toBeTruthy();
   });
 });
 
@@ -168,7 +168,7 @@ describe('新しいやり方を書く', () => {
     renderPractices([]);
     await screen.findByText(/まだ1件も無い/);
 
-    const input = screen.getByLabelText('slug');
+    const input = screen.getByLabelText(/^名前/);
     const button = screen.getByRole('button', { name: '開く' });
     expect((button as HTMLButtonElement).disabled).toBe(true);
 
@@ -181,9 +181,8 @@ describe('新しいやり方を書く', () => {
 describe('slug 欄の補足文', () => {
   it('書式は常時表示の補足文で、欄と aria-describedby で結ばれる（プレースホルダは短い例だけ）', async () => {
     renderPractices([]);
-    const input = await screen.findByLabelText('slug');
+    const input = await screen.findByLabelText(/^名前/);
     const hint = document.getElementById(input.getAttribute('aria-describedby') ?? '');
-    expect(hint?.textContent).toMatch(/英小文字・数字/);
     expect(hint?.textContent).toMatch(/128 文字まで/);
     expect((input as HTMLInputElement).placeholder).not.toMatch(/英小文字/);
   });
@@ -199,5 +198,33 @@ describe('一覧の行は題名だけがリンク', () => {
     expect(link.closest('li')?.querySelectorAll('a')).toHaveLength(1);
     expect(screen.getByText('daily-report').closest('a')).toBeNull();
     expect(screen.getByText(/作成 3日前/).closest('a')).toBeNull();
+  });
+});
+
+describe('利用者に内部の語を見せない（#2782 / #2787）', () => {
+  it('名前の入力欄にラベルが在り、入力後も残る（プレースホルダだけに頼らない）', async () => {
+    renderPractices([]);
+    await screen.findByText(/まだ1件も無い/);
+
+    const input = screen.getByLabelText(/^名前/);
+    fireEvent.change(input, { target: { value: 'abc' } });
+    expect(screen.getByLabelText(/^名前/)).toBe(input);
+    // 内部の語（slug）を欄の名前に使わない。
+    expect(screen.queryByLabelText(/slug/)).toBeNull();
+  });
+
+  it('procedure / routine は「手順」「定例」と出し、括弧つきの内部の語や Issue 番号を出さない', async () => {
+    renderPractices([
+      practice({ slug: 'a', kind: 'procedure', title: 'A のやり方' }),
+      practice({ slug: 'b', kind: 'routine', title: 'B のやり方' }),
+    ]);
+
+    await screen.findByText('A のやり方');
+    expect(screen.getByText('手順')).toBeTruthy();
+    expect(screen.getByText('定例')).toBeTruthy();
+    const text = document.body.textContent ?? '';
+    expect(text).not.toContain('[procedure]');
+    expect(text).not.toContain('[routine]');
+    expect(text).not.toMatch(/#\d{3,}/);
   });
 });

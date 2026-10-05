@@ -24,6 +24,7 @@ import {
   useEditCommitment,
   usePushCommitment,
   useCommitments,
+  useConversations,
 } from '@alteroid/swr';
 import { formatDateTime, formatRelative, redactBody } from '@alteroid/logic';
 import type { CommitmentClosedBy, CommitmentOrigin, TextMarkup } from '@alteroid/core';
@@ -238,8 +239,8 @@ function TrimmedClosedNote({ trimmedClosed }: { trimmedClosed: number }) {
     >
       <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden />
       <span className="min-w-0 break-words">
-        保持上限を超えて物理削除された片付き行が累計 {trimmedClosed} 件ある。
-        <strong>削除された分の内容はここでは二度と読めない。</strong>
+        保存できる数の上限を超えたため、古い完了済みの仕事が合わせて {trimmedClosed} 件消えている。
+        <strong>消えた分の内容は、ここでは二度と読めない。</strong>
       </span>
     </div>
   );
@@ -306,21 +307,67 @@ function originLabel(origin: CommitmentOrigin): string {
  * リンクになるだけである。
  */
 function OriginBadge({ commitment }: { commitment: Commitment }) {
-  const hasSource = commitment.source !== undefined && commitment.source !== null;
+  const label = originLabel(commitment.origin);
+  const source = commitment.source;
+  const hasSource = source !== undefined && source !== null && source !== '';
+  const tone = commitment.origin === 'human' ? 'accent' : 'neutral';
+
+  // **内部 ID（UUID）を利用者に見せない（#2801）。** マネージャーの行は「マネージャーの詳細」
+  // という語そのものをリンクにする（id は宛先に含まれるだけで、文字としては出さない）。
+  if (commitment.origin === 'manager' && hasSource) {
+    return (
+      <Badge tone={tone}>
+        <Link to={`/managers/${source}`} className="hover:underline">
+          {label}の詳細
+        </Link>
+      </Badge>
+    );
+  }
+  if (commitment.origin === 'human' && hasSource && looksLikeId(source)) {
+    return <HumanConversationBadge label={label} source={source} />;
+  }
+  // 外部の出どころ（webhook の source など、利用者が決めた名前）は、そのまま添える。
+  if (commitment.origin === 'external' && hasSource && !looksLikeId(source)) {
+    return (
+      <Badge tone={tone}>
+        {label}（{source}）
+      </Badge>
+    );
+  }
+  return <Badge tone={tone}>{label}</Badge>;
+}
+
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** 内部の識別子（UUID）に見える文字列か。そうなら画面に文字として出さない。 */
+function looksLikeId(value: string): boolean {
+  return UUID_PATTERN.test(value);
+}
+
+const CONVERSATION_TITLE_MAX = 24;
+
+/**
+ * 人間の行の出どころ。`source` が会話 id なら「会話『冒頭の一言』」にして会話へのリンクにする。
+ *
+ * **会話の一覧（直近）に載っていない id は、会話だと言い切らない**——`source` は承認待ちへの
+ * 回答の id のこともある（`packages/core/src/schema.ts` の `commitmentRespondedAt` の doc）。
+ * その場合は「人間」とだけ出して、リンクも ID も出さない。
+ */
+function HumanConversationBadge({ label, source }: { label: string; source: string }) {
+  const { data } = useConversations();
+  const conversation = data?.conversations.find((entry) => entry.conversationId === source);
+  if (conversation === undefined) return <Badge tone="accent">{label}</Badge>;
+  const preview = conversation.preview.trim();
+  const title =
+    preview.length > CONVERSATION_TITLE_MAX
+      ? `${preview.slice(0, CONVERSATION_TITLE_MAX)}…`
+      : preview;
   return (
-    <Badge tone={commitment.origin === 'human' ? 'accent' : 'neutral'}>
-      {originLabel(commitment.origin)}
-      {hasSource &&
-        (commitment.origin === 'manager' ? (
-          <>
-            {' / '}
-            <Link to={`/managers/${commitment.source}`} className="hover:underline">
-              {commitment.source}
-            </Link>
-          </>
-        ) : (
-          ` / ${commitment.source}`
-        ))}
+    <Badge tone="accent">
+      {label} /{' '}
+      <Link to={`/chat/${source}`} className="hover:underline">
+        {title === '' ? '会話' : `会話「${title}」`}
+      </Link>
     </Badge>
   );
 }
@@ -352,6 +399,34 @@ function splitManagerPrefix(body: string): { prefix: string | null; rest: string
     if (body.startsWith(prefix)) return { prefix, rest: body.slice(prefix.length) };
   }
   return { prefix: null, rest: body };
+}
+
+/**
+ * 外部イベント由来の本文は、`{ "note": "…" }` のような JSON のまま来ることがある（#2801）。
+ * 利用者向けには、欄が `note` だけならその文面を、平たい欄の並びなら「欄: 値」の行に直す。
+ * **JSON として読めない・入れ子や配列を含むときは、手を加えず元の文字列のまま出す**（欠落させない）。
+ */
+export function readableExternalBody(body: string): string {
+  const trimmed = body.trim();
+  if (!trimmed.startsWith('{')) return body;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch {
+    return body;
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return body;
+  const entries = Object.entries(parsed);
+  if (entries.length === 0) return body;
+  const flat = entries.every(
+    ([, value]) =>
+      typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean',
+  );
+  if (!flat) return body;
+  if (entries.length === 1 && entries[0]?.[0] === 'note' && typeof entries[0][1] === 'string') {
+    return entries[0][1];
+  }
+  return entries.map(([key, value]) => `${key}: ${String(value)}`).join('\n');
 }
 
 /** `human` / `external` の描き方（理由は後述の `CommitmentBody` の doc）。素のテキストのまま。 */
@@ -669,8 +744,10 @@ function CommitmentBody({ commitment }: { commitment: Commitment }) {
     }
 
     case 'human':
-    case 'external':
       return <PlainBody body={body} />;
+
+    case 'external':
+      return <PlainBody body={readableExternalBody(body)} />;
 
     default:
       /*
@@ -743,7 +820,9 @@ function AnsweredStateBadge({ commitment }: { commitment: Commitment }) {
   if (commitment.origin !== 'human') return null;
   if (commitment.respondedAt !== undefined) {
     return (
-      <Badge tone="accent">返答済み・未クローズ（{formatDateTime(commitment.respondedAt)}）</Badge>
+      <Badge tone="accent">
+        返事済み・まだ片付いていない（{formatDateTime(commitment.respondedAt)}）
+      </Badge>
     );
   }
   return <Badge tone="warn">未着手</Badge>;
@@ -791,7 +870,7 @@ function InProgressBadge({ commitment }: { commitment: Commitment }) {
         <Fragment key={id}>
           {index > 0 && ', '}
           <Link to={`/managers/${id}`} className="hover:underline">
-            {id}
+            {ids.length === 1 ? '詳細を見る' : `詳細${index + 1}`}
           </Link>
         </Fragment>
       ))}
@@ -901,6 +980,7 @@ function CommitmentBodyEditor({
 
         <Tabs.Content value="edit" className="px-2 py-2">
           <Textarea
+            aria-label="仕事の本文"
             className="min-h-32 font-mono text-xs leading-relaxed"
             value={value}
             spellCheck={false}
@@ -941,8 +1021,17 @@ function CommitmentBodyEditor({
   );
 }
 
+const SNIPPET_MAX = 20;
+
+/** 行ごとの入力欄の名前に入れる、依頼の頭の数文字（同じ見た目の欄が並ぶので、どの行かを区別する）。 */
+function snippet(body: string): string {
+  const flat = redactBody(body).replace(/\s+/g, ' ').trim();
+  return flat.length > SNIPPET_MAX ? `${flat.slice(0, SNIPPET_MAX)}…` : flat;
+}
+
 function OpenRow({ commitment }: { commitment: Commitment }) {
   const closeCommitment = useCloseCommitment();
+  const reasonId = useId();
   const reasonHintId = useId();
   const [reason, setReason] = useState('');
   const [busy, setBusy] = useState(false);
@@ -1015,11 +1104,15 @@ function OpenRow({ commitment }: { commitment: Commitment }) {
         <CommitmentBody commitment={commitment} />
       )}
 
-      <div className="mt-2 flex items-center gap-2">
+      <label htmlFor={reasonId} className="mt-2 block text-xs font-medium text-muted-foreground">
+        片付けた理由
+      </label>
+      <div className="mt-1 flex items-center gap-2">
         <Input
-          value={reason}
-          aria-label="片付いた理由"
+          id={reasonId}
           aria-describedby={reasonHintId}
+          value={reason}
+          aria-label={`「${snippet(commitment.body)}」を片付けた理由`}
           placeholder="例: 修正を入れて確認した"
           onChange={(event) => setReason(event.target.value)}
           onKeyDown={(event) => {
@@ -1156,6 +1249,7 @@ function ClosedReasonBody({ commitment }: { commitment: Commitment }) {
  */
 function PushForm() {
   const pushCommitment = usePushCommitment();
+  const inputId = useId();
   const bodyHintId = useId();
   const [body, setBody] = useState('');
   const [busy, setBusy] = useState(false);
@@ -1179,10 +1273,13 @@ function PushForm() {
     <Card className="mb-4">
       <CardHeader title="仕事を登録する" subtitle="引き受けたことを、片付くまで残す" />
       <div className="flex flex-col gap-2 px-4 py-3">
+        <label htmlFor={inputId} className="text-xs font-medium text-muted-foreground">
+          何を引き受けたか
+        </label>
         <Input
-          value={body}
-          aria-label="引き受けた仕事"
+          id={inputId}
           aria-describedby={bodyHintId}
+          value={body}
           placeholder="例: 金曜までに週次レビューを出す"
           onChange={(event) => setBody(event.target.value)}
           onKeyDown={(event) => {

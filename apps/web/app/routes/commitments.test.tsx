@@ -19,7 +19,7 @@ import type { CommitmentOrigin } from '@alteroid/core';
 import { json, Providers, stubFetch, storeTestBaseUrl } from '~/test-support';
 import type { Commitment } from '@alteroid/logic';
 
-import Commitments from './commitments';
+import Commitments, { readableExternalBody } from './commitments';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -125,7 +125,8 @@ describe('/commitments 画面', () => {
 
     expect(await screen.findByText('ドキュメントの誤りを直す')).toBeTruthy();
     expect(screen.getByText(/人間/)).toBeTruthy();
-    expect(screen.getByText(/conv-1/)).toBeTruthy();
+    // 内部の id は文字として出さない（#2801）。
+    expect(screen.queryByText(/conv-1/)).toBeNull();
     // 受け取ってから3日。絶対時刻だけだと、読むたびに引き算をさせることになる。
     expect(screen.getByText('(3日前)')).toBeTruthy();
   });
@@ -143,9 +144,9 @@ describe('/commitments 画面', () => {
     renderPageWithRouter();
 
     expect(await screen.findByText('ドキュメントの誤りを直す')).toBeTruthy();
-    // 文言そのものは変えていない —— 引き続き「マネージャー / mgr-42」が読める。
-    expect(screen.getByText(/マネージャー/)).toBeTruthy();
-    const link = screen.getByRole('link', { name: /mgr-42/ });
+    // id は文字として出さず、「マネージャーの詳細」の語そのものが /managers/<id> へのリンクになる。
+    expect(screen.queryByText(/mgr-42/)).toBeNull();
+    const link = screen.getByRole('link', { name: 'マネージャーの詳細' });
     expect(link.getAttribute('href')).toBe('/managers/mgr-42');
   });
 
@@ -160,7 +161,7 @@ describe('/commitments 画面', () => {
     renderPage();
 
     expect(await screen.findByText('ドキュメントの誤りを直す')).toBeTruthy();
-    expect(screen.getByText(/conv-1/)).toBeTruthy();
+    expect(screen.queryByText(/conv-1/)).toBeNull();
     expect(screen.queryByRole('link', { name: /conv-1/ })).toBeNull();
   });
 
@@ -229,7 +230,7 @@ describe('/commitments 画面', () => {
    * あって全実装が守れているわけではないので、破られた事実が人間から見えないと
    * 上のテスト（「片付けたものは…」）が固定している前提そのものが嘘になる。
    */
-  it('保持上限を超えて物理削除された片付き行があれば、一覧の上に断りが出る', async () => {
+  it('保存の上限で消えた完了済みの仕事があれば、一覧の上に断りが出る', async () => {
     stubFetch((url) => {
       if (!url.includes('/commitments')) return undefined;
       return json({ entries: [commitment()], unreadable: [], trimmedClosed: 3 });
@@ -237,7 +238,7 @@ describe('/commitments 画面', () => {
     renderPage();
 
     await screen.findByText('ドキュメントの誤りを直す');
-    expect(screen.getByText(/保持上限を超えて物理削除された片付き行が累計 3 件ある/)).toBeTruthy();
+    expect(screen.getByText(/古い完了済みの仕事が合わせて 3 件消えている/)).toBeTruthy();
   });
 
   /**
@@ -315,7 +316,7 @@ describe('/commitments 画面', () => {
     renderPage();
 
     await screen.findByText('ドキュメントの誤りを直す');
-    expect(screen.queryByText(/物理削除された/)).toBeNull();
+    expect(screen.queryByText(/完了済みの仕事が合わせて/)).toBeNull();
   });
 
   /**
@@ -331,7 +332,7 @@ describe('/commitments 画面', () => {
     expect((close as HTMLButtonElement).disabled).toBe(true);
 
     // 空白だけでも通さない（見た目上は書いたように見えるので、ここが抜けやすい）。
-    fireEvent.change(screen.getByLabelText('片付いた理由'), {
+    fireEvent.change(screen.getByLabelText(/を片付けた理由$/), {
       target: { value: '   ' },
     });
     expect((screen.getByRole('button', { name: '片付いた' }) as HTMLButtonElement).disabled).toBe(
@@ -345,7 +346,7 @@ describe('/commitments 画面', () => {
     renderPage();
 
     await screen.findByText('ドキュメントの誤りを直す');
-    fireEvent.change(screen.getByLabelText('片付いた理由'), {
+    fireEvent.change(screen.getByLabelText(/を片付けた理由$/), {
       target: { value: 'PR #99 をマージした' },
     });
     fireEvent.click(screen.getByRole('button', { name: '片付いた' }));
@@ -369,7 +370,7 @@ describe('/commitments 画面', () => {
     renderPage();
 
     await screen.findByText('未了の仕事はない。');
-    fireEvent.change(screen.getByLabelText('引き受けた仕事'), {
+    fireEvent.change(screen.getByLabelText('何を引き受けたか'), {
       target: { value: '週明けに設計を見直す' },
     });
     fireEvent.click(screen.getByRole('button', { name: '積む' }));
@@ -415,7 +416,7 @@ describe('返答済み・未クローズ / 未着手（issue #1003）', () => {
     renderPage();
 
     await screen.findByText('ドキュメントの誤りを直す');
-    expect(screen.getByText(/返答済み・未クローズ/)).toBeTruthy();
+    expect(screen.getByText(/返事済み・まだ片付いていない/)).toBeTruthy();
     expect(screen.queryByText('未着手')).toBeNull();
   });
 
@@ -425,7 +426,7 @@ describe('返答済み・未クローズ / 未着手（issue #1003）', () => {
 
     await screen.findByText('ドキュメントの誤りを直す');
     expect(screen.getByText('未着手')).toBeTruthy();
-    expect(screen.queryByText(/返答済み・未クローズ/)).toBeNull();
+    expect(screen.queryByText(/返事済み・まだ片付いていない/)).toBeNull();
   });
 
   /**
@@ -442,7 +443,7 @@ describe('返答済み・未クローズ / 未着手（issue #1003）', () => {
     renderPage();
 
     await screen.findByText('ドキュメントの誤りを直す');
-    expect(screen.queryByText(/返答済み・未クローズ/)).toBeNull();
+    expect(screen.queryByText(/返事済み・まだ片付いていない/)).toBeNull();
     expect(screen.queryByText('未着手')).toBeNull();
   });
 });
@@ -465,18 +466,18 @@ describe('進行中（委譲あり）の id が /managers/<id> への Link に�
     renderPageWithRouter();
 
     await screen.findByText('ドキュメントの誤りを直す');
-    // 文言そのものは変えていない —— 引き続き「進行中（委譲あり: mgr-1, mgr-2）」が読める。
+    // id は文字として出さない（#2801）。「進行中（委譲あり: 詳細1, 詳細2）」と読める。
     // id はリンク（`<a>`）に分かれて DOM 上は別ノードになるので、バッジ（`<span>`）の
     // `textContent`（子孫を含む）で組み立て後の文言全体を確かめる
     // （`getByText` の既定は直下のテキストノードしか見ないため、ここでは使えない）。
     const badge = screen.getByText(
       (_, node) =>
-        node?.tagName === 'SPAN' && node.textContent === '進行中（委譲あり: mgr-1, mgr-2）',
+        node?.tagName === 'SPAN' && node.textContent === '進行中（委譲あり: 詳細1, 詳細2）',
     );
     expect(badge).toBeTruthy();
 
-    const link1 = screen.getByRole('link', { name: 'mgr-1' });
-    const link2 = screen.getByRole('link', { name: 'mgr-2' });
+    const link1 = screen.getByRole('link', { name: '詳細1' });
+    const link2 = screen.getByRole('link', { name: '詳細2' });
     expect(link1.getAttribute('href')).toBe('/managers/mgr-1');
     expect(link2.getAttribute('href')).toBe('/managers/mgr-2');
   });
@@ -1219,17 +1220,102 @@ describe('本文の編集（未了の行すべて。origin では隠さない）
   });
 });
 
+/**
+ * #2801 / #2787: 会話の内部 ID・生の JSON を出さない。入力欄にラベルが在る。
+ */
+describe('利用者に内部表現を見せない・入力欄に名前が在る（#2801 / #2787）', () => {
+  const CONV_ID = '2fa61863-1e7e-4bc2-acd6-48a465a650de';
+
+  it('人間の行の出どころは、会話の冒頭を名前にした会話へのリンクで、UUID は文字として出ない', async () => {
+    stubFetch((url) => {
+      if (url.includes('/conversations')) {
+        return json({
+          conversations: [
+            {
+              conversationId: CONV_ID,
+              preview: 'こんにちは。一言で自己紹介して',
+              updatedAt: new Date().toISOString(),
+              messages: 2,
+            },
+          ],
+          hiddenByLimit: 0,
+        });
+      }
+      if (!url.includes('/commitments')) return undefined;
+      return json({ entries: [commitment({ origin: 'human', source: CONV_ID })] });
+    });
+    renderPageWithRouter();
+
+    const link = await screen.findByRole('link', {
+      name: /会話「こんにちは。一言で自己紹介して」/,
+    });
+    expect(link.getAttribute('href')).toBe(`/chat/${CONV_ID}`);
+    expect(document.body.textContent).not.toContain(CONV_ID);
+  });
+
+  it('会話の一覧に無い UUID（承認の id かもしれない）は、会話と言い切らず、文字としても出さない', async () => {
+    stubCommitments([commitment({ origin: 'human', source: CONV_ID })]);
+    renderPage();
+
+    await screen.findByText('ドキュメントの誤りを直す');
+    expect(document.body.textContent).not.toContain(CONV_ID);
+    expect(screen.queryByRole('link', { name: /会話/ })).toBeNull();
+  });
+
+  it('外部イベントの JSON は、note だけなら文面、平たい欄なら「欄: 値」の行で出る', async () => {
+    stubCommitments([
+      commitment({
+        id: 'a',
+        origin: 'external',
+        source: 'manual',
+        body: '{ "note": "請求書を確認する" }',
+      }),
+      commitment({
+        id: 'b',
+        origin: 'external',
+        source: 'ci',
+        body: '{"repo":"alteroid","failed":3}',
+      }),
+    ]);
+    renderPage();
+
+    expect(await screen.findByText('請求書を確認する')).toBeTruthy();
+    expect(document.body.textContent).not.toContain('{ "note"');
+    expect(screen.getByText(/repo: alteroid/)).toBeTruthy();
+    expect(screen.getByText(/failed: 3/)).toBeTruthy();
+    // JSON として読めなければ手を加えない。
+    expect(readableExternalBody('{壊れた')).toBe('{壊れた');
+    expect(readableExternalBody('{"a":{"b":1}}')).toBe('{"a":{"b":1}}');
+  });
+
+  it('仕事を登録する欄と、行ごとの「片付けた理由」欄にラベルが在る（入力後も名前が残る）', async () => {
+    stubCommitments([
+      commitment({ id: 'a', body: '請求書を確認する' }),
+      commitment({ id: 'b', body: '議事録を共有する' }),
+    ]);
+    renderPage();
+
+    const push = await screen.findByLabelText('何を引き受けたか');
+    fireEvent.change(push, { target: { value: 'あ' } });
+    expect(screen.getByLabelText('何を引き受けたか')).toBe(push);
+
+    const first = screen.getByLabelText('「請求書を確認する」を片付けた理由');
+    const second = screen.getByLabelText('「議事録を共有する」を片付けた理由');
+    expect(first).not.toBe(second);
+  });
+});
+
 describe('入力欄の補足文', () => {
   it('登録欄・片付ける欄の条件は常時表示の補足文で、欄と aria-describedby で結ばれる', async () => {
     stubCommitments([commitment()]);
     renderPage();
 
-    const body = await screen.findByLabelText('引き受けた仕事');
+    const body = await screen.findByLabelText('何を引き受けたか');
     const bodyHint = document.getElementById(body.getAttribute('aria-describedby') ?? '');
     expect(bodyHint?.textContent).toMatch(/一覧側の仕事/);
     expect((body as HTMLInputElement).placeholder).not.toMatch(/一覧側/);
 
-    const reason = screen.getByLabelText('片付いた理由');
+    const reason = screen.getByLabelText(/を片付けた理由$/);
     const reasonHint = document.getElementById(reason.getAttribute('aria-describedby') ?? '');
     expect(reasonHint?.textContent).toMatch(/後から否定できる/);
     expect((reason as HTMLInputElement).placeholder).not.toMatch(/否定/);
