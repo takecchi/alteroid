@@ -9,6 +9,7 @@ import { PgCommitmentStore } from './commitments.js';
 import { PgPracticeStore } from './practices.js';
 import type { Db } from './db.js';
 import { PgInboxStore } from './inbox.js';
+import { PgConversationReadStore } from './conversation-reads.js';
 import { PgJobStore } from './jobs.js';
 import { PgJournalStore } from './journal.js';
 import { PgMcpServerStore } from './mcp-servers.js';
@@ -28,6 +29,7 @@ export { PgAuthStore } from './auth.js';
 export { PgCommitmentStore } from './commitments.js';
 export { PgPracticeStore } from './practices.js';
 export { PgInboxStore } from './inbox.js';
+export { PgConversationReadStore } from './conversation-reads.js';
 export { PgJobStore } from './jobs.js';
 export { PgJournalStore } from './journal.js';
 export { PgMcpServerStore } from './mcp-servers.js';
@@ -133,6 +135,7 @@ export function createPgStoresFromDb(db: Db, close?: () => Promise<void>): PgSto
     profile: new PgProfileStore(db),
     credentials: new PgCredentialVaultStore(db),
     mcpServers: new PgMcpServerStore(db),
+    conversationReads: new PgConversationReadStore(db),
     tokens: new PgTokenPoolStore(db),
     usage: new PgUsageStore(db),
     ...sessionStores(db),

@@ -109,7 +109,7 @@
         "operationId": "getHealth",
         "tags": ["system"],
         "summary": "死活監視と本人確認",
-        "description": "デーモンが応答しているかと、その pid・記憶の置き場・認証の状態を返す。`Authorization: Bearer <state/daemon.json の token>` を添えると `operator` が true になり、CLI はこれで「自分が起こしたデーモンか」を確かめる（PID は信用しない）。**トークンそのものは返さない** — この値は許可を付与できる資格そのものなので、無認証で読める応答には置けない。",
+        "description": "デーモンが応答しているかと、その pid・認証の状態を返す。**記憶の置き場は返さない**（無認証で読める応答に、内部のホスト名・DB 名・ホームのパスを置かない。#2869）。認証の要る `GET /status` が返す。`Authorization: Bearer <state/daemon.json の token>` を添えると `operator` が true になり、CLI はこれで「自分が起こしたデーモンか」を確かめる（PID は信用しない）。**トークンそのものは返さない** — この値は許可を付与できる資格そのものなので、無認証で読める応答には置けない。",
         "security": [],
         "responses": {
           "200": {
@@ -130,9 +130,6 @@
                     },
                     "operator": {
                       "type": "boolean"
-                    },
-                    "storage": {
-                      "type": "string"
                     },
                     "auth": {
                       "type": "object",
@@ -162,7 +159,49 @@
                       "required": ["enabled", "providers"]
                     }
                   },
-                  "required": ["ok", "pid", "operator", "storage", "auth"]
+                  "required": ["ok", "pid", "operator", "auth"]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/status": {
+      "get": {
+        "operationId": "getStatus",
+        "tags": ["system"],
+        "summary": "デーモン自身の説明（記憶の置き場。資格が要る）",
+        "description": "記憶の置き場（PostgreSQL なら `host:port/db`、ファイルなら記憶ディレクトリのパス）を返す。接続情報（パスワード等）は含めない。無認証の `GET /health` は置き場を返さないので、置き場を知りたい呼び出し元はログインの後ろのここから取る。",
+        "responses": {
+          "200": {
+            "description": "認証を通った相手への説明。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "storage": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["storage"]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "資格が無い。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
                 }
               }
             }
@@ -624,6 +663,23 @@
                           },
                           "preview": {
                             "type": "string"
+                          },
+                          "unreadCount": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          },
+                          "readThrough": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "format": "date-time",
+                                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
                           }
                         },
                         "required": [
@@ -631,7 +687,9 @@
                           "startedAt",
                           "updatedAt",
                           "messages",
-                          "preview"
+                          "preview",
+                          "unreadCount",
+                          "readThrough"
                         ]
                       }
                     },
@@ -647,6 +705,9 @@
                       "type": "integer",
                       "minimum": -9007199254740991,
                       "maximum": 9007199254740991
+                    },
+                    "readStateUnreadable": {
+                      "type": "string"
                     }
                   },
                   "required": ["conversations", "scanned", "reachedStart", "hiddenByLimit"]
@@ -693,6 +754,40 @@
             }
           }
         ]
+      }
+    },
+    "/conversations/unread-count": {
+      "get": {
+        "operationId": "getConversationsUnreadCount",
+        "tags": ["conversations"],
+        "summary": "未読のある会話の数",
+        "description": "未読のある会話の数（全会話で数える。直近の一覧には限らない）。**日誌を広く遡らない** — 会話ごとの最後のクローン側発言の時刻の索引（日誌の写し）を、前回の続きから新しく積まれた分だけ足して数える。未読の会話が上限（99）を超えるとき、または長い不在のあとの取り込みが1回に収まらないときは `capped: true`（`count` は下限。UI は「N+」）。一覧の `unreadCount` との差が出うるのは、編集で畳まれた返答が会話の最後のクローン側発言のとき（その会話を開いて既読にすれば揃う）。既読の記録が読めないときは `readStateUnreadable` が載る。",
+        "responses": {
+          "200": {
+            "description": "未読のある会話の数。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "count": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "capped": {
+                      "type": "boolean"
+                    },
+                    "readStateUnreadable": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["count", "capped"]
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/conversations/{id}": {
@@ -756,6 +851,26 @@
                       "type": "integer",
                       "minimum": -9007199254740991,
                       "maximum": 9007199254740991
+                    },
+                    "readThrough": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "format": "date-time",
+                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "unreadCount": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "readStateUnreadable": {
+                      "type": "string"
                     }
                   },
                   "required": [
@@ -763,7 +878,9 @@
                     "messages",
                     "scanned",
                     "reachedStart",
-                    "supersededCount"
+                    "supersededCount",
+                    "readThrough",
+                    "unreadCount"
                   ]
                 }
               }
@@ -822,6 +939,111 @@
               "enum": ["true", "false"]
             }
           },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "id",
+            "required": true
+          }
+        ]
+      }
+    },
+    "/conversations/{id}/read": {
+      "post": {
+        "operationId": "postConversationsByIdRead",
+        "tags": ["conversations"],
+        "summary": "会話を既読にする（位置を進める）",
+        "description": "既読の位置（全員で1組）を、`through` で指した発言の時刻まで進める。**`through` は発言の id**（`GET /conversations/:id` の `messages[].id`）で、時刻はサーバが日誌から引く。**戻らない**——いまの位置より古い発言を指しても何も変わらず、200 でいまの位置を返す。発言が無い・人間との往復でないときは 404、別の会話の発言のときは 400。応答は進めた後の実効の位置と未読数（一覧・詳細と同じ数え方。窓は既定の `scan`）。",
+        "responses": {
+          "200": {
+            "description": "進めた後の実効の既読の位置と未読数。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "conversationId": {
+                      "type": "string"
+                    },
+                    "readThrough": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "format": "date-time",
+                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "unreadCount": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "readStateUnreadable": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["conversationId", "readThrough", "unreadCount"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "本文が不正、または `through` の発言がこの会話のものでない。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`through` の発言が日誌に無い（人間との往復でない場合を含む）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "through": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": ["through"]
+              }
+            }
+          }
+        },
+        "parameters": [
           {
             "schema": {
               "type": "string"
@@ -2264,6 +2486,11 @@
                             "format": "date-time",
                             "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
                           },
+                          "usageStoppedAt": {
+                            "type": "string",
+                            "format": "date-time",
+                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                          },
                           "request": {
                             "type": "string"
                           },
@@ -2552,6 +2779,11 @@
                             "type": "string"
                           },
                           "runnerListedAt": {
+                            "type": "string",
+                            "format": "date-time",
+                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                          },
+                          "usageStoppedAt": {
                             "type": "string",
                             "format": "date-time",
                             "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
@@ -3913,10 +4145,10 @@
         "operationId": "deleteMemoryBySlug",
         "tags": ["memory"],
         "summary": "記憶文書を消す",
-        "description": "書けるのに消せないと、間違って作った記憶が永久に判断の材料に残る。消した事実は日誌に残る（`cause: human`）ので、記憶から消えても記録からは消えない。",
+        "description": "書けるのに消せないと、間違って作った記憶が永久に判断の材料に残る。消した事実は日誌に残る（`cause: human`）ので、記憶から消えても記録からは消えない。\n\n**読んだ版を前提にできる（Issue #2881）。** クエリ `ifMatch` に、読んだ時の版（`GET /memory/{slug}` の `version`）を付けると、いまの版と違うとき**何も消さず 409** でいまの版を返す（読んだ後にクローンが書いた内容を黙って消さない）。\n\n**段階的に必須にする。** いまは `ifMatch` を付けない削除も通る（Web の削除が版を送るようになるまでの移行）が、応答に `warning` を載せ、デーモンの標準エラーと日誌にも「版の照合なし」と残す。移行が済んだら版を必須にする。",
         "responses": {
           "200": {
-            "description": "消した。",
+            "description": "消した。版を付けていなければ `warning` が載る。",
             "content": {
               "application/json": {
                 "schema": {
@@ -3927,6 +4159,9 @@
                       "const": true
                     },
                     "slug": {
+                      "type": "string"
+                    },
+                    "warning": {
                       "type": "string"
                     }
                   },
@@ -3966,9 +4201,298 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "`ifMatch`（読んだ時の版）が、いまの版と違う（読んでから消すまでの間に別の書き手が書いた）。**何も消していない。** `current` にいまの版を返す。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "current": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "document": {
+                              "type": "object",
+                              "properties": {
+                                "slug": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 128,
+                                  "pattern": "^[a-z0-9][a-z0-9._-]*$"
+                                },
+                                "title": {
+                                  "type": "string"
+                                },
+                                "updatedAt": {
+                                  "type": "string",
+                                  "format": "date-time",
+                                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                                },
+                                "createdAt": {
+                                  "oneOf": [
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "kind": {
+                                          "type": "string",
+                                          "const": "known"
+                                        },
+                                        "at": {
+                                          "type": "string",
+                                          "format": "date-time",
+                                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                                        }
+                                      },
+                                      "required": ["kind", "at"]
+                                    },
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "kind": {
+                                          "type": "string",
+                                          "const": "unknown"
+                                        }
+                                      },
+                                      "required": ["kind"]
+                                    }
+                                  ]
+                                },
+                                "bytes": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                "frontmatter": {
+                                  "oneOf": [
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "kind": {
+                                          "type": "string",
+                                          "const": "none"
+                                        }
+                                      },
+                                      "required": ["kind"]
+                                    },
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "kind": {
+                                          "type": "string",
+                                          "const": "malformed"
+                                        }
+                                      },
+                                      "required": ["kind"]
+                                    },
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "kind": {
+                                          "type": "string",
+                                          "const": "parsed"
+                                        },
+                                        "description": {
+                                          "type": "string"
+                                        },
+                                        "type": {
+                                          "type": "string"
+                                        },
+                                        "parent": {
+                                          "type": "string"
+                                        }
+                                      },
+                                      "required": ["kind"]
+                                    }
+                                  ]
+                                },
+                                "kind": {
+                                  "type": "string",
+                                  "enum": ["premise", "fact", "indexed"]
+                                },
+                                "description": {
+                                  "type": "string"
+                                },
+                                "parent": {
+                                  "type": "string"
+                                },
+                                "descriptionFreshness": {
+                                  "oneOf": [
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "kind": {
+                                          "type": "string",
+                                          "const": "fresh"
+                                        }
+                                      },
+                                      "required": ["kind"]
+                                    },
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "kind": {
+                                          "type": "string",
+                                          "const": "stale"
+                                        },
+                                        "staleForMs": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "drift": {
+                                          "oneOf": [
+                                            {
+                                              "type": "object",
+                                              "properties": {
+                                                "kind": {
+                                                  "type": "string",
+                                                  "const": "measured"
+                                                },
+                                                "describedBytes": {
+                                                  "type": "integer",
+                                                  "minimum": 0,
+                                                  "maximum": 9007199254740991
+                                                },
+                                                "currentBytes": {
+                                                  "type": "integer",
+                                                  "minimum": 0,
+                                                  "maximum": 9007199254740991
+                                                },
+                                                "deltaBytes": {
+                                                  "type": "integer",
+                                                  "minimum": -9007199254740991,
+                                                  "maximum": 9007199254740991
+                                                }
+                                              },
+                                              "required": [
+                                                "kind",
+                                                "describedBytes",
+                                                "currentBytes",
+                                                "deltaBytes"
+                                              ]
+                                            },
+                                            {
+                                              "type": "object",
+                                              "properties": {
+                                                "kind": {
+                                                  "type": "string",
+                                                  "const": "at-least"
+                                                },
+                                                "baselineBytes": {
+                                                  "type": "integer",
+                                                  "minimum": 0,
+                                                  "maximum": 9007199254740991
+                                                },
+                                                "baselineAt": {
+                                                  "type": "string",
+                                                  "format": "date-time",
+                                                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                                                },
+                                                "currentBytes": {
+                                                  "type": "integer",
+                                                  "minimum": 0,
+                                                  "maximum": 9007199254740991
+                                                },
+                                                "deltaBytes": {
+                                                  "type": "integer",
+                                                  "minimum": -9007199254740991,
+                                                  "maximum": 9007199254740991
+                                                }
+                                              },
+                                              "required": [
+                                                "kind",
+                                                "baselineBytes",
+                                                "baselineAt",
+                                                "currentBytes",
+                                                "deltaBytes"
+                                              ]
+                                            },
+                                            {
+                                              "type": "object",
+                                              "properties": {
+                                                "kind": {
+                                                  "type": "string",
+                                                  "const": "unrecorded"
+                                                }
+                                              },
+                                              "required": ["kind"]
+                                            }
+                                          ]
+                                        }
+                                      },
+                                      "required": ["kind", "staleForMs", "drift"]
+                                    },
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "kind": {
+                                          "type": "string",
+                                          "const": "unknown"
+                                        }
+                                      },
+                                      "required": ["kind"]
+                                    },
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "kind": {
+                                          "type": "string",
+                                          "const": "absent"
+                                        }
+                                      },
+                                      "required": ["kind"]
+                                    }
+                                  ]
+                                },
+                                "content": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "slug",
+                                "title",
+                                "updatedAt",
+                                "createdAt",
+                                "bytes",
+                                "frontmatter",
+                                "kind",
+                                "descriptionFreshness",
+                                "content"
+                              ]
+                            },
+                            "version": {
+                              "type": "string"
+                            }
+                          },
+                          "required": ["document", "version"]
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": ["error", "current"]
+                }
+              }
+            }
           }
         },
         "parameters": [
+          {
+            "in": "query",
+            "name": "ifMatch",
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
           {
             "schema": {
               "type": "string"
@@ -4114,9 +4638,12 @@
                         "chars",
                         "content"
                       ]
+                    },
+                    "version": {
+                      "type": "string"
                     }
                   },
-                  "required": ["practice"]
+                  "required": ["practice", "version"]
                 }
               }
             }
@@ -4239,9 +4766,12 @@
                         "chars",
                         "content"
                       ]
+                    },
+                    "version": {
+                      "type": "string"
                     }
                   },
-                  "required": ["practice"]
+                  "required": ["practice", "version"]
                 }
               }
             }
@@ -4258,6 +4788,84 @@
                     }
                   },
                   "required": ["error"]
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`ifMatch`（読んだ時の版）が、いまの版と違う（読んでから書くまでの間に別の書き手が書いた、または消した）。**何も書いていない**（版の履歴にも足していない）。`current` にいまの版を返す。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "current": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "practice": {
+                              "type": "object",
+                              "properties": {
+                                "slug": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 128,
+                                  "pattern": "^[a-z0-9][a-z0-9._-]*$"
+                                },
+                                "kind": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 128
+                                },
+                                "title": {
+                                  "type": "string"
+                                },
+                                "createdAt": {
+                                  "type": "string",
+                                  "format": "date-time",
+                                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                                },
+                                "updatedAt": {
+                                  "type": "string",
+                                  "format": "date-time",
+                                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                                },
+                                "chars": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                "content": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "slug",
+                                "kind",
+                                "title",
+                                "createdAt",
+                                "updatedAt",
+                                "chars",
+                                "content"
+                              ]
+                            },
+                            "version": {
+                              "type": "string"
+                            }
+                          },
+                          "required": ["practice", "version"]
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": ["error", "current"]
                 }
               }
             }
@@ -4280,6 +4888,9 @@
                   },
                   "content": {
                     "type": "string"
+                  },
+                  "ifMatch": {
+                    "type": ["string", "null"]
                   }
                 },
                 "required": ["kind", "title", "content"]

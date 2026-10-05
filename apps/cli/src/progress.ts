@@ -1,6 +1,6 @@
 import { stdout } from 'node:process';
 
-import { describeProgress } from '@alteroid/core';
+import { describeProgress } from '@alteroid/core/cli-light';
 
 import { createClient } from './client.js';
 import { describeAuthFailure, resolveTarget } from './target.js';

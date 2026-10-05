@@ -25,6 +25,7 @@ import type {
   McpServers,
   MemoryDocument,
   McpServersUpdateResult,
+  Practice,
   ProfileScope,
   ProfileUpdateResult,
   TokenRotationSettings,
@@ -77,6 +78,9 @@ export function useRecordOwnMessage() {
               updatedAt: now,
               messages: 1,
               preview: shortened,
+              // 自分の発言は未読にならない（既読の位置は次の再取得で正しい値に戻る）。
+              unreadCount: 0,
+              readThrough: now,
             };
             // `scanned`（日誌をどこまで遡ったか）はここでは動いていないので触らない。
             // 先頭へ足すだけで末尾は切らない。次の再取得で正しい件数に戻る。
@@ -163,12 +167,35 @@ export function useSaveMemory() {
   );
 }
 
+/**
+ * 記憶を消す。
+ *
+ * `ifMatch` は**読んだ時の版**（`GET /memory/{slug}` の `version`。クエリで送る。Issue #2916 / #2881）。
+ * 渡すと、いまの版と違えば**何も消さず** `MemoryConflictError` を投げる（`current` にいまの版）。
+ * 取り消せない操作なので、衝突しても自動では再送しない——呼び出し側がいまの内容を見せてから
+ * もう一度確認を取る。省略すると従来どおり（デーモンは応答に warning を載せて通す）。
+ */
 export function useDeleteMemory() {
   const api = useApi();
   const { mutate } = useSWRConfig();
   return useCallback(
-    async (slug: string) => {
-      await api.api.DELETE('/memory/{slug}', { params: { path: { slug } } }).then(unwrap);
+    async (slug: string, ifMatch?: string) => {
+      const result = await api.api.DELETE('/memory/{slug}', {
+        params: { path: { slug }, query: ifMatch === undefined ? {} : { ifMatch } },
+      });
+      if (result.response.status === 409 && result.error !== undefined) {
+        // 衝突のときは、画面がいまの版を見せられるようキャッシュも引き直す。
+        await Promise.all([mutate(KEY.memory), mutate(KEY.memoryDoc(slug))]);
+        const body = result.error as {
+          error?: string;
+          current?: { document: MemoryDocument; version: string } | null;
+        };
+        throw new MemoryConflictError(
+          body.error ?? '記憶が読んだ後に変わっている',
+          body.current ?? null,
+        );
+      }
+      unwrap(result);
       await mutate(KEY.memory);
     },
     [api, mutate],
@@ -176,21 +203,53 @@ export function useDeleteMemory() {
 }
 
 /**
+ * 読んだ後に別の書き手がやり方を書き換えていた（`PUT /practices/{slug}` の 409、Issue #2853）。
+ * `MemoryConflictError` と同じ形。**何も書いていない**ので、人間の下書きは呼び出し側が持ったまま、
+ * `current`（いまの版。`null` なら読んだ後に消された）を見せて選ばせる。`ApiError` を継承する。
+ */
+export class PracticeConflictError extends ApiError {
+  readonly current: { practice: Practice; version: string } | null;
+
+  constructor(message: string, current: { practice: Practice; version: string } | null) {
+    super(409, message);
+    this.name = 'PracticeConflictError';
+    this.current = current;
+  }
+}
+
+/**
  * 仕事のやり方を書く（全文置換。無ければ作る、#1055 段3③）。
  *
  * `useSaveMemory` と違い `kind` / `title` も一緒に送る——`PracticeStore.write`
  * は `content` だけの部分更新を持たない（`practiceSchema` の doc）。
+ *
+ * `ifMatch` は**読んだ時の版**（`GET /practices/{slug}` の `version`。読んだ時に無かったなら `null`）。
+ * 渡すと、いまの版と違えば何も書かずに `PracticeConflictError` を投げる。省略すると従来どおり後勝ち。
  */
 export function useSavePractice() {
   const api = useApi();
   const { mutate } = useSWRConfig();
   return useCallback(
-    async (slug: string, kind: string, title: string, content: string) => {
-      const result = await api.api
-        .PUT('/practices/{slug}', { params: { path: { slug } }, body: { kind, title, content } })
-        .then(unwrap);
+    async (slug: string, kind: string, title: string, content: string, ifMatch?: string | null) => {
+      const result = await api.api.PUT('/practices/{slug}', {
+        params: { path: { slug } },
+        body: ifMatch === undefined ? { kind, title, content } : { kind, title, content, ifMatch },
+      });
+      if (result.response.status === 409 && result.error !== undefined) {
+        // 衝突のときは、画面がいまの版を見せられるようキャッシュも引き直す。
+        await Promise.all([mutate(KEY.practices), mutate(KEY.practice(slug))]);
+        const body = result.error as {
+          error?: string;
+          current?: { practice: Practice; version: string } | null;
+        };
+        throw new PracticeConflictError(
+          body.error ?? 'やり方が読んだ後に変わっている',
+          body.current ?? null,
+        );
+      }
+      const saved = unwrap(result);
       await Promise.all([mutate(KEY.practices), mutate(KEY.practice(slug))]);
-      return result.practice;
+      return { practice: saved.practice, version: saved.version };
     },
     [api, mutate],
   );

@@ -306,3 +306,35 @@ export const perRunnerScene: SystemTopologyProps = {
     },
   ],
 };
+
+/**
+ * 利用枠の上限で止まっている場面。クローンも、手が空いたように見えて実は枠で止まっているマネージャーも
+ * 「止まっている」（waiting）と描き、本当に仕事の無いマネージャーは「仕事なし」のまま。
+ */
+export const usageBlockedScene: SystemTopologyProps = {
+  human: { flow: 'idle' },
+  clone: { status: 'waiting', task: '利用枠の上限で止まっている' },
+  db: { label: 'PostgreSQL', status: 'ok', flow: 'idle' },
+  runners: [{ id: 'r1', label: 'runner-primary', status: 'ok' }],
+  managers: [
+    {
+      id: 'm1',
+      runner: 'r1',
+      label: 'mgr-7f3a',
+      task: '利用枠の上限で止まっている: codex の駆動役を配線する',
+      status: 'waiting',
+      flow: 'idle',
+      details: [{ label: '利用枠', value: '利用枠の上限で止まっている（1 時間前 から）' }],
+      workers: [],
+    },
+    {
+      id: 'm2',
+      runner: 'r1',
+      label: 'mgr-c019',
+      task: '完了: PR #2695 のレビュー',
+      status: 'idle',
+      flow: 'idle',
+      workers: [],
+    },
+  ],
+};

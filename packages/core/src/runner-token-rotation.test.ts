@@ -823,3 +823,66 @@ describe('認証トークンを回した後、走行中のマネージャーの�
     expect(s.startedOptions[1]?.resume).toBe('sess-1');
   });
 });
+
+/**
+ * **`Host#resume` の「生きたセッションへの短絡」を、応答で名乗る**（Issue #2877）。
+ *
+ * `Host#resume` は同じ managerId の生きたセッションが居ると、新しい SDK を起こさずに
+ * message をそこへ push して返す。旧プロセスの env は起動時に凍っているので、鍵が回った
+ * 後で境界に達していない（背景処理が残っている）セッションへ短絡すると、**message は
+ * 古い鍵のプロセスへ届く**。応答の `reusedLiveSession: true` がそれを言い、デーモンは
+ * その回に世代を現役へ書き換えない（`manager-resume-alive-shortcut.test.ts`）。
+ * 新しい SDK を起こした回は `false`。
+ */
+describe('resume が生きた旧プロセスへ短絡したかを応答で名乗る（#2877）', () => {
+  it('⚠️ 境界に達していない旧セッションへ resume すると、旧プロセスへ流れ、reusedLiveSession: true が返る', async () => {
+    const s = setup();
+    await s.host.start({ managerId: 'mgr-1', request: '調べて', cwd: '/work/project' });
+    const first = await nthSession(s.sessions, 0);
+    first.backgroundTasksChanged([{ id: 'bg-1', taskType: 'shell' }]);
+    first.say('完了を待つ');
+    first.finish('完了を待つ');
+    await reportEvents(s.events, 1);
+    // 鍵が回る。背景処理が残っているので畳み直しの境界に達しない。
+    await s.host.setCredentials([
+      { name: 'CLAUDE_CODE_OAUTH_TOKEN', value: 'token-fake-new-2877' },
+    ]);
+
+    const resumed = await s.host.resume({
+      managerId: 'mgr-1',
+      sessionId: 'sess-1',
+      cwd: '/work/project',
+      request: '調べて',
+      message: '続けて',
+    });
+
+    expect(resumed.reusedLiveSession).toBe(true);
+    // 旧プロセスへ流れた（新しい SDK は起きていない）。
+    await vi.waitFor(() => {
+      if (!first.inputs.includes('続けて')) throw new Error('旧プロセスに届いていない');
+    });
+    expect(s.startedOptions).toHaveLength(1);
+    // 後始末: 背景処理を片付け、旧セッションの未完のターンを閉じる（shutdown 待ちを避ける）。
+    first.backgroundTasksChanged([]);
+    first.finish('終わり');
+  });
+
+  it('生きたセッションが居なければ新しい SDK が起き、reusedLiveSession: false が返る', async () => {
+    const s = setup();
+
+    const resumed = await s.host.resume({
+      managerId: 'mgr-9',
+      sessionId: 'sess-9',
+      cwd: '/work/project',
+      request: '調べて',
+      message: '続けて',
+    });
+
+    expect(resumed.reusedLiveSession).toBe(false);
+    const opened = await nthSession(s.sessions, 0);
+    // 後始末: resume の message が始めたターンを閉じる（shutdown 待ちを避ける）。
+    opened.finish('終わり');
+    expect(s.startedOptions[0]?.resume).toBe('sess-9');
+    expect(s.startedOptions[0]?.env?.CLAUDE_CODE_OAUTH_TOKEN).toBe(OLD_TOKEN);
+  });
+});

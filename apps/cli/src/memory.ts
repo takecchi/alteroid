@@ -270,11 +270,18 @@ export async function memoryShowCommand(slug: string): Promise<void> {
   if (conn === null) return;
   const doc = await readDoc(conn.client, conn.target, slug);
   if (doc === null) {
-    stdout.write(`そんな記憶はありません: ${slug}\n`);
-    return;
+    throw new Error(`そんな記憶はありません: ${slug}`);
   }
   const content = doc.content;
   stdout.write(content.endsWith('\n') ? content : `${content}\n`);
+  // **版は stderr へ1行（Issue #2919）。** stdout は本文をそのまま出す口で、パイプや
+  // リダイレクトで使う人がいる（版を混ぜると本文が壊れる）。端末では両方見える。
+  // 古いデーモンが `version` を返さなければ出さない。
+  if (doc.version !== undefined) {
+    process.stderr.write(
+      `版: ${doc.version}（読んだ版を前提に消すなら: alteroid memory remove ${slug} --if-match ${doc.version}）\n`,
+    );
+  }
 }
 
 /**
@@ -373,12 +380,54 @@ export async function memorySetCommand(
  * **それ以外（401/403/5xx）を、この2つのどちらかだと取り違えない**——
  * 以前はここが「400 以外は全部『無い』」という形をしていたため、認証切れや
  * サーバの内部エラーでも「そんな記憶はありません」と誤案内していた。
+ *
+ * **読んだ版を持ち回る（Issue #2881。`memory edit` と同じ取り方）。** 消す直前に
+ * `GET /memory/<slug>` で読み、その `version` を `DELETE` の `ifMatch` に付ける。
+ * 読んだ後に別の書き手（クローンなど）が書いていたら、デーモンは**消さずに** 409 を返す。
+ * そのときは消さずに、いまの版と次の手（`memory show` で確かめてから再実行）を案内して失敗で終わる。
+ * **`--if-match <版>`（Issue #2919）を渡すと、読み直さずにその版で照合する**——`memory show` が
+ * stderr に出した版を渡せば、「見て決めた内容」を前提に消せる。
+ * 古いデーモンが `version` を返さなければ前提なしで消す（段階1。デーモンが警告を返せば出す）。
+ * **読んで無かった（404 / 400）ときも版なしで DELETE を打つ**——「無い」と「名前が不正」の
+ * 切り分けはサーバが持つので、ここで再実装しない。
  */
-export async function memoryRemoveCommand(slug: string): Promise<void> {
+export async function memoryRemoveCommand(
+  slug: string,
+  options: { ifMatch?: string } = {},
+): Promise<void> {
   const conn = await connect('write');
   if (conn === null) return;
   const { client, target } = conn;
-  const response = await client.memory[':slug'].$delete({ param: { slug } });
+  // **`--if-match` があれば、それだけで照合する**（Issue #2919）。人間が判断の根拠にしたのは
+  // `memory show` で読んだ内容なので、消す直前に読み直した版へ差し替えない。
+  // 無ければ、消す直前に読んだ版を前提にする（上の段落）。
+  const ifMatch = options.ifMatch ?? (await readDoc(client, target, slug))?.version;
+  const response = await client.memory[':slug'].$delete({
+    param: { slug },
+    query: ifMatch === undefined ? {} : { ifMatch },
+  });
+  if (response.status === 409) {
+    const body = (await response.json()) as {
+      current?: { document?: { content?: string }; version?: string } | null;
+    };
+    const current = body.current ?? null;
+    stdout.write(
+      [
+        `消していません: ${slug} は、あなたが読んだ後に変わっています（クローンなど別の書き手が書いたか、すでに消されました）。`,
+        current === null
+          ? '  いまの記憶: 無い（すでに消されています）'
+          : `  いまの記憶の版: ${current.version ?? '（不明）'}（${String(current.document?.content?.length ?? 0)} 文字）`,
+        ...(current === null
+          ? []
+          : [
+              `  いまの内容を読み直す: \`alteroid memory show ${slug}\`（版そのものは GET /memory/${slug} の version）`,
+              `  確かめたうえで消してよければ、もう一度 \`alteroid memory remove ${slug}\`（いまの版を読み直して消します）。`,
+            ]),
+        '',
+      ].join('\n'),
+    );
+    throw new Error(`記憶が読んだ後に変わっていたので消しませんでした: ${slug}`);
+  }
   if (!response.ok) {
     if (response.status === 400) {
       throw new Error(`記憶の名前として成立しません: ${slug}`);
@@ -396,6 +445,9 @@ export async function memoryRemoveCommand(slug: string): Promise<void> {
     );
   }
   stdout.write(`消しました: ${slug}\n`);
+  // 版を付けずに消せたとき、デーモンは警告を返す（段階1）。握り潰さず見せる。
+  const done = (await response.json().catch(() => ({}))) as { warning?: unknown };
+  if (typeof done.warning === 'string') stdout.write(`注意: ${done.warning}\n`);
 }
 
 /**

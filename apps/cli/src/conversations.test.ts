@@ -15,7 +15,8 @@ vi.mock('./target.js', () => ({
   describeAuthFailure: () => null,
 }));
 
-const { conversationsListCommand, conversationsShowCommand } = await import('./conversations.js');
+const { conversationsListCommand, conversationsReadCommand, conversationsShowCommand } =
+  await import('./conversations.js');
 
 interface Sent {
   url: string;
@@ -52,6 +53,16 @@ afterEach(() => {
   globalThis.fetch = originalFetch;
   vi.restoreAllMocks();
 });
+
+/** 失敗（reject）した Error を取り出す。resolve したらテストを落とす。 */
+async function failureOf(promise: Promise<unknown>): Promise<Error> {
+  try {
+    await promise;
+  } catch (error) {
+    return error as Error;
+  }
+  throw new Error('reject するはずが resolve した');
+}
 
 describe('alteroid conversations list', () => {
   it('GET /conversations を打ち、scanned を必ず出す（黙って打ち切らない）', async () => {
@@ -246,12 +257,10 @@ describe('alteroid conversations list', () => {
   });
 
   it('クエリが不正（400）なら、読めなかったと言う', async () => {
-    const read = captureStdout();
     replies.push({ status: 400, body: { error: 'invalid' } });
 
-    await conversationsListCommand({ limit: '0' });
-
-    expect(read()).toContain('読めませんでした');
+    // 失敗は例外で上へ通す（終了コードが 0 でなくなる。#2856）。
+    await expect(conversationsListCommand({ limit: '0' })).rejects.toThrow('読めませんでした');
   });
 
   /**
@@ -294,6 +303,78 @@ describe('alteroid conversations list', () => {
     await conversationsListCommand();
 
     expect(read().endsWith('\n')).toBe(true);
+  });
+});
+
+describe('alteroid conversations list の未読', () => {
+  const row = (conversationId: string, unreadCount: number) => ({
+    conversationId,
+    startedAt: '2026-08-16T10:00:00.000Z',
+    updatedAt: '2026-08-16T10:05:00.000Z',
+    messages: 3,
+    preview: '相談',
+    unreadCount,
+  });
+
+  it('未読がある会話の行にだけ「未読 N」を出す', async () => {
+    const read = captureStdout();
+    replies.push({
+      status: 200,
+      body: {
+        conversations: [row('conv-unread', 2), row('conv-read', 0)],
+        scanned: 5,
+        reachedStart: true,
+        hiddenByLimit: 0,
+      },
+    });
+    await conversationsListCommand();
+    const lines = read().split('\n');
+    expect(lines.find((l) => l.includes('conv-unread'))).toContain('未読 2');
+    expect(lines.find((l) => l.includes('conv-read'))).not.toContain('未読');
+  });
+});
+
+describe('alteroid conversations read', () => {
+  const detail = {
+    conversationId: 'conv-1',
+    messages: [
+      { id: 'm1', at: '2026-08-16T10:00:00.000Z', role: 'inbound', text: '質問' },
+      { id: 'm2', at: '2026-08-16T10:01:00.000Z', role: 'outbound', text: '返答' },
+    ],
+    scanned: 2,
+    reachedStart: true,
+    supersededCount: 0,
+    readThrough: null,
+    unreadCount: 1,
+  };
+
+  it('最新の発言の id を指して既読にする', async () => {
+    const read = captureStdout();
+    replies.push({ status: 200, body: detail });
+    replies.push({
+      status: 200,
+      body: { conversationId: 'conv-1', readThrough: '2026-08-16T10:01:00.000Z', unreadCount: 0 },
+    });
+    await conversationsReadCommand('conv-1');
+    expect(sent.map((s) => `${s.method} ${s.url}`)).toEqual([
+      'GET http://127.0.0.1:4517/conversations/conv-1',
+      'POST http://127.0.0.1:4517/conversations/conv-1/read',
+    ]);
+    expect(read()).toBe('既読にしました: conv-1\n');
+  });
+
+  it('無い会話は、そう言って既読の呼びを打たない（終了コードは非 0。#2856）', async () => {
+    replies.push({ status: 404, body: { error: 'not found' } });
+    await expect(conversationsReadCommand('nope')).rejects.toThrow('そんな会話はありません');
+    expect(sent).toHaveLength(1);
+  });
+
+  it('見える範囲に発言が無いときは、既読にせず理由を言う', async () => {
+    const read = captureStdout();
+    replies.push({ status: 200, body: { ...detail, messages: [], reachedStart: false } });
+    await conversationsReadCommand('conv-1');
+    expect(sent).toHaveLength(1);
+    expect(read()).toContain('既読にする発言が見つかりませんでした');
   });
 });
 
@@ -461,12 +542,11 @@ describe('alteroid conversations show', () => {
   });
 
   it('404（遡り切れたうえで無い）なら、そう言う', async () => {
-    const read = captureStdout();
     replies.push({ status: 404, body: { error: 'not found' } });
 
-    await conversationsShowCommand('conv-missing');
-
-    expect(read()).toContain('そんな会話はありません: conv-missing');
+    await expect(conversationsShowCommand('conv-missing')).rejects.toThrow(
+      'そんな会話はありません: conv-missing',
+    );
   });
 
   /**
@@ -512,35 +592,28 @@ describe('alteroid conversations show', () => {
  */
 describe('alteroid conversations の失敗の理由', () => {
   it('list: 500 + { error } なら、状態コードと理由を出す', async () => {
-    const read = captureStdout();
     replies.push({ status: 500, body: { error: '一覧が読めない（conversations のテスト用）' } });
 
-    await conversationsListCommand();
-
-    const text = read();
+    const error = await failureOf(conversationsListCommand());
+    const text = error.message;
     expect(text).toContain('会話の一覧を読めませんでした');
     expect(text).toContain('HTTP 500');
     expect(text).toContain('一覧が読めない（conversations のテスト用）');
   });
 
   it('show: 500 + { error } なら、状態コードと理由を出す', async () => {
-    const read = captureStdout();
     replies.push({ status: 500, body: { error: '会話が読めない（conversations のテスト用）' } });
 
-    await conversationsShowCommand('conv-1');
-
-    const text = read();
+    const error = await failureOf(conversationsShowCommand('conv-1'));
+    const text = error.message;
     expect(text).toContain('会話を読めませんでした');
     expect(text).toContain('HTTP 500');
     expect(text).toContain('会話が読めない（conversations のテスト用）');
   });
 
   it('show: 本文が読めない 500 でも、状態コードは出す', async () => {
-    const read = captureStdout();
     replies.push({ status: 500, body: null });
 
-    await conversationsShowCommand('conv-1');
-
-    expect(read()).toContain('HTTP 500');
+    await expect(conversationsShowCommand('conv-1')).rejects.toThrow('HTTP 500');
   });
 });

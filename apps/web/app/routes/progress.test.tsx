@@ -690,11 +690,11 @@ describe('/progress 画面 — 期間の切替', () => {
 });
 
 describe('/progress 画面 — 取得の失敗', () => {
-  it('404 は「接続先のデーモンが古い」と分けて出す', async () => {
+  it('404 は「デーモンがこの窓口を持っていない」と分けて出す', async () => {
     stubProgress({ status: 404, body: {} });
     renderPage();
 
-    expect(await screen.findByText(/接続先のデーモンが古く/)).toBeTruthy();
+    expect((await screen.findByRole('alert')).textContent).toMatch(/窓口を持っていません/);
     expect(screen.queryByRole('heading', { name: '未完了の仕事' })).toBeNull();
   });
 
@@ -703,7 +703,7 @@ describe('/progress 画面 — 取得の失敗', () => {
     renderPage();
 
     expect(await screen.findByRole('alert')).toBeTruthy();
-    expect(screen.queryByText(/接続先のデーモンが古く/)).toBeNull();
+    expect(screen.getByRole('alert').textContent).not.toMatch(/窓口を持っていません/);
   });
 });
 

@@ -210,6 +210,27 @@ export function Input({ className, ...props }: InputHTMLAttributes<HTMLInputElem
 }
 
 /**
+ * 入力欄の補足文（書式・条件）。**プレースホルダへ書かず、欄の上か下に常時出す**
+ * （プレースホルダは入力を始めると消え、欄の幅で切れる。スマホ幅では後半の条件が読めない）。
+ * 折り返せる `<p>`。呼ぶ側が `id` を決め、欄の `aria-describedby` へ同じ値を渡して結ぶ。
+ */
+export function FieldHint({
+  id,
+  className,
+  children,
+}: {
+  id: string;
+  className?: string;
+  children: ReactNode;
+}) {
+  return (
+    <p id={id} className={cn('text-xs break-words text-muted-foreground', className)}>
+      {children}
+    </p>
+  );
+}
+
+/**
  * 選択肢が決まっている絞り込み用。**`Input` と同じ見た目に揃えてある**
  * （並べたときに片方だけ浮くと、同じ役割のものに見えなくなる）。shadcn の
  * `NativeSelect`（素の `<select>`）を使う——選択肢は呼ぶ側が `<option>` で渡す。

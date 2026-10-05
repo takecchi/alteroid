@@ -1,4 +1,4 @@
-import type { ReactNode, Ref } from 'react';
+import { useId, useLayoutEffect, useRef, useState, type ReactNode, type Ref } from 'react';
 
 import { cn } from '@/lib/utils';
 
@@ -85,17 +85,7 @@ export function Page({
       >
         <div className="min-w-0">
           <h1 className="text-base font-semibold">{title}</h1>
-          {/*
-            **上限は歯止めであって、置き場を認めるものではない**（真上の doc）。
-            それでも長いものが渡ったときに本文を全部押し出さないよう、伸びる先を
-            この中のスクロールへ閉じ込める。**文字は1つも捨てない** — `line-clamp`
-            で切ると、header に収まっているように見えたまま読めない部分ができる。
-          */}
-          {description !== undefined && (
-            <p className="mt-0.5 max-h-16 overflow-y-auto text-xs text-muted-foreground">
-              {description}
-            </p>
-          )}
+          {description !== undefined && <PageDescription>{description}</PageDescription>}
         </div>
         {action !== undefined && <div className="shrink-0">{action}</div>}
       </header>
@@ -110,6 +100,7 @@ export function Page({
       */}
       <div
         ref={scrollRef}
+        data-scroll-body
         className={cn(
           // **`relative` は外せない**（body が余計にスクロールする不具合の原因を塞ぐ）。
           // 本文の中の `sr-only`（`position: absolute`）は、祖先に位置の基準が無いと初期の
@@ -122,5 +113,55 @@ export function Page({
         {children}
       </div>
     </div>
+  );
+}
+
+/**
+ * 見出しの説明文。**3行で畳み（行の境目で切り、末尾に「…」が出る）、全文は「詳しく」で開く。**
+ *
+ * 以前は `max-h-16 overflow-y-auto`（枠の中をスクロール）だった。長い説明が本文を押し出さない
+ * 歯止め（#147）としては効いたが、Chromium は「キーボードで届くものを持たないスクロール枠」を
+ * 自動で Tab の対象にするので、押しても何も起きない停止が1つ増え、スクロールできる手がかりも
+ * 無かった（#2810）。ここは `overflow: hidden` の畳みにして**スクロール枠を持たず**、
+ * 畳まれて切れているときだけボタンを出す。畳んでも文字は DOM に全部在る（読み上げには全文が届く）。
+ */
+function PageDescription({ children }: { children: ReactNode }) {
+  const ref = useRef<HTMLParagraphElement>(null);
+  const id = useId();
+  const [open, setOpen] = useState(false);
+  const [clipped, setClipped] = useState(false);
+
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (el === null || open) return;
+    const measure = () => setClipped(el.scrollHeight > el.clientHeight + 1);
+    measure();
+    if (typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [children, open]);
+
+  return (
+    <>
+      <p
+        ref={ref}
+        id={id}
+        className={cn('mt-0.5 text-xs text-muted-foreground', !open && 'line-clamp-3')}
+      >
+        {children}
+      </p>
+      {(clipped || open) && (
+        <button
+          type="button"
+          aria-expanded={open}
+          aria-controls={id}
+          onClick={() => setOpen((v) => !v)}
+          className="mt-0.5 text-xs text-muted-foreground underline hover:text-foreground"
+        >
+          {open ? 'たたむ' : '詳しく'}
+        </button>
+      )}
+    </>
   );
 }

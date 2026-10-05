@@ -1,13 +1,13 @@
 import { stdout } from 'node:process';
 
-import {
-  describeRevisionStatus,
-  type RunnerCredentialFingerprint,
-  type RunnerProfileFingerprint,
-  type RunnerPushHealth,
-  type RunnerPushOutcome,
-  type RunnerRevisionReport,
-  type RunnerRevisionStatus,
+import { describeRevisionStatus } from '@alteroid/core/cli-light';
+import type {
+  RunnerCredentialFingerprint,
+  RunnerProfileFingerprint,
+  RunnerPushHealth,
+  RunnerPushOutcome,
+  RunnerRevisionReport,
+  RunnerRevisionStatus,
 } from '@alteroid/core';
 
 import { describeCloneProvider } from '@alteroid/logic';

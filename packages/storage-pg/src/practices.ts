@@ -1,9 +1,11 @@
 import {
   ensureTrailingNewline,
+  PracticeConflictError,
   practiceMetaSchema,
   practiceSchema,
   practiceSlugSchema,
   practiceVersionMetaSchema,
+  practiceVersionMatches,
   practiceVersionSchema,
   UnreadablePracticeError,
 } from '@alteroid/core';
@@ -14,7 +16,9 @@ import type {
   PracticeStore,
   PracticeVersion,
   PracticeVersionMeta,
+  RemovePracticeOptions,
   UnreadablePractice,
+  WritePracticeOptions,
 } from '@alteroid/core';
 import { and, asc, eq, sql } from 'drizzle-orm';
 
@@ -189,12 +193,15 @@ export class PgPracticeStore implements PracticeStore {
     return parsed.data;
   }
 
-  async write(input: {
-    slug: string;
-    kind: string;
-    title: string;
-    content: string;
-  }): Promise<Practice> {
+  async write(
+    input: {
+      slug: string;
+      kind: string;
+      title: string;
+      content: string;
+    },
+    options?: WritePracticeOptions,
+  ): Promise<Practice> {
     // **正規化を自分で書かない。** 出所は `@alteroid/core` の
     // `ensureTrailingNewline` 1箇所である（`PracticeStore.write` の doc と #370）。
     const content = ensureTrailingNewline(input.content);
@@ -216,47 +223,67 @@ export class PgPracticeStore implements PracticeStore {
     // ⭐ **本体の upsert と、版の追記を1つのトランザクションに畳む（#1309）。**
     // 途中で落ちたときに「本体は書き変わったが版は増えていない」という食い違いを
     // 作らないため（`PracticeStore.write` の doc）。
-    return this.#db.transaction(async (tx) => {
-      const rows = await tx
-        .insert(practices)
-        .values({
-          slug: value.slug,
-          kind: value.kind,
-          title: value.title,
-          content: value.content,
-          createdAt: now,
-          updatedAt: now,
-        })
-        // **`createdAt` を `set` に入れないこと。** 上書きで作成時刻を捏造しない
-        // （`PracticeStore.write` の doc）。既にある行の `created_at` はそのまま残る。
-        //
-        // **⚠️ この `ON CONFLICT DO UPDATE` が、下の版番号の計算を安全にしている
-        // 側でもある。** 同一 slug への同時書き込みは、PostgreSQL が
-        // `ON CONFLICT` の対象行に対して行うロック待ち（一方が commit するまで
-        // もう一方の文を待たせる）によって直列化される——`FsPracticeStore` が
-        // `withPathLock` で直列化しているのと同じ効果を、ここでは一意制約の
-        // 衝突待ちで得ている。この直列化が無いと、2つの書き込みが同時に
-        // `max(version)` を読んで同じ番号を計算しうる。
-        .onConflictDoUpdate({
-          target: practices.slug,
-          set: {
-            kind: value.kind,
-            title: value.title,
-            content: value.content,
-            updatedAt: now,
-          },
-        })
-        .returning({
-          slug: practices.slug,
-          kind: practices.kind,
-          title: practices.title,
-          content: practices.content,
-          createdAt: practices.createdAt,
-          updatedAt: practices.updatedAt,
-          chars: charsExpr,
-        });
+    const ifMatch = options?.ifMatch;
+    const written = await this.#db.transaction(async (tx) => {
+      // **前提の版つき（Issue #2853）。比較は書き込みと同じトランザクションの中で、
+      // 行をロックしてから行う**（読んでから書くと、その間の別の書き手を見逃す）。
+      // 行が無い（`ifMatch: null` を含む）ときは、下の `onConflictDoNothing` が
+      // 「同時に作った別の書き手」を弾く。`ifMatch` を持たない書き手は従来どおり upsert。
+      if (typeof ifMatch === 'string') {
+        const locked = await tx
+          .select({ kind: practices.kind, title: practices.title, content: practices.content })
+          .from(practices)
+          .where(eq(practices.slug, value.slug))
+          .for('update');
+        if (!practiceVersionMatches(locked[0] ?? null, ifMatch)) return undefined;
+      }
+      const returning = {
+        slug: practices.slug,
+        kind: practices.kind,
+        title: practices.title,
+        content: practices.content,
+        createdAt: practices.createdAt,
+        updatedAt: practices.updatedAt,
+        chars: charsExpr,
+      };
+      const insert = tx.insert(practices).values({
+        slug: value.slug,
+        kind: value.kind,
+        title: value.title,
+        content: value.content,
+        createdAt: now,
+        updatedAt: now,
+      });
+      const rows =
+        ifMatch === null
+          ? // 「読んだ時には無かった」。同時に作った別の書き手がいれば行が返らない。
+            await insert.onConflictDoNothing({ target: practices.slug }).returning(returning)
+          : // **`createdAt` を `set` に入れないこと。** 上書きで作成時刻を捏造しない
+            // （`PracticeStore.write` の doc）。既にある行の `created_at` はそのまま残る。
+            //
+            // **⚠️ この `ON CONFLICT DO UPDATE` が、下の版番号の計算を安全にしている
+            // 側でもある。** 同一 slug への同時書き込みは、PostgreSQL が
+            // `ON CONFLICT` の対象行に対して行うロック待ち（一方が commit するまで
+            // もう一方の文を待たせる）によって直列化される——`FsPracticeStore` が
+            // `withPathLock` で直列化しているのと同じ効果を、ここでは一意制約の
+            // 衝突待ちで得ている。この直列化が無いと、2つの書き込みが同時に
+            // `max(version)` を読んで同じ番号を計算しうる。
+            await insert
+              .onConflictDoUpdate({
+                target: practices.slug,
+                set: {
+                  kind: value.kind,
+                  title: value.title,
+                  content: value.content,
+                  updatedAt: now,
+                },
+              })
+              .returning(returning);
       const row = rows[0];
-      if (row === undefined) throw new Error(`やり方 ${value.slug} を書けなかった`);
+      if (row === undefined) {
+        if (ifMatch === null) return undefined;
+        throw new Error(`やり方 ${value.slug} を書けなかった`);
+      }
 
       // ⭐ **書いた後の本文を版として追記する（#1309）。** 番号は
       // 「この slug の既存の版の最大値 + 1」——`remove()` は版を消さないので
@@ -285,12 +312,48 @@ export class PgPracticeStore implements PracticeStore {
         chars: row.chars,
       };
     });
+    // 書かなかった（前提の版が合わない）。いまの版は、トランザクションの外で読み直して返す。
+    if (written === undefined) {
+      throw new PracticeConflictError(input.slug, await this.#readOrNull(input.slug));
+    }
+    return written;
   }
 
-  async remove(slug: string): Promise<void> {
+  /** 衝突の `current` 用。読めない形の行は「無い」側に数える（fs 版と同じ）。 */
+  async #readOrNull(slug: string): Promise<Practice | null> {
+    try {
+      return await this.read(slug);
+    } catch (error) {
+      if (error instanceof UnreadablePracticeError) return null;
+      throw error;
+    }
+  }
+
+  async remove(slug: string, options?: RemovePracticeOptions): Promise<void> {
+    const key = this.#slug(slug);
+    const ifMatch = options?.ifMatch;
     // **版は消さない**（`PracticeStore.remove` の doc、#1309）——`practices`
     // からだけ消し、`practiceVersions` には触れない。
-    await this.#db.delete(practices).where(eq(practices.slug, this.#slug(slug)));
+    if (ifMatch === undefined) {
+      await this.#db.delete(practices).where(eq(practices.slug, key));
+      return;
+    }
+    // 前提の版つき（Issue #2923）。`write` と同じく、行をロックして比べてから消すのを
+    // 1つのトランザクションに畳む（版は kind / title / content の JSON のハッシュで、
+    // SQL の1文では書けないため。比較と DELETE の間に別の書き手は割り込めない）。
+    const current = await this.#db.transaction(async (tx) => {
+      const locked = await tx
+        .select({ kind: practices.kind, title: practices.title, content: practices.content })
+        .from(practices)
+        .where(eq(practices.slug, key))
+        .for('update');
+      if (!practiceVersionMatches(locked[0] ?? null, ifMatch)) return { conflict: true as const };
+      await tx.delete(practices).where(eq(practices.slug, key));
+      return { conflict: false as const };
+    });
+    if (current.conflict) {
+      throw new PracticeConflictError(slug, await this.#readOrNull(slug));
+    }
   }
 
   async clear(): Promise<number> {

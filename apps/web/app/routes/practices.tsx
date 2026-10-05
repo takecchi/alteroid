@@ -1,9 +1,10 @@
 import { MemoryTabs } from '~/components/group-tabs';
+import { LoadError } from '~/components/load-error';
 import { AlertTriangle } from 'lucide-react';
 import { useId, useState } from 'react';
 import { Link, useNavigate } from 'react-router';
 
-import { Page, Button, Card, Empty, ErrorNote, Input, Spinner } from '@alteroid/ui';
+import { Page, Button, Card, Empty, FieldHint, Input, Spinner } from '@alteroid/ui';
 import { usePractices } from '@alteroid/swr';
 import { formatRelative } from '@alteroid/logic';
 import type { UnreadablePractice } from '@alteroid/logic';
@@ -67,7 +68,7 @@ const SLUG_PATTERN = /^[a-z0-9][a-z0-9._-]*$/;
  * `[種類]` タグは既に付いた値をそのまま出すだけで、選ばせる欄ではない。
  */
 export default function Practices() {
-  const { data, error, isLoading } = usePractices();
+  const { data, error, isLoading, isValidating, mutate } = usePractices();
   const navigate = useNavigate();
   const slugId = useId();
   const [slug, setSlug] = useState('');
@@ -76,10 +77,11 @@ export default function Practices() {
   // **読めなかった行**（`GET /practices` の `unreadable`。issue #2346）。1件でも在るときだけ
   // 載る——無ければ空配列として扱う（0件のとき何も出さない）。
   const unreadable = data?.unreadable ?? [];
+  const hintId = useId();
   const valid = SLUG_PATTERN.test(slug) && slug.length <= 128;
   /**
    * **取れなかったのを0件と描かない**（issue #2324）。一覧をまだ一度も読めていないまま
-   * 失敗したとき、失敗は上の `ErrorNote` が言う。「正常な状態」は言い切りになる。
+   * 失敗したとき、失敗は `LoadError` が言う。「正常な状態」は言い切りになる。
    * 再検証の失敗で `data` が残っているときは当たらず、一覧をそのまま出す。
    */
   const listUnavailable = data === undefined && error !== undefined;
@@ -90,7 +92,13 @@ export default function Practices() {
       title="やり方"
       description="仕事のやり方の控え。読んで従うかどうかは毎回クローンが決める。alteroid が自動で実行するものではない"
     >
-      <ErrorNote error={error} className="mb-4" />
+      <LoadError
+        what="やり方の一覧"
+        error={error}
+        onRetry={() => mutate()}
+        retrying={isValidating}
+        className="mb-4"
+      />
 
       <Card className="mb-4 p-4">
         <p className="mb-2 text-sm font-medium">新しいやり方を書く</p>
@@ -100,6 +108,7 @@ export default function Practices() {
         <div className="flex gap-2">
           <Input
             id={slugId}
+            aria-describedby={hintId}
             value={slug}
             placeholder="例: work-style"
             onChange={(event) => setSlug(event.target.value)}
@@ -115,6 +124,9 @@ export default function Practices() {
             開く
           </Button>
         </div>
+        <FieldHint id={hintId} className="mt-1.5">
+          先頭は英数字で、128 文字まで。
+        </FieldHint>
         {slug !== '' && !valid && (
           <p className="mt-1.5 text-xs text-destructive">
             使えるのは半角の英小文字・数字と . _ - で、先頭は英数字。128 文字まで。

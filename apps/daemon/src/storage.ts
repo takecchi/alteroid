@@ -48,7 +48,7 @@ export interface Storage {
    */
   kind: 'fs' | 'pg';
   /**
-   * 記憶がどこにあるかの1行（起動ログと `/health`）。**接続情報そのものは出さない。**
+   * 記憶がどこにあるかの1行（起動ログと、認証の要る `GET /status`）。**接続情報そのものは出さない。**
    * 人間が「いまどっちの器で動いているか」を取り違えないための表示であり、
    * 認証情報の配布経路にはしない。
    */
@@ -220,6 +220,31 @@ async function backfillMemoryCreatedAt(stores: Stores): Promise<void> {
   }
 }
 
+/**
+ * 会話の既読の基準時刻を、起動時に確実に決める（無ければ「いま」、在れば変えない）。
+ *
+ * 位置の記録が無い会話は「基準時刻以前の発言は既読、以後は未読」と判定する
+ * （`ConversationReadStore`）。導入した瞬間に過去の会話が未読だらけにならず、導入後に
+ * クローンが新しく始めた会話は未読になる。**読み出しでも無ければ決める**（どの経路でも
+ * 決まる）が、起動時に決めておけば「最初に読まれた時刻」へ基準時刻が遅れない。
+ *
+ * **失敗しても起動は続ける**（読めない記録は書き換えない。読み出し側が理由を載せる）。
+ */
+async function ensureConversationReadBaseline(stores: Stores): Promise<void> {
+  try {
+    const result = await stores.conversationReads.ensureBaseline(new Date().toISOString());
+    if (result.state === 'unreadable') {
+      process.stderr.write(
+        `alteroidd: 会話の既読の記録が読めない（基準時刻は決めていない）: ${result.reason}\n`,
+      );
+    }
+  } catch (error) {
+    process.stderr.write(
+      `alteroidd: 会話の既読の基準時刻を決められなかった（起動は続ける）: ${reasonOf(error)}\n`,
+    );
+  }
+}
+
 export async function openStorage(env: NodeJS.ProcessEnv = process.env): Promise<Storage> {
   const plan = planStorage(env);
 
@@ -233,6 +258,7 @@ export async function openStorage(env: NodeJS.ProcessEnv = process.env): Promise
     await reportBootFootprint(stores, null);
     await backfillMemoryHumanTouch(stores);
     await backfillMemoryCreatedAt(stores);
+    await ensureConversationReadBaseline(stores);
     return {
       stores,
       paths,
@@ -262,6 +288,7 @@ export async function openStorage(env: NodeJS.ProcessEnv = process.env): Promise
   await reportBootFootprint(pg, footprint);
   await backfillMemoryHumanTouch(pg);
   await backfillMemoryCreatedAt(pg);
+  await ensureConversationReadBaseline(pg);
 
   return {
     stores: pg,

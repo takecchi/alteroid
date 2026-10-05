@@ -15,15 +15,17 @@ import { useState, type ReactNode } from 'react';
 import { Link, Navigate, NavLink, Outlet, useLocation } from 'react-router';
 
 import { ConnectionCard } from '~/components/connection';
+import { LoadError } from '~/components/load-error';
 import { isNavItemActive, NAV_ITEMS, type NavItemDef } from '~/lib/nav';
 import {
   AppSidebar,
   Badge,
   Drawer,
-  ErrorNote,
+  MAIN_CONTENT_ID,
   MobileTopBar,
   ScreenLoading,
   ScreenState,
+  SkipLink,
   useIsMobile,
   cn,
   type AppSidebarItem,
@@ -110,7 +112,14 @@ export default function Shell() {
   if (auth.error !== undefined && auth.status !== 'anonymous' && auth.status !== 'ungranted') {
     return (
       <ScreenState title="デーモンに繋がらない">
-        <ErrorNote error={auth.error} className="mb-4" />
+        {/* 各画面の読み込み失敗の帯と同じ部品・同じ形（issue #2799）。 */}
+        <LoadError
+          what="デーモンの状態"
+          error={auth.error}
+          onRetry={() => auth.revalidate()}
+          retrying={auth.isValidating}
+          className="mb-4"
+        />
         <ConnectionCard />
         <p className="mt-3 text-xs text-muted-foreground">
           接続先を直すとこの画面は自動で進む。デーモンが起きていないだけなら
@@ -241,6 +250,7 @@ function AuthedShell() {
         body がスクロールしない形を枠そのものに持たせる。
       */}
       <div className={cn('flex h-dvh overflow-hidden', isMobile ? 'flex-col' : 'flex-row')}>
+        <SkipLink />
         {isMobile ? (
           <>
             <MobileTopBar
@@ -277,7 +287,11 @@ function AuthedShell() {
           sidebar(false)
         )}
 
-        <main className="flex min-h-0 min-w-0 flex-1 flex-col">
+        <main
+          id={MAIN_CONTENT_ID}
+          tabIndex={-1}
+          className="flex min-h-0 min-w-0 flex-1 flex-col outline-none"
+        >
           <Outlet />
         </main>
       </div>

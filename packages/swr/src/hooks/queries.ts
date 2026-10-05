@@ -67,6 +67,7 @@ export function isKeyOfType(key: unknown, type: string): boolean {
 
 export const KEY = {
   health: { type: 'health' } as const,
+  status: { type: 'status' } as const,
   /**
    * **窓ごとに別のキーになる**（issue #670）。かつてここは
    * `{ type: 'managers' }` の1つだけで、`mutate(KEY.managers)` が呼べていた。
@@ -150,6 +151,18 @@ export function useHealth() {
     // 繋がらないときに黙って諦めない（接続先を直したらすぐ復帰してほしい）。
     errorRetryInterval: 5000,
     refreshInterval: 30_000,
+  });
+}
+
+/**
+ * デーモン自身の説明（いまは記憶の置き場）。**資格が要る**（`GET /status`。#2869）。
+ * 無認証の `/health` は置き場を返さないので、置き場はここから取る。
+ * 資格が通らない（401）ときは `error` になる——呼び出し側は例外にせず表示で受ける。
+ */
+export function useStatus() {
+  const api = useApi();
+  return useSWR(KEY.status, () => api.api.GET('/status').then(unwrap), {
+    errorRetryInterval: 5000,
   });
 }
 
