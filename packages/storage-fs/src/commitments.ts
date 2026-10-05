@@ -387,9 +387,13 @@ export class FsCommitmentStore implements CommitmentStore {
    * なので、そちらは常に DB 側の保証で閉じている。
    */
   async open(rawEntry: Commitment): Promise<CommitmentOpenResult> {
-    // id（鍵）の NUL は断り、本文は落として残す（issue #3011）。
+    // id（鍵）の NUL は断り、本文と source（出所の注記。鍵ではない）は落として残す（issue #3011）。
     assertNoNul('commitment.id', rawEntry.id);
-    const entry = { ...rawEntry, body: stripNul(rawEntry.body) };
+    const entry = {
+      ...rawEntry,
+      body: stripNul(rawEntry.body),
+      ...(rawEntry.source === undefined ? {} : { source: stripNul(rawEntry.source) }),
+    };
     return this.#update<CommitmentOpenResult>((file) => {
       // 閉じた行・読めない行も含めて見る（片付いたものを開き直さない／
       // 読めない行と同じ id を二重に持たない）

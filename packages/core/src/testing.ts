@@ -866,9 +866,13 @@ export function createMemoryStores(): Stores {
       // ないような形式不正な entry も「開けた」として通していた。
       // ⚠️ 同期のまま最後まで判定して書く（`await` を挟まない）——`.parse()`
       // は同期なので、直上のコメント（issue #1041）の性質を壊さない。
-      // id（鍵）の NUL は断り、本文は落として残す（issue #3011）。
+      // id（鍵）の NUL は断り、本文と source（出所の注記。鍵ではない）は落として残す（issue #3011）。
       assertNoNul('commitment.id', entry.id);
-      const parsed = commitmentSchema.parse({ ...entry, body: stripNul(entry.body) });
+      const parsed = commitmentSchema.parse({
+        ...entry,
+        body: stripNul(entry.body),
+        ...(entry.source === undefined ? {} : { source: stripNul(entry.source) }),
+      });
       if (commitments.has(parsed.id)) return { opened: false, folded: false };
       const duplicate = findOpenManagerDuplicate([...commitments.values()], parsed);
       if (duplicate !== undefined) return { opened: false, folded: true, foldedInto: duplicate.id };

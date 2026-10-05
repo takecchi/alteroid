@@ -1531,7 +1531,7 @@ export interface CommitmentStore {
    *
    * **NUL（issue #3011）。** 読むだけの口（`get`・`close`・`closeMany`・`editBody` の id）は、NUL を含む id でも断らず
    * 「無い」と同じ結果（`null`・`false`・閉じた id に含めない）を返す。`open` は `id` の NUL を `NulNotAllowedError` で断り、
-   * `body`・`closedReason` の NUL は落として残す（3実装とも）。`source` の NUL の扱いは未決で、ここでは揃えていない。
+   * `body`・`closedReason` の NUL は落として残す（3実装とも）。`source`（出所の注記。行を指す鍵ではない）の NUL は、断らず落として残す（3実装とも。畳み込みの判定も落とした値で揃う）。断ると引き受けた仕事が台帳から消え、害が大きいのはそちらである（`UsageStore` と同じ事情）。
    */
   get(id: string): Promise<Commitment | null>;
 
@@ -2563,7 +2563,8 @@ export class UnreadableActiveTokenError extends Error {
  * 種類の台帳（消費）では落として残す——これらは集計の切り口で、特定の1行を指して書き換える鍵では
  * ない。断ると、NUL を含む `model` のターンの消費が台帳から丸ごと消える（呼び出し側は失敗を握りつぶして
  * 日誌に残すだけ）。害が大きいのは記録を失うほうである。他のストアが鍵の NUL を断るのとは逆の
- * 向きの例外である（`nul-guard.ts`）。
+ * 向きの例外である（`nul-guard.ts`）。同じ理由の例外がもう1つある: 台帳 `CommitmentStore` の `source`（出所の注記。
+ * issue #3011。teto の判断、2026-10-06）。断ると引き受けた仕事が台帳から消えるので、落として残す。
  *
  * **`aggregate()` の絞り込み（`managerId`・`tokenId`）の NUL は、落としてから引く**（issue #3005。3実装とも）。
  * 書き込みが落として残しているので、引くほうも落とすのが対称になる。投げず、一致しなければ空の集計を返す。
