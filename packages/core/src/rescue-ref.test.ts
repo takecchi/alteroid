@@ -1,6 +1,6 @@
 import { execFileSync, spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -247,6 +247,112 @@ describe('退避 ref（#1266）', () => {
     expect(g(bare, 'show', `${refs[0] as string}:a.txt`)).toBe('in worktree\n');
   });
 
+  it('A1: git add -N（intent-to-add）の未追跡ファイルは中身を送らず、未追跡として台帳に出す', async () => {
+    await writeFile(path.join(repo, 'ita.txt'), 'intent to add body\n');
+    g(repo, 'add', '-N', 'ita.txt');
+    await writeFile(path.join(repo, 'a.txt'), 'changed\n');
+    const before = g(repo, 'status', '--porcelain');
+    const [report] = await run();
+    const ref = report?.pushed?.ref as string;
+    expect(g(bare, 'ls-tree', '-r', '--name-only', ref)).not.toContain('ita.txt');
+    expect(g(bare, 'show', `${ref}:a.txt`)).toBe('changed\n');
+    expect(report?.untracked?.paths).toContain('ita.txt');
+    expect(report?.untracked?.count).toBe(1);
+    // 実 index は動かない（i-t-a のまま）。
+    expect(g(repo, 'status', '--porcelain')).toBe(before);
+  });
+
+  it('A2: 内容が "++ ..." の追加行（diff 上は "+++ ..."）も鍵の判定を通る', async () => {
+    const fake = `gh${'p'}_${'K5m2'.repeat(9)}`;
+    await writeFile(path.join(repo, 'a.txt'), `one\n++ ${fake}\n`);
+    const [report] = await run();
+    expect(report?.notPushed).toEqual({ reason: 'secret-like', files: ['a.txt'] });
+  });
+
+  it('B1: バイナリ扱いの追跡済みファイル（NUL・-diff 属性）の中も判定する', async () => {
+    const fake = `gh${'p'}_${'N8x1'.repeat(9)}`;
+    await writeFile(path.join(repo, '.gitattributes'), 'blob.dat -diff\n');
+    await writeFile(path.join(repo, 'blob.dat'), Buffer.from('start\0\n'));
+    g(repo, 'add', '.gitattributes', 'blob.dat');
+    g(repo, 'commit', '-qm', 'bin');
+    g(repo, 'push', '-q', 'origin', 'main');
+    g(repo, 'fetch', '-q', 'origin');
+    await writeFile(path.join(repo, 'blob.dat'), Buffer.from(`start\0\n${fake}\n`));
+    const [report] = await run();
+    expect(report?.notPushed?.reason).toBe('secret-like');
+    expect(report?.notPushed?.files).toEqual(['blob.dat']);
+  });
+
+  it('B2: 未 push のマージコミットで手で解消した内容も判定する', async () => {
+    const fake = `gh${'p'}_${'M3q7'.repeat(9)}`;
+    g(repo, 'checkout', '-q', '-b', 'topic');
+    await writeFile(path.join(repo, 'a.txt'), 'topic\n');
+    g(repo, 'commit', '-qam', 'topic');
+    g(repo, 'checkout', '-q', 'main');
+    await writeFile(path.join(repo, 'a.txt'), 'main\n');
+    g(repo, 'commit', '-qam', 'main');
+    try {
+      g(repo, 'merge', '-q', 'topic');
+    } catch {
+      // 衝突は想定どおり。
+    }
+    await writeFile(path.join(repo, 'a.txt'), `resolved ${fake}\n`);
+    g(repo, 'add', 'a.txt');
+    g(repo, 'commit', '-qm', 'merge');
+    // topic の枝も未 push だが、HEAD から辿れる未 push の差分に鍵は merge の解消にしか無い。
+    const [report] = await run();
+    expect(report?.notPushed?.reason).toBe('secret-like');
+  });
+
+  it('B4: 一時 index の複製は spawn（子ユーザー側）で行い、残骸は掃除する', async () => {
+    await writeFile(path.join(repo, 'a.txt'), 'changed\n');
+    const stale = path.join(repo, '.git', 'alteroid-rescue.index.deadbeef');
+    const young = path.join(repo, '.git', 'alteroid-rescue.index.cafebabe');
+    await writeFile(stale, 'x');
+    await writeFile(young, 'x');
+    const old = new Date(Date.now() - 3 * 3600_000);
+    await utimes(stale, old, old);
+    const commands: string[] = [];
+    const [report] = await run({
+      spawn: (o) => {
+        commands.push(o.command);
+        return realSpawn(o);
+      },
+    });
+    expect(report?.pushed?.ref).toBeDefined();
+    expect(commands).toContain('cp');
+    expect(existsSync(stale)).toBe(false);
+    expect(existsSync(young)).toBe(true);
+  });
+
+  it('B3: 呼び出し元の期限切れで後続の git が失敗したら error ではなく timeout', async () => {
+    await writeFile(path.join(repo, 'a.txt'), 'changed\n');
+    const controller = new AbortController();
+    const [report] = await run({
+      signal: controller.signal,
+      spawn: (o) => {
+        if (o.args[0] === 'write-tree') controller.abort();
+        return realSpawn(o);
+      },
+    });
+    expect(report?.notPushed?.reason).toBe('timeout');
+    expect(g(bare, 'for-each-ref', RESCUE_REF_PREFIX)).toBe('');
+  });
+
+  it('C5: 運べたか分からないので、一定時間たったら変わらなくても台帳へ運び直す', async () => {
+    await writeFile(path.join(repo, 'a.txt'), 'changed\n');
+    let nowMs = Date.parse('2026-10-05T00:00:00Z');
+    const memory = new RescueMemory(() => nowMs);
+    const now = () => new Date(nowMs);
+    expect(await run({ now }, memory)).toHaveLength(1);
+    nowMs += 60_000;
+    expect(await run({ now }, memory)).toEqual([]);
+    nowMs += 31 * 60_000;
+    const again = await run({ now }, memory);
+    expect(again).toHaveLength(1);
+    expect(again[0]?.pushed?.ref).toBeDefined();
+  });
+
   it('退避 ref の名前は git の ref として正しい', () => {
     for (const rel of ['.', 'a b/c', '日本語/x', '../../etc', '/tmp/x.lock']) {
       const name = rescueRefName(managerId, '/tmp/x', rel);
@@ -261,9 +367,13 @@ describe('退避 ref（#1266）', () => {
       'diff --git a/x.txt b/x.txt',
       '--- a/x.txt',
       '+++ b/x.txt',
+      '@@ -1 +1 @@',
       `-${fake}`,
       '+ok',
       'diff --git a/y.txt b/y.txt',
+      '--- a/y.txt',
+      '+++ b/y.txt',
+      '@@ -0,0 +1 @@',
       `+${fake}`,
     ].join('\n');
     expect(filesWithSecretLikeAdditions(diff, undefined)).toEqual(['y.txt']);
@@ -291,6 +401,11 @@ describe('退避 ref（#1266）', () => {
     );
     expect(resolveRescueIntervalMs({ [RESCUE_INTERVAL_MS_ENV_KEY]: '0' })).toBe(
       DEFAULT_RESCUE_INTERVAL_MS,
+    );
+    // B5: タイマーの仕様の範囲（1ms〜2^31-1ms）に挟む。
+    expect(resolveRescueIntervalMs({ [RESCUE_INTERVAL_MS_ENV_KEY]: '1' })).toBe(1000);
+    expect(resolveRescueIntervalMs({ [RESCUE_INTERVAL_MS_ENV_KEY]: '99999999999' })).toBe(
+      2147483647,
     );
   });
 });

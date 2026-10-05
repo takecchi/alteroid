@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { copyFile, stat, unlink, utimes } from 'node:fs/promises';
+import { readdir, stat, unlink } from 'node:fs/promises';
 import path from 'node:path';
 
 import { reasonOf } from './dropped-record.js';
@@ -62,17 +62,45 @@ export const RESCUE_INTERVAL_MS_ENV_KEY = 'ALTEROID_RESCUE_INTERVAL_MS';
  */
 export const DEFAULT_RESCUE_INTERVAL_MS = 5 * 60_000;
 
+/** 周期の下限（ms）。混雑を作らないための下限であって、回数の制限ではない。 */
+export const MIN_RESCUE_INTERVAL_MS = 1000;
+/**
+ * 周期の上限（ms）。**運用の上限ではなく、タイマーの仕様の範囲を守るためのもの**——
+ * `setInterval` は 2^31-1 ms を超える値を 1ms 周期へ倒す。
+ */
+export const MAX_RESCUE_INTERVAL_MS = 2_147_483_647;
+
 /**
  * 周期を環境から読む。**未設定・空・数値でない・0 以下は既定へ倒す**
  * （`resolveSynthesizedNoticeWindowMs` と同じ作法。ただし値が読めなくても
- * 退避を止めない）。
+ * 退避を止めない）。読めた値は {@link MIN_RESCUE_INTERVAL_MS}〜
+ * {@link MAX_RESCUE_INTERVAL_MS} に挟む。
  */
 export function resolveRescueIntervalMs(env: NodeJS.ProcessEnv = process.env): number {
   const raw = env[RESCUE_INTERVAL_MS_ENV_KEY]?.trim();
   if (raw === undefined || raw === '') return DEFAULT_RESCUE_INTERVAL_MS;
   const parsed = Number(raw);
   if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_RESCUE_INTERVAL_MS;
-  return parsed;
+  return Math.min(MAX_RESCUE_INTERVAL_MS, Math.max(MIN_RESCUE_INTERVAL_MS, parsed));
+}
+
+/**
+ * SIGKILL で残った一時 index（`<gitdir>/alteroid-rescue.index.*`）を消す。走っている別の回が
+ * 使っているものを消さないよう、{@link STALE_INDEX_AGE_MS} より古いものだけ。
+ */
+async function removeStaleIndexFiles(gitDir: string): Promise<void> {
+  try {
+    for (const name of await readdir(gitDir)) {
+      if (!name.startsWith('alteroid-rescue.index.')) continue;
+      const file = path.join(gitDir, name);
+      const info = await stat(file).catch(() => undefined);
+      if (info !== undefined && Date.now() - info.mtimeMs > STALE_INDEX_AGE_MS) {
+        await unlink(file).catch(() => undefined);
+      }
+    }
+  } catch {
+    // 掃除は best-effort。
+  }
 }
 
 /** 未追跡のパスを台帳へ載せる上限。溢れたら件数だけ（`omitted`）。 */
@@ -108,14 +136,20 @@ interface GitCall {
   readonly signal?: AbortSignal;
   readonly timeoutMs?: number;
   readonly maxBytes?: number;
+  /** 既定は `git`。一時 index の複製（`cp`）だけが別のコマンドを使う。 */
+  readonly command?: string;
 }
 
 async function git(spawn: ProcessSpawnFn, args: string[], call: GitCall): Promise<GitResult> {
   const controller = new AbortController();
-  const onCallerAbort = (): void => controller.abort();
-  if (call.signal?.aborted === true) controller.abort();
-  call.signal?.addEventListener('abort', onCallerAbort, { once: true });
   let timedOut = false;
+  // 呼び出し元の期限切れ（畳む直前の abort など）も「期限」として分類する。
+  const onCallerAbort = (): void => {
+    timedOut = true;
+    controller.abort();
+  };
+  if (call.signal?.aborted === true) onCallerAbort();
+  call.signal?.addEventListener('abort', onCallerAbort, { once: true });
   const timer = setTimeout(() => {
     timedOut = true;
     controller.abort();
@@ -125,7 +159,7 @@ async function git(spawn: ProcessSpawnFn, args: string[], call: GitCall): Promis
   let overflow = false;
   try {
     const child = spawn({
-      command: 'git',
+      command: call.command ?? 'git',
       args,
       cwd: call.cwd,
       env: {
@@ -224,6 +258,9 @@ export function filesWithSecretLikeAdditions(
 ): string[] {
   const hits: string[] = [];
   let currentFile = '(不明)';
+  // `diff --git` から最初の `@@` までがヘッダ。ヘッダの `+++ b/x` は追加行ではないが、
+  // `@@` 以降の `+` で始まる行は（内容が `++ …` で `+++` に見えるものも含め）全部が追加行。
+  let inHeader = false;
   let added: string[] = [];
   const flush = (): void => {
     if (added.length === 0) return;
@@ -236,15 +273,25 @@ export function filesWithSecretLikeAdditions(
   for (const line of diffText.split('\n')) {
     if (line.startsWith('diff --git ')) {
       flush();
+      inHeader = true;
       const idx = line.lastIndexOf(' b/');
       currentFile = idx === -1 ? '(不明)' : line.slice(idx + 3);
       continue;
     }
-    if (line.startsWith('+') && !line.startsWith('+++')) added.push(line.slice(1));
+    if (inHeader) {
+      if (line.startsWith('@@')) inHeader = false;
+      continue;
+    }
+    if (line.startsWith('+')) added.push(line.slice(1));
   }
   flush();
   return hits;
 }
+
+/** 変わらない結果を台帳へ運び直す間隔（30分）。 */
+export const RESCUE_RESEND_AFTER_MS = 30 * 60_000;
+/** 一時 index の残骸（SIGKILL で残ったもの）を掃除する年齢。 */
+const STALE_INDEX_AGE_MS = 10 * 60_000;
 
 /** 1つの作業ツリーについて、前回までに覚えておくもの。 */
 interface RescueEntry {
@@ -259,6 +306,24 @@ interface RescueEntry {
 /** セッション1本ぶんの退避の記憶。作業ツリー（絶対パス）ごと。 */
 export class RescueMemory {
   readonly #entries = new Map<string, RescueEntry>();
+  readonly #nowMs: () => number;
+  #lastResendMs: number;
+  constructor(nowMs: () => number = Date.now) {
+    this.#nowMs = nowMs;
+    this.#lastResendMs = nowMs();
+  }
+  /**
+   * **運べたかどうかを確かめる手段が無い**（`emit` は送りっぱなしで、台帳へ届いたかの
+   * 返事が無い）ので、変わらない作業ツリーも {@link RESCUE_RESEND_AFTER_MS} ごとに
+   * 1回は台帳へ運び直す（台帳側の merge は冪等）。届かなかった回の損失は、最大でこの間隔
+   * に収まる。毎周期は運ばない（同じ結果の繰り返しで台帳を書き続けないため）。
+   */
+  takeResend(): boolean {
+    const now = this.#nowMs();
+    if (now - this.#lastResendMs < RESCUE_RESEND_AFTER_MS) return false;
+    this.#lastResendMs = now;
+    return true;
+  }
   entry(repoRoot: string): RescueEntry {
     let entry = this.#entries.get(repoRoot);
     if (entry === undefined) {
@@ -301,10 +366,11 @@ export async function runRescue(cwd: string, options: RunRescueOptions): Promise
     ...(options.tmpRootDir === undefined ? {} : { tmpRootDir: options.tmpRootDir }),
   });
   const reports: RescueWorktree[] = [];
+  const resend = options.memory.takeResend();
   for (const tree of listed.worktrees) {
     if (options.signal?.aborted === true) break;
     try {
-      const report = await rescueOne(tree.repoRoot, tree.relativePath, options);
+      const report = await rescueOne(tree.repoRoot, tree.relativePath, options, resend);
       if (report !== undefined) reports.push(report);
     } catch (error) {
       // 1本の失敗で他の作業ツリーを止めない。文面は運ばず分類だけ。
@@ -315,10 +381,10 @@ export async function runRescue(cwd: string, options: RunRescueOptions): Promise
         branch: null,
         at: (options.now?.() ?? new Date()).toISOString(),
         ...(entry.pushed === undefined ? {} : { pushed: entry.pushed }),
-        notPushed: { reason: 'error' },
+        notPushed: { reason: options.signal?.aborted === true ? 'timeout' : 'error' },
       };
       const signature = JSON.stringify({ ...report, at: undefined });
-      if (entry.signature !== signature) {
+      if (resend || entry.signature !== signature) {
         entry.signature = signature;
         reports.push(report);
       }
@@ -331,6 +397,7 @@ async function rescueOne(
   repoRoot: string,
   relativePath: string,
   options: RunRescueOptions,
+  resend: boolean,
 ): Promise<RescueWorktree | undefined> {
   const { spawn, env, signal } = options;
   const at = (options.now?.() ?? new Date()).toISOString();
@@ -355,14 +422,17 @@ async function rescueOne(
       ...(parts.submoduleCount === undefined ? {} : { submoduleCount: parts.submoduleCount }),
     };
   }
+  const failure = (): NonNullable<RescueWorktree['notPushed']> => ({
+    reason: signal?.aborted === true ? 'timeout' : 'error',
+  });
   const emitIfChanged = (report: RescueWorktree): RescueWorktree | undefined => {
     const signature = JSON.stringify({ ...report, at: undefined });
-    if (entry.signature === signature) return undefined;
+    if (!resend && entry.signature === signature) return undefined;
     entry.signature = signature;
     return report;
   };
   if (!ok(gitDirResult) || gitDir === '')
-    return emitIfChanged(finish({ branch: null, notPushed: { reason: 'error' } }));
+    return emitIfChanged(finish({ branch: null, notPushed: failure() }));
 
   const headResult = await git(spawn, ['rev-parse', '--verify', '-q', 'HEAD^{commit}'], base);
   const head = ok(headResult) ? headResult.stdout.trim() : undefined;
@@ -382,35 +452,47 @@ async function rescueOne(
   };
   const idxCall: GitCall = { ...base, env: indexEnv };
   try {
-    let seeded = false;
-    try {
-      const source = path.join(gitDir, 'index');
-      await copyFile(source, indexFile);
-      // **コピーの mtime を元の index に合わせる（racy git。実測で踏んだ）。** git は
-      // 「index の mtime 以降に更新された entry」だけを中身で確かめ直す。コピーの
-      // mtime が「いま」になると、直前に（同じ時刻の粒の中で）同じ大きさへ書き換えた
-      // ファイルを「変わっていない」と読み、変更を取りこぼす。1μs 手前に置いて、
-      // 元の index と同じ（以上に慎重な）判定にする。
-      const { atimeNs, mtimeNs } = await stat(source, { bigint: true });
-      await utimes(indexFile, Number(atimeNs) / 1e9, Number(mtimeNs) / 1e9 - 1e-6);
-      seeded = true;
-    } catch {
-      seeded = false;
-    }
+    await removeStaleIndexFiles(gitDir);
+    // **複製は git と同じ子ユーザーの `cp -p` で行う**（runner 本体の fs ではなく）。実 index が
+    // 0600 でも子が読め、複製の所有者も子になる。`-p` は mtime を元の index に揃える
+    // （**racy git。実測で踏んだ**: 複製の mtime が「いま」になると、直前に同じ大きさへ
+    // 書き換えたファイルを git が「変わっていない」と読み、変更を取りこぼす）。
+    const copied = await git(spawn, ['-p', path.join(gitDir, 'index'), indexFile], {
+      ...base,
+      command: 'cp',
+    });
+    const seeded = ok(copied);
     if (!seeded) {
       const read = await git(
         spawn,
         head === undefined ? ['read-tree', '--empty'] : ['read-tree', 'HEAD'],
         idxCall,
       );
-      if (!ok(read)) return emitIfChanged(finish({ branch, notPushed: { reason: 'error' } }));
+      if (!ok(read)) return emitIfChanged(finish({ branch, notPushed: failure() }));
+    }
+    // **intent-to-add（`git add -N`）の項目は未追跡として扱う。** 実 index を土台にすると
+    // i-t-a の項目が `add -u` で中身ごと tree に入る。一時 index から外し、名前を
+    // 「退避されなかったもの」へ足す（`ls-files --others` には出ない）。
+    const itaResult = await git(
+      spawn,
+      ['diff-files', '--diff-filter=A', '--name-only', '-z'],
+      idxCall,
+    );
+    const itaNames = ok(itaResult) ? itaResult.stdout.split('\0').filter((n) => n !== '') : [];
+    for (let i = 0; i < itaNames.length; i += 100) {
+      const removed = await git(
+        spawn,
+        ['update-index', '--force-remove', '--', ...itaNames.slice(i, i + 100)],
+        idxCall,
+      );
+      if (!ok(removed)) return emitIfChanged(finish({ branch, notPushed: failure() }));
     }
     const added = await git(spawn, ['add', '-u'], idxCall);
-    if (!ok(added)) return emitIfChanged(finish({ branch, notPushed: { reason: 'error' } }));
+    if (!ok(added)) return emitIfChanged(finish({ branch, notPushed: failure() }));
     const written = await git(spawn, ['write-tree'], idxCall);
     const tree = written.stdout.trim();
     if (!ok(written) || tree === '') {
-      return emitIfChanged(finish({ branch, notPushed: { reason: 'error' } }));
+      return emitIfChanged(finish({ branch, notPushed: failure() }));
     }
 
     // 退避されなかったもの（名前だけ）。
@@ -420,8 +502,11 @@ async function rescueOne(
       base,
     );
     let untracked: RescueWorktree['untracked'];
-    if (ok(untrackedResult)) {
-      const names = untrackedResult.stdout.split('\0').filter((n) => n !== '');
+    {
+      const names = [
+        ...itaNames,
+        ...(ok(untrackedResult) ? untrackedResult.stdout.split('\0').filter((n) => n !== '') : []),
+      ];
       if (names.length > 0) {
         untracked = {
           count: names.length,
@@ -448,6 +533,15 @@ async function rescueOne(
     if (entry.definitiveKey === key) return emitIfChanged(withExtras(entry.definitiveNotPushed));
 
     const settle = (notPushed: RescueWorktree['notPushed'], definitive: boolean) => {
+      // 呼び出し元の期限が切れていたら、途中の git の失敗や取りこぼしを根拠にした結論
+      // （送るものが無い・origin が無い 等）は信用しない。timeout として確定させない。
+      if (
+        signal?.aborted === true &&
+        notPushed !== undefined &&
+        notPushed.reason !== 'secret-like'
+      ) {
+        return emitIfChanged(withExtras({ reason: 'timeout' }));
+      }
       if (definitive) {
         entry.definitiveKey = key;
         entry.definitiveNotPushed = notPushed;
@@ -487,7 +581,8 @@ async function rescueOne(
 
     // 送る前の歯。
     const maxBytes = options.diffMaxBytes ?? RESCUE_DIFF_MAX_BYTES;
-    const diffArgs = ['--no-color', '--no-ext-diff', '--no-textconv'];
+    // `--text`: バイナリ扱い（NUL・`-diff` 属性）のファイルも中身を差分に出して判定する。
+    const diffArgs = ['--no-color', '--no-ext-diff', '--no-textconv', '--text'];
     const treeDiff = await git(
       spawn,
       ['diff-tree', '-p', '-r', ...diffArgs, head === undefined ? EMPTY_TREE_SHA1 : head, tree],
@@ -498,7 +593,7 @@ async function rescueOne(
         ? undefined
         : await git(
             spawn,
-            ['log', '-p', ...diffArgs, '--format=', 'HEAD', '--not', '--remotes=origin'],
+            ['log', '-p', '-m', ...diffArgs, '--format=', 'HEAD', '--not', '--remotes=origin'],
             { ...base, maxBytes },
           );
     if (treeDiff.overflow || logDiff?.overflow === true) {
@@ -506,7 +601,7 @@ async function rescueOne(
     }
     if (!ok(treeDiff) || (logDiff !== undefined && !ok(logDiff))) {
       // 判定できなかった。送らない側に倒す。
-      return settle({ reason: 'error' }, false);
+      return settle(failure(), false);
     }
     const hitFiles = [
       ...new Set([
@@ -535,7 +630,7 @@ async function rescueOne(
     ];
     const committed = await git(spawn, commitArgs, idxCall);
     const commit = committed.stdout.trim();
-    if (!ok(committed) || commit === '') return settle({ reason: 'error' }, false);
+    if (!ok(committed) || commit === '') return settle(failure(), false);
 
     const ref = rescueRefName(options.managerId, repoRoot, relativePath);
     const pushedResult = await git(

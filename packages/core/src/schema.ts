@@ -3563,6 +3563,8 @@ export const rescueNotPushedReasonSchema = z.enum([
   'push-failed',
   /** 退避 commit を作る途中の git が失敗した。 */
   'error',
+  /** 畳む直前の期限などで打ち切られた（失敗とは区別する。次の周期でまた試す）。 */
+  'timeout',
 ]);
 export type RescueNotPushedReason = z.infer<typeof rescueNotPushedReasonSchema>;
 

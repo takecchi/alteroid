@@ -4020,6 +4020,7 @@ const RESCUE_NOT_PUSHED_TEXT: Record<RescueNotPushedReason, string> = {
   'no-remote': 'origin が無いので退避できなかった',
   'push-failed': 'push に失敗した',
   error: '退避 commit を作れなかった',
+  timeout: '期限で打ち切られた（次の周期でまた試す）',
 };
 
 /**
