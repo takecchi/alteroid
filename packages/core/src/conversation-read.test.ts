@@ -167,7 +167,31 @@ describe('countUnreadConversations', () => {
     };
   }
 
-  it('日誌に NUL を含む会話 id の発言が在っても、索引の取り込みは落ちず、その会話だけ数えない（issue #2927）', async () => {
+  it('日誌に NUL を含む会話 id の古い行（journal.append が NUL を落とすようになる前に fs の日誌へ書かれたもの）が在っても、索引の取り込みは落ちず、その会話だけ数えない（issue #2927）', async () => {
+    const { stores, deps } = await backlog(2);
+    await stores.journal.append({
+      type: 'exchange',
+      with: 'human',
+      role: 'outbound',
+      text: 'x',
+      conversationId: 'c-marker',
+    });
+    // append は NUL を落とすので（issue #3011）、古い行は list の結果を差し替えて再現する。
+    const legacyJournal = {
+      list: async (query?: Parameters<typeof stores.journal.list>[0]) =>
+        (await stores.journal.list(query)).map((entry) =>
+          entry.type === 'exchange' && entry.conversationId === 'c-marker'
+            ? { ...entry, conversationId: 'c-\u0000-nul' }
+            : entry,
+        ),
+    };
+
+    const result = await countUnreadConversations({ ...deps, journal: legacyJournal });
+
+    expect(result.count).toBe(2);
+  });
+
+  it('journal.append は会話 id の NUL を落として残すので、正しい id の会話として数えられる（issue #3011）', async () => {
     const { stores, deps } = await backlog(2);
     await stores.journal.append({
       type: 'exchange',
@@ -179,7 +203,7 @@ describe('countUnreadConversations', () => {
 
     const result = await countUnreadConversations(deps);
 
-    expect(result.count).toBe(2);
+    expect(result.count).toBe(3);
   });
 
   it('溜まりが1回の上限の何倍あっても、呼び出しを重ねれば capped が外れて正しい数に収束する', async () => {
