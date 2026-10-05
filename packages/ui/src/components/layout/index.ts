@@ -5,3 +5,4 @@ export * from './mobile-top-bar';
 export * from './screen-state';
 export * from './section-tabs';
 export * from './skip-link';
+export * from './list-detail';

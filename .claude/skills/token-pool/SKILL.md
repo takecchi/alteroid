@@ -122,6 +122,8 @@ curl -X PUT http://127.0.0.1:4517/tokens \
 
 **⚠️ 測っている間に回ると、結果は降りた鍵のものになる**（#2738）。probe は数百ms〜締め切りかかる。**`usage-poller.ts` は `env` と同じ瞬間に現役の身元（`tokenId` と世代。鍵の値は持たない）を控え、結果と一緒に `onState` → `observeAccount` → `reconsider` の `origin.observedBy` へ渡す。** `reconsider` は `turn_success` と同じ `observationFreshness` を通し、`stale`（測った鍵がもう現役でない）なら `ignored` で捨てる（降りた鍵の `unusable` でまだ試していない新しい現役を冷却へ入れない。逆向きの `usable` が新しい現役の冷却を消さない）。身元を控えられなかった probe（箱が空の構成）は従来どおり門を掛けない。
 
+**⚠️ 表示（`GET /usage` の `account` / `alteroid usage` / Web / `usage_read`）の保持は「同じ鍵での一時的な失敗」に限る**（#2752）。`usage-poller.ts` は一時的な失敗で表示が消えないよう最後の `ok` を保つが、(1) **現役の鍵（`tokenId`）が変わったら古い `ok` は捨てる**（`state()` も、測った鍵が現役でなくなった `ok` は返さず `unknown` を返す。降りた鍵の枠をいまの枠として語らない）、(2) **同じ鍵で保っている間に失敗が続くなら `ok.refreshFailure`（`since` / `at` / `reason`）を載せ**、`describeAccountUsage` が「上の値は最後に取れたときのもの」と出す。回し手へ渡る `onState` は保持と無関係に「この回の実観測」のままである。
+
 ### ⚠️ 復帰の下限は目盛りの60秒ではなく、probe の周期である（実運用のレビューで判明。2026-09-07。**周期は5分とは限らない** —— 下の但し書き）
 
 **「記録の上で現役が `ready`」の状態からは、目盛りは何回鳴っても動かない**（それが「健全な鍵から勝手に移らない」の歯止めそのもの）。記録を `ready` から動かせるのは2つだけである:
