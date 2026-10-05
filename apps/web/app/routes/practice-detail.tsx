@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { Link, useNavigate } from 'react-router';
+import { useEffect, useRef, useState } from 'react';
+import { Link, useBlocker, useNavigate } from 'react-router';
 import { Tabs } from 'radix-ui';
 
 import {
@@ -110,6 +110,23 @@ export default function PracticeDetail({ loaderData }: Route.ComponentProps) {
   const [tab, setTab] = useState<string | undefined>(undefined);
   const activeTab = tab ?? (missing || content.trim() === '' ? 'edit' : 'preview');
 
+  /**
+   * **未保存の変更があるまま離れない（#2764。`memory-detail.tsx` と同じ穴）。** アプリ内の移動
+   * （リンク・戻る）は確認を挟み、タブを閉じる・再読み込みはブラウザの警告に任せる。
+   * 削除が通った後の移動は止めない。
+   */
+  const leaving = useRef(false);
+  const blocker = useBlocker(() => dirty && !leaving.current);
+  useEffect(() => {
+    if (!dirty) return;
+    const warn = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  }, [dirty]);
+
   function save() {
     if (!canSave) return;
     setBusy(true);
@@ -173,7 +190,10 @@ export default function PracticeDetail({ loaderData }: Route.ComponentProps) {
                 onConfirm={() => {
                   setBusy(true);
                   deletePractice(slug)
-                    .then(() => navigate('/practices'))
+                    .then(() => {
+                      leaving.current = true;
+                      navigate('/practices');
+                    })
                     .catch(setFailure)
                     .finally(() => setBusy(false));
                 }}
@@ -191,6 +211,19 @@ export default function PracticeDetail({ loaderData }: Route.ComponentProps) {
     >
       {!missing && <ErrorNote error={error} className="mb-3" />}
       <ErrorNote error={failure} className="mb-3" />
+      <ConfirmDialog
+        open={blocker.state === 'blocked'}
+        onOpenChange={(open) => {
+          if (!open && blocker.state === 'blocked') blocker.reset();
+        }}
+        title="保存していない変更があります"
+        description="このまま離れると、書きかけの内容は失われます。"
+        confirmLabel="破棄して離れる"
+        destructive
+        onConfirm={() => {
+          if (blocker.state === 'blocked') blocker.proceed();
+        }}
+      />
 
       {isLoading && !missing ? (
         <Spinner />
