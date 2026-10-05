@@ -41,6 +41,7 @@ import {
   droppedTraceLedgerSince,
   fingerprintOf,
   mcpServersFingerprintOf,
+  memoryVersion,
   noteDroppedRecord,
   parseMcpServers,
   RunnerMcpServersUnsupportedError,
@@ -953,6 +954,75 @@ describe('HTTP API', () => {
       const res = await put({ content: '# 価値観\n\n全文置換\n' });
       expect(res.status).toBe(200);
       expect((await stores.persona.read('values'))?.content).toBe('# 価値観\n\n全文置換\n');
+    });
+  });
+
+  /**
+   * Issue #2881。人間の削除（DELETE）も、読んだ版を前提に付けられる（`ifMatch`、クエリ）。
+   * 読んでから消すまでの間にクローンが書いていたら、**消さず** 409 でいまの版を返す。
+   */
+  describe('DELETE /memory/:slug の前提版（ifMatch、Issue #2881）', () => {
+    const del = (query = '') => app.request(`/memory/values${query}`, { method: 'DELETE' });
+    const readVersion = async () =>
+      ((await (await app.request('/memory/values')).json()) as { version: string }).version;
+
+    it('読んだ後にクローンが書いたなら、版付きの DELETE は 409 で、何も消さない', async () => {
+      await stores.persona.write('values', '# 価値観\n\nV1\n');
+      const version = await readVersion();
+      await stores.persona.write('values', '# 価値観\n\nV1\n\nクローンが蒸留した判断\n');
+
+      const res = await del(`?ifMatch=${version}`);
+      expect(res.status).toBe(409);
+      const body = (await res.json()) as {
+        error: string;
+        current: { document: { content: string }; version: string } | null;
+      };
+      expect(body.error).toContain('消していません');
+      expect(body.current?.document.content).toContain('クローンが蒸留した判断');
+      expect(body.current?.version).toBe(
+        memoryVersion((await stores.persona.read('values'))?.content ?? ''),
+      );
+      expect((await stores.persona.read('values'))?.content).toContain('クローンが蒸留した判断');
+      expect(await stores.journal.list({ types: ['memory_update'] })).toEqual([]);
+    });
+
+    it('版が最新と一致していれば消せ、警告は付かない', async () => {
+      await stores.persona.write('values', '# 価値観\n\nV1\n');
+      const res = await del(`?ifMatch=${await readVersion()}`);
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ ok: true, slug: 'values' });
+      expect(await stores.persona.read('values')).toBeNull();
+    });
+
+    it('版を付けない従来の DELETE は通る（段階1）が、応答に警告が載る', async () => {
+      await stores.persona.write('values', '# 価値観\n\nV1\n');
+      const res = await del();
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { ok: true; slug: string; warning?: string };
+      expect(body.warning).toContain('ifMatch');
+      expect(await stores.persona.read('values')).toBeNull();
+      const entries = await stores.journal.list({ types: ['memory_update'] });
+      expect(entries[0]).toMatchObject({ action: 'remove' });
+      expect(entries[0]?.summary).toContain('版の照合なし');
+    });
+
+    it('版を付けない DELETE の警告は stderr にも出る（本文は出さない）', async () => {
+      await stores.persona.write('values', '# 価値観\n\n秘密っぽい本文\n');
+      const spy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+      try {
+        await del();
+        const out = spy.mock.calls.map((c) => String(c[0])).join('');
+        expect(out).toContain('版の照合なし');
+        expect(out).toContain('values');
+        expect(out).not.toContain('秘密っぽい本文');
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it('無い記憶への版付き DELETE は 404（消すものが無い）', async () => {
+      const res = await del('?ifMatch=deadbeef');
+      expect(res.status).toBe(404);
     });
   });
 
