@@ -185,7 +185,9 @@ describe('/tmp の委譲の作業場の片付け（#3039）', () => {
     expect(event?.kept).toMatchObject([{ name: 'mgr-aaaa1111', reason: 'tracked-changes' }]);
   });
 
-  it('未追跡のファイルだけなら消し、件数と名前を記録に載せる（.gitignore は数えない）', async () => {
+  // 経緯: 当初は「未追跡だけなら消し、名前を記録する」だった。依頼者のレビューで、
+  // `.gitignore` 除外後に残る未追跡は書きかけの成果である見込みが高いので、1つでもあれば残す、へ反転した。
+  it('未追跡のファイルが1つでもあれば残し、件数と名前を載せる（.gitignore は数えない）', async () => {
     const repo = await makeClone('mgr-aaaa1111');
     await writeFile(path.join(repo, '.gitignore'), 'ignored.txt\n');
     g(repo, 'add', '.gitignore');
@@ -197,10 +199,35 @@ describe('/tmp の委譲の作業場の片付け（#3039）', () => {
     const s = sweeper();
     await expire(s);
     const event = await s.sweep(ctl.signal, 'r1');
-    expect(existsSync(path.join(root, 'mgr-aaaa1111'))).toBe(false);
-    expect(event?.removed).toMatchObject([
-      { name: 'mgr-aaaa1111', untracked: { count: 1, names: ['repo/scratch.txt'] } },
+    expect(existsSync(path.join(repo, 'scratch.txt'))).toBe(true);
+    expect(event?.removed).toEqual([]);
+    expect(event?.kept).toMatchObject([
+      {
+        name: 'mgr-aaaa1111',
+        reason: 'untracked-files',
+        count: 1,
+        untracked: { count: 1, names: ['repo/scratch.txt'] },
+      },
     ]);
+  });
+
+  it('この runner が一度でも起こした委譲（畳まれて live から消えたもの）は、猶予を過ぎても消さない', async () => {
+    await makeClone('mgr-aaaa1111');
+    known = [ID_A];
+    live = [];
+    const s = sweeper();
+    t = 0;
+    await s.sweep(ctl.signal, 'r1');
+    t = GRACE * 1000;
+    expect(await s.sweep(ctl.signal, 'r1')).toBeNull();
+    expect(existsSync(path.join(root, 'mgr-aaaa1111', 'repo', 'a.txt'))).toBe(true);
+    expect(rmCalls).toEqual([]);
+    // 知らない名前（孤児）は今までどおり猶予で消える。
+    await makeClone('mgr-bbbb2222');
+    t += 1;
+    await s.sweep(ctl.signal, 'r1');
+    t += GRACE;
+    expect((await s.sweep(ctl.signal, 'r1'))?.removed.map((i) => i.name)).toEqual(['mgr-bbbb2222']);
   });
 
   it('git が失敗する（判定できない）なら残す', async () => {
@@ -344,7 +371,6 @@ describe('/tmp の委譲の作業場の片付け（#3039）', () => {
     const outside = await makeTempDir('scratch-sweep-outside-');
     await writeFile(path.join(outside, 'precious'), 'p');
     await symlink(outside, path.join(root, 'mgr-cccc3333'));
-    known = [ID_A];
     const s = sweeper();
     await expire(s);
     const event = await s.sweep(ctl.signal, 'r1');
@@ -353,7 +379,6 @@ describe('/tmp の委譲の作業場の片付け（#3039）', () => {
       'mgr-bbbb2222-logs:directory',
       'mgr-cccc3333:symlink',
     ]);
-    expect(event?.removed.find((i) => i.kind === 'file')?.managerId).toBe(ID_A);
     expect(existsSync(path.join(root, 'mgr-cccc3333'))).toBe(false);
     expect(existsSync(path.join(outside, 'precious'))).toBe(true);
     await rm(outside, { recursive: true, force: true });

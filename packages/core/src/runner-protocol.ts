@@ -992,7 +992,7 @@ export const scratchSweepItemSchema = z.object({
   kind: z.enum(['directory', 'file', 'symlink']),
   /** この runner が過去に走らせた委譲のうち、名前の規則に当たったもの。知らなければ無い。 */
   managerId: z.string().optional(),
-  /** 片付けた項目: 未追跡のため捨てたファイル（件数と、上限つきの名前）。 */
+  /** 未追跡のファイル（件数と、上限つきの名前。残した項目に載る）。 */
   untracked: z.object({ count: z.number().int(), names: z.array(z.string()) }).optional(),
   /** 残した項目: 理由。 */
   reason: z
@@ -1002,6 +1002,7 @@ export const scratchSweepItemSchema = z.object({
       'undecidable',
       'worktree-dependency',
       'rm-failed',
+      'untracked-files',
       'unsafe-target',
     ])
     .optional(),

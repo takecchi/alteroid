@@ -15121,7 +15121,9 @@ class Pool implements ManagerPool {
       return `  - 消した ${label(i)}${untracked}`;
     });
     const keptLines = event.kept.map(
-      (i) => `  - 残した ${label(i)} 理由 ${i.reason ?? '(不明)'}: ${i.detail ?? ''}`,
+      (i) =>
+        `  - 残した ${label(i)} 理由 ${i.reason ?? '(不明)'}: ${i.detail ?? ''}` +
+        (i.untracked === undefined ? '' : ` 未追跡: ${i.untracked.names.join(', ')}`),
     );
     const statfsLine =
       event.statfs === undefined

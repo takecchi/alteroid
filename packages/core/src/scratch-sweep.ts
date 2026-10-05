@@ -30,7 +30,7 @@ import {
  *    委譲を、閉じた直後に消さないための猶予である。
  * 3. **消す前に守る**（ディレクトリ）。下の作業ツリーを `findGitDirs` と同じ探索で探し、
  *    各ツリーを子 UID の git で調べる。未 push のコミット・追跡済みの未コミットの変更が
- *    あれば残す。未追跡のファイルだけなら消してよい（名前を記録に残す）。
+ *    あれば残す。未追跡のファイルが1つでもあれば残す（`.gitignore` 除外後に残るのは書きかけの成果である見込みが高い）（名前を記録に残す）。
  *    **判定できない（探索の打ち切り・読めない子ディレクトリ・git の失敗/期限切れ）は
  *    残す**——「判定できない」を「消してよい」へ倒さない。
  *    **作業ツリーの依存**: 各リポジトリの `git worktree list` の全ツリーのうち、存在し、
@@ -166,6 +166,7 @@ type Verdict =
       kind: 'keep';
       reason: NonNullable<ScratchSweepItem['reason']>;
       count?: number;
+      untracked?: { count: number; names: string[] };
       detail: string;
     };
 
@@ -203,8 +204,15 @@ export class ScratchSweeper {
     this.#now = options.now ?? Date.now;
   }
 
+  /**
+   * 守る委譲（名前が当たれば猶予で消さない）＝生きた委譲 ∪ この runner が一度でも起こした委譲。
+   * 畳まれた done・stopped・failed も、デーモンが `manager_send` で resume しうるので守る。
+   * この runner が知らない名前（孤児・runner の再起動前のもの）は猶予で扱う。
+   */
   #claimedBy(name: string): string | undefined {
-    return this.#o.liveManagerIds().find((id) => matchesManagerScratchDirName(name, id));
+    return [...this.#o.liveManagerIds(), ...(this.#o.knownManagerIds?.() ?? [])].find((id) =>
+      matchesManagerScratchDirName(name, id),
+    );
   }
 
   #knownIdFor(name: string): string | undefined {
@@ -362,6 +370,16 @@ export class ScratchSweeper {
         detail: `追跡済みの未コミットの変更 ${String(trackedTotal)} 行（${trackedAt ?? ''}）`,
       };
     }
+    // 未追跡（`.gitignore` 除外後）が残るのは書きかけの成果である見込みが高いので、残す。
+    if (untrackedCount > 0) {
+      return {
+        kind: 'keep',
+        reason: 'untracked-files',
+        count: untrackedCount,
+        untracked: { count: untrackedCount, names: untracked },
+        detail: `未追跡のファイル ${String(untrackedCount)} 件`,
+      };
+    }
     if (unknownAt !== undefined) {
       return { kind: 'keep', reason: 'undecidable', detail: clip(unknownAt) };
     }
@@ -437,6 +455,7 @@ export class ScratchSweeper {
             ...itemOf(c),
             reason: verdict.reason,
             ...(verdict.count === undefined ? {} : { count: verdict.count }),
+            ...(verdict.untracked === undefined ? {} : { untracked: verdict.untracked }),
             detail: verdict.detail,
           });
         } else planned.set(c.name, { entry: c, untracked: verdict });
