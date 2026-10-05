@@ -280,7 +280,9 @@ const EXPECTED_SITE_COUNT: Record<string, number> = {
   // - 5 + 4（#1311。押し込みの失敗の5箇所（`#pushProfile` 2・`#pushCredentials`・`#pushMcpServers`・
   // `#pushAgentToken`）を `#journalPushFailure` の `EXCHANGE_KIND_FAILURE_PREFIX` 1箇所と、
   // 畳みの要約3箇所（`EXCHANGE_KIND_THINNING_PREFIX`）にまとめた）。
-  'manager.ts': 47,
+  // + 2（#3022。`#recordStaleRunnerUsage` が、移った後に古い runner から届いた消費の累積を積まなかった
+  // 理由を `EXCHANGE_KIND_GAUGE_PREFIX` で、台帳へ積めなかったことを `EXCHANGE_KIND_FAILURE_PREFIX` で書く）。
+  'manager.ts': 49,
 };
 
 describe('type: exchange の書き込み全箇所が kind 接頭辞を持つ（issue #1332）', () => {

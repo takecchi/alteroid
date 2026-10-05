@@ -2,17 +2,11 @@ import type { AccessTokenRecord, AuthAccount, AuthIdentity, LoginRequest } from 
 import { assertNoNul, stripNul } from './nul-guard.js';
 
 /**
- * `AuthStore` の書き込みの入口の NUL の扱い（issue #3011。teto の判断、2026-10-05・10-06）。
+ * `AuthStore` の書き込みの入口で NUL を整える部品（issue #3011）。
  * 3実装（インメモリ / fs / pg）が、zod スキーマを通した後・書く前に呼ぶ。
  *
- * - **鍵と参照キー、突き合わせに使う値は `NulNotAllowedError` で断る。** 落として残すと別の
- *   値になる（id・`accountId`・`grantedBy`・`subject`・トークンの `sha256`・ログイン要求の
- *   `nonce`／`codeVerifier`／`claimSha256`／`redirectUri`）。
- * - **本文は NUL を落として残す**（`displayName`・`label`・`error`）。
- * - **メールアドレス（teto の判断、2026-10-06）**: `AuthAccount.email` は一意の索引と衝突の検査に使う
- *   ので鍵として断る。`AuthIdentity.email` は本文として落として残す。
- *
- * 例外の文には欄名だけを載せ、値は載せない。入力は書き換えず、整えた写しを返す。
+ * **どの欄を断り、どの欄を落とすか、読む口がどう答えるかの約束は `store.ts` の `Stores.auth` の doc が持つ**
+ * （ここには二重に書かない）。ここは、その約束どおりに入力を検査・整える関数で、入力は書き換えず整えた写しを返す。
  */
 export function prepareAccountForWrite(account: AuthAccount): AuthAccount {
   assertNoNul('authAccount.id', account.id);
