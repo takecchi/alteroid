@@ -22,7 +22,7 @@ import {
 
 import { createClient } from './client.js';
 import { withErrorReason } from './format.js';
-import { resolveTarget } from './target.js';
+import { describeAuthFailure, resolveTarget } from './target.js';
 
 /**
  * `alteroid usage` — alteroid が使った分（トークンと費用）を見る。
@@ -79,13 +79,11 @@ export function narrowUsageAxis<T extends string>(
 export async function usageCommand(options: UsageOptions): Promise<void> {
   const layer = narrowUsageAxis<UsageLayer>(usageLayerSchema, options.layer);
   if (!layer.ok) {
-    stdout.write(`--layer は ${layer.allowed} のどれかを指定してください\n`);
-    return;
+    throw new Error(`--layer は ${layer.allowed} のどれかを指定してください`);
   }
   const site = narrowUsageAxis<UsageSite>(usageSiteSchema, options.site);
   if (!site.ok) {
-    stdout.write(`--site は ${site.allowed} のどれかを指定してください\n`);
-    return;
+    throw new Error(`--site は ${site.allowed} のどれかを指定してください`);
   }
   const target = await resolveTarget();
   if (target.note !== null) {
@@ -104,13 +102,16 @@ export async function usageCommand(options: UsageOptions): Promise<void> {
     },
   });
   if (!response.ok) {
-    stdout.write(
-      `${await withErrorReason(
+    // 失敗は例外で上へ通す（＝終了コードが 0 でなくなる。#2856）。認証切れ（401/403）を
+    // 「クエリの形を確かめてください」と案内しない。
+    const described = describeAuthFailure(response.status, target);
+    if (described !== null) throw new Error(described);
+    throw new Error(
+      await withErrorReason(
         `利用状況を読めませんでした（HTTP ${String(response.status)}。クエリの形を確かめてください）`,
         response,
-      )}\n`,
+      ),
     );
-    return;
   }
   const aggregate = await response.json();
   const dateOrderNotice = describeUsageDateOrder(options.from, options.to);

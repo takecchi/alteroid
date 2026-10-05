@@ -144,8 +144,7 @@ export async function practiceShowCommand(
 
   const found = await read(client, conn.target, slug);
   if (found === null) {
-    stdout.write(`そんなやり方はありません: ${slug}\n`);
-    return;
+    throw new Error(`そんなやり方はありません: ${slug}`);
   }
   const content = found.content;
   stdout.write(content.endsWith('\n') ? content : `${content}\n`);

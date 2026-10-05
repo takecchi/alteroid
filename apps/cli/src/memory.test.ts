@@ -276,12 +276,10 @@ describe('alteroid memory list / show', () => {
   });
 
   it('無い記憶を読もうとしたら、そう言う（空の本文と区別する）', async () => {
-    const read = captureStdout();
     replies.push({ status: 404, body: { error: 'not found' } });
 
-    await memoryShowCommand('missing');
-
-    expect(read()).toContain('そんな記憶はありません: missing');
+    // 無い記憶は例外（終了コードが 0 でなくなる。`memory remove` と同じ。#2856）。
+    await expect(memoryShowCommand('missing')).rejects.toThrow('そんな記憶はありません: missing');
   });
 
   /**
@@ -424,12 +422,9 @@ describe('alteroid memory の読み出しの失敗の理由', () => {
   });
 
   it('show: 404 は「無い」のまま', async () => {
-    const read = captureStdout();
     replies.push({ status: 404, body: { error: 'not found' } });
 
-    await memoryShowCommand('nothing');
-
-    expect(read()).toContain('そんな記憶はありません: nothing');
+    await expect(memoryShowCommand('nothing')).rejects.toThrow('そんな記憶はありません: nothing');
   });
 
   it('show: 500 を「そんな記憶はありません」と言わず、理由を載せて投げる', async () => {

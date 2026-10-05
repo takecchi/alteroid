@@ -270,8 +270,7 @@ export async function memoryShowCommand(slug: string): Promise<void> {
   if (conn === null) return;
   const doc = await readDoc(conn.client, conn.target, slug);
   if (doc === null) {
-    stdout.write(`そんな記憶はありません: ${slug}\n`);
-    return;
+    throw new Error(`そんな記憶はありません: ${slug}`);
   }
   const content = doc.content;
   stdout.write(content.endsWith('\n') ? content : `${content}\n`);

@@ -12,7 +12,8 @@ import { describeUsageDateOrder, renderUsage, usageCommand, type UsageView } fro
  * 実例と同じ形）。`fetch` を差し替えて本物の型付きクライアント（`hono/client`）を
  * 通す形は `conversations.test.ts` / `memory.test.ts` と同じ。
  */
-vi.mock('./target.js', () => ({
+vi.mock('./target.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./target.js')>()),
   // `vi.fn()` にしてあるのは、「ログインしていない」note 分岐だけ1件
   // `mockResolvedValueOnce` で上書きしたいため（`login.test.ts` と同じ理由）。
   resolveTarget: vi.fn(() =>
@@ -21,6 +22,16 @@ vi.mock('./target.js', () => ({
 }));
 
 const target = await import('./target.js');
+
+/** 失敗（reject）した Error を取り出す。resolve したらテストを落とす。 */
+async function failureOf(promise: Promise<unknown>): Promise<Error> {
+  try {
+    await promise;
+  } catch (error) {
+    return error as Error;
+  }
+  throw new Error('reject するはずが resolve した');
+}
 
 interface Sent {
   url: string;
@@ -551,23 +562,22 @@ describe('usageCommand', () => {
   });
 
   it('--layer が許された値でなければ、そう書いて叩かない', async () => {
-    const read = captureStdout();
 
-    await usageCommand({ layer: 'not-a-layer' });
+    // 引数の誤りは例外（終了コードが 0 でなくなる。#2856）。
+    const error = await failureOf(usageCommand({ layer: 'not-a-layer' }));
 
     expect(sent).toHaveLength(0);
-    expect(read()).toContain('--layer は');
-    expect(read()).toContain('のどれかを指定してください');
+    expect(error.message).toContain('--layer は');
+    expect(error.message).toContain('のどれかを指定してください');
   });
 
   it('--site が許された値でなければ、そう書いて叩かない', async () => {
-    const read = captureStdout();
 
-    await usageCommand({ site: 'not-a-site' });
+    const error = await failureOf(usageCommand({ site: 'not-a-site' }));
 
     expect(sent).toHaveLength(0);
-    expect(read()).toContain('--site は');
-    expect(read()).toContain('のどれかを指定してください');
+    expect(error.message).toContain('--site は');
+    expect(error.message).toContain('のどれかを指定してください');
   });
 
   it('ログインしていなければ note をそのまま書き、usage を叩かない', async () => {
@@ -587,22 +597,30 @@ describe('usageCommand', () => {
 
   it('応答が失敗（ok でない）なら、読めなかったと書く（renderUsage は呼ばない）', async () => {
     replies.push({ status: 500, body: {} });
-    const read = captureStdout();
-
-    await usageCommand({});
 
     // 理由が読めない本文（`{}`）でも、状態コードは載せる（固定の文言だけにしない）。
-    expect(read()).toBe('利用状況を読めませんでした（HTTP 500。クエリの形を確かめてください）\n');
+    // 失敗は例外（終了コードが 0 でなくなる。#2856）。
+    await expect(usageCommand({})).rejects.toThrow(
+      new Error('利用状況を読めませんでした（HTTP 500。クエリの形を確かめてください）'),
+    );
+  });
+
+  it('応答が 401 なら、クエリの形ではなく認証の案内を例外で言う（#2856）', async () => {
+    replies.push({ status: 401, body: { error: 'unauthorized' } });
+
+    const error = await failureOf(usageCommand({}));
+
+    expect(error.message).toContain('認証されませんでした');
+    expect(error.message).not.toContain('クエリの形');
   });
 
   it('応答が失敗（500 + { error }）なら、状態コードとデーモンの理由も書く', async () => {
     replies.push({ status: 500, body: { error: '集計が失敗した（usage のテスト用）' } });
-    const read = captureStdout();
 
-    await usageCommand({});
-
-    expect(read()).toBe(
-      '利用状況を読めませんでした（HTTP 500。クエリの形を確かめてください）: 集計が失敗した（usage のテスト用）\n',
+    await expect(usageCommand({})).rejects.toThrow(
+      new Error(
+        '利用状況を読めませんでした（HTTP 500。クエリの形を確かめてください）: 集計が失敗した（usage のテスト用）',
+      ),
     );
   });
 

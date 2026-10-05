@@ -462,12 +462,12 @@ describe('alteroid practice list / show', () => {
   });
 
   it('無いやり方を読もうとしたら、そう言う（空の本文と区別する）', async () => {
-    const read = captureStdout();
     replies.push({ status: 404, body: { error: 'not found' } });
 
-    await practiceShowCommand('missing');
-
-    expect(read()).toContain('そんなやり方はありません: missing');
+    // 無いやり方は例外（終了コードが 0 でなくなる。`practice remove` と同じ。#2856）。
+    await expect(practiceShowCommand('missing')).rejects.toThrow(
+      'そんなやり方はありません: missing',
+    );
   });
 });
 
@@ -598,12 +598,11 @@ describe('alteroid practice の読み出しの失敗の理由', () => {
   });
 
   it('show: 404 は「無い」のまま', async () => {
-    const read = captureStdout();
     replies.push({ status: 404, body: { error: 'not found' } });
 
-    await practiceShowCommand('nothing');
-
-    expect(read()).toContain('そんなやり方はありません: nothing');
+    await expect(practiceShowCommand('nothing')).rejects.toThrow(
+      'そんなやり方はありません: nothing',
+    );
   });
 
   it('show: 500 を「そんなやり方はありません」と言わず、理由を載せて投げる', async () => {
