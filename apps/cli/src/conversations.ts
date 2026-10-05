@@ -295,43 +295,36 @@ export function renderConversationDetail(
  * **進めるのは、いま読み出した最新の発言まで**——読み出した後に届いた発言は未読のまま残る。
  */
 export async function conversationsReadCommand(id: string): Promise<void> {
-  const client = await connect();
-  if (client === null) return;
+  const conn = await connect();
+  if (conn === null) return;
+  const { client, target } = conn;
   const detail = await client.conversations[':id'].$get({ param: { id }, query: {} });
-  if (detail.status === 404) {
-    stdout.write(`そんな会話はありません: ${id}\n`);
-    return;
-  }
+  if (detail.status === 404) throw new Error(`そんな会話はありません: ${id}`);
   if (!detail.ok) {
-    stdout.write(
-      `${await withErrorReason(
-        `会話を読めませんでした（HTTP ${String(detail.status)}）`,
-        detail,
-      )}\n`,
+    const described = describeAuthFailure(detail.status, target);
+    if (described !== null) throw new Error(described);
+    throw new Error(
+      await withErrorReason(`会話を読めませんでした（HTTP ${String(detail.status)}）`, detail),
     );
-    return;
   }
   const { messages } = await detail.json();
   const latest = messages[messages.length - 1];
   if (latest === undefined) {
-    stdout.write(
+    throw new Error(
       '既読にする発言が見つかりませんでした（古すぎて見える範囲の外にあるのかもしれません。' +
-        `alteroid conversations show ${id} --scan で範囲を広げて確かめてください）\n`,
+        `alteroid conversations show ${id} --scan で範囲を広げて確かめてください）`,
     );
-    return;
   }
   const response = await client.conversations[':id'].read.$post({
     param: { id },
     json: { through: latest.id },
   });
   if (!response.ok) {
-    stdout.write(
-      `${await withErrorReason(
-        `既読にできませんでした（HTTP ${String(response.status)}）`,
-        response,
-      )}\n`,
+    const described = describeAuthFailure(response.status, target);
+    if (described !== null) throw new Error(described);
+    throw new Error(
+      await withErrorReason(`既読にできませんでした（HTTP ${String(response.status)}）`, response),
     );
-    return;
   }
   const { unreadCount } = await response.json();
   stdout.write(

@@ -363,20 +363,24 @@ describe('alteroid conversations read', () => {
     expect(read()).toBe('既読にしました: conv-1\n');
   });
 
-  it('無い会話は、そう言って既読の呼びを打たない', async () => {
-    const read = captureStdout();
+  it('無い会話は、失敗で終えて既読の呼びを打たない', async () => {
     replies.push({ status: 404, body: { error: 'not found' } });
-    await conversationsReadCommand('nope');
+    await expect(conversationsReadCommand('nope')).rejects.toThrow('そんな会話はありません');
     expect(sent).toHaveLength(1);
-    expect(read()).toContain('そんな会話はありません');
   });
 
-  it('見える範囲に発言が無いときは、既読にせず理由を言う', async () => {
-    const read = captureStdout();
+  it('見える範囲に発言が無いときは、既読にせず理由を言って失敗で終える', async () => {
     replies.push({ status: 200, body: { ...detail, messages: [], reachedStart: false } });
-    await conversationsReadCommand('conv-1');
+    await expect(conversationsReadCommand('conv-1')).rejects.toThrow(
+      '既読にする発言が見つかりませんでした',
+    );
     expect(sent).toHaveLength(1);
-    expect(read()).toContain('既読にする発言が見つかりませんでした');
+  });
+
+  it('既読にする呼びが失敗したら、失敗で終える', async () => {
+    replies.push({ status: 200, body: detail });
+    replies.push({ status: 500, body: { error: 'boom' } });
+    await expect(conversationsReadCommand('conv-1')).rejects.toThrow('既読にできませんでした');
   });
 });
 
