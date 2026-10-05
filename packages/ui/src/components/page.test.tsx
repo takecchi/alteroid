@@ -83,6 +83,7 @@ describe('Page の説明文は内部スクロール枠にしない（#2810）', 
     const classes = classesOf(p);
     expect(classes).not.toContain('overflow-y-auto');
     expect(classes).not.toContain('overflow-auto');
+    expect(classes.some((c) => c.startsWith('max-h-'))).toBe(false);
     expect(p.hasAttribute('tabindex')).toBe(false);
   });
 
@@ -98,11 +99,11 @@ describe('Page の説明文は内部スクロール枠にしない（#2810）', 
         </Page>,
       );
       const p = screen.getByText('長い説明');
-      expect(classesOf(p)).toContain('max-h-12');
+      expect(classesOf(p)).toContain('line-clamp-3');
       const button = screen.getByRole('button', { name: '詳しく' });
       expect(button.getAttribute('aria-expanded')).toBe('false');
       fireEvent.click(button);
-      expect(classesOf(p)).not.toContain('max-h-12');
+      expect(classesOf(p)).not.toContain('line-clamp-3');
       expect(screen.getByRole('button', { name: 'たたむ' }).getAttribute('aria-expanded')).toBe(
         'true',
       );

@@ -104,7 +104,7 @@ export function Page({
 }
 
 /**
- * 見出しの説明文。**3行ぶんの高さで畳み、全文は「詳しく」で開く。**
+ * 見出しの説明文。**3行で畳み（行の境目で切り、末尾に「…」が出る）、全文は「詳しく」で開く。**
  *
  * 以前は `max-h-16 overflow-y-auto`（枠の中をスクロール）だった。長い説明が本文を押し出さない
  * 歯止め（#147）としては効いたが、Chromium は「キーボードで届くものを持たないスクロール枠」を
@@ -134,7 +134,7 @@ function PageDescription({ children }: { children: ReactNode }) {
       <p
         ref={ref}
         id={id}
-        className={cn('mt-0.5 text-xs text-muted-foreground', !open && 'max-h-12 overflow-hidden')}
+        className={cn('mt-0.5 text-xs text-muted-foreground', !open && 'line-clamp-3')}
       >
         {children}
       </p>
