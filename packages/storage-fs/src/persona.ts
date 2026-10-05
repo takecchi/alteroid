@@ -6,6 +6,7 @@ import {
   deriveHumanTouchedAtFromJournal,
   deriveMemoryFrontmatter,
   ensureTrailingNewline,
+  stripNul,
   memorySlugSchema,
   memoryVersionMatches,
   memoryProtectionRebuildDecision,
@@ -439,7 +440,7 @@ export class FsPersonaStore implements PersonaStore {
     await mkdir(this.#dir, { recursive: true });
     // **`writeFileAtomic`（`atomic.ts`）を使う** — tmp 名が固定だと、同じ
     // ディレクトリを向いた書き手が2つ在ると互いの tmp を踏む（issue #1050）。
-    await writeFileAtomic(path, ensureTrailingNewline(content));
+    await writeFileAtomic(path, ensureTrailingNewline(stripNul(content)));
     const written = await this.read(slug);
     if (!written) throw new Error(`記憶の書き込みに失敗: ${slug}`);
     // **書いた直後のハッシュを記録する。** ここが write() と append() の唯一の

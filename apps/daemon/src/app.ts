@@ -1781,6 +1781,14 @@ async function mutateProfile(
         body: { error: 'プロファイルの入力が不正（保存していない）', detail: error.message },
       };
     }
+    // **鍵（行の名前）・環境変数になる値（script）の NUL も 400**（issue #2927。teto の判断、2026-10-05）。
+    // 文は欄名と固定の説明だけで、値を載せない。
+    if (error instanceof NulNotAllowedError) {
+      return {
+        ok: false,
+        body: { error: 'プロファイルの入力が不正（保存していない）', detail: error.message },
+      };
+    }
     throw error;
   }
 
@@ -6953,6 +6961,14 @@ export function createApp(deps: AppDeps) {
             'MCP サーバ登録の打ち消しの日誌',
             `count=${String(names.length)}`,
           );
+          // **鍵（サーバー名・env の名前）と環境変数になる値（env の値）の NUL は入力の誤り**
+          // ——400（issue #2927。teto の判断、2026-10-05）。文は欄名と固定の説明だけで、値を載せない。
+          if (error instanceof NulNotAllowedError) {
+            return c.json(
+              { error: `MCP サーバの登録が不正（保存していない）: ${error.message}` },
+              400,
+            );
+          }
           throw error;
         }
         // 配布の結果も日誌へ（名前と成否だけ。値は書かない）。差し替え自体は

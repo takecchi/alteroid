@@ -174,6 +174,8 @@ export interface PersonaStore {
    * 何も書かず `MemoryConflictError`。比較は書き込みと同じ排他の中で行う
    * （fs: `#serialize` の内側、pg: 条件付きの1文）。3実装とも同じ挙動で、
    * `persona-contract.test.ts` / fs / pg の各テストに歯がある。
+   *
+   * **本文の NUL は、fs も含めて落として残す**（issue #2927。teto の判断、2026-10-05。slug は `memorySlugSchema` が NUL を含めて弾く）。
    */
   write(slug: string, content: string, options?: WriteMemoryOptions): Promise<MemoryDocument>;
   /**
@@ -797,6 +799,8 @@ export interface ConversationReadStore {
    * 会話 `conversationId` の位置を `readThrough` まで進める。**戻らない**——いまの位置より
    * 古い値を渡すと何もせず、いまの位置を返す（並行2本でも単調）。記録が読めない状態なら
    * この会話の位置で書き直す。返すのは書いた後の位置。
+   *
+   * `conversationId` は鍵なので、NUL があれば `NulNotAllowedError` で断る（issue #2927）。
    */
   advance(conversationId: string, readThrough: string): Promise<ConversationReadPosition>;
   /** 「会話ごとの最後のクローン側発言の時刻」の索引（`ConversationOutboundIndex`）。 */
@@ -804,6 +808,8 @@ export interface ConversationReadStore {
   /**
    * 索引へ足す。**単調**——会話ごとの時刻と `watermark` は、古い値では戻らない
    * （`watermark: null` は「進めない」）。位置・基準時刻には触れない。
+   *
+   * `lastOutbound` の会話 id に NUL があれば `NulNotAllowedError` で断る（issue #2927。何も足さない）。
    */
   mergeOutboundIndex(update: ConversationOutboundIndex): Promise<void>;
   /** 索引だけを空にする（`POST /reset` が日誌を消すとき、消えた会話を未読に数え続けないため）。 */
@@ -978,6 +984,8 @@ export interface PermissionGrantStore {
    * 新規作成専用（`JobStore.putApproval` と同じ形）。**既存行の更新には使わない
    * こと** —— `revoke` / `markUsed` が居る理由の doc を見よ。呼び手は
    * `clone.ts` の `answerApproval` の1箇所だけで、常に新しい `id` を渡す。
+   *
+   * `id`・`approvalId`・`route.accountId`（鍵・参照キー）に NUL があれば `NulNotAllowedError` で断る。`rule`・`allows`・`denies`・`answer`（本文）の NUL は落として残す（issue #2927）。
    */
   put(grant: PermissionGrant): Promise<void>;
 
@@ -2228,6 +2236,8 @@ export interface ProfileStore {
   /**
    * 1行を置く（無ければ作り、在れば本文・撒く先・更新日時を入れ替える）。
    * 呼び出し側が名前（`PROFILE_ENTRY_NAME`）と本文が空でないことを検査して渡す。
+   *
+   * `name`（鍵）・`script`（環境変数になる値）に NUL があれば `NulNotAllowedError` で断る（issue #2927。teto の判断、2026-10-05）。
    */
   set(name: string, script: string, scope: EnvProfileScope): Promise<EnvProfileEntry>;
   /** 1行を外す。在れば `true`、無ければ `false`。 */
@@ -2241,6 +2251,8 @@ export interface ProfileStore {
    * と `GET /profile` が見せる監査情報である。成功していない更新でそこが動くと、
    * 起動のたびに動いていたときと同じ意味の壊れ方をする。**通常の書き込みに使わない
    * こと** — 更新日時を呼び出し側が決められる口なので、失敗の巻き戻し専用である。
+   *
+   * `set` と同じく、`name`・`script` の NUL は `NulNotAllowedError` で断る（全行を先に検査し、1行でも不正なら何も書かない。issue #2927）。
    */
   replaceAll(previous: readonly EnvProfileEntry[]): Promise<void>;
 
@@ -2280,6 +2292,8 @@ export interface McpServerStore {
    *
    * **書く前に `parseMcpServers` を通すこと**（3実装とも）。器ごとに検査を
    * 書き分けると、1つだけ緩い器が生まれる。不正なら投げ、前のものが残る。
+   *
+   * サーバー名と `env` の名前・値の NUL は `NulNotAllowedError` で断る。`command`・`args`・`url`・`headers` などの本文の NUL は落として残す（issue #2927。teto の判断、2026-10-05）。
    */
   write(servers: McpServers): Promise<StoredMcpServers>;
 }
@@ -2690,6 +2704,7 @@ export interface TranscriptGrave {
  */
 export interface SessionRegistry {
   getCloneSessionId(): Promise<string | null>;
+  /** NUL を含む id は `NulNotAllowedError` で断る（issue #2927）。墓標は JSON 文字列で持つので NUL を含んでも往復する（現状のまま）。 */
   setCloneSessionId(sessionId: string | null): Promise<void>;
   /**
    * 墓標を読む。**高々1つしか持たない。**
@@ -2759,6 +2774,7 @@ export interface SessionRegistry {
    * 落ちた回は墓標が立たない（拾う鍵が無い）。
    */
   getProjectKey(): Promise<string | null>;
+  /** NUL を含む鍵は `NulNotAllowedError` で断る（issue #2927）。 */
   setProjectKey(projectKey: string): Promise<void>;
 
   /**

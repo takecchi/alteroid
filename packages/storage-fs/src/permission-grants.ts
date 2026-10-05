@@ -5,6 +5,7 @@ import {
   compareIsoInstant,
   createUnreadableRowOnce,
   permissionGrantSchema,
+  preparePermissionGrantForPut,
   UnreadablePermissionGrantError,
   unreadableRowKey,
 } from '@alteroid/core';
@@ -124,16 +125,17 @@ export class FsPermissionGrantStore implements PermissionGrantStore {
   }
 
   async put(grant: PermissionGrant): Promise<void> {
+    const prepared = preparePermissionGrantForPut(permissionGrantSchema.parse(grant));
     await this.#update((file) => {
-      const grants = file.grants.filter((existing) => existing.id !== grant.id);
-      grants.push(permissionGrantSchema.parse(grant));
+      const grants = file.grants.filter((existing) => existing.id !== prepared.id);
+      grants.push(prepared);
       // **書き込む id と一致する壊れた行は置き換える**（`FsCredentialVaultStore.put` /
       // `FsJobStore.putJob` と同じフォローアップ。issue #1740 / #1868）。直した
       // はずの id の壊れた行が `invalidGrantsRaw` として残り続けると、ファイル
       // に同じ id が2行並び、以後 `list()` のたびに直したはずの跡が出続ける
       // ——「直した」という呼び手の意図に対する驚きになる。
       const invalidGrantsRaw = file.invalidGrantsRaw.filter(
-        (raw) => extractRowId(raw) !== grant.id,
+        (raw) => extractRowId(raw) !== prepared.id,
       );
       return { next: { grants, invalidGrantsRaw }, result: undefined };
     });

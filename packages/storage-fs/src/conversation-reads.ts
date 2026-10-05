@@ -1,7 +1,7 @@
 import { mkdir, readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 
-import { compareIsoInstant } from '@alteroid/core';
+import { assertNoNul, compareIsoInstant } from '@alteroid/core';
 import type {
   ConversationBaselineResult,
   ConversationOutboundIndex,
@@ -107,6 +107,7 @@ export class FsConversationReadStore implements ConversationReadStore {
   }
 
   async advance(conversationId: string, readThrough: string): Promise<ConversationReadPosition> {
+    assertNoNul('conversation.id', conversationId);
     await mkdir(dirname(this.#path), { recursive: true });
     return withPathLock(this.#path, async () => {
       const loaded = await this.#load();
@@ -142,6 +143,7 @@ export class FsConversationReadStore implements ConversationReadStore {
   }
 
   async mergeOutboundIndex(update: ConversationOutboundIndex): Promise<void> {
+    for (const id of Object.keys(update.lastOutbound)) assertNoNul('conversation.id', id);
     await mkdir(dirname(this.#path), { recursive: true });
     await withPathLock(this.#path, async () => {
       const loaded = await this.#load();

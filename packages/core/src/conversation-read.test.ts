@@ -167,6 +167,21 @@ describe('countUnreadConversations', () => {
     };
   }
 
+  it('日誌に NUL を含む会話 id の発言が在っても、索引の取り込みは落ちず、その会話だけ数えない（issue #2927）', async () => {
+    const { stores, deps } = await backlog(2);
+    await stores.journal.append({
+      type: 'exchange',
+      with: 'human',
+      role: 'outbound',
+      text: 'x',
+      conversationId: 'c-\u0000-nul',
+    });
+
+    const result = await countUnreadConversations(deps);
+
+    expect(result.count).toBe(2);
+  });
+
   it('溜まりが1回の上限の何倍あっても、呼び出しを重ねれば capped が外れて正しい数に収束する', async () => {
     const { deps } = await backlog(12);
     const options = { chunk: 2, maxChunks: 1 };

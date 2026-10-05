@@ -2,6 +2,7 @@ import { mkdir, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import {
+  assertNoNul,
   noteSessionMaterialUnreadable,
   type LostSessionGrave,
   type SessionRegistry,
@@ -112,6 +113,7 @@ export class FsSessionRegistry implements SessionRegistry {
   }
 
   async setCloneSessionId(sessionId: string | null): Promise<void> {
+    if (sessionId !== null) assertNoNul('session.cloneSessionId', sessionId);
     if (sessionId === null) {
       await rm(this.#path, { force: true });
       return;
@@ -198,6 +200,7 @@ export class FsSessionRegistry implements SessionRegistry {
   }
 
   async setProjectKey(projectKey: string): Promise<void> {
+    assertNoNul('session.projectKey', projectKey);
     await mkdir(this.#dir, { recursive: true });
     await writeFileAtomic(this.#projectKeyPath, `${JSON.stringify({ projectKey })}\n`);
   }

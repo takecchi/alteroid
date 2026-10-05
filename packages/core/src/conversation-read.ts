@@ -386,6 +386,9 @@ export async function countUnreadConversations(
       if (row.type !== 'exchange' || row.role !== 'outbound' || row.conversationId === undefined) {
         continue;
       }
+      // **NUL を含む会話 id は索引へ入れない**（issue #2927。ストアは鍵の NUL を断る）。日誌から導く
+      // 索引が1件の不正な id で毎回落ちると、全会話の未読数が出なくなる——その会話だけ数えない。
+      if (row.conversationId.includes('\u0000')) continue;
       const known = found[row.conversationId];
       if (known === undefined || compareIsoInstant(row.at, known) > 0) {
         found[row.conversationId] = row.at;
