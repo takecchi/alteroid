@@ -294,6 +294,13 @@ describe('認証が有効なとき', () => {
     expect((await app.request('/auth/providers')).status).toBe(200);
   });
 
+  it('GET /status（記憶の置き場）は資格が無ければ 401、持ち主のトークンなら通る（#2869）', async () => {
+    expect((await app.request('/status')).status).toBe(401);
+    const response = await app.request('/status', { headers: OPERATOR });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toHaveProperty('storage');
+  });
+
   it('実行環境の持ち主のトークンで通る（ログインせずに手元から使える）', async () => {
     const response = await app.request('/memory', { headers: OPERATOR });
     expect(response.status).toBe(200);

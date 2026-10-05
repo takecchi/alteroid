@@ -167,12 +167,35 @@ export function useSaveMemory() {
   );
 }
 
+/**
+ * 記憶を消す。
+ *
+ * `ifMatch` は**読んだ時の版**（`GET /memory/{slug}` の `version`。クエリで送る。Issue #2916 / #2881）。
+ * 渡すと、いまの版と違えば**何も消さず** `MemoryConflictError` を投げる（`current` にいまの版）。
+ * 取り消せない操作なので、衝突しても自動では再送しない——呼び出し側がいまの内容を見せてから
+ * もう一度確認を取る。省略すると従来どおり（デーモンは応答に warning を載せて通す）。
+ */
 export function useDeleteMemory() {
   const api = useApi();
   const { mutate } = useSWRConfig();
   return useCallback(
-    async (slug: string) => {
-      await api.api.DELETE('/memory/{slug}', { params: { path: { slug } } }).then(unwrap);
+    async (slug: string, ifMatch?: string) => {
+      const result = await api.api.DELETE('/memory/{slug}', {
+        params: { path: { slug }, query: ifMatch === undefined ? {} : { ifMatch } },
+      });
+      if (result.response.status === 409 && result.error !== undefined) {
+        // 衝突のときは、画面がいまの版を見せられるようキャッシュも引き直す。
+        await Promise.all([mutate(KEY.memory), mutate(KEY.memoryDoc(slug))]);
+        const body = result.error as {
+          error?: string;
+          current?: { document: MemoryDocument; version: string } | null;
+        };
+        throw new MemoryConflictError(
+          body.error ?? '記憶が読んだ後に変わっている',
+          body.current ?? null,
+        );
+      }
+      unwrap(result);
       await mutate(KEY.memory);
     },
     [api, mutate],
