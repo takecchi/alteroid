@@ -89,18 +89,18 @@ function renderManagers(
 }
 
 /**
- * **読めない委譲を「まだ1体も起きていない」の顔で隠さない（#2345）。** `GET /managers` は
+ * **読めない委譲を「まだマネージャーはいません」の顔で隠さない（#2345）。** `GET /managers` は
  * 読めない行を `unreadable` に別欄で返す（1件でも在るときだけ鍵が載る）。読めた行が0件でも、
  * 読めない行が在れば「居ない」とは言えない。
  */
 describe('読めない委譲（#2345）', () => {
-  it('読めた行が0件でも「まだ1体も起きていない」と言わず、件数と id を断る', async () => {
+  it('読めた行が0件でも「まだマネージャーはいません」と言わず、件数と id を断る', async () => {
     renderManagers([], [{ id: 'mgr-bad', reason: '不正な欄: status' }]);
 
     const note = await screen.findByText(/読めない委譲が 1 件ある/);
     expect(note.textContent).toContain('id: mgr-bad');
     expect(note.textContent).toContain('居ないのでも、畳まれたのでもない');
-    expect(screen.queryByText(/まだ1体も起きていない/)).toBeNull();
+    expect(screen.queryByText(/まだマネージャーはいません/)).toBeNull();
     expect(screen.getByText(/読めたマネージャーは無い/)).toBeTruthy();
   });
 
@@ -116,8 +116,34 @@ describe('読めない委譲（#2345）', () => {
   it('対照: 鍵が無ければ（0件）、断りは出ず、従来の空の文言のまま', async () => {
     renderManagers([]);
 
-    expect(await screen.findByText(/まだ1体も起きていない/)).toBeTruthy();
+    expect(await screen.findByText(/まだマネージャーはいません/)).toBeTruthy();
     expect(screen.queryByText(/読めない委譲/)).toBeNull();
+  });
+});
+
+describe('全体が0件のときの空表示（#2789）', () => {
+  it('内部の語（発意 tick）を言わず、会話へのリンクを出し、絞り込みのチップは出さない', async () => {
+    renderManagers([]);
+
+    expect(await screen.findByText(/まだマネージャーはいません/)).toBeTruthy();
+    expect(screen.queryByText(/tick/)).toBeNull();
+    const link = screen.getByRole('link', { name: '会話' });
+    expect(link.getAttribute('href')).toBe('/chat');
+    expect(screen.queryByRole('button', { name: '実行中' })).toBeNull();
+  });
+
+  it('対照: 1体でも居れば、チップは出る', async () => {
+    renderManagers([{ ...BASE }]);
+
+    expect(await screen.findByText('PR を出して')).toBeTruthy();
+    expect(screen.getByRole('button', { name: '実行中' })).toBeTruthy();
+  });
+
+  it('読めない行が在るときは「居ない」と言えないので、チップを隠さない', async () => {
+    renderManagers([], [{ reason: '不正な行' }]);
+
+    expect(await screen.findByText(/読めない委譲が 1 件ある/)).toBeTruthy();
+    expect(screen.getByRole('button', { name: '実行中' })).toBeTruthy();
   });
 });
 
@@ -1054,7 +1080,7 @@ describe('status の絞り込みと「もっと見る」（issue #670）', () =>
    * **絞りに1件も当たらないときの空表示を、素の空と混ぜない。** 「まだ1体も
    * 起きていない」と出すと、絞っているせいで空なのだと分からない。
    */
-  it('絞りで0件になったとき「まだ1体も起きていない」とは言わない', async () => {
+  it('絞りで0件になったとき「まだマネージャーはいません」とは言わない', async () => {
     renderWithRoutes((url) => (url.includes('status=') ? { managers: [] } : { managers: page(1) }));
 
     await waitFor(() => {
@@ -1063,7 +1089,7 @@ describe('status の絞り込みと「もっと見る」（issue #670）', () =>
     fireEvent.click(screen.getByRole('button', { name: '失敗' }));
 
     expect(await screen.findByText(/この状態のマネージャーは無い/)).toBeTruthy();
-    expect(screen.queryByText(/まだ1体も起きていない/)).toBeNull();
+    expect(screen.queryByText(/まだマネージャーはいません/)).toBeNull();
   });
 
   /**
@@ -1274,7 +1300,7 @@ describe('状態チップの選択が URL に載る（issue #2030）', () => {
   }
 
   it('チップを押すと URL の status に状態が載る', async () => {
-    const { router } = renderWithRouter(() => ({ managers: [] }));
+    const { router } = renderWithRouter(() => ({ managers: [{ ...BASE }] }));
     await screen.findByRole('button', { name: '実行中' });
 
     fireEvent.click(screen.getByRole('button', { name: '実行中' }));
@@ -1344,7 +1370,7 @@ describe('状態チップの選択が URL に載る（issue #2030）', () => {
    * 使い物にならなくなる。同じ判断を2つの画面で割らない。
    */
   it('チップの切り替えは履歴を汚さない（replace: true。journal.tsx の判断に揃える）', async () => {
-    const { router } = renderWithRouter(() => ({ managers: [] }));
+    const { router } = renderWithRouter(() => ({ managers: [{ ...BASE }] }));
     await screen.findByRole('button', { name: '実行中' });
 
     fireEvent.click(screen.getByRole('button', { name: '実行中' }));

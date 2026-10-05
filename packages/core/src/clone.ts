@@ -1316,6 +1316,13 @@ export interface CloneOptions {
    */
   scheduler?: () => ScheduleStatus[];
   /**
+   * 定期の依頼の発火が、引き受け（`claimRun`）の読み書きの失敗で**動かなかった**ときに呼ぶ
+   * （#2741）。デーモンは `scheduler.retrySoon(kind)` を渡す。スケジューラは発火の時点で
+   * 次回を1周期先へ進めてあるので、これが無いと再起動まで取り戻されない。
+   * 定刻の発火（`schedule`）だけが呼ぶ。手で起こした1回（`manual`）は再試行しない。
+   */
+  onScheduledRunNotStarted?: (kind: string) => void;
+  /**
    * いま自分がどう走っているかの事実（記憶の器・作業ディレクトリ・委譲先・
    * 入口・モデル帯）。システムプロンプトの自己認識の節に載る。
    *
@@ -2295,6 +2302,7 @@ class Clone implements CloneHost {
   readonly #withheldEnvKeys: readonly string[];
   readonly #accountUsage: (() => AccountUsageState) | undefined;
   readonly #scheduler: (() => ScheduleStatus[]) | undefined;
+  readonly #onScheduledRunNotStarted: ((kind: string) => void) | undefined;
   /** {@link CloneOptions.redeliveryGate}。必須（{@link CloneOptions.redeliveryGate} の doc）。 */
   readonly #redeliveryGate: RedeliveryGate;
 
@@ -2325,6 +2333,7 @@ class Clone implements CloneHost {
       mcpServerService,
       accountUsage,
       scheduler,
+      onScheduledRunNotStarted,
       self,
       providerOf,
       mcpServerFactory,
@@ -2361,6 +2370,7 @@ class Clone implements CloneHost {
     this.#withheldEnvKeys = withheldEnvKeys ?? [];
     this.#accountUsage = accountUsage;
     this.#scheduler = scheduler;
+    this.#onScheduledRunNotStarted = onScheduledRunNotStarted;
     this.#self = self;
     this.#providerOf = providerOf ?? knownProviderOf;
     this.#mcpServerFactory = mcpServerFactory ?? createCloneMcpServer;
@@ -3755,7 +3765,15 @@ class Clone implements CloneHost {
         // 後始末の途中で変わる値ではないが、件ごとに読み直す形にすると
         // 「同じ1ターンの分が、半分は消えて半分は保持される」を作れる形が残る。
         const defer = this.#usageBlocked !== null;
-        for (const held of batch) await this.#settleInboxEvent(held, defer);
+        for (const held of batch) {
+          // **保持した `human_answer` は「処理済み」の印を外す**（Issue #2744）。
+          // 印（`#handledHumanAnswerIds`）は #1977 の二重配達防止だが、枠で失敗した
+          // 回答は**まだ処理されていない**（マネージャーへ戻っていない）。残すと、
+          // 解除後の再配達が「二重配達」と畳まれ、回答が黙って失われる。
+          // 印は同じプロセスの中でしか持たないので、保持と生死を揃えてここで外す。
+          if (defer && held.type === 'human_answer') this.#handledHumanAnswerIds.delete(held.id);
+          await this.#settleInboxEvent(held, defer);
+        }
       }
     }
     // 閉じた後に待っている人を取り残さない
@@ -8476,6 +8494,11 @@ class Clone implements CloneHost {
             role: 'outbound',
             text: `${EXCHANGE_KIND_DECISION_PREFIX}定期の依頼 ${event.kind} は、この発火では動かない: ${claimed.reason}`,
           });
+          // 「次の発火で読み直す」の次の発火が1周期先では遠すぎる。人間が消した
+          // （`withdrawn`）ものは再試行しない。
+          if (event.cause !== 'manual' && claimed.status !== 'withdrawn') {
+            this.#onScheduledRunNotStarted?.(event.kind);
+          }
           return;
         }
 

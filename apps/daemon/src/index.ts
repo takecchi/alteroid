@@ -1846,6 +1846,8 @@ export async function main(): Promise<void> {
     // 同じやり方で参照している（closure は呼ばれた瞬間の束縛を見るので、
     // 呼ばれるより先に両方とも作られていれば壊れない）。
     scheduler: () => scheduler.list(),
+    // 引き受けに失敗して動かなかった定期の発火を、再起動を待たず短い間隔で据え直す（#2741）。
+    onScheduledRunNotStarted: (kind) => scheduler.retrySoon(kind),
     cwd: paths.root,
     runners,
     profile,

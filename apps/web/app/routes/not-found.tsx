@@ -4,7 +4,7 @@ import { Page, Card, Empty } from '@alteroid/ui';
 
 export default function NotFound() {
   return (
-    <Page title="404" description="そんな画面は無い">
+    <Page title="ページが見つかりません" description="そんな画面は無い">
       <Card>
         <Empty>
           <Link to="/" className="text-primary hover:underline">
