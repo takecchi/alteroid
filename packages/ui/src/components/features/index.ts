@@ -11,6 +11,7 @@ export * from './filter-chips';
 export * from './home';
 export * from './journal';
 export * from './key-value-list';
+export * from './load-failure';
 export * from './markdown-editor';
 export * from './stat';
 export * from './status-badge';

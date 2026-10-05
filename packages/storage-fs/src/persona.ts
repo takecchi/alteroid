@@ -20,6 +20,7 @@ import type {
   MemoryDocumentMeta,
   MemoryProtectionStatus,
   PersonaStore,
+  RemoveMemoryOptions,
   WriteMemoryOptions,
 } from '@alteroid/core';
 
@@ -495,8 +496,15 @@ export class FsPersonaStore implements PersonaStore {
     };
   }
 
-  async remove(slug: string): Promise<void> {
+  async remove(slug: string, options?: RemoveMemoryOptions): Promise<void> {
     await this.#serialize(async () => {
+      // 前提の版の比較は消す直前、`#serialize` の内側で行う（Issue #2881。`write` と同じ）。
+      if (options?.ifMatch !== undefined) {
+        const current = await this.read(slug);
+        if (!memoryVersionMatches(current, options.ifMatch)) {
+          throw new MemoryConflictError(slug, current);
+        }
+      }
       await rm(this.#path(slug), { force: true });
       // 保護状態の派生値も一緒に消す（pg は行ごと DELETE するので、同じ意味を
       // fs 側でも揃える）。**人間が付けた human 印は、その文書の実体が無くなれば

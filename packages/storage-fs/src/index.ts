@@ -8,6 +8,7 @@ import { FsAuthStore } from './auth.js';
 import { FsCommitmentStore } from './commitments.js';
 import { FsCredentialVaultStore } from './credentials.js';
 import { FsInboxStore } from './inbox.js';
+import { FsConversationReadStore } from './conversation-reads.js';
 import { FsJobStore } from './jobs.js';
 import { FsJournalStore } from './journal.js';
 import { FsMcpServerStore } from './mcp-servers.js';
@@ -28,6 +29,7 @@ export { CLOSED_HISTORY_LIMIT, FsCommitmentStore } from './commitments.js';
 export { FsCredentialVaultStore } from './credentials.js';
 export { LockTimeoutError, withPathLock } from './file-lock.js';
 export { FsInboxStore } from './inbox.js';
+export { FsConversationReadStore } from './conversation-reads.js';
 export { FsJobStore } from './jobs.js';
 export { FsJournalStore } from './journal.js';
 export { FsMcpServerStore } from './mcp-servers.js';
@@ -63,6 +65,7 @@ export function createFsStores(root?: string): Stores & { paths: AlteroidPaths }
     profile: new FsProfileStore(paths.profile, paths.profileDir),
     credentials: new FsCredentialVaultStore(paths.credentials),
     mcpServers: new FsMcpServerStore(paths.mcpServers),
+    conversationReads: new FsConversationReadStore(paths.jobs),
     tokens: new FsTokenPoolStore(paths.tokens),
     usage: new FsUsageStore(paths.usage),
   };
