@@ -1235,6 +1235,13 @@ export const managerSummarySchema = z.object({
     .enum(['pool-not-wired', 'not-yet-observed', 'reattached-across-restart'])
     .optional(),
   /**
+   * runner が最後に見た、この委譲の起こしっぱなしの背景処理の本数（Issue #2851。
+   * `packages/core/src/manager.ts` の `ManagerSummary.liveBackgroundTasks`）。
+   * **`undefined` は「0 本」ではなく「分からない」。** ここに宣言しないと、値が在っても
+   * 黙って落ちる（真上の `tokenGenerationUnknownReason` と同じ断り）。
+   */
+  liveBackgroundTasks: z.number().int().nonnegative().optional(),
+  /**
    * 429の文言の `resets` 時刻を、プールの各鍵の `cooldownUntil` と突き合わせた
    * 結果（Issue #914 オーナー提案(2)。`packages/core/src/manager.ts` の
    * `ManagerSummary.resetTimeSkewMatch`）。
@@ -1417,6 +1424,7 @@ export const managerActionResponseSchema = z.object({
     'stopped',
     'not_stopped',
     'session_missing',
+    'declined',
     'unknown',
   ]),
   detail: z.string(),

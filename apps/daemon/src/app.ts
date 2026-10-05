@@ -5739,6 +5739,9 @@ export function createApp(deps: AppDeps) {
               '`session_missing` = **runner がこの委譲のセッションを持っておらず、resume でも' +
               '入り直せなかった**（#563。**届いていない**）。' +
               '`unknown` はここには出ない（404 になる）。' +
+              '`declined` = **認証トークンの世代が食い違う done の委譲を畳んで新しい鍵で起こし直したいが、' +
+              '背景処理・確認待ちが残っている（または分からない）ため、畳まず、送らなかった**' +
+              '（#2851。そのものは居る。`detail` が残っているものと取れる手を言う）。' +
               '⚠️ `session_missing` を 404 にしないのは、**そのものは居る**からである — ' +
               '委譲は台帳に在り、時間で解ける理由（引き取り中・貸し出し期限）なら送り直しで通る。',
             content: { 'application/json': { schema: resolver(managerActionResponseSchema) } },

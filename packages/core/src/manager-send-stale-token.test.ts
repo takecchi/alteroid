@@ -80,7 +80,14 @@ function staleRunner() {
     async connect(onEvent) {
       emit = onEvent;
     },
-    async start(): Promise<{ cwd?: string }> {
+    async start(command): Promise<{ cwd?: string }> {
+      alive.push({
+        managerId: command.managerId,
+        status: 'running',
+        cwd: command.cwd,
+        request: command.request,
+        waiting: [],
+      });
       return {};
     },
     async resume(command): Promise<{ cwd?: string }> {
@@ -287,31 +294,36 @@ describe('done の委譲へ send するとき、世代が食い違っていた�
   });
 
   it('⚠️ sessionId が無く会話を引き継げない done は、畳まずに断る（黙って会話を切らない）', async () => {
-    const s = await setup();
-    s.rotate();
-    const record = (await s.stores.jobs.listJobs()).find((j) => j.id === 'mgr-stale');
-    expect(record).toBeDefined();
-    // 台帳の sessionId を落とす（resume できない状態）。
-    await s.stores.jobs.putJob({ ...(record as Job), sessionId: undefined });
-    // プロセス内の像にも反映させるため、別のプールで開き直す。
-    const reopened = createRunnerRegistry([s.fake.runner]);
+    // `start()` したばかりで、runner がまだ session を名乗っていない委譲を作る（sessionId が無い）。
+    const stores = createMemoryStores();
+    const fake = staleRunner();
+    const registry = createRunnerRegistry([fake.runner]);
+    const active = { tokenId: 'tok-a', generation: 59 };
     const pool = createManagerPool({
-      stores: s.stores,
+      stores,
       post: () => undefined,
-      runners: reopened,
-      profile: createProfileService({ stores: s.stores, runners: reopened }),
-      tokenIdentity: () => ({ ...s.active }),
+      runners: registry,
+      profile: createProfileService({ stores, runners: registry }),
+      tokenIdentity: () => ({ ...active }),
     });
-    await pool.restore();
-    s.fake.resumes.length = 0;
-    s.fake.sends.length = 0;
+    const started = await pool.start({ request: '調べて', cwd: '/work/project' });
+    fake.push({
+      type: 'report',
+      managerId: started.managerId,
+      text: '終わった',
+      status: 'done',
+    } as RunnerEvent);
+    await settle();
+    active.tokenId = 'tok-b';
+    active.generation = 60;
 
-    const result = await pool.send('mgr-stale', '続きを');
+    const result = await pool.send(started.managerId, '続きを');
 
-    expect(s.fake.stops).toHaveLength(0);
-    expect(result.outcome).not.toBe('delivered');
+    expect(result.outcome).toBe('declined');
+    expect(result.detail).toContain('sessionId');
+    expect(fake.stops).toHaveLength(0);
+    expect(fake.sends).toHaveLength(0);
     await pool.stop();
-    await s.pool.stop();
   });
 
   it('畳めたと確かめられなければ resume しない（二重のセッションを作らない）', async () => {
@@ -324,7 +336,7 @@ describe('done の委譲へ send するとき、世代が食い違っていた�
     expect(s.fake.stops).toEqual(['mgr-stale']);
     expect(s.fake.resumes).toHaveLength(0);
     expect(s.fake.sends).toHaveLength(0);
-    expect(result.outcome).toBe('unknown');
+    expect(result.outcome).toBe('declined');
     expect(result.detail).toContain('畳めた');
     await s.pool.stop();
   });

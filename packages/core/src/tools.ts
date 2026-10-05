@@ -112,7 +112,11 @@ import {
   selectArchiveRemovalTargets,
 } from './archive-prune.js';
 import type { ArchiveRemoveManyFilter } from './archive-prune.js';
-import { describeDenialFollowUp, guardArchiveRemoval } from './manager.js';
+import {
+  describeDenialFollowUp,
+  guardArchiveRemoval,
+  tokenGenerationMismatched,
+} from './manager.js';
 import { describeTokenDiff } from './token-diff.js';
 import type {
   ManagerDenial,
@@ -3803,25 +3807,6 @@ function describeTokenGenerationUnknownReason(reason: TokenGenerationUnknownReas
  * 「出す」と約束している値そのものなので、一致していることも材料が在る限り
  * 言う。
  */
-/**
- * **この委譲が抱えている認証トークンの世代が、現役と食い違っているか**
- * （Issue #914 提案1 の判定そのもの。Issue #931 で2つ目の読み手が付いた）。
- *
- * **判定を2箇所へ書かないためだけに在る。** {@link describeTokenGeneration}
- * が ⚠ の行を出すかどうかと、{@link failureLine} が回復の見込みに但し書きを
- * 足すかどうかは、**同じ1つの事実**である——別々に書くと、いつか片方だけが
- * 直って「世代は食い違っているのに『時間で戻る』とだけ出る」形に戻る。
- *
- * **どちらかが `undefined` なら偽である。** 比べる相手が居ないときに
- * 食い違いを捏造しない（`ManagerSummary.activeTokenGeneration` の doc と
- * 同じ理由）。
- */
-function tokenGenerationMismatched(manager: ManagerSummary): boolean {
-  if (manager.tokenGeneration === undefined) return false;
-  if (manager.activeTokenGeneration === undefined) return false;
-  return manager.tokenGeneration !== manager.activeTokenGeneration;
-}
-
 function describeTokenGeneration(manager: ManagerSummary): string | null {
   if (manager.tokenGeneration === undefined) {
     return manager.tokenGenerationUnknownReason === undefined
@@ -3842,9 +3827,26 @@ function describeTokenGeneration(manager: ManagerSummary): string | null {
     `現役は世代 ${manager.activeTokenGeneration}）。この委譲のセッションが、` +
     'ターンの境界（確認待ち・背景処理が無い状態）に一度も達しないまま古い鍵で走り続けている' +
     '可能性がある（認証トークンを回した直後は、次のターンの境界に達するまでの短い遅れとして' +
-    '普通に起こる——それ自体は症状ではない）。この行が消えないまま 429 が続くようなら、' +
+    '普通に起こる——それ自体は症状ではない）。' +
+    describeBackgroundTasksForStaleToken(manager) +
+    '委譲が done なら、manager_send の時点で畳んで新しい鍵で起こし直す' +
+    '（背景処理・確認待ちが残っていれば断る。Issue #2851）。' +
+    '背景処理・確認待ちが無いのにこの行が消えないまま 429 が続くようなら、' +
     `起こし直すこと。${STALE_TOKEN_RESTART_ADVICE}`
   );
+}
+
+/**
+ * 世代の ⚠ に添える、runner が最後に見た背景処理の本数（Issue #2851）。
+ * **`undefined` は「分からない」と言う**——0 本とは言わない（古い runner は欄を返さない）。
+ */
+function describeBackgroundTasksForStaleToken(manager: ManagerSummary): string {
+  if (manager.liveBackgroundTasks === undefined) {
+    return 'runner が見ている背景処理の本数は分からない（まだ聞けていない、または古い runner）。';
+  }
+  return manager.liveBackgroundTasks === 0
+    ? 'runner が最後に見た背景処理は 0 本。'
+    : `runner が最後に見た背景処理は ${manager.liveBackgroundTasks} 本（残っていると境界に達せず、自動では畳み直されない）。`;
 }
 
 /**
