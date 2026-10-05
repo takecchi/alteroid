@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { makeTempDirSync } from '../../../vitest.tmpdir.js';
 
+import { BASH_GUARD_ENV } from './bash-guard-mode.js';
 import { createRunnerHost, type RunnerHost } from './runner.js';
 
 /**
@@ -112,14 +113,17 @@ afterEach(async () => {
   await host?.shutdown().catch(() => undefined);
 });
 
-async function startedOptions(): Promise<Options> {
+/** 既定（`ask`）では判定が例外で終わっても確認に倒れる（#2884）。以降の deny の歯は `deny` の設定で固定する。 */
+async function startedOptions(
+  env: NodeJS.ProcessEnv = { [BASH_GUARD_ENV]: 'deny' },
+): Promise<Options> {
   const { fn, started } = fakeRunnerSdk();
   host = createRunnerHost({
     runnerId: 'runner-test',
     workspacePath: dir,
     emit: () => undefined,
     queryFn: fn,
-    env: {},
+    env,
   });
   await host.start({ managerId: 'mgr-1', request: '走る', cwd: dir });
   const options = started[0]?.options;
@@ -133,7 +137,20 @@ function bash(command: string): Record<string, unknown> {
 
 const DENY = { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny' } };
 
-describe('ガードの判定そのものが投げたら、閉じる側（deny）へ倒す（issue #1980 の 2）', () => {
+describe('ガードの判定そのものが投げたら、既定では確認に倒す（issue #2884）', () => {
+  it('inspectBashCommand が投げると、弾かない形の Bash でも ask を返す（上がらずに止めない）', async () => {
+    const options = await startedOptions({});
+    throwing.inspect = true;
+
+    const result = await firePreToolUse(options, bash(ALLOWED_COMMAND));
+
+    expect(result).toMatchObject({
+      hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'ask' },
+    });
+  });
+});
+
+describe('ガードの判定そのものが投げたら、deny の設定では閉じる側（deny）へ倒す（issue #1980 の 2）', () => {
   it('inspectBashCommand が投げると、弾かない形の Bash でも deny を返す', async () => {
     const options = await startedOptions();
     throwing.inspect = true;

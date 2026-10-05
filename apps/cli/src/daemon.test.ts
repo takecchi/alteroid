@@ -35,6 +35,7 @@ import {
   startWithRecovery,
   status,
   stop,
+  storageOf,
   stopDaemon,
   type DaemonRuntimeInfo,
   type Presence,
@@ -722,5 +723,33 @@ describe('startWithRecovery() — --force の中身（Issue #1851）', () => {
       if (outcome.kind !== 'recovered') throw new Error('unreachable');
       expect(outcome.previousPidAlive).toBe(true);
     });
+  });
+});
+
+// 記憶の置き場は、無認証の `/health` ではなく資格が要る `/status` から取る（#2869）。
+describe('storageOf（記憶の置き場を /status から取る）', () => {
+  it('状態ファイルのトークンを付けて GET /status を打ち、storage を返す', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue({ ok: true, json: async () => ({ storage: 'PostgreSQL db:5432/app' }) });
+    vi.stubGlobal('fetch', fetchMock);
+
+    expect(await storageOf(INFO)).toBe('PostgreSQL db:5432/app');
+    const [url, init] = fetchMock.mock.calls[0] as [string, { headers: Record<string, string> }];
+    expect(url).toBe('http://127.0.0.1:4517/status');
+    expect(init.headers.authorization).toBe('Bearer token-of-the-real-daemon');
+  });
+
+  it('資格が通らない（401）・古いデーモン（404）・例外・空の storage は null', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, json: async () => ({}) }));
+    expect(await storageOf(INFO)).toBeNull();
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('fetch failed')));
+    expect(await storageOf(INFO)).toBeNull();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({ ok: true, json: async () => ({ storage: '' }) }),
+    );
+    expect(await storageOf(INFO)).toBeNull();
+    expect(await storageOf(null)).toBeNull();
   });
 });
