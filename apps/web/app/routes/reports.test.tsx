@@ -276,7 +276,7 @@ describe('日報', () => {
 
     renderReports();
 
-    await screen.findByText('2026-08-19 07:00');
+    await screen.findAllByText('2026-08-19 の日報');
     const order = screen
       .getAllByRole('link')
       .map((link) => link.getAttribute('href'))
@@ -341,12 +341,20 @@ describe('日報', () => {
     renderReports();
 
     // 2件が別々の行として並ぶまで待つ。
-    await screen.findByText('2026-08-20 09:30');
+    await screen.findAllByText('2026-08-20 の日報');
 
-    // 日の軸は `report.date` である。`formatDateTime(at)` を使っていれば、遡り生成の
-    // 側が '08/21' に化けてここが落ちる（＝症状が戻ったことを検知する）。
-    expect(rowFor('r-catchup').textContent).toBe('2026-08-20 09:30');
-    expect(rowFor('r-close').textContent).toBe('2026-08-20 07:00');
+    // 日の軸は `report.date` である（題）。書かれた日時は日付つきで別に出す（#2779）。
+    // 時:分だけだと、翌日に書かれた遡り生成が「その日の 09:30」に読めた。
+    // 年は今年なら付かないので部分一致で見る。
+    const catchup = rowFor('r-catchup').textContent ?? '';
+    const close = rowFor('r-close').textContent ?? '';
+    expect(catchup).toContain('2026-08-20 の日報');
+    expect(catchup).toContain('08/21 09:30 に書かれた');
+    expect(close).toContain('2026-08-20 の日報');
+    expect(close).toContain('08/21 07:00 に書かれた');
+    // 同じ日が複数あるとき、先頭（最新）にだけ目印が付く。
+    expect(catchup).toContain('最新');
+    expect(close).not.toContain('最新');
   });
 
   it('reportId で1件を指定すると、選択の見た目が付くリンクはちょうど1つになる', async () => {
@@ -356,7 +364,7 @@ describe('日報', () => {
 
     // 両方の行が描かれるまで待つ（先に getAllByRole を打つと、fetch が
     // 返る前の空の一覧で判定してしまいうる）。
-    await screen.findByText('2026-08-20 09:30');
+    await screen.findAllByText('2026-08-20 の日報');
 
     // **クラス名は token で見ること。** `includes('bg-muted')` は全リンクが
     // 持つ `hover:bg-muted` にも当たるので、部分一致だと「選択の見た目」を
@@ -372,6 +380,41 @@ describe('日報', () => {
     expect(selected).toHaveLength(1);
     // **選ばれたのがどれかは `href` で見る**（`id` が選択の単位そのものなので）。
     expect(selected[0]).toBe(rowFor('r-close'));
+    // 支援技術へも伝える（#2780）。選択中だけ aria-current="page"。
+    const current = screen
+      .getAllByRole('link')
+      .filter((l) => l.getAttribute('aria-current') === 'page');
+    expect(current).toEqual([rowFor('r-close')]);
+  });
+
+  it('本文の見出しは画面の h1 と並ばず、h3 以下に下がる（#2780）', async () => {
+    stubSameDayReports();
+
+    renderReports({ date: '2026-08-20', reportId: 'r-close' });
+
+    const heading = await screen.findByRole('heading', { name: '締めの見出し' });
+    // 本文の `##`（h2）は h4 になる。h1 は画面の「日報」だけ。
+    expect(heading.tagName).toBe('H4');
+    expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1);
+  });
+
+  it('本文の `#` も h1 にならない', async () => {
+    stubFetch((url) => {
+      const reports = [
+        {
+          type: 'daily_report',
+          id: 'r1',
+          at: '2026-08-14T22:00:00.000Z',
+          date: '2026-08-14',
+          body: '# 日報の題\n\n中身。',
+        },
+      ];
+      if (url.includes('/reports')) return json({ reports });
+      return undefined;
+    });
+    renderReports();
+    const heading = await screen.findByRole('heading', { name: '日報の題' });
+    expect(heading.tagName).toBe('H3');
   });
 
   /**
@@ -439,6 +482,37 @@ describe('日報', () => {
    * **これも視覚回帰試験ではない。** 押さえられるのはクラスが当たっている
    * ことまでである（上のテストの doc と同じ理由）。
    */
+  it('読み込み中は右側に「1件も無い」を出さない（#2803）', async () => {
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const reports = [
+      {
+        type: 'daily_report',
+        id: 'r1',
+        at: '2026-08-14T22:00:00.000Z',
+        date: '2026-08-14',
+        body: '進捗があった。',
+      },
+    ];
+    stubFetch((url) => {
+      if (url.includes('/reports')) return gate.then(() => json({ reports }));
+      return undefined;
+    });
+
+    renderReports();
+
+    // 一覧が未着の間、右側は「1件も無い」と言わない。
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(screen.queryByText(/日報が1件も無い/)).toBeNull();
+    expect(screen.queryByText('まだ無い。')).toBeNull();
+
+    release();
+    expect(await screen.findByText('進捗があった。')).toBeTruthy();
+    expect(screen.queryByText(/日報が1件も無い/)).toBeNull();
+  });
+
   it('日報が1件も無いときの本文側 Card は min-w-0 を持つ', async () => {
     stubFetch((url) => {
       if (url.includes('/reports')) return json({ reports: [] });
