@@ -345,7 +345,19 @@ export const conversationDetailResponseSchema = z.object({
 // ---------------------------------------------------------------------------
 
 export const memoryListResponseSchema = z.object({ documents: z.array(memoryDocumentMetaSchema) });
-export const memoryReadResponseSchema = z.object({ document: memoryDocumentSchema });
+/**
+ * `version` は本文（保存された形）の sha256 hex（`memoryVersion`、Issue #2743）。
+ * 書き換える側が持ち回り、`PUT /memory/{slug}` の `ifMatch` へ渡す。
+ */
+export const memoryReadResponseSchema = z.object({
+  document: memoryDocumentSchema,
+  version: z.string(),
+});
+/** `PUT /memory/{slug}` の 409。`current` は**いまの版**（読んだ後に消されていれば null）。 */
+export const memoryConflictResponseSchema = z.object({
+  error: z.string(),
+  current: memoryReadResponseSchema.nullable(),
+});
 export const memoryDeleteResponseSchema = z.object({ ok: z.literal(true), slug: z.string() });
 
 // ---------------------------------------------------------------------------
