@@ -4,6 +4,13 @@ import { useMemo, useState } from 'react';
 
 import { Page, Badge, Button, Card, CardHeader, ErrorNote, Input } from '@alteroid/ui';
 import { useInboxBacklog, useInboxRemoveMany } from '@alteroid/swr';
+import {
+  INBOX_TYPES,
+  formatDateTime,
+  inboxSourceLabel,
+  inboxTypeLabel,
+  localDateTimeToIso,
+} from '@alteroid/logic';
 import type {
   InboxBacklog,
   InboxEventType,
@@ -84,7 +91,7 @@ export default function Inbox() {
     <Page
       tabs={<ScheduleTabs />}
       title="受信箱"
-      description="まだ処理し終えていない合図（inbox_events）の未読を、絞り込んでまとめて消す。既定は試算——1件も消さない"
+      description="まだ処理し終えていない合図を、絞り込んでまとめて消す。まず試算でき、試算では1件も消さない"
     >
       <div className="flex flex-col gap-4">
         <InboxBacklogCard />
@@ -95,50 +102,12 @@ export default function Inbox() {
 }
 
 /**
- * 表示順とラベル。**`Record<InboxEventType, string>` が全7種類を強制する**
- * ——`InboxEventType` に値が増えたのにここへ足していなければ `pnpm typecheck`
- * が落ちる。`INBOX_TYPE_ORDER` はこの `Record` の鍵からそのまま作るので、
- * 順序と網羅性を2箇所に分けて持たない。
- *
- * **値そのものは `@alteroid/core` から import しない。** `apps/web` は
- * `@alteroid/core` の値 import が禁止されている（サーバ専用コードごと
- * バンドルへ引き込む。`commitments.tsx` の `KNOWN_COMMITMENT_CLOSED_BY` の
- * doc と同じ理由）——ここは生成 spec から導いた型（`InboxEventType`）に対して
- * 文字列リテラルを合わせているだけで、`packages/core/src/inbox-backlog.ts` の
- * `INBOX_EVENT_TYPE_ORDER` の値そのものを参照してはいない。
- * 字面は揃えてある（`grep -Fn -- "'human_message'," packages/core/src/inbox-backlog.ts`）。
+ * 種類の日本語名と表示順は `@alteroid/logic` の `INBOX_TYPE_LABEL`
+ * （`satisfies Record<InboxEventType, string>` で網羅を型が守る）。知らない種類は
+ * 識別子を出さず一般的な言い方（`inboxTypeLabel`）に倒れる（issue #2010 /
+ * #2782）。送る値（`types`）は識別子のまま。
  */
-const INBOX_TYPE_LABELS: Record<InboxEventType, string> = {
-  human_message: '人間の発言',
-  human_answer: '人間の回答（ask_human への応答）',
-  distill: '要約（distill）',
-  timer: 'タイマー',
-  external: '外部イベント',
-  self_initiative: '自発（self_initiative）',
-  manager_message: 'マネージャーの報告',
-};
-
-const INBOX_TYPE_ORDER = Object.keys(INBOX_TYPE_LABELS) as InboxEventType[];
-
-/**
- * **知らない `type` にも倒れ先を持つ**（issue #2010。#1623 で `managers.tsx` の
- * `ManagerStatusBadge` に入れた形の横展開）。`byType` / `undeliveredByType` の
- * `entry.type` は daemon（`GET /inbox`）から届く値で、Web（Vercel）とデーモン
- * （Railway）は別々にデプロイされるので、デーモンが先に新しい種類の値を返す時間が
- * 在る。型は `InboxEventType` でも、JSON はそのまま届く。倒れ先が無いと
- * `INBOX_TYPE_LABELS[type]` が `undefined` になり、件数だけが宙に浮いた行に
- * なっていた（throw はしないが、何の滞留かが画面から読めない）。
- *
- * **生の値をそのまま見せる。** 「不明」とだけ書くと、何が来たのかを人間が
- * 追えない。**`Object.hasOwn` で引く** —— `INBOX_TYPE_LABELS['constructor']` の
- * ような継承したキーは `undefined` にならず、別の形で壊れるためである
- * （`managers.tsx` の `ManagerStatusBadge` の doc と同じ理由）。
- */
-function inboxTypeLabel(type: InboxEventType): string {
-  return Object.hasOwn(INBOX_TYPE_LABELS, type)
-    ? INBOX_TYPE_LABELS[type]
-    : `知らない種類（${String(type)}）`;
-}
+const INBOX_TYPE_ORDER = INBOX_TYPES;
 
 /** カンマ区切りの入力を、空文字を除いた配列にする（CLI の `splitList` と同じ形）。 */
 function splitList(value: string): string[] {
@@ -166,7 +135,7 @@ function InboxBacklogCard() {
     <Card>
       <CardHeader
         title="内訳"
-        subtitle="alteroid inbox show / GET /inbox と同じもの（読み取り専用）"
+        subtitle="いま溜まっている合図の数え方（見るだけで、何も変わらない）"
       />
       <div className="flex flex-col gap-3 px-4 py-3 text-sm">
         <ErrorNote error={error} />
@@ -231,24 +200,24 @@ function InboxBacklogView({ backlog }: { backlog: InboxBacklog }) {
       {backlog.humanOriginated.total > 0 && (
         <div className="flex flex-col gap-1 rounded-md border border-warn/40 bg-warn/10 px-3 py-2 text-xs text-warn">
           <p>
-            ⚠ 人間起点（human_message / human_answer）の滞留が {backlog.humanOriginated.total}{' '}
-            件ある （
+            ⚠ 人間からの合図（発言・回答）が溜まっている: {backlog.humanOriginated.total} 件（
             {backlog.humanOriginated.byType
               .map((entry) => `${inboxTypeLabel(entry.type)} ${entry.count}`)
               .join(' / ')}
             ）。
           </p>
           <p>
-            そのうち、いまの器になってから積まれ、まだ片付いていない分が{' '}
-            {backlog.humanOriginated.undelivered} 件（ストアに残っている行を見ているだけで、
-            配達されていないとは言えない）。
+            そのうち、いまの器になってから溜まり、まだ片付いていない分が{' '}
+            {backlog.humanOriginated.undelivered} 件（残っている行を数えているだけで、
+            まだ処理されていないとは言い切れない）。
           </p>
         </div>
       )}
 
       <p className="text-xs">
         計 {backlog.total} 件
-        {backlog.oldestAt !== undefined && ` （最も古いものは ${backlog.oldestAt} から）`}
+        {backlog.oldestAt !== undefined &&
+          ` （最も古いものは ${formatDateTime(backlog.oldestAt)} から）`}
       </p>
 
       <BreakdownSection
@@ -260,30 +229,33 @@ function InboxBacklogView({ backlog }: { backlog: InboxBacklog }) {
       />
 
       <BreakdownSection
-        title={`送信元（上位5件。source/managerId を持つ型のみ。溢れ ${backlog.bySourceOverflowKinds} 種 ${backlog.bySourceOverflowCount} 件 / source を言えない型 ${backlog.bySourceUnknownCount} 件）`}
-        rows={backlog.bySource.map((entry) => ({ label: entry.source, count: entry.count }))}
-        empty="（source/managerId を持つ型は無い）"
+        title={`送信元（多い順に上位5件。送り主が分かる種類のみ。載り切らない送信元 ${backlog.bySourceOverflowKinds} 種 ${backlog.bySourceOverflowCount} 件 / 送り主が分からない種類 ${backlog.bySourceUnknownCount} 件）`}
+        rows={backlog.bySource.map((entry) => ({
+          label: inboxSourceLabel(entry.source),
+          count: entry.count,
+        }))}
+        empty="（送り主が分かる種類の合図は無い）"
       />
 
       <p className="text-xs">
-        同一本文（id/at を除いた中身）を畳むと {backlog.distinct} 件
+        同じ内容の合図（id と時刻を除く）をまとめると {backlog.distinct} 件
         {backlog.distinctAcrossManagers !== backlog.distinct &&
-          ` ／ 同じ本文がマネージャーを跨いで ${backlog.distinctAcrossManagers} 件`}
+          ` ／ 同じ内容がマネージャーをまたいで ${backlog.distinctAcrossManagers} 件`}
         <span className="block text-muted-foreground">
-          ⚠ 本文が同じでも別々に起きた出来事である。この数は上下どちらへもぶれる。
+          ⚠ 内容が同じでも別々に起きた出来事である。この数は上下どちらへもぶれる。
         </span>
       </p>
 
       <p className="text-xs">
-        器の入れ替え回数: 0回＝いまの器になってから積まれた {backlog.undelivered} / 1回{' '}
+        器の入れ替え回数: 0回＝いまの器になってから溜まった {backlog.undelivered} / 1回{' '}
         {backlog.deliveredOnce} / 2回以上 {backlog.redelivered}（最大 {backlog.maxDeliveries}）
         <span className="block text-muted-foreground">
-          ⚠ 配られた回数ではない — 門が畳んだ行はターンが1度も起きないまま数だけ増える
+          ⚠ 処理した回数ではない — 処理されないまま数だけ増えることもある
         </span>
       </p>
 
       <BreakdownSection
-        title="いまの器になってから積まれた分（0回）の内訳（種類別）"
+        title="いまの器になってから溜まった分（0回）の内訳（種類別）"
         rows={backlog.undeliveredByType.map((entry) => ({
           label: inboxTypeLabel(entry.type),
           count: entry.count,
@@ -291,7 +263,7 @@ function InboxBacklogView({ backlog }: { backlog: InboxBacklog }) {
       />
 
       <BreakdownSection
-        title={`滞留時間（観測 ${backlog.observedAt} 時点。滞留時間は相対値なので、この行を写すときは基準点も一緒に写すこと）`}
+        title={`溜まっている時間（${formatDateTime(backlog.observedAt)} 時点）`}
         rows={backlog.ageBuckets.map((entry) => ({ label: entry.label, count: entry.count }))}
       />
     </div>
@@ -345,7 +317,8 @@ function InboxRemoveCard() {
     [selectedTypes],
   );
   const sources = useMemo(() => splitList(sourcesText), [sourcesText]);
-  const before = beforeText.trim() === '' ? undefined : beforeText.trim();
+  // 入力欄は利用者の地域の時刻。送るときに今までと同じ UTC の ISO 8601 へ変える。
+  const before = localDateTimeToIso(beforeText);
   const limitTrimmed = limitText.trim();
   const limitNumber = Number(limitTrimmed);
   const limitValid = limitTrimmed === '' || (Number.isInteger(limitNumber) && limitNumber >= 1);
@@ -421,23 +394,20 @@ function InboxRemoveCard() {
 
   return (
     <Card>
-      <CardHeader
-        title="絞り込み"
-        subtitle="alteroid inbox remove / POST /inbox/remove と同じもの"
-      />
+      <CardHeader title="絞り込み" subtitle="消す合図の条件を選ぶ" />
       <div className="flex flex-col gap-4 px-4 py-3 text-sm">
         <div>
           <p className="mb-1 text-xs text-muted-foreground">種類（最低1つ）</p>
           <div className="flex flex-col gap-1">
             {INBOX_TYPE_ORDER.map((type) => (
-              <label key={type} className="flex items-center gap-2 text-xs">
+              <label key={type} className="flex items-center gap-2 text-xs pointer-coarse:min-h-11">
                 <input
                   type="checkbox"
+                  className="pointer-coarse:size-5"
                   checked={selectedTypes.has(type)}
                   onChange={() => toggleType(type)}
                 />
                 <span>{inboxTypeLabel(type)}</span>
-                <span className="font-mono text-muted-foreground">{type}</span>
               </label>
             ))}
           </div>
@@ -446,7 +416,8 @@ function InboxRemoveCard() {
 
         <label className="flex flex-col gap-1">
           <span className="text-xs text-muted-foreground">
-            送信元（完全一致・カンマ区切り。例 external:foo, manager:mgr-1。任意）
+            送信元（完全一致・カンマ区切り。外部の通知は external:名前、マネージャーは manager:名前
+            の形。任意）
           </span>
           <Input
             value={sourcesText}
@@ -460,15 +431,15 @@ function InboxRemoveCard() {
 
         <label className="flex flex-col gap-1">
           <span className="text-xs text-muted-foreground">
-            この時刻より古い行だけを対象にする（ISO8601。任意）
+            この日時より古い合図だけを対象にする（任意）
           </span>
           <Input
+            type="datetime-local"
             value={beforeText}
             onChange={(event) => {
               setBeforeText(event.target.value);
               invalidatePreviousResult();
             }}
-            placeholder="例 2026-09-15T00:00:00.000Z"
           />
         </label>
 
@@ -533,9 +504,9 @@ function AllSelectedWarning({ show }: { show: boolean }) {
   if (!show) return null;
   return (
     <p className="mt-2 text-xs text-warn">
-      7種類全部を選んでいる。これは「絞り込みが無い」のと同じ呼びなので、サーバに
-      断られる（400。1回で受信箱を空にできてしまうことを防ぐための制約——それは
-      「設定」画面のワークスペースのリセットの役目である）。消したい種類だけを選ぶこと。
+      7種類すべてを選んでいる。これは「絞り込みが無い」のと同じなので、断られる
+      （1回で受信箱を空にできてしまうのを防ぐため。全部消したいときは「設定」画面の
+      ワークスペースのリセットを使う）。消したい種類だけを選ぶこと。
     </p>
   );
 }
@@ -560,11 +531,12 @@ function ResultView({ result }: { result: InboxRemoveManyResult }) {
         </p>
       )}
       {result.removedIds.length === 0 ? (
-        <p className="mt-2 text-muted-foreground">対象になる id は無い。</p>
+        <p className="mt-2 text-muted-foreground">対象になる合図は無い。</p>
       ) : (
         <>
           <p className="mt-2">
-            {result.dryRun ? '消える予定の id' : '消した id'}（{result.removedIds.length}件）:
+            {result.dryRun ? '消える予定の合図の id' : '消した合図の id'}（
+            {result.removedIds.length}件）:
           </p>
           <ul className="mt-1 flex flex-col gap-0.5 font-mono break-all">
             {result.removedIds.map((id) => (

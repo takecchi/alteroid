@@ -343,6 +343,7 @@ export const tailwindMergeConfig: Config<string, string> = {
     'bg-clip': [{ 'bg-clip': ['border', 'padding', 'content', 'text'] }],
     'bg-color': [{ bg: scaleColor() }],
     'gradient-from': [{ from: scaleColor() }],
+    'gradient-to': [{ to: scaleColor() }],
     rounded: [{ rounded: scaleRadius() }],
     'rounded-t': [{ 'rounded-t': scaleRadius() }],
     'rounded-r': [{ 'rounded-r': scaleRadius() }],
