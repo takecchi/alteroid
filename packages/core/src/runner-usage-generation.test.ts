@@ -188,7 +188,7 @@ describe('復帰で畳まれた古い世代の result は usage に混ざらな�
       // 最悪の仮定: 畳まれたはずの古い世代が、後から成功の result（大きい累積）を出す。
       if (zombie) {
         await old.finish('古い世代の遅れた結果', { costUsd: 10 });
-        await new Promise((resolve) => setTimeout(resolve, 50));
+        await settle();
       }
       // 古い世代の累積（10）は、新しい世代の累積（1）の後ろに混ざらない。
       expect(usageCosts(events)).toEqual([1]);
@@ -204,10 +204,15 @@ describe('復帰で畳まれた古い世代の result は usage に混ざらな�
     // 遅れる窓が無いかを測る。成功が先に `progressed` を立てるなら、失敗は復帰にならない）。
     void old.finish('進んだ', { costUsd: 3 });
     void old.finish('', { subtype: 'error_during_execution', isError: true });
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    await settle();
 
     expect(usageCosts(events)).toEqual([3]);
     // 復帰していない＝新しいセッションは開いていない。
     expect(sessions).toHaveLength(1);
   });
 });
+
+/** event loop を数回回して、流した出来事が処理されるのを待つ（実時間の待ちを使わない）。 */
+async function settle(): Promise<void> {
+  for (let i = 0; i < 30; i += 1) await new Promise((resolve) => setImmediate(resolve));
+}
