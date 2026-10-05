@@ -55,7 +55,11 @@ describe('practice_write / practice_remove の base_version（#2923）', () => {
     const v = practiceVersion(base); // クローンが読んだ時点の版
     // 人間が直す。
     await h.stores.practices.write({ ...base, content: '人間が直した\n' });
-    const body = await h.call('practice_write', { ...base, content: 'クローンの全文\n', base_version: v });
+    const body = await h.call('practice_write', {
+      ...base,
+      content: 'クローンの全文\n',
+      base_version: v,
+    });
     expect(body).toContain('何も書いていない');
     expect(body).toContain('その間に変わった');
     expect(body).toContain('practice_read slug=review');

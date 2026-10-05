@@ -238,7 +238,13 @@ import {
   describeUnreadableSchedules,
   describeUnreadableTokens,
 } from './store.js';
-import { MemoryConflictError, memoryVersion, PROFILE_ENTRY_NAME } from './store.js';
+import {
+  MemoryConflictError,
+  memoryVersion,
+  PracticeConflictError,
+  practiceVersion,
+  PROFILE_ENTRY_NAME,
+} from './store.js';
 import type { ArchiveEntry, InboxPeek, JournalStore, Stores } from './store.js';
 import {
   RESTART_BEFORE_CHECK_ADVICE,
@@ -4340,6 +4346,46 @@ function describeMemoryConflict(
     `記憶 ${slug} は、読んだ後にその間に変わった（人間または別のターンが書いた）ので、${action}を**書かなかった**。` +
     `${now}**何も書いていない**（あなたの内容は書かれておらず、いまの内容は1文字も変わっていない）。` +
     `memory_read slug=${slug} で読み直し、いまの内容に対してやりたいことが変わらないか判断し直してから、` +
+    '読み直した版の base_version を付けて書き直すこと。'
+  );
+}
+
+/**
+ * **Issue #2923。** 読んだやり方の版（`practiceVersion`。#2853）を、クローンが次の
+ * 書き込みへ持ち回るための1行。`practice_read` / `practice_write` の応答の末尾に付く。
+ * 欄の名前は `practice_write` / `practice_remove` の引数 `base_version` と同じ。
+ */
+function practiceVersionLine(practice: Pick<Practice, 'kind' | 'title' | 'content'>): string {
+  return `（版 base_version=${practiceVersion(practice)} ——このやり方を全文で書き直す practice_write と、消す practice_remove には、これを base_version に渡すこと）`;
+}
+
+/**
+ * 読んだ版と違っていて、**書かなかった／消さなかった**ときにクローンへ返す文
+ * （`describeMemoryConflict` のやり方版）。`current` は書く瞬間のやり方（無ければ
+ * `null` ＝ 読んだ後に消えた）。
+ */
+function describePracticeConflict(
+  slug: string,
+  action: string,
+  current: Pick<Practice, 'kind' | 'title' | 'content'> | null,
+  kind: 'write' | 'remove' = 'write',
+): string {
+  const now =
+    current === null
+      ? 'いまそのやり方は無い（読んだ後に消された）。'
+      : `いまの版は base_version=${practiceVersion(current)}（${current.content.length} 文字）。`;
+  if (kind === 'remove') {
+    return (
+      `やり方 ${slug} は、読んだ後にその間に変わった（人間または別のターンが書いた）ので、${action}を**しなかった**。` +
+      `${now}**何も消していない**（読んでいない内容を消さないため。いまの内容は1文字も変わっていない）。` +
+      `practice_read slug=${slug} で読み直し、いまの内容でも消してよいか判断し直してから、` +
+      '読み直した版の base_version を付けて practice_remove し直すこと。'
+    );
+  }
+  return (
+    `やり方 ${slug} は、読んだ後にその間に変わった（人間または別のターンが書いた）ので、${action}を**書かなかった**。` +
+    `${now}**何も書いていない**（あなたの内容は書かれておらず、いまの内容は1文字も変わっていない）。` +
+    `practice_read slug=${slug} で読み直し、いまの内容に対してやりたいことが変わらないか判断し直してから、` +
     '読み直した版の base_version を付けて書き直すこと。'
   );
 }
@@ -10187,7 +10233,9 @@ export function createCloneTools(context: ToolContext) {
         try {
           written = await stores.practices.write(
             { slug, kind, title, content },
-            beforeWasUnreadable ? undefined : { ifMatch: before === null ? (baseVersion ?? null) : baseVersion! },
+            beforeWasUnreadable
+              ? undefined
+              : { ifMatch: before === null ? (baseVersion ?? null) : baseVersion! },
           );
         } catch (error) {
           if (error instanceof PracticeConflictError) {
