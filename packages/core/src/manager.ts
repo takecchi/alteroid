@@ -87,6 +87,7 @@ import type {
   Job,
   JobStatus,
   JournalEntryInput,
+  LastRescue,
   LastUnpushedWorkObservation,
   TextMarkup,
   UnpushedWorkObservationSource,
@@ -825,6 +826,11 @@ export interface ManagerSummary {
    * {@link lastUnpushedWorkObservationSchema}（`schema.ts`）の doc を見よ。
    */
   lastUnpushedWorkObservation?: LastUnpushedWorkObservation;
+  /**
+   * 走行中の定期的な退避 ref の push の記録（Issue #1266）。台帳
+   * （`Job.lastRescue`）をそのまま写すだけ。{@link lastRescueSchema}（`schema.ts`）。
+   */
+  lastRescue?: LastRescue;
 }
 
 /**
@@ -950,6 +956,29 @@ function unpushedWorkObservationOf(
  * existing.observedAt`）と同じ作法。**同点は勝たせる**（`existing.at`
  * が `candidate.at` より**厳密に**新しいときだけ弾く）。
  */
+/**
+ * runner から届いた退避の結果を台帳へ重ねる（Issue #1266）。`relativePath` ごとに
+ * 置き換え、届かなかった作業ツリーは前のまま残す。`pushed` は新しい回が持たなければ
+ * 前のものを引き継ぐ。
+ */
+export function mergeRescue(
+  previous: LastRescue | undefined,
+  incoming: LastRescue['worktrees'],
+  at: string,
+): LastRescue {
+  const byPath = new Map((previous?.worktrees ?? []).map((w) => [w.relativePath, w]));
+  for (const tree of incoming) {
+    const before = byPath.get(tree.relativePath);
+    byPath.set(tree.relativePath, {
+      ...tree,
+      ...(tree.pushed === undefined && before?.pushed !== undefined
+        ? { pushed: before.pushed }
+        : {}),
+    });
+  }
+  return { at, worktrees: [...byPath.values()] };
+}
+
 function isUnpushedWorkObservationAtLeastAsNewAs(
   candidate: LastUnpushedWorkObservation,
   existing: LastUnpushedWorkObservation | undefined,
@@ -12727,6 +12756,38 @@ class Pool implements ManagerPool {
         return;
       }
 
+      case 'rescue_ref': {
+        /*
+         * **走行中の退避 ref の結果（Issue #1266）。** runner のタイマーが
+         * 作業ツリーを動かさずに `refs/alteroid-rescue/…` へ push した結果を
+         * 台帳（`Job.lastRescue`）へ積む。`relativePath` ごとに置き換え、
+         * `pushed`（最後に成功した退避）は新しい回が持たなければ前のものを残す
+         * （後の回が「送らなかった」でも、remote の ref はまだ在る）。
+         *
+         * **`closed` / `shutdown_unpushed_work` と違い、走行中に届く**——器が
+         * 入れ替わる最後の瞬間に頼らない。`status` / `lease` には触れない。
+         *
+         * 鍵らしい文字列で止めた回（`secret-like`）は日誌へ残す（ファイル名
+         * だけ。文字列そのものは持ってこない。runner が運ぶ時点で持っていない）。
+         */
+        const at = new Date(this.#now()).toISOString();
+        record.job.lastRescue = mergeRescue(record.job.lastRescue, event.worktrees, at);
+        for (const tree of event.worktrees) {
+          if (tree.notPushed?.reason !== 'secret-like') continue;
+          await this.#journal({
+            type: 'decision',
+            decision:
+              `作業ツリー ${tree.relativePath} の退避 ref は、鍵らしい文字列を差分に ` +
+              '見つけたので送らなかった。',
+            grounds:
+              `当たったファイル: ${(tree.notPushed.files ?? []).join(', ') || '(不明)'}。` +
+              '文字列そのものは記録しない。取り除くか伏せれば次の周期で送られる。',
+          });
+        }
+        await this.#persist(record);
+        return;
+      }
+
       case 'tool_running':
       case 'tool_end': {
         // **日誌に書かない（Issue #2725）。`#journal` を呼ばない。** 稼働の地図の
@@ -15024,6 +15085,7 @@ function summaryOf(
     ...(job.lastUnpushedWorkObservation === undefined
       ? {}
       : { lastUnpushedWorkObservation: job.lastUnpushedWorkObservation }),
+    ...(job.lastRescue === undefined ? {} : { lastRescue: job.lastRescue }),
     /*
      * **`live` と同じ引数の作法で運ぶ（省略可能な引数にしない）。** 材料は台帳
      * ではなく `Pool` の在庫（`#withheldReports`）なので、`record` からは読め
