@@ -8524,7 +8524,7 @@ class Clone implements CloneHost {
             digest: timerDigest,
           }),
         );
-        await this.#runInternal(
+        const outcome = await this.#runInternal(
           buildTimerPrompt({
             kind: event.kind,
             ...(event.target === undefined ? {} : { target: event.target }),
@@ -8540,7 +8540,29 @@ class Clone implements CloneHost {
         // **終わったことを記録するのはここ。** claim（引き受けた印）とは別に置く。
         // ここまで来ないうちに器が落ちたら、印が残っているので配り直される
         // （日次なら翌日・週次なら翌週まで消える、を作らない）。
-        if (plan !== null) await this.#completeScheduledRun(event.kind, event.at, cause);
+        //
+        // **失敗で終わったターンは「終わった」ではない（#2739）。** 枠切れ以外の失敗
+        // （API エラー・文脈窓・SDK の失敗）で `completeRun` を呼ぶと、印が消えて基準が
+        // 進み、週次なら次の週まで誰も気づかない。印を残せば、次の起動の
+        // `#firstDue` と、次の周期の刻み（`#resumable`）で元の発火として配り直される。
+        // 受信箱の合図は失敗として settle される（決定的に失敗する合図を起動のたびに
+        // 焼かない線）ので、配り直しを担うのは印の側である。枠での保持（`heldForUsage`）は
+        // 従来どおり `#pump` の `defer` が配り直す。
+        if (plan !== null) {
+          if (outcome.status === 'failed' && !outcome.heldForUsage) {
+            await this.#journal({
+              type: 'exchange',
+              with: 'self',
+              role: 'outbound',
+              text:
+                `${EXCHANGE_KIND_FAILURE_PREFIX}定期の依頼 ${event.kind}（${event.at}）のターンが失敗で終わった` +
+                `ので「終わった」とは記録しない（引き受けた印が残り、次の起動か次の周期の刻みで配り直される）: ` +
+                outcome.reason,
+            });
+          } else {
+            await this.#completeScheduledRun(event.kind, event.at, cause);
+          }
+        }
         return;
       }
 
