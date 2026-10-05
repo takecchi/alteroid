@@ -244,7 +244,7 @@ function McpServersEditor({ current }: { current: McpServersState }) {
       <div className="flex flex-col gap-3 px-4 py-3 text-sm">
         <p className="text-xs leading-relaxed break-words text-muted-foreground">
           登録内容を JSON で書く（.mcp.json をそのまま貼れる形。{'{ "mcpServers": { … } }'}
-          ）。保存する前にデーモンが形を確かめ、通らなければ保存も反映もしない（前のものが残る）。コマンドで起動する形（stdio）の登録は、次のセッションでクローンやマネージャーが起動するコマンドになる。
+          ）。保存する前に接続先のサーバが形を確かめ、通らなければ保存も反映もしない（前のものが残る）。コマンドで起動する形（stdio）の登録は、次のセッションでクローンやマネージャーが起動するコマンドになる。
         </p>
 
         {!editing ? (

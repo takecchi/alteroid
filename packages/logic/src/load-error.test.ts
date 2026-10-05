@@ -15,7 +15,7 @@ describe('classifyLoadError', () => {
   it('ネットワーク断（TypeError: Failed to fetch）は「つながっていない」で、生の文は detail にだけ入る', () => {
     const info = classifyLoadError(new TypeError('Failed to fetch'));
     expect(info.kind).toBe('network');
-    expect(info.summary).toBe('デーモンにつながっていません。');
+    expect(info.summary).toBe('接続先のサーバにつながっていません。');
     expect(info.summary).not.toMatch(/fetch/i);
     expect(info.detail).toBe('Failed to fetch');
   });

@@ -48,7 +48,7 @@ export function LiveMapCard({
       {scene === undefined ? (
         unavailable !== undefined ? (
           <ErrorNote
-            error={new Error(`デーモンが稼働状況の図を組めていない（${unavailable}）`)}
+            error={new Error(`サーバが稼働状況の図を組めていない（${unavailable}）`)}
             className="m-4"
           />
         ) : connection === 'offline' ? (
@@ -67,7 +67,7 @@ export function LiveMapCard({
               className="mb-3 rounded-md border border-warn/40 bg-warn/10 px-3 py-2 text-xs text-warn"
             >
               {unavailable !== undefined
-                ? `デーモンが稼働状況の図を組めていない（${unavailable}）。`
+                ? `サーバが稼働状況の図を組めていない（${unavailable}）。`
                 : '稼働状況の図への接続が切れている（繋ぎ直している）。'}
               {staleAt === undefined
                 ? '出しているのは最後に受け取った状態で、いまの状態ではない。'

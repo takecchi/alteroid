@@ -232,7 +232,7 @@ export function ConnectionCard({ compact = false }: { compact?: boolean }) {
                 既定の <code className="font-mono">{SAME_ORIGIN_BASE_URL}</code>{' '}
                 は同一オリジン向け（開発サーバの proxy と、画面の手前に置いたリバースプロキシが
                 これで当たる）。<code className="font-mono">https://api.example.com</code>{' '}
-                のように別オリジンを指す場合は、デーモン側でそのオリジンを明示的に許可する必要がある。
+                のように別オリジンを指す場合は、接続先のサーバ側でそのオリジンを明示的に許可する必要がある。
               </p>
               <pre className="mt-1.5 rounded border border-border bg-card p-2 break-all whitespace-pre-wrap">
                 ALTEROID_ALLOWED_ORIGINS=https://www.example.com
@@ -298,7 +298,7 @@ function SelectedActions({
           一覧から削除
         </Button>
         <span className="text-[11px] text-muted-foreground">
-          削除してもデーモン側には何も起きない（このブラウザの一覧から消えるだけ）
+          削除しても接続先のサーバ側には何も起きない（このブラウザの一覧から消えるだけ）
         </span>
       </div>
     );

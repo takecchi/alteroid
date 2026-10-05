@@ -77,7 +77,7 @@ describe('接続できないとき', () => {
     renderShell();
 
     // まず「繋がらない」と、直す口が同じ画面に出ている
-    expect(await screen.findByText('デーモンに繋がらない')).toBeTruthy();
+    expect(await screen.findByText('接続先のサーバに繋がらない')).toBeTruthy();
     const input = await screen.findByLabelText<HTMLInputElement>('接続先');
     expect(input).toBeTruthy();
 

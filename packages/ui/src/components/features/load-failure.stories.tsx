@@ -19,8 +19,8 @@ type Story = StoryObj<typeof meta>;
 export const Network: Story = {
   args: {
     title: '日報を読み込めませんでした',
-    summary: 'デーモンにつながっていません。',
-    hint: 'デーモンが起きているか、接続先が合っているかを確かめて、もう一度試してください。',
+    summary: '接続先のサーバにつながっていません。',
+    hint: 'サーバが起きているか、接続先が合っているかを確かめて、もう一度試してください。',
     detail: 'Failed to fetch',
     onRetry: () => undefined,
   },
@@ -29,7 +29,7 @@ export const Network: Story = {
 export const Server: Story = {
   args: {
     title: 'マネージャー一覧を読み込めませんでした',
-    summary: 'デーモンの側で処理に失敗しました。',
+    summary: 'サーバの側で処理に失敗しました。',
     hint: '少し待ってから、もう一度試してください。',
     detail: 'HTTP 500: boom',
     onRetry: () => undefined,
@@ -39,7 +39,7 @@ export const Server: Story = {
 export const Retrying: Story = {
   args: {
     title: 'マネージャー一覧を読み込めませんでした',
-    summary: 'デーモンの側で処理に失敗しました。',
+    summary: 'サーバの側で処理に失敗しました。',
     detail: 'HTTP 500: boom',
     onRetry: () => undefined,
     retrying: true,
@@ -50,7 +50,7 @@ export const Retrying: Story = {
 export const InsideCard: Story = {
   args: {
     title: '失敗した記録を読み込めませんでした',
-    summary: 'デーモンの側で処理に失敗しました。',
+    summary: 'サーバの側で処理に失敗しました。',
     detail: 'HTTP 500: boom',
     onRetry: () => undefined,
   },

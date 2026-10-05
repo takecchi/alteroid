@@ -63,7 +63,7 @@ export function describeAccountUsageView(state: AccountUsageState | undefined): 
     return {
       tone: 'warn',
       headline: 'アカウント全体の残りを取得できませんでした。',
-      action: '接続先のデーモンが古い可能性があります。更新してから開き直してください。',
+      action: '接続先のサーバが古い可能性があります。更新してから開き直してください。',
       lines: [],
       details: core,
     };

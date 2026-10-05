@@ -6,7 +6,7 @@
  * 欄が常に在る。**欄が無いときは古いデーモンか配線されていない構成なので、`claude` と
  * 読まずに「不明」と書く**（`describeManagerProvider` と同じ作法）。
  */
-export const CLONE_PROVIDER_UNKNOWN_LABEL = '不明（デーモンが値を返していない）';
+export const CLONE_PROVIDER_UNKNOWN_LABEL = '不明（サーバが値を返していない）';
 
 export function describeCloneProvider(cloneProvider: string | null | undefined): string {
   return cloneProvider === undefined || cloneProvider === null || cloneProvider === ''

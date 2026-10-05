@@ -141,8 +141,8 @@ function visibleText(alert: HTMLElement): string {
 
 describe.each(CASES)('$name の読み込みの失敗', ({ Page, ok, title }) => {
   it.each([
-    ['サーバーの失敗（500 boom）', 'server', 'boom', 'デーモンの側で処理に失敗しました'],
-    ['ネットワーク断', 'network', 'Failed to fetch', 'デーモンにつながっていません'],
+    ['サーバーの失敗（500 boom）', 'server', 'boom', 'サーバの側で処理に失敗しました'],
+    ['ネットワーク断', 'network', 'Failed to fetch', '接続先のサーバにつながっていません'],
   ] as const)('%s: 主文は日本語、生の文は「詳細」の中', async (_, mode, raw, summary) => {
     stub(ok, () => mode);
     renderPage(Page);

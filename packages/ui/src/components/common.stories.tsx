@@ -127,7 +127,7 @@ export const Feedback: Story = {
   render: () => (
     <div className="max-w-md space-y-3">
       <Spinner />
-      <ErrorNote error={new Error('デーモンに繋がらない（http://127.0.0.1:4517）')} />
+      <ErrorNote error={new Error('接続先のサーバに繋がらない（http://127.0.0.1:4517）')} />
     </div>
   ),
 };

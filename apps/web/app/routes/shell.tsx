@@ -112,10 +112,10 @@ export default function Shell() {
    */
   if (auth.error !== undefined && auth.status !== 'anonymous' && auth.status !== 'ungranted') {
     return (
-      <ScreenState title="デーモンに繋がらない">
+      <ScreenState title="接続先のサーバに繋がらない">
         {/* 各画面の読み込み失敗の帯と同じ部品・同じ形（issue #2799）。 */}
         <LoadError
-          what="デーモンの状態"
+          what="接続先のサーバの状態"
           error={auth.error}
           onRetry={() => auth.revalidate()}
           retrying={auth.isValidating}
@@ -123,7 +123,7 @@ export default function Shell() {
         />
         <ConnectionCard />
         <p className="mt-3 text-xs text-muted-foreground">
-          接続先を直すとこの画面は自動で進む。デーモンが起きていないだけなら
+          接続先を直すとこの画面は自動で進む。サーバが起きていないだけなら
           <code className="mx-1 font-mono">alteroid daemon start</code>。
         </p>
       </ScreenState>
@@ -350,7 +350,7 @@ function HealthFooter() {
   return (
     <div className="border-t border-border px-4 py-3 text-[11px] text-muted-foreground">
       {error !== undefined ? (
-        <span className="text-destructive">デーモンに繋がらない</span>
+        <span className="text-destructive">接続先のサーバに繋がらない</span>
       ) : data === undefined ? (
         <span>確認中…</span>
       ) : (

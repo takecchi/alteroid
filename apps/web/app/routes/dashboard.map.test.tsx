@@ -232,7 +232,7 @@ describe('切れた・組めないとき、古いと断る', () => {
     });
 
     const note = await within(mapCard()).findByText(
-      /デーモンが稼働状況の図を組めていない（ECONNREFUSED）/,
+      /サーバが稼働状況の図を組めていない（ECONNREFUSED）/,
     );
     expect(note.textContent).toContain('いまの状態ではない');
     expect(node(/マネージャー abcdef12/)).toBeTruthy();
@@ -244,7 +244,7 @@ describe('切れた・組めないとき、古いと断る', () => {
     });
 
     expect(
-      await within(mapCard()).findByText(/デーモンが稼働状況の図を組めていない（ECONNREFUSED）/),
+      await within(mapCard()).findByText(/サーバが稼働状況の図を組めていない（ECONNREFUSED）/),
     ).toBeTruthy();
     expect(within(mapCard()).queryByText('走っているマネージャーはいません')).toBeNull();
   });

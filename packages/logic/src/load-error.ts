@@ -84,8 +84,8 @@ export function classifyLoadError(error: unknown): LoadErrorInfo {
     if (status === 404) {
       return {
         kind: 'notFound',
-        summary: 'デーモンがこの情報の窓口を持っていません（デーモンの版が古い可能性があります）。',
-        hint: 'デーモンを更新してから、もう一度試してください。ここに何も無い、という意味ではありません。',
+        summary: 'サーバがこの情報の窓口を持っていません（サーバの版が古い可能性があります）。',
+        hint: 'サーバを更新してから、もう一度試してください。ここに何も無い、という意味ではありません。',
         retryable: true,
         ...base,
       };
@@ -93,7 +93,7 @@ export function classifyLoadError(error: unknown): LoadErrorInfo {
     if (status >= 500) {
       return {
         kind: 'server',
-        summary: 'デーモンの側で処理に失敗しました。',
+        summary: 'サーバの側で処理に失敗しました。',
         hint: '少し待ってから、もう一度試してください。',
         retryable: true,
         ...base,
@@ -101,7 +101,7 @@ export function classifyLoadError(error: unknown): LoadErrorInfo {
     }
     return {
       kind: 'rejected',
-      summary: 'デーモンが要求を受け付けませんでした。',
+      summary: 'サーバが要求を受け付けませんでした。',
       hint: undefined,
       retryable: true,
       ...base,
@@ -111,8 +111,8 @@ export function classifyLoadError(error: unknown): LoadErrorInfo {
   if (error instanceof TypeError || NETWORK_MESSAGE.test(raw)) {
     return {
       kind: 'network',
-      summary: 'デーモンにつながっていません。',
-      hint: 'デーモンが起きているか、接続先が合っているかを確かめて、もう一度試してください。',
+      summary: '接続先のサーバにつながっていません。',
+      hint: 'サーバが起きているか、接続先が合っているかを確かめて、もう一度試してください。',
       detail,
       retryable: true,
     };
