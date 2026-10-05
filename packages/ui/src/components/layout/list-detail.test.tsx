@@ -179,3 +179,82 @@ describe('ListDetailItems: 項目の className', () => {
     expect(screen.getByRole('link', { name: '項目c' }).className).not.toContain('border-b-0');
   });
 });
+
+describe('ListDetailItems: 一部だけがリンク（extra / lead）', () => {
+  function Partial({ initial }: { initial: string | undefined }) {
+    const [selected, setSelected] = useState(initial);
+    return (
+      <ListDetail
+        listLabel="記憶"
+        hasSelection={selected !== undefined}
+        selectionKey={selected}
+        detail={<h2>詳細 {selected}</h2>}
+        list={
+          <ListDetailItems
+            label="記憶の一覧"
+            items={['a', 'b', 'c'].map((key) => ({
+              key,
+              href: `#${key}`,
+              current: key === selected,
+              lead: <span>札{key}</span>,
+              children: `題名${key}`,
+              extra: <p>名前-{key}</p>,
+            }))}
+            renderLink={(props) => (
+              <a
+                {...props}
+                onClick={(event) => {
+                  event.preventDefault();
+                  setSelected(props.href.slice(1));
+                  props.onClick(event);
+                }}
+              >
+                {props.children}
+              </a>
+            )}
+          />
+        }
+      />
+    );
+  }
+
+  it('リンクは題名だけで、札と extra はリンクの外（選択できる文字）', () => {
+    render(<Partial initial="a" />);
+    const link = screen.getByRole('link', { name: '題名b' });
+    expect(link.textContent).toBe('題名b');
+    expect(screen.getByText('名前-b').closest('a')).toBeNull();
+    expect(screen.getByText('札b').closest('a')).toBeNull();
+    expect(link.closest('li')?.querySelectorAll('a')).toHaveLength(1);
+  });
+
+  it('aria-current はリンクに、強調は行全体（li）に付く', () => {
+    render(<Partial initial="b" />);
+    const link = screen.getByRole('link', { name: '題名b' });
+    expect(link.getAttribute('aria-current')).toBe('page');
+    expect(link.closest('li')?.className).toContain('bg-accent');
+    expect(screen.getByRole('link', { name: '題名a' }).closest('li')?.className).not.toContain(
+      'bg-accent',
+    );
+  });
+
+  it('↑/↓・Home/End で焦点が項目のリンクを辿る', () => {
+    render(<Partial initial="a" />);
+    const a = screen.getByRole('link', { name: '題名a' });
+    a.focus();
+    fireEvent.keyDown(a, { key: 'ArrowDown' });
+    expect(document.activeElement).toBe(screen.getByRole('link', { name: '題名b' }));
+    fireEvent.keyDown(document.activeElement as HTMLElement, { key: 'End' });
+    expect(document.activeElement).toBe(screen.getByRole('link', { name: '題名c' }));
+    fireEvent.keyDown(document.activeElement as HTMLElement, { key: 'Home' });
+    expect(document.activeElement).toBe(a);
+  });
+
+  it('スマホのドロワーで題名を押すと閉じる', () => {
+    viewport.mobile = true;
+    render(<Partial initial="a" />);
+    fireEvent.click(screen.getByRole('button', { name: '記憶を開く' }));
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('link', { name: '題名b' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(screen.getByRole('heading', { name: '詳細 b' })).toBeTruthy();
+  });
+});
