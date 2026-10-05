@@ -9,6 +9,7 @@ import { maskUrl } from '@alteroid/core/mask-url';
 import { createClient } from './client.js';
 import { describeAuthFailure, forbiddenKindOf, resolveTarget, type Target } from './target.js';
 import { redactError } from './redact.js';
+import { describeEditorFailure, readInputFile } from './input-errors.js';
 
 /**
  * `alteroid mcp` — 人間の MCP 連携の登録（`.mcp.json` の `mcpServers` と同じ形）を
@@ -128,7 +129,10 @@ export async function mcpShowCommand(options: { reveal?: boolean } = {}): Promis
 
 /** ファイル（`-` なら標準入力）の `.mcp.json` で丸ごと置き換える。 */
 export async function mcpSetCommand(file: string): Promise<void> {
-  const text = file === '-' ? await readAll() : await readFile(file, 'utf8');
+  const text =
+    file === '-'
+      ? await readAll()
+      : await readInputFile(file, '引数 <file>', '<file>（.mcp.json）、または標準入力（-）');
   const servers = parseMcpJson(text);
   const target = await resolveTarget();
   const before = await read(target);
@@ -353,10 +357,12 @@ async function openEditor(path: string): Promise<void> {
   const editor = process.env.VISUAL ?? process.env.EDITOR ?? 'vi';
   await new Promise<void>((resolve, reject) => {
     const child = spawn(editor, [path], { stdio: 'inherit', shell: true });
-    child.on('error', reject);
-    child.on('close', (code) => {
+    child.on('error', (error) =>
+      reject(describeEditorFailure(editor, { error }, 'alteroid mcp set <file>')),
+    );
+    child.on('close', (code, signal) => {
       if (code === 0) resolve();
-      else reject(new Error(`${editor} が異常終了しました (${String(code)})`));
+      else reject(describeEditorFailure(editor, { code, signal }, 'alteroid mcp set <file>'));
     });
   });
 }

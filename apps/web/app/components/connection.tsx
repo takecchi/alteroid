@@ -88,7 +88,7 @@ export function ConnectionCard({ compact = false }: { compact?: boolean }) {
     <Card>
       <CardHeader
         title="接続先"
-        subtitle="ビルドし直さずに向き先を変えられる（同じ成果物をどの配置でも使うため）"
+        subtitle="alteroid のどこへ繋ぐかを、ここで切り替えられる"
         action={
           health.error !== undefined ? (
             <Badge tone="danger">繋がらない</Badge>
@@ -197,42 +197,54 @@ export function ConnectionCard({ compact = false }: { compact?: boolean }) {
         {/*
           ここは「ドメインが違うときどうするか」の答えを画面の中に置いている。
           設定を触るのは大抵それで詰まったときなので、別の文書へ飛ばさない。
+          本文は平易な言い方にし、環境変数名は括弧の補足で残す。CORS・ヘッダ名など
+          開発者向けの語は「開発者向けの詳細」の先に置く（#2782）。
         */}
         {!compact && (
           <div className="rounded-md border border-border bg-background p-3 text-xs leading-relaxed text-muted-foreground">
-            <p className="mb-1.5 font-medium text-foreground">別のオリジンのデーモンに繋ぐとき</p>
+            <p className="mb-1.5 font-medium text-foreground">別の場所の alteroid に繋ぐとき</p>
             <p className="mb-1.5">
-              既定の <code className="font-mono">{SAME_ORIGIN_BASE_URL}</code>{' '}
-              は同一オリジン向け（開発サーバの proxy と、画面の手前に置いたリバースプロキシが
-              これで当たる）。<code className="font-mono">https://api.example.com</code>{' '}
-              のように別オリジンを指す場合は、デーモン側でそのオリジンを明示的に許可する必要がある。
+              この画面を開いているブラウザの場所と、繋ぎたい alteroid の場所が違うときは、 alteroid
+              側で「この画面の場所から繋いでよい」と設定しておく必要がある （
+              <code className="font-mono">ALTEROID_ALLOWED_ORIGINS</code>）。
+              許可するのは、設定に書いた場所だけである。
             </p>
-            <pre className="rounded border border-border bg-card p-2">
-              ALTEROID_ALLOWED_ORIGINS=https://www.example.com
-            </pre>
-            <p className="mt-1.5">
-              許可は<strong className="text-foreground">列挙したオリジンだけ</strong>
-              で、ワイルドカードは 受け付けない。資格情報は Cookie ではなくヘッダ（
-              <code className="font-mono">Authorization: Bearer</code>）で運ぶ設計なので、
-              別の登録可能ドメイン（例: <code className="font-mono">*.vercel.app</code>）に画面を
-              置いても成立する。
+            <p className="mb-1.5">
+              外から届く場所に置くときは、alteroid 側のログイン（
+              <code className="font-mono">ALTEROID_GOOGLE_CLIENT_ID</code>
+              ）を有効にするか、手前に別の守り（リバースプロキシ・トンネル）を置くこと。
+              この設定が守るのはブラウザからの接続だけで、それ以外の道具からは素通りになる。
             </p>
-            <p className="mt-1.5">
-              <strong className="text-foreground">CORS はブラウザにしか効かない。</strong>
-              <code className="font-mono">curl</code>{' '}
-              は素通りするので、外から届く場所に置くならデーモン側のログイン（
-              <code className="font-mono">ALTEROID_GOOGLE_CLIENT_ID</code>）を有効にするか、
-              手前に境界（リバースプロキシ・トンネル）を置くこと。
-            </p>
+            <details>
+              <summary className="cursor-pointer">開発者向けの詳細</summary>
+              <p className="mt-1.5">
+                既定の <code className="font-mono">{SAME_ORIGIN_BASE_URL}</code>{' '}
+                は同一オリジン向け（開発サーバの proxy と、画面の手前に置いたリバースプロキシが
+                これで当たる）。<code className="font-mono">https://api.example.com</code>{' '}
+                のように別オリジンを指す場合は、デーモン側でそのオリジンを明示的に許可する必要がある。
+              </p>
+              <pre className="mt-1.5 rounded border border-border bg-card p-2 break-all whitespace-pre-wrap">
+                ALTEROID_ALLOWED_ORIGINS=https://www.example.com
+              </pre>
+              <p className="mt-1.5">
+                許可は<strong className="text-foreground">列挙したオリジンだけ</strong>
+                で、ワイルドカードは受け付けない。資格情報は Cookie ではなくヘッダ（
+                <code className="font-mono">Authorization: Bearer</code>
+                ）で運ぶ設計なので、別の登録可能ドメイン（例:{' '}
+                <code className="font-mono">*.vercel.app</code>）に画面を置いても成立する。
+              </p>
+              <p className="mt-1.5">
+                <strong className="text-foreground">CORS はブラウザにしか効かない。</strong>
+                <code className="font-mono">curl</code> は素通りする。
+              </p>
+              <p className="mt-1.5">
+                一覧の「既定」はビルド時の <code className="font-mono">VITE_ALTEROID_API_URL</code>{' '}
+                が決める。カンマ区切りで複数書け、<code className="font-mono">本番=https://…</code>{' '}
+                の形で名前を付けられる。<strong className="text-foreground">先頭が既定</strong>
+                である。
+              </p>
+            </details>
           </div>
-        )}
-
-        {!compact && (
-          <p className="text-[11px] leading-relaxed text-muted-foreground">
-            一覧の「既定」はビルド時の <code className="font-mono">VITE_ALTEROID_API_URL</code>{' '}
-            が決める。カンマ区切りで複数書け、<code className="font-mono">本番=https://…</code>{' '}
-            の形で名前を付けられる。<strong className="text-foreground">先頭が既定</strong>である。
-          </p>
         )}
       </div>
     </Card>

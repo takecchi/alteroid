@@ -1,8 +1,8 @@
-import { readFile } from 'node:fs/promises';
 import { stdin, stdout } from 'node:process';
 
 import { describeAuthFailure, forbiddenKindOf, resolveTarget, type Target } from './target.js';
 import { redactError } from './redact.js';
+import { readInputFile } from './input-errors.js';
 
 /**
  * `alteroid token` — 認証トークンのプール（Issue #393「PR1 プールの器」）。
@@ -335,7 +335,7 @@ export async function tokenAddCommand(options: { label: string; file?: string })
   const raw =
     options.file === undefined || options.file === '-'
       ? await readAll()
-      : await readFile(options.file, 'utf8');
+      : await readInputFile(options.file, '--file', '--file <path>、または標準入力（-）');
   const value = raw.trim();
   if (value.length === 0) {
     throw new Error('値が空である（ファイルか標準入力から、空でない値を渡す）');
@@ -391,10 +391,33 @@ async function setDisabled(id: string, disabled: boolean): Promise<void> {
 /**
  * 回す契機・冷却の既定を見る／変える。引数を1つも渡さなければいまの設定を出す。
  */
+const ROTATE_ON_VALUES: readonly string[] = ['free_exhausted', 'overage_exhausted', 'off'];
+
 export async function tokenPolicyCommand(
   value: string | undefined,
   options: { cooldownMs?: string } = {},
 ): Promise<void> {
+  const patch: { rotateOn?: string; cooldownMs?: number } = {};
+  if (value !== undefined) {
+    if (!ROTATE_ON_VALUES.includes(value)) {
+      throw new Error(
+        `token policy の第1引数は ${ROTATE_ON_VALUES.join(' / ')} のいずれか（渡されたのは ${value}）。` +
+          'free_exhausted は無料枠が尽きたら回す、overage_exhausted は課金枠まで閉じてから回す、' +
+          'off は回さない（記録だけする）',
+      );
+    }
+    patch.rotateOn = value;
+  }
+  if (options.cooldownMs !== undefined) {
+    const parsed = Number(options.cooldownMs);
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+      throw new Error(
+        `--cooldown-ms は正の数（ミリ秒）で指定する（渡されたのは ${options.cooldownMs}）`,
+      );
+    }
+    patch.cooldownMs = parsed;
+  }
+
   const target = await resolveTarget();
 
   if (value === undefined && options.cooldownMs === undefined) {
@@ -408,16 +431,6 @@ export async function tokenPolicyCommand(
     }
     printSettings(current.settings);
     return;
-  }
-
-  const patch: { rotateOn?: string; cooldownMs?: number } = {};
-  if (value !== undefined) patch.rotateOn = value;
-  if (options.cooldownMs !== undefined) {
-    const parsed = Number(options.cooldownMs);
-    if (!Number.isFinite(parsed) || parsed <= 0) {
-      throw new Error('--cooldown-ms は正の整数（ミリ秒）で指定する');
-    }
-    patch.cooldownMs = parsed;
   }
 
   const settings = (await request(target, '/tokens/policy', {
@@ -505,8 +518,24 @@ async function request(target: Target, path: string, init: RequestInit = {}): Pr
     }
     const described = describeAuthFailure(response.status, target);
     if (described !== null) throw new Error(described);
-    const body = (await response.json().catch(() => ({}))) as { error?: unknown };
+    const body = (await response.json().catch(() => ({}))) as { error?: unknown; code?: unknown };
+    // **日誌が書けなかったので、デーモンは何も変えずに断った**（issue #2742 の続き。`code` で
+    // 見分ける——文言では見分けない）。「変更していない」ことと、次にすることを言う。
+    if (response.status === 500 && body.code === 'journal_write_failed') {
+      throw new Error(
+        '記録（日誌）が書けなかったので、変更していません。\n' +
+          'デーモンの記憶ディレクトリ（日誌の置き場所）に書けるか確かめてから、もう一度実行してください。',
+      );
+    }
     if (typeof body.error === 'string') throw new Error(redactError(body.error));
+    // 本文が無い 500（素の `Internal Server Error`。日誌の失敗を言えない版のデーモンを含む）。
+    // 書き換えの口では、変更されたかどうかを言えないので、確かめ方を言う。
+    if (response.status >= 500 && init.method === 'PUT') {
+      throw new Error(
+        `デーモンが失敗を返しました（${String(response.status)}、${path}）。変更されたかどうかは分かりません。\n` +
+          'alteroid token list で今の姿を確かめてください（デーモンの標準エラーに理由の跡があります）。',
+      );
+    }
     throw new Error(`${path} が失敗しました (${String(response.status)})`);
   }
   return response.json();

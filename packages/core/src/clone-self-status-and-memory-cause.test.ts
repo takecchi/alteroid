@@ -7,7 +7,7 @@ import { ALWAYS_REDELIVER, CLONE_MODEL, CLONE_MODEL_ENV_KEY, createClone } from 
 import { renderMemoryDocuments } from './memory.js';
 import { createLocalRunner } from './runner-local.js';
 import { createRunnerRegistry } from './runner-protocol.js';
-import type { Stores } from './store.js';
+import { memoryVersion, type Stores } from './store.js';
 import { createCloneMcpServer, createCloneTools } from './tools.js';
 import type { ToolContext } from './tools.js';
 import { createMemoryStores, humanMessage } from './testing.js';
@@ -714,6 +714,7 @@ describe('クローン — memory_update の cause 配線（蒸留と通常タ�
       slug: 'values',
       content: '# 価値観\n\n蒸留が書いた\n',
       summary: '蒸留の書き込みテスト（T1）',
+      base_version: memoryVersion((await s.stores.persona.read('values'))!.content),
     });
 
     s.release(0, 1);
@@ -808,6 +809,9 @@ describe('クローン — memory_update の cause 配線（蒸留と通常タ�
       slug: 'values',
       content: '# 価値観\n\nサイドクエリが書いた\n',
       summary: 'サイドクエリの書き込みテスト（T3）',
+      ...((await stores.persona.read('values')) === null
+        ? {}
+        : { base_version: memoryVersion((await stores.persona.read('values'))!.content) }),
     });
 
     const entries = await stores.journal.list({ types: ['memory_update'] });

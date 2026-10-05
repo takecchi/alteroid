@@ -29,7 +29,6 @@ const SCREENS = [
   'mcp-servers',
   'access',
   'permissions',
-  'usage',
 ];
 
 const FORBIDDEN: { name: string; pattern: RegExp }[] = [
@@ -40,6 +39,8 @@ const FORBIDDEN: { name: string; pattern: RegExp }[] = [
   { name: 'API のパス', pattern: /\b(?:GET|PUT|POST|PATCH|DELETE) \/[a-z]/ },
   { name: 'Issue 番号', pattern: /#\d{2,}/ },
   { name: 'snake_case の識別子', pattern: /\b[a-z]+_[a-z_]+\b/ },
+  // 実装の内側の呼び名（#2782）。画面では「実行環境」「引き継ぎの連絡」「一覧」などと言う。
+  { name: '内部の呼び名', pattern: /runner|器|握手|名簿|指紋|冷却|回転|撒く|降ろす/ },
 ];
 
 describe('記憶・設定系の画面の説明文に内部の語を出さない（#2782）', () => {

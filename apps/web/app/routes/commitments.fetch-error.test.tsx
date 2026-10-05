@@ -7,7 +7,7 @@
  * ための器が空に見える（AGENTS.md の地雷「取れない軸に 0 の行を作る」）。通信・サーバの失敗である。
  */
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { MemoryRouter } from 'react-router';
+import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { json, Providers, storeTestBaseUrl } from '~/test-support';
@@ -39,9 +39,7 @@ function stubCommitments(respond: (url: string) => Response | Promise<Response>)
 function renderPage() {
   render(
     <Providers>
-      <MemoryRouter>
-        <Commitments />
-      </MemoryRouter>
+      <RouterProvider router={createMemoryRouter([{ path: '/', Component: Commitments }])} />
     </Providers>,
   );
 }

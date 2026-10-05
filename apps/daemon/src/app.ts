@@ -175,6 +175,9 @@ import {
   credentialsUpdateResponseSchema,
   droppedResponseSchema,
   errorResponseSchema,
+  JOURNAL_WRITE_FAILED_CODE,
+  JOURNAL_WRITE_FAILED_MESSAGE,
+  journalWriteFailedResponseSchema,
   eventAcceptedResponseSchema,
   githubObservationRequestSchema,
   healthResponseSchema,
@@ -1451,6 +1454,11 @@ async function appendJournalOrDrop(
   }
 }
 
+/** 日誌が書けず、状態を変えずに断った 500 の本文（`journalWriteFailedResponseSchema`）。 */
+function journalWriteFailedBody(): { error: string; code: typeof JOURNAL_WRITE_FAILED_CODE } {
+  return { error: JOURNAL_WRITE_FAILED_MESSAGE, code: JOURNAL_WRITE_FAILED_CODE };
+}
+
 /**
  * 読めない行を id で指して消す口（`POST /permission-grants/unreadable/remove`・
  * `POST /access/unreadable/remove`。issue #2440）の共通の運び。トークンの口
@@ -2198,9 +2206,9 @@ export function createApp(deps: AppDeps) {
    * Hono の既定のエラーハンドラを、本文を出さない規律に合わせて置き換える
    * （Issue #249）。
    *
-   * **応答（500 / `Internal Server Error`）と `HTTPException` の分岐
-   * （`getResponse()` を返す枝）は既定と同じに保つ。** 変えるのは
-   * `console.error(err)` の枝だけである。実物（`hono@4.13.1`、
+   * **変えるのは `console.error(err)` の枝と、失敗本文の形である**（issue #2849:
+   * 既定の `text/plain` の本文は `{ error }` の JSON へ揃えた。状態コードは既定と同じ）。
+   * `HTTPException` が `res` を明示していて JSON などのときは既定どおり通す。実物（`hono@4.13.1`、
    * `node_modules/.pnpm/hono@4.13.1/node_modules/hono/dist/hono-base.js` の
    * `errorHandler`）は逐語で:
    *
@@ -2223,16 +2231,27 @@ export function createApp(deps: AppDeps) {
    * **`reasonOf` は `dropped-record.ts` の既存の口をそのまま使う。** 同じ
    * 判断（1行目だけ・200字で切る）を2箇所に持つと必ずずれる。
    */
-  base.onError((err, c) => {
+  base.onError(async (err, c) => {
     if ('getResponse' in err) {
       const res = err.getResponse();
+      // **失敗の本文は `{ error }` の JSON に揃える（issue #2849）。** hono の
+      // validator が壊れた JSON に投げる `HTTPException`（`Malformed JSON in request
+      // body`）は `text/plain` で、`jsonBody` の `hook` には届かない。`text/plain`
+      // のときだけ畳み、`res` を明示した例外（JSON など）はそのまま通す。
+      if ((res.headers.get('content-type') ?? '').startsWith('text/plain')) {
+        const message = await res.text();
+        return c.json({ error: message === '' ? res.statusText : message }, res.status as 400);
+      }
       return c.newResponse(res.body, res);
     }
     process.stderr.write(
       `alteroidd: HTTP 経路で例外を捕まえました（本文は出しません）: ${reasonOf(err)}\n`,
     );
-    return c.text('Internal Server Error', 500);
+    return c.json({ error: 'Internal Server Error' }, 500);
   });
+
+  // **存在しない経路・メソッドも `{ error }` の JSON で返す（issue #2849）。**
+  base.notFound((c) => c.json({ error: 'not found' }, 404));
 
   // **CORS は認証より先に登録する。** ブラウザの preflight（OPTIONS）は
   // `Authorization` を積んで来ないので、門番が先に立つと preflight が 401 になり、
@@ -2771,6 +2790,7 @@ export function createApp(deps: AppDeps) {
           text: message.text,
           ...(message.supersedes === undefined ? {} : { supersedes: message.supersedes }),
           ...(message.supersededBy === undefined ? {} : { supersededBy: message.supersededBy }),
+          ...(message.turnFailure === undefined ? {} : { turnFailure: message.turnFailure }),
         }));
 
         /*
@@ -5739,6 +5759,9 @@ export function createApp(deps: AppDeps) {
               '`session_missing` = **runner がこの委譲のセッションを持っておらず、resume でも' +
               '入り直せなかった**（#563。**届いていない**）。' +
               '`unknown` はここには出ない（404 になる）。' +
+              '`declined` = **認証トークンの世代が食い違う done の委譲を畳んで新しい鍵で起こし直したいが、' +
+              '背景処理・確認待ちが残っている（または分からない）ため、畳まず、送らなかった**' +
+              '（#2851。そのものは居る。`detail` が残っているものと取れる手を言う）。' +
               '⚠️ `session_missing` を 404 にしないのは、**そのものは居る**からである — ' +
               '委譲は台帳に在り、時間で解ける理由（引き取り中・貸し出し期限）なら送り直しで通る。',
             content: { 'application/json': { schema: resolver(managerActionResponseSchema) } },
@@ -7016,8 +7039,14 @@ export function createApp(deps: AppDeps) {
               '日誌が書けなかった（保存していない）**。狭める側（削除・無効化・改名）だけの変更は、' +
               '日誌が書けなくても保存して 200 を返す（issue #2742）。' +
               '**理由の本文は返さない**（ドライバの例外は失敗した' +
-              'クエリの束縛パラメータを添えてくることがあるため）。跡は stderr に残る。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+              'クエリの束縛パラメータを添えてくることがあるため）。跡は stderr に残る。' +
+              '日誌が書けなかった回の本文は `{ error: "記録（日誌）が書けなかったので、変更していません", code: "journal_write_failed" }`' +
+              '（`code` で見分ける。保存の失敗は `code` の無い `{ error }`）。',
+            content: {
+              'application/json': {
+                schema: resolver(z.union([journalWriteFailedResponseSchema, errorResponseSchema])),
+              },
+            },
           },
           403: {
             description:
@@ -7084,8 +7113,17 @@ export function createApp(deps: AppDeps) {
             },
           });
         } catch (error) {
-          // 日誌が書けなかった回は、状態を変えていない。投げ直して `base.onError` の 500 に任せる。
-          if (state.journalError !== undefined) throw error;
+          // 日誌が書けなかった回は、状態を変えていない。素の 500（`Internal Server Error`）には
+          // せず、「記録が書けなかったので変更していない」と言う本文を返す。**例外の本文は
+          // 返さない**（値が載りうる。種類だけ跡に残す）。
+          if (state.journalError !== undefined) {
+            noteDroppedRecord(
+              '認証トークンのプールの変更の日誌（保存していない）',
+              `count=${String(requestedCount)}`,
+              kindOfError(state.journalError.cause),
+            );
+            return c.json(journalWriteFailedBody(), 500);
+          }
           // **返してよい例外だけを返す。型で分ける。**
           //
           // `TokenPoolInputError` は「`message` をそのまま応答へ返してよい」と
@@ -7378,8 +7416,10 @@ export function createApp(deps: AppDeps) {
             content: { 'application/json': { schema: resolver(tokenRotationSettingsSchema) } },
           },
           500: {
-            description: '日誌が書けなかった（**保存していない**。広げる側の変更のとき）。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+            description:
+              '日誌が書けなかった（**保存していない**。広げる側の変更のとき）。本文は ' +
+              '`{ error: "記録（日誌）が書けなかったので、変更していません", code: "journal_write_failed" }`。',
+            content: { 'application/json': { schema: resolver(journalWriteFailedResponseSchema) } },
           },
           400: {
             description: 'トークンのプールの器が配線されていない。',
@@ -7410,6 +7450,7 @@ export function createApp(deps: AppDeps) {
           changes: TokenPolicyChange[];
           widens: boolean;
           written: boolean;
+          journalError?: { cause: unknown };
         } = { changes: [], widens: false, written: false };
         let settings: Awaited<ReturnType<TokenPoolService['setSettings']>>;
         try {
@@ -7419,17 +7460,30 @@ export function createApp(deps: AppDeps) {
               policyState.changes = classified.changes;
               policyState.widens = classified.widens;
               if (!classified.widens) return;
-              await deps.stores.journal.append({
-                type: 'decision',
-                decision: `トークンを回す設定を変えようとしている（${describeTokenPolicyChanges(classified.changes)}）`,
-                grounds:
-                  `${describeActor(c.get('principal'))}（PUT /tokens/policy）。` +
-                  '回す契機を有効にする・変える（または冷却を変える）操作なので、日誌を先に書いた。',
-              });
+              try {
+                await deps.stores.journal.append({
+                  type: 'decision',
+                  decision: `トークンを回す設定を変えようとしている（${describeTokenPolicyChanges(classified.changes)}）`,
+                  grounds:
+                    `${describeActor(c.get('principal'))}（PUT /tokens/policy）。` +
+                    '回す契機を有効にする・変える（または冷却を変える）操作なので、日誌を先に書いた。',
+                });
+              } catch (cause) {
+                policyState.journalError = { cause };
+                throw cause;
+              }
               policyState.written = true;
             },
           });
         } catch (error) {
+          if (policyState.journalError !== undefined) {
+            noteDroppedRecord(
+              'トークンを回す設定の変更の日誌（保存していない）',
+              policyState.changes.map((change) => change.field).join(','),
+              kindOfError(policyState.journalError.cause),
+            );
+            return c.json(journalWriteFailedBody(), 500);
+          }
           if (policyState.written) {
             await appendJournalOrDrop(
               deps.stores,
