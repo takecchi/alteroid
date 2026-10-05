@@ -130,7 +130,12 @@ describe('終端の無いヒアドキュメントと、区切りの多い長い1
     it(`${label}が予算内に終わる`, () => {
       // n * factor（#3017 前の既定は4）の大きさで、直す前と同じ入力に対する blocked を確かめる。
       expect(inspectBashCommand(makeInput(n * 4)).blocked).toBe(blocked);
-      expectNotSuperlinear((command: string) => inspectBashCommand(command), makeInput, { n });
+      // factor: 16（n..16n の5点・傾き4つ）。この歯は線形でも区間の傾きが揺れ、既定の factor=8（傾き3つ）では
+      // 通ったときの傾きの中央値が 3 回の実測で最大 1.30〜1.41 と閾値 1.5 に寄った（#3017。2206 と同じ扱い）。
+      expectNotSuperlinear((command: string) => inspectBashCommand(command), makeInput, {
+        n,
+        factor: 16,
+      });
       // 明示のタイムアウト（vitest の既定 5000ms ではなく）。この歯は n が大きく、助けが5回×ラウンドで
       // 測るので、手元で約 0.2〜1 秒かかる。2026-09-30 の CI で 5000ms の時間切れを起こした（実装の
       // 伸び方とは無関係な器の遅さ）。歯の判定は比と hardCapMs（2000ms）が持ち、ここは動かさない（#2576）。
