@@ -147,6 +147,8 @@ export async function resetWorkspaceState(
 ): Promise<WorkspaceResetSummary> {
   const memory = await stores.persona.clear();
   const journal = await stores.journal.clear();
+  // 会話の既読の索引は日誌の写し。日誌が消えたら写しも消す（位置と基準時刻は残す）。
+  await stores.conversationReads.clearOutboundIndex();
   const jobsResult = await stores.jobs.clear();
   const schedulesResult = await stores.schedules.clear();
   const inbox = await stores.inbox.clear();

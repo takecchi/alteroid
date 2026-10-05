@@ -120,16 +120,77 @@ describe('alteroid memory set', () => {
 });
 
 describe('alteroid memory remove', () => {
-  it('DELETE /memory/<slug> を打つ', async () => {
+  it('読んだ版を ifMatch に付けて DELETE /memory/<slug> を打つ（#2881）', async () => {
     const read = captureStdout();
+    replies.push({
+      status: 200,
+      body: { document: { slug: 'values', content: '# 価値観\n' }, version: 'v-read' },
+    });
     replies.push({ status: 200, body: { ok: true, slug: 'values' } });
 
     await memoryRemoveCommand('values');
 
-    expect(sent).toHaveLength(1);
-    expect(sent[0]?.method).toBe('DELETE');
-    expect(sent[0]?.url).toBe('http://127.0.0.1:4517/memory/values');
+    expect(sent).toHaveLength(2);
+    expect(sent[0]?.method).toBe('GET');
+    expect(sent[1]?.method).toBe('DELETE');
+    expect(sent[1]?.url).toBe('http://127.0.0.1:4517/memory/values?ifMatch=v-read');
     expect(read()).toContain('消しました: values');
+  });
+
+  it('古いデーモン（version を返さない）には版を付けずに打ち、返ってきた警告を見せる', async () => {
+    const read = captureStdout();
+    replies.push({ status: 200, body: { document: { slug: 'values', content: 'x' } } });
+    replies.push({
+      status: 200,
+      body: { ok: true, slug: 'values', warning: '版の照合なしで消しました' },
+    });
+
+    await memoryRemoveCommand('values');
+
+    expect(sent[1]?.url).toBe('http://127.0.0.1:4517/memory/values');
+    expect(read()).toContain('注意: 版の照合なしで消しました');
+  });
+
+  it('409（読んだ後に変わっていた）なら、消していないと言い、いまの版と次の手を案内して失敗する（#2881）', async () => {
+    const read = captureStdout();
+    replies.push({
+      status: 200,
+      body: { document: { slug: 'values', content: '# 価値観\n' }, version: 'v-read' },
+    });
+    replies.push({
+      status: 409,
+      body: {
+        error: '記憶が読んだ後に変わっています（消していません）',
+        current: {
+          document: { slug: 'values', content: '# 価値観\n\nクローンが蒸留\n' },
+          version: 'v-now',
+        },
+      },
+    });
+
+    const error = await memoryRemoveCommand('values').catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(Error);
+    expect(String(error)).toContain('消しませんでした');
+    const text = read();
+    expect(text).toContain('消していません: values');
+    expect(text).toContain('v-now');
+    expect(text).toContain('alteroid memory show values');
+    expect(text).toContain('alteroid memory remove values');
+    expect(text).not.toContain('消しました');
+  });
+
+  it('409 で current が null（読んだ後に消されていた）なら、そう言う', async () => {
+    const read = captureStdout();
+    replies.push({
+      status: 200,
+      body: { document: { slug: 'values', content: 'x' }, version: 'v' },
+    });
+    replies.push({ status: 409, body: { error: 'x', current: null } });
+
+    await memoryRemoveCommand('values').catch(() => undefined);
+
+    expect(read()).toContain('すでに消されています');
   });
 
   /**
@@ -141,10 +202,13 @@ describe('alteroid memory remove', () => {
    * 消さず、見る先を「書いた文字列」から「投げた例外の文言」へ反転した。
    */
   it('「無い」と「名前として不正」を混ぜない（どちらも例外を投げる。#1641）', async () => {
+    // 先に読む（GET。無ければ null）。無いものは版なしで DELETE を打ち、サーバの 404 / 400 をそのまま伝える。
+    replies.push({ status: 404, body: { error: 'not found' } });
     replies.push({ status: 404, body: { error: 'not found' } });
     const missing = await memoryRemoveCommand('missing').catch((e: unknown) => e);
     expect(String(missing)).toContain('そんな記憶はありません');
 
+    replies.push({ status: 400, body: { error: '記憶のスラッグが不正' } });
     replies.push({ status: 400, body: { error: '記憶のスラッグが不正' } });
     const invalid = await memoryRemoveCommand('..').catch((e: unknown) => e);
     expect(String(invalid)).toContain('名前として成立しません');
@@ -183,6 +247,10 @@ describe('#1641 の再現（Issue 本文）', () => {
   });
 
   it('memory remove: DELETE が 500 なら投げる（「そんな記憶はありません」に化けない）', async () => {
+    replies.push({
+      status: 200,
+      body: { document: { slug: 'some-slug', content: 'x' }, version: 'v' },
+    });
     replies.push({ status: 500, body: { error: '内部エラー' } });
 
     const error = await memoryRemoveCommand('some-slug').catch((e: unknown) => e);
@@ -276,12 +344,10 @@ describe('alteroid memory list / show', () => {
   });
 
   it('無い記憶を読もうとしたら、そう言う（空の本文と区別する）', async () => {
-    const read = captureStdout();
     replies.push({ status: 404, body: { error: 'not found' } });
 
-    await memoryShowCommand('missing');
-
-    expect(read()).toContain('そんな記憶はありません: missing');
+    // 無い記憶は例外（終了コードが 0 でなくなる。`memory remove` と同じ。#2856）。
+    await expect(memoryShowCommand('missing')).rejects.toThrow('そんな記憶はありません: missing');
   });
 
   /**
@@ -424,12 +490,9 @@ describe('alteroid memory の読み出しの失敗の理由', () => {
   });
 
   it('show: 404 は「無い」のまま', async () => {
-    const read = captureStdout();
     replies.push({ status: 404, body: { error: 'not found' } });
 
-    await memoryShowCommand('nothing');
-
-    expect(read()).toContain('そんな記憶はありません: nothing');
+    await expect(memoryShowCommand('nothing')).rejects.toThrow('そんな記憶はありません: nothing');
   });
 
   it('show: 500 を「そんな記憶はありません」と言わず、理由を載せて投げる', async () => {

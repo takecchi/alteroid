@@ -3,7 +3,9 @@ import { join } from 'node:path';
 
 import {
   ensureTrailingNewline,
+  PracticeConflictError,
   practiceSchema,
+  practiceVersionMatches,
   practiceVersionSchema,
   UnreadablePracticeError,
   compareCodeUnits,
@@ -14,6 +16,7 @@ import type {
   PracticeMeta,
   PracticeStore,
   PracticeVersion,
+  WritePracticeOptions,
   PracticeVersionMeta,
   UnreadablePractice,
 } from '@alteroid/core';
@@ -293,18 +296,31 @@ export class FsPracticeStore implements PracticeStore {
     );
   }
 
-  async write(input: {
-    slug: string;
-    kind: string;
-    title: string;
-    content: string;
-  }): Promise<Practice> {
+  async write(
+    input: {
+      slug: string;
+      kind: string;
+      title: string;
+      content: string;
+    },
+    options?: WritePracticeOptions,
+  ): Promise<Practice> {
     // **正規化を自分で書かない。** 出所は `@alteroid/core` の
     // `ensureTrailingNewline` 1箇所である（`PracticeStore.write` の doc と #370）。
     const content = ensureTrailingNewline(input.content);
     const now = new Date().toISOString();
     return this.#update((file) => {
       const existing = file.practices.find((entry) => entry.slug === input.slug);
+      // **前提の版の比較は `#update`（`withPathLock` の内側）で、書き込みの直前に行う**
+      // （Issue #2853）。外で読んでから入ると、その間の別の書き手を見逃す。
+      // 読めない形の行は「無い」側に数える（`existing` が `undefined`。壊れた行の
+      // 中身は安全に読めない）。`ifMatch` を持たない書き手は従来どおり書き直せる。
+      if (!practiceVersionMatches(existing ?? null, options?.ifMatch)) {
+        throw new PracticeConflictError(
+          input.slug,
+          existing === undefined ? null : toPractice(existing),
+        );
+      }
       const next = practiceRecordSchema.parse({
         slug: input.slug,
         kind: input.kind,

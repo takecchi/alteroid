@@ -592,11 +592,11 @@ describe('alteroid token remove', () => {
 
   it('無い id を指定したら、見つからないと言うだけで PUT は打たない', async () => {
     setReply('GET', '/tokens', { status: 200, body: { tokens: [], settings: EMPTY_SETTINGS } });
-    const read = captureStdout();
 
-    await tokenRemoveCommand('ghost');
-
-    expect(read()).toContain('id ghost のトークンは見つかりません。');
+    // 例外（終了コードが 0 でなくなる。#2856）。次に何をするか（token list）も言う。
+    await expect(tokenRemoveCommand('ghost')).rejects.toThrow(
+      'id ghost のトークンは見つかりません（alteroid token list で id を確かめてください）',
+    );
     expect(sent.some((call) => call.method === 'PUT')).toBe(false);
   });
 });

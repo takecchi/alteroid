@@ -1,13 +1,11 @@
 import { SettingsTabs } from '~/components/group-tabs';
+import { LoadError } from '~/components/load-error';
 import { settingsDocumentTitle } from '~/lib/nav';
 import { AlertTriangle } from 'lucide-react';
 import {
-  ACCOUNT_USAGE_TITLE,
-  describeAccountUsage,
   describeUnmeteredUsage,
   describeUnreadableUsage,
   describeUnreadableUsageRows,
-  describeUnrecordedManagers,
   describeUsageDateOrder,
   describeWebSearchRequests,
   formatUsd,
@@ -17,9 +15,10 @@ import {
   USAGE_DATE_PATTERN,
   USAGE_LAYERS,
   USAGE_SITES,
+  CLONE_ACTOR_ID,
   type UnreadableUsageRow,
 } from '@alteroid/core/usage';
-import type { ReactNode } from 'react';
+import { useId, type ReactNode } from 'react';
 import { Link, useSearchParams } from 'react-router';
 
 import {
@@ -30,14 +29,19 @@ import {
   CardHeader,
   cn,
   Empty,
-  ErrorNote,
   Input,
   Select,
   Spinner,
 } from '@alteroid/ui';
-import { useUsage, type UsageQuery } from '@alteroid/swr';
+import { useManagers, useTokens, useUsage, type UsageQuery } from '@alteroid/swr';
 import {
+  describeAccountUsageView,
+  formatDateTime,
   tokensHref,
+  usageLayerLabel,
+  usageSiteLabel,
+  USAGE_LAYER_LABELS,
+  USAGE_SITE_LABELS,
   USAGE_FROM_PARAM,
   USAGE_MANAGER_ID_PARAM,
   USAGE_TO_PARAM,
@@ -212,20 +216,63 @@ export function parseUsageDate(raw: string | null): string {
   return isRealUsageDate(raw) ? raw : '';
 }
 
-/** 層（誰が）の表示名。知らない値は元の文字のまま出す（消さない）。 */
-const LAYER_LABELS: Record<string, string> = { clone: 'クローン', manager: 'マネージャー' };
-function layerLabel(layer: string): string {
-  return LAYER_LABELS[layer] ?? layer;
+const UNKNOWN_MANAGER = '（一覧に無い委譲）';
+const UNKNOWN_TOKEN = '（一覧に無い認証トークン）';
+
+interface IdLabels {
+  manager: (id: string) => string;
+  token: (id: string) => string;
 }
 
-/** 場所（どこで）の表示名。知らない値は元の文字のまま出す（消さない）。 */
-const SITE_LABELS: Record<string, string> = {
-  session: '本体のセッション',
-  distill: '記憶への蒸留',
-  peer: 'もう一方のモデル',
-};
-function siteLabel(site: string): string {
-  return SITE_LABELS[site] ?? site;
+/** 委譲の依頼文を、選択肢に収まる長さへ縮める（改行は空白へ）。 */
+function shortenRequest(request: string): string {
+  const flat = request.replace(/\s+/g, ' ').trim();
+  if (flat === '') return '（依頼文なし）';
+  return flat.length > 28 ? `${flat.slice(0, 28)}…` : flat;
+}
+
+/** 絞り込みの1欄。`<label for>` で入力欄に結ぶ（ラベルを押すと欄へ移る・読み上げられる）。 */
+function FilterField({ id, label, children }: { id: string; label: string; children: ReactNode }) {
+  return (
+    <div className="flex flex-col gap-1">
+      <label htmlFor={id} className="text-xs text-muted-foreground">
+        {label}
+      </label>
+      {children}
+    </div>
+  );
+}
+
+/**
+ * 候補から選ぶ欄。**現在の値が候補に無くても、その値を消さない**——URL で渡された
+ * id がまだ一覧に載っていない（一覧が読めていない・外れた）ときに、選択が黙って
+ * 「すべて」へ見えると、絞り込みが効いているのに欄は空という食い違いになる。
+ */
+function CandidateSelect({
+  id,
+  value,
+  options,
+  unknownLabel,
+  onChange,
+}: {
+  id: string;
+  value: string;
+  options: readonly { value: string; label: string }[];
+  unknownLabel: string;
+  onChange: (value: string) => void;
+}) {
+  const known = value === '' || options.some((option) => option.value === value);
+  return (
+    <Select id={id} value={value} onChange={(event) => onChange(event.target.value)}>
+      <option value="">すべて</option>
+      {!known && <option value={value}>{unknownLabel}</option>}
+      {options.map((option) => (
+        <option key={option.value} value={option.value}>
+          {option.label}
+        </option>
+      ))}
+    </Select>
+  );
 }
 
 export default function Usage() {
@@ -258,12 +305,27 @@ export default function Usage() {
   const managerId = searchParams.get(MANAGER_ID_PARAM) ?? '';
   const layer = parseUsageLayer(searchParams.get(LAYER_PARAM));
   const site = parseUsageSite(searchParams.get(SITE_PARAM));
-  // **トークンは `Select` にしない。** 選択肢の集合が閉じていない（プールの中身は
-  // 器ごとに違う）ので、`USAGE_LAYERS` のような一覧を core から持ってこられない。
-  // ここで `GET /tokens` を引いて選択肢にすることもできるが、それは**この画面が
-  // プールの状態に依存する**という別の結び付きを作る（プールが読めないと絞り込みも
-  // 消える）。id は `alteroid token list` と `/tokens` から取れるので素の入力にする。
+  // **マネージャーと認証トークンは、一覧から選べるようにする（#2795）。** id を手で
+  // 入れさせない。ただし一覧が取れなくても URL の値は効く（下の `CandidateSelect`）。
   const tokenId = searchParams.get(TOKEN_ID_PARAM) ?? '';
+  const idPrefix = useId();
+  // 候補は「あれば選べる」だけにする。**取れなくても絞り込みは使える**（URL の値は
+  // そのまま効く）ので、一覧の失敗は画面のエラーにしない。
+  const { data: managersData } = useManagers();
+  const { data: tokensData } = useTokens();
+  const managerOptions = (managersData?.managers ?? []).map((manager) => ({
+    value: manager.managerId,
+    label: `${shortenRequest(manager.request)}（${formatDateTime(manager.startedAt)}）`,
+  }));
+  const tokenOptions = (tokensData?.tokens ?? []).map((token) => ({
+    value: token.id,
+    label: token.label,
+  }));
+  // 軸の行・一覧の見出しに、id でなく名前を出すための引き表（無いものは id を見せない）。
+  const labels: IdLabels = {
+    manager: (id) => managerOptions.find((option) => option.value === id)?.label ?? UNKNOWN_MANAGER,
+    token: (id) => tokenOptions.find((option) => option.value === id)?.label ?? UNKNOWN_TOKEN,
+  };
 
   /** 1つの絞り込みを変える。空文字なら URL からそのパラメタを消す。 */
   function setFilter(param: string, value: string) {
@@ -286,7 +348,7 @@ export default function Usage() {
     ...(site === '' ? {} : { site }),
     ...(tokenId === '' ? {} : { tokenId }),
   };
-  const { data, error, isLoading } = useUsage(query);
+  const { data, error, isLoading, isValidating, mutate } = useUsage(query);
 
   /**
    * **黙って捨てない（issue #2133）。** `layer` / `site` は捨てて終わりだが
@@ -297,10 +359,14 @@ export default function Usage() {
    */
   const dateNotices: string[] = [];
   if (invalidFrom !== null) {
-    dateNotices.push(`URL の from=${invalidFrom} は日付として読めないので、絞り込みに使っていない`);
+    dateNotices.push(
+      `開始日に指定された値（${invalidFrom}）は日付として読めないので、絞り込みに使っていません`,
+    );
   }
   if (invalidTo !== null) {
-    dateNotices.push(`URL の to=${invalidTo} は日付として読めないので、絞り込みに使っていない`);
+    dateNotices.push(
+      `終了日に指定された値（${invalidTo}）は日付として読めないので、絞り込みに使っていません`,
+    );
   }
   /**
    * **`to` が `from` より前だと、絞り込みは常に空を返す（issue #2155）。**
@@ -334,7 +400,7 @@ export default function Usage() {
       tabs={<SettingsTabs />}
       documentTitle={settingsDocumentTitle('/usage')}
       title="利用状況"
-      description="alteroid が使った分（トークンと費用）。使った量からの推定値であり、Anthropic の請求明細ではない"
+      description="alteroid が使った分（トークンと費用）。推定値であり、Anthropic の請求明細ではありません"
     >
       <Card className="mb-4 p-4">
         {/*
@@ -358,66 +424,75 @@ export default function Usage() {
           当たっていることまでである。
         */}
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-          <label className="flex flex-col gap-1 text-xs text-muted-foreground">
-            開始日
+          <FilterField id={`${idPrefix}-from`} label="開始日">
             <Input
+              id={`${idPrefix}-from`}
               type="date"
               className="min-w-0"
               value={from}
               onChange={(event) => setFilter(FROM_PARAM, event.target.value)}
             />
-          </label>
-          <label className="flex flex-col gap-1 text-xs text-muted-foreground">
-            終了日
+          </FilterField>
+          <FilterField id={`${idPrefix}-to`} label="終了日">
             <Input
+              id={`${idPrefix}-to`}
               type="date"
               className="min-w-0"
               value={to}
               onChange={(event) => setFilter(TO_PARAM, event.target.value)}
             />
-          </label>
-          <label className="flex flex-col gap-1 text-xs text-muted-foreground">
-            マネージャー
-            <Input
-              placeholder="マネージャーの番号"
+          </FilterField>
+          <FilterField id={`${idPrefix}-manager`} label="マネージャー">
+            <CandidateSelect
+              id={`${idPrefix}-manager`}
               value={managerId}
-              onChange={(event) => setFilter(MANAGER_ID_PARAM, event.target.value)}
+              options={managerOptions}
+              unknownLabel={UNKNOWN_MANAGER}
+              onChange={(value) => setFilter(MANAGER_ID_PARAM, value)}
             />
-          </label>
+          </FilterField>
           {/*
             **選択肢は core の一覧から作る**（`USAGE_LAYERS` / `USAGE_SITES`）。
-            画面に値を書き写すと、値が増えたときにここだけ古くなる。
+            画面に値を書き写すと、値が増えたときにここだけ古くなる。表示名は
+            `@alteroid/logic` の対応表が持つ（知らない値は値のまま出る）。
           */}
-          <label className="flex flex-col gap-1 text-xs text-muted-foreground">
-            誰が
-            <Select value={layer} onChange={(event) => setFilter(LAYER_PARAM, event.target.value)}>
+          <FilterField id={`${idPrefix}-layer`} label="誰が">
+            <Select
+              id={`${idPrefix}-layer`}
+              value={layer}
+              onChange={(event) => setFilter(LAYER_PARAM, event.target.value)}
+            >
               <option value="">すべて</option>
               {USAGE_LAYERS.map((value) => (
                 <option key={value} value={value}>
-                  {layerLabel(value)}
+                  {USAGE_LAYER_LABELS[value]}
                 </option>
               ))}
             </Select>
-          </label>
-          <label className="flex flex-col gap-1 text-xs text-muted-foreground">
-            どこで
-            <Select value={site} onChange={(event) => setFilter(SITE_PARAM, event.target.value)}>
+          </FilterField>
+          <FilterField id={`${idPrefix}-site`} label="どこで">
+            <Select
+              id={`${idPrefix}-site`}
+              value={site}
+              onChange={(event) => setFilter(SITE_PARAM, event.target.value)}
+            >
               <option value="">すべて</option>
               {USAGE_SITES.map((value) => (
                 <option key={value} value={value}>
-                  {siteLabel(value)}
+                  {USAGE_SITE_LABELS[value]}
                 </option>
               ))}
             </Select>
-          </label>
-          <label className="flex flex-col gap-1 text-xs text-muted-foreground">
-            認証トークン
-            <Input
-              placeholder="トークンの番号"
+          </FilterField>
+          <FilterField id={`${idPrefix}-token`} label="認証トークン">
+            <CandidateSelect
+              id={`${idPrefix}-token`}
               value={tokenId}
-              onChange={(event) => setFilter(TOKEN_ID_PARAM, event.target.value)}
+              options={tokenOptions}
+              unknownLabel={UNKNOWN_TOKEN}
+              onChange={(value) => setFilter(TOKEN_ID_PARAM, value)}
             />
-          </label>
+          </FilterField>
         </div>
       </Card>
 
@@ -427,7 +502,13 @@ export default function Usage() {
         </p>
       ))}
 
-      <ErrorNote error={error} className="mb-4" />
+      <LoadError
+        what="使用量"
+        error={error}
+        onRetry={() => mutate()}
+        retrying={isValidating}
+        className="mb-4"
+      />
 
       {isLoading ? (
         <Spinner />
@@ -441,15 +522,23 @@ export default function Usage() {
           <AccountCard account={data.account} />
           {data.since === null ? (
             <>
-              {/* **`$0.00` と出さない。** まだ台帳に1件も無いのを「使っていない」に見せない。 */}
+              {/* **`$0.00` と出さない。** まだ1件も無いのを「使っていない」に見せない。 */}
               <Card>
                 <Empty inset="card">
-                  台帳にはまだ1件も記録が無い。（消費の記録はこの機能を入れた時点から始まる。それより前の分は残っていない）
+                  まだ使用量の記録がありません。会話を始めると、ここに出ます。
                 </Empty>
+                <ReadingGuide>
+                  <li>
+                    使用量の記録は、この機能を入れた時点から始まります。それより前の分は残っていません。
+                  </li>
+                </ReadingGuide>
               </Card>
               <UnreadableUsageRowsNote rows={data.unreadableRows} />
               <UnmeteredUsageNote rows={data.unmeteredRows} />
-              <UnrecordedManagersCard unrecordedManagers={data.unrecordedManagers} />
+              <UnrecordedManagersCard
+                unrecordedManagers={data.unrecordedManagers}
+                labels={labels}
+              />
             </>
           ) : (
             <UsageBody
@@ -463,6 +552,7 @@ export default function Usage() {
               beforeTokens={data.beforeTokens}
               notice={data.notice}
               unrecordedManagers={data.unrecordedManagers}
+              labels={labels}
               unreadableRows={data.unreadableRows}
               unmeteredRows={data.unmeteredRows}
             />
@@ -486,37 +576,61 @@ export default function Usage() {
  * 向こうが言っている値で、一致する保証がない。題で区別が付くようにしてある。
  */
 function AccountCard({ account }: { account: AccountUsageState | undefined }) {
+  const view = describeAccountUsageView(account);
   return (
     <Card>
       <CardHeader
-        title={ACCOUNT_USAGE_TITLE}
-        subtitle="台帳（alteroid が使った分）とは別物。足さない"
+        title="アカウント全体の残り（Claude 側の値）"
+        subtitle="下の記録（alteroid が使った分）とは別物です。足さないでください"
       />
-      <ul className="flex flex-col gap-0.5 px-4 py-3">
-        {/*
-          **`whitespace-pre` にしない（折り返さない指定になる）。** ここに並ぶ行には
-          「この応答にアカウント全体の残りが入っていない（返さないデーモンに繋がって
-          いる）。0 ではなく、分からない。」のような日本語の自由文が混ざるので、
-          折り返さないとカードの外まで伸びる。
-
-          **`pre-wrap` は `pre` と同じく連続空白と改行を保つ**ので、枠の行の
-          先頭2スペースの字下げ（`usage-format.ts` の `  ${window.kind}: …`）は
-          そのまま残る。**1文字も省略しない** — 切るのではなく折り返す。
-
-          `break-words` は、空白を持たないまま長くなりうる値（`failed` / `unavailable`
-          の `reason`、`観測時刻` の ISO 文字列）の受けである。`reports.tsx` の
-          `UnavailableNote` と同じ組み合わせ。
-        */}
-        {describeAccountUsage(account, { emphasis: false }).map((line, index) => (
-          <li
-            key={`${index}-${line}`}
-            className="font-mono text-[11px] break-words whitespace-pre-wrap text-muted-foreground"
-          >
-            {line}
-          </li>
-        ))}
-      </ul>
+      <div className="flex flex-col gap-2 px-4 py-3">
+        {view.headline !== undefined && (
+          <p className={cn('text-sm', view.tone === 'warn' ? 'text-warn' : 'text-foreground')}>
+            {view.headline}
+          </p>
+        )}
+        {view.action !== undefined && (
+          <p className="text-sm text-muted-foreground">{view.action}</p>
+        )}
+        {view.lines.length > 0 && (
+          <ul className="flex flex-col gap-0.5">
+            {view.lines.map((line, index) => (
+              <li
+                key={`${index}-${line}`}
+                className="text-sm break-words whitespace-pre-wrap text-muted-foreground"
+              >
+                {line}
+              </li>
+            ))}
+          </ul>
+        )}
+        {view.details.length > 0 && (
+          <details className="text-xs text-muted-foreground">
+            <summary className="cursor-pointer">詳しい情報（開発者向け）</summary>
+            <ul className="mt-2 flex flex-col gap-0.5">
+              {view.details.map((line, index) => (
+                <li
+                  key={`${index}-${line}`}
+                  className="font-mono text-[11px] break-words whitespace-pre-wrap"
+                >
+                  {line}
+                </li>
+              ))}
+            </ul>
+          </details>
+        )}
+      </div>
     </Card>
+  );
+}
+
+/** 折りたたみの「記録の読み方」。注記が無ければ何も出さない。 */
+function ReadingGuide({ children }: { children: ReactNode }) {
+  return (
+    <details className="border-t px-4 py-3 text-xs text-muted-foreground">
+      <summary className="cursor-pointer">記録の読み方</summary>
+      <ul className="mt-2 list-disc space-y-1 pl-5">{children}</ul>
+    </details>
   );
 }
 
@@ -532,23 +646,40 @@ function AccountCard({ account }: { account: AccountUsageState | undefined }) {
  */
 function UnrecordedManagersCard({
   unrecordedManagers,
+  labels,
 }: {
   unrecordedManagers: readonly UnrecordedManager[];
+  labels: IdLabels;
 }) {
+  // 0件は「取りこぼしが無い」と、そう読める形で言う（黙らない）。
+  if (unrecordedManagers.length === 0) {
+    return (
+      <Card>
+        <CardHeader title="記録の無い委譲" action={<Badge>0</Badge>} />
+        <p className="px-4 py-3 text-sm text-muted-foreground">
+          使用量の記録が1件も無い委譲は、ありません。
+        </p>
+      </Card>
+    );
+  }
   return (
     <Card>
       <CardHeader
-        title="台帳に1行も無い委譲"
-        subtitle="全期間で判定する。from / to の絞り込みには影響されない"
+        title="記録の無い委譲"
+        subtitle="全期間で判定します。開始日・終了日の絞り込みには影響されません"
         action={<Badge>{unrecordedManagers.length}</Badge>}
       />
+      <p className="px-4 pt-3 text-sm text-warn">
+        使用量の記録がまだ1件も無い委譲が {unrecordedManagers.length}{' '}
+        件あります。上の合計には入っていません。
+      </p>
       <ul className="flex flex-col gap-0.5 px-4 py-3">
-        {describeUnrecordedManagers(unrecordedManagers).map((line, index) => (
-          <li
-            key={`${index}-${line}`}
-            className="font-mono text-[11px] break-words whitespace-pre-wrap text-muted-foreground"
-          >
-            {line}
+        {unrecordedManagers.map((manager) => (
+          <li key={manager.managerId} className="text-sm break-words text-muted-foreground">
+            <Link to={`/managers/${manager.managerId}`} className="hover:underline">
+              {labels.manager(manager.managerId)}
+            </Link>
+            （起こした時刻: {formatDateTime(manager.startedAt)}）
           </li>
         ))}
       </ul>
@@ -567,9 +698,11 @@ function UsageBody({
   beforeTokens,
   notice,
   unrecordedManagers,
+  labels,
   unreadableRows,
   unmeteredRows,
 }: {
+  labels: IdLabels;
   unreadableRows: readonly UnreadableUsageRow[] | undefined;
   unmeteredRows: readonly UsageUnmeteredRow[] | undefined;
   rows: readonly UsageRow[];
@@ -593,10 +726,10 @@ function UsageBody({
       <UnreadableUsageRowsNote rows={unreadableRows} />
       <UnmeteredUsageNote rows={unmeteredRows} />
       <Card>
-        <CardHeader title="合計" subtitle={`台帳の始点: ${since}`} />
+        <CardHeader title="合計" subtitle={`記録の始まり: ${formatDateTime(since)}`} />
         <div className="px-4 py-3">
           {rows.length === 0 ? (
-            <Empty inset="none">その範囲には記録が無い。</Empty>
+            <Empty inset="none">この期間の使用量の記録はありません。</Empty>
           ) : (
             <>
               <p className="text-2xl font-semibold">{formatUsd(summary.total.costUsd)}</p>
@@ -609,48 +742,54 @@ function UsageBody({
               </p>
             </>
           )}
-          {beforeLedger && (
-            // **0 と言わない。** 台帳が無かった期間を「使っていない期間」と読ませない。
+          {/* **0 と言わない。** 記録が始まる前の期間を「使っていない期間」と読ませない。
+              記録が1件も無いとき（rows が空）は、下の「記録の読み方」へ寄せる。 */}
+          {beforeLedger && rows.length > 0 && (
             <p className="mt-3 text-xs text-warn">
-              照会した範囲は台帳の始点より前にかかっている。その分は 0 ではなく「記録が無い」。
+              指定した範囲の一部は、記録が始まる前の期間です。その分は 0 ではなく「記録なし」です。
             </p>
           )}
-          {beforeLayers && (
-            // **層の始点を台帳の始点と混ぜない。** 層の軸のほうが後から入ったので、
-            // それより前の行の層と場所は既定値であって観測ではない。ここを黙ると
-            // 「クローンは使っていなかった」「蒸留は起きていなかった」と読める。
-            <p className="mt-3 text-xs text-warn">
-              照会した範囲は層と場所の軸の始点
-              {layersSince === null ? '（まだ1件も記録が無い）' : `（${layersSince}）`}
-              より前にかかっている。その分の層と場所は既定値であって観測ではない。
-            </p>
-          )}
-          {beforeTokens && (
-            // **トークンの軸の null は、上の2つと意味が1つ違う。** 記録が1件も無い
-            // ときだけでなく、**プールを使っていない構成では最後まで null である。**
-            // だから「まだ記録が無い」で終わらせず、それが正常でありうると書く
-            // （黙ると「トークンを回していない」と読める）。
-            <p className="mt-3 text-xs text-warn">
-              照会した範囲は認証トークンの軸の始点
-              {tokensSince === null
-                ? '（まだ1件も記録が無い。プールを使っていない構成なら、これが正常）'
-                : `（${tokensSince}）`}
-              より前にかかっている。その分にトークンの帰属は無い（0
-              でも既定値でもなく、取れていない）。
-            </p>
-          )}
-          {/* **取れなかった区切りが在れば、その旨を1行**（Issue #2086）。無ければ
-              空配列なので、既存の画面は1文字も変わらない。 */}
+          {/* **取れなかった区切りが在れば、その旨を1行**（Issue #2086）。 */}
           {describeUnreadableUsage(summary.total).map((line) => (
             <p key={line} className="mt-3 text-xs text-warn">
               {line}
             </p>
           ))}
         </div>
+        {(beforeLedger && rows.length === 0) || beforeLayers || beforeTokens ? (
+          <ReadingGuide>
+            {beforeLedger && rows.length === 0 && (
+              <li>
+                指定した範囲は、記録が始まる前の期間にかかっています。その分は 0
+                ではなく「記録なし」です。
+              </li>
+            )}
+            {beforeLayers && (
+              // **層の始点を記録の始点と混ぜない。** 層と場所の軸は後から入ったので、
+              // それより前の行の層と場所は、記録時に埋めた初期値であって観測ではない。
+              <li>
+                指定した範囲は、「誰が・どこで」を記録し始める前（
+                {layersSince === null ? 'まだ記録なし' : formatDateTime(layersSince)}
+                ）にかかっています。その分の「誰が・どこで」は、実際に観測した値ではありません。
+              </li>
+            )}
+            {beforeTokens && (
+              // **null は記録が1件も無いときだけでなく、プールを使っていない構成でも
+              // 最後まで null**——それが正常でありうると書く。
+              <li>
+                指定した範囲は、認証トークンを記録し始める前（
+                {tokensSince === null ? 'まだ記録なし' : formatDateTime(tokensSince)}
+                ）にかかっています。
+                {tokensSince === null && '認証トークンを使い分けていない場合は、これが正常です。'}
+                その分は、どの認証トークンかが分かりません（0 ではありません）。
+              </li>
+            )}
+          </ReadingGuide>
+        ) : null}
       </Card>
 
       {/* **合計値の隣に必ず出す（Issue #98）。** */}
-      <UnrecordedManagersCard unrecordedManagers={unrecordedManagers} />
+      <UnrecordedManagersCard unrecordedManagers={unrecordedManagers} labels={labels} />
 
       {rows.length > 0 && (
         // ⚠️ #295: この grid には基底の `grid-cols-*` が無いので、暗黙トラック
@@ -678,7 +817,7 @@ function UsageBody({
         // 道具（Playwright / Storybook / Chromatic）も無く、Vercel の
         // preview は release/prod へ push されるまで出ない。詳細と再オープ
         // ン条件は #295。
-        <div className="grid gap-4 lg:grid-cols-3">
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
           <AxisCard
             title="日別"
             entries={[...summary.byDate]
@@ -701,7 +840,8 @@ function UsageBody({
             entries={[...summary.byManager]
               .sort((a, b) => b.totals.costUsd - a.totals.costUsd)
               .map((entry) => ({
-                label: entry.managerId,
+                label:
+                  entry.managerId === CLONE_ACTOR_ID ? 'クローン' : labels.manager(entry.managerId),
                 costUsd: entry.totals.costUsd,
                 ...(isDelegationActorId(entry.managerId)
                   ? { href: `/managers/${entry.managerId}` }
@@ -720,16 +860,22 @@ function UsageBody({
             「誰が使ったか」に答えられない。
           */}
           <AxisCard
-            title="層別（誰が）"
+            title="誰が使ったか"
             entries={[...summary.byLayer]
               .sort((a, b) => b.totals.costUsd - a.totals.costUsd)
-              .map((entry) => ({ label: layerLabel(entry.layer), costUsd: entry.totals.costUsd }))}
+              .map((entry) => ({
+                label: usageLayerLabel(entry.layer),
+                costUsd: entry.totals.costUsd,
+              }))}
           />
           <AxisCard
-            title="場所別（どこで）"
+            title="どこで使ったか"
             entries={[...summary.bySite]
               .sort((a, b) => b.totals.costUsd - a.totals.costUsd)
-              .map((entry) => ({ label: siteLabel(entry.site), costUsd: entry.totals.costUsd }))}
+              .map((entry) => ({
+                label: usageSiteLabel(entry.site),
+                costUsd: entry.totals.costUsd,
+              }))}
           />
           {/*
             **`tokenId` が null の要素を落とさない。** 落とすとこの軸だけ合計に
@@ -754,7 +900,10 @@ function UsageBody({
             entries={[...summary.byToken]
               .sort((a, b) => b.totals.costUsd - a.totals.costUsd)
               .map((entry) => ({
-                label: entry.tokenId ?? '（トークンの帰属が無い分）',
+                label:
+                  entry.tokenId === null
+                    ? '（認証トークンの分からない分）'
+                    : labels.token(entry.tokenId),
                 costUsd: entry.totals.costUsd,
                 ...(entry.tokenId !== null ? { href: tokensHref({ tokenId: entry.tokenId }) } : {}),
               }))}

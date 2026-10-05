@@ -15,6 +15,7 @@ import type {
   MemoryDocumentMeta,
   MemoryProtectionStatus,
   PersonaStore,
+  RemoveMemoryOptions,
   WriteMemoryOptions,
 } from '@alteroid/core';
 import { and, asc, eq, isNull, lt, or, sql } from 'drizzle-orm';
@@ -330,8 +331,26 @@ export class PgPersonaStore implements PersonaStore {
    * `described_at` も同じ行が消えるので一緒に消える（要旨の鮮度は実体が無い
    * 文書には意味を持たない）。
    */
-  async remove(slug: string): Promise<void> {
-    await this.#db.delete(memory).where(eq(memory.slug, this.#slug(slug)));
+  async remove(slug: string, options?: RemoveMemoryOptions): Promise<void> {
+    const key = this.#slug(slug);
+    const ifMatch = options?.ifMatch;
+    if (ifMatch === undefined) {
+      await this.#db.delete(memory).where(eq(memory.slug, key));
+      return;
+    }
+    // 前提の版つき（Issue #2881）。比較は消すのと同じ1文の中で行う（`write` の条件付き UPDATE と同じ）。
+    const rows = await this.#db
+      .delete(memory)
+      .where(
+        and(
+          eq(memory.slug, key),
+          sql`encode(sha256(convert_to(${memory.content}, 'UTF8')), 'hex') = ${ifMatch}`,
+        ),
+      )
+      .returning({ slug: memory.slug });
+    if (rows[0] === undefined) {
+      throw new MemoryConflictError(slug, await this.read(slug));
+    }
   }
 
   async protectionStatus(slug: string): Promise<MemoryProtectionStatus> {

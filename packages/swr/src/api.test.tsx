@@ -20,7 +20,7 @@ import { StrictMode } from 'react';
 import { useHealth } from './hooks/queries';
 import { json, Providers, stubFetch, storeTestBaseUrl, TEST_BASE_URL } from './test-support';
 
-import { useApiContext } from './api';
+import { ApiError, unwrap, useApiContext } from './api';
 
 const OTHER_BASE_URL = 'http://daemon-2.test';
 
@@ -152,5 +152,38 @@ describe('世代の紐（issue #2768）', () => {
     await waitFor(() => expect(screen.getByTestId('pid').textContent).toBe('2'));
     expect(signals.old?.aborted).toBe(true);
     expect(signals.next?.aborted).toBe(false);
+  });
+});
+
+describe('ApiError の code（#2886）', () => {
+  const response = (status: number) => new Response(null, { status });
+
+  it('本文の code（文字列）を運ぶ。文言は error のまま', () => {
+    try {
+      unwrap({
+        error: {
+          error: '記録（日誌）が書けなかったので、変更していません',
+          code: 'journal_write_failed',
+        },
+        response: response(500),
+      });
+      expect.unreachable();
+    } catch (caught) {
+      expect(caught).toBeInstanceOf(ApiError);
+      expect((caught as ApiError).code).toBe('journal_write_failed');
+      expect((caught as ApiError).message).toBe('記録（日誌）が書けなかったので、変更していません');
+      expect((caught as ApiError).status).toBe(500);
+    }
+  });
+
+  it('code が無い・文字列でない応答では undefined（既存の呼び出しは変わらない）', () => {
+    for (const error of [{ error: '保存できなかった' }, { error: 'x', code: 42 }, 'text']) {
+      try {
+        unwrap({ error, response: response(500) });
+        expect.unreachable();
+      } catch (caught) {
+        expect((caught as ApiError).code).toBeUndefined();
+      }
+    }
   });
 });
