@@ -173,7 +173,7 @@ export function useSaveMemory() {
  * `ifMatch` は**読んだ時の版**（`GET /memory/{slug}` の `version`。クエリで送る。Issue #2916 / #2881）。
  * 渡すと、いまの版と違えば**何も消さず** `MemoryConflictError` を投げる（`current` にいまの版）。
  * 取り消せない操作なので、衝突しても自動では再送しない——呼び出し側がいまの内容を見せてから
- * もう一度確認を取る。省略すると従来どおり（デーモンは応答に warning を載せて通す）。
+ * もう一度確認を取る。**省略すると、デーモンは 428 で断る（何も消さない。#2881 段階3）。**
  */
 export function useDeleteMemory() {
   const api = useApi();
