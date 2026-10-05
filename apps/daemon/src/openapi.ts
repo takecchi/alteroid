@@ -367,12 +367,17 @@ export const memoryReadResponseSchema = z.object({
   document: memoryDocumentSchema,
   version: z.string(),
 });
-/** `PUT /memory/{slug}` の 409。`current` は**いまの版**（読んだ後に消されていれば null）。 */
+/** `PUT` / `DELETE /memory/{slug}` の 409（DELETE は Issue #2881）。`current` は**いまの版**（読んだ後に消されていれば null）。 */
 export const memoryConflictResponseSchema = z.object({
   error: z.string(),
   current: memoryReadResponseSchema.nullable(),
 });
-export const memoryDeleteResponseSchema = z.object({ ok: z.literal(true), slug: z.string() });
+export const memoryDeleteResponseSchema = z.object({
+  ok: z.literal(true),
+  slug: z.string(),
+  /** 版（`ifMatch`）を付けない削除に載る警告（Issue #2881。段階的に必須にする）。 */
+  warning: z.string().optional(),
+});
 
 // ---------------------------------------------------------------------------
 // 仕事のやり方（/practices）— core の practice(Meta)Schema をそのまま使う

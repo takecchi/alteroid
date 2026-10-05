@@ -89,6 +89,12 @@ export interface WriteMemoryOptions {
   ifMatch?: string | null;
 }
 
+/** `PersonaStore.remove` の任意の引数（Issue #2881）。 */
+export interface RemoveMemoryOptions {
+  /** 前提の版（`memoryVersion` の値）。合わなければ消さず `MemoryConflictError`。省略は無条件。 */
+  ifMatch?: string;
+}
+
 /**
  * 前提の版が合わず、書かなかった。`current` は**いまの文書**（無ければ `null`）
  * ——書き手が自分の内容を捨てずに見比べられるよう、呼び出し側へ返す。
@@ -173,7 +179,15 @@ export interface PersonaStore {
    * 片方だけを外しても歯が落ちないことを実測している）。
    */
   append(slug: string, content: string): Promise<MemoryDocument>;
-  remove(slug: string): Promise<void>;
+  /**
+   * 文書を消す。無ければ何もしない（冪等）。
+   *
+   * **`options.ifMatch`（Issue #2881）で前提の版を持てる。** いまの版と違えば
+   * 何も消さず `MemoryConflictError`（`write` と同じ。比較は消すのと同じ排他の中で行う）。
+   * 省略は従来どおり無条件に消す（段階1。`PUT` と違い、版を持たない呼び出しを
+   * いずれ必須にする予定は PRD に在る）。
+   */
+  remove(slug: string, options?: RemoveMemoryOptions): Promise<void>;
   /**
    * 全文書を本文ごと、`slug` の昇順で返す。
    *

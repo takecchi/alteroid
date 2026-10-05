@@ -481,6 +481,18 @@ const chatBody = z.object({
  */
 const memoryBody = z.object({ content: z.string(), ifMatch: z.string().nullable().optional() });
 /**
+ * `DELETE /memory/:slug` のクエリ（Issue #2881）。`ifMatch` は消す側が**読んだ時の版**
+ * （GET の `version`）。いまの版と違えば消さずに 409。**省略は従来どおり消す**（段階1。
+ * Web の削除ボタンが版を送れるようになるまでの移行。省略したときは応答に `warning` が載る）。
+ * 削除は「無い」ものを消す意味が無いので、PUT と違って `null` は受けない。
+ */
+const memoryDeleteQuery = z.object({ ifMatch: z.string().min(1).optional() });
+/** 版を付けない削除への警告文（段階1。応答の `warning`）。 */
+const MEMORY_DELETE_UNVERSIONED_WARNING =
+  '版の照合なしで消しました。読んだ後に別の書き手（クローンなど）が書いた内容も消えます。' +
+  '削除にも読んだ版を `ifMatch`（クエリ。GET /memory/:slug の `version`）で付けてください。' +
+  '今後、版のない削除は断るようになる予定です。';
+/**
  * `PracticeStore.write` の入力そのまま（`slug` だけは経路から取る）。
  *
  * **`kind` に列挙を課さない。** `practiceKindSchema` は `z.string().min(1).max(128)`
@@ -3259,11 +3271,23 @@ export function createApp(deps: AppDeps) {
         summary: '記憶文書を消す',
         description:
           '書けるのに消せないと、間違って作った記憶が永久に判断の材料に残る。消した事実は' +
-          '日誌に残る（`cause: human`）ので、記憶から消えても記録からは消えない。',
+          '日誌に残る（`cause: human`）ので、記憶から消えても記録からは消えない。\n\n' +
+          '**読んだ版を前提にできる（Issue #2881）。** クエリ `ifMatch` に、読んだ時の版' +
+          '（`GET /memory/{slug}` の `version`）を付けると、いまの版と違うとき**何も消さず 409** で' +
+          'いまの版を返す（読んだ後にクローンが書いた内容を黙って消さない）。\n\n' +
+          '**段階的に必須にする。** いまは `ifMatch` を付けない削除も通る（Web の削除が版を送るように' +
+          'なるまでの移行）が、応答に `warning` を載せ、デーモンの標準エラーと日誌にも「版の照合なし」と残す。' +
+          '移行が済んだら版を必須にする。',
         responses: {
           200: {
-            description: '消した。',
+            description: '消した。版を付けていなければ `warning` が載る。',
             content: { 'application/json': { schema: resolver(memoryDeleteResponseSchema) } },
+          },
+          409: {
+            description:
+              '`ifMatch`（読んだ時の版）が、いまの版と違う（読んでから消すまでの間に別の書き手が' +
+              '書いた）。**何も消していない。** `current` にいまの版を返す。',
+            content: { 'application/json': { schema: resolver(memoryConflictResponseSchema) } },
           },
           400: {
             description: '記憶のスラッグが名前として成立しない（「無い」とは区別する）。',
@@ -3275,11 +3299,13 @@ export function createApp(deps: AppDeps) {
           },
         },
       }),
+      queryParams(memoryDeleteQuery),
       async (c) => {
         const slug = c.req.param('slug');
         if (!memorySlugSchema.safeParse(slug).success) {
           return c.json({ error: '記憶のスラッグが不正' as const }, 400);
         }
+        const { ifMatch } = c.req.valid('query');
         const existing = await stores.persona.read(slug);
         if (existing === null) return c.json({ error: 'not found' as const }, 404);
         // **`markHumanTouched` はここでは呼ばない。** `PersonaStore.remove` は
@@ -3290,7 +3316,32 @@ export function createApp(deps: AppDeps) {
         // `action:'remove'` のこのエントリからは印を立て直さない（`storage.ts` の
         // backfill の doc）——delete は「人間の意思で消した」であって、
         // 将来ここに書かれる新しい内容を無条件に保護する理由にはならない。
-        await stores.persona.remove(slug);
+        try {
+          // 版の比較は消すのと同じ排他の中で行う（`PersonaStore.remove`）。
+          await stores.persona.remove(slug, ifMatch === undefined ? undefined : { ifMatch });
+        } catch (error) {
+          // **黙って消さない（Issue #2881）。** 消していないので日誌にも積まない。
+          if (error instanceof MemoryConflictError) {
+            return c.json(
+              {
+                error: '記憶が読んだ後に変わっています（消していません）' as const,
+                current:
+                  error.current === null
+                    ? null
+                    : { document: error.current, version: memoryVersion(error.current.content) },
+              },
+              409,
+            );
+          }
+          throw error;
+        }
+        // **段階1: 版のない削除は通すが、見えるようにする。** stderr へは slug だけ
+        // （本文は出さない。`base.onError` と同じ書式）。日誌の summary にも残す。
+        if (ifMatch === undefined) {
+          process.stderr.write(
+            `alteroidd: 記憶の削除を版の照合なしで通しました（slug=${slug}。\`ifMatch\` を付けると、読んだ後に書かれた内容を消さずに済みます）\n`,
+          );
+        }
         // **削除自体はもう効いている**（Issue #2037）。日誌への追記だけが
         // 落ちても 500 を返さない——`appendJournalOrDrop` の doc。
         await appendJournalOrDrop(
@@ -3302,12 +3353,18 @@ export function createApp(deps: AppDeps) {
             action: 'remove',
             bytesBefore: Buffer.byteLength(existing.content, 'utf8'),
             bytesAfter: 0,
-            summary: 'HTTP API 経由で人間が記憶を削除した',
+            summary:
+              'HTTP API 経由で人間が記憶を削除した' +
+              (ifMatch === undefined ? '（版の照合なし）' : ''),
           },
           '記憶削除の日誌',
           `slug=${slug}`,
         );
-        return c.json({ ok: true, slug });
+        return c.json(
+          ifMatch === undefined
+            ? { ok: true as const, slug, warning: MEMORY_DELETE_UNVERSIONED_WARNING }
+            : { ok: true as const, slug },
+        );
       },
     )
 

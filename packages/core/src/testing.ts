@@ -455,8 +455,17 @@ export function createMemoryStores(): Stores {
         existing ? `${ensureTrailingNewline(existing.content)}\n${content}` : content,
       );
     },
-    async remove(slug) {
+    async remove(slug, options) {
       checkMemorySlug(slug);
+      const before = documents.get(slug);
+      if (!memoryVersionMatches(before ?? null, options?.ifMatch)) {
+        throw new MemoryConflictError(
+          slug,
+          before === undefined
+            ? null
+            : { ...before, createdAt: toMemoryCreatedAt(createdAtStore.get(slug)) },
+        );
+      }
       documents.delete(slug);
       // fs / pg と同じく、実体が消えれば派生値も消える（過去に human で書かれた
       // 事実そのものは journal に残るので、backfill が立て直す）。
