@@ -434,3 +434,17 @@ describe('/schedule 画面: 読めない継続中の依頼の断り', () => {
     expect(screen.queryByText(/読めない/)).toBeNull();
   });
 });
+
+describe('定期ジョブの行の説明文の列（#2755）', () => {
+  it('説明文の列は最小幅を持つ（flex-basis 0 のまま 46px に潰れない）', async () => {
+    // jsdom はレイアウトを持たず折り返しを測れない（390px で説明文の列が約46px、
+    // 1行2〜3文字に潰れた実寸はブラウザで測った）。潰れを防ぐ指定そのもの＝
+    // 最小幅を持つこと、`min-w-0`（最小幅を0にする指定）に戻らないことを固定する。
+    stubSchedule([DEFAULT_ENTRY]);
+    renderSchedule();
+
+    const column = (await screen.findByText(DEFAULT_ENTRY.description)).parentElement;
+    expect(column?.className).toContain('min-w-[min(14rem,100%)]');
+    expect(column?.className).not.toMatch(/(^|\s)min-w-0(\s|$)/);
+  });
+});
