@@ -7,6 +7,7 @@ import {
   TOPOLOGY_ENDED_WINDOW_MS,
   TOPOLOGY_MANAGERS_CHAR_BUDGET,
   TOPOLOGY_REQUEST_LIMIT,
+  TOPOLOGY_RUNNER_LISTING_FRESH_MS,
   TOPOLOGY_WAITING_PER_MANAGER,
   buildTopologySnapshot,
   createStorageHealthTracker,
@@ -365,5 +366,101 @@ describe('createTopologyService', () => {
     expect(snapshot.clone.state).toBe('unknown');
     expect(snapshot.runners).toEqual([]);
     expect(snapshot.storage).toEqual({ state: 'unknown' });
+  });
+});
+
+describe('runner の上に居る委譲（runnerListedAt）は窓に関係なく載る', () => {
+  const OLD = -TOPOLOGY_ENDED_WINDOW_MS - 60 * 60_000;
+  const idsOf = (managers: ManagerSummary[]) =>
+    buildTopologySnapshot(inputs({ managers })).managers.map((m) => m.managerId);
+
+  it('runner に居る done は10分経っても載り、欄も応答に写る（スキーマも通る）', () => {
+    const snapshot = buildTopologySnapshot(
+      inputs({
+        managers: [
+          manager('idle-on-runner', {
+            status: 'done',
+            updatedAt: iso(OLD),
+            runnerId: 'r1',
+            runnerListedAt: iso(-5_000),
+          }),
+        ],
+      }),
+    );
+    expect(snapshot.managers.map((m) => m.managerId)).toEqual(['idle-on-runner']);
+    expect(snapshot.managers[0]?.runnerListedAt).toBe(iso(-5_000));
+    expect(topologyResponseSchema.parse(snapshot)).toEqual(snapshot);
+  });
+
+  it('観測が無ければ（欄が無い）窓の外の done は載らない', () => {
+    expect(
+      idsOf([manager('no-obs', { status: 'done', updatedAt: iso(OLD), runnerId: 'r1' })]),
+    ).toEqual([]);
+  });
+
+  it('lost / failed / stopped は、runner の一覧に載っていても窓の外なら載らない', () => {
+    expect(
+      idsOf(
+        (['lost', 'failed', 'stopped'] as const).map((status) =>
+          manager(`t-${status}`, {
+            status,
+            live: false,
+            updatedAt: iso(OLD),
+            runnerId: 'r1',
+            runnerListedAt: iso(-5_000),
+          }),
+        ),
+      ),
+    ).toEqual([]);
+  });
+
+  it('観測が古い（60秒より前）なら居座らせない。読めない時刻も同じ', () => {
+    expect(
+      idsOf([
+        manager('stale', {
+          status: 'done',
+          updatedAt: iso(OLD),
+          runnerListedAt: iso(-TOPOLOGY_RUNNER_LISTING_FRESH_MS - 1_000),
+        }),
+        manager('edge', {
+          status: 'done',
+          updatedAt: iso(OLD),
+          runnerListedAt: iso(-TOPOLOGY_RUNNER_LISTING_FRESH_MS),
+        }),
+        manager('bad', { status: 'done', updatedAt: iso(OLD), runnerListedAt: 'not-a-date' }),
+      ]),
+    ).toEqual(['edge']);
+  });
+
+  it('並びは終端の段（途中のものより後ろ）で、予算で切られるのもこちらが先', () => {
+    const snapshot = buildTopologySnapshot(
+      inputs({
+        managers: [
+          manager('idle', {
+            status: 'done',
+            startedAt: iso(-1_000),
+            updatedAt: iso(OLD),
+            runnerListedAt: iso(-5_000),
+          }),
+          manager('run', { status: 'running', startedAt: iso(-90_000) }),
+        ],
+      }),
+    );
+    expect(snapshot.managers.map((m) => m.managerId)).toEqual(['run', 'idle']);
+
+    const big = 'あ'.repeat(TOPOLOGY_REQUEST_LIMIT);
+    const many = Array.from({ length: 400 }, (_, i) =>
+      manager(`idle-${String(i).padStart(3, '0')}`, {
+        status: 'done',
+        request: big,
+        updatedAt: iso(OLD),
+        runnerListedAt: iso(-5_000),
+      }),
+    );
+    const cut = buildTopologySnapshot(
+      inputs({ managers: [...many, manager('run', { status: 'running' })] }),
+    );
+    expect(cut.managers[0]?.managerId).toBe('run');
+    expect(cut.managersOmitted ?? 0).toBeGreaterThan(0);
   });
 });

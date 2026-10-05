@@ -2,6 +2,8 @@ import { useId, useLayoutEffect, useRef, useState, type ReactNode, type Ref } fr
 
 import { cn } from '@/lib/utils';
 
+import { DocumentTitle } from './document-title';
+
 /**
  * 画面の枠（見出しの帯＋スクロールする本文）。
  *
@@ -13,6 +15,7 @@ import { cn } from '@/lib/utils';
  */
 export function Page({
   title,
+  documentTitle,
   description,
   action,
   className,
@@ -21,6 +24,12 @@ export function Page({
   children,
 }: {
   title: ReactNode;
+  /**
+   * タブの題名に使う画面名。`title` が文字列ならそれを使うので、**文字列の `title` の画面は
+   * 渡さない**（h1 と題名が同じ出どころになる）。`title` が部品（パンくず）のときだけ渡す。
+   * UUID や英語の内部識別子は入れない（利用者が自分で付けた名前は可）。
+   */
+  documentTitle?: string;
   description?: ReactNode;
   action?: ReactNode;
   className?: string;
@@ -45,6 +54,7 @@ export function Page({
   tabs?: ReactNode;
   children: ReactNode;
 }) {
+  const docTitle = documentTitle ?? (typeof title === 'string' ? title : undefined);
   return (
     /*
      * **`h-dvh` ではなく `h-full`。** 高さの出どころは `AuthedShell` の `h-dvh` 1つに
@@ -52,6 +62,7 @@ export function Page({
      * 画面からはみ出す（帯は shell が持っていて、この部品からは見えない）。
      */
     <div className="flex h-full flex-col">
+      {docTitle !== undefined && <DocumentTitle>{docTitle}</DocumentTitle>}
       <header
         className={cn(
           // タブの帯があるときは、区切り線を帯の下の1本にする（線が2本続かないように）。

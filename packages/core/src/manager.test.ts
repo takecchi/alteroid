@@ -1641,7 +1641,12 @@ describe('デーモン再起動後（M4）', () => {
     expect((s.sessions[0] as FakeSession).options.resume).toBe('sess-before-restart');
     await expect
       .poll(() => (s.sessions[0] as FakeSession).inputs, { timeout: 2000 })
-      .toEqual(['[system] デーモンが再起動した。中断していた作業の続きを進めよ。']);
+      .toEqual([
+        // **runner に居なかったので resume した分岐は器の入れ替えとして扱う（#2748）。**
+        // 「デーモンが再起動した」だけでは、作業ディレクトリが消えたことを告げない。
+        // attach 分岐が 'daemon' のまま変わらないことは manager-workspace-nudge.test.ts が持つ。
+        '[system] runner の器が作り直された。作業ディレクトリが残っているとは限らないので、続きに入る前に手元の状態を確かめよ。中断していた作業の続きを進めよ。',
+      ]);
 
     // クローンが「続きがある」ことを知る経路は受信箱ただ1つ
     const notice = s.inbox.find((event) => event.type === 'manager_message');
@@ -12117,6 +12122,72 @@ describe('生存確認が観測した sessions から sessionMissingSince を立
 
     await pool.stop();
     await real.stop();
+  });
+
+  /**
+   * **`runnerListedAt`（稼働の地図が手の空いたマネージャーを載せる根拠）の歯。** 立つのは
+   * 「名簿の entry が黙っておらず、一覧に載っていた」ときだけで、`status` は動かさない。
+   */
+  describe('runnerListedAt: runner の一覧に載っていた観測を写す', () => {
+    const at = '2026-08-27T00:00:00.000Z';
+    const observedAt = '2026-08-27T00:00:10.000Z';
+    async function setup(patch: { sessions: readonly string[]; state?: string } | null) {
+      const stores = createMemoryStores();
+      await stores.jobs.putJob({
+        id: 'mgr-done',
+        managerId: 'mgr-done',
+        createdAt: at,
+        updatedAt: at,
+        status: 'done',
+        summary: '終わった',
+        request: '頼んだ',
+        cwd: '/work/project',
+        runnerId: 'runner-a',
+        sessionId: 'sess-done',
+      } as Job);
+      const a = new FakePoolRunner('runner-a', { managers: 0 });
+      const real = createRunnerRegistry([a]);
+      const patches = new Map<
+        string,
+        { sessions: readonly string[]; sessionsObservedAt: string }
+      >();
+      if (patch !== null) {
+        patches.set('runner-a', {
+          ...patch,
+          sessionsObservedAt: observedAt,
+        } as unknown as { sessions: readonly string[]; sessionsObservedAt: string });
+      }
+      const pool = createManagerPool({
+        stores,
+        post: () => undefined,
+        runners: withEntrySessions(real, () => patches),
+      });
+      await pool.restore();
+      const found = (await pool.list()).find((m) => m.managerId === 'mgr-done');
+      await pool.stop();
+      await real.stop();
+      return found;
+    }
+
+    it('done でも、runner が一覧に載せていれば観測時刻が立つ（status は動かない）', async () => {
+      const found = await setup({ sessions: ['mgr-done'] });
+      expect(found?.status).toBe('done');
+      expect(found?.runnerListedAt).toBe(observedAt);
+    });
+
+    it('一覧に載っていなければ立たない', async () => {
+      expect((await setup({ sessions: ['other'] }))?.runnerListedAt).toBeUndefined();
+      expect((await setup({ sessions: [] }))?.runnerListedAt).toBeUndefined();
+    });
+
+    it('まだ聞けていない（sessions が無い）なら立たない', async () => {
+      expect((await setup(null))?.runnerListedAt).toBeUndefined();
+    });
+
+    it('黙った器（lost）の一覧は根拠にしない', async () => {
+      const found = await setup({ sessions: ['mgr-done'], state: 'lost' });
+      expect(found?.runnerListedAt).toBeUndefined();
+    });
   });
 
   /**

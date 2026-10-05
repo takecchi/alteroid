@@ -2,10 +2,12 @@ import { mkdir, readFile, readdir, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import {
+  MemoryConflictError,
   deriveHumanTouchedAtFromJournal,
   deriveMemoryFrontmatter,
   ensureTrailingNewline,
   memorySlugSchema,
+  memoryVersionMatches,
   memoryProtectionRebuildDecision,
   nextDescribedState,
   resolveMemoryDescriptionFreshness,
@@ -18,6 +20,7 @@ import type {
   MemoryDocumentMeta,
   MemoryProtectionStatus,
   PersonaStore,
+  WriteMemoryOptions,
 } from '@alteroid/core';
 
 import { writeFileAtomic } from './atomic.js';
@@ -376,8 +379,22 @@ export class FsPersonaStore implements PersonaStore {
     }
   }
 
-  async write(slug: string, content: string): Promise<MemoryDocument> {
-    return this.#serialize(() => this.#writeNow(slug, content));
+  async write(
+    slug: string,
+    content: string,
+    options?: WriteMemoryOptions,
+  ): Promise<MemoryDocument> {
+    return this.#serialize(async () => {
+      // **前提の版の比較は `#serialize` の内側で、書き込みの直前に行う**（Issue #2743）。
+      // 外で読んでから入ると、その間の別の書き手を見逃す。
+      if (options?.ifMatch !== undefined) {
+        const current = await this.read(slug);
+        if (!memoryVersionMatches(current, options.ifMatch)) {
+          throw new MemoryConflictError(slug, current);
+        }
+      }
+      return this.#writeNow(slug, content);
+    });
   }
 
   async append(slug: string, content: string): Promise<MemoryDocument> {
