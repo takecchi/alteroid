@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
-import { Link, useBlocker, useNavigate } from 'react-router';
+import { useBlocker, useNavigate } from 'react-router';
 
 import {
+  DocumentTitle,
   MarkdownEditor,
   type MarkdownEditorMode,
-  Page,
   Button,
   ConfirmDialog,
   ErrorNote,
@@ -24,8 +24,18 @@ export function clientLoader({ params }: Route.ClientLoaderArgs) {
   return { slug: params.slug };
 }
 
+/**
+ * 一覧の右のペインに出る（親の経路 `memory.tsx` の `ListDetail`）。**親は同じままで子の `:slug` だけが
+ * 変わる**ので、素のままだと別の記憶へ移っても同じ部品が使い回され、下書き・保存時刻・版の控え・
+ * 衝突の表示が次の記憶へ持ち越される。**`key={slug}` で作り直す。** 未保存の編集があるときは、
+ * 作り直しの前に `useBlocker` が移動そのものを止めて確認を出す（確認で「破棄して離れる」を
+ * 選んだときだけ移り、作り直される）。
+ */
 export default function MemoryDetail({ loaderData }: Route.ComponentProps) {
-  const { slug } = loaderData;
+  return <MemoryDetailBody key={loaderData.slug} slug={loaderData.slug} />;
+}
+
+function MemoryDetailBody({ slug }: { slug: string }) {
   const { data, error, isLoading } = useMemoryDocument(slug);
   const saveMemory = useSaveMemory();
   const deleteMemory = useDeleteMemory();
@@ -148,46 +158,34 @@ export default function MemoryDetail({ loaderData }: Route.ComponentProps) {
     return () => window.removeEventListener('beforeunload', warn);
   }, [dirty]);
 
+  const description =
+    savedAt !== undefined
+      ? `保存した（${formatDateTime(savedAt)}）` +
+        // 保存直後でも作成時刻は画面から消さない（`data` が届いていれば足す）。
+        (data !== undefined ? ` · 作成 ${formatCreatedAt(data.document.createdAt)}` : '')
+      : data !== undefined
+        ? `作成 ${formatCreatedAt(data.document.createdAt)} · 更新 ${formatDateTime(data.document.updatedAt)}`
+        : missing
+          ? 'まだ無い記憶。書けば作られる'
+          : undefined;
+
   return (
-    <Page
-      documentTitle={`${slug} - 記憶`}
-      title={
-        // `Page` の title は h1 の親（div）が既に `min-w-0` を持つので、この
-        // flex 行自体は絞られる側に居る。slug は `break-all` 済み（最大128
-        // 文字・空白なし、本2）で、break-all は最小コンテンツ幅を1文字ぶんまで
-        // 縮めるので理屈のうえでは既にはみ出さない。それでも flex item の
-        // `min-width: auto`（既定は min-content 依存）に頼らせず、
-        // `min-w-0` を明示して縮む先を固定する — `connection.tsx` の入力欄・
-        // `schedule.tsx` の本文欄と同じ、縮める側に `min-w-0` を明示する流儀
-        // に揃えた。`flex-wrap` は付けていない: 折り返すと1行に収まる
-        // 「記憶 / slug」の見た目が崩れ、items-center との組み合わせで
-        // リンクが複数行の slug の縦中央に浮く見た目になる（stackingの利点が
-        // 無いのに見た目だけ悪くなる）。見出しの「記憶」「/」は `shrink-0 whitespace-nowrap`
-        // で狭い幅でも縦に割らず、slug が複数行になっても先頭行の基線に揃える（#2763）。
-        <span className="flex items-baseline gap-2">
-          <Link
-            to="/memory"
-            className="shrink-0 whitespace-nowrap text-muted-foreground hover:text-foreground"
-          >
-            記憶
-          </Link>
-          <span className="shrink-0 text-muted-foreground">/</span>
-          <span className="min-w-0 font-mono text-sm break-all">{slug}</span>
-        </span>
-      }
-      description={
-        savedAt !== undefined
-          ? `保存した（${formatDateTime(savedAt)}）` +
-            // 保存直後でも作成時刻は画面から消さない（`data` が届いていれば足す）。
-            (data !== undefined ? ` · 作成 ${formatCreatedAt(data.document.createdAt)}` : '')
-          : data !== undefined
-            ? `作成 ${formatCreatedAt(data.document.createdAt)} · 更新 ${formatDateTime(data.document.updatedAt)}`
-            : missing
-              ? 'まだ無い記憶。書けば作られる'
-              : undefined
-      }
-      action={
-        <div className="flex items-center gap-2">
+    <div className="flex min-h-full flex-col">
+      {/*
+        詳細は一覧の右のペインに出る（親の経路 `memory.tsx` の `ListDetail`）ので、画面の枠
+        （`Page`）も戻るリンクも持たない。画面の h1 は親が持ち、ここの見出しは h2。狭い画面では
+        `ListDetail` の「記憶の一覧を開く」が一覧への戻り口になる。
+      */}
+      <DocumentTitle>{`${slug} - 記憶`}</DocumentTitle>
+      <header className="mb-4 flex shrink-0 items-start justify-between gap-4">
+        <div className="min-w-0">
+          {/* 名前は最大128文字・空白なし。`break-all` で幅に収める（#2763） */}
+          <h2 className="font-mono text-base font-semibold break-all">{slug}</h2>
+          {description !== undefined && (
+            <p className="mt-0.5 text-xs text-muted-foreground">{description}</p>
+          )}
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
           {!missing && data !== undefined && (
             <>
               <Button
@@ -231,9 +229,8 @@ export default function MemoryDetail({ loaderData }: Route.ComponentProps) {
             </Button>
           )}
         </div>
-      }
-      className="flex flex-col"
-    >
+      </header>
+
       {!missing && <ErrorNote error={error} className="mb-3" />}
       <ErrorNote error={failure} className="mb-3" />
       {conflict !== undefined && (
@@ -301,6 +298,6 @@ export default function MemoryDetail({ loaderData }: Route.ComponentProps) {
           placeholder=""
         />
       )}
-    </Page>
+    </div>
   );
 }

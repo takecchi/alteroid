@@ -17,8 +17,8 @@ export default [
     route('journal', 'routes/journal.tsx'),
     route('managers', 'routes/managers.tsx'),
     route('managers/:id', 'routes/manager-detail.tsx'),
-    route('memory', 'routes/memory.tsx'),
-    route('memory/:slug', 'routes/memory-detail.tsx'),
+    // 一覧（左）と中身（右）の1画面。`memory.tsx` が親で、中身は子の経路が右に出る。
+    route('memory', 'routes/memory.tsx', [route(':slug', 'routes/memory-detail.tsx')]),
     route('practices', 'routes/practices.tsx'),
     route('practices/:slug', 'routes/practice-detail.tsx'),
     route('approvals', 'routes/approvals.tsx'),

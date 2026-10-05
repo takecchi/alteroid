@@ -16,7 +16,7 @@
  * unmount してもデータは消えない。これを直接固定する。
  */
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { createMemoryRouter, RouterProvider } from 'react-router';
+import { createMemoryRouter, Link, RouterProvider } from 'react-router';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { MemoryDocument } from '@alteroid/logic';
@@ -68,7 +68,13 @@ afterEach(() => {
  */
 function Harness({ slug }: { slug: string }) {
   const loaderData = clientLoader({ params: { slug } } as Route.ClientLoaderArgs);
-  return <MemoryDetail {...({ loaderData } as Route.ComponentProps)} />;
+  return (
+    <>
+      {/* 離れる先のリンク（本番では左の一覧や上のタブが担う。一覧との組み合わせは memory-list-detail.test.tsx） */}
+      <Link to="/memory">記憶</Link>
+      <MemoryDetail {...({ loaderData } as Route.ComponentProps)} />
+    </>
+  );
 }
 
 /** ルーターを組んで描くだけ。`globalThis.fetch` の差し替えは呼ぶ側の責務。 */
@@ -435,15 +441,17 @@ describe('折り返しの付け忘れ（本2）', () => {
  * 持たないので、固定できるのは「そのクラス名が書かれていること」までである。
  */
 describe('横並びの積み替え（本4-D）: タイトル行の slug', () => {
-  it('slug の span に min-w-0 が付いている', async () => {
+  it('slug の見出し（h2）が break-all で幅に収まり、右のボタン群は縮まない', async () => {
     const longSlug = 'a'.repeat(80);
     renderDetail(longSlug, docRoute({ ...DOC, slug: longSlug }));
 
-    const span = await screen.findByText(longSlug);
-    const tokens = span.className.split(/\s+/);
-    expect(tokens).toContain('min-w-0');
-    // break-all（本2）も残っていること。
-    expect(tokens).toContain('break-all');
+    const heading = await screen.findByRole('heading', { level: 2, name: longSlug });
+    expect(heading.className.split(/\s+/)).toContain('break-all');
+    // 縮む側は見出しを包む div（min-w-0）。ボタン群は shrink-0。
+    expect(heading.parentElement?.className.split(/\s+/)).toContain('min-w-0');
+    expect(
+      screen.getByRole('button', { name: /保存|変更なし/ }).parentElement?.className,
+    ).toContain('shrink-0');
   });
 });
 
@@ -555,17 +563,12 @@ describe('編集欄の振る舞い（部品へ移しても変わらないもの�
 });
 
 describe('見出し（#2763）', () => {
-  it('戻る導線「記憶」は縮まず折り返さない（狭い幅で縦に割れない）', async () => {
-    // jsdom はレイアウトを持たないので、実寸（390px で 16px 幅 × 2行に割れた）は測れない。
-    // 割れを防ぐ指定そのもの（flex 子の shrink と折り返しの抑止）を固定する。
-    // 実寸はブラウザで測った値を PR に書いている。
+  it('slug は h2 で、長くても折り返せる', async () => {
+    // jsdom はレイアウトを持たないので、実寸はブラウザで測った値を PR に書いている。
     renderDetail('notes', docRoute(DOC));
 
-    const back = await screen.findByRole('link', { name: '記憶' });
-    expect(back.className).toContain('shrink-0');
-    expect(back.className).toContain('whitespace-nowrap');
-    // 縮む側は slug だけ。
-    expect(screen.getByText('notes').className).toContain('min-w-0');
+    const heading = await screen.findByRole('heading', { level: 2, name: 'notes' });
+    expect(heading.className).toContain('break-all');
   });
 });
 
