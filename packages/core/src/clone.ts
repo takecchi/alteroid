@@ -3755,7 +3755,15 @@ class Clone implements CloneHost {
         // 後始末の途中で変わる値ではないが、件ごとに読み直す形にすると
         // 「同じ1ターンの分が、半分は消えて半分は保持される」を作れる形が残る。
         const defer = this.#usageBlocked !== null;
-        for (const held of batch) await this.#settleInboxEvent(held, defer);
+        for (const held of batch) {
+          // **保持した `human_answer` は「処理済み」の印を外す**（Issue #2744）。
+          // 印（`#handledHumanAnswerIds`）は #1977 の二重配達防止だが、枠で失敗した
+          // 回答は**まだ処理されていない**（マネージャーへ戻っていない）。残すと、
+          // 解除後の再配達が「二重配達」と畳まれ、回答が黙って失われる。
+          // 印は同じプロセスの中でしか持たないので、保持と生死を揃えてここで外す。
+          if (defer && held.type === 'human_answer') this.#handledHumanAnswerIds.delete(held.id);
+          await this.#settleInboxEvent(held, defer);
+        }
       }
     }
     // 閉じた後に待っている人を取り残さない
