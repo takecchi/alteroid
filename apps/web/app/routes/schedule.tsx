@@ -1,4 +1,5 @@
 import { ScheduleTabs } from '~/components/group-tabs';
+import { LoadError } from '~/components/load-error';
 import { AlertTriangle } from 'lucide-react';
 import { useId, useState } from 'react';
 import { Tabs } from 'radix-ui';
@@ -88,7 +89,7 @@ export function UnreadableScheduleNote({
  * `useCreateSchedule` をそのまま使い、新しい hook は増やさない。
  */
 export default function Schedule() {
-  const { data, error, isLoading } = useSchedule();
+  const { data, error, isLoading, isValidating, mutate } = useSchedule();
   const runSchedule = useRunSchedule();
   const removeSchedule = useRemoveSchedule();
   const [running, setRunning] = useState<string | undefined>(undefined);
@@ -98,7 +99,7 @@ export default function Schedule() {
   const [failure, setFailure] = useState<unknown>(undefined);
   /**
    * **取れなかったのを0件と描かない**（issue #2324）。一覧をまだ一度も読めていないまま
-   * 失敗したとき、失敗は上の `ErrorNote` が言う。「登録された定期ジョブが無い」は状態の
+   * 失敗したとき、失敗は `LoadError` が言う。「登録された定期ジョブが無い」は状態の
    * 断定になる。再検証の失敗で `data` が残っているときは当たらず、一覧をそのまま出す。
    */
   const listUnavailable = data === undefined && error !== undefined;
@@ -109,7 +110,14 @@ export default function Schedule() {
       title="予定"
       description="決まった時刻に動く依頼と、外部からの知らせを、ここで確かめたり手で起こしたりする"
     >
-      <ErrorNote error={error ?? failure} className="mb-4" />
+      <LoadError
+        what="スケジュール"
+        error={error}
+        onRetry={() => mutate()}
+        retrying={isValidating}
+        className="mb-4"
+      />
+      <ErrorNote error={failure} className="mb-4" />
 
       {/* 一覧の上に置く。読める行の中身を見る前に、まず断りが目に入るように。 */}
       <UnreadableScheduleNote unreadable={data?.unreadable ?? []} className="mb-4" />

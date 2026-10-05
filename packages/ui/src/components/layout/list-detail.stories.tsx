@@ -113,3 +113,54 @@ export const ManyItems: Story = {
   args,
   render: () => <Demo count={60} initial="25" withFooter />,
 };
+
+/** 題名だけがリンクで、名前・日時は選択・コピーできる形（`extra` / `lead`）。 */
+function PartialDemo() {
+  const entries = sampleEntries(12);
+  const [selected, setSelected] = useState<string | undefined>('3');
+  return (
+    <div className="h-[600px] border border-border">
+      <ListDetail
+        listLabel="記憶"
+        hasSelection={selected !== undefined}
+        selectionKey={selected}
+        detail={<h2 className="text-base font-semibold">{selected}</h2>}
+        list={
+          <ListDetailItems
+            label="記憶の一覧"
+            items={entries.map((e) => ({
+              key: e.id,
+              href: `#${e.id}`,
+              current: e.id === selected,
+              lead: <span className="mr-1.5 shrink-0 text-[10px] text-muted-foreground">前提</span>,
+              children: e.title,
+              extra: (
+                <>
+                  <p className="truncate font-mono text-[11px] text-muted-foreground">{e.id}</p>
+                  <p className="text-[11px] text-muted-foreground">{e.date}</p>
+                </>
+              ),
+            }))}
+            renderLink={(props) => (
+              <a
+                {...props}
+                onClick={(event) => {
+                  event.preventDefault();
+                  setSelected(props.href.slice(1));
+                  props.onClick(event);
+                }}
+              >
+                {props.children}
+              </a>
+            )}
+          />
+        }
+      />
+    </div>
+  );
+}
+
+export const PartialLink: Story = {
+  args,
+  render: () => <PartialDemo />,
+};

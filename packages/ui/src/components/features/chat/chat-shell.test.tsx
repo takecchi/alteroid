@@ -109,6 +109,14 @@ describe('ConversationList: 枠・空・但し書き', () => {
 });
 
 describe('ChatHeader', () => {
+  it('見出し（h1）と題名は「会話」で、「クローンと話す」は見出しの下の説明に回る（#2844）', () => {
+    render(<ChatHeader conversationId="c" subtitle="10/01 10:00 に開始" />);
+    expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('会話');
+    expect(document.title).toBe('会話 - alteroid');
+    expect(screen.getByText(/クローンと話す/).tagName).toBe('P');
+    expect(screen.getByText('10/01 10:00 に開始')).toBeTruthy();
+  });
+
   it('会話が無ければ操作は出ず、「新しい会話」と出る。決まっていれば2つの操作（id は出さない）', () => {
     const { rerender } = render(
       <ChatHeader

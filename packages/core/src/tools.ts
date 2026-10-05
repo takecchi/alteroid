@@ -4384,11 +4384,21 @@ function describeMemoryConflict(
   slug: string,
   action: string,
   current: { readonly content: string } | null,
+  /** 削除（#2881）のとき `'remove'`。「書かなかった」でなく「消さなかった」と言う。 */
+  kind: 'write' | 'remove' = 'write',
 ): string {
   const now =
     current === null
       ? 'いまその文書は無い（読んだ後に消された）。'
       : `いまの版は base_version=${memoryVersion(current.content)}（${current.content.length} 文字）。`;
+  if (kind === 'remove') {
+    return (
+      `記憶 ${slug} は、読んだ後にその間に変わった（人間または別のターンが書いた）ので、${action}を**しなかった**。` +
+      `${now}**何も消していない**（読んでいない内容を消さないため。いまの内容は1文字も変わっていない）。` +
+      `memory_read slug=${slug} で読み直し、いまの内容でも消してよいか判断し直してから、` +
+      '読み直した版の base_version を付けて memory_delete し直すこと。'
+    );
+  }
   return (
     `記憶 ${slug} は、読んだ後にその間に変わった（人間または別のターンが書いた）ので、${action}を**書かなかった**。` +
     `${now}**何も書いていない**（あなたの内容は書かれておらず、いまの内容は1文字も変わっていない）。` +
@@ -5213,6 +5223,7 @@ export function createCloneTools(context: ToolContext) {
       [
         '記憶の文書を1つ、文書ごと消す（部分削除ではない。一部を変えたいだけなら memory_write を使う）。',
         '無いスラッグを渡しても成功にはならず、そう返る。',
+        '**先に memory_read（または memory_outline）で読んで、応答に出る base_version を渡すこと（必須）。焼き込みの索引だけでは消せない**——読んだ後に人間や別のターンが書いていたら、何も消さずに「その間に変わった」と返す（読んでいない内容まで消さないため）。',
         '消した事実は日誌に残る（スラッグと直前の文字数のみ。本文は残らない）。',
         '**統合の走行（distill）からは、人間が一度でも書いた文書・履歴の無い文書は消せない**',
         '（断られる。ask_human で人間に確認を通せば次のターンで実行できる）。会話の中の削除は通る。',
@@ -5220,8 +5231,14 @@ export function createCloneTools(context: ToolContext) {
       {
         slug: z.string().describe('記憶のスラッグ（拡張子なし）'),
         summary: z.string().describe('なぜ消したかの一行要約（日誌に残る。本文は残らない）'),
+        base_version: z
+          .string()
+          .optional()
+          .describe(
+            '読んだ時点の版（memory_read / memory_outline / 直前の書き込みの応答に出る base_version）。**必須**——無ければ何も消さずに読み直しを促す。焼き込みの索引だけでは版は分からない。',
+          ),
       },
-      async ({ slug, summary }) => {
+      async ({ slug, summary, base_version: baseVersion }) => {
         // **issue #1662。** `memory_read` と同じ門（doc はそちらにある）。
         if (!memorySlugSchema.safeParse(slug).success) {
           return text(`記憶のスラッグが不正: ${slug}（英小文字・数字・. _ - のみ）。`);
@@ -5233,7 +5250,23 @@ export function createCloneTools(context: ToolContext) {
         const cause = memoryCause();
         const denial = await guardFullReplace(stores, slug, cause, '削除');
         if (denial !== null) return text(denial);
-        await stores.persona.remove(slug);
+        // **Issue #2881。** 版なしでは消さない（`memory_write` の全文置換と同じ線）。
+        // 消すのは「読んだ内容を見て」の判断であって、読んでいない内容まで消さない。
+        if (baseVersion === undefined) {
+          return text(
+            `記憶 ${slug} を消すには、先に memory_read slug=${slug} で読み、` +
+              '応答に出る base_version をこの呼び出しの base_version に渡すこと' +
+              '（読んだ後に人間や別のターンが書いた内容を、気づかずに消さないため。焼き込みの索引だけでは消せない）。**何も消していない。**',
+          );
+        }
+        try {
+          await stores.persona.remove(slug, { ifMatch: baseVersion });
+        } catch (error) {
+          if (error instanceof MemoryConflictError) {
+            return text(describeMemoryConflict(slug, '削除', error.current, 'remove'));
+          }
+          throw error;
+        }
         await appendJournalOrThrow(
           'memory_delete',
           stores.journal,

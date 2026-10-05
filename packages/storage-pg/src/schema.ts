@@ -958,3 +958,34 @@ export const practiceVersions = pgTable(
   },
   (table) => [primaryKey({ columns: [table.slug, table.version] })],
 );
+
+/**
+ * 会話の既読の位置。**会話ごとに1行**（全員で1組。`ConversationReadStore` の doc）。
+ * `readThrough` は最後に読んだ発言の `at` で、戻らない（`greatest` の upsert）。
+ */
+export const conversationRead = pgTable('conversation_read', {
+  conversationId: text('conversation_id').primaryKey(),
+  readThrough: timestamp('read_through', { withTimezone: true, mode: 'date' }).notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull(),
+});
+
+/**
+ * 会話の既読の基準時刻。**高々1行**（`env_profile` と同じく鍵は固定）。位置の記録が無い会話は
+ * 「この時刻以前の発言は既読、以後は未読」と判定する。**一度決まったら変えない**
+ * （`on conflict do nothing`）。
+ */
+export const conversationReadBaseline = pgTable('conversation_read_baseline', {
+  id: text('id').primaryKey(),
+  at: timestamp('at', { withTimezone: true, mode: 'date' }).notNull(),
+  /** 索引の取り込み済みの印（`ConversationOutboundIndex.watermark`）。 */
+  scannedThrough: timestamp('scanned_through', { withTimezone: true, mode: 'date' }),
+});
+
+/**
+ * 会話ごとの最後のクローン側発言の時刻（日誌の写し。`ConversationOutboundIndex`）。
+ * 未読のある会話の数を、日誌を広く遡らずに数えるためのもの。
+ */
+export const conversationOutboundLatest = pgTable('conversation_outbound_latest', {
+  conversationId: text('conversation_id').primaryKey(),
+  at: timestamp('at', { withTimezone: true, mode: 'date' }).notNull(),
+});

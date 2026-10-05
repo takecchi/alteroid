@@ -52,6 +52,8 @@ useManagersWindowMock.mockImplementation((status: readonly ManagerStatus[]) => {
     isLoadingOlder: false,
     olderError: undefined,
     loadOlder: () => {},
+    reload: () => {},
+    isReloading: false,
   };
   return stub;
 });
