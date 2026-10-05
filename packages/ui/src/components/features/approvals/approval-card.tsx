@@ -150,9 +150,8 @@ export function ApprovalCard({
           `context` もクローンが書いた文字列なので Markdown で描く。
 
           **スクロールの箱（`max-h-48 overflow-y-auto`）は残す。** 外すと長い背景が
-          回答欄を画面外へ押し出す。`packages/ui/src/components/page.tsx`
-          （`grep -Fn -- 'スクロールへ閉じ込める' packages/ui/src/components/page.tsx`）と
-          `apps/web/app/routes/manager-detail.tsx` の `RequestCard` が同じ流儀 —
+          回答欄を画面外へ押し出す。`apps/web/app/routes/manager-detail.tsx` の
+          `RequestCard` が同じ流儀 —
           **文字は1つも捨てず、スクロールへ閉じ込める。**
 
           `min-w-0` は中の表・コードブロックが `overflow-x-auto` で収まるため
