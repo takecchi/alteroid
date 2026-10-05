@@ -973,3 +973,19 @@ describe('/approvals 画面: 読めない承認待ちの断り', () => {
     expect(screen.queryByText(/読めない/)).toBeNull();
   });
 });
+
+describe('見出し帯に幅を取る操作を置かない（#2765）', () => {
+  it('「回答済み・取り下げ済みも見る」は見出し帯（header）の外にある', async () => {
+    // jsdom はレイアウトを持たず折り返しを測れない（390px で見出しの列が約148px、説明文が
+    // 4行になった実寸はブラウザで測った）。原因だった「見出し帯の右に居座る」配置が
+    // 戻らないことを、DOM の位置で固定する。
+    stubApprovals([]);
+    renderPage();
+
+    const toggle = await screen.findByRole('button', { name: '回答済み・取り下げ済みも見る' });
+    expect(toggle.closest('header')).toBeNull();
+    // 見出しと説明文は header の中に残っている。
+    const heading = screen.getByRole('heading', { name: '承認待ち' });
+    expect(heading.closest('header')).not.toBeNull();
+  });
+});

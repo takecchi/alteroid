@@ -131,17 +131,22 @@ export default function Practices() {
           <ul>
             {practices.map((practice) => (
               <li key={practice.slug} className="border-b border-border last:border-b-0">
-                <Link
-                  to={`/practices/${practice.slug}`}
-                  className="flex items-center gap-3 px-4 py-3 hover:bg-muted"
-                >
+                {/* 行全体をリンクにしない（#2808）。リンクは題名だけにして、slug・サイズ・日時は
+                    選択・コピーできる文字にする。 */}
+                <div className="flex items-center gap-3 px-4 py-3 hover:bg-muted">
                   <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm">
-                      <span className="mr-1.5 text-[10px] text-muted-foreground">
+                    <div className="flex items-baseline text-sm">
+                      <span className="mr-1.5 shrink-0 text-[10px] text-muted-foreground">
                         [{practice.kind}]
                       </span>
-                      {practice.title}
-                    </p>
+                      {/* 押せる範囲は題名の行いっぱい（縦は上下に 4px ずつ足して 28px。-my で行の高さは変えない） */}
+                      <Link
+                        to={`/practices/${practice.slug}`}
+                        className="-my-1 block min-w-0 truncate py-1 underline-offset-2 hover:underline"
+                      >
+                        {practice.title}
+                      </Link>
+                    </div>
                     <p className="truncate font-mono text-[11px] text-muted-foreground">
                       {practice.slug}
                     </p>
@@ -153,7 +158,7 @@ export default function Practices() {
                     {practice.chars} 文字 · 作成 {formatRelative(practice.createdAt)} · 更新{' '}
                     {formatRelative(practice.updatedAt)}
                   </span>
-                </Link>
+                </div>
               </li>
             ))}
           </ul>

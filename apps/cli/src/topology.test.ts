@@ -192,6 +192,56 @@ describe('renderTopology', () => {
     expect(renderTopology(view() as never, NOW)).not.toContain('完了待ち');
   });
 
+  it('手が空いて runner の一覧に載っている委譲は、その旨を出し、欄が無ければ出さない', () => {
+    const idle = (extra: object) =>
+      view({
+        managers: [
+          {
+            managerId: 'mgr-idle',
+            status: 'done',
+            live: true,
+            request: '終わった依頼',
+            startedAt: ago(7200),
+            updatedAt: ago(3600),
+            waiting: [],
+            workers: [],
+            ...extra,
+          },
+        ],
+      });
+    expect(renderTopology(idle({ runnerListedAt: ago(5) }) as never, NOW)).toContain(
+      'runner の一覧に載っている（観測 5s ago）',
+    );
+    expect(renderTopology(idle({}) as never, NOW)).not.toContain('runner の一覧に載っている');
+  });
+
+  it('マネージャーの居る器を言う。生きた器と突き合わなければ「分からない」と言い、落とさない', () => {
+    const m = (managerId: string, runnerId?: string) => ({
+      managerId,
+      status: 'running',
+      live: true,
+      ...(runnerId === undefined ? {} : { runnerId }),
+      request: 'x',
+      startedAt: ago(60),
+      updatedAt: ago(5),
+      waiting: [],
+      workers: [],
+    });
+    const out = renderTopology(
+      view({
+        runners: [
+          { label: 'http://a', runnerId: 'runner-a', state: 'connected', since: ago(9) },
+          { label: 'http://b', runnerId: 'runner-b', state: 'lost', since: ago(9) },
+        ],
+        managers: [m('m-a', 'runner-a'), m('m-b', 'runner-b'), m('m-none')],
+      }) as never,
+      NOW,
+    );
+    expect(out).toContain('器: runner-a');
+    expect(out).not.toContain('器: runner-b');
+    expect(out.match(/器: 分からない/g)).toHaveLength(2);
+  });
+
   it('自由文（依頼・返事待ち）に混じったトークンは伏せる', () => {
     const token = `ghp_${'a1B2c3D4e5'.repeat(4)}`;
     const base = view();

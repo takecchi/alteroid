@@ -89,6 +89,8 @@ import {
   ensureTrailingNewline,
   findOpenManagerDuplicate,
   JournalAnchorNotFoundError,
+  MemoryConflictError,
+  memoryVersionMatches,
 } from './store.js';
 import {
   activeAgentTokenSchema,
@@ -363,9 +365,18 @@ export function createMemoryStores(): Stores {
       if (doc === undefined) return null;
       return { ...doc, createdAt: toMemoryCreatedAt(createdAtStore.get(slug)) };
     },
-    async write(slug, content) {
+    async write(slug, content, options) {
       checkMemorySlug(slug);
       const before = documents.get(slug);
+      // 前提の版（Issue #2743）。fs / pg と同じ挙動——合わなければ書かずに投げる。
+      if (!memoryVersionMatches(before ?? null, options?.ifMatch)) {
+        throw new MemoryConflictError(
+          slug,
+          before === undefined
+            ? null
+            : { ...before, createdAt: toMemoryCreatedAt(createdAtStore.get(slug)) },
+        );
+      }
       const updatedAt = new Date().toISOString();
       // **保存する形へ正規化してから、以降は正規化した本文だけを使う。**
       // `PersonaStore.write` の契約（`store.ts`）であり、fs（`#writeNow` が

@@ -1,4 +1,5 @@
 import {
+  MemoryConflictError,
   deriveHumanTouchedAtFromJournal,
   deriveMemoryFrontmatter,
   ensureTrailingNewline,
@@ -14,6 +15,7 @@ import type {
   MemoryDocumentMeta,
   MemoryProtectionStatus,
   PersonaStore,
+  WriteMemoryOptions,
 } from '@alteroid/core';
 import { and, asc, eq, isNull, lt, or, sql } from 'drizzle-orm';
 
@@ -78,7 +80,11 @@ export class PgPersonaStore implements PersonaStore {
     return row === undefined ? null : toDocument(row);
   }
 
-  async write(slug: string, content: string): Promise<MemoryDocument> {
+  async write(
+    slug: string,
+    content: string,
+    options?: WriteMemoryOptions,
+  ): Promise<MemoryDocument> {
     const key = this.#slug(slug);
     // **describedAt の判定に要る「書く前の内容」を先に控える。** upsert は
     // SQL の1文で完結するので、JS 側からは新旧の content を突き合わせられない
@@ -86,7 +92,43 @@ export class PgPersonaStore implements PersonaStore {
     const prior = await this.#readPrior(key);
     const body = stripNulls(ensureTrailingNewline(content));
     const now = new Date();
-    const rows = await this.#db
+    const returning = {
+      slug: memory.slug,
+      content: memory.content,
+      updatedAt: memory.updatedAt,
+      createdAt: memory.createdAt,
+    };
+    const ifMatch = options?.ifMatch;
+    const rows =
+      ifMatch === undefined
+        ? await this.#upsert(key, body, now)
+        : // **前提の版つき（Issue #2743）。比較は書き込みと同じ1文の中で行う**
+          // （読んでから書くと、その間の別の書き手を見逃す。fs 版の `#serialize`
+          // 内の比較と同じ挙動）。合わなければ行が返らない。
+          ifMatch === null
+          ? await this.#db
+              .insert(memory)
+              .values({ slug: key, content: body, updatedAt: now, createdAt: now })
+              .onConflictDoNothing({ target: memory.slug })
+              .returning(returning)
+          : await this.#db
+              .update(memory)
+              .set({ content: body, updatedAt: now })
+              .where(
+                and(
+                  eq(memory.slug, key),
+                  sql`encode(sha256(convert_to(${memory.content}, 'UTF8')), 'hex') = ${ifMatch}`,
+                ),
+              )
+              .returning(returning);
+    if (ifMatch !== undefined && rows[0] === undefined) {
+      throw new MemoryConflictError(slug, await this.read(slug));
+    }
+    return this.#finishWrite(key, slug, prior, rows);
+  }
+
+  async #upsert(key: string, body: string, now: Date) {
+    return await this.#db
       .insert(memory)
       // **新規作成のときだけ `created_at` が入る。** conflict 側（＝更新）の
       // `set` には含めないので、既存行の `created_at` は NULL でも保たれる。
@@ -101,6 +143,27 @@ export class PgPersonaStore implements PersonaStore {
         updatedAt: memory.updatedAt,
         createdAt: memory.createdAt,
       });
+  }
+
+  async #finishWrite(
+    key: string,
+    slug: string,
+    prior:
+      | {
+          content: string;
+          updatedAt: Date | string;
+          describedAt: Date | null;
+          describedBytes: number | null;
+          describedBytesAt: Date | null;
+        }
+      | undefined,
+    rows: {
+      slug: string;
+      content: string;
+      updatedAt: Date | string;
+      createdAt: Date | string | null;
+    }[],
+  ): Promise<MemoryDocument> {
     const row = rows[0];
     if (row === undefined) throw new Error(`記憶の書き込みに失敗: ${slug}`);
     const { describedAt, describedBytes, describedBytesAt } = await this.#updateDerived(
