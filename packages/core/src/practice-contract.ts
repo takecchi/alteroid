@@ -359,6 +359,67 @@ export async function verifyPracticeStoreContract(
     if ((await practices.read(slug)) !== null) fail('ifMatch 省略の削除が消さない');
   }
 
+  // --- 11. NUL（issue #3011。teto の判断、2026-10-06） ---
+  // slug（鍵）は入口のスキーマ（practiceSlugSchema の正規表現）が NUL を弾くので、書く口は3実装とも投げる。
+  // 読むだけの口（read・readVersion・listVersions・remove）は、断らず「無い」と同じ結果を返す。本文（kind・title・content）の NUL は落として残す。
+  {
+    const nulSlug = 'contract-n\u0000ul';
+    const nulInput = {
+      slug: 'contract-nul',
+      kind: '調\u0000査',
+      title: '題\u0000',
+      content: '本\u0000文',
+    };
+    let writeThrown: unknown;
+    try {
+      await practices.write({ ...nulInput, slug: nulSlug });
+    } catch (error) {
+      writeThrown = error;
+    }
+    if (writeThrown === undefined)
+      fail('write(NULを含むslug)が投げない（入口のスキーマが弾くこと）');
+    // 読むだけの口は、断らず「無い」と同じ結果を返す（投げない）。
+    const readOutcomes: Array<[string, () => Promise<unknown>, string]> = [
+      ['read(NULを含むslug)はnull', () => practices.read(nulSlug), 'null'],
+      ['readVersion(NULを含むslug)はnull', () => practices.readVersion(nulSlug, 1), 'null'],
+      ['listVersions(NULを含むslug)は空', () => practices.listVersions(nulSlug), '[]'],
+      ['remove(NULを含むslug)は何もしない', () => practices.remove(nulSlug), 'undefined'],
+    ];
+    for (const [label, call, expected] of readOutcomes) {
+      let outcome: unknown;
+      try {
+        outcome = await call();
+      } catch (error) {
+        fail(`${label}（投げた: ${error instanceof Error ? error.name : typeof error}）`);
+      }
+      if ((JSON.stringify(outcome) ?? 'undefined') !== expected)
+        fail(`${label}（実際: ${JSON.stringify(outcome)}）`);
+    }
+    const nulWritten = await practices.write(nulInput);
+    if (
+      nulWritten.kind !== '調査' ||
+      nulWritten.title !== '題' ||
+      nulWritten.content !== '本文\n'
+    ) {
+      fail(`writeの返り値に NUL が残る: ${JSON.stringify(nulWritten)}`);
+    }
+    const nulRead = await practices.read('contract-nul');
+    if (nulRead?.kind !== '調査' || nulRead.title !== '題' || nulRead.content !== '本文\n') {
+      fail(`読み戻しに NUL が残る: ${JSON.stringify(nulRead)}`);
+    }
+    let emptied: unknown;
+    try {
+      await practices.write({ ...nulInput, slug: 'contract-nul-empty', kind: '\u0000' });
+    } catch (error) {
+      emptied = error;
+    }
+    if (emptied === undefined && (await practices.read('contract-nul-empty')) !== null) {
+      fail('NULだけの kind を、落とすと空になる kind を、そのまま受け付けた');
+    }
+    await practices.remove('contract-nul');
+    await practices.remove('contract-nul-empty');
+  }
+
   if (options.verifyClear !== true) {
     for (const slug of ['contract-a', 'contract-b', 'contract-c', 'contract-v', 'contract-m']) {
       await practices.remove(slug);

@@ -12,6 +12,7 @@ import {
   verifyJournalStoreWithContract,
   verifyPermissionGrantStoreContract,
   verifyPracticeStoreContract,
+  verifyJobNulContract,
   verifyScheduleNulContract,
   verifyStoreIsolationContract,
 } from '@alteroid/core';
@@ -672,6 +673,10 @@ describe('PgJournalStore', () => {
 });
 
 describe('PgJobStore', () => {
+  it('NUL の契約（issue #3011。3実装で同じことを測る）', async () => {
+    await verifyJobNulContract(stores.jobs);
+  });
+
   it('ジョブを積んで session_id ごと読み戻せる（再起動後の resume の足がかり）', async () => {
     const now = new Date().toISOString();
     await stores.jobs.putJob({

@@ -1,6 +1,8 @@
 import {
   ensureTrailingNewline,
+  hasNul,
   PracticeConflictError,
+  stripNul,
   practiceMetaSchema,
   practiceSchema,
   practiceSlugSchema,
@@ -160,6 +162,8 @@ export class PgPracticeStore implements PracticeStore {
    * 読めない」として書き直し・削除まで進むため。
    */
   async read(slug: string): Promise<Practice | null> {
+    // 読むだけの口の NUL（issue #3011）。NUL を含む slug のやり方は存在しえない（書き込みはスキーマが弾く）ので「無い」。
+    if (hasNul(slug)) return null;
     const rows = await this.#db
       .select({
         slug: practices.slug,
@@ -204,7 +208,8 @@ export class PgPracticeStore implements PracticeStore {
   ): Promise<Practice> {
     // **正規化を自分で書かない。** 出所は `@alteroid/core` の
     // `ensureTrailingNewline` 1箇所である（`PracticeStore.write` の doc と #370）。
-    const content = ensureTrailingNewline(input.content);
+    // 本文（kind・title・content）の NUL は、検証の前に落として残す（issue #3011）。slug は下のスキーマが弾く。
+    const content = ensureTrailingNewline(stripNul(input.content));
     const now = new Date();
     // 本文も題も人間かクローンが書いた自由文なので NUL が混ざりうる。
     // **`chars` はここでは作らない**（`practiceSchema.omit({ chars: true })`
@@ -213,8 +218,8 @@ export class PgPracticeStore implements PracticeStore {
     const value = stripNulls(
       practiceSchema.omit({ chars: true }).parse({
         slug: this.#slug(input.slug),
-        kind: input.kind,
-        title: input.title,
+        kind: stripNul(input.kind),
+        title: stripNul(input.title),
         content,
         createdAt: now.toISOString(),
         updatedAt: now.toISOString(),
@@ -330,6 +335,7 @@ export class PgPracticeStore implements PracticeStore {
   }
 
   async remove(slug: string, options?: RemovePracticeOptions): Promise<void> {
+    if (hasNul(slug)) return;
     const key = this.#slug(slug);
     const ifMatch = options?.ifMatch;
     // **版は消さない**（`PracticeStore.remove` の doc、#1309）——`practices`
@@ -377,6 +383,7 @@ export class PgPracticeStore implements PracticeStore {
    * 「読めない」throw とは別に扱う。`FsPracticeStore.listVersions` と同じ形）。
    */
   async listVersions(slug: string): Promise<PracticeVersionMeta[]> {
+    if (hasNul(slug)) return [];
     const parsedSlug = this.#slug(slug);
     const rows = await this.#db
       .select({
@@ -422,6 +429,7 @@ export class PgPracticeStore implements PracticeStore {
    * （`version` も持つ）。
    */
   async readVersion(slug: string, version: number): Promise<PracticeVersion | null> {
+    if (hasNul(slug)) return null;
     const rows = await this.#db
       .select({
         slug: practiceVersions.slug,

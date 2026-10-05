@@ -3,6 +3,7 @@ import { join } from 'node:path';
 
 import {
   ensureTrailingNewline,
+  stripNul,
   PracticeConflictError,
   practiceSchema,
   practiceVersionMatches,
@@ -308,7 +309,10 @@ export class FsPracticeStore implements PracticeStore {
   ): Promise<Practice> {
     // **正規化を自分で書かない。** 出所は `@alteroid/core` の
     // `ensureTrailingNewline` 1箇所である（`PracticeStore.write` の doc と #370）。
-    const content = ensureTrailingNewline(input.content);
+    // 本文（kind・title・content）の NUL は、検証の前に落として残す（issue #3011）。slug は下のスキーマが弾く。
+    const content = ensureTrailingNewline(stripNul(input.content));
+    const kind = stripNul(input.kind);
+    const title = stripNul(input.title);
     const now = new Date().toISOString();
     return this.#update((file) => {
       const existing = file.practices.find((entry) => entry.slug === input.slug);
@@ -324,8 +328,8 @@ export class FsPracticeStore implements PracticeStore {
       }
       const next = practiceRecordSchema.parse({
         slug: input.slug,
-        kind: input.kind,
-        title: input.title,
+        kind,
+        title,
         content,
         // 上書きで作成時刻を捏造しない（`PracticeStore.write` の doc）。
         // **既存が壊れた行にしか無ければ `existing` は `undefined`**——
@@ -372,8 +376,8 @@ export class FsPracticeStore implements PracticeStore {
       const nextVersion = practiceVersionRecordSchema.parse({
         slug: input.slug,
         version: priorMaxVersion + 1,
-        kind: input.kind,
-        title: input.title,
+        kind,
+        title,
         content,
         at: now,
       });

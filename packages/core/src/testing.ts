@@ -124,6 +124,7 @@ import {
   stripNulFromUsageRecord,
 } from './usage-input.js';
 import { assertNoNul, hasNul, stripNul, stripNulDeep } from './nul-guard.js';
+import { prepareApprovalForWrite, prepareJobForWrite } from './job-input.js';
 import { preparePermissionGrantForPut } from './permission-grant-input.js';
 import { assertProfileRowWritable } from './profile-input.js';
 import { assertValidActiveToken, prepareTokensForReplace } from './token-pool-input.js';
@@ -673,7 +674,7 @@ export function createMemoryStores(): Stores {
     async putJob(job) {
       // 本物（fs / pg）と同じく `jobSchema` を通す（issue #1715。同じストアの
       // `updateJob` は #1652 で先に直っていたが、`putJob` だけ食い違って残った）。
-      jobs.set(job.id, isolate(jobSchema.parse(job)));
+      jobs.set(job.id, isolate(prepareJobForWrite(jobSchema.parse(job))));
     },
     // **判定と書き込みのあいだに `await` を1つも挟まないこと（issue #1041 と
     // 同じ理由）。** プロセス内の `Map` は同期アクセスなので、fs の
@@ -688,7 +689,7 @@ export function createMemoryStores(): Stores {
       // 同じ書き方）でも、`jobSchema.parse` が投げて書き込みに至らなかった
       // ときに `Map` の中身を汚さないため。
       // 本物（fs / pg）と同じく `jobSchema` を通す（issue #1652 と同じ理由）。
-      const next = jobSchema.parse(mutate(isolate(found)));
+      const next = prepareJobForWrite(jobSchema.parse(mutate(isolate(found))));
       jobs.set(id, isolate(next));
       return isolate(next);
     },
@@ -711,7 +712,10 @@ export function createMemoryStores(): Stores {
       // 本物（fs / pg）と同じく `pendingApprovalSchema` を通す（issue #2012。
       // `putJob`（#1715）・`updateApproval`（#2007。すぐ下）は先に直っていたが、
       // `putApproval` だけ食い違って残った）。
-      approvals.set(approval.id, isolate(pendingApprovalSchema.parse(approval)));
+      approvals.set(
+        approval.id,
+        isolate(prepareApprovalForWrite(pendingApprovalSchema.parse(approval))),
+      );
     },
     // `updateJob`（すぐ上）と同じ理由・同じ形（issue #2007）——プロセス内の
     // `Map` は同期アクセスなので、判定と書き込みのあいだに `await` を挟まなければ
@@ -722,7 +726,7 @@ export function createMemoryStores(): Stores {
       if (found === undefined) return null;
       const next = mutate(isolate(found));
       if (next === null) return null;
-      const parsed = pendingApprovalSchema.parse(next);
+      const parsed = prepareApprovalForWrite(pendingApprovalSchema.parse(next));
       approvals.set(id, isolate(parsed));
       return isolate(parsed);
     },
@@ -1939,7 +1943,10 @@ export function createMemoryStores(): Stores {
       return found === undefined ? null : isolate(found);
     },
     async write(input, options) {
-      const content = ensureTrailingNewline(input.content);
+      // 本文（kind・title・content）の NUL は、検証の前に落として残す（issue #3011）。slug は下のスキーマが弾く。
+      const content = ensureTrailingNewline(stripNul(input.content));
+      const kind = stripNul(input.kind);
+      const title = stripNul(input.title);
       const now = new Date().toISOString();
       const existing = practices.get(input.slug);
       // 前提の版（Issue #2853）。fs / pg と同じ挙動——合わなければ書かず・版も足さずに投げる。
@@ -1951,8 +1958,8 @@ export function createMemoryStores(): Stores {
       }
       const next = practiceSchema.parse({
         slug: input.slug,
-        kind: input.kind,
-        title: input.title,
+        kind,
+        title,
         content,
         // **上書きで作成時刻を捏造しない**（`PracticeStore.write` の doc）。
         createdAt: existing?.createdAt ?? now,
@@ -1970,8 +1977,8 @@ export function createMemoryStores(): Stores {
       const version = practiceVersionSchema.parse({
         slug: input.slug,
         version: history.length + 1,
-        kind: input.kind,
-        title: input.title,
+        kind,
+        title,
         content,
         at: now,
         chars: [...content].length,

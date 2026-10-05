@@ -720,6 +720,26 @@ describe('PgSessionStore（SDK のセッション永続化）', () => {
     ]);
   });
 
+  it('読むだけの口は、鍵列に NUL を含んでいても断らず「無い」と同じ結果を返す（issue #3011）', async () => {
+    const nulKey = { projectKey: 'pro\u0000j', sessionId: 'sess-1' };
+    const nulSession = { projectKey: 'proj', sessionId: 'sess\u0000-1' };
+    const nulSubpath = { projectKey: 'proj', sessionId: 'sess-1', subpath: 'sub\u0000path' };
+    await stores.sessionStore.append(key, [{ type: 'user', uuid: 'keep-1', body: 'b' }]);
+    for (const bad of [nulKey, nulSession, nulSubpath]) {
+      expect(await stores.sessionStore.load(bad)).toBeNull();
+      expect(await stores.sessionStore.readTail(bad, 1_000)).toBeNull();
+      expect(await stores.sessionStore.measureSize(bad)).toBeNull();
+      await expect(stores.sessionStore.delete(bad)).resolves.toBeUndefined();
+    }
+    expect(await stores.sessionStore.listSessions('pro\u0000j')).toEqual([]);
+    expect(await stores.sessionStore.listSubkeys(nulKey)).toEqual([]);
+    expect(await stores.sessionStore.listSubkeys(nulSession)).toEqual([]);
+    // 読んだだけ・消そうとしただけで、本物の行は変わらない。
+    expect(await stores.sessionStore.load(key)).toEqual([
+      { type: 'user', uuid: 'keep-1', body: 'b' },
+    ]);
+  });
+
   /**
    * **末尾だけを読む口**（#564 E1b。`SessionTranscriptTail`）。
    *

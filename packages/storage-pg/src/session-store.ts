@@ -1,4 +1,4 @@
-import { assertNoNul, countCodePoints } from '@alteroid/core';
+import { assertNoNul, countCodePoints, hasNul } from '@alteroid/core';
 import type { LostSessionGrave, SessionTranscriptTail } from '@alteroid/core';
 import type { SessionKey, SessionStore, SessionStoreEntry } from '@anthropic-ai/claude-agent-sdk';
 import { and, asc, desc, eq, ne, sql } from 'drizzle-orm';
@@ -28,6 +28,15 @@ import { sessionEntries, sessions } from './schema.js';
  * なるが、蒸留はそれで成立する（`clone.ts` の `tailOf` は、もともと末尾しか読まない）。
  */
 const TAIL_SCAN_ROWS = 2_000;
+
+/** 鍵列（projectKey・sessionId・subpath）のどれかに NUL があるか（読むだけの口の短絡用。issue #3011）。 */
+function hasKeyNul(key: { projectKey: string; sessionId: string; subpath?: string }): boolean {
+  return (
+    hasNul(key.projectKey) ||
+    hasNul(key.sessionId) ||
+    (key.subpath !== undefined && hasNul(key.subpath))
+  );
+}
 
 export class PgSessionStore implements SessionStore, SessionTranscriptTail {
   readonly #db: Db;
@@ -114,6 +123,8 @@ export class PgSessionStore implements SessionStore, SessionTranscriptTail {
   }
 
   async load(key: SessionKey): Promise<SessionStoreEntry[] | null> {
+    // 読むだけの口の NUL（issue #3011）。NUL を含む鍵の行は存在しえない（append が断る）ので「無い」。DB に投げるとエラーになる。
+    if (hasKeyNul(key)) return null;
     const rows = await this.#db
       .select({ entry: sessionEntries.entry })
       .from(sessionEntries)
@@ -148,6 +159,7 @@ export class PgSessionStore implements SessionStore, SessionTranscriptTail {
    * 作り直さない。
    */
   async readTail(key: LostSessionGrave, maxChars: number): Promise<string | null> {
+    if (hasKeyNul(key)) return null;
     const rows = await this.#db
       .select({ entry: sessionEntries.entry })
       .from(sessionEntries)
@@ -252,6 +264,7 @@ export class PgSessionStore implements SessionStore, SessionTranscriptTail {
    * 何バイトあたりで発火するかは確かめていない。
    */
   async measureSize(key: LostSessionGrave): Promise<number | null> {
+    if (hasKeyNul(key)) return null;
     try {
       return await withStatementTimeout(this.#db, STATEMENT_TIMEOUT_MS, async (tx) => {
         const [row] = await tx
@@ -277,6 +290,7 @@ export class PgSessionStore implements SessionStore, SessionTranscriptTail {
   }
 
   async listSessions(projectKey: string): Promise<{ sessionId: string; mtime: number }[]> {
+    if (hasNul(projectKey)) return [];
     const rows = await this.#db
       .select({ sessionId: sessions.sessionId, updatedAt: sessions.updatedAt })
       .from(sessions)
@@ -289,6 +303,7 @@ export class PgSessionStore implements SessionStore, SessionTranscriptTail {
 
   /** 作業者（サブエージェント）の生ログも resume 時に materialize させる。 */
   async listSubkeys(key: { projectKey: string; sessionId: string }): Promise<string[]> {
+    if (hasKeyNul(key)) return [];
     const rows = await this.#db
       .select({ subpath: sessions.subpath })
       .from(sessions)
@@ -310,6 +325,7 @@ export class PgSessionStore implements SessionStore, SessionTranscriptTail {
    * セッションが一覧に出続けることになる。
    */
   async delete(key: SessionKey): Promise<void> {
+    if (hasKeyNul(key)) return;
     await this.#db.transaction(async (tx) => {
       await tx.delete(sessionEntries).where(this.#keyFilter(key));
       await tx
