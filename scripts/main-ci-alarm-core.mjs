@@ -133,15 +133,59 @@ export function runMention(runId) {
 }
 
 /**
+ * 取り消された run を見分けるときの対象 workflow と、集約ゲートの job 名。
+ *
+ * `ci.yml` の `ci` ジョブは `needs` の job が cancelled でも `exit 1` する
+ * （`if: always()`。skipped にすると必須チェックが「通った」と読まれうるため、
+ * 判定は変えない —— 逐語は `ci.yml` の `ci` ジョブの直上の doc）。そのため、
+ * 後続の push で `cancel-in-progress` に取り消された `main` の run も、
+ * workflow の conclusion は `failure` になる（Issue #3044。#3040 が偽の警報）。
+ * **`workflow_run` の conclusion だけでは本物の失敗と見分けられない**ので、
+ * jobs を見る。名前は `ci.yml` と一致していなければならない（歯:
+ * `main-ci-alarm.test.ts` の「取り消し判定の名前が ci.yml と一致する」）。
+ */
+export const CANCEL_AWARE_WORKFLOW_NAME = 'CI';
+export const GATE_JOB_NAME = 'ci';
+
+/** 「失敗」と数えない job の conclusion。**これ以外はすべて失敗側に数える**（安全側）。 */
+const NOT_FAILED_CONCLUSIONS = new Set(['success', 'skipped', 'cancelled', 'neutral']);
+
+/**
+ * 取り消された run（＝本物の失敗ではない）か。
+ *
+ * ⟹ **次の2つが両方成り立つときだけ** true:
+ *
+ * 1. 失敗した job が1つ以上在り、**そのすべてが集約ゲート（`ci`）である**
+ * 2. `cancelled` の job が1つ以上在る
+ *
+ * ⛔ **本物の失敗が cancelled と混ざっているときは false**（今までどおり鳴らす）。
+ * ⛔ **jobs が取れなかった（`null` / 配列でない）ときも false** —— 取れないことを
+ * 「取り消された」へ倒すと、警報が黙って消える。
+ * 失敗の job が1つも見えない（ゲートも含めて）ときも false（説明のつかない赤は鳴らす）。
+ *
+ * @param {{name:string, conclusion:string|null}[]|null|undefined} jobs
+ */
+export function isCancelledRun(jobs) {
+  if (!Array.isArray(jobs)) return false;
+  const failed = jobs.filter((j) => !NOT_FAILED_CONCLUSIONS.has(j.conclusion ?? ''));
+  if (failed.length === 0) return false;
+  if (!failed.every((j) => j.name === GATE_JOB_NAME)) return false;
+  return jobs.some((j) => j.conclusion === 'cancelled');
+}
+
+/**
  * 警報を出す状況かどうか。
  *
  * **workflow 側の `if:` と二重になっているのは承知のうえである。** `if:` は
  * YAML 式で、外した／書き間違えたときに**静かに全部通す**側へ倒れる。ここで
  * もう一度見ておけば、少なくとも「関係ない run で Issue を立てた」は起きない。
  *
- * @param {{conclusion:string|null, headBranch:string|null, defaultBranch:string}} input
+ * `jobs` は **`CANCEL_AWARE_WORKFLOW_NAME` の run にだけ**効く。省略（`undefined`）・
+ * `null`（取得に失敗）のときは取り消しとみなさず、今までどおり鳴らす。
+ *
+ * @param {{conclusion:string|null, headBranch:string|null, defaultBranch:string, workflowName?:string, jobs?:{name:string, conclusion:string|null}[]|null}} input
  */
-export function shouldAlarm({ conclusion, headBranch, defaultBranch }) {
+export function shouldAlarm({ conclusion, headBranch, defaultBranch, workflowName, jobs }) {
   if (conclusion !== 'failure') {
     return { alarm: false, reason: `conclusion=${conclusion} は failure ではない` };
   }
@@ -151,6 +195,14 @@ export function shouldAlarm({ conclusion, headBranch, defaultBranch }) {
     return {
       alarm: false,
       reason: `head_branch=${headBranch} は default branch（${defaultBranch}）ではない`,
+    };
+  }
+  if (workflowName === CANCEL_AWARE_WORKFLOW_NAME && isCancelledRun(jobs)) {
+    // 後続の push に取り消された run。集約ゲート `ci` が cancelled を見て
+    // 落ちているだけで、本物の失敗は無い（Issue #3044）。
+    return {
+      alarm: false,
+      reason: `失敗したのは集約ゲート（${GATE_JOB_NAME}）だけで、ほかの job が cancelled —— 取り消された run であって本物の失敗ではない`,
     };
   }
   return { alarm: true, reason: `${defaultBranch} の run が failure で終わった` };

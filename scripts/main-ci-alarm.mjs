@@ -27,7 +27,15 @@
  * | `--conclusion` | `MAIN_CI_ALARM_CONCLUSION` | その run の conclusion |
  * | `--head-branch` | `MAIN_CI_ALARM_HEAD_BRANCH` | その run の head_branch |
  * | `--default-branch` | `MAIN_CI_ALARM_DEFAULT_BRANCH` | repo の default branch |
+ * | `--run-attempt` | `MAIN_CI_ALARM_RUN_ATTEMPT`（任意） | その run の run_attempt（jobs をその試行から読む。無ければ最新） |
  * | `--apply` | `MAIN_CI_ALARM_APPLY`（`1`/`true`） | 実際に書くなら指定 |
+ *
+ * ## 取り消された run は鳴らさない（Issue #3044）
+ *
+ * `CI` の run は、後続の push に `cancel-in-progress` で取り消されても、集約ゲート
+ * `ci` が落ちるので conclusion が `failure` になる。**判定は core の `isCancelledRun`**
+ * （失敗が `ci` だけで cancelled が在るときだけ「取り消し」）。ここは jobs を取りに行く
+ * だけで、**取れなかったときは今までどおり鳴らす**（黙って消さない）。
  *
  * 欠けている入力が在れば「呼び方の誤り」として終了コード1で終わる
  * （`issue-done-trailer.mjs` と同じ理由 —— 読みに行くための情報が最初から無いのは
@@ -62,6 +70,7 @@ import {
   buildIssueBody,
   buildIssueTitle,
   decideAlarmAction,
+  CANCEL_AWARE_WORKFLOW_NAME,
   findOpenAlarmIssue,
   shouldAlarm,
 } from './main-ci-alarm-core.mjs';
@@ -156,6 +165,34 @@ function fetchIssueComments(repo, issueNumber) {
   }
 }
 
+/**
+ * run の jobs を `{name, conclusion}` の配列で返す。失敗したら `{ jobs: null, error }`。
+ * `--paginate` は `.jobs` を持つ応答を1つの JSON へ連結できないので、`--jq` で1件1行にして読む。
+ */
+function fetchRunJobs(repo, runId, runAttempt) {
+  const base =
+    runAttempt === ''
+      ? `repos/${repo}/actions/runs/${runId}/jobs`
+      : `repos/${repo}/actions/runs/${runId}/attempts/${runAttempt}/jobs`;
+  const { stdout, error } = gh([
+    'api',
+    '--paginate',
+    `${base}?per_page=100`,
+    '--jq',
+    '.jobs[] | {name, conclusion}',
+  ]);
+  if (stdout === null) return { jobs: null, error };
+  try {
+    const jobs = stdout
+      .split('\n')
+      .filter((line) => line.trim() !== '')
+      .map((line) => JSON.parse(line));
+    return { jobs, error: null };
+  } catch (e) {
+    return { jobs: null, error: `応答を JSON として読めなかった: ${String(e)}` };
+  }
+}
+
 function main() {
   const args = parseArgs(process.argv.slice(2));
   const env = process.env;
@@ -168,6 +205,8 @@ function main() {
   const conclusion = args.conclusion || env.MAIN_CI_ALARM_CONCLUSION || '';
   const headBranch = args['head-branch'] || env.MAIN_CI_ALARM_HEAD_BRANCH || '';
   const defaultBranch = args['default-branch'] || env.MAIN_CI_ALARM_DEFAULT_BRANCH || '';
+
+  const runAttempt = args['run-attempt'] || env.MAIN_CI_ALARM_RUN_ATTEMPT || '';
 
   const missing = Object.entries({
     repo,
@@ -190,7 +229,18 @@ function main() {
   const apply = isApplyRequested(args);
   log(apply ? '=== APPLY モード: 実際に Issue へ書く ===' : '=== dry-run: 何も書かない ===');
 
-  const verdict = shouldAlarm({ conclusion, headBranch, defaultBranch });
+  let verdict = shouldAlarm({ conclusion, headBranch, defaultBranch, workflowName });
+  if (verdict.alarm && workflowName === CANCEL_AWARE_WORKFLOW_NAME) {
+    const { jobs, error: jobsError } = fetchRunJobs(repo, runId, runAttempt);
+    if (jobs === null) {
+      // 安全側: jobs が読めないときは取り消しとみなさず、今までどおり鳴らす。
+      logError('main-ci-alarm: run の jobs を読めなかった —— 取り消しかどうか判定できないので鳴らす');
+      logError(`  gh の出力: ${jobsError}`);
+    } else {
+      log(`main-ci-alarm: jobs ${jobs.map((j) => `${j.name}=${j.conclusion}`).join(', ')}`);
+    }
+    verdict = shouldAlarm({ conclusion, headBranch, defaultBranch, workflowName, jobs });
+  }
   if (!verdict.alarm) {
     log(`main-ci-alarm: 警報を出さない —— ${verdict.reason}`);
     return;
