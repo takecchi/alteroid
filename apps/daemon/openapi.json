@@ -735,6 +735,10 @@
                           },
                           "supersededBy": {
                             "type": "string"
+                          },
+                          "turnFailure": {
+                            "type": "string",
+                            "enum": ["failed", "held"]
                           }
                         },
                         "required": ["id", "at", "role", "text"]
@@ -876,6 +880,10 @@
                         },
                         "supersedes": {
                           "type": "string"
+                        },
+                        "turnFailure": {
+                          "type": "string",
+                          "enum": ["failed", "held"]
                         },
                         "approvalId": {
                           "type": "string"
@@ -4713,6 +4721,10 @@
                               "supersedes": {
                                 "type": "string"
                               },
+                              "turnFailure": {
+                                "type": "string",
+                                "enum": ["failed", "held"]
+                              },
                               "approvalId": {
                                 "type": "string"
                               },
@@ -8095,6 +8107,10 @@
                                 "supersedes": {
                                   "type": "string"
                                 },
+                                "turnFailure": {
+                                  "type": "string",
+                                  "enum": ["failed", "held"]
+                                },
                                 "approvalId": {
                                   "type": "string"
                                 },
@@ -9375,6 +9391,10 @@
                                 },
                                 "supersedes": {
                                   "type": "string"
+                                },
+                                "turnFailure": {
+                                  "type": "string",
+                                  "enum": ["failed", "held"]
                                 },
                                 "approvalId": {
                                   "type": "string"
@@ -10657,6 +10677,10 @@
                               "supersedes": {
                                 "type": "string"
                               },
+                              "turnFailure": {
+                                "type": "string",
+                                "enum": ["failed", "held"]
+                              },
                               "approvalId": {
                                 "type": "string"
                               },
@@ -11925,6 +11949,10 @@
                               },
                               "supersedes": {
                                 "type": "string"
+                              },
+                              "turnFailure": {
+                                "type": "string",
+                                "enum": ["failed", "held"]
                               },
                               "approvalId": {
                                 "type": "string"

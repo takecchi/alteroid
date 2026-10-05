@@ -2799,6 +2799,7 @@ export function createApp(deps: AppDeps) {
           text: message.text,
           ...(message.supersedes === undefined ? {} : { supersedes: message.supersedes }),
           ...(message.supersededBy === undefined ? {} : { supersededBy: message.supersededBy }),
+          ...(message.turnFailure === undefined ? {} : { turnFailure: message.turnFailure }),
         }));
 
         /*

@@ -468,6 +468,7 @@ export function describeDistillGap(gap: DistillGap): string {
     '',
     `中身は日誌に在る。\`journal_read\` に \`since\`（${gap.firstActivityAt}）と ` +
       `\`until\`（${gap.lastActivityAt}）を渡せばその区間だけを読める。` +
-      '記憶へ移すべきものが在れば `memory_write` / `memory_append` で移すこと。',
+      '記憶へ移すべきものが在れば `memory_write` / `memory_append` で移すこと' +
+      '（既存の文書を `memory_write` で書き直すときは、先に `memory_read` で読んで `base_version` を渡すこと）。',
   ].join('\n');
 }

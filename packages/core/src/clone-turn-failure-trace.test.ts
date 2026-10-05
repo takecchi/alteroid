@@ -32,6 +32,7 @@ describe('クローン — ターンの失敗の跡', () => {
       role: string;
       text: string;
       conversationId?: string;
+      turnFailure?: string;
     }[];
   }
 
@@ -801,6 +802,9 @@ describe('クローン — ターンの失敗の跡', () => {
     /** 枠だけ（長さの語を含まない）。対照1 用。 */
     const usageOnlyMessage = "You've hit your individual spend limit for this account.";
 
+    /** 直近の `toHumanAfterFailure` が読んだ行の `turnFailure` の印。 */
+    let markOfLastLine: string | undefined;
+
     /** 失敗した `result` で1ターン落とし、人間へ返った1行を取り出す。 */
     async function toHumanAfterFailure(resultText: string): Promise<string | undefined> {
       const stores = createMemoryStores();
@@ -824,6 +828,7 @@ describe('クローン — ターンの失敗の跡', () => {
         (entry) => entry.with === 'human' && entry.role === 'outbound' && entry.text !== 'やあ',
       );
       await s.clone.stop();
+      markOfLastLine = toHuman?.turnFailure;
       return toHuman?.text;
     }
 
@@ -845,6 +850,8 @@ describe('クローン — ターンの失敗の跡', () => {
     it('対照1（枠だけ）: 長さの語を含まない上限では、断りが出ない', async () => {
       const toHuman = await toHumanAfterFailure(usageOnlyMessage);
 
+      // 保持の1行は「失敗」ではなく「保持」の印を持つ（画面が文面を見ずに見分けるため）。
+      expect(markOfLastLine).toBe('held');
       expect(toHuman).toContain('枠が開いたら試し直して返信する');
       // **ここが出たら「常に足す」実装である。**
       expect(toHuman).not.toContain('文脈窓');
@@ -859,6 +866,8 @@ describe('クローン — ターンの失敗の跡', () => {
       expect(toHuman).toContain('この発言には返せなかった');
       expect(toHuman).not.toContain('文脈窓');
       expect(toHuman).not.toContain('いま利用上限に当たっているので');
+      // 失敗の1行は「failed」の印を持つ。文面（上）は1文字も変えていない。
+      expect(markOfLastLine).toBe('failed');
     });
   });
 
