@@ -1585,6 +1585,8 @@ export function createMemoryStores(): Stores {
    * 「テストの器では通るのに本物では他の鍵が消える」というずれ方をする。
    */
   const credentialRows = new Map<string, StoredCredential>();
+  /** `seedOnce` の印（fs は `credentials.json`、pg は `daemon_state`）。 */
+  const credentialSeedMarkers = new Set<string>();
 
   const credentials: CredentialVaultStore = {
     async list() {
@@ -1610,6 +1612,25 @@ export function createMemoryStores(): Stores {
         });
       }
       return credentials.list();
+    },
+    async seedOnce(marker, entries) {
+      assertValidCredentialEntries(entries);
+      if (credentialSeedMarkers.has(marker)) return [];
+      credentialSeedMarkers.add(marker);
+      const at = new Date().toISOString();
+      const written: string[] = [];
+      for (const entry of entries) {
+        if (entry.value.length === 0 || credentialRows.has(entry.name)) continue;
+        credentialRows.set(entry.name, {
+          name: entry.name,
+          value: entry.value,
+          updatedAt: at,
+          scope: entry.scope ?? 'all',
+          secret: entry.secret ?? true,
+        });
+        written.push(entry.name);
+      }
+      return written;
     },
   };
 

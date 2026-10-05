@@ -10,7 +10,7 @@ import { asc, inArray } from 'drizzle-orm';
 
 import { byteOrder } from './db.js';
 import type { Db } from './db.js';
-import { managerCredentials } from './schema.js';
+import { daemonState, managerCredentials } from './schema.js';
 
 /**
  * マネージャーへ降ろす環境変数の正本（クラウド段)。
@@ -95,5 +95,37 @@ export class PgCredentialVaultStore implements CredentialVaultStore {
         });
     }
     return this.list();
+  }
+
+  async seedOnce(marker: string, entries: readonly CredentialEntry[]): Promise<string[]> {
+    assertValidCredentialEntries(entries);
+    const key = `credentials_seeded:${marker}`;
+    const at = new Date();
+    return this.#db.transaction(async (tx) => {
+      // **印を先に取る**（同時に2つのデーモンが起きても、印を取れた1つだけが書く）。
+      const claimed = await tx
+        .insert(daemonState)
+        .values({ key, value: '1' })
+        .onConflictDoNothing()
+        .returning({ key: daemonState.key });
+      if (claimed.length === 0) return [];
+      const written: string[] = [];
+      for (const entry of entries) {
+        if (entry.value.length === 0) continue;
+        const inserted = await tx
+          .insert(managerCredentials)
+          .values({
+            name: entry.name,
+            value: entry.value,
+            updatedAt: at,
+            scope: entry.scope ?? 'all',
+            secret: entry.secret ?? true,
+          })
+          .onConflictDoNothing()
+          .returning({ name: managerCredentials.name });
+        if (inserted.length > 0) written.push(entry.name);
+      }
+      return written;
+    });
   }
 }

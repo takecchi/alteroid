@@ -1176,6 +1176,20 @@ export interface CloneOptions {
    */
   env?: NodeJS.ProcessEnv;
   /**
+   * **SDK 子プロセスの env の土台**（`#childEnv()` の最初の重ね）。省略は `env`
+   * （＝従来どおり `process.env`）。
+   *
+   * ## なぜ `env` と別に持つのか（2026-10-06）
+   *
+   * デーモンは起動時に `applyAppScopedEnvVars` で正本（袋）の `scope: all | app` の行を
+   * `process.env` へ書き写す。**それを「器の env」と取り違えて子へ渡すと、正本から外した
+   * 名前の古い値が起動時の写しとして子に残り続ける**（どの名前でも。正本を更新しても
+   * 古い値が勝つ）。⟹ 子へ渡す土台には、**書き写す前の `process.env` のスナップショット**を
+   * 渡す。`env`（モデル帯・権限モードなどデーモン自身の設定の読み出し）は従来どおり
+   * 書き写し後の `process.env` のままでよい。
+   */
+  childEnvBase?: NodeJS.ProcessEnv;
+  /**
    * SDK 子プロセスへ重ねる鍵の現在値を返す関数（Issue #393 PR3）。
    *
    * **クローンにも認証トークンのプールの現在値を届けるための口である。** 渡さなければ
@@ -2253,6 +2267,8 @@ class Clone implements CloneHost {
    */
   readonly #sdkSession = new CloneSdkSession<AgentCloneSession, AgentUserInput>();
   readonly #env: NodeJS.ProcessEnv;
+  /** {@link CloneOptions.childEnvBase}。`#childEnv()` の土台。 */
+  readonly #childEnvBase: NodeJS.ProcessEnv;
   /**
    * SDK 子プロセスへ重ねる鍵の**現在値を返す関数**（Issue #393 PR3）。
    *
@@ -2353,6 +2369,7 @@ class Clone implements CloneHost {
       sessionStore,
       managers,
       env,
+      childEnvBase,
       credentials,
       tokenIdentity,
       onUsageObservation,
@@ -2398,6 +2415,7 @@ class Clone implements CloneHost {
     this.#mergedBatchLimit = mergedBatchLimit ?? resolveMergedBatchSizeLimit(envSource);
     this.#dailyReportRetryDelays = dailyReportRetryDelaysMs ?? DAILY_REPORT_RETRY_DELAYS_MS;
     this.#env = envSource;
+    this.#childEnvBase = childEnvBase ?? envSource;
     this.#credentials = credentials;
     this.#tokenIdentity = tokenIdentity;
     this.#onUsageObservation = onUsageObservation;
@@ -10876,7 +10894,7 @@ class Clone implements CloneHost {
    * だから落とさない」という上の理由はここには当てはまらない。
    */
   #childEnv(): NodeJS.ProcessEnv {
-    // **鍵は呼ばれるたびに読み直す。** `this.#env` は構築時のスナップショットなので、
+    // **鍵は呼ばれるたびに読み直す。** `this.#childEnvBase` は構築時のスナップショットなので、
     // そのまま配ると人間（や回し手）が後から差し替えた鍵が永久に届かない
     // （`credentials.ts` / `runner.ts` の `#childEnv()` と同じ理由）。
     //
@@ -10885,10 +10903,10 @@ class Clone implements CloneHost {
     // 言っており、**層ごとに順序が違うと「マネージャーには回るのにクローンには
     // 回らない」（あるいは逆）が生まれる。** 規則は1つにする。**正本の重ねを
     // `env` の直後・鍵とプロファイルより前に置くのは、Anthropic のプールの扱い
-    // （`this.#credentials`）を1バイトも変えないためである** —— 正本の重ねは
-    // `resolveCredentialRows` が `CLAUDE_CODE_OAUTH_TOKEN` を決して含まないので
-    // （`GITHUB_CREDENTIAL_NAMES` の doc）ここに挟んでも衝突しないが、念のため
-    // プールの重ねより手前に置いて、プールの行を後勝ちのまま動かさない。
+    // （`this.#credentials`）を1バイトも変えないためである** —— プールの名前
+    // （`POOL_OWNED_CREDENTIAL_NAMES`）は `assertEntries` が正本への書き込みを拒むので
+    // ここに挟んでも衝突しないが、念のためプールの重ねより手前に置いて、
+    // プールの行を後勝ちのまま動かさない。
     //
     // **⚠️ この順序の帰結として、プロファイルが鍵と同じ名前を宣言していると
     // 鍵が黙って上書きされる。** 塞ぐのは順序ではなく検出のほうである
@@ -10897,7 +10915,7 @@ class Clone implements CloneHost {
     // ここ以外で読み直すと、世代の照合が素通しになる。
     this.#sdkSession.captureSessionTokenIdentity(this.#tokenIdentity?.());
     const env: NodeJS.ProcessEnv = {
-      ...this.#env,
+      ...this.#childEnvBase,
       ...this.#vaultCredentialOverlay(),
       ...(this.#credentials?.() ?? {}),
       ...(this.#profile?.env() ?? {}),
@@ -10928,20 +10946,15 @@ class Clone implements CloneHost {
    *
    * ## `credentialService` を渡さなかったら
    *
-   * `[]` を正本として解決する——`resolveCredentialRows([], this.#env)` は
-   * 「正本に何も無い」場合と同じ形になり、**変更前の `#childEnv()`**
-   * （`env` → 鍵 → プロファイルだけ）とちょうど同じ集合を返す。**既定の
-   * 構成の挙動を変えない**（`CloneOptions.credentials` の同じ doc と同じ
-   * 約束）。
+   * `[]` を正本として解決する——正本の上乗せが無いだけで、**変更前の `#childEnv()`**
+   * （`env` → 鍵 → プロファイルだけ）とちょうど同じ集合を返す。**既定の構成の挙動を
+   * 変えない**（`CloneOptions.credentials` の同じ doc と同じ約束）。
    *
-   * ## 写しがまだ一度も読めていないとき（起動直後の窓）
+   * ## 器の env を最後の土台にしない（2026-10-06）
    *
-   * 同じく `[]` として扱われる——`vaultSnapshot()` の doc が言うとおり、
-   * これは退行ではない。**痩せるのは「正本にしか無い名前」だけで、それは
-   * この変更より前からクローンに届いていなかった名前である。** GitHub の
-   * 名前（`GITHUB_CREDENTIAL_NAMES`）で器の env が非空なら、この窓の間も
-   * 変わらず `this.#env` の値が届く（`resolveCredentialRows` がその名前を
-   * 器の env から出す）。
+   * 正本に無い名前（`GH_TOKEN` を含む）は、この重ねからは何も出ない。以前は
+   * `resolveCredentialRows` が `this.#env` の `GH_TOKEN` 等を土台として埋めていたが、
+   * その値は起動時に正本から書き写されたものだった（`CloneOptions.childEnvBase` の doc）。
    *
    * ## 範囲が広がる副作用
    *
@@ -10954,7 +10967,7 @@ class Clone implements CloneHost {
    */
   #vaultCredentialOverlay(): Record<string, string> {
     const rows = this.#credentialService?.vaultSnapshot() ?? [];
-    const resolved = resolveCredentialRows(rows, this.#env, 'clone');
+    const resolved = resolveCredentialRows(rows, 'clone');
     return Object.fromEntries(resolved.map((row) => [row.name, row.value]));
   }
 

@@ -11,7 +11,6 @@ import {
   CREDENTIAL_NAME,
   ENV_FILE_OWNED_CREDENTIAL_NAMES,
   fingerprintOf,
-  GITHUB_CREDENTIAL_NAMES,
   isWithheldCredentialName,
   POOL_OWNED_CREDENTIAL_NAMES,
   ROTATABLE_CREDENTIAL_KEYS,
@@ -413,43 +412,13 @@ describe('CLAUDE_CODE_OAUTH_TOKEN を回せる鍵にする', () => {
 });
 
 /**
- * **クローンの器の env が正本より勝つ名前の範囲（Issue #865 の恒久策、
- * 2026-09-12）。** ここが守るのは「推測で広がらないこと」——中身は明示的な
- * 列挙であって、`ROTATABLE_CREDENTIAL_KEYS` からプールを引いた計算結果では
- * ない（`GITHUB_CREDENTIAL_NAMES` の doc）。
+ * **`GITHUB_CREDENTIAL_NAMES`（クローンの器の env が正本より勝つ名前。Issue #865、2026-09-12）の
+ * 歯は、列挙そのものを撤去した 2026-10-06 に消した**（オーナー決定「GH_TOKEN も通常の環境変数と
+ * 同じように扱ってほしい」）。守っていたのは「勝つ範囲が推測で広がらないこと」で、**勝つ名前が
+ * 1つも無くなった**ので範囲という概念が消えた。保証は「器の env はどの名前でも出所にならない」へ
+ * 移った（`credential-service.test.ts` の「GitHub の名前も他の名前と同じく、正本が勝つ」と
+ * 「出力は入力の行の部分集合である」が測る）。3点セットは PR 本文にある。
  */
-describe('GITHUB_CREDENTIAL_NAMES（クローンの器の env が正本より勝つ名前）', () => {
-  it('いまは GH_TOKEN と GITHUB_TOKEN の2つだけである', () => {
-    expect([...GITHUB_CREDENTIAL_NAMES].sort()).toEqual(['GH_TOKEN', 'GITHUB_TOKEN']);
-  });
-
-  it('CLAUDE_CODE_OAUTH_TOKEN（プールの名前）を含まない', () => {
-    // **プールの名前が紛れ込んだら、Anthropic のトークンの優先順位まで
-    // 一緒に反転する。** ここが守るのはそれが起きないことである。
-    for (const name of POOL_OWNED_CREDENTIAL_NAMES) {
-      expect(GITHUB_CREDENTIAL_NAMES).not.toContain(name);
-    }
-  });
-
-  it('ROTATABLE_CREDENTIAL_KEYS からプールを引いた集合そのものである必要はない', () => {
-    // **⚠️ 現状は値として一致するが、この一致を機械的な計算結果として
-    // テストしない。** 一致するのは「たまたま」であって「そう作られている
-    // から」ではない——ROTATABLE_CREDENTIAL_KEYS に GitHub 以外の非プールの
-    // 名前が増えても、この配列は自動では広がらない（doc の主張そのもの）。
-    // ここでは「差は何か」を1つの事実として固定する。
-    //
-    // **#486 S5 で `CODEX_API_KEY` を回せる鍵に足した** ので、もう一致しない——
-    // これは上の主張が実際に起きた最初の例である。差は `CODEX_API_KEY` だけで、
-    // **GitHub 優先は広がっていない**（`GITHUB_CREDENTIAL_NAMES` は GH_TOKEN /
-    // GITHUB_TOKEN のまま）。旧い期待（一致）を、差の名指しへ強めて置き換えた。
-    const rotatableMinusPool = ROTATABLE_CREDENTIAL_KEYS.filter(
-      (name) => !POOL_OWNED_CREDENTIAL_NAMES.includes(name),
-    );
-    const notGitHub = rotatableMinusPool.filter((name) => !GITHUB_CREDENTIAL_NAMES.includes(name));
-    expect(notGitHub).toEqual(['CODEX_API_KEY']);
-    expect([...GITHUB_CREDENTIAL_NAMES].sort()).toEqual(['GITHUB_TOKEN', 'GH_TOKEN'].sort());
-  });
-});
 
 /**
  * 正本を器の生の環境変数（.env / Railway の Service 変数）が持つ名前の範囲
@@ -540,16 +509,15 @@ describe('credentialNamesShadowedByProfile', () => {
 /**
  * Codex の API キー（`CODEX_API_KEY`）を袋に入れた（Issue #486 M7 段 S5）。
  * 足して変わるのは、器のファイルになることと所在の env が増えることだけで、
- * プール・GitHub 優先・正本が器の env のもの・伏せる鍵のどれにも入らない。
+ * プール・正本が器の env のもの・伏せる鍵のどれにも入らない。
  */
 describe('CODEX_API_KEY を袋（回せる鍵）に入れる', () => {
   it('回せる鍵の一覧に入っている', () => {
     expect(ROTATABLE_CREDENTIAL_KEYS).toContain('CODEX_API_KEY');
   });
 
-  it('プール・GitHub 優先・器の env が正本のどの一覧にも入らない（足した効果が袋だけに留まる）', () => {
+  it('プール・器の env が正本のどの一覧にも入らない（足した効果が袋だけに留まる）', () => {
     expect(POOL_OWNED_CREDENTIAL_NAMES).not.toContain('CODEX_API_KEY');
-    expect(GITHUB_CREDENTIAL_NAMES).not.toContain('CODEX_API_KEY');
     expect(ENV_FILE_OWNED_CREDENTIAL_NAMES).not.toContain('CODEX_API_KEY');
   });
 

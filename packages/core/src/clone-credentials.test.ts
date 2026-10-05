@@ -212,7 +212,21 @@ describe('credentialService（正本を同期で覗いて重ねる。#865）', (
     expect(calls[0]?.options.env?.GH_TOKEN).toBe('from-vault');
   });
 
-  it('器の env が非空なら、正本より器の env が勝つ（GitHub の名前だけ）', async () => {
+  /**
+   * **⚠️ このテストは 2026-10-06 に期待値を反転した。** 元の題と期待:
+   * 「器の env が非空なら、正本より器の env が勝つ（GitHub の名前だけ）」——
+   * `expect(...GH_TOKEN).toBe('from-container-env')`。
+   *
+   * **GitHub の特別扱い（`GITHUB_CREDENTIAL_NAMES`）を撤去した**（オーナー決定 2026-10-06
+   * 「GH_TOKEN も通常の環境変数と同じように扱ってほしい」）。実害は、勝っていた「器の env」が
+   * 起動時に正本から書き写された古い値だったこと（画面で更新しても古い値が配られた。
+   * 実測 2026-10-05）。いまは**正本が子プロセスの env の土台に必ず勝つ**。
+   *
+   * **保証は弱くなっていない。** 元は「GitHub の名前だけ器の env に揃える」で、いまは
+   * 「どの名前でも、土台の env に何が在っても正本の行が勝つ」——後者のほうが強く、下の
+   * 「🔴 任意の名前」の歯（元から正本が勝っていた）と同じ主張に畳まれた。
+   */
+  it('器の env が非空でも、正本が勝つ（GitHub の名前も他の名前と同じ。2026-10-06）', async () => {
     const { clone, calls } = cloneWithVault({
       vault: [{ name: 'GH_TOKEN', value: 'from-vault', updatedAt: '2026-09-12T00:00:00.000Z' }],
       env: { GH_TOKEN: 'from-container-env' },
@@ -221,7 +235,7 @@ describe('credentialService（正本を同期で覗いて重ねる。#865）', (
     await waitFor(() => calls.length > 0, 'セッションが開くこと');
     clone.stop();
 
-    expect(calls[0]?.options.env?.GH_TOKEN).toBe('from-container-env');
+    expect(calls[0]?.options.env?.GH_TOKEN).toBe('from-vault');
   });
 
   it('🔴 器の env が空文字なら、正本が勝つ（空は「置かれていない」と同じ）', async () => {
@@ -304,7 +318,7 @@ describe('credentialService（正本を同期で覗いて重ねる。#865）', (
    * 判定だけ」と書いていた claim を、ここで実測に変える——`resolveCredentialRows`
    * の describe（`credential-service.test.ts`）は manager 側を実測している。
    * こちらはクローン自身の `#childEnv()`（`this.#env` を先に重ね、その上へ
-   * `resolveCredentialRows(rows, this.#env, 'clone')` を重ねる）まで通した
+   * `resolveCredentialRows(rows, 'clone')` を重ねる）まで通した
    * 観測点である。
    *
    * `scope: 'runner'` は `target: 'clone'` に適用されない
@@ -357,6 +371,105 @@ describe('credentialService（正本を同期で覗いて重ねる。#865）', (
     expect(withoutRow.calls[0]?.options.env?.GH_TOKEN).toBe(
       withRow.calls[0]?.options.env?.GH_TOKEN,
     );
+  });
+});
+
+/**
+ * **子プロセスの env の土台は、正本を書き写す前のスナップショットである**
+ * （`CloneOptions.childEnvBase`。2026-10-06）。
+ *
+ * デーモンは起動時に正本の `scope: all | app` の行を `process.env` へ書き写す。**書き写した後の
+ * `process.env` を土台にすると、正本から外した名前の古い値が、起動時の写しとして子に残り続ける**
+ * （どの名前でも。実測 2026-10-05）。ここが測るのは3つ: (1) 土台に書き写された値は、正本から
+ * 外せば子から本当に消える (2) 正本を更新すれば、書き写された古い値ではなく新しい値が子に届く
+ * (3) 土台を分けても、モデル帯など**デーモン自身の設定の読み出し**（`env`）は従来どおり
+ * 書き写し後の値を読む。
+ */
+describe('childEnvBase（子の env の土台は、書き写す前のスナップショット。2026-10-06）', () => {
+  let postSeq4 = 0;
+
+  function cloneWithBase(input: {
+    env: NodeJS.ProcessEnv;
+    childEnvBase?: NodeJS.ProcessEnv;
+    vault?: { name: string; value: string; updatedAt: string; scope?: 'all' | 'app' | 'runner' }[];
+  }) {
+    const { fn, calls } = fakeSdk();
+    const vault = input.vault ?? [];
+    const clone = createClone({
+      redeliveryGate: ALWAYS_REDELIVER,
+      stores: createMemoryStores(),
+      queryFn: fn,
+      env: input.env,
+      ...(input.childEnvBase === undefined ? {} : { childEnvBase: input.childEnvBase }),
+      credentialService: {
+        vaultSnapshot: () => vault,
+      } as unknown as Parameters<typeof createClone>[0]['credentialService'],
+      runners: createRunnerRegistry([
+        createLocalRunner({ workspacePath: '/work', queryFn: fakeSdk().fn, env: {} }),
+      ]),
+    });
+    return { clone, calls };
+  }
+
+  function say(clone: ReturnType<typeof createClone>): void {
+    clone.post({
+      type: 'human_message',
+      id: `evt-base-${String(++postSeq4)}`,
+      at: new Date().toISOString(),
+      text: 'こんにちは',
+      conversationId: 'conv-1',
+    });
+  }
+
+  it('(1) 起動時に書き写された名前は、正本から外せば次に起こす子から消える', async () => {
+    // `env` は書き写し後の process.env（NPM_TOKEN が正本から書き写されている）。
+    // 土台のスナップショットには無い。正本（vault）は空 ＝ 画面で消した後。
+    const { clone, calls } = cloneWithBase({
+      env: { NPM_TOKEN: 'written-at-boot', REAL_CONTAINER_VAR: 'kept' },
+      childEnvBase: { REAL_CONTAINER_VAR: 'kept' },
+      vault: [],
+    });
+    say(clone);
+    await waitFor(() => calls.length > 0, 'セッションが開くこと');
+    clone.stop();
+
+    expect(calls[0]?.options.env).not.toHaveProperty('NPM_TOKEN');
+    // 本物の器の環境変数（スナップショットに在るもの）は普通の名前として届く。
+    expect(calls[0]?.options.env?.REAL_CONTAINER_VAR).toBe('kept');
+  });
+
+  it('(2) 正本を更新すれば、書き写された古い値ではなく新しい値が子に届く（GH_TOKEN）', async () => {
+    const { clone, calls } = cloneWithBase({
+      env: { GH_TOKEN: 'old-written-at-boot' },
+      childEnvBase: {},
+      vault: [{ name: 'GH_TOKEN', value: 'new-in-vault', updatedAt: '2026-10-06T00:00:00.000Z' }],
+    });
+    say(clone);
+    await waitFor(() => calls.length > 0, 'セッションが開くこと');
+    clone.stop();
+
+    expect(calls[0]?.options.env?.GH_TOKEN).toBe('new-in-vault');
+  });
+
+  it('(3) 土台を分けても、デーモン自身の設定（モデル帯）は書き写し後の env から読む', async () => {
+    const { clone, calls } = cloneWithBase({
+      env: { ALTEROID_CLONE_MODEL: 'sonnet' },
+      childEnvBase: {},
+    });
+    say(clone);
+    await waitFor(() => calls.length > 0, 'セッションが開くこと');
+    clone.stop();
+
+    expect(calls[0]?.options.model).toBe('sonnet');
+  });
+
+  it('childEnvBase を渡さなければ、土台は env のまま（既定の構成の挙動を変えない）', async () => {
+    const { clone, calls } = cloneWithBase({ env: { FROM_ENV: 'yes' } });
+    say(clone);
+    await waitFor(() => calls.length > 0, 'セッションが開くこと');
+    clone.stop();
+
+    expect(calls[0]?.options.env?.FROM_ENV).toBe('yes');
   });
 });
 

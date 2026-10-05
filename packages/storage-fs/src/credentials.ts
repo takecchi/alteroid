@@ -58,6 +58,8 @@ const rowSchema = z.object({
  */
 const topLevelSchema = z.object({
   credentials: z.array(z.unknown()).default([]),
+  /** `seedOnce` の印（1度だけの移行をしたことの記録。無ければ空）。 */
+  seeded: z.array(z.string()).default([]),
 });
 
 /**
@@ -72,9 +74,11 @@ interface CredentialFile {
   credentials: StoredCredential[];
   /** 行の形が不正で読めなかった、生の要素（パース前のまま）。 */
   invalidRaw: unknown[];
+  /** `seedOnce` が立てた印。書き戻すときも落とさない。 */
+  seeded: string[];
 }
 
-const EMPTY: CredentialFile = { credentials: [], invalidRaw: [] };
+const EMPTY: CredentialFile = { credentials: [], invalidRaw: [], seeded: [] };
 
 /**
  * 不正な行を要約する。**`issue.message` は使わない**——zod の既定メッセージが
@@ -161,9 +165,41 @@ export class FsCredentialVaultStore implements CredentialVaultStore {
         const name = extractRowName(raw);
         return name === undefined || !writtenNames.has(name);
       });
-      return { credentials: [...rows.values()], invalidRaw };
+      return { credentials: [...rows.values()], invalidRaw, seeded: file.seeded };
     });
     return [...written.credentials].sort((a, b) => compareCodeUnits(a.name, b.name));
+  }
+
+  async seedOnce(marker: string, entries: readonly CredentialEntry[]): Promise<string[]> {
+    assertValidCredentialEntries(entries);
+    const at = new Date().toISOString();
+    const written: string[] = [];
+    await this.#update((file) => {
+      if (file.seeded.includes(marker)) return file;
+      const rows = new Map(file.credentials.map((row) => [row.name, row]));
+      // 同じ名前の壊れた行（`invalidRaw`）が在るなら、人間の手が入っている行として
+      // 上書きしない（`put` はそれを置き換えるが、こちらは「無い名前だけ」を書く）。
+      const invalidNames = new Set(file.invalidRaw.map((raw) => extractRowName(raw)));
+      for (const entry of entries) {
+        if (entry.value.length === 0 || rows.has(entry.name) || invalidNames.has(entry.name)) {
+          continue;
+        }
+        rows.set(entry.name, {
+          name: entry.name,
+          value: entry.value,
+          updatedAt: at,
+          scope: entry.scope ?? 'all',
+          secret: entry.secret ?? true,
+        });
+        written.push(entry.name);
+      }
+      return {
+        credentials: [...rows.values()],
+        invalidRaw: file.invalidRaw,
+        seeded: [...file.seeded, marker],
+      };
+    });
+    return written;
   }
 
   /**
@@ -202,7 +238,7 @@ export class FsCredentialVaultStore implements CredentialVaultStore {
           })}\n`,
         );
       });
-      return { credentials, invalidRaw };
+      return { credentials, invalidRaw, seeded: top.seeded };
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return EMPTY;
       throw error;
@@ -225,8 +261,10 @@ export class FsCredentialVaultStore implements CredentialVaultStore {
       // **不正な行（`invalidRaw`）も一緒に書き戻す。** ここへ入れなかった
       // 分は消える——`credentials`（検査を通った行）だけを書けば、人間が
       // 手で書いた不正な行が次の書き込みで黙って消える（issue #1740）。
-      const serialized: { credentials: unknown[] } = {
+      const serialized: { credentials: unknown[]; seeded?: string[] } = {
         credentials: [...next.credentials, ...next.invalidRaw],
+        // 印が1つも無いファイルには欄を足さない（既存のファイルの形を変えない）。
+        ...(next.seeded.length > 0 ? { seeded: next.seeded } : {}),
       };
       // 一時ファイルの時点で 0600（`writeFileAtomic` の `mode`）。rename 後に
       // 絞ると、その隙間で他人が読める。

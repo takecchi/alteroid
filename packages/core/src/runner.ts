@@ -608,19 +608,18 @@ const PID_OWNER_MANAGER_ID_CAP = 4096;
 /**
  * 回るとセッションの畳み直しの引き金になる鍵の名前。
  *
- * **`ROTATABLE_CREDENTIAL_KEYS`（`credentials.ts`）に載っている名前のうち、
- * ここだけを見る。** `GH_TOKEN` / `GITHUB_TOKEN` が変わっても、走行中の
- * マネージャーは次の呼び出し（`gh` シム経由）から新しい値を読むので（`git` /
- * `gh` は呼ばれるたびに器のファイルを読み直す）、セッションを畳む必要が無い
- * ——畳む理由になるのは「起動時にしか読まれない」鍵、すなわち SDK 子プロセスの
- * env 経由でしか渡らない `CLAUDE_CODE_OAUTH_TOKEN` だけである
- * （`credentials.ts` の同名エントリの doc「いま走っているターンには届かない」）。
+ * **2026-10-06 から、畳み直しの契機（`Host#setCredentials`）はこの名前だけではない。**
+ * どの名前でも値（指紋）・有無が変われば畳む。`GH_TOKEN` のように `gh` シムが
+ * 呼ぶたびに器のファイルを読み直す名前も、SDK 子プロセスの env には起動時の値が
+ * 凍っているので、畳まないと任意の名前の更新が次のターンから届かない。
+ * この定数が今も効くのは、`tokenFingerprintOf`（子の env が持つ認証トークンの指紋。
+ * 世代の照合）のほうである。
  *
  * **型で `ROTATABLE_CREDENTIAL_KEYS` に縛ってある。** 裸のリテラルのままだと、
  * `credentials.ts` 側で名前が変わる／消えるときに、こちらは何も言わずに
  * 古い名前のまま指紋を比べ続ける——比べる対象が実在しない名前になり、
- * `fingerprintFor` は常に `undefined` を返すので `before === after` が恒真になり、
- * **畳み直しが二度と起きなくなるのに、テストも typecheck も緑のまま**という
+ * `tokenFingerprintOf` は常に `undefined` を返すので、
+ * **世代の照合が二度と効かなくなるのに、テストも typecheck も緑のまま**という
  * いちばん静かな壊れ方をする。`(typeof ROTATABLE_CREDENTIAL_KEYS)[number]` を
  * 型注釈に付けることで、名前が消えた瞬間にこの1行が typecheck で落ちるように
  * してある。
@@ -628,12 +627,21 @@ const PID_OWNER_MANAGER_ID_CAP = 4096;
 const AGENT_TOKEN_CREDENTIAL_NAME: (typeof ROTATABLE_CREDENTIAL_KEYS)[number] =
   'CLAUDE_CODE_OAUTH_TOKEN';
 
-/** `fingerprints()` の並びから名前で1件だけ引く。無ければ `undefined`。 */
-function fingerprintFor(
+/** `fingerprints()` の並びを、名前→sha256 の写しにする。**値は載らない**（指紋だけ）。 */
+function fingerprintsByName(
   fingerprints: readonly CredentialFingerprint[],
-  name: string,
-): string | undefined {
-  return fingerprints.find((fingerprint) => fingerprint.name === name)?.sha256;
+): ReadonlyMap<string, string> {
+  return new Map(fingerprints.map((fingerprint) => [fingerprint.name, fingerprint.sha256]));
+}
+
+/** 2つの写しが、名前の集合も各 sha256 も同じか。 */
+function sameFingerprints(
+  a: ReadonlyMap<string, string>,
+  b: ReadonlyMap<string, string>,
+): boolean {
+  if (a.size !== b.size) return false;
+  for (const [name, sha256] of a) if (b.get(name) !== sha256) return false;
+  return true;
 }
 
 /**
@@ -904,17 +912,20 @@ class Host implements RunnerHost {
     // **差し替える前の指紋を控える。** `this.#credentials.set(...)` が投げたら
     // ここで確定した `before` は使われないまま終わる —— 例外はそのまま呼び出し
     // 元へ伝播させる（`POST /credentials` の応答を壊さない）。
-    const before = fingerprintFor(this.#credentials.fingerprints(), AGENT_TOKEN_CREDENTIAL_NAME);
+    const before = fingerprintsByName(this.#credentials.fingerprints());
     const fingerprints = await this.#credentials.set(entries);
-    const after = fingerprintFor(fingerprints, AGENT_TOKEN_CREDENTIAL_NAME);
+    const after = fingerprintsByName(fingerprints);
     // **🔴 比べるのは指紋（sha256）だけ。値は一度も読まない。**
     //
-    // **変わったときだけ畳む。** 在る→無い（`value: ''` で env 行へ戻す）・
-    // 無い→在るも「変わった」に含まれる —— `fingerprintFor` は無ければ
-    // `undefined` を返すので、`undefined !== 'hash'` はどちらの向きでも
-    // 真になる。**同じ指紋（再接続の追いつかせが同じ値を降ろした場合を含む）
-    // では何もしない**（`RunnerHost.setCredentials` の doc）。
-    if (before !== after) {
+    // **どの名前でも、値（指紋）・有無が変わったら畳む**（2026-10-06 のオーナー決定
+    // 「環境変数を即時反映にしてほしい」。以前は `CLAUDE_CODE_OAUTH_TOKEN` だけだった）。
+    // SDK 子プロセスの env は起動時に凍るので、これが無いと任意の名前の更新は
+    // 走行中のマネージャーに「次にセッションが作り直されるまで」届かない。
+    //
+    // 在る→無い（`value: ''` で外した）・無い→在るも「変わった」に含まれる ——
+    // 名前の集合が違えば `sameFingerprints` は偽になる。**同じ指紋（再接続の追いつかせが
+    // 同じ値を降ろした場合を含む）では何もしない**（`RunnerHost.setCredentials` の doc）。
+    if (!sameFingerprints(before, after)) {
       for (const session of this.#sessions.values()) session.recycleForToken();
     }
     return fingerprints;
@@ -3206,7 +3217,7 @@ class RunnerSession {
       type: 'note',
       managerId: this.#id,
       text:
-        '認証トークンが差し替わったので、ターンの境界でセッションを畳んで' +
+        '鍵・環境変数（認証トークンを含む）が差し替わったので、ターンの境界でセッションを畳んで' +
         '開き直した（会話は resume で続く）。',
       // **daemon 側に「いま開き直した」を構造化して伝える**（Issue #914 提案1。
       // `runner-protocol.ts` の `note.tokenRotation` の doc）。`text` の

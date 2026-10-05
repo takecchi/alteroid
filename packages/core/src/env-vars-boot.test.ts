@@ -1,8 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 
+import { createCredentialService, resolveCredentialRows } from './credential-service.js';
 import {
   APP_ENV_VAR_DEFAULTS,
   applyAppScopedEnvVars,
+  migrateEnvBaseCredentialsOnce,
   seedDefaultEnvVars,
 } from './env-vars-boot.js';
 import { createMemoryStores } from './testing.js';
@@ -247,5 +249,157 @@ describe('applyAppScopedEnvVars', () => {
     expect(line).toContain('ALTEROID_CLONE_MODEL');
     // **値は出さない**（この袋には秘密の行も居る）。
     expect(line).not.toContain('opus');
+  });
+});
+
+/**
+ * **器の環境変数にだけ置かれていた鍵を、起動時に1度だけ正本へ移す**
+ * （`migrateEnvBaseCredentialsOnce`。2026-10-06 のオーナー決定）。
+ *
+ * 守るのは5つ: (1) 土台だった3つの名前（`GH_TOKEN` / `GITHUB_TOKEN` / `CODEX_API_KEY`）だけを、
+ * 正本に行が無く非空のときに `scope: all`・`secret: true` で写す（プールの名前・任意の名前は
+ * 写さない） (2) **1度だけ**——画面で消した後の再起動で蘇らない（印） (3) 既に在る行は上書きしない
+ * (4) 名前だけを stderr と日誌へ残し、値は出さない (5) 失敗しても起動を止めない。
+ */
+describe('migrateEnvBaseCredentialsOnce', () => {
+  const SNAPSHOT: NodeJS.ProcessEnv = {
+    GH_TOKEN: 'ghp_dummy_gh',
+    GITHUB_TOKEN: 'ghp_dummy_github',
+    CODEX_API_KEY: 'sk-dummy-codex',
+    CLAUDE_CODE_OAUTH_TOKEN: 'sk-ant-dummy-pool',
+    NPM_TOKEN: 'npm_dummy',
+  };
+
+  function quiet<T>(run: () => Promise<T>): Promise<T> {
+    const spy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    return run().finally(() => spy.mockRestore());
+  }
+
+  it('土台だった3つの名前だけを、scope: all / secret: true で写す（プールの名前・任意の名前は写さない）', async () => {
+    const stores = createMemoryStores();
+
+    const written = await quiet(() => migrateEnvBaseCredentialsOnce(stores, SNAPSHOT));
+
+    expect([...written].sort()).toEqual(['CODEX_API_KEY', 'GH_TOKEN', 'GITHUB_TOKEN']);
+    const rows = await stores.credentials.list();
+    expect(rows.map((row) => row.name)).toEqual(['CODEX_API_KEY', 'GH_TOKEN', 'GITHUB_TOKEN']);
+    for (const row of rows)
+      expect(row).toEqual(expect.objectContaining({ scope: 'all', secret: true }));
+    expect(rows.find((row) => row.name === 'GH_TOKEN')?.value).toBe('ghp_dummy_gh');
+  });
+
+  it('1度だけ: 画面で消した後に再起動しても、器の env から蘇らない（印）', async () => {
+    const stores = createMemoryStores();
+    await quiet(() => migrateEnvBaseCredentialsOnce(stores, SNAPSHOT));
+    // 人間が画面から消した。
+    await stores.credentials.put([{ name: 'GH_TOKEN', value: '' }]);
+
+    const again = await quiet(() => migrateEnvBaseCredentialsOnce(stores, SNAPSHOT));
+
+    expect(again).toEqual([]);
+    expect((await stores.credentials.list()).map((row) => row.name)).not.toContain('GH_TOKEN');
+  });
+
+  it('既に正本に在る名前は上書きしない（人間が置いたものが勝つ）。印は立つ', async () => {
+    const stores = createMemoryStores();
+    await stores.credentials.put([{ name: 'GH_TOKEN', value: 'ghp_human_placed', scope: 'app' }]);
+
+    const written = await quiet(() => migrateEnvBaseCredentialsOnce(stores, SNAPSHOT));
+
+    expect([...written].sort()).toEqual(['CODEX_API_KEY', 'GITHUB_TOKEN']);
+    expect((await stores.credentials.list()).find((row) => row.name === 'GH_TOKEN')).toEqual(
+      expect.objectContaining({ value: 'ghp_human_placed', scope: 'app' }),
+    );
+  });
+
+  it('空文字・未設定は写さない。**書くものが無くても印は立つ**（後から置かれた器の env を拾わない）', async () => {
+    const stores = createMemoryStores();
+    const first = await quiet(() =>
+      migrateEnvBaseCredentialsOnce(stores, { GH_TOKEN: '', GITHUB_TOKEN: undefined }),
+    );
+    expect(first).toEqual([]);
+
+    const second = await quiet(() => migrateEnvBaseCredentialsOnce(stores, SNAPSHOT));
+
+    expect(second).toEqual([]);
+    expect(await stores.credentials.list()).toEqual([]);
+  });
+
+  it('移した名前を stderr と日誌に残し、値は1文字も出さない', async () => {
+    const stores = createMemoryStores();
+    const written: string[] = [];
+    const spy = vi.spyOn(process.stderr, 'write').mockImplementation((chunk: unknown) => {
+      written.push(String(chunk));
+      return true;
+    });
+    try {
+      await migrateEnvBaseCredentialsOnce(stores, SNAPSHOT);
+    } finally {
+      spy.mockRestore();
+    }
+
+    const stderr = written.join('');
+    expect(stderr).toContain('GH_TOKEN');
+    const journal = JSON.stringify(await stores.journal.list());
+    expect(journal).toContain('GH_TOKEN');
+    for (const value of ['ghp_dummy_gh', 'ghp_dummy_github', 'sk-dummy-codex']) {
+      expect(stderr).not.toContain(value);
+      expect(journal).not.toContain(value);
+    }
+  });
+
+  it('正本へ書けなくても投げない（起動を止めない）。失敗は stderr に残る', async () => {
+    const stores = createMemoryStores();
+    stores.credentials.seedOnce = () => Promise.reject(new Error('boom'));
+    const written: string[] = [];
+    const spy = vi.spyOn(process.stderr, 'write').mockImplementation((chunk: unknown) => {
+      written.push(String(chunk));
+      return true;
+    });
+    try {
+      await expect(migrateEnvBaseCredentialsOnce(stores, SNAPSHOT)).resolves.toEqual([]);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(written.join('')).toContain('移せませんでした');
+  });
+});
+
+/**
+ * **確認済みのバグの再現（2026-10-05）。** 起動時に `applyAppScopedEnvVars` が正本（袋）の
+ * `scope: all | app` の行を `process.env` へ書き写し、それを「器の env」と取り違えると、
+ * 正本を画面で更新しても古い値が配られ、削除しても書き写した古い値が配られ続けた
+ * （`resolveCredentialRows` の `fromEnvOnly` / `cloneEnvWins`）。**正本が唯一の出所であること**を、
+ * 起動の流れ（正本へ置く → 書き写す → 更新 → 削除）そのままで測る。
+ */
+describe('起動時の書き写しは「器の env」ではない（2026-10-05 の再現）', () => {
+  it('正本の GH_TOKEN を更新すれば新しい値が配られ、削除すれば何も配られない', async () => {
+    const stores = createMemoryStores();
+    await stores.credentials.put([{ name: 'GH_TOKEN', value: 'old', scope: 'all' }]);
+    const written: NodeJS.ProcessEnv = {};
+    await applyAppScopedEnvVars(stores, written); // 起動時の書き写し
+    expect(written.GH_TOKEN).toBe('old');
+
+    const service = createCredentialService({ stores, withheldEnvKeys: [] });
+    await service.apply([{ name: 'GH_TOKEN', value: 'new' }]);
+    expect(
+      resolveCredentialRows(await stores.credentials.list(), 'manager').map((row) => row.value),
+    ).toEqual(['new']);
+
+    await service.apply([{ name: 'GH_TOKEN', value: '' }]);
+    expect(resolveCredentialRows(await stores.credentials.list(), 'manager')).toEqual([]);
+    expect(resolveCredentialRows(await stores.credentials.list(), 'clone')).toEqual([]);
+  });
+
+  it('applyAppScopedEnvVars の alsoInto は、同じ解決結果をもう1つの env へも書く（子の土台用）', async () => {
+    const stores = createMemoryStores();
+    await stores.credentials.put([{ name: 'NPM_TOKEN', value: 'npm_x', scope: 'all' }]);
+    const target: NodeJS.ProcessEnv = {};
+    const also: NodeJS.ProcessEnv = { KEPT: 'yes' };
+
+    await applyAppScopedEnvVars(stores, target, also);
+
+    expect(target.NPM_TOKEN).toBe('npm_x');
+    expect(also).toEqual({ KEPT: 'yes', NPM_TOKEN: 'npm_x' });
   });
 });

@@ -83,7 +83,15 @@ afterEach(async () => {
 const DUMMY = 'CRED-CLI-DUMMY';
 
 describe('alteroid credential list', () => {
-  it('空なら、無いことと「器の環境変数だけで走る」ことと置き方を言う', async () => {
+  /**
+   * **⚠️ このテストは 2026-10-06 に期待値を反転した。** 元の題: 「空なら、無いことと
+   * 「器の環境変数だけで走る」ことと置き方を言う」（元の期待: 「デーモン（クローン）の環境変数に
+   * 在るものだけで走ります」）。**器の環境変数を最後の土台にする経路を撤去した**ので
+   * （オーナー決定 2026-10-06）、空の正本のとき、マネージャーへ配られるものは**無い**。
+   * 元の文言を出し続けるのは嘘になる。**保証は弱くなっていない**——「空のときの状態を、実際の
+   * 挙動のとおりに言う」は同じで、実際の挙動が変わった。
+   */
+  it('空なら、無いことと「配られるものは無い」ことと置き方を言う', async () => {
     setReply('GET', '/credentials', { status: 200, body: { credentials: [] } });
     const read = captureStdout();
 
@@ -91,22 +99,21 @@ describe('alteroid credential list', () => {
 
     const text = read();
     expect(text).toContain('正本に置かれた環境変数はありません');
-    expect(text).toContain('デーモン（クローン）の環境変数に在るものだけで走ります');
+    expect(text).toContain('マネージャーへ配られる環境変数はありません');
+    expect(text).not.toContain('在るものだけで走ります');
     expect(text).toContain('alteroid credential set <名前> --file <path>');
   });
 
   /**
-   * **GitHub の名前で、正本の行より器の環境変数の値が優先して配られている
-   * ことを、ここで名指しする（#865 の恒久策、2026-09-12）。**
+   * **「器の環境変数が正本に勝つ」ことの名指し（#865・#1894。旗 `shadowsCloneEnv`）は撤去した
+   * （2026-10-06）。** この節にあった5本（食い違いの名指し・無ければ出ない・scope: app の2本・
+   * 混在）は、起こり得ない状態を測っていたので消した（勝つ側を撤去した。3点セットは PR 本文）。
    *
-   * ⭐ **旗が立っていることを言うだけでは足りない。** 読んだ人が次に何を
-   * すればいいかまで出ていなければ、この口は「観測はしたが誰も動けない」に
-   * なる。**⚠️ この PR で次の一手が変わった** —— 以前は「正本の行を外す」
-   * だったが、GitHub の名前は器の環境変数のほうが優先されるようになった
-   * ので、外しても配られる値は変わらない。**だから新しい一手（正本の値を
-   * 器の環境変数に合わせる）を歯で固定する。**
+   * **代わりの歯: 古いデーモン（旗を返す版）につないでも、警告を出さない。** CLI とデーモンは
+   * 別々に更新されうるので、旗が応答に載ってくる版ずれが実在する。載っていても表示は変えない
+   * （消した警告が、古いデーモン相手に蘇らない）。
    */
-  it('食い違っている名前を名指しし、次にやること（正本を器の環境変数に合わせる）まで言う', async () => {
+  it('古いデーモンが shadowsCloneEnv を返しても、警告は出ない（旗は撤去済み）', async () => {
     setReply('GET', '/credentials', {
       status: 200,
       body: {
@@ -114,129 +121,6 @@ describe('alteroid credential list', () => {
           {
             name: 'GH_TOKEN',
             sha256: 'cccccccccccc',
-            updatedAt: '2026-09-12T00:00:00.000Z',
-            scope: 'all',
-            secret: true,
-            shadowsCloneEnv: true,
-          },
-          {
-            name: 'NPM_TOKEN',
-            sha256: 'dddddddddddd',
-            updatedAt: '2026-09-12T00:00:00.000Z',
-            scope: 'all',
-            secret: true,
-          },
-        ],
-      },
-    });
-    const read = captureStdout();
-
-    await credentialListCommand();
-
-    const text = read();
-    expect(text).toContain('優先して配られています');
-    expect(text).toContain('alteroid credential set GH_TOKEN --file <path>');
-    // **旗が立っていない行を巻き込まない。** 巻き込むと「全部おかしい」に
-    // 見えて、本当に食い違っている1本が埋もれる。
-    expect(text).not.toContain('alteroid credential set NPM_TOKEN --file <path>');
-  });
-
-  it('食い違いが無ければ、その節は出ない（無い警告を出さない）', async () => {
-    setReply('GET', '/credentials', {
-      status: 200,
-      body: {
-        credentials: [
-          {
-            name: 'GH_TOKEN',
-            sha256: 'cccccccccccc',
-            updatedAt: '2026-09-12T00:00:00.000Z',
-            scope: 'all',
-            secret: true,
-          },
-        ],
-      },
-    });
-    const read = captureStdout();
-
-    await credentialListCommand();
-
-    expect(read()).not.toContain('別の鍵で走っています');
-  });
-
-  /**
-   * **scope: app は他の scope と挙動が違う（issue #1894 の続き）。** `scope:
-   * 'app'` の行は manager に配布されない（issue #1867）ので、「マネージャーも
-   * 器の環境変数の値で走っている」も「外しても配られる値は変わらない」も
-   * 逆になる。上の「食い違っている名前を名指しし…」テストは scope: 'all' の
-   * 行だけを見ており、scope: 'app' はまだ別扱いしていなかった。
-   */
-  it('scope: app の食い違いは、「外しても変わらない」と言わない（issue #1894）', async () => {
-    setReply('GET', '/credentials', {
-      status: 200,
-      body: {
-        credentials: [
-          {
-            name: 'GH_TOKEN',
-            sha256: 'cccccccccccc',
-            updatedAt: '2026-09-12T00:00:00.000Z',
-            scope: 'app',
-            secret: true,
-            shadowsCloneEnv: true,
-          },
-        ],
-      },
-    });
-    const read = captureStdout();
-
-    await credentialListCommand();
-
-    const text = read();
-    expect(text).not.toContain('外しても配られる値は変わりません');
-    expect(text).not.toContain('マネージャーもクローンも、器の環境変数の値で');
-  });
-
-  it('scope: app の食い違いは、manager にはいま何も配られていないと言う（issue #1894）', async () => {
-    setReply('GET', '/credentials', {
-      status: 200,
-      body: {
-        credentials: [
-          {
-            name: 'GH_TOKEN',
-            sha256: 'cccccccccccc',
-            updatedAt: '2026-09-12T00:00:00.000Z',
-            scope: 'app',
-            secret: true,
-            shadowsCloneEnv: true,
-          },
-        ],
-      },
-    });
-    const read = captureStdout();
-
-    await credentialListCommand();
-
-    const text = read();
-    expect(text).toContain('マネージャーにはこの名前が');
-    expect(text).toContain('何も配られていません');
-    expect(text).toContain('配られ始めます');
-  });
-
-  it('混在: scope: app とそれ以外は別の節に分かれる（issue #1894）', async () => {
-    setReply('GET', '/credentials', {
-      status: 200,
-      body: {
-        credentials: [
-          {
-            name: 'GH_TOKEN',
-            sha256: 'cccccccccccc',
-            updatedAt: '2026-09-12T00:00:00.000Z',
-            scope: 'app',
-            secret: true,
-            shadowsCloneEnv: true,
-          },
-          {
-            name: 'GITHUB_TOKEN',
-            sha256: 'eeeeeeeeeeee',
             updatedAt: '2026-09-12T00:00:00.000Z',
             scope: 'all',
             secret: true,
@@ -250,11 +134,9 @@ describe('alteroid credential list', () => {
     await credentialListCommand();
 
     const text = read();
-    // GH_TOKEN（app）は新しい言い分。GITHUB_TOKEN（all）は従来どおり。
-    expect(text).toContain('alteroid credential set GH_TOKEN --file <path>');
-    expect(text).toContain('alteroid credential set GITHUB_TOKEN --file <path>');
-    expect(text).toContain('外しても配られる値は変わりません');
-    expect(text).toContain('何も配られていません');
+    expect(text).toContain('GH_TOKEN');
+    expect(text).not.toContain('優先して配られています');
+    expect(text).not.toContain('器の環境変数の値');
   });
 
   it('名前と指紋を並べ、突き合わせ先（runner 側）まで言う', async () => {

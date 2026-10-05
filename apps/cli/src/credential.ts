@@ -33,17 +33,6 @@ interface CredentialFingerprint {
   /** sha256（16進）の先頭12桁。**値は返らない。** */
   sha256: string;
   updatedAt: string;
-  /**
-   * **GitHub の名前で、正本のこの行より、デーモン（クローン）の器の環境変数の
-   * 値が優先して配られている**（＝正本のこの行はどこにも配られていない）
-   * ときだけ `true`。既定では返らない（`credentialsResponseSchema` の doc、
-   * Issue #865）。
-   *
-   * **⚠️ 「正本が勝つ」だった以前の仕様は、GitHub の名前について反転した**
-   * （2026-09-12。オーナーの仕様「クローンへ渡す環境変数と同じものを
-   * マネージャーへ渡す」）。
-   */
-  shadowsCloneEnv?: boolean;
   /** 撒く先。'all'=共通(既定) / 'app'=clone だけ / 'runner'=manager だけ。 */
   scope: 'all' | 'app' | 'runner';
   /** シークレット可否。`false` の行だけ `value` が併走する。 */
@@ -85,8 +74,9 @@ export async function credentialListCommand(): Promise<void> {
   if (view.credentials.length === 0) {
     stdout.write('正本に置かれた環境変数はありません。\n');
     stdout.write(
-      '**この状態では、マネージャーはデーモン（クローン）の環境変数に在るものだけで走ります。**\n' +
-        '（runner 側の環境変数は見ません —— runner は自分の env から鍵を1文字も拾いません）\n',
+      '**この状態では、マネージャーへ配られる環境変数はありません。**\n' +
+        '（デーモンの器の環境変数も、runner の環境変数も配られません。正本が唯一の出所です。\n' +
+        '　既存の器の GH_TOKEN などは、起動時に1度だけ正本へ移されています）\n',
     );
     stdout.write('置くには: alteroid credential set <名前> --file <path>\n');
     return;
@@ -113,63 +103,6 @@ export async function credentialListCommand(): Promise<void> {
     '届いているかは runner 側の指紋と突き合わせます: alteroid runners\n' +
       '（値はどちらにも出ません。指紋が一致していれば同じものです）\n',
   );
-
-  /**
-   * **GitHub の名前で、正本の行より器の環境変数の値が優先して配られている
-   * ことを名指しする**（Issue #865 の恒久策、2026-09-12）。
-   *
-   * 黙って通り過ぎない理由: この名前については、正本にその名前の行が在っても
-   * **器の環境変数の値のほうが優先される**（オーナーの仕様「クローンへ渡す
-   * 環境変数と同じものをマネージャーへ渡す」）ので、正本のその行は誰にも
-   * 配られていない。しかも `alteroid credential list` はここまで指紋しか
-   * 出さないので、値も指紋も見比べない限り誰にも気づけない——だからここで
-   * 名前だけを突き合わせて出す（値は出さない。指紋も出さない。名前と次の
-   * 一手だけ）。
-   *
-   * **`scope: 'app'` は分けて出す（issue #1894）。** `scope: 'app'` の行は
-   * manager に配布されない（`scopeAppliesTo`。issue #1867）ので、「マネー
-   * ジャーも器の環境変数の値で走っている」は誤りで、「外しても配られる値は
-   * 変わらない」も誤り（外すと `held` から消え、manager へ器の env の値が
-   * 配られ始める）。`entry.scope` はここまでの応答に既に載っているので、
-   * ここで分ければ済む——新しい経路は要らない。
-   */
-  const shadowed = view.credentials.filter((entry) => entry.shadowsCloneEnv === true);
-  const shadowedOther = shadowed.filter((entry) => entry.scope !== 'app');
-  const shadowedApp = shadowed.filter((entry) => entry.scope === 'app');
-  if (shadowedOther.length > 0) {
-    stdout.write('\n');
-    stdout.write(
-      `⚠ GitHub の名前で、正本の行よりデーモン（クローン）の器の環境変数の値が\n` +
-        `優先して配られています（マネージャーもクローンも、器の環境変数の値で\n` +
-        `走っています。正本のその行は配られていません）: ` +
-        `${shadowedOther.map((entry) => entry.name).join(', ')}\n` +
-        `正本のその行を外しても配られる値は変わりません（どちらにしても器の\n` +
-        `環境変数の値が配られます）。揃えるには、正本の値を器の環境変数に\n` +
-        `合わせて置き直すか、器の環境変数の側を変えてください` +
-        `（この口からは変えられません）:\n` +
-        shadowedOther
-          .map((entry) => `  alteroid credential set ${entry.name} --file <path>\n`)
-          .join(''),
-    );
-  }
-  if (shadowedApp.length > 0) {
-    stdout.write('\n');
-    stdout.write(
-      `⚠ GitHub の名前で、正本の行よりデーモン（クローン）の器の環境変数の値が\n` +
-        `優先して配られています（クローンは器の環境変数の値で走っています。\n` +
-        `正本のその行は配られていません）: ` +
-        `${shadowedApp.map((entry) => entry.name).join(', ')}\n` +
-        `これは scope: app（clone だけ）の行なので、マネージャーにはこの名前が\n` +
-        `いま何も配られていません（scope で意図して閉じてある。issue #1867）。\n` +
-        `⚠ 正本のその行を外すと、器の環境変数の値がマネージャーにも配られ始めます\n` +
-        `（scope で閉じた先へ届く）。揃えるには、正本の値を器の環境変数に\n` +
-        `合わせて置き直すか、器の環境変数の側を変えてください` +
-        `（この口からは変えられません）:\n` +
-        shadowedApp
-          .map((entry) => `  alteroid credential set ${entry.name} --file <path>\n`)
-          .join(''),
-    );
-  }
 }
 
 export async function credentialSetCommand(

@@ -77,7 +77,6 @@ function setup() {
     stores,
     runners: registry,
     withheldEnvKeys: [...WITHHELD_ENV_KEYS],
-    env: {},
   });
   const pool = createManagerPool({
     stores,

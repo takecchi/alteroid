@@ -1,5 +1,9 @@
 import { resolveCredentialRows } from './credential-service.js';
-import { ENV_FILE_OWNED_CREDENTIAL_NAMES } from './credentials.js';
+import {
+  ENV_FILE_OWNED_CREDENTIAL_NAMES,
+  POOL_OWNED_CREDENTIAL_NAMES,
+  ROTATABLE_CREDENTIAL_KEYS,
+} from './credentials.js';
 import { reasonOf } from './dropped-record.js';
 import type { Stores } from './store.js';
 
@@ -72,8 +76,7 @@ export const APP_ENV_VAR_DEFAULTS: readonly { name: string; value: string }[] = 
  * 明示的に置いた値・削除した値は上書きしない）。
  *
  * 失敗しても起動は止めない——播種は「あると便利な既定」であって、無くても
- * 既存の `process.env` の値（あれば）がそのまま `resolveCredentialRows` の
- * 最後の土台として効く。
+ * 既存の `process.env` の値（あれば）がデーモン自身の設定の読み出しにそのまま効く。
  */
 export async function seedDefaultEnvVars(
   stores: Stores,
@@ -130,6 +133,14 @@ export async function seedDefaultEnvVars(
 export async function applyAppScopedEnvVars(
   stores: Stores,
   target: NodeJS.ProcessEnv = process.env,
+  /**
+   * **同じ解決結果を、もう1つの env へも書く**（2026-10-06）。デーモンが同一プロセスの
+   * runner（`createLocalRunner`）へ渡す env の土台に使う——`target`（`process.env`）は
+   * 書き写した後の値でデーモン自身の設定の読み出しに使うが、**子プロセスへ渡す土台に
+   * してはいけない**（正本から外した名前の古い値が、起動時の写しとして子に残る）。
+   * 土台は書き写す前のスナップショットの複製を渡す。
+   */
+  alsoInto?: NodeJS.ProcessEnv,
 ): Promise<void> {
   let rows: Awaited<ReturnType<Stores['credentials']['list']>>;
   try {
@@ -161,8 +172,89 @@ export async function applyAppScopedEnvVars(
     );
   }
 
-  const resolved = resolveCredentialRows(rows, target, 'clone');
+  const resolved = resolveCredentialRows(rows, 'clone');
   for (const row of resolved) {
     target[row.name] = row.value;
+    if (alsoInto !== undefined) alsoInto[row.name] = row.value;
   }
+}
+
+/** `migrateEnvBaseCredentialsOnce` の印の名前。**変えると全器で移行がもう1度走る**（印が別物になる）。 */
+export const ENV_BASE_MIGRATION_MARKER = 'env_base_credentials_v1';
+
+/**
+ * **器の環境変数にだけ置かれていた鍵を、起動時に1度だけ正本（袋）へ移す**
+ * （2026-10-06 のオーナー決定「GH_TOKEN も CODEX_API_KEY も普通の名前と同じ扱いに」）。
+ *
+ * ## なぜ要るか
+ *
+ * 以前は、正本に行が無い `GH_TOKEN` / `GITHUB_TOKEN` / `CODEX_API_KEY` を、クローンの
+ * 器の環境変数（Railway の Service 変数・`.env`）が**最後の土台として**配っていた
+ * （`resolveCredentialRows` の `fromEnvOnly`）。その土台を撤去すると、**変数にだけ鍵を
+ * 置いている既存の器が、黙って鍵を失う**（子プロセスが `gh` を叩けなくなる）。
+ * ⟹ 撤去の前に、その値を正本へ1度だけ写す。
+ *
+ * ## 何を写すか
+ *
+ * - **対象の名前**は、撤去した土台が見ていた名前そのもの
+ *   （`ROTATABLE_CREDENTIAL_KEYS` からプールの名前を引いたもの）
+ * - **値は `snapshotEnv`**（`applyAppScopedEnvVars` が正本を書き写す前の `process.env`
+ *   のスナップショット）から読む。**書き写した後の `process.env` から読んではいけない**
+ *   ——正本から消した値が、書き写しの残骸として蘇る
+ * - 正本にその名前の行が**無く**、値が**非空**のときだけ、`scope: 'all'` / `secret: true` で書く
+ *
+ * ## 1度だけ（印）
+ *
+ * 印は `CredentialVaultStore.seedOnce` が持つ（pg は `daemon_state`、fs は
+ * `credentials.json`）。**書いても書かなくても印を立てる**——印が無いと、画面で消した
+ * 後の再起動で、器の env から値が蘇る。
+ *
+ * ## 出力
+ *
+ * 移した**名前だけ**を stderr と日誌（`decision`）へ残す。**値は出さない。**
+ * 失敗は投げない（起動を止めない。値の読み出し・書き込みとも）——ただし失敗は stderr に
+ * 残す。**黙って失敗すると「移したつもりで、鍵が配られない」になる。**
+ *
+ * @returns 実際に書いた名前
+ */
+export async function migrateEnvBaseCredentialsOnce(
+  stores: Stores,
+  snapshotEnv: NodeJS.ProcessEnv,
+): Promise<string[]> {
+  const candidates = ROTATABLE_CREDENTIAL_KEYS.filter(
+    (name) => !POOL_OWNED_CREDENTIAL_NAMES.includes(name),
+  ).flatMap((name) => {
+    const value = snapshotEnv[name];
+    return value === undefined || value.length === 0
+      ? []
+      : [{ name, value, scope: 'all' as const, secret: true }];
+  });
+  let written: string[];
+  try {
+    written = await stores.credentials.seedOnce(ENV_BASE_MIGRATION_MARKER, candidates);
+  } catch (error) {
+    process.stderr.write(
+      `alteroidd: 器の環境変数の鍵を正本へ移せませんでした（このまま起動します。` +
+        `正本に無い名前は配られません）: ${reasonOf(error)}\n`,
+    );
+    return [];
+  }
+  if (written.length === 0) return [];
+  process.stderr.write(
+    `alteroidd: 器の環境変数にだけ在った鍵を、正本（環境変数の袋）へ1度だけ移しました` +
+      `（scope: all・secret）。以後は正本が唯一の出所で、画面・CLI で消せば消えます。名前: ${written.join(', ')}\n`,
+  );
+  try {
+    await stores.journal.append({
+      type: 'decision',
+      decision: `器の環境変数にだけ在った鍵を、正本へ1度だけ移した（名前: ${written.join(', ')}）`,
+      grounds:
+        '2026-10-06 のオーナー決定（GH_TOKEN・CODEX_API_KEY も普通の名前と同じ扱い）。' +
+        '器の環境変数を最後の土台にする経路を撤去したため、既存の器を黙って壊さないための1回きりの移行。' +
+        '値は書かない。',
+    });
+  } catch (error) {
+    process.stderr.write(`alteroidd: 鍵の移行の日誌を書けませんでした: ${reasonOf(error)}\n`);
+  }
+  return written;
 }

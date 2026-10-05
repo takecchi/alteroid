@@ -15,6 +15,7 @@ import {
   DAEMON_TOKEN_POOL_REOPENED_SOURCE,
   DEFAULT_PERMISSION_MODE,
   applyAppScopedEnvVars,
+  migrateEnvBaseCredentialsOnce,
   seedDefaultEnvVars,
   createClone,
   describeProviderGaps,
@@ -296,6 +297,11 @@ export function parseRunnerUrls(env: NodeJS.ProcessEnv): string[] {
  */
 function runnerSeeds(options: {
   workspace: string;
+  /**
+   * 同一プロセスの runner の子プロセスの env の土台。**書き写し後の `process.env` ではない**
+   * （`main()` の `bootEnvSnapshot` の doc）。
+   */
+  env: NodeJS.ProcessEnv;
   withheldEnvKeys: string[];
   profilePath: string;
   /**
@@ -339,6 +345,7 @@ function runnerSeeds(options: {
         createLocalRunner({
           runnerId: 'runner-local',
           workspacePath: options.workspace,
+          env: options.env,
           // 置かれたときだけ渡す（未設定の既定では `hello` も従来どおり名乗りを載せない）。
           ...(placedProvider === null ? {} : { managerProvider: managerProvider.id }),
           withheldEnvKeys: options.withheldEnvKeys,
@@ -999,57 +1006,6 @@ export function describeReopenedTokenNotice(
 }
 
 /**
- * `credentialService` の `onCloneEnvShadowed` が知らせてきたときの stderr の本文
- * （issue #1894）。
- *
- * **`main()` に埋め込んだままでは測れない**ので、ここへ切り出した（AGENTS.md
- * 「テストを弱めずに直す」の「テストが書けない構造は、テストが無いのと同じ」）。
- * `describeReopenedTokenNotice` と同じ形——出力は1文字も変えていない
- * （`scope: 'app'` を含まない場合は、この PR より前の文言と逐語で同じ）。
- *
- * ## なぜ2本に分けるか
- *
- * `scope: 'app'` の名前は、`scope` が `'all'`/`'runner'`/未設定の名前と
- * 挙動が違う（`CredentialFingerprint.shadowsCloneEnv` の doc、issue #1867・
- * #1894）。`scope: 'app'` はマネージャーに**何も配られていない**——「マネー
- * ジャーも器の環境変数の値で走っている」も「外しても配られる値は変わらない」
- * も、`scope: 'app'` については逆に言い切ってしまう（前者は「何も配られて
- * いない」の否定、後者は「外すと配られ始める」の否定）。**同じ1文で両方の
- * scope を語ると、どちらか一方が必ず誤りになる**ので、名前を出す前に分ける。
- */
-export function describeCloneEnvShadowedNotice(
-  names: readonly string[],
-  appScopedNames: readonly string[],
-): string {
-  const appScoped = new Set(appScopedNames);
-  const otherNames = names.filter((name) => !appScoped.has(name));
-  let out = '';
-  if (otherNames.length > 0) {
-    out +=
-      `alteroidd: GitHub の名前で、正本の行よりこのデーモンの器の環境変数の値が` +
-      `優先して配られています（マネージャーもクローンも、器の環境変数の値で` +
-      `走っています。正本のその行は配られていません）: ${otherNames.join(', ')}。` +
-      `正本のその行を外しても配られる値は変わりません（どちらにしても器の` +
-      `環境変数の値が配られます）。揃えるには、正本の値を器の環境変数に` +
-      `合わせて置き直すか（alteroid credential set <名前>）、器の環境変数の` +
-      `側を変えてください（この HTTP の口からは変えられません）\n`;
-  }
-  if (appScopedNames.length > 0) {
-    out +=
-      `alteroidd: GitHub の名前で、正本の行よりこのデーモンの器の環境変数の値が` +
-      `優先して配られています（クローンは器の環境変数の値で走っています。` +
-      `正本のその行は配られていません）: ${appScopedNames.join(', ')}。` +
-      `これは scope: app（clone だけに撒く）の行なので、マネージャーには` +
-      `この名前がいま何も配られていません（scope で意図して閉じてある。` +
-      `issue #1867）。⚠ 正本のその行を外すと、器の環境変数の値がマネージャー` +
-      `にも配られ始めます（scope で閉じた先へ届く）。揃えるには、正本の値を` +
-      `器の環境変数に合わせて置き直すか（alteroid credential set <名前>）、` +
-      `器の環境変数の側を変えてください（この HTTP の口からは変えられません）\n`;
-  }
-  return out;
-}
-
-/**
  * `tokenRotationStream` の網羅性チェック専用。呼ばれること自体が保証で、
  * `event` の型が `never` でなくなった時点（＝ 未対応の値が足された時点）で
  * 呼び出し側が型エラーになる。実行時にここへ来ることは型が守っている限り
@@ -1096,7 +1052,22 @@ export async function main(): Promise<void> {
    * `await` しても起動を止めない。
    */
   await seedDefaultEnvVars(stores);
-  await applyAppScopedEnvVars(stores);
+  /**
+   * **子プロセスへ渡す env の土台は、書き写す前の `process.env` のスナップショットである**
+   * （2026-10-06）。`applyAppScopedEnvVars` は正本の `scope: all | app` の行を `process.env`
+   * へ書き写すので、書き写した後の `process.env` を「器の env」と取り違えて子へ渡すと、
+   * **正本から外した（更新・削除した）名前の古い値が、起動時の写しとして子に残り続ける**。
+   * デーモン自身の設定の読み出し（TZ・自律のスケジュール等）は従来どおり `process.env`。
+   */
+  const bootEnvSnapshot: NodeJS.ProcessEnv = { ...process.env };
+  /**
+   * 器の環境変数にだけ置かれていた鍵（`GH_TOKEN` 等）を正本へ1度だけ移す。**書き写す前の
+   * スナップショットから読む**（`migrateEnvBaseCredentialsOnce` の doc）。
+   */
+  await migrateEnvBaseCredentialsOnce(stores, bootEnvSnapshot);
+  /** 同一プロセスの runner へ渡す env の土台（スナップショットの複製に、正本を重ねたもの）。 */
+  const localRunnerEnv: NodeJS.ProcessEnv = { ...bootEnvSnapshot };
+  await applyAppScopedEnvVars(stores, process.env, localRunnerEnv);
 
   // クローンのセッションは人格データディレクトリを基準に置く。呼び出し元の
   // カレントディレクトリに依存させると、別の場所から起動した瞬間に resume が
@@ -1203,6 +1174,7 @@ export async function main(): Promise<void> {
 
   const seeds = runnerSeeds({
     workspace,
+    env: localRunnerEnv,
     withheldEnvKeys: storage.withheldEnvKeys,
     profilePath: join(paths.state, 'runner-profile.sh'),
     onRunnerUnknown: reportRunnerUnknown,
@@ -1534,24 +1506,19 @@ export async function main(): Promise<void> {
     runners,
     withheldEnvKeys: [...WITHHELD_ENV_KEYS, ...storage.withheldEnvKeys],
     /**
-     * **GitHub の名前で、正本の行より器の環境変数の値が優先して配られている**
-     * （Issue #865 の恒久策、2026-09-12）ことを知らせる。正本にその名前の行が
-     * 在り、かつこのデーモンの器の env にも別の値が在るときだけ立つ
-     * （`cloneEnvShadowedNames` の doc）。
+     * **正本の更新が成功し、クローンから見える値が変わったら、クローンのセッションを
+     * ターンの境界で畳んで `resume` で開き直させる**（2026-10-06 のオーナー決定
+     * 「環境変数を即時反映にしてほしい」）。SDK 子プロセスの env は起動時に凍るので、
+     * これが無いと更新は次にセッションが作り直されるまでクローンに届かない。
      *
-     * **値も指紋も渡ってこない**（`onCloneEnvShadowed` の型）ので、ここで
-     * 出す行にも名前しか載らない。**⚠️ 「正本が勝つ」だった以前の仕様は、
-     * GitHub の名前について反転した**（`resolveCredentialRows`）——ここは
-     * 知らせるだけで、勝敗の決定そのものはしない。
-     *
-     * 連続した同じ食い違いは呼ばれない（`createCredentialService` 側で
-     * 抑止済み）ので、ここで頻度を気にする必要は無い。
-     *
-     * **本文の組み立ては `describeCloneEnvShadowedNotice` に切り出してある**
-     * （issue #1894）——`scope: 'app'` の名前は挙動が違うので文言も分ける。
+     * **印を立てるだけ**で、いま走っているターンは最後まで走る
+     * （`Clone#recycleSessionForToken` の doc）。**再開の合図は入れない**——鍵の枠切れと
+     * 違い、止まっていた層を起こす理由は無い（`pendingTokenWake` は認証トークン専用）。
+     * 渡ってくるのは名前だけで、値は渡らない。`clone` はこの後（下）で作る前方参照である
+     * （呼ばれるのは HTTP の `PUT /credentials` からなので、作られた後）。
      */
-    onCloneEnvShadowed: (names, appScopedNames) => {
-      process.stderr.write(describeCloneEnvShadowedNotice(names, appScopedNames));
+    onApplied: () => {
+      clone.recycleSessionForToken();
     },
   });
 
@@ -1853,6 +1820,8 @@ export async function main(): Promise<void> {
 
   const cloneDriver = cloneDriverFor(cloneProvider.id);
   const clone = createClone({
+    // 子プロセスの env の土台は、正本を書き写す前のスナップショット（`bootEnvSnapshot` の doc）。
+    childEnvBase: bootEnvSnapshot,
     // クローン層の provider（S8）。`claude` は従来どおり（駆動役を渡さず、既定の Claude の駆動役）。
     // `codex` は Codex の駆動役と、承認・蒸留を持たないという申告（台帳の「取れなかった」等が読む）。
     ...(cloneDriver === undefined ? {} : { driver: cloneDriver, provider: cloneProvider }),

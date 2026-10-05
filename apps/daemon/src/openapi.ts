@@ -2139,16 +2139,9 @@ const credentialScopeSchema = z.enum(['all', 'app', 'runner']);
  * runnerCredentialFingerprintSchema を直接拡張せず、こちらで .extend() する
  * ——あちらは runner 側の指紋（GET /runners の credentials）とも共有する土台
  * なので、そちらへ scope/secret/value の概念を持ち込まない（runner には
- * 「クローンの器の env」のような比較対象も scope の概念も無い）。
+ * scope の概念が無い）。
  */
 const credentialFingerprintWithMetaSchema = runnerCredentialFingerprintSchema.extend({
-  /**
-   * GitHub の名前（GITHUB_CREDENTIAL_NAMES）で、正本のこの行より
-   * デーモンの器の環境変数の値が優先して配られている（＝正本のこの行は
-   * どこにも配られていない）ときだけ true。既定では付かない
-   * （Issue #865 の恒久策、2026-09-12）。値そのものは載らない。
-   */
-  shadowsCloneEnv: z.boolean().optional(),
   /** 撒く先（共通/clone/manager）。 */
   scope: credentialScopeSchema,
   /** シークレット可否。false の行だけ value が併走する。 */

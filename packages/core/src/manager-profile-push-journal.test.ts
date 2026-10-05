@@ -112,7 +112,6 @@ function setup(stores: Stores): { pool: ManagerPool; runner: RunnerClient } {
       stores,
       runners: registry,
       withheldEnvKeys: [...WITHHELD_ENV_KEYS],
-      env: {},
     }),
   });
   return { pool, runner };

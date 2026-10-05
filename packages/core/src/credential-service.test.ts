@@ -75,26 +75,14 @@ function registryOf(runners: RunnerClient[]) {
   } as never;
 }
 
-function serviceOf(runners: RunnerClient[] = [], env: NodeJS.ProcessEnv = {}) {
+function serviceOf(runners: RunnerClient[] = []) {
   const stores = createMemoryStores();
-  /**
-   * クローンとの食い違いを知らせた回（#865）。**名前の配列しか受け取らない**
-   * ——値も指紋も渡らないことを、この型そのものが固定している。
-   */
-  const shadowNotices: readonly string[][] = [];
   const service = createCredentialService({
     stores,
     runners: registryOf(runners),
     withheldEnvKeys: [...WITHHELD],
-    // **器の env を明示で渡す（既定の `process.env` に依らせない）。** 既定のままだと、
-    // 検証を走らせた機械に `GH_TOKEN` が在るかどうかで結果が変わる ——
-    // 実際、`env` の土台を足した直後にこのファイルの5本がそれで落ちた。
-    env,
-    onCloneEnvShadowed: (names) => {
-      (shadowNotices as string[][]).push([...names]);
-    },
   });
-  return { stores, service, shadowNotices };
+  return { stores, service };
 }
 
 describe('置いて配る', () => {
@@ -373,21 +361,44 @@ describe('名乗ってきた runner へ降ろし直す', () => {
    * 「鍵の出所をクローン1つに保つ」へ移り、後者のほうが強い（runner の env に
    * 何が在っても子には届かない）。
    */
-  it('正本が空でも、クローンの器の env に在れば配る（配らなければ鍵はどこにも無い）', async () => {
-    const runner = fakeRunner();
-    const { stores, service } = serviceOf([runner], { GH_TOKEN: 'ghp_from_clone_env' });
+  /**
+   * **⚠️ このテストは 2026-10-06 に期待値を再び反転した。** 上の 2026-09-11 の反転の
+   * 経緯（元の題と本文）はそのまま残してある。
+   *
+   * 2026-09-11 の題: 「正本が空でも、クローンの器の env に在れば配る」——
+   * `GH_TOKEN` / `GITHUB_TOKEN` / `CODEX_API_KEY` を、正本に行が無いときの最後の土台として
+   * 器の env から配っていた。**その土台は撤去した**（2026-10-06 のオーナー決定「GH_TOKEN も
+   * CODEX_API_KEY も普通の名前と同じ扱いにしてほしい」）。土台の「器の env」は実は起動時に
+   * 正本から `process.env` へ書き写された値で、**正本から消しても配られ続けた**（実測
+   * 2026-10-05）ためである。既存の器は、起動時に1度だけ正本へ移す
+   * （`env-vars-boot.test.ts` の `migrateEnvBaseCredentialsOnce`）。
+   *
+   * **保証は弱くなっていない。** 守る対象が「器の env の鍵を配る」から「正本が唯一の出所である
+   * （正本に無い名前は、プロセスの環境変数に何が在っても配らない）」へ移り、後者のほうが強い
+   * （消した値が戻らない）。以前は `env` を引数で渡せたが、いまは出所が正本だけなので、
+   * 実際の `process.env`（以前の既定）に鍵を置いて、**配られないこと**を測る。
+   */
+  it('正本が空なら、プロセスの環境変数に GH_TOKEN 等が在っても配らない（正本が唯一の出所）', async () => {
+    vi.stubEnv('GH_TOKEN', 'ghp_from_clone_env');
+    vi.stubEnv('GITHUB_TOKEN', 'ghp_from_clone_env_2');
+    vi.stubEnv('CODEX_API_KEY', 'sk-codex-from-env');
+    try {
+      const runner = fakeRunner();
+      const { stores, service } = serviceOf([runner]);
 
-    const result = await service.syncRunner(runner);
+      expect(await service.syncRunner(runner)).toBeNull();
 
-    expect(result?.map((entry) => entry.name)).toEqual(['GH_TOKEN']);
-    expect(runner.held.get('GH_TOKEN')).toBe('ghp_from_clone_env');
-    // **正本は書き換えない。** 器の env は「最後の土台」であって正本ではない
-    expect(await stores.credentials.list()).toEqual([]);
+      expect(runner.received).toEqual([]);
+      expect(runner.held.size).toBe(0);
+      expect(await stores.credentials.list()).toEqual([]);
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
-  it('正本にも器の env にも無ければ、1文字も配らない（「全部外せ」とは言わない）', async () => {
+  it('正本が空なら、1文字も配らない（「全部外せ」とは言わない）', async () => {
     const runner = fakeRunner();
-    const { service } = serviceOf([runner], {});
+    const { service } = serviceOf([runner]);
 
     expect(await service.syncRunner(runner)).toBeNull();
     expect(runner.received).toEqual([]);
@@ -412,36 +423,84 @@ describe('名乗ってきた runner へ降ろし直す', () => {
    * 効く」から「マネージャーとクローンが常に同じ値で走る」へ移った——
    * 後者のほうが Issue #865 の実害（2つの主体が別の鍵で走る）を直接塞ぐ。
    */
-  it('GitHub の名前は、正本が在っても器の env のほうが勝つ（クローンと同じ値で走らせる。#865）', async () => {
-    const runner = fakeRunner();
-    const { service } = serviceOf([runner], { GH_TOKEN: 'ghp_from_clone_env' });
-    await service.apply([{ name: 'GH_TOKEN', value: 'ghp_from_vault' }]);
-    runner.received.length = 0;
+  /**
+   * **⚠️ このテストは 2026-10-06 に期待値を再び反転した。** 上の 2026-09-12 の反転の経緯は
+   * そのまま残してある。
+   *
+   * 2026-09-12 の題: 「GitHub の名前は、正本が在っても器の env のほうが勝つ」
+   * （`GITHUB_CREDENTIAL_NAMES`）。**その特別扱いを撤去した**（2026-10-06 のオーナー決定
+   * 「GH_TOKEN も通常の環境変数と同じように扱ってほしい」）。Issue #865 の実害
+   * （マネージャーとクローンが別の鍵で走る）は、**器の env を出所から外す**ことで別の形で
+   * 塞がる——両方の主体が同じ関数（`resolveCredentialRows`）を同じ正本の行で通すので、
+   * 出所が正本1つしか無く、ずれようがない。
+   *
+   * **保証は弱くなっていない。** 守る対象が「GitHub の名前だけ、器の env を優先して揃える」から
+   * 「どの名前も正本だけを見て揃える」へ広がった。そして実際に壊れていたのは、
+   * 「器の env」が起動時に正本から書き写された古い値だったこと（正本を画面で更新しても古い値が
+   * 配られた）——この歯が測るのはその反対（正本の値が必ず勝つ）である。
+   */
+  it('GitHub の名前も他の名前と同じく、正本が勝つ（プロセスの環境変数に別の値が在っても。2026-10-06）', async () => {
+    vi.stubEnv('GH_TOKEN', 'ghp_from_clone_env');
+    try {
+      const runner = fakeRunner();
+      const { service } = serviceOf([runner]);
+      await service.apply([{ name: 'GH_TOKEN', value: 'ghp_from_vault' }]);
+      runner.received.length = 0;
 
-    await service.syncRunner(runner);
+      await service.syncRunner(runner);
 
-    expect(runner.held.get('GH_TOKEN')).toBe('ghp_from_clone_env');
+      expect(runner.held.get('GH_TOKEN')).toBe('ghp_from_vault');
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
-  it('GitHub 以外の任意の名前は、従来どおり正本が勝つ（優先順位は GitHub だけに限る）', async () => {
-    const runner = fakeRunner();
-    const { service } = serviceOf([runner], { NPM_TOKEN: 'from_clone_env' });
-    await service.apply([{ name: 'NPM_TOKEN', value: 'from_vault' }]);
-    runner.received.length = 0;
+  it('正本から GH_TOKEN を外せば、プロセスの環境変数に値が在っても runner から消える（書き写された古い値が蘇らない）', async () => {
+    vi.stubEnv('GH_TOKEN', 'ghp_written_at_boot');
+    try {
+      const runner = fakeRunner();
+      const { service } = serviceOf([runner]);
+      await service.apply([{ name: 'GH_TOKEN', value: 'ghp_from_vault' }]);
+      await service.apply([{ name: 'GH_TOKEN', value: '' }]);
+      runner.received.length = 0;
 
-    await service.syncRunner(runner);
+      expect(await service.syncRunner(runner)).toBeNull();
 
-    expect(runner.held.get('NPM_TOKEN')).toBe('from_vault');
+      expect(runner.held.has('GH_TOKEN')).toBe(false);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('GitHub 以外の任意の名前も、従来どおり正本が勝つ', async () => {
+    vi.stubEnv('NPM_TOKEN', 'from_clone_env');
+    try {
+      const runner = fakeRunner();
+      const { service } = serviceOf([runner]);
+      await service.apply([{ name: 'NPM_TOKEN', value: 'from_vault' }]);
+      runner.received.length = 0;
+
+      await service.syncRunner(runner);
+
+      expect(runner.held.get('NPM_TOKEN')).toBe('from_vault');
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it('プールが正本を持つ名前は、器の env に在っても配らない（撒き手を2つにしない）', async () => {
     // **回し手（`token-spread.ts`）が撒く名前である。** ここが同じ名前を降ろすと、
     // 名乗り直しのたびに回した鍵を巻き戻す。
-    const runner = fakeRunner();
-    const { service } = serviceOf([runner], { CLAUDE_CODE_OAUTH_TOKEN: 'sk-ant-from-env' });
+    vi.stubEnv('CLAUDE_CODE_OAUTH_TOKEN', 'sk-ant-from-env');
+    try {
+      const runner = fakeRunner();
+      const { service } = serviceOf([runner]);
 
-    expect(await service.syncRunner(runner)).toBeNull();
-    expect(runner.received).toEqual([]);
+      expect(await service.syncRunner(runner)).toBeNull();
+      expect(runner.received).toEqual([]);
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it('指紋が同じものは降ろさない（再接続のたびにセッションを畳ませない）', async () => {
@@ -560,356 +619,61 @@ describe('同時に更新されたとき', () => {
 });
 
 /**
- * **クローンとマネージャーが別の鍵で走っていることを検出する（#865）。**
+ * **「器の env が正本に勝つ」ことの検出（`shadowsCloneEnv`・`onCloneEnvShadowed`。#865・#1894）は
+ * 撤去した（2026-10-06）。**
  *
- * ⭐ **これは挙動の歯ではなく、観測の歯である。** ここが固定するのは
- * `shadowsCloneEnv` が**いつ立つか**（検出条件）だけで、**立ったときに
- * どちらの値が実際に配られるか**（勝敗）はここでは測らない——勝敗は
- * `resolveCredentialRows` の歯（下の別の describe）が固定する。
- *
- * **⚠️ 2026-09-12 より前は「正本が勝つ」が勝敗の全部だったので、この2つは
- * 同じ節で測れていた。** いまは GitHub の名前（`GITHUB_CREDENTIAL_NAMES`）に
- * ついて器の env が勝つよう反転しているので（`it('GitHub の名前は、正本が
- * 在っても器の env のほうが勝つ（クローンと同じ値で走らせる。#865）')`）、
- * **検出条件（この節）と勝敗（`resolveCredentialRows` の節）は別の主張になった。
- * 検出条件そのものは変わっていない**（正本に行が在り・器の env にも空でない
- * 別の値が在り・GitHub の名前であること）。
- *
- * ここが守っているのは1つだけ: **食い違っていることに、誰かが気づけること。**
- * 実測（#865）では、マネージャーが GitHub App の user-to-server トークンで、
- * クローンが classic PAT で走っていた —— **どちらの層も自分は正常に見えており、
- * 気づける経路は「マネージャーが 403 で止まって人間が原因を追う」しか無かった。**
+ * 検出していた状態（正本の行が、クローンの器の env の値に負けて配られない）は、勝つ側
+ * （`GITHUB_CREDENTIAL_NAMES`）を撤去したので**起こり得ない**。この節にあった15本
+ * （検出条件9本・勝敗の確認1本・第2引数5本）は、起こり得ない状態を測っていたので消した。
+ * 3点セット（変更した事実・なぜ必要になったか・なぜ保証が弱くなっていないか）は PR 本文に
+ * ある。**保証は「食い違いに気づける」から「食い違いが構造的に作れない」へ移った**ので、
+ * その歯をここに置く: ①旗が決して立たない ②正本が必ず勝つ（上の `syncRunner` の節）。
  */
-describe('クローンとマネージャーで別の鍵が配られていることを検出する（#865）', () => {
-  /** 実在の鍵と紛れない形（`token-rotator.test.ts` の `dummy-not-a-real-token` と同じ作法）。 */
-  const VAULT = 'dummy-not-a-real-token-vault';
-  const CLONE_ENV = 'dummy-not-a-real-token-clone-env';
+describe('器の env は出所ではない（旗も知らせも無い。2026-10-06）', () => {
+  it('プロセスの環境変数に別の値が在っても、fingerprints() に shadowsCloneEnv は付かない', async () => {
+    vi.stubEnv('GH_TOKEN', 'dummy-not-a-real-token-clone-env');
+    try {
+      const { service } = serviceOf([]);
+      await service.apply([{ name: 'GH_TOKEN', value: 'dummy-not-a-real-token-vault' }]);
 
-  it('正本と器の env に同じ名前で別の値が在れば、旗が立つ', async () => {
-    const { service } = serviceOf([], { GH_TOKEN: CLONE_ENV });
-    await service.apply([{ name: 'GH_TOKEN', value: VAULT }]);
-
-    expect(await service.fingerprints()).toEqual([
-      expect.objectContaining({ name: 'GH_TOKEN', shadowsCloneEnv: true }),
-    ]);
-  });
-
-  it('同じ値なら立たない（食い違っていない）', async () => {
-    const { service } = serviceOf([], { GH_TOKEN: VAULT });
-    await service.apply([{ name: 'GH_TOKEN', value: VAULT }]);
-
-    // **`false` を敷き詰めない。** 旗そのものが付かない。
-    expect((await service.fingerprints())[0]).not.toHaveProperty('shadowsCloneEnv');
-  });
-
-  it('正本にしか無ければ立たない（effective() が正本を配るので両者は揃う）', async () => {
-    const { service } = serviceOf([], {});
-    await service.apply([{ name: 'GH_TOKEN', value: VAULT }]);
-
-    expect((await service.fingerprints())[0]).not.toHaveProperty('shadowsCloneEnv');
-  });
-
-  it('器の env にしか無ければ立たない（正本に行が無いので effective() が env から埋める）', async () => {
-    const { service } = serviceOf([], { GH_TOKEN: CLONE_ENV });
-
-    // 正本が空なので、そもそも並べる行が無い。
-    expect(await service.fingerprints()).toEqual([]);
-  });
-
-  it('器の env の値が空文字なら立たない（空は「置かれていない」と同じ）', async () => {
-    const { service } = serviceOf([], { GH_TOKEN: '' });
-    await service.apply([{ name: 'GH_TOKEN', value: VAULT }]);
-
-    expect((await service.fingerprints())[0]).not.toHaveProperty('shadowsCloneEnv');
-  });
-
-  it('GitHub 以外の名前では立たない（見るのは GITHUB_CREDENTIAL_NAMES だけ）', async () => {
-    // **身元は GitHub の名前ではない。** ここを見ると、クローンが自分の身元で
-    // コミットし、マネージャーが正本の身元でコミットする**正常な構成**まで
-    // 食い違いとして出てしまう。
-    const { service } = serviceOf([], { GIT_AUTHOR_NAME: 'from-clone-env' });
-    await service.apply([{ name: 'GIT_AUTHOR_NAME', value: 'from-vault' }]);
-
-    expect((await service.fingerprints())[0]).not.toHaveProperty('shadowsCloneEnv');
-  });
-
-  it('プールが正本を持つ名前では立たない（比べる相手がそもそも違う）', async () => {
-    // **`apply()` は経由できない。** あちらは `CLAUDE_CODE_OAUTH_TOKEN` を
-    // 「正本はプールの側である」と拒むので（`assertEntries`）、この状態は
-    // 正規の口からは作れない。**それでも門を測る** —— 記憶ストアを直に
-    // 書けば作れてしまう状態であり、門が消えたことに気づける経路は他に無い。
-    //
-    // **立ってはいけない理由**: クローンが実際に使う `CLAUDE_CODE_OAUTH_TOKEN` は
-    // 正本でも器の env でもなく、回し手（`token-spread.ts`）が撒いた値である。
-    // ここで正本と器の env を比べても、**クローンが本当に使っている値とは
-    // 無関係な比較**になり、誤検出しか生まない。
-    const { stores, service } = serviceOf([], { CLAUDE_CODE_OAUTH_TOKEN: CLONE_ENV });
-    await stores.credentials.put([{ name: 'CLAUDE_CODE_OAUTH_TOKEN', value: VAULT }]);
-
-    expect((await service.fingerprints())[0]).not.toHaveProperty('shadowsCloneEnv');
-  });
-
-  it('syncRunner が食い違いを知らせる。ただし同じ食い違いは繰り返さない', async () => {
-    const runner = fakeRunner();
-    const { service, shadowNotices } = serviceOf([runner], { GH_TOKEN: CLONE_ENV });
-    await service.apply([{ name: 'GH_TOKEN', value: VAULT }]);
-
-    await service.syncRunner(runner);
-    await service.syncRunner(runner);
-
-    // **1回だけ。** `syncRunner` は runner が名乗り直すたびに叩かれるので、
-    // 毎回出すと同じ1行で日誌が埋まり、意味のある行が埋もれる。
-    expect(shadowNotices).toEqual([['GH_TOKEN']]);
-  });
-
-  it('食い違いが無ければ、一度も知らせない', async () => {
-    const runner = fakeRunner();
-    const { service, shadowNotices } = serviceOf([runner], { GH_TOKEN: VAULT });
-    await service.apply([{ name: 'GH_TOKEN', value: VAULT }]);
-
-    await service.syncRunner(runner);
-
-    expect(shadowNotices).toEqual([]);
-  });
-
-  it('値も指紋も、旗にも知らせにも出ない', async () => {
-    const runner = fakeRunner();
-    const { service, shadowNotices } = serviceOf([runner], { GH_TOKEN: CLONE_ENV });
-    await service.apply([{ name: 'GH_TOKEN', value: VAULT }]);
-    await service.syncRunner(runner);
-
-    const fingerprints = JSON.stringify(await service.fingerprints());
-    const notices = JSON.stringify(shadowNotices);
-    for (const secret of [VAULT, CLONE_ENV, fingerprintOf(CLONE_ENV)]) {
-      expect(notices).not.toContain(secret);
+      const rows = await service.fingerprints();
+      expect(rows).toEqual([expect.objectContaining({ name: 'GH_TOKEN' })]);
+      expect(rows[0]).not.toHaveProperty('shadowsCloneEnv');
+    } finally {
+      vi.unstubAllEnvs();
     }
-    // **旗の側には正本の指紋だけが載る**（元から載っているもの）。
-    // **器の env の側の指紋は、どこにも出さない。**
-    expect(fingerprints).not.toContain(VAULT);
-    expect(fingerprints).not.toContain(CLONE_ENV);
-    expect(fingerprints).not.toContain(fingerprintOf(CLONE_ENV));
-  });
-
-  /**
-   * **⚠️ このテストは 2026-09-12 に期待値を反転した。** 元の題と本文は下に
-   * 残してある。
-   *
-   * 元: 「🔴 旗が立っていても、配るのは正本の値のままである（挙動を変えて
-   * いない）」——2026-09-11 時点では、`shadowsCloneEnv` は検出専用で勝敗には
-   * 手を出さなかった。
-   *
-   * **その前提が無くなった**（人間の決定 2026-09-12、Issue #865 の恒久策）。
-   * GitHub の名前については、旗が立つ条件（正本と器の env が食い違う）が
-   * まさに「器の env が優先して配られる」条件と重なる——`resolveCredentialRows`
-   * が両方を同じ入力から決めるため。**⟹ 旗が立っているとき、配られるのは
-   * もう正本の値ではない。**
-   */
-  it('🔴 旗が立っているとき、実際に配られるのは器の env の値である（挙動が変わった。#865）', async () => {
-    const runner = fakeRunner();
-    const { service } = serviceOf([runner], { GH_TOKEN: CLONE_ENV });
-    await service.apply([{ name: 'GH_TOKEN', value: VAULT }]);
-    runner.received.length = 0;
-
-    await service.syncRunner(runner);
-
-    // **検出条件どおりに勝敗が決まる。** ここが `VAULT` に戻ったら、
-    // GitHub の名前の優先順位が反転前に巻き戻っている。
-    expect(runner.held.get('GH_TOKEN')).toBe(CLONE_ENV);
   });
 });
 
 /**
- * **`onCloneEnvShadowed` の第2引数（`appScopedNames`。issue #1894）。**
+ * **scope: 'runner' の GH_TOKEN の実測（issue #1894）。** 元の主張は2つだった:
+ * (1) manager は器の env の値で走る (2) 正本の行を外しても manager へ配られる値は
+ * 変わらない。
  *
- * 呼び手（daemon の stderr・CLI・Web）が `scope: 'app'` の名前だけ文言を
- * 変えるには、旗が立った名前のうちどれが `scope: 'app'` かを知る必要がある
- * ——旗そのもの（`names`）は scope を見ずに立つ（直上の describe）ので、
- * ここで分けて渡す。
- *
- * **測るのは「正しく分けて渡しているか」だけ**——文言（daemon/CLI/Web の
- * 実際の出力）はそれぞれの呼び手側のテストが持つ。
+ * **⚠️ 2026-10-06 に期待値を反転した**（元の題と本文はこの下の it のコメントに残す）。
+ * GitHub の特別扱い（器の env が正本に勝つ）と、器の env を最後の土台にする経路を撤去したため、
+ * 2つの主張はどちらも逆になった: (1) manager は**正本の値**で走る (2) 正本の行を外せば、
+ * manager へ配られるものは**無くなる**。**保証は弱くなっていない**——元は「器の env が勝つ
+ * こと」の確認で、いまは「正本が唯一の出所であること」の確認であり、後者は消した値が
+ * 戻らないことまで言う（実測 2026-10-05 の不具合の反対側）。
  */
-describe('onCloneEnvShadowed の第2引数（appScopedNames。issue #1894）', () => {
+describe('scope: runner の GH_TOKEN の実測（issue #1894 → 2026-10-06 に反転）', () => {
   const VAULT = 'dummy-not-a-real-token-vault';
-  const CLONE_ENV = 'dummy-not-a-real-token-clone-env';
 
-  it('scope: app の食い違いは、names にも appScopedNames にも載る', async () => {
-    const stores = createMemoryStores();
-    const runner = fakeRunner();
-    const calls: { names: readonly string[]; appScopedNames: readonly string[] }[] = [];
-    const service = createCredentialService({
-      stores,
-      runners: registryOf([runner]),
-      withheldEnvKeys: [...WITHHELD],
-      env: { GH_TOKEN: CLONE_ENV },
-      onCloneEnvShadowed: (names, appScopedNames) => {
-        calls.push({ names, appScopedNames });
-      },
-    });
-    await service.apply([{ name: 'GH_TOKEN', value: VAULT, scope: 'app' }]);
-    await service.syncRunner(runner);
+  const runnerRow: StoredCredential = {
+    name: 'GH_TOKEN',
+    value: VAULT,
+    updatedAt: '2026-09-14T00:00:00.000Z',
+    scope: 'runner',
+  };
 
-    expect(calls).toEqual([{ names: ['GH_TOKEN'], appScopedNames: ['GH_TOKEN'] }]);
+  it('(1) manager は正本の値で走る（scope: runner の GH_TOKEN）', () => {
+    expect(resolveCredentialRows([runnerRow], 'manager')).toEqual([runnerRow]);
   });
 
-  it('scope: all（既定）の食い違いは、names には載るが appScopedNames には載らない', async () => {
-    const stores = createMemoryStores();
-    const runner = fakeRunner();
-    const calls: { names: readonly string[]; appScopedNames: readonly string[] }[] = [];
-    const service = createCredentialService({
-      stores,
-      runners: registryOf([runner]),
-      withheldEnvKeys: [...WITHHELD],
-      env: { GH_TOKEN: CLONE_ENV },
-      onCloneEnvShadowed: (names, appScopedNames) => {
-        calls.push({ names, appScopedNames });
-      },
-    });
-    await service.apply([{ name: 'GH_TOKEN', value: VAULT }]);
-    await service.syncRunner(runner);
-
-    expect(calls).toEqual([{ names: ['GH_TOKEN'], appScopedNames: [] }]);
-  });
-
-  it('scope: runner の食い違いも、appScopedNames には載らない', async () => {
-    const stores = createMemoryStores();
-    const runner = fakeRunner();
-    const calls: { names: readonly string[]; appScopedNames: readonly string[] }[] = [];
-    const service = createCredentialService({
-      stores,
-      runners: registryOf([runner]),
-      withheldEnvKeys: [...WITHHELD],
-      env: { GH_TOKEN: CLONE_ENV },
-      onCloneEnvShadowed: (names, appScopedNames) => {
-        calls.push({ names, appScopedNames });
-      },
-    });
-    await service.apply([{ name: 'GH_TOKEN', value: VAULT, scope: 'runner' }]);
-    await service.syncRunner(runner);
-
-    expect(calls).toEqual([{ names: ['GH_TOKEN'], appScopedNames: [] }]);
-  });
-
-  it('混在: app scoped の名前だけが appScopedNames に載る（他は落ちる）', async () => {
-    const stores = createMemoryStores();
-    const runner = fakeRunner();
-    const calls: { names: readonly string[]; appScopedNames: readonly string[] }[] = [];
-    const service = createCredentialService({
-      stores,
-      runners: registryOf([runner]),
-      withheldEnvKeys: [...WITHHELD],
-      env: { GH_TOKEN: CLONE_ENV, GITHUB_TOKEN: CLONE_ENV },
-      onCloneEnvShadowed: (names, appScopedNames) => {
-        calls.push({ names: [...names].sort(), appScopedNames: [...appScopedNames].sort() });
-      },
-    });
-    await service.apply([
-      { name: 'GH_TOKEN', value: VAULT, scope: 'app' },
-      { name: 'GITHUB_TOKEN', value: VAULT, scope: 'all' },
-    ]);
-    await service.syncRunner(runner);
-
-    expect(calls).toEqual([{ names: ['GH_TOKEN', 'GITHUB_TOKEN'], appScopedNames: ['GH_TOKEN'] }]);
-  });
-
-  /**
-   * **レビュー指摘（PR #1920）の直しそのもの。** `lastShadowSignature` が
-   * 名前の集合だけで作られていると、同じ名前のまま `scope` だけ `all` → `app`
-   * に変わっても「直前と同じ集合」に見えて再通知されない。旗が立つ条件
-   * （`cloneEnvShadowedNames`）は scope を見ないので、`names` の集合は本当に
-   * 変わらない——**しかし `appScopedNames` は変わる**。呼び手（daemon の
-   * stderr・CLI・Web）が文言を分けるのに使う情報が変わったのに、その変化が
-   * 伝わらないと、scope を app に変えた後も「manager も器の env で走って
-   * いる」という**古い（scope: app には誤りの）文言**が日誌に残り続ける。
-   *
-   * **これは既存の「直前と同じ集合なら黙る」テスト（直上）とは別の主張
-   * である。** あちらは「名前の集合が本当に変わらない」ときに黙ることを
-   * 固定しており、書き換えていない。こちらは「名前の集合は変わらないが
-   * scope が変わった」ときに**黙らない**ことを固定する——両立する。
-   */
-  it('名前の集合は同じでも、scope が all → app に変わったら再度知らせる（PR #1920 レビュー指摘）', async () => {
-    const stores = createMemoryStores();
-    const runner = fakeRunner();
-    const calls: { names: readonly string[]; appScopedNames: readonly string[] }[] = [];
-    const service = createCredentialService({
-      stores,
-      runners: registryOf([runner]),
-      withheldEnvKeys: [...WITHHELD],
-      env: { GH_TOKEN: CLONE_ENV },
-      onCloneEnvShadowed: (names, appScopedNames) => {
-        calls.push({ names, appScopedNames });
-      },
-    });
-
-    // 1回目: scope 省略（＝ all）で食い違い。
-    await service.apply([{ name: 'GH_TOKEN', value: VAULT }]);
-    await service.syncRunner(runner);
-
-    // 同じ名前・同じ値のまま、scope だけ app へ変える。
-    await service.apply([{ name: 'GH_TOKEN', value: VAULT, scope: 'app' }]);
-    await service.syncRunner(runner);
-
-    // 名前の集合（['GH_TOKEN']）は2回とも同じだが、scope が変わったので
-    // appScopedNames の中身が変わり、2回目も知らせが来る。
-    expect(calls).toEqual([
-      { names: ['GH_TOKEN'], appScopedNames: [] },
-      { names: ['GH_TOKEN'], appScopedNames: ['GH_TOKEN'] },
-    ]);
-  });
-});
-
-/**
- * **scope: 'runner' の文言の正しさを実測する（issue #1894 の「確かめていない
- * こと」2つ目）。** Issue は「マネージャーもクローンも器の env で合っている
- * *はず*だという判定だけ」と書いていた——ここで実測に変える。
- *
- * 主張は2つ: (1) manager は器の env の値で走る（`scope: 'app'` と違って
- * `held` には残るので、器の env の値が manager へ届く）。(2) 正本の行を
- * 外しても manager へ配られる値は変わらない（外す前から既に器の env の値が
- * 勝っているため）。
- *
- * **どちらも赤にはならない**（scope: 'runner' の文言はそもそも直していない
- * ——このテストは「直さなくてよい」という判断の裏付けである）。
- */
-describe('scope: runner の GH_TOKEN の実測（issue #1894）', () => {
-  const VAULT = 'dummy-not-a-real-token-vault';
-  const CLONE_ENV = 'dummy-not-a-real-token-clone-env';
-
-  it('(1) manager は器の env の値で走る（scope: runner でも GitHub の名前は器の env が勝つ）', () => {
-    const rows: StoredCredential[] = [
-      {
-        name: 'GH_TOKEN',
-        value: VAULT,
-        updatedAt: '2026-09-14T00:00:00.000Z',
-        scope: 'runner',
-      },
-    ];
-    const resolved = resolveCredentialRows(rows, { GH_TOKEN: CLONE_ENV }, 'manager');
-    expect(resolved).toEqual([
-      { name: 'GH_TOKEN', value: CLONE_ENV, updatedAt: '(クローンの器の環境変数)' },
-    ]);
-  });
-
-  it('(2) 正本の行を外しても、manager へ配られる値は変わらない（scope: runner）', () => {
-    const withRow: StoredCredential[] = [
-      {
-        name: 'GH_TOKEN',
-        value: VAULT,
-        updatedAt: '2026-09-14T00:00:00.000Z',
-        scope: 'runner',
-      },
-    ];
-    const withoutRow: StoredCredential[] = [];
-
-    const resolvedWithRow = resolveCredentialRows(withRow, { GH_TOKEN: CLONE_ENV }, 'manager');
-    const resolvedWithoutRow = resolveCredentialRows(
-      withoutRow,
-      { GH_TOKEN: CLONE_ENV },
-      'manager',
-    );
-
-    expect(resolvedWithRow).toEqual(resolvedWithoutRow);
-    expect(resolvedWithRow.map((row) => row.value)).toEqual([CLONE_ENV]);
+  it('(2) 正本の行を外せば、manager へ配られる値は無くなる（scope: runner）', () => {
+    expect(resolveCredentialRows([runnerRow], 'manager').map((row) => row.value)).toEqual([VAULT]);
+    expect(resolveCredentialRows([], 'manager')).toEqual([]);
   });
 });
 
@@ -922,13 +686,13 @@ describe('scope: runner の GH_TOKEN の実測（issue #1894）', () => {
  * 使われる。** ⟹ ここで固定した組み合わせは、両方の主体に同時に効く——
  * どちらかだけを直して片方を直し忘れる、という形が構造的に作れない。
  */
-describe('resolveCredentialRows（正本と器の env から配る値を1本で決める）', () => {
+describe('resolveCredentialRows（正本から配る値を1本で決める）', () => {
   function row(name: string, value: string): StoredCredential {
     return { name, value, updatedAt: '2026-09-12T00:00:00.000Z' };
   }
 
   it('正本にしか無ければ、GitHub の名前でも正本が勝つ', () => {
-    const resolved = resolveCredentialRows([row('GH_TOKEN', 'from-vault')], {}, 'clone');
+    const resolved = resolveCredentialRows([row('GH_TOKEN', 'from-vault')], 'clone');
     expect(resolved).toEqual([row('GH_TOKEN', 'from-vault')]);
   });
 
@@ -939,118 +703,80 @@ describe('resolveCredentialRows（正本と器の env から配る値を1本で�
    */
   it('正本が器の生の環境変数である名前は、行が在っても配らない', () => {
     for (const name of ENV_FILE_OWNED_CREDENTIAL_NAMES) {
-      expect(resolveCredentialRows([row(name, 'from-vault')], {}, 'clone')).toEqual([]);
-      expect(resolveCredentialRows([row(name, 'from-vault')], {}, 'manager')).toEqual([]);
+      expect(resolveCredentialRows([row(name, 'from-vault')], 'clone')).toEqual([]);
+      expect(resolveCredentialRows([row(name, 'from-vault')], 'manager')).toEqual([]);
     }
   });
 
   it('provider の2つも、行が在っても配らない', () => {
     for (const name of ['ALTEROID_CLONE_PROVIDER', 'ALTEROID_MANAGER_PROVIDER']) {
-      expect(resolveCredentialRows([row(name, 'claude')], {}, 'clone')).toEqual([]);
-      expect(resolveCredentialRows([row(name, 'claude')], {}, 'manager')).toEqual([]);
+      expect(resolveCredentialRows([row(name, 'claude')], 'clone')).toEqual([]);
+      expect(resolveCredentialRows([row(name, 'claude')], 'manager')).toEqual([]);
     }
   });
 
   it('落とすのはその名前だけで、隣の行は配る', () => {
     const resolved = resolveCredentialRows(
       [row('ALTEROID_MANAGER_MODEL', 'sonnet'), row('GH_TOKEN', 'from-vault')],
-      {},
       'manager',
     );
     expect(resolved).toEqual([row('GH_TOKEN', 'from-vault')]);
   });
 
-  it('器の env にしか無ければ、GitHub の名前は器の env から埋める（既存の土台）', () => {
-    const resolved = resolveCredentialRows([], { GH_TOKEN: 'from-clone-env' }, 'clone');
-    expect(resolved.map((r) => [r.name, r.value])).toEqual([['GH_TOKEN', 'from-clone-env']]);
-  });
-
-  it('両方に在って GitHub の名前なら、器の env が正本より勝つ', () => {
-    const resolved = resolveCredentialRows(
-      [row('GH_TOKEN', 'from-vault')],
-      { GH_TOKEN: 'from-clone-env' },
-      'clone',
-    );
-    expect(resolved).toEqual([
-      { name: 'GH_TOKEN', value: 'from-clone-env', updatedAt: expect.any(String) },
-    ]);
-  });
-
-  it('GITHUB_TOKEN でも同じ優先順位が効く（GH_TOKEN だけの特別扱いではない）', () => {
-    const resolved = resolveCredentialRows(
-      [row('GITHUB_TOKEN', 'from-vault')],
-      { GITHUB_TOKEN: 'from-clone-env' },
-      'clone',
-    );
-    expect(resolved.map((r) => [r.name, r.value])).toEqual([['GITHUB_TOKEN', 'from-clone-env']]);
-  });
-
-  it('🔴 器の env が空文字なら、GitHub の名前でも正本が勝つ（空は「置かれていない」と同じ）', () => {
-    const resolved = resolveCredentialRows(
-      [row('GH_TOKEN', 'from-vault')],
-      { GH_TOKEN: '' },
-      'clone',
-    );
-    expect(resolved).toEqual([row('GH_TOKEN', 'from-vault')]);
-  });
-
-  it('🔴 CLAUDE_CODE_OAUTH_TOKEN は対象外——両方に在っても正本が勝つ（プールの専用）', () => {
-    // **正規の口（`apply()`）ではこの状態は作れない**（`assertEntries` が
-    // `POOL_OWNED_CREDENTIAL_NAMES` を拒む）。それでも `resolveCredentialRows`
-    // 自身が誤って解けないことを、入力を直接与えて測る——ここが唯一の門である。
-    const resolved = resolveCredentialRows(
-      [row('CLAUDE_CODE_OAUTH_TOKEN', 'from-vault')],
-      { CLAUDE_CODE_OAUTH_TOKEN: 'from-clone-env' },
-      'clone',
-    );
-    expect(resolved).toEqual([row('CLAUDE_CODE_OAUTH_TOKEN', 'from-vault')]);
-  });
-
-  it('🔴 ROTATABLE_CREDENTIAL_KEYS に無い任意の名前は対象外——両方に在っても正本が勝つ', () => {
-    const resolved = resolveCredentialRows(
-      [row('NPM_TOKEN', 'from-vault')],
-      { NPM_TOKEN: 'from-clone-env' },
-      'clone',
-    );
-    expect(resolved).toEqual([row('NPM_TOKEN', 'from-vault')]);
-  });
-
-  it('任意の名前は、正本にしか無くても配る（PR #825 の既存の約束を壊さない）', () => {
-    const resolved = resolveCredentialRows([row('NPM_TOKEN', 'from-vault')], {}, 'clone');
-    expect(resolved).toEqual([row('NPM_TOKEN', 'from-vault')]);
-  });
-
-  it('任意の名前は、器の env にしか無くても配らない（この土台は回せる名前だけに効く）', () => {
-    const resolved = resolveCredentialRows([], { NPM_TOKEN: 'from-clone-env' }, 'clone');
-    expect(resolved).toEqual([]);
-  });
-
   /**
-   * **⭐ 等価変異——ふるまいを変えない変更は生存してよい。**
-   * `updatedAt` は「器の env が出所」であることを示す固定文字列で、配る
-   * *値*（`value`）には関与しない。この文字列そのものを別の固定文字列へ
-   * 差し替えても、`name` → `value` の対応（=このシステムがクローンと
-   * マネージャーへ実際に渡すもの）は1文字も変わらない。
+   * **⚠️ 2026-10-06 に、この区間の6本の期待値を反転・削除した。** 元の題（反転前）:
+   * 「器の env にしか無ければ、GitHub の名前は器の env から埋める（既存の土台）」/
+   * 「両方に在って GitHub の名前なら、器の env が正本より勝つ」/「GITHUB_TOKEN でも同じ優先順位が
+   * 効く」/「🔴 器の env が空文字なら、GitHub の名前でも正本が勝つ」/「🔴 CLAUDE_CODE_OAUTH_TOKEN
+   * は対象外——両方に在っても正本が勝つ」/「🔴 ROTATABLE_CREDENTIAL_KEYS に無い任意の名前は対象外」
+   * /「任意の名前は、器の env にしか無くても配らない」/「器の env 由来の行の updatedAt は固定文字列」。
+   *
+   * **`resolveCredentialRows` は器の env を引数に取らなくなった**（オーナー決定 2026-10-06
+   * 「GH_TOKEN も CODEX_API_KEY も普通の名前と同じ扱い」）。⟹ 「器の env が勝つ」「器の env から
+   * 埋める」を測る入力がそもそも無い。**保証は強くなっている**: 以前は「器の env は GitHub の名前
+   * だけ勝つ・回せる名前だけ土台になる」という**名前ごとの場合分け**を歯が守っていたが、いまは
+   * 「出力は正本の行（scope と除外名で絞ったもの）に限る」という1本の主張に畳まれ、下の歯がそれを
+   * 守る。プールの名前・任意の名前が正本のまま勝つこと（元の 🔴 の2本）は、正本の行だけを返すことで
+   * 構造的に満たされ、下の「出力は入力の行の部分集合」が測る。
    */
-  it('器の env 由来の行の updatedAt は固定文字列である（値には関与しない）', () => {
-    const resolved = resolveCredentialRows([], { GH_TOKEN: 'from-clone-env' }, 'clone');
-    expect(resolved[0]?.updatedAt).toBe('(クローンの器の環境変数)');
+  it('GitHub の名前も、正本の行が在ればそのまま配る（特別扱いは無い）', () => {
+    for (const name of ['GH_TOKEN', 'GITHUB_TOKEN', 'CODEX_API_KEY']) {
+      expect(resolveCredentialRows([row(name, 'from-vault')], 'clone')).toEqual([
+        row(name, 'from-vault'),
+      ]);
+    }
+  });
+
+  it('正本が空なら、何も出ない（土台は無い）', () => {
+    expect(resolveCredentialRows([], 'clone')).toEqual([]);
+    expect(resolveCredentialRows([], 'manager')).toEqual([]);
+  });
+
+  it('出力は入力の行の部分集合である（行を作り出さない・値を差し替えない）', () => {
+    const rows = [
+      row('GH_TOKEN', 'a'),
+      row('NPM_TOKEN', 'b'),
+      row('CLAUDE_CODE_OAUTH_TOKEN', 'c'),
+      row('CODEX_API_KEY', 'd'),
+    ];
+    const resolved = resolveCredentialRows(rows, 'clone');
+    for (const out of resolved) expect(rows).toContainEqual(out);
   });
 
   it('target を変えても、scope の無い行（＝ all 相当）は両方に届く', () => {
     const rows: StoredCredential[] = [
       { name: 'NPM_TOKEN', value: 'npm_x', updatedAt: '2026-09-14T00:00:00.000Z' },
     ];
-    expect(resolveCredentialRows(rows, {}, 'clone')).toEqual(rows);
-    expect(resolveCredentialRows(rows, {}, 'manager')).toEqual(rows);
+    expect(resolveCredentialRows(rows, 'clone')).toEqual(rows);
+    expect(resolveCredentialRows(rows, 'manager')).toEqual(rows);
   });
 
   it('scope: app の行は clone にだけ届き、manager には届かない', () => {
     const rows: StoredCredential[] = [
       { name: 'TZ', value: 'Asia/Tokyo', updatedAt: '2026-09-14T00:00:00.000Z', scope: 'app' },
     ];
-    expect(resolveCredentialRows(rows, {}, 'clone')).toEqual(rows);
-    expect(resolveCredentialRows(rows, {}, 'manager')).toEqual([]);
+    expect(resolveCredentialRows(rows, 'clone')).toEqual(rows);
+    expect(resolveCredentialRows(rows, 'manager')).toEqual([]);
   });
 
   it('scope: runner の行は manager にだけ届き、clone には届かない', () => {
@@ -1062,29 +788,29 @@ describe('resolveCredentialRows（正本と器の env から配る値を1本で�
         scope: 'runner',
       },
     ];
-    expect(resolveCredentialRows(rows, {}, 'clone')).toEqual([]);
-    expect(resolveCredentialRows(rows, {}, 'manager')).toEqual(rows);
+    expect(resolveCredentialRows(rows, 'clone')).toEqual([]);
+    expect(resolveCredentialRows(rows, 'manager')).toEqual(rows);
   });
 
   it('scope: all を明示した行も、scope が無い行と同じく両方に届く', () => {
     const rows: StoredCredential[] = [
       { name: 'NPM_TOKEN', value: 'npm_x', updatedAt: '2026-09-14T00:00:00.000Z', scope: 'all' },
     ];
-    expect(resolveCredentialRows(rows, {}, 'clone')).toEqual(rows);
-    expect(resolveCredentialRows(rows, {}, 'manager')).toEqual(rows);
+    expect(resolveCredentialRows(rows, 'clone')).toEqual(rows);
+    expect(resolveCredentialRows(rows, 'manager')).toEqual(rows);
   });
 
   /**
-   * **scope で宛先から外れた行を、器の env で埋め戻さない（issue #1867）。**
-   * 器の env を最後の土台として埋めるのは「正本に**行が無い**」名前だけである
-   * （`resolveCredentialRows` の doc）。以前は、scope で絞った後の集合を「持って
-   * いる名前」として使っていたので、`scope: 'app'` の行は manager から見て「行が
-   * 無い」扱いになり、器の env の値が manager へ配られていた。
+   * **scope で宛先から外れた行は、manager へ配らない（issue #1867）。**
    *
-   * 経緯: この歯は、層ごとのバグ探しの作業者が main の上で赤を取った再現
-   * （枝 `test/hunt-vault` の `b8eef89`）を、直した後の保証の形に書き換えたもの。
+   * 元の歯は「`scope: 'app'` の GH_TOKEN を、器の env の値で埋め戻して manager へ配ってしまう」
+   * 不具合を測っていた（器の env を土台にする経路が在ったため）。**2026-10-06 にその経路を
+   * 撤去したので、埋め戻す先がそもそも無い**——歯は「scope: 'app' の行は manager へ出ない」へ
+   * 畳んだ（元の期待値 `[]` は同じ。入力から器の env を外した）。元のコメントの経緯: この歯は、
+   * 層ごとのバグ探しの作業者が main の上で赤を取った再現（枝 `test/hunt-vault` の `b8eef89`）
+   * を、直した後の保証の形に書き換えたもの。
    */
-  it('scope: app の GH_TOKEN は、器の env に値があっても manager へ配らない（issue #1867）', () => {
+  it('scope: app の GH_TOKEN は manager へ配らない（issue #1867）', () => {
     const rows: StoredCredential[] = [
       {
         name: 'GH_TOKEN',
@@ -1093,21 +819,11 @@ describe('resolveCredentialRows（正本と器の env から配る値を1本で�
         scope: 'app',
       },
     ];
-    const resolved = resolveCredentialRows(
-      rows,
-      { GH_TOKEN: 'ghp_FAKE1234FAKE5678FAKE9012' },
-      'manager',
-    );
-    expect(resolved).toEqual([]);
+    expect(resolveCredentialRows(rows, 'manager')).toEqual([]);
   });
 
-  it('対照: 正本に行が無ければ、いままでどおり器の env の GH_TOKEN を manager へ配る（issue #1867）', () => {
-    const resolved = resolveCredentialRows(
-      [],
-      { GH_TOKEN: 'ghp_FAKE1234FAKE5678FAKE9012' },
-      'manager',
-    );
-    expect(resolved.map((row) => row.name)).toEqual(['GH_TOKEN']);
+  it('対照: scope: app の行を外した後も、manager へ配られるものは無い（器の env が埋め戻さない）', () => {
+    expect(resolveCredentialRows([], 'manager')).toEqual([]);
   });
 });
 
@@ -1257,8 +973,89 @@ describe('名前が長すぎる既存の行（#2445）', () => {
       { name: LONG_NAME, value: 'old', updatedAt: '2026-01-01T00:00:00.000Z' },
       { name: 'NPM_TOKEN', value: 'npm_x', updatedAt: '2026-01-01T00:00:00.000Z' },
     ];
-    expect(resolveCredentialRows(rows, {}, 'manager').map((row) => row.name)).toEqual([
-      'NPM_TOKEN',
-    ]);
+    expect(resolveCredentialRows(rows, 'manager').map((row) => row.name)).toEqual(['NPM_TOKEN']);
+  });
+});
+
+/**
+ * **更新が成功してクローンから見える値が変わったら知らせる（`onApplied`。2026-10-06 の
+ * オーナー決定「環境変数を即時反映にしてほしい」）。** 呼び手（デーモン）はここで
+ * クローンのセッションをターンの境界で畳んで resume させる。
+ *
+ * 測るのは「いつ鳴るか」——**増えた・値が変わった・消えた（削除）のどれでも鳴り、同じ値の
+ * 書き直しと、クローンへ届かない行（scope: runner）では鳴らない。** 渡るのは名前だけである。
+ */
+describe('apply() が onApplied でクローンへ知らせる', () => {
+  function serviceWithListener() {
+    const stores = createMemoryStores();
+    const calls: (readonly string[])[] = [];
+    const service = createCredentialService({
+      stores,
+      runners: registryOf([]),
+      withheldEnvKeys: [...WITHHELD],
+      onApplied: (names) => {
+        calls.push([...names]);
+      },
+    });
+    return { stores, service, calls };
+  }
+
+  it('新しい名前を置いたら鳴る（名前だけ。値は渡らない）', async () => {
+    const { service, calls } = serviceWithListener();
+    await service.apply([{ name: 'GH_TOKEN', value: 'ghp_secret_value_1' }]);
+    expect(calls).toEqual([['GH_TOKEN']]);
+    expect(JSON.stringify(calls)).not.toContain('ghp_secret_value_1');
+  });
+
+  it('値を更新したら鳴る', async () => {
+    const { service, calls } = serviceWithListener();
+    await service.apply([{ name: 'GH_TOKEN', value: 'old' }]);
+    calls.length = 0;
+    await service.apply([{ name: 'GH_TOKEN', value: 'new' }]);
+    expect(calls).toEqual([['GH_TOKEN']]);
+  });
+
+  it('削除（空値）も変更として鳴る', async () => {
+    const { service, calls } = serviceWithListener();
+    await service.apply([{ name: 'GH_TOKEN', value: 'old' }]);
+    calls.length = 0;
+    await service.apply([{ name: 'GH_TOKEN', value: '' }]);
+    expect(calls).toEqual([['GH_TOKEN']]);
+  });
+
+  it('同じ値の書き直しでは鳴らない（畳み直しを無駄に起こさない）', async () => {
+    const { service, calls } = serviceWithListener();
+    await service.apply([{ name: 'GH_TOKEN', value: 'same' }]);
+    calls.length = 0;
+    await service.apply([{ name: 'GH_TOKEN', value: 'same' }]);
+    expect(calls).toEqual([]);
+  });
+
+  it('クローンへ届かない行（scope: runner）を置いても鳴らない', async () => {
+    const { service, calls } = serviceWithListener();
+    await service.apply([{ name: 'MANAGER_ONLY', value: 'x', scope: 'runner' }]);
+    expect(calls).toEqual([]);
+  });
+
+  it('scope を all から runner へ変えると、クローンから消えるので鳴る', async () => {
+    const { service, calls } = serviceWithListener();
+    await service.apply([{ name: 'NPM_TOKEN', value: 'x' }]);
+    calls.length = 0;
+    await service.apply([{ name: 'NPM_TOKEN', value: 'x', scope: 'runner' }]);
+    expect(calls).toEqual([['NPM_TOKEN']]);
+  });
+
+  it('購読者が投げても、更新そのものは成功を返す', async () => {
+    const stores = createMemoryStores();
+    const service = createCredentialService({
+      stores,
+      runners: registryOf([]),
+      withheldEnvKeys: [...WITHHELD],
+      onApplied: () => {
+        throw new Error('畳み直しの印を立てられなかった');
+      },
+    });
+    await expect(service.apply([{ name: 'GH_TOKEN', value: 'x' }])).resolves.toBeDefined();
+    expect(await stores.credentials.list()).toHaveLength(1);
   });
 });

@@ -69,7 +69,6 @@ async function setup() {
       stores,
       runners: registry,
       withheldEnvKeys: [...WITHHELD_ENV_KEYS],
-      env: {},
     }),
   });
   return { stores, runner, pool, profile };

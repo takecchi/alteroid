@@ -855,6 +855,8 @@ export {
 export {
   APP_ENV_VAR_DEFAULTS,
   applyAppScopedEnvVars,
+  ENV_BASE_MIGRATION_MARKER,
+  migrateEnvBaseCredentialsOnce,
   seedDefaultEnvVars,
 } from './env-vars-boot.js';
 /**

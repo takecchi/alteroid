@@ -13,12 +13,25 @@ set -eu
 
 d="${ALTEROID_CREDENTIAL_DIR:-/run/alteroid/credentials}"
 for n in GH_TOKEN GITHUB_TOKEN; do
+  # `ALTEROID_<NAME>_FILE` が**明示的に置かれている**か。置かれているのは、器（runner）が
+  # その名前の鍵を持っていた層だけである（`credentials.ts` の `CredentialStore#env`）。
+  eval "explicit=\${ALTEROID_${n}_FILE:-}"
   eval "f=\${ALTEROID_${n}_FILE:-$d/$n}"
-  [ -r "$f" ] || continue
-  t="$(cat "$f")"
-  # 空を export すると「鍵が無い」より悪い（hosts.yml も無視される）
-  [ -n "$t" ] || continue
-  eval "$n=\$t"; export "$n"
+  t=""
+  if [ -r "$f" ]; then t="$(cat "$f")"; fi
+  if [ -n "$t" ]; then
+    eval "$n=\$t"; export "$n"
+  elif [ -n "$explicit" ]; then
+    # **削除を走行中の gh / git へ届ける**（2026-10-06 のオーナー決定「環境変数を即時反映に」）。
+    # 子プロセスの env は起動時に凍るので、鍵を外しても（ファイルが消えても）起動時の値が
+    # 残り続ける。**所在が明示されているのにファイルが無い（または空）なら、外されたと読んで
+    # 凍った値を捨てる。** 空を export すると「鍵が無い」より悪い（hosts.yml も無視される）ので
+    # 空を入れるのではなく unset する。
+    # **所在が置かれていない層（器にファイル置き場が無いクローンなど）では何もしない**——
+    # そこでは GH_TOKEN は env から来ており、ファイルが無いのは「外された」ではないので、
+    # 消すと鍵を失う。
+    unset "$n"
+  fi
 done
 # 実行環境プロファイル（人間の .zprofile 相当）も読む。**鍵より後**に読むのは、
 # 人間が明示的に書いたほうを勝たせるためである（`profile.ts` と同じ順序）。

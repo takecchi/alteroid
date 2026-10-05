@@ -4,10 +4,8 @@ import {
   CREDENTIAL_NAME_MAX_LENGTH,
   ENV_FILE_OWNED_CREDENTIAL_NAMES,
   fingerprintOf,
-  GITHUB_CREDENTIAL_NAMES,
   isWithheldCredentialName,
   POOL_OWNED_CREDENTIAL_NAMES,
-  ROTATABLE_CREDENTIAL_KEYS,
   type CredentialEntry,
   type CredentialFingerprint,
 } from './credentials.js';
@@ -111,12 +109,9 @@ export interface CredentialService {
    *
    * ## まだ一度も読めていないとき
    *
-   * 空配列。**これは退行ではない**——この口が無かった以前から、クローンは
-   * 正本を1文字も読んでいなかった（`Clone#childEnv()` は器の env をそのまま
-   * 持つだけだった）。空の写しで解決した結果は、その「以前の `Clone#childEnv()`」
-   * とちょうど同じ集合になる（正本の上乗せが無いだけで、器の env の値は
-   * そのまま届く）。**痩せるのは「正本にしか無い名前」だけで、それは
-   * この変更より前から届いていなかった名前である。**
+   * 空配列。**正本に無い名前は誰にも配らない**（`resolveCredentialRows`）ので、
+   * 空の写しで解決した結果は「正本に何も無い」と同じ集合になる。起動直後の
+   * ごく短い窓だけ、正本にしか無い名前が届かない（次に写しが温まれば追いつく）。
    */
   vaultSnapshot(): readonly StoredCredential[];
 }
@@ -134,65 +129,17 @@ export interface CredentialServiceOptions {
    */
   withheldEnvKeys: readonly string[];
   /**
-   * **クローンの器（デーモンのプロセス）の環境変数。** 既定は `process.env`。
+   * 正本の更新（`apply`）が成功し、**クローンから見える解決結果**
+   * （`resolveCredentialRows(rows, 'clone')` の名前→指紋）が変わったときに呼ぶ
+   * （2026-10-06 のオーナー決定「環境変数を即時反映にしてほしい」）。
    *
-   * ## なぜ読むのか（2026-09-11 の人間の決定）
-   *
-   * **runner は自分の env から鍵を拾わない器になった**（`apps/runner/src/index.ts` の
-   * `seed: {}` と `runner.ts` の `#childEnv()`）。⟹ 器の `.env` / Shared Variables
-   * に鍵を置いただけの構成では、**誰も配らないので鍵が消える。**
-   *
-   * だから**クローンの器の env を最後の土台として配る**（正本に無い名前だけ）。
-   * 人間が `.env` に1行置くだけで従来どおり動き、しかも配るのは常にクローンである。
-   *
-   * **見るのは `ROTATABLE_CREDENTIAL_KEYS` だけ。** env を総なめにしない —— 何が鍵かを
-   * 推測すると、鍵でないものを晒すか鍵を取りこぼす（`credentials.ts` の同じ doc）。
-   * ⟹ 任意の名前を器の env に置く形は支えない。**それは正本へ置く**（この口の本題）。
-   *
-   * **⚠️ GitHub の名前（`GITHUB_CREDENTIAL_NAMES`）については、この土台の
-   * ほうが正本より勝つ**（人間の決定 2026-09-12、Issue #865 の恒久策——
-   * オーナーの仕様「クローンへ渡す環境変数と同じものをマネージャーへ渡す」）。
-   * `resolveCredentialRows` が両方の主体（マネージャー側の `effective()` と
-   * クローン側の `Clone#childEnv()`）で同じ解決を通すことで、**構造的に
-   * ずれない**——以前は「正本にその名前の行が在れば `effective()` は正本の値を
-   * 配るが、クローンはここ（この `env`）を直に読む」という2本の梯子が在り、
-   * 正本の値とこの `env` の値が違うと2つの主体が別の鍵で走った（Issue #865 の
-   * 実測: マネージャーは GitHub App のトークン、クローンは classic PAT）。
-   * **GitHub 以外の名前（プールの名前・任意の名前）は従来どおり正本が勝つ。**
-   * この食い違いの検出は `cloneEnvShadowedNames` に置いてある。
+   * 呼び手（デーモン）はここでクローンのセッションをターンの境界で畳んで
+   * `resume` で開き直させる（`Clone#recycleSessionForToken`）。SDK 子プロセスの
+   * env は起動時に凍るので、これが無いと更新は「次にセッションが作り直される
+   * まで」クローンに届かない。**渡すのは名前だけで、値も指紋も渡さない。**
+   * 削除（空値）も変更である。購読者の例外は応答を落とさない。
    */
-  env?: NodeJS.ProcessEnv;
-  /**
-   * 正本のこの名前の行が、クローンの器の環境変数の値に優先順位で負けて
-   * 配られていない（`cloneEnvShadowedNames` が名前を返した）ことを知らせる。
-   * **渡すのは名前の配列だけ。値も指紋も渡さない**——ここから先へ値を運ぶ
-   * 経路をひとつも作らない。
-   *
-   * 呼ぶ位置は `syncRunner()`（後述のdocを見ること）。**同じ食い違いを
-   * 連続して知らせない**——直前に知らせた名前の集合と変わらなければ黙る
-   * （`syncRunner` は runner が名乗り直すたびに叩かれるので、そのたびに
-   * 出すと同じ1行で日誌が埋まり、意味のある行が埋もれる）。
-   *
-   * ## 第2引数（`appScopedNames`。issue #1894）
-   *
-   * `names` のうち `scope: 'app'` の行だけを別に渡す。**`names` 自体は
-   * scope を問わず立つ**（旗そのものは scope を見ない——`cloneEnvShadowedNames`
-   * の doc）ので、呼び手（daemon の stderr・CLI・Web）が文言を scope ごとに
-   * 分けるにはここで分けて渡すしかない。
-   *
-   * **`scope: 'app'` は他の scope（`all` / `runner` / 未設定）と挙動が違う**
-   * （`resolveCredentialRows` の `held` の doc、issue #1867）。`scope: 'app'`
-   * の名前は manager（`target: 'manager'`）に**何も配られていない**——
-   * 「マネージャーも器の環境変数の値で走っている」は誤りで、「正本の行を
-   * 外しても配られる値は変わらない」も誤り（外すと `held` から名前が消え、
-   * `fromEnvOnly` が器の env の値を manager へ配り始める）。呼び手は
-   * `appScopedNames` に載った名前について、この2つの言い切りをしないこと。
-   *
-   * 既存の呼び手（`names` だけを見るもの）は直す必要が無い——引数を1つ
-   * 増やしただけで、渡す位置・頻度の抑止（直前と同じ集合なら黙る）は
-   * 変えていない。
-   */
-  onCloneEnvShadowed?: (names: readonly string[], appScopedNames: readonly string[]) => void;
+  onApplied?: (changedNames: readonly string[]) => void;
 }
 
 export interface ApplyCredentialsResult {
@@ -330,89 +277,25 @@ function assertEntries(
 }
 
 /**
- * 正本のこの名前の行が、クローンの器の env の値に優先順位で負けていて
- * 配られていない名前を返す。**名前だけを返す。値も指紋も返さない**
- * （`fingerprintOf` で比べた結果しか外へ出さない）。
- *
- * ## 検出条件（これがすべて）
- *
- * 1. GitHub の名前である（`GITHUB_CREDENTIAL_NAMES`）
- * 2. 正本（`stores.credentials`）にその名前の行が在る
- * 3. クローンの器の env（`CredentialServiceOptions.env`）にも、その名前の
- *    空でない値が在る
- * 4. 両者の指紋（`fingerprintOf`）が違う
- *
- * この4つが揃ったときだけ立つ。実測（Issue #865）: マネージャーは GitHub App
- * の user-to-server トークン、クローンは classic PAT だった。
- *
- * **GitHub 以外の名前・正本にしか無い・器の env にしか無いときは立たない。**
- * GitHub 以外は `resolveCredentialRows` が正本を配るので両者は揃う。
- * 正本にしか無ければ両者とも正本の値になる。器の env にしか無ければ
- * `resolveCredentialRows` が env から埋め、こちらも揃う。**「GitHub の名前で
- * 両方に在って中身が違う」ときだけが揃わない**——ここが唯一の食い違いである。
- *
- * **`POOL_OWNED_CREDENTIAL_NAMES` は最初から見ない。** `GITHUB_CREDENTIAL_NAMES`
- * に含まれないので自動的に外れるが、比べる意味そのものも無い——比べるべき
- * 「クローンが実際に使う値」はそもそも正本ではなくプールの撒き手
- * （`token-spread.ts`）が撒く値である。正本と器の env をここで比べても、
- * クローンが本当に使っている値とは無関係な比較になる（＝誤検出を作るだけ）。
- *
- * **この関数は検出するだけで、どちらの値を配るかには手を出さない**
- * （それは `resolveCredentialRows` の役目）。GitHub の名前について「正本が
- * 勝つ」だった以前の仕様は 2026-09-12 に反転しており、この旗が立つのは
- * いまや「クローンの器の env が勝っていて、正本のその行が配られていない」
- * ことを意味する（`CredentialFingerprint.shadowsCloneEnv` の doc）。
- */
-function cloneEnvShadowedNames(
-  authoritative: readonly StoredCredential[],
-  env: NodeJS.ProcessEnv,
-): string[] {
-  const vaultValue = new Map(authoritative.map((row) => [row.name, row.value]));
-  return GITHUB_CREDENTIAL_NAMES.filter((name) => {
-    const vault = vaultValue.get(name);
-    if (vault === undefined) return false; // 正本に無い(食い違いようがない)
-    const clone = env[name];
-    if (clone === undefined || clone.length === 0) return false; // 器の env に無い
-    return fingerprintOf(vault) !== fingerprintOf(clone);
-  });
-}
-
-/**
- * `resolveCredentialRows` が器の env を出所とする行に付ける `updatedAt`。
- * 器のファイルには更新時刻が無いので、正本の行（`StoredCredential.updatedAt`
- * が実際のタイムスタンプ）と区別できる固定文字列を置く。
- */
-const CLONE_ENV_UPDATED_AT = '(クローンの器の環境変数)';
-
-/**
- * 正本の行とクローンの器の env から、**配る名前→値を1本で決める。**
+ * 正本の行から、**配る名前→値を1本で決める。**
  *
  * マネージャー（`effective()`）とクローン（`Clone#childEnv()`）の両方が
- * この同じ関数を同じ入力（正本の行・クローンの器の env）で呼ぶことで、
- * **梯子を1本に統一する**（人間の決定 2026-09-12、Issue #865 の恒久策）。
- * 優先順位を両側で個別に実装して揃える形は、揃え忘れをまた作りうる——
- * 解決そのものを1本にすれば、構造的にずれ得ない。
+ * この同じ関数を同じ入力（正本の行）で呼ぶことで、**梯子を1本に統一する**
+ * （人間の決定 2026-09-12、Issue #865 の恒久策）。
  *
- * ## 優先順位
+ * ## 出所は正本だけである（2026-10-06 のオーナー決定）
  *
- * - **GitHub の名前（`GITHUB_CREDENTIAL_NAMES`）だけ**、クローンの器の env に
- *   空でない値が在れば、そちらを正本より優先する。**正本にその名前の行が
- *   在っても配らない。** オーナーの仕様「クローンへ渡す環境変数と同じものを
- *   マネージャーへ渡す」——クローンが基準である。
- * - **それ以外は従来どおり正本が勝つ**——`CLAUDE_CODE_OAUTH_TOKEN` を含む
- *   プールの名前（`POOL_OWNED_CREDENTIAL_NAMES`）と、`ROTATABLE_CREDENTIAL_KEYS`
- *   に無い任意の名前（PR #825「任意の名前→任意の値」）のどちらも、正本に
- *   行が在ればそれを配る。器の env の値は無視する。
- * - **正本に行が無い非プールの回せる名前だけ、器の env を最後の土台として
- *   埋める。** これは今回の優先順位の変更とは別の、既存の仕組みである
- *   （`CredentialServiceOptions.env` の doc）——`GITHUB_CREDENTIAL_NAMES` に
- *   限らず `ROTATABLE_CREDENTIAL_KEYS` 全体に効く。
+ * **GitHub の名前も、他の普通の名前と同じ扱いにした。** 以前は
+ * `GITHUB_CREDENTIAL_NAMES`（`GH_TOKEN` / `GITHUB_TOKEN`）だけ、クローンの器の
+ * env が正本に勝ち、**正本に行が無い回せる名前（`GH_TOKEN` / `GITHUB_TOKEN` /
+ * `CODEX_API_KEY`）は器の env を最後の土台として埋めていた。** どちらも撤去した。
+ * 理由は、その「器の env」が実は**起動時に `applyAppScopedEnvVars` が正本から
+ * `process.env` へ書き写した値**だったこと——正本を更新しても古い値が勝ち、
+ * 正本から消しても書き写された値が配られ続けた（実測 2026-10-05）。
  *
- * **`GITHUB_CREDENTIAL_NAMES` は明示的な列挙であって、`ROTATABLE_CREDENTIAL_KEYS`
- * からプールを引いた集合の別名ではない。** 現状は値として一致するが、将来
- * `ROTATABLE_CREDENTIAL_KEYS` に GitHub 以外の非プールの名前が増えても、
- * ここで使っている優先順位はその名前へ自動では広がらない
- * （`credentials.ts` の `GITHUB_CREDENTIAL_NAMES` の doc）。
+ * ⟹ **正本に無い名前は、誰にも配らない。** 既存の器（Railway の変数にだけ
+ * `GH_TOKEN` を置いている構成）を黙って壊さないため、起動時に1度だけ正本へ移す
+ * （`env-vars-boot.ts` の `migrateEnvBaseCredentialsOnce`）。
  *
  * ## 正本が器の生の環境変数である名前は、行が在っても配らない（2026-09-15）
  *
@@ -422,12 +305,11 @@ const CLONE_ENV_UPDATED_AT = '(クローンの器の環境変数)';
  * デーモンの `process.env` を上書きし続ける。⟹ 配る側のここでも落とす。
  *
  * **`target` で分けない。** クローンにもマネージャーにも配らない——この一覧の
- * 名前を読むのは器自身のプロセス（デーモン / runner）であって、SDK 子プロセス
- * では誰も読まないからである（`credentials.ts` の群2の表）。
+ * 名前を読むのは器自身のプロセス（デーモン / runner）であって、SDK 子プロセスで
+ * は誰も読まないからである（`credentials.ts` の群2の表）。
  */
 export function resolveCredentialRows(
   authoritative: readonly StoredCredential[],
-  cloneEnv: NodeJS.ProcessEnv,
   target: 'clone' | 'manager',
 ): StoredCredential[] {
   // **scope でまず絞る**（2026-09-14。人間の明示的な指示で
@@ -443,45 +325,12 @@ export function resolveCredentialRows(
   // 前に保存された行が残りうるが、runner の受け口（`runnerSetCredentialsCommandSchema`）は
   // 1行でも上限超えがあると配列全体を 400 で弾き、ほかの鍵の配布まで止まる。
   // 落としたことの通知は呼び手の役目（`overlongCredentialNames`）。
-  const scoped = authoritative.filter(
+  return authoritative.filter(
     (row) =>
       !ENV_FILE_OWNED_CREDENTIAL_NAMES.includes(row.name) &&
       row.name.length <= CREDENTIAL_NAME_MAX_LENGTH &&
       scopeAppliesTo(row.scope, target),
   );
-  // **「正本にその名前の行があるか」は、scope で絞る前の行で決める**（issue #1867）。
-  // 器の env を最後の土台として埋めるのは「正本に行が無い」名前だけである（直上の doc）。
-  // scope で絞った後の集合を使うと、`scope: 'app'` の行は manager から見て「行が無い」
-  // 扱いになり、器の env の値が manager へ配られてしまう——運用者が scope で明示した
-  // 「この名前は manager にとって意味が無い」を破る。
-  const held = new Set(
-    authoritative
-      .filter((row) => !ENV_FILE_OWNED_CREDENTIAL_NAMES.includes(row.name))
-      .map((row) => row.name),
-  );
-
-  const cloneEnvWins = (name: string): boolean => {
-    if (!GITHUB_CREDENTIAL_NAMES.includes(name)) return false;
-    const value = cloneEnv[name];
-    return value !== undefined && value.length > 0;
-  };
-
-  const fromVault = scoped.map((row) =>
-    cloneEnvWins(row.name)
-      ? { name: row.name, value: cloneEnv[row.name]!, updatedAt: CLONE_ENV_UPDATED_AT }
-      : row,
-  );
-
-  const fromEnvOnly = ROTATABLE_CREDENTIAL_KEYS.filter(
-    (name) => !held.has(name) && !POOL_OWNED_CREDENTIAL_NAMES.includes(name),
-  ).flatMap((name) => {
-    const value = cloneEnv[name];
-    // 空文字は「置かれていない」と同じに扱う（空の鍵は無い鍵より悪い）。
-    if (value === undefined || value.length === 0) return [];
-    return [{ name, value, updatedAt: CLONE_ENV_UPDATED_AT }];
-  });
-
-  return [...fromVault, ...fromEnvOnly];
 }
 
 /**
@@ -500,7 +349,7 @@ function scopeAppliesTo(scope: StoredCredential['scope'], target: 'clone' | 'man
  * `fingerprintsOf()` の両方がここを通る**——scope/secret/value の出し方を
  * 2箇所で書くと、片方だけ直し忘れる形になる。
  */
-function fingerprintOfRow(row: StoredCredential, shadowsCloneEnv: boolean): CredentialFingerprint {
+function fingerprintOfRow(row: StoredCredential): CredentialFingerprint {
   const secret = row.secret ?? true;
   return {
     name: row.name,
@@ -508,8 +357,6 @@ function fingerprintOfRow(row: StoredCredential, shadowsCloneEnv: boolean): Cred
     updatedAt: row.updatedAt,
     scope: row.scope ?? 'all',
     secret,
-    // **`false` を敷き詰めない**（`CredentialFingerprint.shadowsCloneEnv` の doc と同じ形）。
-    ...(shadowsCloneEnv ? { shadowsCloneEnv: true as const } : {}),
     // **secret === false の行だけ値を載せる。**
     ...(secret ? {} : { value: row.value }),
   };
@@ -534,56 +381,30 @@ function resolveEntryForWrite(
   };
 }
 
+/**
+ * 更新の前後で、**クローンから見える解決結果**（`resolveCredentialRows(_, 'clone')`）の
+ * 名前→指紋が変わった名前。**増えた・値が変わった・消えた（削除）のどれも変更である**
+ * （`apply` の `onApplied` の doc）。値は返さない。
+ */
+function changedCloneNames(
+  before: readonly StoredCredential[],
+  after: readonly StoredCredential[],
+): string[] {
+  const view = (rows: readonly StoredCredential[]): Map<string, string> =>
+    new Map(resolveCredentialRows(rows, 'clone').map((row) => [row.name, fingerprintOf(row.value)]));
+  const was = view(before);
+  const now = view(after);
+  const names = new Set([...was.keys(), ...now.keys()]);
+  return [...names].filter((name) => was.get(name) !== now.get(name)).sort();
+}
+
 /** 名前が上限を超えていて、配らずに落とす行の名前（{@link resolveCredentialRows}）。 */
 export function overlongCredentialNames(rows: readonly StoredCredential[]): string[] {
   return rows.map((row) => row.name).filter((name) => name.length > CREDENTIAL_NAME_MAX_LENGTH);
 }
 
 export function createCredentialService(options: CredentialServiceOptions): CredentialService {
-  const { stores, runners, withheldEnvKeys, onCloneEnvShadowed } = options;
-  const env = options.env ?? process.env;
-
-  /**
-   * 直前に知らせた食い違いの署名（名前とscopeから作る。ソート済み・カンマ
-   * 結合）。**同じ集合を連続して知らせないための記憶**（`onCloneEnvShadowed`
-   * の doc）。`undefined` は「まだ一度も測っていない」で、空集合とは区別する
-   * ——区別しないと、「一度も食い違ったことが無い」状態と「測ったら食い違いが
-   * 無かった」状態が同じ値になり、最初の食い違いが「変わっていない」と
-   * 誤認されて出なくなる。
-   *
-   * **⚠️ 名前だけでは足りない（PR #1920 のレビュー指摘）。** 旗そのもの
-   * （`cloneEnvShadowedNames`）は scope を見ないので、同じ名前のまま
-   * `scope` だけ `all` → `app` に変わっても名前の集合は変わらない。それでも
-   * `appScopedNames`（呼び手が文言を分けるための情報。`onCloneEnvShadowed`
-   * の doc）は変わるので、署名にも scope（app かどうか）を含めないと、
-   * scope が変わった後も古い（誤りの）文言が知らされたまま更新されない。
-   */
-  let lastShadowSignature: string | undefined;
-
-  /**
-   * `syncRunner()` の副作用として食い違いを知らせる。**ここでしか呼ばない**
-   * ——`effective()` の呼び手は `syncRunner()` だけなので、行を読み直さずに
-   * 済む場所がここしか無い（`apply()` は `effective()` を経由しない）。
-   */
-  function reportCloneEnvShadow(authoritative: readonly StoredCredential[]): void {
-    if (onCloneEnvShadowed === undefined) return;
-    const shadowed = cloneEnvShadowedNames(authoritative, env);
-    // **`scope: 'app'` だけを分けて渡す**（`onCloneEnvShadowed` の doc）。
-    // `authoritative` は scope で絞る前の全行なので、ここで引ける
-    // （`resolveCredentialRows` の `held` と同じ集合を見ている）。
-    const scopeByName = new Map(authoritative.map((row) => [row.name, row.scope ?? 'all']));
-    const appScopedNames = shadowed.filter((name) => scopeByName.get(name) === 'app');
-    // **署名は名前＋app scope かどうかで作る。** 名前だけだと、上の doc の
-    // とおり scope の変化を見落とす。
-    const signature = [...shadowed]
-      .sort()
-      .map((name) => `${name}:${scopeByName.get(name) === 'app' ? 'app' : 'other'}`)
-      .join(',');
-    if (signature === lastShadowSignature) return;
-    lastShadowSignature = signature;
-    if (shadowed.length === 0) return;
-    onCloneEnvShadowed(shadowed, appScopedNames);
-  }
+  const { stores, runners, withheldEnvKeys, onApplied } = options;
 
   /**
    * **配らずに落とした上限超えの名前の行を、黙らせない**（#2445。`env-vars-boot.ts` の
@@ -646,12 +467,7 @@ export function createCredentialService(options: CredentialServiceOptions): Cred
     fingerprints: async () => {
       const rows = await stores.credentials.list();
       noteVaultSnapshot(rows);
-      // **読むだけの口でも旗を立てる。** `GET /credentials` は人間が能動的に
-      // 見に行く経路であり、`syncRunner` の側（runner が名乗るたびの契機）と
-      // 独立して「いま食い違っているか」を確かめられる必要がある——だから
-      // ここは `lastShadowSignature` を経由せず、呼ばれるたびに測り直す。
-      const shadowed = new Set(cloneEnvShadowedNames(rows, env));
-      return rows.map((row) => fingerprintOfRow(row, shadowed.has(row.name)));
+      return rows.map((row) => fingerprintOfRow(row));
     },
 
     apply: (entries: readonly CredentialEntry[]) =>
@@ -669,6 +485,7 @@ export function createCredentialService(options: CredentialServiceOptions): Cred
 
         const rows = await stores.credentials.put(resolved);
         noteVaultSnapshot(rows);
+        const changedForClone = changedCloneNames(existing, rows);
 
         /**
          * **外した名前も配る。** 正本から消えた行は `rows` に無いので、そのまま
@@ -706,6 +523,17 @@ export function createCredentialService(options: CredentialServiceOptions): Cred
           }
         }
 
+        // **配布が失敗しても、正本は書けているのでクローンへは知らせる**（クローンの
+        // `#childEnv()` は正本の写しを直に読む。runner への配布の成否とは独立）。
+        // 購読者の例外で応答を落とさない（上の `pushListeners` と同じ理由）。
+        if (changedForClone.length > 0) {
+          try {
+            onApplied?.(changedForClone);
+          } catch {
+            // 畳み直しの印を立てられなかっただけで、正本の更新そのものは成功している。
+          }
+        }
+
         return { fingerprints: fingerprintsOf(rows), runners: pushed };
       }),
 
@@ -717,7 +545,8 @@ export function createCredentialService(options: CredentialServiceOptions): Cred
     syncRunner: (runner: RunnerClient) =>
       serial(async () => {
         /**
-         * **降ろす対象は「正本 ∪ クローンの器の env」である**（2026-09-11）。
+         * **降ろす対象は正本だけである**（2026-10-06。以前は「正本 ∪ クローンの器の
+         * env」だったが、器の env を土台にする経路は撤去した）。
          *
          * 以前はここが「正本が空なら1文字も配らない」だった —— runner が自分の env
          * から種を拾う器だったので、空を配ると**その種を消して回る**形になるためで
@@ -725,7 +554,7 @@ export function createCredentialService(options: CredentialServiceOptions): Cred
          * **配らなければ鍵はどこにも無い。**
          */
         const rows = await effective();
-        // 配るものが無い（正本も器の env も空）。**「全部外せ」とは言わない** ——
+        // 配るものが無い（正本が空）。**「全部外せ」とは言わない** ——
         // 外す指示は `apply` が明示的に送る。
         if (rows.length === 0) return null;
 
@@ -749,22 +578,19 @@ export function createCredentialService(options: CredentialServiceOptions): Cred
    * 降ろす対象を決める。**解決そのものは `resolveCredentialRows` を1本だけ
    * 通す**（`Clone#childEnv()` と同じ関数。2026-09-12「梯子を1本に統一する」）。
    *
-   * **副作用として、ここでクローンとの食い違いも知らせ、写しも更新する。**
-   * `syncRunner()` の呼び手はここだけで、正本の行はここで一度だけ読む——
-   * `reportCloneEnvShadow` / `noteVaultSnapshot` のために
-   * `stores.credentials.list()` を二重に呼び直さずに済む場所が、ここ以外に
-   * 無い。
+   * **副作用として、ここで写しも更新する。** `syncRunner()` の呼び手はここだけで、
+   * 正本の行はここで一度だけ読む——`noteVaultSnapshot` のために
+   * `stores.credentials.list()` を二重に呼び直さずに済む場所が、ここ以外に無い。
    */
   async function effective(): Promise<StoredCredential[]> {
     const rows = await stores.credentials.list();
-    reportCloneEnvShadow(rows);
     noteVaultSnapshot(rows);
     reportOverlong(rows);
-    return resolveCredentialRows(rows, env, 'manager');
+    return resolveCredentialRows(rows, 'manager');
   }
 
   function fingerprintsOf(rows: readonly StoredCredential[]): CredentialFingerprint[] {
-    return rows.map((row) => fingerprintOfRow(row, false));
+    return rows.map((row) => fingerprintOfRow(row));
   }
 
   async function pushAll(

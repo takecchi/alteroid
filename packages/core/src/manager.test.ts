@@ -351,10 +351,8 @@ function setup(
       stores,
       runners: registry,
       withheldEnvKeys: [...WITHHELD_ENV_KEYS],
-      // **クローンの器の env は明示で空にする（既定の `process.env` に依らせない）。**
-      // 既定のままだと、検証を走らせた機械に `GH_TOKEN` / `GITHUB_TOKEN` が在るか
-      // どうかで降りる鍵が変わる —— 実際、土台を足した直後に3本がそれで落ちた。
-      env: {},
+      // （以前はここで「クローンの器の env」を明示で空にしていた。器の env を土台にする経路は
+      // 2026-10-06 に撤去したので、降りる鍵は機械の `process.env` に依らない。）
     }),
     ...(options.generateManagerId === undefined
       ? {}

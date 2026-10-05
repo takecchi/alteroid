@@ -6,7 +6,6 @@ import type { InboxEvent } from '@alteroid/core';
 
 import {
   createCloneWakeGate,
-  describeCloneEnvShadowedNotice,
   describeReopenedTokenNotice,
   isTokenPoolReopenedNotice,
   reopenedTokenOf,
@@ -1052,76 +1051,11 @@ describe('describeReopenedTokenNotice', () => {
 });
 
 /**
- * **`describeCloneEnvShadowedNotice` — issue #1894 の直しそのもの。**
- *
- * `scope: 'app'` の名前は他の scope と挙動が違う——manager には何も配られて
- * いない（issue #1867）。以前の本文（`names` を1本で扱う版）は、scope を
- * 問わず「マネージャーも器の環境変数の値で走っている」「外しても配られる値は
- * 変わらない」と言い切っていた——`scope: 'app'` についてはどちらも逆である。
- *
- * **(e) 陽性対照: `scope: 'app'` を含まない場合の本文は、この issue の前と
- * 1文字も変わらない。** 全文一致で固定する。
+ * **`describeCloneEnvShadowedNotice`（issue #1894）の歯9本は、関数ごと撤去した
+ * 2026-10-06 に消した。** 「GitHub の名前で、正本の行より器の環境変数の値が優先して配られている」
+ * ことを stderr へ言う関数で、勝つ側（`GITHUB_CREDENTIAL_NAMES`）を撤去したので言う相手が
+ * 無い。3点セットは PR 本文にある。
  */
-describe('describeCloneEnvShadowedNotice（issue #1894）', () => {
-  const ORIGINAL_MESSAGE =
-    `alteroidd: GitHub の名前で、正本の行よりこのデーモンの器の環境変数の値が` +
-    `優先して配られています（マネージャーもクローンも、器の環境変数の値で` +
-    `走っています。正本のその行は配られていません）: GH_TOKEN。` +
-    `正本のその行を外しても配られる値は変わりません（どちらにしても器の` +
-    `環境変数の値が配られます）。揃えるには、正本の値を器の環境変数に` +
-    `合わせて置き直すか（alteroid credential set <名前>）、器の環境変数の` +
-    `側を変えてください（この HTTP の口からは変えられません）\n`;
-
-  it('(e) 陽性対照: scope: app を含まなければ、本文はこの issue の前と1文字も変わらない', () => {
-    const text = describeCloneEnvShadowedNotice(['GH_TOKEN'], []);
-    expect(text).toBe(ORIGINAL_MESSAGE);
-  });
-
-  /**
-   * **これが直しそのものである。** scope: app の名前について、この2つを
-   * 言い切らないこと:
-   * 1. 「マネージャーも器の環境変数の値で走っている」——実際は manager に
-   *    何も配られていない
-   * 2. 「外しても配られる値は変わらない」——実際は外すと manager に器の env
-   *    の値が配られ始める
-   */
-  it('scope: app の名前は「外しても変わらない」と言わない', () => {
-    const text = describeCloneEnvShadowedNotice(['GH_TOKEN'], ['GH_TOKEN']);
-    expect(text).not.toContain('外しても配られる値は変わりません');
-  });
-
-  it('scope: app の名前は「マネージャーも器の環境変数の値で走っている」と言わない', () => {
-    const text = describeCloneEnvShadowedNotice(['GH_TOKEN'], ['GH_TOKEN']);
-    expect(text).not.toContain('マネージャーもクローンも、器の環境変数の値で');
-  });
-
-  it('scope: app の名前は、manager にはいま何も配られていないと言う', () => {
-    const text = describeCloneEnvShadowedNotice(['GH_TOKEN'], ['GH_TOKEN']);
-    expect(text).toContain('マネージャーにはこの名前がいま何も配られていません');
-  });
-
-  it('scope: app の名前は、外すと manager にも配られ始めると言う', () => {
-    const text = describeCloneEnvShadowedNotice(['GH_TOKEN'], ['GH_TOKEN']);
-    expect(text).toContain('正本のその行を外すと、器の環境変数の値がマネージャー');
-    expect(text).toContain('にも配られ始めます');
-  });
-
-  it('混在: scope: app と、それ以外は別の段落に分かれ、それぞれの言い分が保たれる', () => {
-    const text = describeCloneEnvShadowedNotice(['GH_TOKEN', 'GITHUB_TOKEN'], ['GH_TOKEN']);
-
-    // GITHUB_TOKEN（app scope ではない）の段落: 従来どおりの言い切り。
-    expect(text).toContain('走っています。正本のその行は配られていません）: GITHUB_TOKEN。');
-    expect(text).toContain('外しても配られる値は変わりません');
-    // GH_TOKEN（app scope）の段落: 新しい言い分。
-    expect(text).toContain('マネージャーにはこの名前がいま何も配られていません');
-    expect(text).toContain('にも配られ始めます');
-  });
-
-  it('scope: app の名前だけなら、従来の段落は出ない', () => {
-    const text = describeCloneEnvShadowedNotice(['GH_TOKEN'], ['GH_TOKEN']);
-    expect(text).not.toContain('外しても配られる値は変わりません');
-  });
-});
 
 /**
  * **クローンの門は `wake()` の中の `clone.post(...)` だけを絞る**（Issue #783）。
