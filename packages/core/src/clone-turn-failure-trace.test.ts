@@ -32,6 +32,7 @@ describe('クローン — ターンの失敗の跡', () => {
       role: string;
       text: string;
       conversationId?: string;
+      turnFailure?: string;
     }[];
   }
 
