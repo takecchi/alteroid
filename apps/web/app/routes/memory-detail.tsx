@@ -59,6 +59,8 @@ export default function MemoryDetail({ loaderData }: Route.ComponentProps) {
   >(undefined);
   /** 保存が 409 で断られたときの、いまの版（下書きは捨てずに残す。#2764）。 */
   const [conflict, setConflict] = useState<MemoryConflictError | undefined>(undefined);
+  /** 削除が 409 で断られたときの、いまの版（消していない。自動では再送しない。#2916）。 */
+  const [deleteConflict, setDeleteConflict] = useState<MemoryConflictError | undefined>(undefined);
 
   const loaded = data?.document.content ?? '';
   const value = draft ?? loaded;
@@ -208,12 +210,17 @@ export default function MemoryDetail({ loaderData }: Route.ComponentProps) {
                 destructive
                 onConfirm={() => {
                   setBusy(true);
-                  deleteMemory(slug)
+                  setConfirmingDelete(false);
+                  // 読んだ版を送る（#2916）。衝突のあとに開き直したときは、見せたいまの版を送る。
+                  deleteMemory(slug, deleteConflict?.current?.version ?? data.version)
                     .then(() => {
                       leaving.current = true;
                       navigate('/memory');
                     })
-                    .catch(setFailure)
+                    .catch((caught: unknown) => {
+                      if (caught instanceof MemoryConflictError) setDeleteConflict(caught);
+                      else setFailure(caught);
+                    })
                     .finally(() => setBusy(false));
                 }}
               />
@@ -236,6 +243,31 @@ export default function MemoryDetail({ loaderData }: Route.ComponentProps) {
     >
       {!missing && <ErrorNote error={error} className="mb-3" />}
       <ErrorNote error={failure} className="mb-3" />
+      {deleteConflict !== undefined && (
+        <div role="alert" className="mb-3 rounded-lg border border-destructive/50 p-3 text-sm">
+          <p className="font-medium text-destructive">
+            読んだ後に、この記憶がほかで書き換えられた。消していない。
+          </p>
+          {deleteConflict.current !== null && (
+            <>
+              <p className="mt-2 text-xs text-muted-foreground">
+                いまの内容（{formatDateTime(deleteConflict.current.document.updatedAt)} に更新）
+              </p>
+              <pre className="mt-1 max-h-48 overflow-auto rounded-md bg-muted p-2 text-xs break-words whitespace-pre-wrap select-text">
+                {deleteConflict.current.document.content}
+              </pre>
+            </>
+          )}
+          <p className="mt-2 text-xs text-muted-foreground">
+            この内容でも消すなら、もう一度「削除」を押して確認してください。
+          </p>
+          <div className="mt-3">
+            <Button size="sm" onClick={() => setDeleteConflict(undefined)}>
+              閉じる
+            </Button>
+          </div>
+        </div>
+      )}
       {conflict !== undefined && (
         <div role="alert" className="mb-3 rounded-lg border border-destructive/50 p-3 text-sm">
           <p className="font-medium text-destructive">

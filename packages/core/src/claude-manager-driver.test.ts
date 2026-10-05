@@ -89,6 +89,24 @@ describe('ClaudeManagerDriver#open', () => {
     expect(result).toEqual({ behavior: 'deny', message: 'no' });
   });
 
+  it('canUseTool の decisionReason は、中立の要求の reason へ写る（Bash の門の ask の理由。#2884）', async () => {
+    const captured: { options?: Options } = {};
+    const { queryFn } = fakeQueryFn(captured);
+    const onPermission = vi.fn(async () => ({ behavior: 'allow' }) as const);
+    new ClaudeManagerDriver({ queryFn }).open(makeSpec({ onPermission }));
+
+    await captured.options!.canUseTool!('Bash', { command: 'ls' }, {
+      signal: new AbortController().signal,
+      requestId: 'req-3',
+      toolUseID: 'tu-3',
+      decisionReason: '待つ形の門',
+    } as never);
+
+    expect(onPermission).toHaveBeenCalledWith(
+      expect.objectContaining({ requestId: 'req-3', reason: '待つ形の門' }),
+    );
+  });
+
   it('requestId が無ければ toolUseID を id にする。AskUserQuestion は question で、答えは updatedInput で返る', async () => {
     const captured: { options?: Options } = {};
     const { queryFn } = fakeQueryFn(captured);

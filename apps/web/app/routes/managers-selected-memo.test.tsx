@@ -21,7 +21,7 @@
  * 呼ぶたびに渡ってくる `selected` の引数を捕まえて比べる（黒箱で測れない
  * 理由は `journal-selected-memo.test.tsx` と同じ）。
  */
-import { act, render } from '@testing-library/react';
+import { act, cleanup, render } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -68,6 +68,10 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  // マウントした画面を片付ける（`@testing-library/react` の自動 cleanup は globals 無しでは効かない）。
+  // 片付けないと、テスト後も画面の SWR が購読・再検証を続け、jsdom が畳まれた後に
+  // `document` を読んで未処理の拒否になる（#2906）。
+  cleanup();
   vi.clearAllMocks();
   capturedSelected.length = 0;
 });
