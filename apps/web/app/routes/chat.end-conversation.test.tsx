@@ -265,4 +265,29 @@ describe('「会話を終える」ボタン', () => {
     });
     expect(await screen.findByText('新しい会話')).toBeTruthy();
   });
+
+  it('(g) 履歴が先頭に届いていない（reachedStart: false）ときは「以降」「発言 N 件以上」と言う', async () => {
+    stubFetch((url) => {
+      if (url.includes(`/conversations/${CONVERSATION_ID}`)) {
+        return json({
+          conversationId: CONVERSATION_ID,
+          reachedStart: false,
+          scanned: 1,
+          messages: [
+            {
+              id: 'm1',
+              at: '2026-10-01T01:00:00.000Z',
+              role: 'inbound',
+              text: 'こんにちは',
+              conversationId: CONVERSATION_ID,
+            },
+          ],
+        });
+      }
+      return conversationRoutes(url);
+    });
+
+    renderChat(`/chat/${CONVERSATION_ID}`);
+    expect(await screen.findByText(/以降 · 発言 1 件以上/)).toBeTruthy();
+  });
 });
