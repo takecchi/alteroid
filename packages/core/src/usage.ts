@@ -329,6 +329,17 @@ export const usageBaselineSchema = z.object({
   /** 数え直しを検知した回数。**黙って数え直さない**ための記録。 */
   resets: z.number().int().nonnegative(),
   lastResetAt: isoDateTime.optional(),
+  /**
+   * **runner ごとに、その runner から最後に受け取った累積**（Issue #3022 仮説1）。
+   * 委譲が別の runner へ移った後に、古い runner の累積が遅れて届いたとき、その runner
+   * 自身の前回との差だけを積むための控えである（`foldRecordForStore` の superseded）。
+   * **上の `models` は現役の runner の高さ**で、古い runner の累積をそこへ畳むと、小さい
+   * 基準に対する大きい累積が全量の「数え直し」になり、記録済みの分を二重に数える。
+   * **無い（`undefined`）のは「覚えていない」**（この欄が入る前の行・runner を名乗らない
+   * 呼び出し）。覚えていないときは、記録済みの分が言えないので積まない側に倒す。
+   * 台帳と同じ store に持つので、デーモンを再起動しても消えない（毎晩の本番反映で再起動する）。
+   */
+  byRunner: z.record(z.string(), z.record(z.string(), usageTotalsSchema)).optional(),
 });
 
 export type UsageBaseline = z.infer<typeof usageBaselineSchema>;
@@ -362,6 +373,22 @@ export interface UsageFold {
   baseline: UsageBaseline | null;
   /** 数え直しが起きたならその事実。起きていなければ undefined。 */
   reset?: UsageReset;
+  /**
+   * **古い runner の累積（`runner.superseded`）を、積まなかった理由。** 積んだときは undefined。
+   * - `unknown-runner`: その runner の前回の累積を覚えていない。記録済みの分が言えない
+   * - `decreased`: その runner の累積が前回より減っていた（その runner 側の数え直し）
+   */
+  skipped?:
+    { reason: 'unknown-runner' } | { reason: 'decreased'; fromCostUsd: number; toCostUsd: number };
+}
+
+/**
+ * `record` の呼び出しが、どの runner の累積か（Issue #3022 仮説1）。
+ * `superseded` は「委譲がもう別の runner へ移っている」。
+ */
+export interface UsageRecordRunner {
+  readonly id: string;
+  readonly superseded: boolean;
 }
 
 function sumCostUsd(models: Record<string, UsageTotals>): number {
@@ -610,6 +637,90 @@ export class UsageRecordOrder {
       },
     };
   }
+}
+
+/**
+ * `UsageStore.record` の畳み。**3実装（インメモリ / fs / pg）が同じ関数を通す**——差分の
+ * 計算と、runner ごとの控えの扱いを実装ごとに書き写さない。**純関数**。
+ *
+ * - `oneshot`: 基準を持たない（`foldOneshotUsage`）。runner は見ない。
+ * - `cumulative`・runner 無し: `foldUsageSnapshot` のまま。**既にある `byRunner` は消さずに持ち越す。**
+ * - `cumulative`・現役の runner: 同じ畳みに加えて、その runner の控え（`byRunner[id]`）を今回の累積に更新する。
+ * - `cumulative`・古い runner（`superseded`）: **基準の `models`（現役の高さ）へは畳まない。**
+ *   その runner の控えとの差だけを増分にして、控えを更新する。**増えた分は取りこぼさない**
+ *   （畳む直前の読みは、最後の `result` の後に使った分を運ぶ）。控えが無い・累積が減っていた
+ *   ときは積まない（`skipped`）——記録済みの分が言えず、積めば過大、積まなければ取りこぼしの
+ *   恐れがあるので、過大にしない側に倒し、呼び出し側が日誌に残す。基準の行が無いときは何も
+ *   作らない（控えの置き場が無い）。
+ *
+ * 全部ゼロの累積は「情報なし」として控えを動かさない（`foldUsageSnapshot` と同じ理由）。
+ */
+export function foldRecordForStore(
+  baseline: UsageBaseline | null,
+  input: {
+    layer: UsageLayer;
+    managerId: string;
+    snapshot: UsageSnapshot;
+    at: string;
+    accumulation: UsageAccumulation;
+    runner?: UsageRecordRunner;
+  },
+): { fold: UsageFold; nextBaseline: UsageBaseline | null } {
+  if (input.accumulation === 'oneshot') {
+    return { fold: foldOneshotUsage(input.snapshot), nextBaseline: null };
+  }
+  const withRunnerMemory = (base: UsageBaseline, runnerId: string | undefined): UsageBaseline => {
+    const carried = baseline?.byRunner;
+    const next =
+      runnerId === undefined || !hasAnyUsage(input.snapshot.models)
+        ? carried
+        : { ...carried, [runnerId]: input.snapshot.models };
+    const rest: UsageBaseline = { ...base };
+    delete rest.byRunner;
+    return next === undefined ? rest : { ...rest, byRunner: next };
+  };
+  const identity = { layer: input.layer, managerId: input.managerId };
+
+  if (input.runner?.superseded === true) {
+    if (baseline === null) {
+      return {
+        fold: { delta: {}, baseline: null, skipped: { reason: 'unknown-runner' } },
+        nextBaseline: null,
+      };
+    }
+    const previous = baseline.byRunner?.[input.runner.id];
+    const keep = (skipped?: UsageFold['skipped'], delta: UsageFold['delta'] = {}) => {
+      const nextBaseline = withRunnerMemory(baseline, input.runner?.id);
+      return {
+        fold: {
+          delta,
+          baseline: nextBaseline,
+          ...(skipped === undefined ? {} : { skipped }),
+        } satisfies UsageFold,
+        nextBaseline,
+      };
+    };
+    if (previous === undefined) return keep({ reason: 'unknown-runner' });
+    const own = foldUsageSnapshot(
+      { ...identity, models: previous, updatedAt: input.at, resets: 0 },
+      input.snapshot,
+      input.at,
+    );
+    if (own.reset !== undefined) {
+      return keep({
+        reason: 'decreased',
+        fromCostUsd: own.reset.fromCostUsd,
+        toCostUsd: own.reset.toCostUsd,
+      });
+    }
+    return keep(undefined, own.delta);
+  }
+
+  const fold = foldUsageSnapshot(baseline, input.snapshot, input.at);
+  if (fold.baseline === null) return { fold, nextBaseline: null };
+  // 全部ゼロの累積は基準をそのまま返す（`foldUsageSnapshot`）。そのときも既存の控えは持ち越す。
+  const nextBaseline = withRunnerMemory({ ...fold.baseline, ...identity }, input.runner?.id);
+  return { fold, nextBaseline };
 }
 
 /**

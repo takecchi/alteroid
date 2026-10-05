@@ -121,13 +121,7 @@ import {
   type UsageLimitNotice,
 } from './usage-limits.js';
 import type { TokenRotatorObservation } from './token-rotator.js';
-import {
-  foldUsageSnapshot,
-  type UsageBaseline,
-  UsageRecordOrder,
-  type UsageRecordTicket,
-  usageDate,
-} from './usage.js';
+import { UsageRecordOrder, type UsageRecordTicket, usageDate } from './usage.js';
 
 /**
  * 委譲のデーモン側（docs/architecture.md「配線」）。
@@ -5595,16 +5589,6 @@ class Pool implements ManagerPool {
   /** 累積の usage を `record` へ積む順番を、届いた順に揃える（Issue #3015）。 */
   readonly #usageOrder = new UsageRecordOrder();
 
-  /**
-   * **runner ごとに、その runner から最後に受け取った累積**（Issue #3022 仮説1）。鍵は
-   * `managerId` と `runnerId`。引き取りで委譲が別の runner へ移った後に、古い runner の
-   * 累積（畳む直前の読みなど）が遅れて届いたとき、**その runner 自身の前回との差**だけを
-   * 積むための控えである。台帳の基準（`usage.record` の中）は委譲に1本だけで、新しい
-   * runner の累積（resume で 0 から数え直し）の高さを持つので、古い runner の累積をそこへ
-   * 畳むと全量が「数え直し」として積まれて過大になる。メモリだけで持つ（再起動で忘れる。
-   * 忘れたときの倒し方は `#recordStaleRunnerUsage`）。古い鍵から捨てて上限を守る。
-   */
-  readonly #usageSeenByRunner = new Map<string, UsageBaseline['models']>();
   /**
    * `shutting_down` を名乗った runner の `runnerId`（Issue #2749）。**名乗りは runner ごと**
    * に覚える——名乗っていない runner（旧 runner）は `stop()` が一切待たない。新しい器の
@@ -12457,6 +12441,8 @@ class Pool implements ManagerPool {
             snapshot: { sessionId: event.sessionId, models: event.models },
             // streaming-input の長寿命セッションなので、降りてくるのは走行合計。
             accumulation: 'cumulative',
+            // どの runner の累積か（台帳が runner ごとの最後の累積を持つ。Issue #3022 仮説1）。
+            runner: { id: fromRunnerId, superseded: false },
             // **そのマネージャーのセッションが起きた瞬間の身元**（`#tokenIdentities`）。
             // `#tokenIdentity?.()` を読み直さないのは、枠の観測と同じ理由である —
             // 回した後に届いた前のセッションぶんの消費が、新しいトークンに付く。
@@ -12479,7 +12465,6 @@ class Pool implements ManagerPool {
         }
 
         // `record` は済んだ。後続の番へ渡す（日誌の書き込みは待たせない）。
-        this.#rememberRunnerUsage(event.managerId, fromRunnerId, event.models);
         usageTicket?.release();
 
         // **ターン1回ぶんの増分を日誌へ残す。** 台帳は日 × actor × モデル ×
@@ -14163,17 +14148,6 @@ class Pool implements ManagerPool {
     }
   }
 
-  #rememberRunnerUsage(managerId: string, runnerId: string, models: UsageBaseline['models']): void {
-    const key = `${managerId}\u0000${runnerId}`;
-    this.#usageSeenByRunner.delete(key);
-    this.#usageSeenByRunner.set(key, models);
-    while (this.#usageSeenByRunner.size > 1000) {
-      const oldest = this.#usageSeenByRunner.keys().next();
-      if (oldest.done === true) break;
-      this.#usageSeenByRunner.delete(oldest.value);
-    }
-  }
-
   /**
    * **委譲が別の runner へ移った後に、古い runner から届いた `usage`**（Issue #3022 仮説1）。
    *
@@ -14193,23 +14167,24 @@ class Pool implements ManagerPool {
   /**
    * 古い runner の累積を、**その runner 自身が前回までに報告した累積との差**だけ積む。
    *
+   * 差の計算と控え（runner ごとの最後の累積）は**台帳の store が持つ**（`UsageStore.record` の
+   * `runner.superseded`。`foldRecordForStore`）。デーモンの再起動で消えない——毎晩の本番反映の
+   * たびに再起動するので、メモリに持つと窓が毎日開く。
+   *
    * - 台帳の基準（新しい runner の高さ）には**畳まない**。畳むと小さい基準に対する大きい
    *   累積が全量の「数え直し」になり、既に記録した分を二重に数える（直す前の過大計上）。
-   * - **増えた分は取りこぼさない。** 畳む直前の読みは、最後の `result` より後に使った分
-   *   （compaction・背景処理など）を運ぶことがあるので、前回との差が正なら積む
-   *   （`oneshot` の増分として。基準は動かさない）。
-   * - **差が取れないときは積まずに跡を残す。** この runner の前回の累積を覚えていない
-   *   （デーモンの再起動後）か、累積が前回より減っている（その runner 側で数え直された）とき、
-   *   どれだけが記録済みかをここでは言えない。積めば過大、積まなければ取りこぼしの恐れ
-   *   なので、**積まない側に倒し、累積そのものを日誌に残す**（黙って消さない）。
+   * - **増えた分は取りこぼさない。** 畳む直前の読みは、最後の `result` より後に使った分を
+   *   運ぶことがあるので、前回との差が正なら積む。
+   * - **差が取れないときは積まずに跡を残す**（返り値の `skipped`）。この runner の前回の累積を
+   *   覚えていない（この欄が入る前の行・基準の行が無い）か、累積が前回より減っている（その
+   *   runner 側で数え直された）とき、どれだけが記録済みかを言えない。積めば過大、積まなければ
+   *   取りこぼしの恐れなので、**積まない側に倒し、累積そのものを日誌に残す**（黙って消さない）。
    */
   async #recordStaleRunnerUsage(
     event: Extract<RunnerEvent, { type: 'usage' }>,
     fromRunnerId: string,
     record: ManagerRecord,
   ): Promise<void> {
-    const key = `${event.managerId}\u0000${fromRunnerId}`;
-    const previous = this.#usageSeenByRunner.get(key);
     const note = async (text: string): Promise<void> => {
       await this.#journal({
         type: 'exchange',
@@ -14218,45 +14193,18 @@ class Pool implements ManagerPool {
         text: `${EXCHANGE_KIND_GAUGE_PREFIX}[${event.managerId}] 移った後に ${fromRunnerId} から届いた消費の累積（いまの宛先は ${record.job.runnerId ?? '不明'}）: ${text}`,
       });
     };
-    const total = (models: UsageBaseline['models']): number =>
-      Object.values(models).reduce((sum, m) => sum + m.costUsd, 0);
-    if (previous === undefined) {
-      await note(
-        `この runner の前回の累積を覚えていないので、記録済みの分が分からず積まなかった（累積 $${total(event.models).toFixed(4)}）。`,
-      );
-      return;
-    }
     const at = new Date(this.#now());
-    const fold = foldUsageSnapshot(
-      {
-        layer: 'manager',
-        managerId: event.managerId,
-        models: previous,
-        updatedAt: at.toISOString(),
-        resets: 0,
-      },
-      { sessionId: event.sessionId, models: event.models },
-      at.toISOString(),
-    );
-    if (fold.reset !== undefined) {
-      await note(
-        `この runner の累積が前回（$${fold.reset.fromCostUsd.toFixed(4)}）より減っていたので、積まなかった（累積 $${fold.reset.toCostUsd.toFixed(4)}）。`,
-      );
-      this.#rememberRunnerUsage(event.managerId, fromRunnerId, event.models);
-      return;
-    }
-    this.#rememberRunnerUsage(event.managerId, fromRunnerId, event.models);
-    if (Object.keys(fold.delta).length === 0) return;
+    let fold;
     try {
-      await this.#stores.usage.record({
+      fold = await this.#stores.usage.record({
         layer: 'manager',
         site: 'session',
         managerId: event.managerId,
         date: usageDate(at),
         at: at.toISOString(),
-        snapshot: { sessionId: event.sessionId, models: fold.delta },
-        // 増分なので基準を持たない（新しい runner の基準を動かさない）。
-        accumulation: 'oneshot',
+        snapshot: { sessionId: event.sessionId, models: event.models },
+        accumulation: 'cumulative',
+        runner: { id: fromRunnerId, superseded: true },
       });
     } catch {
       await this.#journal({
@@ -14265,6 +14213,17 @@ class Pool implements ManagerPool {
         role: 'inbound',
         text: `${EXCHANGE_KIND_FAILURE_PREFIX}[${event.managerId}] 移った後に届いた消費を台帳へ記録できなかった（この分は集計に出ない）`,
       });
+      return;
+    }
+    const total = Object.values(event.models).reduce((sum, m) => sum + m.costUsd, 0);
+    if (fold.skipped?.reason === 'unknown-runner') {
+      await note(
+        `この runner の前回の累積を台帳が覚えていないので、記録済みの分が分からず積まなかった（累積 $${total.toFixed(4)}）。`,
+      );
+    } else if (fold.skipped?.reason === 'decreased') {
+      await note(
+        `この runner の累積が前回（$${fold.skipped.fromCostUsd.toFixed(4)}）より減っていたので、積まなかった（累積 $${fold.skipped.toCostUsd.toFixed(4)}）。`,
+      );
     }
   }
 

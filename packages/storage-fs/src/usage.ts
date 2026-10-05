@@ -8,8 +8,7 @@ import {
   stripNulFromUsageQuery,
   stripNulFromUsageRecord,
   addUnreadableCounts,
-  foldOneshotUsage,
-  foldUsageSnapshot,
+  foldRecordForStore,
   isRealUsageDate,
   usageAggregateSchema,
   usageBaselineSchema,
@@ -27,6 +26,7 @@ import type {
   UsageAggregate,
   UsageBaseline,
   UsageFold,
+  UsageRecordRunner,
   UsageLayer,
   UsageQuery,
   UsageSite,
@@ -484,6 +484,7 @@ export class FsUsageStore implements UsageStore {
     snapshot: UsageSnapshot;
     accumulation: UsageAccumulation;
     tokenId?: string;
+    runner?: UsageRecordRunner;
   }): Promise<UsageFold> {
     const input = stripNulFromUsageRecord(rawInput);
     return this.#mutate((file) => {
@@ -492,16 +493,15 @@ export class FsUsageStore implements UsageStore {
       // 前回より高くついた回だけが差に縮んで黙って目減りする。
       const baseKey = baselineKey(input.layer, input.managerId);
       const baseline = input.accumulation === 'oneshot' ? null : (file.baselines[baseKey] ?? null);
-      const fold =
-        input.accumulation === 'oneshot'
-          ? foldOneshotUsage(input.snapshot)
-          : foldUsageSnapshot(baseline, input.snapshot, input.at);
-      // foldUsageSnapshot は基準が無ければ layer / managerId を空で返す
-      // （呼び出し側が知っている値を後から入れる契約 — usage.ts 参照）。
-      const nextBaseline: UsageBaseline | null =
-        fold.baseline === null
-          ? null
-          : { ...fold.baseline, layer: input.layer, managerId: input.managerId };
+      // 差分の計算と runner ごとの控えの扱いは、3実装が同じ関数を通す（`usage.ts`）。
+      const { fold, nextBaseline } = foldRecordForStore(baseline, {
+        layer: input.layer,
+        managerId: input.managerId,
+        snapshot: input.snapshot,
+        at: input.at,
+        accumulation: input.accumulation,
+        ...(input.runner === undefined ? {} : { runner: input.runner }),
+      });
 
       const rows = { ...file.rows };
       // 増えていないモデルの行は作らない。fold が既に 0 のモデルを delta から
@@ -571,7 +571,12 @@ export class FsUsageStore implements UsageStore {
           turnsAt: file.turnsAt ?? (turned ? input.at : null),
           unmetered: file.unmetered,
         },
-        result: { delta: fold.delta, baseline: nextBaseline, reset: fold.reset },
+        result: {
+          delta: fold.delta,
+          baseline: nextBaseline,
+          reset: fold.reset,
+          ...(fold.skipped === undefined ? {} : { skipped: fold.skipped }),
+        },
       };
     });
   }

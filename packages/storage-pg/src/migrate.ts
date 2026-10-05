@@ -337,6 +337,9 @@ export const STATEMENTS = [
   `create unique index if not exists usage_baseline_key_idx
      on usage_baseline (layer, manager_id)`,
   `alter table usage_baseline drop constraint if exists usage_baseline_pkey`,
+  // runner ごとの最後の累積（Issue #3022 仮説1）。**null 可の追加列だけ**——既にある行は null のまま
+  // 読まれ、「覚えていない」として扱われる（古い runner の累積は積まずに日誌に残す。後方互換）。
+  `alter table usage_baseline add column if not exists by_runner jsonb`,
 
   // 単一行（id = 'default'）。台帳が記録を始めた時刻。aggregate の since の元。
   `create table if not exists usage_ledger (

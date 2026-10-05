@@ -49,11 +49,19 @@ export function stripNulFromUsageSnapshot(snapshot: UsageSnapshot): UsageSnapsho
 
 /** `record` の入力の鍵列（managerId・tokenId・model・sessionId）の NUL を落とす。 */
 export function stripNulFromUsageRecord<
-  T extends { managerId: string; tokenId?: string; snapshot: UsageSnapshot },
+  T extends {
+    managerId: string;
+    tokenId?: string;
+    snapshot: UsageSnapshot;
+    runner?: { readonly id: string; readonly superseded: boolean };
+  },
 >(input: T): T {
   return {
     ...input,
     managerId: stripNul(input.managerId),
+    ...(input.runner === undefined
+      ? {}
+      : { runner: { id: stripNul(input.runner.id), superseded: input.runner.superseded } }),
     ...(input.tokenId === undefined ? {} : { tokenId: stripNulFromTokenId(input.tokenId) }),
     snapshot: stripNulFromUsageSnapshot(input.snapshot),
   };

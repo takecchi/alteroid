@@ -130,8 +130,7 @@ import { assertProfileRowWritable } from './profile-input.js';
 import { assertValidActiveToken, prepareTokensForReplace } from './token-pool-input.js';
 import {
   addUnreadableCounts,
-  foldOneshotUsage,
-  foldUsageSnapshot,
+  foldRecordForStore,
   USAGE_ESTIMATE_NOTICE,
   usageDate,
   ZERO_USAGE,
@@ -1693,21 +1692,22 @@ export function createMemoryStores(): Stores {
 
   const usage: UsageStore = {
     async record(input) {
-      const { layer, site, managerId, date, at, snapshot, accumulation, tokenId } =
+      const { layer, site, managerId, date, at, snapshot, accumulation, tokenId, runner } =
         stripNulFromUsageRecord(input);
       // 累積の器は `query()` 呼び出しの寿命で閉じる（`usage.ts` の
       // `usageAccumulationSchema`）。1回で閉じる呼び出しに基準を持たせると、
       // 前回より高くついた回だけが差に縮んで黙って目減りする。
       const baseKey = usageBaselineKey(layer, managerId);
       const baseline = accumulation === 'oneshot' ? null : (usageBaselines.get(baseKey) ?? null);
-      const fold =
-        accumulation === 'oneshot'
-          ? foldOneshotUsage(snapshot)
-          : foldUsageSnapshot(baseline, snapshot, at);
-      // foldUsageSnapshot は基準が無ければ layer / managerId を空で返す
-      // （呼び出し側が知っている値を後から入れる契約 — usage.ts 参照）。
-      const nextBaseline: UsageBaseline | null =
-        fold.baseline === null ? null : { ...fold.baseline, layer, managerId };
+      // 差分の計算と runner ごとの控えの扱いは、3実装が同じ関数を通す（`usage.ts`）。
+      const { fold, nextBaseline } = foldRecordForStore(baseline, {
+        layer,
+        managerId,
+        snapshot,
+        at,
+        accumulation,
+        ...(runner === undefined ? {} : { runner }),
+      });
       // `oneshot` は基準を持たない。既にある基準を消しもしない
       // （同じ主体が cumulative でも記録していることがある）。
       if (nextBaseline !== null) usageBaselines.set(baseKey, nextBaseline);
@@ -1769,7 +1769,12 @@ export function createMemoryStores(): Stores {
           updatedAt: at,
         });
       }
-      return { delta: fold.delta, baseline: nextBaseline, reset: fold.reset };
+      return {
+        delta: fold.delta,
+        baseline: nextBaseline,
+        reset: fold.reset,
+        ...(fold.skipped === undefined ? {} : { skipped: fold.skipped }),
+      };
     },
     async aggregate(rawQuery) {
       // 書き込みが鍵列の NUL を落として残すので、絞り込みも落としてから引く（issue #3005）。

@@ -4,8 +4,7 @@ import {
   stripNulFromUnmeteredRecord,
   stripNulFromUsageQuery,
   stripNulFromUsageRecord,
-  foldOneshotUsage,
-  foldUsageSnapshot,
+  foldRecordForStore,
   isRealUsageDate,
   usageDate,
   usageLayerSchema,
@@ -17,6 +16,7 @@ import type {
   UsageAggregate,
   UsageBaseline,
   UsageFold,
+  UsageRecordRunner,
   UsageLayer,
   UsageQuery,
   UsageRow,
@@ -215,6 +215,7 @@ export class PgUsageStore implements UsageStore {
     snapshot: UsageSnapshot;
     accumulation: UsageAccumulation;
     tokenId?: string;
+    runner?: UsageRecordRunner;
   }): Promise<UsageFold> {
     const input = stripNulFromUsageRecord(rawInput);
     return this.#db.transaction(async (tx) => {
@@ -249,16 +250,15 @@ export class PgUsageStore implements UsageStore {
               .limit(1);
       const baseline = baselineRows[0] === undefined ? null : this.#toBaseline(baselineRows[0]);
 
-      const fold =
-        input.accumulation === 'oneshot'
-          ? foldOneshotUsage(input.snapshot)
-          : foldUsageSnapshot(baseline, input.snapshot, input.at);
-      // foldUsageSnapshot は基準が無ければ layer / managerId を空で返す
-      // （呼び出し側が知っている値を後から入れる契約 — usage.ts 参照）。
-      const nextBaseline: UsageBaseline | null =
-        fold.baseline === null
-          ? null
-          : { ...fold.baseline, layer: input.layer, managerId: input.managerId };
+      // 差分の計算と runner ごとの控えの扱いは、3実装が同じ関数を通す（`usage.ts`）。
+      const { fold, nextBaseline } = foldRecordForStore(baseline, {
+        layer: input.layer,
+        managerId: input.managerId,
+        snapshot: input.snapshot,
+        at: input.at,
+        accumulation: input.accumulation,
+        ...(input.runner === undefined ? {} : { runner: input.runner }),
+      });
 
       // **「起きた（＝ターン1回）」の判定。** 台帳の行が動いた回（`fold.delta` が
       // 空でない回）だけを1回と数える——増分が空の record（同じ累積スナップショット
@@ -308,6 +308,8 @@ export class PgUsageStore implements UsageStore {
           resets: nextBaseline.resets,
           lastResetAt:
             nextBaseline.lastResetAt === undefined ? null : new Date(nextBaseline.lastResetAt),
+          // 無いときは null（この列が入る前の行と区別しない＝「覚えていない」）。
+          byRunner: nextBaseline.byRunner === undefined ? null : stripNulls(nextBaseline.byRunner),
         };
         await tx
           .insert(usageBaseline)
@@ -426,7 +428,12 @@ export class PgUsageStore implements UsageStore {
           });
       }
 
-      return { delta: fold.delta, baseline: nextBaseline, reset: fold.reset };
+      return {
+        delta: fold.delta,
+        baseline: nextBaseline,
+        reset: fold.reset,
+        ...(fold.skipped === undefined ? {} : { skipped: fold.skipped }),
+      };
     });
   }
 
@@ -744,6 +751,9 @@ export class PgUsageStore implements UsageStore {
       updatedAt: toIso(row.updatedAt),
       resets: row.resets,
       lastResetAt: optionalIso(row.lastResetAt),
+      ...(row.byRunner === null || row.byRunner === undefined
+        ? {}
+        : { byRunner: row.byRunner as NonNullable<UsageBaseline['byRunner']> }),
     };
   }
 }

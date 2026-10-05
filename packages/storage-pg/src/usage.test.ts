@@ -2,6 +2,7 @@ import {
   USAGE_ESTIMATE_NOTICE,
   ZERO_USAGE,
   verifyUsageNulContract,
+  verifyUsageRunnerContract,
   type UsageAccumulation,
   type UsageLayer,
   type UsageSite,
@@ -1599,5 +1600,83 @@ describe('PgUsageStore.recordedManagerIds', () => {
 describe('PgUsageStore の鍵列の NUL（issue #2927。3実装で同じことを測る）', () => {
   it('鍵列の NUL は断らず、落として残す', async () => {
     await verifyUsageNulContract(store);
+  });
+});
+
+describe('PgUsageStore の runner ごとの最後の累積（Issue #3022 仮説1。3実装で同じことを測る）', () => {
+  it('古い runner の累積は、その runner 自身の前回との差だけを積む', async () => {
+    await verifyUsageRunnerContract(store);
+  });
+});
+
+describe('PgUsageStore: runner ごとの最後の累積の列は、旧スキーマから後方互換で足される（Issue #3022 仮説1）', () => {
+  let legacyClient: TestDbHandle;
+  let legacyDb: Db;
+
+  beforeEach(async () => {
+    ({ client: legacyClient, db: legacyDb } = await createEmptyTestDb());
+    // 今のスキーマから by_runner 列だけを外して、この列が入る前の DB を作る（旧い列の無い状態）。
+    await migrate(legacyDb);
+    await legacyDb.execute(sql.raw('alter table usage_baseline drop column by_runner'));
+    // by_runner 列が入る前の基準の行（累積 $12.5）。
+    await legacyDb.execute(
+      sql.raw(`insert into usage_baseline (manager_id, session_id, models, updated_at)
+               values ('mgr-old', 'sess-old',
+                       '{"claude-opus-5":{"inputTokens":0,"outputTokens":0,"cacheReadInputTokens":0,"cacheCreationInputTokens":0,"webSearchRequests":0,"costUsd":12.5}}',
+                       '2026-08-01T10:00:00Z')`),
+    );
+  });
+
+  afterEach(async () => {
+    await legacyClient.close();
+  });
+
+  it('古い行は控え無し（覚えていない）として読まれ、古い runner の累積は積まれない。現役の記録の後は差で積まれる', async () => {
+    await migrate(legacyDb);
+    await migrate(legacyDb); // 2回目も落ちない
+    const legacyStore = new PgUsageStore(legacyDb);
+    const baseline = await legacyStore.baseline('manager', 'mgr-old');
+    expect(baseline?.byRunner).toBeUndefined();
+    expect(baseline?.models['claude-opus-5']?.costUsd).toBe(12.5);
+
+    const base = {
+      layer: 'manager',
+      site: 'session',
+      managerId: 'mgr-old',
+      date: '2026-10-06',
+      accumulation: 'cumulative',
+    } as const;
+    const costOf = async () =>
+      (await legacyStore.aggregate({ managerId: 'mgr-old' })).rows.reduce(
+        (sum, row) => sum + row.totals.costUsd,
+        0,
+      );
+    const at = (n: number) => `2026-10-06T00:00:0${String(n)}.000Z`;
+
+    // 古い行（控え無し）: 積まず、理由を返す。基準も動かさない。
+    const first = await legacyStore.record({
+      ...base,
+      at: at(1),
+      snapshot: snapshot({ 'claude-opus-5': totals({ costUsd: 20 }) }),
+      runner: { id: 'runner-a', superseded: true },
+    });
+    expect(first.skipped).toEqual({ reason: 'unknown-runner' });
+    expect(await costOf()).toBe(0);
+
+    // 現役の runner の記録で控えが入り、以後は差で積める。
+    await legacyStore.record({
+      ...base,
+      at: at(2),
+      snapshot: snapshot({ 'claude-opus-5': totals({ costUsd: 13 }) }),
+      runner: { id: 'runner-b', superseded: false },
+    });
+    const second = await legacyStore.record({
+      ...base,
+      at: at(3),
+      snapshot: snapshot({ 'claude-opus-5': totals({ costUsd: 22 }) }),
+      runner: { id: 'runner-a', superseded: true },
+    });
+    // runner-a の控えは（古い行の分は覚えていない）first で入った 20。差 2 を積む。
+    expect(second.delta['claude-opus-5']?.costUsd).toBe(2);
   });
 });

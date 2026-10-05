@@ -330,4 +330,48 @@ describe('引き取り後に届く古い runner の usage は、過大に数え�
     await settle();
     expect(await costOf(stores)).toBe(11);
   });
+
+  it('デーモンを再起動（Pool を作り直す。store は同じ）しても、runner-a の遅れた累積は差だけを積む（過大でも取りこぼしでもない）', async () => {
+    const stores = createMemoryStores();
+    await stores.jobs.putJob(jobWith('mgr-race', 'runner-a'));
+
+    /** Pool を起こす（再起動は、同じ store で作り直すこと）。 */
+    async function boot() {
+      const fake = createFakeRegistry();
+      fake.entries.push(entryOf('runner-a', 'lost', 'runner-a'));
+      fake.entries.push(entryOf('runner-b', 'connected', 'runner-b'));
+      const runnerA = fakeRunner('runner-a');
+      const runnerB = fakeRunner('runner-b');
+      fake.addClient(runnerA.client);
+      fake.addClient(runnerB.client);
+      const pool = createManagerPool({
+        stores,
+        post: () => {},
+        runners: fake.registry,
+        now: () => FIXED_NOW,
+      });
+      await pool.abort('mgr-does-not-exist');
+      return { pool, runnerA, runnerB };
+    }
+
+    // 再起動の前: runner-a で累積 10。
+    const before = await boot();
+    before.runnerA.emit?.(usageEvent(10));
+    await settle();
+    expect(await costOf(stores)).toBe(10);
+    await before.pool.stop();
+
+    // 再起動の後（メモリの控えは無い）: runner-b が引き取り、累積 1。
+    const after = await boot();
+    await after.pool.reattachRunner('runner-b');
+    after.runnerB.emit?.(usageEvent(1));
+    await settle();
+    expect(await costOf(stores)).toBe(11);
+
+    // runner-a の遅れた累積 12（前回報告した 10 からの増えは 2）。
+    after.runnerA.emit?.(usageEvent(12));
+    await settle();
+    expect(await costOf(stores)).toBe(13);
+    await after.pool.stop();
+  });
 });

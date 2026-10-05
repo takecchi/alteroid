@@ -693,6 +693,11 @@ export const usageBaseline = pgTable(
     updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull(),
     resets: integer('resets').notNull().default(0),
     lastResetAt: timestamp('last_reset_at', { withTimezone: true, mode: 'date' }),
+    /**
+     * runner ごとの最後の累積（`runner_id` → モデル id → 累積。Issue #3022 仮説1）。null は
+     * 「覚えていない」（この列が入る前の行を含む。後方互換の足し方は `migrate.ts`）。
+     */
+    byRunner: jsonb('by_runner'),
   },
   // `usage_daily` と同じ理由で一意索引（migrate.ts の「鍵を差し替える」参照）。
   // 既定 `'manager'` が入るので、既にある基準はそのまま同じ主体として引ける

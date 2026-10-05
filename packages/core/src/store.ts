@@ -48,6 +48,7 @@ import type {
   UsageAggregate,
   UsageBaseline,
   UsageFold,
+  UsageRecordRunner,
   UsageLayer,
   UsageQuery,
   UsageSite,
@@ -2629,6 +2630,15 @@ export interface UsageStore {
      * （`manager.ts` の `#tokenIdentities` が同じ理由で在る）。
      */
     tokenId?: string;
+    /**
+     * **どの runner の累積か**（Issue #3022 仮説1。マネージャー層の `cumulative` だけが渡す）。
+     * 台帳は runner ごとの最後の累積を基準の行に持つ（`UsageBaseline.byRunner`）ので、
+     * **デーモンを再起動しても消えない**。`superseded: true` は「委譲がもう別の runner へ移った後に、
+     * 古い runner から届いた累積」で、**基準の高さ（現役の runner の累積）へは畳まず、その runner
+     * 自身の前回との差だけを積む**（`foldRecordForStore`）。控えが無い・累積が減っていたときは積まず、
+     * 返り値の `skipped` に理由を載せる（呼び出し側が日誌に残す）。省略は従来どおり。3実装とも同じ。
+     */
+    runner?: UsageRecordRunner;
   }): Promise<UsageFold>;
 
   /**

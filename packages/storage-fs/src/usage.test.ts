@@ -5,6 +5,7 @@ import {
   USAGE_ESTIMATE_NOTICE,
   ZERO_USAGE,
   verifyUsageNulContract,
+  verifyUsageRunnerContract,
   type UsageAccumulation,
   type UsageLayer,
   type UsageSite,
@@ -1227,5 +1228,11 @@ describe('FsUsageStore.recordedManagerIds', () => {
 describe('FsUsageStore の鍵列の NUL（issue #2927。3実装で同じことを測る）', () => {
   it('鍵列の NUL は断らず、落として残す', async () => {
     await verifyUsageNulContract(store);
+  });
+});
+
+describe('FsUsageStore の runner ごとの最後の累積（Issue #3022 仮説1。3実装で同じことを測る）', () => {
+  it('古い runner の累積は、その runner 自身の前回との差だけを積む', async () => {
+    await verifyUsageRunnerContract(store);
   });
 });
