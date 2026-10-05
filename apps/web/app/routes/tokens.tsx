@@ -75,6 +75,28 @@ export default function Tokens() {
 }
 
 /**
+ * 書き込み（`PUT /tokens` / `PUT /tokens/policy`）が失敗したときのエラー表示（#2886）。
+ *
+ * サーバは、記録（日誌）が書けなかった回は**何も保存せずに** `code: "journal_write_failed"` を返す。
+ * その印のときだけ、本文（サーバの文言）の下に「変更していない・次にすること」を足す。
+ * 保存そのものの失敗など `code` の無い失敗は、これまでどおりサーバの文言だけを出す。
+ * フォームの入力は呼び出し側が失敗時に消さない（保存していないので、貼り直しを強いない）。
+ */
+function TokenWriteError({ error, className }: { error: unknown; className?: string }) {
+  if (error === undefined || error === null) return null;
+  return (
+    <div className={className}>
+      <ErrorNote error={error} />
+      {error instanceof ApiError && error.code === 'journal_write_failed' && (
+        <p className="mt-1 text-xs text-muted-foreground">
+          何も変更していない。もう一度試すか、記録の置き場所（ディスクの空き・書き込み権限）を確かめる。
+        </p>
+      )}
+    </div>
+  );
+}
+
+/**
  * トークンを1本足す。**値はテキストエリアへ貼り付ける**（`alteroid token add`
  * と違いブラウザにファイル入力を持たせない——貼り付けのほうが手数が少ない）。
  *
@@ -124,7 +146,7 @@ function AddTokenForm() {
             autoComplete="off"
           />
         </label>
-        <ErrorNote error={failure} />
+        <TokenWriteError error={failure} />
         <div>
           <Button
             variant="primary"
@@ -502,7 +524,7 @@ function UnreadableRowsNote({ unreadable }: { unreadable: TokensRowsUnreadable }
           一覧を書き換える操作（追加・削除・無効化/戻す）は、この行を捨てずに持ち越す。
           消すには、行ごとの「この行を消す」を使う。番号が取れない行は、ここでは消せない。
         </p>
-        <ErrorNote error={failure} />
+        <TokenWriteError error={failure} />
       </div>
     </div>
   );
@@ -670,7 +692,7 @@ function TokenRow({
         ]}
       />
 
-      <ErrorNote error={failure} className="mt-2" />
+      <TokenWriteError error={failure} className="mt-2" />
       <div className="mt-2 flex flex-wrap gap-1.5">
         {token.disabledAt === undefined ? (
           <Button
@@ -825,7 +847,7 @@ function SettingsCard({ settings }: { settings: TokenRotationSettings }) {
           />
         </label>
 
-        <ErrorNote error={failure} />
+        <TokenWriteError error={failure} />
 
         <div>
           <Button
@@ -942,7 +964,7 @@ function UnreadableSettingsCard({ reason }: { reason: string }) {
           />
         </label>
 
-        <ErrorNote error={failure} />
+        <TokenWriteError error={failure} />
 
         <div>
           <Button

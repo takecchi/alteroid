@@ -341,19 +341,36 @@ export function useApi(): AlteroidClient {
  */
 export class ApiError extends Error {
   readonly status: number;
+  /**
+   * サーバが本文に載せた機械向けの印（`{ error, code }` の `code`）。無い応答では `undefined`。
+   * 画面は文言（`message`）ではなくこの印で場合分けする（例: `journal_write_failed`）。
+   */
+  readonly code: string | undefined;
 
-  constructor(status: number, message: string) {
+  constructor(status: number, message: string, code?: string) {
     // 画面へ出る前に伏せる（issue #2600。`ErrorNote` ほか `error.message` を出す口すべてに効く）。
     super(redactError(message));
     this.name = 'ApiError';
     this.status = status;
+    this.code = code;
   }
+}
+
+/** 応答本文の `code`（文字列のときだけ）。 */
+function errorCode(error: unknown): string | undefined {
+  if (typeof error !== 'object' || error === null) return undefined;
+  const { code } = error as { code?: unknown };
+  return typeof code === 'string' ? code : undefined;
 }
 
 /** `openapi-fetch` の `{data, error, response}` を SWR が扱える形に均す。 */
 export function unwrap<T>(result: { data?: T; error?: unknown; response: Response }): T {
   if (result.error !== undefined || result.data === undefined) {
-    throw new ApiError(result.response.status, describeError(result.error, result.response));
+    throw new ApiError(
+      result.response.status,
+      describeError(result.error, result.response),
+      errorCode(result.error),
+    );
   }
   return result.data;
 }
