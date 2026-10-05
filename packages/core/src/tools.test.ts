@@ -24252,9 +24252,12 @@ describe('クローンの記憶の全文書き直しは読んだ版を前提に�
     expect((await h.stores.persona.read('ops'))?.content).toContain('三版');
   });
 
-  it('既存の文書に版なしで memory_write すると、書かずに memory_read を促す', async () => {
+  it('読んだ後に人間が別内容へ直し、版を持たずに memory_write すると、書かずに memory_read を促す（再現）', async () => {
     const h = harness();
+    await h.stores.persona.write('ops', '# 運用\n\n人間の元AAAA\n');
+    await h.call('memory_read', { slug: 'ops' });
     await h.stores.persona.write('ops', '# 運用\n\n人間の内容\n');
+    await h.stores.persona.markHumanTouched('ops', new Date().toISOString());
     const result = await h.call('memory_write', {
       slug: 'ops',
       content: '上書き',
