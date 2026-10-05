@@ -421,7 +421,7 @@ describe('未保存の編集を離れる前に確認する', () => {
   it('書きかけのまま他の画面へのリンクを押すと確認が出る。やめれば留まる', async () => {
     renderDetail('daily-report', docRoute(PRACTICE));
     fireEvent.mouseDown(await screen.findByRole('tab', { name: '編集' }));
-    fireEvent.change(await screen.findByLabelText('題（title）'), {
+    fireEvent.change(await screen.findByLabelText('題'), {
       target: { value: '書きかけ' },
     });
 
@@ -430,13 +430,13 @@ describe('未保存の編集を離れる前に確認する', () => {
     expect(await screen.findByRole('alertdialog')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'やめる' }));
     await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
-    expect((screen.getByLabelText('題（title）') as HTMLInputElement).value).toBe('書きかけ');
+    expect((screen.getByLabelText('題') as HTMLInputElement).value).toBe('書きかけ');
   });
 
   it('変更が無ければ確認なしで移動し、書きかけのときだけ beforeunload の警告を出す', async () => {
     renderDetail('daily-report', docRoute(PRACTICE));
     fireEvent.mouseDown(await screen.findByRole('tab', { name: '編集' }));
-    const input = await screen.findByLabelText('題（title）');
+    const input = await screen.findByLabelText('題');
 
     const clean = new Event('beforeunload', { cancelable: true });
     window.dispatchEvent(clean);
