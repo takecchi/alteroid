@@ -185,6 +185,9 @@ describe.each([
       const body = (await del.json().catch(() => undefined)) as unknown;
       expect(del.status, `本文: ${JSON.stringify(body)}`).toBe(200);
 
+      // 読めない行には版が無い（#2959）。付けようのない前提を促す警告は出さない。
+      expect(body).toEqual({ ok: true, slug: BAD_SLUG });
+
       const read = await app.request(`/practices/${BAD_SLUG}`);
       expect(read.status).toBe(404);
 

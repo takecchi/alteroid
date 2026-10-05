@@ -1361,7 +1361,10 @@ describe('HTTP API', () => {
       content: '本文',
     });
 
-    const del = await app.request('/practices/to-remove', { method: 'DELETE' });
+    const version = (
+      (await (await app.request('/practices/to-remove')).json()) as { version: string }
+    ).version;
+    const del = await app.request(`/practices/to-remove?ifMatch=${version}`, { method: 'DELETE' });
     expect(del.status).toBe(200);
     expect(await del.json()).toEqual({ ok: true, slug: 'to-remove' });
 
@@ -1371,6 +1374,77 @@ describe('HTTP API', () => {
     expect(entries[0]).toMatchObject({
       decision: expect.stringContaining('to-remove') as unknown as string,
       grounds: '人間が直接 API からやり方を消した',
+    });
+  });
+
+  /**
+   * Issue #2959。人間の削除（DELETE）も、読んだ版を前提に付けられる（`ifMatch`、クエリ。
+   * 記憶の #2881 と同じ段階1）。読んでから消すまでの間にクローンが書いていたら、
+   * **消さず**・日誌にも積まず 409 でいまの版を返す。
+   */
+  describe('DELETE /practices/:slug の前提版（ifMatch、Issue #2959）', () => {
+    const del = (query = '') =>
+      app.request(`/practices/daily-report${query}`, { method: 'DELETE' });
+    const base = { slug: 'daily-report', kind: '日報', title: '日報の書き方' };
+    const readVersion = async () =>
+      ((await (await app.request('/practices/daily-report')).json()) as { version: string })
+        .version;
+
+    it('読んだ後にクローンが書いたなら、版付きの DELETE は 409 で、何も消さない', async () => {
+      await stores.practices.write({ ...base, content: 'V1' });
+      const version = await readVersion();
+      await stores.practices.write({ ...base, content: 'クローンが書いた' });
+      const journalBefore = await stores.journal.list({ types: ['decision'] });
+
+      const res = await del(`?ifMatch=${version}`);
+
+      expect(res.status).toBe(409);
+      const body = (await res.json()) as {
+        error: string;
+        current: { practice: { content: string }; version: string } | null;
+      };
+      expect(body.error).toContain('消していません');
+      expect(body.current?.practice.content).toBe('クローンが書いた\n');
+      expect(body.current?.version).toBe(await readVersion());
+      expect((await stores.practices.read('daily-report'))?.content).toBe('クローンが書いた\n');
+      expect(await stores.journal.list({ types: ['decision'] })).toEqual(journalBefore);
+    });
+
+    it('版が最新と一致していれば消せ、警告は付かない', async () => {
+      await stores.practices.write({ ...base, content: 'V1' });
+      const res = await del(`?ifMatch=${await readVersion()}`);
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ ok: true, slug: 'daily-report' });
+      expect(await stores.practices.read('daily-report')).toBeNull();
+    });
+
+    it('版を付けない従来の DELETE は通る（段階1）が、応答に警告が載り、日誌に「版の照合なし」と残る', async () => {
+      await stores.practices.write({ ...base, content: 'V1' });
+      const res = await del();
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { ok: true; slug: string; warning?: string };
+      expect(body.warning).toContain('ifMatch');
+      expect(await stores.practices.read('daily-report')).toBeNull();
+      const entries = await stores.journal.list({ types: ['decision'] });
+      expect(JSON.stringify(entries[0])).toContain('版の照合なし');
+    });
+
+    it('版を付けない DELETE の警告は stderr にも出る（slug だけで、本文は出さない）', async () => {
+      await stores.practices.write({ ...base, content: '秘密っぽい本文' });
+      const spy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+      try {
+        await del();
+        const out = spy.mock.calls.map((c) => String(c[0])).join('');
+        expect(out).toContain('版の照合なし');
+        expect(out).toContain('daily-report');
+        expect(out).not.toContain('秘密っぽい本文');
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it('無いやり方への版付き DELETE は 404（消すものが無い）', async () => {
+      expect((await del('?ifMatch=deadbeef')).status).toBe(404);
     });
   });
 

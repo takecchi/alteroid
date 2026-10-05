@@ -10722,10 +10722,7 @@ export function createCloneTools(context: ToolContext) {
         request: z
           .string()
           .describe('依頼内容。人間が Claude Code に書くのと同じ粒度で、背景と狙いを添えて書く'),
-        cwd: z
-          .string()
-          .optional()
-          .describe('作業ディレクトリ（実プロジェクトの場所）。省略時はデーモンの既定'),
+        cwd: z.string().optional().describe('作業ディレクトリ。省略時はデーモンの既定'),
         runnerId: z
           .string()
           .optional()

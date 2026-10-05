@@ -575,3 +575,86 @@ describe('保存は読んだ版を前提にし、衝突しても下書きを捨�
     expect(putBodies[1]).toMatchObject({ content: '2回目', ifMatch: V2 });
   });
 });
+
+/**
+ * 削除は読んだ版を前提にする（#2959 / #2881）。衝突したら消さず、いまの内容を見せ、
+ * 自動では再送しない。人間がもう一度確認して消すときは、見せたいまの版を送る。
+ */
+describe('削除は読んだ版を ifMatch（クエリ）として送り、衝突しても消さない', () => {
+  const V1 = 'a'.repeat(64);
+  const V2 = 'b'.repeat(64);
+  const CLONE = {
+    ...PRACTICE,
+    content: 'クローンが書いた本文\n',
+    updatedAt: '2026-08-22T02:00:00.000Z',
+  };
+
+  /** DELETE の URL を控え、`deleteResponses` を順に返す。GET は常に PRACTICE（版 V1）。 */
+  function stubDelete(deleteResponses: Response[]) {
+    const deleteUrls: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = input instanceof Request ? input : new Request(input, init);
+      if (request.url.includes('/versions')) return json({ versions: [] });
+      if (!request.url.includes('/practices/daily-report')) {
+        return Promise.reject(new TypeError(`Failed to fetch: ${request.url}`));
+      }
+      if (request.method === 'DELETE') {
+        deleteUrls.push(request.url);
+        return deleteResponses.shift() ?? json({ error: 'x' }, 500);
+      }
+      return json({ practice: PRACTICE, version: V1 });
+    }) as typeof fetch;
+    mountDetail('daily-report');
+    return deleteUrls;
+  }
+
+  const conflict = () =>
+    json(
+      {
+        error: 'やり方が読んだ後に変わっています（消していません）',
+        current: { practice: CLONE, version: V2 },
+      },
+      409,
+    );
+
+  async function askDelete() {
+    await screen.findByRole('heading', { name: 'daily-report' });
+    fireEvent.click(await screen.findByRole('button', { name: '削除' }));
+    fireEvent.click(await screen.findByRole('button', { name: '削除する' }));
+  }
+
+  it('読んだ版を ifMatch として DELETE のクエリに付ける', async () => {
+    const urls = stubDelete([json({ ok: true, slug: 'daily-report' })]);
+
+    await askDelete();
+
+    await waitFor(() => expect(urls).toHaveLength(1));
+    expect(new URL(urls[0] ?? '').searchParams.get('ifMatch')).toBe(V1);
+  });
+
+  it('409 では消さず、確認を閉じて、読んだ後に変わったことといまの内容を見せる。再送しない', async () => {
+    const urls = stubDelete([conflict()]);
+
+    await askDelete();
+
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toContain('消していない');
+    expect(alert.textContent).toContain('クローンが書いた本文');
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    // この画面に留まっている（移動していない）。自動では再送していない。
+    expect(screen.getByRole('button', { name: '削除' })).toBeTruthy();
+    expect(urls).toHaveLength(1);
+  });
+
+  it('いまの内容を見たうえで、もう一度確認して削除すると、いまの版（V2）で送る', async () => {
+    const urls = stubDelete([conflict(), json({ ok: true, slug: 'daily-report' })]);
+    await askDelete();
+    await screen.findByRole('alert');
+
+    fireEvent.click(screen.getByRole('button', { name: '削除' }));
+    fireEvent.click(await screen.findByRole('button', { name: '削除する' }));
+
+    await waitFor(() => expect(urls).toHaveLength(2));
+    expect(new URL(urls[1] ?? '').searchParams.get('ifMatch')).toBe(V2);
+  });
+});

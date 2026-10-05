@@ -106,6 +106,10 @@ function PracticeDetailBody({ slug }: { slug: string }) {
   >(undefined);
   /** 保存が 409 で断られたときの、いまの版（下書きは捨てずに残す）。 */
   const [conflict, setConflict] = useState<PracticeConflictError | undefined>(undefined);
+  /** 削除が 409 で断られたときの、いまの版（消していない。自動では再送しない。#2959）。 */
+  const [deleteConflict, setDeleteConflict] = useState<PracticeConflictError | undefined>(
+    undefined,
+  );
 
   const loadedKind = data?.practice.kind ?? '';
   const loadedTitle = data?.practice.title ?? '';
@@ -241,12 +245,17 @@ function PracticeDetailBody({ slug }: { slug: string }) {
                 destructive
                 onConfirm={() => {
                   setBusy(true);
-                  deletePractice(slug)
+                  setConfirmingDelete(false);
+                  // 読んだ版を送る（#2959）。衝突のあとに開き直したときは、見せたいまの版を送る。
+                  deletePractice(slug, deleteConflict?.current?.version ?? data.version)
                     .then(() => {
                       leaving.current = true;
                       navigate('/practices');
                     })
-                    .catch(setFailure)
+                    .catch((caught: unknown) => {
+                      if (caught instanceof PracticeConflictError) setDeleteConflict(caught);
+                      else setFailure(caught);
+                    })
                     .finally(() => setBusy(false));
                 }}
               />
@@ -268,6 +277,37 @@ function PracticeDetailBody({ slug }: { slug: string }) {
 
       {!missing && <ErrorNote error={error} className="mb-3" />}
       <ErrorNote error={failure} className="mb-3" />
+      {deleteConflict !== undefined && (
+        <div role="alert" className="mb-3 rounded-lg border border-destructive/50 p-3 text-sm">
+          <p className="font-medium text-destructive">
+            {deleteConflict.current === null
+              ? '読んだ後に、このやり方はほかで消された。こちらでは消していない。'
+              : '読んだ後に、このやり方がほかで書き換えられた。消していない。'}
+          </p>
+          {deleteConflict.current !== null && (
+            <>
+              <p className="mt-2 text-xs text-muted-foreground">
+                いまの内容（{formatDateTime(deleteConflict.current.practice.updatedAt)} に更新）
+              </p>
+              <p className="mt-1 text-xs break-words">
+                種類: {deleteConflict.current.practice.kind} / 題:{' '}
+                {deleteConflict.current.practice.title}
+              </p>
+              <pre className="mt-1 max-h-48 overflow-auto rounded-md bg-muted p-2 text-xs break-words whitespace-pre-wrap select-text">
+                {deleteConflict.current.practice.content}
+              </pre>
+              <p className="mt-2 text-xs text-muted-foreground">
+                この内容でも消すなら、もう一度「削除」を押して確認してください。
+              </p>
+            </>
+          )}
+          <div className="mt-3">
+            <Button size="sm" onClick={() => setDeleteConflict(undefined)}>
+              閉じる
+            </Button>
+          </div>
+        </div>
+      )}
       {conflict !== undefined && (
         <div role="alert" className="mb-3 rounded-lg border border-destructive/50 p-3 text-sm">
           <p className="font-medium text-destructive">

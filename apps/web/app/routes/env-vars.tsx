@@ -30,17 +30,15 @@ import type { EnvVarScope, EnvVarView } from '@alteroid/logic';
  * からも呼べるようにしただけである（`.claude/skills/env-profile/SKILL.md`）。
  *
  * **CLI と同じ資格。** 読み出し（一覧・指紋）は `authenticate` だけで開くが、
- * 置く・外す（`PUT /credentials`）は `requireOwner`——宣言済み owner でなければ
- * 403 になる。ボタンは隠さない（`settings.tsx` の `ResetWorkspace` と同じ
- * 「なぜ押せないかを消さない」方針）。
+ * 置く・外す（`PUT /credentials`）は `requireOwner`——中身は素通しで、許可済みで
+ * ログインできるアカウントは全員持ち主として通る（2026-10-05 オーナー決定、#2862 / PR #2945）。
+ * 許可の無いアカウントは `authenticate` の 403。ボタンは隠さない。
  *
  * **⚠️ 2026-09-17 まで、この画面のボタンは押すと必ず 403 だった**（issue #1195）。
  * 資格が `requireOperator` だったためで、**ブラウザは構造的にそれを通れない**
  * ——「実行環境の持ち主」はサーバ上のファイルを読めることであって、提示できる
- * 秘密ではない。**2026-09-17〜18 の間は `grantedBy === 'operator'` の近似
- * （issue #1195）で通していたが、いまは `ownerDeclaredAt` の宣言（issue #1198）
- * へ置き換えてある**——宣言は `routes/access.tsx` から `alteroid access owner`
- * 相当のボタンで行う。**この画面は1バイトも変えていない**——直したのは
+ * 秘密ではない。**その後、近似（`grantedBy === 'operator'`）・`ownerDeclaredAt` の宣言と
+ * 門が移り、いまは許可済みなら全員通る。**この画面は1バイトも変えていない**——直したのは
  * デーモン側の門だけである。
  */
 export default function EnvVars() {

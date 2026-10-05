@@ -6,7 +6,6 @@ import { settingsDocumentTitle } from '~/lib/nav';
 import { maskUrl } from '@alteroid/core/mask-url';
 import { useState } from 'react';
 
-import { NotOwnerHint } from '~/components/not-owner-hint';
 import {
   Page,
   Badge,
@@ -45,8 +44,9 @@ import type {
  * - **保存は2段で確かめる。** stdio の登録は、次のセッションでクローンの SDK が
  *   起こすコマンドである（`apps/daemon/src/app.ts` の `GET /mcp-servers` の doc）。
  *   サーバ側に確認の印は無いので、押す前の確認だけが網になる
- * - **資格は `requireOwner`**（`/profile` と同じ）。ボタンは隠さず、宣言していない
- *   アカウントの 403 には宣言の仕方を案内する（`NotOwnerHint`）
+ * - **資格は `requireOwner`**（`/profile` と同じ。中身は素通しで、許可済みでログインできる
+ *   アカウントは全員持ち主。#2862）。ボタンは隠さない。403 は `authenticate` の「許可が無い」
+ *   ものだけで、持ち主の宣言の案内は出さない
  *
  * **形の検査はデーモンに任せる**（`parseMcpServers` が正本）。この画面が手元で
  * 止めるのは「JSON として読めない」と「`mcpServers` の欄が無い」だけで、これは
@@ -72,7 +72,6 @@ export default function McpServersPage() {
               onRetry={() => mutate()}
               retrying={isValidating}
             />
-            <NotOwnerHint failure={error} subject="MCP 連携の登録" />
             {isLoading ? <Spinner /> : data !== undefined && <McpServersView state={data} />}
           </div>
         </Card>
@@ -343,7 +342,6 @@ function McpServersEditor({ current }: { current: McpServersState }) {
         {failure instanceof ApiError && failure.status === 400 && (
           <p className="text-[11px] text-muted-foreground">前の登録がそのまま残っている。</p>
         )}
-        <NotOwnerHint failure={failure} subject="MCP 連携の登録" />
 
         {result !== null && <UpdateReport before={result.before} update={result.update} />}
       </div>

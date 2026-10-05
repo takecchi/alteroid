@@ -5,7 +5,7 @@
  * 部品（`ConversationList`）の既定はこのボタンを Tab の順路から外す（`tabIndex=-1`）が、
  * 従来の画面ではリンクの中のボタンも Tab で止まっていた。**移行で変えてよいのは見た目だけ**
  * なので、画面は `newConversationTabStop` でその振る舞いを保っている。この歯はその側を押さえる。
- * 見た目（選択中の行・往復の数の包み・入力欄の帯の地色）は新しいテーマの既定を採っており、
+ * 見た目（選択中の行・発言数の包み・入力欄の帯の地色）は新しいテーマの既定を採っており、
  * ここでは固定しない。
  */
 import { cleanup, render, screen } from '@testing-library/react';
@@ -60,9 +60,11 @@ const CONVERSATIONS = [
 ];
 
 let originalFetch: typeof fetch;
+let reachedStart: boolean | undefined;
 
 beforeEach(() => {
   originalFetch = globalThis.fetch;
+  reachedStart = true;
   localStorage.clear();
   storeTestBaseUrl();
   stubFetch((url) => {
@@ -71,7 +73,7 @@ beforeEach(() => {
     }
     if (url.includes('/approvals')) return json({ approvals: [] });
     if (url.includes('/conversations')) {
-      return json({ conversations: CONVERSATIONS, scanned: 40, reachedStart: true });
+      return json({ conversations: CONVERSATIONS, scanned: 40, reachedStart });
     }
     return undefined;
   });
@@ -90,5 +92,31 @@ describe('会話の一覧', () => {
     expect(button.hasAttribute('tabindex')).toBe(false);
     const link = button.closest('a');
     expect(link?.getAttribute('href')).toBe('/chat');
+  });
+
+  it('各行は「発言 N 件」と出し、窓が先頭に届いているなら「以上」を付けない', async () => {
+    renderChat(`/chat/${ACTIVE_ID}`);
+
+    const row = (await screen.findByText('別の会話')).closest('a');
+    expect(row?.textContent).toMatch(/発言 2 件$/);
+    expect(row?.textContent).not.toContain('往復');
+  });
+
+  it('reachedStart が false なら、どの行も「発言 N 件以上」と出す', async () => {
+    reachedStart = false;
+    renderChat(`/chat/${ACTIVE_ID}`);
+
+    const other = (await screen.findByText('別の会話')).closest('a');
+    expect(other?.textContent).toMatch(/発言 2 件以上$/);
+    const active = screen.getByText('選んでいる会話').closest('a');
+    expect(active?.textContent).toMatch(/発言 4 件以上$/);
+  });
+
+  it('reachedStart が無い応答では「以上」を付けない', async () => {
+    reachedStart = undefined;
+    renderChat(`/chat/${ACTIVE_ID}`);
+
+    const row = (await screen.findByText('別の会話')).closest('a');
+    expect(row?.textContent).toMatch(/発言 2 件$/);
   });
 });

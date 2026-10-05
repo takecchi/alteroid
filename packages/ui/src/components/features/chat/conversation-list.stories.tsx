@@ -61,6 +61,13 @@ export const Unread: Story = {
     />
   ),
 };
+/** 窓が先頭まで届いていない一覧。件数は下限なので「発言 N 件以上」と出す。 */
+export const WindowNotReachedStart: Story = {
+  args,
+  render: () => (
+    <Demo items={SAMPLE_CONVERSATIONS.map((item) => ({ ...item, messagesAtLeast: true }))} />
+  ),
+};
 export const Empty: Story = { args, render: () => <Demo empty /> };
 /** 取得に失敗して1件も読めていない。「まだ会話がない。」は出さず、失敗だけを言う（#2323）。 */
 export const Unavailable: Story = {

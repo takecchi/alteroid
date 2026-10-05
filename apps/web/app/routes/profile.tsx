@@ -2,7 +2,6 @@ import { SettingsTabs } from '~/components/group-tabs';
 import { settingsDocumentTitle } from '~/lib/nav';
 import { useState } from 'react';
 
-import { NotOwnerHint } from '~/components/not-owner-hint';
 import {
   Page,
   Badge,
@@ -71,13 +70,12 @@ const NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
  * `PUT|DELETE /profile/:name` と同じものを読み書きする。** 経路は新しく足していない
  * （AGENTS.md「画面の都合で API に経路を足さないこと」）。
  *
- * **資格は `requireOwner`**（`env-vars.tsx` の `PUT /credentials` と同じ）。宣言済み owner で
- * なければ読み書きとも 403 になる。**⚠️ この画面を足したとき（#1122）、門は
- * `requireOperator` だった**——ブラウザは「サーバ上のファイルを読めること」という資格を
- * 提示できないので、認証を有効にした構成では誰も開けなかった。人間へ上げ、2026-09-24 に
- * オーナーが `requireOwner` へ移すと決めた（`docs/architecture.md` も同じ PR で直した）。
- * ボタンは隠さない（`access.tsx` の宣言ボタンと同じ「押せない理由を消さない」方針）で、
- * 宣言していないアカウントの 403 には宣言の仕方を案内する。
+ * **資格は `requireOwner`**（`env-vars.tsx` の `PUT /credentials` と同じ）。ただし中身は素通しで、
+ * 許可済みでログインできるアカウントは全員持ち主として読み書きできる（2026-10-05 オーナー決定、
+ * #2862 / PR #2945）。弾くのは `authenticate` の 403（許可の無いアカウント）だけで、
+ * 宣言の案内は出さない。**⚠️ この画面を足したとき（#1122）、門は `requireOperator` だった**
+ * ——ブラウザは「サーバ上のファイルを読めること」という資格を提示できないので、認証を有効に
+ * した構成では誰も開けなかった。その後 `requireOwner`（宣言済み owner のみ）を経て、いまの形になった。
  *
  * **本文は既定で隠す。** `GET /profile` は本文を丸ごと返し、そこには鍵が入りうる
  * （`credentials` と違って指紋に畳まれていない）。画面を開いただけ・肩越しに
@@ -115,7 +113,6 @@ export default function Profile() {
               行は名前の辞書順につなげて効く（Linux の /etc/profile.d と同じ並べ方）。
             </p>
             <ErrorNote error={error} />
-            <NotOwnerHint failure={error} subject="実行環境プロファイル" />
             {data?.legacy === true && (
               <p className="text-[11px] break-words text-warn">{LEGACY_PROFILE_NOTICE}</p>
             )}
@@ -306,7 +303,6 @@ function EntryRow({
         </div>
       )}
       <ErrorNote error={failure} className="mt-2" />
-      <NotOwnerHint failure={failure} subject="実行環境プロファイル" />
     </li>
   );
 }
@@ -541,7 +537,6 @@ function ProfileEditor({
             前のプロファイルがそのまま残っている。
           </p>
         )}
-        <NotOwnerHint failure={failure} subject="実行環境プロファイル" />
       </div>
     </Card>
   );

@@ -54,3 +54,36 @@ describe('ConversationList: 未読の印', () => {
     expect(screen.getByText('来週の資料').className).not.toContain('font-semibold');
   });
 });
+
+describe('ConversationList: 発言数', () => {
+  function subline(messagesAtLeast: boolean | undefined): string {
+    render(
+      <ConversationList
+        items={[
+          {
+            id: 'c1',
+            preview: '来週の資料',
+            updatedLabel: '3 分前',
+            messages: 4,
+            ...(messagesAtLeast === undefined ? {} : { messagesAtLeast }),
+          },
+        ]}
+        activeId={undefined}
+        renderLink={(_target, slot) => <a className={slot.className}>{slot.children}</a>}
+      />,
+    );
+    return screen.getByText(/3 分前/).textContent ?? '';
+  }
+
+  it('「発言 N 件」と出す（往復とは言わない）', () => {
+    expect(subline(undefined)).toBe('3 分前 · 発言 4 件');
+  });
+
+  it('messagesAtLeast が偽なら「以上」を付けない', () => {
+    expect(subline(false)).toBe('3 分前 · 発言 4 件');
+  });
+
+  it('messagesAtLeast が真なら「発言 N 件以上」', () => {
+    expect(subline(true)).toBe('3 分前 · 発言 4 件以上');
+  });
+});

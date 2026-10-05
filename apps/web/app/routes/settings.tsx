@@ -723,14 +723,14 @@ function ShutdownDaemon() {
  * ないという重さの違いによる。**`reset` という語を打たせる**（`y` 1文字の
  * 誤打で通らないようにするため。CLI の `resetCommand` の確認と同じ判断）。
  *
- * **ボタンは常に出す。** 宣言済み owner（`requireOwner`。issue #1198）でなければ
- * `POST /reset` が 403 を返すが、隠さない——隠すと「なぜ押せないか」が消える
+ * **ボタンは常に出す。** `POST /reset` は `requireOwner`（中身は素通し。許可済みでログイン
+ * できるアカウントは全員持ち主。2026-10-05 オーナー決定、#2862 / PR #2945）で、許可の無い
+ * アカウントには `authenticate` の 403 が返る。隠さない——隠すと「なぜ押せないか」が消える
  * （`hooks/mutations.ts` の `useRemoveSchedule` の doc と同じ判断）。
  *
  * **⚠️ 2026-09-17 まで、ここは押すと必ず 403 だった**（issue #1195。`env-vars.tsx`
  * と同じ機序）。**2026-09-17〜18 の間は近似（`grantedBy === 'operator'`）で
- * 通していたが、いまは `ownerDeclaredAt` の宣言（issue #1198。`routes/access.tsx`
- * から行う）へ置き換えてある。**
+ * 通していた。その後の移し替えを経て、いまは許可済みなら全員通る。**
  */
 function ResetWorkspace() {
   const resetWorkspace = useResetWorkspace();

@@ -407,6 +407,7 @@ function ConversationList({
         preview: conversation.preview,
         updatedLabel: formatRelative(conversation.updatedAt),
         messages: conversation.messages,
+        messagesAtLeast: data.reachedStart === false,
         unread: conversation.unreadCount,
       }))}
       activeId={activeId}

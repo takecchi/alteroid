@@ -3348,7 +3348,7 @@ describe('runner だけが入れ替わったとき（デプロイ）', () => {
     // クローンにも届く。作業ディレクトリが消えている可能性まで言う。
     const notice = s.inbox.filter((event) => event.type === 'manager_message').at(-1);
     expect((notice as { text: string }).text).toContain('runner の器が作り直された');
-    expect((notice as { text: string }).text).toContain('コミット前の変更は失われている');
+    expect((notice as { text: string }).text).toContain('外へ保存していない作業は失われている');
 
     await s.pool.stop();
   });

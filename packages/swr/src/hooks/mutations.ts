@@ -255,12 +255,35 @@ export function useSavePractice() {
   );
 }
 
+/**
+ * やり方を消す。
+ *
+ * `ifMatch` は**読んだ時の版**（`GET /practices/{slug}` の `version`。クエリで送る。Issue #2959 / #2881）。
+ * 渡すと、いまの版と違えば**何も消さず** `PracticeConflictError` を投げる（`current` にいまの版）。
+ * 取り消せない操作なので、衝突しても自動では再送しない——呼び出し側がいまの内容を見せてから
+ * もう一度確認を取る。省略すると従来どおり（デーモンは応答に warning を載せて通す）。
+ */
 export function useDeletePractice() {
   const api = useApi();
   const { mutate } = useSWRConfig();
   return useCallback(
-    async (slug: string) => {
-      await api.api.DELETE('/practices/{slug}', { params: { path: { slug } } }).then(unwrap);
+    async (slug: string, ifMatch?: string) => {
+      const result = await api.api.DELETE('/practices/{slug}', {
+        params: { path: { slug }, query: ifMatch === undefined ? {} : { ifMatch } },
+      });
+      if (result.response.status === 409 && result.error !== undefined) {
+        // 衝突のときは、画面がいまの版を見せられるようキャッシュも引き直す。
+        await Promise.all([mutate(KEY.practices), mutate(KEY.practice(slug))]);
+        const body = result.error as {
+          error?: string;
+          current?: { practice: Practice; version: string } | null;
+        };
+        throw new PracticeConflictError(
+          body.error ?? 'やり方が読んだ後に変わっている',
+          body.current ?? null,
+        );
+      }
+      unwrap(result);
       await mutate(KEY.practices);
     },
     [api, mutate],

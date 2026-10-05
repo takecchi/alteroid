@@ -10,7 +10,7 @@
  *    で初めて、編集した登録をそのまま送る。JSON として読めないものは送らない
  * 3. **400 のときは不正な欄の位置（`error`）を出し、前のものが残ると言う**
  * 4. **外すのは空の `mcpServers` の `PUT`**（`alteroid mcp clear` と同じ）
- * 5. **403 は本文で出し分ける。** `requireOwner` の本文のときだけ持ち主の宣言を案内する
+ * 5. **403 に宣言の案内を出さない。** 本文が何であれ（かつての `requireOwner` の本文でも）、持ち主として宣言する手は案内しない（#2862）
  * 6. **保存したら 実行環境ごとの反映結果を出す**（配り損ねを小さく出さない）
  */
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
@@ -169,7 +169,7 @@ describe('/mcp-servers 画面 — 読む', () => {
     expect(screen.getByRole('button', { name: '編集する' })).toBeTruthy();
   });
 
-  it('requireOwner の 403 なら、持ち主として宣言する手を案内する', async () => {
+  it('かつての requireOwner の本文の 403 でも、持ち主の宣言は案内しない（#2862）', async () => {
     stubMcp({
       get: {
         status: 403,
@@ -181,11 +181,12 @@ describe('/mcp-servers 画面 — 読む', () => {
     expect(
       await screen.findByText('実行環境の持ち主として宣言されたアカウントだけが操作できる'),
     ).toBeTruthy();
-    expect(screen.getByText('alteroid access owner <アカウント id>')).toBeTruthy();
+    expect(screen.queryByText('alteroid access owner <アカウント id>')).toBeNull();
+    expect(screen.queryByText(/持ち主として宣言してください/)).toBeNull();
     expect(screen.queryByRole('button', { name: '編集する' })).toBeNull();
   });
 
-  it('本文から理由が判別できない 403 には案内を出さない', async () => {
+  it('許可の無い 403 にも、持ち主の宣言は案内しない', async () => {
     stubMcp({
       get: { status: 403, body: { error: 'このアカウントには alteroid を使う許可が無い' } },
     });
@@ -267,11 +268,10 @@ describe('/mcp-servers 画面 — 差し替える', () => {
     expect(puts).toEqual([{ mcpServers: { x: {} } }]);
     expect(screen.getByLabelText<HTMLTextAreaElement>('MCP サーバの新しい登録').value).toBe(bad);
     expect(screen.queryByRole('button', { name: '本当に保存する' })).toBeNull();
-    // 400 は持ち主の案内の対象ではない。
     expect(screen.queryByText('alteroid access owner <アカウント id>')).toBeNull();
   });
 
-  it('PUT が requireOwner の 403 なら、持ち主として宣言する手を案内する', async () => {
+  it('PUT がかつての requireOwner の本文の 403 でも、持ち主の宣言は案内しない', async () => {
     stubMcp({
       put: {
         status: 403,
@@ -287,7 +287,11 @@ describe('/mcp-servers 画面 — 差し替える', () => {
     fireEvent.click(screen.getByRole('button', { name: '保存する' }));
     fireEvent.click(screen.getByRole('button', { name: '本当に保存する' }));
 
-    expect(await screen.findByText('alteroid access owner <アカウント id>')).toBeTruthy();
+    expect(
+      await screen.findByText('実行環境の持ち主として宣言されたアカウントだけが操作できる'),
+    ).toBeTruthy();
+    expect(screen.queryByText('alteroid access owner <アカウント id>')).toBeNull();
+    expect(screen.queryByText(/持ち主として宣言してください/)).toBeNull();
     expect(screen.queryByText('前の登録がそのまま残っている。')).toBeNull();
   });
 
