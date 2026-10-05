@@ -8,7 +8,7 @@
  * 「置く・外すは既存の `PUT /credentials`（`GET`/`PUT /credentials` と同じ経路）
  * を呼ぶ」の各点。
  */
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
@@ -121,7 +121,7 @@ describe('/env-vars 画面 — 一覧', () => {
     expect(screen.getByText('GH_TOKEN')).toBeTruthy();
     expect(screen.getByText('共通')).toBeTruthy();
     expect(screen.getByText('シークレット')).toBeTruthy();
-    expect(screen.getByText(/指紋 sha256=a{12}/)).toBeTruthy();
+    expect(screen.getByText(/識別用の値 sha256=a{12}/)).toBeTruthy();
   });
 
   it('非 secret な行は値をそのまま出す', async () => {
@@ -146,7 +146,7 @@ describe('/env-vars 画面 — 一覧', () => {
     await waitForListLoaded();
 
     expect(screen.getByText('Asia/Tokyo')).toBeTruthy();
-    expect(screen.getByText('clone')).toBeTruthy();
+    expect(screen.getAllByText('クローンだけ').some((el) => el.tagName !== 'OPTION')).toBe(true);
     expect(screen.getByText('非シークレット')).toBeTruthy();
   });
 
@@ -170,7 +170,9 @@ describe('/env-vars 画面 — 一覧', () => {
     );
     await waitForListLoaded();
 
-    expect(screen.getByText('manager')).toBeTruthy();
+    expect(screen.getAllByText('マネージャーだけ').some((el) => el.tagName !== 'OPTION')).toBe(
+      true,
+    );
   });
 
   it('shadowsCloneEnv が立っている行には警告が出る', async () => {
@@ -194,7 +196,7 @@ describe('/env-vars 画面 — 一覧', () => {
     );
     await waitForListLoaded();
 
-    expect(await screen.findByText(/優先して配られている/)).toBeTruthy();
+    expect(await screen.findByText(/優先して渡されている/)).toBeTruthy();
   });
 
   /**
@@ -224,8 +226,8 @@ describe('/env-vars 画面 — 一覧', () => {
     );
     await waitForListLoaded();
 
-    expect(await screen.findByText(/manager にはいま何も配られていない/)).toBeTruthy();
-    expect(await screen.findByText(/manager にも配られ始める/)).toBeTruthy();
+    expect(await screen.findByText(/マネージャーにはいま何も渡されていない/)).toBeTruthy();
+    expect(await screen.findByText(/マネージャーにも渡され始める/)).toBeTruthy();
   });
 
   it('shadowsCloneEnv かつ scope: all の行には、manager 向けの注記（app 専用）は出ない', async () => {
@@ -249,8 +251,8 @@ describe('/env-vars 画面 — 一覧', () => {
     );
     await waitForListLoaded();
 
-    await screen.findByText(/優先して配られている/);
-    expect(screen.queryByText(/manager にはいま何も配られていない/)).toBeNull();
+    await screen.findByText(/優先して渡されている/);
+    expect(screen.queryByText(/マネージャーにはいま何も渡されていない/)).toBeNull();
   });
 
   it('1件も無ければ、その旨を言う', async () => {
@@ -270,7 +272,7 @@ describe('/env-vars 画面 — 一覧', () => {
 });
 
 describe('/env-vars 画面 — 置く・外す', () => {
-  it('名前・値・撒く先・シークレット可否を指定して置くと、PUT /credentials が呼ばれ一覧に出る', async () => {
+  it('名前・値・渡す先・シークレット可否を指定して置くと、PUT /credentials が呼ばれ一覧に出る', async () => {
     const { puts } = stubCrudScreen([]);
 
     render(
@@ -284,7 +286,7 @@ describe('/env-vars 画面 — 置く・外す', () => {
 
     fireEvent.change(screen.getByPlaceholderText('TZ'), { target: { value: 'tz' } });
     fireEvent.change(screen.getByLabelText('値'), { target: { value: 'Asia/Tokyo' } });
-    fireEvent.change(screen.getByLabelText('撒く先'), { target: { value: 'app' } });
+    fireEvent.change(screen.getByLabelText('渡す先'), { target: { value: 'app' } });
     fireEvent.click(screen.getByLabelText(/シークレット扱いにする/));
     fireEvent.click(screen.getByRole('button', { name: '置く' }));
 
@@ -315,6 +317,19 @@ describe('/env-vars 画面 — 置く・外す', () => {
     expect(await screen.findByText('NPM_TOKEN')).toBeTruthy();
 
     fireEvent.click(screen.getByRole('button', { name: '外す' }));
+    // 押しただけでは外さない（#2781）。確認を出し、まだ PUT していない。
+    const dialog = await screen.findByRole('alertdialog');
+    expect(screen.getByText('環境変数「NPM_TOKEN」を外しますか')).toBeTruthy();
+    expect(puts).toEqual([]);
+    fireEvent.click(within(dialog).getByRole('button', { name: 'やめる' }));
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+    expect(puts).toEqual([]);
+    expect(screen.getByText('NPM_TOKEN')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: '外す' }));
+    fireEvent.click(
+      within(await screen.findByRole('alertdialog')).getByRole('button', { name: '外す' }),
+    );
 
     await screen.findByText('置かれた環境変数がまだ1件も無い。');
     expect(puts).toEqual([[{ name: 'NPM_TOKEN', value: '' }]]);

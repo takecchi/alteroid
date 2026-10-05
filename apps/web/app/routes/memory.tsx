@@ -1,5 +1,5 @@
 import { MemoryTabs } from '~/components/group-tabs';
-import { useState } from 'react';
+import { useId, useState } from 'react';
 import { Link, useNavigate } from 'react-router';
 
 import { Page, Button, Card, Empty, ErrorNote, Input, Spinner } from '@alteroid/ui';
@@ -19,6 +19,7 @@ const SLUG_PATTERN = /^[a-z0-9][a-z0-9._-]*$/;
 export default function Memory() {
   const { data, error, isLoading } = useMemoryDocuments();
   const navigate = useNavigate();
+  const slugId = useId();
   const [slug, setSlug] = useState('');
 
   const documents = data?.documents ?? [];
@@ -34,16 +35,20 @@ export default function Memory() {
     <Page
       tabs={<MemoryTabs />}
       title="記憶"
-      description="クローンの価値観そのもの。人間がいつでも読んで直せることが信頼の要件（提供価値1）"
+      description="クローンの価値観そのもの。人間がいつでも読んで直せる"
     >
       <ErrorNote error={error} className="mb-4" />
 
       <Card className="mb-4 p-4">
         <p className="mb-2 text-sm font-medium">新しい記憶を書く</p>
+        <label htmlFor={slugId} className="mb-1 block text-xs text-muted-foreground">
+          名前（半角の英小文字・数字・. _ - のみ）
+        </label>
         <div className="flex gap-2">
           <Input
+            id={slugId}
             value={slug}
-            placeholder="slug（英小文字・数字・. _ - のみ）"
+            placeholder="例: work-style"
             onChange={(event) => setSlug(event.target.value)}
             onKeyDown={(event) => {
               if (event.key === 'Enter' && valid) void navigate(`/memory/${slug}`);
@@ -59,7 +64,7 @@ export default function Memory() {
         </div>
         {slug !== '' && !valid && (
           <p className="mt-1.5 text-xs text-destructive">
-            使えるのは英小文字・数字・`.` `_` `-` で、先頭は英数字。128 文字まで。
+            使えるのは半角の英小文字・数字と . _ - で、先頭は英数字。128 文字まで。
           </p>
         )}
       </Card>
@@ -77,21 +82,26 @@ export default function Memory() {
           <ul>
             {documents.map((document) => (
               <li key={document.slug} className="border-b border-border last:border-b-0">
-                <Link
-                  to={`/memory/${document.slug}`}
-                  className="flex items-center gap-3 px-4 py-3 hover:bg-muted"
-                >
+                {/* 行全体をリンクにしない（#2808）。リンクは題名だけにして、slug・サイズ・日時は
+                    選択・コピーできる文字にする。 */}
+                <div className="flex items-center gap-3 px-4 py-3 hover:bg-muted">
                   <div className="min-w-0 flex-1">
                     {/* 一覧の1行は Markdown 化の対象外（`components/markdown.tsx` の doc） */}
-                    <p className="truncate text-sm">
+                    <div className="flex items-baseline text-sm">
                       <span
-                        className="mr-1.5 text-[10px] text-muted-foreground"
+                        className="mr-1.5 shrink-0 text-[10px] text-muted-foreground"
                         title={kindHint(document.kind)}
                       >
-                        [{document.kind}]
+                        {kindLabel(document.kind)}
                       </span>
-                      {document.title}
-                    </p>
+                      {/* 押せる範囲は題名の行いっぱい（縦は上下に 4px ずつ足して 28px。-my で行の高さは変えない） */}
+                      <Link
+                        to={`/memory/${document.slug}`}
+                        className="-my-1 block min-w-0 truncate py-1 underline-offset-2 hover:underline"
+                      >
+                        {document.title}
+                      </Link>
+                    </div>
                     <p className="truncate font-mono text-[11px] text-muted-foreground">
                       {document.slug}
                     </p>
@@ -108,7 +118,7 @@ export default function Memory() {
                     {formatCreatedAtRelative(document.createdAt)} · 更新{' '}
                     {formatRelative(document.updatedAt)}
                   </span>
-                </Link>
+                </div>
               </li>
             ))}
           </ul>
@@ -127,14 +137,28 @@ export default function Memory() {
  * 「indexed」が何を意味するか分からないので、ここで意味を持たせる
  * （`packages/core/src/memory.ts` の `renderIndexedCard` の doc と同じ説明）。
  */
+/** 記憶の種別（内部の語）を利用者向けの名前にする。 */
+function kindLabel(kind: 'premise' | 'fact' | 'indexed'): string {
+  switch (kind) {
+    case 'premise':
+      return '前提';
+    case 'indexed':
+      return '特定の作業用';
+    case 'fact':
+      return '事実';
+    default:
+      return kind;
+  }
+}
+
 function kindHint(kind: 'premise' | 'fact' | 'indexed'): string {
   switch (kind) {
     case 'premise':
-      return 'premise: 判断の前提。毎ターン要旨と節の目次がクローンのプロンプトへ焼かれる（本文は開くまで載らない）。';
+      return '前提: 判断のよりどころ。クローンは毎回、要旨と見出しの一覧を見ている（本文は開いたときだけ読む）。';
     case 'indexed':
-      return 'indexed: 特定の作業でしか使わない記憶。毎ターン要旨だけが焼かれ、節の目次は焼かれない（節は memory_outline で確かめる）。';
+      return '特定の作業用: その作業のときにだけ使う記憶。クローンは毎回、要旨だけを見ている（見出しは必要なときに確かめる）。';
     case 'fact':
-      return 'fact: 事実の蓄積。毎ターン目次の1行だけが焼かれる（本文は開くまで載らない）。';
+      return '事実: 事実の蓄積。クローンは毎回、目次の1行だけを見ている（本文は開いたときだけ読む）。';
     default:
       return '';
   }

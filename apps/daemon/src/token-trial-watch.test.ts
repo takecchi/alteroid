@@ -479,6 +479,82 @@ describe('token-trial-watch: 現役の指名が読めない（issue #2125）', (
   });
 });
 
+describe('token-trial-watch: tick 全体の失敗で未処理の拒否を出さない（#2747）', () => {
+  let stderr: ReturnType<typeof vi.spyOn>;
+  let unhandled: unknown[];
+  const onUnhandled = (reason: unknown): void => {
+    unhandled.push(reason);
+  };
+
+  beforeEach(() => {
+    stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    unhandled = [];
+    process.on('unhandledRejection', onUnhandled);
+  });
+
+  afterEach(() => {
+    stderr.mockRestore();
+    process.off('unhandledRejection', onUnhandled);
+  });
+
+  function start(stores: Stores, trial: TokenTrialPort): ReturnType<typeof startTokenTrialWatch> {
+    return startTokenTrialWatch({
+      stores,
+      recordTrialVerdict: realRecordTrialVerdict(stores),
+      trial,
+      reconsider: () => Promise.resolve(ROTATED),
+      onOutcome: () => Promise.resolve(),
+      tickMs: 5,
+      now: () => AT,
+    });
+  }
+
+  function fallenLines(): string[] {
+    return stderr.mock.calls
+      .map((call: unknown[]) => String(call[0]))
+      .filter((line: string) => line.includes('認証トークンの試しが落ちました'));
+  }
+
+  it('stores.tokens.list() が投げても未処理の拒否にならず、stderr へ1行出して次の周期へ進む', async () => {
+    const stores = createMemoryStores();
+    await seedToken(stores, { id: 'a', order: 0, cooldownUntil: AT + 60 * 60 * 1000 });
+    let broken = true;
+    const realList = stores.tokens.list.bind(stores.tokens);
+    stores.tokens.list = () =>
+      broken ? Promise.reject(new Error('接続が切れた（テスト用）')) : realList();
+    stores.tokens.readActive = () =>
+      Promise.resolve({ tokenId: 'a', generation: 1, rotatedAt: '' });
+    const trial = fakeTrial({ verdict: 'undecidable', reason: 'まだ判定できない' });
+    const watch = start(stores, trial.port);
+
+    await vi.advanceTimersByTimeAsync(30);
+    expect(unhandled).toEqual([]);
+    expect(fallenLines().length).toBeGreaterThanOrEqual(1);
+    expect(fallenLines()[0]).toContain('接続が切れた（テスト用）');
+
+    // 周期は止まっていない: 直ったら次の周期で試しが走る。
+    broken = false;
+    await vi.advanceTimersByTimeAsync(30);
+    watch.stop();
+    expect(trial.calls).toEqual(['a']);
+    expect(unhandled).toEqual([]);
+  });
+
+  it('readActive() が UnreadableActiveTokenError 以外で投げても未処理の拒否にならない', async () => {
+    const stores = createMemoryStores();
+    await seedToken(stores, { id: 'a', order: 0, cooldownUntil: AT + 60 * 60 * 1000 });
+    stores.tokens.readActive = () => Promise.reject(new Error('読み取り失敗（テスト用）'));
+    const trial = fakeTrial({ verdict: 'usable' });
+    const watch = start(stores, trial.port);
+
+    await vi.advanceTimersByTimeAsync(30);
+    watch.stop();
+    expect(unhandled).toEqual([]);
+    expect(trial.calls).toEqual([]);
+    expect(fallenLines().length).toBeGreaterThanOrEqual(1);
+  });
+});
+
 describe('token-trial-watch: 試しが投げた例外の文は伏せ字を通す（#2607）', () => {
   it('Bearer・URL の資格が stderr の跡に出ない', async () => {
     const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);

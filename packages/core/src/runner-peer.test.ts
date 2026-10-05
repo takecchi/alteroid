@@ -130,7 +130,7 @@ describe('runner: peer の承認をクローンへ上げる', () => {
   type Json = Record<string, unknown>;
 
   /** `item/commandExecution/requestApproval` を1回上げてから、答えに応じて完了する偽の app-server。 */
-  function approvingAppServer(decisions: unknown[]): AgentChildProcess {
+  function approvingAppServer(decisions: unknown[], toolItems: Json[] = []): AgentChildProcess {
     const emitter = new EventEmitter();
     const stdin = new PassThrough();
     const stdout = new PassThrough();
@@ -148,6 +148,12 @@ describe('runner: peer の承認をクローンへ上げる', () => {
         if (typeof method !== 'string') {
           if (id !== undefined && id === approvalId) {
             decisions.push((message['result'] as Json | undefined)?.['decision']);
+            for (const item of toolItems) {
+              send({
+                method: 'item/completed',
+                params: { threadId: 'thr-peer', turnId: 'turn-1', item },
+              });
+            }
             send({
               method: 'item/completed',
               params: {
@@ -217,7 +223,7 @@ describe('runner: peer の承認をクローンへ上げる', () => {
     }) as unknown as AgentChildProcess;
   }
 
-  async function setupPeerCall() {
+  async function setupPeerCall(toolItems: Json[] = []) {
     const sdk = capturingQuery();
     const events: RunnerEvent[] = [];
     const decisions: unknown[] = [];
@@ -229,7 +235,7 @@ describe('runner: peer の承認をクローンへ上げる', () => {
       queryFn: sdk.fn,
       env: {},
       childUser: { uid: 1000, gid: 1000 },
-      spawnAgentProcessFn: () => approvingAppServer(decisions),
+      spawnAgentProcessFn: () => approvingAppServer(decisions, toolItems),
       peer: {
         host: peerHost,
         peers: ['codex'],
@@ -255,7 +261,7 @@ describe('runner: peer の承認をクローンへ上げる', () => {
     for (let i = 0; i < 20_000 && asks().length === 0; i += 1) {
       await new Promise((resolve) => setImmediate(resolve));
     }
-    return { host, client, call, asks, decisions, returned: () => returned };
+    return { host, client, call, asks, decisions, events, returned: () => returned };
   }
 
   it('承認は出所の印つきで ask に上がり、答えが出るまで peer_run は返らない。allow で codex へ accept が返る', async () => {
@@ -286,6 +292,46 @@ describe('runner: peer の承認をクローンへ上げる', () => {
     const result = await s.call;
     expect(s.decisions).toEqual(['decline']);
     expect(result.content[0]?.text).toContain('拒否した');
+    await s.client.close();
+    await s.host.shutdown();
+  });
+
+  it('peer が実行したツールは、actor=peer:<provider> の tool_use として降りる。失敗は note（#2753）', async () => {
+    const s = await setupPeerCall([
+      {
+        type: 'commandExecution',
+        id: 'c1',
+        command: 'ls -la',
+        cwd: '/work',
+        commandActions: [],
+        status: 'completed',
+        exitCode: 0,
+      },
+      {
+        type: 'commandExecution',
+        id: 'c2',
+        command: 'false',
+        cwd: '/work',
+        commandActions: [],
+        status: 'failed',
+        exitCode: 1,
+      },
+    ]);
+    const ask = s.asks()[0]!;
+    await s.host.answer('mgr-1', {
+      requestId: ask.requestId,
+      message: 'いいよ',
+      decision: 'allow',
+    });
+    await s.call;
+    const toolUses = s.events.filter((e) => e.type === 'tool_use');
+    expect(toolUses).toHaveLength(1);
+    expect(toolUses[0]).toMatchObject({ actor: 'peer:codex' });
+    expect(JSON.stringify(toolUses[0])).toContain('ls -la');
+    const failures = s.events.filter(
+      (e) => e.type === 'note' && e.text.includes('actor=peer:codex'),
+    );
+    expect(failures).toHaveLength(1);
     await s.client.close();
     await s.host.shutdown();
   });

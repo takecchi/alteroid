@@ -35,7 +35,15 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { createMemoryRouter, RouterProvider, useParams } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { json, Providers, storeTestBaseUrl, stubFetch, type Route } from '~/test-support';
+import {
+  findShownConversation,
+  queryShownConversation,
+  json,
+  Providers,
+  storeTestBaseUrl,
+  stubFetch,
+  type Route,
+} from '~/test-support';
 
 import Chat, { describeCloneInterruptOutcome } from './chat';
 
@@ -284,7 +292,7 @@ describe('会話を切り替えた後に届いた応答（#1548 / #1570）', () 
 
     await router.navigate(`/chat/${OTHER_CONVERSATION_ID}`);
     // B の画面に切り替わったことを確かめる（ヘッダーの会話 id 表示）。
-    expect(await screen.findByText(OTHER_CONVERSATION_ID)).toBeTruthy();
+    expect(await findShownConversation(OTHER_CONVERSATION_ID)).toBeTruthy();
 
     /*
      * 切り替わったこと（DOM のテキスト）は render の commit で分かるが、
@@ -358,14 +366,14 @@ describe('会話を切り替えた後に届いた応答（#1548 / #1570）', () 
      */
     let releasedInWindow = false;
     const observer = new MutationObserver(() => {
-      if (releasedInWindow || screen.queryByText(OTHER_CONVERSATION_ID) === null) return;
+      if (releasedInWindow || queryShownConversation(OTHER_CONVERSATION_ID) === null) return;
       releasedInWindow = true;
       observer.disconnect();
       releaseInterrupt();
     });
     observer.observe(document.body, { childList: true, subtree: true, characterData: true });
     await router.navigate(`/chat/${OTHER_CONVERSATION_ID}`);
-    expect(await screen.findByText(OTHER_CONVERSATION_ID)).toBeTruthy();
+    expect(await findShownConversation(OTHER_CONVERSATION_ID)).toBeTruthy();
     expect(releasedInWindow).toBe(true);
     await waitFor(() => {
       expect((interruptButton() as HTMLButtonElement).disabled).toBe(false);

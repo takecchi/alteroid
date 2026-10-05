@@ -118,9 +118,9 @@ function renderSchedule(): void {
 
 describe('継続する依頼を仕込む', () => {
   async function fill(kind: string, request: string): Promise<void> {
-    const kindBox = await screen.findByPlaceholderText(/kind/);
+    const kindBox = await screen.findByLabelText(/依頼の名前/);
     fireEvent.change(kindBox, { target: { value: kind } });
-    const requestBox = screen.getByPlaceholderText(/依頼の本文/);
+    const requestBox = screen.getByLabelText('依頼の本文');
     fireEvent.change(requestBox, { target: { value: request } });
   }
 
@@ -199,11 +199,29 @@ describe('継続する依頼を仕込む', () => {
 });
 
 describe('継続中の依頼を外す', () => {
-  it('依頼には「外す」があり、DELETE を打つ', async () => {
+  it('「外す」を押しただけでは外さず、確認を出す。やめれば外さない（#2781）', async () => {
     stubSchedule([REQUEST_ENTRY]);
     renderSchedule();
 
     fireEvent.click(await screen.findByRole('button', { name: '外す' }));
+
+    expect(await screen.findByRole('alertdialog')).toBeTruthy();
+    expect(screen.getByText('予定「morning-issues」を外しますか')).toBeTruthy();
+    expect(sent).toHaveLength(0);
+
+    fireEvent.click(screen.getByRole('button', { name: 'やめる' }));
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+    expect(sent).toHaveLength(0);
+  });
+
+  it('依頼には「外す」があり、確認で外すと DELETE を打つ', async () => {
+    stubSchedule([REQUEST_ENTRY]);
+    renderSchedule();
+
+    fireEvent.click(await screen.findByRole('button', { name: '外す' }));
+    fireEvent.click(
+      within(await screen.findByRole('alertdialog')).getByRole('button', { name: '外す' }),
+    );
 
     await waitFor(() => {
       expect(sent).toHaveLength(1);
@@ -284,11 +302,11 @@ describe('横並びの積み替え（本4-B）: flex-wrap と break-words', () =
     expect(tokens).toContain('flex-wrap');
   });
 
-  it('kind の表示に break-words が付いている', async () => {
-    stubSchedule([DEFAULT_ENTRY]);
+  it('利用者が付けた名前の表示に break-words が付いている', async () => {
+    stubSchedule([REQUEST_ENTRY]);
     renderSchedule();
 
-    const kind = await screen.findByText('daily_report');
+    const kind = await screen.findByText('morning-issues');
     const tokens = kind.className.split(/\s+/);
     expect(tokens).toContain('break-words');
   });
@@ -307,7 +325,8 @@ describe('仕込まれた依頼を編集できる（#496）', () => {
     renderSchedule();
 
     // 仕込まれた依頼（SPEC_ENTRY）の行にだけ「編集」が出る。
-    await screen.findByText('daily_report');
+    await screen.findByText('毎日 22:00 に日報');
+    expect(screen.queryByText('daily_report')).toBeNull();
     expect(screen.getAllByRole('button', { name: '編集' })).toHaveLength(1);
   });
 
@@ -411,7 +430,7 @@ describe('/schedule 画面: 読めない継続中の依頼の断り', () => {
     );
     renderSchedule();
 
-    expect(await screen.findByText(DEFAULT_ENTRY.kind)).toBeTruthy();
+    expect(await screen.findByText(DEFAULT_ENTRY.description)).toBeTruthy();
     const note = await screen.findByText(/読めない継続中の依頼が 2 件ある/);
     expect(note.textContent).toContain('kind: broken-1');
     expect(note.textContent).toContain('壊れた行であって、消された依頼ではない');
@@ -432,5 +451,46 @@ describe('/schedule 画面: 読めない継続中の依頼の断り', () => {
 
     expect(await screen.findByText(/登録された定期ジョブが無い（/)).toBeTruthy();
     expect(screen.queryByText(/読めない/)).toBeNull();
+  });
+});
+
+describe('定期ジョブの行の説明文の列（#2755）', () => {
+  it('説明文の列は最小幅を持つ（flex-basis 0 のまま 46px に潰れない）', async () => {
+    // jsdom はレイアウトを持たず折り返しを測れない（390px で説明文の列が約46px、
+    // 1行2〜3文字に潰れた実寸はブラウザで測った）。潰れを防ぐ指定そのもの＝
+    // 最小幅を持つこと、`min-w-0`（最小幅を0にする指定）に戻らないことを固定する。
+    stubSchedule([DEFAULT_ENTRY]);
+    renderSchedule();
+
+    const column = (await screen.findByText(DEFAULT_ENTRY.description)).parentElement;
+    expect(column?.className).toContain('min-w-[min(14rem,100%)]');
+    expect(column?.className).not.toMatch(/(^|\s)min-w-0(\s|$)/);
+  });
+});
+
+/**
+ * 入力欄の名前は、入力するとプレースホルダが消えても残らなければならない（#2787）。
+ * `getByLabelText` で引けることは、`<label>` か `aria-label` が在ることの証拠である。
+ */
+describe('入力欄にラベルが在る（#2787）', () => {
+  it('依頼の名前・依頼の本文・送り元・知らせの内容が、ラベルで引ける', async () => {
+    stubSchedule([DEFAULT_ENTRY]);
+    renderSchedule();
+
+    const kind = await screen.findByLabelText(/依頼の名前/);
+    fireEvent.change(kind, { target: { value: 'x' } });
+    // 入力してもラベルは残る（プレースホルダは消える）。
+    expect(screen.getByLabelText(/依頼の名前/)).toBe(kind);
+    expect(screen.getByLabelText('依頼の本文')).toBeTruthy();
+    expect(screen.getByLabelText('送り元の名前')).toBeTruthy();
+    expect(screen.getByLabelText('知らせの内容')).toBeTruthy();
+  });
+
+  it('既定の仕込みの内部の名前（kind）を利用者に見せない（#2782）', async () => {
+    stubSchedule([DEFAULT_ENTRY]);
+    renderSchedule();
+
+    await screen.findByText('毎日 22:00 に日報');
+    expect(screen.queryByText('daily_report')).toBeNull();
   });
 });

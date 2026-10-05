@@ -1,5 +1,5 @@
-import { writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { readFile, rm, writeFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -462,5 +462,100 @@ describe('alteroid memory の読み出しの失敗の理由', () => {
       if (savedEditor === undefined) delete process.env.EDITOR;
       else process.env.EDITOR = savedEditor;
     }
+  });
+
+  it('edit: エディタが無い（127）とき、EDITOR / VISUAL と memory set を案内する（#2867）', async () => {
+    captureStdout();
+    const savedEditor = process.env.EDITOR;
+    const savedVisual = process.env.VISUAL;
+    delete process.env.VISUAL;
+    process.env.EDITOR = 'alteroid-no-such-editor-2867';
+    replies.push({ status: 404, body: { error: 'not found' } });
+    try {
+      const error = await memoryEditCommand('values').catch((e: unknown) => e);
+      expect(String(error)).toContain('エディタ「alteroid-no-such-editor-2867」を起動できない');
+      expect(String(error)).toContain('VISUAL か EDITOR');
+      expect(String(error)).toContain('alteroid memory set <slug> --file <path>');
+      expect(String(error)).not.toContain('異常終了しました');
+    } finally {
+      if (savedEditor === undefined) delete process.env.EDITOR;
+      else process.env.EDITOR = savedEditor;
+      if (savedVisual !== undefined) process.env.VISUAL = savedVisual;
+    }
+  });
+
+  /** Issue #2743: 読んだ版を持ち回り、エディタを開いている間の別の書き手を黙って消さない。 */
+  describe('edit の前提の版（Issue #2743）', () => {
+    let savedEditor: string | undefined;
+    beforeEach(() => {
+      savedEditor = process.env.EDITOR;
+      // 保存して閉じる、を模す（人間が1行足した）。
+      process.env.EDITOR = `sh -c 'printf "人間の編集\\n" > "$1"' _`;
+    });
+    afterEach(() => {
+      if (savedEditor === undefined) delete process.env.EDITOR;
+      else process.env.EDITOR = savedEditor;
+    });
+
+    it('GET で読んだ version を、PUT の ifMatch に載せる', async () => {
+      captureStdout();
+      replies.push({
+        status: 200,
+        body: { document: { slug: 'values', content: '# 価値観\n' }, version: 'v-read' },
+      });
+      replies.push({ status: 200, body: {} });
+
+      await memoryEditCommand('values');
+
+      expect(sent[1]?.method).toBe('PUT');
+      expect(JSON.parse(sent[1]?.body ?? '{}')).toEqual({
+        content: '人間の編集\n',
+        ifMatch: 'v-read',
+      });
+    });
+
+    it('無い記憶を作るときは ifMatch: null（読んだ時には無かった）', async () => {
+      captureStdout();
+      replies.push({ status: 404, body: { error: 'not found' } });
+      replies.push({ status: 200, body: {} });
+
+      await memoryEditCommand('values');
+
+      expect(JSON.parse(sent[1]?.body ?? '{}')).toEqual({ content: '人間の編集\n', ifMatch: null });
+    });
+
+    it('409 のとき、人間が書いた内容を消さずに残し、パスと次の手を示して失敗する', async () => {
+      const out = captureStdout();
+      replies.push({
+        status: 200,
+        body: { document: { slug: 'values', content: '# 価値観\n' }, version: 'v-read' },
+      });
+      replies.push({
+        status: 409,
+        body: {
+          error: '変わっています',
+          current: {
+            document: { slug: 'values', content: '# 価値観\n\nクローンの判断\n' },
+            version: 'v-now',
+          },
+        },
+      });
+
+      const error = await memoryEditCommand('values').catch((e: unknown) => e);
+
+      expect(error).toBeInstanceOf(Error);
+      expect(String(error)).toContain('書き換えませんでした');
+      const text = out();
+      const mine = /あなたの編集（残してあります）: (\S+)/.exec(text)?.[1];
+      const theirs = /いまの記憶: (\S+)/.exec(text)?.[1];
+      expect(mine).toBeDefined();
+      expect(theirs).toBeDefined();
+      // 人間が書いた内容も、いまの版も、読める形で残っている。
+      expect(await readFile(mine ?? '', 'utf8')).toBe('人間の編集\n');
+      expect(await readFile(theirs ?? '', 'utf8')).toContain('クローンの判断');
+      expect(text).toContain('diff -u');
+      expect(text).toContain('alteroid memory edit values');
+      await rm(dirname(mine ?? ''), { recursive: true, force: true });
+    });
   });
 });

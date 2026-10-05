@@ -32,8 +32,14 @@ export interface ScheduleEntry {
   description: string;
   /** `after` より後の最初の発火時刻。 */
   nextAt(after: Date): Date;
-  /** 発火時に受信箱へ積むイベント。 */
-  event(at: Date): InboxEvent;
+  /**
+   * 発火時に受信箱へ積むイベント。
+   *
+   * `scheduledAt` は `tick()` の定刻の発火だけが渡す、**予定されていた時刻**（`due`）。
+   * 止まっていたプロセスが再開した刻みでは `at`（実際に刻みが回った時刻）より大きく
+   * 前になりうる。「その予定の日」を運びたいエントリ（日報）だけが読む。
+   */
+  event(at: Date, scheduledAt?: Date): InboxEvent;
   /**
    * 落ちていた間に過ぎた予定を、起き直したときに1回だけ拾うか（省略時は拾う）。
    *
@@ -110,6 +116,17 @@ export interface Scheduler {
   run(kind: string): boolean;
   /** 期限が来たものを起こす。内部タイマーとテストの共通経路。 */
   tick(now?: Date): string[];
+  /**
+   * 「この回は動いていない」を受け取り、次回を**短い間隔で**据え直す（#2741）。
+   *
+   * 発火の時点で `#due` は次の周期へ進めてある。引き受け（`claimRun`）が読めない・書けない
+   * で動かなかった回は保存された状態が何も変わらないので、そのままだと再起動まで
+   * 取り戻せない（週次なら1週間）。据え直す先は `SCHEDULE_RETRY_MS` 後で、本来の次回の方が
+   * 早ければそちらを残す。再試行の発火も同じ `claimRun` を通るので、動けば本来の次回へ戻る。
+   * `delayMs` で間隔を変えられる（#2739: ターンが失敗で終わった回は後退させる）。
+   * 知らない kind・もう予定の無い kind は何もしない。
+   */
+  retrySoon(kind: string, delayMs?: number): void;
   /**
    * 永続化された「定期の依頼」を読み直して、仕込みを合わせる。
    *
@@ -197,6 +214,12 @@ function dueFromSeed(entry: ScheduleEntry, seed: Date, now: Date): { at: Date; c
     catchUp: false,
   };
 }
+
+/**
+ * 引き受けに失敗した回を据え直す間隔（`Scheduler.retrySoon`）。内部タイマーの刻み
+ * （最大1分）と同じ桁で、失敗が続いても再試行は1分に1回を超えない（回数の上限ではなく間隔）。
+ */
+export const SCHEDULE_RETRY_MS = 60_000;
 
 export function createScheduler(options: SchedulerOptions): Scheduler {
   return new TimerScheduler(options);
@@ -564,6 +587,18 @@ class TimerScheduler implements Scheduler {
     return [...this.#base, ...[...this.#requests.values()].map((held) => held.entry)];
   }
 
+  retrySoon(kind: string, delayMs: number = SCHEDULE_RETRY_MS): void {
+    const due = this.#due.get(kind);
+    if (due === undefined) return;
+    // 明示の再試行なので、同じ回の配り直しを「もう配った」と数えない（#2739。数えると、
+    // 配り直した回がまた失敗したとき、次の刻みが元の回ではなく新しい回になる）。
+    this.#redelivered.delete(kind);
+    const retryAt = this.#now().getTime() + Math.max(delayMs, 0);
+    if (due <= retryAt) return;
+    this.#due.set(kind, retryAt);
+    this.#arm();
+  }
+
   tick(now: Date = this.#now()): string[] {
     const fired: string[] = [];
     for (const entry of this.#entries()) {
@@ -611,7 +646,7 @@ class TimerScheduler implements Scheduler {
       // 位相も post の前に進める（`#due` と同じ理由）。既定の仕込みだけが対象で、
       // 失敗しても時計は止まらない（`#recordPhase` に倒れる向きを書いてある）。
       this.#recordPhase(entry, now, 'schedule');
-      const event = entry.event(now);
+      const event = entry.event(now, new Date(due));
       // **`cause` を上書きするのは `timer` / `self_initiative` 型で、かつ本当に
       // catch-up のときだけ。** 継続中の依頼（`timer`）と発意 tick
       // （`self_initiative`）は `#seedBase` / `#reconcile` の両方が `#catchUp` を
@@ -776,8 +811,11 @@ export const DAILY_REPORT_KIND = 'daily_report';
 /**
  * 日報 — 時間起点ジョブの最初の実例（PRD「可観測性」）。
  *
- * 1日の終わりに、その日を締める。締め時刻に発火し、対象日は**発火時刻の
- * ローカル日付**である。
+ * 1日の終わりに、その日を締める。締め時刻に発火し、対象日は**予定時刻（締め時刻）の
+ * ローカル日付**である（実際に刻みが回った時刻ではない。常駐したまま予定時刻をまたいで
+ * 止まり、翌朝に再開した刻みでも、止まっていた日の日報を作る — #2740）。複数日止まった
+ * ときは、まとめ撃ちせず、最初に過ぎた予定の日（`due`）の1本だけを積む。間の日は
+ * プロセスが止まっていて記録が無く、動き直した後の記録は起動時の `missingDailyReportDates` が拾う。
  */
 export function dailyReportEntry(options: { at: TimeOfDay }): ScheduleEntry {
   const { at } = options;
@@ -797,8 +835,8 @@ export function dailyReportEntry(options: { at: TimeOfDay }): ScheduleEntry {
       const tomorrow = new Date(after.getFullYear(), after.getMonth(), after.getDate() + 1);
       return atTimeOnDay(tomorrow, at);
     },
-    event(firedAt) {
-      return dailyReportEvent(localDate(firedAt), firedAt);
+    event(firedAt, scheduledAt) {
+      return dailyReportEvent(localDate(scheduledAt ?? firedAt), firedAt);
     },
   };
 }

@@ -362,6 +362,7 @@ function fakeScheduler() {
       ran.push(kind);
       return kind === 'daily_report';
     },
+    retrySoon() {},
     tick() {
       return [];
     },
@@ -454,6 +455,7 @@ describe('managerSummarySchema と ManagerSummary のキーの一致（再発防
       live: true,
       runnerLostSince: true,
       runnerVanished: true,
+      runnerListedAt: true,
       sessionMissingSince: true,
       sessionMissingKind: true,
       shutdownObservationArrivedAfterSwap: true,
@@ -486,6 +488,7 @@ describe('managerSummarySchema と ManagerSummary のキーの一致（再発防
       tokenGeneration: true,
       activeTokenGeneration: true,
       tokenGenerationUnknownReason: true,
+      liveBackgroundTasks: true,
       resetTimeSkewMatch: true,
       lastUnpushedWorkObservation: true,
       lastRescue: true,
@@ -880,6 +883,78 @@ describe('HTTP API', () => {
     // 人間による書き換えも日誌に残る
     const entries = await stores.journal.list({ types: ['memory_update'] });
     expect(entries[0]).toMatchObject({ cause: 'human', slug: 'values' });
+  });
+
+  /**
+   * Issue #2743。人間の書き換え（PUT）は、読んだ版を前提に付けられる（`ifMatch`）。
+   * 読んでから書くまでの間にクローンが書いていたら、黙って上書きせず 409 で返し、
+   * **いまの版を一緒に返す**（人間が自分の編集を捨てずに見比べられる）。
+   */
+  describe('PUT /memory/:slug の前提版（ifMatch、Issue #2743）', () => {
+    const put = (body: unknown) => app.request('/memory/values', { ...json(body), method: 'PUT' });
+    const readVersion = async () =>
+      ((await (await app.request('/memory/values')).json()) as { version: string }).version;
+
+    it('読んだ後にクローンが書いたなら、ifMatch 付きの PUT は 409 で、クローンの書き込みは消えない', async () => {
+      await stores.persona.write('values', '# 価値観\n\nV1\n');
+      const version = await readVersion();
+
+      // 人間がエディタを開いている間に、クローンが同じ文書へ書く（V2）。
+      await stores.persona.write('values', '# 価値観\n\nV1\n\nクローンが蒸留した判断\n');
+
+      const res = await put({
+        content: '# 価値観\n\nV1（人間が別の箇所を直した）\n',
+        ifMatch: version,
+      });
+      expect(res.status).toBe(409);
+      const body = (await res.json()) as {
+        error: string;
+        current: { document: { content: string }; version: string } | null;
+      };
+      expect(body.current?.document.content).toContain('クローンが蒸留した判断');
+
+      // 黙って上書きされていない。日誌にも人間の書き込みは積まれない。
+      expect((await stores.persona.read('values'))?.content).toContain('クローンが蒸留した判断');
+      expect(await stores.journal.list({ types: ['memory_update'] })).toEqual([]);
+    });
+
+    it('ifMatch が最新と一致していれば書ける。応答の version は次の ifMatch に使える', async () => {
+      await stores.persona.write('values', '# 価値観\n\nV1\n');
+      const version = await readVersion();
+
+      const first = await put({ content: '# 価値観\n\nV2\n', ifMatch: version });
+      expect(first.status).toBe(200);
+      const next = ((await first.json()) as { version: string }).version;
+      expect(next).not.toBe(version);
+
+      const second = await put({ content: '# 価値観\n\nV3\n', ifMatch: next });
+      expect(second.status).toBe(200);
+    });
+
+    it('ifMatch: null は「読んだ時は無かった」。その間に作られていれば 409、無ければ作れる', async () => {
+      const created = await put({ content: '# 新しい\n', ifMatch: null });
+      expect(created.status).toBe(200);
+      const again = await put({ content: '# 別の内容\n', ifMatch: null });
+      expect(again.status).toBe(409);
+      expect((await stores.persona.read('values'))?.content).toBe('# 新しい\n');
+    });
+
+    it('読んだ後に消されていたら、ifMatch 付きの PUT は 409（current は null）', async () => {
+      await stores.persona.write('values', '# 価値観\n');
+      const version = await readVersion();
+      await stores.persona.remove('values');
+      const res = await put({ content: '# 価値観（人間）\n', ifMatch: version });
+      expect(res.status).toBe(409);
+      expect(((await res.json()) as { current: unknown }).current).toBeNull();
+    });
+
+    it('ifMatch を付けない従来の PUT は、これまでどおり後勝ちで書ける（後方互換）', async () => {
+      await stores.persona.write('values', '# 価値観\n\nV1\n');
+      await stores.persona.write('values', '# 価値観\n\nV2\n');
+      const res = await put({ content: '# 価値観\n\n全文置換\n' });
+      expect(res.status).toBe(200);
+      expect((await stores.persona.read('values'))?.content).toBe('# 価値観\n\n全文置換\n');
+    });
   });
 
   it('人間の書き換え（PUT）にも action: "write" が構造として載る', async () => {

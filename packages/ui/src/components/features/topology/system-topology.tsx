@@ -102,7 +102,7 @@ const KIND: Record<NodeKind, { icon: LucideIcon; role: string }> = {
 /**
  * 稼働状況の図。**いま誰が何をしていて、どの線を指示と報告が行き来しているか**を1枚で見せる。
  *
- * 器（デーモン・manager-runner・DB）を枠で、層（人間・クローン・マネージャー・作業者）を
+ * 器（デーモン・runner ごとの枠・DB）を枠で、層（人間・クローン・マネージャー・作業者）を
  * 札で描き、線の上を流れる光で「いま動いている経路」を言う。下りの光（指示）は
  * `primary`、上りの光（報告・確認）は `chart-4` の色で、向きでも色でも見分けられる。
  *
@@ -184,7 +184,9 @@ export function SystemTopology({ layout = 'auto', className, ...rawScene }: Syst
               <div className="flex h-full items-center justify-center rounded-md border border-dashed px-2 text-center text-xs text-muted-foreground">
                 {(rawScene.unreadableCount ?? 0) > 0
                   ? `読めたマネージャーはいません（読めない行が ${rawScene.unreadableCount} 件ある。居ないとは限らない）`
-                  : '走っているマネージャーはいません'}
+                  : rawScene.runners.length === 0
+                    ? '稼働中の器（runner）はありません'
+                    : '走っているマネージャーはいません'}
               </div>
             </foreignObject>
           ) : null}
@@ -249,11 +251,13 @@ function redactScene(scene: TopologyScene, body: (text: string) => string): Topo
   };
 }
 
-function summarize({ clone, db, runner, managers }: TopologyScene): string {
+function summarize({ clone, db, runners, managers }: TopologyScene): string {
   const parts = [
     `クローン: ${STATUS[clone.status].label}${clone.task ? `（${clone.task}）` : ''}`,
     `記憶ストア: ${STATUS[db.status].label}`,
-    `manager-runner: ${STATUS[runner.status].label}`,
+    runners.length === 0
+      ? '稼働中の器（runner）: なし'
+      : `runner: ${runners.map((r) => `${r.label} ${STATUS[r.status].label}`).join('、')}`,
     ...managers.map((m) => {
       const ws = (m.workers ?? []).map((w) => `${w.label} ${STATUS[w.status].label}`).join('、');
       return `マネージャー ${m.label}: ${STATUS[m.status].label}${ws ? `。作業者 ${ws}` : ''}`;
@@ -261,6 +265,12 @@ function summarize({ clone, db, runner, managers }: TopologyScene): string {
   ];
   return parts.join('。');
 }
+
+/** 枠の名前の補足（ツールチップ）。表示の名前は日本語で、正式な英字の名前はここにだけ残す。 */
+const CONTAINER_HINT: Record<string, string> = {
+  db: '記憶の置き場（db）',
+  daemon: 'alteroid 本体（alteroidd）',
+};
 
 function Container({
   container: { key, box, label, state, labelAlign },
@@ -271,6 +281,7 @@ function Container({
   const unknown = state === 'unknown';
   return (
     <g data-container={key} data-state={state}>
+      {CONTAINER_HINT[key] ? <title>{CONTAINER_HINT[key]}</title> : null}
       <rect
         x={box.x}
         y={box.y}

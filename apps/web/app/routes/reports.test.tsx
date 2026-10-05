@@ -4,11 +4,18 @@
  * **「日報の本文が描画経路を通ること」だけ**（Markdown が正しく描かれるかは
  * `markdown.test.tsx` の仕事）。
  */
-import { cleanup, render, screen } from '@testing-library/react';
-import { createMemoryRouter, RouterProvider } from 'react-router';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { createMemoryRouter, RouterProvider, useParams } from 'react-router';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { json, Providers, stubFetch, storeTestBaseUrl } from '~/test-support';
+import {
+  DEFAULT_VIEWPORT_WIDTH,
+  json,
+  Providers,
+  setViewportWidth,
+  stubFetch,
+  storeTestBaseUrl,
+} from '~/test-support';
 
 import Reports from './reports';
 
@@ -87,6 +94,27 @@ function renderReports(loaderData: { date?: string; reportId?: string } = {}) {
       { path: '/schedule', Component: () => null },
     ],
     { initialEntries: ['/reports'] },
+  );
+  return render(
+    <Providers>
+      <RouterProvider router={router} />
+    </Providers>,
+  );
+}
+
+/** 本番と同じ経路（`/reports/:date?/:reportId?`）に URL で入る。 */
+function renderReportsAtUrl(url: string) {
+  function Routed() {
+    const { date, reportId } = useParams();
+    return <ReportsRoute loaderData={{ date, reportId }} />;
+  }
+  const router = createMemoryRouter(
+    [
+      { path: '/reports/:date?/:reportId?', Component: Routed },
+      { path: '/journal', Component: () => null },
+      { path: '/schedule', Component: () => null },
+    ],
+    { initialEntries: [url] },
   );
   return render(
     <Providers>
@@ -276,7 +304,7 @@ describe('日報', () => {
 
     renderReports();
 
-    await screen.findByText('2026-08-19 07:00');
+    await screen.findAllByText('2026-08-19 の日報');
     const order = screen
       .getAllByRole('link')
       .map((link) => link.getAttribute('href'))
@@ -341,12 +369,20 @@ describe('日報', () => {
     renderReports();
 
     // 2件が別々の行として並ぶまで待つ。
-    await screen.findByText('2026-08-20 09:30');
+    await screen.findAllByText('2026-08-20 の日報');
 
-    // 日の軸は `report.date` である。`formatDateTime(at)` を使っていれば、遡り生成の
-    // 側が '08/21' に化けてここが落ちる（＝症状が戻ったことを検知する）。
-    expect(rowFor('r-catchup').textContent).toBe('2026-08-20 09:30');
-    expect(rowFor('r-close').textContent).toBe('2026-08-20 07:00');
+    // 日の軸は `report.date` である（題）。書かれた日時は日付つきで別に出す（#2779）。
+    // 時:分だけだと、翌日に書かれた遡り生成が「その日の 09:30」に読めた。
+    // 年は今年なら付かないので部分一致で見る。
+    const catchup = rowFor('r-catchup').textContent ?? '';
+    const close = rowFor('r-close').textContent ?? '';
+    expect(catchup).toContain('2026-08-20 の日報');
+    expect(catchup).toContain('08/21 09:30 に書かれた');
+    expect(close).toContain('2026-08-20 の日報');
+    expect(close).toContain('08/21 07:00 に書かれた');
+    // 同じ日が複数あるとき、先頭（最新）にだけ目印が付く。
+    expect(catchup).toContain('最新');
+    expect(close).not.toContain('最新');
   });
 
   it('reportId で1件を指定すると、選択の見た目が付くリンクはちょうど1つになる', async () => {
@@ -356,15 +392,14 @@ describe('日報', () => {
 
     // 両方の行が描かれるまで待つ（先に getAllByRole を打つと、fetch が
     // 返る前の空の一覧で判定してしまいうる）。
-    await screen.findByText('2026-08-20 09:30');
+    await screen.findAllByText('2026-08-20 の日報');
 
-    // **クラス名は token で見ること。** `includes('bg-muted')` は全リンクが
-    // 持つ `hover:bg-muted` にも当たるので、部分一致だと「選択の見た目」を
-    // 数えているつもりで全リンクを数えることになる（この判定が空回りしても
-    // `text-primary` の側で1件に絞れてしまうため、緑のまま気づけない）。
+    // **クラス名は token で見ること。** 部分一致だと、全リンクが持つ `hover:bg-muted` などにも
+    // 当たり、「選択の見た目」を数えているつもりで全リンクを数えることになる。選択の見た目は
+    // 共通部品（`ListDetailItems`）が付ける `bg-accent` である。
     const selected = screen.getAllByRole('link').filter((link) => {
       const tokens = link.className.split(/\s+/);
-      return tokens.includes('bg-muted') && tokens.includes('text-primary');
+      return tokens.includes('bg-accent');
     });
 
     // 前は `report.date === selected` で選んでいたので、同じ日の2件が両方
@@ -372,6 +407,41 @@ describe('日報', () => {
     expect(selected).toHaveLength(1);
     // **選ばれたのがどれかは `href` で見る**（`id` が選択の単位そのものなので）。
     expect(selected[0]).toBe(rowFor('r-close'));
+    // 支援技術へも伝える（#2780）。選択中だけ aria-current="page"。
+    const current = screen
+      .getAllByRole('link')
+      .filter((l) => l.getAttribute('aria-current') === 'page');
+    expect(current).toEqual([rowFor('r-close')]);
+  });
+
+  it('本文の見出しは画面の h1 と並ばず、h3 以下に下がる（#2780）', async () => {
+    stubSameDayReports();
+
+    renderReports({ date: '2026-08-20', reportId: 'r-close' });
+
+    const heading = await screen.findByRole('heading', { name: '締めの見出し' });
+    // 本文の `##`（h2）は h4 になる。h1 は画面の「日報」だけ。
+    expect(heading.tagName).toBe('H4');
+    expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1);
+  });
+
+  it('本文の `#` も h1 にならない', async () => {
+    stubFetch((url) => {
+      const reports = [
+        {
+          type: 'daily_report',
+          id: 'r1',
+          at: '2026-08-14T22:00:00.000Z',
+          date: '2026-08-14',
+          body: '# 日報の題\n\n中身。',
+        },
+      ];
+      if (url.includes('/reports')) return json({ reports });
+      return undefined;
+    });
+    renderReports();
+    const heading = await screen.findByRole('heading', { name: '日報の題' });
+    expect(heading.tagName).toBe('H3');
   });
 
   /**
@@ -392,54 +462,127 @@ describe('日報', () => {
   });
 
   /**
-   * `lg` 未満で枠から出た形跡は無い（#282 の from/to と違い、症状の報告は無い）
-   * が、#282 と同じ機構の欠落だったので #283 で予防的に直した再発防止。
-   *
-   * `lg` 未満のこの容器に `grid-template-columns` が1つも無いと暗黙の単一
-   * トラックは `auto`＝max-content になり、中身の内在幅がそのままトラック幅
-   * になって枠を超えうる。
-   *
-   * **これは視覚回帰試験ではない。** jsdom はレイアウトを持たないので
-   * `offsetWidth` / `scrollWidth` / `getBoundingClientRect()` はすべて 0 を
-   * 返し、CSS も適用されない。ここで押さえられるのは「クラス名が当たって
-   * いること」までで、「実機で枠に収まること」ではない。次に読む人がこの
-   * テストを視覚回帰試験だと誤読しないように明示しておく。
+   * 一覧と詳細は共通部品（`ListDetail`）が持つ。広い画面では左の一覧と右の詳細が同時に出て、
+   * 一覧は自分の中でスクロールする（`nav` の `overflow-y-auto`）。**jsdom はレイアウトを
+   * 持たないので、押さえられるのは構造とクラスまでである**（寸法は実ブラウザで見た）。
    */
-  it('日報一覧の容器は lg 未満でも grid-cols-1 を持つ（暗黙トラックを auto にしない）', async () => {
+  it('広い画面では一覧（nav）と詳細が両方出て、一覧だけが独立にスクロールできる形になる', async () => {
+    stubSameDayReports();
+
+    renderReports({ date: '2026-08-20', reportId: 'r-close' });
+
+    const nav = await screen.findByRole('navigation', { name: '日報の一覧' });
+    expect(nav.className.split(/\s+/)).toContain('overflow-y-auto');
+    expect(screen.getByRole('region', { name: '日報の一覧の詳細' })).toBeTruthy();
+    expect(await screen.findByText('締め本文だけの目印。')).toBeTruthy();
+    // スマホ用の「開く」ボタンは広い画面では出ない。
+    expect(screen.queryByRole('button', { name: '日報の一覧を開く' })).toBeNull();
+    // 詳細の見出しは h2（画面の h1 は「日報」だけ）。
+    expect(screen.getByRole('heading', { level: 2, name: '2026-08-20 の日報' })).toBeTruthy();
+  });
+
+  describe('スマホ幅', () => {
+    afterEach(() => {
+      setViewportWidth(DEFAULT_VIEWPORT_WIDTH);
+    });
+
+    it('詳細が全幅で出て、「日報の一覧を開く」ボタンからドロワーに一覧が出る。選ぶと詳細が変わる', async () => {
+      setViewportWidth(390);
+      stubSameDayReports();
+
+      renderReports({ date: '2026-08-20', reportId: 'r-close' });
+
+      expect(await screen.findByText('締め本文だけの目印。')).toBeTruthy();
+      // 一覧は畳まれている。
+      expect(screen.queryByRole('navigation', { name: '日報の一覧' })).toBeNull();
+
+      fireEvent.click(screen.getByRole('button', { name: '日報の一覧を開く' }));
+      const nav = await screen.findByRole('navigation', { name: '日報の一覧' });
+      expect(within(nav).getAllByRole('link')).toHaveLength(2);
+      const current = within(nav)
+        .getAllByRole('link')
+        .filter((link) => link.getAttribute('aria-current') === 'page');
+      expect(current).toHaveLength(1);
+      expect(current[0]?.getAttribute('href')).toBe('/reports/2026-08-20/r-close');
+    });
+
+    it('一覧が読み込めていない間や0件のときは、一覧を全幅で出す', async () => {
+      setViewportWidth(390);
+      stubFetch((url) => {
+        if (url.includes('/reports')) return json({ reports: [] });
+        return undefined;
+      });
+
+      renderReports();
+
+      expect(await screen.findByText('まだ無い。')).toBeTruthy();
+      expect(screen.queryByRole('button', { name: '日報の一覧を開く' })).toBeNull();
+    });
+  });
+
+  it('URL で指定した日報を直接開ける（日付と id）', async () => {
+    stubSameDayReports();
+
+    renderReportsAtUrl('/reports/2026-08-20/r-catchup');
+
+    expect(await screen.findByText('遡り生成本文だけの目印。')).toBeTruthy();
+    expect(screen.queryByText('締め本文だけの目印。')).toBeNull();
+    const current = screen
+      .getAllByRole('link')
+      .filter((link) => link.getAttribute('aria-current') === 'page');
+    expect(current).toEqual([rowFor('r-catchup')]);
+  });
+
+  it('指定が無ければ最新の日報が選ばれ、一覧でも選択中になる', async () => {
+    stubSameDayReports();
+
+    renderReports();
+
+    expect(await screen.findByText('遡り生成本文だけの目印。')).toBeTruthy();
+    expect(rowFor('r-catchup').getAttribute('aria-current')).toBe('page');
+    expect(rowFor('r-close').getAttribute('aria-current')).toBeNull();
+  });
+
+  it('読み込み中は右側に「1件も無い」を出さない（#2803）', async () => {
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let requested = false;
+    const reports = [
+      {
+        type: 'daily_report',
+        id: 'r1',
+        at: '2026-08-14T22:00:00.000Z',
+        date: '2026-08-14',
+        body: '進捗があった。',
+      },
+    ];
     stubFetch((url) => {
-      if (url.includes('/reports')) return json({ reports: [] });
+      if (url.includes('/reports')) {
+        requested = true;
+        return gate.then(() => json({ reports }));
+      }
       return undefined;
     });
 
     renderReports();
 
-    // grid の直接の子（左側の一覧 Card）に含まれる「まだ無い。」から遡って
-    // 容器（grid）を取る。
-    const emptyList = await screen.findByText('まだ無い。');
-    const listCard = emptyList.parentElement;
-    if (listCard === null) throw new Error('一覧の Card が見つからない');
-    const grid = listCard.parentElement;
-    if (grid === null) throw new Error('grid の容器が見つからない');
-    const tokens = grid.className.split(/\s+/);
-    expect(tokens).toContain('grid-cols-1');
-    expect(tokens).toContain('lg:grid-cols-[16rem_1fr]');
+    // 一覧が未着の間（要求は出たが応答が返っていない）、右側は「1件も無い」と言わない。
+    // 実時間で待たず、要求が出たことを待つ（#2146）。
+    await waitFor(() => expect(requested).toBe(true));
+    expect(screen.queryByText(/日報が1件も無い/)).toBeNull();
+    expect(screen.queryByText('まだ無い。')).toBeNull();
+
+    release();
+    expect(await screen.findByText('進捗があった。')).toBeTruthy();
+    expect(screen.queryByText(/日報が1件も無い/)).toBeNull();
   });
 
   /**
-   * `lg:grid-cols-[16rem_1fr]` の生の `1fr` は `minmax(auto,1fr)` に展開される
-   * （#265 で特定済み）ので、`lg` 以上でも2つ目の列（1fr側）の自動最小サイズは
-   * content-based のままである。1つ目の列（16rem側、一覧の `Card`）は短い
-   * 固定フォーマットの文字列なので付けていないが、2つ目の列に来る子（本文の
-   * `Card`）には `min-w-0` を明示している。
-   *
-   * 日報が1件も無いときの本文側は `<ReportBody>` ではなく
-   * `<Card><Empty>…</Empty></Card>` の分岐で、こちらには `min-w-0` が付いて
-   * いなかった（#283 で見つけて追加）。
-   *
-   * **これも視覚回帰試験ではない。** 押さえられるのはクラスが当たっている
-   * ことまでである（上のテストの doc と同じ理由）。
+   * 日報が1件も無いときの案内は、詳細側（広い画面）に出る。一覧の側は「まだ無い。」。
    */
-  it('日報が1件も無いときの本文側 Card は min-w-0 を持つ', async () => {
+  it('日報が1件も無いときは、詳細側にその案内が出る', async () => {
     stubFetch((url) => {
       if (url.includes('/reports')) return json({ reports: [] });
       return undefined;
@@ -447,11 +590,8 @@ describe('日報', () => {
 
     renderReports();
 
-    const emptyBody = await screen.findByText(/日報が1件も無い/);
-    const bodyCard = emptyBody.parentElement;
-    if (bodyCard === null) throw new Error('本文側の Card が見つからない');
-    const tokens = bodyCard.className.split(/\s+/);
-    expect(tokens).toContain('min-w-0');
+    const detail = await screen.findByRole('region', { name: '日報の一覧の詳細' });
+    expect(within(detail).getByText(/日報が1件も無い/)).toBeTruthy();
   });
 
   /**

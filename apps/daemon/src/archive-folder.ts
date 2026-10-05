@@ -3,6 +3,7 @@ import {
   ARCHIVE_REMOVE_MANY_LIMIT_DEFAULT,
   chunkIdsByChars,
   guardArchiveRemoval,
+  noteDroppedRecord,
   reasonOf,
   selectArchiveRemovalTargets,
   type ArchiveEntry,
@@ -163,6 +164,12 @@ export interface FoldArchiveOnceResult {
    * 省かない。
    */
   readonly raced: number;
+  /**
+   * 本文は畳んだが、その塊の日誌が書けなかった id（issue #2746）。0件でも欄を
+   * 省かない。`POST /archive/remove` と同じく、日誌が落ちても残りの塊へ進む
+   * （この欄が空でなければ「日誌の裏付けが無い tombstone」がある）。
+   */
+  readonly journalDroppedIds: readonly string[];
 }
 
 export interface FoldArchiveOnceOptions {
@@ -275,6 +282,7 @@ export async function foldArchiveOnce(
   const foldedIds: string[] = [];
   let foldedBytes = 0;
   let raced = 0;
+  const journalDroppedIds: string[] = [];
   for (const [index, chunk] of chunks.entries()) {
     const chunkIds = new Set(chunk);
     const chunkTargets = foldableTargets.filter((row) => chunkIds.has(row.id));
@@ -300,18 +308,30 @@ export async function foldArchiveOnce(
     // このループ自体が0回（`chunks` が空）なので、`chunks.entries()` が1周
     // 回ってしまう心配は無い（`chunkIdsByChars([], …)` は空配列を返す）。
     if (foldedThisChunk.length === 0) continue;
-    await options.stores.journal.append({
-      type: 'decision',
-      decision:
-        'デーモンが退避済み生ログの古い写しを自動で畳んだ（issue #698。' +
-        `${index + 1}/${chunks.length} 塊目、この塊は ${foldedThisChunk.length} 件）\n` +
-        `絞り込み: before=${before}\n` +
-        `畳んだ id: ${foldedThisChunk.join(' ')}`,
-      grounds:
-        `${ARCHIVE_FOLD_EVERY_ENV} による定期実行。requireContainment: true ` +
-        '（新しい行が古い行を先頭から丸ごと含むと証明できた行だけを畳んだ。' +
-        '読めるものは1バイトも減っていない）。',
-    });
+    // **この塊の本文はもう消えている**（不可逆）ので、日誌が落ちても残りの塊へ進む
+    // （issue #2746。`POST /archive/remove` の `appendJournalOrDrop` と同じ作法）。
+    // 書けなかった id は結果に残し、跡は stderr へ出す。
+    try {
+      await options.stores.journal.append({
+        type: 'decision',
+        decision:
+          'デーモンが退避済み生ログの古い写しを自動で畳んだ（issue #698。' +
+          `${index + 1}/${chunks.length} 塊目、この塊は ${foldedThisChunk.length} 件）\n` +
+          `絞り込み: before=${before}\n` +
+          `畳んだ id: ${foldedThisChunk.join(' ')}`,
+        grounds:
+          `${ARCHIVE_FOLD_EVERY_ENV} による定期実行。requireContainment: true ` +
+          '（新しい行が古い行を先頭から丸ごと含むと証明できた行だけを畳んだ。' +
+          '読めるものは1バイトも減っていない）。',
+      });
+    } catch (error) {
+      journalDroppedIds.push(...foldedThisChunk);
+      noteDroppedRecord(
+        '退避済み生ログの自動畳みの日誌',
+        `chunk=${index + 1}/${chunks.length} count=${foldedThisChunk.length}`,
+        error,
+      );
+    }
   }
 
   return {
@@ -322,6 +342,7 @@ export async function foldArchiveOnce(
     remaining: selection.remaining,
     skipped: { ...selection.skipped, inUse: skippedInUse },
     raced,
+    journalDroppedIds,
   };
 }
 
@@ -400,6 +421,11 @@ export function startArchiveFolding(options: ArchiveFolderOptions): ArchiveFolde
       ...(options.limit === undefined ? {} : { limit: options.limit }),
     })
       .then((result) => {
+        if (result.journalDroppedIds.length > 0) {
+          process.stderr.write(
+            `alteroidd: 退避済み生ログを ${result.folded} 件畳んだが、うち ${result.journalDroppedIds.length} 件は日誌に書けなかった\n`,
+          );
+        }
         options.onResult?.(result);
         return result;
       })

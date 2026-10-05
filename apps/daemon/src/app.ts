@@ -29,6 +29,8 @@ import type {
   TokenPoolService,
 } from '@alteroid/core';
 import {
+  MemoryConflictError,
+  memoryVersion,
   ARCHIVE_REMOVED_BYTES_UNIT_NOTE,
   JOURNAL_SEARCH_UNCOVERED_LIST_MD,
   MCP_SERVER_NAME,
@@ -43,6 +45,8 @@ import {
   ARCHIVE_REMOVE_MANY_LIMIT_MAX,
   DEFAULT_SSE_HEARTBEAT_MS,
   DEFAULT_TOKEN_ROTATION_SETTINGS,
+  classifyTokenPolicyChange,
+  classifyTokenPoolChange,
   CredentialEntryRejectedError,
   JournalAnchorNotFoundError,
   ProfileInputError,
@@ -130,6 +134,8 @@ import {
   type ArchiveRemoveManyFilter,
   type AuthAccount,
   type AuthService,
+  type TokenPolicyChange,
+  type TokenPoolChange,
   type InboxRemoveManyFilter,
   type RemoveUnreadableRowsOptions,
   type RemoveUnreadableRowsResult,
@@ -169,6 +175,9 @@ import {
   credentialsUpdateResponseSchema,
   droppedResponseSchema,
   errorResponseSchema,
+  JOURNAL_WRITE_FAILED_CODE,
+  JOURNAL_WRITE_FAILED_MESSAGE,
+  journalWriteFailedResponseSchema,
   eventAcceptedResponseSchema,
   githubObservationRequestSchema,
   healthResponseSchema,
@@ -183,6 +192,7 @@ import {
   managersListResponseSchema,
   memoryDeleteResponseSchema,
   memoryListResponseSchema,
+  memoryConflictResponseSchema,
   memoryReadResponseSchema,
   meResponseSchema,
   okResponseSchema,
@@ -464,7 +474,12 @@ const chatBody = z.object({
   supersedes: z.string().min(1).optional(),
 });
 
-const memoryBody = z.object({ content: z.string() });
+/**
+ * `ifMatch`（任意、Issue #2743）は、書き換える側が**読んだ時の版**（GET の `version`）。
+ * 書く瞬間の版と違えば書かずに 409。`null` は「読んだ時には無かった」。
+ * **省略は従来どおり後勝ち**——既存の呼び出し（`memory set`、スクリプト）を壊さない。
+ */
+const memoryBody = z.object({ content: z.string(), ifMatch: z.string().nullable().optional() });
 /**
  * `PracticeStore.write` の入力そのまま（`slug` だけは経路から取る）。
  *
@@ -1334,6 +1349,38 @@ function describeActor(principal: Principal): string {
 }
 
 /**
+ * `PUT /tokens` の差分を日誌の1文にする（issue #2742）。**id・ラベル・操作の種類だけで、
+ * トークンの値も指紋も書かない**（`TokenPoolChange` が値を持たない作り）。
+ */
+function describeTokenPoolChanges(changes: readonly TokenPoolChange[]): string {
+  const names = {
+    add: '追加',
+    remove: '削除',
+    disable: '無効化',
+    enable: '有効化',
+    rename: '改名',
+  };
+  return changes
+    .map((change) => {
+      const kind =
+        change.operation === 'switch'
+          ? change.reason === 'value'
+            ? '切替（値の差し替え）'
+            : '切替（試す順の入れ替え）'
+          : names[change.operation];
+      return `${kind}: ${change.label}（id: ${change.id}）`;
+    })
+    .join('、');
+}
+
+/** `PUT /tokens/policy` の差分を日誌の1文にする（issue #2742）。値は契機の名前と冷却のミリ秒だけ。 */
+function describeTokenPolicyChanges(changes: readonly TokenPolicyChange[]): string {
+  return changes
+    .map((change) => `${change.field}: ${change.from ?? '読めなかった'} → ${change.to}`)
+    .join('、');
+}
+
+/**
  * 状態を変える操作の後に日誌へ書き、落ちたら跡だけ残して握る（Issue #2037）。
  *
  * **なぜ握るか。** ここへ来る時点で、対応する状態変更（許可の取り消し・
@@ -1386,6 +1433,9 @@ function describeActor(principal: Principal): string {
  * 型のまま `appendJournalOrDrop` を当てていたが、能力を広げる口はそちら
  * ではなく閉じる側に倒す）・`POST /runners/credentials`（issue #2198。登録
  * されている全 runner へ鍵を配る口で、以前は日誌を1行も書いていなかった）。
+ * `PUT /tokens`・`PUT /tokens/policy`（issue #2742。決定 2026-10-05、teto＝takecchi の代理。
+ * 以前は日誌を書いていなかった。**能力の向きで分ける**——広げる側は日誌先、狭める側
+ * （削除・無効化・改名・`rotateOn: off`）は保存先で、日誌は後にこの関数で書く）。
  * **`PUT /credentials`・`PUT /profile` は検証と実際の状態変更が同じ1呼び
  * （`apply`）の中にあり分けられないので、検証で断られた回も同じ「打ち消し」
  * の扱いにする**（同じ理由——記録が多すぎる側を選ぶ）。
@@ -1402,6 +1452,11 @@ async function appendJournalOrDrop(
     noteDroppedRecord(what, detail, error);
     return undefined;
   }
+}
+
+/** 日誌が書けず、状態を変えずに断った 500 の本文（`journalWriteFailedResponseSchema`）。 */
+function journalWriteFailedBody(): { error: string; code: typeof JOURNAL_WRITE_FAILED_CODE } {
+  return { error: JOURNAL_WRITE_FAILED_MESSAGE, code: JOURNAL_WRITE_FAILED_CODE };
 }
 
 /**
@@ -2151,9 +2206,9 @@ export function createApp(deps: AppDeps) {
    * Hono の既定のエラーハンドラを、本文を出さない規律に合わせて置き換える
    * （Issue #249）。
    *
-   * **応答（500 / `Internal Server Error`）と `HTTPException` の分岐
-   * （`getResponse()` を返す枝）は既定と同じに保つ。** 変えるのは
-   * `console.error(err)` の枝だけである。実物（`hono@4.13.1`、
+   * **変えるのは `console.error(err)` の枝と、失敗本文の形である**（issue #2849:
+   * 既定の `text/plain` の本文は `{ error }` の JSON へ揃えた。状態コードは既定と同じ）。
+   * `HTTPException` が `res` を明示していて JSON などのときは既定どおり通す。実物（`hono@4.13.1`、
    * `node_modules/.pnpm/hono@4.13.1/node_modules/hono/dist/hono-base.js` の
    * `errorHandler`）は逐語で:
    *
@@ -2176,16 +2231,27 @@ export function createApp(deps: AppDeps) {
    * **`reasonOf` は `dropped-record.ts` の既存の口をそのまま使う。** 同じ
    * 判断（1行目だけ・200字で切る）を2箇所に持つと必ずずれる。
    */
-  base.onError((err, c) => {
+  base.onError(async (err, c) => {
     if ('getResponse' in err) {
       const res = err.getResponse();
+      // **失敗の本文は `{ error }` の JSON に揃える（issue #2849）。** hono の
+      // validator が壊れた JSON に投げる `HTTPException`（`Malformed JSON in request
+      // body`）は `text/plain` で、`jsonBody` の `hook` には届かない。`text/plain`
+      // のときだけ畳み、`res` を明示した例外（JSON など）はそのまま通す。
+      if ((res.headers.get('content-type') ?? '').startsWith('text/plain')) {
+        const message = await res.text();
+        return c.json({ error: message === '' ? res.statusText : message }, res.status as 400);
+      }
       return c.newResponse(res.body, res);
     }
     process.stderr.write(
       `alteroidd: HTTP 経路で例外を捕まえました（本文は出しません）: ${reasonOf(err)}\n`,
     );
-    return c.text('Internal Server Error', 500);
+    return c.json({ error: 'Internal Server Error' }, 500);
   });
+
+  // **存在しない経路・メソッドも `{ error }` の JSON で返す（issue #2849）。**
+  base.notFound((c) => c.json({ error: 'not found' }, 404));
 
   // **CORS は認証より先に登録する。** ブラウザの preflight（OPTIONS）は
   // `Authorization` を積んで来ないので、門番が先に立つと preflight が 401 になり、
@@ -2724,6 +2790,7 @@ export function createApp(deps: AppDeps) {
           text: message.text,
           ...(message.supersedes === undefined ? {} : { supersedes: message.supersedes }),
           ...(message.supersededBy === undefined ? {} : { supersededBy: message.supersededBy }),
+          ...(message.turnFailure === undefined ? {} : { turnFailure: message.turnFailure }),
         }));
 
         /*
@@ -3090,7 +3157,7 @@ export function createApp(deps: AppDeps) {
         }
         const doc = await stores.persona.read(slug);
         if (!doc) return c.json({ error: 'not found' as const }, 404);
-        return c.json({ document: doc });
+        return c.json({ document: doc, version: memoryVersion(doc.content) });
       },
     )
 
@@ -3109,6 +3176,12 @@ export function createApp(deps: AppDeps) {
             description: '記憶のスラッグが不正、または本文が JSON として不正。',
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
+          409: {
+            description:
+              '`ifMatch`（読んだ時の版）が、いまの版と違う（読んでから書くまでの間に別の書き手が' +
+              '書いた、または消した）。**何も書いていない。** `current` にいまの版を返す。',
+            content: { 'application/json': { schema: resolver(memoryConflictResponseSchema) } },
+          },
         },
       }),
       jsonBody(memoryBody, (where) => ({
@@ -3120,7 +3193,26 @@ export function createApp(deps: AppDeps) {
           return c.json({ error: '記憶のスラッグが不正' as const }, 400);
         }
         const before = await stores.persona.read(slug);
-        const doc = await stores.persona.write(slug, c.req.valid('json').content);
+        const { content, ifMatch } = c.req.valid('json');
+        let doc;
+        try {
+          doc = await stores.persona.write(slug, content, { ifMatch });
+        } catch (error) {
+          // **黙って上書きしない（Issue #2743）。** 書いていないので日誌にも積まない。
+          if (error instanceof MemoryConflictError) {
+            return c.json(
+              {
+                error: '記憶が読んだ後に変わっています（書き換えていません）' as const,
+                current:
+                  error.current === null
+                    ? null
+                    : { document: error.current, version: memoryVersion(error.current.content) },
+              },
+              409,
+            );
+          }
+          throw error;
+        }
         // **書き換え自体はもう効いている**（Issue #2037）。日誌への追記だけが
         // 落ちても 500 を返さない——`appendJournalOrDrop` の doc。
         const entry = await appendJournalOrDrop(
@@ -3150,7 +3242,7 @@ export function createApp(deps: AppDeps) {
         if (entry !== undefined) {
           await stores.persona.markHumanTouched(slug, entry.at);
         }
-        return c.json({ document: doc });
+        return c.json({ document: doc, version: memoryVersion(doc.content) });
       },
     )
 
@@ -5667,6 +5759,9 @@ export function createApp(deps: AppDeps) {
               '`session_missing` = **runner がこの委譲のセッションを持っておらず、resume でも' +
               '入り直せなかった**（#563。**届いていない**）。' +
               '`unknown` はここには出ない（404 になる）。' +
+              '`declined` = **認証トークンの世代が食い違う done の委譲を畳んで新しい鍵で起こし直したいが、' +
+              '背景処理・確認待ちが残っている（または分からない）ため、畳まず、送らなかった**' +
+              '（#2851。そのものは居る。`detail` が残っているものと取れる手を言う）。' +
               '⚠️ `session_missing` を 404 にしないのは、**そのものは居る**からである — ' +
               '委譲は台帳に在り、時間で解ける理由（引き取り中・貸し出し期限）なら送り直しで通る。',
             content: { 'application/json': { schema: resolver(managerActionResponseSchema) } },
@@ -6940,9 +7035,18 @@ export function createApp(deps: AppDeps) {
           },
           500: {
             description:
-              '保存に失敗した。**理由の本文は返さない**（ドライバの例外は失敗した' +
-              'クエリの束縛パラメータを添えてくることがあるため）。跡は stderr に残る。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+              '保存に失敗した、または**広げる側の変更（追加・有効化・値の差し替え・試す順の入れ替え）で' +
+              '日誌が書けなかった（保存していない）**。狭める側（削除・無効化・改名）だけの変更は、' +
+              '日誌が書けなくても保存して 200 を返す（issue #2742）。' +
+              '**理由の本文は返さない**（ドライバの例外は失敗した' +
+              'クエリの束縛パラメータを添えてくることがあるため）。跡は stderr に残る。' +
+              '日誌が書けなかった回の本文は `{ error: "記録（日誌）が書けなかったので、変更していません", code: "journal_write_failed" }`' +
+              '（`code` で見分ける。保存の失敗は `code` の無い `{ error }`）。',
+            content: {
+              'application/json': {
+                schema: resolver(z.union([journalWriteFailedResponseSchema, errorResponseSchema])),
+              },
+            },
           },
           403: {
             description:
@@ -6973,10 +7077,53 @@ export function createApp(deps: AppDeps) {
         if (deps.tokens === undefined) {
           return c.json({ error: 'トークンのプールの器が無い' as const }, 400);
         }
+        // **能力の向きで日誌の順序を分ける**（issue #2742。決定 2026-10-05、teto＝takecchi の代理）。
+        // - **広げる側**（追加・有効化・切替＝値の差し替え/試す順の入れ替え）が差分に1つでも在れば、
+        //   **日誌を先に書き、書けなければ保存せずに 500**（`PUT /credentials` と同じ。使える鍵が
+        //   増える・変わる操作を、記録の無いまま通さない）。
+        // - **狭める側だけ**（削除・無効化・改名）なら、**保存を先**にして日誌を後に書く
+        //   （`appendJournalOrDrop`。日誌が書けなくても狭める操作は止めない）。
+        // 全文置換なので、前後の差分（`classifyTokenPoolChange`）から分類する。
+        const state: {
+          changes: TokenPoolChange[];
+          written: boolean;
+          journalError?: { cause: unknown };
+        } = { changes: [], written: false };
+        const requestedCount = c.req.valid('json').tokens.length;
         let saved: Awaited<ReturnType<TokenPoolService['replace']>>;
         try {
-          saved = await deps.tokens.replace(c.req.valid('json').tokens);
+          saved = await deps.tokens.replace(c.req.valid('json').tokens, {
+            beforeSave: async ({ before, after }) => {
+              state.changes = classifyTokenPoolChange(before, after);
+              if (!state.changes.some((change) => change.widens)) return;
+              try {
+                await deps.stores.journal.append({
+                  type: 'decision',
+                  decision: `認証トークンのプールを変えようとしている（${describeTokenPoolChanges(state.changes)}）`,
+                  grounds:
+                    `${describeActor(c.get('principal'))}（PUT /tokens）。` +
+                    '使える鍵が増える・変わる操作を含むので、日誌を先に書いた。' +
+                    'id・ラベル・操作の種類だけを書く（トークンの値は書かない）。',
+                });
+              } catch (cause) {
+                state.journalError = { cause };
+                throw cause;
+              }
+              state.written = true;
+            },
+          });
         } catch (error) {
+          // 日誌が書けなかった回は、状態を変えていない。素の 500（`Internal Server Error`）には
+          // せず、「記録が書けなかったので変更していない」と言う本文を返す。**例外の本文は
+          // 返さない**（値が載りうる。種類だけ跡に残す）。
+          if (state.journalError !== undefined) {
+            noteDroppedRecord(
+              '認証トークンのプールの変更の日誌（保存していない）',
+              `count=${String(requestedCount)}`,
+              kindOfError(state.journalError.cause),
+            );
+            return c.json(journalWriteFailedBody(), 500);
+          }
           // **返してよい例外だけを返す。型で分ける。**
           //
           // `TokenPoolInputError` は「`message` をそのまま応答へ返してよい」と
@@ -6995,6 +7142,21 @@ export function createApp(deps: AppDeps) {
           if (error instanceof TokenPoolInputError) {
             return c.json({ error: error.message }, 400);
           }
+          // 日誌は先に書いたが保存できなかった。打ち消しの行を足す（`PUT /credentials` と同じ形）。
+          if (state.written) {
+            await appendJournalOrDrop(
+              deps.stores,
+              {
+                type: 'decision',
+                decision: '認証トークンのプールを変えられなかった',
+                grounds:
+                  `${describeActor(c.get('principal'))}（PUT /tokens、状態の変更が失敗）。` +
+                  `先に書いた行の変更（${describeTokenPoolChanges(state.changes)}）は保存されていない。`,
+              },
+              '認証トークンのプールの打ち消しの日誌',
+              `count=${String(requestedCount)}`,
+            );
+          }
           // **跡は残す。ただし本文は出さない**（`dropped-record.ts` の作法）。
           // detail は**本文を含まない見分け**だけ（`dropped-record.ts` の doc）。
           // **error は種類（`name`）だけ渡す**（issue #2396）。`noteDroppedRecord` は
@@ -7002,10 +7164,27 @@ export function createApp(deps: AppDeps) {
           // エラー文に載ったトークンの値が出うる。
           noteDroppedRecord(
             '認証トークンのプール',
-            `count=${String(c.req.valid('json').tokens.length)}`,
+            `count=${String(requestedCount)}`,
             kindOfError(error),
           );
           return c.json({ error: 'トークンのプールを保存できなかった' as const }, 500);
+        }
+        // **狭める側だけの変更は、保存した後に日誌を書く**（書けなければ跡だけ残して握る）。
+        // 広げる側を含む回は、保存の前に書いてある。
+        if (!state.written && state.changes.length > 0) {
+          await appendJournalOrDrop(
+            deps.stores,
+            {
+              type: 'decision',
+              decision: `認証トークンのプールを変えた（${describeTokenPoolChanges(state.changes)}）`,
+              grounds:
+                `${describeActor(c.get('principal'))}（PUT /tokens）。` +
+                '狭める側（削除・無効化・改名）だけの変更なので、保存の後に書いた。' +
+                'id・ラベル・操作の種類だけを書く（トークンの値は書かない）。',
+            },
+            '認証トークンのプールの変更の日誌',
+            `count=${String(requestedCount)}`,
+          );
         }
         // **ここから先は、保存した後である**（issue #2396）。失敗しても「保存できなかった」
         // ではない。上の `catch`（500）へ落とさず、保存したと言って返す。
@@ -7021,10 +7200,10 @@ export function createApp(deps: AppDeps) {
         } else {
           cause = saved.cause;
         }
-        // **日誌を先に書く作法（`PUT /credentials` 型）は、この口には入れない。** ここは
-        // 保存した後の、読み直しの失敗の跡だけである。`PUT /tokens` は今まで日誌を書いて
-        // おらず、先に書く形にすると「書けなければ保存しない」へ挙動が変わる。
-        // best-effort で1行だけ残し、書けなければ stderr へ跡を残す。
+        // ここは保存した後の、読み直しの失敗の跡である。**変更そのものの日誌は上で書いてある**
+        // （広げる側は保存の前、狭める側は保存の後。issue #2742。決定 2026-10-05、teto＝takecchi
+        // の代理——かつてここは「日誌を先に書く作法は、この口には入れない」と書いていたが、
+        // それを覆した）。この1行は保存の後の best-effort で、書けなければ stderr へ跡を残す。
         await appendJournalOrDrop(
           deps.stores,
           {
@@ -7227,11 +7406,20 @@ export function createApp(deps: AppDeps) {
       describeRoute({
         tags: ['tokens'],
         summary: '回す契機・冷却の既定を変える',
-        description: '省略した項目は現状のまま変えない。',
+        description:
+          '省略した項目は現状のまま変えない。変更は日誌に残る（issue #2742）。回す契機を有効にする・' +
+          '変える・冷却を変える変更は**日誌を先に書き、書けなければ保存せず 500**。' +
+          '`rotateOn: off` へ狭める変更は保存が先で、日誌が書けなくても保存する。',
         responses: {
           200: {
             description: '更新後の設定。',
             content: { 'application/json': { schema: resolver(tokenRotationSettingsSchema) } },
+          },
+          500: {
+            description:
+              '日誌が書けなかった（**保存していない**。広げる側の変更のとき）。本文は ' +
+              '`{ error: "記録（日誌）が書けなかったので、変更していません", code: "journal_write_failed" }`。',
+            content: { 'application/json': { schema: resolver(journalWriteFailedResponseSchema) } },
           },
           400: {
             description: 'トークンのプールの器が配線されていない。',
@@ -7252,7 +7440,80 @@ export function createApp(deps: AppDeps) {
         if (deps.tokens === undefined) {
           return c.json({ error: 'トークンのプールの器が無い' as const }, 400);
         }
-        const settings = await deps.tokens.setSettings(c.req.valid('json'));
+        // **能力の向きで日誌の順序を分ける**（issue #2742。決定 2026-10-05、teto＝takecchi の代理）。
+        // - **回さない方向へ狭めるだけ**（変更後の `rotateOn` が `off`）→ 保存が先、日誌は後。
+        //   「止める」を日誌の失敗で止めない。
+        // - **それ以外の変更**（回す契機を有効にする・変える、冷却を変える）→ 日誌が先。書けなければ
+        //   保存せずに 500。冷却の長短は判断が割れるので、安全側（広げる側）に倒した。
+        // - 差分が無ければ日誌は書かない。
+        const policyState: {
+          changes: TokenPolicyChange[];
+          widens: boolean;
+          written: boolean;
+          journalError?: { cause: unknown };
+        } = { changes: [], widens: false, written: false };
+        let settings: Awaited<ReturnType<TokenPoolService['setSettings']>>;
+        try {
+          settings = await deps.tokens.setSettings(c.req.valid('json'), {
+            beforeWrite: async ({ before, after }) => {
+              const classified = classifyTokenPolicyChange(before, after);
+              policyState.changes = classified.changes;
+              policyState.widens = classified.widens;
+              if (!classified.widens) return;
+              try {
+                await deps.stores.journal.append({
+                  type: 'decision',
+                  decision: `トークンを回す設定を変えようとしている（${describeTokenPolicyChanges(classified.changes)}）`,
+                  grounds:
+                    `${describeActor(c.get('principal'))}（PUT /tokens/policy）。` +
+                    '回す契機を有効にする・変える（または冷却を変える）操作なので、日誌を先に書いた。',
+                });
+              } catch (cause) {
+                policyState.journalError = { cause };
+                throw cause;
+              }
+              policyState.written = true;
+            },
+          });
+        } catch (error) {
+          if (policyState.journalError !== undefined) {
+            noteDroppedRecord(
+              'トークンを回す設定の変更の日誌（保存していない）',
+              policyState.changes.map((change) => change.field).join(','),
+              kindOfError(policyState.journalError.cause),
+            );
+            return c.json(journalWriteFailedBody(), 500);
+          }
+          if (policyState.written) {
+            await appendJournalOrDrop(
+              deps.stores,
+              {
+                type: 'decision',
+                decision: 'トークンを回す設定を変えられなかった',
+                grounds:
+                  `${describeActor(c.get('principal'))}（PUT /tokens/policy、状態の変更が失敗）。` +
+                  `先に書いた行の変更（${describeTokenPolicyChanges(policyState.changes)}）は保存されていない。`,
+              },
+              'トークンを回す設定の打ち消しの日誌',
+              policyState.changes.map((change) => change.field).join(','),
+            );
+          }
+          throw error;
+        }
+        if (!policyState.written && policyState.changes.length > 0) {
+          await appendJournalOrDrop(
+            deps.stores,
+            {
+              type: 'decision',
+              decision: `トークンを回す設定を変えた（${describeTokenPolicyChanges(policyState.changes)}）`,
+              grounds:
+                `${describeActor(c.get('principal'))}（PUT /tokens/policy）。` +
+                '回さない方向（rotateOn: off）へ狭める変更なので、保存の後に書いた。',
+            },
+            'トークンを回す設定の変更の日誌',
+            policyState.changes.map((change) => change.field).join(','),
+          );
+        }
         return c.json(tokenRotationSettingsSchema.parse(settings));
       },
     )

@@ -327,6 +327,44 @@ describe('作成時刻', () => {
 });
 
 describe('削除', () => {
+  /** DELETE を打ったか。`openapi-fetch` は `Request` で呼ぶので、メソッドは `entries` の `request` で読む。 */
+  function deleted(stub: ReturnType<typeof stubFetch>): number {
+    return stub.entries.filter((entry) => entry.request?.method === 'DELETE').length;
+  }
+
+  it('「削除」を押しただけでは消さず、確認を出す（#2781）', async () => {
+    const stub = renderDetail('notes', docRoute(DOC));
+    await screen.findByRole('heading', { name: '見出し' });
+
+    fireEvent.click(screen.getByRole('button', { name: '削除' }));
+
+    expect(await screen.findByRole('alertdialog')).toBeTruthy();
+    expect(screen.getByText('「notes」を削除しますか')).toBeTruthy();
+    expect(screen.getByText(/この記憶は本文ごと消え、元に戻せません/)).toBeTruthy();
+    expect(deleted(stub)).toBe(0);
+  });
+
+  it('確認で「やめる」を押すと消さずに閉じる', async () => {
+    const stub = renderDetail('notes', docRoute(DOC));
+    await screen.findByRole('heading', { name: '見出し' });
+    fireEvent.click(screen.getByRole('button', { name: '削除' }));
+
+    fireEvent.click(await screen.findByRole('button', { name: 'やめる' }));
+
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+    expect(deleted(stub)).toBe(0);
+  });
+
+  it('確認で「削除する」を押したときだけ DELETE を打つ', async () => {
+    const stub = renderDetail('notes', docRoute(DOC));
+    await screen.findByRole('heading', { name: '見出し' });
+    fireEvent.click(screen.getByRole('button', { name: '削除' }));
+
+    fireEvent.click(await screen.findByRole('button', { name: '削除する' }));
+
+    await waitFor(() => expect(deleted(stub)).toBe(1));
+  });
+
   it('プレビュータブでも削除ボタンが在る', async () => {
     renderDetail('notes', docRoute(DOC));
     await screen.findByRole('heading', { name: '見出し' });
@@ -462,7 +500,7 @@ describe('編集欄の振る舞い（部品へ移しても変わらないもの�
     fireEvent.mouseDown(await screen.findByRole('tab', { name: '編集' }));
     const textarea = await screen.findByRole('textbox');
     expect(
-      screen.getByText('ここで書き換えたものは `memory_update`（cause: human）として日誌に残る。'),
+      screen.getByText('ここで書き換えたものは、人間が直した記録として日誌に残る。'),
     ).toBeTruthy();
     expect(screen.queryByText(/Ctrl \+ S/)).toBeNull();
     expect(textarea.getAttribute('placeholder') ?? '').toBe('');
@@ -513,5 +551,207 @@ describe('編集欄の振る舞い（部品へ移しても変わらないもの�
     const textarea = await screen.findByRole('textbox');
     expect(fireEvent.keyDown(textarea, { key: 's', ctrlKey: true })).toBe(false);
     expect(puts).toEqual([]);
+  });
+});
+
+describe('見出し（#2763）', () => {
+  it('戻る導線「記憶」は縮まず折り返さない（狭い幅で縦に割れない）', async () => {
+    // jsdom はレイアウトを持たないので、実寸（390px で 16px 幅 × 2行に割れた）は測れない。
+    // 割れを防ぐ指定そのもの（flex 子の shrink と折り返しの抑止）を固定する。
+    // 実寸はブラウザで測った値を PR に書いている。
+    renderDetail('notes', docRoute(DOC));
+
+    const back = await screen.findByRole('link', { name: '記憶' });
+    expect(back.className).toContain('shrink-0');
+    expect(back.className).toContain('whitespace-nowrap');
+    // 縮む側は slug だけ。
+    expect(screen.getByText('notes').className).toContain('min-w-0');
+  });
+});
+
+/**
+ * 未保存の編集があるまま離れない（#2764）と、読んだ版を前提にした保存・衝突の扱い（#2743 / #2764）。
+ */
+describe('未保存の編集を離れる前に確認する', () => {
+  async function startEditing(text = '書きかけ') {
+    fireEvent.mouseDown(await screen.findByRole('tab', { name: '編集' }));
+    const textarea = (await screen.findByRole('textbox')) as HTMLTextAreaElement;
+    fireEvent.change(textarea, { target: { value: text } });
+    return textarea;
+  }
+
+  it('書きかけのまま他の画面へのリンクを押すと確認が出る。やめれば留まり下書きが残る', async () => {
+    renderDetail('notes', docRoute(DOC));
+    await startEditing();
+
+    fireEvent.click(screen.getByRole('link', { name: '記憶' }));
+
+    expect(await screen.findByRole('alertdialog')).toBeTruthy();
+    expect(screen.getByText('保存していない変更があります')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'やめる' }));
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+    // まだこの画面に居て、下書きも残っている。
+    expect((screen.getByRole('textbox') as HTMLTextAreaElement).value).toBe('書きかけ');
+  });
+
+  it('確認で「破棄して離れる」を押すと移動する', async () => {
+    renderDetail('notes', docRoute(DOC));
+    await startEditing();
+
+    fireEvent.click(screen.getByRole('link', { name: '記憶' }));
+    fireEvent.click(await screen.findByRole('button', { name: '破棄して離れる' }));
+
+    await waitFor(() => expect(screen.queryByRole('textbox')).toBeNull());
+  });
+
+  it('変更が無ければ確認なしで移動する', async () => {
+    renderDetail('notes', docRoute(DOC));
+    await screen.findByRole('heading', { name: '見出し' });
+
+    fireEvent.click(screen.getByRole('link', { name: '記憶' }));
+
+    await waitFor(() => expect(screen.queryByRole('heading', { name: '見出し' })).toBeNull());
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+  });
+
+  it('タブを閉じる・再読み込みは、書きかけのときだけブラウザの警告（beforeunload）を出す', async () => {
+    renderDetail('notes', docRoute(DOC));
+    await screen.findByRole('heading', { name: '見出し' });
+
+    const clean = new Event('beforeunload', { cancelable: true });
+    window.dispatchEvent(clean);
+    expect(clean.defaultPrevented).toBe(false);
+
+    await startEditing();
+    const dirty = new Event('beforeunload', { cancelable: true });
+    window.dispatchEvent(dirty);
+    expect(dirty.defaultPrevented).toBe(true);
+  });
+});
+
+describe('保存は読んだ版を前提にし、衝突しても下書きを捨てない', () => {
+  const V1 = 'a'.repeat(64);
+  const V2 = 'b'.repeat(64);
+  const CLONE_DOC = {
+    ...DOC,
+    content: 'クローンが書いた本文',
+    updatedAt: '2026-08-22T02:00:00.000Z',
+  };
+
+  /** PUT の本文を控え、`putResponses` を順に返す。GET は常に DOC（版 V1）。 */
+  function stubPut(putResponses: Response[]) {
+    const putBodies: unknown[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = input instanceof Request ? input : new Request(input, init);
+      if (!request.url.includes('/memory/notes')) {
+        return Promise.reject(new TypeError(`Failed to fetch: ${request.url}`));
+      }
+      if (request.method === 'PUT') {
+        putBodies.push(await request.json());
+        return putResponses.shift() ?? json({ error: 'x' }, 500);
+      }
+      return json({ document: DOC, version: V1 });
+    }) as typeof fetch;
+    mountDetail('notes');
+    return putBodies;
+  }
+
+  const conflict = () =>
+    json(
+      {
+        error: '記憶が読んだ後に変わっています（書き換えていません）',
+        current: { document: CLONE_DOC, version: V2 },
+      },
+      409,
+    );
+
+  async function editAndSave() {
+    fireEvent.mouseDown(await screen.findByRole('tab', { name: '編集' }));
+    fireEvent.change(await screen.findByRole('textbox'), { target: { value: '人間の書きかけ' } });
+    fireEvent.click(screen.getByRole('button', { name: '保存する' }));
+  }
+
+  it('読んだ版（version）を ifMatch として送る', async () => {
+    const putBodies = stubPut([
+      json({ document: { ...DOC, content: '人間の書きかけ' }, version: V2 }),
+    ]);
+
+    await editAndSave();
+
+    await waitFor(() => expect(putBodies).toEqual([{ content: '人間の書きかけ', ifMatch: V1 }]));
+  });
+
+  it('409 では下書きを残し、ほかで書き換えられたことと最新の内容を見せる', async () => {
+    const putBodies = stubPut([conflict()]);
+
+    await editAndSave();
+
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toContain('ほかで書き換えられた');
+    expect(alert.textContent).toContain('クローンが書いた本文');
+    // 下書きは捨てていない。保存ボタンも「保存する」のまま（保存済みにならない）。
+    expect((screen.getByRole('textbox') as HTMLTextAreaElement).value).toBe('人間の書きかけ');
+    expect(screen.queryByText(/^保存した/)).toBeNull();
+    expect(putBodies).toHaveLength(1);
+  });
+
+  it('「自分の内容で上書きする」は、いまの版を ifMatch にして書き直す', async () => {
+    const putBodies = stubPut([
+      conflict(),
+      json({ document: { ...DOC, content: '人間の書きかけ' }, version: 'c'.repeat(64) }),
+    ]);
+    await editAndSave();
+
+    fireEvent.click(await screen.findByRole('button', { name: '自分の内容で上書きする' }));
+
+    await waitFor(() => expect(putBodies).toHaveLength(2));
+    expect(putBodies[1]).toEqual({ content: '人間の書きかけ', ifMatch: V2 });
+    await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
+  });
+
+  it('「いまの内容を読み直す」は下書きを捨てて、書き込まない', async () => {
+    const putBodies = stubPut([conflict()]);
+    await editAndSave();
+
+    fireEvent.click(
+      await screen.findByRole('button', { name: '自分の下書きを捨てて、いまの内容を読み直す' }),
+    );
+
+    await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
+    expect(putBodies).toHaveLength(1);
+    expect((screen.getByRole('textbox') as HTMLTextAreaElement).value).toBe(DOC.content);
+  });
+});
+
+describe('保存した直後に編集を再開しても、手元の版は保存の応答の版（偽の 409 にならない）', () => {
+  it('保存の応答が新しい版を返し、再取得がまだ古い版を返していても、次の保存の ifMatch は新しい版', async () => {
+    const V1 = 'a'.repeat(64);
+    const V2 = 'b'.repeat(64);
+    const putBodies: unknown[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = input instanceof Request ? input : new Request(input, init);
+      if (!request.url.includes('/memory/notes')) {
+        return Promise.reject(new TypeError(`Failed to fetch: ${request.url}`));
+      }
+      if (request.method === 'PUT') {
+        putBodies.push(await request.json());
+        return json({ document: { ...DOC, content: '1回目' }, version: V2 });
+      }
+      // 再取得はまだ古い版を返す（保存の反映が GET に届く前を再現する）。
+      return json({ document: DOC, version: V1 });
+    }) as typeof fetch;
+    mountDetail('notes');
+
+    fireEvent.mouseDown(await screen.findByRole('tab', { name: '編集' }));
+    fireEvent.change(await screen.findByRole('textbox'), { target: { value: '1回目' } });
+    fireEvent.click(screen.getByRole('button', { name: '保存する' }));
+    expect(await screen.findByText(/保存した/)).toBeTruthy();
+
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: '2回目' } });
+    fireEvent.click(screen.getByRole('button', { name: '保存する' }));
+
+    await waitFor(() => expect(putBodies).toHaveLength(2));
+    expect(putBodies[0]).toEqual({ content: '1回目', ifMatch: V1 });
+    expect(putBodies[1]).toEqual({ content: '2回目', ifMatch: V2 });
   });
 });

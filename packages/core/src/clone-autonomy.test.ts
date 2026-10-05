@@ -1114,6 +1114,37 @@ describe('クローン — 自律（人間以外の起点）', () => {
     await restarted.clone.stop();
   });
 
+  it('ターンが（枠切れ以外で）失敗で終わった定期の発火は、完了にせず印を残す（#2739）', async () => {
+    const stores = createMemoryStores();
+    await stores.schedules.put({
+      kind: 'weekly-round',
+      spec: { type: 'cron' as const, expression: '0 10 * * 1' },
+      request: '週次で open issue を見て実装を進める',
+      createdAt: '2026-08-01T00:00:00.000Z',
+      updatedAt: '2026-08-01T00:00:00.000Z',
+    });
+
+    // 枠切れではない失敗（heldForUsage が false になる文面）
+    const s = setup(undefined, stores, {
+      resultSubtype: 'error_during_execution',
+      resultText: 'internal failure: something broke',
+    });
+    s.clone.post({
+      type: 'timer',
+      id: 'evt-failed-turn',
+      at: '2026-08-10T10:00:00.000Z',
+      kind: 'weekly-round',
+    });
+
+    await waitFor(() => s.calls.length > 0, '失敗するターンが走る');
+    await s.clone.stop();
+
+    const after = (await stores.schedules.list()).entries[0];
+    // 失敗したターンを「実行済み」にしない: 印が残り、定期の基準は進まない
+    expect(after?.pendingRun?.at).toBe('2026-08-10T10:00:00.000Z');
+    expect(after?.lastScheduledRunAt).toBeUndefined();
+  });
+
   it('配り直された発火は、元の時刻・元の理由で確定する', async () => {
     const stores = createMemoryStores();
     // 09:10 の手動発火を引き受けたまま落ちた状態

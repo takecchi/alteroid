@@ -21,7 +21,8 @@ import {
   formatRelative,
   JOURNAL_TONE,
   JOURNAL_TYPES,
-  SEARCH_SCOPE_NOTE,
+  journalTypeLabel,
+  SEARCH_SCOPE_NOTE_JA,
   shiftForPrepend,
 } from '@alteroid/logic';
 import { JournalEntryLinks } from '~/lib/journal-links';
@@ -245,7 +246,7 @@ export default function Journal() {
               type="search"
               value={draft}
               onChange={(event) => setDraft(event.target.value)}
-              placeholder="本文を語で探す（大文字小文字を区別しない部分一致）"
+              placeholder="本文を語で探す"
               aria-label="日誌を語で探す"
               className="w-full rounded border border-border bg-background py-1.5 pr-2 pl-8 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none"
             />
@@ -259,12 +260,12 @@ export default function Journal() {
           ときの目印にならない（`memory_read` の注記と同じ倒し方）。
         */}
         {committed !== '' && (
-          <p className="mb-3 text-[11px] text-muted-foreground">{SEARCH_SCOPE_NOTE}</p>
+          <p className="mb-3 text-[11px] text-muted-foreground">{SEARCH_SCOPE_NOTE_JA}</p>
         )}
         <FilterChips
           className="mb-4"
           label="種別で絞り込む"
-          options={JOURNAL_TYPES.map((type) => ({ value: type }))}
+          options={JOURNAL_TYPES.map((type) => ({ value: type, label: journalTypeLabel(type) }))}
           selected={selected}
           onToggle={toggle}
           onClear={clearSelected}
@@ -304,17 +305,20 @@ export default function Journal() {
  * （`journal.test.tsx`「当たらなかったら、その語では無いと言う」）。
  */
 function journalEmptyMessage(selected: readonly JournalEntryType[], q: string): string {
-  const typeLabel = selected.length > 0 ? `type=${selected.join(',')}` : undefined;
+  const typeLabel =
+    selected.length > 0
+      ? selected.map((type) => `「${journalTypeLabel(type)}」`).join('')
+      : undefined;
   if (typeLabel === undefined && q === '') {
     return 'この条件では何も記録されていない。';
   }
   if (typeLabel === undefined) {
-    return `「${q}」に当たる記録は無い（この条件の中では）。`;
+    return `「${q}」に当たる記録はありません（この条件の中では）。`;
   }
   if (q === '') {
-    return `${typeLabel} に当たる記録は無い（絞り込みを外せば見えるかもしれない）。`;
+    return `${typeLabel}の記録はありません（絞り込みを外せば見えるかもしれません）。`;
   }
-  return `${typeLabel} に絞った上で、「${q}」に当たる記録は無い（絞り込みを外せば見えるかもしれない）。`;
+  return `${typeLabel}に絞った上で、「${q}」に当たる記録はありません（絞り込みを外せば見えるかもしれません）。`;
 }
 
 function JournalBody({
@@ -341,6 +345,33 @@ function JournalBody({
   // 「いま上端に居るか」（`shiftForPrepend` の `atTop`）。既定は上端＝
   // `true`（画面を開いた直後は上端に居る。仮想化する前と同じ初期状態）。
   const [atTop, setAtTop] = useState(true);
+  // 「いま読んでいるか」（`shiftForPrepend` の `reading`）。行を展開している、または一覧の文章を
+  // 選択している間は `true`。上端のすぐ下に居るだけでも、読んでいる行を新着で動かさない
+  // （issue #2774）。
+  const listRef = useRef<HTMLDivElement>(null);
+  const [reading, setReading] = useState(false);
+  useEffect(() => {
+    const list = listRef.current;
+    if (list === null) return;
+    const update = () => {
+      const selection = document.getSelection();
+      const selecting =
+        selection !== null &&
+        !selection.isCollapsed &&
+        selection.anchorNode !== null &&
+        list.contains(selection.anchorNode);
+      setReading(selecting || list.querySelector('[aria-expanded="true"]') !== null);
+    };
+    // 行の開閉は React の描画の後に `aria-expanded` が変わる。クリックの listener では
+    // 描画の前に読んでしまうので、DOM の変化を見る。
+    const observer = new MutationObserver(update);
+    observer.observe(list, { subtree: true, attributes: true, attributeFilter: ['aria-expanded'] });
+    document.addEventListener('selectionchange', update);
+    return () => {
+      observer.disconnect();
+      document.removeEventListener('selectionchange', update);
+    };
+  }, []);
 
   function handleScroll(offset: number) {
     const handle = virtualizerRef.current;
@@ -387,46 +418,49 @@ function JournalBody({
         </BlockedNote>
       )}
 
-      <Card>
-        {isLoadingInitial ? (
-          <Spinner />
-        ) : listUnavailable ? null : entries.length === 0 ? (
-          <Empty>{journalEmptyMessage(selected, q)}</Empty>
-        ) : (
-          <Virtualizer
-            ref={virtualizerRef}
-            scrollRef={scrollAreaRef}
-            startMargin={startMargin}
-            // **決定そのものは `shiftForPrepend` が持つ**（`packages/logic/src/journal-window.ts`）。
-            // ここでインラインの `&&`/`!` 式を書かない — 書くと、測れるはず
-            // の決定まで JSX の中に埋もれて測れなくなる（人間の指示、
-            // 2026-08-23）。
-            shift={shiftForPrepend(journalWindow.prepended, atTop)}
-            onScroll={handleScroll}
-          >
-            {entries.map((entry) => (
-              <JournalEntryRow
-                key={entry.id}
-                atLabel={formatDateTime(entry.at)}
-                // **`time` で渡す（`at` / `relativeLabel` にしない）。** 部品の既定の
-                // `Timestamp` は JST 固定の tooltip と焦点を受ける `<time>` を持つ。この画面の
-                // 時刻は `@alteroid/logic` の整形で閲覧者の端末の時間帯のまま出しており、
-                // 開閉の `<button>` の中に Tab の停止点も増やさない。
-                time={formatRelative(entry.at)}
-                type={entry.type}
-                tone={JOURNAL_TONE[entry.type]}
-                summary={summarizeJournalEntry(entry)}
-                links={<JournalEntryLinks entry={entry} />}
-                raw={entry}
-                isLast={entry.id === lastId}
-                // 種別は行の頭の札に出ている。帯（種別の名前と「写す」ボタン）を出すと、
-                // 開いた行で種別の文字が2箇所に出て、この画面に無かった操作も増える。
-                rawBar={false}
-              />
-            ))}
-          </Virtualizer>
-        )}
-      </Card>
+      <div ref={listRef}>
+        <Card>
+          {isLoadingInitial ? (
+            <Spinner />
+          ) : listUnavailable ? null : entries.length === 0 ? (
+            <Empty>{journalEmptyMessage(selected, q)}</Empty>
+          ) : (
+            <Virtualizer
+              ref={virtualizerRef}
+              scrollRef={scrollAreaRef}
+              startMargin={startMargin}
+              // **決定そのものは `shiftForPrepend` が持つ**（`packages/logic/src/journal-window.ts`）。
+              // ここでインラインの `&&`/`!` 式を書かない — 書くと、測れるはず
+              // の決定まで JSX の中に埋もれて測れなくなる（人間の指示、
+              // 2026-08-23）。
+              shift={shiftForPrepend(journalWindow.prepended, atTop, reading)}
+              onScroll={handleScroll}
+            >
+              {entries.map((entry) => (
+                <JournalEntryRow
+                  key={entry.id}
+                  atLabel={formatDateTime(entry.at)}
+                  // **`time` で渡す（`at` / `relativeLabel` にしない）。** 部品の既定の
+                  // `Timestamp` は JST 固定の tooltip と焦点を受ける `<time>` を持つ。この画面の
+                  // 時刻は `@alteroid/logic` の整形で閲覧者の端末の時間帯のまま出しており、
+                  // 開閉の `<button>` の中に Tab の停止点も増やさない。
+                  time={formatRelative(entry.at)}
+                  type={entry.type}
+                  typeLabel={journalTypeLabel(entry.type)}
+                  tone={JOURNAL_TONE[entry.type]}
+                  summary={summarizeJournalEntry(entry)}
+                  links={<JournalEntryLinks entry={entry} />}
+                  raw={entry}
+                  isLast={entry.id === lastId}
+                  // 種別は行の頭の札に出ている。帯（種別の名前と「写す」ボタン）を出すと、
+                  // 開いた行で種別の文字が2箇所に出て、この画面に無かった操作も増える。
+                  rawBar={false}
+                />
+              ))}
+            </Virtualizer>
+          )}
+        </Card>
+      </div>
 
       {!isLoadingInitial && entries.length > 0 && (
         <div className="mt-3">

@@ -14,7 +14,7 @@ import { readSSE } from './tui/sse.js';
  * 地図も同じものを見る（PRD「インターフェース」— 片方の口でしかできないことを作らない）。
  *
  * **ここに判断は無い。** 「いま流れている」と読む閾値も持たない——線は**最後の活動からの
- * 経過**（`3s ago`）をそのまま出し、読むのは人間である。`unknown`（分からない）は
+ * 経過**（`3秒前`）をそのまま出し、読むのは人間である。`unknown`（分からない）は
  * `unknown` のまま出し、`ok` / `idle` に化けさせない。
  */
 
@@ -29,6 +29,8 @@ export interface TopologyView {
     status: string;
     live: boolean;
     runnerId?: string;
+    /** runner の生存確認の一覧にこの委譲が載っていた観測時刻（無いときは鍵が無い）。 */
+    runnerListedAt?: string;
     request: string;
     startedAt: string;
     updatedAt: string;
@@ -56,15 +58,15 @@ export interface TopologyView {
   links: { key: string; lastDownAt?: string; lastUpAt?: string; lastActivityAt?: string }[];
 }
 
-/** 経過を `3s ago` の形にする。読めない時刻は「経過不明」。 */
+/** 経過を `3秒前` の形にする。読めない時刻は「経過不明」。 */
 export function formatAge(iso: string, now: number): string {
   const at = Date.parse(iso);
   if (Number.isNaN(at)) return '経過不明';
   const seconds = Math.max(0, Math.round((now - at) / 1000));
-  if (seconds < 60) return `${String(seconds)}s ago`;
-  if (seconds < 3600) return `${String(Math.floor(seconds / 60))}m ago`;
-  if (seconds < 86_400) return `${String(Math.floor(seconds / 3600))}h ago`;
-  return `${String(Math.floor(seconds / 86_400))}d ago`;
+  if (seconds < 60) return `${String(seconds)}秒前`;
+  if (seconds < 3600) return `${String(Math.floor(seconds / 60))}分前`;
+  if (seconds < 86_400) return `${String(Math.floor(seconds / 3600))}時間前`;
+  return `${String(Math.floor(seconds / 86_400))}日前`;
 }
 
 /** 線の向きごとの時刻。**無い向きは「観測していない」と言う**（0 や「流れていない」にしない）。 */
@@ -131,13 +133,27 @@ export function renderTopology(view: TopologyView, now: number = Date.now()): st
   }
 
   if (view.managers.length === 0) {
-    lines.push('  └ マネージャー: 走行中・返事待ち・直近10分に終わった委譲は無い');
+    lines.push(
+      '  └ マネージャー: 走行中・返事待ち・直近10分に終わった委譲は無い（runner の上に居ると観測できた委譲も無い）',
+    );
   } else {
     lines.push(`  └ マネージャー（${String(view.managers.length)} 本）`);
+    // 図（Web の稼働の地図）と同じ振り分け: 生きた器（connected / vacating）の runnerId と
+    // 突き合えばその器、突き合わなければ「器が分からない」と言う（委譲を落とさない）。
+    const liveRunnerIds = new Set(
+      view.runners
+        .filter((r) => r.state === 'connected' || r.state === 'vacating')
+        .flatMap((r) => (r.runnerId === undefined ? [] : [r.runnerId])),
+    );
     for (const manager of view.managers) {
       const live = manager.live ? 'live' : 'not live';
       lines.push(
         `      ${manager.managerId} [${manager.status}・${live}]  ${redactBody(manager.request)}`,
+      );
+      lines.push(
+        manager.runnerId !== undefined && liveRunnerIds.has(manager.runnerId)
+          ? `        器: ${manager.runnerId}`
+          : '        器: 分からない（生きた runner の一覧と突き合わない）',
       );
       lines.push(
         `        ${renderLink(
@@ -150,6 +166,17 @@ export function renderTopology(view: TopologyView, now: number = Date.now()): st
         const { tasks, breakdown, since } = manager.awaitingBackground;
         lines.push(
           `        完了待ち: 背景処理 ${String(tasks)} 件${breakdown === '' ? '' : `（${breakdown}）`}（${formatAge(since, now)}から）`,
+        );
+      }
+      // 手が空いた（走行中でも返事待ちでもない）が、runner の一覧にはまだ載っている委譲。
+      // 地図が窓（10分）を過ぎても載せている理由を言う。欄が無ければ行ごと出さない。
+      if (
+        manager.runnerListedAt !== undefined &&
+        manager.status !== 'running' &&
+        manager.status !== 'waiting_human'
+      ) {
+        lines.push(
+          `        runner の一覧に載っている（観測 ${formatAge(manager.runnerListedAt, now)}）`,
         );
       }
       if (manager.lastReportAt !== undefined) {
@@ -260,7 +287,7 @@ export async function topologyCommand(options: TopologyOptions = {}): Promise<vo
  * `--watch`: `GET /topology/stream` を読み続けて描き直す。
  *
  * - 端末（TTY）では、スナップショットが届くたびと**1秒ごと**に描き直す。ストリームは
- *   **内容が変わったときだけ**届くので、経過（`3s ago`）は最後の内容を使って手元で進める。
+ *   **内容が変わったときだけ**届くので、経過（`3秒前`）は最後の内容を使って手元で進める。
  * - 端末でないとき（パイプ・ファイル）は、届いたスナップショットを描き足すだけ。
  *   `--json` は1スナップショット1行（NDJSON）。
  * - デーモンが地図を組めなくなると `unavailable` が1回届く（`notice`／`--json` は `type` 付きの1行）。

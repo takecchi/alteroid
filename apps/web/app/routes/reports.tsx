@@ -1,8 +1,19 @@
+import { useId } from 'react';
 import { Link } from 'react-router';
 
-import { Markdown, Page, Card, Empty, ErrorNote, Spinner, cn } from '@alteroid/ui';
+import {
+  markdownComponents,
+  toReact,
+  Page,
+  ListDetail,
+  ListDetailItems,
+  Empty,
+  ErrorNote,
+  Spinner,
+  cn,
+} from '@alteroid/ui';
 import { useReport, useReports } from '@alteroid/swr';
-import { formatDateTime, formatTime, redactBody } from '@alteroid/logic';
+import { formatDateTime, redactBody } from '@alteroid/logic';
 
 import type { DailyReport } from '@alteroid/logic';
 
@@ -85,8 +96,43 @@ export function UnavailableNote({ reason }: { reason: string }) {
  * だから日は `date`（その日報が何日について書かれたか）、時刻は `at`（いつ書か
  * れたか）で、2つは別の軸として並べる。
  */
-function reportLabel(report: DailyReport): string {
-  return `${report.date} ${formatTime(report.at)}`;
+function reportTitle(date: string): string {
+  return `${date} の日報`;
+}
+
+/**
+ * 「いつ書かれたか」。**日付つきで出す**（時:分だけだと、翌日に書かれた1件が
+ * 日報の日の 00:30 に書かれたように読める。#2779）。端末の時間帯の時刻で出す
+ * （`formatDateTime`）。
+ */
+function writtenAt(report: DailyReport): string {
+  return `${formatDateTime(report.at)} に書かれた`;
+}
+
+/**
+ * 本文の見出しを**1段下げて**描く。画面の見出し（h1「日報」）・カードの見出し（h2）
+ * の下に本文の `#` が h1 で並ばないようにする（#2780）。`Markdown`（共通部品）は
+ * 本文の見出しを書かれたとおりの段で描くので、この画面だけ見出しの部品を差し替える
+ * （共通部品は変えていない）。h1→h3 … h4→h6、h5・h6 は h6 に畳む（HTML に h7 は無い）。
+ * 見た目は差し替え先の段の部品のものになる。
+ */
+const reportMarkdownComponents: typeof markdownComponents = {
+  ...markdownComponents,
+  h1: markdownComponents.h3,
+  h2: markdownComponents.h4,
+  h3: markdownComponents.h5,
+  h4: markdownComponents.h6,
+  h5: markdownComponents.h6,
+  h6: markdownComponents.h6,
+};
+
+function ReportMarkdown({ children }: { children: string }) {
+  const prefix = 'md' + useId().replace(/[^A-Za-z0-9_-]/g, '') + '-';
+  return (
+    <div className="min-w-0 text-sm break-words">
+      {toReact(children, reportMarkdownComponents, prefix)}
+    </div>
+  );
 }
 
 /**
@@ -149,61 +195,66 @@ export default function Reports({ loaderData }: Route.ComponentProps) {
    */
   const listUnavailable = list.data === undefined && list.error !== undefined;
 
+  /*
+    一覧の行ごとの見え方。`ListDetailItems` の `renderLink` は行の添字を渡さないので、
+    隣との関係（同じ日か）は `href` を鍵にして先に数えておく。
+  */
+  const hrefOf = (report: DailyReport) =>
+    `/reports/${report.date}/${encodeURIComponent(report.id)}`;
+  const sameDayAsNext = new Set<string>();
+  const latestOfManyInDay = new Set<string>();
+  reports.forEach((report, index) => {
+    const sameAsNext = reports[index + 1]?.date === report.date;
+    if (sameAsNext) sameDayAsNext.add(hrefOf(report));
+    // 同じ日が複数あるとき、**並びの先頭（書かれたのが最も新しい）にだけ**「最新」を付ける。
+    // 並びはデーモンが決めている（上）。
+    if (sameAsNext && reports[index - 1]?.date !== report.date) {
+      latestOfManyInDay.add(hrefOf(report));
+    }
+  });
+
   return (
-    <Page title="日報" description="普段の接点はほぼこれだけでよい。掘りたくなったら日誌へ降りる">
-      <ErrorNote error={list.error} className="mb-4" />
-
-      {/*
-        `lg` 未満にはこの容器へ `grid-template-columns` の指定が1つも無かった
-        （旧: `grid gap-4 lg:grid-cols-[16rem_1fr]`）。無い場合の暗黙の単一
-        トラックは `auto`＝max-content になるので、**中身の内在幅がそのまま
-        トラック幅**になり枠を超えうる（#265/#282 と同じ形の欠落。#283 で
-        特定・追跡）。`grid-cols-1` を足して傘を掛けるのが根の直し。
-
-        **`lg:grid-cols-[16rem_1fr]` の生の `1fr` は `minmax(auto,1fr)` に
-        展開される**（#265 で特定済み）ので、`lg` 以上でも2つ目の列（1fr側）の
-        自動最小サイズは content-based のままである。1つ目の列（16rem側、
-        `<Card className="h-fit">`）は一覧の1行が短い固定フォーマットの文字列
-        （日付+時刻）で、空白のところで折り返せるため実害は無いと判断し、
-        `min-w-0` は足していない。2つ目の列（1fr側）に来る子には `min-w-0` を
-        足す — `<ReportBody>` のルート `Card` には既に付いている。日報が0件の
-        ときに出る `<Card><Empty>…</Empty></Card>` はこの列に来る唯一のもう
-        1つの分岐で、こちらには付いていなかったので今回足した。
-
-        **jsdom はレイアウトを持たないので、この修正が実機で効いていることは
-        テストでは確かめられない。** 下のテストが保証するのはクラスが当たって
-        いることまでである。
-      */}
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-[16rem_1fr]">
-        <Card className="h-fit">
-          {list.isLoading ? (
-            <Spinner />
-          ) : listUnavailable ? null : reports.length === 0 ? (
-            <Empty>まだ無い。</Empty>
-          ) : (
-            <>
-              <ul>
-                {reports.map((report, index) => (
-                  <li key={report.id}>
-                    <Link
-                      to={`/reports/${report.date}/${encodeURIComponent(report.id)}`}
-                      className={cn(
-                        'block px-4 py-2 text-sm hover:bg-muted',
-                        /*
-                          **罫線は日付の変わり目にだけ引く。** 同じ日のものが1つの塊に
-                          見えるので、時刻だけが違う行が並んでいることが形から分かる
-                          （1日1件の日は今までと同じ見え方になる）。
-
-                          **これは「同じ日の行が隣り合っている」ことに乗っている。**
-                          並びが書いた順だった間は隣り合う保証が無く、遡り生成の日報が
-                          別の日付を挟んで離れると、同じ日に何本も罫線が引かれた。
-                          保証は `apps/daemon/src/reports.ts` が持つ（日付の新しい順）。
-                        */
-                        reports[index + 1]?.date !== report.date && 'border-b border-border',
-                        report.id === selectedId && 'bg-muted text-primary',
-                      )}
-                    >
-                      {reportLabel(report)}
+    /*
+      本文の余白とスクロールは外す（`overflow-hidden p-0 md:p-0`。`cn` は後勝ちなので、
+      safe-area の `pl`/`pr`/`pb` も `p-0` と一緒に消える）。`ListDetail` が左右のペインを
+      それぞれスクロールさせるため。`Page` 自体に足さないのは、枠は他の変更も触っているので
+      ここだけ呼ぶ側で上書きして済ませるため。
+    */
+    <Page
+      title="日報"
+      description="普段の接点はほぼこれだけでよい。掘りたくなったら日誌へ降りる"
+      className="overflow-hidden p-0 md:p-0"
+    >
+      <div className="flex h-full flex-col">
+        <ErrorNote error={list.error} className="mx-4 mt-4 shrink-0 md:mx-6" />
+        <ListDetail
+          className="min-h-0 flex-1"
+          listLabel="日報の一覧"
+          hasSelection={selectedDate !== undefined}
+          selectionKey={selectedId}
+          list={
+            list.isLoading ? (
+              <Spinner />
+            ) : listUnavailable ? null : reports.length === 0 ? (
+              <Empty>まだ無い。</Empty>
+            ) : (
+              <ListDetailItems
+                label="日報"
+                items={reports.map((report) => ({
+                  key: report.id,
+                  href: hrefOf(report),
+                  current: report.id === selectedId,
+                  children: (
+                    <>
+                      <span className="block">{reportTitle(report.date)}</span>
+                      <span className="block text-xs text-muted-foreground">
+                        {writtenAt(report)}
+                        {latestOfManyInDay.has(hrefOf(report)) && (
+                          <span className="ml-1 rounded border border-border px-1 text-[11px]">
+                            最新
+                          </span>
+                        )}
+                      </span>
                       {/*
                         **印の付いた行は、開く前に分かる形にする。** 印を出さないと
                         「日報がある行」と同じ顔になり、人間は開くまで気づけない
@@ -214,35 +265,68 @@ export default function Reports({ loaderData }: Route.ComponentProps) {
                           ⚠
                         </span>
                       )}
-                    </Link>
-                  </li>
-                ))}
-              </ul>
-              {/*
-                **`GET /reports` は総件数を返さないので `TruncationNote` は
-                使えない**（あちらは正確な `total` が要る）。取れた件数が
-                要求した上限とちょうど一致するときだけ、「これより古い日報が
-                あるかもしれない」と明示する——黙って切り捨てない
-                （`tokens.tsx` の `RotationHistory` と同じ形。Issue #426 の G3）。
-              */}
-              {isReportsWindowFull(reports.length) && (
-                <p className="border-t border-border px-4 py-2 text-[11px] text-muted-foreground">
-                  直近 {REPORTS_LIMIT} 件のみ表示している。これより古い日報があるかもしれない。
-                </p>
-              )}
-            </>
-          )}
-        </Card>
+                    </>
+                  ),
+                }))}
+                renderLink={({ href, className, children, ...rest }) => (
+                  <Link
+                    to={href}
+                    {...rest}
+                    className={cn(
+                      className,
+                      /*
+                        **罫線は日付の変わり目にだけ引く。** 同じ日のものが1つの塊に
+                        見えるので、時刻だけが違う行が並んでいることが形から分かる
+                        （1日1件の日は今までと同じ見え方になる）。
 
-        {selectedDate === undefined && listUnavailable ? null : selectedDate === undefined ? (
-          <Card className="min-w-0">
-            <Empty>
-              日報が1件も無い。クローンが締め時刻にまとめる（スケジュールから今すぐ回せる）。
-            </Empty>
-          </Card>
-        ) : (
-          <ReportBody date={selectedDate} reportId={selectedId} />
-        )}
+                        **これは「同じ日の行が隣り合っている」ことに乗っている。**
+                        並びが書いた順だった間は隣り合う保証が無く、遡り生成の日報が
+                        別の日付を挟んで離れると、同じ日に何本も罫線が引かれた。
+                        保証は `apps/daemon/src/reports.ts` が持つ（日付の新しい順）。
+                      */
+                      sameDayAsNext.has(href) && 'border-b-0',
+                    )}
+                  >
+                    {children}
+                  </Link>
+                )}
+              />
+            )
+          }
+          listFooter={
+            /*
+              **`GET /reports` は総件数を返さないので `TruncationNote` は
+              使えない**（あちらは正確な `total` が要る）。取れた件数が
+              要求した上限とちょうど一致するときだけ、「これより古い日報が
+              あるかもしれない」と明示する——黙って切り捨てない
+              （`tokens.tsx` の `RotationHistory` と同じ形。Issue #426 の G3）。
+            */
+            isReportsWindowFull(reports.length) ? (
+              <p className="px-4 py-2 text-[11px] text-muted-foreground">
+                直近 {REPORTS_LIMIT} 件のみ表示している。これより古い日報があるかもしれない。
+              </p>
+            ) : undefined
+          }
+          emptyDetail={
+            listUnavailable ? null : list.isLoading ? (
+              /*
+                **読み込み中に「1件も無い」と言わない**（#2803）。一覧がまだ来ていないだけで
+                `selectedDate` が無いので、「無い」と区別できない。一覧の取得が終わって0件だった
+                ときだけ「1件も無い」を出す。
+              */
+              <Spinner />
+            ) : (
+              <Empty>
+                日報が1件も無い。クローンが締め時刻にまとめる（スケジュールから今すぐ回せる）。
+              </Empty>
+            )
+          }
+          detail={
+            selectedDate === undefined ? null : (
+              <ReportBody date={selectedDate} reportId={selectedId} />
+            )
+          }
+        />
       </div>
     </Page>
   );
@@ -276,11 +360,9 @@ function ReportBody({ date, reportId }: { date: string; reportId: string | undef
   const bodyUnavailable = data === undefined && error !== undefined;
 
   return (
-    <Card className="min-w-0">
-      <div className="border-b border-border px-4 py-3">
-        <h2 className="text-sm font-semibold">
-          {report === undefined ? date : reportLabel(report)}
-        </h2>
+    <div className="min-w-0">
+      <div className="border-b border-border pb-3">
+        <h2 className="text-sm font-semibold">{reportTitle(date)}</h2>
       </div>
       <ErrorNote error={error} className="m-4" />
       {isLoading ? (
@@ -288,7 +370,7 @@ function ReportBody({ date, reportId }: { date: string; reportId: string | undef
       ) : bodyUnavailable ? null : report === undefined ? (
         <Empty>この日の日報は無い。</Empty>
       ) : (
-        <article className="min-w-0 px-4 py-3">
+        <article className="min-w-0 pt-3">
           {/*
             **「書かれたのは」を省かないこと。** 見出しは「何日ぶんの日報か」
             （`date`）で、ここは「いつ書かれたか」（`at`）である。遡り生成では
@@ -301,10 +383,10 @@ function ReportBody({ date, reportId }: { date: string; reportId: string | undef
           {isUnavailable(report) ? (
             <UnavailableNote reason={report.unavailable} />
           ) : (
-            <Markdown>{redactBody(report.body)}</Markdown>
+            <ReportMarkdown>{redactBody(report.body)}</ReportMarkdown>
           )}
         </article>
       )}
-    </Card>
+    </div>
   );
 }

@@ -81,3 +81,27 @@ describe('JournalEntryRow: rawBar', () => {
     expect(container.querySelector('pre')).toBeNull();
   });
 });
+
+describe('JournalEntryRow: 構造（#2756 / #2775）', () => {
+  it('要旨は開閉の button の外にある（button の中の文字は Chromium でドラッグ選択できない）', () => {
+    render(<JournalEntryRow {...base} summary="選べる要旨" />);
+    const summary = screen.getByText('選べる要旨');
+    expect(summary.closest('button')).toBeNull();
+    expect(screen.getByRole('button', { expanded: false }).textContent).not.toContain('選べる要旨');
+  });
+
+  it('要旨を押しても開閉しない（選択のためのクリックで開閉が動かない）', () => {
+    render(<JournalEntryRow {...base} summary="選べる要旨" />);
+    fireEvent.click(screen.getByText('選べる要旨'));
+    expect(screen.getByRole('button', { expanded: false })).toBeTruthy();
+  });
+
+  it('スマホ幅では要旨を2段目に回して3行まで折り返し、sm 以上で1行 truncate に戻る', () => {
+    render(<JournalEntryRow {...base} />);
+    const cls = screen.getByTestId('journal-row-summary').className;
+    expect(cls).toContain('line-clamp-3');
+    expect(cls).toContain('w-full');
+    expect(cls).toContain('sm:truncate');
+    expect(cls).toContain('sm:flex-1');
+  });
+});

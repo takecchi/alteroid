@@ -14,7 +14,7 @@
  * 断片へ割れていて、画面が実際に使う字の断片しか落ちてこない（`unicode-range`）。
  *
  * - IBM Plex Sans JP: 本文と見出し（日本語が主なので、日本語を持つ書体を主にする）
- * - Michroma: ロゴと大きな数字だけ（`font-display`）。幅広の字面が「計器の表示」に見える
+ * - Michroma: ロゴ（ブランドの印）だけ（`font-display`）。幅広の字面が「計器の表示」に見えるが、0 と O の見分けがつかない（#2843）ので、数字・件数・id には使わない
  * - IBM Plex Mono: 識別子・生ログ（`font-mono`）。Plex Sans JP と骨格が揃う
  */
 @import '@fontsource/ibm-plex-sans-jp/400.css';
@@ -58,7 +58,7 @@
  * shadcn に無いものだけを足してある:
  * - `warn` / `ok` —— 状態の色（注意・成功）
  * - `--safe-*` —— 切り欠き・ホームインジケータの取り分
- * - `font-display` —— ロゴと大きな数字の書体（上の書体の節）
+ * - `font-display` —— ロゴ（ブランドの印）の書体。数字・id には使わない（上の書体の節）
  */
 @theme inline {
   --radius-sm: calc(var(--radius) - 4px);

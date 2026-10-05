@@ -261,7 +261,7 @@ const EXPECTED_SITE_COUNT: Record<string, number> = {
   // `[失敗]` = `EXCHANGE_KIND_FAILURE_PREFIX` で、先に書いた「止めた」の打ち消しを書く）。
   // + 1（#486 S8。`#buildSessionSpec` の `onNote`。Claude 以外の駆動役の観測（渡していない MCP 等）を
   // `[判断]` = `EXCHANGE_KIND_DECISION_PREFIX` で書く。Claude の駆動役は呼ばない）。
-  'clone.ts': 58,
+  'clone.ts': 59,
   // 40（issue #1332 起票時点） + 1（issue #1425 が `case 'rate_limit'` に
   // 足した、跨いで畳んだ本数の flush。同じく `EXCHANGE_KIND_GAUGE_PREFIX`）
   // + 1（issue #1388 が `#flushSynthesizedNoticeFor` に足した、合流窓へ
@@ -277,7 +277,10 @@ const EXPECTED_SITE_COUNT: Record<string, number> = {
   // 出し切ったときに1本、`EXCHANGE_KIND_THINNING_PREFIX` で書く）。
   // + 1（#486 S7。`case 'peer_usage'` が peer の消費を台帳へ積めなかったことを
   // `EXCHANGE_KIND_FAILURE_PREFIX` で書く）。
-  'manager.ts': 48,
+  // - 5 + 4（#1311。押し込みの失敗の5箇所（`#pushProfile` 2・`#pushCredentials`・`#pushMcpServers`・
+  // `#pushAgentToken`）を `#journalPushFailure` の `EXCHANGE_KIND_FAILURE_PREFIX` 1箇所と、
+  // 畳みの要約3箇所（`EXCHANGE_KIND_THINNING_PREFIX`）にまとめた）。
+  'manager.ts': 47,
 };
 
 describe('type: exchange の書き込み全箇所が kind 接頭辞を持つ（issue #1332）', () => {

@@ -152,7 +152,7 @@ import {
   buildSelfInitiativePrompt,
   buildTimerPrompt,
 } from './prompt.js';
-import { DAILY_REPORT_KIND, localDate, localDayRange } from './schedule.js';
+import { DAILY_REPORT_KIND, dailyReportEvent, localDate, localDayRange } from './schedule.js';
 import type { ScheduleStatus } from './schedule.js';
 import {
   commitmentClosedBySchema,
@@ -479,6 +479,20 @@ function roundToOneDecimal(value: number): number {
 const DAILY_REPORT_LOOKUP = 30;
 
 /**
+ * 日報のターンが枠切れ（`heldForUsage`）以外で失敗したとき、自分で作り直すまでの間隔（#2745）。
+ * 要素の数が作り直しの回数の上限で、使い切ったら諦める（恒常的な失敗で回り続けない）。
+ * 合計は約21時間（22:00 の日報なら翌日の日報の時刻の手前まで）。数時間の API 障害を越えられる長さにしてある。
+ * 諦めても「作れなかった」の印は日誌に残る（人間に見える）。再起動時の後追いも従来どおり働く。
+ */
+const DAILY_REPORT_RETRY_DELAYS_MS: readonly number[] = [
+  10 * 60_000,
+  30 * 60_000,
+  2 * 3_600_000,
+  6 * 3_600_000,
+  12 * 3_600_000,
+];
+
+/**
  * 外部イベントの中身をクローンに見せる上限（プロンプト・台帳の本文）。
  *
  * **切ったら、省いた量と全文の取り方を名乗る**（issue #1535。
@@ -681,6 +695,15 @@ export function resolveMergedBatchSizeLimit(env: NodeJS.ProcessEnv = process.env
   }
   return Math.floor(parsed);
 }
+
+/**
+ * ターンが失敗で終わった定期の発火を、同じプロセスの中で配り直す間隔（#2739）。失敗のたびに
+ * 後退する（毎分1ターンにしない）。使い切ったら印を残したまま次の周期か再起動に任せる。
+ * 本来の次回より遠くには置かれない（`Scheduler.retrySoon`）。
+ */
+const FAILED_TURN_RETRY_DELAYS_MS: readonly number[] = [10, 30, 120, 360, 720].map(
+  (minutes) => minutes * 60_000,
+);
 
 /**
  * 継続中の依頼の器に触るときの試行回数と間隔（読み取りと発火の記録の両方）。
@@ -1238,6 +1261,11 @@ export interface CloneOptions {
    */
   mergedBatchLimit?: number;
   /**
+   * 日報のターンが枠切れ以外で失敗したあと、作り直すまでの間隔の列（ms。#2745）。
+   * 要素数が作り直しの上限回数。省略時は {@link DAILY_REPORT_RETRY_DELAYS_MS}。主にテスト用。
+   */
+  dailyReportRetryDelaysMs?: readonly number[];
+  /**
    * 実行環境プロファイル（`.zprofile` 相当）。
    *
    * **クローンにも効かせる。** 人間の `.zshenv` は、その人が Claude Code に頼む
@@ -1315,6 +1343,13 @@ export interface CloneOptions {
    * `apps/daemon/src/index.ts`）が組み立てるので、ここで作り直さない。
    */
   scheduler?: () => ScheduleStatus[];
+  /**
+   * 定期の依頼の発火が、引き受け（`claimRun`）の読み書きの失敗で**動かなかった**ときに呼ぶ
+   * （#2741）。デーモンは `scheduler.retrySoon(kind)` を渡す。スケジューラは発火の時点で
+   * 次回を1周期先へ進めてあるので、これが無いと再起動まで取り戻されない。
+   * 定刻の発火（`schedule`）だけが呼ぶ。手で起こした1回（`manual`）は再試行しない。
+   */
+  onScheduledRunNotStarted?: (kind: string, delayMs?: number) => void;
   /**
    * いま自分がどう走っているかの事実（記憶の器・作業ディレクトリ・委譲先・
    * 入口・モデル帯）。システムプロンプトの自己認識の節に載る。
@@ -1667,6 +1702,11 @@ class Clone implements CloneHost {
   readonly #humanPriority: boolean;
   /** 1ターンへ束ねる合図の最大件数（`MERGED_BATCH_SIZE_LIMIT_ENV_KEY`）。 */
   readonly #mergedBatchLimit: number;
+  /** 日報の作り直しの間隔（#2745）。 */
+  readonly #dailyReportRetryDelays: readonly number[];
+  /** 日付ごとの作り直しの回数。プロセス内だけで数える（再起動は後追いが拾う）。 */
+  readonly #dailyReportRetries = new Map<string, number>();
+  readonly #dailyReportRetryTimers = new Set<ReturnType<typeof setTimeout>>();
   /** 道具の MCP サーバを組み立てる関数。既定は本物、テストでは差し替えられる。 */
   readonly #mcpServerFactory: typeof createCloneMcpServer;
   /**
@@ -2295,6 +2335,9 @@ class Clone implements CloneHost {
   readonly #withheldEnvKeys: readonly string[];
   readonly #accountUsage: (() => AccountUsageState) | undefined;
   readonly #scheduler: (() => ScheduleStatus[]) | undefined;
+  readonly #onScheduledRunNotStarted: ((kind: string, delayMs?: number) => void) | undefined;
+  /** 失敗したターンの再試行を数える（kind → 元の回の時刻と回数）。プロセス内だけ。#2739 */
+  readonly #timerTurnRetries = new Map<string, { at: string; attempts: number }>();
   /** {@link CloneOptions.redeliveryGate}。必須（{@link CloneOptions.redeliveryGate} の doc）。 */
   readonly #redeliveryGate: RedeliveryGate;
 
@@ -2318,6 +2361,7 @@ class Clone implements CloneHost {
       permissionMode,
       humanPriority,
       mergedBatchLimit,
+      dailyReportRetryDelaysMs,
       profile,
       profileService,
       credentialService,
@@ -2325,6 +2369,7 @@ class Clone implements CloneHost {
       mcpServerService,
       accountUsage,
       scheduler,
+      onScheduledRunNotStarted,
       self,
       providerOf,
       mcpServerFactory,
@@ -2350,6 +2395,7 @@ class Clone implements CloneHost {
     this.#permissionMode = permissionMode ?? resolveClonePermissionMode(envSource);
     this.#humanPriority = humanPriority ?? resolveCloneHumanPriority(envSource);
     this.#mergedBatchLimit = mergedBatchLimit ?? resolveMergedBatchSizeLimit(envSource);
+    this.#dailyReportRetryDelays = dailyReportRetryDelaysMs ?? DAILY_REPORT_RETRY_DELAYS_MS;
     this.#env = envSource;
     this.#credentials = credentials;
     this.#tokenIdentity = tokenIdentity;
@@ -2361,6 +2407,7 @@ class Clone implements CloneHost {
     this.#withheldEnvKeys = withheldEnvKeys ?? [];
     this.#accountUsage = accountUsage;
     this.#scheduler = scheduler;
+    this.#onScheduledRunNotStarted = onScheduledRunNotStarted;
     this.#self = self;
     this.#providerOf = providerOf ?? knownProviderOf;
     this.#mcpServerFactory = mcpServerFactory ?? createCloneMcpServer;
@@ -3205,6 +3252,8 @@ class Clone implements CloneHost {
   }
 
   async stop(): Promise<void> {
+    for (const timer of this.#dailyReportRetryTimers) clearTimeout(timer);
+    this.#dailyReportRetryTimers.clear();
     // **`#inbox.closed` も見る**（Issue #564 (a)）。読み切りのあいだ `#stopped` はまだ
     // 立っていないので、ここを `#stopped` だけで守ると2度目の呼びが本体をもう一度
     // 走らせる。受信箱を閉じるのはこの関数だけなので、閉じている＝もう入っている。
@@ -3755,7 +3804,15 @@ class Clone implements CloneHost {
         // 後始末の途中で変わる値ではないが、件ごとに読み直す形にすると
         // 「同じ1ターンの分が、半分は消えて半分は保持される」を作れる形が残る。
         const defer = this.#usageBlocked !== null;
-        for (const held of batch) await this.#settleInboxEvent(held, defer);
+        for (const held of batch) {
+          // **保持した `human_answer` は「処理済み」の印を外す**（Issue #2744）。
+          // 印（`#handledHumanAnswerIds`）は #1977 の二重配達防止だが、枠で失敗した
+          // 回答は**まだ処理されていない**（マネージャーへ戻っていない）。残すと、
+          // 解除後の再配達が「二重配達」と畳まれ、回答が黙って失われる。
+          // 印は同じプロセスの中でしか持たないので、保持と生死を揃えてここで外す。
+          if (defer && held.type === 'human_answer') this.#handledHumanAnswerIds.delete(held.id);
+          await this.#settleInboxEvent(held, defer);
+        }
       }
     }
     // 閉じた後に待っている人を取り残さない
@@ -7497,6 +7554,8 @@ class Clone implements CloneHost {
     // 実測ではそちらのほうが多い（24件中15件）が、依頼元の判定が「2×2 の右下1マス
     // だけ」であり、そこは範囲の外である。**⟹ 「長さで落ちる回は全部直った」と
     // 読まないこと。**
+    // 画面が「失敗の知らせ」と見分けるための印（`turnFailure` の doc）。文面は見ない。
+    const turnFailure = this.#usageBlocked === null ? ('failed' as const) : ('held' as const);
     const humanText =
       (this.#usageBlocked === null
         ? 'この発言には返せなかった（ターンが失敗した）。失敗の理由は日誌に残してある。'
@@ -7546,6 +7605,7 @@ class Clone implements CloneHost {
       role: 'outbound',
       text: humanText,
       conversationId,
+      turnFailure,
     });
   }
 
@@ -8476,6 +8536,11 @@ class Clone implements CloneHost {
             role: 'outbound',
             text: `${EXCHANGE_KIND_DECISION_PREFIX}定期の依頼 ${event.kind} は、この発火では動かない: ${claimed.reason}`,
           });
+          // 「次の発火で読み直す」の次の発火が1周期先では遠すぎる。人間が消した
+          // （`withdrawn`）ものは再試行しない。
+          if (event.cause !== 'manual' && claimed.status !== 'withdrawn') {
+            this.#onScheduledRunNotStarted?.(event.kind);
+          }
           return;
         }
 
@@ -8501,7 +8566,7 @@ class Clone implements CloneHost {
             digest: timerDigest,
           }),
         );
-        await this.#runInternal(
+        const outcome = await this.#runInternal(
           buildTimerPrompt({
             kind: event.kind,
             ...(event.target === undefined ? {} : { target: event.target }),
@@ -8517,7 +8582,45 @@ class Clone implements CloneHost {
         // **終わったことを記録するのはここ。** claim（引き受けた印）とは別に置く。
         // ここまで来ないうちに器が落ちたら、印が残っているので配り直される
         // （日次なら翌日・週次なら翌週まで消える、を作らない）。
-        if (plan !== null) await this.#completeScheduledRun(event.kind, event.at, cause);
+        //
+        // **失敗で終わったターンは「終わった」ではない（#2739）。** 枠切れ以外の失敗
+        // （API エラー・文脈窓・SDK の失敗）で `completeRun` を呼ぶと、印が消えて基準が
+        // 進み、週次なら次の週まで誰も気づかない。印を残せば、次の起動の
+        // `#firstDue` と、次の周期の刻み（`#resumable`）で元の発火として配り直される。
+        // 受信箱の合図は失敗として settle される（決定的に失敗する合図を起動のたびに
+        // 焼かない線）ので、配り直しを担うのは印の側である。枠での保持（`heldForUsage`）は
+        // 従来どおり `#pump` の `defer` が配り直す。保持した合図は受信箱に未読で残るので、
+        // 保持中に器が落ちても再起動の `#restoreUnread` が元の回として配り直す（#2814）。
+        // **ここで印を残さないこと** — 残すと `#firstDue` と未読の両方から同じ回が届き、
+        // 走っていない回に `unfinishedAt` が付く（`clone-schedule-held-for-usage.test.ts`）。
+        if (plan !== null) {
+          if (outcome.status === 'failed' && !outcome.heldForUsage) {
+            await this.#journal({
+              type: 'exchange',
+              with: 'self',
+              role: 'outbound',
+              text:
+                `${EXCHANGE_KIND_FAILURE_PREFIX}定期の依頼 ${event.kind}（${event.at}）のターンが失敗で終わった` +
+                `ので「終わった」とは記録しない（引き受けた印が残り、次の起動か次の周期の刻みで配り直される）: ` +
+                outcome.reason,
+            });
+            // 同じプロセスの中でも、次の周期を待たずに後退しながら配り直す。
+            // 元の回（`pendingRun.at`）のまま配り直される（`Scheduler.#resumable`）。
+            // 手で起こした1回は再試行しない。使い切ったら印を残したまま次の周期か再起動に任せる。
+            if (cause !== 'manual') {
+              const prior = this.#timerTurnRetries.get(event.kind);
+              const attempts = prior?.at === event.at ? prior.attempts : 0;
+              const delayMs = FAILED_TURN_RETRY_DELAYS_MS[attempts];
+              if (delayMs !== undefined) {
+                this.#timerTurnRetries.set(event.kind, { at: event.at, attempts: attempts + 1 });
+                this.#onScheduledRunNotStarted?.(event.kind, delayMs);
+              }
+            }
+          } else {
+            this.#timerTurnRetries.delete(event.kind);
+            await this.#completeScheduledRun(event.kind, event.at, cause);
+          }
+        }
         return;
       }
 
@@ -9150,18 +9253,23 @@ class Clone implements CloneHost {
       // 印は1日1件でよい。**積むと人間が読む唯一の層が「作れなかった」で埋まる。**
       // 失敗が続いた回数は日誌（`#reportFailure`）に全部残っているので、ここで
       // 数える必要は無い。
-      if (existing.length > 0) return;
-      await this.#journal({
-        type: 'daily_report',
-        date,
-        // **SDK の文言をそのまま残す**（人間が検索できる形。`usage-limits.ts` の
-        // 「言い換えないこと」と同じ約束）。ただし日報の本文としてではなく、
-        // 書けなかった理由として置く。
-        body: `（この日の日報は作れなかった。日誌から直接辿ること。理由: ${outcome.reason}）`,
-        unavailable: outcome.reason,
-      });
+      if (existing.length === 0)
+        await this.#journal({
+          type: 'daily_report',
+          date,
+          // **SDK の文言をそのまま残す**（人間が検索できる形。`usage-limits.ts` の
+          // 「言い換えないこと」と同じ約束）。ただし日報の本文としてではなく、
+          // 書けなかった理由として置く。
+          body: `（この日の日報は作れなかった。日誌から直接辿ること。理由: ${outcome.reason}）`,
+          unavailable: outcome.reason,
+        });
+      // **印を書いて終わりにしない**（#2745）。枠切れ以外の失敗は一時的なことが多く、
+      // 後追い（`missingDailyReportDates`）は起動時に1回しか走らない。有限回、間を置いて
+      // 作り直す。印は本物の日報が書かれるまで残る（`isWrittenDailyReport`）。
+      this.#scheduleDailyReportRetry(date);
       return;
     }
+    this.#dailyReportRetries.delete(date);
 
     await this.#journal({
       type: 'daily_report',
@@ -9171,6 +9279,23 @@ class Clone implements CloneHost {
           ? outcome.text
           : '（クローンがこの日の日報を残さなかった。日誌から直接辿ること。）',
     });
+  }
+
+  /**
+   * 失敗した日報を、間を置いて作り直す合図を積む（#2745）。回数は
+   * `#dailyReportRetryDelays` の長さで頭打ち。使い切ったら何もしない（印は残っている）。
+   */
+  #scheduleDailyReportRetry(date: string): void {
+    const done = this.#dailyReportRetries.get(date) ?? 0;
+    const delay = this.#dailyReportRetryDelays[done];
+    if (delay === undefined) return;
+    this.#dailyReportRetries.set(date, done + 1);
+    const timer = setTimeout(() => {
+      this.#dailyReportRetryTimers.delete(timer);
+      this.post(dailyReportEvent(date, new Date(), 'schedule_catchup'));
+    }, delay);
+    timer.unref();
+    this.#dailyReportRetryTimers.add(timer);
   }
 
   /**

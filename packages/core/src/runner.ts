@@ -2086,6 +2086,11 @@ class RunnerSession {
       ...(this.#resumeState.sessionId === undefined
         ? {}
         : { sessionId: this.#resumeState.sessionId }),
+      // **背景処理の本数を運ぶ**（Issue #2851。`runnerManagerStateSchema.
+      // liveBackgroundTasks` の doc）。デーモンが「畳んで新しい鍵で起こし直して
+      // よいか」を決める材料で、畳むと道連れになるものの本数である
+      // （`#atTokenRecycleBoundary` と同じ数え方）。
+      liveBackgroundTasks: this.#sdkSession.liveBackgroundTasks.length,
     };
   }
 
@@ -2599,7 +2604,7 @@ class RunnerSession {
           models: report.models,
           ...(report.unmetered ? { unmetered: true } : {}),
         }),
-      makeSpec: (_provider, parts) => ({
+      makeSpec: (provider, parts) => ({
         // cwd・env・子プロセスの起こし方・人間の MCP 連携（peer 自身は除く）はマネージャーと同じ。
         ...this.#buildSpec(undefined, true),
         input: parts.input,
@@ -2618,13 +2623,41 @@ class RunnerSession {
         onNote: parts.onNote,
         onPreToolUse: () => ({ kind: 'continue' }),
         onPermissionDenied: async () => ({ kind: 'no-retry' }),
-        onPostToolUse: () => ({ kind: 'continue' }),
-        onPostToolUseFailure: () => undefined,
+        // **peer の実行も日誌に残す**（#2753。「全ツール実行の記録」は監査の層の約束）。出所は
+        // `actor: peer:<provider>`。マネージャー本体の帳面（`#preToolInputHeads` 等）には触れない。
+        onPostToolUse: (record) => {
+          this.#emit({
+            type: 'tool_use',
+            managerId: this.#id,
+            actor: `peer:${provider}`,
+            tool: record.toolName ?? '(不明)',
+            input: record.toolInput,
+          });
+          return { kind: 'continue' };
+        },
+        onPostToolUseFailure: (record) => this.#notePeerToolUseFailure(provider, record),
         onPreCompact: () => undefined,
         onUserPromptSubmit: () => undefined,
         onSubagentStop: () => ({ kind: 'continue' }),
         onStop: () => undefined,
       }),
+    });
+  }
+
+  /**
+   * peer の失敗した道具呼び出しを日誌へ（#2753）。形は `#onPostToolUseFailure`（マネージャー本体）と
+   * 同じ `note`（`TOOL_USE_FAILURE_NOTE_PREFIX`）で、`actor` だけ `peer:<provider>`。`tool_use` に
+   * しない理由（旧 daemon が未知の欄を落とす）も `#onPostToolUseFailure` の doc のとおり。
+   */
+  #notePeerToolUseFailure(provider: AgentProviderId, record: AgentToolAuditFailureRecord): void {
+    const error =
+      typeof record.error === 'string'
+        ? excerptLine(redactErrorText(record.error, process.env), TOOL_USE_FAILURE_ERROR_EXCERPT)
+        : '(不明)';
+    this.#emit({
+      type: 'note',
+      managerId: this.#id,
+      text: `${TOOL_USE_FAILURE_NOTE_PREFIX} 道具=${record.toolName ?? '(不明)'}・actor=peer:${provider}・error=${error}`,
     });
   }
 
@@ -4633,6 +4666,21 @@ class RunnerSession {
         ? `manager:${this.#id}`
         : `worker:${this.#id}:${record.agentType ?? WORKER_AGENT_NAME}`;
     const toolName = record.toolName;
+
+    // **入口の1行（issue #1766）。** PermissionDenied フックが呼ばれたこと自体を
+    // 日誌に残す（マネージャー本人の拒否で確認が届かない原因が、フックが来て
+    // いないのか呼ばれて落ちたのかを区別するため）。返り値・ask・順序は変えない。
+    // 理由は先頭だけ（改行は潰す）。tool_input は載せない。
+    const reasonHead = Array.from((record.reason ?? '').replace(/\s+/g, ' ').trim());
+    this.#emit({
+      type: 'note',
+      managerId: this.#id,
+      text:
+        `分類器の拒否のフックが届いた（${actor}・${toolName ?? '道具名なし'}・` +
+        `tool_use_id=${record.toolUseId ?? '無し'}）。理由の先頭: ` +
+        `${reasonHead.length === 0 ? '(無し)' : reasonHead.slice(0, 80).join('')}` +
+        `${reasonHead.length > 80 ? '…' : ''}（issue #1766）`,
+    });
 
     if (toolName === undefined) {
       this.#emit({

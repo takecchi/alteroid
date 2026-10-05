@@ -71,6 +71,7 @@ import type {
   RunnerEvent,
   RunnerExecutionResources,
   RunnerLegState,
+  RunnerManagerListing,
   PidsSaturation,
   RunnerLiveness,
   RunnerMcpServersFingerprint,
@@ -335,6 +336,31 @@ export interface ManagerSummary {
    * だけである。
    */
   runnerVanished?: true;
+  /**
+   * **宛先の runner が、最新の生存確認の一覧にこの委譲を載せていた観測時刻**（ISO8601。
+   * `RunnerEntry.sessionsObservedAt` の写し）。観測できていなければ**欄ごと消える**。
+   *
+   * **「居る」と言える事実だけで立てる。** 立つのは次の3つがすべて成り立つときだけで、
+   * どれかが欠ければ出さない（推測で立てない）:
+   *
+   * 1. 宛先の `runnerId` が台帳に在る
+   * 2. その runner が名簿に entry として在り、`#silentRunners()`（`lost`）に入っていない
+   * 3. `#runnerSessions()` の一覧（答えた回の観測。聞けていない回は入らない）にこの委譲
+   *    の id が載っている
+   *
+   * **ここで runner を叩かない**（10秒ごとの生存確認が名簿へ立てた観測を同期に読むだけ。
+   * `sessionMissingSince` の3つ目の契機と同じ材料の、「載っていた」側の写しである）。
+   * `#probeSessions` が持ち帰る `sessions` は `states`（読めた委譲）だけで、
+   * `unreadableIds`（スキーマに合わず読めなかった委譲）は入らない。だから読めなかった委譲は
+   * この欄が立たない（「居る」と言い切れる材料が無い側へ倒れる）。
+   *
+   * **`status` も `live` も動かさない。** `status: done` でも runner が一覧に載せていれば
+   * 立つ——「手が空いただけで、器の上にまだ居る」を名指しする欄である（稼働の地図は、これが
+   * 立った lost / failed / stopped 以外の委譲を終端の窓（10分）に関係なく載せる）。
+   * **古い観測は読み手が捨てる**——`/managers` だけが詰まった回は前の観測が残るので、
+   * 時刻を見て新しさを判断すること。
+   */
+  runnerListedAt?: string;
   /**
    * **宛先の runner が応答したうえで、この委譲のセッションを一覧に載せなかったと
    * 観測した時刻**（ISO8601）。観測していなければ**欄ごと消える**。
@@ -794,6 +820,17 @@ export interface ManagerSummary {
    * ときにしか意味を持たない材料である。
    */
   tokenGenerationUnknownReason?: TokenGenerationUnknownReason;
+  /**
+   * **runner が最後に見た、この委譲の起こしっぱなしの背景処理の本数**（Issue #2851。
+   * 10秒ごとの生存確認が `list()` から拾った `RunnerManagerState.liveBackgroundTasks`）。
+   *
+   * 世代の ⚠（{@link tokenGeneration}）が出ているとき、**なぜ runner が自動で畳み直せて
+   * いないのか**の材料になる（背景処理が残っていると境界に達しない）。**`undefined` は
+   * 「0 本」ではなく「分からない」**（まだ聞けていない・古い runner が欄を返さない）。
+   * 往復は足さない（既に名簿に立っている観測を読むだけ）ので、`send()` が畳む直前に
+   * 読み直す値とは別物で、少し古いことがある。
+   */
+  liveBackgroundTasks?: number;
   /**
    * **429の文言の`resets`時刻を、プールの各鍵の`cooldownUntil`と突き合わせた
    * 結果**（Issue #914 オーナー提案(2)。判定は{@link matchNoticeResetAgainstPool}）。
@@ -1762,6 +1799,7 @@ export type ManagerDecision = 'allow' | 'deny';
  * | `'session_missing'` | **runner がこの委譲のセッションを持っておらず、resume でも入り直せなかった。** そのものは居る | 200 |
  * | `'unknown'` | 届けられたか確かめられなかった（宛先の runner が名簿に開いていない・待ちの宛先が決められない・引き取り中 など） | `'unknown'` のみ 404 |
  * | `'unreadable'` | **台帳に行は在るが読めない形で入っている**（issue #2359）。送っていない。`'unknown'`（居ない）と分ける | 409 |
+ * | `'declined'` | **世代が食い違う done の委譲を畳んで新しい鍵で起こし直したいが、畳めない（背景処理・確認待ちが残っている・それらが分からない・畳めたと確かめられない）ので、畳まず、旧セッションへも送らなかった**（#2851）。そのものは居る | 200 |
  *
  * **`'session_missing'` を `'unknown'` へ畳まないこと。** 畳むと `app.ts` の
  * `if (result.outcome === 'unknown')` が 404 を返し、`ManagerAbortResult` の doc が
@@ -1780,7 +1818,7 @@ export type ManagerDecision = 'allow' | 'deny';
  * したことで、2つの実装は同じ入力に同じ `outcome` を返す。
  */
 export interface ManagerSendResult {
-  outcome: 'answered' | 'delivered' | 'session_missing' | 'unknown' | 'unreadable';
+  outcome: 'answered' | 'delivered' | 'session_missing' | 'unknown' | 'unreadable' | 'declined';
   detail: string;
 }
 
@@ -2945,6 +2983,26 @@ const REATTACH_RETRY_MAX_MS = 30_000;
  */
 const PUSH_RETRY_BASE_MS = 2_000;
 const PUSH_RETRY_MAX_MS = 60_000;
+
+/**
+ * 押し込みの失敗の行を畳む連なりが「途切れた」と見なす空き（ミリ秒。issue #1311）。
+ *
+ * **既定の `JOURNAL_FOLD_IDLE_GAP_MS`（60秒）は使えない。** 挑み直しの間隔は
+ * `PUSH_RETRY_MAX_MS`（60秒）で頭打ちになるので、定常では観測と観測の空きが
+ * 60秒を**少し超える**——既定の空きだと毎回「途切れた」と判定され、何も畳まれない。
+ * 挑み直しの上限の2倍にして、定常の反復が確実に1本の連なりに収まるようにする。
+ * 一方、**2分以上空いた再発は別の連なり＝必ず1行書かれる。**
+ */
+export const PUSH_FAILURE_FOLD_IDLE_GAP_MS = PUSH_RETRY_MAX_MS * 2;
+
+/**
+ * 押し込みの失敗の連なりを、途中の要約で吐き出す総経過の上限（ミリ秒）。
+ *
+ * 既定（5分）だと60秒間隔の反復は5件ごとに要約が出て、行数が 1/5 にしかならない。
+ * 失うのは**畳んだ件数の内訳だけ**（器が落ちたときに高々この時間ぶん）なので、
+ * 30分に伸ばす。
+ */
+export const PUSH_FAILURE_FOLD_MAX_SPAN_MS = 30 * 60_000;
 
 /**
  * `#observeUnpushedWorkOnce`（`case 'report'` と `case 'tool_use'` の
@@ -5376,6 +5434,12 @@ class Pool implements ManagerPool {
   /** 次に待つ時間。全部直ったら忘れる（`#reattachDelays` と同じ形）。 */
   readonly #pushRetryDelays = new Map<string, number>();
   /**
+   * 押し込み（プロファイル・環境変数・MCP・認証トークン）の失敗の行を畳む窓
+   * （`runnerId` と種類ごとに1本。issue #1311。`#journalPushFailure`）。
+   * 直ったとき（`ok`）と `stop()` で吐き出して外す。
+   */
+  readonly #pushFailureFolds = new Map<string, JournalFoldWindow>();
+  /**
    * `probeTurnEnds` が最後に生ログを読みに行った時刻（managerId → `#now()`。
    * Issue #567）。**費用の門のバックオフにしか使わない**——ここに載ったこと
    * 自体は「症状である」を意味しない。
@@ -5670,6 +5734,7 @@ class Pool implements ManagerPool {
       // **門を通す（Issue #1212 残件2）。** `record.job.usageStoppedAt` を
       // 直接渡さない——`ManagerSummary.usageStoppedAt` の doc のとおり。
       this.#usageStopped.has(record.job.id) ? record.job.usageStoppedAt : undefined,
+      runnerListedAtOf(record.job, silent, this.#runnerSessions()),
     );
     /*
      * **`summaryOf` の一般形へは混ぜない（Issue #1814）。** `cwdConfirmed` /
@@ -5825,6 +5890,24 @@ class Pool implements ManagerPool {
               `許可するなら decision: 'allow' を付けて答え直すこと。`
             : `${pending.summary} に回答した。`,
       };
+    }
+
+    /*
+     * **認証トークンの世代が食い違った done の委譲は、旧セッションへ流さない（#2851）。**
+     *
+     * done は台帳の `attached` が true のまま runner にセッションが生きていて、下の
+     * `runner.send()` は旧プロセスへ追加指示を積むだけである。旧プロセスの env は
+     * 起動時に凍っているので、鍵が回った後でも古い鍵で走り、また枠に当たる。しかも
+     * `#tokenIdentities` が動かないので、`manager_list` の世代の ⚠ も消えない
+     * （failed は `attached` が false なので下の resume に落ちて新しい鍵になる）。
+     *
+     * ⟹ 食い違っていれば、ここで畳んで `attached` を false に戻し、**下の既存の resume
+     * 経路へ落とす**（会話は同じ sessionId で続く）。畳んでよくない理由が残っていれば
+     * 畳まずに断る（`#foldStaleTokenSession` の doc）。
+     */
+    if (record.attached && record.job.status === 'done') {
+      const declined = await this.#foldStaleTokenSession(record, runner, managerId);
+      if (declined !== undefined) return declined;
     }
 
     /*
@@ -6021,6 +6104,161 @@ class Pool implements ManagerPool {
         ? '追加指示として届けた（runner にこの委譲のセッションが無かったので、resume から入り直した）。'
         : '追加指示として届けた。',
     };
+  }
+
+  /**
+   * **done の委譲の認証トークンの世代が現役と食い違っているとき、旧セッションを畳んで
+   * 新しい鍵で起こし直せる状態にする**（Issue #2851。`send()` の呼び出し側の注記を見よ）。
+   *
+   * 戻り値が `undefined` なら「呼び出し側はそのまま進んでよい」で、2つの意味がある。
+   * (1) 世代が食い違っていない・runner が一覧にこの委譲を載せていない（下の既存の
+   * 経路が拾う）。(2) **畳んで `record.attached` を false にした**——呼び出し側の
+   * 続きの `if (!attached)` が既存の `#resumeOnce` に落ちる。**戻り値が `ManagerSendResult`
+   * のときは、何も畳まず送ってもいない**（断る・畳めたか確かめられなかった）。
+   *
+   * ## 畳んでよいのは「失うものが無い」と分かったときだけ
+   *
+   * 畳むと SDK 子プロセスごと、確認待ち（`canUseTool`）と起こしっぱなしの背景処理が
+   * 道連れになる。runner 自身の自動の畳み直し（`#atTokenRecycleBoundary`）が境界と
+   * 呼ぶ条件と同じ線で、**1つでも欠けていれば断る**（`declined`）。**古い鍵のまま流し
+   * 込むこともしない**——それが #2851 の症状だからである。
+   *
+   * - 確認待ち: 台帳（`record.waiting`）と runner の応答（`waiting`）の両方を見る
+   * - 背景処理: **runner の応答の `liveBackgroundTasks` だけが材料である。**
+   *   `report.awaitingBackground` は「失敗で終わった回」には立たない（枠で終わった回が
+   *   まさにそれ）ので代わりにならない。**欄が無い（古い runner）ときは「分からない」
+   *   として断る**——0 と読んで畳むと背景処理を黙って殺す
+   * - 会話を引き継げること: `sessionId` が無いまま畳むと会話が切れる
+   *
+   * ## 失われるものが無い順序
+   *
+   * 1. 未 push の観測を取る（`unpushedWork`。best-effort。`abort()` と同じ）
+   * 2. `runner.stop()`。runner 側の `#stopBody` が、子プロセスを閉じた後に生ログを
+   *    デーモンへ送り出し（`#shipArchive`）、未報告の本文を flush し（`#flushUnreported`）、
+   *    それから `onClosed` する。**作業ツリーは runner のディスクに残る**（畳むのは SDK
+   *    子プロセスであって、ワークスペースではない）
+   * 3. 一覧から消えたことを確かめる。**確かめられなければ resume しない**（二重に起こさない）
+   * 4. `attached` を false にする。**貸し出しは返さず握ったまま**で、呼び出し側の
+   *    `#resumeOnce` → `#claimForResume` が同じ器へ貸し直す（`abort()` を流用しない——
+   *    あれは `stopConfirmedAt` を立てて `#resume` に「止めた意思」として resume を断らせる）
+   *
+   * resume が効かない（生ログが無い・session が腐っている）ときは、既存の
+   * `resume_failed` → `#unresumable` の経路に乗る（`case 'resume_failed'`）。
+   */
+  async #foldStaleTokenSession(
+    record: ManagerRecord,
+    runner: RunnerClient,
+    managerId: string,
+  ): Promise<ManagerSendResult | undefined> {
+    const held = this.#tokenIdentities.get(managerId)?.generation;
+    const active = this.#tokenIdentity?.()?.generation;
+    // **一覧の ⚠ と同じ判定**（`tokenGenerationMismatched`）。ここで別の式を書かない。
+    if (
+      !tokenGenerationMismatched({ tokenGeneration: held, activeTokenGeneration: active }) ||
+      held === undefined ||
+      active === undefined
+    ) {
+      return undefined;
+    }
+
+    let listing: RunnerManagerListing;
+    try {
+      listing = await listRunnerManagers(runner);
+    } catch (error) {
+      return {
+        outcome: 'declined',
+        detail:
+          `${managerId} は認証トークンの世代が食い違っている（世代 ${String(held)} を抱えたまま、` +
+          `現役は世代 ${String(active)}）が、runner の状態を読めなかった（${reasonOf(error)}）ため、` +
+          '背景処理や確認待ちが残っているか分からない。畳んでいないし、古い鍵のセッションへも送っていない。' +
+          '少し置いてから送り直すこと。',
+      };
+    }
+    const state = listing.states.find((entry) => entry.managerId === managerId);
+    if (state === undefined) {
+      // 読めない形で在るなら「居る」側に数える（#1661）。数えずに通すと、下の既存の経路が
+      // 旧セッションへ送りうる。
+      if (!listing.unreadableIds.includes(managerId)) return undefined;
+      return {
+        outcome: 'declined',
+        detail:
+          `${managerId} は認証トークンの世代が食い違っているが、runner が返した状態が読めず、` +
+          '背景処理や確認待ちが残っているか分からない。送っていない。',
+      };
+    }
+
+    const blockers: string[] = [];
+    const waitingCount = Math.max(state.waiting.length, record.waiting.length);
+    if (waitingCount > 0) blockers.push(`確認待ちが ${String(waitingCount)} 件残っている`);
+    if (state.liveBackgroundTasks === undefined) {
+      blockers.push(
+        '起こしっぱなしの背景処理が残っているか分からない（この runner の版は本数を返さない）',
+      );
+    } else if (state.liveBackgroundTasks > 0) {
+      blockers.push(`起こしっぱなしの背景処理が ${String(state.liveBackgroundTasks)} 本残っている`);
+    }
+    if (record.job.sessionId === undefined) {
+      blockers.push('会話を引き継ぐ sessionId が無い（畳むと会話が切れる）');
+    }
+    if (blockers.length > 0) {
+      return {
+        outcome: 'declined',
+        detail:
+          `${managerId} は認証トークンの世代が食い違っている（世代 ${String(held)} を抱えたまま、` +
+          `現役は世代 ${String(active)}）。古い鍵のセッションへ流すとまた枠に当たるので、` +
+          '畳んで新しい鍵で起こし直したいが、畳めない理由が残っている: ' +
+          `${blockers.join('。')}。畳んでいないし、送ってもいない。` +
+          '取れる手: (1) 背景処理・確認待ちが終わるのを待ってから送り直す。' +
+          '(2) 残っているものを捨ててよいなら manager_stop → manager_start で後継を起こす' +
+          '（manager_stop は残っている仕事ごと畳む）。',
+      };
+    }
+
+    // 1. 未 push の観測（best-effort。失敗しても畳みの判断は変えない）。
+    await this.unpushedWork(managerId, {
+      signal: AbortSignal.timeout(UNPUSHED_WORK_OBSERVATION_TIMEOUT_MS),
+      source: 'stop',
+    }).catch(() => undefined);
+
+    // 2. 畳む。runner が生ログの送り出しと未報告の flush を済ませてから閉じる。
+    let stopError: unknown;
+    try {
+      await runner.stop(managerId);
+    } catch (error) {
+      stopError = error;
+    }
+    // 3. 一覧から消えたことを確かめる（`abort()` と同じ見方。読めなかった委譲は居る側）。
+    const gone = await listRunnerManagers(runner)
+      .then(
+        ({ states, unreadableIds }) =>
+          !states.some((entry) => entry.managerId === managerId) &&
+          !unreadableIds.includes(managerId),
+      )
+      .catch(() => undefined);
+    if (gone !== true) {
+      return {
+        outcome: 'declined',
+        detail:
+          `${managerId} の旧セッションを畳めたと確かめられなかった` +
+          `（${gone === false ? 'runner の一覧にまだ残っている' : '一覧を読めなかった'}` +
+          `${stopError === undefined ? '' : `。runner.stop() が例外を投げた: ${reasonOf(stopError)}`}）。` +
+          '二重に起こさないので resume していないし、送ってもいない。少し置いてから送り直すこと。',
+      };
+    }
+
+    // 4. 台帳を「セッションは無い」に揃えて、呼び出し側の既存の resume へ落とす。
+    // **書き残してから進む**（404 で訂正する経路と同じ）。畳んだ後・resume の前に
+    // daemon が落ちても、台帳が「繋がっている」のまま残らない。
+    record.attached = false;
+    await this.#persist(record);
+    await this.#journal({
+      type: 'decision',
+      decision: `[${managerId}] 認証トークンの世代が食い違った done の委譲を、畳んで新しい鍵で起こし直す`,
+      grounds:
+        `managerId=${managerId} 抱えていた世代=${String(held)} 現役の世代=${String(active)} ` +
+        'liveBackgroundTasks=0 確認待ち=0（#2851。旧セッションへ流すと古い鍵のまま走る）',
+    });
+    return undefined;
   }
 
   /**
@@ -6242,6 +6480,20 @@ class Pool implements ManagerPool {
     }
   }
 
+  /**
+   * 生存確認が名簿へ立てた観測から、その委譲の背景処理の本数を引く（#2851）。
+   * **聞けていない・欄を返さない runner のときは `undefined`**（0 ではない）。
+   */
+  #observedBackgroundTasks(runnerId: string | undefined, managerId: string): number | undefined {
+    if (runnerId === undefined) return undefined;
+    for (const entry of this.#runners.entries()) {
+      if (entry.runnerId !== runnerId) continue;
+      const tasks = entry.sessionBackgroundTasks;
+      if (tasks !== undefined && Object.hasOwn(tasks, managerId)) return tasks[managerId];
+    }
+    return undefined;
+  }
+
   async list(): Promise<ManagerSummary[]> {
     await this.#ensureConnected();
 
@@ -6249,6 +6501,7 @@ class Pool implements ManagerPool {
     // 読んで台帳へ写すだけである（`#noteMissingSessions` / `#silentRunners`）。
     this.#noteMissingSessions();
     const silent = this.#silentRunners();
+    const runnerSessions = this.#runnerSessions();
     // **同じ理由で1回だけ引く（Issue #1212 running 側。段1）。** 一覧を作って
     // いる間に名簿が動いても、同じ応答の中では全件を同じ像で比べる
     // （`activeTokenGeneration` と同じ筋。真下の `#noteVanishedRunnerGauge` の
@@ -6286,6 +6539,7 @@ class Pool implements ManagerPool {
           this.#resetTimeSkewMatches.get(record.job.id),
           // **門を通す（Issue #1212 残件2）。** `ManagerSummary.usageStoppedAt` の doc。
           this.#usageStopped.has(record.job.id) ? record.job.usageStoppedAt : undefined,
+          runnerListedAtOf(record.job, silent, runnerSessions),
         ),
       );
     }
@@ -6318,8 +6572,18 @@ class Pool implements ManagerPool {
           this.#resetTimeSkewMatches.get(job.id),
           // **門を通す（Issue #1212 残件2）。** `ManagerSummary.usageStoppedAt` の doc。
           this.#usageStopped.has(job.id) ? job.usageStoppedAt : undefined,
+          runnerListedAtOf(job, silent, runnerSessions),
         ),
       );
+    }
+    // **runner が最後に見た背景処理の本数を載せる**（#2851。往復は足さない）。聞けて
+    // いない委譲には欄を作らない（0 を捏造しない）。
+    for (const record of this.#records.values()) {
+      const tasks = this.#observedBackgroundTasks(record.job.runnerId, record.job.id);
+      const summary = known.get(record.job.id);
+      if (tasks !== undefined && summary !== undefined) {
+        known.set(record.job.id, { ...summary, liveBackgroundTasks: tasks });
+      }
     }
     const summaries = [...known.values()];
     // **`isLive()` の返り値にも `status` にも触れない、独立した計器**
@@ -8444,6 +8708,7 @@ class Pool implements ManagerPool {
             // **門を通す（Issue #1212 残件2）。** この直前で `#usageStopped` は
             // 台帳の写しから組み直し済み（このループ冒頭の doc）。
             this.#usageStopped.has(record.job.id) ? record.job.usageStoppedAt : undefined,
+            undefined,
           ),
         );
         continue;
@@ -8477,9 +8742,14 @@ class Pool implements ManagerPool {
       const runner = await this.#runnerOf(record);
       if (!runner) continue;
 
+      // **ここへ来る条件そのものが「runner がこのセッションを知らない」である**
+      // （知っていれば上の `living` の分岐で attach して終わる）。それは器が入れ
+      // 替わった（作業ツリーが消えている）ことと区別できないので、cause は
+      // `'runner'` にする。`'daemon'` のままだと、枝名の clone 案内と「コミット
+      // 前の変更は失われている」が出ない（Issue #2748）。
       const nudge = restartNudge(
         job.status,
-        'daemon',
+        'runner',
         job.workspace,
         job.lastUnpushedWorkObservation,
       );
@@ -8559,7 +8829,7 @@ class Pool implements ManagerPool {
             `${EXCHANGE_KIND_RECOVERY_PREFIX}[${job.id}] （再起動後の再開）${nudge}` +
             (swapNotice === undefined ? '' : ` ${swapNotice}`),
         });
-        this.#notifyRestored(record, 'resumed');
+        this.#notifyRestored(record, 'resumed', 'runner');
         resumed.push(
           summaryOf(
             record,
@@ -8580,6 +8850,7 @@ class Pool implements ManagerPool {
             // **門を通す（Issue #1212 残件2）。** 同上——このループ冒頭で
             // `#usageStopped` は組み直し済み。
             this.#usageStopped.has(record.job.id) ? record.job.usageStoppedAt : undefined,
+            undefined,
           ),
         );
       } catch (error) {
@@ -9096,6 +9367,7 @@ class Pool implements ManagerPool {
     // 記録そのもの**である。`#retire()` を通らずに止まる（＝走行中の委譲を抱えた
     // まま落ちる）と、畳んだ2件目以降が丸ごと消える。
     this.#flushRateLimitJournalFolds();
+    this.#flushPushFailureFolds();
     // 名簿の購読も畳む（載り続ける runner に、止めたプールが繋ぎに行かない）。
     this.#unsubscribe();
     // 予約してあった取り直しは畳む（止めたはずのプールが後から動かない）。
@@ -9162,18 +9434,16 @@ class Pool implements ManagerPool {
       // のと同じ線に揃える（出力はその場の応答——`profile_write` / `PUT /profile`——
       // でだけ返す）。
       const outputChars = result.output?.length ?? 0;
-      await this.#journal({
-        type: 'exchange',
-        with: 'self',
-        role: 'outbound',
-        text:
-          `${EXCHANGE_KIND_FAILURE_PREFIX}${runnerId} に実行環境プロファイルを置けなかった（前のものが残っている）: ` +
+      await this.#journalPushFailure(
+        runnerId,
+        'profile',
+        `${runnerId} に実行環境プロファイルを置けなかった（前のものが残っている）: ` +
           `${result.error ?? '理由不明'}` +
           (outputChars === 0
             ? ''
             : `（プロファイルの出力 ${outputChars} 文字は記録しない——鍵の値が入りうる。` +
               '出力は profile_write / PUT /profile で書き直したときの応答で読める）'),
-      });
+      );
     } catch (error) {
       // **`this.#journal` を経由する。** ここが直に `this.#stores.journal.append`
       // を呼んで自前の catch で `String(error)` を書いていたときは、日誌 append
@@ -9196,12 +9466,11 @@ class Pool implements ManagerPool {
         at: this.#nowIso(),
         error: reasonOf(error),
       });
-      await this.#journal({
-        type: 'exchange',
-        with: 'self',
-        role: 'outbound',
-        text: `${EXCHANGE_KIND_FAILURE_PREFIX}${runnerId} へ実行環境プロファイルを降ろせなかった: ${reasonOf(error)}`,
-      });
+      await this.#journalPushFailure(
+        runnerId,
+        'profile',
+        `${runnerId} へ実行環境プロファイルを降ろせなかった: ${reasonOf(error)}`,
+      );
     }
   }
 
@@ -9232,12 +9501,11 @@ class Pool implements ManagerPool {
         error: reasonOf(error),
       });
       // **`this.#journal` を経由する**（`#pushProfile` と同じ理由・同じ非対称）。
-      await this.#journal({
-        type: 'exchange',
-        with: 'self',
-        role: 'outbound',
-        text: `${EXCHANGE_KIND_FAILURE_PREFIX}${runnerId} へマネージャーの環境変数を降ろせなかった（この runner で起こすマネージャーは、器の環境変数に在るものだけで走る）: ${reasonOf(error)}`,
-      });
+      await this.#journalPushFailure(
+        runnerId,
+        'credentials',
+        `${runnerId} へマネージャーの環境変数を降ろせなかった（この runner で起こすマネージャーは、器の環境変数に在るものだけで走る）: ${reasonOf(error)}`,
+      );
     }
   }
 
@@ -9273,12 +9541,11 @@ class Pool implements ManagerPool {
         error: reasonOf(error),
       });
       // **`this.#journal` を経由する**（`#pushProfile` と同じ理由・同じ非対称）。
-      await this.#journal({
-        type: 'exchange',
-        with: 'self',
-        role: 'outbound',
-        text: `${EXCHANGE_KIND_FAILURE_PREFIX}${runnerId} へ MCP サーバの登録を降ろせなかった（この runner で起こすマネージャー・作業者は、記憶ストアの登録を持たずに走る）: ${reasonOf(error)}`,
-      });
+      await this.#journalPushFailure(
+        runnerId,
+        'mcpServers',
+        `${runnerId} へ MCP サーバの登録を降ろせなかった（この runner で起こすマネージャー・作業者は、記憶ストアの登録を持たずに走る）: ${reasonOf(error)}`,
+      );
     }
   }
 
@@ -9664,8 +9931,11 @@ class Pool implements ManagerPool {
             /*
              * **待っていることを日誌に残す（この経路が本番である）。**
              *
-             * 器の入れ替えで走るのはここであって `#restoreJobs` ではない
-             * （あちらは像に載っている委譲を先頭で見送る）。ここに何も書かないと、
+             * 器の入れ替えだけ（デーモンは生き残った）で走るのはここであって
+             * `#restoreJobs` ではない（あちらは像に載っている委譲を先頭で見送る）。
+             * デーモンと runner が同時に入れ替わった反映では `#restoreJobs` が先に
+             * 走りうるが、あちらも runner に居ないので resume する分岐は cause を
+             * `'runner'` にしてあり、同じ案内が出る（Issue #2748）。ここに何も書かないと、
              * 「待っている」と「忘れている」が記録から区別できなくなる。
              *
              * **遷移のときだけ書く**（`onLost` が1回だけ知らせるのと同じ形）。
@@ -12973,13 +13243,107 @@ class Pool implements ManagerPool {
       // 受け取って読み直す相手がいない（tools.ts 側の `appendJournalOrThrow`
       // が投げ直すのは、クローンがその応答を読んで判断し直せる口を持つからで、
       // ここにはその口が無い）。
+      await this.#journalPushFailure(
+        runner.runnerId,
+        'agentToken',
+        `${runner.runnerId} に認証トークンを降ろせなかった（この runner で起こすマネージャーは、器の環境変数に認証トークンが入っていればそれで走り、入っていなければ資格を1つも持たずに走る——どちらになるかは器の env 次第で、ここからは分からない）: ${reasonOf(error)}`,
+      );
+    }
+  }
+
+  /**
+   * 押し込みの失敗1件を日誌へ書く。**同じ本文が続くあいだは2件目以降を畳む**
+   * （{@link JournalFoldWindow}、issue #1311）。
+   *
+   * ## なぜここか
+   *
+   * 押し込みに失敗した runner へは `#retryFailedPushes` が**諦めずに**挑み直す
+   * （`PUSH_RETRY_MAX_MS` ＝ 60 秒で頭打ち。north_star 禁止2 なので回数では
+   * 止めない）。直らない障害では、**種類（4つ）× runner ごとに、最大で毎分1行・
+   * 1日 1,440 行**の同じ「〜を降ろせなかった」が積まれる。本文は変わらない。
+   *
+   * ## 畳み方（追記専用を破らない）
+   *
+   * - **1件目は必ず書く。** 「降ろせなかった」が消える瞬間は無い
+   * - 本文が変わったら（理由が変わった）別の連なり＝書く
+   * - 空きが {@link PUSH_FAILURE_FOLD_IDLE_GAP_MS} を超えたら別の連なり＝書く
+   * - 直ったら（`ok`）連なりを閉じて要約を吐く（`#flushPushFailureFold`）。
+   *   **直った後の次の失敗は、新しい連なりの1件目として必ず書く**
+   * - 要約は新しい1行の追記（`UPDATE` / 削除は無い）
+   *
+   * 失うのは**2件目以降の個別の時刻**だけである。
+   *
+   * ## 守る線
+   *
+   * 帳面（`#pushHealth`）・挑み直し・クローンへの通知は**一切変えない**。
+   * 畳むのは日誌への1行だけである。この行は判断・承認・権限を記録しない
+   * （`[障害]` の実況。読み手は `journal_read` と日誌の表示だけで、
+   * `readConversationWindow` / digest は `with: 'human'` しか読まない）。
+   */
+  async #journalPushFailure(
+    runnerId: string,
+    kind: keyof RunnerPushHealth,
+    body: string,
+  ): Promise<void> {
+    // 接頭辞は書く箇所の字面に置く（`exchange-kind-coverage.test.ts` の静的検査が読む）。
+    const text = `${EXCHANGE_KIND_FAILURE_PREFIX}${body}`;
+    const key = `${runnerId}\u0000${kind}`;
+    let fold = this.#pushFailureFolds.get(key);
+    if (fold === undefined) {
+      fold = new JournalFoldWindow({
+        idleGapMs: PUSH_FAILURE_FOLD_IDLE_GAP_MS,
+        maxSpanMs: PUSH_FAILURE_FOLD_MAX_SPAN_MS,
+      });
+      this.#pushFailureFolds.set(key, fold);
+    }
+    const folded = fold.observe(text, text, this.#now());
+    if (folded.flush !== undefined) {
       await this.#journal({
         type: 'exchange',
         with: 'self',
         role: 'outbound',
-        text: `${EXCHANGE_KIND_FAILURE_PREFIX}${runner.runnerId} に認証トークンを降ろせなかった（この runner で起こすマネージャーは、器の環境変数に認証トークンが入っていればそれで走り、入っていなければ資格を1つも持たずに走る——どちらになるかは器の env 次第で、ここからは分からない）: ${reasonOf(error)}`,
+        text: `${EXCHANGE_KIND_THINNING_PREFIX}${foldedRunText(folded.flush)}`,
       });
     }
+    if (folded.write) {
+      await this.#journal({
+        type: 'exchange',
+        with: 'self',
+        role: 'outbound',
+        text: `${EXCHANGE_KIND_FAILURE_PREFIX}${body}`,
+      });
+    }
+  }
+
+  /** 1本の押し込みの失敗の畳みを閉じ、畳み残しを要約で吐く（直ったとき）。 */
+  #flushPushFailureFold(runnerId: string, kind: keyof RunnerPushHealth): void {
+    const key = `${runnerId}\u0000${kind}`;
+    const fold = this.#pushFailureFolds.get(key);
+    if (fold === undefined) return;
+    this.#pushFailureFolds.delete(key);
+    const flushed = fold.flush();
+    if (flushed === undefined) return;
+    void this.#journal({
+      type: 'exchange',
+      with: 'self',
+      role: 'outbound',
+      text: `${EXCHANGE_KIND_THINNING_PREFIX}${foldedRunText(flushed)}`,
+    });
+  }
+
+  /** 開いている押し込みの失敗の畳みを全部吐き出す（止まるとき）。 */
+  #flushPushFailureFolds(): void {
+    for (const fold of this.#pushFailureFolds.values()) {
+      const flushed = fold.flush();
+      if (flushed === undefined) continue;
+      void this.#journal({
+        type: 'exchange',
+        with: 'self',
+        role: 'outbound',
+        text: `${EXCHANGE_KIND_THINNING_PREFIX}${foldedRunText(flushed)}`,
+      });
+    }
+    this.#pushFailureFolds.clear();
   }
 
   /** `this.#now()` を ISO 8601 の文字列にする（テストで時刻を固定するため経由する）。 */
@@ -13000,6 +13364,9 @@ class Pool implements ManagerPool {
     outcome: RunnerPushOutcome,
   ): void {
     if (runnerId === undefined) return;
+    // **直ったら畳んでいた連なりを閉じる**（issue #1311）。次に失敗したときは
+    // 「同じ本文だから畳む」ではなく、**新しい失敗として1件目から書く**。
+    if (outcome.status === 'ok') this.#flushPushFailureFold(runnerId, kind);
     const health = this.#pushHealth.get(runnerId) ?? {};
     health[kind] = outcome;
     this.#pushHealth.set(runnerId, health);
@@ -14700,6 +15067,26 @@ function vanishedOf(
   return true;
 }
 
+/**
+ * {@link ManagerSummary.runnerListedAt} を1件ぶん判定する。`silentRunners` と
+ * `sessions`（`Pool#runnerSessions`）は呼ぶ側が一覧ごとに1回だけ引いたものを渡す。
+ *
+ * **観測できていなければ `undefined`**——宛先が無い・名簿が名乗っていない（`sessions` に
+ * entry が無い）・黙った器（`lost`）・一覧に載っていない、のどれでも立てない。
+ */
+function runnerListedAtOf(
+  job: Pick<Job, 'id' | 'runnerId'>,
+  silentRunners: ReadonlyMap<string, string>,
+  sessions: ReadonlyMap<string, { ids: ReadonlySet<string>; observedAt: string }>,
+): string | undefined {
+  const runnerId = job.runnerId;
+  if (runnerId === undefined) return undefined;
+  if (silentRunners.has(runnerId)) return undefined;
+  const observed = sessions.get(runnerId);
+  if (observed === undefined) return undefined;
+  return observed.ids.has(job.id) ? observed.observedAt : undefined;
+}
+
 function isLive(record: ManagerRecord, silentRunners: ReadonlyMap<string, string>): boolean {
   // **`lost` は何より先に見る。** 「繋がっている（`attached`）なら live」を先に
   // 置くと、両立しない組を出さないことが「両者が同時に立つ代入が無い」という
@@ -14973,6 +15360,10 @@ function summaryOf(
   // プロセス内の状態——呼ぶ側が `this.#usageStopped.has(id)` で門を通した
   // 後の値（時刻）だけをここへ渡す。`ManagerSummary.usageStoppedAt` の doc。
   usageStoppedAt: string | undefined,
+  // **`live` と同じ引数の作法で運ぶ。** 材料は名簿の観測（`#runnerSessions()`）で `record`
+  // からは読めない。呼ぶ側が `runnerListedAtOf()` の返り値を渡す。観測しない呼び出し
+  // （起動時の引き取り）は `undefined` を明示する。`ManagerSummary.runnerListedAt` の doc。
+  runnerListedAt: string | undefined,
 ): ManagerSummary {
   const { job } = record;
   const tokenGenerationUnknownReason = tokenGenerationUnknownReasonOf(
@@ -14991,6 +15382,7 @@ function summaryOf(
     // ことが「entry は名簿に残っている」という主張になって外へ出る。呼ぶ側は
     // `vanishedOf(record, registeredRunnerIds)` の返り値をそのまま渡せばよい。
     ...(runnerVanished === undefined ? {} : { runnerVanished }),
+    ...(runnerListedAt === undefined ? {} : { runnerListedAt }),
     // **同上（#563）。** 既定を置くと、足す人が考えなかったことが「runner はこの
     // 委譲のセッションを持っている」という主張になって外へ出る。呼ぶ側は
     // `record.sessionMissingSince` をそのまま渡せばよい（像が正本である）。
@@ -15125,4 +15517,25 @@ function summaryOf(
     // では欄ごと消す——`tokenGeneration` と同じ作法。
     ...(resetTimeSkewMatch === undefined ? {} : { resetTimeSkewMatch }),
   };
+}
+
+/**
+ * **この委譲が抱えている認証トークンの世代が、現役と食い違っているか**
+ * （Issue #914 提案1 の判定そのもの。Issue #931 で2つ目の読み手が付いた）。
+ *
+ * **判定を2箇所へ書かないためだけに在る。** {@link describeTokenGeneration}
+ * が ⚠ の行を出すかどうかと、{@link failureLine} が回復の見込みに但し書きを
+ * 足すかどうかは、**同じ1つの事実**である——別々に書くと、いつか片方だけが
+ * 直って「世代は食い違っているのに『時間で戻る』とだけ出る」形に戻る。
+ *
+ * **どちらかが `undefined` なら偽である。** 比べる相手が居ないときに
+ * 食い違いを捏造しない（`ManagerSummary.activeTokenGeneration` の doc と
+ * 同じ理由）。
+ */
+export function tokenGenerationMismatched(
+  manager: Pick<ManagerSummary, 'tokenGeneration' | 'activeTokenGeneration'>,
+): boolean {
+  if (manager.tokenGeneration === undefined) return false;
+  if (manager.activeTokenGeneration === undefined) return false;
+  return manager.tokenGeneration !== manager.activeTokenGeneration;
 }

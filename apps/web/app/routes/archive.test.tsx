@@ -138,8 +138,10 @@ describe('/archive 画面 — 一覧・集計・削除（#776）', () => {
 
     await renderArchive();
 
-    expect(await screen.findByText('sess-1-a.jsonl')).toBeTruthy();
-    expect(screen.getByText(/session sess-1/)).toBeTruthy();
+    expect(await screen.findByText(/ の会話$/)).toBeTruthy();
+    // 識別子は「詳しい情報」の先にだけ在る
+    expect(screen.getByText('sess-1-a.jsonl').closest('details')).not.toBeNull();
+    expect(screen.getByText('sess-1').closest('details')).not.toBeNull();
     expect(screen.getByText(/1234バイト/)).toBeTruthy();
   });
 
@@ -159,8 +161,86 @@ describe('/archive 画面 — 一覧・集計・削除（#776）', () => {
 
     await renderArchive();
 
-    expect(await screen.findByText('sess-repeated')).toBeTruthy();
+    expect(await screen.findByText(/からの会話/)).toBeTruthy();
+    expect(screen.getByText('sess-repeated').closest('details')).not.toBeNull();
     expect(screen.getByText('行数 68')).toBeTruthy();
+  });
+
+  it('折りたたみの外に UUID の形の文字列を出さない', async () => {
+    const uuid = '3f2b8c1e-9a4d-4e6f-8b1a-0c2d3e4f5a6b';
+    stubArchiveScreen(
+      [{ id: `${uuid}-1.jsonl`, sessionId: uuid, at: '2026-09-01T00:00:00.000Z', storedBytes: 10 }],
+      {
+        sessions: [
+          {
+            sessionId: uuid,
+            rows: 1,
+            storedBytes: 10,
+            maxStoredBytes: 10,
+            firstAt: '2026-09-01T00:00:00.000Z',
+            lastAt: '2026-09-01T00:00:00.000Z',
+          },
+        ],
+      },
+    );
+
+    await renderArchive();
+    await screen.findAllByText(/の会話$/);
+
+    const clone = document.body.cloneNode(true) as HTMLElement;
+    clone.querySelectorAll('details').forEach((el) => el.remove());
+    expect(clone.textContent).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-/);
+    expect(document.body.textContent).toMatch(uuid);
+  });
+
+  it('連続性のバッジは日本語で出し、内部の語を本文に出さない', async () => {
+    stubArchiveScreen([
+      {
+        id: 'a.jsonl',
+        sessionId: 's',
+        at: '2026-09-01T00:00:00.000Z',
+        storedBytes: 1,
+        continuity: 'continues',
+      },
+      {
+        id: 'b.jsonl',
+        sessionId: 's',
+        at: '2026-09-02T00:00:00.000Z',
+        storedBytes: 1,
+        continuity: 'zzz',
+      },
+      {
+        id: 'c.jsonl',
+        sessionId: 's',
+        at: '2026-09-03T00:00:00.000Z',
+        storedBytes: 1,
+        removedAt: '2026-09-04T00:00:00.000Z',
+        removedBytes: 7,
+      },
+    ] as StubEntry[]);
+
+    await renderArchive();
+
+    expect(await screen.findByText('前回の続き')).toBeTruthy();
+    expect(screen.getByText('前回との関係は不明')).toBeTruthy();
+    const clone = document.body.cloneNode(true) as HTMLElement;
+    clone.querySelectorAll('details,[title]').forEach((el) => el.removeAttribute('title'));
+    clone.querySelectorAll('details').forEach((el) => el.remove());
+    const text = clone.textContent ?? '';
+    for (const word of [/continues/, /zzz/, /UTF-8/, /置き場/]) expect(text).not.toMatch(word);
+    expect(text).toMatch(/消した本文は 7バイト/);
+  });
+
+  it('空のとき、何が起きるとここに出るかを言い、コマンド名・パス・内部の語を出さない（#2792）', async () => {
+    stubArchiveScreen([]);
+
+    await renderArchive();
+
+    expect((await screen.findAllByText(/退避された生ログはまだありません/)).length).toBe(2);
+    const text = document.body.textContent ?? '';
+    for (const word of [/alteroid chat/, /\/archive/, /sessionId/, /GET /]) {
+      expect(text).not.toMatch(word);
+    }
   });
 
   it('既に削除済みの行には「本文を消す」を出さない', async () => {
@@ -200,9 +280,9 @@ describe('/archive 画面 — 一覧・集計・削除（#776）', () => {
     // 消した量（`removedBytes`）は「消した本文の素の UTF-8 バイト数」。
     // 使用量とは単位が違い、置き場で解放した量でもないと言う。
     const removedLine = screen.getByText(/削除:/);
-    expect(removedLine.textContent).toContain('消した本文の素の UTF-8 バイト数 1000000');
-    expect(removedLine.textContent).toContain('使用量とは単位が違い');
-    expect(removedLine.textContent).toContain('解放した量ではない');
+    expect(removedLine.textContent).toContain('消した本文は 1000000バイト');
+    expect(removedLine.textContent).toContain('使用量とは数え方が違う');
+    expect(removedLine.textContent).toContain('空いた容量とは一致しません');
     // 単位の区別なしの「（1000000バイト）」の形は出さない。
     expect(screen.queryByText(/（1000000バイト）/)).toBeNull();
   });

@@ -1,10 +1,10 @@
 import { useState } from 'react';
 import type { ReactNode } from 'react';
-import { Link, useNavigate } from 'react-router';
+import { Link, useLocation, useNavigate } from 'react-router';
 
 import {
+  DocumentTitle,
   Markdown,
-  Page,
   Badge,
   Button,
   Card,
@@ -121,10 +121,13 @@ export function clientLoader({ params }: Route.ClientLoaderArgs) {
  */
 const PAGE_DESCRIPTION = 'この仕事1本の状態と、走行中に割り込む口。依頼の全文は下';
 
+const NOT_FOUND_DESCRIPTION = '指定されたマネージャーはありません';
+
 export default function ManagerDetail({ loaderData }: Route.ComponentProps) {
   const { id } = loaderData;
   const { data, error, isLoading } = useManager(id);
   const navigate = useNavigate();
+  const { search } = useLocation();
   const abortManager = useAbortManager();
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<unknown>(undefined);
@@ -139,83 +142,92 @@ export default function ManagerDetail({ loaderData }: Route.ComponentProps) {
    * **409（委譲の行は在るが、読めない形で入っている。issue #2359）も「見つからない」ではない。**
    * 居ないのではなく壊れているだけなので、デーモンの言い分（理由つき）を `ErrorNote` が出す。
    */
-  const detailUnavailable =
-    data === undefined &&
-    error !== undefined &&
-    !(error instanceof ApiError && error.status === 404);
+  const notFound = data === undefined && error instanceof ApiError && error.status === 404;
+  const detailUnavailable = data === undefined && error !== undefined && !notFound;
 
   return (
-    <Page
-      title={
-        <span className="flex items-center gap-2">
-          <Link to="/managers" className="text-muted-foreground hover:text-foreground">
-            マネージャー
-          </Link>
-          <span className="text-muted-foreground">/</span>
-          <span className="font-mono text-sm">{id}</span>
-        </span>
-      }
-      description={PAGE_DESCRIPTION}
-      action={
-        /*
-          **状態で出し分けない。** ここはかつて `running` / `waiting_human` の
-          ときだけ停止ボタンを描いていたが、絞っていたのは画面だけだった —
-          CLI の `/stop`（`apps/cli/src/chat.ts`）は id を受け取ってそのまま
-          `DELETE` を投げるだけで status を見ないし、デーモン
-          （`apps/daemon/src/app.ts` の `.delete('/managers/:id')`）も
-          `ManagerPool.abort`（`packages/core/src/manager.ts`）も、台帳に
-          居ない（`absent`）以外では弾かない。**同じ行為が入口によって
-          できたりできなかったりしていた**（PRD「入口の等価性」は「委譲の停止」を
-          名指しで挙げている。北極星の禁止1）。
+    <>
+      {/*
+        詳細は一覧の右のペインに出る（親の経路 `managers.tsx` の `ListDetail`）ので、画面の枠
+        （`Page`）も戻るリンクも持たない。画面の h1 は親が持ち、ここの見出しは h2。狭い画面では
+        `ListDetail` の「マネージャーの一覧を開く」が一覧への戻り口になる。
+      */}
+      <DocumentTitle>マネージャーの詳細</DocumentTitle>
+      <header className="mb-4 flex items-start justify-between gap-4">
+        <div className="min-w-0">
+          <h2 className="text-base font-semibold">マネージャーの詳細</h2>
+          <p className="mt-0.5 text-xs text-muted-foreground">
+            {notFound ? NOT_FOUND_DESCRIPTION : PAGE_DESCRIPTION}
+          </p>
+          <p className="mt-0.5 break-all font-mono text-[11px] text-muted-foreground">{id}</p>
+        </div>
+        <div className="shrink-0">
+          {/*
+            **状態で出し分けない。** ここはかつて `running` / `waiting_human` の
+            ときだけ停止ボタンを描いていたが、絞っていたのは画面だけだった —
+            CLI の `/stop`（`apps/cli/src/chat.ts`）は id を受け取ってそのまま
+            `DELETE` を投げるだけで status を見ないし、デーモン
+            （`apps/daemon/src/app.ts` の `.delete('/managers/:id')`）も
+            `ManagerPool.abort`（`packages/core/src/manager.ts`）も、台帳に
+            居ない（`absent`）以外では弾かない。**同じ行為が入口によって
+            できたりできなかったりしていた**（PRD「入口の等価性」は「委譲の停止」を
+            名指しで挙げている。北極星の禁止1）。
 
-          **揃える方向は「できる側」である。** CLI から能力を削れば対称には
-          なるが、それは禁止2 に触れる。
+            **揃える方向は「できる側」である。** CLI から能力を削れば対称には
+            なるが、それは禁止2 に触れる。
 
-          **`done` を止めたい場面は実在する。** `done` は「死んだ」ではなく
-          「終えて待機」で（`schema.ts` の `jobStatusSchema`、この画面の札も
-          「待機中」）、セッションは生きている。待機したまま残っているものを
-          畳む手が、Web にだけ無かった。
+            **`done` を止めたい場面は実在する。** `done` は「死んだ」ではなく
+            「終えて待機」で（`schema.ts` の `jobStatusSchema`、この画面の札も
+            「待機中」）、セッションは生きている。待機したまま残っているものを
+            畳む手が、Web にだけ無かった。
 
-          **状態を列挙する形へ戻さないこと。** 状態は増えうるので、
-          `status === X || status === Y` の形は増えた日に黙って新しい状態を
-          締め出す（増えたことはこの行からは分からない）。**ここは1つも
-          数え上げない**ことでそれを避けている。
+            **状態を列挙する形へ戻さないこと。** 状態は増えうるので、
+            `status === X || status === Y` の形は増えた日に黙って新しい状態を
+            締め出す（増えたことはこの行からは分からない）。**ここは1つも
+            数え上げない**ことでそれを避けている。
 
-          **押せない理由があるときは、非表示ではなく理由で出す。** 停止が
-          通らなかった応答は `failure` に入り、下の `ErrorNote` に出る。
-          ボタンを消すと、できないことと「この画面が扱っていないこと」を
-          人間が区別できない。
+            **押せない理由があるときは、非表示ではなく理由で出す。** 停止が
+            通らなかった応答は `failure` に入り、下の `ErrorNote` に出る。
+            ボタンを消すと、できないことと「この画面が扱っていないこと」を
+            人間が区別できない。
 
-          残っている `manager !== undefined` は**状態のガードではなく存在の
-          ガード**である（読み込み中はまだ何も描けない）。
-        */
-        manager !== undefined ? (
-          <Button
-            variant="danger"
-            size="sm"
-            loading={busy}
-            onClick={() => {
-              setBusy(true);
-              setFailure(undefined);
-              // 本文が要る（サーバ側に json バリデータが付いている）。
-              abortManager(id, '人間が画面から停止した')
-                .then(() => navigate('/managers'))
-                .catch(setFailure)
-                .finally(() => setBusy(false));
-            }}
-          >
-            停止する
-          </Button>
-        ) : undefined
-      }
-    >
-      <ErrorNote error={error ?? failure} className="mb-4" />
+            残っている `manager !== undefined` は**状態のガードではなく存在の
+            ガード**である（読み込み中はまだ何も描けない）。
+          */}
+          {manager !== undefined ? (
+            <Button
+              variant="danger"
+              size="sm"
+              loading={busy}
+              onClick={() => {
+                setBusy(true);
+                setFailure(undefined);
+                // 本文が要る（サーバ側に json バリデータが付いている）。
+                abortManager(id, '人間が画面から停止した')
+                  .then(() => navigate({ pathname: '/managers', search }))
+                  .catch(setFailure)
+                  .finally(() => setBusy(false));
+              }}
+            >
+              停止する
+            </Button>
+          ) : undefined}
+        </div>
+      </header>
+
+      {/* 404 は下のカードが日本語で言う。応答の素の文（英語の `not found`）を重ねて出さない（#2791）。 */}
+      <ErrorNote error={notFound ? failure : (error ?? failure)} className="mb-4" />
 
       {isLoading ? (
         <Spinner />
       ) : detailUnavailable ? null : manager === undefined ? (
         <Card>
-          <Empty>見つからない。</Empty>
+          <Empty>
+            このマネージャーは見つかりません（削除されたか、id が違います）。
+            <Link to="/managers" className="ml-2 underline">
+              マネージャー一覧へ戻る
+            </Link>
+          </Empty>
         </Card>
       ) : (
         <div className="flex flex-col gap-4">
@@ -436,7 +448,7 @@ export default function ManagerDetail({ loaderData }: Route.ComponentProps) {
           <Transcript id={id} />
         </div>
       )}
-    </Page>
+    </>
   );
 }
 
@@ -741,7 +753,7 @@ function LastReportBody({
   lastFailure: ManagerSummary['lastFailure'] | undefined;
 }) {
   if (lastFailure === undefined || lastFailure === null) {
-    return <Markdown>{redactBody(lastReport)}</Markdown>;
+    return <Markdown headingOffset={2}>{redactBody(lastReport)}</Markdown>;
   }
   return (
     <pre className="overflow-x-auto rounded border border-border bg-background p-2 text-[11px] break-words whitespace-pre-wrap text-muted-foreground">

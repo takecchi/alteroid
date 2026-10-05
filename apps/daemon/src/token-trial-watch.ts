@@ -250,7 +250,7 @@ export function startTokenTrialWatch(options: TokenTrialWatchOptions): TokenTria
     await handleFailure(token, verdict);
   }
 
-  async function tick(): Promise<void> {
+  async function tickBody(): Promise<void> {
     if (stopped) return;
     const at = now();
     confirmPendingSuccesses(at);
@@ -302,6 +302,22 @@ export function startTokenTrialWatch(options: TokenTrialWatchOptions): TokenTria
       process.stderr.write(`alteroidd: 認証トークンの試しが落ちました: ${reasonOf(error)}\n`);
     } finally {
       inFlight = false;
+    }
+  }
+
+  /**
+   * 目盛り1回ぶん。**例外は全部ここで握る**（issue #2747）。`stores.tokens.list()` /
+   * `readActive()` の一時的な失敗（記憶ストアの瞬断など）が reject のまま
+   * 出ると、`void tick().finally(schedule)` は誰にも受けられない未処理の拒否になり、
+   * デーモンごと落ちる。ほかの周期処理（`token-watch.ts` など）と同じく、
+   * stderr へ1行だけ書いて次の周期へ進む。メッセージには `reasonOf` を通した文だけを
+   * 出し、鍵の値は出さない。
+   */
+  async function tick(): Promise<void> {
+    try {
+      await tickBody();
+    } catch (error) {
+      process.stderr.write(`alteroidd: 認証トークンの試しが落ちました: ${reasonOf(error)}\n`);
     }
   }
 

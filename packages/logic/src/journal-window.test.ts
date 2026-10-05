@@ -17,6 +17,7 @@ import {
   filterByType,
   filterRecent,
   journalHorizonNote,
+  journalHorizonNoteForHuman,
   mergeBack,
   mergeFront,
   newerPageQuery,
@@ -335,6 +336,15 @@ describe('shiftForPrepend（新着を先頭に足すとき shift に何を渡す
   it('足された・上端に居ない（遡って読んでいる） → shift する（読んでいる行が動かない）', () => {
     expect(shiftForPrepend(true, false)).toBe(true);
   });
+
+  it('足された・上端に居る・読んでいる（行を展開中／文章を選択中） → shift する（#2774）', () => {
+    expect(shiftForPrepend(true, true, true)).toBe(true);
+  });
+
+  it('何も足されていなければ、読んでいても shift しない', () => {
+    expect(shiftForPrepend(false, true, true)).toBe(false);
+    expect(shiftForPrepend(false, false, true)).toBe(false);
+  });
 });
 
 /**
@@ -470,5 +480,28 @@ describe('継続点 next（Issue #2604 / #2605）', () => {
       const first: P = { entries: [real], next: cursor };
       expect(await readThroughUnreadable<P>(first, never)).toBe(first);
     });
+  });
+});
+
+describe('journalHorizonNoteForHuman（issue #2806）', () => {
+  const fmt = (iso: string) => `<${iso.slice(0, 10)}>`;
+
+  it('出す条件は journalHorizonNote と同じ', () => {
+    for (const outcome of ['progress', 'retryLarger', 'blocked'] as const) {
+      expect(
+        journalHorizonNoteForHuman(outcome, '2026-10-03T01:00:00.000Z', true, fmt),
+      ).toBeUndefined();
+    }
+    expect(
+      journalHorizonNoteForHuman('end', '2026-10-03T01:00:00.000Z', false, fmt),
+    ).toBeUndefined();
+    expect(journalHorizonNoteForHuman('end', null, true, fmt)).toBeUndefined();
+  });
+
+  it('時刻は渡された整形で出し、ISO 文字列と内部の言葉（記憶ストア）を出さない', () => {
+    const note = journalHorizonNoteForHuman('end', '2026-10-03T01:00:00.000Z', true, fmt);
+    expect(note).toContain('<2026-10-03>');
+    expect(note).not.toContain('T01:00');
+    expect(note).not.toContain('記憶ストア');
   });
 });

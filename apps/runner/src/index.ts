@@ -210,6 +210,24 @@ export function childUserOf(env: NodeJS.ProcessEnv = process.env): RunnerChildUs
 }
 
 /**
+ * 制御面のソケットの持ち主（デーモンの UID）。**未設定なら `undefined`（持ち主を変えない）。**
+ *
+ * 以前は `Number(env ?? '')` を `Number.isInteger` で見ていたが、`Number('')` は `0` で整数なので、
+ * UID が未設定でも uid 0 へ chown しに行っていた（非 root の runner では EPERM で起動に失敗し、
+ * root の runner ではデーモンが繋げない root 持ちのソケットになる）。
+ * 置かれた値が整数でないときは従来どおり変えない。
+ */
+export function socketOwnerOf(
+  env: NodeJS.ProcessEnv = process.env,
+): { uid: number; gid: number } | undefined {
+  const rawUid = envValue(env, 'ALTEROID_RUNNER_SOCKET_UID');
+  if (rawUid === undefined) return undefined;
+  const uid = Number(rawUid);
+  if (!Number.isInteger(uid)) return undefined;
+  return { uid, gid: Number(envValue(env, 'ALTEROID_RUNNER_SOCKET_GID') ?? uid) };
+}
+
+/**
  * 孤児の回収（#315 / #1334）を切る口。**この版が受け付けるのは3値である。**
  *
  * **未設定なら `reclaim`（撃つ）である**（オーナーの決定 2026-10-02、#1853）。それまでの既定は
@@ -472,11 +490,8 @@ export async function main(): Promise<void> {
     mkdirSync(dirname(socketPath), { recursive: true });
     await new Promise<void>((resolve) => server.listen({ path: socketPath }, resolve));
     // **デーモンだけが繋げる持ち主にする。** 子プロセス（別 UID）は繋げない。
-    const ownerUid = Number(envValue(process.env, 'ALTEROID_RUNNER_SOCKET_UID') ?? '');
-    if (Number.isInteger(ownerUid)) {
-      const ownerGid = Number(envValue(process.env, 'ALTEROID_RUNNER_SOCKET_GID') ?? ownerUid);
-      chownSync(socketPath, ownerUid, ownerGid);
-    }
+    const owner = socketOwnerOf(process.env);
+    if (owner !== undefined) chownSync(socketPath, owner.uid, owner.gid);
     chmodSync(socketPath, 0o600);
     listeningOn = `unix:${socketPath}`;
   } else {

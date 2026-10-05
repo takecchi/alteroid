@@ -54,13 +54,13 @@ function view(overrides: Record<string, unknown> = {}) {
 
 describe('formatAge', () => {
   it('秒・分・時間・日で言い、読めない時刻は経過不明', () => {
-    expect(formatAge(ago(3), NOW)).toBe('3s ago');
-    expect(formatAge(ago(125), NOW)).toBe('2m ago');
-    expect(formatAge(ago(7200), NOW)).toBe('2h ago');
-    expect(formatAge(ago(3 * 86_400), NOW)).toBe('3d ago');
+    expect(formatAge(ago(3), NOW)).toBe('3秒前');
+    expect(formatAge(ago(125), NOW)).toBe('2分前');
+    expect(formatAge(ago(7200), NOW)).toBe('2時間前');
+    expect(formatAge(ago(3 * 86_400), NOW)).toBe('3日前');
     expect(formatAge('not-a-date', NOW)).toBe('経過不明');
     // 時計のずれで未来になっても負の値を出さない
-    expect(formatAge(ago(-5), NOW)).toBe('0s ago');
+    expect(formatAge(ago(-5), NOW)).toBe('0秒前');
   });
 });
 
@@ -68,14 +68,14 @@ describe('renderTopology', () => {
   it('各層の状態と、線ごとの向き別の経過を出す', () => {
     const out = renderTopology(view() as never, NOW);
     expect(out).toContain('クローン [busy（normal・会話 conv-1）]');
-    expect(out).toContain('記憶 [postgres: ok（5s agoに確認）]');
-    expect(out).toContain('↓ 発言 3s ago   ↑ 応答 1s ago');
-    expect(out).toContain('↓ 書き込み —（未観測）   ↑ 読み出し 7s ago');
+    expect(out).toContain('記憶 [postgres: ok（5秒前に確認）]');
+    expect(out).toContain('↓ 発言 3秒前   ↑ 応答 1秒前');
+    expect(out).toContain('↓ 書き込み —（未観測）   ↑ 読み出し 7秒前');
     expect(out).toContain('mgr-1 [waiting_human・live]  認証まわりを直して');
-    expect(out).toContain('↓ 指示 1m ago   ↑ 報告・確認 30s ago');
-    expect(out).toContain('返事待ち question（8s agoから）: どちらにしますか');
-    expect(out).toContain('作業者 worker（種類ごとに束ねた1行）: 最後の道具 Edit（4s ago）');
-    expect(out).toContain('↓ 背景で起動 1m ago   ↑ 結果が戻った —（未観測）   ・ 活動 4s ago');
+    expect(out).toContain('↓ 指示 1分前   ↑ 報告・確認 30秒前');
+    expect(out).toContain('返事待ち question（8秒前から）: どちらにしますか');
+    expect(out).toContain('作業者 worker（種類ごとに束ねた1行）: 最後の道具 Edit（4秒前）');
+    expect(out).toContain('↓ 背景で起動 1分前   ↑ 結果が戻った —（未観測）   ・ 活動 4秒前');
     expect(out).toContain('runner r1 [connected]');
   });
 
@@ -101,10 +101,10 @@ describe('renderTopology', () => {
       ],
     });
     const out = renderTopology(withRunning as never, NOW);
-    expect(out).toContain('実行中の道具 Bash（開始 3m ago）');
+    expect(out).toContain('実行中の道具 Bash（開始 3分前）');
     // 既存の行はそのまま。
-    expect(out).toContain('作業者 worker（種類ごとに束ねた1行）: 最後の道具 Edit（4s ago）');
-    expect(out.replace(/ *実行中の道具 Bash（開始 3m ago）\n/, '')).toBe(without);
+    expect(out).toContain('作業者 worker（種類ごとに束ねた1行）: 最後の道具 Edit（4秒前）');
+    expect(out.replace(/ *実行中の道具 Bash（開始 3分前）\n/, '')).toBe(without);
   });
 
   it('分からない軸は unknown のまま出し、idle / ok に化けさせない', () => {
@@ -187,9 +187,59 @@ describe('renderTopology', () => {
       ],
     });
     expect(renderTopology(waiting as never, NOW)).toContain(
-      '完了待ち: 背景処理 2 件（local_agent×2）（1m agoから）',
+      '完了待ち: 背景処理 2 件（local_agent×2）（1分前から）',
     );
     expect(renderTopology(view() as never, NOW)).not.toContain('完了待ち');
+  });
+
+  it('手が空いて runner の一覧に載っている委譲は、その旨を出し、欄が無ければ出さない', () => {
+    const idle = (extra: object) =>
+      view({
+        managers: [
+          {
+            managerId: 'mgr-idle',
+            status: 'done',
+            live: true,
+            request: '終わった依頼',
+            startedAt: ago(7200),
+            updatedAt: ago(3600),
+            waiting: [],
+            workers: [],
+            ...extra,
+          },
+        ],
+      });
+    expect(renderTopology(idle({ runnerListedAt: ago(5) }) as never, NOW)).toContain(
+      'runner の一覧に載っている（観測 5秒前）',
+    );
+    expect(renderTopology(idle({}) as never, NOW)).not.toContain('runner の一覧に載っている');
+  });
+
+  it('マネージャーの居る器を言う。生きた器と突き合わなければ「分からない」と言い、落とさない', () => {
+    const m = (managerId: string, runnerId?: string) => ({
+      managerId,
+      status: 'running',
+      live: true,
+      ...(runnerId === undefined ? {} : { runnerId }),
+      request: 'x',
+      startedAt: ago(60),
+      updatedAt: ago(5),
+      waiting: [],
+      workers: [],
+    });
+    const out = renderTopology(
+      view({
+        runners: [
+          { label: 'http://a', runnerId: 'runner-a', state: 'connected', since: ago(9) },
+          { label: 'http://b', runnerId: 'runner-b', state: 'lost', since: ago(9) },
+        ],
+        managers: [m('m-a', 'runner-a'), m('m-b', 'runner-b'), m('m-none')],
+      }) as never,
+      NOW,
+    );
+    expect(out).toContain('器: runner-a');
+    expect(out).not.toContain('器: runner-b');
+    expect(out.match(/器: 分からない/g)).toHaveLength(2);
   });
 
   it('自由文（依頼・返事待ち）に混じったトークンは伏せる', () => {

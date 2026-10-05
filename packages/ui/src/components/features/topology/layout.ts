@@ -42,6 +42,11 @@ export interface TopologyWorker {
 
 export interface TopologyManager {
   id: string;
+  /**
+   * このマネージャーが居る器（`TopologyScene.runners[].id`）。**無い・どの器とも突き合わない
+   * ときは「器の分からない委譲」の枠へ入れる**（図から黙って消さない）。
+   */
+  runner?: string;
   label: string;
   task?: string;
   status: TopologyStatus;
@@ -49,6 +54,15 @@ export interface TopologyManager {
   flow?: TopologyFlow;
   workers?: readonly TopologyWorker[];
   details?: readonly TopologyDetail[];
+}
+
+/** runner の器1台。`id` は `managers[].runner` と突き合わせる鍵。 */
+export interface TopologyRunner {
+  id: string;
+  /** 枠の名前（runner の名前。例: runner-primary） */
+  label: string;
+  /** `offline` ならこの器の中のマネージャーへの線を切れた形で描く */
+  status: TopologyStatus;
 }
 
 export interface TopologyScene {
@@ -71,8 +85,12 @@ export interface TopologyScene {
   };
   /** デーモンの器（クローンと記憶ストアの接続情報を持つ側） */
   daemon?: { label?: string };
-  /** manager-runner の器。`offline` ならクローンからの線を切れた形で描く */
-  runner: { label?: string; status: TopologyStatus };
+  /**
+   * 生きている runner の器。**1台に1枠**を描き、その中にその器の上で確認できているマネージャーを
+   * 入れる（大きな「manager-runner」の枠は無い）。0台なら枠は出さず、空の案内だけを出す。
+   * 死んだ器（名簿で `lost` など）は呼び手が入れない。
+   */
+  runners: readonly TopologyRunner[];
   managers: readonly TopologyManager[];
   /**
    * 台帳の行が読めず、地図に載せられなかった委譲の件数（`snapshot.unreadable` の長さ。#2705）。
@@ -144,8 +162,62 @@ export interface TopologyLayout {
   nodes: LaidNode[];
   edges: LaidEdge[];
   containers: LaidContainer[];
-  /** マネージャーが1本も無いときの「いません」の枠 */
+  /** マネージャーが1本も無いときの案内の枠（枠が在れば、その下に置く） */
   empty?: Box;
+}
+
+/**
+ * 器の枠に出す名前。**利用者に見える名前は日本語にする**（内部の呼び名 alteroidd・db は出さない）。
+ * 正式な英字の名前は枠のツールチップ（`system-topology.tsx` の `CONTAINER_HINT`）に残す。鍵（`db` / `daemon`）は変えない。
+ */
+export const DB_CONTAINER_LABEL = '記憶の置き場';
+export const DAEMON_CONTAINER_LABEL = 'alteroid 本体';
+/** 人間の札の補足。細い札（スマホ幅で 120 幅）に収まる短さにする。 */
+const HUMAN_TASK = '画面・端末';
+
+/** どの生きた器とも突き合わないマネージャーを入れる枠の鍵。 */
+export const UNKNOWN_RUNNER_KEY = 'unknown-runner';
+export const UNKNOWN_RUNNER_LABEL = '器の分からない委譲';
+
+interface RunnerGroup {
+  key: string;
+  label: string;
+  state: ContainerState;
+  broken: boolean;
+  /** `scene.managers` の添字 */
+  members: number[];
+}
+
+/**
+ * マネージャーを器ごとの枠へ振り分ける。**器が分からない・突き合わないものを捨てない**——
+ * 最後の「器の分からない委譲」へ入れる（実行中なのに図に居ない、を作らない）。
+ */
+function groupManagers(scene: TopologyScene): RunnerGroup[] {
+  const groups: RunnerGroup[] = scene.runners.map((r) => ({
+    key: r.id,
+    label: r.label,
+    state: containerState(r.status),
+    broken: r.status === 'offline',
+    members: [],
+  }));
+  const byKey = new Map(groups.map((g) => [g.key, g]));
+  let unknown: RunnerGroup | undefined;
+  scene.managers.forEach((m, i) => {
+    const hit = m.runner === undefined ? undefined : byKey.get(m.runner);
+    if (hit) {
+      hit.members.push(i);
+      return;
+    }
+    unknown ??= {
+      key: UNKNOWN_RUNNER_KEY,
+      label: UNKNOWN_RUNNER_LABEL,
+      state: 'unknown',
+      broken: false,
+      members: [],
+    };
+    unknown.members.push(i);
+  });
+  return unknown ? [...groups, unknown] : groups;
 }
 
 const NODE_H = 60;
@@ -224,7 +296,7 @@ function baseNodes(scene: TopologyScene) {
       kind: 'human',
       box,
       label: scene.human?.label ?? 'あなた',
-      task: 'Web UI / CLI',
+      task: HUMAN_TASK,
       edges: ['human'],
     }),
     db: (box: Box): LaidNode => ({
@@ -241,7 +313,7 @@ function baseNodes(scene: TopologyScene) {
       key: 'clone',
       kind: 'clone',
       box,
-      label: scene.clone.label ?? 'clone',
+      label: scene.clone.label ?? 'クローン',
       task: scene.clone.task,
       status: scene.clone.status,
       details: scene.clone.details,
@@ -259,12 +331,35 @@ export function layoutWide(scene: TopologyScene): TopologyLayout {
   const width = COL.worker + W + 24 + PAD;
 
   const rows = scene.managers.map((m) => Math.max(1, m.workers?.length ?? 0));
-  const contentH =
-    Math.max(
-      3,
-      rows.reduce((a, b) => a + b, 0),
-    ) * ROW_H;
-  const height = TOP + contentH + PAD + 8;
+  const groups = groupManagers(scene);
+  const GROUP_GAP = 12;
+  /** 空の枠（マネージャーが居ない器）の中身の高さ。名前の行だけ。 */
+  const EMPTY_BODY = 8;
+
+  // 器ごとの枠を縦に積む。枠の上端は名前の行（HEAD + 4）の分だけ行の開始より上。
+  let stackY = TOP;
+  const laidGroups = groups.map((g) => {
+    const bodyH = g.members.reduce((a, i) => a + rows[i]! * ROW_H, 0);
+    const box: Box = {
+      x: COL.manager - PAD,
+      y: stackY - HEAD - 4,
+      w: COL.worker + W + PAD - (COL.manager - PAD),
+      h: HEAD + 4 + (g.members.length === 0 ? EMPTY_BODY : bodyH),
+    };
+    const rowTop = stackY;
+    stackY = box.y + box.h + GROUP_GAP + HEAD + 4;
+    return { group: g, box, rowTop };
+  });
+  const stackBottom =
+    laidGroups.length === 0 ? TOP : laidGroups.at(-1)!.box.y + laidGroups.at(-1)!.box.h;
+  const empty: Box | undefined =
+    scene.managers.length === 0
+      ? laidGroups.length === 0
+        ? { x: COL.manager, y: TOP + ROW_H, w: COL.worker + W - COL.manager, h: NODE_H }
+        : { x: COL.manager, y: stackBottom + GROUP_GAP, w: COL.worker + W - COL.manager, h: NODE_H }
+      : undefined;
+  const contentH = Math.max(3 * ROW_H, stackBottom - TOP);
+  const height = Math.max(TOP + contentH, empty ? empty.y + empty.h : 0) + PAD + 8;
   const at = (x: number, centerY: number): Box => ({ x, y: centerY - NODE_H / 2, w: W, h: NODE_H });
 
   const make = baseNodes(scene);
@@ -274,7 +369,6 @@ export function layoutWide(scene: TopologyScene): TopologyLayout {
 
   const nodes: LaidNode[] = [];
   const edges: LaidEdge[] = [];
-  const runnerDown = scene.runner.status === 'offline';
   const dbDown = scene.db.status === 'offline';
 
   // 人間と DB → クローンの左辺。出口を上下に分けて、最後の横の区間を共有させない。
@@ -303,16 +397,22 @@ export function layoutWide(scene: TopologyScene): TopologyLayout {
   if (scene.human) nodes.push(make.human(humanBox));
   nodes.push(make.db(dbBox), make.clone(cloneBox));
 
-  let cursor = 0;
-  const managerBoxes = scene.managers.map((m, i) => {
-    const span = rows[i] ?? 1;
-    const box = at(COL.manager, TOP + (cursor + span / 2) * ROW_H);
-    const workerBoxes = (m.workers ?? []).map((_, j) =>
-      at(COL.worker, TOP + (cursor + j) * ROW_H + ROW_H / 2),
-    );
-    cursor += span;
-    return { box, workerBoxes };
-  });
+  const managerBoxes: { box: Box; workerBoxes: Box[] }[] = [];
+  for (const { group, rowTop } of laidGroups) {
+    let cursor = 0;
+    for (const i of group.members) {
+      const m = scene.managers[i]!;
+      const span = rows[i] ?? 1;
+      const box = at(COL.manager, rowTop + (cursor + span / 2) * ROW_H);
+      const workerBoxes = (m.workers ?? []).map((_, j) =>
+        at(COL.worker, rowTop + (cursor + j) * ROW_H + ROW_H / 2),
+      );
+      cursor += span;
+      managerBoxes[i] = { box, workerBoxes };
+    }
+  }
+  const brokenOf = new Map<number, boolean>();
+  for (const g of groups) for (const i of g.members) brokenOf.set(i, g.broken);
 
   const toManagers = fanRight(
     cloneBox,
@@ -324,7 +424,7 @@ export function layoutWide(scene: TopologyScene): TopologyLayout {
       key: `m-${m.id}`,
       points: toManagers[i]!,
       flow: m.flow ?? 'idle',
-      broken: runnerDown,
+      broken: brokenOf.get(i) ?? false,
       reverse: false,
     });
     nodes.push({
@@ -343,7 +443,7 @@ export function layoutWide(scene: TopologyScene): TopologyLayout {
         key: `w-${w.id}`,
         points: toWorkers[j]!,
         flow: w.flow ?? 'idle',
-        broken: runnerDown,
+        broken: brokenOf.get(i) ?? false,
         reverse: false,
       });
       nodes.push({
@@ -374,34 +474,26 @@ export function layoutWide(scene: TopologyScene): TopologyLayout {
       {
         key: 'db',
         box: wrap(dbBox),
-        label: 'db',
+        label: DB_CONTAINER_LABEL,
         state: containerState(scene.db.status),
         labelAlign: 'start',
       },
       {
         key: 'daemon',
         box: wrap(cloneBox),
-        label: scene.daemon?.label ?? 'alteroidd',
+        label: scene.daemon?.label ?? DAEMON_CONTAINER_LABEL,
         state: 'ok',
         labelAlign: 'start',
       },
-      {
-        key: 'runner',
-        box: {
-          x: COL.manager - PAD,
-          y: TOP - HEAD - 4,
-          w: COL.worker + W + PAD - (COL.manager - PAD),
-          h: contentH + HEAD + 4,
-        },
-        label: scene.runner.label ?? 'manager-runner',
-        state: containerState(scene.runner.status),
+      ...laidGroups.map(({ group, box }): LaidContainer => ({
+        key: `runner:${group.key}`,
+        box,
+        label: group.label,
+        state: group.state,
         labelAlign: 'start',
-      },
+      })),
     ],
-    empty:
-      scene.managers.length === 0
-        ? { x: COL.manager, y: TOP + ROW_H, w: COL.worker + W - COL.manager, h: NODE_H }
-        : undefined,
+    empty,
   };
 }
 
@@ -411,7 +503,6 @@ export function layoutNarrow(scene: TopologyScene): TopologyLayout {
   const ROW_H = 72;
   const GAP = 24;
   const make = baseNodes(scene);
-  const runnerDown = scene.runner.status === 'offline';
   const dbDown = scene.db.status === 'offline';
 
   // 1段目: 人間と DB を横に並べる（人間が居なければ DB だけ右に置く）
@@ -429,22 +520,42 @@ export function layoutNarrow(scene: TopologyScene): TopologyLayout {
   };
   const cloneBox: Box = { x: 16, y: daemonContainer.y + HEAD, w: 328, h: NODE_H };
 
-  // 3段目: runner の器の中に、マネージャー → その下に字下げした作業者
-  const runnerY = daemonContainer.y + daemonContainer.h + GAP;
-  let rowY = runnerY + HEAD;
-  const managerBoxes = scene.managers.map((m) => {
-    const box: Box = { x: 48, y: rowY, w: 296, h: NODE_H };
-    rowY += ROW_H;
-    const workerBoxes = (m.workers ?? []).map(() => {
-      const wb: Box = { x: 80, y: rowY, w: 264, h: NODE_H };
+  // 3段目: 器（runner）ごとの枠。その中に、マネージャー → その下に字下げした作業者
+  const groups = groupManagers(scene);
+  const brokenOf = new Map<number, boolean>();
+  const managerBoxes: { box: Box; workerBoxes: Box[] }[] = [];
+  const runnerContainers: LaidContainer[] = [];
+  let rowY = daemonContainer.y + daemonContainer.h + GAP;
+  for (const g of groups) {
+    const top = rowY;
+    rowY += HEAD;
+    for (const i of g.members) {
+      brokenOf.set(i, g.broken);
+      const m = scene.managers[i]!;
+      const box: Box = { x: 48, y: rowY, w: 296, h: NODE_H };
       rowY += ROW_H;
-      return wb;
+      const workerBoxes = (m.workers ?? []).map(() => {
+        const wb: Box = { x: 80, y: rowY, w: 264, h: NODE_H };
+        rowY += ROW_H;
+        return wb;
+      });
+      managerBoxes[i] = { box, workerBoxes };
+    }
+    if (g.members.length === 0) rowY += 8;
+    runnerContainers.push({
+      key: `runner:${g.key}`,
+      box: { x: 8, y: top, w: 344, h: rowY - top },
+      label: g.label,
+      state: g.state,
+      labelAlign: 'end',
     });
-    return { box, workerBoxes };
-  });
-  const rowsH = Math.max(ROW_H, rowY - (runnerY + HEAD));
-  const runnerContainer: Box = { x: 8, y: runnerY, w: 344, h: HEAD + rowsH };
-  const height = runnerContainer.y + runnerContainer.h + 8;
+    rowY += GAP / 2;
+  }
+  const emptyBox: Box | undefined =
+    scene.managers.length === 0
+      ? { x: 16, y: groups.length === 0 ? rowY + HEAD : rowY, w: 328, h: NODE_H }
+      : undefined;
+  const height = Math.max(rowY - GAP / 2, emptyBox ? emptyBox.y + emptyBox.h : 0) + 8;
 
   const nodes: LaidNode[] = [];
   const edges: LaidEdge[] = [];
@@ -485,7 +596,7 @@ export function layoutNarrow(scene: TopologyScene): TopologyLayout {
       key: `m-${m.id}`,
       points: toManagers[i]!,
       flow: m.flow ?? 'idle',
-      broken: runnerDown,
+      broken: brokenOf.get(i) ?? false,
       reverse: false,
     });
     nodes.push({
@@ -504,7 +615,7 @@ export function layoutNarrow(scene: TopologyScene): TopologyLayout {
         key: `w-${w.id}`,
         points: toWorkers[j]!,
         flow: w.flow ?? 'idle',
-        broken: runnerDown,
+        broken: brokenOf.get(i) ?? false,
         reverse: false,
       });
       nodes.push({
@@ -529,27 +640,20 @@ export function layoutNarrow(scene: TopologyScene): TopologyLayout {
       {
         key: 'db',
         box: dbContainer,
-        label: 'db',
+        label: DB_CONTAINER_LABEL,
         state: containerState(scene.db.status),
         labelAlign: 'end',
       },
       {
         key: 'daemon',
         box: daemonContainer,
-        label: scene.daemon?.label ?? 'alteroidd',
+        label: scene.daemon?.label ?? DAEMON_CONTAINER_LABEL,
         state: 'ok',
         labelAlign: 'end',
       },
-      {
-        key: 'runner',
-        box: runnerContainer,
-        label: scene.runner.label ?? 'manager-runner',
-        state: containerState(scene.runner.status),
-        labelAlign: 'end',
-      },
+      ...runnerContainers,
     ],
-    empty:
-      scene.managers.length === 0 ? { x: 16, y: runnerY + HEAD, w: 328, h: NODE_H } : undefined,
+    empty: emptyBox,
   };
 }
 

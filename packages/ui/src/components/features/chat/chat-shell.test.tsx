@@ -109,7 +109,7 @@ describe('ConversationList: 枠・空・但し書き', () => {
 });
 
 describe('ChatHeader', () => {
-  it('会話が無ければ操作は出ず、「新しい会話」と出る。決まっていれば id と2つの操作', () => {
+  it('会話が無ければ操作は出ず、「新しい会話」と出る。決まっていれば2つの操作（id は出さない）', () => {
     const { rerender } = render(
       <ChatHeader
         conversationId={undefined}
@@ -122,9 +122,22 @@ describe('ChatHeader', () => {
     rerender(
       <ChatHeader conversationId="conv_1" onInterrupt={() => undefined} onEnd={() => undefined} />,
     );
-    expect(screen.getByText('conv_1')).toBeTruthy();
+    expect(screen.queryByText('conv_1')).toBeNull();
     expect(screen.getByRole('button', { name: 'クローンのターンを止める' })).toBeTruthy();
     expect(screen.getByRole('button', { name: '会話を終える' })).toBeTruthy();
+  });
+
+  it('subtitle を渡すと見出しの下に出す。「会話を終える」は確認を挟み、「終える」で初めて onEnd を呼ぶ', () => {
+    const onEnd = vi.fn();
+    render(
+      <ChatHeader conversationId="c" subtitle="10/01 10:00 に開始 · 発言 8 件" onEnd={onEnd} />,
+    );
+    expect(screen.getByText('10/01 10:00 に開始 · 発言 8 件')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: '会話を終える' }));
+    expect(onEnd).not.toHaveBeenCalled();
+    expect(screen.getByText(/学びを記憶にまとめます/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: '終える' }));
+    expect(onEnd).toHaveBeenCalledTimes(1);
   });
 
   it('帯と notice は同じ safe-area の余白を持つ', () => {
@@ -192,5 +205,51 @@ describe('ChatComposer', () => {
   it('空の下書きでは「送る」が押せない', () => {
     composer({ value: '  ' });
     expect((screen.getByRole('button', { name: '送る' }) as HTMLButtonElement).disabled).toBe(true);
+  });
+});
+
+describe('ChatComposer: 入力に合わせて高さが伸びる', () => {
+  // jsdom は寸法を計算しないので、scrollHeight をテキストの行数から返す。
+  function stubHeights(lineHeight: number) {
+    const proto = HTMLTextAreaElement.prototype;
+    vi.spyOn(proto, 'scrollHeight', 'get').mockImplementation(function (this: HTMLTextAreaElement) {
+      return Math.max(2, this.value.split('\n').length) * lineHeight;
+    });
+  }
+  afterEach(() => vi.restoreAllMocks());
+
+  function box(value: string) {
+    const ui = (v: string) => (
+      <ChatComposer value={v} onChange={() => undefined} onSend={() => undefined} />
+    );
+    const view = render(ui(value));
+    const el = screen.getByRole('textbox') as HTMLTextAreaElement;
+    return { el, update: (v: string) => view.rerender(ui(v)) };
+  }
+
+  it('行が増えると高さが伸び、空に戻すと元の高さに戻る', () => {
+    stubHeights(24);
+    const { el, update } = box('');
+    expect(el.style.height).toBe('48px');
+    update(Array.from({ length: 10 }, () => 'a').join('\n'));
+    expect(el.style.height).toBe('240px');
+    update('');
+    expect(el.style.height).toBe('48px');
+  });
+
+  it('上限は CSS の max-height で掛かり、超えた分は内側をスクロールする', () => {
+    stubHeights(24);
+    const { el } = box(Array.from({ length: 30 }, () => 'a').join('\n'));
+    expect(el.style.height).toBe('720px'); // 測った高さはそのまま入れ、止めるのは max-height
+    const classes = el.className.split(/\s+/);
+    expect(classes).toContain('max-h-[min(40dvh,15rem)]');
+    expect(classes).toContain('overflow-y-auto');
+  });
+
+  it('リサイズのつまみを出さない（resize-none が resize-y に負けない）', () => {
+    const { el } = box('');
+    const classes = el.className.split(/\s+/);
+    expect(classes).toContain('resize-none');
+    expect(classes).not.toContain('resize-y');
   });
 });

@@ -91,6 +91,20 @@ import { createApp } from './app.js';
 export const errorResponseSchema = z.object({ error: z.string() });
 
 /**
+ * **日誌が書けなかったので、状態を変えずに断った** 500 の本文（issue #2742 の続き。
+ * `PUT /tokens`・`PUT /tokens/policy` の「広げる側」）。
+ *
+ * `error` は人間が読む文、`code` は機械が見分ける印（文言では見分けない）。
+ * 例外の本文は載せない（トークンの値が載りうる）。
+ */
+export const JOURNAL_WRITE_FAILED_CODE = 'journal_write_failed';
+export const JOURNAL_WRITE_FAILED_MESSAGE = '記録（日誌）が書けなかったので、変更していません';
+export const journalWriteFailedResponseSchema = z.object({
+  error: z.string(),
+  code: z.literal(JOURNAL_WRITE_FAILED_CODE),
+});
+
+/**
  * **`validationErrorResponseSchema`（`{ data, error: <issue配列>, success: false }`）は
  * ここに在ったが、いまは無い。** `hook` を渡さない `validator(...)` が検査に
  * 落ちたときの、`@hono/standard-validator` の既定 400 の形——`json` の経路は
@@ -309,6 +323,12 @@ const conversationMessageSchema = z.object({
    * ときにだけ、どの編集がこれを隠したかを示す。
    */
   supersededBy: z.string().optional(),
+  /**
+   * 返信ではなく「返せなかった」知らせである印。`failed` はターンの失敗（もう一度送れば
+   * 試し直せる）、`held` は利用上限での保持（枠が開けばクローンが自分で試し直す）。
+   * 付いていない発言は通常の発言（または印を持たない古い行）。
+   */
+  turnFailure: z.enum(['failed', 'held']).optional(),
 });
 
 export const conversationDetailResponseSchema = z.object({
@@ -345,7 +365,19 @@ export const conversationDetailResponseSchema = z.object({
 // ---------------------------------------------------------------------------
 
 export const memoryListResponseSchema = z.object({ documents: z.array(memoryDocumentMetaSchema) });
-export const memoryReadResponseSchema = z.object({ document: memoryDocumentSchema });
+/**
+ * `version` は本文（保存された形）の sha256 hex（`memoryVersion`、Issue #2743）。
+ * 書き換える側が持ち回り、`PUT /memory/{slug}` の `ifMatch` へ渡す。
+ */
+export const memoryReadResponseSchema = z.object({
+  document: memoryDocumentSchema,
+  version: z.string(),
+});
+/** `PUT /memory/{slug}` の 409。`current` は**いまの版**（読んだ後に消されていれば null）。 */
+export const memoryConflictResponseSchema = z.object({
+  error: z.string(),
+  current: memoryReadResponseSchema.nullable(),
+});
 export const memoryDeleteResponseSchema = z.object({ ok: z.literal(true), slug: z.string() });
 
 // ---------------------------------------------------------------------------
@@ -1135,6 +1167,12 @@ export const managerSummarySchema = z.object({
    * `manager_list` にだけ出る形になる）。
    */
   runnerVanished: z.literal(true).optional(),
+  /**
+   * 宛先の runner が、最新の生存確認の一覧にこの委譲を載せていた観測時刻
+   * （`ManagerSummary.runnerListedAt`）。**観測できていなければ欄ごと無い**（推測で立てない）。
+   * 古い観測は読み手が時刻で捨てる。**ここに宣言しないと、値が在っても黙って落ちる。**
+   */
+  runnerListedAt: isoDateTimeSchema.optional(),
   runnerId: z.string().optional(),
   workspace: workspaceLocatorSchema.optional(),
   /**
@@ -1216,6 +1254,13 @@ export const managerSummarySchema = z.object({
   tokenGenerationUnknownReason: z
     .enum(['pool-not-wired', 'not-yet-observed', 'reattached-across-restart'])
     .optional(),
+  /**
+   * runner が最後に見た、この委譲の起こしっぱなしの背景処理の本数（Issue #2851。
+   * `packages/core/src/manager.ts` の `ManagerSummary.liveBackgroundTasks`）。
+   * **`undefined` は「0 本」ではなく「分からない」。** ここに宣言しないと、値が在っても
+   * 黙って落ちる（真上の `tokenGenerationUnknownReason` と同じ断り）。
+   */
+  liveBackgroundTasks: z.number().int().nonnegative().optional(),
   /**
    * 429の文言の `resets` 時刻を、プールの各鍵の `cooldownUntil` と突き合わせた
    * 結果（Issue #914 オーナー提案(2)。`packages/core/src/manager.ts` の
@@ -1404,6 +1449,7 @@ export const managerActionResponseSchema = z.object({
     'stopped',
     'not_stopped',
     'session_missing',
+    'declined',
     'unknown',
   ]),
   detail: z.string(),
@@ -1663,6 +1709,13 @@ const topologyManagerSchema = z.object({
   status: jobStatusSchema,
   live: z.boolean(),
   runnerId: z.string().optional(),
+  /**
+   * 宛先の runner が、最新の生存確認の一覧にこの委譲を載せていた観測時刻
+   * （`ManagerSummary.runnerListedAt`）。**`status` が `done` でも、これが立っていれば
+   * 地図は終端の窓（10分）に関係なく載せる**（lost / failed / stopped を除く。器ごと消えた・
+   * 黙った runner の委譲には立たない）。観測できていなければ欄ごと無い。
+   */
+  runnerListedAt: isoDateTimeSchema.optional(),
   /** 抜粋。全文は `GET /managers/:id`。 */
   request: z.string(),
   startedAt: isoDateTimeSchema,

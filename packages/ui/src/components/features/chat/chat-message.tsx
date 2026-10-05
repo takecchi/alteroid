@@ -83,7 +83,13 @@ export function ChatMessage({
   return (
     <li className={cn('group flex flex-col gap-1', role === 'human' ? 'items-end' : 'items-start')}>
       <div
-        className={cn('flex min-w-0 max-w-full items-start gap-1', role === 'clone' && 'w-full')}
+        className={cn(
+          'flex min-w-0 max-w-full items-start gap-1',
+          role === 'clone' && 'w-full',
+          // 編集欄が入ると外側は中身の幅に縮む（`items-end` の li の中）ので、
+          // 元の吹き出しより狭くなる。編集中は読む幅の上限（46rem）まで広げる。
+          editing && role !== 'clone' && 'w-full max-w-[46rem]',
+        )}
       >
         {onEdit !== undefined && !editing && (
           <Button
@@ -120,7 +126,12 @@ export function ChatMessage({
              * 読む幅が枠の内側へ削られ、縦に長い箱が積み重なって読みにくくなる
              * （人間の言葉で「AIのメッセージはバブルになってなくて良い」）。
              */
-            role === 'human' && 'rounded-lg bg-primary px-3 py-2 text-primary-foreground',
+            // `selection:`: 吹き出しが `bg-primary` なので、既定の `::selection`
+            // （主色の35%、`styles.css`）だと選択範囲が地と同じ色に溶けて、
+            // 範囲選択しても何も見えない（選択自体はできている）。反転色で塗る。
+            role === 'human' &&
+              'rounded-lg bg-primary px-3 py-2 text-primary-foreground selection:bg-primary-foreground selection:text-primary',
+            editing && role !== 'clone' && 'flex-1',
             role === 'clone' && 'w-full py-1',
             /*
              * 事情の行は板にしない（発言ではないので）。左の細い線で「差し込み」で
@@ -156,7 +167,7 @@ export function ChatMessage({
                * が受信の途中では正しく解釈されず、閉じた瞬間に表示が
                * 変わって見える揺れが起きうる**（受信が終われば安定する）。
                */
-              <Markdown>{shown}</Markdown>
+              <Markdown headingOffset={2}>{shown}</Markdown>
             )
           ) : transient ? (
             <span className="inline-flex items-center gap-2">
