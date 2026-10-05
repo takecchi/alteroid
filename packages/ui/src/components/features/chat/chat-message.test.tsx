@@ -229,6 +229,11 @@ describe('ChatMessage: 範囲選択と編集欄の大きさ（実寸は jsdom �
     const area = screen.getByRole('textbox') as HTMLTextAreaElement;
     expect(classes(area)).toEqual(expect.arrayContaining(['field-sizing-content', 'w-full']));
     expect(classes(area)).not.toContain('field-sizing-fixed');
+    // 紫の吹き出しの上でも読めるよう、通常の入力欄の面と字色で上書きする（薄い膜 dark:bg-input/30 を潰す）。
+    expect(classes(area)).toEqual(
+      expect.arrayContaining(['bg-background', 'dark:bg-background', 'text-foreground']),
+    );
+    expect(classes(area)).not.toContain('dark:bg-input/30');
     expect(area.rows).toBe(2);
     rerender(
       <ChatMessageEditor

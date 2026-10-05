@@ -40,7 +40,7 @@ export function ChatMessageEditor({
         // 合わせて伸びる（`Textarea` 既定の `field-sizing-fixed` を上書き）。
         rows={Math.max(2, value.split('\n').length)}
         value={value}
-        className="field-sizing-content max-h-[60vh] w-full text-primary-foreground"
+        className="field-sizing-content max-h-[60vh] w-full bg-background text-foreground dark:bg-background"
         aria-label="発言を編集する下書き"
         onChange={(event) => onChange(event.target.value)}
         onKeyDown={(event) => {
