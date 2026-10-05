@@ -78,7 +78,7 @@ function SessionsSummary() {
           <Spinner />
         </div>
       ) : data === undefined ? null : data.sessions.length === 0 ? (
-        <Empty>（生ログはまだありません）</Empty>
+        <Empty inset="card">（生ログはまだありません）</Empty>
       ) : (
         <ul>
           {data.sessions.map((session) => (
@@ -124,7 +124,7 @@ function EntryList() {
           <Spinner />
         </div>
       ) : data === undefined ? null : data.entries.length === 0 ? (
-        <Empty>（生ログはまだありません）</Empty>
+        <Empty inset="card">（生ログはまだありません）</Empty>
       ) : (
         <ul>
           {data.entries.map((entry) => (
