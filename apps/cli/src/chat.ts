@@ -30,11 +30,7 @@ import {
   type UsageLayer,
   type UsageSite,
 } from '@alteroid/core';
-import {
-  ARCHIVE_REMOVED_BYTES_UNIT_NOTE,
-  describeGithubCi,
-  JOURNAL_SEARCH_UNCOVERED_LIST,
-} from '@alteroid/core';
+import { ARCHIVE_REMOVED_BYTES_UNIT_NOTE, describeGithubCi, JOURNAL_SEARCH_UNCOVERED_LIST } from '@alteroid/core/cli-light';
 import {
   CGROUP_EVENTS_UNKNOWN_NOTE,
   formatCgroupEventsNote,

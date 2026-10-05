@@ -3,7 +3,7 @@ import { realpathSync } from 'node:fs';
 import { stdout } from 'node:process';
 import { pathToFileURL } from 'node:url';
 
-import { REMOVE_MANY_LIMIT_DEFAULT, REMOVE_MANY_LIMIT_MAX } from '@alteroid/core';
+import { REMOVE_MANY_LIMIT_DEFAULT, REMOVE_MANY_LIMIT_MAX } from '@alteroid/core/cli-light';
 import { initWorkspace } from '@alteroid/storage-fs';
 import { Command } from 'commander';
 
@@ -14,7 +14,6 @@ import {
   accessRemoveUnreadableCommand,
   accessRevokeCommand,
 } from './access.js';
-import { chatCommand } from './chat.js';
 import { localizeCommander } from './commander-ja.js';
 import {
   conversationsListCommand,
@@ -24,7 +23,6 @@ import {
 import * as daemon from './daemon.js';
 import { droppedCommand } from './dropped.js';
 import { formatElapsedAgo } from './format.js';
-import { inboxRemoveCommand, inboxShowCommand } from './inbox.js';
 import { loginCommand, logoutCommand, whoamiCommand } from './login.js';
 import {
   memoryEditCommand,
@@ -85,7 +83,6 @@ import {
 import { progressCommand } from './progress.js';
 import { HELP_EXAMPLES } from './help-examples.js';
 import { describeCliVersion } from './version.js';
-import { usageCommand } from './usage.js';
 import { describeCliFailure } from './failure-message.js';
 
 /**
@@ -262,7 +259,7 @@ program
   .command('chat')
   .description('クローンと会話する（デーモンが居なければ起こす）')
   .action(async () => {
-    await chatCommand();
+    await (await import('./chat.js')).chatCommand();
   });
 
 program
@@ -343,7 +340,7 @@ program
       site?: string;
       token?: string;
     }) => {
-      await usageCommand(options);
+      await (await import('./usage.js')).usageCommand(options);
     },
   );
 
@@ -440,7 +437,7 @@ inboxCommand
   .command('show')
   .description('受信箱の滞留の内訳を読む（読み取り専用。何も変更しない）')
   .action(async () => {
-    await inboxShowCommand();
+    await (await import('./inbox.js')).inboxShowCommand();
   });
 
 inboxCommand
@@ -474,7 +471,7 @@ inboxCommand
       execute?: boolean;
       limit?: string;
     }) => {
-      await inboxRemoveCommand(options);
+      await (await import('./inbox.js')).inboxRemoveCommand(options);
     },
   );
 

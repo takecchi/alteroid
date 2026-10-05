@@ -48,3 +48,6 @@ export {
   formatUsd,
   summarizeUsage,
 } from './usage-format.js';
+export type { BuildRevision } from './revision-format.js';
+export { reportRunnerRevision, resolveBuildRevision } from './revision-resolve.js';
+export { CREDENTIAL_NAME } from './credentials.js';
