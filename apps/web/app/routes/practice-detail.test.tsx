@@ -93,8 +93,8 @@ describe('既定タブ', () => {
     renderDetail('empty', docRoute({ ...PRACTICE, slug: 'empty', content: '' }));
 
     // kind / title / content の3つの入力欄が編集タブに出る。
-    expect(((await screen.findByLabelText('種類（kind）')) as HTMLInputElement).value).toBe('日報');
-    expect((screen.getByLabelText('題（title）') as HTMLInputElement).value).toBe('日報の書き方');
+    expect(((await screen.findByLabelText('種類')) as HTMLInputElement).value).toBe('日報');
+    expect((screen.getByLabelText('題') as HTMLInputElement).value).toBe('日報の書き方');
     expect(screen.getByRole('tab', { name: 'プレビュー' })).toBeTruthy();
   });
 
@@ -115,9 +115,9 @@ describe('編集タブ', () => {
     renderDetail('daily-report', docRoute(PRACTICE));
 
     fireEvent.mouseDown(await screen.findByRole('tab', { name: '編集' }));
-    const kindInput = (await screen.findByLabelText('種類（kind）')) as HTMLInputElement;
+    const kindInput = (await screen.findByLabelText('種類')) as HTMLInputElement;
     expect(kindInput.value).toBe('日報');
-    const titleInput = screen.getByLabelText('題（title）') as HTMLInputElement;
+    const titleInput = screen.getByLabelText('題') as HTMLInputElement;
     expect(titleInput.value).toBe('日報の書き方');
   });
 });
@@ -126,7 +126,7 @@ describe('種類（kind）はプルダウンではなく自由入力である', 
   it('<select> を1つも置いていない', async () => {
     renderDetail('daily-report', docRoute(PRACTICE));
     fireEvent.mouseDown(await screen.findByRole('tab', { name: '編集' }));
-    await screen.findByLabelText('種類（kind）');
+    await screen.findByLabelText('種類');
     expect(document.querySelector('select')).toBeNull();
   });
 });
@@ -136,14 +136,14 @@ describe('タブ切り替えと書きかけ', () => {
     renderDetail('daily-report', docRoute(PRACTICE));
 
     fireEvent.mouseDown(await screen.findByRole('tab', { name: '編集' }));
-    const titleInput = (await screen.findByLabelText('題（title）')) as HTMLInputElement;
+    const titleInput = (await screen.findByLabelText('題')) as HTMLInputElement;
     fireEvent.change(titleInput, { target: { value: '書きかけの題' } });
 
     fireEvent.mouseDown(screen.getByRole('tab', { name: 'プレビュー' }));
     await screen.findByText('書きかけの題');
 
     fireEvent.mouseDown(screen.getByRole('tab', { name: '編集' }));
-    const titleAgain = (await screen.findByLabelText('題（title）')) as HTMLInputElement;
+    const titleAgain = (await screen.findByLabelText('題')) as HTMLInputElement;
     expect(titleAgain.value).toBe('書きかけの題');
   });
 });
@@ -170,7 +170,7 @@ describe('保存', () => {
     mountDetail('daily-report');
 
     fireEvent.mouseDown(await screen.findByRole('tab', { name: '編集' }));
-    const contentBox = (await screen.findByLabelText('本文（content）')) as HTMLTextAreaElement;
+    const contentBox = (await screen.findByLabelText('本文')) as HTMLTextAreaElement;
     expect(contentBox.value).toBe('# 見出し\n\n本文だよ');
 
     expect((screen.getByRole('button', { name: '変更なし' }) as HTMLButtonElement).disabled).toBe(
@@ -194,7 +194,7 @@ describe('保存', () => {
     renderDetail('daily-report', docRoute(PRACTICE));
 
     fireEvent.mouseDown(await screen.findByRole('tab', { name: '編集' }));
-    const kindInput = (await screen.findByLabelText('種類（kind）')) as HTMLInputElement;
+    const kindInput = (await screen.findByLabelText('種類')) as HTMLInputElement;
     fireEvent.change(kindInput, { target: { value: '' } });
 
     const saveButton = screen.getByRole('button', { name: '保存する' }) as HTMLButtonElement;
@@ -203,6 +203,44 @@ describe('保存', () => {
 });
 
 describe('削除', () => {
+  /** DELETE を打ったか。`openapi-fetch` は `Request` で呼ぶので、メソッドは `entries` の `request` で読む。 */
+  function deleted(stub: ReturnType<typeof stubFetch>): number {
+    return stub.entries.filter((entry) => entry.request?.method === 'DELETE').length;
+  }
+
+  it('「削除」を押しただけでは消さず、確認を出す（#2781）', async () => {
+    const stub = renderDetail('daily-report', docRoute(PRACTICE));
+    await screen.findByRole('heading', { name: '見出し' });
+
+    fireEvent.click(screen.getByRole('button', { name: '削除' }));
+
+    expect(await screen.findByRole('alertdialog')).toBeTruthy();
+    expect(screen.getByText('「daily-report」を削除しますか')).toBeTruthy();
+    expect(screen.getByText(/このやり方は本文ごと消え、元に戻せません/)).toBeTruthy();
+    expect(deleted(stub)).toBe(0);
+  });
+
+  it('確認で「やめる」を押すと消さずに閉じる', async () => {
+    const stub = renderDetail('daily-report', docRoute(PRACTICE));
+    await screen.findByRole('heading', { name: '見出し' });
+    fireEvent.click(screen.getByRole('button', { name: '削除' }));
+
+    fireEvent.click(await screen.findByRole('button', { name: 'やめる' }));
+
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+    expect(deleted(stub)).toBe(0);
+  });
+
+  it('確認で「削除する」を押したときだけ DELETE を打つ', async () => {
+    const stub = renderDetail('daily-report', docRoute(PRACTICE));
+    await screen.findByRole('heading', { name: '見出し' });
+    fireEvent.click(screen.getByRole('button', { name: '削除' }));
+
+    fireEvent.click(await screen.findByRole('button', { name: '削除する' }));
+
+    await waitFor(() => expect(deleted(stub)).toBe(1));
+  });
+
   it('プレビュータブでも削除ボタンが在る', async () => {
     renderDetail('daily-report', docRoute(PRACTICE));
     await screen.findByRole('heading', { name: '見出し' });
@@ -274,7 +312,7 @@ describe('履歴タブ（#1309）', () => {
 
     await screen.findByText(/旧本文/);
     // 読み取り専用——textarea を持たない（編集タブの本文欄と区別する）。
-    expect(screen.queryByLabelText('本文（content）')).toBeNull();
+    expect(screen.queryByLabelText('本文')).toBeNull();
   });
 
   it('版が1件も無い slug では「まだ版が無い」と言う', async () => {
@@ -363,5 +401,17 @@ describe('生 HTML の扱い', () => {
     expect(screen.queryByRole('img')).toBeNull();
     expect(document.querySelector('script')).toBeNull();
     expect(document.body.textContent).toContain('onerror="alert(1)"');
+  });
+});
+
+describe('見出し（#2763 と同じ作り）', () => {
+  it('戻る導線「やり方」は縮まず折り返さない（狭い幅で縦に割れない）', async () => {
+    // jsdom はレイアウトを持たないので実寸は測れない。割れを防ぐ指定そのものを固定する。
+    renderDetail('daily-report', docRoute(PRACTICE));
+
+    const back = await screen.findByRole('link', { name: 'やり方' });
+    expect(back.className).toContain('shrink-0');
+    expect(back.className).toContain('whitespace-nowrap');
+    expect(screen.getByText('daily-report').className).toContain('min-w-0');
   });
 });

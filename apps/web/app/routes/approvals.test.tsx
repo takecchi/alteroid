@@ -763,7 +763,7 @@ describe('横並びの積み替え（本4-B）: flex-wrap の付け忘れ', () =
     renderPage();
 
     // `job-abc` の部分は `<Link>` になったので（issue #2041）、行はリンクから辿る。
-    const jobLink = await screen.findByRole('link', { name: 'job-abc' });
+    const jobLink = await screen.findByRole('link', { name: '詳細を見る' });
     const row = jobLink.closest('div');
     expect(row).not.toBeNull();
     const tokens = row!.className.split(/\s+/);
@@ -789,13 +789,14 @@ describe('横並びの積み替え（本4-B）: flex-wrap の付け忘れ', () =
  * 作法で、文言は変えない——行の文字列は引き続き `job <id>` と読める。
  */
 describe('メタ行の job id が委譲の詳細へのリンクになる（issue #2041）', () => {
-  it('jobId を持つカードは id が /managers/<id> への Link になり、文言は job <id> のまま', async () => {
+  it('jobId を持つカードは id が /managers/<id> への Link になり、id は文字として出ない（#2782）', async () => {
     stubApprovals([approval({ id: 'a-1', jobId: 'mgr-42' })]);
     renderPage();
 
-    const link = await screen.findByRole('link', { name: 'mgr-42' });
+    const link = await screen.findByRole('link', { name: '詳細を見る' });
     expect(link.getAttribute('href')).toBe('/managers/mgr-42');
-    expect(link.parentElement?.textContent).toBe('job mgr-42');
+    expect(link.parentElement?.textContent).toBe('委譲: 詳細を見る');
+    expect(document.body.textContent).not.toContain('mgr-42');
   });
 
   it('jobId を持たないカードにはリンクを出さない', async () => {
@@ -971,5 +972,21 @@ describe('/approvals 画面: 読めない承認待ちの断り', () => {
     expect(await screen.findByText('読める質問')).toBeTruthy();
     expect(screen.queryByRole('status')).toBeNull();
     expect(screen.queryByText(/読めない/)).toBeNull();
+  });
+});
+
+describe('見出し帯に幅を取る操作を置かない（#2765）', () => {
+  it('「回答済み・取り下げ済みも見る」は見出し帯（header）の外にある', async () => {
+    // jsdom はレイアウトを持たず折り返しを測れない（390px で見出しの列が約148px、説明文が
+    // 4行になった実寸はブラウザで測った）。原因だった「見出し帯の右に居座る」配置が
+    // 戻らないことを、DOM の位置で固定する。
+    stubApprovals([]);
+    renderPage();
+
+    const toggle = await screen.findByRole('button', { name: '回答済み・取り下げ済みも見る' });
+    expect(toggle.closest('header')).toBeNull();
+    // 見出しと説明文は header の中に残っている。
+    const heading = screen.getByRole('heading', { name: '承認待ち' });
+    expect(heading.closest('header')).not.toBeNull();
   });
 });

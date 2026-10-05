@@ -7,6 +7,7 @@ import {
   Button,
   Card,
   CardHeader,
+  ConfirmDialog,
   Empty,
   ErrorNote,
   Input,
@@ -45,7 +46,7 @@ export default function EnvVars() {
     <Page
       tabs={<SettingsTabs />}
       title="環境変数"
-      description="alteroid 自身の運用設定・マネージャーへ降ろす環境変数。撒く先は共通/clone/manager から選べる"
+      description="alteroid 自身の運用設定と、マネージャーへ渡す環境変数。渡す先は「共通」「クローン」「マネージャー」から選べる"
     >
       <div className="flex flex-col gap-4">
         <EnvVarList />
@@ -60,15 +61,15 @@ function describeScope(scope: EnvVarScope): { label: string; tone: 'neutral' | '
     case 'all':
       return { label: '共通', tone: 'accent' };
     case 'app':
-      return { label: 'clone', tone: 'neutral' };
+      return { label: 'クローンだけ', tone: 'neutral' };
     case 'runner':
-      return { label: 'manager', tone: 'neutral' };
+      return { label: 'マネージャーだけ', tone: 'neutral' };
     default:
       // **送られてくる値である**（デーモンが `GET /credentials` で載せる）。
       // `apps/web` は Vercel、デーモンは Railway で別に配られるので、
       // サーバのほうが新しい窓が必ず在る——投げずに「未知」とそのまま出す
       // （`tokens.tsx` の `describeUnknown` と同じ判断）。
-      return { label: `未知の撒く先（${String(scope)}）`, tone: 'neutral' };
+      return { label: `未知の渡す先（${String(scope)}）`, tone: 'neutral' };
   }
 }
 
@@ -102,7 +103,7 @@ function EnvVarList() {
     <Card>
       <CardHeader
         title="一覧"
-        subtitle="alteroid credential list / GET /credentials と同じもの"
+        subtitle="登録済みの環境変数"
         action={listUnavailable ? undefined : <Badge>{credentials.length}</Badge>}
       />
       <ErrorNote error={error} className="m-4" />
@@ -139,6 +140,7 @@ function EnvVarRow({
   onRemove: () => void;
 }) {
   const scope = describeScope(entry.scope);
+  const [confirmingRemove, setConfirmingRemove] = useState(false);
 
   return (
     <li className="border-b border-border px-4 py-3 last:border-b-0">
@@ -176,25 +178,35 @@ function EnvVarRow({
             // manager にはこの名前が何も配られていない。そして「配られていない」
             // からといってこの行を外すと、その名前は manager にも配られ始める
             // （scope で閉じた先へ届く）。
-            ' scope: app（clone だけ）のこの名前は、manager にはいま何も配られて' +
-              'いない。この行を外すと、器の環境変数の値が manager にも配られ始める' +
-              '（scope で閉じた先へ届く）。'}
+            ' 渡す先が「クローンだけ」のこの名前は、マネージャーにはいま何も渡されて' +
+              'いない。この行を外すと、器の環境変数の値がマネージャーにも渡され始める' +
+              '（渡す先を閉じていた分が外れるため）。'}
         </p>
       )}
 
       <div className="mt-2">
-        <Button variant="danger" size="sm" loading={busy} onClick={onRemove}>
+        <Button variant="danger" size="sm" loading={busy} onClick={() => setConfirmingRemove(true)}>
           外す
         </Button>
+        {/* 外すと置いた値が消えて取り消せない。押した瞬間には実行せず確認を挟む（#2781） */}
+        <ConfirmDialog
+          open={confirmingRemove}
+          onOpenChange={setConfirmingRemove}
+          title={`環境変数「${entry.name}」を外しますか`}
+          description="置いた値が消え、元に戻せません。これを受け取っていた仕事には、以後この値が配られません。"
+          confirmLabel="外す"
+          destructive
+          onConfirm={onRemove}
+        />
       </div>
     </li>
   );
 }
 
 const SCOPE_OPTIONS: { value: EnvVarScope; label: string }[] = [
-  { value: 'all', label: '共通（clone・manager 両方。既定）' },
-  { value: 'app', label: 'clone だけ' },
-  { value: 'runner', label: 'manager だけ' },
+  { value: 'all', label: '共通（クローン・マネージャー両方。既定）' },
+  { value: 'app', label: 'クローンだけ' },
+  { value: 'runner', label: 'マネージャーだけ' },
 ];
 
 function AddEnvVarForm() {
@@ -229,7 +241,7 @@ function AddEnvVarForm() {
     <Card>
       <CardHeader
         title="登録する"
-        subtitle="alteroid credential set / PUT /credentials と同じもの。シークレット可否は作成時に決まり、後から変更できない"
+        subtitle="秘密の値にするかどうかは登録するときに決まり、後から変えられない"
       />
       <div className="flex flex-col gap-3 px-4 py-3 text-sm">
         <label className="flex flex-col gap-1">

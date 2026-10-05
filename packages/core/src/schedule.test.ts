@@ -224,6 +224,39 @@ describe('スケジューラ', () => {
     s.scheduler.stop();
   });
 
+  it('D 日 22:00 をまたいで止まり D+1 日 08:00 に再開しても、対象日は止まっていた D 日になる（#2740）', () => {
+    const s = setup(at(2026, 8, 12, 10, 0));
+    s.scheduler.start();
+
+    // D=8/12 の 22:00 の前に止まり、8/13 08:00 に再開した最初の刻み
+    s.scheduler.tick(at(2026, 8, 13, 8, 0));
+    const targets = () =>
+      s.posted.flatMap((event) =>
+        event.type === 'timer' && event.kind === DAILY_REPORT_KIND ? [event.target] : [],
+      );
+    expect(targets()).toEqual(['2026-08-12']);
+
+    // 次の予定は 8/13 22:00。そこでは D+1 の日報が立つ（朝に D+1 を確定させない）
+    s.scheduler.tick(at(2026, 8, 13, 22, 0));
+    expect(targets()).toEqual(['2026-08-12', '2026-08-13']);
+
+    s.scheduler.stop();
+  });
+
+  it('複数日止まっていたときも、予定時刻（due）の日付で1回だけ立つ（まとめ撃ちしない）', () => {
+    const s = setup(at(2026, 8, 12, 10, 0));
+    s.scheduler.start();
+
+    s.scheduler.tick(at(2026, 8, 15, 10, 0));
+    const reports = s.posted.filter(
+      (event) => event.type === 'timer' && event.kind === DAILY_REPORT_KIND,
+    );
+    expect(reports).toHaveLength(1);
+    expect(reports[0]).toMatchObject({ target: '2026-08-12' });
+
+    s.scheduler.stop();
+  });
+
   it('手で今すぐ起こせる。予定はずらさない', () => {
     const s = setup(at(2026, 8, 12, 10, 0));
     s.scheduler.start();

@@ -194,3 +194,49 @@ describe('ChatComposer', () => {
     expect((screen.getByRole('button', { name: '送る' }) as HTMLButtonElement).disabled).toBe(true);
   });
 });
+
+describe('ChatComposer: 入力に合わせて高さが伸びる', () => {
+  // jsdom は寸法を計算しないので、scrollHeight をテキストの行数から返す。
+  function stubHeights(lineHeight: number) {
+    const proto = HTMLTextAreaElement.prototype;
+    vi.spyOn(proto, 'scrollHeight', 'get').mockImplementation(function (this: HTMLTextAreaElement) {
+      return Math.max(2, this.value.split('\n').length) * lineHeight;
+    });
+  }
+  afterEach(() => vi.restoreAllMocks());
+
+  function box(value: string) {
+    const ui = (v: string) => (
+      <ChatComposer value={v} onChange={() => undefined} onSend={() => undefined} />
+    );
+    const view = render(ui(value));
+    const el = screen.getByRole('textbox') as HTMLTextAreaElement;
+    return { el, update: (v: string) => view.rerender(ui(v)) };
+  }
+
+  it('行が増えると高さが伸び、空に戻すと元の高さに戻る', () => {
+    stubHeights(24);
+    const { el, update } = box('');
+    expect(el.style.height).toBe('48px');
+    update(Array.from({ length: 10 }, () => 'a').join('\n'));
+    expect(el.style.height).toBe('240px');
+    update('');
+    expect(el.style.height).toBe('48px');
+  });
+
+  it('上限は CSS の max-height で掛かり、超えた分は内側をスクロールする', () => {
+    stubHeights(24);
+    const { el } = box(Array.from({ length: 30 }, () => 'a').join('\n'));
+    expect(el.style.height).toBe('720px'); // 測った高さはそのまま入れ、止めるのは max-height
+    const classes = el.className.split(/\s+/);
+    expect(classes).toContain('max-h-[min(40dvh,15rem)]');
+    expect(classes).toContain('overflow-y-auto');
+  });
+
+  it('リサイズのつまみを出さない（resize-none が resize-y に負けない）', () => {
+    const { el } = box('');
+    const classes = el.className.split(/\s+/);
+    expect(classes).toContain('resize-none');
+    expect(classes).not.toContain('resize-y');
+  });
+});

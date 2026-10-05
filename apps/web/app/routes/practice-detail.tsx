@@ -6,6 +6,7 @@ import {
   Markdown,
   Page,
   Button,
+  ConfirmDialog,
   ErrorNote,
   Input,
   Spinner,
@@ -22,6 +23,7 @@ import {
   usePracticeVersions,
 } from '@alteroid/swr';
 import { formatDateTime } from '@alteroid/logic';
+import { practiceKindLabel } from './practices';
 
 import type { Route } from './+types/practice-detail';
 
@@ -75,6 +77,7 @@ export default function PracticeDetail({ loaderData }: Route.ComponentProps) {
   const [draftTitle, setDraftTitle] = useState<string | undefined>(undefined);
   const [draftContent, setDraftContent] = useState<string | undefined>(undefined);
   const [busy, setBusy] = useState(false);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [failure, setFailure] = useState<unknown>(undefined);
   const [savedAt, setSavedAt] = useState<string | undefined>(undefined);
 
@@ -126,12 +129,16 @@ export default function PracticeDetail({ loaderData }: Route.ComponentProps) {
 
   return (
     <Page
+      documentTitle={`${slug} - やり方`}
       title={
-        <span className="flex items-center gap-2">
-          <Link to="/practices" className="text-muted-foreground hover:text-foreground">
+        <span className="flex items-baseline gap-2">
+          <Link
+            to="/practices"
+            className="shrink-0 whitespace-nowrap text-muted-foreground hover:text-foreground"
+          >
             やり方
           </Link>
-          <span className="text-muted-foreground">/</span>
+          <span className="shrink-0 text-muted-foreground">/</span>
           <span className="min-w-0 font-mono text-sm break-all">{slug}</span>
         </span>
       }
@@ -148,20 +155,32 @@ export default function PracticeDetail({ loaderData }: Route.ComponentProps) {
       action={
         <div className="flex items-center gap-2">
           {!missing && data !== undefined && (
-            <Button
-              variant="danger"
-              size="sm"
-              disabled={busy}
-              onClick={() => {
-                setBusy(true);
-                deletePractice(slug)
-                  .then(() => navigate('/practices'))
-                  .catch(setFailure)
-                  .finally(() => setBusy(false));
-              }}
-            >
-              削除
-            </Button>
+            <>
+              <Button
+                variant="danger"
+                size="sm"
+                disabled={busy}
+                onClick={() => setConfirmingDelete(true)}
+              >
+                削除
+              </Button>
+              {/* 取り消せない操作（本文ごと消える）なので、押した瞬間には実行せず確認を挟む（#2781） */}
+              <ConfirmDialog
+                open={confirmingDelete}
+                onOpenChange={setConfirmingDelete}
+                title={`「${slug}」を削除しますか`}
+                description="このやり方は本文ごと消え、元に戻せません。"
+                confirmLabel="削除する"
+                destructive
+                onConfirm={() => {
+                  setBusy(true);
+                  deletePractice(slug)
+                    .then(() => navigate('/practices'))
+                    .catch(setFailure)
+                    .finally(() => setBusy(false));
+                }}
+              />
+            </>
           )}
           {!loadFailed && (
             <Button variant="primary" size="sm" loading={busy} disabled={!canSave} onClick={save}>
@@ -208,7 +227,9 @@ export default function PracticeDetail({ loaderData }: Route.ComponentProps) {
           */}
           <Tabs.Content value="preview" className="min-h-0 flex-1 overflow-y-auto">
             <p className="mb-2 text-xs text-muted-foreground">
-              <span className="mr-1.5 text-[10px]">[{kind || '（種類未設定）'}]</span>
+              <span className="mr-1.5 text-[10px]">
+                {kind === '' ? '（種類未設定）' : practiceKindLabel(kind)}
+              </span>
               {title}
             </p>
             <Markdown>{content}</Markdown>
@@ -217,10 +238,10 @@ export default function PracticeDetail({ loaderData }: Route.ComponentProps) {
           <Tabs.Content value="edit" className="flex min-h-0 flex-1 flex-col gap-3">
             <p className="shrink-0 text-xs text-muted-foreground">
               ここで書き換えたものは日誌に残る（人間が API/画面から操作したと分かる形で）。
-              種類（kind）は自由文字列——一覧の固定リストから選ぶのではない。
+              種類は自由に書ける（一覧から選ぶのではない）。
             </p>
             <label className="shrink-0 text-xs text-muted-foreground">
-              種類（kind）
+              種類
               <Input
                 className="mt-1"
                 value={kind}
@@ -229,7 +250,7 @@ export default function PracticeDetail({ loaderData }: Route.ComponentProps) {
               />
             </label>
             <label className="shrink-0 text-xs text-muted-foreground">
-              題（title）
+              題
               <Input
                 className="mt-1"
                 value={title}
@@ -238,7 +259,7 @@ export default function PracticeDetail({ loaderData }: Route.ComponentProps) {
               />
             </label>
             <label className="flex min-h-0 flex-1 flex-col text-xs text-muted-foreground">
-              本文（content）
+              本文
               <Textarea
                 className="mt-1 min-h-[50vh] flex-1 font-mono text-xs leading-relaxed"
                 value={content}
@@ -257,7 +278,7 @@ export default function PracticeDetail({ loaderData }: Route.ComponentProps) {
           <Tabs.Content value="history" className="flex min-h-0 flex-1 gap-4 overflow-y-auto">
             <div className="w-64 shrink-0 overflow-y-auto border-r border-border pr-3">
               <p className="mb-2 text-xs text-muted-foreground">
-                write のたびに版が1つ増える。remove しても版は消えない（#1309）。
+                保存のたびに版が1つ増える。削除しても版は消えない。
               </p>
               {/*
                 **読めた `data` が在るなら、再検証の失敗で一覧を消さない（issue
@@ -293,7 +314,9 @@ export default function PracticeDetail({ loaderData }: Route.ComponentProps) {
                         onClick={() => setHistoryVersion(v.version)}
                       >
                         <span className="mr-1.5 font-mono">版{v.version}</span>
-                        <span className="mr-1.5 text-[10px] text-muted-foreground">[{v.kind}]</span>
+                        <span className="mr-1.5 text-[10px] text-muted-foreground">
+                          {practiceKindLabel(v.kind)}
+                        </span>
                         <span>{v.title}</span>
                         <span className="block text-[10px] text-muted-foreground">
                           {formatDateTime(v.at)} · {v.chars} 文字
@@ -322,8 +345,9 @@ export default function PracticeDetail({ loaderData }: Route.ComponentProps) {
                     <ErrorNote error={historyDetailError} className="mb-2" />
                   )}
                   <p className="mb-2 text-xs text-muted-foreground">
-                    版{historyDetail.version.version}（{historyDetail.version.kind}）
-                    {historyDetail.version.title} · {formatDateTime(historyDetail.version.at)}
+                    版{historyDetail.version.version}（
+                    {practiceKindLabel(historyDetail.version.kind)}）{historyDetail.version.title} ·{' '}
+                    {formatDateTime(historyDetail.version.at)}
                   </p>
                   <Markdown>{historyDetail.version.content}</Markdown>
                 </>

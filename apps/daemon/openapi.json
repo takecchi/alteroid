@@ -2251,6 +2251,11 @@
                           "runnerId": {
                             "type": "string"
                           },
+                          "runnerListedAt": {
+                            "type": "string",
+                            "format": "date-time",
+                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                          },
                           "request": {
                             "type": "string"
                           },
@@ -2537,6 +2542,11 @@
                           },
                           "runnerId": {
                             "type": "string"
+                          },
+                          "runnerListedAt": {
+                            "type": "string",
+                            "format": "date-time",
+                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
                           },
                           "request": {
                             "type": "string"
@@ -3238,9 +3248,12 @@
                         "descriptionFreshness",
                         "content"
                       ]
+                    },
+                    "version": {
+                      "type": "string"
                     }
                   },
-                  "required": ["document"]
+                  "required": ["document", "version"]
                 }
               }
             }
@@ -3550,9 +3563,12 @@
                         "descriptionFreshness",
                         "content"
                       ]
+                    },
+                    "version": {
+                      "type": "string"
                     }
                   },
-                  "required": ["document"]
+                  "required": ["document", "version"]
                 }
               }
             }
@@ -3572,6 +3588,287 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "`ifMatch`（読んだ時の版）が、いまの版と違う（読んでから書くまでの間に別の書き手が書いた、または消した）。**何も書いていない。** `current` にいまの版を返す。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "current": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "document": {
+                              "type": "object",
+                              "properties": {
+                                "slug": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 128,
+                                  "pattern": "^[a-z0-9][a-z0-9._-]*$"
+                                },
+                                "title": {
+                                  "type": "string"
+                                },
+                                "updatedAt": {
+                                  "type": "string",
+                                  "format": "date-time",
+                                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                                },
+                                "createdAt": {
+                                  "oneOf": [
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "kind": {
+                                          "type": "string",
+                                          "const": "known"
+                                        },
+                                        "at": {
+                                          "type": "string",
+                                          "format": "date-time",
+                                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                                        }
+                                      },
+                                      "required": ["kind", "at"]
+                                    },
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "kind": {
+                                          "type": "string",
+                                          "const": "unknown"
+                                        }
+                                      },
+                                      "required": ["kind"]
+                                    }
+                                  ]
+                                },
+                                "bytes": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                "frontmatter": {
+                                  "oneOf": [
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "kind": {
+                                          "type": "string",
+                                          "const": "none"
+                                        }
+                                      },
+                                      "required": ["kind"]
+                                    },
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "kind": {
+                                          "type": "string",
+                                          "const": "malformed"
+                                        }
+                                      },
+                                      "required": ["kind"]
+                                    },
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "kind": {
+                                          "type": "string",
+                                          "const": "parsed"
+                                        },
+                                        "description": {
+                                          "type": "string"
+                                        },
+                                        "type": {
+                                          "type": "string"
+                                        },
+                                        "parent": {
+                                          "type": "string"
+                                        }
+                                      },
+                                      "required": ["kind"]
+                                    }
+                                  ]
+                                },
+                                "kind": {
+                                  "type": "string",
+                                  "enum": ["premise", "fact", "indexed"]
+                                },
+                                "description": {
+                                  "type": "string"
+                                },
+                                "parent": {
+                                  "type": "string"
+                                },
+                                "descriptionFreshness": {
+                                  "oneOf": [
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "kind": {
+                                          "type": "string",
+                                          "const": "fresh"
+                                        }
+                                      },
+                                      "required": ["kind"]
+                                    },
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "kind": {
+                                          "type": "string",
+                                          "const": "stale"
+                                        },
+                                        "staleForMs": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "drift": {
+                                          "oneOf": [
+                                            {
+                                              "type": "object",
+                                              "properties": {
+                                                "kind": {
+                                                  "type": "string",
+                                                  "const": "measured"
+                                                },
+                                                "describedBytes": {
+                                                  "type": "integer",
+                                                  "minimum": 0,
+                                                  "maximum": 9007199254740991
+                                                },
+                                                "currentBytes": {
+                                                  "type": "integer",
+                                                  "minimum": 0,
+                                                  "maximum": 9007199254740991
+                                                },
+                                                "deltaBytes": {
+                                                  "type": "integer",
+                                                  "minimum": -9007199254740991,
+                                                  "maximum": 9007199254740991
+                                                }
+                                              },
+                                              "required": [
+                                                "kind",
+                                                "describedBytes",
+                                                "currentBytes",
+                                                "deltaBytes"
+                                              ]
+                                            },
+                                            {
+                                              "type": "object",
+                                              "properties": {
+                                                "kind": {
+                                                  "type": "string",
+                                                  "const": "at-least"
+                                                },
+                                                "baselineBytes": {
+                                                  "type": "integer",
+                                                  "minimum": 0,
+                                                  "maximum": 9007199254740991
+                                                },
+                                                "baselineAt": {
+                                                  "type": "string",
+                                                  "format": "date-time",
+                                                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                                                },
+                                                "currentBytes": {
+                                                  "type": "integer",
+                                                  "minimum": 0,
+                                                  "maximum": 9007199254740991
+                                                },
+                                                "deltaBytes": {
+                                                  "type": "integer",
+                                                  "minimum": -9007199254740991,
+                                                  "maximum": 9007199254740991
+                                                }
+                                              },
+                                              "required": [
+                                                "kind",
+                                                "baselineBytes",
+                                                "baselineAt",
+                                                "currentBytes",
+                                                "deltaBytes"
+                                              ]
+                                            },
+                                            {
+                                              "type": "object",
+                                              "properties": {
+                                                "kind": {
+                                                  "type": "string",
+                                                  "const": "unrecorded"
+                                                }
+                                              },
+                                              "required": ["kind"]
+                                            }
+                                          ]
+                                        }
+                                      },
+                                      "required": ["kind", "staleForMs", "drift"]
+                                    },
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "kind": {
+                                          "type": "string",
+                                          "const": "unknown"
+                                        }
+                                      },
+                                      "required": ["kind"]
+                                    },
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "kind": {
+                                          "type": "string",
+                                          "const": "absent"
+                                        }
+                                      },
+                                      "required": ["kind"]
+                                    }
+                                  ]
+                                },
+                                "content": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "slug",
+                                "title",
+                                "updatedAt",
+                                "createdAt",
+                                "bytes",
+                                "frontmatter",
+                                "kind",
+                                "descriptionFreshness",
+                                "content"
+                              ]
+                            },
+                            "version": {
+                              "type": "string"
+                            }
+                          },
+                          "required": ["document", "version"]
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": ["error", "current"]
+                }
+              }
+            }
           }
         },
         "requestBody": {
@@ -3583,6 +3880,9 @@
                 "properties": {
                   "content": {
                     "type": "string"
+                  },
+                  "ifMatch": {
+                    "type": ["string", "null"]
                   }
                 },
                 "required": ["content"]
@@ -6792,6 +7092,25 @@
                                 }
                               },
                               "required": ["at", "limitsAvailable", "windows"]
+                            },
+                            "refreshFailure": {
+                              "type": "object",
+                              "properties": {
+                                "since": {
+                                  "type": "string",
+                                  "format": "date-time",
+                                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                                },
+                                "at": {
+                                  "type": "string",
+                                  "format": "date-time",
+                                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                                },
+                                "reason": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": ["since", "at", "reason"]
                             }
                           },
                           "required": ["state", "usage"]
@@ -14587,6 +14906,11 @@
                             "type": "boolean",
                             "const": true
                           },
+                          "runnerListedAt": {
+                            "type": "string",
+                            "format": "date-time",
+                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                          },
                           "runnerId": {
                             "type": "string"
                           },
@@ -15176,6 +15500,11 @@
                         "runnerVanished": {
                           "type": "boolean",
                           "const": true
+                        },
+                        "runnerListedAt": {
+                          "type": "string",
+                          "format": "date-time",
+                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
                         },
                         "runnerId": {
                           "type": "string"
@@ -18090,7 +18419,7 @@
             }
           },
           "500": {
-            "description": "保存に失敗した。**理由の本文は返さない**（ドライバの例外は失敗したクエリの束縛パラメータを添えてくることがあるため）。跡は stderr に残る。",
+            "description": "保存に失敗した、または**広げる側の変更（追加・有効化・値の差し替え・試す順の入れ替え）で日誌が書けなかった（保存していない）**。狭める側（削除・無効化・改名）だけの変更は、日誌が書けなくても保存して 200 を返す（issue #2742）。**理由の本文は返さない**（ドライバの例外は失敗したクエリの束縛パラメータを添えてくることがあるため）。跡は stderr に残る。",
             "content": {
               "application/json": {
                 "schema": {
@@ -18397,7 +18726,7 @@
         "operationId": "putTokensPolicy",
         "tags": ["tokens"],
         "summary": "回す契機・冷却の既定を変える",
-        "description": "省略した項目は現状のまま変えない。",
+        "description": "省略した項目は現状のまま変えない。変更は日誌に残る（issue #2742）。回す契機を有効にする・変える・冷却を変える変更は**日誌を先に書き、書けなければ保存せず 500**。`rotateOn: off` へ狭める変更は保存が先で、日誌が書けなくても保存する。",
         "responses": {
           "200": {
             "description": "更新後の設定。",
@@ -18442,6 +18771,22 @@
           },
           "403": {
             "description": "alteroid を使う許可が無い（ログインしているが `access grant` されていない）。資格そのものが無い場合は 401。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "日誌が書けなかった（**保存していない**。広げる側の変更のとき）。",
             "content": {
               "application/json": {
                 "schema": {

@@ -1,6 +1,7 @@
 import { JournalTabs } from '~/components/group-tabs';
 import { Page, Badge, Card, CardHeader, Empty, ErrorNote, Spinner } from '@alteroid/ui';
 import { useDropped, ApiError } from '@alteroid/swr';
+import { formatDateTime } from '@alteroid/logic';
 import type { DroppedState } from '@alteroid/logic';
 
 /**
@@ -9,7 +10,8 @@ import type { DroppedState } from '@alteroid/logic';
  *
  * 経路は `GET /dropped` の1本だけで、CLI（`alteroid dropped`）とクローンの MCP
  * 道具 `self_dropped` も同じ帳面を見る（`packages/core/src/dropped-record.ts`）。
- * **読み取り専用。**
+ * **読み取り専用。** **画面の文言は利用者の言葉で書き、CLI 名・HTTP のパス・内部の
+ * 語は出さない**（#2792）。時刻は端末の地域の時刻（`formatDateTime`）で出す。
  *
  * **「無い」の種類を3つ、混ぜずに言い分ける。判定の基準は「次の一手が変わるか」。**
  *
@@ -31,12 +33,12 @@ export default function Dropped() {
     <Page
       tabs={<JournalTabs />}
       title="記録の失敗"
-      description="記録・読み出しの失敗の跡。本文は1文字も含まない。読み取り専用"
+      description="日誌に書き損ねた記録の一覧です。本文は含まず、見るだけの画面です"
     >
       <Card>
         <CardHeader
           title="失敗の一覧"
-          subtitle="alteroid dropped / GET /dropped と同じもの"
+          subtitle="古いものが上、新しいものが下に並びます"
           action={data === undefined ? undefined : <Badge>{data.total}</Badge>}
         />
         <DroppedErrorNote error={error} />
@@ -56,8 +58,8 @@ function DroppedErrorNote({ error }: { error: unknown }) {
   if (error instanceof ApiError && error.status === 404) {
     return (
       <div className="px-4 pt-3 text-sm text-destructive">
-        このデーモンには GET /dropped が無い（版が古い可能性がある。デーモンを更新してください）。
-        跡が0件だった、という意味ではない。
+        この本体には、記録の失敗を見る機能がありません（版が古い可能性があります。本体を更新してください）。
+        失敗が0件だった、という意味ではありません。
       </div>
     );
   }
@@ -69,7 +71,7 @@ function DroppedBody({ state }: { state: DroppedState }) {
     <div className="flex flex-col gap-3 px-4 py-3 text-sm">
       {/* **常に出す**（0件でも）。runner の跡はここには構造的に出ない。 */}
       <p className="text-muted-foreground">{describeDroppedTraceOriginNote(state.origin)}</p>
-      <p className="text-xs text-muted-foreground">帳面が数え始めた時刻: {state.since}</p>
+      <p className="text-xs text-muted-foreground">数え始めた時刻: {formatDateTime(state.since)}</p>
       <p className="text-xs text-muted-foreground">
         件数: {state.total}（{describeDroppedTraceRetentionNote(state.limit)}）
       </p>
@@ -124,8 +126,8 @@ export function describeDroppedTraceOriginNote(origin: DroppedState['origin'] | 
   switch (origin) {
     case 'daemon':
       return (
-        'デーモンのプロセス（クローンを含む）が残した跡だけである。' +
-        '別プロセスの runner が残した跡はここには出ない。'
+        'ここに出るのは、本体（クローンの動きを含む）が残した記録だけです。' +
+        'マネージャーが動く実行環境の側で起きた失敗は出ません。'
       );
     case undefined:
       return '';
@@ -151,9 +153,9 @@ export function describeDroppedTraceOriginNote(origin: DroppedState['origin'] | 
  */
 export function describeDroppedTraceEmptyNote(): string {
   return (
-    'このプロセスではまだ跡（記録・読み出しの握り潰し）が1件も残っていない。' +
-    '0件は「握り潰しが1件も無かった」ことを意味しない —— ' +
-    'この帳面はプロセスの生存中だけの記憶で、再起動・デプロイの入れ替えで消える。'
+    '日誌に書き損ねた記録は、いまは0件です。' +
+    'ただしこの一覧は本体が動いている間だけの記憶で、再起動や更新で消えます。' +
+    '0件でも、過去に失敗が無かったとは限りません。'
   );
 }
 
@@ -172,7 +174,7 @@ export function describeDroppedTraceEmptyNote(): string {
  */
 export function describeDroppedTraceRetentionNote(limit: number): string {
   return (
-    `直近 ${limit} 件までしか持たず、溢れた古い側から押し出される。` +
-    'それより古い分はこの帳面の中には無く、器の外の stderr を見るしかない。'
+    `直近 ${limit} 件までを残し、あふれた古い分から消えます。` +
+    'それより古い分はここでは見られません。'
   );
 }

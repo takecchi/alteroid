@@ -217,9 +217,24 @@ export type TokenReconsiderReason =
  * （`.claude/skills/token-pool/SKILL.md` の「身元を運ばない観測しか無い器では
  * 復帰の下限がいまも probe の5分である」と同じ話）。だから世代の照合はしない
  * ——照合する相手（「どのセッションの観測か」）がそもそも無い。
+ *
+ * **ただし probe が開始時に測った鍵の身元（`observedBy`）を控えていれば、それは
+ * 運べる**（#2738。セッションの身元ではなく「どの鍵を測ったか」）。付いていれば
+ * 世代の照合を掛ける。付かない（箱が空の構成など）なら従来どおり掛けない。
  */
 export type TokenVerdictOrigin =
-  | { source: 'account_probe' }
+  | {
+      source: 'account_probe';
+      /**
+       * **probe の開始時に測った鍵の身元**（#2738）。`usage-poller.ts` が
+       * probe を始める瞬間に控える。**付いていれば `turn_success` と同じ世代の門
+       * （{@link observationFreshness}）を通す** —— 測っている間に回った後で
+       * 届いた、降りた鍵の `unusable` / `usable` を、いまの現役へ当てない。
+       * **省略は「身元が控えられなかった」**（箱がまだ何も撒いていない構成など）
+       * であって、門は掛からない（従来どおり）。値（鍵そのもの）は運ばない。
+       */
+      observedBy?: { tokenId: string; generation: number };
+    }
   | { source: 'turn_success'; observedBy: { tokenId: string; generation: number } };
 
 /** 回した / 回さなかった結果。**日誌へそのまま出せる形にしてある。** */
@@ -680,8 +695,9 @@ export interface TokenRotator {
    *   新しい現役の記録を `usable` にしうる。** ⟹ `origin.source ===
    *   'turn_success'` のときだけ、`observationFreshness(active,
    *   origin.observedBy)` が `'current'` でなければ**回さず** `kind: 'ignored'`
-   *   で抜ける。`account_probe` は身元を運ばない観測なので、この門はかけない
-   *   （かけようがない——照合する身元がそもそも無い）。
+   *   で抜ける。`account_probe` は、probe の開始時に測った鍵の身元
+   *   （`origin.observedBy`。#2738）を運んできたときだけ同じ門を通し、現役でない鍵の
+   *   判定は捨てる。身元を運ばない probe にはかけない（照合する相手が無い）。
    *
    *   **⚠️ そして `turn_success` はどんな結果でも通常の回転判定へは絶対に落ちない**
    *   （成功は「いまの現役が通る」証拠であって「回すべき」証拠ではない）。
@@ -2207,11 +2223,10 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
          * それが初めて踏む穴である。**回った後に届いた前の世代の成功が、まだ
          * 一度も試していない新しい現役の記録を `usable` にしうる。**
          *
-         * **`account_probe` にはこの門を掛けない。** あちらは身元を運ばない
-         * 観測なので、そもそも照合する相手が無い（probe はアカウントの枠を
-         * 測るので、名乗るべきセッションの身元を持たない——
-         * `.claude/skills/token-pool/SKILL.md` の「身元を運ばない観測しか無い
-         * 器では復帰の下限がいまも probe の5分」と同じ話）。
+         * **`account_probe` は、身元を運んでいない限りこの門を掛けない**（照合する
+         * 相手が無い。`.claude/skills/token-pool/SKILL.md` の「身元を運ばない観測
+         * しか無い器では復帰の下限がいまも probe の5分」と同じ話）。**運んでいる
+         * ときは次の門が掛かる**（#2738）。
          */
         if (current !== undefined && current.origin.source === 'turn_success') {
           const freshness = observationFreshness(active, current.origin.observedBy);
@@ -2225,6 +2240,32 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
                 'あるいはまだ一度も試していない現役についての成功なので、捨てる）',
             };
           }
+        }
+
+        /**
+         * **`account_probe` も、測った鍵の身元を名乗っていれば同じ門を通す**（#2738）。
+         *
+         * probe は開始時に現役の鍵を控え、数百ms〜締め切りのあいだ走る。その間に
+         * 回ると、降りた鍵の `unusable`（枠切れ）が「いまの現役」へ当たり、まだ
+         * 一度も試していない鍵を冷却へ入れて余計に回す（逆向きに、古い `usable` が
+         * 新しい現役の冷却を消す形もある）。**身元が無い probe（`observedBy` 省略）には
+         * 掛けない**——照合する相手が無い（従来どおり）。`stale` だけ捨て、`unknown`
+         * （現役がまだ無い）は従来どおり通す。捨てても目盛りが記録だけで見直す。
+         */
+        if (
+          current !== undefined &&
+          current.origin.source === 'account_probe' &&
+          current.origin.observedBy !== undefined &&
+          observationFreshness(active, current.origin.observedBy) === 'stale'
+        ) {
+          return {
+            kind: 'ignored' as const,
+            signal: 'none' as const,
+            reason,
+            why:
+              '枠の probe を観測したが、測った鍵がもう現役ではない（測っている間に回った）' +
+              'ので、その判定は現役へ当てずに捨てる',
+          };
         }
 
         /**

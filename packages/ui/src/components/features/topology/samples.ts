@@ -6,7 +6,7 @@ export const idleScene: SystemTopologyProps = {
   human: { flow: 'idle' },
   clone: { status: 'idle', task: '次の発意 tick を待っている' },
   db: { status: 'idle', flow: 'idle' },
-  runner: { status: 'idle' },
+  runners: [{ id: 'r1', label: 'runner-primary', status: 'ok' }],
   managers: [],
 };
 
@@ -22,10 +22,14 @@ export const busyScene: SystemTopologyProps = {
     ],
   },
   db: { status: 'running', flow: 'both' },
-  runner: { status: 'running' },
+  runners: [
+    { id: 'r1', label: 'runner-primary', status: 'ok' },
+    { id: 'r2', label: 'runner-2', status: 'ok' },
+  ],
   managers: [
     {
       id: 'm1',
+      runner: 'r1',
       label: 'mgr-7f3a',
       task: 'codex の駆動役を配線する',
       status: 'running',
@@ -55,6 +59,7 @@ export const busyScene: SystemTopologyProps = {
     },
     {
       id: 'm2',
+      runner: 'r1',
       label: 'mgr-c019',
       task: 'PR #2695 のレビュー',
       status: 'waiting',
@@ -69,6 +74,7 @@ export const busyScene: SystemTopologyProps = {
     },
     {
       id: 'm3',
+      runner: 'r2',
       label: 'mgr-91be',
       task: 'Railway のデプロイ時刻を調べる',
       status: 'running',
@@ -78,10 +84,14 @@ export const busyScene: SystemTopologyProps = {
   ],
 };
 
-/** runner が1つも登録されていない（分からない）。器は破線と「— 不明」で言い、正常には見せない。 */
+/**
+ * 生きた runner が1つも見えないが、委譲は居る。器の分からない委譲は黙って消さず、破線と「— 不明」の
+ * 「器の分からない委譲」の枠へ入れる（正常な器には見せない）。
+ */
 export const runnerUnknownScene: SystemTopologyProps = {
   ...busyScene,
-  runner: { status: 'unknown' },
+  runners: [],
+  managers: busyScene.managers.map((m) => ({ ...m, runner: undefined })),
 };
 
 export const runnerDownScene: SystemTopologyProps = {
@@ -89,7 +99,7 @@ export const runnerDownScene: SystemTopologyProps = {
   clone: { status: 'waiting', task: 'runner へ繋ぎ直している' },
   human: { flow: 'up' },
   db: { status: 'running', flow: 'down' },
-  runner: { status: 'offline' },
+  runners: busyScene.runners.map((r) => ({ ...r, status: 'offline' as const })),
   managers: busyScene.managers.map((m) => ({
     ...m,
     status: 'offline',
@@ -105,17 +115,33 @@ export const liveFrames: readonly SystemTopologyProps[] = [
     human: { flow: 'down' },
     clone: { status: 'running', task: '依頼を読んで記憶を引いている' },
     db: { status: 'running', flow: 'up' },
-    runner: { status: 'idle' },
+    runners: [{ id: 'r1', label: 'runner-primary', status: 'ok' }],
     managers: [],
   },
   {
     human: { flow: 'idle' },
     clone: { status: 'running', task: 'manager_start × 2' },
     db: { status: 'idle', flow: 'idle' },
-    runner: { status: 'running' },
+    runners: [{ id: 'r1', label: 'runner-primary', status: 'ok' }],
     managers: [
-      { id: 'm1', label: 'mgr-7f3a', task: '起動中', status: 'running', flow: 'down', workers: [] },
-      { id: 'm2', label: 'mgr-c019', task: '起動中', status: 'running', flow: 'down', workers: [] },
+      {
+        id: 'm1',
+        runner: 'r1',
+        label: 'mgr-7f3a',
+        task: '起動中',
+        status: 'running',
+        flow: 'down',
+        workers: [],
+      },
+      {
+        id: 'm2',
+        runner: 'r1',
+        label: 'mgr-c019',
+        task: '起動中',
+        status: 'running',
+        flow: 'down',
+        workers: [],
+      },
     ],
   },
   busyScene,
@@ -144,6 +170,7 @@ export const crowdedScene: SystemTopologyProps = {
   ...busyScene,
   managers: Array.from({ length: 5 }, (_, i) => ({
     id: `c${i}`,
+    runner: i < 3 ? 'r1' : 'r2',
     label: `mgr-${(0xa0 + i * 17).toString(16)}`,
     task: `並行の仕事 ${i + 1}`,
     status: i === 3 ? ('waiting' as const) : ('running' as const),
@@ -166,7 +193,7 @@ export const unknownScene: SystemTopologyProps = {
   human: { flow: 'idle' },
   clone: { status: 'unknown', task: 'ターンの有無を確認できない' },
   db: { label: '記憶ストア', status: 'unknown', task: '確かめる手段が無い', flow: 'idle' },
-  runner: { status: 'unknown' },
+  runners: [],
   managers: [],
 };
 
@@ -179,10 +206,11 @@ export const awaitingScene: SystemTopologyProps = {
   human: { flow: 'idle' },
   clone: { status: 'awaiting', task: '委譲 1 本の完了待ち' },
   db: { label: 'PostgreSQL', status: 'ok', flow: 'idle' },
-  runner: { status: 'ok' },
+  runners: [{ id: 'r1', label: 'runner-primary', status: 'ok' }],
   managers: [
     {
       id: 'm1',
+      runner: 'r1',
       label: 'mgr-7f3a',
       task: '背景処理 2 件の完了待ち: codex の駆動役を配線する',
       status: 'awaiting',
@@ -204,6 +232,7 @@ export const awaitingScene: SystemTopologyProps = {
     },
     {
       id: 'm2',
+      runner: 'r1',
       label: 'mgr-c019',
       task: '完了: PR #2695 のレビュー',
       status: 'idle',
@@ -218,11 +247,62 @@ export const storageDownScene: SystemTopologyProps = {
   ...busyScene,
   clone: { status: 'waiting', task: '利用枠の上限で止まっている' },
   db: { label: 'PostgreSQL', status: 'offline', task: 'ECONNREFUSED', flow: 'idle' },
-  runner: { status: 'ok' },
 };
 
 /** 台帳の行が読めない委譲が在り、読めたマネージャーは1本も無い。空と言い切らない。 */
 export const unreadableEmptyScene: SystemTopologyProps = {
   ...idleScene,
   unreadableCount: 2,
+};
+
+/**
+ * 器（runner）ごとの枠。runner-primary には実行中が1本と、手が空いて器の上に居るだけのマネージャー
+ * （仕事なし）が2本。runner-2 は空。器の分からない委譲（実行中だが、生きた器と突き合わない）は
+ * 最後の枠へ入れる。大きな「manager-runner」の枠は無い。
+ */
+export const perRunnerScene: SystemTopologyProps = {
+  human: { flow: 'idle' },
+  clone: { status: 'running', task: 'ターンを処理している' },
+  db: { label: 'PostgreSQL', status: 'ok', flow: 'idle' },
+  runners: [
+    { id: 'r1', label: 'runner-primary', status: 'ok' },
+    { id: 'r2', label: 'runner-2', status: 'ok' },
+  ],
+  managers: [
+    {
+      id: 'p1',
+      runner: 'r1',
+      label: 'mgr-7f3a',
+      task: 'codex の駆動役を配線する',
+      status: 'running',
+      flow: 'down',
+      workers: [],
+    },
+    {
+      id: 'p2',
+      runner: 'r1',
+      label: 'mgr-c019',
+      task: '完了: PR #2695 のレビュー',
+      status: 'idle',
+      flow: 'idle',
+      workers: [],
+    },
+    {
+      id: 'p3',
+      runner: 'r1',
+      label: 'mgr-91be',
+      task: '完了: Railway のデプロイ時刻を調べる',
+      status: 'idle',
+      flow: 'idle',
+      workers: [],
+    },
+    {
+      id: 'p4',
+      label: 'mgr-0d2e',
+      task: '器の名前を名乗っていない委譲',
+      status: 'running',
+      flow: 'idle',
+      workers: [],
+    },
+  ],
 };

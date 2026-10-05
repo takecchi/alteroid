@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { ensureTrailingNewline } from './store.js';
+import { MemoryConflictError, ensureTrailingNewline, memoryVersion } from './store.js';
 import { createMemoryStores } from './testing.js';
 
 /**
@@ -23,6 +23,70 @@ import { createMemoryStores } from './testing.js';
  * 関数を通っているので、実装が食い違うには誰かがその呼びを外すしかない。
  */
 describe('PersonaStore の契約（インメモリ実装）', () => {
+  describe('write の前提の版 ifMatch（Issue #2743。fs・pg・インメモリで同じ挙動）', () => {
+    it('読んだ版と同じなら書ける。違えば書かずに MemoryConflictError（current は書かれている文書）', async () => {
+      const stores = createMemoryStores();
+      await stores.persona.write('values', '# 価値観\n\nV1\n');
+      const read = await stores.persona.read('values');
+      const v1 = memoryVersion(read?.content ?? '');
+      // 読んだ後に別の書き手（クローン）が書く
+      await stores.persona.write('values', '# 価値観\n\nV1\n\nクローンの判断\n');
+
+      const error = await stores.persona
+        .write('values', '# 価値観\n\n人間の編集\n', { ifMatch: v1 })
+        .catch((e: unknown) => e);
+
+      expect(error).toBeInstanceOf(MemoryConflictError);
+      expect((error as MemoryConflictError).current?.content).toContain('クローンの判断');
+      expect((await stores.persona.read('values'))?.content).toContain('クローンの判断');
+
+      const latest = memoryVersion((await stores.persona.read('values'))?.content ?? '');
+      const ok = await stores.persona.write('values', '# 価値観\n\n人間の編集\n', {
+        ifMatch: latest,
+      });
+      expect(ok.content).toBe('# 価値観\n\n人間の編集\n');
+    });
+
+    it('null は「無かった」: 無ければ作れ、在れば書かない。在るものを null 前提で書かない', async () => {
+      const stores = createMemoryStores();
+      await stores.persona.write('values', '# A\n', { ifMatch: null });
+      const error = await stores.persona
+        .write('values', '# B\n', { ifMatch: null })
+        .catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(MemoryConflictError);
+      expect((await stores.persona.read('values'))?.content).toBe('# A\n');
+    });
+
+    it('文書が無いのに版を指定したら 409（current は null）。書かれない', async () => {
+      const stores = createMemoryStores();
+      const error = await stores.persona
+        .write('values', '# B\n', { ifMatch: memoryVersion('# 昔あった\n') })
+        .catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(MemoryConflictError);
+      expect((error as MemoryConflictError).current).toBeNull();
+      expect(await stores.persona.read('values')).toBeNull();
+    });
+
+    it('同じ版を前提にした2つの書き込みが重なっても、勝つのは1つだけ', async () => {
+      const stores = createMemoryStores();
+      await stores.persona.write('values', '# 価値観\n');
+      const v = memoryVersion((await stores.persona.read('values'))?.content ?? '');
+      const results = await Promise.allSettled([
+        stores.persona.write('values', '# 一\n', { ifMatch: v }),
+        stores.persona.write('values', '# 二\n', { ifMatch: v }),
+      ]);
+      expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+      expect(results.filter((r) => r.status === 'rejected')).toHaveLength(1);
+    });
+
+    it('ifMatch を付けなければ従来どおり後勝ち（後方互換）', async () => {
+      const stores = createMemoryStores();
+      await stores.persona.write('values', '# 価値観\n\nV1\n');
+      await stores.persona.write('values', '# 価値観\n\nV2\n');
+      await stores.persona.write('values', '# 価値観\n\nV3\n', {});
+      expect((await stores.persona.read('values'))?.content).toBe('# 価値観\n\nV3\n');
+    });
+  });
   it('write した本文は、末尾の改行が正規化されて読み戻る', async () => {
     const stores = createMemoryStores();
 

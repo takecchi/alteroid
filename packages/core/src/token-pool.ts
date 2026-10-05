@@ -961,3 +961,133 @@ export function credentialOf(token: AgentToken): TokenCredential {
   }
   return { kind: 'stored', value: token.value };
 }
+
+// ---------------------------------------------------------------------------
+// 変更の分類（日誌の作法。issue #2742）
+// ---------------------------------------------------------------------------
+
+/**
+ * `PUT /tokens`（全文置換）の前後の差分の1件。**行の中身（トークンの値）は持たない**——
+ * 日誌へそのまま書けるよう、id・ラベル・操作の種類・理由だけで作る。
+ *
+ * | operation | 意味                                                             | widens |
+ * | --------- | ---------------------------------------------------------------- | ------ |
+ * | `add`     | 新しい行（無効の行として足されても追加として数える）             | true   |
+ * | `enable`  | `disabledAt` が外れた                                            | true   |
+ * | `switch`  | 値の差し替え、または試す順の入れ替え（現役が変わりうる）         | true   |
+ * | `remove`  | 行が消えた                                                       | false  |
+ * | `disable` | `disabledAt` が立った                                            | false  |
+ * | `rename`  | ラベルだけが変わった                                             | false  |
+ */
+export interface TokenPoolChange {
+  operation: 'add' | 'remove' | 'disable' | 'enable' | 'switch' | 'rename';
+  id: string;
+  label: string;
+  /** `switch` の理由。`value`＝値の差し替え、`order`＝試す順の入れ替え。 */
+  reason?: 'value' | 'order';
+  /** 使える鍵が増える・変わる側か（日誌を先に書く側）。 */
+  widens: boolean;
+}
+
+/**
+ * 全文置換の前後（`before` は保存前、`after` は {@link normalizeTokenPool} の結果）から、
+ * 操作を分類する（issue #2742、決定 2026-10-05）。**純粋関数。**
+ *
+ * - 呼び出し側は、**1つでも `widens` が在れば全体を広げる側として扱う**（日誌が先）。
+ * - 試す順は、**残った行どうしの並び（`order` 昇順、同値は配列順）が変わったときだけ**
+ *   `switch`。`order` の数値だけが変わって並びが同じなら、現役は変わらないので分類しない。
+ * - 値の比較はするが、**値も指紋も結果へ入れない**。
+ */
+export function classifyTokenPoolChange(
+  before: readonly AgentToken[],
+  after: readonly AgentToken[],
+): TokenPoolChange[] {
+  const sortedIds = (rows: readonly AgentToken[], keep: ReadonlySet<string>): string[] =>
+    rows
+      .map((row, index) => ({ row, index }))
+      .sort((a, b) => a.row.order - b.row.order || a.index - b.index)
+      .map(({ row }) => row.id)
+      .filter((id) => keep.has(id));
+  const beforeById = new Map(before.map((row) => [row.id, row] as const));
+  const afterById = new Map(after.map((row) => [row.id, row] as const));
+  const changes: TokenPoolChange[] = [];
+
+  for (const row of after) {
+    const previous = beforeById.get(row.id);
+    if (previous === undefined) {
+      changes.push({ operation: 'add', id: row.id, label: row.label, widens: true });
+      continue;
+    }
+    if (previous.disabledAt === undefined && row.disabledAt !== undefined) {
+      changes.push({ operation: 'disable', id: row.id, label: row.label, widens: false });
+    } else if (previous.disabledAt !== undefined && row.disabledAt === undefined) {
+      changes.push({ operation: 'enable', id: row.id, label: row.label, widens: true });
+    }
+    if (previous.value !== row.value) {
+      changes.push({
+        operation: 'switch',
+        id: row.id,
+        label: row.label,
+        reason: 'value',
+        widens: true,
+      });
+    }
+    if (previous.label !== row.label) {
+      changes.push({ operation: 'rename', id: row.id, label: row.label, widens: false });
+    }
+  }
+  for (const row of before) {
+    if (!afterById.has(row.id)) {
+      changes.push({ operation: 'remove', id: row.id, label: row.label, widens: false });
+    }
+  }
+
+  const survivors = new Set(before.filter((row) => afterById.has(row.id)).map((row) => row.id));
+  const beforeSequence = sortedIds(before, survivors);
+  const afterSequence = sortedIds(after, survivors);
+  afterSequence.forEach((id, position) => {
+    if (beforeSequence[position] !== id) {
+      const row = afterById.get(id);
+      if (row !== undefined) {
+        changes.push({ operation: 'switch', id, label: row.label, reason: 'order', widens: true });
+      }
+    }
+  });
+  return changes;
+}
+
+/** {@link classifyTokenPolicyChange} の1項目。値は回す契機の名前と冷却のミリ秒だけ（秘密ではない）。 */
+export interface TokenPolicyChange {
+  field: 'rotateOn' | 'cooldownMs';
+  /** 読めない現在値を上書きしたときは `undefined`。 */
+  from: string | undefined;
+  to: string;
+}
+
+/**
+ * `PUT /tokens/policy` の前後から、変わった項目と、広げる側かを返す（issue #2742）。
+ *
+ * - **`after.rotateOn` が `off`**（回さない方向）→ 狭める側。冷却を一緒に変えていても同じ
+ *   （回さないので、冷却は効かない）。**日誌が書けなくても止めない。**
+ * - それ以外で変わった項目が在れば**広げる側**（`off` から戻す・契機を変える・冷却を変える。
+ *   冷却の長短の判断は安全側＝日誌先に倒した）。
+ * - 差分が無ければ `changes` は空で、`widens` は false。
+ * - `before` が `undefined`（現在値が読めず、両方を書き直した）は、両項目を変更として数える。
+ */
+export function classifyTokenPolicyChange(
+  before: TokenRotationSettings | undefined,
+  after: Pick<TokenRotationSettings, 'rotateOn' | 'cooldownMs'>,
+): { changes: TokenPolicyChange[]; widens: boolean } {
+  const changes: TokenPolicyChange[] = [];
+  if (before === undefined || before.rotateOn !== after.rotateOn) {
+    changes.push({ field: 'rotateOn', from: before?.rotateOn, to: after.rotateOn });
+  }
+  if (before === undefined || before.cooldownMs !== after.cooldownMs) {
+    changes.push({
+      field: 'cooldownMs',
+      from: before === undefined ? undefined : String(before.cooldownMs),
+      to: String(after.cooldownMs),
+    });
+  }
+  return { changes, widens: changes.length > 0 && after.rotateOn !== 'off' };
+}
