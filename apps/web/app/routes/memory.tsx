@@ -77,10 +77,9 @@ export default function Memory() {
           <ul>
             {documents.map((document) => (
               <li key={document.slug} className="border-b border-border last:border-b-0">
-                <Link
-                  to={`/memory/${document.slug}`}
-                  className="flex items-center gap-3 px-4 py-3 hover:bg-muted"
-                >
+                {/* 行全体をリンクにしない（#2808）。リンクは題名だけにして、slug・サイズ・日時は
+                    選択・コピーできる文字にする。 */}
+                <div className="flex items-center gap-3 px-4 py-3 hover:bg-muted">
                   <div className="min-w-0 flex-1">
                     {/* 一覧の1行は Markdown 化の対象外（`components/markdown.tsx` の doc） */}
                     <p className="truncate text-sm">
@@ -90,7 +89,12 @@ export default function Memory() {
                       >
                         [{document.kind}]
                       </span>
-                      {document.title}
+                      <Link
+                        to={`/memory/${document.slug}`}
+                        className="underline-offset-2 hover:underline"
+                      >
+                        {document.title}
+                      </Link>
                     </p>
                     <p className="truncate font-mono text-[11px] text-muted-foreground">
                       {document.slug}
@@ -108,7 +112,7 @@ export default function Memory() {
                     {formatCreatedAtRelative(document.createdAt)} · 更新{' '}
                     {formatRelative(document.updatedAt)}
                   </span>
-                </Link>
+                </div>
               </li>
             ))}
           </ul>
