@@ -267,7 +267,7 @@ function toAgentPreToolRecord(input: unknown): AgentPreToolRecord {
  * #1744 で分割済み）の「issue #863」/
  * `runner-pre-tool-use.test.ts` の既存の歯がこれを固定している）。
  *
- * **`never` で網羅性を検査する。** `AgentPreToolDecision` に4つ目の `kind` が
+ * **`never` で網羅性を検査する。** `AgentPreToolDecision` に5つ目の `kind` が
  * 増えたら、この `switch` の `default` 節で `tsc` が落ちる（`memory.ts` の
  * `assertNeverMemoryProtectionStatus` と同じ形の型検査。AGENTS.md「テストを
  * 弱めずに直す」の「型で塞いだ分岐にも、実行時の倒れ先の歯を足す」）。
@@ -301,6 +301,21 @@ function wrapPreToolHook(hook: AgentPreToolHook): HookCallback {
           hookSpecificOutput: {
             hookEventName: 'PreToolUse',
             permissionDecision: 'allow',
+            permissionDecisionReason: decision.reason,
+            ...(decision.rewrite !== undefined
+              ? { updatedInput: decision.rewrite.input, additionalContext: decision.rewrite.note }
+              : {}),
+          },
+        };
+      case 'ask':
+        // 確認に上げる（issue #2884）。SDK は `canUseTool` へ流し、`permissionDecisionReason` は
+        // `options.decisionReason` として確認を受ける側に届く（本物の本体で確かめてある。
+        // マネージャー本体でも作業者の呼び出しでも。`real-cli-pre-tool-use-ask.test.ts`）。
+        return {
+          continue: true,
+          hookSpecificOutput: {
+            hookEventName: 'PreToolUse',
+            permissionDecision: 'ask',
             permissionDecisionReason: decision.reason,
             ...(decision.rewrite !== undefined
               ? { updatedInput: decision.rewrite.input, additionalContext: decision.rewrite.note }
