@@ -1,7 +1,7 @@
 import { mkdir, readFile, rm, stat } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
-import { parseMcpServers } from '@alteroid/core';
+import { parseMcpServers, sortMcpServers } from '@alteroid/core';
 import type { McpServers, McpServerStore, StoredMcpServers } from '@alteroid/core';
 
 import { writeFileAtomic } from './atomic.js';
@@ -47,10 +47,12 @@ export class FsMcpServerStore implements McpServerStore {
       // 文言に含める（鍵が入りうる）。
       throw new Error(`${this.#path} が JSON として読めない`);
     }
-    const servers = parseMcpServers(
-      parsed !== null && typeof parsed === 'object' && 'mcpServers' in parsed
-        ? parsed.mcpServers
-        : undefined,
+    const servers = sortMcpServers(
+      parseMcpServers(
+        parsed !== null && typeof parsed === 'object' && 'mcpServers' in parsed
+          ? parsed.mcpServers
+          : undefined,
+      ),
     );
     if (Object.keys(servers).length === 0) return null;
     return { mcpServers: servers, updatedAt: mtime.toISOString() };
@@ -72,6 +74,7 @@ export class FsMcpServerStore implements McpServerStore {
         mode: 0o600,
       });
     });
-    return { mcpServers: servers, updatedAt: at };
+    // 保存する形（書いた順）は変えず、返すときだけ名前の順に並べる（issue #2927 項目6）。
+    return { mcpServers: sortMcpServers(servers), updatedAt: at };
   }
 }

@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 
 import { z } from 'zod';
 
+import { compareCodeUnits } from './code-unit-order.js';
 import { MCP_SERVER_NAME } from './tools.js';
 
 /**
@@ -150,6 +151,18 @@ export function parseMcpServers(input: unknown): McpServers {
   throw new Error(
     `MCP サーバの登録の形が不正: ${where === '' ? '' : `${where}: `}${first?.message ?? '理由不明'}`,
   );
+}
+
+/**
+ * サーバーを名前の `compareCodeUnits` 順に並べて返す（issue #2927 項目6）。3実装（インメモリ・fs・pg）が
+ * `read()` と `write()` の戻り値をこれで揃える。pg の jsonb は書いた順を保たず（短い順→バイト順に
+ * 並べ替える）、fs は書いた順を返していたため、サーバーの並びを表示する面で器ごとに違って見えた。
+ * 並べ替えは返すときだけで、保存される形は変えない。
+ */
+export function sortMcpServers(servers: McpServers): McpServers {
+  return Object.fromEntries(
+    Object.entries(servers).sort(([a], [b]) => compareCodeUnits(a, b)),
+  ) as McpServers;
 }
 
 /**

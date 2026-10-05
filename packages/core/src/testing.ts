@@ -32,7 +32,7 @@ import type {
   SchedulePhase,
   ScheduledRequest,
 } from './schema.js';
-import { parseMcpServers, type StoredMcpServers } from './mcp-servers.js';
+import { parseMcpServers, sortMcpServers, type StoredMcpServers } from './mcp-servers.js';
 import {
   commitmentSchema,
   inboxEventSchema,
@@ -1487,7 +1487,12 @@ export function createMemoryStores(): Stores {
   /** 人間の MCP 連携の登録（インメモリ。契約は `mcp-server-contract.ts`）。 */
   const mcpServers: McpServerStore = {
     async read() {
-      return storedMcpServers === null ? null : structuredClone(storedMcpServers);
+      return storedMcpServers === null
+        ? null
+        : {
+            ...storedMcpServers,
+            mcpServers: sortMcpServers(structuredClone(storedMcpServers.mcpServers)),
+          };
     },
     async write(input) {
       // **書く前に検査する**（3実装が同じ関数を通す。`McpServerStore.write` の doc）。
@@ -1495,7 +1500,7 @@ export function createMemoryStores(): Stores {
       const updatedAt = new Date().toISOString();
       storedMcpServers =
         Object.keys(servers).length === 0 ? null : { mcpServers: servers, updatedAt };
-      return { mcpServers: structuredClone(servers), updatedAt };
+      return { mcpServers: sortMcpServers(structuredClone(servers)), updatedAt };
     },
   };
 

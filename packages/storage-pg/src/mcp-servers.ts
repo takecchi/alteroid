@@ -1,4 +1,4 @@
-import { parseMcpServers } from '@alteroid/core';
+import { parseMcpServers, sortMcpServers } from '@alteroid/core';
 import type { McpServers, McpServerStore, StoredMcpServers } from '@alteroid/core';
 import { eq } from 'drizzle-orm';
 
@@ -33,7 +33,7 @@ export class PgMcpServerStore implements McpServerStore {
       .limit(1);
     const row = rows[0];
     if (row === undefined) return null;
-    const servers = parseMcpServers(row.servers);
+    const servers = sortMcpServers(parseMcpServers(row.servers));
     if (Object.keys(servers).length === 0) return null;
     return { mcpServers: servers, updatedAt: row.updatedAt.toISOString() };
   }
@@ -51,6 +51,7 @@ export class PgMcpServerStore implements McpServerStore {
       .insert(mcpServers)
       .values({ id: MCP_SERVERS_ID, servers, updatedAt: at })
       .onConflictDoUpdate({ target: mcpServers.id, set: { servers, updatedAt: at } });
-    return { mcpServers: servers, updatedAt: at.toISOString() };
+    // 保存する形は変えず、返すときだけ名前の順に並べる（issue #2927 項目6）。
+    return { mcpServers: sortMcpServers(servers), updatedAt: at.toISOString() };
   }
 }

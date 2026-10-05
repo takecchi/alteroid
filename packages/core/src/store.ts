@@ -2264,7 +2264,12 @@ export interface ProfileStore {
  * `mcp-servers.ts`。
  */
 export interface McpServerStore {
-  /** 置かれていなければ null（空の登録も null として読む）。 */
+  /**
+   * 置かれていなければ null（空の登録も null として読む）。
+   *
+   * **返すサーバーは、名前の `compareCodeUnits` 順に並べる**（`write()` の戻り値も同じ。3実装とも
+   * `sortMcpServers` を通す。pg の jsonb の並びに依らない。issue #2927 項目6）。
+   */
   read(): Promise<StoredMcpServers | null>;
   /**
    * 全文置換。**空の登録（`{}`）は「登録を外す」**（`ProfileStore.write()` と

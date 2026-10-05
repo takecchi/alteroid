@@ -899,6 +899,7 @@ export {
   mcpSseServerConfigSchema,
   mcpStdioServerConfigSchema,
   parseMcpServers,
+  sortMcpServers,
   type McpServerEntryConfig,
   type McpServers,
   type StoredMcpServers,
