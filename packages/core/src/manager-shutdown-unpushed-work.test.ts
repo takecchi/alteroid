@@ -227,6 +227,47 @@ describe('台帳の lastUnpushedWorkObservation が、shutdown_unpushed_work（I
     await pool.stop();
   });
 
+  it('1b. 件数（unpushedCommitCount 等）も台帳へ写る——器の入れ替え後の案内が失われた件数を言うため（Issue #2751）', async () => {
+    const { pool, fake } = await runningManualSetup('mgr-counts');
+
+    fake.shutdownUnpushedWork('mgr-counts', {
+      kind: 'ok',
+      result: {
+        cwd: '/work/project',
+        worktrees: [
+          {
+            relativePath: '.',
+            branch: 'feat/x',
+            unpushedCommitCount: 3,
+            uncommittedChangeCount: 2,
+          },
+          {
+            relativePath: 'sub',
+            branch: 'feat/y',
+            unpushedCommitCountUnknown: 'git が落ちた',
+            uncommittedChangeCountUnknown: '読めなかった',
+          },
+        ],
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    const listed = await listedOf(pool, 'mgr-counts');
+    expect(listed.lastUnpushedWorkObservation).toMatchObject({
+      kind: 'observed',
+      worktrees: [
+        { relativePath: '.', unpushedCommitCount: 3, uncommittedChangeCount: 2 },
+        {
+          relativePath: 'sub',
+          unpushedCommitCountUnknown: 'git が落ちた',
+          uncommittedChangeCountUnknown: '読めなかった',
+        },
+      ],
+    });
+
+    await pool.stop();
+  });
+
   it('2. unavailable: shutdown_unpushed_work の unpushedWork（kind:unavailable）が、台帳に kind:unavailable + reason として残る', async () => {
     const { pool, fake } = await runningManualSetup('mgr-unavailable');
 

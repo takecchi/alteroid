@@ -3343,6 +3343,20 @@ export const observedWorktreeBranchSchema = z.object({
       path: z.string(),
     })
     .optional(),
+  /**
+   * 件数の写し（Issue #2751）。`unpushedWorkTreeSchema` の同名の欄をそのまま
+   * 継ぐ（有無・件数まで——「出してよい範囲」の内側）。器が入れ替わった後の
+   * 再開の案内が、未 push のコミットを失った事実を件数つきで言うために要る。
+   * 古い行・古い runner は持たない（省略。`0` で埋めない）。
+   * 件数は `--remotes=origin` 基準で多めに出る側の誤差（`unpushedWorkTreeSchema` の doc）。
+   */
+  unpushedCommitCount: z.number().int().nonnegative().optional(),
+  /** `unpushedCommitCount` を確かめられなかった理由。 */
+  unpushedCommitCountUnknown: z.string().optional(),
+  /** 未コミットの変更の件数（`git status --porcelain` の行数）。 */
+  uncommittedChangeCount: z.number().int().nonnegative().optional(),
+  /** `uncommittedChangeCount` を確かめられなかった理由。 */
+  uncommittedChangeCountUnknown: z.string().optional(),
 });
 
 export type ObservedWorktreeBranch = z.infer<typeof observedWorktreeBranchSchema>;

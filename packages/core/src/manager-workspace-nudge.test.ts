@@ -741,11 +741,11 @@ describe('runner-swap の一言は作業ツリーごとの未 push・退避 ref 
   });
 
   it('作業ツリーが多くても一覧は予算に収まり、危ない作業ツリーが先に出て、溢れは件数で言う', async () => {
-    const worktrees = Array.from({ length: 40 }, (_, i) => ({
+    const worktrees = Array.from({ length: 60 }, (_, i) => ({
       relativePath: `repo-${String(i).padStart(2, '0')}`,
       branch: `feature/${i}`,
       remoteOrigin: origin,
-      unpushedCommitCount: i === 39 ? 7 : 0,
+      unpushedCommitCount: i === 59 ? 7 : 0,
       uncommittedChangeCount: 0,
     }));
     const job = jobWith('mgr-many', unknownLocator, {
@@ -757,7 +757,7 @@ describe('runner-swap の一言は作業ツリーごとの未 push・退避 ref 
     const { message } = await runnerSwapNudge(job);
 
     expect(message.length).toBeLessThan(6000);
-    expect(message.indexOf('repo-39')).toBeLessThan(message.indexOf('repo-00'));
-    expect(message).toMatch(/…ほか \d+ 本は省略（全 40 本/);
+    expect(message.indexOf('repo-59')).toBeLessThan(message.indexOf('repo-00'));
+    expect(message).toMatch(/…ほか \d+ 本は省略（全 60 本/);
   });
 });
