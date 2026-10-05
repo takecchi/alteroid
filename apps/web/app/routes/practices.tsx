@@ -4,7 +4,7 @@ import { AlertTriangle } from 'lucide-react';
 import { useId, useState } from 'react';
 import { Link, useNavigate } from 'react-router';
 
-import { Page, Button, Card, Empty, ErrorNote, Input, Spinner } from '@alteroid/ui';
+import { Page, Button, Card, Empty, Input, Spinner } from '@alteroid/ui';
 import { usePractices } from '@alteroid/swr';
 import { formatRelative } from '@alteroid/logic';
 import type { UnreadablePractice } from '@alteroid/logic';

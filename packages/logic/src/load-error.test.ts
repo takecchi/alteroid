@@ -48,6 +48,13 @@ describe('classifyLoadError', () => {
     expect(info.retryable).toBe(retryable);
   });
 
+  it('403 の日本語の理由は案内として残し、英語の素の文は出さない', () => {
+    expect(classifyLoadError(new FakeApiError(403, '持ち主だけが操作できる')).hint).toBe(
+      '持ち主だけが操作できる',
+    );
+    expect(classifyLoadError(new FakeApiError(403, 'forbidden')).hint).toBeUndefined();
+  });
+
   it('文の無い応答は HTTP の番号だけを詳細に持つ', () => {
     expect(classifyLoadError(new FakeApiError(502, '')).detail).toBe('HTTP 502');
   });

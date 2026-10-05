@@ -74,7 +74,9 @@ export function classifyLoadError(error: unknown): LoadErrorInfo {
       return {
         kind: 'forbidden',
         summary: 'この画面を見る許可がありません。',
-        hint: undefined,
+        // 日本語の理由（デーモンが返す「持ち主だけが操作できる」など）は利用者に要る情報なので、
+        // 案内として残す。英語の素の文は出さず「詳細」へ回す。
+        hint: /[\u3040-\u30ff\u3400-\u9fff]/.test(raw) ? raw : undefined,
         retryable: false,
         ...base,
       };
