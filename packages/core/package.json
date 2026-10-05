@@ -8,6 +8,10 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     },
+    "./cli-light": {
+      "types": "./dist/cli-light.d.ts",
+      "import": "./dist/cli-light.js"
+    },
     "./usage": {
       "types": "./dist/usage-format.d.ts",
       "import": "./dist/usage-format.js"

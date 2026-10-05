@@ -1814,8 +1814,9 @@ const CLOSE_MANY_SOURCES_SHOWN = 8;
  * **`REMOVE_MANY_JOURNAL_ID_CHARS` の意味も同じ**——#972 の要求（「消した id
  * は全部日誌に残す」）を「予算は件数ではなく文字数」の形で満たす。
  */
-export const REMOVE_MANY_LIMIT_DEFAULT = 500;
-export const REMOVE_MANY_LIMIT_MAX = 2_000;
+import { REMOVE_MANY_LIMIT_DEFAULT, REMOVE_MANY_LIMIT_MAX } from './remove-many-limit.js';
+
+export { REMOVE_MANY_LIMIT_DEFAULT, REMOVE_MANY_LIMIT_MAX };
 export const REMOVE_MANY_JOURNAL_ID_CHARS = 3_600;
 /** 一括削除の戻り値に並べる id の件数の上限（`CLOSE_MANY_IDS_SHOWN` と同じ理由）。 */
 const REMOVE_MANY_IDS_SHOWN = 20;
