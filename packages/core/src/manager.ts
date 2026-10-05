@@ -2918,6 +2918,26 @@ const PUSH_RETRY_BASE_MS = 2_000;
 const PUSH_RETRY_MAX_MS = 60_000;
 
 /**
+ * 押し込みの失敗の行を畳む連なりが「途切れた」と見なす空き（ミリ秒。issue #1311）。
+ *
+ * **既定の `JOURNAL_FOLD_IDLE_GAP_MS`（60秒）は使えない。** 挑み直しの間隔は
+ * `PUSH_RETRY_MAX_MS`（60秒）で頭打ちになるので、定常では観測と観測の空きが
+ * 60秒を**少し超える**——既定の空きだと毎回「途切れた」と判定され、何も畳まれない。
+ * 挑み直しの上限の2倍にして、定常の反復が確実に1本の連なりに収まるようにする。
+ * 一方、**2分以上空いた再発は別の連なり＝必ず1行書かれる。**
+ */
+export const PUSH_FAILURE_FOLD_IDLE_GAP_MS = PUSH_RETRY_MAX_MS * 2;
+
+/**
+ * 押し込みの失敗の連なりを、途中の要約で吐き出す総経過の上限（ミリ秒）。
+ *
+ * 既定（5分）だと60秒間隔の反復は5件ごとに要約が出て、行数が 1/5 にしかならない。
+ * 失うのは**畳んだ件数の内訳だけ**（器が落ちたときに高々この時間ぶん）なので、
+ * 30分に伸ばす。
+ */
+export const PUSH_FAILURE_FOLD_MAX_SPAN_MS = 30 * 60_000;
+
+/**
  * `#observeUnpushedWorkOnce`（`case 'report'` と `case 'tool_use'` の
  * git push 検出。Issue #1266 の (4) と Issue #1376 の続き）が
  * `unpushedWork()` へ渡す期限。
@@ -5346,6 +5366,12 @@ class Pool implements ManagerPool {
   readonly #unsubscribeDirectPushes: (() => void)[] = [];
   /** 次に待つ時間。全部直ったら忘れる（`#reattachDelays` と同じ形）。 */
   readonly #pushRetryDelays = new Map<string, number>();
+  /**
+   * 押し込み（プロファイル・環境変数・MCP・認証トークン）の失敗の行を畳む窓
+   * （`runnerId` と種類ごとに1本。issue #1311。`#journalPushFailure`）。
+   * 直ったとき（`ok`）と `stop()` で吐き出して外す。
+   */
+  readonly #pushFailureFolds = new Map<string, JournalFoldWindow>();
   /**
    * `probeTurnEnds` が最後に生ログを読みに行った時刻（managerId → `#now()`。
    * Issue #567）。**費用の門のバックオフにしか使わない**——ここに載ったこと
@@ -9067,6 +9093,7 @@ class Pool implements ManagerPool {
     // 記録そのもの**である。`#retire()` を通らずに止まる（＝走行中の委譲を抱えた
     // まま落ちる）と、畳んだ2件目以降が丸ごと消える。
     this.#flushRateLimitJournalFolds();
+    this.#flushPushFailureFolds();
     // 名簿の購読も畳む（載り続ける runner に、止めたプールが繋ぎに行かない）。
     this.#unsubscribe();
     // 予約してあった取り直しは畳む（止めたはずのプールが後から動かない）。
@@ -9133,18 +9160,16 @@ class Pool implements ManagerPool {
       // のと同じ線に揃える（出力はその場の応答——`profile_write` / `PUT /profile`——
       // でだけ返す）。
       const outputChars = result.output?.length ?? 0;
-      await this.#journal({
-        type: 'exchange',
-        with: 'self',
-        role: 'outbound',
-        text:
-          `${EXCHANGE_KIND_FAILURE_PREFIX}${runnerId} に実行環境プロファイルを置けなかった（前のものが残っている）: ` +
+      await this.#journalPushFailure(
+        runnerId,
+        'profile',
+        `${EXCHANGE_KIND_FAILURE_PREFIX}${runnerId} に実行環境プロファイルを置けなかった（前のものが残っている）: ` +
           `${result.error ?? '理由不明'}` +
           (outputChars === 0
             ? ''
             : `（プロファイルの出力 ${outputChars} 文字は記録しない——鍵の値が入りうる。` +
               '出力は profile_write / PUT /profile で書き直したときの応答で読める）'),
-      });
+      );
     } catch (error) {
       // **`this.#journal` を経由する。** ここが直に `this.#stores.journal.append`
       // を呼んで自前の catch で `String(error)` を書いていたときは、日誌 append
@@ -9167,12 +9192,11 @@ class Pool implements ManagerPool {
         at: this.#nowIso(),
         error: reasonOf(error),
       });
-      await this.#journal({
-        type: 'exchange',
-        with: 'self',
-        role: 'outbound',
-        text: `${EXCHANGE_KIND_FAILURE_PREFIX}${runnerId} へ実行環境プロファイルを降ろせなかった: ${reasonOf(error)}`,
-      });
+      await this.#journalPushFailure(
+        runnerId,
+        'profile',
+        `${EXCHANGE_KIND_FAILURE_PREFIX}${runnerId} へ実行環境プロファイルを降ろせなかった: ${reasonOf(error)}`,
+      );
     }
   }
 
@@ -9203,12 +9227,11 @@ class Pool implements ManagerPool {
         error: reasonOf(error),
       });
       // **`this.#journal` を経由する**（`#pushProfile` と同じ理由・同じ非対称）。
-      await this.#journal({
-        type: 'exchange',
-        with: 'self',
-        role: 'outbound',
-        text: `${EXCHANGE_KIND_FAILURE_PREFIX}${runnerId} へマネージャーの環境変数を降ろせなかった（この runner で起こすマネージャーは、器の環境変数に在るものだけで走る）: ${reasonOf(error)}`,
-      });
+      await this.#journalPushFailure(
+        runnerId,
+        'credentials',
+        `${EXCHANGE_KIND_FAILURE_PREFIX}${runnerId} へマネージャーの環境変数を降ろせなかった（この runner で起こすマネージャーは、器の環境変数に在るものだけで走る）: ${reasonOf(error)}`,
+      );
     }
   }
 
@@ -9244,12 +9267,11 @@ class Pool implements ManagerPool {
         error: reasonOf(error),
       });
       // **`this.#journal` を経由する**（`#pushProfile` と同じ理由・同じ非対称）。
-      await this.#journal({
-        type: 'exchange',
-        with: 'self',
-        role: 'outbound',
-        text: `${EXCHANGE_KIND_FAILURE_PREFIX}${runnerId} へ MCP サーバの登録を降ろせなかった（この runner で起こすマネージャー・作業者は、記憶ストアの登録を持たずに走る）: ${reasonOf(error)}`,
-      });
+      await this.#journalPushFailure(
+        runnerId,
+        'mcpServers',
+        `${EXCHANGE_KIND_FAILURE_PREFIX}${runnerId} へ MCP サーバの登録を降ろせなかった（この runner で起こすマネージャー・作業者は、記憶ストアの登録を持たずに走る）: ${reasonOf(error)}`,
+      );
     }
   }
 
@@ -12901,13 +12923,100 @@ class Pool implements ManagerPool {
       // 受け取って読み直す相手がいない（tools.ts 側の `appendJournalOrThrow`
       // が投げ直すのは、クローンがその応答を読んで判断し直せる口を持つからで、
       // ここにはその口が無い）。
+      await this.#journalPushFailure(
+        runner.runnerId,
+        'agentToken',
+        `${EXCHANGE_KIND_FAILURE_PREFIX}${runner.runnerId} に認証トークンを降ろせなかった（この runner で起こすマネージャーは、器の環境変数に認証トークンが入っていればそれで走り、入っていなければ資格を1つも持たずに走る——どちらになるかは器の env 次第で、ここからは分からない）: ${reasonOf(error)}`,
+      );
+    }
+  }
+
+  /**
+   * 押し込みの失敗1件を日誌へ書く。**同じ本文が続くあいだは2件目以降を畳む**
+   * （{@link JournalFoldWindow}、issue #1311）。
+   *
+   * ## なぜここか
+   *
+   * 押し込みに失敗した runner へは `#retryFailedPushes` が**諦めずに**挑み直す
+   * （`PUSH_RETRY_MAX_MS` ＝ 60 秒で頭打ち。north_star 禁止2 なので回数では
+   * 止めない）。直らない障害では、**種類（4つ）× runner ごとに、最大で毎分1行・
+   * 1日 1,440 行**の同じ「〜を降ろせなかった」が積まれる。本文は変わらない。
+   *
+   * ## 畳み方（追記専用を破らない）
+   *
+   * - **1件目は必ず書く。** 「降ろせなかった」が消える瞬間は無い
+   * - 本文が変わったら（理由が変わった）別の連なり＝書く
+   * - 空きが {@link PUSH_FAILURE_FOLD_IDLE_GAP_MS} を超えたら別の連なり＝書く
+   * - 直ったら（`ok`）連なりを閉じて要約を吐く（`#flushPushFailureFold`）。
+   *   **直った後の次の失敗は、新しい連なりの1件目として必ず書く**
+   * - 要約は新しい1行の追記（`UPDATE` / 削除は無い）
+   *
+   * 失うのは**2件目以降の個別の時刻**だけである。
+   *
+   * ## 守る線
+   *
+   * 帳面（`#pushHealth`）・挑み直し・クローンへの通知は**一切変えない**。
+   * 畳むのは日誌への1行だけである。この行は判断・承認・権限を記録しない
+   * （`[障害]` の実況。読み手は `journal_read` と日誌の表示だけで、
+   * `readConversationWindow` / digest は `with: 'human'` しか読まない）。
+   */
+  async #journalPushFailure(
+    runnerId: string,
+    kind: keyof RunnerPushHealth,
+    text: string,
+  ): Promise<void> {
+    const key = `${runnerId}\u0000${kind}`;
+    let fold = this.#pushFailureFolds.get(key);
+    if (fold === undefined) {
+      fold = new JournalFoldWindow({
+        idleGapMs: PUSH_FAILURE_FOLD_IDLE_GAP_MS,
+        maxSpanMs: PUSH_FAILURE_FOLD_MAX_SPAN_MS,
+      });
+      this.#pushFailureFolds.set(key, fold);
+    }
+    const folded = fold.observe(text, text, this.#now());
+    if (folded.flush !== undefined) {
       await this.#journal({
         type: 'exchange',
         with: 'self',
         role: 'outbound',
-        text: `${EXCHANGE_KIND_FAILURE_PREFIX}${runner.runnerId} に認証トークンを降ろせなかった（この runner で起こすマネージャーは、器の環境変数に認証トークンが入っていればそれで走り、入っていなければ資格を1つも持たずに走る——どちらになるかは器の env 次第で、ここからは分からない）: ${reasonOf(error)}`,
+        text: `${EXCHANGE_KIND_THINNING_PREFIX}${foldedRunText(folded.flush)}`,
       });
     }
+    if (folded.write) {
+      await this.#journal({ type: 'exchange', with: 'self', role: 'outbound', text });
+    }
+  }
+
+  /** 1本の押し込みの失敗の畳みを閉じ、畳み残しを要約で吐く（直ったとき）。 */
+  #flushPushFailureFold(runnerId: string, kind: keyof RunnerPushHealth): void {
+    const key = `${runnerId}\u0000${kind}`;
+    const fold = this.#pushFailureFolds.get(key);
+    if (fold === undefined) return;
+    this.#pushFailureFolds.delete(key);
+    const flushed = fold.flush();
+    if (flushed === undefined) return;
+    void this.#journal({
+      type: 'exchange',
+      with: 'self',
+      role: 'outbound',
+      text: `${EXCHANGE_KIND_THINNING_PREFIX}${foldedRunText(flushed)}`,
+    });
+  }
+
+  /** 開いている押し込みの失敗の畳みを全部吐き出す（止まるとき）。 */
+  #flushPushFailureFolds(): void {
+    for (const fold of this.#pushFailureFolds.values()) {
+      const flushed = fold.flush();
+      if (flushed === undefined) continue;
+      void this.#journal({
+        type: 'exchange',
+        with: 'self',
+        role: 'outbound',
+        text: `${EXCHANGE_KIND_THINNING_PREFIX}${foldedRunText(flushed)}`,
+      });
+    }
+    this.#pushFailureFolds.clear();
   }
 
   /** `this.#now()` を ISO 8601 の文字列にする（テストで時刻を固定するため経由する）。 */
@@ -12928,6 +13037,9 @@ class Pool implements ManagerPool {
     outcome: RunnerPushOutcome,
   ): void {
     if (runnerId === undefined) return;
+    // **直ったら畳んでいた連なりを閉じる**（issue #1311）。次に失敗したときは
+    // 「同じ本文だから畳む」ではなく、**新しい失敗として1件目から書く**。
+    if (outcome.status === 'ok') this.#flushPushFailureFold(runnerId, kind);
     const health = this.#pushHealth.get(runnerId) ?? {};
     health[kind] = outcome;
     this.#pushHealth.set(runnerId, health);
