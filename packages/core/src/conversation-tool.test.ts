@@ -766,3 +766,75 @@ describe('conversation_read — includeSuperseded（編集で畳まれた版）'
     expect(reply).not.toContain('元の回答トマト');
   });
 });
+
+/**
+ * **#3644（#3550 の道具側）。** 会話の一覧が `GET /conversations` と同じ `cursor` で頁送りできる。
+ * 応答の末尾に出た cursor をそのまま渡せば続きが読め、`limit` の上限（200）・予算・`scan` の窓の外へも
+ * 辿れる。続きが無ければ cursor は出さない。
+ */
+describe('conversation_read — 一覧の cursor の頁送り（#3644）', () => {
+  const cursorOf = (reply: string): string | undefined =>
+    /conversation_read[^\n]*?cursor=([A-Za-z0-9_-]+)/.exec(reply)?.[1];
+  const idsOf = (reply: string): string[] =>
+    [...reply.matchAll(/^(conv-\d+) /gm)].map((match) => match[1] as string);
+
+  it('limit で切れたら cursor が出て、渡すと続きが新しい順に出る（飛ばさず重複しない）', async () => {
+    const stores = createMemoryStores();
+    for (let i = 0; i < 5; i += 1) await humanTurn(stores, `conv-${i}`, `質問${i}`, `返答${i}`);
+    const call = tools(stores);
+
+    const first = await call('conversation_read', { limit: 2 });
+    expect(idsOf(first)).toEqual(['conv-4', 'conv-3']);
+    const cursor = cursorOf(first);
+    expect(cursor).toBeDefined();
+
+    const second = await call('conversation_read', { limit: 2, cursor });
+    expect(idsOf(second)).toEqual(['conv-2', 'conv-1']);
+    const third = await call('conversation_read', { limit: 2, cursor: cursorOf(second) });
+    expect(idsOf(third)).toEqual(['conv-0']);
+    // 続きが無ければ cursor は出さない。
+    expect(cursorOf(third)).toBeUndefined();
+  });
+
+  it('scan の窓の外も cursor で辿れる', async () => {
+    const stores = createMemoryStores();
+    for (let i = 0; i < 4; i += 1) await humanTurn(stores, `conv-${i}`, `質問${i}`, `返答${i}`);
+    const call = tools(stores);
+
+    // 窓は4件（= 2 会話ぶん）。limit に余裕があっても、窓の外が残るので cursor が出る。
+    const first = await call('conversation_read', { scan: 4 });
+    expect(idsOf(first)).toEqual(['conv-3', 'conv-2']);
+    const second = await call('conversation_read', { scan: 4, cursor: cursorOf(first) });
+    expect(idsOf(second)).toEqual(['conv-1', 'conv-0']);
+  });
+
+  it('予算で切れたら、出せた最後の会話からの cursor が出て、渡すと残りが出る', async () => {
+    const stores = createMemoryStores();
+    for (let i = 0; i < 120; i += 1) await humanTurn(stores, `conv-${i}`, `質問${i}`, `返答${i}`);
+    const call = tools(stores);
+
+    const seen: string[] = [];
+    let cursor: string | undefined;
+    for (let guard = 0; guard < 20; guard += 1) {
+      const reply = await call('conversation_read', {
+        limit: 200,
+        ...(cursor === undefined ? {} : { cursor }),
+      });
+      seen.push(...idsOf(reply));
+      cursor = cursorOf(reply);
+      if (cursor === undefined) break;
+    }
+    expect(seen).toEqual(Array.from({ length: 120 }, (_, i) => `conv-${119 - i}`));
+  });
+
+  it('壊れた cursor は、先頭から返さず断る', async () => {
+    const stores = createMemoryStores();
+    await humanTurn(stores, 'conv-0', '質問', '返答');
+    const call = tools(stores);
+
+    const reply = await call('conversation_read', { cursor: 'not-a-cursor' });
+
+    expect(reply).toContain('cursor');
+    expect(idsOf(reply)).toEqual([]);
+  });
+});
