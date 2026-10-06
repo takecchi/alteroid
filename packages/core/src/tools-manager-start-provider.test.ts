@@ -53,13 +53,19 @@ function fingerprint(tool: { description: string; inputSchema: unknown }): strin
 
 // origin/main（PEERS の配線前）の manager_start の指紋。空のときはこれと一致し続けなければならない。
 // `cwd` の説明文を「作業ディレクトリ。…」へ直したとき（#2970）に取り直した。
-const BASELINE = 'd044f1fcaed3d6d16949fc0ecfe1e480e89fc2e239bbe4ea09fc80516c5f3b91';
+// 担い手へ渡す添付の任意引数 `attachments` を足したとき（#3111 段3）に取り直した（道具の説明文は不変）。
+const BASELINE = '92468963a71427a678185900742ab8479a1ea9b24a00316ff924b7dd0805a912';
 
 describe('manager_start の provider 引数', () => {
   it('PEERS が未設定・空なら、スキーマと説明文は配線前と同一（provider は見えない）', () => {
     for (const peers of [undefined, []] as const) {
       const { tool } = build(peers);
-      expect(Object.keys(tool.inputSchema as object)).toEqual(['request', 'cwd', 'runnerId']);
+      expect(Object.keys(tool.inputSchema as object)).toEqual([
+        'request',
+        'cwd',
+        'attachments',
+        'runnerId',
+      ]);
       expect(fingerprint(tool as never)).toBe(BASELINE);
     }
   });
@@ -67,7 +73,7 @@ describe('manager_start の provider 引数', () => {
   it('開けた provider だけを enum に持つ optional の引数が出る', () => {
     const { tool } = build(['codex']);
     const shape = tool.inputSchema as z.ZodRawShape;
-    expect(Object.keys(shape)).toEqual(['request', 'cwd', 'runnerId', 'provider']);
+    expect(Object.keys(shape)).toEqual(['request', 'cwd', 'attachments', 'runnerId', 'provider']);
     const schema = z.object(shape);
     expect(schema.safeParse({ request: 'a' }).success).toBe(true);
     expect(schema.safeParse({ request: 'a', provider: 'codex' }).success).toBe(true);
