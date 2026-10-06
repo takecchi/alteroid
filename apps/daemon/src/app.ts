@@ -162,6 +162,7 @@ import {
 } from '@alteroid/core';
 import {
   AttachmentRejectedError,
+  hasNul,
   nonBlankString,
   readAttachmentLimits,
   stripNul,
@@ -533,11 +534,15 @@ const chatBody = z
      * 結び付け先になる id で、pg の添付の `conversation_id`（text 列）は孤立サロゲートを U+FFFD へ書き換えて
      * 残す——同じ添付の再 bind が conflict になり、別々の id が同じ値に潰れて取り違えうる。黙って正規化すると
      * 呼び手が渡した id と違うものを扱うことになるので、入口で断る。エラーには値を混ぜない（`path` だけ）。
+     * **NUL を含むものも 400 で断る（#3631）。** 添付つきは `bind` の `assertNoNul` が 400 に変換されず 500 に
+     * なり、添付なしは pg の日誌が NUL を落として残し、別々の id が 1 つに潰れうる（`nul-guard.ts`:
+     * 鍵は入口で断る）。
      */
     conversationId: z
       .string()
       .min(1)
       .refine(isWellFormedString, { message: '孤立サロゲートを含む' })
+      .refine((id) => !hasNul(id), { message: 'NUL を含む' })
       .optional(),
     supersedes: z.string().min(1).optional(),
     /**

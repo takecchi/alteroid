@@ -3,14 +3,14 @@
  * 答えを送って応答を待つ間に打ち足した文は、成功しても消えない（issue #3515）。
  *
  * 成功したとき畳むのは「送った時点の下書きと同じ項目」だけ。違うときは残し、承認が未回答の一覧から
- * 消えたあとも「送ったあとに打った文が残っている」として見せる（写す・閉じる）。
+ * 消えたあとも「送らなかった下書きが残っている」として見せる（写す・閉じる）。
  * 応答の時期は、回答の Promise を手で解決して操る（実時間の待ちは書かない）。
  */
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { loadApprovalDrafts, type PendingApproval } from '@alteroid/logic';
+import { loadApprovalDrafts, saveApprovalDrafts, type PendingApproval } from '@alteroid/logic';
 import { json, Providers, storeTestBaseUrl } from '~/test-support';
 
 import Approvals from './approvals';
@@ -107,7 +107,7 @@ afterEach(() => {
   globalThis.fetch = originalFetch;
 });
 
-const LEFT = '送ったあとに打った文が残っている承認';
+const LEFT = '送らなかった下書きが残っている承認';
 
 describe('応答を待つ間に打ち足した文（issue #3515）', () => {
   it('個別送信: 打ち足さなければ、通ったあとに下書きも残りの案内も無い', async () => {
@@ -207,5 +207,55 @@ describe('応答を待つ間に打ち足した文（issue #3515）', () => {
     renderPage();
     const left = await screen.findByRole('list', { name: LEFT });
     expect(within(left).getByText('答え+')).toBeTruthy();
+  });
+});
+
+describe('送っていない欄の下書きは、送った経路によらず残る（issue #3625）', () => {
+  it('定型の答え（許可）: 回答欄の書きかけは送っていないので残り、上部のブロックに出る', async () => {
+    const gate = stub([free], []);
+    renderPage();
+    fireEvent.change(await screen.findByPlaceholderText(/答える/), {
+      target: { value: '条件つきなら進めてよい' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '許可' }));
+    gate.resolve();
+
+    const left = await screen.findByRole('list', { name: LEFT });
+    expect(within(left).getByText(/対象: 自由記述の件/)).toBeTruthy();
+    expect(within(left).getByText('条件つきなら進めてよい')).toBeTruthy();
+    expect(loadApprovalDrafts().texts).toEqual({ 'a-free': '条件つきなら進めてよい' });
+  });
+
+  it('設問のフォームで答える: 送っていない自由記述が残り、上部のブロックに出る', async () => {
+    // 設問の承認の自由記述は、画面からは打てない。保存済みの下書きとして持っている場合を作る。
+    saveApprovalDrafts({ texts: { 'a-ask': '別に書いておいた文' }, questions: {} });
+    const gate = stub([asked], []);
+    renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: '選択肢を開いて答える' }));
+    fireEvent.click(screen.getByRole('radio', { name: /Fly\.io/ }));
+    fireEvent.click(screen.getByRole('button', { name: '回答' }));
+    gate.resolve();
+
+    const left = await screen.findByRole('list', { name: LEFT });
+    expect(within(left).getByText(/対象: 設問の件/)).toBeTruthy();
+    expect(within(left).getByText('別に書いておいた文')).toBeTruthy();
+    // 設問のフォームは送ったので畳まれ、残った文に選択肢は出ない。
+    expect(within(left).queryByText(/選んだ/)).toBeNull();
+    expect(loadApprovalDrafts()).toEqual({
+      texts: { 'a-ask': '別に書いておいた文' },
+      questions: {},
+    });
+  });
+
+  it('自由記述をそのまま送ったときは、従来どおり畳まれる', async () => {
+    const gate = stub([free], []);
+    renderPage();
+    fireEvent.change(await screen.findByPlaceholderText(/答える/), { target: { value: '答え' } });
+    fireEvent.click(screen.getByRole('button', { name: '回答する' }));
+    gate.resolve();
+
+    await waitFor(() => expect(screen.queryByPlaceholderText(/答える/)).toBeNull());
+    expect(screen.queryByRole('list', { name: LEFT })).toBeNull();
+    await waitFor(() => expect(loadApprovalDrafts()).toEqual({ texts: {}, questions: {} }));
   });
 });

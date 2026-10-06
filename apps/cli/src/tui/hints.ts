@@ -33,6 +33,6 @@ export const HINT_AP_DETAIL_FROM_DAY =
 export const approvalDetailHint = (from: 'list' | 'day'): string =>
   from === 'day' ? HINT_AP_DETAIL_FROM_DAY : HINT_AP_DETAIL;
 export const HINT_AP_FORM =
-  '↑↓ 移動 · Space 選ぶ/書く · s 送る前の確認 · Esc 読む画面へ（書きかけは残る）';
+  '↑↓ 移動 · Space 選ぶ/書く · s 確認 · Esc 読む画面へ（書きかけは残る） · ^C 中断';
 export const HINT_AP_INPUT = 'Enter 確定 · Esc 確定して戻る · ^C 中断（クローン） · ^D 終了';
 export const HINT_AP_CONFIRM = 'y 送る · それ以外のキーで戻る';

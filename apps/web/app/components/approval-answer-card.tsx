@@ -3,6 +3,8 @@ import { useState } from 'react';
 import type { ReactNode } from 'react';
 import { Link } from 'react-router';
 
+import { useMinuteNow } from '~/lib/use-now';
+
 import {
   ApprovalCard,
   ErrorNote,
@@ -44,7 +46,7 @@ export function approvalDetailPath(approvalId: string): string {
   return `/approvals/item/${encodeURIComponent(approvalId)}`;
 }
 
-/** 送った時点の下書き（`onAnswered` へ渡す）。 */
+/** 実際に送ったもの（`onAnswered` へ渡す）。送っていない欄は空（`text: ''`・`questions` 無し）。 */
 export interface SentApprovalDraft {
   text: string;
   questions?: ApprovalQuestionsDraft;
@@ -70,7 +72,7 @@ export function ApprovalAnswerCard({
   questionsDraft?: ApprovalQuestionsDraft;
   onQuestionsDraftChange?: (draft: ApprovalQuestionsDraft) => void;
   /**
-   * この id に答えが通った。**送った時点の下書き**（`sent`）を渡す。呼ぶ側は、いまの下書きが
+   * この id に答えが通った。**実際に送ったもの**（`sent`）を渡す。呼ぶ側は、いまの下書きが
    * これと同じときだけ畳む（応答を待つ間に打ち足した分を消さない。issue #3515）。
    */
   onAnswered?: (sent: SentApprovalDraft) => void;
@@ -83,6 +85,8 @@ export function ApprovalAnswerCard({
   showSettledAt?: boolean;
 }) {
   const answerApproval = useAnswerApproval();
+  // 「たった今」「N分前」を古いまま残さない（#3596）。
+  const now = useMinuteNow();
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<unknown>(undefined);
   const [ownDraft, setOwnDraft] = useState('');
@@ -93,9 +97,11 @@ export function ApprovalAnswerCard({
   const withdrawn = isApprovalWithdrawn(approval);
   const state = withdrawn ? 'withdrawn' : answered ? 'answered' : 'unanswered';
 
-  async function send(request: () => Promise<void>) {
-    // 送るときに下書きを控える。成功したあとの「いまの下書き」ではなく、これと比べさせる。
-    const sent: SentApprovalDraft = { text: currentDraft, questions: questionsDraft };
+  /**
+   * `sent` は**実際に送ったもの**。成功したあとの「いまの下書き」ではなく、これと比べさせる。
+   * 送っていない欄（定型の答えのときの回答欄、設問で答えたときの自由記述）は、控えに含めない。
+   */
+  async function send(request: () => Promise<void>, sent: SentApprovalDraft) {
     setBusy(true);
     setFailure(undefined);
     try {
@@ -110,14 +116,16 @@ export function ApprovalAnswerCard({
 
   async function submit(text: string) {
     if (text.trim() === '') return;
-    await send(() => answerApproval(approval.id, text));
+    await send(() => answerApproval(approval.id, text), { text, questions: undefined });
   }
 
   /** 設問のフォームの「回答」（issue #2525）。畳んだ文はサーバが作る。 */
   async function submitQuestions({ selections, supplement }: ApprovalQuestionsAnswer) {
     if (selections.length === 0 && supplement === undefined) return;
-    await send(() =>
-      answerApproval(approval.id, supplement, selections.length === 0 ? undefined : selections),
+    await send(
+      () =>
+        answerApproval(approval.id, supplement, selections.length === 0 ? undefined : selections),
+      { text: '', questions: questionsDraft },
     );
   }
 
@@ -141,7 +149,7 @@ export function ApprovalAnswerCard({
       time={
         <>
           <span>{formatDateTime(approval.createdAt)}</span>
-          <span>({formatRelative(approval.createdAt)})</span>
+          <span>({formatRelative(approval.createdAt, now)})</span>
           {showSettledAt && state === 'answered' && approval.answeredAt != null && (
             <span>回答: {formatDateTime(approval.answeredAt)}</span>
           )}

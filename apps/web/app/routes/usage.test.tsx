@@ -1015,6 +1015,42 @@ describe('/usage 画面の読めずに外した行（unreadableRows）', () => {
     expect(await screen.findByText(/合計に入っていない/)).toBeTruthy();
   });
 
+  it('#3614: since が null でも外した行が在れば、「記録がありません」と言い切らない', async () => {
+    stubUsage({ rows: [], since: null, beforeLedger: false, unreadableRows: UNREADABLE });
+
+    renderUsage();
+
+    expect(await screen.findByText(/読めた使用量の記録はありません/)).toBeTruthy();
+    expect(screen.queryByText(/まだ使用量の記録がありません/)).toBeNull();
+  });
+
+  it('#3614: 期間内が空でも外した行が在れば、「記録はありません」と言い切らない', async () => {
+    stubUsage({
+      rows: [],
+      since: '2026-08-01T00:00:00.000Z',
+      beforeLedger: false,
+      unreadableRows: UNREADABLE,
+    });
+
+    renderUsage();
+
+    expect(await screen.findByText(/この期間に読めた使用量の記録はありません/)).toBeTruthy();
+    expect(screen.queryByText(/この期間の使用量の記録はありません/)).toBeNull();
+  });
+
+  it('#3614: 外した行が無ければ、空の文言は変わらない', async () => {
+    stubUsage({ rows: [], since: null, beforeLedger: false, unreadableRows: [] });
+    const { unmount } = renderUsage();
+    expect(await screen.findByText(/まだ使用量の記録がありません/)).toBeTruthy();
+    expect(screen.queryByText(/読めずに外した行があります/)).toBeNull();
+    unmount();
+
+    stubUsage({ rows: [], since: '2026-08-01T00:00:00.000Z', beforeLedger: false });
+    renderUsage();
+    expect(await screen.findByText(/この期間の使用量の記録はありません/)).toBeTruthy();
+    expect(screen.queryByText(/読めずに外した行があります/)).toBeNull();
+  });
+
   it('対照: 欄が無い・空配列なら、何も出さない', async () => {
     stubUsage({
       rows: [row(1)],

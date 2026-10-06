@@ -55,6 +55,8 @@ useJournalWindowMock.mockImplementation((selected: readonly JournalEntryType[]) 
     entries: [],
     isLoadingInitial: false,
     error: undefined,
+    loadMoreError: undefined,
+    retryLoadMore: () => {},
     olderStatus: 'end',
     isLoadingOlder: false,
     loadOlder: () => {},
