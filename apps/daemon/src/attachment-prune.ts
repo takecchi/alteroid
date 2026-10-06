@@ -91,7 +91,7 @@ export function startAttachmentPruning(options: AttachmentPrunerOptions): Attach
   };
   options.signal?.addEventListener('abort', stop, { once: true });
 
-  // 写しの掃除の失敗は、添付本体の掃除の結果を巻き込まない。
+  // 写しの掃除の失敗は、添付本体の掃除の結果を巻き込まない（逆も同じ。`runOnce` が両方を独立に走らせる）。
   const pruneCopies = async (): Promise<void> => {
     if (options.copiesDir === undefined) return;
     try {
@@ -104,20 +104,20 @@ export function startAttachmentPruning(options: AttachmentPrunerOptions): Attach
   const runOnce = (): Promise<number | null> => {
     // 重ねない。
     if (inFlight !== null) return inFlight;
-    inFlight = options.stores.attachments
-      .prune(options.now?.() ?? new Date())
-      .then(async (pruned) => {
-        await pruneCopies();
-        options.onResult?.(pruned);
-        return pruned;
-      })
-      .catch((error: unknown) => {
+    // 添付本体の prune の成否にかかわらず、写しの掃除も走らせる（本体が落ちている間も写しは溜めない）。
+    inFlight = (async (): Promise<number | null> => {
+      let pruned: number | null = null;
+      try {
+        pruned = await options.stores.attachments.prune(options.now?.() ?? new Date());
+      } catch (error: unknown) {
         process.stderr.write(`alteroidd: 添付ファイルの掃除に失敗しました: ${reasonOf(error)}\n`);
-        return null;
-      })
-      .finally(() => {
-        inFlight = null;
-      });
+      }
+      await pruneCopies();
+      if (pruned !== null) options.onResult?.(pruned);
+      return pruned;
+    })().finally(() => {
+      inFlight = null;
+    });
     return inFlight;
   };
 

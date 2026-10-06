@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
 
 import { sha256Hex } from './auth.js';
+import { reasonOf } from './dropped-record.js';
 import { normalizeAttachmentName, type AttachmentStore } from './attachment.js';
 
 /**
@@ -78,10 +79,21 @@ export async function fetchAttachmentCopy(
 
   const existing = await readFile(path).catch(() => undefined);
   if (existing !== undefined && sha256Hex(existing) === sha256) {
-    // 使われた印（掃除が「古い」と読まないように）。
+    // 使われた印（掃除が「古い」と読まないように）。確かめてから印を付けるまでの間に掃除が消した
+    // （印が付けられない・パスが無い）なら、消えたパスを返さず、下で書き直す。
     const now = new Date();
-    await utimes(dir, now, now).catch(() => undefined);
-    return copy(true);
+    const touched = await utimes(dir, now, now).then(
+      () => true,
+      () => false,
+    );
+    if (
+      touched &&
+      (await stat(path).then(
+        () => true,
+        () => false,
+      ))
+    )
+      return copy(true);
   }
   await mkdir(dir, { recursive: true, mode: 0o700 });
   const tmp = `${path}.${randomUUID()}.tmp`;
@@ -120,8 +132,15 @@ export async function pruneAttachmentCopies(
       }
     }
     if (drop) {
-      await rm(dir, { recursive: true, force: true });
-      removed += 1;
+      try {
+        await rm(dir, { recursive: true, force: true });
+        removed += 1;
+      } catch (error) {
+        // 1件の失敗で周回を止めない（残りは次の周でまた掃く）。
+        process.stderr.write(
+          `alteroidd: 添付の写しを消せませんでした (${entry}): ${reasonOf(error)}\n`,
+        );
+      }
     }
   }
   return removed;
