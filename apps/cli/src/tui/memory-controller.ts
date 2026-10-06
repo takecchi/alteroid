@@ -186,7 +186,8 @@ export class MemoryController {
     const detail = this.store.getSnapshot().detail;
     if (detail === null) return;
     const { slug } = detail;
-    const gen = this.detailGen;
+    // 取り直しごとに世代を進める（後から始めたものが勝つ。開き直し・戻るでも進むので、それらも古い応答を捨てる）。
+    const gen = ++this.detailGen;
     try {
       const doc = await this.api.readMemory(slug);
       if (gen !== this.detailGen) return;

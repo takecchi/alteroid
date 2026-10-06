@@ -25,6 +25,7 @@ import {
 import {
   buildAnswer,
   emptyForm,
+  isBlankForm,
   moveCursor,
   setOther,
   setText,
@@ -144,6 +145,13 @@ function settledNotice(
         ? '応答が無く、送れたかは分からない。この承認待ちは回答済みになっている'
         : 'この承認待ちは他の入口で回答済みになった。答えは送っていない';
   return previous !== null && previous.startsWith('✗') ? `${previous}（${now}）` : now;
+}
+
+/** 答えられない（回答済み・取り下げ済み）詳細で a を押したときの断り。どちらかが分かるように言う。 */
+function cannotAnswerNotice(approval: ApprovalRow): string {
+  return approval.withdrawnAt !== undefined
+    ? 'もう答えられない: この承認待ちは取り下げ済み'
+    : 'もう答えられない: この承認待ちは回答済み';
 }
 
 export class ApprovalsController {
@@ -533,16 +541,35 @@ export class ApprovalsController {
 
   /**
    * 答えるフォームを開く（書きかけがあれば続きから）。答えられない（回答済み・取り下げ済み・
-   * 読み込み前）ときは何もしない。戻り値が `'edit'` なら、いまのカーソルは文字を書く欄
+   * 読み込み前）ときは何もしない（決着済みなら最下行へ断りの notice を出す）。戻り値が `'edit'` なら、いまのカーソルは文字を書く欄
    * （設問の無い承認待ち）なので、呼び出し側は入力欄へフォーカスを移す。
    */
   startAnswer(): 'edit' | 'form' | null {
     const d = this.currentDetail();
-    if (d === null || d.busy || !isOpen(d.approval)) return null;
+    if (d === null || d.busy) return null;
+    if (!isOpen(d.approval)) {
+      // 読み込み前（approval が null）は黙って何もしない。決着済みなら断りを最下行へ出す。
+      if (d.approval !== null) {
+        this.setDetail(d.id, { notice: cannotAnswerNotice(d.approval), noticeTone: 'warn' });
+      }
+      return null;
+    }
     const form = d.form ?? emptyForm(0);
     this.setDetail(d.id, { mode: 'form', form, confirm: null, notice: null });
     // 設問の無い承認待ちは文字欄が 1 つだけ（カーソルは常にそこ）。
     return (d.approval?.questions ?? []).length === 0 ? 'edit' : 'form';
+  }
+
+  /** 答えるフォームに、選んだ分か書いた分が残っているか（詳細を閉じると捨てる分）。 */
+  hasDraft(): boolean {
+    const form = this.currentDetail()?.form ?? null;
+    return form !== null && !isBlankForm(form);
+  }
+
+  /** 詳細の最下行に一言出す（書きかけを捨てる前の案内など）。 */
+  setNotice(notice: string): void {
+    const d = this.currentDetail();
+    if (d !== null) this.setDetail(d.id, { notice, noticeTone: 'warn' });
   }
 
   /** フォームを閉じて読む画面へ戻る（書きかけは残す）。 */

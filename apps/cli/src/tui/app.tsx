@@ -7,13 +7,13 @@
  */
 import { JOURNAL_MAX_LIMIT, JOURNAL_TYPES } from '@alteroid/logic';
 import { Box, useApp, useInput, useWindowSize } from 'ink';
-import { useMemo, useRef, useState, type FC } from 'react';
+import { useEffect, useMemo, useRef, useState, type FC } from 'react';
 
 import { redactedErrorMessage } from '../redact.js';
 import { parseJournalSearchTokens } from '../chat.js';
 import type { ConversationSummary, TuiApi } from './api.js';
 import type { ChatController } from './chat-controller.js';
-import type { ApprovalsController } from './approvals-controller.js';
+import { isOpen, type ApprovalsController } from './approvals-controller.js';
 import {
   AnsweredDatesList,
   AnsweredDayList,
@@ -67,7 +67,7 @@ import {
   JournalList,
   journalDetailLines,
 } from './journal-view.js';
-import { chatLayout, TABS, type TabId } from './layout.js';
+import { chatLayout, isFullscreenViewport, TABS, type TabId } from './layout.js';
 import type { MemoryController } from './memory-controller.js';
 import {
   MEMORY_DETAIL_HEAD_ROWS,
@@ -157,10 +157,13 @@ export const App: FC<AppProps> = ({
   managers,
   journal,
   memory,
-  fullscreen,
+  fullscreen: launchedFullscreen,
 }) => {
   const { exit } = useApp();
   const { columns, rows } = useWindowSize();
+  // 起動時に全画面（代替画面）へ入っていても、いまの行数が閾値未満のあいだは高さを固定しない
+  // （固定すると入力欄とフッタが切れて操作できない。#3651）。
+  const fullscreen = launchedFullscreen && isFullscreenViewport(rows);
   const chat = useCoalescedStore(controller.store);
   const header = useCoalescedStore(feed.store);
   const ap = useCoalescedStore(approvals.store);
@@ -244,6 +247,15 @@ export const App: FC<AppProps> = ({
   const memWin = logWindow(memRows, memLogHeight, memAnchor);
 
   const logRows = useMemo(() => logLines(chat.entries, columns), [chat.entries, columns]);
+  // 幅が変わって折り返しの行数が変わったら、上へスクロール中の位置（行 index）を行数の比で写す。
+  const logShape = useRef({ columns, total: logRows.length });
+  useEffect(() => {
+    const prev = logShape.current;
+    logShape.current = { columns, total: logRows.length };
+    const at = anchorRef.current;
+    if (prev.columns === columns || typeof at !== 'number' || prev.total === 0) return;
+    setAnchor(Math.max(1, Math.round((at * logRows.length) / prev.total)));
+  }, [columns, logRows.length, anchorRef, setAnchor]);
   const streamRows = streamLines(chat.streaming, columns, layout.logHeight);
   const win = logWindow([...logRows, ...streamRows], layout.logHeight, anchor);
 
@@ -259,6 +271,8 @@ export const App: FC<AppProps> = ({
   const quittingRef = useRef(false);
   /** 委譲の詳細で、書きかけを捨てて戻る 2 度目の Esc を待っている（#3367）。 */
   const mgrDiscardArmedRef = useRef(false);
+  /** 承認待ちの詳細で、答えるフォームの書きかけを捨てて戻る 2 度目の Esc を待っている。 */
+  const apDiscardArmedRef = useRef(false);
   /**
    * 書きかけが在るまま、2 度目の終了（Ctrl+D か `/exit`。捨てて終了）を待っている（#3490・#3518）。
    * 1 度目の時点の書きかけ（会話・委譲・承認待ち）の写し。待っていなければ null。
@@ -554,7 +568,7 @@ export const App: FC<AppProps> = ({
         managers.openSelected();
       } else if (input === 'f') managers.cycleFilter();
       else if (input === 'm') void managers.loadOlder();
-      else if (input === 'r') void managers.loadList();
+      else if (input === 'r') void managers.refreshList();
       else return false;
       return true;
     }
@@ -666,6 +680,7 @@ export const App: FC<AppProps> = ({
     }
     const detail = state.detail;
     if (detail === null) return false;
+    if (!key.escape) apDiscardArmedRef.current = false;
     if (detail.mode === 'confirm') {
       if (input === 'y') {
         void approvals.confirmSend().then((sent) => {
@@ -693,6 +708,15 @@ export const App: FC<AppProps> = ({
     }
     const step = pageStep(apLogHeight);
     if (key.escape) {
+      // 答えるフォームの書きかけは黙って捨てない。1 度目の Esc は残して言い、もう一度押したら捨てて戻る（委譲の #3367 と同じ）。
+      if (approvals.hasDraft() && !apDiscardArmedRef.current) {
+        apDiscardArmedRef.current = true;
+        approvals.setNotice(
+          '答えるフォームに書きかけが残っている。もう一度 Esc で捨てて戻る（a で続きを書く）',
+        );
+        return true;
+      }
+      apDiscardArmedRef.current = false;
       setApAnchor(apLogHeight);
       setApBuffer(emptyBuffer());
       approvals.back();
@@ -940,7 +964,20 @@ export const App: FC<AppProps> = ({
     if (tabRef.current === 'chat') {
       // 会話で `ask_human` が来ていれば、その承認待ちの詳細へ飛ぶ。
       const asked = controller.store.getSnapshot().pendingAsk;
-      if (input === 'a' && asked !== null) return openApproval(asked);
+      if (input === 'a' && asked !== null) {
+        // 押したときに未回答かを確かめ、最も古い未回答へ飛ぶ。確かめている間に画面を離れていたら奪わない。
+        void controller
+          .nextPendingAsk()
+          .then((id) => {
+            if (tabRef.current !== 'chat') return;
+            if (id === null) controller.addSystem('未回答の承認待ちは無い');
+            else openApproval(id);
+          })
+          .catch((error: unknown) => {
+            controller.addSystem(`承認待ちを開けなかった（${redactedErrorMessage(error)}）`);
+          });
+        return;
+      }
       if (key.tab || key.return || input === 'i') return setZone('input');
       if (key.upArrow)
         return setAnchor(scrollUp(anchorRef.current, totalRows(), layout.logHeight, 1));
@@ -970,7 +1007,7 @@ export const App: FC<AppProps> = ({
                   ? HINT_AP_INPUT
                   : ap.detail?.mode === 'form'
                     ? HINT_AP_FORM
-                    : approvalDetailHint(ap.detailFrom)
+                    : approvalDetailHint(ap.detailFrom, isOpen(ap.detail?.approval ?? null))
         : tab === 'journal'
           ? jr.view === 'filter'
             ? HINT_JOURNAL_FILTER

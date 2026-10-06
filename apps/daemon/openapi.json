@@ -302,7 +302,8 @@
                         "empty",
                         "attachment_missing",
                         "attachment_conflict",
-                        "attachment_forbidden"
+                        "attachment_forbidden",
+                        "reserved_source"
                       ]
                     }
                   },
@@ -332,7 +333,8 @@
                         "empty",
                         "attachment_missing",
                         "attachment_conflict",
-                        "attachment_forbidden"
+                        "attachment_forbidden",
+                        "reserved_source"
                       ]
                     }
                   },
@@ -16286,7 +16288,7 @@
             }
           },
           "400": {
-            "description": "入力の形が不正（何も作っていない）。",
+            "description": "入力の形が不正、または source が daemon 自身の予約語（`code`: `reserved_source`＝`token-pool`・`runner-registry`）（何も作っていない）。",
             "content": {
               "application/json": {
                 "schema": {
@@ -16294,6 +16296,10 @@
                   "properties": {
                     "error": {
                       "type": "string"
+                    },
+                    "code": {
+                      "type": "string",
+                      "const": "reserved_source"
                     }
                   },
                   "required": ["error"]
@@ -16691,7 +16697,7 @@
             }
           },
           "400": {
-            "description": "本文が JSON として不正。または添付を付けられない（`code`: `attachment_missing`＝無い・期限切れ、`attachment_conflict`＝すでに別の会話・外部イベントに結び付いている、`attachment_forbidden`＝連携の鍵が、その鍵自身が上げていない添付を付けようとした、`too_many`＝個数の上限超え）。いずれもイベントは投函されない。",
+            "description": "本文が JSON として不正。または source が daemon 自身の予約語（`code`: `reserved_source`＝`token-pool`・`runner-registry`。前後の空白・大文字小文字・全角を正規化した後で比べる）。または添付を付けられない（`code`: `attachment_missing`＝無い・期限切れ、`attachment_conflict`＝すでに別の会話・外部イベントに結び付いている、`attachment_forbidden`＝連携の鍵が、その鍵自身が上げていない添付を付けようとした、`too_many`＝個数の上限超え）。いずれもイベントは投函されない。",
             "content": {
               "application/json": {
                 "schema": {
@@ -16711,7 +16717,8 @@
                         "empty",
                         "attachment_missing",
                         "attachment_conflict",
-                        "attachment_forbidden"
+                        "attachment_forbidden",
+                        "reserved_source"
                       ]
                     }
                   },
@@ -16773,7 +16780,8 @@
                         "empty",
                         "attachment_missing",
                         "attachment_conflict",
-                        "attachment_forbidden"
+                        "attachment_forbidden",
+                        "reserved_source"
                       ]
                     }
                   },
@@ -16879,7 +16887,7 @@
             }
           },
           "400": {
-            "description": "本文が JSON として不正。または添付を付けられない（`code`: `attachment_missing`＝無い・期限切れ、`attachment_conflict`＝すでに別の会話・外部イベントに結び付いている、`attachment_forbidden`＝連携の鍵が、その鍵自身が上げていない添付を付けようとした、`too_many`＝個数の上限超え）。いずれもイベントは投函されない。",
+            "description": "本文が JSON として不正。または source が daemon 自身の予約語（`code`: `reserved_source`＝`token-pool`・`runner-registry`。前後の空白・大文字小文字・全角を正規化した後で比べる）。または添付を付けられない（`code`: `attachment_missing`＝無い・期限切れ、`attachment_conflict`＝すでに別の会話・外部イベントに結び付いている、`attachment_forbidden`＝連携の鍵が、その鍵自身が上げていない添付を付けようとした、`too_many`＝個数の上限超え）。いずれもイベントは投函されない。",
             "content": {
               "application/json": {
                 "schema": {
@@ -16899,7 +16907,8 @@
                         "empty",
                         "attachment_missing",
                         "attachment_conflict",
-                        "attachment_forbidden"
+                        "attachment_forbidden",
+                        "reserved_source"
                       ]
                     }
                   },
@@ -16961,7 +16970,8 @@
                         "empty",
                         "attachment_missing",
                         "attachment_conflict",
-                        "attachment_forbidden"
+                        "attachment_forbidden",
+                        "reserved_source"
                       ]
                     }
                   },

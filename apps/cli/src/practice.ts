@@ -115,7 +115,7 @@ export async function practiceListCommand(): Promise<void> {
 
 export async function practiceShowCommand(
   slug: string,
-  options: { version?: number } = {},
+  options: { version?: number | string } = {},
 ): Promise<void> {
   const conn = await connect('read');
   if (conn === null) return;
@@ -145,7 +145,7 @@ export async function practiceShowCommand(
     }
     const body = await response.json();
     const content = 'version' in body ? body.version.content : '';
-    stdout.write(content.endsWith('\n') ? content : `${content}\n`);
+    writeShownBody(stdout, content.endsWith('\n') ? content : `${content}\n`);
     return;
   }
 
@@ -231,10 +231,11 @@ export async function practiceEditCommand(
   // クローンが同じやり方へ書くと、版が変わっていて 409 になる（黙って上書きしない）。無い slug は
   // `null`（「読んだ時には無かった」）。古いデーモンが `version` を返さなければ前提なしで書く。
   const ifMatch = current === null ? null : current.version;
+  const initial = template(slug);
   const dir = await mkdtemp(join(tmpdir(), 'alteroid-practice-'));
   const path = join(dir, `${slug}.md`);
   try {
-    await writeFile(path, current?.content ?? template(slug), 'utf8');
+    await writeFile(path, current?.content ?? initial, 'utf8');
     await openEditor(path, 'alteroid practice set <slug> --file <path>');
   } catch (error) {
     // まだ人間は何も書いていない（エディタが起きなかった・異常終了した）。
@@ -253,11 +254,12 @@ export async function practiceEditCommand(
   await keepDraftOnFailure(dir, path, resume, async (keep) => {
     const edited = await readFile(path, 'utf8');
 
+    // **新しく作るときは、雛形のまま閉じたら「何も書かなかった」である**（雛形は案内文で、
+    // そのまま書くとやり方として保存される）。
     if (
-      current !== null &&
-      edited === current.content &&
-      kind === current.kind &&
-      title === current.title
+      current === null
+        ? edited === initial
+        : edited === current.content && kind === current.kind && title === current.title
     ) {
       // **書き換えていないなら書き込まない**（`memory edit` と同じ理由——
       // 同じ内容でも `PUT` は日誌へ `decision` を積むので、押し戻すたびに
@@ -265,6 +267,9 @@ export async function practiceEditCommand(
       stdout.write('変更はありません。\n');
       return;
     }
+    // **全部消した（空白だけも）なら、`set` と同じ断り**（#3456）。書き込まず、編集は
+    // `keepDraftOnFailure` が残して続きのやり方を言う。「変更なし」の判定より後に置く。
+    if (edited.trim().length === 0) throw new Error(emptyBodyMessage(slug));
     try {
       await write(client, target, slug, kind, title, edited, ifMatch);
     } catch (error) {
@@ -291,6 +296,14 @@ export async function practiceEditCommand(
       });
     }
   });
+}
+
+/** 本文が空（空白だけを含む）のときの断り（#3456。`set` と `edit` で同じ文言）。 */
+function emptyBodyMessage(slug: string): string {
+  return (
+    `やり方 ${slug}: 本文が空なので置き換えません（既存の本文は変えていません）。` +
+    '空にしたいときだけ --allow-empty を付けてください。'
+  );
 }
 
 /**
@@ -323,10 +336,7 @@ export async function practiceSetCommand(
       : await readInputFile(options.file, '--file', '--file <path>、または標準入力（-）');
   // 空の本文は通信の前に断る（#3456。`memory set`・`profile set` と同じ線）。空にしたい人だけ `--allow-empty`。
   if (options.allowEmpty !== true && content.trim().length === 0) {
-    throw new Error(
-      `やり方 ${slug}: 本文が空なので置き換えません（既存の本文は変えていません）。` +
-        '空にしたいときだけ --allow-empty を付けてください。',
-    );
+    throw new Error(emptyBodyMessage(slug));
   }
   await write(client, target, slug, kind, title, content);
 }

@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { makeTempDirSync } from '../../../vitest.tmpdir.js';
 
-import { captureStderr, captureStdout } from './test-support.js';
+import { captureStderr, captureStdout, pretendTty } from './test-support.js';
 
 /**
  * `alteroid practice` — **人間が仕事のやり方を CLI から読んで書き換えられること**
@@ -255,6 +255,32 @@ describe('alteroid practice edit', () => {
     expect(sent.filter((s) => s.method === 'PUT')).toHaveLength(0);
   });
 
+  it.each([
+    ['全部消した', ''],
+    ['空白だけにした', ' \n\t\n'],
+  ])(
+    '本文を%sまま閉じたら、PUT せずに set と同じ文言で断り、編集を残す（#3456）',
+    async (_label, body) => {
+      captureStdout();
+      const err = captureStderr();
+      const bodyFile = join(makeTempDirSync('alteroid-practice-empty-'), 'body.txt');
+      writeFileSync(bodyFile, body);
+      process.env.EDITOR = `sh -c 'cat "${bodyFile}" > "$1"' _`;
+      replies.push({ status: 200, body: practiceBody() });
+
+      const error = await practiceEditCommand('review', {}).catch((e: unknown) => e);
+
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toContain('本文が空');
+      expect((error as Error).message).toContain('--allow-empty');
+      expect(sent.map((s) => s.method)).toEqual(['GET']);
+      const mine = /残してあります: (\S+)/.exec(err())?.[1];
+      expect(mine).toBeDefined();
+      expect(readFileSync(mine ?? '', 'utf8')).toBe(body);
+      rmSync(dirname(mine ?? ''), { recursive: true, force: true });
+    },
+  );
+
   it('$EDITOR が本文を変えたら PUT する（種類と題は引き継ぐ）', async () => {
     captureStdout();
     process.env.EDITOR = `sh -c 'printf "編集後の本文\\n" > "$1"' _`;
@@ -317,7 +343,8 @@ describe('alteroid practice edit', () => {
    */
   it('無い slug でも開ける。雛形は「実行される定義ではない」と言い、許可の一覧を作らない', async () => {
     captureStdout();
-    process.env.EDITOR = `sh -c 'cat "$1" > "$1.seen"' _`;
+    // 雛形を読み取り、1行足して閉じる（足さずに閉じると書かない。下のテスト）。
+    process.env.EDITOR = `sh -c 'cat "$1" > "$1.seen"; echo 追記 >> "$1"' _`;
     replies.push({ status: 404, body: { error: 'not found' } });
     replies.push({ status: 200, body: practiceBody({ slug: 'fresh' }) });
 
@@ -327,6 +354,17 @@ describe('alteroid practice edit', () => {
     const content = JSON.parse(sent[1]?.body ?? '{}') as { content: string };
     expect(content.content).toContain('実行される定義ではなく');
     expect(content.content).not.toContain('permissions');
+  });
+
+  it('無いやり方を作るとき、雛形のまま閉じたら PUT を打たない', async () => {
+    const read = captureStdout();
+    process.env.EDITOR = 'true';
+    replies.push({ status: 404, body: { error: 'not found' } });
+
+    await practiceEditCommand('fresh', { kind: '調査', title: '調べ方' });
+
+    expect(read()).toContain('変更はありません');
+    expect(sent.map((s) => s.method)).toEqual(['GET']);
   });
 
   it('409 以外の保存の失敗（500）でも、書いた内容を残し、場所と set --file を案内して失敗する（#3453）', async () => {
@@ -887,6 +925,38 @@ describe('alteroid practice history / show --version', () => {
     expect(read()).toContain('古い本文');
   });
 
+  // 現行版の show と同じ口（writeShownBody）: パイプへ流す本文は掃除せず、端末へ出すときだけ掃除する（#3455）。
+  const versionBody = 'a\rb\u001b[31mred\u001b[0m\n';
+  it('show --version は、パイプ（非 TTY）のとき本文を1バイトも変えない', async () => {
+    const restore = pretendTty(false);
+    const read = captureStdout();
+    replies.push({
+      status: 200,
+      body: { version: { slug: 'review', version: 1, content: versionBody } },
+    });
+    try {
+      await practiceShowCommand('review', { version: 1 });
+    } finally {
+      restore();
+    }
+    expect(read()).toBe(versionBody);
+  });
+
+  it('show --version は、端末のときだけ制御文字を落とす', async () => {
+    const restore = pretendTty(true);
+    const read = captureStdout();
+    replies.push({
+      status: 200,
+      body: { version: { slug: 'review', version: 1, content: versionBody } },
+    });
+    try {
+      await practiceShowCommand('review', { version: 1 });
+    } finally {
+      restore();
+    }
+    expect(read()).toBe('abred\n');
+  });
+
   it('無い版番号を指定したら、そう言う', async () => {
     const read = captureStdout();
     replies.push({ status: 404, body: { error: 'not found' } });
@@ -968,6 +1038,15 @@ describe('alteroid practice の読み出しの失敗の理由', () => {
     replies.push({ status: 400, body: {} });
     await expect(practiceShowCommand('review', { version: 1 })).rejects.toThrow(
       '版番号として成立しません: 1',
+    );
+    expect(read()).toBe('');
+  });
+
+  it('show --version: 成立しない版番号の 400 は、打った文字列をそのまま言う（NaN と言わない）', async () => {
+    const read = captureStdout();
+    replies.push({ status: 400, body: {} });
+    await expect(practiceShowCommand('review', { version: 'abc' })).rejects.toThrow(
+      '版番号として成立しません: abc',
     );
     expect(read()).toBe('');
   });
