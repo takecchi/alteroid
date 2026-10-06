@@ -5,6 +5,7 @@ import { Link, useNavigate } from 'react-router';
 import {
   ChatComposer,
   ChatHeader,
+  Button,
   ChatMessage,
   ChatMessageEditor,
   ChatMessageList,
@@ -520,6 +521,24 @@ export function ChatPane({
    */
   const [drafts, setDrafts] = useState<Map<string | undefined, string>>(new Map());
   const [sending, setSending] = useState(false);
+  /**
+   * 送れなかった文を下書きへ戻す依頼（#3064）。失敗が届いたら積み、下の effect が
+   * **commit 済みの `shownId`** と突き合わせて、いま見ている会話なら `draft`、
+   * そうでなければ `drafts` の鍵へ合わせる。失敗の `catch` で `shownIdRef`
+   * を読んで振り分けないのは、会話を切り替えた直後（effect が回る前、#1576 の窓）に
+   * 古い値を読んで、別の会話の入力欄へ入れてしまうため。
+   */
+  const [pendingRestores, setPendingRestores] = useState<
+    { key: string | undefined; text: string }[]
+  >([]);
+  /**
+   * 「再送」を出すための記録（#3064）。キーは `failures` と同じ。`error` が
+   * `failures` の値と同一のときだけ有効とする（次の別の失敗で上書きされた古い
+   * 記録が、別の失敗の隣に出ない）。`supersedes` は編集の再送で引き継ぐ。
+   */
+  const [failedSends, setFailedSends] = useState<
+    Map<string | undefined, { error: unknown; supersedes: string | undefined }>
+  >(new Map());
   /**
    * 送信経路（`send`/`followUp`、ストリームの `error` イベント）の失敗。**会話 id ごとに持つ（#1585）。**
    *
@@ -1273,6 +1292,25 @@ export function ChatPane({
   // 画面を離れたら読むのをやめる（クローンのターンは止まらない。購読を外すだけ）。
   useEffect(() => () => streamRef.current?.controller.abort(), []);
 
+  /** 失敗した文を、会話ごとの下書きへ合わせる（#3064。`pendingRestores` の doc）。 */
+  useEffect(() => {
+    if (pendingRestores.length === 0) return;
+    const join = (text: string, current: string) =>
+      current.trim() === '' ? text : `${text}\n\n${current}`;
+    const here = pendingRestores.filter((item) => item.key === shownId);
+    const elsewhere = pendingRestores.filter((item) => item.key !== shownId);
+    setPendingRestores([]);
+    if (here.length > 0)
+      setDraft((current) => here.reduce((acc, item) => join(item.text, acc), current));
+    if (elsewhere.length > 0) {
+      setDrafts((previous) => {
+        const next = new Map(previous);
+        for (const item of elsewhere) next.set(item.key, join(item.text, next.get(item.key) ?? ''));
+        return next;
+      });
+    }
+  }, [pendingRestores, shownId]);
+
   /** 打った本文を画面へ積む。送信の入口が2つ（新規・追送）あるので1本にしてある。 */
   const showOwnLine = useCallback((text: string) => {
     // 最下部にいなくても、送った直後だけは追従してよい（上の
@@ -1288,6 +1326,29 @@ export function ChatPane({
       },
     ]);
   }, []);
+
+  /**
+   * **投函が相手に届かなかった発言を、使い手の手元へ戻す（#3064）。** 失敗を積み、
+   * 楽観で積んだ吹き出し（`showOwnLine`）を外し、文を下書きへ戻す依頼を出す。
+   * `key` は失敗を積む会話の鍵（`failures` と同じ）。
+   */
+  const failSend = useCallback(
+    (key: string | undefined, text: string, caught: unknown, supersedes: string | undefined) => {
+      setFailures((prev) => new Map(prev).set(key, caught));
+      setFailedSends((prev) => new Map(prev).set(key, { error: caught, supersedes }));
+      setLines((previous) => {
+        for (let i = previous.length - 1; i >= 0; i -= 1) {
+          const line = previous[i];
+          if (line?.role === 'human' && line.text === text && line.of === key) {
+            return [...previous.slice(0, i), ...previous.slice(i + 1)];
+          }
+        }
+        return previous;
+      });
+      setPendingRestores((previous) => [...previous, { key, text }]);
+    },
+    [],
+  );
 
   /**
    * **受信中に続けて打った発言を、購読を張らずに投函だけする。**
@@ -1369,10 +1430,11 @@ export function ChatPane({
          * 終わった）だけ**で、そのストリームに後から `open` は届かないので、
          * 確定した id へ移す必要は無い（`failures` の doc）。
          */
-        setFailures((prev) => new Map(prev).set(running.id, caught));
+        // 投函に失敗した（`open` を見る前）ので、文は届いていない。手元へ戻す。
+        failSend(running.id, text, caught, supersedes);
       }
     },
-    [api, recordOwnMessage, showOwnLine],
+    [api, recordOwnMessage, showOwnLine, failSend],
   );
 
   /**
@@ -1631,6 +1693,8 @@ export function ChatPane({
       showOwnLine(text);
 
       const { setTransient, apply } = createStreamWriter(stream, controller);
+      // `open` を見たなら、サーバは受信箱へ積み終えている（文は届いた）。
+      let accepted = false;
 
       /*
        * **送ると決めた瞬間から「考えている…」を出す。サーバの `thinking` を待たない。**
@@ -1670,6 +1734,7 @@ export function ChatPane({
           { signal: controller.signal },
         )) {
           if (message.event === 'open') {
+            accepted = true;
             if (stream.id === undefined) {
               // **順番が大事。** 先にストリームの所属を新しい id へ移してから
               // state を動かす。逆にすると、上の effect がこのストリームを
@@ -1718,7 +1783,12 @@ export function ChatPane({
          * の突き合わせで二重に守る。
          */
         if (!controller.signal.aborted) {
-          setFailures((prev) => new Map(prev).set(stream.id, caught));
+          if (accepted) {
+            // 届いた後の失敗（受信の途中で切れた等）。文は日誌に載っているので戻さない。
+            setFailures((prev) => new Map(prev).set(stream.id, caught));
+          } else {
+            failSend(stream.id, text, caught, supersedes);
+          }
         }
       } finally {
         // `open` を一度も見ないまま終わったなら、追送は投函先を持てない。
@@ -1756,7 +1826,7 @@ export function ChatPane({
         }
       }
     },
-    [api, shownId, navigate, recordOwnMessage, showOwnLine, followUp, createStreamWriter],
+    [api, shownId, navigate, recordOwnMessage, showOwnLine, followUp, failSend, createStreamWriter],
   );
 
   /**
@@ -2022,6 +2092,12 @@ export function ChatPane({
   const visibleFailure = failures.has(shownId) ? failures.get(shownId) : undefined;
 
   const shownFailure = visibleFailure ?? visibleInterruptFailure ?? visibleEndFailure;
+  // 送れなかった発言の失敗なら「再送」を出す（#3064）。戻した文（`draft`）で送り直す。
+  const recordedSend = failedSends.get(shownId);
+  const failedSend =
+    visibleFailure !== undefined && recordedSend?.error === visibleFailure
+      ? recordedSend
+      : undefined;
 
   /**
    * 「会話を終える」の結果の文を出してよいか（#2759）。終えた直後の新しい会話
@@ -2282,7 +2358,20 @@ export function ChatPane({
               }
             />
           ) : (
-            <ErrorNote error={shownFailure} />
+            <>
+              <ErrorNote error={shownFailure} />
+              {failedSend !== undefined && (
+                <Button
+                  size="sm"
+                  variant="default"
+                  className="mt-2"
+                  disabled={draft.trim() === ''}
+                  onClick={() => void send(draft, { supersedes: failedSend.supersedes })}
+                >
+                  再送
+                </Button>
+              )}
+            </>
           )
         }
       />
