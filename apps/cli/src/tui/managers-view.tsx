@@ -14,7 +14,7 @@ import type { FC } from 'react';
 import { formatElapsedAgo } from '../format.js';
 import type { ManagerRow, ManagerStatus } from './api.js';
 import { oneLine } from './journal-format.js';
-import { redactBody } from '../redact.js';
+import { redactBody, sanitizeForTerminal } from '../redact.js';
 import type { DetailState, ListState } from './managers-controller.js';
 import { glyph, theme } from './theme.js';
 
@@ -52,9 +52,10 @@ export function stateText(row: ManagerRow): string {
 /** 一覧の 1 行（選択の印は付けない）。 */
 export function managerListLine(row: ManagerRow, now: number): string {
   const wait = row.waiting.length > 0 ? ` ⏸確認待ち${String(row.waiting.length)}` : '';
-  return (
+  // 状態の字面・id・経過など、redactBody を通らない欄も含めて、組み立てたあとで掃除する。
+  return sanitizeForTerminal(
     `[${stateText(row)}] ${shortId(row.managerId)} ${formatElapsedAgo(row.updatedAt, now)}` +
-    `${wait}  ${oneLine(redactBody(row.request), 120)}`
+      `${wait}  ${oneLine(redactBody(row.request), 120)}`,
   );
 }
 
@@ -90,7 +91,7 @@ export function managerNotes(row: ManagerRow): string[] {
   if (row.lastFailure !== undefined) {
     notes.push(`直近の失敗: ${row.lastFailure.code}（${row.lastFailure.at}）`);
   }
-  return notes;
+  return notes.map(sanitizeForTerminal);
 }
 
 /** 詳細の最下行（ログ直下の 1 行）に出す文言。優先: 確認 > 操作結果（あれば失敗・窓の外を並べる） > 失敗 > 窓の外 > 状態。 */
@@ -110,9 +111,12 @@ export function detailStatusText(
   if (detail.error !== null) parts.push(`⚠ 取り直せなかった: ${detail.error}`);
   if (detail.notice !== null) {
     if (hiddenBelow > 0) parts.push(`↓ あと ${String(hiddenBelow)} 行`);
-    return { text: parts.join(' · '), tone: detail.error !== null ? 'warn' : 'dim' };
+    return {
+      text: sanitizeForTerminal(parts.join(' · ')),
+      tone: detail.error !== null ? 'warn' : 'dim',
+    };
   }
-  if (detail.error !== null) return { text: parts.join(' · '), tone: 'warn' };
+  if (detail.error !== null) return { text: sanitizeForTerminal(parts.join(' · ')), tone: 'warn' };
   if (detail.missing) return { text: 'このマネージャーは見つからない（404）', tone: 'warn' };
   if (hiddenBelow > 0) {
     return {
@@ -212,10 +216,9 @@ export const ManagerDetailHead: FC<{ detail: DetailState }> = ({ detail }) => {
   if (m === null) {
     return (
       <Box flexDirection="column" height={DETAIL_HEAD_ROWS} flexShrink={0} overflow="hidden">
-        <Text
-          bold
-          wrap="truncate-end"
-        >{`${detail.id}  ${detail.missing ? '見つからない' : '読んでいる…'}`}</Text>
+        <Text bold wrap="truncate-end">
+          {sanitizeForTerminal(`${detail.id}  ${detail.missing ? '見つからない' : '読んでいる…'}`)}
+        </Text>
         <Text> </Text>
         <Text> </Text>
         <Text> </Text>
@@ -226,15 +229,17 @@ export const ManagerDetailHead: FC<{ detail: DetailState }> = ({ detail }) => {
   return (
     <Box flexDirection="column" height={DETAIL_HEAD_ROWS} flexShrink={0} overflow="hidden">
       <Text wrap="truncate-end">
-        <Text bold>{`[${stateText(m)}]`}</Text>
-        {` ${m.managerId}`}
+        <Text bold>{sanitizeForTerminal(`[${stateText(m)}]`)}</Text>
+        {sanitizeForTerminal(` ${m.managerId}`)}
       </Text>
       <Text wrap="truncate-end" dimColor>
-        {`${m.cwd}  provider: ${describeManagerProvider(m.managerProvider)}  作成 ${m.startedAt}  更新 ${formatElapsedAgo(m.updatedAt, detail.loadedAt)}`}
+        {sanitizeForTerminal(
+          `${m.cwd}  provider: ${describeManagerProvider(m.managerProvider)}  作成 ${m.startedAt}  更新 ${formatElapsedAgo(m.updatedAt, detail.loadedAt)}`,
+        )}
       </Text>
       <Text wrap="truncate-end">{`依頼: ${oneLine(redactBody(m.request), 300)}`}</Text>
       <Text wrap="truncate-end" color={theme.warn}>
-        {notes.length > 0 ? `⚠ ${notes.join(' / ')}` : ' '}
+        {notes.length > 0 ? sanitizeForTerminal(`⚠ ${notes.join(' / ')}`) : ' '}
       </Text>
     </Box>
   );
@@ -244,7 +249,7 @@ export const ManagerDetailHead: FC<{ detail: DetailState }> = ({ detail }) => {
 export const DetailStatusRow: FC<{ text: string; tone: 'dim' | 'warn' }> = ({ text, tone }) => (
   <Box flexShrink={0}>
     <Text wrap="truncate-end" {...(tone === 'warn' ? { color: theme.warn } : { dimColor: true })}>
-      {text.length > 0 ? text : ' '}
+      {text.length > 0 ? sanitizeForTerminal(text) : ' '}
     </Text>
   </Box>
 );

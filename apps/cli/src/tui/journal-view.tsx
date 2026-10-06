@@ -29,6 +29,7 @@ import {
 } from './journal-format.js';
 import type { JournalState } from './journal-controller.js';
 import { selectedIndex } from './journal-controller.js';
+import { sanitizeForTerminal } from '../redact.js';
 import { listWindow } from './journal-window.js';
 import type { DisplayLine } from './log.js';
 import { glyph, theme } from './theme.js';
@@ -212,11 +213,13 @@ export const JournalFilter: FC<{ state: JournalState; height: number }> = ({ sta
 export const JournalDetailHead: FC<{ entry: JournalEntry; now: number }> = ({ entry, now }) => (
   <Box flexDirection="column" height={JOURNAL_DETAIL_HEAD_ROWS} flexShrink={0} overflow="hidden">
     <Text wrap="truncate-end">
-      <Text bold>{`[${entry.type}]`}</Text>
-      {` ${entry.id}`}
+      <Text bold>{sanitizeForTerminal(`[${entry.type}]`)}</Text>
+      {sanitizeForTerminal(` ${entry.id}`)}
     </Text>
     <Text wrap="truncate-end" dimColor>
-      {`${entry.at}（${formatDateTime(entry.at, now)} · ${formatElapsedAgo(entry.at, now)}）`}
+      {sanitizeForTerminal(
+        `${entry.at}（${formatDateTime(entry.at, now)} · ${formatElapsedAgo(entry.at, now)}）`,
+      )}
     </Text>
     <Text wrap="truncate-end">{oneLine(summarizeJournalEntry(entry), 300)}</Text>
   </Box>

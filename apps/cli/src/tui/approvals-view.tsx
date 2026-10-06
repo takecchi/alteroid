@@ -33,7 +33,7 @@ import { oneLine } from './journal-format.js';
 import type { DisplayLine } from './log.js';
 import type { RichSpan } from './markdown.js';
 import { glyph, theme } from './theme.js';
-import { redactBody } from '../redact.js';
+import { redactBody, sanitizeForTerminal } from '../redact.js';
 import { LINE_BREAK, wrapLogical } from './wrap.js';
 
 /** 一覧に出す識別子（長い id は先頭だけ。全文は詳細の頭に出す）。 */
@@ -59,9 +59,10 @@ export function approvalSummary(row: ApprovalRow): string {
 
 /** 一覧の 1 行（選択の印は付けない）。 */
 export function approvalListLine(row: ApprovalRow, now: number): string {
-  return (
+  // id・出どころ・時刻は redactBody を通らない欄。組み立てたあとで掃除する。
+  return sanitizeForTerminal(
     `${formatElapsedAgo(row.createdAt, now)} ${shortId(row.id)} ${originTag(row)}` +
-    `${row.permissionRequest === undefined ? '' : ' [実行許可]'}  ${approvalSummary(row)}`
+      `${row.permissionRequest === undefined ? '' : ' [実行許可]'}  ${approvalSummary(row)}`,
   );
 }
 
@@ -87,7 +88,9 @@ export const ApprovalList: FC<{ list: ListState; height: number }> = ({ list, he
   const unreadableLine =
     list.unreadable.length > 0
       ? `⚠ 読めない承認待ちが ${String(list.unreadable.length)} 件ある` +
-        `${ids.length === 0 ? '' : `（id: ${ids.join(', ')}）`}（壊れた行であって、回答済みでも取り下げ済みでもない。この一覧には載っていない）`
+        sanitizeForTerminal(
+          `${ids.length === 0 ? '' : `（id: ${ids.join(', ')}）`}（壊れた行であって、回答済みでも取り下げ済みでもない。この一覧には載っていない）`,
+        )
       : null;
   const errorLine = list.error !== null ? `⚠ ${list.error}` : null;
   const fixed = 1 + (unreadableLine === null ? 0 : 1) + (errorLine === null ? 0 : 1);
@@ -133,7 +136,7 @@ export const ApprovalList: FC<{ list: ListState; height: number }> = ({ list, he
 
 /** 決着した日の 1 行（選択の印は付けない）。 */
 export const answeredDateLine = (row: AnsweredDateRow): string =>
-  `${row.date}  ${String(row.count)} 件`;
+  sanitizeForTerminal(`${row.date}  ${String(row.count)} 件`);
 
 /**
  * その日の件の 1 行（選択の印は付けない）。**抜粋だけ**: 状態（回答済み／取り下げ済み）・決着からの経過・
@@ -148,9 +151,9 @@ export function answeredDayLine(row: ApprovalRow, now: number): string {
     : row.answer === undefined
       ? ''
       : `  回答: ${oneLine(redactBody(row.answer), 60)}`;
-  return (
+  return sanitizeForTerminal(
     `${withdrawn ? '取り下げ済み' : '回答済み'} ${formatElapsedAgo(settledAt, now)} ` +
-    `${shortId(row.id)}  ${oneLine(redactBody(row.question), 80)}${tail}`
+      `${shortId(row.id)}  ${oneLine(redactBody(row.question), 80)}${tail}`,
   );
 }
 
@@ -279,7 +282,8 @@ class DocBuilder {
     const hang = options.hang ?? indent;
     const kind = options.kind ?? 'assistant';
     let lead = true;
-    for (const logical of text.split(LINE_BREAK)) {
+    // 詳細の本文はどの欄も、ここを通って端末へ出る。外から来た文字列の制御文字をここで落とす。
+    for (const logical of sanitizeForTerminal(text).split(LINE_BREAK)) {
       const content = Math.max(1, this.width - Math.max(indent, hang));
       for (const piece of wrapLogical(logical, content)) {
         const line = `${' '.repeat(lead ? indent : hang)}${piece}`;
@@ -474,7 +478,7 @@ export function approvalStatusText(
     if (detail.error !== null) parts.push(`⚠ 取り直せなかった: ${detail.error}`);
     if (hiddenBelow > 0) parts.push(`↓ あと ${String(hiddenBelow)} 行`);
     const warn = detail.noticeTone === 'warn' || detail.error !== null;
-    return { text: parts.join(' · '), tone: warn ? 'warn' : 'dim' };
+    return { text: sanitizeForTerminal(parts.join(' · ')), tone: warn ? 'warn' : 'dim' };
   }
   if (detail.error !== null) return { text: `⚠ 取り直せなかった: ${detail.error}`, tone: 'warn' };
   if (detail.missing && detail.approval === null) {
