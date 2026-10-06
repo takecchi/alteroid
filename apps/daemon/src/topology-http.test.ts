@@ -158,6 +158,29 @@ describe('GET /topology', () => {
     expect(body.links.find((l) => l.key === 'clone~manager:m1')?.lastUpAt).toBeUndefined();
   });
 
+  it('連携の鍵（via）で届いた external_event だけが、外部サービスの札と down の線になる（#3676）', async () => {
+    const { app, journal } = setup();
+    // via の無い external_event（デーモン自身の合図など）は外部として数えない
+    await journal.append({ type: 'external_event', source: 'internal', summary: '{}' });
+    const before = topologyResponseSchema.parse(await (await app.request('/topology')).json());
+    expect(before.externals).toBeUndefined();
+    expect(before.links).toEqual([]);
+
+    await journal.append({
+      type: 'external_event',
+      source: 'github',
+      summary: '{}',
+      via: { keyId: 'k1', name: 'GitHub 連携' },
+    });
+    const body = topologyResponseSchema.parse(await (await app.request('/topology')).json());
+    expect(body.externals).toEqual([
+      expect.objectContaining({ keyId: 'k1', name: 'GitHub 連携', source: 'github' }),
+    ]);
+    const link = body.links.find((l) => l.key === 'external:k1~clone');
+    expect(link?.lastDownAt).toBe(body.externals?.[0]?.lastAt);
+    expect(link?.lastUpAt).toBeUndefined();
+  });
+
   it('台帳に読めない委譲の行が在れば、managers が空でも unreadable が載る。無ければ鍵ごと無い（#2705）', async () => {
     const rows = [{ id: 'mgr-bad', reason: '不正な欄: status' }];
     const broken = setup({ managers: [], unreadable: rows });
