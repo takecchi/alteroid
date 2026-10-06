@@ -18,7 +18,7 @@ afterEach(() => {
 });
 
 const frame = (name: string, data: unknown) => `event: ${name}\ndata: ${JSON.stringify(data)}\n\n`;
-const sse = (body: BodyInit) =>
+const sse = (body: string | ReadableStream<Uint8Array>) =>
   new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } });
 const openFrame = (id: string, inProgress: boolean) =>
   frame('open', { conversationId: id, inProgress });

@@ -356,7 +356,9 @@ async function openChatStream(
       signal,
     });
   } catch (error) {
-    throw new Error(`${what}: デーモンに繋がりません（${redactError(String(error))}）`);
+    throw new Error(`${what}: デーモンに繋がりません（${redactError(String(error))}）`, {
+      cause: error,
+    });
   }
   if (!response.ok || !response.body) {
     const described = describeAuthFailure(response.status, target);
