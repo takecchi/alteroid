@@ -602,6 +602,8 @@ async function renderChatEvents(
   conversationId: string | null,
   /** 応答が `error`・切断・終端の無い終わりで終わったとき、理由の文を渡す（非対話の入力で止める判断に使う。#3684）。`usage_limited` は呼ばない。 */
   onFailed?: (reason: string) => void,
+  /** `/resume` の再生か。例外で切れたときの文を「戻れませんでした」の形にする（切断を1つの文で言う。#3767）。 */
+  resuming = false,
 ): Promise<string | null> {
   let nextConversationId = conversationId;
   let wrote = false;
@@ -693,12 +695,15 @@ async function renderChatEvents(
     // 応答の途中で切れた（SSE の切断）。ここまでに知った会話 id を返し、REPL が続けられるようにする。
     flushPending();
     ended = true;
-    stdout.write(
-      `\nエラー: 応答が途中で切れました（${redactError(error instanceof Error ? error.message : String(error))}）\n`,
-    );
-    onFailed?.(
-      `応答が途中で切れた（${redactError(error instanceof Error ? error.message : String(error))}）`,
-    );
+    const reason = redactError(error instanceof Error ? error.message : String(error));
+    if (resuming) {
+      const described = `進行中の応答に戻れませんでした: 接続が切れました（${reason}）`;
+      stdout.write(`\nエラー: ${described}\n`);
+      onFailed?.(described);
+    } else {
+      stdout.write(`\nエラー: 応答が途中で切れました（${reason}）\n`);
+      onFailed?.(`応答が途中で切れた（${reason}）`);
+    }
     failedOrLimited = true;
   }
 
@@ -855,24 +860,8 @@ export async function runResumeCommand(
   } catch (error) {
     return fail(error);
   }
-  let failure: unknown = null;
-  async function* events(): AsyncGenerator<SSEEvent> {
-    try {
-      yield* readSSE(body);
-    } catch (error) {
-      // 描きかけの行は書き切ってから知らせる（`renderChatEvents` が最後に書き出す）。
-      failure = error;
-    }
-  }
-  const resumed = await renderChatEvents(target, events(), found, onFailed);
-  if (failure !== null) {
-    const reason = failure instanceof Error ? failure.message : String(failure);
-    stdout.write(
-      `エラー: 進行中の応答に戻れませんでした: 接続が切れました（${redactError(reason)}）\n`,
-    );
-    onFailed?.(`進行中の応答に戻れませんでした: 接続が切れました（${redactError(reason)}）`);
-  }
-  return resumed;
+  // 例外で切れたら `renderChatEvents` の catch が、描きかけの行を書き切ったうえで切断の文を1つだけ言う。
+  return renderChatEvents(target, readSSE(body), found, onFailed, true);
 }
 
 const HELP = `（入力）            応答中の Ctrl-C でターンを止める（会話は続く。入力待ちの Ctrl-C は終了）。

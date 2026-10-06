@@ -232,6 +232,46 @@ describe('/resume（REPL から進行中のターンへ戻る）', () => {
     expect(readCalls(calls)).toEqual([]);
   });
 
+  it('例外で切れたときは、切断の文を1つだけ出し、止める理由もそれにする（正常な終端なしの文は出さない）', async () => {
+    const encoder = new TextEncoder();
+    let pulled = 0;
+    const broken = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulled += 1;
+        if (pulled === 1) {
+          controller.enqueue(
+            encoder.encode(openFrame('c1', true) + frame('text', { text: '途中まで' })),
+          );
+        } else {
+          controller.error(new Error('reset'));
+        }
+      },
+    });
+    stub({ streams: { c1: [() => sse(openFrame('c1', true)), () => sse(broken)] } });
+    const out = captureStdout();
+    const reasons: string[] = [];
+    await runResumeCommand('/resume c1', target, (reason) => reasons.push(reason));
+    expect(out()).not.toContain('done も error も来ないまま');
+    expect(out().match(/接続が切れました/g)).toHaveLength(1);
+    expect(reasons).toEqual(['進行中の応答に戻れませんでした: 接続が切れました（reset）']);
+  });
+
+  it('終端の無いまま正常に閉じたときは、従来どおり「途中で切れました」を出す', async () => {
+    stub({
+      streams: {
+        c1: [
+          () => sse(openFrame('c1', true)),
+          () => sse(openFrame('c1', true) + frame('text', { text: '途中まで' })),
+        ],
+      },
+    });
+    const out = captureStdout();
+    const reasons: string[] = [];
+    await runResumeCommand('/resume c1', target, (reason) => reasons.push(reason));
+    expect(out()).toContain('応答が途中で切れました（done も error も来ないまま');
+    expect(reasons).toEqual(['応答が終端の無いまま切れた（done も error も来なかった）']);
+  });
+
   it('error で終わったら既読にしない', async () => {
     const calls = stub({
       streams: {
