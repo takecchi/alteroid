@@ -40,7 +40,7 @@ echo -n "<あなたのトークン>" | alteroid token add --label <名前>
 
 ```
 alteroid token list                 # 一覧（値は出ない）
-alteroid token remove <id>
+alteroid token remove <id>          # 取り消せないので対話で確認する。非対話（スクリプト・ssh 越し）は --yes
 alteroid token disable <id>         # 人間の判断で外す（戻らない側）
 alteroid token enable <id>          # 戻す
 alteroid token policy               # いまの契機・冷却を見る（引数無し）

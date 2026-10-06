@@ -27,6 +27,9 @@ import {
 import type { Target } from './target.js';
 import { captureStdout } from './test-support.js';
 
+/** 確認を取る口（#3141）。承認するスタブ。確認そのものの歯は下の `describe('戻せない操作の確認')`。 */
+const confirmYes = async (): Promise<boolean> => true;
+
 type ManagerListItem = Parameters<typeof renderManagerList>[0][number];
 type ManagerWaitingItem = ManagerListItem['waiting'][number];
 
@@ -4107,7 +4110,7 @@ describe('chat の /stop', () => {
     const read = captureStdout();
     const { calls, client } = stubClient();
 
-    await runSlashCommand('/stop mgr-1', client, emptyListed());
+    await runSlashCommand('/stop mgr-1', client, emptyListed(), null, undefined, confirmYes);
 
     expect(calls).toEqual([
       { route: 'DELETE /managers/:id', args: { param: { id: 'mgr-1' }, json: {} } },
@@ -4120,7 +4123,14 @@ describe('chat の /stop', () => {
     captureStdout();
     const { calls, client } = stubClient();
 
-    await runSlashCommand('/stop mgr-1 同じ issue に2本立っている', client, emptyListed());
+    await runSlashCommand(
+      '/stop mgr-1 同じ issue に2本立っている',
+      client,
+      emptyListed(),
+      null,
+      undefined,
+      confirmYes,
+    );
 
     expect(calls[0]?.args).toEqual({
       param: { id: 'mgr-1' },
@@ -4133,7 +4143,7 @@ describe('chat の /stop', () => {
     const { calls, client } = stubClient();
 
     // 余分な空白だけを渡しても、`reason` は付かない。
-    await runSlashCommand('/stop mgr-1    ', client, emptyListed());
+    await runSlashCommand('/stop mgr-1    ', client, emptyListed(), null, undefined, confirmYes);
 
     expect(calls[0]?.args).toEqual({ param: { id: 'mgr-1' }, json: {} });
   });
@@ -4152,7 +4162,7 @@ describe('chat の /stop', () => {
     const read = captureStdout();
     const { client } = stubClient({ abortStatus: 404, abortBody: { error: 'そんな id は無い' } });
 
-    await runSlashCommand('/stop mgr-none', client, emptyListed());
+    await runSlashCommand('/stop mgr-none', client, emptyListed(), null, undefined, confirmYes);
 
     const text = read();
     expect(text).toContain('見つかりませんでした');
@@ -4169,7 +4179,14 @@ describe('chat の /stop', () => {
       abortStatus: 500,
       abortBody: { error: '委譲の停止が失敗した（issue #2172 のテスト用）' },
     });
-    await runSlashCommand('/stop mgr-1', serverErrorClient, emptyListed());
+    await runSlashCommand(
+      '/stop mgr-1',
+      serverErrorClient,
+      emptyListed(),
+      null,
+      undefined,
+      confirmYes,
+    );
     const serverErrorText = serverError();
     vi.restoreAllMocks();
 
@@ -4178,7 +4195,14 @@ describe('chat の /stop', () => {
       abortStatus: 400,
       abortBody: { error: '理由が長すぎる（issue #2172 のテスト用）' },
     });
-    await runSlashCommand('/stop mgr-1', badRequestClient, emptyListed());
+    await runSlashCommand(
+      '/stop mgr-1',
+      badRequestClient,
+      emptyListed(),
+      null,
+      undefined,
+      confirmYes,
+    );
     const badRequestText = badRequest();
 
     expect(serverErrorText).toContain('委譲の停止が失敗した（issue #2172 のテスト用）');
@@ -4205,7 +4229,7 @@ describe('chat の /stop', () => {
     const listed: Listed = { ...emptyListed(), managers: ['mgr-a', 'mgr-b'] };
     captureStdout();
 
-    await runSlashCommand('/stop 2', client, listed);
+    await runSlashCommand('/stop 2', client, listed, null, undefined, confirmYes);
 
     expect(calls).toEqual([
       { route: 'DELETE /managers/:id', args: { param: { id: 'mgr-b' }, json: {} } },
@@ -5872,7 +5896,14 @@ describe('chat の /archive', () => {
         archiveRemoveBody: { ok: true, id: 'sess-1.jsonl', bytes: 1234, alreadyRemoved: false },
       });
 
-      await runSlashCommand('/archive remove sess-1.jsonl', client, emptyListed());
+      await runSlashCommand(
+        '/archive remove sess-1.jsonl',
+        client,
+        emptyListed(),
+        null,
+        undefined,
+        confirmYes,
+      );
 
       expect(read()).toContain('消しました');
       expect(read()).toContain('1234バイト');
@@ -5891,7 +5922,14 @@ describe('chat の /archive', () => {
           archiveRemoveBody: { ok: true, id: 'sess-1.jsonl', bytes: 1234, alreadyRemoved },
         });
 
-        await runSlashCommand('/archive remove sess-1.jsonl', client, emptyListed());
+        await runSlashCommand(
+          '/archive remove sess-1.jsonl',
+          client,
+          emptyListed(),
+          null,
+          undefined,
+          confirmYes,
+        );
 
         expect(read(), `alreadyRemoved=${String(alreadyRemoved)}`).toContain(
           '置き場で解放した量ではなく',
@@ -5906,7 +5944,14 @@ describe('chat の /archive', () => {
         archiveRemoveBody: { ok: true, id: 'sess-1.jsonl', bytes: 1234, alreadyRemoved: true },
       });
 
-      await runSlashCommand('/archive remove sess-1.jsonl', client, emptyListed());
+      await runSlashCommand(
+        '/archive remove sess-1.jsonl',
+        client,
+        emptyListed(),
+        null,
+        undefined,
+        confirmYes,
+      );
 
       expect(read()).toContain('前から消されていました');
     });
@@ -5915,7 +5960,14 @@ describe('chat の /archive', () => {
       const read = captureStdout();
       const { client } = stubClient({ archiveRemoveStatus: 404 });
 
-      await runSlashCommand('/archive remove no-such-id.jsonl', client, emptyListed());
+      await runSlashCommand(
+        '/archive remove no-such-id.jsonl',
+        client,
+        emptyListed(),
+        null,
+        undefined,
+        confirmYes,
+      );
 
       const text = read();
       expect(text).toContain('その生ログはありません');
@@ -5936,7 +5988,14 @@ describe('chat の /archive', () => {
         },
       });
 
-      await runSlashCommand('/archive remove sess-1.jsonl', client, emptyListed());
+      await runSlashCommand(
+        '/archive remove sess-1.jsonl',
+        client,
+        emptyListed(),
+        null,
+        undefined,
+        confirmYes,
+      );
 
       const text = read();
       expect(text).toContain('走行中のマネージャー mgr-1 の退避なので消せない');
@@ -5955,7 +6014,14 @@ describe('chat の /archive', () => {
         archiveRemoveStatus: 500,
         archiveRemoveBody: { error: '生ログの削除が失敗した（archive remove のテスト用）' },
       });
-      await runSlashCommand('/archive remove sess-1.jsonl', serverErrorClient, emptyListed());
+      await runSlashCommand(
+        '/archive remove sess-1.jsonl',
+        serverErrorClient,
+        emptyListed(),
+        null,
+        undefined,
+        confirmYes,
+      );
       const serverErrorText = serverError();
       vi.restoreAllMocks();
 
@@ -5964,7 +6030,14 @@ describe('chat の /archive', () => {
         archiveRemoveStatus: 400,
         archiveRemoveBody: { error: 'overrideReason が長すぎる（archive remove のテスト用）' },
       });
-      await runSlashCommand('/archive remove sess-1.jsonl', badRequestClient, emptyListed());
+      await runSlashCommand(
+        '/archive remove sess-1.jsonl',
+        badRequestClient,
+        emptyListed(),
+        null,
+        undefined,
+        confirmYes,
+      );
       const badRequestText = badRequest();
 
       expect(serverErrorText).toContain('生ログの削除が失敗した（archive remove のテスト用）');
@@ -5990,6 +6063,9 @@ describe('chat の /archive', () => {
         '/archive remove sess-1.jsonl 本番障害の調査で緊急に消す必要があった',
         client,
         emptyListed(),
+        null,
+        undefined,
+        confirmYes,
       );
 
       const text = read();
@@ -6002,6 +6078,60 @@ describe('chat の /archive', () => {
         overrideReason: '本番障害の調査で緊急に消す必要があった',
       });
     });
+  });
+});
+
+describe('戻せない操作の確認（REPL。#3141）', () => {
+  const declined = async (): Promise<boolean> => false;
+
+  it.each([
+    ['/stop mgr-1', 'DELETE /managers/:id'],
+    ['/archive remove sess-1.jsonl', 'DELETE /archive/:id'],
+  ])('%s: 確認で承認しなければ、叩かずにやめる', async (line, route) => {
+    const read = captureStdout();
+    const { calls, client } = stubClient();
+
+    await runSlashCommand(line, client, emptyListed(), null, undefined, declined);
+
+    expect(calls.some((entry) => entry.route === route)).toBe(false);
+    expect(read()).not.toContain('消しました');
+  });
+
+  it.each([
+    ['/stop mgr-1', 'DELETE /managers/:id'],
+    ['/archive remove sess-1.jsonl', 'DELETE /archive/:id'],
+  ])('%s: 確認の口が渡されていなければ、確認できないので叩かない', async (line, route) => {
+    const read = captureStdout();
+    const { calls, client } = stubClient();
+
+    await runSlashCommand(line, client, emptyListed());
+
+    expect(calls.some((entry) => entry.route === route)).toBe(false);
+    expect(read()).toContain('何も変更していません');
+  });
+
+  it('確認の文は、何が戻らないかを言う（止める対象・消す対象を含む）', async () => {
+    captureStdout();
+    const { client } = stubClient();
+    const summaries: string[] = [];
+    const record = async (summary: string): Promise<boolean> => {
+      summaries.push(summary);
+      return false;
+    };
+
+    await runSlashCommand('/stop mgr-1', client, emptyListed(), null, undefined, record);
+    await runSlashCommand(
+      '/archive remove sess-1.jsonl',
+      client,
+      emptyListed(),
+      null,
+      undefined,
+      record,
+    );
+
+    expect(summaries[0]).toContain('mgr-1');
+    expect(summaries[1]).toContain('sess-1.jsonl');
+    expect(summaries[1]).toContain('戻りません');
   });
 });
 

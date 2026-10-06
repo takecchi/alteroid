@@ -57,6 +57,7 @@ import {
 } from '@alteroid/core/unpushed-work-observation-format';
 import type { InferResponseType } from 'hono/client';
 
+import { confirmInRepl } from './confirm.js';
 import {
   AttachmentDraft,
   attachmentLinesOf,
@@ -125,7 +126,15 @@ export async function chatCommand(): Promise<void> {
       }
 
       if (line.startsWith('/')) {
-        const handled = await runSlashCommand(line, client, listed, conversationId, target);
+        const handled = await runSlashCommand(
+          line,
+          client,
+          listed,
+          conversationId,
+          target,
+          // 戻せない操作の確認は、この REPL の readline で聞く（`confirm.ts`）。
+          (summary) => confirmInRepl(summary, (question) => rl.question(question)),
+        );
         if (handled === 'quit') break;
         continue;
       }
@@ -157,6 +166,20 @@ export async function chatCommand(): Promise<void> {
       await endConversationOnExit(client, target, conversationId);
     }
   }
+}
+
+/** `confirm` が渡されていなければ確認できないので、実行しない（#3141）。 */
+async function confirmRepl(
+  confirm: ((summary: string) => Promise<boolean>) | undefined,
+  summary: string,
+): Promise<boolean> {
+  if (confirm === undefined) {
+    stdout.write(
+      `${summary}\n取り消せない操作で、確認できないので実行しません。何も変更していません。\n`,
+    );
+    return false;
+  }
+  return confirm(summary);
 }
 
 export async function sendMessage(
@@ -464,6 +487,12 @@ export async function runSlashCommand(
    * 試さないので省略できるよう任意にしてある。
    */
   target?: Target,
+  /**
+   * 戻せない操作（`/stop`・`/archive remove`）の確認（Issue #3141）。進めてよければ `true`。
+   * 呼び出し元（`chatCommand`）は REPL の readline で聞く。**省略したときは確認できないので
+   * 実行しない**（確認の無いまま消さない）。
+   */
+  confirm?: (summary: string) => Promise<boolean>,
 ): Promise<'ok' | 'quit'> {
   const [command, ...rest] = line.split(/\s+/);
 
@@ -1146,6 +1175,15 @@ export async function runSlashCommand(
         stdout.write(`[${reference}] は /managers の一覧にありません\n`);
         return 'ok';
       }
+      // 止めた仕事は終わり、走っていた途中の作業は戻らない（TUI の `confirmStop` と同じ線。#3141）。
+      if (
+        !(await confirmRepl(
+          confirm,
+          `マネージャー ${id} を止めます。この仕事だけが止まり、走っていた途中の作業は戻りません。`,
+        ))
+      ) {
+        return 'ok';
+      }
       const reason = rest.slice(1).join(' ').trim();
       const response = await client.managers[':id'].$delete({
         param: { id },
@@ -1402,6 +1440,15 @@ export async function runSlashCommand(
         const removeId = rest[1];
         if (!removeId) {
           stdout.write('使い方: /archive remove <id> [理由]\n');
+          return 'ok';
+        }
+        // 本文は消すと戻らない（行と大きさだけが残る）。確認は叩く前に取る（#3141）。
+        if (
+          !(await confirmRepl(
+            confirm,
+            `生ログ ${removeId} の本文を消します。本文は戻りません（行と大きさだけが残ります）。`,
+          ))
+        ) {
           return 'ok';
         }
         const reason = rest.slice(2).join(' ').trim();

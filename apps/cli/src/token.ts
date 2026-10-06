@@ -1,6 +1,7 @@
 import { stdin, stdout } from 'node:process';
 
 import { describeAuthFailure, forbiddenKindOf, resolveTarget, type Target } from './target.js';
+import { confirmIrreversible } from './confirm.js';
 import { redactError } from './redact.js';
 import { readInputFile } from './input-errors.js';
 
@@ -172,7 +173,16 @@ export function describeCarriedOver(view: PutTokensView): string {
  * 読めないトークンの行を、id を指して消す（issue #2354）。**値は出さない**（id と件数だけ）。
  * 指した id が読めない行に無ければ、デーモンが何も消さずに断る（エラーとして投げる）。
  */
-export async function tokenRemoveUnreadableCommand(ids: readonly string[]): Promise<void> {
+export async function tokenRemoveUnreadableCommand(
+  ids: readonly string[],
+  options: { yes?: boolean } = {},
+): Promise<void> {
+  // 戻せない操作なので確認する（#3141。`confirm.ts`）。壊れた行は中身を出さずに消すので、消すと残らない。
+  const confirmed = await confirmIrreversible(
+    `読めないトークンの行（id: ${ids.join(', ')}）を消します。壊れた行は消すと残りません。`,
+    options,
+  );
+  if (!confirmed) return;
   const target = await resolveTarget();
   const result = (await request(target, '/tokens/unreadable/remove', {
     method: 'POST',
@@ -352,7 +362,15 @@ export async function tokenAddCommand(options: { label: string; file?: string })
   stdout.write(describeCarriedOver(view));
 }
 
-export async function tokenRemoveCommand(id: string): Promise<void> {
+/**
+ * トークンを1本消す。**戻せない操作なので確認する**（Issue #3141。`confirm.ts`）。値は
+ * 消した後に読み出せない（`token list` も値は出さない）ので、登録し直すには元の値が要る。
+ * 戻したいだけなら `disable` / `enable`（値を残したまま外す・戻す）を使う。
+ */
+export async function tokenRemoveCommand(
+  id: string,
+  options: { yes?: boolean } = {},
+): Promise<void> {
   const target = await resolveTarget();
   const current = (await request(target, '/tokens')) as TokensView;
   if (!current.tokens.some((token) => token.id === id)) {
@@ -360,6 +378,11 @@ export async function tokenRemoveCommand(id: string): Promise<void> {
       `id ${id} のトークンは見つかりません（alteroid token list で id を確かめてください）`,
     );
   }
+  const confirmed = await confirmIrreversible(
+    `トークン（id ${id}）を削除します。値は読み出せないので、登録し直すには元の値が要ります（値を残したまま外すなら alteroid token disable ${id}）。`,
+    options,
+  );
+  if (!confirmed) return;
   const inputs = current.tokens.filter((token) => token.id !== id).map(toInput);
   const view = await putTokens(target, inputs);
   stdout.write(`トークン（id ${id}）を削除しました。\n`);

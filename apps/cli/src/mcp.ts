@@ -6,6 +6,7 @@ import { stdin, stdout } from 'node:process';
 import { maskUrl } from '@alteroid/core/mask-url';
 import { hasMcpPushProblem } from '@alteroid/logic';
 
+import { confirmIrreversible } from './confirm.js';
 import { createClient } from './client.js';
 import { describeAuthFailure, forbiddenKindOf, resolveTarget, type Target } from './target.js';
 import { redactError } from './redact.js';
@@ -127,8 +128,14 @@ export async function mcpShowCommand(options: { reveal?: boolean } = {}): Promis
   );
 }
 
-/** ファイル（`-` なら標準入力）の `.mcp.json` で丸ごと置き換える。 */
-export async function mcpSetCommand(file: string): Promise<void> {
+/**
+ * ファイル（`-` なら標準入力）の `.mcp.json` で丸ごと置き換える。
+ *
+ * **いま置いてある登録が変わる（外れる・値が変わる）ときは確認する**（Issue #3141。
+ * `confirm.ts`）。置き換え前の値（env / headers の鍵を含む）は残らない。**いまと同じ中身、
+ * または何も置いていないところへ置くだけなら、失うものが無いので確認しない。**
+ */
+export async function mcpSetCommand(file: string, options: { yes?: boolean } = {}): Promise<void> {
   const text =
     file === '-'
       ? await readAll()
@@ -136,7 +143,25 @@ export async function mcpSetCommand(file: string): Promise<void> {
   const servers = parseMcpJson(text);
   const target = await resolveTarget();
   const before = await read(target);
-  await put(target, servers, Object.keys(before.mcpServers));
+  const beforeNames = Object.keys(before.mcpServers);
+  if (beforeNames.length > 0 && stableJson(before.mcpServers) !== stableJson(servers)) {
+    const confirmed = await confirmIrreversible(
+      `MCP の登録（${beforeNames.join('・')}）を、渡された内容で丸ごと置き換えます。いまの値は残りません` +
+        '（控えるなら alteroid mcp show --reveal）。',
+      options,
+    );
+    if (!confirmed) return;
+  }
+  await put(target, servers, beforeNames);
+}
+
+/** キーの並びに依らない比較用の文字列。 */
+function stableJson(value: unknown): string {
+  return JSON.stringify(value, (_key, v: unknown) =>
+    typeof v === 'object' && v !== null && !Array.isArray(v)
+      ? Object.fromEntries(Object.entries(v).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
+      : v,
+  );
 }
 
 /**
@@ -166,11 +191,23 @@ export async function mcpEditCommand(): Promise<void> {
   }
 }
 
-/** 登録を外す（空の `mcpServers` の `PUT`）。 */
-export async function mcpClearCommand(): Promise<void> {
+/**
+ * 登録を外す（空の `mcpServers` の `PUT`）。**何か置いてあるときは確認する**（Issue #3141。
+ * `confirm.ts`）。外した値（env / headers の鍵を含む）は残らない。
+ */
+export async function mcpClearCommand(options: { yes?: boolean } = {}): Promise<void> {
   const target = await resolveTarget();
   const before = await read(target);
-  await put(target, {}, Object.keys(before.mcpServers));
+  const beforeNames = Object.keys(before.mcpServers);
+  if (beforeNames.length > 0) {
+    const confirmed = await confirmIrreversible(
+      `MCP の登録（${beforeNames.join('・')}）を全部外します。いまの値は残りません` +
+        '（控えるなら alteroid mcp show --reveal）。',
+      options,
+    );
+    if (!confirmed) return;
+  }
+  await put(target, {}, beforeNames);
 }
 
 /**

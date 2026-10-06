@@ -291,9 +291,11 @@ const EXPECTED_SITE_COUNT: Record<string, number> = {
   // `EXCHANGE_KIND_DECISION_PREFIX` で書く）。
   // + 1（#3161。`case 'closed'` が、`lost` に確定した後に届いた `closed` で status を動かさなかったことを
   // `EXCHANGE_KIND_DECISION_PREFIX` で書く）。
+  // + 1（#3187。`case 'closed'` が、`failed` に確定済みの委譲へ届いた同じ `closed(failed)` の二重配達を、
+  // 知らせも器の失敗の計上も重ねずに見送ったことを `EXCHANGE_KIND_DECISION_PREFIX` で書く）。
   // + 1（#3189。`case 'closed'` が、report を受け取っていない（または判定できない）まま届いた
   // `closed(done)` をクローンへ知らせるとき、その本文を `EXCHANGE_KIND_DECISION_PREFIX` で書く）。
-  'manager.ts': 54,
+  'manager.ts': 55,
 };
 
 describe('type: exchange の書き込み全箇所が kind 接頭辞を持つ（issue #1332）', () => {

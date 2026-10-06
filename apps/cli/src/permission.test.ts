@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { captureStdout } from './test-support.js';
+import { captureStdout, pretendTty } from './test-support.js';
 
 /**
  * `alteroid permission` — 人間が承認した Bash 許可（Issue #863）を CLI から
@@ -297,7 +297,7 @@ describe('alteroid permission revoke', () => {
     replies.push({ status: 200, body: { ok: true } });
     const read = captureStdout();
 
-    await permissionRevokeCommand('grant-1');
+    await permissionRevokeCommand('grant-1', { yes: true });
 
     expect(sent).toEqual([
       { url: 'http://127.0.0.1:4517/permission-grants/grant-1/revoke', method: 'POST' },
@@ -308,13 +308,15 @@ describe('alteroid permission revoke', () => {
   it('404 は例外を投げる（消えたかどうかを終了コードで区別する）', async () => {
     replies.push({ status: 404, body: { error: 'not found' } });
 
-    await expect(permissionRevokeCommand('missing')).rejects.toThrow(/該当する許可がありません/);
+    await expect(permissionRevokeCommand('missing', { yes: true })).rejects.toThrow(
+      /該当する許可がありません/,
+    );
   });
 
   it('500 は状態コードに加えてデーモンの理由を載せて投げる', async () => {
     replies.push({ status: 500, body: { error: '許可の取り消しが書けない（テスト用）' } });
 
-    await expect(permissionRevokeCommand('grant-1')).rejects.toThrow(
+    await expect(permissionRevokeCommand('grant-1', { yes: true })).rejects.toThrow(
       /許可を取り消せませんでした（500）: 許可の取り消しが書けない（テスト用）/,
     );
   });
@@ -325,7 +327,7 @@ describe('alteroid permission revoke', () => {
       body: { error: 'このアカウントには alteroid を使う許可が無い' },
     });
 
-    await expect(permissionRevokeCommand('grant-1')).rejects.toThrow(/access grant/);
+    await expect(permissionRevokeCommand('grant-1', { yes: true })).rejects.toThrow(/access grant/);
   });
 });
 
@@ -398,7 +400,7 @@ describe('alteroid permission remove-unreadable（issue #2440）', () => {
     replies.push({ status: 200, body: { removedIds: ['row-1', 'row-2'], count: 2 } });
     const read = captureStdout();
 
-    await permissionRemoveUnreadableCommand(['row-1', 'row-2']);
+    await permissionRemoveUnreadableCommand(['row-1', 'row-2'], { yes: true });
 
     expect(sent).toHaveLength(1);
     expect(sent[0]?.url).toBe('http://127.0.0.1:4517/permission-grants/unreadable/remove');
@@ -412,9 +414,9 @@ describe('alteroid permission remove-unreadable（issue #2440）', () => {
   it('404（指した id が読めない行に無い）は、何も消していないと言って投げる。指した文字列は映さない', async () => {
     replies.push({ status: 404, body: { error: 'x' } });
 
-    const error = await permissionRemoveUnreadableCommand(['FAKE_SECRET_VALUE_2440']).catch(
-      (e: unknown) => e,
-    );
+    const error = await permissionRemoveUnreadableCommand(['FAKE_SECRET_VALUE_2440'], {
+      yes: true,
+    }).catch((e: unknown) => e);
 
     expect(error).toBeInstanceOf(Error);
     expect((error as Error).message).toContain('何も消していません');
@@ -425,7 +427,9 @@ describe('alteroid permission remove-unreadable（issue #2440）', () => {
   it('500 はデーモンの理由を載せて投げる', async () => {
     replies.push({ status: 500, body: { error: '保存できなかった（テスト用）' } });
 
-    await expect(permissionRemoveUnreadableCommand(['row-1'])).rejects.toThrow(/500/);
+    await expect(permissionRemoveUnreadableCommand(['row-1'], { yes: true })).rejects.toThrow(
+      /500/,
+    );
   });
 });
 
@@ -483,5 +487,29 @@ describe('alteroid permission list — 読めない行（issue #2536）', () => 
     expect(text).toContain('許可が無い、とは言えない');
     expect(text).not.toContain('許可はまだ1件もありません');
     expect(text).not.toContain('有効な許可はありません');
+  });
+});
+
+describe('alteroid permission revoke の確認（#3141）', () => {
+  it('端末でなく --yes も無ければ、HTTP に出ずに断る（取り消していない）', async () => {
+    const restore = pretendTty(false);
+    try {
+      await expect(permissionRevokeCommand('grant-1')).rejects.toThrow('--yes');
+    } finally {
+      restore();
+    }
+    expect(sent).toEqual([]);
+  });
+});
+
+describe('alteroid permission remove-unreadable の確認（#3141）', () => {
+  it('端末でなく --yes も無ければ、HTTP に出ずに断る（消えていない）', async () => {
+    const restore = pretendTty(false);
+    try {
+      await expect(permissionRemoveUnreadableCommand(['row-1'])).rejects.toThrow('--yes');
+    } finally {
+      restore();
+    }
+    expect(sent.length).toBe(0);
   });
 });

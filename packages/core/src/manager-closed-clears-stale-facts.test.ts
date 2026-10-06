@@ -201,6 +201,10 @@ describe('closed を受けた時点で、前の回の lastCgroupEvents / lastSys
     expect(first.lastSystemError).toMatchObject({ code: 'EAGAIN' });
 
     // resume され、report が一度も届かないまま、欄の無い failed で閉じる。
+    // **台帳も本当に resume する（#3187）。** 台帳が `failed` のまま同じ `closed(failed)` が届くのは
+    // 二重配達として日誌だけに残す扱いになったので、resume で `running` へ戻してから2回目を流す
+    // （実際の resume も `send()` が status を `running` へ書く）。期待値は変えていない。
+    await pool.send('mgr-twice', '続きを');
     fake.revive('mgr-twice');
     fake.closed('mgr-twice', 'failed');
     // 2回目の反映が済んだ印は、1回目の値が下りたこと（#2463 の直しそのもの）。
@@ -226,6 +230,10 @@ describe('closed を受けた時点で、前の回の lastCgroupEvents / lastSys
     });
     await listedWhen(pool, 'mgr-replace', (m) => m.lastCgroupEvents?.pidsMaxDelta === 3);
 
+    // **台帳も本当に resume する（#3187）。** 台帳が `failed` のまま同じ `closed(failed)` が届くのは
+    // 二重配達として日誌だけに残す扱いになったので、resume で `running` へ戻してから2回目を流す
+    // （実際の resume も `send()` が status を `running` へ書く）。期待値は変えていない。
+    await pool.send('mgr-replace', '続きを');
     fake.revive('mgr-replace');
     fake.closed('mgr-replace', 'failed', {
       cgroupEvents: { oomKillDelta: 2 },

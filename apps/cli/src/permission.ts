@@ -7,6 +7,7 @@ import {
 } from '@alteroid/core/cli-light';
 import type { PermissionGrant } from '@alteroid/core';
 
+import { confirmIrreversible } from './confirm.js';
 import { createClient } from './client.js';
 import { describeUnreadableRowsList, withErrorReason } from './format.js';
 import { describeAuthFailure, resolveTarget } from './target.js';
@@ -115,11 +116,24 @@ export async function permissionListCommand(options: PermissionListOptions = {})
   stdout.write('\n');
 }
 
-export async function permissionRevokeCommand(id: string): Promise<void> {
+/**
+ * 許可を取り消す。**確認する**（Issue #3141。`confirm.ts`）。取り消しを元に戻す口は無い
+ * （`PermissionGrantStore` に取り消しを外す操作が無く、許可は `request_permission` の
+ * 承認でしか増えない）。同じ許可がほしければ、クローンに頼み直して承認し直す。
+ */
+export async function permissionRevokeCommand(
+  id: string,
+  options: { yes?: boolean } = {},
+): Promise<void> {
   const target = await resolveTarget();
   // 未ログインの note も例外にする（#2456、クローン teto の判断 2026-09-30）。
   // 何もせず 0 で返すと「取り消した」と誤読される。読み取り系（一覧）は今のまま。
   if (target.note !== null) throw new Error(target.note);
+  const confirmed = await confirmIrreversible(
+    `許可 ${id} を取り消します。元に戻す口は無く、同じ許可は、クローンに頼み直して承認し直すまで戻りません。`,
+    options,
+  );
+  if (!confirmed) return;
   const client = createClient(target.baseUrl, target.headers);
   const response = await client['permission-grants'][':id'].revoke.$post({ param: { id } });
   // **失敗を握り潰さない。** 取り消しは安全側への操作なので「取り消せたか」を
@@ -147,7 +161,16 @@ export async function permissionRevokeCommand(id: string): Promise<void> {
  * この口では消せない**（`permission-grants.json` を手で直す）。指した id が1つでも読めない行に
  * 無ければ、デーモンが何も消さずに断る。**行の中身は出さない**（id と件数だけ）。
  */
-export async function permissionRemoveUnreadableCommand(ids: readonly string[]): Promise<void> {
+export async function permissionRemoveUnreadableCommand(
+  ids: readonly string[],
+  options: { yes?: boolean } = {},
+): Promise<void> {
+  // 戻せない操作なので確認する（#3141。`confirm.ts`）。壊れた行は中身を出さずに消すので、消すと残らない。
+  const confirmed = await confirmIrreversible(
+    `読めない許可の行（id: ${ids.join(', ')}）を消します。壊れた行は消すと残りません。`,
+    options,
+  );
+  if (!confirmed) return;
   const target = await resolveTarget();
   if (target.note !== null) throw new Error(target.note);
   const client = createClient(target.baseUrl, target.headers);

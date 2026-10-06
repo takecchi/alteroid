@@ -2,6 +2,7 @@ import { stdout } from 'node:process';
 
 import { describeUnreadableRowsList, formatElapsedAgo, withErrorReason } from './format.js';
 import { describeAuthFailure, forbiddenKindOf, resolveTarget, type Target } from './target.js';
+import { confirmIrreversible } from './confirm.js';
 import { redactError } from './redact.js';
 
 /**
@@ -153,8 +154,23 @@ export async function accessGrantCommand(accountId: string): Promise<void> {
   stdout.write(`許可しました: ${account.email ?? account.displayName ?? account.id}\n`);
 }
 
-export async function accessRevokeCommand(accountId: string): Promise<void> {
+/**
+ * 許可を取り消す。**確認する**（Issue #3141。`confirm.ts`）。`access grant` で許可し直せるが、
+ * 許可に乗っていた「実行環境の持ち主」の宣言は一緒に落ち、**再 grant しても戻らない**
+ * （`AuthService.revoke` の doc。宣言は `alteroid access owner` でしか立たない）。
+ * 取り消した相手は、発行済みトークンごとその場で通らなくなる。
+ */
+export async function accessRevokeCommand(
+  accountId: string,
+  options: { yes?: boolean } = {},
+): Promise<void> {
   const target = await resolveTarget();
+  const confirmed = await confirmIrreversible(
+    `アカウント ${accountId} の許可を取り消します。発行済みのトークンはその場から通らなくなり、` +
+      '許可に乗っていた「実行環境の持ち主」の宣言も落ちます（許可し直しても宣言は戻りません）。',
+    options,
+  );
+  if (!confirmed) return;
   const { account } = (await request(target, `/access/${encodeURIComponent(accountId)}/revoke`, {
     method: 'POST',
   })) as { account: AccountView };
@@ -172,7 +188,16 @@ export async function accessRevokeCommand(accountId: string): Promise<void> {
  * （`auth.json` を手で直す）。指した id が1つでも読めない行に無ければ、デーモンが何も消さずに
  * 断る。**行の中身は出さない**（id と件数だけ）。
  */
-export async function accessRemoveUnreadableCommand(ids: readonly string[]): Promise<void> {
+export async function accessRemoveUnreadableCommand(
+  ids: readonly string[],
+  options: { yes?: boolean } = {},
+): Promise<void> {
+  // 戻せない操作なので確認する（#3141。`confirm.ts`）。壊れた行は中身を出さずに消すので、消すと残らない。
+  const confirmed = await confirmIrreversible(
+    `読めないアカウントの行（id: ${ids.join(', ')}）を消します。壊れた行は消すと残りません。`,
+    options,
+  );
+  if (!confirmed) return;
   const target = await resolveTarget();
   const result = (await request(
     target,

@@ -9360,8 +9360,36 @@ class Pool implements ManagerPool {
       // しない）。違うのは「挑み直しの予約」の書き方だけで、あちらは runner 単位の
       // `retry` フラグを畳んでから予約するのに対し、こちらは同じ走査の
       // `held-by-lease` が既に使っている `#scheduleReattach` をその場で呼ぶ。
+      // **同じ runner への resume が飛んでいる間、`closed` を預ける窓を立てる**（Issue #3184。
+      // `#reattach` の同じ形——`#sameRunnerResumeWindow` の doc）。どの抜け方でも必ず1回閉じる。
+      let windowOpen = false;
+      let windowMoved = false;
       try {
-        const ok = await this.#resumeOnce(record, runner, nudge);
+        // 別の契機が resume 中（`#resuming`）なら窓は持たない（そちらの窓を壊さない）。
+        if (!this.#resuming.has(job.id)) {
+          this.#sameRunnerResumeWindow.set(job.id, runner.runnerId);
+          windowOpen = true;
+        }
+        let ok: ResumeOutcome;
+        try {
+          ok = await this.#resumeOnce(record, runner, nudge);
+        } catch (resumeError) {
+          if (windowOpen) {
+            windowOpen = false;
+            await this.#endRelocationWindow(job.id, false);
+          }
+          throw resumeError;
+        }
+        // 受理されなかった回はここで閉じる（預かった `closed` を処理し直す）。受理された回は、下で
+        // `running` を persist した後に閉じる（処理し直した結果を後から上書きしないため。`#reattach` と同じ）。
+        if (windowOpen) {
+          if (ok === 'resumed') {
+            windowMoved = true;
+          } else {
+            windowOpen = false;
+            await this.#endRelocationWindow(job.id, false);
+          }
+        }
         if (ok !== 'resumed') {
           /*
            * **貸し出し期限で断られたのは「まだ」である。** 引き取りの契機は「runner が
@@ -9400,7 +9428,13 @@ class Pool implements ManagerPool {
         // **受理は「戻れた」ではない。** この `await` の間に「戻れなかった」が確定
         // していることがある（runner は別プロセスで、失敗は SSE で追いかけてくる）。
         // ここで無条件に上書きすると、書いたばかりの終端状態が `running` へ巻き戻る。
-        if (record.job.status === 'lost') continue;
+        if (record.job.status === 'lost') {
+          if (windowOpen) {
+            windowOpen = false;
+            await this.#endRelocationWindow(job.id, windowMoved);
+          }
+          continue;
+        }
         record.job.status = 'running';
         await this.#persist(record);
         // `runner.send()` の失敗は無視する（畳んで待つのと同じ理由——本体の
@@ -9440,7 +9474,14 @@ class Pool implements ManagerPool {
             undefined,
           ),
         );
+        if (windowOpen) {
+          windowOpen = false;
+          await this.#endRelocationWindow(job.id, windowMoved);
+        }
       } catch (error) {
+        if (windowOpen) {
+          await this.#endRelocationWindow(job.id, windowMoved);
+        }
         if (isFencedRunnerError(error)) {
           /*
            * **世代で拒まれた（409）。これは「戻せなかった」ではない**（`#reattach` の
@@ -11058,9 +11099,26 @@ class Pool implements ManagerPool {
     return this.#runners.get(runnerId);
   }
 
-  /** 戻せないと確定する（`#unresumable` を立て、台帳へ書き、知らせ、像から外す）。 */
+  /**
+   * 戻せないと確定する（`#unresumable` を立て、台帳へ書き、知らせ、像から外す）。
+   *
+   * **止めた後は状態を動かさない（Issue #3185。`closed` などが持つ R4 の門と同じ形）。** 引数の
+   * `record` は呼び出し側が取った時点の写しで、その後に `abort()` が `stopped` を書いていることが
+   * ある。冒頭で最新（`#records` の像、無ければ台帳）を読み、`stopped` なら status も `#unresumable` も
+   * 知らせも触らず、日誌にだけ残して戻る。**`#retire` も呼ばない** — `stopped` を書くのは `abort()` だけで、
+   * `abort()` は同じ呼びの中で `#retire` まで済ませる（`outcome === 'stopped'` の分岐）。
+   */
   async #confirmLost(record: ManagerRecord, error: unknown): Promise<void> {
     const { job } = record;
+    const latest = this.#records.get(job.id)?.job ?? (await this.#latestJobOf(job.id)) ?? job;
+    if (latest.status === 'stopped' || job.status === 'stopped') {
+      await this.#journal({
+        type: 'decision',
+        decision: `[${job.id}] 戻せなかったとして確定するのを見送った（止めた後は状態を動かさない。台帳は stopped のまま）`,
+        grounds: `確定しようとした理由: ${reasonOf(error)}`,
+      });
+      return;
+    }
     this.#relocationRefusals.delete(job.id);
     // 挑み直さないと決めたので、**ジョブ側に覚える**（runner 単位の `retry`
     // では表せない。同じ runner の別ジョブが予約を積むたびに巻き込まれる）。
@@ -11092,7 +11150,10 @@ class Pool implements ManagerPool {
       if (job.status !== 'running' && job.status !== 'waiting_human') continue;
       if (this.#unresumable.has(job.id) || !this.#shouldRelocateFrom(job.runnerId)) continue;
       const known = this.#records.get(job.id);
-      const record = known ?? { job: { ...job }, waiting: [], attached: false };
+      // **古い写し（ループの先頭で取った `job`）で確定しない**（Issue #3185）。この間に `abort()` が
+      // `stopped` を書いていることがあるので、確定の直前に台帳を読み直した行から写しを作る。
+      const fresh = known === undefined ? ((await this.#latestJobOf(job.id)) ?? job) : job;
+      const record = known ?? { job: { ...fresh }, waiting: [], attached: false };
       const reason = new Error(
         `runnerId=${runnerId} が併存している（${duplicates} 件）ので、移送先として取り直しを見送った`,
       );
@@ -12330,7 +12391,15 @@ class Pool implements ManagerPool {
           // 軸に0の行を作る」）。
           ...(event.askedAt === undefined ? {} : { askedAt: event.askedAt }),
         });
-        record.job.status = 'waiting_human';
+        // **終端（`failed` / `lost`）を、遅れて処理される ask で書き戻さない（Issue #3186。
+        // #3160 の `case 'report'` と同じ形）。** 上の `await`（`#ignoreIfMovedAway`）で待つ間に
+        // `closed(failed / lost)` が終端を台帳へ書いていると、無条件の `waiting_human` は台帳を
+        // 非終端へ戻す（クローンには `closed_failed` の知らせが出るのに台帳は待ちのまま／
+        // `lost` は引き取りの契機も消える）。**待ちへの積み・日誌・受信箱への流れは従来どおり**で、
+        // 動かさないのは status だけ。
+        if (record.job.status !== 'failed' && record.job.status !== 'lost') {
+          record.job.status = 'waiting_human';
+        }
         await this.#persist(record);
         await this.#journal({
           type: 'escalation',
@@ -13633,7 +13702,14 @@ class Pool implements ManagerPool {
             event.reason,
         });
         if (event.recovered) {
-          record.job.status = 'running';
+          // **終端（`failed` / `lost`）を、遅れて処理される resume_failed で書き戻さない
+          // （Issue #3186。#3160 と同じ形）。** 上の `await #journal` で待つ間に
+          // `closed(failed / lost)` が終端を書いていると、無条件の `running` は台帳を非終端へ
+          // 戻す。**`runnerSessionSince` の更新と `#notifyResumeFallback` は従来どおり**で、
+          // 動かさないのは status だけ。
+          if (record.job.status !== 'failed' && record.job.status !== 'lost') {
+            record.job.status = 'running';
+          }
           record.attached = true;
           // 前の会話へは戻れなかったが、**器は新しいセッションを持っている**
           // （#579。`ManagerRecord.runnerSessionSince` の doc）。
@@ -13825,6 +13901,42 @@ class Pool implements ManagerPool {
             await this.#persist(record);
             this.#emit(event.managerId, 'report', notice);
           }
+          this.#retire(event.managerId);
+          return;
+        }
+        /*
+         * **`failed` に確定済みの委譲へ、同じ `closed(failed)` がもう一度届いても、日誌にだけ残す
+         * （Issue #3187。上の `lost` の後に届いた `closed` と同じ置き場所・同じ形）。**
+         * `closed` には冪等キーが無い。runner の SSE が再接続の `Last-Event-ID` で同じ出来事を
+         * 配り直すと、下の `failed` の枝が日誌の失敗行・`closed_failed` の知らせ（合流窓で
+         * 「×2」になる）・`noteManagerFailed`（器の失敗が二重に加算され、配置の点数で器が余計に
+         * 沈む）をもう1回ずつ出していた。**デーモンの中だけで直す**（`closed` に冪等キーを足す
+         * 変更は、runner とのやり取りの形を変えるので採らない）。
+         *
+         * **「新しい失敗」とは取り違えない。** `failed` の後に resume されれば status は
+         * `running` へ戻るので、そのあとの `closed(failed)` はここに掛からず従来どおり知らせる。
+         * 台帳が `failed` のまま届いた `closed(failed)` だけが重複と読める。**`done` / `lost` の
+         * `closed` はここでは扱わない**（`failed` から `done` / `lost` へ動く扱いは従来のまま）。
+         *
+         * **その委譲の resume が飛んでいる最中は重複と読まない。** `send()` は resume の**後**で
+         * 台帳を `running` に書くので、failed の委譲を開き直している最中は台帳がまだ `failed` である。
+         * その窓に届いた `closed(failed)` は、開き直した新しいセッションがすぐ落ちた知らせでありうる
+         * ので、従来どおり処理する（知らせを捨てない）。
+         */
+        if (
+          record.job.status === 'failed' &&
+          event.status === 'failed' &&
+          !this.#resuming.has(event.managerId)
+        ) {
+          await this.#journal({
+            type: 'exchange',
+            with: 'manager',
+            role: 'inbound',
+            text:
+              `${EXCHANGE_KIND_DECISION_PREFIX}[${event.managerId}] （failed 確定済みのため status は動かさず、` +
+              `知らせも器の失敗の計上も重ねない）runner 側の終了イベント（status=failed）を受け取った: ` +
+              event.reason,
+          });
           this.#retire(event.managerId);
           return;
         }
@@ -15068,6 +15180,15 @@ class Pool implements ManagerPool {
       (entry) => entry.id === managerId,
     );
     return row === undefined ? undefined : describeUnreadableManagerRow(managerId, row.reason);
+  }
+
+  /** 台帳の最新の1行（`#records` へは載せない）。読めない・無いなら `null`（呼び出し側が写しへ倒す）。 */
+  async #latestJobOf(managerId: string): Promise<Job | null> {
+    try {
+      return (await this.#stores.jobs.listJobs()).find((entry) => entry.id === managerId) ?? null;
+    } catch {
+      return null;
+    }
   }
 
   async #load(managerId: string): Promise<ManagerRecord | null> {

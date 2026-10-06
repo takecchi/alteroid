@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { makeTempDir } from '../../../vitest.tmpdir.js';
 
-import { captureStdout } from './test-support.js';
+import { captureStdout, pretendTty } from './test-support.js';
 
 /**
  * `alteroid mcp` — 人間の MCP 連携の登録（#325 段4）。
@@ -239,7 +239,9 @@ describe('alteroid mcp set / clear', () => {
     await writeFile(path, JSON.stringify(next), 'utf8');
     const read = captureStdout();
 
-    await expect(mcpSetCommand(path)).rejects.toThrow('runner への反映が一部失敗しました');
+    await expect(mcpSetCommand(path, { yes: true })).rejects.toThrow(
+      'runner への反映が一部失敗しました',
+    );
 
     const put = sent.find((s) => s.method === 'PUT');
     expect(put?.path).toBe('/mcp-servers');
@@ -306,7 +308,7 @@ describe('alteroid mcp set / clear', () => {
     });
     const read = captureStdout();
 
-    await mcpClearCommand();
+    await mcpClearCommand({ yes: true });
 
     expect(sent.find((s) => s.method === 'PUT')?.body).toEqual({ mcpServers: {} });
     const text = read();
@@ -335,7 +337,9 @@ describe('alteroid mcp set / clear', () => {
     });
     const read = captureStdout();
 
-    await expect(mcpClearCommand()).rejects.toThrow('runner への反映が一部失敗しました');
+    await expect(mcpClearCommand({ yes: true })).rejects.toThrow(
+      'runner への反映が一部失敗しました',
+    );
 
     const text = read();
     expect(text).toContain(
@@ -440,5 +444,73 @@ describe('伏せ方と読み方', () => {
 
   it('parseMcpJson は JSON として読めないものを、保存していないと言って止める', () => {
     expect(() => parseMcpJson('{')).toThrow('JSON として読めませんでした（何も保存していません）');
+  });
+});
+
+describe('alteroid mcp set / clear の確認（#3141）', () => {
+  it('clear: 何か置いてあるとき、端末でなく --yes も無ければ PUT せずに断る', async () => {
+    setReply('GET', '/mcp-servers', { status: 200, body: STORED });
+    const restore = pretendTty(false);
+    try {
+      await expect(mcpClearCommand()).rejects.toThrow('--yes');
+    } finally {
+      restore();
+    }
+    expect(sent.some((entry) => entry.method === 'PUT')).toBe(false);
+  });
+
+  it('set: いまの登録を変えるとき、端末でなく --yes も無ければ PUT せずに断る', async () => {
+    setReply('GET', '/mcp-servers', { status: 200, body: STORED });
+    const dir = await makeTempDir('alteroid-cli-mcp-set-');
+    const path = join(dir, '.mcp.json');
+    await writeFile(path, JSON.stringify({ mcpServers: { only: { command: 'x' } } }), 'utf8');
+    const restore = pretendTty(false);
+    try {
+      await expect(mcpSetCommand(path)).rejects.toThrow('--yes');
+    } finally {
+      restore();
+    }
+    expect(sent.some((entry) => entry.method === 'PUT')).toBe(false);
+  });
+
+  it('set: いまと同じ中身（キーの並びだけ違う）なら失うものが無いので、確認なしで通る', async () => {
+    setReply('GET', '/mcp-servers', { status: 200, body: STORED });
+    setReply('PUT', '/mcp-servers', {
+      status: 200,
+      body: {
+        names: Object.keys(STORED.mcpServers),
+        updatedAt: 'x',
+        appliesFrom: 'y',
+        runners: [],
+      },
+    });
+    const dir = await makeTempDir('alteroid-cli-mcp-set-');
+    const path = join(dir, '.mcp.json');
+    const reordered = Object.fromEntries(Object.entries(STORED.mcpServers).reverse());
+    await writeFile(path, JSON.stringify({ mcpServers: reordered }), 'utf8');
+    captureStdout();
+    const restore = pretendTty(false);
+    try {
+      await mcpSetCommand(path);
+    } finally {
+      restore();
+    }
+    expect(sent.some((entry) => entry.method === 'PUT')).toBe(true);
+  });
+
+  it('clear: 何も置いていなければ失うものが無いので、確認なしで通る', async () => {
+    setReply('GET', '/mcp-servers', { status: 200, body: { mcpServers: {} } });
+    setReply('PUT', '/mcp-servers', {
+      status: 200,
+      body: { names: [], updatedAt: 'x', appliesFrom: 'y', runners: [] },
+    });
+    captureStdout();
+    const restore = pretendTty(false);
+    try {
+      await mcpClearCommand();
+    } finally {
+      restore();
+    }
+    expect(sent.some((entry) => entry.method === 'PUT')).toBe(true);
   });
 });

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { captureStdout } from './test-support.js';
+import { captureStdout, pretendTty } from './test-support.js';
 
 /**
  * `alteroid access` — 誰が alteroid を使えるかを CLI から見えること。
@@ -30,8 +30,12 @@ vi.mock('./target.js', async (importOriginal) => ({
     }),
 }));
 
-const { accessListCommand, accessOwnerCommand, accessRemoveUnreadableCommand } =
-  await import('./access.js');
+const {
+  accessListCommand,
+  accessOwnerCommand,
+  accessRemoveUnreadableCommand,
+  accessRevokeCommand,
+} = await import('./access.js');
 
 interface Sent {
   url: string;
@@ -475,7 +479,7 @@ describe('alteroid access remove-unreadable（issue #2440）', () => {
     replies.push({ status: 200, body: { removedIds: ['row-1', 'row-2'], count: 2 } });
     const read = captureStdout();
 
-    await accessRemoveUnreadableCommand(['row-1', 'row-2']);
+    await accessRemoveUnreadableCommand(['row-1', 'row-2'], { yes: true });
 
     expect(sent).toHaveLength(1);
     expect(sent[0]?.url).toBe('http://127.0.0.1:4517/access/unreadable/remove');
@@ -489,9 +493,9 @@ describe('alteroid access remove-unreadable（issue #2440）', () => {
   it('404（指した id が読めない行に無い）は、何も消していないと言って投げる。指した文字列は映さない', async () => {
     replies.push({ status: 404, body: { error: 'x' } });
 
-    const error = await accessRemoveUnreadableCommand(['FAKE_SECRET_VALUE_2440']).catch(
-      (e: unknown) => e,
-    );
+    const error = await accessRemoveUnreadableCommand(['FAKE_SECRET_VALUE_2440'], {
+      yes: true,
+    }).catch((e: unknown) => e);
 
     expect(error).toBeInstanceOf(Error);
     expect((error as Error).message).toContain('何も消していません');
@@ -502,7 +506,7 @@ describe('alteroid access remove-unreadable（issue #2440）', () => {
   it('500 はデーモンの理由を載せて投げる', async () => {
     replies.push({ status: 500, body: { error: '保存できなかった（テスト用）' } });
 
-    await expect(accessRemoveUnreadableCommand(['row-1'])).rejects.toThrow(/500/);
+    await expect(accessRemoveUnreadableCommand(['row-1'], { yes: true })).rejects.toThrow(/500/);
   });
 });
 
@@ -543,5 +547,41 @@ describe('alteroid access list — 読めない行（issue #2536）', () => {
     // 読めない行しか無いのに「誰もログインしていない」とは言わない。
     expect(text).not.toContain('まだ誰もログインしていません。');
     expect(text).toContain('誰もログインしていない、とは言えない');
+  });
+});
+
+describe('alteroid access revoke（#3141）', () => {
+  it('--yes なら POST /access/:id/revoke を叩く。トークンが通らなくなると言う', async () => {
+    replies.push({ status: 200, body: { account: { id: 'acc-1', email: 'a@example.com' } } });
+    const read = captureStdout();
+
+    await accessRevokeCommand('acc-1', { yes: true });
+
+    expect(sent.map((entry) => `${entry.method} ${new URL(entry.url).pathname}`)).toEqual([
+      'POST /access/acc-1/revoke',
+    ]);
+    expect(read()).toContain('許可を取り消しました: a@example.com');
+  });
+
+  it('端末でなく --yes も無ければ、HTTP に出ずに断る（許可は残る）', async () => {
+    const restore = pretendTty(false);
+    try {
+      await expect(accessRevokeCommand('acc-1')).rejects.toThrow('--yes');
+    } finally {
+      restore();
+    }
+    expect(sent).toEqual([]);
+  });
+});
+
+describe('alteroid access remove-unreadable の確認（#3141）', () => {
+  it('端末でなく --yes も無ければ、HTTP に出ずに断る（消えていない）', async () => {
+    const restore = pretendTty(false);
+    try {
+      await expect(accessRemoveUnreadableCommand(['row-1'])).rejects.toThrow('--yes');
+    } finally {
+      restore();
+    }
+    expect(sent.length).toBe(0);
   });
 });
