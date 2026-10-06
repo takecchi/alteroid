@@ -50,9 +50,12 @@ export function settleApprovalDraft(
   id: string,
   sent: SentDraft,
 ): ApprovalDrafts {
-  const keepText = id in current.texts && current.texts[id] !== sent.text;
+  // 送ったあとに空へ戻した欄は、残すものが無いので畳む（空の項目を保存先に残さない）。
+  const text = current.texts[id];
+  const keepText = text !== undefined && text !== '' && text !== sent.text;
+  const form = current.questions[id];
   const keepQuestions =
-    id in current.questions && !sameQuestions(current.questions[id], sent.questions);
+    form !== undefined && !isEmptyQuestionsDraft(form) && !sameQuestions(form, sent.questions);
   const dropText = id in current.texts && !keepText;
   const dropQuestions = id in current.questions && !keepQuestions;
   if (!dropText && !dropQuestions) return current;

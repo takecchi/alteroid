@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
+import type { StoredQuestionsDraft } from './approval-drafts.js';
 import { describeApprovalLeftover, settleApprovalDraft } from './approval-leftovers.js';
 
-const form = (supplement: string, chosen: string[] = []) => ({
+const form = (supplement: string, chosen: string[] = []): StoredQuestionsDraft => ({
   drafts: chosen.length === 0 ? {} : { q: { chosen, other: '', otherOn: false } },
   supplement,
 });
@@ -24,6 +25,14 @@ describe('settleApprovalDraft（issue #3515）', () => {
       { text: '答え', questions: form('補', ['x']) },
     );
     expect(next).toEqual({ texts: { a: '答え+' }, questions: {} });
+  });
+
+  it('送ったあとに空へ戻した欄は、残さずに畳む', () => {
+    const next = settleApprovalDraft({ texts: { a: '' }, questions: { a: form('') } }, 'a', {
+      text: '答え',
+      questions: form('補', ['x']),
+    });
+    expect(next).toEqual({ texts: {}, questions: {} });
   });
 
   it('何も変わらないときは同じ参照を返す', () => {
