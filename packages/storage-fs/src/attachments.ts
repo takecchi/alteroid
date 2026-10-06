@@ -10,6 +10,7 @@ import {
   hasNul,
   isAttachmentPrunable,
   prepareAttachment,
+  reasonOf,
   readAttachmentLimits,
   type AttachmentBindResult,
   type AttachmentBindTarget,
@@ -196,6 +197,11 @@ export class FsAttachmentStore implements AttachmentStore {
     return unbound;
   }
 
+  /**
+   * 掃除。**判定と `rm` は `bind` / `unbind` と同じロック（meta.json）の中で行い、ロックを取ってから
+   * 判定し直す**——外で読んだあとに `bind` が通っても、結び付けた直後の添付を消さない。ディレクトリごとに
+   * 失敗を受け止めて次へ進む（1件の `rm` の失敗で周回を止めない）。戻り値は消せた件数。
+   */
   async prune(now: Date): Promise<number> {
     let names: string[];
     try {
@@ -205,21 +211,39 @@ export class FsAttachmentStore implements AttachmentStore {
       throw error;
     }
     let count = 0;
+    const failures: string[] = [];
     for (const name of names) {
       if (!ID_PATTERN.test(name)) continue;
       const dir = join(this.#dir, name);
-      const meta = await this.#readMeta(dir);
-      if (meta === undefined) {
+      try {
+        // 先に外で読み、消す気の無いものはロックを取らずに飛ばす。消す側はロックの中で判定し直す。
+        const meta = await this.#readMeta(dir);
         // 控えの無い（書きかけ・壊れた）ディレクトリは、作ってから1時間たったら片付ける。
-        const info = await stat(dir).catch(() => undefined);
-        if (info === undefined || info.mtimeMs + ATTACHMENT_UNBOUND_TTL_MS > now.getTime())
-          continue;
-      } else if (!isAttachmentPrunable(meta, now)) {
-        continue;
+        // 更新時刻はロックを取る前に見る（ロックファイルを置くとディレクトリの更新時刻が進むため）。
+        const staleOrphan = meta === undefined && (await this.#isStaleOrphan(dir, now));
+        if (meta === undefined ? !staleOrphan : !isAttachmentPrunable(meta, now)) continue;
+        const removed = await withPathLock(join(dir, META_FILE), async () => {
+          const latest = await this.#readMeta(dir);
+          if (latest === undefined ? !staleOrphan : !isAttachmentPrunable(latest, now))
+            return false;
+          await rm(dir, { recursive: true, force: true });
+          return true;
+        });
+        if (removed) count += 1;
+      } catch (error) {
+        failures.push(`${name}: ${reasonOf(error)}`);
       }
-      await rm(dir, { recursive: true, force: true });
-      count += 1;
+    }
+    if (failures.length > 0) {
+      process.stderr.write(
+        `alteroidd: 添付ファイルの掃除で ${failures.length} 件を消せなかった: ${failures.join('; ')}\n`,
+      );
     }
     return count;
+  }
+
+  async #isStaleOrphan(dir: string, now: Date): Promise<boolean> {
+    const info = await stat(dir).catch(() => undefined);
+    return info !== undefined && info.mtimeMs + ATTACHMENT_UNBOUND_TTL_MS <= now.getTime();
   }
 }
