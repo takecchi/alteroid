@@ -73,3 +73,20 @@ export function pretendTty(isTty: boolean): () => void {
     });
   };
 }
+
+/**
+ * 標準入力だけが端末（TTY）かどうかを、テストの間だけ決め打ちする。`chat`（REPL）は、標準入力が端末でない
+ * ときだけ「送信が失敗したら止まる」（#3413）。標準出力は変えない（貼り付けの印などの制御文字が出ない）。
+ */
+export function pretendStdinTty(isTty: boolean): () => void {
+  const saved = Object.getOwnPropertyDescriptor(process.stdin, 'isTTY');
+  Object.defineProperty(process.stdin, 'isTTY', {
+    value: isTty,
+    configurable: true,
+    writable: true,
+  });
+  return () => {
+    if (saved === undefined) Reflect.deleteProperty(process.stdin, 'isTTY');
+    else Object.defineProperty(process.stdin, 'isTTY', saved);
+  };
+}

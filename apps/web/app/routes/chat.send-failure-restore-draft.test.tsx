@@ -142,7 +142,9 @@ describe('#3064: 送信が失敗したら書いた文を失わせない', () => 
 
     renderChat(`/chat/${A}`);
     await typeAndSend('一つ目');
-    expect(await screen.findByRole('button', { name: '受信をやめる' })).toBeTruthy();
+    expect(
+      await screen.findByRole('button', { name: '受信をやめる（クローンのターンは止まらない）' }),
+    ).toBeTruthy();
     await typeAndSend(LONG);
 
     expect(await screen.findByText(BOOM)).toBeTruthy();
@@ -211,7 +213,9 @@ describe('#3064: 送信が失敗したら書いた文を失わせない', () => 
 
     const { router } = renderChat(`/chat/${A}`);
     await typeAndSend('一つ目');
-    expect(await screen.findByRole('button', { name: '受信をやめる' })).toBeTruthy();
+    expect(
+      await screen.findByRole('button', { name: '受信をやめる（クローンのターンは止まらない）' }),
+    ).toBeTruthy();
     await typeAndSend(LONG);
     await router.navigate(`/chat/${B}`);
     expect(await findShownConversation(B)).toBeTruthy();
