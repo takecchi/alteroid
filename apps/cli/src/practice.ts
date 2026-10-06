@@ -145,7 +145,7 @@ export async function practiceShowCommand(
     }
     const body = await response.json();
     const content = 'version' in body ? body.version.content : '';
-    stdout.write(content.endsWith('\n') ? content : `${content}\n`);
+    writeShownBody(stdout, content.endsWith('\n') ? content : `${content}\n`);
     return;
   }
 
