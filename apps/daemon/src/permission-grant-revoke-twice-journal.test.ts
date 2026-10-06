@@ -14,6 +14,7 @@ import { createMigratedPglite, migratedTemplate } from './pglite-template.test-s
 
 function stubCloneHost(): CloneHost {
   return {
+    postPersisted: async () => 'persisted',
     post: () => undefined,
     dropQueuedInboxEvents: async () => 0,
     subscribe: () => () => undefined,

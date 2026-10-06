@@ -53,6 +53,7 @@ const json = (body: unknown) => ({
 function fakeCloneHost(stores: Stores): CloneHost & { answered: string[] } {
   const answered: string[] = [];
   return {
+    postPersisted: async () => 'persisted',
     answered,
     post: () => {},
     recycleSessionForToken: () => {},

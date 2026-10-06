@@ -27,6 +27,7 @@ const ALL_VALUES = [V_A, V_B, V_C, V_NEW];
 
 function stubCloneHost(): CloneHost {
   return {
+    postPersisted: async () => 'persisted',
     post: () => undefined,
     dropQueuedInboxEvents: async () => 0,
     subscribe: () => () => undefined,

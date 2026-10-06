@@ -573,7 +573,7 @@
         "operationId": "postChat",
         "tags": ["chat"],
         "summary": "クローンと話す（SSE）",
-        "description": "人間の発言をクローンの受信箱へ積み、クローンの応答を SSE で流す。**SSE。** `event:` にイベント名（`open` / `queued` / `text` / `thinking` / `tool` / `ask_human` / `done` / `error`）、`data:` に対応する JSON が入る。`data:` の 形は下記スキーマ（`open` は `{conversationId, clientMessageId?}`（重複の再送のときは `duplicate: true` も）で別枠、他は `chatStreamEventSchema` の各枝）。人間が chat を閉じてもクローンのターンは走り続ける（人間の不在で止まるのは承認待ちの仕事だけ）。**`queued` と `thinking` は別の状態である。** `queued` は受信箱に積んだ（受理したが順番待ち。先客のターンが走っていれば、ここで数分待つことがある）、`thinking` は入力がモデルへ渡って最初の出力を待っている。前者の後に後者が来る。**発言が日誌に載るのも `queued` の時点である**ので、`GET /conversations` にはターンの順番を待たずに現れる。**コメント行（`:` で始まる行）の heartbeat が周期的に流れる。SSE の仕様上クライアントは読み捨ててよい**（無音のまま死んだ接続を掃除するための送信でもある）。**`supersedes` — 送信済みの人間の発言を編集する。** この会話の中の、自分の過去の発言（`role: inbound`）の id を渡すと、その発言は既定ビュー・`conversation_read` から畳まれ、この発言が編集後の版として応答を受ける（編集前のターンで起きた副作用——承認待ち・記憶・マネージャー・台帳の行——は一切取り消さない）。`conversationId` と併せて渡すこと。編集できるのは**人間の発言だけ**（クローンの応答は指せない）。**`clientMessageId` — 送った側が発言ごとに作る一意な id（任意。英数字・`_` `-` の1〜128字）。** 受信箱の発言と日誌の発言に残り、`open` と `GET /conversations/:id` の `messages` で返る（送った側が、自分の発言が履歴に現れたかを本文でなく id で確かめられる）。**同じ値が再び届いたら二重に受けない**——何も積まず、`open`（`duplicate: true`）の後、進行中のターンがあれば途中経過から続きを流して閉じる（`GET /chat/:conversationId/stream` と同じ）。ただし**中身（本文・添付の id の集合・`supersedes`）が1回目と違う**なら、黙って捨てずに 409（`client_message_id_mismatch`）。別の会話で受け取り済みの値も 409（`client_message_id_conflict`）。重複の判定は、直近の日誌（人間との往復200件）と受け取り直後の記憶で行う。",
+        "description": "人間の発言をクローンの受信箱へ積み、クローンの応答を SSE で流す。**⚠️ `open`（200）は「受け付けた」であって、受信箱（器）への永続化の完了ではない。** 発言は `open` を書く前にクローンへ渡すが、器への書き込みは待たない（失敗しても応答は成功のままで、失敗は stderr にだけ残る。書けなかった発言はこのプロセスが生きているあいだは配達されるが、再起動・デプロイを挟むと失われる）。永続化できたときだけ成功を返す口は `POST /events`・`POST /events/:source`。**SSE。** `event:` にイベント名（`open` / `queued` / `text` / `thinking` / `tool` / `ask_human` / `done` / `error`）、`data:` に対応する JSON が入る。`data:` の 形は下記スキーマ（`open` は `{conversationId, clientMessageId?}`（重複の再送のときは `duplicate: true` も）で別枠、他は `chatStreamEventSchema` の各枝）。人間が chat を閉じてもクローンのターンは走り続ける（人間の不在で止まるのは承認待ちの仕事だけ）。**`queued` と `thinking` は別の状態である。** `queued` は受信箱に積んだ（受理したが順番待ち。先客のターンが走っていれば、ここで数分待つことがある）、`thinking` は入力がモデルへ渡って最初の出力を待っている。前者の後に後者が来る。**発言が日誌に載るのも `queued` の時点である**ので、`GET /conversations` にはターンの順番を待たずに現れる。**コメント行（`:` で始まる行）の heartbeat が周期的に流れる。SSE の仕様上クライアントは読み捨ててよい**（無音のまま死んだ接続を掃除するための送信でもある）。**`supersedes` — 送信済みの人間の発言を編集する。** この会話の中の、自分の過去の発言（`role: inbound`）の id を渡すと、その発言は既定ビュー・`conversation_read` から畳まれ、この発言が編集後の版として応答を受ける（編集前のターンで起きた副作用——承認待ち・記憶・マネージャー・台帳の行——は一切取り消さない）。`conversationId` と併せて渡すこと。編集できるのは**人間の発言だけ**（クローンの応答は指せない）。**`clientMessageId` — 送った側が発言ごとに作る一意な id（任意。英数字・`_` `-` の1〜128字）。** 受信箱の発言と日誌の発言に残り、`open` と `GET /conversations/:id` の `messages` で返る（送った側が、自分の発言が履歴に現れたかを本文でなく id で確かめられる）。**同じ値が再び届いたら二重に受けない**——何も積まず、`open`（`duplicate: true`）の後、進行中のターンがあれば途中経過から続きを流して閉じる（`GET /chat/:conversationId/stream` と同じ）。ただし**中身（本文・添付の id の集合・`supersedes`）が1回目と違う**なら、黙って捨てずに 409（`client_message_id_mismatch`）。別の会話で受け取り済みの値も 409（`client_message_id_conflict`）。重複の判定は、直近の日誌（人間との往復200件）と受け取り直後の記憶で行う。",
         "responses": {
           "200": {
             "description": "SSE ストリーム。",
@@ -16671,7 +16671,7 @@
         "description": "自作ツール・ショートカット・CI からクローンへ出来事を届ける。何をするかはここで決めない（対応表を持った瞬間に自動化ジョブに戻る）。**`attachments`（任意）— `POST /attachments` が返した id を渡すと、その添付がクローンのターンへ届く（画像はモデルへの入力として、すべての添付は通知行として）。** 検証と結び付けは投函の前に行い、断るときはイベントを投函しない。**連携の鍵（`altk_`）で送るときは、その鍵自身が`POST /attachments` で上げた添付だけ**付けられる（別の鍵・アカウント・operator が上げたものは 400）。人間・operator は `POST /chat` と同じ規則（上げた主体は問わない）。結び付いた添付は別のイベント・会話へ使い回せない。",
         "responses": {
           "200": {
-            "description": "受信箱へ積んだ。",
+            "description": "受信箱へ**永続化できた**（器へ書けてから返す。以後は配達される）。**この応答を受けたら送り直さない**（二重に届く）。",
             "content": {
               "application/json": {
                 "schema": {
@@ -16797,6 +16797,22 @@
                 }
               }
             }
+          },
+          "503": {
+            "description": "受信箱へ永続化できなかった（器への書き込みが、拾い直しの後も失敗した）。**イベントは受け付けていない** — 受信箱のメモリにも積んでいないので、送り直してよい（二重には届かない）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
           }
         },
         "requestBody": {
@@ -16843,7 +16859,7 @@
         },
         "responses": {
           "200": {
-            "description": "受信箱へ積んだ。",
+            "description": "受信箱へ**永続化できた**（器へ書けてから返す。以後は配達される）。**この応答を受けたら送り直さない**（二重に届く）。",
             "content": {
               "application/json": {
                 "schema": {
@@ -16972,6 +16988,22 @@
           },
           "429": {
             "description": "連携の鍵の回数の上限（既定 60 回/分）を超えた。`Retry-After`（秒）の後でやり直す。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "受信箱へ永続化できなかった（器への書き込みが、拾い直しの後も失敗した）。**イベントは受け付けていない** — 受信箱のメモリにも積んでいないので、送り直してよい（二重には届かない）。",
             "content": {
               "application/json": {
                 "schema": {

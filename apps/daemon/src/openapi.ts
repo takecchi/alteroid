@@ -3260,6 +3260,9 @@ export async function buildOpenApiDocument(): Promise<unknown> {
     post() {
       throw new Error('spec 生成専用のスタブ: 受信箱には積まない');
     },
+    postPersisted() {
+      throw new Error('spec 生成専用のスタブ: 受信箱には積まない');
+    },
     dropQueuedInboxEvents() {
       throw new Error('spec 生成専用のスタブ: 配達の待ち行列は無い');
     },

@@ -36,6 +36,9 @@ export type AnswerApprovalVia =
   | { kind: 'operator'; auth: 'disabled' | 'operator-token' }
   | { kind: 'account'; accountId: string };
 
+/** {@link CloneHost.postPersisted} の結果。 */
+export type PostPersistOutcome = 'persisted' | 'unavailable';
+
 /**
  * デーモンから見たクローン。
  *
@@ -45,6 +48,21 @@ export type AnswerApprovalVia =
 export interface CloneHost {
   /** 受信箱へイベントを積む。起点が人間でもタイマーでも入口はここ1つ。 */
   post(event: InboxEvent): void;
+
+  /**
+   * **受信箱（`stores.inbox`）へ書けたかを返す投函**（Issue #3679）。`post` と違い、書き込みの
+   * 結果を待つ。HTTP の `POST /events`・`POST /events/:source` が「200 は永続化できたときだけ」を
+   * 守るために使う。
+   *
+   * - `'persisted'` — 器へ書けた（以後は `post` と同じく配達される。片付けの窓に当たった場合も、
+   *   行は器に在り次の起動で配り直される）。
+   * - `'unavailable'` — 拾い直しが尽きても書けなかった。**受信箱のメモリにも積んでいない**
+   *   （積むと、失敗を受けた呼び手の送り直しと二重に届く）。呼び手は 503 で断る。
+   *
+   * **reject しない**（失敗は戻り値で返す）。`post` の呼び手（定期の依頼・内部の起点・`POST /chat`）は
+   * これを使わず、挙動は変わらない。
+   */
+  postPersisted(event: InboxEvent): Promise<PostPersistOutcome>;
 
   /**
    * **器から消した合図の配達を止める**（issue #1049）。戻り値は実際に配達待ち

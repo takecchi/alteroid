@@ -33,6 +33,7 @@ afterAll(() => {
 
 function fakeCloneHost(stores: Stores): CloneHost {
   return {
+    postPersisted: async () => 'persisted',
     post: () => {},
     recycleSessionForToken: () => {},
     subscribe: () => () => {},

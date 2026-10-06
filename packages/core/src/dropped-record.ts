@@ -119,6 +119,28 @@ export function noteInboxEventLost(detail: string, error: unknown): void {
 }
 
 /**
+ * 受信箱へ書けなかった合図を、**受理せずに呼び手へ失敗を返した**ことを stderr へ1行残す
+ * （Issue #3679。`Clone#postPersisted`）。
+ *
+ * **`noteInboxEventKeptInMemoryOnly` と逆の判断である。** あちらは「メモリの待ち行列に残して配達する」
+ * 経路（`post`）の跡で、呼び手には成功が返っている。こちらは呼び手（HTTP の `POST /events*`）へ 503 を
+ * 返す経路で、**メモリにも積んでいない** —— 積むと、失敗を受けた相手の送り直しと二重に届く。
+ * 「失った」でもない（呼び手は失敗を知っており、送り直せる）ので、専用の文言を持つ。
+ *
+ * **本文は出さない。** 理由は `noteDroppedRecord` と同じ（#52）。
+ *
+ * @param detail 本文を含まない見分け（`inboxEventShape` で作る）
+ * @param error 最後の拾い直しで実際に投げられたエラー
+ */
+export function noteInboxEventRefused(detail: string, error: unknown): void {
+  const tail = detail === '' ? '' : `（${detail}）`;
+  note(
+    `合図を受信箱へ書けなかったので受理しなかった${tail}: ${reasonOf(error)}。` +
+      '呼び手へは失敗を返した。メモリの待ち行列にも積んでいない（送り直しと二重に届くのを避けるため）。',
+  );
+}
+
+/**
  * 記録の**読み出し**に失敗したことを stderr へ1行だけ残す。
  *
  * **書けなかった側（`noteDroppedRecord`）と対になる。** あちらの理由がそのまま

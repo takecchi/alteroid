@@ -14,6 +14,7 @@ function setup() {
   const stores = createMemoryStores();
   const answered: string[] = [];
   const clone: CloneHost = {
+    postPersisted: async () => 'persisted',
     post: () => {},
     recycleSessionForToken: () => {},
     subscribe: () => () => {},

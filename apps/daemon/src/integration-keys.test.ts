@@ -35,6 +35,10 @@ function fakeClone(): CloneHost {
       posted.push(event);
       return 'conversation-1';
     },
+    postPersisted: async (event: InboxEvent) => {
+      posted.push(event);
+      return 'persisted' as const;
+    },
     subscribe: () => () => undefined,
     stop: () => Promise.resolve(),
   } as unknown as CloneHost;

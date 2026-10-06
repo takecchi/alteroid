@@ -28,6 +28,7 @@ const FAKE_VALUE = 'FAKE_SECRET_VALUE_2429';
 
 function fakeCloneHost(stores: Stores): CloneHost {
   return {
+    postPersisted: async () => 'persisted',
     post: () => {},
     recycleSessionForToken: () => {},
     subscribe: () => () => {},

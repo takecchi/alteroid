@@ -111,10 +111,11 @@ import {
   noteInboxEventKeptInMemoryOnly,
   noteCloneSessionIdNotRecorded,
   noteInboxEventLost,
+  noteInboxEventRefused,
   noteUnreadableRecord,
   reasonOf,
 } from './dropped-record.js';
-import type { AnswerApprovalVia, CloneHost } from './host.js';
+import type { AnswerApprovalVia, CloneHost, PostPersistOutcome } from './host.js';
 import { createRunnerRegistry, type RunnerClient } from './runner-protocol.js';
 import {
   createManagerPool,
@@ -2614,6 +2615,32 @@ class Clone implements CloneHost {
   // -------------------------------------------------------------------------
 
   post(event: InboxEvent): void {
+    this.#admit(event, false);
+  }
+
+  /**
+   * **受信箱へ書けたかを返す投函**（Issue #3679。`CloneHost.postPersisted`）。
+   *
+   * `post` と同じ入口（`#admit`）を通り、**違うのは「器への書き込みを待ってから積む」ことと、書けなかった
+   * ときの扱いだけ**である。書けなかったら受信箱のメモリにも積まず、日誌・台帳にも載せず、`'unavailable'`
+   * を返す。呼び手が 503 で断り、相手が送り直しても、同じ合図が2回届くことは無い。
+   *
+   * **書けなかった合図が配達されない理由は、二重配達の回避である。** `post` は書けなくてもメモリに積んで
+   * 配達する（このプロセスが生きているあいだ）。それを 503 と組み合わせると、断られた相手が送り直した
+   * 回で同じ出来事が2回届く。外部イベントの id はデーモンが採番する（呼び手は付けない）ので、id で
+   * 重複を弾くこともできない。
+   */
+  postPersisted(event: InboxEvent): Promise<PostPersistOutcome> {
+    return Promise.resolve(this.#admit(event, true) ?? 'persisted');
+  }
+
+  /**
+   * `post` の本体。**`durable: false` のときは従来と1行も変わらず同期で終わる**（戻り値は無い）。
+   * `durable: true` のときだけ、器への書き込みが要る分岐（片付けの窓・通常の積み込み）が Promise を返す。
+   * 畳み込みで済む分岐（書き込みが要らない）は `undefined` を返し、呼び手は `'persisted'` と読む
+   * （畳み先の代表は既に器に在る）。
+   */
+  #admit(event: InboxEvent, durable: boolean): Promise<PostPersistOutcome> | undefined {
     // 片付け中に届いたものは、**このプロセスでは**処理できない（`stop()` の直後に
     // `storage.close()` → `process.exit(0)` が来る）。だが**次の起動でなら処理できる。**
     //
@@ -2649,6 +2676,8 @@ class Clone implements CloneHost {
       // ——任せる先のターンがそもそも起きない。⟹ 本文を日誌へ残す役目も
       // `#foldIntoPendingCollapse` 側が引き受ける（`PendingCollapseVerdict`）。
       if (this.#foldIntoPendingCollapse(event, { canQueue: false }) !== 'pass') return;
+      // 書き込みの成否を返す呼びなら、書けなかったことを呼び手へ返す（`post` はここで失ったと跡を残すだけ）。
+      if (durable) return this.#persistThenSettleClosed(event);
       // **同じ `canQueue: false` を `#remember` へも流す（issue #1144）。**
       // この窓は `#inbox.push` を一度も通らないので、`#remember` の拾い直しが
       // 尽きたときの跡は「失った」と名乗るべきで、「メモリの待ち行列に残る」
@@ -2798,6 +2827,9 @@ class Clone implements CloneHost {
       // `#postedBeforeRestored` の doc）。`#remember` の書き込みを
       // `claimPending()` が拾っても、配り直しの側で飛ばせるようにする。
       if (!this.#restorePassFinished) this.#postedBeforeRestored.add(event.id);
+      // **書き込みの成否を返す呼びは、書けてから積む**（`#persistThenEnqueue`）。ここから先
+      // （`#record`・`#commit`・`#enqueue`）はその中で同じ順に行う。
+      if (durable) return this.#persistThenEnqueue(event);
       this.#remember(event, { canQueue: true });
       // 受理した瞬間に日誌へ載せて合図を出す。**器へ書くのと同じ場所である**
       // （`#remember` の隣）。
@@ -2808,6 +2840,14 @@ class Clone implements CloneHost {
       // 「処理に失敗した依頼」だけが台帳に載らない。
       this.#commit(event);
     }
+    this.#enqueue(event);
+    return undefined;
+  }
+
+  /**
+   * `#admit` の最後の1手: メモリ上の待ち行列へ積む。`post` と `#persistThenEnqueue` が同じ手で積む。
+   */
+  #enqueue(event: InboxEvent): void {
     // **人間が待っている合図は、待ち行列の人間の最後尾へ入れる**（`Inbox#push` の
     // `insertAfterLast`）。人間どうしは追い越さず、人間以外は飛び越す。
     //
@@ -2827,6 +2867,64 @@ class Clone implements CloneHost {
       event,
       this.#humanPriority && isHumanOriginated(event) ? isHumanOriginated : undefined,
     );
+  }
+
+  /**
+   * `postPersisted` の通常経路。**器へ書けてから**、`post` と同じ順（未読の控え → 日誌 → 台帳 → 待ち行列）で
+   * 積む。書けなかったら何も積まない。
+   *
+   * - 書けなかった: 書きかけが残っていれば**消す**（`#rollbackUnread`。書き込みが「失敗」を返しつつ実は
+   *   通っていた場合に、次の起動の配り直しで二重に届くのを避ける）。`'unavailable'`。
+   * - 待っている間に片付けが始まった: 受信箱は閉じていて積めない。行は器に在るので次の起動で配り直される。
+   *   `post` の片付けの窓と同じ後始末（台帳・跡）だけして `'persisted'`。
+   *
+   * **配り直しの窓**（`#postedBeforeRestored`）への id の登録は呼び出し元が書き込みの前に済ませている。
+   */
+  async #persistThenEnqueue(event: InboxEvent): Promise<PostPersistOutcome> {
+    const failure = await this.#tryPersistUnread(event);
+    if (failure !== null) {
+      await this.#rollbackUnread(event);
+      noteInboxEventRefused(inboxEventShape(event), failure.error);
+      return 'unavailable';
+    }
+    this.#inboxFlow.arrived(event.type);
+    this.#delivery.setUnread(event.id, Promise.resolve());
+    if (this.#sdkSession.stopped || this.#delivery.inbox.closed) {
+      this.#commit(event);
+      noteDroppedInboxEvent(event);
+      return 'persisted';
+    }
+    this.#record(event);
+    this.#commit(event);
+    this.#enqueue(event);
+    return 'persisted';
+  }
+
+  /** `postPersisted` の片付けの窓の経路（`post` の同じ窓の、書き込みの成否を返す版）。 */
+  async #persistThenSettleClosed(event: InboxEvent): Promise<PostPersistOutcome> {
+    const failure = await this.#tryPersistUnread(event);
+    if (failure !== null) {
+      await this.#rollbackUnread(event);
+      noteInboxEventRefused(inboxEventShape(event), failure.error);
+      return 'unavailable';
+    }
+    this.#inboxFlow.arrived(event.type);
+    this.#delivery.setUnread(event.id, Promise.resolve());
+    this.#commit(event);
+    noteDroppedInboxEvent(event);
+    return 'persisted';
+  }
+
+  /**
+   * 書き込みが「失敗」を返したが実は通っていた場合に備え、その行を1回だけ消しにいく。**失敗しても何もしない**
+   * （消せなければ、次の起動で配り直される1件が残りうる。そこまでは塞げない — PR #3679 の本文）。
+   */
+  async #rollbackUnread(event: InboxEvent): Promise<void> {
+    try {
+      await this.#stores.inbox.remove(event.id);
+    } catch {
+      // 書けない器に消しも通らないのは想定内。跡は `noteInboxEventRefused` が残す。
+    }
   }
 
   /**
@@ -5329,6 +5427,21 @@ class Clone implements CloneHost {
    * 同じ——変わるのは、尽きたときに何を stderr へ残すかだけである。
    */
   async #persistUnread(event: InboxEvent, options: { readonly canQueue: boolean }): Promise<void> {
+    const failure = await this.#tryPersistUnread(event);
+    if (failure === null) return;
+    if (options.canQueue) {
+      noteInboxEventKeptInMemoryOnly(inboxEventShape(event), failure.error);
+    } else {
+      noteInboxEventLost(inboxEventShape(event), failure.error);
+    }
+  }
+
+  /**
+   * `#persistUnread` の書き込み部分（拾い直しの回数・間隔はここ1か所）。書けたら `null`、尽きたら最後の
+   * エラーを返す（reject しない）。跡を残すかどうかは呼び手が決める（`post` は残して続行、
+   * `postPersisted` は呼び手へ失敗を返す）。
+   */
+  async #tryPersistUnread(event: InboxEvent): Promise<{ readonly error: unknown } | null> {
     let last: unknown;
     for (let attempt = 0; attempt < REMEMBER_RETRY_ATTEMPTS; attempt += 1) {
       if (attempt > 0) {
@@ -5336,16 +5449,12 @@ class Clone implements CloneHost {
       }
       try {
         await this.#stores.inbox.put(event, event.at);
-        return;
+        return null;
       } catch (error) {
         last = error;
       }
     }
-    if (options.canQueue) {
-      noteInboxEventKeptInMemoryOnly(inboxEventShape(event), last);
-    } else {
-      noteInboxEventLost(inboxEventShape(event), last);
-    }
+    return { error: last };
   }
 
   /**

@@ -63,6 +63,7 @@ const BAD_ROWS = [BAD_RAW, BAD_OTHER_CONV, BAD_NO_CONV, BAD_NUM_CONV];
 
 function fakeCloneHost(stores: Stores): CloneHost {
   return {
+    postPersisted: async () => 'persisted',
     post: () => {},
     recycleSessionForToken: () => {},
     subscribe: () => () => {},

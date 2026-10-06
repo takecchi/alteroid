@@ -19,6 +19,7 @@ import { createApp } from './app.js';
 function setup() {
   const stores = createMemoryStores();
   const clone: CloneHost = {
+    postPersisted: async () => 'persisted',
     post: () => {},
     recycleSessionForToken: () => {},
     subscribe: () => () => {},

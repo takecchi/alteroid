@@ -114,6 +114,7 @@ function poolOver(stores: Stores): ManagerPool {
 
 function stubCloneHost(stores: Stores): CloneHost {
   return {
+    postPersisted: async () => 'persisted',
     post: () => undefined,
     dropQueuedInboxEvents: async () => 0,
     subscribe: () => () => undefined,

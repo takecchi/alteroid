@@ -21,6 +21,7 @@ describe('POST /approvals/answer の results[].error（#2509）', () => {
       question: '進めてよいか',
     });
     const clone: CloneHost = {
+      postPersisted: async () => 'persisted',
       post: () => {},
       recycleSessionForToken: () => {},
       subscribe: () => () => {},
