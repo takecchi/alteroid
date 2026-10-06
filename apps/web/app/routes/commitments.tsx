@@ -2,6 +2,7 @@ import { WorkTabs } from '~/components/group-tabs';
 import { LoadError } from '~/components/load-error';
 import { useReportDirty, LeaveGuardScope } from '~/lib/leave-guard';
 import { useLatest } from '~/lib/use-latest';
+import { useMinuteNow } from '~/lib/use-now';
 import { unsentInput } from '~/lib/unsent-input';
 import { AlertTriangle } from 'lucide-react';
 import { Fragment, useEffect, useId, useState } from 'react';
@@ -1138,6 +1139,8 @@ function OpenRow({ commitment }: { commitment: Commitment }) {
   const closeCommitment = useCloseCommitment();
   const reasonId = useId();
   const reasonHintId = useId();
+  // 「N分前」を分の時計で動かす（#3748。刻みは全行で1本）。
+  const now = useMinuteNow();
   const [reason, setReason] = useState('');
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<unknown>(undefined);
@@ -1201,7 +1204,7 @@ function OpenRow({ commitment }: { commitment: Commitment }) {
         <InProgressBadge commitment={commitment} />
         <span>{formatDateTime(commitment.at)}</span>
         {/* 齢。器は優先度も締切も持たないので、急ぎ方を決める材料はこれだけである。 */}
-        <span>({formatRelative(commitment.at)})</span>
+        <span>({formatRelative(commitment.at, now)})</span>
         <button
           type="button"
           className="ml-auto text-[11px] text-muted-foreground underline hover:text-foreground pointer-coarse:-my-3.5 pointer-coarse:-mr-3 pointer-coarse:px-3 pointer-coarse:py-3.5"
