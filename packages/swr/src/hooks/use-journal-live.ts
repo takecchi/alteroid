@@ -155,6 +155,22 @@ function refetchMounted(mutate: ReturnType<typeof useSWRConfig>['mutate']): void
 }
 
 /**
+ * 台帳（`stores.commitments`）を書く道具の名前（#3784）。
+ *
+ * `commitment_list` は読むだけなので含めない（クローンが一覧を読むたびに画面が
+ * 取り直すことになる）。数え上げの根拠は `@alteroid/core` の `CLONE_TOOL_NAMES` で、
+ * `use-journal-live.test.tsx` がその配列の `commitment_` 始まりと突き合わせる
+ * （道具が増えて名簿が古くなれば、そのテストが落ちる）。core の実行時コードは
+ * 画面のバンドルへ持ち込まないので、ここは写しである。
+ */
+const LEDGER_WRITE_TOOLS: ReadonlySet<string> = new Set([
+  'commitment_open',
+  'commitment_close',
+  'commitment_close_many',
+  'commitment_edit',
+]);
+
+/**
  * 届いた出来事に対応するキャッシュだけを落とす。
  *
  * **`default` の `never` 縛りで網羅性を型に縛ってある。** `schema.ts` の
@@ -193,7 +209,13 @@ function invalidate(entry: JournalEntry, mutate: ReturnType<typeof useSWRConfig>
       void mutate(KEY.report(entry.date));
       break;
     case 'tool_use':
-      // **クローン自身の手の分では落とさない。** 道具はクローンにも全部あり
+      // **台帳を書く道具は、actor を問わず `commitments` を落とす（#3784）。**
+      // 台帳を動かすのは主にクローン自身で、その手の分は下の `isCloneActor` の関門で
+      // `managers` を落とさないので、この分岐は関門より前に置く。
+      if (LEDGER_WRITE_TOOLS.has(entry.tool)) {
+        void mutate((key) => isKeyOfType(key, 'commitments'));
+      }
+      // **クローン自身の手の分では `managers` を落とさない。** 道具はクローンにも全部あり
       // （#32）、その実行も同じ `tool_use` として届く。マネージャーが1つも
       // 動いていないのに `/managers` と開いている詳細・生ログを取り直すと、
       // クローンが自分で作業しているあいだ画面が再取得を続けることになる。
@@ -206,8 +228,14 @@ function invalidate(entry: JournalEntry, mutate: ReturnType<typeof useSWRConfig>
       if (entry.with === 'manager') {
         void mutate((key) => isKeyOfType(key, 'managers'));
         invalidateManagerDetail(mutate);
+        // 委譲の開始・再開・終わりの報告。台帳の「進行中」（`activeManagerIds`）は
+        // `GET /commitments` のたびに job 一覧から導かれるので、取り直さないと残る（#3784）。
+        void mutate((key) => isKeyOfType(key, 'commitments'));
       }
       if (entry.with === 'human') {
+        // 返事（outbound）で「未着手」（`respondedAt`）が変わる。`buildCommitmentDerivations` が
+        // 人間との `exchange` の履歴から導く（#3784）。
+        void mutate((key) => isKeyOfType(key, 'commitments'));
         void mutate((key) => isKeyOfType(key, 'conversations'));
         void mutate((key) => isKeyOfType(key, 'conversationUnreadCount'));
         // **一覧だけでなく本文も落とす。** ここを忘れると、会話の画面を開いた
