@@ -2870,7 +2870,8 @@ describe('HTTP API', () => {
         expect(body.error).toContain('1件も消していない');
         expect(await stores.inbox.pending()).toMatchObject({ count: 1 });
       }
-      for (const readable of ['2026-10-06', '2026-10-06T09:00:00Z', '2026-10-06T09:00:00+09:00']) {
+      // 日付だけ（`2026-10-06`）は #3390 から 400（時差が無い。歯は bulk-remove-before-boundary.test.ts）。
+      for (const readable of ['2026-10-06T09:00:00Z', '2026-10-06T09:00:00+09:00']) {
         const response = await app.request(
           '/inbox/remove',
           json({ types: ['manager_message'], reason: 'x', before: readable }),
@@ -3414,11 +3415,8 @@ describe('HTTP API', () => {
           expect(body.error).toContain('1件も消していない');
           expect(await snapshot()).toEqual(before);
         }
-        for (const readable of [
-          '2026-10-06',
-          '2026-10-06T09:00:00Z',
-          '2026-10-06T09:00:00+09:00',
-        ]) {
+        // 日付だけ（`2026-10-06`）は #3390 から 400（時差が無い。歯は bulk-remove-before-boundary.test.ts）。
+        for (const readable of ['2026-10-06T09:00:00Z', '2026-10-06T09:00:00+09:00']) {
           const response = await app.request(
             '/archive/remove',
             json({ minStoredBytes: 0, before: readable, reason: 'x' }),

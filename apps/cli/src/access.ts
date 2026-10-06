@@ -1,4 +1,4 @@
-import { stdout } from 'node:process';
+import { stdout } from './terminal-out.js';
 
 import { describeUnreadableRowsList, formatElapsedAgo, withErrorReason } from './format.js';
 import { describeAuthFailure, forbiddenKindOf, resolveTarget, type Target } from './target.js';
@@ -167,12 +167,11 @@ export async function accessRevokeCommand(
   const target = await resolveTarget();
   // 未ログインなら確認を出す前に断る（Issue #3214）。
   if (target.note !== null) throw new Error(target.note);
-  const confirmed = await confirmIrreversible(
+  await confirmIrreversible(
     `アカウント ${accountId} の許可を取り消します。発行済みのトークンはその場から通らなくなり、` +
       '許可に乗っていた「実行環境の持ち主」の宣言も落ちます（許可し直しても宣言は戻りません）。',
     options,
   );
-  if (!confirmed) return;
   const { account } = (await request(target, `/access/${encodeURIComponent(accountId)}/revoke`, {
     method: 'POST',
   })) as { account: AccountView };
@@ -198,11 +197,10 @@ export async function accessRemoveUnreadableCommand(
   // 未ログインなら確認を出す前に断る（Issue #3214）。
   if (target.note !== null) throw new Error(target.note);
   // 戻せない操作なので確認する（#3141。`confirm.ts`）。壊れた行は中身を出さずに消すので、消すと残らない。
-  const confirmed = await confirmIrreversible(
+  await confirmIrreversible(
     `読めないアカウントの行（id: ${ids.join(', ')}）を消します。壊れた行は消すと残りません。`,
     options,
   );
-  if (!confirmed) return;
   const result = (await request(
     target,
     '/access/unreadable/remove',

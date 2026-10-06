@@ -14,6 +14,7 @@
  * `.ts` をそのまま export するので、NodeNext の `apps/cli` が読むとき、拡張子の無い相対
  * import は `TS2835` で型検査を落とす（`apps/cli/src/logic-import.test.ts` が見張る）。
  */
+export * from './approval-drafts.js';
 export * from './approval-questions.js';
 export * from './attachments.js';
 export * from './auth.js';

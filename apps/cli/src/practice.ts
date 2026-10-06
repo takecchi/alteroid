@@ -1,7 +1,8 @@
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { stdin, stdout } from 'node:process';
+import { stdin } from 'node:process';
+import { stderr, stdout, writeShownBody } from './terminal-out.js';
 
 import { createClient, type DaemonClient } from './client.js';
 import { withErrorReason } from './format.js';
@@ -153,12 +154,12 @@ export async function practiceShowCommand(
     throw new Error(`そんなやり方はありません: ${slug}`);
   }
   const content = found.content;
-  stdout.write(content.endsWith('\n') ? content : `${content}\n`);
+  writeShownBody(stdout, content.endsWith('\n') ? content : `${content}\n`);
   // **版は stderr へ1行（Issue #2984。`memory show` と同じ）。** stdout は本文をそのまま出す口で、
   // パイプやリダイレクトで使う人がいる（版を混ぜると本文が壊れる）。端末では両方見える。
   // 古いデーモンが `version` を返さなければ出す版が無い。
   if (found.version !== undefined) {
-    process.stderr.write(
+    stderr.write(
       `版: ${found.version}（読んだ版を前提に消すなら: alteroid practice remove ${slug} --if-match ${found.version}）\n`,
     );
   }
@@ -300,7 +301,7 @@ export async function practiceEditCommand(
  */
 export async function practiceSetCommand(
   slug: string,
-  options: { file?: string; kind?: string; title?: string } = {},
+  options: { file?: string; kind?: string; title?: string; allowEmpty?: boolean } = {},
 ): Promise<void> {
   const conn = await connect('write');
   if (conn === null) return;
@@ -320,6 +321,13 @@ export async function practiceSetCommand(
     options.file === undefined || options.file === '-'
       ? await readAll()
       : await readInputFile(options.file, '--file', '--file <path>、または標準入力（-）');
+  // 空の本文は通信の前に断る（#3456。`memory set`・`profile set` と同じ線）。空にしたい人だけ `--allow-empty`。
+  if (options.allowEmpty !== true && content.trim().length === 0) {
+    throw new Error(
+      `やり方 ${slug}: 本文が空なので置き換えません（既存の本文は変えていません）。` +
+        '空にしたいときだけ --allow-empty を付けてください。',
+    );
+  }
   await write(client, target, slug, kind, title, content);
 }
 

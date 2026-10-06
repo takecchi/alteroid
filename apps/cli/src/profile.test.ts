@@ -979,7 +979,10 @@ describe('alteroid profile set の上書き確認（#3201）', () => {
     stubReplies(true);
     const { io } = fakeIo({ isTTY: true, answer: 'no' });
 
-    await profileSetCommand('rust', { file: await scriptFile() }, io);
+    // やめたことは例外で伝わる（入口が非 0 にする。#3450）。
+    await expect(profileSetCommand('rust', { file: await scriptFile() }, io)).rejects.toThrow(
+      '取り消しました。何も変更していません。',
+    );
 
     expect(wrote()).toBe(false);
   });
