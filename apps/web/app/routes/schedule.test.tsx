@@ -228,6 +228,95 @@ describe('継続する依頼を仕込む', () => {
   });
 });
 
+describe('既に在る名前で仕込むときだけ、置き換わると確かめる（#3347）', () => {
+  async function fill(kind: string, request: string): Promise<void> {
+    fireEvent.change(await screen.findByLabelText(/依頼の名前/), { target: { value: kind } });
+    fireEvent.change(screen.getByLabelText('依頼の本文'), { target: { value: request } });
+  }
+
+  it('在る名前なら送る前に確認を挟み、やめれば送らず入力も残る', async () => {
+    stubSchedule([DEFAULT_ENTRY, SPEC_ENTRY]);
+    renderSchedule();
+    await screen.findByText(/名前: /);
+
+    await fill('morning-issues', '新しい本文');
+    fireEvent.click(screen.getByRole('button', { name: '仕込む' }));
+
+    const dialog = await screen.findByRole('alertdialog');
+    expect(within(dialog).getByText(/本文と周期が置き換わ/)).toBeTruthy();
+    expect(within(dialog).getByText(/前回動いた時刻は保たれ/)).toBeTruthy();
+    expect(sent).toEqual([]);
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'やめる' }));
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+    expect(sent).toEqual([]);
+    expect((screen.getByLabelText('依頼の本文') as HTMLTextAreaElement).value).toBe('新しい本文');
+  });
+
+  it('確かめて進めると送り、結果は「置き換えた」と言う（「仕込んだ」とは別）', async () => {
+    stubSchedule([DEFAULT_ENTRY, SPEC_ENTRY]);
+    renderSchedule();
+    await screen.findByText(/名前: /);
+
+    await fill('morning-issues', '新しい本文');
+    fireEvent.click(screen.getByRole('button', { name: '仕込む' }));
+    const dialog = await screen.findByRole('alertdialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: '置き換える' }));
+
+    await waitFor(() => expect(sent).toHaveLength(1));
+    await expect(sent[0]?.read()).resolves.toMatchObject({ kind: 'morning-issues', request: '新しい本文' });
+    expect(await screen.findByText('置き換えた: morning-issues')).toBeTruthy();
+    expect(screen.queryByText(/仕込んだ: /)).toBeNull();
+  });
+
+  it('新しい名前なら確認なしでそのまま送り、「仕込んだ」と言う', async () => {
+    stubSchedule([DEFAULT_ENTRY, SPEC_ENTRY]);
+    renderSchedule();
+    await screen.findByText(/名前: /);
+
+    await fill('another', '本文');
+    fireEvent.click(screen.getByRole('button', { name: '仕込む' }));
+
+    await waitFor(() => expect(sent).toHaveLength(1));
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    expect(await screen.findByText('仕込んだ: another')).toBeTruthy();
+  });
+
+  it('一覧が読めていないときは確認で止めず、そのまま送る', async () => {
+    globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+      const request = input instanceof Request ? input : null;
+      const method = request?.method ?? init?.method ?? 'GET';
+      if (method === 'GET') return Promise.reject(new TypeError('Failed to fetch'));
+      sent.push({ url: request?.url ?? '', method, read: async () => undefined });
+      return Promise.resolve(json({ ok: true }));
+    }) as typeof fetch;
+    renderSchedule();
+
+    await fill('morning-issues', '本文');
+    fireEvent.click(screen.getByRole('button', { name: '仕込む' }));
+    await waitFor(() => expect(sent).toHaveLength(1));
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+  });
+
+  it('予約名（409）は日本語で断り、入力を残す', async () => {
+    globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+      const request = input instanceof Request ? input : null;
+      const method = request?.method ?? init?.method ?? 'GET';
+      if (method === 'GET') return Promise.resolve(json({ entries: [DEFAULT_ENTRY] }));
+      return Promise.resolve(json({ error: 'reserved kind' }, 409));
+    }) as typeof fetch;
+    renderSchedule();
+
+    await fill('daily_report', '本文');
+    fireEvent.click(screen.getByRole('button', { name: '仕込む' }));
+
+    expect(await screen.findByText(/既定の名前（予約名）なので使えない。別の名前にする/)).toBeTruthy();
+    expect(screen.queryByText(/reserved kind/)).toBeNull();
+    expect((screen.getByLabelText(/依頼の名前/) as HTMLInputElement).value).toBe('daily_report');
+    expect((screen.getByLabelText('依頼の本文') as HTMLTextAreaElement).value).toBe('本文');
+  });
+});
+
 /**
  * 「今すぐ回す」を押したら、起こした旨を短く出す（issue #3075）。直す前は成功しても何も変わらず、
  * 押せたのか・もう一度押すべきかが分からなかった。デーモンはターンの結果を待たないので、
