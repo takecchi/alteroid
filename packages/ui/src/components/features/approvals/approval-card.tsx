@@ -275,7 +275,7 @@ export function ApprovalCard({
               size="sm"
               loading={busy}
               aria-describedby={questionId}
-              disabled={draft.trim() === ''}
+              disabled={draft.trim() === '' || busy}
               onClick={() => onSubmit?.(draft)}
             >
               回答する

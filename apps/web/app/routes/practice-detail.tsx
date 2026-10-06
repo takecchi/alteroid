@@ -466,14 +466,16 @@ function PracticeDetailBody({ slug }: { slug: string }) {
             <label className="flex min-h-0 flex-1 flex-col text-xs text-muted-foreground">
               本文
               <Textarea
-                className="mt-1 min-h-[50vh] flex-1 font-mono text-xs leading-relaxed"
+                className="mt-1 min-h-[50vh] font-mono text-xs leading-relaxed"
                 value={content}
                 spellCheck={false}
                 onChange={(event) => {
                   touch();
                   setDraftContent(event.target.value);
                 }}
-                // 親の高さを埋める形のまま（`maxHeight` は渡さない）。
+                // 記憶の詳細（`MarkdownEditor`）と同じに、内容に合わせて伸び、60vh から先は内側をスクロールする。
+                // 以前は `flex-1` で親の高さを埋めていたが、伸びる欄には固定の flex 基準が邪魔なので外した（下限は 50vh のまま）。
+                maxHeight="60vh"
                 onSubmitShortcut={() => save()}
                 submitDisabled={!canSave || busy}
                 onKeyDown={(event) => {

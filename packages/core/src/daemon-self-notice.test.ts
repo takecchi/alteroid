@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  DAEMON_RESERVED_EVENT_SOURCES,
+  DAEMON_RUNNER_REGISTRY_SOURCE,
   DAEMON_TOKEN_POOL_REOPENED_SOURCE,
+  isDaemonSelfNotice,
+  isReservedEventSource,
+  normalizeEventSource,
   staleObservedRecoveryForBlockedKey,
   staleObservedRecoveryNoticeEvent,
   tokenPoolReopenedPayload,
@@ -192,5 +197,60 @@ describe('staleObservedRecoveryNoticeEvent', () => {
       payload: { text: '本文', tokenId: 'tok-a', observedRecovery: true },
     };
     expect(staleObservedRecoveryNoticeEvent(event, FUTURE, 'tok-a')).toBe(false);
+  });
+});
+
+/**
+ * **予約語の一覧は1か所**（`DAEMON_RESERVED_EVENT_SOURCES`）で、`isDaemonSelfNotice` と入口の検査
+ * （`isReservedEventSource`）が同じ一覧を使う。daemon 内部の知らせは従来どおり「自身の知らせ」と読まれる。
+ */
+describe('予約語の source', () => {
+  const externalFrom = (source: string): InboxEvent => ({
+    type: 'external',
+    id: 'evt-r',
+    at: '2026-10-07T00:00:00.000Z',
+    source,
+    payload: { text: '本文' },
+  });
+
+  it('一覧の全部が isDaemonSelfNotice で真、入口の検査（isReservedEventSource）でも真', () => {
+    for (const source of DAEMON_RESERVED_EVENT_SOURCES) {
+      expect(isDaemonSelfNotice(externalFrom(source)), source).toBe(true);
+      expect(isReservedEventSource(source), source).toBe(true);
+    }
+    expect([...DAEMON_RESERVED_EVENT_SOURCES]).toEqual([
+      DAEMON_TOKEN_POOL_REOPENED_SOURCE,
+      DAEMON_RUNNER_REGISTRY_SOURCE,
+    ]);
+  });
+
+  it('入口の検査は正規化の後で判定する（大文字小文字・前後の空白・全角）', () => {
+    for (const source of [
+      'Token-Pool',
+      'RUNNER-REGISTRY',
+      '  token-pool  ',
+      '　runner-registry\n',
+      'ｔｏｋｅｎ-ｐｏｏｌ',
+    ]) {
+      expect(isReservedEventSource(source), JSON.stringify(source)).toBe(true);
+    }
+    expect(normalizeEventSource(' Token-Pool\t')).toBe('token-pool');
+  });
+
+  it('普通の source は予約語ではない（部分一致では断らない）', () => {
+    for (const source of ['ci', 'github', 'token-pool-2', 'my-runner-registry', 'token_pool', '']) {
+      expect(isReservedEventSource(source), source).toBe(false);
+      expect(isDaemonSelfNotice(externalFrom(source)), source).toBe(false);
+    }
+  });
+
+  it('external 以外は、source が予約語でも isDaemonSelfNotice は偽', () => {
+    const event: InboxEvent = {
+      type: 'manager_message',
+      id: 'evt-m',
+      at: '2026-10-07T00:00:00.000Z',
+      text: 'token-pool',
+    } as unknown as InboxEvent;
+    expect(isDaemonSelfNotice(event)).toBe(false);
   });
 });
