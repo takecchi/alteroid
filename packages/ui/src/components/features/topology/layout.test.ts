@@ -288,3 +288,91 @@ describe('器ごとの枠', () => {
     },
   );
 });
+
+/**
+ * 外部サービス（連携の鍵）の札と、外部 → クローンの線（Issue #3676）。
+ * 札は 0〜6 枚（上限 5 + 「ほか N 件」）。**線が重ならない・交わらない・札を突き抜けない**を、
+ * マネージャーの数と組み合わせて測る。
+ */
+function externalsOf(n: number): NonNullable<TopologyScene['externals']> {
+  return Array.from({ length: n }, (_, i) => ({
+    id: `external:k${i}`,
+    label: `鍵${i}`,
+    flow: i % 2 === 0 ? ('down' as const) : ('idle' as const),
+  }));
+}
+
+const externalShapes: (readonly [number, number[]])[] = [];
+for (const n of [1, 2, 3, 4, 5, 6]) {
+  for (const counts of [[], [0], [2, 0, 1], [1, 1, 1, 1, 1, 1, 1, 1]]) {
+    externalShapes.push([n, counts]);
+  }
+}
+
+describe.each([
+  ['wide', layoutWide],
+  ['narrow', layoutNarrow],
+] as const)('%s の配置（外部サービス）', (_name, layout) => {
+  const withExternals = (n: number, counts: number[]): TopologyScene => ({
+    ...scene(counts),
+    externals: externalsOf(n),
+  });
+
+  it.each(externalShapes.map((s) => [`外部 ${s[0]} 枚・作業者 ${JSON.stringify(s[1])}`, s] as const))(
+    '%s のとき、別々の線は重ならず交わらず、札を突き抜けない',
+    (_label, [n, counts]) => {
+      const laid = layout(withExternals(n, counts));
+      const segs = segments(laid);
+      const clashes = segs.flatMap((s, i) =>
+        segs
+          .slice(i + 1)
+          .filter((t) => t.edge !== s.edge && clash(s, t))
+          .map((t) => `${s.edge} × ${t.edge}`),
+      );
+      expect(clashes).toEqual([]);
+      const pierced = segs.flatMap((s) =>
+        laid.nodes.filter((node) => piercesBox(s, node.box)).map((node) => `${s.edge} → ${node.key}`),
+      );
+      expect(pierced).toEqual([]);
+    },
+  );
+
+  it('外部の札は種類 external で出て、線は札とクローンの edges に載る（ホバーで強調できる）', () => {
+    const laid = layout(withExternals(3, [1]));
+    const cards = laid.nodes.filter((node) => node.kind === 'external');
+    expect(cards.map((c) => c.label)).toEqual(['鍵0', '鍵1', '鍵2']);
+    const clone = laid.nodes.find((node) => node.kind === 'clone')!;
+    for (const card of cards) {
+      expect(laid.edges.some((e) => e.key === card.key)).toBe(true);
+      expect(card.edges).toContain(card.key);
+      expect(clone.edges).toContain(card.key);
+    }
+  });
+
+  it('線の向きは外部 → クローンで、光は札の flow に従う（down のとき forward）', () => {
+    const laid = layout(withExternals(2, []));
+    const cards = laid.nodes.filter((node) => node.kind === 'external');
+    const clone = laid.nodes.find((node) => node.kind === 'clone')!;
+    const flows = cards.map((card) => laid.edges.find((e) => e.key === card.key));
+    expect(flows.map((e) => [e?.flow, e?.reverse])).toEqual([
+      ['down', false],
+      ['idle', false],
+    ]);
+    // 始点は札の縁、終点はクローンの縁
+    for (const [i, edge] of flows.entries()) {
+      const box = cards[i]!.box;
+      const start = edge!.points[0]!;
+      const end = edge!.points.at(-1)!;
+      const onBoxEdge = (p: Point, b: Box) =>
+        p.x >= b.x && p.x <= b.x + b.w && p.y >= b.y && p.y <= b.y + b.h;
+      expect(onBoxEdge(start, box)).toBe(true);
+      expect(onBoxEdge(end, clone.box)).toBe(true);
+    }
+  });
+
+  it('外部が 0 枚（省く・空）なら、配置は今までと同じ', () => {
+    const none = layout(scene([2, 0]));
+    expect(layout({ ...scene([2, 0]), externals: [] })).toEqual(none);
+    expect(none.nodes.some((node) => node.kind === 'external')).toBe(false);
+  });
+});

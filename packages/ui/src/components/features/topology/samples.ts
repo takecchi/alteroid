@@ -338,3 +338,32 @@ export const usageBlockedScene: SystemTopologyProps = {
     },
   ],
 };
+
+/**
+ * 連携の鍵で外部サービスから呼ばれている場面（Issue #3676）。札に状態は無く（外部サービスの状態は
+ * 観測していない）、最後に呼ばれた時刻だけを言う。上限を超えた分は「ほか N 件」の1枚にまとめる。
+ */
+export const externalsScene: SystemTopologyProps = {
+  ...idleScene,
+  externals: [
+    {
+      id: 'external:k1',
+      label: 'GitHub 連携',
+      task: '最後の呼び出し: たった今',
+      flow: 'down',
+      details: [
+        { label: '鍵の名前', value: 'GitHub 連携' },
+        { label: '鍵 ID', value: 'k1', mono: true },
+        { label: 'source', value: 'github', mono: true },
+        {
+          label: '観測の範囲',
+          value:
+            '時刻はクローンが受信箱から取り出して処理した時刻で、受け付けた時刻ではない。' +
+            'デーモンの起動後に連携の鍵で呼ばれた、直近 10 分のものだけを出す',
+        },
+      ],
+    },
+    { id: 'external:k2', label: 'CI', task: '最後の呼び出し: 3 分前', flow: 'idle' },
+    { id: 'external-others', label: 'ほか 2 件', task: '札にしていない連携の鍵', flow: 'idle' },
+  ],
+};

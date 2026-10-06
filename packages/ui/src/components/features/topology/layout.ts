@@ -56,6 +56,19 @@ export interface TopologyManager {
   details?: readonly TopologyDetail[];
 }
 
+/**
+ * 外部サービスの札（連携の鍵1本ぶん、または上限を超えた分をまとめた「ほか N 件」）。
+ * **`status` を持たない**——観測できるのは最後に呼ばれた時刻だけで、外部サービスの状態は観測していない。
+ */
+export interface TopologyExternal {
+  id: string;
+  label: string;
+  task?: string;
+  /** 外部サービス → クローンの線（`down` だけが在りうる） */
+  flow?: TopologyFlow;
+  details?: readonly TopologyDetail[];
+}
+
 /** runner の器1台。`id` は `managers[].runner` と突き合わせる鍵。 */
 export interface TopologyRunner {
   id: string;
@@ -68,6 +81,11 @@ export interface TopologyRunner {
 export interface TopologyScene {
   /** 人間（Web UI / CLI）。省けば描かない */
   human?: { label?: string; flow?: TopologyFlow };
+  /**
+   * 外部サービス（連携の鍵）。**左の列の人間と記憶ストアのあいだ**（狭い配置ではクローンの下）へ
+   * 置き、線は外部 → クローン。省く・空なら今までと同じ配置。
+   */
+  externals?: readonly TopologyExternal[];
   clone: {
     label?: string;
     task?: string;
@@ -112,7 +130,7 @@ export interface Box {
   h: number;
 }
 
-export type NodeKind = 'human' | 'db' | 'clone' | 'manager' | 'worker';
+export type NodeKind = 'human' | 'external' | 'db' | 'clone' | 'manager' | 'worker';
 
 export interface LaidNode {
   key: string;
@@ -323,9 +341,65 @@ function baseNodes(scene: TopologyScene) {
       task: scene.clone.task,
       status: scene.clone.status,
       details: scene.clone.details,
-      edges: ['human', 'db', ...scene.managers.map((m) => `m-${m.id}`)],
+      edges: [
+        'human',
+        'db',
+        ...(scene.externals ?? []).map((x) => `x-${x.id}`),
+        ...scene.managers.map((m) => `m-${m.id}`),
+      ],
     }),
   };
+}
+
+/** 外部サービスの札と、その線（札 → クローン）。位置は呼び手が決める。 */
+function externalNode(external: TopologyExternal, box: Box): LaidNode {
+  const key = `x-${external.id}`;
+  return {
+    key,
+    kind: 'external',
+    box,
+    label: external.label,
+    task: external.task,
+    details: external.details,
+    edges: [key],
+  };
+}
+
+/**
+ * 左の列の札（人間・外部サービス・記憶）から、右のクローンの左辺へ（`wide`）。横 → 縦 → 横。
+ * `sources` は上から下の順。出口はクローンの左辺に上下の順で並べ、**上へ折れる線（札がクローンの
+ * 出口より上）は上の札ほど内側（クローンに近い幹）、下へ折れる線は下の札ほど内側**にする。
+ * この順なら、どの線も別の線の幹と横線を横切らない（`layout.test.ts` が総当たりで測る）。
+ */
+function fanInto(sources: readonly Box[], target: Box): Point[][] {
+  const x1 = Math.max(...sources.map(right));
+  const ports = spread(sources.length, target.h - 24, 12);
+  const py = sources.map((_, i) => cy(target) + ports[i]!);
+  const up = sources.map((_, i) => i).filter((i) => cy(sources[i]!) < py[i]! - 0.5);
+  const down = sources
+    .map((_, i) => i)
+    .filter((i) => cy(sources[i]!) > py[i]! + 0.5)
+    .reverse();
+  const xb = target.x - 16;
+  const trunk = new Map<number, number>();
+  for (const group of [up, down]) {
+    const step = Math.min(12, (xb - (x1 + 16)) / Math.max(1, group.length - 1));
+    group.forEach((i, k) => trunk.set(i, xb - k * step));
+  }
+  return sources.map((box, i) => {
+    const tx = trunk.get(i);
+    if (tx === undefined)
+      return [
+        { x: right(box), y: py[i]! },
+        { x: target.x, y: py[i]! },
+      ];
+    return [
+      { x: right(box), y: cy(box) },
+      { x: tx, y: cy(box) },
+      { x: tx, y: py[i]! },
+      { x: target.x, y: py[i]! },
+    ];
+  });
 }
 
 /** 左から右へ。広い画面。 */
@@ -366,7 +440,11 @@ export function layoutWide(scene: TopologyScene): TopologyLayout {
     laidGroups.length === 0
       ? { x: COL.manager, y: TOP + ROW_H, w: COL.worker + W - COL.manager, h: NODE_H }
       : undefined;
-  const contentH = Math.max(3 * ROW_H, stackBottom - TOP);
+  // 外部サービスは左の列の人間（1行目）と記憶ストア（最終行）のあいだに縦に積む。
+  // 記憶の枠（札の上に名前の行がある）に触れない高さを、札の数から出す。0 枚なら何も足さない。
+  const externals = scene.externals ?? [];
+  const leftNeed = externals.length === 0 ? 0 : (externals.length + 1) * ROW_H + 160;
+  const contentH = Math.max(3 * ROW_H, stackBottom - TOP, leftNeed);
   const height = Math.max(TOP + contentH, empty ? empty.y + empty.h : 0) + PAD + 8;
   const at = (x: number, centerY: number): Box => ({ x, y: centerY - NODE_H / 2, w: W, h: NODE_H });
 
@@ -381,27 +459,60 @@ export function layoutWide(scene: TopologyScene): TopologyLayout {
 
   // 人間と DB → クローンの左辺。出口を上下に分けて、最後の横の区間を共有させない。
   // 縦の幹も左右にずらす —— 同じ x だと、上下から来た2本が1本の線に見える。
-  const sources: { key: 'human' | 'db'; box: Box }[] = [
-    ...(scene.human ? [{ key: 'human' as const, box: humanBox }] : []),
-    { key: 'db', box: dbBox },
-  ];
-  const inOffsets = spread(sources.length, NODE_H - 24, 12);
-  const mid = (right(humanBox) + cloneBox.x) / 2;
-  sources.forEach(({ key, box }, i) => {
-    const py = cy(cloneBox) + inOffsets[i]!;
-    const tx = mid + (key === 'human' ? -8 : 8);
-    const points = [
-      { x: right(box), y: cy(box) },
-      { x: tx, y: cy(box) },
-      { x: tx, y: py },
-      { x: cloneBox.x, y: py },
+  if (externals.length === 0) {
+    const sources: { key: 'human' | 'db'; box: Box }[] = [
+      ...(scene.human ? [{ key: 'human' as const, box: humanBox }] : []),
+      { key: 'db', box: dbBox },
     ];
-    edges.push(
-      key === 'human'
-        ? { key, points, flow: scene.human?.flow ?? 'idle', broken: false, reverse: false }
-        : { key, points, flow: scene.db.flow ?? 'idle', broken: dbDown, reverse: true },
+    const inOffsets = spread(sources.length, NODE_H - 24, 12);
+    const mid = (right(humanBox) + cloneBox.x) / 2;
+    sources.forEach(({ key, box }, i) => {
+      const py = cy(cloneBox) + inOffsets[i]!;
+      const tx = mid + (key === 'human' ? -8 : 8);
+      const points = [
+        { x: right(box), y: cy(box) },
+        { x: tx, y: cy(box) },
+        { x: tx, y: py },
+        { x: cloneBox.x, y: py },
+      ];
+      edges.push(
+        key === 'human'
+          ? { key, points, flow: scene.human?.flow ?? 'idle', broken: false, reverse: false }
+          : { key, points, flow: scene.db.flow ?? 'idle', broken: dbDown, reverse: true },
+      );
+    });
+  } else {
+    // 外部サービスが居るとき。人間・外部サービス（上から下）・記憶を、クローンの左辺へ分けて入れる。
+    const extBoxes = externals.map((_, i) =>
+      at(COL.left, TOP + ROW_H + HEAD + 4 + (i + 0.5) * ROW_H),
     );
-  });
+    const ordered: { key: string; box: Box; flow: TopologyFlow; reverse: boolean }[] = [
+      ...(scene.human
+        ? [{ key: 'human', box: humanBox, flow: scene.human.flow ?? 'idle', reverse: false }]
+        : []),
+      ...externals.map((x, i) => ({
+        key: `x-${x.id}`,
+        box: extBoxes[i]!,
+        flow: x.flow ?? 'idle',
+        reverse: false,
+      })),
+      { key: 'db', box: dbBox, flow: scene.db.flow ?? 'idle', reverse: true },
+    ];
+    const paths = fanInto(
+      ordered.map((s) => s.box),
+      cloneBox,
+    );
+    ordered.forEach((s, i) => {
+      edges.push({
+        key: s.key,
+        points: paths[i]!,
+        flow: s.flow,
+        broken: s.key === 'db' && dbDown,
+        reverse: s.reverse,
+      });
+    });
+    externals.forEach((x, i) => nodes.push(externalNode(x, extBoxes[i]!)));
+  }
   if (scene.human) nodes.push(make.human(humanBox));
   nodes.push(make.db(dbBox), make.clone(cloneBox));
 
@@ -529,12 +640,39 @@ export function layoutNarrow(scene: TopologyScene): TopologyLayout {
   };
   const cloneBox: Box = { x: 16, y: daemonContainer.y + HEAD, w: 328, h: NODE_H };
 
-  // 3段目: 器（runner）ごとの枠。その中に、マネージャー → その下に字下げした作業者
+  // 3段目: 外部サービス（連携の鍵）。クローンの下に縦に並べ、線は札の右から右の余白を通ってクローンの
+  // 下辺へ上る（マネージャーの線は左の余白を通るので交わらない）。0 枚なら何も足さない。
+  const externals = scene.externals ?? [];
+  let rowY = daemonContainer.y + daemonContainer.h + GAP;
+  const extBoxes: Box[] = externals.map((_, i) => ({ x: 48, y: rowY + i * ROW_H, w: 248, h: NODE_H }));
+  const extEdges: LaidEdge[] = [];
+  if (externals.length > 0) {
+    // 下の札ほど外側（右）の幹へ。上の札の横線が、下の札の幹まで届かない（交わらない）。
+    const xMin = 304;
+    const step = Math.min(8, (336 - xMin) / Math.max(1, externals.length - 1));
+    externals.forEach((x, i) => {
+      const box = extBoxes[i]!;
+      const gx = xMin + i * step;
+      extEdges.push({
+        key: `x-${x.id}`,
+        points: [
+          { x: right(box), y: cy(box) },
+          { x: gx, y: cy(box) },
+          { x: gx, y: cloneBox.y + cloneBox.h },
+        ],
+        flow: x.flow ?? 'idle',
+        broken: false,
+        reverse: false,
+      });
+    });
+    rowY += externals.length * ROW_H + GAP / 2;
+  }
+
+  // 4段目: 器（runner）ごとの枠。その中に、マネージャー → その下に字下げした作業者
   const groups = groupManagers(scene);
   const brokenOf = new Map<number, boolean>();
   const managerBoxes: { box: Box; workerBoxes: Box[] }[] = [];
   const runnerContainers: LaidContainer[] = [];
-  let rowY = daemonContainer.y + daemonContainer.h + GAP;
   for (const g of groups) {
     const top = rowY;
     rowY += HEAD;
@@ -585,6 +723,8 @@ export function layoutNarrow(scene: TopologyScene): TopologyLayout {
     });
   }
   nodes.push(make.db(dbBox), make.clone(cloneBox));
+  externals.forEach((x, i) => nodes.push(externalNode(x, extBoxes[i]!)));
+  edges.push(...extEdges);
   edges.push({
     key: 'db',
     points: [
