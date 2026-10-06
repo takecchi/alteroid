@@ -1,6 +1,4 @@
-import { Button, Textarea } from '../../common';
-
-import { isSubmitShortcut } from './ime';
+import { Button, SubmitHint, Textarea } from '../../common';
 
 /**
  * 送った発言を直す下書き。`ChatMessage` の `children` に渡す。
@@ -38,9 +36,10 @@ export function ChatMessageEditor({
         // 元の吹き出しの高さを下回らない: 行数ぶん（最低2行）で開き、
         // `field-sizing-content` に対応した描画系では折り返しも含めて本文に
         // 合わせて伸びる（`Textarea` 既定の `field-sizing-fixed` を上書き）。
-        rows={Math.max(2, value.split('\n').length)}
+        rows={2}
+        maxHeight="60vh"
         value={value}
-        className="field-sizing-content max-h-[60vh] w-full bg-background text-foreground dark:bg-background"
+        className="w-full bg-background text-foreground dark:bg-background"
         aria-label="発言を編集する下書き"
         onChange={(event) => onChange(event.target.value)}
         onKeyDown={(event) => {
@@ -49,19 +48,18 @@ export function ChatMessageEditor({
             onCancel();
             return;
           }
-          if (isSubmitShortcut(event)) {
-            event.preventDefault();
-            if (!empty) onConfirm();
-          }
         }}
+        onSubmitShortcut={onConfirm}
+        submitDisabled={empty}
       />
-      <div className="flex gap-2">
+      <div className="flex items-center gap-2">
         <Button size="sm" variant="primary" disabled={empty} onClick={onConfirm}>
           確定
         </Button>
         <Button size="sm" variant="ghost" onClick={onCancel}>
           キャンセル
         </Button>
+        <SubmitHint action="確定" />
       </div>
     </div>
   );

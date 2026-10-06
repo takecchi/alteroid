@@ -12,7 +12,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ChatMessage, ChatMessageList, type ChatRole } from './chat-message';
 import { ChatMessageEditor } from './chat-message-editor';
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+});
 
 describe('ChatMessageList / ChatMessage: 描き分け', () => {
   it('list は「やりとり」、行は li。人間・system は素のテキスト、クローンだけ Markdown', () => {
@@ -222,19 +225,25 @@ describe('ChatMessage: 範囲選択と編集欄の大きさ（実寸は jsdom �
     );
   });
 
-  it('編集欄は幅いっぱい・本文に合わせて伸びる（field-sizing-content、行数ぶんの rows）', () => {
+  it('編集欄は幅いっぱい・本文に合わせて伸びる（scrollHeight から決め、上限は 60vh）', () => {
+    // jsdom は寸法を計算しないので、scrollHeight を行数から返す。
+    vi.spyOn(HTMLTextAreaElement.prototype, 'scrollHeight', 'get').mockImplementation(function (
+      this: HTMLTextAreaElement,
+    ) {
+      return this.value.split('\n').length * 20;
+    });
     const { rerender } = render(
       <ChatMessageEditor value="1行" onChange={vi.fn()} onConfirm={vi.fn()} onCancel={vi.fn()} />,
     );
     const area = screen.getByRole('textbox') as HTMLTextAreaElement;
-    expect(classes(area)).toEqual(expect.arrayContaining(['field-sizing-content', 'w-full']));
-    expect(classes(area)).not.toContain('field-sizing-fixed');
+    expect(classes(area)).toContain('w-full');
     // 紫の吹き出しの上でも読めるよう、通常の入力欄の面と字色で上書きする（薄い膜 dark:bg-input/30 を潰す）。
     expect(classes(area)).toEqual(
       expect.arrayContaining(['bg-background', 'dark:bg-background', 'text-foreground']),
     );
     expect(classes(area)).not.toContain('dark:bg-input/30');
-    expect(area.rows).toBe(2);
+    expect(area.style.maxHeight).toBe('60vh');
+    expect(area.style.height).toBe('20px');
     rerender(
       <ChatMessageEditor
         value={'a\nb\nc\nd\ne'}
@@ -243,6 +252,6 @@ describe('ChatMessage: 範囲選択と編集欄の大きさ（実寸は jsdom �
         onCancel={vi.fn()}
       />,
     );
-    expect(area.rows).toBe(5);
+    expect(area.style.height).toBe('100px');
   });
 });

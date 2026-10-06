@@ -234,6 +234,29 @@ describe('/mcp-servers 画面 — 差し替える', () => {
     expect(screen.getByText('いつから効くか: クローンの次のセッションから')).toBeTruthy();
   });
 
+  it('Ctrl + Enter は「保存する」と同じ（確認へ進むだけ）。確認の段では何もせず、確認を飛ばして送らない', async () => {
+    const { puts } = stubMcp();
+    renderScreen();
+
+    fireEvent.click(await screen.findByRole('button', { name: '編集する' }));
+    const editor = screen.getByLabelText<HTMLTextAreaElement>('MCP サーバの新しい登録');
+    // 変更が無いあいだは何も起きない（保存ボタンも disabled）。
+    fireEvent.keyDown(editor, { key: 'Enter', ctrlKey: true });
+    expect(screen.queryByRole('button', { name: '本当に保存する' })).toBeNull();
+
+    const next = { mcpServers: { notion: { type: 'sse', url: 'https://example.com/sse' } } };
+    fireEvent.change(editor, { target: { value: JSON.stringify(next) } });
+    fireEvent.keyDown(editor, { key: 'Enter' });
+    expect(screen.queryByRole('button', { name: '本当に保存する' })).toBeNull();
+    fireEvent.keyDown(editor, { key: 'Enter', ctrlKey: true });
+    expect(screen.getByRole('button', { name: '本当に保存する' })).toBeTruthy();
+    expect(puts).toEqual([]);
+
+    // 確認の段でもう一度押しても、送らない（確認は「本当に保存する」でだけ越える）。
+    fireEvent.keyDown(editor, { key: 'Enter', metaKey: true });
+    expect(puts).toEqual([]);
+  });
+
   it('JSON として読めなければ確認へ進まず、送らない', async () => {
     const { puts } = stubMcp();
     renderScreen();

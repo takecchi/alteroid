@@ -5,7 +5,7 @@ import { Fragment, useState, type ReactNode } from 'react';
 import { useIsMobile } from '@/hooks/use-is-mobile';
 import { cn } from '@/lib/utils';
 
-import { TAB_TRIGGER_ACTIVE_CLASS, TAB_TRIGGER_CLASS, Textarea } from '../common';
+import { TAB_TRIGGER_ACTIVE_CLASS, TAB_TRIGGER_CLASS, SubmitHint, Textarea } from '../common';
 import { Markdown } from '../markdown';
 
 export type MarkdownEditorMode = 'edit' | 'preview' | 'split';
@@ -25,7 +25,7 @@ const SAVE_HINT = '⌘/Ctrl + S で保存';
  * - **書きかけ（`value`）は呼ぶ側が持つ**（この部品は写さない）。タブを行き来しても、
  *   取得し直しが走っても書きかけは消えない
  * - プレビューが映すのは保存前の `value` そのもの（本文を書き換えない）
- * - ⌘ / Ctrl + S で `onSave`（渡したときだけ）
+ * - ⌘ / Ctrl + S と ⌘ / Ctrl + Enter で `onSave`（渡したときだけ。⌘/Ctrl + Enter は `saveDisabled` のあいだ呼ばない）
  *
  * 足したもの:
  *
@@ -45,6 +45,7 @@ export function MarkdownEditor({
   value,
   onChange,
   onSave,
+  saveDisabled = false,
   mode: controlledMode,
   defaultMode,
   onModeChange,
@@ -60,6 +61,8 @@ export function MarkdownEditor({
   value: string;
   onChange: (value: string) => void;
   onSave?: () => void;
+  /** 保存できないあいだ（変更が無いなど）。保存ボタンの `disabled` と同じ条件を渡す。 */
+  saveDisabled?: boolean;
   mode?: MarkdownEditorMode;
   /** 最初に開くタブ（渡さなければ中身で決める）。 */
   defaultMode?: MarkdownEditorMode;
@@ -105,7 +108,10 @@ export function MarkdownEditor({
   const editor = (
     <Textarea
       aria-label={label}
-      className="flex-1 font-mono text-xs leading-relaxed"
+      className="font-mono text-xs leading-relaxed"
+      maxHeight="60vh"
+      onSubmitShortcut={onSave}
+      submitDisabled={saveDisabled || onSave === undefined}
       style={{ minHeight }}
       value={value}
       placeholder={placeholder}
@@ -163,8 +169,11 @@ export function MarkdownEditor({
         {shown.map((m) => (
           <Fragment key={m}>{triggers[m]}</Fragment>
         ))}
-        {onSave !== undefined && saveHint !== null && mode !== 'preview' && (
-          <span className="ml-auto pb-1.5 text-[11px] text-muted-foreground">{saveHint}</span>
+        {onSave !== undefined && mode !== 'preview' && (
+          <span className="ml-auto flex gap-3 pb-1.5 text-[11px] text-muted-foreground">
+            {saveHint !== null && <span>{saveHint}</span>}
+            <SubmitHint action="保存" />
+          </span>
         )}
       </Tabs.List>
 
