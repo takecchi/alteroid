@@ -3094,6 +3094,28 @@ const REATTACH_RETRY_BASE_MS = 1_000;
 const REATTACH_RETRY_MAX_MS = 30_000;
 
 /**
+ * 取り直しが `busy`（別の契機がその委譲を resume 中）で抜けた回を、**委譲ごとに**
+ * 何回まで予約し直すか（Issue #3188。人間の決定 2026-10-06: 案 A ＋ 上限）。
+ *
+ * **なぜ上限を持つか。** `busy` を予約に載せないと、相手の resume が一時的に失敗したとき、
+ * 次の名乗り（`hello`）まで誰も取り直さない。一方、載せっぱなしにすると、別の契機の
+ * resume が延々と続く（毎回 busy に当たる）間、梯子が回り続ける。相手が成功すれば次の回は
+ * その委譲が `alive` に居て触らないので自然に止まる——止まらないのは相手が終わらない
+ * ときだけで、そのときだけ打ち切る。
+ *
+ * **5 回にした理由。** 梯子は 1 秒から倍々で伸びるので、5 回で約 31 秒（1+2+4+8+16）
+ * 待つ。resume の往復（起動直後の瞬断・5xx の再試行を含む）が終わるのを待つには足り、
+ * 毎回 busy に当たる異常を数十秒で止めるには十分短い。`REATTACH_RETRY_MAX_MS`（30 秒）で
+ * 頭打ちになる前に打ち切るので、間隔の上限には達しない。
+ *
+ * 数えは `busy` 以外の結果（resume の受理・断り・失敗）、委譲が `alive` に居た回、
+ * 委譲の確定（`lost`）、プールの停止で消える。**runner 単位の梯子を借りるが、数えは
+ * ジョブ単位**なので、同じ runner の別の委譲の `busy` が梯子を延命することはない
+ * （各委譲が自分の上限で降りる）。
+ */
+const REATTACH_BUSY_MAX_RETRIES = 5;
+
+/**
  * プロファイル・環境変数・認証トークンの押し込みに失敗した runner へ、挑み直す
  * までの待ち時間（倍々で伸ばし、上限で頭打ちにする）。`REATTACH_RETRY_*` と
  * 同じ形——**これも能力の上限ではなく、混雑を作らないための間隔である**
@@ -5527,6 +5549,11 @@ class Pool implements ManagerPool {
   readonly #reattachTimers = new Map<string, ReturnType<typeof setTimeout>>();
   /** 次に待つ時間。うまくいったら忘れる。 */
   readonly #reattachDelays = new Map<string, number>();
+  /**
+   * `#reattach` が `busy` で抜けて梯子を予約し直した回数（`jobId` → 回数）。
+   * `REATTACH_BUSY_MAX_RETRIES` の doc を参照。`busy` 以外の結果・`alive`・確定・停止で消える。
+   */
+  readonly #reattachBusyRetries = new Map<string, number>();
   /** いま resume を投げている最中のマネージャー（同じ session を二本起こさない）。 */
   readonly #resuming = new Set<string>();
   /**
@@ -9931,6 +9958,7 @@ class Pool implements ManagerPool {
     for (const timer of this.#reattachTimers.values()) clearTimeout(timer);
     this.#reattachTimers.clear();
     this.#reattachDelays.clear();
+    this.#reattachBusyRetries.clear();
     // 予約してあった押し込みの挑み直しも同様に畳む（`#reattachTimers` と同じ理由）。
     for (const timer of this.#pushRetryTimers.values()) clearTimeout(timer);
     this.#pushRetryTimers.clear();
@@ -10470,7 +10498,12 @@ class Pool implements ManagerPool {
       ]);
 
       for (const job of jobs) {
-        if (alive.has(job.id) || this.#stopped) continue;
+        if (alive.has(job.id)) {
+          // 相手の resume が成功した（Issue #3188）。`busy` の数えは終わり。
+          this.#reattachBusyRetries.delete(job.id);
+          continue;
+        }
+        if (this.#stopped) continue;
         // 宛先が書かれていない古いジョブはここでは触らない（どの runner の器が
         // 入れ替わったのかを、この情報だけでは決められない）。起動時の `restore`
         // が拾って `runner_id` を書くので、次からはこの経路に乗る。
@@ -10592,6 +10625,33 @@ class Pool implements ManagerPool {
           // ものではない）。ここを `continue` だけで済ませると、次の名乗り
           // （`hello`）まで誰もこの委譲を拾わない——`hello` は SSE が繋がった
           // ときにしか来ないので、永久に来ないことがある。
+          if (outcome === 'busy') {
+            /*
+             * **別の契機がこの委譲を resume 中。** 相手が成功すれば次の回は `alive` で触らないが、
+             * 失敗したら（`manager_send` の 503 など）誰もこの委譲を取り直さない——`hello` は
+             * 永久に来ないことがある（Issue #3188）。だから梯子に載せる。
+             *
+             * **ただし委譲ごとに `REATTACH_BUSY_MAX_RETRIES` 回まで。** 相手の resume が終わらない
+             * 限り毎回 busy に当たるので、数えて打ち切る。梯子は runner 単位だが、数えと打ち切りは
+             * ジョブ単位（打ち切った委譲は `retry` を立てないので、梯子を延命しない）。
+             */
+            const tried = this.#reattachBusyRetries.get(job.id) ?? 0;
+            if (tried < REATTACH_BUSY_MAX_RETRIES) {
+              this.#reattachBusyRetries.set(job.id, tried + 1);
+              retry = true;
+            } else {
+              this.#reattachBusyRetries.delete(job.id);
+              await this.#journal({
+                type: 'decision',
+                decision: `[${job.id}] 取り直しの予約を止めた（別の契機の resume が ${REATTACH_BUSY_MAX_RETRIES} 回の挑み直しを通じて終わらなかった）`,
+                grounds:
+                  'busy が続いたので、この委譲についての梯子の予約を打ち切った。次の名乗り（hello）か、相手の resume の結果に任せる',
+              });
+            }
+            continue;
+          }
+          // `busy` の連続はここで途切れた。
+          this.#reattachBusyRetries.delete(job.id);
           if (outcome === 'unreadable') {
             retry = true;
             continue;
@@ -10712,6 +10772,7 @@ class Pool implements ManagerPool {
             windowOpen = false;
             await this.#endRelocationWindow(job.id, windowMoved);
           }
+          this.#reattachBusyRetries.delete(job.id);
           // **「次の `hello` でまた挑む」は嘘だった。** `hello` は SSE が繋がった
           // ときにしか来ない。器は上がってストリームも安定しているのに resume だけが
           // 一時的にこけた場合（起動直後・瞬断・5xx）、次の名乗りは永久に来ないので、
@@ -11028,6 +11089,7 @@ class Pool implements ManagerPool {
 
   /** 戻せないと確定する（`#unresumable` を立て、台帳へ書き、知らせ、像から外す）。 */
   async #confirmLost(record: ManagerRecord, error: unknown): Promise<void> {
+    this.#reattachBusyRetries.delete(record.job.id);
     const { job } = record;
     this.#relocationRefusals.delete(job.id);
     // 挑み直さないと決めたので、**ジョブ側に覚える**（runner 単位の `retry`
