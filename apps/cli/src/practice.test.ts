@@ -972,6 +972,15 @@ describe('alteroid practice の読み出しの失敗の理由', () => {
     expect(read()).toBe('');
   });
 
+  it('show --version: 成立しない版番号の 400 は、打った文字列をそのまま言う（NaN と言わない）', async () => {
+    const read = captureStdout();
+    replies.push({ status: 400, body: {} });
+    await expect(practiceShowCommand('review', { version: 'abc' })).rejects.toThrow(
+      '版番号として成立しません: abc',
+    );
+    expect(read()).toBe('');
+  });
+
   it('show --version: 401 は describeAuthFailure の文で例外にする（#3452）', async () => {
     const read = captureStdout();
     replies.push({ status: 401, body: {} });

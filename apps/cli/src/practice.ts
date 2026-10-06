@@ -115,7 +115,7 @@ export async function practiceListCommand(): Promise<void> {
 
 export async function practiceShowCommand(
   slug: string,
-  options: { version?: number } = {},
+  options: { version?: number | string } = {},
 ): Promise<void> {
   const conn = await connect('read');
   if (conn === null) return;
