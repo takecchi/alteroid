@@ -29,9 +29,22 @@ export const HINT_AP_DETAIL =
 /** その日の件（回答済み）から開いた詳細。Esc は未回答の一覧ではなくその日へ戻る。 */
 export const HINT_AP_DETAIL_FROM_DAY =
   'Esc その日へ · a 答える · ↑↓ PgUp/PgDn 読み進める · r 更新 · 1-5 画面 · ^C 中断';
-/** 詳細の読む画面の案内（開いた元で Esc の戻り先が違う）。 */
-export const approvalDetailHint = (from: 'list' | 'day'): string =>
-  from === 'day' ? HINT_AP_DETAIL_FROM_DAY : HINT_AP_DETAIL;
+/** もう答えられない（回答済み・取り下げ済み）詳細の読む画面。a は何もしないので案内しない。 */
+export const HINT_AP_DETAIL_SETTLED =
+  'Esc 一覧へ · ↑↓ PgUp/PgDn 読み進める · r 更新 · 1-5 画面 · ^C 中断';
+export const HINT_AP_DETAIL_SETTLED_FROM_DAY =
+  'Esc その日へ · ↑↓ PgUp/PgDn 読み進める · r 更新 · 1-5 画面 · ^C 中断';
+/**
+ * 詳細の読む画面の案内（開いた元で Esc の戻り先が違う。`answerable` が偽なら a 答える を出さない）。
+ */
+export const approvalDetailHint = (from: 'list' | 'day', answerable = true): string =>
+  from === 'day'
+    ? answerable
+      ? HINT_AP_DETAIL_FROM_DAY
+      : HINT_AP_DETAIL_SETTLED_FROM_DAY
+    : answerable
+      ? HINT_AP_DETAIL
+      : HINT_AP_DETAIL_SETTLED;
 export const HINT_AP_FORM =
   '↑↓ 移動 · Space 選ぶ/書く · s 確認 · Esc 読む画面へ（書きかけは残る） · ^C 中断';
 export const HINT_AP_INPUT = 'Enter 確定 · Esc 確定して戻る · ^C 中断（クローン） · ^D 終了';
