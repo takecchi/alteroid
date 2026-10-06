@@ -110,7 +110,13 @@ export default function ProgressPage() {
           </div>
         </Card>
       ) : (
-        <div className="flex flex-col gap-4">
+        <div className="flex flex-col gap-4" aria-busy={isLoading}>
+          {/* 前の期間の数字を見せている間は、数字のそばでそう言う（#3419）。 */}
+          {isLoading && (
+            <p role="status" className="text-xs text-muted-foreground">
+              前の期間の数字を表示しています。新しい期間で読み込み中です。
+            </p>
+          )}
           {/* 取り直しの失敗は、古い数を残したまま帯で言う（issue #3069。画面を奪わない）。 */}
           {error !== undefined && (
             <Card>

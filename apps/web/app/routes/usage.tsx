@@ -510,10 +510,17 @@ export default function Usage() {
         className="mb-4"
       />
 
-      {isLoading ? (
+      {/* `keepPreviousData` のとき `isLoading` は別の条件の初回読み込みでも真になる。スピナーにしてよいのは、出せるデータが無いときだけ（#3419）。 */}
+      {isLoading && data === undefined ? (
         <Spinner />
       ) : data === undefined ? null : (
-        <div className="flex flex-col gap-4">
+        <div className="flex flex-col gap-4" aria-busy={isLoading}>
+          {/* 前の条件の数字を見せている間は、数字のそばでそう言う。 */}
+          {isLoading && (
+            <p role="status" className="text-xs text-muted-foreground">
+              前の条件の数字を表示しています。新しい条件で読み込み中です。
+            </p>
+          )}
           {/*
             **アカウント全体の残りは、台帳が空でも出す。** 台帳が空であることと、
             アカウントの枠が分からないことは別の事実である（片方を理由にもう片方を
