@@ -273,6 +273,40 @@ export async function uploadAttachment(
   return (await response.json()) as UploadedAttachment;
 }
 
+/**
+ * 送信が `400 attachment_missing`（添付が無い・期限切れ）で断られた。サーバは、発言に結び付かない添付を
+ * 1 時間で掃除する（#3246）。`message` はサーバの理由の文（見つからない id を含む）。
+ */
+export class AttachmentMissingError extends Error {
+  override readonly name = 'AttachmentMissingError';
+}
+
+/** 失敗した応答の本文が `attachment_missing` なら、サーバの理由の文。違えば `null`。 */
+export function attachmentMissingMessageOf(body: unknown): string | null {
+  if (typeof body !== 'object' || body === null) return null;
+  const { code, error } = body as { code?: unknown; error?: unknown };
+  if (code !== 'attachment_missing') return null;
+  return typeof error === 'string' && error.length > 0 ? error : '添付が見つからない';
+}
+
+/**
+ * `attachment_missing` で落ちた送信の分（`sent`）から、サーバが掃除した添付の「上げ済み」の印を捨てて、
+ * 次の送信で上げ直させる。**どれが無いかはサーバの文（`message`）に載る id で決める**。名指しが読み取れなければ、
+ * その送信で上げ済みだった分を全部捨てる（残して 400 を繰り返すより、余計に上げ直すほうが安い）。
+ * 使い手へ出す文を返す（添えかけは残してある）。
+ */
+export function expireUploads(sent: readonly DraftFile[], message: string): string {
+  const uploaded = sent.filter((f) => f.uploadedId !== undefined);
+  const named = uploaded.filter((f) => message.includes(f.uploadedId!));
+  const expired = named.length > 0 ? named : uploaded;
+  for (const file of expired) delete file.uploadedId;
+  const names = expired.map((f) => f.name).join(', ');
+  return (
+    `添付が期限切れだったので送っていない${names === '' ? '' : `（${names}）`}。` +
+    '添えかけは残してある。次の送信で上げ直す'
+  );
+}
+
 export type UploadDraftResult =
   | {
       ok: true;

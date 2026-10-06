@@ -61,7 +61,9 @@ import type { InferResponseType } from 'hono/client';
 import { confirmInRepl } from './confirm.js';
 import {
   AttachmentDraft,
+  attachmentMissingMessageOf,
   createAttachmentDraft,
+  expireUploads,
   type DraftFile,
   attachmentLinesOf,
   describeAttachment,
@@ -168,6 +170,10 @@ export async function chatCommand(): Promise<void> {
         ...(attachmentIds === undefined ? {} : { attachments: attachmentIds }),
         // サーバが発言を受けたら、送った分の添えかけを外す（受けなかったら残す）。
         onAccepted: () => draft.discard(sentFiles),
+        // 添付が期限切れ（サーバが掃除した）なら、上げ済みの印を捨てて、次の送信で上げ直す（#3246）。
+        onAttachmentMissing: (message) => {
+          stdout.write(`${expireUploads(sentFiles, message)}\n`);
+        },
       });
     }
   } finally {
@@ -209,6 +215,8 @@ export async function sendMessage(
     attachments?: string[];
     /** サーバが発言を受けた（HTTP 2xx）とき。添えかけを空にする合図。 */
     onAccepted?: () => void;
+    /** `400 attachment_missing`（添付が無い・期限切れ）で断られたとき。サーバの理由の文を渡す（#3246）。 */
+    onAttachmentMissing?: (message: string) => void;
   } = {},
 ): Promise<string | null> {
   // SSE は hono/client ではなく生の fetch で受ける（EventSource は POST も
@@ -235,11 +243,16 @@ export async function sendMessage(
       stdout.write(`${described}\n`);
       return conversationId;
     }
+    const failed = { status: response.status, body: await response.json().catch(() => null) };
+    const missing = attachmentMissingMessageOf(failed.body);
     // **本文の `error` をそのまま出す。** `supersedes` の検証（400）は4通り
     // あり、どれも「次に何を打てばよいか」まで書いてある（`apps/daemon/src/app.ts`
     // の手前検証）。ここで一律「デーモンが応答しません」に潰すと、`/edit` が
     // クローンの応答を指したときの案内（制約(C)）が人間に届かない。
-    stdout.write(`エラー: ${await errorDetail(response)}\n`);
+    stdout.write(
+      `エラー: ${await errorDetail({ status: failed.status, json: () => Promise.resolve(failed.body) })}\n`,
+    );
+    if (missing !== null) options.onAttachmentMissing?.(missing);
     return conversationId;
   }
 
