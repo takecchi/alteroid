@@ -23,6 +23,7 @@ import { toCodexMcpServersConfig } from './codex-mcp-config.js';
 import { CODEX_PROVIDER } from './codex-provider.js';
 import { codexUsageToLedgerTotals } from './codex-usage-ledger.js';
 import { PERMISSION_MODES } from './permission-mode.js';
+import { composeAttachmentInput, type PlacedAttachment } from './runner-attachments.js';
 
 // 架空の鍵。実在の資格ではない。
 const FAKE_KEY = 'sk-fake-0000-test-key-not-real';
@@ -633,6 +634,35 @@ describe('CodexManagerDriver: ターン', () => {
     expect((starts[1] as Json)['input']).toEqual([
       { type: 'text', text: '画像なし', text_elements: [] },
     ]);
+  });
+
+  it('担い手へ渡した添付（runner が置いて組んだ入力）は、通知行（path）つきの text と画像の data URL で turn/start に載る（#3111 段3）', async () => {
+    const h = setup({ env: { CODEX_API_KEY: FAKE_KEY } });
+    h.server.script.onTurn = (_n, _t, id) => h.server.completeTurn(id);
+    const placed: PlacedAttachment[] = [
+      {
+        id: 'att-img',
+        name: 'shot.png',
+        mediaType: 'image/png',
+        size: 3,
+        sha256: 'ab',
+        path: '/tmp/alteroid-attachments/mgr-1/att-img/shot.png',
+        image: { mediaType: 'image/png', data: 'QUJD', name: 'shot.png' },
+      },
+    ];
+    h.feed.push(composeAttachmentInput('見て', placed));
+    const done = h.run();
+    await until(() => h.server.paramsOf('turn/start').length === 1, 'turn/start');
+    await until(() => h.events.filter((e) => e.type === 'turn_ended').length === 1, '完了');
+    h.feed.end();
+    await done;
+    const input = (h.server.paramsOf('turn/start')[0] as Json)['input'] as Json[];
+    expect(input).toHaveLength(2);
+    expect(input[0]).toMatchObject({ type: 'text' });
+    expect(String(input[0]?.['text'])).toContain(
+      'path=/tmp/alteroid-attachments/mgr-1/att-img/shot.png（画像としても渡した）（Read で開ける）',
+    );
+    expect(input[1]).toEqual({ type: 'image', url: 'data:image/png;base64,QUJD' });
   });
 
   it('turn/start が RPC エラーで返ったら、そのターンだけ失敗にして次の入力へ進む', async () => {
