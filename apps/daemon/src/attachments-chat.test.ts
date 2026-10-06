@@ -100,7 +100,7 @@ const upload = (
   app.request(`/attachments?${query}`, {
     method: 'POST',
     headers: { 'content-type': contentType },
-    body: body as BodyInit,
+    body: body as RequestInit['body'],
   });
 
 const chat = async (
@@ -274,7 +274,7 @@ describe('添付: 認証', () => {
     const ok = await app.request('/attachments?name=a.png&type=image%2Fpng', {
       method: 'POST',
       headers: { 'content-type': 'application/octet-stream', authorization: 'Bearer test-token' },
-      body: PNG as BodyInit,
+      body: PNG as RequestInit['body'],
     });
     expect(ok.status).toBe(200);
   });

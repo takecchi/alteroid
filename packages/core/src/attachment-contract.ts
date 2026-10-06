@@ -129,6 +129,7 @@ export async function verifyAttachmentStoreContract(store: AttachmentStore): Pro
     uploadedBy: 'account:a1',
   });
   if (uploaded.uploadedBy !== 'account:a1') fail('put が uploadedBy を返さない');
-  if ((await store.getMeta(uploaded.id))?.uploadedBy !== 'account:a1') fail('getMeta の uploadedBy');
+  if ((await store.getMeta(uploaded.id))?.uploadedBy !== 'account:a1')
+    fail('getMeta の uploadedBy');
   if ((await store.get(uploaded.id))?.meta.uploadedBy !== 'account:a1') fail('get の uploadedBy');
 }

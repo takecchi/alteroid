@@ -2516,7 +2516,7 @@ export function createApp(deps: AppDeps) {
         } catch (error) {
           if (error instanceof AttachmentRejectedError) {
             return c.json(
-              { error: error.message, code: error.code },
+              { error: reasonOf(error), code: error.code },
               error.code === 'too_large' ? 413 : 400,
             );
           }
@@ -2633,8 +2633,12 @@ export function createApp(deps: AppDeps) {
         error: 'text が空、または本文の形が不正' + (where === '' ? '' : `: ${where}`),
       })),
       async (c) => {
-        const { text, conversationId: given, supersedes, attachments: attachmentIds } =
-          c.req.valid('json');
+        const {
+          text,
+          conversationId: given,
+          supersedes,
+          attachments: attachmentIds,
+        } = c.req.valid('json');
 
         /*
          * **送信済みの人間の発言を編集する口の検証。** `clone.post` を呼ぶ前に
@@ -2775,7 +2779,7 @@ export function createApp(deps: AppDeps) {
           } catch (error) {
             if (error instanceof AttachmentRejectedError) {
               return c.json(
-                { error: error.message, code: error.code },
+                { error: reasonOf(error), code: error.code },
                 error.code === 'too_many' ? 400 : 413,
               );
             }
