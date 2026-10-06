@@ -7,7 +7,7 @@
  */
 import { JOURNAL_MAX_LIMIT, JOURNAL_TYPES } from '@alteroid/logic';
 import { Box, useApp, useInput, useWindowSize } from 'ink';
-import { useMemo, useRef, useState, type FC } from 'react';
+import { useEffect, useMemo, useRef, useState, type FC } from 'react';
 
 import { redactedErrorMessage } from '../redact.js';
 import { parseJournalSearchTokens } from '../chat.js';
@@ -67,7 +67,7 @@ import {
   JournalList,
   journalDetailLines,
 } from './journal-view.js';
-import { chatLayout, TABS, type TabId } from './layout.js';
+import { chatLayout, isFullscreenViewport, TABS, type TabId } from './layout.js';
 import type { MemoryController } from './memory-controller.js';
 import {
   MEMORY_DETAIL_HEAD_ROWS,
@@ -151,10 +151,13 @@ export const App: FC<AppProps> = ({
   managers,
   journal,
   memory,
-  fullscreen,
+  fullscreen: launchedFullscreen,
 }) => {
   const { exit } = useApp();
   const { columns, rows } = useWindowSize();
+  // 起動時に全画面（代替画面）へ入っていても、いまの行数が閾値未満のあいだは高さを固定しない
+  // （固定すると入力欄とフッタが切れて操作できない。#3651）。
+  const fullscreen = launchedFullscreen && isFullscreenViewport(rows);
   const chat = useCoalescedStore(controller.store);
   const header = useCoalescedStore(feed.store);
   const ap = useCoalescedStore(approvals.store);
@@ -238,6 +241,15 @@ export const App: FC<AppProps> = ({
   const memWin = logWindow(memRows, memLogHeight, memAnchor);
 
   const logRows = useMemo(() => logLines(chat.entries, columns), [chat.entries, columns]);
+  // 幅が変わって折り返しの行数が変わったら、上へスクロール中の位置（行 index）を行数の比で写す。
+  const logShape = useRef({ columns, total: logRows.length });
+  useEffect(() => {
+    const prev = logShape.current;
+    logShape.current = { columns, total: logRows.length };
+    const at = anchorRef.current;
+    if (prev.columns === columns || typeof at !== 'number' || prev.total === 0) return;
+    setAnchor(Math.max(1, Math.round((at * logRows.length) / prev.total)));
+  }, [columns, logRows.length, anchorRef, setAnchor]);
   const streamRows = streamLines(chat.streaming, columns, layout.logHeight);
   const win = logWindow([...logRows, ...streamRows], layout.logHeight, anchor);
 
@@ -894,7 +906,20 @@ export const App: FC<AppProps> = ({
     if (tabRef.current === 'chat') {
       // 会話で `ask_human` が来ていれば、その承認待ちの詳細へ飛ぶ。
       const asked = controller.store.getSnapshot().pendingAsk;
-      if (input === 'a' && asked !== null) return openApproval(asked);
+      if (input === 'a' && asked !== null) {
+        // 押したときに未回答かを確かめ、最も古い未回答へ飛ぶ。確かめている間に画面を離れていたら奪わない。
+        void controller
+          .nextPendingAsk()
+          .then((id) => {
+            if (tabRef.current !== 'chat') return;
+            if (id === null) controller.addSystem('未回答の承認待ちは無い');
+            else openApproval(id);
+          })
+          .catch((error: unknown) => {
+            controller.addSystem(`承認待ちを開けなかった（${redactedErrorMessage(error)}）`);
+          });
+        return;
+      }
       if (key.tab || key.return || input === 'i') return setZone('input');
       if (key.upArrow)
         return setAnchor(scrollUp(anchorRef.current, totalRows(), layout.logHeight, 1));
