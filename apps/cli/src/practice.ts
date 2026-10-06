@@ -9,6 +9,7 @@ import { createClient, type DaemonClient } from './client.js';
 import { withErrorReason } from './format.js';
 import { describeAuthFailure, resolveTarget, type Target } from './target.js';
 import { keepDraftOnFailure, openEditor, readInputFile } from './input-errors.js';
+import { shellQuote } from './shell-quote.js';
 
 /**
  * `alteroid practice` — 仕事のやり方を読む・書き換える・消す（#1055 段3③）。
@@ -249,7 +250,6 @@ export async function practiceEditCommand(
   // **成功したときと「変更なし」のときだけ、一時ディレクトリを消す。** 保存の失敗（衝突以外も）は
   // 人間が書いた内容を残し、場所と続きのやり方を言う（#3453）。衝突は下で自分で案内する。
   // 種類と題は、いまと違う（新しいやり方や --kind / --title を渡した）ときだけ `set` へ持ち越す。
-  const shellQuote = (value: string): string => `'${value.replaceAll("'", "'\\''")}'`;
   const resume = [
     `alteroid practice set ${slug} --file ${path}`,
     ...(kind === current?.kind ? [] : [`--kind ${shellQuote(kind)}`]),
