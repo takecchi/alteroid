@@ -19,6 +19,8 @@ import {
 import { useProgress, useSchedule, useUsage } from '@alteroid/swr';
 import { formatRelative, usageHref, type Progress } from '@alteroid/logic';
 
+import { useMinuteNow } from '~/lib/use-now';
+
 import { UnreadableScheduleNote } from './schedule';
 import { UnreadableUsageRowsNote } from './usage';
 
@@ -36,6 +38,9 @@ const USAGE_WINDOW_DAYS = 2;
 function shiftedDate(base: Date, days: number): string {
   return usageDate(new Date(base.getFullYear(), base.getMonth(), base.getDate() + days));
 }
+
+/** ホームのタイルが使用量を取り直す間隔。`useProgress` の `refreshInterval` と同じ。 */
+const HOME_REFRESH_MS = 30_000;
 
 /** 小さなカードの3枚（最新の日報は `dashboard-report.tsx` の全幅の枠）。各ページへの入口で、数字は1〜2個だけ置く。 */
 export function HomeTiles() {
@@ -199,11 +204,20 @@ function NextRunTile() {
  *   日が取れない行だけに絞る
  */
 function UsageTile() {
+  // 分の時計で窓を引き直す（#3699）。鍵は日付の文字列だけから作るので、分が進んでも日が同じなら
+  // 鍵は変わらず、日をまたいだときだけ新しい日の窓になる。
+  // 分の時計は、描き直す合図として使う。値そのものは使わない: 最初の描画では、誰も購読していな
+  // かったあいだの古い値を返しうる（購読の後で読み直す）ので、窓の今日を描画の時点の時刻から取る。
+  useMinuteNow();
   const browserNow = new Date();
-  const usage = useUsage({
-    from: shiftedDate(browserNow, -USAGE_WINDOW_DAYS),
-    to: shiftedDate(browserNow, USAGE_WINDOW_DAYS),
-  });
+  const usage = useUsage(
+    {
+      from: shiftedDate(browserNow, -USAGE_WINDOW_DAYS),
+      to: shiftedDate(browserNow, USAGE_WINDOW_DAYS),
+    },
+    // 進捗（`useProgress`）と同じ間隔で取り直す。開いたままでも金額が動く（#3699）。
+    { refreshInterval: HOME_REFRESH_MS },
+  );
   // 型は `string` だが、古いデーモンの応答には無いので `undefined` を許す。
   const today: string | undefined = usage.data?.today;
   const todayRows = usage.data?.rows.filter((row) => row.date === today) ?? [];
