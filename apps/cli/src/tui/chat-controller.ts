@@ -640,17 +640,25 @@ export class ChatController {
     }
   }
 
-  /** 履歴の一覧。`at` は読んだ時刻（「何分前」の基準）。 */
-  async listConversations(): Promise<{
+  /** 履歴の一覧。`at` は読んだ時刻（「何分前」の基準）。`cursor` は「もっと見る」の続きの頁（#3643）。 */
+  async listConversations(cursor?: string): Promise<{
     items: ConversationSummary[];
     at: number;
     scanned: number;
     reachedStart: boolean;
     hiddenByLimit: number;
+    nextCursor?: string;
   }> {
-    const { conversations, scanned, reachedStart, hiddenByLimit } =
-      await this.api.listConversations();
-    return { items: conversations, at: Date.now(), scanned, reachedStart, hiddenByLimit };
+    const { conversations, scanned, reachedStart, hiddenByLimit, nextCursor } =
+      await this.api.listConversations(cursor);
+    return {
+      items: conversations,
+      at: Date.now(),
+      scanned,
+      reachedStart,
+      hiddenByLimit,
+      ...(nextCursor === undefined ? {} : { nextCursor }),
+    };
   }
 
   /** 履歴の会話を開き直す。 */
