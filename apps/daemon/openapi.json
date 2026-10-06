@@ -16170,6 +16170,22 @@
               }
             }
           },
+          "409": {
+            "description": "鍵の行が読めない形で入っている（失効できない）。`POST /integration-keys/unreadable/remove` で消す。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
           "415": {
             "description": "content-type が application/json ではない（ブラウザの単純リクエスト対策 — 状態を変える POST は必ずここを通す）。",
             "content": {

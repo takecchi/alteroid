@@ -26,6 +26,7 @@ const {
   integrationListCommand,
   integrationCreateCommand,
   integrationRevokeCommand,
+  integrationRemoveUnreadableCommand,
   integrationKeyStatus,
   parseExpires,
 } = await import('./integration.js');
@@ -303,6 +304,115 @@ describe('integration revoke', () => {
     expect(ask).not.toHaveBeenCalled();
     expect(out().match(/すでに失効しています/g)).toHaveLength(2);
     expect(calls()).toEqual(['GET /integration-keys', 'GET /integration-keys']);
+  });
+});
+
+describe('読めない連携の鍵の行（#3216）', () => {
+  const rowsUnreadable = {
+    count: 3,
+    rows: [
+      { id: 'bad-1', reason: '不正な欄: source' },
+      { id: 'bad-2', reason: '不正な欄: name' },
+    ],
+  };
+  const calls = () => sent.map((s) => `${s.method} ${s.path}`);
+  function fakeIo(isTTY: boolean, answer = '') {
+    const ask = vi.fn(() => Promise.resolve(answer));
+    const io: ConfirmIo = { isTTY, write: (text) => process.stdout.write(text), ask };
+    return { io, ask };
+  }
+
+  it('list: 読めない行を一覧の前に警告する（id と欄名だけ。消す口と、id が取れない行の案内つき）', async () => {
+    setReply('GET', '/integration-keys', { status: 200, body: { keys: [view()], rowsUnreadable } });
+    const out = captureStdout();
+    await integrationListCommand(NOW);
+    const text = out();
+    expect(text).toContain(
+      '読めない連携の鍵の行が 3 件ある（消えたのではなく、読めない形で入っている）',
+    );
+    expect(text).toContain('id=bad-1  不正な欄: source');
+    expect(text).toContain('id が取れない行が 1 件');
+    expect(text).toContain('integration-keys.json を手で直す');
+    expect(text).toContain('消すには、id を指す: alteroid integration remove-unreadable <id>');
+    expect(text.indexOf('読めない連携の鍵の行')).toBeLessThan(text.indexOf('連携の鍵: 1 件'));
+  });
+
+  it('list: 読めない行しか無いとき「鍵が無い」とは言わない', async () => {
+    setReply('GET', '/integration-keys', { status: 200, body: { keys: [], rowsUnreadable } });
+    const out = captureStdout();
+    await integrationListCommand(NOW);
+    expect(out()).toContain('連携の鍵がまだ無い、とは言えない');
+    expect(out()).not.toContain('連携の鍵はありません');
+  });
+
+  it('list: 読めない行が無ければ警告は出ない', async () => {
+    setReply('GET', '/integration-keys', { status: 200, body: { keys: [view()] } });
+    const out = captureStdout();
+    await integrationListCommand(NOW);
+    expect(out()).not.toContain('読めない');
+  });
+
+  it('revoke: 読めない行の id は「無い」ではなく、消す口を案内して断る（POST しない）', async () => {
+    setReply('GET', '/integration-keys', { status: 200, body: { keys: [], rowsUnreadable } });
+    await expect(integrationRevokeCommand('bad-1', { yes: true })).rejects.toThrow(
+      'alteroid integration remove-unreadable',
+    );
+    expect(calls()).toEqual(['GET /integration-keys']);
+  });
+
+  it('remove-unreadable: 端末で yes と答えると、id を指して POST する', async () => {
+    setReply('POST', '/integration-keys/unreadable/remove', {
+      status: 200,
+      body: { removedIds: ['bad-1'], count: 1 },
+    });
+    const out = captureStdout();
+    const { io, ask } = fakeIo(true, 'yes');
+    await integrationRemoveUnreadableCommand(['bad-1'], { io });
+    expect(ask).toHaveBeenCalledOnce();
+    expect(out()).toContain('読めない連携の鍵の行（id: bad-1）を消します');
+    expect(out()).toContain('読めない連携の鍵の行を 1 行消しました（id: bad-1）');
+    expect(sent).toEqual([
+      { method: 'POST', path: '/integration-keys/unreadable/remove', body: { ids: ['bad-1'] } },
+    ]);
+  });
+
+  it('remove-unreadable: 端末で yes 以外なら POST しない。端末でなく --yes も無ければ断る（非 0）。--yes は確認を飛ばす', async () => {
+    captureStdout();
+    await integrationRemoveUnreadableCommand(['bad-1'], { io: fakeIo(true, 'y').io });
+    expect(sent).toEqual([]);
+    const noTty = fakeIo(false, 'yes');
+    await expect(integrationRemoveUnreadableCommand(['bad-1'], { io: noTty.io })).rejects.toThrow(
+      '--yes',
+    );
+    expect(noTty.ask).not.toHaveBeenCalled();
+    expect(sent).toEqual([]);
+    setReply('POST', '/integration-keys/unreadable/remove', {
+      status: 200,
+      body: { removedIds: ['bad-1', 'bad-2'], count: 2 },
+    });
+    const yes = fakeIo(false, 'no');
+    await integrationRemoveUnreadableCommand(['bad-1', 'bad-2'], { yes: true, io: yes.io });
+    expect(yes.ask).not.toHaveBeenCalled();
+    expect(calls()).toEqual(['POST /integration-keys/unreadable/remove']);
+  });
+
+  it('remove-unreadable: 404 は id の確かめ方つきで、401 は認証の案内で、500 は理由つきで失敗する', async () => {
+    captureStdout();
+    setReply('POST', '/integration-keys/unreadable/remove', { status: 404, body: { error: 'x' } });
+    await expect(integrationRemoveUnreadableCommand(['nope'], { yes: true })).rejects.toThrow(
+      '何も消していません',
+    );
+    setReply('POST', '/integration-keys/unreadable/remove', { status: 401, body: {} });
+    await expect(integrationRemoveUnreadableCommand(['bad-1'], { yes: true })).rejects.toThrow(
+      '認証されませんでした',
+    );
+    setReply('POST', '/integration-keys/unreadable/remove', {
+      status: 500,
+      body: { error: '壊れた' },
+    });
+    await expect(integrationRemoveUnreadableCommand(['bad-1'], { yes: true })).rejects.toThrow(
+      '壊れた',
+    );
   });
 });
 
