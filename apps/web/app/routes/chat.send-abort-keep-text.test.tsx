@@ -7,7 +7,8 @@
  * - 文は入力欄へ戻り（空のときだけ）、吹き出しは外れる
  * - 「送れたか確かめられなかった」旨の表示に「再送」「破棄」が出る
  * - 切り替えて中断したら、送った側の会話へ戻り、切り替えた先には入らない
- * - 履歴に同じ文の人間の発言が現れたら、積んだ文と表示を自動で下ろす
+ * - 履歴に自分の `clientMessageId` を持つ人間の発言が現れたら、積んだ文と表示を自動で下ろす
+ *   （同じ文でも別の id なら下ろさない。#3203。`chat.client-message-id.test.tsx`）
  */
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider, useParams } from 'react-router';
@@ -55,14 +56,29 @@ function renderChat(initial: string) {
   };
 }
 
-let historyOfA: { id: string; at: string; role: string; text: string }[] = [];
+let historyOfA: {
+  id: string;
+  at: string;
+  role: string;
+  text: string;
+  clientMessageId?: string;
+}[] = [];
+let stub: ReturnType<typeof stubFetch>;
+
+/** 最初の `POST /chat` に付いていた `clientMessageId`（openapi-fetch は `Request` で呼ぶ）。 */
+async function firstPostedClientMessageId(): Promise<string> {
+  const entry = stub.entries.find((e) => e.url.endsWith('/chat') && e.request !== undefined);
+  const body = (await entry?.request?.clone().json()) as { clientMessageId?: string } | undefined;
+  expect(body?.clientMessageId).toBeTruthy();
+  return body?.clientMessageId as string;
+}
 
 /**
  * 1回目の `POST /chat` は `open` を返さず、中断（abort）されて初めて終わる。
  * 2回目以降（再送）は `open` まで返す。
  */
 function stubAbortableSend(counter: { posts: number }) {
-  stubFetch((url, init) => {
+  stub = stubFetch((url, init) => {
     if (url.includes(`/conversations/${A}`)) {
       return json({ conversationId: A, messages: historyOfA });
     }
@@ -198,7 +214,7 @@ describe('#3121: open の前に中断された送信は、書いた文を失わ�
     expect(counter.posts).toBe(1);
   });
 
-  it('履歴に同じ文の人間の発言が現れたら、積んだ文と表示を下ろす（手を入れていない入力欄も空にする）', async () => {
+  it('履歴に自分の clientMessageId を持つ発言が現れたら、積んだ文と表示を下ろす（手を入れていない入力欄も空にする）', async () => {
     const counter = { posts: 0 };
     stubAbortableSend(counter);
     const { router } = renderChat(`/chat/${A}`);
@@ -209,7 +225,15 @@ describe('#3121: open の前に中断された送信は、書いた文を失わ�
     await act(async () => {});
 
     // サーバは実は受け取っていた。次に A を開くと履歴に出る。
-    historyOfA = [{ id: 'm1', at: '2026-08-20T00:00:00Z', role: 'inbound', text: LONG }];
+    historyOfA = [
+      {
+        id: 'm1',
+        at: '2026-08-20T00:00:00Z',
+        role: 'inbound',
+        text: LONG,
+        clientMessageId: await firstPostedClientMessageId(),
+      },
+    ];
     await router.navigate(`/chat/${A}`);
     expect(await findShownConversation(A)).toBeTruthy();
     await waitFor(() => expect(bubbleCount(LONG)).toBe(1));

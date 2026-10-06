@@ -64,6 +64,7 @@ const OTHER = meta('att-other');
 let history: unknown[] = [];
 let originalFetch: typeof fetch;
 let posts = 0;
+let stub: ReturnType<typeof stubFetch>;
 
 beforeEach(() => {
   originalFetch = globalThis.fetch;
@@ -74,7 +75,7 @@ beforeEach(() => {
   let n = 0;
   URL.createObjectURL = vi.fn(() => `blob:fake-${(n += 1)}`);
   URL.revokeObjectURL = vi.fn();
-  stubFetch((url, init) => {
+  stub = stubFetch((url, init) => {
     if (url.includes('/attachments?')) return json(MINE);
     if (url.includes('/attachments/')) return new Response(new Uint8Array([1, 2, 3, 4]));
     if (url.includes(`/conversations/${A}`)) return json({ conversationId: A, messages: history });
@@ -100,6 +101,14 @@ afterEach(() => {
   cleanup();
   globalThis.fetch = originalFetch;
 });
+
+/** 最初の `POST /chat` に付いていた `clientMessageId`（openapi-fetch は `Request` で呼ぶ）。 */
+async function firstPostedClientMessageId(stub: ReturnType<typeof stubFetch>): Promise<string> {
+  const entry = stub.entries.find((e) => e.url.endsWith('/chat') && e.request !== undefined);
+  const body = (await entry?.request?.clone().json()) as { clientMessageId?: string } | undefined;
+  expect(body?.clientMessageId).toBeTruthy();
+  return body?.clientMessageId as string;
+}
 
 const nodeFile = () =>
   new NodeFile([new Uint8Array([1, 2, 3, 4])], 'mine.png', {
@@ -128,8 +137,8 @@ async function reopenA(router: { navigate: (to: string) => Promise<void> }) {
   await act(async () => {});
 }
 
-describe('添付つきの中断は、添付 id で受け取りを判定する', () => {
-  it('別の添付だけの発言（本文も空）が履歴に現れても下ろさない（再送の案内が残る）', async () => {
+describe('添付つきの中断も、clientMessageId で受け取りを判定する（添付 id では見ない。#3203）', () => {
+  it('別の発言（本文も空・添付も別・別の clientMessageId）が履歴に現れても下ろさない（再送の案内が残る）', async () => {
     const { router } = await sendAttachmentOnlyAndAbort();
     history = [
       { id: 'm1', at: '2026-08-20T00:00:00Z', role: 'inbound', text: '', attachments: [OTHER] },
@@ -141,10 +150,17 @@ describe('添付つきの中断は、添付 id で受け取りを判定する', 
     expect(posts).toBe(1);
   });
 
-  it('自分の添付 id を持つ発言が現れたら下ろす', async () => {
+  it('自分の clientMessageId を持つ発言が現れたら下ろす', async () => {
     const { router } = await sendAttachmentOnlyAndAbort();
     history = [
-      { id: 'm1', at: '2026-08-20T00:00:00Z', role: 'inbound', text: '', attachments: [MINE] },
+      {
+        id: 'm1',
+        at: '2026-08-20T00:00:00Z',
+        role: 'inbound',
+        text: '',
+        attachments: [MINE],
+        clientMessageId: await firstPostedClientMessageId(stub),
+      },
     ];
     await reopenA(router);
     expect(await screen.findByAltText('att-mine.png')).toBeTruthy();
