@@ -148,32 +148,54 @@ describe('alteroid inbox remove — 送る本文', () => {
   });
 });
 
-describe('alteroid inbox remove — 入力の手前での断り（fetch を呼ばない）', () => {
+/**
+ * ⚠️ 2026-10-06（#3139）: 以前は断りを stdout へ書いて正常 return していた（＝終了コードは 0。
+ * 「消えたのか消えなかったのか」が終了コードで区別できなかった）。いまは例外を投げる——
+ * アサーションは消さず、見る先を「書いた文字列」から「投げた例外の文言」へ反転した
+ * （`memory.ts` / `token.ts` と同じ。#1621 / #1641 / #2456 / #2856）。
+ */
+describe('alteroid inbox remove — 入力の手前での断り（fetch を呼ばない。例外＝終了コード非0）', () => {
   it('--types が空（カンマだけ等）なら断って fetch しない', async () => {
-    const read = captureStdout();
-    await inboxRemoveCommand({ types: ' , ', reason: 'r' });
+    captureStdout();
+    const error = await inboxRemoveCommand({ types: ' , ', reason: 'r' }).catch((e: unknown) => e);
 
     expect(sent).toHaveLength(0);
-    expect(read()).toContain('--types に最低1種類');
+    expect(String(error)).toContain('--types に最低1種類');
+  });
+
+  it('--sources が空（カンマだけ等）なら断って fetch しない', async () => {
+    captureStdout();
+    const error = await inboxRemoveCommand({
+      types: 'timer',
+      reason: 'r',
+      sources: ' , ',
+    }).catch((e: unknown) => e);
+
+    expect(sent).toHaveLength(0);
+    expect(String(error)).toContain('--sources を渡すなら最低1件');
   });
 
   it('--limit が整数でないなら断って fetch しない', async () => {
-    const read = captureStdout();
-    await inboxRemoveCommand({ types: 'timer', reason: 'r', limit: 'abc' });
+    captureStdout();
+    const error = await inboxRemoveCommand({ types: 'timer', reason: 'r', limit: 'abc' }).catch(
+      (e: unknown) => e,
+    );
 
     expect(sent).toHaveLength(0);
-    expect(read()).toContain('--limit には1以上の整数');
+    expect(String(error)).toContain('--limit には1以上の整数');
   });
 
   it('--limit が0以下なら断って fetch しない', async () => {
-    const read = captureStdout();
-    await inboxRemoveCommand({ types: 'timer', reason: 'r', limit: '0' });
+    captureStdout();
+    const error = await inboxRemoveCommand({ types: 'timer', reason: 'r', limit: '0' }).catch(
+      (e: unknown) => e,
+    );
 
     expect(sent).toHaveLength(0);
     // 隣の `--limit が整数でない` と同じく、断った理由まで見る——`sent` が0件
     // であることだけを見ると、**別の理由で fetch に届かなかった場合**（例えば
     // `--types` の検査で先に return した）と区別できない。
-    expect(read()).toContain('--limit には1以上の整数');
+    expect(String(error)).toContain('--limit には1以上の整数');
   });
 });
 

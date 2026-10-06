@@ -120,10 +120,7 @@ export async function chatCommand(): Promise<void> {
     rl.close();
     if (conversationId) {
       // 会話終了は蒸留の契機（寿命モデル: 蒸留は生存条件）
-      stdout.write('\n（学びを記憶へ蒸留しています…）\n');
-      await client.chat[':conversationId'].end
-        .$post({ param: { conversationId } })
-        .catch(() => undefined);
+      await endConversationOnExit(client, target, conversationId);
     }
   }
 }
@@ -3067,6 +3064,38 @@ async function errorDetail(response: { status: number; json: () => Promise<unkno
     // 本文が JSON でない（プロキシの HTML 等）。状態コードへ倒す。
   }
   return `HTTP ${response.status}（理由は読めませんでした）`;
+}
+
+/**
+ * 抜けるときの `POST /chat/:id/end`。**要求が通ってから**「蒸留しています」と言う。失敗
+ * （例外・非 ok）は、会話は終わっておらず蒸留も走っていないこと、あとで終えられることを
+ * 出す。終了コードは変えない（REPL の他のエラーと同じく、書いて正常に戻る）。
+ */
+export async function endConversationOnExit(
+  client: DaemonClient,
+  target: Target,
+  conversationId: string,
+  write: (text: string) => void = (text) => void stdout.write(text),
+): Promise<void> {
+  write('\n（会話を終えています…）\n');
+  let reason: string;
+  try {
+    const response = await client.chat[':conversationId'].end.$post({
+      param: { conversationId },
+    });
+    if (response.ok) {
+      write('（学びを記憶へ蒸留しています…）\n');
+      return;
+    }
+    reason = describeAuthFailure(response.status, target) ?? (await errorDetail(response));
+  } catch (error) {
+    reason = redactError(error instanceof Error ? error.message : String(error));
+  }
+  write(
+    `会話 ${conversationId} を終えられませんでした（${reason}）。会話は終わっておらず、` +
+      '学びの蒸留も走っていません。あとで Web の会話画面の「会話を終える」か、' +
+      `alteroid tui で /conversations から開き直して /end で終えられます\n`,
+  );
 }
 
 /** `/managers [status=…] [limit=…] [after=…]` を解いた結果（issue #670）。 */

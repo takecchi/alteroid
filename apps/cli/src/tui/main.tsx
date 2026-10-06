@@ -96,5 +96,7 @@ export async function runApp(api: TuiApi, io: TuiIo): Promise<void> {
     feed.stop();
     restore();
     uninstall();
+    // 画面を戻した後でないと、代替画面ごと消えて読めない。
+    if (controller.shutdownFailure !== null) io.stderr.write(`${controller.shutdownFailure}\n`);
   }
 }

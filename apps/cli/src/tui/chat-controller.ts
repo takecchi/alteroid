@@ -256,12 +256,26 @@ export class ChatController {
     this.addSystem('会話を終えた（学びを記憶へ蒸留している）。次の発言から新しい会話になる');
   }
 
+  /**
+   * `shutdown` で会話を終えられなかったときの断り（成功・会話なしなら `null`）。終了後は ink の
+   * 描画が畳まれる（代替画面は捨てられる）ので、ログへは積まず、呼び出し側が画面を戻した後に
+   * 端末へ書く（`main.tsx` の `runApp`）。
+   */
+  shutdownFailure: string | null = null;
+
   /** 終了前の後始末: 受信をやめ、会話があれば終える（既存 CLI の chat と同じ）。 */
   async shutdown(): Promise<void> {
     this.abort?.abort();
     this.stopWatch();
     const id = this.store.getSnapshot().conversationId;
-    if (id !== null) await this.api.endConversation(id).catch(() => undefined);
+    if (id === null) return;
+    try {
+      await this.api.endConversation(id);
+    } catch (error) {
+      this.shutdownFailure =
+        `会話 ${id} を終えられませんでした（${messageOf(error)}）。会話は終わっておらず、学びの蒸留も走っていません。` +
+        'あとで Web の会話画面の「会話を終える」か、alteroid tui の /conversations から開き直して /end で終えられます';
+    }
   }
 
   /** 履歴の一覧。`at` は読んだ時刻（「何分前」の基準）。 */

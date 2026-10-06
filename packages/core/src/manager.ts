@@ -5532,8 +5532,13 @@ class Pool implements ManagerPool {
   /**
    * 移送の resume を**その runner の都合で**断られた回の控え（`managerId` → 断った移送先の `runnerId`。
    * Issue #3098）。候補を全部断られたかの判定（`#noteRelocationRefusal`）にだけ使う。
-   * 移送が受理された・lost に確定した回に消える。メモリだけ（デーモンの再起動で消える。再起動後は
-   * 移送先がもう一度断れば、また積み直される）。
+   * 移送が受理された・lost に確定した回に消える。
+   *
+   * **メモリだけで、デーモンの再起動で消える**（永続化しない。Issue #3102 の決定）。理由: この控えは
+   * 「候補が尽きたか」の判定にしか使っておらず、断った runner も `hello` のたびに試される（控えは
+   * 試すのを止める印ではない）。再起動の後に移送が始まるのは元の runner がもう一度 lost になった
+   * ときだけで、そのとき候補を1巡し直すのは妥当である（再起動1回につき1巡で、無限には試さない）。
+   * 4xx 以外で引き取れない回（`workspace-path-unknown`、併存の見送り。Issue #3103）も同じ控えに流す。
    */
   readonly #relocationRefusals = new Map<string, Set<string>>();
   /**
@@ -5548,14 +5553,19 @@ class Pool implements ManagerPool {
    */
   readonly #relocatingTo = new Map<string, string>();
   /**
-   * 上の窓の間に届いた、移送先以外の runner からの `closed`（届いた順）。**捨てずに預かる**：
-   * 移送が受理されれば古い世代の出来事として日誌にだけ残して捨て、移送が失敗したなら
-   * （どこにも移れなかった＝元の runner の lost は事実のまま）従来どおり処理し直す
-   * （`#endRelocationWindow`）。
+   * 上の窓の間に届いた、移送先以外の runner からの `closed` / `session` / `report` / `ask` /
+   * `settled`（**委譲ごとに届いた順の1本の列**。Issue #3097 は `closed`、#3125 が残りの4種）。
+   * **捨てずに預かる**：移送が受理されれば古い世代の出来事として日誌にだけ残して捨て
+   * （#3059 の `#ignoreIfMovedAway` と同じ扱い）、移送が失敗したなら（どこにも移れなかった＝
+   * 元の runner の出来事は事実のまま）届いた順に `#onEvent` で処理し直す（`#endRelocationWindow`）。
+   * 処理し直しは通常の経路なので `reportId` / `requestId` の冪等性もそのまま効く。
    */
-  readonly #deferredClosed = new Map<
+  readonly #deferredEvents = new Map<
     string,
-    { event: Extract<RunnerEvent, { type: 'closed' }>; fromRunnerId: string }[]
+    {
+      event: Extract<RunnerEvent, { type: 'closed' | 'session' | 'report' | 'ask' | 'settled' }>;
+      fromRunnerId: string;
+    }[]
   >();
   /**
    * 直近の resume が「生きていた旧プロセスへ流しただけ」だったマネージャー（#2877。
@@ -10321,6 +10331,9 @@ class Pool implements ManagerPool {
           const jobIds = listed.filter((job) => job.runnerId === runnerId).map((job) => job.id);
           this.#noteAmbiguousSighting(runnerId, sighting.duplicates, jobIds);
         }
+        // **この runner を移送先の候補として数えていたジョブには、見送りを断りとして流す**
+        // （Issue #3103。runner 単位の `return` なので、ジョブのループには届かない）。
+        await this.#refuseRelocationsBeforeGate(runnerId, sighting.duplicates);
         return;
       }
       if (this.#ambiguousRunnersNotified.has(runnerId)) {
@@ -10552,6 +10565,51 @@ class Pool implements ManagerPool {
             }
             continue;
           }
+          if (relocating && outcome === 'no-session') {
+            /*
+             * **移送のときの `no-session` は、その場で lost に確定する**（Issue #3103）。
+             * セッションが無いのは委譲の側の事実で、どの runner でも開き直せない——候補を
+             * 回しても変わらないので待たせない。元の runner への復帰（`!relocating`）の
+             * `no-session` は従来どおり（下の `continue`）。理由は日誌とクローンへの知らせに残す。
+             */
+            const reason = new Error(
+              'no-session: 委譲が session_id を持っておらず、どの runner でも開き直せない（移送の候補を回しても変わらないので、その場で確定した）',
+            );
+            await this.#journal({
+              type: 'decision',
+              decision: `[${job.id}] 移送先 ${runnerId} へ移せない（セッションが無い）。候補を回さず、戻せなかったものとして確定する`,
+              grounds: reasonOf(reason),
+            });
+            await this.#confirmLost(record, reason);
+            continue;
+          }
+          if (relocating && outcome === 'workspace-path-unknown') {
+            /*
+             * **この候補が引き取れない回は、4xx の断りと同じ控えに流す**（Issue #3103）。
+             * 候補が尽きたら lost に確定し、残りが居ればその候補へ任せる（`#noteRelocationRefusal`）。
+             *
+             * **貸し出しは返さない。** `#resume` はこの分岐を `#claimForResume` の前で返すので、
+             * この回では貸していない。ここで `record.job.lease` がこの候補を指していたら、それは
+             * 以前の回が貸したもので、その回に resume が飛んでいたか（セッションが起きたか）を
+             * ここからは確かめられない——起きていないと確かめられないものは返さない。
+             */
+            const reason = new Error(
+              `workspace-path-unknown: 移送先 ${runnerId} は cwd を記録しておらず、runner からも workspacePath を聞けていない`,
+            );
+            if (await this.#noteRelocationRefusal(record, runnerId, reason)) {
+              await this.#confirmLost(record, reason);
+            } else if (
+              record.job.lease?.runnerId === runnerId &&
+              record.job.lease.releasedAt === undefined
+            ) {
+              await this.#journal({
+                type: 'decision',
+                decision: `[${job.id}] 移送先 ${runnerId} に貸した貸し出しは返していない（以前の回の貸し出しで、セッションが起きていないと確かめられない）`,
+                grounds: reasonOf(reason),
+              });
+            }
+            continue;
+          }
           if (outcome !== 'resumed') continue;
           // **`#resumeOnce` から戻った直後、他の await を挟む前に読む**
           // （Issue #1814。`#restoreJobs` と同じ理由・同じ形——doc はそちらに
@@ -10649,16 +10707,7 @@ class Pool implements ManagerPool {
               });
             }
           } else {
-            this.#relocationRefusals.delete(job.id);
-            // 挑み直さないと決めたので、**ジョブ側に覚える**（runner 単位の `retry`
-            // では表せない。同じ runner の別ジョブが予約を積むたびに巻き込まれる）。
-            // 台帳にも書く — 記憶は器と一緒に消えるが、諦めた事実は消えない。
-            this.#unresumable.add(job.id);
-            record.job.status = 'lost';
-            await this.#persist(record);
-            this.#notifyUnresumable(record, error);
-            // waiting は上で（resume を挑む前に）既に空にしてある。
-            this.#retire(job.id);
+            await this.#confirmLost(record, error);
           }
         }
       }
@@ -10905,6 +10954,52 @@ class Pool implements ManagerPool {
     return this.#runners.get(runnerId);
   }
 
+  /** 戻せないと確定する（`#unresumable` を立て、台帳へ書き、知らせ、像から外す）。 */
+  async #confirmLost(record: ManagerRecord, error: unknown): Promise<void> {
+    const { job } = record;
+    this.#relocationRefusals.delete(job.id);
+    // 挑み直さないと決めたので、**ジョブ側に覚える**（runner 単位の `retry`
+    // では表せない。同じ runner の別ジョブが予約を積むたびに巻き込まれる）。
+    // 台帳にも書く — 記憶は器と一緒に消えるが、諦めた事実は消えない。
+    this.#unresumable.add(job.id);
+    record.job.status = 'lost';
+    this.#records.set(job.id, record);
+    await this.#persist(record);
+    this.#notifyUnresumable(record, error);
+    // waiting は resume を挑む前に既に空にしてある。
+    this.#retire(job.id);
+  }
+
+  /**
+   * 併存を関門より前で検出して `#reattach` が `runnerId` を見送った回に、この `runnerId` を移送先に
+   * なりうる委譲（記録された宛先が lost / vacating で、まだ running / waiting_human）それぞれについて、
+   * 断りとして控える（Issue #3103）。尽きた委譲は lost に確定し、残りが居る委譲は残りへ任せる。
+   *
+   * 台帳が読めない回は何もしない（`#listJobsOrNote` が日誌に残す。次の `hello` で再び届く）。
+   */
+  async #refuseRelocationsBeforeGate(runnerId: string, duplicates: number): Promise<void> {
+    const listed = await this.#listJobsOrNote(
+      `runnerId=${runnerId} の併存による移送の見送りを控えられなかった（次の hello で再挑戦する）`,
+    );
+    if (listed === null) return;
+    for (const job of listed) {
+      if (this.#stopped) return;
+      if (job.runnerId === undefined || job.runnerId === runnerId) continue;
+      if (job.status !== 'running' && job.status !== 'waiting_human') continue;
+      if (this.#unresumable.has(job.id) || !this.#shouldRelocateFrom(job.runnerId)) continue;
+      const known = this.#records.get(job.id);
+      const record = known ?? { job: { ...job }, waiting: [], attached: false };
+      const reason = new Error(
+        `runnerId=${runnerId} が併存している（${duplicates} 件）ので、移送先として取り直しを見送った`,
+      );
+      if (await this.#noteRelocationRefusal(record, runnerId, reason)) {
+        record.attached = false;
+        record.waiting = [];
+        await this.#confirmLost(record, reason);
+      }
+    }
+  }
+
   /**
    * 移送先 `refusedBy` が resume を**その runner の都合で**断った。ほかに試せる候補が残っているか
    * （Issue #3098）。残っていなければ真（＝呼び出し元が従来どおり lost に確定する）。
@@ -10952,18 +11047,19 @@ class Pool implements ManagerPool {
   }
 
   /**
-   * 移送の resume の結果が出た。窓の間に預かった元の runner の `closed` を片づける（Issue #3097）。
+   * 移送の resume の結果が出た。窓の間に預かった元の runner の出来事を、届いた順に片づける
+   * （Issue #3097 / #3125）。
    *
    * - **移送が受理された（`moved`）** — 古い世代の出来事なので、日誌にだけ残して捨てる
    *   （台帳は `running` / 移送先のまま。#3059 と同じ形）。
-   * - **受理されなかった** — どこにも移れていないので、元の runner の `closed` は従来どおり
-   *   処理し直す（捨てると lost を取りこぼす）。
+   * - **受理されなかった** — どこにも移れていないので、元の runner の出来事は従来どおり
+   *   処理し直す（捨てると lost や report を取りこぼす）。
    */
   async #endRelocationWindow(managerId: string, moved: boolean): Promise<void> {
     const target = this.#relocatingTo.get(managerId);
     this.#relocatingTo.delete(managerId);
-    const held = this.#deferredClosed.get(managerId) ?? [];
-    this.#deferredClosed.delete(managerId);
+    const held = this.#deferredEvents.get(managerId) ?? [];
+    this.#deferredEvents.delete(managerId);
     for (const { event, fromRunnerId } of held) {
       if (moved) {
         await this.#journal({
@@ -10973,12 +11069,24 @@ class Pool implements ManagerPool {
           text:
             `${EXCHANGE_KIND_DECISION_PREFIX}[${managerId}] （移送の最中に届いた古い runner の出来事のため無視。` +
             `移送先は ${target ?? '不明'}、この出来事は ${fromRunnerId} から）` +
-            `runner 側の終了イベント（status=${event.status}）を受け取った: ${event.reason}`,
+            (event.type === 'closed'
+              ? `runner 側の終了イベント（status=${event.status}）を受け取った: ${event.reason}`
+              : `移送の最中に届いた古い runner の ${event.type} を無視した`),
         });
       } else {
         await this.#onEvent(event, fromRunnerId);
       }
     }
+  }
+
+  /** 移送の窓の間に届いた出来事を、届いた順に預ける（`#deferredEvents`）。同期で呼ぶこと。 */
+  #deferEvent(
+    event: Extract<RunnerEvent, { type: 'closed' | 'session' | 'report' | 'ask' | 'settled' }>,
+    fromRunnerId: string,
+  ): void {
+    const held = this.#deferredEvents.get(event.managerId) ?? [];
+    held.push({ event, fromRunnerId });
+    this.#deferredEvents.set(event.managerId, held);
   }
 
   /**
@@ -11662,6 +11770,22 @@ class Pool implements ManagerPool {
 
     const record = this.#records.get(event.managerId) ?? (await this.#load(event.managerId));
     if (!record) return;
+
+    // **移送の resume が飛んでいる最中の session / report / ask / settled も、`closed` と同じく
+    // 結論が出るまで預かる**（Issue #3125）。窓の間は `job.runnerId` がまだ元の runner なので、
+    // `#ignoreIfMovedAway` が素通りし、受理される移送の前に古い報告が台帳と受信箱へ流れる。
+    if (
+      event.type === 'session' ||
+      event.type === 'report' ||
+      event.type === 'ask' ||
+      event.type === 'settled'
+    ) {
+      const relocatingTo = this.#relocatingTo.get(event.managerId);
+      if (relocatingTo !== undefined && relocatingTo !== fromRunnerId) {
+        this.#deferEvent(event, fromRunnerId);
+        return;
+      }
+    }
 
     switch (event.type) {
       case 'session': {
@@ -13467,9 +13591,7 @@ class Pool implements ManagerPool {
         // 取りこぼし、ここで処理すると移送が受理された回に台帳が lost のまま残る。
         const relocatingTo = this.#relocatingTo.get(event.managerId);
         if (relocatingTo !== undefined && relocatingTo !== fromRunnerId) {
-          const held = this.#deferredClosed.get(event.managerId) ?? [];
-          held.push({ event, fromRunnerId });
-          this.#deferredClosed.set(event.managerId, held);
+          this.#deferEvent(event, fromRunnerId);
           return;
         }
         const registeredRunnerIdsForClosed = this.#registeredRunnerIds();

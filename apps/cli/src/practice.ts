@@ -208,11 +208,10 @@ export async function practiceEditCommand(
   const kind = options.kind ?? current?.kind;
   const title = options.title ?? current?.title;
   if (kind === undefined || title === undefined) {
-    stdout.write(
+    throw new Error(
       '新しいやり方には --kind と --title が両方必要です: ' +
-        'alteroid practice edit <slug> --kind <種類> --title <題>\n',
+        'alteroid practice edit <slug> --kind <種類> --title <題>',
     );
-    return;
   }
 
   // **読んだ時の版を持ち回る（Issue #2853。`memory edit` と同じ）。** エディタを開いている間に
@@ -288,11 +287,10 @@ export async function practiceSetCommand(
   const kind = options.kind ?? current?.kind;
   const title = options.title ?? current?.title;
   if (kind === undefined || title === undefined) {
-    stdout.write(
+    throw new Error(
       '新しいやり方には --kind と --title が両方必要です: ' +
-        'alteroid practice set <slug> --kind <種類> --title <題>\n',
+        'alteroid practice set <slug> --kind <種類> --title <題>',
     );
-    return;
   }
 
   const content =

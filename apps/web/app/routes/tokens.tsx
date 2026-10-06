@@ -29,6 +29,7 @@ import {
   useJournal,
   useTokens,
   ApiError,
+  TokenNotFoundError,
 } from '@alteroid/swr';
 import { formatDateTime, formatRelative, TOKEN_ID_PARAM } from '@alteroid/logic';
 import type {
@@ -405,6 +406,9 @@ function PoolCard({
   rowsUnreadable?: TokensRowsUnreadable;
 }) {
   const sorted = [...tokens].sort((a, b) => a.order - b.order);
+  // **「既に無い」は行ではなく一覧側に持つ。** hook は断る前に一覧を取り直すので、
+  // その行は画面から消える——行の state に置くと断りの文言も一緒に消える。
+  const [gone, setGone] = useState<TokenNotFoundError | undefined>(undefined);
   // **プールから外れた id で飛んできたときの倒れ先。** 使用量には残っている
   // が、いまの `GET /tokens` には居ない id（外した・別の器のプールを見ている、
   // など——どちらとも断定しない）で飛んできたとき、黙って画面の頭に着地する
@@ -433,6 +437,7 @@ function PoolCard({
           </span>
         </div>
       )}
+      {gone !== undefined && <TokenWriteError error={gone} className="m-4" />}
       {rowsUnreadable !== undefined && <UnreadableRowsNote unreadable={rowsUnreadable} />}
       {sorted.length === 0 ? (
         rowsUnreadable !== undefined ? (
@@ -452,7 +457,12 @@ function PoolCard({
       ) : (
         <ul>
           {sorted.map((token) => (
-            <TokenRow key={token.id} token={token} highlighted={token.id === targetTokenId} />
+            <TokenRow
+              key={token.id}
+              token={token}
+              highlighted={token.id === targetTokenId}
+              onGone={setGone}
+            />
           ))}
         </ul>
       )}
@@ -556,8 +566,11 @@ function UnreadableRowsNote({ unreadable }: { unreadable: TokensRowsUnreadable }
 function TokenRow({
   token,
   highlighted = false,
+  onGone,
 }: {
   token: AgentTokenView;
+  /** 操作の対象が既に無かった（`TokenNotFoundError`）と、一覧側へ知らせる。操作の開始時に `undefined` で消す。 */
+  onGone: (error: TokenNotFoundError | undefined) => void;
   /** 使用量の画面から、この行を指して飛んできたか（issue #2109）。 */
   highlighted?: boolean;
 }) {
@@ -585,10 +598,12 @@ function TokenRow({
   async function toggleDisabled(next: boolean) {
     setBusy(next ? 'disable' : 'enable');
     setFailure(undefined);
+    onGone(undefined);
     try {
       await setDisabled(token.id, next);
     } catch (caught) {
-      setFailure(caught);
+      if (caught instanceof TokenNotFoundError) onGone(caught);
+      else setFailure(caught);
     } finally {
       setBusy(null);
     }
@@ -597,10 +612,12 @@ function TokenRow({
   async function remove() {
     setBusy('remove');
     setFailure(undefined);
+    onGone(undefined);
     try {
       await removeToken(token.id);
     } catch (caught) {
-      setFailure(caught);
+      if (caught instanceof TokenNotFoundError) onGone(caught);
+      else setFailure(caught);
     } finally {
       setBusy(null);
     }
