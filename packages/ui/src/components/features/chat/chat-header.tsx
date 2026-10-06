@@ -132,6 +132,7 @@ export function ChatHeader({
       )}
       {notice !== undefined && (
         <p
+          role="status"
           className={`shrink-0 border-b border-border py-2 text-[11px] text-muted-foreground ${gutter}`}
         >
           {notice}

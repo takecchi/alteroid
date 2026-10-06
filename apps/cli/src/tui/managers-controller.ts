@@ -18,7 +18,7 @@ import { type ManagerRow, type ManagerStatus, type TuiApi, type UnreadableManage
 import type { HeaderFeed } from './header-feed.js';
 import type { LogEntry } from './log.js';
 import { parseTranscript } from './managers-transcript.js';
-import { redactedErrorMessage } from '../redact.js';
+import { redactedErrorMessage, sanitizeForTerminal } from '../redact.js';
 import { Store } from './store.js';
 
 /** Web の `MANAGERS_PAGE` と同じ。 */
@@ -99,6 +99,14 @@ const messageOf = redactedErrorMessage;
 
 /** 追加指示が相手に渡ったと言える `outcome`。これ以外（`session_missing` / `declined` など）は渡っていない。 */
 const DELIVERED_OUTCOMES: ReadonlySet<string> = new Set(['delivered', 'answered']);
+
+/**
+ * 停止が済んだと言える `outcome`。daemon の `DELETE /managers/{id}` は 200 で `stopped` / `not_stopped` / `unknown` を返す
+ * （`absent` は 404、`unreadable` は 409 で例外側。packages/core の `ManagerAbortResult`）。
+ * `not_stopped`（止まっていないと確かめた）・`unknown`（確かめられなかった）は止まったと言えないので失敗の表示にする。
+ * 既に止まっていたものも `stopped` で返る（専用の値は無い）。
+ */
+const STOPPED_OUTCOMES: ReadonlySet<string> = new Set(['stopped']);
 
 export class ManagersController {
   readonly store = new Store<ManagersState>(initialManagersState);
@@ -372,7 +380,11 @@ export class ManagersController {
     let delivered: boolean;
     try {
       const result = await this.api.sendManagerMessage(id, text);
-      this.setDetail(id, { busy: false, notice: `${result.outcome}: ${result.detail}` });
+      // デーモンの応答の文字列。端末へ出る前に掃除する。
+      this.setDetail(id, {
+        busy: false,
+        notice: sanitizeForTerminal(`${result.outcome}: ${result.detail}`),
+      });
       // 200 でも `session_missing`（届いていない）・`declined`（送らなかった）は送れていない。文を残させる（#3487）。
       delivered = DELIVERED_OUTCOMES.has(result.outcome);
     } catch (error) {
@@ -400,7 +412,7 @@ export class ManagersController {
     if (d !== null) this.setDetail(d.id, { confirmStop: false });
   }
 
-  /** 確認のあとに呼ぶ。応答の `outcome` を読み替えずに出す（`stopped` 以外を「止めた」と言わない）。 */
+  /** 確認のあとに呼ぶ。応答の `outcome` を読み替えずに出し、`stopped` 以外は `✗ ` を付ける（#3519）。 */
   async confirmStop(): Promise<void> {
     const detail = this.store.getSnapshot().detail;
     if (detail === null || !detail.confirmStop || detail.busy) return;
@@ -408,7 +420,11 @@ export class ManagersController {
     this.setDetail(id, { confirmStop: false, busy: true, notice: '止めている…' });
     try {
       const result = await this.api.stopManager(id);
-      this.setDetail(id, { busy: false, notice: `${result.outcome}: ${result.detail}` });
+      const mark = STOPPED_OUTCOMES.has(result.outcome) ? '' : '✗ ';
+      this.setDetail(id, {
+        busy: false,
+        notice: `${mark}${sanitizeForTerminal(`${result.outcome}: ${result.detail}`)}`,
+      });
     } catch (error) {
       this.setDetail(id, {
         busy: false,

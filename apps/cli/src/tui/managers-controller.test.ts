@@ -250,6 +250,23 @@ describe('詳細', () => {
     expect(api.stoppedManagers).toEqual(['a']);
     expect(state().detail?.confirmStop).toBe(false);
   });
+
+  it('停止の結果が stopped 以外（not_stopped / unknown）なら ✗ を付け、読み替えずに出す。stopped は付けない（#3519）', async () => {
+    const { api, controller, state } = setup((a) => {
+      a.managerRows = [managerRow('a')];
+    });
+    await controller.open('a');
+    for (const outcome of ['not_stopped', 'unknown']) {
+      api.stopResult = { outcome, detail: '止まっていない' };
+      controller.askStop();
+      await controller.confirmStop();
+      expect(state().detail?.notice).toBe(`✗ ${outcome}: 止まっていない`);
+    }
+    api.stopResult = { outcome: 'stopped', detail: '止めた' };
+    controller.askStop();
+    await controller.confirmStop();
+    expect(state().detail?.notice).toBe('stopped: 止めた');
+  });
 });
 
 describe('表示の文言', () => {

@@ -95,13 +95,16 @@ function ProgressTile() {
             unit="件"
             hint={`未了の仕事 ${data.backlog.total} 件・直近 ${windowText(data.window.hours)}で閉じた仕事 ${data.throughput.commitmentsClosed} 件`}
           />
-          {data.inProgress.running === 0 && data.backlog.total === 0 && (
-            <HomeTileNote>
-              いま動いている作業も未了の仕事も無い。何かを任せると、ここに出る。
-            </HomeTileNote>
-          )}
-          {progressPartial(data) && (
+          {progressPartial(data) ? (
+            // 数が下限でしかないときは「無い」と言い切らない（issue #3538）。下限の注記だけにする。
             <HomeTileNote tone="warn">読めなかった行があり、数は下限として読むこと。</HomeTileNote>
+          ) : (
+            data.inProgress.running === 0 &&
+            data.backlog.total === 0 && (
+              <HomeTileNote>
+                いま動いている作業も未了の仕事も無い。何かを任せると、ここに出る。
+              </HomeTileNote>
+            )
           )}
         </>
       )}
@@ -152,7 +155,12 @@ function NextRunTile() {
           {/* 読めない継続中の依頼を、一覧が空に見えることで隠さない（issue #2343）。 */}
           <UnreadableScheduleNote unreadable={schedule.data.unreadable ?? []} className="mb-2" />
           {shown === undefined ? (
-            <p className="text-sm text-muted-foreground">予定はない。</p>
+            <p className="text-sm text-muted-foreground">
+              {/* 読めない依頼が在るのに「ない」と言い切らない（issue #3538。定期ジョブの画面と同じ言い方）。 */}
+              {(schedule.data.unreadable ?? []).length > 0
+                ? '読めた範囲では、予定はない。'
+                : '予定はない。'}
+            </p>
           ) : (
             <Stat
               label={<span title={shown.description}>{shown.description}</span>}

@@ -177,6 +177,8 @@ export const App: FC<AppProps> = ({
   const [memAnchor, setMemAnchor, memAnchorRef] = useSyncedState<ScrollAnchor>('bottom');
   const [picker, setPicker, pickerRef] = useSyncedState<PickerState | null>(null);
   const [quitting, setQuitting] = useState(false);
+  /** 最下行に、キーヒントの代わりに出す通知（次のキーで消える）。会話のログが見えない画面で結果を言う（#3489・#3490）。 */
+  const [footNote, setFootNote] = useState<string | null>(null);
 
   const wrapWidth = Math.max(1, columns - COMPOSER_PREFIX_CELLS);
   const inMgrDetail = tab === 'managers' && mgr.view === 'detail' && mgr.detail !== null;
@@ -251,6 +253,8 @@ export const App: FC<AppProps> = ({
   const quittingRef = useRef(false);
   /** 委譲の詳細で、書きかけを捨てて戻る 2 度目の Esc を待っている（#3367）。 */
   const mgrDiscardArmedRef = useRef(false);
+  /** 書きかけが在るまま、2 度目の Ctrl+D（捨てて終了）を待っている（#3490）。 */
+  const quitArmedRef = useRef(false);
   const quit = (): void => {
     if (quittingRef.current) return;
     quittingRef.current = true;
@@ -321,20 +325,16 @@ export const App: FC<AppProps> = ({
    * `/journal [件数] [type=<種別,…>] [q=<語>]`。CLI `/journal` と同じ `parseJournalSearchTokens` で解く
    * （知らない種別は問い合わせる前に断る）。引数が無ければ今の絞りのまま画面へ移るだけ。
    */
-  const applyJournalArgs = (args: string): void => {
+  const applyJournalArgs = (args: string): string | undefined => {
     const tokens = args.split(/\s+/).filter((t) => t.length > 0);
-    if (tokens.length === 0) return;
+    if (tokens.length === 0) return undefined;
     const parsed = parseJournalSearchTokens(tokens);
-    if (!parsed.ok) {
-      journal.note(parsed.message);
-      return;
-    }
+    if (!parsed.ok) return parsed.message;
     let pageSize: number | undefined;
     if (parsed.limit !== undefined) {
       const n = Number(parsed.limit);
       if (!Number.isInteger(n) || n < 1 || n > JOURNAL_MAX_LIMIT) {
-        journal.note(`件数は 1〜${String(JOURNAL_MAX_LIMIT)} の整数で指定する（${parsed.limit}）`);
-        return;
+        return `件数は 1〜${String(JOURNAL_MAX_LIMIT)} の整数で指定する（${parsed.limit}）`;
       }
       pageSize = n;
     }
@@ -343,6 +343,7 @@ export const App: FC<AppProps> = ({
       .filter((t): t is JournalType => (JOURNAL_TYPES as readonly string[]).includes(t));
     setJAnchor('bottom');
     journal.setFilter(types, parsed.q ?? '', pageSize);
+    return undefined;
   };
 
   const runCommand = (action: CommandAction, args = ''): void => {
@@ -370,8 +371,12 @@ export const App: FC<AppProps> = ({
         break;
       case 'journal':
         // 絞りを先に決める（画面を開く読み込みと二重にならないように）。
-        applyJournalArgs(args);
-        goTab(action);
+        // 引数の誤りの断りは、画面を開いたあとに載せる（開く読み込みの開始が `error` を消すため）。
+        {
+          const refusal = applyJournalArgs(args);
+          goTab(action);
+          if (refusal !== undefined) journal.note(refusal);
+        }
         break;
       case 'approvals': {
         const id = args.split(/\s+/)[0] ?? '';
@@ -737,27 +742,33 @@ export const App: FC<AppProps> = ({
   useInput((rawInput, rawKey) => {
     const { input, key } = normalizeChord(rawInput, rawKey);
 
+    // 通知は次のキーで消す。Ctrl+D の 2 度目の待ちも、Ctrl+D 以外のキーで解く。
+    setFootNote(null);
+    if (!(key.ctrl && input === 'd')) quitArmedRef.current = false;
+
     if (key.ctrl && input === 'c') {
-      void controller.interrupt();
+      const where = tabRef.current;
+      void controller.interrupt().then((result) => {
+        // 会話のログが見えない画面では、結果（失敗も）を最下行にも出す（#3489）。
+        if (where !== 'chat') setFootNote(result.ok ? result.text : `✗ ${result.text}`);
+      });
       return;
     }
     if (key.ctrl && input === 'd') {
-      // 入力欄が空のときだけ（書きかけを誤って捨てない）。入力欄の外・他の画面では常に終了。
-      const draft =
-        tabRef.current === 'chat'
-          ? bufferRef.current
-          : tabRef.current === 'approvals'
-            ? apBufferRef.current
-            : mgrBufferRef.current;
-      if (
-        (tabRef.current !== 'chat' &&
-          tabRef.current !== 'managers' &&
-          tabRef.current !== 'approvals') ||
-        zoneRef.current !== 'input' ||
-        isEmptyBuffer(draft)
-      ) {
-        quit();
+      // 書きかけ（会話・委譲・承認待ちの入力欄）が在れば、1 度目は言うだけで、2 度目で終了する。
+      // どの画面・どのゾーンでも同じ（委譲の Esc 二度押しと揃える。#3490）。
+      const hasDraft =
+        !isEmptyBuffer(bufferRef.current) ||
+        !isEmptyBuffer(mgrBufferRef.current) ||
+        (tabRef.current === 'approvals' &&
+          zoneRef.current === 'input' &&
+          !isEmptyBuffer(apBufferRef.current));
+      if (hasDraft && !quitArmedRef.current) {
+        quitArmedRef.current = true;
+        setFootNote('書きかけが残っている。もう一度 ^D で捨てて終了する');
+        return;
       }
+      quit();
       return;
     }
 
@@ -850,8 +861,9 @@ export const App: FC<AppProps> = ({
     if (tabRef.current === 'journal' && handleJournalNav(input, key)) return;
     if (tabRef.current === 'memory' && handleMemoryNav(input, key)) return;
     if (input === '/') {
+      // 会話の書きかけは「/」で置き換えて消さない。空のときだけ「/」から書き始める（#3488）。
       goTab('chat');
-      setBuffer({ value: '/', cursor: 1 });
+      if (isEmptyBuffer(bufferRef.current)) setBuffer({ value: '/', cursor: 1 });
       return;
     }
     const digit = TABS.find((t) => t.key === input);
@@ -872,7 +884,7 @@ export const App: FC<AppProps> = ({
   const cursorTop = inMgrDetail
     ? 2 + DETAIL_HEAD_ROWS + mgrLogHeight + 1 + 1
     : 2 + layout.logHeight + 1 + 1;
-  const hint = quitting
+  const baseHint = quitting
     ? HINT_QUITTING
     : picker !== null
       ? HINT_PICKER
@@ -911,6 +923,8 @@ export const App: FC<AppProps> = ({
               : tab === 'chat' && zone === 'input'
                 ? HINT_INPUT
                 : HINT_NAV;
+
+  const hint = quitting ? baseHint : (footNote ?? baseHint);
 
   return (
     <Box

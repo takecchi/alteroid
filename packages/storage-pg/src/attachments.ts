@@ -11,7 +11,7 @@ import {
   type AttachmentStore,
   type AttachmentStoreOptions,
 } from '@alteroid/core';
-import { and, inArray, isNull, lte, or, eq } from 'drizzle-orm';
+import { and, inArray, isNull, lte, or, eq, gt } from 'drizzle-orm';
 
 import type { Db } from './db.js';
 import { toIso, toNumber } from './db.js';
@@ -74,6 +74,11 @@ export class PgAttachmentStore implements AttachmentStore {
     this.#options = options;
   }
 
+  /** 期限内（`expiresAt` が今より後）。prune の `lte(expiresAt, now)` の逆で、ちょうどは期限切れ（#3522）。 */
+  #notExpired() {
+    return gt(attachments.expiresAt, this.#options.now?.() ?? new Date());
+  }
+
   async put(input: AttachmentPutInput): Promise<AttachmentMeta> {
     const limits = this.#options.limits ?? readAttachmentLimits().limits;
     const meta = prepareAttachment(input, limits, this.#options.now?.() ?? new Date());
@@ -98,7 +103,7 @@ export class PgAttachmentStore implements AttachmentStore {
     const rows = await this.#db
       .select({ ...META_COLUMNS, bytes: attachments.bytes })
       .from(attachments)
-      .where(eq(attachments.id, id));
+      .where(and(eq(attachments.id, id), this.#notExpired()));
     const row = rows[0];
     if (row === undefined) return undefined;
     return { meta: toMeta(row), bytes: new Uint8Array(row.bytes) };
@@ -109,7 +114,7 @@ export class PgAttachmentStore implements AttachmentStore {
     const rows = await this.#db
       .select(META_COLUMNS)
       .from(attachments)
-      .where(eq(attachments.id, id));
+      .where(and(eq(attachments.id, id), this.#notExpired()));
     return rows[0] === undefined ? undefined : toMeta(rows[0]);
   }
 
@@ -138,6 +143,7 @@ export class PgAttachmentStore implements AttachmentStore {
     if (queryable.length > 0) {
       // 1本の UPDATE … RETURNING が、行ごとの原子的な判定になる: 「いま未結び付け」の行だけがここで変わって返る。
       // 同時に別の呼び出しが先に結んだ行は WHERE に当たらない（#3282）。
+      const notExpired = this.#notExpired();
       const updated = await this.#db
         .update(attachments)
         .set(target)
@@ -146,6 +152,7 @@ export class PgAttachmentStore implements AttachmentStore {
             inArray(attachments.id, queryable),
             isNull(attachments.conversationId),
             isNull(attachments.externalEventId),
+            notExpired,
           ),
         )
         .returning({ id: attachments.id });
@@ -163,7 +170,7 @@ export class PgAttachmentStore implements AttachmentStore {
             externalEventId: attachments.externalEventId,
           })
           .from(attachments)
-          .where(inArray(attachments.id, rest));
+          .where(and(inArray(attachments.id, rest), notExpired));
         for (const row of others) {
           const same =
             'conversationId' in target
@@ -175,7 +182,8 @@ export class PgAttachmentStore implements AttachmentStore {
     }
     return {
       bound: ids.filter((id) => bound.has(id)),
-      newlyBound: ids.filter((id) => newlyBound.has(id)),
+      // 重ねて渡された同じ id は最初の1回だけ数える（memory・fs と同じ。bound・missing・conflicts は渡した数のまま）。
+      newlyBound: ids.filter((id, index) => newlyBound.has(id) && ids.indexOf(id) === index),
       missing: ids.filter((id) => !bound.has(id) && !conflicts.has(id)),
       conflicts: ids.filter((id) => conflicts.has(id)),
     };

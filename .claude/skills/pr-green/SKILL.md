@@ -99,7 +99,7 @@ description: PR が本当に緑かを判定するとき、CI の完了を待つ�
 
       **`created_at` だけでは決まらない。** 決めているのは `id` の大小である（逐語は `grep -Fn -- 'return a.id > b.id ? a : b;' scripts/check-pr-green-core.mjs`）。`check-runs` 側の `started_at` も同じ向きを指す（`cancelled` が `21:26:04Z`、`success` が `21:26:08Z`）。
 
-    - **⟹ `check-runs` の一覧に見える `conclusion=cancelled` の行は、最新世代とは限らない。** 上の2世代は `cancel-in-progress: true` が作ったもので（`.github/workflows/` のうち `cancel-in-progress: true` を持つもの。何本在るかはここに数え上げない。逐語は `grep -Fn -- 'cancel-in-progress: true' .github/workflows/ci.yml`）、**同じ枝へ短い間に2つのイベントが飛ぶと、push が無くても同じ sha の上に世代が2つ生まれて先の世代が切られる。**
+    - **⟹ `check-runs` の一覧に見える `conclusion=cancelled` の行は、最新世代とは限らない。** 上の2世代は `cancel-in-progress: true` が作ったもので（`.github/workflows/` のうち、PR の側で `cancel-in-progress` が真になるもの。何本在るかはここに数え上げない。`ci.yml` は PR では真・main の push では偽にしてある（#3540）。逐語は `grep -Fn -- 'cancel-in-progress: ${{ github.event_name !=' .github/workflows/ci.yml`）、**同じ枝へ短い間に2つのイベントが飛ぶと、push が無くても同じ sha の上に世代が2つ生まれて先の世代が切られる。**
       - **実際に1人が誤読した**（2026-09-16 観測）。`check-runs` の `cancelled` の行を見て「required の門が `cancelled` の世代を持っている」と読み、**最新世代は `success` だった。** ⚠️ **誤りの向きは赤の側なので、この回は実害が出ていない。鏡像（古い世代の `success` を最新と読んで赤を見落とす）は、上の `started_at` / `id` の逆転の項が扱っている。**
       - **⚠️ 「最新世代が `cancelled`」という状態自体は実在する**（実測 2026-09-17T02:20Z、直近1000 run の窓で **33件**。全部 `CI` の run で、`ci` と `image` は required である）。**ただしそのとき GitHub が required を満たしたと見なすかは測れていない** —— 経緯と、測るのに要る費用は #1155 に在る
   - **その run が実際にジョブを実行したか**を見る（`actions/runs/<id>/jobs` の `total_count` が0でないこと。実行時間も見る）

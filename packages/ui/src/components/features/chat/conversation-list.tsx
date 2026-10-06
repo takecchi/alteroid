@@ -1,6 +1,7 @@
 import { BellDot, Plus } from 'lucide-react';
 import type { ReactNode } from 'react';
 
+import { useDisplayText } from '@/lib/display-text';
 import { cn } from '@/lib/utils';
 
 import { Button, Empty, ErrorNote, Spinner } from '../../common';
@@ -29,7 +30,20 @@ export type ConversationRenderLink = (
 ) => ReactNode;
 
 /**
+ * 一覧の続きを読む口（#3404）。**渡さなければボタンを出さない**（もう続きが無いとき）。
+ * `error` は続きを読めなかったことを、一覧の下に小さく言う（一覧は残す）。
+ */
+export interface ConversationListMore {
+  onClick: () => void;
+  loading?: boolean;
+  /** 失敗の中身（`ErrorNote` と同じく、表示の伏せ字を通して出す）。 */
+  error?: unknown;
+}
+
+/**
  * 会話の一覧（会話の画面の脇の面）。
+ *
+ * - `more` —— 「もっと見る」（一覧の続きを読む口）。無ければ出さない
  *
  * - `newConversation` —— 「新しい会話」の口（上の帯の右）。リンクにするのは画面
  * - `unavailable` —— 取得に失敗して1件も読めていないとき（#2323）。「まだ会話がない。」を
@@ -53,6 +67,7 @@ export function ConversationList({
   notes,
   inDrawer = false,
   newConversationTabStop = false,
+  more,
 }: {
   items: readonly ConversationListItem[] | undefined;
   activeId: string | undefined;
@@ -63,7 +78,9 @@ export function ConversationList({
   notes?: readonly ReactNode[];
   inDrawer?: boolean;
   newConversationTabStop?: boolean;
+  more?: ConversationListMore;
 }) {
+  const display = useDisplayText();
   return (
     <aside
       className={cn(
@@ -134,6 +151,28 @@ export function ConversationList({
               </li>
             ))}
           </ul>
+        )}
+        {more !== undefined && (
+          <div className="px-3 py-2">
+            {more.error !== undefined && more.error !== null && (
+              <p role="alert" className="mb-1 text-[11px] break-words text-destructive">
+                続きを読めなかった（
+                {display.error(
+                  more.error instanceof Error ? more.error.message : String(more.error),
+                )}
+                ）。もう一度押せば取り直す。
+              </p>
+            )}
+            <Button
+              size="sm"
+              variant="ghost"
+              className="w-full"
+              disabled={more.loading === true}
+              onClick={more.onClick}
+            >
+              {more.loading === true ? '読み込み中…' : 'もっと見る'}
+            </Button>
+          </div>
         )}
       </div>
 

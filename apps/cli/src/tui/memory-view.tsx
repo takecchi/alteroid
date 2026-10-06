@@ -14,6 +14,7 @@ import type { MemoryRow } from './api.js';
 import { formatCreatedAt, freshnessMarker } from '../memory.js';
 import type { MemoryDetailState, MemoryState } from './memory-controller.js';
 import { oneLine } from './journal-format.js';
+import { sanitizeForTerminal } from '../redact.js';
 import { glyph, theme } from './theme.js';
 
 /** 一覧 1 件の行数。 */
@@ -26,13 +27,18 @@ const DESCRIPTION_LIMIT = 200;
 /** 1 行目: 種別・タイトル・slug・大きさ・更新。 */
 export function memoryTitleLine(row: MemoryRow, now: number): string {
   const size = row.bytes === undefined ? '' : ` · ${formatBytes(row.bytes)}`;
-  return `[${row.kind}] ${row.title}  ${row.slug}${size} · 更新 ${formatElapsedAgo(row.updatedAt, now)}`;
+  // 外から来た文字列（title・slug・kind）の制御文字を端末へ出さない。組み立てたあとで掃除する。
+  return sanitizeForTerminal(
+    `[${row.kind}] ${row.title}  ${row.slug}${size} · 更新 ${formatElapsedAgo(row.updatedAt, now)}`,
+  );
 }
 
 /** 2 行目: 要旨（印は要旨の前。`alteroid memory list` と同じ `freshnessMarker`）。 */
 export function memoryDescriptionLine(row: MemoryRow): string {
   if (row.description === undefined) return ' ';
-  return `    ${freshnessMarker(row.descriptionFreshness)}${oneLine(row.description, DESCRIPTION_LIMIT)}`;
+  return sanitizeForTerminal(
+    `    ${freshnessMarker(row.descriptionFreshness)}${oneLine(sanitizeForTerminal(row.description), DESCRIPTION_LIMIT)}`,
+  );
 }
 
 /** 一覧。窓は選択が見える範囲だけを描く。 */
@@ -90,15 +96,17 @@ export const MemoryDetailHead: FC<{ detail: MemoryDetailState }> = ({ detail }) 
   return (
     <Box flexDirection="column" height={MEMORY_DETAIL_HEAD_ROWS} flexShrink={0} overflow="hidden">
       <Text wrap="truncate-end">
-        <Text bold>{row === null ? '' : `[${row.kind}] `}</Text>
-        {detail.slug}
+        <Text bold>{row === null ? '' : sanitizeForTerminal(`[${row.kind}] `)}</Text>
+        {sanitizeForTerminal(detail.slug)}
       </Text>
       <Text wrap="truncate-end" dimColor>
         {doc === null
           ? ' '
-          : `作成 ${formatCreatedAt(doc.createdAt)} · 更新 ${doc.updatedAt}（${formatElapsedAgo(doc.updatedAt, detail.loadedAt)}）`}
+          : sanitizeForTerminal(
+              `作成 ${formatCreatedAt(doc.createdAt)} · 更新 ${doc.updatedAt}（${formatElapsedAgo(doc.updatedAt, detail.loadedAt)}）`,
+            )}
       </Text>
-      <Text wrap="truncate-end">{row === null ? ' ' : row.title}</Text>
+      <Text wrap="truncate-end">{row === null ? ' ' : sanitizeForTerminal(row.title)}</Text>
     </Box>
   );
 };
