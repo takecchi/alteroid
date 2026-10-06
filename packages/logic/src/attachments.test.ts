@@ -98,3 +98,10 @@ describe('型の判定', () => {
     expect(attachmentMediaType({ type: 'text/csv' })).toBe('text/csv');
   });
 });
+
+describe('上限に null を渡したとき（#3204）', () => {
+  it('既定値で検査する（古いデーモンの 404）', () => {
+    const big = { name: 'a.png', size: 6 * 1024 * 1024, type: 'image/png' };
+    expect(checkAttachments([], [big], null).rejected).toHaveLength(1);
+  });
+});

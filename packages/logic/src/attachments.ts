@@ -63,8 +63,9 @@ interface Sized {
 export function checkAttachments<T extends Sized>(
   existing: readonly Sized[],
   incoming: readonly T[],
-  limits: AttachmentCheckLimits = DEFAULT_ATTACHMENT_CHECK_LIMITS,
+  given?: AttachmentCheckLimits | null,
 ): { accepted: T[]; rejected: { name: string; reason: string }[] } {
+  const limits = given ?? DEFAULT_ATTACHMENT_CHECK_LIMITS;
   const accepted: T[] = [];
   const rejected: { name: string; reason: string }[] = [];
   let count = existing.length;
