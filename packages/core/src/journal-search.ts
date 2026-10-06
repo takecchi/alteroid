@@ -43,18 +43,18 @@ export type JournalSearchTarget = Readonly<Record<string, unknown>>;
  * **pg が SQL の中で行ごとの種別を分岐せずに済むようにするためである。**
  * この照合は3実装（`testing.ts` のインメモリ / `storage-fs` / `storage-pg`）で
  * **同じ答えでなければならない**（`journal-search-contract.ts` が測る）。
- * pg 側は `entry->>'<欄>'` を `coalesce(…, '')` で繋いだ式に `ILIKE` を当てる
- * ——**JS 側も同じ順序・同じ区切りで、無い欄を空文字列として繋ぐ**ことで、
- * 両者が組み立てる文字列そのものが1バイトも違わなくなる。
+ * pg 側は欄ごとに `coalesce(entry->>'<欄>', '') ILIKE …` を当てて `OR` で繋ぐ。
+ * **JS 側も同じ欄の一覧（`JOURNAL_SEARCH_FIELDS`）を欄ごとに別々に当て、どれか1つの欄に含まれれば当たり**
+ * とする（issue #3289）。**欄をまたいで当てない**——かつては全欄を改行で繋いだ1本の文字列に
+ * 当てていたので、`q: '\n'` が全行（探す欄を持たない種別も）に当たり、欄をまたぐ一致もできた。
  *
  * 行の種別ごとに欄を選ぶ形にすると、pg 側は `case entry->>'type' when …` の
  * 分岐を持つことになり、**JS 側の分岐と食い違っても誰も気づけない**（食い違いは
  * 特定の種別 × 特定の語のときだけ出る）。**平らにして両側から同じ定数を読ませる
  * ほうが、ずれる余地が構造的に無い。**
  *
- * ⚠️ **だから並び順は意味を持つ。** `q` に改行を含めると、繋ぎ目に入る `\n` に
- * 当たりうる（例: `"…text\n…"`）。3実装が同じ順序で繋ぐ限り**答えは揃う**が、
- * 「本文の中の改行」と「欄の繋ぎ目の改行」は区別が付かない。
+ * ⚠️ **欄ごとに当てるので、並び順は意味を持たない。** `q` に改行を含めても、当たるのは
+ * 1つの欄の本文の中の改行だけで、欄の繋ぎ目には当たらない（繋ぎ目が無い）。
  *
  * ## 対象にしていない欄（**「無い」と読まないための記録である**）
  *
@@ -87,7 +87,7 @@ export const SEARCHABLE_FIELDS_BY_TYPE = {
    * `text` だけ。**`agentId` / `agentType` / `outcome` は入れない** —— 上の doc の
    * 「識別子・列挙値の欄」の線であり、混ぜると `q: "woken"` が `outcome: 'woken'` の
    * 全行に当たる（**空転を絞る口は `types: ['subagent_stall']` として既に在る**）。
-   * カウント3つは数なので、そもそも `journalSearchText` の `typeof value === 'string'`
+   * カウント3つは数なので、そもそも `journalSearchValues` の `typeof value === 'string'`
    * を通らない。
    */
   subagent_stall: ['text'],
@@ -161,23 +161,20 @@ export const JOURNAL_SEARCH_UNCOVERED_LIST_MD: string = [
  *
  * **JS 側（インメモリ / fs）と SQL 側（pg）が、どちらもこの定数から式を
  * 組み立てる。** 片側に欄名を書き写さないこと —— 書き写した瞬間に、片方だけ
- * 直して他方を忘れる形ができる（`journalSearchText` の doc）。
+ * 直して他方を忘れる形ができる（`journalSearchValues` の doc）。
  *
- * 名前順にしてあるのは、宣言順（`SEARCHABLE_FIELDS_BY_TYPE` の並び）に依存
- * させないためである。**繋ぐ順序が変われば、改行をまたぐ語の当たり方が変わる**
- * ので、順序は「読む人が再現できる規則」で決まっているほうがよい。
+ * 名前順にしてあるのは、宣言順（`SEARCHABLE_FIELDS_BY_TYPE` の並び）に依存させず、
+ * 読む人が再現できる規則で決めるためである（欄ごとに当てるので答えは順序に依らない）。
  */
 export const JOURNAL_SEARCH_FIELDS: readonly string[] = [
   ...new Set(Object.values(SEARCHABLE_FIELDS_BY_TYPE).flat()),
 ].sort();
 
 /**
- * 照合に使う「この行の本文」を組み立てる。
- *
- * `JOURNAL_SEARCH_FIELDS` の順に、**その欄が文字列ならその値・そうでなければ
- * 空文字列**を並べ、改行で繋ぐ。無い欄を飛ばさずに空文字列で埋めるのは、pg 側の
- * `coalesce(entry->>'<欄>', '')` と繋ぎ目まで一致させるためである
- * （`SEARCHABLE_FIELDS_BY_TYPE` の doc）。
+ * 照合に使う「この行の欄の値」を、`JOURNAL_SEARCH_FIELDS` の順に並べる。
+ * **文字列の欄だけ**を入れ、無い欄・文字列でない欄は入れない。**繋がない**——
+ * 1つの欄が1つの値で、照合は欄ごとに別々に当てる（issue #3289。かつては `'\n'` で繋いだ
+ * 1本の文字列に当てていて、欄をまたぐ一致ができた）。
  *
  * **`typeof value === 'string'` で見るのは防御ではなく契約である。** ここに
  * 並ぶ欄名はすべて `z.string()`（または `z.string().optional()`）だが、将来
@@ -185,11 +182,13 @@ export const JOURNAL_SEARCH_FIELDS: readonly string[] = [
  * 何かしらの文字列を作れてしまい、pg 側（`->>` は JSON 値のテキスト化）と
  * ずれる。**作れてしまう側を先に塞いでおく。**
  */
-export function journalSearchText(entry: JournalSearchTarget): string {
-  return JOURNAL_SEARCH_FIELDS.map((field) => {
+export function journalSearchValues(entry: JournalSearchTarget): string[] {
+  const values: string[] = [];
+  for (const field of JOURNAL_SEARCH_FIELDS) {
     const value = entry[field];
-    return typeof value === 'string' ? value : '';
-  }).join('\n');
+    if (typeof value === 'string') values.push(value);
+  }
+  return values;
 }
 
 /**
@@ -208,5 +207,8 @@ export function journalSearchText(entry: JournalSearchTarget): string {
  * 「0件」ではなく「絞っていない一覧」である。
  */
 export function matchesJournalSearch(entry: JournalSearchTarget, q: string): boolean {
-  return journalSearchText(entry).toLowerCase().includes(q.toLowerCase());
+  // 空の語は「絞らない」（上の doc）。欄ごとの照合に任せると、探す欄を持たない種別だけが落ちる。
+  if (q === '') return true;
+  const needle = q.toLowerCase();
+  return journalSearchValues(entry).some((value) => value.toLowerCase().includes(needle));
 }
