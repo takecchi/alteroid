@@ -6,6 +6,7 @@ import { cgroupEventsDeltaSchema, type CgroupEventsDelta } from './cgroup-events
 import { CRON_EXPRESSION_MAX, isCronExpression } from './cron.js';
 import type { JobStatusLike } from './job-status-running.js';
 import type { JournalDiagnosticsEntryLike } from './journal-diagnostics-format.js';
+import { stripNul } from './nul-guard.js';
 import type { SystemErrorFactsLike } from './system-error-format.js';
 import { systemErrorFactsSchema, type SystemErrorFacts } from './system-error.js';
 import type { TraceActionLike } from './trace-action.js';
@@ -4727,7 +4728,16 @@ export const practiceSlugSchema = z
  * 書こうとした人間が、器に拒まれる形を作らない。表記ゆれは**そのぶんの代償**として
  * 引き受ける（束ねる側が寄せればよく、器が弾く理由にはならない）。
  */
-export const practiceKindSchema = z.string().min(1).max(128);
+export const practiceKindSchema = z
+  .string()
+  .min(1)
+  .max(128)
+  // **NUL だけの値は空と同じ（issue #3361）。** ストアは NUL を落として残す（`nul-guard.ts`）ので、
+  // NUL だけの kind は落とした後に空になり、保存層の `practiceSchema` が投げて HTTP が 500 になる。
+  // 落とした後の形で入口が断る（HTTP の `practiceBody` も道具 `practice_write` もこれを通る）。
+  .refine((kind) => stripNul(kind).length > 0, {
+    message: 'NUL（\\u0000）だけの値は空と同じ',
+  });
 
 /**
  * 一覧に出す分（本文を含まない）。

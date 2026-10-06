@@ -18,6 +18,8 @@ import {
   Spinner,
   TurnFailureNote,
   useIsMobile,
+  EMPTY_QUESTIONS_DRAFT,
+  type ApprovalQuestionsDraft,
 } from '@alteroid/ui';
 import {
   useEndConversation,
@@ -110,6 +112,16 @@ function attachmentIds(items: readonly PendingAttachment[]): string[] {
 function withoutSentText(current: string, sent: string): string {
   return current.startsWith(sent) ? current.slice(sent.length) : current;
 }
+
+/**
+ * 送るとき、入力欄の本文をどうするか。
+ *
+ * - `clear` — 入力欄の文を送ったので空にする
+ * - `clearSent` — 送った分だけ取り除き、待つあいだに打ち足した分は残す（再送・添付を上げて待った送信。#3248）
+ * - `keep` — 入力欄の文は送っていない（編集の確定・失敗した返信の「もう一度送る」）ので触らない。
+ *   触ると、別の発言を書きかけていた入力欄が黙って空になる（#3391）
+ */
+type DraftHandling = 'clear' | 'clearSent' | 'keep';
 
 /** 送信失敗の応答が、添付の期限切れ・欠落（400 `attachment_missing`）か。 */
 function isAttachmentMissing(error: unknown): boolean {
@@ -634,6 +646,15 @@ export function ChatPane({
    */
   const [drafts, setDrafts] = useState<Map<string | undefined, string>>(new Map());
   const [sending, setSending] = useState(false);
+  /**
+   * 会話の中の承認カードの書きかけ（承認 id ごと。回答欄の文と設問フォームの選択・補足）。
+   * カードは会話を移ると外れるので、カードの中で持つと書きかけが消える（#3398）。ここは
+   * `ChatPane` が生きているあいだ残る。
+   */
+  const [approvalDrafts, setApprovalDrafts] = useState<Map<string, string>>(new Map());
+  const [questionDrafts, setQuestionDrafts] = useState<Map<string, ApprovalQuestionsDraft>>(
+    new Map(),
+  );
   /**
    * 送信経路（`send`/`followUp`、ストリームの `error` イベント）の失敗。**会話 id ごとに持つ（#1585）。**
    *
@@ -1433,23 +1454,31 @@ export function ChatPane({
   useEffect(() => () => streamRef.current?.controller.abort(), []);
 
   /** 打った本文を画面へ積む。送信の入口が2つ（新規・追送）あるので1本にしてある。 */
-  const showOwnLine = useCallback((text: string, attachments?: readonly MessageAttachment[]) => {
-    const key = `h-${ownLineSeqRef.current++}-${text.slice(0, 8)}`;
-    // 最下部にいなくても、送った直後だけは追従してよい（上の
-    // `justSentOwnLineRef` のコメント参照）。
-    justSentOwnLineRef.current = true;
-    setLines((previous) => [
-      ...previous,
-      {
-        key,
-        role: 'human',
-        text,
-        of: shownIdRef.current,
-        ...(attachments === undefined || attachments.length === 0 ? {} : { attachments }),
-      },
-    ]);
-    return key;
-  }, []);
+  const showOwnLine = useCallback(
+    (
+      text: string,
+      attachments: readonly MessageAttachment[] | undefined,
+      /** 行の持ち主＝**送った先の会話**。いま見ている会話ではない（別の会話へ移ったあとに送ることがある。#3395）。 */
+      owner: string | undefined,
+    ) => {
+      const key = `h-${ownLineSeqRef.current++}-${text.slice(0, 8)}`;
+      // 最下部にいなくても、送った直後だけは追従してよい（上の
+      // `justSentOwnLineRef` のコメント参照）。
+      justSentOwnLineRef.current = true;
+      setLines((previous) => [
+        ...previous,
+        {
+          key,
+          role: 'human',
+          text,
+          of: owner,
+          ...(attachments === undefined || attachments.length === 0 ? {} : { attachments }),
+        },
+      ]);
+      return key;
+    },
+    [],
+  );
 
   /**
    * **`open` に届く前に送信が失敗したとき、書いた文を使い手へ返す（#3064）。**
@@ -1510,6 +1539,11 @@ export function ChatPane({
   const unconfirmedEntry = retries.get(shownId);
   const unconfirmedText =
     unconfirmedEntry?.unconfirmed === undefined ? undefined : unconfirmedEntry.text;
+  /** 入力欄に戻した文が、発言の編集の続きであるときの積んだ中身（#3393）。 */
+  const editContinuation =
+    unconfirmedEntry?.supersedes !== undefined && unconfirmedEntry.inComposer === true
+      ? unconfirmedEntry
+      : undefined;
   const unconfirmedSeen =
     unconfirmedEntry?.unconfirmed !== undefined &&
     unconfirmedEntry.clientMessageId !== undefined &&
@@ -1546,14 +1580,13 @@ export function ChatPane({
      * `supersedes` — この追送が送信済みの人間の発言を編集したものなら、
      * 置き換える対象の日誌エントリ id（チャットのメッセージ編集、#1010）。
      * 通常の追送では渡らない。
-     * `clearOnlyIfUnchanged` — 真なら入力欄から「送った分」だけを取り除く（再送、および
-     * 添付を上げて待っていた送信。待つあいだに打ち足した分は残す。#3215・#3248）。
+     * `draftHandling` — 入力欄の本文の扱い（`DraftHandling`）。
      */
     async (
       text: string,
       running: Stream,
       supersedes?: string,
-      clearOnlyIfUnchanged?: boolean,
+      draftHandling: DraftHandling = 'clear',
       attachments: PendingAttachment[] = [],
       clientMessageId: string = newClientMessageId(),
     ) => {
@@ -1575,11 +1608,12 @@ export function ChatPane({
         next.delete(running.id);
         return next;
       });
-      if (clearOnlyIfUnchanged === true) setDraft((current) => withoutSentText(current, text));
-      else setDraft('');
+      if (draftHandling === 'clearSent') setDraft((current) => withoutSentText(current, text));
+      else if (draftHandling === 'clear') setDraft('');
       const lineKey = showOwnLine(
         text,
         attachments.flatMap((item) => (item.meta === undefined ? [] : [item.meta])),
+        running.id,
       );
 
       try {
@@ -1893,12 +1927,18 @@ export function ChatPane({
         attachments?: PendingAttachment[];
         /** 再送のとき、最初の送信で付けた値。無ければ（新しい送信なら）ここで作る。 */
         clientMessageId?: string;
+        /** 入力欄の本文の扱い。無ければ、再送・添付を上げて待った送信は `clearSent`、それ以外は `clear`。 */
+        draft?: DraftHandling;
       },
     ) => {
       // 本文が空でも添付があれば送る（サーバも添付のある空本文を受ける）。
       if (text.trim() === '' && (options?.attachments?.length ?? 0) === 0) return;
       const supersedes = options?.supersedes;
       const retry = options?.retry;
+      // 待つ前（上げる・会話を引く）に走っていたストリーム。新しい会話の `open` を待つ追送の見分けに使う（下）。
+      const streamAtStart = streamRef.current;
+      // 上げる・会話を引くために待ったか。待つあいだに別の会話へ移りうる（#3395）。
+      let awaited = false;
       // 送るたびに作る。**再送だけは最初の値を使う**（サーバが受け取り済みなら二重に受けない。#3203）。
       const clientMessageId =
         retry === true && options?.clientMessageId !== undefined
@@ -1921,6 +1961,7 @@ export function ChatPane({
         } else if (stashed?.unconfirmed !== undefined && stashed.clientMessageId !== undefined) {
           if (lookingUpRef.current) return;
           lookingUpRef.current = true;
+          awaited = true;
           try {
             adoptedId = await findConversationByClientMessageId(api, stashed.clientMessageId);
           } catch (caught) {
@@ -1950,6 +1991,7 @@ export function ChatPane({
       // 添付を上げて待ったか。待ったなら、そのあいだに入力欄へ足された分が在りうる（#3215）。
       const waitedForUpload = attachments.some((item) => item.meta === undefined);
       if (waitedForUpload) {
+        awaited = true;
         setUploading(true);
         setFailures((prev) => {
           if (!prev.has(shownId)) return prev;
@@ -2014,16 +2056,43 @@ export function ChatPane({
        * `sending` で弾いていた頃は、ここが「返事が返るまで次を打てない」の実体
        * だった（`followUp` の doc に理由）。
        */
-      const running = streamRef.current;
-      if (running !== undefined) {
+      const draftHandling: DraftHandling =
+        options?.draft ?? (retry === true || waitedForUpload ? 'clearSent' : 'clear');
+      /*
+       * **待つあいだに別の会話へ移っていたら、送った先（`shownId`）へ投函だけする（#3395）。**
+       * 受信の購読は張らない——張ると、いま見ている会話の画面に「受信中」が立ち、送った発言も
+       * 移った先の会話の行として出てしまう。応答は、送った先へ戻ったときの履歴が出す。
+       * 行の持ち主も送った先で、入力欄に残した本文（しまってある下書き）からは送った分を取り除く。
+       */
+      if (awaited && shownId !== undefined && shownIdRef.current !== shownId) {
         await followUp(
           text,
-          running,
+          createStream(new AbortController(), shownId),
           supersedes,
-          retry === true || waitedForUpload,
+          'keep',
           attachments,
           clientMessageId,
         );
+        setDrafts((previous) => {
+          const kept = previous.get(shownId);
+          if (kept === undefined) return previous;
+          const rest = withoutSentText(kept, text);
+          return rest === kept ? previous : new Map(previous).set(shownId, rest);
+        });
+        return;
+      }
+
+      /*
+       * **走っているストリームがあっても、送り先の会話のものでなければ追送しない（#3395）。**
+       * 別の会話のストリーム（切り替えで止める途中のもの・戻ってきた再生）へ投函すると、その会話へ
+       * 届いてしまう。新しい会話（`shownId` が無い）では、送る前から走っていたものだけが自分の続き。
+       */
+      const running = streamRef.current;
+      if (
+        running !== undefined &&
+        (shownId === undefined ? running === streamAtStart : running.id === shownId)
+      ) {
+        await followUp(text, running, supersedes, draftHandling, attachments, clientMessageId);
         return;
       }
 
@@ -2047,11 +2116,12 @@ export function ChatPane({
         next.delete(shownId);
         return next;
       });
-      if (retry === true || waitedForUpload) setDraft((current) => withoutSentText(current, text));
-      else setDraft('');
+      if (draftHandling === 'clearSent') setDraft((current) => withoutSentText(current, text));
+      else if (draftHandling === 'clear') setDraft('');
       const lineKey = showOwnLine(
         text,
         attachments.flatMap((item) => (item.meta === undefined ? [] : [item.meta])),
+        shownId,
       );
       let opened = false;
 
@@ -2399,7 +2469,8 @@ export function ChatPane({
       const text = editDraft.trim();
       if (text === '' || line.journalId === undefined) return;
       setEditingKey(undefined);
-      await send(text, { supersedes: line.journalId });
+      // 入力欄の文を送るのではないので、入力欄の書きかけには触らない（#3391）。
+      await send(text, { supersedes: line.journalId, draft: 'keep' });
     },
     [editDraft, send],
   );
@@ -2685,12 +2756,34 @@ export function ChatPane({
                    * 行が挟まる）では、前の発言が失敗の原因とは限らないので出さない。送信中も出さない。
                    */
                   if (line.approval !== undefined) {
+                    const approvalId = line.approval.id;
                     return (
                       <li key={line.key}>
                         <ApprovalAnswerCard
                           approval={line.approval}
                           showSettledAt
-                          onAnswered={() => void conversationApprovals.mutate()}
+                          draft={approvalDrafts.get(approvalId) ?? ''}
+                          onDraftChange={(text) =>
+                            setApprovalDrafts((previous) => new Map(previous).set(approvalId, text))
+                          }
+                          questionsDraft={questionDrafts.get(approvalId) ?? EMPTY_QUESTIONS_DRAFT}
+                          onQuestionsDraftChange={(next) =>
+                            setQuestionDrafts((previous) => new Map(previous).set(approvalId, next))
+                          }
+                          onAnswered={() => {
+                            // 答えが通ったので、書きかけは要らない。
+                            setApprovalDrafts((previous) => {
+                              const next = new Map(previous);
+                              next.delete(approvalId);
+                              return next;
+                            });
+                            setQuestionDrafts((previous) => {
+                              const next = new Map(previous);
+                              next.delete(approvalId);
+                              return next;
+                            });
+                            void conversationApprovals.mutate();
+                          }}
                           trailing={
                             <Link
                               to={approvalDetailPath(line.approval.id)}
@@ -2718,7 +2811,12 @@ export function ChatPane({
                         key={line.key}
                         kind={line.turnFailure}
                         text={line.text}
-                        onRetry={retryText === undefined ? undefined : () => void send(retryText)}
+                        onRetry={
+                          retryText === undefined
+                            ? undefined
+                            : // 入力欄の文を送るのではないので、書きかけには触らない（#3391）。
+                              () => void send(retryText, { draft: 'keep' })
+                        }
                       />
                     );
                   }
@@ -2828,8 +2926,25 @@ export function ChatPane({
         value={draft}
         onChange={setDraft}
         onSend={() => {
-          if (!uploading) void send(draft, { attachments: pending });
+          if (uploading) return;
+          // 編集の送信が失敗して戻った文は、編集の続きとして送る（`supersedes` を保つ。#3393）。
+          if (editContinuation !== undefined) resend(editContinuation);
+          else void send(draft, { attachments: pending });
         }}
+        editContinuation={
+          editContinuation === undefined
+            ? undefined
+            : {
+                onCancel: () =>
+                  setRetries((prev) => {
+                    const entry = prev.get(shownId);
+                    if (entry === undefined) return prev;
+                    const next = { ...entry };
+                    delete next.supersedes;
+                    return new Map(prev).set(shownId, next);
+                  }),
+              }
+        }
         sending={sending}
         uploading={uploading}
         attachments={composerAttachments}

@@ -72,3 +72,28 @@ describe('practice_write の kind — 範囲外は読める文で断り、書か
     expect(stored?.kind).toBe(kind);
   });
 });
+
+describe('practice_write の kind — NUL だけの値は読める文で断り、書かない（issue #3361）', () => {
+  it('NUL だけの kind は理由の読める文で断り、write() を呼ばず日誌も増えない（生の ZodError を投げない）', async () => {
+    const h = harness();
+    const write = vi.spyOn(h.stores.practices, 'write');
+    const journalBefore = (await h.stores.journal.list()).length;
+
+    const body = await h.call({ slug: 'ok', kind: '\u0000', title: 't', content: 'c' });
+
+    expect(body).toBe(
+      `kind は使えない（NUL（\\u0000）だけの値は空と同じ。${formatPracticeKindRangeJa()}のみ）。`,
+    );
+    expect(write).not.toHaveBeenCalled();
+    expect(await h.stores.practices.read('ok')).toBeNull();
+    expect((await h.stores.journal.list()).length).toBe(journalBefore);
+  });
+
+  it('NUL を含んでも落とした後に残る kind は、今までどおり落として書ける', async () => {
+    const h = harness();
+    const body = await h.call({ slug: 'ok', kind: '調\u0000査', title: 't', content: 'c' });
+
+    expect(body).not.toContain('は使えない');
+    expect((await h.stores.practices.read('ok'))?.kind).toBe('調査');
+  });
+});

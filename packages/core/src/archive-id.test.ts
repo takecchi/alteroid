@@ -81,6 +81,23 @@ describe('compareArchiveEntriesNewestFirst（#908）', () => {
     expect(compareArchiveEntriesNewestFirst(older, newer)).toBeGreaterThan(0);
   });
 
+  it('at はオフセット表記でも実時刻で比べる（文字列では +09:00 が後ろに来る。#3360）', () => {
+    // 実時刻は jst が 00:00Z、utc が 01:00Z。文字列では '2026-09-27T09:...' < '2026-09-27T01:...' が逆になる。
+    const jst = entry('s', '2026-09-27T09:00:00+09:00', 's-a.jsonl');
+    const utc = entry('s', '2026-09-27T01:00:00Z', 's-b.jsonl');
+    expect(compareArchiveEntriesNewestFirst(utc, jst)).toBeLessThan(0);
+    expect(compareArchiveEntriesNewestFirst(jst, utc)).toBeGreaterThan(0);
+    // 同じ瞬間の別表記は at の差では決まらず、2次キー（枝番）へ進む。
+    const sameInstant = entry(
+      's',
+      '2026-09-27T10:00:00+09:00',
+      's-2026-09-27T01-00-00-000Z-2.jsonl',
+    );
+    const base = entry('s', '2026-09-27T01:00:00.000Z', 's-2026-09-27T01-00-00-000Z.jsonl');
+    expect(compareArchiveEntriesNewestFirst(sameInstant, base)).toBeLessThan(0);
+    expect(compareArchiveEntriesNewestFirst(base, sameInstant)).toBeGreaterThan(0);
+  });
+
   it('同じ at・同じ sessionId なら、枝番が大きい方（後から積んだ方）が先', () => {
     const stamp = '2026-09-23T00-00-00-000Z';
     const branch1 = entry('s', '2026-09-23T00:00:00.000Z', `s-${stamp}.jsonl`);

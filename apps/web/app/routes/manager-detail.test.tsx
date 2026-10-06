@@ -472,7 +472,7 @@ describe('待ちは kind で質問と実行許可を出し分ける（#334）', 
 
     const textarea = screen.getByPlaceholderText('この質問への答えを、自分の言葉で書く');
     fireEvent.change(textarea, { target: { value: 'PostgreSQL で' } });
-    const button = screen.getByRole('button', { name: '送信' });
+    const button = screen.getByRole('button', { name: '「DB はどちらにする？」へ答えを送信' });
     expect(button.hasAttribute('disabled')).toBe(false);
     fireEvent.click(button);
 
@@ -481,6 +481,25 @@ describe('待ちは kind で質問と実行許可を出し分ける（#334）', 
     // **`decision` を送らない。** 本文と requestId だけが乗る
     // （余計なキーが無いことまで見るため `toEqual` で完全一致にする）。
     expect(sent[0]?.body).toEqual({ text: 'PostgreSQL で', requestId: 'req-q' });
+  });
+
+  it('質問の行の「送信」と答えの欄には、どの質問か分かる名前が付く（#3371）', async () => {
+    renderDetailWithMessages(
+      {
+        ...BASE,
+        status: 'waiting_human',
+        waiting: [
+          { requestId: 'req-a', summary: 'DB はどちらにする？', kind: 'question', askedAt },
+          { requestId: 'req-b', summary: '期限はいつにする？', kind: 'question', askedAt },
+        ],
+      },
+      { outcome: 'answered', detail: '回答として届けた。' },
+    );
+    expect(await screen.findByText('DB はどちらにする？')).toBeTruthy();
+    for (const q of ['「DB はどちらにする？」', '「期限はいつにする？」']) {
+      expect(screen.getByRole('button', { name: `${q}へ答えを送信` })).toBeTruthy();
+      expect(screen.getByRole('textbox', { name: `${q}への答え` })).toBeTruthy();
+    }
   });
 
   it('question は空文字・空白のみでは送らない', async () => {
@@ -492,7 +511,7 @@ describe('待ちは kind で質問と実行許可を出し分ける（#334）', 
 
     expect(await screen.findByText('DB はどちらにする？')).toBeTruthy();
     const textarea = screen.getByPlaceholderText('この質問への答えを、自分の言葉で書く');
-    const button = screen.getByRole('button', { name: '送信' });
+    const button = screen.getByRole('button', { name: '「DB はどちらにする？」へ答えを送信' });
 
     // 空欄のまま押しても disabled なので飛ばない。
     expect(button.hasAttribute('disabled')).toBe(true);
@@ -2429,13 +2448,13 @@ describe('「話しかける」と待ちの行は、send の戻り値を使い�
       'この質問への答えを、自分の言葉で書く',
     ) as HTMLTextAreaElement;
     fireEvent.change(textarea, { target: { value: 'PostgreSQL' } });
-    fireEvent.click(screen.getByRole('button', { name: '送信' }));
+    fireEvent.click(screen.getByRole('button', { name: '「DB はどちらにする？」へ答えを送信' }));
     const note = await screen.findByText(/届けていない.*畳めなかった。/);
     expect(note.className.includes('text-warn')).toBe(true);
     expect(textarea.value).toBe('PostgreSQL');
 
     reply.body = { outcome: 'answered', detail: '解いた。' };
-    fireEvent.click(screen.getByRole('button', { name: '送信' }));
+    fireEvent.click(screen.getByRole('button', { name: '「DB はどちらにする？」へ答えを送信' }));
     await waitFor(() => expect(textarea.value).toBe(''));
     expect(screen.queryByText(/畳めなかった。/)).toBeNull();
   });

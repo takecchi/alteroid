@@ -441,7 +441,10 @@ export function useProgress(windowHours?: number) {
           params: { query: windowHours === undefined ? {} : { windowHours: String(windowHours) } },
         })
         .then(unwrap),
-    { refreshInterval: 30_000 },
+    // **窓を替えて別キーになっても、前の数を出したままにする（#3419。`useCommitments` の #3074 と同じ）。**
+    // 前のキーのデータは読み込み中だけ `data` に載り、`isLoading` は真になる。
+    // 画面は、その間「前の期間の数」と数のそばで言うこと。
+    { refreshInterval: 30_000, keepPreviousData: true },
   );
 }
 
@@ -452,21 +455,27 @@ export function useProgress(windowHours?: number) {
  */
 export function useUsage(query: UsageQuery = {}) {
   const api = useApi();
-  return useSWR(KEY.usage(query), ({ from, to, managerId, layer, site, tokenId }) =>
-    api.api
-      .GET('/usage', {
-        params: {
-          query: {
-            ...(from === undefined ? {} : { from }),
-            ...(to === undefined ? {} : { to }),
-            ...(managerId === undefined ? {} : { managerId }),
-            ...(layer === undefined ? {} : { layer }),
-            ...(site === undefined ? {} : { site }),
-            ...(tokenId === undefined ? {} : { tokenId }),
+  return useSWR(
+    KEY.usage(query),
+    ({ from, to, managerId, layer, site, tokenId }) =>
+      api.api
+        .GET('/usage', {
+          params: {
+            query: {
+              ...(from === undefined ? {} : { from }),
+              ...(to === undefined ? {} : { to }),
+              ...(managerId === undefined ? {} : { managerId }),
+              ...(layer === undefined ? {} : { layer }),
+              ...(site === undefined ? {} : { site }),
+              ...(tokenId === undefined ? {} : { tokenId }),
+            },
           },
-        },
-      })
-      .then(unwrap),
+        })
+        .then(unwrap),
+    // **絞り込みや期間を替えて別キーになっても、前の中身を出したままにする（#3419。`useCommitments` の #3074 と同じ）。**
+    // 前のキーのデータは読み込み中だけ `data` に載り、`isLoading` は真になる。
+    // 画面は、その間「前の条件の数字」と数のそばで言うこと。
+    { keepPreviousData: true },
   );
 }
 
