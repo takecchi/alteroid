@@ -33,22 +33,26 @@ import Approvals from './approvals';
  * 「取り直しが投げた」経路は、`mutate` そのものを拒否させないと通らない。
  */
 const refresh = vi.hoisted(() => ({ rejects: false }));
-// apps/web は `swr` を直接の依存に持たない（型が引けない）ので、形は最小限だけ書く。
+// apps/web は `swr` を直接の依存に持たない（型が引けない・名前で差し替えても hook 側の `swr` に
+// 効かない）ので、`packages/swr` が解決する実体のファイルを指し、形は最小限だけ書く。
 type MutateFn = (...args: unknown[]) => Promise<unknown>;
-vi.mock('../../../../packages/swr/node_modules/swr', async (importOriginal) => {
-  const original = await importOriginal<{ useSWRConfig: () => { mutate: MutateFn } }>();
-  return {
-    ...original,
-    useSWRConfig: () => {
-      const config = original.useSWRConfig();
-      return {
-        ...config,
-        mutate: (...args: unknown[]) =>
-          refresh.rejects ? Promise.reject(new Error('refresh failed')) : config.mutate(...args),
-      };
-    },
-  };
-});
+vi.mock(
+  '../../../../packages/swr/node_modules/swr/dist/index/index.mjs',
+  async (importOriginal) => {
+    const original = await importOriginal<{ useSWRConfig: () => { mutate: MutateFn } }>();
+    return {
+      ...original,
+      useSWRConfig: () => {
+        const config = original.useSWRConfig();
+        return {
+          ...config,
+          mutate: (...args: unknown[]) =>
+            refresh.rejects ? Promise.reject(new Error('refresh failed')) : config.mutate(...args),
+        };
+      },
+    };
+  },
+);
 
 function approval(over: Partial<PendingApproval> = {}): PendingApproval {
   return {
