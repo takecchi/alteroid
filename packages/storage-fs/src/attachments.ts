@@ -7,6 +7,7 @@ import {
   assertNoNul,
   canBindAttachmentTo,
   isAttachmentBoundTo,
+  isAttachmentExpired,
   hasNul,
   isAttachmentPrunable,
   prepareAttachment,
@@ -107,7 +108,7 @@ export class FsAttachmentStore implements AttachmentStore {
   async get(id: string): Promise<{ meta: AttachmentMeta; bytes: Uint8Array } | undefined> {
     const dir = this.#idDir(id);
     if (dir === undefined) return undefined;
-    const meta = await this.#readMeta(dir);
+    const meta = await this.#readLiveMeta(dir);
     if (meta === undefined) return undefined;
     try {
       return { meta, bytes: new Uint8Array(await readFile(join(dir, DATA_FILE))) };
@@ -119,7 +120,14 @@ export class FsAttachmentStore implements AttachmentStore {
 
   async getMeta(id: string): Promise<AttachmentMeta | undefined> {
     const dir = this.#idDir(id);
-    return dir === undefined ? undefined : this.#readMeta(dir);
+    return dir === undefined ? undefined : this.#readLiveMeta(dir);
+  }
+
+  /** 期限を過ぎたものは、prune が走る前でも「無い」（#3522）。prune と bind は期限切れも読む（`#readMeta`）。 */
+  async #readLiveMeta(dir: string): Promise<AttachmentMeta | undefined> {
+    const meta = await this.#readMeta(dir);
+    const now = this.#options.now?.() ?? new Date();
+    return meta === undefined || isAttachmentExpired(meta, now) ? undefined : meta;
   }
 
   async bind(ids: readonly string[], conversationId: string): Promise<AttachmentBindResult> {
@@ -151,7 +159,7 @@ export class FsAttachmentStore implements AttachmentStore {
       }
       try {
         const outcome = await withPathLock(join(dir, META_FILE), async () => {
-          const meta = await this.#readMeta(dir);
+          const meta = await this.#readLiveMeta(dir);
           if (meta === undefined) return 'missing' as const;
           if (!canBindAttachmentTo(meta, target)) return 'conflict' as const;
           // 同じ宛先に結び付いている（冪等）なら書き直さない。
