@@ -72,9 +72,7 @@ function Body({ id }: { id: string }) {
     <Card>
       <CardHeader
         title={entry === undefined ? '生ログ' : `${formatDateTime(entry.at)} の会話`}
-        {...(entry === undefined
-          ? {}
-          : { subtitle: `使用量 ${entry.storedBytes}バイト` })}
+        {...(entry === undefined ? {} : { subtitle: `使用量 ${entry.storedBytes}バイト` })}
       />
       {notFound && data === undefined ? (
         <Empty inset="card">その生ログはありません</Empty>

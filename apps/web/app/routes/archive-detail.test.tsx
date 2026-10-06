@@ -119,9 +119,7 @@ describe('/archive/:id', () => {
   });
 
   it('消された行（410）は失敗ではなく「本文は削除済み」と言う', async () => {
-    stub(() =>
-      json({ error: 'removed', removedAt: '2026-08-01T00:00:00.000Z', bytes: 1234 }, 410),
-    );
+    stub(() => json({ error: 'removed', removedAt: '2026-08-01T00:00:00.000Z', bytes: 1234 }, 410));
     renderPage();
 
     expect(await screen.findByText('本文は削除済み')).toBeTruthy();

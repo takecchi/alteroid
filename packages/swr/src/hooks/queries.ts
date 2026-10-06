@@ -662,8 +662,7 @@ export function useArchiveSessions() {
 
 /** `useArchiveBody` の結果。本文が消された退避（410）は失敗ではなく、1つの正当な状態である。 */
 export type ArchiveBody =
-  | { kind: 'body'; body: string }
-  | { kind: 'removed'; removedAt: string; bytes: number };
+  { kind: 'body'; body: string } | { kind: 'removed'; removedAt: string; bytes: number };
 
 /**
  * 退避した生ログ1件の本文（`GET /archive/{id}`、`text/plain` の JSONL。CLI の `/archive <id>`
