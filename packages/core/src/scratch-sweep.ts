@@ -45,6 +45,24 @@ import {
  * 5. 1回の周期で同時に走るのは1本まで。`signal` で止められる（候補の境目で止まる。
  *    `rm` の最中は止められない）。消す直前にもう一度、生きた委譲と突き合わせる。
  *
+ * ## `node_modules` の片付け（#3039 続き）
+ *
+ * 作業場ごとは消さないと決めたもの（この runner が起こした委譲の畳まれた done・stopped・failed、
+ * 未 push・追跡済み・未追跡・stash・判定不能・依存で残すもの）でも、**生きたセッションに当たらない
+ * 状態が猶予続いた**作業場の中の `node_modules` だけは片付ける（容量とファイル数の大半）。
+ * **生きたセッション（ターンの合間の done を含む `#sessions`）の作業場には触らない。**
+ * 消すのは、git 作業ツリーの中の、名前が `node_modules` のディレクトリで、所属ツリーの
+ * `git check-ignore -q` が exit 0（無視されている）かつ `git ls-files` が空（追跡済みを含まない）
+ * ものだけ。exit 1・失敗・期限切れ・symlink・ツリーの外は消さない。`node_modules` の中へは降りない。
+ * 消す直前に、基点・「基点直下の `mgr-…` の下」・名前・realpath の一致（{@link unsafeNodeModulesTarget}）と、
+ * 生きたセッションとの突き合わせをやり直す。**再開されたら `pnpm install` のやり直しが要る。**
+ *
+ * ## 孤児の中身（#3039 続き）
+ *
+ * この runner が知らない（孤児の）`.git` の無いディレクトリは、通常ファイル（`node_modules` の中は
+ * 数えない）が1つでもあれば `non-git-content` で残す。孤児のファイルも 0 バイトでなければ残す。
+ * 空のディレクトリ・空のファイル・`node_modules` だけのディレクトリは消してよい。
+ *
  * ## 既知の限界
  * - 探索は深さ12まで。それより下に降りなかった枝があれば「判定できない」で残す。
  * - `rm` が途中で止まった（失敗・プロセス終了）作業場は、半分壊れたまま残る。次の回は
@@ -204,6 +222,38 @@ async function defaultExists(p: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+/**
+ * `node_modules` を消す直前の最後の関門。基点が空でない絶対パスで `/` でないこと、対象が基点の
+ * 直下の `mgr-…` ディレクトリの**下**（そのディレクトリ自身ではない）であること、名前が
+ * `node_modules` であること、途中に symlink を挟まない（`realpath` が基点の実体＋相対パスと一致。
+ * 基点自身が symlink でも通る）こと。満たさなければ理由を返す（消さない）。
+ */
+export async function unsafeNodeModulesTarget(
+  base: string,
+  target: string,
+  realpathFn: (p: string) => Promise<string>,
+): Promise<string | undefined> {
+  if (base === '' || !path.isAbsolute(base)) return `基点が空でない絶対パスでない（'${base}'）`;
+  const resolvedBase = path.resolve(base);
+  if (resolvedBase === path.parse(resolvedBase).root) return '基点が / そのものである';
+  const resolved = path.resolve(target);
+  const rel = path.relative(resolvedBase, resolved);
+  if (rel === '' || rel.startsWith('..') || path.isAbsolute(rel)) return '対象が基点の外にある';
+  const segs = rel.split(path.sep);
+  const first = segs[0] ?? '';
+  if (!isManagerScratchDirName(first)) return '対象が mgr- 規則の作業場の下にない';
+  if (segs.length < 2) return '対象が作業場そのものである';
+  if (path.basename(resolved) !== 'node_modules') return '対象の名前が node_modules でない';
+  try {
+    const real = await realpathFn(resolved);
+    const realBase = await realpathFn(resolvedBase);
+    if (real !== path.join(realBase, rel)) return `途中に symlink を挟んでいる（${real}）`;
+  } catch (error) {
+    return `realpath を取れなかった: ${reasonOf(error)}`;
+  }
+  return undefined;
 }
 
 export class ScratchSweeper {
@@ -754,32 +804,8 @@ export class ScratchSweeper {
     return found;
   }
 
-  /**
-   * `node_modules` を消す直前の最後の関門。基点が空でない絶対パスで `/` でないこと、対象が基点の
-   * 直下の `mgr-…` ディレクトリの**下**（そのディレクトリ自身ではない）であること、名前が
-   * `node_modules` であること、途中に symlink を挟まない（`realpath` が基点の実体＋相対パスと一致）こと。
-   */
-  async #unsafeNodeModulesReason(target: string): Promise<string | undefined> {
-    const base = this.#o.tmpRoot;
-    if (base === '' || !path.isAbsolute(base)) return `基点が空でない絶対パスでない（'${base}'）`;
-    const resolvedBase = path.resolve(base);
-    if (resolvedBase === path.parse(resolvedBase).root) return '基点が / そのものである';
-    const resolved = path.resolve(target);
-    const rel = path.relative(resolvedBase, resolved);
-    if (rel === '' || rel.startsWith('..') || path.isAbsolute(rel)) return '対象が基点の外にある';
-    const segs = rel.split(path.sep);
-    const first = segs[0] ?? '';
-    if (!isManagerScratchDirName(first)) return '対象が mgr- 規則の作業場の下にない';
-    if (segs.length < 2) return '対象が作業場そのものである';
-    if (path.basename(resolved) !== 'node_modules') return '対象の名前が node_modules でない';
-    try {
-      const real = await (this.#o.realpathFn ?? realpath)(resolved);
-      const realBase = await (this.#o.realpathFn ?? realpath)(resolvedBase);
-      if (real !== path.join(realBase, rel)) return `途中に symlink を挟んでいる（${real}）`;
-    } catch (error) {
-      return `realpath を取れなかった: ${reasonOf(error)}`;
-    }
-    return undefined;
+  #unsafeNodeModulesReason(target: string): Promise<string | undefined> {
+    return unsafeNodeModulesTarget(this.#o.tmpRoot, target, this.#o.realpathFn ?? realpath);
   }
 
   /**
