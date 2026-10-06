@@ -60,7 +60,7 @@ export default function EnvVars() {
       tabs={<SettingsTabs />}
       documentTitle={settingsDocumentTitle('/env-vars')}
       title="環境変数"
-      description="alteroid 自身の運用設定と、マネージャーへ渡す環境変数。渡す先は「共通」「clone」「manager」から選べる"
+      description="alteroid 自身の運用設定と、マネージャーへ渡す環境変数。渡す先は「共通」「クローンだけ」「マネージャーだけ」から選べる"
     >
       <div className="flex flex-col gap-4">
         <EnvVarList />
@@ -75,15 +75,15 @@ function describeScope(scope: EnvVarScope): { label: string; tone: 'neutral' | '
     case 'all':
       return { label: '共通', tone: 'accent' };
     case 'app':
-      return { label: 'clone', tone: 'neutral' };
+      return { label: 'クローンだけ', tone: 'neutral' };
     case 'runner':
-      return { label: 'manager', tone: 'neutral' };
+      return { label: 'マネージャーだけ', tone: 'neutral' };
     default:
       // **送られてくる値である**（デーモンが `GET /credentials` で載せる）。
       // `apps/web` は Vercel、デーモンは Railway で別に配られるので、
       // サーバのほうが新しい窓が必ず在る——投げずに「未知」とそのまま出す
       // （`tokens.tsx` の `describeUnknown` と同じ判断）。
-      return { label: `未知（${String(scope)}）`, tone: 'neutral' };
+      return { label: `未知の渡す先（${String(scope)}）`, tone: 'neutral' };
   }
 }
 
@@ -370,9 +370,9 @@ function EditEnvVarDialog({
 }
 
 const SCOPE_OPTIONS: { value: EnvVarScope; label: string }[] = [
-  { value: 'all', label: '共通（clone・manager 両方。既定）' },
-  { value: 'app', label: 'clone だけ' },
-  { value: 'runner', label: 'manager だけ' },
+  { value: 'all', label: '共通（クローン・マネージャー両方。既定）' },
+  { value: 'app', label: 'クローンだけ' },
+  { value: 'runner', label: 'マネージャーだけ' },
 ];
 
 function AddEnvVarForm() {
