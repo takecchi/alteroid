@@ -268,27 +268,28 @@ describe('alteroid permission list', () => {
     expect(read()).toContain('規則が不正');
   });
 
-  it('500 は状態コードに加えてデーモンの理由を stdout へ書く', async () => {
+  it('500 は状態コードに加えてデーモンの理由を例外で言う（stdout に書かない。#3446）', async () => {
     replies.push({ status: 500, body: { error: '許可の台帳が読めない（テスト用）' } });
     const read = captureStdout();
 
-    await permissionListCommand();
-
-    const text = read();
-    expect(text).toContain('許可の一覧を読めませんでした（500）');
-    expect(text).toContain('許可の台帳が読めない（テスト用）');
+    const error = await permissionListCommand().then(
+      () => null,
+      (e: unknown) => e as Error,
+    );
+    expect(error?.message).toContain('許可の一覧を読めませんでした（500）');
+    expect(error?.message).toContain('許可の台帳が読めない（テスト用）');
+    expect(read()).toBe('');
   });
 
-  it('403 は stdout へ書いて正常終了する（読み取り専用の作法）', async () => {
+  it('403 は例外にする（stdout に書かない。#3446）', async () => {
     replies.push({
       status: 403,
       body: { error: 'このアカウントには alteroid を使う許可が無い' },
     });
     const read = captureStdout();
 
-    await permissionListCommand();
-
-    expect(read()).toContain('access grant');
+    await expect(permissionListCommand()).rejects.toThrow('access grant');
+    expect(read()).toBe('');
   });
 });
 

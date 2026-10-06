@@ -399,6 +399,81 @@ describe('/commitments 画面', () => {
     await screen.findByText('未了の仕事はない。');
     expect((screen.getByRole('button', { name: '積む' }) as HTMLButtonElement).disabled).toBe(true);
   });
+
+  /**
+   * #3376: 登録欄は編集欄（`CommitmentBodyEditor`）と同じ `Textarea`。Enter は改行、
+   * Cmd/Ctrl+Enter で送る。以前は1行の `Input` で、Enter が登録を実行していた。
+   */
+  describe('本文欄は複数行（Textarea）', () => {
+    const isPost = (request: Request) =>
+      request.method === 'POST' && request.url.endsWith('/commitments');
+
+    it('textarea で、自動で伸びる（上限の高さを持つ）', async () => {
+      stubCommitments([]);
+      renderPage();
+      const body = await screen.findByLabelText('何を引き受けたか');
+      expect(body.tagName).toBe('TEXTAREA');
+      expect((body as HTMLTextAreaElement).style.maxHeight).toBe('60vh');
+    });
+
+    it('Enter は改行のままで、送られない', async () => {
+      stubCommitments([]);
+      const requests = recordRequests();
+      renderPage();
+      const body = await screen.findByLabelText('何を引き受けたか');
+      fireEvent.change(body, { target: { value: '手順1' } });
+
+      const notPrevented = fireEvent.keyDown(body, { key: 'Enter' });
+      // 実時間で待たない（#2146）。送る経路は同期で fetch まで進むので、マイクロタスクを流せば足りる。
+      await act(async () => {
+        for (let i = 0; i < 10; i += 1) await Promise.resolve();
+      });
+      expect(notPrevented).toBe(true);
+      expect(requests.some(isPost)).toBe(false);
+    });
+
+    it.each([
+      ['Ctrl', { ctrlKey: true }],
+      ['Cmd', { metaKey: true }],
+    ])('%s+Enter で、複数行の本文がそのまま送られる', async (_name, modifier) => {
+      stubCommitments([]);
+      const requests = recordRequests();
+      renderPage();
+      const body = await screen.findByLabelText('何を引き受けたか');
+      fireEvent.change(body, { target: { value: '次を出す\n- 手順1\n- 手順2' } });
+
+      fireEvent.keyDown(body, { key: 'Enter', ...modifier });
+
+      const posted = await waitFor(() => {
+        const found = requests.find(isPost);
+        expect(found).toBeDefined();
+        return found!;
+      });
+      expect(JSON.parse(await posted.text())).toEqual({ body: '次を出す\n- 手順1\n- 手順2' });
+    });
+
+    it('空のあいだは Cmd/Ctrl+Enter でも送られない', async () => {
+      stubCommitments([]);
+      const requests = recordRequests();
+      renderPage();
+      const body = await screen.findByLabelText('何を引き受けたか');
+      fireEvent.change(body, { target: { value: '  \n ' } });
+
+      fireEvent.keyDown(body, { key: 'Enter', ctrlKey: true });
+      // 実時間で待たない（#2146）。送る経路は同期で fetch まで進むので、マイクロタスクを流せば足りる。
+      await act(async () => {
+        for (let i = 0; i < 10; i += 1) await Promise.resolve();
+      });
+      expect(requests.some(isPost)).toBe(false);
+    });
+
+    it('送るキーの案内が出る', async () => {
+      stubCommitments([]);
+      renderPage();
+      await screen.findByLabelText('何を引き受けたか');
+      expect(await screen.findByText(/Enter で登録$/)).toBeTruthy();
+    });
+  });
 });
 
 /**
@@ -1016,7 +1091,7 @@ describe('本文の編集（未了の行すべて。origin では隠さない）
      * **編集タブの textarea はまだ選んでいないので出ていない。**
      *
      * `screen.queryByRole('textbox')` を素で呼ぶと、この行の `Input`
-     * （片付ける理由）や `PushForm` の `Input`（積む本文）まで拾って
+     * （片付ける理由）や `PushForm` の `Textarea`（積む本文）まで拾って
      * 「複数一致」で例外になる——`<input>`（type 未指定）も `<textarea>` も
      * 暗黙の role は同じ `textbox` である。**Tabs.Root の中だけを見る**
      * ことで、無関係な `Input` を数えない。
@@ -1320,7 +1395,7 @@ describe('入力欄の補足文', () => {
     const body = await screen.findByLabelText('何を引き受けたか');
     const bodyHint = document.getElementById(body.getAttribute('aria-describedby') ?? '');
     expect(bodyHint?.textContent).toMatch(/一覧側の仕事/);
-    expect((body as HTMLInputElement).placeholder).not.toMatch(/一覧側/);
+    expect((body as HTMLTextAreaElement).placeholder).not.toMatch(/一覧側/);
 
     const reason = screen.getByLabelText(/を片付けた理由$/);
     const reasonHint = document.getElementById(reason.getAttribute('aria-describedby') ?? '');
