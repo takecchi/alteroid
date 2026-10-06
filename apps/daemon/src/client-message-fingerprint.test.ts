@@ -8,7 +8,9 @@ import { clientMessageFingerprint } from './client-message-fingerprint.js';
 
 describe('clientMessageFingerprint', () => {
   it('陰性対照: 普通の本文は、別の本文と別の指紋になる', () => {
-    expect(clientMessageFingerprint({ text: 'a' })).not.toBe(clientMessageFingerprint({ text: 'b' }));
+    expect(clientMessageFingerprint({ text: 'a' })).not.toBe(
+      clientMessageFingerprint({ text: 'b' }),
+    );
     expect(clientMessageFingerprint({ text: '絵文字😀' })).not.toBe(
       clientMessageFingerprint({ text: '絵文字�' }),
     );

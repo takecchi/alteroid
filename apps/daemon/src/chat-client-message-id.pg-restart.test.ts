@@ -71,25 +71,28 @@ describe('clientMessageId の重複判定と、pg の日誌が書き換える本
     ['孤立した上位サロゲートを含む本文', '壊れた絵文字\ud83d'],
     ['孤立した下位サロゲートを含む本文', '\ude00壊れた絵文字'],
     ['NUL と孤立サロゲートの両方を含む本文', 'a\u0000b\ud83dc'],
-  ])('%s の再送は、再起動をまたいでも 409 mismatch にならず重複として受ける', async (_label, text) => {
-    const migrated = await createMigratedPglite();
-    client = migrated.client;
-    const stores = createPgStoresFromDb(migrated.db);
-    const body = { text, conversationId: 'conv-a', clientMessageId: 'cm-1' };
+  ])(
+    '%s の再送は、再起動をまたいでも 409 mismatch にならず重複として受ける',
+    async (_label, text) => {
+      const migrated = await createMigratedPglite();
+      client = migrated.client;
+      const stores = createPgStoresFromDb(migrated.db);
+      const body = { text, conversationId: 'conv-a', clientMessageId: 'cm-1' };
 
-    // 1 回目は受け取り済み（クローンが日誌へ書いた inbound の発言。pg が本文を書き換えて残す）。
-    await stores.journal.append({
-      type: 'exchange',
-      with: 'human',
-      role: 'inbound',
-      text: body.text,
-      conversationId: body.conversationId,
-      clientMessageId: body.clientMessageId,
-    });
+      // 1 回目は受け取り済み（クローンが日誌へ書いた inbound の発言。pg が本文を書き換えて残す）。
+      await stores.journal.append({
+        type: 'exchange',
+        with: 'human',
+        role: 'inbound',
+        text: body.text,
+        conversationId: body.conversationId,
+        clientMessageId: body.clientMessageId,
+      });
 
-    // デーモンの再起動のあとの再送（メモリの受け取り済みは空。日誌から引き直す）。
-    const second = await post(appOver(stores), body);
-    const reply = await second.text();
-    expect([second.status, reply.includes('client_message_id_mismatch')]).toEqual([200, false]);
-  });
+      // デーモンの再起動のあとの再送（メモリの受け取り済みは空。日誌から引き直す）。
+      const second = await post(appOver(stores), body);
+      const reply = await second.text();
+      expect([second.status, reply.includes('client_message_id_mismatch')]).toEqual([200, false]);
+    },
+  );
 });
