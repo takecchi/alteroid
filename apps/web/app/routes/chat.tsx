@@ -60,7 +60,12 @@ import type {
   PendingApproval,
 } from '@alteroid/logic';
 
-import { ApprovalAnswerCard, approvalDetailPath } from '~/components/approval-answer-card';
+import {
+  ApprovalAnswerCard,
+  approvalDetailPath,
+  isApprovalAnswered,
+  isApprovalWithdrawn,
+} from '~/components/approval-answer-card';
 import { usePageVisible } from '~/lib/use-page-visible';
 
 import type { Route } from './+types/chat';
@@ -384,6 +389,64 @@ export function retainedBy(
  * **同じ本文が複数あっても1件ずつしか消さない**（多重集合の照合。理由は
  * `ChatPane` 内の `all` の doc に同じものがある）。
  */
+/** 操作で消える要素から、フォーカスを戻す先（#3595）。 */
+type FocusIntent =
+  { kind: 'edit'; lineKey: string } | { kind: 'approval'; approvalId: string } | { kind: 'end' };
+
+const FOCUSABLE = 'textarea, input, select, button:not([disabled]), a[href]';
+
+function isFocusLost(): boolean {
+  const active = document.activeElement;
+  return active === null || active === document.body;
+}
+
+function composerInput(): HTMLElement | null {
+  return document.querySelector<HTMLElement>('[data-chat-input]');
+}
+
+/**
+ * 戻す先へフォーカスを移す。**戻し終えた（もう見張らなくてよい）ときだけ `true`。**
+ * 鉛筆へ戻した直後は `false` を返す——確定した発言は置き換わって鉛筆ごと消えることがあり、
+ * そのときはもう一度（入力欄へ）戻す。
+ */
+function applyFocusIntent(intent: FocusIntent): boolean {
+  if (intent.kind === 'edit') {
+    if (!isFocusLost()) return false;
+    const pencil = [...document.querySelectorAll<HTMLElement>('[data-edit-key]')].find(
+      (element) => element.getAttribute('data-edit-key') === intent.lineKey,
+    );
+    if (pencil !== undefined) {
+      pencil.focus();
+      return false;
+    }
+    composerInput()?.focus();
+    return true;
+  }
+  if (intent.kind === 'approval') {
+    const cards = [...document.querySelectorAll<HTMLElement>('[data-approval-card]')];
+    const answered = cards.find(
+      (element) => element.getAttribute('data-approval-card') === intent.approvalId,
+    );
+    // 答えが台帳から戻って、カードが答え済みの表示に変わるまで待つ。
+    if (answered?.getAttribute('data-approval-state') === 'unanswered') return false;
+    const active = document.activeElement;
+    if (!isFocusLost() && !(answered !== undefined && answered.contains(active))) return true;
+    const unanswered = cards.filter(
+      (element) => element.getAttribute('data-approval-state') === 'unanswered',
+    );
+    const index = answered === undefined ? -1 : cards.indexOf(answered);
+    const next = unanswered.find((element) => cards.indexOf(element) > index) ?? unanswered[0];
+    const target = next?.querySelector<HTMLElement>(FOCUSABLE) ?? composerInput();
+    target?.focus();
+    return true;
+  }
+  // 会話を終える: 確認を閉じたあと。成功なら新しい会話の入力欄、失敗なら押したボタンへ。
+  // 成功すると会話が切り替わって入力欄が作り直されることがあるので、戻した後も見張る（使い手が動かすまで）。
+  if (!isFocusLost()) return false;
+  (document.querySelector<HTMLElement>('[data-chat-end]') ?? composerInput())?.focus();
+  return false;
+}
+
 export function pendingOwnLines(
   lines: Line[],
   shownId: string | undefined,
@@ -1091,6 +1154,12 @@ export function ChatPane({
    * 素直だからである。
    */
   const [editingKey, setEditingKey] = useState<string | undefined>(undefined);
+  /**
+   * 操作で消えた要素から、フォーカスを戻す先（#3595）。無ければ `undefined`。
+   * 要素が unmount されるとブラウザはフォーカスを `document.body` へ捨てるので、キーボードで
+   * 続けるには先頭から Tab し直すことになる。**戻す効果は下の `useEffect`（`applyFocusIntent`）。**
+   */
+  const focusIntentRef = useRef<FocusIntent | undefined>(undefined);
   /**
    * **発言の編集の下書きは、発言（`Line.key`）ごとに持つ（#3565）。** 確定するまで消さない——
    * Escape・「キャンセル」・別の発言の鉛筆・会話の切り替えでは捨てない。その発言の鉛筆をもう一度
@@ -2880,6 +2949,7 @@ export function ChatPane({
     async (line: Line) => {
       const text = editDraft.trim();
       if ((text === '' && editAttachments.length === 0) || line.journalId === undefined) return;
+      focusIntentRef.current = { kind: 'edit', lineKey: line.key };
       setEditingKey(undefined);
       // 送る文は送信の側が持つ（失敗すれば入力欄へ編集の続きとして戻る。#3393）。書きかけは消す。
       dropEditDraft(line.key);
@@ -2992,6 +3062,8 @@ export function ChatPane({
    */
   const handleEndConversation = useCallback(
     async (pressedConversationId: string) => {
+      // 確認を閉じたあと、押したボタンは読み込み中で戻れない。終わったら戻す先を決めておく（#3595）。
+      focusIntentRef.current = { kind: 'end' };
       setEndingConversation({ conversationId: pressedConversationId });
       setEndFailure(undefined);
       setEndNotice(undefined);
@@ -3019,6 +3091,35 @@ export function ChatPane({
   const visibleInterrupting = interrupting !== undefined && interrupting.conversationId === shownId;
   const visibleEnding =
     endingConversation !== undefined && endingConversation.conversationId === shownId;
+  /*
+   * **フォーカスを戻す（#3595）。** 編集欄・承認カードの押した要素・「会話を終える」の確認は、
+   * 閉じる・答える・終えると unmount されるか disabled になり、フォーカスが `document.body` に
+   * 落ちる。毎 commit で、戻す先が決まっていて（`focusIntentRef`）フォーカスが失われているときだけ、
+   * 戻す。**使い手が自分でフォーカスを動かしたら（pointerdown / keydown。capture で先に見る）、
+   * 戻す約束は取り下げる。**
+   */
+  useEffect(() => {
+    const clear = () => {
+      focusIntentRef.current = undefined;
+    };
+    document.addEventListener('pointerdown', clear, true);
+    document.addEventListener('keydown', clear, true);
+    return () => {
+      document.removeEventListener('pointerdown', clear, true);
+      document.removeEventListener('keydown', clear, true);
+    };
+  }, []);
+  useEffect(() => {
+    const intent = focusIntentRef.current;
+    if (intent === undefined) return;
+    if (intent.kind === 'edit' && editingKey !== undefined) {
+      focusIntentRef.current = undefined;
+      return;
+    }
+    if (intent.kind === 'end' && visibleEnding) return;
+    const done = applyFocusIntent(intent);
+    if (done) focusIntentRef.current = undefined;
+  });
   const visibleInterruptNotice =
     interruptNotice !== undefined && interruptNotice.conversationId === shownId
       ? interruptNotice.text
@@ -3184,7 +3285,17 @@ export function ChatPane({
                   if (line.approval !== undefined) {
                     const approvalId = line.approval.id;
                     return (
-                      <li key={line.key}>
+                      <li
+                        key={line.key}
+                        data-approval-card={approvalId}
+                        data-approval-state={
+                          isApprovalWithdrawn(line.approval)
+                            ? 'withdrawn'
+                            : isApprovalAnswered(line.approval)
+                              ? 'answered'
+                              : 'unanswered'
+                        }
+                      >
                         <ApprovalAnswerCard
                           approval={line.approval}
                           showSettledAt
@@ -3210,6 +3321,8 @@ export function ChatPane({
                             }))
                           }
                           onAnswered={() => {
+                            // 押した要素は答えの表示に変わって消える。次の未回答のカードへ戻す（#3595）。
+                            focusIntentRef.current = { kind: 'approval', approvalId };
                             // 答えが通ったので、書きかけは要らない（通らなかったときは呼ばれない）。
                             setApprovalDrafts((previous) => ({
                               texts: omitKey(previous.texts, approvalId),
@@ -3296,6 +3409,7 @@ export function ChatPane({
                       role={line.role}
                       text={displayedText}
                       transient={line.transient}
+                      editKey={line.key}
                       onEdit={
                         isEditable
                           ? () => {
@@ -3367,6 +3481,7 @@ export function ChatPane({
                             if (!hasEditDraft(editDrafts.get(line.key), line)) {
                               dropEditDraft(line.key);
                             }
+                            focusIntentRef.current = { kind: 'edit', lineKey: line.key };
                             setEditingKey(undefined);
                           }}
                         />
