@@ -1743,7 +1743,7 @@ function SendMessage({
   const [text, setText] = useState('');
   const latestText = useLatest(text);
   const [busy, setBusy] = useState(false);
-  const [outcome,setOutcome] = useState<{ text: string; reached: boolean } | undefined>(undefined);
+  const [outcome, setOutcome] = useState<{ text: string; reached: boolean } | undefined>(undefined);
   const [failure, setFailure] = useState<unknown>(undefined);
 
   function submit() {
