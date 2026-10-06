@@ -35,7 +35,7 @@ import Approvals from './approvals';
 const refresh = vi.hoisted(() => ({ rejects: false }));
 // apps/web は `swr` を直接の依存に持たない（型が引けない）ので、形は最小限だけ書く。
 type MutateFn = (...args: unknown[]) => Promise<unknown>;
-vi.mock('swr', async (importOriginal) => {
+vi.mock('../../../../packages/swr/node_modules/swr', async (importOriginal) => {
   const original = await importOriginal<{ useSWRConfig: () => { mutate: MutateFn } }>();
   return {
     ...original,
