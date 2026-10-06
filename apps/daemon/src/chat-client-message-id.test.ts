@@ -499,6 +499,28 @@ describe('POST /chat の clientMessageId', () => {
     });
   });
 
+  describe('supersedes の検証に落ちた送信は id を覚えない（Issue #3254）', () => {
+    it('同時に2本とも 400 でも、直した編集の再送は重複にならず受かる', async () => {
+      const { app, stores } = setupApp();
+      await sendAndRead(app, { text: '最初', conversationId: 'conv-e2', clientMessageId: 'o2' });
+      const original = (await inboundOf(stores))[0];
+      const bad = {
+        text: '直した',
+        conversationId: 'conv-e2',
+        supersedes: 'no-such-id',
+        clientMessageId: 'edit-bad',
+      };
+      const [x, y] = await Promise.all([post(app, bad), post(app, bad)]);
+      expect([x.status, y.status]).toEqual([400, 400]);
+      const ok = await post(app, { ...bad, supersedes: original?.id });
+      expect(ok.status).toBe(200);
+      expect(
+        events(await ok.text()).find((e) => e.event === 'open')?.data.duplicate,
+      ).toBeUndefined();
+      expect(await inboundOf(stores)).toHaveLength(2);
+    });
+  });
+
   describe('同時の重複は、添付の検査より前に1本へ絞る（Issue #3244）', () => {
     const PNG1 = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 9, 8, 7, 6, 5]);
     const PNG2 = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]);

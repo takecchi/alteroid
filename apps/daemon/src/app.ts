@@ -3126,81 +3126,12 @@ export function createApp(deps: AppDeps) {
           }
         }
 
-        /*
-         * **送信済みの人間の発言を編集する口の検証。** `clone.post` を呼ぶ前に
-         * ここで弾く——弾いたときは日誌に何も積まない（`GET /journal` の
-         * `afterId`/`afterAt` の手書き検証と同じ作法。手前で `if` を並べて
-         * 400 を返す）。
-         */
-        if (supersedes !== undefined) {
-          // (1) conversationId が無いのに supersedes がある。
-          if (given === undefined) {
-            return c.json(
-              { error: 'supersedes を指定するには conversationId が要る' as const },
-              400,
-            );
-          }
-          // 対象は `journal.get` で直接引く——`scan`/窓には縛られない、日誌
-          // そのものへの厳密な問い合わせである（`conversation_read id=<id>` の
-          // 全文モードと同じ考え方）。
-          const target = await stores.journal.get(supersedes);
-          // (2) 指した id が窓の中に無い / その会話のものでない。
-          if (
-            target === null ||
-            target.type !== 'exchange' ||
-            target.with !== 'human' ||
-            target.conversationId !== given
-          ) {
-            return c.json(
-              {
-                error:
-                  `supersedes が指す発言 ${supersedes} は見つからないか、この会話のものではない` as const,
-              },
-              400,
-            );
-          }
-          // (3) 指した id が `role: 'outbound'`（クローンの応答）——制約(C)。
-          // 編集できるのは人間の発言だけである。
-          if (target.role === 'outbound') {
-            return c.json(
-              { error: 'supersedes はクローンの応答ではなく人間の発言だけを指せる' as const },
-              400,
-            );
-          }
-          // (4) 指した id が既に別の編集に置き換えられている。
-          //
-          // **畳み込み規則（`computeSupersededIds`）でしか判定できない**ので、
-          // この会話の全履歴を読む。`commitmentRespondedAt` の判定
-          // （この下の `/commitments` ハンドラ）と同じ理由で、ここは「会話を
-          // 1本表示する窓」ではなく「置き換え済みかどうかを判定するための
-          // 全履歴」が要るため、`scan` に事実上の無制限を渡す。
-          const fullHistory = await readConversationWindow(stores.journal, {
-            scan: Number.MAX_SAFE_INTEGER,
-          });
-          const chronological = fullHistory
-            .filter(
-              (entry): entry is Exchange =>
-                entry.type === 'exchange' &&
-                entry.with === 'human' &&
-                entry.conversationId === given,
-            )
-            .reverse();
-          const supersededIds = computeSupersededIds(chronological);
-          if (supersededIds.has(supersedes)) {
-            return c.json(
-              {
-                error:
-                  `supersedes が指す発言 ${supersedes} は既に別の編集に置き換えられている` as const,
-              },
-              400,
-            );
-          }
-        }
-
         const conversationId = given ?? randomUUID();
 
         /*
-         * **`clientMessageId` を、添付の検査・結び付けより前に先取りする（Issue #3244）。** 同期の1歩なので、
+         * **`clientMessageId` を、`supersedes` の検証と添付の検査・結び付けより前に先取りする（Issue #3244・#3254）。**
+         * 検証より後だと、同時の編集の2本目が早い確認を抜けたあと1本目が日誌へ載り、「置き換え済み」の 400 になった。
+         * 同期の1歩なので、
          * 同時に届いた2本のうち片方だけが取れる。取れなかった側は、先に取った1本の検査が終わるのを待つ
          * （`await (existing.settled)`）——**重複の 200 は「受け取った」と言う応えなので、1本目が検査に落ちて
          * 取り下げたなら言えない。** そのときは取り直して、自分で検査する（同じ中身なら同じ 400、直した中身なら
@@ -3224,6 +3155,88 @@ export function createApp(deps: AppDeps) {
                 fingerprint,
               }) ?? replayReceivedMessage(c, attempt.existing.conversationId, clientMessageId)
             );
+          }
+        }
+
+        /** 検証に落ちた送信の id は覚えない（#3208）。先取りを取り下げてから 400 を返す。 */
+        const failEdit = (body: { error: string }, status: 400) => {
+          claim?.settle(false);
+          return c.json(body, status);
+        };
+
+        /*
+         * **送信済みの人間の発言を編集する口の検証。** `clone.post` を呼ぶ前に
+         * ここで弾く——弾いたときは日誌に何も積まない（`GET /journal` の
+         * `afterId`/`afterAt` の手書き検証と同じ作法。手前で `if` を並べて
+         * 400 を返す）。
+         */
+        if (supersedes !== undefined) {
+          try {
+            // (1) conversationId が無いのに supersedes がある。
+            if (given === undefined) {
+              return failEdit(
+                { error: 'supersedes を指定するには conversationId が要る' as const },
+                400,
+              );
+            }
+            // 対象は `journal.get` で直接引く——`scan`/窓には縛られない、日誌
+            // そのものへの厳密な問い合わせである（`conversation_read id=<id>` の
+            // 全文モードと同じ考え方）。
+            const target = await stores.journal.get(supersedes);
+            // (2) 指した id が窓の中に無い / その会話のものでない。
+            if (
+              target === null ||
+              target.type !== 'exchange' ||
+              target.with !== 'human' ||
+              target.conversationId !== given
+            ) {
+              return failEdit(
+                {
+                  error:
+                    `supersedes が指す発言 ${supersedes} は見つからないか、この会話のものではない` as const,
+                },
+                400,
+              );
+            }
+            // (3) 指した id が `role: 'outbound'`（クローンの応答）——制約(C)。
+            // 編集できるのは人間の発言だけである。
+            if (target.role === 'outbound') {
+              return failEdit(
+                { error: 'supersedes はクローンの応答ではなく人間の発言だけを指せる' as const },
+                400,
+              );
+            }
+            // (4) 指した id が既に別の編集に置き換えられている。
+            //
+            // **畳み込み規則（`computeSupersededIds`）でしか判定できない**ので、
+            // この会話の全履歴を読む。`commitmentRespondedAt` の判定
+            // （この下の `/commitments` ハンドラ）と同じ理由で、ここは「会話を
+            // 1本表示する窓」ではなく「置き換え済みかどうかを判定するための
+            // 全履歴」が要るため、`scan` に事実上の無制限を渡す。
+            const fullHistory = await readConversationWindow(stores.journal, {
+              scan: Number.MAX_SAFE_INTEGER,
+            });
+            const chronological = fullHistory
+              .filter(
+                (entry): entry is Exchange =>
+                  entry.type === 'exchange' &&
+                  entry.with === 'human' &&
+                  entry.conversationId === given,
+              )
+              .reverse();
+            const supersededIds = computeSupersededIds(chronological);
+            if (supersededIds.has(supersedes)) {
+              return failEdit(
+                {
+                  error:
+                    `supersedes が指す発言 ${supersedes} は既に別の編集に置き換えられている` as const,
+                },
+                400,
+              );
+            }
+          } catch (error) {
+            claim?.settle(false);
+            throw error;
           }
         }
 
