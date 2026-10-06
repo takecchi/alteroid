@@ -701,3 +701,45 @@ describe('保存の門と送るキーの案内（#3300）', () => {
     await waitFor(() => expect(screen.queryByText(/で保存$/)).toBeNull());
   });
 });
+
+describe('保存中の追記は、成功しても消えない', () => {
+  it('保存中に打ち足すと、成功後も追記が残り、次の保存は今回保存した版を ifMatch にする', async () => {
+    const V1 = 'a'.repeat(64);
+    const V2 = 'b'.repeat(64);
+    const putBodies: unknown[] = [];
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = input instanceof Request ? input : new Request(input, init);
+      if (request.url.includes('/versions')) return json({ versions: [] });
+      if (request.method === 'PUT') {
+        putBodies.push(await request.json());
+        // 1回目だけ保留する（送信中を作る）。
+        if (putBodies.length === 1) await gate;
+        return json({ practice: PRACTICE, version: V2 });
+      }
+      // 再取得はまだ古い版を返す。
+      return json({ practice: PRACTICE, version: V1 });
+    }) as typeof fetch;
+    mountDetail('daily-report');
+
+    fireEvent.mouseDown(await screen.findByRole('tab', { name: '編集' }));
+    const body = (await screen.findByLabelText('本文')) as HTMLTextAreaElement;
+    fireEvent.change(body, { target: { value: '1回目' } });
+    fireEvent.click(screen.getByRole('button', { name: '保存する' }));
+    await waitFor(() => expect(putBodies).toHaveLength(1));
+
+    // 保存の応答が返る前に追記する。
+    fireEvent.change(body, { target: { value: '1回目 と追記' } });
+    release();
+    await screen.findByText(/保存した/);
+
+    expect((screen.getByLabelText('本文') as HTMLTextAreaElement).value).toBe('1回目 と追記');
+
+    fireEvent.click(screen.getByRole('button', { name: '保存する' }));
+    await waitFor(() => expect(putBodies).toHaveLength(2));
+    expect(putBodies[1]).toMatchObject({ content: '1回目 と追記', ifMatch: V2 });
+  });
+});

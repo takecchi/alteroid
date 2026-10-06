@@ -871,3 +871,46 @@ describe('保存の門（#3300）', () => {
     expect(puts).toHaveLength(1);
   });
 });
+
+describe('保存中の追記は、成功しても消えない', () => {
+  it('保存中に打ち足すと、成功後も追記が残り、次の保存は今回保存した版を ifMatch にする', async () => {
+    const V1 = 'a'.repeat(64);
+    const V2 = 'b'.repeat(64);
+    const putBodies: unknown[] = [];
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let puts = 0;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = input instanceof Request ? input : new Request(input, init);
+      if (request.method === 'PUT') {
+        putBodies.push(await request.json());
+        puts += 1;
+        // 1回目だけ保留する（送信中を作る）。
+        if (puts === 1) await gate;
+        return json({ document: { ...DOC, content: '1回目' }, version: V2 });
+      }
+      // 再取得はまだ古い版を返す。
+      return json({ document: DOC, version: V1 });
+    }) as typeof fetch;
+    mountDetail('notes');
+
+    fireEvent.mouseDown(await screen.findByRole('tab', { name: '編集' }));
+    const textarea = (await screen.findByRole('textbox')) as HTMLTextAreaElement;
+    fireEvent.change(textarea, { target: { value: '1回目' } });
+    fireEvent.click(screen.getByRole('button', { name: '保存する' }));
+    await waitFor(() => expect(putBodies).toHaveLength(1));
+
+    // 保存の応答が返る前に追記する。
+    fireEvent.change(textarea, { target: { value: '1回目 と追記' } });
+    release();
+    await screen.findByText(/保存した/);
+
+    expect((screen.getByRole('textbox') as HTMLTextAreaElement).value).toBe('1回目 と追記');
+
+    fireEvent.click(screen.getByRole('button', { name: '保存する' }));
+    await waitFor(() => expect(putBodies).toHaveLength(2));
+    expect(putBodies[1]).toEqual({ content: '1回目 と追記', ifMatch: V2 });
+  });
+});

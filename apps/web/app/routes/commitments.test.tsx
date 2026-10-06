@@ -1791,3 +1791,50 @@ describe('本文の編集の保存の門と送るキーの案内（#3300）', ()
     await waitFor(() => expect(screen.queryByText(/Enter で保存$/)).toBeNull());
   });
 });
+
+describe('保存中の追記は、成功しても編集欄ごと消えない', () => {
+  it('保存中に打ち足すと、成功後も編集欄は開いたまま追記が残り、そのまま続けて保存できる', async () => {
+    const patched: unknown[] = [];
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = input instanceof Request ? input : new Request(input, init);
+      const { url, method } = request;
+      if (method === 'PATCH' && url.includes('/commitments/cmt-1')) {
+        patched.push(await request.json());
+        // 1回目だけ保留する（送信中を作る）。
+        if (patched.length === 1) await gate;
+        return json({ ok: true });
+      }
+      if (url.includes('/commitments')) {
+        return json({ entries: [commitment({ body: 'もとの依頼' })] });
+      }
+      return Promise.reject(new TypeError(`Failed to fetch: ${url}`));
+    }) as typeof fetch;
+    renderPage();
+
+    await screen.findByText('もとの依頼');
+    fireEvent.click(screen.getByRole('button', { name: /の本文を編集$/ }));
+    const tabsRoot = screen.getByRole('tablist').parentElement!;
+    fireEvent.mouseDown(await screen.findByRole('tab', { name: '編集' }));
+    const textarea = (await within(tabsRoot).findByRole('textbox')) as HTMLTextAreaElement;
+    fireEvent.change(textarea, { target: { value: '直した依頼' } });
+    fireEvent.click(screen.getByRole('button', { name: '保存' }));
+    await waitFor(() => expect(patched).toHaveLength(1));
+
+    // 保存の応答が返る前に追記する。
+    fireEvent.change(textarea, { target: { value: '直した依頼 と追記' } });
+    release();
+
+    // 編集欄は閉じない。追記が残っていて、そのまま続けて保存できる。
+    await waitFor(() => expect(screen.getByRole('button', { name: '保存' })).toBeTruthy());
+    expect((screen.getByLabelText('仕事の本文') as HTMLTextAreaElement).value).toBe(
+      '直した依頼 と追記',
+    );
+    fireEvent.click(screen.getByRole('button', { name: '保存' }));
+    await waitFor(() => expect(patched).toHaveLength(2));
+    expect(patched[1]).toMatchObject({ body: '直した依頼 と追記' });
+  });
+});
