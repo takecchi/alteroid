@@ -13797,6 +13797,33 @@ class Pool implements ManagerPool {
           return;
         }
         /*
+         * **`failed` に確定済みの委譲へ、同じ `closed(failed)` がもう一度届いても、日誌にだけ残す
+         * （Issue #3187。上の `lost` の後に届いた `closed` と同じ置き場所・同じ形）。**
+         * `closed` には冪等キーが無い。runner の SSE が再接続の `Last-Event-ID` で同じ出来事を
+         * 配り直すと、下の `failed` の枝が日誌の失敗行・`closed_failed` の知らせ（合流窓で
+         * 「×2」になる）・`noteManagerFailed`（器の失敗が二重に加算され、配置の点数で器が余計に
+         * 沈む）をもう1回ずつ出していた。**デーモンの中だけで直す**（`closed` に冪等キーを足す
+         * 変更は、runner とのやり取りの形を変えるので採らない）。
+         *
+         * **「新しい失敗」とは取り違えない。** `failed` の後に resume されれば status は
+         * `running` へ戻るので、そのあとの `closed(failed)` はここに掛からず従来どおり知らせる。
+         * 台帳が `failed` のまま届いた `closed(failed)` だけが重複と読める。**`done` / `lost` の
+         * `closed` はここでは扱わない**（`failed` から `done` / `lost` へ動く扱いは従来のまま）。
+         */
+        if (record.job.status === 'failed' && event.status === 'failed') {
+          await this.#journal({
+            type: 'exchange',
+            with: 'manager',
+            role: 'inbound',
+            text:
+              `${EXCHANGE_KIND_DECISION_PREFIX}[${event.managerId}] （failed 確定済みのため status は動かさず、` +
+              `知らせも器の失敗の計上も重ねない）runner 側の終了イベント（status=failed）を受け取った: ` +
+              event.reason,
+          });
+          this.#retire(event.managerId);
+          return;
+        }
+        /*
          * **自己失効は「終わった」ではない（M5 PR4）。**
          *
          * runner が「デーモンと連絡が取れないので貸し出し期限が切れた」と言って畳んだ
