@@ -955,7 +955,7 @@ describe('本文の編集（未了の行すべて。origin では隠さない）
     renderPage();
 
     await screen.findByText('ドキュメントの誤りを直す');
-    expect(screen.getByRole('button', { name: '本文を編集' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /の本文を編集$/ })).toBeTruthy();
   });
 
   /*
@@ -971,7 +971,7 @@ describe('本文の編集（未了の行すべて。origin では隠さない）
       renderPage();
 
       await screen.findByText(`${origin} の本文`);
-      expect(screen.getByRole('button', { name: '本文を編集' })).toBeTruthy();
+      expect(screen.getByRole('button', { name: /の本文を編集$/ })).toBeTruthy();
     },
   );
 
@@ -996,7 +996,7 @@ describe('本文の編集（未了の行すべて。origin では隠さない）
 
     await screen.findByText('片付いた本文');
     // 未了の human 行の分（open-1）だけ在り、片付いた human 行（closed-1）には無い。
-    expect(screen.getAllByRole('button', { name: '本文を編集' })).toHaveLength(1);
+    expect(screen.getAllByRole('button', { name: /の本文を編集$/ })).toHaveLength(1);
   });
 
   // 固定したいもの: human の行のプレビューが素テキストのままであること（回帰）。
@@ -1005,7 +1005,7 @@ describe('本文の編集（未了の行すべて。origin では隠さない）
     renderPage();
 
     await screen.findByText('## 見出しではない');
-    fireEvent.click(screen.getByRole('button', { name: '本文を編集' }));
+    fireEvent.click(screen.getByRole('button', { name: /の本文を編集$/ }));
 
     const previewTab = await screen.findByRole('tab', { name: 'プレビュー' });
     expect(previewTab.getAttribute('aria-selected')).toBe('true');
@@ -1037,7 +1037,7 @@ describe('本文の編集（未了の行すべて。origin では隠さない）
     renderPage();
 
     await screen.findByRole('heading', { name: '引き受けた見出し' });
-    fireEvent.click(screen.getByRole('button', { name: '本文を編集' }));
+    fireEvent.click(screen.getByRole('button', { name: /の本文を編集$/ }));
 
     // 編集を開いた直後（下書き未入力）も、一覧と同じ見え方のまま。
     expect(await screen.findByRole('heading', { name: '引き受けた見出し' })).toBeTruthy();
@@ -1087,7 +1087,7 @@ describe('本文の編集（未了の行すべて。origin では隠さない）
     renderPage();
 
     await screen.findByText('クローンが積んだ行');
-    fireEvent.click(screen.getByRole('button', { name: '本文を編集' }));
+    fireEvent.click(screen.getByRole('button', { name: /の本文を編集$/ }));
     // Tabs.Root の中だけを見て取る（無関係な `Input` と role が衝突するため。
     // 上の「編集を開くと既定タブは…」テストの注記と同じ理由）。
     const tabsRoot = screen.getByRole('tablist').parentElement!;
@@ -1106,7 +1106,7 @@ describe('本文の編集（未了の行すべて。origin では隠さない）
     renderPage();
 
     await screen.findByText('もとの本文');
-    fireEvent.click(screen.getByRole('button', { name: '本文を編集' }));
+    fireEvent.click(screen.getByRole('button', { name: /の本文を編集$/ }));
     // 無関係な `Input`（片付ける理由・積む本文）と役割が同じ（`textbox`）
     // なので、textarea は Tabs.Root の中だけを見て取る（上のテストと同じ理由）。
     const tabsRoot = screen.getByRole('tablist').parentElement!;
@@ -1153,7 +1153,7 @@ describe('本文の編集（未了の行すべて。origin では隠さない）
     renderPage();
 
     await screen.findByText('もとの依頼');
-    fireEvent.click(screen.getByRole('button', { name: '本文を編集' }));
+    fireEvent.click(screen.getByRole('button', { name: /の本文を編集$/ }));
     // Tabs.Root の中だけを見て取る（無関係な `Input` と role が衝突するため。
     // 上の「編集を開くと既定タブは…」テストの注記と同じ理由）。
     const tabsRoot = screen.getByRole('tablist').parentElement!;
@@ -1191,7 +1191,7 @@ describe('本文の編集（未了の行すべて。origin では隠さない）
     renderPage();
 
     await screen.findByText('もとの依頼');
-    fireEvent.click(screen.getByRole('button', { name: '本文を編集' }));
+    fireEvent.click(screen.getByRole('button', { name: /の本文を編集$/ }));
     // Tabs.Root の中だけを見て取る（無関係な `Input` と role が衝突するため。
     // 上の「編集を開くと既定タブは…」テストの注記と同じ理由）。
     const tabsRoot = screen.getByRole('tablist').parentElement!;
@@ -1334,7 +1334,7 @@ describe('本文の編集: 未保存のまま離れる前に確認する（#2764
   async function startEditing() {
     stubCommitments([commitment({ origin: 'human', source: 'conv-1' })]);
     const router = renderPage();
-    fireEvent.click(await screen.findByRole('button', { name: '本文を編集' }));
+    fireEvent.click(await screen.findByRole('button', { name: /の本文を編集$/ }));
     fireEvent.mouseDown(await screen.findByRole('tab', { name: '編集' }));
     const textarea = (await screen.findByLabelText('仕事の本文')) as HTMLTextAreaElement;
     fireEvent.change(textarea, { target: { value: '書きかけ' } });
@@ -1370,7 +1370,7 @@ describe('本文の編集: 未保存のまま離れる前に確認する（#2764
   it('変更が無ければ確認なしで移動し、beforeunload も警告しない。書きかけのときだけ警告する', async () => {
     stubCommitments([commitment({ origin: 'human', source: 'conv-1' })]);
     const router = renderPage();
-    fireEvent.click(await screen.findByRole('button', { name: '本文を編集' }));
+    fireEvent.click(await screen.findByRole('button', { name: /の本文を編集$/ }));
     const clean = new Event('beforeunload', { cancelable: true });
     window.dispatchEvent(clean);
     expect(clean.defaultPrevented).toBe(false);
@@ -1401,7 +1401,7 @@ describe('本文の編集: 未保存のまま離れる前に確認する（#2764
       commitment({ id: 'b', body: '後の仕事' }),
     ]);
     const router = renderPage();
-    const openers = await screen.findAllByRole('button', { name: '本文を編集' });
+    const openers = await screen.findAllByRole('button', { name: /の本文を編集$/ });
     // 先の行を開いて書きかけにする。
     fireEvent.click(openers[0]!);
     fireEvent.mouseDown(await screen.findByRole('tab', { name: '編集' }));
@@ -1412,7 +1412,7 @@ describe('本文の編集: 未保存のまま離れる前に確認する（#2764
     fireEvent.click(openers[1]!);
 
     await waitFor(() =>
-      expect(screen.getAllByRole('button', { name: '編集をやめる' })).toHaveLength(2),
+      expect(screen.getAllByRole('button', { name: /の編集をやめる$/ })).toHaveLength(2),
     );
 
     await act(async () => {
@@ -1424,6 +1424,126 @@ describe('本文の編集: 未保存のまま離れる前に確認する（#2764
     const event = new Event('beforeunload', { cancelable: true });
     window.dispatchEvent(event);
     expect(event.defaultPrevented).toBe(true);
+  });
+});
+
+/** 書きかけの編集を、同じ画面の中の操作（やめる・編集をやめる）で確認なしに捨てない（#3375）。 */
+describe('本文の編集: 書きかけがあるときだけ、やめる前に確認する（#3375）', () => {
+  async function startEditing(draft: string | null) {
+    stubCommitments([commitment({ origin: 'human', source: 'conv-1' })]);
+    const router = renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: /の本文を編集$/ }));
+    if (draft !== null) {
+      fireEvent.mouseDown(await screen.findByRole('tab', { name: '編集' }));
+      fireEvent.change(await screen.findByLabelText('仕事の本文'), { target: { value: draft } });
+    }
+    return router;
+  }
+
+  it('「本文を編集」「編集をやめる」には、どの行かが分かる名前が付く（見える文言は変わらない）', async () => {
+    stubCommitments([commitment({ origin: 'human', source: 'conv-1' })]);
+    renderPage();
+    const open = await screen.findByRole('button', {
+      name: '「ドキュメントの誤りを直す」の本文を編集',
+    });
+    expect(open.textContent).toBe('本文を編集');
+    fireEvent.click(open);
+    const close = await screen.findByRole('button', {
+      name: '「ドキュメントの誤りを直す」の編集をやめる',
+    });
+    expect(close.textContent).toBe('編集をやめる');
+  });
+
+  it.each([
+    ['行の右上の「編集をやめる」', /の編集をやめる$/],
+    ['編集欄の「やめる」', 'やめる'],
+  ])('書きかけのとき、%s は確認を挟み、閉じない', async (_name, button) => {
+    await startEditing('書きかけ');
+
+    fireEvent.click(screen.getByRole('button', { name: button }));
+
+    const dialog = await screen.findByRole('alertdialog');
+    expect(within(dialog).getByText('保存していない変更があります')).toBeTruthy();
+    // 「編集に戻る」で確認を閉じれば、編集欄も下書きも残る。
+    fireEvent.click(within(dialog).getByRole('button', { name: 'やめる' }));
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+    expect((screen.getByLabelText('仕事の本文') as HTMLTextAreaElement).value).toBe('書きかけ');
+  });
+
+  it.each([
+    ['行の右上の「編集をやめる」', /の編集をやめる$/],
+    ['編集欄の「やめる」', 'やめる'],
+  ])('書きかけのとき、%s は「破棄して閉じる」で閉じて下書きを捨てる', async (_name, button) => {
+    await startEditing('書きかけ');
+    fireEvent.click(screen.getByRole('button', { name: button }));
+
+    fireEvent.click(await screen.findByRole('button', { name: '破棄して閉じる' }));
+
+    await waitFor(() => expect(screen.queryByLabelText('仕事の本文')).toBeNull());
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    // 開き直すと元の本文から始まる。
+    fireEvent.click(screen.getByRole('button', { name: /の本文を編集$/ }));
+    fireEvent.mouseDown(await screen.findByRole('tab', { name: '編集' }));
+    expect((screen.getByLabelText('仕事の本文') as HTMLTextAreaElement).value).toBe(
+      'ドキュメントの誤りを直す',
+    );
+  });
+
+  it.each([
+    ['行の右上の「編集をやめる」', /の編集をやめる$/],
+    ['編集欄の「やめる」', 'やめる'],
+  ])('何も書いていなければ、%s は確認なしで閉じる', async (_name, button) => {
+    await startEditing(null);
+
+    fireEvent.click(screen.getByRole('button', { name: button }));
+
+    await waitFor(() => expect(screen.queryByRole('button', { name: /の編集をやめる$/ })).toBeNull());
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+  });
+
+  it('元の本文に書き戻していれば、書きかけではないので確認なしで閉じる', async () => {
+    await startEditing('書きかけ');
+    fireEvent.change(screen.getByLabelText('仕事の本文'), {
+      target: { value: 'ドキュメントの誤りを直す' },
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /の編集をやめる$/ }));
+
+    await waitFor(() => expect(screen.queryByLabelText('仕事の本文')).toBeNull());
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+  });
+});
+
+describe('「仕事を登録する」の書きかけも、離れる前に確認する（#3375）', () => {
+  it('書きかけのままアプリ内で移動しようとすると確認が出て、beforeunload も警告する', async () => {
+    stubCommitments([]);
+    const router = renderPage();
+    const input = await screen.findByLabelText('何を引き受けたか');
+    const clean = new Event('beforeunload', { cancelable: true });
+    window.dispatchEvent(clean);
+    expect(clean.defaultPrevented).toBe(false);
+
+    fireEvent.change(input, { target: { value: '書きかけの仕事' } });
+    const dirty = new Event('beforeunload', { cancelable: true });
+    window.dispatchEvent(dirty);
+    expect(dirty.defaultPrevented).toBe(true);
+
+    await act(async () => {
+      void router.navigate('/elsewhere');
+    });
+    expect(await screen.findByRole('alertdialog')).toBeTruthy();
+    expect(router.state.location.pathname).toBe('/');
+  });
+
+  it('空のままなら確認なしで移動できる', async () => {
+    stubCommitments([]);
+    const router = renderPage();
+    await screen.findByLabelText('何を引き受けたか');
+    await act(async () => {
+      void router.navigate('/elsewhere');
+    });
+    await waitFor(() => expect(router.state.location.pathname).toBe('/elsewhere'));
+    expect(screen.queryByRole('alertdialog')).toBeNull();
   });
 });
 
@@ -1457,7 +1577,7 @@ describe('「片付けたものも見る」の初回読み込み中も、未了�
     renderPage();
 
     await screen.findByText('もとの本文');
-    fireEvent.click(screen.getByRole('button', { name: '本文を編集' }));
+    fireEvent.click(screen.getByRole('button', { name: /の本文を編集$/ }));
     const tabsRoot = screen.getByRole('tablist').parentElement!;
     fireEvent.mouseDown(await screen.findByRole('tab', { name: '編集' }));
     const textarea = (await within(tabsRoot).findByRole('textbox')) as HTMLTextAreaElement;
@@ -1543,7 +1663,7 @@ describe('閉じた分が0件のときの再検証で「記録はまだない」
 describe('本文の編集の保存の門と送るキーの案内（#3300）', () => {
   async function openEditor() {
     await screen.findByText('もとの依頼');
-    fireEvent.click(screen.getByRole('button', { name: '本文を編集' }));
+    fireEvent.click(screen.getByRole('button', { name: /の本文を編集$/ }));
     return screen.getByRole('tablist').parentElement!;
   }
 
