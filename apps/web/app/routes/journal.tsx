@@ -339,8 +339,17 @@ function JournalBody({
   startMargin: number;
 }) {
   const journalWindow = useJournalWindow(selected, q);
-  const { entries, isLoadingInitial, error, olderStatus, isLoadingOlder, loadOlder, horizonNote } =
-    journalWindow;
+  const {
+    entries,
+    isLoadingInitial,
+    error,
+    loadMoreError,
+    retryLoadMore,
+    olderStatus,
+    isLoadingOlder,
+    loadOlder,
+    horizonNote,
+  } = journalWindow;
 
   const virtualizerRef = useRef<VirtualizerHandle>(null);
   // 「その件数のぶんはもう新着を確認しに行った」の目印。件数が変わらない限り
@@ -409,9 +418,8 @@ function JournalBody({
   /**
    * **取れなかったのを0件と描かない**（issue #2322）。日誌をまだ1件も読めていないまま
    * 失敗したとき、失敗は上の `LoadError` が言う。ここで「何も記録されていない」を並べると、
-   * 読めていないのに記録が無いように読める。フックは `error` を初回の失敗と後続の失敗で
-   * 共用するが、後続は行が在って初めて起こるので、`error` と0件の組は初回の失敗を指す。
-   * 一覧が残っているときは当たらず、そのまま出す。
+   * 読めていないのに記録が無いように読める。フックは `error`（初回の失敗）と
+   * `loadMoreError`（読み足しの失敗）を分けて持つ。一覧が残っているときは当たらず、そのまま出す。
    */
   const listUnavailable = error !== undefined && entries.length === 0;
 
@@ -420,8 +428,17 @@ function JournalBody({
       <LoadError
         what="日誌"
         error={error}
-        // 取り直しは作り直し（行の読み足しが消える）なので、行が残っているときは出さない。
-        {...(listUnavailable ? { onRetry } : {})}
+        // 初回の失敗の後に SSE の新着で行が入っても、取り直しは出す。`error` は初回の失敗だけで、
+        // 作り直しで消えるのは SSE 由来の行だけ（読み直した一覧が上書きするので重ならない）。
+        onRetry={onRetry}
+        className="mb-4"
+      />
+      {/* 読み足しの失敗。一覧は残したまま、その場で撃ち直す（成功すると下りる）。 */}
+      <LoadError
+        what="日誌の続き"
+        error={loadMoreError}
+        onRetry={retryLoadMore}
+        retrying={isLoadingOlder || journalWindow.isLoadingNewer}
         className="mb-4"
       />
       {journalWindow.newerBlocked && (

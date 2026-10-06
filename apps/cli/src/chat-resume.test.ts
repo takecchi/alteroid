@@ -273,6 +273,7 @@ describe('/resume（REPL から進行中のターンへ戻る）', () => {
       waiting: [],
       messages: [],
       messagesConversationId: null,
+      messageAttachments: {},
     });
     expect(out()).toContain('/resume [id]');
   });
