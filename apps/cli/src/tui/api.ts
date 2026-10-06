@@ -54,6 +54,8 @@ export interface ConversationList {
   scanned: number;
   reachedStart: boolean;
   hiddenByLimit: number;
+  /** 続きの頁の継続点（#3550）。続きが無ければ、または古いデーモンなら鍵ごと無い。 */
+  nextCursor?: string;
 }
 
 export interface ConversationSummary {
@@ -247,7 +249,7 @@ export interface TuiApi {
    * 履歴の一覧。`reachedStart` が偽なら、窓（`scanned` 件の往復）の外に古い会話が残っているかもしれない
    * （一覧が空でも「無い」とは言えない）。`hiddenByLimit` は窓の中で上限に収まらず省いた会話の数。
    */
-  listConversations(): Promise<ConversationList>;
+  listConversations(cursor?: string): Promise<ConversationList>;
   /**
    * `null` は 404（遡り切れた上で「無い」）。`reachedStart` が偽なら、窓の外に続き（古い発言）が
    * 残っているかもしれない。`messages` が空でこれが偽のときは「無い」ではなく**判定できない**。
@@ -459,11 +461,20 @@ export function createTuiApi(target: Target): TuiApi {
       }
     },
 
-    async listConversations() {
-      const response = await client.conversations.$get({ query: {} });
+    async listConversations(cursor) {
+      const response = await client.conversations.$get({
+        query: cursor === undefined ? {} : { cursor },
+      });
       if (!response.ok) throw await failure('会話の一覧を読めませんでした', response);
-      const { conversations, scanned, reachedStart, hiddenByLimit } = await response.json();
-      return { conversations, scanned, reachedStart, hiddenByLimit };
+      const { conversations, scanned, reachedStart, hiddenByLimit, nextCursor } =
+        await response.json();
+      return {
+        conversations,
+        scanned,
+        reachedStart,
+        hiddenByLimit,
+        ...(nextCursor === undefined ? {} : { nextCursor }),
+      };
     },
 
     async readConversation(id) {

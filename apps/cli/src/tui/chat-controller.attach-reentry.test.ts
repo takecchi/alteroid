@@ -212,4 +212,41 @@ describe('TUI: 追送の添付を上げている最中にターンが終わっ�
       ['追送', 1],
     ]);
   });
+
+  // 監査 6: 切り替えは、上げ済みの分を添えかけへ戻してから `send` を呼ぶと、生きた添えかけを丸ごと走査し直し、
+  // 上げているあいだに `/attach` で足した分（#3558・#3245 が「次の発言のために残す」と決めたもの）が混ざる。
+  it('上げている最中に /attach で足した添付は、いまの発言に混ぜず、次の発言のために残す', async () => {
+    const dir = await makeTempDir('alteroid-tui-audit6-');
+    const pathA = join(dir, 'a.log');
+    const pathB = join(dir, 'b.log');
+    await writeFile(pathA, 'log-a');
+    await writeFile(pathB, 'log-b');
+    const api = fakeApi();
+    const turn = gate();
+    const upload = gate();
+    const realUpload = api.uploadAttachment.bind(api);
+    api.uploadAttachment = async (file) => {
+      await upload.wait;
+      return realUpload(file);
+    };
+    const controller = new ChatController(api);
+    api.scripts.push(
+      [{ type: 'open', conversationId: 'c1' }, turn.wait, { type: 'done' }],
+      [{ type: 'open', conversationId: 'c1' }, { type: 'done' }],
+    );
+    const first = controller.send('一回目');
+    await controller.attach(pathA);
+    const follow = controller.send('追送'); // busy のあいだなので追送。a を上げ始める
+    await controller.attach(pathB); // 上げ待ちのあいだに足す（次の発言のため）
+    turn.open();
+    await first; // ターンが終わる（busy が下りる）
+    upload.open();
+    await follow;
+    // 追送の発言に付くのは、送ると決めた時点の a だけ（b は次の発言のために残る）。
+    expect(api.chatCalls.map((c) => [c.text, c.attachments?.length ?? 0])).toEqual([
+      ['一回目', 0],
+      ['追送', 1],
+    ]);
+    expect(controller.hasAttachments()).toBe(true);
+  });
 });
