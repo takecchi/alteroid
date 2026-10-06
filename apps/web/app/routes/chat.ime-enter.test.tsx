@@ -2,19 +2,19 @@
 /**
  * **IME で変換している最中の送信ショートカットを、送信として拾わないこと。**
  *
- * 送るのは ⌘ + Enter（macOS）／ Ctrl + Enter（それ以外）だけで、Enter 単体・Shift + Enter では
+ * 送るのは ⌘ + Enter / Ctrl + Enter（OS を問わずどちらも）だけで、Enter 単体・Shift + Enter では
  * 送らない（textarea の既定の改行）。変換中でも `input` は飛ぶので、`draft` に入っているのは
  * 確定前の途中の文字列であり、門が無いとそれが投函される。
  *
  * **測り方**: 同じ入力・同じキーで `isComposing` だけを反転させ、`POST /chat` が立つか立たないかを見る。
  * 片側だけでは「そもそも送れていない」と区別が付かないので、**必ず両側を1本の中で通す**
- * （変換中→0本、確定後→1本）。OS の判定は `navigator.platform`（jsdom は空 = Ctrl 側）を差し替えて切り替える。
+ * （変換中→0本、確定後→1本）。案内の文だけが OS に合わせて変わる（`navigator.platform` を差し替えて確かめる）。
  */
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider, useParams } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { json, Providers, sse, storeTestBaseUrl, stubFetch } from '~/test-support';
+import { json, Providers, setTouchOnly, sse, storeTestBaseUrl, stubFetch } from '~/test-support';
 
 import Chat from './chat';
 
@@ -136,6 +136,17 @@ const BODY = (text: string) => ({
 describe('IME 変換中の送信ショートカット', () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    setTouchOnly(false);
+  });
+
+  it('案内は OS に合わせて出し、指だけの端末では隠す。送信ボタンの名前は残る', async () => {
+    setUpChat();
+    renderChat(`/chat/${CONVERSATION_ID}`);
+    await typeInto('x');
+    expect(screen.getByText('Ctrl + Enter で送信')).toBeTruthy();
+    act(() => setTouchOnly(true));
+    expect(screen.queryByText(/Enter で送信/)).toBeNull();
+    expect(screen.getByRole('button', { name: 'メッセージを送信' })).toBeTruthy();
   });
 
   it('Ctrl + Enter（Mac 以外）は、変換中（isComposing: true）は送らず、確定後（false）は送る', async () => {
@@ -154,14 +165,13 @@ describe('IME 変換中の送信ショートカット', () => {
     expect(JSON.parse(bodies[0] ?? '{}')).toEqual(BODY('こんにちは'));
   });
 
-  it('⌘ + Enter（Mac）も同じ。Ctrl + Enter は Mac では送らない', async () => {
+  it('⌘ + Enter も同じ（Mac でも Mac 以外でも、⌘ と Ctrl のどちらでも送る）', async () => {
     pretendPlatform('MacIntel');
     const { bodies } = setUpChat();
     renderChat(`/chat/${CONVERSATION_ID}`);
     const box = await typeInto('へんかんちゅう');
 
     fireEvent.keyDown(box, { key: 'Enter', metaKey: true, isComposing: true });
-    fireEvent.keyDown(box, { key: 'Enter', ctrlKey: true, isComposing: false });
     await settle();
     expect(bodies).toEqual([]);
 
@@ -170,19 +180,6 @@ describe('IME 変換中の送信ショートカット', () => {
       expect(bodies.length).toBe(1);
     });
     expect(JSON.parse(bodies[0] ?? '{}')).toEqual(BODY('へんかんちゅう'));
-  });
-
-  it('Mac 以外では ⌘（meta）+ Enter は送らない', async () => {
-    const { bodies } = setUpChat();
-    renderChat(`/chat/${CONVERSATION_ID}`);
-    const box = await typeInto('めた');
-    fireEvent.keyDown(box, { key: 'Enter', metaKey: true });
-    await settle();
-    expect(bodies).toEqual([]);
-    fireEvent.keyDown(box, { key: 'Enter', ctrlKey: true });
-    await waitFor(() => {
-      expect(bodies.length).toBe(1);
-    });
   });
 
   /**

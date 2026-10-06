@@ -252,7 +252,7 @@ describe('ChatComposer: 入力に合わせて高さが伸びる', () => {
     const { el } = box(Array.from({ length: 30 }, () => 'a').join('\n'));
     expect(el.style.height).toBe('720px'); // 測った高さはそのまま入れ、止めるのは max-height
     const classes = el.className.split(/\s+/);
-    expect(classes).toContain('max-h-[min(40dvh,15rem)]');
+    expect(el.style.maxHeight.replace(/\s/g, '')).toBe('min(40dvh,15rem)');
     expect(classes).toContain('overflow-y-auto');
   });
 

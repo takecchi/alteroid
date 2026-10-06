@@ -14,6 +14,7 @@ import {
   KeyValueList,
   Select,
   Spinner,
+  SubmitHint,
   Textarea,
 } from '@alteroid/ui';
 import {
@@ -477,6 +478,10 @@ function ProfileEditor({
               <Textarea
                 aria-label="プロファイルの新しい本文"
                 className="min-h-64 font-mono text-xs"
+                maxHeight="60vh"
+                // 保存ボタンと同じ（確認の段へ進むだけ。確認は飛ばさない）。
+                onSubmitShortcut={() => setConfirming(true)}
+                submitDisabled={unchanged || !nameValid || scriptEmpty || confirming || busy}
                 spellCheck={false}
                 autoComplete="off"
                 value={editor.script}
@@ -527,6 +532,7 @@ function ProfileEditor({
                 >
                   保存する
                 </Button>
+                <SubmitHint action="保存" />
                 <Button variant="ghost" size="sm" disabled={busy} onClick={() => setEditor(null)}>
                   編集を閉じる
                 </Button>
