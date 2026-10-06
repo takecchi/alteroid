@@ -1530,7 +1530,7 @@ describe('閉じた分が0件のときの再検証で「記録はまだない」
       window.dispatchEvent(new Event('focus'));
     });
     // 再検証が本当に走って止まっている（でなければこの試験は何も見ていない）。
-    expect(held).toBeGreaterThan(0);
+    await waitFor(() => expect(held).toBeGreaterThan(0));
 
     expect(screen.getByText('完了した仕事の記録はまだない。')).toBeTruthy();
     await act(async () => {
