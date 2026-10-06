@@ -1156,6 +1156,25 @@ export function ChatPane({
    * 読むだけである。
    */
   const conversationApprovals = useConversationApprovals(shownId ?? null);
+  // 生配信の分岐（`useMemo` の中）から、いまの会話の承認を取り直す口（#3299）。
+  const refetchApprovalsRef = useRef<() => void>(() => {});
+  const mountedRef = useRef(false);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+  refetchApprovalsRef.current = () => {
+    // 画面が外れたあとに届いた生配信では呼ばない（SWR のキャッシュが片付いている）。
+    if (!mountedRef.current) return;
+    try {
+      // 失敗は `conversationApprovals.error` に出る（下の `ErrorNote`）ので、ここでは未処理にしないだけ。
+      void Promise.resolve(conversationApprovals.mutate()).catch(() => undefined);
+    } catch {
+      // 同上。
+    }
+  };
 
   /**
    * **既読にする（1つの規則）: この画面が表示されていて、タブが見えているとき、画面に出ている
@@ -1777,6 +1796,8 @@ export function ChatPane({
               approval: approvalFromAskEvent(event.approvalId, event.question),
             },
           ]);
+          // 生配信の行は質問しか知らない最小の形なので、台帳から取り直す（#3299）。
+          if (owns()) refetchApprovalsRef.current();
           break;
         /*
          * **枠（利用上限）が閉じていて、この合図はモデルへ一度も渡っていない
@@ -1833,10 +1854,12 @@ export function ChatPane({
         case 'error':
           settleReply();
           setFailures((prev) => new Map(prev).set(stream.id, new TurnFailedError(event.message)));
+          if (owns()) refetchApprovalsRef.current();
           break;
         case 'done':
           settleReply();
           setLines((previous) => previous.filter((line) => line.transient !== true));
+          if (owns()) refetchApprovalsRef.current();
           break;
       }
     };
