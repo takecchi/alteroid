@@ -2043,3 +2043,62 @@ describe('履歴の選択の「もっと見る」（#3643）', () => {
     expect(h.frame()).not.toContain('\x1b[2J');
   });
 });
+
+describe('/edit（#3681）', () => {
+  const editSetup = (api: FakeApi) => {
+    api.messages.c1 = [
+      {
+        id: 'm1',
+        at: '2026-10-01T00:00:00Z',
+        role: 'inbound',
+        text: 'もとの本文',
+        attachments: [{ id: 'a1', name: 'a.log', mediaType: 'text/plain', size: 3 }],
+      },
+    ];
+  };
+
+  // 「❯ 本文」は会話ログの履歴の行にも出る。入力欄にも入ったときは 2 つになる。
+  const inInput = (h: Harness): boolean => h.frame().split('❯ もとの本文').length - 1 >= 2;
+
+  it('元の本文が入力欄に入り、直して Enter で supersedes 付きで送る。添付は付いたまま', async () => {
+    const h = start(editSetup);
+    await h.controller.openConversation('c1');
+    await type(h.stdin, '/edit 1');
+    h.stdin.write(ENTER);
+    await waitFor(() => h.frame().includes('番号は上の一覧の並び'));
+    await type(h.stdin, '/edit 1');
+    h.stdin.write(ENTER);
+    await waitFor(() => inInput(h));
+    expect(h.frame()).toContain('[添付] a.log');
+    h.api.scripts.push([{ type: 'open', conversationId: 'c1' }, { type: 'done' }]);
+    await type(h.stdin, 'を直した');
+    h.stdin.write(ENTER);
+    await waitFor(() => h.api.chatCalls.length === 1);
+    expect(h.api.chatCalls[0]).toEqual({
+      text: 'もとの本文を直した',
+      conversationId: 'c1',
+      attachments: ['a1'],
+      supersedes: 'm1',
+    });
+  });
+
+  it('編集の途中の空の Enter は、送れない理由を出す。/edit-cancel で何も送らず終わる', async () => {
+    const h = start(editSetup);
+    await h.controller.openConversation('c1');
+    await type(h.stdin, '/edit');
+    h.stdin.write(ENTER);
+    await type(h.stdin, '/edit 1');
+    h.stdin.write(ENTER);
+    await waitFor(() => inInput(h));
+    await press(h.stdin, '\x15'); // Ctrl+U: 入れてあった本文を消す
+    await type(h.stdin, '/detach all');
+    h.stdin.write(ENTER);
+    // 入力欄は /detach で空になっている。添付も本文も無い Enter。
+    h.stdin.write(ENTER);
+    await waitFor(() => h.frame().includes('本文も添付も無いので送っていない'));
+    await type(h.stdin, '/edit-cancel');
+    h.stdin.write(ENTER);
+    await waitFor(() => h.frame().includes('編集をやめた'));
+    expect(h.api.chatCalls).toEqual([]);
+  });
+});

@@ -21,7 +21,9 @@ export type CommandAction =
   | 'interrupt'
   | 'attach'
   | 'attachments'
-  | 'detach';
+  | 'detach'
+  | 'edit'
+  | 'editCancel';
 
 export interface CommandSpec {
   /** 正式名（先頭の `/` なし・小文字）。 */
@@ -77,6 +79,17 @@ export const COMMANDS: readonly CommandSpec[] = [
   },
   { name: 'attachments', action: 'attachments', describe: '添えかけのファイルの一覧' },
   { name: 'detach', action: 'detach', describe: '添えかけを外す。<番号|all>' },
+  {
+    name: 'edit',
+    action: 'edit',
+    describe:
+      '自分の発言を編集する。<番号|id>（無しなら編集できる発言の一覧）。本文は入力欄に入り、Enter で置き換えて送る。/detach で添付を外せる',
+  },
+  {
+    name: 'edit-cancel',
+    action: 'editCancel',
+    describe: '始めた編集をやめる（何も送らない）',
+  },
   { name: 'interrupt', action: 'interrupt', describe: '走っているターンを止める（Ctrl+C と同じ）' },
   { name: 'help', aliases: ['?'], action: 'help', describe: 'コマンドとキーの一覧' },
   {
