@@ -56,7 +56,14 @@ on:
 #   前の実行を切る**（2026-09-30 のオーナーの決定。それまでは `github.run_id` に
 #   落として main の実行を1本も切らない形だった —— 同時に4本走っているのを観測した
 #   2026-09-30T01:09Z が変更のきっかけ）。
-#   ⚠️ **代わりに、途中の commit の CI は `cancelled` で終わる。** その commit が
+#   **ただし走っている実行は切らない**（`cancel-in-progress` を push では偽にする。
+#   2026-10-06 の人間の決定、Issue #3540）。走っている実行まで後勝ちで切ると、マージの
+#   間隔が CI の所要時間より短い間は main の実行が毎回途中で切られ、1本も決着しない ——
+#   2026-10-06 は 15:04Z の 73186593 を最後に、1時間以上 success も failure も出ず、
+#   main が赤くなっても見えなかった。偽にしても group は ref のままなので、GitHub は
+#   同じ group の待ちを最新の1本しか残さない ⟹ **走るのは常に1本、待ちも最新の1本
+#   だけ**で、09-30 の「同時に4本」には戻らない。
+#   ⚠️ **代わりに、途中の commit の CI は（待ちのまま後続に置き換えられて）`cancelled` で終わる。** その commit が
 #   緑だったかは記録に残らない。
 #   ⚠️ **しかも workflow の conclusion は `cancelled` ではなく `failure` になる。** 下の
 #   集約ゲート `ci` は needs の cancelled でも `exit 1` する（skipped にすると必須チェックが
@@ -80,12 +87,12 @@ on:
 # 元ブランチ名で揃えておくほうが読めるからである。push の値は `refs/heads/` から
 # 始まるので、PR の元ブランチ名（`head_ref`）と同じ群に入ることはない。
 #
-# release/prod（`cancel-in-progress: false`）と逆にしてあるのは、あちらが途中で
+# PR の側を release/prod（`cancel-in-progress: false`）と逆にしてあるのは、あちらが途中で
 # 切れると push の途中で終わるからで、こちらは読み取りと検査しかしないので途中で
 # 切れても外に影響が残らない。
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name == 'push' && github.ref || github.head_ref || github.run_id }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name != 'push' }}
 
 # **上流ドリフトを見に行く回か。** `image` の `no-cache` と `cache-to` をこれで切り替える。
 # 判定を1か所に置いてあるのは、2か所に書くと片方だけ直されて食い違うからである。
