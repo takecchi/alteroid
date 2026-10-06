@@ -25,6 +25,7 @@ import {
   verifyPracticeStoreContract,
   verifyStoreIsolationContract,
   verifyJournalStoreHorizonContract,
+  verifyConversationPageContract,
   verifyJournalStoreOrderContract,
   verifyJournalStorePageContract,
   verifyJournalStoreQueryEdgeContract,
@@ -1540,6 +1541,10 @@ describe('FsJournalStore', () => {
   describe('order/after 契約（issue #432 の2本目）', () => {
     it('order 未指定=desc／asc は正確な逆順／after は絞り・limit より前に効く／同着を飛ばさない', async () => {
       await verifyJournalStoreOrderContract(stores.journal);
+    });
+
+    it('会話の一覧の頁送り（日誌の継続点の上の組み立て）が、頁の連結=全件・窓より小さい頁・同着・使えない継続点で揃う', async () => {
+      await verifyConversationPageContract(stores.journal);
     });
 
     it('畳み込みの契約（#1041。3実装で同じことを測る。⚠ 名乗れるのはプロセス内で原子であることまで）', async () => {
