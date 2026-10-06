@@ -83,9 +83,12 @@ export function ChatMessage({
   const shown = body(text);
   const editing = children !== undefined;
   const viewingOld = versions !== undefined && versions.index < versions.total - 1;
+  // 添付だけで本文が空の人間の発言は、空の吹き出しを出さず添付だけを出す。
+  const attachmentOnly = role === 'human' && text === '' && attachments !== undefined && !editing;
 
   return (
     <li className={cn('group flex flex-col gap-1', role === 'human' ? 'items-end' : 'items-start')}>
+      {!attachmentOnly && (
       <div
         className={cn(
           'flex min-w-0 max-w-full items-start gap-1',
@@ -186,6 +189,7 @@ export function ChatMessage({
           )}
         </div>
       </div>
+      )}
 
       {attachments !== undefined && !editing && attachments}
 

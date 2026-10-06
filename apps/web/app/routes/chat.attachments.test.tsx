@@ -240,13 +240,34 @@ describe('添えて送る', () => {
     expect(screen.queryByRole('button', { name: 'big.png を外す' })).toBeNull();
   });
 
-  it('本文が空なら、添付があっても送れない（サーバの text は 1 文字以上）', async () => {
-    stubFetch((url) => background(url));
+  it('本文が空でも添付があれば送れる（/chat は text が空文字で attachments つき）。添付も本文も無ければ送れない', async () => {
+    stubFetch((url, init) => {
+      if (url.includes('/attachments?')) return json(PNG_META);
+      if (url.includes('/attachments/att-png')) return new Response(new Uint8Array([1, 2, 3, 4]));
+      if (url.endsWith('/chat')) {
+        return sse([{ event: 'open', data: { conversationId: CONVERSATION_ID } }], {
+          signal: init?.signal,
+        });
+      }
+      return background(url);
+    });
+    const seen = captureRequests();
     renderChat('/chat');
     await box();
-    choose([nodeFile('a.txt', 3, 'text/plain')]);
-    await screen.findByRole('button', { name: 'a.txt を外す' });
     expect((screen.getByRole('button', { name: '送る' }) as HTMLButtonElement).disabled).toBe(true);
+    choose([nodeFile('shot.png', [1, 2, 3, 4], 'image/png')]);
+    await screen.findByRole('button', { name: 'shot.png を外す' });
+    const sendButton = screen.getByRole('button', { name: '送る' }) as HTMLButtonElement;
+    expect(sendButton.disabled).toBe(false);
+    fireEvent.click(sendButton);
+    await waitFor(() => {
+      expect(seen.some((r) => r.url.endsWith('/chat'))).toBe(true);
+    });
+    const chat = seen.find((r) => r.url.endsWith('/chat'));
+    expect(JSON.parse(new TextDecoder().decode(chat?.body))).toEqual({
+      text: '',
+      attachments: ['att-png'],
+    });
   });
 
   it('貼り付けとドロップでも添えられる', async () => {

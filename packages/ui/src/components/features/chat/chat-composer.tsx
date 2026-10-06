@@ -82,9 +82,8 @@ export function ChatComposer({
   /** 添付を上げている最中か。真のあいだは送れない（二重に上げない）。 */
   uploading?: boolean;
 }) {
-  // 本文が空の発言はサーバが受けない（`POST /chat` の `text` は 1 文字以上）ので、
-  // 添付だけでは送れない。
-  const empty = value.trim() === '';
+  // 本文が空でも、添付が1件以上あれば送れる（サーバも添付のある空本文を受ける。Issue #3111）。
+  const empty = value.trim() === '' && attachments.length === 0;
   const fileInput = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
   const hasFiles = (types: readonly string[] | undefined) => types?.includes('Files') === true;

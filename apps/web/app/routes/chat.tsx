@@ -1756,7 +1756,8 @@ export function ChatPane({
       text: string,
       options?: { supersedes?: string; retry?: boolean; attachments?: PendingAttachment[] },
     ) => {
-      if (text.trim() === '') return;
+      // 本文が空でも添付があれば送る（サーバも添付のある空本文を受ける）。
+      if (text.trim() === '' && (options?.attachments?.length ?? 0) === 0) return;
       const supersedes = options?.supersedes;
       const retry = options?.retry;
 
