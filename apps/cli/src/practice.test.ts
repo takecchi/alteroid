@@ -156,14 +156,18 @@ describe('alteroid practice set', () => {
    * 人間へ分かる形で言う。**そして PUT を1本も打たない**（打つと、弾かれた
    * のか書けたのかが出力から読めない）。
    */
-  it('新しいやり方で --kind / --title が欠けていたら、PUT を打たずに断る', async () => {
-    const read = captureStdout();
+  it('新しいやり方で --kind / --title が欠けていたら、PUT を打たずに断る（例外。#3139）', async () => {
+    // ⚠️ 2026-10-06（#3139）: 以前は stdout へ書いて正常 return（終了コード 0）していた。
+    // アサーションは消さず、見る先を「投げた例外の文言」へ反転した（下の #1641 と同じ理由）。
+    captureStdout();
     replies.push({ status: 404, body: { error: 'not found' } });
 
-    await practiceSetCommand('new-one', { file: fileWith('本文\n'), kind: '調査' });
+    const error = await practiceSetCommand('new-one', {
+      file: fileWith('本文\n'),
+      kind: '調査',
+    }).catch((e: unknown) => e);
 
-    const text = read();
-    expect(text).toContain('--kind と --title が両方必要です');
+    expect(String(error)).toContain('--kind と --title が両方必要です');
     expect(sent.filter((s) => s.method === 'PUT')).toHaveLength(0);
   });
 
@@ -189,6 +193,17 @@ describe('alteroid practice set', () => {
 });
 
 describe('alteroid practice edit', () => {
+  it('新しいやり方で --kind / --title が欠けていたら、エディタも PUT も開かず例外で断る（#3139）', async () => {
+    captureStdout();
+    process.env.EDITOR = 'false';
+    replies.push({ status: 404, body: { error: 'not found' } });
+
+    const error = await practiceEditCommand('new-one', { kind: '調査' }).catch((e: unknown) => e);
+
+    expect(String(error)).toContain('--kind と --title が両方必要です');
+    expect(sent.filter((s) => s.method === 'PUT')).toHaveLength(0);
+  });
+
   it('$EDITOR が本文を変えたら PUT する（種類と題は引き継ぐ）', async () => {
     captureStdout();
     process.env.EDITOR = `sh -c 'printf "編集後の本文\\n" > "$1"' _`;
