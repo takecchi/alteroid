@@ -1490,9 +1490,10 @@ export interface CommitmentOpenResult {
  * 別の会話で送る）まで1件に潰しかねない——その保証を弱める理由がここには無い。
  *
  * **`source` が無い行（`undefined`）どうしは重複と数えない。** `manager_message`
- * の `commitmentFor` は必ず `source` を持つので、`source` が `undefined` になるのは
- * 他の origin だけだが、`entry.origin !== 'manager'` を先に弾いているのでここへは
- * 来ない——念のための防御である。
+ * の `commitmentFor` は必ず `source` を持つが、API が直接受けた `origin: 'manager'`
+ * の行は `source` を持たないことがある。出所の分からない行どうしを「同じマネージャー」
+ * とは言えないので畳まない（pg の `foldable` と同じ。直す前は `undefined === undefined`
+ * で畳み、fs / in-memory だけが pg と割れていた。#3056）。
  *
  * **閉じたあとの同文は畳まない。** 一度閉じれば「未了」ではなくなるので、同じ
  * マネージャーが同じ文言をもう一度報告してきても、それは新しい未了として台帳に
@@ -1507,7 +1508,7 @@ export function findOpenManagerDuplicate(
   entries: readonly Commitment[],
   entry: Commitment,
 ): Commitment | undefined {
-  if (entry.origin !== 'manager') return undefined;
+  if (entry.origin !== 'manager' || entry.source === undefined) return undefined;
   return entries.find(
     (existing) =>
       existing.closedAt === undefined &&
