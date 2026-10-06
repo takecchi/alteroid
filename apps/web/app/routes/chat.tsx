@@ -27,6 +27,7 @@ import {
   useConversationApprovals,
   useConversations,
   useMarkConversationRead,
+  findConversationByClientMessageId,
   getChatStream,
   postChat,
   uploadAttachment,
@@ -704,6 +705,11 @@ export function ChatPane({
          * （本文でも添付でもなく id で見る。同じ本文・同じ添付の別の発言と取り違えない）。
          */
         unconfirmed?: true;
+        /**
+         * 新しい会話（キーが `undefined`）の送信について、取り直した会話の id（#3258）。ある間は、次の送信は
+         * 新しい会話ではなく、この会話へ送る（受け取り済みの添付が別の会話へ結ばれて 400 になるのを避ける）。
+         */
+        conversationId?: string;
       }
     >
   >(new Map());
@@ -718,6 +724,8 @@ export function ChatPane({
   /** 添えようとして断った理由（個数・大きさ。クライアントの先行検査）。 */
   const [attachNotice, setAttachNotice] = useState<string>();
   const attachSeqRef = useRef(0);
+  /** 中断した新しい会話の送信の会話を、`clientMessageId` で引いている最中か（#3258。二重に引かない）。 */
+  const lookingUpRef = useRef(false);
   const ownLineSeqRef = useRef(0);
   /**
    * `POST /clone/interrupt` を呼んでいる最中かどうか（#1398 c23-1/c30-2）。
@@ -1440,6 +1448,7 @@ export function ChatPane({
       attachments: PendingAttachment[] | undefined,
       clientMessageId: string,
       unconfirmed?: true,
+      conversationId?: string,
     ) => {
       setLines((previous) => previous.filter((line) => line.key !== lineKey));
       setRetries((prev) =>
@@ -1449,6 +1458,7 @@ export function ChatPane({
           ...(supersedes === undefined ? {} : { supersedes }),
           ...(attachments === undefined || attachments.length === 0 ? {} : { attachments }),
           ...(unconfirmed === undefined ? {} : { unconfirmed }),
+          ...(conversationId === undefined ? {} : { conversationId }),
         }),
       );
     },
@@ -1873,6 +1883,41 @@ export function ChatPane({
           : newClientMessageId();
 
       /*
+       * **新しい会話で `open` の前に中断した送信の後は、会話を取り直してから送る（#3258）。**
+       * 中断した送信をサーバが受け取っていると、添付はもう最初の会話に結び付いている。会話 id を知らない
+       * まま新しい会話として送ると、`attachment_conflict`（400）で弾かれる。`clientMessageId` で引き、
+       * 見つかればその会話へ送る（同じ id の再送は重複の 200、直した本文は新しい id で同じ会話へ）。
+       * 404 なら受け取られていないので、今までどおり新しい会話。**引けなかったら、黙って新しい会話として
+       * 送らない**——案内を出して送らず、入力は残す（もう一度送ると確かめ直す）。
+       */
+      let adoptedId: string | undefined;
+      if (shownId === undefined) {
+        const stashed = retries.get(undefined);
+        if (stashed?.conversationId !== undefined) {
+          adoptedId = stashed.conversationId;
+        } else if (stashed?.unconfirmed !== undefined && stashed.clientMessageId !== undefined) {
+          if (lookingUpRef.current) return;
+          lookingUpRef.current = true;
+          try {
+            adoptedId = await findConversationByClientMessageId(api, stashed.clientMessageId);
+          } catch (caught) {
+            setFailures((prev) =>
+              new Map(prev).set(
+                shownId,
+                new Error(
+                  `前の送信が受け取られたか確かめられなかった（${redactError(caught instanceof Error ? caught.message : String(caught))}）。もう一度送ると確かめ直す`,
+                  { cause: caught },
+                ),
+              ),
+            );
+            return;
+          } finally {
+            lookingUpRef.current = false;
+          }
+        }
+      }
+
+      /*
        * **添付は、何かを消す前に上げる。** 上げるのに失敗したら、書きかけも添付も
        * そのまま残してエラーだけ出す（下書きを消すのは上げ終えた後）。上げ終えたものは
        * `meta` を持って state に残るので、直して送り直しても二重に上げない。
@@ -2021,7 +2066,11 @@ export function ChatPane({
           api,
           {
             text,
-            ...(shownId === undefined ? {} : { conversationId: shownId }),
+            ...(shownId === undefined
+              ? adoptedId === undefined
+                ? {}
+                : { conversationId: adoptedId }
+              : { conversationId: shownId }),
             ...(supersedes === undefined ? {} : { supersedes }),
             attachments: attachmentIds(attachments),
             clientMessageId,
@@ -2089,6 +2138,8 @@ export function ChatPane({
               supersedes,
               attachments,
               isClientMessageIdMismatch(caught) ? newClientMessageId() : clientMessageId,
+              undefined,
+              stream.id === undefined ? adoptedId : undefined,
             );
           }
         }
@@ -2096,7 +2147,16 @@ export function ChatPane({
         // `open` の前に中断された（受信をやめる・会話の切り替え）。受け取られたか
         // 分からないので、文は積むだけで自動では送らない（#3121）。
         if (!opened && controller.signal.aborted) {
-          giveBack(stream.id, text, lineKey, supersedes, attachments, clientMessageId, true);
+          giveBack(
+            stream.id,
+            text,
+            lineKey,
+            supersedes,
+            attachments,
+            clientMessageId,
+            true,
+            stream.id === undefined ? adoptedId : undefined,
+          );
         }
         // `open` を一度も見ないまま終わったなら、追送は投函先を持てない。
         // 待たせたままにすると、続けて打った発言が永久に返ってこない
@@ -2133,7 +2193,17 @@ export function ChatPane({
         }
       }
     },
-    [api, shownId, navigate, recordOwnMessage, showOwnLine, followUp, createStreamWriter, giveBack],
+    [
+      api,
+      shownId,
+      retries,
+      navigate,
+      recordOwnMessage,
+      showOwnLine,
+      followUp,
+      createStreamWriter,
+      giveBack,
+    ],
   );
 
   /**
