@@ -9032,7 +9032,10 @@ export function createCloneTools(context: ToolContext) {
         if (qError !== null) return text(qError);
         const untilLengthError = describeStringLengthViolation('until', until, { min: 1 });
         if (untilLengthError !== null) return text(untilLengthError);
-        const reasonError = describeStringLengthViolation('reason', reason, { min: 1 });
+        // **空白だけも断る**（#3580。`commitment_close`（#3544）・HTTP の `nonBlankString`（#3142）と揃える）。
+        const reasonError =
+          describeStringLengthViolation('reason', reason, { min: 1 }) ??
+          describeBlankViolation('reason', reason);
         if (reasonError !== null) return text(reasonError);
         // 🔴 **絞り込みの無い呼びを断る（issue #844 の受け入れ基準）。**
         // `origin` が4値全部を含む呼びは「絞り込みが無い」のと同じであり、
