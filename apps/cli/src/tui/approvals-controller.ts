@@ -146,6 +146,13 @@ function settledNotice(
   return previous !== null && previous.startsWith('✗') ? `${previous}（${now}）` : now;
 }
 
+/** 答えられない（回答済み・取り下げ済み）詳細で a を押したときの断り。どちらかが分かるように言う。 */
+function cannotAnswerNotice(approval: ApprovalRow): string {
+  return approval.withdrawnAt !== undefined
+    ? 'もう答えられない: この承認待ちは取り下げ済み'
+    : 'もう答えられない: この承認待ちは回答済み';
+}
+
 export class ApprovalsController {
   readonly store = new Store<ApprovalsState>(initialApprovalsState);
   private gen = 0;
@@ -533,12 +540,19 @@ export class ApprovalsController {
 
   /**
    * 答えるフォームを開く（書きかけがあれば続きから）。答えられない（回答済み・取り下げ済み・
-   * 読み込み前）ときは何もしない。戻り値が `'edit'` なら、いまのカーソルは文字を書く欄
+   * 読み込み前）ときは何もしない（決着済みなら最下行へ断りの notice を出す）。戻り値が `'edit'` なら、いまのカーソルは文字を書く欄
    * （設問の無い承認待ち）なので、呼び出し側は入力欄へフォーカスを移す。
    */
   startAnswer(): 'edit' | 'form' | null {
     const d = this.currentDetail();
-    if (d === null || d.busy || !isOpen(d.approval)) return null;
+    if (d === null || d.busy) return null;
+    if (!isOpen(d.approval)) {
+      // 読み込み前（approval が null）は黙って何もしない。決着済みなら断りを最下行へ出す。
+      if (d.approval !== null) {
+        this.setDetail(d.id, { notice: cannotAnswerNotice(d.approval), noticeTone: 'warn' });
+      }
+      return null;
+    }
     const form = d.form ?? emptyForm(0);
     this.setDetail(d.id, { mode: 'form', form, confirm: null, notice: null });
     // 設問の無い承認待ちは文字欄が 1 つだけ（カーソルは常にそこ）。

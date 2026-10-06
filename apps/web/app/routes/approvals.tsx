@@ -167,6 +167,23 @@ export default function Approvals() {
   const [bulkErrors, setBulkErrors] = useState<Record<string, string>>({});
   const [bulkBusy, setBulkBusy] = useState(false);
   const [bulkFailure, setBulkFailure] = useState<unknown>(undefined);
+  /** 同じ描画の中の2回目の押下を止める（state は次の描画まで古い）。 */
+  const bulkBusyRef = useRef(false);
+  /**
+   * カードが個別に送信中の id（#3626）。まとめ送信の対象から外し、保存先の下書きも
+   * 送信中は落とさない（#3666。一覧から消える描画と `onAnswered` の間の一瞬）。
+   * ref は押下の直後に読むため、state は描画のため。
+   */
+  const sendingIdsRef = useRef<Set<string>>(new Set());
+  const [sendingIds, setSendingIds] = useState<ReadonlySet<string>>(new Set());
+
+  function setCardSending(id: string, sending: boolean): void {
+    const next = new Set(sendingIdsRef.current);
+    if (sending) next.add(id);
+    else next.delete(id);
+    sendingIdsRef.current = next;
+    setSendingIds(next);
+  }
 
   function setDraft(id: string, text: string): void {
     setDrafts((current) => ({
@@ -226,12 +243,13 @@ export default function Approvals() {
   const liveDrafts = useMemo<ApprovalDrafts>(() => {
     if (approvalsList === undefined) return drafts;
     // 答えが通ったあとに残した下書き（`leftoverSources` に在る id）は、一覧から消えても保つ。
-    const keep = (id: string) => unansweredIds.has(id) || id in leftoverSources;
+    const keep = (id: string) =>
+      unansweredIds.has(id) || id in leftoverSources || sendingIds.has(id);
     return {
       texts: Object.fromEntries(Object.entries(drafts.texts).filter(([id]) => keep(id))),
       questions: Object.fromEntries(Object.entries(drafts.questions).filter(([id]) => keep(id))),
     };
-  }, [drafts, approvalsList, unansweredIds, leftoverSources]);
+  }, [drafts, approvalsList, unansweredIds, leftoverSources, sendingIds]);
   useEffect(() => {
     saveApprovalDrafts(liveDrafts, draftsEpoch.current);
   }, [liveDrafts]);
@@ -260,18 +278,23 @@ export default function Approvals() {
     saveApprovalLeftoverSources(liveLeftoverSources);
   }, [liveLeftoverSources]);
   const pendingDrafts = Object.entries(drafts.texts).filter(
-    ([id, text]) => text.trim() !== '' && unansweredIds.has(id),
+    ([id, text]) => text.trim() !== '' && unansweredIds.has(id) && !sendingIds.has(id),
   );
 
   async function submitBulk(): Promise<void> {
-    if (pendingDrafts.length === 0) return;
+    // 送信中は何もしない（二重に送らない。#3626）。
+    if (bulkBusyRef.current) return;
+    // 描画を待たず、いまカードが送信中の id も外す。
+    const targets = pendingDrafts.filter(([id]) => !sendingIdsRef.current.has(id));
+    if (targets.length === 0) return;
+    bulkBusyRef.current = true;
     // 送るときに下書きを控える。応答を待つ間に打ち足した分を、成功のあとに消さないため。
     const sentTexts = drafts.texts;
     const sentQuestions = drafts.questions;
     setBulkBusy(true);
     setBulkFailure(undefined);
     try {
-      const results = await answerApprovals(pendingDrafts.map(([id, answer]) => ({ id, answer })));
+      const results = await answerApprovals(targets.map(([id, answer]) => ({ id, answer })));
       const nextErrors: Record<string, string> = {};
       for (const result of results) {
         if (result.ok) {
@@ -294,6 +317,7 @@ export default function Approvals() {
       // まだ分からないので、下書きは消さずに残す。
       setBulkFailure(caught);
     } finally {
+      bulkBusyRef.current = false;
       setBulkBusy(false);
     }
   }
@@ -361,6 +385,8 @@ export default function Approvals() {
                 onQuestionsDraftChange={(next) => setQuestionsDraft(approval.id, next)}
                 onAnswered={(sent) => settleDraft(approval, sent)}
                 bulkError={bulkErrors[approval.id]}
+                bulkBusy={bulkBusy}
+                onSendingChange={(sending) => setCardSending(approval.id, sending)}
               />
             </li>
           ))}

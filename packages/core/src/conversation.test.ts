@@ -747,3 +747,23 @@ describe('collectConversations: 添付だけの発言の抜粋', () => {
     expect(collectConversations(entries)[0]?.preview).toBe('ひとこと');
   });
 });
+
+describe('会話の一覧の cursor の符号化（#3644）', () => {
+  it('encode した継続点を decode で取り戻せる', async () => {
+    const { decodeConversationCursor, encodeConversationCursor } =
+      await import('./conversation.js');
+    const cursor = { id: 'jrn-1', at: '2026-01-01T00:00:00.000Z' };
+    expect(decodeConversationCursor(encodeConversationCursor(cursor))).toEqual(cursor);
+  });
+
+  it.each([
+    'not-a-cursor',
+    Buffer.from('[]', 'utf8').toString('base64url'),
+    Buffer.from(JSON.stringify({ id: '', at: 'x' }), 'utf8').toString('base64url'),
+    Buffer.from(JSON.stringify({ id: 'a' }), 'utf8').toString('base64url'),
+    Buffer.from('null', 'utf8').toString('base64url'),
+  ])('読めない cursor（%s）は null', async (raw) => {
+    const { decodeConversationCursor } = await import('./conversation.js');
+    expect(decodeConversationCursor(raw)).toBeNull();
+  });
+});

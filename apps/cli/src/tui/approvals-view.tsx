@@ -494,7 +494,11 @@ export function approvalStatusText(
 export function composerPlaceholder(detail: DetailState): string {
   const cursorKind = slotsOf(detail.approval?.questions)[detail.form?.cursor ?? 0]?.kind ?? null;
   if (detail.busy) return '送信中…';
-  if (detail.mode !== 'form') return 'a で答える（i でも）';
+  if (detail.mode !== 'form') {
+    return isOpen(detail.approval)
+      ? 'a で答える（i でも）'
+      : '（回答済み・取り下げ済みで、もう答えられない）';
+  }
   if (cursorKind === 'other') return '「その他」の文を書く（Enter で確定）';
   if (cursorKind === 'text') {
     return (detail.approval?.questions ?? []).length > 0
