@@ -190,6 +190,8 @@ describe('manager_start の attachments（Issue #3111 段3）', () => {
         maxPerMessage: 1,
         maxTotalBytes: 1024,
         retentionDays: 30,
+        maxTurnImages: 20,
+        maxTurnImageBytes: 16 * 1024 * 1024,
       },
     });
     const a = await stores.attachments.put({
@@ -385,6 +387,8 @@ describe('runner が名乗った本文の上限での検め（hello.attachmentBo
         maxPerMessage: 10,
         maxTotalBytes: 16 * 1024 * 1024,
         retentionDays: 30,
+        maxTurnImages: 20,
+        maxTurnImageBytes: 16 * 1024 * 1024,
       },
     });
     const big = await stores.attachments.put({

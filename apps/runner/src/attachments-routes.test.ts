@@ -28,6 +28,8 @@ const LIMITS: AttachmentLimits = {
   maxPerMessage: 2,
   maxTotalBytes: 2048,
   retentionDays: 30,
+  maxTurnImages: 20,
+  maxTurnImageBytes: 16 * 1024 * 1024,
 };
 
 function fakeSdk(): typeof sdkQuery {
