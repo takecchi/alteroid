@@ -34,6 +34,8 @@ export function ApprovalEntry({
   onQuestionsDraftChange,
   onAnswered,
   bulkError,
+  bulkBusy,
+  onSendingChange,
 }: {
   approval: PendingApproval;
   /**
@@ -49,6 +51,10 @@ export function ApprovalEntry({
   onAnswered?: (sent: SentApprovalDraft) => void;
   /** 直前のまとめ送信でこの id が駄目だった理由（無ければ何も出さない）。 */
   bulkError?: string;
+  /** まとめ送信の最中（カードの送信を止める。#3626）。 */
+  bulkBusy?: boolean;
+  /** このカードの送信中が変わった（#3626）。 */
+  onSendingChange?: (sending: boolean) => void;
 }) {
   // 状態の導出・回答の送信・エラー表示は会話の画面と共有のカードが持つ（#3259）。
   // ここが足すのは、この画面だけのもの（答えの後の経緯・確認が上がった会話）。
@@ -61,6 +67,8 @@ export function ApprovalEntry({
       onQuestionsDraftChange={onQuestionsDraftChange}
       onAnswered={onAnswered}
       bulkError={bulkError}
+      bulkBusy={bulkBusy}
+      onSendingChange={onSendingChange}
       /*
         **答えの後にクローンが何をしたか（issue #847 の案B）。** 答え済みの件だけに
         出し、開いたときだけ読む（`useApprovalTrace` の doc）。

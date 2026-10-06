@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { makeTempDirSync } from '../../../vitest.tmpdir.js';
 
-import { captureStderr, captureStdout } from './test-support.js';
+import { captureStderr, captureStdout, pretendTty } from './test-support.js';
 
 /**
  * `alteroid practice` — **人間が仕事のやり方を CLI から読んで書き換えられること**
@@ -254,6 +254,32 @@ describe('alteroid practice edit', () => {
     expect(String(error)).toContain('--kind と --title が両方必要です');
     expect(sent.filter((s) => s.method === 'PUT')).toHaveLength(0);
   });
+
+  it.each([
+    ['全部消した', ''],
+    ['空白だけにした', ' \n\t\n'],
+  ])(
+    '本文を%sまま閉じたら、PUT せずに set と同じ文言で断り、編集を残す（#3456）',
+    async (_label, body) => {
+      captureStdout();
+      const err = captureStderr();
+      const bodyFile = join(makeTempDirSync('alteroid-practice-empty-'), 'body.txt');
+      writeFileSync(bodyFile, body);
+      process.env.EDITOR = `sh -c 'cat "${bodyFile}" > "$1"' _`;
+      replies.push({ status: 200, body: practiceBody() });
+
+      const error = await practiceEditCommand('review', {}).catch((e: unknown) => e);
+
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toContain('本文が空');
+      expect((error as Error).message).toContain('--allow-empty');
+      expect(sent.map((s) => s.method)).toEqual(['GET']);
+      const mine = /残してあります: (\S+)/.exec(err())?.[1];
+      expect(mine).toBeDefined();
+      expect(readFileSync(mine ?? '', 'utf8')).toBe(body);
+      rmSync(dirname(mine ?? ''), { recursive: true, force: true });
+    },
+  );
 
   it('$EDITOR が本文を変えたら PUT する（種類と題は引き継ぐ）', async () => {
     captureStdout();
@@ -885,6 +911,38 @@ describe('alteroid practice history / show --version', () => {
     expect(sent[0]?.method).toBe('GET');
     expect(sent[0]?.url).toBe('http://127.0.0.1:4517/practices/review/versions/1');
     expect(read()).toContain('古い本文');
+  });
+
+  // 現行版の show と同じ口（writeShownBody）: パイプへ流す本文は掃除せず、端末へ出すときだけ掃除する（#3455）。
+  const versionBody = 'a\rb\u001b[31mred\u001b[0m\n';
+  it('show --version は、パイプ（非 TTY）のとき本文を1バイトも変えない', async () => {
+    const restore = pretendTty(false);
+    const read = captureStdout();
+    replies.push({
+      status: 200,
+      body: { version: { slug: 'review', version: 1, content: versionBody } },
+    });
+    try {
+      await practiceShowCommand('review', { version: 1 });
+    } finally {
+      restore();
+    }
+    expect(read()).toBe(versionBody);
+  });
+
+  it('show --version は、端末のときだけ制御文字を落とす', async () => {
+    const restore = pretendTty(true);
+    const read = captureStdout();
+    replies.push({
+      status: 200,
+      body: { version: { slug: 'review', version: 1, content: versionBody } },
+    });
+    try {
+      await practiceShowCommand('review', { version: 1 });
+    } finally {
+      restore();
+    }
+    expect(read()).toBe('abred\n');
   });
 
   it('無い版番号を指定したら、そう言う', async () => {

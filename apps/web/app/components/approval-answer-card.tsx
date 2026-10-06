@@ -1,5 +1,5 @@
 import { describeAnsweredVia } from '@alteroid/core/answered-via';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Link } from 'react-router';
 
@@ -60,6 +60,8 @@ export function ApprovalAnswerCard({
   onQuestionsDraftChange,
   onAnswered,
   bulkError,
+  bulkBusy = false,
+  onSendingChange,
   footer,
   trailing,
   showSettledAt = false,
@@ -78,6 +80,16 @@ export function ApprovalAnswerCard({
   onAnswered?: (sent: SentApprovalDraft) => void;
   /** 直前のまとめ送信でこの id が駄目だった理由（無ければ何も出さない）。 */
   bulkError?: string;
+  /**
+   * まとめ送信の最中か（#3626）。最中は、このカードの送信（ボタン・⌘/Ctrl+Enter）を止める。
+   * 省略すれば止めない（会話の画面は渡さない）。
+   */
+  bulkBusy?: boolean;
+  /**
+   * このカードが送信中かが変わった（#3626）。親が「まとめて送る」の対象から外す・
+   * 保存先の下書きを送信中に落とさないために使う。省略できる。
+   */
+  onSendingChange?: (sending: boolean) => void;
   /** 回答済みのときの経緯などを置く口。 */
   footer?: ReactNode;
   trailing?: ReactNode;
@@ -88,6 +100,8 @@ export function ApprovalAnswerCard({
   // 「たった今」「N分前」を古いまま残さない（#3596）。
   const now = useMinuteNow();
   const [busy, setBusy] = useState(false);
+  // state は次の描画まで古いので、同じ描画の中の2回目の押下は ref で止める。
+  const sendingRef = useRef(false);
   const [failure, setFailure] = useState<unknown>(undefined);
   const [ownDraft, setOwnDraft] = useState('');
   const currentDraft = draft ?? ownDraft;
@@ -102,6 +116,10 @@ export function ApprovalAnswerCard({
    * 送っていない欄（定型の答えのときの回答欄、設問で答えたときの自由記述）は、控えに含めない。
    */
   async function send(request: () => Promise<void>, sent: SentApprovalDraft) {
+    // 送信中（このカード・まとめ送信）は何もしない。同じ承認を二重に送らない（#3626）。
+    if (sendingRef.current || bulkBusy) return;
+    sendingRef.current = true;
+    onSendingChange?.(true);
     setBusy(true);
     setFailure(undefined);
     try {
@@ -110,7 +128,9 @@ export function ApprovalAnswerCard({
     } catch (caught) {
       setFailure(caught);
     } finally {
+      sendingRef.current = false;
       setBusy(false);
+      onSendingChange?.(false);
     }
   }
 
@@ -193,7 +213,7 @@ export function ApprovalAnswerCard({
       {...(questionsDraft === undefined || onQuestionsDraftChange === undefined
         ? {}
         : { questionsDraft, onQuestionsDraftChange })}
-      busy={busy}
+      busy={busy || bulkBusy}
       footer={footer}
       error={errors}
       trailing={trailing}

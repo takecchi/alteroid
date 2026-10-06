@@ -72,6 +72,18 @@ export const initialChatState: ChatState = {
 
 const messageOf = redactedErrorMessage;
 
+/** 未回答（答え済みでも取り下げ済みでもない）の承認の id を、積まれた古い順に。 */
+function unansweredIds(read: ConversationApprovalsRead): string[] {
+  const time = (iso: string): number => {
+    const t = Date.parse(iso);
+    return Number.isNaN(t) ? Number.POSITIVE_INFINITY : t;
+  };
+  return read.approvals
+    .filter((a) => !a.answeredAt && !a.withdrawnAt)
+    .sort((a, b) => time(a.createdAt) - time(b.createdAt))
+    .map((a) => a.id);
+}
+
 /** 添えかけが無いときの結果（待たずに同期で進める。送信の前に非同期の隙間を作らない）。 */
 const NO_ATTACHMENTS = { ids: [] as string[], lines: [] as string[], files: [] as DraftFile[] };
 
@@ -155,6 +167,15 @@ export class ChatController {
   private unopened: string | null = null;
   /** {@link unopened} を引いている最中か（二重に引かない）。 */
   private lookingUp = false;
+  /** {@link unopened} になった送信が添えていたファイル（受け取り済みと分かったとき、入力欄から外す。#3652）。 */
+  private unopenedFiles: readonly DraftFile[] = [];
+  /**
+   * 履歴から会話を開いている最中（await のあいだ）か。入力欄は生きているので、この間の送信は断る
+   * （通すと、開く処理の丸ごとの差し替えで発言の行が消え、会話 id が取り違えられる。#3648）。
+   */
+  private switching = false;
+  /** 未回答の承認待ちの id（古い順）。`a` で最も古い未回答から指す（#3650）。 */
+  private askIds: string[] = [];
   /** 会話ごとに、最後に既読の要求を送った発言の id。 */
   private readonly markedThrough = new Map<string, string>();
 
@@ -308,6 +329,33 @@ export class ChatController {
     this.store.update((s) => ({ ...s, ...patch }));
   }
 
+  /** 未回答の承認待ちの覚えを置き換える。`pendingAsk` は最も古い未回答。 */
+  private setAsks(ids: string[]): void {
+    this.askIds = ids;
+    this.set({ pendingAsk: ids[0] ?? null });
+  }
+
+  /**
+   * 会話の画面の `a` の行き先: 未回答の承認待ちのうち最も古いもの（無ければ `null`）。
+   * 押したときに承認を読み直して、答え済み・取り下げ済みを外す。読めなかったときは画面を奪わず
+   * 1行断って、覚えている先頭を返す（詳細の画面が状態を見せる）。
+   */
+  async nextPendingAsk(): Promise<string | null> {
+    const conversationId = this.store.getSnapshot().conversationId;
+    if (this.askIds.length === 0 || conversationId === null) return null;
+    const read = await this.api.readConversationApprovals(conversationId);
+    if (this.store.getSnapshot().conversationId !== conversationId) return null;
+    if (read.failure !== undefined) {
+      this.addSystem(`承認待ちの状態を確かめられなかった（${read.failure}）。覚えている先頭を開く`);
+      return this.askIds[0] ?? null;
+    }
+    const open = new Set(unansweredIds(read));
+    const known = new Set(read.approvals.map((a) => a.id));
+    // 一覧に無い id は判定できないので、答え済みと決めつけず残す。
+    this.setAsks(this.askIds.filter((id) => open.has(id) || !known.has(id)));
+    return this.askIds[0] ?? null;
+  }
+
   /**
    * 前の送信（新しい会話で `open` の前に終わったもの）が受け取られていたか引き、受け取り済みならその会話を
    * 「いまの会話」にする（404 なら覚えを捨てて新しい会話のまま）。**引けなかったら `false`**（黙って新しい会話として
@@ -324,6 +372,16 @@ export class ChatController {
       if (found !== null) {
         this.set({ conversationId: found });
         this.addSystem(`前の送信は受け取られていた。その会話（${found}）へ送る`);
+        // その送信の添付は最初の会話に結び付いて届いている。残しておくと、次の送信で二重に添える（#3652）。
+        const before = this.draft.count;
+        this.draft.discard(this.unopenedFiles);
+        const dropped = before - this.draft.count;
+        if (dropped > 0) {
+          this.addSystem(
+            `前の送信に添えていたファイル ${String(dropped)} 件は届いているので、添えかけから外した`,
+          );
+        }
+        this.unopenedFiles = [];
       }
       return true;
     } catch (error) {
@@ -344,6 +402,12 @@ export class ChatController {
     if (text.length === 0 && this.draft.count === 0) return true;
     if (this.uploading) {
       this.addSystem('添付を上げている最中なので、送っていない（上がってからもう一度送る）');
+      return false;
+    }
+    if (this.switching) {
+      this.addSystem(
+        '会話を開いている最中なので、送っていない（開き終わってからもう一度送る。入力は残してある）',
+      );
       return false;
     }
     if (this.store.getSnapshot().busy) return this.followUp(text);
@@ -415,6 +479,7 @@ export class ChatController {
       // 次の送信の前に、この id で会話を引き直す（#3304）。
       if (conversationId === null && reply.conversationId === null && !rejected) {
         this.unopened = clientMessageId;
+        this.unopenedFiles = attached.files;
       }
     }
     if (closedQuietly) this.addSystem(closedQuietlyNotice(reply.sawEvent));
@@ -499,7 +564,7 @@ export class ChatController {
             event.approvalId,
           );
         }
-        this.set({ pendingAsk: event.approvalId });
+        this.setAsks([...this.askIds.filter((id) => id !== event.approvalId), event.approvalId]);
         break;
       case 'usage_limited':
         this.flushStreaming();
@@ -594,6 +659,7 @@ export class ChatController {
     if (this.refuseWhileBusy()) return false;
     this.stopWatch();
     this.unopened = null;
+    this.askIds = [];
     this.store.update(() => ({ ...initialChatState }));
     this.addSystem('新しい会話を始めた');
     return true;
@@ -601,6 +667,7 @@ export class ChatController {
 
   /** 今の会話を終える（蒸留の契機）。 */
   async endConversation(): Promise<void> {
+    if (this.refuseWhileBusy('応答中は会話を終えられない（Ctrl+C で止めてから /end）')) return;
     const id = this.store.getSnapshot().conversationId;
     if (id === null) {
       this.addSystem('終える会話がまだ無い');
@@ -614,6 +681,7 @@ export class ChatController {
     }
     this.stopWatch();
     this.unopened = null;
+    this.askIds = [];
     this.store.update(() => ({ ...initialChatState }));
     this.addSystem('会話を終えた（学びを記憶へ蒸留している）。次の発言から新しい会話になる');
   }
@@ -664,6 +732,23 @@ export class ChatController {
   /** 履歴の会話を開き直す。 */
   async openConversation(id: string): Promise<boolean> {
     if (this.refuseWhileBusy()) return false;
+    if (this.refuseWhileSwitching()) return false;
+    this.switching = true;
+    try {
+      return await this.openLocked(id);
+    } finally {
+      this.switching = false;
+    }
+  }
+
+  private refuseWhileSwitching(): boolean {
+    if (!this.switching) return false;
+    this.addSystem('会話を開いている最中なので、別の会話は開けない（開き終わってから）');
+    return true;
+  }
+
+  /** {@link openConversation} の本体（`switching` を立てた呼び手の中で呼ぶ）。 */
+  private async openLocked(id: string): Promise<boolean> {
     let read;
     try {
       read = await this.api.readConversation(id);
@@ -683,10 +768,8 @@ export class ChatController {
       );
       return false;
     }
-    const entries = this.historyEntries(
-      read.messages,
-      await this.api.readConversationApprovals(id),
-    );
+    const approvalsRead = await this.api.readConversationApprovals(id);
+    const entries = this.historyEntries(read.messages, approvalsRead);
     this.stopWatch();
     this.unopened = null;
     this.store.update(() => ({
@@ -694,6 +777,9 @@ export class ChatController {
       conversationId: id,
       entries: this.capEntries(entries),
     }));
+    this.setAsks(unansweredIds(approvalsRead));
+    // ここで差し替えは済んだ。以降の送信は開いた会話へ向かう（既読の通信を待たせない）。
+    this.switching = false;
     if (!read.reachedStart) {
       this.addSystem(
         '遡れた範囲だけを出している。これより古い発言は窓の外に残っているかもしれない',
@@ -719,6 +805,16 @@ export class ChatController {
       return true;
     }
     if (this.refuseWhileBusy()) return false;
+    if (this.refuseWhileSwitching()) return false;
+    this.switching = true;
+    try {
+      return await this.resumeLocked(id);
+    } finally {
+      this.switching = false;
+    }
+  }
+
+  private async resumeLocked(id?: string): Promise<boolean> {
     let candidates: string[];
     if (id !== undefined) {
       candidates = [id];
@@ -739,7 +835,7 @@ export class ChatController {
         this.addError(messageOf(error));
         return false;
       }
-      if (inProgress) return this.openConversation(candidate);
+      if (inProgress) return this.openLocked(candidate);
     }
     this.addSystem(
       id === undefined
@@ -805,12 +901,16 @@ export class ChatController {
       const read = await this.api.readConversation(conversationId);
       if (abort.signal.aborted || read === null) return;
       if (!read.reachedStart && read.messages.length === 0) return;
-      const entries = this.historyEntries(
-        read.messages,
-        await this.api.readConversationApprovals(conversationId),
-      );
+      const approvalsRead = await this.api.readConversationApprovals(conversationId);
+      const entries = this.historyEntries(read.messages, approvalsRead);
       if (abort.signal.aborted) return;
       this.store.update((s) => (s.conversationId === conversationId ? { ...s, entries } : s));
+      if (
+        this.store.getSnapshot().conversationId === conversationId &&
+        approvalsRead.failure === undefined
+      ) {
+        this.setAsks(unansweredIds(approvalsRead));
+      }
       if (!read.reachedStart) {
         this.addSystem(
           '遡れた範囲だけを出している。これより古い発言は窓の外に残っているかもしれない',
@@ -882,10 +982,12 @@ export class ChatController {
     }
   }
 
-  private refuseWhileBusy(): boolean {
+  private refuseWhileBusy(
+    notice = '応答中は会話を切り替えられない（Ctrl+C で止めてから）',
+  ): boolean {
     // 戻り接続だけで立った busy は、切り替えを止めない（切り替えは接続を abort する）。
     if (!this.store.getSnapshot().busy || this.watch !== null) return false;
-    this.addSystem('応答中は会話を切り替えられない（Ctrl+C で止めてから）');
+    this.addSystem(notice);
     return true;
   }
 }
