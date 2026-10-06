@@ -65,6 +65,7 @@ import {
   uploadDraft,
 } from './attachments.js';
 import { createClient, type DaemonClient } from './client.js';
+import { markConversationReadAfterReply } from './conversations.js';
 import { formatElapsedAgo } from './format.js';
 import { redactBody, redactError } from './redact.js';
 import { formatCreatedAt, freshnessMarker } from './memory.js';
@@ -208,6 +209,9 @@ export async function sendMessage(
   options.onAccepted?.();
   let nextConversationId = conversationId;
   let wrote = false;
+  // 返答が最後まで表示されたか（`done` が来て、`error` / `usage_limited` が無かった）。既読にする条件。
+  let completed = false;
+  let failedOrLimited = false;
   // **本文は改行までためて、行ごとに伏せてから書く**（#2635）。チャンクごとに伏せると、
   // 2つのチャンクにまたがったトークンはどちらの断片も規則に合わずに出る。端末へ書いた
   // ものは取り消せないので、まだ改行の来ていない残りは `pending` に持ち、ほかの出来事の
@@ -261,9 +265,14 @@ export async function sendMessage(
             '    （この発言は保持されていて、次に枠が開いたときに配り直されて試し直される）\n',
           );
         }
+        failedOrLimited = true;
         break;
       }
+      case 'done':
+        completed = true;
+        break;
       case 'error': {
+        failedOrLimited = true;
         const data = event.json<{ message: string }>();
         stdout.write(`\nエラー: ${data ? redactError(data.message) : '不明'}\n`);
         break;
@@ -275,6 +284,9 @@ export async function sendMessage(
 
   flushPending();
   if (wrote) stdout.write('\n');
+  if (completed && !failedOrLimited && nextConversationId !== null) {
+    await markConversationReadAfterReply(target, nextConversationId);
+  }
   return nextConversationId;
 }
 
@@ -353,7 +365,7 @@ const HELP = `/attach <path>       次に送る発言にファイルを添える
 /commit <本文>       引き受けたことを台帳へ積む
 /commit-edit <番号|id> <新しい本文>  台帳の本文を後から直す（番号は /commitments の並び。
                      直せるのは自分が積んだ未了の行だけ——断りの理由はサーバが返す）
-/done <番号|id> [理由]  片付けたことを記録する（番号は /commitments の並び）
+/done <番号|id> <理由>  片付けたことを記録する（理由は必須。番号は /commitments の並び）
 /usage [from=YYYY-MM-DD] [to=YYYY-MM-DD] [manager=<id>] [layer=<種>] [site=<場所>] [token=<id>]  利用状況（いくら使ったか）
                      layer= は ${usageLayerSchema.options.join(' / ')}、site= は
                      ${usageSiteSchema.options.join(' / ')} のどれか。token= は
@@ -362,7 +374,7 @@ const HELP = `/attach <path>       次に送る発言にファイルを添える
 /schedule <kind> <HH:MM|30m|cron 0 10 * * 1> <依頼>  継続する依頼を仕込む
 /unschedule <kind>   継続中の依頼を外す
 /run <kind>          定期ジョブを今すぐ起こす
-/event <source> <本文>  外部イベントをクローンに届ける
+/event <source> [本文]  外部イベントをクローンに届ける（本文が JSON ならその値として）
 /quit                終了
 `;
 
@@ -625,13 +637,17 @@ export async function runSlashCommand(
     }
 
     case '/event': {
-      const [source, ...bodyParts] = rest;
-      const body = bodyParts.join(' ');
-      if (!source || body.length === 0) {
-        stdout.write('使い方: /event <source> <本文>\n');
+      const [source] = rest;
+      if (!source) {
+        stdout.write('使い方: /event <source> [本文]（本文が JSON ならその値として届ける）\n');
         return 'ok';
       }
-      const response = await client.events.$post({ json: { source, payload: body } });
+      // 本文は空白を畳まない生の残りを使う（`rest` は空白で割ってあり、JSON の文字列や
+      // 本文の中の連続した空白を壊す）。解釈は Web の予定の画面と同じ（issue #3146）。
+      const body = line.replace(/^\S+\s+\S+\s*/, '').trimEnd();
+      const response = await client.events.$post({
+        json: { source, payload: parseEventPayload(body) },
+      });
       stdout.write(
         `${
           response.ok
@@ -1817,7 +1833,7 @@ export async function runSlashCommand(
       listed.commitments.push(...ids);
       stdout.write(`${text}\n`);
       if (ids.length > 0) {
-        stdout.write('  /done <番号> [理由] で片付けたことを記録できます\n');
+        stdout.write('  /done <番号> <理由> で片付けたことを記録できます\n');
       }
       return 'ok';
     }
@@ -1857,8 +1873,15 @@ export async function runSlashCommand(
 
     case '/done': {
       const [reference, ...reasonParts] = rest;
-      if (!reference) {
-        stdout.write('使い方: /done <番号|id> [理由]（番号は /commitments の並び）\n');
+      // **理由は必須**（Web の `commitments.tsx` の `reason.trim() === ''` と同じ。
+      // issue #3143）。閉じた理由は人間が後から読んで否定する材料なので、
+      // 書かれていないまま「閉じた」事実だけを残さない。送る前に断る。
+      const reason = reasonParts.join(' ').trim();
+      if (!reference || reason.length === 0) {
+        stdout.write(
+          '使い方: /done <番号|id> <理由>（番号は /commitments の並び）\n' +
+            '  理由が要ります（何をもって片付いたかを、後から読んで確かめられるように残すため）\n',
+        );
         return 'ok';
       }
       const id = resolveListedId(reference, listed.commitments);
@@ -1866,10 +1889,9 @@ export async function runSlashCommand(
         stdout.write(`[${reference}] は /commitments の一覧にありません\n`);
         return 'ok';
       }
-      const reason = reasonParts.join(' ');
       const response = await client.commitments[':id'].close.$post({
         param: { id },
-        json: { reason: reason.length === 0 ? DONE_WITHOUT_REASON : reason },
+        json: { reason },
       });
       if (response.ok) {
         stdout.write('片付いたことを記録しました\n');
@@ -3501,16 +3523,6 @@ function parseAnswerPairs(tokens: string[]): AnswerPair[] | null {
 // 引き受けたまま終わっていない仕事の台帳
 // ---------------------------------------------------------------------------
 
-/**
- * `/done` に理由を書かなかったときに残す1行。
- *
- * **空文字を送らない。** 器は「どう片付いたか」が残る前提で作ってあり
- * （`schema.ts` の `closedReason`）、そこが空だと「閉じた」という事実だけが
- * 残って人間が後から否定できなくなる。理由を書かなかったこと自体は事実なので、
- * 起きたことだけを書く（片付いた中身を勝手に埋めない）。
- */
-const DONE_WITHOUT_REASON = '人間が chat の /done で片付けたと記録した（理由は書かれていない）';
-
 const COMMITMENT_ORIGIN_LABEL: Record<Commitment['origin'], string> = {
   human: '人間',
   manager: 'マネージャー',
@@ -3781,4 +3793,21 @@ export async function runAttachmentCommand(line: string, draft: AttachmentDraft)
 function unquotePath(raw: string): string {
   const match = /^(['"])(.*)\1$/.exec(raw);
   return match === null ? raw : (match[2] ?? raw);
+}
+
+/**
+ * `/event` の本文を API の payload（JSON）にする。**Web の予定の画面
+ * （`apps/web/app/routes/schedule.tsx` の `EventForm`）と同じ解釈**で、webhook の
+ * `POST /events/:source` とも同じ（issue #3146）: JSON として読めればその値、読めなければ
+ * 文字列のまま。空の本文は JSON として読めないので空文字列になる（Web が source だけで
+ * 送れるのと同じ）。入口ごとに解釈が違うと、同じ `{"a":1}` でもクローンが読む本文と
+ * 重複判定の鍵（`JSON.stringify(payload)`）が入口で変わってしまう。
+ * 共有の純関数は無いので同じ規則を書いてある（Web 側は変えていない）。
+ */
+export function parseEventPayload(body: string): unknown {
+  try {
+    return JSON.parse(body) as unknown;
+  } catch {
+    return body;
+  }
 }

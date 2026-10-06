@@ -4,6 +4,7 @@ import {
   timingSafeEqualHex,
   type AuthAccount,
   type AuthProvider,
+  type IntegrationLimits,
 } from '@alteroid/core';
 import type { Context } from 'hono';
 
@@ -128,7 +129,19 @@ function describe(enabled: boolean, providers: AuthProvider[], mode: string): st
  */
 export type Principal =
   | { kind: 'operator'; auth: 'disabled' | 'operator-token' }
-  | { kind: 'account'; account: AuthAccount };
+  | { kind: 'account'; account: AuthAccount }
+  /**
+   * **連携の鍵**（`altk_`。第3の資格。`@alteroid/core` の `integration-key.ts`）。外のサービスへ渡す鍵で、
+   * 通れるのは固定の1 `source` の外部イベントの口だけ（`createApp` の `authenticate`。既定で拒否）。
+   * `limits` は鍵ごとの上限（本文のバイト数・1分あたりの回数。**この資格にだけ掛かる**）。
+   */
+  | {
+      kind: 'integration';
+      keyId: string;
+      name: string;
+      source: string;
+      limits: IntegrationLimits;
+    };
 
 export interface AuthVariables {
   principal: Principal;

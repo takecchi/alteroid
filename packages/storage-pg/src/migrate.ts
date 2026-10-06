@@ -781,6 +781,23 @@ export const STATEMENTS = [
      conversation_id text primary key,
      at timestamptz not null
    )`,
+  // --- 連携の鍵（外のサービスへ渡す、固定の1 source で外部イベントを送るだけの鍵） ----------
+  // 新しい表を足すだけで既存行の意味は変わらず、同名の drop をどこにも置いていないので
+  // 2周目以降も本当の no-op である。**素の値は入れない**（sha256 だけ）。
+  `create table if not exists integration_keys (
+     id text primary key,
+     name text not null,
+     source text not null,
+     sha256 text not null,
+     created_at timestamptz not null,
+     created_by text not null,
+     expires_at timestamptz,
+     revoked_at timestamptz,
+     last_used_at timestamptz,
+     max_body_bytes integer,
+     rate_per_minute integer
+   )`,
+  `create unique index if not exists integration_keys_sha256_idx on integration_keys (sha256)`,
   // 添付ファイル（#3111 段1a）。新しい表と索引だけで、既存行の意味は変わらない。
   `create table if not exists attachments (
      id text primary key,

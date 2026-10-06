@@ -252,6 +252,15 @@ function countHuman(lines: Line[], text: string): number {
   return lines.filter((line) => line.role === 'human' && line.text === text).length;
 }
 
+/** 履歴に、この id の添付を持つ人間の発言があるか（添付は1会話にしか結び付かず、id は一意）。 */
+function hasHumanWithAttachment(lines: Line[], ids: readonly string[]): boolean {
+  return lines.some(
+    (line) =>
+      line.role === 'human' &&
+      (line.attachments ?? []).some((attachment) => ids.includes(attachment.id)),
+  );
+}
+
 /** 版の切り替え（`< 2/2 >`）が1つ差し出す、編集前のある版。 */
 export interface EditedVersion {
   /** その版で実際に送った本文。 */
@@ -618,6 +627,12 @@ export function ChatPane({
          * 現れたら、受け取られていたと見て下ろす。
          */
         unconfirmed?: number;
+        /**
+         * 上げ終えた添付の id。あれば、受け取りの判定は本文でなく**この id を持つ
+         * 人間の発言が履歴に現れたか**で行う（添付だけの発言は本文が全部 ''、
+         * 本文が同じで添付が違う発言もあり、本文では区別できない）。
+         */
+        confirmIds?: string[];
       }
     >
   >(new Map());
@@ -1401,12 +1416,14 @@ export function ChatPane({
       unconfirmed?: number,
     ) => {
       setLines((previous) => previous.filter((line) => line.key !== lineKey));
+      const ids = attachmentIds(attachments ?? []);
       setRetries((prev) =>
         new Map(prev).set(key, {
           text,
           ...(supersedes === undefined ? {} : { supersedes }),
           ...(attachments === undefined || attachments.length === 0 ? {} : { attachments }),
           ...(unconfirmed === undefined ? {} : { unconfirmed }),
+          ...(unconfirmed !== undefined && ids.length > 0 ? { confirmIds: ids } : {}),
         }),
       );
     },
@@ -1432,7 +1449,8 @@ export function ChatPane({
   }, [historyLines]);
 
   /**
-   * 中断で積んだ文（`unconfirmed`）と同じ文が、履歴に送る前より多く現れたら、
+   * 中断で積んだ文（`unconfirmed`）が履歴に現れたら（添付つきは、その添付 id を持つ人間の発言。
+   * 添付の無い文は、同じ文が送る前より多く現れたら）、
    * サーバは受け取っていた——積んだ文と表示を下ろす（二重送信を誘わない、#3121）。
    * 入力欄は、戻した文のまま（使い手が手を入れていない）ときだけ空にする。
    */
@@ -1441,7 +1459,9 @@ export function ChatPane({
     unconfirmedEntry?.unconfirmed === undefined ? undefined : unconfirmedEntry.text;
   const unconfirmedSeen =
     unconfirmedEntry?.unconfirmed !== undefined &&
-    countHuman(historyLines, unconfirmedEntry.text) > unconfirmedEntry.unconfirmed;
+    (unconfirmedEntry.confirmIds === undefined
+      ? countHuman(historyLines, unconfirmedEntry.text) > unconfirmedEntry.unconfirmed
+      : hasHumanWithAttachment(historyLines, unconfirmedEntry.confirmIds));
   useEffect(() => {
     if (!unconfirmedSeen || unconfirmedText === undefined) return;
     setRetries((prev) => {
