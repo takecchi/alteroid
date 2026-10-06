@@ -139,6 +139,35 @@ describe('ClaudeManagerDriver#open', () => {
     expect(typeof withSpawn.options!.spawnClaudeCodeProcess).toBe('function');
   });
 
+  it('画像つきの入力は text + image(base64) ブロックの配列になり、画像が無ければ文字列のまま', async () => {
+    const captured: { options?: Options; prompt?: AsyncIterable<unknown> } = {};
+    const { queryFn } = fakeQueryFn(captured);
+    new ClaudeManagerDriver({ queryFn }).open(
+      makeSpec({
+        input: (async function* () {
+          yield { text: '見て', images: [{ mediaType: 'image/png' as const, data: 'QUJD' }] };
+          yield { text: '画像なし', images: [] };
+        })(),
+      }),
+    );
+    const sent: unknown[] = [];
+    for await (const message of captured.prompt!) sent.push(message);
+    expect(sent).toEqual([
+      {
+        type: 'user',
+        message: {
+          role: 'user',
+          content: [
+            { type: 'text', text: '見て' },
+            { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'QUJD' } },
+          ],
+        },
+        parent_tool_use_id: null,
+      },
+      { type: 'user', message: { role: 'user', content: '画像なし' }, parent_tool_use_id: null },
+    ]);
+  });
+
   it('入力は SDK のユーザーメッセージへ、生ログは SessionStore へ写る', async () => {
     const captured: { options?: Options; prompt?: AsyncIterable<unknown> } = {};
     const { queryFn } = fakeQueryFn(captured);

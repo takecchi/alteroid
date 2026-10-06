@@ -92,6 +92,11 @@ export default function Profile() {
   const { data, error, isLoading } = useProfile();
   // 編集欄（新規 or 既存の行）。一度に1つだけ開く。
   const [editor, setEditor] = useState<EditorState | null>(null);
+  // 一覧の「編集する」を押すたびに進める。`ProfileEditor` の `key` にして作り直す——確認の枠
+  // （`confirming`）と保存の失敗（`failure`）は `ProfileEditor` の中の state で、別の行へ
+  // 切り替えても親の `setEditor` では畳めない。残すと、確認していない行について「本当に保存する」が
+  // 確認済みの顔で出て、前の行の失敗が新しい行の下に出る（issue #3073）。
+  const [editorSerial, setEditorSerial] = useState(0);
   const [result, setResult] = useState<{ label: string; update: ProfileUpdateResult } | null>(null);
 
   return (
@@ -124,6 +129,7 @@ export default function Profile() {
                   profile={data}
                   onEdit={(entry) => {
                     setResult(null);
+                    setEditorSerial((serial) => serial + 1);
                     setEditor({
                       name: entry.name,
                       existing: true,
@@ -140,6 +146,7 @@ export default function Profile() {
         </Card>
         {data !== undefined && (
           <ProfileEditor
+            key={editorSerial}
             legacy={data.legacy}
             hasDefault={data.entries.some((entry) => entry.name === 'default')}
             editor={editor}

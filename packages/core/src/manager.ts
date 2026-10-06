@@ -12328,6 +12328,12 @@ class Pool implements ManagerPool {
             `${inputText}${denialSuffix}`,
         });
 
+        // **止めた委譲に遅れて届いた拒否は、日誌と数え上げだけ残して受信箱へは回さない**
+        // （Issue #3094。`case 'report'` / `case 'ask'` の `stopped` の門と同じ理由——R4）。
+        // 止めた仕事の拒否はクローンの判断材料にならず、`DENIED_ESCALATE_AT = 1` なので
+        // 1件目から `#emit` してしまっていた。上の日誌と数え上げ（`deniedLastAt` など）は
+        // 済んでいるので、捨てて「黙って失われる」を作ることにはならない。
+        if (record.job.status === 'stopped') return;
         if (!shouldEscalateDenial(toolTotal)) return;
         // **Markdown として書かれていない2つの欄を、埋め込む直前に包む**（issue #287）。
         //

@@ -11,7 +11,7 @@ import {
   Users,
   type LucideIcon,
 } from 'lucide-react';
-import { useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Link, Navigate, NavLink, Outlet, useLocation } from 'react-router';
 
 import { ConnectionCard } from '~/components/connection';
@@ -88,6 +88,9 @@ function NavItemLink({
   );
 }
 
+/** 確認済みの後の再検証が失敗したときの、自動の再試行の間隔（ms）。使い切ると全体表示（合計 60 秒）。 */
+const RECHECK_RETRY_DELAYS_MS = [5_000, 10_000, 15_000, 30_000];
+
 /**
  * 通ってから中身を出す。
  *
@@ -97,6 +100,41 @@ function NavItemLink({
  */
 export default function Shell() {
   const auth = useAuth();
+  const { error, status, isValidating, revalidate } = auth;
+
+  /**
+   * 確認済み（`status` が `checking` でない＝`data` がある）の後の再検証の失敗（issue #3063）。
+   * 画面を置き換えると配下の書きかけが消えるので、帯で知らせて間隔を空けて自動で再試行し、
+   * 約 60 秒続いたときだけ `gaveUp` にして全体表示へ切り替える。
+   *
+   * **判断と再試行はここ（Shell）1か所に置く。** `useAuth` は Shell・配下の画面・設定・ログインで
+   * 同時に使われ、SWR の成功・失敗のコールバックは要求を始めたインスタンスでしか呼ばれない。
+   * インスタンスごとの state に置くと、どれが取得を始めたかで結果が変わる。ここは共有される
+   * `error` / `status`（キャッシュ）だけを見る。
+   */
+  const recheckFailing = error !== undefined && status !== 'checking';
+  const [gaveUp, setGaveUp] = useState(false);
+  // 直った（失敗でなくなった）ら諦めを解く。描画中の state 調整（effect で立て直さない）。
+  if (!recheckFailing && gaveUp) setGaveUp(false);
+  const attempts = useRef(0);
+  useEffect(() => {
+    if (!recheckFailing) {
+      attempts.current = 0;
+      return;
+    }
+    // 取り直しの最中は待つ（終わるとここへ戻る）。諦めた後は自動では打たない。
+    if (isValidating || gaveUp) return;
+    const delay = RECHECK_RETRY_DELAYS_MS[attempts.current];
+    if (delay === undefined) {
+      setGaveUp(true);
+      return;
+    }
+    const timer = setTimeout(() => {
+      attempts.current += 1;
+      void revalidate();
+    }, delay);
+    return () => clearTimeout(timer);
+  }, [recheckFailing, isValidating, gaveUp, revalidate]);
 
   /**
    * 繋がらない・認証の確認自体が失敗した、は「未ログイン」ではない。
@@ -110,7 +148,12 @@ export default function Shell() {
    * 間違っているとそこへは永久に到達できない（配る成果物の既定は同一オリジンの
    * `/api` なので、別のホストのデーモンを指したい初回の人は必ずここで詰まる）。
    */
-  if (auth.error !== undefined && auth.status !== 'anonymous' && auth.status !== 'ungranted') {
+  if (
+    auth.error !== undefined &&
+    (auth.status === 'checking' || gaveUp) &&
+    auth.status !== 'anonymous' &&
+    auth.status !== 'ungranted'
+  ) {
     return (
       <ScreenState title="接続先のサーバに繋がらない">
         {/* 各画面の読み込み失敗の帯と同じ部品・同じ形（issue #2799）。 */}
@@ -138,10 +181,16 @@ export default function Shell() {
     return <Navigate to="/login" replace />;
   }
 
-  return <AuthedShell />;
+  return <AuthedShell recheckFailing={recheckFailing && !gaveUp} onRecheck={() => revalidate()} />;
 }
 
-function AuthedShell() {
+function AuthedShell({
+  recheckFailing,
+  onRecheck,
+}: {
+  recheckFailing: boolean;
+  onRecheck: () => unknown;
+}) {
   // SSE はここで1本だけ張る。下の画面はこれが回した無効化に相乗りする。
   const live = useJournalLive();
   const { data: approvals, error: approvalsError } = useApprovals(true);
@@ -154,6 +203,14 @@ function AuthedShell() {
   const approvalsList = Array.isArray(approvals?.approvals) ? approvals.approvals : undefined;
   const approvalsMalformed = approvals !== undefined && approvalsList === undefined;
   const pending = approvalsList?.length ?? 0;
+  /**
+   * 読めない行（`unreadable`）の数（issue #3062）。`pending` は読める行だけなので、読めない行だけの
+   * ときに札が無い＝「承認待ちはない」に見えた。**0件の顔にしない**——警告の札を出す（語は
+   * `/approvals` の「読めない承認待ちが N 件ある」）。
+   */
+  const unreadableApprovals = Array.isArray(approvals?.unreadable)
+    ? approvals.unreadable.length
+    : 0;
   /**
    * 「読めていない」を「0件」と区別する（issue #2105）。`GET /approvals` が
    * 失敗しても、`useApprovals` を呼んでいるのがこの1箇所だけなのでナビの
@@ -193,7 +250,18 @@ function AuthedShell() {
       ?
     </Badge>
   ) : (
-    pending > 0 && <Badge tone="warn">{pending}</Badge>
+    <>
+      {pending > 0 && <Badge tone="warn">{pending}</Badge>}
+      {unreadableApprovals > 0 && (
+        <Badge
+          tone="warn"
+          aria-label={`読めない承認待ちが ${unreadableApprovals} 件ある`}
+          title={`読めない承認待ちが ${unreadableApprovals} 件ある`}
+        >
+          !
+        </Badge>
+      )}
+    </>
   );
 
   /**
@@ -291,7 +359,7 @@ function AuthedShell() {
               status={live.status}
               onOpenNav={() => setNavOpen(true)}
               trailing={
-                (pending > 0 || approvalsUnavailable) && (
+                (pending > 0 || unreadableApprovals > 0 || approvalsUnavailable) && (
                   // **リンクのままにする**（issue #2105）。開けば `/approvals` の
                   // `ErrorNote` で読めなかった理由まで読める——ここでは「読めていない」
                   // ことだけを言う。
@@ -299,7 +367,11 @@ function AuthedShell() {
                     to="/approvals"
                     className="flex min-h-11 shrink-0 items-center px-2"
                     aria-label={
-                      approvalsUnavailable ? '承認待ちを読めていない' : `承認待ち ${pending} 件`
+                      approvalsUnavailable
+                        ? '承認待ちを読めていない'
+                        : unreadableApprovals > 0
+                          ? `承認待ち ${pending} 件・読めない承認待ちが ${unreadableApprovals} 件ある`
+                          : `承認待ち ${pending} 件`
                     }
                   >
                     {approvalsUnavailable ? (
@@ -307,7 +379,17 @@ function AuthedShell() {
                         承認待ち ?
                       </Badge>
                     ) : (
-                      <Badge tone="warn">承認待ち {pending}</Badge>
+                      <>
+                        {pending > 0 && <Badge tone="warn">承認待ち {pending}</Badge>}
+                        {unreadableApprovals > 0 && (
+                          <Badge
+                            tone="warn"
+                            title={`読めない承認待ちが ${unreadableApprovals} 件ある`}
+                          >
+                            読めない {unreadableApprovals}
+                          </Badge>
+                        )}
+                      </>
                     )}
                   </NavLink>
                 )
@@ -326,6 +408,19 @@ function AuthedShell() {
           tabIndex={-1}
           className="flex min-h-0 min-w-0 flex-1 flex-col outline-none"
         >
+          {recheckFailing && (
+            // 確認済みの後の再検証の失敗（issue #3063）。画面を置き換えると配下の書きかけが
+            // 消えるので、上に知らせるだけにする（自動で再試行し、続いたときだけ全体表示）。
+            <div
+              role="status"
+              className="flex shrink-0 items-center justify-between gap-2 border-b border-border bg-destructive/10 px-4 py-1.5 text-xs text-destructive"
+            >
+              <span>接続先のサーバを確認できていない。自動で再試行している。</span>
+              <button type="button" onClick={() => void onRecheck()} className="shrink-0 underline">
+                今すぐ試す
+              </button>
+            </div>
+          )}
           <Outlet />
         </main>
       </div>
