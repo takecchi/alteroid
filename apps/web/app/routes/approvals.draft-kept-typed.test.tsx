@@ -136,8 +136,9 @@ describe('応答を待つ間に打ち足した文（issue #3515）', () => {
     expect(within(left).getByText(/対象: 自由記述の件/)).toBeTruthy();
     expect(within(left).getByText('答え。追記です')).toBeTruthy();
     expect(within(left).getByRole('button', { name: /写す|写した|写せなかった/ })).toBeTruthy();
-    // 承認が一覧から消えても、下書きは保存先に残る。
-    expect(loadApprovalDrafts().texts).toEqual({ 'a-free': '答え。追記です' });
+    // 承認が一覧から消えても、下書きは保存先に残る。保存先へ書かれるのは描画のあとの effect
+    // なので、待ってから見る（同期で読むと、書き直しの前の一瞬を見て揺らぐ。issue #3666）。
+    await waitFor(() => expect(loadApprovalDrafts().texts).toEqual({ 'a-free': '答え。追記です' }));
 
     fireEvent.click(within(left).getByRole('button', { name: '閉じる（捨てる）' }));
     await waitFor(() => expect(screen.queryByRole('list', { name: LEFT })).toBeNull());
@@ -155,7 +156,7 @@ describe('応答を待つ間に打ち足した文（issue #3515）', () => {
 
     await waitFor(() => expect(screen.queryByPlaceholderText(/答える/)).toBeNull());
     expect(screen.queryByRole('list', { name: LEFT })).toBeNull();
-    expect(loadApprovalDrafts()).toEqual({ texts: {}, questions: {} });
+    await waitFor(() => expect(loadApprovalDrafts()).toEqual({ texts: {}, questions: {} }));
   });
 
   it('設問のフォーム: 待つ間に「その他」へ打ち足した分が残り、選択肢の名前つきで見える', async () => {
@@ -189,7 +190,9 @@ describe('応答を待つ間に打ち足した文（issue #3515）', () => {
     expect(within(left).getAllByRole('listitem')).toHaveLength(1);
     expect(within(left).getByText(/対象: 二件目/)).toBeTruthy();
     expect(within(left).getByText('二件目の答え、あとから')).toBeTruthy();
-    expect(loadApprovalDrafts().texts).toEqual({ 'a-two': '二件目の答え、あとから' });
+    await waitFor(() =>
+      expect(loadApprovalDrafts().texts).toEqual({ 'a-two': '二件目の答え、あとから' }),
+    );
   });
 
   it('再読み込み（保存した下書きと控え）でも、残った文が見える', async () => {
@@ -201,6 +204,8 @@ describe('応答を待つ間に打ち足した文（issue #3515）', () => {
     fireEvent.change(box, { target: { value: '答え+' } });
     gate.resolve();
     await screen.findByRole('list', { name: LEFT });
+    // 保存先へ書かれるのは描画のあとの effect（issue #3666）。書かれたのを見てから閉じる。
+    await waitFor(() => expect(loadApprovalDrafts().texts).toEqual({ 'a-free': '答え+' }));
     cleanup();
 
     stub([], []);
@@ -223,7 +228,9 @@ describe('送っていない欄の下書きは、送った経路によらず残�
     const left = await screen.findByRole('list', { name: LEFT });
     expect(within(left).getByText(/対象: 自由記述の件/)).toBeTruthy();
     expect(within(left).getByText('条件つきなら進めてよい')).toBeTruthy();
-    expect(loadApprovalDrafts().texts).toEqual({ 'a-free': '条件つきなら進めてよい' });
+    await waitFor(() =>
+      expect(loadApprovalDrafts().texts).toEqual({ 'a-free': '条件つきなら進めてよい' }),
+    );
   });
 
   it('設問のフォームで答える: 送っていない自由記述が残り、上部のブロックに出る', async () => {
@@ -241,10 +248,12 @@ describe('送っていない欄の下書きは、送った経路によらず残�
     expect(within(left).getByText('別に書いておいた文')).toBeTruthy();
     // 設問のフォームは送ったので畳まれ、残った文に選択肢は出ない。
     expect(within(left).queryByText(/選んだ/)).toBeNull();
-    expect(loadApprovalDrafts()).toEqual({
-      texts: { 'a-ask': '別に書いておいた文' },
-      questions: {},
-    });
+    await waitFor(() =>
+      expect(loadApprovalDrafts()).toEqual({
+        texts: { 'a-ask': '別に書いておいた文' },
+        questions: {},
+      }),
+    );
   });
 
   it('自由記述をそのまま送ったときは、従来どおり畳まれる', async () => {
