@@ -222,17 +222,43 @@ export class ChatController {
   }
 
   /** ログに 1 件足す。 */
-  private push(kind: LogKind, text: string): number {
+  private push(kind: LogKind, text: string, approvalId?: string): number {
     this.seq += 1;
-    const entry: LogEntry = { seq: this.seq, kind, text };
+    const entry: LogEntry = {
+      seq: this.seq,
+      kind,
+      text,
+      ...(approvalId === undefined ? {} : { approvalId }),
+    };
     this.store.update((s) => {
       const entries = [...s.entries, entry];
       return {
         ...s,
-        entries: entries.length > MAX_ENTRIES ? entries.slice(-MAX_ENTRIES) : entries,
+        entries: this.capEntries(entries),
       };
     });
     return entry.seq;
+  }
+
+  /**
+   * ログを {@link MAX_ENTRIES} 件に収める。古い側を捨てるときは、先頭に捨てた件数の断りを1行置く（累計。
+   * 会話の先頭が途中から始まっているのに、先頭まで読めたように見えないように。#3409）。
+   */
+  private capEntries(entries: readonly LogEntry[]): LogEntry[] {
+    if (entries.length <= MAX_ENTRIES) return [...entries];
+    const head = entries[0];
+    const hasNotice = head?.dropped !== undefined;
+    const body = hasNotice ? entries.slice(1) : entries;
+    const keep = body.slice(-(MAX_ENTRIES - 1));
+    const dropped = (hasNotice ? (head.dropped ?? 0) : 0) + body.length - keep.length;
+    if (!hasNotice) this.seq += 1;
+    const notice: LogEntry = {
+      seq: hasNotice ? head.seq : this.seq,
+      kind: 'system',
+      text: `古い側 ${String(dropped)} 件は表示していない（新しい ${String(MAX_ENTRIES - 1)} 件だけを持っている。会話の全文は alteroid conversations show で読める）`,
+      dropped,
+    };
+    return [notice, ...keep];
   }
 
   /**
@@ -429,12 +455,16 @@ export class ChatController {
         this.flushStreaming();
         // 答える画面は承認待ちのタブ。id と質問を残し、そこへ飛ぶ口（`a`・`/approvals <id>`）を案内する。
         // 既存 CLI の `/answer <id> <回答>` と Web の承認待ちの画面からも答えられる。
-        this.push(
-          'ask',
-          `確認したいことがある（承認待ち ${event.approvalId}）: ${redactBody(event.question)}\n` +
-            `答えるには、Esc のあと a（承認待ちの詳細が開く）か /approvals ${event.approvalId}。` +
-            `alteroid chat の /answer ${event.approvalId} <回答>、Web の承認待ちの画面からも答えられる`,
-        );
+        // 読み返し（履歴から開いた会話）が同じ承認をすでに出していれば、再生された `ask_human` で二重に出さない（#3408）。
+        if (!this.store.getSnapshot().entries.some((e) => e.approvalId === event.approvalId)) {
+          this.push(
+            'ask',
+            `確認したいことがある（承認待ち ${event.approvalId}）: ${redactBody(event.question)}\n` +
+              `答えるには、Esc のあと a（承認待ちの詳細が開く）か /approvals ${event.approvalId}。` +
+              `alteroid chat の /answer ${event.approvalId} <回答>、Web の承認待ちの画面からも答えられる`,
+            event.approvalId,
+          );
+        }
         this.set({ pendingAsk: event.approvalId });
         break;
       case 'usage_limited':
@@ -610,7 +640,7 @@ export class ChatController {
     this.store.update(() => ({
       ...initialChatState,
       conversationId: id,
-      entries: entries.length > MAX_ENTRIES ? entries.slice(-MAX_ENTRIES) : entries,
+      entries: this.capEntries(entries),
     }));
     if (!read.reachedStart) {
       this.addSystem(
@@ -691,7 +721,12 @@ export class ChatController {
     const entries: LogEntry[] = interleaveApprovals(messages, approvals.approvals).map((item) => {
       this.seq += 1;
       if (item.kind === 'approval') {
-        return { seq: this.seq, kind: 'ask', text: approvalText(item.approval) };
+        return {
+          seq: this.seq,
+          kind: 'ask',
+          text: approvalText(item.approval),
+          approvalId: item.approval.id,
+        };
       }
       const m = item.message;
       return {
@@ -704,7 +739,7 @@ export class ChatController {
       this.seq += 1;
       entries.push({ seq: this.seq, kind: 'system', text: notice });
     }
-    return entries.length > MAX_ENTRIES ? entries.slice(-MAX_ENTRIES) : entries;
+    return this.capEntries(entries);
   }
 
   /**
