@@ -110,7 +110,7 @@ export default function Shell() {
    * 間違っているとそこへは永久に到達できない（配る成果物の既定は同一オリジンの
    * `/api` なので、別のホストのデーモンを指したい初回の人は必ずここで詰まる）。
    */
-  if (auth.error !== undefined && auth.status !== 'anonymous' && auth.status !== 'ungranted') {
+  if (auth.unreachable && auth.status !== 'anonymous' && auth.status !== 'ungranted') {
     return (
       <ScreenState title="接続先のサーバに繋がらない">
         {/* 各画面の読み込み失敗の帯と同じ部品・同じ形（issue #2799）。 */}
@@ -138,10 +138,16 @@ export default function Shell() {
     return <Navigate to="/login" replace />;
   }
 
-  return <AuthedShell />;
+  return <AuthedShell recheckFailing={auth.recheckFailing} onRecheck={() => auth.revalidate()} />;
 }
 
-function AuthedShell() {
+function AuthedShell({
+  recheckFailing,
+  onRecheck,
+}: {
+  recheckFailing: boolean;
+  onRecheck: () => unknown;
+}) {
   // SSE はここで1本だけ張る。下の画面はこれが回した無効化に相乗りする。
   const live = useJournalLive();
   const { data: approvals, error: approvalsError } = useApprovals(true);
@@ -326,6 +332,19 @@ function AuthedShell() {
           tabIndex={-1}
           className="flex min-h-0 min-w-0 flex-1 flex-col outline-none"
         >
+          {recheckFailing && (
+            // 確認済みの後の再検証の失敗（issue #3063）。画面を置き換えると配下の書きかけが
+            // 消えるので、上に知らせるだけにする（自動で再試行し、続いたときだけ全体表示）。
+            <div
+              role="status"
+              className="flex shrink-0 items-center justify-between gap-2 border-b border-border bg-destructive/10 px-4 py-1.5 text-xs text-destructive"
+            >
+              <span>接続先のサーバを確認できていない。自動で再試行している。</span>
+              <button type="button" onClick={() => void onRecheck()} className="shrink-0 underline">
+                今すぐ試す
+              </button>
+            </div>
+          )}
           <Outlet />
         </main>
       </div>

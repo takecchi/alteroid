@@ -30,7 +30,7 @@ const CREDENTIAL: Credential = {
   createdAt: '2026-08-13T00:00:00.000Z',
 };
 
-const FULL_SCREEN = '接続先のサーバに繋がらない';
+const FULL_SCREEN = '接続先のサーバに繋がらない'; // 全体表示の見出し（フッターの同文の1行とは別）
 
 function renderShell() {
   const router = createMemoryRouter(
@@ -64,6 +64,20 @@ function routes(url: string): Response | undefined {
  * 入力欄に書きかけを打ち、`/health` を落としてフォーカスで再取得を起こす。
  * `fakeTimers`: RTL の待ちは実時計を要るので、時計を止めるのは入力を済ませた後にする。
  */
+/**
+ * 偽の時計を `ms` 進める。**fetch の失敗は実の非同期で返る**ので、小刻みに進めては
+ * 実時計側（`setImmediate`。偽にしていない）で結果を取り込ませる。
+ */
+async function advance(ms: number): Promise<void> {
+  for (let left = ms; left > 0; left -= 1_000) {
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(Math.min(1_000, left));
+      await new Promise((resolve) => setImmediate(resolve));
+      await new Promise((resolve) => setImmediate(resolve));
+    });
+  }
+}
+
 async function typeDraftThenFailRecheck(fakeTimers = false): Promise<HTMLInputElement> {
   const input = await screen.findByLabelText<HTMLInputElement>('下書き');
   fireEvent.change(input, { target: { value: '書きかけ' } });
@@ -71,8 +85,8 @@ async function typeDraftThenFailRecheck(fakeTimers = false): Promise<HTMLInputEl
   healthUp = false;
   await act(async () => {
     window.dispatchEvent(new Event('focus'));
-    if (fakeTimers) await vi.advanceTimersByTimeAsync(50);
   });
+  if (fakeTimers) await advance(1_000);
   return input;
 }
 
@@ -98,7 +112,7 @@ describe('確認済みの後の再検証の失敗（issue #3063）', () => {
     const input = await typeDraftThenFailRecheck();
 
     expect(await screen.findByRole('status')).toBeTruthy();
-    expect(screen.queryByText(FULL_SCREEN)).toBeNull();
+    expect(screen.queryByRole('heading', { name: FULL_SCREEN })).toBeNull();
     // 同じ要素のまま（unmount されていない）で、値も残っている。
     expect(screen.getByLabelText<HTMLInputElement>('下書き')).toBe(input);
     expect(input.value).toBe('書きかけ');
@@ -111,12 +125,10 @@ describe('確認済みの後の再検証の失敗（issue #3063）', () => {
     expect(screen.queryByRole('status')).not.toBeNull();
 
     healthUp = true;
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(10_000);
-    });
+    await advance(10_000);
 
     expect(screen.queryByRole('status')).toBeNull();
-    expect(screen.queryByText(FULL_SCREEN)).toBeNull();
+    expect(screen.queryByRole('heading', { name: FULL_SCREEN })).toBeNull();
     expect(screen.getByLabelText<HTMLInputElement>('下書き')).toBe(input);
     expect(input.value).toBe('書きかけ');
   });
@@ -125,30 +137,26 @@ describe('確認済みの後の再検証の失敗（issue #3063）', () => {
     stubFetch(routes);
     renderShell();
     await typeDraftThenFailRecheck(true);
-    expect(screen.queryByText(FULL_SCREEN)).toBeNull();
+    expect(screen.queryByRole('heading', { name: FULL_SCREEN })).toBeNull();
 
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(180_000);
-    });
+    await advance(180_000);
 
-    expect(screen.queryByText(FULL_SCREEN)).not.toBeNull();
+    expect(screen.queryByRole('heading', { name: FULL_SCREEN })).not.toBeNull();
   });
 
   it('切り替わった後でも、接続が戻れば画面は自動で進む', async () => {
     stubFetch(routes);
     renderShell();
     await typeDraftThenFailRecheck(true);
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(180_000);
-    });
-    expect(screen.queryByText(FULL_SCREEN)).not.toBeNull();
+    await advance(180_000);
+    expect(screen.queryByRole('heading', { name: FULL_SCREEN })).not.toBeNull();
 
     healthUp = true;
     vi.useRealTimers();
     fireEvent.click(screen.getByRole('button', { name: 'もう一度試す' }));
     await waitFor(() => {
-      expect(screen.queryByText(FULL_SCREEN)).toBeNull();
+      expect(screen.queryByRole('heading', { name: FULL_SCREEN })).toBeNull();
     });
-    expect(screen.queryByLabelText('下書き')).not.toBeNull();
+    expect(await screen.findByLabelText('下書き')).toBeTruthy();
   });
 });
