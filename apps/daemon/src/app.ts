@@ -150,6 +150,7 @@ import {
   type AuthAccount,
   type AuthService,
   NulNotAllowedError,
+  stripNul,
   InvalidCredentialNameError,
   type TokenPolicyChange,
   type TokenPoolChange,
@@ -1010,7 +1011,12 @@ const abortBody = z.object({ reason: z.string().min(1).optional() });
  */
 const scheduleBody = z.object({
   kind: scheduleKindSchema,
-  request: z.string().min(1),
+  // **「空」は NUL を落とした後で見る**（#3438）。ストアは NUL を落として残すので、落とす前の長さで見ると
+  // NUL だけの `request` が検査を抜け、ハンドラが日誌へ「設定しようとしている」を書いた後で 500 になる。
+  request: z
+    .string()
+    .min(1)
+    .refine((value) => stripNul(value).length > 0),
   spec: scheduleSpecSchema,
 });
 
