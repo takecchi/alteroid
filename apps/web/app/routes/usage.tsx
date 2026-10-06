@@ -25,6 +25,7 @@ import {
   Page,
   Badge,
   BarList,
+  Button,
   Card,
   CardHeader,
   cn,
@@ -945,6 +946,9 @@ function AxisCard({
   /** `href` を持つ行だけ `label` を `<Link>` にする（issue #2046）。文言は変えない。 */
   entries: { label: string; costUsd: number; href?: string }[];
 }) {
+  // **カードごとの状態。** 開閉は他のカードへ波及させない（Issue #3537）。
+  const [showAll, setShowAll] = useState(false);
+  const overflowing = entries.length > AXIS_LIMIT;
   return (
     <Card>
       <CardHeader title={title} action={<Badge>{entries.length}</Badge>} />
@@ -959,7 +963,7 @@ function AxisCard({
         金額の文字は今までどおり `formatUsd` が出す（帯は文字を持たない）。
       */}
       <BarList
-        limit={AXIS_LIMIT}
+        {...(showAll ? {} : { limit: AXIS_LIMIT })}
         formatValue={formatUsd}
         empty="無し。"
         items={entries.map((entry) => {
@@ -979,6 +983,18 @@ function AxisCard({
           };
         })}
       />
+      {/*
+        **切った分へ辿れるようにする（Issue #3537）。** 注記（`…残り N 件は出していない`）
+        は `BarList` が出し、押す口はその直下に置く。全件を出している間は注記が消える
+        ので、戻す口だけが残る。`BarList` 側は変えない（他の画面の見た目を保つ）。
+      */}
+      {overflowing && (
+        <div className="border-t border-border px-4 py-2">
+          <Button variant="ghost" size="sm" onClick={() => setShowAll((value) => !value)}>
+            {showAll ? `上位 ${AXIS_LIMIT} 件に戻す` : 'すべて表示する'}
+          </Button>
+        </div>
+      )}
     </Card>
   );
 }
