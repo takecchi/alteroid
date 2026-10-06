@@ -2,6 +2,7 @@ import { createElement } from 'react';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { App } from './app.js';
+import { NotDeliveredError } from './api.js';
 import { ApprovalsController } from './approvals-controller.js';
 import { ChatController } from './chat-controller.js';
 import {
@@ -240,10 +241,33 @@ describe('会話', () => {
     h.stdin.write(ENTER);
     await waitFor(() => h.frame().includes('不明なコマンド: /exti'));
     expect(h.api.chatCalls).toEqual([]);
+    // 断った文は入力欄に残る（#3406）。消して、// で始め直す。
+    expect(h.frame()).toContain('/exti');
+    h.stdin.write('\x15');
     await type(h.stdin, '//exit は終了です');
     h.stdin.write(ENTER);
     await waitFor(() => h.api.chatCalls.length === 1);
     expect(h.api.chatCalls[0]?.text).toBe('/exit は終了です');
+  });
+
+  it('未知のコマンドとして断った文は、入力欄を空にしない（#3406）', async () => {
+    const h = start();
+    await type(h.stdin, '/var/log/app.log が壊れている');
+    h.stdin.write(ENTER);
+    await waitFor(() => h.frame().includes('不明なコマンド: /var/log/app.log'));
+    expect(h.frame()).toContain('❯ /var/log/app.log が壊れている');
+    expect(h.api.chatCalls).toEqual([]);
+  });
+
+  it('受け取られなかった送信は、文を入力欄へ戻す（#3405）', async () => {
+    const h = start((api) => {
+      api.scripts.push([new NotDeliveredError('送信できませんでした（HTTP 503）')]);
+    });
+    await type(h.stdin, '大事な長い文章');
+    h.stdin.write(ENTER);
+    await waitFor(() => h.frame().includes('✗ 送信できませんでした（HTTP 503）'));
+    await waitFor(() => h.frame().includes('❯ 大事な長い文章'));
+    expect(h.frame()).toContain('送れなかった発言');
   });
 
   it('Shift+Enter（modifyOtherKeys）と行末の \\ で改行でき、送らない', async () => {

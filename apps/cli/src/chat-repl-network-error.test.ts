@@ -77,6 +77,31 @@ async function run(
 }
 
 // 初回は chat.ts（大きい）の読み込みで既定の5秒を超えうる。
+describe('chat: done も error も無いまま閉じたら言う（#3410）', { timeout: 30000 }, () => {
+  it('open のあとで閉じたら、途中で切れたと言う', async () => {
+    const { text } = await run(['one'], () =>
+      Promise.resolve(
+        sse('event: open\ndata: {"conversationId":"c1"}\n\nevent: text\ndata: {"text":"途中"}\n\n'),
+      ),
+    );
+    expect(text).toContain('途中');
+    expect(text).toContain('応答が途中で切れました');
+  });
+
+  it('open の前に閉じたら、受け取られたか分からないと言う', async () => {
+    const { text } = await run(['one'], () => Promise.resolve(sse('')));
+    expect(text).toContain('発言が受け取られたかは分かりません');
+  });
+
+  it('done で閉じたら言わない', async () => {
+    const { text } = await run(['one'], () =>
+      Promise.resolve(sse('event: done\ndata: {"type":"done"}\n\n')),
+    );
+    expect(text).not.toContain('途中で切れました');
+    expect(text).not.toContain('受け取られたかは分かりません');
+  });
+});
+
 describe('chat: 通信の例外で REPL を落とさない（#3218）', { timeout: 30000 }, () => {
   it('発言の送信が例外（fetch 失敗）でも、1行言って入力に戻り、次の発言を送れる', async () => {
     const { calls, text } = await run(['one', 'two'], (path, call) =>
