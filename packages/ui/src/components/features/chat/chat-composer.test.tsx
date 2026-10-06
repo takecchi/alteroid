@@ -181,6 +181,30 @@ describe('ChatComposer: 無効・送信中', () => {
     fireEvent.click(screen.getByRole('button', { name: '受信をやめる' }));
     expect(stop).toHaveBeenCalledTimes(1);
   });
+
+  it('受信中: 「受信をやめる」は送信と同じくアイコンだけの丸いボタンで、aria-label とヒントが同じ文', () => {
+    setup({ sending: true, onStopReceiving: vi.fn() });
+    const stop = screen.getByRole('button', { name: '受信をやめる' });
+    expect(stop.textContent).toBe('');
+    expect(stop.querySelector('svg')).not.toBeNull();
+    expect(stop.getAttribute('aria-label')).toBe('受信をやめる');
+    for (const cls of ['size-11', 'rounded-full', 'md:size-8']) {
+      expect(stop.classList.contains(cls)).toBe(true);
+    }
+    expect(screen.queryByRole('tooltip')).toBeNull();
+    act(() => stop.focus());
+    expect(screen.getByRole('tooltip').textContent).toBe('受信をやめる');
+  });
+
+  it('受信中: 「受信をやめる」もホバーでヒントが出る（遅延のあと）', () => {
+    setup({ sending: true, onStopReceiving: vi.fn() });
+    const trigger = screen.getByRole('button', { name: '受信をやめる' }).parentElement!;
+    fireEvent.pointerMove(trigger, { pointerType: 'mouse' });
+    act(() => {
+      vi.advanceTimersByTime(300);
+    });
+    expect(screen.getByRole('tooltip').textContent).toBe('受信をやめる');
+  });
 });
 
 describe('ChatComposer: 指だけの端末', () => {

@@ -61,7 +61,7 @@ const ROUND_BUTTON = 'size-11 rounded-full p-0 md:size-8';
  * - **⌘ + Enter / Ctrl + Enter（どちらでも）で送る。** Enter 単体・Shift + Enter は
  *   textarea の既定（改行）のまま。IME の変換を確定する Enter では送らない（`ime.ts`）。
  *   案内の文は OS に合わせた修飾キーで出し、指だけの端末では隠す（`SubmitHint`）
- * - [+]（ファイルを添付）と [▶]（メッセージを送信）は、ホバーとキーボードのフォーカスでヒントを出す。
+ * - [+]（ファイルを添付）・[▶]（メッセージを送信）・[■]（受信をやめる。受信中だけ）は、ホバーとキーボードのフォーカスでヒントを出す。
  *   読み上げの名前は `aria-label` で持つ
  * - **受信中も送れる。**「受信をやめる」は「送る」の代わりではないので並べて出す——
  *   送る口を消すと、続けて送るにはいったん受信を捨てるしかなくなる
@@ -242,19 +242,19 @@ export function ChatComposer({
                 受信中でも続けて送れるので、送る口を消してしまうと、追送するには
                 いったん受信を捨てるしかなくなる（捨てているあいだに届いた応答は画面に出ない）。
 
-                **狭い画面ではラベルだけ畳み、アイコンは常に出す**（`hidden md:inline`）。
-                `aria-label` は明示する — 実機で文字が本当に消えたときに備え、頼らない形にしてある。
+                **送信ボタンと同じ形にそろえる** — アイコンだけの丸いボタン（`ROUND_BUTTON`）で、
+                説明はホバー・フォーカスのヒントが担う。`aria-label` はヒントと同じ文にする。
+                文字のラベルは持たない。
               */}
               {sending && onStopReceiving !== undefined && (
-                <Hint label="読むのをやめる。クローンのターンは止まらない">
+                <Hint label="受信をやめる">
                   <Button
                     variant="default"
+                    className={ROUND_BUTTON}
                     onClick={onStopReceiving}
                     aria-label="受信をやめる"
-                    className="rounded-full md:h-8"
                   >
                     <Square className="size-3.5" aria-hidden />
-                    <span className="hidden md:inline">受信をやめる</span>
                   </Button>
                 </Hint>
               )}
