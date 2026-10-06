@@ -10,15 +10,27 @@ import { captureStdout } from './test-support.js';
 const lines: string[] = [];
 
 vi.mock('node:readline/promises', () => ({
-  createInterface: () => ({
-    question: async () => {
-      const next = lines.shift();
-      if (next === undefined) throw new Error('closed');
-      return next;
-    },
-    once: () => undefined,
-    close: () => undefined,
-  }),
+  // `chat.ts` は `line` / `close` イベントで読む（#3262）。`prompt()` のたびに次の行を流し、尽きたら閉じる。
+  createInterface: () => {
+    const handlers: { line?: (text: string) => void; close?: () => void } = {};
+    return {
+      on: (_event: 'line', handler: (text: string) => void) => {
+        handlers.line = handler;
+      },
+      once: (_event: 'close', handler: () => void) => {
+        handlers.close = handler;
+      },
+      setPrompt: () => undefined,
+      prompt: () => {
+        queueMicrotask(() => {
+          const next = lines.shift();
+          if (next === undefined) handlers.close?.();
+          else handlers.line?.(next);
+        });
+      },
+      close: () => undefined,
+    };
+  },
 }));
 
 vi.mock('./target.js', async (orig) => ({
