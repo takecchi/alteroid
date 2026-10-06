@@ -739,6 +739,7 @@ function TokenRow({
         {token.disabledAt === undefined ? (
           <Button
             size="sm"
+            aria-label={`${token.label} を無効化する`}
             loading={busy === 'disable'}
             disabled={busy !== null}
             onClick={() => void toggleDisabled(true)}
@@ -748,6 +749,7 @@ function TokenRow({
         ) : (
           <Button
             size="sm"
+            aria-label={`${token.label} を戻す`}
             loading={busy === 'enable'}
             disabled={busy !== null}
             onClick={() => void toggleDisabled(false)}
@@ -758,6 +760,7 @@ function TokenRow({
         <Button
           variant="danger"
           size="sm"
+          aria-label={`${token.label} を削除`}
           loading={busy === 'remove'}
           disabled={busy !== null}
           onClick={() => setConfirmingRemove(true)}

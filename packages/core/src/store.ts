@@ -929,9 +929,11 @@ export interface JobStore {
    * **`conversationId` を渡すと、`entries` をその会話で上がった確認（`conversationId`
    * が一致するもの）だけに絞る**（issue #3290。`GET /approvals?conversationId=` が
    * 全件を取ってメモリで絞っていたのをストアへ寄せた）。`pendingOnly` と併用でき、
-   * 絞りだけで並びは変えない。**`unreadable` は絞らない** —— 読めない行は
-   * どの会話のものかも分からないので、`conversationId` を渡しても `pendingOnly` の
-   * 絞りだけを当てたものが返る（絞る前の挙動を変えない）。3実装（fs / pg / インメモリ）で
+   * 絞りだけで並びは変えない。**`unreadable` も会話で絞る**（#3319）—— 生の行の
+   * `conversationId`（jsonb / JSON の値そのもの）がその会話と一致する読めない行だけが
+   * 載る。**会話の id すら読めない行と、ほかの会話の壊れた行は載らない**（全行を検査せずに
+   * 済ませるため。壊れた行は `conversationId` を渡さない呼びで全件見える）。`conversationId`
+   * を渡さない呼びは、今までどおり読めない行を全件返す。3実装（fs / pg / インメモリ）で
    * 揃えること（`verifyApprovalConversationFilterContract`）。
    */
   listApprovals(options?: {

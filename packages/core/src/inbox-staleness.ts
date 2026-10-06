@@ -1,4 +1,5 @@
 import { DAEMON_TOKEN_POOL_REOPENED_SOURCE } from './clone.js';
+import { compareIsoInstant } from './iso-instant.js';
 import type { InboxEvent } from './schema.js';
 
 /**
@@ -98,4 +99,40 @@ export function restoredInboxEventVerdict(event: InboxEvent): RestoredInboxEvent
       throw new Error(`未知の受信箱イベント種別（staleness）: ${JSON.stringify(exhaustive)}`);
     }
   }
+}
+
+/**
+ * 拾い直した timer の合図が、**もう完了した回**のものか（#3291）。
+ *
+ * 回が完了すると `completeRun` が `lastScheduledRunAt` をその回の `at` へ進める
+ * （`claimRun` は合図の `event.at` をそのまま `pendingRun.at` に置く）。完了まで済んだのに
+ * 受信箱の消し込みだけ失敗して落ちると、行が未読で残り、再起動の配り直しで完了済みの回が
+ * もう一度走る。**行の `at` が `lastScheduledRunAt` 以前なら、その回は済んでいる**ので
+ * `stale` として畳む。
+ *
+ * - **`manual` は数えない。** 手で起こした回は `lastScheduledRunAt` を進めない（余分な1回）ので、
+ *   この比較は何も言えない。`live` のまま配る。
+ * - **まだ走っていない回（`at` が `lastScheduledRunAt` より後）は `live`。** 畳むのは完了済みだけである。
+ * - **枠保持の印（`timer.heldForUsage`、#3317）のある行は `live`。** 枠保持で終わった回も `completeRun` が
+ *   走るので、永続状態は完了済みと同じ見た目になる。`Clone` が枠保持にしたときに行へ印を付ける
+ *   ので、印のある行は完了済みではなく「まだ走っていない」回として配り直す（#2814）。
+ * - `lastScheduledRunAt` が無い（その kind が未登録・一度も定期で完了していない・読めなかった）
+ *   なら `live`（判定できないなら残す）。
+ * - 時刻は実時刻で比べる（`compareIsoInstant`。#2451）。
+ *
+ * `restoredInboxEventVerdict` とは別の関数にしてある: あちらは合図だけで答える純関数で、
+ * 「引数に無いことが保証」という作りを歯（`inbox-staleness.test.ts`）が固定している。
+ * こちらはストアの状態（`lastScheduledRunAt`）を材料にする。呼び手は両方を見て、どちらかが
+ * `stale` なら畳む。
+ */
+export function completedTimerRoundVerdict(
+  event: InboxEvent,
+  lastScheduledRunAt: string | undefined,
+): RestoredInboxEventVerdict {
+  if (event.type !== 'timer' || event.cause === 'manual') return 'live';
+  // 枠保持で終わった回の印（`timer.heldForUsage`）。永続状態は完了済みと同じ見た目だが走っていない
+  // ので、畳まず配り直す（#2814）。
+  if (event.heldForUsage === true) return 'live';
+  if (lastScheduledRunAt === undefined) return 'live';
+  return compareIsoInstant(event.at, lastScheduledRunAt) <= 0 ? 'stale' : 'live';
 }

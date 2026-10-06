@@ -1493,6 +1493,7 @@ export {
 export { verifyIntegrationKeyStoreContract } from './integration-key-contract.js';
 export {
   ATTACHMENT_IMAGE_MEDIA_TYPES,
+  ATTACHMENT_DISK_NAME_MAX_BYTES,
   ATTACHMENT_MAX_FILE_BYTES_DEFAULT,
   ATTACHMENT_MAX_FILE_BYTES_ENV,
   ATTACHMENT_MAX_IMAGE_BYTES_DEFAULT,
@@ -1507,6 +1508,7 @@ export {
   ATTACHMENT_UNBOUND_TTL_MS,
   AttachmentRejectedError,
   DEFAULT_ATTACHMENT_LIMITS,
+  attachmentDiskName,
   canBindAttachmentTo,
   isAttachmentImageMediaType,
   isBoundTo as isAttachmentBoundTo,

@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Navigate, useNavigate } from 'react-router';
 
 import { ConnectionCard } from '~/components/connection';
+import { LoadError } from '~/components/load-error';
 import {
   Badge,
   Button,
@@ -26,15 +27,41 @@ import { readPendingLogin, storePendingLogin } from '@alteroid/logic';
 export default function Login() {
   const auth = useAuth();
 
-  // 繋がらないなら、ログイン手段の一覧すら引けていない。**「確認中」より先に見る**
-  // （応答が無いあいだ `status` は checking のままなので、逆にすると輪が回り続ける）。
-  // 直す口をここにも置く — この画面へ直接来た人は設定画面へ行けない。
-  if (auth.error !== undefined) {
+  /**
+   * 繋がらない（確認が失敗した）。**結果が1度も無い（`checking`）ときだけ**、画面をエラーに差し替える
+   * （ログイン手段の一覧すら引けていない。応答が無いあいだ `status` は checking のままなので、
+   * **「確認中」より先に見る**。逆にすると輪が回り続ける）。直す口をここにも置く — この画面へ
+   * 直接来た人は設定画面へ行けない。
+   *
+   * **結果が既に在る（`checking` でない）ときは差し替えない**（#3379）。`useAuth` は SWR なので、
+   * 窓へ戻るたびの再検証が失敗しても前回の `status` を持ったまま `error` が立つ。ここで画面を
+   * 差し替えると、待機中の `SignIn` が unmount されて待っていた取り込みが止まり、「許可されたか
+   * 確認する」の失敗ではアカウント id と実行するコマンドが消える。前回の画面を残し、再試行つきの
+   * 失敗の帯を上に足す（`shell.tsx` の `recheckFailing` と同じ考え方）。
+   */
+  const recheckError = auth.status === 'checking' ? undefined : auth.error;
+  const notice = (
+    <LoadError
+      what="接続先のサーバの状態"
+      error={recheckError}
+      onRetry={() => auth.revalidate()}
+      retrying={auth.isValidating}
+      className="mb-4"
+    />
+  );
+
+  if (auth.error !== undefined && auth.status === 'checking') {
     return (
       <Shell>
         <DocumentTitle>接続先のサーバに繋がらない</DocumentTitle>
         <h1 className="text-sm font-semibold">接続先のサーバに繋がらない</h1>
-        <ErrorNote error={auth.error} className="mt-3" />
+        <LoadError
+          what="接続先のサーバの状態"
+          error={auth.error}
+          onRetry={() => auth.revalidate()}
+          retrying={auth.isValidating}
+          className="mt-3"
+        />
       </Shell>
     );
   }
@@ -51,9 +78,9 @@ export default function Login() {
     return <Navigate to="/" replace />;
   }
   if (auth.status === 'ungranted') {
-    return <Ungranted />;
+    return <Ungranted notice={notice} />;
   }
-  return <SignIn />;
+  return <SignIn notice={notice} />;
 }
 
 /**
@@ -88,7 +115,7 @@ function Shell({ children }: { children: React.ReactNode }) {
   );
 }
 
-function SignIn() {
+function SignIn({ notice }: { notice: React.ReactNode }) {
   const auth = useAuth();
   const { client, baseUrl, setCredential } = useApiContext();
   const navigate = useNavigate();
@@ -179,6 +206,7 @@ function SignIn() {
 
   return (
     <Shell>
+      {notice}
       <DocumentTitle>ログイン</DocumentTitle>
       <h1 className="text-sm font-semibold">ログイン</h1>
       <p className="mt-1 text-xs text-muted-foreground">
@@ -248,7 +276,7 @@ function SignIn() {
  * **ここでログインし直させない。** 何度やっても同じ結果になる。必要なのは人間が
  * CLI で許可を与えることなので、貼り付けられる形でコマンドを出す。
  */
-function Ungranted() {
+function Ungranted({ notice }: { notice: React.ReactNode }) {
   const auth = useAuth();
   /**
    * **ここでも `auth.logout()`（サーバ側の失効）を使う（issue #1757）。**
@@ -268,6 +296,7 @@ function Ungranted() {
 
   return (
     <Shell>
+      {notice}
       <DocumentTitle>まだ使う許可が無い</DocumentTitle>
       <h1 className="text-sm font-semibold">まだ使う許可が無い</h1>
       {/*

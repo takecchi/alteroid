@@ -95,6 +95,22 @@ describe('placeRunnerAttachments（Issue #3111 段3）', () => {
     expect(composeAttachmentInput('本文', [])).toEqual({ text: '本文' });
   });
 
+  it('長い名前（日本語 100 文字・ASCII 255 文字）でも置け、path のファイル名は 200 バイト以内。通知行の name は丸めない（#3324）', async () => {
+    const root = await makeTempDir('runner-att-');
+    for (const [index, name] of [`${'あ'.repeat(100)}.log`, 'a'.repeat(255)].entries()) {
+      const placed = await placeRunnerAttachments({
+        root,
+        managerId: `mgr-long${index}`,
+        attachments: [attachmentOf('att-1', name, Buffer.from('x'), 'text/plain')],
+      });
+      expect(placed[0]?.name).toBe(name);
+      const file = placed[0]!.path.split('/').at(-1)!;
+      expect(Buffer.byteLength(file, 'utf8')).toBeLessThanOrEqual(200);
+      expect((await readFile(placed[0]!.path)).toString()).toBe('x');
+      expect(await readdir(join(root, `mgr-long${index}`, 'att-1'))).toEqual([file]);
+    }
+  });
+
   it('sha256 が合わなければ何も置かずに断る（半端な dir も残さない）', async () => {
     const root = await makeTempDir('runner-att-');
     const good = attachmentOf('att-ok', 'ok.txt', Buffer.from('ok'));
