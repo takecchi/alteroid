@@ -241,6 +241,10 @@ function fakeClone() {
   };
 
   const clone: CloneHost = {
+    async postPersisted(event) {
+      posted.push(event);
+      return 'persisted';
+    },
     managers,
     // 認証トークンの切替（#393 PR4）。HTTP 境界の検証では触らない。
     recycleSessionForToken() {},

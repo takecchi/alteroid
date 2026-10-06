@@ -104,6 +104,12 @@ function setup(
           return target.post(event);
         };
       }
+      if (key === 'postPersisted') {
+        return (event: InboxEvent) => {
+          posted.push(event);
+          return target.postPersisted(event);
+        };
+      }
       const value = Reflect.get(target, key, target) as unknown;
       return typeof value === 'function' ? (value as () => unknown).bind(target) : value;
     },

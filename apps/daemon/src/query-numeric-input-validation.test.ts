@@ -105,6 +105,7 @@ function stubManagerPool(): ManagerPool {
 
 function stubCloneHost(): CloneHost {
   return {
+    postPersisted: async () => 'persisted',
     post: () => undefined,
     dropQueuedInboxEvents: async () => 0,
     subscribe: () => () => undefined,

@@ -40,6 +40,7 @@ async function breakProfileTable(db: Db): Promise<void> {
 
 function fakeCloneHost(stores: Stores): CloneHost {
   return {
+    postPersisted: async () => 'persisted',
     post: () => {},
     recycleSessionForToken: () => {},
     subscribe: () => () => {},

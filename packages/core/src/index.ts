@@ -232,7 +232,7 @@ export {
   type StartLoginInput,
   type StartLoginResult,
 } from './auth-service.js';
-export type { AnswerApprovalVia, CloneHost } from './host.js';
+export type { AnswerApprovalVia, CloneHost, PostPersistOutcome } from './host.js';
 export { Inbox } from './inbox.js';
 export { isTerminalJobStatus } from './progress.js';
 /** 作業の進捗の集計（Issue #2241 の 1）。台帳と委譲の行を数え直す純関数。 */

@@ -11,6 +11,7 @@ import { createApp } from './app.js';
  */
 function stubCloneHost(): CloneHost {
   return {
+    postPersisted: async () => 'persisted',
     post: () => undefined,
     dropQueuedInboxEvents: async () => 0,
     subscribe: () => () => undefined,

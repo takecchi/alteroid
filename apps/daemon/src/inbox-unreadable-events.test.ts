@@ -92,6 +92,7 @@ async function seedPg(): Promise<Seeded> {
 
 function stubCloneHost(): CloneHost {
   return {
+    postPersisted: async () => 'persisted',
     post: () => undefined,
     dropQueuedInboxEvents: async () => 0,
     subscribe: () => () => undefined,

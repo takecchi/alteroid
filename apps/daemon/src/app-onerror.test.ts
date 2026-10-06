@@ -37,6 +37,7 @@ import { createApp } from './app.js';
  */
 function fakeCloneHost(stores: Stores): CloneHost {
   return {
+    postPersisted: async () => 'persisted',
     post: () => {},
     // 認証トークンの切替（#393 PR4）。この歯では触らない。
     recycleSessionForToken: () => {},

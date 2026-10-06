@@ -42,6 +42,7 @@ const AUTH = { authorization: 'Bearer test-token' };
 
 function stubCloneHost(): CloneHost {
   return {
+    postPersisted: async () => 'persisted',
     post: () => undefined,
     dropQueuedInboxEvents: async () => 0,
     subscribe: () => () => undefined,

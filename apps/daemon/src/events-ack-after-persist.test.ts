@@ -113,9 +113,9 @@ const sendWebhook = (s: Setup, mark: string) =>
   });
 
 /** 偽の `setTimeout` を進めながら、拾い直しの待ちが終わるまで応答を待つ（実時間は待たない）。 */
-async function settle(request: Promise<Response>): Promise<Response> {
+async function settle(request: Response | Promise<Response>): Promise<Response> {
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
-  const response = request.then((r) => r);
+  const response = Promise.resolve(request);
   await vi.advanceTimersByTimeAsync(10_000);
   const result = await response;
   vi.useRealTimers();

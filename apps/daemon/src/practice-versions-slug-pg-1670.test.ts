@@ -40,6 +40,7 @@ let app: ReturnType<typeof createApp>;
  */
 function stubCloneHost(): CloneHost {
   return {
+    postPersisted: async () => 'persisted',
     post: () => undefined,
     dropQueuedInboxEvents: async () => 0,
     subscribe: () => () => undefined,
