@@ -644,17 +644,7 @@ const practiceBody = z.object({
  * 承認待ちの行が要るので、ここ（形の検査）ではなくハンドラで行う（`describeSelectionsViolation`）。
  */
 const answerFields = {
-  /**
-   * **送ったなら、NUL を落として trim した後に1文字以上**（Issue #3384）。空白・全角空白・改行とタブ・
-   * NUL だけの回答は空の回答として記録されてしまう（NUL は承認の入口で落ちて空になる）。
-   * 値は書き換えない（検査だけ。`nonBlankString` と同じ作法）。`.min(1)` は OpenAPI の `minLength` を保つ。
-   * 省略は従来どおり（`selections` だけで答えられる）。
-   */
-  answer: z
-    .string()
-    .min(1)
-    .refine((value) => stripNul(value).trim().length > 0)
-    .optional(),
+  answer: z.string().min(1).optional(),
   selections: z.array(approvalSelectionSchema).min(1).optional(),
 };
 /**
@@ -664,16 +654,29 @@ const answerFields = {
  */
 const hasAnswerOrSelections = (body: { answer?: unknown; selections?: unknown }) =>
   body.answer !== undefined || body.selections !== undefined;
+/**
+ * **`selections` を伴わない `answer` は、NUL を落として trim した後に1文字以上**（Issue #3384）。
+ * 空白・全角空白・改行とタブ・NUL だけの回答は空の回答として記録されてしまう（NUL は承認の入口で
+ * 落ちて空になる）。値は書き換えない（検査だけ。`nonBlankString` と同じ作法）。
+ * `selections` と併用する `answer` は補足で、空白だけの補足は「補足なし」として
+ * `describeSelectionsViolation` が扱う（issue #2582。「何も答えていない」の文で断る）ので、ここでは見ない。
+ */
+const answerIsNotBlank = (body: { answer?: string; selections?: unknown }) =>
+  body.selections !== undefined ||
+  body.answer === undefined ||
+  stripNul(body.answer).trim().length > 0;
 const answerBody = z
   .object(answerFields)
-  .refine(hasAnswerOrSelections, { message: 'answer も selections も無い' });
+  .refine(hasAnswerOrSelections, { message: 'answer も selections も無い' })
+  .refine(answerIsNotBlank, { message: 'answer が空白だけ', path: ['answer'] });
 /** まとめて答える（溜まった保留を人間が一度に片付けるための口）。 */
 const answersBody = z.object({
   answers: z
     .array(
       z
         .object({ id: z.string().min(1), ...answerFields })
-        .refine(hasAnswerOrSelections, { message: 'answer も selections も無い' }),
+        .refine(hasAnswerOrSelections, { message: 'answer も selections も無い' })
+        .refine(answerIsNotBlank, { message: 'answer が空白だけ', path: ['answer'] }),
     )
     .min(1)
     .max(200),
