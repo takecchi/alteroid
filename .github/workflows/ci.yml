@@ -583,22 +583,27 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: docker/setup-buildx-action@v4
-      - uses: docker/build-push-action@v7
+      # **final（`alteroid:ci`）と runtime（`alteroid:ci-runtime`）は 1 回のビルド（bake、
+      # `docker-bake.hcl`）で焼く。** 別々のビルドにすると、片方だけが gha キャッシュの
+      # 古い層を使い、もう片方が同じ RUN を走らせ直すことがあり、非決定的な出力（apt の
+      # ログ・codex の一時ディレクトリ・chunk のハッシュ名）が突き合わせに出る（PR #3174 の
+      # run 37419381099）。1 回の solve なら共通の層は 1 度だけ作られる。
+      - uses: docker/bake-action@v7
         with:
-          context: .
-          target: final
+          source: .
+          targets: default
           load: true
-          tags: alteroid:ci
           # クローンの自己認識に載るリビジョン。**ビルド文脈に `.git` は入れない**
           # ので、渡さないと「リビジョン不明」の器が焼ける。不明でも壊れないが、
           # 自分が走っているコミットを言えるかどうかは調べ物の精度に直結する。
-          build-args: |
-            ALTEROID_BUILD_REV=${{ github.sha }}
-          cache-from: type=gha
-          # **定時の回はキャッシュを書き戻さない。** 書き戻すと翌日の PR の `image` が
-          # その層で焼かれることになり、上流が動いた日に**無関係な PR が赤くなる**
-          # ＝ 上の `schedule` で避けたはずの「門を人質に取る」がそのまま戻ってくる。
-          cache-to: ${{ env.DRIFT != 'true' && 'type=gha' || '' }}
+          set: |
+            *.args.ALTEROID_BUILD_REV=${{ github.sha }}
+            *.cache-from=type=gha
+            ${{ env.DRIFT != 'true' && 'final.cache-to=type=gha' || '' }}
+          # **定時の回はキャッシュを書き戻さない**（上の `cache-to` の行は条件つき）。
+          # 書き戻すと翌日の PR の `image` がその層で焼かれることになり、上流が動いた日に
+          # **無関係な PR が赤くなる**＝ 上の `schedule` で避けたはずの「門を人質に取る」が
+          # そのまま戻ってくる。書くのは final だけ（runtime の層は final の中に全部入る）。
           # **このジョブが自分で名乗っている役割は、ここが無いと果たされない**（逐語は
           # `grep -Fn -- '上流が変わって壊れたことに気づく場所が要る' .github/workflows/ci.yml`）。
           # 実測（観測 2026-09-10T06:57Z、`main` の run 34447496931 の `image` ジョブの
@@ -624,19 +629,9 @@ jobs:
           #   `grep -Fn -- 'SHA が違えば push する。それだけである。' .github/scripts/reflect-release-prod.sh`）
           no-cache: ${{ env.DRIFT == 'true' }}
 
-      # **Issue #2534 段1。ビルド時の追加層（`final` ステージ）の歯。** 追加の2回の
-      # ビルドは上と同じ buildx のキャッシュ（層）を使うので、足す時間は小さい。
-      # `alteroid:ci` は空の引数で焼いた `final` のまま残す（後続の歯がこれを使う）。
-      - name: 追加層を空で焼いた final は runtime と同じ像か（ファイル系・設定）
-        uses: docker/build-push-action@v7
-        with:
-          context: .
-          target: runtime
-          load: true
-          tags: alteroid:ci-runtime
-          build-args: |
-            ALTEROID_BUILD_REV=${{ github.sha }}
-          cache-from: type=gha
+      # **Issue #2534 段1。ビルド時の追加層（`final` ステージ）の歯。** 上の 1 回のビルドが
+      # `alteroid:ci`（空の引数で焼いた `final`。後続の歯がこれを使う）と
+      # `alteroid:ci-runtime` の両方を作っている。
       - name: final（空）と runtime のファイル系・設定を突き合わせる
         run: |
           set -eu
@@ -656,8 +651,7 @@ jobs:
           wait "$p1" || { echo "final の列挙に失敗" >&2; exit 1; }
           wait "$p2" || { echo "runtime の列挙に失敗" >&2; exit 1; }
           wc -l /tmp/final.list /tmp/runtime.list
-          diff /tmp/runtime.list /tmp/final.list \
-            || { echo "空の final が runtime とファイル系で違う" >&2; exit 1; }
+          sh .github/scripts/image-listing-diff.sh /tmp/runtime.list /tmp/final.list
           cfg() {
             docker inspect "$1" | jq -S '.[0].Config
               | {User, Cmd, Entrypoint, Env, WorkingDir, ExposedPorts, Volumes, Labels, Healthcheck, StopSignal, Shell}'
