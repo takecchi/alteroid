@@ -251,6 +251,7 @@ export async function chatCommand(): Promise<void> {
     waiting: [],
     messages: [],
     messagesConversationId: null,
+    messageAttachments: {},
   };
 
   stdout.write(
@@ -928,6 +929,12 @@ export interface Listed {
    * まだ何も見ていなければ `null`。
    */
   messagesConversationId: string | null;
+  /**
+   * 上の `messages` の各発言に付いていた添付の id（発言 id → 添付 id の並び。添付の無い発言は持たない）。
+   * `/edit` が新しい版の `POST /chat` の `attachments` に付けて送る（Web の編集と同じ。#3399 決定 a・#3630）。
+   * 出所は Web の `line.attachments` と同じ、`/conversation` が読んだ発言の `attachments`。
+   */
+  messageAttachments: Record<string, string[]>;
 }
 
 /**
@@ -1410,6 +1417,7 @@ export async function runSlashCommand(
        * ときも、その行には番号を振らない）。
        */
       listed.messages.length = 0;
+      listed.messageAttachments = {};
       listed.messagesConversationId = id;
       // その会話のターンから積まれた承認を時刻順の位置に1行で出す（#3261）。取れなくても会話は出す。
       const approvalsRead = await fetchConversationApprovals(client, id);
@@ -1430,7 +1438,12 @@ export async function runSlashCommand(
           const message = item.message;
           const speaker = message.role === 'inbound' ? '人間' : 'クローン';
           const editable = message.role === 'inbound' && message.supersededBy === undefined;
-          if (editable) listed.messages.push(message.id);
+          if (editable) {
+            listed.messages.push(message.id);
+            if (message.attachments !== undefined && message.attachments.length > 0) {
+              listed.messageAttachments[message.id] = message.attachments.map((item) => item.id);
+            }
+          }
           const label = editable ? `[${listed.messages.length}]` : '   ';
           // **どれが畳まれた版で、どの編集に置き換えられたかを読める形に
           // する。** `includeSuperseded=true` のときだけ、どちらかが付きうる。
@@ -1522,7 +1535,10 @@ export async function runSlashCommand(
         stdout.write('編集を送れませんでした（接続先が分かりません）\n');
         return 'ok';
       }
-      await sendMessage(target, text, owningConversationId, id);
+      // 元の発言に付いていた添付は、外さずに新しい版へ引き継ぐ（上げ直さない。Web と同じ。#3399 決定 a・#3630）。
+      // 期限切れで無くなっていれば、サーバが 400 attachment_missing で断り、sendMessage が理由を出す。
+      const carried = listed.messageAttachments[id] ?? [];
+      await sendMessage(target, text, owningConversationId, id, { attachments: carried });
       return 'ok';
     }
 

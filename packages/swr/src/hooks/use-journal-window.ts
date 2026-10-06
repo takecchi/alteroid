@@ -62,7 +62,15 @@ export interface JournalWindow {
   /** 新しい順、重複なし。virtua の子としてそのまま並べる。 */
   entries: JournalEntry[];
   isLoadingInitial: boolean;
+  /** **初回の読み込みの失敗だけ**。読み足し（過去方向・新着方向）の失敗は `loadMoreError`。 */
   error: unknown;
+  /**
+   * 読み足し（過去方向 / 新着方向の取りこぼし確認）の失敗。一覧は残す。**成功したら下りる**
+   * （過去方向と新着方向は別々に持ち、両方失敗しているときは過去方向を返す）。
+   */
+  loadMoreError: unknown;
+  /** 失敗している読み足しを撃ち直す。読み込み中・失敗が無いときは何もしない。 */
+  retryLoadMore: () => void;
 
   /**
    * 過去方向のいまの状態。`'progress'` と `'retryLarger'` は画面には同じ
@@ -123,6 +131,8 @@ export function useJournalWindow(selected: readonly JournalEntryType[], q = ''):
 
   const [isLoadingInitial, setLoadingInitial] = useState(true);
   const [error, setError] = useState<unknown>(undefined);
+  const [olderError, setOlderError] = useState<unknown>(undefined);
+  const [newerError, setNewerError] = useState<unknown>(undefined);
   const [olderStatus, setOlderStatus] = useState<PageOutcome>('progress');
   const [isLoadingOlder, setLoadingOlder] = useState(false);
   const [isLoadingNewer, setLoadingNewer] = useState(false);
@@ -296,6 +306,7 @@ export function useJournalWindow(selected: readonly JournalEntryType[], q = ''):
         ),
       )
       .then((data) => {
+        setOlderError(undefined);
         const applied = applyOlderPage(
           entriesRef.current,
           data.entries,
@@ -321,7 +332,7 @@ export function useJournalWindow(selected: readonly JournalEntryType[], q = ''):
         setLoadingOlder(false);
       })
       .catch((caught: unknown) => {
-        setError(caught);
+        setOlderError(caught);
         setLoadingOlder(false);
       });
   }
@@ -375,6 +386,7 @@ export function useJournalWindow(selected: readonly JournalEntryType[], q = ''):
       .GET('/journal', { params: { query: buildQuery(limit, query) } })
       .then(unwrap)
       .then((data) => {
+        setNewerError(undefined);
         const applied = applyNewerPage(entriesRef.current, data.entries, limit, JOURNAL_MAX_LIMIT);
         if (applied.outcome === 'retryLarger') {
           refreshNewerAt(JOURNAL_MAX_LIMIT);
@@ -386,7 +398,7 @@ export function useJournalWindow(selected: readonly JournalEntryType[], q = ''):
         setLoadingNewer(false);
       })
       .catch((caught: unknown) => {
-        setError(caught);
+        setNewerError(caught);
         setLoadingNewer(false);
       });
   }
@@ -397,10 +409,23 @@ export function useJournalWindow(selected: readonly JournalEntryType[], q = ''):
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isLoadingNewer]);
 
+  const loadMoreError = olderError ?? newerError;
+  const retryLoadMore = useCallback(() => {
+    if (olderError !== undefined) {
+      if (!isLoadingOlder) loadOlderAt(JOURNAL_PAGE);
+    } else if (newerError !== undefined) {
+      if (!isLoadingNewer) refreshNewerAt(JOURNAL_PAGE);
+    }
+    // loadOlderAt / refreshNewerAt は素の関数（上のコメント参照）。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [olderError, newerError, isLoadingOlder, isLoadingNewer]);
+
   return {
     entries,
     isLoadingInitial,
     error,
+    loadMoreError,
+    retryLoadMore,
     olderStatus,
     isLoadingOlder,
     loadOlder,

@@ -10748,8 +10748,23 @@ class Pool implements ManagerPool {
         // 無意味な resume と同じ通知が予約の間隔ごとに繰り返される。
         if (this.#unresumable.has(job.id)) continue;
 
-        // 器の中に居ないことは確かめた。台帳の `attached` はもう嘘である。
+        // **古い写し（ループの先頭で取った `job`）の宛先で、像へ書かない**（Issue #3622。#3603 と同じ形）。
+        // `#reattaching` は runner ごとの直列化なので、別の runner の取り直しとは並行に走る。先の委譲の
+        // resume を待っている間に、そちらが落ちた runner の委譲を移送し終える（台帳・像の宛先が変わる）と、
+        // 写しの宛先で「移送する」と判定したまま、移送先で健全に走る像へ `attached = false`・`waiting = []`・
+        // 「セッションが無く resume に失敗した」の観測を書いてしまう。像が在ればその宛先、無ければ
+        // 台帳を読み直した行（#3603 の読み直し。下でも使う）の宛先を写しと比べ、食い違えば飛ばす。
+        // 判定は読み直しの後・像への最初の書き込みの前に置く。自分の runner の委譲（`!relocating`）は
+        // 宛先が変わらないので、ここでは飛ばさない。
+        const fresh =
+          this.#records.get(job.id) === undefined
+            ? ((await this.#latestJobOf(job.id)) ?? job)
+            : job;
+        // 読み直しの `await` の間に像が載ることもあるので、読んだ後にもう一度 `#records` を見る。
         const known = this.#records.get(job.id);
+        if ((known?.job.runnerId ?? fresh.runnerId) !== job.runnerId) continue;
+
+        // 器の中に居ないことは確かめた。台帳の `attached` はもう嘘である。
         if (known) known.attached = false;
 
         /*
@@ -10776,9 +10791,7 @@ class Pool implements ManagerPool {
         // `#refuseRelocationsBeforeGate` と同じ形）。同じ runner の先の委譲の resume を待っている間に
         // `abort()` が `stopped` を書いて `#retire` していると、`known` が無く、写しの `running` を信じて
         // `stopConfirmedAt` を持たない新しい record で起こし直し、`stopped` を `running` で上書きする。
-        // `known` が無いときは台帳を読み直した行で判定し、record も同じ行から作る。
-        // 読み直しの `await` の間に像が載ることもあるので、読んだ後にもう一度 `#records` を見る。
-        const fresh = known === undefined ? ((await this.#latestJobOf(job.id)) ?? job) : job;
+        // `known` が無いときは台帳を読み直した行（上の `fresh`）で判定し、record も同じ行から作る。
         const current = this.#records.get(job.id) ?? known;
         const status = current?.job.status ?? fresh.status;
         if (status !== 'running' && status !== 'waiting_human') continue;

@@ -67,6 +67,7 @@ export function ChatMessage({
   text,
   transient = false,
   onEdit,
+  editKey,
   hasDraft = false,
   versions,
   attachments,
@@ -76,6 +77,8 @@ export function ChatMessage({
   text: string;
   transient?: boolean;
   onEdit?: () => void;
+  /** 鉛筆の目印（`data-edit-key`）。編集を閉じたあとのフォーカスの戻し先を、呼ぶ側が引くために付ける。 */
+  editKey?: string;
   hasDraft?: boolean;
   versions?: ChatMessageVersions;
   attachments?: ReactNode;
@@ -106,6 +109,7 @@ export function ChatMessage({
               size="sm"
               variant="ghost"
               aria-label={hasDraft ? '発言を編集（書きかけあり）' : '発言を編集'}
+              data-edit-key={editKey}
               className={cn(
                 'relative mt-1 shrink-0 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 pointer-coarse:opacity-60 pointer-coarse:group-focus-within:opacity-100 pointer-coarse:focus-visible:opacity-100',
                 hasDraft && 'opacity-100',
