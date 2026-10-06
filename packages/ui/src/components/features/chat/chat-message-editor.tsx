@@ -1,9 +1,11 @@
 import { Button, SubmitHint, Textarea } from '../../common';
 
+import { isImeComposing } from './ime';
+
 /**
  * 送った発言を直す下書き。`ChatMessage` の `children` に渡す。
  *
- * - ⌘ / Ctrl + Enter で確定、Escape でやめる
+ * - ⌘ / Ctrl + Enter で確定、Escape でやめる（IME の変換中の Escape は変換の取り消しなので、やめない）
  * - IME の変換を確定する Enter では何もしない（`ime.ts`）
  * - 空白だけの下書きでは確定できない
  */
@@ -43,7 +45,8 @@ export function ChatMessageEditor({
         aria-label="発言を編集する下書き"
         onChange={(event) => onChange(event.target.value)}
         onKeyDown={(event) => {
-          if (event.key === 'Escape') {
+          // IME の変換の取り消しの Escape では閉じない（直していた文が消える。#3394）。
+          if (event.key === 'Escape' && !isImeComposing(event)) {
             event.preventDefault();
             onCancel();
             return;
