@@ -19,7 +19,6 @@ import {
   sse,
   storeTestBaseUrl,
   stubFetch,
-  type Route,
 } from '~/test-support';
 
 import Chat from './chat';
