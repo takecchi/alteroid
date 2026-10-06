@@ -1150,7 +1150,23 @@ export function ChatPane({
   const conversationApprovals = useConversationApprovals(shownId ?? null);
   // 生配信の分岐（`useMemo` の中）から、いまの会話の承認を取り直す口（#3299）。
   const refetchApprovalsRef = useRef<() => void>(() => {});
-  refetchApprovalsRef.current = () => void conversationApprovals.mutate();
+  const mountedRef = useRef(false);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+  refetchApprovalsRef.current = () => {
+    // 画面が外れたあとに届いた生配信では呼ばない（SWR のキャッシュが片付いている）。
+    if (!mountedRef.current) return;
+    try {
+      // 失敗は `conversationApprovals.error` に出る（下の `ErrorNote`）ので、ここでは未処理にしないだけ。
+      void Promise.resolve(conversationApprovals.mutate()).catch(() => undefined);
+    } catch {
+      // 同上。
+    }
+  };
 
   /**
    * **既読にする（1つの規則）: この画面が表示されていて、タブが見えているとき、画面に出ている

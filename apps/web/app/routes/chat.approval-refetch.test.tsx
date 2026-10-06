@@ -11,7 +11,7 @@
  */
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider, useParams } from 'react-router';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { json, Providers, sse, stubFetch, storeTestBaseUrl, type Route } from '~/test-support';
 
@@ -179,5 +179,40 @@ describe('会話の承認カードの取り直し（#3299）', () => {
 
     await screen.findByText('CLI から答えた');
     await waitFor(() => expect(screen.queryByRole('button', { name: '許可' })).toBeNull());
+  });
+});
+
+describe('画面が外れたあとに届いた生配信（#3299）', () => {
+  it('unmount 後に ask_human / done が届いても例外にならない（取り直さない）', async () => {
+    const { releaseDone, approvalsFetchCount } = setup();
+    const errors: unknown[] = [];
+    const onError = (event: PromiseRejectionEvent | ErrorEvent) => errors.push(event);
+    window.addEventListener('error', onError);
+    window.addEventListener('unhandledrejection', onError);
+    try {
+      const router = createMemoryRouter([{ path: '/chat/:conversationId', Component: Harness }], {
+        initialEntries: [`/chat/${ID}`],
+      });
+      const view = render(
+        <Providers>
+          <RouterProvider router={router} />
+        </Providers>,
+      );
+      const box = await screen.findByPlaceholderText(/クローンに話しかける/);
+      fireEvent.change(box, { target: { value: '確認して' } });
+      fireEvent.click(screen.getByRole('button', { name: 'メッセージを送信' }));
+      await screen.findByText(QUESTION);
+      view.unmount();
+      const before = approvalsFetchCount();
+      vi.useFakeTimers({ toFake: ['setTimeout'] });
+      releaseDone();
+      await vi.advanceTimersByTimeAsync(100);
+      expect(approvalsFetchCount()).toBe(before);
+      expect(errors).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+      window.removeEventListener('error', onError);
+      window.removeEventListener('unhandledrejection', onError);
+    }
   });
 });
