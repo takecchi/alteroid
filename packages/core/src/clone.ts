@@ -193,6 +193,7 @@ import { CloneDistillMemoryState } from './clone-distill-memory-state.js';
 import { CloneInboxFlow } from './clone-inbox-flow.js';
 import { CloneNotices } from './clone-notices.js';
 import { CloneSdkSession } from './clone-sdk-session.js';
+import { attachmentCopiesDir } from './attachment-fetch.js';
 import { resolveTurnAttachments } from './attachment-turn.js';
 import { stripNul } from './nul-guard.js';
 import { composeTurnInputText, turnInputEntry } from './turn-input.js';
@@ -10032,6 +10033,11 @@ class Clone implements CloneHost {
    * 省略すると `createCloneTools` の歯（`ToolContext.conversationId` の doc）
    * が throw する。
    */
+  /** `ToolContext.attachmentCopiesDir`。cwd が無ければ入れない（道具が `os.tmpdir()` 配下へ倒す）。 */
+  #attachmentCopiesDirEntry(): { attachmentCopiesDir?: string } {
+    return this.#cwd === undefined ? {} : { attachmentCopiesDir: attachmentCopiesDir(this.#cwd) };
+  }
+
   #toolContext(): ToolContext {
     return {
       // **日誌だけを包む（issue #847 の案B）。** 答えのターンの中で道具が書く
@@ -10066,6 +10072,8 @@ class Clone implements CloneHost {
       // `#queuedInMemoryCount()` を経由する——式を2箇所に書き写さない
       // （そのメソッドの doc「なぜ1本のメソッドに切り出したか」）。
       queuedInMemory: () => this.#queuedInMemoryCount(),
+      // **`attachment_fetch` の写しの置き場。クローンの cwd の中**（`Read` が追加の許可なしで開ける）。
+      ...this.#attachmentCopiesDirEntry(),
       // **`ask_human` が `PendingApproval.conversationId` を埋めるための口（#768）。**
       // `emit` の1行上と同じ薄い closure —— `#turn?.conversationId` が無ければ
       // （マネージャー発の確認・蒸留・timer など内部ターン）undefined を返す。
@@ -11172,6 +11180,7 @@ class Clone implements CloneHost {
         // **同じ理由で渡す**（issue #1133）。`#toolContext()` と同じ
         // `#queuedInMemoryCount()` を経由する。
         queuedInMemory: () => this.#queuedInMemoryCount(),
+        ...this.#attachmentCopiesDirEntry(),
         // **`conversationId` は明示する（#768・#781）。** かつては省略していたが、
         // いまは `ToolContext.conversationId` が必須（省略すると
         // `createCloneTools` が throw する）。値そのものの判断は変えていない

@@ -67,7 +67,7 @@ describe('発言の添付', () => {
     expect(input).toContain(
       `[添付] id=${png.id} name=shot.png type=image/png size=${png.size} sha256=${png.sha256}`,
     );
-    // 画像以外はメタデータだけ（取り出し口は段2）。
+    // 画像以外は中身を渡さず、取り出しの案内を付ける（段2）。
     expect(input).toContain(`[添付] id=${txt.id} name=memo.txt type=text/plain size=5`);
     expect(blocks.filter((block) => block.type === 'image')).toHaveLength(1);
 
