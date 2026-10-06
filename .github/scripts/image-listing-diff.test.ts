@@ -23,6 +23,8 @@ import { makeTempDirSync } from '../../vitest.tmpdir.js';
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SCRIPT = join(HERE, 'image-listing-diff.sh');
 const CI_YML = join(HERE, '..', 'workflows', 'ci.yml');
+// 親の process.env を丸ごと継がせない（#1971）。sh と diff を解決する PATH だけ渡す。
+const CHILD_ENV = { PATH: process.env['PATH'] ?? '' };
 
 const BASE = [
   '-rw-r--r-- 0/0 119230   var/log/dpkg.log',
@@ -40,7 +42,7 @@ function run(runtime: string[], final: string[]) {
   const f = join(dir, 'final.list');
   writeFileSync(r, `${[...runtime].sort().join('\n')}\n`);
   writeFileSync(f, `${[...final].sort().join('\n')}\n`);
-  return spawnSync('sh', [SCRIPT, r, f], { encoding: 'utf8' });
+  return spawnSync('sh', [SCRIPT, r, f], { encoding: 'utf8', env: CHILD_ENV });
 }
 
 describe('image-listing-diff.sh', () => {
@@ -83,7 +85,7 @@ describe('image-listing-diff.sh', () => {
   });
 
   it('引数が足りなければ 2', () => {
-    expect(spawnSync('sh', [SCRIPT], { encoding: 'utf8' }).status).toBe(2);
+    expect(spawnSync('sh', [SCRIPT], { encoding: 'utf8', env: CHILD_ENV }).status).toBe(2);
   });
 });
 

@@ -591,6 +591,9 @@ jobs:
       - uses: docker/bake-action@v7
         with:
           source: .
+          # 既定では compose.yaml も読み、`ALTEROID_DATABASE_URL` の必須補間で落ちる
+          # （#3180 の初回 run 37421235160）。CI の定義だけを読ませる。
+          files: ./docker-bake.hcl
           targets: default
           load: true
           # クローンの自己認識に載るリビジョン。**ビルド文脈に `.git` は入れない**
