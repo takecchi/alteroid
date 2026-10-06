@@ -2132,6 +2132,11 @@ export function createApp(deps: AppDeps) {
   interface ReceivedClientMessage {
     readonly conversationId: string;
     readonly fingerprint: string;
+    /**
+     * 添付の検査が終わるまで入っている（Issue #3244）。`true` で受け取り済みが確定、`false` で検査に落ちて
+     * 取り下げられた（覚えていないのと同じ）。日誌から引いた分は付かない（日誌にあれば確定している）。
+     */
+    readonly settled?: Promise<boolean>;
   }
 
   /**
@@ -2180,7 +2185,9 @@ export function createApp(deps: AppDeps) {
     clientMessageId: string,
   ): Promise<ReceivedClientMessage | undefined> {
     const remembered = receivedClientMessages.get(clientMessageId);
-    if (remembered !== undefined) return remembered;
+    // 検査の途中の1本目は、終わるのを待つ。落ちたなら（取り下げられたなら）受け取っていないのと同じなので、
+    // 日誌を引く（日誌にも無い）。
+    if (remembered !== undefined && (await (remembered.settled ?? true))) return remembered;
     const recent = await readConversationWindow(stores.journal, {
       scan: CLIENT_MESSAGE_LOOKUP_SCAN,
     });
@@ -2206,21 +2213,43 @@ export function createApp(deps: AppDeps) {
   }
 
   /**
-   * 受け取ったことを覚える。**同期で呼ぶ**（`await` を挟まずに「無ければ入れる」を1歩にして、同時に届いた
-   * 2本のうち片方だけが先に入れるようにする）。先に覚えていれば、その会話の id を返して何もしない。
+   * この `clientMessageId` を先取りする（Issue #3244）。**同期で呼ぶ**（`await` を挟まずに「無ければ入れる」を
+   * 1歩にして、同時に届いた2本のうち片方だけが先に入れるようにする）。**添付の検査・結び付けより前に呼ぶ**——
+   * 後に置くと、同時の2本が両方とも結び付けへ進み、片方が `attachment_conflict` の 400 になり、別の会話で
+   * 受け取り済みの id（409）に添付だけが結び付くこともあった。
+   *
+   * - 取れたら `{ won: true, settle }`。呼び手は検査のあとに必ず `settle` を呼ぶ: 通れば `settle(true)`、
+   *   落ちた（検査が 400・例外）なら `settle(false)`——**落ちた送信の id は覚えない**（#3208。直した再送を
+   *   重複と読まない）。`settle(false)` は先に Map から外してから待っている側を起こす。
+   * - 先に取られていれば `{ won: false, existing }`。
    */
   function claimClientMessage(
     clientMessageId: string,
-    received: ReceivedClientMessage,
-  ): ReceivedClientMessage | undefined {
+    received: Omit<ReceivedClientMessage, 'settled'>,
+  ):
+    | { won: true; settle: (accepted: boolean) => void }
+    | { won: false; existing: ReceivedClientMessage } {
     const existing = receivedClientMessages.get(clientMessageId);
-    if (existing !== undefined) return existing;
-    receivedClientMessages.set(clientMessageId, received);
+    if (existing !== undefined) return { won: false, existing };
+    let resolve: (accepted: boolean) => void = () => {};
+    const settled = new Promise<boolean>((done) => {
+      resolve = done;
+    });
+    const entry: ReceivedClientMessage = { ...received, settled };
+    receivedClientMessages.set(clientMessageId, entry);
     if (receivedClientMessages.size > RECEIVED_CLIENT_MESSAGES_MAX) {
       const oldest = receivedClientMessages.keys().next();
       if (oldest.done !== true) receivedClientMessages.delete(oldest.value);
     }
-    return undefined;
+    return {
+      won: true,
+      settle: (accepted) => {
+        if (!accepted && receivedClientMessages.get(clientMessageId) === entry) {
+          receivedClientMessages.delete(clientMessageId);
+        }
+        resolve(accepted);
+      },
+    };
   }
 
   /**
@@ -3171,32 +3200,58 @@ export function createApp(deps: AppDeps) {
         const conversationId = given ?? randomUUID();
 
         /*
-         * **添付を発言へ結び付ける（Issue #3111 段1b）。** 会話 id が決まった後で、`clone.post` の前に
-         * 行う。弾くときは受信箱に何も積まない。個数 → 存在 → 合計 → 別の会話への結び付き → `bind` の順。
+         * **`clientMessageId` を、添付の検査・結び付けより前に先取りする（Issue #3244）。** 同期の1歩なので、
+         * 同時に届いた2本のうち片方だけが取れる。取れなかった側は、先に取った1本の検査が終わるのを待つ
+         * （`await (existing.settled)`）——**重複の 200 は「受け取った」と言う応えなので、1本目が検査に落ちて
+         * 取り下げたなら言えない。** そのときは取り直して、自分で検査する（同じ中身なら同じ 400、直した中身なら
+         * 受かる）。待つのは添付の検査・結び付けの間だけで、1本目が日誌へ載るまでではない。
+         * 取れなかった側は、別の会話なら 409（`client_message_id_conflict`）、中身が違えば 409
+         * （`client_message_id_mismatch`）、同じなら重複の応え。**どれも添付には触れない。**
+         * 新しい会話（`given` 無し）の重複は、こちらが引いた `conversationId` ではなく先に取った側の会話を指す。
          */
-        const attached = await checkAndBindAttachments(attachmentIds, {
-          store: stores.attachments,
-          limits: attachmentLimits,
-          bind: (ids) => stores.attachments.bind(ids, conversationId),
-          isBoundElsewhere: (meta) =>
-            meta.conversationId !== undefined && meta.conversationId !== conversationId,
-          conflictMessage: '別の会話に結び付いた添付は使えない',
-        });
-        if (!attached.ok) return c.json(attached.body, attached.status);
-        const attachmentRefs = attached.refs;
-
-        // 検査を抜けた。覚えるのは**ここ**（同期）——同時に届いた2本のうち、片方だけがここを通る。
+        let claim: { settle: (accepted: boolean) => void } | undefined;
         if (clientMessageId !== undefined) {
-          const raced = claimClientMessage(clientMessageId, { conversationId, fingerprint });
-          if (raced !== undefined) {
+          for (;;) {
+            const attempt = claimClientMessage(clientMessageId, { conversationId, fingerprint });
+            if (attempt.won) {
+              claim = attempt;
+              break;
+            }
+            if (!(await (attempt.existing.settled ?? true))) continue;
             return (
-              rejectDuplicateClientMessage(c, raced, clientMessageId, {
-                conversationId,
+              rejectDuplicateClientMessage(c, attempt.existing, clientMessageId, {
+                conversationId: given,
                 fingerprint,
-              }) ?? replayReceivedMessage(c, raced.conversationId, clientMessageId)
+              }) ?? replayReceivedMessage(c, attempt.existing.conversationId, clientMessageId)
             );
           }
         }
+
+        /*
+         * **添付を発言へ結び付ける（Issue #3111 段1b）。** 会話 id が決まった後で、`clone.post` の前に
+         * 行う。弾くときは受信箱に何も積まない。個数 → 存在 → 合計 → 別の会話への結び付き → `bind` の順。
+         * **弾いたら（例外も）先取りを取り下げる**——検査で落ちた送信の id は覚えない（#3208）。
+         */
+        let attached: AttachmentBatchResult;
+        try {
+          attached = await checkAndBindAttachments(attachmentIds, {
+            store: stores.attachments,
+            limits: attachmentLimits,
+            bind: (ids) => stores.attachments.bind(ids, conversationId),
+            isBoundElsewhere: (meta) =>
+              meta.conversationId !== undefined && meta.conversationId !== conversationId,
+            conflictMessage: '別の会話に結び付いた添付は使えない',
+          });
+        } catch (error) {
+          claim?.settle(false);
+          throw error;
+        }
+        if (!attached.ok) {
+          claim?.settle(false);
+          return c.json(attached.body, attached.status);
+        }
+        const attachmentRefs = attached.refs;
+        claim?.settle(true);
 
         return streamSSE(c, async (stream) => {
           const pump = chatEventPump();

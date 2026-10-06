@@ -452,4 +452,83 @@ describe('POST /chat の clientMessageId', () => {
       expect(await inboundOf(stores)).toHaveLength(1);
     });
   });
+
+  describe('同時の重複は、添付の検査より前に1本へ絞る（Issue #3244）', () => {
+    const PNG1 = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 9, 8, 7, 6, 5]);
+    const PNG2 = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]);
+
+    async function upload(app: App, bytes: Uint8Array): Promise<string> {
+      const res = await app.request('/attachments?name=shot.png&type=image%2Fpng', {
+        method: 'POST',
+        headers: { 'content-type': 'application/octet-stream' },
+        body: bytes as RequestInit['body'],
+      });
+      return ((await res.json()) as { id: string }).id;
+    }
+
+    it('新しい会話に同じ id・同じ添付が同時に2本届いても、片方が重複の 200 になる（400 にならない）', async () => {
+      const { app, stores, inputs } = setupApp();
+      const a1 = await upload(app, PNG1);
+      const body = { text: 't', clientMessageId: 'cc1', attachments: [a1] };
+      const [x, y] = await Promise.all([post(app, body), post(app, body)]);
+      expect([x.status, y.status]).toEqual([200, 200]);
+      const opens = [events(await x.text()), events(await y.text())].map(
+        (list) => list.find((e) => e.event === 'open')?.data,
+      );
+      expect(opens.filter((open) => open?.duplicate === true)).toHaveLength(1);
+      // 重複の応えは、最初に決まった会話を指す。
+      expect(opens[0]?.conversationId).toBe(opens[1]?.conversationId);
+      expect(await inboundOf(stores)).toHaveLength(1);
+      expect(inputs.count).toBe(1);
+      expect((await stores.attachments.getMeta(a1))?.conversationId).toBe(opens[0]?.conversationId);
+    });
+
+    it('別の会話の id に同時に届いて 409 になった側の添付は、結び付かない', async () => {
+      const { app, stores } = setupApp();
+      const a1 = await upload(app, PNG1);
+      const a2 = await upload(app, PNG2);
+      const [x, y] = await Promise.all([
+        post(app, {
+          text: 't',
+          conversationId: 'conv-c2a',
+          clientMessageId: 'cc2',
+          attachments: [a1],
+        }),
+        post(app, {
+          text: 't',
+          conversationId: 'conv-c2b',
+          clientMessageId: 'cc2',
+          attachments: [a2],
+        }),
+      ]);
+      expect([x.status, y.status].sort()).toEqual([200, 409]);
+      const [winner, loser] = x.status === 200 ? [x, y] : [y, x];
+      expect(((await loser.json()) as { code?: string }).code).toBe('client_message_id_conflict');
+      await winner.text();
+      const [m1, m2] = [await stores.attachments.getMeta(a1), await stores.attachments.getMeta(a2)];
+      const bound = [m1, m2].filter((m) => m?.conversationId !== undefined);
+      expect(bound).toHaveLength(1);
+      expect(await inboundOf(stores)).toHaveLength(1);
+    });
+
+    it('検査で落ちた送信は id を覚えない: 同時に2本とも 400 でも、直した再送は受かる', async () => {
+      const { app, stores } = setupApp();
+      const a1 = await upload(app, PNG1);
+      const bad = {
+        text: 'x',
+        conversationId: 'conv-c3',
+        clientMessageId: 'cc3',
+        attachments: ['nope'],
+      };
+      const [x, y] = await Promise.all([post(app, bad), post(app, bad)]);
+      // 重複の 200 にならない（1回目は受け取られていない）。
+      expect([x.status, y.status]).toEqual([400, 400]);
+      const ok = await post(app, { ...bad, attachments: [a1] });
+      expect(ok.status).toBe(200);
+      expect(
+        events(await ok.text()).find((e) => e.event === 'open')?.data.duplicate,
+      ).toBeUndefined();
+      expect(await inboundOf(stores)).toHaveLength(1);
+    });
+  });
 });
