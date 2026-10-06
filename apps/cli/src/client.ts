@@ -14,8 +14,15 @@ import { hc } from 'hono/client';
  * 実行環境の持ち主のトークン、別のデーモンなら `alteroid login` で得た
  * アクセストークンで、どちらを出すかは `target.ts` が決める。
  */
-export function createClient(base: string, headers: Record<string, string> = {}) {
-  return hc<AppType>(base, { headers: { 'content-type': 'application/json', ...headers } });
+export function createClient(
+  base: string,
+  headers: Record<string, string> = {},
+  fetchImpl?: typeof fetch,
+) {
+  return hc<AppType>(base, {
+    headers: { 'content-type': 'application/json', ...headers },
+    ...(fetchImpl === undefined ? {} : { fetch: fetchImpl }),
+  });
 }
 
 export type DaemonClient = ReturnType<typeof createClient>;

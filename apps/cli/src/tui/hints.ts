@@ -1,5 +1,6 @@
 /** フッタ 1 行のキーヒント。80 桁の端末に収まる長さにする（`hints.test.ts` が見ている）。 */
-export const HINT_INPUT = 'Enter 送信 · Esc 画面移動 · PgUp/PgDn 遡る · /help · ^C 中断 · ^D 終了';
+export const HINT_INPUT =
+  'Enter 送信 · \\+Enter 改行 · Esc 移動 · PgUp/Dn 遡る · /help · ^C 中断 · ^D 終了';
 export const HINT_NAV =
   '1-5 画面 · Tab/i 入力へ · ↑↓ PgUp/PgDn 遡る · / コマンド · ^C 中断 · ^D 終了';
 export const HINT_PICKER = '↑↓ 選択 · Enter 開く · Esc 戻る · ^C 中断';
@@ -8,10 +9,11 @@ export const HINT_MGR_LIST =
   '↑↓ 選択 · Enter 詳細 · f 絞り · m 古い側 · r 更新 · 1-5 画面 · / コマンド';
 export const HINT_MGR_DETAIL =
   'Esc 一覧へ · i 指示を送る · s 止める · ↑↓ PgUp/PgDn 遡る · r 更新 · 1-5 画面';
-export const HINT_MGR_INPUT = 'Enter 送信 · Esc 抜ける · /help · ^C 中断（クローン） · ^D 終了';
+export const HINT_MGR_INPUT =
+  'Enter 送信 · \\+Enter 改行 · Esc 抜ける · /help · ^C 中断（クローン） · ^D 終了';
 export const HINT_MGR_CONFIRM = 'y 止める · それ以外のキーでやめる';
 export const HINT_JOURNAL_LIST =
-  '↑↓ PgUp/PgDn 選ぶ · Enter 全文 · f 種別 · n 最新へ · m 古い側 · 1-5 画面';
+  '↑↓ 選ぶ · Enter 全文 · f 種別 · n 最新 · m 古い · r 更新 · 1-5 画面 · / コマンド';
 export const HINT_JOURNAL_DETAIL = 'Esc 一覧へ · ↑↓ PgUp/PgDn 読み進める · 1-5 画面 · / コマンド';
 export const HINT_JOURNAL_FILTER = '↑↓ 選ぶ · Space 切替 · Enter 適用 · c 全部外す · Esc やめる';
 export const HINT_MEM_LIST = '↑↓ 選ぶ · Enter 開く（読むだけ） · r 更新 · 1-5 画面 · / コマンド';

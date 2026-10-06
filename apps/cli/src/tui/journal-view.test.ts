@@ -21,6 +21,18 @@ describe('最下行', () => {
   });
 });
 
+describe('取りこぼし確認の失敗（#3483）', () => {
+  it('追従中とは言わず、失敗と r で読み直すことを言う（error が消えても残る）', () => {
+    const text = bottomLineText(
+      { ...initialJournalState, status: 'ready', follow: true, newerFailed: true, error: null },
+      'live',
+    );
+    expect(text).not.toContain('追従中');
+    expect(text).toContain('取りこぼし確認に失敗');
+    expect(text).toContain('r で読み直す');
+  });
+});
+
 describe('語で絞っているときの最下行（#2588）', () => {
   const base = { ...initialJournalState, status: 'ready' as const };
 

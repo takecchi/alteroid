@@ -135,19 +135,32 @@ function TracePanel({ approvalId }: { approvalId: string }) {
     );
   }
   if (trace.isLoading) return <Spinner label="答えの後の行動を読み込み中" />;
-  if (trace.error !== undefined) return <ErrorNote error={trace.error} className="mt-2" />;
   const data = trace.data;
+  // 読めた後の取り直しの失敗は、前に読めた中身を残したまま注記する（issue #3514。#3346 と同じ形）。
+  if (trace.error !== undefined && data === undefined) {
+    return <ErrorNote error={trace.error} className="mt-2" />;
+  }
   if (data === undefined) return null;
+  const staleNote =
+    trace.error !== undefined ? (
+      <p className="mt-2 text-xs text-warn">
+        最新の行動を取り直せなかった。下は前に読めたときのもの。
+      </p>
+    ) : null;
   if (data.state !== 'paired') {
     return (
-      <p className="mt-2 text-[11px] text-muted-foreground italic">
-        {TRACE_MISSING[data.state] ?? `対が無い（${data.state}）`}
-        {data.truncated ? `（答えの後 ${data.scanned} 行までしか見ていない）` : ''}
-      </p>
+      <>
+        {staleNote}
+        <p className="mt-2 text-[11px] text-muted-foreground italic">
+          {TRACE_MISSING[data.state] ?? `対が無い（${data.state}）`}
+          {data.truncated ? `（答えの後 ${data.scanned} 行までしか見ていない）` : ''}
+        </p>
+      </>
     );
   }
   return (
     <div className="mt-2">
+      {staleNote}
       <p className="mb-1 text-[11px] font-semibold text-muted-foreground">
         答えの後の行動（この承認の印を持つもの。古い順）
       </p>
@@ -220,9 +233,16 @@ function ConversationPanel({ conversationId }: { conversationId: string }) {
     return <Spinner label="この確認が上がった会話を読み込み中" />;
   }
   // ② 読み出せなかった（失敗）。理由をそのまま出す。
-  if (conversation.error !== undefined) {
+  // 読めた後の取り直しの失敗は、前に読めた会話を残したまま注記する（issue #3514。#3346 と同じ形）。
+  if (conversation.error !== undefined && conversation.data === undefined) {
     return <ErrorNote error={conversation.error} />;
   }
+  const staleNote =
+    conversation.error !== undefined ? (
+      <p className="mb-2 text-xs text-warn">
+        最新の会話を取り直せなかった。下は前に読めたときのもの。
+      </p>
+    ) : null;
 
   const messages = conversation.data?.messages ?? [];
   const hasCloneReply = messages.some((message) => message.role === 'outbound');
@@ -232,6 +252,7 @@ function ConversationPanel({ conversationId }: { conversationId: string }) {
   if (!hasCloneReply) {
     return (
       <div>
+        {staleNote}
         <p className="text-[11px] text-muted-foreground italic">
           この会話にはまだクローンの発言が無い
         </p>
@@ -243,6 +264,7 @@ function ConversationPanel({ conversationId }: { conversationId: string }) {
   // ④ 在る。
   return (
     <div>
+      {staleNote}
       <p className="mb-2 text-[11px] font-semibold text-muted-foreground">この確認が上がった会話</p>
       <ul className="flex flex-col gap-2">
         {messages.map((message) => (

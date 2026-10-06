@@ -226,7 +226,9 @@ describe('送信ストリームの error イベント（会話を見ずに立つ
     await waitFor(() => {
       expect(stub.entries.some((entry) => entry.url.endsWith('/chat'))).toBe(true);
     });
-    expect(await screen.findByRole('button', { name: '受信をやめる' })).toBeTruthy();
+    expect(
+      await screen.findByRole('button', { name: '受信をやめる（クローンのターンは止まらない）' }),
+    ).toBeTruthy();
 
     let releasedInWindow = false;
     const observer = new MutationObserver(() => {
@@ -248,7 +250,9 @@ describe('送信ストリームの error イベント（会話を見ずに立つ
      * （`chat.interrupt.test.tsx` の `disabled` の扱いと同じ理由）。
      */
     await waitFor(() => {
-      expect(screen.queryByRole('button', { name: '受信をやめる' })).toBeNull();
+      expect(
+        screen.queryByRole('button', { name: '受信をやめる（クローンのターンは止まらない）' }),
+      ).toBeNull();
     });
 
     // B の画面に A の error が出ていない。
@@ -320,7 +324,9 @@ describe('追送（followUp）の失敗（投函先を見ずに立つ、#1576-2�
     await waitFor(() => {
       expect(stub.entries.filter((entry) => entry.url.endsWith('/chat')).length).toBe(1);
     });
-    expect(await screen.findByRole('button', { name: '受信をやめる' })).toBeTruthy();
+    expect(
+      await screen.findByRole('button', { name: '受信をやめる（クローンのターンは止まらない）' }),
+    ).toBeTruthy();
 
     await typeAndSend('二つ目');
     await waitFor(() => {
@@ -376,7 +382,9 @@ describe('追送（followUp）の失敗（投函先を見ずに立つ、#1576-2�
 
     renderChat(`/chat/${CONVERSATION_ID}`);
     await typeAndSend('一つ目');
-    expect(await screen.findByRole('button', { name: '受信をやめる' })).toBeTruthy();
+    expect(
+      await screen.findByRole('button', { name: '受信をやめる（クローンのターンは止まらない）' }),
+    ).toBeTruthy();
 
     await typeAndSend('二つ目');
 
