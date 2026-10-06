@@ -4,6 +4,7 @@ import {
   createRunnerRegistry,
   scanJournalPages,
   verifyCommitmentFoldContract,
+  verifyCommitmentTieOrderContract,
   verifyJournalStoreHorizonContract,
   verifyJournalStoreOrderContract,
   verifyJournalStorePageContract,
@@ -478,6 +479,10 @@ describe('PgJournalStore', () => {
 
     it('畳み込みの契約（#1041。3実装で同じことを測る。⚠ 名乗れるのはプロセス内で原子であることまで）', async () => {
       await verifyCommitmentFoldContract(stores.commitments);
+    });
+
+    it('同じ at の未了の並びの契約（#3285。3実装で同じことを測る。入れた順のまま、editBody・close・closeMany の後も）', async () => {
+      await verifyCommitmentTieOrderContract(stores.commitments);
     });
 
     it('ストアが返す値は書いた側の握りと別物である（#1072。3実装で同じことを測る）', async () => {

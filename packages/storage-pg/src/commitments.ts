@@ -122,11 +122,12 @@ export class PgCommitmentStore implements CommitmentStore {
 
   async list(options?: { includeClosed?: boolean }): Promise<CommitmentList> {
     // 未了は古い順。齢が判断の材料なので、放置されているものから見せる
+    // 同じ at は入れた順（`seq`。issue #3285。fs / in-memory の安定整列と同じ）。
     const openRows = await this.#db
       .select({ id: commitments.id, at: commitments.at, commitment: commitments.commitment })
       .from(commitments)
       .where(isNull(commitments.closedAt))
-      .orderBy(asc(commitments.at));
+      .orderBy(asc(commitments.at), asc(commitments.seq), asc(commitments.id));
     const open = splitReadableRows(openRows);
     // **`includeClosed` が偽なら未了の行しか読まないので、`unreadable` にも
     // 未了の行しか入らない。これは意図どおりである** — 片付いた壊れ行まで
@@ -141,11 +142,12 @@ export class PgCommitmentStore implements CommitmentStore {
     // `packages/core/src/store.ts`）。
     if (options?.includeClosed !== true) return { ...open, trimmedClosed: 0 };
 
+    // 閉じた側も同じ closedAt は入れた順の昇順（fs / in-memory の安定整列と同じ。issue #3285）
     const closedRows = await this.#db
       .select({ id: commitments.id, at: commitments.at, commitment: commitments.commitment })
       .from(commitments)
       .where(isNotNull(commitments.closedAt))
-      .orderBy(desc(commitments.closedAt));
+      .orderBy(desc(commitments.closedAt), asc(commitments.seq), asc(commitments.id));
     const closed = splitReadableRows(closedRows);
     return {
       entries: [...open.entries, ...closed.entries],
