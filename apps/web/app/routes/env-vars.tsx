@@ -3,6 +3,7 @@ import { LoadError } from '~/components/load-error';
 import { settingsDocumentTitle } from '~/lib/nav';
 import { EllipsisVertical } from 'lucide-react';
 import { useState } from 'react';
+import { LeaveGuardScope, useReportDirty } from '~/lib/leave-guard';
 
 import {
   Page,
@@ -62,10 +63,12 @@ export default function EnvVars() {
       title="環境変数"
       description="alteroid 自身の運用設定と、マネージャーへ渡す環境変数。渡す先は「共通」「クローンだけ」「マネージャーだけ」から選べる"
     >
-      <div className="flex flex-col gap-4">
-        <EnvVarList />
-        <AddEnvVarForm />
-      </div>
+      <LeaveGuardScope>
+        <div className="flex flex-col gap-4">
+          <EnvVarList />
+          <AddEnvVarForm />
+        </div>
+      </LeaveGuardScope>
     </Page>
   );
 }
@@ -384,6 +387,8 @@ function AddEnvVarForm() {
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<unknown>(undefined);
   const [result, setResult] = useState<EnvVarUpdateResult | undefined>(undefined);
+  // 書きかけ = 名前か値に入力がある（渡す先・シークレットは次の1件へ引き継ぐ設定なので数えない）。
+  useReportDirty('add-env-var', name !== '' || value !== '');
 
   const canSubmit = name.trim().length > 0 && value.length > 0;
 

@@ -345,6 +345,36 @@ describe('/profile 画面 — 行を置く', () => {
     expect(screen.getByText(/反映できなかった — runner に届かなかった/)).toBeTruthy();
   });
 
+  it('クローンへ反映できなかったら（実行環境は全部成功でも）、成功の見出しを出さず、クローンを名指しした警告にする（#3507）', async () => {
+    stubProfile({
+      rows: [],
+      put: {
+        status: 200,
+        body: { ...UPDATED, clone: { ok: false, error: 'クローンに届かなかった' } },
+      },
+    });
+    renderScreen();
+
+    fireEvent.click(await screen.findByRole('button', { name: '行を追加する' }));
+    fireEvent.change(screen.getByLabelText('プロファイルの行の名前'), {
+      target: { value: 'rust' },
+    });
+    fireEvent.change(screen.getByLabelText('プロファイルの新しい本文'), {
+      target: { value: 'export A=1\n' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '保存する' }));
+    fireEvent.click(screen.getByRole('button', { name: '本当に保存する' }));
+
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toContain(
+      'プロファイルの行 rust を更新したが、クローンへ反映できていない',
+    );
+    expect(alert.textContent).not.toContain('実行環境');
+    expect(alert.className).toContain('text-warn');
+    expect(screen.queryByText(/プロファイルの行 rust を更新した。/)).toBeNull();
+    expect(screen.getByText(/反映できなかった — クローンに届かなかった/)).toBeTruthy();
+  });
+
   it('名前の形が不正・本文が空なら保存できない', async () => {
     stubProfile({ rows: [] });
     renderScreen();

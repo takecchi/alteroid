@@ -18,6 +18,15 @@ export const ATTACHMENT_PRUNE_EVERY_ENV = 'ALTEROID_ATTACHMENT_PRUNE_EVERY';
 /** 周期の既定値（分）。暫定値で、`60` という数そのものに根拠は無い（`DEFAULT_ARCHIVE_FOLD_EVERY_MINUTES` と同じ立場）。 */
 export const DEFAULT_ATTACHMENT_PRUNE_EVERY_MINUTES = 60;
 
+/**
+ * 周期の上限（ms）。**運用の上限ではなく、タイマーの仕様の範囲を守るためのもの**——
+ * `setTimeout` は 2^31-1 ms（約24.8日）を超える遅延を 1ms へ倒すので、掃除が休みなく回ってしまう
+ * （#3539）。#3535 の `MAX_ARCHIVE_FOLD_INTERVAL_MS`（#3534）と同じ形・同じ値で、core の
+ * scratch-sweep の `MAX_*_MS` とも同じ値（あちらは core から公開されていないので、ここに持つ）。
+ * `intervalMs`（テスト用の上書き）にも掛かる（#3535 と同じ）。
+ */
+export const MAX_ATTACHMENT_PRUNE_INTERVAL_MS = 2_147_483_647;
+
 /** `archive-folder.ts` の `OFF` と綴りを揃えてある。 */
 const OFF = new Set(['off', 'none', 'false', '0']);
 
@@ -76,7 +85,10 @@ export function startAttachmentPruning(options: AttachmentPrunerOptions): Attach
   if (options.everyMinutes === null) {
     return { refresh: async () => null, stop: () => {} };
   }
-  const interval = options.intervalMs ?? options.everyMinutes * 60_000;
+  const interval = Math.min(
+    options.intervalMs ?? options.everyMinutes * 60_000,
+    MAX_ATTACHMENT_PRUNE_INTERVAL_MS,
+  );
 
   let inFlight: Promise<number | null> | null = null;
   let timer: ReturnType<typeof setTimeout> | undefined;

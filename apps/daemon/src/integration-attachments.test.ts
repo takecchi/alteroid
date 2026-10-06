@@ -16,6 +16,7 @@ import {
   createMemoryStores,
   createRunnerRegistry,
   DEFAULT_ATTACHMENT_LIMITS,
+  MemoryAttachmentStore,
   type CloneHost,
   type InboxEvent,
 } from '@alteroid/core';
@@ -72,8 +73,16 @@ function recordingSdk(blocks: unknown[]): typeof import('@anthropic-ai/claude-ag
   }) as unknown as typeof import('@anthropic-ai/claude-agent-sdk').query;
 }
 
-function setup(options: { limits?: typeof DEFAULT_ATTACHMENT_LIMITS } = {}) {
-  const stores = createMemoryStores();
+function setup(
+  options: { limits?: typeof DEFAULT_ATTACHMENT_LIMITS; attachmentsNow?: () => Date } = {},
+) {
+  const stores =
+    options.attachmentsNow === undefined
+      ? createMemoryStores()
+      : {
+          ...createMemoryStores(),
+          attachments: new MemoryAttachmentStore({ now: options.attachmentsNow }),
+        };
   const blocks: unknown[] = [];
   const posted: InboxEvent[] = [];
   const queryFn = recordingSdk(blocks);
@@ -303,6 +312,19 @@ describe('鍵が付けられるのは、同じ鍵が上げた添付だけ（400�
     expect(response.status).toBe(400);
     expect(await response.json()).toMatchObject({ code: 'attachment_missing' });
     expect((await sendWebhook(s, bearer(key.value), '?attachments=no-such-id')).status).toBe(400);
+    expect(s.posted).toHaveLength(0);
+  });
+
+  it('期限（expiresAt）を過ぎた id は、prune の前でも 400 attachment_missing で投函しない（#3522）', async () => {
+    let now = new Date(T0);
+    const s = setup({ attachmentsNow: () => now });
+    const key = await issue(s);
+    const meta = await uploadOk(s, bearer(key.value));
+    now = new Date(T0 + 31 * 86_400_000);
+    const response = await sendEvent(s, bearer(key.value), { attachments: [meta.id] });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ code: 'attachment_missing' });
+    expect((await sendWebhook(s, bearer(key.value), `?attachments=${meta.id}`)).status).toBe(400);
     expect(s.posted).toHaveLength(0);
   });
 

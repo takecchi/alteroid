@@ -159,6 +159,11 @@ describe('ChatHeader', () => {
     }
   });
 
+  it('notice は role="status" で、成功の知らせも読み上げに伝わる（#3568）', () => {
+    render(<ChatHeader conversationId="c" notice="止めた" />);
+    expect(screen.getByRole('status').textContent).toBe('止めた');
+  });
+
   it('onOpenList を渡したときだけ「会話一覧を開く」を出す', () => {
     const onOpenList = vi.fn();
     const { rerender } = render(<ChatHeader conversationId="c" />);
@@ -205,7 +210,9 @@ describe('ChatComposer', () => {
 
   it('受信中は「受信をやめる」を「送る」と並べて出し、但し書きも出す', () => {
     composer({ sending: true, onStopReceiving: () => undefined });
-    expect(screen.getByRole('button', { name: '受信をやめる' })).toBeTruthy();
+    expect(
+      screen.getByRole('button', { name: '受信をやめる（クローンのターンは止まらない）' }),
+    ).toBeTruthy();
     expect(screen.getByRole('button', { name: 'メッセージを送信' })).toBeTruthy();
     expect(screen.getByText(/画面を閉じてもクローンは考え続ける/)).toBeTruthy();
   });

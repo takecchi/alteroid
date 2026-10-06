@@ -74,3 +74,37 @@ describe('会話の一覧の未読の印', () => {
     expect(read.textContent).not.toContain('未読');
   });
 });
+
+describe('会話の一覧の「いま開いている会話」（#3568）', () => {
+  it('開いている会話の Link だけ aria-current="page" を持つ', async () => {
+    stubFetch((url) => {
+      if (url.includes('/approvals')) return json({ approvals: [] });
+      if (url.includes('/conversations/c1')) return json({ conversationId: 'c1', messages: [] });
+      if (url.includes('/conversations')) {
+        return json({
+          conversations: [summary('c1', '資料の件', 0), summary('c2', '日報の件', 0)],
+          scanned: 2,
+          reachedStart: true,
+          hiddenByLimit: 0,
+        });
+      }
+      return undefined;
+    });
+    const router = createMemoryRouter(
+      [
+        { path: '/chat', Component: Harness },
+        { path: '/chat/:conversationId', Component: Harness },
+      ],
+      { initialEntries: ['/chat/c1'] },
+    );
+    render(
+      <Providers>
+        <RouterProvider router={router} />
+      </Providers>,
+    );
+
+    const open = await screen.findByRole('link', { name: /資料の件/ });
+    expect(open.getAttribute('aria-current')).toBe('page');
+    expect(screen.getByRole('link', { name: /日報の件/ }).getAttribute('aria-current')).toBeNull();
+  });
+});

@@ -197,6 +197,7 @@ import {
   practiceKindSchema,
   practiceSlugSchema,
   scheduleKindSchema,
+  SCHEDULE_EVERY_MINUTES_MAX,
   scheduleSpecSchema,
 } from './schema.js';
 import type {
@@ -2372,6 +2373,18 @@ function describeStringLengthViolation(
   const withinRange = (min === undefined || length >= min) && (max === undefined || length <= max);
   if (withinRange) return null;
   return `${field} は使えない（${formatStringLengthJa(range)}のみ）。`;
+}
+
+/**
+ * 空白だけの値を断る（Issue #3544）。HTTP の `nonBlankString`（`non-blank-string.ts`。#3142）と同じ基準
+ * ——NUL を落として trim した後に1文字以上。`POST /commitments/:id/close` がこれで 400 にする欄を、
+ * 道具も同じにする。**数えるだけで値は書き換えない。** 空文字・NUL だけは `describeStringLengthViolation` が
+ * 先に断るので、ここへ来るのは「長さはあるが空白だけ」の値である。
+ */
+function describeBlankViolation(field: string, value: string | undefined): string | null {
+  if (value === undefined) return null;
+  if (stripNul(value).trim().length > 0) return null;
+  return `${field} は使えない（空白だけの値は空と同じ。${formatStringLengthJa({ min: 1 })}のみ）。`;
 }
 
 /**
@@ -7847,7 +7860,7 @@ export function createCloneTools(context: ToolContext) {
           // だけを固定する。
           .optional()
           .describe(
-            `この分数ごとに起こす（${formatIntRangeJa({ min: 1 })}）。周期はどれか1つだけ渡す`,
+            `この分数ごとに起こす（${formatIntRangeJa({ min: 1, max: SCHEDULE_EVERY_MINUTES_MAX })}。1年より長い周期は cron か単発で書く）。周期はどれか1つだけ渡す`,
           ),
         cron: z
           .string()
@@ -7897,14 +7910,18 @@ export function createCloneTools(context: ToolContext) {
           );
         }
         // **issue #1651 の後始末。** HTTP の `scheduleBody`（`spec` を
-        // `scheduleSpecSchema` で検査——`every` は `minutes: z.number().int().min(1)`）
-        // と同じ意味「1以上の整数のみ」に揃える。検査はここ（ハンドラ）で行い、
+        // `scheduleSpecSchema` で検査——`every` は `minutes: z.number().int().min(1).max(…)`）
+        // と同じ意味「1以上・1年以下の整数のみ」に揃える。検査はここ（ハンドラ）で行い、
         // 保存層（fs / pg の `scheduledRequestSchema.parse(entry)` 経由の
         // `scheduleSpecSchema`）へは不正な値を1文字も渡さない。doc は
         // `everyMinutes` の入力スキーマ側にある。
-        if (everyMinutes !== undefined && (!Number.isInteger(everyMinutes) || everyMinutes < 1)) {
+        const everyViolation = describeIntRangeViolation('everyMinutes', everyMinutes, {
+          min: 1,
+          max: SCHEDULE_EVERY_MINUTES_MAX,
+        });
+        if (everyViolation !== null) {
           return text(
-            `everyMinutes ${everyMinutes} は使えない（${formatIntRangeJa({ min: 1 })}のみ）。`,
+            `${everyViolation}1年（${SCHEDULE_EVERY_MINUTES_MAX}分）より長い周期は everyMinutes ではなく cron 式か単発の予定で書くこと。`,
           );
         }
 
@@ -8563,6 +8580,14 @@ export function createCloneTools(context: ToolContext) {
         // 落とした後に本文が残るなら、今までどおり通す（保存するのは落とす前の値のまま）。
         const bodyError = describeStringLengthViolation('body', stripNul(body), { min: 1 });
         if (bodyError !== null) return text(bodyError);
+        // **source も落とした後で見る**（Issue #3436）。台帳の入口は source からも NUL を落として残すので、
+        // NUL だけ・空文字は空の source の行になる。HTTP（`POST /commitments`）の `.min(1)` と揃えて断る
+        // （省略は今までどおり通る）。
+        if (source !== undefined && stripNul(source).length === 0) {
+          return text(
+            'source が空です。NUL だけ・空文字は指定できません。source は分かるときだけ、実のある文字列で渡し、無いなら省略してください。',
+          );
+        }
         const entry = {
           id: randomUUID(),
           at: new Date().toISOString(),
@@ -8646,7 +8671,10 @@ export function createCloneTools(context: ToolContext) {
       },
       async ({ id, reason }) => {
         // **issue #1752（#1651/#1689/#1720 の揃え漏れ。非数値の欄）。**
-        const reasonError = describeStringLengthViolation('reason', reason, { min: 1 });
+        // **空白だけも断る**（#3544。HTTP の `POST /commitments/:id/close` の `nonBlankString` と揃える）。
+        const reasonError =
+          describeStringLengthViolation('reason', reason, { min: 1 }) ??
+          describeBlankViolation('reason', reason);
         if (reasonError !== null) return text(reasonError);
         // **読めない行でも閉じられるようにする（issue #2148 の決定 (1)）。**
         // `get` が `UnreadableCommitmentError` を投げても、ここでは投げ直さず
@@ -9004,7 +9032,10 @@ export function createCloneTools(context: ToolContext) {
         if (qError !== null) return text(qError);
         const untilLengthError = describeStringLengthViolation('until', until, { min: 1 });
         if (untilLengthError !== null) return text(untilLengthError);
-        const reasonError = describeStringLengthViolation('reason', reason, { min: 1 });
+        // **空白だけも断る**（#3580。`commitment_close`（#3544）・HTTP の `nonBlankString`（#3142）と揃える）。
+        const reasonError =
+          describeStringLengthViolation('reason', reason, { min: 1 }) ??
+          describeBlankViolation('reason', reason);
         if (reasonError !== null) return text(reasonError);
         // 🔴 **絞り込みの無い呼びを断る（issue #844 の受け入れ基準）。**
         // `origin` が4値全部を含む呼びは「絞り込みが無い」のと同じであり、
@@ -11004,6 +11035,10 @@ export function createCloneTools(context: ToolContext) {
       },
       async ({ managerId, message, decision, requestId, attachments }) => {
         if (!context.managers) return NO_POOL;
+        // **空文字・NUL だけは断る**（#3544。HTTP の `POST /managers/:id/messages` の `min(1)` と
+        // 「NUL を落として空なら断る」（#3461）に揃える）。**空白だけは HTTP も通すので、ここでも断らない。**
+        const messageError = describeStringLengthViolation('message', message, { min: 1 });
+        if (messageError !== null) return text(messageError);
         // 添付は、送る前に読む。見つからなければ何も送らずに道具のエラー文を返す。
         const handover = await loadManagerAttachments(
           stores,
@@ -13472,9 +13507,12 @@ export function createCloneTools(context: ToolContext) {
         }
         // 存在しない日付（`2026-02-31` は V8 が 3/3 へずらす）や日付でない文字列（`foo 1`）を
         // 別の時刻として読んで**消す**ので、#3287 の3段で検める（#3358）。
-        if (before !== undefined && !isReadableJournalTimeBoundary(before)) {
+        // 元に戻せない一括削除なので時差も必須にする（#3482。`inbox_remove_many` の before・
+        // HTTP の `POST /archive/remove` と同じ門。#2462・#3390）。この門は内側で上の3段も通す。
+        if (before !== undefined && !isOffsetQualifiedTimeBoundary(before)) {
           return text(
-            describeUnreadableJournalTimeBoundary('before', before) + '**1件も消していない。**',
+            describeOffsetRequiredTimeBoundary('before', before, '2026-09-15T00:00:00.000Z') +
+              '**1件も消していない。**',
           );
         }
         // **issue #1720（#1651/#1689 の揃え漏れ）。**

@@ -249,9 +249,11 @@ describe('編集して送信する', () => {
     expect(await screen.findByText('元の文')).toBeTruthy();
     expect(stub.entries.some((entry) => entry.url.endsWith('/chat'))).toBe(false);
 
-    // ボタンの「キャンセル」でも同じく戻る。
-    fireEvent.click(within(row).getByRole('button', { name: '発言を編集' }));
+    // ボタンの「キャンセル」でも同じく戻る。書きかけは捨てない（#3565）ので、鉛筆には印が付き、
+    // 押すと書きかけから再開する。
+    fireEvent.click(within(row).getByRole('button', { name: '発言を編集（書きかけあり）' }));
     const secondTextarea = await screen.findByRole('textbox', { name: '発言を編集する下書き' });
+    expect((secondTextarea as HTMLTextAreaElement).value).toBe('書きかけの文');
     fireEvent.change(secondTextarea, { target: { value: 'また書きかけ' } });
     fireEvent.click(screen.getByRole('button', { name: 'キャンセル' }));
 

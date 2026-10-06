@@ -129,7 +129,9 @@ function bubbleCount(text: string) {
 }
 
 async function stopReceiving() {
-  const stop = await screen.findByRole('button', { name: '受信をやめる' });
+  const stop = await screen.findByRole('button', {
+    name: '受信をやめる（クローンのターンは止まらない）',
+  });
   await act(async () => {
     fireEvent.click(stop);
   });

@@ -209,6 +209,25 @@ describe('絞り込み', () => {
     controller.cancelFilter();
     expect(state().types).toEqual(['decision', 'escalation']);
   });
+
+  it('選択画面の c は語も外す。Enter で反映する。c を押さなければ語は残る（#3485）', async () => {
+    const { controller, state } = setup((a) => {
+      a.journalEntries = run(1);
+    });
+    controller.setFilter([], 'foo');
+    await waitFor(() => state().status === 'ready');
+    controller.openFilter();
+    controller.applyFilter();
+    await waitFor(() => state().status === 'ready');
+    expect(state().q).toBe('foo');
+
+    controller.openFilter();
+    expect(state().qDraft).toBe('foo');
+    controller.clearFilterDraft();
+    controller.applyFilter();
+    await waitFor(() => state().status === 'ready');
+    expect(state().q).toBe('');
+  });
 });
 
 describe('古い側と取りこぼし', () => {
@@ -258,7 +277,8 @@ describe('古い側と取りこぼし', () => {
     controller.setFilter([], '', 2);
     await waitFor(() => state().status === 'ready');
     controller.moveSelection(1);
-    await waitFor(() => ids().length === 4);
+    await waitFor(() => ids().length === 3); // 頁は 2 件。境界の e3 は再送されるので e2 だけが増える
+    expect(ids()).toEqual(['e4', 'e3', 'e2']);
     expect(api.journalListCalls.at(-1)).toMatchObject({ until: minute(3) });
   });
 
@@ -276,10 +296,55 @@ describe('古い側と取りこぼし', () => {
     expect(state().selectedId).toBe('e4');
   });
 
+  it('取りこぼし確認が失敗したら印を立てる。loadOlder で error が消えても、のちの確認が成功しても残り、読み直すと下りる（#3483）', async () => {
+    const { api, controller, state, ids, push, fire } = setup((a) => {
+      a.journalEntries = run(4);
+    });
+    controller.setFilter([], '', 2); // 頁を 2 件にして、古い側が残っている状態にする
+    await waitFor(() => state().status === 'ready');
+    expect(ids()).toEqual(['e4', 'e3']);
+    api.journalEntries = run(7);
+    api.journalListFails = 'boom';
+    fire('open');
+    await waitFor(() => state().newerFailed);
+    expect(ids()).toEqual(['e4', 'e3']);
+    expect(state().status).toBe('ready');
+
+    // 古い側を読み足すと error は消える。穴は残ったままなので、印は消えない。
+    api.journalListFails = null;
+    await controller.loadOlder();
+    expect(state().error).toBeNull();
+    expect(state().newerFailed).toBe(true);
+
+    // 新着が 1 件届き、次の繋ぎ直しの確認が成功しても、穴（e3〜e5）は埋まらない。印は残す。
+    push(said(8));
+    await controller.refreshNewer();
+    expect(ids()).not.toContain('e5');
+    expect(state().newerFailed).toBe(true);
+
+    // 読み直す（r）と印は下りる。
+    api.journalEntries = run(8);
+    await controller.load();
+    expect(state().newerFailed).toBe(false);
+    expect(ids()).toEqual(['e8', 'e7']);
+  });
+
   it('まだ開いていなければ、open でも読まない', () => {
     const { api, fire } = setup();
     fire('open');
     expect(api.journalListCalls).toHaveLength(0);
+  });
+});
+
+describe('一覧に載せる一言（note）（#3484）', () => {
+  it('初めて開く前に載せた断りは、開く読み込みの開始で消えない（開いたあとに載せれば残る）', async () => {
+    const { controller, state } = setup((a) => {
+      a.journalEntries = run(1);
+    });
+    controller.enter();
+    controller.note('bad arg');
+    await waitFor(() => state().status === 'ready');
+    expect(state().error).toBe('bad arg');
   });
 });
 

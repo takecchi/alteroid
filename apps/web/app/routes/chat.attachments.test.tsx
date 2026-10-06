@@ -51,6 +51,7 @@ const revoked: string[] = [];
 beforeEach(() => {
   originalFetch = globalThis.fetch;
   localStorage.clear();
+  sessionStorage.clear(); // 書きかけの本文は sessionStorage にも残る（#3400）。テストどうしへ持ち越さない
   storeTestBaseUrl();
   created.length = 0;
   revoked.length = 0;

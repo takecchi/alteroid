@@ -140,7 +140,9 @@ async function sendWithAttachmentAndAbort() {
   await screen.findByRole('button', { name: 'mine.png を外す' });
   fireEvent.click(screen.getByRole('button', { name: 'メッセージを送信' }));
   await waitFor(() => expect(posted).toHaveLength(1));
-  const stop = await screen.findByRole('button', { name: '受信をやめる' });
+  const stop = await screen.findByRole('button', {
+    name: '受信をやめる（クローンのターンは止まらない）',
+  });
   await act(async () => {
     fireEvent.click(stop);
   });

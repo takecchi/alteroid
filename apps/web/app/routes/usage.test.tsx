@@ -258,6 +258,32 @@ describe('/usage 画面', () => {
     expect(within(managers).queryByText('m1')).toBeNull();
   });
 
+  it('軸別カードは上位 20 件で切り、「すべて表示する」でそのカードだけ全件を出す', async () => {
+    // モデル別だけが 25 件（高い順に m-01..m-25）。他の軸は 1 件で、切られない。
+    const rows = Array.from({ length: 25 }, (_, i) =>
+      row(100 - i, { model: `m-${String(i + 1).padStart(2, '0')}` }),
+    );
+    stubUsage({ rows, since: '2026-08-01T00:00:00.000Z', beforeLedger: false });
+
+    renderUsage();
+
+    await screen.findByRole('heading', { name: 'モデル別' });
+    const card = axisCard('モデル別');
+    expect(within(card).getByText('m-20')).toBeTruthy();
+    expect(within(card).queryByText('m-21')).toBeNull();
+    expect(within(card).getByText('…残り 5 件は出していない')).toBeTruthy();
+    // 切っていないカードには口が出ない。
+    expect(within(axisCard('日別')).queryByRole('button')).toBeNull();
+
+    fireEvent.click(within(card).getByRole('button', { name: 'すべて表示する' }));
+    expect(within(card).getByText('m-25')).toBeTruthy();
+    expect(within(card).queryByText(/件は出していない/)).toBeNull();
+
+    fireEvent.click(within(card).getByRole('button', { name: '上位 20 件に戻す' }));
+    expect(within(card).queryByText('m-21')).toBeNull();
+    expect(within(card).getByText('…残り 5 件は出していない')).toBeTruthy();
+  });
+
   it('層別（誰が）と場所別（どこで）の内訳も出す', async () => {
     // **モデル名では層を見分けられない。** 2行とも同じモデル帯にしてあるのは、
     // `ALTEROID_CLONE_MODEL` を置いたときに実際に起きる並びだからである。

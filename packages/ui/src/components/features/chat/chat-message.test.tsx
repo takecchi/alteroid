@@ -58,6 +58,28 @@ describe('ChatMessageList / ChatMessage: 描き分け', () => {
 });
 
 describe('ChatMessage: 編集の入口', () => {
+  it('指だけの端末（pointer: coarse）では鉛筆を薄く出す。マウスのホバーで出す振る舞いは残す（#3403）', () => {
+    render(<ChatMessage role="human" text="やあ" onEdit={() => {}} />);
+    const classes = screen.getByRole('button', { name: '発言を編集' }).className.split(/\s+/);
+    expect(classes).toEqual(
+      expect.arrayContaining([
+        'opacity-0',
+        'group-hover:opacity-100',
+        'pointer-coarse:opacity-60',
+        // フォーカスしたら、指の端末でもはっきり見せる。
+        'pointer-coarse:group-focus-within:opacity-100',
+      ]),
+    );
+  });
+
+  it('hasDraft のときは、鉛筆を常に見せ、名前で書きかけを知らせる（#3565）', () => {
+    const { rerender } = render(<ChatMessage role="human" text="やあ" onEdit={() => {}} />);
+    expect(screen.queryByRole('button', { name: /書きかけ/ })).toBeNull();
+    rerender(<ChatMessage role="human" text="やあ" onEdit={() => {}} hasDraft />);
+    const button = screen.getByRole('button', { name: '発言を編集（書きかけあり）' });
+    expect(button.className.split(/\s+/)).toContain('opacity-100');
+  });
+
   it('onEdit を渡したときだけ鉛筆が出る。編集中（children）は出ない', () => {
     const onEdit = vi.fn();
     const { rerender } = render(<ChatMessage role="human" text="やあ" />);

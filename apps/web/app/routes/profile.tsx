@@ -690,7 +690,16 @@ function UpdateReport({ label, update }: { label: string; update: ProfileUpdateR
   // 古いデーモンの応答には無い（`composed` は新しい形で足された）。実行時の倒れ先。
   const composed = (update as Partial<ProfileUpdateResult>).composed;
   // 実行環境が0台は失敗ではない（`@alteroid/logic` の `hasRunnerPushFailure` の doc）。
-  const partial = hasRunnerPushFailure(update);
+  const runnerFailed = hasRunnerPushFailure(update);
+  // クローン（デーモン自身）への反映の失敗は `hasRunnerPushFailure` の外（実行環境だけを見る）。
+  const cloneFailed = !update.clone.ok;
+  const partial = runnerFailed || cloneFailed;
+  const failedTargets =
+    cloneFailed && runnerFailed
+      ? 'クローンと一部の実行環境'
+      : cloneFailed
+        ? 'クローン'
+        : '一部の実行環境';
   const rows = [
     { label: 'クローン', outcome: update.clone },
     ...update.runners.map((runner) => ({ label: runner.runnerId, outcome: runner })),
@@ -700,7 +709,7 @@ function UpdateReport({ label, update }: { label: string; update: ProfileUpdateR
     <div className="flex flex-col gap-2 text-xs">
       {partial ? (
         <p role="alert" className="font-medium text-warn">
-          {`プロファイルの${label}が、一部の実行環境へ反映できていない（保存はできている）。`}
+          {`プロファイルの${label}が、${failedTargets}へ反映できていない（保存はできている）。`}
         </p>
       ) : (
         <p className="font-medium text-ok">{`プロファイルの${label}。`}</p>

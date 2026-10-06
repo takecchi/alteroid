@@ -1,4 +1,5 @@
 import { exampleBaseUrl } from '~/lib/integration-example';
+import { LeaveGuardScope, useReportDirty, type LeaveNotice } from '~/lib/leave-guard';
 import { SettingsTabs } from '~/components/group-tabs';
 import { UnreadableRowsNote } from '~/components/unreadable-rows-note';
 import { LoadError } from '~/components/load-error';
@@ -78,6 +79,14 @@ const STATUS_VIEW: Record<KeyStatus, { label: string; tone: 'ok' | 'neutral' | '
   expired: { label: '期限切れ', tone: 'warn' },
 };
 
+/** 写していない鍵の値が消える、という確認（値は文に出さない）。 */
+const ISSUED_VALUE_NOTICE: LeaveNotice = {
+  title: '写していない鍵の値があります',
+  description:
+    'このまま離れると、発行した鍵の値は消えて二度と見られません。取り直せないので、鍵を失効して発行し直すことになります。',
+  confirmLabel: '値を消して離れる',
+};
+
 export default function Integrations() {
   const { data, error, isLoading, isValidating, mutate } = useIntegrationKeys();
   const removeUnreadable = useRemoveUnreadableIntegrationKeys();
@@ -93,69 +102,71 @@ export default function Integrations() {
       title="連携"
       description="外のサービスが alteroid へ外部イベントを送るための鍵。鍵ごとに送れる source を1つに固定し、期限と上限を付けられる"
     >
-      <div className="flex flex-col gap-4">
-        <p className="text-xs leading-relaxed break-words text-muted-foreground">
-          alteroid から相手の MCP サーバを呼びたいときは、鍵ではなく{' '}
-          <Link to="/mcp-servers" className="underline underline-offset-2">
-            MCP サーバの登録
-          </Link>
-          へ。
-        </p>
+      <LeaveGuardScope>
+        <div className="flex flex-col gap-4">
+          <p className="text-xs leading-relaxed break-words text-muted-foreground">
+            alteroid から相手の MCP サーバを呼びたいときは、鍵ではなく{' '}
+            <Link to="/mcp-servers" className="underline underline-offset-2">
+              MCP サーバの登録
+            </Link>
+            へ。
+          </p>
 
-        <IssueForm onIssued={(result) => setIssued((current) => [result, ...current])} />
+          <IssueForm onIssued={(result) => setIssued((current) => [result, ...current])} />
 
-        {issued.map((result) => (
-          <IssuedValue
-            key={result.key.id}
-            issued={result}
-            onClose={() =>
-              setIssued((current) => current.filter((row) => row.key.id !== result.key.id))
-            }
-          />
-        ))}
-
-        <Card>
-          <CardHeader
-            title="発行した鍵"
-            subtitle="失効・期限切れを含む。値は残っていない（指紋は見分けるためだけの先頭12桁）"
-            action={data === undefined ? undefined : <Badge>{data.keys.length}</Badge>}
-          />
-          <div className="flex flex-col gap-3 px-4 py-3">
-            {/* 再取得の失敗でも data は残る。帯で言うだけで、下の一覧は消さない。 */}
-            <LoadError
-              what="連携の鍵の一覧"
-              error={error}
-              onRetry={() => mutate()}
-              retrying={isValidating}
+          {issued.map((result) => (
+            <IssuedValue
+              key={result.key.id}
+              issued={result}
+              onClose={() =>
+                setIssued((current) => current.filter((row) => row.key.id !== result.key.id))
+              }
             />
-          </div>
-          {/* 読めない行は一覧の前に言う（#3216。0件なら鍵ごと無いので何も出ない）。 */}
-          {data?.rowsUnreadable !== undefined && (
-            <UnreadableRowsNote
-              noun="連携の鍵"
-              unreadable={data.rowsUnreadable}
-              removeUnreadable={removeUnreadable}
-              hand="integration-keys.json"
+          ))}
+
+          <Card>
+            <CardHeader
+              title="発行した鍵"
+              subtitle="失効・期限切れを含む。値は残っていない（指紋は見分けるためだけの先頭12桁）"
+              action={data === undefined ? undefined : <Badge>{data.keys.length}</Badge>}
             />
-          )}
-          {isLoading ? (
-            <Spinner />
-          ) : data === undefined ? null : data.keys.length === 0 ? (
-            data.rowsUnreadable !== undefined ? (
-              // 読めない行が在るので「鍵がまだ無い」とは言えない（CLI の `integration list` と同じ文言）。
-              <Empty>読めた連携の鍵は無い（連携の鍵がまだ無い、とは言えない）。</Empty>
+            <div className="flex flex-col gap-3 px-4 py-3">
+              {/* 再取得の失敗でも data は残る。帯で言うだけで、下の一覧は消さない。 */}
+              <LoadError
+                what="連携の鍵の一覧"
+                error={error}
+                onRetry={() => mutate()}
+                retrying={isValidating}
+              />
+            </div>
+            {/* 読めない行は一覧の前に言う（#3216。0件なら鍵ごと無いので何も出ない）。 */}
+            {data?.rowsUnreadable !== undefined && (
+              <UnreadableRowsNote
+                noun="連携の鍵"
+                unreadable={data.rowsUnreadable}
+                removeUnreadable={removeUnreadable}
+                hand="integration-keys.json"
+              />
+            )}
+            {isLoading ? (
+              <Spinner />
+            ) : data === undefined ? null : data.keys.length === 0 ? (
+              data.rowsUnreadable !== undefined ? (
+                // 読めない行が在るので「鍵がまだ無い」とは言えない（CLI の `integration list` と同じ文言）。
+                <Empty>読めた連携の鍵は無い（連携の鍵がまだ無い、とは言えない）。</Empty>
+              ) : (
+                <Empty>連携の鍵はまだ無い。</Empty>
+              )
             ) : (
-              <Empty>連携の鍵はまだ無い。</Empty>
-            )
-          ) : (
-            <ul>
-              {data.keys.map((key) => (
-                <KeyRow key={key.id} view={key} now={now} />
-              ))}
-            </ul>
-          )}
-        </Card>
-      </div>
+              <ul>
+                {data.keys.map((key) => (
+                  <KeyRow key={key.id} view={key} now={now} />
+                ))}
+              </ul>
+            )}
+          </Card>
+        </div>
+      </LeaveGuardScope>
     </Page>
   );
 }
@@ -171,6 +182,11 @@ function IssueForm({ onIssued }: { onIssued: (issued: IntegrationKeyIssued) => v
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<unknown>(undefined);
   const [problems, setProblems] = useState<string[]>([]);
+  // 書きかけ = どれかの欄に入力がある（発行できたら空に戻るので、そのあとは確認しない）。
+  useReportDirty(
+    'issue-form',
+    [name, source, expires, maxBodyBytes, ratePerMinute].some((field) => field !== ''),
+  );
 
   // CLI（`integration create`）と同じ上限・同じ数え方（trim 後の `.length`）。黙って切らない。
   const nameTooLong = name.trim().length > NAME_MAX_LENGTH;
@@ -358,6 +374,8 @@ function buildInput(fields: {
 function IssuedValue({ issued, onClose }: { issued: IntegrationKeyIssued; onClose: () => void }) {
   const { baseUrl } = useApiContext();
   const { key, value } = issued;
+  // 表示している間は、移動・タブを閉じる前に確認する（閉じれば確認しない）。
+  useReportDirty(`issued-value:${key.id}`, true, ISSUED_VALUE_NOTICE);
   const example =
     `curl -X POST ${exampleBaseUrl(baseUrl, window.location.origin)}/events/${key.source} \\\n` +
     `  -H "Authorization: Bearer <上の値>" \\\n` +
