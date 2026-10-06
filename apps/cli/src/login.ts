@@ -75,23 +75,63 @@ export async function loginCommand(options: { provider?: string }): Promise<void
   stdout.write('ブラウザでの操作を待っています…\n');
 
   const deadline = Date.parse(started.expiresAt);
+  // 直近の「届かない・5xx・429」。期限切れの文言に添え、後続の 400 の読み違いも防ぐ。
+  let lastTransient: string | null = null;
   for (;;) {
     if (Number.isFinite(deadline) && Date.now() > deadline) {
-      throw new Error('ログインの期限が切れました（alteroid login をやり直してください）');
+      throw new Error(
+        'ログインの期限が切れました（alteroid login をやり直してください）' +
+          (lastTransient === null ? '' : `\n最後に繋がらなかった理由: ${lastTransient}`),
+      );
     }
     await sleep(POLL_INTERVAL_MS);
 
-    const response = await fetch(`${target.baseUrl}/auth/login/${started.requestId}/claim`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ claimSecret: started.claimSecret }),
-    });
+    // **再試行してよい線（#3727）。** サーバの claim は、ブラウザ側が終わるまで
+    // （pending / processing）は何も消費しない。**ready を返す1回で要求を consumed に
+    // し、トークンはその応答にしか載らない**（`packages/core/src/auth-service.ts` の
+    // `claim` ／ `claimLoginRequest`）。二度目は 400（引き取り済み）になる。
+    // よって「届かない・5xx・429」は待ちを続ける（pending の間なら何も失わない）が、
+    // 200 を受けた後の失敗（本文が読めない等）は再試行しても取れない——やり直しを案内する。
+    let response: Response;
+    try {
+      response = await fetch(`${target.baseUrl}/auth/login/${started.requestId}/claim`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ claimSecret: started.claimSecret }),
+      });
+    } catch (error) {
+      lastTransient = `${target.baseUrl} に届きませんでした（${redactedErrorMessage(error)}）`;
+      stdout.write(`デーモンに繋がらない。待ちを続けています…（${lastTransient}）\n`);
+      continue;
+    }
     if (response.status === 202) continue;
+    if (response.status >= 500 || response.status === 429 || response.status === 408) {
+      lastTransient = await errorText(response);
+      stdout.write(`デーモンが一時的に応答しない。待ちを続けています…（${lastTransient}）\n`);
+      continue;
+    }
     if (!response.ok) {
-      throw new Error(`ログインに失敗しました: ${await errorText(response)}`);
+      throw new Error(
+        `ログインに失敗しました: ${await errorText(response)}` +
+          (lastTransient === null
+            ? ''
+            : '\n直前に通信失敗があったため、その claim が応答を返せないまま引き取り済みに' +
+              'なった可能性があります。alteroid login をやり直してください。'),
+      );
     }
 
-    const result = (await response.json()) as ClaimResponse;
+    let result: ClaimResponse;
+    try {
+      result = (await response.json()) as ClaimResponse;
+    } catch (error) {
+      // 200 を受けた = サーバ側は引き取り済みかもしれない。再試行しても取れない。
+      throw new Error(
+        `ログイン結果の応答を読めませんでした（${redactedErrorMessage(error)}）。` +
+          'この要求は引き取り済みの可能性があり、再試行では取れません。' +
+          'alteroid login をやり直してください。',
+        { cause: error },
+      );
+    }
     if (result.status === 'pending') continue;
 
     const label = result.account.email ?? result.account.displayName ?? result.account.id;
