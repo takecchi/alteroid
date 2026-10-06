@@ -12,6 +12,7 @@ import {
   Empty,
   ErrorNote,
   Input,
+  isImeConfirmEnter,
   KeyValueList,
   Spinner,
   Textarea,
@@ -1632,7 +1633,9 @@ function SendMessage({
 
   function submit() {
     // **ボタンの `disabled` だけに頼らない。** Enter でもここへ来る。
-    if (text.trim() === '' || noWayBack) return;
+    // 送っている最中の Enter も弾く。ボタンは `loading` で塞がるが、Enter の
+    // 道はボタンを経由しないので、押した数だけ割り込みが飛ぶ。
+    if (text.trim() === '' || noWayBack || busy) return;
     setBusy(true);
     setFailure(undefined);
     send(id, { text })
@@ -1675,6 +1678,10 @@ function SendMessage({
             placeholder="追加の指示"
             onChange={(event) => setText(event.target.value)}
             onKeyDown={(event) => {
+              // IME の変換を確定する Enter では送らない（門の形と理由は
+              // `isImeConfirmEnter` の注釈）。ここは Enter 単体で送るので、
+              // 門が無いと確定前の途中の文字列がそのまま割り込む。
+              if (isImeConfirmEnter(event)) return;
               if (event.key === 'Enter') submit();
             }}
           />

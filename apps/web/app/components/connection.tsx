@@ -39,6 +39,7 @@ import {
   CardHeader,
   ErrorNote,
   Input,
+  isImeConfirmEnter,
   KeyValueList,
   Select,
 } from '@alteroid/ui';
@@ -318,6 +319,8 @@ function SelectedActions({
           placeholder={endpoint.url}
           onChange={(event) => setDraft(event.target.value)}
           onKeyDown={(event) => {
+            // IME の変換を確定する Enter では保存しない（`isImeConfirmEnter` の注釈）。
+            if (isImeConfirmEnter(event)) return;
             if (event.key === 'Enter') commit();
           }}
         />
@@ -378,6 +381,8 @@ function AddEndpoint({ onAdd }: { onAdd(entry: { url: string; label?: string }):
           className="sm:w-32 sm:shrink-0"
           onChange={(event) => setLabel(event.target.value)}
           onKeyDown={(event) => {
+            // 名前は日本語で打つ欄なので、変換の確定の Enter で足して繋ぎ替えない。
+            if (isImeConfirmEnter(event)) return;
             if (event.key === 'Enter') submit();
           }}
         />
@@ -389,6 +394,7 @@ function AddEndpoint({ onAdd }: { onAdd(entry: { url: string; label?: string }):
             spellCheck={false}
             onChange={(event) => setUrl(event.target.value)}
             onKeyDown={(event) => {
+              if (isImeConfirmEnter(event)) return;
               if (event.key === 'Enter') submit();
             }}
           />

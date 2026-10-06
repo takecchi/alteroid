@@ -969,6 +969,50 @@ describe('詳細でも、`live` は繋がっていないことを文で言うが
 });
 
 /**
+ * **「話しかける」は Enter 単体で送る。だから IME の確定の Enter と、送っている
+ * 最中の Enter を拾わないこと。**
+ *
+ * 門が無いと、日本語の変換を確定する Enter で確定前の途中の文字列が割り込みとして
+ * 飛ぶ（門の形は `packages/ui/src/components/features/chat/ime.ts` の
+ * `isImeConfirmEnter`、会話の側の歯は `chat.ime-enter.test.tsx`）。ボタンは送信中に
+ * `loading` で塞がるが、Enter の道はボタンを経由しないので、押した数だけ飛ぶ。
+ *
+ * **同じ入力・同じキーで `isComposing` だけを反転させて両側を1本で通す**（変換中→0本、
+ * 確定後→1本）。片側だけでは「そもそも送れていない」と区別が付かない。
+ */
+describe('「話しかける」の Enter は、IME の確定と送信中の連打では飛ばない', () => {
+  it('変換中の Enter では送らず、確定後の Enter では1本だけ送る', async () => {
+    const { sent } = renderDetailWithMessages({ ...BASE, status: 'running', live: true });
+    expect(await screen.findByText('実行中')).toBeTruthy();
+
+    const input = screen.getByPlaceholderText('追加の指示');
+    fireEvent.change(input, { target: { value: 'つづけて' } });
+
+    fireEvent.keyDown(input, { key: 'Enter', isComposing: true });
+    fireEvent.keyDown(input, { key: 'Enter', keyCode: 229 });
+    expect(sent.length).toBe(0);
+
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(await screen.findByText('delivered: 追加指示として届けた。')).toBeTruthy();
+    expect(sent.length).toBe(1);
+  });
+
+  it('送っている最中に Enter を重ねても、届くのは1本だけ', async () => {
+    const { sent } = renderDetailWithMessages({ ...BASE, status: 'running', live: true });
+    expect(await screen.findByText('実行中')).toBeTruthy();
+
+    const input = screen.getByPlaceholderText('追加の指示');
+    fireEvent.change(input, { target: { value: '続けて' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    fireEvent.keyDown(input, { key: 'Enter' });
+
+    expect(await screen.findByText('delivered: 追加指示として届けた。')).toBeTruthy();
+    expect(sent.length).toBe(1);
+  });
+});
+
+/**
  * **停止は status で出し分けない。**
  *
  * かつてこの画面は「停止する」を `running` / `waiting_human` のときだけ描いて
