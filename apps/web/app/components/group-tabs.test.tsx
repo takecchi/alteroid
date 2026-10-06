@@ -65,7 +65,7 @@ describe('GroupTabs', () => {
     expect(screen.getByRole('link', { name: 'やり方' }).getAttribute('aria-current')).toBeNull();
   });
 
-  it('設定のタブは8つ（利用状況・認証トークン・アクセス許可・許可・環境変数・プロファイル・MCP を含む）', () => {
+  it('設定のタブは9つ（利用状況・認証トークン・アクセス許可・許可・環境変数・プロファイル・MCP・連携を含む）', () => {
     renderAt('/usage', SETTINGS_TABS);
 
     expect(screen.getAllByRole('link').map((link) => link.getAttribute('href'))).toEqual([
@@ -77,6 +77,7 @@ describe('GroupTabs', () => {
       '/env-vars',
       '/profile',
       '/mcp-servers',
+      '/integrations',
     ]);
   });
 });

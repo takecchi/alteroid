@@ -22,6 +22,8 @@ import type {
   EnvVarScope,
   InboxEventType,
   InboxRemoveManyResult,
+  IntegrationKeyInput,
+  IntegrationKeyIssued,
   McpServers,
   MemoryDocument,
   McpServersUpdateResult,
@@ -1060,7 +1062,12 @@ export function useRemoveArchive() {
           },
         })
         .then(unwrap);
-      await Promise.all([mutate(KEY.archive), mutate(KEY.archiveSessions)]);
+      await Promise.all([
+        mutate(KEY.archive),
+        mutate(KEY.archiveSessions),
+        // 開いている本文があれば取り直す（消えたものを読ませ続けない）。
+        mutate((key) => isKeyOfType(key, 'archiveBody')),
+      ]);
       return result;
     },
     [api, mutate],
@@ -1237,6 +1244,43 @@ export function useSetMcpServers() {
       const updated = await api.api.PUT('/mcp-servers', { body: { mcpServers } }).then(unwrap);
       await mutate(KEY.mcpServers);
       return updated;
+    },
+    [api, mutate],
+  );
+}
+
+/**
+ * 連携の鍵を発行する（`POST /integration-keys`。#3113 段2）。**応答の `value` が鍵の値を見られる唯一の機会**
+ * なので、呼び出し側（`routes/integrations.tsx`）は state にだけ持ち、どこにも保存しない。
+ *
+ * **一覧の取り直しの失敗は、発行の失敗にしない。** 発行は済んでいる（値は手元にある）ので、ここで投げると
+ * 画面が「失敗した」と言い、人間が値を受け取れないまま作り直すことになる。取り直しの失敗は一覧の
+ * `error`（`useIntegrationKeys`）が言う。
+ */
+export function useIssueIntegrationKey() {
+  const api = useApi();
+  const { mutate } = useSWRConfig();
+  return useCallback(
+    async (input: IntegrationKeyInput): Promise<IntegrationKeyIssued> => {
+      const issued = await api.api.POST('/integration-keys', { body: input }).then(unwrap);
+      await mutate(KEY.integrationKeys).catch(() => undefined);
+      return issued;
+    },
+    [api, mutate],
+  );
+}
+
+/** 連携の鍵を失効させる（`POST /integration-keys/:id/revoke`）。**確認は画面の側が持つ。** 取り直しの失敗は失効の失敗にしない。 */
+export function useRevokeIntegrationKey() {
+  const api = useApi();
+  const { mutate } = useSWRConfig();
+  return useCallback(
+    async (id: string) => {
+      const result = await api.api
+        .POST('/integration-keys/{id}/revoke', { params: { path: { id } }, body: {} })
+        .then(unwrap);
+      await mutate(KEY.integrationKeys).catch(() => undefined);
+      return result;
     },
     [api, mutate],
   );

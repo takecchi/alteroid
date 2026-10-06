@@ -49,7 +49,10 @@ interface StubEnvVarRow {
  * （`tokens.test.tsx` の同じ断り書きと同じ理由）。ここでは `globalThis.fetch`
  * を自分で差し替える。
  */
-function stubCrudScreen(initial: StubEnvVarRow[]) {
+function stubCrudScreen(
+  initial: StubEnvVarRow[],
+  runners: { runnerId: string; ok: boolean; error?: string }[] = [],
+) {
   let rows = initial;
   const puts: { name: string; value: string; scope?: string; secret?: boolean }[][] = [];
 
@@ -84,7 +87,7 @@ function stubCrudScreen(initial: StubEnvVarRow[]) {
         };
         rows = [...rows.filter((row) => row.name !== entry.name), updated];
       }
-      return json({ credentials: rows });
+      return json({ credentials: rows, runners });
     }
     return json({ credentials: rows });
   }) as typeof fetch;
@@ -102,6 +105,85 @@ async function openMenuItem(name: string, item: '編集' | '削除'): Promise<vo
 async function waitForListLoaded(): Promise<void> {
   await screen.findByRole('heading', { name: '一覧' });
 }
+
+describe('/env-vars 画面 — runner への反映の一部失敗（#3157）', () => {
+  const PARTIAL = [
+    { runnerId: 'runner-1', ok: true },
+    { runnerId: 'runner-2', ok: false, error: 'つながらない' },
+  ];
+
+  it('置いたとき、一部の実行環境へ反映できなければ warn の警告を出し、失敗した実行環境と理由を言う', async () => {
+    stubCrudScreen([], PARTIAL);
+    render(
+      <Providers>
+        <MemoryRouter>
+          <EnvVars />
+        </MemoryRouter>
+      </Providers>,
+    );
+    await waitForListLoaded();
+
+    fireEvent.change(screen.getByPlaceholderText('TZ'), { target: { value: 'tz' } });
+    fireEvent.change(screen.getByLabelText('値'), { target: { value: 'Asia/Tokyo' } });
+    fireEvent.click(screen.getByRole('button', { name: '置く' }));
+
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toContain('正本には置いたが、1 台の実行環境へ反映できていない');
+    expect(alert.textContent).toContain('runner-2');
+    expect(alert.textContent).toContain('つながらない');
+    expect(alert.className).toContain('text-warn');
+  });
+
+  it('全部届いた・実行環境が0台なら警告を出さない', async () => {
+    stubCrudScreen([], [{ runnerId: 'runner-1', ok: true }]);
+    render(
+      <Providers>
+        <MemoryRouter>
+          <EnvVars />
+        </MemoryRouter>
+      </Providers>,
+    );
+    await waitForListLoaded();
+
+    fireEvent.change(screen.getByPlaceholderText('TZ'), { target: { value: 'tz' } });
+    fireEvent.change(screen.getByLabelText('値'), { target: { value: 'Asia/Tokyo' } });
+    fireEvent.click(screen.getByRole('button', { name: '置く' }));
+
+    await waitFor(() => expect((screen.getByLabelText('値') as HTMLInputElement).value).toBe(''));
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('削除したとき、一部の実行環境へ反映できなければ警告を出す', async () => {
+    stubCrudScreen(
+      [
+        {
+          name: 'TZ',
+          sha256: 'f'.repeat(12),
+          updatedAt: '2026-09-14T00:00:00.000Z',
+          scope: 'all',
+          secret: true,
+        },
+      ],
+      PARTIAL,
+    );
+    render(
+      <Providers>
+        <MemoryRouter>
+          <EnvVars />
+        </MemoryRouter>
+      </Providers>,
+    );
+    await waitForListLoaded();
+
+    await openMenuItem('TZ', '削除');
+    fireEvent.click(
+      within(await screen.findByRole('alertdialog')).getByRole('button', { name: '削除' }),
+    );
+
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toContain('正本には外したが');
+  });
+});
 
 describe('/env-vars 画面 — 一覧', () => {
   it('secret な行は値を伏せ字にし、実値を DOM に出さない（指紋は title だけ）', async () => {

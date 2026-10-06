@@ -560,6 +560,29 @@ export const authAccessTokens = pgTable(
 );
 
 /**
+ * 連携の鍵。**素の値は入れない**（sha256 だけ。`integration-key.ts`）。
+ * 鍵の種類そのものが「固定の1 source で外部イベントを送る」という1つの能力だけを表すので、
+ * 許可の一覧（scopes）の列は置かない。
+ */
+export const integrationKeys = pgTable(
+  'integration_keys',
+  {
+    id: text('id').primaryKey(),
+    name: text('name').notNull(),
+    source: text('source').notNull(),
+    sha256: text('sha256').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull(),
+    createdBy: text('created_by').notNull(),
+    expiresAt: timestamp('expires_at', { withTimezone: true, mode: 'date' }),
+    revokedAt: timestamp('revoked_at', { withTimezone: true, mode: 'date' }),
+    lastUsedAt: timestamp('last_used_at', { withTimezone: true, mode: 'date' }),
+    maxBodyBytes: integer('max_body_bytes'),
+    ratePerMinute: integer('rate_per_minute'),
+  },
+  (table) => [uniqueIndex('integration_keys_sha256_idx').on(table.sha256)],
+);
+
+/**
  * 利用状況の台帳（`usage.ts` の `UsageStore`）。4つに分けている。
  *
  * - `usageDaily`: 増分を「日 × マネージャー × モデル」で足し込んだ行。集計の主体

@@ -13166,9 +13166,10 @@ export function createCloneTools(context: ToolContext) {
      * アーカイブ済みセッション生ログの本文を、絞り込んでまとめて tombstone
      * する（issue #698 の残タスク）。
      *
-     * **人間には `POST /archive/remove` が既に在る（PR #1078）。** 人間に
-     * できることがクローンにできないのは north_star 禁止1 に反するので、
-     * こちらにも同じ口を渡す。
+     * **経緯:** `POST /archive/remove` は PR #1078 で人間の入口として置かれ、
+     * 等価性（north_star 禁止1）のためにクローンにも同じ口（この道具）を渡した。
+     * #3135 の決定で、HTTP の口は人間の入口（CLI・Web UI）には出さず
+     * クローン専用とした。
      *
      * **雛形は `inbox_remove_many` / `commitment_close_many` である。** 既定
      * （`dryRun` を省略すると true）・絞り込みの無い呼びを断る・塊ごとに

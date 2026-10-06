@@ -134,8 +134,15 @@ import {
   usageDateSchema,
   usageLayerSchema,
   usageSiteSchema,
+  integrationKeyFingerprint,
+  integrationKeyLimits,
+  issueIntegrationKeyValue,
+  looksLikeIntegrationKey,
+  resolveIntegrationKey,
+  sha256Hex,
   type AnswerApprovalVia,
   type ApprovalPagingKey,
+  type IntegrationKeyRecord,
   type ArchiveRemoveManyFilter,
   type AuthAccount,
   type AuthService,
@@ -149,6 +156,7 @@ import {
 } from '@alteroid/core';
 import {
   AttachmentRejectedError,
+  nonBlankString,
   readAttachmentLimits,
   validateAttachmentBatch,
   type AttachmentLimits,
@@ -156,9 +164,10 @@ import {
 } from '@alteroid/core';
 
 import { bearerOf, isOperator, type AuthPlan, type AuthVariables, type Principal } from './auth.js';
+import { createFixedWindowRateLimiter, judgeIntegrationRoute } from './integration-gate.js';
 import type { JournalBus } from './journal-bus.js';
 import { Scalar } from '@scalar/hono-api-reference';
-import { Hono } from 'hono';
+import { Hono, type Context, type Next } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { cors } from 'hono/cors';
 import { createMiddleware } from 'hono/factory';
@@ -195,6 +204,10 @@ import {
   credentialsUpdateResponseSchema,
   droppedResponseSchema,
   errorResponseSchema,
+  integrationKeyCreateRequestSchema,
+  integrationKeyCreateResponseSchema,
+  integrationKeyResponseSchema,
+  integrationKeysListResponseSchema,
   JOURNAL_WRITE_FAILED_CODE,
   JOURNAL_WRITE_FAILED_MESSAGE,
   journalWriteFailedResponseSchema,
@@ -546,10 +559,12 @@ function attachmentDisposition(name: string): string {
 
 /**
  * 添付を上げた主体の識別子（`AttachmentMeta.uploadedBy`）。持ち主（operator）は `operator`、
- * アカウントは `account:<id>`。トークンや資格そのものは入れない。
+ * アカウントは `account:<id>`、連携の鍵は `integration:<keyId>`。トークンや資格そのものは入れない。
  */
 function uploaderOf(principal: Principal): string {
-  return principal.kind === 'operator' ? 'operator' : `account:${principal.account.id}`;
+  if (principal.kind === 'operator') return 'operator';
+  if (principal.kind === 'integration') return `integration:${principal.keyId}`;
+  return `account:${principal.account.id}`;
 }
 
 /**
@@ -969,7 +984,7 @@ const commitmentBody = z.object({
  * できることが最終承認の実体である以上（north_star）、否定する材料の無い閉じ方を
  * 受け付けてはいけない（`commitmentSchema` の `closedReason` の注記）。
  */
-const commitmentCloseBody = z.object({ reason: z.string().min(1) });
+const commitmentCloseBody = z.object({ reason: nonBlankString });
 
 /**
  * 編集後の本文。**空を許さない**（`commitmentBody.body` と同じ制約——空文字を
@@ -1180,6 +1195,27 @@ function loginErrorDetail(reason: string): string {
   }
 }
 
+/** 連携の鍵を、人間が読む・応答に載せる形にする。**値も sha256 の全体も載せない**（指紋＝先頭12桁だけ）。 */
+function integrationKeyView(key: IntegrationKeyRecord) {
+  return {
+    id: key.id,
+    name: key.name,
+    source: key.source,
+    fingerprint: integrationKeyFingerprint(key.sha256),
+    createdAt: key.createdAt,
+    createdBy: key.createdBy,
+    expiresAt: key.expiresAt,
+    revokedAt: key.revokedAt,
+    lastUsedAt: key.lastUsedAt,
+    limits: integrationKeyLimits(key),
+  };
+}
+
+/** 日誌に残す連携の鍵の呼び名。**名前・source・id・指紋だけ**（値は書かない）。 */
+function describeIntegrationKey(key: IntegrationKeyRecord): string {
+  return `「${key.name}」（id=${key.id}、source=${key.source}、指紋=${integrationKeyFingerprint(key.sha256)}）`;
+}
+
 /** 日誌に残す人間向けの名前。 */
 function describeAccount(account: AuthAccount): string {
   const name = account.email ?? account.displayName;
@@ -1273,6 +1309,31 @@ function noBodyPostRequestBody(description: string) {
     description,
     // 中身は縛らない（free-form）。ここで伝えたいのは形ではなく content-type である。
     content: { 'application/json': { schema: {} } },
+  };
+}
+
+/**
+ * 連携の鍵（`altk_`）でこの口を叩いたときだけ起きる応答（`POST /events` と `POST /events/:source`）。
+ * 人間・operator の経路には、これらの制限（401・413・429 と source の突き合わせ）は無い。
+ *
+ * **403（source の不一致）はここに置かず、各経路の `describeRoute` に直に書く**——「実際に返すステータスが
+ * 宣言されているか」を測る歯が、リテラルの `403` を経路ごとに読むため。
+ */
+function integrationKeyEventResponses() {
+  return {
+    401: {
+      description: '連携の鍵が無効か期限切れ（未知・失効・期限切れ）。',
+      content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+    },
+    413: {
+      description: '連携の鍵の本文の上限（既定 1 MiB）を超えた。',
+      content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+    },
+    429: {
+      description:
+        '連携の鍵の回数の上限（既定 60 回/分）を超えた。`Retry-After`（秒）の後でやり直す。',
+      content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+    },
   };
 }
 
@@ -1452,14 +1513,20 @@ function managerProviderOf(managers: ManagerPool, summary: ManagerSummary): stri
  * 読む文なので、どちらの資格で叩いたかが文として分かる形にする。
  */
 function actorOf(principal: Principal): string {
-  return principal.kind === 'operator' ? 'operator' : principal.account.id;
+  if (principal.kind === 'operator') return 'operator';
+  if (principal.kind === 'integration') return `integration:${principal.keyId}`;
+  return principal.account.id;
 }
 
 /** 日誌の `grounds` に載せる、人間が読む形の「誰が」。 */
 function describeActor(principal: Principal): string {
-  return principal.kind === 'operator'
-    ? '実行環境の持ち主による操作'
-    : `許可されたアカウント（${principal.account.id}）による操作`;
+  if (principal.kind === 'operator') return '実行環境の持ち主による操作';
+  // 連携の鍵（鍵の値は書かない。id と名前だけ）。管理の口へは入れない（既定で拒否）ので日誌の行為者には
+  // 通常ならないが、`Principal` を網羅するために持つ。
+  if (principal.kind === 'integration') {
+    return `連携の鍵「${principal.name}」（${principal.keyId}）による操作`;
+  }
+  return `許可されたアカウント（${principal.account.id}）による操作`;
 }
 
 /**
@@ -1701,6 +1768,10 @@ function credentialDeliveryFailureOf(error: unknown): string {
  * 直さない。
  */
 function answerApprovalViaOf(principal: Principal): AnswerApprovalVia {
+  if (principal.kind === 'integration') {
+    // 連携の鍵は承認の口へ入れない（`authenticate` が既定で拒否する）。人間が答えた証拠にはならない。
+    throw new Error('連携の鍵は承認に答えられない');
+  }
   return principal.kind === 'operator'
     ? { kind: 'operator', auth: principal.auth }
     : { kind: 'account', accountId: principal.account.id };
@@ -2044,6 +2115,21 @@ export function createApp(deps: AppDeps) {
     tokenTtlDays: 30,
     description: '認証は無効（未設定）',
   };
+  /** 連携の鍵の回数の窓（メモリ上。時計は `deps.now` と同じ）。 */
+  const integrationClock = deps.now ?? (() => new Date());
+  const integrationRateLimiter = createFixedWindowRateLimiter(() => integrationClock().getTime());
+  /** 断った試みをデーモンのログへ（日誌には書かない）。**鍵の値は出さない**（id だけ）。 */
+  function noteIntegrationRefusal(
+    c: Context,
+    status: 401 | 403 | 413 | 429,
+    why: string,
+    keyId?: string,
+  ): void {
+    process.stderr.write(
+      `alteroid: 連携の鍵の要求を断った（${String(status)}、${why}）: ` +
+        `${c.req.method} ${c.req.path}${keyId === undefined ? '' : ` keyId=${keyId}`}\n`,
+    );
+  }
   const authService: AuthService =
     deps.auth?.service ??
     createAuthService({
@@ -2218,6 +2304,14 @@ export function createApp(deps: AppDeps) {
       await next();
       return;
     }
+    // **第3の資格: 連携の鍵（`altk_`）。認証が無効の構成でも、`altk_` の bearer が付いていれば照合と
+    // 制限を掛ける**（bearer が無ければ今までどおり素通し）。公開パス（`isPublicPath`）の扱いは変えない。
+    if (!isPublicPath(c.req.path)) {
+      const presented = bearerOf(c.req.header('authorization'));
+      if (presented !== null && looksLikeIntegrationKey(presented)) {
+        return authenticateIntegrationKey(c, next, presented);
+      }
+    }
     if (!authPlan.enabled) {
       // 認証を設定していない構成では、この機能が入る前とまったく同じに振る舞う。
       // 守りは待ち受け先（既定 127.0.0.1）と手前に置く境界の側にある。
@@ -2255,6 +2349,72 @@ export function createApp(deps: AppDeps) {
     c.set('principal', { kind: 'account', account });
     await next();
   });
+
+  /**
+   * **連携の鍵（`altk_`）の門。** 照合し、**既定で拒否**し、上限を掛ける。**この資格にだけ**掛かる
+   * （人間・operator の経路に新しい制限は足さない）。
+   *
+   * 1. 未知・失効・期限切れは **401**。
+   * 2. 通すのは `POST /events`（本文の source が鍵の source と一致するときだけ。本文を読むハンドラが判定し、
+   *    不一致は 403）と `POST /events/:source`（パスが一致するときだけ）。**不一致も、それ以外のすべての口
+   *    （鍵の管理の口を含む）も 403。**
+   * 3. 鍵ごとの回数（メモリ上の固定窓）を超えたら **429** と `Retry-After`。
+   * 4. 本文が鍵の `maxBodyBytes` を超えたら **413**。
+   *
+   * **断った試み（401/403/413/429）は日誌に書かず、デーモンのログへ**（鍵の値は出さない）。
+   */
+  async function authenticateIntegrationKey(
+    c: Context<{ Variables: AuthVariables }>,
+    next: Next,
+    presented: string,
+  ): Promise<Response | void> {
+    const refuse = (status: 401 | 403 | 413 | 429, why: string, key?: IntegrationKeyRecord) => {
+      noteIntegrationRefusal(c, status, why, key?.id);
+    };
+    const key = await resolveIntegrationKey({
+      store: stores.integrationKeys,
+      bearer: presented,
+      now: integrationClock(),
+    });
+    if (key === null) {
+      refuse(401, '未知・失効・期限切れ');
+      return c.json({ error: '連携の鍵が無効か期限切れ' as const }, 401);
+    }
+    const limits = integrationKeyLimits(key);
+    c.set('principal', {
+      kind: 'integration',
+      keyId: key.id,
+      name: key.name,
+      source: key.source,
+      limits,
+    });
+    if (!judgeIntegrationRoute(c.req.method, c.req.path, key.source).allowed) {
+      refuse(403, 'この鍵が通れない口');
+      return c.json(
+        {
+          error:
+            'この連携の鍵では、この操作はできない（固定の source への外部イベントだけ）' as const,
+        },
+        403,
+      );
+    }
+    const verdict = integrationRateLimiter.consume(key.id, limits.ratePerMinute);
+    if (!verdict.ok) {
+      refuse(429, '回数の上限', key);
+      c.header('Retry-After', String(verdict.retryAfterSeconds));
+      return c.json(
+        { error: '連携の鍵の回数の上限を超えた（Retry-After の後でやり直す）' as const },
+        429,
+      );
+    }
+    return bodyLimit({
+      maxSize: limits.maxBodyBytes,
+      onError: (ctx) => {
+        refuse(413, '本文の上限', key);
+        return ctx.json({ error: '本文が連携の鍵の上限を超えた' as const }, 413);
+      },
+    })(c, next);
+  }
 
   /**
    * 実行環境の持ち主だけに絞る門。**⚠️ 2026-09-06 のオーナー決定で、`/tokens`
@@ -2307,6 +2467,18 @@ export function createApp(deps: AppDeps) {
    * 正典は `docs/architecture.md`「デーモンの API に入る資格」。
    */
   const requireOwner = createMiddleware<{ Variables: AuthVariables }>(async (_c, next) => {
+    await next();
+  });
+
+  /**
+   * 連携の鍵の管理の口（`/integration-keys`）に付ける、**二重の門**。連携の鍵（`altk_`）は `authenticate` が
+   * 既定で拒否するのでここへは来ないが、配線のずれ・将来の変更で鍵が管理の口へ入れないよう、口の側でも断る
+   * （鍵が自分の仲間の鍵を発行・失効できたら、配布範囲の境界が崩れる）。
+   */
+  const humanOnly = createMiddleware<{ Variables: AuthVariables }>(async (c, next) => {
+    if (c.get('principal').kind === 'integration') {
+      return c.json({ error: '連携の鍵では、鍵の管理はできない' as const }, 403);
+    }
     await next();
   });
 
@@ -5250,6 +5422,228 @@ export function createApp(deps: AppDeps) {
       },
     )
 
+    // --- 連携の鍵（外のサービスへ渡す、固定の 1 source で外部イベントだけを送れる鍵） ---------
+    /**
+     * 連携の鍵の一覧。**値（`altk_...`）も sha256 の全体も返さない**（見分けるための先頭12桁だけ）。
+     *
+     * **資格は `authenticate` だけ**（許可済みのアカウント・operator）。**連携の鍵そのものは入れない**
+     * （`authenticate` が既定で拒否する。`humanOnly` はその二重の門）。
+     */
+    .get(
+      '/integration-keys',
+      describeRoute({
+        tags: ['integration-keys'],
+        summary: '連携の鍵の一覧',
+        description:
+          '外のサービスへ渡した連携の鍵の一覧（失効・期限切れを含む）。**値も sha256 の全体も返さない**' +
+          '（`fingerprint` は sha256 の先頭12桁で、見分けるためだけの値）。',
+        responses: {
+          200: {
+            description: '連携の鍵の一覧。',
+            content: {
+              'application/json': { schema: resolver(integrationKeysListResponseSchema) },
+            },
+          },
+        },
+      }),
+      humanOnly,
+      async (c) => {
+        const keys = await stores.integrationKeys.listIntegrationKeys();
+        return c.json(
+          integrationKeysListResponseSchema.parse({ keys: keys.map(integrationKeyView) }),
+        );
+      },
+    )
+
+    /**
+     * 連携の鍵を発行する。**値はこの応答で1度だけ返す**（保存は sha256 だけ）。
+     *
+     * **日誌を先に書き、書けなければ状態を変えずに 500**（`access grant` と同じ作法。#2043）。
+     * 日誌には名前・source・id・指紋（sha256 の先頭12桁）だけを書き、**鍵の値は書かない**。
+     */
+    .post(
+      '/integration-keys',
+      describeRoute({
+        tags: ['integration-keys'],
+        summary: '連携の鍵を発行する',
+        description:
+          '外のサービスへ渡す鍵を発行する。**鍵の種類そのものが「固定の 1 source で外部イベントを送る」' +
+          'という 1 つの能力だけを表す**（選べる許可の一覧は無い）。通れるのは `POST /events`（本文の ' +
+          'source が鍵の source と一致するとき）と `POST /events/:source`（パスが一致するとき）だけで、' +
+          'それ以外の口は **すべて 403**（鍵の管理の口を含む）。本文は既定で 1 MiB、回数は既定で 60 回/分' +
+          'まで（鍵ごとに上書きできる。この上限は連携の鍵にだけ掛かる）。**値（`altk_...`）はこの応答で' +
+          '1度だけ返し、後からは取り出せない**（保存は sha256 だけ）。',
+        responses: {
+          200: {
+            description: '発行した。`value` はこの応答でだけ見える。',
+            content: {
+              'application/json': { schema: resolver(integrationKeyCreateResponseSchema) },
+            },
+          },
+          400: {
+            description: '入力の形が不正（何も作っていない）。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+          500: {
+            description: '日誌が書けなかった（**状態を変えていない**）。',
+            content: { 'application/json': { schema: resolver(journalWriteFailedResponseSchema) } },
+          },
+        },
+      }),
+      humanOnly,
+      jsonBody(integrationKeyCreateRequestSchema, (where) => ({
+        error: '連携の鍵の入力の形が不正（何も作っていない）' + (where === '' ? '' : `: ${where}`),
+      })),
+      async (c) => {
+        const input = c.req.valid('json');
+        const at = integrationClock();
+        if (input.expiresAt !== undefined && !(Date.parse(input.expiresAt) > at.getTime())) {
+          return c.json({ error: 'expiresAt が過去（何も作っていない）' as const }, 400);
+        }
+        const value = issueIntegrationKeyValue();
+        const record: IntegrationKeyRecord = {
+          id: randomUUID(),
+          name: input.name,
+          source: input.source,
+          sha256: sha256Hex(value),
+          createdAt: at.toISOString(),
+          createdBy: describeActor(c.get('principal')),
+          expiresAt: input.expiresAt ?? null,
+          revokedAt: null,
+          lastUsedAt: null,
+          maxBodyBytes: input.maxBodyBytes ?? null,
+          ratePerMinute: input.ratePerMinute ?? null,
+        };
+        try {
+          await stores.journal.append({
+            type: 'decision',
+            decision: `連携の鍵を発行: ${describeIntegrationKey(record)}`,
+            grounds:
+              `${describeActor(c.get('principal'))}（POST /integration-keys）。` +
+              '鍵の値は書かない（名前・source・id・指紋だけ）。',
+          });
+        } catch (error) {
+          noteDroppedRecord(
+            '連携の鍵の発行の日誌（発行していない）',
+            `id=${record.id}`,
+            kindOfError(error),
+          );
+          return c.json(journalWriteFailedBody(), 500);
+        }
+        try {
+          await stores.integrationKeys.putIntegrationKey(record);
+        } catch (error) {
+          // 日誌には「発行した」が残っているので、打ち消す（記録が多すぎる側に倒す）。
+          await appendJournalOrDrop(
+            stores,
+            {
+              type: 'decision',
+              decision: `連携の鍵を発行できなかった: ${describeIntegrationKey(record)}`,
+              grounds: `${describeActor(c.get('principal'))}（POST /integration-keys、保存が失敗）`,
+            },
+            '連携の鍵の発行の打ち消しの日誌',
+            `id=${record.id}`,
+          );
+          throw error;
+        }
+        const stored = (await stores.integrationKeys.getIntegrationKey(record.id)) ?? record;
+        return c.json(
+          integrationKeyCreateResponseSchema.parse({ key: integrationKeyView(stored), value }),
+        );
+      },
+    )
+
+    /**
+     * 連携の鍵を失効させる。**冪等**（失効済みはそのまま 200。先の時刻を動かさず、日誌も足さない）。
+     * 日誌を先に書き、書けなければ状態を変えずに 500。
+     */
+    .post(
+      '/integration-keys/:id/revoke',
+      describeRoute({
+        tags: ['integration-keys'],
+        summary: '連携の鍵を失効させる',
+        description:
+          '連携の鍵を失効させる。以後その鍵は 401 になる（発行済みの値を消さなくても即座に効く）。' +
+          '失効済みの鍵への再実行は 200（先の失効の時刻を動かさない）。',
+        requestBody: noBodyPostRequestBody(
+          '**中身は読まないので `{}` を送ればよい。** 本文そのものではなく ' +
+            '`content-type: application/json` が要る（ブラウザの単純リクエストで失効させられないため）。',
+        ),
+        responses: {
+          200: {
+            description: '失効した（既に失効済みでも 200）。',
+            content: { 'application/json': { schema: resolver(integrationKeyResponseSchema) } },
+          },
+          404: {
+            description: '該当する鍵が無い。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+          500: {
+            description: '日誌が書けなかった（**状態を変えていない**）。',
+            content: { 'application/json': { schema: resolver(journalWriteFailedResponseSchema) } },
+          },
+          ...noBodyPostResponses(),
+        },
+      }),
+      humanOnly,
+      deliberateClient,
+      async (c) => {
+        const id = c.req.param('id');
+        const before = await stores.integrationKeys.getIntegrationKey(id);
+        if (before === null) return c.json({ error: 'not found' as const }, 404);
+        if (before.revokedAt !== null) {
+          return c.json(integrationKeyResponseSchema.parse({ key: integrationKeyView(before) }));
+        }
+        try {
+          await stores.journal.append({
+            type: 'decision',
+            decision: `連携の鍵を失効: ${describeIntegrationKey(before)}`,
+            grounds: `${describeActor(c.get('principal'))}（POST /integration-keys/:id/revoke）`,
+          });
+        } catch (error) {
+          noteDroppedRecord(
+            '連携の鍵の失効の日誌（失効していない）',
+            `id=${id}`,
+            kindOfError(error),
+          );
+          return c.json(journalWriteFailedBody(), 500);
+        }
+        let result;
+        try {
+          result = await stores.integrationKeys.revokeIntegrationKey(
+            id,
+            integrationClock().toISOString(),
+          );
+        } catch (error) {
+          await appendJournalOrDrop(
+            stores,
+            {
+              type: 'decision',
+              decision: `連携の鍵を失効できなかった: ${describeIntegrationKey(before)}`,
+              grounds: `${describeActor(c.get('principal'))}（POST /integration-keys/:id/revoke、状態の変更が失敗）`,
+            },
+            '連携の鍵の失効の打ち消しの日誌',
+            `id=${id}`,
+          );
+          throw error;
+        }
+        if (result.status === 'not_found') {
+          await appendJournalOrDrop(
+            stores,
+            {
+              type: 'decision',
+              decision: `連携の鍵を失効できなかった: ${describeIntegrationKey(before)}`,
+              grounds: `${describeActor(c.get('principal'))}（POST /integration-keys/:id/revoke、対象が消えていた）`,
+            },
+            '連携の鍵の失効の打ち消しの日誌',
+            `id=${id}`,
+          );
+          return c.json({ error: 'not found' as const }, 404);
+        }
+        return c.json(integrationKeyResponseSchema.parse({ key: integrationKeyView(result.key) }));
+      },
+    )
+
     // --- 外部イベントの入口（起点③） ----------------------------------------
     /**
      * 自作ツール・ショートカット・CI からクローンへ出来事を届ける。
@@ -5272,6 +5666,12 @@ export function createApp(deps: AppDeps) {
             description: '本文が JSON として不正。',
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
+          403: {
+            description:
+              '連携の鍵の source と、本文の source が違う（連携の鍵でだけ起きる。人間・operator は任意の source を名乗れる）。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+          ...integrationKeyEventResponses(),
         },
       }),
       jsonBody(eventBody, (where) => ({
@@ -5279,8 +5679,23 @@ export function createApp(deps: AppDeps) {
       })),
       (c) => {
         const { source, payload } = c.req.valid('json');
+        const principal = c.get('principal');
+        // **連携の鍵は、本文の source が鍵の source と一致するときだけ通す**（不一致は 403。日誌には書かない）。
+        if (principal.kind === 'integration' && source !== principal.source) {
+          noteIntegrationRefusal(c, 403, '本文の source が鍵の source と違う', principal.keyId);
+          return c.json({ error: '本文の source が、この連携の鍵の source と違う' as const }, 403);
+        }
         const id = randomUUID();
-        clone.post({ type: 'external', id, at: new Date().toISOString(), source, payload });
+        clone.post({
+          type: 'external',
+          id,
+          at: new Date().toISOString(),
+          source,
+          payload,
+          ...(principal.kind === 'integration'
+            ? { via: { keyId: principal.keyId, name: principal.name } }
+            : {}),
+        });
         return c.json({ ok: true, id });
       },
     )
@@ -5310,12 +5725,24 @@ export function createApp(deps: AppDeps) {
             description: '受信箱へ積んだ。',
             content: { 'application/json': { schema: resolver(eventAcceptedResponseSchema) } },
           },
+          403: {
+            description:
+              '連携の鍵の source と、パスの source が違う（連携の鍵でだけ起きる。人間・operator は任意の source を名乗れる）。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
           ...noBodyPostResponses(),
+          ...integrationKeyEventResponses(),
         },
       }),
       deliberateClient,
       async (c) => {
         const source = c.req.param('source');
+        const principal = c.get('principal');
+        // 門番がパスで判定済みだが、ルートの解釈とずれても通さないよう、ここでも突き合わせる（二重の門）。
+        if (principal.kind === 'integration' && source !== principal.source) {
+          noteIntegrationRefusal(c, 403, 'パスの source が鍵の source と違う', principal.keyId);
+          return c.json({ error: 'パスの source が、この連携の鍵の source と違う' as const }, 403);
+        }
         const raw = await c.req.text();
         let payload: unknown = raw;
         try {
@@ -5324,7 +5751,16 @@ export function createApp(deps: AppDeps) {
           // JSON でなければ本文のまま渡す
         }
         const id = randomUUID();
-        clone.post({ type: 'external', id, at: new Date().toISOString(), source, payload });
+        clone.post({
+          type: 'external',
+          id,
+          at: new Date().toISOString(),
+          source,
+          payload,
+          ...(principal.kind === 'integration'
+            ? { via: { keyId: principal.keyId, name: principal.name } }
+            : {}),
+        });
         return c.json({ ok: true, id });
       },
     )
@@ -8407,8 +8843,9 @@ export function createApp(deps: AppDeps) {
         tags: ['archive'],
         summary: 'アーカイブ済み生ログを絞り込んでまとめて tombstone する',
         description:
-          '人間の入口から、アーカイブ済み生ログの本文を絞り込んでまとめて消す' +
-          '（issue #698）。**既定は試算（`dryRun` を省略すると true）で、1件も' +
+          'クローン専用の口（クローンの道具 `archive_remove_many` と同じ関数。' +
+          'CLI・Web UI には出さない）。アーカイブ済み生ログの本文を絞り込んで' +
+          'まとめて消す（issue #698）。**既定は試算（`dryRun` を省略すると true）で、1件も' +
           '消さない。** `sessionIds` / `before` / `minStoredBytes` のどれも' +
           '渡さない呼びは断る——絞り込みが無いのと同じで、1回でアーカイブを' +
           '空にできてしまう。走行中のマネージャーの退避（`skipped.inUse`）と' +
@@ -9330,12 +9767,21 @@ export function createApp(deps: AppDeps) {
             description: '資格が無い。',
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
+          403: {
+            description:
+              '連携の鍵（`altk_`）では呼べない（連携の鍵は外部イベントの口にしか入れない）。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
         },
       }),
       (c) => {
         const principal = c.get('principal');
         if (principal.kind === 'operator') {
           return c.json(meResponseSchema.parse({ kind: 'operator' as const }));
+        }
+        // 連携の鍵はここへ来ない（`authenticate` が既定で拒否する）。来たら二重の門で断る。
+        if (principal.kind === 'integration') {
+          return c.json({ error: '連携の鍵では、この操作はできない' as const }, 403);
         }
         return c.json(
           meResponseSchema.parse({

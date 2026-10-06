@@ -5553,6 +5553,25 @@ class Pool implements ManagerPool {
    */
   readonly #relocatingTo = new Map<string, string>();
   /**
+   * **同じ runner への（移送ではない）復帰の resume を投げている最中の、その runner**
+   * （`managerId` → `runnerId`。Issue #3159）。`#reattach` が `relocating` でないときに resume の前に
+   * 立て、結果が出たら必ず外す（`#endRelocationWindow`）。
+   *
+   * **`#relocatingTo` に同じ runnerId を立てない理由。** あちらの窓は「移送先自身の出来事」
+   * （`fromRunnerId === target`）を、受理されたら処理し直し、受理されなかったら捨てる。同じ runner への
+   * 復帰ではその向きが逆である — 受理されたら古いセッションの畳み（`closed`）を捨て、失敗したら
+   * 従来どおり処理して `lost` にする。同じ値を立てると `#endRelocationWindow` の振り分けが
+   * 反転して、失敗した回の `closed(lost)` を捨てる。だから別の印にして、預かる列（`#deferredEvents`）と
+   * 閉じ方（`#endRelocationWindow`）だけを共有する。
+   *
+   * **預かるのは `closed` だけ**（`session` / `report` / `ask` / `settled` は預けない）。`closed` だけが
+   * 終端状態（`lost` / `done` / `failed`）を台帳へ書き、貸し出しの返却と `#retire` まで進める。ほかの4種は
+   * 古いセッションのものでも事実の報告で、預けて遅らせても得るものが無い一方、受理の後まで遅らせると
+   * 新しいセッションの `ask` / `report` を待たせる。`closed` には世代の識別子が無い（Issue #3170）ので、
+   * 窓の間に届いたものは古い世代と読む。
+   */
+  readonly #sameRunnerResumeWindow = new Map<string, string>();
+  /**
    * 上の窓の間に届いた、元の runner と移送先の runner からの `closed` / `session` / `report` / `ask` /
    * `settled`（**委譲ごとに届いた順の1本の列**。Issue #3097 は `closed`、#3125 が残りの4種。
    * 移送先自身から届いたものも同じ列に預ける＝ #3158）。
@@ -10538,9 +10557,12 @@ class Pool implements ManagerPool {
           record.sessionMissingKind = 'resume-failed';
           // **移送の resume が飛んでいる間、移送先を立てる**（`#relocatingTo` の doc）。
           // 別の契機が resume 中（`#resuming`）なら窓は持たない（そちらの窓を壊さない）。
-          const ownsWindow = relocating && !this.#resuming.has(job.id);
+          // 同じ runner への復帰（`!relocating`）も、`closed` だけを預ける別の窓を持つ（Issue #3159。
+          // `#sameRunnerResumeWindow` の doc）。
+          const ownsWindow = !this.#resuming.has(job.id);
           if (ownsWindow) {
-            this.#relocatingTo.set(job.id, runnerId);
+            if (relocating) this.#relocatingTo.set(job.id, runnerId);
+            else this.#sameRunnerResumeWindow.set(job.id, runnerId);
             windowOpen = true;
           }
           let outcome: ResumeOutcome;
@@ -11116,9 +11138,31 @@ class Pool implements ManagerPool {
   async #endRelocationWindow(managerId: string, moved: boolean): Promise<void> {
     const target = this.#relocatingTo.get(managerId);
     this.#relocatingTo.delete(managerId);
+    const sameRunner = this.#sameRunnerResumeWindow.get(managerId);
+    this.#sameRunnerResumeWindow.delete(managerId);
     const held = this.#deferredEvents.get(managerId) ?? [];
     this.#deferredEvents.delete(managerId);
     for (const { event, fromRunnerId } of held) {
+      // 同じ runner への復帰の窓（Issue #3159）: 受理されたなら、窓の間に届いた `closed` は resume の前の
+      // セッションの畳みなので日誌にだけ残して捨てる。受理されなかったなら従来どおり処理し直す。
+      if (sameRunner !== undefined) {
+        if (!moved) {
+          await this.#onEvent(event, fromRunnerId);
+          continue;
+        }
+        await this.#journal({
+          type: 'exchange',
+          with: 'manager',
+          role: 'inbound',
+          text:
+            `${EXCHANGE_KIND_DECISION_PREFIX}[${managerId}] （同じ runner ${sameRunner} への復帰の resume の最中に届いた、` +
+            `古いセッションの出来事のため無視。resume は受理された）` +
+            (event.type === 'closed'
+              ? `runner 側の終了イベント（status=${event.status}）を受け取った: ${event.reason}`
+              : `古いセッションの ${event.type} を無視した`),
+        });
+        continue;
+      }
       const fromTarget = fromRunnerId === target;
       // 移送先自身の出来事（Issue #3158）: 受理されたなら、宛先はもう移送先なので通常の経路で
       // 処理し直す（移送先自身の出来事として効く）。受理されなかったなら移送先はこの委譲を
@@ -13673,6 +13717,11 @@ class Pool implements ManagerPool {
           this.#deferEvent(event, fromRunnerId);
           return;
         }
+        // 同じ runner への復帰の resume の最中の closed も預かる（Issue #3159。`#sameRunnerResumeWindow`）。
+        if (this.#sameRunnerResumeWindow.get(event.managerId) === fromRunnerId) {
+          this.#deferEvent(event, fromRunnerId);
+          return;
+        }
         const registeredRunnerIdsForClosed = this.#registeredRunnerIds();
         if (
           record.job.runnerId !== undefined &&
@@ -13689,6 +13738,62 @@ class Pool implements ManagerPool {
               `いまの宛先は ${record.job.runnerId}、この出来事は ${fromRunnerId} から）runner 側の` +
               `終了イベント（status=${event.status}）を受け取った: ${event.reason}`,
           });
+          return;
+        }
+        /*
+         * **`lost` に確定した後に届いた `closed` で、status を動かさない（Issue #3161）。**
+         * デーモンが `lost` に確定して `#retire()` した後で、元の runner から `closed` が
+         * 届くと、`#load()` が像を作り直し、下の `record.job.status = event.status` が
+         * `lost` を `done` へ書き換えていた。**`stopped` の後と同じ扱いにする**——
+         * 台帳は `lost` のまま、日誌に残す。
+         *
+         * **`lost` は「成果を誰も確かめていない」状態である。** だから後から
+         * `closed(done)` が届いたことは、確かめる材料として人間に見えている必要がある
+         * （成果が出ている可能性がある。`#notifyUnresumable` の「戻れなかったことは
+         * 仕事が終わっていない証拠ではない」と同じ向き）。`done` のときだけ、クローンの
+         * 受信箱へ `report` を1回だけ出す。`failed` / `lost` は日誌だけ（受信箱へは
+         * 出さない——lost のままで、新しい材料が無い）。
+         *
+         * **「1回だけ」は `Job.lateDoneNotifiedAt` で持つ**（`closed` に冪等キーが無い。
+         * 台帳に置くので、デーモンの再起動をまたいだ二重も止まる）。**印を先に永続して
+         * から出す**——出す前に落ちれば知らせは落ちるが、本文は日誌に先に残してある。
+         * 二重に出るよりは日誌から辿れるほうを採った。
+         *
+         * **この位置にある理由:** 上の runner-id 不一致の捨てを通った後（＝いまの宛先の
+         * runner からの `closed` だけがここへ来る）で、`selfFenced` の枝より前
+         * （`lost` の委譲は引き取り直しの梯子に載せない）。
+         */
+        if (record.job.status === 'lost') {
+          const notifyDone = event.status === 'done' && record.job.lateDoneNotifiedAt === undefined;
+          const notice = notifyDone
+            ? [
+                `この委譲 ${event.managerId} は \`lost\` と確定していたが、後から runner が \`closed\`（status=done）を届けた。`,
+                '台帳の状態は `lost` のまま変えていない。',
+                '**成果が出ている可能性がある** — `lost` は成果を誰も確かめていない状態なので、' +
+                  '成果が実際に出ているか（PR・コミット・送信済みのメール・登録済みの予定・投稿先など）を確かめること。' +
+                  '確かめるまで「終わった」とも「終わっていない」とも言わない。',
+                `closed の reason: ${event.reason}`,
+              ].join('\n')
+            : undefined;
+          await this.#journal({
+            type: 'exchange',
+            with: 'manager',
+            role: 'inbound',
+            text:
+              `${EXCHANGE_KIND_DECISION_PREFIX}[${event.managerId}] （lost 確定済みのため status は動かさない）` +
+              `runner 側の終了イベント（status=${event.status}）を受け取った: ${event.reason}` +
+              (notice !== undefined
+                ? `。done なのでクローンへ知らせる: ${notice}`
+                : event.status === 'done'
+                  ? '。done は既に知らせてあるので重ねて知らせない'
+                  : '。受信箱へは出さない'),
+          });
+          if (notice !== undefined) {
+            record.job.lateDoneNotifiedAt = new Date(this.#now()).toISOString();
+            await this.#persist(record);
+            this.#emit(event.managerId, 'report', notice);
+          }
+          this.#retire(event.managerId);
           return;
         }
         /*

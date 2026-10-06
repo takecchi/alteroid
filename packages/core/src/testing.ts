@@ -70,6 +70,13 @@ import {
   prepareIdentityForWrite,
   prepareLoginRequestForWrite,
 } from './auth-input.js';
+import {
+  compareIntegrationKeyOrder,
+  integrationKeyRecordSchema,
+  prepareIntegrationKeyForWrite,
+  type IntegrationKeyRecord,
+  type IntegrationKeyStore,
+} from './integration-key.js';
 import type {
   CredentialVaultStore,
   EnvProfileEntry,
@@ -1238,6 +1245,45 @@ export function createMemoryStores(): Stores {
   const compareAccessTokenOrder = (a: AccessTokenRecord, b: AccessTokenRecord): number =>
     compareCreatedAt(a, b) || compareCodeUnits(a.id, b.id);
 
+  const integrationKeyRows = new Map<string, IntegrationKeyRecord>();
+  const integrationKeys: IntegrationKeyStore = {
+    async putIntegrationKey(key) {
+      // 本物（fs / pg）と同じくスキーマを通し、NUL を整える。検査から書き込みまでの間に await を挟まない。
+      const parsed = prepareIntegrationKeyForWrite(integrationKeyRecordSchema.parse(key));
+      if (integrationKeyRows.has(parsed.id)) throw new Error('integration key: 同じ id が既に在る');
+      for (const row of integrationKeyRows.values()) {
+        if (row.sha256 === parsed.sha256) throw new Error('integration key: 同じ値の鍵が既に在る');
+      }
+      integrationKeyRows.set(parsed.id, parsed);
+    },
+    async findIntegrationKeyBySha256(sha256) {
+      if (hasNul(sha256)) return null;
+      return [...integrationKeyRows.values()].find((row) => row.sha256 === sha256) ?? null;
+    },
+    async getIntegrationKey(id) {
+      if (hasNul(id)) return null;
+      return integrationKeyRows.get(id) ?? null;
+    },
+    async listIntegrationKeys() {
+      return [...integrationKeyRows.values()].sort(compareIntegrationKeyOrder);
+    },
+    async markIntegrationKeyUsed(id, at) {
+      if (hasNul(id)) return;
+      const row = integrationKeyRows.get(id);
+      if (row === undefined || row.revokedAt !== null) return;
+      integrationKeyRows.set(id, integrationKeyRecordSchema.parse({ ...row, lastUsedAt: at }));
+    },
+    async revokeIntegrationKey(id, at) {
+      if (hasNul(id)) return { status: 'not_found' };
+      const row = integrationKeyRows.get(id);
+      if (row === undefined) return { status: 'not_found' };
+      if (row.revokedAt !== null) return { status: 'already_revoked', key: row };
+      const revoked = integrationKeyRecordSchema.parse({ ...row, revokedAt: at });
+      integrationKeyRows.set(id, revoked);
+      return { status: 'revoked', key: revoked };
+    },
+  };
+
   const auth: AuthStore = {
     async listAccounts() {
       return [...accounts.values()].sort(compareAccountOrder);
@@ -2064,6 +2110,7 @@ export function createMemoryStores(): Stores {
     archive,
     sessions,
     auth,
+    integrationKeys,
     permissionGrants,
     profile,
     credentials,

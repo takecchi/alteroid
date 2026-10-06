@@ -239,13 +239,18 @@ describe('alteroid mcp set / clear', () => {
     await writeFile(path, JSON.stringify(next), 'utf8');
     const read = captureStdout();
 
-    await mcpSetCommand(path, { yes: true });
+    await expect(mcpSetCommand(path, { yes: true })).rejects.toThrow(
+      'runner への反映が一部失敗しました',
+    );
 
     const put = sent.find((s) => s.method === 'PUT');
     expect(put?.path).toBe('/mcp-servers');
     expect(put?.body).toEqual(next);
     const text = read();
-    expect(text).toContain('MCP サーバの登録を差し替えました (sha256 abcdefabcdef)');
+    expect(text).toContain(
+      '警告: MCP サーバの登録を保存しましたが、一部の runner へ反映できていません (sha256 abcdefabcdef)',
+    );
+    expect(text).not.toContain('差し替えました');
     expect(text).toContain('  足した: notion');
     expect(text).toContain('  外した: linear');
     expect(text).toContain('  置き直した: github');
@@ -312,7 +317,38 @@ describe('alteroid mcp set / clear', () => {
     expect(text).toContain('  runner-a: 外しました');
   });
 
-  it('配った runner が無ければ、無いと言う（黙らない）', async () => {
+  it('ok でも runner の指紋が保存と違えば、成功の見出しを出さず警告にして例外にする（#3157）', async () => {
+    setReply('GET', '/mcp-servers', { status: 200, body: STORED });
+    setReply('PUT', '/mcp-servers', {
+      status: 200,
+      body: {
+        names: ['github'],
+        updatedAt: 'x',
+        sha256: 'aaaaaaaaaaaa',
+        appliesFrom: 'y',
+        runners: [
+          {
+            runnerId: 'runner-a',
+            ok: true,
+            mcpServers: { names: ['github'], sha256: 'bbbbbbbbbbbb' },
+          },
+        ],
+      },
+    });
+    const read = captureStdout();
+
+    await expect(mcpClearCommand({ yes: true })).rejects.toThrow(
+      'runner への反映が一部失敗しました',
+    );
+
+    const text = read();
+    expect(text).toContain(
+      '警告: MCP サーバの登録を保存しましたが、一部の runner へ反映できていません',
+    );
+    expect(text).toContain('届きましたが指紋が違います');
+  });
+
+  it('配った runner が無ければ、無いと言う（黙らない）。失敗ではないので正常に返る', async () => {
     setReply('GET', '/mcp-servers', { status: 200, body: { mcpServers: {} } });
     setReply('PUT', '/mcp-servers', {
       status: 200,

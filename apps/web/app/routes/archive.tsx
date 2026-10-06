@@ -1,6 +1,7 @@
 import { JournalTabs } from '~/components/group-tabs';
 import { LoadError } from '~/components/load-error';
 import { useState } from 'react';
+import { Link } from 'react-router';
 
 import {
   Page,
@@ -39,12 +40,12 @@ import type { ArchiveEntry, ArchiveSessionSummary } from '@alteroid/logic';
  * ジャーの画面からは辿れない古い退避も含むので、`manager-detail` に埋めると
  * 到達できない行が残る。
  *
- * **本文（生ログ全体）を読む画面はここでは足していない。** #776 の範囲は
- * 「消す操作を対話面に出す」ことで、行の特定に要る情報（id / sessionId /
- * 時刻 / 使用バイト数 / 削除済みかどうか）は一覧だけで足りる——同じ判断は
- * CLI 側の `/archive sessions`（このページの「sessionId ごとの集計」）が
- * 動機だったものと同じである。本文を読みたいときは CLI の `/archive <id>`
- * か `GET /archive/:id` を使うこと。
+ * **本文（生ログ全体）を読む画面は、#776 の時点では足していなかった。** #776 の範囲は
+ * 「消す操作を対話面に出す」ことで、行の特定に要る情報（id / sessionId / 時刻 / 使用バイト数 /
+ * 削除済みかどうか）は一覧だけで足りる、という判断だった。**#3137 で足した**: PRD の入口の等価性
+ * 「見えるもの（日報・日誌・生ログ）は同じ」に照らすと、CLI の `/archive <id>` で読める本文が
+ * Web で読めないのは欠落だった。行の「本文を読む」から `archive-detail.tsx`（`/archive/:id`）へ
+ * 行く。読むだけで、消す操作は引き続きこの一覧の行にある。
  */
 /** 空のときの文言。何が起きるとここに出て、出たあと何ができるかを言う（#2792）。 */
 const ARCHIVE_EMPTY =
@@ -234,6 +235,14 @@ function EntryRow({ entry }: { entry: ArchiveEntry }) {
         )}
       </div>
       <div className="mt-1 text-muted-foreground">使用量 {entry.storedBytes}バイト</div>
+      {!removed && (
+        <div className="mt-2">
+          {/* 読むだけの画面（#3137）。消された行は読める本文が無いので出さない。 */}
+          <Link to={`/archive/${encodeURIComponent(entry.id)}`} className="underline">
+            本文を読む
+          </Link>
+        </div>
+      )}
       <TechnicalIds
         rows={[
           { label: '退避の識別子', value: entry.id },

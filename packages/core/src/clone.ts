@@ -149,6 +149,8 @@ import {
   buildDailyReportPrompt,
   buildDistillPrompt,
   buildExternalEventPrompt,
+  EXTERNAL_EVENT_FRAMING,
+  externalViaLine,
   buildSelfInitiativePrompt,
   buildTimerPrompt,
 } from './prompt.js';
@@ -4896,6 +4898,8 @@ class Clone implements CloneHost {
         // **切らずに書く**（issue #1535。`EXTERNAL_JOURNAL_LIMIT` の doc）。
         // プロンプトと台帳が「全文は日誌に在る」と名乗る、その在り処である。
         summary: journalPayload(event.payload),
+        // **どの連携の鍵（id と名前）経由か**（#3113）。鍵の値は書かない。
+        ...(event.via === undefined ? {} : { via: event.via }),
       });
     }
   }
@@ -8681,7 +8685,13 @@ class Clone implements CloneHost {
         await this.#journalIncomingBody(event);
         // **片付け済みの配り直しはここへ来ない**（`#pump` が畳む。
         // `#foldClosedRedelivery`）。
-        await this.#runInternal(buildExternalEventPrompt({ source: event.source, body }));
+        await this.#runInternal(
+          buildExternalEventPrompt({
+            source: event.source,
+            body,
+            ...(event.via === undefined ? {} : { viaKeyNames: [event.via.name] }),
+          }),
+        );
         return;
       }
 
@@ -12965,8 +12975,13 @@ function externalBatchPrompt(events: ExternalEvent[]): string {
   const body = renderPayload(head.payload, head.at);
   const timestamps = events.map((event) => event.at).join(' / ');
 
+  const viaNames = events.flatMap((event) => (event.via === undefined ? [] : [event.via.name]));
+  const via = externalViaLine(viaNames, viaNames.length < events.length);
+
   return [
     `[system] 外部から出来事が届いた（source: ${head.source}）。人間はこれを見ていない。`,
+    ...(via === null ? [] : [via]),
+    EXTERNAL_EVENT_FRAMING,
     `処理待ちのあいだに、同じ中身の合図を続けて **${events.length} 件** まとめて渡す` +
       '（本文は1回だけ。全件で `source` と中身が一致している）。',
     `届いた時刻（届いた順）: ${timestamps}`,

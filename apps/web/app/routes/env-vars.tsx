@@ -31,8 +31,8 @@ import {
   DropdownMenuTrigger,
 } from '@alteroid/ui/shadcn';
 import { useCredentials, useRemoveEnvVar, useSetEnvVar } from '@alteroid/swr';
-import { formatDateTime } from '@alteroid/logic';
-import type { EnvVarScope, EnvVarView } from '@alteroid/logic';
+import { failedRunnerPushes, formatDateTime } from '@alteroid/logic';
+import type { EnvVarScope, EnvVarUpdateResult, EnvVarView } from '@alteroid/logic';
 
 /**
  * `/env-vars` — alteroid 自身の運用設定・マネージャーへ降ろす環境変数（旧
@@ -101,11 +101,13 @@ function EnvVarList() {
   const { data, error, isLoading, isValidating, mutate } = useCredentials();
   const removeEnvVar = useRemoveEnvVar();
   const [removeFailure, setRemoveFailure] = useState<unknown>(undefined);
+  const [removeResult, setRemoveResult] = useState<EnvVarUpdateResult | undefined>(undefined);
 
   async function remove(name: string) {
     setRemoveFailure(undefined);
+    setRemoveResult(undefined);
     try {
-      await removeEnvVar(name);
+      setRemoveResult(await removeEnvVar(name));
     } catch (caught) {
       setRemoveFailure(caught);
     }
@@ -134,6 +136,9 @@ function EnvVarList() {
         className="m-4"
       />
       <ErrorNote error={removeFailure} className="m-4" />
+      {removeResult !== undefined && (
+        <RunnerPushWarning update={removeResult} saved="外した" className="m-4" />
+      )}
       {isLoading ? (
         <Spinner />
       ) : listUnavailable ? null : credentials.length === 0 ? (
@@ -148,6 +153,45 @@ function EnvVarList() {
         </div>
       )}
     </Card>
+  );
+}
+
+/**
+ * 保存はできたが、一部の実行環境へ反映できていないときの警告（#3157）。**成功の見出しは出さない**
+ * （全部届いたときは何も出さない。従来どおり一覧が更新されるだけ）。実行環境が0台のときは
+ * 失敗ではないので出さない（`@alteroid/logic` の `failedRunnerPushes` の doc）。
+ * 失敗した実行環境ごとの理由を出し、いつ追いつくかを言う。
+ */
+function RunnerPushWarning({
+  update,
+  saved,
+  className,
+}: {
+  update: EnvVarUpdateResult;
+  /** 「正本に〇〇」の〇〇（置いた・外した・保存した）。 */
+  saved: string;
+  className?: string;
+}) {
+  const failed = failedRunnerPushes(update);
+  if (failed.length === 0) return null;
+  return (
+    <div
+      role="alert"
+      className={`flex flex-col gap-1 rounded-md border border-warn/40 bg-warn/10 px-3 py-2 text-xs text-warn ${className ?? ''}`}
+    >
+      <p className="font-medium">
+        {`正本には${saved}が、${String(failed.length)} 台の実行環境へ反映できていない。`}
+      </p>
+      <ul className="flex flex-col gap-1">
+        {failed.map((runner) => (
+          <li key={runner.runnerId} className="break-words">
+            <span className="font-mono break-all">{runner.runnerId}</span>:{' '}
+            {runner.error ?? '理由不明'}
+          </li>
+        ))}
+      </ul>
+      <p className="text-[11px]">失敗した実行環境へは、次につなぎ直したときに渡す。</p>
+    </div>
   );
 }
 
@@ -237,6 +281,7 @@ function EditEnvVarDialog({
   const [scope, setScope] = useState<EnvVarScope>(entry.scope);
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<unknown>(undefined);
+  const [result, setResult] = useState<EnvVarUpdateResult | undefined>(undefined);
 
   const canSave = value.length > 0;
 
@@ -246,6 +291,7 @@ function EditEnvVarDialog({
       setValue(initialValue);
       setScope(entry.scope);
       setFailure(undefined);
+      setResult(undefined);
     }
     onOpenChange(next);
   }
@@ -254,9 +300,12 @@ function EditEnvVarDialog({
     if (!canSave) return;
     setBusy(true);
     setFailure(undefined);
+    setResult(undefined);
     try {
-      await setEnvVar({ name: entry.name, value, scope });
-      onOpenChange(false);
+      const update = await setEnvVar({ name: entry.name, value, scope });
+      // 一部の実行環境へ反映できていなければ閉じない（閉じると警告ごと消えて、成功と見分けが付かない）。
+      if (failedRunnerPushes(update).length > 0) setResult(update);
+      else onOpenChange(false);
     } catch (caught) {
       setFailure(caught);
     } finally {
@@ -299,6 +348,7 @@ function EditEnvVarDialog({
             </Select>
           </label>
           <ErrorNote error={failure} />
+          {result !== undefined && <RunnerPushWarning update={result} saved="保存した" />}
         </div>
         <DialogFooter>
           <Button size="sm" onClick={() => handleOpenChange(false)}>
@@ -333,6 +383,7 @@ function AddEnvVarForm() {
   const [secret, setSecret] = useState(true);
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<unknown>(undefined);
+  const [result, setResult] = useState<EnvVarUpdateResult | undefined>(undefined);
 
   const canSubmit = name.trim().length > 0 && value.length > 0;
 
@@ -340,8 +391,9 @@ function AddEnvVarForm() {
     if (!canSubmit) return;
     setBusy(true);
     setFailure(undefined);
+    setResult(undefined);
     try {
-      await setEnvVar({ name: name.trim(), value, scope, secret });
+      setResult(await setEnvVar({ name: name.trim(), value, scope, secret }));
       setName('');
       setValue('');
       // **scope・secret は次の1件のために引き継ぐ。** 同じ設定で複数を続けて
@@ -394,6 +446,7 @@ function AddEnvVarForm() {
         </label>
 
         <ErrorNote error={failure} />
+        {result !== undefined && <RunnerPushWarning update={result} saved="置いた" />}
 
         <div>
           <Button

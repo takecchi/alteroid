@@ -678,6 +678,12 @@ export const inboxEventSchema = z.discriminatedUnion('type', [
      * なので外部が名乗れる」という代償を広げるものではない。
      */
     identity: z.string().optional(),
+    /**
+     * **連携の鍵（`integration-key.ts`）経由で届いたとき、その鍵の id と名前**（#3113）。鍵の値は持たない。
+     * 日誌の `external_event` に写し、プロンプトに名前を添える。**`identity` と同じく、リクエスト本文からは
+     * 立てられない**（デーモンが、門番の解決した principal から詰める）。
+     */
+    via: z.object({ keyId: z.string(), name: z.string() }).optional(),
   }),
   z.object({
     type: z.literal('self_initiative'),
@@ -1803,6 +1809,8 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
     at: isoDateTime,
     /** どこから届いたか（webhook の呼び出し元が名乗る名前）。 */
     source: z.string(),
+    /** 連携の鍵経由で届いたとき、その鍵の id と名前（#3113）。鍵の値は書かない。 */
+    via: z.object({ keyId: z.string(), name: z.string() }).optional(),
     /**
      * 届いた中身。長いものは切って入る。
      *
@@ -3882,6 +3890,17 @@ export const jobSchema = z.object({
    * 側ではなく `judgeLease` の返り値の種類として持つ。
    */
   lease: jobLeaseSchema.optional(),
+  /**
+   * **`lost` に確定した後に `closed(status: 'done')` が届き、クローンへ知らせた時刻**
+   * （Issue #3161）。`manager.ts` の `case 'closed'` の「lost の後の closed」の項。
+   *
+   * `closed` には冪等キーが無いので、同じ委譲へ `done` が二重に届いたときに知らせを
+   * 1回に保つ印をここへ持つ。**台帳（`Job`）に置くのはデーモンの再起動をまたいでも
+   * 効かせるため**——runner は SSE の再接続で `Last-Event-ID` から同じ出来事を配り直す
+   * ことがあり（`runner-protocol.ts` の `reportId` の doc）、プロセス内の集合では
+   * 再起動の後の二重を止められない。**欠けている＝まだ知らせていない。**
+   */
+  lateDoneNotifiedAt: isoDateTime.optional(),
   /**
    * **この委譲のセッションが最後に実際に置かれた器**（runner の `/health` の
    * `instanceId`）。器の入れ替えを、話しかけられた委譲へ告げるかの判定材料である

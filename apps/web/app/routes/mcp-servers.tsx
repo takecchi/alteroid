@@ -18,7 +18,7 @@ import {
   Textarea,
 } from '@alteroid/ui';
 import { useSetMcpServers, useMcpServers, ApiError } from '@alteroid/swr';
-import { formatDateTime } from '@alteroid/logic';
+import { formatDateTime, hasMcpPushProblem } from '@alteroid/logic';
 import type {
   McpServerEntry,
   McpServers,
@@ -361,14 +361,24 @@ function UpdateReport({ before, update }: { before: string[]; update: McpServers
   const added = update.names.filter((name) => !beforeSet.has(name));
   const removed = before.filter((name) => !afterSet.has(name)).sort();
   const cleared = update.names.length === 0;
+  // 失敗・または届いた指紋が保存と違う実行環境が1台でも在れば、成功の見出しにしない。
+  const partial = hasMcpPushProblem(update);
 
   return (
     <div className="flex flex-col gap-2 text-xs">
-      <p className="font-medium text-ok">
-        {cleared
-          ? 'MCP 連携の登録を外した。'
-          : `MCP 連携の登録を差し替えた（確認用の値 ${update.sha256 ?? '?'}）。`}
-      </p>
+      {partial ? (
+        <p role="alert" className="font-medium text-warn">
+          {cleared
+            ? 'MCP 連携の登録は外したが、一部の実行環境へ反映できていない（保存はできている）。'
+            : `MCP 連携の登録は保存したが、一部の実行環境へ反映できていない（確認用の値 ${update.sha256 ?? '?'}）。`}
+        </p>
+      ) : (
+        <p className="font-medium text-ok">
+          {cleared
+            ? 'MCP 連携の登録を外した。'
+            : `MCP 連携の登録を差し替えた（確認用の値 ${update.sha256 ?? '?'}）。`}
+        </p>
+      )}
       {added.length > 0 && <p className="break-words">足した: {added.join(', ')}</p>}
       {removed.length > 0 && <p className="break-words">外した: {removed.join(', ')}</p>}
       <ul className="flex flex-col gap-1" aria-label="実行環境ごとの反映結果">

@@ -318,6 +318,8 @@ export {
   buildDailyReportPrompt,
   buildDistillPrompt,
   buildExternalEventPrompt,
+  EXTERNAL_EVENT_FRAMING,
+  externalViaLine,
   buildManagerSystemPrompt,
   buildSelfInitiativePrompt,
   buildTimerPrompt,
@@ -929,6 +931,7 @@ export {
   type ProfileService,
   type ProfileServiceOptions,
 } from './profile-service.js';
+export { nonBlankString } from './non-blank-string.js';
 /**
  * 認証トークンのプール（Issue #393「PR1 プールの器」）。**回さない。** 検知も
  * 切替もここには無い——器・設定・入出力の口だけを持つ。
@@ -1449,6 +1452,29 @@ export {
 } from './auth-input.js';
 export { verifyAuthNulContract } from './auth-nul-contract.js';
 
+/** 連携の鍵（外のサービスへ渡す、固定の1 source で外部イベントを送るだけの鍵）。 */
+export {
+  DEFAULT_INTEGRATION_MAX_BODY_BYTES,
+  DEFAULT_INTEGRATION_RATE_PER_MINUTE,
+  INTEGRATION_KEY_LAST_USED_THROTTLE_MS,
+  INTEGRATION_KEY_PREFIX,
+  INTEGRATION_SOURCE_PATTERN,
+  compareIntegrationKeyOrder,
+  integrationKeyFingerprint,
+  integrationKeyLimits,
+  integrationKeyRecordSchema,
+  integrationSourceSchema,
+  isIntegrationKeyUsable,
+  issueIntegrationKeyValue,
+  looksLikeIntegrationKey,
+  prepareIntegrationKeyForWrite,
+  resolveIntegrationKey,
+  type IntegrationKeyRecord,
+  type IntegrationKeyStore,
+  type IntegrationLimits,
+  type RevokeIntegrationKeyOutcome,
+} from './integration-key.js';
+export { verifyIntegrationKeyStoreContract } from './integration-key-contract.js';
 export {
   ATTACHMENT_IMAGE_MEDIA_TYPES,
   ATTACHMENT_MAX_FILE_BYTES_DEFAULT,

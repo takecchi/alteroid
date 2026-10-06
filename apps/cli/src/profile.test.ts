@@ -355,13 +355,13 @@ function updateBody(
     })),
     composed: { clone: { sha256: 'cc11' }, runner: { sha256: 'rr22' } },
     clone: { ok: true, names: ['GH_TOKEN'] },
-    runners: [{ runnerId: 'runner-a', ok: false, error: 'timeout', output: 'line1\nline2' }],
+    runners: [{ runnerId: 'runner-a', ok: true, names: ['GH_TOKEN'] }],
     ...overrides,
   };
 }
 
 describe('alteroid profile set', () => {
-  it('ファイルの内容で1行を PUT し、成功・失敗それぞれの反映結果と gh/git の案内を出す', async () => {
+  it('ファイルの内容で1行を PUT し、反映結果と gh/git の案内を出す。全部届いたなら成功の見出しで正常に返る', async () => {
     setReply('GET', '/profile', { status: 200, body: profileBody([]) });
     setReply('PUT', '/profile/default', {
       status: 200,
@@ -379,10 +379,55 @@ describe('alteroid profile set', () => {
     expect(text).toContain('  撒く先: all（共通）');
     expect(text).toContain('  合成後の指紋: クローン用 cc11 / runner 用 rr22');
     expect(text).toContain('  クローン: 反映しました（GH_TOKEN）');
-    expect(text).toContain('  runner-a: 反映できませんでした — timeout');
-    expect(text).toContain('    | line1');
-    expect(text).toContain('    | line2');
+    expect(text).toContain('  runner-a: 反映しました（GH_TOKEN）');
+    expect(text).not.toContain('警告');
     expect(text).toContain('これから起こす仕事には即座に効きます');
+  });
+
+  it('一部の runner へ反映できなかったら、成功の見出しを出さず警告にして、文を出した後で例外にする（#3157）', async () => {
+    setReply('GET', '/profile', { status: 200, body: profileBody([]) });
+    setReply('PUT', '/profile/default', {
+      status: 200,
+      body: updateBody([{ name: 'default', scope: 'all' }], {
+        runners: [
+          { runnerId: 'runner-a', ok: true },
+          { runnerId: 'runner-b', ok: false, error: 'timeout', output: 'line1\nline2' },
+        ],
+      }),
+    });
+    const dir = await makeTempDir('alteroid-profile-set-');
+    const path = join(dir, 'profile.sh');
+    await writeFile(path, 'export FOO=bar\n', 'utf8');
+    const read = captureStdout();
+
+    await expect(profileSetCommand(undefined, { file: path })).rejects.toThrow(
+      'runner への反映が一部失敗しました',
+    );
+
+    const text = read();
+    expect(text).toContain(
+      '警告: プロファイルの行 default は保存しましたが、一部の runner へ反映できていません',
+    );
+    expect(text).not.toContain('を更新しました');
+    expect(text).toContain('  runner-a: 反映しました');
+    expect(text).toContain('  runner-b: 反映できませんでした — timeout');
+    expect(text).toContain('    | line1');
+  });
+
+  it('runner が0台（配る先なし）は失敗ではない。成功の見出しのまま正常に返る（#3157）', async () => {
+    setReply('GET', '/profile', { status: 200, body: profileBody([]) });
+    setReply('PUT', '/profile/default', {
+      status: 200,
+      body: updateBody([{ name: 'default', scope: 'all' }], { runners: [] }),
+    });
+    const dir = await makeTempDir('alteroid-profile-set-');
+    const path = join(dir, 'profile.sh');
+    await writeFile(path, 'export FOO=bar\n', 'utf8');
+    const read = captureStdout();
+
+    await profileSetCommand(undefined, { file: path });
+
+    expect(read()).toContain('プロファイルの行 default を更新しました');
   });
 
   it('名前と --scope を PUT /profile/:name へ送る。--scope を省くと scope を送らない', async () => {

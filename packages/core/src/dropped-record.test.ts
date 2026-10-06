@@ -932,6 +932,12 @@ describe('inboxEventShape の名簿（schema に足した型・欄の足し忘�
           '呼ぶ経路でしか立てられず外部からは立てられない欄だが、跡に載せるかは' +
           '別の判断——いまは載せていない。',
       },
+      via: {
+        emit: 'never',
+        why:
+          '連携の鍵経由で届いたときの鍵の id と名前（#3113）。名前は人間が付けたラベル（自由文）で、' +
+          'この関数は参照しない（`identity` と同じ「単に本体が触れていない欄」）。鍵の値は持たない。',
+      },
     },
     self_initiative: {
       reason: { emit: 'size-unnamed' },
@@ -1024,6 +1030,7 @@ describe('inboxEventShape の名簿（schema に足した型・欄の足し忘�
       source: SECRET,
       payload: { token: SECRET },
       identity: SECRET,
+      via: { keyId: SECRET, name: SECRET },
     },
     self_initiative: {
       type: 'self_initiative',
@@ -1935,6 +1942,12 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
       // （source/summary はどちらも size() 経由）なので、この型自身の欄が
       // 毒を運ぶことはできない（PR #829 の本文で確かめた内容と同じ）。
       summary: { emit: 'size-unnamed' },
+      via: {
+        emit: 'never',
+        why:
+          '連携の鍵経由のときの鍵の id と名前（#3113）。名前は人間が付けたラベル（自由文）なので、' +
+          '落ちた記録の跡には載せない（この関数は参照しない）。',
+      },
     },
     worker_wait: {
       openedAt: { emit: 'tag', token: 'openedAt' },
@@ -2299,6 +2312,7 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
       type: 'external_event',
       source: SECRET,
       summary: SECRET,
+      via: { keyId: SECRET, name: SECRET },
     },
     worker_wait: {
       type: 'worker_wait',

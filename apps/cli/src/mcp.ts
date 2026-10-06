@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { stdin, stdout } from 'node:process';
 
 import { maskUrl } from '@alteroid/core/mask-url';
+import { hasMcpPushProblem } from '@alteroid/logic';
 
 import { confirmIrreversible } from './confirm.js';
 import { createClient } from './client.js';
@@ -275,6 +276,12 @@ async function put(target: Target, servers: McpServers, beforeNames: string[]): 
   if (!response.ok) await fail(response, target);
   const result = (await response.json()) as McpServersUpdateView;
   stdout.write(renderMcpUpdate(result, beforeNames));
+  if (hasMcpPushProblem(result)) {
+    // 見出しと runner ごとの結果は出した。保存は済んでいる（失敗した runner へは次の名乗りで降ろし直す）。
+    throw new Error(
+      'runner への反映が一部失敗しました（MCP 連携の登録の保存は済んでいます。失敗した runner へは次に名乗ったときに降ろし直します）',
+    );
+  }
 }
 
 /**
@@ -293,10 +300,15 @@ export function renderMcpUpdate(result: McpServersUpdateView, beforeNames: strin
   const kept = result.names.filter((name) => before.has(name));
 
   const lines: string[] = [];
+  const partial = hasMcpPushProblem(result);
   lines.push(
     result.names.length === 0
-      ? 'MCP サーバの登録を外しました。'
-      : `MCP サーバの登録を差し替えました (sha256 ${result.sha256 ?? '?'})`,
+      ? partial
+        ? '警告: MCP サーバの登録を外しましたが、一部の runner へ反映できていません。'
+        : 'MCP サーバの登録を外しました。'
+      : partial
+        ? `警告: MCP サーバの登録を保存しましたが、一部の runner へ反映できていません (sha256 ${result.sha256 ?? '?'})`
+        : `MCP サーバの登録を差し替えました (sha256 ${result.sha256 ?? '?'})`,
   );
   if (added.length > 0) lines.push(`  足した: ${added.join(', ')}`);
   if (removed.length > 0) lines.push(`  外した: ${removed.join(', ')}`);

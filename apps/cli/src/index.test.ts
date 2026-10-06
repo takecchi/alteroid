@@ -390,6 +390,22 @@ describe('サブコマンドの登録（入口が在ること）', () => {
     ]);
   });
 
+  /** **`alteroid integration` が入口として実在すること**（#3113 段2）。 */
+  it('alteroid integration は list / create / revoke を持ち、create は --name と --source を要る', () => {
+    expect(subcommandNames('integration')).toEqual(['create', 'list', 'revoke']);
+    const integration = program.commands.find((c) => c.name() === 'integration');
+    const create = integration?.commands.find((c) => c.name() === 'create');
+    expect(create?.options.map((o) => [o.long, o.mandatory])).toEqual([
+      ['--name', true],
+      ['--source', true],
+      ['--expires', false],
+      ['--max-body-bytes', false],
+      ['--rate-per-minute', false],
+    ]);
+    const revoke = integration?.commands.find((c) => c.name() === 'revoke');
+    expect((revoke?.options ?? []).map((o) => o.long)).toEqual(['--yes']);
+  });
+
   /**
    * **`--kind` / `--title` が無いと、新しいやり方を CLI から1件も作れない。**
    * `PracticeStore.write` は `slug`/`kind`/`title`/`content` の全文置換で、
