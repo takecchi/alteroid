@@ -66,6 +66,7 @@ export function UnreadableRowsNote({
                 variant="danger"
                 size="sm"
                 loading={busyId === row.id}
+                aria-label={`${row.id} の行を消す`}
                 onClick={() => setConfirmingId(row.id)}
               >
                 この行を消す
