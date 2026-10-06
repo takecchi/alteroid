@@ -62,6 +62,7 @@ import { confirmInRepl } from './confirm.js';
 import {
   AttachmentDraft,
   createAttachmentDraft,
+  type DraftFile,
   attachmentLinesOf,
   describeAttachment,
   uploadAttachment,
@@ -149,6 +150,7 @@ export async function chatCommand(): Promise<void> {
 
       // 添えかけがあれば先に上げる。失敗したら送らず、添えかけを残して理由を出す。
       let attachmentIds: string[] | undefined;
+      let sentFiles: DraftFile[] = [];
       if (draft.count > 0) {
         const uploaded = await uploadDraft(draft, (file) => uploadAttachment(target, file));
         if (!uploaded.ok) {
@@ -159,12 +161,13 @@ export async function chatCommand(): Promise<void> {
           continue;
         }
         attachmentIds = uploaded.uploaded.map((a) => a.id);
+        sentFiles = uploaded.files;
         for (const a of uploaded.uploaded) stdout.write(`  ${describeAttachment(a)}\n`);
       }
       conversationId = await sendMessage(target, line, conversationId, undefined, {
         ...(attachmentIds === undefined ? {} : { attachments: attachmentIds }),
-        // サーバが発言を受けたら添えかけを空にする（受けなかったら残す）。
-        onAccepted: () => draft.clear(),
+        // サーバが発言を受けたら、送った分の添えかけを外す（受けなかったら残す）。
+        onAccepted: () => draft.discard(sentFiles),
       });
     }
   } finally {
