@@ -19,6 +19,7 @@ function chatBatch(store: AttachmentStore, ids: string[], conversationId: string
     isBoundElsewhere: (meta) =>
       meta.conversationId !== undefined && meta.conversationId !== conversationId,
     conflictMessage: '別の会話に結び付いた添付は使えない',
+    serializeKey: `conversation:${conversationId}`,
   });
 }
 
@@ -75,6 +76,7 @@ describe('checkAndBindAttachments は、400 で断った回に添付を結び付
         isBoundElsewhere: (meta) =>
           meta.conversationId !== undefined || meta.externalEventId !== undefined,
         conflictMessage: 'すでに別の宛先に結び付いた添付は使えない',
+        serializeKey: `externalEvent:${eventId}`,
       });
     const [first, second] = await Promise.all([
       eventBatch([b.id], 'ev-2'),
@@ -110,5 +112,65 @@ describe('checkAndBindAttachments は、400 で断った回に添付を結び付
     // 先に通った発言が結んだ A は、結ばれたまま残る。
     expect((await store.getMeta(a.id))?.conversationId).toBe('conv-1');
     expect((await store.getMeta(b.id))?.conversationId).toBe('conv-2');
+  });
+});
+
+describe('checkAndBindAttachments は、同じ宛先への呼びを直列に通す（#3633）', () => {
+  it('断る回の戻しが、同じ会話に同時に届いて通った別の発言の添付まで外さない', async () => {
+    const real = createMemoryStores().attachments;
+    const x = await real.put({ name: 'x.png', mediaType: 'image/png', bytes: PNG });
+    const y = await real.put({ name: 'y.png', mediaType: 'image/png', bytes: PNG });
+
+    // 呼び A: [x, y] を conv-1 へ。検査の後、bind の前に y が conv-2 に取られ、bind は x を結んで y で conflict。
+    // 戻し（unbind）の直前に、呼び B: [x] を conv-1 へ（x は A が結んだ分なので、B にとっては「結び済み」）が届く。
+    // 実時間は待たない。並行の順序はゲートの Promise で決める。
+    let releaseBind!: () => void;
+    let releaseUnbind!: () => void;
+    let unbindReached!: () => void;
+    const bindGate = new Promise<void>((resolve) => (releaseBind = resolve));
+    const unbindGate = new Promise<void>((resolve) => (releaseUnbind = resolve));
+    const reachedUnbind = new Promise<void>((resolve) => (unbindReached = resolve));
+    const gated: AttachmentStore = Object.assign(Object.create(real) as AttachmentStore, {
+      getMeta: (id: string) => real.getMeta(id),
+      bind: async (ids: readonly string[], conversationId: string) => {
+        await bindGate;
+        return real.bind(ids, conversationId);
+      },
+      unbind: async (ids: readonly string[], target: Parameters<AttachmentStore['unbind']>[1]) => {
+        unbindReached();
+        await unbindGate;
+        return real.unbind(ids, target);
+      },
+    });
+
+    const a = chatBatch(gated, [x.id, y.id], 'conv-1');
+    await Promise.resolve();
+    expect((await real.bind([y.id], 'conv-2')).bound).toEqual([y.id]);
+    releaseBind();
+    await reachedUnbind; // A は x を結んで y の conflict で断る途中（戻す直前）
+    const b = chatBatch(real, [x.id], 'conv-1');
+    // B が（直列化されずに）通れる状態なら、ここまでに終わっている。マクロタスク1つ分だけ譲って流し切る（時間は待たない）。
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    releaseUnbind();
+    const [resultA, resultB] = await Promise.all([a, b]);
+    expect(resultA.ok).toBe(false);
+    expect(resultB.ok).toBe(true);
+
+    // B は通って発言になる。その添付 x は conv-1 に結んだままのはず（外れると、1 時間後の prune で消える）。
+    expect((await real.getMeta(x.id))?.conversationId).toBe('conv-1');
+  });
+
+  it('先の呼びが例外で落ちても、同じ宛先の次の呼びは通る（鍵が詰まらない）', async () => {
+    const real = createMemoryStores().attachments;
+    const x = await real.put({ name: 'x.png', mediaType: 'image/png', bytes: PNG });
+    const broken = Object.assign(Object.create(real) as AttachmentStore, {
+      getMeta: (id: string) => real.getMeta(id),
+      bind: () => Promise.reject(new Error('EIO')),
+    });
+    await expect(chatBatch(broken, [x.id], 'conv-1')).rejects.toThrow('EIO');
+    const failing = chatBatch(broken, [x.id], 'conv-1');
+    const next = chatBatch(real, [x.id], 'conv-1');
+    await expect(failing).rejects.toThrow('EIO');
+    expect((await next).ok).toBe(true);
   });
 });

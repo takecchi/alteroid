@@ -260,7 +260,7 @@ export function ApprovalCard({
               variant="primary"
               size="sm"
               loading={busy}
-              disabled={draft.trim() === ''}
+              disabled={draft.trim() === '' || busy}
               onClick={() => onSubmit?.(draft)}
             >
               回答する

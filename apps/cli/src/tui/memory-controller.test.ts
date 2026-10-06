@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { fakeApi, memoryDoc, memoryRow } from './fake-api.js';
+import { fakeApi, gate, memoryDoc, memoryRow } from './fake-api.js';
 import type { HeaderFeed } from './header-feed.js';
 import { MEMORY_DETAIL_CHARS, MemoryController } from './memory-controller.js';
 import { memoryDescriptionLine, memoryDetailStatus, memoryTitleLine } from './memory-view.js';
@@ -118,6 +118,38 @@ describe('詳細（読むだけ）', () => {
     api.memoryDocs['a'] = memoryDoc('a', '二版');
     fire('memory_update');
     await waitFor(() => state().detail?.doc?.content === '二版');
+    expect(state().detail?.body[0]?.text).toBe('二版');
+  });
+
+  it('取り直しが並行したとき、先に始めた遅い応答が後から始めた応答を上書きしない', async () => {
+    const { api, controller, state } = setup((a) => {
+      a.memoryRows = [memoryRow('a')];
+      a.memoryDocs['a'] = memoryDoc('a', '一版');
+    });
+    controller.enter();
+    await waitFor(() => state().status === 'ready');
+    await controller.open('a');
+    expect(state().detail?.doc?.content).toBe('一版');
+
+    // 1 本目（遅い・古い本文）と 2 本目（速い・新しい本文）。応答の順序はゲートで決める。
+    const slow = gate();
+    const original = api.readMemory.bind(api);
+    let calls = 0;
+    api.readMemory = async (slug) => {
+      calls += 1;
+      if (calls === 1) {
+        await slow.wait;
+        return memoryDoc('a', '古い応答');
+      }
+      return original(slug);
+    };
+    api.memoryDocs['a'] = memoryDoc('a', '二版');
+    const first = controller.refreshDetail();
+    await controller.refreshDetail();
+    expect(state().detail?.doc?.content).toBe('二版');
+    slow.open();
+    await first;
+    expect(state().detail?.doc?.content).toBe('二版');
     expect(state().detail?.body[0]?.text).toBe('二版');
   });
 

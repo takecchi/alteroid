@@ -1015,7 +1015,7 @@ describe('詳細でも、`live` は繋がっていないことを文で言うが
     expect(screen.getByText('戻れなければ理由がここに出る。')).toBeTruthy();
   });
 
-  it('D: session_id が無い相手だけはボタンが無効になり、理由と結びつき、Enter でも飛ばない', async () => {
+  it('D: session_id が無い相手だけはボタンが無効になり、理由と結びつき、⌘/Ctrl+Enter でも飛ばない', async () => {
     const { sent } = renderDetailWithMessages({
       ...BASE,
       status: 'running',
@@ -1045,9 +1045,9 @@ describe('詳細でも、`live` は繋がっていないことを文で言うが
     expect(reason?.textContent).toContain('送れない');
     expect(reason?.textContent).toContain('新しく起こし直すこと');
 
-    // 3. Enter でも POST が飛ばない（`submit()` はボタンの `disabled` を
+    // 3. ⌘/Ctrl+Enter でも POST が飛ばない（`submit()` はボタンの `disabled` を
     //    経由しない独立した入口なので、ここも別に確かめる）。
-    fireEvent.keyDown(input, { key: 'Enter' });
+    fireEvent.keyDown(input, { key: 'Enter', ctrlKey: true });
     expect(sent.length).toBe(0);
 
     // 4. クリックしても飛ばない（ネイティブの `disabled` 経由で `onClick` は
@@ -1058,30 +1058,41 @@ describe('詳細でも、`live` は繋がっていないことを文で言うが
 });
 
 /**
- * **「話しかける」は Enter 単体で送る。だから IME の確定の Enter と、送っている
- * 最中の Enter を拾わないこと。**
- *
- * 門が無いと、日本語の変換を確定する Enter で確定前の途中の文字列が割り込みとして
- * 飛ぶ（門の形は `packages/ui/src/components/features/chat/ime.ts` の
- * `isImeConfirmEnter`、会話の側の歯は `chat.ime-enter.test.tsx`）。ボタンは送信中に
- * `loading` で塞がるが、Enter の道はボタンを経由しないので、押した数だけ飛ぶ。
+ * **「話しかける」は共有の `Textarea` で、Enter は改行・⌘/Ctrl+Enter で送る**（質問への答えと同じ。#3557）。
+ * だから Enter 単体では送らず、IME の変換中の ⌘/Ctrl+Enter でも送らず、送っている最中の連打でも
+ * 1本しか飛ばない（門の形は `packages/ui/src/components/features/chat/ime.ts` の `isSubmitShortcut`、
+ * `Textarea` の `submitDisabled`）。
  *
  * **同じ入力・同じキーで `isComposing` だけを反転させて両側を1本で通す**（変換中→0本、
  * 確定後→1本）。片側だけでは「そもそも送れていない」と区別が付かない。
  */
-describe('「話しかける」の Enter は、IME の確定と送信中の連打では飛ばない', () => {
-  it('変換中の Enter では送らず、確定後の Enter では1本だけ送る', async () => {
+describe('「話しかける」は Enter では送らず、⌘/Ctrl+Enter で1本だけ送る', () => {
+  it('Enter 単体（Shift 付きも）では送らず、欄は textarea のまま', async () => {
+    const { sent } = renderDetailWithMessages({ ...BASE, status: 'running', live: true });
+    expect(await screen.findByText('実行中')).toBeTruthy();
+
+    const input = screen.getByPlaceholderText('追加の指示');
+    expect(input.tagName).toBe('TEXTAREA');
+    fireEvent.change(input, { target: { value: 'つづけて' } });
+
+    fireEvent.keyDown(input, { key: 'Enter' });
+    fireEvent.keyDown(input, { key: 'Enter', shiftKey: true });
+    expect(sent.length).toBe(0);
+    expect((input as HTMLTextAreaElement).value).toBe('つづけて');
+  });
+
+  it('変換中の ⌘/Ctrl+Enter では送らず、確定後の ⌘/Ctrl+Enter では1本だけ送る', async () => {
     const { sent } = renderDetailWithMessages({ ...BASE, status: 'running', live: true });
     expect(await screen.findByText('実行中')).toBeTruthy();
 
     const input = screen.getByPlaceholderText('追加の指示');
     fireEvent.change(input, { target: { value: 'つづけて' } });
 
-    fireEvent.keyDown(input, { key: 'Enter', isComposing: true });
-    fireEvent.keyDown(input, { key: 'Enter', keyCode: 229 });
+    fireEvent.keyDown(input, { key: 'Enter', ctrlKey: true, isComposing: true });
+    fireEvent.keyDown(input, { key: 'Enter', metaKey: true, keyCode: 229 });
     expect(sent.length).toBe(0);
 
-    fireEvent.keyDown(input, { key: 'Enter' });
+    fireEvent.keyDown(input, { key: 'Enter', ctrlKey: true });
     expect(
       await screen.findByText(
         // 表示は使い手向けの言い方に変えた（#3066）。識別子（`delivered`）はもう出さない。
@@ -1091,15 +1102,15 @@ describe('「話しかける」の Enter は、IME の確定と送信中の連�
     expect(sent.length).toBe(1);
   });
 
-  it('送っている最中に Enter を重ねても、届くのは1本だけ', async () => {
+  it('送っている最中に ⌘/Ctrl+Enter を重ねても、届くのは1本だけ', async () => {
     const { sent } = renderDetailWithMessages({ ...BASE, status: 'running', live: true });
     expect(await screen.findByText('実行中')).toBeTruthy();
 
     const input = screen.getByPlaceholderText('追加の指示');
     fireEvent.change(input, { target: { value: '続けて' } });
-    fireEvent.keyDown(input, { key: 'Enter' });
-    fireEvent.keyDown(input, { key: 'Enter' });
-    fireEvent.keyDown(input, { key: 'Enter' });
+    fireEvent.keyDown(input, { key: 'Enter', ctrlKey: true });
+    fireEvent.keyDown(input, { key: 'Enter', ctrlKey: true });
+    fireEvent.keyDown(input, { key: 'Enter', metaKey: true });
 
     expect(
       await screen.findByText(

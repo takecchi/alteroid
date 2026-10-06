@@ -758,8 +758,8 @@ practiceCommand
   .description('やり方の本文を出す（--version で過去の版を読む）')
   .option('--version <version>', '省略時はいまの本文。指定すると過去の版を読む')
   .action(async (slug: string, options: { version?: string }) => {
-    const version = options.version === undefined ? undefined : Number(options.version);
-    await practiceShowCommand(slug, { version });
+    // 打った文字列のまま渡す（数に直すと、成立しない値のエラー文が NaN になる）。daemon が整数かを断る。
+    await practiceShowCommand(slug, { version: options.version });
   });
 
 practiceCommand
