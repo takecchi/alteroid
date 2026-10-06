@@ -4505,6 +4505,38 @@ export function describeBackgroundWaitElapsed(firstAt: string, now: number): str
 type SynthesizedNoticeLabel = string;
 
 /**
+ * **`closed(done)` が届いたとき、このセッションで report を受け取っているか**（Issue #3189）。
+ *
+ * - `'seen'` — 受け取っている。`closed(done)` は報告の後の idle の終わりで、知らせない（今までどおり）
+ * - `'none'` — 一度も受け取っていない（`lastReportAt` が無い）。報告無しで終わった
+ * - `'unknown'` — 判定できない。**知らせる側へ倒す**（黙って無音へ倒さない。AGENTS.md「静かに失敗する道具」の
+ *   「判定できない」という3つ目の状態）。2通り:
+ *   (1) `runnerSessionSince` が無い（デーモンの再起動直後の像。`ManagerRecord.runnerSessionSince` は
+ *   プロセス内にしか置かない）——`lastReportAt` は永続しているので、**前のデーモンの時代の report** かもしれず、
+ *   いまのセッションのものとは言えない
+ *   (2) どちらかが日時として読めない（`jobSchema.lastReportAt` は `z.string()` で、形を保証していない）
+ *
+ * **なぜこの2欄で「このセッションで report が来ていない」と言えるか。** `runnerSessionSince` は
+ * `start()` / `resume()` が返った後と runner の `session` の名乗りでだけ進み（器がこの委譲を持った確定の瞬間）、
+ * `lastReportAt` は `case 'report'` でだけ進む（握り潰した報告でも進む）。**前者より後に後者が進んでいれば、
+ * そのセッションの report が少なくとも1本は来ている。**
+ *
+ * **限界（確かめていない側）。** 同じセッションの中で report の後に別のターンが始まり、そのターンだけが
+ * report 無しで閉じた回は `'seen'` になる（ターンの始まりを持つ欄が無い。`send()` はどの欄も書かない）。
+ */
+function reportSeenInSession(
+  lastReportAt: string | undefined,
+  runnerSessionSince: string | undefined,
+): 'seen' | 'none' | 'unknown' {
+  if (lastReportAt === undefined) return 'none';
+  if (runnerSessionSince === undefined) return 'unknown';
+  const reportMs = Date.parse(lastReportAt);
+  const sessionMs = Date.parse(runnerSessionSince);
+  if (Number.isNaN(reportMs) || Number.isNaN(sessionMs)) return 'unknown';
+  return reportMs >= sessionMs ? 'seen' : 'none';
+}
+
+/**
  * 既知の族の名前（`describeSynthesizedNoticeLabel` の対応表の鍵）。
  * **これは網羅ではない** — `runner-protocol.ts` の `report.synthesized` は
  * `z.string()` なので、ここに無い値が届くことがある（`describeSynthesizedNoticeLabel`
@@ -4514,6 +4546,7 @@ const KNOWN_SYNTHESIZED_NOTICE_LABELS: Record<string, string> = {
   rate_limit: '枠の遷移（追い返された／課金枠へ入った）',
   usage_notice: '利用上限の通知',
   closed_failed: 'セッションが落ちた',
+  closed_done_silent: 'report を出さないまま閉じた（done）',
   turn_failed: '応答を返さずに終わったターンの報告',
   resume_fallback: '器の入れ替えで前のセッションへ戻れず、生ログから作り直して続けた',
   resume_failed: '器の入れ替えで前のセッションへ戻れず、再開そのものに失敗した',
@@ -14065,6 +14098,54 @@ class Pool implements ManagerPool {
            */
           if (record.job.runnerId !== undefined) {
             this.#runners.noteManagerFailed(record.job.runnerId);
+          }
+        }
+        /*
+         * **report が無いまま `closed(done)` だけが届いたことを、クローンへ知らせる（Issue #3189。
+         * 人間の決定 2026-10-06 の案 A）。** `runner.ts` の「マネージャーのセッションが閉じた。」の
+         * 既定の経路は、SDK のストリームが result 無しで閉じても `done` を名乗る。台帳は `done` に
+         * なるが、`closed(failed)` と違って受信箱には何も出ず、**成果が出ているかを誰も確かめない**
+         * まま終わる。
+         *
+         * **知らせるのは、このセッションで report を受け取っていないときだけ。** 報告の後の idle
+         * としての `closed(done)`（正常な終わり）は今までどおり無音。判定は
+         * {@link reportSeenInSession}（`lastReportAt` と `runnerSessionSince` の前後。**判定できない
+         * ときは知らせる側へ倒す**）。
+         *
+         * **背景処理の積み（`#withheldReports`）が在るときは重ねない**——直下の分岐が
+         * 「この委譲は終わった」を配る（`#emit` が積みを末尾へ足す）ので、2本目を出すと二重になる。
+         *
+         * **合流窓へ積む（`closed_failed` と同じ族の扱い）。** 本文は機構が書いたもので、
+         * マネージャー本人の発話を含まない。`event.reason` は runner の定型文（包む単位が無い。上の
+         * `failed` の doc と同じ）。**本文を先に日誌へ書く**（flush の前に落ちても辿れるように。
+         * `closed_failed` の issue #799 と同じ）。
+         */
+        if (event.status === 'done' && !this.#withheldReports.has(event.managerId)) {
+          const seen = reportSeenInSession(record.job.lastReportAt, record.runnerSessionSince);
+          if (seen !== 'seen') {
+            const body = [
+              `この委譲 ${event.managerId} は、report を出さないまま終わった（closed の status=done。台帳の状態は done）。`,
+              '**成果が出ているとは限らない** — 成果が実際に出ているか' +
+                '（PR・コミット・送信済みのメール・登録済みの予定・投稿先など）を確かめること。' +
+                '確かめるまで「終わった」とも「終わっていない」とも言わない。',
+              ...(seen === 'unknown'
+                ? [
+                    'このセッションで report を受け取ったかは判定できなかった（デーモンの再起動直後などで' +
+                      '比較する時刻が無い）ため、念のため知らせている。',
+                  ]
+                : []),
+              `closed の reason: ${event.reason}`,
+            ].join('\n');
+            await this.#journal({
+              type: 'exchange',
+              with: 'manager',
+              role: 'inbound',
+              text:
+                `${EXCHANGE_KIND_DECISION_PREFIX}[${event.managerId}] report 無しの closed(done)` +
+                `（${seen === 'none' ? 'report は一度も受け取っていない' : '判定できないので知らせる側へ倒した'}）。` +
+                `クローンへ知らせる: ${body}`,
+            });
+            this.#queueSynthesizedNotice(event.managerId, 'closed_done_silent', body);
           }
         }
         // **積みが在れば、それをクローンへ配ってから畳む。** 握り潰した
