@@ -68,9 +68,16 @@ describe('フッタのキーヒント', () => {
       HINT_AP_DAY,
       HINT_AP_DETAIL,
       HINT_AP_DETAIL_FROM_DAY,
+      HINT_AP_FORM,
     ]) {
       expect(hint).toContain('^C 中断');
     }
+  });
+
+  it('答えるフォームのフッタは、書きかけが残ることと送る前の確認の s を案内する', () => {
+    // 80 桁に ^C 中断を収めるため「s 送る前の確認」を「s 確認」へ詰めた。書きかけが残る案内は外さない。
+    expect(HINT_AP_FORM).toContain('書きかけは残る');
+    expect(HINT_AP_FORM).toContain('s 確認');
   });
 
   it('日誌の一覧のフッタは、読み直しの r を案内する（#3485）', () => {
