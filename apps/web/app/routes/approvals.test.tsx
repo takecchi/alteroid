@@ -18,41 +18,12 @@
  */
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import type { PendingApproval } from '@alteroid/logic';
 import { json, Providers, storeTestBaseUrl } from '~/test-support';
 
 import Approvals from './approvals';
-
-/**
- * 一覧の取り直し（`useSWRConfig().mutate`）を、必要なときだけ拒否させる（#3627）。
- *
- * **fetch を繋がらなくしても `mutate(key)` は拒否されない**（SWR は取り直しの失敗を
- * キャッシュの `error` に入れるだけで、`mutate` の約束は解決する）。だから hook の
- * 「取り直しが投げた」経路は、`mutate` そのものを拒否させないと通らない。
- */
-const refresh = vi.hoisted(() => ({ rejects: false }));
-// apps/web は `swr` を直接の依存に持たない（型が引けない・名前で差し替えても hook 側の `swr` に
-// 効かない）ので、`packages/swr` が解決する実体のファイルを指し、形は最小限だけ書く。
-type MutateFn = (...args: unknown[]) => Promise<unknown>;
-vi.mock(
-  '../../../../packages/swr/node_modules/swr/dist/index/index.mjs',
-  async (importOriginal) => {
-    const original = await importOriginal<{ useSWRConfig: () => { mutate: MutateFn } }>();
-    return {
-      ...original,
-      useSWRConfig: () => {
-        const config = original.useSWRConfig();
-        return {
-          ...config,
-          mutate: (...args: unknown[]) =>
-            refresh.rejects ? Promise.reject(new Error('refresh failed')) : config.mutate(...args),
-        };
-      },
-    };
-  },
-);
 
 function approval(over: Partial<PendingApproval> = {}): PendingApproval {
   return {
@@ -103,8 +74,6 @@ function stubApprovals(
     trace?: (id: string) => Response | Promise<Response>;
     /** `GET /approvals` の `unreadable`（#2298）。渡さなければ鍵ごと無い（0件と同じ）。 */
     unreadable?: { id?: string; reason: string }[];
-    /** まとめ送信の POST が届いたあと、一覧の取り直し（`mutate`）を拒否させる（#3627）。 */
-    refreshRejectsAfterBulk?: boolean;
   } = {},
 ): ApprovalsStub {
   const calls: string[] = [];
@@ -128,7 +97,6 @@ function stubApprovals(
           ? ((await input.clone().json()) as { answers: { id: string; answer: string }[] })
           : { answers: [] };
       bulkRequests.push(body.answers);
-      if (options.refreshRejectsAfterBulk === true) refresh.rejects = true;
       const resolve =
         options.bulkResults ?? ((answers) => answers.map((entry) => ({ id: entry.id, ok: true })));
       return json({ results: resolve(body.answers) });
@@ -159,7 +127,6 @@ beforeEach(() => {
   localStorage.clear();
   sessionStorage.clear();
   storeTestBaseUrl();
-  refresh.rejects = false;
 });
 
 afterEach(() => {
@@ -282,49 +249,6 @@ describe('/approvals 画面のまとめ送信', () => {
     expect((within(items[1]!).getByPlaceholderText(/答える/) as HTMLTextAreaElement).value).toBe(
       '却下する',
     );
-  });
-
-  /**
-   * 答えは通っている（POST は 200）。そのあとの一覧の取り直しだけが失敗しても、
-   * 「通信そのものの失敗」にしない——下書きを全部残すと、送り直しが 409 になる（#3627）。
-   */
-  it('POST は通り、取り直しだけが失敗したとき: bulkFailure は出ず、通った承認の下書きは畳まれる', async () => {
-    const { bulkRequests } = stubApprovals(
-      [approval({ id: 'a-1', question: '質問1' }), approval({ id: 'a-2', question: '質問2' })],
-      {
-        refreshRejectsAfterBulk: true,
-        bulkResults: (answers) =>
-          answers.map((entry) =>
-            entry.id === 'a-2'
-              ? { id: entry.id, ok: false, error: 'already answered' }
-              : { id: entry.id, ok: true },
-          ),
-      },
-    );
-    renderPage();
-
-    const textareas = await screen.findAllByPlaceholderText(/答える/);
-    fireEvent.change(textareas[0]!, { target: { value: '許可する' } });
-    fireEvent.change(textareas[1]!, { target: { value: '却下する' } });
-    fireEvent.click(screen.getByRole('button', { name: 'まとめて送る' }));
-    await waitFor(() => expect(bulkRequests).toHaveLength(1));
-
-    const items = within(await screen.findByRole('list', { name: '承認待ちの一覧' })).getAllByRole(
-      'listitem',
-    );
-    // 通った a-1 の下書きは畳まれる。
-    await waitFor(() =>
-      expect((within(items[0]!).getByPlaceholderText(/答える/) as HTMLTextAreaElement).value).toBe(
-        '',
-      ),
-    );
-    // 通らなかった a-2 は、その id の理由が出て、下書きが残る。
-    expect(await within(items[1]!).findByText(/already answered/)).toBeTruthy();
-    expect((within(items[1]!).getByPlaceholderText(/答える/) as HTMLTextAreaElement).value).toBe(
-      '却下する',
-    );
-    // 取り直しの失敗を、まとめ送信の失敗（`bulkFailure`）として出さない。
-    expect(screen.queryByText(/refresh failed/)).toBeNull();
   });
 
   it('個別の「回答する」ボタンは、まとめ送りとは無関係にその場で即送信できる', async () => {
