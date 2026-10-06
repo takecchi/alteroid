@@ -866,11 +866,9 @@ function describeClientError(error: CodexAppServerClientError): string {
 export function toCodexInput(next: AgentUserInput): CodexUserInput[] {
   return [
     { type: 'text', text: next.text, text_elements: [] },
-    ...(next.images ?? []).map(
-      (image): CodexUserInput => ({
-        type: 'image',
-        url: `data:${image.mediaType};base64,${image.data}`,
-      }),
-    ),
+    ...(next.images ?? []).map((image): CodexUserInput => ({
+      type: 'image',
+      url: `data:${image.mediaType};base64,${image.data}`,
+    })),
   ];
 }
