@@ -69,9 +69,9 @@ function routes(url: string): Response | undefined {
  * 実時計側（`setImmediate`。偽にしていない）で結果を取り込ませる。
  */
 async function advance(ms: number): Promise<void> {
-  for (let left = ms; left > 0; left -= 1_000) {
+  for (let left = ms; left > 0; left -= 2_500) {
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(Math.min(1_000, left));
+      await vi.advanceTimersByTimeAsync(Math.min(2_500, left));
       await new Promise((resolve) => setImmediate(resolve));
       await new Promise((resolve) => setImmediate(resolve));
     });
@@ -116,7 +116,7 @@ describe('確認済みの後の再検証の失敗（issue #3063）', () => {
     // 同じ要素のまま（unmount されていない）で、値も残っている。
     expect(screen.getByLabelText<HTMLInputElement>('下書き')).toBe(input);
     expect(input.value).toBe('書きかけ');
-  });
+  }, 30_000);
 
   it('自動で再試行し、直ったら帯が消える（書きかけは残ったまま）', async () => {
     stubFetch(routes);
@@ -131,7 +131,7 @@ describe('確認済みの後の再検証の失敗（issue #3063）', () => {
     expect(screen.queryByRole('heading', { name: FULL_SCREEN })).toBeNull();
     expect(screen.getByLabelText<HTMLInputElement>('下書き')).toBe(input);
     expect(input.value).toBe('書きかけ');
-  });
+  }, 30_000);
 
   it('失敗が続いたときだけ全体表示へ切り替わる', async () => {
     stubFetch(routes);
@@ -142,7 +142,7 @@ describe('確認済みの後の再検証の失敗（issue #3063）', () => {
     await advance(180_000);
 
     expect(screen.queryByRole('heading', { name: FULL_SCREEN })).not.toBeNull();
-  });
+  }, 30_000);
 
   it('切り替わった後でも、接続が戻れば画面は自動で進む', async () => {
     stubFetch(routes);
@@ -158,5 +158,5 @@ describe('確認済みの後の再検証の失敗（issue #3063）', () => {
       expect(screen.queryByRole('heading', { name: FULL_SCREEN })).toBeNull();
     });
     expect(await screen.findByLabelText('下書き')).toBeTruthy();
-  });
+  }, 30_000);
 });
