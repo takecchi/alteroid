@@ -987,3 +987,68 @@ describe('書きかけの依頼を確認なしで消さない（#3374）', () =>
     expect(screen.queryByRole('alertdialog')).toBeNull();
   });
 });
+
+describe('送信中の追記は、成功しても消えない', () => {
+  /** `stubSchedule` の POST だけ、返すのを保留する（送信中を作る）。GET は素通し。 */
+  function holdPosts(): { release: () => void } {
+    const inner = globalThis.fetch;
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = input instanceof Request ? input : new Request(input, init);
+      if (request.url.includes('/events') && request.method === 'POST') {
+        sent.push({ url: request.url, method: request.method, read: () => request.json() });
+        await gate;
+        return json({ id: 'evt-1' });
+      }
+      const response = inner(input, init);
+      if (request.method !== 'GET') await gate;
+      return response;
+    }) as typeof fetch;
+    return { release };
+  }
+
+  it('継続する依頼: 仕込んでいる間に本文へ打ち足すと、成功後も名前と本文が残る', async () => {
+    stubSchedule([DEFAULT_ENTRY]);
+    const { release } = holdPosts();
+    renderSchedule();
+
+    fireEvent.change(await screen.findByLabelText(/依頼の名前/), { target: { value: 'poll' } });
+    const requestBox = screen.getByLabelText('依頼の本文') as HTMLTextAreaElement;
+    fireEvent.change(requestBox, { target: { value: 'Slack を見てきて' } });
+    fireEvent.click(screen.getByRole('button', { name: '仕込む' }));
+    await waitFor(() => expect(sent).toHaveLength(1));
+
+    fireEvent.change(requestBox, { target: { value: 'Slack を見てきて、あと追記' } });
+    release();
+
+    // 成功の表示が出たあとも、欄は空にならない。
+    await screen.findByText(/仕込んだ: poll/);
+    expect((screen.getByLabelText('依頼の本文') as HTMLTextAreaElement).value).toBe(
+      'Slack を見てきて、あと追記',
+    );
+    expect((screen.getByLabelText(/依頼の名前/) as HTMLInputElement).value).toBe('poll');
+  });
+
+  it('外部イベント: 送っている間に内容へ打ち足すと、成功後も内容が残る', async () => {
+    stubSchedule([DEFAULT_ENTRY]);
+    const { release } = holdPosts();
+    renderSchedule();
+
+    fireEvent.change(await screen.findByLabelText('送り元の名前'), { target: { value: 'ci' } });
+    const payload = screen.getByLabelText('知らせの内容') as HTMLTextAreaElement;
+    fireEvent.change(payload, { target: { value: 'build failed' } });
+    fireEvent.click(screen.getByRole('button', { name: '送る' }));
+    await waitFor(() => expect(sent).toHaveLength(1));
+
+    fireEvent.change(payload, { target: { value: 'build failed の続き' } });
+    release();
+
+    await screen.findByText('受け付けた');
+    expect((screen.getByLabelText('知らせの内容') as HTMLTextAreaElement).value).toBe(
+      'build failed の続き',
+    );
+  });
+});
