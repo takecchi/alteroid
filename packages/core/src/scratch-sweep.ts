@@ -1,4 +1,4 @@
-import { lstat, readdir, rm, statfs } from 'node:fs/promises';
+import { lstat, readdir, realpath, rm, statfs } from 'node:fs/promises';
 import path from 'node:path';
 
 import { reasonOf } from './dropped-record.js';
@@ -70,6 +70,9 @@ export const SCRATCH_SWEEP_NAME_MAX_LENGTH = 200;
  * それでも降りなかった枝があれば「判定できない」で残す。
  */
 export const SCRATCH_SWEEP_MAX_DEPTH = 12;
+/** `.git` の無いディレクトリの通常ファイルを数える上限（これ以上は数えずに残す）と、1作業場で消す `node_modules` の上限。 */
+export const SCRATCH_SWEEP_CONTENT_SCAN_LIMIT = 1000;
+export const SCRATCH_SWEEP_NODE_MODULES_LIMIT = 100;
 /** 片付けの git 1本の期限（ms）。 */
 export const SCRATCH_SWEEP_GIT_TIMEOUT_MS = 15_000;
 
@@ -139,6 +142,10 @@ export interface ScratchSweeperOptions {
   /** 作業ツリーを探す深さ（既定 {@link SCRATCH_SWEEP_MAX_DEPTH}。テスト用の口）。 */
   maxDepth?: number;
   existsFn?: (p: string) => Promise<boolean>;
+  /** 通常ファイルの大きさ（既定は `lstat`）。孤児のファイルが空かを見る。 */
+  sizeFn?: (p: string) => Promise<number>;
+  /** 途中に symlink を挟まない確認に使う（既定は `fs.realpath`）。 */
+  realpathFn?: (p: string) => Promise<string>;
   rmFn?: (p: string) => Promise<void>;
   statfsFn?: (p: string) => Promise<ScratchSweepStatfs>;
 }
@@ -175,6 +182,7 @@ type Verdict =
       reason: NonNullable<ScratchSweepItem['reason']>;
       count?: number;
       untracked?: { count: number; names: string[] };
+      files?: { count: number; names: string[] };
       detail: string;
     };
 
@@ -217,6 +225,11 @@ export class ScratchSweeper {
    * 畳まれた done・stopped・failed も、デーモンが `manager_send` で resume しうるので守る。
    * この runner が知らない名前（孤児・runner の再起動前のもの）は猶予で扱う。
    */
+  /** 生きたセッションに当たるか（`node_modules` の片付けが触らない集合）。 */
+  #liveClaimedBy(name: string): string | undefined {
+    return this.#o.liveManagerIds().find((id) => matchesManagerScratchDirName(name, id));
+  }
+
   #claimedBy(name: string): string | undefined {
     return [...this.#o.liveManagerIds(), ...(this.#o.knownManagerIds?.() ?? [])].find((id) =>
       matchesManagerScratchDirName(name, id),
@@ -455,17 +468,20 @@ export class ScratchSweeper {
         if (!names.has(name)) this.#unclaimedSince.delete(name);
       }
       for (const c of candidates) {
-        if (this.#claimedBy(c.name) !== undefined) this.#unclaimedSince.delete(c.name);
+        if (this.#liveClaimedBy(c.name) !== undefined) this.#unclaimedSince.delete(c.name);
         else if (!this.#unclaimedSince.has(c.name)) {
           this.#unclaimedSince.set(c.name, this.#firstScanDone ? now : this.#o.startedAt);
         }
       }
       this.#firstScanDone = true;
 
+      // 生きたセッションに当たらない状態が猶予続いたもの。`node_modules` の片付けはこの全部が対象。
+      // 作業場ごと消すのは、さらに「この runner が一度も起こしていない（孤児）」ものだけ。
       const expired = candidates.filter((c) => {
         const since = this.#unclaimedSince.get(c.name);
         return since !== undefined && now - since >= this.#o.graceMs;
       });
+      const wholeCandidates = expired.filter((c) => this.#claimedBy(c.name) === undefined);
 
       const itemOf = (c: ScratchDirEntry): ScratchSweepItem => {
         const managerId = this.#knownIdFor(c.name);
@@ -484,24 +500,68 @@ export class ScratchSweeper {
       const dirInspections = new Map<string, DirInspection>();
       const dirPath = (c: ScratchDirEntry): string => path.join(this.#o.tmpRoot, c.name);
 
-      for (const c of expired) {
+      const keepItem = (c: ScratchDirEntry, verdict: Verdict & { kind: 'keep' }): void => {
+        kept.push({
+          ...itemOf(c),
+          reason: verdict.reason,
+          ...(verdict.count === undefined ? {} : { count: verdict.count }),
+          ...(verdict.untracked === undefined ? {} : { untracked: verdict.untracked }),
+          ...(verdict.files === undefined ? {} : { files: verdict.files }),
+          detail: verdict.detail,
+        });
+      };
+
+      for (const c of wholeCandidates) {
         if (signal.aborted) break;
-        if (c.isSymbolicLink() || !c.isDirectory()) {
+        if (c.isSymbolicLink()) {
           planned.set(c.name, { entry: c });
+          continue;
+        }
+        if (!c.isDirectory()) {
+          // 孤児のファイル（ログ等）。空（0バイト）でなければ残す。
+          const size = await this.#sizeOf(dirPath(c));
+          if (typeof size !== 'number') {
+            keepItem(c, { kind: 'keep', reason: 'undecidable', detail: clip(size.why) });
+          } else if (size > 0) {
+            keepItem(c, {
+              kind: 'keep',
+              reason: 'non-git-content',
+              count: 1,
+              files: { count: 1, names: [clip(c.name)] },
+              detail: `中身のあるファイル（${String(size)} バイト）`,
+            });
+          } else planned.set(c.name, { entry: c });
           continue;
         }
         const insp = await this.#inspectDir(dirPath(c), signal);
         dirInspections.set(c.name, insp);
-        const verdict = this.#verdictOf(insp);
-        if (verdict.kind === 'keep') {
-          kept.push({
-            ...itemOf(c),
-            reason: verdict.reason,
-            ...(verdict.count === undefined ? {} : { count: verdict.count }),
-            ...(verdict.untracked === undefined ? {} : { untracked: verdict.untracked }),
-            detail: verdict.detail,
+        if (insp.trees.length === 0 && insp.searchUnknown === undefined) {
+          // `.git` を持たないディレクトリ。通常ファイル（`node_modules` の中は数えない）が1つでも
+          // あれば残す。空のディレクトリ・`node_modules` だけのディレクトリは消してよい。
+          const content = await this.#scanContent(dirPath(c));
+          if (content.unknown !== undefined) {
+            keepItem(c, { kind: 'keep', reason: 'undecidable', detail: clip(content.unknown) });
+            continue;
+          }
+          if (content.count > 0) {
+            keepItem(c, {
+              kind: 'keep',
+              reason: 'non-git-content',
+              count: content.count,
+              files: { count: content.count, names: content.names },
+              detail: `git の無いディレクトリに通常ファイル ${String(content.count)} 件`,
+            });
+            continue;
+          }
+          planned.set(c.name, {
+            entry: c,
+            untracked: { kind: 'remove', untracked: [], untrackedCount: 0 },
           });
-        } else planned.set(c.name, { entry: c, untracked: verdict });
+          continue;
+        }
+        const verdict = this.#verdictOf(insp);
+        if (verdict.kind === 'keep') keepItem(c, verdict);
+        else planned.set(c.name, { entry: c, untracked: verdict });
       }
 
       // 作業ツリーの依存（不動点）。
@@ -573,6 +633,22 @@ export class ScratchSweeper {
             : item,
         );
       }
+      // 作業場ごとは消さなかった（残した・知っている委譲の）作業場でも、猶予後は git が無視する
+      // `node_modules` だけを片付ける（生きたセッションの作業場は expired に入らない）。
+      const removedNames = new Set(removed.map((i) => i.name));
+      for (const c of expired) {
+        if (signal.aborted) break;
+        if (removedNames.has(c.name) || c.isSymbolicLink() || !c.isDirectory()) continue;
+        const insp = dirInspections.get(c.name) ?? (await this.#inspectDir(dirPath(c), signal));
+        const item = await this.#sweepNodeModules(c.name, dirPath(c), insp, signal, kept);
+        if (item !== undefined)
+          removed.push({
+            ...item,
+            ...(this.#knownIdFor(c.name) === undefined
+              ? {}
+              : { managerId: this.#knownIdFor(c.name) }),
+          });
+      }
     } catch (error) {
       scanError = `片付けが想定外に失敗した: ${reasonOf(error)}`;
     }
@@ -597,6 +673,166 @@ export class ScratchSweeper {
       kept: newKept,
       ...(scanErrorIsNew ? { scanError } : {}),
       statfs: await this.#statfs(),
+    };
+  }
+
+  async #sizeOf(p: string): Promise<number | { why: string }> {
+    try {
+      return await (this.#o.sizeFn ?? (async (x) => (await lstat(x)).size))(p);
+    } catch (error) {
+      return { why: `大きさを読めなかった: ${reasonOf(error)}` };
+    }
+  }
+
+  #listDir(): ReaddirFn {
+    return this.#o.gitReaddirFn ?? ((dir) => readdir(dir, { withFileTypes: true }));
+  }
+
+  /** `.git` を持たないディレクトリの通常ファイルを数える（`node_modules` の中は数えない）。 */
+  async #scanContent(dir: string): Promise<{ count: number; names: string[]; unknown?: string }> {
+    const maxDepth = this.#o.maxDepth ?? SCRATCH_SWEEP_MAX_DEPTH;
+    const listDir = this.#listDir();
+    const names: string[] = [];
+    let count = 0;
+    let unknown: string | undefined;
+    const walk = async (d: string, depth: number): Promise<void> => {
+      if (count >= SCRATCH_SWEEP_CONTENT_SCAN_LIMIT) return;
+      let entries;
+      try {
+        entries = await listDir(d);
+      } catch (error) {
+        unknown ??= `${d} を読めなかった: ${reasonOf(error)}`;
+        return;
+      }
+      for (const e of entries) {
+        if (e.name === 'node_modules') continue;
+        const isLink = (e as { isSymbolicLink?: () => boolean }).isSymbolicLink?.() === true;
+        if (isLink) continue;
+        if (e.isDirectory()) {
+          if (depth >= maxDepth) {
+            unknown ??= `深さ上限より下に降りなかった（${path.join(d, e.name)}）`;
+            continue;
+          }
+          await walk(path.join(d, e.name), depth + 1);
+        } else {
+          count += 1;
+          if (names.length < SCRATCH_SWEEP_UNTRACKED_NAMES_LIMIT) {
+            names.push(clip(path.relative(dir, path.join(d, e.name))));
+          }
+        }
+      }
+    };
+    await walk(dir, 0);
+    return { count, names, ...(unknown === undefined ? {} : { unknown }) };
+  }
+
+  /** 作業場の中の、名前が `node_modules` のディレクトリを探す（中へは降りない・symlink は辿らない）。 */
+  async #findNodeModules(dir: string): Promise<string[]> {
+    const maxDepth = this.#o.maxDepth ?? SCRATCH_SWEEP_MAX_DEPTH;
+    const listDir = this.#listDir();
+    const found: string[] = [];
+    const walk = async (d: string, depth: number): Promise<void> => {
+      if (found.length >= SCRATCH_SWEEP_NODE_MODULES_LIMIT) return;
+      let entries;
+      try {
+        entries = await listDir(d);
+      } catch {
+        return; // 読めない所は触らない（消さないだけ）。
+      }
+      for (const e of entries) {
+        if (!e.isDirectory()) continue; // symlink は isDirectory が偽（辿らない）
+        if (e.name === '.git') continue;
+        const child = path.join(d, e.name);
+        if (e.name === 'node_modules') {
+          found.push(child);
+          continue; // 中へは降りない
+        }
+        if (depth < maxDepth) await walk(child, depth + 1);
+      }
+    };
+    await walk(dir, 0);
+    return found;
+  }
+
+  /**
+   * `node_modules` を消す直前の最後の関門。基点が空でない絶対パスで `/` でないこと、対象が基点の
+   * 直下の `mgr-…` ディレクトリの**下**（そのディレクトリ自身ではない）であること、名前が
+   * `node_modules` であること、途中に symlink を挟まない（`realpath` が基点の実体＋相対パスと一致）こと。
+   */
+  async #unsafeNodeModulesReason(target: string): Promise<string | undefined> {
+    const base = this.#o.tmpRoot;
+    if (base === '' || !path.isAbsolute(base)) return `基点が空でない絶対パスでない（'${base}'）`;
+    const resolvedBase = path.resolve(base);
+    if (resolvedBase === path.parse(resolvedBase).root) return '基点が / そのものである';
+    const resolved = path.resolve(target);
+    const rel = path.relative(resolvedBase, resolved);
+    if (rel === '' || rel.startsWith('..') || path.isAbsolute(rel)) return '対象が基点の外にある';
+    const segs = rel.split(path.sep);
+    const first = segs[0] ?? '';
+    if (!isManagerScratchDirName(first)) return '対象が mgr- 規則の作業場の下にない';
+    if (segs.length < 2) return '対象が作業場そのものである';
+    if (path.basename(resolved) !== 'node_modules') return '対象の名前が node_modules でない';
+    try {
+      const real = await (this.#o.realpathFn ?? realpath)(resolved);
+      const realBase = await (this.#o.realpathFn ?? realpath)(resolvedBase);
+      if (real !== path.join(realBase, rel)) return `途中に symlink を挟んでいる（${real}）`;
+    } catch (error) {
+      return `realpath を取れなかった: ${reasonOf(error)}`;
+    }
+    return undefined;
+  }
+
+  /**
+   * 1つの作業場の `node_modules` を片付ける。消すのは、所属する作業ツリーで
+   * `git check-ignore -q` が exit 0（無視されている）かつ `git ls-files` が空（追跡済みを含まない）の
+   * ものだけ。それ以外（exit 1・失敗・期限切れ）は消さない。消したものがあれば項目を返す。
+   */
+  async #sweepNodeModules(
+    name: string,
+    dir: string,
+    insp: DirInspection,
+    signal: AbortSignal,
+    kept: ScratchSweepItem[],
+  ): Promise<ScratchSweepItem | undefined> {
+    if (insp.trees.length === 0) return undefined; // git 作業ツリーの外は消さない
+    const candidates = await this.#findNodeModules(dir);
+    const paths: string[] = [];
+    for (const nm of candidates) {
+      if (signal.aborted) break;
+      const owner = insp.trees
+        .filter((tree) => isWithin(nm, tree.root))
+        .sort((a, b) => b.root.length - a.root.length)[0];
+      if (owner === undefined) continue;
+      const rel = path.relative(owner.root, nm);
+      const ignored = await this.#git(['check-ignore', '-q', '--', rel], owner.root);
+      if (!ignored.ok) continue;
+      const tracked = await this.#git(['ls-files', '--', rel], owner.root);
+      if (!tracked.ok || tracked.out.trim() !== '') continue;
+      // 消す直前にもう一度、生きたセッションと突き合わせる。
+      if (this.#liveClaimedBy(name) !== undefined)
+        return paths.length === 0 ? undefined : this.#nodeModulesItem(name, paths);
+      const unsafe = await this.#unsafeNodeModulesReason(nm);
+      if (unsafe !== undefined) {
+        kept.push({ name, kind: 'directory', reason: 'unsafe-target', detail: clip(unsafe) });
+        continue;
+      }
+      try {
+        await (this.#o.rmFn ?? ((p) => rm(p, { recursive: true, force: true })))(nm);
+      } catch (error) {
+        kept.push({ name, kind: 'directory', reason: 'rm-failed', detail: clip(reasonOf(error)) });
+        continue;
+      }
+      paths.push(clip(path.relative(dir, nm)));
+    }
+    return paths.length === 0 ? undefined : this.#nodeModulesItem(name, paths);
+  }
+
+  #nodeModulesItem(name: string, paths: string[]): ScratchSweepItem {
+    return {
+      name,
+      kind: 'node_modules',
+      count: paths.length,
+      paths: paths.slice(0, SCRATCH_SWEEP_UNTRACKED_NAMES_LIMIT),
     };
   }
 

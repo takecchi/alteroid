@@ -404,9 +404,8 @@ describe('/tmp の委譲の作業場の片付け（#3039）', () => {
   });
 
   it('ファイルと .git の無いディレクトリは猶予後に消す。シンボリックリンクは追わず、リンクだけ消す', async () => {
-    await writeFile(path.join(root, 'mgr-aaaa1111-p10-verify.log'), 'log');
+    await writeFile(path.join(root, 'mgr-aaaa1111-p10-verify.log'), '');
     await mkdir(path.join(root, 'mgr-bbbb2222-logs'));
-    await writeFile(path.join(root, 'mgr-bbbb2222-logs', 'x.log'), 'log');
     const outside = await makeTempDir('scratch-sweep-outside-');
     await writeFile(path.join(outside, 'precious'), 'p');
     await symlink(outside, path.join(root, 'mgr-cccc3333'));
@@ -449,7 +448,7 @@ describe('/tmp の委譲の作業場の片付け（#3039）', () => {
   });
 
   it('rm が失敗したら残した（rm-failed）として運ぶ', async () => {
-    await writeFile(path.join(root, 'mgr-aaaa1111.log'), 'x');
+    await writeFile(path.join(root, 'mgr-aaaa1111.log'), '');
     const s = sweeper({
       rmFn: async () => {
         throw new Error('EBUSY');
@@ -460,7 +459,7 @@ describe('/tmp の委譲の作業場の片付け（#3039）', () => {
   });
 
   it('中断された回は何も消さない', async () => {
-    await writeFile(path.join(root, 'mgr-aaaa1111.log'), 'x');
+    await writeFile(path.join(root, 'mgr-aaaa1111.log'), '');
     const s = sweeper();
     await expire(s);
     const aborted = new AbortController();
@@ -470,7 +469,7 @@ describe('/tmp の委譲の作業場の片付け（#3039）', () => {
   });
 
   it('statfs の観測と、取れなかった理由', async () => {
-    await writeFile(path.join(root, 'mgr-aaaa1111.log'), 'x');
+    await writeFile(path.join(root, 'mgr-aaaa1111.log'), '');
     const ok = sweeper({
       statfsFn: async () => ({ bsize: 4096, blocks: 100, bfree: 40, files: 1000, ffree: 250 }),
     });
@@ -481,7 +480,7 @@ describe('/tmp の委譲の作業場の片付け（#3039）', () => {
       totalInodes: 1000,
       usedInodes: 750,
     });
-    await writeFile(path.join(root, 'mgr-bbbb2222.log'), 'x');
+    await writeFile(path.join(root, 'mgr-bbbb2222.log'), '');
     const ng = sweeper({
       statfsFn: async () => {
         throw new Error('ENOSYS');
@@ -511,6 +510,7 @@ describe('消す直前の安全検査（基点・対象の形）', () => {
       startedAt: 0,
       now: () => 0,
       readdirFn: async () => names.map(file),
+      sizeFn: async () => 0,
       rmFn: async (p) => {
         calls.push(p);
       },
