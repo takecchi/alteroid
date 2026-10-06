@@ -51,6 +51,29 @@ export interface AttachmentBatchOptions {
   readonly conflictMessage: string;
   /** 連携の鍵のときだけ渡す（`uploaderOf(principal)`）。この主体が上げたものだけを通す。 */
   readonly onlyUploadedBy?: string;
+  /**
+   * **宛先ごとの直列化の鍵**（`conversation:<会話 id>` / `externalEvent:<イベント id>`。#3633）。同じ鍵の呼びは、
+   * 「検査 → bind → 断る回の unbind」を1本ずつ順に通る。呼び A が新しく結んだ x を、A が戻す前に同じ宛先へ送る
+   * 呼び B が「結び済み」として通ると、A の戻しが B の通った発言の添付を外すため。`bind` の中でストアが例外の回に
+   * 行う戻し（#3592）も、この `bind` 呼びの内側なので同じ窓が閉じる。**プロセス内の鍵**であり、デーモンが1プロセス
+   * である前提（`ManagerPool` などの像と同じ）。別の宛先の呼びは互いに待たない。
+   */
+  readonly serializeKey: string;
+}
+
+/** 鍵ごとの末尾の Promise。前の呼びが終わる（成功でも失敗でも）のを待ってから次を始める。空になった鍵は消す。 */
+const tails = new Map<string, Promise<unknown>>();
+
+async function serialized<T>(key: string, run: () => Promise<T>): Promise<T> {
+  const previous = tails.get(key) ?? Promise.resolve();
+  const result = previous.then(run, run);
+  const tail = result.catch(() => undefined);
+  tails.set(key, tail);
+  try {
+    return await result;
+  } finally {
+    if (tails.get(key) === tail) tails.delete(key);
+  }
 }
 
 export async function checkAndBindAttachments(
@@ -58,6 +81,13 @@ export async function checkAndBindAttachments(
   options: AttachmentBatchOptions,
 ): Promise<AttachmentBatchResult> {
   if (attachmentIds === undefined || attachmentIds.length === 0) return { ok: true, refs: [] };
+  return serialized(options.serializeKey, () => checkAndBind(attachmentIds, options));
+}
+
+async function checkAndBind(
+  attachmentIds: readonly string[],
+  options: AttachmentBatchOptions,
+): Promise<AttachmentBatchResult> {
   const { store, limits } = options;
   const ids = [...new Set(attachmentIds)];
   const fail = (code: AttachmentBatchFailure['body']['code'], error: string) =>

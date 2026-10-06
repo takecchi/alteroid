@@ -252,6 +252,8 @@ export async function chatCommand(): Promise<void> {
   };
   // 次に送る発言へ添えかけのファイル（`/attach`）。
   const draft = createAttachmentDraft(target);
+  // `/edit <番号|id>` で始めた編集（確定か `/edit-cancel` まで。#3642）。中は `draft` が元の添付も持つ。
+  let editing: EditInProgress | null = null;
   let conversationId: string | null = null;
   // 新しい会話で、2xx のあと `open` の前に SSE が終わった送信の `clientMessageId`（#3304）。次の送信の前に、
   // `GET /client-messages/:id` で会話を引き直す（引かずに送ると、次の発言が新しい会話に入って会話が黙って分かれる）。
@@ -267,6 +269,7 @@ export async function chatCommand(): Promise<void> {
     messages: [],
     messagesConversationId: null,
     messageAttachments: {},
+    messageTexts: {},
   };
 
   stdout.write(
@@ -286,7 +289,11 @@ export async function chatCommand(): Promise<void> {
       // 添えかけ（`draft`）と会話 id はここで失わない。`break` / `continue` は try の外へ効く。
       try {
         // 空行は、添えかけが無ければ送らない。あれば添付だけの発言として送る。
-        if (line.length === 0 && draft.count === 0) continue;
+        if (line.length === 0 && draft.count === 0) {
+          // 編集中に何も無いまま確定しても送らない（Web と同じ。本文か添付のどちらかは要る）。
+          if (editing !== null) stdout.write(`${EDIT_EMPTY_MESSAGE}\n`);
+          continue;
+        }
 
         if (/^\/(attach|attachments|detach)(\s|$)/.test(line)) {
           slashFailure = null;
@@ -297,6 +304,12 @@ export async function chatCommand(): Promise<void> {
             abortReason = `コマンド ${line.split(/\s+/)[0] ?? ''} が失敗した（${redactError(slashFailure)}）`;
             break;
           }
+          continue;
+        }
+
+        const editCommand = runEditDraftCommand(line, listed, draft, editing);
+        if (editCommand.handled) {
+          editing = editCommand.editing;
           continue;
         }
 
@@ -340,7 +353,7 @@ export async function chatCommand(): Promise<void> {
 
         // 前の送信が `open` の前に終わっていたら、受け取られたかを引いて会話を取り直す。引けなかったら、
         // 黙って新しい会話として送らない（readline は入力を残せないので、もう一度送ってもらう）。
-        if (conversationId === null && unopened !== null) {
+        if (editing === null && conversationId === null && unopened !== null) {
           try {
             const found = await findClientMessage(target, unopened);
             unopened = null;
@@ -384,25 +397,36 @@ export async function chatCommand(): Promise<void> {
         let sendFailure: string | null = null;
         // 送れなかったとき、本文を端末へ戻すための控え。サーバが受けたら外す（#3686）。
         unsent = line;
-        conversationId = await sendMessage(target, line, conversationId, undefined, {
-          onFailed: (reason) => {
-            sendFailure = reason;
+        // 編集の確定は、編集する発言の会話へ `supersedes` 付きで送る（いま話している会話は変えない）。
+        const edit = editing;
+        const sentTo = await sendMessage(
+          target,
+          line,
+          edit === null ? conversationId : edit.conversationId,
+          edit?.id,
+          {
+            onFailed: (reason) => {
+              sendFailure = reason;
+            },
+            ...(attachmentIds === undefined ? {} : { attachments: attachmentIds }),
+            // サーバが発言を受けたら、送った分の添えかけを外す（受けなかったら残す）。編集はここで終わる。
+            onAccepted: () => {
+              unsent = null;
+              draft.discard(sentFiles);
+              if (edit !== null) editing = null;
+            },
+            // 新しい会話で `open` の前に終わったら、次の送信の前に会話を引き直せるよう id を覚える（#3304）。
+            onUnopened: (clientMessageId) => {
+              unopened = clientMessageId;
+            },
+            // 添付が期限切れ（サーバが掃除した）なら、上げ済みの印を捨てて、次の送信で上げ直す（#3246）。
+            // 編集で引き継いだ元の添付は上げ直せないので、外すか編集をやめるかを案内する（#3642）。
+            onAttachmentMissing: (message) => {
+              stdout.write(`${expireUploads(sentFiles, message)}\n`);
+            },
           },
-          ...(attachmentIds === undefined ? {} : { attachments: attachmentIds }),
-          // サーバが発言を受けたら、送った分の添えかけを外す（受けなかったら残す）。
-          onAccepted: () => {
-            unsent = null;
-            draft.discard(sentFiles);
-          },
-          // 新しい会話で `open` の前に終わったら、次の送信の前に会話を引き直せるよう id を覚える（#3304）。
-          onUnopened: (clientMessageId) => {
-            unopened = clientMessageId;
-          },
-          // 添付が期限切れ（サーバが掃除した）なら、上げ済みの印を捨てて、次の送信で上げ直す（#3246）。
-          onAttachmentMissing: (message) => {
-            stdout.write(`${expireUploads(sentFiles, message)}\n`);
-          },
-        });
+        );
+        if (edit === null) conversationId = sentTo;
         if (sendFailure !== null) reprintUnsent();
         if (sendFailure !== null && !interactive) {
           abortReason = `送信に失敗した（${sendFailure}）`;
@@ -869,7 +893,12 @@ const HELP = `（入力）            応答中の Ctrl-C でターンを止め�
                      番号は /conversations の並び。includeSuperseded=true でチャットの
                      編集で畳まれた旧発言・その応答も含めて読める）
 /edit <番号|id> <新しい本文>  送信済みの自分の発言を編集する（番号は /conversation の並び。
-                     クローンの応答は編集できない。編集前のターンの副作用は取り消さない）
+                     クローンの応答は編集できない。編集前のターンの副作用は取り消さない。
+                     元の添付は付けたまま、その場で送る）
+/edit <番号|id>      編集を始める。元の本文と添付を出し、添付を添えかけに載せる（上げ直さない）。
+                     /detach で外す・/attach で足す。本文を打って Enter で確定（添付が残っていれば
+                     空行の Enter で本文を空にして確定できる。添付も本文も無ければ送らない）
+/edit-cancel         始めた編集をやめる（何も送らない）
 /resume [id]         進行中のターンへ戻る（途中経過を再生して続きを流す）。id 省略なら新しい順に5件まで探す。自動では戻らない
 /managers [status=<s1,s2>] [limit=<N>] [after=<番号|id>]  マネージャーの一覧（番号付き）と状態
                      status= は ${jobStatusSchema.options.join(' / ')} のカンマ区切り。
@@ -987,8 +1016,14 @@ export interface Listed {
    * 上の `messages` の各発言に付いていた添付の id（発言 id → 添付 id の並び。添付の無い発言は持たない）。
    * `/edit` が新しい版の `POST /chat` の `attachments` に付けて送る（Web の編集と同じ。#3399 決定 a・#3630）。
    * 出所は Web の `line.attachments` と同じ、`/conversation` が読んだ発言の `attachments`。
+   * 編集の開始（`/edit <番号|id>`）は、これを添えかけへ「上げ済み」として載せる（#3642）ので、名前・型・大きさも持つ。
    */
-  messageAttachments: Record<string, string[]>;
+  messageAttachments: Record<
+    string,
+    { id: string; name: string; mediaType: string; size: number }[]
+  >;
+  /** 上の `messages` の各発言の本文（発言 id → 本文）。編集の開始で元の本文を見せる（#3642）。 */
+  messageTexts: Record<string, string>;
 }
 
 /**
@@ -1474,6 +1509,7 @@ export async function runSlashCommand(
        */
       listed.messages.length = 0;
       listed.messageAttachments = {};
+      listed.messageTexts = {};
       listed.messagesConversationId = id;
       // その会話のターンから積まれた承認を時刻順の位置に1行で出す（#3261）。取れなくても会話は出す。
       const approvalsRead = await fetchConversationApprovals(client, id);
@@ -1496,8 +1532,14 @@ export async function runSlashCommand(
           const editable = message.role === 'inbound' && message.supersededBy === undefined;
           if (editable) {
             listed.messages.push(message.id);
+            listed.messageTexts[message.id] = message.text;
             if (message.attachments !== undefined && message.attachments.length > 0) {
-              listed.messageAttachments[message.id] = message.attachments.map((item) => item.id);
+              listed.messageAttachments[message.id] = message.attachments.map((item) => ({
+                id: item.id,
+                name: item.name,
+                mediaType: item.mediaType,
+                size: item.size,
+              }));
             }
           }
           const label = editable ? `[${listed.messages.length}]` : '   ';
@@ -1535,7 +1577,9 @@ export async function runSlashCommand(
         );
       }
       if (listed.messages.length > 0) {
-        stdout.write('  /edit <番号|id> <新しい本文> で自分の発言を編集できます\n');
+        stdout.write(
+          '  /edit <番号|id> <新しい本文> で自分の発言を編集できます（/edit <番号|id> だけなら、添付を外す・本文を空にする編集もできます）\n',
+        );
       }
       return 'ok';
     }
@@ -1567,8 +1611,10 @@ export async function runSlashCommand(
       const text = rawTail(line, 2);
       if (!reference || text.length === 0) {
         stdout.write(
-          '使い方: /edit <番号|id> <新しい本文>（番号は /conversation の並び。' +
-            '編集できるのは自分（人間）の発言だけです — クローンの応答は指せません）\n',
+          '使い方: /edit <番号|id> <新しい本文>（1行で直す。元の添付は付けたまま送る）、または\n' +
+            '        /edit <番号|id>（編集を始める。元の本文と添付を出す。/detach で添付を外し、/attach で足し、' +
+            '本文を打って Enter（添付が残っていれば空行でも）で確定、/edit-cancel でやめる）\n' +
+            '番号は /conversation の並び。編集できるのは自分（人間）の発言だけです — クローンの応答は指せません\n',
         );
         return 'ok';
       }
@@ -1593,7 +1639,7 @@ export async function runSlashCommand(
       }
       // 元の発言に付いていた添付は、外さずに新しい版へ引き継ぐ（上げ直さない。Web と同じ。#3399 決定 a・#3630）。
       // 期限切れで無くなっていれば、サーバが 400 attachment_missing で断り、sendMessage が理由を出す。
-      const carried = listed.messageAttachments[id] ?? [];
+      const carried = (listed.messageAttachments[id] ?? []).map((a) => a.id);
       await sendMessage(target, text, owningConversationId, id, {
         attachments: carried,
         ...(onFailed === undefined ? {} : { onFailed }),
@@ -4450,6 +4496,84 @@ function summarizeText(value: string): string {
   // 伏せ字を先に掛ける（切ってからだとトークンの途中で切れて形が崩れ、取りこぼす）。
   const single = redactBody(value).replace(/\s+/g, ' ').trim();
   return single.length > 80 ? `${single.slice(0, codePointBoundary(single, 80))}…` : single;
+}
+
+/** 始めた編集（`/edit <番号|id>`）。確定すると、この発言を `supersedes` に、この会話へ送る。 */
+export interface EditInProgress {
+  readonly id: string;
+  readonly conversationId: string;
+}
+
+/** 編集中に、本文も添付も無いまま確定しようとしたとき（Web と同じ。送らない）。 */
+export const EDIT_EMPTY_MESSAGE =
+  '本文も添付も無いので送っていません（本文を打つか、/attach で添付を足してください。やめるなら /edit-cancel）';
+
+/**
+ * `/edit <番号|id>`（編集を始める）と `/edit-cancel`（やめる）。Web の編集欄と同じ流れを、添えかけ（`draft`）で持つ（#3642）。
+ * - 始める: 元の本文と添付を出し、元の添付を上げ済みとして `draft` へ載せる（上げ直さない）。確定は、本文の行
+ *   （添付が残っていれば空行でも）が送られるとき（`chatCommand`）。
+ * - 既存の1行の形 `/edit <番号|id> <新しい本文>` は `handled: false` で `runSlashCommand` へ渡す（元の添付を付けて即送る）。
+ *   ただし編集の途中では、混ざらないよう断る。
+ * 添えかけに別の添付が残っているときは始めない（元の添付と混ざり、取り消しで巻き添えにするため）。
+ */
+export function runEditDraftCommand(
+  line: string,
+  listed: Listed,
+  draft: AttachmentDraft,
+  editing: EditInProgress | null,
+): { handled: false } | { handled: true; editing: EditInProgress | null } {
+  if (/^\/edit-cancel(\s|$)/.test(line)) {
+    if (editing === null) {
+      stdout.write('編集は始めていません\n');
+      return { handled: true, editing };
+    }
+    draft.clear();
+    stdout.write('編集をやめました（何も送っていません。添えかけも空にしました）\n');
+    return { handled: true, editing: null };
+  }
+  const match = /^\/edit(?:\s+([\s\S]*))?$/.exec(line);
+  if (match === null) return { handled: false };
+  const args = (match[1] ?? '').trim();
+  if (args === '') return { handled: false };
+  if (editing !== null) {
+    stdout.write(
+      '編集の途中です。本文を打って確定するか、/edit-cancel でやめてから、もう一度 /edit してください\n',
+    );
+    return { handled: true, editing };
+  }
+  if (/\s/.test(args)) return { handled: false }; // 1行の形
+  const id = resolveListedId(args, listed.messages);
+  if (id === null) {
+    stdout.write(
+      `[${args}] は直前の /conversation の一覧にありません` +
+        '（番号は、その会話でまだ畳まれていない自分の発言だけに振られています）\n',
+    );
+    return { handled: true, editing };
+  }
+  const owning = listed.messagesConversationId;
+  if (owning === null) {
+    stdout.write('先に /conversation <番号|id> でその発言が含まれる会話を開いてください\n');
+    return { handled: true, editing };
+  }
+  if (draft.count > 0) {
+    stdout.write(
+      '添えかけのファイルが残っています。先に送るか、/detach all で外してから /edit してください\n',
+    );
+    return { handled: true, editing };
+  }
+  const original = listed.messageAttachments[id] ?? [];
+  for (const attachment of original) draft.addUploaded(attachment);
+  const text = listed.messageTexts[id];
+  stdout.write(
+    `編集を始めます（${args}）\n` +
+      `  元の本文: ${text === undefined ? '（直前の /conversation の一覧に無いので出せません）' : redactBody(text)}\n`,
+  );
+  for (const item of attachmentLinesOf(original)) stdout.write(`  ${redactBody(item)}\n`);
+  stdout.write(
+    '本文を打って Enter で、置き換えた新しい版を送ります（添付が残っていれば空行の Enter で本文を空にして送れます）。\n' +
+      '/detach <番号|all> で添付を外す・/attach <path> で足す（足した分は新しく上げます）・/edit-cancel でやめる\n',
+  );
+  return { handled: true, editing: { id, conversationId: owning } };
 }
 
 /** `/attach <path>` / `/attachments` / `/detach <番号|all>`（添えかけの操作。送るときに上がる）。 */

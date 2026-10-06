@@ -103,7 +103,10 @@ import {
   reasonOf,
   readConversationPage,
   readConversationWindow,
+  decodeConversationCursor,
+  encodeConversationCursor,
   InvalidConversationCursorError,
+  type ConversationCursor,
   clientMessageIdSchema,
   RECENT_TRACE_LIMIT,
   recentDroppedTraces,
@@ -989,11 +992,6 @@ const conversationsQuery = z.object({
    * **`scan` の窓の外も、継続点を辿れば読める**（`readConversationPage` の doc）。
    */
   cursor: z.string().optional(),
-});
-/** `GET /conversations` のカーソルの中身（日誌の継続点）。 */
-const conversationsCursorSchema = z.object({
-  id: z.string().min(1),
-  at: z.string().min(1),
 });
 /**
  * `includeSuperseded`: 編集で畳まれた旧発言・その応答も含めて返すか
@@ -2423,6 +2421,7 @@ export function createApp(deps: AppDeps) {
         meta.conversationId !== undefined || meta.externalEventId !== undefined,
       conflictMessage: 'すでに別の宛先に結び付いた添付は使えない',
       onlyUploadedBy: principal.kind === 'integration' ? uploaderOf(principal) : undefined,
+      serializeKey: `externalEvent:${eventId}`,
     });
   }
 
@@ -3386,6 +3385,7 @@ export function createApp(deps: AppDeps) {
             isBoundElsewhere: (meta) =>
               meta.conversationId !== undefined && meta.conversationId !== conversationId,
             conflictMessage: '別の会話に結び付いた添付は使えない',
+            serializeKey: `conversation:${conversationId}`,
           });
         } catch (error) {
           claim?.settle(false);
@@ -3679,16 +3679,12 @@ export function createApp(deps: AppDeps) {
       queryParams(conversationsQuery),
       async (c) => {
         const { limit, scan, cursor } = c.req.valid('query');
-        let cursorPayload: z.infer<typeof conversationsCursorSchema> | undefined;
+        // 符号化はクローンの道具（`conversation_read`）と同じ関数（core）を通す。
+        let cursorPayload: ConversationCursor | undefined;
         if (cursor !== undefined) {
-          try {
-            cursorPayload = decodeCursor(cursor, conversationsCursorSchema);
-          } catch (error) {
-            if (error instanceof InvalidCursorError) {
-              return c.json({ error: error.message }, 400);
-            }
-            throw error;
-          }
+          const decoded = decodeConversationCursor(cursor);
+          if (decoded === null) return c.json({ error: new InvalidCursorError().message }, 400);
+          cursorPayload = decoded;
         }
         /**
          * 既読の記録は全員で1組（`ConversationReadStore`）。基準時刻が無ければここで決める
@@ -3758,9 +3754,7 @@ export function createApp(deps: AppDeps) {
            * `reachedStart: false` のときは「窓が `scan` 件ちょうどだった」だけのこともあるので、
            * 辿った先が空で終わることはある（安全側）。
            */
-          ...(page.next === null
-            ? {}
-            : { nextCursor: encodeCursor({ id: page.next.id, at: page.next.at }) }),
+          ...(page.next === null ? {} : { nextCursor: encodeConversationCursor(page.next) }),
         });
       },
     )

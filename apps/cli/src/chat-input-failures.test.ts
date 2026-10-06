@@ -135,6 +135,7 @@ describe('#3683: 本文の改行・インデント・連続した空白を潰さ
       messages: ['m1'],
       messagesConversationId: 'c1',
       messageAttachments: {},
+      messageTexts: {},
     };
     await runSlashCommand(
       '/msg mgr1 直して:\n  if x:\n      y',
@@ -210,6 +211,7 @@ describe('#3685: 非 TTY の /edit・/resume・/attach・/detach の失敗で止
         messages: [],
         messagesConversationId: 'c1',
         messageAttachments: {},
+        messageTexts: {},
       },
       null,
       { baseUrl: base, headers: {}, remote: false, note: null },

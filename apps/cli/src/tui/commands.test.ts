@@ -80,4 +80,10 @@ describe('resolveCommand', () => {
     expect(text).toMatch(/Ctrl\+D[^\n]*書きかけ[^\n]*もう一度/);
     expect(text).not.toContain('Ctrl+D（入力欄が空のとき）終了');
   });
+
+  it('help は委譲の画面のキー（一覧・詳細・追加指示・停止・書きかけの Esc 二度）を案内する', () => {
+    const text = helpLines().join('\n');
+    expect(text).toMatch(/委譲の画面[^\n]*Enter[^\n]*f[^\n]*m[^\n]*r/);
+    expect(text).toMatch(/委譲の詳細[^\n]*i[^\n]*s[^\n]*y[^\n]*Esc/);
+  });
 });
