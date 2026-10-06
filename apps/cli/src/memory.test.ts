@@ -122,6 +122,59 @@ describe('alteroid memory set', () => {
   });
 });
 
+describe('alteroid memory set の空の本文（#3456）', () => {
+  async function emptyFile(content: string): Promise<string> {
+    const dir = await makeTempDir('alteroid-memory-test-');
+    const path = join(dir, 'empty.md');
+    await writeFile(path, content, 'utf8');
+    return path;
+  }
+
+  it.each([
+    ['空', ''],
+    ['空白だけ', ' \n\t\n'],
+  ])(
+    '既存の記憶があるとき、本文が%sなら、上書きせずに断る（--allow-empty を案内する）',
+    async (_name, body) => {
+      const read = captureStdout();
+      replies.push({ status: 200, body: { document: { slug: 'x', content: '大事な記憶\n' } } });
+
+      const error = await memorySetCommand('x', { file: await emptyFile(body), yes: true }).catch(
+        (e: unknown) => e,
+      );
+
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toContain('本文が空');
+      expect((error as Error).message).toContain('--allow-empty');
+      expect(sent.filter((entry) => entry.method === 'PUT')).toEqual([]);
+      expect(read()).not.toContain('書き換えました');
+    },
+  );
+
+  it('新しく作るときも、本文が空なら断る（profile set と同じ）', async () => {
+    captureStdout();
+    replies.push({ status: 404, body: { error: 'not found' } });
+
+    await expect(memorySetCommand('x', { file: await emptyFile('') })).rejects.toThrow(
+      '--allow-empty',
+    );
+    expect(sent.filter((entry) => entry.method === 'PUT')).toEqual([]);
+  });
+
+  it('--allow-empty を付けたときだけ、空の本文で置き換える', async () => {
+    const read = captureStdout();
+    replies.push({ status: 200, body: { document: { slug: 'x', content: '大事な記憶\n' } } });
+    replies.push({ status: 200, body: { document: { slug: 'x', content: '' } } });
+
+    await memorySetCommand('x', { file: await emptyFile(''), yes: true, allowEmpty: true });
+
+    const puts = sent.filter((entry) => entry.method === 'PUT');
+    expect(puts).toHaveLength(1);
+    expect(JSON.parse(puts[0]?.body ?? '{}')).toEqual({ content: '' });
+    expect(read()).toContain('書き換えました: x');
+  });
+});
+
 describe('alteroid memory show の版と remove --if-match（#2919）', () => {
   it('show は版を stderr に1行出し、stdout は本文だけのまま（パイプを壊さない）', async () => {
     const read = captureStdout();
@@ -775,7 +828,10 @@ describe('alteroid memory set の上書き確認（#3201）', () => {
     replies.push(existing);
     const { io } = fakeIo({ isTTY: true, answer: 'no' });
 
-    await memorySetCommand('values', { file }, io);
+    // やめたことは例外で伝わる（入口が非 0 にする。#3450）。
+    await expect(memorySetCommand('values', { file }, io)).rejects.toThrow(
+      '取り消しました。何も変更していません。',
+    );
 
     expect(methods()).toEqual(['GET']);
   });

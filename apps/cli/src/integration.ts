@@ -293,13 +293,12 @@ export async function integrationRevokeCommand(
     stdout.write(`すでに失効しています: ${key.name}（失効 ${key.revokedAt}）\n`);
     return;
   }
-  const confirmed = await confirmIrreversible(
+  await confirmIrreversible(
     `連携の鍵「${key.name}」（source=${key.source}）を失効させます。\n` +
       '以後この鍵で送ってくる外のサービスは 401 になります。',
     { yes: options.yes },
     options.io,
   );
-  if (!confirmed) return;
   const response = await client['integration-keys'][':id'].revoke.$post({ param: { id } });
   if (!response.ok) await fail(response, target, `/integration-keys/${id}/revoke`);
   const { key: revoked } = (await response.json()) as { key: IntegrationKeyView };
@@ -324,12 +323,11 @@ export async function integrationRemoveUnreadableCommand(
   // 未ログインなら確認を出す前に断る（Issue #3214）。
   if (target.note !== null) throw new Error(target.note);
   // 戻せない操作なので確認する（#3141。`confirm.ts`）。壊れた行は中身を出さずに消すので、消すと残らない。
-  const confirmed = await confirmIrreversible(
+  await confirmIrreversible(
     `読めない連携の鍵の行（id: ${ids.join(', ')}）を消します。壊れた行は消すと残りません。`,
     { yes: options.yes },
     options.io,
   );
-  if (!confirmed) return;
   const client = createClient(target.baseUrl, target.headers);
   const response = await client['integration-keys'].unreadable.remove.$post({
     json: { ids: [...ids] },

@@ -251,12 +251,11 @@ export async function profileSetCommand(
   const profile = await fetchProfile(target);
   assertLegacySupports(profile, name, scope);
   if (profile.entries.some((row) => row.name === name)) {
-    const confirmed = await confirmIrreversible(
+    await confirmIrreversible(
       `プロファイルの行 ${name} を置き換えます。前の本文は残りません（控えるなら alteroid profile show ${name}）。`,
       options,
       io,
     );
-    if (!confirmed) return;
   }
   const script =
     options.file === undefined || options.file === '-'
@@ -314,11 +313,10 @@ export async function profileRemoveCommand(
   const target = await resolveTarget();
   const profile = await fetchProfile(target);
   assertLegacySupports(profile, name);
-  const confirmed = await confirmIrreversible(
+  await confirmIrreversible(
     `プロファイルの行 ${name} を外します。行の本文は残りません（控えるなら alteroid profile show ${name}）。`,
     options,
   );
-  if (!confirmed) return;
   // 古いデーモンには DELETE /profile/:name が無い。default の行は全部外す口（空の PUT）へ倒す。
   const result = (await (profile.legacy
     ? request(target, '/profile', { method: 'PUT', body: JSON.stringify({ script: '' }) })
@@ -343,11 +341,10 @@ export async function profileClearCommand(options: { yes?: boolean } = {}): Prom
   // 未ログインなら確認を出す前に断る（Issue #3214）。
   if (target.note !== null) throw new Error(target.note);
   // **戻せない操作なので確認する**（Issue #3141。`confirm.ts`）。全行の本文が残らない。
-  const confirmed = await confirmIrreversible(
+  await confirmIrreversible(
     'プロファイルの全行を外します。行の本文は残りません（控えるなら alteroid profile show）。',
     options,
   );
-  if (!confirmed) return;
   const result = (await request(target, '/profile', {
     method: 'PUT',
     body: JSON.stringify({ script: '' }),

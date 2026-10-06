@@ -351,6 +351,14 @@ export async function memoryEditCommand(slug: string): Promise<void> {
 }
 
 /**
+ * 本文が空（空白だけを含む）のときの断り（#3456）。上流のコマンドが失敗して何も流さなかった
+ * `generate | alteroid memory set x --yes` や `< /dev/null` で、記憶が黙って空になるのを防ぐ。
+ * 記憶には版の履歴が無く、戻せない。`profile set`（`EMPTY_BODY_MESSAGE`）と同じ線。
+ */
+const EMPTY_BODY_MESSAGE =
+  '本文が空なので置き換えません（既存の本文は変えていません）。空にしたいときだけ --allow-empty を付けてください。';
+
+/**
  * ファイル（または標準入力）の内容で丸ごと置き換える。
  *
  * **既に在る記憶を置き換えるときだけ確認する（Issue #3201。`confirm.ts`）。** 新しく置くときは
@@ -363,23 +371,26 @@ export async function memoryEditCommand(slug: string): Promise<void> {
  */
 export async function memorySetCommand(
   slug: string,
-  options: { file?: string; yes?: boolean } = {},
+  options: { file?: string; yes?: boolean; allowEmpty?: boolean } = {},
   io?: ConfirmIo,
 ): Promise<void> {
   const conn = await connect('write');
   if (conn === null) return;
   if ((await readDoc(conn.client, conn.target, slug)) !== null) {
-    const confirmed = await confirmIrreversible(
+    await confirmIrreversible(
       `記憶 ${slug} を置き換えます。前の本文は残りません（控えるなら alteroid memory show ${slug}）。`,
       options,
       io,
     );
-    if (!confirmed) return;
   }
   const content =
     options.file === undefined || options.file === '-'
       ? await readAll()
       : await readInputFile(options.file, '--file', '--file <path>、または標準入力（-）');
+  // 空の本文は通信の前に断る（#3456。`profile set` と同じ線）。空にしたい人だけ `--allow-empty`。
+  if (options.allowEmpty !== true && content.trim().length === 0) {
+    throw new Error(`記憶 ${slug}: ${EMPTY_BODY_MESSAGE}`);
+  }
   await write(conn.client, conn.target, slug, content);
 }
 
@@ -425,14 +436,10 @@ export async function memoryRemoveCommand(
   const conn = await connect('write');
   if (conn === null) return;
   const { client, target } = conn;
-  if (
-    !(await confirmIrreversible(
-      `記憶 ${slug} を消します。本文は戻りません（日誌には消した事実と大きさだけが残ります）。`,
-      options,
-    ))
-  ) {
-    return;
-  }
+  await confirmIrreversible(
+    `記憶 ${slug} を消します。本文は戻りません（日誌には消した事実と大きさだけが残ります）。`,
+    options,
+  );
   // **`--if-match` があれば、それだけで照合する**（Issue #2919）。人間が判断の根拠にしたのは
   // `memory show` で読んだ内容なので、消す直前に読み直した版へ差し替えない。
   // 無ければ、消す直前に読んだ版を前提にする（上の段落）。

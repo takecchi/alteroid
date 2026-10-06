@@ -695,7 +695,8 @@ memoryCommand
   .description('ファイル（または標準入力）の内容で丸ごと置き換える')
   .option('-f, --file <path>', '読み込むファイル（省略か - で標準入力）')
   .option('--yes', '確認を飛ばす（スクリプト・CI 向け。端末でなければ必須）')
-  .action(async (slug: string, options: { file?: string; yes?: boolean }) => {
+  .option('--allow-empty', '本文が空でも置き換える（既定では空の本文は断る。空にしたいときだけ）')
+  .action(async (slug: string, options: { file?: string; yes?: boolean; allowEmpty?: boolean }) => {
     await memorySetCommand(slug, options);
   });
 
@@ -768,9 +769,15 @@ practiceCommand
   .option('-f, --file <path>', '読み込むファイル（省略か - で標準入力）')
   .option('--kind <kind>', '仕事の種類（省略すると現在の値。新しいやり方では必須）')
   .option('--title <title>', '題（省略すると現在の値。新しいやり方では必須）')
-  .action(async (slug: string, options: { file?: string; kind?: string; title?: string }) => {
-    await practiceSetCommand(slug, options);
-  });
+  .option('--allow-empty', '本文が空でも置き換える（既定では空の本文は断る。空にしたいときだけ）')
+  .action(
+    async (
+      slug: string,
+      options: { file?: string; kind?: string; title?: string; allowEmpty?: boolean },
+    ) => {
+      await practiceSetCommand(slug, options);
+    },
+  );
 
 practiceCommand
   .command('remove <slug>')
@@ -1161,6 +1168,18 @@ program
   });
 
 /**
+ * 入口の最上位が、コマンドの失敗（投げられた例外）を stderr に1行で言い、終了コードを返す。
+ *
+ * 終了コードは**失敗なら 1**（`daemon stop` が止まらなかったときの `process.exitCode = 1`〔#3140〕と
+ * 同じ値）。戻せない操作の確認で使い手がやめた（`ConfirmDeclinedError`、#3450）ときも同じ 1 で、
+ * 「何もしなかった」をスクリプトが成功と区別できる。テストから argv 経由で測れるよう切り出してある。
+ */
+export function reportCliFailure(error: unknown): number {
+  process.stderr.write(`alteroid: ${describeCliFailure(error)}\n`);
+  return 1;
+}
+
+/**
  * 直接起動されたときだけ parseAsync を走らせる。
  *
  * `apps/runner/src/index.ts` / `apps/daemon/src/index.ts` と同じ形（既存の
@@ -1187,7 +1206,6 @@ if (invokedDirectly()) {
     ? launchTui()
     : program.parseAsync(process.argv);
   run.catch((error: unknown) => {
-    process.stderr.write(`alteroid: ${describeCliFailure(error)}\n`);
-    process.exit(1);
+    process.exit(reportCliFailure(error));
   });
 }

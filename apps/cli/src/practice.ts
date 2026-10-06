@@ -277,7 +277,7 @@ export async function practiceEditCommand(
  */
 export async function practiceSetCommand(
   slug: string,
-  options: { file?: string; kind?: string; title?: string } = {},
+  options: { file?: string; kind?: string; title?: string; allowEmpty?: boolean } = {},
 ): Promise<void> {
   const conn = await connect('write');
   if (conn === null) return;
@@ -297,6 +297,13 @@ export async function practiceSetCommand(
     options.file === undefined || options.file === '-'
       ? await readAll()
       : await readInputFile(options.file, '--file', '--file <path>、または標準入力（-）');
+  // 空の本文は通信の前に断る（#3456。`memory set`・`profile set` と同じ線）。空にしたい人だけ `--allow-empty`。
+  if (options.allowEmpty !== true && content.trim().length === 0) {
+    throw new Error(
+      `やり方 ${slug}: 本文が空なので置き換えません（既存の本文は変えていません）。` +
+        '空にしたいときだけ --allow-empty を付けてください。',
+    );
+  }
   await write(client, target, slug, kind, title, content);
 }
 
