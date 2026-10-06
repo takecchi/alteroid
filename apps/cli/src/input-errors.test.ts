@@ -143,7 +143,7 @@ describe('openEditor（#2867）', () => {
   it('在るエディタは、指定の文字列のままシェルで起こす', async () => {
     vi.stubEnv('VISUAL', 'sh -c true');
     await openEditor('/tmp/x', 'alt');
-    expect(spawn).toHaveBeenCalledWith('sh -c true', ['/tmp/x'], {
+    expect(spawn).toHaveBeenCalledWith('sh -c true', ["'/tmp/x'"], {
       stdio: 'inherit',
       shell: true,
     });
