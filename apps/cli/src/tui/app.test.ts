@@ -856,6 +856,70 @@ describe('委譲（マネージャーの一覧と詳細）', () => {
     expect(h.exited()).toBe(false);
     expect(h.frame()).toContain('❯ abc');
   });
+
+  it('委譲の入力欄から /exit を打ったとき、会話の書きかけが在れば 1 度目は案内だけで、2 度目の /exit で終了する（#3518）', async () => {
+    const h = start(managersFixture);
+    await type(h.stdin, '会話の書きかけ');
+    h.stdin.write(ESC);
+    await waitFor(() => h.frame().includes('1-5 画面'));
+    h.stdin.write('3');
+    await waitFor(() => h.frame().includes('委譲（絞り: すべて'));
+    h.stdin.write(ENTER);
+    await waitFor(() => h.frame().includes('Esc 一覧へ'));
+    h.stdin.write('i');
+    await type(h.stdin, '/exit');
+    h.stdin.write(ENTER);
+    await waitFor(() => h.frame().includes('もう一度 ^D'));
+    expect(h.frame()).toContain('もう一度 ^D');
+    expect(h.exited()).toBe(false);
+    await type(h.stdin, '/exit');
+    h.stdin.write(ENTER);
+    await waitFor(() => h.exited());
+    expect(h.exited()).toBe(true);
+  });
+
+  it('会話の入力欄から /exit を打ったとき、委譲の書きかけが在れば 1 度目は案内だけで、2 度目の Ctrl+D でも終了できる（#3518）', async () => {
+    const h = start(managersFixture);
+    await openList(h);
+    h.stdin.write(ENTER);
+    await waitFor(() => h.frame().includes('Esc 一覧へ'));
+    h.stdin.write('i');
+    await type(h.stdin, '委譲の書きかけ');
+    h.stdin.write(ESC);
+    await waitFor(() => h.frame().includes('1-5 画面'));
+    h.stdin.write('1');
+    await type(h.stdin, '/exit');
+    h.stdin.write(ENTER);
+    await waitFor(() => h.frame().includes('もう一度 ^D'));
+    expect(h.frame()).toContain('もう一度 ^D');
+    expect(h.exited()).toBe(false);
+    h.stdin.write(CTRL_D);
+    await waitFor(() => h.exited());
+    expect(h.exited()).toBe(true);
+  });
+
+  it('/exit の 1 度目のあとに別のキーを挟めば、1 度目からやり直す（#3518）', async () => {
+    const h = start(managersFixture);
+    await openList(h);
+    h.stdin.write(ENTER);
+    await waitFor(() => h.frame().includes('Esc 一覧へ'));
+    h.stdin.write('i');
+    await type(h.stdin, '委譲の書きかけ');
+    h.stdin.write(ESC);
+    await waitFor(() => h.frame().includes('1-5 画面'));
+    h.stdin.write('1');
+    await type(h.stdin, '/exit');
+    h.stdin.write(ENTER);
+    await waitFor(() => h.frame().includes('もう一度 ^D'));
+    h.stdin.write(ESC);
+    await waitFor(() => !h.frame().includes('もう一度 ^D'));
+    h.stdin.write('1');
+    await type(h.stdin, '/exit');
+    h.stdin.write(ENTER);
+    await waitFor(() => h.frame().includes('もう一度 ^D'));
+    expect(h.frame()).toContain('もう一度 ^D');
+    expect(h.exited()).toBe(false);
+  });
 });
 
 describe('日誌（ライブで流れる一覧と全文）', () => {
