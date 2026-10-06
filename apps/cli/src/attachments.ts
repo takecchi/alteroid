@@ -1,4 +1,5 @@
 import { readFile, stat, writeFile } from 'node:fs/promises';
+import { homedir } from 'node:os';
 import { basename, resolve } from 'node:path';
 import { stdout } from 'node:process';
 
@@ -79,6 +80,24 @@ export function attachmentLinesOf(
   attachments: readonly { id: string; name: string; mediaType: string; size: number }[] | undefined,
 ): string[] {
   return (attachments ?? []).map(describeAttachment);
+}
+
+/**
+ * `/attach` に打たれたパスの解釈（REPL・TUI 共通。`alteroid attachments put ~/x` でシェルが
+ * してくれることに揃える。#3219）。**`add` の前に呼ぶ**（`add` は解釈済みのパスを受ける。
+ * `attachments put` の引数はシェルが解釈済みなので二重に解釈しない）。
+ * - 前後が同じ引用符なら外し、中身はそのまま（シェルも引用符の中では `~` を展開しない）。
+ * - 引用符が無ければ、先頭の `~` / `~/` を home に展開し、`\ ` は空白にする（端末へドラッグすると
+ *   空白が `\ ` になる）。それ以外のバックスラッシュは触らない（ファイル名の一部かもしれず、
+ *   黙って消すと別のパスになる）。`~user` は展開しない（引ける home が無い）。
+ */
+export function interpretAttachPath(raw: string): string {
+  const trimmed = raw.trim();
+  const quoted = /^(['"])([\s\S]*)\1$/.exec(trimmed);
+  if (quoted !== null) return quoted[2] ?? trimmed;
+  const expanded =
+    trimmed === '~' || trimmed.startsWith('~/') ? `${homedir()}${trimmed.slice(1)}` : trimmed;
+  return expanded.replaceAll('\\ ', ' ');
 }
 
 /** 次に送る発言へ添えかけのファイル。 */

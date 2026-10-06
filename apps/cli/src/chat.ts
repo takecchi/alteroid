@@ -63,12 +63,17 @@ import {
   AttachmentDraft,
   createAttachmentDraft,
   attachmentLinesOf,
+  interpretAttachPath,
   describeAttachment,
   uploadAttachment,
   uploadDraft,
 } from './attachments.js';
 import { createClient, type DaemonClient } from './client.js';
-import { fetchUnreadTotalLine, markConversationReadAfterReply } from './conversations.js';
+import {
+  fetchUnreadTotalLine,
+  markConversationReadAfterReply,
+  unreadMark,
+} from './conversations.js';
 import { formatElapsedAgo } from './format.js';
 import { redactBody, redactError } from './redact.js';
 import { formatCreatedAt, freshnessMarker } from './memory.js';
@@ -1002,7 +1007,7 @@ export async function runSlashCommand(
           stdout.write(
             `  [${index + 1}] ${conversation.conversationId}` +
               `  作成: ${conversation.startedAt}  更新: ${conversation.updatedAt}` +
-              `  (${conversation.messages}件)\n`,
+              `  (${conversation.messages}件)${unreadMark(conversation.unreadCount)}\n`,
           );
           stdout.write(`      ${redactBody(conversation.preview)}\n`);
         });
@@ -3972,7 +3977,7 @@ export async function runAttachmentCommand(line: string, draft: AttachmentDraft)
       stdout.write('使い方: /attach <path>\n');
       return;
     }
-    const added = await draft.add(unquotePath(args));
+    const added = await draft.add(interpretAttachPath(args));
     if (!added.ok) {
       stdout.write(`添えられません: ${added.reason}\n`);
       return;
@@ -3996,12 +4001,6 @@ export async function runAttachmentCommand(line: string, draft: AttachmentDraft)
       ? `外した: ${removed.removed.map((f) => f.name).join(', ')}（残り ${draft.count} 件）\n`
       : `外せません: ${removed.reason}\n`,
   );
-}
-
-/** パスの前後の引用符（シェルの癖で付けがち）を外す。 */
-function unquotePath(raw: string): string {
-  const match = /^(['"])(.*)\1$/.exec(raw);
-  return match === null ? raw : (match[2] ?? raw);
 }
 
 /**

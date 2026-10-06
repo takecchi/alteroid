@@ -11,6 +11,7 @@ import {
   createAttachmentDraft,
   describeAttachment,
   fetchAttachmentLimits,
+  interpretAttachPath,
   mediaTypeOfName,
   uploadAttachment,
   uploadDraft,
@@ -323,5 +324,42 @@ describe('添付の上限はデーモンの値で先に検査する（#3204）',
     stubLimits(() => new Response('', { status: 404 }));
     const result = await createAttachmentDraft(target).add(path);
     expect(result.ok ? '' : result.reason).toContain('大きすぎる');
+  });
+});
+
+describe('interpretAttachPath（/attach のパスの解釈。#3219）', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('先頭の ~ と ~/ を home に展開する。~user・途中の ~ は触らない', () => {
+    vi.stubEnv('HOME', '/home/me');
+    expect(interpretAttachPath('~')).toBe('/home/me');
+    expect(interpretAttachPath('~/pic.png')).toBe('/home/me/pic.png');
+    expect(interpretAttachPath('~other/pic.png')).toBe('~other/pic.png');
+    expect(interpretAttachPath('a/~/pic.png')).toBe('a/~/pic.png');
+  });
+
+  it('\\ でエスケープされた空白を空白にし、ほかのバックスラッシュは触らない', () => {
+    vi.stubEnv('HOME', '/home/me');
+    expect(interpretAttachPath('~/My\\ Pics/a\\ b.png')).toBe('/home/me/My Pics/a b.png');
+    expect(interpretAttachPath('/x/a\\nb.png')).toBe('/x/a\\nb.png');
+  });
+
+  it('引用符で囲まれていれば外すだけ（シェルと同じく、中の ~ や \\ は解釈しない）', () => {
+    vi.stubEnv('HOME', '/home/me');
+    expect(interpretAttachPath('"/x/a b.png"')).toBe('/x/a b.png');
+    expect(interpretAttachPath("'~/a b.png'")).toBe('~/a b.png');
+  });
+
+  it('/attach ~/x は home の下のファイルを読んで添えかける（REPL）', async () => {
+    const dir = await makeTempDir('alteroid-attach-home-');
+    await writeFile(join(dir, 'my pic.txt'), 'hi');
+    vi.stubEnv('HOME', dir);
+    const out = captureStdout();
+    const draft = new AttachmentDraft();
+    await runAttachmentCommand('/attach ~/my\\ pic.txt', draft);
+    expect(draft.list().map((f) => f.path)).toEqual([join(dir, 'my pic.txt')]);
+    expect(out()).not.toContain('添えられません');
   });
 });

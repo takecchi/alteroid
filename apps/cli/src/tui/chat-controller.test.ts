@@ -670,6 +670,19 @@ describe('/resume（明示して進行中の会話へ戻る）', () => {
 });
 
 describe('/attach（添えかけ）', () => {
+  it('~/ を home に展開し、\\ の空白を空白として読む（#3219）', async () => {
+    const dir = await makeTempDir('alteroid-tui-attach-home-');
+    await writeFile(join(dir, 'my log.txt'), 'log');
+    vi.stubEnv('HOME', dir);
+    try {
+      const { controller } = setup();
+      await controller.attach('~/my\\ log.txt');
+      expect(controller.hasAttachments()).toBe(true);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it('送るときに上げ、id を /chat の attachments に入れ、受理後に添えかけを空にする。失敗なら送らず残す', async () => {
     const dir = await makeTempDir('alteroid-tui-attach-');
     const path = join(dir, 'a.log');
