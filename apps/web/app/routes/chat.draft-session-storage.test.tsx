@@ -17,6 +17,8 @@ import {
   stubFetch,
 } from '~/test-support';
 
+import { storeCredential } from '@alteroid/logic';
+
 import Chat from './chat';
 
 const A = 'conv-3400-a';
@@ -167,5 +169,23 @@ describe('書きかけの本文を sessionStorage へ残す（#3400）', () => {
     fireEvent.click(screen.getByRole('button', { name: 'メッセージを送信' }));
     await vi.waitFor(() => expect(stored(A)).toBeNull());
     expect(input.value).toBe('');
+  });
+
+  it('ログアウトの直前に打った本文は、ログアウトの後（タイマー・pagehide・unmount）に書き戻らない', async () => {
+    const first = mount(`/chat/${A}`);
+    const input = await box();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    fireEvent.change(input, { target: { value: 'ログアウト直前に打った' } });
+    expect(stored(A)).toBeNull();
+    // 書き出しの待ちが明ける前にログアウトする。
+    storeCredential('http://daemon.test', null);
+    act(() => {
+      vi.advanceTimersByTime(1000);
+    });
+    expect(stored(A)).toBeNull();
+    window.dispatchEvent(new Event('pagehide'));
+    first.view.unmount();
+    expect(stored(A)).toBeNull();
+    expect(sessionStorage.length).toBe(0);
   });
 });

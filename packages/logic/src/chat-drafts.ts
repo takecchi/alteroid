@@ -15,6 +15,16 @@
 
 const PREFIX = 'alteroid.chatDraft:';
 
+/**
+ * 全部消した回数（ログアウトのたびに増える）。間引きで書き出しを待っている側が、待っているあいだに
+ * ログアウトされたかを見るための印——待ちが明けた後に書くと、消したはずの本文が書き戻る。
+ */
+let clearEpoch = 0;
+
+export function chatDraftEpoch(): number {
+  return clearEpoch;
+}
+
 function keyFor(conversationId: string | undefined): string {
   return `${PREFIX}${conversationId ?? 'new'}`;
 }
@@ -51,6 +61,7 @@ export function saveChatDraft(conversationId: string | undefined, text: string):
 
 /** 全会話の書きかけを消す（ログアウト）。 */
 export function clearChatDrafts(): void {
+  clearEpoch += 1;
   const target = storage();
   if (target === null) return;
   try {

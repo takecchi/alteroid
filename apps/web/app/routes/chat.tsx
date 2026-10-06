@@ -44,6 +44,7 @@ import {
   formatDateTime,
   formatRelative,
   isPreviewableImage,
+  chatDraftEpoch,
   isEmptyQuestionsDraft,
   loadApprovalDrafts,
   loadChatDraft,
@@ -854,11 +855,15 @@ export function ChatPane({
    * 空にしたときは待たずに消す（送った文が復元されない）。会話を替える・画面を離れる・タブを
    * 隠す／閉じる（`pagehide`）ときは、待っている分をすぐ書く。
    */
-  const pendingDraftSave = useRef<{ id: string | undefined; text: string } | null>(null);
+  const pendingDraftSave = useRef<{ id: string | undefined; text: string; epoch: number } | null>(
+    null,
+  );
   const flushDraftSave = useCallback(() => {
     const waiting = pendingDraftSave.current;
     if (waiting === null) return;
     pendingDraftSave.current = null;
+    // 待っているあいだにログアウト（全部消す）されたなら、書き戻さない。
+    if (waiting.epoch !== chatDraftEpoch()) return;
     saveChatDraft(waiting.id, waiting.text);
   }, []);
   useEffect(() => {
@@ -869,7 +874,7 @@ export function ChatPane({
       saveChatDraft(shownId, '');
       return;
     }
-    pendingDraftSave.current = { id: shownId, text: draft };
+    pendingDraftSave.current = { id: shownId, text: draft, epoch: chatDraftEpoch() };
     const timer = setTimeout(flushDraftSave, DRAFT_SAVE_DELAY_MS);
     return () => clearTimeout(timer);
   }, [shownId, draft, flushDraftSave]);
