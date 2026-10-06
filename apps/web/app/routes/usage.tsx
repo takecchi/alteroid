@@ -220,6 +220,31 @@ export function parseUsageDate(raw: string | null): string {
 const UNKNOWN_MANAGER = '（一覧に無い委譲）';
 const UNKNOWN_TOKEN = '（一覧に無い認証トークン）';
 
+/** 一覧を読めていないときの注記（名前を出せない理由）。 */
+const UNREADABLE_MANAGER_NAMES =
+  '委譲の一覧を読めていないので、名前を出せない。委譲は id の先頭8文字で示している。';
+const UNREADABLE_TOKEN_NAMES =
+  '認証トークンの一覧を読めていないので、名前を出せない。認証トークンは id の先頭8文字で示している。';
+
+/** 名前を引けないときに行を区別するための id の短い形（`topology-scene` の `managerLabel` と同じ8文字）。 */
+function shortId(id: string): string {
+  return id.length > 8 ? id.slice(0, 8) : id;
+}
+
+/** 一覧が読めず名前を出せないことを断る。0件なら描かない。形は `UnreadableUsageRowsNote` に揃える。 */
+function UnreadableNamesNote({ lines }: { lines: readonly string[] }) {
+  if (lines.length === 0) return null;
+  return (
+    <div
+      role="status"
+      className="flex items-start gap-2 rounded-md border border-warn/40 bg-warn/10 px-3 py-2 text-sm text-warn"
+    >
+      <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden />
+      <span className="min-w-0 break-words">{lines.join(' ')}</span>
+    </div>
+  );
+}
+
 interface IdLabels {
   manager: (id: string) => string;
   token: (id: string) => string;
@@ -312,8 +337,8 @@ export default function Usage() {
   const idPrefix = useId();
   // 候補は「あれば選べる」だけにする。**取れなくても絞り込みは使える**（URL の値は
   // そのまま効く）ので、一覧の失敗は画面のエラーにしない。
-  const { data: managersData } = useManagers();
-  const { data: tokensData } = useTokens();
+  const { data: managersData, error: managersError } = useManagers();
+  const { data: tokensData, error: tokensError } = useTokens();
   const managerOptions = (managersData?.managers ?? []).map((manager) => ({
     value: manager.managerId,
     label: `${shortenRequest(manager.request)}（${formatDateTime(manager.startedAt)}）`,
@@ -322,11 +347,28 @@ export default function Usage() {
     value: token.id,
     label: token.label,
   }));
-  // 軸の行・一覧の見出しに、id でなく名前を出すための引き表（無いものは id を見せない）。
+  // 軸の行・一覧の見出しに、id でなく名前を出すための引き表。
+  // **一覧が取れていて、そこに無い id** だけが「一覧に無い」。**取れていない**（読み込み中・
+  // 失敗）ときは「無い」と言えないので、id の先頭だけで区別する（`shortId`）。
+  // id は秘密ではない（秘密は認証トークンの `value` で、API は id しか出さない。
+  // `/managers/<id>` への Link の href にも既に出ている）。名前の方が読みやすいので
+  // 名前を優先しているだけで、id を隠す意図ではない。
   const labels: IdLabels = {
-    manager: (id) => managerOptions.find((option) => option.value === id)?.label ?? UNKNOWN_MANAGER,
-    token: (id) => tokenOptions.find((option) => option.value === id)?.label ?? UNKNOWN_TOKEN,
+    manager: (id) =>
+      managersData === undefined
+        ? shortId(id)
+        : (managerOptions.find((option) => option.value === id)?.label ?? UNKNOWN_MANAGER),
+    token: (id) =>
+      tokensData === undefined
+        ? shortId(id)
+        : (tokenOptions.find((option) => option.value === id)?.label ?? UNKNOWN_TOKEN),
   };
+  const unreadableNames = [
+    ...(managersError !== undefined && managersData === undefined
+      ? [UNREADABLE_MANAGER_NAMES]
+      : []),
+    ...(tokensError !== undefined && tokensData === undefined ? [UNREADABLE_TOKEN_NAMES] : []),
+  ];
 
   /** 1つの絞り込みを変える。空文字なら URL からそのパラメタを消す。 */
   function setFilter(param: string, value: string) {
@@ -541,6 +583,7 @@ export default function Usage() {
             隠すと、枠の状態が画面から消える）。
           */}
           <AccountCard account={data.account} />
+          <UnreadableNamesNote lines={unreadableNames} />
           {data.since === null ? (
             <>
               {/* **`$0.00` と出さない。** まだ1件も無いのを「使っていない」に見せない。 */}

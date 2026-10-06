@@ -9,7 +9,13 @@ import type { z } from 'zod';
 
 import type { topologyResponseSchema } from './openapi.js';
 import type { TopologyActivityTracker } from './topology-activity.js';
-import { cloneManagerLink, HUMAN_CLONE_LINK, CLONE_STORAGE_LINK } from './topology-activity.js';
+import {
+  cloneManagerLink,
+  externalCloneLink,
+  EXTERNAL_OTHERS_LINK,
+  HUMAN_CLONE_LINK,
+  CLONE_STORAGE_LINK,
+} from './topology-activity.js';
 
 /**
  * 稼働の地図のスナップショットを組む層（`GET /topology` と `GET /topology/stream`）。
@@ -25,6 +31,18 @@ type TopologyManager = TopologySnapshot['managers'][number];
 
 /** 終端した委譲を地図に残す窓。画面が「畳まれていく」のを見せるための猶予。 */
 export const TOPOLOGY_ENDED_WINDOW_MS = 10 * 60 * 1000;
+/**
+ * 連携の鍵の札を地図に残す窓（Issue #3676）。最後の呼び出しがこれより古い鍵は札も線も出さない
+ * （終端した委譲の窓と同じ長さ。観測した分だけで、呼ばれていないことを言うものではない）。
+ */
+export const TOPOLOGY_EXTERNAL_WINDOW_MS = TOPOLOGY_ENDED_WINDOW_MS;
+/**
+ * 外部サービスの札の上限。超えた分は札にせず、件数（`externalsOmitted`）と1本の線
+ * （`external-others~clone`）にまとめる。**5 の根拠**: 左の列は人間・記憶と並び、クローンの左辺へ入る
+ * 線の出口は 36px に収まる（7本 = 人間 + 5 + 記憶で6px 間隔）。作業者の20（1マネージャーの右の列を
+ * 縦に伸ばせる）や仕事なしの畳み（3）と違い、ここは同じ縦の列を共有する。
+ */
+export const TOPOLOGY_EXTERNALS_MAX = 5;
 /**
  * runner の生存確認の一覧に載っていた観測（`runnerListedAt`）を「いま居る」の根拠にしてよい
  * 古さの上限。生存確認は10秒周期なので、6周ぶん取りこぼしても居る側へ倒す。`/managers` だけが
@@ -256,6 +274,25 @@ export function buildTopologySnapshot(input: TopologyInputs): TopologySnapshot {
     return false;
   });
 
+  // 外部サービス（連携の鍵）。窓の中のものだけ。新しい順に上限まで札にし、残りは件数と1本の線へ。
+  // 札の並びは**名前→keyId の順で固定**する（呼ばれるたびに札が入れ替わって見えないように）。
+  const recent = input.activity.externals().filter((row) => {
+    const at = Date.parse(row.lastAt);
+    return !Number.isNaN(at) && input.nowMs - at <= TOPOLOGY_EXTERNAL_WINDOW_MS;
+  });
+  const shownExternals = recent
+    .slice(0, TOPOLOGY_EXTERNALS_MAX)
+    .sort((a, b) => a.name.localeCompare(b.name) || a.keyId.localeCompare(b.keyId));
+  const omittedExternals = recent.slice(TOPOLOGY_EXTERNALS_MAX);
+  const externalLinks: TopologySnapshot['links'] = shownExternals.map((row) => ({
+    key: externalCloneLink(row.keyId),
+    lastDownAt: row.lastAt,
+  }));
+  if (omittedExternals.length > 0) {
+    // `externals()` は新しい順なので、まとめた側で最も新しいのは先頭。
+    externalLinks.push({ key: EXTERNAL_OTHERS_LINK, lastDownAt: omittedExternals[0]!.lastAt });
+  }
+
   return {
     observedAt: new Date(input.nowMs).toISOString(),
     clone,
@@ -272,7 +309,19 @@ export function buildTopologySnapshot(input: TopologyInputs): TopologySnapshot {
     ...(input.unreadable !== undefined && input.unreadable.length > 0
       ? { unreadable: [...input.unreadable] }
       : {}),
-    links,
+    // 1件でも在るときだけ載せる（0件で空配列を作ると「呼ばれていない」と読める）。
+    ...(shownExternals.length > 0
+      ? {
+          externals: shownExternals.map((row) => ({
+            keyId: row.keyId,
+            name: row.name,
+            source: row.source,
+            lastAt: row.lastAt,
+          })),
+        }
+      : {}),
+    ...(omittedExternals.length > 0 ? { externalsOmitted: omittedExternals.length } : {}),
+    links: [...links, ...externalLinks],
   };
 }
 

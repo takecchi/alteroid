@@ -309,10 +309,11 @@ export async function memoryEditCommand(slug: string): Promise<void> {
   // 前提なし（従来どおり後勝ち）で書く。
   const ifMatch = doc === null ? null : doc.version;
 
+  const initial = template(slug);
   const dir = await mkdtemp(join(tmpdir(), 'alteroid-memory-'));
   const path = join(dir, `${slug}.md`);
   try {
-    await writeFile(path, current ?? template(slug), 'utf8');
+    await writeFile(path, current ?? initial, 'utf8');
     await openEditor(path, 'alteroid memory set <slug> --file <path>');
   } catch (error) {
     // まだ人間は何も書いていない（エディタが起きなかった・異常終了した）。
@@ -328,7 +329,9 @@ export async function memoryEditCommand(slug: string): Promise<void> {
     async (keep) => {
       const edited = await readFile(path, 'utf8');
 
-      if (current !== null && edited === current) {
+      // **新しく作るときは、雛形のまま閉じたら「何も書かなかった」である。** 雛形は案内文で、
+      // そのまま書くと案内文が記憶（システムプロンプトに載る）として保存される。
+      if ((current !== null && edited === current) || (current === null && edited === initial)) {
         // **書き換えていないなら書き込まない。** 同じ本文でも `PUT` は日誌へ
         // `memory_update` を積むので、押し戻すたびに「人間が書き換えた」が
         // 増えていく（後から経緯を読む側が、実際には無かった変更を数える）。

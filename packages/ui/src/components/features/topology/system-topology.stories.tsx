@@ -6,6 +6,7 @@ import {
   awaitingScene,
   busyScene,
   crowdedScene,
+  externalsScene,
   idleScene,
   liveFrames,
   perRunnerScene,
@@ -63,6 +64,9 @@ export const StorageDown: Story = { args: storageDownScene };
 
 /** マネージャーと作業者が多いとき。出口と幹を線ごとに分けているので、線が重ならない。 */
 export const Crowded: Story = { args: crowdedScene };
+
+/** 連携の鍵で外部サービスから呼ばれている。札に状態は無く、最後に呼ばれた時刻だけを言う。 */
+export const Externals: Story = { args: externalsScene };
 
 /** 狭い画面の配置（上から下への木）。押すと下からシートが出る。 */
 export const Narrow: Story = { args: { ...busyScene, layout: 'narrow' } };

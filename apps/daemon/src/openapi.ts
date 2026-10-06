@@ -1989,8 +1989,32 @@ const topologyManagerSchema = z.object({
   workers: z.array(topologyWorkerSchema),
 });
 
+/**
+ * 外部サービスの札（連携の鍵1本ぶん。Issue #3676）。**連携の鍵（`altk_`）で `POST /events` /
+ * `POST /events/:source` を呼んだものだけ**（`via` の無い外部イベントは載らない）。
+ */
+const topologyExternalSchema = z.object({
+  /** 連携の鍵の id（鍵の値ではない）。線の key `external:<keyId>~clone` の `<keyId>`。 */
+  keyId: z.string(),
+  /** 鍵の名前（人間が付けた名前。最後に観測した呼び出しのときのもの）。 */
+  name: z.string(),
+  /** 鍵が固定されている source。 */
+  source: z.string(),
+  /**
+   * 最後に受け付けた時刻（デーモンが受信箱へ積んだ時刻）。**クローンが取り出して処理した
+   * 時刻ではない**——クローンがターンの途中・枠の上限で止まっていても、受け付けた時点で載る。
+   * デーモンのメモリにだけ在り、再起動で消える（無いことは「呼ばれていない」とは限らない）。
+   */
+  lastAt: isoDateTimeSchema,
+});
+
 const topologyLinkSchema = z.object({
-  /** `human~clone` / `clone~storage` / `clone~manager:<id>` / `manager:<id>~worker:<type>` */
+  /**
+   * `human~clone` / `clone~storage` / `clone~manager:<id>` / `manager:<id>~worker:<type>` /
+   * `external:<keyId>~clone`（連携の鍵 → クローン。`down` だけ）/
+   * `external-others~clone`（`externals` に載せなかった連携の鍵をまとめた線。`down` だけ）。
+   * **知らない key は読み手が無視する**（版ずれ）。
+   */
   key: z.string(),
   lastDownAt: isoDateTimeSchema.optional(),
   lastUpAt: isoDateTimeSchema.optional(),
@@ -2025,6 +2049,16 @@ export const topologyResponseSchema = z.object({
    * （`managersOmitted` の対象は読めた行だけ）。`GET /topology/stream` の `snapshot` にも載る。
    */
   unreadable: z.array(unreadableJobSchema).optional(),
+  /**
+   * 外部サービスの札（Issue #3676）。**デーモンが起きてから観測した、直近10分以内に連携の鍵で
+   * 呼ばれたものだけ**（日誌を読み戻さない・窓を過ぎれば消える）。**1件でも在るときだけ載る**——
+   * 欄が無いことは「呼ばれていない」ではなく「観測していない」でありうる（古いデーモンも同じく
+   * 載せない）。上限を超えた分は `externalsOmitted` が件数を言い、その分の呼び出しは線
+   * `external-others~clone` へまとまる。
+   */
+  externals: z.array(topologyExternalSchema).optional(),
+  /** 上限を超えて札にしなかった連携の鍵の件数（超えていなければ無い）。 */
+  externalsOmitted: z.number().int().positive().optional(),
   links: z.array(topologyLinkSchema),
 });
 

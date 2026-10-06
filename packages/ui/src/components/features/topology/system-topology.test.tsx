@@ -7,7 +7,7 @@
 import { cleanup, render } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { awaitingScene, busyScene, idleScene, usageBlockedScene } from './samples';
+import { awaitingScene, busyScene, externalsScene, idleScene, usageBlockedScene } from './samples';
 import { SystemTopology, WIDE_MIN_WIDTH } from './system-topology';
 
 afterEach(() => {
@@ -266,5 +266,43 @@ describe('器と札の名前（#2772）', () => {
       'alteroidd',
     );
     expect(container.querySelector('[data-container="db"] title')!.textContent).toContain('db');
+  });
+});
+
+describe('外部サービスの札（Issue #3676）', () => {
+  it.each([1000, 360])(
+    '（%ipx）札は外部サービスとして出て、状態は言わず、光る線は down の1本だけ',
+    (w) => {
+      stubFrameWidth(w);
+      const { container } = render(<SystemTopology {...externalsScene} />);
+      const names = Array.from(container.querySelectorAll('button')).map((b) =>
+        b.getAttribute('aria-label'),
+      );
+      // 状態（正常・仕事なし等）を付けない。外部サービスの状態は観測していない。
+      expect(names).toContain('外部サービス GitHub 連携');
+      expect(names).toContain('外部サービス CI');
+      expect(names).toContain('外部サービス ほか 2 件');
+      // 光（Pulse）はアクティブな線だけ。down の `GitHub 連携` の線に、下りの色の光が流れる
+      const lit = container.querySelector('[data-edge="x-external:k1"]')!;
+      expect(lit.querySelector('animateMotion')).not.toBeNull();
+      expect(lit.querySelector('.fill-primary')).not.toBeNull();
+      expect(container.querySelector('[data-edge="x-external:k2"] animateMotion')).toBeNull();
+      expect(container.querySelector('[data-edge="x-external-others"] animateMotion')).toBeNull();
+    },
+  );
+
+  it('読み上げには名前と最後の呼び出しが出て、いま呼ばれた札はそれも言う', () => {
+    stubFrameWidth(1000);
+    const { container } = render(<SystemTopology {...externalsScene} />);
+    const summary = container.querySelector('figcaption')?.textContent ?? '';
+    expect(summary).toContain('外部サービス GitHub 連携（最後の呼び出し: たった今）。いま呼ばれた');
+    expect(summary).toContain('外部サービス CI（最後の呼び出し: 3 分前）');
+  });
+
+  it('外部が無い場面には外部の札も線も出ない（今までと同じ）', () => {
+    stubFrameWidth(1000);
+    const { container } = render(<SystemTopology {...idleScene} />);
+    expect(container.querySelector('[data-edge^="x-"]')).toBeNull();
+    expect(container.textContent).not.toContain('外部サービス');
   });
 });

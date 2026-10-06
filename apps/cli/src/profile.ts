@@ -301,7 +301,8 @@ export async function profileEditCommand(
 
     // 撒く先だけを変えるのも更新である（本文が同じでも、外れる側が出る）。
     const scopeChanged = current !== undefined && scope !== undefined && scope !== current.scope;
-    if (current !== undefined && edited === current.script && !scopeChanged) {
+    // **新しく作る行は、雛形のまま閉じたら「何も書かなかった」である**（雛形は案内文）。
+    if (current === undefined ? edited === TEMPLATE : edited === current.script && !scopeChanged) {
       stdout.write('変更はありません。\n');
       return;
     }

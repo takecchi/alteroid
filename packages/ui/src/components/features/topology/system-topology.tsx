@@ -1,6 +1,6 @@
 import { useEffect, useId, useState } from 'react';
 
-import { Bot, Brain, Database, Hammer, User, type LucideIcon } from 'lucide-react';
+import { Bot, Brain, Database, Hammer, Plug, User, type LucideIcon } from 'lucide-react';
 
 import { Popover, PopoverAnchor, PopoverContent } from '@/components/ui/popover';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
@@ -24,6 +24,7 @@ import {
 
 export type {
   TopologyDetail,
+  TopologyExternal,
   TopologyFlow,
   TopologyManager,
   TopologyScene,
@@ -93,6 +94,7 @@ const STATUS = {
 
 const KIND: Record<NodeKind, { icon: LucideIcon; role: string }> = {
   human: { icon: User, role: '人間' },
+  external: { icon: Plug, role: '外部サービス' },
   db: { icon: Database, role: '記憶ストア' },
   clone: { icon: Brain, role: 'クローン' },
   manager: { icon: Bot, role: 'マネージャー' },
@@ -230,6 +232,15 @@ function redactScene(scene: TopologyScene, body: (text: string) => string): Topo
     ...scene,
     clone: { ...scene.clone, task: text(scene.clone.task), details: details(scene.clone.details) },
     db: { ...scene.db, task: text(scene.db.task), details: details(scene.db.details) },
+    ...(scene.externals === undefined
+      ? {}
+      : {
+          externals: scene.externals.map((external) => ({
+            ...external,
+            task: text(external.task),
+            details: details(external.details),
+          })),
+        }),
     managers: scene.managers.map((manager) => ({
       ...manager,
       task: text(manager.task),
@@ -260,9 +271,14 @@ function EmptyNote({ box, text }: { box: LaidContainer['box']; text: string }) {
   );
 }
 
-function summarize({ clone, db, runners, managers }: TopologyScene): string {
+function summarize({ clone, db, runners, managers, externals }: TopologyScene): string {
   const parts = [
     `クローン: ${STATUS[clone.status].label}${clone.task ? `（${clone.task}）` : ''}`,
+    // 外部サービスは状態を観測していない。名前と、最後に呼ばれた時刻（task）だけを言う。
+    ...(externals ?? []).map(
+      (x) =>
+        `外部サービス ${x.label}${x.task ? `（${x.task}）` : ''}${x.flow === 'down' ? '。いま呼ばれた' : ''}`,
+    ),
     `記憶ストア: ${STATUS[db.status].label}`,
     runners.length === 0
       ? '稼働中の器（runner）: なし'

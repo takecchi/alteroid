@@ -37,6 +37,9 @@ function fakeClone(): CloneHost {
     },
     subscribe: () => () => undefined,
     stop: () => Promise.resolve(),
+    // `GET /topology` が読む分（#3676 の稼働状況の図の歯）。
+    usageBlocked: false,
+    managers: { list: () => Promise.resolve([]) },
   } as unknown as CloneHost;
 }
 
@@ -646,6 +649,63 @@ describe('日誌が書けなければ、状態を変えず 500', () => {
         })
       ).status,
     ).toBe(200);
+  });
+});
+
+describe('稼働状況の図の外部サービスの線（#3676）', () => {
+  type TopologyBody = {
+    externals?: { keyId: string; name: string; source: string; lastAt: string }[];
+    links: { key: string; lastDownAt?: string; lastUpAt?: string; lastActivityAt?: string }[];
+  };
+  const topology = async (app: App): Promise<TopologyBody> =>
+    (await (await app.request('/topology', { headers: OPERATOR })).json()) as TopologyBody;
+
+  it('連携の鍵で POST /events を受け付けた時点で、クローンが取り出す前に外部→クローンの線が down で光る', async () => {
+    const app = buildApp();
+    const { id, value } = await issue(app, { name: 'ビルド', source: 'ci.main' });
+    const accepted = await app.request('/events', {
+      ...events('ci.main'),
+      headers: { ...bearer(value), ...JSON_HEADERS },
+    });
+    expect(accepted.status).toBe(200);
+    // 偽のクローンは日誌に何も書かない（取り出していない）。それでも受け付けた時刻
+    // （受信箱へ積んだ event.at と同じ値）で光る。
+    expect(posted).toHaveLength(1);
+    const at = posted[0]!.at;
+    const body = await topology(app);
+    expect(body.externals).toEqual([{ keyId: id, name: 'ビルド', source: 'ci.main', lastAt: at }]);
+    expect(body.links).toContainEqual({ key: `external:${id}~clone`, lastDownAt: at });
+  });
+
+  it('POST /events/:source でも光る。source 違いで断った呼び出しと、鍵を使わない送信は光らない', async () => {
+    const app = buildApp();
+    const { id, value } = await issue(app, { name: 'ビルド', source: 'ci.main' });
+    const refused = await app.request('/events', {
+      ...events('other'),
+      headers: { ...bearer(value), ...JSON_HEADERS },
+    });
+    expect(refused.status).toBe(403);
+    const byOperator = await app.request('/events', {
+      ...events('ci.main'),
+      headers: { ...OPERATOR, ...JSON_HEADERS },
+    });
+    expect(byOperator.status).toBe(200);
+    const before = await topology(app);
+    expect(before.externals).toBeUndefined();
+    expect(before.links.filter((l) => l.key.startsWith('external'))).toEqual([]);
+
+    const accepted = await app.request('/events/ci.main', {
+      ...events('ci.main'),
+      headers: { ...bearer(value), ...JSON_HEADERS },
+    });
+    expect(accepted.status).toBe(200);
+    // 受信箱には operator の分と鍵の分の2件。光るのは鍵の分の時刻だけ。
+    expect(posted).toHaveLength(2);
+    const after = await topology(app);
+    expect(after.links).toContainEqual({
+      key: `external:${id}~clone`,
+      lastDownAt: posted[1]!.at,
+    });
   });
 });
 
