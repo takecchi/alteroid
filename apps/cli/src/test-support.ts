@@ -40,3 +40,26 @@ export function captureStdout(): () => string {
   });
   return () => chunks.join('');
 }
+
+/**
+ * 標準入出力が端末（TTY）かどうかを、テストの間だけ決め打ちする（#3141）。
+ *
+ * 戻せない操作の確認（`confirm.ts`）は「端末でなく `--yes` も無ければ断る」を
+ * `process.stdin.isTTY` / `process.stdout.isTTY` で判定する。**テストを人間が端末から
+ * 回すと本物の TTY になり、確認の質問が出て止まる**ので、断りを確かめるテストは
+ * これで非 TTY に固定する。返す関数で元に戻す。
+ */
+export function pretendTty(isTty: boolean): () => void {
+  const streams = [process.stdin, process.stdout] as const;
+  const saved = streams.map((stream) => Object.getOwnPropertyDescriptor(stream, 'isTTY'));
+  for (const stream of streams) {
+    Object.defineProperty(stream, 'isTTY', { value: isTty, configurable: true, writable: true });
+  }
+  return () => {
+    streams.forEach((stream, index) => {
+      const descriptor = saved[index];
+      if (descriptor === undefined) Reflect.deleteProperty(stream, 'isTTY');
+      else Object.defineProperty(stream, 'isTTY', descriptor);
+    });
+  };
+}

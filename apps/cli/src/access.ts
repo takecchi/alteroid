@@ -164,13 +164,13 @@ export async function accessRevokeCommand(
   accountId: string,
   options: { yes?: boolean } = {},
 ): Promise<void> {
+  const target = await resolveTarget();
   const confirmed = await confirmIrreversible(
     `アカウント ${accountId} の許可を取り消します。発行済みのトークンはその場から通らなくなり、` +
       '許可に乗っていた「実行環境の持ち主」の宣言も落ちます（許可し直しても宣言は戻りません）。',
     options,
   );
   if (!confirmed) return;
-  const target = await resolveTarget();
   const { account } = (await request(target, `/access/${encodeURIComponent(accountId)}/revoke`, {
     method: 'POST',
   })) as { account: AccountView };

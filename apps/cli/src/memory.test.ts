@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { makeTempDir } from '../../../vitest.tmpdir.js';
 
-import { captureStdout } from './test-support.js';
+import { captureStdout, pretendTty } from './test-support.js';
 
 /**
  * `alteroid memory` — 記憶を人間が CLI から直せること。
@@ -148,7 +148,7 @@ describe('alteroid memory show の版と remove --if-match（#2919）', () => {
       },
     });
 
-    const error = await memoryRemoveCommand('values', { ifMatch: 'v-shown' }).catch(
+    const error = await memoryRemoveCommand('values', { ifMatch: 'v-shown', yes: true }).catch(
       (e: unknown) => e,
     );
 
@@ -163,7 +163,7 @@ describe('alteroid memory show の版と remove --if-match（#2919）', () => {
   it('remove --if-match で版が合えば消せる', async () => {
     const read = captureStdout();
     replies.push({ status: 200, body: { ok: true, slug: 'values' } });
-    await memoryRemoveCommand('values', { ifMatch: 'v-shown' });
+    await memoryRemoveCommand('values', { ifMatch: 'v-shown', yes: true });
     expect(sent).toHaveLength(1);
     expect(read()).toContain('消しました: values');
   });
@@ -178,7 +178,7 @@ describe('alteroid memory remove', () => {
     });
     replies.push({ status: 200, body: { ok: true, slug: 'values' } });
 
-    await memoryRemoveCommand('values');
+    await memoryRemoveCommand('values', { yes: true });
 
     expect(sent).toHaveLength(2);
     expect(sent[0]?.method).toBe('GET');
@@ -192,7 +192,7 @@ describe('alteroid memory remove', () => {
     replies.push({ status: 200, body: { document: { slug: 'values', content: 'x' } } });
     replies.push({ status: 200, body: { ok: true, slug: 'values' } });
 
-    await memoryRemoveCommand('values');
+    await memoryRemoveCommand('values', { yes: true });
 
     expect(sent[1]?.url).toBe('http://127.0.0.1:4517/memory/values');
     expect(read()).toContain('消しました: values');
@@ -206,7 +206,7 @@ describe('alteroid memory remove', () => {
       body: { error: '版が無いので消していません（消していません）', current: null },
     });
 
-    const error = await memoryRemoveCommand('values').catch((e: unknown) => e);
+    const error = await memoryRemoveCommand('values', { yes: true }).catch((e: unknown) => e);
 
     expect(error).toBeInstanceOf(Error);
     expect(String(error)).toContain('消していません');
@@ -232,7 +232,7 @@ describe('alteroid memory remove', () => {
       },
     });
 
-    const error = await memoryRemoveCommand('values').catch((e: unknown) => e);
+    const error = await memoryRemoveCommand('values', { yes: true }).catch((e: unknown) => e);
 
     expect(error).toBeInstanceOf(Error);
     expect(String(error)).toContain('消しませんでした');
@@ -252,7 +252,7 @@ describe('alteroid memory remove', () => {
     });
     replies.push({ status: 409, body: { error: 'x', current: null } });
 
-    await memoryRemoveCommand('values').catch(() => undefined);
+    await memoryRemoveCommand('values', { yes: true }).catch(() => undefined);
 
     expect(read()).toContain('すでに消されています');
   });
@@ -269,12 +269,12 @@ describe('alteroid memory remove', () => {
     // 先に読む（GET。無ければ null）。無いものは版なしで DELETE を打ち、サーバの 404 / 400 をそのまま伝える。
     replies.push({ status: 404, body: { error: 'not found' } });
     replies.push({ status: 404, body: { error: 'not found' } });
-    const missing = await memoryRemoveCommand('missing').catch((e: unknown) => e);
+    const missing = await memoryRemoveCommand('missing', { yes: true }).catch((e: unknown) => e);
     expect(String(missing)).toContain('そんな記憶はありません');
 
     replies.push({ status: 400, body: { error: '記憶のスラッグが不正' } });
     replies.push({ status: 400, body: { error: '記憶のスラッグが不正' } });
-    const invalid = await memoryRemoveCommand('..').catch((e: unknown) => e);
+    const invalid = await memoryRemoveCommand('..', { yes: true }).catch((e: unknown) => e);
     expect(String(invalid)).toContain('名前として成立しません');
     expect(String(invalid)).not.toContain('そんな記憶はありません');
   });
@@ -317,7 +317,7 @@ describe('#1641 の再現（Issue 本文）', () => {
     });
     replies.push({ status: 500, body: { error: '内部エラー' } });
 
-    const error = await memoryRemoveCommand('some-slug').catch((e: unknown) => e);
+    const error = await memoryRemoveCommand('some-slug', { yes: true }).catch((e: unknown) => e);
 
     expect(error).toBeInstanceOf(Error);
     expect(String(error)).not.toContain('そんな記憶はありません');
@@ -684,5 +684,21 @@ describe('alteroid memory の読み出しの失敗の理由', () => {
       expect(text).toContain('alteroid memory edit values');
       await rm(dirname(mine ?? ''), { recursive: true, force: true });
     });
+  });
+});
+
+describe('alteroid memory remove の確認（#3141）', () => {
+  it('端末でなく --yes も無ければ、DELETE を打たずに断る（消えていない）', async () => {
+    replies.push({
+      status: 200,
+      body: { document: { slug: 'values', content: '# 価値観\n' }, version: 'v-read' },
+    });
+    const restore = pretendTty(false);
+    try {
+      await expect(memoryRemoveCommand('values')).rejects.toThrow('--yes');
+    } finally {
+      restore();
+    }
+    expect(sent.some((entry) => entry.method === 'DELETE')).toBe(false);
   });
 });

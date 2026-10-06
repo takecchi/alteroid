@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { makeTempDir } from '../../../vitest.tmpdir.js';
 
-import { captureStdout } from './test-support.js';
+import { captureStdout, pretendTty } from './test-support.js';
 
 /**
  * `alteroid credential` — マネージャーへ降ろす環境変数（名前→値の袋）。
@@ -414,7 +414,7 @@ describe('alteroid credential remove', () => {
     setReply('GET', '/credentials', { status: 200, body: { credentials: [] } });
     const read = captureStdout();
 
-    await credentialRemoveCommand('NPM_TOKEN');
+    await credentialRemoveCommand('NPM_TOKEN', { yes: true });
 
     expect(sent.map((entry) => entry.method)).toEqual(['GET']);
     const text = read();
@@ -433,7 +433,7 @@ describe('alteroid credential remove', () => {
     });
     const read = captureStdout();
 
-    await credentialRemoveCommand('NPM_TOKEN');
+    await credentialRemoveCommand('NPM_TOKEN', { yes: true });
 
     expect(sent.at(-1)?.body).toEqual({ credentials: [{ name: 'NPM_TOKEN', value: '' }] });
     expect(read()).toContain('NPM_TOKEN を外しました');
@@ -453,11 +453,27 @@ describe('alteroid credential remove', () => {
     });
     const read = captureStdout();
 
-    await credentialRemoveCommand('NPM_TOKEN');
+    await credentialRemoveCommand('NPM_TOKEN', { yes: true });
 
     const text = read();
     expect(text).toContain('runner-broken: 降ろせませんでした');
     expect(text).toContain('次に名乗ったときに追いつきます');
     expect(text).toContain('つながらない');
+  });
+});
+
+describe('alteroid credential remove の確認（#3141）', () => {
+  it('端末でなく --yes も無ければ、PUT せずに断る（外れていない）', async () => {
+    setReply('GET', '/credentials', {
+      status: 200,
+      body: { credentials: [{ name: 'NPM_TOKEN', sha256: 'cccccccccccc', updatedAt: 'now' }] },
+    });
+    const restore = pretendTty(false);
+    try {
+      await expect(credentialRemoveCommand('NPM_TOKEN')).rejects.toThrow('--yes');
+    } finally {
+      restore();
+    }
+    expect(sent.some((entry) => entry.method === 'PUT')).toBe(false);
   });
 });

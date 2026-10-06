@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { makeTempDir } from '../../../vitest.tmpdir.js';
 
-import { captureStdout } from './test-support.js';
+import { captureStdout, pretendTty } from './test-support.js';
 
 /**
  * `alteroid profile` — #333。この3つ（index / login / profile）はこれまで
@@ -442,7 +442,7 @@ describe('alteroid profile rm', () => {
     setReply('DELETE', '/profile/rust', { status: 200, body: updateBody([]) });
     const read = captureStdout();
 
-    await profileRemoveCommand('rust');
+    await profileRemoveCommand('rust', { yes: true });
 
     const text = read();
     expect(text).toContain('プロファイルの行 rust を外しました。');
@@ -469,7 +469,7 @@ describe('alteroid profile clear', () => {
     });
     const read = captureStdout();
 
-    await profileClearCommand();
+    await profileClearCommand({ yes: true });
 
     const text = read();
     expect(text).toContain('プロファイルを全部外しました。');
@@ -767,7 +767,7 @@ describe('古いデーモン（旧形式の応答）', () => {
     await expect(profileSetCommand(undefined, { file: path, scope: 'runner' })).rejects.toThrow(
       'サーバが古い',
     );
-    await expect(profileRemoveCommand('rust')).rejects.toThrow('サーバが古い');
+    await expect(profileRemoveCommand('rust', { yes: true })).rejects.toThrow('サーバが古い');
     await expect(profileEditCommand('rust')).rejects.toThrow('サーバが古い');
     expect(sent.some((entry) => entry.method === 'PUT' || entry.method === 'DELETE')).toBe(false);
   });
@@ -780,9 +780,35 @@ describe('古いデーモン（旧形式の応答）', () => {
     });
     captureStdout();
 
-    await profileRemoveCommand('default');
+    await profileRemoveCommand('default', { yes: true });
 
     const put = sent.find((entry) => entry.method === 'PUT');
     expect(JSON.parse(String(put?.body))).toEqual({ script: '' });
+  });
+});
+
+describe('alteroid profile rm / clear の確認（#3141）', () => {
+  it('rm: 端末でなく --yes も無ければ、DELETE せずに断る', async () => {
+    setReply('GET', '/profile', {
+      status: 200,
+      body: profileBody([entryOf('rust', 'export R=1\n', 'runner')]),
+    });
+    const restore = pretendTty(false);
+    try {
+      await expect(profileRemoveCommand('rust')).rejects.toThrow('--yes');
+    } finally {
+      restore();
+    }
+    expect(sent.some((entry) => entry.method !== 'GET')).toBe(false);
+  });
+
+  it('clear: 端末でなく --yes も無ければ、PUT せずに断る', async () => {
+    const restore = pretendTty(false);
+    try {
+      await expect(profileClearCommand()).rejects.toThrow('--yes');
+    } finally {
+      restore();
+    }
+    expect(sent.some((entry) => entry.method !== 'GET')).toBe(false);
   });
 });

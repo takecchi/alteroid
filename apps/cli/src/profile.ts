@@ -317,13 +317,13 @@ export async function profileRemoveCommand(
  * 1回で叩く** — 行ごとに `DELETE` を並べると、途中で落ちたとき半端に残る。
  */
 export async function profileClearCommand(options: { yes?: boolean } = {}): Promise<void> {
+  const target = await resolveTarget();
   // **戻せない操作なので確認する**（Issue #3141。`confirm.ts`）。全行の本文が残らない。
   const confirmed = await confirmIrreversible(
     'プロファイルの全行を外します。行の本文は残りません（控えるなら alteroid profile show）。',
     options,
   );
   if (!confirmed) return;
-  const target = await resolveTarget();
   const result = (await request(target, '/profile', {
     method: 'PUT',
     body: JSON.stringify({ script: '' }),

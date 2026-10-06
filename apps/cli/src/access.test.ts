@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { captureStdout } from './test-support.js';
+import { captureStdout, pretendTty } from './test-support.js';
 
 /**
  * `alteroid access` — 誰が alteroid を使えるかを CLI から見えること。
@@ -30,8 +30,12 @@ vi.mock('./target.js', async (importOriginal) => ({
     }),
 }));
 
-const { accessListCommand, accessOwnerCommand, accessRemoveUnreadableCommand } =
-  await import('./access.js');
+const {
+  accessListCommand,
+  accessOwnerCommand,
+  accessRemoveUnreadableCommand,
+  accessRevokeCommand,
+} = await import('./access.js');
 
 interface Sent {
   url: string;
@@ -543,5 +547,29 @@ describe('alteroid access list — 読めない行（issue #2536）', () => {
     // 読めない行しか無いのに「誰もログインしていない」とは言わない。
     expect(text).not.toContain('まだ誰もログインしていません。');
     expect(text).toContain('誰もログインしていない、とは言えない');
+  });
+});
+
+describe('alteroid access revoke（#3141）', () => {
+  it('--yes なら POST /access/:id/revoke を叩く。トークンが通らなくなると言う', async () => {
+    replies.push({ status: 200, body: { account: { id: 'acc-1', email: 'a@example.com' } } });
+    const read = captureStdout();
+
+    await accessRevokeCommand('acc-1', { yes: true });
+
+    expect(sent.map((entry) => `${entry.method} ${new URL(entry.url).pathname}`)).toEqual([
+      'POST /access/acc-1/revoke',
+    ]);
+    expect(read()).toContain('許可を取り消しました: a@example.com');
+  });
+
+  it('端末でなく --yes も無ければ、HTTP に出ずに断る（許可は残る）', async () => {
+    const restore = pretendTty(false);
+    try {
+      await expect(accessRevokeCommand('acc-1')).rejects.toThrow('--yes');
+    } finally {
+      restore();
+    }
+    expect(sent).toEqual([]);
   });
 });

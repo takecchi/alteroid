@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { makeTempDir } from '../../../vitest.tmpdir.js';
 
-import { captureStdout } from './test-support.js';
+import { captureStdout, pretendTty } from './test-support.js';
 
 /**
  * `alteroid token` — Issue #393「PR1 プールの器」。**回さない**——ここで固定する
@@ -375,7 +375,7 @@ describe('読めない行の持ち越しを言う（#2354）', () => {
 
     for (const run of [
       () => tokenAddCommand({ label: 'n', file: path }),
-      () => tokenRemoveCommand('tok-a'),
+      () => tokenRemoveCommand('tok-a', { yes: true }),
       () => tokenDisableCommand('tok-a'),
       () => tokenEnableCommand('tok-a'),
     ]) {
@@ -483,7 +483,11 @@ describe('保存した後の読み直しに失敗した応答（viewUnavailable�
 
   it.each([
     ['add', runAdd, 'トークン「new-one」を追加しました。'],
-    ['remove', () => tokenRemoveCommand('tok-a'), 'トークン（id tok-a）を削除しました。'],
+    [
+      'remove',
+      () => tokenRemoveCommand('tok-a', { yes: true }),
+      'トークン（id tok-a）を削除しました。',
+    ],
     ['disable', () => tokenDisableCommand('tok-a'), 'トークン（id tok-a）を外しました。'],
     ['enable', () => tokenEnableCommand('tok-a'), 'トークン（id tok-a）を戻しました。'],
   ] as const)(
@@ -583,7 +587,7 @@ describe('alteroid token remove', () => {
     });
     const read = captureStdout();
 
-    await tokenRemoveCommand('tok-a');
+    await tokenRemoveCommand('tok-a', { yes: true });
 
     expect(read()).toContain('トークン（id tok-a）を削除しました。');
     const put = sent.find((call) => call.method === 'PUT');
@@ -884,5 +888,24 @@ describe('日誌が書けなかった 500 の見せ方', () => {
     expect((error as Error).message).toContain('変更されたかどうかは分かりません');
     expect((error as Error).message).toContain('alteroid token list');
     expect((error as Error).message).not.toContain('Internal Server Error');
+  });
+});
+
+describe('alteroid token remove の確認（#3141）', () => {
+  it('端末でなく --yes も無ければ、PUT せずに断る（消えていない）', async () => {
+    setReply('GET', '/tokens', {
+      status: 200,
+      body: {
+        tokens: [{ id: 'tok-a', label: 'a', order: 0, sha256: 'aaaaaaaaaaaa' }],
+        settings: EMPTY_SETTINGS,
+      },
+    });
+    const restore = pretendTty(false);
+    try {
+      await expect(tokenRemoveCommand('tok-a')).rejects.toThrow('--yes');
+    } finally {
+      restore();
+    }
+    expect(sent.some((call) => call.method === 'PUT')).toBe(false);
   });
 });

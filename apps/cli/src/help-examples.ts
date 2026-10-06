@@ -31,7 +31,7 @@ export const HELP_EXAMPLES = {
   ),
   accessRevoke: examples(
     'alteroid access list                    # アカウントの id を見つける',
-    'alteroid access revoke <accountId>      # その id の許可を取り消す',
+    'alteroid access revoke <accountId>      # その id の許可を取り消す（対話で確認。省くなら --yes）',
   ),
   progress: examples(
     'alteroid progress                       # 既定の窓で',
@@ -59,7 +59,7 @@ export const HELP_EXAMPLES = {
   ),
   mcpSet: examples(
     'alteroid mcp set ./.mcp.json            # ファイルの内容で丸ごと置き換える',
-    'cat ./.mcp.json | alteroid mcp set -    # 標準入力から（- を付ける）',
+    'cat ./.mcp.json | alteroid mcp set - --yes    # 標準入力から（- を付ける。端末ではないので確認は --yes で省く）',
     'alteroid mcp edit                       # エディタで開く（VISUAL か EDITOR）',
   ),
   tokenPolicy: examples(
