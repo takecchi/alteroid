@@ -66,8 +66,12 @@ export function formatRelative(iso: string, now: number = Date.now()): string {
 
   const suffix = future ? '後' : '前';
   if (abs < 45) return future ? 'まもなく' : 'たった今';
-  if (abs < 3600) return `${Math.round(abs / 60)}分${suffix}`;
-  if (abs < 86400) return `${Math.round(abs / 3600)}時間${suffix}`;
+  // 丸めた後の値で単位を上げるかを決める（#3609）。生の秒で境目を切ると、
+  // 3570〜3599 秒が「60分前」、84600 秒以降が「24時間前」になる。
+  const minutes = Math.round(abs / 60);
+  if (minutes < 60) return `${minutes}分${suffix}`;
+  const hours = Math.round(abs / 3600);
+  if (hours < 24) return `${hours}時間${suffix}`;
   return `${Math.round(abs / 86400)}日${suffix}`;
 }
 
@@ -152,7 +156,10 @@ export function formatMemoryStaleness(ms: number): string {
 
 export function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  // 丸めた後の値で単位を上げるかを決める（#3609）。1,048,524 バイト以上が
+  // 「1024.0 KB」にならないようにする。
+  const kb = (bytes / 1024).toFixed(1);
+  if (Number(kb) < 1024) return `${kb} KB`;
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 

@@ -9478,12 +9478,23 @@ class Pool implements ManagerPool {
       // 残るので、クローンからは `lost` として — **起こし直す対象として** 見える。
       if (job.status === 'lost') continue;
 
-      const record: ManagerRecord = { job: { ...job }, waiting: [], attached: false };
+      // **古い写し（ループの先頭で取った `job`）で resume を決めない**（Issue #3603。#3185 と同じ形）。
+      // 先の委譲の resume を待っている間に `abort()` が `stopped` を書いて `#retire` していると、
+      // `#records` に像が無く、写しの `running` を信じて `stopConfirmedAt` の無い新しい record で
+      // 起こし直し、`stopped` を `running` で上書きする。resume しうる状態の写しだけ、像を載せる直前に
+      // 台帳を読み直す（待機などは resume せず、読み直す往復を増やさない）。読み直しの `await` の間に
+      // 像が載ることもあるので、読んだ後にもう一度 `#records` を見る。
+      const resumable = job.status === 'running' || job.status === 'waiting_human';
+      const fresh = resumable ? ((await this.#latestJobOf(job.id)) ?? job) : job;
+      if (resumable && this.#records.has(job.id)) continue;
+      if (fresh.status === 'lost') continue;
+
+      const record: ManagerRecord = { job: { ...fresh }, waiting: [], attached: false };
       this.#records.set(job.id, record);
 
       // 手を動かしている最中に器が落ちた分だけ、実際に続きへ戻す。待機（`done`）
       // だったものは台帳に載せるだけにする（話しかけられたら resume する）。
-      if (job.status !== 'running' && job.status !== 'waiting_human') continue;
+      if (fresh.status !== 'running' && fresh.status !== 'waiting_human') continue;
 
       const runner = await this.#runnerOf(record);
       if (!runner) continue;
@@ -9494,10 +9505,10 @@ class Pool implements ManagerPool {
       // `'runner'` にする。`'daemon'` のままだと、枝名の clone 案内と「コミット
       // 前の変更は失われている」が出ない（Issue #2748）。
       const nudge = restartNudge(
-        job.status,
+        fresh.status,
         'runner',
-        job.workspace,
-        job.lastUnpushedWorkObservation,
+        fresh.workspace,
+        fresh.lastUnpushedWorkObservation,
       );
       // **1本が戻せなくても、残りを道連れにしない。** ここで抜けると、後ろに
       // 並んでいた仕事が誰にも拾われないまま `running` として残る。
@@ -10760,10 +10771,19 @@ class Pool implements ManagerPool {
         // 話しかけられたら続く。ここで起こすと開いたままの窓を勝手に閉じる）。
         // **判定より前に `#records` へ載せない** — 載せると `list()` が終わった
         // 仕事まで `live: true` で見せ、話しかけると必ず失敗する相手が生まれる。
-        const status = known?.job.status ?? job.status;
+        //
+        // **古い写し（ループの先頭で取った `job`）で判定しない**（Issue #3603。#3185 の
+        // `#refuseRelocationsBeforeGate` と同じ形）。同じ runner の先の委譲の resume を待っている間に
+        // `abort()` が `stopped` を書いて `#retire` していると、`known` が無く、写しの `running` を信じて
+        // `stopConfirmedAt` を持たない新しい record で起こし直し、`stopped` を `running` で上書きする。
+        // `known` が無いときは台帳を読み直した行で判定し、record も同じ行から作る。
+        // 読み直しの `await` の間に像が載ることもあるので、読んだ後にもう一度 `#records` を見る。
+        const fresh = known === undefined ? ((await this.#latestJobOf(job.id)) ?? job) : job;
+        const current = this.#records.get(job.id) ?? known;
+        const status = current?.job.status ?? fresh.status;
         if (status !== 'running' && status !== 'waiting_human') continue;
 
-        const record = known ?? { job: { ...job }, waiting: [], attached: false };
+        const record = current ?? { job: { ...fresh }, waiting: [], attached: false };
         this.#records.set(job.id, record);
         record.attached = false;
         // **待っていた確認を持ち越さない。** 新しい器はその request_id を知らない

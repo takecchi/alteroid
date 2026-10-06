@@ -79,7 +79,13 @@ export const COMMANDS: readonly CommandSpec[] = [
   { name: 'detach', action: 'detach', describe: '添えかけを外す。<番号|all>' },
   { name: 'interrupt', action: 'interrupt', describe: '走っているターンを止める（Ctrl+C と同じ）' },
   { name: 'help', aliases: ['?'], action: 'help', describe: 'コマンドとキーの一覧' },
-  { name: 'exit', aliases: ['quit'], action: 'exit', describe: '終了する（Ctrl+D でも可）' },
+  {
+    name: 'exit',
+    aliases: ['quit'],
+    action: 'exit',
+    describe:
+      '終了する（Ctrl+D でも可。書きかけがあるときは 1 度目は案内だけで、もう一度で捨てて終了）',
+  },
 ];
 
 export type ResolvedInput =
@@ -129,7 +135,7 @@ export function helpLines(): string[] {
     '  回答済み・取り下げ済み: 承認待ちの画面で d → 決着した日（新しい日が上）→ Enter でその日の件 → Enter で詳細（m で古い日、Esc で戻る）',
     '  会話で承認待ちが来たら、Esc のあと a でその詳細へ飛べる',
     '  記憶の画面（読むだけ）: ↑↓ 選ぶ / Enter 本文 / r 読み直し / Esc 一覧へ',
-    '  Ctrl+C 走っているターンを止める / Ctrl+D（入力欄が空のとき）終了',
+    '  Ctrl+C 走っているターンを止める / Ctrl+D 終了（書きかけ（会話・委譲・承認待ちの欄）があるときは、1 度目は案内だけ。もう一度 ^D か /exit で捨てて終了）',
     '  入力欄の編集: ← → ↑ ↓ / Home・End か Ctrl+A・Ctrl+E で行頭・行末 / Ctrl+W 直前の語を消す（空白で区切る） / Ctrl+K 行末まで消す / Delete 後ろの1字 / Ctrl+U 空にする',
     '  `//` で始めると、先頭の `/` を 1 つ外した文をそのまま送る',
   );

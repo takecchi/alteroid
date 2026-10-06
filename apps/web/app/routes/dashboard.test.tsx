@@ -267,6 +267,40 @@ describe('「今日の利用」カードの読めずに外した行（#2427）',
     expect(await screen.findByText(/合計に入っていない/)).toBeTruthy();
   });
 
+  it('#3614: 記録が空（since が null）でも外した行が在れば、「記録が無い」と言い切らない', async () => {
+    renderHome({
+      usage: { ...base, since: null, unreadableRows: [unreadable('2026-08-14')] },
+    });
+
+    expect(await screen.findByText(/読めずに外した行がある/)).toBeTruthy();
+    expect(screen.queryByText(/まだ記録が無い/)).toBeNull();
+  });
+
+  it('#3614: 外した行が無ければ、since が null の文言は変わらない', async () => {
+    renderHome({ usage: { ...base, since: null, unreadableRows: [unreadable('2026-08-13')] } });
+
+    expect(await screen.findByText(/まだ記録が無い/)).toBeTruthy();
+    expect(screen.queryByText(/読めずに外した行がある/)).toBeNull();
+  });
+
+  it('#3614: 記録の始点より前（beforeLedger）でも外した行が在れば、「記録が無い」と言い切らない', async () => {
+    renderHome({
+      usage: { ...base, beforeLedger: true, unreadableRows: [unreadable()] },
+    });
+
+    expect(await screen.findByText(/今日の分は、読めた記録が無い/)).toBeTruthy();
+    expect(screen.queryByText(/今日の分はまだ記録が無い/)).toBeNull();
+  });
+
+  it('#3614: beforeLedger で外した行が無ければ、文言は変わらない', async () => {
+    renderHome({
+      usage: { ...base, beforeLedger: true, unreadableRows: [unreadable('2026-08-13')] },
+    });
+
+    expect(await screen.findByText(/今日の分はまだ記録が無い/)).toBeTruthy();
+    expect(screen.queryByText(/読めずに外した行がある/)).toBeNull();
+  });
+
   it('対照: 欄が無い・空配列なら、何も出さない', async () => {
     renderHome({ usage: { ...base, unreadableRows: [] } });
 
