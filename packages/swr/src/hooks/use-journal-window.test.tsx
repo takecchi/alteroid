@@ -97,3 +97,53 @@ describe('useJournalWindow: prepended', () => {
     expect(afterOlder.every((c) => !c.prepended && c.front === 'd-3')).toBe(true);
   });
 });
+
+describe('useJournalWindow: 読み足しの失敗', () => {
+  let probe: { error: unknown; loadMoreError: unknown; retry: () => void; load: () => void };
+  function ErrorProbe() {
+    const win = useJournalWindow([], '');
+    useLayoutEffect(() => {
+      probe = {
+        error: win.error,
+        loadMoreError: win.loadMoreError,
+        retry: win.retryLoadMore,
+        load: win.loadOlder,
+      };
+    });
+    return <div data-testid="len">{win.entries.length}</div>;
+  }
+
+  it('読み足しの失敗は error に載らず一覧も残る。撃ち直しが成功すると下りる', async () => {
+    const first = Array.from({ length: 100 }, (_, i) =>
+      decision(`d${i}`, new Date(Date.UTC(2026, 0, 1, 0, 0, 100 - i)).toISOString()),
+    );
+    let olderCalls = 0;
+    stubFetch((url) => {
+      if (!url.includes('/journal')) return undefined;
+      if (new URL(url).searchParams.has('until')) {
+        olderCalls += 1;
+        if (olderCalls === 1) return json({ error: 'boom' }, 500);
+        return json({ entries: [], scanned: 0 });
+      }
+      return json({ entries: first, scanned: first.length });
+    });
+
+    render(
+      <Providers>
+        <JournalFeedProvider value={{ status: 'live', recent: [] }}>
+          <ErrorProbe />
+        </JournalFeedProvider>
+      </Providers>,
+    );
+    await waitFor(() => expect(screen.getByTestId('len').textContent).toBe('100'));
+
+    act(() => probe.load());
+    await waitFor(() => expect(probe.loadMoreError).toBeDefined());
+    expect(probe.error).toBeUndefined();
+    expect(screen.getByTestId('len').textContent).toBe('100');
+
+    act(() => probe.retry());
+    await waitFor(() => expect(probe.loadMoreError).toBeUndefined());
+    expect(olderCalls).toBe(2);
+  });
+});
