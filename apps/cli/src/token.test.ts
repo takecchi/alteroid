@@ -414,7 +414,7 @@ describe('alteroid token remove-unreadable（#2354）', () => {
     });
     const read = captureStdout();
 
-    await tokenRemoveUnreadableCommand(['tok-bad']);
+    await tokenRemoveUnreadableCommand(['tok-bad'], { yes: true });
 
     expect(read()).toContain('読めないトークンの行を 1 行消した（id: tok-bad）');
     const post = sent.find((call) => call.method === 'POST');
@@ -435,7 +435,7 @@ describe('alteroid token remove-unreadable（#2354）', () => {
     });
     const read = captureStdout();
 
-    await tokenRemoveUnreadableCommand(['tok-bad']);
+    await tokenRemoveUnreadableCommand(['tok-bad'], { yes: true });
 
     expect(read()).toContain('読めない行は、まだ 1 行ある');
   });
@@ -450,7 +450,7 @@ describe('alteroid token remove-unreadable（#2354）', () => {
     });
     const read = captureStdout();
 
-    await tokenRemoveUnreadableCommand(['tok-bad']);
+    await tokenRemoveUnreadableCommand(['tok-bad'], { yes: true });
 
     const text = read();
     expect(text).toContain('読めないトークンの行を 1 行消した（id: tok-bad）');
@@ -465,7 +465,9 @@ describe('alteroid token remove-unreadable（#2354）', () => {
       body: { error: '指した id のうち 1 件が、読めない行に無い（何も消していない。）' },
     });
 
-    await expect(tokenRemoveUnreadableCommand(['ghost'])).rejects.toThrow('何も消していない');
+    await expect(tokenRemoveUnreadableCommand(['ghost'], { yes: true })).rejects.toThrow(
+      '何も消していない',
+    );
   });
 });
 
@@ -907,5 +909,17 @@ describe('alteroid token remove の確認（#3141）', () => {
       restore();
     }
     expect(sent.some((call) => call.method === 'PUT')).toBe(false);
+  });
+});
+
+describe('alteroid token remove-unreadable の確認（#3141）', () => {
+  it('端末でなく --yes も無ければ、HTTP に出ずに断る（消えていない）', async () => {
+    const restore = pretendTty(false);
+    try {
+      await expect(tokenRemoveUnreadableCommand(['row-1'])).rejects.toThrow('--yes');
+    } finally {
+      restore();
+    }
+    expect(sent.length).toBe(0);
   });
 });

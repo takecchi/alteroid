@@ -576,7 +576,7 @@ railway ssh --service app
 alteroid credential list                              # 名前と指紋（値は出ない）
 printf %s 'github_pat_xxx' > /tmp/pat && alteroid credential set GH_TOKEN -f /tmp/pat && rm /tmp/pat
 alteroid credential set GIT_AUTHOR_NAME -f - <<< 'takecchi'
-alteroid credential remove SOME_OLD_KEY               # 外す（runner の器からも消える）
+alteroid credential remove SOME_OLD_KEY --yes         # 外す（runner の器からも消える。railway ssh 越しは端末でないので確認を --yes で省く）
 ```
 
 **⚠️ `CLAUDE_CODE_OAUTH_TOKEN` はここへは置けない**（400 で断る）。正本はプールの側（`alteroid token add`）で、こちらへ置くと**名乗り直しのたびに回した鍵を巻き戻す**。

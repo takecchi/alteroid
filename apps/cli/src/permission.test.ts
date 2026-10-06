@@ -400,7 +400,7 @@ describe('alteroid permission remove-unreadable（issue #2440）', () => {
     replies.push({ status: 200, body: { removedIds: ['row-1', 'row-2'], count: 2 } });
     const read = captureStdout();
 
-    await permissionRemoveUnreadableCommand(['row-1', 'row-2']);
+    await permissionRemoveUnreadableCommand(['row-1', 'row-2'], { yes: true });
 
     expect(sent).toHaveLength(1);
     expect(sent[0]?.url).toBe('http://127.0.0.1:4517/permission-grants/unreadable/remove');
@@ -414,9 +414,9 @@ describe('alteroid permission remove-unreadable（issue #2440）', () => {
   it('404（指した id が読めない行に無い）は、何も消していないと言って投げる。指した文字列は映さない', async () => {
     replies.push({ status: 404, body: { error: 'x' } });
 
-    const error = await permissionRemoveUnreadableCommand(['FAKE_SECRET_VALUE_2440']).catch(
-      (e: unknown) => e,
-    );
+    const error = await permissionRemoveUnreadableCommand(['FAKE_SECRET_VALUE_2440'], {
+      yes: true,
+    }).catch((e: unknown) => e);
 
     expect(error).toBeInstanceOf(Error);
     expect((error as Error).message).toContain('何も消していません');
@@ -427,7 +427,9 @@ describe('alteroid permission remove-unreadable（issue #2440）', () => {
   it('500 はデーモンの理由を載せて投げる', async () => {
     replies.push({ status: 500, body: { error: '保存できなかった（テスト用）' } });
 
-    await expect(permissionRemoveUnreadableCommand(['row-1'])).rejects.toThrow(/500/);
+    await expect(permissionRemoveUnreadableCommand(['row-1'], { yes: true })).rejects.toThrow(
+      /500/,
+    );
   });
 });
 
@@ -497,5 +499,17 @@ describe('alteroid permission revoke の確認（#3141）', () => {
       restore();
     }
     expect(sent).toEqual([]);
+  });
+});
+
+describe('alteroid permission remove-unreadable の確認（#3141）', () => {
+  it('端末でなく --yes も無ければ、HTTP に出ずに断る（消えていない）', async () => {
+    const restore = pretendTty(false);
+    try {
+      await expect(permissionRemoveUnreadableCommand(['row-1'])).rejects.toThrow('--yes');
+    } finally {
+      restore();
+    }
+    expect(sent.length).toBe(0);
   });
 });

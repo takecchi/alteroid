@@ -173,7 +173,16 @@ export function describeCarriedOver(view: PutTokensView): string {
  * 読めないトークンの行を、id を指して消す（issue #2354）。**値は出さない**（id と件数だけ）。
  * 指した id が読めない行に無ければ、デーモンが何も消さずに断る（エラーとして投げる）。
  */
-export async function tokenRemoveUnreadableCommand(ids: readonly string[]): Promise<void> {
+export async function tokenRemoveUnreadableCommand(
+  ids: readonly string[],
+  options: { yes?: boolean } = {},
+): Promise<void> {
+  // 戻せない操作なので確認する（#3141。`confirm.ts`）。壊れた行は中身を出さずに消すので、消すと残らない。
+  const confirmed = await confirmIrreversible(
+    `読めないトークンの行（id: ${ids.join(', ')}）を消します。壊れた行は消すと残りません。`,
+    options,
+  );
+  if (!confirmed) return;
   const target = await resolveTarget();
   const result = (await request(target, '/tokens/unreadable/remove', {
     method: 'POST',

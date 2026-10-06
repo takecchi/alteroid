@@ -161,7 +161,16 @@ export async function permissionRevokeCommand(
  * この口では消せない**（`permission-grants.json` を手で直す）。指した id が1つでも読めない行に
  * 無ければ、デーモンが何も消さずに断る。**行の中身は出さない**（id と件数だけ）。
  */
-export async function permissionRemoveUnreadableCommand(ids: readonly string[]): Promise<void> {
+export async function permissionRemoveUnreadableCommand(
+  ids: readonly string[],
+  options: { yes?: boolean } = {},
+): Promise<void> {
+  // 戻せない操作なので確認する（#3141。`confirm.ts`）。壊れた行は中身を出さずに消すので、消すと残らない。
+  const confirmed = await confirmIrreversible(
+    `読めない許可の行（id: ${ids.join(', ')}）を消します。壊れた行は消すと残りません。`,
+    options,
+  );
+  if (!confirmed) return;
   const target = await resolveTarget();
   if (target.note !== null) throw new Error(target.note);
   const client = createClient(target.baseUrl, target.headers);

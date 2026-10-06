@@ -548,8 +548,9 @@ accessCommand
     '読めないアカウントの行を id を指して消す（id はデーモンの stderr の「accounts の不正な行を読み飛ばしました」の跡。' +
       'access revoke は読めない行に触れない。id が取れない行はこの口では消せない）',
   )
-  .action(async (ids: string[]) => {
-    await accessRemoveUnreadableCommand(ids);
+  .option('--yes', '確認を飛ばす（スクリプト・CI 向け）')
+  .action(async (ids: string[], options: { yes?: boolean }) => {
+    await accessRemoveUnreadableCommand(ids, options);
   });
 
 /**
@@ -598,8 +599,9 @@ permissionCommand
     '読めない許可の行を id を指して消す（id はデーモンの stderr の「許可の記録の不正な行を読み飛ばしました」の跡。' +
       'permission revoke は読めない行に触れない。id が取れない行はこの口では消せない）',
   )
-  .action(async (ids: string[]) => {
-    await permissionRemoveUnreadableCommand(ids);
+  .option('--yes', '確認を飛ばす（スクリプト・CI 向け）')
+  .action(async (ids: string[], options: { yes?: boolean }) => {
+    await permissionRemoveUnreadableCommand(ids, options);
   });
 
 permissionCommand
@@ -984,8 +986,9 @@ tokenCommand
     '読めないトークンの行を id を指して消す（token list の「読めない行」の id。' +
       'add / remove などの書き換えは、読めない行を持ち越す）',
   )
-  .action(async (ids: string[]) => {
-    await tokenRemoveUnreadableCommand(ids);
+  .option('--yes', '確認を飛ばす（スクリプト・CI 向け）')
+  .action(async (ids: string[], options: { yes?: boolean }) => {
+    await tokenRemoveUnreadableCommand(ids, options);
   });
 
 tokenCommand
