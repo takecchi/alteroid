@@ -156,9 +156,14 @@ export class FsAttachmentStore implements AttachmentStore {
     } catch (error) {
       // 途中の id で ENOENT 以外の I/O 例外が出た。id を1つずつ結ぶので、先に結んだ分が結び付いたまま残る。
       // 呼び手には結果が届かず `newlyBound` を知れないので、ここで「この呼びで新しく結んだ分」だけを戻す
-      // （すでに結んであった id は `newlyBound` に入っていない。#3592）。戻しも落ちたら握りつぶし、
-      // 元の例外を投げ直す（原因は元の例外。戻せなかった分はその宛先に残る）。
-      await this.unbind(newlyBound, target).catch(() => undefined);
+      // （すでに結んであった id は `newlyBound` に入っていない。#3592）。戻しも落ちたら、戻せなかったことを
+      // stderr へ1行残し（件数・宛先の種類・理由だけ。名前や中身は出さない）、元の例外を投げ直す
+      // （原因は元の例外。戻せなかった分はその宛先に残る）。
+      await this.unbind(newlyBound, target).catch((rollbackError: unknown) => {
+        process.stderr.write(
+          `alteroidd: 添付の結び付けを戻せなかった（${'conversationId' in target ? '会話' : '外部イベント'}へ結んだ ${newlyBound.length} 件が残る）: ${reasonOf(rollbackError)}\n`,
+        );
+      });
       throw error;
     }
     return { bound, newlyBound, missing, conflicts };
