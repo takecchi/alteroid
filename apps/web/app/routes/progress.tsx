@@ -1,6 +1,6 @@
 import { WorkTabs } from '~/components/group-tabs';
 import { LoadError } from '~/components/load-error';
-import { useMemo, type ReactNode } from 'react';
+import { useMemo, useState, type ReactNode } from 'react';
 import { useSearchParams } from 'react-router';
 
 import {
@@ -65,6 +65,12 @@ export default function ProgressPage() {
   const rawWindow = searchParams.get(WINDOW_PARAM);
   const windowHours = useMemo(() => parseWindow(rawWindow), [rawWindow]);
   const { data, error, isLoading, isValidating, mutate } = useProgress(windowHours);
+  // 表示中の data を最後に読めた窓。失敗したとき、いまの窓と違えば「前の期間の数字」と言う（#3419）。
+  const [okWindow, setOkWindow] = useState<number>();
+  if (data !== undefined && error === undefined && !isLoading && okWindow !== windowHours) {
+    setOkWindow(windowHours);
+  }
+  const showsOtherWindow = error !== undefined && okWindow !== windowHours;
 
   function selectWindow(next: WindowHours) {
     setSearchParams(
@@ -128,7 +134,9 @@ export default function ProgressPage() {
                 className="m-4"
               />
               <p className="px-4 pb-4 text-xs text-warn">
-                下の数は前に読めたときのもの。いまの値ではないかもしれない。
+                {showsOtherWindow
+                  ? '新しい期間では読み込めなかった。下は前の期間の数字。'
+                  : '下の数は前に読めたときのもの。いまの値ではないかもしれない。'}
               </p>
             </Card>
           )}

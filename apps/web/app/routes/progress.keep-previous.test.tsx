@@ -133,3 +133,24 @@ describe('/progress 画面 — 期間を替えても前の中身を残す（#341
     expect(screen.queryByText(MARK)).toBeNull();
   });
 });
+
+describe('/progress 画面 — 新しい期間の取得が失敗したとき（#3419）', () => {
+  it('前の期間の数字だと言い、再試行の口を残す', async () => {
+    stubFetch((url) => {
+      if (!url.includes('/progress')) return undefined;
+      return url.includes('windowHours=24') ? json({ error: 'boom' }, 500) : json(body(12, 168));
+    });
+    renderPage();
+    await screen.findByText('12');
+
+    fireEvent.click(screen.getByRole('radio', { name: '24時間' }));
+
+    expect(
+      await screen.findByText(/新しい期間では読み込めなかった。下は前の期間の数字/),
+    ).toBeTruthy();
+    expect(screen.getByText('12')).toBeTruthy();
+    // 同じ期間の取り直しの失敗の文言ではない。
+    expect(screen.queryByText(/下の数は前に読めたときのもの/)).toBeNull();
+    expect(screen.getByRole('button', { name: /再試行|もう一度/ })).toBeTruthy();
+  });
+});

@@ -18,7 +18,7 @@ import {
   CLONE_ACTOR_ID,
   type UnreadableUsageRow,
 } from '@alteroid/core/usage';
-import { useId, type ReactNode } from 'react';
+import { useId, useState, type ReactNode } from 'react';
 import { Link, useSearchParams } from 'react-router';
 
 import {
@@ -349,6 +349,13 @@ export default function Usage() {
     ...(tokenId === '' ? {} : { tokenId }),
   };
   const { data, error, isLoading, isValidating, mutate } = useUsage(query);
+  // 表示中の data を最後に読めた条件。失敗したとき、いまの条件と違えば「前の条件の数字」と言う（#3419）。
+  const queryKey = JSON.stringify(query);
+  const [okQueryKey, setOkQueryKey] = useState<string>();
+  if (data !== undefined && error === undefined && !isLoading && okQueryKey !== queryKey) {
+    setOkQueryKey(queryKey);
+  }
+  const showsOtherQuery = error !== undefined && data !== undefined && okQueryKey !== queryKey;
 
   /**
    * **黙って捨てない（issue #2133）。** `layer` / `site` は捨てて終わりだが
@@ -509,6 +516,12 @@ export default function Usage() {
         retrying={isValidating}
         className="mb-4"
       />
+
+      {showsOtherQuery && (
+        <p className="mb-4 text-xs text-warn">
+          新しい条件では読み込めなかった。下は前の条件の数字。
+        </p>
+      )}
 
       {/* `keepPreviousData` のとき `isLoading` は別の条件の初回読み込みでも真になる。スピナーにしてよいのは、出せるデータが無いときだけ（#3419）。 */}
       {isLoading && data === undefined ? (

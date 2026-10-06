@@ -128,3 +128,26 @@ describe('/usage 画面 — 絞り込みを替えても前の中身を残す（#
     expect(screen.queryByText(MARK)).toBeNull();
   });
 });
+
+describe('/usage 画面 — 新しい条件の取得が失敗したとき（#3419）', () => {
+  it('前の条件の数字だと言い、再試行の口を残す', async () => {
+    stubFetch((url) => {
+      if (url.includes('/managers')) return json({ managers: [] });
+      if (url.includes('/tokens')) return json({ tokens: [] });
+      if (!url.includes('/usage')) return undefined;
+      return new URL(url).searchParams.has('layer')
+        ? json({ error: 'boom' }, 500)
+        : json(usageBody(12));
+    });
+    renderUsage();
+    await screen.findAllByText('$12.00');
+
+    fireEvent.change(screen.getByLabelText('誰が'), { target: { value: 'manager' } });
+
+    expect(
+      await screen.findByText(/新しい条件では読み込めなかった。下は前の条件の数字/),
+    ).toBeTruthy();
+    expect(screen.getAllByText('$12.00').length).toBeGreaterThan(0);
+    expect(screen.getByRole('button', { name: /再試行|もう一度/ })).toBeTruthy();
+  });
+});
