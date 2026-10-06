@@ -1348,6 +1348,9 @@ describe('承認待ち（一覧と詳細・答える）', () => {
     await waitFor(() => h.frame().includes('[回答済み] ap-done'));
     // フッタの案内も、Esc の戻り先（その日）に合わせる
     expect(h.frame()).toContain('Esc その日へ');
+    // 回答済みの詳細は答えられない。a を案内しない（a は何もしない）。
+    expect(h.frame()).not.toContain('a 答える');
+    expect(h.frame()).not.toContain('a で答える');
     expect(h.frame()).not.toContain('Esc 一覧へ');
     h.stdin.write(ESC);
     await waitFor(() => h.frame().includes('2026-09-30 に決着した承認'));

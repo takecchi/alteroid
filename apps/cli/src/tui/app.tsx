@@ -13,7 +13,7 @@ import { redactedErrorMessage } from '../redact.js';
 import { parseJournalSearchTokens } from '../chat.js';
 import type { ConversationSummary, TuiApi } from './api.js';
 import type { ChatController } from './chat-controller.js';
-import type { ApprovalsController } from './approvals-controller.js';
+import { isOpen, type ApprovalsController } from './approvals-controller.js';
 import {
   AnsweredDatesList,
   AnsweredDayList,
@@ -924,7 +924,7 @@ export const App: FC<AppProps> = ({
                   ? HINT_AP_INPUT
                   : ap.detail?.mode === 'form'
                     ? HINT_AP_FORM
-                    : approvalDetailHint(ap.detailFrom)
+                    : approvalDetailHint(ap.detailFrom, isOpen(ap.detail?.approval ?? null))
         : tab === 'journal'
           ? jr.view === 'filter'
             ? HINT_JOURNAL_FILTER
