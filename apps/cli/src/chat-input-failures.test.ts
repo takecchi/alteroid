@@ -360,3 +360,74 @@ describe('#3686: 送れなかった本文を端末へ戻す', () => {
     expect(out()).not.toContain('送れなかった本文');
   });
 });
+
+describe('#3723: /schedule の依頼文と /answer の補足も改行・連続した空白を潰さない', () => {
+  const base = 'http://127.0.0.1:4517';
+  const target = { baseUrl: base, headers: {}, remote: false, note: null };
+  const listed = {
+    approvals: [],
+    managerAnchors: {},
+    commitments: [],
+    conversations: [],
+    managers: [],
+    waiting: [],
+    messages: [],
+    messagesConversationId: null,
+    messageAttachments: {},
+    messageTexts: {},
+  };
+  const run = async (line: string, calls: Call[]) => {
+    const out = captureStdout();
+    const { runSlashCommand } = await import('./chat.js');
+    const { createClient } = await import('./client.js');
+    await runSlashCommand(line, createClient(base, {}), listed, null, target);
+    out();
+    return calls;
+  };
+
+  it('/schedule（HH:MM・分ごと）の依頼文がそのまま送られる', async () => {
+    for (const [when, spec] of [
+      ['09:00', { type: 'daily', at: '09:00' }],
+      ['30m', { type: 'every', minutes: 30 }],
+    ] as const) {
+      const calls = recordFetch(() => Response.json({}));
+      await run(`/schedule check ${when} 直して:\n  if x:\n      y  z  `, calls);
+      const body = calls.find((c) => c.path === '/schedule')?.body;
+      expect(body?.request).toBe('直して:\n  if x:\n      y  z');
+      expect(body?.spec).toEqual(spec);
+    }
+  });
+
+  it('/schedule cron の依頼文がそのまま送られ、式は5項目のまま', async () => {
+    const calls = recordFetch(() => Response.json({}));
+    await run('/schedule check cron 0  10 * * 1 週次:\n    まとめ  て', calls);
+    const body = calls.find((c) => c.path === '/schedule')?.body;
+    expect(body?.request).toBe('週次:\n    まとめ  て');
+    expect(body?.spec).toEqual({ type: 'cron', expression: '0 10 * * 1' });
+  });
+
+  it('/answer の補足がそのまま送られる（フラグを挟むと空白1つ）', async () => {
+    const calls = recordFetch(({ path }) =>
+      path === '/approvals/a1'
+        ? Response.json({
+            approval: { id: 'a1', questions: [{ id: 'q1', question: 'q', options: [] }] },
+          })
+        : Response.json({}),
+    );
+    await run('/answer a1 --select q1=x 補足:\n  1行目  です  --other q2=あ  末尾  ', calls);
+    expect(calls.find((c) => c.path === '/approvals/a1/answer')?.body?.answer).toBe(
+      '補足:\n  1行目  です 末尾',
+    );
+    const calls2 = recordFetch(({ path }) =>
+      path === '/approvals/a1'
+        ? Response.json({
+            approval: { id: 'a1', questions: [{ id: 'q1', question: 'q', options: [] }] },
+          })
+        : Response.json({}),
+    );
+    await run('/answer a1 前  置き\n  --select q1=x 後ろ  です', calls2);
+    expect(calls2.find((c) => c.path === '/approvals/a1/answer')?.body?.answer).toBe(
+      '前  置き 後ろ  です',
+    );
+  });
+});

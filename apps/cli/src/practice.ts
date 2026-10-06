@@ -2,6 +2,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { stdin } from 'node:process';
+import { PRACTICE_SLUG_RULE, describeSlugViolation } from '@alteroid/core/cli-light';
 import { stderr, stdout, writeShownBody } from './terminal-out.js';
 
 import { createClient, type DaemonClient } from './client.js';
@@ -213,6 +214,9 @@ export async function practiceEditCommand(
   slug: string,
   options: { kind?: string; title?: string } = {},
 ): Promise<void> {
+  // **slug は、通信も一時ファイルも作る前に検査する（#3728。`memory edit` と同じ）。**
+  const violation = describeSlugViolation(slug, PRACTICE_SLUG_RULE);
+  if (violation !== null) throw new Error(`やり方の名前が不正です: ${violation}`);
   const conn = await connect('write');
   if (conn === null) return;
   const { client, target } = conn;
