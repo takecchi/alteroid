@@ -254,6 +254,8 @@ runner が報告する資源（pids の現在値と上限など）と直近の�
 
 進行中のターンの途中経過は、クローンが会話ごとにメモリ上へ保持する（done/error で捨てる。永続化しない）。人間が接続を切っても再読み込みしても、GET /chat/:conversationId/stream で続きに戻れる。デーモンの再起動を越えては残らない（再起動後の会話の復元は日誌を正本とする）。
 
+`POST /chat` の発言は、送った側が `clientMessageId`（任意。英数字・`_` `-` の1〜128字）で名乗れる。この値は受信箱の `human_message` と日誌の inbound `exchange` に残り、`open` と `GET /conversations/:id` の `messages` で返る。送った側は、`open` に届く前に中断した送信を「自分の id の発言が履歴に現れたか」で確かめる（本文の一致では見ない。同じ本文の別の発言と取り違えるため）。**同じ会話に同じ値が再び届いたら二重に受けない**——何も積まず `open`（`duplicate: true`）を返し、進行中のターンがあれば途中経過から続きを流す（`GET /chat/:conversationId/stream` と同じ）。別の会話で受け取り済みの値は 409。重複の判定は、直近の日誌（人間との往復 200 件）と、受け取り直後のメモリで行う。
+
 ## 同時実行モデル — クローンは複数のマネージャーを使う
 
 人間が Claude Code を複数枚開くのと同じことが、クローンにもできる。
@@ -561,6 +563,8 @@ packages/ui          Web UI の見た目の部品（shadcn の部品・汎用の
 
 **添付の中身を取る `GET /attachments/:id` も Bearer で受ける。** ブラウザの `<img src>` に URL を直接入れても `Authorization` を運べない（Cookie は受けないので）。そこで Web UI は Bearer 付きの `fetch` で取り、`Blob` から `blob:` URL を作って表示する（画面から外れたら解放する）。レスポンスは `content-disposition: attachment` と `x-content-type-options: nosniff` を付け、人間が上げた中身をブラウザがこのオリジンの文書として開かないようにする。`GET /attachments/:id/meta` は中身を読まずに控えだけを返す。
 
+**添付の上限は `GET /attachments/limits` で返す。** `createApp` が実際に使っている値（`ALTEROID_ATTACHMENT_MAX_*` を含む）を `{maxImageBytes, maxFileBytes, maxPerMessage, maxTotalBytes, retentionDays}` で返す。CLI・TUI・Web はこれを取って送る前の検査に使い、取れた値は覚えて取り直さない。取れなければ core の既定値で検査し、最終判断はサーバの 4xx に任せる——古いデーモン（404）は既定値で確定として覚え、接続失敗や壊れた応答のような一時的な失敗は覚えずに次の機会に取り直す。登録は `/attachments/:id` より前（`limits` を id と取り違えない）。
+
 開発中は Vite の proxy（`/api` → デーモン）で同一オリジンに見せる。**開発のためだけに CORS を
 開けさせない。**
 
@@ -591,7 +595,7 @@ packages/ui          Web UI の見た目の部品（shadcn の部品・汎用の
 - **無認証の `GET /health` は「動いているか」だけを返す。記憶の置き場（`storage`。PostgreSQL なら `host:port/db`、ファイルなら記憶ディレクトリのパス）は返さない**（2026-10-05 のオーナー決定、#2869）。公開の構成で、内部のホスト名・DB 名・ホームのパスをログインしていない相手に読ませないため。残る項目は `ok` `pid` `operator`（CLI の本人確認）`auth`（ログインの要否と手段）。置き場は資格が要る `GET /status` が返す（`alteroid daemon status` はこれを読む）
 - **ログインしただけでは使えない。** 使う許可は人間が `alteroid access grant` で与える。これは PRD「権限境界」とは別の層である — あちらは「クローンが何を人間へ確認するか」を記憶で決める話で、こちらは「そもそも誰が API に触れるか」であり、持つのは**許可されているか否か**だけである（身元についての事実で、**行為の一覧は持たない**。「持ち主として宣言されたか否か」は2026-10-05 以降、通す・通さないに効かない）
 - **入口ごとに認証を作らない。** CLI・HTTP API・Web UI は同じ門番を通る（PRD「インターフェース」）
-- **添付の口（`POST /attachments`・`GET /attachments/:id`・`GET /attachments/:id/meta`）は、認証のある入口からだけ受ける。** 上の公開経路には入らない。上げた主体は `uploadedBy`（識別子だけ）に残る（[ストレージ](#添付--中身は置き場に記憶と日誌には控えだけ)）
+- **添付の口（`POST /attachments`・`GET /attachments/limits`・`GET /attachments/:id`・`GET /attachments/:id/meta`）は、認証のある入口からだけ受ける。** 上の公開経路には入らない。上げた主体は `uploadedBy`（識別子だけ）に残る（[ストレージ](#添付--中身は置き場に記憶と日誌には控えだけ)）
 - 資格は `Authorization: Bearer` だけで運ぶ。Cookie は受けない（[Web UI](#web-ui--画面とデーモンのオリジンが違うこと)の項）
 - **CORS はブラウザにしか効かない。** `curl` は素通りするので、外から届く場所に置くならここを有効にするか、手前に境界（リバースプロキシ・トンネル）を置くこと。認証を切ったまま公開しないこと
 
