@@ -514,6 +514,70 @@ describe('委譲（マネージャーの一覧と詳細）', () => {
     await waitFor(() => h.frame().includes('メッセージ'));
   });
 
+  it('追加指示の送信に失敗したら、書いた文は入力欄に残り、失敗を言う（#3367）', async () => {
+    const h = start((api) => {
+      managersFixture(api);
+      api.sendManagerMessage = () => Promise.reject(new Error('送れない'));
+    });
+    await openList(h);
+    h.stdin.write(ENTER);
+    await waitFor(() => h.frame().includes('Esc 一覧へ'));
+    h.stdin.write('i');
+    await type(h.stdin, '大事な指示');
+    h.stdin.write(ENTER);
+    await waitFor(() => h.frame().includes('✗ 送れない'));
+    // 後ろに 1 文字足して、欄に文が残っていた（空になっていない）ことを確かめる。
+    await type(h.stdin, '。');
+    await waitFor(() => h.frame().includes('❯ 大事な指示。'));
+    expect(h.frame()).toContain('❯ 大事な指示。');
+  });
+
+  it('送信中に Enter を押しても文は消えず、送信中と言う（#3367）', async () => {
+    const g = gate();
+    const h = start((api) => {
+      managersFixture(api);
+      api.sendManagerMessage = async (id, text) => {
+        api.managerMessages.push({ id, text });
+        await g.wait;
+        return { outcome: 'delivered', detail: '届いた' };
+      };
+    });
+    await openList(h);
+    h.stdin.write(ENTER);
+    await waitFor(() => h.frame().includes('Esc 一覧へ'));
+    h.stdin.write('i');
+    await type(h.stdin, '一つ目');
+    h.stdin.write(ENTER);
+    await waitFor(() => h.api.managerMessages.length === 1);
+    await type(h.stdin, '二つ目');
+    h.stdin.write(ENTER);
+    await waitFor(() => h.frame().includes('送信中'));
+    await type(h.stdin, '。');
+    await waitFor(() => h.frame().includes('❯ 二つ目。'));
+    expect(h.frame()).toContain('❯ 二つ目。');
+    expect(h.api.managerMessages).toHaveLength(1);
+    g.open();
+  });
+
+  it('書きかけのまま Esc を二度押しても、すぐには捨てない。もう一度 Esc で捨てて戻る（#3367）', async () => {
+    const h = start(managersFixture);
+    await openList(h);
+    h.stdin.write(ENTER);
+    await waitFor(() => h.frame().includes('Esc 一覧へ'));
+    h.stdin.write('i');
+    await type(h.stdin, '書きかけ');
+    h.stdin.write(ESC); // 入力欄を抜ける
+    await waitFor(() => h.frame().includes('Esc 一覧へ'));
+    h.stdin.write(ESC);
+    await waitFor(() => h.frame().includes('もう一度 Esc'));
+    expect(h.frame()).toContain('もう一度 Esc');
+    expect(h.frame()).not.toContain('委譲（絞り: すべて');
+    expect(h.frame()).toContain('書きかけ');
+    h.stdin.write(ESC);
+    await waitFor(() => h.frame().includes('委譲（絞り: すべて'));
+    expect(h.frame()).toContain('委譲（絞り: すべて');
+  });
+
   it('止めるには確認を挟む。y 以外では止めない', async () => {
     const h = start(managersFixture);
     await openList(h);
@@ -772,7 +836,7 @@ describe('日誌（ライブで流れる一覧と全文）', () => {
     await waitFor(() => h.frame().includes('種別で絞り込む'));
     expect(h.frame()).toContain('[ ] turn_usage'); // 14 種すべてが選べる
     h.stdin.write(DOWN); // decision
-    h.stdin.write(' ');
+    h.stdin.write('\u3000'); // IME オンの Space は全角で届く（#3369）
     await waitFor(() => h.frame().includes('[x] decision'));
     h.stdin.write(ENTER);
     await waitFor(() => h.frame().includes('絞り: type=decision'));

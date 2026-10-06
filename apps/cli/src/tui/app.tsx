@@ -245,6 +245,8 @@ export const App: FC<AppProps> = ({
   };
 
   const quittingRef = useRef(false);
+  /** 委譲の詳細で、書きかけを捨てて戻る 2 度目の Esc を待っている（#3367）。 */
+  const mgrDiscardArmedRef = useRef(false);
   const quit = (): void => {
     if (quittingRef.current) return;
     quittingRef.current = true;
@@ -441,7 +443,10 @@ export const App: FC<AppProps> = ({
       return;
     }
     setMgrAnchor('bottom');
-    void managers.sendMessage(resolved.text);
+    // 送れなかった（失敗・送信中）ときは、打った文を入力欄へ戻す（#3367。会話の #3304 と同じ形）。
+    void managers.sendMessage(resolved.text).then((sent) => {
+      if (!sent && isEmptyBuffer(mgrBufferRef.current)) setMgrBuffer(bufferOf(text));
+    });
   };
 
   /** 生ログの総行数（ハンドラの中で最新の状態から数える）。 */
@@ -474,6 +479,7 @@ export const App: FC<AppProps> = ({
     }
     const detail = state.detail;
     if (detail === null) return false;
+    if (!key.escape) mgrDiscardArmedRef.current = false;
     if (detail.confirmStop) {
       // 確認中は全部のキーをここで受ける。y だけが確定。
       if (input === 'y') void managers.confirmStop();
@@ -482,6 +488,15 @@ export const App: FC<AppProps> = ({
     }
     const step = pageStep(mgrLogHeight);
     if (key.escape) {
+      // 書きかけは黙って捨てない。1 度目の Esc は残して言い、もう一度押したら捨てて戻る（#3367）。
+      if (!isEmptyBuffer(mgrBufferRef.current) && !mgrDiscardArmedRef.current) {
+        mgrDiscardArmedRef.current = true;
+        managers.setNotice(
+          '書きかけの追加指示が残っている。もう一度 Esc で捨てて一覧へ戻る（i で続きを書く）',
+        );
+        return true;
+      }
+      mgrDiscardArmedRef.current = false;
       setMgrAnchor('bottom');
       setMgrBuffer(emptyBuffer());
       managers.back();
@@ -609,7 +624,7 @@ export const App: FC<AppProps> = ({
       if (key.escape) journal.cancelFilter();
       else if (key.upArrow) journal.moveFilterCursor(-1);
       else if (key.downArrow) journal.moveFilterCursor(1);
-      else if (input === ' ') journal.toggleFilterDraft();
+      else if (isSpaceKey(input)) journal.toggleFilterDraft();
       else if (key.return) {
         setJAnchor('bottom');
         journal.applyFilter();
