@@ -187,6 +187,16 @@ describe('確認の文（buildConfirmMessage） — issue #2196', () => {
     );
   });
 
+  it('接続先の userinfo（user:pass@）は確認の文に出ない。URL として読めない値でも落ちない（#3214）', () => {
+    const message = buildConfirmMessage('https://alice:s3cret@alteroid.example.com:8443/base');
+    expect(message).toContain('接続先: https://alteroid.example.com:8443/base');
+    expect(message).not.toContain('alice');
+    expect(message).not.toContain('s3cret');
+    const broken = buildConfirmMessage('//bob:hunter2@not a url');
+    expect(broken).not.toContain('bob');
+    expect(broken).not.toContain('hunter2');
+  });
+
   it('消した後の報告の見出し（SUMMARY_LABELS）が、全キーどこかの確認の group に載っている', () => {
     const covered = new Set(
       RESET_CONFIRM_GROUPS_FOR_TEST.flatMap((group: { keys: string[] }) => group.keys),

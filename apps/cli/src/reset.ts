@@ -84,11 +84,26 @@ export const RESET_CONFIRM_GROUPS_FOR_TEST = CONFIRM_GROUPS;
  * 確認の文（何が消えるか）。`confirmIrreversible` の `summary` に渡す。テストから直接読める。
  * 末尾の改行と「取り消せません。」は `confirmIrreversible` が足すので、ここには持たない。
  */
+/**
+ * 確認の文に出す接続先。**userinfo（`user:pass@`）は出さない**（秘密を画面に出さない）。
+ * URL として読めない値でも例外にせず、`//…@` の部分だけ落として返す。
+ */
+export function displayBaseUrl(baseUrl: string): string {
+  try {
+    const url = new URL(baseUrl);
+    url.username = '';
+    url.password = '';
+    return url.href.replace(/\/$/, '');
+  } catch {
+    return baseUrl.replace(/\/\/[^/]*@/, '//');
+  }
+}
+
 export function buildConfirmMessage(baseUrl: string): string {
   const list = CONFIRM_GROUPS.map((group) => group.label).join('・');
   return (
     '本当に削除しますか？\n' +
-    `接続先: ${baseUrl}\n` +
+    `接続先: ${displayBaseUrl(baseUrl)}\n` +
     `${list}を全部消します。\n` +
     '認証トークンのプール・マネージャーへ降ろす環境変数・Web UI のログイン' +
     'アカウントは消しません。'
