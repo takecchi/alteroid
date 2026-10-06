@@ -81,7 +81,7 @@ describe('FsScheduleStore — 保存済みの6欄の cron は読めない行と�
     const scheduler = createScheduler({
       entries: [],
       post: (event) => posted.push(event),
-      now: () => new Date(2026, 8, 12, 8, 0, 0),
+      now: () => new Date('2026-09-12T08:00:00.000Z'),
       schedules: stores.schedules,
       onError: () => undefined,
     });
