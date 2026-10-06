@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import { fingerprintOf } from './credentials.js';
+import { nonBlankString } from './non-blank-string.js';
 import { limitRecoveryOf, limitRecoverySchema, type LimitRecovery } from './usage-limits.js';
 
 /**
@@ -407,7 +408,14 @@ export function toAgentTokenView(token: AgentToken): AgentTokenView {
 export const agentTokenInputSchema = z.object({
   /** 既存の行を指す。省略すると新しい行として扱う。 */
   id: z.string().min(1).optional(),
-  label: z.string().min(1),
+  /**
+   * **空白だけの label は置けない**（trim 後に空なら弾く）。Web は送る前に
+   * 弾いているので、CLI・API からも同じにする（issue #3142）。**値は
+   * trim しない**（検査だけ。入力を黙って書き換えない）。**入力の検査だけで、
+   * 保存済みの行の読み出し（`agentTokenSchema`）は触らない**——既に空白だけの
+   * label が保存されていても、読めなくならない。
+   */
+  label: nonBlankString,
   /** 省略したら `id` が指す既存の行の値を保つ。新規の行では必須。 */
   value: z.string().min(1).optional(),
   order: z.number().int().optional(),
