@@ -61,3 +61,44 @@ describe('/approvals の応答が配列を持たない形のとき', () => {
     expect(screen.queryByText(/承認待ちを読めていない/)).toBeNull();
   });
 });
+
+/**
+ * 読めない行（`unreadable`）だけのとき、ホームは「承認待ちはない」と言わず警告を出す（issue #3062）。
+ * 文言は `/approvals` の「読めない承認待ちが N 件ある」に揃える。
+ */
+describe('読めない承認待ちだけのとき（#3062）', () => {
+  it('calm（承認待ちはない）の代わりに警告を出す', async () => {
+    renderHome({
+      approvals: {
+        raw: { approvals: [], unreadable: [{ id: 'ap-bad', reason: 'x' }, { reason: 'y' }] },
+      },
+    });
+
+    const note = await screen.findByText(/読めない承認待ちが 2 件ある/);
+    expect(note.textContent).toContain('壊れた行であって、回答済みでも取り下げ済みでもない');
+    expect(screen.queryByText('承認待ちはない')).toBeNull();
+  });
+
+  it('読める承認待ちと混在するときも、警告を一覧の上に足す', async () => {
+    renderHome({
+      approvals: {
+        raw: {
+          approvals: [
+            { id: 'a-1', question: '質問1', createdAt: '2026-08-19T10:00:00.000Z', options: [] },
+          ],
+          unreadable: [{ reason: 'y' }],
+        },
+      },
+    });
+
+    expect(await screen.findByText(/読めない承認待ちが 1 件ある/)).toBeTruthy();
+    expect(screen.getByText('質問1')).toBeTruthy();
+  });
+
+  it('対照: 読めない行が無く0件なら、従来どおり「承認待ちはない」', async () => {
+    renderHome({ approvals: { raw: { approvals: [] } } });
+
+    expect(await screen.findByText('承認待ちはない')).toBeTruthy();
+    expect(screen.queryByText(/読めない承認待ち/)).toBeNull();
+  });
+});

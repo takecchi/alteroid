@@ -15,7 +15,7 @@
  *   は本ファイルの「日誌の購読を張らない」へ移した
  */
 import { USAGE_ESTIMATE_NOTICE, usageDate, ZERO_USAGE } from '@alteroid/core/usage';
-import { cleanup, fireEvent, screen, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderedMoneyTexts, storeTestBaseUrl } from '~/test-support';
@@ -710,5 +710,37 @@ describe('「作業の進捗」カード', () => {
     )!;
     expect(await within(card).findByRole('alert')).toBeTruthy();
     expect(within(card).queryByText('実行中の任せた作業')).toBeNull();
+  });
+
+  /**
+   * **一度取れたあとの取り直しの失敗（issue #3069）。** SWR は直前の `data` を残して `error` を立てる
+   * ので、`data` だけ見ると止まった数が今の値に見えた。方針は「画面を奪わず、その場で言う」——
+   * 古い数は残し、数の上に注記を出す。取り直しが成功したら注記は消える。
+   */
+  it('取れたあとの取り直しが失敗しても、古い数は残したまま、その場で失敗を言う', async () => {
+    renderHome();
+    expect(await screen.findByText(/未了の仕事 5 件/)).toBeTruthy();
+    expect(screen.queryByText(/取り直せなかった/)).toBeNull();
+
+    const healthy = globalThis.fetch;
+    globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      return url.includes('/progress')
+        ? Promise.resolve(new Response('{"error":"internal"}', { status: 500 }))
+        : healthy(input, init);
+    }) as typeof fetch;
+    act(() => {
+      window.dispatchEvent(new Event('focus'));
+    });
+
+    expect(await screen.findByText(/最新の数を取り直せなかった/)).toBeTruthy();
+    expect(screen.getByText(/未了の仕事 5 件/)).toBeTruthy();
+
+    globalThis.fetch = healthy;
+    act(() => {
+      window.dispatchEvent(new Event('focus'));
+    });
+    await waitFor(() => expect(screen.queryByText(/取り直せなかった/)).toBeNull());
+    expect(screen.getByText(/未了の仕事 5 件/)).toBeTruthy();
   });
 });

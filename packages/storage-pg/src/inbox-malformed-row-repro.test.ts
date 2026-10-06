@@ -110,6 +110,29 @@ describe('PgInboxStore — 読めない1行で受信箱ごと落とさない', (
     expect((await stores.inbox.pending()).count).toBe(2);
   });
 
+  // issue #3056 の 1。fs が揃える先（`storage-fs/src/inbox-malformed-row-repro.test.ts`）。
+  it('removeMany() は id で名指しされた読めない行も消し、戻り値に入れる', async () => {
+    await seedWithBadRow();
+    expect(await stores.inbox.removeMany(['evt-bad'])).toEqual(['evt-bad']);
+    const rows = await db.select({ id: inboxEvents.id }).from(inboxEvents);
+    expect(rows.map((row) => row.id)).toEqual(['evt-good']);
+    expect((await stores.inbox.pending()).count).toBe(1);
+  });
+
+  it('remove() も id で名指しされた読めない行を消し、名指しされない行は残す', async () => {
+    await seedWithBadRow();
+    await stores.inbox.remove('evt-bad');
+    const rows = await db.select({ id: inboxEvents.id }).from(inboxEvents);
+    expect(rows.map((row) => row.id)).toEqual(['evt-good']);
+  });
+
+  it('removeMany() は読めた行と読めない行を1回で消し、無い id は戻り値に入れない', async () => {
+    await seedWithBadRow();
+    const removed = await stores.inbox.removeMany(['evt-bad', 'evt-good', 'evt-none', 'evt-bad']);
+    expect(removed.sort()).toEqual(['evt-bad', 'evt-good']);
+    expect(await db.select({ id: inboxEvents.id }).from(inboxEvents)).toEqual([]);
+  });
+
   it('対照: 読めない行が無ければ、今までどおり全部を配り、跡も出さない', async () => {
     await stores.inbox.put(GOOD_EVENT, '2026-09-28T00:00:00.000Z');
     let ids: string[] = [];

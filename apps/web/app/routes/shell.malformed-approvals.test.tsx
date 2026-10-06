@@ -111,3 +111,40 @@ describe('/approvals の応答が配列を持たない形のとき', () => {
     expect(link.getAttribute('href')).toBe('/approvals');
   });
 });
+
+/**
+ * 読めない行（`unreadable`）だけのとき、ナビは「承認待ちはない」に見えてはいけない（issue #3062）。
+ * 読める行は0件でも、`/approvals` が言う「読めない承認待ちが N 件ある」を警告の札で言う。
+ */
+describe('読めない承認待ちだけのとき（#3062）', () => {
+  const UNREADABLE = [{ id: 'ap-bad', reason: '不正な欄: createdAt' }, { reason: '不正な行' }];
+
+  it('左ナビの「承認待ち」に警告の札が付く（読めない件数を言う）', async () => {
+    stubApprovalsBody({ approvals: [], unreadable: UNREADABLE });
+
+    renderShell();
+
+    expect(await screen.findByLabelText('読めない承認待ちが 2 件ある')).toBeTruthy();
+    // 「読めていない」（danger の ?）とは別。取れてはいる。
+    expect(screen.queryByLabelText('承認待ちを読めていない')).toBeNull();
+  });
+
+  it('狭い画面: 上端の帯に出る（リンク先は /approvals）', async () => {
+    setViewportWidth(375);
+    stubApprovalsBody({ approvals: [], unreadable: UNREADABLE });
+
+    renderShell();
+
+    const link = await screen.findByRole('link', { name: /読めない承認待ちが 2 件ある/ });
+    expect(link.getAttribute('href')).toBe('/approvals');
+  });
+
+  it('対照: 読めない行が無ければ札は付かない', async () => {
+    stubApprovalsBody({ approvals: [] });
+
+    renderShell();
+
+    expect(await screen.findByRole('link', { name: /ホーム/ })).toBeTruthy();
+    expect(screen.queryByLabelText(/読めない承認待ち/)).toBeNull();
+  });
+});

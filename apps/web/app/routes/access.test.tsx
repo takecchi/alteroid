@@ -264,7 +264,12 @@ describe('/access 画面 — grant / revoke', () => {
 
     // 1回目の押下では叩かない。確認の文言と「本当に取り消す」が出る。
     expect(stub.calls.some((url) => /\/access\/acct-a\/revoke$/.test(url))).toBe(false);
-    expect(screen.getByText(/その場では戻せない/)).toBeTruthy();
+    // 誤読されない言い方（issue #3072）。直す前は主語が「このアカウントは」で、何が戻せないのかが
+    // 曖昧だった。戻せないのは取り消された本人で、押す側は「許可する」で戻せる。
+    const warning = screen.getByText(/取り消された本人は、自分では許可を戻せない/);
+    expect(warning.textContent).toMatch(/許可を持つ別のアカウントか実行環境の持ち主/);
+    expect(warning.textContent).toMatch(/「許可する」で戻せる/);
+    expect(screen.queryByText(/その場では戻せない/)).toBeNull();
 
     // やめれば元に戻り、叩かない。
     fireEvent.click(screen.getByText('やめる'));

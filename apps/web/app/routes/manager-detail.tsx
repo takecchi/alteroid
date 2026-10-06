@@ -1470,13 +1470,17 @@ function PermissionWaitingRow({
   askedAtNote: ReactNode;
 }) {
   const send = useSendManagerMessage();
-  const [busy, setBusy] = useState(false);
+  // どちらを送っているか。**押したほうだけが回る**（`loading`）。もう片方は
+  // 二重に答えさせないよう塞ぐだけ（`disabled`）。1本の真偽値だと、
+  // 「拒否」を押しても「許可」が回った（#3068）。
+  const [busy, setBusy] = useState<'allow' | 'deny' | null>(null);
   const [failure, setFailure] = useState<unknown>(undefined);
   // 戻り値を見る。未達（`session_missing` など、HTTP 200）を成功として黙らせない。
   const [note, setNote] = useState<{ text: string; reached: boolean } | undefined>(undefined);
 
   function answer(decision: 'allow' | 'deny') {
-    setBusy(true);
+    if (busy !== null) return;
+    setBusy(decision);
     setFailure(undefined);
     setNote(undefined);
     send(id, {
@@ -1490,7 +1494,7 @@ function PermissionWaitingRow({
         if (!described.reached) setNote(described);
       })
       .catch(setFailure)
-      .finally(() => setBusy(false));
+      .finally(() => setBusy(null));
   }
 
   return (
@@ -1498,10 +1502,22 @@ function PermissionWaitingRow({
       <p className="text-sm">{redactBody(summary)}</p>
       {askedAtNote}
       <div className="mt-2 flex items-center gap-2">
-        <Button size="sm" variant="primary" loading={busy} onClick={() => answer('allow')}>
+        <Button
+          size="sm"
+          variant="primary"
+          loading={busy === 'allow'}
+          disabled={busy === 'deny'}
+          onClick={() => answer('allow')}
+        >
           許可
         </Button>
-        <Button size="sm" variant="danger" disabled={busy} onClick={() => answer('deny')}>
+        <Button
+          size="sm"
+          variant="danger"
+          loading={busy === 'deny'}
+          disabled={busy === 'allow'}
+          onClick={() => answer('deny')}
+        >
           拒否
         </Button>
       </div>

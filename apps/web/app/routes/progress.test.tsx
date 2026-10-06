@@ -19,7 +19,7 @@
  */
 import { describeGithubCi } from '@alteroid/core';
 import { GITHUB_CI_COUNT_LABEL, GITHUB_CI_COUNT_ORDER } from '@alteroid/logic';
-import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -753,6 +753,38 @@ describe('/progress 画面 — 取得の失敗', () => {
 
     expect(await screen.findByRole('alert')).toBeTruthy();
     expect(screen.getByRole('alert').textContent).not.toMatch(/窓口を持っていません/);
+  });
+
+  /**
+   * 一度取れたあとの取り直しの失敗（issue #3069）。SWR は `data` を残して `error` を立てるので、
+   * 直す前は帯が無く、止まった数が今の値に見えた。方針は「画面を奪わず、その場で言う」——
+   * 4枚は残したまま、上に失敗の帯を出す。取り直しが通れば帯は消える。
+   */
+  it('取れたあとの取り直しが失敗しても、4枚は残したまま、上に失敗の帯を出す', async () => {
+    let failing = false;
+    stubFetch((url) => {
+      if (!url.includes('/progress')) return undefined;
+      return failing ? json({ error: 'boom' }, 500) : json(baseBody());
+    });
+    renderPage();
+    await card('未完了の仕事');
+    expect(screen.queryByRole('alert')).toBeNull();
+
+    failing = true;
+    act(() => {
+      window.dispatchEvent(new Event('focus'));
+    });
+    const band = await screen.findByRole('alert');
+    expect(band.textContent).toMatch(/作業の進捗の最新を読み込めませんでした/);
+    expect(screen.getByText(/下の数は前に読めたときのもの/)).toBeTruthy();
+    expect(within(await card('未完了の仕事')).getByText('12')).toBeTruthy();
+
+    failing = false;
+    act(() => {
+      window.dispatchEvent(new Event('focus'));
+    });
+    await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
+    expect(screen.queryByText(/下の数は前に読めたときのもの/)).toBeNull();
   });
 });
 
