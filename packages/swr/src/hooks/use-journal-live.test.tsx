@@ -11,7 +11,7 @@
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { useManager, useManagerTranscript, useTokens } from './queries';
+import { useManager, useManagerTranscript, useProfile, useTokens } from './queries';
 import { useJournalLive } from './use-journal-live';
 import { json, Providers, sse, stubFetch, storeTestBaseUrl, type FetchStub } from '../test-support';
 
@@ -322,4 +322,108 @@ describe('プールの状態（GET /tokens）の取り直し', () => {
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(tokensCallCount(stub)).toBe(before);
   });
+});
+
+/**
+ * 切れていた間の変化を取り直す。サーバは途中から再生しないので、**繋ぎ直した**後の
+ * `open` で、いま表示中（マウント中）のキーを1回取り直す。初回の接続の `open` では
+ * 取り直さない（各画面がマウント時に取る）。
+ *
+ * 取り直し方は `mutate(述語)`（データ引数なし）。SWR はこれをマウント中のキーの
+ * 再検証としてだけ扱い、マウントされていないキーのキャッシュは捨てない。ただし
+ * `useProfile` / `useMcpServers`（値に鍵が入りうるので自動の再取得をしない）と
+ * `useAuth`（失敗すると画面全体が置き換わる）は巻き込まない。
+ */
+describe('再接続時の取り直し', () => {
+  const RECONNECT_TIMEOUT = 4000;
+
+  function ReconnectProbe() {
+    useJournalLive();
+    const manager = useManager(MANAGER_ID);
+    const transcript = useManagerTranscript(MANAGER_ID);
+    useProfile();
+    return (
+      <div>
+        <div data-testid="manager">{manager.data?.manager.managerId ?? ''}</div>
+        <div data-testid="transcript">{transcript.data ?? ''}</div>
+      </div>
+    );
+  }
+
+  /** `first` は1本目の接続の終わり方。2本目以降は張りっぱなし。 */
+  function renderReconnect(first: 'close' | 'fail') {
+    const state = { streams: 0 };
+    const stub = stubFetch((url, init) => {
+      if (url.endsWith('/journal/stream')) {
+        state.streams += 1;
+        if (state.streams === 1 && first === 'fail') return undefined;
+        return sse([{ event: 'open', data: { ok: true } }], {
+          keepOpen: state.streams > 1 || first === 'fail',
+          signal: init?.signal,
+        });
+      }
+      if (url.endsWith(`/managers/${MANAGER_ID}`)) return json(MANAGER_DETAIL);
+      if (url.endsWith(`/managers/${MANAGER_ID}/transcript`)) {
+        return new Response('{"line":1}\n', { status: 200 });
+      }
+      if (url.endsWith('/profile')) return json({ entries: [] });
+      return undefined;
+    });
+    render(
+      <Providers>
+        <ReconnectProbe />
+      </Providers>,
+    );
+    return { stub, state };
+  }
+
+  const profileCalls = (stub: FetchStub) => stub.calls.filter((u) => u.endsWith('/profile')).length;
+
+  it('初回の open では表示中のキーを取り直さない', async () => {
+    const stub = renderProbe([{ event: 'open', data: { ok: true } }]);
+
+    await screen.findByText(MANAGER_ID);
+    await waitFor(() => {
+      expect(stub.calls.filter((url) => url.endsWith('/journal/stream')).length).toBe(1);
+    });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(countsOf(stub)).toEqual({ manager: 1, transcript: 1 });
+  });
+
+  it('接続が正常終了して繋ぎ直したとき、表示中のキーを取り直す', async () => {
+    const { stub, state } = renderReconnect('close');
+
+    await screen.findByText(MANAGER_ID);
+    // 再接続の待ち（1秒）を越えるまで待つ。
+    await waitFor(() => expect(state.streams).toBe(2), { timeout: RECONNECT_TIMEOUT });
+    await waitFor(() => {
+      const after = countsOf(stub);
+      expect(after.manager).toBeGreaterThan(1);
+      expect(after.transcript).toBeGreaterThan(1);
+    });
+  }, 10_000);
+
+  it('接続の失敗（offline）から繋ぎ直したときも取り直す', async () => {
+    const { stub, state } = renderReconnect('fail');
+
+    await screen.findByText(MANAGER_ID);
+    await waitFor(() => expect(state.streams).toBe(2), { timeout: RECONNECT_TIMEOUT });
+    await waitFor(() => {
+      const after = countsOf(stub);
+      expect(after.manager).toBeGreaterThan(1);
+      expect(after.transcript).toBeGreaterThan(1);
+    });
+  }, 10_000);
+
+  it('繋ぎ直しでは自動の再取得をしない設定のキー（useProfile）を取り直さない', async () => {
+    const { stub, state } = renderReconnect('close');
+
+    await screen.findByText(MANAGER_ID);
+    await waitFor(() => expect(profileCalls(stub)).toBe(1));
+    await waitFor(() => expect(state.streams).toBe(2), { timeout: RECONNECT_TIMEOUT });
+    // 取り直しが走ったことを確かめてから、profile だけ増えていないことを見る。
+    await waitFor(() => expect(countsOf(stub).manager).toBeGreaterThan(1));
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(profileCalls(stub)).toBe(1);
+  }, 10_000);
 });
