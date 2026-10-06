@@ -31,8 +31,8 @@ export interface HomeOptions {
         today?: string | null;
         unreadableRows?: unknown[];
       };
-  /** `'fail'` は 500。 */
-  reports?: unknown[] | 'fail';
+  /** 日報の行。`'fail'` は 500、`{ raw }` は応答の本文をそのまま返す（版のずれ）。 */
+  reports?: unknown[] | 'fail' | { raw: unknown };
   /** 承認待ちの行。`'fail'` は 500、`{ raw }` は応答の本文をそのまま返す（版のずれ）。 */
   approvals?: unknown[] | 'fail' | { raw: unknown };
   managers?: { managers: unknown; unreadable?: unknown[] } | 'fail';
@@ -89,7 +89,13 @@ export function homeRoute(options: HomeOptions = {}): Route {
     if (url.includes('/reports')) {
       return options.reports === 'fail'
         ? json({ error: 'internal' }, 500)
-        : json({ reports: options.reports ?? [] });
+        : json(
+            options.reports !== undefined &&
+              !Array.isArray(options.reports) &&
+              options.reports !== 'fail'
+              ? options.reports.raw
+              : { reports: options.reports ?? [] },
+          );
     }
     if (url.includes('/approvals')) {
       const approvals = options.approvals ?? [];

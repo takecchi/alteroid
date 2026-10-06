@@ -17,6 +17,8 @@ import { redactBody } from '@alteroid/logic';
 // 静かに残る）。
 import { isUnavailable, UnavailableNote } from './reports';
 
+const REPORTS_MALFORMED_MESSAGE = '最新の日報を読めていない（応答の形が想定と違う）';
+
 /**
  * 最新の日報。ホームの主役のひとつなので、小さなカードの抜粋ではなく **全幅の枠で本文を
  * Markdown として描く**（`/reports` と同じ `Markdown` 部品と `redactBody`）。長い本文は
@@ -32,7 +34,10 @@ import { isUnavailable, UnavailableNote } from './reports';
  */
 export function LatestReport() {
   const reports = useReports(1);
-  const latest = reports.data?.reports[0];
+  // 配列でない応答は「読めていない」へ倒す（`?? []` で0件にしない。#3702。承認待ちの #2308 と同じ形）。
+  const list = Array.isArray(reports.data?.reports) ? reports.data.reports : undefined;
+  const malformed = reports.data !== undefined && list === undefined;
+  const latest = list?.[0];
   const readable = latest !== undefined && !isUnavailable(latest);
   return (
     <HomeReportCard
@@ -54,6 +59,8 @@ export function LatestReport() {
         <ErrorNote error={reports.error} />
       ) : reports.data === undefined ? (
         <Spinner />
+      ) : malformed ? (
+        <ErrorNote error={new Error(REPORTS_MALFORMED_MESSAGE)} />
       ) : latest === undefined ? (
         <p className="text-sm text-muted-foreground">
           まだ日報がない。締め時刻を待つか、スケジュールから今すぐ回せる。
