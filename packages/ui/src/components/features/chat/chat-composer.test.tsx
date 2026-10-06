@@ -178,32 +178,42 @@ describe('ChatComposer: 無効・送信中', () => {
   it('受信中: 「受信をやめる」を並べて出し、押せる', () => {
     const stop = vi.fn();
     setup({ sending: true, onStopReceiving: stop });
-    fireEvent.click(screen.getByRole('button', { name: '受信をやめる' }));
+    fireEvent.click(
+      screen.getByRole('button', { name: '受信をやめる（クローンのターンは止まらない）' }),
+    );
     expect(stop).toHaveBeenCalledTimes(1);
   });
 
   it('受信中: 「受信をやめる」は送信と同じくアイコンだけの丸いボタンで、aria-label とヒントが同じ文', () => {
     setup({ sending: true, onStopReceiving: vi.fn() });
-    const stop = screen.getByRole('button', { name: '受信をやめる' });
+    const stop = screen.getByRole('button', {
+      name: '受信をやめる（クローンのターンは止まらない）',
+    });
     expect(stop.textContent).toBe('');
     expect(stop.querySelector('svg')).not.toBeNull();
-    expect(stop.getAttribute('aria-label')).toBe('受信をやめる');
+    expect(stop.getAttribute('aria-label')).toBe('受信をやめる（クローンのターンは止まらない）');
     for (const cls of ['size-11', 'rounded-full', 'md:size-8']) {
       expect(stop.classList.contains(cls)).toBe(true);
     }
     expect(screen.queryByRole('tooltip')).toBeNull();
     act(() => stop.focus());
-    expect(screen.getByRole('tooltip').textContent).toBe('受信をやめる');
+    expect(screen.getByRole('tooltip').textContent).toBe(
+      '受信をやめる（クローンのターンは止まらない）',
+    );
   });
 
   it('受信中: 「受信をやめる」もホバーでヒントが出る（遅延のあと）', () => {
     setup({ sending: true, onStopReceiving: vi.fn() });
-    const trigger = screen.getByRole('button', { name: '受信をやめる' }).parentElement!;
+    const trigger = screen.getByRole('button', {
+      name: '受信をやめる（クローンのターンは止まらない）',
+    }).parentElement!;
     fireEvent.pointerMove(trigger, { pointerType: 'mouse' });
     act(() => {
       vi.advanceTimersByTime(300);
     });
-    expect(screen.getByRole('tooltip').textContent).toBe('受信をやめる');
+    expect(screen.getByRole('tooltip').textContent).toBe(
+      '受信をやめる（クローンのターンは止まらない）',
+    );
   });
 });
 

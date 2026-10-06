@@ -69,7 +69,8 @@ const ROUND_BUTTON = 'size-11 rounded-full p-0 md:size-8';
  *   （止めるのは見出しの「ターンを止める」）
  * - **入力に合わせて高さが伸びる**（上限つき。超えたら内側をスクロール）。伸びるので
  *   リサイズのつまみは出さない（タッチでは掴めず、デスクトップでも自動の高さと競う）
- * - 狭い画面では「受信をやめる」の文言を隠して記号だけにする。読み上げの名前は `aria-label` で持つ
+ * - 「受信をやめる」は記号（■）だけのボタンで、文字のラベルは持たない。ヒントと `aria-label` は同じ文
+ *   「受信をやめる（クローンのターンは止まらない）」（■ がクローンを止めるボタンに見えないよう、止まらないことを添える）
  *
  * - **添付**（`onAttach` を渡したときだけ有効）— [+]・貼り付け（クリップボードのファイル）・
  *   ドラッグ＆ドロップのどれからも `onAttach(files)` が呼ばれる。個数や大きさの検査・上げる処理は
@@ -247,12 +248,12 @@ export function ChatComposer({
                 文字のラベルは持たない。
               */}
               {sending && onStopReceiving !== undefined && (
-                <Hint label="受信をやめる">
+                <Hint label="受信をやめる（クローンのターンは止まらない）">
                   <Button
                     variant="default"
                     className={ROUND_BUTTON}
                     onClick={onStopReceiving}
-                    aria-label="受信をやめる"
+                    aria-label="受信をやめる（クローンのターンは止まらない）"
                   >
                     <Square className="size-3.5" aria-hidden />
                   </Button>

@@ -216,12 +216,18 @@ describe('画面に戻ったとき、処理中の会話の途中経過に戻る'
 
     renderApp(`/chat/${ID}`);
     expect(await screen.findByText('考えている…')).toBeTruthy();
-    expect(screen.getByRole('button', { name: '受信をやめる' })).toBeTruthy();
+    expect(
+      screen.getByRole('button', { name: '受信をやめる（クローンのターンは止まらない）' }),
+    ).toBeTruthy();
 
     more.open();
     expect(await within(transcript()).findByText('お待たせ')).toBeTruthy();
     // done で畳まれる: 受信中の見た目も戻る
-    await waitFor(() => expect(screen.queryByRole('button', { name: '受信をやめる' })).toBeNull());
+    await waitFor(() =>
+      expect(
+        screen.queryByRole('button', { name: '受信をやめる（クローンのターンは止まらない）' }),
+      ).toBeNull(),
+    );
     expect(screen.queryByText('考えている…')).toBeNull();
   });
 
@@ -261,7 +267,9 @@ describe('画面に戻ったとき、処理中の会話の途中経過に戻る'
     // 閉じられずに残っていない（サーバが閉じなくても、こちらから畳む）
     await waitFor(() => expect(aborted[0]).toBe(true));
     expect(screen.queryByText('考えている…')).toBeNull();
-    expect(screen.queryByRole('button', { name: '受信をやめる' })).toBeNull();
+    expect(
+      screen.queryByRole('button', { name: '受信をやめる（クローンのターンは止まらない）' }),
+    ).toBeNull();
     // 再描画をまたいでも張り直さない
     fireEvent.change(screen.getByPlaceholderText(/クローンに話しかける/), {
       target: { value: 'あ' },
@@ -280,7 +288,9 @@ describe('画面に戻ったとき、処理中の会話の途中経過に戻る'
     ).toBeTruthy();
     await waitFor(() => expect(streamCalls()).toBe(1));
     expect(screen.queryByRole('alert')).toBeNull();
-    expect(screen.queryByRole('button', { name: '受信をやめる' })).toBeNull();
+    expect(
+      screen.queryByRole('button', { name: '受信をやめる（クローンのターンは止まらない）' }),
+    ).toBeNull();
   });
 
   it('自分の送信中は張らない（新しい会話で送っても、再生の口は 1 回も叩かれない）', async () => {
@@ -308,7 +318,11 @@ describe('画面に戻ったとき、処理中の会話の途中経過に戻る'
     await waitFor(() => expect(router.state.location.pathname).toBe(`/chat/${ID}`));
     expect(streamCalls()).toBe(0);
     finish.open();
-    await waitFor(() => expect(screen.queryByRole('button', { name: '受信をやめる' })).toBeNull());
+    await waitFor(() =>
+      expect(
+        screen.queryByRole('button', { name: '受信をやめる（クローンのターンは止まらない）' }),
+      ).toBeNull(),
+    );
     expect(streamCalls()).toBe(0);
   });
 
@@ -330,7 +344,11 @@ describe('画面に戻ったとき、処理中の会話の途中経過に戻る'
     fireEvent.click(screen.getByRole('button', { name: 'メッセージを送信' }));
     expect(await within(transcript()).findByText('へんじ')).toBeTruthy();
     finish.open();
-    await waitFor(() => expect(screen.queryByRole('button', { name: '受信をやめる' })).toBeNull());
+    await waitFor(() =>
+      expect(
+        screen.queryByRole('button', { name: '受信をやめる（クローンのターンは止まらない）' }),
+      ).toBeNull(),
+    );
     expect(streamCalls()).toBe(1);
   });
 
@@ -387,7 +405,11 @@ describe('画面に戻ったとき、処理中の会話の途中経過に戻る'
     const before = detailFetches();
     window.dispatchEvent(new Event('focus'));
     await waitFor(() => expect(detailFetches()).toBeGreaterThan(before));
-    await waitFor(() => expect(screen.queryByRole('button', { name: '受信をやめる' })).toBeNull());
+    await waitFor(() =>
+      expect(
+        screen.queryByRole('button', { name: '受信をやめる（クローンのターンは止まらない）' }),
+      ).toBeNull(),
+    );
     expect(within(transcript()).getAllByText('わかった')).toHaveLength(1);
     expect(within(transcript()).getAllByText('やあ')).toHaveLength(1);
   });
@@ -422,7 +444,11 @@ describe('画面に戻ったとき、処理中の会話の途中経過に戻る'
     recorded = true;
     more.open();
     window.dispatchEvent(new Event('focus'));
-    await waitFor(() => expect(screen.queryByRole('button', { name: '受信をやめる' })).toBeNull());
+    await waitFor(() =>
+      expect(
+        screen.queryByRole('button', { name: '受信をやめる（クローンのターンは止まらない）' }),
+      ).toBeNull(),
+    );
     await waitFor(() => expect(within(transcript()).getAllByText(line)).toHaveLength(1));
   });
 

@@ -1245,9 +1245,13 @@ describe('送信ボタンの狭幅対応（本6）', () => {
     renderChat();
     await send('やあ');
 
-    const stopButton = await screen.findByRole('button', { name: '受信をやめる' });
+    const stopButton = await screen.findByRole('button', {
+      name: '受信をやめる（クローンのターンは止まらない）',
+    });
     expect(stopButton.textContent).toBe('');
-    expect(stopButton.getAttribute('aria-label')).toBe('受信をやめる');
+    expect(stopButton.getAttribute('aria-label')).toBe(
+      '受信をやめる（クローンのターンは止まらない）',
+    );
 
     // 「受信をやめる」は送信の代わりではない。並べて出ている。
     expect(screen.getByRole('button', { name: 'メッセージを送信' })).toBeTruthy();

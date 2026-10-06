@@ -138,7 +138,7 @@ async function sendThenSwitch(options: { bIsRunning: boolean }) {
   expect(await findShownConversation(B)).toBeTruthy();
   if (options.bIsRunning) {
     // B の再生が張られ、「受信中」になっている。
-    await screen.findByRole('button', { name: '受信をやめる' });
+    await screen.findByRole('button', { name: '受信をやめる（クローンのターンは止まらない）' });
   }
 
   await act(async () => {
@@ -164,7 +164,9 @@ describe('送った発言は送った先の会話の行で、移った先の画�
     const list = screen.queryByRole('list', { name: 'やりとり' });
     expect(list?.textContent ?? '').not.toContain('Aへの本文');
     // B の画面は「受信中」にならない（A への投函のために購読は張らない）。
-    expect(screen.queryByRole('button', { name: '受信をやめる' })).toBeNull();
+    expect(
+      screen.queryByRole('button', { name: '受信をやめる（クローンのターンは止まらない）' }),
+    ).toBeNull();
 
     // A へ戻ると、送った発言は A の行として居て、書いた本文は入力欄に戻ってこない。
     await act(async () => {
@@ -187,6 +189,8 @@ describe('送った発言は送った先の会話の行で、移った先の画�
       'Aへの本文',
     );
     // B の「受信中」は B のまま（A への投函で止まらない・増えない）。
-    expect(screen.getByRole('button', { name: '受信をやめる' })).toBeTruthy();
+    expect(
+      screen.getByRole('button', { name: '受信をやめる（クローンのターンは止まらない）' }),
+    ).toBeTruthy();
   });
 });
