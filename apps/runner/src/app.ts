@@ -1283,8 +1283,8 @@ export function createRunnerApp(deps: RunnerAppDeps) {
         // ——`Host#start` の doc を見よ。デーモンはこれと自分が送った値を比べて、
         // 倒れたかどうかを知る。
         try {
-          const { cwd } = await host.start(c.req.valid('json'));
-          return c.json({ ok: true, cwd });
+          const { cwd, sessionGeneration } = await host.start(c.req.valid('json'));
+          return c.json({ ok: true, cwd, sessionGeneration });
         } catch (error) {
           // 添付を置けなかった（sha256 の不一致など）。セッションは作っていない。再送しても同じ結果なので 4xx。
           if (error instanceof RunnerAttachmentRejectedError) {
@@ -1314,7 +1314,7 @@ export function createRunnerApp(deps: RunnerAppDeps) {
         if (command.managerId !== c.req.param('id')) {
           return c.json({ error: 'manager_id が経路と本文で食い違っている' as const }, 400);
         }
-        let resumed: { cwd: string; reusedLiveSession: boolean };
+        let resumed: { cwd: string; reusedLiveSession: boolean; sessionGeneration: string };
         try {
           resumed = await host.resume(command);
         } catch (error) {
@@ -1338,7 +1338,13 @@ export function createRunnerApp(deps: RunnerAppDeps) {
           throw error;
         }
         // **短絡したかを運ぶ**（#2877。`runnerSessionOpenResultSchema.reusedLiveSession` の doc）。
-        return c.json({ ok: true, cwd: resumed.cwd, reusedLiveSession: resumed.reusedLiveSession });
+        // **セッションの世代も運ぶ**（Issue #3170。`runnerSessionOpenResultSchema.sessionGeneration` の doc）。
+        return c.json({
+          ok: true,
+          cwd: resumed.cwd,
+          reusedLiveSession: resumed.reusedLiveSession,
+          sessionGeneration: resumed.sessionGeneration,
+        });
       },
     )
 

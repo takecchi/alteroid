@@ -81,6 +81,8 @@ describe('同じ runner への復帰の最中に届く closed', () => {
   function fakeRunner(
     runnerId: string,
     workspacePath = '/work/project',
+    // resume の応答が名乗るセッションの世代（Issue #3170）。省略は「名乗らない古い runner」。
+    sessionGeneration?: string,
   ): {
     client: RunnerClient;
     resumes: RunnerResumeCommand[];
@@ -101,7 +103,7 @@ describe('同じ runner への復帰の最中に届く closed', () => {
         /* この試験群では使わない。 */
         return {};
       },
-      async resume(command): Promise<{ cwd?: string }> {
+      async resume(command): Promise<{ cwd?: string; sessionGeneration?: string }> {
         resumes.push(command);
         sessions.set(command.managerId, {
           managerId: command.managerId,
@@ -111,7 +113,7 @@ describe('同じ runner への復帰の最中に届く closed', () => {
           waiting: [],
           sessionId: command.sessionId,
         });
-        return {};
+        return sessionGeneration === undefined ? {} : { sessionGeneration };
       },
       async send() {
         return true;
@@ -254,5 +256,144 @@ describe('同じ runner への復帰の最中に届く closed', () => {
     const after = (await stores.jobs.listJobs()).find((j) => j.id === 'mgr-same');
     expect(after?.status).toBe('lost');
     await pool.stop();
+  });
+
+  /**
+   * 同じ runner への復帰の resume が受理された後の台帳を作る（Issue #3170 の歯の足場）。
+   * `inWindow` を渡すと、resume の応答の**前**に（窓の間に）その出来事を流す。
+   */
+  async function resumedOnSameRunner(options: {
+    generation?: string;
+    inWindow?: RunnerEvent[];
+  }): Promise<{
+    pool: ReturnType<typeof createManagerPool>;
+    stores: ReturnType<typeof createMemoryStores>;
+    runnerA: ReturnType<typeof fakeRunner>;
+  }> {
+    const stores = createMemoryStores();
+    await stores.jobs.putJob(jobWith('mgr-same', 'runner-a'));
+    const fake = createFakeRegistry();
+    fake.entries.push(entryOf('runner-a', 'connected', 'runner-a'));
+    const runnerA = fakeRunner('runner-a', '/work/project', options.generation);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let entered!: () => void;
+    const enteredResume = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const originalResume = runnerA.client.resume.bind(runnerA.client);
+    runnerA.client.resume = async (command) => {
+      entered();
+      await gate;
+      return originalResume(command);
+    };
+    fake.addClient(runnerA.client);
+    const pool = createManagerPool({ stores, post: () => {}, runners: fake.registry });
+    await pool.abort('mgr-does-not-exist');
+    const reattach = pool.reattachRunner('runner-a');
+    await enteredResume;
+    for (const event of options.inWindow ?? []) runnerA.emit?.(event);
+    // 実時間では待たない（#2146）。
+    for (let i = 0; i < 10; i += 1) await new Promise((resolve) => setImmediate(resolve));
+    release();
+    await reattach;
+    return { pool, stores, runnerA };
+  }
+
+  async function settle(): Promise<void> {
+    for (let i = 0; i < 10; i += 1) await new Promise((resolve) => setImmediate(resolve));
+  }
+
+  const lostClosed = (sessionGeneration?: string): RunnerEvent => ({
+    type: 'closed',
+    managerId: 'mgr-same',
+    status: 'lost',
+    reason: 'セッションが畳まれた',
+    ...(sessionGeneration === undefined ? {} : { sessionGeneration }),
+  });
+
+  describe('セッションの世代（Issue #3170）で、窓の外に届く古い出来事を区別する', () => {
+    it('resume の応答の後に届いた、古い世代のセッションの closed(lost) は、台帳を lost にしない（窓の外。#3159 の残り）', async () => {
+      const { pool, stores, runnerA } = await resumedOnSameRunner({ generation: 'gen-new' });
+      // resume の応答は返り終わった（窓は閉じている）。その後に旧セッションの畳みが届く。
+      runnerA.emit?.(lostClosed('gen-old'));
+      await settle();
+      const after = (await stores.jobs.listJobs()).find((j) => j.id === 'mgr-same');
+      expect(after?.status).toBe('running');
+      await pool.stop();
+    });
+
+    it('新しい世代の closed(lost) は、従来どおり台帳を lost にする', async () => {
+      const { pool, stores, runnerA } = await resumedOnSameRunner({ generation: 'gen-new' });
+      runnerA.emit?.(lostClosed('gen-new'));
+      await settle();
+      const after = (await stores.jobs.listJobs()).find((j) => j.id === 'mgr-same');
+      expect(after?.status).toBe('lost');
+      await pool.stop();
+    });
+
+    it('世代を持たない closed(lost) は、従来どおり lost にする（古い runner との後方互換）', async () => {
+      const { pool, stores, runnerA } = await resumedOnSameRunner({ generation: 'gen-new' });
+      runnerA.emit?.(lostClosed());
+      await settle();
+      const after = (await stores.jobs.listJobs()).find((j) => j.id === 'mgr-same');
+      expect(after?.status).toBe('lost');
+      await pool.stop();
+    });
+
+    it('resume の応答が世代を名乗らない（古い runner）なら、追っている世代を持たず、世代付きの closed(lost) も従来どおり効く', async () => {
+      const { pool, stores, runnerA } = await resumedOnSameRunner({});
+      runnerA.emit?.(lostClosed('gen-whatever'));
+      await settle();
+      const after = (await stores.jobs.listJobs()).find((j) => j.id === 'mgr-same');
+      expect(after?.status).toBe('lost');
+      await pool.stop();
+    });
+
+    it('窓の間に届いた新しい世代の closed(lost) は、窓の「古い出来事」扱いで捨てられず、lost にする', async () => {
+      const { pool, stores } = await resumedOnSameRunner({
+        generation: 'gen-new',
+        inWindow: [lostClosed('gen-new')],
+      });
+      await settle();
+      const after = (await stores.jobs.listJobs()).find((j) => j.id === 'mgr-same');
+      expect(after?.status).toBe('lost');
+      await pool.stop();
+    });
+
+    it('窓の間に届いた古い世代の closed(lost) は、これまでどおり捨てて running のまま', async () => {
+      const { pool, stores } = await resumedOnSameRunner({
+        generation: 'gen-new',
+        inWindow: [lostClosed('gen-old')],
+      });
+      const after = (await stores.jobs.listJobs()).find((j) => j.id === 'mgr-same');
+      expect(after?.status).toBe('running');
+      await pool.stop();
+    });
+
+    it('古い世代の report は、台帳の lastReport を書き換えない。新しい世代・世代なしの report は従来どおり書く', async () => {
+      const { pool, stores, runnerA } = await resumedOnSameRunner({ generation: 'gen-new' });
+      const report = (text: string, sessionGeneration?: string): RunnerEvent => ({
+        type: 'report',
+        managerId: 'mgr-same',
+        status: 'done',
+        text,
+        ...(sessionGeneration === undefined ? {} : { sessionGeneration }),
+      });
+      const lastReport = async (): Promise<string | undefined> =>
+        (await stores.jobs.listJobs()).find((j) => j.id === 'mgr-same')?.lastReport;
+      runnerA.emit?.(report('古いセッションの報告', 'gen-old'));
+      await settle();
+      expect(await lastReport()).toBe('途中まで進めた');
+      runnerA.emit?.(report('新しいセッションの報告', 'gen-new'));
+      await settle();
+      expect(await lastReport()).toBe('新しいセッションの報告');
+      runnerA.emit?.(report('世代なしの報告'));
+      await settle();
+      expect(await lastReport()).toBe('世代なしの報告');
+      await pool.stop();
+    });
   });
 });
