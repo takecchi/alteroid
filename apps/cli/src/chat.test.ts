@@ -1662,6 +1662,7 @@ interface ConversationMessageLike {
   text: string;
   supersedes?: string;
   supersededBy?: string;
+  attachments?: { id: string; name: string; mediaType: string; size: number; sha256: string }[];
 }
 
 interface AnswersRequest {
@@ -2175,6 +2176,7 @@ function emptyListed(): Listed {
     waiting: [],
     messages: [],
     messagesConversationId: null,
+    messageAttachments: {},
   };
 }
 
@@ -5143,6 +5145,47 @@ describe('chat の /edit（送信済みの自分の発言を編集する）', ()
       supersedes: 'm1',
       clientMessageId: expect.stringMatching(/^[A-Za-z0-9_-]{1,128}$/),
     });
+  });
+
+  it('添付つきの発言を編集すると、新しい版にも元の添付の id を付けて送る（#3630。Web の #3399 と同じ）', async () => {
+    stubEditFetch({ status: 200 });
+    const attachment = (id: string) => ({
+      id,
+      name: `${id}.csv`,
+      mediaType: 'text/csv',
+      size: 12,
+      sha256: 'x',
+    });
+    const { client } = stubClient({
+      conversationDetailBody: {
+        conversationId: 'conv-1',
+        messages: [
+          {
+            id: 'm1',
+            at: '2026-08-16T10:00:00.000Z',
+            role: 'inbound',
+            text: 'この表を見て',
+            attachments: [attachment('att-1'), attachment('att-2')],
+          },
+          { id: 'm3', at: '2026-08-16T10:02:00.000Z', role: 'inbound', text: '添付なし' },
+        ],
+        scanned: 2,
+        reachedStart: true,
+        supersededCount: 0,
+      },
+    });
+    const listed = emptyListed();
+    const read = captureStdout();
+
+    await runSlashCommand('/conversation conv-1', client, listed);
+    expect(read()).toContain('att-1'); // 一覧には添付が出ている
+    await runSlashCommand('/edit 1 合計だけ出して', client, listed, null, target);
+    await runSlashCommand('/edit 2 添付は付けない', client, listed, null, target);
+
+    expect(sent).toHaveLength(2);
+    expect(sent[0]?.body).toMatchObject({ supersedes: 'm1', attachments: ['att-1', 'att-2'] });
+    // 添付の無い発言には `attachments` を付けない（従来と同じ本文）
+    expect(sent[1]?.body).not.toHaveProperty('attachments');
   });
 
   it('id をそのまま指しても解決する（番号を経由しなくてよい）', async () => {

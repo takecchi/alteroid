@@ -35,6 +35,7 @@ function emptyListed(): Listed {
     waiting: [],
     messages: [],
     messagesConversationId: null,
+    messageAttachments: {},
   };
 }
 
