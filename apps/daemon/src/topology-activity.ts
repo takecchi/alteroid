@@ -25,21 +25,21 @@ import {
  * | `clone~storage` | 記憶の書き込み（`memory_update`） | 記憶・日誌を読む道具 |
  * | `clone~manager:<id>` | 委譲・追送（`exchange` with=manager outbound） | 報告の受け取り（inbound）・確認（`escalation`） |
  * | `manager:<id>~worker:<type>` | 作業者を背景で起こした（`Agent` / `Task` で `run_in_background: true`） | 前景で起こした呼び出しが終わった（結果が戻った） |
- * | `external:<keyId>~clone` | 連携の鍵で届いた外部イベント（`external_event` で `via` が在るもの） | （無い。外部サービスへ返すものは無い） |
+ * | `external:<keyId>~clone` | 連携の鍵で `POST /events`（`/events/:source`）を受け付けた（`recordExternal`。日誌は通らない） | （無い。外部サービスへ返すものは無い） |
  *
- * **外部サービスの線は連携の鍵（`via`）で届いたものだけである**（Issue #3676）。`via` の無い
- * `external_event`（デーモン自身の合図・人間 / operator が `POST /events` で送ったもの）は混ぜない
- * ——外部から呼んだわけではないものを外部として光らせると、観測が嘘になる。`via` は
- * デーモンが門番の principal から詰める（リクエスト本文からは立てられない）。
+ * **外部サービスの線は連携の鍵で受け付けたものだけである**（Issue #3676）。人間・operator が
+ * `POST /events` で送ったもの・デーモン自身の合図は混ぜない——外部から呼んだわけではないものを
+ * 外部として光らせると、観測が嘘になる。
  *
- * **`external_event` の `at` は「クローンが受信箱から取り出して書いた時刻」であって、HTTP で受け付けた
- * 時刻ではない**（`clone.ts` の `#handle` が配達のたびに `#journalIncomingBody` で書く。`at` は
- * 日誌ストアが追記時に埋める）。クローンがターンの途中・枠の上限で止まっている間は、受け付けてから
- * 光るまでが遅れる（受け付けた時刻は受信箱の `event.at` にだけ在り、日誌には載らない）。
- * 線は「外部から受け付けた」ではなく「クローンへ届いた（取り出された）」を言う。
+ * **日誌の `external_event` からは拾わない。** あの行の `at` は「クローンが受信箱から取り出して書いた
+ * 時刻」であって受け付けた時刻ではない（`clone.ts` の `#journalIncomingBody`。`at` は日誌ストアが
+ * 追記時に埋める）。クローンがターンの途中・枠の上限で止まっている間は数分単位で遅れ、取り出されない
+ * まま器が畳まれれば一度も光らない。だから受け付けたハンドラ（`app.ts` の `POST /events`）が、
+ * 受信箱へ積んだのと同じ時刻で `recordExternal` を呼ぶ。日誌の行も拾うと、同じ呼び出しで線が2度
+ * 光り、時刻が取り出しの側へ書き換わる。
  *
- * **外部サービスの札は観測した分だけ**（デーモンが起きてから日誌に載ったもの。起動時に日誌を
- * 読み戻さない）。無いことは「呼ばれていない」ではなく「観測していない」でありうる。
+ * **外部サービスの札は観測した分だけ**（デーモンが起きてから受け付けたもの。メモリにだけ在り、
+ * 再起動で消える）。無いことは「呼ばれていない」ではなく「観測していない」でありうる。
  *
  * **`tool_use` は道具が終わった後に書かれる**（`runner.ts` の `#onPostToolUse`）。前景の
  * `Agent` / `Task` は作業者が終わるまで返らないので、その時刻は起こした瞬間ではなく
@@ -83,7 +83,7 @@ export interface ExternalActivity {
   name: string;
   /** 鍵が固定されている source。 */
   source: string;
-  /** 最後に観測した時刻（`external_event` の `at` = クローンが取り出して書いた時刻）。 */
+  /** 最後に受け付けた時刻（`POST /events` のハンドラが受信箱へ積んだ時刻）。 */
   lastAt: string;
 }
 
@@ -160,7 +160,7 @@ export interface WorkerTouch {
   tool?: string;
 }
 
-/** 1件の日誌が外部サービスの札へ与える変化。 */
+/** 連携の鍵で受け付けた外部イベント1件（`recordExternal` へ渡す。`at` は受け付けた時刻）。 */
 export interface ExternalTouch {
   keyId: string;
   name: string;
@@ -171,8 +171,6 @@ export interface ExternalTouch {
 export interface EntryMapping {
   links: LinkTouch[];
   workers: WorkerTouch[];
-  /** 連携の鍵で届いた外部イベントのときだけ。 */
-  externals?: ExternalTouch[];
 }
 
 /** `manager:<id>` の `<id>`。形が違えば `undefined`。 */
@@ -269,24 +267,8 @@ export function mapJournalEntry(entry: JournalEntry): EntryMapping {
         workers: [],
       };
     }
-    case 'external_event': {
-      // **連携の鍵（`via`）で届いたものだけ**。`via` の無いものは外部から呼ばれたとは言えない。
-      // 型は `keyId` / `name` を string と言うが、古い・壊れた行に備えて実行時にも確かめる。
-      const via = entry.via;
-      if (via === undefined || typeof via.keyId !== 'string' || via.keyId === '') return empty;
-      return {
-        links: [],
-        workers: [],
-        externals: [
-          {
-            keyId: via.keyId,
-            name: typeof via.name === 'string' ? via.name : '',
-            source: entry.source,
-            at,
-          },
-        ],
-      };
-    }
+    // `external_event` は拾わない（外部サービスの線は受け付けたハンドラが `recordExternal` で入れる。
+    // 理由はこのファイル冒頭の「日誌の `external_event` からは拾わない」）。
     case 'memory_update': {
       // **人間の直接編集（`cause: 'human'`）はクローンの書き込みではない**
       // （人間→記憶の線は地図に無い）。
@@ -360,6 +342,11 @@ export interface TopologyActivityTracker {
   record(entry: JournalEntry): void;
   /** 線の活動の写し。**最後の活動が新しい順。** */
   links(): LinkActivity[];
+  /**
+   * 連携の鍵で外部イベントを受け付けたことを取り込む（Issue #3676）。**日誌は通らない**
+   * （受け付けたハンドラが、受信箱へ積んだのと同じ時刻で呼ぶ）。
+   */
+  recordExternal(touch: ExternalTouch): void;
   /** 連携の鍵ごとの最後の呼び出し。**新しい順。** */
   externals(): ExternalActivity[];
   /** あるマネージャーの作業者（種類ごと）。 */
@@ -372,7 +359,7 @@ export interface TopologyActivityTracker {
    * 無視する（入れ替わり対策）。
    */
   recordWorkerTool(event: WorkerToolEvent): void;
-  /** 作業者の実行中の道具が変わったときに呼ぶ。戻り値は解除。 */
+  /** 作業者の実行中の道具・外部サービスの受け付け（`recordExternal`）が変わったときに呼ぶ。戻り値は解除。 */
   onChange(listener: () => void): () => void;
   /** 作業者の道具の合図の購読口（`WorkerToolBus.subscribe`）へ繋ぐ。戻り値は解除。 */
   attachWorkerTools(
@@ -494,17 +481,21 @@ export function createTopologyActivityTracker(
         }
         workers.set(key, row);
       }
-      for (const touch of mapped.externals ?? []) {
-        const row = externals.get(touch.keyId);
-        if (row === undefined) {
-          externals.set(touch.keyId, {
-            keyId: touch.keyId,
-            name: touch.name,
-            source: touch.source,
-            lastAt: touch.at,
-          });
-          continue;
-        }
+      if (mapped.links.length > 0 || mapped.workers.length > 0) prune();
+    },
+    recordExternal(touch) {
+      // 型は string と言うが、呼び手の取り違えに備えて実行時にも確かめる（空の keyId は札にしない）。
+      if (typeof touch.keyId !== 'string' || touch.keyId === '') return;
+      if (Number.isNaN(Date.parse(touch.at))) return;
+      const row = externals.get(touch.keyId);
+      if (row === undefined) {
+        externals.set(touch.keyId, {
+          keyId: touch.keyId,
+          name: touch.name,
+          source: touch.source,
+          lastAt: touch.at,
+        });
+      } else {
         const updated = later(row.lastAt, touch.at);
         // 名前・source は最後の呼び出しのものを採る（鍵の名前は付け替えられる）。
         if (updated === touch.at) {
@@ -513,9 +504,9 @@ export function createTopologyActivityTracker(
         }
         row.lastAt = updated;
       }
-      if (mapped.links.length > 0 || mapped.workers.length > 0 || mapped.externals !== undefined) {
-        prune();
-      }
+      prune();
+      // 日誌を通らないので、流れ（`GET /topology/stream`）へは作業者の道具と同じ口で知らせる。
+      notifyChange();
     },
     links() {
       return [...links.values()]

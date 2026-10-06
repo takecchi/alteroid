@@ -158,14 +158,11 @@ describe('GET /topology', () => {
     expect(body.links.find((l) => l.key === 'clone~manager:m1')?.lastUpAt).toBeUndefined();
   });
 
-  it('連携の鍵（via）で届いた external_event だけが、外部サービスの札と down の線になる（#3676）', async () => {
+  it('日誌の external_event は via 付きでも外部サービスの線にしない（受け付けた時刻で入れる。#3676）', async () => {
     const { app, journal } = setup();
-    // via の無い external_event（デーモン自身の合図など）は外部として数えない
+    // 日誌の行の at はクローンが取り出した時刻。線は受け付けたハンドラが入れる
+    // （`integration-keys.test.ts` の「稼働状況の図の外部サービスの線」）。
     await journal.append({ type: 'external_event', source: 'internal', summary: '{}' });
-    const before = topologyResponseSchema.parse(await (await app.request('/topology')).json());
-    expect(before.externals).toBeUndefined();
-    expect(before.links).toEqual([]);
-
     await journal.append({
       type: 'external_event',
       source: 'github',
@@ -173,12 +170,8 @@ describe('GET /topology', () => {
       via: { keyId: 'k1', name: 'GitHub 連携' },
     });
     const body = topologyResponseSchema.parse(await (await app.request('/topology')).json());
-    expect(body.externals).toEqual([
-      expect.objectContaining({ keyId: 'k1', name: 'GitHub 連携', source: 'github' }),
-    ]);
-    const link = body.links.find((l) => l.key === 'external:k1~clone');
-    expect(link?.lastDownAt).toBe(body.externals?.[0]?.lastAt);
-    expect(link?.lastUpAt).toBeUndefined();
+    expect(body.externals).toBeUndefined();
+    expect(body.links).toEqual([]);
   });
 
   it('台帳に読めない委譲の行が在れば、managers が空でも unreadable が載る。無ければ鍵ごと無い（#2705）', async () => {

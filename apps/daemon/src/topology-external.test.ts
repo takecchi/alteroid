@@ -3,17 +3,26 @@ import { describe, expect, it } from 'vitest';
 
 import { topologyResponseSchema } from './openapi.js';
 import * as activityModule from './topology-activity.js';
-import { createTopologyActivityTracker, mapJournalEntry } from './topology-activity.js';
+import {
+  createTopologyActivityTracker,
+  mapJournalEntry,
+  type ExternalTouch,
+} from './topology-activity.js';
 import * as topologyModule from './topology.js';
 import { buildTopologySnapshot, type TopologyInputs } from './topology.js';
 
 /**
  * 外部サービス（連携の鍵）→ クローンの線（Issue #3676）。
- * 時刻は注入する（実時間を待たない）。
+ * 時刻は注入する（実時間を待たない）。受け付けた側（`app.ts` の `POST /events`）からの配線は
+ * `integration-keys.test.ts` の「稼働状況の図の外部サービスの線」が測る。
  */
 
 const NOW = Date.parse('2026-10-07T10:00:00.000Z');
 const iso = (offsetMs: number) => new Date(NOW + offsetMs).toISOString();
+
+function touch(keyId: string, name: string, at: string, source = 'github'): ExternalTouch {
+  return { keyId, name, source, at };
+}
 
 let seq = 0;
 function externalEvent(
@@ -43,38 +52,53 @@ function inputs(overrides: Partial<TopologyInputs> = {}): TopologyInputs {
   };
 }
 
-describe('external_event の写し（連携の鍵だけが外部の線になる）', () => {
-  it('連携の鍵（via）で届いたものは、鍵ごとの外部サービスの活動になる', () => {
+describe('日誌の external_event は拾わない（受け付けた時刻で入れるので、二重に光らせない）', () => {
+  it('via 付きでも線にも札にもならない（at はクローンが取り出した時刻で、受け付けた時刻ではない）', () => {
     const mapped = mapJournalEntry(
       externalEvent({ via: { keyId: 'k1', name: 'GitHub 連携' }, source: 'github', at: iso(-500) }),
     );
-    expect(mapped.externals).toEqual([
-      { keyId: 'k1', name: 'GitHub 連携', source: 'github', at: iso(-500) },
-    ]);
+    expect(mapped).toEqual({ links: [], workers: [] });
+
+    const activity = createTopologyActivityTracker();
+    activity.record(externalEvent({ via: { keyId: 'k1', name: 'GitHub 連携' } }));
+    activity.record(externalEvent({ source: 'internal' }));
+    expect(activity.externals()).toEqual([]);
+    const snapshot = buildTopologySnapshot(inputs({ activity }));
+    expect(snapshot.externals).toBeUndefined();
+    expect(snapshot.links.filter((l) => l.key.startsWith('external'))).toEqual([]);
   });
 
-  it('via の無い external_event（デーモン自身の合図・人間の送信）は外部として数えない', () => {
-    const mapped = mapJournalEntry(externalEvent({ source: 'internal' }));
-    expect(mapped.externals ?? []).toEqual([]);
-    expect(mapped.links).toEqual([]);
+  it('受け付けた後に日誌の行が来ても、時刻は受け付けた時刻のまま', () => {
+    const activity = createTopologyActivityTracker();
+    activity.recordExternal(touch('k1', 'GitHub 連携', iso(-5_000)));
+    activity.record(externalEvent({ via: { keyId: 'k1', name: 'GitHub 連携' }, at: iso(-1_000) }));
+    expect(activity.externals().map((e) => e.lastAt)).toEqual([iso(-5_000)]);
+  });
+});
+
+describe('recordExternal', () => {
+  it('keyId が空・時刻が読めないものは数えない（実行時の倒れ先）', () => {
+    const activity = createTopologyActivityTracker();
+    activity.recordExternal(touch('', 'x', iso(-1_000)));
+    activity.recordExternal(touch('k1', 'x', 'not-a-time'));
+    expect(activity.externals()).toEqual([]);
   });
 
-  it('keyId が空の壊れた via は数えない（実行時の倒れ先）', () => {
-    const mapped = mapJournalEntry(externalEvent({ via: { keyId: '', name: 'x' } }));
-    expect(mapped.externals ?? []).toEqual([]);
+  it('流れ（onChange）へ知らせる——日誌を通らないので、知らせないと SSE が組み直さない', () => {
+    const activity = createTopologyActivityTracker();
+    let changes = 0;
+    activity.onChange(() => {
+      changes += 1;
+    });
+    activity.recordExternal(touch('k1', 'GitHub 連携', iso(-1_000)));
+    expect(changes).toBe(1);
   });
 });
 
 describe('スナップショットの外部サービス', () => {
   it('連携の鍵で受けた呼び出しは external:<keyId>~clone を down で光らせる', () => {
     const activity = createTopologyActivityTracker();
-    activity.record(
-      externalEvent({
-        via: { keyId: 'k1', name: 'GitHub 連携' },
-        source: 'github',
-        at: iso(-2_000),
-      }),
-    );
+    activity.recordExternal(touch('k1', 'GitHub 連携', iso(-2_000)));
     const snapshot = buildTopologySnapshot(inputs({ activity }));
     expect(snapshot.links).toContainEqual({
       key: 'external:k1~clone',
@@ -90,10 +114,8 @@ describe('スナップショットの外部サービス', () => {
     expect(topologyResponseSchema.parse(snapshot)).toEqual(snapshot);
   });
 
-  it('via の無い external_event は札も線も作らない（欄ごと無い）', () => {
-    const activity = createTopologyActivityTracker();
-    activity.record(externalEvent({ source: 'internal' }));
-    const snapshot = buildTopologySnapshot(inputs({ activity }));
+  it('何も受け付けていなければ札も線も作らない（欄ごと無い）', () => {
+    const snapshot = buildTopologySnapshot(inputs());
     expect(snapshot.externals).toBeUndefined();
     expect(snapshot.externalsOmitted).toBeUndefined();
     expect(snapshot.links.filter((l) => l.key.startsWith('external'))).toEqual([]);
@@ -101,10 +123,10 @@ describe('スナップショットの外部サービス', () => {
 
   it('同じ鍵の呼び出しは1枚にまとまり、時刻は新しいほう・名前は最後のものを採る', () => {
     const activity = createTopologyActivityTracker();
-    activity.record(externalEvent({ via: { keyId: 'k1', name: '旧名' }, at: iso(-9_000) }));
-    activity.record(externalEvent({ via: { keyId: 'k1', name: '新名' }, at: iso(-3_000) }));
-    // 古い時刻の行が後から届いても、時刻も名前も戻さない
-    activity.record(externalEvent({ via: { keyId: 'k1', name: '旧名' }, at: iso(-8_000) }));
+    activity.recordExternal(touch('k1', '旧名', iso(-9_000)));
+    activity.recordExternal(touch('k1', '新名', iso(-3_000)));
+    // 古い時刻の呼び出しが後から届いても、時刻も名前も戻さない
+    activity.recordExternal(touch('k1', '旧名', iso(-8_000)));
     const snapshot = buildTopologySnapshot(inputs({ activity }));
     expect(snapshot.externals).toEqual([
       { keyId: 'k1', name: '新名', source: 'github', lastAt: iso(-3_000) },
@@ -114,12 +136,8 @@ describe('スナップショットの外部サービス', () => {
   it('観測の窓（10分）を過ぎた鍵は札も線も出さない', () => {
     const activity = createTopologyActivityTracker();
     const window = topologyModule.TOPOLOGY_EXTERNAL_WINDOW_MS;
-    activity.record(
-      externalEvent({ via: { keyId: 'old', name: '古い' }, at: iso(-window - 1_000) }),
-    );
-    activity.record(
-      externalEvent({ via: { keyId: 'new', name: '新しい' }, at: iso(-window + 1_000) }),
-    );
+    activity.recordExternal(touch('old', '古い', iso(-window - 1_000)));
+    activity.recordExternal(touch('new', '新しい', iso(-window + 1_000)));
     const snapshot = buildTopologySnapshot(inputs({ activity }));
     expect(snapshot.externals?.map((e) => e.keyId)).toEqual(['new']);
     expect(snapshot.links.map((l) => l.key)).not.toContain('external:old~clone');
@@ -130,9 +148,7 @@ describe('スナップショットの外部サービス', () => {
     const max = topologyModule.TOPOLOGY_EXTERNALS_MAX;
     // 新しい順に max 本は札、残り2本はまとめる。まとめた側のうち最も新しい時刻が線に載る。
     for (let i = 0; i < max + 2; i++) {
-      activity.record(
-        externalEvent({ via: { keyId: `k${i}`, name: `鍵${i}` }, at: iso(-1_000 - i * 1_000) }),
-      );
+      activity.recordExternal(touch(`k${i}`, `鍵${i}`, iso(-1_000 - i * 1_000)));
     }
     const snapshot = buildTopologySnapshot(inputs({ activity }));
     expect(snapshot.externals).toHaveLength(max);
@@ -155,7 +171,7 @@ describe('スナップショットの外部サービス', () => {
     const activity = createTopologyActivityTracker();
     const max = topologyModule.TOPOLOGY_EXTERNALS_MAX;
     for (let i = 0; i < max; i++) {
-      activity.record(externalEvent({ via: { keyId: `k${i}`, name: `鍵${i}` }, at: iso(-1_000) }));
+      activity.recordExternal(touch(`k${i}`, `鍵${i}`, iso(-1_000)));
     }
     const snapshot = buildTopologySnapshot(inputs({ activity }));
     expect(snapshot.externals).toHaveLength(max);
@@ -165,10 +181,10 @@ describe('スナップショットの外部サービス', () => {
 
   it('札の並びは安定している（新しく呼ばれても並び替えない: 名前→keyId の順）', () => {
     const activity = createTopologyActivityTracker();
-    activity.record(externalEvent({ via: { keyId: 'b', name: 'B' }, at: iso(-5_000) }));
-    activity.record(externalEvent({ via: { keyId: 'a', name: 'A' }, at: iso(-4_000) }));
+    activity.recordExternal(touch('b', 'B', iso(-5_000)));
+    activity.recordExternal(touch('a', 'A', iso(-4_000)));
     const before = buildTopologySnapshot(inputs({ activity })).externals?.map((e) => e.keyId);
-    activity.record(externalEvent({ via: { keyId: 'b', name: 'B' }, at: iso(-1_000) }));
+    activity.recordExternal(touch('b', 'B', iso(-1_000)));
     const after = buildTopologySnapshot(inputs({ activity })).externals?.map((e) => e.keyId);
     expect(before).toEqual(['a', 'b']);
     expect(after).toEqual(['a', 'b']);
