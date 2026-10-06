@@ -5,13 +5,13 @@ import { describe, expect, it } from 'vitest';
 import { createApp } from './app.js';
 
 /**
- * `POST /schedule` は `every` の分数に上限を課さず、`minutes: 1e15` を 200 で保存する。保存された行は
+ * `POST /schedule` は `every` の分数に上限を課さず、`minutes: 1e15` を 200 で保存した（#3533）。保存された行は
  * スケジューラの次の予定を Invalid Date にし、`GET /schedule`（`scheduler.list()`）が 500 になる
  * （`toISOString()` が `RangeError: Invalid time value`）。同時に、スケジューラは1ms 周期で `timer` を
  * 積み続ける（core の `schedule-huge-every.test.ts`）。
  *
- * 直し方は2通りありうる（入口で断る／スケジューラが範囲外を扱う）ので、ここは「保存を受けたなら
- * 一覧が読める」「読めなくなる値は最初から断る」のどちらでも緑になる形で書く。
+ * 人間の決定（2026-10-06）で、上限（1年 = 525600 分）を超える値は入口（`scheduleBody` の `scheduleSpecSchema`）で
+ * 400 にする。
  */
 function stubCloneHost(): CloneHost {
   return {
@@ -32,8 +32,8 @@ function stubCloneHost(): CloneHost {
 
 const headers = { 'content-type': 'application/json', authorization: 'Bearer test-token' };
 
-describe('POST /schedule の every が巨大でも、定期ジョブの一覧は読める', () => {
-  it('minutes: 1e15 を仕込んだ後の GET /schedule が 500 にならない（断るなら 4xx で何も保存しない）', async () => {
+describe('POST /schedule の every の上限（1年 = 525600 分、#3533）', () => {
+  async function post(minutes: number) {
     const stores = createMemoryStores();
     const scheduler: Scheduler = createScheduler({
       entries: [],
@@ -47,27 +47,37 @@ describe('POST /schedule の every が巨大でも、定期ジョブの一覧は
       shutdown: () => undefined,
       scheduler,
     });
-    scheduler.start();
-    try {
-      const created = await app.request('/schedule', {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({
-          kind: 'huge',
-          request: '確認する',
-          spec: { type: 'every', minutes: 1e15 },
-        }),
-      });
+    const res = await app.request('/schedule', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        kind: 'huge',
+        request: '確認する',
+        spec: { type: 'every', minutes },
+      }),
+    });
+    return { app, stores, res };
+  }
 
-      if (created.status >= 400 && created.status < 500) {
-        expect((await stores.schedules.list()).entries).toEqual([]);
-      } else {
-        expect(created.status).toBe(200);
-      }
-      const listed = await app.request('/schedule', { headers });
-      expect(listed.status).toBe(200);
-    } finally {
-      scheduler.stop();
-    }
+  it.each([525_601, 1e15])(
+    'minutes: %s は 400 で断り、何も保存せず、GET /schedule は 200',
+    async (minutes) => {
+      const { app, stores, res } = await post(minutes);
+      expect(res.status).toBe(400);
+      const body = (await res.json()) as { error: string };
+      expect(body.error).toContain('spec.minutes');
+      expect(body.error).toContain('525600');
+      expect(body.error).toContain('cron');
+      expect(body.error).toContain('単発');
+      expect(body.error).not.toContain(String(minutes));
+      expect((await stores.schedules.list()).entries).toEqual([]);
+      expect((await app.request('/schedule', { headers })).status).toBe(200);
+    },
+  );
+
+  it('minutes: 525600 は通り、GET /schedule に載る', async () => {
+    const { app, res } = await post(525_600);
+    expect(res.status).toBe(200);
+    expect((await app.request('/schedule', { headers })).status).toBe(200);
   });
 });

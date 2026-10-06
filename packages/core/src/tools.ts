@@ -197,6 +197,7 @@ import {
   practiceKindSchema,
   practiceSlugSchema,
   scheduleKindSchema,
+  SCHEDULE_EVERY_MINUTES_MAX,
   scheduleSpecSchema,
 } from './schema.js';
 import type {
@@ -7847,7 +7848,7 @@ export function createCloneTools(context: ToolContext) {
           // だけを固定する。
           .optional()
           .describe(
-            `この分数ごとに起こす（${formatIntRangeJa({ min: 1 })}）。周期はどれか1つだけ渡す`,
+            `この分数ごとに起こす（${formatIntRangeJa({ min: 1, max: SCHEDULE_EVERY_MINUTES_MAX })}。1年より長い周期は cron か単発で書く）。周期はどれか1つだけ渡す`,
           ),
         cron: z
           .string()
@@ -7897,14 +7898,18 @@ export function createCloneTools(context: ToolContext) {
           );
         }
         // **issue #1651 の後始末。** HTTP の `scheduleBody`（`spec` を
-        // `scheduleSpecSchema` で検査——`every` は `minutes: z.number().int().min(1)`）
-        // と同じ意味「1以上の整数のみ」に揃える。検査はここ（ハンドラ）で行い、
+        // `scheduleSpecSchema` で検査——`every` は `minutes: z.number().int().min(1).max(…)`）
+        // と同じ意味「1以上・1年以下の整数のみ」に揃える。検査はここ（ハンドラ）で行い、
         // 保存層（fs / pg の `scheduledRequestSchema.parse(entry)` 経由の
         // `scheduleSpecSchema`）へは不正な値を1文字も渡さない。doc は
         // `everyMinutes` の入力スキーマ側にある。
-        if (everyMinutes !== undefined && (!Number.isInteger(everyMinutes) || everyMinutes < 1)) {
+        const everyViolation = describeIntRangeViolation('everyMinutes', everyMinutes, {
+          min: 1,
+          max: SCHEDULE_EVERY_MINUTES_MAX,
+        });
+        if (everyViolation !== null) {
           return text(
-            `everyMinutes ${everyMinutes} は使えない（${formatIntRangeJa({ min: 1 })}のみ）。`,
+            `${everyViolation}1年（${SCHEDULE_EVERY_MINUTES_MAX}分）より長い周期は everyMinutes ではなく cron 式か単発の予定で書くこと。`,
           );
         }
 

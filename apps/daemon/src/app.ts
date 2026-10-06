@@ -118,6 +118,7 @@ import {
   RunnerHttpError,
   runnerSetCredentialsCommandSchema,
   scheduleKindSchema,
+  SCHEDULE_EVERY_MINUTES_MAX_MESSAGE,
   scheduleSpecSchema,
   selectArchiveRemovalTargets,
   startSseHeartbeat,
@@ -6566,7 +6567,13 @@ export function createApp(deps: AppDeps) {
         },
       }),
       jsonBody(scheduleBody, (where) => ({
-        error: 'kind/request/spec の形が不正' + (where === '' ? '' : `: ${where}`),
+        error:
+          'kind/request/spec の形が不正' +
+          (where === '' ? '' : `: ${where}`) +
+          // every の分数の断りは、上限と代わりの書き方を伝える（#3533）。値は混ぜない（固定の文だけ）。
+          (where.split(', ').includes('spec.minutes')
+            ? `（${SCHEDULE_EVERY_MINUTES_MAX_MESSAGE}）`
+            : ''),
       })),
       async (c) => {
         const { kind, request, spec } = c.req.valid('json');
