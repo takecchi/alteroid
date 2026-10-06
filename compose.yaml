@@ -24,7 +24,7 @@
 # 焼き直さない方を推す**:
 #
 #   docker compose exec app alteroid credential set GH_TOKEN -f ./pat.txt
-#   docker compose exec app alteroid credential set GIT_AUTHOR_NAME -f - <<< '...'
+#   docker compose exec app alteroid credential set GIT_AUTHOR_NAME -f - --yes <<< '...'
 #
 # こちらは記憶ストアが正本で、器を作り直しても runner が名乗り直したときに降り直す。
 # 下の `.env` へ置く形も引き続き効く（起動時に1度だけ、正本に無い `GH_TOKEN` は
@@ -268,7 +268,7 @@ x-shared-env: &shared-env
   #
   #   docker compose exec app alteroid credential list
   #   printf %s 'github_pat_xxx' > /tmp/pat && \
-  #     docker compose exec -T app alteroid credential set GH_TOKEN -f - < /tmp/pat
+  #     docker compose exec -T app alteroid credential set GH_TOKEN -f - --yes < /tmp/pat
   #
   # **⚠️ ここは app（クローン）にだけ在れば足りる。runner には要らない。**
   # runner は自分の環境変数から鍵を1文字も拾わない（`apps/runner/src/index.ts` の

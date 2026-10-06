@@ -1309,46 +1309,46 @@ class Host implements RunnerHost {
     const alive = this.#sessions.get(command.managerId);
     if (alive) {
       alive.checkFence(command.lease);
-      if (!alive.stopping) {
-        if (command.message !== undefined) {
+      // 生きている（畳み中でない）セッションへは、一言を流して短絡する。畳み中なら畳み終わるのを待ち、
+      // 名簿に居るものを取り直す。居なくなるまで繰り返してから、下の「作り直し」へ落ちる。
+      let current: RunnerSession | undefined = alive;
+      while (current !== undefined) {
+        if (!current.stopping) {
+          if (command.message === undefined) {
+            return { cwd: current.cwd, reusedLiveSession: true, ...this.#generationOf(current) };
+          }
           const placing = this.#attachmentInput(
             command.managerId,
             command.message,
             command.attachments,
           );
           const input = placing instanceof Promise ? await placing : placing;
-          alive.push(input.text, input.images);
-        }
-        return { cwd: alive.cwd, reusedLiveSession: true, ...this.#generationOf(alive) };
-      }
-      try {
-        await alive.stop('resume 待ちのため、畳み中のセッションの完了を待った。');
-      } catch {
-        // 待ちたいのは畳みの完了であって成否ではない。ここで投げ直すと
-        // resume 自体が失敗したように見えてしまう。
-      }
-      const afterWait = this.#sessions.get(command.managerId);
-      if (afterWait !== undefined) {
-        if (!afterWait.stopping) {
-          // 並行した resume が先に新しいセッションを作っていた。合流する。
-          if (command.message !== undefined) {
-            const placing = this.#attachmentInput(
-              command.managerId,
-              command.message,
-              command.attachments,
-            );
-            const input = placing instanceof Promise ? await placing : placing;
-            afterWait.push(input.text, input.images);
+          // **置いている間に畳まれたら、積まずに畳み待ちへ落ちる**（Issue #3235。`send` の同じ見直しと揃える）。
+          // `push()` は畳み済みなら黙って捨てるので、見直さずに `reusedLiveSession: true` を返すと、
+          // 追加の一言が誰にも届かないのに成功と答えることになる。置いたものは畳みの `onClosed` が消すので、
+          // 作り直しの経路が置き直す（`resumePlacing`）。
+          if (!current.stopping && this.#sessions.get(command.managerId) === current) {
+            current.push(input.text, input.images);
+            return { cwd: current.cwd, reusedLiveSession: true, ...this.#generationOf(current) };
           }
-          return {
-            cwd: afterWait.cwd,
-            reusedLiveSession: true,
-            ...this.#generationOf(afterWait),
-          };
         }
-        // 畳みが途中の例外で `#onClosed()` まで届かず、畳み済みの古い
-        // セッションが名簿に残ったままだった。手で取り除いて作り直す。
-        this.#sessions.delete(command.managerId);
+        try {
+          await current.stop('resume 待ちのため、畳み中のセッションの完了を待った。');
+        } catch {
+          // 待ちたいのは畳みの完了であって成否ではない。ここで投げ直すと
+          // resume 自体が失敗したように見えてしまう。
+        }
+        const next = this.#sessions.get(command.managerId);
+        if (next === current) {
+          // 畳みが途中の例外で `#onClosed()` まで届かず、畳み済みの古い
+          // セッションが名簿に残ったままだった。手で取り除いて作り直す。
+          this.#sessions.delete(command.managerId);
+          current = undefined;
+        } else {
+          // 別のセッションが居れば、並行した resume が先に作り直していた。そちらへ合流する
+          // （ここで作り直すと同じ managerId のセッションが2本開く）。居なければ作り直しへ。
+          current = next;
+        }
       }
     }
     // 添付は、セッションを作る前に置く（`start` と同じ理由）。`message` が無ければ使わない。

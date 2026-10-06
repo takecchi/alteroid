@@ -139,6 +139,19 @@ switch (args[0]) {
     if (cmd[0] === 'alteroid' && cmd[1] === 'credential' && cmd[2] === 'set') {
       // 正本（DB）へ置くのが一時的にこける、を再現する
       if (process.env.FAKE_SSH_CREDENTIAL_FAILS) process.exit(1);
+      // 古い CLI（#3201 より前）は --yes を知らない。--help の出力に載せず、渡されれば落ちる
+      const oldCli = Boolean(process.env.FAKE_OLD_CLI);
+      if (cmd.includes('--help')) {
+        process.stdout.write(
+          'Usage: alteroid credential set [options] <名前>\\nOptions:\\n  -f, --file <path>\\n' +
+            (oldCli ? '' : '  --yes  確認を飛ばす\\n'),
+        );
+        process.exit(0);
+      }
+      if (oldCli && cmd.includes('--yes')) {
+        process.stderr.write("error: unknown option '--yes'\\n");
+        process.exit(1);
+      }
       let value = '';
       try {
         value = fs.readFileSync(0, 'utf8');
@@ -148,7 +161,7 @@ switch (args[0]) {
       }
       fs.appendFileSync(
         at('credentials.jsonl'),
-        JSON.stringify({ service: svc, name: cmd[3], value }) + '\\n',
+        JSON.stringify({ service: svc, name: cmd[3], value, yes: cmd.includes('--yes') }) + '\\n',
       );
     } else if (cmd[0] === 'node' && cmd[1] === '-') {
       // scale-runners.sh の vacate 経路（#1377）。標準入力に流れてきた
@@ -204,7 +217,12 @@ export type Run = {
   /** 投入された順の Service id（同じ id が複数回あればその回数だけ並ぶ）。 */
   upsertedServices: string[];
   /** `railway ssh -- alteroid credential set` で置かれた順（`set_credential`）。 */
-  credentials: { service: string | undefined; name: string | undefined; value: string }[];
+  credentials: {
+    service: string | undefined;
+    name: string | undefined;
+    value: string;
+    yes: boolean;
+  }[];
   /**
    * 呼び出しごとに1要素（`args.join(' ')`）。**1要素＝1回の CLI 起動**で、
    * 引数にリテラルな改行が入っていても割れない。
@@ -364,7 +382,12 @@ function finish(options: RunOptions, prepared: Prepared, exitCode: number, stder
     .filter(Boolean)
     .map(
       (l) =>
-        JSON.parse(l) as { service: string | undefined; name: string | undefined; value: string },
+        JSON.parse(l) as {
+          service: string | undefined;
+          name: string | undefined;
+          value: string;
+          yes: boolean;
+        },
     );
 
   return {

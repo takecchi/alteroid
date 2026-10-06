@@ -10,6 +10,7 @@ import {
   Empty,
   FieldHint,
   Input,
+  isImeConfirmEnter,
   ListDetail,
   ListDetailItems,
   Spinner,
@@ -135,6 +136,8 @@ export default function Practices() {
                 placeholder="例: work-style"
                 onChange={(event) => setSlug(event.target.value)}
                 onKeyDown={(event) => {
+                  // IME の変換を確定する Enter では遷移しない（`isImeConfirmEnter` の注釈）。
+                  if (isImeConfirmEnter(event)) return;
                   if (event.key === 'Enter' && valid) void navigate(`/practices/${slug}`);
                 }}
               />

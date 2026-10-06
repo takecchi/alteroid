@@ -45,7 +45,7 @@ export const HELP_EXAMPLES = {
   ),
   memorySet: examples(
     'alteroid memory set values -f ./values.md            # ファイルの中身で置き換える',
-    'cat ./values.md | alteroid memory set values         # 標準入力から',
+    'cat ./values.md | alteroid memory set values --yes   # 標準入力から（端末ではないので、置き換えの確認は --yes で省く）',
     'alteroid memory edit values                          # エディタで開く（VISUAL か EDITOR）',
   ),
   practiceShow: examples(

@@ -91,7 +91,7 @@
 
 | 向き | 経路 |
 |---|---|
-| デーモン → runner | `POST /managers`（start。任意の `attachments` を受ける） / `POST /managers/:id/resume`（任意の `attachments` を受ける。応答は `cwd` と `reusedLiveSession` — 新しい SDK を起こさず生きた旧セッションへ message を流して返した回だけ true。#2877） / `POST /managers/:id/messages`（任意の `attachments` を受ける） / `POST /managers/:id/answers` / `DELETE /managers/:id` / `GET /managers` / `GET /managers/:id/transcript` / `GET /managers/:id/unpushed-work`（未 push の成果の観測。`manager_stop` が使う） / `GET /health`（runner_id を名乗る） / 降ろす口: `POST /credentials`（マネージャーへ降ろす環境変数）・`POST /profile`（実行環境プロファイル）・`POST /mcp-servers`（MCP 登録）。`GET /profile` と `GET /mcp-servers` は指紋を返す |
+| デーモン → runner | `POST /managers`（start。任意の `attachments` を受ける。応答は `sessionGeneration`（runner がセッションを新しく作るたびに振る世代。任意。#3170）を含む） / `POST /managers/:id/resume`（任意の `attachments` を受ける。応答は `cwd` と `reusedLiveSession` — 新しい SDK を起こさず生きた旧セッションへ message を流して返した回だけ true。#2877 — と `sessionGeneration`（runner がセッションを新しく作るたびに振る世代。任意。短絡した回はそのセッションの値。#3170）） / `POST /managers/:id/messages`（任意の `attachments` を受ける） / `POST /managers/:id/answers` / `DELETE /managers/:id` / `GET /managers` / `GET /managers/:id/transcript` / `GET /managers/:id/unpushed-work`（未 push の成果の観測。`manager_stop` が使う） / `GET /health`（runner_id を名乗る） / 降ろす口: `POST /credentials`（マネージャーへ降ろす環境変数）・`POST /profile`（実行環境プロファイル）・`POST /mcp-servers`（MCP 登録）。`GET /profile` と `GET /mcp-servers` は指紋を返す |
 | runner → デーモン | `GET /events`（SSE）。種別は `hello`（名乗り。`capabilities` に `manager-attachments` など、`attachmentBodyLimit` に添付の本文の上限） / `session` / `project_key` / `report` / `worker_wait` / `ask` / `settled` / `note` / `tool_use` / `tool_running` / `tool_end` / `permission_denied` / `usage` / `peer_usage` / `context_usage` / `usage_notice` / `rate_limit` / `mirror`（生ログ） / `archive` / `closed` / `resume_failed` / `shutdown_unpushed_work` / `rescue_ref`（退避 ref の結果。#1266） / `shutting_down`（runner が畳み始めた。畳みの出来事より先に1回。デーモンは名乗った runner の SSE が閉じるまで、上限付きで待ってから自分の口を閉じる。#2749） |
 
 **この表は写しである。正本は `packages/core/src/runner-protocol.ts` の `runnerEventSchema`（上りの種別）と `apps/runner/src/app.ts` のルート定義（下りの口）で、食い違ったら正本が勝つ。** 口を足すときは、`control`（合鍵）の内側に置くこと（下の「制御面の保護」）。
@@ -163,6 +163,7 @@
     デーモンと runner は別々にデプロイされるので、この欄は optional で、無い版と混ざる窓でも壊れない
 - **台帳が「繋がっていない」のに runner に旧プロセスが生きているとき（デーモン再起動後の done など）の resume は、短絡を名乗らせる**（Issue #2877）。`Host#resume` は生きたセッションが居ると新しい SDK を起こさず message をそこへ流して返す。旧プロセスの鍵は凍っているので、**デーモンが抱えている世代を現役へ書き換えると、古い鍵のまま走っているのに ⚠ が消える**。⟹ resume の応答に optional の `reusedLiveSession` を持たせ（短絡した回だけ true。`stopping` を待った後の短絡も含む）、デーモンは **true の回は世代を書かず「分からない」のまま残す**。`send` の detail が「生きた旧プロセスへ流した。鍵が現役か確かめていない」と言う。**欄を持たない古い runner（undefined）は従来どおり世代を書く——古い runner の間は短絡を見分けられない**（版が混ざる窓の限界）。古いデーモンの zod は未知の欄を捨てるだけで落ちない。
   - **旧プロセスの鍵を指紋で確かめ、食い違えば畳み直す**（#2877 PR2）。`GET /managers` の各セッションに optional の `tokenFingerprint`（セッションの子プロセスが起動時に掴んだ `CLAUDE_CODE_OAUTH_TOKEN` の指紋。`token_list` と同じ `fingerprintOf`＝sha256 の先頭12桁で、値は載せない）を運ぶ。デーモンは、台帳が「繋がっていない」done（再起動後など）へ送るとき、**10秒ごとの生存確認の観測**（名簿が `sessions` と同じ観測から書く `sessionTokenFingerprints`。往復を足さない。最大10秒古い）で、旧セッションの指紋を現役の指紋（デーモンの現役の箱が添える）と比べる。**観測が一致なら流し、世代を書く。観測が食い違いを示したときだけ、その場で `GET /managers` を1回取り直して確かめる**（観測は古く、走っているセッションを畳まないため）。取り直した結果で、指紋が一致・セッションが居ない・読めないなら畳まない。**食い違いのままなら #2851 と同じく**（ターンが走っておらず、背景処理 0 本・確認待ち無し・sessionId 有りのときだけ）畳んで起こし直し、残っていれば断る（`declined`。detail に両方の指紋）。**指紋が読めない（欄の無い古い runner・現役の指紋が分からない）ときは、断らず、流して世代は書かない**（再起動後の done へ送れなくなるのは能力の削除になる）。ログ・日誌・detail に出すのは指紋だけで、鍵の値やその一部は出さない
+- **runner の出来事は、出したセッションの世代を名乗る**（Issue #3170）。`start` / `resume` の応答と、`closed` / `session` / `report` / `ask` / `settled` には、runner がセッションを新しく作るたびに振る `sessionGeneration`（任意）を載せる。デーモンは応答で受け取った値を「いま追っている世代」として覚え、値があって食い違う出来事は日誌にだけ残し状態に効かせない。**値が無い出来事（古い runner）は従来どおり処理する。** 同じ runner への復帰 resume の最中の窓（#3159）は、世代を名乗らない出来事のために残す。デーモンの再起動の直後から次の resume の応答までは追う世代が無いので、守りは窓だけになる
 
 ### 制御面の保護 — マネージャーは自分の許可確認に答えられない
 
@@ -253,6 +254,8 @@ runner が報告する資源（pids の現在値と上限など）と直近の�
 - **監査は日誌＋アーカイブで担保する。** PreCompact フックで要約に潰す直前の全文をアーカイブへ落とす。人間が後から追う用途にセッション本体を太らせ続けない
 
 進行中のターンの途中経過は、クローンが会話ごとにメモリ上へ保持する（done/error で捨てる。永続化しない）。人間が接続を切っても再読み込みしても、GET /chat/:conversationId/stream で続きに戻れる。デーモンの再起動を越えては残らない（再起動後の会話の復元は日誌を正本とする）。
+
+`POST /chat` の発言は、送った側が `clientMessageId`（任意。英数字・`_` `-` の1〜128字）で名乗れる。この値は受信箱の `human_message` と日誌の inbound `exchange` に残り、`open` と `GET /conversations/:id` の `messages` で返る。送った側は、`open` に届く前に中断した送信を「自分の id の発言が履歴に現れたか」で確かめる（本文の一致では見ない。同じ本文の別の発言と取り違えるため）。**同じ会話に同じ値が再び届いたら二重に受けない**——何も積まず `open`（`duplicate: true`）を返し、進行中のターンがあれば途中経過から続きを流す（`GET /chat/:conversationId/stream` と同じ）。別の会話で受け取り済みの値は 409。重複の判定は、直近の日誌（人間との往復 200 件）と、受け取り直後のメモリで行う。
 
 ## 同時実行モデル — クローンは複数のマネージャーを使う
 
@@ -561,6 +564,8 @@ packages/ui          Web UI の見た目の部品（shadcn の部品・汎用の
 
 **添付の中身を取る `GET /attachments/:id` も Bearer で受ける。** ブラウザの `<img src>` に URL を直接入れても `Authorization` を運べない（Cookie は受けないので）。そこで Web UI は Bearer 付きの `fetch` で取り、`Blob` から `blob:` URL を作って表示する（画面から外れたら解放する）。レスポンスは `content-disposition: attachment` と `x-content-type-options: nosniff` を付け、人間が上げた中身をブラウザがこのオリジンの文書として開かないようにする。`GET /attachments/:id/meta` は中身を読まずに控えだけを返す。
 
+**添付の上限は `GET /attachments/limits` で返す。** `createApp` が実際に使っている値（`ALTEROID_ATTACHMENT_MAX_*` を含む）を `{maxImageBytes, maxFileBytes, maxPerMessage, maxTotalBytes, retentionDays}` で返す。CLI・TUI・Web はこれを取って送る前の検査に使い、取れた値は覚えて取り直さない。取れなければ core の既定値で検査し、最終判断はサーバの 4xx に任せる——古いデーモン（404）は既定値で確定として覚え、接続失敗や壊れた応答のような一時的な失敗は覚えずに次の機会に取り直す。登録は `/attachments/:id` より前（`limits` を id と取り違えない）。
+
 開発中は Vite の proxy（`/api` → デーモン）で同一オリジンに見せる。**開発のためだけに CORS を
 開けさせない。**
 
@@ -591,7 +596,7 @@ packages/ui          Web UI の見た目の部品（shadcn の部品・汎用の
 - **無認証の `GET /health` は「動いているか」だけを返す。記憶の置き場（`storage`。PostgreSQL なら `host:port/db`、ファイルなら記憶ディレクトリのパス）は返さない**（2026-10-05 のオーナー決定、#2869）。公開の構成で、内部のホスト名・DB 名・ホームのパスをログインしていない相手に読ませないため。残る項目は `ok` `pid` `operator`（CLI の本人確認）`auth`（ログインの要否と手段）。置き場は資格が要る `GET /status` が返す（`alteroid daemon status` はこれを読む）
 - **ログインしただけでは使えない。** 使う許可は人間が `alteroid access grant` で与える。これは PRD「権限境界」とは別の層である — あちらは「クローンが何を人間へ確認するか」を記憶で決める話で、こちらは「そもそも誰が API に触れるか」であり、持つのは**許可されているか否か**だけである（身元についての事実で、**行為の一覧は持たない**。「持ち主として宣言されたか否か」は2026-10-05 以降、通す・通さないに効かない）
 - **入口ごとに認証を作らない。** CLI・HTTP API・Web UI は同じ門番を通る（PRD「インターフェース」）
-- **添付の口（`POST /attachments`・`GET /attachments/:id`・`GET /attachments/:id/meta`）は、認証のある入口からだけ受ける。** 上の公開経路には入らない。上げた主体は `uploadedBy`（識別子だけ）に残る（[ストレージ](#添付--中身は置き場に記憶と日誌には控えだけ)）
+- **添付の口（`POST /attachments`・`GET /attachments/limits`・`GET /attachments/:id`・`GET /attachments/:id/meta`）は、認証のある入口からだけ受ける。** 上の公開経路には入らない。上げた主体は `uploadedBy`（識別子だけ）に残る（[ストレージ](#添付--中身は置き場に記憶と日誌には控えだけ)）
 - 資格は `Authorization: Bearer` だけで運ぶ。Cookie は受けない（[Web UI](#web-ui--画面とデーモンのオリジンが違うこと)の項）
 - **CORS はブラウザにしか効かない。** `curl` は素通りするので、外から届く場所に置くならここを有効にするか、手前に境界（リバースプロキシ・トンネル）を置くこと。認証を切ったまま公開しないこと
 

@@ -4,7 +4,7 @@ import { CREDENTIAL_NAME } from '@alteroid/core/cli-light';
 import { hasRunnerPushFailure } from '@alteroid/logic';
 
 import { describeAuthFailure, forbiddenKindOf, resolveTarget, type Target } from './target.js';
-import { confirmIrreversible } from './confirm.js';
+import { confirmIrreversible, type ConfirmIo } from './confirm.js';
 import { redactError } from './redact.js';
 import { readInputFile } from './input-errors.js';
 
@@ -109,7 +109,8 @@ export async function credentialListCommand(): Promise<void> {
 
 export async function credentialSetCommand(
   name: string,
-  options: { file?: string; scope?: string; secret?: boolean },
+  options: { file?: string; scope?: string; secret?: boolean; yes?: boolean },
+  io?: ConfirmIo,
 ): Promise<void> {
   if (
     options.scope !== undefined &&
@@ -127,6 +128,21 @@ export async function credentialSetCommand(
     throw new Error(
       `名前 <name> は英大文字で始まり、英大文字・数字・_ だけで書く（渡されたのは ${name}。例: GH_TOKEN）`,
     );
+  }
+
+  // **既に在る名前を置き換えるときだけ確認する**（Issue #3201。`confirm.ts`）。在るかは
+  // `GET /credentials`（名前と指紋の一覧。`credential list` / `remove` と同じ口）で見る。
+  // **値は読まず、確認の文にも出さない。** 確認は入力を読む前に出す（標準入力を読み切ると、
+  // 端末の `yes` を聞けない）。
+  const target = await resolveTarget();
+  const current = (await request(target, '/credentials')) as CredentialsView;
+  if (current.credentials.some((entry) => entry.name === name)) {
+    const confirmed = await confirmIrreversible(
+      `環境変数 ${name} を置き換えます。前の値は残らず、読み出せないので戻すには元の値が要ります（runner の器の値も入れ替わります）。`,
+      options,
+      io,
+    );
+    if (!confirmed) return;
   }
 
   const raw =
@@ -149,7 +165,6 @@ export async function credentialSetCommand(
     );
   }
 
-  const target = await resolveTarget();
   const view = (await put(target, [
     {
       name,
