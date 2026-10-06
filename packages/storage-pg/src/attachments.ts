@@ -163,6 +163,8 @@ export class PgAttachmentStore implements AttachmentStore {
       const rest = queryable.filter((id) => !bound.has(id));
       if (rest.length > 0) {
         // 残りは、すでに同じ宛先へ結ばれている（冪等。新しくはない）か、別の宛先（conflicts）か、無い。
+        // UPDATE は上でもう確定している。この SELECT が落ちたら、呼び手には `newlyBound` が届かないので、
+        // この呼びで新しく結んだ分をここで戻してから元の例外を投げ直す（#3592。戻しも落ちたら握りつぶす）。
         const others = await this.#db
           .select({
             id: attachments.id,
@@ -170,7 +172,11 @@ export class PgAttachmentStore implements AttachmentStore {
             externalEventId: attachments.externalEventId,
           })
           .from(attachments)
-          .where(and(inArray(attachments.id, rest), notExpired));
+          .where(and(inArray(attachments.id, rest), notExpired))
+          .catch(async (error: unknown) => {
+            await this.unbind([...newlyBound], target).catch(() => undefined);
+            throw error;
+          });
         for (const row of others) {
           const same =
             'conversationId' in target

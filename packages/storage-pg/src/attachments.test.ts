@@ -86,3 +86,30 @@ describe('PgAttachmentStore', () => {
     ]);
   });
 });
+
+describe('PgAttachmentStore: bind が途中で例外を投げた回（#3592）', () => {
+  it('UPDATE のあとの SELECT が落ちたら、この呼びで結んだ分を戻して元の例外を投げる', async () => {
+    const real = new PgAttachmentStore(client.withLogger({ logQuery: () => undefined }));
+    const a = await real.put({ name: 'a.png', mediaType: 'image/png', bytes: PNG });
+    const b = await real.put({ name: 'b.png', mediaType: 'image/png', bytes: PNG });
+    await real.bind([b.id], 'conv-other'); // 別の宛先（SELECT 側へ回る）
+    const db = client.withLogger({ logQuery: () => undefined });
+    const failing = new Proxy(db, {
+      get(target, prop) {
+        if (prop === 'select') {
+          // 組み立ては通り、実行（await / catch）の時点で落ちる。
+          return () => ({
+            from: () => ({ where: () => Promise.reject(new Error('EIO')) }),
+          });
+        }
+        const value = Reflect.get(target, prop, target) as unknown;
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+    await expect(
+      new PgAttachmentStore(failing).bindToExternalEvent([a.id, b.id], 'ev-1'),
+    ).rejects.toThrow('EIO');
+    expect((await real.getMeta(a.id))?.externalEventId).toBeUndefined();
+    expect((await real.getMeta(b.id))?.conversationId).toBe('conv-other');
+  });
+});

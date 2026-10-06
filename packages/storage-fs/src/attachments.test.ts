@@ -176,3 +176,48 @@ describe('FsAttachmentStore', () => {
     expect(await readdir(join(dir, 'attachments'))).toEqual([]);
   });
 });
+
+describe('FsAttachmentStore: bind が途中で例外を投げた回（#3592）', () => {
+  // 2つ目の id の meta.json をディレクトリに差し替え、読むと EISDIR（ENOENT 以外の I/O 例外）になるようにする。
+  const breakMeta = async (id: string) => {
+    const path = join(dir, 'attachments', id, 'meta.json');
+    await rm(path);
+    await mkdir(path);
+  };
+
+  it.each([
+    [
+      'bind',
+      (s: FsAttachmentStore, ids: string[]) => s.bind(ids, 'conv-1'),
+      { conversationId: 'conv-1' },
+    ],
+    [
+      'bindToExternalEvent',
+      (s: FsAttachmentStore, ids: string[]) => s.bindToExternalEvent(ids, 'ev-1'),
+      { externalEventId: 'ev-1' },
+    ],
+  ] as const)(
+    '%s: 落ちた回に新しく結んだ分は戻し、前から結んであった分は残す。例外はそのまま投げる',
+    async (_name, run, target) => {
+      const pre = await store.put({ name: 'pre.png', mediaType: 'image/png', bytes: PNG });
+      const a = await store.put({ name: 'a.png', mediaType: 'image/png', bytes: PNG });
+      const b = await store.put({ name: 'b.png', mediaType: 'image/png', bytes: PNG });
+      await run(store, [pre.id]); // 前の呼びで結んである（冪等で通る側）
+      await breakMeta(b.id);
+      await expect(run(store, [pre.id, a.id, b.id])).rejects.toMatchObject({ code: 'EISDIR' });
+      const key = Object.keys(target)[0] as 'conversationId' | 'externalEventId';
+      expect((await store.getMeta(a.id))?.[key]).toBeUndefined(); // この呼びで結んだ分は戻る
+      expect((await store.getMeta(pre.id))?.[key]).toBe(Object.values(target)[0]); // 前からの分は残る
+      // 直った後は、同じ添付を別の宛先へ付け直せる。
+      expect((await store.bindToExternalEvent([a.id], 'ev-other')).newlyBound).toEqual([a.id]);
+    },
+  );
+
+  it('戻しも落ちたら、元の例外を投げる（戻しの例外で上書きしない）', async () => {
+    const a = await store.put({ name: 'a.png', mediaType: 'image/png', bytes: PNG });
+    const b = await store.put({ name: 'b.png', mediaType: 'image/png', bytes: PNG });
+    await breakMeta(b.id);
+    vi.spyOn(store, 'unbind').mockRejectedValueOnce(new Error('EIO-rollback'));
+    await expect(store.bind([a.id, b.id], 'conv-1')).rejects.toMatchObject({ code: 'EISDIR' });
+  });
+});
