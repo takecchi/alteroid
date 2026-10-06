@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { realpathSync } from 'node:fs';
-import { stdout } from 'node:process';
+import { stderr, stdout } from './terminal-out.js';
 import { pathToFileURL } from 'node:url';
 
 import { REMOVE_MANY_LIMIT_DEFAULT, REMOVE_MANY_LIMIT_MAX } from '@alteroid/core/cli-light';
@@ -258,6 +258,15 @@ program
   .description('クローンと会話し、クローンに仕事を任せる')
   .version(describeCliVersion(), '-V, --version', 'バージョンを出す');
 
+// **ルートのオプション（`-V, --version`）は、サブコマンドの名前より前でだけ読む（#3454）。**
+// これが無いと、`practice show <slug> --version 3` のようにサブコマンドの後ろへ置いた
+// `--version <n>` をルートの `-V, --version` が先に食い、過去の版ではなく CLI の
+// バージョンを出して 0 で終わる（`--version=3` だけが効いた）。サブコマンドごとに
+// 名前を変えず、打ち方（`--version 3` / `--version=3`）はそのままにできる。
+// 他のコマンドへの効き: ルートのオプションは `-V` だけなので、後ろへ置いた `-V` が
+// 「バージョンを出す」ではなく「そのサブコマンドの未知のオプション」になる。
+program.enablePositionalOptions();
+
 program
   .command('init')
   .description('人格データディレクトリ（~/.alteroid）を初期化する')
@@ -462,7 +471,10 @@ inboxCommand
       'self_initiative,manager_message から選ぶ。在る7種類全部を並べた呼びは断られる）',
   )
   .option('--sources <送信元>', '送信元での絞り込み（完全一致、カンマ区切り）')
-  .option('--before <ISO8601>', 'この時刻より古い行だけを対象にする')
+  .option(
+    '--before <ISO8601>',
+    'この時刻より古い行だけを対象にする（時差が必須。例 2026-10-06T00:00:00Z / 2026-10-06T09:00:00+09:00。時差の無い値は断られる）',
+  )
   .requiredOption('--reason <理由>', '日誌に残す理由')
   .option('--execute', '試算ではなく実際に消す（既定は試算）')
   // 既定・上限は `@alteroid/core` の定数から組む（`usage` / `conversations` の
@@ -695,7 +707,8 @@ memoryCommand
   .description('ファイル（または標準入力）の内容で丸ごと置き換える')
   .option('-f, --file <path>', '読み込むファイル（省略か - で標準入力）')
   .option('--yes', '確認を飛ばす（スクリプト・CI 向け。端末でなければ必須）')
-  .action(async (slug: string, options: { file?: string; yes?: boolean }) => {
+  .option('--allow-empty', '本文が空でも置き換える（既定では空の本文は断る。空にしたいときだけ）')
+  .action(async (slug: string, options: { file?: string; yes?: boolean; allowEmpty?: boolean }) => {
     await memorySetCommand(slug, options);
   });
 
@@ -768,9 +781,15 @@ practiceCommand
   .option('-f, --file <path>', '読み込むファイル（省略か - で標準入力）')
   .option('--kind <kind>', '仕事の種類（省略すると現在の値。新しいやり方では必須）')
   .option('--title <title>', '題（省略すると現在の値。新しいやり方では必須）')
-  .action(async (slug: string, options: { file?: string; kind?: string; title?: string }) => {
-    await practiceSetCommand(slug, options);
-  });
+  .option('--allow-empty', '本文が空でも置き換える（既定では空の本文は断る。空にしたいときだけ）')
+  .action(
+    async (
+      slug: string,
+      options: { file?: string; kind?: string; title?: string; allowEmpty?: boolean },
+    ) => {
+      await practiceSetCommand(slug, options);
+    },
+  );
 
 practiceCommand
   .command('remove <slug>')
@@ -1161,6 +1180,18 @@ program
   });
 
 /**
+ * 入口の最上位が、コマンドの失敗（投げられた例外）を stderr に1行で言い、終了コードを返す。
+ *
+ * 終了コードは**失敗なら 1**（`daemon stop` が止まらなかったときの `process.exitCode = 1`〔#3140〕と
+ * 同じ値）。戻せない操作の確認で使い手がやめた（`ConfirmDeclinedError`、#3450）ときも同じ 1 で、
+ * 「何もしなかった」をスクリプトが成功と区別できる。テストから argv 経由で測れるよう切り出してある。
+ */
+export function reportCliFailure(error: unknown): number {
+  stderr.write(`alteroid: ${describeCliFailure(error)}\n`);
+  return 1;
+}
+
+/**
  * 直接起動されたときだけ parseAsync を走らせる。
  *
  * `apps/runner/src/index.ts` / `apps/daemon/src/index.ts` と同じ形（既存の
@@ -1187,7 +1218,6 @@ if (invokedDirectly()) {
     ? launchTui()
     : program.parseAsync(process.argv);
   run.catch((error: unknown) => {
-    process.stderr.write(`alteroid: ${describeCliFailure(error)}\n`);
-    process.exit(1);
+    process.exit(reportCliFailure(error));
   });
 }

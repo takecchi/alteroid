@@ -3217,12 +3217,20 @@ class Clone implements CloneHost {
    */
   async #recordPermissionGrantIfConsented(
     approval: PendingApproval,
-    answer: string,
+    rawAnswer: string,
     answeredAt: string,
     via: AnswerApprovalVia | undefined,
   ): Promise<void> {
     const { permissionRequest } = approval;
     if (permissionRequest === undefined) return;
+
+    // **同意の判定は、承認の行に残る値（NUL を落とした後）で行う**（issue #3385）。
+    // `answerApproval` の `answer` は入口の `stripNulDeep`（`job-input.ts` の
+    // `prepareApprovalForWrite`）より前の値で、`trim()` は NUL を落とさない。落とす前の値で
+    // 判定すると、行に残る値は定型文ちょうどなのに許可が記録されず、起動時の拾い直し
+    // （`#reconcilePermissionGrant`。保存後の値を読む）とは結果が食い違う。NUL は落として
+    // 残すという `nul-guard.ts` の方針に揃え、許可に残す `answer` も同じ値にする。
+    const answer = stripNul(rawAnswer);
 
     const grounds = `approvalId=${approval.id}・rule=${permissionRequest.rule}`;
 

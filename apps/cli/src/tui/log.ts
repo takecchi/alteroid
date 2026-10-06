@@ -7,7 +7,7 @@
  * 量が実際の行数とずれたりしないように）。全画面では `<Static>` は見えないので使わず、
  * 見えている窓の行だけを描く。
  */
-import { cellWidth, LINE_BREAK, wrapLogical, wrapRichLine } from './wrap.js';
+import { cellWidth, expandTabs, LINE_BREAK, wrapLogical, wrapRichLine } from './wrap.js';
 import { type RichSpan, renderMarkdown } from './markdown.js';
 
 export type LogKind = 'user' | 'assistant' | 'tool' | 'system' | 'ask' | 'error';
@@ -17,6 +17,10 @@ export interface LogEntry {
   readonly seq: number;
   readonly kind: LogKind;
   readonly text: string;
+  /** 承認の行のとき、その承認の id（読み返しと再生で同じ承認を二重に出さないための印）。 */
+  readonly approvalId?: string;
+  /** 古い側を捨てた断りの行のとき、捨てた件数（累計）。 */
+  readonly dropped?: number;
 }
 
 /** 物理行 1 本。`text` は prefix / 字下げを含む。`spans` は Markdown 由来の装飾付き版。 */
@@ -57,7 +61,11 @@ function safeRenderMarkdown(text: string): ReturnType<typeof renderMarkdown> | u
   }
 }
 
-function entryLines(entry: LogEntry, width: number): DisplayLine[] {
+function entryLines(rawEntry: LogEntry, width: number): DisplayLine[] {
+  // タブは幅 0 と数えられ、端末は次のタブ位置まで進むので、折り返しの前に空白へ展開する（#3407）。
+  const entry = rawEntry.text.includes('\t')
+    ? { ...rawEntry, text: expandTabs(rawEntry.text) }
+    : rawEntry;
   const prefix = prefixFor(entry.kind);
   const indent = ' '.repeat(cellWidth(prefix));
   const content = Math.max(1, width - cellWidth(prefix));
@@ -167,7 +175,7 @@ export function streamLines(text: string, width: number, cap: number): DisplayLi
   const prefix = prefixFor('assistant');
   const indent = ' '.repeat(cellWidth(prefix));
   const content = Math.max(1, width - cellWidth(prefix));
-  const logical = text.split(LINE_BREAK);
+  const logical = expandTabs(text).split(LINE_BREAK);
   let end = logical.length;
   while (end > 0 && (logical[end - 1] ?? '').trim().length === 0) end -= 1;
   const limit = cap > 0 ? cap : Number.POSITIVE_INFINITY;

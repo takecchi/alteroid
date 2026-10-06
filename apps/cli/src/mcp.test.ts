@@ -1,11 +1,11 @@
-import { writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { makeTempDir } from '../../../vitest.tmpdir.js';
 
-import { captureStdout, pretendTty } from './test-support.js';
+import { captureStderr, captureStdout, pretendTty } from './test-support.js';
 
 /**
  * `alteroid mcp` — 人間の MCP 連携の登録（#325 段4）。
@@ -391,6 +391,40 @@ describe('alteroid mcp edit', () => {
       mcpServers: { github: STORED.mcpServers.github },
     });
     expect(read()).toContain('  外した: linear');
+  });
+
+  it('JSON の書き損じ（末尾のカンマ）でも、書いた内容を 0600 のまま残し、場所と set <file> を案内して失敗する（#3453）', async () => {
+    setReply('GET', '/mcp-servers', { status: 200, body: STORED });
+    const broken = '{ "mcpServers": { "a": { "command": "x", }, } }';
+    editWith = (path) => writeFile(path, broken);
+    captureStdout();
+    const err = captureStderr();
+
+    await expect(mcpEditCommand()).rejects.toThrow('JSON として読めません');
+
+    expect(sent.filter((s) => s.method === 'PUT')).toEqual([]);
+    const mine = /残してあります: (\S+)/.exec(err())?.[1];
+    expect(mine).toBeDefined();
+    expect(await readFile(mine ?? '', 'utf8')).toBe(broken);
+    expect((await stat(mine ?? '')).mode & 0o777).toBe(0o600);
+    expect(err()).toContain(`alteroid mcp set ${mine ?? ''}`);
+    await rm(dirname(mine ?? ''), { recursive: true, force: true });
+  });
+
+  it('保存の失敗（500）でも、書いた内容を残して案内する（#3453）', async () => {
+    setReply('GET', '/mcp-servers', { status: 200, body: STORED });
+    setReply('PUT', '/mcp-servers', { status: 500, body: { error: 'boom' } });
+    const edited = JSON.stringify({ mcpServers: { github: STORED.mcpServers.github } });
+    editWith = (path) => writeFile(path, edited);
+    captureStdout();
+    const err = captureStderr();
+
+    await expect(mcpEditCommand()).rejects.toThrow();
+
+    const mine = /残してあります: (\S+)/.exec(err())?.[1];
+    expect(mine).toBeDefined();
+    expect(await readFile(mine ?? '', 'utf8')).toBe(edited);
+    await rm(dirname(mine ?? ''), { recursive: true, force: true });
   });
 
   it('何も変えずに閉じれば PUT しない', async () => {

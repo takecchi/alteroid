@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { cellWidth, wrapDisplayLines, wrapLogical, wrapRichLine } from './wrap.js';
+import { cellWidth, expandTabs, wrapDisplayLines, wrapLogical, wrapRichLine } from './wrap.js';
 
 describe('wrapLogical（表示幅で折り返す）', () => {
   it('全角は 2 セルで数える（.length ではなく表示幅）', () => {
@@ -51,5 +51,27 @@ describe('wrapRichLine（装飾を保ったまま折り返す）', () => {
 
   it('空入力は空の行を 1 本返す', () => {
     expect(wrapRichLine([], 10)).toEqual([[]]);
+  });
+});
+
+describe('expandTabs（タブをタブ位置まで空白へ。#3407）', () => {
+  it('行頭から 4 セルごとのタブ位置まで進める。全角は 2 セルで数える', () => {
+    expect(expandTabs('a\tb')).toBe('a   b');
+    expect(expandTabs('\tx')).toBe('    x');
+    expect(expandTabs('あ\tb')).toBe('あ  b');
+    expect(expandTabs('abcd\te')).toBe('abcd    e');
+  });
+
+  it('改行をまたぐと、次の行は行頭から数え直す。タブが無ければそのまま', () => {
+    expect(expandTabs('ab\tc\n\td')).toBe('ab  c\n    d');
+    expect(expandTabs('タブ無し')).toBe('タブ無し');
+  });
+
+  it('展開した行は、折り返しの幅の数え（cellWidth）と実際の幅が一致する', () => {
+    for (const row of wrapDisplayLines('col1\tcol2\tcol3 TSVEND', 20)) {
+      expect(row).not.toContain('\t');
+      expect(cellWidth(row)).toBeLessThanOrEqual(20);
+    }
+    expect(wrapDisplayLines('col1\tcol2\tcol3 TSVEND', 20).join('')).toContain('TSVEND');
   });
 });

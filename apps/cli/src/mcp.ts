@@ -1,7 +1,8 @@
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { stdin, stdout } from 'node:process';
+import { stdin } from 'node:process';
+import { stdout } from './terminal-out.js';
 
 import { maskUrl } from '@alteroid/core/mask-url';
 import { hasMcpPushProblem } from '@alteroid/logic';
@@ -10,7 +11,7 @@ import { confirmIrreversible } from './confirm.js';
 import { createClient } from './client.js';
 import { describeAuthFailure, forbiddenKindOf, resolveTarget, type Target } from './target.js';
 import { redactError } from './redact.js';
-import { openEditor, readInputFile } from './input-errors.js';
+import { keepDraftOnFailure, openEditor, readInputFile } from './input-errors.js';
 
 /**
  * `alteroid mcp` — 人間の MCP 連携の登録（`.mcp.json` の `mcpServers` と同じ形）を
@@ -118,10 +119,10 @@ export async function mcpShowCommand(options: { reveal?: boolean } = {}): Promis
   const target = await resolveTarget();
   const view = await read(target);
   if (options.reveal === true) {
-    stdout.write(`${JSON.stringify({ mcpServers: view.mcpServers }, null, 2)}\n`);
+    stdout.writeRaw(`${JSON.stringify({ mcpServers: view.mcpServers }, null, 2)}\n`);
     return;
   }
-  stdout.write(`${JSON.stringify({ mcpServers: maskMcpServers(view.mcpServers) }, null, 2)}\n`);
+  stdout.writeRaw(`${JSON.stringify({ mcpServers: maskMcpServers(view.mcpServers) }, null, 2)}\n`);
   stdout.write(
     '（env / headers / args の値と URL のクエリ・認証情報は伏せました。' +
       '全部見るには: alteroid mcp show --reveal）\n',
@@ -145,12 +146,11 @@ export async function mcpSetCommand(file: string, options: { yes?: boolean } = {
   const before = await read(target);
   const beforeNames = Object.keys(before.mcpServers);
   if (beforeNames.length > 0 && stableJson(before.mcpServers) !== stableJson(servers)) {
-    const confirmed = await confirmIrreversible(
+    await confirmIrreversible(
       `MCP の登録（${beforeNames.join('・')}）を、渡された内容で丸ごと置き換えます。いまの値は残りません` +
         '（控えるなら alteroid mcp show --reveal）。',
       options,
     );
-    if (!confirmed) return;
   }
   await put(target, servers, beforeNames);
 }
@@ -179,6 +179,14 @@ export async function mcpEditCommand(): Promise<void> {
     // 中身は人間が置いた鍵そのものになりうる。一時ファイルでも絞る。
     await writeFile(path, original, { encoding: 'utf8', mode: 0o600 });
     await openEditor(path, 'alteroid mcp set <file>');
+  } catch (error) {
+    // まだ人間は何も書いていない（エディタが起きなかった・異常終了した）。
+    await rm(dir, { recursive: true, force: true });
+    throw error;
+  }
+  // **成功したときと「変更なし」のときだけ、一時ディレクトリを消す。** 失敗（JSON の書き損じ・保存）は
+  // 人間が書いた内容を 0600 のまま残し、場所と続きのやり方を言う（#3453）。
+  await keepDraftOnFailure(dir, path, `alteroid mcp set ${path}`, async () => {
     const edited = await readFile(path, 'utf8');
 
     if (edited === original) {
@@ -186,9 +194,7 @@ export async function mcpEditCommand(): Promise<void> {
       return;
     }
     await put(target, parseMcpJson(edited), Object.keys(current.mcpServers));
-  } finally {
-    await rm(dir, { recursive: true, force: true });
-  }
+  });
 }
 
 /**
@@ -200,12 +206,11 @@ export async function mcpClearCommand(options: { yes?: boolean } = {}): Promise<
   const before = await read(target);
   const beforeNames = Object.keys(before.mcpServers);
   if (beforeNames.length > 0) {
-    const confirmed = await confirmIrreversible(
+    await confirmIrreversible(
       `MCP の登録（${beforeNames.join('・')}）を全部外します。いまの値は残りません` +
         '（控えるなら alteroid mcp show --reveal）。',
       options,
     );
-    if (!confirmed) return;
   }
   await put(target, {}, beforeNames);
 }

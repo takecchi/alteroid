@@ -202,6 +202,17 @@ describe('添付: アップロードから クローンのターンまで', () =
     expect(((await bad.json()) as { code: string }).code).toBe('magic_mismatch');
   });
 
+  it('0 バイトの本文は 400 empty（415・JSON のパース・413 に落ちない）。画像の宣言でも同じ（#3327）', async () => {
+    const { app } = setupApp();
+    for (const query of ['name=e.txt&type=text%2Fplain', 'name=e.png&type=image%2Fpng']) {
+      const res = await upload(app, new Uint8Array(0), query);
+      expect(res.status).toBe(400);
+      const body = (await res.json()) as { code: string; error: string };
+      expect(body.code).toBe('empty');
+      expect(body.error).toContain('空のファイルは添えられない');
+    }
+  });
+
   it('別の会話に結び付いた添付・存在しない添付を付けた /chat は 400 で、受信箱に入れない', async () => {
     const { app, stores } = setupApp();
     const meta = (await (await upload(app, PNG)).json()) as Meta;

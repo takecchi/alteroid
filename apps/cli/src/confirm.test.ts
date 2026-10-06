@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import { confirmInRepl, confirmIrreversible, type ConfirmIo } from './confirm.js';
+import {
+  ConfirmDeclinedError,
+  confirmInRepl,
+  confirmIrreversible,
+  type ConfirmIo,
+} from './confirm.js';
 
 function fakeIo(over: Partial<ConfirmIo> & { answer?: string } = {}): {
   io: ConfirmIo;
@@ -59,13 +64,16 @@ describe('confirmIrreversible（#3141。形は alteroid reset の確認に揃え
   });
 
   it.each(['y', 'Y', 'ye', 'no', ''])(
-    '端末で %j のような yes の全文でない答えは、やめて「何も変更していません」と言う',
+    '端末で %j のような yes の全文でない答えは、やめて、決まった例外（ConfirmDeclinedError）を投げる（#3450）',
     async (answer) => {
       const { io, written } = fakeIo({ answer });
 
-      await expect(confirmIrreversible('消します。', {}, io)).resolves.toBe(false);
+      const error = await confirmIrreversible('消します。', {}, io).catch((e: unknown) => e);
 
-      expect(written.join('')).toContain('取り消しました。何も変更していません。');
+      // 終了コードを決める最上位がこの例外を非 0 にする。文言は例外が持つ（stdout には書かない）。
+      expect(error).toBeInstanceOf(ConfirmDeclinedError);
+      expect((error as Error).message).toBe('取り消しました。何も変更していません。');
+      expect(written.join('')).not.toContain('取り消しました');
     },
   );
 });
