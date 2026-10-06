@@ -113,13 +113,14 @@ function createFakeRegistry(): {
 function fakeRunner(
   runnerId: string,
   workspacePath = '/work/project',
+  workspacePathKnown = true,
 ): { client: RunnerClient; resumes: RunnerResumeCommand[] } {
   const resumes: RunnerResumeCommand[] = [];
   const sessions = new Map<string, RunnerManagerState>();
   const client: RunnerClient = {
     runnerId,
     runnerIdKnown: true,
-    workspacePathKnown: true,
+    workspacePathKnown,
     workspacePath,
     async connect() {
       /* この試験群は hello イベントの配送経路を使わない（`reattachRunner` /
@@ -217,10 +218,7 @@ describe('移送の候補が resume を投げずに抜けると、委譲が runn
       const fake = createFakeRegistry();
       fake.entries.push(entryOf('runner-a', 'lost', 'runner-a'));
       fake.entries.push(entryOf('runner-b', 'connected', 'runner-b'));
-      const runnerB = fakeRunner('runner-b');
-      // b は hello で workspacePath を聞けていない。
-      runnerB.client.workspacePathKnown = false;
-      runnerB.client.workspacePath = '';
+      const runnerB = fakeRunner('runner-b', '', false);
       fake.addClient(runnerB.client);
       const { pool } = setup(stores, fake.registry);
 
@@ -259,9 +257,7 @@ describe('移送の候補が resume を投げずに抜けると、委譲が runn
       runnerB.client.resume = async () => {
         throw new RunnerHttpError('forbidden (runner-b 固有の設定)', 403);
       };
-      const runnerC = fakeRunner('runner-c');
-      runnerC.client.workspacePathKnown = false;
-      runnerC.client.workspacePath = '';
+      const runnerC = fakeRunner('runner-c', '', false);
       fake.addClient(runnerB.client);
       fake.addClient(runnerC.client);
       const { pool } = setup(stores, fake.registry);
@@ -303,9 +299,7 @@ describe('移送で引き取れない抜け方をした候補の扱い（#3103 �
       fake.entries.push(entryOf('runner-a', 'lost', 'runner-a'));
       fake.entries.push(entryOf('runner-b', 'connected', 'runner-b'));
       fake.entries.push(entryOf('runner-c', 'connected', 'runner-c'));
-      const runnerB = fakeRunner('runner-b');
-      runnerB.client.workspacePathKnown = false;
-      runnerB.client.workspacePath = '';
+      const runnerB = fakeRunner('runner-b', '', false);
       const runnerC = fakeRunner('runner-c');
       fake.addClient(runnerB.client);
       fake.addClient(runnerC.client);
@@ -378,9 +372,7 @@ describe('移送で引き取れない抜け方をした候補の扱い（#3103 �
       await stores.jobs.putJob(jobWith('mgr-wpu-home', 'runner-a', { cwd: undefined }));
       const fake = createFakeRegistry();
       fake.entries.push(entryOf('runner-a', 'connected', 'runner-a'));
-      const runnerA = fakeRunner('runner-a');
-      runnerA.client.workspacePathKnown = false;
-      runnerA.client.workspacePath = '';
+      const runnerA = fakeRunner('runner-a', '', false);
       fake.addClient(runnerA.client);
       const { pool } = setup(stores, fake.registry);
 
