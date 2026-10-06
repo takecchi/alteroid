@@ -87,4 +87,37 @@ describe('useMinuteNow', () => {
     render(<Label />);
     expect(vi.getTimerCount()).toBe(0);
   });
+
+  it('誰も購読していなかったあいだに時間が進んでも、最初の描画から新しい時刻になる（#3721）', () => {
+    render(<Label />).unmount();
+    vi.setSystemTime(START + 7 * 60_000);
+    const seen: string[] = [];
+    function Probe() {
+      const now = useMinuteNow();
+      seen.push(formatRelative(CREATED, now));
+      return null;
+    }
+    render(<Probe />);
+    // 最初の描画（購読の前）から新しい時刻で計算されている。
+    expect(seen[0]).toBe('7分前');
+    expect(new Set(seen)).toEqual(new Set(['7分前']));
+  });
+
+  it('同じ描画の中の2つのコンポーネントは、同じ値を受け取る（#3721）', () => {
+    render(<Label />).unmount();
+    vi.setSystemTime(START + 3 * 60_000);
+    const seen: number[] = [];
+    function Probe() {
+      seen.push(useMinuteNow());
+      return null;
+    }
+    render(
+      <>
+        <Probe />
+        <Probe />
+      </>,
+    );
+    expect(seen.length).toBeGreaterThanOrEqual(2);
+    expect(new Set(seen)).toEqual(new Set([START + 3 * 60_000]));
+  });
 });
