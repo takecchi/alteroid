@@ -2375,6 +2375,18 @@ function describeStringLengthViolation(
 }
 
 /**
+ * 空白だけの値を断る（Issue #3544）。HTTP の `nonBlankString`（`non-blank-string.ts`。#3142）と同じ基準
+ * ——NUL を落として trim した後に1文字以上。`POST /commitments/:id/close` がこれで 400 にする欄を、
+ * 道具も同じにする。**数えるだけで値は書き換えない。** 空文字・NUL だけは `describeStringLengthViolation` が
+ * 先に断るので、ここへ来るのは「長さはあるが空白だけ」の値である。
+ */
+function describeBlankViolation(field: string, value: string | undefined): string | null {
+  if (value === undefined) return null;
+  if (stripNul(value).trim().length > 0) return null;
+  return `${field} は使えない（空白だけの値は空と同じ。${formatStringLengthJa({ min: 1 })}のみ）。`;
+}
+
+/**
  * `practiceKindSchema`（`schema.ts`。`.min(1).max(128)`）専用の断り文。
  *
  * **道具の入力スキーマ側には型（文字列）だけを渡し、長さの検査はここで
@@ -8654,7 +8666,10 @@ export function createCloneTools(context: ToolContext) {
       },
       async ({ id, reason }) => {
         // **issue #1752（#1651/#1689/#1720 の揃え漏れ。非数値の欄）。**
-        const reasonError = describeStringLengthViolation('reason', reason, { min: 1 });
+        // **空白だけも断る**（#3544。HTTP の `POST /commitments/:id/close` の `nonBlankString` と揃える）。
+        const reasonError =
+          describeStringLengthViolation('reason', reason, { min: 1 }) ??
+          describeBlankViolation('reason', reason);
         if (reasonError !== null) return text(reasonError);
         // **読めない行でも閉じられるようにする（issue #2148 の決定 (1)）。**
         // `get` が `UnreadableCommitmentError` を投げても、ここでは投げ直さず
@@ -11012,6 +11027,10 @@ export function createCloneTools(context: ToolContext) {
       },
       async ({ managerId, message, decision, requestId, attachments }) => {
         if (!context.managers) return NO_POOL;
+        // **空文字・NUL だけは断る**（#3544。HTTP の `POST /managers/:id/messages` の `min(1)` と
+        // 「NUL を落として空なら断る」（#3461）に揃える）。**空白だけは HTTP も通すので、ここでも断らない。**
+        const messageError = describeStringLengthViolation('message', message, { min: 1 });
+        if (messageError !== null) return text(messageError);
         // 添付は、送る前に読む。見つからなければ何も送らずに道具のエラー文を返す。
         const handover = await loadManagerAttachments(
           stores,
