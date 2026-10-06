@@ -210,4 +210,44 @@ describe('runner の取り直し（reattach）と abort の交差（listJobs の
     expect(runnerA.resumes.map((command) => command.managerId)).toEqual(['mgr-first']);
     expect((await stores.jobs.listJobs()).find((j) => j.id === 'mgr-second')?.status).toBe('stopped');
   });
+
+  it('起動時の引き取り（restore）が先の委譲を resume している最中に、後ろの委譲を人間が止め切っても、その委譲を起こし直さない（#3603 の同じ型）', async () => {
+    const stores = createMemoryStores();
+    await stores.jobs.putJob(jobWith('mgr-first', 'runner-a'));
+    await stores.jobs.putJob(jobWith('mgr-second', 'runner-a'));
+    const fake = createFakeRegistry();
+    fake.entries.push(entryOf('runner-a', 'connected', 'runner-a'));
+    const runnerA = fakeRunner('runner-a');
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let entered!: () => void;
+    const enteredResume = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const plainResume = runnerA.client.resume.bind(runnerA.client);
+    runnerA.client.resume = async (command) => {
+      if (command.managerId === 'mgr-first') {
+        entered();
+        await gate;
+      }
+      return plainResume(command);
+    };
+    fake.addClient(runnerA.client);
+    const pool = createManagerPool({ stores, post: () => {}, runners: fake.registry });
+
+    // デーモンが起動して引き取りが走る。1本目の resume が遅い。
+    const restoring = pool.restore();
+    await enteredResume;
+    // その間に人間が、まだ順番の来ていない2本目を止める。台帳は stopped になる。
+    const aborted = await pool.abort('mgr-second', '人間が止めた');
+    expect(aborted.outcome).toBe('stopped');
+    expect((await stores.jobs.listJobs()).find((j) => j.id === 'mgr-second')?.status).toBe('stopped');
+    release();
+    await restoring;
+
+    expect(runnerA.resumes.map((command) => command.managerId)).toEqual(['mgr-first']);
+    expect((await stores.jobs.listJobs()).find((j) => j.id === 'mgr-second')?.status).toBe('stopped');
+  });
 });
