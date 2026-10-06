@@ -40,6 +40,17 @@ describe('formatRelative', () => {
     expect(formatRelative('2026-08-11T12:00:00Z', NOW)).toBe('2日前');
   });
 
+  it('丸めた後の値で単位を上げる（#3609）', () => {
+    const ago = (s: number) => formatRelative(new Date(NOW - s * 1000).toISOString(), NOW);
+    expect(ago(3569)).toBe('59分前');
+    expect(ago(3570)).toBe('1時間前');
+    expect(ago(3599)).toBe('1時間前');
+    expect(ago(84599)).toBe('23時間前');
+    expect(ago(84600)).toBe('1日前');
+    expect(ago(86399)).toBe('1日前');
+    expect(formatRelative(new Date(NOW + 3590 * 1000).toISOString(), NOW)).toBe('1時間後');
+  });
+
   it('未来（次の発火時刻）も表せる', () => {
     // スケジュール画面は「次はいつ」を出す。ここが前提だけを見ていると 0分前 になる。
     expect(formatRelative('2026-08-13T13:00:00Z', NOW)).toBe('1時間後');
@@ -87,6 +98,14 @@ describe('formatBytes', () => {
     expect(formatBytes(512)).toBe('512 B');
     expect(formatBytes(2048)).toBe('2.0 KB');
     expect(formatBytes(3 * 1024 * 1024)).toBe('3.0 MB');
+  });
+
+  it('丸めた後の値で単位を上げる（#3609）', () => {
+    expect(formatBytes(1023)).toBe('1023 B');
+    expect(formatBytes(1048524)).toBe('1023.9 KB');
+    expect(formatBytes(1048525)).toBe('1.0 MB');
+    expect(formatBytes(1048575)).toBe('1.0 MB');
+    expect(formatBytes(1048576)).toBe('1.0 MB');
   });
 });
 

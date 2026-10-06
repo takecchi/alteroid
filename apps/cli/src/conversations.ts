@@ -71,6 +71,11 @@ export interface ConversationsListOptions {
    * 10000）。マネージャーとの往復・内部ターンは数えない（issue #418）。
    */
   scan?: string;
+  /**
+   * 続きの頁（前の一覧の最後に出た `--cursor` の値をそのまま渡す。#3550）。**`--limit` の上限 200 や
+   * `--scan` の窓の外の会話は、これを辿って読む。**
+   */
+  cursor?: string;
 }
 
 export async function conversationsListCommand(
@@ -87,6 +92,7 @@ export async function conversationsListCommand(
     query: {
       ...(options.limit === undefined ? {} : { limit: options.limit }),
       ...(options.scan === undefined ? {} : { scan: options.scan }),
+      ...(options.cursor === undefined ? {} : { cursor: options.cursor }),
     },
   });
   if (!response.ok) {
@@ -95,12 +101,12 @@ export async function conversationsListCommand(
     if (described !== null) throw new Error(described);
     throw new Error(
       await withErrorReason(
-        `会話の一覧を読めませんでした（HTTP ${String(response.status)}。--limit / --scan の値を確かめてください）`,
+        `会話の一覧を読めませんでした（HTTP ${String(response.status)}。--limit / --scan / --cursor の値を確かめてください）`,
         response,
       ),
     );
   }
-  const { conversations, scanned, reachedStart, hiddenByLimit } = await response.json();
+  const { conversations, scanned, reachedStart, hiddenByLimit, nextCursor } = await response.json();
   // `renderConversationsList` は改行で終わらずに返す（末尾に改行が無いことは
   // `.claude/skills/mutation-testing/mutate-selftest.mjs` が固定している）。
   // 端末の次のプロンプトや後続の書き込みが最終行へ食い込まないよう、ここで足す（#326）。
@@ -109,7 +115,7 @@ export async function conversationsListCommand(
   // 見出しに1行足す。
   const unreadLine = await fetchUnreadTotalLine(client);
   stdout.write(
-    `${unreadLine}\n${renderConversationsList(conversations, scanned, reachedStart, hiddenByLimit, now)}\n`,
+    `${unreadLine}\n${renderConversationsList(conversations, scanned, reachedStart, hiddenByLimit, now, nextCursor)}\n`,
   );
 }
 
@@ -165,6 +171,7 @@ export function renderConversationsList(
   reachedStart: boolean,
   hiddenByLimit: number,
   now: number = Date.now(),
+  nextCursor?: string,
 ): string {
   const lines: string[] = [];
   if (conversations.length === 0) {
@@ -207,6 +214,11 @@ export function renderConversationsList(
       `…ほか ${hiddenByLimit} 件は省略（この窓に ${conversations.length + hiddenByLimit} 件あり、` +
         `新しい順に ${conversations.length} 件だけ出した）。--limit を増やせば出る。`,
     );
+  }
+  // **続きが在るときだけ出す（#3550）。** `--limit` の上限 200 や `--scan` の窓の外は、増やしても
+  // 出ない。継続点を渡せば、その続きから読める。
+  if (nextCursor !== undefined) {
+    lines.push(`続きを読むには: alteroid conversations list --cursor ${nextCursor}`);
   }
   lines.push('中身を読むには: alteroid conversations show <id>');
   return lines.join('\n');

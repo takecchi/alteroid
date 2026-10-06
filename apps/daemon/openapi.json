@@ -1086,7 +1086,7 @@
         "operationId": "getConversations",
         "tags": ["conversations"],
         "summary": "会話の一覧",
-        "description": "`POST /chat` の SSE は流すだけで読み直す口が無かった。器（端末・タブ・アプリ）を替えても続きから話せるための一覧。日誌から組み立てるので新しい状態は持たない。新しい順。`scanned` は人間との往復を何件遡ったか（マネージャーとの往復・内部ターンは数えない。issue #418）、`reachedStart` はその窓が日誌の先頭に届いたかで、遡り切れていないことが分かる（黙って打ち切らない）。`hiddenByLimit` は、その窓の**中で** `limit` に収まらず落とした会話の数（窓の外は数えていない）。",
+        "description": "`POST /chat` の SSE は流すだけで読み直す口が無かった。器（端末・タブ・アプリ）を替えても続きから話せるための一覧。日誌から組み立てるので新しい状態は持たない。新しい順。`scanned` は人間との往復を何件遡ったか（マネージャーとの往復・内部ターンは数えない。issue #418）、`reachedStart` はその窓が日誌の先頭に届いたかで、遡り切れていないことが分かる（黙って打ち切らない）。`hiddenByLimit` は、その窓の**中で** `limit` に収まらず落とした会話の数（窓の外は数えていない）。続きが在る（`hiddenByLimit > 0` か `reachedStart` が偽）ときは `nextCursor` が載り、次の呼びの `cursor` へそのまま渡すと、その続き（窓の外も含む）から読める。`/approvals` / `/commitments` と同じ形で、続きが無ければ `nextCursor` は無い。壊れた `cursor`・指す発言が見当たらない `cursor` は 400。",
         "responses": {
           "200": {
             "description": "会話の一覧（新しい順）。",
@@ -1159,6 +1159,9 @@
                       "minimum": -9007199254740991,
                       "maximum": 9007199254740991
                     },
+                    "nextCursor": {
+                      "type": "string"
+                    },
                     "readStateUnreadable": {
                       "type": "string"
                     }
@@ -1169,7 +1172,7 @@
             }
           },
           "400": {
-            "description": "クエリが不正。",
+            "description": "クエリが不正、または `cursor` が壊れている・指す発言が見当たらない。",
             "content": {
               "application/json": {
                 "schema": {
@@ -1204,6 +1207,13 @@
               "type": "integer",
               "minimum": 1,
               "maximum": 10000
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "schema": {
+              "type": "string"
             }
           }
         ]

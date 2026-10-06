@@ -27,6 +27,8 @@ import {
 import { formatDateTime } from '@alteroid/logic';
 import { practiceKindLabel } from './practices';
 
+import { useLatest } from '~/lib/use-latest';
+
 import type { Route } from './+types/practice-detail';
 
 export function clientLoader({ params }: Route.ClientLoaderArgs) {
@@ -130,6 +132,8 @@ function PracticeDetailBody({ slug }: { slug: string }) {
   const kind = draftKind ?? loadedKind;
   const title = draftTitle ?? loadedTitle;
   const content = draftContent ?? loadedContent;
+  /** 応答が返った時点の「いまの入力」（送った時点と比べる。issue #3515）。 */
+  const latestFields = useLatest({ kind, title, content });
 
   const dirty =
     (draftKind !== undefined && draftKind !== loadedKind) ||
@@ -182,12 +186,22 @@ function PracticeDetailBody({ slug }: { slug: string }) {
     if (!canSave && !(conflict !== undefined && hasDraft && kind.trim() !== '')) return;
     setBusy(true);
     setFailure(undefined);
-    savePractice(slug, kind, title, content, ifMatch)
+    // 送った値を控える。成功のあと、いまの入力がこれと同じときだけ畳む（issue #3515）。
+    const sent = { kind, title, content };
+    savePractice(slug, sent.kind, sent.title, sent.content, ifMatch)
       .then(({ practice, version }) => {
         setSavedAt(practice.updatedAt);
         setLastSaved({ replaces: data === undefined ? null : data.version, version });
-        // 保存できたら下書きを畳んで、またサーバの値に追従させる。
-        discardDraft();
+        const now = latestFields.current;
+        if (now.kind === sent.kind && now.title === sent.title && now.content === sent.content) {
+          // 保存できたら下書きを畳んで、またサーバの値に追従させる。
+          discardDraft();
+        } else {
+          // 応答を待つ間に打ち足した分は残す。保存できた版を前提に進め、次の保存が
+          // 自分の保存と衝突しないようにする。
+          setBaseVersion(version);
+          setConflict(undefined);
+        }
       })
       .catch((caught: unknown) => {
         if (caught instanceof PracticeConflictError) setConflict(caught);
