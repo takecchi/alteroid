@@ -232,4 +232,40 @@ describe('reattach のループが写しの job.runnerId で移送かどうか�
       'runner-b',
     );
   });
+
+  it('移送先で確認待ちになっている委譲の waiting を、遅れていた runner-c の取り直しが捨てない', async () => {
+    const stores = createMemoryStores();
+    await stores.jobs.putJob(jobWith('mgr-first', 'runner-c'));
+    await stores.jobs.putJob(jobWith('mgr-moved', 'runner-a'));
+    const fake = createFakeRegistry();
+    fake.entries.push(entryOf('runner-a', 'lost', 'runner-a'));
+    fake.entries.push(entryOf('runner-b', 'connected', 'runner-b'));
+    fake.entries.push(entryOf('runner-c', 'connected', 'runner-c'));
+    const runnerB = fakeRunner('runner-b');
+    const runnerC = fakeRunner('runner-c');
+    const gateC = gateFirstResume(runnerC);
+    fake.addClient(runnerB.client);
+    fake.addClient(runnerC.client);
+    const pool = createManagerPool({ stores, post: () => {}, runners: fake.registry });
+    await pool.abort('mgr-does-not-exist');
+
+    const reattachC = pool.reattachRunner('runner-c');
+    await gateC.entered;
+    await pool.reattachRunner('runner-b');
+    // 移送先（runner-b）で、委譲が人間への確認待ちになる。
+    runnerB.emit?.({
+      type: 'ask',
+      managerId: 'mgr-moved',
+      requestId: 'req-1',
+      kind: 'question',
+      summary: '確認したい',
+    } as RunnerEvent);
+    for (let i = 0; i < 30; i += 1) await new Promise<void>((r) => setImmediate(r));
+    gateC.release();
+    await reattachC;
+
+    // 確認待ちが残っていれば、requestId を指した答えは「待っていない」と断られない。
+    const result = await pool.send('mgr-moved', 'はい', { decision: 'allow', requestId: 'req-1' });
+    expect(result.detail ?? '').not.toContain('待っていない');
+  });
 });
