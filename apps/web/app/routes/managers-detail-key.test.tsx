@@ -93,8 +93,11 @@ describe('詳細の切り替え', () => {
 
     // 確認はモーダルで一覧を覆うので、行を押す代わりに経路を切り替える（戻る・進むと同じ）。
     await act(async () => {
-      await router.navigate('/managers/mgr-b');
+      void router.navigate('/managers/mgr-b');
     });
+    // A には書きかけがあるので、manager-detail の離れる前の確認（#3556 / #3623）が切り替えを
+    // 止める。「破棄して離れる」を選ぶと B へ移り、A の書きかけも停止の確認も B に残らない。
+    fireEvent.click(await screen.findByRole('button', { name: '破棄して離れる' }));
 
     await waitFor(() => {
       expect(
