@@ -18,6 +18,7 @@ import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import {
+  APPROVALS_TABS,
   JOURNAL_TABS,
   MEMORY_TABS,
   SCHEDULE_TABS,
@@ -27,6 +28,7 @@ import {
 } from '~/lib/nav';
 
 import {
+  ApprovalsTabs,
   GroupTabs,
   JournalTabs,
   MemoryTabs,
@@ -65,6 +67,23 @@ describe('GroupTabs', () => {
     expect(screen.getByRole('link', { name: 'やり方' }).getAttribute('aria-current')).toBeNull();
   });
 
+  it('承認のタブ: 回答済みの配下（日付・1件）では「回答済み」だけが選ばれ、「未回答」は選ばれない（#3237）', () => {
+    const current = () =>
+      screen
+        .getAllByRole('link')
+        .filter((link) => link.getAttribute('aria-current') === 'page')
+        .map((link) => link.textContent);
+
+    renderAt('/approvals', APPROVALS_TABS);
+    expect(current()).toEqual(['未回答']);
+    cleanup();
+    renderAt('/approvals/answered', APPROVALS_TABS);
+    expect(current()).toEqual(['回答済み']);
+    cleanup();
+    renderAt('/approvals/answered/2026-09-30/ap-1', APPROVALS_TABS);
+    expect(current()).toEqual(['回答済み']);
+  });
+
   it('設定のタブは9つ（利用状況・認証トークン・アクセス許可・許可・環境変数・プロファイル・MCP・連携を含む）', () => {
     renderAt('/usage', SETTINGS_TABS);
 
@@ -100,9 +119,20 @@ describe('まとまりの全ページが自分の帯を描いている', () => {
     }
   });
 
+  it('承認の2ページ（未回答・回答済み）は、どちらも ApprovalsTabs を描く', () => {
+    // 回答済みの経路は `/approvals/answered` で、他のまとまりのように `routes/<経路>.tsx` の名前に
+    // ならない（`routes/approvals-answered.tsx`）ので、上の走査には入れず別に見る。
+    for (const file of ['approvals.tsx', 'approvals-answered.tsx']) {
+      expect(readFileSync(join(routesDir, file), 'utf8'), file).toContain(
+        'tabs={<ApprovalsTabs />}',
+      );
+    }
+  });
+
   it('帯の部品が、定義の配列を使っている（まとまり名の取り違えを落とす）', () => {
     // 5つの部品はそれぞれ別の配列を描く。**描く中身そのものを確かめる。**
     const cases: [() => React.JSX.Element, readonly NavTab[]][] = [
+      [ApprovalsTabs, APPROVALS_TABS],
       [WorkTabs, WORK_TABS],
       [JournalTabs, JOURNAL_TABS],
       [MemoryTabs, MEMORY_TABS],

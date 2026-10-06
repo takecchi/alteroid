@@ -8,6 +8,7 @@ import { makeTempDir } from '../../../../vitest.tmpdir.js';
 
 import { AttachmentMissingError } from '../attachments.js';
 import { ChatController, MAX_ENTRIES, RESUME_PROBE_LIMIT } from './chat-controller.js';
+import { ApiError } from './api.js';
 import { fakeApi, gate } from './fake-api.js';
 
 const open = (conversationId: string) => ({ type: 'open' as const, conversationId });
@@ -994,5 +995,107 @@ describe('/attach の上限はデーモンの値で先に検査する（#3204）
     const { controller, texts } = setup();
     await controller.attach(path);
     expect(texts('system').join('\n')).toContain('添えられない');
+  });
+});
+
+describe('新しい会話で open の前に終わった送信の取り直し（#3304）', () => {
+  /** 添えかけつきで新しい会話を送り、`open` の前に受信をやめる（サーバは受け取っていてもよい）。 */
+  async function abortBeforeOpen(
+    setupResult: ReturnType<typeof setup>,
+    how: 'abort' | 'disconnect',
+  ) {
+    const { api, controller } = setupResult;
+    const dir = await makeTempDir('alteroid-tui-adopt-');
+    const path = join(dir, 'a.log');
+    await writeFile(path, 'log');
+    await controller.attach(path);
+    if (how === 'abort') {
+      const g = gate();
+      api.scripts.push([g.wait, open('c9')]);
+      const sending = controller.send('最初');
+      await vi.waitFor(() => expect(api.chatCalls).toHaveLength(1)); // 添付を上げ終えて、受信が始まるまで
+      const shutdown = controller.shutdown();
+      g.open();
+      await sending;
+      await shutdown;
+    } else {
+      api.scripts.push([new ApiError('送信できませんでした: 接続が切れました')]);
+      await controller.send('最初');
+    }
+    return path;
+  }
+
+  for (const how of ['abort', 'disconnect'] as const) {
+    it(`受け取り済みなら、次の送信はその会話へ送る。添えかけは残っていて、会話も切り替わる（${how}）`, async () => {
+      const s = setup();
+      const { api, controller, state } = s;
+      await abortBeforeOpen(s, how);
+      expect(state().conversationId).toBeNull();
+      expect(controller.hasAttachments()).toBe(true);
+      const firstId = api.chatClientMessageIds[0];
+      expect(firstId).toBeTypeOf('string');
+      api.receivedClientMessages[firstId as string] = 'c9';
+      api.scripts.push([open('c9'), { type: 'done' }]);
+      await controller.send('次');
+      expect(api.clientMessageLookups).toEqual([firstId]);
+      expect(api.chatCalls[1]).toEqual({
+        text: '次',
+        conversationId: 'c9',
+        attachments: ['att-1'],
+      });
+      expect(api.chatClientMessageIds[1]).not.toBe(firstId);
+      expect(state().conversationId).toBe('c9');
+      expect(controller.hasAttachments()).toBe(false);
+    });
+  }
+
+  it('404（受け取られていない）なら新しい会話として送り、覚えていた id は捨てる', async () => {
+    const s = setup();
+    const { api, controller, state } = s;
+    await abortBeforeOpen(s, 'abort');
+    api.scripts.push([open('c2'), { type: 'done' }]);
+    await controller.send('次');
+    expect(api.clientMessageLookups).toHaveLength(1);
+    expect(api.chatCalls[1]?.conversationId).toBeUndefined();
+    expect(state().conversationId).toBe('c2');
+    api.scripts.push([{ type: 'done' }]);
+    await controller.send('その次');
+    expect(api.clientMessageLookups).toHaveLength(1);
+    expect(api.chatCalls[2]?.conversationId).toBe('c2');
+  });
+
+  it('引けなかったら送らず、理由と案内を出す。添えかけは残り、次の送信で引き直す', async () => {
+    const s = setup();
+    const { api, controller, state, texts } = s;
+    await abortBeforeOpen(s, 'abort');
+    const firstId = api.chatClientMessageIds[0] as string;
+    api.clientMessageLookupFails = '確かめられない理由';
+    const result = await controller.send('次');
+    expect(result).toBe(false);
+    expect(api.chatCalls).toHaveLength(1);
+    expect(texts('error').at(-1)).toContain('確かめられない理由');
+    expect(texts('error').at(-1)).toContain('もう一度送ると確かめ直す');
+    expect(controller.hasAttachments()).toBe(true);
+    expect(state().busy).toBe(false);
+    api.clientMessageLookupFails = null;
+    api.receivedClientMessages[firstId] = 'c9';
+    api.scripts.push([open('c9'), { type: 'done' }]);
+    expect(await controller.send('次')).toBe(true);
+    expect(api.clientMessageLookups).toEqual([firstId, firstId]);
+    expect(api.chatCalls[1]?.conversationId).toBe('c9');
+  });
+
+  it('取り直した会話でもう一度 open の前に中断したら、その会話 id を使い続ける', async () => {
+    const s = setup();
+    const { api, controller, state } = s;
+    await abortBeforeOpen(s, 'disconnect');
+    api.receivedClientMessages[api.chatClientMessageIds[0] as string] = 'c9';
+    api.scripts.push([new ApiError('送信できませんでした: 接続が切れました')]);
+    await controller.send('次');
+    expect(state().conversationId).toBe('c9');
+    api.scripts.push([{ type: 'done' }]);
+    await controller.send('その次');
+    expect(api.clientMessageLookups).toHaveLength(1);
+    expect(api.chatCalls[2]?.conversationId).toBe('c9');
   });
 });

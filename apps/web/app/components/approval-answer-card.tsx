@@ -31,13 +31,12 @@ export function isApprovalWithdrawn(approval: PendingApproval): boolean {
 /**
  * 承認1件の詳細へ行く先。**リンクを作る箇所はここ1つにまとめてある。**
  *
- * いまは承認の画面（`/approvals`）全体へのリンクにしている（暫定）。承認の画面を未回答と
- * 回答済みの2ページに分ける作業（#3237）で URL の形が決まったら、この関数だけを差し替える。
+ * 日付なしの入口（`/approvals/item/:id`。`routes/approvals-item.tsx`）を返す。回答済みの詳細
+ * （`/approvals/answered/:date/:id`）の日付はデーモンの `localDate()` で決まり、id だけでは組めない
+ * ので、入口が正しい日（未回答なら `/approvals`）へ replace で移す。
  */
 export function approvalDetailPath(approvalId: string): string {
-  // 1件への URL が決まるまでは使わない（呼ぶ側は id を渡しておく）。
-  void approvalId;
-  return '/approvals';
+  return `/approvals/item/${encodeURIComponent(approvalId)}`;
 }
 
 export function ApprovalAnswerCard({

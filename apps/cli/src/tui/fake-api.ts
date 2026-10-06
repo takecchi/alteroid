@@ -43,6 +43,14 @@ export interface ChatCall {
 
 export interface FakeApi extends TuiApi {
   chatCalls: ChatCall[];
+  /** `chat()` に渡された `clientMessageId`（`chatCalls` と同じ順）。 */
+  chatClientMessageIds: (string | undefined)[];
+  /** サーバが受け取り済みの発言（`clientMessageId` → 会話 id）。`findClientMessage` が引く。 */
+  receivedClientMessages: Record<string, string>;
+  /** `findClientMessage` に渡された id。 */
+  clientMessageLookups: string[];
+  /** 非 null なら `findClientMessage` がこの理由で失敗する。 */
+  clientMessageLookupFails: string | null;
   /** `uploadAttachment()` に渡されたもの。 */
   uploads: { name: string; mediaType: string; size: number }[];
   /** 次の（以降の）`uploadAttachment()` を失敗させる理由。 */
@@ -144,6 +152,10 @@ export function fakeApi(): FakeApi {
   const api: FakeApi = {
     baseUrl: 'http://127.0.0.1:4517',
     chatCalls: [],
+    chatClientMessageIds: [],
+    receivedClientMessages: {},
+    clientMessageLookups: [],
+    clientMessageLookupFails: null,
     scripts: [],
     streamScripts: [],
     streamCalls: [],
@@ -191,7 +203,15 @@ export function fakeApi(): FakeApi {
       api.limitsCalls += 1;
       return api.limits;
     },
+    findClientMessage(clientMessageId) {
+      api.clientMessageLookups.push(clientMessageId);
+      if (api.clientMessageLookupFails !== null) {
+        return Promise.reject(new ApiError(api.clientMessageLookupFails));
+      }
+      return Promise.resolve(api.receivedClientMessages[clientMessageId] ?? null);
+    },
     async *chat(input, signal) {
+      api.chatClientMessageIds.push(input.clientMessageId);
       api.chatCalls.push({
         text: input.text,
         ...(input.conversationId === undefined ? {} : { conversationId: input.conversationId }),
