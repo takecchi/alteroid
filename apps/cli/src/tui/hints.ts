@@ -21,6 +21,12 @@ export const HINT_AP_DATES =
   '↑↓ 選ぶ · Enter その日の件 · m 古い日を読む · Esc 未回答へ · r 更新 · 1-5 画面';
 export const HINT_AP_DAY = '↑↓ 選ぶ · Enter 詳細 · Esc 日付へ · r 更新 · 1-5 画面';
 export const HINT_AP_DETAIL = 'Esc 一覧へ · a 答える · ↑↓ PgUp/PgDn 読み進める · r 更新 · 1-5 画面';
+/** その日の件（回答済み）から開いた詳細。Esc は未回答の一覧ではなくその日へ戻る。 */
+export const HINT_AP_DETAIL_FROM_DAY =
+  'Esc その日へ · a 答える · ↑↓ PgUp/PgDn 読み進める · r 更新 · 1-5 画面';
+/** 詳細の読む画面の案内（開いた元で Esc の戻り先が違う）。 */
+export const approvalDetailHint = (from: 'list' | 'day'): string =>
+  from === 'day' ? HINT_AP_DETAIL_FROM_DAY : HINT_AP_DETAIL;
 export const HINT_AP_FORM =
   '↑↓ 移動 · Space 選ぶ/書く · s 送る前の確認 · Esc 読む画面へ（書きかけは残る）';
 export const HINT_AP_INPUT = 'Enter 確定 · Esc 確定して戻る · ^C 中断（クローン） · ^D 終了';

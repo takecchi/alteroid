@@ -1005,6 +1005,8 @@ describe('承認待ち（一覧と詳細・答える）', () => {
     await press(h.stdin, DOWN);
     await press(h.stdin, ENTER);
     await waitFor(() => h.frame().includes('二行目の説明'));
+    // 未回答から開いた詳細の案内は今までどおり
+    expect(h.frame()).toContain('Esc 一覧へ');
   }
 
   it('d で回答済み: 決着した日 → その日の件 → 詳細 → Esc でその日へ → Esc で日付へ → Esc で未回答へ（#3340）', async () => {
@@ -1036,6 +1038,9 @@ describe('承認待ち（一覧と詳細・答える）', () => {
     expect(frame).toContain('取り下げた理由: 自分で見つけた');
     await press(h.stdin, ENTER);
     await waitFor(() => h.frame().includes('[回答済み] ap-done'));
+    // フッタの案内も、Esc の戻り先（その日）に合わせる
+    expect(h.frame()).toContain('Esc その日へ');
+    expect(h.frame()).not.toContain('Esc 一覧へ');
     h.stdin.write(ESC);
     await waitFor(() => h.frame().includes('2026-09-30 に決着した承認'));
     h.stdin.write(ESC);

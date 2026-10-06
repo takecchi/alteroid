@@ -35,7 +35,7 @@ import {
 import type { HeaderFeed } from './header-feed.js';
 import {
   HINT_AP_CONFIRM,
-  HINT_AP_DETAIL,
+  approvalDetailHint,
   HINT_AP_FORM,
   HINT_AP_INPUT,
   HINT_AP_DATES,
@@ -872,7 +872,7 @@ export const App: FC<AppProps> = ({
                   ? HINT_AP_INPUT
                   : ap.detail?.mode === 'form'
                     ? HINT_AP_FORM
-                    : HINT_AP_DETAIL
+                    : approvalDetailHint(ap.detailFrom)
         : tab === 'journal'
           ? jr.view === 'filter'
             ? HINT_JOURNAL_FILTER

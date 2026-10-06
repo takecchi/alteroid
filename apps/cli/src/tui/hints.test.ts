@@ -6,6 +6,8 @@ import {
   HINT_AP_DATES,
   HINT_AP_DAY,
   HINT_AP_DETAIL,
+  HINT_AP_DETAIL_FROM_DAY,
+  approvalDetailHint,
   HINT_AP_FORM,
   HINT_AP_INPUT,
   HINT_AP_LIST,
@@ -32,6 +34,7 @@ describe('フッタのキーヒント', () => {
       HINT_AP_DATES,
       HINT_AP_DAY,
       HINT_AP_DETAIL,
+      HINT_AP_DETAIL_FROM_DAY,
       HINT_AP_FORM,
       HINT_AP_INPUT,
       HINT_AP_LIST,
@@ -50,5 +53,13 @@ describe('フッタのキーヒント', () => {
     ]) {
       expect(stringWidth(hint)).toBeLessThanOrEqual(80);
     }
+  });
+
+  it('詳細の案内は開いた元で変わる（その日の件から開いたら Esc はその日へ。未回答から開いたら今のまま）', () => {
+    expect(approvalDetailHint('list')).toBe(HINT_AP_DETAIL);
+    expect(HINT_AP_DETAIL).toContain('Esc 一覧へ');
+    expect(approvalDetailHint('day')).toBe(HINT_AP_DETAIL_FROM_DAY);
+    expect(HINT_AP_DETAIL_FROM_DAY).toContain('Esc その日へ');
+    expect(HINT_AP_DETAIL_FROM_DAY).not.toContain('Esc 一覧へ');
   });
 });
