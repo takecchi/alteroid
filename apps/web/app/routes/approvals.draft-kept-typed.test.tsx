@@ -241,7 +241,10 @@ describe('送っていない欄の下書きは、送った経路によらず残�
     expect(within(left).getByText('別に書いておいた文')).toBeTruthy();
     // 設問のフォームは送ったので畳まれ、残った文に選択肢は出ない。
     expect(within(left).queryByText(/選んだ/)).toBeNull();
-    expect(loadApprovalDrafts()).toEqual({ texts: { 'a-ask': '別に書いておいた文' }, questions: {} });
+    expect(loadApprovalDrafts()).toEqual({
+      texts: { 'a-ask': '別に書いておいた文' },
+      questions: {},
+    });
   });
 
   it('自由記述をそのまま送ったときは、従来どおり畳まれる', async () => {
