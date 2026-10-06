@@ -83,6 +83,7 @@ describe('/permissions 画面 — 一覧（既定は有効なものだけ）', (
     expect(screen.getByText('Bash(gh pr merge:*)')).toBeTruthy();
     expect(screen.getByText('grant-a')).toBeTruthy();
     expect(screen.getByText('有効')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Bash(gh pr merge:*) を取り消す' })).toBeTruthy();
   });
 
   it('取り消し済みは既定では隠れる', async () => {

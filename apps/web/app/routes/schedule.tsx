@@ -223,6 +223,7 @@ export default function Schedule() {
                 </div>
                 <Button
                   size="sm"
+                  aria-label={`${entry.kind} を今すぐ回す`}
                   loading={running.has(entry.kind)}
                   onClick={() => {
                     if (runningRef.current.has(entry.kind)) return;
@@ -266,12 +267,17 @@ export default function Schedule() {
                   </span>
                 ) : (
                   <>
-                    <Button size="sm" onClick={() => setEditing(entry.kind)}>
+                    <Button
+                      size="sm"
+                      aria-label={`${entry.kind} を編集`}
+                      onClick={() => setEditing(entry.kind)}
+                    >
                       編集
                     </Button>
                     <Button
                       size="sm"
                       variant="danger"
+                      aria-label={`${entry.kind} を外す`}
                       loading={removing === entry.kind}
                       onClick={() => setConfirmingRemove(entry.kind)}
                     >

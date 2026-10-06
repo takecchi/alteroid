@@ -20,6 +20,7 @@ import {
   AttachmentDraft,
   attachmentLinesOf,
   describeAttachment,
+  type DraftFile,
   uploadDraft,
 } from '../attachments.js';
 import type { ChatEvent, ConversationMessage, ConversationSummary, TuiApi } from './api.js';
@@ -55,7 +56,7 @@ export const initialChatState: ChatState = {
 const messageOf = redactedErrorMessage;
 
 /** 添えかけが無いときの結果（待たずに同期で進める。送信の前に非同期の隙間を作らない）。 */
-const NO_ATTACHMENTS = { ids: [] as string[], lines: [] as string[] };
+const NO_ATTACHMENTS = { ids: [] as string[], lines: [] as string[], files: [] as DraftFile[] };
 
 interface Deferred<T> {
   promise: Promise<T>;
@@ -155,10 +156,14 @@ export class ChatController {
 
   /**
    * 添えかけを上げて、id を返す（無ければ空配列）。**失敗したら `null`**（送らない。添えかけは残す）。
-   * 受けたら（`accepted()`）空にする。
+   * 受けたら、送った分（`files`）だけ空にする（待つあいだに足された分は残す。#3245）。
    */
-  private async uploadDraft(): Promise<{ ids: string[]; lines: string[] } | null> {
-    if (this.draft.count === 0) return { ids: [], lines: [] };
+  private async uploadDraft(): Promise<{
+    ids: string[];
+    lines: string[];
+    files: DraftFile[];
+  } | null> {
+    if (this.draft.count === 0) return NO_ATTACHMENTS;
     const result = await uploadDraft(this.draft, (file) => this.api.uploadAttachment(file));
     if (!result.ok) {
       this.addError(
@@ -169,6 +174,7 @@ export class ChatController {
     return {
       ids: result.uploaded.map((a) => a.id),
       lines: result.uploaded.map(describeAttachment),
+      files: result.files,
     };
   }
 
@@ -233,8 +239,8 @@ export class ChatController {
         },
         abort.signal,
       )) {
-        // サーバが発言を受けた（イベントが届いた）ので、添えかけは空にする。
-        if (attached.ids.length > 0) this.draft.clear();
+        // サーバが発言を受けた（イベントが届いた）ので、送った分の添えかけは外す（あとから足した分は残す）。
+        this.draft.discard(attached.files);
         reply.see(event);
         this.onEvent(event, opened);
       }
@@ -358,7 +364,7 @@ export class ChatController {
           },
           abort.signal,
         )) {
-          if (attached.ids.length > 0) this.draft.clear();
+          this.draft.discard(attached.files);
           if (event.type === 'open') break;
         }
       } finally {

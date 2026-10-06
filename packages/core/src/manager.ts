@@ -14508,7 +14508,23 @@ class Pool implements ManagerPool {
          */
         if (event.status === 'done' && !this.#withheldReports.has(event.managerId)) {
           const seen = reportSeenInSession(record.job.lastReportAt, record.job.runnerSessionSince);
-          if (seen !== 'seen') {
+          // **同じセッションについては1回だけ**（Issue #3233）。印は知らせを積んだときの
+          // `runnerSessionSince`。resume / start で新しいセッションになれば値が変わるので、
+          // 新しい終わりは従来どおり知らせる。`runnerSessionSince` がまだ無いセッションは空文字で印を打つ
+          // （`Job.silentDoneNotifiedFor` の doc）。
+          const sessionKey = record.job.runnerSessionSince ?? '';
+          const alreadyNotified = record.job.silentDoneNotifiedFor === sessionKey;
+          if (seen !== 'seen' && alreadyNotified) {
+            await this.#journal({
+              type: 'exchange',
+              with: 'manager',
+              role: 'inbound',
+              text:
+                `${EXCHANGE_KIND_DECISION_PREFIX}[${event.managerId}] report 無しの closed(done)。` +
+                `同じセッション（${sessionKey === '' ? '開始時刻は不明' : sessionKey}）については知らせ済みなので重ねて知らせない: ` +
+                event.reason,
+            });
+          } else if (seen !== 'seen') {
             const body = [
               `この委譲 ${event.managerId} は、report を出さないまま終わった（closed の status=done。台帳の状態は done）。`,
               '**成果が出ているとは限らない** — 成果が実際に出ているか' +
@@ -14531,6 +14547,9 @@ class Pool implements ManagerPool {
                 `（${seen === 'none' ? 'report は一度も受け取っていない' : '判定できないので知らせる側へ倒した'}）。` +
                 `クローンへ知らせる: ${body}`,
             });
+            // **印を先に台帳へ書く**（`lateDoneNotifiedAt` と同じ。本文は上で日誌へ残してある）。
+            record.job.silentDoneNotifiedFor = sessionKey;
+            await this.#persist(record);
             this.#queueSynthesizedNotice(event.managerId, 'closed_done_silent', body);
           }
         }

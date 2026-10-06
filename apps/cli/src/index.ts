@@ -1104,6 +1104,10 @@ integrationCommand
   .option('--expires <日時か期間>', '期限（例: 2027-01-01T00:00:00Z / 30d / 12h）。省略は無期限')
   .option('--max-body-bytes <N>', '本文の上限バイト（既定 1048576）')
   .option('--rate-per-minute <N>', '1分あたりの回数の上限（既定 60）')
+  .option(
+    '--json',
+    '整形せず、デーモンが返した JSON（key と value）だけを標準出力へ出す。警告は標準エラーへ（値はログに残さないこと）',
+  )
   .action(
     async (options: {
       name: string;
@@ -1111,6 +1115,7 @@ integrationCommand
       expires?: string;
       maxBodyBytes?: string;
       ratePerMinute?: string;
+      json?: boolean;
     }) => {
       await integrationCreateCommand(options);
     },

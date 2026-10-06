@@ -239,7 +239,12 @@ function RevokeControl({ grant }: { grant: PermissionGrant }) {
     <div className="mt-2 flex flex-col gap-2">
       <div className="flex flex-wrap items-center gap-2">
         {!confirming ? (
-          <Button variant="danger" size="sm" onClick={() => setConfirming(true)}>
+          <Button
+            variant="danger"
+            size="sm"
+            aria-label={`${grant.rule} を取り消す`}
+            onClick={() => setConfirming(true)}
+          >
             取り消す
           </Button>
         ) : (
@@ -248,7 +253,13 @@ function RevokeControl({ grant }: { grant: PermissionGrant }) {
               取り消すと、次の Bash
               呼び出しからその場で効く（戻すには、同じ規則をもう一度承認してもらう必要がある）。
             </span>
-            <Button variant="danger" size="sm" loading={busy} onClick={() => void run()}>
+            <Button
+              variant="danger"
+              size="sm"
+              loading={busy}
+              aria-label={`${grant.rule} を本当に取り消す`}
+              onClick={() => void run()}
+            >
               本当に取り消す
             </Button>
             <Button variant="ghost" size="sm" onClick={() => setConfirming(false)}>

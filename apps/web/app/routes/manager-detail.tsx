@@ -1478,6 +1478,14 @@ function SendOutcomeNote({ note }: { note: { text: string; reached: boolean } | 
  * **`kind === 'permission'` の見た目（許可／拒否の2ボタン）。1文字も変えて
  * いない**（`askedAtNote` の差し込みを除く。Issue #334 の指示どおり）。
  */
+const WAITING_LABEL_MAX = 20;
+
+/** 許可待ちの行の「許可」「拒否」の名前に入れる、依頼の頭の数文字（同じ名前のボタンが並ぶので行を区別する）。 */
+function waitingLabel(summary: string): string {
+  const flat = redactBody(summary).replace(/\s+/g, ' ').trim();
+  return `「${flat.length > WAITING_LABEL_MAX ? `${flat.slice(0, WAITING_LABEL_MAX)}…` : flat}」`;
+}
+
 function PermissionWaitingRow({
   id,
   requestId,
@@ -1526,6 +1534,7 @@ function PermissionWaitingRow({
           size="sm"
           variant="primary"
           loading={busy === 'allow'}
+          aria-label={`${waitingLabel(summary)}を許可`}
           disabled={busy === 'deny'}
           onClick={() => answer('allow')}
         >
@@ -1535,6 +1544,7 @@ function PermissionWaitingRow({
           size="sm"
           // 「拒否」は取り返しのつく操作なので danger にしない（#3091）。
           loading={busy === 'deny'}
+          aria-label={`${waitingLabel(summary)}を拒否`}
           disabled={busy === 'allow'}
           onClick={() => answer('deny')}
         >

@@ -172,12 +172,15 @@ describe('/profile 画面 — 読む', () => {
     expect(screen.getByText(/名前の辞書順/)).toBeTruthy();
     expect(document.body.textContent).not.toContain('very-secret-value');
 
-    fireEvent.click(screen.getAllByRole('button', { name: '本文を表示する' })[0]!);
+    expect(screen.getByRole('button', { name: 'base の本文を表示する' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'base を編集する' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'base の行を外す' })).toBeTruthy();
+    fireEvent.click(screen.getAllByRole('button', { name: / の本文を表示する$/ })[0]!);
     expect(screen.getByLabelText('プロファイルの行 base の本文').textContent).toContain(
       SECRET_LINE,
     );
 
-    fireEvent.click(screen.getByRole('button', { name: '本文を隠す' }));
+    fireEvent.click(screen.getByRole('button', { name: / の本文を隠す$/ }));
     expect(document.body.textContent).not.toContain('very-secret-value');
   });
 
@@ -186,7 +189,7 @@ describe('/profile 画面 — 読む', () => {
     renderScreen();
 
     expect(await screen.findByText('置かれていない')).toBeTruthy();
-    expect(screen.queryByRole('button', { name: '本文を表示する' })).toBeNull();
+    expect(screen.queryByRole('button', { name: / の本文を表示する$/ })).toBeNull();
     expect(screen.getByRole('button', { name: '行を追加する' })).toBeTruthy();
   });
 
@@ -231,7 +234,7 @@ describe('/profile 画面 — 行を置く', () => {
     stubProfile();
     renderScreen();
 
-    fireEvent.click((await screen.findAllByRole('button', { name: '編集する' }))[1]!);
+    fireEvent.click((await screen.findAllByRole('button', { name: / を編集する$/ }))[1]!);
 
     expect(screen.getByLabelText<HTMLTextAreaElement>('プロファイルの新しい本文').value).toBe(
       RUST.script,
@@ -358,7 +361,7 @@ describe('/profile 画面 — 行を置く', () => {
     stubProfile();
     renderScreen();
 
-    fireEvent.click((await screen.findAllByRole('button', { name: '編集する' }))[0]!);
+    fireEvent.click((await screen.findAllByRole('button', { name: / を編集する$/ }))[0]!);
     expect(screen.getByRole('button', { name: '保存する' }).hasAttribute('disabled')).toBe(true);
 
     fireEvent.change(screen.getByLabelText('プロファイルの渡す先'), { target: { value: 'app' } });
@@ -370,7 +373,7 @@ describe('/profile 画面 — 行を置く', () => {
     const { puts } = stubProfile();
     renderScreen();
 
-    fireEvent.click((await screen.findAllByRole('button', { name: '編集する' }))[0]!);
+    fireEvent.click((await screen.findAllByRole('button', { name: / を編集する$/ }))[0]!);
     fireEvent.change(screen.getByLabelText('プロファイルの新しい本文'), {
       target: { value: 'export A=1\n' },
     });
@@ -393,7 +396,7 @@ describe('/profile 画面 — 行を置く', () => {
     });
     renderScreen();
 
-    fireEvent.click((await screen.findAllByRole('button', { name: '編集する' }))[0]!);
+    fireEvent.click((await screen.findAllByRole('button', { name: / を編集する$/ }))[0]!);
     fireEvent.change(screen.getByLabelText('プロファイルの新しい本文'), {
       target: { value: 'export (\n' },
     });
@@ -422,7 +425,7 @@ describe('/profile 画面 — 行を置く', () => {
     });
     renderScreen();
 
-    fireEvent.click((await screen.findAllByRole('button', { name: '編集する' }))[0]!);
+    fireEvent.click((await screen.findAllByRole('button', { name: / を編集する$/ }))[0]!);
     fireEvent.change(screen.getByLabelText('プロファイルの新しい本文'), {
       target: { value: 'export A=1\n' },
     });
@@ -447,14 +450,14 @@ describe('/profile 画面 — 編集する行を切り替える', () => {
     const { puts } = stubProfile();
     renderScreen();
 
-    fireEvent.click((await screen.findAllByRole('button', { name: '編集する' }))[0]!);
+    fireEvent.click((await screen.findAllByRole('button', { name: / を編集する$/ }))[0]!);
     fireEvent.change(screen.getByLabelText('プロファイルの新しい本文'), {
       target: { value: 'export A=1\n' },
     });
     fireEvent.click(screen.getByRole('button', { name: '保存する' }));
     expect(screen.getByRole('button', { name: '本当に保存する' })).toBeTruthy();
 
-    fireEvent.click(screen.getAllByRole('button', { name: '編集する' })[1]!);
+    fireEvent.click(screen.getAllByRole('button', { name: / を編集する$/ })[1]!);
 
     expect(screen.queryByRole('button', { name: '本当に保存する' })).toBeNull();
     expect(screen.getByRole('button', { name: '保存する' })).toBeTruthy();
@@ -467,7 +470,7 @@ describe('/profile 画面 — 編集する行を切り替える', () => {
     });
     renderScreen();
 
-    fireEvent.click((await screen.findAllByRole('button', { name: '編集する' }))[0]!);
+    fireEvent.click((await screen.findAllByRole('button', { name: / を編集する$/ }))[0]!);
     fireEvent.change(screen.getByLabelText('プロファイルの新しい本文'), {
       target: { value: 'export (\n' },
     });
@@ -475,7 +478,7 @@ describe('/profile 画面 — 編集する行を切り替える', () => {
     fireEvent.click(screen.getByRole('button', { name: '本当に保存する' }));
     expect(await screen.findByText('プロファイルが読めなかったので保存していない')).toBeTruthy();
 
-    fireEvent.click(screen.getAllByRole('button', { name: '編集する' })[1]!);
+    fireEvent.click(screen.getAllByRole('button', { name: / を編集する$/ })[1]!);
 
     expect(screen.queryByText('プロファイルが読めなかったので保存していない')).toBeNull();
   });
@@ -495,7 +498,7 @@ describe('/profile 画面 — 保存中に別の行へ切り替える', () => {
     const { puts } = stubProfile({ putGate: promise });
     renderScreen();
 
-    fireEvent.click((await screen.findAllByRole('button', { name: '編集する' }))[0]!);
+    fireEvent.click((await screen.findAllByRole('button', { name: / を編集する$/ }))[0]!);
     fireEvent.change(screen.getByLabelText('プロファイルの新しい本文'), {
       target: { value: 'export A=1\n' },
     });
@@ -503,7 +506,7 @@ describe('/profile 画面 — 保存中に別の行へ切り替える', () => {
     fireEvent.click(screen.getByRole('button', { name: '本当に保存する' }));
     await vi.waitFor(() => expect(puts).toHaveLength(1));
 
-    fireEvent.click(screen.getAllByRole('button', { name: '編集する' })[1]!);
+    fireEvent.click(screen.getAllByRole('button', { name: / を編集する$/ })[1]!);
     fireEvent.change(screen.getByLabelText('プロファイルの新しい本文'), {
       target: { value: 'export DRAFT=2\n' },
     });
@@ -531,7 +534,7 @@ describe('/profile 画面 — 保存中に別の行へ切り替える', () => {
     fireEvent.click(screen.getByRole('button', { name: '本当に保存する' }));
     await vi.waitFor(() => expect(puts).toHaveLength(1));
 
-    fireEvent.click(screen.getAllByRole('button', { name: '編集する' })[0]!);
+    fireEvent.click(screen.getAllByRole('button', { name: / を編集する$/ })[0]!);
     fireEvent.change(screen.getByLabelText('プロファイルの新しい本文'), {
       target: { value: 'export DRAFT=3\n' },
     });
@@ -547,7 +550,7 @@ describe('/profile 画面 — 保存中に別の行へ切り替える', () => {
     stubProfile();
     renderScreen();
 
-    fireEvent.click((await screen.findAllByRole('button', { name: '編集する' }))[0]!);
+    fireEvent.click((await screen.findAllByRole('button', { name: / を編集する$/ }))[0]!);
     fireEvent.change(screen.getByLabelText('プロファイルの新しい本文'), {
       target: { value: 'export A=1\n' },
     });
@@ -564,9 +567,9 @@ describe('/profile 画面 — 行を外す', () => {
     const { deletes } = stubProfile();
     renderScreen();
 
-    fireEvent.click((await screen.findAllByRole('button', { name: 'この行を外す' }))[1]!);
+    fireEvent.click((await screen.findAllByRole('button', { name: / の行を外す$/ }))[1]!);
     expect(deletes).toEqual([]);
-    fireEvent.click(screen.getByRole('button', { name: '本当に外す' }));
+    fireEvent.click(screen.getByRole('button', { name: / の行を本当に外す$/ }));
 
     expect(await screen.findByText(/プロファイルの行 rust を外した。/)).toBeTruthy();
     expect(deletes).toEqual(['rust']);
@@ -576,11 +579,11 @@ describe('/profile 画面 — 行を外す', () => {
     const { deletes } = stubProfile();
     renderScreen();
 
-    fireEvent.click((await screen.findAllByRole('button', { name: 'この行を外す' }))[0]!);
+    fireEvent.click((await screen.findAllByRole('button', { name: / の行を外す$/ }))[0]!);
     fireEvent.click(screen.getByRole('button', { name: '外すのをやめる' }));
 
     expect(deletes).toEqual([]);
-    expect(screen.queryByRole('button', { name: '本当に外す' })).toBeNull();
+    expect(screen.queryByRole('button', { name: / の行を本当に外す$/ })).toBeNull();
   });
 });
 
@@ -637,7 +640,7 @@ describe('/profile 画面 — 古いデーモン（旧形式の応答）', () =>
     expect(screen.getByText(/o{12}/)).toBeTruthy();
     // 本文は今までどおり、押すまで出さない。押せば1文字も欠けずに見える。
     expect(document.body.textContent).not.toContain('very-secret-value');
-    fireEvent.click(screen.getByRole('button', { name: '本文を表示する' }));
+    fireEvent.click(screen.getByRole('button', { name: / の本文を表示する$/ }));
     expect(screen.getByLabelText('プロファイルの行 default の本文').textContent).toContain(
       SECRET_LINE,
     );
@@ -648,7 +651,7 @@ describe('/profile 画面 — 古いデーモン（旧形式の応答）', () =>
     renderScreen();
 
     await screen.findByText('default');
-    expect(screen.queryByRole('button', { name: 'この行を外す' })).toBeNull();
+    expect(screen.queryByRole('button', { name: / の行を外す$/ })).toBeNull();
     // default が既に在るので、行の追加ボタンも出ない。
     expect(screen.queryByRole('button', { name: '行を追加する' })).toBeNull();
   });
@@ -657,7 +660,7 @@ describe('/profile 画面 — 古いデーモン（旧形式の応答）', () =>
     const { calls } = stubOldDaemon();
     renderScreen();
 
-    fireEvent.click(await screen.findByRole('button', { name: '編集する' }));
+    fireEvent.click(await screen.findByRole('button', { name: / を編集する$/ }));
     expect(screen.getByLabelText<HTMLInputElement>('プロファイルの行の名前').disabled).toBe(true);
     expect(screen.getByLabelText<HTMLSelectElement>('プロファイルの渡す先').disabled).toBe(true);
     const next = 'export NEW=1\n';
