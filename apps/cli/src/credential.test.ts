@@ -214,6 +214,34 @@ describe('alteroid credential list', () => {
 });
 
 describe('alteroid credential set', () => {
+  it('一部の runner へ降ろせなかったら、成功の見出しを出さず警告にして例外にする（#3157）', async () => {
+    const path = join(dir, 'value.txt');
+    await writeFile(path, DUMMY, 'utf8');
+    setReply('PUT', '/credentials', {
+      status: 200,
+      body: {
+        credentials: [{ name: 'NPM_TOKEN', sha256: 'cccccccccccc', updatedAt: 'now' }],
+        runners: [
+          { runnerId: 'runner-1', ok: true },
+          { runnerId: 'runner-2', ok: false, error: 'つながらない' },
+        ],
+      },
+    });
+    const read = captureStdout();
+
+    await expect(credentialSetCommand('NPM_TOKEN', { file: path })).rejects.toThrow(
+      'runner への反映が一部失敗しました',
+    );
+
+    const text = read();
+    expect(text).toContain(
+      '警告: NPM_TOKEN は正本に置きましたが、一部の runner へ反映できていません',
+    );
+    expect(text).not.toContain('NPM_TOKEN を置きました');
+    expect(text).toContain('runner-1: 降ろしました');
+    expect(text).toContain('runner-2: 降ろせませんでした');
+  });
+
   it('値をファイルから読んで PUT する（末尾の改行は落とす）', async () => {
     const path = join(dir, 'value.txt');
     await writeFile(path, `${DUMMY}\n`, 'utf8');
@@ -453,9 +481,15 @@ describe('alteroid credential remove', () => {
     });
     const read = captureStdout();
 
-    await credentialRemoveCommand('NPM_TOKEN');
+    await expect(credentialRemoveCommand('NPM_TOKEN')).rejects.toThrow(
+      'runner への反映が一部失敗しました',
+    );
 
     const text = read();
+    expect(text).toContain(
+      '警告: NPM_TOKEN は正本から外しましたが、一部の runner へ反映できていません',
+    );
+    expect(text).not.toContain('NPM_TOKEN を外しました');
     expect(text).toContain('runner-broken: 降ろせませんでした');
     expect(text).toContain('次に名乗ったときに追いつきます');
     expect(text).toContain('つながらない');

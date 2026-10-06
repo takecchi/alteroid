@@ -1,6 +1,7 @@
 import { stdin, stdout } from 'node:process';
 
 import { CREDENTIAL_NAME } from '@alteroid/core/cli-light';
+import { hasRunnerPushFailure } from '@alteroid/logic';
 
 import { describeAuthFailure, forbiddenKindOf, resolveTarget, type Target } from './target.js';
 import { redactError } from './redact.js';
@@ -156,8 +157,13 @@ export async function credentialSetCommand(
       ...(options.secret === undefined ? {} : { secret: options.secret }),
     },
   ])) as CredentialsUpdateView;
-  stdout.write(`${name} を置きました。\n`);
+  stdout.write(
+    hasRunnerPushFailure(view)
+      ? `警告: ${name} は正本に置きましたが、一部の runner へ反映できていません。\n`
+      : `${name} を置きました。\n`,
+  );
   reportRunners(view);
+  failOnPartialPush(view);
 }
 
 export async function credentialRemoveCommand(name: string): Promise<void> {
@@ -176,8 +182,24 @@ export async function credentialRemoveCommand(name: string): Promise<void> {
 
   // 空文字が「外す」である（`PUT /credentials` の doc）。
   const view = (await put(target, [{ name, value: '' }])) as CredentialsUpdateView;
-  stdout.write(`${name} を外しました。\n`);
+  stdout.write(
+    hasRunnerPushFailure(view)
+      ? `警告: ${name} は正本から外しましたが、一部の runner へ反映できていません。\n`
+      : `${name} を外しました。\n`,
+  );
   reportRunners(view);
+  failOnPartialPush(view);
+}
+
+/**
+ * 一部の runner へ反映できていなければ、見出しと台ごとの結果を出した**後で**例外にする
+ * （`index.ts` が stderr へ出して終了コード 1。正本への保存は済んでいる）。
+ */
+function failOnPartialPush(view: CredentialsUpdateView): void {
+  if (!hasRunnerPushFailure(view)) return;
+  throw new Error(
+    'runner への反映が一部失敗しました（正本への保存は済んでいます。失敗した runner へは次に名乗ったときに降ろし直します）',
+  );
 }
 
 /** 配布の結果を台ごとに出す。**畳んで1つの成否にしない。** */
