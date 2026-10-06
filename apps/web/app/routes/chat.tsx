@@ -627,8 +627,8 @@ export default function Chat({ loaderData }: Route.ComponentProps) {
  * **広い画面では脇に、狭い画面ではドロワーの中に、同じものを置く**（`shell.tsx`
  * の `Nav` と同じ形）。別々に書くと、一覧に何か足したときに片方だけ増える。
  */
-/** 会話の一覧が一度に読む件数の段（`GET /conversations` の `limit` は最大 200）。 */
-const CONVERSATION_LIMITS = [30, 60, 90, 120, 150, 200] as const;
+/** 会話の一覧が 1 頁で読む件数（`GET /conversations` の `limit`）。続きは継続点（`nextCursor`）で足す。 */
+const CONVERSATION_PAGE_SIZE = 30;
 
 function ConversationList({
   activeId,
@@ -644,17 +644,19 @@ function ConversationList({
   onNavigate?: (() => void) | undefined;
 }) {
   /*
-   * 「もっと見る」（#3404）。押すたびに `limit` を段で増やし（上限は API の 200）、取り直す。
+   * 「もっと見る」（#3404 → #3550）。押すたびに 1 頁（30 件）ぶん多く、**継続点（`nextCursor`）で
+   * 続きを足す**。`limit` の上限（200）や `scan` の窓の外の会話にも辿れる。
    * **取り直しの間も、失敗したときも、直前の一覧を残す**（`keepPreviousData`）。
-   * 失敗は画面の上の `ErrorNote` ではなく、一覧の下に小さく言う。もう一度押せば同じ段を取り直す。
+   * 失敗は画面の上の `ErrorNote` ではなく、一覧の下に小さく言う。もう一度押せば同じ頁を取り直す。
+   * 続き（`nextCursor`）が無ければボタンを出さない。
    */
-  const [step, setStep] = useState(0);
-  const limit = CONVERSATION_LIMITS[step] ?? 30;
-  const { data, error, isLoading, isValidating, mutate } = useConversations(limit, {
-    keepPreviousData: true,
-  });
-  const loadingMore = step > 0 && isValidating;
-  const moreFailing = step > 0 && error !== undefined && !isValidating;
+  const [pages, setPages] = useState(1);
+  const { data, error, isLoading, isValidating, mutate } = useConversations(
+    CONVERSATION_PAGE_SIZE,
+    { keepPreviousData: true, pages },
+  );
+  const loadingMore = pages > 1 && isValidating;
+  const moreFailing = pages > 1 && error !== undefined && !isValidating;
 
   /*
    * 但し書きを組み立てるのは画面の側（`ConversationList` の `notes`）。出す条件は
@@ -685,7 +687,8 @@ function ConversationList({
    * 語彙はクローンの道具（`tools.ts` の「…ほか N 件は省略」）に寄せる。
    * `reachedStart` とは別の条件なので、両方出ることも片方だけのこともある。
    */
-  if (data !== undefined && data.hiddenByLimit > 0) {
+  if (data !== undefined && data.hiddenByLimit > 0 && data.nextCursor === undefined) {
+    // 続き（`nextCursor`）を返さない古いデーモンのとき。続きがあるなら、下の「もっと見る」が言う。
     notes.push(
       `…ほか ${data.hiddenByLimit} 件は省略（この窓に ${data.conversations.length + data.hiddenByLimit} 件あり、新しい順に ${data.conversations.length} 件だけ出した）。`,
     );
@@ -698,20 +701,19 @@ function ConversationList({
         preview: conversation.preview,
         updatedLabel: formatRelative(conversation.updatedAt),
         messages: conversation.messages,
-        messagesAtLeast: data.reachedStart === false,
+        messagesAtLeast: data.windowsComplete === false,
         unread: conversation.unreadCount,
       }))}
       activeId={activeId}
-      loading={isLoading}
-      error={step > 0 && data !== undefined ? undefined : error}
+      // 続きを取っている間は、直前の一覧を残す（`keepPreviousData` でも `isLoading` は真になる）。
+      loading={isLoading && data === undefined}
+      error={pages > 1 && data !== undefined ? undefined : error}
       more={
-        data !== undefined &&
-        data.hiddenByLimit > 0 &&
-        (step < CONVERSATION_LIMITS.length - 1 || moreFailing)
+        data !== undefined && (data.nextCursor !== undefined || moreFailing)
           ? {
               onClick: () => {
                 if (moreFailing) void mutate();
-                else setStep((current) => current + 1);
+                else setPages((current) => current + 1);
               },
               loading: loadingMore,
               ...(moreFailing ? { error } : {}),

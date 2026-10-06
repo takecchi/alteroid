@@ -121,7 +121,9 @@ export type PracticeVersionSummary = Ok<
 >['versions'][number];
 export type PracticeVersion = Ok<paths['/practices/{slug}/versions/{version}']['get']>['version'];
 
-export type ConversationSummary = Ok<paths['/conversations']['get']>['conversations'][number];
+/** `GET /conversations` の応答（1頁ぶん）。 */
+export type ConversationsResponse = Ok<paths['/conversations']['get']>;
+export type ConversationSummary = ConversationsResponse['conversations'][number];
 export type ConversationDetail = Ok<paths['/conversations/{id}']['get']>;
 export type ConversationMessage = ConversationDetail['messages'][number];
 /** デーモンの添付の上限（`GET /attachments/limits`。先行検査に使う。#3204）。 */

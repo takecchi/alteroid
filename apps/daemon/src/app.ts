@@ -62,7 +62,6 @@ import {
   UnreadablePracticeError,
   approvalUpdatedAt,
   chatStreamEventSchema,
-  collectConversations,
   countUnread,
   countUnreadConversations,
   effectiveReadThrough,
