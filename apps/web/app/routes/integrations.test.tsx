@@ -218,6 +218,28 @@ describe('/integrations 画面 — 発行', () => {
     expect(document.body.textContent).not.toContain(SECRET_VALUE);
   });
 
+  it('名前が 200 文字を超えたら、黙って切らず欄の下で言い、送らない（CLI と同じ上限）', async () => {
+    const stub = stubKeys();
+    renderScreen();
+    await screen.findByText('CI');
+    const long = 'あ'.repeat(201);
+    fill('名前（見分けるための呼び名）', long);
+    fill('source', 'new.src');
+    // 黙って切らない。
+    expect(screen.getByLabelText<HTMLInputElement>('名前（見分けるための呼び名）').value).toBe(
+      long,
+    );
+    expect(screen.getByText(/名前は 1〜200 文字で指定してください/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: '発行する' }));
+    expect(stub.posts).toEqual([]);
+    // 200 文字ちょうどなら言わず、送れる。
+    fill('名前（見分けるための呼び名）', 'あ'.repeat(200));
+    expect(screen.queryByText(/名前は 1〜200 文字で指定してください/)).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: '発行する' }));
+    await screen.findByText(/発行した:/);
+    expect(stub.posts).toHaveLength(1);
+  });
+
   it('期限と上限の上書きを送る。上限の既定は畳んだ欄に出す', async () => {
     const stub = stubKeys();
     renderScreen();

@@ -204,6 +204,7 @@ export function renderIntegrationCreated(
     `    -H "Authorization: Bearer $ALTEROID_INTEGRATION_KEY" \\`,
     `    -H "Content-Type: application/json" \\`,
     `    -d '{"message":"hello"}'`,
+    `  （${baseUrl} は、この端末から見える接続先です。外のサービスから届く値とは限らないので、渡す先の設定には自分の公開 URL に置き換えてください）`,
     '',
     `失効するには: alteroid integration revoke ${key.id}`,
   ];

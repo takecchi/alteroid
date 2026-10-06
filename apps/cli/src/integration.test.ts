@@ -145,6 +145,8 @@ describe('integration create', () => {
     expect(text).toContain('二度と表示されません');
     expect(text).toContain('curl -X POST http://127.0.0.1:4517/events/ci.main');
     expect(text).toContain('Authorization: Bearer $ALTEROID_INTEGRATION_KEY');
+    // 接続先は外のサービスから届く値とは限らない（#3210）。例であることを添える。
+    expect(text).toContain('自分の公開 URL に置き換えてください');
     expect(sent).toEqual([
       { method: 'POST', path: '/integration-keys', body: { name: 'CI', source: 'ci.main' } },
     ]);
