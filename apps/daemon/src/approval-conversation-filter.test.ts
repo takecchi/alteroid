@@ -52,8 +52,14 @@ const GOOD: PendingApproval[] = [
   approval('a4', 6, 'conv-a'),
 ];
 
-// 読めない行（版ずれ）。会話では絞られず、どの呼びにも載る。
+// 読めない行（版ずれ）。会話で絞ると、生の `conversationId` が一致するものだけが載り（#3319）、
+// 絞らない呼びには全件が載る。
 const BAD_RAW = { id: 'ap-bad', createdAt: 'not-a-date', question: 'x', conversationId: 'conv-a' };
+const BAD_OTHER_CONV = { ...BAD_RAW, id: 'ap-bad-other', conversationId: 'conv-b' };
+// 会話の id すら読めない行（欠けている／文字列でない）。
+const BAD_NO_CONV = { id: 'ap-bad-noconv', createdAt: 'not-a-date', question: 'x' };
+const BAD_NUM_CONV = { ...BAD_RAW, id: 'ap-bad-num', conversationId: 5 };
+const BAD_ROWS = [BAD_RAW, BAD_OTHER_CONV, BAD_NO_CONV, BAD_NUM_CONV];
 
 function fakeCloneHost(stores: Stores): CloneHost {
   return {
@@ -102,10 +108,10 @@ const ids = (body: Body): string[] => body.approvals.map((a) => a.id);
 
 /** 3実装で同じでなければならない確認。`withBad` は読めない行が入っているか。 */
 async function expectSameResponses(stores: Stores, withBad: boolean): Promise<void> {
-  const unreadable = withBad ? [expect.objectContaining({ id: 'ap-bad' })] : undefined;
-  const check = (body: Body): void => {
-    // 読めない行は会話で絞らない（どの呼びにも載る。`limit` / `cursor` でも切らない）。
-    expect(body.unreadable).toEqual(unreadable);
+  // 会話で絞った `unreadable` は、生の `conversationId` が一致する行だけ（#3319。
+  // `limit` / `cursor` では切れない）。一致する行が無ければ鍵ごと無い。
+  const check = (body: Body, ...bad: string[]): void => {
+    expect(body.unreadable?.map((u) => u.id)).toEqual(withBad && bad.length > 0 ? bad : undefined);
   };
 
   // 既定（pending=true・opt-in なし）: 鍵は approvals（と unreadable）だけ。total は載らない。
@@ -113,21 +119,21 @@ async function expectSameResponses(stores: Stores, withBad: boolean): Promise<vo
   expect(ids(dflt)).toEqual(['a1', 'a3', 'a4']);
   expect('total' in dflt).toBe(false);
   expect('nextCursor' in dflt).toBe(false);
-  check(dflt);
+  check(dflt, 'ap-bad');
 
   // pending=false: 回答済みも含む。total は絞ったあとの件数（全件の 6 ではなく 4）。
   const all = await get(stores, '?conversationId=conv-a&pending=false&order=asc');
   expect(ids(all)).toEqual(['a1', 'a2', 'a3', 'a4']);
   expect(all.total).toBe(4);
   expect('nextCursor' in all).toBe(false);
-  check(all);
+  check(all, 'ap-bad');
 
   // desc + limit: nextCursor で辿る。total は頁をまたいでも絞ったあとの件数。
   const d1 = await get(stores, '?conversationId=conv-a&pending=false&order=desc&limit=3');
   expect(ids(d1)).toEqual(['a4', 'a3', 'a2']);
   expect(d1.total).toBe(4);
   expect(d1.nextCursor).toBeDefined();
-  check(d1);
+  check(d1, 'ap-bad');
   const d2 = await get(
     stores,
     `?conversationId=conv-a&pending=false&order=desc&limit=3&cursor=${encodeURIComponent(d1.nextCursor ?? '')}`,
@@ -135,7 +141,7 @@ async function expectSameResponses(stores: Stores, withBad: boolean): Promise<vo
   expect(ids(d2)).toEqual(['a1']);
   expect(d2.total).toBe(4);
   expect('nextCursor' in d2).toBe(false);
-  check(d2);
+  check(d2, 'ap-bad');
 
   // pending=true + asc + limit: 回答済みを除いた 3 件の集合で数える。
   const p1 = await get(stores, '?conversationId=conv-a&order=asc&limit=2');
@@ -154,6 +160,7 @@ async function expectSameResponses(stores: Stores, withBad: boolean): Promise<vo
   const b = await get(stores, '?conversationId=conv-b&order=asc');
   expect(ids(b)).toEqual(['b1']);
   expect(b.total).toBe(1);
+  check(b, 'ap-bad-other');
   const none = await get(stores, '?conversationId=conv-nothing&order=asc&limit=5');
   expect(ids(none)).toEqual([]);
   expect(none.total).toBe(0);
@@ -163,6 +170,10 @@ async function expectSameResponses(stores: Stores, withBad: boolean): Promise<vo
   const unfiltered = await get(stores, '?pending=false&order=asc');
   expect(ids(unfiltered)).toEqual(['a1', 'b1', 'a2', 'none1', 'a3', 'a4']);
   expect(unfiltered.total).toBe(6);
+  // 絞らない呼び（承認の画面）は、読めない行を全件返す。
+  expect(unfiltered.unreadable?.map((u) => u.id).sort()).toEqual(
+    withBad ? ['ap-bad', 'ap-bad-noconv', 'ap-bad-num', 'ap-bad-other'] : undefined,
+  );
 }
 
 beforeAll(async () => {
@@ -183,7 +194,7 @@ describe('GET /approvals の conversationId — ストアの側の絞り（#3290
     // 読めない行は先頭に置く（絞りに関係なく載る）。
     await writeFile(
       join(dir, 'jobs.json'),
-      `${JSON.stringify({ jobs: [], approvals: [BAD_RAW, ...GOOD] }, null, 2)}\n`,
+      `${JSON.stringify({ jobs: [], approvals: [...BAD_ROWS, ...GOOD] }, null, 2)}\n`,
     );
     await captureStderr(async () => {
       await expectSameResponses(createFsStores(root), true);
@@ -201,13 +212,15 @@ describe('GET /approvals の conversationId — ストアの側の絞り（#3290
       ({ client, db } = await createMigratedPglite());
       const stores = createPgStoresFromDb(db);
       for (const a of GOOD) await stores.jobs.putApproval(a);
-      await db.insert(tables.approvals).values({
-        id: BAD_RAW.id,
-        createdAt: new Date(T(0)),
-        answeredAt: null,
-        withdrawnAt: null,
-        approval: BAD_RAW,
-      });
+      for (const raw of BAD_ROWS) {
+        await db.insert(tables.approvals).values({
+          id: raw.id,
+          createdAt: new Date(T(0)),
+          answeredAt: null,
+          withdrawnAt: null,
+          approval: raw,
+        });
+      }
       await captureStderr(async () => {
         await expectSameResponses(stores, true);
       });
