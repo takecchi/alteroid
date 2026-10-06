@@ -16,6 +16,8 @@ export interface AlteroidPaths {
   jobs: string;
   /** セッション生ログのアーカイブ: JSONL */
   archive: string;
+  /** 添付ファイル: `<id>/meta.json` と `<id>/data`（#3111 段1a）。memory とは独立 */
+  attachments: string;
   /** クローンのセッション id など、デーモンの状態 */
   state: string;
   /**
@@ -88,6 +90,7 @@ export function resolvePaths(root: string = defaultRoot()): AlteroidPaths {
     journal: join(root, 'journal'),
     jobs: join(root, 'jobs'),
     archive: join(root, 'archive'),
+    attachments: join(root, 'attachments'),
     state: join(root, 'state'),
     auth: join(root, 'auth'),
     profile: join(root, 'profile.sh'),

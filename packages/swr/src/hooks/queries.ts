@@ -317,12 +317,19 @@ export function useConversationApprovals(conversationId: string | null) {
  */
 export function useCommitments(includeClosed = false) {
   const api = useApi();
-  return useSWR(KEY.commitments(includeClosed), ({ includeClosed }) =>
-    api.api
-      .GET('/commitments', {
-        params: { query: { includeClosed: includeClosed ? 'true' : 'false' } },
-      })
-      .then(unwrap),
+  return useSWR(
+    KEY.commitments(includeClosed),
+    ({ includeClosed }) =>
+      api.api
+        .GET('/commitments', {
+          params: { query: { includeClosed: includeClosed ? 'true' : 'false' } },
+        })
+        .then(unwrap),
+    // **`includeClosed` を切り替えて別キーになっても、前の一覧を出したままにする（#3074）。**
+    // 初回は `data` が無く `isLoading` が真になり、画面が一覧をスピナーに置き換えると、
+    // 未了の行の書きかけ（本文の下書き・片付ける理由）が unmount で黙って消える。
+    // 前のキーのデータは読み込み中だけ `data` に載る（`isValidating` は真のまま）。
+    { keepPreviousData: true },
   );
 }
 

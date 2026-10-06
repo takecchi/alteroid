@@ -1,4 +1,5 @@
 import {
+  compareIsoInstant,
   createUnreadableRowOnce,
   hasNul,
   permissionGrantSchema,
@@ -291,8 +292,10 @@ export class PgPermissionGrantStore implements PermissionGrantStore {
       const current = parsed.data;
       // 取り消し済みなら記録しない（Issue #1687）。
       if (current.revokedAt !== undefined) return false;
-      // 既存より古い時刻では戻さない。
-      if (current.lastUsedAt !== undefined && current.lastUsedAt >= at) return true;
+      // 既存より古い時刻では戻さない。実時刻で比べる（Issue #3095。文字列で比べると、
+      // オフセット表記の `lastUsedAt` より実時刻で後の `Z` の時刻が「古い」と読まれる）。
+      if (current.lastUsedAt !== undefined && compareIsoInstant(current.lastUsedAt, at) >= 0)
+        return true;
 
       const next = permissionGrantSchema.parse({ ...current, lastUsedAt: at });
       await tx.update(permissionGrants).set({ record: next }).where(eq(permissionGrants.id, id));

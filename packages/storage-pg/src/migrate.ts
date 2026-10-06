@@ -781,6 +781,20 @@ export const STATEMENTS = [
      conversation_id text primary key,
      at timestamptz not null
    )`,
+  // 添付ファイル（#3111 段1a）。新しい表と索引だけで、既存行の意味は変わらない。
+  `create table if not exists attachments (
+     id text primary key,
+     sha256 text not null,
+     media_type text not null,
+     name text not null,
+     size bigint not null,
+     bytes bytea not null,
+     conversation_id text,
+     created_at timestamptz not null,
+     expires_at timestamptz not null
+   )`,
+  `create index if not exists attachments_expires_at_idx on attachments (expires_at)`,
+  `create index if not exists attachments_created_at_idx on attachments (created_at)`,
 ] as const;
 
 /** `ensureOpenManagerBodyIndex` が作る部分 unique 索引の名前（issue #1041）。 */

@@ -5502,6 +5502,27 @@ class Pool implements ManagerPool {
    */
   readonly #relocationRefusals = new Map<string, Set<string>>();
   /**
+   * **別の runner へ移す resume を投げている最中の、移送先**（`managerId` → 移送先の `runnerId`。
+   * Issue #3097）。`#reattach` が `relocating` のときだけ resume の前に立て、結果が出たら必ず外す。
+   *
+   * 要るのは `case 'closed'` の「移った後の古い出来事を捨てる」判定が、`job.runnerId` が
+   * 移送先へ書き換わる（`#resume` が resume の応答を受けた後）まで効かないからである。
+   * その窓に元の runner の遅れた `closed(lost)` が届くと、台帳が `lost` になり、`#reattach` は
+   * `status === 'lost'` で抜けるので `running` / 移送先が persist されない（移送先では走っているのに）。
+   * **`#resuming` を流用しない**——あちらは「誰が resume しているか」を持たず、移送先を知る材料が無い。
+   */
+  readonly #relocatingTo = new Map<string, string>();
+  /**
+   * 上の窓の間に届いた、移送先以外の runner からの `closed`（届いた順）。**捨てずに預かる**：
+   * 移送が受理されれば古い世代の出来事として日誌にだけ残して捨て、移送が失敗したなら
+   * （どこにも移れなかった＝元の runner の lost は事実のまま）従来どおり処理し直す
+   * （`#endRelocationWindow`）。
+   */
+  readonly #deferredClosed = new Map<
+    string,
+    { event: Extract<RunnerEvent, { type: 'closed' }>; fromRunnerId: string }[]
+  >();
+  /**
    * 直近の resume が「生きていた旧プロセスへ流しただけ」だったマネージャー（#2877。
    * `runnerSessionOpenResultSchema.reusedLiveSession`）。`send()` が detail で言うための控えで、
    * 次の resume が新しい SDK を起こした回に消える。
@@ -10448,7 +10469,18 @@ class Pool implements ManagerPool {
           // **由来を上書きする（格上げ）**（#579。`send()` と同じ形——ここを
           // 抜けて印が残っている ⟺ resume でも入り直せなかった）。
           record.sessionMissingKind = 'resume-failed';
-          const outcome = await this.#resumeOnce(record, runner, message);
+          // **移送の resume が飛んでいる間、移送先を立てる**（`#relocatingTo` の doc）。
+          // 別の契機が resume 中（`#resuming`）なら窓は持たない（そちらの窓を壊さない）。
+          const ownsWindow = relocating && !this.#resuming.has(job.id);
+          if (ownsWindow) this.#relocatingTo.set(job.id, runnerId);
+          let outcome: ResumeOutcome;
+          try {
+            outcome = await this.#resumeOnce(record, runner, message);
+          } catch (resumeError) {
+            if (ownsWindow) await this.#endRelocationWindow(job.id, false);
+            throw resumeError;
+          }
+          if (ownsWindow) await this.#endRelocationWindow(job.id, outcome === 'resumed');
           // **引けなかっただけなら諦めない。** 予約して挑み直す（`retry` は runner
           // 単位の予約であって、`#unresumable` のようにこのジョブを恒久に降ろす
           // ものではない）。ここを `continue` だけで済ませると、次の名乗り
@@ -10882,6 +10914,36 @@ class Pool implements ManagerPool {
     // 数が上限なので無限にはならない）。
     for (const candidate of remaining) this.#scheduleReattach(candidate);
     return exhausted;
+  }
+
+  /**
+   * 移送の resume の結果が出た。窓の間に預かった元の runner の `closed` を片づける（Issue #3097）。
+   *
+   * - **移送が受理された（`moved`）** — 古い世代の出来事なので、日誌にだけ残して捨てる
+   *   （台帳は `running` / 移送先のまま。#3059 と同じ形）。
+   * - **受理されなかった** — どこにも移れていないので、元の runner の `closed` は従来どおり
+   *   処理し直す（捨てると lost を取りこぼす）。
+   */
+  async #endRelocationWindow(managerId: string, moved: boolean): Promise<void> {
+    const target = this.#relocatingTo.get(managerId);
+    this.#relocatingTo.delete(managerId);
+    const held = this.#deferredClosed.get(managerId) ?? [];
+    this.#deferredClosed.delete(managerId);
+    for (const { event, fromRunnerId } of held) {
+      if (moved) {
+        await this.#journal({
+          type: 'exchange',
+          with: 'manager',
+          role: 'inbound',
+          text:
+            `${EXCHANGE_KIND_DECISION_PREFIX}[${managerId}] （移送の最中に届いた古い runner の出来事のため無視。` +
+            `移送先は ${target ?? '不明'}、この出来事は ${fromRunnerId} から）` +
+            `runner 側の終了イベント（status=${event.status}）を受け取った: ${event.reason}`,
+        });
+      } else {
+        await this.#onEvent(event, fromRunnerId);
+      }
+    }
   }
 
   /**
@@ -12350,6 +12412,12 @@ class Pool implements ManagerPool {
             `${inputText}${denialSuffix}`,
         });
 
+        // **止めた委譲に遅れて届いた拒否は、日誌と数え上げだけ残して受信箱へは回さない**
+        // （Issue #3094。`case 'report'` / `case 'ask'` の `stopped` の門と同じ理由——R4）。
+        // 止めた仕事の拒否はクローンの判断材料にならず、`DENIED_ESCALATE_AT = 1` なので
+        // 1件目から `#emit` してしまっていた。上の日誌と数え上げ（`deniedLastAt` など）は
+        // 済んでいるので、捨てて「黙って失われる」を作ることにはならない。
+        if (record.job.status === 'stopped') return;
         if (!shouldEscalateDenial(toolTotal)) return;
         // **Markdown として書かれていない2つの欄を、埋め込む直前に包む**（issue #287）。
         //
@@ -13352,6 +13420,16 @@ class Pool implements ManagerPool {
          * 在り、判定材料が無い）のときは、既定値の可能性を否定できないので、
          * 従来どおり（＝以前の振る舞い＝安全側）でイベントを適用する。
          */
+        // **移送の resume が飛んでいる最中の closed は、結論が出るまで預かる**（Issue #3097）。
+        // 判定は `#relocatingTo` の doc。ここで捨てると移送が失敗した回に元の runner の lost を
+        // 取りこぼし、ここで処理すると移送が受理された回に台帳が lost のまま残る。
+        const relocatingTo = this.#relocatingTo.get(event.managerId);
+        if (relocatingTo !== undefined && relocatingTo !== fromRunnerId) {
+          const held = this.#deferredClosed.get(event.managerId) ?? [];
+          held.push({ event, fromRunnerId });
+          this.#deferredClosed.set(event.managerId, held);
+          return;
+        }
         const registeredRunnerIdsForClosed = this.#registeredRunnerIds();
         if (
           record.job.runnerId !== undefined &&

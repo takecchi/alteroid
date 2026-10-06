@@ -133,6 +133,43 @@ describe('FsInboxStore — inbox.json の不正な1行を読み飛ばす（issue
     expect((await rawEventIds()).sort()).toEqual(['evt-bad', 'evt-new']);
   });
 
+  /**
+   * issue #3056 の 1。「読めない行は消さずに残す」（#1966 / #2024）は、まとめての削除や自動の
+   * 片付けで黙って失わないための線で、人やクローンが id を名指しして消すのは意図した操作である
+   * （人間の決定 2026-10-06）。pg の `remove` / `removeMany`（列 id の DELETE）と同じく、
+   * fs でも id で一致する読めない行を消す。読めない行は in-memory 実装が持てない（`put()` が
+   * schema を通す）ので、この歯は fs と pg の2つで測る（pg は
+   * `storage-pg/src/inbox-malformed-row-repro.test.ts`）。
+   */
+  it('removeMany() は id で名指しされた読めない行も消し、戻り値に入れる（pg と同じ）', async () => {
+    const stores = await writeRawInboxFile();
+    let removed: string[] = [];
+    await captureStderr(async () => {
+      removed = await stores.inbox.removeMany(['evt-bad']);
+    });
+    expect(removed).toEqual(['evt-bad']);
+    expect(await rawEventIds()).toEqual(['evt-good']);
+    expect((await stores.inbox.pending()).count).toBe(1);
+  });
+
+  it('remove() も id で名指しされた読めない行を消し、名指しされない行は残す', async () => {
+    const stores = await writeRawInboxFile();
+    await captureStderr(async () => {
+      await stores.inbox.remove('evt-bad');
+    });
+    expect(await rawEventIds()).toEqual(['evt-good']);
+  });
+
+  it('removeMany() は読めた行と読めない行を1回で消し、無い id は戻り値に入れない', async () => {
+    const stores = await writeRawInboxFile();
+    let removed: string[] = [];
+    await captureStderr(async () => {
+      removed = await stores.inbox.removeMany(['evt-bad', 'evt-good', 'evt-none', 'evt-bad']);
+    });
+    expect(removed.sort()).toEqual(['evt-bad', 'evt-good']);
+    expect(await rawEventIds()).toEqual([]);
+  });
+
   it('pending() は壊れた行も件数に数える（pg の count(*) と同じ）', async () => {
     const stores = await writeRawInboxFile();
     let count = -1;

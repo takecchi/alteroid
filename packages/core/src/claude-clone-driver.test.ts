@@ -85,6 +85,35 @@ describe('ClaudeCloneDriver#open', () => {
     ]);
   });
 
+  it('画像つきの入力は text + image(base64) ブロックの配列になり、画像が無ければ文字列のまま', async () => {
+    const captured: { options?: Options; prompt?: unknown } = {};
+    const { queryFn } = fakeQueryFn(captured);
+    new ClaudeCloneDriver({ queryFn }).open(
+      makeSpec({
+        input: (async function* () {
+          yield { text: '見て', images: [{ mediaType: 'image/png' as const, data: 'QUJD' }] };
+          yield { text: '画像なし', images: [] };
+        })(),
+      }),
+    );
+    const sent: unknown[] = [];
+    for await (const message of captured.prompt as AsyncIterable<unknown>) sent.push(message);
+    expect(sent).toEqual([
+      {
+        type: 'user',
+        message: {
+          role: 'user',
+          content: [
+            { type: 'text', text: '見て' },
+            { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'QUJD' } },
+          ],
+        },
+        parent_tool_use_id: null,
+      },
+      { type: 'user', message: { role: 'user', content: '画像なし' }, parent_tool_use_id: null },
+    ]);
+  });
+
   it('sessionLog・cwd が無ければ Options へ欄ごと載せない', () => {
     const captured: { options?: Options } = {};
     new ClaudeCloneDriver({ queryFn: fakeQueryFn(captured).queryFn }).open(makeSpec());

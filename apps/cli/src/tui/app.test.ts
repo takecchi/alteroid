@@ -113,7 +113,7 @@ function start(
 describe('画面の骨組み', () => {
   it('ヘッダ（接続先・承認待ち・実行中の委譲）、タブ、フッタが出る', async () => {
     const h = start((api) => {
-      api.counts = { pendingApprovals: 3, runningManagers: 2 };
+      api.counts = { pendingApprovals: 3, unreadableApprovals: 0, runningManagers: 2 };
     });
     await waitFor(() => h.frame().includes('承認待ち 3'));
     const frame = h.frame();
@@ -124,6 +124,14 @@ describe('画面の骨組み', () => {
       expect(frame).toContain(label);
     }
     expect(frame).toContain('^D 終了');
+  });
+
+  it('読めない承認待ちだけのとき、ヘッダとタブは「承認待ち 0」で済ませず読めない件数を言う（#3090）', async () => {
+    const h = start((api) => {
+      api.counts = { pendingApprovals: 0, unreadableApprovals: 2, runningManagers: 0 };
+    });
+    await waitFor(() => h.frame().includes('承認待ち 0（読めない 2）'));
+    expect(h.frame()).toContain('2 承認待ち ⚠読めない 2');
   });
 
   it('全画面では端末の行数ぶんに収まる（はみ出さない）', async () => {
@@ -983,7 +991,7 @@ describe('承認待ち（一覧と詳細・答える）', () => {
         questions: deployQuestions,
       }),
     ];
-    api.counts = { pendingApprovals: 2, runningManagers: 0 };
+    api.counts = { pendingApprovals: 2, unreadableApprovals: 0, runningManagers: 0 };
   }
 
   async function openList(h: Harness): Promise<void> {

@@ -59,6 +59,11 @@ function windowText(hours: number): string {
 /**
  * 作業の進捗。任せた作業のうち実行中の件数・未了の仕事・窓の中で閉じた件数。**割合は出さない**
  * （分母が無い）。大きな数字が何の件数かは `label` で言い、ほかの2つの件数は `hint` に名前付きで置く。
+ *
+ * **取り直しの失敗は、古い数を残したまま、その場で言う**（issue #3069）。SWR は再取得が失敗しても
+ * 直前の `data` を残して `error` を立てるので、`data` だけ見ると止まった数が今の値に見える。
+ * `NextRunTile`（#2138 の1）は失敗を先に見て数を隠すが、こちらは人間の決定で数を隠さない
+ * （失敗で画面を奪わない）。数の上に注記を置く。
  */
 function ProgressTile() {
   const progress = useProgress();
@@ -79,6 +84,11 @@ function ProgressTile() {
         <Spinner />
       ) : (
         <>
+          {progress.error !== undefined && (
+            <HomeTileNote tone="warn">
+              最新の数を取り直せなかった。下の数は前に読めたときのもの。
+            </HomeTileNote>
+          )}
           <Stat
             label="実行中の任せた作業"
             value={String(data.inProgress.running)}

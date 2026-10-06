@@ -73,6 +73,7 @@ import {
   type Stores,
   type TokenRotationEntry,
   type TokenRotationOutcome,
+  readAttachmentLimits,
 } from '@alteroid/core';
 
 import { createApp, parseAllowedOrigins } from './app.js';
@@ -86,6 +87,7 @@ import { TokenRotationJournalFold } from './token-rotation-journal-fold.js';
 import { startUsagePolling } from './usage-poller.js';
 import { startManagerPolling } from './manager-poller.js';
 import { readArchiveFoldConfig, startArchiveFolding } from './archive-folder.js';
+import { readAttachmentPruneConfig, startAttachmentPruning } from './attachment-prune.js';
 import { AUTH_WITHHELD_ENV_KEYS, planAuth } from './auth.js';
 import { createJournalBus } from './journal-bus.js';
 import { createWorkerToolBus } from './topology-activity.js';
@@ -157,6 +159,15 @@ export {
   runtimeFilePath,
   type DaemonRuntimeInfo,
 } from './runtime.js';
+export {
+  ATTACHMENT_PRUNE_EVERY_ENV,
+  DEFAULT_ATTACHMENT_PRUNE_EVERY_MINUTES,
+  readAttachmentPruneConfig,
+  startAttachmentPruning,
+  type AttachmentPruneConfig,
+  type AttachmentPruner,
+  type AttachmentPrunerOptions,
+} from './attachment-prune.js';
 export {
   ARCHIVE_FOLD_EVERY_ENV,
   ARCHIVE_FOLD_GRACE_MS,
@@ -1956,6 +1967,20 @@ export async function main(): Promise<void> {
   });
 
   /**
+   * 添付ファイル（`stores.attachments`。#3111 段1a）の保持期間の定期掃除（`attachment-prune.ts`）。
+   * `ALTEROID_ATTACHMENT_PRUNE_EVERY`（分、既定60。off 系の綴りで外せる）。上限の環境変数の
+   * 読み損ねもここで stderr へ流す。
+   */
+  const attachmentPruneConfig = readAttachmentPruneConfig();
+  for (const note of [...readAttachmentLimits().notes, ...attachmentPruneConfig.notes]) {
+    process.stderr.write(`alteroidd: ${note}\n`);
+  }
+  const attachmentPruner = startAttachmentPruning({
+    stores,
+    everyMinutes: attachmentPruneConfig.everyMinutes,
+  });
+
+  /**
    * 回し手が出した結果1件を片付ける。**観測から来た回と、状態から来た回で同じ
    * ここを通る**（人間の決定 2026-09-07）。
    *
@@ -2534,6 +2559,7 @@ export async function main(): Promise<void> {
     // 自動で畳む周期も止める（止めたはずのデーモンが背景で `archive.list()` を
     // 読み続けない。`usagePoller` / `managerPoller` と同じ理由）。
     archiveFolder.stop();
+    attachmentPruner.stop();
     // **見張りも畳む。** 止めたはずのデーモンが背景で probe を焼き続けない
     // （`usagePoller` と同じ理由。`token-watch.ts`）。
     tokenWatch?.stop();

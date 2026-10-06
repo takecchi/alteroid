@@ -35,13 +35,15 @@ import process from 'node:process';
 
 import {
   compareRequiredStatusChecks,
-  contextsFromProtection,
   formatComparison,
+  isBranchNotProtected,
+  resolveLiveRequiredChecks,
 } from './check-required-status-checks-core.mjs';
 
 const ROOT = join(import.meta.dirname, '..');
 const DECLARATION_PATH = join(ROOT, '.github', 'required-status-checks.json');
 const PROTECTION_PATH = 'repos/takecchi/alteroid/branches/main/protection';
+const RULES_PATH = 'repos/takecchi/alteroid/rules/branches/main';
 
 // `console` に頼らない理由は他の check スクリプトと同じ（`scripts/verify.mjs` に
 // 揃えて `process.std{out,err}.write` を使う）。
@@ -54,24 +56,26 @@ function logError(text) {
 }
 
 /**
- * ブランチ保護を読む。読めなければ `null` を返す。
+ * `gh api` で読む。結果は `{ status: 'ok', body } | { status: 'absent' } | { status: 'error', detail }`。
  *
- * **例外を握り潰して `null` にするが、握り潰した中身は捨てない** —— 読めなかった
- * 理由（401 / 403 / ネットワーク）は、次の一手を決める材料そのものである。
+ * **`absent` は 404 `Branch not protected` のときだけ**（`allowAbsent` の口だけ）。それ以外の
+ * 失敗（401 / 403 / 別の 404 / ネットワーク）は `error` で、理由を捨てない —— 次の一手を決める
+ * 材料そのものである。
  */
-function fetchProtection() {
+function ghGet(path, { allowAbsent }) {
   try {
-    const stdout = execFileSync('gh', ['api', PROTECTION_PATH], {
+    const stdout = execFileSync('gh', ['api', path], {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe'],
     });
-    return { protection: JSON.parse(stdout), error: null };
+    return { status: 'ok', body: JSON.parse(stdout) };
   } catch (error) {
     const detail =
       error !== null && typeof error === 'object' && 'stderr' in error && error.stderr
         ? String(error.stderr).trim()
         : String(error);
-    return { protection: null, error: detail };
+    if (allowAbsent && isBranchNotProtected(detail)) return { status: 'absent' };
+    return { status: 'error', detail };
   }
 }
 
@@ -93,9 +97,10 @@ function main() {
     return;
   }
 
-  const { protection, error } = fetchProtection();
-  const live = protection === null ? null : contextsFromProtection(protection);
-  const result = compareRequiredStatusChecks(declared, live);
+  const protection = ghGet(PROTECTION_PATH, { allowAbsent: true });
+  const rules = ghGet(RULES_PATH, { allowAbsent: false });
+  const { live, reasons } = resolveLiveRequiredChecks(protection, rules);
+  const result = compareRequiredStatusChecks(declared, live, reasons);
 
   if (result.verdict === 'match') {
     log(formatComparison(result));
@@ -103,11 +108,6 @@ function main() {
   }
 
   logError(formatComparison(result));
-  // **読めなかった理由は必ず添える。** 「読めなかった」だけだと、権限の問題なのか
-  // ネットワークなのかが分からず、次の一手が決まらない。
-  if (result.verdict === 'unreadable' && error !== null) {
-    logError(`  gh の出力: ${error}`);
-  }
   process.exitCode = 1;
 }
 
