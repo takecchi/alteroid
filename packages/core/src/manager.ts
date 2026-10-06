@@ -9328,8 +9328,36 @@ class Pool implements ManagerPool {
       // しない）。違うのは「挑み直しの予約」の書き方だけで、あちらは runner 単位の
       // `retry` フラグを畳んでから予約するのに対し、こちらは同じ走査の
       // `held-by-lease` が既に使っている `#scheduleReattach` をその場で呼ぶ。
+      // **同じ runner への resume が飛んでいる間、`closed` を預ける窓を立てる**（Issue #3184。
+      // `#reattach` の同じ形——`#sameRunnerResumeWindow` の doc）。どの抜け方でも必ず1回閉じる。
+      let windowOpen = false;
+      let windowMoved = false;
       try {
-        const ok = await this.#resumeOnce(record, runner, nudge);
+        // 別の契機が resume 中（`#resuming`）なら窓は持たない（そちらの窓を壊さない）。
+        if (!this.#resuming.has(job.id)) {
+          this.#sameRunnerResumeWindow.set(job.id, runner.runnerId);
+          windowOpen = true;
+        }
+        let ok: ResumeOutcome;
+        try {
+          ok = await this.#resumeOnce(record, runner, nudge);
+        } catch (resumeError) {
+          if (windowOpen) {
+            windowOpen = false;
+            await this.#endRelocationWindow(job.id, false);
+          }
+          throw resumeError;
+        }
+        // 受理されなかった回はここで閉じる（預かった `closed` を処理し直す）。受理された回は、下で
+        // `running` を persist した後に閉じる（処理し直した結果を後から上書きしないため。`#reattach` と同じ）。
+        if (windowOpen) {
+          if (ok === 'resumed') {
+            windowMoved = true;
+          } else {
+            windowOpen = false;
+            await this.#endRelocationWindow(job.id, false);
+          }
+        }
         if (ok !== 'resumed') {
           /*
            * **貸し出し期限で断られたのは「まだ」である。** 引き取りの契機は「runner が
@@ -9368,7 +9396,13 @@ class Pool implements ManagerPool {
         // **受理は「戻れた」ではない。** この `await` の間に「戻れなかった」が確定
         // していることがある（runner は別プロセスで、失敗は SSE で追いかけてくる）。
         // ここで無条件に上書きすると、書いたばかりの終端状態が `running` へ巻き戻る。
-        if (record.job.status === 'lost') continue;
+        if (record.job.status === 'lost') {
+          if (windowOpen) {
+            windowOpen = false;
+            await this.#endRelocationWindow(job.id, windowMoved);
+          }
+          continue;
+        }
         record.job.status = 'running';
         await this.#persist(record);
         // `runner.send()` の失敗は無視する（畳んで待つのと同じ理由——本体の
@@ -9408,7 +9442,14 @@ class Pool implements ManagerPool {
             undefined,
           ),
         );
+        if (windowOpen) {
+          windowOpen = false;
+          await this.#endRelocationWindow(job.id, windowMoved);
+        }
       } catch (error) {
+        if (windowOpen) {
+          await this.#endRelocationWindow(job.id, windowMoved);
+        }
         if (isFencedRunnerError(error)) {
           /*
            * **世代で拒まれた（409）。これは「戻せなかった」ではない**（`#reattach` の
