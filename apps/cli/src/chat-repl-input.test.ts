@@ -195,6 +195,26 @@ describe('chat: 複数行の入力（#3412）', () => {
     ]);
   });
 
+  it('// で始まる行は発言なので、行末の \\ で続けられる（#3768）', async () => {
+    useStdin(true);
+    const calls = recordFetch((path) => (path === '/chat' ? sse(OK_REPLY) : Response.json({})));
+    const out = captureStdout();
+    const { chatCommand } = await import('./chat.js');
+    const done = chatCommand();
+    await flush();
+    rl.emit('line', '//tmp/a を見て\\');
+    await flush();
+    expect(calls.filter((c) => c.path === '/chat')).toHaveLength(0);
+    rl.emit('line', '二行目');
+    await flush();
+    rl.close();
+    await done;
+    out();
+    expect(calls.filter((c) => c.path === '/chat').map((c) => c.text)).toEqual([
+      '/tmp/a を見て\n二行目',
+    ]);
+  });
+
   it('行末の \\ で次の行へ続け、/ で始まる行は続けない', async () => {
     useStdin(true);
     const calls = recordFetch((path) => (path === '/chat' ? sse(OK_REPLY) : Response.json({})));
@@ -261,6 +281,72 @@ describe('chat: 非対話の入力で送信が失敗したら止まる（#3413�
     expect(error?.message).toContain('busy');
     expect(calls.filter((c) => c.path === '/chat').map((c) => c.text)).toEqual(['hello', '503 a']);
     expect(calls.filter((c) => c.path === '/chat/c1/end')).toHaveLength(1);
+  });
+
+  it.each([
+    ['不明なコマンド', '/reprot', '不明なコマンド'],
+    ['使い方の誤り', '/answer', '使い方の誤り'],
+  ])('非対話では、%s の行で止まり、残りは送らず、投げる（#3768）', async (_name, bad, reason) => {
+    useStdin(false);
+    const calls = recordFetch(() => sse(OK_REPLY));
+    const out = captureStdout();
+    const { chatCommand } = await import('./chat.js');
+    const done = chatCommand();
+    const settled = done.then(
+      () => null,
+      (error: unknown) => error as Error,
+    );
+    await flush();
+    rl.emit('line', bad);
+    await flush();
+    rl.emit('line', 'hello');
+    await flush();
+    const error = await settled;
+    out();
+    expect(error).toBeInstanceOf(Error);
+    expect(error?.message).toContain(bad);
+    expect(error?.message).toContain(reason);
+    expect(calls.filter((c) => c.path === '/chat')).toEqual([]);
+  });
+
+  it.each([
+    ['不明なコマンド', '/reprot'],
+    ['使い方の誤り', '/answer'],
+  ])('端末なら、%s は案内を出して続ける（止めない）（#3768）', async (_name, bad) => {
+    useStdin(true);
+    const calls = recordFetch(() => sse(OK_REPLY));
+    const out = captureStdout();
+    const { chatCommand } = await import('./chat.js');
+    const done = chatCommand();
+    await flush();
+    rl.emit('line', bad);
+    await flush();
+    rl.emit('line', 'hello');
+    await flush();
+    rl.close();
+    await done;
+    out();
+    expect(calls.filter((c) => c.path === '/chat').map((c) => c.text)).toEqual(['hello']);
+  });
+
+  it('// で始めた行は、先頭の / を 1 つ外した発言として送る（TUI と同じ。#3768）', async () => {
+    useStdin(false);
+    const calls = recordFetch(() => sse(OK_REPLY));
+    const out = captureStdout();
+    const { chatCommand } = await import('./chat.js');
+    const done = chatCommand();
+    await flush();
+    rl.emit('line', '//var/log/app.log を見て');
+    await flush();
+    rl.emit('line', '///x');
+    await flush();
+    rl.close();
+    await done;
+    out();
+    expect(calls.filter((c) => c.path === '/chat').map((c) => c.text)).toEqual([
+      '/var/log/app.log を見て',
+      '//x',
+    ]);
   });
 
   it('端末なら、失敗しても1行言って入力へ戻る（終了コードは変えない）', async () => {

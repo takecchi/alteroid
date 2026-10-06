@@ -169,7 +169,8 @@ export async function chatCommand(): Promise<void> {
     }
     const segment = [...pasteLines.splice(0), text].join('\n');
     const head = continued[0] ?? segment;
-    if (continuesLine(segment) && !head.startsWith('/')) {
+    // `//` で始まる行はコマンドではなく発言（下の脱出）なので、ほかの文と同じく `\` で続けられる。
+    if (continuesLine(segment) && (!head.startsWith('/') || head.startsWith('//'))) {
       continued.push(segment.slice(0, -1));
       if (waiter !== null && stdin.isTTY === true) {
         rl.setPrompt('… ');
@@ -329,7 +330,11 @@ export async function chatCommand(): Promise<void> {
           continue;
         }
 
-        if (line.startsWith('/')) {
+        // `//` で始めると、先頭の `/` を 1 つ外した発言として送る（`/` で始まる文を送るための抜け道。
+        // TUI の `resolveCommand` と同じ規則。#3768）。以降は発言として扱う。
+        if (line.startsWith('//')) {
+          line = line.slice(1);
+        } else if (line.startsWith('/')) {
           slashFailure = null;
           const handled = await runSlashCommand(
             line,
@@ -877,7 +882,8 @@ export async function runResumeCommand(
 
 const HELP = `（入力）            応答中の Ctrl-C でターンを止める（会話は続く。入力待ちの Ctrl-C は終了）。
                      行末の \\ で次の行へ続けて1発言にする（/ で始まる行は除く）。端末では貼り付けた複数行も1発言になり、Enter で送る
-                     標準入力が端末でない（パイプ）ときは、送信が失敗した行で止まり、非 0 で終わる
+                     // で始めると、先頭の / を 1 つ外した文をそのまま発言として送る（例: //var/log/app.log を見て）
+                     標準入力が端末でない（パイプ）ときは、送信が失敗した行・不明なコマンド・使い方の誤りの行で止まり、非 0 で終わる
 /attach <path>       次に送る発言にファイルを添える（複数回で複数個。本文を打って送ると一緒に上がる。添えかけがあれば空行の Enter で添付だけも送れる）
 /attachments         添えかけのファイルの一覧
 /detach <番号|all>   添えかけを外す
@@ -1067,6 +1073,12 @@ export async function runSlashCommand(
   onFailed?: (reason: string) => void,
 ): Promise<'ok' | 'quit'> {
   const [command, ...rest] = line.split(/\s+/);
+  // 使い方の誤り: 案内を出し、非対話の入力で止める判断のために失敗として知らせる（#3768）。
+  const usageError = (message: string): 'ok' => {
+    stdout.write(message);
+    onFailed?.(`使い方の誤り（${command ?? ''}）`);
+    return 'ok';
+  };
 
   switch (command) {
     case '/help':
@@ -1154,8 +1166,7 @@ export async function runSlashCommand(
         return 'ok';
       }
       if (rest.length > 0) {
-        stdout.write('使い方: /schedule <kind> <HH:MM|30m|cron 0 10 * * 1> <依頼の本文>\n');
-        return 'ok';
+        return usageError('使い方: /schedule <kind> <HH:MM|30m|cron 0 10 * * 1> <依頼の本文>\n');
       }
       const response = await client.schedule.$get();
       if (!response.ok) {
@@ -1201,8 +1212,7 @@ export async function runSlashCommand(
     case '/unschedule': {
       const kind = rest[0];
       if (!kind) {
-        stdout.write('使い方: /unschedule <kind>（/schedule で一覧）\n');
-        return 'ok';
+        return usageError('使い方: /unschedule <kind>（/schedule で一覧）\n');
       }
       const response = await client.schedule[':kind'].$delete({ param: { kind } });
       // 「無い」は 404 だけ。それ以外の失敗を「ありません」と言わない。
@@ -1221,8 +1231,7 @@ export async function runSlashCommand(
     case '/run': {
       const kind = rest[0];
       if (!kind) {
-        stdout.write('使い方: /run <kind>（/schedule で一覧）\n');
-        return 'ok';
+        return usageError('使い方: /run <kind>（/schedule で一覧）\n');
       }
       const response = await client.schedule[':kind'].run.$post({ param: { kind } });
       stdout.write(
@@ -1240,8 +1249,7 @@ export async function runSlashCommand(
     case '/event': {
       const [source] = rest;
       if (!source) {
-        stdout.write('使い方: /event <source> [本文]（本文が JSON ならその値として届ける）\n');
-        return 'ok';
+        return usageError('使い方: /event <source> [本文]（本文が JSON ならその値として届ける）\n');
       }
       // 本文は空白を畳まない生の残りを使う（`rest` は空白で割ってあり、JSON の文字列や
       // 本文の中の連続した空白を壊す）。解釈は Web の予定の画面と同じ（issue #3146）。
@@ -1460,11 +1468,10 @@ export async function runSlashCommand(
     case '/conversation': {
       const reference = rest[0];
       if (!reference) {
-        stdout.write(
+        return usageError(
           '使い方: /conversation <番号|id> [scan=<N>] [includeSuperseded=true]' +
             '（番号は /conversations の並び）\n',
         );
-        return 'ok';
       }
       const id = resolveListedId(reference, listed.conversations);
       if (id === null) {
@@ -1610,13 +1617,12 @@ export async function runSlashCommand(
       const [reference] = rest;
       const text = rawTail(line, 2);
       if (!reference || text.length === 0) {
-        stdout.write(
+        return usageError(
           '使い方: /edit <番号|id> <新しい本文>（1行で直す。元の添付は付けたまま送る）、または\n' +
             '        /edit <番号|id>（編集を始める。元の本文と添付を出す。/detach で添付を外し、/attach で足し、' +
             '本文を打って Enter（添付が残っていれば空行でも）で確定、/edit-cancel でやめる）\n' +
             '番号は /conversation の並び。編集できるのは自分（人間）の発言だけです — クローンの応答は指せません\n',
         );
-        return 'ok';
       }
       const id = resolveListedId(reference, listed.messages);
       if (id === null) {
@@ -1773,8 +1779,7 @@ export async function runSlashCommand(
     case '/stop': {
       const reference = rest[0];
       if (!reference) {
-        stdout.write('使い方: /stop <番号|manager_id> [理由]\n');
-        return 'ok';
+        return usageError('使い方: /stop <番号|manager_id> [理由]\n');
       }
       const id = resolveListedId(reference, listed.managers);
       if (id === null) {
@@ -1821,8 +1826,7 @@ export async function runSlashCommand(
       // 日誌で足りないときに、manager_id からそのセッションの生ログへ降りる
       const reference = rest[0];
       if (!reference) {
-        stdout.write('使い方: /manager <番号|manager_id>\n');
-        return 'ok';
+        return usageError('使い方: /manager <番号|manager_id>\n');
       }
       const id = resolveListedId(reference, listed.managers);
       if (id === null) {
@@ -1858,8 +1862,7 @@ export async function runSlashCommand(
       const [reference] = rest;
       const text = rawTail(line, 2);
       if (!reference || text.length === 0) {
-        stdout.write('使い方: /msg <番号|manager_id> <本文>\n');
-        return 'ok';
+        return usageError('使い方: /msg <番号|manager_id> <本文>\n');
       }
       const id = resolveListedId(reference, listed.managers);
       if (id === null) {
@@ -1897,8 +1900,7 @@ export async function runSlashCommand(
       const [reference] = rest;
       const text = rawTail(line, 2);
       if (!reference || text.length === 0) {
-        stdout.write('使い方: /reply <番号|requestId> <本文>\n');
-        return 'ok';
+        return usageError('使い方: /reply <番号|requestId> <本文>\n');
       }
       const target = await resolveWaitingTarget(reference, listed.waiting, client);
       if (!target.ok) {
@@ -2045,8 +2047,7 @@ export async function runSlashCommand(
       if (sub === 'remove') {
         const removeId = rest[1];
         if (!removeId) {
-          stdout.write('使い方: /archive remove <id> [理由]\n');
-          return 'ok';
+          return usageError('使い方: /archive remove <id> [理由]\n');
         }
         // 本文は消すと戻らない（行と大きさだけが残る）。確認は叩く前に取る（#3141）。
         if (
@@ -2138,8 +2139,7 @@ export async function runSlashCommand(
         const dayArg = args.find((arg) => !/^(limit|before)=/.test(arg));
         if (dayArg !== undefined) {
           if (args.length > 1) {
-            stdout.write('使い方: /approvals answered <YYYY-MM-DD>\n');
-            return 'ok';
+            return usageError('使い方: /approvals answered <YYYY-MM-DD>\n');
           }
           const response = await client.approvals.$get({ query: { answeredOn: dayArg } });
           if (!response.ok) {
@@ -2312,8 +2312,7 @@ export async function runSlashCommand(
     case '/approval-trace': {
       const [reference] = rest;
       if (!reference) {
-        stdout.write('使い方: /approval-trace <番号|id>\n');
-        return 'ok';
+        return usageError('使い方: /approval-trace <番号|id>\n');
       }
       const id = resolveListedId(reference, listed.approvals);
       if (id === null) {
@@ -2350,8 +2349,7 @@ export async function runSlashCommand(
     case '/approval': {
       const reference = rest[0];
       if (!reference) {
-        stdout.write('使い方: /approval <番号|id>\n');
-        return 'ok';
+        return usageError('使い方: /approval <番号|id>\n');
       }
       const id = resolveListedId(reference, listed.approvals);
       if (id === null) {
@@ -2410,8 +2408,7 @@ export async function runSlashCommand(
     case '/answer': {
       const [reference] = rest;
       if (!reference) {
-        stdout.write('使い方: /answer <番号|id> <回答>\n');
-        return 'ok';
+        return usageError('使い方: /answer <番号|id> <回答>\n');
       }
       const id = resolveListedId(reference, listed.approvals);
       if (id === null) {
@@ -2464,8 +2461,7 @@ export async function runSlashCommand(
       }
       const answer = structured === null ? rawTail(line, 2) : structured.supplement;
       if (answer.length === 0 && structured === null) {
-        stdout.write('使い方: /answer <番号|id> <回答>\n');
-        return 'ok';
+        return usageError('使い方: /answer <番号|id> <回答>\n');
       }
       const response = await client.approvals[':id'].answer.$post({
         param: { id },
@@ -2503,11 +2499,10 @@ export async function runSlashCommand(
       const tokens = tokenizeQuoted(argsText);
       const pairs = parseAnswerPairs(tokens);
       if (pairs === null) {
-        stdout.write(
+        return usageError(
           '使い方: /answers <番号|id> <回答> [<番号|id> <回答> ...]' +
             '（回答は1語。複数語なら "..." で囲む）\n',
         );
-        return 'ok';
       }
 
       const requests: { id: string; answer: string }[] = [];
@@ -2591,8 +2586,7 @@ export async function runSlashCommand(
     case '/commit': {
       const body = rawTail(line, 1);
       if (body.length === 0) {
-        stdout.write('使い方: /commit <本文>（引き受けたままの仕事として台帳へ積みます）\n');
-        return 'ok';
+        return usageError('使い方: /commit <本文>（引き受けたままの仕事として台帳へ積みます）\n');
       }
       const response = await client.commitments.$post({
         json: {
@@ -2621,11 +2615,10 @@ export async function runSlashCommand(
       // 書かれていないまま「閉じた」事実だけを残さない。送る前に断る。
       const reason = rawTail(line, 2);
       if (!reference || reason.length === 0) {
-        stdout.write(
+        return usageError(
           '使い方: /done <番号|id> <理由>（番号は /commitments の並び）\n' +
             '  理由が要ります（何をもって片付いたかを、後から読んで確かめられるように残すため）\n',
         );
-        return 'ok';
       }
       const id = resolveListedId(reference, listed.commitments);
       if (id === null) {
@@ -2675,8 +2668,9 @@ export async function runSlashCommand(
       const [reference] = rest;
       const body = rawTail(line, 2);
       if (!reference || body.length === 0) {
-        stdout.write('使い方: /commit-edit <番号|id> <新しい本文>（番号は /commitments の並び）\n');
-        return 'ok';
+        return usageError(
+          '使い方: /commit-edit <番号|id> <新しい本文>（番号は /commitments の並び）\n',
+        );
       }
       const id = resolveListedId(reference, listed.commitments);
       if (id === null) {
@@ -2729,6 +2723,7 @@ export async function runSlashCommand(
 
     default:
       stdout.write(`不明なコマンド: ${command ?? ''}\n${HELP}`);
+      onFailed?.(`不明なコマンド（${command ?? ''}）`);
       return 'ok';
   }
 }
