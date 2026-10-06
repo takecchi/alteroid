@@ -467,7 +467,7 @@ export async function runResumeCommand(line: string, target: Target): Promise<st
   return resumed;
 }
 
-const HELP = `/attach <path>      次に送る発言にファイルを添える（複数回で複数個。本文を打って送ると一緒に上がる。添えかけがあれば空行の Enter で添付だけも送れる）
+const HELP = `/attach <path>       次に送る発言にファイルを添える（複数回で複数個。本文を打って送ると一緒に上がる。添えかけがあれば空行の Enter で添付だけも送れる）
 /attachments         添えかけのファイルの一覧
 /detach <番号|all>   添えかけを外す
 /report [日付]        日報（既定は直近。日付は YYYY-MM-DD）
@@ -483,7 +483,7 @@ const HELP = `/attach <path>      次に送る発言にファイルを添える�
                      編集で畳まれた旧発言・その応答も含めて読める）
 /edit <番号|id> <新しい本文>  送信済みの自分の発言を編集する（番号は /conversation の並び。
                      クローンの応答は編集できない。編集前のターンの副作用は取り消さない）
-/resume [id]          進行中のターンへ戻る（途中経過を再生して続きを流す）。id 省略なら新しい順に5件まで探す。自動では戻らない
+/resume [id]         進行中のターンへ戻る（途中経過を再生して続きを流す）。id 省略なら新しい順に5件まで探す。自動では戻らない
 /managers [status=<s1,s2>] [limit=<N>] [after=<番号|id>]  マネージャーの一覧（番号付き）と状態
                      status= は ${jobStatusSchema.options.join(' / ')} のカンマ区切り。
                      limit= と after= で古い側へ頁を辿る（after= は直前の /managers に
