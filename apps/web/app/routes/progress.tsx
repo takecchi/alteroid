@@ -111,6 +111,21 @@ export default function ProgressPage() {
         </Card>
       ) : (
         <div className="flex flex-col gap-4">
+          {/* 取り直しの失敗は、古い数を残したまま帯で言う（issue #3069。画面を奪わない）。 */}
+          {error !== undefined && (
+            <Card>
+              <LoadError
+                what="作業の進捗の最新"
+                error={error}
+                onRetry={() => mutate()}
+                retrying={isValidating}
+                className="m-4"
+              />
+              <p className="px-4 pb-4 text-xs text-warn">
+                下の数は前に読めたときのもの。いまの値ではないかもしれない。
+              </p>
+            </Card>
+          )}
           <BacklogCard progress={data} />
           <InProgressCard progress={data} />
           <ThroughputCard progress={data} />

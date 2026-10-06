@@ -22,6 +22,7 @@ import type {
   WorkspaceLocator,
 } from './schema.js';
 import { createMemoryStores } from './testing.js';
+import { formatWorkspaceCloneHintLines, workspaceCloneHintsFrom } from './workspace-swap-hints.js';
 
 /**
  * `restartNudge`（マネージャー向け）と `#notifyRestored`（クローン向け）は、
@@ -966,5 +967,63 @@ describe('runner-swap の一言は作業ツリーごとの未 push・退避 ref 
     expect(message.length).toBeLessThan(6000);
     expect(message.indexOf('repo-59')).toBeLessThan(message.indexOf('repo-00'));
     expect(message).toMatch(/…ほか \d+ 本は省略（全 60 本/);
+  });
+});
+
+describe('削除済みの退避 ref を案内に出さない（#3060）', () => {
+  const pushedBase = {
+    ref: 'refs/alteroid-rescue/mgr-1/main',
+    commit: 'abcdef1234567890',
+    at: '2026-10-01T00:00:00.000Z',
+    remote: 'https://example.com/o/r.git',
+  };
+  const rescueWith = (removal: unknown): LastRescue =>
+    ({
+      at: '2026-10-01T00:00:00.000Z',
+      worktrees: [
+        {
+          relativePath: '.',
+          branch: 'feat/x',
+          at: '2026-10-01T00:00:00.000Z',
+          pushed: { ...pushedBase, removal },
+        },
+      ],
+    }) as LastRescue;
+  const observed = {
+    kind: 'observed',
+    at: '2026-10-03T00:00:00.000Z',
+    worktrees: [
+      {
+        relativePath: '.',
+        branch: 'feat/x',
+        remoteOrigin: { host: 'example.com', path: 'o/r' },
+        unpushedCommitCount: 0,
+        uncommittedChangeCount: 0,
+      },
+    ],
+  } as unknown as LastUnpushedWorkObservation;
+
+  it('rescue-only: 消せた ref（failureKind 無し）しか無ければ、案内する材料は無い', () => {
+    const rescue = rescueWith({ at: '2026-10-02T00:00:00.000Z', reason: 'landed' });
+    expect(workspaceCloneHintsFrom(undefined, rescue)).toBeUndefined();
+  });
+
+  it('観測つき: 消せた ref へ git fetch させない', () => {
+    const rescue = rescueWith({ at: '2026-10-02T00:00:00.000Z', reason: 'landed' });
+    const got = workspaceCloneHintsFrom(observed, rescue);
+    const text = formatWorkspaceCloneHintLines(got?.hints ?? [], got?.at);
+    expect(text).not.toContain('git fetch origin');
+  });
+
+  it('failureKind あり（消せなかった）なら、従来どおり取り戻す手順を出す', () => {
+    const rescue = rescueWith({
+      at: '2026-10-02T00:00:00.000Z',
+      reason: 'landed',
+      failureKind: 'network',
+    });
+    const got = workspaceCloneHintsFrom(undefined, rescue);
+    expect(got?.hints[0]?.kind).toBe('rescue-only');
+    const text = formatWorkspaceCloneHintLines(got?.hints ?? [], got?.at);
+    expect(text).toContain('git fetch origin');
   });
 });
