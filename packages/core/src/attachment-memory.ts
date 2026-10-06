@@ -56,6 +56,7 @@ export class MemoryAttachmentStore implements AttachmentStore {
   /** 結び付け先は会話か外部イベントのどちらか1つ。同じ宛先なら冪等、別の宛先なら conflict。 */
   #bindTo(ids: readonly string[], target: AttachmentBindTarget): AttachmentBindResult {
     const bound: string[] = [];
+    const newlyBound: string[] = [];
     const missing: string[] = [];
     const conflicts: string[] = [];
     for (const id of ids) {
@@ -65,11 +66,14 @@ export class MemoryAttachmentStore implements AttachmentStore {
       } else if (!canBindAttachmentTo(row.meta, target)) {
         conflicts.push(id);
       } else {
+        if (row.meta.conversationId === undefined && row.meta.externalEventId === undefined) {
+          newlyBound.push(id);
+        }
         row.meta = { ...row.meta, ...target };
         bound.push(id);
       }
     }
-    return { bound, missing, conflicts };
+    return { bound, newlyBound, missing, conflicts };
   }
 
   async unbind(ids: readonly string[], target: AttachmentBindTarget): Promise<string[]> {

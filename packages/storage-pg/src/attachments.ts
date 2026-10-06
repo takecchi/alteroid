@@ -133,44 +133,49 @@ export class PgAttachmentStore implements AttachmentStore {
   ): Promise<AttachmentBindResult> {
     const queryable = [...new Set(ids.filter((id) => !hasNul(id)))];
     const bound = new Set<string>();
+    const newlyBound = new Set<string>();
     const conflicts = new Set<string>();
     if (queryable.length > 0) {
+      // 1本の UPDATE … RETURNING が、行ごとの原子的な判定になる: 「いま未結び付け」の行だけがここで変わって返る。
+      // 同時に別の呼び出しが先に結んだ行は WHERE に当たらない（#3282）。
       const updated = await this.#db
         .update(attachments)
         .set(target)
         .where(
           and(
             inArray(attachments.id, queryable),
-            'conversationId' in target
-              ? and(
-                  isNull(attachments.externalEventId),
-                  or(
-                    isNull(attachments.conversationId),
-                    eq(attachments.conversationId, target.conversationId),
-                  ),
-                )
-              : and(
-                  isNull(attachments.conversationId),
-                  or(
-                    isNull(attachments.externalEventId),
-                    eq(attachments.externalEventId, target.externalEventId),
-                  ),
-                ),
+            isNull(attachments.conversationId),
+            isNull(attachments.externalEventId),
           ),
         )
         .returning({ id: attachments.id });
-      for (const row of updated) bound.add(row.id);
+      for (const row of updated) {
+        bound.add(row.id);
+        newlyBound.add(row.id);
+      }
       const rest = queryable.filter((id) => !bound.has(id));
       if (rest.length > 0) {
+        // 残りは、すでに同じ宛先へ結ばれている（冪等。新しくはない）か、別の宛先（conflicts）か、無い。
         const others = await this.#db
-          .select({ id: attachments.id })
+          .select({
+            id: attachments.id,
+            conversationId: attachments.conversationId,
+            externalEventId: attachments.externalEventId,
+          })
           .from(attachments)
           .where(inArray(attachments.id, rest));
-        for (const row of others) conflicts.add(row.id);
+        for (const row of others) {
+          const same =
+            'conversationId' in target
+              ? row.conversationId === target.conversationId && row.externalEventId === null
+              : row.externalEventId === target.externalEventId && row.conversationId === null;
+          (same ? bound : conflicts).add(row.id);
+        }
       }
     }
     return {
       bound: ids.filter((id) => bound.has(id)),
+      newlyBound: ids.filter((id) => newlyBound.has(id)),
       missing: ids.filter((id) => !bound.has(id) && !conflicts.has(id)),
       conflicts: ids.filter((id) => conflicts.has(id)),
     };
