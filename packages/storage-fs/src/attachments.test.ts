@@ -1,10 +1,10 @@
-import { mkdtemp, readdir, rm, utimes, writeFile, mkdir, readFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { readdir, rm, utimes, writeFile, mkdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { ATTACHMENT_UNBOUND_TTL_MS, verifyAttachmentStoreContract } from '@alteroid/core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
+import { makeTempDir } from '../../../vitest.tmpdir.js';
 import { FsAttachmentStore } from './attachments.js';
 
 /**
@@ -15,7 +15,7 @@ let dir: string;
 let store: FsAttachmentStore;
 
 beforeEach(async () => {
-  dir = await mkdtemp(join(tmpdir(), 'alteroid-attachments-'));
+  dir = await makeTempDir('alteroid-attachments-');
   store = new FsAttachmentStore(join(dir, 'attachments'));
 });
 afterEach(async () => {
