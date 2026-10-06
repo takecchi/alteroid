@@ -7848,7 +7848,7 @@ export function createCloneTools(context: ToolContext) {
           .string()
           .optional()
           .describe(
-            'cron 式で起こす（ローカル時刻。例: 毎週月曜 10:00 なら `0 10 * * 1`）。' +
+            'cron 式で起こす（ローカル時刻。分 時 日 月 曜の5欄だけ。例: 毎週月曜 10:00 なら `0 10 * * 1`）。' +
               '曜日や月の指定が要るときはこれを使う。周期はどれか1つだけ渡す',
           ),
       },
@@ -7886,7 +7886,7 @@ export function createCloneTools(context: ToolContext) {
         }
         if (cron !== undefined && !isCronExpression(cron)) {
           return text(
-            `cron "${cron}" は cron 式として読めない（例: 毎週月曜 10:00 なら \`0 10 * * 1\`）。`,
+            `cron "${cron}" は cron 式として読めない（分 時 日 月 曜の5欄だけ。秒つきは使えない。例: 毎週月曜 10:00 なら \`0 10 * * 1\`）。`,
           );
         }
         // **issue #1651 の後始末。** HTTP の `scheduleBody`（`spec` を
