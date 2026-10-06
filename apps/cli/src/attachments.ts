@@ -97,21 +97,24 @@ export type DraftResult = { ok: true; file: DraftFile } | { ok: false; reason: s
 export class AttachmentDraft {
   private readonly files: DraftFile[] = [];
 
-  private limitsPromise: Promise<AttachmentLimits> | undefined;
+  private known: AttachmentLimits | undefined;
 
   /**
-   * 上限そのもの、またはそれを取る関数（初めて要るときに1回だけ呼び、結果を覚える。取れなければ既定値）。
+   * 上限そのもの、またはそれを取る関数。取る関数が `null`（接続失敗・壊れた応答などの一時的な失敗）を
+   * 返したら、覚えずに既定値で検査し、次に要るときにまた取る。値（古いデーモンの 404 の既定値を含む）は覚える。
    */
   constructor(
     private readonly source:
-      AttachmentLimits | (() => Promise<AttachmentLimits>) = DEFAULT_ATTACHMENT_LIMITS,
+      AttachmentLimits | (() => Promise<AttachmentLimits | null>) = DEFAULT_ATTACHMENT_LIMITS,
   ) {}
 
-  /** 検査に使う上限（初回だけ取り、以降は同じ値）。 */
-  limits(): Promise<AttachmentLimits> {
-    this.limitsPromise ??=
-      typeof this.source === 'function' ? this.source() : Promise.resolve(this.source);
-    return this.limitsPromise;
+  /** 検査に使う上限。 */
+  async limits(): Promise<AttachmentLimits> {
+    if (this.known !== undefined) return this.known;
+    const got = typeof this.source === 'function' ? await this.source() : this.source;
+    if (got === null) return DEFAULT_ATTACHMENT_LIMITS;
+    this.known = got;
+    return got;
   }
 
   list(): readonly DraftFile[] {
@@ -188,25 +191,29 @@ export class AttachmentDraft {
 }
 
 /**
- * デーモンの添付の上限（`GET /attachments/limits`。#3204）。**取れなければ（古いデーモン・接続失敗・
- * 壊れた応答）core の既定値**を返す——最終判断はデーモンなので、先行検査が既定値でも壊れはしない。投げない。
+ * デーモンの添付の上限（`GET /attachments/limits`。#3204）。投げない。
+ * - 取れた値を返す。
+ * - 古いデーモン（404 など、応答はあるが口が無い）は core の既定値を返す（確定。覚えてよい）。
+ * - 接続失敗・壊れた応答は `null`（一時的。呼び手は既定値で検査し、次に取り直す）。
+ * 最終判断はデーモンなので、先行検査が既定値でも壊れはしない。
  */
-export async function fetchAttachmentLimits(target: Target): Promise<AttachmentLimits> {
+export async function fetchAttachmentLimits(target: Target): Promise<AttachmentLimits | null> {
   try {
     const response = await createClient(target.baseUrl, target.headers).attachments.limits.$get();
-    if (!response.ok) return DEFAULT_ATTACHMENT_LIMITS;
+    if (response.status === 404) return DEFAULT_ATTACHMENT_LIMITS;
+    if (!response.ok) return null;
     const body: Partial<Record<keyof AttachmentLimits, unknown>> = await response.json();
     const keys = Object.keys(DEFAULT_ATTACHMENT_LIMITS) as (keyof AttachmentLimits)[];
     if (!keys.every((key) => Number.isSafeInteger(body[key]) && (body[key] as number) > 0)) {
-      return DEFAULT_ATTACHMENT_LIMITS;
+      return null;
     }
     return body as AttachmentLimits;
   } catch {
-    return DEFAULT_ATTACHMENT_LIMITS;
+    return null;
   }
 }
 
-/** `chat` が使う添えかけ（上限は初めて要るとき〔`/attach`〕に1回だけ取る）。 */
+/** `chat` が使う添えかけ（上限は `/attach` で取り、値か 404 が返れば以降は覚える。一時的な失敗は次の `/attach` で取り直す）。 */
 export function createAttachmentDraft(target: Target): AttachmentDraft {
   return new AttachmentDraft(() => fetchAttachmentLimits(target));
 }

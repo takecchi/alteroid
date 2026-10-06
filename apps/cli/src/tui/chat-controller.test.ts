@@ -820,6 +820,22 @@ describe('/attach の上限はデーモンの値で先に検査する（#3204）
     expect(api.chatCalls[0]?.attachments).toHaveLength(2);
   });
 
+  it('一時的な失敗（null）は覚えず、次の /attach で取り直してデーモンの値を使う', async () => {
+    const dir = await makeTempDir('alteroid-tui-attach-');
+    const path = join(dir, 'big.bin');
+    await writeFile(path, Buffer.alloc(DEFAULT_ATTACHMENT_LIMITS.maxFileBytes + MIB));
+    const { api, controller, texts } = setup();
+    api.limits = null;
+    await controller.attach(path);
+    expect(texts('system').join('\n')).toContain('添えられない');
+    api.limits = limitsOf({ maxFileBytes: 200 * MIB });
+    await controller.attach(path);
+    expect(controller.hasAttachments()).toBe(true);
+    expect(api.limitsCalls).toBe(2);
+    await controller.attach(path);
+    expect(api.limitsCalls).toBe(2);
+  });
+
   it('上限を下げたデーモンでは、既定値の内側でも先に断る', async () => {
     const dir = await makeTempDir('alteroid-tui-attach-');
     const path = join(dir, 'a.bin');

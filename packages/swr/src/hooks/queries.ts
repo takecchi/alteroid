@@ -170,18 +170,27 @@ export function useStatus() {
 }
 
 /**
- * デーモンの添付の上限（`GET /attachments/limits`。#3204）。先行検査に使う。**取れなければ `data` は
- * 無いまま**で、呼び出し側は既定値で検査する（最終判断はデーモン。古いデーモンの 404 も同じ）。
- * 上限は起動時に決まる値なので、再検証も再試行もしない（SWR のキャッシュで1回だけ取る）。
+ * デーモンの添付の上限（`GET /attachments/limits`。#3204）。先行検査に使う。
+ * - 取れた値は SWR のキャッシュに覚える（再検証しない）。
+ * - 古いデーモンの 404 は `null` を値として覚える（取り直さない。呼び手は既定値で検査する）。
+ * - 接続失敗など一時的な失敗は `data` が無いまま `error` になり、次にこの hook が使われたとき
+ *   （画面の表示）に取り直す。再試行の自動ループはしない。最終判断はデーモン。
  */
 export function useAttachmentLimits() {
   const api = useApi();
-  return useSWR(KEY.attachmentLimits, () => api.api.GET('/attachments/limits').then(unwrap), {
-    revalidateOnFocus: false,
-    revalidateOnReconnect: false,
-    revalidateIfStale: false,
-    shouldRetryOnError: false,
-  });
+  return useSWR(
+    KEY.attachmentLimits,
+    async () => {
+      const result = await api.api.GET('/attachments/limits');
+      return result.response.status === 404 ? null : unwrap(result);
+    },
+    {
+      revalidateOnFocus: false,
+      revalidateOnReconnect: false,
+      revalidateIfStale: false,
+      shouldRetryOnError: false,
+    },
+  );
 }
 
 /**

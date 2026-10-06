@@ -212,8 +212,8 @@ export interface TuiApi {
     input: { text: string; conversationId?: string; attachments?: string[] },
     signal: AbortSignal,
   ): AsyncGenerator<ChatEvent>;
-  /** `GET /attachments/limits`。取れなければ既定値（失敗は投げない）。 */
-  attachmentLimits(): Promise<AttachmentLimits>;
+  /** `GET /attachments/limits`。古いデーモン（404）は既定値、一時的な失敗は `null`（失敗は投げない）。 */
+  attachmentLimits(): Promise<AttachmentLimits | null>;
   /** `POST /attachments`（生のバイト列）。失敗は `ApiError` ではなく普通の `Error`（理由つき）。 */
   uploadAttachment(file: {
     name: string;

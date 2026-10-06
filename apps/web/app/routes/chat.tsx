@@ -2079,7 +2079,7 @@ export function ChatPane({
       const { accepted, rejected } = checkAttachments(
         pending.map((item) => item.file),
         files,
-        attachmentLimits,
+        attachmentLimits ?? undefined,
       );
       if (accepted.length > 0) {
         setPending((current) => [
