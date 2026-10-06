@@ -13809,8 +13809,17 @@ class Pool implements ManagerPool {
          * `running` へ戻るので、そのあとの `closed(failed)` はここに掛からず従来どおり知らせる。
          * 台帳が `failed` のまま届いた `closed(failed)` だけが重複と読める。**`done` / `lost` の
          * `closed` はここでは扱わない**（`failed` から `done` / `lost` へ動く扱いは従来のまま）。
+         *
+         * **その委譲の resume が飛んでいる最中は重複と読まない。** `send()` は resume の**後**で
+         * 台帳を `running` に書くので、failed の委譲を開き直している最中は台帳がまだ `failed` である。
+         * その窓に届いた `closed(failed)` は、開き直した新しいセッションがすぐ落ちた知らせでありうる
+         * ので、従来どおり処理する（知らせを捨てない）。
          */
-        if (record.job.status === 'failed' && event.status === 'failed') {
+        if (
+          record.job.status === 'failed' &&
+          event.status === 'failed' &&
+          !this.#resuming.has(event.managerId)
+        ) {
           await this.#journal({
             type: 'exchange',
             with: 'manager',

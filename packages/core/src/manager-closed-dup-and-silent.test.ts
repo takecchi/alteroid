@@ -280,6 +280,38 @@ describe('closed(failed) の二重配達（SSE 再送。#3187）', () => {
     expect(text).toContain('boom2');
   });
 
+  it('failed の委譲を send が開き直している最中（台帳はまだ failed）に届いた closed(failed) は、重複と読まず新しい失敗として知らせる', async () => {
+    const { pool, inbox, fake } = await runningManualSetup('mgr-inflight');
+    fake.closed('mgr-inflight', 'failed', '1回目の失敗: boom1');
+    await settle();
+    // send の resume を止めておき、その間に新しいセッションがすぐ落ちた closed(failed) を流す。
+    // `send()` は resume の**後**で台帳を `running` に書くので、この窓では台帳はまだ `failed` である。
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let entered!: () => void;
+    const enteredResume = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    fake.runner.resume = async () => {
+      entered();
+      await gate;
+      return {};
+    };
+    const sending = pool.send('mgr-inflight', '続きを');
+    await enteredResume;
+    fake.closed('mgr-inflight', 'failed', '開き直した直後の失敗: boom-inflight');
+    await settle();
+    release();
+    await sending;
+    await settle();
+    await pool.stop(); // 合流窓を flush する
+
+    const text = JSON.stringify(inbox.filter((e) => e.type === 'manager_message'));
+    expect(text).toContain('boom-inflight');
+  });
+
   // 対照（緑のはず）: lost は runner が先に resume_failed(recovered=false) を出すので知らせが出る。
   // （report 無しの closed(done) が無音になる件 #3189 は方針待ちなので、ここには取り込んでいない。）
   it('対照: resume_failed(recovered=false) の後に closed(lost) が続く通常の lost は、受信箱に出る', async () => {
