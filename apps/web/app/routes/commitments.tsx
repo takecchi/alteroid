@@ -174,8 +174,8 @@ export default function Commitments() {
                 title="完了した仕事"
                 subtitle="新しい順。何をもって終わりとしたかを残す"
               />
-              {closed.length === 0 && isValidating ? (
-                // 閉じた分の初回読み込み中は、前のキー（未了だけ）の一覧が `data` に載っている
+              {closed.length === 0 && isLoading ? (
+                // 閉じた分の初回読み込み中（`isLoading` は新しいキーにキャッシュが無いときだけ真。再検証では偽）は、前のキー（未了だけ）の一覧が `data` に載っている
                 // （#3074）。ここで「記録はまだない」と言うと、読めていないのに無いと読める。
                 <Spinner />
               ) : closed.length === 0 && error !== undefined ? null : closed.length === 0 ? (

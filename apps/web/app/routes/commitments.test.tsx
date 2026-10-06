@@ -1503,3 +1503,27 @@ describe('「片付けたものも見る」の初回読み込み中も、未了�
     );
   });
 });
+
+describe('閉じた分が0件のときの再検証で「記録はまだない」がちらつかない（#3074）', () => {
+  it('閉じた分を読み終えた後の再検証中も、空の表示のまま（スピナーに戻らない）', async () => {
+    stubCommitments([commitment({ body: 'もとの本文' })], []);
+    renderPage();
+
+    await screen.findByText('もとの本文');
+    fireEvent.click(screen.getByRole('button', { name: '片付けたものも見る' }));
+    await screen.findByText('完了した仕事の記録はまだない。');
+
+    // 再検証を遅らせて走らせる（フォーカス復帰・mutate と同じ経路）。
+    const inner = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      return inner(input, init);
+    }) as typeof fetch;
+    act(() => {
+      window.dispatchEvent(new Event('focus'));
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(screen.getByText('完了した仕事の記録はまだない。')).toBeTruthy();
+  });
+});
