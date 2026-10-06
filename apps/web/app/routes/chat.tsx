@@ -200,6 +200,23 @@ function sameAsStashed(
   );
 }
 
+/** 発言の編集の書きかけ（#3565）。 */
+interface EditDraft {
+  text: string;
+  attachments: MessageAttachment[];
+}
+
+/** 書きかけが元の発言と違うか。元のまま（開いただけ）なら「書きかけ」とは言わない。 */
+function hasEditDraft(draft: EditDraft | undefined, line: Line): boolean {
+  if (draft === undefined) return false;
+  if (draft.text !== line.text) return true;
+  const original = line.attachments ?? [];
+  return (
+    draft.attachments.length !== original.length ||
+    draft.attachments.some((item, index) => item.id !== original[index]?.id)
+  );
+}
+
 /** 画面に出す1行。届いた順に並べる。 */
 interface Line {
   key: string;
@@ -1044,13 +1061,49 @@ export function ChatPane({
    * 素直だからである。
    */
   const [editingKey, setEditingKey] = useState<string | undefined>(undefined);
-  /** 編集中の textarea の下書き。確定 (`confirmEdit`) が読み、取消で捨てる。 */
-  const [editDraft, setEditDraft] = useState('');
   /**
-   * 編集中の発言の添付（#3399）。**編集では引き継ぐ**——外さない限り、新しい版にも付ける。
-   * 同じ会話の中なら、サーバは同じ添付の結び直しを受ける（冪等）。
+   * **発言の編集の下書きは、発言（`Line.key`）ごとに持つ（#3565）。** 確定するまで消さない——
+   * Escape・「キャンセル」・別の発言の鉛筆・会話の切り替えでは捨てない。その発言の鉛筆をもう一度
+   * 押すと、書きかけから再開する。確定（`confirmEdit`）で消す（送った文は、失敗すれば入力欄へ
+   * 編集の続きとして戻る。#3393）。
+   *
+   * 添付（#3399）は**編集では引き継ぐ**——外さない限り、新しい版にも付ける。同じ会話の中なら、
+   * サーバは同じ添付の結び直しを受ける（冪等）。
+   *
+   * 画面の状態として持つだけで、`sessionStorage` へは残さない（再読み込みで消える。ログアウトは
+   * 画面ごと畳むので、ここから漏れない）。
    */
-  const [editAttachments, setEditAttachments] = useState<MessageAttachment[]>([]);
+  const [editDrafts, setEditDrafts] = useState<ReadonlyMap<string, EditDraft>>(new Map());
+  const editDraft = editingKey === undefined ? '' : (editDrafts.get(editingKey)?.text ?? '');
+  const editAttachments = useMemo(
+    () => (editingKey === undefined ? [] : (editDrafts.get(editingKey)?.attachments ?? [])),
+    [editDrafts, editingKey],
+  );
+  const updateEditDraft = useCallback(
+    (key: string, change: (current: EditDraft) => EditDraft) =>
+      setEditDrafts((previous) => {
+        const current = previous.get(key) ?? { text: '', attachments: [] };
+        return new Map(previous).set(key, change(current));
+      }),
+    [],
+  );
+  const dropEditDraft = useCallback(
+    (key: string) =>
+      setEditDrafts((previous) => {
+        if (!previous.has(key)) return previous;
+        const next = new Map(previous);
+        next.delete(key);
+        return next;
+      }),
+    [],
+  );
+  /**
+   * 「受信を始めた」「返信が終わった」を読み上げるための知らせ（#3568）。本文の流れは読まない。
+   * 会話（`id`）を持たせ、いま見ている会話のものだけ出す。
+   */
+  const [liveNote, setLiveNote] = useState<{ id: string | undefined; text: string } | undefined>(
+    undefined,
+  );
   /**
    * 版の切り替え（`< 2/2 >`）がいま見せている版の添字（0始まり）。
    * key は `Line.journalId`（編集された発言の、いま既定ビューに出ている側の
@@ -1281,9 +1334,10 @@ export function ChatPane({
           return next;
         });
       }
-      // 編集中の入力を別の会話へ持ち越さない（`editingKey` は `Line.key` で、
-      // 別の会話へ移ればどのみち画面に出なくなるが、下書きを残す理由も無い）。
+      // 編集欄は閉じる（`editingKey` は `Line.key` で、別の会話では出ない）。**書きかけは捨てない**
+      // （`editDrafts`。戻って鉛筆を押せば再開できる。#3565）。
       setEditingKey(undefined);
+      setLiveNote(undefined);
       /*
        * **送っていない下書きは会話ごとに持ち、戻ったら戻す（#1618）。**
        *
@@ -2068,6 +2122,7 @@ export function ChatPane({
           break;
         case 'text':
           if (replyKey === undefined) {
+            if (writable()) setLiveNote({ id: stream.id, text: '返信の受信を始めた' });
             replyKey = `c-${Date.now()}`;
             const key = replyKey;
             if (stream.id !== undefined) unfinishedReplyRef.current.set(stream.id, key);
@@ -2155,6 +2210,8 @@ export function ChatPane({
           break;
         case 'done':
           settleReply();
+          // 失敗の知らせは Alert が持つので、ここで読むのは正常に終わったときだけ（#3568）。
+          if (owns()) setLiveNote({ id: stream.id, text: '返信が終わった' });
           setLines((previous) => previous.filter((line) => line.transient !== true));
           if (owns()) refetchApprovalsRef.current();
           break;
@@ -2368,6 +2425,7 @@ export function ChatPane({
       const stream = createStream(controller, shownId);
       streamRef.current = stream;
       setSending(true);
+      setLiveNote(undefined);
       // この会話（`shownId` == `stream.id` の初期値）ぶんの失敗だけを消す（#1585）。
       // followUp と同じ理由——次の送信に立て直しの機会が移るのはこの会話だけ。
       setFailures((prev) => {
@@ -2763,12 +2821,14 @@ export function ChatPane({
       const text = editDraft.trim();
       if ((text === '' && editAttachments.length === 0) || line.journalId === undefined) return;
       setEditingKey(undefined);
+      // 送る文は送信の側が持つ（失敗すれば入力欄へ編集の続きとして戻る。#3393）。書きかけは消す。
+      dropEditDraft(line.key);
       // 引き継ぐ添付は、すでに上げてある（`meta`）ので上げ直さない。
       const carried = carriedAttachments(editAttachments);
       // 入力欄の文を送るのではないので、入力欄の書きかけには触らない（#3391）。
       await send(text, { supersedes: line.journalId, draft: 'keep', attachments: carried });
     },
-    [editDraft, editAttachments, send],
+    [editDraft, editAttachments, send, dropEditDraft],
   );
 
   /**
@@ -2983,6 +3043,11 @@ export function ChatPane({
         notice={visibleInterruptNotice ?? visibleEndNotice}
       />
 
+      {/* 読み上げ専用（#3568）。「受信を始めた／返信が終わった」だけで、本文の流れは読まない。 */}
+      <div role="status" className="sr-only">
+        {liveNote !== undefined && liveNote.id === shownId ? liveNote.text : ''}
+      </div>
+
       <div
         ref={scrollContainerRef}
         onScroll={handleScroll}
@@ -3174,11 +3239,19 @@ export function ChatPane({
                         isEditable
                           ? () => {
                               setEditingKey(line.key);
-                              setEditDraft(line.text);
-                              setEditAttachments([...(line.attachments ?? [])]);
+                              // 書きかけがあればそこから再開する。無ければ元の本文で始める（#3565）。
+                              setEditDrafts((previous) =>
+                                previous.has(line.key)
+                                  ? previous
+                                  : new Map(previous).set(line.key, {
+                                      text: line.text,
+                                      attachments: [...(line.attachments ?? [])],
+                                    }),
+                              );
                             }
                           : undefined
                       }
+                      hasDraft={hasEditDraft(editDrafts.get(line.key), line)}
                       attachments={
                         line.attachments === undefined ? undefined : (
                           <Suspense fallback={null}>
@@ -3211,19 +3284,30 @@ export function ChatPane({
                       {isEditing ? (
                         <ChatMessageEditor
                           value={editDraft}
-                          onChange={setEditDraft}
+                          onChange={(text) =>
+                            updateEditDraft(line.key, (current) => ({ ...current, text }))
+                          }
                           attachments={editAttachments.map((attachment) => ({
                             id: attachment.id,
                             name: attachment.name,
                             sizeLabel: formatBytes(attachment.size),
                           }))}
                           onRemoveAttachment={(id) =>
-                            setEditAttachments((current) =>
-                              current.filter((attachment) => attachment.id !== id),
-                            )
+                            updateEditDraft(line.key, (current) => ({
+                              ...current,
+                              attachments: current.attachments.filter(
+                                (attachment) => attachment.id !== id,
+                              ),
+                            }))
                           }
                           onConfirm={() => void confirmEdit(line)}
-                          onCancel={() => setEditingKey(undefined)}
+                          onCancel={() => {
+                            // 閉じるだけで、書きかけは残す（#3565）。元のままなら残す理由が無い。
+                            if (!hasEditDraft(editDrafts.get(line.key), line)) {
+                              dropEditDraft(line.key);
+                            }
+                            setEditingKey(undefined);
+                          }}
                         />
                       ) : undefined}
                     </ChatMessage>
