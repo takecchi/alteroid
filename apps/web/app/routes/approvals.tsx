@@ -1,7 +1,8 @@
 import { AlertTriangle } from 'lucide-react';
 import { useMemo, useState } from 'react';
 
-import { ApprovalEntry, isAnswered, isWithdrawn } from '~/components/approval-entry';
+import { ApprovalEntry } from '~/components/approval-entry';
+import { isApprovalAnswered, isApprovalWithdrawn } from '~/components/approval-answer-card';
 import { ApprovalsTabs } from '~/components/group-tabs';
 import { Page, Button, Card, Empty, ErrorNote, Spinner } from '@alteroid/ui';
 import { useAnswerApprovals, useApprovals } from '@alteroid/swr';
@@ -102,7 +103,7 @@ export default function Approvals() {
     () =>
       new Set(
         (approvalsList ?? [])
-          .filter((approval) => !isAnswered(approval) && !isWithdrawn(approval))
+          .filter((approval) => !isApprovalAnswered(approval) && !isApprovalWithdrawn(approval))
           .map((a) => a.id),
       ),
     [approvalsList],

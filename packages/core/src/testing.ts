@@ -1267,6 +1267,14 @@ export function createMemoryStores(): Stores {
     async listIntegrationKeys() {
       return [...integrationKeyRows.values()].sort(compareIntegrationKeyOrder);
     },
+    async listUnreadableIntegrationKeys() {
+      // 読めない行は持てない（`putIntegrationKey` がスキーマを通す）。常に空。
+      return [];
+    },
+    // インメモリは読めない行を持てないので、消すものが無い（issue #3216）。
+    async removeUnreadableIntegrationKeys(ids) {
+      return { kind: 'unknown', count: new Set(ids).size };
+    },
     async markIntegrationKeyUsed(id, at) {
       if (hasNul(id)) return;
       const row = integrationKeyRows.get(id);

@@ -1,4 +1,5 @@
 import { readFile, stat, writeFile } from 'node:fs/promises';
+import { homedir } from 'node:os';
 import { basename, resolve } from 'node:path';
 import { stdout } from 'node:process';
 
@@ -79,6 +80,24 @@ export function attachmentLinesOf(
   attachments: readonly { id: string; name: string; mediaType: string; size: number }[] | undefined,
 ): string[] {
   return (attachments ?? []).map(describeAttachment);
+}
+
+/**
+ * `/attach` に打たれたパスの解釈（REPL・TUI 共通。`alteroid attachments put ~/x` でシェルが
+ * してくれることに揃える。#3219）。**`add` の前に呼ぶ**（`add` は解釈済みのパスを受ける。
+ * `attachments put` の引数はシェルが解釈済みなので二重に解釈しない）。
+ * - 前後が同じ引用符なら外し、中身はそのまま（シェルも引用符の中では `~` を展開しない）。
+ * - 引用符が無ければ、先頭の `~` / `~/` を home に展開し、`\ ` は空白にする（端末へドラッグすると
+ *   空白が `\ ` になる）。それ以外のバックスラッシュは触らない（ファイル名の一部かもしれず、
+ *   黙って消すと別のパスになる）。`~user` は展開しない（引ける home が無い）。
+ */
+export function interpretAttachPath(raw: string): string {
+  const trimmed = raw.trim();
+  const quoted = /^(['"])([\s\S]*)\1$/.exec(trimmed);
+  if (quoted !== null) return quoted[2] ?? trimmed;
+  const expanded =
+    trimmed === '~' || trimmed.startsWith('~/') ? `${homedir()}${trimmed.slice(1)}` : trimmed;
+  return expanded.replaceAll('\\ ', ' ');
 }
 
 /** 次に送る発言へ添えかけのファイル。 */
@@ -271,6 +290,40 @@ export async function uploadAttachment(
     );
   }
   return (await response.json()) as UploadedAttachment;
+}
+
+/**
+ * 送信が `400 attachment_missing`（添付が無い・期限切れ）で断られた。サーバは、発言に結び付かない添付を
+ * 1 時間で掃除する（#3246）。`message` はサーバの理由の文（見つからない id を含む）。
+ */
+export class AttachmentMissingError extends Error {
+  override readonly name = 'AttachmentMissingError';
+}
+
+/** 失敗した応答の本文が `attachment_missing` なら、サーバの理由の文。違えば `null`。 */
+export function attachmentMissingMessageOf(body: unknown): string | null {
+  if (typeof body !== 'object' || body === null) return null;
+  const { code, error } = body as { code?: unknown; error?: unknown };
+  if (code !== 'attachment_missing') return null;
+  return typeof error === 'string' && error.length > 0 ? error : '添付が見つからない';
+}
+
+/**
+ * `attachment_missing` で落ちた送信の分（`sent`）から、サーバが掃除した添付の「上げ済み」の印を捨てて、
+ * 次の送信で上げ直させる。**どれが無いかはサーバの文（`message`）に載る id で決める**。名指しが読み取れなければ、
+ * その送信で上げ済みだった分を全部捨てる（残して 400 を繰り返すより、余計に上げ直すほうが安い）。
+ * 使い手へ出す文を返す（添えかけは残してある）。
+ */
+export function expireUploads(sent: readonly DraftFile[], message: string): string {
+  const uploaded = sent.filter((f) => f.uploadedId !== undefined);
+  const named = uploaded.filter((f) => message.includes(f.uploadedId!));
+  const expired = named.length > 0 ? named : uploaded;
+  for (const file of expired) delete file.uploadedId;
+  const names = expired.map((f) => f.name).join(', ');
+  return (
+    `添付が期限切れだったので送っていない${names === '' ? '' : `（${names}）`}。` +
+    '添えかけは残してある。次の送信で上げ直す'
+  );
 }
 
 export type UploadDraftResult =

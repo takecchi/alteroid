@@ -78,13 +78,10 @@ async function send(text: string) {
 
 const CONVERSATION_ID = 'conv-ask-human';
 /**
- * **testing-library の既定の正規化に合わせて空白を畳んである。** DOM 上の
- * 実際の文字列は `\n` を1つ挟むが（`chat.tsx` の SSE `case 'ask_human'` /
- * `historyLines` の doc）、`getByText` の既定 `normalizer` は連続する空白
- * （改行を含む）を単一の半角スペースへ畳んでから比較する。畳んだ後の形が
- * ここでの「1文字も違えない」の基準になる。
+ * 承認のカード（`ApprovalAnswerCard`）に出る問いの文。カードは承認 1 件を 1 枚で出し
+ * （#3259）、回答・取り下げも同じカードの状態として出す。
  */
-const QUESTION_LINE = '確認したいことがある: 本番に出してよいか （承認待ちの画面から答えられる）';
+const QUESTION_LINE = '本番に出してよいか';
 
 describe('リロード後（＝手元の lines を経由しない状態）でも ask_human の質問・回答が消えない', () => {
   it('質問だけの確認は、SSE の文言と1文字も違えない形で historyLines から出る', async () => {
@@ -128,7 +125,7 @@ describe('リロード後（＝手元の lines を経由しない状態）でも
     const items = within(transcript()).getAllByRole('listitem');
     const texts = items.map((item) => item.textContent);
     const humanIndex = texts.findIndex((text) => text?.includes('進めてよいか確認して'));
-    const questionIndex = texts.findIndex((text) => text?.includes('確認したいことがある'));
+    const questionIndex = texts.findIndex((text) => text?.includes(QUESTION_LINE));
     expect(humanIndex).toBeGreaterThanOrEqual(0);
     expect(questionIndex).toBeGreaterThan(humanIndex);
   });
@@ -137,7 +134,7 @@ describe('リロード後（＝手元の lines を経由しない状態）でも
    * **不変条件A: 質問だけ復元すると、回答済みの確認が永久に未回答に見える。**
    * だから回答も出す。
    */
-  it('回答済みの確認は、質問と回答の両方が時刻順に出る', async () => {
+  it('回答済みの確認は、1枚のカードに問い・回答済みの状態・回答が出る', async () => {
     const route: Route = (url) => {
       if (url.includes(`/conversations/${CONVERSATION_ID}`)) {
         return json({
@@ -168,15 +165,15 @@ describe('リロード後（＝手元の lines を経由しない状態）でも
     renderChat(`/chat/${CONVERSATION_ID}`);
 
     await screen.findByText(QUESTION_LINE);
-    expect(await screen.findByText(/確認への回答: はい、進めてよい/)).toBeTruthy();
+    expect(await screen.findByText('はい、進めてよい')).toBeTruthy();
 
-    // 回答は質問より後ろに出る（answeredAt > createdAt）。
+    // 問いと回答は同じ1枚のカードの中にあり、状態は「回答済」で、回答の時刻もカードの中にある。
     const items = within(transcript()).getAllByRole('listitem');
-    const texts = items.map((item) => item.textContent);
-    const questionIndex = texts.findIndex((text) => text?.includes('確認したいことがある'));
-    const answerIndex = texts.findIndex((text) => text?.includes('確認への回答'));
-    expect(questionIndex).toBeGreaterThanOrEqual(0);
-    expect(answerIndex).toBeGreaterThan(questionIndex);
+    expect(items).toHaveLength(1);
+    expect(items[0]?.textContent).toContain(QUESTION_LINE);
+    expect(items[0]?.textContent).toContain('回答済');
+    expect(items[0]?.textContent).toContain('回答:');
+    expect(screen.queryByText(/確認への回答/)).toBeNull();
   });
 });
 

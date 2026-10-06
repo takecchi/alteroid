@@ -11,8 +11,9 @@
  *    発行は済んでいるのに取り直しが失敗したときも、発行の失敗にしない
  * 4. **失効は確認つき。** 1回目では POST しない
  * 5. 一覧は名前・source・状態・作成者・最終使用・期限・指紋を出す。MCP 登録への案内リンクがある
+ * 6. **読めない行は「無い」と言わず、`UnreadableRowsNote` で断り、消すのは確認つき**（#3216）
  */
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
@@ -402,5 +403,81 @@ describe('/integrations 画面 — 失効', () => {
     const row = screen.getByText('CI').closest('li');
     expect(row).toBeTruthy();
     expect(within(row as HTMLElement).getByText('有効')).toBeTruthy();
+  });
+});
+
+describe('/integrations 画面 — 読めない行（#3216）', () => {
+  it('読めない行が無ければ、その断りは出ない（鍵ごと無い）', async () => {
+    stubKeys();
+    renderScreen();
+    await screen.findByText('CI');
+    expect(screen.queryByText(/読めない連携の鍵の行/)).toBeNull();
+    expect(screen.queryByRole('button', { name: 'この行を消す' })).toBeNull();
+  });
+
+  it('読めない行しか無いとき、「まだ無い」と言わず、件数と id・不正な欄名を断る。id の無い行にはボタンが無い', async () => {
+    stubKeys({
+      get: {
+        status: 200,
+        body: {
+          keys: [],
+          rowsUnreadable: { count: 2, rows: [{ id: 'bad-1', reason: '不正な欄: source' }] },
+        },
+      },
+    });
+    renderScreen();
+    expect(await screen.findByText(/読めない連携の鍵の行が 2 件ある/)).toBeTruthy();
+    expect(screen.getByText('bad-1')).toBeTruthy();
+    expect(screen.getByText(/不正な欄: source/)).toBeTruthy();
+    expect(screen.getByText(/id が取れない行が 1 件ある/)).toBeTruthy();
+    expect(screen.getByText(/連携の鍵がまだ無い、とは言えない/)).toBeTruthy();
+    expect(screen.queryByText('連携の鍵はまだ無い。')).toBeNull();
+    expect(screen.getAllByRole('button', { name: 'この行を消す' })).toHaveLength(1);
+  });
+
+  it('「この行を消す」は確認を経て id を指して POST し、再取得で断りが消える（確認で止めたら POST しない）', async () => {
+    const posts: unknown[] = [];
+    let unreadable = true;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = input instanceof Request ? input : null;
+      const url = request?.url ?? (typeof input === 'string' ? input : String(input));
+      const method = request?.method ?? init?.method ?? 'GET';
+      if (url.includes('/integration-keys/unreadable/remove') && method === 'POST') {
+        posts.push(request !== null ? await request.json() : JSON.parse(String(init?.body)));
+        unreadable = false;
+        return json({ removedIds: ['bad-1'], count: 1 });
+      }
+      if (url.includes('/integration-keys')) {
+        return json({
+          keys: [view()],
+          ...(unreadable
+            ? { rowsUnreadable: { count: 1, rows: [{ id: 'bad-1', reason: '不正な欄: source' }] } }
+            : {}),
+        });
+      }
+      return Promise.reject(new TypeError(`Failed to fetch: ${url}`));
+    }) as typeof fetch;
+
+    renderScreen();
+    fireEvent.click(await screen.findByRole('button', { name: 'この行を消す' }));
+    const dialog = await screen.findByRole('alertdialog');
+    expect(dialog.textContent).toContain('元に戻せません');
+    expect(dialog.textContent).toContain('bad-1');
+    expect(posts).toEqual([]);
+    fireEvent.click(within(dialog).getByRole('button', { name: 'やめる' }));
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+    expect(posts).toEqual([]);
+    fireEvent.click(screen.getByRole('button', { name: 'この行を消す' }));
+    fireEvent.click(
+      within(await screen.findByRole('alertdialog')).getByRole('button', { name: '消す' }),
+    );
+    await waitFor(() => {
+      expect(posts).toEqual([{ ids: ['bad-1'] }]);
+    });
+    await waitFor(() => {
+      expect(screen.queryByText(/読めない連携の鍵の行が/)).toBeNull();
+    });
+    // 読めた鍵は残っている。
+    expect(screen.getByText('CI')).toBeTruthy();
   });
 });

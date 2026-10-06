@@ -76,8 +76,8 @@ afterEach(() => {
 const transcript = () => screen.getByRole('list', { name: 'やりとり' });
 
 const CONVERSATION_ID = 'conv-withdrawn';
-/** `chat.ask-human-history.test.tsx` の `QUESTION_LINE` と同じ基準（畳んだ後の形）。 */
-const QUESTION_LINE = '確認したいことがある: 本番に出してよいか （承認待ちの画面から答えられる）';
+/** `chat.ask-human-history.test.tsx` の `QUESTION_LINE` と同じ（カードに出る問いの文）。 */
+const QUESTION_LINE = '本番に出してよいか';
 
 function stubConversationAndApprovals(approval: Record<string, unknown>) {
   const route: Route = (url) => {
@@ -107,7 +107,7 @@ function stubConversationAndApprovals(approval: Record<string, unknown>) {
 }
 
 describe('取り下げられた確認が会話のタイムラインに出る（issue #974）', () => {
-  it('理由付きで取り下げられた確認は、質問の行の後ろに取り下げの行が出る', async () => {
+  it('理由付きで取り下げられた確認は、同じカードに取り下げ済みの状態と理由が出る', async () => {
     stubConversationAndApprovals({
       id: 'ap-1',
       createdAt: '2026-08-20T00:00:05.000Z',
@@ -118,23 +118,18 @@ describe('取り下げられた確認が会話のタイムラインに出る（i
 
     renderChat(`/chat/${CONVERSATION_ID}`);
 
-    // 質問の行の本文は SSE の `case 'ask_human'` と1文字も違えない
-    // （不変条件。`chat.ask-human-history.test.tsx` と同じ基準）。
+    // 問い・取り下げの状態・理由は同じ1枚のカードの中にある（取り下げを別の行にしない）。
     await screen.findByText(QUESTION_LINE);
-    expect(
-      await screen.findByText(/確認の取り下げ: 要件が変わったため確認自体が不要になった/),
-    ).toBeTruthy();
+    expect(await screen.findByText('要件が変わったため確認自体が不要になった')).toBeTruthy();
+    const cards = within(transcript())
+      .getAllByRole('listitem')
+      .filter((item) => item.textContent?.includes(QUESTION_LINE));
+    expect(cards).toHaveLength(1);
+    expect(cards[0]?.textContent).toContain('取り下げ済');
+    expect(cards[0]?.textContent).toContain('取り下げ:');
 
-    // 取り下げは質問より後ろに出る（時系列の正しい位置＝ withdrawnAt > createdAt）。
-    const items = within(transcript()).getAllByRole('listitem');
-    const texts = items.map((item) => item.textContent);
-    const questionIndex = texts.findIndex((text) => text?.includes('確認したいことがある'));
-    const withdrawnIndex = texts.findIndex((text) => text?.includes('確認の取り下げ'));
-    expect(questionIndex).toBeGreaterThanOrEqual(0);
-    expect(withdrawnIndex).toBeGreaterThan(questionIndex);
-
-    // 回答の行は出ない（取り下げと回答は排他——`answeredAt` の doc）。
-    expect(screen.queryByText(/確認への回答/)).toBeNull();
+    // 回答の欄は出ない（取り下げと回答は排他——`answeredAt` の doc）。
+    expect(screen.queryByText('回答する')).toBeNull();
   });
 
   it('取り下げの理由が欠けている行でも、取り下げられた事実の行は出る', async () => {
@@ -149,6 +144,6 @@ describe('取り下げられた確認が会話のタイムラインに出る（i
     renderChat(`/chat/${CONVERSATION_ID}`);
 
     await screen.findByText(QUESTION_LINE);
-    expect(await screen.findByText(/確認の取り下げ: （理由の記録なし）/)).toBeTruthy();
+    expect(await screen.findByText('（理由の記録なし）')).toBeTruthy();
   });
 });

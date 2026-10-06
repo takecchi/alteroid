@@ -61,15 +61,22 @@ import type { InferResponseType } from 'hono/client';
 import { confirmInRepl } from './confirm.js';
 import {
   AttachmentDraft,
+  attachmentMissingMessageOf,
   createAttachmentDraft,
+  expireUploads,
   type DraftFile,
   attachmentLinesOf,
+  interpretAttachPath,
   describeAttachment,
   uploadAttachment,
   uploadDraft,
 } from './attachments.js';
 import { createClient, type DaemonClient } from './client.js';
-import { fetchUnreadTotalLine, markConversationReadAfterReply } from './conversations.js';
+import {
+  fetchUnreadTotalLine,
+  markConversationReadAfterReply,
+  unreadMark,
+} from './conversations.js';
 import { formatElapsedAgo } from './format.js';
 import { redactBody, redactError } from './redact.js';
 import { formatCreatedAt, freshnessMarker } from './memory.js';
@@ -127,55 +134,67 @@ export async function chatCommand(): Promise<void> {
       } catch {
         break; // Ctrl-C・入力の終わり（EOF）
       }
-      // 空行は、添えかけが無ければ送らない。あれば添付だけの発言として送る。
-      if (line.length === 0 && draft.count === 0) continue;
+      // 通信の例外（fetch の失敗・デーモンの再起動中など）は、1行言って入力に戻る（#3218）。
+      // 添えかけ（`draft`）と会話 id はここで失わない。`break` / `continue` は try の外へ効く。
+      try {
+        // 空行は、添えかけが無ければ送らない。あれば添付だけの発言として送る。
+        if (line.length === 0 && draft.count === 0) continue;
 
-      if (/^\/(attach|attachments|detach)(\s|$)/.test(line)) {
-        await runAttachmentCommand(line, draft);
-        continue;
-      }
-
-      if (/^\/resume(\s|$)/.test(line)) {
-        const resumed = await runResumeCommand(line, target);
-        if (resumed !== null) conversationId = resumed;
-        continue;
-      }
-
-      if (line.startsWith('/')) {
-        const handled = await runSlashCommand(
-          line,
-          client,
-          listed,
-          conversationId,
-          target,
-          // 戻せない操作の確認は、この REPL の readline で聞く（`confirm.ts`）。
-          (summary) => confirmInRepl(summary, ask),
-        );
-        if (handled === 'quit') break;
-        continue;
-      }
-
-      // 添えかけがあれば先に上げる。失敗したら送らず、添えかけを残して理由を出す。
-      let attachmentIds: string[] | undefined;
-      let sentFiles: DraftFile[] = [];
-      if (draft.count > 0) {
-        const uploaded = await uploadDraft(draft, (file) => uploadAttachment(target, file));
-        if (!uploaded.ok) {
-          stdout.write(
-            `添付を上げられなかったので送っていません: ${uploaded.reason}\n` +
-              '（添えかけは残してあります。/attachments で確認、/detach で外せます）\n',
-          );
+        if (/^\/(attach|attachments|detach)(\s|$)/.test(line)) {
+          await runAttachmentCommand(line, draft);
           continue;
         }
-        attachmentIds = uploaded.uploaded.map((a) => a.id);
-        sentFiles = uploaded.files;
-        for (const a of uploaded.uploaded) stdout.write(`  ${describeAttachment(a)}\n`);
+
+        if (/^\/resume(\s|$)/.test(line)) {
+          const resumed = await runResumeCommand(line, target);
+          if (resumed !== null) conversationId = resumed;
+          continue;
+        }
+
+        if (line.startsWith('/')) {
+          const handled = await runSlashCommand(
+            line,
+            client,
+            listed,
+            conversationId,
+            target,
+            // 戻せない操作の確認は、この REPL の readline で聞く（`confirm.ts`）。
+            (summary) => confirmInRepl(summary, ask),
+          );
+          if (handled === 'quit') break;
+          continue;
+        }
+
+        // 添えかけがあれば先に上げる。失敗したら送らず、添えかけを残して理由を出す。
+        let attachmentIds: string[] | undefined;
+        let sentFiles: DraftFile[] = [];
+        if (draft.count > 0) {
+          const uploaded = await uploadDraft(draft, (file) => uploadAttachment(target, file));
+          if (!uploaded.ok) {
+            stdout.write(
+              `添付を上げられなかったので送っていません: ${uploaded.reason}\n` +
+                '（添えかけは残してあります。/attachments で確認、/detach で外せます）\n',
+            );
+            continue;
+          }
+          attachmentIds = uploaded.uploaded.map((a) => a.id);
+          sentFiles = uploaded.files;
+          for (const a of uploaded.uploaded) stdout.write(`  ${describeAttachment(a)}\n`);
+        }
+        conversationId = await sendMessage(target, line, conversationId, undefined, {
+          ...(attachmentIds === undefined ? {} : { attachments: attachmentIds }),
+          // サーバが発言を受けたら、送った分の添えかけを外す（受けなかったら残す）。
+          onAccepted: () => draft.discard(sentFiles),
+          // 添付が期限切れ（サーバが掃除した）なら、上げ済みの印を捨てて、次の送信で上げ直す（#3246）。
+          onAttachmentMissing: (message) => {
+            stdout.write(`${expireUploads(sentFiles, message)}\n`);
+          },
+        });
+      } catch (error) {
+        stdout.write(
+          `エラー: ${redactError(error instanceof Error ? error.message : String(error))}\n`,
+        );
       }
-      conversationId = await sendMessage(target, line, conversationId, undefined, {
-        ...(attachmentIds === undefined ? {} : { attachments: attachmentIds }),
-        // サーバが発言を受けたら、送った分の添えかけを外す（受けなかったら残す）。
-        onAccepted: () => draft.discard(sentFiles),
-      });
     }
   } finally {
     rl.close();
@@ -216,6 +235,8 @@ export async function sendMessage(
     attachments?: string[];
     /** サーバが発言を受けた（HTTP 2xx）とき。添えかけを空にする合図。 */
     onAccepted?: () => void;
+    /** `400 attachment_missing`（添付が無い・期限切れ）で断られたとき。サーバの理由の文を渡す（#3246）。 */
+    onAttachmentMissing?: (message: string) => void;
   } = {},
 ): Promise<string | null> {
   // SSE は hono/client ではなく生の fetch で受ける（EventSource は POST も
@@ -242,11 +263,16 @@ export async function sendMessage(
       stdout.write(`${described}\n`);
       return conversationId;
     }
+    const failed = { status: response.status, body: await response.json().catch(() => null) };
+    const missing = attachmentMissingMessageOf(failed.body);
     // **本文の `error` をそのまま出す。** `supersedes` の検証（400）は4通り
     // あり、どれも「次に何を打てばよいか」まで書いてある（`apps/daemon/src/app.ts`
     // の手前検証）。ここで一律「デーモンが応答しません」に潰すと、`/edit` が
     // クローンの応答を指したときの案内（制約(C)）が人間に届かない。
-    stdout.write(`エラー: ${await errorDetail(response)}\n`);
+    stdout.write(
+      `エラー: ${await errorDetail({ status: failed.status, json: () => Promise.resolve(failed.body) })}\n`,
+    );
+    if (missing !== null) options.onAttachmentMissing?.(missing);
     return conversationId;
   }
 
@@ -283,63 +309,74 @@ async function renderChatEvents(
     pending = '';
   };
 
-  for await (const event of events) {
-    if (event.name !== 'text') flushPending();
-    switch (event.name) {
-      case 'open': {
-        const data = event.json<{ conversationId: string }>();
-        if (data) nextConversationId = data.conversationId;
-        break;
-      }
-      case 'text': {
-        const data = event.json<{ text: string }>();
-        if (data) {
-          pending += data.text;
-          const lineEnd = pending.lastIndexOf('\n');
-          if (lineEnd !== -1) {
-            stdout.write(redactBody(pending.slice(0, lineEnd + 1)));
-            pending = pending.slice(lineEnd + 1);
+  try {
+    for await (const event of events) {
+      if (event.name !== 'text') flushPending();
+      switch (event.name) {
+        case 'open': {
+          const data = event.json<{ conversationId: string }>();
+          if (data) nextConversationId = data.conversationId;
+          break;
+        }
+        case 'text': {
+          const data = event.json<{ text: string }>();
+          if (data) {
+            pending += data.text;
+            const lineEnd = pending.lastIndexOf('\n');
+            if (lineEnd !== -1) {
+              stdout.write(redactBody(pending.slice(0, lineEnd + 1)));
+              pending = pending.slice(lineEnd + 1);
+            }
+            wrote = true;
           }
-          wrote = true;
+          break;
         }
-        break;
-      }
-      case 'tool': {
-        const data = event.json<{ tool: string }>();
-        if (data) stdout.write(`\n  · ${data.tool}\n`);
-        break;
-      }
-      case 'ask_human': {
-        const data = event.json<{ approvalId: string; question: string }>();
-        if (data) {
-          stdout.write(`\n  ? 人間への確認（${data.approvalId}）: ${redactBody(data.question)}\n`);
-          stdout.write('    /answer <id> <回答> で返せます\n');
+        case 'tool': {
+          const data = event.json<{ tool: string }>();
+          if (data) stdout.write(`\n  · ${data.tool}\n`);
+          break;
         }
-        break;
-      }
-      case 'usage_limited': {
-        const data = event.json<{ message: string }>();
-        if (data) {
-          stdout.write(`\n  ! ${redactError(data.message)}\n`);
-          stdout.write(
-            '    （この発言は保持されていて、次に枠が開いたときに配り直されて試し直される）\n',
-          );
+        case 'ask_human': {
+          const data = event.json<{ approvalId: string; question: string }>();
+          if (data) {
+            stdout.write(
+              `\n  ? 人間への確認（${data.approvalId}）: ${redactBody(data.question)}\n`,
+            );
+            stdout.write('    /answer <id> <回答> で返せます\n');
+          }
+          break;
         }
-        failedOrLimited = true;
-        break;
+        case 'usage_limited': {
+          const data = event.json<{ message: string }>();
+          if (data) {
+            stdout.write(`\n  ! ${redactError(data.message)}\n`);
+            stdout.write(
+              '    （この発言は保持されていて、次に枠が開いたときに配り直されて試し直される）\n',
+            );
+          }
+          failedOrLimited = true;
+          break;
+        }
+        case 'done':
+          completed = true;
+          break;
+        case 'error': {
+          failedOrLimited = true;
+          const data = event.json<{ message: string }>();
+          stdout.write(`\nエラー: ${data ? redactError(data.message) : '不明'}\n`);
+          break;
+        }
+        default:
+          break;
       }
-      case 'done':
-        completed = true;
-        break;
-      case 'error': {
-        failedOrLimited = true;
-        const data = event.json<{ message: string }>();
-        stdout.write(`\nエラー: ${data ? redactError(data.message) : '不明'}\n`);
-        break;
-      }
-      default:
-        break;
     }
+  } catch (error) {
+    // 応答の途中で切れた（SSE の切断）。ここまでに知った会話 id を返し、REPL が続けられるようにする。
+    flushPending();
+    stdout.write(
+      `\nエラー: 応答が途中で切れました（${redactError(error instanceof Error ? error.message : String(error))}）\n`,
+    );
+    failedOrLimited = true;
   }
 
   flushPending();
@@ -635,9 +672,14 @@ export interface Listed {
  * **ここの `!response.ok` は例外を投げない（`stdout.write` して `'ok'` を返す）。**
  * #1641 / PR #1642 で変更系コマンド（`reset.ts` / `access.ts` / `token.ts` /
  * `memory.ts` / `practice.ts` 等）は HTTP の失敗で例外を投げる形に揃えたが、
- * ここは意図して揃えていない——`runSlashCommand` の呼び出し側（`chatCommand`
- * の読み取りループ）に `try/catch` が無く、ここで投げると対話のセッション
- * 全体が落ちるためである（オーナー了承済み）。
+ * ここは意図して揃えていない——1つの操作の失敗で、無関係な会話の続きまで失わせない
+ * ためである（オーナー了承済み）。
+ *
+ * **了承の範囲は「HTTP の失敗で例外を投げない」まで。** 通信そのものの例外（`$get()`
+ * の fetch 失敗・SSE の切断）で REPL ごと落ちてよい、までは含まない（#3218）。以前は
+ * `chatCommand` の読み取りループに `try/catch` が無く、ここの注釈が「呼び出し側が
+ * 受けない」ことを理由にしていたが、いまはループが例外を受けて 1 行言って入力に戻る
+ * （添えかけと会話 id は保つ）。
  */
 export async function runSlashCommand(
   line: string,
@@ -1012,7 +1054,7 @@ export async function runSlashCommand(
           stdout.write(
             `  [${index + 1}] ${conversation.conversationId}` +
               `  作成: ${conversation.startedAt}  更新: ${conversation.updatedAt}` +
-              `  (${conversation.messages}件)\n`,
+              `  (${conversation.messages}件)${unreadMark(conversation.unreadCount)}\n`,
           );
           stdout.write(`      ${redactBody(conversation.preview)}\n`);
         });
@@ -3982,7 +4024,7 @@ export async function runAttachmentCommand(line: string, draft: AttachmentDraft)
       stdout.write('使い方: /attach <path>\n');
       return;
     }
-    const added = await draft.add(unquotePath(args));
+    const added = await draft.add(interpretAttachPath(args));
     if (!added.ok) {
       stdout.write(`添えられません: ${added.reason}\n`);
       return;
@@ -4006,12 +4048,6 @@ export async function runAttachmentCommand(line: string, draft: AttachmentDraft)
       ? `外した: ${removed.removed.map((f) => f.name).join(', ')}（残り ${draft.count} 件）\n`
       : `外せません: ${removed.reason}\n`,
   );
-}
-
-/** パスの前後の引用符（シェルの癖で付けがち）を外す。 */
-function unquotePath(raw: string): string {
-  const match = /^(['"])(.*)\1$/.exec(raw);
-  return match === null ? raw : (match[2] ?? raw);
 }
 
 /**

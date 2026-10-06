@@ -1,38 +1,17 @@
-import { describeAnsweredVia } from '@alteroid/core/answered-via';
 import { describeTraceAction } from '@alteroid/core/trace-action';
 import { useState } from 'react';
 import { Link } from 'react-router';
 
-import { ApprovalCard as ApprovalCardView, Button, ErrorNote, Spinner, cn } from '@alteroid/ui';
-import type { ApprovalQuestionsAnswer } from '@alteroid/ui';
-import { useAnswerApproval, useApprovalTrace, useConversation } from '@alteroid/swr';
-import {
-  formatDateTime,
-  formatRelative,
-  journalTypeLabel,
-  redactBody,
-  summarizeQuestions,
-} from '@alteroid/logic';
+import { Button, ErrorNote, Spinner, cn } from '@alteroid/ui';
+import { useApprovalTrace, useConversation } from '@alteroid/swr';
+import { formatDateTime, journalTypeLabel, redactBody } from '@alteroid/logic';
 import type { PendingApproval } from '@alteroid/logic';
 
-export function isAnswered(approval: PendingApproval): boolean {
-  return approval.answeredAt !== undefined && approval.answeredAt !== null;
-}
-
-/**
- * クローンが `approval_withdraw` で取り下げたか（issue #963）。
- *
- * **`isAnswered` と排他的な想定である。** 正常な経路では両方 true になる
- * 行は無い（回答済みは取り下げられず、取り下げ済みは答えられない——
- * `packages/core/src/schema.ts` の `pendingApprovalSchema.withdrawnAt` の
- * doc、`apps/daemon/src/app.ts` の `/approvals/:id/answer` の `withdrawn`
- * ガード）。
- */
-export function isWithdrawn(approval: PendingApproval): boolean {
-  return approval.withdrawnAt !== undefined && approval.withdrawnAt !== null;
-}
-
-function noop(): void {}
+import {
+  ApprovalAnswerCard,
+  isApprovalAnswered,
+  isApprovalWithdrawn,
+} from '~/components/approval-answer-card';
 
 /**
  * 承認の1件。見た目は `@alteroid/ui` の `ApprovalCard`（Twin Plate）に任せ、ここは
@@ -47,16 +26,15 @@ function noop(): void {}
  */
 export function ApprovalEntry({
   approval,
-  draft = '',
-  onDraftChange = noop,
-  onAnswered = noop,
+  draft,
+  onDraftChange,
+  onAnswered,
   bulkError,
 }: {
   approval: PendingApproval;
   /**
-   * まとめて送るための下書き。親が持つので、カードをまたいで数えられる。**未回答の画面
-   * （`approvals.tsx`）だけが渡す。** 回答済みの画面（`approvals-answered.tsx`）は決着した件
-   * だけを出すので、下書きも送信も持たない（渡さない）。
+   * まとめて送るための下書き。**未回答の画面（`approvals.tsx`）だけが渡す。** 回答済みの画面
+   * （`approvals-answered.tsx`）は決着した件だけを出すので渡さない（カードが自前で持つ）。
    */
   draft?: string;
   onDraftChange?: (text: string) => void;
@@ -65,127 +43,27 @@ export function ApprovalEntry({
   /** 直前のまとめ送信でこの id が駄目だった理由（無ければ何も出さない）。 */
   bulkError?: string;
 }) {
-  const answerApproval = useAnswerApproval();
-  const [busy, setBusy] = useState(false);
-  const [failure, setFailure] = useState<unknown>(undefined);
-
-  const answered = isAnswered(approval);
-  const withdrawn = isWithdrawn(approval);
-  // 取り下げ済み（#963）は回答済みと別の終端。両方 true の行は無い想定だが、
-  // 来たら今までどおり取り下げを優先する。
-  const state = withdrawn ? 'withdrawn' : answered ? 'answered' : 'unanswered';
-
-  async function submit(text: string) {
-    if (text.trim() === '') return;
-    await send(() => answerApproval(approval.id, text));
-  }
-
-  /**
-   * 設問のフォームの「回答」（issue #2525）。選んだ設問ごとの `selections` と、補足があれば
-   * `answer`（補足になる）を1回で送る。畳んだ文はサーバが作る（ここでは作らない）。
-   */
-  async function submitQuestions({ selections, supplement }: ApprovalQuestionsAnswer) {
-    if (selections.length === 0 && supplement === undefined) return;
-    await send(() =>
-      answerApproval(approval.id, supplement, selections.length === 0 ? undefined : selections),
-    );
-  }
-
-  async function send(request: () => Promise<void>) {
-    setBusy(true);
-    setFailure(undefined);
-    try {
-      await request();
-      onAnswered();
-    } catch (caught) {
-      setFailure(caught);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  // エラーは今までどおり、個別の失敗 → まとめ送信の失敗の順に、それぞれ別の
-  // ErrorNote で出す。どちらも無いときは何も渡さない（部品は `error` が在ると
-  // 余白の箱を出すので、空の箱を作らない）。
-  const hasFailure = failure !== undefined && failure !== null;
-  const errors =
-    hasFailure || bulkError !== undefined ? (
-      <>
-        <ErrorNote error={failure} />
-        {bulkError !== undefined && (
-          <ErrorNote
-            error={`まとめて送った回答は通らなかった: ${bulkError}`}
-            className={hasFailure ? 'mt-2' : undefined}
-          />
-        )}
-      </>
-    ) : undefined;
-
+  // 状態の導出・回答の送信・エラー表示は会話の画面と共有のカードが持つ（#3259）。
+  // ここが足すのは、この画面だけのもの（答えの後の経緯・確認が上がった会話）。
   return (
-    <ApprovalCardView
-      state={state}
-      time={
-        <>
-          <span>{formatDateTime(approval.createdAt)}</span>
-          <span>({formatRelative(approval.createdAt)})</span>
-        </>
-      }
-      /*
-        **`jobId` を委譲の詳細へつなぐ（issue #2041）。** `jobId` はマネージャー id
-        である（`packages/core/src/schema.ts` の `pendingApprovalSchema` の doc
-        「どのマネージャーの件か（= manager_id）」。積むのは
-        `packages/core/src/tools.ts` の `jobId: managerId` だけ）。
-        `commitments.tsx` の `OriginBadge`（issue #2028）と同じ作法で、文言は
-        1文字も変えず id の部分だけを `<Link>` にする。
-      */
-      jobLink={
-        approval.jobId !== undefined && approval.jobId !== null ? (
-          <>
-            {'委譲: '}
-            <Link to={`/managers/${approval.jobId}`} className="hover:underline">
-              詳細を見る
-            </Link>
-          </>
-        ) : undefined
-      }
-      question={approval.question}
-      context={approval.context ?? undefined}
-      answer={approval.answer ?? undefined}
-      /*
-        **回答経路（Issue #1479）。** 記録が無い（`answeredVia` を持たない古い
-        経路で答えられた）行では渡さない——「わからない」を「operator では
-        ない」に化けさせない（`packages/core/src/schema.ts` の
-        `answeredViaSchema` の doc）。部品は `!== undefined` で判定するので、
-        今の画面の truthy 判定はここで保つ。`describeAnsweredVia` は
-        `@alteroid/core/answered-via`（ブラウザが読む軽い口）から import する——
-        `@alteroid/core` バレルからの値 import はサーバ専用のドメイン層を
-        引き込むので禁じている。
-      */
-      answeredVia={approval.answeredVia ? describeAnsweredVia(approval.answeredVia) : undefined}
-      withdrawnReason={approval.withdrawnReason ?? undefined}
+    <ApprovalAnswerCard
+      approval={approval}
       draft={draft}
       onDraftChange={onDraftChange}
-      onSubmit={(text) => void submit(text)}
-      questions={approval.questions ?? undefined}
-      questionsSummary={
-        approval.questions && approval.questions.length > 0
-          ? summarizeQuestions(approval.questions)
-          : undefined
-      }
-      onSubmitQuestions={(answer) => void submitQuestions(answer)}
-      busy={busy}
-      // 長文になりうるので Enter は改行のまま。送信は Cmd/Ctrl+Enter（部品の既定
-      // `isSubmitShortcut`）。IME の確定の Enter は送信に数えない（issue #2259）。
+      onAnswered={onAnswered}
+      bulkError={bulkError}
       /*
         **答えの後にクローンが何をしたか（issue #847 の案B）。** 答え済みの件だけに
         出し、開いたときだけ読む（`useApprovalTrace` の doc）。
       */
-      footer={state === 'answered' ? <TracePanel approvalId={approval.id} /> : undefined}
-      error={errors}
+      footer={
+        isApprovalAnswered(approval) && !isApprovalWithdrawn(approval) ? (
+          <TracePanel approvalId={approval.id} />
+        ) : undefined
+      }
       /*
-        **この確認が上がった会話（issue #782 の3）。** 承認だけを見ていると、
-        クローンが実際にこの人間と何を話していたかが分からない。4状態を
-        別々に出す（`ConversationPanel` の doc）。
+        **この確認が上がった会話（issue #782 の3）。** 4状態を別々に出す
+        （`ConversationPanel` の doc）。
       */
       trailing={
         <div className="mt-3 border-t border-border pt-3">

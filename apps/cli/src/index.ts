@@ -50,6 +50,7 @@ import {
 import {
   integrationCreateCommand,
   integrationListCommand,
+  integrationRemoveUnreadableCommand,
   integrationRevokeCommand,
 } from './integration.js';
 import {
@@ -1086,7 +1087,9 @@ daemonCommand
  */
 const integrationCommand = program
   .command('integration')
-  .description('連携の鍵（外のサービスが外部イベントを送るための鍵）を一覧・発行・失効する');
+  .description(
+    '連携の鍵（外のサービスが外部イベントを送るための鍵）を一覧・発行・失効する（読めない行は remove-unreadable で消す）',
+  );
 
 integrationCommand
   .command('list')
@@ -1128,6 +1131,17 @@ integrationCommand
   .option('--yes', '確認を飛ばす（スクリプト・CI 向け。端末でなければ必須）')
   .action(async (id: string, options: { yes?: boolean }) => {
     await integrationRevokeCommand(id, options);
+  });
+
+integrationCommand
+  .command('remove-unreadable <ids...>')
+  .description(
+    '読めない連携の鍵の行を id を指して消す（id は alteroid integration list の「読めない連携の鍵の行」に出る。' +
+      'integration revoke は読めない行に触れない。id が取れない行はこの口では消せない）',
+  )
+  .option('--yes', '確認を飛ばす（スクリプト・CI 向け。端末でなければ必須）')
+  .action(async (ids: string[], options: { yes?: boolean }) => {
+    await integrationRemoveUnreadableCommand(ids, options);
   });
 
 /**

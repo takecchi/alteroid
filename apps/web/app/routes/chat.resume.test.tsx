@@ -392,7 +392,7 @@ describe('画面に戻ったとき、処理中の会話の途中経過に戻る'
     expect(within(transcript()).getAllByText('やあ')).toHaveLength(1);
   });
 
-  it('再生で届いた確認（ask_human）は履歴由来の行と同じ文面で、取り直しても二重にならない', async () => {
+  it('再生で届いた確認（ask_human）は履歴由来のカードと同じ承認として、取り直しても二重にならない', async () => {
     let recorded = false;
     const more = gate();
     setup({
@@ -413,7 +413,7 @@ describe('画面に戻ったとき、処理中の会話の途中経過に戻る'
         },
       ],
     });
-    const line = '確認したいことがある: いいか （承認待ちの画面から答えられる）';
+    const line = 'いいか';
 
     renderApp(`/chat/${ID}`);
     expect(

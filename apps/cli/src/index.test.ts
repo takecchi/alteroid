@@ -392,7 +392,12 @@ describe('サブコマンドの登録（入口が在ること）', () => {
 
   /** **`alteroid integration` が入口として実在すること**（#3113 段2）。 */
   it('alteroid integration は list / create / revoke を持ち、create は --name と --source を要る', () => {
-    expect(subcommandNames('integration')).toEqual(['create', 'list', 'revoke']);
+    expect(subcommandNames('integration')).toEqual([
+      'create',
+      'list',
+      'remove-unreadable',
+      'revoke',
+    ]);
     const integration = program.commands.find((c) => c.name() === 'integration');
     const create = integration?.commands.find((c) => c.name() === 'create');
     expect(create?.options.map((o) => [o.long, o.mandatory])).toEqual([
@@ -427,6 +432,7 @@ describe('サブコマンドの登録（入口が在ること）', () => {
     for (const command of program.commands) walk(command, [command.name()]);
     expect(found).toContain('reset');
     expect(found).toContain('access remove-unreadable');
+    expect(found).toContain('integration remove-unreadable');
   });
 
   /**
