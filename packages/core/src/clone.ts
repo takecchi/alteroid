@@ -13393,7 +13393,7 @@ export function commitmentFor(event: InboxEvent): Commitment | null {
       };
     case 'external':
       // **デーモン自身が自分へ出した合図には、始末をつける相手が居ない。**
-      // `isDaemonSelfNotice` の doc に理由と、払っている代償の全文がある。
+      // `isDaemonSelfNotice` の doc に理由と、外から予約語を名乗らせない入口の断りの全文がある。
       if (isDaemonSelfNotice(event)) return null;
       return {
         ...base,

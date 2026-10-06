@@ -1257,6 +1257,11 @@ export {
   ApprovalAlreadySettledError,
   InvalidApprovalSelectionsError,
 } from './clone.js';
+export {
+  DAEMON_RESERVED_EVENT_SOURCES,
+  isReservedEventSource,
+  normalizeEventSource,
+} from './daemon-self-notice.js';
 export { placedModelTier, resolveModelTier } from './model-tier.js';
 export type { AgentProviderId } from './agent-ports.js';
 export {
