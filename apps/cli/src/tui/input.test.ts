@@ -60,6 +60,14 @@ describe('editText', () => {
     expect(editText(bufferOf('abc', 0), '', key({ home: true })).changed).toBe(false);
   });
 
+  it('複数行: 行頭の Home・空行や行末の End は動かず、行をまたがない', () => {
+    expect(editText(bufferOf('abc\ndef', 4), '', key({ home: true })).changed).toBe(false);
+    expect(editText(bufferOf('abc\n\ndef', 4), '', key({ end: true })).changed).toBe(false);
+    expect(editText(bufferOf('abc\ndef', 7), '', key({ end: true })).changed).toBe(false);
+    expect(editText(bufferOf('abc\ndef', 3), 'a', key({ ctrl: true })).buffer.cursor).toBe(0);
+    expect(editText(bufferOf('abc\ndef', 4), 'e', key({ ctrl: true })).buffer.cursor).toBe(7);
+  });
+
   it('Ctrl+W は直前の語（空白区切り）を消す。空白だけの手前は飛ばし、行頭では改行を 1 つ消す', () => {
     expect(editText(bufferOf('foo bar'), 'w', key({ ctrl: true })).buffer).toEqual({
       value: 'foo ',

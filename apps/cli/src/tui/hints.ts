@@ -9,7 +9,8 @@ export const HINT_MGR_LIST =
   '↑↓ 選択 · Enter 詳細 · f 絞り · m 古い側 · r 更新 · 1-5 画面 · / コマンド';
 export const HINT_MGR_DETAIL =
   'Esc 一覧へ · i 指示を送る · s 止める · ↑↓ PgUp/PgDn 遡る · r 更新 · 1-5 画面';
-export const HINT_MGR_INPUT = 'Enter 送信 · Esc 抜ける · /help · ^C 中断（クローン） · ^D 終了';
+export const HINT_MGR_INPUT =
+  'Enter 送信 · \\+Enter 改行 · Esc 抜ける · /help · ^C 中断（クローン） · ^D 終了';
 export const HINT_MGR_CONFIRM = 'y 止める · それ以外のキーでやめる';
 export const HINT_JOURNAL_LIST =
   '↑↓ PgUp/PgDn 選ぶ · Enter 全文 · f 種別 · n 最新へ · m 古い側 · 1-5 画面';
