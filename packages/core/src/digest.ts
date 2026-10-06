@@ -1,5 +1,6 @@
 import { providerGapsSection } from './provider-gaps.js';
 import { excerptLine } from './excerpt.js';
+import { compareIsoInstant } from './iso-instant.js';
 import { scanJournalPages } from './journal-scan.js';
 // **型だけを取る**（`import type` は実行時に消えるので、`manager.ts` との間に
 // 実行時の循環を作らない）。字面の生成元をここに置く理由は
@@ -14,7 +15,14 @@ import {
   describeUnreadableSchedules,
 } from './store.js';
 import type { Stores } from './store.js';
-import { formatUsd, isCloneActor, summarizeUsage, usageDate } from './usage.js';
+import {
+  describeUnmeteredUsage,
+  describeUnreadableUsageRows,
+  formatUsd,
+  isCloneActor,
+  summarizeUsage,
+  usageDate,
+} from './usage.js';
 
 /**
  * ある期間に何が起きたかの要約（日報と発意 tick の材料）。
@@ -674,14 +682,14 @@ function groupEscalations(
     let answeredInWindow = existing?.answeredInWindow;
     if (
       entry.answer !== undefined &&
-      (answeredInWindow === undefined || entry.at > answeredInWindow.at)
+      (answeredInWindow === undefined || compareIsoInstant(entry.at, answeredInWindow.at) > 0)
     ) {
       answeredInWindow = { answer: entry.answer, at: entry.at };
     }
     let withdrawnInWindow = existing?.withdrawnInWindow;
     if (
       entry.withdrawnAt !== undefined &&
-      (withdrawnInWindow === undefined || entry.at > withdrawnInWindow.at)
+      (withdrawnInWindow === undefined || compareIsoInstant(entry.at, withdrawnInWindow.at) > 0)
     ) {
       withdrawnInWindow = { reason: entry.withdrawnReason ?? '', at: entry.at };
     }
@@ -689,7 +697,10 @@ function groupEscalations(
       approvalId: entry.approvalId,
       question: existing?.question ?? entry.question,
       managerId: existing?.managerId ?? entry.managerId,
-      at: existing === undefined || entry.at > existing.at ? entry.at : existing.at,
+      at:
+        existing === undefined || compareIsoInstant(entry.at, existing.at) > 0
+          ? entry.at
+          : existing.at,
       answeredInWindow,
       withdrawnInWindow,
     });
@@ -1187,8 +1198,9 @@ export async function buildActivityDigest(
   const settled = (await stores.commitments.list({ includeClosed: true })).entries.filter(
     (entry) =>
       entry.closedAt !== undefined &&
-      entry.closedAt >= window.since.toISOString() &&
-      entry.closedAt < until.toISOString(),
+      // **実時刻で比べる**（#2451。文字列では `+09:00` 表記の時刻を数え違える。#3360）。
+      compareIsoInstant(entry.closedAt, window.since.toISOString()) >= 0 &&
+      compareIsoInstant(entry.closedAt, until.toISOString()) < 0,
   );
 
   // **境界を JS 側で切り直す理由。** `JournalQuery.until` は「以前＝含む」
@@ -1198,7 +1210,7 @@ export async function buildActivityDigest(
   // ここで `entry.at < untilIso` を掛けて決め直す。**二重に見えるが、
   // 片方だけでは足りない**——クエリ側を外すと OOM の本体（#1283）そのものに
   // 戻り、JS 側を外すと境界のミリ秒が1件ずれる。
-  const withinWindow = (entry: JournalEntry): boolean => entry.at < untilIso;
+  const withinWindow = (entry: JournalEntry): boolean => compareIsoInstant(entry.at, untilIso) < 0;
 
   // **`exchange` は別の走査にする。** `JournalQuery.with` はストアの絞りと
   // して `exchange` にしか効かない契約（`store.ts` の doc）——残り5種別と
@@ -1765,14 +1777,28 @@ async function usageSection(stores: Stores, since: Date, until: Date): Promise<s
   }
 
   const lines = ['## 使った分'];
+  // **取れなかったことは、どの分岐よりも先に書く**（Issue #3359）。消費を報告しない
+  // provider のターン（#486 M7）と、読めずに外した行（#2427）は、`usage_read` が
+  // 同じ関数で出している。ここで落とすと、取れなかったことが日報から消え、
+  // 取れなかったターンしか無い期間が「記録は無い」と読める。無ければ空配列。
+  const unreadableLines = describeUnreadableUsageRows(aggregate.unreadableRows);
+  const unmeteredLines = describeUnmeteredUsage(aggregate.unmeteredRows);
+  const gapLines = [...unreadableLines, ...unmeteredLines];
+  lines.push(...gapLines);
   if (aggregate.since === null) {
-    lines.push('（台帳にまだ記録が無い。この機能を入れる前の分は残っていない）');
+    lines.push(
+      gapLines.length > 0
+        ? '（消費の金額の記録がまだ無い。この機能を入れる前の分は残っていない）'
+        : '（台帳にまだ記録が無い。この機能を入れる前の分は残っていない）',
+    );
     return lines;
   }
 
   const summary = summarizeUsage(aggregate.rows, aggregate.turnRows);
   if (aggregate.rows.length === 0) {
-    lines.push('この期間の記録は無い。');
+    lines.push(
+      gapLines.length > 0 ? 'この期間、消費の金額を取れた記録は無い。' : 'この期間の記録は無い。',
+    );
   } else {
     lines.push(`- 合計: ${formatUsd(summary.total.costUsd)}`);
     lines.push(

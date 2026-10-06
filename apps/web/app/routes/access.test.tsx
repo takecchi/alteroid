@@ -145,6 +145,28 @@ describe('/access 画面 — 一覧', () => {
     expect(screen.getByRole('alert')).toBeTruthy();
   });
 
+  it('取得が失敗したら「もう一度試す」が出て、押すと取り直して一覧が出る（#3420）', async () => {
+    let failing = true;
+    stubFetch((url) => {
+      if (url.includes('/access')) {
+        return failing
+          ? json({ error: 'boom' }, 500)
+          : json({ accounts: [account({ email: 'retry@example.com' })] });
+      }
+      return undefined;
+    });
+
+    await renderAccess();
+
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toContain('アクセス許可の一覧を読み込めませんでした');
+    failing = false;
+    fireEvent.click(within(alert).getByRole('button', { name: 'もう一度試す' }));
+
+    await waitFor(() => expect(screen.getAllByText('retry@example.com').length).toBeGreaterThan(0));
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
   it('grantedBy が operator なら「実行環境の持ち主」と出す。伝播した許可はアカウント id をそのまま出す', async () => {
     stubAccess({
       body: {
@@ -305,7 +327,7 @@ describe('/access 画面 — 読めない行（issue #2536）', () => {
     await renderAccess();
 
     expect(screen.queryByText(/読めないアカウントの行/)).toBeNull();
-    expect(screen.queryByRole('button', { name: 'この行を消す' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'acct-bad の行を消す' })).toBeNull();
   });
 
   it('読めない行しか無いとき、「誰もログインしていない」と言わず、件数と id・不正な欄名を断る。id の無い行にはボタンが無い', async () => {
@@ -324,7 +346,28 @@ describe('/access 画面 — 読めない行（issue #2536）', () => {
     expect(screen.getByText(/id が取れない行が 1 件ある/)).toBeTruthy();
     expect(screen.getByText(/誰もログインしていない、とは言えない/)).toBeTruthy();
     expect(screen.queryByText('まだ誰もログインしていません。')).toBeNull();
-    expect(screen.getAllByRole('button', { name: 'この行を消す' })).toHaveLength(1);
+    expect(screen.getAllByRole('button', { name: 'acct-bad の行を消す' })).toHaveLength(1);
+  });
+
+  it('行ごとに「<id> の行を消す」の名前で引ける（読み上げで同じ名前が並ばない。#3299）', async () => {
+    stubAccess({
+      body: {
+        accounts: [],
+        rowsUnreadable: {
+          count: 2,
+          rows: [
+            { id: 'acct-bad', reason: '不正な欄: displayName' },
+            { id: 'acct-bad-2', reason: '不正な欄: email' },
+          ],
+        },
+      },
+    });
+
+    await renderAccess();
+
+    expect(await screen.findByRole('button', { name: 'acct-bad の行を消す' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'acct-bad-2 の行を消す' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'この行を消す' })).toBeNull();
   });
 
   it('「この行を消す」は id を指して POST /access/unreadable/remove を呼び、再取得で断りが消える', async () => {
@@ -356,7 +399,7 @@ describe('/access 画面 — 読めない行（issue #2536）', () => {
     }) as typeof fetch;
 
     await renderAccess();
-    fireEvent.click(await screen.findByRole('button', { name: 'この行を消す' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'acct-bad の行を消す' }));
     // 押しただけでは消さない（#3091。共有部品なので permissions / access で挙動が揃う）。
     const dialog = await screen.findByRole('alertdialog');
     expect(dialog.textContent).toContain('元に戻せません');
@@ -365,7 +408,7 @@ describe('/access 画面 — 読めない行（issue #2536）', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: 'やめる' }));
     await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
     expect(posts).toEqual([]);
-    fireEvent.click(screen.getByRole('button', { name: 'この行を消す' }));
+    fireEvent.click(screen.getByRole('button', { name: 'acct-bad の行を消す' }));
     fireEvent.click(
       within(await screen.findByRole('alertdialog')).getByRole('button', { name: '消す' }),
     );

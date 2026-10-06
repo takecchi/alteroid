@@ -1,7 +1,7 @@
 import { JournalTabs } from '~/components/group-tabs';
 import { LoadError } from '~/components/load-error';
-import { useState } from 'react';
-import { Link } from 'react-router';
+import { useState, type MouseEvent } from 'react';
+import { Link, useNavigate } from 'react-router';
 
 import {
   Page,
@@ -14,6 +14,7 @@ import {
   ErrorNote,
   Input,
   Spinner,
+  cn,
 } from '@alteroid/ui';
 import { useRemoveArchive, useArchive, useArchiveSessions, ApiError } from '@alteroid/swr';
 import { formatBytes, formatDateTime } from '@alteroid/logic';
@@ -195,7 +196,12 @@ function EntryList() {
  * 叩き、`ApiError.status === 409` が返ったときだけ理由の入力欄を出す——
  * 理由を毎回求めると、拒まれない大多数の行でも1ステップ増える。
  */
+/** 行を押したときに、遷移へ化けさせない中身（それぞれ自分の操作を持つ）。 */
+const ROW_INTERACTIVE =
+  'a, button, input, textarea, select, summary, details, label, [role="dialog"], [role="alertdialog"]';
+
 function EntryRow({ entry }: { entry: ArchiveEntry }) {
+  const navigate = useNavigate();
   const removeArchive = useRemoveArchive();
   const [reason, setReason] = useState('');
   const [busy, setBusy] = useState(false);
@@ -206,6 +212,32 @@ function EntryRow({ entry }: { entry: ArchiveEntry }) {
 
   const removed = entry.removedAt !== undefined;
   const denied = failure instanceof ApiError && failure.status === 409;
+  // 行ごとに同じ名前のボタンが並ぶので、どの行かを aria-label に足す（#3232 と同じ付け方。見える文言は変えない）。
+  const rowName = `${formatDateTime(entry.at)} の会話`;
+
+  const detailPath = `/archive/${encodeURIComponent(entry.id)}`;
+
+  /**
+   * 行のどこを押しても詳細へ行く（#3377。記憶・やり方の一覧 #3107 と揃える）。行の中にボタンが
+   * 在るので、`ListDetailItems` の「行全体が1本の `<a>`」は使えない（`<a>` の中に `button` は置けない）。
+   * 代わりに行（`li`）の押下で遷移し、**行の中の操作は遷移から除く**。除くのは次のもの。
+   * - ボタン・リンク・入力欄・`details`（`ROW_INTERACTIVE`）の上の押下
+   * - 確認の窓（ポータルで DOM は行の外だが、React のイベントは行まで泡立つ）の中の押下
+   * - 文字を選んでいる最中（ドラッグで選んだ後の click で飛ばない）、修飾キー付き、主ボタン以外
+   * 読む画面が無い（本文が消された）行は遷移しない。キーボードは「本文を読む」のリンクがそのまま効く。
+   */
+  function openDetail(event: MouseEvent<HTMLLIElement>) {
+    if (removed) return;
+    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
+      return;
+    }
+    const target = event.target;
+    if (!(target instanceof Element)) return;
+    if (!event.currentTarget.contains(target)) return;
+    if (target.closest(ROW_INTERACTIVE) !== null) return;
+    if ((window.getSelection()?.toString() ?? '') !== '') return;
+    void navigate(detailPath);
+  }
 
   async function remove(overrideReason?: string) {
     setBusy(true);
@@ -225,9 +257,15 @@ function EntryRow({ entry }: { entry: ArchiveEntry }) {
   }
 
   return (
-    <li className="border-b border-border px-4 py-3 text-xs last:border-b-0">
+    <li
+      className={cn(
+        'border-b border-border px-4 py-3 text-xs last:border-b-0',
+        !removed && 'cursor-pointer transition-colors hover:bg-muted',
+      )}
+      onClick={openDetail}
+    >
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-        <span className="font-medium">{formatDateTime(entry.at)} の会話</span>
+        <span className="font-medium">{rowName}</span>
         {removed && <Badge tone="warn">本文は削除済み</Badge>}
         {entry.continuity !== undefined && (
           <Badge tone="neutral" title={continuityLabel(entry.continuity)}>
@@ -239,7 +277,7 @@ function EntryRow({ entry }: { entry: ArchiveEntry }) {
       {!removed && (
         <div className="mt-2">
           {/* 読むだけの画面（#3137）。消された行は読める本文が無いので出さない。 */}
-          <Link to={`/archive/${encodeURIComponent(entry.id)}`} className="underline">
+          <Link to={detailPath} className="underline" aria-label={`${rowName}の本文を読む`}>
             本文を読む
           </Link>
         </div>
@@ -255,7 +293,7 @@ function EntryRow({ entry }: { entry: ArchiveEntry }) {
         <div className="mt-1 text-muted-foreground">
           削除: {entry.removedAt === undefined ? '' : formatDateTime(entry.removedAt)}
           {entry.removedBytes !== undefined &&
-            `（消した本文は ${entry.removedBytes}バイト。使用量とは数え方が違うため、空いた容量とは一致しません）`}
+            `（消した本文は ${formatBytes(entry.removedBytes)}。使用量とは数え方が違うため、空いた容量とは一致しません）`}
         </div>
       ) : (
         <>
@@ -265,6 +303,7 @@ function EntryRow({ entry }: { entry: ArchiveEntry }) {
               size="sm"
               loading={busy}
               disabled={busy}
+              aria-label={`${rowName}の本文を消す`}
               onClick={() => setConfirming(true)}
             >
               本文を消す
@@ -290,6 +329,7 @@ function EntryRow({ entry }: { entry: ArchiveEntry }) {
             <div className="mt-2 flex items-center gap-2">
               <Input
                 value={reason}
+                aria-label="走行中のマネージャーの退避を上書きする理由"
                 placeholder="走行中のマネージャーの退避——上書きする理由"
                 onChange={(event) => setReason(event.target.value)}
               />
@@ -297,6 +337,7 @@ function EntryRow({ entry }: { entry: ArchiveEntry }) {
                 variant="danger"
                 size="sm"
                 className="shrink-0"
+                aria-label={`${rowName}の本文を理由を付けて消す`}
                 loading={busy}
                 // 理由なしでは override させない——`guardArchiveRemoval` 自身が
                 // 非空文字列を意思表示として扱う契約（`packages/core/src/manager.ts`）

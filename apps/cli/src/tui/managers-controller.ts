@@ -351,10 +351,19 @@ export class ManagersController {
     });
   }
 
-  /** 追加指示を送る。結果（`outcome: detail`）はそのまま見せる。 */
-  async sendMessage(text: string): Promise<void> {
+  /**
+   * 追加指示を送る。結果（`outcome: detail`）はそのまま見せる。
+   * 送れたら true。送れなかった（失敗・前の操作が終わっていない）ら false — 呼び出し側は書いた文を残す（#3367）。
+   */
+  async sendMessage(text: string): Promise<boolean> {
     const detail = this.store.getSnapshot().detail;
-    if (detail === null || detail.busy || text.length === 0) return;
+    if (detail === null || text.length === 0) return false;
+    if (detail.busy) {
+      this.setDetail(detail.id, {
+        notice: '送信中（前の操作が終わってから送る。書いた文は残してある）',
+      });
+      return false;
+    }
     const { id } = detail;
     this.setDetail(id, { busy: true, notice: '送っている…' });
     try {
@@ -362,9 +371,10 @@ export class ManagersController {
       this.setDetail(id, { busy: false, notice: `${result.outcome}: ${result.detail}` });
     } catch (error) {
       this.setDetail(id, { busy: false, notice: `✗ ${messageOf(error)}` });
-      return;
+      return false;
     }
     await this.refreshDetail();
+    return true;
   }
 
   /** 詳細の最下行に一言出す（コマンドの案内など）。`null` で消す。 */

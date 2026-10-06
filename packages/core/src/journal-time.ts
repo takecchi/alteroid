@@ -74,15 +74,62 @@
  */
 
 /**
- * `value` が日時として読めるか。**`Date.parse` が `NaN` を返さないことだけを
- * 見る**——`isoDateTime`（`z.string().datetime({ offset: true })`）より緩い。
- * 秒の省略・オフセット付き・スペース区切りなど、`Date.parse` が読める形は
- * すべて許す（`journal_read` の `since`/`until` の説明文が例示する
- * `2026-08-15T09:00:00Z` はもちろん、issue #1515 が挙げた
- * `2026-09-12T20:21Z` / `+09:00` も読める）。
+ * 受け付ける形の ISO 風パターン（#3287）。年・月・日を取り出すために捕捉する。
+ *
+ * - 日付 `YYYY-MM-DD`
+ * - 日時 `YYYY-MM-DDTHH:MM` / `:SS` / `.sss`（小数秒は1〜9桁）。区切りは `T` か空白1つ
+ * - 時差つき日時 末尾に `Z` か `±HH:MM`（`±HHMM` は断る）
+ *
+ * 量指定子は入れ子にせず線形。
+ */
+const JOURNAL_TIME_BOUNDARY_PATTERN =
+  /^(\d{4})-(\d{2})-(\d{2})(?:[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d{1,9})?)?(?:Z|[+-]\d{2}:\d{2})?)?$/;
+
+/**
+ * `value` が日時として読めるか。**3段で見る**（#3287）：
+ *
+ * 1. ISO 風の形に合う（`JOURNAL_TIME_BOUNDARY_PATTERN`）
+ * 2. `Date.parse` が `NaN` を返さない（時・分の範囲外などを落とす）
+ * 3. 日付が実在する——年月日を取り出し、`Date` に戻したときに同じ年月日に
+ *    なること（`2026-02-31` は `Date.parse` が 3/3 へずらして読むので、
+ *    2 だけでは通ってしまう）
+ *
+ * ## 緩さは意図だった——が、厳しくした（経緯）
+ *
+ * この関数は #1515 の時点では、`Date.parse` が読める形をすべて許す緩さを
+ * **意図して**選んでいた（秒の省略・オフセット付き・スペース区切りなどを
+ * `isoDateTime` より緩く通すため）。しかし `Date.parse` の読みは V8 の
+ * 慣用の読みで、`'foo 1'` を 2000 年の12月、`'1'` / `'12'` を年月として読み、
+ * `2026-02-31` を 3/3 へずらす。**判定できない入力を、黙って別の窓へ倒していた**
+ * （#3287）。
+ *
+ * 2026-10-06 に人間が「厳しくする」と決めた（#3287 の案 A）。緩さを残して
+ * 読んだ結果を応答に出す案 C や、存在しない日付だけを断る案 B は採らなかった。
+ * 形の線は、いま実際に使われている形から引いた：デーモン・CLI・Web が送るのは
+ * `entry.at`（`toISOString()` の `…Z`）だけで、既存のテストは時差なしの日時
+ * （`2026-09-25T19:00`）を通すと固定している。空白区切りは、以前の doc が
+ * 許すと書いていて、`T` の形と読みが同じ（地方時刻）なので残した。
+ * `YYYY/MM/DD`・`Sep 25 2026`・`±HHMM` のような他の形は断る。
+ *
+ * 時差の無い日時（日付だけの形も含む）は `Date.parse` の読みに従う——日付だけは UTC、
+ * 時差なしの日時はサーバーの地方時刻。時差が要る一括操作の口は
+ * `isOffsetQualifiedTimeBoundary` で別に締めている。
  */
 export function isReadableJournalTimeBoundary(value: string): boolean {
-  return !Number.isNaN(Date.parse(value));
+  const match = JOURNAL_TIME_BOUNDARY_PATTERN.exec(value);
+  if (match === null) return false;
+  if (Number.isNaN(Date.parse(value))) return false;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  // `Date.UTC` は 0〜99 年を 1900 年代へ読み替えるので、`setUTCFullYear` で組む。
+  const calendar = new Date(0);
+  calendar.setUTCFullYear(year, month - 1, day);
+  return (
+    calendar.getUTCFullYear() === year &&
+    calendar.getUTCMonth() === month - 1 &&
+    calendar.getUTCDate() === day
+  );
 }
 
 // `YYYY-MM-DDThh:mm[:ss[.fff]]` + (`Z` | `±hh:mm`)。量指定子は入れ子にせず線形。
@@ -93,7 +140,7 @@ const OFFSET_QUALIFIED_TIME_PATTERN =
  * `value` が**時差（`Z` か `±hh:mm`）の付いた** ISO 8601 の日時か。
  * **元に戻せない一括操作**（`commitment_close_many` の `until`・`inbox_remove_many` の
  * `before`）の門に使う（#2462）。`isReadableJournalTimeBoundary` は時差の無い
- * `2026-09-25T19:00` / `2026/09/25` / `Sep 25 2026` も通し、**サーバーの地方時刻として読む**ため、
+ * `2026-09-25T19:00` も通し（`2026/09/25` / `Sep 25 2026` は #3287 から断る）、**サーバーの地方時刻として読む**ため、
  * 境界が時差ぶんずれたまま消す・閉じる対象が決まってしまう。
  *
  * 形は `T` 区切りのみ（空白区切りは断る）、時差は `Z` か `±hh:mm`（`±hhmm` は断る）。
@@ -127,11 +174,12 @@ export function normalizeJournalTimeBoundary(value: string): string | null {
 
 /** 読めない `since`/`until` を断るときの共通の言い方。呼び出し口ごとに文言が割れないようにする。 */
 export function describeUnreadableJournalTimeBoundary(
-  field: 'since' | 'until',
+  field: 'since' | 'until' | 'before',
   value: string,
 ): string {
   return (
     `${field} に渡された「${value}」は日時として読めない` +
-    '（ISO 8601 で指定する。例 2026-08-15T09:00:00Z）。'
+    '（ISO 8601 で指定する。受け付ける形の例 2026-10-06 / 2026-10-06T09:00 / ' +
+    '2026-10-06T09:00:00+09:00 / 2026-10-06T09:00:00Z。実在しない日付も断る）。'
   );
 }
