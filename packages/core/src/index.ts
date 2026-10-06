@@ -1516,6 +1516,7 @@ export {
   canBindAttachmentTo,
   isAttachmentImageMediaType,
   isBoundTo as isAttachmentBoundTo,
+  isAttachmentExpired,
   isAttachmentPrunable,
   normalizeAttachmentMediaType,
   normalizeAttachmentName,

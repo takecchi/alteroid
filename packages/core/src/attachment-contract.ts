@@ -389,6 +389,42 @@ async function verifyWithSmallLimits(
   if ((await clocked.prune(new Date(unboundAt))) !== 1) fail('未結び付けが1時間ちょうどで消えない');
   if ((await clocked.getMeta(unbound.id)) !== undefined) fail('未結び付けが1時間ちょうどで残った');
 
+  // 9（#3522）: 期限を過ぎたものは、prune が走る前でも読めず・結べない（prune が消すものは読めない）。
+  //   境界は prune と同じ向き（expiresAt ちょうどで「無い」、1ms 前はまだある）。結び付いて期限内のものは変えない。
+  let readNow = T0;
+  const expiring = await createStore({ now: () => readNow });
+  const keep = await expiring.put({ name: 'k.txt', mediaType: 'text/plain', bytes: PNG });
+  const late = await expiring.put({ name: 'l.txt', mediaType: 'text/plain', bytes: PNG });
+  const late2 = await expiring.put({ name: 'm.txt', mediaType: 'text/plain', bytes: PNG });
+  const lateBound = await expiring.put({ name: 'b.txt', mediaType: 'text/plain', bytes: PNG });
+  await expiring.bind([lateBound.id], 'conv-x');
+  const dueAt = Date.parse(keep.expiresAt);
+  readNow = new Date(dueAt - 1);
+  if ((await expiring.getMeta(keep.id)) === undefined)
+    fail('expiresAt の1ms前に getMeta が無いと答えた');
+  if ((await expiring.get(keep.id)) === undefined) fail('expiresAt の1ms前に get が無いと答えた');
+  readNow = new Date(dueAt);
+  if ((await expiring.getMeta(keep.id)) !== undefined)
+    fail('expiresAt ちょうどで getMeta が答えた');
+  if ((await expiring.get(keep.id)) !== undefined) fail('expiresAt ちょうどで get が答えた');
+  if ((await expiring.getMeta(lateBound.id)) !== undefined)
+    fail('結び付いていても期限切れの getMeta が答えた');
+  readNow = new Date(dueAt + 1000);
+  const lateBind = await expiring.bind([late.id], 'conv-late');
+  if (lateBind.bound.length > 0 || lateBind.newlyBound.length > 0 || lateBind.conflicts.length > 0)
+    fail(`期限切れの bind が通った: ${JSON.stringify(lateBind)}`);
+  if (lateBind.missing.join() !== late.id) fail('期限切れの bind が missing にならない');
+  const lateEvent = await expiring.bindToExternalEvent([late2.id], 'ev-late');
+  if (lateEvent.bound.length > 0 || lateEvent.missing.join() !== late2.id)
+    fail(`期限切れの bindToExternalEvent が missing にならない: ${JSON.stringify(lateEvent)}`);
+  // 期限内で結び付いているものを、同じ宛先へ結び直しても変わらない（冪等）。
+  readNow = new Date(dueAt - 1);
+  const again = await expiring.bind([lateBound.id], 'conv-x');
+  if (again.bound.join() !== lateBound.id || again.newlyBound.length > 0)
+    fail('期限内で結び付いたものの冪等な bind が変わった');
+  if ((await expiring.getMeta(lateBound.id))?.conversationId !== 'conv-x')
+    fail('期限内で結び付いたものが読めない');
+
   // 9: bind と prune の並行。どちらが先でもよいが、答えと結果が食い違ってはならない
   //（bound と答えたのに無い・missing と答えたのに残っている、は許さない）
   const racing = await createStore({ now: () => T0 });
