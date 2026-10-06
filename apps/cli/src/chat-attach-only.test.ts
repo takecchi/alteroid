@@ -91,7 +91,7 @@ async function run(
 
 // 初回は chat.ts（大きい）の読み込みで既定の5秒を超えうる。
 describe('chat: 添えかけがあるときの空行（添付だけの発言）', { timeout: 30000 }, () => {
-  it('/attach のあとの空行で text:"" と attachments が /chat に送られ、その後の空行は送らない', async () => {
+  it('/attach のあとの空行で text:"" と attachments が /chat に送られ、その後の空行は送らない', { timeout: 50 }, async () => {
     const dir = await makeTempDir('alteroid-chat-only-');
     const path = join(dir, 'a.log');
     await writeFile(path, 'x');
