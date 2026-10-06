@@ -48,6 +48,18 @@ interface DraftOf {
   otherOn: boolean;
 }
 
+/** 設問1つぶんの書きかけ。 */
+export type ApprovalQuestionDraft = DraftOf;
+
+/** フォーム全体の書きかけ（選択・「その他」・補足）。呼ぶ側が持つと、フォームが外れても残る。 */
+export interface ApprovalQuestionsDraft {
+  drafts: Readonly<Record<string, DraftOf>>;
+  supplement: string;
+}
+
+/** 何も書いていない書きかけ。 */
+export const EMPTY_QUESTIONS_DRAFT: ApprovalQuestionsDraft = { drafts: {}, supplement: '' };
+
 const EMPTY: DraftOf = { chosen: [], other: '', otherOn: false };
 /** 単一選択の RadioGroup で「その他」を表す値。選択肢の id と衝突しない（空白を含む）。 */
 const OTHER_VALUE = ' other ';
@@ -95,18 +107,37 @@ export function ApprovalQuestionsForm({
   questions,
   busy = false,
   onSubmit,
+  draft,
+  onDraftChange,
 }: {
   questions: readonly ApprovalQuestionView[];
   busy?: boolean;
   onSubmit: (answer: ApprovalQuestionsAnswer) => void;
+  /**
+   * 書きかけを呼ぶ側が持つとき（会話の画面。会話を移ってもカードの書きかけを失わない）。
+   * 渡さなければフォームの中で持つ。`draft` と `onDraftChange` は対で渡す。
+   */
+  draft?: ApprovalQuestionsDraft;
+  onDraftChange?: (draft: ApprovalQuestionsDraft) => void;
 }) {
-  const [drafts, setDrafts] = useState<Record<string, DraftOf>>({});
-  const [supplement, setSupplement] = useState('');
+  const [ownDraft, setOwnDraft] = useState<ApprovalQuestionsDraft>(EMPTY_QUESTIONS_DRAFT);
+  const current = draft ?? ownDraft;
+  const drafts = current.drafts;
+  const supplement = current.supplement;
   const supplementId = useId();
   const formRef = useRef<HTMLFormElement>(null);
+  // 同じ描画の中で続けて呼ばれても取りこぼさないよう、最新の値を ref に持つ。
+  const latest = useRef(current);
+  latest.current = current;
+  const change = (next: ApprovalQuestionsDraft) => {
+    latest.current = next;
+    if (onDraftChange !== undefined) onDraftChange(next);
+    else setOwnDraft(next);
+  };
 
   function update(id: string, patch: (current: DraftOf) => DraftOf): void {
-    setDrafts((current) => ({ ...current, [id]: patch(current[id] ?? EMPTY) }));
+    const base = latest.current;
+    change({ ...base, drafts: { ...base.drafts, [id]: patch(base.drafts[id] ?? EMPTY) } });
   }
 
   const answer = buildApprovalAnswer(questions, drafts, supplement);
@@ -144,7 +175,7 @@ export function ApprovalQuestionsForm({
           // ⌘/Ctrl + Enter は「回答」ボタンと同じ form の submit（空・送信中は送らない）。
           onSubmitShortcut={() => formRef.current?.requestSubmit()}
           submitDisabled={empty || busy}
-          onChange={(event) => setSupplement(event.target.value)}
+          onChange={(event) => change({ ...latest.current, supplement: event.target.value })}
         />
       </div>
       <div className="flex flex-wrap items-center gap-2">

@@ -1,4 +1,4 @@
-import { ArrowUp, Plus, Square } from 'lucide-react';
+import { ArrowUp, Pencil, Plus, Square } from 'lucide-react';
 import { lazy, type ReactNode, Suspense, useId, useRef, useState } from 'react';
 
 import { isMacPlatform, submitShortcutLabel } from '@/lib/platform';
@@ -76,6 +76,10 @@ const ROUND_BUTTON = 'size-11 rounded-full p-0 md:size-8';
  *   呼ぶ側が持つ。`uploading` のあいだは送れない
  * - `disabled` — 欄ぜんたいを使えなくする（入力・添付・送信）
  *
+ * - `editContinuation` — 渡すと、いま入力欄にあるのが**発言の編集の続き**（編集の送信が失敗して戻った文）で、
+ *   送ると元の発言を置き換えることを枠の上に言う。「編集をやめる」で、ただの新しい発言に戻す
+ *   （文はそのまま残す。#3393）
+ *
  * `error` には送信・中断の失敗を渡す（枠の上に出る）。渡すと `mb-2` の `div` で
  * 包む。**失敗が無いときは `undefined` を渡す**（空の `div` の余白が残る）。
  */
@@ -92,6 +96,7 @@ export function ChatComposer({
   onRemoveAttachment,
   uploading = false,
   disabled = false,
+  editContinuation,
 }: {
   value: string;
   onChange: (value: string) => void;
@@ -108,6 +113,8 @@ export function ChatComposer({
   uploading?: boolean;
   /** 欄ぜんたいを使えなくする。 */
   disabled?: boolean;
+  /** 入力欄が発言の編集の続きであるとき。押すと「編集」をやめ、文はただの新しい発言として残る。 */
+  editContinuation?: { onCancel: () => void };
 }) {
   // 本文が空でも、添付が1件以上あれば送れる（サーバも添付のある空本文を受ける。Issue #3111）。
   const empty = value.trim() === '' && attachments.length === 0;
@@ -140,6 +147,20 @@ export function ChatComposer({
         className="shrink-0 border-t border-border bg-background pt-3 pb-[calc(0.75rem+var(--safe-bottom))] pl-[calc(1rem+var(--safe-left))] pr-[calc(1rem+var(--safe-right))] md:pl-[calc(1.5rem+var(--safe-left))] md:pr-[calc(1.5rem+var(--safe-right))]"
       >
         {error !== undefined && <div className="mb-2">{error}</div>}
+        {editContinuation !== undefined && (
+          <div
+            data-slot="chat-composer-edit-continuation"
+            className="mb-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground"
+          >
+            <Pencil className="size-3.5 shrink-0" aria-hidden />
+            <span className="min-w-0 break-words">
+              発言の編集の続き。送ると、元の発言を置き換える
+            </span>
+            <Button size="sm" variant="ghost" onClick={editContinuation.onCancel}>
+              編集をやめる
+            </Button>
+          </div>
+        )}
         {/* 枠。フォーカスの輪とドロップ先の強調は、テキストエリアでなくこの枠に付ける。 */}
         <div
           data-slot="chat-composer-frame"
