@@ -156,7 +156,7 @@ describe('添えて送る', () => {
     expect(await within(tray).findByAltText('shot.png の縮小表示')).toBeTruthy();
 
     fireEvent.change(await box(), { target: { value: 'これを見て' } });
-    fireEvent.click(screen.getByRole('button', { name: '送る' }));
+    fireEvent.click(screen.getByRole('button', { name: 'メッセージを送信' }));
 
     await waitFor(() => {
       expect(seen.some((r) => r.url.endsWith('/chat'))).toBe(true);
@@ -195,7 +195,7 @@ describe('添えて送る', () => {
     choose([nodeFile('a.txt', 3, 'text/plain')]);
     fireEvent.click(await screen.findByRole('button', { name: 'a.txt を外す' }));
     fireEvent.change(await box(), { target: { value: 'なし' } });
-    fireEvent.click(screen.getByRole('button', { name: '送る' }));
+    fireEvent.click(screen.getByRole('button', { name: 'メッセージを送信' }));
     await waitFor(() => {
       expect(seen.some((r) => r.url.endsWith('/chat'))).toBe(true);
     });
@@ -219,16 +219,16 @@ describe('添えて送る', () => {
     await box();
     choose([nodeFile('a.txt', 3, 'text/plain')]);
     fireEvent.change(await box(), { target: { value: '書きかけ' } });
-    fireEvent.click(await screen.findByRole('button', { name: '送る' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'メッセージを送信' }));
 
     expect(await screen.findByText(/a\.txt を上げられなかった: 大きすぎる/)).toBeTruthy();
     expect(((await box()) as HTMLTextAreaElement).value).toBe('書きかけ');
     expect(screen.getByRole('button', { name: 'a.txt を外す' })).toBeTruthy();
     expect(seen.some((r) => r.url.endsWith('/chat'))).toBe(false);
     // 上げ終えて送信ボタンが戻っている（止めっぱなしにしない）。
-    expect((screen.getByRole('button', { name: '送る' }) as HTMLButtonElement).disabled).toBe(
-      false,
-    );
+    expect(
+      (screen.getByRole('button', { name: 'メッセージを送信' }) as HTMLButtonElement).disabled,
+    ).toBe(false);
   });
 
   it('個数・大きさの上限はクライアントでも先に断り、理由を出す', async () => {
@@ -258,10 +258,14 @@ describe('添えて送る', () => {
     const seen = captureRequests();
     renderChat('/chat');
     await box();
-    expect((screen.getByRole('button', { name: '送る' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(
+      (screen.getByRole('button', { name: 'メッセージを送信' }) as HTMLButtonElement).disabled,
+    ).toBe(true);
     choose([nodeFile('shot.png', [1, 2, 3, 4], 'image/png')]);
     await screen.findByRole('button', { name: 'shot.png を外す' });
-    const sendButton = screen.getByRole('button', { name: '送る' }) as HTMLButtonElement;
+    const sendButton = screen.getByRole('button', {
+      name: 'メッセージを送信',
+    }) as HTMLButtonElement;
     expect(sendButton.disabled).toBe(false);
     fireEvent.click(sendButton);
     await waitFor(() => {

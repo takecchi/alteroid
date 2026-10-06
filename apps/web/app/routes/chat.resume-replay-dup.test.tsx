@@ -256,7 +256,7 @@ describe('再生し直しても、前の途中経過が残って二重になら�
     fireEvent.change(screen.getByPlaceholderText(/クローンに話しかける/), {
       target: { value: 'おーい' },
     });
-    fireEvent.click(screen.getByRole('button', { name: /送る/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'メッセージを送信' }));
     expect(await within(transcript()).findByText('こんにち')).toBeTruthy();
 
     await router.navigate(`/chat/${OTHER}`);
@@ -347,7 +347,7 @@ describe('再生し直しても、前の途中経過が残って二重になら�
     fireEvent.change(screen.getByPlaceholderText(/クローンに話しかける/), {
       target: { value: 'おーい' },
     });
-    fireEvent.click(screen.getByRole('button', { name: /送る/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'メッセージを送信' }));
     expect(await within(transcript()).findByText('こんにち')).toBeTruthy();
 
     await router.navigate(`/chat/${OTHER}`);

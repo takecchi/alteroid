@@ -120,7 +120,7 @@ async function box() {
 
 async function typeAndSend(text: string) {
   fireEvent.change(await box(), { target: { value: text } });
-  fireEvent.click(screen.getByRole('button', { name: '送る' }));
+  fireEvent.click(screen.getByRole('button', { name: 'メッセージを送信' }));
 }
 
 /** 吹き出し（会話の流れの中）に同じ文があるか。入力欄の中身は数えない。 */

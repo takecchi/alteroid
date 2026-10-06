@@ -299,7 +299,7 @@ describe('画面に戻ったとき、処理中の会話の途中経過に戻る'
     const { router } = renderApp('/chat');
     const box = await screen.findByPlaceholderText(/クローンに話しかける/);
     fireEvent.change(box, { target: { value: 'やあ' } });
-    fireEvent.click(screen.getByRole('button', { name: /送る/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'メッセージを送信' }));
 
     // 送信の途中（open で会話 id が決まり、URL が追いついた後）に数える
     await untilOpenSettled(router, ID);
@@ -327,7 +327,7 @@ describe('画面に戻ったとき、処理中の会話の途中経過に戻る'
     await waitFor(() => expect(streamCalls()).toBe(1));
     const box = await screen.findByPlaceholderText(/クローンに話しかける/);
     fireEvent.change(box, { target: { value: 'もう一つ' } });
-    fireEvent.click(screen.getByRole('button', { name: /送る/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'メッセージを送信' }));
     expect(await within(transcript()).findByText('へんじ')).toBeTruthy();
     finish.open();
     await waitFor(() => expect(screen.queryByRole('button', { name: '受信をやめる' })).toBeNull());
@@ -532,7 +532,7 @@ describe('画面に戻ったとき、処理中の会話の途中経過に戻る'
 
     const box = screen.getByPlaceholderText(/クローンに話しかける/);
     fireEvent.change(box, { target: { value: 'つづけて' } });
-    fireEvent.click(screen.getByRole('button', { name: /送る/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'メッセージを送信' }));
 
     expect(await within(transcript()).findByText('つづけて')).toBeTruthy();
     const post = await waitFor(() => {

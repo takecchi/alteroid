@@ -1490,12 +1490,14 @@ export function ChatPane({
      * `supersedes` — この追送が送信済みの人間の発言を編集したものなら、
      * 置き換える対象の日誌エントリ id（チャットのメッセージ編集、#1010）。
      * 通常の追送では渡らない。
+     * `clearOnlyIfUnchanged` — 真なら入力欄は「送った本文のままのときだけ」空にする（再送、および
+     * 添付を上げて待っていた送信。待つあいだに打ち足した分を消さない。#3215）。
      */
     async (
       text: string,
       running: Stream,
       supersedes?: string,
-      retry?: boolean,
+      clearOnlyIfUnchanged?: boolean,
       attachments: PendingAttachment[] = [],
       clientMessageId: string = newClientMessageId(),
     ) => {
@@ -1517,7 +1519,7 @@ export function ChatPane({
         next.delete(running.id);
         return next;
       });
-      if (retry) setDraft((current) => (current === text ? '' : current));
+      if (clearOnlyIfUnchanged === true) setDraft((current) => (current === text ? '' : current));
       else setDraft('');
       const lineKey = showOwnLine(
         text,
@@ -1841,7 +1843,9 @@ export function ChatPane({
        * 上げているあいだは `uploading` が送信ボタンを止める。
        */
       let attachments = options?.attachments ?? [];
-      if (attachments.some((item) => item.meta === undefined)) {
+      // 添付を上げて待ったか。待ったなら、そのあいだに入力欄へ足された分が在りうる（#3215）。
+      const waitedForUpload = attachments.some((item) => item.meta === undefined);
+      if (waitedForUpload) {
         setUploading(true);
         setFailures((prev) => {
           if (!prev.has(shownId)) return prev;
@@ -1882,7 +1886,8 @@ export function ChatPane({
       }
       if (attachments.length > 0) {
         const sent = new Set(attachments.map((item) => item.key));
-        setPending((current) => (retry ? current.filter((item) => !sent.has(item.key)) : []));
+        // 送った分（key）だけ消す。上げているあいだに足された添付は残す（#3215）。
+        setPending((current) => current.filter((item) => !sent.has(item.key)));
         setAttachNotice(undefined);
       }
 
@@ -1893,7 +1898,14 @@ export function ChatPane({
        */
       const running = streamRef.current;
       if (running !== undefined) {
-        await followUp(text, running, supersedes, retry, attachments, clientMessageId);
+        await followUp(
+          text,
+          running,
+          supersedes,
+          retry === true || waitedForUpload,
+          attachments,
+          clientMessageId,
+        );
         return;
       }
 
@@ -1917,7 +1929,8 @@ export function ChatPane({
         next.delete(shownId);
         return next;
       });
-      if (retry) setDraft((current) => (current === text ? '' : current));
+      if (retry === true || waitedForUpload)
+        setDraft((current) => (current === text ? '' : current));
       else setDraft('');
       const lineKey = showOwnLine(
         text,

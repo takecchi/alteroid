@@ -22,8 +22,18 @@ export function isImeConfirmEnter(event: KeyboardEvent): boolean {
   );
 }
 
-/** ⌘ / Ctrl + Enter（送る・確定する）。IME の確定の Enter は含まない。 */
+/** ⌘ / Ctrl + Enter（送る・確定する。どちらの修飾キーでも）。IME の確定の Enter は含まない。 */
 export function isSubmitShortcut(event: KeyboardEvent): boolean {
   if (isImeConfirmEnter(event)) return false;
   return (event.metaKey || event.ctrlKey) && event.key === 'Enter';
+}
+
+/**
+ * 入力欄（`ChatComposer`）の送信のショートカットか。**macOS では ⌘ + Enter だけ、それ以外では
+ * Ctrl + Enter だけ**（Enter 単体・Shift + Enter は送らない。textarea の既定の改行のまま）。
+ * IME の確定の Enter は含まない。
+ */
+export function isPlatformSubmitShortcut(event: KeyboardEvent, mac: boolean): boolean {
+  if (!isSubmitShortcut(event)) return false;
+  return mac ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey;
 }

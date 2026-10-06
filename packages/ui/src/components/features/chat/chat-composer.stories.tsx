@@ -3,9 +3,9 @@ import { useState } from 'react';
 
 import { ErrorNote } from '../../common';
 
-import { ChatComposer } from './chat-composer';
+import { ChatComposer, type ComposerAttachment } from './chat-composer';
 
-/** 話しかける欄。⌘/Ctrl + Enter で送る。受信中も送れる。 */
+/** 話しかける欄。1つの枠に、テキストエリアと下段の [+]（添付）・[▶]（送信）。⌘（Mac）/ Ctrl + Enter で送る。ボタンはホバー・フォーカスでヒントが出る。受信中も送れる。 */
 const meta = {
   title: 'Features/Chat/ChatComposer',
   component: ChatComposer,
@@ -20,13 +20,21 @@ function Demo({
   sending,
   error,
   lines = 0,
+  text,
+  attachments,
+  uploading,
+  disabled,
 }: {
   sending?: boolean;
   error?: boolean;
   lines?: number;
+  text?: string;
+  attachments?: ComposerAttachment[];
+  uploading?: boolean;
+  disabled?: boolean;
 }) {
   const [value, setValue] = useState(
-    Array.from({ length: lines }, (_, i) => `${i + 1} 行目の下書き`).join('\n'),
+    text ?? Array.from({ length: lines }, (_, i) => `${i + 1} 行目の下書き`).join('\n'),
   );
   const [sent, setSent] = useState<string[]>([]);
   return (
@@ -45,6 +53,11 @@ function Demo({
           setValue('');
         }}
         sending={sending}
+        attachments={attachments}
+        onAttach={() => undefined}
+        onRemoveAttachment={() => undefined}
+        uploading={uploading}
+        disabled={disabled}
         onStopReceiving={() => undefined}
         error={
           error === true ? (
@@ -60,9 +73,35 @@ function Demo({
 
 const args = { value: '', onChange: () => undefined, onSend: () => undefined };
 
-export const Default: Story = { args, render: () => <Demo /> };
-export const Sending: Story = { args, render: () => <Demo sending /> };
-export const WithError: Story = { args, render: () => <Demo error /> };
+const FILES: ComposerAttachment[] = [
+  { key: 'a', name: 'design-notes.pdf', sizeLabel: '1.2 MB' },
+  { key: 'b', name: 'screenshot.png', sizeLabel: '340 KB' },
+];
+
+/** 空。案内の文（⌘ / Ctrl + Enter で送信）が出る。送信ボタンは押せない。 */
+export const Empty: Story = { args, render: () => <Demo /> };
+/** 入力中。 */
+export const Typing: Story = {
+  args,
+  render: () => <Demo text={'来週の予定を整理して。\n優先度の高いものから順に。'} />,
+};
+/** 添付あり（本文は空でも送れる）。 */
+export const WithAttachments: Story = {
+  args,
+  render: () => <Demo text="これを見て" attachments={FILES} />,
+};
+/** 添付だけ（本文なし）。 */
+export const AttachmentsOnly: Story = { args, render: () => <Demo attachments={FILES} /> };
+/** 添付を上げている最中。送信ボタンは回って押せず、[+] も止まる。 */
+export const Uploading: Story = {
+  args,
+  render: () => <Demo text="これを見て" attachments={FILES} uploading />,
+};
+/** 受信中。「受信をやめる」を [▶] と並べて出し、続けて送れる。 */
+export const Sending: Story = { args, render: () => <Demo sending text="続きもお願い" /> };
+/** 無効。欄ぜんたいが使えない。 */
+export const Disabled: Story = { args, render: () => <Demo disabled text="送れない" /> };
+export const WithError: Story = { args, render: () => <Demo error text="再送できる" /> };
 
 /** 30 行の下書き。上限で止まり、内側をスクロールする。 */
 export const LongDraft: Story = { args, render: () => <Demo lines={30} /> };
