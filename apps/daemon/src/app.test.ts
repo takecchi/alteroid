@@ -2850,6 +2850,35 @@ describe('HTTP API', () => {
       expect(response.status).toBe(400);
     });
 
+    // #3358。`Date.parse` は存在しない日付（9/31 → 10/1）を別の時刻へずらし、日付でない
+    // 文字列（`foo 1`）も 2001 年として読む。消す口なので、読めない値は例つきで断り、
+    // 何も消さない。受け付ける形（日付・Z・オフセット）は従来どおり通る。
+    it('before が存在しない日付・日付でない文字列なら、例つきの文言で400にして何も消さない（#3358）', async () => {
+      await stores.inbox.put(
+        managerReport('evt-old', '2026-08-10T00:00:00.000Z'),
+        '2026-08-10T00:00:00.000Z',
+      );
+      for (const garbage of ['2026-09-31T00:00:00.000Z', 'foo 1']) {
+        const response = await app.request(
+          '/inbox/remove',
+          json({ types: ['manager_message'], reason: 'x', before: garbage, dryRun: false }),
+        );
+        expect(response.status).toBe(400);
+        const body = (await response.json()) as { error: string };
+        expect(body.error).toContain(`before に渡された「${garbage}」は日時として読めない`);
+        expect(body.error).toContain('2026-10-06T09:00:00+09:00');
+        expect(body.error).toContain('1件も消していない');
+        expect(await stores.inbox.pending()).toMatchObject({ count: 1 });
+      }
+      for (const readable of ['2026-10-06', '2026-10-06T09:00:00Z', '2026-10-06T09:00:00+09:00']) {
+        const response = await app.request(
+          '/inbox/remove',
+          json({ types: ['manager_message'], reason: 'x', before: readable }),
+        );
+        expect(response.status).toBe(200);
+      }
+    });
+
     it('sources で送信元の完全一致に絞れる（manager_list と同じ表記）', async () => {
       await stores.inbox.put(
         managerReport('evt-a', '2026-08-10T00:00:00.000Z', 'mgr-a'),
@@ -3366,6 +3395,36 @@ describe('HTTP API', () => {
         );
         expect(response.status).toBe(400);
         expect(await snapshot()).toEqual(before);
+      });
+
+      // #3358。存在しない日付・日付でない文字列を別の時刻として読んで消さない。
+      it('before が存在しない日付・日付でない文字列なら、例つきの文言で400にして何も消さない（#3358）', async () => {
+        await stores.archive.archive('sess-400-d', 'A');
+        const before = await snapshot();
+
+        for (const garbage of ['2026-02-31T00:00:00.000Z', 'foo 1']) {
+          const response = await app.request(
+            '/archive/remove',
+            json({ minStoredBytes: 0, before: garbage, reason: 'x', dryRun: false }),
+          );
+          expect(response.status).toBe(400);
+          const body = (await response.json()) as { error: string };
+          expect(body.error).toContain(`before に渡された「${garbage}」は日時として読めない`);
+          expect(body.error).toContain('2026-10-06T09:00:00+09:00');
+          expect(body.error).toContain('1件も消していない');
+          expect(await snapshot()).toEqual(before);
+        }
+        for (const readable of [
+          '2026-10-06',
+          '2026-10-06T09:00:00Z',
+          '2026-10-06T09:00:00+09:00',
+        ]) {
+          const response = await app.request(
+            '/archive/remove',
+            json({ minStoredBytes: 0, before: readable, reason: 'x' }),
+          );
+          expect(response.status).toBe(200);
+        }
       });
 
       it('limit が上限を超えると400', async () => {

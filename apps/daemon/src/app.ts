@@ -81,6 +81,7 @@ import {
   reachedStart,
   droppedTraceLedgerSince,
   findUnrecordedManagers,
+  isReadableJournalTimeBoundary,
   describeUnreadableJournalTimeBoundary,
   guardArchiveRemoval,
   INBOX_EVENT_TYPE_ORDER,
@@ -9531,12 +9532,12 @@ export function createApp(deps: AppDeps) {
             400,
           );
         }
-        if (before !== undefined && Number.isNaN(Date.parse(before))) {
+        if (before !== undefined && !isReadableJournalTimeBoundary(before)) {
+          // 存在しない日付・日付でない文字列を別の時刻として読んで消さない（#3358。#3287 と同じ3段）。
           return c.json(
             {
               error:
-                `before に渡された「${before}」は ISO8601 として読めない` +
-                '（例 2026-09-15T00:00:00.000Z）。**1件も消していない。**',
+                describeUnreadableJournalTimeBoundary('before', before) + '**1件も消していない。**',
             },
             400,
           );
@@ -9812,12 +9813,12 @@ export function createApp(deps: AppDeps) {
             400,
           );
         }
-        if (before !== undefined && Number.isNaN(Date.parse(before))) {
+        if (before !== undefined && !isReadableJournalTimeBoundary(before)) {
+          // 存在しない日付・日付でない文字列を別の時刻として読んで消さない（#3358。#3287 と同じ3段）。
           return c.json(
             {
               error:
-                `before に渡された「${before}」は ISO8601 として読めない` +
-                '（例 2026-09-15T00:00:00.000Z）。**1件も消していない。**',
+                describeUnreadableJournalTimeBoundary('before', before) + '**1件も消していない。**',
             },
             400,
           );

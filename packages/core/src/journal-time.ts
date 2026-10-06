@@ -174,7 +174,7 @@ export function normalizeJournalTimeBoundary(value: string): string | null {
 
 /** 読めない `since`/`until` を断るときの共通の言い方。呼び出し口ごとに文言が割れないようにする。 */
 export function describeUnreadableJournalTimeBoundary(
-  field: 'since' | 'until',
+  field: 'since' | 'until' | 'before',
   value: string,
 ): string {
   return (
