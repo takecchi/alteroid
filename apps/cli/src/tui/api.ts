@@ -74,6 +74,10 @@ export interface ConversationMessage {
   text: string;
   /** 発言に添えた添付のメタデータ（中身は無い）。 */
   attachments?: { id: string; name: string; mediaType: string; size: number }[];
+  /** 別の編集に置き換えられた発言なら、その新しい版の id（もう編集できない）。 */
+  supersededBy?: string;
+  /** 編集後の発言なら、置き換えた元の発言の id。 */
+  supersedes?: string;
 }
 
 export interface HeaderCounts {
@@ -227,6 +231,8 @@ export interface TuiApi {
       text: string;
       conversationId?: string;
       attachments?: string[];
+      /** 編集の確定: 置き換える発言の id（`conversationId` が要る。#3681）。 */
+      supersedes?: string;
       /** 呼び手が名乗らせたいとき（`open` の前に終わった送信を、あとで引き直す。#3304）。無ければ api が採番する。 */
       clientMessageId?: string;
     },
@@ -413,6 +419,7 @@ export function createTuiApi(target: Target): TuiApi {
         conversationId: input.conversationId ?? undefined,
         // 発言ごとに名乗る（Issue #3203）。新しい会話で `open` の前に終わった送信は、呼び手がこの id で引き直す（#3304）。
         clientMessageId: input.clientMessageId ?? randomUUID(),
+        ...(input.supersedes === undefined ? {} : { supersedes: input.supersedes }),
         ...(input.attachments === undefined || input.attachments.length === 0
           ? {}
           : { attachments: input.attachments }),

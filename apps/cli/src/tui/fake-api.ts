@@ -40,6 +40,7 @@ export interface ChatCall {
   text: string;
   conversationId?: string;
   attachments?: string[];
+  supersedes?: string;
 }
 
 export interface FakeApi extends TuiApi {
@@ -257,6 +258,7 @@ export function fakeApi(): FakeApi {
         text: input.text,
         ...(input.conversationId === undefined ? {} : { conversationId: input.conversationId }),
         ...(input.attachments === undefined ? {} : { attachments: input.attachments }),
+        ...(input.supersedes === undefined ? {} : { supersedes: input.supersedes }),
       });
       const script = api.scripts.shift() ?? [];
       for (const step of script) {

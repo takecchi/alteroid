@@ -76,27 +76,41 @@ describe('引用を外した写しの判定が、長い入力で2乗にならな
     });
   }
 
-  // 陰性対照（#3017）: 出発点・倍加は線形の歯と同じ既定のまま、本物の `inspectBashCommand` を入力の長さに
-  // 比例する回数だけ走らせる（= 2乗にした）関数は、実時間のままで落ちる。
-  // 回数は「64000 文字ごとに1回」（倍にされた n=32000 の約 128000 文字で2回、そこから 2 倍ごとに 2 倍）。傾きの理論値は
-  // 2 のまま。2乗の側は大きい点で時間が爆発する（約 1M 文字×16 回は hardCapMs を超える）ので、
-  // 1ラウンド・3回で測って 2乗の側の時間を抑える（16n・3 ラウンドでは約 30 秒かかった）——1万6千文字ごとに1回（小さいほうで5回・大きいほうで
-  // 17回）走らせた最初の形は、CI の器で 5 秒の既定の時間切れに当たった（PR #3024 の1回目の CI）。
-  // 器が混んだときに時間切れで偽の赤を出さないよう、上限も明示して延ばす。
-  it('陰性対照: 2乗にした関数は落ちる', { timeout: 30_000 }, () => {
-    const quadratic = (command: string): void => {
-      const calls = Math.max(1, Math.round(command.length / 64000));
-      for (let i = 0; i < calls; i += 1) inspectBashCommand(command);
-    };
-    // CI の器が遅いと、傾きを測る前に hardCapMs で打ち切られ「hardCapMs を超えた」で投げる（#3043）。
-    // どちらも検出器が超線形を捕まえた文言なので、この2つに限って受け入れる。引数の誤りや型の誤りなど
-    // 検出器と無関係の例外はどちらにも合わず落ちる（線形の関数が投げないことは上の線形の歯が守る）。
-    expect(() =>
-      expectNotSuperlinear(quadratic, (n) => `${T} ${'\\-n '.repeat(n)}x`, {
+  // 陰性対照（#3713）: 確かめたいのは「検出器が超線形を捕まえる」ことで、本物の `inspectBashCommand` の
+  // 速さではない。本物を入力の長さに比例する回数だけ走らせて実時間で測ると、混んだ runner では各点に乗る雑音で
+  // 傾きが閾値の下へ落ち、検出器が2乗を捕まえず揺れて落ちた（PR #3665 の CI run 37522245827）。
+  // そこで偽の時計を差し込み、「2乗の関数」は入力の長さ L に対して時計を (L / K) ** 2 ms だけ進めるだけにする
+  // （本物は走らせない）。傾きは理論値（2。線形の対照は 1）そのものになり、実時間に左右されない。
+  //
+  // K は、どの点でも偽の時計の値が hardCapMs（既定 2000ms）未満に収まるように選ぶ。偽の時計の値も
+  // `t >= hardCapMs` の比較には効く（vm の timeout は実時間なので割り込みは起きない）ので、超えると
+  // 「hardCapMs を超えた」で投げ、傾きの経路を通らなくなる。入力は L = 4n + 4 文字ほど（n=8000 で約 32000、
+  // 最大の点は 8 倍の約 256000）。K=10000 なら (L/K)**2 は最小の点で約 10ms（minSmallMs=5 を満たすので
+  // n は倍にされない）、最大の点で約 655ms で、2000ms の下に収まる。
+  const K = 10_000;
+  const makeFakeClock = () => {
+    let now = 0;
+    return { now: () => now, advance: (ms: number): void => void (now += ms) };
+  };
+  const makeLength = (n: number): number => `${T} ${'\\-n '.repeat(n)}x`.length;
+
+  it('陰性対照: 2乗にした関数は落ちる', () => {
+    const clock = makeFakeClock();
+    const run = () =>
+      expectNotSuperlinear((length: number) => clock.advance((length / K) ** 2), makeLength, {
         n: 8000,
-        repeats: 3,
-        rounds: 1,
-      }),
-    ).toThrow(/2乗以上の後戻り|hardCapMs を超えた/);
+        now: clock.now,
+      });
+    expect(run).toThrow(/2乗以上の後戻り/);
+    expect(run).not.toThrow(/hardCapMs を超えた/);
+  });
+
+  it('陰性対照の対: 線形にした関数は投げない', () => {
+    const clock = makeFakeClock();
+    const result = expectNotSuperlinear((length: number) => clock.advance(length / K), makeLength, {
+      n: 8000,
+      now: clock.now,
+    });
+    expect(result.slope).toBeCloseTo(1, 2);
   });
 });
