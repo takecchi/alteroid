@@ -1439,14 +1439,13 @@ describe('「片付けたものも見る」の初回読み込み中も、未了�
     const gate = new Promise<void>((resolve) => {
       release = resolve;
     });
-    stubFetch(async (url) => {
-      if (!url.includes('/commitments')) return undefined;
-      if (url.includes('includeClosed=true')) {
-        await gate;
-        return json({ entries: [...open, ...closed] });
-      }
-      return json({ entries: open });
-    });
+    stubCommitments(open, closed);
+    const inner = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input instanceof Request ? input.url : String(input);
+      if (url.includes('includeClosed=true')) await gate;
+      return inner(input, init);
+    }) as typeof fetch;
     return release;
   }
 
