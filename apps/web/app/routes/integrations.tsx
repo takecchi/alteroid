@@ -1,5 +1,5 @@
 import { exampleBaseUrl } from '~/lib/integration-example';
-import { LeaveGuardScope, useReportDirty } from '~/lib/leave-guard';
+import { LeaveGuardScope, useReportDirty, type LeaveNotice } from '~/lib/leave-guard';
 import { SettingsTabs } from '~/components/group-tabs';
 import { UnreadableRowsNote } from '~/components/unreadable-rows-note';
 import { LoadError } from '~/components/load-error';
@@ -77,6 +77,14 @@ const STATUS_VIEW: Record<KeyStatus, { label: string; tone: 'ok' | 'neutral' | '
   active: { label: '有効', tone: 'ok' },
   revoked: { label: '失効', tone: 'neutral' },
   expired: { label: '期限切れ', tone: 'warn' },
+};
+
+/** 写していない鍵の値が消える、という確認（値は文に出さない）。 */
+const ISSUED_VALUE_NOTICE: LeaveNotice = {
+  title: '写していない鍵の値があります',
+  description:
+    'このまま離れると、発行した鍵の値は消えて二度と見られません。取り直せないので、鍵を失効して発行し直すことになります。',
+  confirmLabel: '値を消して離れる',
 };
 
 export default function Integrations() {
@@ -366,6 +374,8 @@ function buildInput(fields: {
 function IssuedValue({ issued, onClose }: { issued: IntegrationKeyIssued; onClose: () => void }) {
   const { baseUrl } = useApiContext();
   const { key, value } = issued;
+  // 表示している間は、移動・タブを閉じる前に確認する（閉じれば確認しない）。
+  useReportDirty(`issued-value:${key.id}`, true, ISSUED_VALUE_NOTICE);
   const example =
     `curl -X POST ${exampleBaseUrl(baseUrl, window.location.origin)}/events/${key.source} \\\n` +
     `  -H "Authorization: Bearer <上の値>" \\\n` +

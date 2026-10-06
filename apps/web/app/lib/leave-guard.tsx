@@ -22,27 +22,43 @@ export function useBeforeUnloadGuard(dirty: boolean) {
   }, [dirty]);
 }
 
-type ReportDirty = (id: string, dirty: boolean) => void;
+/** 確認の文言。`useReportDirty` に渡すと、書きかけの既定の文言の代わりにこれを出す。 */
+export interface LeaveNotice {
+  title: string;
+  description: string;
+  confirmLabel: string;
+}
+
+const DRAFT_NOTICE: LeaveNotice = {
+  title: '保存していない変更があります',
+  description: 'このまま離れると、書きかけの内容は失われます。',
+  confirmLabel: '破棄して離れる',
+};
+
+type ReportDirty = (id: string, dirty: boolean, notice?: LeaveNotice) => void;
 
 const LeaveGuardContext = createContext<ReportDirty | undefined>(undefined);
 
 /**
  * 画面ごとに1つだけ置く。中の欄が `useReportDirty` で知らせた書きかけのどれか1つでもあれば、
  * アプリ内の移動（`useBlocker`）と `beforeunload` の前に確認を挟む（`schedule.tsx` の形を共通にしたもの）。
- * 確認の文言は既存の画面（`schedule.tsx` など）と同じ。
+ * 確認の文言は既定では既存の画面（`schedule.tsx` など）と同じ。欄が `LeaveNotice` を渡せば、それで差し替える。
  */
 export function LeaveGuardScope({ children }: { children: ReactNode }) {
-  const [dirtyIds, setDirtyIds] = useState<ReadonlySet<string>>(new Set());
-  const report = useCallback<ReportDirty>((id, dirty) => {
+  // id -> 文言（既定なら undefined）。
+  const [dirtyIds, setDirtyIds] = useState<ReadonlyMap<string, LeaveNotice | undefined>>(new Map());
+  const report = useCallback<ReportDirty>((id, dirty, notice) => {
     setDirtyIds((current) => {
-      if (current.has(id) === dirty) return current;
-      const next = new Set(current);
-      if (dirty) next.add(id);
+      if (current.has(id) === dirty && (!dirty || current.get(id) === notice)) return current;
+      const next = new Map(current);
+      if (dirty) next.set(id, notice);
       else next.delete(id);
       return next;
     });
   }, []);
   const anyDirty = dirtyIds.size > 0;
+  // 文言を持つ欄（取り直せない値など）があれば、書きかけの既定よりそちらを先に言う。
+  const notice = [...dirtyIds.values()].find((n) => n !== undefined) ?? DRAFT_NOTICE;
   const blocker = useBlocker(anyDirty);
   useBeforeUnloadGuard(anyDirty);
 
@@ -53,9 +69,9 @@ export function LeaveGuardScope({ children }: { children: ReactNode }) {
         onOpenChange={(open) => {
           if (!open && blocker.state === 'blocked') blocker.reset();
         }}
-        title="保存していない変更があります"
-        description="このまま離れると、書きかけの内容は失われます。"
-        confirmLabel="破棄して離れる"
+        title={notice.title}
+        description={notice.description}
+        confirmLabel={notice.confirmLabel}
         destructive
         onConfirm={() => {
           if (blocker.state === 'blocked') blocker.proceed();
@@ -70,10 +86,10 @@ export function LeaveGuardScope({ children }: { children: ReactNode }) {
  * 書きかけかどうかを、外側の `LeaveGuardScope` へ知らせる。欄が消えたら（保存・やめる）書きかけでなくなる。
  * `id` は同じ画面の中で欄ごとに別にする。
  */
-export function useReportDirty(id: string, dirty: boolean) {
+export function useReportDirty(id: string, dirty: boolean, notice?: LeaveNotice) {
   const report = useContext(LeaveGuardContext);
   useEffect(() => {
-    report?.(id, dirty);
-  }, [id, dirty, report]);
+    report?.(id, dirty, notice);
+  }, [id, dirty, notice, report]);
   useEffect(() => () => report?.(id, false), [id, report]);
 }
