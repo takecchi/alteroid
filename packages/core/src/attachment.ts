@@ -116,6 +116,11 @@ export const ATTACHMENT_MAX_FILE_BYTES_DEFAULT = 25 * MIB;
 export const ATTACHMENT_MAX_PER_MESSAGE_DEFAULT = 10;
 export const ATTACHMENT_MAX_TOTAL_BYTES_DEFAULT = 50 * MIB;
 export const ATTACHMENT_RETENTION_DAYS_DEFAULT = 30;
+/**
+ * 保持日数の上限（約100年）。`expiresAt` は `new Date(now + 日数 × 86_400_000).toISOString()` で作るので、
+ * 巨大な値は `RangeError: Invalid time value` で全 `put` を 500 にする（Issue #3326）。
+ */
+export const ATTACHMENT_RETENTION_DAYS_MAX = 36_500;
 /** 未結び付けのまま残してよい時間（作成から。1時間）。 */
 export const ATTACHMENT_UNBOUND_TTL_MS = 60 * 60_000;
 
@@ -154,16 +159,20 @@ export interface AttachmentLimitsConfig {
 
 /**
  * 環境変数から上限を読む（`readArchiveFoldConfig` と同じ作法: 読めない値は `notes` へ落として既定へ倒す）。
- * 正の整数だけを受ける。
+ * 正の整数だけを受ける。保持日数は {@link ATTACHMENT_RETENTION_DAYS_MAX} まで（超えたら既定へ倒す）。
  */
 export function readAttachmentLimits(env: NodeJS.ProcessEnv = process.env): AttachmentLimitsConfig {
   const notes: string[] = [];
-  const read = (name: string, fallback: number): number => {
+  const read = (name: string, fallback: number, max?: number): number => {
     const raw = env[name]?.trim();
     if (raw === undefined || raw.length === 0) return fallback;
     const parsed = Number(raw);
     if (!Number.isSafeInteger(parsed) || parsed <= 0) {
       notes.push(`${name}="${raw}" は正の整数として読めないので既定 ${fallback} を使う`);
+      return fallback;
+    }
+    if (max !== undefined && parsed > max) {
+      notes.push(`${name}="${raw}" は上限 ${max} を超えているので既定 ${fallback} を使う`);
       return fallback;
     }
     return parsed;
@@ -174,7 +183,11 @@ export function readAttachmentLimits(env: NodeJS.ProcessEnv = process.env): Atta
       maxFileBytes: read(ATTACHMENT_MAX_FILE_BYTES_ENV, ATTACHMENT_MAX_FILE_BYTES_DEFAULT),
       maxPerMessage: read(ATTACHMENT_MAX_PER_MESSAGE_ENV, ATTACHMENT_MAX_PER_MESSAGE_DEFAULT),
       maxTotalBytes: read(ATTACHMENT_MAX_TOTAL_BYTES_ENV, ATTACHMENT_MAX_TOTAL_BYTES_DEFAULT),
-      retentionDays: read(ATTACHMENT_RETENTION_DAYS_ENV, ATTACHMENT_RETENTION_DAYS_DEFAULT),
+      retentionDays: read(
+        ATTACHMENT_RETENTION_DAYS_ENV,
+        ATTACHMENT_RETENTION_DAYS_DEFAULT,
+        ATTACHMENT_RETENTION_DAYS_MAX,
+      ),
     },
     notes,
   };

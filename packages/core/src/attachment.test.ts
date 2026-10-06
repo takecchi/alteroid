@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  ATTACHMENT_RETENTION_DAYS_DEFAULT,
   ATTACHMENT_RETENTION_DAYS_ENV,
   AttachmentRejectedError,
   DEFAULT_ATTACHMENT_LIMITS,
@@ -11,6 +12,7 @@ import {
   validateAttachmentBatch,
   validateAttachmentInput,
 } from './attachment.js';
+import { MemoryAttachmentStore } from './attachment-memory.js';
 import { verifyAttachmentStoreContract } from './attachment-contract.js';
 import { createMemoryStores } from './testing.js';
 
@@ -88,6 +90,30 @@ describe('添付: 上限', () => {
     const bad = readAttachmentLimits({ ALTEROID_ATTACHMENT_MAX_PER_MESSAGE: 'many' });
     expect(bad.limits.maxPerMessage).toBe(10);
     expect(bad.notes).toHaveLength(1);
+  });
+
+  it('保持日数は上限（36500 日）まで。超えたら notes に落として既定へ倒し、put が RangeError にならない（#3326）', async () => {
+    const atMax = readAttachmentLimits({
+      [ATTACHMENT_RETENTION_DAYS_ENV]: '36500',
+    });
+    expect(atMax.limits.retentionDays).toBe(36500);
+    expect(atMax.notes).toEqual([]);
+    const over = readAttachmentLimits({
+      [ATTACHMENT_RETENTION_DAYS_ENV]: '36501',
+    });
+    expect(over.limits.retentionDays).toBe(ATTACHMENT_RETENTION_DAYS_DEFAULT);
+    expect(over.notes).toHaveLength(1);
+    expect(over.notes[0]).toContain(ATTACHMENT_RETENTION_DAYS_ENV);
+    const huge = readAttachmentLimits({ [ATTACHMENT_RETENTION_DAYS_ENV]: '1000000000000000' });
+    expect(huge.limits.retentionDays).toBe(ATTACHMENT_RETENTION_DAYS_DEFAULT);
+    expect(huge.notes).toHaveLength(1);
+    // 上限の他の項目（バイト数など）は上限を掛けない。
+    expect(
+      readAttachmentLimits({ ALTEROID_ATTACHMENT_MAX_FILE_BYTES: '1000000000000' }).notes,
+    ).toEqual([]);
+    const store = new MemoryAttachmentStore({ limits: huge.limits });
+    const meta = await store.put({ name: 'a', mediaType: 'text/plain', bytes: Uint8Array.of(1) });
+    expect(Date.parse(meta.expiresAt)).toBeGreaterThan(Date.parse(meta.createdAt));
   });
 });
 
