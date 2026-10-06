@@ -307,7 +307,7 @@ const HELP = `/report [日付]        日報（既定は直近。日付は YYYY-
 /commit <本文>       引き受けたことを台帳へ積む
 /commit-edit <番号|id> <新しい本文>  台帳の本文を後から直す（番号は /commitments の並び。
                      直せるのは自分が積んだ未了の行だけ——断りの理由はサーバが返す）
-/done <番号|id> [理由]  片付けたことを記録する（番号は /commitments の並び）
+/done <番号|id> <理由>  片付けたことを記録する（理由は必須。番号は /commitments の並び）
 /usage [from=YYYY-MM-DD] [to=YYYY-MM-DD] [manager=<id>] [layer=<種>] [site=<場所>] [token=<id>]  利用状況（いくら使ったか）
                      layer= は ${usageLayerSchema.options.join(' / ')}、site= は
                      ${usageSiteSchema.options.join(' / ')} のどれか。token= は
@@ -1768,7 +1768,7 @@ export async function runSlashCommand(
       listed.commitments.push(...ids);
       stdout.write(`${text}\n`);
       if (ids.length > 0) {
-        stdout.write('  /done <番号> [理由] で片付けたことを記録できます\n');
+        stdout.write('  /done <番号> <理由> で片付けたことを記録できます\n');
       }
       return 'ok';
     }
@@ -1808,8 +1808,15 @@ export async function runSlashCommand(
 
     case '/done': {
       const [reference, ...reasonParts] = rest;
-      if (!reference) {
-        stdout.write('使い方: /done <番号|id> [理由]（番号は /commitments の並び）\n');
+      // **理由は必須**（Web の `commitments.tsx` の `reason.trim() === ''` と同じ。
+      // issue #3143）。閉じた理由は人間が後から読んで否定する材料なので、
+      // 書かれていないまま「閉じた」事実だけを残さない。送る前に断る。
+      const reason = reasonParts.join(' ').trim();
+      if (!reference || reason.length === 0) {
+        stdout.write(
+          '使い方: /done <番号|id> <理由>（番号は /commitments の並び）\n' +
+            '  理由が要ります（何をもって片付いたかを、後から読んで確かめられるように残すため）\n',
+        );
         return 'ok';
       }
       const id = resolveListedId(reference, listed.commitments);
@@ -1817,10 +1824,9 @@ export async function runSlashCommand(
         stdout.write(`[${reference}] は /commitments の一覧にありません\n`);
         return 'ok';
       }
-      const reason = reasonParts.join(' ');
       const response = await client.commitments[':id'].close.$post({
         param: { id },
-        json: { reason: reason.length === 0 ? DONE_WITHOUT_REASON : reason },
+        json: { reason },
       });
       if (response.ok) {
         stdout.write('片付いたことを記録しました\n');
@@ -3451,16 +3457,6 @@ function parseAnswerPairs(tokens: string[]): AnswerPair[] | null {
 // ---------------------------------------------------------------------------
 // 引き受けたまま終わっていない仕事の台帳
 // ---------------------------------------------------------------------------
-
-/**
- * `/done` に理由を書かなかったときに残す1行。
- *
- * **空文字を送らない。** 器は「どう片付いたか」が残る前提で作ってあり
- * （`schema.ts` の `closedReason`）、そこが空だと「閉じた」という事実だけが
- * 残って人間が後から否定できなくなる。理由を書かなかったこと自体は事実なので、
- * 起きたことだけを書く（片付いた中身を勝手に埋めない）。
- */
-const DONE_WITHOUT_REASON = '人間が chat の /done で片付けたと記録した（理由は書かれていない）';
 
 const COMMITMENT_ORIGIN_LABEL: Record<Commitment['origin'], string> = {
   human: '人間',

@@ -2394,7 +2394,7 @@ describe('chat の台帳コマンド', () => {
    * 番号で引けないと、人間が UUID を写す作業をすることになる（`/answer` と同じ理由）。
    * 理由が空のまま閉じると「閉じた」という事実だけが残り、人間が後から否定できない。
    */
-  it('/done は番号を id へ引き直し、理由を書かなくても何をもって閉じたかを残す', async () => {
+  it('/done は番号を id へ引き直し、書かれた理由を送る', async () => {
     captureStdout();
     const { calls, client } = stubClient({
       commitments: [commitment({ id: 'cmt-1' }), commitment({ id: 'cmt-2' })],
@@ -2402,14 +2402,30 @@ describe('chat の台帳コマンド', () => {
     const listed = emptyListed();
 
     await runSlashCommand('/commitments', client, listed);
-    await runSlashCommand('/done 2', client, listed);
+    await runSlashCommand('/done 2 片付けた', client, listed);
 
     const close = calls.find((call) => call.route === 'POST /commitments/:id/close');
     expect(close).toBeDefined();
     expect((close?.args as { param: { id: string } }).param).toEqual({ id: 'cmt-2' });
-    const { reason } = (close?.args as { json: { reason: string } }).json;
-    expect(reason.length).toBeGreaterThan(0);
-    expect(reason).toContain('/done');
+    expect((close?.args as { json: { reason: string } }).json.reason).toBe('片付けた');
+  });
+
+  /**
+   * 閉じた理由は人間が後から読んで否定する材料なので、Web（`commitments.tsx` の
+   * `reason.trim() === ''` で送らない）と同じく、理由が無ければ送らない（#3143）。
+   */
+  it('/done は理由が無い・空白だけなら何も送らず、使い方と理由が要る旨を出す（#3143）', async () => {
+    const out = captureStdout();
+    const { calls, client } = stubClient({ commitments: [commitment({ id: 'cmt-1' })] });
+    const listed = emptyListed();
+
+    await runSlashCommand('/commitments', client, listed);
+    await runSlashCommand('/done 1', client, listed);
+    await runSlashCommand('/done 1    ', client, listed);
+
+    expect(calls.some((call) => call.route === 'POST /commitments/:id/close')).toBe(false);
+    expect(out()).toContain('使い方: /done <番号|id> <理由>');
+    expect(out()).toContain('理由が要ります');
   });
 
   it('/commit-edit は番号を id へ引き直し、新しい本文を PATCH で送る（#1058）', async () => {
@@ -2490,7 +2506,7 @@ describe('chat の台帳コマンド', () => {
     });
     const listedConflict = emptyListed();
     await runSlashCommand('/commitments', conflictClient, listedConflict);
-    await runSlashCommand('/done 1', conflictClient, listedConflict);
+    await runSlashCommand('/done 1 片付けた', conflictClient, listedConflict);
     const conflictText = conflict();
     vi.restoreAllMocks();
 
@@ -2501,7 +2517,7 @@ describe('chat の台帳コマンド', () => {
     });
     const listedMissing = emptyListed();
     await runSlashCommand('/commitments', missingClient, listedMissing);
-    await runSlashCommand('/done 1', missingClient, listedMissing);
+    await runSlashCommand('/done 1 片付けた', missingClient, listedMissing);
     const missingText = missing();
 
     expect(conflictText).toContain('既に片付いています');
@@ -2523,7 +2539,7 @@ describe('chat の台帳コマンド', () => {
     });
     const listedServerError = emptyListed();
     await runSlashCommand('/commitments', serverErrorClient, listedServerError);
-    await runSlashCommand('/done 1', serverErrorClient, listedServerError);
+    await runSlashCommand('/done 1 片付けた', serverErrorClient, listedServerError);
     const serverErrorText = serverError();
     vi.restoreAllMocks();
 
@@ -2535,7 +2551,7 @@ describe('chat の台帳コマンド', () => {
     });
     const listedBadRequest = emptyListed();
     await runSlashCommand('/commitments', badRequestClient, listedBadRequest);
-    await runSlashCommand('/done 1', badRequestClient, listedBadRequest);
+    await runSlashCommand('/done 1 片付けた', badRequestClient, listedBadRequest);
     const badRequestText = badRequest();
 
     expect(serverErrorText).toContain('台帳の書き込みが失敗した（issue #2172 のテスト用）');
@@ -2557,7 +2573,7 @@ describe('chat の台帳コマンド', () => {
       approvals: ['approval-1'],
     };
 
-    await runSlashCommand('/done 1', client, listed);
+    await runSlashCommand('/done 1 片付けた', client, listed);
 
     expect(calls).toEqual([]);
     expect(read()).toContain('/commitments の一覧にありません');
