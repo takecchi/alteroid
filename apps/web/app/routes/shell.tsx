@@ -11,7 +11,7 @@ import {
   Users,
   type LucideIcon,
 } from 'lucide-react';
-import { useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { Link, Navigate, NavLink, Outlet, useLocation } from 'react-router';
 
 import { ConnectionCard } from '~/components/connection';
@@ -99,6 +99,22 @@ export default function Shell() {
   const auth = useAuth();
 
   /**
+   * 確認が済んだ後（`data` が在る = `checking` でない）の再検証の失敗は、画面を置き換えず
+   * 帯で知らせる（下の `AuthedShell`）。置き換えると配下の state（入力欄の書きかけ）が
+   * 消える。SWR は失敗しても直前の `data` を残すので、`error` が立つたびに一定時間後に
+   * 取り直す（`useAuth` は `shouldRetryOnError: false`）。失敗が続くあいだ帯を出し続けるだけで、
+   * 全体表示へは切り替えない——この状態は設定画面（接続先の変更）にも届くので詰まらず、
+   * 切り替えると state が消えるだけ損になる。
+   */
+  const revalidateFailed = auth.error !== undefined && auth.status !== 'checking';
+  const { revalidate } = auth;
+  useEffect(() => {
+    if (!revalidateFailed) return;
+    const timer = setTimeout(() => void revalidate(), REVALIDATE_RETRY_MS);
+    return () => clearTimeout(timer);
+  }, [revalidateFailed, auth.error, revalidate]);
+
+  /**
    * 繋がらない・認証の確認自体が失敗した、は「未ログイン」ではない。
    * ログイン画面へ飛ばすと、直しようのない画面をぐるぐる回すことになる。
    *
@@ -110,7 +126,7 @@ export default function Shell() {
    * 間違っているとそこへは永久に到達できない（配る成果物の既定は同一オリジンの
    * `/api` なので、別のホストのデーモンを指したい初回の人は必ずここで詰まる）。
    */
-  if (auth.error !== undefined && auth.status !== 'anonymous' && auth.status !== 'ungranted') {
+  if (auth.error !== undefined && auth.status === 'checking') {
     return (
       <ScreenState title="接続先のサーバに繋がらない">
         {/* 各画面の読み込み失敗の帯と同じ部品・同じ形（issue #2799）。 */}
@@ -138,10 +154,31 @@ export default function Shell() {
     return <Navigate to="/login" replace />;
   }
 
-  return <AuthedShell />;
+  return (
+    <AuthedShell
+      connectionBand={
+        revalidateFailed ? (
+          <div className="shrink-0 px-4 pt-3">
+            <LoadError
+              what="接続先のサーバの状態"
+              error={auth.error}
+              onRetry={() => auth.revalidate()}
+              retrying={auth.isValidating}
+            />
+            <p className="mt-1 text-xs text-muted-foreground">
+              接続の確認に失敗した。{REVALIDATE_RETRY_MS / 1000} 秒おきに再試行している。
+            </p>
+          </div>
+        ) : null
+      }
+    />
+  );
 }
 
-function AuthedShell() {
+/** 確認済みの後の再検証が失敗したとき、自動で取り直すまでの間隔。 */
+const REVALIDATE_RETRY_MS = 5000;
+
+function AuthedShell({ connectionBand }: { connectionBand: ReactNode }) {
   // SSE はここで1本だけ張る。下の画面はこれが回した無効化に相乗りする。
   const live = useJournalLive();
   const { data: approvals, error: approvalsError } = useApprovals(true);
@@ -326,6 +363,7 @@ function AuthedShell() {
           tabIndex={-1}
           className="flex min-h-0 min-w-0 flex-1 flex-col outline-none"
         >
+          {connectionBand}
           <Outlet />
         </main>
       </div>
