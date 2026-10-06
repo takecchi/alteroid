@@ -81,8 +81,9 @@ import {
   reachedStart,
   droppedTraceLedgerSince,
   findUnrecordedManagers,
-  isReadableJournalTimeBoundary,
+  isOffsetQualifiedTimeBoundary,
   describeUnreadableJournalTimeBoundary,
+  describeOffsetRequiredTimeBoundary,
   guardArchiveRemoval,
   INBOX_EVENT_TYPE_ORDER,
   isAccountGranted,
@@ -161,6 +162,7 @@ import {
   AttachmentRejectedError,
   nonBlankString,
   readAttachmentLimits,
+  stripNul,
   type AttachmentLimits,
 } from '@alteroid/core';
 
@@ -183,6 +185,7 @@ import {
   accessAccountResponseSchema,
   accessListResponseSchema,
   approvalsAnswerResponseSchema,
+  approvalByIdResponseSchema,
   approvalsAnsweredDatesResponseSchema,
   approvalsResponseSchema,
   approvalTraceResponseSchema,
@@ -273,7 +276,7 @@ import {
   usageResponseSchema,
 } from './openapi.js';
 import { InvalidCursorError, decodeCursor, encodeCursor } from './cursor.js';
-import { answeredDates, approvalsSettledOn } from './approvals-answered.js';
+import { answeredDates, approvalSettledDate, approvalsSettledOn } from './approvals-answered.js';
 import { createTopologyActivityTracker, type WorkerToolBus } from './topology-activity.js';
 import {
   createStorageHealthTracker,
@@ -536,8 +539,11 @@ const chatBody = z
   /**
    * **本文は空でもよいが、添付が1件以上あるときだけ**（添付だけの発言。Issue #3111）。
    * 添付の無い空本文は従来どおり 400。`min(1)` を外した代わりの条件をここに置く。
+   *
+   * **「空」は NUL を落とした後で見る**（#3437）。ストアは本文の NUL を落として残すので、落とす前の長さで
+   * 見ると NUL だけの `text` が空の発言として日誌へ入る。
    */
-  .refine((body) => body.text.length > 0 || (body.attachments?.length ?? 0) > 0, {
+  .refine((body) => stripNul(body.text).length > 0 || (body.attachments?.length ?? 0) > 0, {
     message: 'text が空のときは attachments が要る',
     path: ['text'],
   });
@@ -654,16 +660,29 @@ const answerFields = {
  */
 const hasAnswerOrSelections = (body: { answer?: unknown; selections?: unknown }) =>
   body.answer !== undefined || body.selections !== undefined;
+/**
+ * **`selections` を伴わない `answer` は、NUL を落として trim した後に1文字以上**（Issue #3384）。
+ * 空白・全角空白・改行とタブ・NUL だけの回答は空の回答として記録されてしまう（NUL は承認の入口で
+ * 落ちて空になる）。値は書き換えない（検査だけ。`nonBlankString` と同じ作法）。
+ * `selections` と併用する `answer` は補足で、空白だけの補足は「補足なし」として
+ * `describeSelectionsViolation` が扱う（issue #2582。「何も答えていない」の文で断る）ので、ここでは見ない。
+ */
+const answerIsNotBlank = (body: { answer?: string; selections?: unknown }) =>
+  body.selections !== undefined ||
+  body.answer === undefined ||
+  stripNul(body.answer).trim().length > 0;
 const answerBody = z
   .object(answerFields)
-  .refine(hasAnswerOrSelections, { message: 'answer も selections も無い' });
+  .refine(hasAnswerOrSelections, { message: 'answer も selections も無い' })
+  .refine(answerIsNotBlank, { message: 'answer が空白だけ', path: ['answer'] });
 /** まとめて答える（溜まった保留を人間が一度に片付けるための口）。 */
 const answersBody = z.object({
   answers: z
     .array(
       z
         .object({ id: z.string().min(1), ...answerFields })
-        .refine(hasAnswerOrSelections, { message: 'answer も selections も無い' }),
+        .refine(hasAnswerOrSelections, { message: 'answer も selections も無い' })
+        .refine(answerIsNotBlank, { message: 'answer が空白だけ', path: ['answer'] }),
     )
     .min(1)
     .max(200),
@@ -1010,7 +1029,12 @@ const abortBody = z.object({ reason: z.string().min(1).optional() });
  */
 const scheduleBody = z.object({
   kind: scheduleKindSchema,
-  request: z.string().min(1),
+  // **「空」は NUL を落とした後で見る**（#3438）。ストアは NUL を落として残すので、落とす前の長さで見ると
+  // NUL だけの `request` が検査を抜け、ハンドラが日誌へ「設定しようとしている」を書いた後で 500 になる。
+  request: z
+    .string()
+    .min(1)
+    .refine((value) => stripNul(value).length > 0),
   spec: scheduleSpecSchema,
 });
 
@@ -1022,7 +1046,11 @@ const scheduleBody = z.object({
  * 無いと、「クローンは自分で積めるのに人間は積めない」という差が残る。
  */
 const commitmentBody = z.object({
-  body: z.string().min(1),
+  /** NUL を落とした後に1文字以上（Issue #3388。台帳の入口は NUL を落として残すので、NUL だけは空の本文になる）。 */
+  body: z
+    .string()
+    .min(1)
+    .refine((value) => stripNul(value).length > 0),
   /** どこから来たか（会話 id・issue 番号など。分かるときだけ）。 */
   source: z.string().min(1).optional(),
 });
@@ -1040,7 +1068,12 @@ const commitmentCloseBody = z.object({ reason: nonBlankString });
  * 編集後の本文。**空を許さない**（`commitmentBody.body` と同じ制約——空文字を
  * 許すと「本文の無い依頼」を人間が自分で作れてしまう）。
  */
-const commitmentEditBody = z.object({ body: z.string().min(1) });
+const commitmentEditBody = z.object({
+  body: z
+    .string()
+    .min(1)
+    .refine((value) => stripNul(value).length > 0),
+});
 
 /**
  * 片付けたものも返すか。
@@ -2910,7 +2943,7 @@ export function createApp(deps: AppDeps) {
           '**`content-type` は `application/octet-stream` だけを受ける**（それ以外は 415）——' +
           'CORS の単純リクエストにさせず、ブラウザが必ず preflight を通すため（`deliberateClient` と同じ考え）。' +
           '認証は他の経路と同じ。本文の上限は添付1つぶんの最大値（超えたら 413）。画像（png / jpeg / webp / gif）は' +
-          '宣言と中身の先頭が一致しなければ 400。返った `id` を `POST /chat` の `attachments` に渡すと発言へ結び付く。' +
+          '宣言と中身の先頭が一致しなければ 400。0バイトの本文も 400（`code`: `empty`。Web・CLI・TUI と揃えて断る）。返った `id` を `POST /chat` の `attachments` に渡すと発言へ結び付く。' +
           '結び付けないまま 1 時間たったものは掃除される。' +
           '**連携の鍵（`altk_`）もこの口だけは通れる**（自分の外部イベントに付ける添付を上げるため。#3113 段3）：' +
           '`uploadedBy` は `integration:<keyId>` になり、その鍵が `POST /events` で付けられるのは自分が上げた添付だけ。' +
@@ -2930,7 +2963,7 @@ export function createApp(deps: AppDeps) {
           },
           400: {
             description:
-              'クエリが不正、または受け付けない中身（`code`: `magic_mismatch` / `media_type_missing`）。',
+              'クエリが不正、または受け付けない中身（`code`: `magic_mismatch` / `media_type_missing` / `empty`＝0バイト）。',
             content: { 'application/json': { schema: resolver(attachmentErrorResponseSchema) } },
           },
           413: {
@@ -5403,10 +5436,9 @@ export function createApp(deps: AppDeps) {
     /**
      * 決着のあった日と件数（`GET /approvals?answeredOn=` で日ごとに開くための目次）。
      *
-     * **`/approvals/:id/...` に食われない**: 既存の `/approvals/` 配下の GET は `/:id/trace`
-     * （3区間）だけで、2区間のこの経路とは当たらない。`GET /approvals/:id` は無い。
-     * 将来 `GET /approvals/:id` を足すなら、**この経路より後ろに登録しないこと**
-     * （`answered-dates` が id として読まれる）。
+     * **`GET /approvals/:id`（下）に食われない**: `/approvals/:id` は2区間で、この経路と
+     * 同じ形をしている。**`GET /approvals/:id` はこの経路より後ろに登録すること**
+     * （先に登録すると `answered-dates` が id として読まれる。`approvals-answered.test.ts` が固定する）。
      */
     .get(
       '/approvals/answered-dates',
@@ -5445,6 +5477,61 @@ export function createApp(deps: AppDeps) {
             ...(beforeDate === undefined ? {} : { beforeDate }),
           }),
         });
+      },
+    )
+
+    /**
+     * 承認を id で1件返し、決着した日を載せる。
+     *
+     * **`GET /approvals/answered-dates` より後ろに登録している**（上の注意書き）。`POST` の
+     * `/approvals/answer` / `/approvals/:id/answer` とは、メソッドが違うので当たらない。
+     *
+     * `settledOn` は `GET /approvals?answeredOn=` の日と**同じ関数**（`approvalSettledDate`）で
+     * 決める。未決着は `null`。在るが読めない行は、`/approvals/:id/trace` と同じく 409
+     * （「無い」と言わない）。
+     */
+    .get(
+      '/approvals/:id',
+      describeRoute({
+        tags: ['approvals'],
+        summary: '承認を id で1件読み、決着した日を返す',
+        description:
+          '承認1件と、決着した日（`settledOn`。デーモンの `localDate()`・日報と同じ区切り。決着の日時は ' +
+          '`answeredAt`、無ければ `withdrawnAt`。`GET /approvals?answeredOn=` と同じ意味）を返す。' +
+          '未回答・未取り下げなら `settledOn` は `null`。回答済みの詳細（`/approvals/answered/<日>/<id>`）へ' +
+          '移るために、一覧を引かずに日を知る口。',
+        responses: {
+          200: {
+            description: '承認と決着した日。',
+            content: { 'application/json': { schema: resolver(approvalByIdResponseSchema) } },
+          },
+          404: {
+            description: '該当する承認待ちが無い。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+          409: {
+            description:
+              '承認待ちの行は在るが読めない形で入っている（版ずれ・手編集）。消されたのではない。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+        },
+      }),
+      async (c) => {
+        let approval: Awaited<ReturnType<typeof stores.jobs.getApproval>>;
+        try {
+          approval = await stores.jobs.getApproval(c.req.param('id'));
+        } catch (error) {
+          if (error instanceof UnreadableApprovalError)
+            return c.json({ error: error.message }, 409);
+          throw error;
+        }
+        if (approval === null) return c.json({ error: 'not found' as const }, 404);
+        return c.json(
+          approvalByIdResponseSchema.parse({
+            approval: { ...approval, updatedAt: approvalUpdatedAt(approval) },
+            settledOn: approvalSettledDate(approval) ?? null,
+          }),
+        );
       },
     )
 
@@ -5812,8 +5899,13 @@ export function createApp(deps: AppDeps) {
         // 「読めない形で在る。取り消しはこの口ではできない」（409）と言い分ける
         // （`GET /managers/:id` の #2359 と同じ線）。行は変わっていない。
         let grant: Awaited<ReturnType<typeof stores.permissionGrants.revoke>>;
+        // **日誌の書き分けのためだけに、取り消す前の状態を読む**（#3362）。取り消し自体は
+        // この読みに依らない（`revoke` が排他区間の中で読み直す）。読めない行は `get()` に
+        // 現れず `null` になるが、そのときは下の `revoke` が 409 で止める。
+        const revokedBefore = (await stores.permissionGrants.get(id))?.revokedAt !== undefined;
+        const revokeAt = new Date().toISOString();
         try {
-          grant = await stores.permissionGrants.revoke(id, new Date().toISOString());
+          grant = await stores.permissionGrants.revoke(id, revokeAt);
         } catch (error) {
           if (!(error instanceof UnreadablePermissionGrantError)) throw error;
           return c.json(
@@ -5831,11 +5923,19 @@ export function createApp(deps: AppDeps) {
         // 「事後に追えることが最終承認の実体」PRD「可観測性」）。
         // **ただし取り消し自体はもう効いている**（Issue #2037）。日誌への
         // 追記だけが落ちても 500 を返さない——`appendJournalOrDrop` の doc。
+        // **操作は毎回残し、出来事は重ねない**（#3362）。2回目以降（既に取り消し済みの
+        // 許可への取り消し）は「取り消した」と書かず、「既に取り消し済みだった。revokedAt は
+        // 変えていない」と書き分ける（`revoke` は元の `revokedAt` を保つ）。既に取り消し済みかは
+        // 読み取り前の状態、または `revoke` が返した `revokedAt` が今回の時刻でないことで判る
+        // （並行した2つの取り消しで、読み取りが両方とも「まだ」でも後に着いた側が拾える）。
+        const alreadyRevoked = revokedBefore || grant.revokedAt !== revokeAt;
         await appendJournalOrDrop(
           stores,
           {
             type: 'decision',
-            decision: `許可を取り消した: ${grant.rule}`,
+            decision: alreadyRevoked
+              ? `許可の取り消しを求められたが、既に取り消し済みだった（revokedAt は変えていない）: ${grant.rule}`
+              : `許可を取り消した: ${grant.rule}`,
             grounds: `${describeActor(c.get('principal'))}（POST /permission-grants/${id}/revoke）`,
           },
           '許可の取り消しの日誌',
@@ -9534,12 +9634,15 @@ export function createApp(deps: AppDeps) {
             400,
           );
         }
-        if (before !== undefined && !isReadableJournalTimeBoundary(before)) {
+        if (before !== undefined && !isOffsetQualifiedTimeBoundary(before)) {
           // 存在しない日付・日付でない文字列を別の時刻として読んで消さない（#3358。#3287 と同じ3段）。
+          // さらに、時差の無い時刻をデーモンの地方時刻として読んで消さない（#3390。道具 `inbox_remove_many` と
+          // 同じ門・同じ文言。元に戻せない一括削除なので時差を必須にする——#2462）。
           return c.json(
             {
               error:
-                describeUnreadableJournalTimeBoundary('before', before) + '**1件も消していない。**',
+                describeOffsetRequiredTimeBoundary('before', before, '2026-10-06T09:00:00+09:00') +
+                '**1件も消していない。**',
             },
             400,
           );
@@ -9815,12 +9918,15 @@ export function createApp(deps: AppDeps) {
             400,
           );
         }
-        if (before !== undefined && !isReadableJournalTimeBoundary(before)) {
+        if (before !== undefined && !isOffsetQualifiedTimeBoundary(before)) {
           // 存在しない日付・日付でない文字列を別の時刻として読んで消さない（#3358。#3287 と同じ3段）。
+          // さらに、時差の無い時刻をデーモンの地方時刻として読んで消さない（#3390。道具 `inbox_remove_many` と
+          // 同じ門・同じ文言。元に戻せない一括削除なので時差を必須にする——#2462）。
           return c.json(
             {
               error:
-                describeUnreadableJournalTimeBoundary('before', before) + '**1件も消していない。**',
+                describeOffsetRequiredTimeBoundary('before', before, '2026-10-06T09:00:00+09:00') +
+                '**1件も消していない。**',
             },
             400,
           );

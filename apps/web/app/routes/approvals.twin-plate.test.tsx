@@ -75,6 +75,7 @@ let originalFetch: typeof fetch;
 beforeEach(() => {
   originalFetch = globalThis.fetch;
   localStorage.clear();
+  sessionStorage.clear();
   storeTestBaseUrl();
 });
 

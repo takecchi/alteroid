@@ -171,6 +171,7 @@ export function ApprovalQuestionsForm({
           // ⌘/Ctrl + Enter は「回答」ボタンと同じ form の submit（空・送信中は送らない）。
           onSubmitShortcut={() => formRef.current?.requestSubmit()}
           submitDisabled={empty || busy}
+          refocusAfterSubmit
           onChange={(event) => change({ ...current, supplement: event.target.value })}
         />
       </div>

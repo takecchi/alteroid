@@ -1,5 +1,11 @@
 import type { AgentInputImage } from './agent-session.js';
-import { sniffAttachmentImageType, type AttachmentStore } from './attachment.js';
+import {
+  formatImageLimit,
+  readAttachmentLimits,
+  sniffAttachmentImageType,
+  type AttachmentLimits,
+  type AttachmentStore,
+} from './attachment.js';
 import { stripNul } from './nul-guard.js';
 import type { AttachmentRef } from './schema.js';
 
@@ -10,6 +16,9 @@ import type { AttachmentRef } from './schema.js';
  *
  * - **画像**（png / jpeg / webp / gif。中身の先頭で再確認する。宣言ではなく中身が決める）は
  *   base64 にして {@link AgentInputImage} へ。モデルへ渡る。
+ *   **ただし中身が画像でも、大きさが `limits.maxImageBytes` を超えるなら画像としては渡さない**（#3325。
+ *   宣言が画像以外なら「その他」の上限で保存できるので、モデル側の画像の上限でターンが落ちないように）。
+ *   通知行で理由と `attachment_fetch` での開け方を言う。
  * - **すべての添付**について通知行を1行ずつ作る（`[添付] id=… name=… type=… size=… sha256=…`）。
  *   画像以外は中身を渡さず、`attachment_fetch` で取り出して `Read` で開ける案内を付ける（段2）。
  * - **見つからない・読めない添付でもターンは続ける。** 通知行で「見つからない（期限切れの可能性）」と言う。
@@ -29,6 +38,8 @@ export const FETCH_HINT = ' （attachment_fetch で取り出して Read で開�
 export async function resolveTurnAttachments(
   stores: { readonly attachments: AttachmentStore },
   refs: readonly AttachmentRef[],
+  /** 既定は {@link readAttachmentLimits}（環境変数。`attachment_fetch` などと同じ流れ）。 */
+  limits: AttachmentLimits = readAttachmentLimits().limits,
 ): Promise<ResolvedTurnAttachments> {
   const images: AgentInputImage[] = [];
   const noticeLines: string[] = [];
@@ -50,6 +61,12 @@ export async function resolveTurnAttachments(
     const imageType = sniffAttachmentImageType(found.bytes);
     if (imageType === undefined) {
       noticeLines.push(`[添付] ${described}${FETCH_HINT}`);
+      continue;
+    }
+    if (found.bytes.length > limits.maxImageBytes) {
+      noticeLines.push(
+        `[添付] ${described}（画像の上限（${formatImageLimit(limits.maxImageBytes)}）を超えるので画像としては渡していない。attachment_fetch で取り出して Read で開ける）`,
+      );
       continue;
     }
     images.push({

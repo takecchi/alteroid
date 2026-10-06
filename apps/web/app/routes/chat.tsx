@@ -319,17 +319,39 @@ export function pendingOwnLines(
     const key = lineMatchKey(line);
     remaining.set(key, (remaining.get(key) ?? 0) + 1);
   }
+  const historyApprovals = new Map<string, PendingApproval>();
+  for (const line of historyLines) {
+    if (line.approval !== undefined) historyApprovals.set(line.approval.id, line.approval);
+  }
   const pending: Line[] = [];
   for (const line of ownedBy(lines, shownId)) {
     const key = lineMatchKey(line);
     const count = remaining.get(key) ?? 0;
     if (count > 0) {
       remaining.set(key, count - 1);
+      /*
+       * **承認のカードは、手元の行より前にいる行がまだ引き取られていないあいだ、手元の位置に残す
+       * （#3396）。** 手元の行（送った発言・受信中の本文）は履歴の後ろに置くので、カードを履歴の側へ
+       * 渡すと、起きた順（発言 → 本文 → 質問）より前（発言や本文の上）に出てしまう。時刻では並べない
+       * （手元の行の時刻は端末の時計で、サーバの時刻とずれうる）。残すあいだの中身は、台帳から取り直した
+       * もの（回答・取り下げ・設問）に差し替える。前の行が引き取られたら、履歴の側（`createdAt` の位置）へ移る。
+       */
+      const approval = historyApprovals.get(line.approval?.id ?? '');
+      if (line.approval !== undefined && approval !== undefined && pending.length > 0) {
+        pending.push({ ...line, approval });
+      }
       continue;
     }
     pending.push(line);
   }
   return pending;
+}
+
+/** `pendingOwnLines` が手元の位置に残している承認カードの id（履歴の側からは外す）。 */
+function heldApprovalIds(pending: Line[]): Set<string> {
+  const ids = new Set<string>();
+  for (const line of pending) if (line.approval !== undefined) ids.add(line.approval.id);
+  return ids;
 }
 
 /**
@@ -1391,10 +1413,15 @@ export function ChatPane({
    * そのまま残る（`role` が一致しないので `pendingOwnLines` の照合対象にも
    * ならない）。
    */
-  const all = useMemo(
-    () => [...historyLines, ...pendingOwnLines(lines, shownId, historyLines)],
-    [historyLines, lines, shownId],
-  );
+  const all = useMemo(() => {
+    const pending = pendingOwnLines(lines, shownId, historyLines);
+    // 手元の位置に残したカードは、履歴の側では出さない（二重にしない。#3396）。
+    const held = heldApprovalIds(pending);
+    return [
+      ...historyLines.filter((line) => line.approval === undefined || !held.has(line.approval.id)),
+      ...pending,
+    ];
+  }, [historyLines, lines, shownId]);
 
   const handleScroll = useCallback(() => {
     const el = scrollContainerRef.current;
@@ -2956,7 +2983,7 @@ export function ChatPane({
         onStopReceiving={() => streamRef.current?.controller.abort()}
         error={
           attachNotice !== undefined && (shownFailure === undefined || shownFailure === null) ? (
-            <p role="alert" className="text-xs whitespace-pre-line text-warn">
+            <p role="alert" className="text-xs break-words whitespace-pre-line text-warn">
               {attachNotice}
             </p>
           ) : (shownFailure === undefined || shownFailure === null) &&

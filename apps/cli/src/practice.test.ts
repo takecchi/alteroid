@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { makeTempDirSync } from '../../../vitest.tmpdir.js';
 
-import { captureStdout } from './test-support.js';
+import { captureStderr, captureStdout } from './test-support.js';
 
 /**
  * `alteroid practice` — **人間が仕事のやり方を CLI から読んで書き換えられること**
@@ -21,10 +21,11 @@ import { captureStdout } from './test-support.js';
  * **`PUT /practices/<slug>` が `{kind,title,content}` の形で実際に組み立てられるか**
  * なので、差し替えるのはもっと外側（`fetch`）にする。
  */
-vi.mock('./target.js', () => ({
+// `describeAuthFailure` は本物を使う（一覧・履歴の 401/403 を例外にする歯のため。#3452）。
+vi.mock('./target.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./target.js')>()),
   resolveTarget: () =>
     Promise.resolve({ baseUrl: 'http://127.0.0.1:4517', headers: {}, note: null }),
-  describeAuthFailure: () => null,
 }));
 
 const {
@@ -192,6 +193,56 @@ describe('alteroid practice set', () => {
   });
 });
 
+describe('alteroid practice set の空の本文（#3456）', () => {
+  it.each([
+    ['空', ''],
+    ['空白だけ', ' \n\t\n'],
+  ])(
+    '既存のやり方があるとき、本文が%sなら、上書きせずに断る（--allow-empty を案内する）',
+    async (_name, body) => {
+      const read = captureStdout();
+      replies.push({ status: 200, body: practiceBody() });
+
+      const error = await practiceSetCommand('review', { file: fileWith(body) }).catch(
+        (e: unknown) => e,
+      );
+
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toContain('本文が空');
+      expect((error as Error).message).toContain('--allow-empty');
+      expect(sent.filter((entry) => entry.method === 'PUT')).toEqual([]);
+      expect(read()).not.toContain('書き換えました');
+    },
+  );
+
+  it('新しく作るときも、本文が空なら断る（profile set と同じ）', async () => {
+    captureStdout();
+    replies.push({ status: 404, body: { error: 'not found' } });
+
+    await expect(
+      practiceSetCommand('new-one', { file: fileWith(''), kind: '調査', title: '題' }),
+    ).rejects.toThrow('--allow-empty');
+    expect(sent.filter((entry) => entry.method === 'PUT')).toEqual([]);
+  });
+
+  it('--allow-empty を付けたときだけ、空の本文で置き換える', async () => {
+    const read = captureStdout();
+    replies.push({ status: 200, body: practiceBody() });
+    replies.push({ status: 200, body: practiceBody({ content: '' }) });
+
+    await practiceSetCommand('review', { file: fileWith(''), allowEmpty: true });
+
+    const puts = sent.filter((entry) => entry.method === 'PUT');
+    expect(puts).toHaveLength(1);
+    expect(JSON.parse(puts[0]?.body ?? '{}')).toEqual({
+      kind: 'レビュー',
+      title: 'レビューの進め方',
+      content: '',
+    });
+    expect(read()).toContain('書き換えました: review');
+  });
+});
+
 describe('alteroid practice edit', () => {
   it('新しいやり方で --kind / --title が欠けていたら、エディタも PUT も開かず例外で断る（#3139）', async () => {
     captureStdout();
@@ -276,6 +327,23 @@ describe('alteroid practice edit', () => {
     const content = JSON.parse(sent[1]?.body ?? '{}') as { content: string };
     expect(content.content).toContain('実行される定義ではなく');
     expect(content.content).not.toContain('permissions');
+  });
+
+  it('409 以外の保存の失敗（500）でも、書いた内容を残し、場所と set --file を案内して失敗する（#3453）', async () => {
+    captureStdout();
+    const err = captureStderr();
+    process.env.EDITOR = `sh -c 'printf "編集後の本文\\n" > "$1"' _`;
+    replies.push({ status: 200, body: practiceBody() });
+    replies.push({ status: 500, body: { error: 'boom' } });
+
+    const error = await practiceEditCommand('review', {}).catch((e: unknown) => e);
+
+    expect(String(error)).toContain('HTTP 500');
+    const mine = /残してあります: (\S+)/.exec(err())?.[1];
+    expect(mine).toBeDefined();
+    expect(readFileSync(mine ?? '', 'utf8')).toBe('編集後の本文\n');
+    expect(err()).toContain(`alteroid practice set review --file ${mine ?? ''}`);
+    rmSync(dirname(mine ?? ''), { recursive: true, force: true });
   });
 });
 
@@ -823,9 +891,10 @@ describe('alteroid practice history / show --version', () => {
     const read = captureStdout();
     replies.push({ status: 404, body: { error: 'not found' } });
 
-    await practiceShowCommand('review', { version: 999 });
-
-    expect(read()).toContain('そんな版はありません: review 版999');
+    await expect(practiceShowCommand('review', { version: 999 })).rejects.toThrow(
+      'そんな版はありません: review 版999',
+    );
+    expect(read()).toBe('');
   });
 });
 
@@ -838,34 +907,78 @@ describe('alteroid practice の読み出しの失敗の理由', () => {
     const read = captureStdout();
     replies.push({ status: 500, body: { error: '一覧が読めない（practice のテスト用）' } });
 
-    await practiceListCommand();
+    const error = await practiceListCommand().then(
+      () => null,
+      (e: unknown) => e as Error,
+    );
 
-    const text = read();
-    expect(text).toContain('やり方の一覧を読めませんでした（HTTP 500）');
-    expect(text).toContain('一覧が読めない（practice のテスト用）');
+    // 例外で通す（＝終了コードが非 0 になる。#3452）。stdout に書いて 0 で返さない。
+    expect(error?.message).toContain('やり方の一覧を読めませんでした（HTTP 500）');
+    expect(error?.message).toContain('一覧が読めない（practice のテスト用）');
+    expect(read()).toBe('');
+  });
+
+  it('list: 401 / 403 は describeAuthFailure の文で例外にする（#3452）', async () => {
+    const read = captureStdout();
+    replies.push({ status: 401, body: {} });
+    await expect(practiceListCommand()).rejects.toThrow('認証されませんでした');
+    replies.push({ status: 403, body: {} });
+    await expect(practiceListCommand()).rejects.toThrow('access grant');
+    expect(read()).toBe('');
   });
 
   it('history: 500 + { error } なら、状態コードと理由を出す', async () => {
     const read = captureStdout();
     replies.push({ status: 500, body: { error: '履歴が読めない（practice のテスト用）' } });
 
-    await practiceHistoryCommand('review');
+    const error = await practiceHistoryCommand('review').then(
+      () => null,
+      (e: unknown) => e as Error,
+    );
 
-    const text = read();
-    expect(text).toContain('版の履歴を読めませんでした（HTTP 500）');
-    expect(text).toContain('履歴が読めない（practice のテスト用）');
+    expect(error?.message).toContain('版の履歴を読めませんでした（HTTP 500）');
+    expect(error?.message).toContain('履歴が読めない（practice のテスト用）');
+    expect(read()).toBe('');
+  });
+
+  it('history: 401 は describeAuthFailure の文で例外にする（#3452）', async () => {
+    const read = captureStdout();
+    replies.push({ status: 401, body: {} });
+    await expect(practiceHistoryCommand('review')).rejects.toThrow('認証されませんでした');
+    expect(read()).toBe('');
   });
 
   it('show --version: 500 を「そんな版はありません」と言わず、理由を載せる', async () => {
     const read = captureStdout();
     replies.push({ status: 500, body: { error: '版が読めない（practice のテスト用）' } });
 
-    await practiceShowCommand('review', { version: 1 });
+    const error = await practiceShowCommand('review', { version: 1 }).then(
+      () => null,
+      (e: unknown) => e as Error,
+    );
 
-    const text = read();
-    expect(text).not.toContain('そんな版はありません');
-    expect(text).toContain('HTTP 500');
-    expect(text).toContain('版が読めない（practice のテスト用）');
+    expect(error?.message).not.toContain('そんな版はありません');
+    expect(error?.message).toContain('HTTP 500');
+    expect(error?.message).toContain('版が読めない（practice のテスト用）');
+    expect(read()).toBe('');
+  });
+
+  it('show --version: 400 は「版番号として成立しません」で例外にする（#3452）', async () => {
+    const read = captureStdout();
+    replies.push({ status: 400, body: {} });
+    await expect(practiceShowCommand('review', { version: 1 })).rejects.toThrow(
+      '版番号として成立しません: 1',
+    );
+    expect(read()).toBe('');
+  });
+
+  it('show --version: 401 は describeAuthFailure の文で例外にする（#3452）', async () => {
+    const read = captureStdout();
+    replies.push({ status: 401, body: {} });
+    await expect(practiceShowCommand('review', { version: 1 })).rejects.toThrow(
+      '認証されませんでした',
+    );
+    expect(read()).toBe('');
   });
 
   it('show: 404 は「無い」のまま', async () => {

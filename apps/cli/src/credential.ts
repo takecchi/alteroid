@@ -1,4 +1,5 @@
-import { stdin, stdout } from 'node:process';
+import { stdin } from 'node:process';
+import { stdout } from './terminal-out.js';
 
 import { CREDENTIAL_NAME } from '@alteroid/core/cli-light';
 import { hasRunnerPushFailure } from '@alteroid/logic';
@@ -137,12 +138,11 @@ export async function credentialSetCommand(
   const target = await resolveTarget();
   const current = (await request(target, '/credentials')) as CredentialsView;
   if (current.credentials.some((entry) => entry.name === name)) {
-    const confirmed = await confirmIrreversible(
+    await confirmIrreversible(
       `環境変数 ${name} を置き換えます。前の値は残らず、読み出せないので戻すには元の値が要ります（runner の器の値も入れ替わります）。`,
       options,
       io,
     );
-    if (!confirmed) return;
   }
 
   const raw =
@@ -193,21 +193,21 @@ export async function credentialRemoveCommand(
   const target = await resolveTarget();
   const current = (await request(target, '/credentials')) as CredentialsView;
   if (!current.credentials.some((entry) => entry.name === name)) {
-    stdout.write(`${name} は正本に置かれていません。\n`);
+    // 無い名前は例外にする（#3449。`token remove` と同じ）。打ち間違いを成功と同じ
+    // 終わり方にしない。
     // **器の環境変数の側は消えない。** ここで黙ると、「外したのにマネージャーが
-    // まだ持っている」理由が人間には分からない。
-    stdout.write(
-      'なおデーモン（クローン）の環境変数に同じ名前が在れば、そちらが配られます' +
-        '（この口が持つのは正本の側だけです）。\n',
+    // まだ持っている」理由が人間には分からないので、例外の文に入れる。
+    throw new Error(
+      `${name} は正本に置かれていません。\n` +
+        'なおデーモン（クローン）の環境変数に同じ名前が在れば、そちらが配られます' +
+        '（この口が持つのは正本の側だけです）。',
     );
-    return;
   }
 
-  const confirmed = await confirmIrreversible(
+  await confirmIrreversible(
     `環境変数 ${name} を外します。値は読み出せないので、戻すには元の値が要ります（runner の器からも消えます）。`,
     options,
   );
-  if (!confirmed) return;
 
   // 空文字が「外す」である（`PUT /credentials` の doc）。
   const view = (await put(target, [{ name, value: '' }])) as CredentialsUpdateView;

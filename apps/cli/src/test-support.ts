@@ -41,6 +41,16 @@ export function captureStdout(): () => string {
   return () => chunks.join('');
 }
 
+/** `captureStdout` の stderr 版。案内（残した一時ファイルの場所など）を読むのに使う（#3453）。 */
+export function captureStderr(): () => string {
+  const chunks: string[] = [];
+  vi.spyOn(process.stderr, 'write').mockImplementation((chunk: unknown) => {
+    chunks.push(String(chunk));
+    return true;
+  });
+  return () => chunks.join('');
+}
+
 /**
  * 標準入出力が端末（TTY）かどうかを、テストの間だけ決め打ちする（#3141）。
  *

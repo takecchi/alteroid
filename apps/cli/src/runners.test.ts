@@ -18,16 +18,14 @@ import { captureStdout } from './test-support.js';
  * 実例と同じ形）。`fetch` を差し替えて本物の型付きクライアント（`hono/client`）を
  * 通す形は `conversations.test.ts` / `memory.test.ts` と同じ。
  */
-vi.mock('./target.js', () => ({
+vi.mock('./target.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./target.js')>()),
   // `vi.fn()` にしてあるのは、「ログインしていない」note 分岐だけ1件
   // `mockResolvedValueOnce` で上書きしたいため（`login.test.ts` と同じ理由）。
   resolveTarget: vi.fn(() =>
     Promise.resolve({ baseUrl: 'http://127.0.0.1:4517', headers: {}, note: null, remote: false }),
   ),
-  // #1641: `runnersVacateCommand` が失敗時に `describeAuthFailure` を呼ぶように
-  // なった（`memory.test.ts` / `practice.test.ts` と同じスタブ。ここでは認証の
-  // 判別そのものは見ないので、常に `null`＝「判別できない」を返す）。
-  describeAuthFailure: () => null,
+  // `describeAuthFailure` は本物を使う（401/403 を例外にする歯のため。#3446）。
 }));
 
 const { renderRunners, runnersCommand, runnersVacateCommand } = await import('./runners.js');
@@ -556,14 +554,24 @@ describe('runnersCommand', () => {
     expect(read()).toBe('https://runner.example.com にログインしていません（alteroid login）\n');
   });
 
-  it('応答が失敗（ok でない）なら、読めなかったと書く（renderRunners は呼ばない）', async () => {
+  it('応答が失敗（ok でない）なら、読めなかったと例外で言う（stdout に書かず、renderRunners は呼ばない。#3446）', async () => {
     replies.push({ status: 500, body: {} });
     const read = captureStdout();
 
-    await runnersCommand();
-
     // 理由が読めない本文（`{}`）でも、状態コードは載せる（固定の文言だけにしない）。
-    expect(read()).toBe('runner の一覧を読めませんでした（HTTP 500）\n');
+    await expect(runnersCommand()).rejects.toThrow('runner の一覧を読めませんでした（HTTP 500）');
+    expect(read()).toBe('');
+  });
+
+  it.each([
+    [401, '認証されませんでした'],
+    [403, 'access grant'],
+  ])('%i は describeAuthFailure の文を例外で言う（#3446）', async (status, phrase) => {
+    replies.push({ status, body: {} });
+    const read = captureStdout();
+
+    await expect(runnersCommand()).rejects.toThrow(phrase);
+    expect(read()).toBe('');
   });
 
   it('応答が失敗（500 + { error }）なら、状態コードとデーモンの理由も書く', async () => {
@@ -573,11 +581,10 @@ describe('runnersCommand', () => {
     });
     const read = captureStdout();
 
-    await runnersCommand();
-
-    expect(read()).toBe(
-      'runner の一覧を読めませんでした（HTTP 500）: 一覧の読み出しが失敗した（runners のテスト用）\n',
+    await expect(runnersCommand()).rejects.toThrow(
+      'runner の一覧を読めませんでした（HTTP 500）: 一覧の読み出しが失敗した（runners のテスト用）',
     );
+    expect(read()).toBe('');
   });
 });
 
@@ -586,16 +593,26 @@ describe('runnersCommand', () => {
  * の1本だけで、応答は「立てた」ことの確認であって「空き終わった」ではない。
  */
 describe('runnersVacateCommand', () => {
+  /** `GET /runners`（名簿）の応答。vacate は先にこれで runnerId が在るかを確かめる（#3451）。 */
+  function roster(...runnerIds: string[]): { status: number; body: unknown } {
+    return {
+      status: 200,
+      body: { runners: runnerIds.map((runnerId) => ({ label: `http://${runnerId}`, runnerId })) },
+    };
+  }
+
   it('POST /runners/vacate へ runnerId を渡し、終わったとは言わずに進捗を追う口を名指しする', async () => {
+    replies.push(roster('runner-1', 'runner-2'));
     replies.push({ status: 200, body: { ok: true } });
     const read = captureStdout();
     await runnersVacateCommand('runner-2');
     const out = read();
 
-    expect(sent).toHaveLength(1);
-    expect(sent[0]?.method).toBe('POST');
-    expect(sent[0]?.url).toContain('/runners/vacate');
-    expect(JSON.parse(sent[0]?.body ?? '{}')).toEqual({ runnerId: 'runner-2' });
+    // 先に名簿（GET /runners）で在るかを確かめてから、1回だけ POST する（#3451）。
+    expect(sent.map((entry) => entry.method)).toEqual(['GET', 'POST']);
+    expect(sent[0]?.url).toMatch(/\/runners$/);
+    expect(sent[1]?.url).toContain('/runners/vacate');
+    expect(JSON.parse(sent[1]?.body ?? '{}')).toEqual({ runnerId: 'runner-2' });
     expect(out).toContain('runner runner-2 を空けると立てた');
     expect(out).toContain('まだ空き終わってはいない');
     expect(out).toContain('alteroid runners');
@@ -604,6 +621,7 @@ describe('runnersVacateCommand', () => {
   });
 
   it('握手を飛ばした応答（handshakeSkipped）には、飛ばしたことと呼び直しを言う（#2376）', async () => {
+    replies.push(roster('runner-2'));
     replies.push({
       status: 200,
       body: {
@@ -633,9 +651,10 @@ describe('runnersVacateCommand', () => {
    * （「立てられませんでした」を言う／「立てた」と言わない）は変わらない。
    */
   it('デーモンが断ったら、立てたとは言わない（例外の文言で確かめる。#1641）', async () => {
+    replies.push(roster('runner-2'));
     replies.push({ status: 400, body: { error: 'runnerId の形が不正（空けていない）' } });
 
-    const error = await runnersVacateCommand('').catch((e: unknown) => e);
+    const error = await runnersVacateCommand('runner-2').catch((e: unknown) => e);
 
     expect(String(error)).toContain('空けると立てられませんでした（HTTP 400）');
     expect(String(error)).not.toContain('空けると立てた。');
@@ -646,6 +665,7 @@ describe('runnersVacateCommand', () => {
    * 判断で同じ形として揃えた）。401/500 でも「立てた」ことにしない。
    */
   it('#1641: デーモンが 500 を返しても投げる（「立てた」と言わない）', async () => {
+    replies.push(roster('runner-2'));
     replies.push({ status: 500, body: { error: '内部エラー' } });
 
     const error = await runnersVacateCommand('runner-2').catch((e: unknown) => e);
@@ -657,8 +677,43 @@ describe('runnersVacateCommand', () => {
   });
 
   it('#1641: デーモンが 401 を返しても投げる', async () => {
+    replies.push(roster('runner-2'));
     replies.push({ status: 401, body: {} });
 
     await expect(runnersVacateCommand('runner-2')).rejects.toThrow();
+  });
+
+  /**
+   * #3451（案 A）: デーモンは名簿に無い runnerId にも 200 を返す（契約は変えない）ので、
+   * CLI が先に `GET /runners` で名簿を確かめ、無ければ立てずに断る（打ち間違いを成功と言わない）。
+   */
+  it('#3451: 名簿に無い runnerId は、POST せずに断る（成功と言わない）', async () => {
+    replies.push(roster('runner-1', 'runner-2'));
+    const read = captureStdout();
+
+    const error = await runnersVacateCommand('runner-9').catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(Error);
+    expect(String(error)).toContain('runner-9');
+    expect(String(error)).toContain('名簿に無い');
+    expect(String(error)).toContain('alteroid runners');
+    expect(String(error)).toContain('空けると立てていません');
+    // 立てていない（POST に出ていない）。成功の文も出さない。
+    expect(sent.map((entry) => entry.method)).toEqual(['GET']);
+    expect(read()).not.toContain('空けると立てた');
+  });
+
+  it('#3451: 名簿を読めなかった（HTTP の失敗）ときも、POST せずに失敗にする', async () => {
+    replies.push({ status: 500, body: { error: '名簿が壊れている' } });
+    const read = captureStdout();
+
+    const error = await runnersVacateCommand('runner-2').catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(Error);
+    expect(String(error)).toContain('HTTP 500');
+    expect(String(error)).toContain('名簿が壊れている');
+    expect(String(error)).toContain('空けると立てていません');
+    expect(sent.map((entry) => entry.method)).toEqual(['GET']);
+    expect(read()).not.toContain('空けると立てた');
   });
 });

@@ -234,18 +234,17 @@ describe('CLI の承認待ち', () => {
   it('/approval の詳細（設問の prompt / label / description）', async () => {
     const out = await run('/approval ap-1', () => ({
       json: {
-        approvals: [
-          {
-            ...approval,
-            questions: [
-              {
-                id: 'q1',
-                prompt: `どれ? ${TOKEN}`,
-                options: [{ id: 'o1', label: `ラベル ${TOKEN}`, description: `説明 ${TOKEN}` }],
-              },
-            ],
-          },
-        ],
+        approval: {
+          ...approval,
+          questions: [
+            {
+              id: 'q1',
+              prompt: `どれ? ${TOKEN}`,
+              options: [{ id: 'o1', label: `ラベル ${TOKEN}`, description: `説明 ${TOKEN}` }],
+            },
+          ],
+        },
+        settledOn: null,
       },
     }));
     expectRedacted(out);

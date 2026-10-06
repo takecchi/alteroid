@@ -446,12 +446,16 @@ describe('alteroid credential remove', () => {
     setReply('GET', '/credentials', { status: 200, body: { credentials: [] } });
     const read = captureStdout();
 
-    await credentialRemoveCommand('NPM_TOKEN', { yes: true });
+    // 無い名前は例外にする（#3449。`token remove` と同じ。打ち間違いを成功と同じ終わり方にしない）。
+    const error = await credentialRemoveCommand('NPM_TOKEN', { yes: true }).then(
+      () => null,
+      (e: unknown) => e as Error,
+    );
 
     expect(sent.map((entry) => entry.method)).toEqual(['GET']);
-    const text = read();
-    expect(text).toContain('NPM_TOKEN は正本に置かれていません');
-    expect(text).toContain('デーモン（クローン）の環境変数に同じ名前が在れば');
+    expect(error?.message).toContain('NPM_TOKEN は正本に置かれていません');
+    expect(error?.message).toContain('デーモン（クローン）の環境変数に同じ名前が在れば');
+    expect(read()).toBe('');
   });
 
   it('置かれていれば空文字で外す（器の側からも消える）', async () => {
@@ -595,7 +599,10 @@ describe('alteroid credential set の上書き確認（#3201）', () => {
     captureStdout();
     const { io } = fakeIo({ isTTY: true, answer: 'no' });
 
-    await credentialSetCommand('NPM_TOKEN', { file }, io);
+    // やめたことは例外で伝わる（入口が非 0 にする。#3450）。
+    await expect(credentialSetCommand('NPM_TOKEN', { file }, io)).rejects.toThrow(
+      '取り消しました。何も変更していません。',
+    );
 
     expect(sent.some((entry) => entry.method === 'PUT')).toBe(false);
   });

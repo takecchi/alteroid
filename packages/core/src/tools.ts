@@ -164,8 +164,8 @@ import {
   resolveMemoryDocKind,
   scanMemorySections,
 } from './memory.js';
-import type { MemoryPart, MemorySection, MemorySectionLookup } from './memory.js';
 import { stripNul } from './nul-guard.js';
+import type { MemoryPart, MemorySection, MemorySectionLookup } from './memory.js';
 import { redactProfileFailure } from './profile.js';
 import { renderAccountList } from './account-list.js';
 import { renderPermissionGrantList } from './permission-grant-list.js';
@@ -2365,8 +2365,11 @@ function describeStringLengthViolation(
 ): string | null {
   if (value === undefined) return null;
   const { min, max } = range;
-  const withinRange =
-    (min === undefined || value.length >= min) && (max === undefined || value.length <= max);
+  // **NUL を落としてから数える**（issue #3435）。ストアや日誌は NUL を落として残すので、
+  // NUL を落とす前の値で数えると、NUL だけの理由・本文が「1文字以上」を通って空として残る。
+  // 値そのものは書き換えない（数えるだけ）。min も max も同じ長さで見る。
+  const length = stripNul(value).length;
+  const withinRange = (min === undefined || length >= min) && (max === undefined || length <= max);
   if (withinRange) return null;
   return `${field} は使えない（${formatStringLengthJa(range)}のみ）。`;
 }
@@ -2469,7 +2472,9 @@ function describeStringArrayElementLengthViolation(
   value: readonly string[] | undefined,
 ): string | null {
   if (value === undefined) return null;
-  const emptyIndex = value.findIndex((entry) => entry.length === 0);
+  // **NUL を落としてから数える**（issue #3460。`describeStringLengthViolation` と同じ形）。
+  // 値そのものは書き換えない（数えるだけ）。
+  const emptyIndex = value.findIndex((entry) => stripNul(entry).length === 0);
   if (emptyIndex === -1) return null;
   return (
     `${field} は使えない（${emptyIndex} 番目（0起点）が空文字。各要素とも` +
@@ -7862,7 +7867,9 @@ export function createCloneTools(context: ToolContext) {
         // 許さない」に揃える——ただし検査そのものはここ（ハンドラの先頭）で
         // 行い、保存層（fs / pg の `scheduledRequestSchema.parse(entry)`）へは
         // 空文字を1文字も渡さない。doc は `request` の入力スキーマ側にある。
-        if (request.length === 0) {
+        // **「空」は NUL を落とした後で見る（#3438）。** ストアは NUL を落として残すので、落とす前の長さで
+        // 見ると NUL だけの `request` が日誌（「設定しようとしている」）より先へ進んでしまう。
+        if (stripNul(request).length === 0) {
           return text('request が空文字は使えない（依頼の本文を渡すこと）。');
         }
         if (RESERVED_SCHEDULE_KINDS.includes(parsedKind.data)) {
@@ -8551,7 +8558,10 @@ export function createCloneTools(context: ToolContext) {
       async ({ body, source }) => {
         // **issue #1752（#1651/#1689/#1720 の揃え漏れ。非数値の欄。issue 本文の
         // 再現テスト対象）。**
-        const bodyError = describeStringLengthViolation('body', body, { min: 1 });
+        // **NUL を落とした後の値で検める**（Issue #3388）。台帳の入口は本文から NUL を落として
+        // 残す（`nul-guard.ts`）ので、生の値で数えると NUL だけの本文が通り、空の本文になる。
+        // 落とした後に本文が残るなら、今までどおり通す（保存するのは落とす前の値のまま）。
+        const bodyError = describeStringLengthViolation('body', stripNul(body), { min: 1 });
         if (bodyError !== null) return text(bodyError);
         const entry = {
           id: randomUUID(),
@@ -8840,7 +8850,10 @@ export function createCloneTools(context: ToolContext) {
       },
       async ({ id, body }) => {
         // **issue #1752（#1651/#1689/#1720 の揃え漏れ。非数値の欄）。**
-        const bodyError = describeStringLengthViolation('body', body, { min: 1 });
+        // **NUL を落とした後の値で検める**（Issue #3388）。台帳の入口は本文から NUL を落として
+        // 残す（`nul-guard.ts`）ので、生の値で数えると NUL だけの本文が通り、空の本文になる。
+        // 落とした後に本文が残るなら、今までどおり通す（保存するのは落とす前の値のまま）。
+        const bodyError = describeStringLengthViolation('body', stripNul(body), { min: 1 });
         if (bodyError !== null) return text(bodyError);
         // **読めない行は本文の書き直しを通さず「名乗る」だけにとどめる**
         // （issue #2148 の決定 (2)(3)）。読める本文が無い以上、書き直した後に

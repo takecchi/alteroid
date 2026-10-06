@@ -1,13 +1,14 @@
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { stdin, stdout } from 'node:process';
+import { stdin } from 'node:process';
+import { stderr, stdout, writeShownBody } from './terminal-out.js';
 
 import { createClient, type DaemonClient } from './client.js';
 import { formatElapsedAgo, withErrorReason } from './format.js';
 import { describeAuthFailure, resolveTarget, type Target } from './target.js';
 import { confirmIrreversible, type ConfirmIo } from './confirm.js';
-import { openEditor, readInputFile } from './input-errors.js';
+import { keepDraftOnFailure, openEditor, readInputFile } from './input-errors.js';
 
 /**
  * `alteroid memory` — 記憶（人格）を読む・書き換える・消す。
@@ -110,13 +111,18 @@ function formatCreatedAtWithElapsed(createdAt: MemorySummary['createdAt'], now: 
 export async function memoryListCommand(now: number = Date.now()): Promise<void> {
   const conn = await connect('read');
   if (conn === null) return;
-  const { client } = conn;
+  const { client, target } = conn;
   const response = await client.memory.$get();
   if (!response.ok) {
-    stdout.write(
-      `${await withErrorReason(`記憶の一覧を読めませんでした（HTTP ${String(response.status)}）`, response)}\n`,
+    // 失敗は例外で上へ通す（＝終了コードが 0 でなくなる。#3452。`readDoc` と同じ）。
+    const described = describeAuthFailure(response.status, target);
+    if (described !== null) throw new Error(described);
+    throw new Error(
+      await withErrorReason(
+        `記憶の一覧を読めませんでした（HTTP ${String(response.status)}）`,
+        response,
+      ),
     );
-    return;
   }
   const { documents } = (await response.json()) as { documents: MemorySummary[] };
   if (documents.length === 0) {
@@ -273,12 +279,12 @@ export async function memoryShowCommand(slug: string): Promise<void> {
     throw new Error(`そんな記憶はありません: ${slug}`);
   }
   const content = doc.content;
-  stdout.write(content.endsWith('\n') ? content : `${content}\n`);
+  writeShownBody(stdout, content.endsWith('\n') ? content : `${content}\n`);
   // **版は stderr へ1行（Issue #2919）。** stdout は本文をそのまま出す口で、パイプや
   // リダイレクトで使う人がいる（版を混ぜると本文が壊れる）。端末では両方見える。
   // 古いデーモンが `version` を返さなければ出さない。
   if (doc.version !== undefined) {
-    process.stderr.write(
+    stderr.write(
       `版: ${doc.version}（読んだ版を前提に消すなら: alteroid memory remove ${slug} --if-match ${doc.version}）\n`,
     );
   }
@@ -305,50 +311,67 @@ export async function memoryEditCommand(slug: string): Promise<void> {
 
   const dir = await mkdtemp(join(tmpdir(), 'alteroid-memory-'));
   const path = join(dir, `${slug}.md`);
-  // **衝突したときだけ、人間が書いた内容を含む一時ディレクトリを消さない。**
-  let keep = false;
   try {
     await writeFile(path, current ?? template(slug), 'utf8');
     await openEditor(path, 'alteroid memory set <slug> --file <path>');
-    const edited = await readFile(path, 'utf8');
-
-    if (current !== null && edited === current) {
-      // **書き換えていないなら書き込まない。** 同じ本文でも `PUT` は日誌へ
-      // `memory_update` を積むので、押し戻すたびに「人間が書き換えた」が
-      // 増えていく（後から経緯を読む側が、実際には無かった変更を数える）。
-      stdout.write('変更はありません。\n');
-      return;
-    }
-    try {
-      await write(client, target, slug, edited, ifMatch);
-    } catch (error) {
-      if (!(error instanceof MemoryConflictCliError)) throw error;
-      // **人間が書いた内容を失わない。** 消さずに残し、いまの版も隣へ置いて、
-      // 見比べる道具（`diff`）と次の手を案内する。
-      keep = true;
-      const theirs = join(dir, `${slug}.current.md`);
-      if (error.current !== null) await writeFile(theirs, error.current, 'utf8');
-      stdout.write(
-        [
-          `書き換えていません: ${slug} は、あなたが読んだ後に変わっています（クローンなど別の書き手が書いたか、消されました）。`,
-          `  あなたの編集（残してあります）: ${path}`,
-          error.current === null
-            ? '  いまの記憶: 無い（消されています）'
-            : `  いまの記憶: ${theirs}`,
-          ...(error.current === null ? [] : [`  見比べる: diff -u ${theirs} ${path}`]),
-          `  取り込んだら \`alteroid memory edit ${slug}\` で開き直して直してください。`,
-          `  そのまま置き換えてよいなら \`alteroid memory set ${slug} --file ${path}\`（クローンの書き込みを消します）。`,
-          '',
-        ].join('\n'),
-      );
-      throw new Error(`記憶が読んだ後に変わっていたので書き換えませんでした: ${slug}`, {
-        cause: error,
-      });
-    }
-  } finally {
-    if (!keep) await rm(dir, { recursive: true, force: true });
+  } catch (error) {
+    // まだ人間は何も書いていない（エディタが起きなかった・異常終了した）。
+    await rm(dir, { recursive: true, force: true });
+    throw error;
   }
+  // **成功したときと「変更なし」のときだけ、一時ディレクトリを消す。** 保存の失敗（衝突以外も）は
+  // 人間が書いた内容を残し、場所と続きのやり方を言う（#3453）。衝突は下で自分で案内する。
+  await keepDraftOnFailure(
+    dir,
+    path,
+    `alteroid memory set ${slug} --file ${path}`,
+    async (keep) => {
+      const edited = await readFile(path, 'utf8');
+
+      if (current !== null && edited === current) {
+        // **書き換えていないなら書き込まない。** 同じ本文でも `PUT` は日誌へ
+        // `memory_update` を積むので、押し戻すたびに「人間が書き換えた」が
+        // 増えていく（後から経緯を読む側が、実際には無かった変更を数える）。
+        stdout.write('変更はありません。\n');
+        return;
+      }
+      try {
+        await write(client, target, slug, edited, ifMatch);
+      } catch (error) {
+        if (!(error instanceof MemoryConflictCliError)) throw error;
+        // **人間が書いた内容を失わない。** 消さずに残し、いまの版も隣へ置いて、
+        // 見比べる道具（`diff`）と次の手を案内する。
+        keep();
+        const theirs = join(dir, `${slug}.current.md`);
+        if (error.current !== null) await writeFile(theirs, error.current, 'utf8');
+        stdout.write(
+          [
+            `書き換えていません: ${slug} は、あなたが読んだ後に変わっています（クローンなど別の書き手が書いたか、消されました）。`,
+            `  あなたの編集（残してあります）: ${path}`,
+            error.current === null
+              ? '  いまの記憶: 無い（消されています）'
+              : `  いまの記憶: ${theirs}`,
+            ...(error.current === null ? [] : [`  見比べる: diff -u ${theirs} ${path}`]),
+            `  取り込んだら \`alteroid memory edit ${slug}\` で開き直して直してください。`,
+            `  そのまま置き換えてよいなら \`alteroid memory set ${slug} --file ${path}\`（クローンの書き込みを消します）。`,
+            '',
+          ].join('\n'),
+        );
+        throw new Error(`記憶が読んだ後に変わっていたので書き換えませんでした: ${slug}`, {
+          cause: error,
+        });
+      }
+    },
+  );
 }
+
+/**
+ * 本文が空（空白だけを含む）のときの断り（#3456）。上流のコマンドが失敗して何も流さなかった
+ * `generate | alteroid memory set x --yes` や `< /dev/null` で、記憶が黙って空になるのを防ぐ。
+ * 記憶には版の履歴が無く、戻せない。`profile set`（`EMPTY_BODY_MESSAGE`）と同じ線。
+ */
+const EMPTY_BODY_MESSAGE =
+  '本文が空なので置き換えません（既存の本文は変えていません）。空にしたいときだけ --allow-empty を付けてください。';
 
 /**
  * ファイル（または標準入力）の内容で丸ごと置き換える。
@@ -363,23 +386,26 @@ export async function memoryEditCommand(slug: string): Promise<void> {
  */
 export async function memorySetCommand(
   slug: string,
-  options: { file?: string; yes?: boolean } = {},
+  options: { file?: string; yes?: boolean; allowEmpty?: boolean } = {},
   io?: ConfirmIo,
 ): Promise<void> {
   const conn = await connect('write');
   if (conn === null) return;
   if ((await readDoc(conn.client, conn.target, slug)) !== null) {
-    const confirmed = await confirmIrreversible(
+    await confirmIrreversible(
       `記憶 ${slug} を置き換えます。前の本文は残りません（控えるなら alteroid memory show ${slug}）。`,
       options,
       io,
     );
-    if (!confirmed) return;
   }
   const content =
     options.file === undefined || options.file === '-'
       ? await readAll()
       : await readInputFile(options.file, '--file', '--file <path>、または標準入力（-）');
+  // 空の本文は通信の前に断る（#3456。`profile set` と同じ線）。空にしたい人だけ `--allow-empty`。
+  if (options.allowEmpty !== true && content.trim().length === 0) {
+    throw new Error(`記憶 ${slug}: ${EMPTY_BODY_MESSAGE}`);
+  }
   await write(conn.client, conn.target, slug, content);
 }
 
@@ -425,14 +451,10 @@ export async function memoryRemoveCommand(
   const conn = await connect('write');
   if (conn === null) return;
   const { client, target } = conn;
-  if (
-    !(await confirmIrreversible(
-      `記憶 ${slug} を消します。本文は戻りません（日誌には消した事実と大きさだけが残ります）。`,
-      options,
-    ))
-  ) {
-    return;
-  }
+  await confirmIrreversible(
+    `記憶 ${slug} を消します。本文は戻りません（日誌には消した事実と大きさだけが残ります）。`,
+    options,
+  );
   // **`--if-match` があれば、それだけで照合する**（Issue #2919）。人間が判断の根拠にしたのは
   // `memory show` で読んだ内容なので、消す直前に読み直した版へ差し替えない。
   // 無ければ、消す直前に読んだ版を前提にする（上の段落）。

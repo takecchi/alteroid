@@ -214,7 +214,7 @@
         "operationId": "postAttachments",
         "tags": ["attachments"],
         "summary": "添付を預かる（生のバイト列）",
-        "description": "本文は**生のバイト列**で、名前と MIME はクエリ（`name` / `type`）で運ぶ。**`content-type` は `application/octet-stream` だけを受ける**（それ以外は 415）——CORS の単純リクエストにさせず、ブラウザが必ず preflight を通すため（`deliberateClient` と同じ考え）。認証は他の経路と同じ。本文の上限は添付1つぶんの最大値（超えたら 413）。画像（png / jpeg / webp / gif）は宣言と中身の先頭が一致しなければ 400。返った `id` を `POST /chat` の `attachments` に渡すと発言へ結び付く。結び付けないまま 1 時間たったものは掃除される。**連携の鍵（`altk_`）もこの口だけは通れる**（自分の外部イベントに付ける添付を上げるため。#3113 段3）：`uploadedBy` は `integration:<keyId>` になり、その鍵が `POST /events` で付けられるのは自分が上げた添付だけ。本文の上限は鍵の `maxBodyBytes` ではなく添付の上限（上記）に従い、1 回として鍵の回数（429）に数える。鍵は添付を読み出せない（`GET /attachments/:id` は 403）。",
+        "description": "本文は**生のバイト列**で、名前と MIME はクエリ（`name` / `type`）で運ぶ。**`content-type` は `application/octet-stream` だけを受ける**（それ以外は 415）——CORS の単純リクエストにさせず、ブラウザが必ず preflight を通すため（`deliberateClient` と同じ考え）。認証は他の経路と同じ。本文の上限は添付1つぶんの最大値（超えたら 413）。画像（png / jpeg / webp / gif）は宣言と中身の先頭が一致しなければ 400。0バイトの本文も 400（`code`: `empty`。Web・CLI・TUI と揃えて断る）。返った `id` を `POST /chat` の `attachments` に渡すと発言へ結び付く。結び付けないまま 1 時間たったものは掃除される。**連携の鍵（`altk_`）もこの口だけは通れる**（自分の外部イベントに付ける添付を上げるため。#3113 段3）：`uploadedBy` は `integration:<keyId>` になり、その鍵が `POST /events` で付けられるのは自分が上げた添付だけ。本文の上限は鍵の `maxBodyBytes` ではなく添付の上限（上記）に従い、1 回として鍵の回数（429）に数える。鍵は添付を読み出せない（`GET /attachments/:id` は 403）。",
         "requestBody": {
           "required": true,
           "description": "添付の中身（生のバイト列）。",
@@ -279,7 +279,7 @@
             }
           },
           "400": {
-            "description": "クエリが不正、または受け付けない中身（`code`: `magic_mismatch` / `media_type_missing`）。",
+            "description": "クエリが不正、または受け付けない中身（`code`: `magic_mismatch` / `media_type_missing` / `empty`＝0バイト）。",
             "content": {
               "application/json": {
                 "schema": {
@@ -296,6 +296,7 @@
                         "too_many",
                         "total_too_large",
                         "media_type_missing",
+                        "empty",
                         "attachment_missing",
                         "attachment_conflict",
                         "attachment_forbidden"
@@ -325,6 +326,7 @@
                         "too_many",
                         "total_too_large",
                         "media_type_missing",
+                        "empty",
                         "attachment_missing",
                         "attachment_conflict",
                         "attachment_forbidden"
@@ -9549,6 +9551,250 @@
         ]
       }
     },
+    "/approvals/{id}": {
+      "get": {
+        "operationId": "getApprovalsById",
+        "tags": ["approvals"],
+        "summary": "承認を id で1件読み、決着した日を返す",
+        "description": "承認1件と、決着した日（`settledOn`。デーモンの `localDate()`・日報と同じ区切り。決着の日時は `answeredAt`、無ければ `withdrawnAt`。`GET /approvals?answeredOn=` と同じ意味）を返す。未回答・未取り下げなら `settledOn` は `null`。回答済みの詳細（`/approvals/answered/<日>/<id>`）へ移るために、一覧を引かずに日を知る口。",
+        "responses": {
+          "200": {
+            "description": "承認と決着した日。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "approval": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "createdAt": {
+                          "type": "string",
+                          "format": "date-time",
+                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                        },
+                        "question": {
+                          "type": "string"
+                        },
+                        "context": {
+                          "type": "string"
+                        },
+                        "jobId": {
+                          "type": "string"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "answeredAt": {
+                          "type": "string",
+                          "format": "date-time",
+                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                        },
+                        "answer": {
+                          "type": "string"
+                        },
+                        "questions": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "prompt": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "options": {
+                                "minItems": 1,
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "properties": {
+                                    "id": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "label": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "description": {
+                                      "type": "string"
+                                    },
+                                    "recommended": {
+                                      "type": "boolean"
+                                    }
+                                  },
+                                  "required": ["id", "label"]
+                                }
+                              },
+                              "multiple": {
+                                "type": "boolean"
+                              },
+                              "allowOther": {
+                                "type": "boolean"
+                              }
+                            },
+                            "required": ["id", "prompt", "options"]
+                          }
+                        },
+                        "selections": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "questionId": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "optionIds": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string",
+                                  "minLength": 1
+                                }
+                              },
+                              "other": {
+                                "type": "string"
+                              }
+                            },
+                            "required": ["questionId", "optionIds"]
+                          }
+                        },
+                        "answeredVia": {
+                          "oneOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "const": "operator"
+                                },
+                                "auth": {
+                                  "type": "string",
+                                  "enum": ["disabled", "operator-token"]
+                                }
+                              },
+                              "required": ["kind", "auth"]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "const": "account"
+                                },
+                                "accountId": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": ["kind", "accountId"]
+                            }
+                          ]
+                        },
+                        "answerDelivery": {
+                          "type": "string",
+                          "enum": ["pending", "delivered"]
+                        },
+                        "conversationId": {
+                          "type": "string"
+                        },
+                        "withdrawnAt": {
+                          "type": "string",
+                          "format": "date-time",
+                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                        },
+                        "withdrawnReason": {
+                          "type": "string"
+                        },
+                        "permissionRequest": {
+                          "type": "object",
+                          "properties": {
+                            "rule": {
+                              "type": "string"
+                            },
+                            "allows": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            },
+                            "denies": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            }
+                          },
+                          "required": ["rule", "allows", "denies"]
+                        },
+                        "updatedAt": {
+                          "type": "string",
+                          "format": "date-time",
+                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                        }
+                      },
+                      "required": ["id", "createdAt", "question", "updatedAt"]
+                    },
+                    "settledOn": {
+                      "type": ["string", "null"]
+                    }
+                  },
+                  "required": ["approval", "settledOn"]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "該当する承認待ちが無い。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "承認待ちの行は在るが読めない形で入っている（版ずれ・手編集）。消されたのではない。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "id",
+            "required": true
+          }
+        ]
+      }
+    },
     "/approvals/{id}/trace": {
       "get": {
         "operationId": "getApprovalsByIdTrace",
@@ -16446,6 +16692,7 @@
                         "too_many",
                         "total_too_large",
                         "media_type_missing",
+                        "empty",
                         "attachment_missing",
                         "attachment_conflict",
                         "attachment_forbidden"
@@ -16507,6 +16754,7 @@
                         "too_many",
                         "total_too_large",
                         "media_type_missing",
+                        "empty",
                         "attachment_missing",
                         "attachment_conflict",
                         "attachment_forbidden"
@@ -16616,6 +16864,7 @@
                         "too_many",
                         "total_too_large",
                         "media_type_missing",
+                        "empty",
                         "attachment_missing",
                         "attachment_conflict",
                         "attachment_forbidden"
@@ -16677,6 +16926,7 @@
                         "too_many",
                         "total_too_large",
                         "media_type_missing",
+                        "empty",
                         "attachment_missing",
                         "attachment_conflict",
                         "attachment_forbidden"

@@ -15,7 +15,8 @@ import { captureStdout } from './test-support.js';
  * `renderDropped`（純粋関数）だけでなく、実際に端末へ書く `droppedCommand`
  * （書く側）も測る。理由は `runners.test.ts` の冒頭 doc と同じ（#361）。
  */
-vi.mock('./target.js', () => ({
+vi.mock('./target.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./target.js')>()),
   resolveTarget: vi.fn(() =>
     Promise.resolve({ baseUrl: 'http://127.0.0.1:4517', headers: {}, note: null, remote: false }),
   ),
@@ -145,34 +146,47 @@ describe('droppedCommand', () => {
     replies.push({ status: 404, body: {} });
     const read = captureStdout();
 
-    await droppedCommand();
-
-    const text = read();
-    expect(text).not.toContain(
+    // 例外にする（#3446）。0件の文言とも別の文字列で、終了コードも非 0 になる。
+    const error = await droppedCommand().then(
+      () => null,
+      (e: unknown) => e as Error,
+    );
+    expect(error).not.toBeNull();
+    expect(error?.message).not.toContain(
       'このプロセスではまだ跡（記録・読み出しの握り潰し）が1件も残っていない',
     );
-    expect(text).toContain('版が古い可能性がある');
+    expect(error?.message).toContain('版が古い可能性がある');
+    expect(read()).toBe('');
   });
 
-  it('応答が失敗（404 以外の ok でない）なら、読めなかったと書く', async () => {
+  it('応答が失敗（404 以外の ok でない）なら、読めなかったと例外で言う（#3446）', async () => {
     replies.push({ status: 500, body: {} });
     const read = captureStdout();
 
-    await droppedCommand();
-
     // 理由が読めない本文（`{}`）でも、状態コードは載せる（固定の文言だけにしない）。
-    expect(read()).toBe('握り潰しの跡を読めませんでした（HTTP 500）\n');
+    await expect(droppedCommand()).rejects.toThrow('握り潰しの跡を読めませんでした（HTTP 500）');
+    expect(read()).toBe('');
+  });
+
+  it.each([
+    [401, '認証されませんでした'],
+    [403, 'access grant'],
+  ])('%i は describeAuthFailure の文を例外で言う（#3446）', async (status, phrase) => {
+    replies.push({ status, body: {} });
+    const read = captureStdout();
+
+    await expect(droppedCommand()).rejects.toThrow(phrase);
+    expect(read()).toBe('');
   });
 
   it('応答が失敗（500 + { error }）なら、状態コードとデーモンの理由も書く', async () => {
     replies.push({ status: 500, body: { error: '跡の読み出しが失敗した（dropped のテスト用）' } });
     const read = captureStdout();
 
-    await droppedCommand();
-
-    expect(read()).toBe(
-      '握り潰しの跡を読めませんでした（HTTP 500）: 跡の読み出しが失敗した（dropped のテスト用）\n',
+    await expect(droppedCommand()).rejects.toThrow(
+      '握り潰しの跡を読めませんでした（HTTP 500）: 跡の読み出しが失敗した（dropped のテスト用）',
     );
+    expect(read()).toBe('');
   });
 
   /**
