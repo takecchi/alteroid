@@ -502,7 +502,7 @@ packages/ui          Web UI の見た目の部品（shadcn の部品・汎用の
 | ランタイム | Node 22 LTS | SDK（要 Node 18+）が子プロセスを spawn する関係で Bun は採らない |
 | モノレポ | pnpm workspaces | 標準的。SDK と相性問題なし |
 | エージェント基盤 | @anthropic-ai/claude-agent-sdk | 自作しない（AGENTS.md） |
-| HTTP | hono | 軽量、SSE 対応、`hono/client` で CLI と型を共有 |
+| HTTP | hono | 軽量、SSE 対応、`hono/client` で CLI と型を共有。添付の本文の上限は hono 同梱の `hono/body-limit`（依存は足していない） |
 | スキーマ | zod | エスカレーション・プロトコルの型付きメッセージの実体 |
 | DB（クラウド段） | PostgreSQL + drizzle | マイグレーション込みで軽量 |
 | テスト | vitest | — |
@@ -557,6 +557,10 @@ packages/ui          Web UI の見た目の部品（shadcn の部品・汎用の
 他人がクローンのターンを起こせる状態に戻る。開けるかどうかは人間が決め、開けた先は列挙した
 相手だけに限る — これが方針ではなく**実行環境の境界**で表すということである（north_star 禁止2）。
 
+**添付の上げ口も同じ考えで塞いでいる**（Issue #3111）。`POST /attachments?name=&type=` は本文が生のバイト列で、**`content-type: application/octet-stream` だけを受ける**（`octetStreamClient`）。`multipart/form-data` と `text/plain`（どちらも CORS の単純リクエストの content-type）は **415** で断る。これで、人間が開いた任意のページが `no-cors` の fetch や HTML の form から添付を預けることができず、ブラウザは必ず preflight を通す（`deliberateClient` と同じ。形が違うのは、本文が JSON ではなくバイト列だから）。名前と MIME は本文ではなくクエリで運ぶ。本文の上限は添付1つぶんの最大値（`hono/body-limit`。超過は 413）。
+
+**添付の中身を取る `GET /attachments/:id` も Bearer で受ける。** ブラウザの `<img src>` に URL を直接入れても `Authorization` を運べない（Cookie は受けないので）。そこで Web UI は Bearer 付きの `fetch` で取り、`Blob` から `blob:` URL を作って表示する（画面から外れたら解放する）。レスポンスは `content-disposition: attachment` と `x-content-type-options: nosniff` を付け、人間が上げた中身をブラウザがこのオリジンの文書として開かないようにする。`GET /attachments/:id/meta` は中身を読まずに控えだけを返す。
+
 開発中は Vite の proxy（`/api` → デーモン）で同一オリジンに見せる。**開発のためだけに CORS を
 開けさせない。**
 
@@ -583,6 +587,7 @@ packages/ui          Web UI の見た目の部品（shadcn の部品・汎用の
 - **無認証の `GET /health` は「動いているか」だけを返す。記憶の置き場（`storage`。PostgreSQL なら `host:port/db`、ファイルなら記憶ディレクトリのパス）は返さない**（2026-10-05 のオーナー決定、#2869）。公開の構成で、内部のホスト名・DB 名・ホームのパスをログインしていない相手に読ませないため。残る項目は `ok` `pid` `operator`（CLI の本人確認）`auth`（ログインの要否と手段）。置き場は資格が要る `GET /status` が返す（`alteroid daemon status` はこれを読む）
 - **ログインしただけでは使えない。** 使う許可は人間が `alteroid access grant` で与える。これは PRD「権限境界」とは別の層である — あちらは「クローンが何を人間へ確認するか」を記憶で決める話で、こちらは「そもそも誰が API に触れるか」であり、持つのは**許可されているか否か**だけである（身元についての事実で、**行為の一覧は持たない**。「持ち主として宣言されたか否か」は2026-10-05 以降、通す・通さないに効かない）
 - **入口ごとに認証を作らない。** CLI・HTTP API・Web UI は同じ門番を通る（PRD「インターフェース」）
+- **添付の口（`POST /attachments`・`GET /attachments/:id`・`GET /attachments/:id/meta`）は、認証のある入口からだけ受ける。** 上の公開経路には入らない。上げた主体は `uploadedBy`（識別子だけ）に残る（[ストレージ](#添付--中身は置き場に記憶と日誌には控えだけ)）
 - 資格は `Authorization: Bearer` だけで運ぶ。Cookie は受けない（[Web UI](#web-ui--画面とデーモンのオリジンが違うこと)の項）
 - **CORS はブラウザにしか効かない。** `curl` は素通りするので、外から届く場所に置くならここを有効にするか、手前に境界（リバースプロキシ・トンネル）を置くこと。認証を切ったまま公開しないこと
 
