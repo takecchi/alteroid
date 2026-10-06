@@ -3,8 +3,8 @@
  * 会話の一覧の未読の印。通知の記号と件数で出し（色だけに頼らない）、読み上げには
  * 「未読 N 件」を1回だけ言う。0 件・省略なら印を出さない。
  */
-import { cleanup, render, screen } from '@testing-library/react';
-import { afterEach, describe, expect, it } from 'vitest';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { ConversationList } from './conversation-list';
 
@@ -85,5 +85,57 @@ describe('ConversationList: 発言数', () => {
 
   it('messagesAtLeast が真なら「発言 N 件以上」', () => {
     expect(subline(true)).toBe('3 分前 · 発言 4 件以上');
+  });
+});
+
+describe('ConversationList: もっと見る（#3404）', () => {
+  const renderLink = (_target: unknown, slot: { className: string; children: React.ReactNode }) => (
+    <a href="#x" className={slot.className}>
+      {slot.children}
+    </a>
+  );
+  const items = [{ id: 'c1', preview: 'a', updatedLabel: '1 分前', messages: 1 }];
+
+  it('more が無ければボタンを出さない', () => {
+    render(<ConversationList items={items} activeId={undefined} renderLink={renderLink} />);
+    expect(screen.queryByRole('button', { name: 'もっと見る' })).toBeNull();
+  });
+
+  it('more があれば押せて、読み込み中は押せない', () => {
+    const onClick = vi.fn();
+    const { rerender } = render(
+      <ConversationList
+        items={items}
+        activeId={undefined}
+        renderLink={renderLink}
+        more={{ onClick }}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'もっと見る' }));
+    expect(onClick).toHaveBeenCalledTimes(1);
+    rerender(
+      <ConversationList
+        items={items}
+        activeId={undefined}
+        renderLink={renderLink}
+        more={{ onClick, loading: true }}
+      />,
+    );
+    expect(
+      (screen.getByRole('button', { name: '読み込み中…' }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+  });
+
+  it('続きの失敗は一覧の下に小さく出て、一覧は残る', () => {
+    render(
+      <ConversationList
+        items={items}
+        activeId={undefined}
+        renderLink={renderLink}
+        more={{ onClick: () => {}, error: new Error('繋がらない') }}
+      />,
+    );
+    expect(screen.getByRole('alert').textContent).toContain('続きを読めなかった（繋がらない）');
+    expect(screen.getByRole('link', { name: /a/ })).toBeTruthy();
   });
 });

@@ -585,6 +585,9 @@ export default function Chat({ loaderData }: Route.ComponentProps) {
  * **広い画面では脇に、狭い画面ではドロワーの中に、同じものを置く**（`shell.tsx`
  * の `Nav` と同じ形）。別々に書くと、一覧に何か足したときに片方だけ増える。
  */
+/** 会話の一覧が一度に読む件数の段（`GET /conversations` の `limit` は最大 200）。 */
+const CONVERSATION_LIMITS = [30, 60, 90, 120, 150, 200] as const;
+
 function ConversationList({
   activeId,
   onNavigate,
@@ -598,7 +601,18 @@ function ConversationList({
    */
   onNavigate?: (() => void) | undefined;
 }) {
-  const { data, error, isLoading } = useConversations(30);
+  /*
+   * 「もっと見る」（#3404）。押すたびに `limit` を段で増やし（上限は API の 200）、取り直す。
+   * **取り直しの間も、失敗したときも、直前の一覧を残す**（`keepPreviousData`）。
+   * 失敗は画面の上の `ErrorNote` ではなく、一覧の下に小さく言う。もう一度押せば同じ段を取り直す。
+   */
+  const [step, setStep] = useState(0);
+  const limit = CONVERSATION_LIMITS[step] ?? 30;
+  const { data, error, isLoading, isValidating, mutate } = useConversations(limit, {
+    keepPreviousData: true,
+  });
+  const loadingMore = step > 0 && isValidating;
+  const moreFailing = step > 0 && error !== undefined && !isValidating;
 
   /*
    * 但し書きを組み立てるのは画面の側（`ConversationList` の `notes`）。出す条件は
@@ -647,7 +661,21 @@ function ConversationList({
       }))}
       activeId={activeId}
       loading={isLoading}
-      error={error}
+      error={step > 0 && data !== undefined ? undefined : error}
+      more={
+        data !== undefined &&
+        data.hiddenByLimit > 0 &&
+        (step < CONVERSATION_LIMITS.length - 1 || moreFailing)
+          ? {
+              onClick: () => {
+                if (moreFailing) void mutate();
+                else setStep((current) => current + 1);
+              },
+              loading: loadingMore,
+              ...(moreFailing ? { error } : {}),
+            }
+          : undefined
+      }
       // 取れなかったのを0件と描かない（#2323）。再検証の失敗で `data` が残るときは当たらない。
       unavailable={data === undefined && error !== undefined}
       notes={notes}
