@@ -1461,6 +1461,7 @@ function eventBadRequestResponse() {
     description:
       '本文が JSON として不正。または source が daemon 自身の予約語（`code`: `reserved_source`＝' +
       '`token-pool`・`runner-registry`。前後の空白・大文字小文字・全角を正規化した後で比べる）。' +
+      'または source が NUL・孤立サロゲートを含む（`code`: `invalid_source`）。' +
       'または添付を付けられない（`code`: `attachment_missing`＝無い・期限切れ、' +
       '`attachment_conflict`＝すでに別の会話・外部イベントに結び付いている、' +
       '`attachment_forbidden`＝連携の鍵が、その鍵自身が上げていない添付を付けようとした、' +
@@ -1501,6 +1502,23 @@ const RESERVED_SOURCE_BODY = {
   error: 'この source は daemon 自身が使う予約語なので、外からは使えない（何も積んでいない）',
   code: 'reserved_source',
 } as const;
+/**
+ * NUL や孤立サロゲートを含む `source` を外から名乗ったときの断り（400。`code: 'invalid_source'`。#3695）。
+ * 会話 id（#3573・#3640）と同じ形の穴: pg は NUL を落とし、孤立サロゲートを U+FFFD へ置き換えて残すので、
+ * 別々の source が1つに潰れる。黙って正規化せず、入口で断る。**エラーには値を混ぜない**（固定の文だけ）。
+ * 予約語（`reserved_source`）とは理由が違うので code を分ける（呼び手が「名前の問題」と「形の問題」を見分けられる）。
+ * 連携の鍵の source は `^[a-z0-9._-]{1,64}$` で、この2つは元から通らない（鍵の発行では変えていない）。
+ */
+const INVALID_SOURCE_BODY = {
+  error: 'source に NUL や孤立サロゲートは含められない（何も積んでいない）',
+  code: 'invalid_source',
+} as const;
+
+/** `source` が NUL か孤立サロゲートを含むか（会話 id の入口の検査と同じ判定）。 */
+function isMalformedEventSource(source: string): boolean {
+  return hasNul(source) || !isWellFormedString(source);
+}
+
 const RESERVED_SOURCE_KEY_BODY = {
   error:
     'この source は daemon 自身が使う予約語なので、連携の鍵の source にできない（何も作っていない）',
@@ -6504,7 +6522,8 @@ export function createApp(deps: AppDeps) {
           noteIntegrationRefusal(c, 403, '本文の source が鍵の source と違う', principal.keyId);
           return c.json({ error: '本文の source が、この連携の鍵の source と違う' as const }, 403);
         }
-        // **予約語は入口で断る（正規化の後。添付の検査より前なので、何も結ばず何も積まない）。**
+        // **NUL・孤立サロゲートと予約語は入口で断る（予約語は正規化の後。添付の検査より前なので、何も結ばず何も積まない）。**
+        if (isMalformedEventSource(source)) return c.json(INVALID_SOURCE_BODY, 400);
         if (isReservedEventSource(source)) return c.json(RESERVED_SOURCE_BODY, 400);
         const id = randomUUID();
         // **投函の前に検証し、結び付ける**（弾くなら受信箱に何も積まない）。
@@ -6593,7 +6612,8 @@ export function createApp(deps: AppDeps) {
           noteIntegrationRefusal(c, 403, 'パスの source が鍵の source と違う', principal.keyId);
           return c.json({ error: 'パスの source が、この連携の鍵の source と違う' as const }, 403);
         }
-        // **予約語は入口で断る（正規化の後。本文も添付も読む前なので、何も結ばず何も積まない）。**
+        // **NUL・孤立サロゲートと予約語は入口で断る（予約語は正規化の後。本文も添付も読む前なので、何も結ばず何も積まない）。**
+        if (isMalformedEventSource(source)) return c.json(INVALID_SOURCE_BODY, 400);
         if (isReservedEventSource(source)) return c.json(RESERVED_SOURCE_BODY, 400);
         const raw = await c.req.text();
         let payload: unknown = raw;

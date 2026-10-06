@@ -124,7 +124,7 @@ export const attachmentLimitsSchema = z.object({
   retentionDays: z.number().int(),
 });
 
-/** 添付を断るときの応答。`code` は `AttachmentRejection` かこの口の `attachment_missing` / `attachment_conflict` / `attachment_forbidden`（連携の鍵が、自分で上げていない添付を付けようとした）、外部イベントの入口が予約語の source を断る `reserved_source`。 */
+/** 添付を断るときの応答。`code` は `AttachmentRejection` かこの口の `attachment_missing` / `attachment_conflict` / `attachment_forbidden`（連携の鍵が、自分で上げていない添付を付けようとした）、外部イベントの入口が予約語の source を断る `reserved_source`、NUL・孤立サロゲートを含む source を断る `invalid_source`。 */
 export const attachmentErrorResponseSchema = z.object({
   error: z.string(),
   code: z
@@ -139,6 +139,7 @@ export const attachmentErrorResponseSchema = z.object({
       'attachment_conflict',
       'attachment_forbidden',
       'reserved_source',
+      'invalid_source',
     ])
     .optional(),
 });
@@ -2597,10 +2598,14 @@ const progressForecastBasisSchema = z.object({
  *   記録した数を repo ごとに返すだけで、値は申告である（`observedBy` を必ず付ける）。記録が
  *   無ければ `state: 'not_observed'`（0 件ではない）。`latestOk` / `latestFailed` は repo ごとの
  *   最新の成功・失敗で、失敗の回に数は無い。**古さは判定しない**（`observedAt` をそのまま返す）。
- * - `backlog.completeness`: 0 でなければ `backlog` と `throughput` の数は欠けうる。
- *   `unreadable` / `trimmedClosed` は台帳の行、`unreadableJobs` は委譲の行（issue #2345）で、
- *   0 でなければ `backlog.byState.delegated`・`inProgress`・`throughput.delegationsEnded` は
- *   読めた委譲の分しか数えていない。
+ * - `backlog.completeness`: `unreadable` は台帳の行、`unreadableJobs` は委譲の行（issue #2345）。
+ *   `unreadable` が 0 でなければ `backlog` の数は欠けうる。`unreadableJobs` が 0 でなければ
+ *   `backlog.byState.delegated`・`inProgress`・`throughput.delegationsEnded` は読めた委譲の分しか
+ *   数えていない。**`trimmedClosed`（刈られた片付き行の累計）は `backlog` の数には効かない**
+ *   （刈られるのは片付き行だけ）。
+ * - `throughput.mayBeUndercounted`: 真のとき `commitmentsOpened` / `commitmentsClosed` は
+ *   刈られた片付き行のぶん数え落としうる（「少なくともこれだけ」）。`forecast` の
+ *   `history_incomplete` と同じ条件を、見込みの判定順とは独立に計算した値。
  * - `inProgress.lastReport.oldestAt` / `newestAt`: 報告が1件も無いとき `null`（0 の
  *   代わりの値は作らない）。報告の無い走行は `withoutReport` に数える。
  */
@@ -2651,6 +2656,7 @@ export const progressResponseSchema = z.object({
   throughput: z.object({
     commitmentsOpened: progressCount,
     commitmentsClosed: progressCount,
+    mayBeUndercounted: z.boolean(),
     delegationsEnded: z.object({ count: progressCount, basis: z.literal('updatedAt') }),
   }),
   forecast: z.discriminatedUnion('state', [

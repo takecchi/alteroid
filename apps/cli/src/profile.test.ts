@@ -43,7 +43,10 @@ vi.mock('node:child_process', () => ({
       // `child.on('error', reject)` は先に登録されるが、ここでは呼ばない
       // （エディタは常に成功する前提のテストだけを置く）。
       if (event === 'close')
-        void (editWith?.(args[0] ?? '') ?? Promise.resolve()).then(() => cb(0));
+        // `openEditor` はパスを単一引用符で包んで渡す（#3728）。外して本物のパスに戻す。
+        void (editWith?.((args[0] ?? '').replace(/^'(.*)'$/, '$1')) ?? Promise.resolve()).then(() =>
+          cb(0),
+        );
       return undefined;
     },
   })),

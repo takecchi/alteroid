@@ -3,10 +3,10 @@
 import { SettingsTabs } from '~/components/group-tabs';
 import { LoadError } from '~/components/load-error';
 import { settingsDocumentTitle } from '~/lib/nav';
+import { LeaveGuardScope, useReportDirty } from '~/lib/leave-guard';
 import { useLatest } from '~/lib/use-latest';
 import { maskUrl } from '@alteroid/core/mask-url';
-import { useEffect, useState } from 'react';
-import { useBlocker } from 'react-router';
+import { useState } from 'react';
 
 import {
   Page,
@@ -79,7 +79,11 @@ export default function McpServersPage() {
             {isLoading ? <Spinner /> : data !== undefined && <McpServersView state={data} />}
           </div>
         </Card>
-        {data !== undefined && <McpServersEditor current={data} />}
+        {data !== undefined && (
+          <LeaveGuardScope>
+            <McpServersEditor current={data} />
+          </LeaveGuardScope>
+        )}
       </div>
     </Page>
   );
@@ -212,17 +216,7 @@ function McpServersEditor({ current }: { current: McpServersState }) {
    * **書きかけがあるまま離れない。** `memory-detail.tsx` と同じ形: アプリ内の移動は確認を挟み、
    * タブを閉じる・再読み込みはブラウザの警告に任せる。
    */
-  const blocker = useBlocker(() => dirty);
-  useEffect(() => {
-    if (!dirty) return;
-    const warn = (event: BeforeUnloadEvent) => {
-      event.preventDefault();
-      // 古いブラウザは returnValue を入れないと出さない。
-      event.returnValue = '';
-    };
-    window.addEventListener('beforeunload', warn);
-    return () => window.removeEventListener('beforeunload', warn);
-  }, [dirty]);
+  useReportDirty('editor', dirty);
   const draftClears = parsed !== null && parsed.ok && Object.keys(parsed.servers).length === 0;
 
   async function submit(servers: McpServers) {
@@ -395,19 +389,6 @@ function McpServersEditor({ current }: { current: McpServersState }) {
         onConfirm={() => {
           setDraft(null);
           setConfirmingClose(false);
-        }}
-      />
-      <ConfirmDialog
-        open={blocker.state === 'blocked'}
-        onOpenChange={(open) => {
-          if (!open && blocker.state === 'blocked') blocker.reset();
-        }}
-        title="保存していない変更があります"
-        description="このまま離れると、書きかけの内容は失われます。"
-        confirmLabel="破棄して離れる"
-        destructive
-        onConfirm={() => {
-          if (blocker.state === 'blocked') blocker.proceed();
         }}
       />
     </Card>

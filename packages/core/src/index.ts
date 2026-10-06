@@ -1448,7 +1448,7 @@ export {
  * {@link stripNul} で落として残す。3実装（インメモリ / fs / pg）が同じ部品を呼ぶ。
  */
 export { NulNotAllowedError, assertNoNul, hasNul, stripNul } from './nul-guard.js';
-export { stripNulDeep } from './nul-guard.js';
+export { stripNulDeep, stripNulWellFormed } from './nul-guard.js';
 export { InvalidCredentialNameError, assertValidCredentialEntries } from './credential-input.js';
 export {
   DuplicateTokenIdError,
@@ -1524,6 +1524,10 @@ export {
   ATTACHMENT_MAX_PER_MESSAGE_ENV,
   ATTACHMENT_MAX_TOTAL_BYTES_DEFAULT,
   ATTACHMENT_MAX_TOTAL_BYTES_ENV,
+  ATTACHMENT_MAX_TURN_IMAGES_DEFAULT,
+  ATTACHMENT_MAX_TURN_IMAGES_ENV,
+  ATTACHMENT_MAX_TURN_IMAGE_BYTES_DEFAULT,
+  ATTACHMENT_MAX_TURN_IMAGE_BYTES_ENV,
   ATTACHMENT_EMPTY_MESSAGE,
   ATTACHMENT_NAME_MAX_LENGTH,
   ATTACHMENT_RETENTION_DAYS_DEFAULT,
@@ -1532,6 +1536,8 @@ export {
   ATTACHMENT_UNBOUND_TTL_MS,
   AttachmentRejectedError,
   DEFAULT_ATTACHMENT_LIMITS,
+  DEFAULT_TURN_IMAGE_LIMITS,
+  turnImageLimitsOf,
   attachmentDiskName,
   canBindAttachmentTo,
   isAttachmentImageMediaType,
@@ -1549,6 +1555,8 @@ export {
   type AttachmentBindTarget,
   type AttachmentImageMediaType,
   type AttachmentLimits,
+  type TurnAttachmentLimits,
+  type TurnImageLimits,
   type AttachmentLimitsConfig,
   type AttachmentMeta,
   type AttachmentPutInput,
@@ -1557,7 +1565,11 @@ export {
   type AttachmentStoreOptions,
 } from './attachment.js';
 export { verifyAttachmentStoreContract } from './attachment-contract.js';
-export { resolveTurnAttachments, type ResolvedTurnAttachments } from './attachment-turn.js';
+export {
+  resolveTurnAttachments,
+  resolveTurnAttachmentGroups,
+  type ResolvedTurnAttachments,
+} from './attachment-turn.js';
 export {
   ATTACHMENT_COPY_MAX_AGE_MS,
   attachmentCopiesDir,

@@ -201,7 +201,7 @@ import { CloneInboxFlow } from './clone-inbox-flow.js';
 import { CloneNotices } from './clone-notices.js';
 import { CloneSdkSession } from './clone-sdk-session.js';
 import { attachmentCopiesDir } from './attachment-fetch.js';
-import { resolveTurnAttachments } from './attachment-turn.js';
+import { resolveTurnAttachmentGroups } from './attachment-turn.js';
 import { stripNul } from './nul-guard.js';
 import { composeTurnInputText, turnInputEntry } from './turn-input.js';
 import type { AccountUsageState } from './usage-snapshot.js';
@@ -4253,14 +4253,22 @@ class Clone implements CloneHost {
     if (head === undefined) return;
     const priorTexts = await this.#resolvePriorTexts(events);
     // 添付（Issue #3111 段1b）。中身はここで読むだけで、受信箱・日誌・記憶へは写さない。
+    // ターンの画像の枚数・合計の予算は**新しい発言から**使う（#3696。`events` は到着順）。
     const images: AgentInputImage[] = [];
     const notices = new Map<string, string>();
-    for (const event of events) {
-      if (event.attachments === undefined || event.attachments.length === 0) continue;
-      const resolved = await resolveTurnAttachments(this.#stores, event.attachments);
+    const withAttachments = events.filter(
+      (event) => event.attachments !== undefined && event.attachments.length > 0,
+    );
+    const resolvedGroups = await resolveTurnAttachmentGroups(
+      this.#stores,
+      withAttachments.map((event) => event.attachments ?? []),
+    );
+    withAttachments.forEach((event, index) => {
+      const resolved = resolvedGroups[index];
+      if (resolved === undefined) return;
       images.push(...resolved.images);
       notices.set(event.id, resolved.noticeLines.join('\n'));
-    }
+    });
     await this.#runTurn(
       head.conversationId,
       humanTurnText(events, priorTexts, notices),
@@ -4961,16 +4969,23 @@ class Clone implements CloneHost {
     events: readonly ExternalEvent[],
   ): Promise<{ images: AgentInputImage[]; noticeLines: string[] }> {
     const seen = new Set<string>();
-    const refs: AttachmentRef[] = [];
+    // 合図ごとの束（到着順）。ターンの画像の予算は新しい合図から使う（#3696）。
+    const groups: AttachmentRef[][] = [];
     for (const event of events) {
+      const refs: AttachmentRef[] = [];
       for (const ref of event.attachments ?? []) {
         if (seen.has(ref.id)) continue;
         seen.add(ref.id);
         refs.push(ref);
       }
+      if (refs.length > 0) groups.push(refs);
     }
-    if (refs.length === 0) return { images: [], noticeLines: [] };
-    return resolveTurnAttachments(this.#stores, refs);
+    if (groups.length === 0) return { images: [], noticeLines: [] };
+    const resolved = await resolveTurnAttachmentGroups(this.#stores, groups);
+    return {
+      images: resolved.flatMap((group) => group.images),
+      noticeLines: resolved.flatMap((group) => group.noticeLines),
+    };
   }
 
   #conversationOf(event: InboxEvent): string | null {

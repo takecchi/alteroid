@@ -1,8 +1,8 @@
 import { SettingsTabs } from '~/components/group-tabs';
 import { settingsDocumentTitle } from '~/lib/nav';
+import { LeaveGuardScope, useReportDirty } from '~/lib/leave-guard';
 import { useLatest } from '~/lib/use-latest';
-import { useEffect, useRef, useState } from 'react';
-import { useBlocker } from 'react-router';
+import { useRef, useState } from 'react';
 
 import {
   Page,
@@ -93,6 +93,14 @@ const NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
  * 形は `access.tsx` の「本当に取り消す」と同じ、その場で展開する確認の一手である。
  */
 export default function Profile() {
+  return (
+    <LeaveGuardScope>
+      <ProfileBody />
+    </LeaveGuardScope>
+  );
+}
+
+function ProfileBody() {
   const { data, error, isLoading } = useProfile();
   // 編集欄（新規 or 既存の行）。一度に1つだけ開く。
   const [editor, setEditor] = useState<EditorState | null>(null);
@@ -115,17 +123,7 @@ export default function Profile() {
    * **書きかけがあるまま離れない（#3370。`memory-detail.tsx` と同じ形）。** アプリ内の移動
    * （リンク・戻る）は確認を挟み、タブを閉じる・再読み込みはブラウザの警告に任せる。
    */
-  const blocker = useBlocker(() => dirty);
-  useEffect(() => {
-    if (!dirty) return;
-    const warn = (event: BeforeUnloadEvent) => {
-      event.preventDefault();
-      // 古いブラウザは returnValue を入れないと出さない。
-      event.returnValue = '';
-    };
-    window.addEventListener('beforeunload', warn);
-    return () => window.removeEventListener('beforeunload', warn);
-  }, [dirty]);
+  useReportDirty('editor', dirty);
 
   function openEntry(entry: ProfileEntryView) {
     setResult(null);
@@ -220,19 +218,6 @@ export default function Profile() {
           if (pending?.kind === 'switch') openEntry(pending.entry);
           else setEditor(null);
           setPending(null);
-        }}
-      />
-      <ConfirmDialog
-        open={blocker.state === 'blocked'}
-        onOpenChange={(open) => {
-          if (!open && blocker.state === 'blocked') blocker.reset();
-        }}
-        title="保存していない変更があります"
-        description="このまま離れると、書きかけの内容は失われます。"
-        confirmLabel="破棄して離れる"
-        destructive
-        onConfirm={() => {
-          if (blocker.state === 'blocked') blocker.proceed();
         }}
       />
     </Page>

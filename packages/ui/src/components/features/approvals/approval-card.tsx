@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useId, useState } from 'react';
 import type { ReactNode } from 'react';
 
 import { useDisplayText } from '@/lib/display-text';
@@ -12,6 +12,12 @@ import {
   type ApprovalQuestionsAnswer,
   type ApprovalQuestionsDraft,
 } from './approval-questions';
+
+/** 回答欄の名前に使う確認の冒頭（最初の空でない行の先頭だけ。長い文を名前に丸ごと入れない）。 */
+function questionHead(question: string): string {
+  const text = (question.split('\n').find((l) => l.trim() !== '') ?? '').trim();
+  return text.length > 30 ? `${text.slice(0, 30)}…` : text;
+}
 
 export type ApprovalState = 'unanswered' | 'answered' | 'withdrawn';
 
@@ -106,6 +112,8 @@ export function ApprovalCard({
   onQuestionsDraftChange?: (draft: ApprovalQuestionsDraft) => void;
 }) {
   const { body } = useDisplayText();
+  // 確認の文の要素の id。回答欄・ボタンを `aria-describedby` で結び、どのカードの操作かを区別させる。
+  const questionId = useId();
   const [questionsOpen, setQuestionsOpen] = useState(
     () =>
       questionsDraft !== undefined &&
@@ -151,7 +159,9 @@ export function ApprovalCard({
         改行を `<br>` にするので、行区切りはこれまでどおり保たれる
         （`packages/ui/src/components/markdown.tsx` の doc に理由が逐語で在る）。
       */}
-      <Markdown headingOffset={2}>{body(question)}</Markdown>
+      <div id={questionId}>
+        <Markdown headingOffset={2}>{body(question)}</Markdown>
+      </div>
 
       {context !== undefined && context !== '' && (
         /*
@@ -221,6 +231,7 @@ export function ApprovalCard({
             <Button
               size="sm"
               aria-expanded={questionsOpen}
+              aria-describedby={questionId}
               onClick={() => setQuestionsOpen((open) => !open)}
             >
               {questionsOpen ? '閉じる' : '選択肢を開いて答える'}
@@ -230,6 +241,7 @@ export function ApprovalCard({
           <div hidden={!questionsOpen}>
             <ApprovalQuestionsForm
               questions={questions}
+              describedBy={questionId}
               busy={busy}
               onSubmit={(answer) => onSubmitQuestions?.(answer)}
               {...(questionsDraft === undefined || onQuestionsDraftChange === undefined
@@ -243,6 +255,8 @@ export function ApprovalCard({
           <Textarea
             rows={2}
             value={draft}
+            aria-label={`「${questionHead(body(question))}」への回答`}
+            aria-describedby={questionId}
             placeholder="答える（書いておくと「まとめて送る」の対象になる。この場ですぐ送ってもよい）"
             onChange={(event) => onDraftChange?.(event.target.value)}
             maxHeight="12rem"
@@ -260,6 +274,7 @@ export function ApprovalCard({
               variant="primary"
               size="sm"
               loading={busy}
+              aria-describedby={questionId}
               disabled={draft.trim() === '' || busy}
               onClick={() => onSubmit?.(draft)}
             >
@@ -268,6 +283,7 @@ export function ApprovalCard({
             <Button
               size="sm"
               disabled={busy}
+              aria-describedby={questionId}
               onClick={() => onSubmit?.(APPROVAL_QUICK_ANSWERS.allow)}
             >
               許可
@@ -275,6 +291,7 @@ export function ApprovalCard({
             <Button
               size="sm"
               disabled={busy}
+              aria-describedby={questionId}
               onClick={() => onSubmit?.(APPROVAL_QUICK_ANSWERS.deny)}
             >
               却下

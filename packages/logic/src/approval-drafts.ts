@@ -13,6 +13,8 @@
  * logic は ui を import できないので、形だけをここに写している（構造的に代入できる）。
  */
 
+import { APPROVAL_DRAFTS_KEY, chatDraftEpoch } from './chat-drafts.js';
+
 export interface StoredQuestionDraft {
   chosen: string[];
   other: string;
@@ -31,7 +33,7 @@ export interface ApprovalDrafts {
   questions: Record<string, StoredQuestionsDraft>;
 }
 
-const KEY = 'alteroid.approvalDrafts';
+const KEY = APPROVAL_DRAFTS_KEY;
 
 export function emptyApprovalDrafts(): ApprovalDrafts {
   return { texts: {}, questions: {} };
@@ -101,8 +103,14 @@ export function loadApprovalDrafts(): ApprovalDrafts {
   return result;
 }
 
-/** 下書きを保存する。空なら項目ごと消す。保存できなくても投げない。 */
-export function saveApprovalDrafts(drafts: ApprovalDrafts): void {
+/**
+ * 下書きを保存する。空なら項目ごと消す。保存できなくても投げない。
+ *
+ * `epoch` — この書き込みを決めた時点の `chatDraftEpoch()`。ログアウト（`clearChatDrafts`）を
+ * 挟んだなら、消したはずの書きかけが書き戻らないよう、何もしない（#3706）。
+ */
+export function saveApprovalDrafts(drafts: ApprovalDrafts, epoch?: number): void {
+  if (epoch !== undefined && epoch !== chatDraftEpoch()) return;
   try {
     const store = storage();
     if (store === null) return;

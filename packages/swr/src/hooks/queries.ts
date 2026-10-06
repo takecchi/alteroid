@@ -459,12 +459,18 @@ export function useProgress(windowHours?: number) {
   );
 }
 
+/** `useUsage` の取り直しの設定。省略すると定期更新はしない（使用量の画面はそのまま）。 */
+export interface UsageOptions {
+  /** 取り直す間隔（ミリ秒）。ホームの「今日の利用」だけが渡す（#3699）。 */
+  refreshInterval?: number;
+}
+
 /**
  * 利用状況（いくら使ったか）。経路は `GET /usage` の1本だけで、CLI・chat の
  * `/usage`・クローンの `usage_read` と同じものを見る（`apps/daemon/src/app.ts`
  * 「経路は1本だけにする」）。
  */
-export function useUsage(query: UsageQuery = {}) {
+export function useUsage(query: UsageQuery = {}, options: UsageOptions = {}) {
   const api = useApi();
   return useSWR(
     KEY.usage(query),
@@ -486,7 +492,8 @@ export function useUsage(query: UsageQuery = {}) {
     // **絞り込みや期間を替えて別キーになっても、前の中身を出したままにする（#3419。`useCommitments` の #3074 と同じ）。**
     // 前のキーのデータは読み込み中だけ `data` に載り、`isLoading` は真になる。
     // 画面は、その間「前の条件の数字」と数のそばで言うこと。
-    { keepPreviousData: true },
+    // `refreshInterval` は呼び手が渡したときだけ効く（既定は定期更新なし。#3699）。
+    { keepPreviousData: true, ...options },
   );
 }
 
