@@ -83,7 +83,7 @@ afterEach(() => {
 async function send(text: string) {
   const box = await screen.findByPlaceholderText(/クローンに話しかける/);
   fireEvent.change(box, { target: { value: text } });
-  fireEvent.click(screen.getByRole('button', { name: /送る/ }));
+  fireEvent.click(screen.getByRole('button', { name: 'メッセージを送信' }));
 }
 
 /**
@@ -184,7 +184,7 @@ describe('新しい会話', () => {
     await waitFor(() => {
       expect(screen.queryByRole('button', { name: /受信をやめる/ })).toBeNull();
     });
-    expect(screen.getByRole('button', { name: /送る/ })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'メッセージを送信' })).toBeTruthy();
   });
 
   /**
@@ -282,7 +282,7 @@ describe('受信をやめる', () => {
       expect(screen.queryByText('考えている…')).toBeNull();
     });
     // ② 送信できる状態へ戻る
-    expect(screen.getByRole('button', { name: /送る/ })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'メッセージを送信' })).toBeTruthy();
     // ③ それまでに届いた本文は残る
     expect(screen.getByText('ここまでは届いた')).toBeTruthy();
     expect(within(transcript()).getByText('やあ')).toBeTruthy();
@@ -326,7 +326,7 @@ describe('受信をやめる', () => {
     await waitFor(() => {
       expect(screen.queryByText(/manager_start を実行中/)).toBeNull();
     });
-    expect(screen.getByRole('button', { name: /送る/ })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'メッセージを送信' })).toBeTruthy();
   });
 });
 
@@ -584,7 +584,7 @@ describe('枠が閉じている合図（usage_limited）', () => {
     // 受信が終わり、入力欄が戻った（＝ finally の transient 掃除が走った）
     // あとも、usage_limited の行は消えていない。
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /送る/ })).toBeTruthy();
+      expect(screen.getByRole('button', { name: 'メッセージを送信' })).toBeTruthy();
     });
     expect(screen.getByText(/枠が閉じている（テスト用の文言）/)).toBeTruthy();
   });
@@ -1188,12 +1188,12 @@ describe('吹き出しの折り返し（本2）', () => {
  *
  * `aria-label` は別に固定する。**ラベルの `<span>` を `hidden` にしても、jsdom は
  * CSS を評価しないのでアクセシブルネームの計算はラベルの文字列を通常どおり拾える。
- * つまり `getByRole('button', { name: '送る' })` は `aria-label` を消しても
+ * つまり `getByRole('button', { name: 'メッセージを送信' })` は `aria-label` を消しても
  * 通ってしまい、それだけでは `aria-label` の有無を確かめられない。** だから
  * ここでは `aria-label` 属性そのものを直接見る。
  */
 describe('送信ボタンの狭幅対応（本6）', () => {
-  it('「送る」のラベルは hidden md:inline を持つ span に包まれている（クラス名の存在のみ。実際に隠れることはここでは確認できない）', async () => {
+  it('送信ボタンは記号だけで文字のラベルを持たない（名前は aria-label が担う）', async () => {
     stubFetch((url, init) => {
       if (url.endsWith('/chat')) return sse(STREAM, { signal: init?.signal });
       // **issue #2210 以降**: `chat.tsx` が `conversationApprovals.error` を見て
@@ -1206,15 +1206,11 @@ describe('送信ボタンの狭幅対応（本6）', () => {
     });
 
     renderChat();
-    const sendButton = await screen.findByRole('button', { name: '送る' });
-    const label = within(sendButton).getByText('送る');
-    expect(label.tagName).toBe('SPAN');
-    const classes = label.className.split(/\s+/);
-    expect(classes).toContain('hidden');
-    expect(classes).toContain('md:inline');
+    const sendButton = await screen.findByRole('button', { name: 'メッセージを送信' });
+    expect(sendButton.textContent).toBe('');
   });
 
-  it('「送る」ボタンは aria-label="送る" を明示している（getByRole の名前一致だけでは確かめられない — 属性を直接見る）', async () => {
+  it('送信ボタンは aria-label="メッセージを送信" を明示している（getByRole の名前一致だけでは確かめられない — 属性を直接見る）', async () => {
     stubFetch((url, init) => {
       if (url.endsWith('/chat')) return sse(STREAM, { signal: init?.signal });
       // **issue #2210 以降**: `chat.tsx` が `conversationApprovals.error` を見て
@@ -1227,11 +1223,11 @@ describe('送信ボタンの狭幅対応（本6）', () => {
     });
 
     renderChat();
-    const sendButton = await screen.findByRole('button', { name: '送る' });
-    expect(sendButton.getAttribute('aria-label')).toBe('送る');
+    const sendButton = await screen.findByRole('button', { name: 'メッセージを送信' });
+    expect(sendButton.getAttribute('aria-label')).toBe('メッセージを送信');
   });
 
-  it('受信中は「受信をやめる」のラベルも hidden md:inline を持つ span に包まれ、aria-label も明示されている。かつ「送る」ボタンは消えず両方とも出ている', async () => {
+  it('受信中は「受信をやめる」のラベルも hidden md:inline を持つ span に包まれ、aria-label も明示されている。かつ送信ボタンは消えず両方とも出ている', async () => {
     stubFetch((url, init) => {
       if (url.endsWith('/chat')) {
         return sse(
@@ -1260,8 +1256,8 @@ describe('送信ボタンの狭幅対応（本6）', () => {
     expect(stopClasses).toContain('md:inline');
     expect(stopButton.getAttribute('aria-label')).toBe('受信をやめる');
 
-    // 「受信をやめる」は「送る」の代わりではない。並べて出ている。
-    expect(screen.getByRole('button', { name: '送る' })).toBeTruthy();
+    // 「受信をやめる」は送信の代わりではない。並べて出ている。
+    expect(screen.getByRole('button', { name: 'メッセージを送信' })).toBeTruthy();
   });
 });
 

@@ -149,7 +149,7 @@ afterEach(() => {
 async function typeAndSend(text: string) {
   const box = await screen.findByPlaceholderText(/クローンに話しかける/);
   fireEvent.change(box, { target: { value: text } });
-  fireEvent.click(screen.getByRole('button', { name: '送る' }));
+  fireEvent.click(screen.getByRole('button', { name: 'メッセージを送信' }));
 }
 
 /**

@@ -1,31 +1,18 @@
 // @vitest-environment jsdom
 /**
- * **IME で変換している最中の Enter を、送信として拾わないこと。**
+ * **IME で変換している最中の送信ショートカットを、送信として拾わないこと。**
  *
- * ⭐ **この歯が守っている門は、いまは誰も踏まない。** 送信条件は `⌘/Ctrl + Enter`
- * だけで、Enter 単体で送る道が `ChatComposer`（`packages/ui/src/components/features/chat/chat-composer.tsx`）にまだ無いからである（#247 の 2）。
- * それでも歯を置くのは、**Enter 単体送信を足した瞬間に、門が無いと IME の
- * 「変換を確定する Enter」がそのまま誤送信になる**ためで、足す人がそのときに
- * 門の不在へ気づく契機を持たない。下の最後の1本（「Enter 単体では送らない」）が、
- * その人をここへ連れてくる網である。
+ * 送るのは ⌘ + Enter（macOS）／ Ctrl + Enter（それ以外）だけで、Enter 単体・Shift + Enter では
+ * 送らない（textarea の既定の改行）。変換中でも `input` は飛ぶので、`draft` に入っているのは
+ * 確定前の途中の文字列であり、門が無いとそれが投函される。
  *
- * **いま既に効いている分もある**（1本目・2本目）— 変換中に `⌘/Ctrl + Enter` を
- * 打つと、`draft` に入っているのは確定前の途中の文字列（変換中でも `input` は
- * 飛ぶ）なので、門が無ければそれが投函される。
- *
- * **測り方**: 同じ入力・同じキーで `isComposing` だけを反転させ、`POST /chat` が
- * 立つか立たないかを見る。片側だけでは「そもそも送れていない」と区別が付かない
- * ので、**必ず両側を1本の中で通す**（変換中→0本、確定後→1本）。
- *
- * `isComposing` / `keyCode` が jsdom の `KeyboardEvent` から React の `nativeEvent`
- * まで実際に運ばれることは、この歯を書く前に別立てで実測してある（`fireEvent.keyDown`
- * の init に載せた値が、そのまま `event.nativeEvent.isComposing` /
- * `event.nativeEvent.keyCode` に出る）。**レイアウト由来の値（`offsetWidth` 等）が
- * jsdom で常に 0 になるのとは性質が違い、これらは素のデータプロパティである。**
+ * **測り方**: 同じ入力・同じキーで `isComposing` だけを反転させ、`POST /chat` が立つか立たないかを見る。
+ * 片側だけでは「そもそも送れていない」と区別が付かないので、**必ず両側を1本の中で通す**
+ * （変換中→0本、確定後→1本）。OS の判定は `navigator.platform`（jsdom は空 = Ctrl 側）を差し替えて切り替える。
  */
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider, useParams } from 'react-router';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { json, Providers, sse, storeTestBaseUrl, stubFetch } from '~/test-support';
 
@@ -113,8 +100,7 @@ function setUpChat(): { bodies: string[] } {
  * 「常に緑」にはならない。
  */
 async function settle(): Promise<void> {
-  for (let i = 0; i < 5; i += 1) await Promise.resolve();
-  await new Promise((resolve) => setTimeout(resolve, 20));
+  for (let i = 0; i < 30; i += 1) await Promise.resolve();
 }
 
 async function typeInto(text: string): Promise<HTMLTextAreaElement> {
@@ -136,33 +122,26 @@ afterEach(() => {
   globalThis.fetch = originalFetch;
 });
 
-describe('IME 変換中の Enter', () => {
-  it('⌘ + Enter は、変換中（isComposing: true）は送らず、確定後（false）は送る', async () => {
+/** `navigator.platform` を差し替える（jsdom は空で、Ctrl 側になる）。 */
+function pretendPlatform(platform: string) {
+  vi.spyOn(navigator, 'platform', 'get').mockReturnValue(platform);
+}
+
+const BODY = (text: string) => ({
+  text,
+  conversationId: CONVERSATION_ID,
+  clientMessageId: expect.stringMatching(/^[A-Za-z0-9_-]{1,128}$/),
+});
+
+describe('IME 変換中の送信ショートカット', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('Ctrl + Enter（Mac 以外）は、変換中（isComposing: true）は送らず、確定後（false）は送る', async () => {
     const { bodies } = setUpChat();
     renderChat(`/chat/${CONVERSATION_ID}`);
     const box = await typeInto('こんにちは');
-
-    // 変換中。**この Enter は「変換を確定する Enter」であって、送信ではない。**
-    fireEvent.keyDown(box, { key: 'Enter', metaKey: true, isComposing: true });
-    await settle();
-    expect(bodies).toEqual([]);
-
-    // 確定後。同じキー・同じ本文で、`isComposing` だけが違う。
-    fireEvent.keyDown(box, { key: 'Enter', metaKey: true, isComposing: false });
-    await waitFor(() => {
-      expect(bodies.length).toBe(1);
-    });
-    expect(JSON.parse(bodies[0] ?? '{}')).toEqual({
-      text: 'こんにちは',
-      conversationId: CONVERSATION_ID,
-      clientMessageId: expect.stringMatching(/^[A-Za-z0-9_-]{1,128}$/),
-    });
-  });
-
-  it('Ctrl + Enter でも同じ（門は修飾キーの種類に依らない）', async () => {
-    const { bodies } = setUpChat();
-    renderChat(`/chat/${CONVERSATION_ID}`);
-    const box = await typeInto('へんかんちゅう');
 
     fireEvent.keyDown(box, { key: 'Enter', ctrlKey: true, isComposing: true });
     await settle();
@@ -172,57 +151,71 @@ describe('IME 変換中の Enter', () => {
     await waitFor(() => {
       expect(bodies.length).toBe(1);
     });
-    expect(JSON.parse(bodies[0] ?? '{}')).toEqual({
-      text: 'へんかんちゅう',
-      conversationId: CONVERSATION_ID,
-      clientMessageId: expect.stringMatching(/^[A-Za-z0-9_-]{1,128}$/),
-    });
+    expect(JSON.parse(bodies[0] ?? '{}')).toEqual(BODY('こんにちは'));
   });
 
-  /**
-   * `isComposing` が false のまま変換確定の Enter を配る実装への備え（`keyCode === 229`）。
-   *
-   * ⚠️ **測れているのは分岐の存在だけである。** 229 を実際に配るブラウザ（Android の
-   * IME・古い WebKit で報告されている形）をこの器から触れないので、「実機で助かる」
-   * ことの証拠にはならない。PR #53 がこの項目を予告したときに挙げた既存実装
-   * （virchamate の `isIMEActive`）が `isComposing` と 229 を併用していたのに合わせてある。
-   */
-  it('keyCode 229（isComposing は false）の ⌘ + Enter でも送らない', async () => {
+  it('⌘ + Enter（Mac）も同じ。Ctrl + Enter は Mac では送らない', async () => {
+    pretendPlatform('MacIntel');
     const { bodies } = setUpChat();
     renderChat(`/chat/${CONVERSATION_ID}`);
-    const box = await typeInto('へんかん');
+    const box = await typeInto('へんかんちゅう');
 
-    fireEvent.keyDown(box, { key: 'Enter', metaKey: true, isComposing: false, keyCode: 229 });
+    fireEvent.keyDown(box, { key: 'Enter', metaKey: true, isComposing: true });
+    fireEvent.keyDown(box, { key: 'Enter', ctrlKey: true, isComposing: false });
     await settle();
     expect(bodies).toEqual([]);
 
-    // 229 でなくなれば送る（上が「そもそも送れない」で緑になっていない）。
-    fireEvent.keyDown(box, { key: 'Enter', metaKey: true, isComposing: false, keyCode: 13 });
+    fireEvent.keyDown(box, { key: 'Enter', metaKey: true, isComposing: false });
+    await waitFor(() => {
+      expect(bodies.length).toBe(1);
+    });
+    expect(JSON.parse(bodies[0] ?? '{}')).toEqual(BODY('へんかんちゅう'));
+  });
+
+  it('Mac 以外では ⌘（meta）+ Enter は送らない', async () => {
+    const { bodies } = setUpChat();
+    renderChat(`/chat/${CONVERSATION_ID}`);
+    const box = await typeInto('めた');
+    fireEvent.keyDown(box, { key: 'Enter', metaKey: true });
+    await settle();
+    expect(bodies).toEqual([]);
+    fireEvent.keyDown(box, { key: 'Enter', ctrlKey: true });
     await waitFor(() => {
       expect(bodies.length).toBe(1);
     });
   });
 
   /**
-   * ⭐ **これは「いまの仕様」を留めている歯である**（欠陥を固定しているのではない）。
-   *
-   * **Enter 単体送信を足すことになったら、この本は反転させてよい。** ただし
-   * そのときは `packages/ui/src/components/features/chat/ime.ts` の `isImeConfirmEnter`（`event.nativeEvent.isComposing`
-   * を見る門）が **Enter 単体の枝も通っていること**を必ず確かめること — 通っていないと、
-   * IME で変換を確定した Enter が、そのまま途中の文字列を投函する。
-   * **この本が落ちることが、その確認を促す唯一の合図である。**
+   * `isComposing` が false のまま変換確定の Enter を配る実装への備え（`keyCode === 229`）。
+   * ⚠️ 測れているのは分岐の存在だけで、実機（Android の IME・古い WebKit）では確かめていない。
    */
-  it('Enter 単体では送らない（いまの仕様。ここを反転するときは上の門を必ず通すこと）', async () => {
+  it('keyCode 229（isComposing は false）の Ctrl + Enter でも送らない', async () => {
+    const { bodies } = setUpChat();
+    renderChat(`/chat/${CONVERSATION_ID}`);
+    const box = await typeInto('へんかん');
+
+    fireEvent.keyDown(box, { key: 'Enter', ctrlKey: true, isComposing: false, keyCode: 229 });
+    await settle();
+    expect(bodies).toEqual([]);
+
+    fireEvent.keyDown(box, { key: 'Enter', ctrlKey: true, isComposing: false, keyCode: 13 });
+    await waitFor(() => {
+      expect(bodies.length).toBe(1);
+    });
+  });
+
+  it('Enter 単体・Shift + Enter では送らない（既定の改行のまま）。送信ボタンは生きている', async () => {
     const { bodies } = setUpChat();
     renderChat(`/chat/${CONVERSATION_ID}`);
     const box = await typeInto('修飾キー無し');
 
-    fireEvent.keyDown(box, { key: 'Enter', isComposing: false });
+    // fireEvent の戻り値は「既定動作が止められなかったか」。止めていない = 改行の既定が生きている。
+    expect(fireEvent.keyDown(box, { key: 'Enter', isComposing: false })).toBe(true);
+    expect(fireEvent.keyDown(box, { key: 'Enter', shiftKey: true, isComposing: false })).toBe(true);
     await settle();
     expect(bodies).toEqual([]);
 
-    // 送る口そのものは生きている（上が「そもそも送れない」で緑になっていない）。
-    fireEvent.click(screen.getByRole('button', { name: /送る/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'メッセージを送信' }));
     await waitFor(() => {
       expect(bodies.length).toBe(1);
     });

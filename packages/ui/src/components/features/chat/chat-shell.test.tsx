@@ -179,7 +179,7 @@ describe('ChatComposer', () => {
       <ChatComposer value="こんにちは" onChange={() => undefined} onSend={onSend} {...props} />,
     );
     const textbox = screen.getByRole('textbox');
-    const band = textbox.parentElement?.parentElement?.parentElement;
+    const band = textbox.closest('[data-slot="chat-composer-frame"]')?.parentElement;
     if (band === undefined || band === null) throw new Error('帯が見つからない');
     return { onSend, band };
   }
@@ -191,28 +191,30 @@ describe('ChatComposer', () => {
     expect(classes).toContain('pb-[calc(0.75rem+var(--safe-bottom))]');
   });
 
-  it('⌘/Ctrl + Enter で送る。Enter 単体・IME の確定の Enter では送らない', () => {
+  it('Ctrl + Enter（Mac 以外）で送る。Enter 単体・Shift + Enter・IME の確定の Enter では送らない', () => {
     const { onSend } = composer();
     const textbox = screen.getByRole('textbox');
     fireEvent.keyDown(textbox, { key: 'Enter' });
+    fireEvent.keyDown(textbox, { key: 'Enter', shiftKey: true });
     fireEvent.keyDown(textbox, { key: 'Enter', ctrlKey: true, isComposing: true });
-    fireEvent.keyDown(textbox, { key: 'Enter', metaKey: true, keyCode: 229 });
+    fireEvent.keyDown(textbox, { key: 'Enter', ctrlKey: true, keyCode: 229 });
     expect(onSend).not.toHaveBeenCalled();
     fireEvent.keyDown(textbox, { key: 'Enter', ctrlKey: true });
-    fireEvent.keyDown(textbox, { key: 'Enter', metaKey: true });
-    expect(onSend).toHaveBeenCalledTimes(2);
+    expect(onSend).toHaveBeenCalledTimes(1);
   });
 
   it('受信中は「受信をやめる」を「送る」と並べて出し、但し書きも出す', () => {
     composer({ sending: true, onStopReceiving: () => undefined });
     expect(screen.getByRole('button', { name: '受信をやめる' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: '送る' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'メッセージを送信' })).toBeTruthy();
     expect(screen.getByText(/画面を閉じてもクローンは考え続ける/)).toBeTruthy();
   });
 
-  it('空の下書きでは「送る」が押せない', () => {
+  it('空の下書きでは送信ボタンが押せない', () => {
     composer({ value: '  ' });
-    expect((screen.getByRole('button', { name: '送る' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(
+      (screen.getByRole('button', { name: 'メッセージを送信' }) as HTMLButtonElement).disabled,
+    ).toBe(true);
   });
 });
 

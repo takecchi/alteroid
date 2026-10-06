@@ -123,7 +123,7 @@ async function sendAttachmentOnlyAndAbort() {
   Object.defineProperty(input, 'files', { value: [nodeFile()], configurable: true });
   fireEvent.change(input);
   await screen.findByRole('button', { name: 'mine.png を外す' });
-  fireEvent.click(screen.getByRole('button', { name: '送る' }));
+  fireEvent.click(screen.getByRole('button', { name: 'メッセージを送信' }));
   await waitFor(() => expect(posts).toBe(1));
   await view.router.navigate(`/chat/${B}`);
   expect(await findShownConversation(B)).toBeTruthy();

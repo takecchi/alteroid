@@ -15,7 +15,7 @@ const file = (name: string) => new File(['x'], name, { type: 'text/plain' });
 describe('ChatComposer: 添付', () => {
   it('onAttach を渡さなければ、添付のボタンは出ない', () => {
     render(<ChatComposer value="x" onChange={() => undefined} onSend={() => undefined} />);
-    expect(screen.queryByRole('button', { name: 'ファイルを添える' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'ファイルを添付' })).toBeNull();
   });
 
   it('ボタンから隠した input を開き、選んだファイルを onAttach へ渡す', () => {
@@ -31,7 +31,7 @@ describe('ChatComposer: 添付', () => {
     const input = container.querySelector('input[type=file]') as HTMLInputElement;
     expect(input.multiple).toBe(true);
     const click = vi.spyOn(input, 'click');
-    fireEvent.click(screen.getByRole('button', { name: 'ファイルを添える' }));
+    fireEvent.click(screen.getByRole('button', { name: 'ファイルを添付' }));
     expect(click).toHaveBeenCalled();
     Object.defineProperty(input, 'files', { value: [file('a.txt')], configurable: true });
     fireEvent.change(input);
@@ -71,7 +71,7 @@ describe('ChatComposer: 添付', () => {
       (screen.getByRole('button', { name: '添付を上げている' }) as HTMLButtonElement).disabled,
     ).toBe(true);
     expect(
-      (screen.getByRole('button', { name: 'ファイルを添える' }) as HTMLButtonElement).disabled,
+      (screen.getByRole('button', { name: 'ファイルを添付' }) as HTMLButtonElement).disabled,
     ).toBe(true);
   });
 });

@@ -179,7 +179,7 @@ describe('会話ごとの下書き（#1618）', () => {
     // B で書いて実際に送る。
     const boxInB = await draftBox();
     fireEvent.change(boxInB, { target: { value: 'Bから送る発言' } });
-    fireEvent.click(screen.getByRole('button', { name: /送る/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'メッセージを送信' }));
 
     // 送信の時点で B の入力欄は空になる（他の会話の下書きには触れない）。
     expect((await draftBox()).value).toBe('');
@@ -269,7 +269,7 @@ describe('会話ごとの下書き（#1618）', () => {
     expect((await draftBox()).value).toBe('新しい会話から送る発言');
 
     // それを送る。`open` で id が確定し、URL が `/chat/<新しい id>` へ追いつく。
-    fireEvent.click(screen.getByRole('button', { name: /送る/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'メッセージを送信' }));
     expect((await draftBox()).value).toBe('');
     await untilOpenSettled(router, CONVERSATION_NEW);
     reply.open();

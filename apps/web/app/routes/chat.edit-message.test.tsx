@@ -151,7 +151,7 @@ describe('編集の入口（鉛筆）— 制約C', () => {
     renderChat('/chat');
     const box = await screen.findByPlaceholderText(/クローンに話しかける/);
     fireEvent.change(box, { target: { value: 'たったいま送った' } });
-    fireEvent.click(screen.getByRole('button', { name: /送る/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'メッセージを送信' }));
 
     const line = await screen.findByText('たったいま送った');
     const row = line.closest('li');

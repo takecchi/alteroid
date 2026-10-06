@@ -109,7 +109,7 @@ afterEach(() => {
 async function typeAndSend(text: string) {
   const box = await screen.findByPlaceholderText(/クローンに話しかける/);
   fireEvent.change(box, { target: { value: text } });
-  fireEvent.click(screen.getByRole('button', { name: '送る' }));
+  fireEvent.click(screen.getByRole('button', { name: 'メッセージを送信' }));
 }
 
 describe('#1585: 送信/追送の失敗は会話ごとに持ち、切り替えでは消えない', () => {
