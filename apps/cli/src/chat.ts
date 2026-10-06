@@ -316,7 +316,7 @@ const HELP = `/report [日付]        日報（既定は直近。日付は YYYY-
 /schedule <kind> <HH:MM|30m|cron 0 10 * * 1> <依頼>  継続する依頼を仕込む
 /unschedule <kind>   継続中の依頼を外す
 /run <kind>          定期ジョブを今すぐ起こす
-/event <source> <本文>  外部イベントをクローンに届ける
+/event <source> [本文]  外部イベントをクローンに届ける（本文が JSON ならその値として）
 /quit                終了
 `;
 
@@ -579,13 +579,17 @@ export async function runSlashCommand(
     }
 
     case '/event': {
-      const [source, ...bodyParts] = rest;
-      const body = bodyParts.join(' ');
-      if (!source || body.length === 0) {
-        stdout.write('使い方: /event <source> <本文>\n');
+      const [source] = rest;
+      if (!source) {
+        stdout.write('使い方: /event <source> [本文]（本文が JSON ならその値として届ける）\n');
         return 'ok';
       }
-      const response = await client.events.$post({ json: { source, payload: body } });
+      // 本文は空白を畳まない生の残りを使う（`rest` は空白で割ってあり、JSON の文字列や
+      // 本文の中の連続した空白を壊す）。解釈は Web の予定の画面と同じ（issue #3146）。
+      const body = line.replace(/^\S+\s+\S+\s*/, '').trimEnd();
+      const response = await client.events.$post({
+        json: { source, payload: parseEventPayload(body) },
+      });
       stdout.write(
         `${
           response.ok
@@ -3690,4 +3694,21 @@ function summarizeText(value: string): string {
   // 伏せ字を先に掛ける（切ってからだとトークンの途中で切れて形が崩れ、取りこぼす）。
   const single = redactBody(value).replace(/\s+/g, ' ').trim();
   return single.length > 80 ? `${single.slice(0, 80)}…` : single;
+}
+
+/**
+ * `/event` の本文を API の payload（JSON）にする。**Web の予定の画面
+ * （`apps/web/app/routes/schedule.tsx` の `EventForm`）と同じ解釈**で、webhook の
+ * `POST /events/:source` とも同じ（issue #3146）: JSON として読めればその値、読めなければ
+ * 文字列のまま。空の本文は JSON として読めないので空文字列になる（Web が source だけで
+ * 送れるのと同じ）。入口ごとに解釈が違うと、同じ `{"a":1}` でもクローンが読む本文と
+ * 重複判定の鍵（`JSON.stringify(payload)`）が入口で変わってしまう。
+ * 共有の純関数は無いので同じ規則を書いてある（Web 側は変えていない）。
+ */
+export function parseEventPayload(body: string): unknown {
+  try {
+    return JSON.parse(body) as unknown;
+  } catch {
+    return body;
+  }
 }

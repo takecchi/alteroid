@@ -1902,6 +1902,12 @@ function stubClient(
         },
       },
     },
+    events: {
+      $post: (args: unknown) => {
+        calls.push({ route: 'POST /events', args });
+        return Promise.resolve(reply(200, { id: 'evt-1' }));
+      },
+    },
     commitments: {
       $get: (args: unknown) => {
         calls.push({ route: 'GET /commitments', args });
@@ -2410,6 +2416,40 @@ describe('chat の台帳コマンド', () => {
     const { reason } = (close?.args as { json: { reason: string } }).json;
     expect(reason.length).toBeGreaterThan(0);
     expect(reason).toContain('/done');
+  });
+
+  it('/event は本文が JSON ならその値を、読めなければ文字列を、空なら空文字列を送る（#3146）', async () => {
+    captureStdout();
+    const { calls, client } = stubClient();
+
+    await runSlashCommand('/event ci {"a":1}', client, emptyListed());
+    await runSlashCommand('/event ci [1,"x"]', client, emptyListed());
+    await runSlashCommand('/event ci 42', client, emptyListed());
+    await runSlashCommand('/event ci ビルドが  落ちた', client, emptyListed());
+    await runSlashCommand('/event ci {"a":1', client, emptyListed());
+    await runSlashCommand('/event ci', client, emptyListed());
+
+    const sent = calls
+      .filter((call) => call.route === 'POST /events')
+      .map((call) => (call.args as { json: unknown }).json);
+    expect(sent).toEqual([
+      { source: 'ci', payload: { a: 1 } },
+      { source: 'ci', payload: [1, 'x'] },
+      { source: 'ci', payload: 42 },
+      { source: 'ci', payload: 'ビルドが  落ちた' },
+      { source: 'ci', payload: '{"a":1' },
+      { source: 'ci', payload: '' },
+    ]);
+  });
+
+  it('/event は source が無ければ何も送らず、使い方を出す', async () => {
+    const out = captureStdout();
+    const { calls, client } = stubClient();
+
+    await runSlashCommand('/event', client, emptyListed());
+
+    expect(calls.some((call) => call.route === 'POST /events')).toBe(false);
+    expect(out()).toContain('使い方: /event');
   });
 
   it('/commit-edit は番号を id へ引き直し、新しい本文を PATCH で送る（#1058）', async () => {
