@@ -20,8 +20,16 @@ import type { CommitmentStore } from './store.js';
  * 3. `close('b')` の後は a, c（残りの相対順が変わらない）
  * 4. 続けて d, e を同じ `at` で開き、`closeMany([a, e])` の後は c, d
  *
- * ⛔ **閉じた側（`closedAt` 降順）の同じ時刻の並びは、この契約では測らない** — 決め方が
- * まだ決まっていない（#3285）。
+ * 5. 閉じた側（`list({ includeClosed: true })`。`closedAt` の新しい順）の同じ `closedAt` の行は、
+ *    **入れた順（昇順）**——閉じた順でも逆順でもない。`closeMany` で一度に閉じた a, e と、同じ時刻で
+ *    `close` を続けた c, d は、入れた順の a, c, d, e に並び、それより古い `closedAt` の b が後ろに来る
+ * 6. 閉じた行は `editBody` が `false` を返し、並びも変わらない
+ *
+ * ## 閉じた側の決め方（2026-10-06 の人間の決定・案 1）
+ *
+ * in-memory と fs の閉じた側は `closedAt` 降順の安定整列なので、同じ時刻は**入れた順の昇順**である
+ * （「入れた順の逆」ではない。はじめは逆を想定したが、現物を読んで取り消した）。**pg をこの現物に
+ * 合わせる**（`order by closed_at desc, seq asc, id asc`）。fs / in-memory は変えない（#3285）。
  */
 export async function verifyCommitmentTieOrderContract(store: CommitmentStore): Promise<void> {
   const fail = (message: string): never => {
@@ -52,4 +60,22 @@ export async function verifyCommitmentTieOrderContract(store: CommitmentStore): 
   const closed = await store.closeMany(['a', 'e'], '2026-01-04T00:00:00.000Z', '片付けた', 'clone');
   if ([...closed].sort().join(',') !== 'a,e') fail(`closeMany の戻りが違う（${closed.join(',')}）`);
   await expectIds('c,d', 'closeMany の後に残りの並びが変わった');
+
+  // 閉じた側。a, e は closeMany で、c, d は同じ時刻で close を続けて閉じる（閉じた時刻は全部同じ）
+  const sameClosedAt = '2026-01-04T00:00:00.000Z';
+  for (const id of ['c', 'd'])
+    if (!(await store.close(id, sameClosedAt, '片付けた', 'clone'))) fail(`close(${id}) が false`);
+  const closedIds = async (): Promise<string> =>
+    (await store.list({ includeClosed: true })).entries
+      .filter((entry) => entry.closedAt !== undefined)
+      .map((entry) => entry.id)
+      .join(',');
+  const expectClosed = async (expected: string, when: string): Promise<void> => {
+    const actual = await closedIds();
+    if (actual !== expected) fail(`${when}（期待: ${expected}、実際: ${actual}）`);
+  };
+  await expectClosed('a,c,d,e,b', '閉じた側の同じ closedAt が入れた順（昇順）でない');
+  if (await store.editBody('c', '閉じた後の直し', '2026-01-05T00:00:00.000Z', 'clone'))
+    fail('閉じた行の editBody が true を返した');
+  await expectClosed('a,c,d,e,b', '閉じた行を直そうとした後に閉じた側の並びが変わった');
 }
