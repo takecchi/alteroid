@@ -324,6 +324,8 @@ export async function profileRemoveCommand(
  */
 export async function profileClearCommand(options: { yes?: boolean } = {}): Promise<void> {
   const target = await resolveTarget();
+  // 未ログインなら確認を出す前に断る（Issue #3214）。
+  if (target.note !== null) throw new Error(target.note);
   // **戻せない操作なので確認する**（Issue #3141。`confirm.ts`）。全行の本文が残らない。
   const confirmed = await confirmIrreversible(
     'プロファイルの全行を外します。行の本文は残りません（控えるなら alteroid profile show）。',

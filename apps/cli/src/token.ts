@@ -177,13 +177,15 @@ export async function tokenRemoveUnreadableCommand(
   ids: readonly string[],
   options: { yes?: boolean } = {},
 ): Promise<void> {
+  const target = await resolveTarget();
+  // 未ログインなら確認を出す前に断る（Issue #3214）。
+  if (target.note !== null) throw new Error(target.note);
   // 戻せない操作なので確認する（#3141。`confirm.ts`）。壊れた行は中身を出さずに消すので、消すと残らない。
   const confirmed = await confirmIrreversible(
     `読めないトークンの行（id: ${ids.join(', ')}）を消します。壊れた行は消すと残りません。`,
     options,
   );
   if (!confirmed) return;
-  const target = await resolveTarget();
   const result = (await request(target, '/tokens/unreadable/remove', {
     method: 'POST',
     body: JSON.stringify({ ids }),

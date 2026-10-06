@@ -547,7 +547,7 @@ accessCommand
   .command('revoke <accountId>')
   .addHelpText('after', HELP_EXAMPLES.accessRevoke)
   .description('alteroid を使う許可を取り消す（取り消せない。既定は対話で確認する）')
-  .option('--yes', '確認を飛ばす（スクリプト・CI 向け）')
+  .option('--yes', '確認を飛ばす（スクリプト・CI 向け。端末でなければ必須）')
   .action(async (accountId: string, options: { yes?: boolean }) => {
     await accessRevokeCommand(accountId, options);
   });
@@ -558,7 +558,7 @@ accessCommand
     '読めないアカウントの行を id を指して消す（id はデーモンの stderr の「accounts の不正な行を読み飛ばしました」の跡。' +
       'access revoke は読めない行に触れない。id が取れない行はこの口では消せない）',
   )
-  .option('--yes', '確認を飛ばす（スクリプト・CI 向け）')
+  .option('--yes', '確認を飛ばす（スクリプト・CI 向け。端末でなければ必須）')
   .action(async (ids: string[], options: { yes?: boolean }) => {
     await accessRemoveUnreadableCommand(ids, options);
   });
@@ -609,7 +609,7 @@ permissionCommand
     '読めない許可の行を id を指して消す（id はデーモンの stderr の「許可の記録の不正な行を読み飛ばしました」の跡。' +
       'permission revoke は読めない行に触れない。id が取れない行はこの口では消せない）',
   )
-  .option('--yes', '確認を飛ばす（スクリプト・CI 向け）')
+  .option('--yes', '確認を飛ばす（スクリプト・CI 向け。端末でなければ必須）')
   .action(async (ids: string[], options: { yes?: boolean }) => {
     await permissionRemoveUnreadableCommand(ids, options);
   });
@@ -617,7 +617,7 @@ permissionCommand
 permissionCommand
   .command('revoke <id>')
   .description('許可を取り消す（次の Bash 呼び出しから効く。取り消せない。既定は対話で確認する）')
-  .option('--yes', '確認を飛ばす（スクリプト・CI 向け）')
+  .option('--yes', '確認を飛ばす（スクリプト・CI 向け。端末でなければ必須）')
   .action(async (id: string, options: { yes?: boolean }) => {
     await permissionRevokeCommand(id, options);
   });
@@ -704,7 +704,7 @@ memoryCommand
     '--if-match <version>',
     '読んだ版（memory show が stderr に出す版）。いまの版と違えば消さずに失敗する。省略すると消す直前に読んだ版で照合する',
   )
-  .option('--yes', '確認を飛ばす（スクリプト・CI 向け）')
+  .option('--yes', '確認を飛ばす（スクリプト・CI 向け。端末でなければ必須）')
   .action(async (slug: string, options: { ifMatch?: string; yes?: boolean }) => {
     await memoryRemoveCommand(slug, options);
   });
@@ -842,7 +842,7 @@ profileCommand
 profileCommand
   .command('rm <名前>')
   .description('1行を外す（他の行は変えない。取り消せない。既定は対話で確認する）')
-  .option('--yes', '確認を飛ばす（スクリプト・CI 向け）')
+  .option('--yes', '確認を飛ばす（スクリプト・CI 向け。端末でなければ必須）')
   .action(async (name: string, options: { yes?: boolean }) => {
     await profileRemoveCommand(name, options);
   });
@@ -850,7 +850,7 @@ profileCommand
 profileCommand
   .command('clear')
   .description('全行を外す（取り消せない。既定は対話で確認する）')
-  .option('--yes', '確認を飛ばす（スクリプト・CI 向け）')
+  .option('--yes', '確認を飛ばす（スクリプト・CI 向け。端末でなければ必須）')
   .action(async (options: { yes?: boolean }) => {
     await profileClearCommand(options);
   });
@@ -894,7 +894,7 @@ mcpCommand
   .addHelpText('after', HELP_EXAMPLES.mcpSet)
   .description('.mcp.json（{ "mcpServers": { … } }）の内容で丸ごと置き換える')
   .argument('<file>', '読み込むファイル（- で標準入力）')
-  .option('--yes', '確認を飛ばす（スクリプト・CI 向け）')
+  .option('--yes', '確認を飛ばす（スクリプト・CI 向け。端末でなければ必須）')
   .action(async (file: string, options: { yes?: boolean }) => {
     await mcpSetCommand(file, options);
   });
@@ -902,7 +902,7 @@ mcpCommand
 mcpCommand
   .command('clear')
   .description('登録を全部外す（取り消せない。既定は対話で確認する）')
-  .option('--yes', '確認を飛ばす（スクリプト・CI 向け）')
+  .option('--yes', '確認を飛ばす（スクリプト・CI 向け。端末でなければ必須）')
   .action(async (options: { yes?: boolean }) => {
     await mcpClearCommand(options);
   });
@@ -961,7 +961,7 @@ credentialCommand
 credentialCommand
   .command('remove <名前>')
   .description('1つ外す（runner の器からも消す。取り消せない。既定は対話で確認する）')
-  .option('--yes', '確認を飛ばす（スクリプト・CI 向け）')
+  .option('--yes', '確認を飛ばす（スクリプト・CI 向け。端末でなければ必須）')
   .action(async (name: string, options: { yes?: boolean }) => {
     await credentialRemoveCommand(name, options);
   });
@@ -1002,7 +1002,7 @@ tokenCommand
 tokenCommand
   .command('remove <id>')
   .description('トークンを1本消す（取り消せない。既定は対話で確認する）')
-  .option('--yes', '確認を飛ばす（スクリプト・CI 向け）')
+  .option('--yes', '確認を飛ばす（スクリプト・CI 向け。端末でなければ必須）')
   .action(async (id: string, options: { yes?: boolean }) => {
     await tokenRemoveCommand(id, options);
   });
@@ -1027,7 +1027,7 @@ tokenCommand
     '読めないトークンの行を id を指して消す（token list の「読めない行」の id。' +
       'add / remove などの書き換えは、読めない行を持ち越す）',
   )
-  .option('--yes', '確認を飛ばす（スクリプト・CI 向け）')
+  .option('--yes', '確認を飛ばす（スクリプト・CI 向け。端末でなければ必須）')
   .action(async (ids: string[], options: { yes?: boolean }) => {
     await tokenRemoveUnreadableCommand(ids, options);
   });
