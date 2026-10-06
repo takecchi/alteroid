@@ -102,13 +102,41 @@ export async function chatCommand(): Promise<void> {
   const client = createClient(base, target.headers);
 
   const rl = createInterface({ input: stdin, output: stdout });
+  // 入力の行は `line` イベントで受けて積み、`ask` が順に取り出す（#3262）。`question()` は、待って
+  // いない間に届いた行（応答待ちの間にパイプで流れ込んだ2行目以降）をどこにも渡さず捨てる。
+  // REPL の問い（`confirmInRepl`）も同じ `ask` なので、次に積まれた行がその答えになる。
+  const pendingLines: string[] = [];
+  let waiter: { resolve: (line: string) => void; reject: (error: Error) => void } | null = null;
+  let inputClosed = false;
+  rl.on('line', (text) => {
+    if (waiter === null) {
+      pendingLines.push(text);
+      return;
+    }
+    const { resolve } = waiter;
+    waiter = null;
+    resolve(text);
+  });
   // 入力が閉じたら、待っている質問を打ち切る（#3217）。node v22 は、パイプの EOF では
-  // `question()` を resolve も reject もしない（端末の Ctrl-D は ABORT_ERR で reject される）。
-  // すでに閉じた後に聞いても、渡した signal が中断済みなので即座に reject される。
-  const inputClosed = new AbortController();
-  rl.once('close', () => inputClosed.abort());
-  const ask = (question: string): Promise<string> =>
-    rl.question(question, { signal: inputClosed.signal });
+  // `question()` を resolve も reject もしない。積んだ行は閉じた後でも先に読ませ、尽きたら reject する。
+  rl.once('close', () => {
+    inputClosed = true;
+    waiter?.reject(new Error('input closed'));
+    waiter = null;
+  });
+  const ask = (question: string): Promise<string> => {
+    const queued = pendingLines.shift();
+    if (queued !== undefined) {
+      stdout.write(question);
+      return Promise.resolve(queued);
+    }
+    if (inputClosed) return Promise.reject(new Error('input closed'));
+    rl.setPrompt(question);
+    rl.prompt();
+    return new Promise((resolve, reject) => {
+      waiter = { resolve, reject };
+    });
+  };
   // 次に送る発言へ添えかけのファイル（`/attach`）。
   const draft = createAttachmentDraft(target);
   let conversationId: string | null = null;
