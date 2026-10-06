@@ -25,6 +25,21 @@ import {
  * | `clone~storage` | 記憶の書き込み（`memory_update`） | 記憶・日誌を読む道具 |
  * | `clone~manager:<id>` | 委譲・追送（`exchange` with=manager outbound） | 報告の受け取り（inbound）・確認（`escalation`） |
  * | `manager:<id>~worker:<type>` | 作業者を背景で起こした（`Agent` / `Task` で `run_in_background: true`） | 前景で起こした呼び出しが終わった（結果が戻った） |
+ * | `external:<keyId>~clone` | 連携の鍵で届いた外部イベント（`external_event` で `via` が在るもの） | （無い。外部サービスへ返すものは無い） |
+ *
+ * **外部サービスの線は連携の鍵（`via`）で届いたものだけである**（Issue #3676）。`via` の無い
+ * `external_event`（デーモン自身の合図・人間 / operator が `POST /events` で送ったもの）は混ぜない
+ * ——外部から呼んだわけではないものを外部として光らせると、観測が嘘になる。`via` は
+ * デーモンが門番の principal から詰める（リクエスト本文からは立てられない）。
+ *
+ * **`external_event` の `at` は「クローンが受信箱から取り出して書いた時刻」であって、HTTP で受け付けた
+ * 時刻ではない**（`clone.ts` の `#handle` が配達のたびに `#journalIncomingBody` で書く。`at` は
+ * 日誌ストアが追記時に埋める）。クローンがターンの途中・枠の上限で止まっている間は、受け付けてから
+ * 光るまでが遅れる（受け付けた時刻は受信箱の `event.at` にだけ在り、日誌には載らない）。
+ * 線は「外部から受け付けた」ではなく「クローンへ届いた（取り出された）」を言う。
+ *
+ * **外部サービスの札は観測した分だけ**（デーモンが起きてから日誌に載ったもの。起動時に日誌を
+ * 読み戻さない）。無いことは「呼ばれていない」ではなく「観測していない」でありうる。
  *
  * **`tool_use` は道具が終わった後に書かれる**（`runner.ts` の `#onPostToolUse`）。前景の
  * `Agent` / `Task` は作業者が終わるまで返らないので、その時刻は起こした瞬間ではなく
@@ -61,12 +76,34 @@ export interface WorkerActivity {
   runningTool?: { tool: string; startedAt: string };
 }
 
+/** 連携の鍵1本ぶんの最後の呼び出し（外部サービスの札の材料）。 */
+export interface ExternalActivity {
+  keyId: string;
+  /** 鍵の名前（人間が付けた名前）。**最後に観測した呼び出しのときの名前**。 */
+  name: string;
+  /** 鍵が固定されている source。 */
+  source: string;
+  /** 最後に観測した時刻（`external_event` の `at` = クローンが取り出して書いた時刻）。 */
+  lastAt: string;
+}
+
 export const HUMAN_CLONE_LINK = 'human~clone';
 export const CLONE_STORAGE_LINK = 'clone~storage';
 
 export function cloneManagerLink(managerId: string): string {
   return `clone~manager:${managerId}`;
 }
+
+/** 外部サービス（連携の鍵）→ クローンの線。向きは `down` のみ。 */
+export function externalCloneLink(keyId: string): string {
+  return `external:${keyId}~clone`;
+}
+
+/**
+ * 地図に札を出さなかった外部サービス（上限を超えた分）をまとめた線。`external:<keyId>~clone` の
+ * 形と衝突しない（`:` が無い）。
+ */
+export const EXTERNAL_OTHERS_LINK = 'external-others~clone';
 
 export function managerWorkerLink(managerId: string, agentType: string): string {
   return `manager:${managerId}~worker:${agentType}`;
@@ -123,9 +160,19 @@ export interface WorkerTouch {
   tool?: string;
 }
 
+/** 1件の日誌が外部サービスの札へ与える変化。 */
+export interface ExternalTouch {
+  keyId: string;
+  name: string;
+  source: string;
+  at: string;
+}
+
 export interface EntryMapping {
   links: LinkTouch[];
   workers: WorkerTouch[];
+  /** 連携の鍵で届いた外部イベントのときだけ。 */
+  externals?: ExternalTouch[];
 }
 
 /** `manager:<id>` の `<id>`。形が違えば `undefined`。 */
@@ -222,6 +269,24 @@ export function mapJournalEntry(entry: JournalEntry): EntryMapping {
         workers: [],
       };
     }
+    case 'external_event': {
+      // **連携の鍵（`via`）で届いたものだけ**。`via` の無いものは外部から呼ばれたとは言えない。
+      // 型は `keyId` / `name` を string と言うが、古い・壊れた行に備えて実行時にも確かめる。
+      const via = entry.via;
+      if (via === undefined || typeof via.keyId !== 'string' || via.keyId === '') return empty;
+      return {
+        links: [],
+        workers: [],
+        externals: [
+          {
+            keyId: via.keyId,
+            name: typeof via.name === 'string' ? via.name : '',
+            source: entry.source,
+            at,
+          },
+        ],
+      };
+    }
     case 'memory_update': {
       // **人間の直接編集（`cause: 'human'`）はクローンの書き込みではない**
       // （人間→記憶の線は地図に無い）。
@@ -295,6 +360,8 @@ export interface TopologyActivityTracker {
   record(entry: JournalEntry): void;
   /** 線の活動の写し。**最後の活動が新しい順。** */
   links(): LinkActivity[];
+  /** 連携の鍵ごとの最後の呼び出し。**新しい順。** */
+  externals(): ExternalActivity[];
   /** あるマネージャーの作業者（種類ごと）。 */
   workersOf(managerId: string): WorkerActivity[];
   /** 日誌の購読口（`JournalBus.subscribe`）へ繋ぐ。戻り値は解除。 */
@@ -347,6 +414,11 @@ export function createTopologyActivityTracker(
 ): TopologyActivityTracker {
   const links = new Map<string, LinkActivity>();
   const workers = new Map<string, WorkerActivity>();
+  const externals = new Map<string, ExternalActivity>();
+  const externalStamp = (row: ExternalActivity): number => {
+    const value = Date.parse(row.lastAt);
+    return Number.isNaN(value) ? 0 : value;
+  };
   /** 実行中の道具（`toolUseId` → ）。作業者の行とは別に持つ（行が間引かれても数えを壊さない）。 */
   const running = new Map<
     string,
@@ -388,6 +460,10 @@ export function createTopologyActivityTracker(
       const ordered = [...links.values()].sort((a, b) => newest(a) - newest(b));
       for (const victim of ordered.slice(0, links.size - cap)) links.delete(victim.key);
     }
+    if (externals.size > cap) {
+      const ordered = [...externals.values()].sort((a, b) => externalStamp(a) - externalStamp(b));
+      for (const victim of ordered.slice(0, externals.size - cap)) externals.delete(victim.keyId);
+    }
     if (workers.size > cap) {
       const stamp = (row: WorkerActivity): number => {
         const value = Date.parse(row.lastToolAt ?? '');
@@ -418,12 +494,38 @@ export function createTopologyActivityTracker(
         }
         workers.set(key, row);
       }
-      if (mapped.links.length > 0 || mapped.workers.length > 0) prune();
+      for (const touch of mapped.externals ?? []) {
+        const row = externals.get(touch.keyId);
+        if (row === undefined) {
+          externals.set(touch.keyId, {
+            keyId: touch.keyId,
+            name: touch.name,
+            source: touch.source,
+            lastAt: touch.at,
+          });
+          continue;
+        }
+        const updated = later(row.lastAt, touch.at);
+        // 名前・source は最後の呼び出しのものを採る（鍵の名前は付け替えられる）。
+        if (updated === touch.at) {
+          row.name = touch.name;
+          row.source = touch.source;
+        }
+        row.lastAt = updated;
+      }
+      if (mapped.links.length > 0 || mapped.workers.length > 0 || mapped.externals !== undefined) {
+        prune();
+      }
     },
     links() {
       return [...links.values()]
         .map((row) => ({ ...row }))
         .sort((a, b) => newest(b) - newest(a) || a.key.localeCompare(b.key));
+    },
+    externals() {
+      return [...externals.values()]
+        .map((row) => ({ ...row }))
+        .sort((a, b) => externalStamp(b) - externalStamp(a) || a.keyId.localeCompare(b.keyId));
     },
     workersOf(managerId) {
       // 実行中の道具だけが先に届いた作業者（日誌に1行も無い）も、行として載せる。
