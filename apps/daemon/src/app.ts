@@ -160,6 +160,7 @@ import {
   AttachmentRejectedError,
   nonBlankString,
   readAttachmentLimits,
+  stripNul,
   type AttachmentLimits,
 } from '@alteroid/core';
 
@@ -1021,7 +1022,11 @@ const scheduleBody = z.object({
  * 無いと、「クローンは自分で積めるのに人間は積めない」という差が残る。
  */
 const commitmentBody = z.object({
-  body: z.string().min(1),
+  /** NUL を落とした後に1文字以上（Issue #3388。台帳の入口は NUL を落として残すので、NUL だけは空の本文になる）。 */
+  body: z
+    .string()
+    .min(1)
+    .refine((value) => stripNul(value).length > 0),
   /** どこから来たか（会話 id・issue 番号など。分かるときだけ）。 */
   source: z.string().min(1).optional(),
 });
@@ -1039,7 +1044,12 @@ const commitmentCloseBody = z.object({ reason: nonBlankString });
  * 編集後の本文。**空を許さない**（`commitmentBody.body` と同じ制約——空文字を
  * 許すと「本文の無い依頼」を人間が自分で作れてしまう）。
  */
-const commitmentEditBody = z.object({ body: z.string().min(1) });
+const commitmentEditBody = z.object({
+  body: z
+    .string()
+    .min(1)
+    .refine((value) => stripNul(value).length > 0),
+});
 
 /**
  * 片付けたものも返すか。
