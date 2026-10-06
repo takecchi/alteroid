@@ -221,7 +221,9 @@ describe('移送の最中に届く元の runner の closed', () => {
       status: 'lost',
       reason: 'runner-a が自分で畳んだ（遅延して届いた）',
     });
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    // 実時間では待たない（#2146）。closed の処理（台帳の読み書きはメモリのストア）を、
+    // 非同期の段を流しきることで終わらせてから resume を通す。
+    for (let i = 0; i < 10; i += 1) await new Promise((resolve) => setImmediate(resolve));
     release();
     await reattach;
 
@@ -287,7 +289,9 @@ describe('移送の最中に届く元の runner の closed', () => {
       status: 'lost',
       reason: 'runner-a が自分で畳んだ（遅延して届いた）',
     });
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    // 実時間では待たない（#2146）。closed の処理（台帳の読み書きはメモリのストア）を、
+    // 非同期の段を流しきることで終わらせてから resume を通す。
+    for (let i = 0; i < 10; i += 1) await new Promise((resolve) => setImmediate(resolve));
     release();
     await reattach;
 
