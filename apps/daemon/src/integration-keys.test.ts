@@ -28,6 +28,8 @@ const T0 = Date.parse('2026-06-01T00:00:00.000Z');
 let nowMs = T0;
 let stores: Stores;
 let posted: InboxEvent[] = [];
+/** `postPersisted` の結果。'unavailable' は受信箱へ書けなかった（#3679。応答は 503）。 */
+let persistOutcome: 'persisted' | 'unavailable' = 'persisted';
 
 function fakeClone(): CloneHost {
   return {
@@ -36,6 +38,7 @@ function fakeClone(): CloneHost {
       return 'conversation-1';
     },
     postPersisted: async (event: InboxEvent) => {
+      if (persistOutcome === 'unavailable') return 'unavailable' as const;
       posted.push(event);
       return 'persisted' as const;
     },
@@ -104,6 +107,7 @@ beforeEach(() => {
   nowMs = T0;
   stores = createMemoryStores();
   posted = [];
+  persistOutcome = 'persisted';
 });
 
 describe('連携の鍵の発行・一覧・失効', () => {
@@ -711,6 +715,37 @@ describe('稼働状況の図の外部サービスの線（#3676）', () => {
       lastDownAt: posted[1]!.at,
     });
   });
+
+  // 受信箱へ書けずに 503 を返した呼び出しは、クローンに届いていない。光らせると、届いていないものを
+  // 「届いた」と地図が言う（#3679。記録を永続化の前へ戻すと赤になる）。
+  for (const [label, path] of [
+    ['POST /events', '/events'],
+    ['POST /events/:source', '/events/ci.main'],
+  ] as const) {
+    it(`${label}: 永続化できず 503 のときは光らない。対として、永続化できた 200 のときは光る`, async () => {
+      const app = buildApp();
+      const { id, value } = await issue(app, { name: 'ビルド', source: 'ci.main' });
+      const send = () =>
+        app.request(path, { ...events('ci.main'), headers: { ...bearer(value), ...JSON_HEADERS } });
+
+      persistOutcome = 'unavailable';
+      const failed = await send();
+      expect(failed.status).toBe(503);
+      expect(posted).toHaveLength(0);
+      const dark = await topology(app);
+      expect(dark.externals).toBeUndefined();
+      expect(dark.links.filter((l) => l.key.startsWith('external'))).toEqual([]);
+
+      persistOutcome = 'persisted';
+      const accepted = await send();
+      expect(accepted.status).toBe(200);
+      expect(posted).toHaveLength(1);
+      const at = posted[0]!.at;
+      const lit = await topology(app);
+      expect(lit.externals).toEqual([{ keyId: id, name: 'ビルド', source: 'ci.main', lastAt: at }]);
+      expect(lit.links).toContainEqual({ key: `external:${id}~clone`, lastDownAt: at });
+    });
+  }
 });
 
 describe('部品', () => {
