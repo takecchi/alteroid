@@ -438,9 +438,10 @@ export const App: FC<AppProps> = ({
 
   /** 委譲の詳細の入力欄の Enter。スラッシュコマンドは解決し、それ以外は追加指示として送る。 */
   const submitManager = (text: string): void => {
-    setMgrBuffer(emptyBuffer());
-    if (text.length === 0) return;
     const resolved = resolveCommand(text);
+    // 未知のコマンドとして断るときは、書いた文を消さない（会話の `submit` と同じ。#3406・#3486）。
+    if (resolved.kind !== 'unknown') setMgrBuffer(emptyBuffer());
+    if (text.length === 0) return;
     if (resolved.kind === 'command') return runCommand(resolved.spec.action, resolved.args);
     if (resolved.kind === 'unknown') {
       managers.setNotice(

@@ -140,6 +140,7 @@ export class FsAttachmentStore implements AttachmentStore {
     target: AttachmentBindTarget,
   ): Promise<AttachmentBindResult> {
     const bound: string[] = [];
+    const newlyBound: string[] = [];
     const missing: string[] = [];
     const conflicts: string[] = [];
     for (const id of ids) {
@@ -160,17 +161,24 @@ export class FsAttachmentStore implements AttachmentStore {
               `${JSON.stringify({ ...meta, ...target })}\n`,
               { mode: 0o600 },
             );
+            return 'newly' as const;
           }
           return 'bound' as const;
         });
-        (outcome === 'bound' ? bound : outcome === 'conflict' ? conflicts : missing).push(id);
+        if (outcome === 'newly') newlyBound.push(id);
+        (outcome === 'bound' || outcome === 'newly'
+          ? bound
+          : outcome === 'conflict'
+            ? conflicts
+            : missing
+        ).push(id);
       } catch (error) {
         // 掃除が先にディレクトリごと消した（ロックファイルを置けない）。「無い」と同じ。
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
         missing.push(id);
       }
     }
-    return { bound, missing, conflicts };
+    return { bound, newlyBound, missing, conflicts };
   }
 
   async unbind(ids: readonly string[], target: AttachmentBindTarget): Promise<string[]> {
