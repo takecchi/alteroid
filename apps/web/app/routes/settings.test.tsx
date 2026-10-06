@@ -877,6 +877,18 @@ describe('runner を空ける（vacate）', () => {
     expect(await entry?.request?.clone().json()).toEqual({ runnerId: 'runner-primary' });
   });
 
+  it('「仕事を移す」まわりのボタンと確認の文に、どの実行環境か分かる名前が付く（#3372）', async () => {
+    renderWithVacate([BASE]);
+    fireEvent.click(await screen.findByRole('button', { name: 'runner-primary から仕事を移す' }));
+    expect(screen.getByText(/runner-primary で動いている委譲を止めて/)).toBeTruthy();
+    expect(
+      screen.getByRole('button', { name: 'runner-primary から仕事を移すのを確定する' }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole('button', { name: 'runner-primary から仕事を移すのをやめる' }),
+    ).toBeTruthy();
+  });
+
   it('普通の成功には、握手を飛ばしたとは言わない（対照。#2376）', async () => {
     renderWithVacate([BASE]);
     fireEvent.click(await screen.findByText('この実行環境から仕事を移す'));
