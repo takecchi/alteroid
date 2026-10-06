@@ -12,7 +12,8 @@
  * 画面のテストは今までどおりここから import すればよい。
  */
 import { waitFor } from '@testing-library/react';
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
+import { createMemoryRouter, RouterProvider } from 'react-router';
 
 import { Providers as SwrProviders } from '@alteroid/swr/test-support';
 
@@ -311,4 +312,30 @@ export async function untilOpenSettled(
       throw new Error(`URL がまだ新しい会話へ付け替わっていない: ${actual}`);
     }
   });
+}
+
+/**
+ * データルーター（`createMemoryRouter`）で子を包む。離れる前の確認（`useBlocker`）を持つ画面は
+ * データルーターの外では動かない（実アプリは `routes.ts` のデータルーター）。
+ * `/elsewhere` は「別の画面へ移る」テスト用の行き先。`onRouter` で移動を起こす口を受け取る。
+ */
+export function TestDataRouter({
+  children,
+  onRouter,
+}: {
+  children: ReactNode;
+  onRouter?: (router: ReturnType<typeof createMemoryRouter>) => void;
+}) {
+  const [router] = useState(() => {
+    const created = createMemoryRouter(
+      [
+        { path: '/', element: children },
+        { path: '/elsewhere', element: <p>別の画面</p> },
+      ],
+      { initialEntries: ['/'] },
+    );
+    onRouter?.(created);
+    return created;
+  });
+  return <RouterProvider router={router} />;
 }

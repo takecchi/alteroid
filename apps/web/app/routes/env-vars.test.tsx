@@ -9,10 +9,9 @@
  * を呼ぶ」の各点。
  */
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { json, Providers, storeTestBaseUrl } from '~/test-support';
+import { json, Providers, TestDataRouter, storeTestBaseUrl } from '~/test-support';
 
 import EnvVars from './env-vars';
 
@@ -116,9 +115,9 @@ describe('/env-vars 画面 — runner への反映の一部失敗（#3157）', (
     stubCrudScreen([], PARTIAL);
     render(
       <Providers>
-        <MemoryRouter>
+        <TestDataRouter>
           <EnvVars />
-        </MemoryRouter>
+        </TestDataRouter>
       </Providers>,
     );
     await waitForListLoaded();
@@ -138,9 +137,9 @@ describe('/env-vars 画面 — runner への反映の一部失敗（#3157）', (
     stubCrudScreen([], [{ runnerId: 'runner-1', ok: true }]);
     render(
       <Providers>
-        <MemoryRouter>
+        <TestDataRouter>
           <EnvVars />
-        </MemoryRouter>
+        </TestDataRouter>
       </Providers>,
     );
     await waitForListLoaded();
@@ -168,9 +167,9 @@ describe('/env-vars 画面 — runner への反映の一部失敗（#3157）', (
     );
     render(
       <Providers>
-        <MemoryRouter>
+        <TestDataRouter>
           <EnvVars />
-        </MemoryRouter>
+        </TestDataRouter>
       </Providers>,
     );
     await waitForListLoaded();
@@ -201,9 +200,9 @@ describe('/env-vars 画面 — 一覧', () => {
 
     render(
       <Providers>
-        <MemoryRouter>
+        <TestDataRouter>
           <EnvVars />
-        </MemoryRouter>
+        </TestDataRouter>
       </Providers>,
     );
     await waitForListLoaded();
@@ -231,9 +230,9 @@ describe('/env-vars 画面 — 一覧', () => {
 
     render(
       <Providers>
-        <MemoryRouter>
+        <TestDataRouter>
           <EnvVars />
-        </MemoryRouter>
+        </TestDataRouter>
       </Providers>,
     );
     await waitForListLoaded();
@@ -257,9 +256,9 @@ describe('/env-vars 画面 — 一覧', () => {
 
     render(
       <Providers>
-        <MemoryRouter>
+        <TestDataRouter>
           <EnvVars />
-        </MemoryRouter>
+        </TestDataRouter>
       </Providers>,
     );
     await waitForListLoaded();
@@ -273,9 +272,9 @@ describe('/env-vars 画面 — 一覧', () => {
 
     render(
       <Providers>
-        <MemoryRouter>
+        <TestDataRouter>
           <EnvVars />
-        </MemoryRouter>
+        </TestDataRouter>
       </Providers>,
     );
     await waitForListLoaded();
@@ -308,9 +307,9 @@ describe('/env-vars 画面 — 一覧', () => {
 
     render(
       <Providers>
-        <MemoryRouter>
+        <TestDataRouter>
           <EnvVars />
-        </MemoryRouter>
+        </TestDataRouter>
       </Providers>,
     );
     await waitForListLoaded();
@@ -323,9 +322,9 @@ describe('/env-vars 画面 — 一覧', () => {
 
     render(
       <Providers>
-        <MemoryRouter>
+        <TestDataRouter>
           <EnvVars />
-        </MemoryRouter>
+        </TestDataRouter>
       </Providers>,
     );
     await waitForListLoaded();
@@ -340,9 +339,9 @@ describe('/env-vars 画面 — 置く・編集・削除', () => {
 
     render(
       <Providers>
-        <MemoryRouter>
+        <TestDataRouter>
           <EnvVars />
-        </MemoryRouter>
+        </TestDataRouter>
       </Providers>,
     );
     await waitForListLoaded();
@@ -371,9 +370,9 @@ describe('/env-vars 画面 — 置く・編集・削除', () => {
 
     render(
       <Providers>
-        <MemoryRouter>
+        <TestDataRouter>
           <EnvVars />
-        </MemoryRouter>
+        </TestDataRouter>
       </Providers>,
     );
     await waitForListLoaded();
@@ -412,9 +411,9 @@ describe('/env-vars 画面 — 置く・編集・削除', () => {
 
     render(
       <Providers>
-        <MemoryRouter>
+        <TestDataRouter>
           <EnvVars />
-        </MemoryRouter>
+        </TestDataRouter>
       </Providers>,
     );
     await waitForListLoaded();
@@ -446,9 +445,9 @@ describe('/env-vars 画面 — 置く・編集・削除', () => {
 
     render(
       <Providers>
-        <MemoryRouter>
+        <TestDataRouter>
           <EnvVars />
-        </MemoryRouter>
+        </TestDataRouter>
       </Providers>,
     );
     await waitForListLoaded();
@@ -486,9 +485,9 @@ describe('/env-vars 画面 — 置く・編集・削除', () => {
 
     render(
       <Providers>
-        <MemoryRouter>
+        <TestDataRouter>
           <EnvVars />
-        </MemoryRouter>
+        </TestDataRouter>
       </Providers>,
     );
     await waitForListLoaded();
