@@ -575,15 +575,8 @@ export function useConversation(
       : {
           // 404（会話ではない id）は待っても変わらない。既定の再試行に任せると、
           // 日誌を遡る読みを黙って繰り返す。それ以外の失敗は既定どおり再試行する。
-          onErrorRetry: (error, _key, config, revalidate, { retryCount }) => {
-            if (error instanceof ApiError && error.status === 404) return;
-            if (config.errorRetryCount !== undefined && retryCount > config.errorRetryCount) return;
-            setTimeout(
-              () => void revalidate({ retryCount }),
-              Math.round((Math.random() + 0.5) * (1 << Math.min(retryCount, 8))) *
-                config.errorRetryInterval,
-            );
-          },
+          shouldRetryOnError: (error: Error) =>
+            !(error instanceof ApiError && error.status === 404),
         },
   );
 }
