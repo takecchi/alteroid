@@ -1,5 +1,5 @@
-import { readFile, stat, utimes, writeFile } from 'node:fs/promises';
-import { join, resolve, sep } from 'node:path';
+import { readdir, readFile, stat, utimes, writeFile } from 'node:fs/promises';
+import { basename, join, resolve, sep } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
@@ -124,6 +124,24 @@ describe('attachment_fetch（#3111 段2）', () => {
       expect(resolve(byName.copy.path).startsWith(resolve(dir, 'abc') + sep)).toBe(true);
     await expect(stat(join(root, 'escaped.txt'))).rejects.toThrow();
     await expect(stat(join(root, 'escape'))).rejects.toThrow();
+  });
+
+  it('長い名前（ASCII 255 文字・日本語 100 文字）でも写しが作れ、一時ファイルを残さない。返す name は丸めない（#3324）', async () => {
+    for (const name of ['a'.repeat(255), `${'あ'.repeat(100)}.pdf`]) {
+      const root = await makeTempDir('alteroid-fetch-');
+      const stores = createMemoryStores();
+      const meta = await stores.attachments.put({ name, mediaType: 'application/pdf', bytes: BYTES });
+      const out = await fetchAttachmentCopy(stores, root, meta.id);
+      expect(out.ok).toBe(true);
+      if (!out.ok) continue;
+      expect(out.copy.name).toBe(meta.name);
+      expect(basename(out.copy.path).length).toBeLessThan(meta.name.length + 1);
+      expect(Buffer.byteLength(basename(out.copy.path), 'utf8')).toBeLessThanOrEqual(200);
+      expect(new Uint8Array(await readFile(out.copy.path))).toEqual(BYTES);
+      expect(await readdir(join(root, meta.id))).toEqual([basename(out.copy.path)]);
+      const again = await fetchAttachmentCopy(stores, root, meta.id);
+      expect(again.ok && again.copy.reused).toBe(true);
+    }
   });
 
   it('掃除: 24時間より古い写しと、元が消えた写しを消し、新しくて元がある写しは残す', async () => {
