@@ -3,6 +3,7 @@
 import { SettingsTabs } from '~/components/group-tabs';
 import { LoadError } from '~/components/load-error';
 import { settingsDocumentTitle } from '~/lib/nav';
+import { useLatest } from '~/lib/use-latest';
 import { maskUrl } from '@alteroid/core/mask-url';
 import { useEffect, useState } from 'react';
 import { useBlocker } from 'react-router';
@@ -188,6 +189,8 @@ function EntrySummary({ name, entry }: { name: string; entry: McpServerEntry | u
 function McpServersEditor({ current }: { current: McpServersState }) {
   const setMcpServers = useSetMcpServers();
   const [draft, setDraft] = useState<string | null>(null);
+  /** 応答が返った時点の「いまの下書き」（送った時点と比べる。issue #3515）。 */
+  const latestDraft = useLatest(draft);
   const [confirming, setConfirming] = useState<'save' | 'clear' | null>(null);
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<unknown>(undefined);
@@ -223,6 +226,8 @@ function McpServersEditor({ current }: { current: McpServersState }) {
   const draftClears = parsed !== null && parsed.ok && Object.keys(parsed.servers).length === 0;
 
   async function submit(servers: McpServers) {
+    // 送ったときの下書きを控える。成功のあと、いまの下書きがこれと同じときだけ閉じる（issue #3515）。
+    const sent = draft;
     setBusy(true);
     setFailure(undefined);
     try {
@@ -230,7 +235,8 @@ function McpServersEditor({ current }: { current: McpServersState }) {
       const update = await setMcpServers(servers);
       setResult({ before, update });
       setConfirming(null);
-      setDraft(null);
+      // 応答を待つ間に打ち足した分は残す（元の登録は、保存できた登録へ追従して再取得される）。
+      if (latestDraft.current === sent) setDraft(null);
     } catch (caught) {
       setFailure(caught);
       // **確認は畳む**（`profile.tsx` と同じ —— 直したつもりで1回で送る形にしない）。
