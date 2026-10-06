@@ -11,7 +11,7 @@ import {
   Users,
   type LucideIcon,
 } from 'lucide-react';
-import { useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Link, Navigate, NavLink, Outlet, useLocation } from 'react-router';
 
 import { ConnectionCard } from '~/components/connection';
@@ -88,6 +88,9 @@ function NavItemLink({
   );
 }
 
+/** 確認済みの後の再検証が失敗したときの、自動の再試行の間隔（ms）。使い切ると全体表示（合計 60 秒）。 */
+const RECHECK_RETRY_DELAYS_MS = [5_000, 10_000, 15_000, 30_000];
+
 /**
  * 通ってから中身を出す。
  *
@@ -97,6 +100,40 @@ function NavItemLink({
  */
 export default function Shell() {
   const auth = useAuth();
+  const { error, status, isValidating, revalidate } = auth;
+
+  /**
+   * 確認済み（`status` が `checking` でない＝`data` がある）の後の再検証の失敗（issue #3063）。
+   * 画面を置き換えると配下の書きかけが消えるので、帯で知らせて間隔を空けて自動で再試行し、
+   * 約 60 秒続いたときだけ `gaveUp` にして全体表示へ切り替える。
+   *
+   * **判断と再試行はここ（Shell）1か所に置く。** `useAuth` は Shell・配下の画面・設定・ログインで
+   * 同時に使われ、SWR の成功・失敗のコールバックは要求を始めたインスタンスでしか呼ばれない。
+   * インスタンスごとの state に置くと、どれが取得を始めたかで結果が変わる。ここは共有される
+   * `error` / `status`（キャッシュ）だけを見る。
+   */
+  const recheckFailing = error !== undefined && status !== 'checking';
+  const [gaveUp, setGaveUp] = useState(false);
+  const attempts = useRef(0);
+  useEffect(() => {
+    if (!recheckFailing) {
+      attempts.current = 0;
+      setGaveUp(false);
+      return;
+    }
+    // 取り直しの最中は待つ（終わるとここへ戻る）。諦めた後は自動では打たない。
+    if (isValidating || gaveUp) return;
+    const delay = RECHECK_RETRY_DELAYS_MS[attempts.current];
+    if (delay === undefined) {
+      setGaveUp(true);
+      return;
+    }
+    const timer = setTimeout(() => {
+      attempts.current += 1;
+      void revalidate();
+    }, delay);
+    return () => clearTimeout(timer);
+  }, [recheckFailing, isValidating, gaveUp, revalidate]);
 
   /**
    * 繋がらない・認証の確認自体が失敗した、は「未ログイン」ではない。
@@ -110,7 +147,12 @@ export default function Shell() {
    * 間違っているとそこへは永久に到達できない（配る成果物の既定は同一オリジンの
    * `/api` なので、別のホストのデーモンを指したい初回の人は必ずここで詰まる）。
    */
-  if (auth.unreachable && auth.status !== 'anonymous' && auth.status !== 'ungranted') {
+  if (
+    auth.error !== undefined &&
+    (auth.status === 'checking' || gaveUp) &&
+    auth.status !== 'anonymous' &&
+    auth.status !== 'ungranted'
+  ) {
     return (
       <ScreenState title="接続先のサーバに繋がらない">
         {/* 各画面の読み込み失敗の帯と同じ部品・同じ形（issue #2799）。 */}
@@ -138,7 +180,7 @@ export default function Shell() {
     return <Navigate to="/login" replace />;
   }
 
-  return <AuthedShell recheckFailing={auth.recheckFailing} onRecheck={() => auth.revalidate()} />;
+  return <AuthedShell recheckFailing={recheckFailing && !gaveUp} onRecheck={() => revalidate()} />;
 }
 
 function AuthedShell({

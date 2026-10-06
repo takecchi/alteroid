@@ -11,6 +11,7 @@ import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { storeCredential, type Credential } from '@alteroid/logic';
+import { useAuth } from '@alteroid/swr';
 import { json, Providers, stubFetch, storeTestBaseUrl, TEST_BASE_URL } from '~/test-support';
 
 import Shell from './shell';
@@ -32,13 +33,23 @@ const CREDENTIAL: Credential = {
 
 const FULL_SCREEN = '接続先のサーバに繋がらない'; // 全体表示の見出し（フッターの同文の1行とは別）
 
+/**
+ * 配下の画面。**`useAuth` を Shell とは別のインスタンスで使う**（設定・ログイン画面と同じ）。
+ * 再検証をどのインスタンスが始めるかは購読順で決まる（子の effect が先）ので、判断を
+ * インスタンスごとの state に置くと、実アプリでだけ破れる。
+ */
+function Draft() {
+  useAuth();
+  return <input aria-label="下書き" />;
+}
+
 function renderShell() {
   const router = createMemoryRouter(
     [
       {
         path: '/',
         Component: Shell,
-        children: [{ index: true, Component: () => <input aria-label="下書き" /> }],
+        children: [{ index: true, Component: Draft }],
       },
     ],
     { initialEntries: ['/'] },
