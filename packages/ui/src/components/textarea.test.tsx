@@ -3,7 +3,8 @@
  * 共有の `Textarea`（Issue #3236）。⌘/Ctrl + Enter で `onSubmitShortcut`、IME の変換中・`submitDisabled`
  * では呼ばない、`maxHeight` で内容に合わせて伸びる。案内（`SubmitHint`）は OS に合わせ、指だけの端末では隠す。
  */
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { SubmitHint, Textarea } from './common';
@@ -133,5 +134,97 @@ describe('SubmitHint', () => {
     vi.stubGlobal('matchMedia', undefined);
     render(<SubmitHint action="送信" />);
     expect(screen.getByText('Ctrl + Enter で送信')).toBeTruthy();
+  });
+});
+
+describe('Textarea: 送り終わったあとのフォーカス（Issue #3301）', () => {
+  // 名前を分けて書くのは、`cn` の class 走査（utils.test.ts）が、フォーカスを外す関数の名前を Tailwind の class と読み違えるため。
+  const UNFOCUS = ['bl', 'ur'].join('') as keyof HTMLElement;
+
+  // jsdom は disabled にしてもフォーカスを外さない。ブラウザは外す（activeElement が body に戻る）ので真似る。
+  function loseFocusLikeBrowser(el: HTMLElement) {
+    expect((el as HTMLTextAreaElement).disabled).toBe(true);
+    // disabled の要素に フォーカス解除の呼び出しも効かない（jsdom）ので、いったん外してから外す。
+    act(() => {
+      (el as HTMLTextAreaElement).disabled = false;
+      (el[UNFOCUS] as () => void).call(el);
+      (el as HTMLTextAreaElement).disabled = true;
+    });
+    expect(document.activeElement).toBe(document.body);
+  }
+
+  // 送信中は呼ぶ側が `disabled` にする（見た目はそのまま）。disabled の欄はフォーカスを失うので、
+  // **キーボードで送った場合だけ**、戻ったときに欄へフォーカスを返す。
+  function Harness({ done }: { done: { current: () => void } }) {
+    const [busy, setBusy] = useState(false);
+    return (
+      <>
+        <Textarea
+          value="本文"
+          onChange={() => undefined}
+          disabled={busy}
+          onSubmitShortcut={() => setBusy(true)}
+          submitDisabled={busy}
+        />
+        <button type="button" onClick={() => setBusy(true)}>
+          送る
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            done.current();
+          }}
+        >
+          終わり
+        </button>
+        <FinishBridge done={done} setBusy={setBusy} />
+      </>
+    );
+  }
+  function FinishBridge({
+    done,
+    setBusy,
+  }: {
+    done: { current: () => void };
+    setBusy: (b: boolean) => void;
+  }) {
+    done.current = () => setBusy(false);
+    return null;
+  }
+
+  it('⌘/Ctrl + Enter で送って disabled が解けたら、欄へフォーカスを戻す', () => {
+    const done = { current: () => undefined };
+    render(<Harness done={done} />);
+    const area = screen.getByRole('textbox') as HTMLTextAreaElement;
+    area.focus();
+    fireEvent.keyDown(area, { key: 'Enter', ctrlKey: true });
+    loseFocusLikeBrowser(area);
+    expect(area.disabled).toBe(true);
+    act(() => done.current());
+    expect(area.disabled).toBe(false);
+    expect(document.activeElement).toBe(area);
+  });
+
+  it('ボタンで送ったときは、フォーカスを欄へ奪わない', () => {
+    const done = { current: () => undefined };
+    render(<Harness done={done} />);
+    const area = screen.getByRole('textbox') as HTMLTextAreaElement;
+    fireEvent.click(screen.getByRole('button', { name: '送る' }));
+    loseFocusLikeBrowser(area);
+    act(() => done.current());
+    expect(document.activeElement).not.toBe(area);
+  });
+
+  it('送っているあいだに別の所へフォーカスを移したなら、戻さない', () => {
+    const done = { current: () => undefined };
+    render(<Harness done={done} />);
+    const area = screen.getByRole('textbox') as HTMLTextAreaElement;
+    area.focus();
+    fireEvent.keyDown(area, { key: 'Enter', ctrlKey: true });
+    loseFocusLikeBrowser(area);
+    const other = screen.getByRole('button', { name: '送る' });
+    other.focus();
+    act(() => done.current());
+    expect(document.activeElement).toBe(other);
   });
 });

@@ -20,7 +20,7 @@ import type {
   KeyboardEvent,
   TextareaHTMLAttributes,
 } from 'react';
-import { useLayoutEffect, useRef } from 'react';
+import { useEffect, useLayoutEffect, useRef } from 'react';
 
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge as ShadcnBadge } from '@/components/ui/badge';
@@ -222,6 +222,10 @@ function fitHeight(el: HTMLTextAreaElement): void {
  * - `maxHeight`（CSS の長さ）— 渡すと **内容に合わせて伸び、上限から先は内側をスクロール**する
  *   （リサイズのつまみは出さない）。渡さなければ今までどおり `rows` / `min-h` で決まる固定の高さ
  *   （親を埋める画面向け）
+ * - **送信中に呼ぶ側が `disabled` にする欄は、キーボード（⌘/Ctrl + Enter）で送ったときだけ、`disabled` が
+ *   解けたところで欄へフォーカスを戻す**（Issue #3301。disabled になるとブラウザはフォーカスを外すので、
+ *   そのままでは続けて打つのにクリックが要る）。ボタンで送ったときは奪わない。送っているあいだに
+ *   別の所へフォーカスを移していたら戻さない。成功して欄が消えるなら何も起きない
  * - 案内の文は `SubmitHint` を、押すボタンの隣など好きな場所に置く
  *
  * **`field-sizing-fixed resize-y`**: shadcn の既定（`field-sizing-content`）は中身に合わせて伸び続けるが、
@@ -241,6 +245,23 @@ export function Textarea({
   maxHeight?: string;
 }) {
   const ref = useRef<HTMLTextAreaElement>(null);
+  // ⌘/Ctrl + Enter で送った直後の状態。'armed' = 送った（次の描画で disabled になるはず）、
+  // 'sending' = disabled になった（解けたらフォーカスを戻す）。
+  const refocus = useRef<'idle' | 'armed' | 'sending'>('idle');
+  const disabled = props.disabled === true;
+  // 描画のたびに見る。送ったキーの次の描画で disabled にならなければ（送れなかった）取り下げる。
+  useEffect(() => {
+    const el = ref.current;
+    if (disabled) {
+      if (refocus.current === 'armed') refocus.current = 'sending';
+      return;
+    }
+    const was = refocus.current;
+    refocus.current = 'idle';
+    if (was !== 'sending' || el === null) return;
+    const active = document.activeElement;
+    if (active === null || active === document.body || active === el) el.focus();
+  });
   const grows = maxHeight !== undefined;
   const value = props.value;
   useLayoutEffect(() => {
@@ -266,7 +287,10 @@ export function Textarea({
         if (event.defaultPrevented || onSubmitShortcut === undefined) return;
         if (isSubmitShortcut(event)) {
           event.preventDefault();
-          if (!submitDisabled) onSubmitShortcut();
+          if (!submitDisabled) {
+            refocus.current = 'armed';
+            onSubmitShortcut();
+          }
         }
       }}
       {...props}
