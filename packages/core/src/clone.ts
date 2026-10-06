@@ -1440,6 +1440,26 @@ export interface Turn {
    */
   approvalId: string | null;
   text: string;
+  /**
+   * **人間（SSE）へ流した本文のうち、まだ日誌へ書いていない分を含む、返答の本文の全部**（#3605）。
+   * 日誌へ書く本文の元はこちらである（`text` は `TurnOutcome.text` 用で、assistant メッセージが
+   * 処理し終えた時点でしか伸びない）。
+   *
+   * **なぜ `text` でなくこちらか。** 道具の実行は、クローンが直前の assistant メッセージを処理し終える
+   * 前に始まりうる（`text_delta` はすでに流れ、`text` はまだ伸びていない）。承認カードを出す道具が
+   * 本文を日誌へ書くとき `text` を元にすると、**受信中に見えていた前半が欠ける**。区切りは「その時点まで
+   * に SSE へ流した本文」で決める——受信中に見せた順番と同じ順番で日誌に残すため。
+   *
+   * 伸ばす所: `text_delta`（流した片）・逐次配信が来ていない回の完成品（流した本文）・逐次配信の回で
+   * 片が1つも無かった assistant メッセージの本文（人間には出ないが、日誌には従来どおり残す）。
+   * 縮める所: SDK が「応答ではない」と印を付けたメッセージの分（`turn.rejected`。従来どおり返答に
+   * しない）。
+   */
+  reply: string;
+  /** `reply` のうち、ここまでを日誌へ書いた（文字数）。 */
+  replyWritten: number;
+  /** 直前の assistant メッセージを処理し終えた時点の `reply.length`（そのメッセージの片の範囲を知る）。 */
+  replyMessageStart: number;
   /** 逐次配信（stream_event）で本文を流したか。流していなければ完成品を流す。 */
   streamed: boolean;
   /**
@@ -8875,6 +8895,9 @@ class Clone implements CloneHost {
         conversationId,
         approvalId,
         text: '',
+        reply: '',
+        replyWritten: 0,
+        replyMessageStart: 0,
         streamed: false,
         rejected: null,
         failure: null,
@@ -11909,7 +11932,10 @@ class Clone implements CloneHost {
 
       case 'text_delta': {
         const turn = this.#sdkSession.turn;
-        if (turn) turn.streamed = true;
+        if (turn) {
+          turn.streamed = true;
+          turn.reply += event.text;
+        }
         this.#emit(turn?.conversationId ?? null, { type: 'text', text: event.text });
         return;
       }
@@ -11930,16 +11956,28 @@ class Clone implements CloneHost {
         // `usage_limited` / `error` に任せる。
         const rejected = assistantFailureOf(event.errorCode, said);
         if (rejected !== undefined) {
-          if (turn) turn.rejected = rejected;
+          if (turn) {
+            turn.rejected = rejected;
+            // このメッセージの分として流れた片は返答にしない（日誌へ書かない）。書き済みの分は戻せない。
+            turn.reply = turn.reply.slice(0, Math.max(turn.replyMessageStart, turn.replyWritten));
+            turn.replyMessageStart = turn.reply.length;
+          }
           return;
         }
 
+        // 逐次配信の回で、このメッセージの片が1つも流れていなければ、本文は人間に出ていない。
+        // 日誌には従来どおり残す（`reply` へだけ足す）。
+        const unstreamedInStreamedTurn =
+          turn !== undefined && turn.streamed && turn.reply.length === turn.replyMessageStart;
         for (const block of event.blocks) {
           if (block.type === 'text') {
             if (turn) turn.text += block.text;
             // 逐次配信が来ていない環境でも、人間に本文が届かないことは無いようにする
             if (!turn?.streamed) {
+              if (turn) turn.reply += block.text;
               this.#emit(turn?.conversationId ?? null, { type: 'text', text: block.text });
+            } else if (unstreamedInStreamedTurn) {
+              turn.reply += block.text;
             }
           } else if (block.type === 'tool_use') {
             this.#emit(turn?.conversationId ?? null, { type: 'tool', tool: block.name });
