@@ -372,6 +372,7 @@ core にストアのインターフェースを切り、ドライバを差し替
 | McpServerStore | 人間の MCP サーバの登録（`.mcp.json` の `mcpServers` と同じ形。#325） | `mcp-servers.json`（0600） | PostgreSQL（1行） |
 | CredentialVaultStore | マネージャーへ降ろす環境変数の正本（名前→値。鍵も身元も同じ形で持つ） | `credentials.json`（0600） | PostgreSQL（1名前1行） |
 | ConversationReadStore | 会話の既読（会話ごとの位置と、全体で1つの基準時刻。全員で1組） | `jobs/conversation-reads.json` | PostgreSQL（会話ごとに1行＋基準時刻の1行） |
+| AttachmentStore | 添付の中身と控え（id・名前・MIME・大きさ・sha256・結び付いた会話・`uploadedBy`・作成と期限。#3111） | `<root>/attachments/<id>/meta.json`（控え）と `data`（中身） | PostgreSQL（`attachments` 表。中身は `bytea`） |
 
 - **記憶の文書は種別を持ち、毎ターンの焼き込みへの載り方が種別で決まる**（frontmatter の `type`。無指定・読めない・未知の値は `premise` へ倒れる — 取り返しがつく側である）。**本文はどの種別でも載らない。** 開く口は `memory_read` / `memory_outline` / `memory_section_read` である
   - `premise`（既定） — **要旨と節の目次**が載る。節id が載るので、節を名指しして直接開ける
@@ -382,6 +383,18 @@ core にストアのインターフェースを切り、ドライバを差し替
 - **CommitmentStore に順序・優先度の列を足さないこと。** 足した瞬間に「何を先にやるか」の判断が器へ移り、PRD「自律」が禁じている「やることの一覧」になる。溜まっているものはクローンへ毎ターン件数と齢で渡し、順序はそのつど決め直させる
 - **仕込みの真実はストア側だけに置く。** スケジューラへ直接足す口を作ると、デーモン再起動で仕込みが消える（スケジューラはストアを読み直すだけの側である）
 - **発火の合図に依頼の本文を載せない。** 載せた瞬間に発火時点の写しになり、人間が本文を直しても古い依頼で走る。運ぶのは名前だけで、本文は処理する瞬間に読む
+
+### 添付 — 中身は置き場に、記憶と日誌には控えだけ
+
+要件は PRD「インターフェース」の「添付」と「可観測性」にある。ここには置き場の設計だけを書く。
+
+- **`AttachmentStore` は記憶（`PersonaStore`）から独立している。** 中身（bytes）は記憶・日誌・受信箱のどこにも書かない。日誌の `exchange` と受信箱の発言に載るのは控え（`AttachmentRef`: id・名前・種類・大きさ・sha256）だけで、中身が保持期間で消えても控えが残る
+- **検証は3実装（インメモリ・fs・pg）で同じ関数を通る**（`prepareAttachment`）。名前の正規化・MIME の正規化・画像のマジックバイト照合・上限・sha256 の計算・id の払い出しは core が持ち、ドライバは置くだけである。契約は `attachment-contract.ts` で3実装を同じ形で測る
+- **中身は一覧で読まない。** `getMeta` と `prune` は bytes を読まない（pg は `bytes` 列を SELECT しない）。中身を読む `get` の呼び手は、クローンのターンへ画像として渡す経路・`attachment_fetch`・`GET /attachments/:id`・担い手への受け渡しである
+- **寿命は2本。** ①`expiresAt`（作成から既定30日。`ALTEROID_ATTACHMENT_RETENTION_DAYS`）を過ぎたもの、②発言（会話）へ結び付いていない（`bind` されていない）まま作成から1時間たったもの（上げただけで送らなかった残骸）を、デーモンが `AttachmentStore.prune` で定期的に消す（周期は `ALTEROID_ATTACHMENT_PRUNE_EVERY`。分。既定60。`off` で止める）。掃除は日誌に書かない
+- **`uploadedBy` は誰が上げたかの識別子だけ**（認証済みの主体を表す文字列。トークンや資格は入れない）。上げた主体が分からない経路では持たない
+- **`attachment_fetch` の写しは、正本ではない。** クローンが画像以外を `Read` で開けるように、デーモンはクローンの cwd の配下 `<ALTEROID_HOME>/state/attachment-copies/<id>/<名前>` へ中身を書き出す（cwd の中なので、組み込みの `Read` が許可を足さずに開ける。許可の範囲を広げない）。同じ sha256 の写しがあれば使い回す。写しの掃除は添付の掃除と同じ周で走り、最後に触れてから24時間を過ぎたもの・元の添付が無くなったものを消す。元の確認が失敗したものは残す
+- **担い手への受け渡しは、命令の本文に中身を載せて下す**（下の「runner API」）。runner 側の置き場は runner が持ち、`AttachmentStore` には届かない
 
 ### 会話の既読 — 全員で1組、位置は戻らない
 
