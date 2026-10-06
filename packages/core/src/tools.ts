@@ -6821,17 +6821,23 @@ export function createCloneTools(context: ToolContext) {
               ].join('\n'),
             );
           }
-          return text(
-            [
-              since === undefined &&
-              until === undefined &&
-              types === undefined &&
-              withFilter === undefined
+          // **afterId があるときは「まだ空」と言わない（issue #3286）。** 続きの位置は
+          // 実在の行を指している（指す行が無ければ上で JournalAnchorNotFoundError）ので、
+          // 日誌は空ではない。0件は「この位置より先（古い側）に行が無い」だけである。
+          const emptyNote =
+            afterId !== undefined &&
+            since === undefined &&
+            until === undefined &&
+            types === undefined &&
+            withFilter === undefined
+              ? '（この位置より先（古い側）に日誌の行は無い。日誌が空なのではない）'
+              : since === undefined &&
+                  until === undefined &&
+                  types === undefined &&
+                  withFilter === undefined
                 ? '（日誌はまだ空）'
-                : '（その条件に当たる日誌は無い）',
-              ...horizonNoteLines,
-            ].join('\n'),
-          );
+                : '（その条件に当たる日誌は無い）';
+          return text([emptyNote, ...horizonNoteLines].join('\n'));
         }
 
         // **予算を先に決めて、入るところまで積む。** 件数から出力量を決めると、

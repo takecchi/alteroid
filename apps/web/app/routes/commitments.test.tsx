@@ -1539,3 +1539,58 @@ describe('閉じた分が0件のときの再検証で「記録はまだない」
     expect(screen.getByText('完了した仕事の記録はまだない。')).toBeTruthy();
   });
 });
+
+describe('本文の編集の保存の門と送るキーの案内（#3300）', () => {
+  async function openEditor() {
+    await screen.findByText('もとの依頼');
+    fireEvent.click(screen.getByRole('button', { name: '本文を編集' }));
+    return screen.getByRole('tablist').parentElement!;
+  }
+
+  it('保存中に Ctrl+S をもう一度押しても PATCH は1回だけ', async () => {
+    let patches = 0;
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = input instanceof Request ? input : new Request(input, init);
+      const { url, method } = request;
+      if (method === 'PATCH' && url.includes('/commitments/cmt-1')) {
+        patches += 1;
+        await gate;
+        return json({ ok: true });
+      }
+      if (url.includes('/commitments')) {
+        return json({ entries: [commitment({ body: 'もとの依頼' })] });
+      }
+      return Promise.reject(new TypeError(`Failed to fetch: ${url}`));
+    }) as typeof fetch;
+    renderPage();
+
+    const tabsRoot = await openEditor();
+    fireEvent.mouseDown(await screen.findByRole('tab', { name: '編集' }));
+    const textarea = await within(tabsRoot).findByRole('textbox');
+    fireEvent.change(textarea, { target: { value: '直した依頼' } });
+
+    fireEvent.keyDown(textarea, { key: 's', ctrlKey: true });
+    await waitFor(() => expect(patches).toBe(1));
+    fireEvent.keyDown(textarea, { key: 's', ctrlKey: true });
+    fireEvent.keyDown(textarea, { key: 'Enter', ctrlKey: true });
+    release();
+    await waitFor(() => expect(screen.queryByRole('tablist')).toBeNull());
+    expect(patches).toBe(1);
+  });
+
+  it('送るキーの案内は編集のタブでだけ出る（プレビューでは出ない）', async () => {
+    stubCommitments([commitment({ body: 'もとの依頼' })]);
+    renderPage();
+
+    await openEditor();
+    expect(screen.queryByText(/Enter で保存$/)).toBeNull();
+    fireEvent.mouseDown(await screen.findByRole('tab', { name: '編集' }));
+    expect(await screen.findByText(/Enter で保存$/)).toBeTruthy();
+    fireEvent.mouseDown(screen.getByRole('tab', { name: 'プレビュー' }));
+    await waitFor(() => expect(screen.queryByText(/Enter で保存$/)).toBeNull());
+  });
+});
