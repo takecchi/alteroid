@@ -124,6 +124,12 @@ export async function chatCommand(): Promise<void> {
         continue;
       }
 
+      if (/^\/resume(\s|$)/.test(line)) {
+        const resumed = await runResumeCommand(line, target);
+        if (resumed !== null) conversationId = resumed;
+        continue;
+      }
+
       if (line.startsWith('/')) {
         const handled = await runSlashCommand(line, client, listed, conversationId, target);
         if (handled === 'quit') break;
@@ -207,6 +213,22 @@ export async function sendMessage(
   }
 
   options.onAccepted?.();
+  return renderChatEvents(target, readSSE(response.body), conversationId);
+}
+
+/**
+ * chat の SSE（`POST /chat` と `GET /chat/{id}/stream` の応答）を端末へ描く。
+ *
+ * **`sendMessage` の本体を切り出したもの。** `/resume`（進行中のターンへ戻る）が
+ * `GET /chat/{id}/stream` の応答を同じ描き方で読めるようにするため。切り出しただけで、
+ * 出力・既読にする条件・戻り値は `sendMessage` に在ったときと同じである（描き方を
+ * 2か所に写すと、片方の伏せ字や既読の扱いだけがずれる）。
+ */
+async function renderChatEvents(
+  target: Target,
+  events: AsyncIterable<SSEEvent>,
+  conversationId: string | null,
+): Promise<string | null> {
   let nextConversationId = conversationId;
   let wrote = false;
   // 返答が最後まで表示されたか（`done` が来て、`error` / `usage_limited` が無かった）。既読にする条件。
@@ -223,7 +245,7 @@ export async function sendMessage(
     pending = '';
   };
 
-  for await (const event of readSSE(response.body)) {
+  for await (const event of events) {
     if (event.name !== 'text') flushPending();
     switch (event.name) {
       case 'open': {
@@ -313,7 +335,137 @@ async function* readSSE(body: ReadableStream<Uint8Array>): AsyncGenerator<SSEEve
   }
 }
 
-const HELP = `/attach <path>       次に送る発言にファイルを添える（複数回で複数個。本文を打って送ると一緒に上がる。添えかけがあれば空行の Enter で添付だけも送れる）
+/** `/resume`（id 無し）が進行中かを確かめに行く会話の数（履歴の新しい順）。TUI の `RESUME_PROBE_LIMIT` と同じ。 */
+const RESUME_PROBE_LIMIT = 5;
+
+/**
+ * `GET /chat/{id}/stream` を張る。繋がれなければ理由つきの `Error` を投げる
+ * （TUI の `chatStream` と同じ「進行中の応答に戻れませんでした」）。
+ */
+async function openChatStream(
+  target: Target,
+  conversationId: string,
+  signal: AbortSignal,
+): Promise<ReadableStream<Uint8Array>> {
+  const what = '進行中の応答に戻れませんでした';
+  let response: Response;
+  try {
+    response = await fetch(`${target.baseUrl}/chat/${encodeURIComponent(conversationId)}/stream`, {
+      method: 'GET',
+      headers: { ...target.headers, 'content-type': 'application/json' },
+      signal,
+    });
+  } catch (error) {
+    throw new Error(`${what}: デーモンに繋がりません（${redactError(String(error))}）`);
+  }
+  if (!response.ok || !response.body) {
+    const described = describeAuthFailure(response.status, target);
+    throw new Error(described ?? `${what}: ${await errorDetail(response)}`);
+  }
+  return response.body;
+}
+
+/** `GET /chat/{id}/stream` の最初の `open` だけ読み、`inProgress` を返して接続を閉じる。 */
+async function probeInProgress(target: Target, conversationId: string): Promise<boolean> {
+  const abort = new AbortController();
+  try {
+    for await (const event of readSSE(await openChatStream(target, conversationId, abort.signal))) {
+      if (event.name === 'open') {
+        return event.json<{ inProgress?: boolean }>()?.inProgress === true;
+      }
+    }
+    return false;
+  } finally {
+    abort.abort();
+  }
+}
+
+/**
+ * `/resume [id]`（TUI の `/resume` と同じ）。明示したときだけ、進行中のターンのある会話へ戻る
+ * （起動時に自動では戻らない）。`id` があればその会話、無ければ履歴の新しい順に最大
+ * {@link RESUME_PROBE_LIMIT} 件を見て、最初に進行中だったもの。進行中の会話の一覧を返す口は
+ * daemon に無いので、会話ごとに `GET /chat/{id}/stream` を張って `open.inProgress` だけ読む。
+ * 見つかったらもう一度張り、途中経過の再生と続きを `sendMessage` と同じ描き方で流す。
+ * 返答が最後まで描かれたら、`sendMessage` と同じく既読にする。
+ *
+ * 戻り値は、以後の発言がつながる会話 id。戻れなかったら `null`（今の会話のまま）。
+ * 離れても（接続が切れても）ターン自体は止めない（この口は発言も中断も送らない）。
+ */
+export async function runResumeCommand(line: string, target: Target): Promise<string | null> {
+  const requested = line.replace(/^\/resume\s*/, '').trim();
+  const id = requested.length > 0 ? requested : undefined;
+  let candidates: string[];
+  if (id !== undefined) {
+    candidates = [id];
+  } else {
+    try {
+      const client = createClient(target.baseUrl, target.headers);
+      const response = await client.conversations.$get({ query: {} });
+      if (!response.ok) {
+        stdout.write(`エラー: 会話の一覧を読めませんでした: ${await errorDetail(response)}\n`);
+        return null;
+      }
+      const { conversations } = await response.json();
+      candidates = conversations.slice(0, RESUME_PROBE_LIMIT).map((c) => c.conversationId);
+    } catch (error) {
+      stdout.write(
+        `エラー: ${redactError(error instanceof Error ? error.message : String(error))}\n`,
+      );
+      return null;
+    }
+  }
+  let found: string | null = null;
+  for (const candidate of candidates) {
+    try {
+      if (await probeInProgress(target, candidate)) {
+        found = candidate;
+        break;
+      }
+    } catch (error) {
+      stdout.write(
+        `エラー: ${redactError(error instanceof Error ? error.message : String(error))}\n`,
+      );
+      return null;
+    }
+  }
+  if (found === null) {
+    stdout.write(
+      id === undefined
+        ? '進行中の会話は無い（/conversations で履歴を見られる）\n'
+        : `会話 ${id} に進行中のターンは無い（/conversations で履歴を見られる）\n`,
+    );
+    return null;
+  }
+  const abort = new AbortController();
+  let body: ReadableStream<Uint8Array>;
+  try {
+    body = await openChatStream(target, found, abort.signal);
+  } catch (error) {
+    stdout.write(
+      `エラー: ${redactError(error instanceof Error ? error.message : String(error))}\n`,
+    );
+    return null;
+  }
+  let failure: unknown = null;
+  async function* events(): AsyncGenerator<SSEEvent> {
+    try {
+      yield* readSSE(body);
+    } catch (error) {
+      // 描きかけの行は書き切ってから知らせる（`renderChatEvents` が最後に書き出す）。
+      failure = error;
+    }
+  }
+  const resumed = await renderChatEvents(target, events(), found);
+  if (failure !== null) {
+    const reason = failure instanceof Error ? failure.message : String(failure);
+    stdout.write(
+      `エラー: 進行中の応答に戻れませんでした: 接続が切れました（${redactError(reason)}）\n`,
+    );
+  }
+  return resumed;
+}
+
+const HELP = `/attach <path>      次に送る発言にファイルを添える（複数回で複数個。本文を打って送ると一緒に上がる。添えかけがあれば空行の Enter で添付だけも送れる）
 /attachments         添えかけのファイルの一覧
 /detach <番号|all>   添えかけを外す
 /report [日付]        日報（既定は直近。日付は YYYY-MM-DD）
@@ -329,6 +481,7 @@ const HELP = `/attach <path>       次に送る発言にファイルを添える
                      編集で畳まれた旧発言・その応答も含めて読める）
 /edit <番号|id> <新しい本文>  送信済みの自分の発言を編集する（番号は /conversation の並び。
                      クローンの応答は編集できない。編集前のターンの副作用は取り消さない）
+/resume [id]          進行中のターンへ戻る（途中経過を再生して続きを流す）。id 省略なら新しい順に5件まで探す。自動では戻らない
 /managers [status=<s1,s2>] [limit=<N>] [after=<番号|id>]  マネージャーの一覧（番号付き）と状態
                      status= は ${jobStatusSchema.options.join(' / ')} のカンマ区切り。
                      limit= と after= で古い側へ頁を辿る（after= は直前の /managers に
