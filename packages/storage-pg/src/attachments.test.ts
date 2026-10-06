@@ -24,7 +24,19 @@ const PNG = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 9, 
 describe('PgAttachmentStore', () => {
   it('契約を通る', async () => {
     const db = client.withLogger({ logQuery: () => undefined });
-    await verifyAttachmentStoreContract(new PgAttachmentStore(db));
+    const extra: TestDbHandle[] = [];
+    try {
+      await verifyAttachmentStoreContract(new PgAttachmentStore(db), {
+        // 空のストアが要るので、呼ぶたびに別の DB を作る。
+        createStore: async (options) => {
+          const { client: fresh } = await createMigratedTestDb();
+          extra.push(fresh);
+          return new PgAttachmentStore(fresh.withLogger({ logQuery: () => undefined }), options);
+        },
+      });
+    } finally {
+      for (const fresh of extra) await fresh.close();
+    }
   });
 
   it('getMeta と prune は bytes 列を読まない（SQL に bytes が現れない）', async () => {

@@ -10,6 +10,7 @@ import {
   validateAttachmentBatch,
   validateAttachmentInput,
 } from './attachment.js';
+import { MemoryAttachmentStore } from './attachment-memory.js';
 import { verifyAttachmentStoreContract } from './attachment-contract.js';
 import { createMemoryStores } from './testing.js';
 
@@ -104,6 +105,8 @@ describe('添付: ファイル名', () => {
 
 describe('添付: インメモリ実装の契約', () => {
   it('verifyAttachmentStoreContract を通る', async () => {
-    await verifyAttachmentStoreContract(createMemoryStores().attachments);
+    await verifyAttachmentStoreContract(createMemoryStores().attachments, {
+      createStore: (options) => new MemoryAttachmentStore(options),
+    });
   });
 });
