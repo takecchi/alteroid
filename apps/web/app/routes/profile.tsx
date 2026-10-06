@@ -1,5 +1,6 @@
 import { SettingsTabs } from '~/components/group-tabs';
 import { settingsDocumentTitle } from '~/lib/nav';
+import { useLatest } from '~/lib/use-latest';
 import { useEffect, useRef, useState } from 'react';
 import { useBlocker } from 'react-router';
 
@@ -416,7 +417,7 @@ interface EditorState {
   script: string;
   scope: ProfileScope;
   /** 編集を始めたときの行（変更が無いかの判定用）。新規なら無い。 */
-  original?: ProfileEntryView;
+  original?: Pick<ProfileEntryView, 'script' | 'scope'>;
 }
 
 /**
@@ -458,6 +459,8 @@ function ProfileEditor({
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<unknown>(undefined);
+  /** 応答が返った時点の「いまの編集欄」（送った時点と比べる。issue #3515）。 */
+  const latestEditor = useLatest(editor);
 
   const unchanged =
     editor?.original !== undefined &&
@@ -479,7 +482,23 @@ function ProfileEditor({
       // **閉じるのは、保存を始めた編集欄がまだ開いているときだけ。**
       if (isCurrent()) {
         setConfirming(false);
-        setEditor(null);
+        const now = latestEditor.current;
+        if (
+          now !== null &&
+          (now.name !== state.name || now.script !== state.script || now.scope !== state.scope)
+        ) {
+          // 応答を待つ間に打ち足した分は残す。保存できた行を「元の行」に進め、変更の有無・
+          // 名前の固定が、保存できた版を基準に判定されるようにする。
+          if (now.name === state.name) {
+            setEditor({
+              ...now,
+              existing: true,
+              original: { script: state.script, scope: state.scope },
+            });
+          }
+        } else {
+          setEditor(null);
+        }
       }
     } catch (caught) {
       setFailure(caught);

@@ -1,5 +1,7 @@
 import { WorkTabs } from '~/components/group-tabs';
 import { LoadError } from '~/components/load-error';
+import { useLatest } from '~/lib/use-latest';
+import { unsentInput } from '~/lib/unsent-input';
 import { AlertTriangle } from 'lucide-react';
 import { Fragment, useCallback, useEffect, useId, useState } from 'react';
 import { Tabs } from 'radix-ui';
@@ -997,6 +999,8 @@ function CommitmentBodyEditor({
 
   const value = draft ?? commitment.body;
   const dirty = draft !== undefined && draft !== commitment.body;
+  /** 応答が返った時点の「いまの下書き」（送った時点と比べる。issue #3515）。 */
+  const latestDraft = useLatest(draft);
 
   /**
    * 書きかけかどうかをページへ知らせる（離れる前の確認はページが1つだけ持つ。#2764）。
@@ -1015,10 +1019,15 @@ function CommitmentBodyEditor({
     if (draft === undefined || draft.trim() === '') return;
     setBusy(true);
     setFailure(undefined);
-    editCommitment(commitment.id, draft)
+    // 送った値を控える。成功のあと、いまの下書きがこれと同じときだけ畳む（issue #3515）。
+    const sent = draft;
+    editCommitment(commitment.id, sent)
       // 成功したら編集モードを畳む。一覧は `useEditCommitment` の中で
       // 取り直されるので、この行の `commitment` はすぐ新しい本文へ差し替わる。
-      .then(onCancel)
+      // 応答を待つ間に打ち足した分があるときは畳まず、下書きを残す。
+      .then(() => {
+        if (latestDraft.current === sent) onCancel();
+      })
       .catch(setFailure)
       .finally(() => setBusy(false));
   }
@@ -1397,11 +1406,13 @@ function PushForm({ onDirtyChange }: { onDirtyChange: (id: string, dirty: boolea
 
   async function submit() {
     if (body.trim() === '') return;
+    const sent = body;
     setBusy(true);
     setFailure(undefined);
     try {
       await pushCommitment(body.trim());
-      setBody('');
+      // 応答を待つ間に打ち足した分は残す（issue #3515）。
+      setBody((current) => unsentInput(current, sent));
     } catch (caught) {
       setFailure(caught);
     } finally {

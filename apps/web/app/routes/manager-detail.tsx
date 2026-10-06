@@ -36,6 +36,7 @@ import {
   usageHref,
 } from '@alteroid/logic';
 import { terminalFailureNote as sharedTerminalFailureNote } from '~/lib/manager-failure-note';
+import { unsentInput } from '~/lib/unsent-input';
 
 /**
  * **`manager-activity.ts` は `@alteroid/core` 本体（`.`）とは別の軽い口
@@ -1595,11 +1596,13 @@ function QuestionWaitingRow({
     setFailure(undefined);
     setNote(undefined);
     // **`decision` を付けない。** 質問に allow/deny は無い。
-    send(id, { text, requestId })
+    const sent = text;
+    send(id, { text: sent, requestId })
       .then((result) => {
         const described = describeSendResult(result);
-        // 届いていないのに入力を空にしない（書いた答えを残す）。
-        if (described.reached) setText('');
+        // 届いていないのに入力を空にしない（書いた答えを残す）。届いたときも、応答を待つ間に
+        // 打ち足した分は残す（issue #3515）。
+        if (described.reached) setText((current) => unsentInput(current, sent));
         else setNote(described);
       })
       .catch(setFailure)
@@ -1753,12 +1756,14 @@ function SendMessage({
     setFailure(undefined);
     // 前回の結果を消す。次の送信が失敗しても、前回の「届けた」が今回のものに見えない。
     setOutcome(undefined);
-    send(id, { text })
+    const sent = text;
+    send(id, { text: sent })
       .then((result) => {
         const described = describeSendResult(result);
         setOutcome(described);
-        // 届いていないときは入力を残す（書いた指示を消さない）。
-        if (described.reached) setText('');
+        // 届いていないときは入力を残す（書いた指示を消さない）。届いたときも、応答を待つ間に
+        // 打ち足した分は残す（issue #3515）。
+        if (described.reached) setText((current) => unsentInput(current, sent));
       })
       .catch(setFailure)
       .finally(() => setBusy(false));
