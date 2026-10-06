@@ -137,6 +137,7 @@ export const KEY = {
   credentials: { type: 'credentials' } as const,
   profile: { type: 'profile' } as const,
   mcpServers: { type: 'mcpServers' } as const,
+  integrationKeys: { type: 'integrationKeys' } as const,
   permissionGrants: { type: 'permissionGrants' } as const,
   dropped: { type: 'dropped' } as const,
   archive: { type: 'archive' } as const,
@@ -590,6 +591,17 @@ export function useProfile() {
     revalidateOnFocus: false,
     revalidateOnReconnect: false,
   });
+}
+
+/**
+ * 連携の鍵の一覧（`GET /integration-keys`。#3113 段2）。値は返らない。
+ *
+ * **フォーカス・再接続での再取得は既定のまま**（他の一覧と同じ。`lastUsedAt` が動くので取り直す価値がある）。
+ * 再取得が失敗しても SWR は `data` を残す——画面は `error` を帯で言うだけで、一覧も発行の欄も消さない。
+ */
+export function useIntegrationKeys() {
+  const api = useApi();
+  return useSWR(KEY.integrationKeys, () => api.api.GET('/integration-keys').then(unwrap));
 }
 
 /**

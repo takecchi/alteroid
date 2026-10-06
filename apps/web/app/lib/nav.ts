@@ -57,6 +57,9 @@ export const SETTINGS_TABS: readonly NavTab[] = [
   // プロファイルの隣。同じく「器を焼き直さずに実行環境を直す」口で、こちらは `.mcp.json` に
   // 当たる連携の登録である（#325 段4）。
   { to: '/mcp-servers', label: 'MCP 連携' },
+  // MCP 連携の隣。あちらは alteroid から相手を呼ぶ口、こちらは外のサービスが alteroid へ
+  // 外部イベントを送るための鍵（#3113 段2）。向きが逆の連携である。
+  { to: '/integrations', label: '連携' },
 ];
 
 /**
