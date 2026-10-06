@@ -99,6 +99,10 @@ function fakeClone(stores: Stores) {
   };
 
   const clone: CloneHost = {
+    // 永続化を待ってから受け取ったと返す口（Issue #3679）。この歯では触らない。
+    async postPersisted() {
+      return 'persisted';
+    },
     managers,
     // 認証トークンの切替（#393 PR4）。この歯では触らない。
     recycleSessionForToken() {},
