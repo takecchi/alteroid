@@ -537,11 +537,15 @@ export class ChatController {
   }
 
   /** Ctrl+C / `/interrupt`: 走っているクローンのターンを止める。 */
-  async interrupt(): Promise<void> {
+  async interrupt(): Promise<{ readonly ok: boolean; readonly text: string }> {
     try {
-      this.addSystem(await this.api.interrupt());
+      const text = await this.api.interrupt();
+      this.addSystem(text);
+      return { ok: true, text };
     } catch (error) {
-      this.addError(messageOf(error));
+      const text = messageOf(error);
+      this.addError(text);
+      return { ok: false, text };
     }
   }
 

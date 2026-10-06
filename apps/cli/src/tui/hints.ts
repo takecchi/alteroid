@@ -14,7 +14,8 @@ export const HINT_JOURNAL_LIST =
   '↑↓ PgUp/PgDn 選ぶ · Enter 全文 · f 種別 · n 最新へ · m 古い側 · 1-5 画面';
 export const HINT_JOURNAL_DETAIL = 'Esc 一覧へ · ↑↓ PgUp/PgDn 読み進める · 1-5 画面 · / コマンド';
 export const HINT_JOURNAL_FILTER = '↑↓ 選ぶ · Space 切替 · Enter 適用 · c 全部外す · Esc やめる';
-export const HINT_MEM_LIST = '↑↓ 選ぶ · Enter 開く（読むだけ） · r 更新 · 1-5 画面 · / コマンド';
+export const HINT_MEM_LIST =
+  '↑↓ 選ぶ · Enter 開く（読むだけ） · r 更新 · 1-5 画面 · / コマンド · ^C 中断';
 export const HINT_MEM_DETAIL = 'Esc 一覧へ · ↑↓ PgUp/PgDn 読み進める · r 更新 · 1-5 画面';
 export const HINT_AP_LIST = '↑↓ 選ぶ · Enter 詳細 · d 回答済み · r 更新 · 1-5 画面 · / コマンド';
 export const HINT_AP_DATES =
