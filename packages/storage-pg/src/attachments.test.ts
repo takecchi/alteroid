@@ -22,6 +22,8 @@ afterEach(async () => {
 const PNG = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 9, 9]);
 
 describe('PgAttachmentStore', () => {
+  // `createStore` が DB を4つ作る（本物の PostgreSQL では雛形からの CREATE DATABASE）。緑でも 3〜5 秒かかり、
+  // 既定の 5000ms では混んだ runner で時間切れになっていた（#3775）。DB を作る他の歯と同じ枠にする。
   it('契約を通る', async () => {
     const db = client.withLogger({ logQuery: () => undefined });
     const extra: TestDbHandle[] = [];
@@ -37,7 +39,7 @@ describe('PgAttachmentStore', () => {
     } finally {
       for (const fresh of extra) await fresh.close();
     }
-  });
+  }, 60_000);
 
   it('getMeta と prune は bytes 列を読まない（SQL に bytes が現れない）', async () => {
     const queries: string[] = [];
