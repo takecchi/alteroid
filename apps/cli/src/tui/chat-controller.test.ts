@@ -833,6 +833,18 @@ describe('/attach（添えかけ）', () => {
     }
   });
 
+  it('0 バイトのファイルは添えかけに入らず、Web と同じ文で断る（#3327）', async () => {
+    const dir = await makeTempDir('alteroid-tui-attach-empty-');
+    const path = join(dir, 'empty.txt');
+    await writeFile(path, '');
+    const { controller } = setup();
+    await controller.attach(path);
+    expect(controller.hasAttachments()).toBe(false);
+    expect(controller.store.getSnapshot().entries.at(-1)?.text).toContain(
+      '空のファイルは添えられない',
+    );
+  });
+
   it('送るときに上げ、id を /chat の attachments に入れ、受理後に添えかけを空にする。失敗なら送らず残す', async () => {
     const dir = await makeTempDir('alteroid-tui-attach-');
     const path = join(dir, 'a.log');

@@ -49,8 +49,9 @@ export async function resetCommand(options: { yes?: boolean } = {}, io?: Confirm
   // そして未ログイン（`target.note`）なら確認を出す前に断るため。
   const target = await resolveTarget();
   if (target.note !== null) throw new Error(target.note);
-  // 「取り消せません」「取り消しました」は `confirmIrreversible` が出す（二重にしない）。
-  if (!(await confirmIrreversible(buildConfirmMessage(target.baseUrl), options, io))) return;
+  // 「取り消せません」は `confirmIrreversible` が出す（二重にしない）。やめたときは同じ部品が
+  // 例外を投げ、入口が非 0 にする（#3450）。
+  await confirmIrreversible(buildConfirmMessage(target.baseUrl), options, io);
 
   const view = (await post(target)) as { cleared: ResetSummary };
   report(view.cleared);

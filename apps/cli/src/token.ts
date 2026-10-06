@@ -182,11 +182,10 @@ export async function tokenRemoveUnreadableCommand(
   // 未ログインなら確認を出す前に断る（Issue #3214）。
   if (target.note !== null) throw new Error(target.note);
   // 戻せない操作なので確認する（#3141。`confirm.ts`）。壊れた行は中身を出さずに消すので、消すと残らない。
-  const confirmed = await confirmIrreversible(
+  await confirmIrreversible(
     `読めないトークンの行（id: ${ids.join(', ')}）を消します。壊れた行は消すと残りません。`,
     options,
   );
-  if (!confirmed) return;
   const result = (await request(target, '/tokens/unreadable/remove', {
     method: 'POST',
     body: JSON.stringify({ ids }),
@@ -381,11 +380,10 @@ export async function tokenRemoveCommand(
       `id ${id} のトークンは見つかりません（alteroid token list で id を確かめてください）`,
     );
   }
-  const confirmed = await confirmIrreversible(
+  await confirmIrreversible(
     `トークン（id ${id}）を削除します。値は読み出せないので、登録し直すには元の値が要ります（値を残したまま外すなら alteroid token disable ${id}）。`,
     options,
   );
-  if (!confirmed) return;
   const inputs = current.tokens.filter((token) => token.id !== id).map(toInput);
   const view = await putTokens(target, inputs);
   stdout.write(`トークン（id ${id}）を削除しました。\n`);

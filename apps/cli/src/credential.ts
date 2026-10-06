@@ -138,12 +138,11 @@ export async function credentialSetCommand(
   const target = await resolveTarget();
   const current = (await request(target, '/credentials')) as CredentialsView;
   if (current.credentials.some((entry) => entry.name === name)) {
-    const confirmed = await confirmIrreversible(
+    await confirmIrreversible(
       `環境変数 ${name} を置き換えます。前の値は残らず、読み出せないので戻すには元の値が要ります（runner の器の値も入れ替わります）。`,
       options,
       io,
     );
-    if (!confirmed) return;
   }
 
   const raw =
@@ -205,11 +204,10 @@ export async function credentialRemoveCommand(
     );
   }
 
-  const confirmed = await confirmIrreversible(
+  await confirmIrreversible(
     `環境変数 ${name} を外します。値は読み出せないので、戻すには元の値が要ります（runner の器からも消えます）。`,
     options,
   );
-  if (!confirmed) return;
 
   // 空文字が「外す」である（`PUT /credentials` の doc）。
   const view = (await put(target, [{ name, value: '' }])) as CredentialsUpdateView;

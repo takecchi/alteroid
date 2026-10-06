@@ -146,12 +146,11 @@ export async function mcpSetCommand(file: string, options: { yes?: boolean } = {
   const before = await read(target);
   const beforeNames = Object.keys(before.mcpServers);
   if (beforeNames.length > 0 && stableJson(before.mcpServers) !== stableJson(servers)) {
-    const confirmed = await confirmIrreversible(
+    await confirmIrreversible(
       `MCP の登録（${beforeNames.join('・')}）を、渡された内容で丸ごと置き換えます。いまの値は残りません` +
         '（控えるなら alteroid mcp show --reveal）。',
       options,
     );
-    if (!confirmed) return;
   }
   await put(target, servers, beforeNames);
 }
@@ -207,12 +206,11 @@ export async function mcpClearCommand(options: { yes?: boolean } = {}): Promise<
   const before = await read(target);
   const beforeNames = Object.keys(before.mcpServers);
   if (beforeNames.length > 0) {
-    const confirmed = await confirmIrreversible(
+    await confirmIrreversible(
       `MCP の登録（${beforeNames.join('・')}）を全部外します。いまの値は残りません` +
         '（控えるなら alteroid mcp show --reveal）。',
       options,
     );
-    if (!confirmed) return;
   }
   await put(target, {}, beforeNames);
 }

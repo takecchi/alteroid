@@ -4,6 +4,7 @@ import { basename, resolve, sep } from 'node:path';
 import { stderr, stdout } from './terminal-out.js';
 
 import {
+  ATTACHMENT_EMPTY_MESSAGE,
   AttachmentRejectedError,
   DEFAULT_ATTACHMENT_LIMITS,
   isAttachmentImageMediaType,
@@ -154,6 +155,7 @@ export class AttachmentDraft {
       return { ok: false, reason: `読めない: ${absolute}（${errnoOf(error)}）` };
     }
     if (!info.isFile()) return { ok: false, reason: `ファイルではない: ${absolute}` };
+    if (info.size === 0) return { ok: false, reason: ATTACHMENT_EMPTY_MESSAGE };
     const name = normalizeAttachmentName(basename(absolute));
     const mediaType = mediaTypeOfName(name);
     const limits = await this.limits();

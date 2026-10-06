@@ -7865,7 +7865,9 @@ export function createCloneTools(context: ToolContext) {
         // 許さない」に揃える——ただし検査そのものはここ（ハンドラの先頭）で
         // 行い、保存層（fs / pg の `scheduledRequestSchema.parse(entry)`）へは
         // 空文字を1文字も渡さない。doc は `request` の入力スキーマ側にある。
-        if (request.length === 0) {
+        // **「空」は NUL を落とした後で見る（#3438）。** ストアは NUL を落として残すので、落とす前の長さで
+        // 見ると NUL だけの `request` が日誌（「設定しようとしている」）より先へ進んでしまう。
+        if (stripNul(request).length === 0) {
           return text('request が空文字は使えない（依頼の本文を渡すこと）。');
         }
         if (RESERVED_SCHEDULE_KINDS.includes(parsedKind.data)) {

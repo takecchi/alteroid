@@ -7,8 +7,10 @@ import { stdout } from './terminal-out.js';
  *
  * **形は `alteroid reset`（`reset.ts`）に揃えてある。**
  * - 端末（TTY）なら対話で確認する。`y` ではなく `yes` の全文を要求する（1文字の
- *   誤打で通さない）。「やめた」ときは `取り消しました。何も変更していません。` を出して
- *   何もしない
+ *   誤打で通さない）。「やめた」ときは**決まった例外（{@link ConfirmDeclinedError}）を投げて**
+ *   何もしない。入口の最上位（`index.ts` の `reportCliFailure`）がそれを stderr の1行
+ *   （`取り消しました。何も変更していません。`）と**終了コード 1**にする（#3450）。やめたのに 0 で
+ *   返ると、`alteroid reset && ...` のような連結で、やめたのに次が走る。stdout には成功の文を出さない
  * - `--yes` を渡すと確認を飛ばす（スクリプト・CI から呼ぶ用途）。確認を無くすのではなく、
  *   確認の主体を対話の相手から呼び出し側へ移すだけである
  * - **端末ではなく `--yes` も無いときは、実行せずに断る（例外＝終了コード非 0）。**
@@ -43,8 +45,25 @@ function defaultIo(): ConfirmIo {
   };
 }
 
+/** やめたときの文。stderr に1行で出る（stdout には出さない）。 */
+const DECLINED_MESSAGE = '取り消しました。何も変更していません。';
+
+/**
+ * 戻せない操作の確認で、使い手がやめた（#3450）。`confirmIrreversible` が投げる。
+ *
+ * **失敗とは別の型にしてあるのは、呼び出し側が区別できるようにするため**で、終了コードは
+ * 他の失敗と同じ非 0（1）になる——スクリプトから「何もしなかった」を成功と見分けるため。
+ * REPL（`confirmInRepl`）は対象外（REPL は続けるので、やめても終了しない）。
+ */
+export class ConfirmDeclinedError extends Error {
+  constructor() {
+    super(DECLINED_MESSAGE);
+    this.name = 'ConfirmDeclinedError';
+  }
+}
+
 const PROMPT = '続けるなら yes と入力してください: ';
-const DECLINED = '取り消しました。何も変更していません。\n';
+const DECLINED = `${DECLINED_MESSAGE}\n`;
 
 /** `yes`（大文字小文字・前後の空白は問わない）だけが承認。 */
 function isYes(answer: string): boolean {
@@ -52,14 +71,15 @@ function isYes(answer: string): boolean {
 }
 
 /**
- * `summary`（何が戻せなくなるか）を示して確認する。進めてよければ `true`、やめたなら
- * `false`（何もしないこと）。端末でなく `--yes` も無ければ投げる。
+ * `summary`（何が戻せなくなるか）を示して確認する。進めてよければ `true` を返す。
+ * やめたなら {@link ConfirmDeclinedError} を投げる（#3450。`false` は返らない）。
+ * 端末でなく `--yes` も無ければ、別の例外を投げる。
  */
 export async function confirmIrreversible(
   summary: string,
   options: { yes?: boolean },
   io: ConfirmIo = defaultIo(),
-): Promise<boolean> {
+): Promise<true> {
   if (options.yes === true) return true;
   if (!io.isTTY) {
     throw new Error(
@@ -69,8 +89,7 @@ export async function confirmIrreversible(
   }
   io.write(`${summary}\n取り消せません。\n`);
   if (isYes(await io.ask(PROMPT))) return true;
-  io.write(DECLINED);
-  return false;
+  throw new ConfirmDeclinedError();
 }
 
 /**

@@ -282,10 +282,11 @@ describe('確認の扱い（confirmIrreversible に揃える） — issue #3200'
   it('端末で yes 以外なら、取り消して POST しない', async () => {
     const { io, written } = fakeIo({ answer: 'n' });
 
-    await resetCommand({}, io);
+    // やめたことは例外で伝わる（入口が非 0 にする。#3450）。stdout には何も言わない。
+    await expect(resetCommand({}, io)).rejects.toThrow('取り消しました。何も変更していません。');
 
     expect(sent).toEqual([]);
-    expect(written.join('')).toContain('取り消しました。何も変更していません。');
+    expect(written.join('')).not.toContain('取り消しました');
   });
 
   it('--yes なら端末でなくても聞かずに POST する', async () => {
