@@ -97,6 +97,9 @@ export const initialManagersState: ManagersState = {
 
 const messageOf = redactedErrorMessage;
 
+/** 追加指示が相手に渡ったと言える `outcome`。これ以外（`session_missing` / `declined` など）は渡っていない。 */
+const DELIVERED_OUTCOMES: ReadonlySet<string> = new Set(['delivered', 'answered']);
+
 export class ManagersController {
   readonly store = new Store<ManagersState>(initialManagersState);
   /** 一覧の読みの世代（絞りを変えたあとに戻ってきた古い応答を捨てる）。 */
@@ -353,7 +356,7 @@ export class ManagersController {
 
   /**
    * 追加指示を送る。結果（`outcome: detail`）はそのまま見せる。
-   * 送れたら true。送れなかった（失敗・前の操作が終わっていない）ら false — 呼び出し側は書いた文を残す（#3367）。
+   * 送れたら true。送れなかった（失敗・前の操作が終わっていない・届いていない／送らなかったと返された）ら false — 呼び出し側は書いた文を残す（#3367）。
    */
   async sendMessage(text: string): Promise<boolean> {
     const detail = this.store.getSnapshot().detail;
@@ -366,6 +369,7 @@ export class ManagersController {
     }
     const { id } = detail;
     this.setDetail(id, { busy: true, notice: '送っている…' });
+    let delivered: boolean;
     try {
       const result = await this.api.sendManagerMessage(id, text);
       // デーモンの応答の文字列。端末へ出る前に掃除する。
@@ -373,12 +377,14 @@ export class ManagersController {
         busy: false,
         notice: sanitizeForTerminal(`${result.outcome}: ${result.detail}`),
       });
+      // 200 でも `session_missing`（届いていない）・`declined`（送らなかった）は送れていない。文を残させる（#3487）。
+      delivered = DELIVERED_OUTCOMES.has(result.outcome);
     } catch (error) {
       this.setDetail(id, { busy: false, notice: `✗ ${messageOf(error)}` });
       return false;
     }
     await this.refreshDetail();
-    return true;
+    return delivered;
   }
 
   /** 詳細の最下行に一言出す（コマンドの案内など）。`null` で消す。 */
