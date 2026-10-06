@@ -74,6 +74,17 @@ export interface FakeApi extends TuiApi {
   /** 非 null なら `interrupt()` がこの理由で失敗する。 */
   interruptFails: string | null;
   conversations: ConversationSummary[];
+  /**
+   * 非 null なら `listConversations` が頁で返す（`nextCursor` は `page-N`、最後の頁は無し。#3643）。
+   * null なら `conversations` を 1 頁で全部返す（従来）。
+   */
+  conversationPages: ConversationSummary[][] | null;
+  /** 非 null なら、継続点つきの `listConversations` がこの理由で失敗する。 */
+  conversationPageFails: string | null;
+  /** 非 null なら、継続点つきの `listConversations` はこれが解けるまで返らない。 */
+  conversationPageGate: Promise<void> | null;
+  /** `listConversations` に渡された継続点（1 頁目は undefined）。 */
+  listCursors: (string | undefined)[];
   messages: Record<string, ConversationMessage[]>;
   /** 窓が日誌の先頭に届いていない会話の id。 */
   unreachedStart: Set<string>;
@@ -182,6 +193,10 @@ export function fakeApi(): FakeApi {
     interrupts: 0,
     interruptFails: null,
     conversations: [],
+    conversationPages: null,
+    conversationPageFails: null,
+    conversationPageGate: null,
+    listCursors: [],
     messages: {},
     unreachedStart: new Set(),
     conversationApprovals: {},
@@ -279,8 +294,27 @@ export function fakeApi(): FakeApi {
         yield step;
       }
     },
-    listConversations() {
-      return Promise.resolve({
+    async listConversations(cursor) {
+      api.listCursors.push(cursor);
+      if (cursor !== undefined) {
+        // 「もっと見る」の頁だけ、失敗と待ちを差し込める（実時間の待ちを書かないため）。
+        if (api.conversationPageGate !== null) await api.conversationPageGate;
+        if (api.conversationPageFails !== null) throw new Error(api.conversationPageFails);
+      }
+      // `conversationPages` が在れば継続点（`page-N`）で頁を引く。無ければ従来どおり 1 頁で全部。
+      const pages = api.conversationPages;
+      if (pages !== null) {
+        const index = cursor === undefined ? 0 : Number(cursor.replace('page-', ''));
+        const page = pages[index] ?? [];
+        return {
+          conversations: page,
+          scanned: page.length,
+          reachedStart: index + 1 >= pages.length,
+          hiddenByLimit: 0,
+          ...(index + 1 < pages.length ? { nextCursor: `page-${String(index + 1)}` } : {}),
+        };
+      }
+      return await Promise.resolve({
         conversations: api.conversations,
         scanned: api.conversations.length,
         reachedStart: true,
