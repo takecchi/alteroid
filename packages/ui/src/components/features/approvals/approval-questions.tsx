@@ -1,10 +1,10 @@
-import { useId, useState } from 'react';
+import { useId, useRef, useState } from 'react';
 
 import { Checkbox } from '@/components/ui/checkbox';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { useDisplayText } from '@/lib/display-text';
 
-import { Badge, Button, Input, Textarea } from '../../common';
+import { Badge, Button, Input, SubmitHint, Textarea } from '../../common';
 
 /** 設問の選択肢（API の `ApprovalOption` と同じ形。ui は logic を import しないので構造だけ持つ）。 */
 export interface ApprovalOptionView {
@@ -103,6 +103,7 @@ export function ApprovalQuestionsForm({
   const [drafts, setDrafts] = useState<Record<string, DraftOf>>({});
   const [supplement, setSupplement] = useState('');
   const supplementId = useId();
+  const formRef = useRef<HTMLFormElement>(null);
 
   function update(id: string, patch: (current: DraftOf) => DraftOf): void {
     setDrafts((current) => ({ ...current, [id]: patch(current[id] ?? EMPTY) }));
@@ -113,6 +114,7 @@ export function ApprovalQuestionsForm({
 
   return (
     <form
+      ref={formRef}
       className="mt-3 flex flex-col gap-4"
       onSubmit={(event) => {
         event.preventDefault();
@@ -138,6 +140,10 @@ export function ApprovalQuestionsForm({
           rows={2}
           value={supplement}
           disabled={busy}
+          maxHeight="10rem"
+          // ⌘/Ctrl + Enter は「回答」ボタンと同じ form の submit（空・送信中は送らない）。
+          onSubmitShortcut={() => formRef.current?.requestSubmit()}
+          submitDisabled={empty || busy}
           onChange={(event) => setSupplement(event.target.value)}
         />
       </div>
@@ -145,6 +151,7 @@ export function ApprovalQuestionsForm({
         <Button variant="primary" size="sm" type="submit" loading={busy} disabled={empty}>
           回答
         </Button>
+        <SubmitHint action="回答" />
         {empty && (
           <span className="text-[11px] text-muted-foreground">
             選ぶか書くかしてから送る（答えない設問があってもよい）

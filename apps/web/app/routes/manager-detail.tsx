@@ -14,9 +14,9 @@ import {
   ErrorNote,
   Input,
   isImeConfirmEnter,
-  isSubmitShortcut,
   KeyValueList,
   Spinner,
+  SubmitHint,
   Textarea,
 } from '@alteroid/ui';
 import {
@@ -1605,13 +1605,10 @@ function QuestionWaitingRow({
           placeholder="この質問への答えを、自分の言葉で書く"
           disabled={busy}
           onChange={(event) => setText(event.target.value)}
-          onKeyDown={(event) => {
-            // 長文になりうるので Enter は改行のまま。送信は Cmd/Ctrl+Enter。
-            if (isSubmitShortcut(event)) {
-              event.preventDefault();
-              submit();
-            }
-          }}
+          maxHeight="12rem"
+          // 長文になりうるので Enter は改行のまま。送信は ⌘/Ctrl + Enter（IME の変換中は送らない）。
+          onSubmitShortcut={submit}
+          submitDisabled={busy || text.trim() === ''}
         />
         <div className="mt-2 flex flex-wrap items-center gap-2">
           <Button
@@ -1623,7 +1620,7 @@ function QuestionWaitingRow({
           >
             送信
           </Button>
-          <span className="text-[11px] text-muted-foreground">⌘/Ctrl + Enter</span>
+          <SubmitHint action="送信" />
         </div>
       </div>
       <SendOutcomeNote note={note} />
