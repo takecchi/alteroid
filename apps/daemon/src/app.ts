@@ -81,6 +81,7 @@ import {
   reachedStart,
   droppedTraceLedgerSince,
   findUnrecordedManagers,
+  isReadableJournalTimeBoundary,
   describeUnreadableJournalTimeBoundary,
   guardArchiveRemoval,
   INBOX_EVENT_TYPE_ORDER,
@@ -5253,7 +5254,9 @@ export function createApp(deps: AppDeps) {
           '`ask_human` が積んだ承認待ち。既定では未回答のみ（`pending=false` で全部）。' +
           '行が読めない（版ずれ・手編集）承認待ちが在るときだけ、`unreadable`（id が取れれば id と' +
           '不正な欄名）が載る。**壊れた行であって、回答済みでも取り下げ済みでもない。**' +
-          '0件なら鍵ごと無い。窓（`limit`/`cursor`）や `conversationId` の絞りでは切らない（issue #2298）。' +
+          '0件なら鍵ごと無い。窓（`limit`/`cursor`）では切らない（issue #2298）。`conversationId` を渡すと、' +
+          '`unreadable` は生の行の `conversationId` がその会話と一致する行だけになる（会話の id すら読めない行と' +
+          'ほかの会話の壊れた行は載らない。全件は `conversationId` を渡さない呼びで見る。issue #3319）。' +
           '`order` / `limit` / `cursor` のいずれかを明示すると頁の封筒（`total` /' +
           '`nextCursor`）が応答へ載る。**明示しない既定の呼びは、この変更の前と応答が' +
           '1バイトも変わらない**（opt-in。`.claude/skills/listing-and-detail/SKILL.md`' +
@@ -5331,7 +5334,8 @@ export function createApp(deps: AppDeps) {
         // 絞ると、会話を開くたびの費用が承認の総数に比例する）。`pending` の直後、
         // `total` を数える前に当たる——`total` は「この呼びが対象にしている集合」の件数で
         // あって、絞り込みを当てる前の全件ではない（`pending` が既にそうしている）。
-        // `unreadable` は会話で絞られない（`JobStore.listApprovals` の doc）。
+        // `unreadable` も会話で絞られる（生の `conversationId` が一致する行だけ。#3319。
+        // `JobStore.listApprovals` の doc）。絞らない呼びは全件。
         const approvalList = await stores.jobs.listApprovals({
           pendingOnly: pending !== 'false',
           ...(conversationId === undefined ? {} : { conversationId }),
@@ -5389,8 +5393,8 @@ export function createApp(deps: AppDeps) {
         };
         // **読めない行は 1 件でも在るときだけ `unreadable` を載せる**（issue #2298）。
         // 0 件なら鍵ごと無い（「読めない行は 0 件」と読める空配列を作らず、既存の呼び手の
-        // 応答を1バイトも変えない）。窓（`limit`/`cursor`）でも `conversationId` の
-        // 絞りでも切らない——行が読めないので、どの会話のものかも分からない。
+        // 応答を1バイトも変えない）。窓（`limit`/`cursor`）では切らない。
+        // `conversationId` の絞りでは、生の行の `conversationId` が一致する行だけが来る（#3319）。
         if (approvalList.unreadable.length > 0) responseBody.unreadable = approvalList.unreadable;
         if (optedIn) {
           responseBody.total = total;
@@ -9540,12 +9544,12 @@ export function createApp(deps: AppDeps) {
             400,
           );
         }
-        if (before !== undefined && Number.isNaN(Date.parse(before))) {
+        if (before !== undefined && !isReadableJournalTimeBoundary(before)) {
+          // 存在しない日付・日付でない文字列を別の時刻として読んで消さない（#3358。#3287 と同じ3段）。
           return c.json(
             {
               error:
-                `before に渡された「${before}」は ISO8601 として読めない` +
-                '（例 2026-09-15T00:00:00.000Z）。**1件も消していない。**',
+                describeUnreadableJournalTimeBoundary('before', before) + '**1件も消していない。**',
             },
             400,
           );
@@ -9821,12 +9825,12 @@ export function createApp(deps: AppDeps) {
             400,
           );
         }
-        if (before !== undefined && Number.isNaN(Date.parse(before))) {
+        if (before !== undefined && !isReadableJournalTimeBoundary(before)) {
+          // 存在しない日付・日付でない文字列を別の時刻として読んで消さない（#3358。#3287 と同じ3段）。
           return c.json(
             {
               error:
-                `before に渡された「${before}」は ISO8601 として読めない` +
-                '（例 2026-09-15T00:00:00.000Z）。**1件も消していない。**',
+                describeUnreadableJournalTimeBoundary('before', before) + '**1件も消していない。**',
             },
             400,
           );

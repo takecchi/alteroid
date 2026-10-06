@@ -145,6 +145,28 @@ describe('/access 画面 — 一覧', () => {
     expect(screen.getByRole('alert')).toBeTruthy();
   });
 
+  it('取得が失敗したら「もう一度試す」が出て、押すと取り直して一覧が出る（#3420）', async () => {
+    let failing = true;
+    stubFetch((url) => {
+      if (url.includes('/access')) {
+        return failing
+          ? json({ error: 'boom' }, 500)
+          : json({ accounts: [account({ email: 'retry@example.com' })] });
+      }
+      return undefined;
+    });
+
+    await renderAccess();
+
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toContain('アクセス許可の一覧を読み込めませんでした');
+    failing = false;
+    fireEvent.click(within(alert).getByRole('button', { name: 'もう一度試す' }));
+
+    await waitFor(() => expect(screen.getAllByText('retry@example.com').length).toBeGreaterThan(0));
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
   it('grantedBy が operator なら「実行環境の持ち主」と出す。伝播した許可はアカウント id をそのまま出す', async () => {
     stubAccess({
       body: {

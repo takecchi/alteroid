@@ -13,10 +13,12 @@ import type { Stores } from './store.js';
  * - 一致は**完全一致**（前方一致・大小無視・`LIKE` のワイルドカードにならない）。会話 id を
  *   持たない承認は、どの会話にも一致しない。
  * - NUL を含む会話 id は、投げずに「一致なし」になる。
- * - `unreadable` は絞らない（絞った呼びでも、絞らない呼びと同じ）。
+ * - 会話で絞った `unreadable` は、絞らない呼びの `unreadable` の部分集合である（#3319。
+ *   生の `conversationId` が一致する行だけ。インメモリは常に空）。
  *
- * 読めない行（壊れた jsonb）の入れ方は実装ごとに違うので、ここでは測らない
- * （`apps/daemon/src/approval-conversation-filter.test.ts` が fs / pg で測る）。
+ * 読めない行（壊れた jsonb）の入れ方は実装ごとに違うので、中身はここでは測らない
+ * （fs / pg の `approval-conversation-filter-contract.test.ts` と
+ * `apps/daemon/src/approval-conversation-filter.test.ts` が測る）。
  *
  * ## 呼び方
  * **空の器に対して呼ぶこと**（承認は消さずに足すだけ）。vitest に依存しない素の非同期関数
@@ -94,8 +96,9 @@ export async function verifyApprovalConversationFilterContract(stores: Stores): 
       if (JSON.stringify(filtered.entries) !== JSON.stringify(reference)) {
         fail(`${label}: 絞らない結果を一致で絞ったものと違う`);
       }
-      if (JSON.stringify(filtered.unreadable) !== JSON.stringify(unfiltered.unreadable)) {
-        fail(`${label}: unreadable が絞られた`);
+      const all = JSON.stringify(unfiltered.unreadable);
+      if (filtered.unreadable.some((u) => !all.includes(JSON.stringify(u)))) {
+        fail(`${label}: unreadable が絞らない呼びの部分集合でない`);
       }
     }
   }

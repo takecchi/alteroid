@@ -89,9 +89,19 @@ const commonFields = {
   alwaysLoad: z.boolean().optional(),
 };
 
+/**
+ * **NUL だけの値は空と同じ（issue #3361）。** `prepareMcpServersForWrite` が NUL を落とした後に
+ * 空になるので、落とした後の形で入口が断る（`PUT /mcp-servers` の入口・ストアの `parseMcpServers` が同じ
+ * スキーマを通る）。入口で断れば、日誌に「差し替えようとしている」を積む前に 400 で返せる。
+ */
+const nonEmptyAfterNul = z
+  .string()
+  .min(1)
+  .refine((value) => stripNul(value).length > 0, { message: 'NUL（\\u0000）だけの値は空と同じ' });
+
 export const mcpStdioServerConfigSchema = z.strictObject({
   type: z.literal('stdio').optional(),
-  command: z.string().min(1),
+  command: nonEmptyAfterNul,
   args: z.array(z.string()).optional(),
   env: stringMapSchema.optional(),
   ...commonFields,
@@ -99,14 +109,14 @@ export const mcpStdioServerConfigSchema = z.strictObject({
 
 export const mcpHttpServerConfigSchema = z.strictObject({
   type: z.literal('http'),
-  url: z.string().min(1),
+  url: nonEmptyAfterNul,
   headers: stringMapSchema.optional(),
   ...commonFields,
 });
 
 export const mcpSseServerConfigSchema = z.strictObject({
   type: z.literal('sse'),
-  url: z.string().min(1),
+  url: nonEmptyAfterNul,
   headers: stringMapSchema.optional(),
   ...commonFields,
 });

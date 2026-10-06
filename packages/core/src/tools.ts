@@ -83,6 +83,7 @@ import {
 } from './dropped-record.js';
 import { collapseErrorCause } from './error-cause.js';
 import { renderApprovalTrace, traceApproval } from './approval-trace.js';
+import { stripNulDeep } from './nul-guard.js';
 import { validatePermissionRequest } from './permission-rule.js';
 import { encodeRunnerCursor, resolveRunnerCursor } from './runner-cursor.js';
 import { encodeTokenCursor, resolveTokenCursor } from './token-cursor.js';
@@ -2400,6 +2401,10 @@ function describePracticeKindViolation(
 ): string | null {
   if (value === undefined) return null;
   if (practiceKindSchema.safeParse(value).success) return null;
+  // NUL だけの値（issue #3361）。長さは範囲内なので、範囲の文では理由が読めない。
+  if (value.length > 0 && stripNul(value).length === 0) {
+    return `${field} は使えない（NUL（\\u0000）だけの値は空と同じ。${formatPracticeKindRangeJa()}のみ）。`;
+  }
   return `${field} は使えない（${formatPracticeKindRangeJa()}のみ）。`;
 }
 
@@ -7088,7 +7093,12 @@ export function createCloneTools(context: ToolContext) {
           .describe('この規則が拒むべき具体的なコマンド例（1件以上、1件も規則に一致しないこと）'),
         reason: z.string().describe('なぜこの許可が要るか。人間が承認画面で読む理由文'),
       },
-      async ({ rule, allows, denies, reason }) => {
+      async (args) => {
+        // **検算は、承認の行に残る値と同じもので行う（#3386）。** 承認の行は `putApproval` の入口で
+        // NUL を落として残す（`stripNulDeep`）ので、落とす前の値で検算すると、通ったはずの要求が
+        // 残った値では自己矛盾する（denies の例が規則に一致する・規則が `Bash()` になる）。
+        // 質問文・`permissionRequest`・検算の3つが同じ値を見るよう、入口で1度だけ落とす。
+        const { rule, allows, denies, reason } = stripNulDeep(args);
         const validation = validatePermissionRequest({ rule, allows, denies });
         if (!validation.ok) {
           return text(
@@ -13453,10 +13463,11 @@ export function createCloneTools(context: ToolContext) {
               '**1件も消していない。**',
           );
         }
-        if (before !== undefined && Number.isNaN(Date.parse(before))) {
+        // 存在しない日付（`2026-02-31` は V8 が 3/3 へずらす）や日付でない文字列（`foo 1`）を
+        // 別の時刻として読んで**消す**ので、#3287 の3段で検める（#3358）。
+        if (before !== undefined && !isReadableJournalTimeBoundary(before)) {
           return text(
-            `before に渡された「${before}」は ISO8601 として読めない` +
-              '（例 2026-09-15T00:00:00.000Z）。**1件も消していない。**',
+            describeUnreadableJournalTimeBoundary('before', before) + '**1件も消していない。**',
           );
         }
         // **issue #1720（#1651/#1689 の揃え漏れ）。**

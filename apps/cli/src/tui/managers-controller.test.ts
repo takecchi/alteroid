@@ -193,12 +193,31 @@ describe('詳細', () => {
       a.managerRows = [managerRow('a')];
     });
     await controller.open('a');
-    await controller.sendMessage('やって');
+    expect(await controller.sendMessage('やって')).toBe(true);
     expect(api.managerMessages).toEqual([{ id: 'a', text: 'やって' }]);
     expect(state().detail?.notice).toBe('delivered: 追加指示として届けた。');
     api.sendManagerMessage = () => Promise.reject(new Error('送れない'));
-    await controller.sendMessage('もう一度');
+    expect(await controller.sendMessage('もう一度')).toBe(false);
     expect(state().detail?.notice).toBe('✗ 送れない');
+  });
+
+  it('busy のときは送らず false を返し、「送信中」と言う（黙って捨てない。#3367）', async () => {
+    const { api, controller, state } = setup((a) => {
+      a.managerRows = [managerRow('a')];
+    });
+    await controller.open('a');
+    const g = gate();
+    api.sendManagerMessage = async (id, text) => {
+      api.managerMessages.push({ id, text });
+      await g.wait;
+      return { outcome: 'delivered', detail: 'ok' };
+    };
+    const first = controller.sendMessage('一つ目');
+    expect(await controller.sendMessage('二つ目')).toBe(false);
+    expect(state().detail?.notice).toContain('送信中');
+    expect(api.managerMessages).toEqual([{ id: 'a', text: '一つ目' }]);
+    g.open();
+    expect(await first).toBe(true);
   });
 
   it('停止は askStop → confirmStop の順でしか呼ばれない', async () => {
@@ -270,7 +289,14 @@ describe('表示の文言', () => {
     expect(detailStatusText({ ...base, confirmStop: true, notice: 'n' }, 3).text).toContain(
       '止める?',
     );
-    expect(detailStatusText({ ...base, notice: 'n', error: 'e' }, 3).text).toBe('n');
+    // 操作結果は、取り直しの失敗と窓の外の行数を隠さない（#3368）。
+    const both = detailStatusText({ ...base, notice: 'n', error: 'e' }, 3);
+    expect(both.text).toContain('n');
+    expect(both.text).toContain('取り直せなかった: e');
+    expect(both.text).toContain('あと 3 行');
+    expect(both.tone).toBe('warn');
+    expect(detailStatusText({ ...base, notice: 'n' }, 0).text).toBe('n');
+    expect(detailStatusText({ ...base, notice: 'n' }, 3).text).toContain('あと 3 行');
     expect(detailStatusText({ ...base, error: 'e' }, 3).text).toContain('e');
     expect(detailStatusText(base, 3).text).toContain('あと 3 行');
     expect(detailStatusText(base, 0).text).toBe(' ');

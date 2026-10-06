@@ -1,4 +1,5 @@
 import { SettingsTabs } from '~/components/group-tabs';
+import { LoadError } from '~/components/load-error';
 import { settingsDocumentTitle } from '~/lib/nav';
 import { useState } from 'react';
 
@@ -72,7 +73,7 @@ import { UnreadableRowsNote } from '~/components/unreadable-rows-note';
  * には無い。**このことを「解消した」と読まないこと**。
  */
 export default function Access() {
-  const { data, error, isLoading } = useAccess();
+  const { data, error, isLoading, isValidating, mutate } = useAccess();
   const removeUnreadable = useRemoveUnreadableAccounts();
 
   return (
@@ -88,7 +89,14 @@ export default function Access() {
           subtitle="許可されているアカウント"
           action={data === undefined ? undefined : <Badge>{data.accounts.length}</Badge>}
         />
-        <ErrorNote error={error} className="m-4" />
+        {/* 一覧が既に読めていれば、取り直しの失敗でも下の一覧は残す（data があるときは中身を消さない）。 */}
+        <LoadError
+          what="アクセス許可の一覧"
+          error={error}
+          onRetry={() => mutate()}
+          retrying={isValidating}
+          className="m-4"
+        />
         {/* 読めない行は一覧の前に言う（issue #2536。0件なら鍵ごと無いので何も出ない）。 */}
         {data?.rowsUnreadable !== undefined && (
           <UnreadableRowsNote

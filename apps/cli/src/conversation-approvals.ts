@@ -167,7 +167,8 @@ export function approvalNoticeLines(read: ConversationApprovalsRead): string[] {
       .filter((id): id is string => id !== undefined);
     lines.push(
       `（読めない承認待ちが ${read.unreadable.length} 件あります${ids.length === 0 ? '' : `（id: ${ids.join(', ')}）`}。` +
-        '壊れた行であって、回答済み・取り下げ済みではありません。この会話のものかも判定できません）',
+        '壊れた行であって、回答済み・取り下げ済みではありません。この会話の id が書かれている行だけを数えています' +
+        '（会話の id すら読めない行と、ほかの会話の壊れた行はここに出ません。承認の画面で全件見られます）',
     );
   }
   return lines;

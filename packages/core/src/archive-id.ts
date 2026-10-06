@@ -1,3 +1,5 @@
+import { compareIsoInstant } from './iso-instant.js';
+
 /**
  * `TranscriptArchive.archive()` の id の形（`packages/storage-fs/src/archive.ts`
  * の `archiveIdCandidate` / `packages/storage-pg/src/archive.ts` の
@@ -109,7 +111,10 @@ export function compareArchiveEntriesNewestFirst(
   a: { readonly sessionId: string; readonly at: string; readonly id: string },
   b: { readonly sessionId: string; readonly at: string; readonly id: string },
 ): number {
-  if (a.at !== b.at) return a.at < b.at ? 1 : -1;
+  // **実時刻で比べる**（#3360）。`at` はオフセット表記もありうるので、文字列では並びが狂う。
+  // 同じ瞬間なら下の2次キーへ進む（同じ文字列のときと同じ順）。
+  const byInstant = compareIsoInstant(b.at, a.at);
+  if (byInstant !== 0) return byInstant;
   if (a.sessionId === b.sessionId) {
     const branchDiff = archiveIdBranch(b.id) - archiveIdBranch(a.id);
     if (branchDiff !== 0) return branchDiff;

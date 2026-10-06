@@ -10,6 +10,7 @@ import {
   ApprovalQuestionsForm,
   type ApprovalQuestionView,
   type ApprovalQuestionsAnswer,
+  type ApprovalQuestionsDraft,
 } from './approval-questions';
 
 export type ApprovalState = 'unanswered' | 'answered' | 'withdrawn';
@@ -62,6 +63,8 @@ export function ApprovalCard({
   questions,
   questionsSummary,
   onSubmitQuestions,
+  questionsDraft,
+  onQuestionsDraftChange,
 }: {
   state: ApprovalState;
   /** `time` を渡すときは要らない（渡しても使わない）。 */
@@ -95,9 +98,19 @@ export function ApprovalCard({
   questionsSummary?: string;
   /** 設問のフォームの「回答」で呼ぶ。 */
   onSubmitQuestions?: (answer: ApprovalQuestionsAnswer) => void;
+  /**
+   * 設問のフォームの書きかけを呼ぶ側が持つとき（`ApprovalQuestionsForm` の `draft`）。書きかけが
+   * あるカードは、描き直されても開いた状態から始まる（書いたものが隠れて見えなくならない）。
+   */
+  questionsDraft?: ApprovalQuestionsDraft;
+  onQuestionsDraftChange?: (draft: ApprovalQuestionsDraft) => void;
 }) {
   const { body } = useDisplayText();
-  const [questionsOpen, setQuestionsOpen] = useState(false);
+  const [questionsOpen, setQuestionsOpen] = useState(
+    () =>
+      questionsDraft !== undefined &&
+      (questionsDraft.supplement !== '' || Object.keys(questionsDraft.drafts).length > 0),
+  );
   const hasQuestions = questions !== undefined && questions.length > 0;
   return (
     <Card className="p-4">
@@ -219,6 +232,9 @@ export function ApprovalCard({
               questions={questions}
               busy={busy}
               onSubmit={(answer) => onSubmitQuestions?.(answer)}
+              {...(questionsDraft === undefined || onQuestionsDraftChange === undefined
+                ? {}
+                : { draft: questionsDraft, onDraftChange: onQuestionsDraftChange })}
             />
           </div>
         </div>
