@@ -326,3 +326,98 @@ describe('載せきれなかった委譲・読めない委譲', () => {
     ).toBe('/managers');
   });
 });
+
+/**
+ * 外部サービス（連携の鍵）の札と線（Issue #3676）。**札は `snapshot.externals` からだけ作る**。
+ * 版ずれ（古いデーモンが載せない・新しいデーモンが知らない key を返す）で落ちず、他の線を壊さない。
+ */
+describe('外部サービス（連携の鍵）', () => {
+  const external = (keyId: string, name: string, lastAt: string) => ({
+    keyId,
+    name,
+    source: 'github',
+    lastAt,
+  });
+  const pulses = (key: string) =>
+    mapCard().querySelectorAll(`[data-edge="${key}"] animateMotion`).length;
+
+  it('連携の鍵で受けた呼び出しは、その札と外部 → クローンの線を光らせ、窓（5秒）を過ぎたら消える', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'] });
+    vi.setSystemTime(new Date('2026-08-14T09:00:00.000Z'));
+
+    renderHome({
+      topology: {
+        frames: [
+          snapshotOf({
+            observedAt: '2026-08-14T09:00:00.000Z',
+            externals: [
+              external('k1', 'GitHub 連携', '2026-08-14T08:59:59.000Z'),
+              external('k2', 'CI', '2026-08-14T08:50:00.000Z'),
+            ],
+            links: [
+              { key: 'external:k1~clone', lastDownAt: '2026-08-14T08:59:59.000Z' },
+              { key: 'external:k2~clone', lastDownAt: '2026-08-14T08:50:00.000Z' },
+            ],
+          }),
+        ],
+      },
+    });
+
+    // 札は状態を言わない（外部サービスの状態は観測していない）。
+    expect(
+      await within(mapCard()).findByRole('button', { name: '外部サービス GitHub 連携' }),
+    ).toBeTruthy();
+    expect(node(/^外部サービス CI$/)).toBeTruthy();
+    await waitFor(() => expect(pulses('x-external:k1')).toBeGreaterThan(0));
+    expect(pulses('x-external:k2')).toBe(0);
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    await waitFor(() => expect(pulses('x-external:k1')).toBe(0));
+  });
+
+  it('上限を超えた分は「ほか N 件」の札になる', async () => {
+    renderHome({
+      topology: {
+        frames: [
+          snapshotOf({
+            externals: [external('k1', 'GitHub 連携', '2026-08-14T08:50:00.000Z')],
+            externalsOmitted: 3,
+          }),
+        ],
+      },
+    });
+
+    expect(
+      await within(mapCard()).findByRole('button', { name: '外部サービス ほか 3 件' }),
+    ).toBeTruthy();
+  });
+
+  it('古いデーモン（externals を載せない）では外部の札を出さず、他の札は今までどおり', async () => {
+    renderHome({ topology: { frames: [snapshotOf({ managers: [manager()] })] } });
+
+    await within(mapCard()).findByRole('button', { name: /マネージャー abcdef12/ });
+    expect(within(mapCard()).queryByRole('button', { name: /外部サービス/ })).toBeNull();
+  });
+
+  it('新しいデーモンが知らない key の線を返しても落ちず、札も作らない（他の線は光る）', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'] });
+    vi.setSystemTime(new Date('2026-08-14T09:00:00.000Z'));
+    renderHome({
+      topology: {
+        frames: [
+          snapshotOf({
+            observedAt: '2026-08-14T09:00:00.000Z',
+            links: [
+              { key: 'external:ghost~clone', lastDownAt: '2026-08-14T08:59:59.000Z' },
+              { key: 'future-kind~clone', lastDownAt: '2026-08-14T08:59:59.000Z' },
+              { key: 'human~clone', lastDownAt: '2026-08-14T08:59:59.000Z' },
+            ],
+          }),
+        ],
+      },
+    });
+
+    await waitFor(() => expect(pulses('human')).toBeGreaterThan(0));
+    expect(within(mapCard()).queryByRole('button', { name: /外部サービス/ })).toBeNull();
+  });
+});

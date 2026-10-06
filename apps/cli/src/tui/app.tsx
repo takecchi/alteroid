@@ -13,7 +13,7 @@ import { redactedErrorMessage } from '../redact.js';
 import { parseJournalSearchTokens } from '../chat.js';
 import type { ConversationSummary, TuiApi } from './api.js';
 import type { ChatController } from './chat-controller.js';
-import type { ApprovalsController } from './approvals-controller.js';
+import { isOpen, type ApprovalsController } from './approvals-controller.js';
 import {
   AnsweredDatesList,
   AnsweredDayList,
@@ -271,6 +271,8 @@ export const App: FC<AppProps> = ({
   const quittingRef = useRef(false);
   /** 委譲の詳細で、書きかけを捨てて戻る 2 度目の Esc を待っている（#3367）。 */
   const mgrDiscardArmedRef = useRef(false);
+  /** 承認待ちの詳細で、答えるフォームの書きかけを捨てて戻る 2 度目の Esc を待っている。 */
+  const apDiscardArmedRef = useRef(false);
   /**
    * 書きかけが在るまま、2 度目の終了（Ctrl+D か `/exit`。捨てて終了）を待っている（#3490・#3518）。
    * 1 度目の時点の書きかけ（会話・委譲・承認待ち）の写し。待っていなければ null。
@@ -678,6 +680,7 @@ export const App: FC<AppProps> = ({
     }
     const detail = state.detail;
     if (detail === null) return false;
+    if (!key.escape) apDiscardArmedRef.current = false;
     if (detail.mode === 'confirm') {
       if (input === 'y') {
         void approvals.confirmSend().then((sent) => {
@@ -705,6 +708,15 @@ export const App: FC<AppProps> = ({
     }
     const step = pageStep(apLogHeight);
     if (key.escape) {
+      // 答えるフォームの書きかけは黙って捨てない。1 度目の Esc は残して言い、もう一度押したら捨てて戻る（委譲の #3367 と同じ）。
+      if (approvals.hasDraft() && !apDiscardArmedRef.current) {
+        apDiscardArmedRef.current = true;
+        approvals.setNotice(
+          '答えるフォームに書きかけが残っている。もう一度 Esc で捨てて戻る（a で続きを書く）',
+        );
+        return true;
+      }
+      apDiscardArmedRef.current = false;
       setApAnchor(apLogHeight);
       setApBuffer(emptyBuffer());
       approvals.back();
@@ -995,7 +1007,7 @@ export const App: FC<AppProps> = ({
                   ? HINT_AP_INPUT
                   : ap.detail?.mode === 'form'
                     ? HINT_AP_FORM
-                    : approvalDetailHint(ap.detailFrom)
+                    : approvalDetailHint(ap.detailFrom, isOpen(ap.detail?.approval ?? null))
         : tab === 'journal'
           ? jr.view === 'filter'
             ? HINT_JOURNAL_FILTER

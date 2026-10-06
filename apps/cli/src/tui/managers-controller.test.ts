@@ -130,6 +130,30 @@ describe('一覧', () => {
     await controller.loadOlder();
     expect(state().list.items.length).toBeGreaterThan(MANAGERS_PAGE);
   });
+
+  it('古い側を読んでいる最中の先頭からの読み直しが失敗しても、読み込み中のまま止まらない', async () => {
+    const { api, controller, state } = setup((a) => {
+      a.managerRows = Array.from({ length: 60 }, (_, i) => managerRow(`m${String(100 - i)}`));
+    });
+    await controller.loadList();
+    const slow = gate();
+    const original = api.listManagers.bind(api);
+    api.listManagers = async (query) => {
+      if (query.after !== undefined) await slow.wait;
+      return original(query);
+    };
+    const pending = controller.loadOlder();
+    expect(state().list.olderLoading).toBe(true);
+    api.managerListFails = '繋がらない';
+    await controller.loadList(); // 読み足しの応答待ちの間に、先頭からの読み直しが失敗する
+    api.managerListFails = null;
+    // 読み足しの応答は世代違いで捨てられるので、立てた印を戻すのは失敗した側の仕事。
+    expect(state().list.status).toBe('error');
+    expect(state().list.olderLoading).toBe(false);
+    slow.open();
+    await pending;
+    expect(state().list.olderLoading).toBe(false);
+  });
 });
 
 describe('一覧の見出し', () => {
@@ -266,6 +290,36 @@ describe('詳細', () => {
     controller.askStop();
     await controller.confirmStop();
     expect(state().detail?.notice).toBe('stopped: 止めた');
+  });
+
+  it('取り直しが並行したとき、先に始めた遅い応答が後から始めた応答を上書きしない', async () => {
+    const { api, controller, state, sleep } = setup((a) => {
+      a.managerRows = [managerRow('a', { status: 'running' })];
+    });
+    controller.enter();
+    await sleep(10);
+    await controller.open('a');
+    expect(state().detail?.manager?.status).toBe('running');
+
+    // 1 本目（遅い・古い状態）と 2 本目（速い・新しい状態）。応答の順序はゲートで決める。
+    const slow = gate();
+    const original = api.readManager.bind(api);
+    let calls = 0;
+    api.readManager = async (id) => {
+      calls += 1;
+      if (calls === 1) {
+        await slow.wait;
+        return managerRow('a', { status: 'running' });
+      }
+      return original(id);
+    };
+    api.managerRows = [managerRow('a', { status: 'done' })];
+    const first = controller.refreshDetail();
+    await controller.refreshDetail();
+    expect(state().detail?.manager?.status).toBe('done');
+    slow.open();
+    await first;
+    expect(state().detail?.manager?.status).toBe('done');
   });
 });
 

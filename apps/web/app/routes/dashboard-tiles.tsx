@@ -53,12 +53,20 @@ export function HomeTiles() {
   );
 }
 
-/** 数が欠けうるか（読めなかった行・刈られた行・読めなかった作業）。欠けうるなら下限として言う。 */
+/** 数が欠けうるか（読めなかった行・読めなかった作業）。刈られた完了済みの行は未了の数に影響しないので入れない。欠けうるなら下限として言う。 */
 function progressPartial(progress: Progress): boolean {
   const { completeness } = progress.backlog;
   // 読めない作業の行（#2345）は古いデーモンだと欄が無い。無いことは 0 件ではないが、言えることが無い。
   const unreadableJobs = (completeness as { unreadableJobs?: number }).unreadableJobs ?? 0;
-  return completeness.unreadable !== 0 || completeness.trimmedClosed !== 0 || unreadableJobs !== 0;
+  return completeness.unreadable !== 0 || unreadableJobs !== 0;
+}
+
+/**
+ * 窓の中で閉じた件数を、刈られた完了済みの行のぶん数え落としうるか（#3698）。真なら件数は下限。
+ * 古いデーモンだと欄が無い。無いときは何も言わない。
+ */
+function closedUndercounted(progress: Progress): boolean {
+  return (progress.throughput as { mayBeUndercounted?: boolean }).mayBeUndercounted === true;
 }
 
 /** 窓の時間数を、日で割り切れるときは日で言う（168 時間 → 7 日）。 */
@@ -103,7 +111,7 @@ function ProgressTile() {
             label="実行中の任せた作業"
             value={String(data.inProgress.running)}
             unit="件"
-            hint={`未了の仕事 ${data.backlog.total} 件・直近 ${windowText(data.window.hours)}で閉じた仕事 ${data.throughput.commitmentsClosed} 件`}
+            hint={`未了の仕事 ${data.backlog.total} 件・直近 ${windowText(data.window.hours)}で閉じた仕事 ${data.throughput.commitmentsClosed} 件${closedUndercounted(data) ? '以上' : ''}`}
           />
           {progressPartial(data) ? (
             // 数が下限でしかないときは「無い」と言い切らない（issue #3538）。下限の注記だけにする。

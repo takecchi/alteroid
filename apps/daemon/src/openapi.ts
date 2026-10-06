@@ -1989,8 +1989,32 @@ const topologyManagerSchema = z.object({
   workers: z.array(topologyWorkerSchema),
 });
 
+/**
+ * 外部サービスの札（連携の鍵1本ぶん。Issue #3676）。**連携の鍵（`altk_`）で `POST /events` /
+ * `POST /events/:source` を呼んだものだけ**（`via` の無い外部イベントは載らない）。
+ */
+const topologyExternalSchema = z.object({
+  /** 連携の鍵の id（鍵の値ではない）。線の key `external:<keyId>~clone` の `<keyId>`。 */
+  keyId: z.string(),
+  /** 鍵の名前（人間が付けた名前。最後に観測した呼び出しのときのもの）。 */
+  name: z.string(),
+  /** 鍵が固定されている source。 */
+  source: z.string(),
+  /**
+   * 最後に受け付けた時刻（デーモンが受信箱へ積んだ時刻）。**クローンが取り出して処理した
+   * 時刻ではない**——クローンがターンの途中・枠の上限で止まっていても、受け付けた時点で載る。
+   * デーモンのメモリにだけ在り、再起動で消える（無いことは「呼ばれていない」とは限らない）。
+   */
+  lastAt: isoDateTimeSchema,
+});
+
 const topologyLinkSchema = z.object({
-  /** `human~clone` / `clone~storage` / `clone~manager:<id>` / `manager:<id>~worker:<type>` */
+  /**
+   * `human~clone` / `clone~storage` / `clone~manager:<id>` / `manager:<id>~worker:<type>` /
+   * `external:<keyId>~clone`（連携の鍵 → クローン。`down` だけ）/
+   * `external-others~clone`（`externals` に載せなかった連携の鍵をまとめた線。`down` だけ）。
+   * **知らない key は読み手が無視する**（版ずれ）。
+   */
   key: z.string(),
   lastDownAt: isoDateTimeSchema.optional(),
   lastUpAt: isoDateTimeSchema.optional(),
@@ -2025,6 +2049,16 @@ export const topologyResponseSchema = z.object({
    * （`managersOmitted` の対象は読めた行だけ）。`GET /topology/stream` の `snapshot` にも載る。
    */
   unreadable: z.array(unreadableJobSchema).optional(),
+  /**
+   * 外部サービスの札（Issue #3676）。**デーモンが起きてから観測した、直近10分以内に連携の鍵で
+   * 呼ばれたものだけ**（日誌を読み戻さない・窓を過ぎれば消える）。**1件でも在るときだけ載る**——
+   * 欄が無いことは「呼ばれていない」ではなく「観測していない」でありうる（古いデーモンも同じく
+   * 載せない）。上限を超えた分は `externalsOmitted` が件数を言い、その分の呼び出しは線
+   * `external-others~clone` へまとまる。
+   */
+  externals: z.array(topologyExternalSchema).optional(),
+  /** 上限を超えて札にしなかった連携の鍵の件数（超えていなければ無い）。 */
+  externalsOmitted: z.number().int().positive().optional(),
   links: z.array(topologyLinkSchema),
 });
 
@@ -2563,10 +2597,14 @@ const progressForecastBasisSchema = z.object({
  *   記録した数を repo ごとに返すだけで、値は申告である（`observedBy` を必ず付ける）。記録が
  *   無ければ `state: 'not_observed'`（0 件ではない）。`latestOk` / `latestFailed` は repo ごとの
  *   最新の成功・失敗で、失敗の回に数は無い。**古さは判定しない**（`observedAt` をそのまま返す）。
- * - `backlog.completeness`: 0 でなければ `backlog` と `throughput` の数は欠けうる。
- *   `unreadable` / `trimmedClosed` は台帳の行、`unreadableJobs` は委譲の行（issue #2345）で、
- *   0 でなければ `backlog.byState.delegated`・`inProgress`・`throughput.delegationsEnded` は
- *   読めた委譲の分しか数えていない。
+ * - `backlog.completeness`: `unreadable` は台帳の行、`unreadableJobs` は委譲の行（issue #2345）。
+ *   `unreadable` が 0 でなければ `backlog` の数は欠けうる。`unreadableJobs` が 0 でなければ
+ *   `backlog.byState.delegated`・`inProgress`・`throughput.delegationsEnded` は読めた委譲の分しか
+ *   数えていない。**`trimmedClosed`（刈られた片付き行の累計）は `backlog` の数には効かない**
+ *   （刈られるのは片付き行だけ）。
+ * - `throughput.mayBeUndercounted`: 真のとき `commitmentsOpened` / `commitmentsClosed` は
+ *   刈られた片付き行のぶん数え落としうる（「少なくともこれだけ」）。`forecast` の
+ *   `history_incomplete` と同じ条件を、見込みの判定順とは独立に計算した値。
  * - `inProgress.lastReport.oldestAt` / `newestAt`: 報告が1件も無いとき `null`（0 の
  *   代わりの値は作らない）。報告の無い走行は `withoutReport` に数える。
  */
@@ -2617,6 +2655,7 @@ export const progressResponseSchema = z.object({
   throughput: z.object({
     commitmentsOpened: progressCount,
     commitmentsClosed: progressCount,
+    mayBeUndercounted: z.boolean(),
     delegationsEnded: z.object({ count: progressCount, basis: z.literal('updatedAt') }),
   }),
   forecast: z.discriminatedUnion('state', [
