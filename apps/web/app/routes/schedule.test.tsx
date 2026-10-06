@@ -852,9 +852,11 @@ describe('書きかけの依頼を確認なしで消さない（#3374）', () =>
     await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
     expect(screen.queryByRole('group', { name: `${OTHER_ENTRY.kind} を編集` })).toBeNull();
     expect(
-      (within(screen.getByRole('group', { name: `${SPEC_ENTRY.kind} を編集` })).getByPlaceholderText(
-        /依頼の本文/,
-      ) as HTMLTextAreaElement).value,
+      (
+        within(
+          screen.getByRole('group', { name: `${SPEC_ENTRY.kind} を編集` }),
+        ).getByPlaceholderText(/依頼の本文/) as HTMLTextAreaElement
+      ).value,
     ).toBe('書きかけ');
   });
 

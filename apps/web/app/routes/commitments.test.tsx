@@ -1497,7 +1497,9 @@ describe('本文の編集: 書きかけがあるときだけ、やめる前に�
 
     fireEvent.click(screen.getByRole('button', { name: button }));
 
-    await waitFor(() => expect(screen.queryByRole('button', { name: /の編集をやめる$/ })).toBeNull());
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: /の編集をやめる$/ })).toBeNull(),
+    );
     expect(screen.queryByRole('alertdialog')).toBeNull();
   });
 
