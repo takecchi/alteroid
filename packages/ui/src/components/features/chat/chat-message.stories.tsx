@@ -77,6 +77,24 @@ export const Versions: Story = {
   },
 };
 
+/** 古い版の後ろの往復に、折り返せない長い一語（URL など）が入っても、はみ出さない。 */
+export const VersionsLongWord: Story = {
+  args: { role: 'human', text: '' },
+  render: () => (
+    <ChatMessage
+      role="human"
+      text="資料は明日まで。"
+      versions={{
+        index: 0,
+        total: 2,
+        onPrevious: () => undefined,
+        onNext: () => undefined,
+        hidden: [{ role: 'clone', text: `https://example.com/${'a'.repeat(160)}` }],
+      }}
+    />
+  ),
+};
+
 export const Editing: Story = {
   args: { role: 'human', text: '' },
   render: function Render() {

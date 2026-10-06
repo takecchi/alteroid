@@ -41,14 +41,16 @@ export default function AttachmentTray({
   disabled?: boolean;
 }) {
   return (
-    <ul aria-label="添付" className="mb-2 flex flex-wrap gap-2">
+    <ul aria-label="添付" className="mb-2 flex max-h-[30dvh] flex-wrap gap-2 overflow-y-auto">
       {attachments.map((item) => (
         <li
           key={item.key}
           className="flex max-w-full items-center gap-2 rounded-md border border-border bg-card px-2 py-1 text-xs"
         >
           {item.preview !== undefined && <Thumbnail blob={item.preview} name={item.name} />}
-          <span className="min-w-0 truncate">{item.name}</span>
+          <span className="min-w-0 truncate" title={item.name}>
+            {item.name}
+          </span>
           <span className="shrink-0 text-muted-foreground" data-numeric>
             {item.sizeLabel}
           </span>
