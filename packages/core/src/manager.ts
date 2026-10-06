@@ -2848,6 +2848,41 @@ function workspaceLocatorFrom(
   }
 }
 
+/** 移送で `runner-volume` を `unknown` へ落とすときの理由（Issue #3099 / #207）。 */
+const RELOCATED_WORKSPACE_REASON =
+  '別の runner へ移送した。移送で workspace の中身は運ばれていない（元の runner の volume に在った作業は、' +
+  '移送先には無い）ので、移送先の volume に残ると言えない。';
+
+/**
+ * **別の runner へ移した後の locator**（Issue #3099）。`job.runnerId` を付け替える箇所で、cwd が
+ * 変わったかどうかに関係なく呼ぶ。
+ *
+ * - `unknown`: `runnerId` を移送先へ付け替える（`runnerId` と `path` は確かめずに言える。`schema.ts`）。
+ * - `runner-volume`: **`unknown` へ落とす。** 移送先へ付け替えると「作業は移送先の volume に在る」と
+ *   主張することになるが、移送で中身は運ばれていない。元の runner のまま残すと、落ちた器を
+ *   指し続ける。どちらも偽の永続性を言うので、確かめられないことを理由つきで書く（#207）。
+ * - `shared-volume` / `git`: `runnerId` を持たない。**1文字も変えない。**
+ */
+function workspaceAfterRelocation(
+  workspace: WorkspaceLocator | undefined,
+  toRunnerId: string,
+): WorkspaceLocator | undefined {
+  if (workspace === undefined) return undefined;
+  switch (workspace.kind) {
+    case 'unknown':
+      return { ...workspace, runnerId: toRunnerId };
+    case 'runner-volume':
+      return {
+        kind: 'unknown',
+        runnerId: toRunnerId,
+        path: workspace.path,
+        reason: RELOCATED_WORKSPACE_REASON,
+      };
+    default:
+      return workspace;
+  }
+}
+
 /** userinfo がアカウント名（`git@` 等）で、秘密ではない慣習の scheme。 */
 const WORKSPACE_REPOSITORY_USERNAME_ONLY_PROTOCOLS: ReadonlySet<string> = new Set([
   'ssh:',
@@ -11295,7 +11330,14 @@ class Pool implements ManagerPool {
     }
 
     record.attached = true;
+    const previousRunnerId = record.job.runnerId;
     record.job.runnerId = runner.runnerId;
+    // **宛先を付け替えた（移送）なら、locator も揃える**（Issue #3099）。cwd が倒れた回だけ作り直す
+    // と、倒れなかった移送で `runnerId` が元の器を指したまま残る。cwd が倒れた回で作り直した
+    // `runner-volume` も、ここで同じく `unknown` へ落ちる（`workspaceAfterRelocation`）。
+    if (previousRunnerId !== undefined && previousRunnerId !== runner.runnerId) {
+      record.job.workspace = workspaceAfterRelocation(record.job.workspace, runner.runnerId);
+    }
     // **宛先が変わった瞬間でもある**（#579）。`runner.resume()` が返った時点で、
     // この器がこの委譲を持っている——生存確認の観測をここから数え直す
     // （`ManagerRecord.runnerSessionSince` の doc）。
