@@ -155,6 +155,14 @@ function AuthedShell() {
   const approvalsMalformed = approvals !== undefined && approvalsList === undefined;
   const pending = approvalsList?.length ?? 0;
   /**
+   * 読めない行（`unreadable`）の数（issue #3062）。`pending` は読める行だけなので、読めない行だけの
+   * ときに札が無い＝「承認待ちはない」に見えた。**0件の顔にしない**——警告の札を出す（語は
+   * `/approvals` の「読めない承認待ちが N 件ある」）。
+   */
+  const unreadableApprovals = Array.isArray(approvals?.unreadable)
+    ? approvals.unreadable.length
+    : 0;
+  /**
    * 「読めていない」を「0件」と区別する（issue #2105）。`GET /approvals` が
    * 失敗しても、`useApprovals` を呼んでいるのがこの1箇所だけなのでナビの
    * バッジも一緒に沈黙していた——0件（バッジ無し）と見分けが付かない。
@@ -193,7 +201,18 @@ function AuthedShell() {
       ?
     </Badge>
   ) : (
-    pending > 0 && <Badge tone="warn">{pending}</Badge>
+    <>
+      {pending > 0 && <Badge tone="warn">{pending}</Badge>}
+      {unreadableApprovals > 0 && (
+        <Badge
+          tone="warn"
+          aria-label={`読めない承認待ちが ${unreadableApprovals} 件ある`}
+          title={`読めない承認待ちが ${unreadableApprovals} 件ある`}
+        >
+          !
+        </Badge>
+      )}
+    </>
   );
 
   /**
@@ -291,7 +310,7 @@ function AuthedShell() {
               status={live.status}
               onOpenNav={() => setNavOpen(true)}
               trailing={
-                (pending > 0 || approvalsUnavailable) && (
+                (pending > 0 || unreadableApprovals > 0 || approvalsUnavailable) && (
                   // **リンクのままにする**（issue #2105）。開けば `/approvals` の
                   // `ErrorNote` で読めなかった理由まで読める——ここでは「読めていない」
                   // ことだけを言う。
@@ -299,7 +318,11 @@ function AuthedShell() {
                     to="/approvals"
                     className="flex min-h-11 shrink-0 items-center px-2"
                     aria-label={
-                      approvalsUnavailable ? '承認待ちを読めていない' : `承認待ち ${pending} 件`
+                      approvalsUnavailable
+                        ? '承認待ちを読めていない'
+                        : unreadableApprovals > 0
+                          ? `承認待ち ${pending} 件・読めない承認待ちが ${unreadableApprovals} 件ある`
+                          : `承認待ち ${pending} 件`
                     }
                   >
                     {approvalsUnavailable ? (
@@ -307,7 +330,17 @@ function AuthedShell() {
                         承認待ち ?
                       </Badge>
                     ) : (
-                      <Badge tone="warn">承認待ち {pending}</Badge>
+                      <>
+                        {pending > 0 && <Badge tone="warn">承認待ち {pending}</Badge>}
+                        {unreadableApprovals > 0 && (
+                          <Badge
+                            tone="warn"
+                            title={`読めない承認待ちが ${unreadableApprovals} 件ある`}
+                          >
+                            読めない {unreadableApprovals}
+                          </Badge>
+                        )}
+                      </>
                     )}
                   </NavLink>
                 )
