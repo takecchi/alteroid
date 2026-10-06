@@ -1,4 +1,4 @@
-import { readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -1094,5 +1094,80 @@ describe('alteroid practice の読み出しの失敗の理由', () => {
     expect(String(error)).toContain('やり方が読めない（practice のテスト用）');
     expect(sent).toHaveLength(1);
     expect(sent[0]?.method).toBe('GET');
+  });
+});
+
+/** Issue #3728: `memory edit` と同じ。slug は一時ファイルを作る前に検査する。 */
+describe('alteroid practice edit は slug を一時ファイルの前に検査する（#3728）', () => {
+  let sandbox: string;
+  let fakeTmp: string;
+  let opened: string;
+  const saved = { tmp: process.env.TMPDIR, editor: process.env.EDITOR, visual: process.env.VISUAL };
+
+  beforeEach(() => {
+    sandbox = makeTempDirSync('alteroid-practice-slug-');
+    fakeTmp = join(sandbox, 'tmp');
+    opened = join(sandbox, 'editor-opened');
+    mkdirSync(fakeTmp);
+    process.env.TMPDIR = fakeTmp;
+    delete process.env.VISUAL;
+    process.env.ALTEROID_TEST_OPENED = opened;
+    process.env.EDITOR = `sh -c 'printf x > "$ALTEROID_TEST_OPENED"; printf "人間の編集\\n" > "$1"' _`;
+    captureStdout();
+  });
+  afterEach(() => {
+    for (const [key, value] of [
+      ['TMPDIR', saved.tmp],
+      ['EDITOR', saved.editor],
+      ['VISUAL', saved.visual],
+    ] as const) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    delete process.env.ALTEROID_TEST_OPENED;
+  });
+
+  it('`../` で一時ディレクトリの外へ出る slug は、外のファイルを書き換えず、通信もエディタも起こさない', async () => {
+    const outside = join(sandbox, 'outside.md');
+    writeFileSync(outside, '使い手が書いたもの\n');
+    replies.push({ status: 404, body: { error: 'not found' } });
+
+    const error = await practiceEditCommand('../../outside', { kind: '調査', title: '題' }).catch(
+      (e: unknown) => e,
+    );
+
+    expect(error).toBeInstanceOf(Error);
+    expect(readFileSync(outside, 'utf8')).toBe('使い手が書いたもの\n');
+    expect(readdirSync(fakeTmp)).toEqual([]);
+    expect(sent).toEqual([]);
+    expect(existsSync(opened)).toBe(false);
+  });
+
+  it.each(['my note', 'a;b', '$(id)', 'Upper', 'a/b', '.hidden', '', 'x'.repeat(129)])(
+    '規則に合わない slug %j は、一時ファイルも GET も PUT もエディタも無しで、使える形を言って断る',
+    async (slug) => {
+      const error = await practiceEditCommand(slug, { kind: '調査', title: '題' }).catch(
+        (e: unknown) => e,
+      );
+
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toContain('英小文字・数字・. _ - のみ');
+      expect(readdirSync(fakeTmp)).toEqual([]);
+      expect(sent).toEqual([]);
+      expect(existsSync(opened)).toBe(false);
+    },
+  );
+
+  it('一時ファイルのパスに空白が入っても（TMPDIR）、エディタは1つのファイルとして開く', async () => {
+    const spaced = join(sandbox, 'tmp with space');
+    mkdirSync(spaced);
+    process.env.TMPDIR = spaced;
+    replies.push({ status: 200, body: practiceBody() });
+    replies.push({ status: 200, body: practiceBody() });
+
+    await practiceEditCommand('review', {});
+
+    expect(sent.map((s) => s.method)).toEqual(['GET', 'PUT']);
+    expect(JSON.parse(sent[1]?.body ?? '{}')).toMatchObject({ content: '人間の編集\n' });
   });
 });
