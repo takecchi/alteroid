@@ -5505,14 +5505,19 @@ class Pool implements ManagerPool {
    */
   readonly #relocatingTo = new Map<string, string>();
   /**
-   * 上の窓の間に届いた、移送先以外の runner からの `closed`（届いた順）。**捨てずに預かる**：
-   * 移送が受理されれば古い世代の出来事として日誌にだけ残して捨て、移送が失敗したなら
-   * （どこにも移れなかった＝元の runner の lost は事実のまま）従来どおり処理し直す
-   * （`#endRelocationWindow`）。
+   * 上の窓の間に届いた、移送先以外の runner からの `closed` / `session` / `report` / `ask` /
+   * `settled`（**委譲ごとに届いた順の1本の列**。Issue #3097 は `closed`、#3125 が残りの4種）。
+   * **捨てずに預かる**：移送が受理されれば古い世代の出来事として日誌にだけ残して捨て
+   * （#3059 の `#ignoreIfMovedAway` と同じ扱い）、移送が失敗したなら（どこにも移れなかった＝
+   * 元の runner の出来事は事実のまま）届いた順に `#onEvent` で処理し直す（`#endRelocationWindow`）。
+   * 処理し直しは通常の経路なので `reportId` / `requestId` の冪等性もそのまま効く。
    */
-  readonly #deferredClosed = new Map<
+  readonly #deferredEvents = new Map<
     string,
-    { event: Extract<RunnerEvent, { type: 'closed' }>; fromRunnerId: string }[]
+    {
+      event: Extract<RunnerEvent, { type: 'closed' | 'session' | 'report' | 'ask' | 'settled' }>;
+      fromRunnerId: string;
+    }[]
   >();
   /**
    * 直近の resume が「生きていた旧プロセスへ流しただけ」だったマネージャー（#2877。
@@ -10833,18 +10838,19 @@ class Pool implements ManagerPool {
   }
 
   /**
-   * 移送の resume の結果が出た。窓の間に預かった元の runner の `closed` を片づける（Issue #3097）。
+   * 移送の resume の結果が出た。窓の間に預かった元の runner の出来事を、届いた順に片づける
+   * （Issue #3097 / #3125）。
    *
    * - **移送が受理された（`moved`）** — 古い世代の出来事なので、日誌にだけ残して捨てる
    *   （台帳は `running` / 移送先のまま。#3059 と同じ形）。
-   * - **受理されなかった** — どこにも移れていないので、元の runner の `closed` は従来どおり
-   *   処理し直す（捨てると lost を取りこぼす）。
+   * - **受理されなかった** — どこにも移れていないので、元の runner の出来事は従来どおり
+   *   処理し直す（捨てると lost や report を取りこぼす）。
    */
   async #endRelocationWindow(managerId: string, moved: boolean): Promise<void> {
     const target = this.#relocatingTo.get(managerId);
     this.#relocatingTo.delete(managerId);
-    const held = this.#deferredClosed.get(managerId) ?? [];
-    this.#deferredClosed.delete(managerId);
+    const held = this.#deferredEvents.get(managerId) ?? [];
+    this.#deferredEvents.delete(managerId);
     for (const { event, fromRunnerId } of held) {
       if (moved) {
         await this.#journal({
@@ -10854,12 +10860,24 @@ class Pool implements ManagerPool {
           text:
             `${EXCHANGE_KIND_DECISION_PREFIX}[${managerId}] （移送の最中に届いた古い runner の出来事のため無視。` +
             `移送先は ${target ?? '不明'}、この出来事は ${fromRunnerId} から）` +
-            `runner 側の終了イベント（status=${event.status}）を受け取った: ${event.reason}`,
+            (event.type === 'closed'
+              ? `runner 側の終了イベント（status=${event.status}）を受け取った: ${event.reason}`
+              : `移送の最中に届いた古い runner の ${event.type} を無視した`),
         });
       } else {
         await this.#onEvent(event, fromRunnerId);
       }
     }
+  }
+
+  /** 移送の窓の間に届いた出来事を、届いた順に預ける（`#deferredEvents`）。同期で呼ぶこと。 */
+  #deferEvent(
+    event: Extract<RunnerEvent, { type: 'closed' | 'session' | 'report' | 'ask' | 'settled' }>,
+    fromRunnerId: string,
+  ): void {
+    const held = this.#deferredEvents.get(event.managerId) ?? [];
+    held.push({ event, fromRunnerId });
+    this.#deferredEvents.set(event.managerId, held);
   }
 
   /**
@@ -11536,6 +11554,22 @@ class Pool implements ManagerPool {
 
     const record = this.#records.get(event.managerId) ?? (await this.#load(event.managerId));
     if (!record) return;
+
+    // **移送の resume が飛んでいる最中の session / report / ask / settled も、`closed` と同じく
+    // 結論が出るまで預かる**（Issue #3125）。窓の間は `job.runnerId` がまだ元の runner なので、
+    // `#ignoreIfMovedAway` が素通りし、受理される移送の前に古い報告が台帳と受信箱へ流れる。
+    if (
+      event.type === 'session' ||
+      event.type === 'report' ||
+      event.type === 'ask' ||
+      event.type === 'settled'
+    ) {
+      const relocatingTo = this.#relocatingTo.get(event.managerId);
+      if (relocatingTo !== undefined && relocatingTo !== fromRunnerId) {
+        this.#deferEvent(event, fromRunnerId);
+        return;
+      }
+    }
 
     switch (event.type) {
       case 'session': {
@@ -13341,9 +13375,7 @@ class Pool implements ManagerPool {
         // 取りこぼし、ここで処理すると移送が受理された回に台帳が lost のまま残る。
         const relocatingTo = this.#relocatingTo.get(event.managerId);
         if (relocatingTo !== undefined && relocatingTo !== fromRunnerId) {
-          const held = this.#deferredClosed.get(event.managerId) ?? [];
-          held.push({ event, fromRunnerId });
-          this.#deferredClosed.set(event.managerId, held);
+          this.#deferEvent(event, fromRunnerId);
           return;
         }
         const registeredRunnerIdsForClosed = this.#registeredRunnerIds();
