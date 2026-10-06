@@ -556,7 +556,7 @@ export const App: FC<AppProps> = ({
         managers.openSelected();
       } else if (input === 'f') managers.cycleFilter();
       else if (input === 'm') void managers.loadOlder();
-      else if (input === 'r') void managers.loadList();
+      else if (input === 'r') void managers.refreshList();
       else return false;
       return true;
     }
