@@ -18,7 +18,7 @@ import { type ManagerRow, type ManagerStatus, type TuiApi, type UnreadableManage
 import type { HeaderFeed } from './header-feed.js';
 import type { LogEntry } from './log.js';
 import { parseTranscript } from './managers-transcript.js';
-import { redactedErrorMessage } from '../redact.js';
+import { redactedErrorMessage, sanitizeForTerminal } from '../redact.js';
 import { Store } from './store.js';
 
 /** Web の `MANAGERS_PAGE` と同じ。 */
@@ -380,7 +380,11 @@ export class ManagersController {
     let delivered: boolean;
     try {
       const result = await this.api.sendManagerMessage(id, text);
-      this.setDetail(id, { busy: false, notice: `${result.outcome}: ${result.detail}` });
+      // デーモンの応答の文字列。端末へ出る前に掃除する。
+      this.setDetail(id, {
+        busy: false,
+        notice: sanitizeForTerminal(`${result.outcome}: ${result.detail}`),
+      });
       // 200 でも `session_missing`（届いていない）・`declined`（送らなかった）は送れていない。文を残させる（#3487）。
       delivered = DELIVERED_OUTCOMES.has(result.outcome);
     } catch (error) {
@@ -417,7 +421,10 @@ export class ManagersController {
     try {
       const result = await this.api.stopManager(id);
       const mark = STOPPED_OUTCOMES.has(result.outcome) ? '' : '✗ ';
-      this.setDetail(id, { busy: false, notice: `${mark}${result.outcome}: ${result.detail}` });
+      this.setDetail(id, {
+        busy: false,
+        notice: `${mark}${sanitizeForTerminal(`${result.outcome}: ${result.detail}`)}`,
+      });
     } catch (error) {
       this.setDetail(id, {
         busy: false,
