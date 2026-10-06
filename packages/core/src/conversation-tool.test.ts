@@ -241,6 +241,22 @@ describe('conversation_read — since/until の正規化（issue #1515）', () =
     expect(reply).toContain('until に渡された「not-a-datetime」は日時として読めない');
     expect(calls).toHaveLength(0);
   });
+
+  // #3287。`Date.parse` が緩く読む「foo 1」と、3/3 へずれる実在しない日付を断る。
+  it.each(['foo 1', '2026-02-31'])(
+    'since に「%s」を渡すと、日誌を読まずに受け付ける形の例つきで断る',
+    async (since) => {
+      const stores = createMemoryStores();
+      const calls = spyOnList(stores);
+      const call = tools(stores);
+
+      const reply = await call('conversation_read', { since });
+
+      expect(reply).toContain(`since に渡された「${since}」は日時として読めない`);
+      expect(reply).toContain('2026-10-06T09:00:00+09:00');
+      expect(calls).toHaveLength(0);
+    },
+  );
 });
 
 describe('conversation_read — 予算を超えたら省略した件数を言う', () => {

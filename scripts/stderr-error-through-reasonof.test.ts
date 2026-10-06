@@ -100,6 +100,10 @@ const ALLOWED_CUSTOM_CLASSES = new Set<string>([
   // #2927。文は欄名（呼び手が書く固定のリテラル）と定型の説明だけで、名前・値を載せない。
   'NulNotAllowedError',
   'InvalidCredentialNameError',
+  // #3288。文は「日誌 <id> は在るが読めない…」の定型と、呼び手が渡した id だけ（行の本文は持たない）。
+  // 任意の `reason` は文の末尾に付くが、投げる側（storage-fs / storage-pg の `get`）は渡していない。
+  // 値の載る `reason` を渡すようにするなら、ここから外すこと。
+  'UnreadableJournalEntryError',
 ]);
 /**
  * **絞りとして認める `<id>.name === '<リテラル>'` のリテラルの許可リスト**（#2606）。

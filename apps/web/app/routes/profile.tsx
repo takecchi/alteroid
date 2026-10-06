@@ -1,6 +1,7 @@
 import { SettingsTabs } from '~/components/group-tabs';
 import { settingsDocumentTitle } from '~/lib/nav';
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { useBlocker } from 'react-router';
 
 import {
   Page,
@@ -8,6 +9,7 @@ import {
   Button,
   Card,
   CardHeader,
+  ConfirmDialog,
   Empty,
   ErrorNote,
   Input,
@@ -102,6 +104,40 @@ export default function Profile() {
   // 編集欄がまだ開いているかを突き合わせる（保存中に別の行へ切り替えると、世代が進んでいる）。
   const editorSerialRef = useRef(0);
   const [result, setResult] = useState<{ label: string; update: ProfileUpdateResult } | null>(null);
+  // 書きかけがあるまま行を切り替える・編集を閉じるときの確認待ち（#3349）。
+  const [pending, setPending] = useState<
+    { kind: 'switch'; entry: ProfileEntryView } | { kind: 'close' } | null
+  >(null);
+
+  const dirty = isDirty(editor);
+  /**
+   * **書きかけがあるまま離れない（#3370。`memory-detail.tsx` と同じ形）。** アプリ内の移動
+   * （リンク・戻る）は確認を挟み、タブを閉じる・再読み込みはブラウザの警告に任せる。
+   */
+  const blocker = useBlocker(() => dirty);
+  useEffect(() => {
+    if (!dirty) return;
+    const warn = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      // 古いブラウザは returnValue を入れないと出さない。
+      event.returnValue = '';
+    };
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  }, [dirty]);
+
+  function openEntry(entry: ProfileEntryView) {
+    setResult(null);
+    editorSerialRef.current += 1;
+    setEditorSerial(editorSerialRef.current);
+    setEditor({
+      name: entry.name,
+      existing: true,
+      script: entry.script,
+      scope: entry.scope,
+      original: entry,
+    });
+  }
 
   return (
     <Page
@@ -132,16 +168,9 @@ export default function Profile() {
                 <ProfileList
                   profile={data}
                   onEdit={(entry) => {
-                    setResult(null);
-                    editorSerialRef.current += 1;
-                    setEditorSerial(editorSerialRef.current);
-                    setEditor({
-                      name: entry.name,
-                      existing: true,
-                      script: entry.script,
-                      scope: entry.scope,
-                      original: entry,
-                    });
+                    // 書きかけがあれば、確認してから切り替える。
+                    if (dirty) setPending({ kind: 'switch', entry });
+                    else openEntry(entry);
                   }}
                   onRemoved={(label, update) => setResult({ label, update })}
                 />
@@ -157,6 +186,10 @@ export default function Profile() {
             hasDefault={data.entries.some((entry) => entry.name === 'default')}
             editor={editor}
             setEditor={setEditor}
+            onClose={() => {
+              if (dirty) setPending({ kind: 'close' });
+              else setEditor(null);
+            }}
             onSaved={(label, update) => setResult({ label, update })}
           />
         )}
@@ -169,8 +202,49 @@ export default function Profile() {
           </Card>
         )}
       </div>
+      <ConfirmDialog
+        open={pending !== null}
+        onOpenChange={(open) => {
+          if (!open) setPending(null);
+        }}
+        title="書きかけの編集があります"
+        description={
+          pending?.kind === 'switch'
+            ? `別の行（${pending.entry.name}）に切り替えると、いま書いている内容は失われます。`
+            : 'このまま閉じると、いま書いている内容は失われます。'
+        }
+        confirmLabel={pending?.kind === 'switch' ? '破棄して切り替える' : '破棄して閉じる'}
+        destructive
+        onConfirm={() => {
+          if (pending?.kind === 'switch') openEntry(pending.entry);
+          else setEditor(null);
+          setPending(null);
+        }}
+      />
+      <ConfirmDialog
+        open={blocker.state === 'blocked'}
+        onOpenChange={(open) => {
+          if (!open && blocker.state === 'blocked') blocker.reset();
+        }}
+        title="保存していない変更があります"
+        description="このまま離れると、書きかけの内容は失われます。"
+        confirmLabel="破棄して離れる"
+        destructive
+        onConfirm={() => {
+          if (blocker.state === 'blocked') blocker.proceed();
+        }}
+      />
     </Page>
   );
+}
+
+/** 編集欄に、元の行から変わった書きかけがあるか。新規の行は、何か書いてあれば書きかけ。 */
+function isDirty(editor: EditorState | null): boolean {
+  if (editor === null) return false;
+  if (editor.original !== undefined) {
+    return editor.script !== editor.original.script || editor.scope !== editor.original.scope;
+  }
+  return editor.script !== '' || (!editor.existing && editor.name !== '') || editor.scope !== 'all';
 }
 
 function ProfileList({
@@ -358,6 +432,7 @@ function ProfileEditor({
   hasDefault,
   editor,
   setEditor,
+  onClose,
   onSaved,
   isCurrent,
 }: {
@@ -369,6 +444,8 @@ function ProfileEditor({
   hasDefault: boolean;
   editor: EditorState | null;
   setEditor: (next: EditorState | null) => void;
+  /** 「編集を閉じる」。書きかけがあれば親が確認を挟む。 */
+  onClose: () => void;
   onSaved: (label: string, update: ProfileUpdateResult) => void;
   /**
    * この編集欄（`key` の世代）がまだ開いているか。保存の完了が戻る前に別の行の「編集する」で
@@ -548,7 +625,7 @@ function ProfileEditor({
                   保存する
                 </Button>
                 <SubmitHint action="保存" />
-                <Button variant="ghost" size="sm" disabled={busy} onClick={() => setEditor(null)}>
+                <Button variant="ghost" size="sm" disabled={busy} onClick={onClose}>
                   編集を閉じる
                 </Button>
                 {unchanged && (

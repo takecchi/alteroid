@@ -93,7 +93,7 @@ export function managerNotes(row: ManagerRow): string[] {
   return notes;
 }
 
-/** 詳細の最下行（ログ直下の 1 行）に出す文言。優先: 確認 > 操作結果 > 失敗 > 窓の外 > 状態。 */
+/** 詳細の最下行（ログ直下の 1 行）に出す文言。優先: 確認 > 操作結果（あれば失敗・窓の外を並べる） > 失敗 > 窓の外 > 状態。 */
 export function detailStatusText(
   detail: DetailState,
   hiddenBelow: number,
@@ -104,8 +104,15 @@ export function detailStatusText(
       tone: 'warn',
     };
   }
-  if (detail.notice !== null) return { text: detail.notice, tone: 'dim' };
-  if (detail.error !== null) return { text: `⚠ 取り直せなかった: ${detail.error}`, tone: 'warn' };
+  // 操作結果（notice）は消える経路が無いので、後ろの状態（取り直しの失敗・窓の外の行数）を隠さず並べる（#3368）。
+  const parts: string[] = [];
+  if (detail.notice !== null) parts.push(detail.notice);
+  if (detail.error !== null) parts.push(`⚠ 取り直せなかった: ${detail.error}`);
+  if (detail.notice !== null) {
+    if (hiddenBelow > 0) parts.push(`↓ あと ${String(hiddenBelow)} 行`);
+    return { text: parts.join(' · '), tone: detail.error !== null ? 'warn' : 'dim' };
+  }
+  if (detail.error !== null) return { text: parts.join(' · '), tone: 'warn' };
   if (detail.missing) return { text: 'このマネージャーは見つからない（404）', tone: 'warn' };
   if (hiddenBelow > 0) {
     return {

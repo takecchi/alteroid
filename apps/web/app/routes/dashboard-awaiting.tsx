@@ -54,8 +54,9 @@ function UnreadableApprovalsWarn({ count, className }: { count: number; classNam
  *   `error` が先に拾う
  * - **形の違う応答（`approvals` が配列でない・`null`）を `?? []` で0件にしない**（issue #2308）。
  *   デーモンと画面は版がずれうる。読めていないのに「ない」と描くと嘘になる
- * - **一度取れたあとの取り直しの失敗**（SWR は直前の `data` を残す）で、古い件数のまま
- *   「答える」を出し続けない（issue #2138 の2）。`error` を `data` より先に見る
+ * - **一度取れたあとの取り直しの失敗**（SWR は直前の `data` を残す）は、古い件数のまま黙って
+ *   「答える」を出し続けない（issue #2138 の2）。件数は残し、注記で失敗を言う（issue #3346。
+ *   進捗のタイルの #3069 と同じ形）。`data` が無いときだけエラーにする
  * - **読めない行（`unreadable`）だけのときも「承認待ちはない」と描かない**（issue #3062）。
  *   `calm` の代わりに警告を出す。読める承認待ちと混在するときも、一覧の上に同じ警告を足す
  * - 読めていないとき（読み込み中・失敗・形が違う）は、**警告色にしない**（待っているものが
@@ -77,7 +78,7 @@ export function AwaitingYou() {
   const malformed = approvals.data !== undefined && list === undefined;
   const pending = list ?? [];
 
-  if (approvals.error !== undefined) {
+  if (approvals.error !== undefined && approvals.data === undefined) {
     return (
       <AwaitingYouCard tone="plain">
         <ErrorNote error={approvals.error} className="m-4" />
@@ -101,8 +102,25 @@ export function AwaitingYou() {
   const unreadableCount = Array.isArray(approvals.data.unreadable)
     ? approvals.data.unreadable.length
     : 0;
+  // 取り直しの失敗は、前に読めた件数を残したまま、その場で言う（issue #3346。進捗のタイルの #3069 と同じ形）。
+  const staleNote =
+    approvals.error !== undefined ? (
+      <p className="mx-4 mt-3 text-xs text-warn">
+        最新の承認待ちを取り直せなかった。下は前に読めたときのもの。
+      </p>
+    ) : null;
   if (pending.length === 0) {
-    if (unreadableCount === 0) return <AwaitingYouCalm />;
+    if (unreadableCount === 0) {
+      if (staleNote === null) return <AwaitingYouCalm />;
+      return (
+        <AwaitingYouCard tone="plain">
+          {staleNote}
+          <p className="px-4 py-3 text-sm text-muted-foreground">
+            前に読めたときは、承認待ちはなかった。
+          </p>
+        </AwaitingYouCard>
+      );
+    }
     return (
       <AwaitingYouCard
         action={
@@ -111,6 +129,7 @@ export function AwaitingYou() {
           </Link>
         }
       >
+        {staleNote}
         <UnreadableApprovalsWarn count={unreadableCount} className="m-4" />
       </AwaitingYouCard>
     );
@@ -129,6 +148,7 @@ export function AwaitingYou() {
         </Link>
       }
     >
+      {staleNote}
       <UnreadableApprovalsWarn count={unreadableCount} className="m-4 mb-0" />
       <ul>
         {pending.slice(0, APPROVAL_LIMIT).map((approval) => (

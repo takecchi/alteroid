@@ -412,7 +412,7 @@ describe('/integrations 画面 — 読めない行（#3216）', () => {
     renderScreen();
     await screen.findByText('CI');
     expect(screen.queryByText(/読めない連携の鍵の行/)).toBeNull();
-    expect(screen.queryByRole('button', { name: 'この行を消す' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'bad-1 の行を消す' })).toBeNull();
   });
 
   it('読めない行しか無いとき、「まだ無い」と言わず、件数と id・不正な欄名を断る。id の無い行にはボタンが無い', async () => {
@@ -432,7 +432,7 @@ describe('/integrations 画面 — 読めない行（#3216）', () => {
     expect(screen.getByText(/id が取れない行が 1 件ある/)).toBeTruthy();
     expect(screen.getByText(/連携の鍵がまだ無い、とは言えない/)).toBeTruthy();
     expect(screen.queryByText('連携の鍵はまだ無い。')).toBeNull();
-    expect(screen.getAllByRole('button', { name: 'この行を消す' })).toHaveLength(1);
+    expect(screen.getAllByRole('button', { name: 'bad-1 の行を消す' })).toHaveLength(1);
   });
 
   it('「この行を消す」は確認を経て id を指して POST し、再取得で断りが消える（確認で止めたら POST しない）', async () => {
@@ -459,7 +459,7 @@ describe('/integrations 画面 — 読めない行（#3216）', () => {
     }) as typeof fetch;
 
     renderScreen();
-    fireEvent.click(await screen.findByRole('button', { name: 'この行を消す' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'bad-1 の行を消す' }));
     const dialog = await screen.findByRole('alertdialog');
     expect(dialog.textContent).toContain('元に戻せません');
     expect(dialog.textContent).toContain('bad-1');
@@ -467,7 +467,7 @@ describe('/integrations 画面 — 読めない行（#3216）', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: 'やめる' }));
     await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
     expect(posts).toEqual([]);
-    fireEvent.click(screen.getByRole('button', { name: 'この行を消す' }));
+    fireEvent.click(screen.getByRole('button', { name: 'bad-1 の行を消す' }));
     fireEvent.click(
       within(await screen.findByRole('alertdialog')).getByRole('button', { name: '消す' }),
     );
