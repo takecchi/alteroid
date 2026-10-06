@@ -15401,7 +15401,7 @@
             }
           },
           "403": {
-            "description": "連携の鍵の source と、本文（`POST /events`）またはパス（`POST /events/:source`）の source が違う。",
+            "description": "連携の鍵の source と、本文の source が違う（連携の鍵でだけ起きる。人間・operator は任意の source を名乗れる）。",
             "content": {
               "application/json": {
                 "schema": {
@@ -15522,7 +15522,7 @@
             }
           },
           "403": {
-            "description": "連携の鍵の source と、本文（`POST /events`）またはパス（`POST /events/:source`）の source が違う。",
+            "description": "連携の鍵の source と、パスの source が違う（連携の鍵でだけ起きる。人間・operator は任意の source を名乗れる）。",
             "content": {
               "application/json": {
                 "schema": {
@@ -23232,6 +23232,22 @@
           },
           "401": {
             "description": "資格が無い。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "連携の鍵（`altk_`）では呼べない（連携の鍵は外部イベントの口にしか入れない）。",
             "content": {
               "application/json": {
                 "schema": {

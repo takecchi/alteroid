@@ -1231,16 +1231,14 @@ function noBodyPostRequestBody(description: string) {
 /**
  * 連携の鍵（`altk_`）でこの口を叩いたときだけ起きる応答（`POST /events` と `POST /events/:source`）。
  * 人間・operator の経路には、これらの制限（401・413・429 と source の突き合わせ）は無い。
+ *
+ * **403（source の不一致）はここに置かず、各経路の `describeRoute` に直に書く**——「実際に返すステータスが
+ * 宣言されているか」を測る歯が、リテラルの `403` を経路ごとに読むため。
  */
 function integrationKeyEventResponses() {
   return {
     401: {
       description: '連携の鍵が無効か期限切れ（未知・失効・期限切れ）。',
-      content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-    },
-    403: {
-      description:
-        '連携の鍵の source と、本文（`POST /events`）またはパス（`POST /events/:source`）の source が違う。',
       content: { 'application/json': { schema: resolver(errorResponseSchema) } },
     },
     413: {
@@ -5361,6 +5359,11 @@ export function createApp(deps: AppDeps) {
             description: '本文が JSON として不正。',
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
+          403: {
+            description:
+              '連携の鍵の source と、本文の source が違う（連携の鍵でだけ起きる。人間・operator は任意の source を名乗れる）。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
           ...integrationKeyEventResponses(),
         },
       }),
@@ -5414,6 +5417,11 @@ export function createApp(deps: AppDeps) {
           200: {
             description: '受信箱へ積んだ。',
             content: { 'application/json': { schema: resolver(eventAcceptedResponseSchema) } },
+          },
+          403: {
+            description:
+              '連携の鍵の source と、パスの source が違う（連携の鍵でだけ起きる。人間・operator は任意の source を名乗れる）。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
           ...noBodyPostResponses(),
           ...integrationKeyEventResponses(),
@@ -9449,6 +9457,11 @@ export function createApp(deps: AppDeps) {
           },
           401: {
             description: '資格が無い。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+          403: {
+            description:
+              '連携の鍵（`altk_`）では呼べない（連携の鍵は外部イベントの口にしか入れない）。',
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
         },

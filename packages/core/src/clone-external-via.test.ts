@@ -15,12 +15,17 @@ import { humanMessage } from './testing.js';
  *   （鍵の値は持たない）。鍵経由でないものには何も足さない
  */
 
-const external = (id: string, via?: { keyId: string; name: string }): InboxEvent => ({
+const external = (
+  id: string,
+  via?: { keyId: string; name: string },
+  source = 'ci.main',
+  payload: unknown = { status: 'failure' },
+): InboxEvent => ({
   type: 'external',
   id,
   at: `2026-09-01T00:00:0${id.slice(-1)}.000Z`,
-  source: 'ci.main',
-  payload: { status: 'failure' },
+  source,
+  payload,
   ...(via === undefined ? {} : { via }),
 });
 
@@ -57,8 +62,8 @@ describe('クローン — 外部イベントの枠付けと via', () => {
     s.clone.post(humanMessage('先客'));
     await waitFor(() => (s.calls[0]?.inputs.length ?? 0) === 1, '先客のターンが投げられる');
 
-    s.clone.post({ ...external('e1', VIA), source: 'ci.via' });
-    s.clone.post({ ...external('e2'), source: 'ci.plain', payload: { status: 'ok' } });
+    s.clone.post(external('e1', VIA, 'ci.via'));
+    s.clone.post(external('e2', undefined, 'ci.plain', { status: 'ok' }));
     await waitFor(
       () => (s.calls[0]?.inputs ?? []).some((input) => input.includes('ci.plain')),
       '2件ぶんのターンが投げられる',

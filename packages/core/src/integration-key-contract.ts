@@ -124,7 +124,9 @@ export async function verifyIntegrationKeyStoreContract(store: IntegrationKeySto
     fail,
     'createdBy の NUL',
     () =>
-      store.putIntegrationKey(make({ id: 'k-n', sha256: 'f'.repeat(64), createdBy: 'zk9\u0000zk9' })),
+      store.putIntegrationKey(
+        make({ id: 'k-n', sha256: 'f'.repeat(64), createdBy: 'zk9\u0000zk9' }),
+      ),
     'zk9',
   );
   await store.putIntegrationKey(make({ id: 'k-n', sha256: 'f'.repeat(64), name: 'a\u0000b' }));
