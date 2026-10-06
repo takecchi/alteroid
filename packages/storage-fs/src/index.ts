@@ -8,6 +8,7 @@ import { FsAuthStore } from './auth.js';
 import { FsCommitmentStore } from './commitments.js';
 import { FsCredentialVaultStore } from './credentials.js';
 import { FsInboxStore } from './inbox.js';
+import { FsIntegrationKeyStore } from './integration-keys.js';
 import { FsConversationReadStore } from './conversation-reads.js';
 import { FsJobStore } from './jobs.js';
 import { FsJournalStore } from './journal.js';
@@ -29,6 +30,7 @@ export { CLOSED_HISTORY_LIMIT, FsCommitmentStore } from './commitments.js';
 export { FsCredentialVaultStore } from './credentials.js';
 export { LockTimeoutError, withPathLock } from './file-lock.js';
 export { FsInboxStore } from './inbox.js';
+export { FsIntegrationKeyStore } from './integration-keys.js';
 export { FsConversationReadStore } from './conversation-reads.js';
 export { FsJobStore } from './jobs.js';
 export { FsJournalStore } from './journal.js';
@@ -61,6 +63,7 @@ export function createFsStores(root?: string): Stores & { paths: AlteroidPaths }
     archive: new FsTranscriptArchive(paths.archive),
     sessions: new FsSessionRegistry(paths.state),
     auth: new FsAuthStore(paths.auth),
+    integrationKeys: new FsIntegrationKeyStore(paths.auth),
     permissionGrants: new FsPermissionGrantStore(paths.jobs),
     profile: new FsProfileStore(paths.profile, paths.profileDir),
     credentials: new FsCredentialVaultStore(paths.credentials),

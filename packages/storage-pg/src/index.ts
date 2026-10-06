@@ -5,6 +5,7 @@ import { Pool } from 'pg';
 
 import { PgTranscriptArchive } from './archive.js';
 import { PgAuthStore } from './auth.js';
+import { PgIntegrationKeyStore } from './integration-keys.js';
 import { PgCommitmentStore } from './commitments.js';
 import { PgPracticeStore } from './practices.js';
 import type { Db } from './db.js';
@@ -26,6 +27,7 @@ import { PgUsageStore } from './usage.js';
 
 export { PgTranscriptArchive } from './archive.js';
 export { PgAuthStore } from './auth.js';
+export { PgIntegrationKeyStore } from './integration-keys.js';
 export { PgCommitmentStore } from './commitments.js';
 export { PgPracticeStore } from './practices.js';
 export { PgInboxStore } from './inbox.js';
@@ -131,6 +133,7 @@ export function createPgStoresFromDb(db: Db, close?: () => Promise<void>): PgSto
     archive: new PgTranscriptArchive(db),
     sessions: new PgSessionRegistry(db),
     auth: new PgAuthStore(db),
+    integrationKeys: new PgIntegrationKeyStore(db),
     permissionGrants: new PgPermissionGrantStore(db),
     profile: new PgProfileStore(db),
     credentials: new PgCredentialVaultStore(db),

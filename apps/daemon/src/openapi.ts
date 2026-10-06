@@ -6,6 +6,7 @@ import {
   commitmentSchema,
   createMemoryStores,
   INBOX_EVENT_TYPE_ORDER,
+  integrationSourceSchema,
   jobSchema,
   jobStatusSchema,
   githubObservationInputSchema,
@@ -270,6 +271,63 @@ export const accessListResponseSchema = z.object({
 });
 
 export const accessAccountResponseSchema = z.object({ account: accountWithIdentitiesSchema });
+
+// ---------------------------------------------------------------------------
+// 連携の鍵（/integration-keys）
+// ---------------------------------------------------------------------------
+
+/**
+ * 連携の鍵の1行。**値（`altk_...`）も sha256 の全体も返さない**——見分けるための先頭12桁
+ * （`fingerprint`。`GET /credentials` の指紋と同じ考え方）だけ。`limits` は上書きが無ければ既定の値
+ * （本文 1 MiB・60回/分）が入った、**実際に掛かっている上限**である。
+ */
+export const integrationKeyViewSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  /** この鍵が送れる唯一の source。 */
+  source: z.string(),
+  /** sha256 の先頭12桁。 */
+  fingerprint: z.string(),
+  createdAt: isoDateTimeSchema,
+  /** 発行した資格（誰が発行したか）。 */
+  createdBy: z.string(),
+  expiresAt: isoDateTimeSchema.nullable(),
+  revokedAt: isoDateTimeSchema.nullable(),
+  lastUsedAt: isoDateTimeSchema.nullable(),
+  limits: z.object({
+    maxBodyBytes: z.number().int().positive(),
+    ratePerMinute: z.number().int().positive(),
+  }),
+});
+
+export const integrationKeysListResponseSchema = z.object({
+  keys: z.array(integrationKeyViewSchema),
+});
+
+/**
+ * 連携の鍵の発行。**`scopes` のような選べる許可の一覧は無い**——鍵の種類そのものが「固定の1 source で
+ * 外部イベントを送る」という1つの能力だけを表す。
+ */
+export const integrationKeyCreateRequestSchema = z.object({
+  /** 人間が見分けるためのラベル。 */
+  name: z.string().trim().min(1).max(200),
+  /** この鍵が送れる唯一の source（英小文字・数字・`.` `_` `-` の64字以内）。 */
+  source: integrationSourceSchema,
+  /** 省略すれば無期限。 */
+  expiresAt: isoDateTimeSchema.optional(),
+  /** 本文の上限（バイト）。省略すれば 1 MiB。 */
+  maxBodyBytes: z.number().int().positive().max(2_147_483_647).optional(),
+  /** 1分あたりの回数の上限。省略すれば 60。 */
+  ratePerMinute: z.number().int().positive().max(2_147_483_647).optional(),
+});
+
+export const integrationKeyCreateResponseSchema = z.object({
+  key: integrationKeyViewSchema,
+  /** 鍵の値。**この応答でだけ返す**（保存は sha256 だけ。後からは取り出せない）。 */
+  value: z.string(),
+});
+
+export const integrationKeyResponseSchema = z.object({ key: integrationKeyViewSchema });
 
 // ---------------------------------------------------------------------------
 // 会話（/conversations）

@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 
 import type { ArchiveContinuity } from './archive-continuity.js';
 import type { AuthStore } from './auth.js';
+import type { IntegrationKeyStore } from './integration-key.js';
 import type {
   ConversationBaselineResult,
   ConversationOutboundIndex,
@@ -3352,6 +3353,11 @@ export interface Stores {
    * 例外の文には欄名だけを載せ、値は載せない。部品は `auth-input.ts`。
    */
   auth: AuthStore;
+  /**
+   * 連携の鍵（外のサービスへ渡す、固定の1 source で外部イベントを送るだけの鍵。`integration-key.ts`）。
+   * アクセストークン（`auth`）と同じ層で、素の値は持たず sha256 だけを持つ。**3実装とも同じ IF を満たす。**
+   */
+  integrationKeys: IntegrationKeyStore;
   /**
    * 人間が承認した Bash 許可の記録（Issue #863）。**省略可能にしないこと**
    * （`schedules` / `inbox` と同じ理由——器が違うだけで上の層が見るものは
