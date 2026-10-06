@@ -8,7 +8,7 @@
  * `exchange(with:'manager')` のように manager id を持たない種別が来ても
  * 取りこぼさないことを固定する。
  */
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { useManager, useManagerTranscript, useProfile, useTokens } from './queries';
@@ -338,12 +338,13 @@ describe('再接続時の取り直し', () => {
   const RECONNECT_TIMEOUT = 4000;
 
   function ReconnectProbe() {
-    useJournalLive();
+    const live = useJournalLive();
     const manager = useManager(MANAGER_ID);
     const transcript = useManagerTranscript(MANAGER_ID);
     useProfile();
     return (
       <div>
+        <div data-testid="status">{live.status}</div>
         <div data-testid="manager">{manager.data?.manager.managerId ?? ''}</div>
         <div data-testid="transcript">{transcript.data ?? ''}</div>
       </div>
@@ -351,14 +352,14 @@ describe('再接続時の取り直し', () => {
   }
 
   /** `first` は1本目の接続の終わり方。2本目以降は張りっぱなし。 */
-  function renderReconnect(first: 'close' | 'fail') {
+  function renderReconnect(first: 'close' | 'fail' | 'stay') {
     const state = { streams: 0 };
     const stub = stubFetch((url, init) => {
       if (url.endsWith('/journal/stream')) {
         state.streams += 1;
         if (state.streams === 1 && first === 'fail') return undefined;
         return sse([{ event: 'open', data: { ok: true } }], {
-          keepOpen: state.streams > 1 || first === 'fail',
+          keepOpen: state.streams > 1 || first !== 'close',
           signal: init?.signal,
         });
       }
@@ -380,14 +381,15 @@ describe('再接続時の取り直し', () => {
   const profileCalls = (stub: FetchStub) => stub.calls.filter((u) => u.endsWith('/profile')).length;
 
   it('初回の open では表示中のキーを取り直さない', async () => {
-    const stub = renderProbe([{ event: 'open', data: { ok: true } }]);
+    const { stub } = renderReconnect('stay');
 
     await screen.findByText(MANAGER_ID);
-    await waitFor(() => {
-      expect(stub.calls.filter((url) => url.endsWith('/journal/stream')).length).toBe(1);
-    });
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    // open を受けて live になった後を見る（実時間は待たない）。取り直しが起きるなら
+    // open の処理と同じ回で始まるので、描画を流し切ってから回数を見る。
+    await waitFor(() => expect(screen.getByTestId('status').textContent).toBe('live'));
+    await act(async () => {});
     expect(countsOf(stub)).toEqual({ manager: 1, transcript: 1 });
+    expect(profileCalls(stub)).toBe(1);
   });
 
   it('接続が正常終了して繋ぎ直したとき、表示中のキーを取り直す', async () => {
@@ -423,7 +425,8 @@ describe('再接続時の取り直し', () => {
     await waitFor(() => expect(state.streams).toBe(2), { timeout: RECONNECT_TIMEOUT });
     // 取り直しが走ったことを確かめてから、profile だけ増えていないことを見る。
     await waitFor(() => expect(countsOf(stub).manager).toBeGreaterThan(1));
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    // 取り直しは再接続の open と同じ回で一斉に始まるので、流し切ってから見る。
+    await act(async () => {});
     expect(profileCalls(stub)).toBe(1);
   }, 10_000);
 });
