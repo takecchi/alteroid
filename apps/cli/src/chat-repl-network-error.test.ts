@@ -82,12 +82,18 @@ describe('chat: 通信の例外で REPL を落とさない（#3218）', { timeou
   it('応答の SSE が途中で切れても、会話 id を保って続け、抜けるときに会話を終える', async () => {
     const { calls, text } = await run(['one', 'two'], (path, call) => {
       if (path === '/chat' && call === 1) {
+        let sent = false;
         const body = new ReadableStream<Uint8Array>({
-          start(controller) {
+          // error() は積んだチャンクを捨てるので、1回目の pull で open を渡し、2回目で切る。
+          pull(controller) {
+            if (sent) {
+              controller.error(new Error('terminated'));
+              return;
+            }
+            sent = true;
             controller.enqueue(
               new TextEncoder().encode('event: open\ndata: {"conversationId":"c1"}\n\n'),
             );
-            controller.error(new Error('terminated'));
           },
         });
         return Promise.resolve(
