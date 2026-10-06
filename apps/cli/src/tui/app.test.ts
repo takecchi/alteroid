@@ -1795,3 +1795,110 @@ describe('履歴の選択の断り書き（#2585）', () => {
     expect(h.frame()).not.toContain('先頭には届いていない');
   });
 });
+
+describe('履歴の選択の「もっと見る」（#3643）', () => {
+  const summary = (id: string) => ({
+    conversationId: id,
+    startedAt: 's',
+    updatedAt: new Date().toISOString(),
+    messages: 2,
+    preview: `話 ${id}`,
+  });
+  const DOWN = '\x1b[B';
+  const open = async (h: Harness): Promise<void> => {
+    await type(h.stdin, '/history');
+    h.stdin.write(ENTER);
+    await waitFor(() => h.frame().includes('会話の履歴（'));
+  };
+  const toMoreRow = async (h: Harness, rows: number): Promise<void> => {
+    for (let i = 0; i < rows; i += 1) h.stdin.write(DOWN);
+    await waitFor(() =>
+      h
+        .frame()
+        .split('\n')
+        .some((l) => l.includes('❯') && l.includes('もっと見る')),
+    );
+  };
+
+  it('末尾の「もっと見る」を選ぶと nextCursor で次の頁が足り、最後の頁では行が消える', async () => {
+    const h = start((api) => {
+      api.conversationPages = [[summary('a1'), summary('a2')], [summary('b1')]];
+    });
+    await open(h);
+    expect(h.frame()).toContain('会話の履歴（2 件）');
+    expect(h.frame()).toContain('もっと見る');
+    await toMoreRow(h, 2);
+    h.stdin.write(ENTER);
+    await waitFor(() => h.frame().includes('会話の履歴（3 件）'));
+    expect(h.frame()).toContain('話 b1');
+    expect(h.frame()).not.toContain('もっと見る');
+    expect(h.api.listCursors).toEqual([undefined, 'page-1']);
+  });
+
+  it('続きが無ければ行を出さない（nextCursor を返さない古いデーモンは従来の但し書き）', async () => {
+    const h = start((api) => {
+      api.listConversations = () =>
+        Promise.resolve({
+          conversations: [summary('c1')],
+          scanned: 50,
+          reachedStart: true,
+          hiddenByLimit: 7,
+        });
+    });
+    await open(h);
+    expect(h.frame()).not.toContain('もっと見る');
+    expect(h.frame()).toContain('…ほか 7 件は省略');
+  });
+
+  it('読み込み中に重ねて選んでも、頁は 1 回しか取らない', async () => {
+    let release: () => void = () => undefined;
+    const h = start((api) => {
+      api.conversationPages = [[summary('a1')], [summary('b1')]];
+      api.conversationPageGate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+    });
+    await open(h);
+    await toMoreRow(h, 1);
+    h.stdin.write(ENTER);
+    await waitFor(() => h.frame().includes('読み込み中'));
+    h.stdin.write(ENTER);
+    h.stdin.write(ENTER);
+    await press(h.stdin, DOWN);
+    expect(h.api.listCursors).toEqual([undefined, 'page-1']);
+    release();
+    await waitFor(() => h.frame().includes('会話の履歴（2 件）'));
+    expect(h.api.listCursors).toEqual([undefined, 'page-1']);
+  });
+
+  it('失敗しても一覧は残り、末尾に理由が出て、もう一度選べば取り直す', async () => {
+    const h = start((api) => {
+      api.conversationPages = [[summary('a1')], [summary('b1')]];
+      api.conversationPageFails = 'デーモンに届かない';
+    });
+    await open(h);
+    await toMoreRow(h, 1);
+    h.stdin.write(ENTER);
+    await waitFor(() => h.frame().includes('続きを読めなかった'));
+    expect(h.frame()).toContain('デーモンに届かない');
+    expect(h.frame()).toContain('話 a1');
+    expect(h.frame()).toContain('会話の履歴（1 件）');
+    h.api.conversationPageFails = null;
+    h.stdin.write(ENTER);
+    await waitFor(() => h.frame().includes('会話の履歴（2 件）'));
+    expect(h.frame()).not.toContain('続きを読めなかった');
+    expect(h.api.listCursors).toEqual([undefined, 'page-1', 'page-1']);
+  });
+
+  it('外から来た文字列は端末に制御文字を通さない', async () => {
+    const h = start((api) => {
+      api.conversationPages = [[summary('a1')], [summary('b1')]];
+      api.conversationPageFails = '壊れた\x1b[2Jあ';
+    });
+    await open(h);
+    await toMoreRow(h, 1);
+    h.stdin.write(ENTER);
+    await waitFor(() => h.frame().includes('続きを読めなかった'));
+    expect(h.frame()).not.toContain('\x1b[2J');
+  });
+});

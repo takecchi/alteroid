@@ -238,8 +238,12 @@ export function conversationPickerNotes(
   scanned: number,
   reachedStart: boolean,
   hiddenByLimit: number,
+  hasMore = false,
 ): string[] {
   const notes: string[] = [];
+  // 続き（`nextCursor`）が在るなら、末尾の「もっと見る」が続きの在ることを言う（#3643）。
+  // 断り書きは `nextCursor` を返さない古いデーモンのときだけ出す。
+  if (hasMore) return notes;
   if (!reachedStart) {
     notes.push(
       `人間との往復を ${String(scanned)} 件遡ったが、先頭には届いていない。これより古い会話が残っているかもしれない`,
@@ -260,17 +264,45 @@ export const ConversationPicker: FC<{
   scanned: number;
   reachedStart: boolean;
   hiddenByLimit: number;
+  /** 続きの頁の継続点。在れば末尾に「もっと見る」の行を置く（#3643）。 */
+  nextCursor?: string | undefined;
+  /** 「もっと見る」を読んでいる最中か（二重に選べない）。 */
+  moreLoading?: boolean;
+  /** 「もっと見る」が失敗した理由（一覧は残す。もう一度選べば取り直す）。 */
+  moreError?: string | null;
   selected: number;
   height: number;
   now: number;
-}> = ({ status, items, scanned, reachedStart, hiddenByLimit, selected, height, now }) => {
+}> = ({
+  status,
+  items,
+  scanned,
+  reachedStart,
+  hiddenByLimit,
+  nextCursor,
+  moreLoading = false,
+  moreError = null,
+  selected,
+  height,
+  now,
+}) => {
+  const hasMore = status === 'ready' && nextCursor !== undefined;
   const notes =
     status === 'ready'
-      ? conversationPickerNotes(items.length, scanned, reachedStart, hiddenByLimit)
+      ? conversationPickerNotes(items.length, scanned, reachedStart, hiddenByLimit, hasMore)
       : [];
-  const cap = Math.max(1, height - 1 - notes.length);
-  const start = Math.min(Math.max(0, selected - cap + 1), Math.max(0, items.length - cap));
-  const shown = items.slice(start, start + cap);
+  const errorLine =
+    hasMore && moreError !== null
+      ? oneLine(
+          sanitizeForTerminal(`続きを読めなかった: ${moreError}（もう一度 Enter で取り直す）`),
+          120,
+        )
+      : null;
+  const rowCount = items.length + (hasMore ? 1 : 0);
+  const cap = Math.max(1, height - 1 - notes.length - (errorLine === null ? 0 : 1));
+  const start = Math.min(Math.max(0, selected - cap + 1), Math.max(0, rowCount - cap));
+  const shown = items.slice(start, Math.min(items.length, start + cap));
+  const showMore = hasMore && start + cap >= rowCount;
   return (
     <Box flexDirection="column" height={height} overflow="hidden" flexShrink={0}>
       <Text bold wrap="truncate-end">
@@ -303,6 +335,20 @@ export const ConversationPicker: FC<{
           </Box>
         );
       })}
+      {showMore ? (
+        <Box flexShrink={0}>
+          <Text wrap="truncate-end" {...(selected === items.length ? { inverse: true } : {})}>
+            {`${selected === items.length ? glyph.caret : ' '} ${
+              moreLoading ? 'もっと見る（読み込み中…）' : 'もっと見る（Enter で次の頁を読む）'
+            }`}
+          </Text>
+        </Box>
+      ) : null}
+      {errorLine === null ? null : (
+        <Text dimColor wrap="truncate-end">
+          {errorLine}
+        </Text>
+      )}
     </Box>
   );
 };
