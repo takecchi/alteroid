@@ -121,12 +121,20 @@ async function assertOwnDirectory(path: string): Promise<void> {
   }
 }
 
-async function ensureDirectory(path: string, mode: number, childGid: number | undefined) {
+/** dir を用意する。**この呼び出しが実際に作った（EEXIST でなかった）ときだけ `true`**（Issue #3268。失敗時の掃除の対象を決める）。 */
+async function ensureDirectory(
+  path: string,
+  mode: number,
+  childGid: number | undefined,
+): Promise<boolean> {
+  let madeHere = true;
   await mkdir(path, { mode }).catch((error: unknown) => {
     if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+    madeHere = false;
   });
   await assertOwnDirectory(path);
   if (childGid !== undefined) await chown(path, ownUid() ?? -1, childGid);
+  return madeHere;
 }
 
 /**
@@ -159,7 +167,9 @@ export async function placeRunnerAttachments(
   const managerDir = resolve(base, managerId);
   const dirMode = childGid === undefined ? 0o700 : 0o750;
   const fileMode = childGid === undefined ? 0o400 : 0o440;
+  // この呼び出しが作った dir と、置いたファイルだけを積む（以前のメッセージが置いた同じ id の dir は消さない）。
   const created: string[] = [];
+  const placedFiles: string[] = [];
   const placed: PlacedAttachment[] = [];
   try {
     await mkdir(base, { recursive: true, mode: 0o755 });
@@ -175,8 +185,7 @@ export async function placeRunnerAttachments(
           `添付 ${attachment.id} の置き先が置き場の外へ出る形だった`,
         );
       }
-      await ensureDirectory(dir, dirMode, childGid);
-      created.push(dir);
+      if (await ensureDirectory(dir, dirMode, childGid)) created.push(dir);
       const tmp = resolve(dir, `.${randomUUID()}.tmp`);
       try {
         // `wx`（O_EXCL）は symlink を辿らない。
@@ -188,6 +197,7 @@ export async function placeRunnerAttachments(
           await handle.close();
         }
         await rename(tmp, path);
+        placedFiles.push(path);
       } catch (error) {
         await rm(tmp, { force: true }).catch(() => undefined);
         throw error;
@@ -206,6 +216,8 @@ export async function placeRunnerAttachments(
       });
     }
   } catch (error) {
+    // 既存の dir の中では、この呼び出しが置いたファイルだけを消す。新しく作った dir は丸ごと消す。
+    for (const file of placedFiles) await rm(file, { force: true }).catch(() => undefined);
     for (const dir of created)
       await rm(dir, { recursive: true, force: true }).catch(() => undefined);
     throw error;

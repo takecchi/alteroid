@@ -172,6 +172,145 @@ describe('同じ runner への復帰の最中に新しいセッションの repo
     };
   }
 
+  it('窓の間に預けた report（新しい世代）が、応答の後・窓が閉じる前に届いた closed(done)（新しい世代）に追い越され、「report 無し」と誤って知らせる（#3240 の届いた順）', async () => {
+    const stores = createMemoryStores();
+    await stores.jobs.putJob(jobWith('mgr-same', 'runner-a'));
+    const fake = createFakeRegistry();
+    fake.entries.push(entryOf('runner-a', 'connected', 'runner-a'));
+    const runnerA = fakeRunner('runner-a', '/work/project', 'gen-new');
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let entered!: () => void;
+    const enteredResume = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const originalResume = runnerA.client.resume.bind(runnerA.client);
+    let responded = false;
+    runnerA.client.resume = async (command) => {
+      entered();
+      await gate;
+      const result = await originalResume(command);
+      responded = true;
+      return result;
+    };
+    fake.addClient(runnerA.client);
+    // 応答の後の最初の台帳書き込み（窓はまだ開いている）の中で、新しいセッションの closed(done) が届く。
+    let injected = false;
+    const originalPut = stores.jobs.putJob.bind(stores.jobs);
+    stores.jobs.putJob = async (job) => {
+      if (responded && !injected) {
+        injected = true;
+        runnerA.emit?.({
+          type: 'closed',
+          managerId: 'mgr-same',
+          status: 'done',
+          reason: '閉じた',
+          sessionGeneration: 'gen-new',
+        });
+      }
+      return originalPut(job);
+    };
+    const clock = { now: Date.now() };
+    const inbox: InboxEvent[] = [];
+    const pool = createManagerPool({
+      stores,
+      post: (event) => inbox.push(event),
+      runners: fake.registry,
+      now: () => clock.now,
+      synthesizedNoticeWindowMs: 60_000,
+    });
+    await pool.abort('mgr-does-not-exist');
+    const reattach = pool.reattachRunner('runner-a');
+    await enteredResume;
+    // 新しいセッションの report が、応答より先に届き、窓に預けられる。
+    runnerA.emit?.({
+      type: 'report',
+      managerId: 'mgr-same',
+      reportId: 'r-new',
+      status: 'done',
+      text: '新しいセッションの報告',
+      sessionGeneration: 'gen-new',
+    });
+    for (let i = 0; i < 10; i += 1) await new Promise((resolve) => setImmediate(resolve));
+    clock.now += 5_000;
+    release();
+    await reattach;
+    for (let i = 0; i < 10; i += 1) await new Promise((resolve) => setImmediate(resolve));
+    await pool.stop();
+    const text = inbox.map((e) => JSON.stringify(e)).join('\n');
+    expect({ injected, reported: text.includes('新しいセッションの報告') }).toEqual({
+      injected: true,
+      reported: true,
+    });
+    expect(text).not.toContain('report を出さないまま');
+  });
+
+  it('預けた列が空のときは、応答の後・窓が閉じる前に届いた世代の一致する closed(lost) は、その場で処理される（#3170 のまま）', async () => {
+    const stores = createMemoryStores();
+    await stores.jobs.putJob(jobWith('mgr-same', 'runner-a'));
+    const fake = createFakeRegistry();
+    fake.entries.push(entryOf('runner-a', 'connected', 'runner-a'));
+    const runnerA = fakeRunner('runner-a', '/work/project', 'gen-new');
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let entered!: () => void;
+    const enteredResume = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const originalResume = runnerA.client.resume.bind(runnerA.client);
+    let responded = false;
+    runnerA.client.resume = async (command) => {
+      entered();
+      await gate;
+      const result = await originalResume(command);
+      responded = true;
+      return result;
+    };
+    fake.addClient(runnerA.client);
+    // 応答の後の最初の台帳書き込み（窓はまだ開いている）の中で、新しいセッションの closed(lost) が届く。
+    // 預けた report は無い（列は空）ので、その場で処理され、窓が閉じる前に台帳へ lost が書かれる。
+    let injected = false;
+    let statusWhileWindowOpen: string | undefined;
+    const originalPut = stores.jobs.putJob.bind(stores.jobs);
+    stores.jobs.putJob = async (job) => {
+      if (responded && !injected) {
+        injected = true;
+        runnerA.emit?.({
+          type: 'closed',
+          managerId: 'mgr-same',
+          status: 'lost',
+          reason: '見失った',
+          sessionGeneration: 'gen-new',
+        });
+        for (let i = 0; i < 10; i += 1) await new Promise((resolve) => setImmediate(resolve));
+        statusWhileWindowOpen = (await stores.jobs.listJobs()).find(
+          (j) => j.id === 'mgr-same',
+        )?.status;
+      }
+      return originalPut(job);
+    };
+    const pool = createManagerPool({
+      stores,
+      post: () => {},
+      runners: fake.registry,
+    });
+    await pool.abort('mgr-does-not-exist');
+    const reattach = pool.reattachRunner('runner-a');
+    await enteredResume;
+    release();
+    await reattach;
+    for (let i = 0; i < 10; i += 1) await new Promise((resolve) => setImmediate(resolve));
+    await pool.stop();
+    expect({ injected, statusWhileWindowOpen }).toEqual({
+      injected: true,
+      statusWhileWindowOpen: 'lost',
+    });
+  });
+
   it('resume の応答より先に新しい世代の report が届きており（このセッションで report は受け取った）、その後 closed(done) が来ても、「report を出さないまま終わった」を知らせない', async () => {
     const stores = createMemoryStores();
     await stores.jobs.putJob(jobWith('mgr-same', 'runner-a'));
