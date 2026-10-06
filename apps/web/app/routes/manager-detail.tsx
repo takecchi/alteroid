@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router';
 
@@ -18,6 +18,7 @@ import {
   Spinner,
   SubmitHint,
   Textarea,
+  WindowedText,
 } from '@alteroid/ui';
 import {
   useAbortManager,
@@ -28,6 +29,7 @@ import {
 } from '@alteroid/swr';
 import {
   describeManagerProvider,
+  formatBytes,
   formatDateTime,
   formatRelative,
   redactBody,
@@ -1839,6 +1841,15 @@ function Transcript({ id }: { id: string }) {
    * ように読める。本当に空の文字列が返ったときの「(空)」は残す。
    */
   const transcriptUnavailable = data === undefined && error !== undefined;
+  /**
+   * 伏せ字は**全体に一度だけ**掛け、`data` が変わったときだけ計算し直す（数 MB になりうるので、
+   * 描画のたびにやり直さない）。窓で切るのは掛けた後（切れ目をまたぐ秘密を取りこぼさない）。
+   */
+  const redacted = useMemo(() => {
+    if (data === undefined || data === '') return undefined;
+    const text = redactBody(data);
+    return { text, size: formatBytes(new Blob([text]).size) };
+  }, [data]);
 
   return (
     <Card>
@@ -1856,10 +1867,16 @@ function Transcript({ id }: { id: string }) {
           <ErrorNote error={error} />
           {isLoading ? (
             <Spinner />
-          ) : transcriptUnavailable ? null : (
+          ) : transcriptUnavailable ? null : redacted === undefined ? (
             <pre className="max-h-[32rem] overflow-auto rounded border border-border bg-background p-2 text-[11px] text-muted-foreground">
-              {data === undefined || data === '' ? '(空)' : redactBody(data)}
+              (空)
             </pre>
+          ) : (
+            <WindowedText
+              text={redacted.text}
+              totalNote={redacted.size}
+              testId="manager-transcript"
+            />
           )}
         </div>
       )}

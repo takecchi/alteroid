@@ -4,7 +4,7 @@
  * 資格で見る・置く・外す画面（2026-09-14 新設）。
  *
  * ここで固定したいのは「secret な行は値を1文字も出さない」「非 secret な行は
- * 値をそのまま出す」「scope バッジが 共通/clone/manager を潰さずに出る」
+ * 値をそのまま出す」「scope バッジが 共通/クローンだけ/マネージャーだけ を潰さずに出る」
  * 「置く・外すは既存の `PUT /credentials`（`GET`/`PUT /credentials` と同じ経路）
  * を呼ぶ」の各点。
  */
@@ -239,11 +239,12 @@ describe('/env-vars 画面 — 一覧', () => {
     await waitForListLoaded();
 
     expect(screen.getByText('Asia/Tokyo')).toBeTruthy();
-    expect(screen.getByText('clone')).toBeTruthy();
+    const row = screen.getByText('Asia/Tokyo').closest('[role="listitem"]') as HTMLElement;
+    expect(within(row).getByText('クローンだけ')).toBeTruthy();
     expect(screen.queryByText('******')).toBeNull();
   });
 
-  it('runner scope は「manager」と出る（タグは行ごとに共通・clone・manager を潰さない）', async () => {
+  it('runner scope は「マネージャーだけ」と出る（タグは行ごとに共通・クローンだけ・マネージャーだけを潰さない）', async () => {
     stubCrudScreen([
       {
         name: 'MANAGER_ONLY',
@@ -263,7 +264,58 @@ describe('/env-vars 画面 — 一覧', () => {
     );
     await waitForListLoaded();
 
-    expect(screen.getByText('manager')).toBeTruthy();
+    const row = screen.getByText('MANAGER_ONLY').closest('[role="listitem"]') as HTMLElement;
+    expect(within(row).getByText('マネージャーだけ')).toBeTruthy();
+  });
+
+  it('渡す先の選択肢は、値を変えずに語だけプロファイル画面（profile.tsx）と同じ言い方で出る', async () => {
+    stubCrudScreen([]);
+
+    render(
+      <Providers>
+        <MemoryRouter>
+          <EnvVars />
+        </MemoryRouter>
+      </Providers>,
+    );
+    await waitForListLoaded();
+
+    const options = within(screen.getByLabelText('渡す先')).getAllByRole('option');
+    expect(
+      options.map((option) => [(option as HTMLOptionElement).value, option.textContent]),
+    ).toEqual([
+      ['all', '共通（クローン・マネージャー両方。既定）'],
+      ['app', 'クローンだけ'],
+      ['runner', 'マネージャーだけ'],
+    ]);
+    expect(
+      screen.getByText(/渡す先は「共通」「クローンだけ」「マネージャーだけ」から選べる/),
+    ).toBeTruthy();
+    // 英語の語（clone / manager）は、この画面の文言には残らない。
+    expect(document.body.textContent).not.toMatch(/\bclone\b|\bmanager\b/i);
+  });
+
+  it('未知の scope は「未知の渡す先（値）」と出す（プロファイル画面と同じ）', async () => {
+    stubCrudScreen([
+      {
+        name: 'FUTURE',
+        sha256: 'd'.repeat(12),
+        updatedAt: '2026-09-14T00:00:00.000Z',
+        scope: 'future-scope',
+        secret: true,
+      } as unknown as StubEnvVarRow,
+    ]);
+
+    render(
+      <Providers>
+        <MemoryRouter>
+          <EnvVars />
+        </MemoryRouter>
+      </Providers>,
+    );
+    await waitForListLoaded();
+
+    expect(screen.getByText('未知の渡す先（future-scope）')).toBeTruthy();
   });
 
   it('1件も無ければ、その旨を言う', async () => {

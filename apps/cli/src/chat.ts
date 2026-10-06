@@ -86,6 +86,7 @@ import {
   interleaveApprovals,
 } from './conversation-approvals.js';
 import { formatElapsedAgo } from './format.js';
+import { requestInterrupt } from './interrupt.js';
 import { redactBody, redactError } from './redact.js';
 import { formatCreatedAt, freshnessMarker } from './memory.js';
 import { parseSSEChunk, type SSEEvent } from './sse-frame.js';
@@ -108,6 +109,22 @@ export async function chatCommand(): Promise<void> {
   }
   const base = target.baseUrl;
   const client = createClient(base, target.headers);
+  // 非対話（パイプ）の入力では、スラッシュコマンドが HTTP で失敗したら（非 2xx・繋がらない）そこで止める（#3413）。
+  // コマンドは失敗を文にして書くだけで例外にしないので、通信の口で見る。端末なら今まで通り続ける。
+  let slashFailure: string | null = null;
+  const slashClient =
+    stdin.isTTY === true
+      ? client
+      : createClient(base, target.headers, async (input, init) => {
+          try {
+            const response = await fetch(input, init);
+            if (!response.ok) slashFailure ??= `HTTP ${String(response.status)}`;
+            return response;
+          } catch (error) {
+            slashFailure ??= error instanceof Error ? error.message : String(error);
+            throw error;
+          }
+        });
 
   const rl = createInterface({ input: stdin, output: process.stdout });
   // 入力の行は `line` イベントで受けて積み、`ask` が順に取り出す（#3262）。`question()` は、待って
@@ -116,7 +133,7 @@ export async function chatCommand(): Promise<void> {
   const pendingLines: string[] = [];
   let waiter: { resolve: (line: string) => void; reject: (error: Error) => void } | null = null;
   let inputClosed = false;
-  rl.on('line', (text) => {
+  const deliver = (text: string): void => {
     if (waiter === null) {
       pendingLines.push(text);
       return;
@@ -124,14 +141,86 @@ export async function chatCommand(): Promise<void> {
     const { resolve } = waiter;
     waiter = null;
     resolve(text);
+  };
+  // 複数行の入れ方（#3412）。(1) 端末の貼り付け（bracketed paste）の間に届いた行は、1つの発言へまとめる。
+  // 貼り付けの終わりのあと、次の Enter で（打ち足した分と一緒に）送る。(2) 行末の `\` で次の行へ続ける
+  // （TUI の `\` + Enter と同じ。`/` で始まるコマンドは続けない。パスが `\` で終わりうる）。
+  let pasting = false;
+  const pasteLines: string[] = [];
+  const continued: string[] = [];
+  const onKeypress = (_: unknown, key: { name?: string } | undefined): void => {
+    if (key?.name === 'paste-start') pasting = true;
+    else if (key?.name === 'paste-end') {
+      pasting = false;
+      // 貼った行は、まだ送っていない。次の Enter で送ると分かるようにする（送ったと思わせない）。
+      const partial = (rl as { line?: unknown }).line;
+      const count = pasteLines.length + (typeof partial === 'string' && partial !== '' ? 1 : 0);
+      if (pasteLines.length > 0) {
+        stdout.write(`\n（貼り付けた ${String(count)} 行。まだ送っていません。Enter で送信）\n`);
+        if (waiter !== null && stdin.isTTY === true) rl.prompt(true);
+      }
+    }
+  };
+  stdin.on('keypress', onKeypress);
+  rl.on('line', (text) => {
+    if (pasting) {
+      pasteLines.push(text);
+      return;
+    }
+    const segment = [...pasteLines.splice(0), text].join('\n');
+    const head = continued[0] ?? segment;
+    if (continuesLine(segment) && !head.startsWith('/')) {
+      continued.push(segment.slice(0, -1));
+      if (waiter !== null && stdin.isTTY === true) {
+        rl.setPrompt('… ');
+        rl.prompt();
+      }
+      return;
+    }
+    deliver([...continued.splice(0), segment].join('\n'));
   });
   // 入力が閉じたら、待っている質問を打ち切る（#3217）。node v22 は、パイプの EOF では
   // `question()` を resolve も reject もしない。積んだ行は閉じた後でも先に読ませ、尽きたら reject する。
   rl.once('close', () => {
+    // 続きの途中・貼り付けの途中で閉じたら、そこまでを1発言として渡す。
+    const rest = [
+      ...continued.splice(0),
+      ...(pasteLines.length > 0 ? [pasteLines.splice(0).join('\n')] : []),
+    ];
+    if (rest.length > 0) deliver(rest.join('\n'));
     inputClosed = true;
     waiter?.reject(new Error('input closed'));
     waiter = null;
   });
+  // 応答中の Ctrl+C は、走っているターンを止めて REPL は続ける（#3411。TUI と同じ約束）。入力を待って
+  // いる間（プロンプト）の Ctrl+C は、今まで通り終了する。`SIGINT` を購読すると readline は自分では
+  // 閉じなくなるので、閉じる側はここで担う。
+  let interrupting = false;
+  rl.on('SIGINT', () => {
+    if (waiter !== null || inputClosed) {
+      rl.close();
+      return;
+    }
+    if (interrupting) return;
+    interrupting = true;
+    void requestInterrupt(client, target)
+      .then(
+        (message) => stdout.write(`\n${message}\n`),
+        (error: unknown) =>
+          stdout.write(
+            `\nエラー: ${redactError(error instanceof Error ? error.message : String(error))}\n`,
+          ),
+      )
+      .finally(() => {
+        interrupting = false;
+      });
+  });
+  // 端末なら、貼り付けを括る印を送ってもらう。
+  const bracketedPaste = stdin.isTTY === true && process.stdout.isTTY === true;
+  if (bracketedPaste) process.stdout.write('\x1b[?2004h');
+  // 非対話（パイプ）の入力では、送信が失敗したらそこで止まり、非 0 で終える（#3413）。
+  const interactive = stdin.isTTY === true;
+  let abortReason: string | null = null;
   const ask = (question: string): Promise<string> => {
     const queued = pendingLines.shift();
     if (queued !== undefined) {
@@ -139,7 +228,8 @@ export async function chatCommand(): Promise<void> {
       return Promise.resolve(queued);
     }
     if (inputClosed) return Promise.reject(new Error('input closed'));
-    rl.setPrompt(question);
+    // `\` で続けている途中は、続きの形のプロンプトにする（まだ送っていないと分かる）。
+    rl.setPrompt(continued.length > 0 ? '… ' : question);
     rl.prompt();
     return new Promise((resolve, reject) => {
       waiter = { resolve, reject };
@@ -163,7 +253,9 @@ export async function chatCommand(): Promise<void> {
     messagesConversationId: null,
   };
 
-  stdout.write('alteroid chat（Ctrl-D で終了 / /help でコマンド）\n');
+  stdout.write(
+    'alteroid chat（Ctrl-D で終了 / 応答中の Ctrl-C でターンを止める / 行末の \\ で改行・貼り付けは1発言 / /help でコマンド）\n',
+  );
 
   try {
     for (;;) {
@@ -194,9 +286,10 @@ export async function chatCommand(): Promise<void> {
         }
 
         if (line.startsWith('/')) {
+          slashFailure = null;
           const handled = await runSlashCommand(
             line,
-            client,
+            slashClient,
             listed,
             conversationId,
             target,
@@ -204,6 +297,10 @@ export async function chatCommand(): Promise<void> {
             (summary) => confirmInRepl(summary, ask),
           );
           if (handled === 'quit') break;
+          if (slashFailure !== null && !interactive) {
+            abortReason = `コマンド ${line.split(/\s+/)[0] ?? ''} が失敗した（${redactError(slashFailure)}）`;
+            break;
+          }
           continue;
         }
 
@@ -222,6 +319,10 @@ export async function chatCommand(): Promise<void> {
               `前の送信が受け取られたか確かめられなかったので、送っていません（${redactError(error instanceof Error ? error.message : String(error))}）。\n` +
                 '同じ内容をもう一度送ってください（確かめ直します。添えかけは残してあります）\n',
             );
+            if (!interactive) {
+              abortReason = `前の送信が受け取られたか確かめられなかった（${redactError(error instanceof Error ? error.message : String(error))}）`;
+              break;
+            }
             continue;
           }
         }
@@ -236,13 +337,21 @@ export async function chatCommand(): Promise<void> {
               `添付を上げられなかったので送っていません: ${uploaded.reason}\n` +
                 '（添えかけは残してあります。/attachments で確認、/detach で外せます）\n',
             );
+            if (!interactive) {
+              abortReason = `添付を上げられなかった: ${uploaded.reason}`;
+              break;
+            }
             continue;
           }
           attachmentIds = uploaded.uploaded.map((a) => a.id);
           sentFiles = uploaded.files;
           for (const a of uploaded.uploaded) stdout.write(`  ${describeAttachment(a)}\n`);
         }
+        let sendFailure: string | null = null;
         conversationId = await sendMessage(target, line, conversationId, undefined, {
+          onFailed: (reason) => {
+            sendFailure = reason;
+          },
           ...(attachmentIds === undefined ? {} : { attachments: attachmentIds }),
           // サーバが発言を受けたら、送った分の添えかけを外す（受けなかったら残す）。
           onAccepted: () => draft.discard(sentFiles),
@@ -255,19 +364,40 @@ export async function chatCommand(): Promise<void> {
             stdout.write(`${expireUploads(sentFiles, message)}\n`);
           },
         });
+        if (sendFailure !== null && !interactive) {
+          abortReason = `送信に失敗した（${sendFailure}）`;
+          break;
+        }
       } catch (error) {
-        stdout.write(
-          `エラー: ${redactError(error instanceof Error ? error.message : String(error))}\n`,
-        );
+        const reason = redactError(error instanceof Error ? error.message : String(error));
+        stdout.write(`エラー: ${reason}\n`);
+        if (!interactive) {
+          abortReason = reason;
+          break;
+        }
       }
     }
   } finally {
+    stdin.off('keypress', onKeypress);
+    if (bracketedPaste) process.stdout.write('\x1b[?2004l');
     rl.close();
     if (conversationId) {
       // 会話終了は蒸留の契機（寿命モデル: 蒸留は生存条件）
       await endConversationOnExit(client, target, conversationId);
     }
   }
+  // 会話を閉じたあと、非 0 で終える（理由は入口が標準エラーへ出す）。残りの行は読んでいない。
+  if (abortReason !== null) {
+    throw new Error(
+      `${abortReason}。入力が端末でないので、ここで止めました（残りの入力は読んでいません）`,
+    );
+  }
+}
+
+/** 行末が、奇数個の `\` で終わるか（続きの行がある印。`\\` は1文字の `\` の書き方として続けない）。 */
+export function continuesLine(line: string): boolean {
+  const trailing = /\\+$/.exec(line);
+  return trailing !== null && trailing[0].length % 2 === 1;
 }
 
 /** `confirm` が渡されていなければ確認できないので、実行しない（#3141）。 */
@@ -307,6 +437,8 @@ export async function sendMessage(
     onUnopened?: (clientMessageId: string) => void;
     /** `400 attachment_missing`（添付が無い・期限切れ）で断られたとき。サーバの理由の文を渡す（#3246）。 */
     onAttachmentMissing?: (message: string) => void;
+    /** サーバが発言を受け取らなかった（HTTP 非 2xx）とき。理由の文を渡す（非対話の入力で止める判断に使う。#3413）。 */
+    onFailed?: (reason: string) => void;
   } = {},
 ): Promise<string | null> {
   const clientMessageId = randomUUID();
@@ -331,6 +463,7 @@ export async function sendMessage(
     const described = describeAuthFailure(response.status, target);
     if (described !== null) {
       stdout.write(`${described}\n`);
+      options.onFailed?.(described);
       return conversationId;
     }
     const failed = { status: response.status, body: await response.json().catch(() => null) };
@@ -339,9 +472,12 @@ export async function sendMessage(
     // あり、どれも「次に何を打てばよいか」まで書いてある（`apps/daemon/src/app.ts`
     // の手前検証）。ここで一律「デーモンが応答しません」に潰すと、`/edit` が
     // クローンの応答を指したときの案内（制約(C)）が人間に届かない。
-    stdout.write(
-      `エラー: ${await errorDetail({ status: failed.status, json: () => Promise.resolve(failed.body) })}\n`,
-    );
+    const detail = await errorDetail({
+      status: failed.status,
+      json: () => Promise.resolve(failed.body),
+    });
+    stdout.write(`エラー: ${detail}\n`);
+    options.onFailed?.(detail);
     if (missing !== null) options.onAttachmentMissing?.(missing);
     return conversationId;
   }
@@ -660,7 +796,10 @@ export async function runResumeCommand(line: string, target: Target): Promise<st
   return resumed;
 }
 
-const HELP = `/attach <path>       次に送る発言にファイルを添える（複数回で複数個。本文を打って送ると一緒に上がる。添えかけがあれば空行の Enter で添付だけも送れる）
+const HELP = `（入力）            応答中の Ctrl-C でターンを止める（会話は続く。入力待ちの Ctrl-C は終了）。
+                     行末の \\ で次の行へ続けて1発言にする（/ で始まる行は除く）。端末では貼り付けた複数行も1発言になり、Enter で送る
+                     標準入力が端末でない（パイプ）ときは、送信が失敗した行で止まり、非 0 で終わる
+/attach <path>       次に送る発言にファイルを添える（複数回で複数個。本文を打って送ると一緒に上がる。添えかけがあれば空行の Enter で添付だけも送れる）
 /attachments         添えかけのファイルの一覧
 /detach <番号|all>   添えかけを外す
 /report [日付]        日報（既定は直近。日付は YYYY-MM-DD）
