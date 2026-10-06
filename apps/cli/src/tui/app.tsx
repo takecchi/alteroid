@@ -321,20 +321,16 @@ export const App: FC<AppProps> = ({
    * `/journal [件数] [type=<種別,…>] [q=<語>]`。CLI `/journal` と同じ `parseJournalSearchTokens` で解く
    * （知らない種別は問い合わせる前に断る）。引数が無ければ今の絞りのまま画面へ移るだけ。
    */
-  const applyJournalArgs = (args: string): void => {
+  const applyJournalArgs = (args: string): string | undefined => {
     const tokens = args.split(/\s+/).filter((t) => t.length > 0);
-    if (tokens.length === 0) return;
+    if (tokens.length === 0) return undefined;
     const parsed = parseJournalSearchTokens(tokens);
-    if (!parsed.ok) {
-      journal.note(parsed.message);
-      return;
-    }
+    if (!parsed.ok) return parsed.message;
     let pageSize: number | undefined;
     if (parsed.limit !== undefined) {
       const n = Number(parsed.limit);
       if (!Number.isInteger(n) || n < 1 || n > JOURNAL_MAX_LIMIT) {
-        journal.note(`件数は 1〜${String(JOURNAL_MAX_LIMIT)} の整数で指定する（${parsed.limit}）`);
-        return;
+        return `件数は 1〜${String(JOURNAL_MAX_LIMIT)} の整数で指定する（${parsed.limit}）`;
       }
       pageSize = n;
     }
@@ -343,6 +339,7 @@ export const App: FC<AppProps> = ({
       .filter((t): t is JournalType => (JOURNAL_TYPES as readonly string[]).includes(t));
     setJAnchor('bottom');
     journal.setFilter(types, parsed.q ?? '', pageSize);
+    return undefined;
   };
 
   const runCommand = (action: CommandAction, args = ''): void => {
@@ -370,8 +367,12 @@ export const App: FC<AppProps> = ({
         break;
       case 'journal':
         // 絞りを先に決める（画面を開く読み込みと二重にならないように）。
-        applyJournalArgs(args);
-        goTab(action);
+        // 引数の誤りの断りは、画面を開いたあとに載せる（開く読み込みの開始が `error` を消すため）。
+        {
+          const refusal = applyJournalArgs(args);
+          goTab(action);
+          if (refusal !== undefined) journal.note(refusal);
+        }
         break;
       case 'approvals': {
         const id = args.split(/\s+/)[0] ?? '';

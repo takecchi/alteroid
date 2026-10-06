@@ -55,6 +55,11 @@ describe('フッタのキーヒント', () => {
     }
   });
 
+  it('日誌の一覧のフッタは、読み直しの r と / コマンドを案内する（#3485）', () => {
+    expect(HINT_JOURNAL_LIST).toContain('r 更新');
+    expect(HINT_JOURNAL_LIST).toContain('/ コマンド');
+  });
+
   it('詳細の案内は開いた元で変わる（その日の件から開いたら Esc はその日へ。未回答から開いたら今のまま）', () => {
     expect(approvalDetailHint('list')).toBe(HINT_AP_DETAIL);
     expect(HINT_AP_DETAIL).toContain('Esc 一覧へ');

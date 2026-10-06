@@ -90,6 +90,9 @@ export function olderLineText(state: JournalState): string {
 export function bottomLineText(state: JournalState, live: LiveStatus): string {
   const liveText =
     live === 'live' ? '' : live === 'offline' ? ' · ライブ切断（再接続中）' : ' · ライブ接続中…';
+  if (state.newerFailed) {
+    return `新着の取りこぼし確認に失敗した。切れていた間の記録が欠けている。r で読み直す${liveText}`;
+  }
   if (state.newerBlocked) {
     return `新着の取りこぼし確認が、同じ時刻の記録の詰まりで止まった。r で読み直す${liveText}`;
   }
@@ -202,7 +205,11 @@ export const JournalFilter: FC<{ state: JournalState; height: number }> = ({ sta
       })}
       <Box flexGrow={1} />
       <Text dimColor wrap="truncate-end">
-        {state.q !== '' ? `語: 「${state.q}」（/journal q=<語> で決める。c で語も外れる）` : ' '}
+        {state.qDraft !== ''
+          ? `語: 「${state.qDraft}」（/journal q=<語> で決める。c で語も外れる）`
+          : state.q !== ''
+            ? '語: 外す（Enter で反映）'
+            : ' '}
       </Text>
     </Box>
   );
