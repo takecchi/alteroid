@@ -1382,6 +1382,8 @@ export function ChatPane({
    * 問わず呼ぶ。Issue #2662）。進行中なら再生が頭から積み直し、進行中でなければ確定した
    * 本文を履歴が出す。どちらでも前の途中の行は残さない。
    */
+  /** 「受信をやめる」で止めた会話 id → 止めた時点の履歴のクローン発言数（#3761）。 */
+  const stoppedReplyRef = useRef(new Map<string, number>());
   const discardUnfinishedReply = useCallback((conversationId: string) => {
     const stale = unfinishedReplyRef.current.get(conversationId);
     if (stale === undefined) return;
@@ -1914,6 +1916,24 @@ export function ChatPane({
   useEffect(() => {
     historyLinesRef.current = historyLines;
   }, [historyLines]);
+  /*
+   * 「受信をやめる」で止めた会話の途中の返信行を、履歴がその会話の新しいクローンの発言を
+   * 出した時点で畳む（#3761）。止めた時点より履歴のクローン発言が増えていれば、完全な発言が
+   * 載ったということ。新しい受信が走っているあいだは、その受信の行を捨てないよう何もしない。
+   */
+  useEffect(() => {
+    if (shownId === undefined) return;
+    const baseline = stoppedReplyRef.current.get(shownId);
+    if (baseline === undefined) return;
+    const running = streamRef.current;
+    if (running !== undefined && !running.controller.signal.aborted) {
+      stoppedReplyRef.current.delete(shownId);
+      return;
+    }
+    if (historyLines.filter((line) => line.role === 'clone').length <= baseline) return;
+    stoppedReplyRef.current.delete(shownId);
+    discardUnfinishedReply(shownId);
+  }, [historyLines, shownId, discardUnfinishedReply]);
   const all = useMemo(() => {
     const pending = pendingOwnLines(lines, shownId, historyLines, failedTurns);
     // 手元の位置に残したカードは、履歴の側では出さない（二重にしない。#3396）。
@@ -3770,7 +3790,18 @@ export function ChatPane({
           setPending((current) => current.filter((item) => item.key !== key));
           setAttachNotice(undefined);
         }}
-        onStopReceiving={() => streamRef.current?.controller.abort()}
+        onStopReceiving={() => {
+          const stopping = streamRef.current;
+          if (stopping === undefined) return;
+          // 止めたあともターンはサーバで続く。途中の返信行は、履歴が新しいクローンの発言を出したら畳む（#3761）。
+          if (stopping.id !== undefined && unfinishedReplyRef.current.has(stopping.id)) {
+            stoppedReplyRef.current.set(
+              stopping.id,
+              historyLinesRef.current.filter((line) => line.role === 'clone').length,
+            );
+          }
+          stopping.controller.abort();
+        }}
         error={
           /*
            * **3つを排他にしない（#3594）。** 添付を断った理由・送信の失敗・未確認の送信の操作
