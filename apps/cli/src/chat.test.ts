@@ -21,6 +21,7 @@ import {
   renderReportLine,
   renderWaitingList,
   runSlashCommand,
+  sendMessage,
   type Listed,
 } from './chat.js';
 import type { Target } from './target.js';
@@ -4578,6 +4579,8 @@ describe('chat の /edit（送信済みの自分の発言を編集する）', ()
     globalThis.fetch = ((input: unknown, init?: RequestInit) => {
       const url = typeof input === 'string' ? input : String(input);
       const body: unknown = init?.body === undefined ? undefined : JSON.parse(String(init.body));
+      // 返答の後の既読（GET /conversations/:id と POST …/read）はここで見たいものではない。
+      if (!url.endsWith('/chat')) return Promise.resolve(new Response('{}', { status: 404 }));
       sent.push({ url, body });
       const ok = reply.status >= 200 && reply.status < 300;
       const text = ok ? 'event: done\ndata: {"type":"done"}\n\n' : JSON.stringify(reply.body);
@@ -5943,5 +5946,112 @@ describe('chat の /archive', () => {
         overrideReason: '本番障害の調査で緊急に消す必要があった',
       });
     });
+  });
+});
+
+/**
+ * `alteroid chat`（REPL）は、返答を表示し終えたとき会話を既読にする
+ * （`docs/architecture.md`「会話の既読」。Web の `useMarkConversationRead` と同じ意味）。
+ */
+describe('chat の既読（返答を表示したとき）', () => {
+  const target: Target = {
+    baseUrl: 'http://127.0.0.1:4517',
+    headers: { authorization: 'Bearer token' },
+    remote: false,
+    note: null,
+  };
+  let originalFetch: typeof fetch;
+  let requests: { method: string; url: string; body: unknown }[];
+
+  function stubFetch(sse: string, readStatus = 200): void {
+    originalFetch = globalThis.fetch;
+    requests = [];
+    globalThis.fetch = ((input: unknown, init?: RequestInit) => {
+      const url =
+        typeof input === 'string' ? input : input instanceof Request ? input.url : String(input);
+      const method = (
+        init?.method ?? (input instanceof Request ? input.method : 'GET')
+      ).toUpperCase();
+      const raw = init?.body ?? (input instanceof Request ? input.body : undefined);
+      requests.push({ method, url, body: typeof raw === 'string' ? JSON.parse(raw) : undefined });
+      const json = (body: unknown, status = 200) =>
+        Promise.resolve(
+          new Response(JSON.stringify(body), {
+            status,
+            headers: { 'content-type': 'application/json' },
+          }),
+        );
+      if (url.endsWith('/chat')) {
+        return Promise.resolve(
+          new Response(sse, { status: 200, headers: { 'content-type': 'text/event-stream' } }),
+        );
+      }
+      if (url.endsWith('/read')) {
+        return readStatus === 200
+          ? json({ readThrough: 't', unreadCount: 0 })
+          : json({ error: '既読にできない理由' }, readStatus);
+      }
+      return json({
+        conversationId: 'c1',
+        messages: [
+          { id: 'm1', at: 't1', role: 'inbound', text: '質問' },
+          { id: 'm2', at: 't2', role: 'outbound', text: '答え' },
+        ],
+        scanned: 2,
+        reachedStart: true,
+        supersededCount: 0,
+      });
+    }) as typeof fetch;
+  }
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  const frame = (name: string, data: unknown) =>
+    `event: ${name}\ndata: ${JSON.stringify(data)}\n\n`;
+  const reply =
+    frame('open', { conversationId: 'c1' }) +
+    frame('text', { text: '答え\n' }) +
+    frame('done', { type: 'done' });
+  const readRequests = () => requests.filter((r) => r.url.endsWith('/read'));
+
+  it('返答が done まで表示されたら、取り直した最後の発言の id で既読にする', async () => {
+    stubFetch(reply);
+    captureStdout();
+    const id = await sendMessage(target, '質問', null);
+    expect(id).toBe('c1');
+    expect(readRequests()).toEqual([
+      {
+        method: 'POST',
+        url: 'http://127.0.0.1:4517/conversations/c1/read',
+        body: { through: 'm2' },
+      },
+    ]);
+  });
+
+  it('done が来ない（接続が切れた）なら既読にしない', async () => {
+    stubFetch(frame('open', { conversationId: 'c1' }) + frame('text', { text: '途中' }));
+    captureStdout();
+    await sendMessage(target, '質問', null);
+    expect(requests.filter((r) => !r.url.endsWith('/chat'))).toEqual([]);
+  });
+
+  it('error で終わったら既読にしない', async () => {
+    stubFetch(reply + frame('error', { message: '失敗' }));
+    captureStdout();
+    await sendMessage(target, '質問', null);
+    expect(requests.filter((r) => !r.url.endsWith('/chat'))).toEqual([]);
+  });
+
+  it('既読の要求が失敗しても、返答は残り会話 id も返り、1 行だけ知らせる', async () => {
+    stubFetch(reply, 500);
+    const read = captureStdout();
+    const id = await sendMessage(target, '質問', null);
+    expect(id).toBe('c1');
+    const text = read();
+    expect(text).toContain('答え');
+    expect(text).toContain('この会話を既読にできませんでした');
+    expect(text).toContain('既読にできない理由');
   });
 });

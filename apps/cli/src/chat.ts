@@ -58,6 +58,7 @@ import {
 import type { InferResponseType } from 'hono/client';
 
 import { createClient, type DaemonClient } from './client.js';
+import { markConversationReadAfterReply } from './conversations.js';
 import { formatElapsedAgo } from './format.js';
 import { redactBody, redactError } from './redact.js';
 import { formatCreatedAt, freshnessMarker } from './memory.js';
@@ -165,6 +166,9 @@ export async function sendMessage(
 
   let nextConversationId = conversationId;
   let wrote = false;
+  // 返答が最後まで表示されたか（`done` が来て、`error` / `usage_limited` が無かった）。既読にする条件。
+  let completed = false;
+  let failedOrLimited = false;
   // **本文は改行までためて、行ごとに伏せてから書く**（#2635）。チャンクごとに伏せると、
   // 2つのチャンクにまたがったトークンはどちらの断片も規則に合わずに出る。端末へ書いた
   // ものは取り消せないので、まだ改行の来ていない残りは `pending` に持ち、ほかの出来事の
@@ -218,9 +222,14 @@ export async function sendMessage(
             '    （この発言は保持されていて、次に枠が開いたときに配り直されて試し直される）\n',
           );
         }
+        failedOrLimited = true;
         break;
       }
+      case 'done':
+        completed = true;
+        break;
       case 'error': {
+        failedOrLimited = true;
         const data = event.json<{ message: string }>();
         stdout.write(`\nエラー: ${data ? redactError(data.message) : '不明'}\n`);
         break;
@@ -232,6 +241,9 @@ export async function sendMessage(
 
   flushPending();
   if (wrote) stdout.write('\n');
+  if (completed && !failedOrLimited && nextConversationId !== null) {
+    await markConversationReadAfterReply(target, nextConversationId);
+  }
   return nextConversationId;
 }
 
