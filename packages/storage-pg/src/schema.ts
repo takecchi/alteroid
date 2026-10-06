@@ -248,6 +248,13 @@ export const commitments = pgTable(
     /** 片付いた時刻。null なら未了。`close` はこの列が null の行だけを更新する。 */
     closedAt: timestamp('closed_at', { withTimezone: true, mode: 'date' }),
     commitment: jsonb('commitment').notNull(),
+    /**
+     * 入れた順（挿入順）。同じ `at` の未了の行の決め手で、`list()` は `order by at, seq`
+     * （issue #3285。fs / in-memory の安定整列と同じ並び）。`commitments_seq_seq` が既定で
+     * 振るので、書き直し（`jsonb_set`）では動かない。**null は migrate が振る前の行**で、
+     * 並びでは最後に来る。
+     */
+    seq: bigint('seq', { mode: 'number' }).default(sql`nextval('commitments_seq_seq')`),
   },
   // 一覧の主経路は「未了だけを古い順」なので、部分索引にして片付いた行を載せない
   // （自動 open は人間の発言のたびに1行増えるため、閉じた行はいずれ大半を占める）。
