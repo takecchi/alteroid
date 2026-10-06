@@ -31,7 +31,14 @@ import {
   storeTestBaseUrl,
 } from '~/test-support';
 
-import { JOURNAL_TABS, MEMORY_TABS, SCHEDULE_TABS, SETTINGS_TABS, WORK_TABS } from '~/lib/nav';
+import {
+  APPROVALS_TABS,
+  JOURNAL_TABS,
+  MEMORY_TABS,
+  SCHEDULE_TABS,
+  SETTINGS_TABS,
+  WORK_TABS,
+} from '~/lib/nav';
 
 import Shell from './shell';
 
@@ -119,6 +126,10 @@ const CASES: [string, string][] = [
   ['/chat', '会話'],
   ['/chat/conv-1', '会話'],
   ['/approvals', '承認待ち'],
+  // 回答済みのページ（日付・1件）でも「承認待ち」の行が選ばれる（#3237）。
+  ['/approvals/answered', '承認待ち'],
+  ['/approvals/answered/2026-09-30', '承認待ち'],
+  ['/approvals/answered/2026-09-30/ap-1', '承認待ち'],
   ['/commitments', '仕事'],
   ['/progress', '仕事'],
   ['/managers', 'マネージャー'],
@@ -155,6 +166,7 @@ describe('まとまりのどのページに居ても、代表の1行が選ばれ
 
   it('タブの定義から作った全経路も、それぞれ1行だけ選ばれる（サイドバーで選ばれないページを作らない）', async () => {
     const groups: [string, readonly { to: string }[]][] = [
+      ['承認待ち', APPROVALS_TABS],
       ['仕事', WORK_TABS],
       ['日誌', JOURNAL_TABS],
       ['記憶とやり方', MEMORY_TABS],

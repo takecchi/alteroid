@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  APPROVALS_TABS,
   isNavItemActive,
   isUnder,
   JOURNAL_TABS,
@@ -33,6 +34,7 @@ describe('NAV_ITEMS', () => {
 
   it('まとまりの全タブは、ちょうど1つの行に属する（サイドバーで選ばれないページも、2行が同時に選ばれるページも作らない）', () => {
     for (const tab of [
+      ...APPROVALS_TABS,
       ...WORK_TABS,
       ...JOURNAL_TABS,
       ...MEMORY_TABS,

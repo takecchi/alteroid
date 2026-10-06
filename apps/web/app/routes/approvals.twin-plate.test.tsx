@@ -94,6 +94,17 @@ function renderPage() {
   );
 }
 
+/**
+ * カードの一覧の各 `<li>`。**上のタブの帯も `list` / `listitem` なので、素の
+ * `getAllByRole('listitem')[0]` はタブ（#3237 以降）を掴む**——そこで「alert が無い」を測ると、
+ * カードを見ていないのに通る。かならずカードの一覧（`aria-label`）へ絞る。
+ */
+async function cardItems(): Promise<HTMLElement[]> {
+  return within(await screen.findByRole('list', { name: '承認待ちの一覧' })).getAllByRole(
+    'listitem',
+  );
+}
+
 describe('時刻の表示（Timestamp を使わない）', () => {
   it('formatDateTime と formatRelative の2つの span を、この順で出す。<time> は出さない', async () => {
     const createdAt = '2026-08-19T10:00:00.000Z';
@@ -165,7 +176,7 @@ describe('エラーの位置と数', () => {
   it('どちらの失敗も無ければ、エラーの箱を出さない', async () => {
     stub([approval({ id: 'a-1' })]);
     renderPage();
-    const item = (await screen.findAllByRole('listitem'))[0]!;
+    const item = (await cardItems())[0]!;
     expect(within(item).queryAllByRole('alert')).toHaveLength(0);
   });
 
@@ -179,7 +190,7 @@ describe('エラーの位置と数', () => {
     await screen.findByText('まとめて送った回答は通らなかった: already answered');
 
     // まとめ送信の失敗だけが出ている間は1つ。
-    const item = screen.getAllByRole('listitem')[0]!;
+    const item = (await cardItems())[0]!;
     expect(within(item).getAllByRole('alert')).toHaveLength(1);
 
     fireEvent.click(screen.getByRole('button', { name: '回答する' }));

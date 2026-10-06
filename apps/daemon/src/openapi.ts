@@ -708,6 +708,14 @@ export const approvalsResponseSchema = z.object({
   nextCursor: z.string().optional(),
 });
 
+/**
+ * `GET /approvals/answered-dates` の応答。決着のあった日（デーモンの `localDate()`）と、その日に
+ * 決着した件数（回答済み＋取り下げ済み）。新しい日が上。**封筒は持たない**（`/reports` と同じ）。
+ */
+export const approvalsAnsweredDatesResponseSchema = z.object({
+  dates: z.array(z.object({ date: z.string(), count: z.number().int().positive() })),
+});
+
 export const approvalsAnswerResponseSchema = z.object({
   results: z.array(z.object({ id: z.string(), ok: z.boolean(), error: z.string().optional() })),
 });
