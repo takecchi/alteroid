@@ -33,7 +33,7 @@
 import type { ConversationReadView } from './conversation-read.js';
 import { compareIsoInstant } from './iso-instant.js';
 import type { AttachmentRef, JournalEntry } from './schema.js';
-import type { JournalStore } from './store.js';
+import { UnreadableJournalEntryError, type JournalCursor, type JournalStore } from './store.js';
 
 /** 日誌の `exchange` 1件。 */
 export type Exchange = Extract<JournalEntry, { type: 'exchange' }>;
@@ -412,4 +412,170 @@ export function toMessage(entry: Exchange): ConversationMessage {
  */
 export function reachedStart(returned: number, scan: number): boolean {
   return returned < scan;
+}
+
+/**
+ * 会話の一覧の頁の継続点。**日誌の頁の継続点（`JournalCursor` = `{ id, at }`）と同じ形である。**
+ *
+ * 指すのは次のどちらかで、呼ぶ側はどちらかを区別しない（応答の `nextCursor` をそのまま返す）。
+ * - 頁の最後の会話の**最新の人間との発言**（`limit` で切れて、窓の中にまだ会話が残るとき）
+ * - 窓（`scan`）の最後に読んだ発言（窓の中の会話は出し切ったが、窓が日誌の先頭に届いていないとき）
+ */
+export type ConversationCursor = JournalCursor;
+
+/**
+ * 継続点が使えないときに投げる。呼び出し側（HTTP）が 400 へ変換する。**黙って先頭へ倒さない**
+ * （`JournalAnchorNotFoundError` と同じ理由。継続点が引けないのは「判定できない」である）。
+ */
+export class InvalidConversationCursorError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'InvalidConversationCursorError';
+  }
+}
+
+/** 継続点より新しい側にある人間との発言の会話 id を、全部集める際の1回の読み出し幅。 */
+const NEWER_IDS_PAGE = 1000;
+
+/**
+ * 会話の一覧の1頁。`GET /conversations` の応答の元になる。
+ *
+ * **並びは、会話ごとの「最新の人間との発言」の日誌の順序（新しい順）である**（`collectConversations`
+ * が最初に出会った順に並べるのと同じ）。日誌は追記専用で既存の行の前後が動かないので、継続点
+ * （発言の `{ id, at }`）で辿れば、同じミリ秒に複数の会話の最新発言が並んでいても、飛ばさず重複しない
+ * （`at` では割れない同着は日誌の順序が割る）。
+ */
+export interface ConversationPage {
+  conversations: ConversationSummary[];
+  /** この頁で読んだ人間との発言の数（継続点があれば、その先から数える）。 */
+  scanned: number;
+  /** この頁の窓が日誌の先頭に届いたか（`reachedStart`）。 */
+  reachedStart: boolean;
+  /** この窓の中で `limit` に収まらず、この頁に載せなかった会話の数。 */
+  hiddenByLimit: number;
+  /**
+   * 次の頁の継続点。**`null` = 続きは無い**（窓の中の会話を出し切り、窓が日誌の先頭にも届いた）。
+   * `hiddenByLimit > 0` か `reachedStart === false` のどちらかなら非 `null`。
+   */
+  next: ConversationCursor | null;
+}
+
+/**
+ * 継続点より**新しい**側にある人間との発言を持つ会話の id を全部集める。
+ *
+ * 継続点より古い側の窓に現れる会話のうち、これに入っているものは、すでに前の頁までで出した会話の
+ * 古い発言である（会話の位置は最新の発言で決まるので、新しい側に発言が在れば、その会話は継続点より
+ * 前に並んでいる）。**それを出し直すと重複になる**ので、窓の側から除く。
+ */
+async function conversationIdsNewerThan(
+  journal: Pick<JournalStore, 'listPage'>,
+  anchor: ConversationCursor,
+): Promise<Set<string>> {
+  const ids = new Set<string>();
+  let after: JournalCursor = anchor;
+  for (;;) {
+    const page = await journal.listPage({
+      types: ['exchange'],
+      with: ['human'],
+      order: 'asc',
+      after,
+      limit: NEWER_IDS_PAGE,
+    });
+    for (const entry of page.entries) {
+      if (entry.type === 'exchange' && entry.conversationId !== undefined) {
+        ids.add(entry.conversationId);
+      }
+    }
+    if (page.next === null) return ids;
+    after = page.next;
+  }
+}
+
+/**
+ * 会話の一覧の1頁を読む（`GET /conversations` と、同じ並びを辿る口が共有する）。
+ *
+ * - `cursor` が無ければ、日誌の新しいほうから `scan` 件の窓（従来と同じ）。
+ * - `cursor` が在れば、その発言**より古い**側から `scan` 件の窓を読み、継続点より新しい側に発言を持つ
+ *   会話（前の頁までに出した会話）を除く。**窓の外へも、継続点を辿れば進める。**
+ *
+ * `scanned` / `reachedStart` / `hiddenByLimit` の意味は従来のまま（頁の窓についての値）。
+ * 窓は頁ごとに読み直すので、**会話の `messages` / `startedAt` / `preview` は、その窓の中で数えた値**である
+ * （窓をまたいで古い発言を持つ会話は、窓の外を数えていない。従来の `scan` の注意と同じ）。
+ *
+ * ⚠️ 継続点が指す発言は日誌に実在し、人間との往復でなければならない。そうでなければ
+ * `InvalidConversationCursorError`。
+ */
+export async function readConversationPage(
+  journal: Pick<JournalStore, 'list' | 'listPage' | 'get'>,
+  options: {
+    limit: number;
+    scan: number;
+    cursor?: ConversationCursor;
+    readView?: ConversationReadView;
+  },
+): Promise<ConversationPage> {
+  const { limit, scan, cursor, readView } = options;
+  let exclude: ReadonlySet<string> = new Set();
+  if (cursor !== undefined) {
+    let anchor: JournalEntry | null;
+    try {
+      anchor = await journal.get(cursor.id);
+    } catch (error) {
+      if (error instanceof UnreadableJournalEntryError) {
+        throw new InvalidConversationCursorError('カーソルが指す発言が読めない');
+      }
+      throw error;
+    }
+    if (
+      anchor === null ||
+      anchor.at !== cursor.at ||
+      anchor.type !== 'exchange' ||
+      anchor.with !== 'human'
+    ) {
+      throw new InvalidConversationCursorError('カーソルが指す発言が見当たらない');
+    }
+    const newer = await conversationIdsNewerThan(journal, cursor);
+    if (anchor.conversationId !== undefined) newer.add(anchor.conversationId);
+    exclude = newer;
+  }
+
+  const entries = await readConversationWindow(journal, {
+    scan,
+    ...(cursor === undefined ? {} : { after: cursor }),
+  });
+  const fresh =
+    exclude.size === 0
+      ? entries
+      : entries.filter(
+          (entry) =>
+            !(
+              entry.type === 'exchange' &&
+              entry.conversationId !== undefined &&
+              exclude.has(entry.conversationId)
+            ),
+        );
+
+  // 会話の位置（最新の発言）。`collectConversations` と同じく、新しい順に最初に出会った発言。
+  const headOf = new Map<string, JournalCursor>();
+  for (const entry of humanExchanges(fresh)) {
+    if (entry.conversationId !== undefined && !headOf.has(entry.conversationId)) {
+      headOf.set(entry.conversationId, { id: entry.id, at: entry.at });
+    }
+  }
+
+  const all = collectConversations(fresh, readView);
+  const conversations = all.slice(0, limit);
+  const hiddenByLimit = all.length - conversations.length;
+  const reached = reachedStart(entries.length, scan);
+
+  let next: ConversationCursor | null = null;
+  const lastShown = conversations[conversations.length - 1];
+  if (hiddenByLimit > 0 && lastShown !== undefined) {
+    next = headOf.get(lastShown.conversationId) ?? null;
+  } else if (!reached) {
+    // 窓の中の会話は出し切った。窓の外が残るので、窓の最後に読んだ発言から続ける。
+    const lastRead = entries[entries.length - 1];
+    if (lastRead !== undefined) next = { id: lastRead.id, at: lastRead.at };
+  }
+  return { conversations, scanned: entries.length, reachedStart: reached, hiddenByLimit, next };
 }

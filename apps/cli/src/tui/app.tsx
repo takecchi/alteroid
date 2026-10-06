@@ -253,8 +253,11 @@ export const App: FC<AppProps> = ({
   const quittingRef = useRef(false);
   /** 委譲の詳細で、書きかけを捨てて戻る 2 度目の Esc を待っている（#3367）。 */
   const mgrDiscardArmedRef = useRef(false);
-  /** 書きかけが在るまま、2 度目の Ctrl+D（捨てて終了）を待っている（#3490）。 */
-  const quitArmedRef = useRef(false);
+  /**
+   * 書きかけが在るまま、2 度目の終了（Ctrl+D か `/exit`。捨てて終了）を待っている（#3490・#3518）。
+   * 1 度目の時点の書きかけ（会話・委譲・承認待ち）の写し。待っていなければ null。
+   */
+  const quitArmedRef = useRef<string | null>(null);
   const quit = (): void => {
     if (quittingRef.current) return;
     quittingRef.current = true;
@@ -264,6 +267,28 @@ export const App: FC<AppProps> = ({
       feed.stop();
       exit();
     })();
+  };
+
+  /**
+   * 終了の要求（Ctrl+D と `/exit` で共有する）。書きかけが在れば、1 度目は言うだけで、2 度目で終了する。
+   * `/exit` を打った欄（`from`）の中身は `/exit` という文なので、書きかけに数えない。
+   * 待ちの間に書きかけが変わっていたら（別の文を足した・消した）、1 度目からやり直す。
+   */
+  const requestQuit = (from?: 'chat' | 'managers'): void => {
+    const drafts = [
+      from === 'chat' ? '' : bufferRef.current.value,
+      from === 'managers' ? '' : mgrBufferRef.current.value,
+      tabRef.current === 'approvals' && zoneRef.current === 'input'
+        ? apBufferRef.current.value
+        : '',
+    ];
+    const snapshot = JSON.stringify(drafts);
+    if (drafts.some((d) => d.length > 0) && quitArmedRef.current !== snapshot) {
+      quitArmedRef.current = snapshot;
+      setFootNote('書きかけが残っている。もう一度 ^D か /exit で捨てて終了する');
+      return;
+    }
+    quit();
   };
 
   const openPicker = (): void => {
@@ -346,7 +371,7 @@ export const App: FC<AppProps> = ({
     return undefined;
   };
 
-  const runCommand = (action: CommandAction, args = ''): void => {
+  const runCommand = (action: CommandAction, args = '', from?: 'chat' | 'managers'): void => {
     // 会話の側へ効く（または会話のログへ書く）コマンドは、結果が見えるよう会話へ移ってから実行する。
     if (
       tabRef.current !== 'chat' &&
@@ -367,7 +392,7 @@ export const App: FC<AppProps> = ({
         controller.addSystem(helpLines().join('\n'));
         break;
       case 'exit':
-        quit();
+        requestQuit(from);
         break;
       case 'journal':
         // 絞りを先に決める（画面を開く読み込みと二重にならないように）。
@@ -426,7 +451,7 @@ export const App: FC<AppProps> = ({
     // 未知のコマンドとして断るときは、書いた文を消さない（`/var/log/…` で始まる普通の文を打ち直させない。#3406）。
     if (resolved.kind !== 'unknown') setBuffer(emptyBuffer());
     if (text.length === 0 && !controller.hasAttachments()) return;
-    if (resolved.kind === 'command') return runCommand(resolved.spec.action, resolved.args);
+    if (resolved.kind === 'command') return runCommand(resolved.spec.action, resolved.args, 'chat');
     if (resolved.kind === 'unknown') {
       controller.addSystem(
         `不明なコマンド: /${resolved.name}（/help で一覧。/ で始まる文をそのまま送るなら // で始める）`,
@@ -446,7 +471,9 @@ export const App: FC<AppProps> = ({
     // 未知のコマンドとして断るときは、書いた文を消さない（会話の `submit` と同じ。#3406・#3486）。
     if (resolved.kind !== 'unknown') setMgrBuffer(emptyBuffer());
     if (text.length === 0) return;
-    if (resolved.kind === 'command') return runCommand(resolved.spec.action, resolved.args);
+    if (resolved.kind === 'command') {
+      return runCommand(resolved.spec.action, resolved.args, 'managers');
+    }
     if (resolved.kind === 'unknown') {
       managers.setNotice(
         `不明なコマンド: /${resolved.name}（/help で一覧。/ で始まる文をそのまま送るなら // で始める）`,
@@ -742,9 +769,16 @@ export const App: FC<AppProps> = ({
   useInput((rawInput, rawKey) => {
     const { input, key } = normalizeChord(rawInput, rawKey);
 
-    // 通知は次のキーで消す。Ctrl+D の 2 度目の待ちも、Ctrl+D 以外のキーで解く。
+    // 通知は次のキーで消す。終了の 2 度目の待ちも、Ctrl+D 以外のキーで解く。
+    // ただし `/exit` を打つ間の入力欄のキーでは解かない（待ちの間に書きかけが変われば、`requestQuit` が見て解く）。
     setFootNote(null);
-    if (!(key.ctrl && input === 'd')) quitArmedRef.current = false;
+    const typingInInput =
+      (tabRef.current === 'chat' || tabRef.current === 'managers') &&
+      zoneRef.current === 'input' &&
+      !key.escape &&
+      !key.tab &&
+      !key.ctrl;
+    if (!(key.ctrl && input === 'd') && !typingInInput) quitArmedRef.current = null;
 
     if (key.ctrl && input === 'c') {
       const where = tabRef.current;
@@ -756,19 +790,8 @@ export const App: FC<AppProps> = ({
     }
     if (key.ctrl && input === 'd') {
       // 書きかけ（会話・委譲・承認待ちの入力欄）が在れば、1 度目は言うだけで、2 度目で終了する。
-      // どの画面・どのゾーンでも同じ（委譲の Esc 二度押しと揃える。#3490）。
-      const hasDraft =
-        !isEmptyBuffer(bufferRef.current) ||
-        !isEmptyBuffer(mgrBufferRef.current) ||
-        (tabRef.current === 'approvals' &&
-          zoneRef.current === 'input' &&
-          !isEmptyBuffer(apBufferRef.current));
-      if (hasDraft && !quitArmedRef.current) {
-        quitArmedRef.current = true;
-        setFootNote('書きかけが残っている。もう一度 ^D で捨てて終了する');
-        return;
-      }
-      quit();
+      // どの画面・どのゾーンでも同じ（委譲の Esc 二度押しと揃える。#3490）。`/exit` も同じ仕組み（#3518）。
+      requestQuit();
       return;
     }
 

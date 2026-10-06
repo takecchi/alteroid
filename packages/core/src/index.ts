@@ -359,10 +359,14 @@ export {
   humanExchanges,
   preview,
   reachedStart,
+  readConversationPage,
   readConversationWindow,
   searchExchanges,
   toMessage,
+  InvalidConversationCursorError,
+  type ConversationCursor,
   type ConversationMessage,
+  type ConversationPage,
   type ConversationSummary,
   type Exchange,
 } from './conversation.js';
@@ -401,6 +405,14 @@ export {
   verifyJournalStoreOrderContract,
   type JournalStoreOrderContractSubject,
 } from './journal-order-with-contract.js';
+/**
+ * 会話の一覧の頁送り（`readConversationPage`）の契約。3実装（インメモリ / `storage-fs` / `storage-pg`）
+ * それぞれの歯がこれを呼んで揃っていることを測る（ストアに新しい口は足していない。日誌の継続点の上の組み立て）。
+ */
+export {
+  verifyConversationPageContract,
+  type ConversationPageContractSubject,
+} from './conversation-page-contract.js';
 /**
  * `JournalQuery` の退化した値（`types: []` / `limit: 0`）の契約（issue #425）。
  * 3実装（インメモリ / `storage-fs` / `storage-pg`）それぞれの歯がこれを

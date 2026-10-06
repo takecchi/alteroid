@@ -310,7 +310,11 @@ conversationsCommand
   .description('会話の一覧（新しい順）')
   .option('--limit <n>', '返す最大件数（デーモンの既定 20、最大 200）')
   .option('--scan <n>', '日誌をどこまで遡って集計するか（デーモンの既定 2000、最大 10000）')
-  .action(async (options: { limit?: string; scan?: string }) => {
+  .option(
+    '--cursor <cursor>',
+    '続きの頁（前の一覧の最後に出た「続きを読むには」の値。上限 200 件や --scan の窓の外へも辿れる）',
+  )
+  .action(async (options: { limit?: string; scan?: string; cursor?: string }) => {
     await conversationsListCommand(options);
   });
 

@@ -60,7 +60,13 @@ import type {
   PendingApproval,
 } from '@alteroid/logic';
 
-import { ApprovalAnswerCard, approvalDetailPath } from '~/components/approval-answer-card';
+import {
+  ApprovalAnswerCard,
+  approvalDetailPath,
+  isApprovalAnswered,
+  isApprovalWithdrawn,
+} from '~/components/approval-answer-card';
+import { useMinuteNow } from '~/lib/use-now';
 import { usePageVisible } from '~/lib/use-page-visible';
 
 import type { Route } from './+types/chat';
@@ -81,7 +87,10 @@ export function clientLoader({ params }: Route.ClientLoaderArgs) {
  * 「最下部にいる」と判定し、狭すぎると丸め誤差で最下部にいるのに追従
  * しない、の両方に転びうる）。
  */
+let replyGroupSeq = 0;
 const BOTTOM_THRESHOLD_PX = 32;
+/** 返信行を1つも持たない集合（state の初期値。同じ参照を使い回して余計な再描画を避ける）。 */
+const NO_REPLY_KEYS: ReadonlySet<string> = new Set();
 
 /**
  * ストリームの `error` イベント（ターンが失敗した）由来の失敗。入力欄の上の帯が、ネットワーク断・
@@ -254,6 +263,13 @@ interface Line {
    * `failed` はもう一度送れば試し直せる、`held` は枠が開けばクローンが自分で試し直す。
    */
   turnFailure?: 'failed' | 'held';
+  /**
+   * 同じストリーム（＝1ターン）の返信行をまとめる印（#3593）。`ask_human`・道具を挟んで返信が
+   * 複数の行に分かれても、日誌には**ターン末に1つの発言**（本文を連結したもの）として載る
+   * （`clone.ts` の `exchange` の書き込み）。`pendingOwnLines` は、この印を持つ行の連結を履歴の
+   * 1発言と突き合わせる。画面の中だけのもの。
+   */
+  replyGroup?: string;
   journalId?: string;
   /** この発言に添えられた添付の控え（中身ではない。表示の部品が取りに行く）。 */
   attachments?: readonly MessageAttachment[];
@@ -374,6 +390,64 @@ export function retainedBy(
  * **同じ本文が複数あっても1件ずつしか消さない**（多重集合の照合。理由は
  * `ChatPane` 内の `all` の doc に同じものがある）。
  */
+/** 操作で消える要素から、フォーカスを戻す先（#3595）。 */
+type FocusIntent =
+  { kind: 'edit'; lineKey: string } | { kind: 'approval'; approvalId: string } | { kind: 'end' };
+
+const FOCUSABLE = 'textarea, input, select, button:not([disabled]), a[href]';
+
+function isFocusLost(): boolean {
+  const active = document.activeElement;
+  return active === null || active === document.body;
+}
+
+function composerInput(): HTMLElement | null {
+  return document.querySelector<HTMLElement>('[data-chat-input]');
+}
+
+/**
+ * 戻す先へフォーカスを移す。**戻し終えた（もう見張らなくてよい）ときだけ `true`。**
+ * 鉛筆へ戻した直後は `false` を返す——確定した発言は置き換わって鉛筆ごと消えることがあり、
+ * そのときはもう一度（入力欄へ）戻す。
+ */
+function applyFocusIntent(intent: FocusIntent): boolean {
+  if (intent.kind === 'edit') {
+    if (!isFocusLost()) return false;
+    const pencil = [...document.querySelectorAll<HTMLElement>('[data-edit-key]')].find(
+      (element) => element.getAttribute('data-edit-key') === intent.lineKey,
+    );
+    if (pencil !== undefined) {
+      pencil.focus();
+      return false;
+    }
+    composerInput()?.focus();
+    return true;
+  }
+  if (intent.kind === 'approval') {
+    const cards = [...document.querySelectorAll<HTMLElement>('[data-approval-card]')];
+    const answered = cards.find(
+      (element) => element.getAttribute('data-approval-card') === intent.approvalId,
+    );
+    // 答えが台帳から戻って、カードが答え済みの表示に変わるまで待つ。
+    if (answered?.getAttribute('data-approval-state') === 'unanswered') return false;
+    const active = document.activeElement;
+    if (!isFocusLost() && !(answered !== undefined && answered.contains(active))) return true;
+    const unanswered = cards.filter(
+      (element) => element.getAttribute('data-approval-state') === 'unanswered',
+    );
+    const index = answered === undefined ? -1 : cards.indexOf(answered);
+    const next = unanswered.find((element) => cards.indexOf(element) > index) ?? unanswered[0];
+    const target = next?.querySelector<HTMLElement>(FOCUSABLE) ?? composerInput();
+    target?.focus();
+    return true;
+  }
+  // 会話を終える: 確認を閉じたあと。成功なら新しい会話の入力欄、失敗なら押したボタンへ。
+  // 成功すると会話が切り替わって入力欄が作り直されることがあるので、戻した後も見張る（使い手が動かすまで）。
+  if (!isFocusLost()) return false;
+  (document.querySelector<HTMLElement>('[data-chat-end]') ?? composerInput())?.focus();
+  return false;
+}
+
 export function pendingOwnLines(
   lines: Line[],
   shownId: string | undefined,
@@ -388,8 +462,28 @@ export function pendingOwnLines(
   for (const line of historyLines) {
     if (line.approval !== undefined) historyApprovals.set(line.approval.id, line.approval);
   }
+  /*
+   * **分かれた返信（#3593）は、連結した本文で履歴の1発言と突き合わせる。** 日誌はターンの本文を
+   * 1つの発言として載せるので、行ごとに照合すると、履歴が引き取っても手元の行が全部残って二重に出る。
+   * 連結が当たらなければ、行ごとの照合へ落ちる（一致を確認できないものは落とさない）。
+   */
+  const groups = new Map<string, Line[]>();
+  for (const line of ownedBy(lines, shownId)) {
+    if (line.replyGroup === undefined || line.role !== 'clone') continue;
+    groups.set(line.replyGroup, [...(groups.get(line.replyGroup) ?? []), line]);
+  }
+  const absorbedGroups = new Set<string>();
+  for (const [group, members] of groups) {
+    if (members.length < 2) continue;
+    const key = `clone\u0000${members.map((member) => member.text).join('')}`;
+    const count = remaining.get(key) ?? 0;
+    if (count === 0) continue;
+    remaining.set(key, count - 1);
+    absorbedGroups.add(group);
+  }
   const pending: Line[] = [];
   for (const line of ownedBy(lines, shownId)) {
+    if (line.replyGroup !== undefined && absorbedGroups.has(line.replyGroup)) continue;
     const key = lineMatchKey(line);
     const count = remaining.get(key) ?? 0;
     if (count > 0) {
@@ -627,8 +721,8 @@ export default function Chat({ loaderData }: Route.ComponentProps) {
  * **広い画面では脇に、狭い画面ではドロワーの中に、同じものを置く**（`shell.tsx`
  * の `Nav` と同じ形）。別々に書くと、一覧に何か足したときに片方だけ増える。
  */
-/** 会話の一覧が一度に読む件数の段（`GET /conversations` の `limit` は最大 200）。 */
-const CONVERSATION_LIMITS = [30, 60, 90, 120, 150, 200] as const;
+/** 会話の一覧が 1 頁で読む件数（`GET /conversations` の `limit`）。続きは継続点（`nextCursor`）で足す。 */
+const CONVERSATION_PAGE_SIZE = 30;
 
 function ConversationList({
   activeId,
@@ -644,17 +738,21 @@ function ConversationList({
   onNavigate?: (() => void) | undefined;
 }) {
   /*
-   * 「もっと見る」（#3404）。押すたびに `limit` を段で増やし（上限は API の 200）、取り直す。
+   * 「もっと見る」（#3404 → #3550）。押すたびに 1 頁（30 件）ぶん多く、**継続点（`nextCursor`）で
+   * 続きを足す**。`limit` の上限（200）や `scan` の窓の外の会話にも辿れる。
    * **取り直しの間も、失敗したときも、直前の一覧を残す**（`keepPreviousData`）。
-   * 失敗は画面の上の `ErrorNote` ではなく、一覧の下に小さく言う。もう一度押せば同じ段を取り直す。
+   * 失敗は画面の上の `ErrorNote` ではなく、一覧の下に小さく言う。もう一度押せば同じ頁を取り直す。
+   * 続き（`nextCursor`）が無ければボタンを出さない。
    */
-  const [step, setStep] = useState(0);
-  const limit = CONVERSATION_LIMITS[step] ?? 30;
-  const { data, error, isLoading, isValidating, mutate } = useConversations(limit, {
-    keepPreviousData: true,
-  });
-  const loadingMore = step > 0 && isValidating;
-  const moreFailing = step > 0 && error !== undefined && !isValidating;
+  const [pages, setPages] = useState(1);
+  const { data, error, isLoading, isValidating, mutate } = useConversations(
+    CONVERSATION_PAGE_SIZE,
+    { keepPreviousData: true, pages },
+  );
+  // 「たった今」「N分前」を古いまま残さない（#3596）。
+  const now = useMinuteNow();
+  const loadingMore = pages > 1 && isValidating;
+  const moreFailing = pages > 1 && error !== undefined && !isValidating;
 
   /*
    * 但し書きを組み立てるのは画面の側（`ConversationList` の `notes`）。出す条件は
@@ -685,7 +783,8 @@ function ConversationList({
    * 語彙はクローンの道具（`tools.ts` の「…ほか N 件は省略」）に寄せる。
    * `reachedStart` とは別の条件なので、両方出ることも片方だけのこともある。
    */
-  if (data !== undefined && data.hiddenByLimit > 0) {
+  if (data !== undefined && data.hiddenByLimit > 0 && data.nextCursor === undefined) {
+    // 続き（`nextCursor`）を返さない古いデーモンのとき。続きがあるなら、下の「もっと見る」が言う。
     notes.push(
       `…ほか ${data.hiddenByLimit} 件は省略（この窓に ${data.conversations.length + data.hiddenByLimit} 件あり、新しい順に ${data.conversations.length} 件だけ出した）。`,
     );
@@ -696,22 +795,21 @@ function ConversationList({
       items={data?.conversations.map((conversation) => ({
         id: conversation.conversationId,
         preview: conversation.preview,
-        updatedLabel: formatRelative(conversation.updatedAt),
+        updatedLabel: formatRelative(conversation.updatedAt, now),
         messages: conversation.messages,
-        messagesAtLeast: data.reachedStart === false,
+        messagesAtLeast: data.windowsComplete === false,
         unread: conversation.unreadCount,
       }))}
       activeId={activeId}
-      loading={isLoading}
-      error={step > 0 && data !== undefined ? undefined : error}
+      // 続きを取っている間は、直前の一覧を残す（`keepPreviousData` でも `isLoading` は真になる）。
+      loading={isLoading && data === undefined}
+      error={pages > 1 && data !== undefined ? undefined : error}
       more={
-        data !== undefined &&
-        data.hiddenByLimit > 0 &&
-        (step < CONVERSATION_LIMITS.length - 1 || moreFailing)
+        data !== undefined && (data.nextCursor !== undefined || moreFailing)
           ? {
               onClick: () => {
                 if (moreFailing) void mutate();
-                else setStep((current) => current + 1);
+                else setPages((current) => current + 1);
               },
               loading: loadingMore,
               ...(moreFailing ? { error } : {}),
@@ -1062,6 +1160,12 @@ export function ChatPane({
    */
   const [editingKey, setEditingKey] = useState<string | undefined>(undefined);
   /**
+   * 操作で消えた要素から、フォーカスを戻す先（#3595）。無ければ `undefined`。
+   * 要素が unmount されるとブラウザはフォーカスを `document.body` へ捨てるので、キーボードで
+   * 続けるには先頭から Tab し直すことになる。**戻す効果は下の `useEffect`（`applyFocusIntent`）。**
+   */
+  const focusIntentRef = useRef<FocusIntent | undefined>(undefined);
+  /**
    * **発言の編集の下書きは、発言（`Line.key`）ごとに持つ（#3565）。** 確定するまで消さない——
    * Escape・「キャンセル」・別の発言の鉛筆・会話の切り替えでは捨てない。その発言の鉛筆をもう一度
    * 押すと、書きかけから再開する。確定（`confirmEdit`）で消す（送った文は、失敗すれば入力欄へ
@@ -1163,7 +1267,10 @@ export function ChatPane({
   const streamRef = useRef<Stream | undefined>(undefined);
   /**
    * **終端（`done`/`error`）を見ないまま途中で終わったかもしれない返信行**のキー
-   * （会話 id → `replyKey`）。Issue #2662。
+   * （会話 id → `replyKey` の集合）。Issue #2662。
+   *
+   * **1本のストリームに返信行は複数ある**（`ask_human`・道具・`usage_limited` を挟んで
+   * 続く text は新しい行で始まる。#3593）ので、値は集合である。
    *
    * サーバの再生（`GET /chat/:id/stream`）は進行中のターンを**頭から**流す。資格が
    * 替わって効果が張り直された・会話を切り替えて戻った・自分の送信が途中で切れた、の
@@ -1175,7 +1282,7 @@ export function ChatPane({
    * 読むのは再生の効果だけ。`done` まで届いて確定した行は外れているので消えない。
    * render では読まないので ref でよい。
    */
-  const unfinishedReplyRef = useRef(new Map<string, string>());
+  const unfinishedReplyRef = useRef(new Map<string, Set<string>>());
   /**
    * その会話の、終端を見なかった途中の返信行を捨てる（再生の `open` から、進行中かどうかを
    * 問わず呼ぶ。Issue #2662）。進行中なら再生が頭から積み直し、進行中でなければ確定した
@@ -1185,8 +1292,11 @@ export function ChatPane({
     const stale = unfinishedReplyRef.current.get(conversationId);
     if (stale === undefined) return;
     unfinishedReplyRef.current.delete(conversationId);
-    setLines((previous) => previous.filter((line) => line.key !== stale));
-    setActiveReplyKey((key) => (key === stale ? undefined : key));
+    setLines((previous) => previous.filter((line) => !stale.has(line.key)));
+    setActiveReplyKeys((keys) => {
+      if (![...keys].some((key) => stale.has(key))) return keys;
+      return new Set([...keys].filter((key) => !stale.has(key)));
+    });
   }, []);
   /**
    * いま見えている会話を、受信の途中からも読めるようにしたもの。
@@ -1197,8 +1307,9 @@ export function ChatPane({
   const shownIdRef = useRef(shownId);
 
   /**
-   * **いま `append`（下）が `key` で引いて中身を継ぎ足しうるクローンの返信の
-   * `key`。** 無ければ `undefined`。
+   * **いま走っているストリームが積んだクローンの返信行の `key`（複数。#3593）。**
+   * 無ければ空。1本のストリームの返信は、`ask_human`・道具を挟むたびに別の行になる。
+   * 以下、単数で書いてある箇所は、この集合の要素ごとに読むこと（旧名 `activeReplyKey`）。
    *
    * ⚠️ **`pendingOwnLines` による刈り込み（下の不変条件チェック）から、この
    * `key` を持つ行だけを除外するために要る。** クローンの返信は完成するまで
@@ -1220,7 +1331,7 @@ export function ChatPane({
    * 同じ tick で `setLines` を呼んでいる箇所であり、React は同じコミットへ
    * まとめる。
    */
-  const [activeReplyKey, setActiveReplyKey] = useState<string | undefined>(undefined);
+  const [activeReplyKeys, setActiveReplyKeys] = useState<ReadonlySet<string>>(NO_REPLY_KEYS);
 
   /**
    * 直前に見ていた会話。`retainedBy`（上）が「いま」に加えて残す2つ目の持ち主。
@@ -1672,7 +1783,7 @@ export function ChatPane({
     pendingOwnLines(lines, shownId, historyLines).map((line) => line.key),
   );
   const settled = ownedBy(lines, shownId).some(
-    (line) => !pendingCurrentKeys.has(line.key) && line.key !== activeReplyKey,
+    (line) => !pendingCurrentKeys.has(line.key) && !activeReplyKeys.has(line.key),
   );
   if (settled) {
     setLines((previous) => {
@@ -1681,7 +1792,7 @@ export function ChatPane({
       );
       const next = previous.filter(
         (line) =>
-          line.of !== shownId || stillPendingKeys.has(line.key) || line.key === activeReplyKey,
+          line.of !== shownId || stillPendingKeys.has(line.key) || activeReplyKeys.has(line.key),
       );
       return next.length === previous.length ? previous : next;
     });
@@ -2072,6 +2183,17 @@ export function ChatPane({
 
     // クローンの応答は細切れで届く。1行に継ぎ足していく。
     let replyKey: string | undefined;
+    /** このストリームが積んだ返信行のキー（settle で `unfinishedReplyRef` から外す）。 */
+    const ownReplyKeys = new Set<string>();
+    let replyCount = 0;
+    const replyGroup = `g-${Date.now()}-${(replyGroupSeq += 1)}`;
+    /** 返信行を閉じる。次の text は新しい行で始まる（#3593）。 */
+    const endReply = () => {
+      replyKey = undefined;
+    };
+    /** 続きの text が来たら、この会話の「〜を実行中…」などの合図を消す。 */
+    const dropTransients = (previous: Line[]) =>
+      previous.filter((line) => !(line.transient === true && line.of === stream.id));
     const append = (chunk: string) => {
       if (!writable()) return;
       setLines((previous) => {
@@ -2097,9 +2219,11 @@ export function ChatPane({
     };
     /** 終端まで届いた＝この返信行は確定した。再生の頭出しで捨てる対象から外す。 */
     const settleReply = () => {
-      if (stream.id !== undefined && unfinishedReplyRef.current.get(stream.id) === replyKey) {
-        unfinishedReplyRef.current.delete(stream.id);
-      }
+      if (stream.id === undefined) return;
+      const unfinished = unfinishedReplyRef.current.get(stream.id);
+      if (unfinished === undefined) return;
+      for (const key of ownReplyKeys) unfinished.delete(key);
+      if (unfinished.size === 0) unfinishedReplyRef.current.delete(stream.id);
     };
     const apply = (event: ChatStreamEvent) => {
       switch (event.type) {
@@ -2118,25 +2242,34 @@ export function ChatPane({
           setTransient('考えている…');
           break;
         case 'tool':
+          endReply();
           setTransient(`${event.tool} を実行中…`);
           break;
         case 'text':
           if (replyKey === undefined) {
             if (writable()) setLiveNote({ id: stream.id, text: '返信の受信を始めた' });
-            replyKey = `c-${Date.now()}`;
-            const key = replyKey;
-            if (stream.id !== undefined) unfinishedReplyRef.current.set(stream.id, key);
+            replyCount += 1;
+            // 同じ ms に2行始まっても衝突しないよう、通し番号を付ける。
+            const key = `c-${Date.now()}-${replyCount}`;
+            replyKey = key;
+            ownReplyKeys.add(key);
+            if (stream.id !== undefined) {
+              const unfinished = unfinishedReplyRef.current.get(stream.id) ?? new Set<string>();
+              unfinished.add(key);
+              unfinishedReplyRef.current.set(stream.id, unfinished);
+            }
             // `pendingOwnLines` による刈り込みから、この行が完成するまで
-            // 守る（`activeReplyKey` の doc）。
-            setActiveReplyKey(key);
+            // 守る（`activeReplyKeys` の doc）。
+            setActiveReplyKeys((keys) => new Set(keys).add(key));
             setLines((previous) => [
-              ...previous.filter((line) => line.transient !== true),
-              { key, role: 'clone', text: '', of: stream.id },
+              ...dropTransients(previous),
+              { key, role: 'clone', text: '', of: stream.id, replyGroup },
             ]);
           }
           append(event.text);
           break;
         case 'ask_human':
+          endReply();
           setLines((previous) => [
             ...previous.filter((line) => line.transient !== true),
             {
@@ -2174,6 +2307,7 @@ export function ChatPane({
          * 送り直してしまう（すでに保持されている分と重複する）。
          */
         case 'usage_limited':
+          endReply();
           setLines((previous) => [
             ...previous.filter((line) => line.transient !== true),
             {
@@ -2627,7 +2761,7 @@ export function ChatPane({
           // このストリームが積んだ返信は、もう `append` から継ぎ足されない
           // （このストリームのやりとりが終わったので）——刈り込みから守る
           // 理由が消えたので、`pendingOwnLines` の対象に戻す。
-          setActiveReplyKey(undefined);
+          setActiveReplyKeys(NO_REPLY_KEYS);
         }
       }
     },
@@ -2790,7 +2924,7 @@ export function ChatPane({
           if (streamRef.current === ended) {
             setSending(false);
             streamRef.current = undefined;
-            setActiveReplyKey(undefined);
+            setActiveReplyKeys(NO_REPLY_KEYS);
           }
         }
       }
@@ -2820,6 +2954,7 @@ export function ChatPane({
     async (line: Line) => {
       const text = editDraft.trim();
       if ((text === '' && editAttachments.length === 0) || line.journalId === undefined) return;
+      focusIntentRef.current = { kind: 'edit', lineKey: line.key };
       setEditingKey(undefined);
       // 送る文は送信の側が持つ（失敗すれば入力欄へ編集の続きとして戻る。#3393）。書きかけは消す。
       dropEditDraft(line.key);
@@ -2932,6 +3067,8 @@ export function ChatPane({
    */
   const handleEndConversation = useCallback(
     async (pressedConversationId: string) => {
+      // 確認を閉じたあと、押したボタンは読み込み中で戻れない。終わったら戻す先を決めておく（#3595）。
+      focusIntentRef.current = { kind: 'end' };
       setEndingConversation({ conversationId: pressedConversationId });
       setEndFailure(undefined);
       setEndNotice(undefined);
@@ -2959,6 +3096,35 @@ export function ChatPane({
   const visibleInterrupting = interrupting !== undefined && interrupting.conversationId === shownId;
   const visibleEnding =
     endingConversation !== undefined && endingConversation.conversationId === shownId;
+  /*
+   * **フォーカスを戻す（#3595）。** 編集欄・承認カードの押した要素・「会話を終える」の確認は、
+   * 閉じる・答える・終えると unmount されるか disabled になり、フォーカスが `document.body` に
+   * 落ちる。毎 commit で、戻す先が決まっていて（`focusIntentRef`）フォーカスが失われているときだけ、
+   * 戻す。**使い手が自分でフォーカスを動かしたら（pointerdown / keydown。capture で先に見る）、
+   * 戻す約束は取り下げる。**
+   */
+  useEffect(() => {
+    const clear = () => {
+      focusIntentRef.current = undefined;
+    };
+    document.addEventListener('pointerdown', clear, true);
+    document.addEventListener('keydown', clear, true);
+    return () => {
+      document.removeEventListener('pointerdown', clear, true);
+      document.removeEventListener('keydown', clear, true);
+    };
+  }, []);
+  useEffect(() => {
+    const intent = focusIntentRef.current;
+    if (intent === undefined) return;
+    if (intent.kind === 'edit' && editingKey !== undefined) {
+      focusIntentRef.current = undefined;
+      return;
+    }
+    if (intent.kind === 'end' && visibleEnding) return;
+    const done = applyFocusIntent(intent);
+    if (done) focusIntentRef.current = undefined;
+  });
   const visibleInterruptNotice =
     interruptNotice !== undefined && interruptNotice.conversationId === shownId
       ? interruptNotice.text
@@ -2989,6 +3155,7 @@ export function ChatPane({
   const visibleFailure = failures.has(shownId) ? failures.get(shownId) : undefined;
 
   const shownFailure = visibleFailure ?? visibleInterruptFailure ?? visibleEndFailure;
+  const hasShownFailure = shownFailure !== undefined && shownFailure !== null;
 
   /**
    * 「会話を終える」の結果の文を出してよいか（#2759）。終えた直後の新しい会話
@@ -3123,7 +3290,17 @@ export function ChatPane({
                   if (line.approval !== undefined) {
                     const approvalId = line.approval.id;
                     return (
-                      <li key={line.key}>
+                      <li
+                        key={line.key}
+                        data-approval-card={approvalId}
+                        data-approval-state={
+                          isApprovalWithdrawn(line.approval)
+                            ? 'withdrawn'
+                            : isApprovalAnswered(line.approval)
+                              ? 'answered'
+                              : 'unanswered'
+                        }
+                      >
                         <ApprovalAnswerCard
                           approval={line.approval}
                           showSettledAt
@@ -3149,6 +3326,8 @@ export function ChatPane({
                             }))
                           }
                           onAnswered={() => {
+                            // 押した要素は答えの表示に変わって消える。次の未回答のカードへ戻す（#3595）。
+                            focusIntentRef.current = { kind: 'approval', approvalId };
                             // 答えが通ったので、書きかけは要らない（通らなかったときは呼ばれない）。
                             setApprovalDrafts((previous) => ({
                               texts: omitKey(previous.texts, approvalId),
@@ -3235,6 +3414,7 @@ export function ChatPane({
                       role={line.role}
                       text={displayedText}
                       transient={line.transient}
+                      editKey={line.key}
                       onEdit={
                         isEditable
                           ? () => {
@@ -3306,6 +3486,7 @@ export function ChatPane({
                             if (!hasEditDraft(editDrafts.get(line.key), line)) {
                               dropEditDraft(line.key);
                             }
+                            focusIntentRef.current = { kind: 'edit', lineKey: line.key };
                             setEditingKey(undefined);
                           }}
                         />
@@ -3362,70 +3543,85 @@ export function ChatPane({
         }}
         onStopReceiving={() => streamRef.current?.controller.abort()}
         error={
-          attachNotice !== undefined && (shownFailure === undefined || shownFailure === null) ? (
-            <p role="alert" className="text-xs break-words whitespace-pre-line text-warn">
-              {attachNotice}
-            </p>
-          ) : (shownFailure === undefined || shownFailure === null) &&
-            unconfirmedText !== undefined ? (
-            <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-              <span>
-                送れたか確かめられなかった。サーバが受け取っていれば会話に出る（二重に送らないよう、確かめてから再送する）
-              </span>
-              <Button
-                size="sm"
-                onClick={() => unconfirmedEntry !== undefined && resend(unconfirmedEntry)}
-              >
-                再送
-              </Button>
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() => {
-                  setRetries((prev) => {
-                    const next = new Map(prev);
-                    next.delete(shownId);
-                    return next;
-                  });
-                  setDraft((current) => (current === unconfirmedText ? '' : current));
-                }}
-              >
-                破棄
-              </Button>
-            </div>
-          ) : shownFailure === undefined ||
-            shownFailure === null ? undefined : shownFailure instanceof TurnFailedError ? (
-            <TurnFailureNote
-              message={shownFailure.message}
-              action={(kind) =>
-                kind === 'auth' ? (
-                  <Link to="/tokens" className="text-xs underline underline-offset-2">
-                    認証トークンの画面を開く
-                  </Link>
-                ) : undefined
-              }
-            />
-          ) : (
-            <>
-              <ErrorNote error={shownFailure} />
-              {isAttachmentMissing(shownFailure) && (
-                <p role="alert" className="mt-2 text-xs text-warn">
-                  添付が期限切れか、サーバに無い。「再送」は同じ添付で送るので、添付を外して付け直してから送る。
+          /*
+           * **3つを排他にしない（#3594）。** 添付を断った理由・送信の失敗・未確認の送信の操作
+           * （再送／破棄）は別の事実で、どれかが出ているあいだ他が隠れると、選んだファイルが
+           * 理由なく落ちたり、再送／破棄の操作が見えなくなったりする。**並べて出す。**
+           */
+          attachNotice === undefined &&
+          unconfirmedText === undefined &&
+          !hasShownFailure ? undefined : (
+            <div className="flex flex-col gap-2">
+              {attachNotice !== undefined && (
+                <p role="alert" className="text-xs break-words whitespace-pre-line text-warn">
+                  {attachNotice}
                 </p>
               )}
-              {visibleFailure !== undefined && retries.has(shownId) && (
-                <Button
-                  size="sm"
-                  className="mt-2"
-                  onClick={() => {
-                    const stashed = retries.get(shownId);
-                    if (stashed !== undefined) resend(stashed);
-                  }}
-                >
-                  再送
-                </Button>
+              {unconfirmedText !== undefined && (
+                <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                  <span>
+                    送れたか確かめられなかった。サーバが受け取っていれば会話に出る（二重に送らないよう、確かめてから再送する）
+                  </span>
+                  <Button
+                    size="sm"
+                    onClick={() => unconfirmedEntry !== undefined && resend(unconfirmedEntry)}
+                  >
+                    再送
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => {
+                      setRetries((prev) => {
+                        const next = new Map(prev);
+                        next.delete(shownId);
+                        return next;
+                      });
+                      setDraft((current) => (current === unconfirmedText ? '' : current));
+                    }}
+                  >
+                    破棄
+                  </Button>
+                </div>
               )}
-            </>
+              {shownFailure === undefined ||
+              shownFailure === null ? undefined : shownFailure instanceof TurnFailedError ? (
+                <TurnFailureNote
+                  message={shownFailure.message}
+                  action={(kind) =>
+                    kind === 'auth' ? (
+                      <Link to="/tokens" className="text-xs underline underline-offset-2">
+                        認証トークンの画面を開く
+                      </Link>
+                    ) : undefined
+                  }
+                />
+              ) : (
+                <div>
+                  <ErrorNote error={shownFailure} />
+                  {isAttachmentMissing(shownFailure) && (
+                    <p role="alert" className="mt-2 text-xs text-warn">
+                      添付が期限切れか、サーバに無い。「再送」は同じ添付で送るので、添付を外して付け直してから送る。
+                    </p>
+                  )}
+                  {/* 未確認の送信の「再送」が上に出ているときは、同じ再送をもう1つ出さない。 */}
+                  {visibleFailure !== undefined &&
+                    retries.has(shownId) &&
+                    unconfirmedText === undefined && (
+                      <Button
+                        size="sm"
+                        className="mt-2"
+                        onClick={() => {
+                          const stashed = retries.get(shownId);
+                          if (stashed !== undefined) resend(stashed);
+                        }}
+                      >
+                        再送
+                      </Button>
+                    )}
+                </div>
+              )}
+            </div>
           )
         }
       />

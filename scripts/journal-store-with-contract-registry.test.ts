@@ -126,6 +126,8 @@ const REQUIRED_CONTRACTS = [
   'verifyJournalStoreQueryEdgeContract',
   'verifyJournalStoreSearchContract',
   'verifyJournalStoreHorizonContract',
+  // 会話の一覧の頁送り。ストアに新しい口は足さず、日誌の継続点の上に組んだものが3実装で揃うことを測る。
+  'verifyConversationPageContract',
 ] as const;
 
 /**
@@ -154,6 +156,7 @@ const KNOWN_IMPLEMENTATIONS: Record<string, RegistryEntry> = {
       'packages/core/src/journal-query-edge-contract.test.ts',
       'packages/core/src/journal-search-contract.test.ts',
       'packages/core/src/journal-horizon-contract.test.ts',
+      'packages/core/src/conversation-page-contract.test.ts',
     ],
     contracts: REQUIRED_CONTRACTS,
     notApplicable: {

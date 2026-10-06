@@ -18,6 +18,8 @@ import {
 } from '@alteroid/swr';
 import { formatCreatedAt, formatDateTime } from '@alteroid/logic';
 
+import { useLatest } from '~/lib/use-latest';
+
 import type { Route } from './+types/memory-detail';
 
 export function clientLoader({ params }: Route.ClientLoaderArgs) {
@@ -75,6 +77,8 @@ function MemoryDetailBody({ slug }: { slug: string }) {
   const loaded = data?.document.content ?? '';
   const value = draft ?? loaded;
   const dirty = draft !== undefined && draft !== loaded;
+  /** 応答が返った時点の「いまの下書き」（送った時点と比べる。issue #3515）。 */
+  const latestDraft = useLatest(draft);
 
   // 記憶が無い slug は 404 になる。それは「これから書く」場合なので、
   // 失敗ではなく空の編集画面として扱う。
@@ -126,15 +130,23 @@ function MemoryDetailBody({ slug }: { slug: string }) {
     // 保存中は何もしない。ボタン・⌘/Ctrl+Enter・⌘/Ctrl+S のどの経路もここを通る（#3300）。
     if (busy) return;
     if (draft === undefined) return;
+    // 送った値を控える。成功のあと、いまの下書きがこれと同じときだけ畳む（issue #3515）。
+    const sent = draft;
     setBusy(true);
     setFailure(undefined);
-    saveMemory(slug, draft, ifMatch)
+    saveMemory(slug, sent, ifMatch)
       .then(({ document, version }) => {
         setSavedAt(document.updatedAt);
         setLastSaved({ replaces: data === undefined ? null : data.version, version });
-        // 保存できたら下書きを畳んで、またサーバの値に追従させる。
-        setDraft(undefined);
-        setBaseVersion(undefined);
+        if (latestDraft.current === sent) {
+          // 保存できたら下書きを畳んで、またサーバの値に追従させる。
+          setDraft(undefined);
+          setBaseVersion(undefined);
+        } else {
+          // 応答を待つ間に打ち足した分は残す。保存できた版を前提に進め、次の保存が
+          // 自分の保存と衝突しないようにする（他者の書き込みへの衝突検出はそのまま効く）。
+          setBaseVersion(version);
+        }
         setConflict(undefined);
       })
       .catch((caught: unknown) => {

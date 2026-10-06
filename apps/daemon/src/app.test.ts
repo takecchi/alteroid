@@ -8949,6 +8949,106 @@ describe('会話・出来事・マネージャーへの手出し', () => {
     });
   });
 
+  /**
+   * **#3550。** `cursor` / `nextCursor`（`/approvals` / `/commitments` と同じ形）で、201 件目以降と
+   * `scan` の窓の外へも辿れる。続きが無ければ `nextCursor` は鍵ごと無い。
+   */
+  describe('会話一覧の cursor（#3550）', () => {
+    interface ListBody {
+      conversations: { conversationId: string }[];
+      hiddenByLimit: number;
+      reachedStart: boolean;
+      scanned: number;
+      nextCursor?: string;
+    }
+    const get = async (query: string): Promise<ListBody> =>
+      (await (await app.request(`/conversations?${query}`)).json()) as ListBody;
+    const ids = (body: ListBody): string[] => body.conversations.map((c) => c.conversationId);
+
+    it('続きが無いとき nextCursor は鍵ごと無い（既存の応答の形を変えない）', async () => {
+      await exchange('conv-a', 'inbound', '1');
+      await exchange('conv-b', 'inbound', '2');
+
+      const body = await get('scan=100&limit=20');
+
+      expect('nextCursor' in body).toBe(false);
+    });
+
+    it('limit で切れたとき nextCursor が載り、渡すと続きが新しい順に出る（飛ばさず重複しない）', async () => {
+      for (const id of ['conv-a', 'conv-b', 'conv-c', 'conv-d', 'conv-e']) {
+        await exchange(id, 'inbound', id);
+      }
+
+      const first = await get('scan=100&limit=2');
+      expect(ids(first)).toEqual(['conv-e', 'conv-d']);
+      expect(first.hiddenByLimit).toBe(3);
+      expect(typeof first.nextCursor).toBe('string');
+
+      const second = await get(`scan=100&limit=2&cursor=${first.nextCursor}`);
+      expect(ids(second)).toEqual(['conv-c', 'conv-b']);
+      expect(second.hiddenByLimit).toBe(1);
+
+      const third = await get(`scan=100&limit=2&cursor=${second.nextCursor}`);
+      expect(ids(third)).toEqual(['conv-a']);
+      expect(third.hiddenByLimit).toBe(0);
+      expect('nextCursor' in third).toBe(false);
+    });
+
+    it('scan の窓の外も cursor で辿れる（窓が埋まっていれば nextCursor が載る）', async () => {
+      for (const id of ['conv-a', 'conv-b', 'conv-c', 'conv-d', 'conv-e']) {
+        await exchange(id, 'inbound', id);
+      }
+
+      // 窓は2件。limit は余裕があるので hiddenByLimit は 0 だが、窓の外が残るので続きが在る。
+      const first = await get('scan=2&limit=20');
+      expect(ids(first)).toEqual(['conv-e', 'conv-d']);
+      expect(first.hiddenByLimit).toBe(0);
+      expect(first.reachedStart).toBe(false);
+      expect(typeof first.nextCursor).toBe('string');
+
+      const collected = [...ids(first)];
+      let cursor = first.nextCursor;
+      for (let guard = 0; cursor !== undefined && guard < 10; guard += 1) {
+        const page = await get(`scan=2&limit=20&cursor=${cursor}`);
+        collected.push(...ids(page));
+        cursor = page.nextCursor;
+      }
+      expect(collected).toEqual(['conv-e', 'conv-d', 'conv-c', 'conv-b', 'conv-a']);
+    });
+
+    it('窓をまたぐ会話を二重に出さない（古い発言を持つ会話は最新の発言の位置にだけ出る）', async () => {
+      await exchange('conv-a', 'inbound', 'a1');
+      await exchange('conv-b', 'inbound', 'b1');
+      await exchange('conv-a', 'outbound', 'a2');
+      await exchange('conv-b', 'outbound', 'b2');
+
+      const collected: string[] = [];
+      let cursor: string | undefined;
+      for (let guard = 0; guard < 10; guard += 1) {
+        const page = await get(`scan=1&limit=1${cursor === undefined ? '' : `&cursor=${cursor}`}`);
+        collected.push(...ids(page));
+        cursor = page.nextCursor;
+        if (cursor === undefined) break;
+      }
+
+      expect(collected).toEqual(['conv-b', 'conv-a']);
+    });
+
+    it('壊れた cursor・指す発言が無い cursor は 400（黙って先頭から返さない）', async () => {
+      await exchange('conv-a', 'inbound', '1');
+
+      const garbage = await app.request('/conversations?cursor=not-a-cursor');
+      expect(garbage.status).toBe(400);
+
+      const missing = Buffer.from(
+        JSON.stringify({ id: 'jrn-missing', at: '2026-01-01T00:00:00.000Z' }),
+        'utf8',
+      ).toString('base64url');
+      const response = await app.request(`/conversations?cursor=${missing}`);
+      expect(response.status).toBe(400);
+    });
+  });
+
   it('日誌の追記がそのまま流れる（聞きに行かなくても気づける）', async () => {
     const response = await app.request('/journal/stream?type=escalation');
     expect(response.status).toBe(200);

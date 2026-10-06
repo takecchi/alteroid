@@ -151,6 +151,31 @@ export class FsAttachmentStore implements AttachmentStore {
     const newlyBound: string[] = [];
     const missing: string[] = [];
     const conflicts: string[] = [];
+    try {
+      await this.#bindEach(ids, target, { bound, newlyBound, missing, conflicts });
+    } catch (error) {
+      // 途中の id で ENOENT 以外の I/O 例外が出た。id を1つずつ結ぶので、先に結んだ分が結び付いたまま残る。
+      // 呼び手には結果が届かず `newlyBound` を知れないので、ここで「この呼びで新しく結んだ分」だけを戻す
+      // （すでに結んであった id は `newlyBound` に入っていない。#3592）。戻しも落ちたら、戻せなかったことを
+      // stderr へ1行残し（件数・宛先の種類・理由だけ。名前や中身は出さない）、元の例外を投げ直す
+      // （原因は元の例外。戻せなかった分はその宛先に残る）。
+      await this.unbind(newlyBound, target).catch((rollbackError: unknown) => {
+        process.stderr.write(
+          `alteroidd: 添付の結び付けを戻せなかった（${'conversationId' in target ? '会話' : '外部イベント'}へ結んだ ${newlyBound.length} 件が残る）: ${reasonOf(rollbackError)}\n`,
+        );
+      });
+      throw error;
+    }
+    return { bound, newlyBound, missing, conflicts };
+  }
+
+  /** `#bindTo` の本体。途中で投げたとき、それまでに結んだ分は `out.newlyBound` に残る（戻すのは呼び手）。 */
+  async #bindEach(
+    ids: readonly string[],
+    target: AttachmentBindTarget,
+    out: { bound: string[]; newlyBound: string[]; missing: string[]; conflicts: string[] },
+  ): Promise<void> {
+    const { bound, newlyBound, missing, conflicts } = out;
     for (const id of ids) {
       const dir = this.#idDir(id);
       if (dir === undefined) {
@@ -186,7 +211,6 @@ export class FsAttachmentStore implements AttachmentStore {
         missing.push(id);
       }
     }
-    return { bound, newlyBound, missing, conflicts };
   }
 
   async unbind(ids: readonly string[], target: AttachmentBindTarget): Promise<string[]> {

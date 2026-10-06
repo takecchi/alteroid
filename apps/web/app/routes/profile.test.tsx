@@ -854,3 +854,70 @@ describe('/profile 画面 — 書きかけを確認なしで捨てない', () =>
     expect(dirty.defaultPrevented).toBe(true);
   });
 });
+
+describe('/profile 画面 — 保存中に打ち足した文字（issue #3515）', () => {
+  function gate() {
+    let release!: () => void;
+    const promise = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    return { promise, release };
+  }
+
+  it('既存の行: 保存が成功しても打ち足した本文は残り、元の行は保存できた本文へ進む', async () => {
+    const { promise, release } = gate();
+    const { puts } = stubProfile({ putGate: promise });
+    renderScreen();
+
+    fireEvent.click((await screen.findAllByRole('button', { name: / を編集する$/ }))[0]!);
+    fireEvent.change(screen.getByLabelText('プロファイルの新しい本文'), {
+      target: { value: 'export A=1\n' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '保存する' }));
+    fireEvent.click(screen.getByRole('button', { name: '本当に保存する' }));
+    await vi.waitFor(() => expect(puts).toHaveLength(1));
+
+    // 応答を待つ間に打ち足す。
+    fireEvent.change(screen.getByLabelText('プロファイルの新しい本文'), {
+      target: { value: 'export A=1\nexport B=2\n' },
+    });
+    release();
+
+    expect(await screen.findByText('プロファイルの行 base を更新した。')).toBeTruthy();
+    const body = screen.getByLabelText<HTMLTextAreaElement>('プロファイルの新しい本文');
+    expect(body.value).toBe('export A=1\nexport B=2\n');
+    // 保存できた本文が基準になっている: 打ち足した分は変更として保存でき、
+    // 保存できた本文へ戻せば「変更なし」になる（古い元の行と比べない）。
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: '保存する' }).disabled).toBe(
+      false,
+    );
+    fireEvent.change(body, { target: { value: 'export A=1\n' } });
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: '保存する' }).disabled).toBe(true);
+  });
+
+  it('新しい行: 保存が成功しても打ち足した本文は残り、行は作られたものとして名前が固定される', async () => {
+    const { promise, release } = gate();
+    const { puts } = stubProfile({ rows: [], putGate: promise });
+    renderScreen();
+
+    fireEvent.click(await screen.findByRole('button', { name: '行を追加する' }));
+    fireEvent.change(screen.getByLabelText('プロファイルの行の名前'), { target: { value: 'new' } });
+    fireEvent.change(screen.getByLabelText('プロファイルの新しい本文'), {
+      target: { value: 'export N=1\n' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '保存する' }));
+    fireEvent.click(screen.getByRole('button', { name: '本当に保存する' }));
+    await vi.waitFor(() => expect(puts).toHaveLength(1));
+
+    fireEvent.change(screen.getByLabelText('プロファイルの新しい本文'), {
+      target: { value: 'export N=1\nexport M=2\n' },
+    });
+    release();
+
+    expect(await screen.findByText('プロファイルの行 new を更新した。')).toBeTruthy();
+    expect(screen.getByLabelText<HTMLTextAreaElement>('プロファイルの新しい本文').value).toBe(
+      'export N=1\nexport M=2\n',
+    );
+    expect(screen.getByLabelText<HTMLInputElement>('プロファイルの行の名前').disabled).toBe(true);
+  });
+});
