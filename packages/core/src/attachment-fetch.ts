@@ -23,6 +23,9 @@ export const ATTACHMENT_COPIES_SUBDIR = join('state', 'attachment-copies');
 /** 写しを残す時間（最後に取り出された/使われたときから）。 */
 export const ATTACHMENT_COPY_MAX_AGE_MS = 24 * 60 * 60_000;
 
+/** 掃除が消す前に付ける専用の名前の頭（`SAFE_ID` は先頭が英数なので、取り出しの id とぶつからない）。 */
+const PRUNING_PREFIX = '.pruning-';
+
 /** 写しの置き場（`root` はクローンの cwd = `ALTEROID_HOME`）。 */
 export function attachmentCopiesDir(root: string): string {
   return join(root, ATTACHMENT_COPIES_SUBDIR);
@@ -113,6 +116,11 @@ export async function fetchAttachmentCopy(
 /**
  * 写しの掃除。①最後に触れてから `maxAgeMs` を過ぎたもの、②元の添付が無くなったもの、を消す。
  * 元の確認で例外が出たものは残す（置き場の一時的な失敗で写しを消さない）。消した件数を返す。
+ *
+ * 消す前に掃除専用の名前（`.pruning-<uuid>`）へ rename し、「古い」の判定を確かめ直してから消す（#3591）。
+ * 判定のあとに {@link fetchAttachmentCopy} が使い回して印を付けていたら、元の名前へ戻す。
+ * 閉じる範囲は、同じ置き場を使う取り出しと掃除の競り（同一プロセスの非同期の交錯、別プロセスも同じ順序で効く）。
+ * rename の直後から戻すまでの間（ごく短い）は元のパスが無いので、その間に取り出しが使い回しを試みると書き直す。
  */
 export async function pruneAttachmentCopies(
   stores: { readonly attachments: AttachmentStore },
@@ -124,9 +132,16 @@ export async function pruneAttachmentCopies(
   let removed = 0;
   for (const entry of entries) {
     const dir = join(copiesDir, entry);
+    // 前の周で消し切れず残った掃除専用の名前（取り出しの id は先頭が英数なので、この名前とはぶつからない）。
+    if (entry.startsWith(PRUNING_PREFIX)) {
+      await rm(dir, { recursive: true, force: true }).catch(() => undefined);
+      continue;
+    }
     const info = await stat(dir).catch(() => undefined);
     if (info === undefined) continue;
-    let drop = now.getTime() - info.mtimeMs > maxAgeMs;
+    const isStale = (mtimeMs: number): boolean => now.getTime() - mtimeMs > maxAgeMs;
+    const stale = isStale(info.mtimeMs);
+    let drop = stale;
     if (!drop) {
       try {
         drop = (await stores.attachments.getMeta(entry)) === undefined;
@@ -134,16 +149,36 @@ export async function pruneAttachmentCopies(
         drop = false;
       }
     }
-    if (drop) {
-      try {
-        await rm(dir, { recursive: true, force: true });
-        removed += 1;
-      } catch (error) {
-        // 1件の失敗で周回を止めない（残りは次の周でまた掃く）。
-        process.stderr.write(
-          `alteroidd: 添付の写しを消せませんでした (${entry}): ${reasonOf(error)}\n`,
-        );
+    if (!drop) continue;
+    // 「古い」と判定してから消すまでの間に `fetchAttachmentCopy` が使い回して印（mtime）を付けても、
+    // 返したパスを消さないため、先に掃除専用の名前へ rename して取り出しから切り離し、そのうえで印を確かめ直す（#3591）。
+    // rename の後は取り出しが同じパスを使い回せない（`readFile` が失敗し、書き直す）。
+    const trash = join(copiesDir, `${PRUNING_PREFIX}${randomUUID()}`);
+    try {
+      await rename(dir, trash);
+    } catch {
+      continue; // すでに無い。次の周でまた見る。
+    }
+    try {
+      if (stale) {
+        const again = await stat(trash).catch(() => undefined);
+        if (again !== undefined && !isStale(again.mtimeMs)) {
+          // 判定のあとに使われた。元の名前へ戻す。戻せない（その間に書き直された）なら、新しい写しがあるので捨ててよい。
+          const restored = await rename(trash, dir).then(
+            () => true,
+            () => false,
+          );
+          if (restored) continue;
+        }
       }
+      await rm(trash, { recursive: true, force: true });
+      removed += 1;
+    } catch (error) {
+      // 1件の失敗で周回を止めない。元の名前へ戻して次の周でまた掃く（戻せなければ掃除専用の名前のまま、次の周の頭で消す）。
+      await rename(trash, dir).catch(() => undefined);
+      process.stderr.write(
+        `alteroidd: 添付の写しを消せませんでした (${entry}): ${reasonOf(error)}\n`,
+      );
     }
   }
   return removed;

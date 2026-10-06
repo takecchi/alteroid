@@ -9,7 +9,7 @@ import { createMemoryStores } from './testing.js';
 
 /**
  * 写しの使い回しと掃除の競り合い・掃除の1件ごとの失敗（#3329）。順序はフックで作る（実時間の待ちは使わない）。
- * `utimes`（使い回しの「使われた印」）の直前に `beforeUtimes` を1度だけ呼び、`rm` は `rmFails` のパスで失敗させる。
+ * `utimes`（使い回しの「使われた印」）の直前に `beforeUtimes` を1度だけ呼び、`rm` は `rmFails` の中身（`f` の内容）を持つ写しで失敗させる。
  */
 const hooks = vi.hoisted(() => ({
   beforeUtimes: undefined as undefined | (() => Promise<void>),
@@ -28,7 +28,9 @@ vi.mock('node:fs/promises', async (importOriginal) => {
       return actual.utimes(...args);
     }) as typeof actual.utimes,
     rm: (async (...args: Parameters<typeof actual.rm>) => {
-      if (hooks.rmFails.has(String(args[0]))) {
+      // 掃除は消す前に専用の名前へ rename する（#3591）ので、パスではなく中身の印で失敗させる対象を決める。
+      const marker = await actual.readFile(join(String(args[0]), 'f'), 'utf8').catch(() => '');
+      if (hooks.rmFails.has(marker)) {
         throw Object.assign(new Error('EBUSY'), { code: 'EBUSY' });
       }
       return actual.rm(...args);
@@ -70,11 +72,11 @@ describe('写しの使い回しと掃除（#3329）', () => {
     const ids = ['aaa', 'bbb', 'ccc'];
     for (const id of ids) {
       await mkdir(join(copiesDir, id));
-      await writeFile(join(copiesDir, id, 'f'), 'x');
+      await writeFile(join(copiesDir, id, 'f'), id);
       const old = new Date(Date.now() - 48 * 3_600_000);
       await utimes(join(copiesDir, id), old, old);
     }
-    hooks.rmFails.add(join(copiesDir, 'aaa'));
+    hooks.rmFails.add('aaa');
     expect(await pruneAttachmentCopies(stores, copiesDir, new Date())).toBe(2);
     expect((await readdir(copiesDir)).sort()).toEqual(['aaa']);
   });
