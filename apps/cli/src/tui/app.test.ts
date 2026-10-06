@@ -1611,6 +1611,37 @@ describe('承認待ち（一覧と詳細・答える）', () => {
     await waitFor(() => h.frame().includes('[未回答] ap-free'));
   });
 
+  it('答えるフォームの Ctrl+C は、書きかけを残したまま中断し、結果を最下行に出す（#3489）', async () => {
+    const h = start(fixture);
+    await openChoiceDetail(h);
+    await press(h.stdin, 'a');
+    await waitFor(() => h.frame().includes('設問に答える'));
+    await press(h.stdin, SPACE); // Railway
+    await waitFor(() => h.frame().includes('(●) a) Railway'));
+    h.stdin.write(CTRL_C);
+    await waitFor(() => h.frame().includes('ターンを止めた'));
+    expect(h.api.interrupts).toBe(1);
+    expect(h.exited()).toBe(false);
+    expect(h.frame()).toContain('設問に答える');
+    expect(h.frame()).toContain('(●) a) Railway');
+  });
+
+  it('答えるフォームの入力ゾーンの Ctrl+C も、書きかけを残したまま中断する（#3489）', async () => {
+    const h = start(fixture);
+    await openChoiceDetail(h);
+    await press(h.stdin, 'a');
+    await waitFor(() => h.frame().includes('設問に答える'));
+    for (let i = 0; i < 5; i++) await press(h.stdin, DOWN); // Q2 その他へ
+    await press(h.stdin, SPACE); // 書き始める
+    await waitFor(() => h.frame().includes('Enter 確定'));
+    await type(h.stdin, 'ただし来週');
+    h.stdin.write(CTRL_C);
+    await waitFor(() => h.frame().includes('ターンを止めた'));
+    expect(h.api.interrupts).toBe(1);
+    expect(h.exited()).toBe(false);
+    expect(h.frame()).toContain('ただし来週');
+  });
+
   it('ask_human が来ていない会話では a は何もしない', async () => {
     const h = start(fixture);
     await waitFor(() => h.frame().includes('メッセージ'));
