@@ -467,12 +467,42 @@ describe('alteroid conversations read', () => {
     expect(sent).toHaveLength(1);
   });
 
-  it('見える範囲に発言が無いときは、既読にせず理由を言う', async () => {
+  it('見える範囲に発言が無いのに未読が残るときは、既読にできなかったとして非 0 で終える（#3447）', async () => {
     const read = captureStdout();
-    replies.push({ status: 200, body: { ...detail, messages: [], reachedStart: false } });
+    replies.push({
+      status: 200,
+      body: { ...detail, messages: [], reachedStart: false, unreadCount: 3 },
+    });
+    await expect(conversationsReadCommand('conv-1')).rejects.toThrow(
+      '既読にする発言が見つかりませんでした',
+    );
+    expect(sent).toHaveLength(1);
+    // 成功に見える文を stdout に出さない。
+    expect(read()).toBe('');
+  });
+
+  it('未読が数えられないときも、既読にできたとは言わずに非 0 で終える（#3447）', async () => {
+    const read = captureStdout();
+    replies.push({
+      status: 200,
+      body: { ...detail, messages: [], reachedStart: false, unreadCount: null },
+    });
+    await expect(conversationsReadCommand('conv-1')).rejects.toThrow(
+      '既読にする発言が見つかりませんでした',
+    );
+    expect(sent).toHaveLength(1);
+    expect(read()).toBe('');
+  });
+
+  it('発言が無く未読も無いときは、既読の呼びを打たずに未読が無いと言って 0 で終える（#3447）', async () => {
+    const read = captureStdout();
+    replies.push({
+      status: 200,
+      body: { ...detail, messages: [], reachedStart: true, unreadCount: 0 },
+    });
     await conversationsReadCommand('conv-1');
     expect(sent).toHaveLength(1);
-    expect(read()).toContain('既読にする発言が見つかりませんでした');
+    expect(read()).toBe('未読の発言はありません: conv-1\n');
   });
 });
 
