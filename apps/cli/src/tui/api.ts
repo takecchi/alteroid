@@ -17,6 +17,8 @@ import type {
 } from '@alteroid/core';
 
 import {
+  AttachmentMissingError,
+  attachmentMissingMessageOf,
   fetchAttachmentLimits,
   uploadAttachment,
   type UploadedAttachment,
@@ -329,7 +331,19 @@ export function createTuiApi(target: Target): TuiApi {
       if (signal.aborted) return;
       throw new ApiError(`${what}: デーモンに繋がりません（${redactError(String(error))}）`);
     }
-    if (!response.ok || !response.body) throw await failure(what, response);
+    if (!response.ok || !response.body) {
+      // 添付が無い・期限切れ（400 の `code`）は、呼び手が上げ直せるよう型で渡す（#3246）。
+      if (response.status === 400) {
+        const missing = attachmentMissingMessageOf(
+          await response
+            .clone()
+            .json()
+            .catch(() => null),
+        );
+        if (missing !== null) throw new AttachmentMissingError(redactError(missing));
+      }
+      throw await failure(what, response);
+    }
     try {
       for await (const event of readSSE(response.body)) yield event;
     } catch (error) {

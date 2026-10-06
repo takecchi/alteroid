@@ -50,6 +50,7 @@ import {
 import {
   integrationCreateCommand,
   integrationListCommand,
+  integrationRemoveUnreadableCommand,
   integrationRevokeCommand,
 } from './integration.js';
 import {
@@ -1086,7 +1087,9 @@ daemonCommand
  */
 const integrationCommand = program
   .command('integration')
-  .description('連携の鍵（外のサービスが外部イベントを送るための鍵）を一覧・発行・失効する');
+  .description(
+    '連携の鍵（外のサービスが外部イベントを送るための鍵）を一覧・発行・失効する（読めない行は remove-unreadable で消す）',
+  );
 
 integrationCommand
   .command('list')
@@ -1104,6 +1107,10 @@ integrationCommand
   .option('--expires <日時か期間>', '期限（例: 2027-01-01T00:00:00Z / 30d / 12h）。省略は無期限')
   .option('--max-body-bytes <N>', '本文の上限バイト（既定 1048576）')
   .option('--rate-per-minute <N>', '1分あたりの回数の上限（既定 60）')
+  .option(
+    '--json',
+    '整形せず、デーモンが返した JSON（key と value）だけを標準出力へ出す。警告は標準エラーへ（値はログに残さないこと）',
+  )
   .action(
     async (options: {
       name: string;
@@ -1111,6 +1118,7 @@ integrationCommand
       expires?: string;
       maxBodyBytes?: string;
       ratePerMinute?: string;
+      json?: boolean;
     }) => {
       await integrationCreateCommand(options);
     },
@@ -1123,6 +1131,17 @@ integrationCommand
   .option('--yes', '確認を飛ばす（スクリプト・CI 向け。端末でなければ必須）')
   .action(async (id: string, options: { yes?: boolean }) => {
     await integrationRevokeCommand(id, options);
+  });
+
+integrationCommand
+  .command('remove-unreadable <ids...>')
+  .description(
+    '読めない連携の鍵の行を id を指して消す（id は alteroid integration list の「読めない連携の鍵の行」に出る。' +
+      'integration revoke は読めない行に触れない。id が取れない行はこの口では消せない）',
+  )
+  .option('--yes', '確認を飛ばす（スクリプト・CI 向け。端末でなければ必須）')
+  .action(async (ids: string[], options: { yes?: boolean }) => {
+    await integrationRemoveUnreadableCommand(ids, options);
   });
 
 /**

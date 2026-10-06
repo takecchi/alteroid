@@ -206,7 +206,7 @@ export function renderConversationsList(
 }
 
 /** 未読があるときだけ付ける小さな印。 */
-function unreadMark(unreadCount: number | undefined): string {
+export function unreadMark(unreadCount: number | undefined): string {
   return unreadCount !== undefined && unreadCount > 0 ? `  未読 ${unreadCount}` : '';
 }
 

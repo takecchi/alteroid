@@ -1,17 +1,17 @@
-import { stdout } from 'node:process';
+import { stderr, stdout } from 'node:process';
 
 import { createClient } from './client.js';
 import { confirmIrreversible, type ConfirmIo } from './confirm.js';
 import { describeAuthFailure, resolveTarget, type Target } from './target.js';
-import { errorReason } from './format.js';
+import { describeUnreadableRowsList, errorReason, withErrorReason } from './format.js';
 import { redactError } from './redact.js';
 
 /**
  * `alteroid integration` — 連携の鍵（外のサービスへ渡す、固定の1つの `source` で外部イベントを
  * 送る鍵。#3113 段2）を一覧・発行・失効する。Web UI の `/integrations` と対になる。
  *
- * **新しいデーモンの経路は足していない。** `GET /integration-keys` / `POST /integration-keys` /
- * `POST /integration-keys/:id/revoke` の3本だけを打つ。
+ * 打つ口は `GET /integration-keys` / `POST /integration-keys` / `POST /integration-keys/:id/revoke` と、
+ * 読めない行を消す `POST /integration-keys/unreadable/remove`（#3216。`access remove-unreadable` と同じ形）。
  *
  * ## 値の扱い
  *
@@ -34,6 +34,12 @@ interface IntegrationKeyView {
   revokedAt: string | null;
   lastUsedAt: string | null;
   limits: { maxBodyBytes: number; ratePerMinute: number };
+}
+
+/** 読めない行（`GET /integration-keys` の `rowsUnreadable`。#3216）。id と不正な欄名だけで、名前などは無い。 */
+interface RowsUnreadable {
+  count: number;
+  rows: { id: string; reason: string }[];
 }
 
 export type IntegrationKeyStatus = 'active' | 'revoked' | 'expired';
@@ -107,13 +113,31 @@ export async function integrationListCommand(now: number = Date.now()): Promise<
   const client = createClient(target.baseUrl, target.headers);
   const response = await client['integration-keys'].$get();
   if (!response.ok) await fail(response, target, '/integration-keys');
-  const { keys } = (await response.json()) as { keys: IntegrationKeyView[] };
-  stdout.write(renderIntegrationList(keys, now));
+  const { keys, rowsUnreadable } = (await response.json()) as {
+    keys: IntegrationKeyView[];
+    rowsUnreadable?: RowsUnreadable;
+  };
+  stdout.write(renderIntegrationList(keys, now, rowsUnreadable));
 }
 
 /** 一覧。値は元から返ってこない（指紋＝sha256 の先頭12桁だけ）。 */
-export function renderIntegrationList(keys: IntegrationKeyView[], now: number): string {
+export function renderIntegrationList(
+  keys: IntegrationKeyView[],
+  now: number,
+  rowsUnreadable?: RowsUnreadable,
+): string {
+  // **読めない行は一覧の前に言う**（0件なら何も出ない。`access list` と同じ文言の型）。
+  const unreadableNote = describeUnreadableRowsList({
+    noun: '連携の鍵',
+    removeCommand: 'alteroid integration remove-unreadable',
+    file: 'integration-keys.json',
+    rowsUnreadable,
+  });
   if (keys.length === 0) {
+    // 読めない行が在るので「鍵がまだ無い」とは言えない。
+    if (rowsUnreadable !== undefined) {
+      return `${unreadableNote}読めた連携の鍵は無い（連携の鍵がまだ無い、とは言えない）。\n`;
+    }
     return (
       '連携の鍵はありません。\n' +
       '発行するには: alteroid integration create --name <名前> --source <source>\n'
@@ -134,7 +158,7 @@ export function renderIntegrationList(keys: IntegrationKeyView[], now: number): 
       `  上限: 本文 ${String(key.limits.maxBodyBytes)} バイト・${String(key.limits.ratePerMinute)} 回/分`,
     );
   }
-  return `${lines.join('\n')}\n`;
+  return `${unreadableNote}${lines.join('\n')}\n`;
 }
 
 export interface IntegrationCreateOptions {
@@ -143,6 +167,8 @@ export interface IntegrationCreateOptions {
   expires?: string;
   maxBodyBytes?: string;
   ratePerMinute?: string;
+  /** デーモンの応答（`{ key, value }`）をそのまま JSON で標準出力へ出す。警告は標準エラーへ（#3220）。 */
+  json?: boolean;
 }
 
 export async function integrationCreateCommand(
@@ -179,6 +205,17 @@ export async function integrationCreateCommand(
   const response = await client['integration-keys'].$post({ json });
   if (!response.ok) await fail(response, target, '/integration-keys');
   const created = (await response.json()) as { key: IntegrationKeyView; value: string };
+  if (options.json === true) {
+    // --json のとき標準出力は JSON だけ（他コマンドの --json と同じ整形）。値は JSON の
+    // `value` にだけ入り、警告は標準エラーへ出す（`KEY=$(... --json | jq -r .value)` で受けても
+    // 警告は混ざらない）。値を標準出力へ出す以上、呼び出し側のログ・CI の出力に残らないよう案内する。
+    stdout.write(`${JSON.stringify(created, null, 2)}\n`);
+    stderr.write(
+      'この値は二度と表示されません（alteroid は sha256 しか保存していません）。標準出力の JSON の value に入っています。\n' +
+        '値をログに残さないでください（CI のログ・シェルの履歴・出力の保存先に注意。変数や秘密の保管先へ直接受けてください）。\n',
+    );
+    return;
+  }
   stdout.write(renderIntegrationCreated(created.key, created.value, target.baseUrl));
 }
 
@@ -237,9 +274,21 @@ export async function integrationRevokeCommand(
   const client = createClient(target.baseUrl, target.headers);
   const listed = await client['integration-keys'].$get();
   if (!listed.ok) await fail(listed, target, '/integration-keys');
-  const { keys } = (await listed.json()) as { keys: IntegrationKeyView[] };
+  const { keys, rowsUnreadable } = (await listed.json()) as {
+    keys: IntegrationKeyView[];
+    rowsUnreadable?: RowsUnreadable;
+  };
   const key = keys.find((row) => row.id === id);
-  if (key === undefined) throw new Error('該当する連携の鍵がありません（何も失効していません）');
+  if (key === undefined) {
+    // 読めない形で入っている行は「無い」と言い分ける（失効はできない。消すなら remove-unreadable）。
+    if (rowsUnreadable?.rows.some((row) => row.id === id) === true) {
+      throw new Error(
+        '連携の鍵の行が読めない形で入っているので、失効できません（何も失効していません）。' +
+          '消すには: alteroid integration remove-unreadable <id>',
+      );
+    }
+    throw new Error('該当する連携の鍵がありません（何も失効していません）');
+  }
   if (key.revokedAt !== null) {
     stdout.write(`すでに失効しています: ${key.name}（失効 ${key.revokedAt}）\n`);
     return;
@@ -256,6 +305,55 @@ export async function integrationRevokeCommand(
   const { key: revoked } = (await response.json()) as { key: IntegrationKeyView };
   stdout.write(
     `連携の鍵を失効させました: ${revoked.name}（source=${revoked.source}、失効 ${revoked.revokedAt ?? '?'}）\n`,
+  );
+}
+
+/**
+ * 読めない連携の鍵の行を、id を指して消す（`POST /integration-keys/unreadable/remove`。#3216）。
+ * 読めない行（版ずれ・手編集）は `integration revoke` が触らないので、片付ける口はこれだけ。
+ * **id は `integration list` が読めない行として出す**（`GET /integration-keys` の
+ * `rowsUnreadable.rows[].id`）。**id が取れない行はこの口では消せない**（`integration-keys.json` を
+ * 手で直す）。指した id が1つでも読めない行に無ければ、デーモンが何も消さずに断る。
+ * **行の中身は出さない**（id と件数だけ）。
+ */
+export async function integrationRemoveUnreadableCommand(
+  ids: readonly string[],
+  options: { yes?: boolean; io?: ConfirmIo } = {},
+): Promise<void> {
+  const target = await resolveTarget();
+  // 未ログインなら確認を出す前に断る（Issue #3214）。
+  if (target.note !== null) throw new Error(target.note);
+  // 戻せない操作なので確認する（#3141。`confirm.ts`）。壊れた行は中身を出さずに消すので、消すと残らない。
+  const confirmed = await confirmIrreversible(
+    `読めない連携の鍵の行（id: ${ids.join(', ')}）を消します。壊れた行は消すと残りません。`,
+    { yes: options.yes },
+    options.io,
+  );
+  if (!confirmed) return;
+  const client = createClient(target.baseUrl, target.headers);
+  const response = await client['integration-keys'].unreadable.remove.$post({
+    json: { ids: [...ids] },
+  });
+  if (!response.ok) {
+    if (response.status === 404) {
+      throw new Error(
+        '指した id が、読めない連携の鍵の行にありません（何も消していません。' +
+          'id は alteroid integration list の「読めない連携の鍵の行」で確かめます。' +
+          'id が取れない行はこの口では消せません）',
+      );
+    }
+    const described = describeAuthFailure(response.status, target);
+    if (described !== null) throw new Error(described);
+    throw new Error(
+      await withErrorReason(
+        `読めない連携の鍵の行を消せませんでした（${response.status}）`,
+        response,
+      ),
+    );
+  }
+  const result = (await response.json()) as { removedIds: string[] };
+  stdout.write(
+    `読めない連携の鍵の行を ${String(result.removedIds.length)} 行消しました（id: ${result.removedIds.join(', ')}）\n`,
   );
 }
 

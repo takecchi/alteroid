@@ -295,15 +295,15 @@ export const accountWithIdentitiesSchema = accountViewSchema.extend({
 });
 
 /**
- * **読めない行を id で指す一覧**（`GET /permission-grants` と `GET /access` の `rowsUnreadable`。
+ * **読めない行を id で指す一覧**（`GET /permission-grants` と `GET /access` と `GET /integration-keys` の `rowsUnreadable`。
  * issue #2536。トークンの `rowsUnreadable`〈#2346〉と同じ線）。
  *
  * **1件でも在るときだけ鍵ごと載る**（0件なら鍵が無い。`{ count: 0 }` は作らない——既存の呼び手の
  * 応答を変えないため）。`count` は読めない行の全件、`rows` は **id が取れた行だけ**（id の無い行は
  * 指せないので載せない。件数には数える。だから `rows.length <= count`）。`rows[].id` は
- * `POST /permission-grants/unreadable/remove` / `POST /access/unreadable/remove` の `ids` に渡せる。
+ * `POST /permission-grants/unreadable/remove` / `POST /access/unreadable/remove` / `POST /integration-keys/unreadable/remove` の `ids` に渡せる。
  *
- * **⚠️ 行の中身（許可の本文・アカウントの email など）は載せない。** id と、不正な欄名だけの
+ * **⚠️ 行の中身（許可の本文・アカウントの email・連携の鍵の名前など）は載せない。** id と、不正な欄名だけの
  * `reason`。
  */
 export const rowsUnreadableSchema = z.object({
@@ -349,6 +349,8 @@ export const integrationKeyViewSchema = z.object({
 
 export const integrationKeysListResponseSchema = z.object({
   keys: z.array(integrationKeyViewSchema),
+  /** 読めない連携の鍵の行（1件でも在るときだけ。{@link rowsUnreadableSchema}。issue #3216）。 */
+  rowsUnreadable: rowsUnreadableSchema.optional(),
 });
 
 /**

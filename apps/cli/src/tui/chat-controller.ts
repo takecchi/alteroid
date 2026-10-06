@@ -18,8 +18,11 @@
  */
 import {
   AttachmentDraft,
+  AttachmentMissingError,
   attachmentLinesOf,
+  interpretAttachPath,
   describeAttachment,
+  expireUploads,
   type DraftFile,
   uploadDraft,
 } from '../attachments.js';
@@ -117,7 +120,7 @@ export class ChatController {
 
   /** `/attach <path>`。 */
   async attach(args: string): Promise<void> {
-    const path = args.trim().replace(/^(['"])(.*)\1$/, '$2');
+    const path = interpretAttachPath(args);
     if (path === '') {
       this.addSystem('使い方: /attach <path>');
       return;
@@ -245,7 +248,11 @@ export class ChatController {
         this.onEvent(event, opened);
       }
     } catch (error) {
-      if (!abort.signal.aborted) this.addError(messageOf(error));
+      if (error instanceof AttachmentMissingError) {
+        this.addError(`${expireUploads(attached.files, error.message)}（${messageOf(error)}）`);
+      } else if (!abort.signal.aborted) {
+        this.addError(messageOf(error));
+      }
     } finally {
       this.flushStreaming();
       opened.reject(new Error('会話が始まらないまま接続が終わったので、続きを送れなかった'));
@@ -371,7 +378,11 @@ export class ChatController {
         abort.abort();
       }
     } catch (error) {
-      this.addError(messageOf(error));
+      this.addError(
+        error instanceof AttachmentMissingError
+          ? `${expireUploads(attached.files, error.message)}（${messageOf(error)}）`
+          : messageOf(error),
+      );
     }
   }
 

@@ -297,7 +297,9 @@ const EXPECTED_SITE_COUNT: Record<string, number> = {
   // `closed(done)` をクローンへ知らせるとき、その本文を `EXCHANGE_KIND_DECISION_PREFIX` で書く）。
   // + 1（#3170。`#handleEvent` が、いま追っているセッションの世代と違う世代を名乗る closed / session / report /
   // ask / settled を、状態に効かせず日誌にだけ残すとき、`EXCHANGE_KIND_DECISION_PREFIX` で書く）。
-  'manager.ts': 56,
+  // + 1（#3233。`case 'closed'` が、同じセッションについて知らせ済みの report 無しの `closed(done)` を、
+  // 知らせを重ねずに見送ったことを `EXCHANGE_KIND_DECISION_PREFIX` で書く）。
+  'manager.ts': 57,
 };
 
 describe('type: exchange の書き込み全箇所が kind 接頭辞を持つ（issue #1332）', () => {
