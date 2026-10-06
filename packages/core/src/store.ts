@@ -1739,7 +1739,13 @@ export interface InboxStore {
    */
   put(event: InboxEvent, at: string): Promise<void>;
 
-  /** 処理を終えた合図を消す。無ければ何もしない。 */
+  /**
+   * 処理を終えた合図を消す。無ければ何もしない。
+   *
+   * **id を名指しした削除は、読めない行（`peekPending().unreadable`）にも効く**（issue #3056 の 1。
+   * 3実装で同じ。`removeMany` も同じ）。「読めない行は消さずに残す」（#1966 / #2024）は
+   * まとめての削除・自動の片付けで黙って失わないための線で、名指しは意図した操作である。
+   */
   remove(id: string): Promise<void>;
 
   /**
