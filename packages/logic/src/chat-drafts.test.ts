@@ -168,6 +168,29 @@ describe('入力欄へ戻した文の印（#3708）', () => {
     expect(loadChatDraftMark('d')).toEqual({ unconfirmed: true });
   });
 
+  it('添付の件数と名前を残して読み戻す。件数の欄が無い古い形は添付なし、壊れた値も添付なし', () => {
+    saveChatDraftMark('conv-a', {
+      unconfirmed: true,
+      attachmentCount: 2,
+      attachmentNames: ['a.png', 'b.png'],
+    });
+    expect(loadChatDraftMark('conv-a')).toEqual({
+      unconfirmed: true,
+      attachmentCount: 2,
+      attachmentNames: ['a.png', 'b.png'],
+    });
+    sessionStorage.setItem(
+      'alteroid.chatDraftMark:old',
+      JSON.stringify({ v: 1, unconfirmed: true }),
+    );
+    expect(loadChatDraftMark('old')?.attachmentCount).toBeUndefined();
+    sessionStorage.setItem(
+      'alteroid.chatDraftMark:bad',
+      JSON.stringify({ unconfirmed: true, attachmentCount: -1, attachmentNames: 3 }),
+    );
+    expect(loadChatDraftMark('bad')).toEqual({ unconfirmed: true });
+  });
+
   it('ログアウトで消える', () => {
     saveChatDraftMark('conv-a', { unconfirmed: true });
     storeCredential('http://daemon.test', null);
