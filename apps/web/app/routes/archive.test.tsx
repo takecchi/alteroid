@@ -16,7 +16,7 @@
  * `stubFetch` の `route(url, init)` には method が渡らない）。ここでは
  * `globalThis.fetch` を自分で差し替え、状態（`removedAt` が付くかどうか）を持つ。
  */
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
@@ -295,7 +295,7 @@ describe('/archive 画面 — 一覧・集計・削除（#776）', () => {
   });
 
   it('「本文を消す」で DELETE /archive/:id を叩き、成功すれば一覧が「本文は削除済み」に変わる', async () => {
-    stubArchiveScreen([
+    const { deletes } = stubArchiveScreen([
       {
         id: 'sess-3-a.jsonl',
         sessionId: 'sess-3',
@@ -306,6 +306,17 @@ describe('/archive 画面 — 一覧・集計・削除（#776）', () => {
 
     await renderArchive();
     fireEvent.click(await screen.findByRole('button', { name: '本文を消す' }));
+    // 押しただけでは消さない（#3091）。「やめる」で閉じても DELETE は飛ばない。
+    const dialog = await screen.findByRole('alertdialog');
+    expect(dialog.textContent).toContain('元に戻せません');
+    expect(deletes).toHaveLength(0);
+    fireEvent.click(within(dialog).getByRole('button', { name: 'やめる' }));
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+    expect(deletes).toHaveLength(0);
+    fireEvent.click(screen.getByRole('button', { name: '本文を消す' }));
+    fireEvent.click(
+      within(await screen.findByRole('alertdialog')).getByRole('button', { name: '消す' }),
+    );
 
     await waitFor(() => {
       expect(screen.getByText('本文は削除済み')).toBeTruthy();
@@ -332,6 +343,9 @@ describe('/archive 画面 — 一覧・集計・削除（#776）', () => {
 
     await renderArchive();
     fireEvent.click(await screen.findByRole('button', { name: '本文を消す' }));
+    fireEvent.click(
+      within(await screen.findByRole('alertdialog')).getByRole('button', { name: '消す' }),
+    );
 
     // 黙って失敗しない: サーバの断り文言が画面に出る。
     expect(await screen.findByText(/走行中のマネージャー mgr-1 の退避なので消せない/)).toBeTruthy();
@@ -343,7 +357,18 @@ describe('/archive 画面 — 一覧・集計・削除（#776）', () => {
 
     fireEvent.change(input, { target: { value: '本番障害の調査で緊急に消す必要があった' } });
     expect(overrideButton).toHaveProperty('disabled', false);
+
+    // 「本文を消す」の確認を開いて閉じても、書いた理由は失われない（#3091）。
+    fireEvent.click(screen.getByRole('button', { name: '本文を消す' }));
+    fireEvent.click(
+      within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'やめる' }),
+    );
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+    expect((input as HTMLInputElement).value).toBe('本番障害の調査で緊急に消す必要があった');
+
+    // 「理由を付けて消す」は理由の入力が前段なので、確認を挟まず通る（#3091）。
     fireEvent.click(overrideButton);
+    expect(screen.queryByRole('alertdialog')).toBeNull();
 
     await waitFor(() => {
       expect(screen.getByText('本文は削除済み')).toBeTruthy();

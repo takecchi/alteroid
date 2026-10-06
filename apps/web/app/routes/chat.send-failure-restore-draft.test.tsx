@@ -108,7 +108,10 @@ describe('#3064: 送信が失敗したら書いた文を失わせない', () => 
     await typeAndSend(LONG);
 
     expect(await screen.findByText(BOOM)).toBeTruthy();
-    expect((await box()).value).toBe(LONG);
+    // 入力欄へ戻すのは effect（`chat.tsx` の `giveBack` の下）で、失敗の表示より1描画遅れる。
+    // 同期で読むと CI の負荷で `''` を掴んで落ちた（#3108 の CI）。戻るまで待つ。
+    const restored = await box();
+    await waitFor(() => expect(restored.value).toBe(LONG));
     expect(bubbleCount(LONG)).toBe(0);
 
     fireEvent.click(screen.getByRole('button', { name: '再送' }));
@@ -143,7 +146,10 @@ describe('#3064: 送信が失敗したら書いた文を失わせない', () => 
     await typeAndSend(LONG);
 
     expect(await screen.findByText(BOOM)).toBeTruthy();
-    expect((await box()).value).toBe(LONG);
+    // 入力欄へ戻すのは effect（`chat.tsx` の `giveBack` の下）で、失敗の表示より1描画遅れる。
+    // 同期で読むと CI の負荷で `''` を掴んで落ちた（#3108 の CI）。戻るまで待つ。
+    const restored = await box();
+    await waitFor(() => expect(restored.value).toBe(LONG));
     expect(bubbleCount(LONG)).toBe(0);
     expect(screen.getByRole('button', { name: '再送' })).toBeTruthy();
   });
@@ -221,7 +227,10 @@ describe('#3064: 送信が失敗したら書いた文を失わせない', () => 
     await router.navigate(`/chat/${A}`);
     expect(await findShownConversation(A)).toBeTruthy();
     expect(await screen.findByText(BOOM)).toBeTruthy();
-    expect((await box()).value).toBe(LONG);
+    // 入力欄へ戻すのは effect（`chat.tsx` の `giveBack` の下）で、失敗の表示より1描画遅れる。
+    // 同期で読むと CI の負荷で `''` を掴んで落ちた（#3108 の CI）。戻るまで待つ。
+    const restored = await box();
+    await waitFor(() => expect(restored.value).toBe(LONG));
     expect(bubbleCount(LONG)).toBe(0);
   });
 

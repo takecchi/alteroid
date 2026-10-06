@@ -32,15 +32,28 @@ describe('HeaderFeed', () => {
 
   it('起動時に件数を取り、open で live になる', async () => {
     const api = fakeApi();
-    api.counts = { pendingApprovals: 3, runningManagers: 2 };
+    api.counts = { pendingApprovals: 3, unreadableApprovals: 0, runningManagers: 2 };
     const feed = new HeaderFeed(api);
     expect(feed.store.getSnapshot()).toEqual({ counts: null, live: 'connecting' });
     feed.start();
     await flush();
     expect(feed.store.getSnapshot()).toEqual({
-      counts: { pendingApprovals: 3, runningManagers: 2 },
+      counts: { pendingApprovals: 3, unreadableApprovals: 0, runningManagers: 2 },
       live: 'live',
     });
+    feed.stop();
+  });
+
+  it('読めない行の数だけが変わっても、件数を差し替える（#3090）', async () => {
+    const api = fakeApi();
+    api.counts = { pendingApprovals: 0, unreadableApprovals: 0, runningManagers: 0 };
+    api.journal.push({ events: ['open'] });
+    const feed = new HeaderFeed(api, { refetchDebounceMs: 100, retryBaseMs: 1_000_000 });
+    feed.start();
+    await flush();
+    api.counts = { pendingApprovals: 0, unreadableApprovals: 2, runningManagers: 0 };
+    await feed.refetch();
+    expect(feed.store.getSnapshot().counts?.unreadableApprovals).toBe(2);
     feed.stop();
   });
 
@@ -57,10 +70,14 @@ describe('HeaderFeed', () => {
     feed.start();
     await flush();
     const afterOpen = calls; // start と open の取得
-    api.counts = { pendingApprovals: 1, runningManagers: 0 };
+    api.counts = { pendingApprovals: 1, unreadableApprovals: 0, runningManagers: 0 };
     await flush(150);
     expect(calls).toBe(afterOpen + 1); // 3 件の出来事が 1 回にまとまる
-    expect(feed.store.getSnapshot().counts).toEqual({ pendingApprovals: 1, runningManagers: 0 });
+    expect(feed.store.getSnapshot().counts).toEqual({
+      pendingApprovals: 1,
+      unreadableApprovals: 0,
+      runningManagers: 0,
+    });
     feed.stop();
   });
 
@@ -90,7 +107,7 @@ describe('HeaderFeed', () => {
     await flush();
     expect(feed.store.getSnapshot().live).toBe('offline');
 
-    api.counts = { pendingApprovals: 5, runningManagers: 0 };
+    api.counts = { pendingApprovals: 5, unreadableApprovals: 0, runningManagers: 0 };
     await flush(999);
     expect(feed.store.getSnapshot().live).toBe('offline');
     await flush(1); // 1 秒後に 2 本目（失敗）
@@ -106,13 +123,17 @@ describe('HeaderFeed', () => {
 
   it('取り直しに失敗しても前の件数を残す（0 にしない）', async () => {
     const api = fakeApi();
-    api.counts = { pendingApprovals: 4, runningManagers: 1 };
+    api.counts = { pendingApprovals: 4, unreadableApprovals: 0, runningManagers: 1 };
     const feed = new HeaderFeed(api);
     feed.start();
     await flush();
     api.headerCounts = () => Promise.reject(new Error('読めない'));
     await feed.refetch();
-    expect(feed.store.getSnapshot().counts).toEqual({ pendingApprovals: 4, runningManagers: 1 });
+    expect(feed.store.getSnapshot().counts).toEqual({
+      pendingApprovals: 4,
+      unreadableApprovals: 0,
+      runningManagers: 1,
+    });
     feed.stop();
   });
 

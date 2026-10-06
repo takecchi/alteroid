@@ -27,7 +27,7 @@ import type {
   AgentCloneTools,
 } from './agent-clone-session.js';
 import type { AgentProvider } from './agent-ports.js';
-import type { AgentUserInput } from './agent-session.js';
+import type { AgentInputImage, AgentUserInput } from './agent-session.js';
 import { ClaudeCloneDriver } from './claude-clone-driver.js';
 import { CLAUDE_PROVIDER } from './claude-provider.js';
 import { describeArchiveContinuityForJournal } from './archive-continuity.js';
@@ -195,6 +195,8 @@ import { CloneDistillMemoryState } from './clone-distill-memory-state.js';
 import { CloneInboxFlow } from './clone-inbox-flow.js';
 import { CloneNotices } from './clone-notices.js';
 import { CloneSdkSession } from './clone-sdk-session.js';
+import { resolveTurnAttachments } from './attachment-turn.js';
+import { stripNul } from './nul-guard.js';
 import { composeTurnInputText, turnInputEntry } from './turn-input.js';
 import type { AccountUsageState } from './usage-snapshot.js';
 import {
@@ -4216,7 +4218,22 @@ class Clone implements CloneHost {
     const head = events[0];
     if (head === undefined) return;
     const priorTexts = await this.#resolvePriorTexts(events);
-    await this.#runTurn(head.conversationId, humanTurnText(events, priorTexts));
+    // 添付（Issue #3111 段1b）。中身はここで読むだけで、受信箱・日誌・記憶へは写さない。
+    const images: AgentInputImage[] = [];
+    const notices = new Map<string, string>();
+    for (const event of events) {
+      if (event.attachments === undefined || event.attachments.length === 0) continue;
+      const resolved = await resolveTurnAttachments(this.#stores, event.attachments);
+      images.push(...resolved.images);
+      notices.set(event.id, resolved.noticeLines.join('\n'));
+    }
+    await this.#runTurn(
+      head.conversationId,
+      humanTurnText(events, priorTexts, notices),
+      'normal',
+      null,
+      images,
+    );
   }
 
   /**
@@ -5333,6 +5350,19 @@ class Clone implements CloneHost {
         text: event.text,
         conversationId: event.conversationId,
         ...(event.supersedes === undefined ? {} : { supersedes: event.supersedes }),
+        // 添付はメタデータだけを写す（中身は `stores.attachments`。日誌へは書かない）。
+        // ファイル名は `stripNul`（pg の `stripNulls` と同じ規則）を通す。
+        ...(event.attachments === undefined || event.attachments.length === 0
+          ? {}
+          : {
+              attachments: event.attachments.map((ref) => ({
+                id: ref.id,
+                name: stripNul(ref.name),
+                mediaType: ref.mediaType,
+                size: ref.size,
+                sha256: ref.sha256,
+              })),
+            }),
       }),
     );
 
@@ -8720,6 +8750,11 @@ class Clone implements CloneHost {
      * 由来しないターンには紐づける承認が無いことをそのまま表す。
      */
     approvalId: string | null = null,
+    /**
+     * 本文に添える画像（段1b）。モデルへ渡す入力（`AgentUserInput.images`）へそのまま通す。
+     * 呼び出し元が渡さなければ従来どおり文字列だけの入力になる。
+     */
+    images: readonly AgentInputImage[] = [],
   ): Promise<TurnOutcome> {
     if (kind !== 'distill') this.#distillMemory.markActivity();
 
@@ -8767,6 +8802,7 @@ class Clone implements CloneHost {
             body: text,
           }),
         ),
+        images,
       );
       // 入力がモデルへ渡った瞬間から最初の出力までは「考えている」。
       // **`#ensureQuery` より後で送る** — セッションの起動そのものはまだ考え
@@ -9561,7 +9597,7 @@ class Clone implements CloneHost {
     ].join('\n');
   }
 
-  #pushInput(text: string): void {
+  #pushInput(text: string, images: readonly AgentInputImage[] = []): void {
     // **`#usageBlockedAccumulatedChars` を積む場所はここ1か所だけ**
     // （`#usageBlockedAccumulatedChars` の doc。Issue #1240）。モデルへ実際に
     // 渡す文字列の長さそのものを数える——`#runTurn` 側で数え直すと、並び順
@@ -9569,7 +9605,7 @@ class Clone implements CloneHost {
     // 別の場所（`turn_ended` の成功枝）で 0 へ戻すので、健全なセッションでは
     // ここは大きくならない。**
     this.#usageBlockedAccumulatedChars += text.length;
-    this.#sdkSession.enqueueInput({ text });
+    this.#sdkSession.enqueueInput(images.length === 0 ? { text } : { text, images });
     this.#sdkSession.wakeInput();
   }
 
@@ -12250,10 +12286,16 @@ function isExternalEvent(event: InboxEvent): event is ExternalEvent {
 export function humanTurnText(
   events: HumanMessage[],
   priorTexts: ReadonlyMap<string, string> = new Map(),
+  attachmentNotices: ReadonlyMap<string, string> = new Map(),
 ): string {
   const head = events[0];
   if (head === undefined) return '';
-  if (events.length === 1) return editedTurnBody(head, priorTexts.get(head.id));
+  const bodyOf = (event: HumanMessage): string => {
+    const body = editedTurnBody(event, priorTexts.get(event.id));
+    const notice = attachmentNotices.get(event.id);
+    return notice === undefined ? body : `${body}\n\n${notice}`;
+  };
+  if (events.length === 1) return bodyOf(head);
 
   return [
     `[system] 前のターンを処理しているあいだに人間から届いた発言を、続けて **${events.length} 件** ` +
@@ -12267,7 +12309,7 @@ export function humanTurnText(
       (event, index) =>
         `**(${index + 1}) ${event.at}**` +
         `${event.supersedes === undefined ? '' : '（既出発言の編集）'}` +
-        `\n\n${editedTurnBody(event, priorTexts.get(event.id))}\n`,
+        `\n\n${bodyOf(event)}\n`,
     ),
   ].join('\n');
 }

@@ -1,3 +1,4 @@
+import { MemoryAttachmentStore } from './attachment-memory.js';
 import {
   classifyArchiveContinuity,
   fingerprintArchiveBody,
@@ -1516,7 +1517,8 @@ export function createMemoryStores(): Stores {
       // 無い・取り消し済みなら記録しない（Issue #1687。`PermissionGrantStore.markUsed` の doc）。
       if (found === undefined || found.revokedAt !== undefined) return false;
       // 既存より古い時刻では戻さない（`PermissionGrantStore.markUsed` の doc）。
-      if (found.lastUsedAt !== undefined && found.lastUsedAt >= at) return true;
+      if (found.lastUsedAt !== undefined && compareIsoInstant(found.lastUsedAt, at) >= 0)
+        return true;
       const next = permissionGrantSchema.parse({ ...found, lastUsedAt: at });
       permissionGrantRows.set(id, next);
       return true;
@@ -2116,6 +2118,7 @@ export function createMemoryStores(): Stores {
     conversationReads,
     tokens,
     usage,
+    attachments: new MemoryAttachmentStore(),
   };
 }
 

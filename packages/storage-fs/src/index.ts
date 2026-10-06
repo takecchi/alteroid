@@ -1,9 +1,10 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import type { Stores } from '@alteroid/core';
+import type { AttachmentStoreOptions, Stores } from '@alteroid/core';
 
 import { FsTranscriptArchive } from './archive.js';
+import { FsAttachmentStore } from './attachments.js';
 import { FsAuthStore } from './auth.js';
 import { FsCommitmentStore } from './commitments.js';
 import { FsCredentialVaultStore } from './credentials.js';
@@ -25,6 +26,7 @@ import { FsUsageStore } from './usage.js';
 
 export { FsTranscriptArchive } from './archive.js';
 export { writeFileAtomic } from './atomic.js';
+export { FsAttachmentStore } from './attachments.js';
 export { FsAuthStore } from './auth.js';
 export { CLOSED_HISTORY_LIMIT, FsCommitmentStore } from './commitments.js';
 export { FsCredentialVaultStore } from './credentials.js';
@@ -46,7 +48,10 @@ export { FsUsageStore } from './usage.js';
 export { ALTEROID_HOME_ENV, defaultRoot, resolvePaths, type AlteroidPaths } from './paths.js';
 
 /** ローカル（fs）ドライバ一式。デーモンプロセスだけがこれを持つ。 */
-export function createFsStores(root?: string): Stores & { paths: AlteroidPaths } {
+export function createFsStores(
+  root?: string,
+  attachmentOptions?: AttachmentStoreOptions,
+): Stores & { paths: AlteroidPaths } {
   const paths = resolvePaths(root);
   // `FsPersonaStore` は保護状態の索引を失ったとき、その場で日誌から組み直す
   // （`persona.ts` の `#rebuildIndex` の doc）ので journal を要る。
@@ -71,6 +76,7 @@ export function createFsStores(root?: string): Stores & { paths: AlteroidPaths }
     conversationReads: new FsConversationReadStore(paths.jobs),
     tokens: new FsTokenPoolStore(paths.tokens),
     usage: new FsUsageStore(paths.usage),
+    attachments: new FsAttachmentStore(paths.attachments, attachmentOptions),
   };
 }
 

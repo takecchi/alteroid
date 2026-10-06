@@ -208,10 +208,40 @@ describe('JSON の口（hono/client）', () => {
         ],
       }),
     );
-    expect(await api.headerCounts()).toEqual({ pendingApprovals: 2, runningManagers: 2 });
+    expect(await api.headerCounts()).toEqual({
+      pendingApprovals: 2,
+      unreadableApprovals: 0,
+      runningManagers: 2,
+    });
     const urls = sent.map((s) => s.url);
     expect(urls.some((u) => u.includes('/approvals'))).toBe(true);
     expect(urls.some((u) => u.includes('/managers'))).toBe(true);
+  });
+});
+
+describe('headerCounts の読めない承認待ち（#3090）', () => {
+  it('unreadable の行数を戻す。読める行には足さない', async () => {
+    const api = createTuiApi(target);
+    replies.push(
+      json({ approvals: [], unreadable: [{ id: 'ap-bad', reason: 'x' }, { reason: 'y' }] }),
+    );
+    replies.push(json({ managers: [] }));
+    expect(await api.headerCounts()).toEqual({
+      pendingApprovals: 0,
+      unreadableApprovals: 2,
+      runningManagers: 0,
+    });
+  });
+
+  it('古いデーモンが unreadable を返さなくても 0 として読める', async () => {
+    const api = createTuiApi(target);
+    replies.push(json({ approvals: [{ id: 'a' }] }));
+    replies.push(json({ managers: [] }));
+    expect(await api.headerCounts()).toEqual({
+      pendingApprovals: 1,
+      unreadableApprovals: 0,
+      runningManagers: 0,
+    });
   });
 });
 

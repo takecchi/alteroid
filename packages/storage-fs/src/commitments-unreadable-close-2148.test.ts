@@ -137,7 +137,12 @@ describe('FsCommitmentStore.close() が読めない行を閉じられる（issue
     expect(raw.closedUnreadable.some((row) => row.id === BAD_ID && row.by === 'human')).toBe(true);
   });
 
-  it('closeMany（issue #844）は読めない行を対象にしない（この issue の範囲外。既存どおり）', async () => {
+  // 経緯（issue #3096）: この歯は元々「closeMany は読めない行を対象にしない（この issue の範囲外。
+  // 既存どおり）」を固定していた（期待値は `[]`）。それは `close()` との食い違い（pg は
+  // `closeMany()` も読めない行を閉じる）という欠陥を仕様として固定したものだったので、期待値を
+  // 反転した——`closeMany()` も `close()` と同じ筋で読めない行を閉じ、その id を返す。
+  // 変えていないもの: 閉じても行の中身は読めないまま（`get` は投げる）。
+  it('closeMany（issue #844）は読めない行を、close() と同じく閉じる（#3096 で反転。元は「対象にしない」）', async () => {
     await writeBadRow();
     const stores = createFsStores(root);
     const closed = await stores.commitments.closeMany(
@@ -146,8 +151,8 @@ describe('FsCommitmentStore.close() が読めない行を閉じられる（issue
       '一括で閉じたつもり',
       'human',
     );
-    expect(closed).toEqual([]);
-    // close() と違い、closeMany は読めない行を見ないままである——変えていない。
+    expect(closed).toEqual([BAD_ID]);
+    // 閉じても中身は読めないままである——変えていない（`close()` と同じ）。
     await expect(stores.commitments.get(BAD_ID)).rejects.toThrow(UnreadableCommitmentError);
   });
 });

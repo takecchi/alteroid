@@ -525,6 +525,20 @@ export const approvalSelectionSchema = z.object({
 export type ApprovalSelection = z.infer<typeof approvalSelectionSchema>;
 
 /**
+ * 発言に添えた添付の参照（Issue #3111 段1b）。**中身（bytes）は持たない**——中身は
+ * `stores.attachments` に在り、受信箱・日誌・記憶のどこにも書かない。
+ */
+export const attachmentRefSchema = z.object({
+  id: z.string().min(1),
+  name: z.string(),
+  mediaType: z.string(),
+  size: z.number().int().nonnegative(),
+  sha256: z.string(),
+});
+
+export type AttachmentRef = z.infer<typeof attachmentRefSchema>;
+
+/**
  * 仕事の起点（PRD「自律」の4つ）。M1 で届くのは `human` だけだが、
  * 判別可能ユニオンとして最初から4つ揃えておく。
  */
@@ -547,6 +561,8 @@ export const inboxEventSchema = z.discriminatedUnion('type', [
      * 日誌は確定した記録）。
      */
     supersedes: z.string().optional(),
+    /** 添付の参照（メタデータだけ。中身は `stores.attachments`）。`Clone#record` が日誌の `exchange` へ写す。 */
+    attachments: z.array(attachmentRefSchema).optional(),
   }),
   z.object({
     type: z.literal('human_answer'),
@@ -1139,6 +1155,11 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
      * 畳み込みの解釈は持たない。
      */
     supersedes: z.string().optional(),
+    /**
+     * この発言に添えた添付の参照（`with: 'human'` かつ `role: 'inbound'` のときだけ。Issue #3111）。
+     * **メタデータだけで、中身（bytes）は日誌に書かない。**
+     */
+    attachments: z.array(attachmentRefSchema).optional(),
     /**
      * **この行は返信ではなく、「このターンには返せなかった」という知らせである**
      * （`with: 'human'` かつ `role: 'outbound'` のときだけ付く）。

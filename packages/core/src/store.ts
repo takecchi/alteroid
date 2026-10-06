@@ -2,6 +2,7 @@ import type { SessionStore } from '@anthropic-ai/claude-agent-sdk';
 import { createHash } from 'node:crypto';
 
 import type { ArchiveContinuity } from './archive-continuity.js';
+import type { AttachmentStore } from './attachment.js';
 import type { AuthStore } from './auth.js';
 import type { IntegrationKeyStore } from './integration-key.js';
 import type {
@@ -3410,6 +3411,12 @@ export interface Stores {
    * 見えるが fs では見えない」という能力差が生まれる（north_star 禁止1）。
    */
   usage: UsageStore;
+  /**
+   * 添付ファイル（画像・動画・ファイル）の置き場（Issue #3111）。記憶（memory）とは独立で、期限つきで預かる。
+   *
+   * **省略可能にしないこと**（`usage` と同じ理由。片方の器でだけ添付が預けられない能力差を作らない）。
+   */
+  attachments: AttachmentStore;
   /**
    * SDK のセッション生ログの預け先（M4 のクラウド構成でだけ付く）。
    *

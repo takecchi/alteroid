@@ -32,7 +32,7 @@
 
 import type { ConversationReadView } from './conversation-read.js';
 import { compareIsoInstant } from './iso-instant.js';
-import type { JournalEntry } from './schema.js';
+import type { AttachmentRef, JournalEntry } from './schema.js';
 import type { JournalStore } from './store.js';
 
 /** 日誌の `exchange` 1件。 */
@@ -136,6 +136,11 @@ export interface ConversationMessage {
    * そのまま写す）。付いていなければ通常の発言（または印を持たない古い行）。
    */
   turnFailure?: 'failed' | 'held';
+  /**
+   * 発言に添えた添付の参照（`schema.ts` の `exchange.attachments` をそのまま写す。メタデータだけで中身は無い）。
+   * 添付の無い発言には付けない。
+   */
+  attachments?: AttachmentRef[];
 }
 
 /**
@@ -380,6 +385,9 @@ export function toMessage(entry: Exchange): ConversationMessage {
     conversationId: entry.conversationId,
     ...(entry.supersedes === undefined ? {} : { supersedes: entry.supersedes }),
     ...(entry.turnFailure === undefined ? {} : { turnFailure: entry.turnFailure }),
+    ...(entry.attachments === undefined || entry.attachments.length === 0
+      ? {}
+      : { attachments: entry.attachments }),
   };
 }
 

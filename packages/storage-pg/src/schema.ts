@@ -3,6 +3,7 @@ import {
   bigint,
   bigserial,
   boolean,
+  customType,
   doublePrecision,
   index,
   integer,
@@ -1018,3 +1019,37 @@ export const conversationOutboundLatest = pgTable('conversation_outbound_latest'
   conversationId: text('conversation_id').primaryKey(),
   at: timestamp('at', { withTimezone: true, mode: 'date' }).notNull(),
 });
+
+/** `bytea` 列（Node では `Buffer`）。 */
+const bytea = customType<{ data: Buffer; driverData: Buffer }>({
+  dataType() {
+    return 'bytea';
+  },
+});
+
+/**
+ * 添付ファイル（#3111 段1a。`AttachmentStore`）。記憶とは独立。
+ *
+ * `bytes` は中身そのもの。**`getMeta` と `prune` は `bytes` を読まない**ので、控えだけの問い合わせが
+ * 大きな列を引かない。`conversation_id` が `null` のうち作成から1時間たったものと、`expires_at` を
+ * 過ぎたものが掃除の対象（`prune`）。
+ */
+export const attachments = pgTable(
+  'attachments',
+  {
+    id: text('id').primaryKey(),
+    sha256: text('sha256').notNull(),
+    mediaType: text('media_type').notNull(),
+    name: text('name').notNull(),
+    size: bigint('size', { mode: 'number' }).notNull(),
+    bytes: bytea('bytes').notNull(),
+    conversationId: text('conversation_id'),
+    uploadedBy: text('uploaded_by'),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull(),
+    expiresAt: timestamp('expires_at', { withTimezone: true, mode: 'date' }).notNull(),
+  },
+  (table) => [
+    index('attachments_expires_at_idx').on(table.expiresAt),
+    index('attachments_created_at_idx').on(table.createdAt),
+  ],
+);

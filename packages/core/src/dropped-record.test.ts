@@ -881,6 +881,13 @@ describe('inboxEventShape の名簿（schema に足した型・欄の足し忘�
           'ある。`journalEntryShape` の `exchange.supersedes` と同じ判断。' +
           '足すなら対応欄と2か所同時、`tag()` は禁止。',
       },
+      attachments: {
+        emit: 'never',
+        why:
+          '添付の参照（#3111）。ファイル名は人間が付けた自由文で、中身（bytes）は' +
+          'そもそも受信箱にも日誌にも無い。件数だけでも跡に出す理由が無い。' +
+          '対になる欄（`inboxEventShape` / `journalEntryShape`）と同時に判断すること、`tag()` は禁止。',
+      },
     },
     human_answer: {
       approvalId: { emit: 'tag', token: 'approvalId' },
@@ -990,6 +997,7 @@ describe('inboxEventShape の名簿（schema に足した型・欄の足し忘�
       text: SECRET,
       conversationId: SECRET,
       supersedes: SECRET,
+      attachments: [{ id: SECRET, name: SECRET, mediaType: 'image/png', size: 1, sha256: SECRET }],
     },
     human_answer: {
       type: 'human_answer',
@@ -1811,6 +1819,12 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
           'この関数はその検証の外に立つ。足すなら `inboxEventShape` の' +
           '`human_message.supersedes` と2か所同時、`tag()` は禁止。',
       },
+      attachments: {
+        emit: 'never',
+        why:
+          '添付の参照（#3111）。ファイル名は人間が付けた自由文で、中身（bytes）は' +
+          'そもそも日誌にも受信箱にも無い。`inboxEventShape` の `human_message.attachments` と同じ判断で、`tag()` は禁止。',
+      },
       // 返信ではなく「返せなかった」知らせの印（`turnFailure`）。`failed` / `held` の2語だけの
       // 列挙で自由文ではない（毒を運べない）が、記録の跡を読む人に要る情報でもない
       // （文面は `text` が持ち、`text` は `size-unnamed` で桁だけ出ている）ので載せない。
@@ -2246,6 +2260,7 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
       text: SECRET,
       conversationId: SECRET,
       supersedes: SECRET,
+      attachments: [{ id: SECRET, name: SECRET, mediaType: 'image/png', size: 1, sha256: SECRET }],
       turnFailure: 'failed',
       approvalId: 'ap-1',
       managerId: 'mgr-1',

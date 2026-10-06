@@ -1,6 +1,6 @@
 import { SettingsTabs } from '~/components/group-tabs';
 import { settingsDocumentTitle } from '~/lib/nav';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 
 import {
   Page,
@@ -97,6 +97,9 @@ export default function Profile() {
   // 切り替えても親の `setEditor` では畳めない。残すと、確認していない行について「本当に保存する」が
   // 確認済みの顔で出て、前の行の失敗が新しい行の下に出る（issue #3073）。
   const [editorSerial, setEditorSerial] = useState(0);
+  // いま開いている編集欄の世代（`editorSerial` の最新値）。保存の完了が戻ったとき、その保存を始めた
+  // 編集欄がまだ開いているかを突き合わせる（保存中に別の行へ切り替えると、世代が進んでいる）。
+  const editorSerialRef = useRef(0);
   const [result, setResult] = useState<{ label: string; update: ProfileUpdateResult } | null>(null);
 
   return (
@@ -129,7 +132,8 @@ export default function Profile() {
                   profile={data}
                   onEdit={(entry) => {
                     setResult(null);
-                    setEditorSerial((serial) => serial + 1);
+                    editorSerialRef.current += 1;
+                    setEditorSerial(editorSerialRef.current);
                     setEditor({
                       name: entry.name,
                       existing: true,
@@ -147,6 +151,7 @@ export default function Profile() {
         {data !== undefined && (
           <ProfileEditor
             key={editorSerial}
+            isCurrent={() => editorSerialRef.current === editorSerial}
             legacy={data.legacy}
             hasDefault={data.entries.some((entry) => entry.name === 'default')}
             editor={editor}
@@ -338,6 +343,7 @@ function ProfileEditor({
   editor,
   setEditor,
   onSaved,
+  isCurrent,
 }: {
   /**
    * 古いデーモン: 行の追加（default 以外）・撒く先の変更はできない。本文の編集だけを、従来の
@@ -348,6 +354,11 @@ function ProfileEditor({
   editor: EditorState | null;
   setEditor: (next: EditorState | null) => void;
   onSaved: (label: string, update: ProfileUpdateResult) => void;
+  /**
+   * この編集欄（`key` の世代）がまだ開いているか。保存の完了が戻る前に別の行の「編集する」で
+   * 切り替えられていたら false で、そのとき閉じてはいけない（新しい行の書きかけが消える。#3078）。
+   */
+  isCurrent: () => boolean;
 }) {
   const setEntry = useSetProfileEntry();
   const setLegacy = useSetProfileLegacy();
@@ -369,9 +380,14 @@ function ProfileEditor({
       const update = legacy
         ? await setLegacy(state.script)
         : await setEntry(state.name, state.script, state.scope);
+      // **結果は、閉じるかどうかと関係なく出す**（書き込みは起きた。行の名前つきの文言なので、
+      // 別の行を開いていても何の結果かは取り違えない）。
       onSaved(`行 ${state.name} を更新した`, update);
-      setConfirming(false);
-      setEditor(null);
+      // **閉じるのは、保存を始めた編集欄がまだ開いているときだけ。**
+      if (isCurrent()) {
+        setConfirming(false);
+        setEditor(null);
+      }
     } catch (caught) {
       setFailure(caught);
       // **確認は畳む。** 400（読めなかった）なら本文を直してからもう一度押す

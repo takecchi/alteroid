@@ -284,7 +284,9 @@ const EXPECTED_SITE_COUNT: Record<string, number> = {
   // 理由を `EXCHANGE_KIND_GAUGE_PREFIX` で、台帳へ積めなかったことを `EXCHANGE_KIND_FAILURE_PREFIX` で書く）。
   // + 1（#3054。`#ignoreIfMovedAway` が、移った後に古い runner から届いた session / report / ask /
   // settled を台帳・受信箱へ流さずに捨てたことを `EXCHANGE_KIND_DECISION_PREFIX` で書く）。
-  'manager.ts': 50,
+  // + 1（#3097。`#endRelocationWindow` が、移送の resume が飛んでいる最中に届いた元の runner の
+  // `closed` を、移送が受理されたので捨てたことを `EXCHANGE_KIND_DECISION_PREFIX` で書く）。
+  'manager.ts': 51,
 };
 
 describe('type: exchange の書き込み全箇所が kind 接頭辞を持つ（issue #1332）', () => {

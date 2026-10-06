@@ -1,9 +1,10 @@
 import { collapseErrorCause } from '@alteroid/core';
-import type { Stores } from '@alteroid/core';
+import type { AttachmentStoreOptions, Stores } from '@alteroid/core';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { Pool } from 'pg';
 
 import { PgTranscriptArchive } from './archive.js';
+import { PgAttachmentStore } from './attachments.js';
 import { PgAuthStore } from './auth.js';
 import { PgIntegrationKeyStore } from './integration-keys.js';
 import { PgCommitmentStore } from './commitments.js';
@@ -26,6 +27,7 @@ import { PgTokenPoolStore } from './token-pool.js';
 import { PgUsageStore } from './usage.js';
 
 export { PgTranscriptArchive } from './archive.js';
+export { PgAttachmentStore } from './attachments.js';
 export { PgAuthStore } from './auth.js';
 export { PgIntegrationKeyStore } from './integration-keys.js';
 export { PgCommitmentStore } from './commitments.js';
@@ -117,7 +119,11 @@ export function describePgConnectionError(error: Error): string {
 }
 
 /** 既存の drizzle ハンドルからストア一式を組む（ドライバを問わない）。 */
-export function createPgStoresFromDb(db: Db, close?: () => Promise<void>): PgStores {
+export function createPgStoresFromDb(
+  db: Db,
+  close?: () => Promise<void>,
+  attachmentOptions?: AttachmentStoreOptions,
+): PgStores {
   // `PgPersonaStore` は保護状態の派生値を失った行を、その場で日誌から
   // 組み直す（`persona.ts` の `#healRow` の doc）ので journal を要る。
   const journal = new PgJournalStore(db);
@@ -141,6 +147,7 @@ export function createPgStoresFromDb(db: Db, close?: () => Promise<void>): PgSto
     conversationReads: new PgConversationReadStore(db),
     tokens: new PgTokenPoolStore(db),
     usage: new PgUsageStore(db),
+    attachments: new PgAttachmentStore(db, attachmentOptions),
     ...sessionStores(db),
     close: close ?? (async () => undefined),
   };
