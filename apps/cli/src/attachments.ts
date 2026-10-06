@@ -423,6 +423,9 @@ export async function attachmentsMetaCommand(id: string): Promise<void> {
       `size: ${meta.size}（${formatBytes(meta.size)}）`,
       `sha256: ${meta.sha256}`,
       ...(meta.conversationId === undefined ? [] : [`conversationId: ${meta.conversationId}`]),
+      ...(meta.externalEventId === undefined
+        ? []
+        : [`externalEventId: ${meta.externalEventId}`]),
       ...(meta.uploadedBy === undefined ? [] : [`uploadedBy: ${meta.uploadedBy}`]),
       `createdAt: ${meta.createdAt}`,
       `expiresAt: ${meta.expiresAt}`,
