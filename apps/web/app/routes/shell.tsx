@@ -114,11 +114,12 @@ export default function Shell() {
    */
   const recheckFailing = error !== undefined && status !== 'checking';
   const [gaveUp, setGaveUp] = useState(false);
+  // 直った（失敗でなくなった）ら諦めを解く。描画中の state 調整（effect で立て直さない）。
+  if (!recheckFailing && gaveUp) setGaveUp(false);
   const attempts = useRef(0);
   useEffect(() => {
     if (!recheckFailing) {
       attempts.current = 0;
-      setGaveUp(false);
       return;
     }
     // 取り直しの最中は待つ（終わるとここへ戻る）。諦めた後は自動では打たない。
