@@ -19,7 +19,6 @@ import {
   TurnFailureNote,
   useIsMobile,
   EMPTY_QUESTIONS_DRAFT,
-  type ApprovalQuestionsDraft,
 } from '@alteroid/ui';
 import {
   useEndConversation,
@@ -45,12 +44,20 @@ import {
   formatDateTime,
   formatRelative,
   isPreviewableImage,
+  isEmptyQuestionsDraft,
+  loadApprovalDrafts,
   loadChatDraft,
   newClientMessageId,
+  saveApprovalDrafts,
   saveChatDraft,
   redactError,
 } from '@alteroid/logic';
-import type { ConversationMessage, MessageAttachment, PendingApproval } from '@alteroid/logic';
+import type {
+  ApprovalDrafts,
+  ConversationMessage,
+  MessageAttachment,
+  PendingApproval,
+} from '@alteroid/logic';
 
 import { ApprovalAnswerCard, approvalDetailPath } from '~/components/approval-answer-card';
 import { usePageVisible } from '~/lib/use-page-visible';
@@ -97,6 +104,9 @@ interface PendingAttachment {
   file?: File;
   meta?: MessageAttachment;
 }
+
+/** 書きかけの本文を `sessionStorage` へ書くまでの、打鍵が止まってからの待ち（ミリ秒。#3400）。 */
+const DRAFT_SAVE_DELAY_MS = 400;
 
 /** 検査（個数・大きさ）に渡す形。引き継いだ添付は控え（`meta`）から作る。 */
 function sizedOf(item: PendingAttachment): { name: string; size: number; type: string } {
@@ -383,6 +393,13 @@ export interface EditedVersion {
    * （この版自身の発言は含まない）。古い順。
    */
   hiddenFollowUps: { role: 'human' | 'clone' | 'approval'; text: string }[];
+}
+
+function omitKey<T>(record: Record<string, T>, key: string): Record<string, T> {
+  if (!(key in record)) return record;
+  const rest = { ...record };
+  delete rest[key];
+  return rest;
 }
 
 /** 決着した（回答済みか取り下げ済み）承認か。 */
@@ -743,10 +760,12 @@ export function ChatPane({
    * カードは会話を移ると外れるので、カードの中で持つと書きかけが消える（#3398）。ここは
    * `ChatPane` が生きているあいだ残る。
    */
-  const [approvalDrafts, setApprovalDrafts] = useState<Map<string, string>>(new Map());
-  const [questionDrafts, setQuestionDrafts] = useState<Map<string, ApprovalQuestionsDraft>>(
-    new Map(),
-  );
+  /*
+   * **承認の画面（`routes/approvals.tsx`）と同じ保存先**（`alteroid.approvalDrafts`、承認 id がキー。#3481）。
+   * チャットの画面を離れる・再読み込みするとここの state は消えるので、`sessionStorage` にも写す。
+   * 会話で書きかけた答えを承認の画面で開いても続きが出て、逆も同じ。
+   */
+  const [approvalDrafts, setApprovalDrafts] = useState<ApprovalDrafts>(loadApprovalDrafts);
   /**
    * 送信経路（`send`/`followUp`、ストリームの `error` イベント）の失敗。**会話 id ごとに持つ（#1585）。**
    *
@@ -831,11 +850,35 @@ export function ChatPane({
   /*
    * 本文の書きかけを、いま見ている会話の鍵で残す。**残すのは本文だけ**（添付・承認の回答・編集の
    * 続きは残さない）。空なら鍵ごと消えるので、送信（入力欄が空になる）で消え、失敗して戻した文は
-   * また残る。入力のたびに書く（間引かない。1回は本文の長さぶんの書き込みで、判断は #3400）。
+   * また残る。**入力のたびには書かず、少し間引く**（打鍵が止まって `DRAFT_SAVE_DELAY_MS` 後に書く）。
+   * 空にしたときは待たずに消す（送った文が復元されない）。会話を替える・画面を離れる・タブを
+   * 隠す／閉じる（`pagehide`）ときは、待っている分をすぐ書く。
    */
+  const pendingDraftSave = useRef<{ id: string | undefined; text: string } | null>(null);
+  const flushDraftSave = useCallback(() => {
+    const waiting = pendingDraftSave.current;
+    if (waiting === null) return;
+    pendingDraftSave.current = null;
+    saveChatDraft(waiting.id, waiting.text);
+  }, []);
   useEffect(() => {
-    saveChatDraft(shownId, draft);
-  }, [shownId, draft]);
+    if (pendingDraftSave.current !== null && pendingDraftSave.current.id !== shownId) flushDraftSave();
+    if (draft === '') {
+      pendingDraftSave.current = null;
+      saveChatDraft(shownId, '');
+      return;
+    }
+    pendingDraftSave.current = { id: shownId, text: draft };
+    const timer = setTimeout(flushDraftSave, DRAFT_SAVE_DELAY_MS);
+    return () => clearTimeout(timer);
+  }, [shownId, draft, flushDraftSave]);
+  useEffect(() => {
+    window.addEventListener('pagehide', flushDraftSave);
+    return () => {
+      window.removeEventListener('pagehide', flushDraftSave);
+      flushDraftSave();
+    };
+  }, [flushDraftSave]);
   /** 添付を上げている最中か。真のあいだは送れない。 */
   const [uploading, setUploading] = useState(false);
   /** 会話を離れているあいだ、その会話の添えかけの添付をしまっておく（`drafts` と同じ鍵・同じ扱い）。 */
@@ -1282,6 +1325,30 @@ export function ChatPane({
    * 読むだけである。
    */
   const conversationApprovals = useConversationApprovals(shownId ?? null);
+  /*
+   * 承認カードの書きかけを `sessionStorage` へ写す（#3481）。**ここで消すのは、この会話の承認の
+   * 一覧を読めていて、決着済み（回答済み・取り下げ済み）と分かった id だけ。** 一覧を読めていない
+   * （取得に失敗した・読み込み中）ときや、ほかの会話の承認の書きかけは、消さずに残す。
+   */
+  const settledApprovalIds = useMemo(
+    () =>
+      new Set(
+        (conversationApprovals.data?.approvals ?? [])
+          .filter(isSettledApproval)
+          .map((approval) => approval.id),
+      ),
+    [conversationApprovals.data],
+  );
+  useEffect(() => {
+    saveApprovalDrafts({
+      texts: Object.fromEntries(
+        Object.entries(approvalDrafts.texts).filter(([id]) => !settledApprovalIds.has(id)),
+      ),
+      questions: Object.fromEntries(
+        Object.entries(approvalDrafts.questions).filter(([id]) => !settledApprovalIds.has(id)),
+      ),
+    });
+  }, [approvalDrafts, settledApprovalIds]);
   // 生配信の分岐（`useMemo` の中）から、いまの会話の承認を取り直す口（#3299）。
   const refetchApprovalsRef = useRef<() => void>(() => {});
   const mountedRef = useRef(false);
@@ -2895,26 +2962,33 @@ export function ChatPane({
                         <ApprovalAnswerCard
                           approval={line.approval}
                           showSettledAt
-                          draft={approvalDrafts.get(approvalId) ?? ''}
+                          draft={approvalDrafts.texts[approvalId] ?? ''}
                           onDraftChange={(text) =>
-                            setApprovalDrafts((previous) => new Map(previous).set(approvalId, text))
+                            setApprovalDrafts((previous) => ({
+                              ...previous,
+                              texts:
+                                text === ''
+                                  ? omitKey(previous.texts, approvalId)
+                                  : { ...previous.texts, [approvalId]: text },
+                            }))
                           }
-                          questionsDraft={questionDrafts.get(approvalId) ?? EMPTY_QUESTIONS_DRAFT}
+                          questionsDraft={
+                            approvalDrafts.questions[approvalId] ?? EMPTY_QUESTIONS_DRAFT
+                          }
                           onQuestionsDraftChange={(next) =>
-                            setQuestionDrafts((previous) => new Map(previous).set(approvalId, next))
+                            setApprovalDrafts((previous) => ({
+                              ...previous,
+                              questions: isEmptyQuestionsDraft(next)
+                                ? omitKey(previous.questions, approvalId)
+                                : { ...previous.questions, [approvalId]: next },
+                            }))
                           }
                           onAnswered={() => {
-                            // 答えが通ったので、書きかけは要らない。
-                            setApprovalDrafts((previous) => {
-                              const next = new Map(previous);
-                              next.delete(approvalId);
-                              return next;
-                            });
-                            setQuestionDrafts((previous) => {
-                              const next = new Map(previous);
-                              next.delete(approvalId);
-                              return next;
-                            });
+                            // 答えが通ったので、書きかけは要らない（通らなかったときは呼ばれない）。
+                            setApprovalDrafts((previous) => ({
+                              texts: omitKey(previous.texts, approvalId),
+                              questions: omitKey(previous.questions, approvalId),
+                            }));
                             void conversationApprovals.mutate();
                           }}
                           trailing={
