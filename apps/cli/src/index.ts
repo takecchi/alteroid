@@ -1110,7 +1110,7 @@ integrationCommand
   .command('revoke')
   .description('連携の鍵を失効させる（取り消せない。既定で確認する）')
   .argument('<id>', '鍵の id（alteroid integration list で見る）')
-  .option('--yes', '確認を飛ばす（スクリプト・CI 向け）')
+  .option('--yes', '確認を飛ばす（スクリプト・CI 向け。端末でなければ必須）')
   .action(async (id: string, options: { yes?: boolean }) => {
     await integrationRevokeCommand(id, options);
   });

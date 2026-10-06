@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import type { ConfirmIo } from './confirm.js';
 import { captureStdout } from './test-support.js';
 
 /**
@@ -10,7 +11,7 @@ import { captureStdout } from './test-support.js';
  * 1. `create` は値を**1回だけ**書き（「二度と表示されない」の直下）、送り方の例には値を書かない
  * 2. 入力の誤り（source の形・期限・上限）はデーモンへ送る前に断る（何も作らない）
  * 3. `list` は値を出さない。状態は有効 / 失効 / 期限切れ
- * 4. `revoke` は既定で `yes` を確認し、`--yes` で飛ばせる。確認で止めたら POST しない
+ * 4. `revoke` は `confirmIrreversible`（端末なら yes、`--yes` で省略、非対話で `--yes` 無しは断る）。存在と失効済みの確認は `--yes` でも行う。確認で止めたら POST しない
  * 5. 失敗の文言に値を出さない
  *
  * `mcp.test.ts` と同じ作法 — `fetch` を差し替え、本物の hono client を通す。
@@ -199,72 +200,107 @@ describe('integration create', () => {
     ).rejects.toThrow('expiresAt が過去');
     expect(out()).not.toContain('altk_');
   });
+
+  it('400 の理由がすでに括弧で終わっていれば、「（何も変更していません）」を重ねない', async () => {
+    setReply('POST', '/integration-keys', {
+      status: 400,
+      body: { error: 'expiresAt が過去（何も作っていない）' },
+    });
+    captureStdout();
+    const create = integrationCreateCommand(
+      { name: 'CI', source: 'ci.main', expires: '2020-01-01' },
+      NOW,
+    );
+    await expect(create).rejects.toThrow(/^expiresAt が過去（何も作っていない）$/);
+    setReply('POST', '/integration-keys', { status: 400, body: { error: 'expiresAt が過去' } });
+    await expect(
+      integrationCreateCommand({ name: 'CI', source: 'ci.main', expires: '2020-01-01' }, NOW),
+    ).rejects.toThrow(/^expiresAt が過去（何も変更していません）$/);
+  });
 });
 
 describe('integration revoke', () => {
   const list = { status: 200, body: { keys: [view()] } };
+  const revokedList = {
+    status: 200,
+    body: { keys: [view({ revokedAt: '2026-09-30T12:00:00.000Z' })] },
+  };
+  const calls = () => sent.map((s) => `${s.method} ${s.path}`);
 
-  it('yes と答えると POST する', async () => {
+  /** 確認の口。`isTTY` と答えを差し込む（`confirmIrreversible` の `ConfirmIo`）。 */
+  function fakeIo(isTTY: boolean, answer = '') {
+    const ask = vi.fn(() => Promise.resolve(answer));
+    const io: ConfirmIo = { isTTY, write: (text) => process.stdout.write(text), ask };
+    return { io, ask };
+  }
+
+  it('端末で yes と答えると POST する（resolveTarget → 一覧 → 確認 → POST の順）', async () => {
     setReply('GET', '/integration-keys', list);
     setReply('POST', '/integration-keys/k-1/revoke', {
       status: 200,
       body: { key: view({ revokedAt: '2026-10-01T00:00:00.000Z' }) },
     });
     const out = captureStdout();
-    const ask = vi.fn(() => Promise.resolve('yes'));
-    await integrationRevokeCommand('k-1', { ask });
+    const { io, ask } = fakeIo(true, 'yes');
+    await integrationRevokeCommand('k-1', { io });
     expect(ask).toHaveBeenCalledOnce();
-    expect(sent.map((s) => `${s.method} ${s.path}`)).toEqual([
-      'GET /integration-keys',
-      'POST /integration-keys/k-1/revoke',
-    ]);
+    expect(calls()).toEqual(['GET /integration-keys', 'POST /integration-keys/k-1/revoke']);
+    expect(out()).toContain('連携の鍵「CI」（source=ci.main）を失効させます');
     expect(out()).toContain('失効させました: CI');
   });
 
-  it('yes 以外なら POST せず、何も変えていないと言う', async () => {
+  it('端末で yes 以外なら POST せず、何も変えていないと言う', async () => {
     setReply('GET', '/integration-keys', list);
     const out = captureStdout();
-    await integrationRevokeCommand('k-1', { ask: () => Promise.resolve('y') });
-    expect(sent.map((s) => s.method)).toEqual(['GET']);
+    const { io } = fakeIo(true, 'y');
+    await integrationRevokeCommand('k-1', { io });
+    expect(calls()).toEqual(['GET /integration-keys']);
     expect(out()).toContain('何も変更していません');
   });
 
-  it('--yes は確認を飛ばして POST する', async () => {
+  it('端末でなく --yes も無ければ、標準入力の yes では通さず、POST せずに断る（非 0）', async () => {
+    // 以前は `echo yes | alteroid integration revoke <id>` で失効した（#3211。他の戻せない操作は断る）。
+    setReply('GET', '/integration-keys', list);
+    captureStdout();
+    const { io, ask } = fakeIo(false, 'yes');
+    await expect(integrationRevokeCommand('k-1', { io })).rejects.toThrow('--yes');
+    expect(ask).not.toHaveBeenCalled();
+    expect(calls()).toEqual(['GET /integration-keys']);
+  });
+
+  it('--yes は確認を飛ばすが、存在の確認（一覧）はしてから POST する', async () => {
+    setReply('GET', '/integration-keys', list);
     setReply('POST', '/integration-keys/k-1/revoke', {
       status: 200,
       body: { key: view({ revokedAt: '2026-10-01T00:00:00.000Z' }) },
     });
     captureStdout();
-    const ask = vi.fn(() => Promise.resolve('no'));
-    await integrationRevokeCommand('k-1', { yes: true, ask });
+    const { io, ask } = fakeIo(false, 'no');
+    await integrationRevokeCommand('k-1', { yes: true, io });
     expect(ask).not.toHaveBeenCalled();
-    expect(sent.map((s) => `${s.method} ${s.path}`)).toEqual(['POST /integration-keys/k-1/revoke']);
+    expect(calls()).toEqual(['GET /integration-keys', 'POST /integration-keys/k-1/revoke']);
   });
 
-  it('無い id は断る（確認前は一覧で、--yes では 404 で）', async () => {
+  it('無い id は、確認前も --yes でも、POST せずに断る', async () => {
     setReply('GET', '/integration-keys', list);
-    await expect(
-      integrationRevokeCommand('nope', { ask: () => Promise.resolve('yes') }),
-    ).rejects.toThrow('該当する連携の鍵がありません');
-    setReply('POST', '/integration-keys/nope/revoke', {
-      status: 404,
-      body: { error: 'not found' },
-    });
-    await expect(integrationRevokeCommand('nope', { yes: true })).rejects.toThrow(
+    await expect(integrationRevokeCommand('nope', { io: fakeIo(true, 'yes').io })).rejects.toThrow(
       '該当する連携の鍵がありません',
     );
+    await expect(integrationRevokeCommand('nope', { yes: true })).rejects.toThrow(
+      '該当する連携の鍵がありません（何も失効していません）',
+    );
+    expect(calls()).toEqual(['GET /integration-keys', 'GET /integration-keys']);
   });
 
-  it('すでに失効済みなら確認せずにそう言う', async () => {
-    setReply('GET', '/integration-keys', {
-      status: 200,
-      body: { keys: [view({ revokedAt: '2026-09-30T12:00:00.000Z' })] },
-    });
+  it('すでに失効済みなら、確認も --yes も関係なくそう言い、POST しない（成功の 0。取り消しは何度叩いても同じ状態になる）', async () => {
+    setReply('GET', '/integration-keys', revokedList);
     const out = captureStdout();
-    const ask = vi.fn(() => Promise.resolve('yes'));
-    await integrationRevokeCommand('k-1', { ask });
+    const { io, ask } = fakeIo(true, 'yes');
+    await integrationRevokeCommand('k-1', { io });
+    await integrationRevokeCommand('k-1', { yes: true });
     expect(ask).not.toHaveBeenCalled();
-    expect(out()).toContain('すでに失効しています');
+    expect(out().match(/すでに失効しています/g)).toHaveLength(2);
+    expect(calls()).toEqual(['GET /integration-keys', 'GET /integration-keys']);
   });
 });
 
