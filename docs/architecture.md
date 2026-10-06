@@ -92,7 +92,7 @@
 | 向き | 経路 |
 |---|---|
 | デーモン → runner | `POST /managers`（start。任意の `attachments` を受ける） / `POST /managers/:id/resume`（任意の `attachments` を受ける。応答は `cwd` と `reusedLiveSession` — 新しい SDK を起こさず生きた旧セッションへ message を流して返した回だけ true。#2877） / `POST /managers/:id/messages`（任意の `attachments` を受ける） / `POST /managers/:id/answers` / `DELETE /managers/:id` / `GET /managers` / `GET /managers/:id/transcript` / `GET /managers/:id/unpushed-work`（未 push の成果の観測。`manager_stop` が使う） / `GET /health`（runner_id を名乗る） / 降ろす口: `POST /credentials`（マネージャーへ降ろす環境変数）・`POST /profile`（実行環境プロファイル）・`POST /mcp-servers`（MCP 登録）。`GET /profile` と `GET /mcp-servers` は指紋を返す |
-| runner → デーモン | `GET /events`（SSE）。種別は `hello`（名乗り。`capabilities` に `manager-attachments` など） / `session` / `project_key` / `report` / `worker_wait` / `ask` / `settled` / `note` / `tool_use` / `tool_running` / `tool_end` / `permission_denied` / `usage` / `peer_usage` / `context_usage` / `usage_notice` / `rate_limit` / `mirror`（生ログ） / `archive` / `closed` / `resume_failed` / `shutdown_unpushed_work` / `rescue_ref`（退避 ref の結果。#1266） / `shutting_down`（runner が畳み始めた。畳みの出来事より先に1回。デーモンは名乗った runner の SSE が閉じるまで、上限付きで待ってから自分の口を閉じる。#2749） |
+| runner → デーモン | `GET /events`（SSE）。種別は `hello`（名乗り。`capabilities` に `manager-attachments` など、`attachmentBodyLimit` に添付の本文の上限） / `session` / `project_key` / `report` / `worker_wait` / `ask` / `settled` / `note` / `tool_use` / `tool_running` / `tool_end` / `permission_denied` / `usage` / `peer_usage` / `context_usage` / `usage_notice` / `rate_limit` / `mirror`（生ログ） / `archive` / `closed` / `resume_failed` / `shutdown_unpushed_work` / `rescue_ref`（退避 ref の結果。#1266） / `shutting_down`（runner が畳み始めた。畳みの出来事より先に1回。デーモンは名乗った runner の SSE が閉じるまで、上限付きで待ってから自分の口を閉じる。#2749） |
 
 **この表は写しである。正本は `packages/core/src/runner-protocol.ts` の `runnerEventSchema`（上りの種別）と `apps/runner/src/app.ts` のルート定義（下りの口）で、食い違ったら正本が勝つ。** 口を足すときは、`control`（合鍵）の内側に置くこと（下の「制御面の保護」）。
 
@@ -107,7 +107,7 @@
 
 - **デーモンが先に検める。** 全部の id の存在 → 個数・合計の上限（人間の発言と同じ `validateAttachmentBatch`）の順で見て、1つでも落ちれば**担い手には何も送らない**（どれが無いかを道具の応答で言う）。中身を読むのはその後である
 - **runner は sha256 と大きさを照合してから置く。** 不一致・dir 名にできない id・安全でない置き場は、何も置かず（途中まで置いた分も消して）**422** で断る。再送しても同じ結果なので 4xx である
-- **本文の上限は添付の上限から計算する**（`runnerAttachmentBodyLimit`: 合計上限の base64 ぶん＋個数ぶんのメタデータ＋依頼文の余裕）。`POST /managers` と `/messages` は超過を **413** で断る。これは検めを抜けた巨大な本文への最後の歯止めで、能力の上限ではない。runner とデーモンは別の環境なので、`ALTEROID_ATTACHMENT_MAX_*` を上げるときは両方へ同じ値を置く
+- **本文の上限は添付の上限から計算する**（`runnerAttachmentBodyLimit`: 合計上限の base64 ぶん＋個数ぶんのメタデータ＋依頼文の余裕）。`POST /managers` と `/messages` は超過を **413** で断る。これは検めを抜けた巨大な本文への最後の歯止めで、能力の上限ではない。**上限は器ごとの事実を正にする**: runner は自分の上限を `hello.attachmentBodyLimit`（バイト）で名乗り、デーモンは送る前にその runner の上限で本文の大きさを見積もって検める。超えるなら送らず、道具が理由を返す（黙って落とさない）。上限を名乗らない runner はデーモン側の既定値で検める。そのため `ALTEROID_ATTACHMENT_MAX_*` を両方へ同じ値で置く二重管理は要らない
 - **能力の名乗りで判定する。** runner は `hello.capabilities` に `manager-attachments` を名乗る。**名乗らない runner（旧い版・名乗りをまだ受けていない）へ、デーモンは添付を送らない**（欄は zod が黙って捨てるだけで 200 が返るので、送れば「渡したつもりで渡っていない」になる。理由を言って断る）。添付の無い命令は従来どおりで、名乗りを待たない
 - **runner 側の置き場は `/tmp/alteroid-attachments/<managerId>/<id>/<名前>`**（`os.tmpdir()` 配下。作業ディレクトリの外なので、作業場の片付けの対象にならない）。**所有は runner のまま、グループを担い手の子プロセスの gid にして、dir は 0750・ファイルは 0440**（子を降ろさない構成は同じ UID なので 0700 / 0400）。担い手は読めるが、書き換え・差し替えはできない。**担い手に書ける dir を作らない**のが要点で、runner が書く先を担い手が symlink へ差し替える経路（特権の踏み台）を構造で塞ぐ。置く前に、置き場の root と各 dir が runner 自身の所有の実在の dir（symlink でない）であることを確かめる
 - **委譲が閉じたら消す。** その委譲の dir ごと消す。取りこぼし（runner の異常終了など）は、生きた委譲に当たらず最後に触れてから24時間を過ぎたものを、次に添付を置くときに消す
