@@ -73,7 +73,7 @@ export default function ProgressPage() {
   const windowHours = useMemo(() => parseWindow(rawWindow), [rawWindow]);
   /**
    * **知らない値は黙って読み替えない（issue #3741。`usage.tsx` の `invalidFrom` と同じ線）。**
-   * 既定の窓で表示したまま、読めなかった生の値を注記で言う。パラメタが無い・空文字は
+   * 既定の窓で表示したまま、読めなかった生の値を注記で言う。パラメタが無いときと空文字のときは
    * 「指定なし」なので言わない。選び直せば URL が正しい値になり、注記は消える。
    */
   const invalidWindow =
