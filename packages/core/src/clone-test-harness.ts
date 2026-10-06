@@ -780,3 +780,119 @@ export function fakeGatedSdk() {
     release: () => release(),
   };
 }
+
+/**
+ * 本物の SDK の形（逐次配信の `stream_event` → `assistant`（text と tool_use）→ 道具の実行 →
+ * `user`（tool_result）→ 次の `assistant`）で1ターンを流す台本の1歩（#3605）。
+ *
+ * `fakeSdk` は1ターン1テキストの `assistant` しか流さないので、「本文 → 承認カードを出す道具 →
+ * 本文」のように**1ターンの中で本文が複数に割れる形**を作れない。
+ */
+export type ScriptedStep =
+  /** 逐次配信の1片（`stream_event` の `content_block_delta` / `text_delta`）。 */
+  | { delta: string }
+  /** 完成した `assistant` メッセージ（text / tool_use のブロック）。 */
+  | { assistant: Array<{ type: 'text'; text: string } | { type: 'tool_use'; name: string }> }
+  /** `tool_result` を持つ `user` メッセージ（道具の結果が返った合図）。 */
+  | { toolResult: true }
+  /**
+   * 道具の実行など、SDK の外で起きることを**この位置で**走らせる（完了まで次の歩へ進まない）。
+   * 道具を呼ぶ位置を台本の順序で決めるための口（実時間の待ちを使わない）。
+   */
+  | { run: () => Promise<unknown> }
+  /**
+   * 道具の実行を**始めるだけで待たずに**次の歩へ進む（SDK が `assistant` を流したあと、クローンが
+   * それを処理し終える前に道具が走り出す順序を作る）。返した Promise は `settled` へ積む。
+   */
+  | { start: () => Promise<unknown> };
+
+/**
+ * 台本どおりに流す `query` の偽物。入力（人間の発言）が来るたびに `script(turnIndex, input)` の歩を
+ * 順に流し、最後に `result` を1つ流す。
+ */
+export function fakeScriptedSdk(
+  script: (turnIndex: number, input: string) => ScriptedStep[],
+  options: { resultSubtype?: string } = {},
+) {
+  const settled: Promise<unknown>[] = [];
+  const fn = ((params: { prompt: unknown }) => {
+    async function* generate(): AsyncGenerator<SDKMessage, void> {
+      yield {
+        type: 'system',
+        subtype: 'init',
+        session_id: 'sess-scripted',
+        uuid: 'uuid-init',
+        model: 'claude-fake-init-model-xyz',
+        claude_code_version: '9.9.9-fake',
+        apiKeySource: 'user',
+        permissionMode: 'default',
+        mcp_servers: [{ name: 'alteroid', status: 'connected' }],
+      } as unknown as SDKMessage;
+      if (typeof params.prompt === 'string') {
+        yield {
+          type: 'result',
+          subtype: 'success',
+          result: '',
+          session_id: 'sess-scripted',
+          uuid: 'uuid-result',
+        } as unknown as SDKMessage;
+        return;
+      }
+      let turnIndex = 0;
+      let seq = 0;
+      for await (const message of params.prompt as AsyncIterable<{
+        message: { content: unknown };
+      }>) {
+        const idx = turnIndex;
+        turnIndex += 1;
+        for (const step of script(idx, contentText(message.message.content))) {
+          seq += 1;
+          if ('delta' in step) {
+            yield {
+              type: 'stream_event',
+              event: {
+                type: 'content_block_delta',
+                delta: { type: 'text_delta', text: step.delta },
+              },
+              parent_tool_use_id: null,
+              session_id: 'sess-scripted',
+              uuid: `uuid-delta-${seq}`,
+            } as unknown as SDKMessage;
+          } else if ('assistant' in step) {
+            yield {
+              type: 'assistant',
+              message: { content: step.assistant },
+              parent_tool_use_id: null,
+              session_id: 'sess-scripted',
+              uuid: `uuid-assistant-${seq}`,
+            } as unknown as SDKMessage;
+          } else if ('toolResult' in step) {
+            yield {
+              type: 'user',
+              message: { content: [{ type: 'tool_result', tool_use_id: 't', content: 'ok' }] },
+              parent_tool_use_id: null,
+              session_id: 'sess-scripted',
+              uuid: `uuid-user-${seq}`,
+            } as unknown as SDKMessage;
+          } else if ('run' in step) {
+            await step.run();
+          } else {
+            settled.push(step.start());
+          }
+        }
+        yield {
+          type: 'result',
+          subtype: options.resultSubtype ?? 'success',
+          result: '',
+          session_id: 'sess-scripted',
+          uuid: 'uuid-result',
+        } as unknown as SDKMessage;
+      }
+    }
+    return Object.assign(generate(), {
+      close: () => undefined,
+      interrupt: async () => undefined,
+    }) as unknown as Query;
+  }) as unknown as typeof sdkQuery;
+  return { fn, settled };
+}

@@ -110,6 +110,11 @@ export interface DraftFile {
   readonly size: number;
   /** 上げ済みなら id（送信に失敗して再送するとき、上げ直さない）。 */
   uploadedId?: string;
+  /**
+   * `/edit` で、元の発言から引き継いだ添付（手元のファイルが無い。`path` は空）。上げ直せないので、
+   * 期限切れでも「上げ済みの印」は捨てない（外すか、編集をやめるかを使い手に任せる。#3642）。
+   */
+  readonly carried?: true;
 }
 
 export type DraftResult = { ok: true; file: DraftFile } | { ok: false; reason: string };
@@ -178,6 +183,21 @@ export class AttachmentDraft {
     return { ok: true, file };
   }
 
+  /**
+   * 元の発言の添付（上げ済み）を、上げ直さずに添えかけへ載せる（`/edit` の開始。#3642）。
+   * 上限の検査はしない（もう受け取られた添付で、足した分の検査は `add` が合計で見る）。
+   */
+  addUploaded(attachment: { id: string; name: string; mediaType: string; size: number }): void {
+    this.files.push({
+      path: '',
+      name: attachment.name,
+      mediaType: attachment.mediaType,
+      size: attachment.size,
+      uploadedId: attachment.id,
+      carried: true,
+    });
+  }
+
   /** `all` か 1 始まりの番号。外したファイルを返す（無効なら理由）。 */
   remove(spec: string): { ok: true; removed: DraftFile[] } | { ok: false; reason: string } {
     const trimmed = spec.trim();
@@ -226,7 +246,7 @@ export class AttachmentDraft {
     return this.files.map(
       (f, i) =>
         `  [${i + 1}] ${f.name} (${f.mediaType}, ${formatBytes(f.size)})` +
-        `${f.uploadedId === undefined ? '' : ` 上げ済み id=${f.uploadedId}`}  ${f.path}`,
+        `${f.uploadedId === undefined ? '' : ` 上げ済み id=${f.uploadedId}`}  ${f.carried === true ? '（元の添付）' : f.path}`,
     );
   }
 }
@@ -327,8 +347,19 @@ export function attachmentMissingMessageOf(body: unknown): string | null {
  */
 export function expireUploads(sent: readonly DraftFile[], message: string): string {
   const uploaded = sent.filter((f) => f.uploadedId !== undefined);
-  const named = uploaded.filter((f) => message.includes(f.uploadedId!));
-  const expired = named.length > 0 ? named : uploaded;
+  // `/edit` で引き継いだ元の添付は、上げ直せない（手元のファイルが無い）。印は捨てず、外すよう案内する（#3642）。
+  const carriedNamed = uploaded.filter(
+    (f) => f.carried === true && message.includes(f.uploadedId!),
+  );
+  if (carriedNamed.length > 0) {
+    return (
+      `元の添付が期限切れだったので送っていない（${carriedNamed.map((f) => f.name).join(', ')}）。` +
+      '/detach で外して送るか、/edit-cancel で編集をやめる'
+    );
+  }
+  const reuploadable = uploaded.filter((f) => f.carried !== true);
+  const named = reuploadable.filter((f) => message.includes(f.uploadedId!));
+  const expired = named.length > 0 ? named : reuploadable;
   for (const file of expired) delete file.uploadedId;
   const names = expired.map((f) => f.name).join(', ');
   return (

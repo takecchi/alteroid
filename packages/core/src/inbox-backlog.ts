@@ -601,13 +601,14 @@ export function inboxBacklogDedupeKey(event: InboxEvent): string {
  * 関数に載せると、計器側の偏り（同じ限界を参照）がそのまま制御側の挙動の
  * 揺れになる。
  *
- * ## 払っている代償は新しくない
+ * ## 外から予約語を名乗らせない（入口で断っている）
  *
- * {@link isDaemonSelfNotice} の doc が言うとおり、`source` は自由文字列
- * なので外部の呼び手が `"token-pool"` / `"runner-registry"` を名乗れば
- * 同じ扱いになる——**この関数はその代償をそのまま引き継ぐだけで、新しい
- * 代償を作っていない**（`commitmentFor` が台帳側で既に同じ代償を払っている
- * のと同じ判断に乗っている）。
+ * {@link isDaemonSelfNotice} は `source` の文字列だけで「daemon 自身の知らせ」
+ * を見分ける。**外部の呼び手が `"token-pool"` / `"runner-registry"` を名乗って
+ * 畳まれることは、`POST /events` / `POST /events/:source` の入口で 400 に
+ * して防いでいる**（予約語の一覧は `DAEMON_RESERVED_EVENT_SOURCES`、`isDaemonSelfNotice`
+ * の doc）。**この関数は同じ判定をそのまま使うだけで、独自の判定を持たない**
+ * （`commitmentFor` が台帳側で同じ判定を使っているのと同じ）。
  */
 export function inboxCollapseKey(event: InboxEvent): string | undefined {
   if (event.type === 'manager_message') return inboxBacklogDedupeKey(event);

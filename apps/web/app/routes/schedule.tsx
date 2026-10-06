@@ -1,5 +1,7 @@
 import { ScheduleTabs } from '~/components/group-tabs';
 import { LoadError } from '~/components/load-error';
+import { unsentInput } from '~/lib/unsent-input';
+import { useLatest } from '~/lib/use-latest';
 import { AlertTriangle } from 'lucide-react';
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { useBlocker } from 'react-router';
@@ -634,6 +636,28 @@ function RequestEditor({
 }
 
 /**
+ * 送信中の印と門。`busy` は描画用（ボタンを塞ぐ）、門は `begin()` が持つ。
+ * **`busy`（state）だけでは、描き直しの前に届いた2回目（⌘/Ctrl+Enter の連打・確認の枠からの送信）を
+ * 止められない**ので、ref の `inFlight` で同じ描画の間も守る（#3555）。
+ */
+function useSending() {
+  const [busy, setBusy] = useState(false);
+  const inFlight = useRef(false);
+  /** 送ってよければ送信中にして true。送信中なら何もせず false。 */
+  function begin(): boolean {
+    if (inFlight.current) return false;
+    inFlight.current = true;
+    setBusy(true);
+    return true;
+  }
+  function end() {
+    inFlight.current = false;
+    setBusy(false);
+  }
+  return { busy, inFlight, begin, end };
+}
+
+/**
  * 依頼の本文のタブ（編集・プレビュー）の状態。**送るキーの案内は textarea が出ている編集のタブだけ**
  * に出すので、案内を置く親も見えるよう親が持つ（#3300）。既定は下の規則（`RequestEditor` の doc）。
  */
@@ -678,8 +702,10 @@ function ScheduleEditForm({
   const [specDraft, setSpecDraft] = useState<ScheduleSpecDraft>(() => initialSpecDraft(entry.spec));
   const [request, setRequest] = useState(entry.request ?? '');
   const { activeTab, setTab } = useRequestTab(entry.request ?? '');
-  const [busy, setBusy] = useState(false);
+  const { busy, begin, end } = useSending();
   const [failure, setFailure] = useState<unknown>(undefined);
+  /** 応答が返った時点の「いまの欄」（送った時点と比べる。#3506）。 */
+  const latestFields = useLatest({ request, specDraft });
 
   const initialSpec = initialSpecDraft(entry.spec);
   const dirty =
@@ -694,17 +720,32 @@ function ScheduleEditForm({
   const ready = !specUnknown && request.trim() !== '';
 
   function submit() {
-    if (!ready) return;
-    setBusy(true);
+    // 送信中は何もしない。ボタン・⌘/Ctrl+Enter のどちらもここを通る（#3555）。
+    if (!ready || !begin()) return;
     setFailure(undefined);
+    // 送った値を控える。成功のあと、いまの欄が送った値と同じときだけ閉じる（#3506。commitments の本文編集と同じ形）。
+    const sentRequest = request;
+    const sentSpec = specDraft;
     createSchedule({
       kind: entry.kind,
       request: request.trim(),
       spec: specDraftToSpec(specDraft),
     })
-      .then(onSaved)
+      .then(() => {
+        // 応答を待つ間に打ち足した・書き換えた分があるときは閉じず、編集欄を開いたまま残す。
+        const now = latestFields.current;
+        if (
+          now.request === sentRequest &&
+          now.specDraft.type === sentSpec.type &&
+          now.specDraft.at === sentSpec.at &&
+          now.specDraft.minutes === sentSpec.minutes &&
+          now.specDraft.expression === sentSpec.expression
+        ) {
+          onSaved();
+        }
+      })
       .catch(setFailure)
-      .finally(() => setBusy(false));
+      .finally(end);
   }
 
   return (
@@ -788,7 +829,7 @@ function ScheduleForm({
   const [request, setRequest] = useState('');
   const { activeTab, setTab } = useRequestTab('');
   const [specDraft, setSpecDraft] = useState<ScheduleSpecDraft>(DEFAULT_SPEC_DRAFT);
-  const [busy, setBusy] = useState(false);
+  const { busy, inFlight, begin, end } = useSending();
   const [done, setDone] = useState<{ kind: string; replaced: boolean } | undefined>(undefined);
   const [failure, setFailure] = useState<unknown>(undefined);
   const [confirming, setConfirming] = useState(false);
@@ -803,7 +844,7 @@ function ScheduleForm({
    * 新規はそのまま送る。やめれば何も送らず、入力はそのまま残る。
    */
   function submit() {
-    if (!ready) return;
+    if (!ready || inFlight.current) return;
     if (replacing) {
       setConfirming(true);
       return;
@@ -812,18 +853,23 @@ function ScheduleForm({
   }
 
   function send(replaced: boolean) {
-    setBusy(true);
+    // 確認の枠からの `send(true)` はボタンも `submit` も通らないので、ここでも見る（#3555）。
+    if (!begin()) return;
+    const sentKind = kind;
+    const sentRequest = request;
     setFailure(undefined);
     setDone(undefined);
 
     createSchedule({ kind: kind.trim(), request: request.trim(), spec: specDraftToSpec(specDraft) })
       .then(() => {
-        setDone({ kind: kind.trim(), replaced });
-        setRequest('');
-        setKind('');
+        setDone({ kind: sentKind.trim(), replaced });
+        // 応答を待つ間に打ち足した分は消さない（#3506）。名前は打ち足しの形が無いので、
+        // 変えていなければ空に、変えていればそのまま残す。
+        setRequest((current) => unsentInput(current, sentRequest));
+        setKind((current) => (current === sentKind ? '' : current));
       })
       .catch(setFailure)
-      .finally(() => setBusy(false));
+      .finally(end);
   }
 
   // 予約名（既定の仕込みの名前）はデーモンが 409 で断る。英語の `reserved kind` をそのまま出さない。
@@ -889,14 +935,14 @@ function EventForm({ onDirtyChange }: { onDirtyChange: (id: string, dirty: boole
   const payloadId = useId();
   const [source, setSource] = useState('');
   const [payload, setPayload] = useState('');
-  const [busy, setBusy] = useState(false);
+  const { busy, begin, end } = useSending();
   const [sent, setSent] = useState<string | undefined>(undefined);
   const [failure, setFailure] = useState<unknown>(undefined);
   useReportDirty(EVENT_FORM_DIRTY_ID, source !== '' || payload !== '', onDirtyChange);
 
   function submit() {
-    if (source.trim() === '') return;
-    setBusy(true);
+    if (source.trim() === '' || !begin()) return;
+    const sentPayload = payload;
     setFailure(undefined);
     setSent(undefined);
 
@@ -912,10 +958,11 @@ function EventForm({ onDirtyChange }: { onDirtyChange: (id: string, dirty: boole
     postEvent(source, parsed)
       .then((result) => {
         setSent(result.id);
-        setPayload('');
+        // 応答を待つ間に打ち足した分は消さない（#3506）。
+        setPayload((current) => unsentInput(current, sentPayload));
       })
       .catch(setFailure)
-      .finally(() => setBusy(false));
+      .finally(end);
   }
 
   return (

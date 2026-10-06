@@ -42,6 +42,7 @@ interface Harness {
   journal: JournalController;
   memory: MemoryController;
   stdin: FakeStdin;
+  stdout: { rows: number; emit: (event: string) => boolean };
   frame: () => string;
   unmount: () => void;
   exited: () => boolean;
@@ -76,7 +77,7 @@ function start(
   const memory = new MemoryController(api, { debounceMs: 10 });
   memory.attach(feed);
   feed.start();
-  const { app, stdin, lastFrame } = renderFullscreen(
+  const { app, stdin, stdout, lastFrame } = renderFullscreen(
     createElement(App, {
       api,
       controller,
@@ -103,6 +104,7 @@ function start(
     journal,
     memory,
     stdin,
+    stdout: stdout as unknown as Harness['stdout'],
     frame: lastFrame,
     unmount: () => app.unmount(),
     exited: () => exited,
@@ -792,6 +794,31 @@ describe('委譲（マネージャーの一覧と詳細）', () => {
     h.stdin.write('\x1b[B'.repeat(59));
     await waitFor(() => h.frame().includes('これより古い委譲は無い（全 60 件）'));
     expect(h.frame()).toContain('これより古い委譲は無い（全 60 件）');
+  });
+
+  it('r で取り直しても、読み足した古い側の頁と選択位置を失わない', async () => {
+    const h = start((api) => {
+      api.managerRows = Array.from({ length: 60 }, (_, i) =>
+        managerRow(`mgr-${String(100 - i)}`, { request: `依頼${String(i)}` }),
+      );
+    });
+    await openList(h);
+    h.stdin.write('m');
+    await waitFor(() => h.frame().includes('60 件読み込み済み'));
+    h.stdin.write('\x1b[B'.repeat(54)); // 55 行目（mgr-46）まで下げる
+    const selectedLine = () =>
+      h
+        .frame()
+        .split('\n')
+        .some((l) => l.includes('❯') && l.includes('mgr-46'));
+    await waitFor(selectedLine);
+    const before = h.api.managerListCalls.length;
+    h.stdin.write('r');
+    await waitFor(() => h.api.managerListCalls.length > before);
+    // 先頭の頁だけに戻ると、ここが 50 件・選択が先頭になる。
+    await waitFor(() => h.frame().includes('これより古い委譲は無い（全 60 件）'));
+    expect(h.api.managerListCalls.at(-1)).toEqual({ limit: 60 });
+    expect(selectedLine()).toBe(true);
   });
 
   it('長い生ログは可視窓だけを描き、PgUp で遡り、PgDn で末尾追従に戻る', async () => {
@@ -1754,6 +1781,59 @@ describe('履歴の選択の断り書き（#2585）', () => {
     await open(h);
     expect(h.frame()).toContain('会話はまだありません');
     expect(h.frame()).not.toContain('先頭には届いていない');
+  });
+});
+
+describe('端末の大きさが変わったとき（#3651）', () => {
+  it('全画面で起動したあと行数が閾値未満へ縮んでも、入力欄とフッタが切れない', async () => {
+    const h = start(() => undefined, { rows: 24 });
+    await waitFor(() => h.frame().includes('^D 終了'));
+    h.stdout.rows = 6;
+    h.stdout.emit('resize');
+    await waitFor(() => h.frame().includes('^D 終了') && h.frame().includes('❯'));
+  });
+});
+
+describe('会話の画面の a キー（#3650）', () => {
+  it('履歴から開いた会話の、答え済みを飛ばして未回答の承認の詳細を開く', async () => {
+    const h = start((api) => {
+      api.messages.c9 = [{ id: '1', at: '2026-10-06T10:00:00.000Z', role: 'inbound', text: 'q' }];
+      api.conversationApprovals.c9 = {
+        approvals: [
+          { id: 'ans-1', createdAt: '2026-10-06T10:01:00.000Z', question: 'x', answeredAt: 'y' },
+          { id: 'open-2', createdAt: '2026-10-06T10:02:00.000Z', question: 'まだ未回答' },
+        ],
+        unreadable: [],
+      };
+      api.approvalRows = [approvalRow('open-2', { question: 'まだ未回答の質問' })];
+    });
+    await h.controller.openConversation('c9');
+    h.stdin.write(ESC);
+    await waitFor(() => h.frame().includes('1-5 画面'));
+    await press(h.stdin, 'a');
+    await waitFor(() => h.frame().includes('まだ未回答の質問')).catch((e: unknown) => {
+      throw new Error(`${String(e)}\n${h.frame()}`);
+    });
+  });
+
+  it('答え済みだけなら、a は何も指さず画面を移さない', async () => {
+    const h = start((api) => {
+      api.messages.c9 = [{ id: '1', at: '2026-10-06T10:00:00.000Z', role: 'inbound', text: 'q' }];
+      api.conversationApprovals.c9 = {
+        approvals: [
+          { id: 'ans-1', createdAt: '2026-10-06T10:01:00.000Z', question: 'x', answeredAt: 'y' },
+        ],
+        unreadable: [],
+      };
+    });
+    await h.controller.openConversation('c9');
+    h.stdin.write(ESC);
+    await waitFor(() => h.frame().includes('1-5 画面'));
+    await press(h.stdin, 'a');
+    // 答え済みだけなら `a` は何も指さない（pendingAsk が立たない）ので、承認待ちへは移らない。
+    expect(h.controller.store.getSnapshot().pendingAsk).toBeNull();
+    expect(h.frame()).toContain('1 会話');
+    expect(h.frame()).not.toContain('承認待ちの詳細');
   });
 });
 
