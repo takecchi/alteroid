@@ -19,7 +19,6 @@ import {
   TurnFailureNote,
   useIsMobile,
   EMPTY_QUESTIONS_DRAFT,
-  type ApprovalQuestionsDraft,
 } from '@alteroid/ui';
 import {
   useEndConversation,
@@ -45,10 +44,21 @@ import {
   formatDateTime,
   formatRelative,
   isPreviewableImage,
+  chatDraftEpoch,
+  isEmptyQuestionsDraft,
+  loadApprovalDrafts,
+  loadChatDraft,
   newClientMessageId,
+  saveApprovalDrafts,
+  saveChatDraft,
   redactError,
 } from '@alteroid/logic';
-import type { ConversationMessage, MessageAttachment, PendingApproval } from '@alteroid/logic';
+import type {
+  ApprovalDrafts,
+  ConversationMessage,
+  MessageAttachment,
+  PendingApproval,
+} from '@alteroid/logic';
 
 import { ApprovalAnswerCard, approvalDetailPath } from '~/components/approval-answer-card';
 import { usePageVisible } from '~/lib/use-page-visible';
@@ -80,6 +90,23 @@ const BOTTOM_THRESHOLD_PX = 32;
 class TurnFailedError extends Error {}
 
 /**
+ * `done` / `error` / `usage_limited` のどれも来ないまま、接続が正常に閉じた（プロキシ・再起動など、#3564）。
+ * 途中までの返信は完成したものではない。文言は CLI・TUI（#3410）にそろえる。
+ */
+class StreamClosedEarlyError extends Error {
+  constructor() {
+    super(
+      '応答が途中で切れた（done も error も来ないまま接続が閉じた）。出ているのは受け取った分だけ',
+    );
+  }
+}
+
+/** ストリームの終端（これらのどれかを見たら、閉じてよい）。 */
+function isStreamTerminal(event: ChatStreamEvent): boolean {
+  return event.type === 'done' || event.type === 'error' || event.type === 'usage_limited';
+}
+
+/**
  * 添付を見せる部品。**添付のある発言が画面に出たときだけ読み込む**（別チャンク。
  * バンドル予算のため、最初の読み込みへ入れない）。
  */
@@ -91,13 +118,34 @@ const MessageAttachments = lazy(() => import('~/components/message-attachments')
  */
 interface PendingAttachment {
   key: string;
-  file: File;
+  /** 選んだファイル。**無いものは、すでにサーバにある添付**（発言の編集で引き継いだもの。`meta` を持つ）。 */
+  file?: File;
   meta?: MessageAttachment;
+}
+
+/** 書きかけの本文を `sessionStorage` へ書くまでの、打鍵が止まってからの待ち（ミリ秒。#3400）。 */
+const DRAFT_SAVE_DELAY_MS = 400;
+
+/** 検査（個数・大きさ）に渡す形。引き継いだ添付は控え（`meta`）から作る。 */
+function sizedOf(item: PendingAttachment): { name: string; size: number; type: string } {
+  return {
+    name: item.file?.name ?? item.meta?.name ?? '',
+    size: item.file?.size ?? item.meta?.size ?? 0,
+    type: item.file?.type ?? item.meta?.mediaType ?? '',
+  };
 }
 
 /** 上げ終えた添付の id（`POST /chat` の `attachments`）。 */
 function attachmentIds(items: readonly PendingAttachment[]): string[] {
   return items.flatMap((item) => (item.meta === undefined ? [] : [item.meta.id]));
+}
+
+/**
+ * すでに上げてある添付（発言に付いている控え）を、送る形へ直す。`meta` を持つので上げ直さない。
+ * 編集の添付の引き継ぎ（#3399）と、失敗したターンの再送（#3566）が使う。
+ */
+function carriedAttachments(items: readonly MessageAttachment[]): PendingAttachment[] {
+  return items.map((meta) => ({ key: `e-${meta.id}`, meta }));
 }
 
 /**
@@ -149,6 +197,23 @@ function sameAsStashed(
     stashed.text === text &&
     before.length === attachments.length &&
     before.every((item, index) => item.key === attachments[index]?.key)
+  );
+}
+
+/** 発言の編集の書きかけ（#3565）。 */
+interface EditDraft {
+  text: string;
+  attachments: MessageAttachment[];
+}
+
+/** 書きかけが元の発言と違うか。元のまま（開いただけ）なら「書きかけ」とは言わない。 */
+function hasEditDraft(draft: EditDraft | undefined, line: Line): boolean {
+  if (draft === undefined) return false;
+  if (draft.text !== line.text) return true;
+  const original = line.attachments ?? [];
+  return (
+    draft.attachments.length !== original.length ||
+    draft.attachments.some((item, index) => item.id !== original[index]?.id)
   );
 }
 
@@ -370,7 +435,53 @@ export interface EditedVersion {
    * この版のすぐ後に続いていた、いまは既定ビューから畳まれているやりとり
    * （この版自身の発言は含まない）。古い順。
    */
-  hiddenFollowUps: { role: 'human' | 'clone'; text: string }[];
+  hiddenFollowUps: { role: 'human' | 'clone' | 'approval'; text: string }[];
+}
+
+function omitKey<T>(record: Record<string, T>, key: string): Record<string, T> {
+  if (!(key in record)) return record;
+  const rest = { ...record };
+  delete rest[key];
+  return rest;
+}
+
+/** 決着した（回答済みか取り下げ済み）承認か。 */
+function isSettledApproval(approval: PendingApproval): boolean {
+  return (
+    (approval.answeredAt !== undefined && approval.answeredAt !== null) ||
+    (approval.withdrawnAt !== undefined && approval.withdrawnAt !== null)
+  );
+}
+
+/** 畳まれた版の後ろに出す、決着済みの確認の1行。 */
+function describeFoldedApproval(approval: PendingApproval): string {
+  const settled =
+    approval.withdrawnAt !== undefined && approval.withdrawnAt !== null
+      ? '（取り下げ済み）'
+      : approval.answer
+        ? `（回答: ${approval.answer}）`
+        : '（回答済み）';
+  return `${approval.question}${settled}`;
+}
+
+/**
+ * 編集で畳まれた区間（畳まれた発言のいちばん古い時刻から、畳んだ編集の時刻まで）。
+ * 畳むかどうかの規則そのものはサーバ（`supersededBy`）が持つ。ここはその区間に上がった承認を
+ * 見分けるためだけに、同じ印から区間を引く（承認は発言の id を持たないので、時刻で当てる）。
+ */
+function foldedSpans(messages: readonly ConversationMessage[]): { start: string; end: string }[] {
+  const starts = new Map<string, string>();
+  for (const message of messages) {
+    if (message.supersededBy === undefined) continue;
+    const current = starts.get(message.supersededBy);
+    if (current === undefined || message.at < current) starts.set(message.supersededBy, message.at);
+  }
+  const spans: { start: string; end: string }[] = [];
+  for (const [editId, start] of starts) {
+    const edit = messages.find((message) => message.id === editId);
+    if (edit !== undefined) spans.push({ start, end: edit.at });
+  }
+  return spans;
 }
 
 /**
@@ -395,6 +506,7 @@ export interface EditedVersion {
 export function buildEditVersions(
   messages: ConversationMessage[],
   headId: string,
+  approvals: readonly PendingApproval[] = [],
 ): EditedVersion[] | undefined {
   const byId = new Map(messages.map((message) => [message.id, message]));
   const head = byId.get(headId);
@@ -415,15 +527,32 @@ export function buildEditVersions(
     const nextId = ids[index + 1];
     // この版のすぐ後に畳まれた分——「次の版に隠された発言」のうち、
     // この版自身（`id`）を除いたもの（＝この版が受け取った応答など）。
-    const hiddenFollowUps: EditedVersion['hiddenFollowUps'] =
+    const next = nextId === undefined ? undefined : byId.get(nextId);
+    const folded: { at: string; role: 'human' | 'clone' | 'approval'; text: string }[] =
       nextId === undefined
         ? []
         : messages
             .filter((entry) => entry.supersededBy === nextId && entry.id !== id)
             .map((entry) => ({
+              at: entry.at,
               role: entry.role === 'inbound' ? ('human' as const) : ('clone' as const),
               text: entry.text,
             }));
+    // この版の区間（この版の発言から、次の版の発言まで）に上がった、決着済みの確認も畳む（#3397）。
+    if (message !== undefined && next !== undefined) {
+      for (const approval of approvals) {
+        if (!isSettledApproval(approval)) continue;
+        if (approval.createdAt < message.at || approval.createdAt >= next.at) continue;
+        folded.push({
+          at: approval.createdAt,
+          role: 'approval',
+          text: describeFoldedApproval(approval),
+        });
+      }
+    }
+    const hiddenFollowUps = folded
+      .sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0))
+      .map(({ role, text }) => ({ role, text }));
     return { text: message?.text ?? '', hiddenFollowUps };
   });
 }
@@ -498,6 +627,9 @@ export default function Chat({ loaderData }: Route.ComponentProps) {
  * **広い画面では脇に、狭い画面ではドロワーの中に、同じものを置く**（`shell.tsx`
  * の `Nav` と同じ形）。別々に書くと、一覧に何か足したときに片方だけ増える。
  */
+/** 会話の一覧が一度に読む件数の段（`GET /conversations` の `limit` は最大 200）。 */
+const CONVERSATION_LIMITS = [30, 60, 90, 120, 150, 200] as const;
+
 function ConversationList({
   activeId,
   onNavigate,
@@ -511,7 +643,18 @@ function ConversationList({
    */
   onNavigate?: (() => void) | undefined;
 }) {
-  const { data, error, isLoading } = useConversations(30);
+  /*
+   * 「もっと見る」（#3404）。押すたびに `limit` を段で増やし（上限は API の 200）、取り直す。
+   * **取り直しの間も、失敗したときも、直前の一覧を残す**（`keepPreviousData`）。
+   * 失敗は画面の上の `ErrorNote` ではなく、一覧の下に小さく言う。もう一度押せば同じ段を取り直す。
+   */
+  const [step, setStep] = useState(0);
+  const limit = CONVERSATION_LIMITS[step] ?? 30;
+  const { data, error, isLoading, isValidating, mutate } = useConversations(limit, {
+    keepPreviousData: true,
+  });
+  const loadingMore = step > 0 && isValidating;
+  const moreFailing = step > 0 && error !== undefined && !isValidating;
 
   /*
    * 但し書きを組み立てるのは画面の側（`ConversationList` の `notes`）。出す条件は
@@ -560,7 +703,21 @@ function ConversationList({
       }))}
       activeId={activeId}
       loading={isLoading}
-      error={error}
+      error={step > 0 && data !== undefined ? undefined : error}
+      more={
+        data !== undefined &&
+        data.hiddenByLimit > 0 &&
+        (step < CONVERSATION_LIMITS.length - 1 || moreFailing)
+          ? {
+              onClick: () => {
+                if (moreFailing) void mutate();
+                else setStep((current) => current + 1);
+              },
+              loading: loadingMore,
+              ...(moreFailing ? { error } : {}),
+            }
+          : undefined
+      }
       // 取れなかったのを0件と描かない（#2323）。再検証の失敗で `data` が残るときは当たらない。
       unavailable={data === undefined && error !== undefined}
       notes={notes}
@@ -570,6 +727,8 @@ function ConversationList({
       renderLink={(target, slot) => (
         <Link
           to={target.id === undefined ? '/chat' : `/chat/${target.id}`}
+          // 開いている会話を読み上げへ伝える（色の class だけでは伝わらない、#3568）。
+          aria-current={target.id !== undefined && target.id === activeId ? 'page' : undefined}
           onClick={onNavigate}
           className={slot.className}
         >
@@ -641,7 +800,8 @@ export function ChatPane({
    */
   const [shownId, setShownId] = useState(routeId);
   const [lines, setLines] = useState<Line[]>([]);
-  const [draft, setDraft] = useState('');
+  // 書きかけの本文は会話ごとに `sessionStorage` にも残す（再読み込み・タブの破棄から戻る。#3400）。
+  const [draft, setDraft] = useState(() => loadChatDraft(routeId));
   /**
    * 「いま見ている会話ではない」会話の下書き（#1618）。**キーは会話 id
    * （`shownId` と同じ形。新しい会話＝id 無しは `undefined` という1つの鍵に
@@ -673,10 +833,12 @@ export function ChatPane({
    * カードは会話を移ると外れるので、カードの中で持つと書きかけが消える（#3398）。ここは
    * `ChatPane` が生きているあいだ残る。
    */
-  const [approvalDrafts, setApprovalDrafts] = useState<Map<string, string>>(new Map());
-  const [questionDrafts, setQuestionDrafts] = useState<Map<string, ApprovalQuestionsDraft>>(
-    new Map(),
-  );
+  /*
+   * **承認の画面（`routes/approvals.tsx`）と同じ保存先**（`alteroid.approvalDrafts`、承認 id がキー。#3481）。
+   * チャットの画面を離れる・再読み込みするとここの state は消えるので、`sessionStorage` にも写す。
+   * 会話で書きかけた答えを承認の画面で開いても続きが出て、逆も同じ。
+   */
+  const [approvalDrafts, setApprovalDrafts] = useState<ApprovalDrafts>(loadApprovalDrafts);
   /**
    * 送信経路（`send`/`followUp`、ストリームの `error` イベント）の失敗。**会話 id ごとに持つ（#1585）。**
    *
@@ -758,8 +920,51 @@ export function ChatPane({
   >(new Map());
   /** 入力欄に添えた添付（送る前）。上げるのは `send` のとき。 */
   const [pending, setPending] = useState<PendingAttachment[]>([]);
-  /** 添付を上げている最中か。真のあいだは送れない。 */
-  const [uploading, setUploading] = useState(false);
+  /*
+   * 本文の書きかけを、いま見ている会話の鍵で残す。**残すのは本文だけ**（添付・承認の回答・編集の
+   * 続きは残さない）。空なら鍵ごと消えるので、送信（入力欄が空になる）で消え、失敗して戻した文は
+   * また残る。**入力のたびには書かず、少し間引く**（打鍵が止まって `DRAFT_SAVE_DELAY_MS` 後に書く）。
+   * 空にしたときは待たずに消す（送った文が復元されない）。会話を替える・画面を離れる・タブを
+   * 隠す／閉じる（`pagehide`）ときは、待っている分をすぐ書く。
+   */
+  const pendingDraftSave = useRef<{ id: string | undefined; text: string; epoch: number } | null>(
+    null,
+  );
+  const flushDraftSave = useCallback(() => {
+    const waiting = pendingDraftSave.current;
+    if (waiting === null) return;
+    pendingDraftSave.current = null;
+    // 待っているあいだにログアウト（全部消す）されたなら、書き戻さない。
+    if (waiting.epoch !== chatDraftEpoch()) return;
+    saveChatDraft(waiting.id, waiting.text);
+  }, []);
+  useEffect(() => {
+    if (pendingDraftSave.current !== null && pendingDraftSave.current.id !== shownId)
+      flushDraftSave();
+    if (draft === '') {
+      pendingDraftSave.current = null;
+      saveChatDraft(shownId, '');
+      return;
+    }
+    pendingDraftSave.current = { id: shownId, text: draft, epoch: chatDraftEpoch() };
+    const timer = setTimeout(flushDraftSave, DRAFT_SAVE_DELAY_MS);
+    return () => clearTimeout(timer);
+  }, [shownId, draft, flushDraftSave]);
+  useEffect(() => {
+    window.addEventListener('pagehide', flushDraftSave);
+    return () => {
+      window.removeEventListener('pagehide', flushDraftSave);
+      flushDraftSave();
+    };
+  }, [flushDraftSave]);
+  /**
+   * 添付を上げている最中か。真のあいだは、**上げ始めた会話の**入力欄は送れない。
+   * 押した時点の会話 id を持ち、描画で `shownId` と一致するときだけ composer へ渡す
+   * （`interruptNotice` と同じ形。持たないと、別の会話へ移っても入力欄を塞ぐ、#3567）。
+   */
+  const [uploading, setUploading] = useState<{ conversationId: string | undefined } | undefined>(
+    undefined,
+  );
   /** 会話を離れているあいだ、その会話の添えかけの添付をしまっておく（`drafts` と同じ鍵・同じ扱い）。 */
   const [attachmentDrafts, setAttachmentDrafts] = useState<
     Map<string | undefined, PendingAttachment[]>
@@ -775,7 +980,9 @@ export function ChatPane({
    * ボタンの二重打鍵を防ぐためだけの、この画面だけの状態——サーバ側の状態には
    * 対応しない。
    */
-  const [interrupting, setInterrupting] = useState(false);
+  const [interrupting, setInterrupting] = useState<{ conversationId: string } | undefined>(
+    undefined,
+  );
   /**
    * `POST /clone/interrupt` の応答を人間の言葉にしたもの（`describeCloneInterruptOutcome`）。
    * 失敗（ネットワーク断・403 等）は `interruptFailure`（下）へ回すので、
@@ -824,7 +1031,9 @@ export function ChatPane({
    * （Issue #2171）。ボタンの二重打鍵を防ぐためだけの、この画面だけの状態
    * ——`interrupting` と同じ理由・同じ形。
    */
-  const [endingConversation, setEndingConversation] = useState(false);
+  const [endingConversation, setEndingConversation] = useState<
+    { conversationId: string } | undefined
+  >(undefined);
   /**
    * 「会話を終える」が成功した結果（#2759）。終えた会話の id を持つ。成功すると画面は
    * 新しい会話（`/chat`）へ移るので、**移った先の見出しの下に1行で出す**——何も
@@ -852,8 +1061,49 @@ export function ChatPane({
    * 素直だからである。
    */
   const [editingKey, setEditingKey] = useState<string | undefined>(undefined);
-  /** 編集中の textarea の下書き。確定 (`confirmEdit`) が読み、取消で捨てる。 */
-  const [editDraft, setEditDraft] = useState('');
+  /**
+   * **発言の編集の下書きは、発言（`Line.key`）ごとに持つ（#3565）。** 確定するまで消さない——
+   * Escape・「キャンセル」・別の発言の鉛筆・会話の切り替えでは捨てない。その発言の鉛筆をもう一度
+   * 押すと、書きかけから再開する。確定（`confirmEdit`）で消す（送った文は、失敗すれば入力欄へ
+   * 編集の続きとして戻る。#3393）。
+   *
+   * 添付（#3399）は**編集では引き継ぐ**——外さない限り、新しい版にも付ける。同じ会話の中なら、
+   * サーバは同じ添付の結び直しを受ける（冪等）。
+   *
+   * 画面の状態として持つだけで、`sessionStorage` へは残さない（再読み込みで消える。ログアウトは
+   * 画面ごと畳むので、ここから漏れない）。
+   */
+  const [editDrafts, setEditDrafts] = useState<ReadonlyMap<string, EditDraft>>(new Map());
+  const editDraft = editingKey === undefined ? '' : (editDrafts.get(editingKey)?.text ?? '');
+  const editAttachments = useMemo(
+    () => (editingKey === undefined ? [] : (editDrafts.get(editingKey)?.attachments ?? [])),
+    [editDrafts, editingKey],
+  );
+  const updateEditDraft = useCallback(
+    (key: string, change: (current: EditDraft) => EditDraft) =>
+      setEditDrafts((previous) => {
+        const current = previous.get(key) ?? { text: '', attachments: [] };
+        return new Map(previous).set(key, change(current));
+      }),
+    [],
+  );
+  const dropEditDraft = useCallback(
+    (key: string) =>
+      setEditDrafts((previous) => {
+        if (!previous.has(key)) return previous;
+        const next = new Map(previous);
+        next.delete(key);
+        return next;
+      }),
+    [],
+  );
+  /**
+   * 「受信を始めた」「返信が終わった」を読み上げるための知らせ（#3568）。本文の流れは読まない。
+   * 会話（`id`）を持たせ、いま見ている会話のものだけ出す。
+   */
+  const [liveNote, setLiveNote] = useState<{ id: string | undefined; text: string } | undefined>(
+    undefined,
+  );
   /**
    * 版の切り替え（`< 2/2 >`）がいま見せている版の添字（0始まり）。
    * key は `Line.journalId`（編集された発言の、いま既定ビューに出ている側の
@@ -1084,9 +1334,10 @@ export function ChatPane({
           return next;
         });
       }
-      // 編集中の入力を別の会話へ持ち越さない（`editingKey` は `Line.key` で、
-      // 別の会話へ移ればどのみち画面に出なくなるが、下書きを残す理由も無い）。
+      // 編集欄は閉じる（`editingKey` は `Line.key` で、別の会話では出ない）。**書きかけは捨てない**
+      // （`editDrafts`。戻って鉛筆を押せば再開できる。#3565）。
       setEditingKey(undefined);
+      setLiveNote(undefined);
       /*
        * **送っていない下書きは会話ごとに持ち、戻ったら戻す（#1618）。**
        *
@@ -1120,7 +1371,7 @@ export function ChatPane({
         next.delete(routeId);
         return next;
       });
-      setDraft(drafts.get(routeId) ?? '');
+      setDraft(drafts.get(routeId) ?? loadChatDraft(routeId));
       /*
        * **添えかけの添付も、下書きと同じく会話ごとにしまい、戻ったら戻す。**
        * 使い手が選んだファイルを、会話を移っただけで黙って失わせない。しまうのは
@@ -1199,6 +1450,30 @@ export function ChatPane({
    * 読むだけである。
    */
   const conversationApprovals = useConversationApprovals(shownId ?? null);
+  /*
+   * 承認カードの書きかけを `sessionStorage` へ写す（#3481）。**ここで消すのは、この会話の承認の
+   * 一覧を読めていて、決着済み（回答済み・取り下げ済み）と分かった id だけ。** 一覧を読めていない
+   * （取得に失敗した・読み込み中）ときや、ほかの会話の承認の書きかけは、消さずに残す。
+   */
+  const settledApprovalIds = useMemo(
+    () =>
+      new Set(
+        (conversationApprovals.data?.approvals ?? [])
+          .filter(isSettledApproval)
+          .map((approval) => approval.id),
+      ),
+    [conversationApprovals.data],
+  );
+  useEffect(() => {
+    saveApprovalDrafts({
+      texts: Object.fromEntries(
+        Object.entries(approvalDrafts.texts).filter(([id]) => !settledApprovalIds.has(id)),
+      ),
+      questions: Object.fromEntries(
+        Object.entries(approvalDrafts.questions).filter(([id]) => !settledApprovalIds.has(id)),
+      ),
+    });
+  }, [approvalDrafts, settledApprovalIds]);
   // 生配信の分岐（`useMemo` の中）から、いまの会話の承認を取り直す口（#3299）。
   const refetchApprovalsRef = useRef<() => void>(() => {});
   const mountedRef = useRef(false);
@@ -1294,16 +1569,27 @@ export function ChatPane({
      * （issue #974）のどちらも、カードが状態と回答・理由を持つことで満たす。
      * 回答のあとのクローンの返答は、時刻順でカードの後ろに並ぶ。
      */
-    const approvalItems = (conversationApprovals.data?.approvals ?? []).map((approval) => ({
-      at: approval.createdAt,
-      line: {
-        key: `a-${approval.id}`,
-        role: 'system' as const,
-        of: shownId,
-        text: approval.question,
-        approval,
-      } satisfies Line,
-    }));
+    /*
+     * **決着済みの承認は、編集で畳まれた区間のものなら畳む（#3397。版を戻せば`hidden`に出る）。
+     * 未回答は区間の中でも常に出す** —— クローンが答えを待っているので、隠すと答えられない。
+     */
+    const spans = foldedSpans(history.data?.messages ?? []);
+    const approvalItems = (conversationApprovals.data?.approvals ?? [])
+      .filter(
+        (approval) =>
+          !isSettledApproval(approval) ||
+          !spans.some((span) => approval.createdAt >= span.start && approval.createdAt < span.end),
+      )
+      .map((approval) => ({
+        at: approval.createdAt,
+        line: {
+          key: `a-${approval.id}`,
+          role: 'system' as const,
+          of: shownId,
+          text: approval.question,
+          approval,
+        } satisfies Line,
+      }));
 
     return [...messageItems, ...approvalItems]
       .sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0))
@@ -1329,11 +1615,15 @@ export function ChatPane({
       if (message.role !== 'inbound') continue;
       if (message.supersededBy !== undefined) continue; // 隠された側は入口にしない
       if (message.supersedes === undefined) continue; // 編集していない発言
-      const chain = buildEditVersions(messages, message.id);
+      const chain = buildEditVersions(
+        messages,
+        message.id,
+        conversationApprovals.data?.approvals ?? [],
+      );
       if (chain !== undefined) result.set(message.id, chain);
     }
     return result;
-  }, [history.data]);
+  }, [history.data, conversationApprovals.data]);
 
   /**
    * **同じ会話へ繰り返し戻った分も、`lines` 自体から刈る（issue #446 の
@@ -1832,6 +2122,7 @@ export function ChatPane({
           break;
         case 'text':
           if (replyKey === undefined) {
+            if (writable()) setLiveNote({ id: stream.id, text: '返信の受信を始めた' });
             replyKey = `c-${Date.now()}`;
             const key = replyKey;
             if (stream.id !== undefined) unfinishedReplyRef.current.set(stream.id, key);
@@ -1919,6 +2210,8 @@ export function ChatPane({
           break;
         case 'done':
           settleReply();
+          // 失敗の知らせは Alert が持つので、ここで読むのは正常に終わったときだけ（#3568）。
+          if (owns()) setLiveNote({ id: stream.id, text: '返信が終わった' });
           setLines((previous) => previous.filter((line) => line.transient !== true));
           if (owns()) refetchApprovalsRef.current();
           break;
@@ -1932,9 +2225,11 @@ export function ChatPane({
     () =>
       pending.map((item) => ({
         key: item.key,
-        name: item.file.name,
-        sizeLabel: formatBytes(item.file.size),
-        ...(isPreviewableImage(item.file.type) ? { preview: item.file } : {}),
+        name: sizedOf(item).name,
+        sizeLabel: formatBytes(sizedOf(item).size),
+        ...(item.file !== undefined && isPreviewableImage(item.file.type)
+          ? { preview: item.file }
+          : {}),
       })),
     [pending],
   );
@@ -2019,7 +2314,7 @@ export function ChatPane({
       const waitedForUpload = attachments.some((item) => item.meta === undefined);
       if (waitedForUpload) {
         awaited = true;
-        setUploading(true);
+        setUploading({ conversationId: shownId });
         setFailures((prev) => {
           if (!prev.has(shownId)) return prev;
           const next = new Map(prev);
@@ -2029,14 +2324,15 @@ export function ChatPane({
         const uploaded: PendingAttachment[] = [];
         try {
           for (const item of attachments) {
-            if (item.meta !== undefined) {
+            const file = item.file;
+            if (item.meta !== undefined || file === undefined) {
               uploaded.push(item);
               continue;
             }
             try {
-              const meta = await uploadAttachment(api, item.file, {
-                name: item.file.name,
-                type: attachmentMediaType(item.file),
+              const meta = await uploadAttachment(api, file, {
+                name: file.name,
+                type: attachmentMediaType(file),
               });
               uploaded.push({ ...item, meta });
               setPending((current) =>
@@ -2044,7 +2340,7 @@ export function ChatPane({
               );
             } catch (caught) {
               throw new Error(
-                `${item.file.name} を上げられなかった: ${redactError(caught instanceof Error ? caught.message : String(caught))}`,
+                `${file.name} を上げられなかった: ${redactError(caught instanceof Error ? caught.message : String(caught))}`,
                 { cause: caught },
               );
             }
@@ -2054,7 +2350,7 @@ export function ChatPane({
           setFailures((prev) => new Map(prev).set(shownId, caught));
           return;
         } finally {
-          setUploading(false);
+          setUploading(undefined);
         }
       }
       if (attachments.length > 0) {
@@ -2129,6 +2425,7 @@ export function ChatPane({
       const stream = createStream(controller, shownId);
       streamRef.current = stream;
       setSending(true);
+      setLiveNote(undefined);
       // この会話（`shownId` == `stream.id` の初期値）ぶんの失敗だけを消す（#1585）。
       // followUp と同じ理由——次の送信に立て直しの機会が移るのはこの会話だけ。
       setFailures((prev) => {
@@ -2151,6 +2448,8 @@ export function ChatPane({
         shownId,
       );
       let opened = false;
+      // 終端（`done` / `error` / `usage_limited`）を見たか。見ないまま閉じたら失敗として出す（#3564）。
+      let sawTerminal = false;
 
       const { setTransient, apply } = createStreamWriter(stream, controller);
 
@@ -2237,7 +2536,26 @@ export function ChatPane({
             continue;
           }
 
+          if (isStreamTerminal(message.data)) sawTerminal = true;
           apply(message.data);
+        }
+        if (!sawTerminal && !controller.signal.aborted) {
+          if (opened) {
+            // 受け取った分の返信は残す。完成したように見せない。
+            setFailures((prev) => new Map(prev).set(stream.id, new StreamClosedEarlyError()));
+          } else {
+            // 受け取られたか分からない。中断（#3121）と同じ道で文を積む（自動では送らない）。
+            giveBack(
+              stream.id,
+              text,
+              lineKey,
+              supersedes,
+              attachments,
+              clientMessageId,
+              true,
+              stream.id === undefined ? adoptedId : undefined,
+            );
+          }
         }
       } catch (caught) {
         /*
@@ -2373,7 +2691,7 @@ export function ChatPane({
   const attach = useCallback(
     (files: File[]) => {
       const { accepted, rejected } = checkAttachments(
-        pending.map((item) => item.file),
+        pending.map(sizedOf),
         files,
         attachmentLimits,
       );
@@ -2426,6 +2744,7 @@ export function ChatPane({
     void (async () => {
       let stream: Stream | undefined;
       let writer: ReturnType<typeof createStreamWriter> | undefined;
+      let sawTerminal = false;
       try {
         for await (const message of getChatStream(api, id, { signal: controller.signal })) {
           if (message.event === 'open') {
@@ -2446,7 +2765,13 @@ export function ChatPane({
             writer.setTransient('考えている…');
             continue;
           }
+          if (isStreamTerminal(message.data)) sawTerminal = true;
           writer?.apply(message.data);
+        }
+        // 再生が終端を見ないまま閉じた（#3564）。始める前（`stream` 無し）は何も見せていないので黙る。
+        if (stream !== undefined && !sawTerminal && !controller.signal.aborted) {
+          const closedId = stream.id;
+          setFailures((prev) => new Map(prev).set(closedId, new StreamClosedEarlyError()));
         }
       } catch (caught) {
         if (!controller.signal.aborted && stream !== undefined) {
@@ -2494,12 +2819,16 @@ export function ChatPane({
   const confirmEdit = useCallback(
     async (line: Line) => {
       const text = editDraft.trim();
-      if (text === '' || line.journalId === undefined) return;
+      if ((text === '' && editAttachments.length === 0) || line.journalId === undefined) return;
       setEditingKey(undefined);
+      // 送る文は送信の側が持つ（失敗すれば入力欄へ編集の続きとして戻る。#3393）。書きかけは消す。
+      dropEditDraft(line.key);
+      // 引き継ぐ添付は、すでに上げてある（`meta`）ので上げ直さない。
+      const carried = carriedAttachments(editAttachments);
       // 入力欄の文を送るのではないので、入力欄の書きかけには触らない（#3391）。
-      await send(text, { supersedes: line.journalId, draft: 'keep' });
+      await send(text, { supersedes: line.journalId, draft: 'keep', attachments: carried });
     },
-    [editDraft, send],
+    [editDraft, editAttachments, send, dropEditDraft],
   );
 
   /**
@@ -2547,7 +2876,7 @@ export function ChatPane({
    */
   const handleInterrupt = useCallback(
     async (pressedConversationId: string) => {
-      setInterrupting(true);
+      setInterrupting({ conversationId: pressedConversationId });
       /*
        * **送信経路の `failures` はここで触らない（#1585）。** 前はここでも
        * `setFailure(undefined)` を呼んで1つだけの `failure` を消していた——
@@ -2572,7 +2901,7 @@ export function ChatPane({
       } catch (caught) {
         setInterruptFailure({ conversationId: pressedConversationId, error: caught });
       } finally {
-        setInterrupting(false);
+        setInterrupting(undefined);
       }
     },
     [interruptClone],
@@ -2603,7 +2932,7 @@ export function ChatPane({
    */
   const handleEndConversation = useCallback(
     async (pressedConversationId: string) => {
-      setEndingConversation(true);
+      setEndingConversation({ conversationId: pressedConversationId });
       setEndFailure(undefined);
       setEndNotice(undefined);
       try {
@@ -2613,7 +2942,7 @@ export function ChatPane({
       } catch (caught) {
         setEndFailure({ conversationId: pressedConversationId, error: caught });
       } finally {
-        setEndingConversation(false);
+        setEndingConversation(undefined);
       }
     },
     [endConversation, navigate],
@@ -2626,6 +2955,10 @@ export function ChatPane({
    * （上の doc）。`shownId` はこの render の同期処理でしか進まない state
    * なので、この比較は常に「この render の時点で正しい」答えを返す。
    */
+  const visibleUploading = uploading !== undefined && uploading.conversationId === shownId;
+  const visibleInterrupting = interrupting !== undefined && interrupting.conversationId === shownId;
+  const visibleEnding =
+    endingConversation !== undefined && endingConversation.conversationId === shownId;
   const visibleInterruptNotice =
     interruptNotice !== undefined && interruptNotice.conversationId === shownId
       ? interruptNotice.text
@@ -2697,9 +3030,9 @@ export function ChatPane({
         subtitle={headerSubtitle}
         onOpenList={onOpenList}
         onInterrupt={shownId === undefined ? undefined : () => void handleInterrupt(shownId)}
-        interrupting={interrupting}
+        interrupting={visibleInterrupting}
         onEnd={shownId === undefined ? undefined : () => void handleEndConversation(shownId)}
-        ending={endingConversation}
+        ending={visibleEnding}
         /*
          * 「ターンを止める」の結果（3値のどれか）。呼べなかった失敗
          * （ネットワーク断・403 等）は下の `ErrorNote`（`visibleInterruptFailure`）に
@@ -2709,6 +3042,11 @@ export function ChatPane({
          */
         notice={visibleInterruptNotice ?? visibleEndNotice}
       />
+
+      {/* 読み上げ専用（#3568）。「受信を始めた／返信が終わった」だけで、本文の流れは読まない。 */}
+      <div role="status" className="sr-only">
+        {liveNote !== undefined && liveNote.id === shownId ? liveNote.text : ''}
+      </div>
 
       <div
         ref={scrollContainerRef}
@@ -2789,26 +3127,33 @@ export function ChatPane({
                         <ApprovalAnswerCard
                           approval={line.approval}
                           showSettledAt
-                          draft={approvalDrafts.get(approvalId) ?? ''}
+                          draft={approvalDrafts.texts[approvalId] ?? ''}
                           onDraftChange={(text) =>
-                            setApprovalDrafts((previous) => new Map(previous).set(approvalId, text))
+                            setApprovalDrafts((previous) => ({
+                              ...previous,
+                              texts:
+                                text === ''
+                                  ? omitKey(previous.texts, approvalId)
+                                  : { ...previous.texts, [approvalId]: text },
+                            }))
                           }
-                          questionsDraft={questionDrafts.get(approvalId) ?? EMPTY_QUESTIONS_DRAFT}
+                          questionsDraft={
+                            approvalDrafts.questions[approvalId] ?? EMPTY_QUESTIONS_DRAFT
+                          }
                           onQuestionsDraftChange={(next) =>
-                            setQuestionDrafts((previous) => new Map(previous).set(approvalId, next))
+                            setApprovalDrafts((previous) => ({
+                              ...previous,
+                              questions: isEmptyQuestionsDraft(next)
+                                ? omitKey(previous.questions, approvalId)
+                                : { ...previous.questions, [approvalId]: next },
+                            }))
                           }
                           onAnswered={() => {
-                            // 答えが通ったので、書きかけは要らない。
-                            setApprovalDrafts((previous) => {
-                              const next = new Map(previous);
-                              next.delete(approvalId);
-                              return next;
-                            });
-                            setQuestionDrafts((previous) => {
-                              const next = new Map(previous);
-                              next.delete(approvalId);
-                              return next;
-                            });
+                            // 答えが通ったので、書きかけは要らない（通らなかったときは呼ばれない）。
+                            setApprovalDrafts((previous) => ({
+                              texts: omitKey(previous.texts, approvalId),
+                              questions: omitKey(previous.questions, approvalId),
+                            }));
                             void conversationApprovals.mutate();
                           }}
                           trailing={
@@ -2825,13 +3170,13 @@ export function ChatPane({
                   }
                   if (line.turnFailure !== undefined) {
                     const previous = index > 0 ? all[index - 1] : undefined;
-                    const retryText =
+                    const retryLine =
                       line.turnFailure === 'failed' &&
                       index === all.length - 1 &&
                       !sending &&
                       previous?.role === 'human' &&
-                      previous.text.trim() !== ''
-                        ? previous.text
+                      (previous.text.trim() !== '' || (previous.attachments?.length ?? 0) > 0)
+                        ? previous
                         : undefined;
                     return (
                       <ChatTurnFailure
@@ -2839,10 +3184,15 @@ export function ChatPane({
                         kind={line.turnFailure}
                         text={line.text}
                         onRetry={
-                          retryText === undefined
+                          retryLine === undefined
                             ? undefined
                             : // 入力欄の文を送るのではないので、書きかけには触らない（#3391）。
-                              () => void send(retryText, { draft: 'keep' })
+                              // 元の発言の添付も付ける（付けないと、返信は添付を読まずに返る、#3566）。
+                              () =>
+                                void send(retryLine.text, {
+                                  draft: 'keep',
+                                  attachments: carriedAttachments(retryLine.attachments ?? []),
+                                })
                         }
                       />
                     );
@@ -2889,10 +3239,19 @@ export function ChatPane({
                         isEditable
                           ? () => {
                               setEditingKey(line.key);
-                              setEditDraft(line.text);
+                              // 書きかけがあればそこから再開する。無ければ元の本文で始める（#3565）。
+                              setEditDrafts((previous) =>
+                                previous.has(line.key)
+                                  ? previous
+                                  : new Map(previous).set(line.key, {
+                                      text: line.text,
+                                      attachments: [...(line.attachments ?? [])],
+                                    }),
+                              );
                             }
                           : undefined
                       }
+                      hasDraft={hasEditDraft(editDrafts.get(line.key), line)}
                       attachments={
                         line.attachments === undefined ? undefined : (
                           <Suspense fallback={null}>
@@ -2925,9 +3284,30 @@ export function ChatPane({
                       {isEditing ? (
                         <ChatMessageEditor
                           value={editDraft}
-                          onChange={setEditDraft}
+                          onChange={(text) =>
+                            updateEditDraft(line.key, (current) => ({ ...current, text }))
+                          }
+                          attachments={editAttachments.map((attachment) => ({
+                            id: attachment.id,
+                            name: attachment.name,
+                            sizeLabel: formatBytes(attachment.size),
+                          }))}
+                          onRemoveAttachment={(id) =>
+                            updateEditDraft(line.key, (current) => ({
+                              ...current,
+                              attachments: current.attachments.filter(
+                                (attachment) => attachment.id !== id,
+                              ),
+                            }))
+                          }
                           onConfirm={() => void confirmEdit(line)}
-                          onCancel={() => setEditingKey(undefined)}
+                          onCancel={() => {
+                            // 閉じるだけで、書きかけは残す（#3565）。元のままなら残す理由が無い。
+                            if (!hasEditDraft(editDrafts.get(line.key), line)) {
+                              dropEditDraft(line.key);
+                            }
+                            setEditingKey(undefined);
+                          }}
                         />
                       ) : undefined}
                     </ChatMessage>
@@ -2953,7 +3333,7 @@ export function ChatPane({
         value={draft}
         onChange={setDraft}
         onSend={() => {
-          if (uploading) return;
+          if (visibleUploading) return;
           // 編集の送信が失敗して戻った文は、編集の続きとして送る（`supersedes` を保つ。#3393）。
           if (editContinuation !== undefined) resend(editContinuation);
           else void send(draft, { attachments: pending });
@@ -2973,7 +3353,7 @@ export function ChatPane({
               }
         }
         sending={sending}
-        uploading={uploading}
+        uploading={visibleUploading}
         attachments={composerAttachments}
         onAttach={attach}
         onRemoveAttachment={(key) => {

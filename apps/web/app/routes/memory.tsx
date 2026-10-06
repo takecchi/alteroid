@@ -1,6 +1,7 @@
 import { MemoryTabs } from '~/components/group-tabs';
 import { LoadError } from '~/components/load-error';
 import { useId, useState } from 'react';
+import { useBeforeUnloadGuard } from '~/lib/leave-guard';
 import { Link, Outlet, useNavigate, useParams } from 'react-router';
 
 import {
@@ -39,6 +40,9 @@ export default function Memory() {
   const slugId = useId();
   const [slug, setSlug] = useState('');
   const { slug: selectedSlug } = useParams();
+  // 開く前の名前が残っている間は、タブを閉じる前に確認する（開いた名前は書きかけではない）。
+  // 移動の確認（`useBlocker`）は置かない: ルーターのブロッカーは1つで、子の経路（`memory-detail.tsx`）が持つ。
+  useBeforeUnloadGuard(slug !== '' && slug !== selectedSlug);
 
   const documents = data?.documents ?? [];
   const hintId = useId();

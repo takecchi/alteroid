@@ -78,7 +78,7 @@ export function runnerAttachmentBodyLimit(limits: AttachmentLimits): number {
   );
 }
 
-/** 受け取った添付を置けなかった（形が不正・中身が sha256 と合わない・置き場が安全でない）。呼び手は 4xx にする。 */
+/** 受け取った添付を置けなかった（形が不正・id の重複・中身が sha256 と合わない・置き場が安全でない）。呼び手は 4xx にする。 */
 export class RunnerAttachmentRejectedError extends Error {
   constructor(message: string) {
     super(message);
@@ -160,10 +160,16 @@ export async function placeRunnerAttachments(
   }
   if (attachments.length === 0) return [];
   // 先に全部を検める（置く前に落とす）。
+  const seenIds = new Set<string>();
   const decoded = attachments.map((attachment) => {
     if (!SAFE_SEGMENT.test(attachment.id)) {
       throw new RunnerAttachmentRejectedError(`添付の id が dir 名にできない形: ${attachment.id}`);
     }
+    // 同じ id は同じ置き先（`<id>/<名前>`）を指す。後のものが先のものを上書きし、通知行の sha256 が path の中身と合わなくなる。
+    if (seenIds.has(attachment.id)) {
+      throw new RunnerAttachmentRejectedError(`添付の id が重複している: ${attachment.id}`);
+    }
+    seenIds.add(attachment.id);
     const bytes = Buffer.from(attachment.data, 'base64');
     if (bytes.length !== attachment.size || sha256Hex(bytes) !== attachment.sha256) {
       throw new RunnerAttachmentRejectedError(
@@ -225,7 +231,10 @@ export async function placeRunnerAttachments(
           ? {}
           : bytes.length > maxImageBytes
             ? { imageOverLimit: maxImageBytes }
-            : { image: { mediaType: imageType, data: attachment.data, name } }),
+            : // 受け取った文字列（改行・空白・url-safe を黙って許す復号）ではなく、検めた bytes から作り直した正規の base64。
+              {
+                image: { mediaType: imageType, data: Buffer.from(bytes).toString('base64'), name },
+              }),
       });
     }
   } catch (error) {

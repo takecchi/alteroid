@@ -8,6 +8,7 @@ import {
   AttachmentRejectedError,
   DEFAULT_ATTACHMENT_LIMITS,
   isAttachmentImageMediaType,
+  attachmentDiskName,
   normalizeAttachmentName,
   validateAttachmentBatch,
   validateAttachmentInput,
@@ -349,10 +350,13 @@ export async function uploadDraft(
     bytes: Uint8Array;
   }) => Promise<UploadedAttachment>,
 ): Promise<UploadDraftResult> {
+  // 送ると決めた時点の写しを走査する（生きた配列を走査しない）。上げているあいだの `/attach` / `/detach` が
+  // 走査とずれて、外したファイルを送ったり、後から足した分を混ぜたりしないように（#3558）。
+  const snapshot = [...draft.list()];
   const uploaded: UploadedAttachment[] = [];
   const sent: DraftFile[] = [];
   const limits = await draft.limits();
-  for (const file of draft.list()) {
+  for (const file of snapshot) {
     if (file.uploadedId !== undefined) {
       uploaded.push({
         id: file.uploadedId,
@@ -423,6 +427,7 @@ export async function attachmentsMetaCommand(id: string): Promise<void> {
       `size: ${meta.size}（${formatBytes(meta.size)}）`,
       `sha256: ${meta.sha256}`,
       ...(meta.conversationId === undefined ? [] : [`conversationId: ${meta.conversationId}`]),
+      ...(meta.externalEventId === undefined ? [] : [`externalEventId: ${meta.externalEventId}`]),
       ...(meta.uploadedBy === undefined ? [] : [`uploadedBy: ${meta.uploadedBy}`]),
       `createdAt: ${meta.createdAt}`,
       `expiresAt: ${meta.expiresAt}`,
@@ -455,10 +460,11 @@ export async function attachmentsGetCommand(
           )),
       );
     }
-    // 名前は保存時に正規化済みだが、ここでも区切りを落として basename にする。
+    // 名前は保存時に正規化済みだが、ここでも区切りを落として basename にし、UTF-8 で NAME_MAX 以内へ丸める
+    // （写し・担い手の置き場と同じ `attachmentDiskName`。#3324 / #3521）。
     // `./` を前に付ける: 名前が `-` でも標準出力（`-o -`）と取り違えない（#3330）。
     // `path.join('.', name)` は `./` を畳んで `-` に戻すので使えない。
-    output = `.${sep}${normalizeAttachmentName((await metaResponse.json()).name)}`;
+    output = `.${sep}${attachmentDiskName((await metaResponse.json()).name)}`;
   }
   // 中身は生のバイト列なので hono/client ではなく生の fetch（認証ヘッダは `target`）。
   const response = await fetch(`${target.baseUrl}/attachments/${encodeURIComponent(id)}`, {

@@ -2560,6 +2560,21 @@ export const scheduleKindSchema = z
   .regex(/^[a-z0-9][a-z0-9._-]*$/, 'kind は英小文字・数字・. _ - のみ');
 
 /**
+ * `every` の分数の上限。1年 = 525600 分（365 日 × 24 時間 × 60 分）。
+ *
+ * **なぜ上限が要るか。** 上限が無いと `Date` の範囲（約 1.44e11 分）を超える値が保存でき、次の予定が
+ * Invalid Date になる。スケジューラは 1ms 周期で `timer` を積み続け、`list()` は投げ、行は保存済みなので
+ * 再起動しても直らない（#3533）。
+ *
+ * **なぜ1年か。** 1年より長い周期は、人間も `every` ではなく cron 式か単発の予定で書く。なので
+ * 能力の欠落にならない（PRD「周期の書き方で人間に負けないこと」）。値は人間の決定（2026-10-06）。
+ */
+export const SCHEDULE_EVERY_MINUTES_MAX = 525_600;
+
+/** `every` が上限を超えたときの断りの文。HTTP の 400 は値を混ぜない決まりなので、この文を `where` の後ろへ足して返す（`POST /schedule`）。 */
+export const SCHEDULE_EVERY_MINUTES_MAX_MESSAGE = `every の分数は 1以上${SCHEDULE_EVERY_MINUTES_MAX}（1年）以下の整数のみ。それより長い周期は cron 式か単発の予定で書く`;
+
+/**
  * 周期。
  *
  * **これは方針であって抑止装置ではない**（north_star 禁止2）。「何回まで」を
@@ -2578,7 +2593,14 @@ export const scheduleSpecSchema = z.discriminatedUnion('type', [
     at: z.string().regex(/^(?:[01]?\d|2[0-3]):[0-5]\d$/, 'HH:MM（00:00〜23:59）で書く'),
   }),
   /** この分数ごと。 */
-  z.object({ type: z.literal('every'), minutes: z.number().int().min(1) }),
+  z.object({
+    type: z.literal('every'),
+    minutes: z
+      .number()
+      .int()
+      .min(1)
+      .max(SCHEDULE_EVERY_MINUTES_MAX, SCHEDULE_EVERY_MINUTES_MAX_MESSAGE),
+  }),
   /**
    * cron 式（ローカル時刻）。
    *

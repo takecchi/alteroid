@@ -75,6 +75,15 @@ export const DEFAULT_ARCHIVE_FOLD_EVERY_MINUTES = 60;
 export const ARCHIVE_FOLD_GRACE_MS = 10 * 60_000;
 
 /**
+ * 周期の上限（ms）。**運用の上限ではなく、タイマーの仕様の範囲を守るためのもの**——
+ * `setTimeout` は 2^31-1 ms（約24.8日）を超える遅延を 1ms へ倒すので、
+ * 畳み込みが全行走査を休みなく回してしまう。`resolveRescueIntervalMs` /
+ * `resolveScratchSweepIntervalMs` の `MAX_*_MS` と同じ値（あちらは core から
+ * 公開されていないので、ここに持つ）。
+ */
+export const MAX_ARCHIVE_FOLD_INTERVAL_MS = 2_147_483_647;
+
+/**
  * `off` / `none` / `false` / `0` で止められる。**綴りは
  * `apps/daemon/src/schedule.ts` の `OFF` と揃えてある**（同じ集合を作り直して
  * いるだけで、あちらを import はしていない——`schedule.ts` の `OFF` は
@@ -395,7 +404,10 @@ export function startArchiveFolding(options: ArchiveFolderOptions): ArchiveFolde
       stop: () => {},
     };
   }
-  const interval = options.intervalMs ?? options.everyMinutes * 60_000;
+  const interval = Math.min(
+    options.intervalMs ?? options.everyMinutes * 60_000,
+    MAX_ARCHIVE_FOLD_INTERVAL_MS,
+  );
 
   let inFlight: Promise<FoldArchiveOnceResult | null> | null = null;
   let timer: ReturnType<typeof setTimeout> | undefined;

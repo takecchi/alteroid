@@ -1,3 +1,5 @@
+import { X } from 'lucide-react';
+
 import { Button, SubmitHint, Textarea } from '../../common';
 
 import { isImeComposing } from './ime';
@@ -7,20 +9,26 @@ import { isImeComposing } from './ime';
  *
  * - ⌘ / Ctrl + Enter で確定、Escape でやめる（IME の変換中の Escape は変換の取り消しなので、やめない）
  * - IME の変換を確定する Enter では何もしない（`ime.ts`）
- * - 空白だけの下書きでは確定できない
+ * - 空白だけの下書きでは確定できない（添付が残っていれば、本文が空でも確定できる）
+ * - `attachments` — この発言の添付。**編集では引き継ぐ**ので、外さない限り新しい版にも付く。
+ *   外す口は `onRemoveAttachment`（#3399）
  */
 export function ChatMessageEditor({
   value,
   onChange,
   onConfirm,
   onCancel,
+  attachments = [],
+  onRemoveAttachment,
 }: {
   value: string;
   onChange: (value: string) => void;
   onConfirm: () => void;
   onCancel: () => void;
+  attachments?: readonly { id: string; name: string; sizeLabel: string }[];
+  onRemoveAttachment?: (id: string) => void;
 }) {
-  const empty = value.trim() === '';
+  const empty = value.trim() === '' && attachments.length === 0;
   /*
    * **クリックで textarea になり、送信で確定する**
    * （チャットのメッセージ編集、#1010）。キー操作は
@@ -55,6 +63,33 @@ export function ChatMessageEditor({
         onSubmitShortcut={onConfirm}
         submitDisabled={empty}
       />
+      {attachments.length > 0 && (
+        <ul aria-label="この発言の添付" className="flex flex-wrap gap-2">
+          {attachments.map((item) => (
+            <li
+              key={item.id}
+              className="flex max-w-full items-center gap-2 rounded-md border border-border bg-card px-2 py-1 text-xs text-foreground"
+            >
+              <span className="min-w-0 truncate" title={item.name}>
+                {item.name}
+              </span>
+              <span className="shrink-0 text-muted-foreground" data-numeric>
+                {item.sizeLabel}
+              </span>
+              {onRemoveAttachment !== undefined && (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  aria-label={`${item.name} を外す`}
+                  onClick={() => onRemoveAttachment(item.id)}
+                >
+                  <X className="size-3.5" aria-hidden />
+                </Button>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
       <div className="flex items-center gap-2">
         <Button size="sm" variant="primary" disabled={empty} onClick={onConfirm}>
           確定

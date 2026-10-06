@@ -2,12 +2,13 @@ import { stat } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { createMemoryStores, fetchAttachmentCopy } from '@alteroid/core';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { makeTempDir } from '../../../vitest.tmpdir.js';
 
 import {
   DEFAULT_ATTACHMENT_PRUNE_EVERY_MINUTES,
+  MAX_ATTACHMENT_PRUNE_INTERVAL_MS,
   readAttachmentPruneConfig,
   startAttachmentPruning,
 } from './attachment-prune.js';
@@ -136,5 +137,53 @@ describe('添付ファイルの定期掃除（#3111）', () => {
     } finally {
       pruner.stop();
     }
+  });
+});
+
+/**
+ * `ALTEROID_ATTACHMENT_PRUNE_EVERY` に大きな分数を置くと、`setTimeout` が 2^31-1 ms を超える遅延を
+ * 1ms に倒し、掃除が休みなく回る（#3539。#3534 / #3535 の archive-folder と同じ穴）。
+ * 実時間は待たない: `setTimeout` を差し替え、渡された遅延だけを記録する。
+ */
+describe('添付の掃除の周期は setTimeout の範囲に収まる（#3539）', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  const collectDelays = async (options: {
+    everyMinutes: number;
+    intervalMs?: number;
+  }): Promise<number[]> => {
+    const delays: number[] = [];
+    vi.spyOn(globalThis, 'setTimeout').mockImplementation(((_fn: unknown, delay?: number) => {
+      delays.push(delay ?? 0);
+      return {
+        unref() {},
+        ref() {},
+        hasRef: () => false,
+        refresh() {},
+        [Symbol.toPrimitive]: () => 0,
+      };
+    }) as unknown as typeof setTimeout);
+    const pruner = startAttachmentPruning({ stores: createMemoryStores(), ...options });
+    // 起動直後の1回が終わると、次の回のタイマーが仕込まれる。
+    await pruner.refresh();
+    for (let i = 0; i < 20; i += 1) await new Promise<void>((resolve) => setImmediate(resolve));
+    pruner.stop();
+    return delays;
+  };
+
+  it('40000 分（約27.8日）でも、仕込む遅延は 2^31-1 ms 以下', async () => {
+    const config = readAttachmentPruneConfig({ ALTEROID_ATTACHMENT_PRUNE_EVERY: '40000' });
+    expect(config.everyMinutes).toBe(40000);
+    const delays = await collectDelays({ everyMinutes: 40000 });
+    expect(delays.length).toBeGreaterThan(0);
+    expect(Math.max(...delays)).toBeLessThanOrEqual(2_147_483_647);
+  });
+
+  it('既定の60分は頭打ちに掛からず、そのまま 3_600_000 ms', async () => {
+    const delays = await collectDelays({ everyMinutes: DEFAULT_ATTACHMENT_PRUNE_EVERY_MINUTES });
+    expect(delays).toEqual([3_600_000]);
+    expect(MAX_ATTACHMENT_PRUNE_INTERVAL_MS).toBe(2_147_483_647);
   });
 });

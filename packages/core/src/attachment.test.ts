@@ -138,6 +138,12 @@ describe('添付: ファイル名', () => {
     expect(normalizeAttachmentName('日本語\u00e9.pdf')).toBe('日本語\u00e9.pdf');
   });
 
+  it('normalizeAttachmentName は冪等である: 255 単位で切った結果が空白で終わっても、もう一度通すと名前が変わらない（#3524）', () => {
+    const once = normalizeAttachmentName(`${'a'.repeat(254)} b`);
+    expect(normalizeAttachmentName(once)).toBe(once);
+    expect(once).toBe('a'.repeat(254));
+  });
+
   it('ディスク名: 200 バイトまでは触らず、超えたら拡張子を残してコードポイントの途中で切らずに丸める（#3324）', () => {
     expect(attachmentDiskName('日本語.pdf')).toBe('日本語.pdf');
     const long = attachmentDiskName(`${'あ'.repeat(100)}.pdf`);
@@ -165,5 +171,29 @@ describe('添付: インメモリ実装の契約', () => {
     await verifyAttachmentStoreContract(createMemoryStores().attachments, {
       createStore: (options) => new MemoryAttachmentStore(options),
     });
+  });
+});
+
+describe('添付: インメモリ実装は期限（expiresAt）を過ぎたものを読ませない（#3522）', () => {
+  const PNG_BYTES = Uint8Array.from([...PNG, 7]);
+  const DAY = 86_400_000;
+
+  it('getMeta / get は、prune が走る前でも「無い」と答える', async () => {
+    let now = new Date('2026-01-01T00:00:00Z');
+    const store = new MemoryAttachmentStore({ now: () => now });
+    const meta = await store.put({ name: 'a.png', mediaType: 'image/png', bytes: PNG_BYTES });
+    now = new Date(Date.parse(meta.expiresAt) + 1000);
+    expect(await store.getMeta(meta.id)).toBeUndefined();
+    expect(await store.get(meta.id)).toBeUndefined();
+  });
+
+  it('bind は missing にする（結んだ直後の prune で発言の添付が黙って消えるのを避ける）', async () => {
+    let now = new Date('2026-01-01T00:00:00Z');
+    const store = new MemoryAttachmentStore({ now: () => now });
+    const meta = await store.put({ name: 'a.png', mediaType: 'image/png', bytes: PNG_BYTES });
+    now = new Date(Date.parse(meta.expiresAt) + DAY);
+    const result = await store.bind([meta.id], 'conv-1');
+    expect(result.bound).toEqual([]);
+    expect(result.missing).toEqual([meta.id]);
   });
 });
