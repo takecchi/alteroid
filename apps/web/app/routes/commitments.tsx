@@ -1,7 +1,7 @@
 import { WorkTabs } from '~/components/group-tabs';
 import { LoadError } from '~/components/load-error';
 import { AlertTriangle } from 'lucide-react';
-import { Fragment, useCallback, useEffect, useId, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useId, useState } from 'react';
 import { Tabs } from 'radix-ui';
 import { Link, useBlocker } from 'react-router';
 
@@ -991,8 +991,6 @@ function CommitmentBodyEditor({
 }) {
   const editCommitment = useEditCommitment();
   const [draft, setDraft] = useState<string | undefined>(undefined);
-  /** いまの下書き。送った値と成功時の値を突き合わせるために持つ（`.then` 内の `draft` は送った時点のもの）。 */
-  const latestDraft = useRef<string | undefined>(undefined);
   const [tab, setTab] = useState<string>('preview');
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<unknown>(undefined);
@@ -1017,15 +1015,10 @@ function CommitmentBodyEditor({
     if (draft === undefined || draft.trim() === '') return;
     setBusy(true);
     setFailure(undefined);
-    const sent = draft;
-    editCommitment(commitment.id, sent)
+    editCommitment(commitment.id, draft)
       // 成功したら編集モードを畳む。一覧は `useEditCommitment` の中で
       // 取り直されるので、この行の `commitment` はすぐ新しい本文へ差し替わる。
-      // ただし保存中に追記があったら畳まない（追記が消える）。追記は下書きに残り、
-      // 新しい本文との差分として未保存のまま見える。
-      .then(() => {
-        if (latestDraft.current === sent) onCancel();
-      })
+      .then(onCancel)
       .catch(setFailure)
       .finally(() => setBusy(false));
   }
@@ -1079,10 +1072,7 @@ function CommitmentBodyEditor({
             // `keyCode === 229`）を付けていない。送信は保存ボタン・Cmd/Ctrl+Enter（共有の
             // `Textarea` の `onSubmitShortcut`。#3242）・Cmd/Ctrl+S で、どれも Enter 単体の確定と衝突しない
             // （`memory-detail.tsx` と同じ設計）。
-            onChange={(event) => {
-              latestDraft.current = event.target.value;
-              setDraft(event.target.value);
-            }}
+            onChange={(event) => setDraft(event.target.value)}
             onKeyDown={(event) => {
               if ((event.metaKey || event.ctrlKey) && event.key === 's') {
                 event.preventDefault();

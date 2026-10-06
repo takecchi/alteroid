@@ -110,14 +110,7 @@ function MemoryDetailBody({ slug }: { slug: string }) {
   const [tab, setTab] = useState<MarkdownEditorMode | undefined>(undefined);
   const defaultTab: MarkdownEditorMode = missing || loaded.trim() === '' ? 'edit' : 'preview';
 
-  /**
-   * いまの下書き。保存の応答が返った時点の値と、送った値を突き合わせるために持つ
-   * （`.then` の中の `draft` は送った時点のもので、保存中の追記は見えない）。
-   */
-  const latestDraft = useRef<string | undefined>(undefined);
-
   function edit(next: string) {
-    latestDraft.current = next;
     // 書き始めた瞬間に、いま読んでいる版を前提として控える。
     if (draft === undefined) {
       const fetched = data === undefined ? null : data.version;
@@ -135,22 +128,14 @@ function MemoryDetailBody({ slug }: { slug: string }) {
     if (draft === undefined) return;
     setBusy(true);
     setFailure(undefined);
-    const sent = draft;
-    saveMemory(slug, sent, ifMatch)
+    saveMemory(slug, draft, ifMatch)
       .then(({ document, version }) => {
         setSavedAt(document.updatedAt);
         setLastSaved({ replaces: data === undefined ? null : data.version, version });
+        // 保存できたら下書きを畳んで、またサーバの値に追従させる。
+        setDraft(undefined);
+        setBaseVersion(undefined);
         setConflict(undefined);
-        if (latestDraft.current === sent) {
-          // 保存できたら下書きを畳んで、またサーバの値に追従させる。
-          latestDraft.current = undefined;
-          setDraft(undefined);
-          setBaseVersion(undefined);
-        } else {
-          // 保存中に追記があった。追記は消さず、次の保存の基準だけ今回保存した版へ進める
-          // （古い版のままだと次の保存が偽の 409 になる）。
-          setBaseVersion(version);
-        }
       })
       .catch((caught: unknown) => {
         if (caught instanceof MemoryConflictError) setConflict(caught);
@@ -161,7 +146,6 @@ function MemoryDetailBody({ slug }: { slug: string }) {
 
   /** 最新を読み直す＝自分の下書きを捨てて、いまの版に追従する。 */
   function discardDraft() {
-    latestDraft.current = undefined;
     setDraft(undefined);
     setBaseVersion(undefined);
     setConflict(undefined);

@@ -1,6 +1,5 @@
 import { ScheduleTabs } from '~/components/group-tabs';
 import { LoadError } from '~/components/load-error';
-import { useLatest } from '~/lib/use-latest';
 import { AlertTriangle } from 'lucide-react';
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { useBlocker } from 'react-router';
@@ -793,7 +792,6 @@ function ScheduleForm({
   const [done, setDone] = useState<{ kind: string; replaced: boolean } | undefined>(undefined);
   const [failure, setFailure] = useState<unknown>(undefined);
   const [confirming, setConfirming] = useState(false);
-  const latest = useLatest({ kind, request });
 
   const ready = kind.trim() !== '' && request.trim() !== '';
   const replacing = existingKinds.has(kind.trim());
@@ -814,8 +812,6 @@ function ScheduleForm({
   }
 
   function send(replaced: boolean) {
-    const sentKind = kind;
-    const sentRequest = request;
     setBusy(true);
     setFailure(undefined);
     setDone(undefined);
@@ -823,11 +819,8 @@ function ScheduleForm({
     createSchedule({ kind: kind.trim(), request: request.trim(), spec: specDraftToSpec(specDraft) })
       .then(() => {
         setDone({ kind: kind.trim(), replaced });
-        // 送っている間に打ち足していたら、入力は空にしない（打った分が消える）。
-        if (latest.current.kind === sentKind && latest.current.request === sentRequest) {
-          setRequest('');
-          setKind('');
-        }
+        setRequest('');
+        setKind('');
       })
       .catch(setFailure)
       .finally(() => setBusy(false));
@@ -899,7 +892,6 @@ function EventForm({ onDirtyChange }: { onDirtyChange: (id: string, dirty: boole
   const [busy, setBusy] = useState(false);
   const [sent, setSent] = useState<string | undefined>(undefined);
   const [failure, setFailure] = useState<unknown>(undefined);
-  const latestPayload = useLatest(payload);
   useReportDirty(EVENT_FORM_DIRTY_ID, source !== '' || payload !== '', onDirtyChange);
 
   function submit() {
@@ -917,12 +909,10 @@ function EventForm({ onDirtyChange }: { onDirtyChange: (id: string, dirty: boole
       parsed = payload;
     }
 
-    const sentPayload = payload;
     postEvent(source, parsed)
       .then((result) => {
         setSent(result.id);
-        // 送っている間に打ち足していたら、欄は空にしない（打った分が消える）。
-        if (latestPayload.current === sentPayload) setPayload('');
+        setPayload('');
       })
       .catch(setFailure)
       .finally(() => setBusy(false));

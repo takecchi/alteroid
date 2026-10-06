@@ -1,6 +1,5 @@
 import { SettingsTabs } from '~/components/group-tabs';
 import { settingsDocumentTitle } from '~/lib/nav';
-import { useLatest } from '~/lib/use-latest';
 import { useEffect, useRef, useState } from 'react';
 import { useBlocker } from 'react-router';
 
@@ -416,11 +415,8 @@ interface EditorState {
   existing: boolean;
   script: string;
   scope: ProfileScope;
-  /**
-   * 保存済みの本文と撒く先（変更が無いかの判定用）。新規なら無い。保存中に追記があって編集欄を
-   * 残したときは、いま保存した値へ進める。
-   */
-  original?: Pick<ProfileEntryView, 'script' | 'scope'>;
+  /** 編集を始めたときの行（変更が無いかの判定用）。新規なら無い。 */
+  original?: ProfileEntryView;
 }
 
 /**
@@ -462,7 +458,6 @@ function ProfileEditor({
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<unknown>(undefined);
-  const latestEditor = useLatest(editor);
 
   const unchanged =
     editor?.original !== undefined &&
@@ -484,22 +479,7 @@ function ProfileEditor({
       // **閉じるのは、保存を始めた編集欄がまだ開いているときだけ。**
       if (isCurrent()) {
         setConfirming(false);
-        const now = latestEditor.current;
-        if (
-          now === null ||
-          (now.name === state.name && now.script === state.script && now.scope === state.scope)
-        ) {
-          setEditor(null);
-        } else if (now.name === state.name) {
-          // 保存中に打ち足していた。閉じずに残し、保存済みの基準だけ今回の値へ進める
-          // （打ち足した分は未保存の差分として残る）。
-          setEditor({
-            ...now,
-            existing: true,
-            original: { script: state.script, scope: state.scope },
-          });
-        }
-        // 名前を打ち替えていたら、別の行の書きかけなので何も触らない。
+        setEditor(null);
       }
     } catch (caught) {
       setFailure(caught);
