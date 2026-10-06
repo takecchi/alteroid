@@ -292,6 +292,11 @@ export interface TuiApi {
     unreadable: UnreadableApproval[];
   }>;
   /**
+   * `GET /approvals/{id}`。承認を id で1件（回答済み・取り下げ済みも）。`null` は 404（無い）。
+   * 読めない行（409）・5xx は `ApiError`（「無い」と言わない）。
+   */
+  readApproval(id: string): Promise<ApprovalRow | null>;
+  /**
    * `GET /approvals/answered-dates`。決着のあった日と件数を新しい日が上の順に。`beforeDate` はその日**より古い**日から
    * （前の頁の最後の日。封筒は無く、続きが在るかは `limit` 件ちょうど返ったかで判る）。
    */
@@ -321,6 +326,13 @@ export interface TuiApi {
 
 /** 人間へそのまま見せてよい文言を持つ失敗。 */
 export class ApiError extends Error {}
+
+/**
+ * 発言をサーバが受け取らなかった失敗（繋がらない・非 ok の応答）。`open` などのイベントが 1 つも来ないうちに
+ * これで終わった送信は、受け取られていないと言えるので、呼び手は文を入力欄へ戻してよい。
+ * 2xx のあとで切れた失敗（受け取られたか分からない）はこれにしない（#3304 の取り直しの対象）。
+ */
+export class NotDeliveredError extends ApiError {}
 
 const CHAT_EVENT_NAMES = new Set([
   'open',
@@ -365,7 +377,9 @@ export function createTuiApi(target: Target): TuiApi {
       });
     } catch (error) {
       if (signal.aborted) return;
-      throw new ApiError(`${what}: デーモンに繋がりません（${redactError(String(error))}）`);
+      throw new NotDeliveredError(
+        `${what}: デーモンに繋がりません（${redactError(String(error))}）`,
+      );
     }
     if (!response.ok || !response.body) {
       // 添付が無い・期限切れ（400 の `code`）は、呼び手が上げ直せるよう型で渡す（#3246）。
@@ -378,7 +392,7 @@ export function createTuiApi(target: Target): TuiApi {
         );
         if (missing !== null) throw new AttachmentMissingError(redactError(missing));
       }
-      throw await failure(what, response);
+      throw new NotDeliveredError((await failure(what, response)).message);
     }
     try {
       for await (const event of readSSE(response.body)) yield event;
@@ -588,6 +602,13 @@ export function createTuiApi(target: Target): TuiApi {
         approvals: body.approvals as ApprovalRow[],
         unreadable: (body.unreadable ?? []) as UnreadableApproval[],
       };
+    },
+
+    async readApproval(id) {
+      const response = await client.approvals[':id'].$get({ param: { id } });
+      if (response.status === 404) return null;
+      if (!response.ok) throw await failure('承認を読めませんでした', response);
+      return (await response.json()).approval as ApprovalRow;
     },
 
     async answerApproval(id, body) {

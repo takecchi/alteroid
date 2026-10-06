@@ -110,13 +110,18 @@ function formatCreatedAtWithElapsed(createdAt: MemorySummary['createdAt'], now: 
 export async function memoryListCommand(now: number = Date.now()): Promise<void> {
   const conn = await connect('read');
   if (conn === null) return;
-  const { client } = conn;
+  const { client, target } = conn;
   const response = await client.memory.$get();
   if (!response.ok) {
-    stdout.write(
-      `${await withErrorReason(`記憶の一覧を読めませんでした（HTTP ${String(response.status)}）`, response)}\n`,
+    // 失敗は例外で上へ通す（＝終了コードが 0 でなくなる。#3452。`readDoc` と同じ）。
+    const described = describeAuthFailure(response.status, target);
+    if (described !== null) throw new Error(described);
+    throw new Error(
+      await withErrorReason(
+        `記憶の一覧を読めませんでした（HTTP ${String(response.status)}）`,
+        response,
+      ),
     );
-    return;
   }
   const { documents } = (await response.json()) as { documents: MemorySummary[] };
   if (documents.length === 0) {

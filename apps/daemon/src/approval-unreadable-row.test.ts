@@ -139,6 +139,15 @@ async function expectHttpSaysUnreadable(stores: Stores): Promise<void> {
 
   const trace = await app.request(`/approvals/${BAD_APPROVAL_RAW.id}/trace`);
   expect(trace.status).toBe(409);
+
+  // `GET /approvals/:id`（#3312）: 読めない行は「無い」（404）ではなく 409。本当に無い id は 404、読める行は 200。
+  const byId = await app.request(`/approvals/${BAD_APPROVAL_RAW.id}`);
+  expect(byId.status).toBe(409);
+  const byIdBody = (await byId.json()) as { error: string };
+  expect(byIdBody.error).toContain(BAD_APPROVAL_RAW.id);
+  expect(byIdBody.error).not.toContain(BAD_APPROVAL_RAW.question);
+  expect((await app.request('/approvals/ap-nowhere')).status).toBe(404);
+  expect((await app.request(`/approvals/${GOOD_APPROVAL.id}`)).status).toBe(200);
 }
 
 describe('JobStore.getApproval() / updateApproval() — 読めない承認の行の扱い', () => {

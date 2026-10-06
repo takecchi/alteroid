@@ -354,7 +354,9 @@ export function renderConversationDetail(
  * **進めるのは、いま読み出した最新の発言まで**——読み出した後に届いた発言は未読のまま残る。
  */
 export async function conversationsReadCommand(id: string): Promise<void> {
-  const conn = await connect();
+  // 状態を変える口（既読の位置を進める）なので、未ログインの遠隔先は例外で終える
+  // （#2456 の書き込み系と同じ。#3447）。
+  const conn = await connect('write');
   if (conn === null) return;
   const { client, target } = conn;
   const detail = await client.conversations[':id'].$get({ param: { id }, query: {} });
@@ -447,9 +449,12 @@ export async function markConversationReadAfterReply(
  * 繋ぎ先を決めて型付きクライアントを作る。**繋げない理由はそのまま出す。**
  * `memory.ts` の同名関数と同じ理由（例外にすると人間向けの案内が例外の見た目になる）。
  */
-async function connect(): Promise<{ client: DaemonClient; target: Target } | null> {
+async function connect(
+  access: 'read' | 'write' = 'read',
+): Promise<{ client: DaemonClient; target: Target } | null> {
   const target = await resolveTarget();
   if (target.note !== null) {
+    if (access === 'write') throw new Error(target.note);
     stdout.write(`${target.note}\n`);
     return null;
   }

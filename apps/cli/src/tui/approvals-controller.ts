@@ -6,7 +6,7 @@
  * - 一覧は未回答のみ、`order=asc`（古い順 — 番号を振って使う前提の並びを実装によらず揃える）。
  * - 設問が在れば `{ selections, answer? }`、無ければ `{ answer }`（自由文）。
  * - 400 などの失敗は、デーモンの理由（本文の `error`）をそのまま見せる。黙って閉じない。
- * - 詳細は一覧に無くても開ける（回答済み・取り下げ済みは `pending=false` で探す）。
+ * - 詳細は一覧に無くても開ける（回答済み・取り下げ済みは `GET /approvals/{id}` で1件引く）。
  *
  * 取り直し: ヘッダの `HeaderFeed.onEvent`（journal の SSE）を合図にまとめて取り直す。
  * 詳細が開いていれば同じ 1 回の読みで詳細も更新する（`pending=true` に無いときだけ全件を読む）。
@@ -255,11 +255,9 @@ export class ApprovalsController {
     const id = detail.id;
     let found: ApprovalRow | undefined = pending.approvals.find((a) => a.id === id);
     if (found === undefined) {
-      // 未回答の一覧に無い: 回答済み・取り下げ済みか、そもそも無いか。
+      // 未回答の一覧に無い: 回答済み・取り下げ済みか、そもそも無いか。全件は読まず、id で1件引く。
       try {
-        found = (await this.api.listApprovals({ pending: false })).approvals.find(
-          (a) => a.id === id,
-        );
+        found = (await this.api.readApproval(id)) ?? undefined;
       } catch (error) {
         if (gen !== this.gen) return;
         this.markDetailError(messageOf(error));

@@ -17,9 +17,17 @@ import type { KeyboardEvent } from 'react';
  * 側からも使えるように置いたもので、判断そのものは変えていない。
  */
 export function isImeConfirmEnter(event: KeyboardEvent): boolean {
-  return (
-    event.key === 'Enter' && (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229)
-  );
+  return event.key === 'Enter' && isImeComposing(event);
+}
+
+/**
+ * そのキー操作が **IME の変換の最中に配られたもの** か（Enter に限らない）。真のとき、画面の
+ * 側のキー（Escape で閉じる・Enter で送る）として読んではいけない。Escape は IME が変換の
+ * 取り消しに使うので、読むと変換を取り消すつもりで押したキーが編集欄ごと閉じる（#3394）。
+ * 見方は `isImeConfirmEnter` と同じ（`isComposing` と `keyCode === 229`）。
+ */
+export function isImeComposing(event: KeyboardEvent): boolean {
+  return event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229;
 }
 
 /** ⌘ / Ctrl + Enter（送る・確定する。どちらの修飾キーでも）。IME の確定の Enter は含まない。 */

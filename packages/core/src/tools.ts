@@ -83,6 +83,7 @@ import {
 } from './dropped-record.js';
 import { collapseErrorCause } from './error-cause.js';
 import { renderApprovalTrace, traceApproval } from './approval-trace.js';
+import { stripNulDeep } from './nul-guard.js';
 import { validatePermissionRequest } from './permission-rule.js';
 import { encodeRunnerCursor, resolveRunnerCursor } from './runner-cursor.js';
 import { encodeTokenCursor, resolveTokenCursor } from './token-cursor.js';
@@ -163,8 +164,8 @@ import {
   resolveMemoryDocKind,
   scanMemorySections,
 } from './memory.js';
-import type { MemoryPart, MemorySection, MemorySectionLookup } from './memory.js';
 import { stripNul } from './nul-guard.js';
+import type { MemoryPart, MemorySection, MemorySectionLookup } from './memory.js';
 import { redactProfileFailure } from './profile.js';
 import { renderAccountList } from './account-list.js';
 import { renderPermissionGrantList } from './permission-grant-list.js';
@@ -2364,8 +2365,11 @@ function describeStringLengthViolation(
 ): string | null {
   if (value === undefined) return null;
   const { min, max } = range;
-  const withinRange =
-    (min === undefined || value.length >= min) && (max === undefined || value.length <= max);
+  // **NUL を落としてから数える**（issue #3435）。ストアや日誌は NUL を落として残すので、
+  // NUL を落とす前の値で数えると、NUL だけの理由・本文が「1文字以上」を通って空として残る。
+  // 値そのものは書き換えない（数えるだけ）。min も max も同じ長さで見る。
+  const length = stripNul(value).length;
+  const withinRange = (min === undefined || length >= min) && (max === undefined || length <= max);
   if (withinRange) return null;
   return `${field} は使えない（${formatStringLengthJa(range)}のみ）。`;
 }
@@ -7092,7 +7096,12 @@ export function createCloneTools(context: ToolContext) {
           .describe('この規則が拒むべき具体的なコマンド例（1件以上、1件も規則に一致しないこと）'),
         reason: z.string().describe('なぜこの許可が要るか。人間が承認画面で読む理由文'),
       },
-      async ({ rule, allows, denies, reason }) => {
+      async (args) => {
+        // **検算は、承認の行に残る値と同じもので行う（#3386）。** 承認の行は `putApproval` の入口で
+        // NUL を落として残す（`stripNulDeep`）ので、落とす前の値で検算すると、通ったはずの要求が
+        // 残った値では自己矛盾する（denies の例が規則に一致する・規則が `Bash()` になる）。
+        // 質問文・`permissionRequest`・検算の3つが同じ値を見るよう、入口で1度だけ落とす。
+        const { rule, allows, denies, reason } = stripNulDeep(args);
         const validation = validatePermissionRequest({ rule, allows, denies });
         if (!validation.ok) {
           return text(
@@ -8547,7 +8556,10 @@ export function createCloneTools(context: ToolContext) {
       async ({ body, source }) => {
         // **issue #1752（#1651/#1689/#1720 の揃え漏れ。非数値の欄。issue 本文の
         // 再現テスト対象）。**
-        const bodyError = describeStringLengthViolation('body', body, { min: 1 });
+        // **NUL を落とした後の値で検める**（Issue #3388）。台帳の入口は本文から NUL を落として
+        // 残す（`nul-guard.ts`）ので、生の値で数えると NUL だけの本文が通り、空の本文になる。
+        // 落とした後に本文が残るなら、今までどおり通す（保存するのは落とす前の値のまま）。
+        const bodyError = describeStringLengthViolation('body', stripNul(body), { min: 1 });
         if (bodyError !== null) return text(bodyError);
         const entry = {
           id: randomUUID(),
@@ -8836,7 +8848,10 @@ export function createCloneTools(context: ToolContext) {
       },
       async ({ id, body }) => {
         // **issue #1752（#1651/#1689/#1720 の揃え漏れ。非数値の欄）。**
-        const bodyError = describeStringLengthViolation('body', body, { min: 1 });
+        // **NUL を落とした後の値で検める**（Issue #3388）。台帳の入口は本文から NUL を落として
+        // 残す（`nul-guard.ts`）ので、生の値で数えると NUL だけの本文が通り、空の本文になる。
+        // 落とした後に本文が残るなら、今までどおり通す（保存するのは落とす前の値のまま）。
+        const bodyError = describeStringLengthViolation('body', stripNul(body), { min: 1 });
         if (bodyError !== null) return text(bodyError);
         // **読めない行は本文の書き直しを通さず「名乗る」だけにとどめる**
         // （issue #2148 の決定 (2)(3)）。読める本文が無い以上、書き直した後に

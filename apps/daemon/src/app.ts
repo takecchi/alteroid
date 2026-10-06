@@ -150,7 +150,6 @@ import {
   type AuthAccount,
   type AuthService,
   NulNotAllowedError,
-  stripNul,
   InvalidCredentialNameError,
   type TokenPolicyChange,
   type TokenPoolChange,
@@ -162,6 +161,7 @@ import {
   AttachmentRejectedError,
   nonBlankString,
   readAttachmentLimits,
+  stripNul,
   type AttachmentLimits,
 } from '@alteroid/core';
 
@@ -184,6 +184,7 @@ import {
   accessAccountResponseSchema,
   accessListResponseSchema,
   approvalsAnswerResponseSchema,
+  approvalByIdResponseSchema,
   approvalsAnsweredDatesResponseSchema,
   approvalsResponseSchema,
   approvalTraceResponseSchema,
@@ -274,7 +275,7 @@ import {
   usageResponseSchema,
 } from './openapi.js';
 import { InvalidCursorError, decodeCursor, encodeCursor } from './cursor.js';
-import { answeredDates, approvalsSettledOn } from './approvals-answered.js';
+import { answeredDates, approvalSettledDate, approvalsSettledOn } from './approvals-answered.js';
 import { createTopologyActivityTracker, type WorkerToolBus } from './topology-activity.js';
 import {
   createStorageHealthTracker,
@@ -655,16 +656,29 @@ const answerFields = {
  */
 const hasAnswerOrSelections = (body: { answer?: unknown; selections?: unknown }) =>
   body.answer !== undefined || body.selections !== undefined;
+/**
+ * **`selections` を伴わない `answer` は、NUL を落として trim した後に1文字以上**（Issue #3384）。
+ * 空白・全角空白・改行とタブ・NUL だけの回答は空の回答として記録されてしまう（NUL は承認の入口で
+ * 落ちて空になる）。値は書き換えない（検査だけ。`nonBlankString` と同じ作法）。
+ * `selections` と併用する `answer` は補足で、空白だけの補足は「補足なし」として
+ * `describeSelectionsViolation` が扱う（issue #2582。「何も答えていない」の文で断る）ので、ここでは見ない。
+ */
+const answerIsNotBlank = (body: { answer?: string; selections?: unknown }) =>
+  body.selections !== undefined ||
+  body.answer === undefined ||
+  stripNul(body.answer).trim().length > 0;
 const answerBody = z
   .object(answerFields)
-  .refine(hasAnswerOrSelections, { message: 'answer も selections も無い' });
+  .refine(hasAnswerOrSelections, { message: 'answer も selections も無い' })
+  .refine(answerIsNotBlank, { message: 'answer が空白だけ', path: ['answer'] });
 /** まとめて答える（溜まった保留を人間が一度に片付けるための口）。 */
 const answersBody = z.object({
   answers: z
     .array(
       z
         .object({ id: z.string().min(1), ...answerFields })
-        .refine(hasAnswerOrSelections, { message: 'answer も selections も無い' }),
+        .refine(hasAnswerOrSelections, { message: 'answer も selections も無い' })
+        .refine(answerIsNotBlank, { message: 'answer が空白だけ', path: ['answer'] }),
     )
     .min(1)
     .max(200),
@@ -1028,7 +1042,11 @@ const scheduleBody = z.object({
  * 無いと、「クローンは自分で積めるのに人間は積めない」という差が残る。
  */
 const commitmentBody = z.object({
-  body: z.string().min(1),
+  /** NUL を落とした後に1文字以上（Issue #3388。台帳の入口は NUL を落として残すので、NUL だけは空の本文になる）。 */
+  body: z
+    .string()
+    .min(1)
+    .refine((value) => stripNul(value).length > 0),
   /** どこから来たか（会話 id・issue 番号など。分かるときだけ）。 */
   source: z.string().min(1).optional(),
 });
@@ -1046,7 +1064,12 @@ const commitmentCloseBody = z.object({ reason: nonBlankString });
  * 編集後の本文。**空を許さない**（`commitmentBody.body` と同じ制約——空文字を
  * 許すと「本文の無い依頼」を人間が自分で作れてしまう）。
  */
-const commitmentEditBody = z.object({ body: z.string().min(1) });
+const commitmentEditBody = z.object({
+  body: z
+    .string()
+    .min(1)
+    .refine((value) => stripNul(value).length > 0),
+});
 
 /**
  * 片付けたものも返すか。
@@ -5409,10 +5432,9 @@ export function createApp(deps: AppDeps) {
     /**
      * 決着のあった日と件数（`GET /approvals?answeredOn=` で日ごとに開くための目次）。
      *
-     * **`/approvals/:id/...` に食われない**: 既存の `/approvals/` 配下の GET は `/:id/trace`
-     * （3区間）だけで、2区間のこの経路とは当たらない。`GET /approvals/:id` は無い。
-     * 将来 `GET /approvals/:id` を足すなら、**この経路より後ろに登録しないこと**
-     * （`answered-dates` が id として読まれる）。
+     * **`GET /approvals/:id`（下）に食われない**: `/approvals/:id` は2区間で、この経路と
+     * 同じ形をしている。**`GET /approvals/:id` はこの経路より後ろに登録すること**
+     * （先に登録すると `answered-dates` が id として読まれる。`approvals-answered.test.ts` が固定する）。
      */
     .get(
       '/approvals/answered-dates',
@@ -5451,6 +5473,61 @@ export function createApp(deps: AppDeps) {
             ...(beforeDate === undefined ? {} : { beforeDate }),
           }),
         });
+      },
+    )
+
+    /**
+     * 承認を id で1件返し、決着した日を載せる。
+     *
+     * **`GET /approvals/answered-dates` より後ろに登録している**（上の注意書き）。`POST` の
+     * `/approvals/answer` / `/approvals/:id/answer` とは、メソッドが違うので当たらない。
+     *
+     * `settledOn` は `GET /approvals?answeredOn=` の日と**同じ関数**（`approvalSettledDate`）で
+     * 決める。未決着は `null`。在るが読めない行は、`/approvals/:id/trace` と同じく 409
+     * （「無い」と言わない）。
+     */
+    .get(
+      '/approvals/:id',
+      describeRoute({
+        tags: ['approvals'],
+        summary: '承認を id で1件読み、決着した日を返す',
+        description:
+          '承認1件と、決着した日（`settledOn`。デーモンの `localDate()`・日報と同じ区切り。決着の日時は ' +
+          '`answeredAt`、無ければ `withdrawnAt`。`GET /approvals?answeredOn=` と同じ意味）を返す。' +
+          '未回答・未取り下げなら `settledOn` は `null`。回答済みの詳細（`/approvals/answered/<日>/<id>`）へ' +
+          '移るために、一覧を引かずに日を知る口。',
+        responses: {
+          200: {
+            description: '承認と決着した日。',
+            content: { 'application/json': { schema: resolver(approvalByIdResponseSchema) } },
+          },
+          404: {
+            description: '該当する承認待ちが無い。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+          409: {
+            description:
+              '承認待ちの行は在るが読めない形で入っている（版ずれ・手編集）。消されたのではない。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+        },
+      }),
+      async (c) => {
+        let approval: Awaited<ReturnType<typeof stores.jobs.getApproval>>;
+        try {
+          approval = await stores.jobs.getApproval(c.req.param('id'));
+        } catch (error) {
+          if (error instanceof UnreadableApprovalError)
+            return c.json({ error: error.message }, 409);
+          throw error;
+        }
+        if (approval === null) return c.json({ error: 'not found' as const }, 404);
+        return c.json(
+          approvalByIdResponseSchema.parse({
+            approval: { ...approval, updatedAt: approvalUpdatedAt(approval) },
+            settledOn: approvalSettledDate(approval) ?? null,
+          }),
+        );
       },
     )
 
