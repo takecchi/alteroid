@@ -453,6 +453,52 @@ describe('POST /chat の clientMessageId', () => {
     });
   });
 
+  describe('同時の編集の重複は、supersedes の検証より前に1本へ絞る（Issue #3254）', () => {
+    it('同じ id・同じ中身の編集が同時に2本届き、1本目が先に日誌へ載っても、2本目は 400 でなく重複の 200', async () => {
+      const { app, stores, inputs } = setupApp();
+      await sendAndRead(app, { text: '最初', conversationId: 'conv-e1', clientMessageId: 'orig' });
+      const original = (await inboundOf(stores))[0];
+      expect(original).toBeDefined();
+      const turnsBefore = inputs.count;
+
+      // 2本目の supersedes 検証（journal.get）を、1本目の編集が日誌に載るまで止める。
+      // 2本目が早い重複の確認を抜けたあとに、1本目が日誌へ載る順を作る（実時間の待ちは使わない）。
+      let editAppended: () => void = () => {};
+      const editLanded = new Promise<void>((resolve) => {
+        editAppended = resolve;
+      });
+      const journal = stores.journal;
+      const realAppend = journal.append.bind(journal);
+      journal.append = async (entry) => {
+        const written = await realAppend(entry);
+        if (entry.type === 'exchange' && entry.supersedes !== undefined) editAppended();
+        return written;
+      };
+      const realGet = journal.get.bind(journal);
+      let gets = 0;
+      journal.get = async (id) => {
+        gets += 1;
+        if (gets === 2) await editLanded;
+        return realGet(id);
+      };
+
+      const edit = {
+        text: '直した',
+        conversationId: 'conv-e1',
+        supersedes: original?.id,
+        clientMessageId: 'edit-race',
+      };
+      const [a, b] = await Promise.all([post(app, edit), post(app, edit)]);
+      expect([a.status, b.status]).toEqual([200, 200]);
+      const opens = [events(await a.text()), events(await b.text())].map(
+        (list) => list.find((e) => e.event === 'open')?.data,
+      );
+      expect(opens.filter((open) => open?.duplicate === true)).toHaveLength(1);
+      expect(await inboundOf(stores)).toHaveLength(2);
+      expect(inputs.count).toBe(turnsBefore + 1);
+    });
+  });
+
   describe('同時の重複は、添付の検査より前に1本へ絞る（Issue #3244）', () => {
     const PNG1 = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 9, 8, 7, 6, 5]);
     const PNG2 = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]);
