@@ -1,7 +1,14 @@
 import { BookText } from 'lucide-react';
 import { Link } from 'react-router';
 
-import { ErrorNote, HOME_LINK_CLASS, HomeReportCard, Markdown, Spinner } from '@alteroid/ui';
+import {
+  ErrorNote,
+  HOME_LINK_CLASS,
+  HomeReportCard,
+  HomeTileNote,
+  Markdown,
+  Spinner,
+} from '@alteroid/ui';
 import { useReports } from '@alteroid/swr';
 import { redactBody } from '@alteroid/logic';
 
@@ -19,6 +26,9 @@ import { isUnavailable, UnavailableNote } from './reports';
  * `isUnavailable` / `UnavailableNote` の doc が経緯）。ここは人間が最初に開く面なので、
  * エラー文が「最新の日報」として出ると、塞いだ穴のうち人間に見える側だけが残る。
  * 印の行は本文を Markdown にしない（SDK のエラー文であって、クローンの文章ではない）。
+ *
+ * **取り直しの失敗は、前に読めた本文を残したまま、その場で言う**（issue #3346。進捗のタイルの
+ * #3069 と同じ形）。`data` が無いときだけエラーにする。
  */
 export function LatestReport() {
   const reports = useReports(1);
@@ -35,9 +45,14 @@ export function LatestReport() {
         </Link>
       }
     >
-      {reports.error !== undefined ? (
+      {reports.error !== undefined && reports.data !== undefined && (
+        <HomeTileNote tone="warn">
+          最新の日報を取り直せなかった。下は前に読めたときのもの。
+        </HomeTileNote>
+      )}
+      {reports.error !== undefined && reports.data === undefined ? (
         <ErrorNote error={reports.error} />
-      ) : reports.isLoading ? (
+      ) : reports.data === undefined ? (
         <Spinner />
       ) : latest === undefined ? (
         <p className="text-sm text-muted-foreground">

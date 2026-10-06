@@ -842,6 +842,20 @@ export const STATEMENTS = [
   `alter table attachments add column if not exists uploaded_by text`,
   // 外部イベントへの結び付け先（#3113 段3）。null 可の列を足すだけで、既存行の意味は変わらない。
   `alter table attachments add column if not exists external_event_id text`,
+  // --- 承認待ちの会話での絞り（#3290）-------------------------------------------
+  // `listApprovals({ conversationId })` の `where` 節（`jobs.ts` の `CONVERSATION_ID_EXPR`）が
+  // 引く式の索引。**列ではなく式索引にした**: 承認の書き込みは `putApproval` /
+  // `updateApproval` が jsonb（`approval`）を丸ごと書く1本の経路で、列を足すと2か所で
+  // 派生値を同期する負債が増える（`withdrawn_at` は `answered_at` と対の終端で、
+  // 絞りの主役だったので列にした。会話 id は jsonb の中の値そのもの）。式索引は
+  // **`create index` が既存の全行を読んで索引を作る**ので、埋め戻し（backfill）の
+  // 文は要らず、書き込みの経路にも触れない。`(approval->>'conversationId', created_at)`
+  // の順にしてあるのは、会話で絞った上での `order by created_at` を索引だけで
+  // 返せるため。非 unique なので既存行が何であっても作れず落ちることは無く
+  // （このファイル冒頭の「危ないのは `drop index` と対の `create index`」にも当たらない）、
+  // 2周目以降は本当の no-op。既存行の意味は変わらない。
+  `create index if not exists approvals_conversation_id_idx
+     on approvals ((approval->>'conversationId'), created_at)`,
 ] as const;
 
 /** `ensureOpenManagerBodyIndex` が作る部分 unique 索引の名前（issue #1041）。 */

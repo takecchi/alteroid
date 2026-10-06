@@ -28,6 +28,7 @@ import {
   verifyJournalStoreOrderContract,
   verifyJournalStorePageContract,
   verifyJournalStoreQueryEdgeContract,
+  verifyJournalStoreUnreadableGetContract,
   verifyJournalStoreSearchContract,
   verifyJournalStoreWithContract,
   verifyTranscriptArchiveContract,
@@ -1693,6 +1694,28 @@ describe('FsJournalStore', () => {
   describe('query edge 契約（issue #425）', () => {
     it('types: []=0件／limit: 0=0件／types 未指定=絞らない／指定=その種別だけ／limit:N(N>=1)はN件で切る／同時指定でも0件', async () => {
       await verifyJournalStoreQueryEdgeContract(stores.journal);
+    });
+  });
+
+  /**
+   * `JournalStore.get` の「在るが読めない」の契約（issue #3288）を、**fs 実装**に対して測る。
+   * 読めない行を持てるのは fs・pg だけ（インメモリは `append` が形を断る）——pg は
+   * `packages/storage-pg/src/index.journal-jobs-schedule.test.ts`。
+   */
+  describe('get の「在るが読めない」契約（issue #3288）', () => {
+    it('読めない行の get は UnreadableJournalEntryError／無い id は null／読める行と list は巻き込まれない', async () => {
+      const journalDir = join(root, 'journal');
+      await mkdir(journalDir, { recursive: true });
+      await verifyJournalStoreUnreadableGetContract(stores.journal, async () => {
+        const id = 'unreadable-contract-1';
+        const today = new Date().toISOString().slice(0, 10);
+        await writeFile(
+          join(journalDir, `${today}.jsonl`),
+          `${JSON.stringify({ id, at: `${today}T00:00:00.000Z`, type: 'no-such-type' })}\n`,
+          { flag: 'a' },
+        );
+        return id;
+      });
     });
   });
 

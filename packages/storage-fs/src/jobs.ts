@@ -234,14 +234,22 @@ export class FsJobStore implements JobStore {
     });
   }
 
-  async listApprovals(options: { pendingOnly?: boolean } = {}): Promise<ApprovalList> {
+  async listApprovals(
+    options: { pendingOnly?: boolean; conversationId?: string } = {},
+  ): Promise<ApprovalList> {
     const { approvals, invalidApprovalsRaw } = await this.#read();
     // **未回答かつ未取り下げだけを「保留」とする（#963）。** 取り下げも
     // `answeredAt` と同じく「もう保留ではない」終端の一形態である
     // （`pendingApprovalSchema.withdrawnAt` の doc）。
-    const entries = options.pendingOnly
+    const pending = options.pendingOnly
       ? approvals.filter((a) => a.answeredAt === undefined && a.withdrawnAt === undefined)
       : approvals;
+    // **会話の絞りもストアの側で当てる**（#3290。pg は SQL、インメモリも同じ条件）。
+    // 読めない行（下）は絞らない —— どの会話のものかも分からない。
+    const entries =
+      options.conversationId === undefined
+        ? pending
+        : pending.filter((a) => a.conversationId === options.conversationId);
     // **読めない行は飛ばして消さず、`unreadable` に別欄で返す**（issue #2298）。
     // 読めない行に `answeredAt` / `withdrawnAt` が立っていれば、`pendingOnly` では
     // 「もう保留ではない」側へ寄せて除く（pg が列で絞るのと揃える）。**どちらも読めない

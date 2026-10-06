@@ -680,6 +680,11 @@ const HELP = `/attach <path>       次に送る発言にファイルを添える
                      もう一度打つと、その理由を記録した上で消せる
 /approvals           承認待ち（番号付き）
 /approvals all       回答済み・取り下げ済みも含めて見る
+/approvals answered [limit=<N>] [before=<YYYY-MM-DD>]  決着した日と件数（新しい日が上。既定 14 日）
+                     before= はその日より古い日から（前の頁の最後の日を渡して続きを辿る）
+/approvals answered <YYYY-MM-DD>  その日に決着した承認を決着の新しい順に（取り下げ済みも）。
+                     一覧は問い・答え・理由の抜粋だけ。全文は /approval <id> で読む（日付は
+                     デーモンの時間帯。日報と同じ区切り。番号は振らない——id で引く）
 /answer <番号|id> <回答>  承認待ちに答える（番号は /approvals の並び）
 /answer <番号|id> --select <設問id>=<選択肢id>[,<選択肢id>...] [--other <設問id>=<文>] [補足]
                      設問つきの承認待ちに選んで答える（--select / --other は何度でも書ける。
@@ -1847,6 +1852,67 @@ export async function runSlashCommand(
      * 人間が席に戻ったときに UUID を写す作業をさせないためである。
      */
     case '/approvals': {
+      // **回答済みの見方（#3239。Web の「回答済み」ページと同じ口）。** 既存の `/approvals` と
+      // `/approvals all` の挙動は変えない。**番号は振らず `listed.approvals` も触らない**——
+      // `/answer <番号>` が指す「未回答の一覧」を、答えようのない行で書き換えないため。
+      if (rest[0] === 'answered') {
+        const args = rest.slice(1);
+        const dayArg = args.find((arg) => !/^(limit|before)=/.test(arg));
+        if (dayArg !== undefined) {
+          if (args.length > 1) {
+            stdout.write('使い方: /approvals answered <YYYY-MM-DD>\n');
+            return 'ok';
+          }
+          const response = await client.approvals.$get({ query: { answeredOn: dayArg } });
+          if (!response.ok) {
+            // 日付の形が不正なら 400。デーモンの文言（`answeredOn は YYYY-MM-DD で指定する`）をそのまま出す。
+            stdout.write(
+              `${await withDetail(`${dayArg} に決着した承認を読めませんでした`, response)}\n`,
+            );
+            return 'ok';
+          }
+          const { approvals } = await response.json();
+          if (approvals.length === 0) {
+            stdout.write(`（${dayArg} に決着した承認はありません）\n`);
+            return 'ok';
+          }
+          stdout.write(`${dayArg} に決着した承認 ${approvals.length} 件（決着の新しい順）\n`);
+          for (const approval of approvals) {
+            const withdrawn = approval.withdrawnAt && !approval.answeredAt;
+            const settledAt = approval.answeredAt ?? approval.withdrawnAt ?? '';
+            stdout.write(
+              `  ${settledAt}  ${withdrawn ? '取り下げ済み' : '回答済み'}  ${summarizeText(approval.question)}\n`,
+            );
+            stdout.write(`      id: ${approval.id}\n`);
+            if (withdrawn) {
+              stdout.write(
+                `      取り下げた理由: ${approval.withdrawnReason ? summarizeText(approval.withdrawnReason) : '（理由の記録なし）'}\n`,
+              );
+            } else if (approval.answer) {
+              stdout.write(`      回答: ${summarizeText(approval.answer)}\n`);
+            }
+          }
+          stdout.write(
+            '  全文・設問は /approval <id>、答えの後の行動は /approval-trace <id> で読めます\n',
+          );
+          return 'ok';
+        }
+        const limit = args.find((arg) => arg.startsWith('limit='))?.slice('limit='.length) ?? '14';
+        const before = args.find((arg) => arg.startsWith('before='))?.slice('before='.length);
+        const response = await client.approvals['answered-dates'].$get({
+          query: { limit, ...(before === undefined ? {} : { beforeDate: before }) },
+        });
+        if (!response.ok) {
+          stdout.write(`${await withDetail('承認が決着した日を読めませんでした', response)}\n`);
+          return 'ok';
+        }
+        const { dates } = await response.json();
+        if (dates.length === 0) stdout.write('（決着した承認はまだありません）\n');
+        for (const entry of dates) stdout.write(`  ${entry.date}  ${entry.count} 件\n`);
+        if (dates.length > 0) stdout.write('  /approvals answered <日付> でその日の件を読めます\n');
+        noteIfAtLimit(dates.length, limit, '日');
+        return 'ok';
+      }
       // **`all` で回答済み・取り下げ済みも含める（#963。`/commitments all` と
       // 同じ約束）。** 既定は未回答かつ未取り下げのみ——番号を振って
       // `/answer` に使わせる一覧を、答えようがない行で埋めないため。

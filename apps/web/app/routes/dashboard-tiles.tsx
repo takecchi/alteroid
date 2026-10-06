@@ -112,8 +112,9 @@ function ProgressTile() {
 /**
  * 次の自動実行。いちばん近い1件と、残りの件数。
  *
- * **エラーを最優先する**（issue #2138 の1）。`data` しか見ないと、一度取れたあとに取り直しが
- * 失敗しても（SWR は直前の `data` を残す）古い予定を今の値として出し続ける。
+ * **取り直しの失敗は、古い予定を残したまま、その場で言う**（issue #3346。進捗のタイルの #3069 と
+ * 同じ形）。SWR は再取得が失敗しても直前の `data` を残して `error` を立てるので、`data` だけ見ると
+ * 止まった予定が今の値に見える（issue #2138 の1）。だから注記を置く。`data` が無いときだけエラーにする。
  */
 function NextRunTile() {
   const schedule = useSchedule();
@@ -137,12 +138,17 @@ function NextRunTile() {
         </Link>
       }
     >
-      {schedule.error !== undefined ? (
+      {schedule.error !== undefined && schedule.data === undefined ? (
         <ErrorNote error={schedule.error} />
       ) : schedule.data === undefined ? (
         <Spinner />
       ) : (
         <>
+          {schedule.error !== undefined && (
+            <HomeTileNote tone="warn">
+              最新の予定を取り直せなかった。下の予定は前に読めたときのもの。
+            </HomeTileNote>
+          )}
           {/* 読めない継続中の依頼を、一覧が空に見えることで隠さない（issue #2343）。 */}
           <UnreadableScheduleNote unreadable={schedule.data.unreadable ?? []} className="mb-2" />
           {shown === undefined ? (
@@ -174,6 +180,8 @@ function NextRunTile() {
  *   古いデーモン）に黙ってブラウザの今日にしない
  * - 記録が空（`since` が null）・記録の始点より前は `$0.00` と出さない（使っていない、に見せない）
  * - 金額には必ず但し書き（`notice`）を添える。省略・要約しない
+ * - 取り直しの失敗は、古い金額を残したまま、その場で言う（issue #3346。進捗のタイルと同じ形）。
+ *   「記録が無い」などの枝も前に読めたときの言い分なので、同じ注記を上に置く
  * - 読めずに集計から外した行が在れば、合計に入っていないと言う（Issue #2427）。窓から今日の行か
  *   日が取れない行だけに絞る
  */
@@ -202,9 +210,14 @@ function UsageTile() {
         )
       }
     >
-      {usage.error !== undefined ? (
+      {usage.error !== undefined && usage.data !== undefined && (
+        <HomeTileNote tone="warn">
+          最新の利用を取り直せなかった。下は前に読めたときのもの。
+        </HomeTileNote>
+      )}
+      {usage.error !== undefined && usage.data === undefined ? (
         <ErrorNote error={usage.error} />
-      ) : usage.isLoading || usage.data === undefined ? (
+      ) : usage.data === undefined ? (
         <Spinner />
       ) : today === undefined ? (
         // 0 や記録なしと出さない。デーモンが今日を返さないので、どの行が今日かを決められない。
@@ -226,7 +239,7 @@ function UsageTile() {
           <HomeTileNote>{usage.data.notice}</HomeTileNote>
         </>
       )}
-      {usage.error === undefined && usage.data !== undefined && today !== undefined && (
+      {usage.data !== undefined && today !== undefined && (
         <UnreadableUsageRowsNote
           rows={usage.data.unreadableRows?.filter(
             (row) => row.date === undefined || row.date === today,

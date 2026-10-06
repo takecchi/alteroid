@@ -412,6 +412,15 @@ export {
   type JournalStoreQueryEdgeContractSubject,
 } from './journal-query-edge-contract.js';
 /**
+ * `JournalStore.get` の「在るが読めない」の契約（issue #3288）。読めない行を持てる実装
+ * （`storage-fs` / `storage-pg`）の歯がこれを呼ぶ。インメモリは読めない行を持てないので対象外
+ * （`UnreadableJournalEntryError` の doc）。
+ */
+export {
+  verifyJournalStoreUnreadableGetContract,
+  type JournalStoreUnreadableGetContractSubject,
+} from './journal-unreadable-get-contract.js';
+/**
  * `JournalStore.oldestAt()`（日誌の地平。issue #1510）の契約。3実装
  * （インメモリ / `storage-fs` / `storage-pg`）それぞれの歯がこれを呼んで
  * 揃っていることを測る — 1つで測って3つとも測ったことにしない
@@ -553,6 +562,7 @@ export { verifyProfileStoreContract } from './profile-store-contract.js';
 export { verifyPermissionGrantStoreContract } from './permission-grant-contract.js';
 export { verifyPracticeStoreContract } from './practice-contract.js';
 export { verifyListOrderContract } from './list-order-contract.js';
+export { verifyApprovalConversationFilterContract } from './approval-conversation-filter-contract.js';
 export { compareCodeUnits } from './code-unit-order.js';
 export { verifyStoreIsolationContract } from './store-isolation-contract.js';
 /**

@@ -24,6 +24,7 @@ import {
   cn,
 } from '@alteroid/ui';
 import {
+  ApiError,
   useCreateSchedule,
   usePostEvent,
   useRemoveSchedule,
@@ -110,6 +111,16 @@ export default function Schedule() {
    * 断定になる。再検証の失敗で `data` が残っているときは当たらず、一覧をそのまま出す。
    */
   const listUnavailable = data === undefined && error !== undefined;
+  /**
+   * 「仕込む」で置き換わる名前（#3347）。画面が既に持っている一覧から導く（取得は足さない）。
+   * 読めない行（`unreadable`）も名前が取れれば数える。本文を持たない行は既定の仕込み
+   * （予約名）で、置き換わるのではなく断られる（409）ので数えない。
+   * **一覧が読めていないとき（`data` が無い）は空**——確かめようが無いので送る側を止めない。
+   */
+  const existingKinds: ReadonlySet<string> = new Set([
+    ...(data?.entries ?? []).filter((entry) => entry.request !== undefined).map((e) => e.kind),
+    ...(data?.unreadable ?? []).flatMap((entry) => (entry.kind != null ? [entry.kind] : [])),
+  ]);
 
   return (
     <Page
@@ -316,7 +327,7 @@ export default function Schedule() {
         )}
       </Card>
 
-      <ScheduleForm />
+      <ScheduleForm existingKinds={existingKinds} />
       <EventForm />
     </Page>
   );
@@ -640,6 +651,8 @@ function ScheduleEditForm({
 // 新規に仕込む
 // ---------------------------------------------------------------------------
 
+const RESERVED_KIND_MESSAGE = '既定の名前（予約名）なので使えない。別の名前にする';
+
 /**
  * 継続する依頼を仕込む。
  *
@@ -652,7 +665,7 @@ function ScheduleEditForm({
  * （`scheduleSpecSchema` の cron のコメント）。だから `daily` / `every` / `cron` の
  * 3つとも置く。
  */
-function ScheduleForm() {
+function ScheduleForm({ existingKinds }: { existingKinds: ReadonlySet<string> }) {
   const createSchedule = useCreateSchedule();
   const kindId = useId();
   const [kind, setKind] = useState('');
@@ -660,26 +673,44 @@ function ScheduleForm() {
   const { activeTab, setTab } = useRequestTab('');
   const [specDraft, setSpecDraft] = useState<ScheduleSpecDraft>(DEFAULT_SPEC_DRAFT);
   const [busy, setBusy] = useState(false);
-  const [done, setDone] = useState<string | undefined>(undefined);
+  const [done, setDone] = useState<{ kind: string; replaced: boolean } | undefined>(undefined);
   const [failure, setFailure] = useState<unknown>(undefined);
+  const [confirming, setConfirming] = useState(false);
 
   const ready = kind.trim() !== '' && request.trim() !== '';
+  const replacing = existingKinds.has(kind.trim());
 
+  /**
+   * **既に在る名前のときだけ確かめる**（#3347。#3201 の「既に値が在るときだけ確認」と同じ線）。
+   * 新規はそのまま送る。やめれば何も送らず、入力はそのまま残る。
+   */
   function submit() {
     if (!ready) return;
+    if (replacing) {
+      setConfirming(true);
+      return;
+    }
+    send(false);
+  }
+
+  function send(replaced: boolean) {
     setBusy(true);
     setFailure(undefined);
     setDone(undefined);
 
     createSchedule({ kind: kind.trim(), request: request.trim(), spec: specDraftToSpec(specDraft) })
       .then(() => {
-        setDone(kind.trim());
+        setDone({ kind: kind.trim(), replaced });
         setRequest('');
         setKind('');
       })
       .catch(setFailure)
       .finally(() => setBusy(false));
   }
+
+  // 予約名（既定の仕込みの名前）はデーモンが 409 で断る。英語の `reserved kind` をそのまま出さない。
+  // 予約名の一覧は画面に出さない（内部の識別子を利用者に見せない。#2782）ので、名前は挙げない。
+  const reservedKindRefused = failure instanceof ApiError && failure.status === 409;
 
   return (
     <Card className="mb-4">
@@ -714,10 +745,21 @@ function ScheduleForm() {
           </Button>
           {activeTab === 'edit' && <SubmitHint action="仕込む" />}
           {done !== undefined && (
-            <span className="font-mono text-[11px] text-muted-foreground">仕込んだ: {done}</span>
+            <span className="font-mono text-[11px] text-muted-foreground">
+              {done.replaced ? '置き換えた' : '仕込んだ'}: {done.kind}
+            </span>
           )}
         </div>
-        <ErrorNote error={failure} />
+        <ConfirmDialog
+          open={confirming}
+          onOpenChange={setConfirming}
+          title={`予定「${kind.trim()}」を置き換えますか`}
+          description="同じ名前の依頼が既に在る。前の依頼の本文と周期が置き換わり、元に戻せない（前回動いた時刻は保たれる）。"
+          confirmLabel="置き換える"
+          destructive
+          onConfirm={() => send(true)}
+        />
+        <ErrorNote error={reservedKindRefused ? RESERVED_KIND_MESSAGE : failure} />
       </div>
     </Card>
   );

@@ -562,6 +562,13 @@ export interface JournalStore {
    * **NUL（issue #3011）。** `id`・`after.id`・`q` に NUL があっても断らず、「無い」と同じ結果（`get` は `null`、
    * `after` は `JournalAnchorNotFoundError`、`q` は0件）を返す。書き込み（`append`）は鍵を持たず（id は store が振る）、
    * 本文の NUL は落として残す（3実装とも）。
+   *
+   * **「無い」と「在るが読めない」を分ける（issue #3288）。** 無い id は `null`。id の行が在るのに
+   * `journalEntrySchema` に合わない（未知の `type`・版ずれ・手編集）ときは `null` に畳まず
+   * `UnreadableJournalEntryError`（本ファイル）を投げる——`null` だと呼び出し元が「まだ書かれていない」
+   * と言ってしまう（`UnreadableApprovalError` と同じ線）。fs・pg が投げる
+   * （`verifyJournalStoreUnreadableGetContract` が測る）。インメモリは読めない行を持てないので投げない
+   * （`UnreadableJournalEntryError` の doc）。`list()` / `listPage()` は従来どおり読めない行を飛ばす。
    */
   get(id: string): Promise<JournalEntry | null>;
 
@@ -639,6 +646,34 @@ export class UnreadableApprovalError extends Error {
         (params.reason === undefined ? '' : `: ${params.reason}`),
     );
     this.name = 'UnreadableApprovalError';
+    this.id = params.id;
+  }
+}
+
+/**
+ * `JournalStore.get()` が、id の行は**在るが読めない**（`journalEntrySchema` に合わない。
+ * 未知の `type`・版ずれ・手編集）ときに投げる専用のエラー型（issue #3288）。
+ * `UnreadableApprovalError` と同じ線——「無い」（`null`）と「在ったが読めない」（throw）を
+ * 区別する。`instanceof` で見分けること（メッセージの文字列で判定しない）。
+ *
+ * **投げるだけで、行は1バイトも変えない**（日誌は追記専用）。`list()` は従来どおり読めない行を
+ * 飛ばして跡（stderr の集計）を残す。
+ *
+ * **id 以外の値は持たない。** 日誌の欄には人間の発言・クローンの判断の本文がそのまま入りうるので、
+ * メッセージにも載せない（stderr の跡と同じ理由、#52）。
+ *
+ * **インメモリ実装（`testing.ts`）はこれを投げない。** `append` が `journalEntrySchema` で断り、
+ * 行は private な配列にしか入らないので、読めない行を持てない（fs・pg は外から書かれた行を持ちうる）。
+ */
+export class UnreadableJournalEntryError extends Error {
+  readonly id: string;
+
+  constructor(params: { id: string; reason?: string }) {
+    super(
+      `日誌 ${params.id} は在るが読めない（壊れた行。消されたのでも、無いのでもない）` +
+        (params.reason === undefined ? '' : `: ${params.reason}`),
+    );
+    this.name = 'UnreadableJournalEntryError';
     this.id = params.id;
   }
 }
@@ -890,8 +925,19 @@ export interface JobStore {
    * 落とさず、`unreadable` に別欄で返す**（issue #2298。`CommitmentStore.list` と同じ形）。
    * **メモリ実装（`testing.ts`）は常に空**——`putApproval` がスキーマを通すので、壊れた行を
    * 持てない。
+   *
+   * **`conversationId` を渡すと、`entries` をその会話で上がった確認（`conversationId`
+   * が一致するもの）だけに絞る**（issue #3290。`GET /approvals?conversationId=` が
+   * 全件を取ってメモリで絞っていたのをストアへ寄せた）。`pendingOnly` と併用でき、
+   * 絞りだけで並びは変えない。**`unreadable` は絞らない** —— 読めない行は
+   * どの会話のものかも分からないので、`conversationId` を渡しても `pendingOnly` の
+   * 絞りだけを当てたものが返る（絞る前の挙動を変えない）。3実装（fs / pg / インメモリ）で
+   * 揃えること（`verifyApprovalConversationFilterContract`）。
    */
-  listApprovals(options?: { pendingOnly?: boolean }): Promise<ApprovalList>;
+  listApprovals(options?: {
+    pendingOnly?: boolean;
+    conversationId?: string;
+  }): Promise<ApprovalList>;
   /**
    * 承認待ち1件を id で読む。**無ければ `null`。在るが読めない行（版ずれ・手編集で
    * `pendingApprovalSchema` に合わなくなった行）は `null` ではなく
