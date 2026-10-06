@@ -1199,3 +1199,78 @@ describe('新しい会話で open の前に終わった送信の取り直し（#
     expect(api.chatCalls[2]?.conversationId).toBe('c9');
   });
 });
+
+describe('読み返しと再生で同じ承認を二重に出さない（#3408）', () => {
+  const openIn = (conversationId: string, inProgress: boolean) => ({
+    type: 'open' as const,
+    conversationId,
+    inProgress,
+  });
+  const tick = () => new Promise((r) => setTimeout(r, 0));
+
+  it('履歴から開いた進行中の会話で、再生された ask_human は読み返しの承認の行と重ねない。pendingAsk は立つ', async () => {
+    const { api, controller, state } = setup();
+    api.messages.c9 = [{ id: '1', at: '2026-10-06T10:00:00.000Z', role: 'inbound', text: 'q' }];
+    api.conversationApprovals.c9 = {
+      approvals: [{ id: 'abcdef12-3456', createdAt: '2026-10-06T10:01:00.000Z', question: 'A?' }],
+      unreadable: [],
+    };
+    api.streamScripts.push([
+      openIn('c9', true),
+      { type: 'ask_human', approvalId: 'abcdef12-3456', question: 'A?' },
+      { type: 'done' },
+    ]);
+    await controller.openConversation('c9');
+    await tick();
+    await tick();
+    expect(state().entries.filter((e) => e.kind === 'ask')).toHaveLength(1);
+    expect(state().pendingAsk).toBe('abcdef12-3456');
+  });
+
+  it('別の承認の ask_human は出る。ライブで同じ id が2回来ても1行', async () => {
+    const { api, controller, state } = setup();
+    api.scripts.push([
+      open('c1'),
+      { type: 'ask_human', approvalId: 'a1', question: 'Q1' },
+      { type: 'ask_human', approvalId: 'a1', question: 'Q1' },
+      { type: 'ask_human', approvalId: 'a2', question: 'Q2' },
+      { type: 'done' },
+    ]);
+    await controller.send('x');
+    expect(state().entries.filter((e) => e.kind === 'ask')).toHaveLength(2);
+  });
+});
+
+describe('古い側を捨てたら断る（#3409）', () => {
+  it('1500 件の会話を開くと、先頭に捨てた件数の断りが出て、全体は MAX_ENTRIES 件', async () => {
+    const { api, controller, state } = setup();
+    api.messages.c9 = Array.from({ length: 1500 }, (_, i) => ({
+      id: String(i),
+      at: new Date(1_000_000_000_000 + i * 1000).toISOString(),
+      role: i % 2 === 0 ? ('inbound' as const) : ('outbound' as const),
+      text: `m${String(i)}`,
+    }));
+    await controller.openConversation('c9');
+    const entries = state().entries;
+    expect(entries).toHaveLength(MAX_ENTRIES);
+    expect(entries[0]).toMatchObject({ kind: 'system', dropped: 501 });
+    expect(entries[0]?.text).toContain('古い側 501 件は表示していない');
+    expect(entries.at(-1)?.text).toBe('m1499');
+  });
+
+  it('ライブで溢れ続けても、断りは1行で件数だけが増える', () => {
+    const { controller, state } = setup();
+    for (let i = 0; i < MAX_ENTRIES + 50; i += 1) controller.addSystem(`n${String(i)}`);
+    const notices = state().entries.filter((e) => e.dropped !== undefined);
+    expect(notices).toHaveLength(1);
+    expect(state().entries).toHaveLength(MAX_ENTRIES);
+    expect(state().entries[0]?.dropped).toBe(51);
+    expect(state().entries.at(-1)?.text).toBe(`n${String(MAX_ENTRIES + 49)}`);
+  });
+
+  it('1000 件ちょうどまでは断りを出さない', () => {
+    const { controller, state } = setup();
+    for (let i = 0; i < MAX_ENTRIES; i += 1) controller.addSystem(`n${String(i)}`);
+    expect(state().entries.filter((e) => e.dropped !== undefined)).toEqual([]);
+  });
+});

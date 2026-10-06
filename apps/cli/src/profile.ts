@@ -16,7 +16,7 @@ import {
 import { confirmIrreversible, type ConfirmIo } from './confirm.js';
 import { describeScope } from './credential.js';
 import { describeAuthFailure, forbiddenKindOf, resolveTarget, type Target } from './target.js';
-import { openEditor, readInputFile } from './input-errors.js';
+import { keepDraftOnFailure, openEditor, readInputFile } from './input-errors.js';
 
 /**
  * `alteroid profile` — 実行環境プロファイル（人間の `.zprofile` に当たるもの）。
@@ -289,6 +289,15 @@ export async function profileEditCommand(
       mode: 0o600,
     });
     await openEditor(path, 'alteroid profile set <name> --file <path>');
+  } catch (error) {
+    // まだ人間は何も書いていない（エディタが起きなかった・異常終了した）。
+    await rm(dir, { recursive: true, force: true });
+    throw error;
+  }
+  // **成功したときと「変更なし」のときだけ、一時ディレクトリを消す。** 失敗（保存・空の本文の断り）は
+  // 人間が書いた内容を 0600 のまま残し、場所と続きのやり方を言う（#3453）。
+  const resume = `alteroid profile set ${name} --file ${path}${scope === undefined ? '' : ` --scope ${scope}`}`;
+  await keepDraftOnFailure(dir, path, resume, async () => {
     const edited = await readFile(path, 'utf8');
 
     // 撒く先だけを変えるのも更新である（本文が同じでも、外れる側が出る）。
@@ -298,9 +307,7 @@ export async function profileEditCommand(
       return;
     }
     await put(name, edited, target, scope, profile.legacy);
-  } finally {
-    await rm(dir, { recursive: true, force: true });
-  }
+  });
 }
 
 /**

@@ -41,10 +41,40 @@ export function wrapLogical(logical: string, width: number): string[] {
   return out;
 }
 
+/** タブ位置の間隔（セル）。 */
+export const TAB_WIDTH = 4;
+
+/**
+ * タブを、次のタブ位置（行頭から `TAB_WIDTH` セルごと）までの空白へ展開する。`string-width` はタブを幅 0 と
+ * 数えるので、そのまま折り返すと端末の実際の幅とずれて行末が欠ける・行が溢れる。行ごとに数える。
+ */
+export function expandTabs(text: string): string {
+  if (!text.includes('\t')) return text;
+  return text
+    .split(/(\r\n|[\r\n\v\f])/)
+    .map((part) => {
+      if (!part.includes('\t')) return part;
+      let out = '';
+      let col = 0;
+      for (const { segment } of GRAPHEMES.segment(part)) {
+        if (segment === '\t') {
+          const pad = TAB_WIDTH - (col % TAB_WIDTH);
+          out += ' '.repeat(pad);
+          col += pad;
+        } else {
+          out += segment;
+          col += stringWidth(segment);
+        }
+      }
+      return out;
+    })
+    .join('');
+}
+
 /** 埋め込みの改行で先に割ってから折り返す。 */
 export function wrapDisplayLines(text: string, width: number): string[] {
   const out: string[] = [];
-  for (const logical of text.split(LINE_BREAK)) {
+  for (const logical of expandTabs(text).split(LINE_BREAK)) {
     for (const row of wrapLogical(logical, width)) out.push(row);
   }
   return out;

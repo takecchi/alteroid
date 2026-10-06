@@ -2365,8 +2365,11 @@ function describeStringLengthViolation(
 ): string | null {
   if (value === undefined) return null;
   const { min, max } = range;
-  const withinRange =
-    (min === undefined || value.length >= min) && (max === undefined || value.length <= max);
+  // **NUL を落としてから数える**（issue #3435）。ストアや日誌は NUL を落として残すので、
+  // NUL を落とす前の値で数えると、NUL だけの理由・本文が「1文字以上」を通って空として残る。
+  // 値そのものは書き換えない（数えるだけ）。min も max も同じ長さで見る。
+  const length = stripNul(value).length;
+  const withinRange = (min === undefined || length >= min) && (max === undefined || length <= max);
   if (withinRange) return null;
   return `${field} は使えない（${formatStringLengthJa(range)}のみ）。`;
 }

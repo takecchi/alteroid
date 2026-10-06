@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { makeTempDirSync } from '../../../vitest.tmpdir.js';
 
-import { captureStdout } from './test-support.js';
+import { captureStderr, captureStdout } from './test-support.js';
 
 /**
  * `alteroid practice` — **人間が仕事のやり方を CLI から読んで書き換えられること**
@@ -277,6 +277,23 @@ describe('alteroid practice edit', () => {
     const content = JSON.parse(sent[1]?.body ?? '{}') as { content: string };
     expect(content.content).toContain('実行される定義ではなく');
     expect(content.content).not.toContain('permissions');
+  });
+
+  it('409 以外の保存の失敗（500）でも、書いた内容を残し、場所と set --file を案内して失敗する（#3453）', async () => {
+    captureStdout();
+    const err = captureStderr();
+    process.env.EDITOR = `sh -c 'printf "編集後の本文\\n" > "$1"' _`;
+    replies.push({ status: 200, body: practiceBody() });
+    replies.push({ status: 500, body: { error: 'boom' } });
+
+    const error = await practiceEditCommand('review', {}).catch((e: unknown) => e);
+
+    expect(String(error)).toContain('HTTP 500');
+    const mine = /残してあります: (\S+)/.exec(err())?.[1];
+    expect(mine).toBeDefined();
+    expect(readFileSync(mine ?? '', 'utf8')).toBe('編集後の本文\n');
+    expect(err()).toContain(`alteroid practice set review --file ${mine ?? ''}`);
+    rmSync(dirname(mine ?? ''), { recursive: true, force: true });
   });
 });
 

@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeTempDir } from '../../../vitest.tmpdir.js';
 
 import { type ConfirmIo } from './confirm.js';
-import { captureStdout, pretendTty } from './test-support.js';
+import { captureStderr, captureStdout, pretendTty } from './test-support.js';
 
 /**
  * `alteroid memory` — 記憶を人間が CLI から直せること。
@@ -701,6 +701,25 @@ describe('alteroid memory の読み出しの失敗の理由', () => {
       expect(await readFile(theirs ?? '', 'utf8')).toContain('クローンの判断');
       expect(text).toContain('diff -u');
       expect(text).toContain('alteroid memory edit values');
+      await rm(dirname(mine ?? ''), { recursive: true, force: true });
+    });
+
+    it('409 以外の保存の失敗（500）でも、書いた内容を残し、場所と set --file を案内して失敗する（#3453）', async () => {
+      captureStdout();
+      const err = captureStderr();
+      replies.push({
+        status: 200,
+        body: { document: { slug: 'values', content: '# 価値観\n' }, version: 'v-read' },
+      });
+      replies.push({ status: 500, body: { error: 'boom' } });
+
+      const error = await memoryEditCommand('values').catch((e: unknown) => e);
+
+      expect(String(error)).toContain('HTTP 500');
+      const mine = /残してあります: (\S+)/.exec(err())?.[1];
+      expect(mine).toBeDefined();
+      expect(await readFile(mine ?? '', 'utf8')).toBe('人間の編集\n');
+      expect(err()).toContain(`alteroid memory set values --file ${mine ?? ''}`);
       await rm(dirname(mine ?? ''), { recursive: true, force: true });
     });
   });

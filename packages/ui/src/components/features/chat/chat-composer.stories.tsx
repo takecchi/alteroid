@@ -107,3 +107,21 @@ export const WithError: Story = { args, render: () => <Demo error text="再送�
 export const LongDraft: Story = { args, render: () => <Demo lines={30} /> };
 /** 10 行の下書き。 */
 export const TenLines: Story = { args, render: () => <Demo lines={10} /> };
+
+const MANY: ComposerAttachment[] = Array.from({ length: 10 }, (_, i) => ({
+  key: `m${i}`,
+  name: `meeting-notes-${i + 1}.pdf`,
+  sizeLabel: '1.2 MB',
+}));
+/** 添付 10 件。チップの並びは高さに上限があり、内側をスクロールする（テキストエリアと [▶] が押し出されない）。 */
+export const ManyAttachments: Story = {
+  args,
+  render: () => <Demo text="これを見て" attachments={MANY} />,
+};
+/** 折り返せない長い名前の添付。名前は切れ、ホバーで全体が出る。 */
+export const LongAttachmentName: Story = {
+  args,
+  render: () => (
+    <Demo attachments={[{ key: 'l', name: `${'a'.repeat(120)}.tar.gz`, sizeLabel: '24 MB' }]} />
+  ),
+};

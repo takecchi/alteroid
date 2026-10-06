@@ -201,7 +201,7 @@ export function ChatMessage({
         出すと、どちらを直しているのか読みにくくなるため。
       */}
       {versions !== undefined && !editing && (
-        <div className="flex flex-col gap-1">
+        <div className="flex max-w-full min-w-0 flex-col gap-1">
           <div className="flex items-center gap-1 text-[11px] text-muted-foreground">
             <button
               type="button"
@@ -232,7 +232,7 @@ export function ChatMessage({
             読める」の本体である。
           */}
           {viewingOld && versions.hidden !== undefined && versions.hidden.length > 0 && (
-            <div className="flex max-w-[46rem] flex-col gap-1 rounded-lg border border-dashed border-border px-3 py-2 text-xs whitespace-pre-wrap text-muted-foreground">
+            <div className="flex max-w-[46rem] min-w-0 flex-col gap-1 rounded-lg border border-dashed border-border px-3 py-2 text-xs break-words whitespace-pre-wrap text-muted-foreground">
               {versions.hidden.map((entry, index) => (
                 <p key={index}>
                   <span className="mr-1 font-semibold">
