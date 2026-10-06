@@ -44,8 +44,9 @@ import {
   newClientMessageId,
   redactError,
 } from '@alteroid/logic';
-import type { ConversationMessage, MessageAttachment } from '@alteroid/logic';
+import type { ConversationMessage, MessageAttachment, PendingApproval } from '@alteroid/logic';
 
+import { ApprovalAnswerCard, approvalDetailPath } from '~/components/approval-answer-card';
 import { usePageVisible } from '~/lib/use-page-visible';
 
 import type { Route } from './+types/chat';
@@ -140,6 +141,27 @@ interface Line {
    * 履歴の人間の発言だけが持つ（付けずに届いた発言・手元の楽観行・クローンの返事は持たない）。
    */
   clientMessageId?: string;
+  /**
+   * この行が承認待ち（`ask_human`）のカードであれば、その承認（#3259）。
+   *
+   * **時刻は `createdAt` に固定する。** 回答・取り下げは同じカードの状態として出し、別の行にしない。
+   * 生配信（SSE の `ask_human`）が作る行は質問しか知らない最小の形で、台帳から読んだ行（履歴）が
+   * 同じ承認を持つようになったら `pendingOwnLines` が承認 id で引き取る。
+   */
+  approval?: PendingApproval;
+}
+
+/** 履歴と手元の行を突き合わせる鍵。承認のカードは本文ではなく承認 id で結ぶ（回答で本文は変わらないが、状態は変わる）。 */
+function lineMatchKey(line: Line): string {
+  return line.approval !== undefined
+    ? `approval\u0000${line.approval.id}`
+    : `${line.role}\u0000${line.text}`;
+}
+
+/** SSE の `ask_human` から、質問しか知らない最小の承認を作る（台帳の行が来たら置き換わる）。 */
+function approvalFromAskEvent(approvalId: string, question: string): PendingApproval {
+  const now = new Date().toISOString();
+  return { id: approvalId, createdAt: now, updatedAt: now, question };
 }
 
 /**
@@ -238,12 +260,12 @@ export function pendingOwnLines(
 ): Line[] {
   const remaining = new Map<string, number>();
   for (const line of historyLines) {
-    const key = `${line.role}\u0000${line.text}`;
+    const key = lineMatchKey(line);
     remaining.set(key, (remaining.get(key) ?? 0) + 1);
   }
   const pending: Line[] = [];
   for (const line of ownedBy(lines, shownId)) {
-    const key = `${line.role}\u0000${line.text}`;
+    const key = lineMatchKey(line);
     const count = remaining.get(key) ?? 0;
     if (count > 0) {
       remaining.set(key, count - 1);
@@ -1146,71 +1168,23 @@ export function ChatPane({
         },
       }));
 
-    const approvalItems = (conversationApprovals.data?.approvals ?? []).flatMap((approval) => {
-      const items: { at: string; line: Line }[] = [
-        {
-          at: approval.createdAt,
-          line: {
-            key: `a-${approval.id}`,
-            role: 'system',
-            of: shownId,
-            /**
-             * **SSE の `case 'ask_human'`（下）と1文字も違えないこと。** 違えると
-             * `pendingOwnLines` の role＋本文の照合が当たらず、生配信で出た行が
-             * 「まだサーバに引き取られていない行」のままリロード後も残り、同じ
-             * 質問が2つ並ぶ（二重表示）。
-             */
-            text: `確認したいことがある: ${approval.question}\n（承認待ちの画面から答えられる）`,
-          },
-        },
-      ];
-      if (
-        approval.answeredAt !== undefined &&
-        approval.answeredAt !== null &&
-        approval.answer !== undefined &&
-        approval.answer !== null
-      ) {
-        items.push({
-          at: approval.answeredAt,
-          line: {
-            key: `a-${approval.id}-answer`,
-            role: 'system',
-            of: shownId,
-            text: `確認への回答: ${approval.answer}`,
-          },
-        });
-      }
-      /**
-       * **取り下げも出す（issue #974。不変条件Aの取り下げ側）。** クローンが
-       * `approval_withdraw`（`packages/core/src/schema.ts` の `withdrawnAt` の
-       * doc）で理由付きで取り下げた確認は、`answeredAt` と排他的なので上の枝
-       * には乗らない。乗らないまま `historyLines` に何も足さないと、会話には
-       * 質問だけが残って**痕跡なく終わる**——人間は「あの質問、その後どう
-       * なった？」を `/approvals`（`approvals.tsx` の取り下げ表示）まで見に
-       * 行かないと分からない。#963 §5 の判断（取り下げの実行者はクローンで
-       * 人間側に取り下げる口は要らないが、**取り下げられた件と理由が読める
-       * ことは要る**）を、人間が実際に読む場所（会話）でも満たす。
-       *
-       * **`withdrawnReason` が欠けている行でも出す。** スキーマ上 optional
-       * なのは古い行を想定してのことで（`withdrawnAt` の doc）、理由が無くて
-       * も「取り下げられた事実」のほうが主なので行自体は出す。
-       *
-       * `answer` 側と違って `withdrawnReason` の非 null は条件に含めない——
-       * `withdrawnAt` の有無だけで素直に分岐する（issue #974 の指示どおり）。
-       */
-      if (approval.withdrawnAt !== undefined && approval.withdrawnAt !== null) {
-        items.push({
-          at: approval.withdrawnAt,
-          line: {
-            key: `a-${approval.id}-withdrawn`,
-            role: 'system',
-            of: shownId,
-            text: `確認の取り下げ: ${approval.withdrawnReason ?? '（理由の記録なし）'}`,
-          },
-        });
-      }
-      return items;
-    });
+    /*
+     * **承認は1件を1枚のカードにして、`createdAt` の位置に置く（#3259）。** 回答（`answeredAt`）と
+     * 取り下げ（`withdrawnAt`）は別の行にせず、同じカードの状態として出す（回答の時刻もカードの中）。
+     * 回答済みが「まだ返答が無い」に見えない（不変条件A）・取り下げが痕跡なく終わらない
+     * （issue #974）のどちらも、カードが状態と回答・理由を持つことで満たす。
+     * 回答のあとのクローンの返答は、時刻順でカードの後ろに並ぶ。
+     */
+    const approvalItems = (conversationApprovals.data?.approvals ?? []).map((approval) => ({
+      at: approval.createdAt,
+      line: {
+        key: `a-${approval.id}`,
+        role: 'system' as const,
+        of: shownId,
+        text: approval.question,
+        approval,
+      } satisfies Line,
+    }));
 
     return [...messageItems, ...approvalItems]
       .sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0))
@@ -1729,7 +1703,9 @@ export function ChatPane({
               key: `a-${event.approvalId}`,
               role: 'system',
               of: stream.id,
-              text: `確認したいことがある: ${event.question}\n（承認待ちの画面から答えられる）`,
+              text: event.question,
+              // 履歴の行と同じカードで出す（承認 id で引き取られる。`lineMatchKey`）。
+              approval: approvalFromAskEvent(event.approvalId, event.question),
             },
           ]);
           break;
@@ -2498,6 +2474,25 @@ export function ChatPane({
                    * **すぐ前が自分の発言**のときだけ出す——承認への回答から起きた失敗（間に確認の
                    * 行が挟まる）では、前の発言が失敗の原因とは限らないので出さない。送信中も出さない。
                    */
+                  if (line.approval !== undefined) {
+                    return (
+                      <li key={line.key}>
+                        <ApprovalAnswerCard
+                          approval={line.approval}
+                          showSettledAt
+                          onAnswered={() => void conversationApprovals.mutate()}
+                          trailing={
+                            <Link
+                              to={approvalDetailPath(line.approval.id)}
+                              className="mt-3 inline-block text-[11px] text-primary hover:underline"
+                            >
+                              承認の画面で開く →
+                            </Link>
+                          }
+                        />
+                      </li>
+                    );
+                  }
                   if (line.turnFailure !== undefined) {
                     const previous = index > 0 ? all[index - 1] : undefined;
                     const retryText =
