@@ -8,6 +8,8 @@ import {
   verifyJournalStoreOrderContract,
   verifyJournalStorePageContract,
   verifyJournalStoreQueryEdgeContract,
+  verifyJournalStoreUnreadableGetContract,
+  UnreadableJournalEntryError,
   verifyJournalStoreSearchContract,
   verifyJournalStoreWithContract,
   verifyPermissionGrantStoreContract,
@@ -632,6 +634,49 @@ describe('PgJournalStore', () => {
   describe('query edge 契約（issue #425）', () => {
     it('types: []=0件／limit: 0=0件／types 未指定=絞らない／指定=その種別だけ／limit:N(N>=1)はN件で切る／同時指定でも0件', async () => {
       await verifyJournalStoreQueryEdgeContract(stores.journal);
+    });
+  });
+
+  /**
+   * `JournalStore.get` の「在るが読めない」の契約（issue #3288）を、**pg 実装**（PGlite）に対して測る。
+   * fs は `packages/storage-fs/src/index.test.ts`。インメモリは読めない行を持てず対象外。
+   */
+  describe('get の「在るが読めない」契約（issue #3288）', () => {
+    it('読めない行の get は UnreadableJournalEntryError／無い id は null／読める行と list は巻き込まれない', async () => {
+      await verifyJournalStoreUnreadableGetContract(stores.journal, async () => {
+        const id = 'unreadable-contract-1';
+        await db.execute(
+          sql`insert into journal (id, at, type, entry)
+              values (${id}, '2026-08-12T00:00:00.000Z', 'no-such-type', ${JSON.stringify({
+                type: 'no-such-type',
+                id,
+                at: '2026-08-12T00:00:00.000Z',
+              })}::jsonb)`,
+        );
+        return id;
+      });
+    });
+
+    it('get(): 読めない行は、跡（stderr の集計）を残したうえで UnreadableJournalEntryError を投げる', async () => {
+      await db.execute(
+        sql`insert into journal (id, at, type, entry)
+            values ('bad-1', '2026-08-12T00:00:00.000Z', 'no-such-type', ${JSON.stringify({
+              type: 'no-such-type',
+              id: 'bad-1',
+              at: '2026-08-12T00:00:00.000Z',
+            })}::jsonb)`,
+      );
+      let thrown: unknown;
+      const lines = await captureStderr(async () => {
+        try {
+          await stores.journal.get('bad-1');
+        } catch (error) {
+          thrown = error;
+        }
+      });
+      expect(thrown).toBeInstanceOf(UnreadableJournalEntryError);
+      expect((thrown as UnreadableJournalEntryError).id).toBe('bad-1');
+      expect(lines.join('')).toContain('type=no-such-type');
     });
   });
 

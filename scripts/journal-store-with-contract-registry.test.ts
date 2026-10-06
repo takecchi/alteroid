@@ -107,6 +107,11 @@ type RegistryEntry =
        * 下の歯が検算する。
        */
       contracts: readonly string[];
+      /**
+       * この実装には当てはまらない契約（契約関数名 → 理由）。`contracts` に無くても、ここに理由付きで
+       * 載っていれば「要求が痩せている」とは数えない。**黙って抜かせない**ための口で、理由が空なら落ちる。
+       */
+      notApplicable?: Readonly<Record<string, string>>;
     }
   | {
       status: 'delegates';
@@ -122,6 +127,13 @@ const REQUIRED_CONTRACTS = [
   'verifyJournalStoreSearchContract',
   'verifyJournalStoreHorizonContract',
 ] as const;
+
+/**
+ * **読めない行を持てる実装だけが通す契約**（issue #3288。`get` の「在るが読めない」）。インメモリは
+ * `append` が形を断り行を private な配列にしか持たないので、読めない行を持てず対象外
+ * （`UnreadableJournalEntryError` の doc）。対象外にするときは `notApplicable` に理由を書く。
+ */
+const READABILITY_CONTRACTS = ['verifyJournalStoreUnreadableGetContract'] as const;
 
 /**
  * 既知の `JournalStore` 実装の一覧。
@@ -144,16 +156,21 @@ const KNOWN_IMPLEMENTATIONS: Record<string, RegistryEntry> = {
       'packages/core/src/journal-horizon-contract.test.ts',
     ],
     contracts: REQUIRED_CONTRACTS,
+    notApplicable: {
+      verifyJournalStoreUnreadableGetContract:
+        '読めない行を持てない（`append` が `journalEntrySchema` で断り、行は private な配列にしか入らない）。' +
+        '`get` が `UnreadableJournalEntryError` を投げる場面が作れない。',
+    },
   },
   'packages/storage-fs/src/journal.ts': {
     status: 'contract-tested',
     testFile: 'packages/storage-fs/src/index.test.ts',
-    contracts: REQUIRED_CONTRACTS,
+    contracts: [...REQUIRED_CONTRACTS, ...READABILITY_CONTRACTS],
   },
   'packages/storage-pg/src/journal.ts': {
     status: 'contract-tested',
     testFile: 'packages/storage-pg/src/index.journal-jobs-schedule.test.ts',
-    contracts: REQUIRED_CONTRACTS,
+    contracts: [...REQUIRED_CONTRACTS, ...READABILITY_CONTRACTS],
   },
   'apps/daemon/src/journal-bus.ts': {
     status: 'delegates',
@@ -205,7 +222,13 @@ describe('JournalStore 実装の一覧が with 契約の登録から漏れてい
   it('contract-tested の各エントリが REQUIRED_CONTRACTS を全部要求している（要求そのものが痩せていないか）', () => {
     for (const [file, entry] of Object.entries(KNOWN_IMPLEMENTATIONS)) {
       if (entry.status === 'delegates') continue;
-      const missing = REQUIRED_CONTRACTS.filter((contract) => !entry.contracts.includes(contract));
+      const notApplicable = entry.notApplicable ?? {};
+      for (const [contract, reason] of Object.entries(notApplicable)) {
+        expect(reason.length, `${file} の notApplicable[${contract}] に理由が無い`).toBeGreaterThan(0);
+      }
+      const missing = [...REQUIRED_CONTRACTS, ...READABILITY_CONTRACTS].filter(
+        (contract) => !entry.contracts.includes(contract) && !(contract in notApplicable),
+      );
       expect(
         missing,
         missing.length === 0

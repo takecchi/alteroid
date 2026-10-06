@@ -234,6 +234,7 @@ import {
   UnreadableActiveTokenError,
   UnreadableApprovalError,
   UnreadableCommitmentError,
+  UnreadableJournalEntryError,
   UnreadablePracticeError,
   UnreadableScheduleError,
   UnreadableTokenSettingsError,
@@ -2038,6 +2039,14 @@ const APPROVAL_QUESTION_EXCERPT = 200;
  */
 function describeUnreadableApproval(id: string): string {
   return `承認待ち ${id} は在るが読めない（壊れた行。消されたのではない。id は合っている）。行は書き換えていない。`;
+}
+/**
+ * 日誌の行が**在るが読めない**（`UnreadableJournalEntryError`、issue #3288）ときの応答文。
+ * 「無い（id が違うか、まだ書かれていない）」とは言わない——id は合っていて、行は在る
+ * （形が合わない。未知の種別・版ずれ・手編集）。行は書き換えていない。`label` は「日誌」/「発言」。
+ */
+function describeUnreadableJournalEntry(label: string, id: string): string {
+  return `${label} ${id} は在るが読めない（形が合わない壊れた行。無いのではなく、id は合っている）。行は書き換えていない。`;
 }
 const APPROVAL_PAGE = 8_000;
 /**
@@ -6678,7 +6687,15 @@ export function createCloneTools(context: ToolContext) {
         if (offsetError !== null) return text(offsetError);
         // --- 全文モード（1件だけ） ---
         if (id !== undefined) {
-          const entry = await stores.journal.get(id);
+          let entry: JournalEntry | null;
+          try {
+            entry = await stores.journal.get(id);
+          } catch (error) {
+            // 在るが読めない行を「無い」と言わない（issue #3288）。
+            if (error instanceof UnreadableJournalEntryError)
+              return text(describeUnreadableJournalEntry('日誌', id));
+            throw error;
+          }
           if (!entry) return text(`日誌 ${id} は無い（id が違うか、まだ書かれていない）。`);
           const { head, body } = renderJournalEntry(entry);
           if (body === '') return text(`${entry.at} ${head}`);
@@ -12694,7 +12711,14 @@ export function createCloneTools(context: ToolContext) {
         if (offsetError !== null) return text(offsetError);
         // --- 全文モード（発言1件） ---
         if (id !== undefined) {
-          const entry = await stores.journal.get(id);
+          let entry: JournalEntry | null;
+          try {
+            entry = await stores.journal.get(id);
+          } catch (error) {
+            if (error instanceof UnreadableJournalEntryError)
+              return text(describeUnreadableJournalEntry('発言', id));
+            throw error;
+          }
           if (!entry) return text(`発言 ${id} は無い（id が違うか、まだ書かれていない）。`);
           if (entry.type !== 'exchange' || entry.with !== 'human') {
             return text(
