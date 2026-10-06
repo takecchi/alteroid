@@ -207,7 +207,12 @@ describe('編集して送信する', () => {
     });
     const call = stub.entries.find((entry) => entry.url.endsWith('/chat'));
     const body = (await call?.request?.clone().json()) as unknown;
-    expect(body).toEqual({ text: '直した文', conversationId: CONVERSATION_ID, supersedes: 'm1' });
+    expect(body).toEqual({
+      text: '直した文',
+      conversationId: CONVERSATION_ID,
+      supersedes: 'm1',
+      clientMessageId: expect.stringMatching(/^[A-Za-z0-9_-]{1,128}$/),
+    });
 
     // 編集後の本文が、いつもどおり新しい発言として画面にも現れる。
     // **やりとりの中に限って見る** — 送信は会話一覧の抜粋にも即座に映るので

@@ -402,6 +402,8 @@ export async function* postChat(
     supersedes?: string;
     /** `uploadAttachment` が返した添付の id（発言へ結び付ける）。 */
     attachments?: readonly string[];
+    /** 発言ごとに作る一意な id（再送では同じ値）。同じ会話に再び届いても、デーモンは二重に受けない。 */
+    clientMessageId?: string;
   },
   options?: { signal?: AbortSignal },
 ): AsyncGenerator<ChatMessage> {
@@ -413,6 +415,7 @@ export async function* postChat(
       ...(input.attachments === undefined || input.attachments.length === 0
         ? {}
         : { attachments: [...input.attachments] }),
+      ...(input.clientMessageId === undefined ? {} : { clientMessageId: input.clientMessageId }),
     },
     parseAs: 'stream',
     ...(options?.signal === undefined ? {} : { signal: options.signal }),

@@ -113,7 +113,7 @@ export async function conversationsListCommand(
  * 読める）。ここで例外を投げると、取れている一覧まで出なくなる（一過性の失敗で一覧を奪わない）ので
  * 投げない。古いデーモンは 404 を返す（口が無い）ので、それも一覧を壊さず1行で言う。
  */
-async function fetchUnreadTotalLine(client: DaemonClient): Promise<string> {
+export async function fetchUnreadTotalLine(client: DaemonClient): Promise<string> {
   const unavailable = (reason: string): string =>
     `未読のある会話の総数は取れませんでした（${reason}）`;
   try {

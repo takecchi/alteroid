@@ -706,6 +706,18 @@ describe('collectConversations（失敗の知らせは一覧の題にしない�
     expect(toMessage(marked).turnFailure).toBe('failed');
     expect('turnFailure' in toMessage(plain)).toBe(false);
   });
+
+  it('toMessage は clientMessageId を写す（付いていなければ欄ごと無い。Issue #3203）', () => {
+    const named = exchange({
+      id: 'n',
+      at: '2026-08-20T00:01:00.000Z',
+      clientMessageId: 'cmid-1',
+    });
+    const plain = exchange({ id: 'p', at: '2026-08-20T00:01:00.000Z' });
+
+    expect(toMessage(named).clientMessageId).toBe('cmid-1');
+    expect('clientMessageId' in toMessage(plain)).toBe(false);
+  });
 });
 
 describe('collectConversations: 添付だけの発言の抜粋', () => {

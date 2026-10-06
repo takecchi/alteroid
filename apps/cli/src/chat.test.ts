@@ -1765,6 +1765,10 @@ function stubClient(
     /** 既定 `0`（＝ limit で落ちた会話は無い＝断り書きを出さない）。 */
     conversationsHiddenByLimit?: number;
     conversationsStatus?: number;
+    /** `GET /conversations/unread-count` の応答（既定は 200 `{ count: 0, capped: false }`）。 */
+    unreadCountStatus?: number;
+    unreadCountBody?: unknown;
+    unreadCountThrows?: Error;
     /** `GET /conversations/:id` の応答。 */
     conversationDetailStatus?: number;
     conversationDetailBody?: {
@@ -1948,6 +1952,18 @@ function stubClient(
             hiddenByLimit: options.conversationsHiddenByLimit ?? 0,
           }),
         );
+      },
+      'unread-count': {
+        $get: () => {
+          if (options.unreadCountThrows !== undefined)
+            return Promise.reject(options.unreadCountThrows);
+          return Promise.resolve(
+            reply(
+              options.unreadCountStatus ?? 200,
+              options.unreadCountBody ?? { count: 0, capped: false },
+            ),
+          );
+        },
       },
       ':id': {
         $get: (args: unknown) => {
@@ -4366,6 +4382,62 @@ describe('chat の /conversations と /conversation', () => {
    * してある。サブコマンド面（`alteroid conversations list --limit --scan`）の
    * 下位互換ではなく、chat からも同じクエリへ届く。
    */
+  describe('未読の総数の1行（alteroid conversations list と同じ fetchUnreadTotalLine）', () => {
+    it('未読のある会話の総数を出す（一覧の外の分も含む）', async () => {
+      const read = captureStdout();
+      const { client } = stubClient({ unreadCountBody: { count: 7, capped: false } });
+      await runSlashCommand('/conversations', client, emptyListed());
+      expect(read()).toContain('未読のある会話 7 件');
+      expect(read()).not.toContain('取れませんでした');
+    });
+
+    it('capped のときは下限として「N 件以上」と言う', async () => {
+      const read = captureStdout();
+      const { client } = stubClient({ unreadCountBody: { count: 99, capped: true } });
+      await runSlashCommand('/conversations', client, emptyListed());
+      expect(read()).toContain('未読のある会話 99 件以上');
+    });
+
+    it('総数が 500 でも一覧は出し、取れなかったと1行で言う', async () => {
+      const read = captureStdout();
+      const { client } = stubClient({
+        conversations: [
+          {
+            conversationId: 'conv-1',
+            startedAt: '2026-08-16T10:00:00.000Z',
+            updatedAt: '2026-08-16T10:05:00.000Z',
+            messages: 4,
+            preview: '設計の相談',
+          },
+        ],
+        unreadCountStatus: 500,
+      });
+      await runSlashCommand('/conversations', client, emptyListed());
+      const text = read();
+      expect(text).toContain('conv-1');
+      expect(text).toContain('未読のある会話の総数は取れませんでした（HTTP 500）');
+      expect(text).not.toMatch(/未読のある会話 \d+ 件/);
+    });
+
+    it('古いデーモン（404）でも一覧は出し、口が無いと言う', async () => {
+      const read = captureStdout();
+      const { client } = stubClient({ unreadCountStatus: 404 });
+      await runSlashCommand('/conversations', client, emptyListed());
+      const text = read();
+      expect(text).toContain('会話はまだありません');
+      expect(text).toContain('古い版');
+    });
+
+    it('通信が途切れて総数だけ失敗しても、一覧は出す', async () => {
+      const read = captureStdout();
+      const { client } = stubClient({ unreadCountThrows: new Error('socket hang up') });
+      await runSlashCommand('/conversations', client, emptyListed());
+      const text = read();
+      expect(text).toContain('会話はまだありません');
+      expect(text).toContain('取れませんでした（socket hang up）');
+    });
+  });
+
   it('/conversations は limit= / scan= を渡すと、そのままクエリへ乗る', async () => {
     captureStdout();
     const { calls, client } = stubClient({ conversations: [], conversationsScanned: 0 });
@@ -4711,6 +4783,7 @@ describe('chat の /edit（送信済みの自分の発言を編集する）', ()
       text: '直した文',
       conversationId: 'conv-1',
       supersedes: 'm1',
+      clientMessageId: expect.stringMatching(/^[A-Za-z0-9_-]{1,128}$/),
     });
   });
 

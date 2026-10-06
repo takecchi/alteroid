@@ -155,6 +155,7 @@ describe('IME 変換中の Enter', () => {
     expect(JSON.parse(bodies[0] ?? '{}')).toEqual({
       text: 'こんにちは',
       conversationId: CONVERSATION_ID,
+      clientMessageId: expect.stringMatching(/^[A-Za-z0-9_-]{1,128}$/),
     });
   });
 
@@ -174,6 +175,7 @@ describe('IME 変換中の Enter', () => {
     expect(JSON.parse(bodies[0] ?? '{}')).toEqual({
       text: 'へんかんちゅう',
       conversationId: CONVERSATION_ID,
+      clientMessageId: expect.stringMatching(/^[A-Za-z0-9_-]{1,128}$/),
     });
   });
 

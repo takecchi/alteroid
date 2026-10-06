@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import type { ConfirmIo } from './confirm.js';
 import { captureStdout } from './test-support.js';
 
 /**
@@ -8,6 +9,10 @@ import { captureStdout } from './test-support.js';
  * **`--yes` を渡して対話プロンプトを飛ばす。** `confirm()` は `readline` を
  * 使うので、ここでは全テストとも確認ダイアログの外側（`options.yes: true`）
  * から始める——対話そのものは別の関心事である。
+ *
+ * Issue #3200 以降、確認は `confirmIrreversible`（`confirm.ts`）で、口（`ConfirmIo`）を
+ * `resetCommand` の第2引数に差し込める。末尾の describe がその扱い（端末でなく `--yes` も
+ * 無ければ断る）を測る。
  *
  * `credential.test.ts` と同じ作法——`fetch` を `method + path` の応答表で
  * 差し替え、`./target.js` は `resolveTarget` だけ差し替えて `forbiddenKindOf` /
@@ -197,5 +202,82 @@ describe('確認の文（buildConfirmMessage） — issue #2196', () => {
     for (const label of Object.values(labels)) {
       expect(label).not.toMatch(/SDK|runner/);
     }
+  });
+});
+
+/**
+ * Issue #3200。`confirmIrreversible`（#3141）と同じ扱いに揃える。
+ *
+ * **反転した仕様**: 以前は `--yes` が無ければ端末かどうかを見ずに標準入力から `yes` を読み、
+ * `echo yes | alteroid reset` が通った（非 TTY でも `yes` で通る）。それは確認の無いまま黙って
+ * 消せる欠陥なので、端末でなく `--yes` も無ければ実行せずに断る（例外）形へ反転した。
+ */
+describe('確認の扱い（confirmIrreversible に揃える） — issue #3200', () => {
+  function fakeIo(over: { isTTY?: boolean; answer?: string } = {}): {
+    io: ConfirmIo;
+    written: string[];
+    asked: string[];
+  } {
+    const written: string[] = [];
+    const asked: string[] = [];
+    const io: ConfirmIo = {
+      isTTY: over.isTTY ?? true,
+      write: (text) => {
+        written.push(text);
+      },
+      ask: (question) => {
+        asked.push(question);
+        return Promise.resolve(over.answer ?? '');
+      },
+    };
+    return { io, written, asked };
+  }
+
+  it('端末でなく --yes も無ければ、標準入力に yes があっても POST せず断る', async () => {
+    const { io, asked } = fakeIo({ isTTY: false, answer: 'yes' });
+
+    const error = await resetCommand({}, io).catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(Error);
+    const message = (error as Error).message;
+    expect(message).toContain('--yes');
+    expect(message).toContain('何も変更していません');
+    // 何が消えるかの文（reset の今の文）はそのまま添える。
+    expect(message).toContain(buildConfirmMessage());
+    expect(asked).toEqual([]);
+    expect(sent).toEqual([]);
+  });
+
+  it('端末で yes なら、何が消えるかを見せてから POST /reset する（「取り消せません」は1回だけ）', async () => {
+    const { io, written, asked } = fakeIo({ answer: 'yes' });
+    const read = captureStdout();
+    await resetCommand({}, io);
+    const out = read();
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({ method: 'POST', body: { confirm: true } });
+    expect(asked).toEqual(['続けるなら yes と入力してください: ']);
+    const shown = written.join('');
+    expect(shown).toContain(buildConfirmMessage());
+    expect(shown.match(/取り消せません。/g)).toHaveLength(1);
+    expect(out).toContain('リセットしました');
+  });
+
+  it('端末で yes 以外なら、取り消して POST しない', async () => {
+    const { io, written } = fakeIo({ answer: 'n' });
+
+    await resetCommand({}, io);
+
+    expect(sent).toEqual([]);
+    expect(written.join('')).toContain('取り消しました。何も変更していません。');
+  });
+
+  it('--yes なら端末でなくても聞かずに POST する', async () => {
+    const { io, asked } = fakeIo({ isTTY: false });
+    captureStdout();
+    await resetCommand({ yes: true }, io);
+
+    expect(sent).toHaveLength(1);
+    expect(asked).toEqual([]);
   });
 });

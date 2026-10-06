@@ -186,6 +186,7 @@ describe('順番待ちのあいだの追送', () => {
     expect(JSON.parse(bodies[1] ?? '{}')).toEqual({
       text: '二つ目',
       conversationId: CONVERSATION_ID,
+      clientMessageId: expect.stringMatching(/^[A-Za-z0-9_-]{1,128}$/),
     });
 
     /*
@@ -269,6 +270,7 @@ describe('順番待ちのあいだの追送', () => {
     expect(JSON.parse(bodies[1] ?? '{}')).toEqual({
       text: '二つ目',
       conversationId: CONVERSATION_ID,
+      clientMessageId: expect.stringMatching(/^[A-Za-z0-9_-]{1,128}$/),
     });
 
     await untilOpenSettled(router, CONVERSATION_ID);

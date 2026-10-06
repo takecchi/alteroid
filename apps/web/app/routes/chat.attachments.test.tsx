@@ -172,6 +172,7 @@ describe('添えて送る', () => {
     expect(JSON.parse(new TextDecoder().decode(chat?.body))).toEqual({
       text: 'これを見て',
       attachments: ['att-png'],
+      clientMessageId: expect.stringMatching(/^[A-Za-z0-9_-]{1,128}$/),
     });
     // 送ったあとは入力欄のチップが消える。
     await waitFor(() => {
@@ -200,7 +201,10 @@ describe('添えて送る', () => {
     });
     expect(seen.some((r) => r.url.includes('/attachments?'))).toBe(false);
     const chat = seen.find((r) => r.url.endsWith('/chat'));
-    expect(JSON.parse(new TextDecoder().decode(chat?.body))).toEqual({ text: 'なし' });
+    expect(JSON.parse(new TextDecoder().decode(chat?.body))).toEqual({
+      text: 'なし',
+      clientMessageId: expect.stringMatching(/^[A-Za-z0-9_-]{1,128}$/),
+    });
   });
 
   it('上げるのに失敗したら、書きかけも添付も残してエラーを出し、/chat は呼ばない', async () => {
@@ -324,6 +328,7 @@ describe('添えて送る', () => {
     expect(JSON.parse(new TextDecoder().decode(chat?.body))).toEqual({
       text: '',
       attachments: ['att-png'],
+      clientMessageId: expect.stringMatching(/^[A-Za-z0-9_-]{1,128}$/),
     });
   });
 

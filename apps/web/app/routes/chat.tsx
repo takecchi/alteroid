@@ -41,6 +41,7 @@ import {
   formatDateTime,
   formatRelative,
   isPreviewableImage,
+  newClientMessageId,
   redactError,
 } from '@alteroid/logic';
 import type { ConversationMessage, MessageAttachment } from '@alteroid/logic';
@@ -134,6 +135,11 @@ interface Line {
   journalId?: string;
   /** この発言に添えられた添付の控え（中身ではない。表示の部品が取りに行く）。 */
   attachments?: readonly MessageAttachment[];
+  /**
+   * 送ったときに付けた発言の id（サーバの `ConversationMessage.clientMessageId` の写し。#3203）。
+   * 履歴の人間の発言だけが持つ（付けずに届いた発言・手元の楽観行・クローンの返事は持たない）。
+   */
+  clientMessageId?: string;
 }
 
 /**
@@ -248,18 +254,12 @@ export function pendingOwnLines(
   return pending;
 }
 
-/** 履歴にある、同じ文の人間の発言の数（#3121。積んだ文が受け取られたかの照合）。 */
-function countHuman(lines: Line[], text: string): number {
-  return lines.filter((line) => line.role === 'human' && line.text === text).length;
-}
-
-/** 履歴に、この id の添付を持つ人間の発言があるか（添付は1会話にしか結び付かず、id は一意）。 */
-function hasHumanWithAttachment(lines: Line[], ids: readonly string[]): boolean {
-  return lines.some(
-    (line) =>
-      line.role === 'human' &&
-      (line.attachments ?? []).some((attachment) => ids.includes(attachment.id)),
-  );
+/**
+ * 履歴に、この `clientMessageId` を持つ人間の発言があるか（#3121 / #3203。積んだ送信が受け取られたかの照合）。
+ * **本文では見ない。** 同じ本文の発言が別の経路から届いても、id は違うので取り違えない。
+ */
+function hasHumanWithClientMessageId(lines: Line[], clientMessageId: string): boolean {
+  return lines.some((line) => line.role === 'human' && line.clientMessageId === clientMessageId);
 }
 
 /** 版の切り替え（`< 2/2 >`）が1つ差し出す、編集前のある版。 */
@@ -623,21 +623,19 @@ export function ChatPane({
         restored?: boolean;
         attachments?: PendingAttachment[];
         /**
-         * `open` の前に**中断された**送信（#3121）。サーバが受け取ったか分からない。
-         * 値は送る前に履歴にあった同じ文の人間の発言の数で、これを超えて履歴に
-         * 現れたら、受け取られていたと見て下ろす。
+         * この送信に付けた `clientMessageId`（#3203）。**再送では同じ値を使う**——サーバが同じ会話で
+         * 受け取り済みなら、二重に受けずに続きを返す。
          */
-        unconfirmed?: number;
+        clientMessageId?: string;
         /**
-         * 上げ終えた添付の id。あれば、受け取りの判定は本文でなく**この id を持つ
-         * 人間の発言が履歴に現れたか**で行う（添付だけの発言は本文が全部 ''、
-         * 本文が同じで添付が違う発言もあり、本文では区別できない）。
+         * `open` の前に**中断された**送信（#3121）。サーバが受け取ったか分からない。
+         * `clientMessageId` を持つ人間の発言が履歴に現れたら、受け取られていたと見て下ろす
+         * （本文でも添付でもなく id で見る。同じ本文・同じ添付の別の発言と取り違えない）。
          */
-        confirmIds?: string[];
+        unconfirmed?: true;
       }
     >
   >(new Map());
-  const historyLinesRef = useRef<Line[]>([]);
   /** 入力欄に添えた添付（送る前）。上げるのは `send` のとき。 */
   const [pending, setPending] = useState<PendingAttachment[]>([]);
   /** 添付を上げている最中か。真のあいだは送れない。 */
@@ -1142,6 +1140,9 @@ export function ChatPane({
           ...(message.attachments === undefined || message.attachments.length === 0
             ? {}
             : { attachments: message.attachments }),
+          ...(message.clientMessageId === undefined
+            ? {}
+            : { clientMessageId: message.clientMessageId }),
         },
       }));
 
@@ -1412,19 +1413,19 @@ export function ChatPane({
       key: string | undefined,
       text: string,
       lineKey: string,
-      supersedes?: string,
-      attachments?: PendingAttachment[],
-      unconfirmed?: number,
+      supersedes: string | undefined,
+      attachments: PendingAttachment[] | undefined,
+      clientMessageId: string,
+      unconfirmed?: true,
     ) => {
       setLines((previous) => previous.filter((line) => line.key !== lineKey));
-      const ids = attachmentIds(attachments ?? []);
       setRetries((prev) =>
         new Map(prev).set(key, {
           text,
+          clientMessageId,
           ...(supersedes === undefined ? {} : { supersedes }),
           ...(attachments === undefined || attachments.length === 0 ? {} : { attachments }),
           ...(unconfirmed === undefined ? {} : { unconfirmed }),
-          ...(unconfirmed !== undefined && ids.length > 0 ? { confirmIds: ids } : {}),
         }),
       );
     },
@@ -1445,13 +1446,9 @@ export function ChatPane({
     setRetries((prev) => new Map(prev).set(shownId, { ...entry, restored: true }));
   }, [retries, shownId]);
 
-  useEffect(() => {
-    historyLinesRef.current = historyLines;
-  }, [historyLines]);
-
   /**
-   * 中断で積んだ文（`unconfirmed`）が履歴に現れたら（添付つきは、その添付 id を持つ人間の発言。
-   * 添付の無い文は、同じ文が送る前より多く現れたら）、
+   * 中断で積んだ文（`unconfirmed`）が履歴に現れたら（その `clientMessageId` を持つ人間の発言が出たら。
+   * 本文の一致では見ない、#3203）、
    * サーバは受け取っていた——積んだ文と表示を下ろす（二重送信を誘わない、#3121）。
    * 入力欄は、戻した文のまま（使い手が手を入れていない）ときだけ空にする。
    */
@@ -1460,9 +1457,8 @@ export function ChatPane({
     unconfirmedEntry?.unconfirmed === undefined ? undefined : unconfirmedEntry.text;
   const unconfirmedSeen =
     unconfirmedEntry?.unconfirmed !== undefined &&
-    (unconfirmedEntry.confirmIds === undefined
-      ? countHuman(historyLines, unconfirmedEntry.text) > unconfirmedEntry.unconfirmed
-      : hasHumanWithAttachment(historyLines, unconfirmedEntry.confirmIds));
+    unconfirmedEntry.clientMessageId !== undefined &&
+    hasHumanWithClientMessageId(historyLines, unconfirmedEntry.clientMessageId);
   useEffect(() => {
     if (!unconfirmedSeen || unconfirmedText === undefined) return;
     setRetries((prev) => {
@@ -1502,6 +1498,7 @@ export function ChatPane({
       supersedes?: string,
       retry?: boolean,
       attachments: PendingAttachment[] = [],
+      clientMessageId: string = newClientMessageId(),
     ) => {
       /*
        * **この追送が向かう会話（`running.id`）ぶんの失敗だけを消す（#1585）。**
@@ -1541,6 +1538,7 @@ export function ChatPane({
               conversationId,
               ...(supersedes === undefined ? {} : { supersedes }),
               attachments: attachmentIds(attachments),
+              clientMessageId,
             },
             {
               signal: controller.signal,
@@ -1576,7 +1574,7 @@ export function ChatPane({
          */
         setFailures((prev) => new Map(prev).set(running.id, caught));
         // 投函は `open` の前に終わっている（ここへ来るのはそれだけ）。
-        giveBack(running.id, text, lineKey, supersedes, attachments);
+        giveBack(running.id, text, lineKey, supersedes, attachments, clientMessageId);
       }
     },
     [api, recordOwnMessage, showOwnLine, giveBack],
@@ -1819,12 +1817,23 @@ export function ChatPane({
      */
     async (
       text: string,
-      options?: { supersedes?: string; retry?: boolean; attachments?: PendingAttachment[] },
+      options?: {
+        supersedes?: string;
+        retry?: boolean;
+        attachments?: PendingAttachment[];
+        /** 再送のとき、最初の送信で付けた値。無ければ（新しい送信なら）ここで作る。 */
+        clientMessageId?: string;
+      },
     ) => {
       // 本文が空でも添付があれば送る（サーバも添付のある空本文を受ける）。
       if (text.trim() === '' && (options?.attachments?.length ?? 0) === 0) return;
       const supersedes = options?.supersedes;
       const retry = options?.retry;
+      // 送るたびに作る。**再送だけは最初の値を使う**（サーバが受け取り済みなら二重に受けない。#3203）。
+      const clientMessageId =
+        retry === true && options?.clientMessageId !== undefined
+          ? options.clientMessageId
+          : newClientMessageId();
 
       /*
        * **添付は、何かを消す前に上げる。** 上げるのに失敗したら、書きかけも添付も
@@ -1885,7 +1894,7 @@ export function ChatPane({
        */
       const running = streamRef.current;
       if (running !== undefined) {
-        await followUp(text, running, supersedes, retry, attachments);
+        await followUp(text, running, supersedes, retry, attachments, clientMessageId);
         return;
       }
 
@@ -1916,7 +1925,6 @@ export function ChatPane({
         attachments.flatMap((item) => (item.meta === undefined ? [] : [item.meta])),
       );
       let opened = false;
-      const baseline = countHuman(historyLinesRef.current, text);
 
       const { setTransient, apply } = createStreamWriter(stream, controller);
 
@@ -1955,6 +1963,7 @@ export function ChatPane({
             ...(shownId === undefined ? {} : { conversationId: shownId }),
             ...(supersedes === undefined ? {} : { supersedes }),
             attachments: attachmentIds(attachments),
+            clientMessageId,
           },
           { signal: controller.signal },
         )) {
@@ -2010,13 +2019,15 @@ export function ChatPane({
         if (!controller.signal.aborted) {
           setFailures((prev) => new Map(prev).set(stream.id, caught));
           // サーバが受け取った（`open` を見た）後の失敗は、文を戻さない（二重に送らせない）。
-          if (!opened) giveBack(stream.id, text, lineKey, supersedes, attachments);
+          if (!opened) {
+            giveBack(stream.id, text, lineKey, supersedes, attachments, clientMessageId);
+          }
         }
       } finally {
         // `open` の前に中断された（受信をやめる・会話の切り替え）。受け取られたか
         // 分からないので、文は積むだけで自動では送らない（#3121）。
         if (!opened && controller.signal.aborted) {
-          giveBack(stream.id, text, lineKey, supersedes, attachments, baseline);
+          giveBack(stream.id, text, lineKey, supersedes, attachments, clientMessageId, true);
         }
         // `open` を一度も見ないまま終わったなら、追送は投函先を持てない。
         // 待たせたままにすると、続けて打った発言が永久に返ってこない

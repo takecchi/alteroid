@@ -38,7 +38,14 @@ export type JournalEntry =
  * 分からなくなる。だから `event` 名で判別する形をそのまま出す。
  */
 export type ChatMessage =
-  | { event: 'open'; data: { conversationId: string } }
+  | {
+      event: 'open';
+      /**
+       * `clientMessageId` は送ったときに渡した値の写し（Issue #3203）。`duplicate` は、同じ `clientMessageId` を
+       * 既に受け取っていて、今回は何も積まなかったときだけ付く（応答は途中経過の続き）。
+       */
+      data: { conversationId: string; clientMessageId?: string; duplicate?: boolean };
+    }
   | { event: ChatStreamEvent['type']; data: ChatStreamEvent };
 
 /**
@@ -108,6 +115,11 @@ export interface ChatInput {
    * **クローンの応答は指せない** — 指すとデーモンが 400 で弾く。
    */
   supersedes?: string;
+  /**
+   * 発言ごとに作る一意な id（英数字・`_` `-` の1〜128字。UUID でよい）。同じ会話に同じ値が再び届いたら、
+   * デーモンは二重に受けない。履歴の `messages[].clientMessageId` で、自分の発言が現れたかを確かめられる。
+   */
+  clientMessageId?: string;
 }
 
 export interface StreamOptions {
@@ -209,6 +221,7 @@ export function createAlteroidClient(options: AlteroidClientOptions): AlteroidCl
         text: input.text,
         ...(input.conversationId === undefined ? {} : { conversationId: input.conversationId }),
         ...(input.supersedes === undefined ? {} : { supersedes: input.supersedes }),
+        ...(input.clientMessageId === undefined ? {} : { clientMessageId: input.clientMessageId }),
       });
       const init: RequestInit = {
         method: 'POST',

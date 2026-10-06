@@ -7,6 +7,8 @@
  * 画面（`chat-controller.ts` / `app.tsx`）はこの `TuiApi` インターフェースだけを見る。
  * 試験では偽物を渡す。
  */
+import { randomUUID } from 'node:crypto';
+
 import type {
   ApprovalQuestion,
   ApprovalSelection,
@@ -343,6 +345,8 @@ export function createTuiApi(target: Target): TuiApi {
       const body = JSON.stringify({
         text: input.text,
         conversationId: input.conversationId ?? undefined,
+        // 発言ごとに名乗る（Issue #3203）。TUI は送信を中断して再送する経路を持たないので、判定には使わない。
+        clientMessageId: randomUUID(),
         ...(input.attachments === undefined || input.attachments.length === 0
           ? {}
           : { attachments: input.attachments }),

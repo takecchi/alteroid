@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { createInterface } from 'node:readline/promises';
 import { stdin, stdout } from 'node:process';
 
@@ -67,7 +68,7 @@ import {
   uploadDraft,
 } from './attachments.js';
 import { createClient, type DaemonClient } from './client.js';
-import { markConversationReadAfterReply } from './conversations.js';
+import { fetchUnreadTotalLine, markConversationReadAfterReply } from './conversations.js';
 import { formatElapsedAgo } from './format.js';
 import { redactBody, redactError } from './redact.js';
 import { formatCreatedAt, freshnessMarker } from './memory.js';
@@ -215,6 +216,9 @@ export async function sendMessage(
     body: JSON.stringify({
       text,
       conversationId: conversationId ?? undefined,
+      // 発言ごとに名乗る（Issue #3203）。CLI は送信を中断して再送する経路を持たないので、判定には使わない
+      // （Web と同じく、履歴に自分の発言の id が残る）。
+      clientMessageId: randomUUID(),
       ...(supersedes === undefined ? {} : { supersedes }),
       ...(options.attachments === undefined || options.attachments.length === 0
         ? {}
@@ -984,6 +988,8 @@ export async function runSlashCommand(
         return 'ok';
       }
       const { conversations, scanned, reachedStart, hiddenByLimit } = await response.json();
+      // 未読の総数の1行は `alteroid conversations list` と同じ関数（取れなくても一覧は出す）。
+      stdout.write(`${await fetchUnreadTotalLine(client)}\n`);
       listed.conversations.length = 0;
       if (conversations.length === 0) {
         stdout.write('（会話はまだありません）\n');

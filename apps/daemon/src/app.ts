@@ -100,6 +100,7 @@ import {
   noteDroppedRecord,
   reasonOf,
   readConversationWindow,
+  clientMessageIdSchema,
   RECENT_TRACE_LIMIT,
   recentDroppedTraces,
   chunkIdsByChars,
@@ -520,6 +521,12 @@ const chatBody = z
      * spec に固定の `maxItems` を書かない）。
      */
     attachments: z.array(z.string().min(1)).optional(),
+    /**
+     * クライアントが発言ごとに作る一意な id（Issue #3203）。形は `clientMessageIdSchema`（英数字・`_` `-` の
+     * 1〜128字。UUID も通る）。受信箱の `human_message` と日誌の inbound `exchange` へ残り、`open` と
+     * `GET /conversations/:id` の `messages` で返る。**同じ値が再び届いたら二重に受けない**（ハンドラが持つ）。
+     */
+    clientMessageId: clientMessageIdSchema.optional(),
   })
   /**
    * **本文は空でもよいが、添付が1件以上あるときだけ**（添付だけの発言。Issue #3111）。
@@ -2114,6 +2121,87 @@ export function createApp(deps: AppDeps) {
   const attachmentBodyMax = Math.max(attachmentLimits.maxImageBytes, attachmentLimits.maxFileBytes);
 
   /**
+   * **`POST /chat` の冪等（Issue #3203）。** 受け取った `clientMessageId` と、その会話の id。
+   * 受信箱へ積んでから日誌へ載るまでの短い窓と、同時に届いた2本の再送を、日誌を引かずに止める。
+   * **日誌を引く側（`findReceivedClientMessage`）が耐久の本体**で、こちらは取りこぼしの窓を塞ぐだけ。
+   * プロセスが落ちれば消える（日誌に載った分は日誌が覚えている）。古いものから捨てる上限つき。
+   */
+  const receivedClientMessages = new Map<string, string>();
+  const RECEIVED_CLIENT_MESSAGES_MAX = 2048;
+  /** 日誌から探すときに遡る、人間との往復の件数。再送は直後に来るので、直近だけでよい。 */
+  const CLIENT_MESSAGE_LOOKUP_SCAN = 200;
+
+  /**
+   * この `clientMessageId` を、もう受け取っているか。受け取っていれば、その会話の id を返す。
+   * 先にメモリ（受け取った直後の窓）、無ければ日誌の直近（再起動をまたぐ）を引く。
+   */
+  async function findReceivedClientMessage(clientMessageId: string): Promise<string | undefined> {
+    const remembered = receivedClientMessages.get(clientMessageId);
+    if (remembered !== undefined) return remembered;
+    const recent = await readConversationWindow(stores.journal, {
+      scan: CLIENT_MESSAGE_LOOKUP_SCAN,
+    });
+    for (const entry of recent) {
+      if (
+        entry.type === 'exchange' &&
+        entry.role === 'inbound' &&
+        entry.clientMessageId === clientMessageId &&
+        entry.conversationId !== undefined
+      ) {
+        return entry.conversationId;
+      }
+    }
+    return undefined;
+  }
+
+  /**
+   * 受け取ったことを覚える。**同期で呼ぶ**（`await` を挟まずに「無ければ入れる」を1歩にして、同時に届いた
+   * 2本のうち片方だけが先に入れるようにする）。先に覚えていれば、その会話の id を返して何もしない。
+   */
+  function claimClientMessage(clientMessageId: string, conversationId: string): string | undefined {
+    const existing = receivedClientMessages.get(clientMessageId);
+    if (existing !== undefined) return existing;
+    receivedClientMessages.set(clientMessageId, conversationId);
+    if (receivedClientMessages.size > RECEIVED_CLIENT_MESSAGES_MAX) {
+      const oldest = receivedClientMessages.keys().next();
+      if (oldest.done !== true) receivedClientMessages.delete(oldest.value);
+    }
+    return undefined;
+  }
+
+  /**
+   * 受け取り済みの `clientMessageId` が再び届いたときの応え（Issue #3203）。**何も積まない。**
+   * `GET /chat/:conversationId/stream` と同じ形で、`open`（`{conversationId, clientMessageId, duplicate: true}`）の後、
+   * 進行中のターンがあれば途中経過から続きを流して `done` / `error` で閉じる。無ければ `open` だけで閉じる
+   * （返事は `GET /conversations/:id` が持つ）。途中経過を持たない器（`clone.attach` が無い）は `open` だけ。
+   */
+  function replayReceivedMessage(
+    c: Context<{ Variables: AuthVariables }>,
+    conversationId: string,
+    clientMessageId: string,
+  ) {
+    return streamSSE(c, async (stream) => {
+      const pump = chatEventPump();
+      const attached = clone.attach?.(conversationId, (event) => pump.push(event));
+      if (attached === undefined || attached.inProgress === null) pump.finish();
+      await pump.serve(
+        stream,
+        { principal: c.get('principal'), authorization: c.req.header('authorization') },
+        attached?.unsubscribe ?? (() => {}),
+        async () => {
+          await stream.writeSSE({
+            event: 'open',
+            data: JSON.stringify({ conversationId, clientMessageId, duplicate: true }),
+          });
+          for (const event of attached?.inProgress ?? []) {
+            await stream.writeSSE({ event: event.type, data: JSON.stringify(event) });
+          }
+        },
+      );
+    });
+  }
+
+  /**
    * **外部イベントに添える添付を検証して結び付ける**（#3113 段3）。`clone.post` の**前**に呼び、`ok: false` なら
    * イベントを投函しない（添付を黙って落として本文だけ送る、をしない）。`POST /chat` の添付の検査と同じ順
    * （個数 → 存在 → 合計 → 結び付き → `bind`）で、**連携の鍵のときだけ「同じ鍵が上げたもの」に絞る**
@@ -2960,7 +3048,7 @@ export function createApp(deps: AppDeps) {
           '人間の発言をクローンの受信箱へ積み、クローンの応答を SSE で流す。' +
           '**SSE。** `event:` にイベント名（`open` / `queued` / `text` / `thinking` / `tool` / ' +
           '`ask_human` / `done` / `error`）、`data:` に対応する JSON が入る。`data:` の ' +
-          '形は下記スキーマ（`open` は `{conversationId}` のみで別枠、他は ' +
+          '形は下記スキーマ（`open` は `{conversationId, clientMessageId?}`（重複の再送のときは `duplicate: true` も）で別枠、他は ' +
           '`chatStreamEventSchema` の各枝）。人間が chat を閉じてもクローンのターンは' +
           '走り続ける（人間の不在で止まるのは承認待ちの仕事だけ）。' +
           '**`queued` と `thinking` は別の状態である。** `queued` は受信箱に積んだ' +
@@ -2975,7 +3063,13 @@ export function createApp(deps: AppDeps) {
           '`conversation_read` から畳まれ、この発言が編集後の版として応答を受ける' +
           '（編集前のターンで起きた副作用——承認待ち・記憶・マネージャー・台帳の行——は' +
           '一切取り消さない）。`conversationId` と併せて渡すこと。編集できるのは' +
-          '**人間の発言だけ**（クローンの応答は指せない）。',
+          '**人間の発言だけ**（クローンの応答は指せない）。' +
+          '**`clientMessageId` — 送った側が発言ごとに作る一意な id（任意。英数字・`_` `-` の1〜128字）。** ' +
+          '受信箱の発言と日誌の発言に残り、`open` と `GET /conversations/:id` の `messages` で返る' +
+          '（送った側が、自分の発言が履歴に現れたかを本文でなく id で確かめられる）。' +
+          '**同じ値が再び届いたら二重に受けない**——何も積まず、`open`（`duplicate: true`）の後、' +
+          '進行中のターンがあれば途中経過から続きを流して閉じる（`GET /chat/:conversationId/stream` と同じ）。' +
+          '別の会話で受け取り済みの値は 409。重複の判定は、直近の日誌（人間との往復200件）と受け取り直後の記憶で行う。',
         responses: {
           200: {
             description: 'SSE ストリーム。',
@@ -2988,7 +3082,14 @@ export function createApp(deps: AppDeps) {
               '`text` が空で添付も無い、または本文が JSON として不正。または `supersedes` の検証に' +
               '落ちた——`conversationId` が無いのに `supersedes` がある、指した id が' +
               '見つからない・この会話のものではない、クローンの応答（outbound）を指して' +
-              'いる、既に別の編集に置き換えられている、のいずれか。',
+              'いる、既に別の編集に置き換えられている、のいずれか。' +
+              '`clientMessageId` の形が不正（英数字・`_` `-` の1〜128字）のときも 400。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+          409: {
+            description:
+              '`clientMessageId` が、**別の会話**の発言として既に受け取られている（`code: client_message_id_conflict`）。' +
+              '同じ会話に同じ値が届いた場合は 409 ではなく、二重に受けずに 200（下の説明）。',
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
         },
@@ -3002,7 +3103,32 @@ export function createApp(deps: AppDeps) {
           conversationId: given,
           supersedes,
           attachments: attachmentIds,
+          clientMessageId,
         } = c.req.valid('json');
+
+        /*
+         * **同じ `clientMessageId` の再送は、二重に受けない（Issue #3203）。** 検査（`supersedes`・添付）より前に
+         * 見る——1回目で受けた編集は、再送のときには既に「置き換え済み」で、検査へ進むと自分自身に 400 を返す。
+         * 受けていれば何も積まず、`GET /chat/:conversationId/stream` と同じ形（`open` の後、進行中のターンが
+         * あれば途中経過から続きを流して `done` / `error` で閉じる）で応える。`open` には
+         * `duplicate: true` を付ける。**別の会話で受けていたら 409**（同じ id を別の発言に使うのは呼び手の取り違え）。
+         */
+        if (clientMessageId !== undefined) {
+          const received = await findReceivedClientMessage(clientMessageId);
+          if (received !== undefined) {
+            if (given !== undefined && given !== received) {
+              return c.json(
+                {
+                  error:
+                    `clientMessageId ${clientMessageId} は別の会話の発言として受け取り済み` as const,
+                  code: 'client_message_id_conflict' as const,
+                },
+                409,
+              );
+            }
+            return replayReceivedMessage(c, received, clientMessageId);
+          }
+        }
 
         /*
          * **送信済みの人間の発言を編集する口の検証。** `clone.post` を呼ぶ前に
@@ -3151,6 +3277,24 @@ export function createApp(deps: AppDeps) {
           }
         }
 
+        // 検査を抜けた。覚えるのは**ここ**（同期）——同時に届いた2本のうち、片方だけがここを通る。
+        if (clientMessageId !== undefined) {
+          const raced = claimClientMessage(clientMessageId, conversationId);
+          if (raced !== undefined) {
+            if (raced !== conversationId) {
+              return c.json(
+                {
+                  error:
+                    `clientMessageId ${clientMessageId} は別の会話の発言として受け取り済み` as const,
+                  code: 'client_message_id_conflict' as const,
+                },
+                409,
+              );
+            }
+            return replayReceivedMessage(c, raced, clientMessageId);
+          }
+        }
+
         return streamSSE(c, async (stream) => {
           const pump = chatEventPump();
           const unsubscribe = clone.subscribe(conversationId, (event) => pump.push(event));
@@ -3185,9 +3329,16 @@ export function createApp(deps: AppDeps) {
                 conversationId,
                 ...(supersedes === undefined ? {} : { supersedes }),
                 ...(attachmentRefs.length === 0 ? {} : { attachments: attachmentRefs }),
+                ...(clientMessageId === undefined ? {} : { clientMessageId }),
               });
 
-              await stream.writeSSE({ event: 'open', data: JSON.stringify({ conversationId }) });
+              await stream.writeSSE({
+                event: 'open',
+                data: JSON.stringify({
+                  conversationId,
+                  ...(clientMessageId === undefined ? {} : { clientMessageId }),
+                }),
+              });
             },
           );
         });
@@ -3554,6 +3705,9 @@ export function createApp(deps: AppDeps) {
           ...(message.turnFailure === undefined ? {} : { turnFailure: message.turnFailure }),
           // 添付のメタデータ（中身は `GET /attachments/:id`）。無い発言には載せない。
           ...(message.attachments === undefined ? {} : { attachments: message.attachments }),
+          ...(message.clientMessageId === undefined
+            ? {}
+            : { clientMessageId: message.clientMessageId }),
         }));
 
         /*

@@ -881,6 +881,13 @@ describe('inboxEventShape の名簿（schema に足した型・欄の足し忘�
           'ある。`journalEntryShape` の `exchange.supersedes` と同じ判断。' +
           '足すなら対応欄と2か所同時、`tag()` は禁止。',
       },
+      clientMessageId: {
+        emit: 'never',
+        why:
+          '送った側（クライアント）が決める値（#3203。`POST /chat` の入口が形を検める前の値でもある）で、' +
+          'この関数の外にある。`journalEntryShape` の `exchange.clientMessageId` と同じ判断で、' +
+          '足すなら2か所同時、`tag()` は禁止。',
+      },
       attachments: {
         emit: 'never',
         why:
@@ -1004,6 +1011,7 @@ describe('inboxEventShape の名簿（schema に足した型・欄の足し忘�
       text: SECRET,
       conversationId: SECRET,
       supersedes: SECRET,
+      clientMessageId: SECRET,
       attachments: [{ id: SECRET, name: SECRET, mediaType: 'image/png', size: 1, sha256: SECRET }],
     },
     human_answer: {
@@ -1827,6 +1835,12 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
           'この関数はその検証の外に立つ。足すなら `inboxEventShape` の' +
           '`human_message.supersedes` と2か所同時、`tag()` は禁止。',
       },
+      clientMessageId: {
+        emit: 'never',
+        why:
+          '送った側（クライアント）が決める値（#3203）で、この関数の外にある。' +
+          '`inboxEventShape` の `human_message.clientMessageId` と2か所同時、`tag()` は禁止。',
+      },
       attachments: {
         emit: 'never',
         why:
@@ -2274,6 +2288,7 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
       text: SECRET,
       conversationId: SECRET,
       supersedes: SECRET,
+      clientMessageId: SECRET,
       attachments: [{ id: SECRET, name: SECRET, mediaType: 'image/png', size: 1, sha256: SECRET }],
       turnFailure: 'failed',
       approvalId: 'ap-1',
