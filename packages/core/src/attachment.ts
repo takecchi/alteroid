@@ -151,6 +151,15 @@ export const DEFAULT_ATTACHMENT_LIMITS: AttachmentLimits = {
   retentionDays: ATTACHMENT_RETENTION_DAYS_DEFAULT,
 };
 
+/**
+ * 画像の上限を人間向けの文にする（MiB で割り切れれば `5 MiB`、そうでなければ `1000 B`）。
+ * 中身が画像でも上限を超える添付を画像として渡さないときの通知行に使う（#3325）。
+ */
+export function formatImageLimit(bytes: number): string {
+  const mib = 1024 * 1024;
+  return bytes % mib === 0 ? `${bytes / mib} MiB` : `${bytes} B`;
+}
+
 export interface AttachmentLimitsConfig {
   readonly limits: AttachmentLimits;
   /** 読めなかった設定値についての注意（呼び出し元が人間に見せる）。 */
