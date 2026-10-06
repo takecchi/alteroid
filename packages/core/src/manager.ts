@@ -113,6 +113,7 @@ import type {
 } from './schema.js';
 import { describeUnreadableManagerRow, type Stores } from './store.js';
 import { pruneRescueLedger, rescueRemovalDue, syncTerminalMark } from './rescue-cleanup.js';
+import { MAX_RESCUE_INTERVAL_MS } from './rescue-ref.js';
 import { withCgroupEventsNote } from './cgroup-events.js';
 import { withSystemErrorNote } from './system-error.js';
 import {
@@ -4886,6 +4887,7 @@ const SYNTHESIZED_NOTICE_WINDOW_MS_UNREADABLE_WHAT = '機構合成の知らせ�
  * | 未設定 / 空・空白のみ | 既定3000ms | 出さない |
  * | 非空だが数値として読めない | 既定3000ms | 残す |
  * | 非空で数値だが 0 以下 | 既定3000ms | 残す |
+ * | 非空で数値で 2^31-1 ms 超 | 2^31-1 ms に挟む | 出さない |
  */
 export function resolveSynthesizedNoticeWindowMs(env: NodeJS.ProcessEnv = process.env): number {
   const raw = env[SYNTHESIZED_NOTICE_WINDOW_MS_ENV_KEY];
@@ -4910,7 +4912,10 @@ export function resolveSynthesizedNoticeWindowMs(env: NodeJS.ProcessEnv = proces
     );
     return SYNTHESIZED_NOTICE_WINDOW_MS;
   }
-  return parsed;
+  // **上限で挟む。運用の上限ではなく、タイマーの仕様の範囲を守るためのもの**——`setTimeout` は
+  // 2^31-1 ms を超える値を 1ms へ倒し、長い窓を指定したつもりが窓が効かなくなる（#3581）。
+  // 兄弟の `resolveRescueIntervalMs` と同じ値・同じ調子で、その定数を使い回す。
+  return Math.min(MAX_RESCUE_INTERVAL_MS, parsed);
 }
 
 /**
