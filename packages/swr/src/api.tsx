@@ -396,7 +396,13 @@ export function unwrap<T>(result: { data?: T; error?: unknown; response: Respons
  */
 export async function* postChat(
   client: AlteroidClient,
-  input: { text: string; conversationId?: string; supersedes?: string },
+  input: {
+    text: string;
+    conversationId?: string;
+    supersedes?: string;
+    /** `uploadAttachment` が返した添付の id（発言へ結び付ける）。 */
+    attachments?: readonly string[];
+  },
   options?: { signal?: AbortSignal },
 ): AsyncGenerator<ChatMessage> {
   const result = await client.api.POST('/chat', {
@@ -404,6 +410,9 @@ export async function* postChat(
       text: input.text,
       ...(input.conversationId === undefined ? {} : { conversationId: input.conversationId }),
       ...(input.supersedes === undefined ? {} : { supersedes: input.supersedes }),
+      ...(input.attachments === undefined || input.attachments.length === 0
+        ? {}
+        : { attachments: [...input.attachments] }),
     },
     parseAs: 'stream',
     ...(options?.signal === undefined ? {} : { signal: options.signal }),
@@ -416,6 +425,57 @@ export async function* postChat(
       data: message.data === '' ? undefined : JSON.parse(message.data),
     } as ChatMessage;
   }
+}
+
+/**
+ * 添付を1つ預ける（`POST /attachments`）。本文は**生のバイト列**で、名前と MIME はクエリで運ぶ。
+ *
+ * `content-type` は `application/octet-stream` だけを受ける（それ以外は 415）。`openapi-fetch` の
+ * 既定の直列化（JSON）を通さないよう、`bodySerializer` で `Blob` をそのまま渡す。
+ * 失敗（415 / 413 / 400）は `{error, code}` を `ApiError` にして投げる。
+ */
+export async function uploadAttachment(
+  client: AlteroidClient,
+  file: Blob,
+  meta: { name: string; type: string },
+  options?: { signal?: AbortSignal },
+) {
+  const result = await client.api.POST('/attachments', {
+    params: { query: { name: meta.name, type: meta.type } },
+    // 生成型は本文を `string` と書く（バイナリの表現）。実体は Blob のまま送る。
+    body: file as unknown as string,
+    bodySerializer: (body: unknown) => body as BodyInit,
+    headers: { 'content-type': 'application/octet-stream' },
+    ...(options?.signal === undefined ? {} : { signal: options.signal }),
+  });
+  return unwrap(result);
+}
+
+/** 添付が取り出せない（消えた・期限切れ。404）。 */
+export class AttachmentGoneError extends Error {
+  constructor() {
+    super('添付を取り出せない（期限切れの可能性）');
+    this.name = 'AttachmentGoneError';
+  }
+}
+
+/**
+ * 添付の中身を取る（`GET /attachments/:id`）。Bearer は `client` が運ぶので、`<img src>` に
+ * URL を直接入れる代わりに、ここで `Blob` にして `blob:` URL へ変える。
+ * 404 は `AttachmentGoneError`、それ以外の失敗は `ApiError`。
+ */
+export async function fetchAttachment(
+  client: AlteroidClient,
+  id: string,
+  options?: { signal?: AbortSignal },
+): Promise<Blob> {
+  const result = await client.api.GET('/attachments/{id}', {
+    params: { path: { id } },
+    parseAs: 'blob',
+    ...(options?.signal === undefined ? {} : { signal: options.signal }),
+  });
+  if (result.response.status === 404) throw new AttachmentGoneError();
+  return unwrap(result) as unknown as Blob;
 }
 
 /**
