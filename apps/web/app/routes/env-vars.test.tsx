@@ -128,7 +128,7 @@ describe('/env-vars 画面 — runner への反映の一部失敗（#3157）', (
     fireEvent.click(screen.getByRole('button', { name: '置く' }));
 
     const alert = await screen.findByRole('alert');
-    expect(alert.textContent).toContain('正本には置いたが、1 台の実行環境へ反映できていない');
+    expect(alert.textContent).toContain('環境変数を置いたが、1 台の実行環境へ反映できていない');
     expect(alert.textContent).toContain('runner-2');
     expect(alert.textContent).toContain('つながらない');
     expect(alert.className).toContain('text-warn');
@@ -181,7 +181,7 @@ describe('/env-vars 画面 — runner への反映の一部失敗（#3157）', (
     );
 
     const alert = await screen.findByRole('alert');
-    expect(alert.textContent).toContain('正本には外したが');
+    expect(alert.textContent).toContain('環境変数を外したが');
   });
 });
 

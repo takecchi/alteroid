@@ -30,12 +30,15 @@ afterEach(() => {
 });
 
 /** `GET /archive/entry-1` に `respond()` を返す。一覧は空、それ以外は繋がらない。 */
-function stub(respond: () => Response | Promise<Response>) {
+function stub(
+  respond: () => Response | Promise<Response>,
+  entries: Record<string, unknown>[] = [],
+) {
   const calls: string[] = [];
   globalThis.fetch = (async (input: RequestInfo | URL) => {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
     const path = new URL(url).pathname;
-    if (path === '/archive') return json({ entries: [] });
+    if (path === '/archive') return json({ entries });
     if (path === '/archive/entry-1') {
       calls.push(path);
       return respond();
@@ -116,6 +119,17 @@ describe('/archive/:id', () => {
       fireEvent.click(screen.getByRole('button', { name: '続きを表示' }));
     }
     expect(screen.getByTestId('archive-body').textContent).toBe(full);
+  });
+
+  it('一覧に在る行なら、使用量を読める単位で見出しに出す（生のバイト数にしない）', async () => {
+    stub(
+      () => text('x'),
+      [{ id: 'entry-1', sessionId: 's', at: '2026-09-01T00:00:00.000Z', storedBytes: 11452 }],
+    );
+    renderPage();
+
+    expect(await screen.findByText('使用量 11.2 KB')).toBeTruthy();
+    expect(screen.queryByText(/11452/)).toBeNull();
   });
 
   it('消された行（410）は失敗ではなく「本文は削除済み」と言う', async () => {
