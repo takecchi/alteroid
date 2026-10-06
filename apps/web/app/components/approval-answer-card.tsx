@@ -3,6 +3,8 @@ import { useState } from 'react';
 import type { ReactNode } from 'react';
 import { Link } from 'react-router';
 
+import { useMinuteNow } from '~/lib/use-now';
+
 import {
   ApprovalCard,
   ErrorNote,
@@ -83,6 +85,8 @@ export function ApprovalAnswerCard({
   showSettledAt?: boolean;
 }) {
   const answerApproval = useAnswerApproval();
+  // 「たった今」「N分前」を古いまま残さない（#3596）。
+  const now = useMinuteNow();
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<unknown>(undefined);
   const [ownDraft, setOwnDraft] = useState('');
@@ -141,7 +145,7 @@ export function ApprovalAnswerCard({
       time={
         <>
           <span>{formatDateTime(approval.createdAt)}</span>
-          <span>({formatRelative(approval.createdAt)})</span>
+          <span>({formatRelative(approval.createdAt, now)})</span>
           {showSettledAt && state === 'answered' && approval.answeredAt != null && (
             <span>回答: {formatDateTime(approval.answeredAt)}</span>
           )}

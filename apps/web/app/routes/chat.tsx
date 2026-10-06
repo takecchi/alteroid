@@ -66,6 +66,7 @@ import {
   isApprovalAnswered,
   isApprovalWithdrawn,
 } from '~/components/approval-answer-card';
+import { useMinuteNow } from '~/lib/use-now';
 import { usePageVisible } from '~/lib/use-page-visible';
 
 import type { Route } from './+types/chat';
@@ -746,6 +747,8 @@ function ConversationList({
   const { data, error, isLoading, isValidating, mutate } = useConversations(limit, {
     keepPreviousData: true,
   });
+  // 「たった今」「N分前」を古いまま残さない（#3596）。
+  const now = useMinuteNow();
   const loadingMore = step > 0 && isValidating;
   const moreFailing = step > 0 && error !== undefined && !isValidating;
 
@@ -789,7 +792,7 @@ function ConversationList({
       items={data?.conversations.map((conversation) => ({
         id: conversation.conversationId,
         preview: conversation.preview,
-        updatedLabel: formatRelative(conversation.updatedAt),
+        updatedLabel: formatRelative(conversation.updatedAt, now),
         messages: conversation.messages,
         messagesAtLeast: data.reachedStart === false,
         unread: conversation.unreadCount,
