@@ -5812,8 +5812,13 @@ export function createApp(deps: AppDeps) {
         // 「読めない形で在る。取り消しはこの口ではできない」（409）と言い分ける
         // （`GET /managers/:id` の #2359 と同じ線）。行は変わっていない。
         let grant: Awaited<ReturnType<typeof stores.permissionGrants.revoke>>;
+        // **日誌の書き分けのためだけに、取り消す前の状態を読む**（#3362）。取り消し自体は
+        // この読みに依らない（`revoke` が排他区間の中で読み直す）。読めない行は `get()` に
+        // 現れず `null` になるが、そのときは下の `revoke` が 409 で止める。
+        const revokedBefore = (await stores.permissionGrants.get(id))?.revokedAt !== undefined;
+        const revokeAt = new Date().toISOString();
         try {
-          grant = await stores.permissionGrants.revoke(id, new Date().toISOString());
+          grant = await stores.permissionGrants.revoke(id, revokeAt);
         } catch (error) {
           if (!(error instanceof UnreadablePermissionGrantError)) throw error;
           return c.json(
@@ -5831,11 +5836,19 @@ export function createApp(deps: AppDeps) {
         // 「事後に追えることが最終承認の実体」PRD「可観測性」）。
         // **ただし取り消し自体はもう効いている**（Issue #2037）。日誌への
         // 追記だけが落ちても 500 を返さない——`appendJournalOrDrop` の doc。
+        // **操作は毎回残し、出来事は重ねない**（#3362）。2回目以降（既に取り消し済みの
+        // 許可への取り消し）は「取り消した」と書かず、「既に取り消し済みだった。revokedAt は
+        // 変えていない」と書き分ける（`revoke` は元の `revokedAt` を保つ）。既に取り消し済みかは
+        // 読み取り前の状態、または `revoke` が返した `revokedAt` が今回の時刻でないことで判る
+        // （並行した2つの取り消しで、読み取りが両方とも「まだ」でも後に着いた側が拾える）。
+        const alreadyRevoked = revokedBefore || grant.revokedAt !== revokeAt;
         await appendJournalOrDrop(
           stores,
           {
             type: 'decision',
-            decision: `許可を取り消した: ${grant.rule}`,
+            decision: alreadyRevoked
+              ? `許可の取り消しを求められたが、既に取り消し済みだった（revokedAt は変えていない）: ${grant.rule}`
+              : `許可を取り消した: ${grant.rule}`,
             grounds: `${describeActor(c.get('principal'))}（POST /permission-grants/${id}/revoke）`,
           },
           '許可の取り消しの日誌',
