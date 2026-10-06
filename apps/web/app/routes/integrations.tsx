@@ -1,3 +1,4 @@
+import { exampleBaseUrl } from '~/lib/integration-example';
 import { SettingsTabs } from '~/components/group-tabs';
 import { LoadError } from '~/components/load-error';
 import { settingsDocumentTitle } from '~/lib/nav';
@@ -56,6 +57,8 @@ const SOURCE_PATTERN = /^[a-z0-9._-]{1,64}$/;
 const DEFAULT_MAX_BODY_BYTES = 1024 * 1024;
 const DEFAULT_RATE_PER_MINUTE = 60;
 const MAX_INT = 2_147_483_647;
+/** 名前の上限（CLI の `integration create` と同じ。デーモンの上限でもある）。 */
+const NAME_MAX_LENGTH = 200;
 
 type KeyStatus = 'active' | 'revoked' | 'expired';
 
@@ -151,7 +154,11 @@ function IssueForm({ onIssued }: { onIssued: (issued: IntegrationKeyIssued) => v
   const [failure, setFailure] = useState<unknown>(undefined);
   const [problems, setProblems] = useState<string[]>([]);
 
+  // CLI（`integration create`）と同じ上限・同じ数え方（trim 後の `.length`）。黙って切らない。
+  const nameTooLong = name.trim().length > NAME_MAX_LENGTH;
+
   async function submit() {
+    if (nameTooLong) return; // 送らない。入力もそのまま残す（言うのは欄の下）。
     const checked = buildInput({ name, source, expires, maxBodyBytes, ratePerMinute });
     if (!checked.ok) {
       // 送らない。入力もそのまま残す。
@@ -194,11 +201,22 @@ function IssueForm({ onIssued }: { onIssued: (issued: IntegrationKeyIssued) => v
           <span className="text-xs text-muted-foreground">名前（見分けるための呼び名）</span>
           <Input
             value={name}
-            maxLength={200}
+            aria-invalid={nameTooLong || undefined}
+            aria-describedby={nameTooLong ? 'integration-name-too-long' : undefined}
             autoComplete="off"
             onChange={(event) => setName(event.target.value)}
           />
         </label>
+        {nameTooLong && (
+          <p
+            id="integration-name-too-long"
+            role="alert"
+            className="-mt-2 text-[11px] break-words text-destructive"
+          >
+            名前は 1〜{String(NAME_MAX_LENGTH)} 文字で指定してください（いま{' '}
+            {String(name.trim().length)} 文字）
+          </p>
+        )}
         <div className="flex flex-col gap-1">
           <label className="flex flex-col gap-1">
             <span className="text-xs text-muted-foreground">source</span>
@@ -323,7 +341,7 @@ function IssuedValue({ issued, onClose }: { issued: IntegrationKeyIssued; onClos
   const { baseUrl } = useApiContext();
   const { key, value } = issued;
   const example =
-    `curl -X POST ${baseUrl.replace(/\/+$/, '')}/events/${key.source} \\\n` +
+    `curl -X POST ${exampleBaseUrl(baseUrl, window.location.origin)}/events/${key.source} \\\n` +
     `  -H "Authorization: Bearer <上の値>" \\\n` +
     `  -H "Content-Type: application/json" \\\n` +
     `  -d '{"message":"hello"}'`;
