@@ -462,7 +462,10 @@ inboxCommand
       'self_initiative,manager_message から選ぶ。在る7種類全部を並べた呼びは断られる）',
   )
   .option('--sources <送信元>', '送信元での絞り込み（完全一致、カンマ区切り）')
-  .option('--before <ISO8601>', 'この時刻より古い行だけを対象にする')
+  .option(
+    '--before <ISO8601>',
+    'この時刻より古い行だけを対象にする（時差が必須。例 2026-10-06T00:00:00Z / 2026-10-06T09:00:00+09:00。時差の無い値は断られる）',
+  )
   .requiredOption('--reason <理由>', '日誌に残す理由')
   .option('--execute', '試算ではなく実際に消す（既定は試算）')
   // 既定・上限は `@alteroid/core` の定数から組む（`usage` / `conversations` の

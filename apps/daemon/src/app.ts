@@ -81,8 +81,9 @@ import {
   reachedStart,
   droppedTraceLedgerSince,
   findUnrecordedManagers,
-  isReadableJournalTimeBoundary,
+  isOffsetQualifiedTimeBoundary,
   describeUnreadableJournalTimeBoundary,
+  describeOffsetRequiredTimeBoundary,
   guardArchiveRemoval,
   INBOX_EVENT_TYPE_ORDER,
   isAccountGranted,
@@ -9534,12 +9535,15 @@ export function createApp(deps: AppDeps) {
             400,
           );
         }
-        if (before !== undefined && !isReadableJournalTimeBoundary(before)) {
+        if (before !== undefined && !isOffsetQualifiedTimeBoundary(before)) {
           // 存在しない日付・日付でない文字列を別の時刻として読んで消さない（#3358。#3287 と同じ3段）。
+          // さらに、時差の無い時刻をデーモンの地方時刻として読んで消さない（#3390。道具 `inbox_remove_many` と
+          // 同じ門・同じ文言。元に戻せない一括削除なので時差を必須にする——#2462）。
           return c.json(
             {
               error:
-                describeUnreadableJournalTimeBoundary('before', before) + '**1件も消していない。**',
+                describeOffsetRequiredTimeBoundary('before', before, '2026-10-06T09:00:00+09:00') +
+                '**1件も消していない。**',
             },
             400,
           );
@@ -9815,12 +9819,15 @@ export function createApp(deps: AppDeps) {
             400,
           );
         }
-        if (before !== undefined && !isReadableJournalTimeBoundary(before)) {
+        if (before !== undefined && !isOffsetQualifiedTimeBoundary(before)) {
           // 存在しない日付・日付でない文字列を別の時刻として読んで消さない（#3358。#3287 と同じ3段）。
+          // さらに、時差の無い時刻をデーモンの地方時刻として読んで消さない（#3390。道具 `inbox_remove_many` と
+          // 同じ門・同じ文言。元に戻せない一括削除なので時差を必須にする——#2462）。
           return c.json(
             {
               error:
-                describeUnreadableJournalTimeBoundary('before', before) + '**1件も消していない。**',
+                describeOffsetRequiredTimeBoundary('before', before, '2026-10-06T09:00:00+09:00') +
+                '**1件も消していない。**',
             },
             400,
           );

@@ -445,8 +445,10 @@ export { journalWindowCrossesHorizon } from './journal-horizon.js';
  */
 export {
   isReadableJournalTimeBoundary,
+  isOffsetQualifiedTimeBoundary,
   normalizeJournalTimeBoundary,
   describeUnreadableJournalTimeBoundary,
+  describeOffsetRequiredTimeBoundary,
 } from './journal-time.js';
 /**
  * 日誌を語で探す（`JournalQuery.q`。issue #250）ときの、照合の唯一の正本。
