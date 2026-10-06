@@ -55,9 +55,27 @@ describe('フッタのキーヒント', () => {
     }
   });
 
-  it('日誌の一覧のフッタは、読み直しの r と / コマンドを案内する（#3485）', () => {
+  it('一覧・詳細の案内は、どの画面からも効く Ctrl+C の「^C 中断」を載せる（#3517）', () => {
+    for (const hint of [
+      HINT_MGR_LIST,
+      HINT_MGR_DETAIL,
+      HINT_JOURNAL_LIST,
+      HINT_JOURNAL_DETAIL,
+      HINT_MEM_LIST,
+      HINT_MEM_DETAIL,
+      HINT_AP_LIST,
+      HINT_AP_DATES,
+      HINT_AP_DAY,
+      HINT_AP_DETAIL,
+      HINT_AP_DETAIL_FROM_DAY,
+    ]) {
+      expect(hint).toContain('^C 中断');
+    }
+  });
+
+  it('日誌の一覧のフッタは、読み直しの r を案内する（#3485）', () => {
+    // 80 桁に ^C 中断（#3517）を収めるため「/ コマンド」は外した。/ はどの画面でも効き、/help に載る。
     expect(HINT_JOURNAL_LIST).toContain('r 更新');
-    expect(HINT_JOURNAL_LIST).toContain('/ コマンド');
   });
 
   it('詳細の案内は開いた元で変わる（その日の件から開いたら Esc はその日へ。未回答から開いたら今のまま）', () => {

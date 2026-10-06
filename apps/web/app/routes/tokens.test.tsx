@@ -678,6 +678,41 @@ describe('/tokens 画面 — 403', () => {
     expect(await screen.findByText(/使う許可があるアカウントだけが見られる/)).toBeTruthy();
     expect(screen.queryByText('alteroid token list')).toBeNull();
   });
+
+  it('一覧が読めたあとの再取得だけが 403 でも、一覧は残し、上に注記を出す', async () => {
+    // 初回は読めて、フォーカス復帰の再取得だけが 403 になる。SWR は `data` を保つので、
+    // 説明カードに置き換えて読めていた一覧を消さない。
+    let forbidden = false;
+    stubFetch((url) => {
+      if (url.includes('/tokens')) {
+        if (forbidden) return json({ error: '実行環境の持ち主だけが操作できる' }, 403);
+        return json({
+          tokens: [
+            {
+              id: 't-ready',
+              label: 'ready-token',
+              order: 0,
+              sha256: 'a'.repeat(12),
+              source: 'stored',
+            },
+          ],
+          settings: DEFAULT_SETTINGS,
+        });
+      }
+      if (url.includes('/journal')) return json({ entries: [] });
+      return undefined;
+    });
+
+    renderTokens();
+    expect(await screen.findByText('ready-token')).toBeTruthy();
+
+    forbidden = true;
+    fireEvent.focus(window);
+
+    expect(await screen.findByText('トークンの一覧を読み込めませんでした')).toBeTruthy();
+    expect(screen.getByText('ready-token')).toBeTruthy();
+    expect(screen.queryByText(/使う許可があるアカウントだけが見られる/)).toBeNull();
+  });
 });
 
 describe('/tokens 画面 — 切り替えの履歴（エラー状況）', () => {

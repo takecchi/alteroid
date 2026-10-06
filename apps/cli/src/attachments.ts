@@ -212,6 +212,14 @@ export class AttachmentDraft {
     }
   }
 
+  /**
+   * 送ると決めて `discard` した分を、送らなかったときに先頭へ戻す（元の並びのまま。上げ済みの印も残るので、
+   * 次の送信で上げ直さない。#3588）。すでに入っている分は足さない。
+   */
+  restore(files: readonly DraftFile[]): void {
+    this.files.unshift(...files.filter((f) => !this.files.includes(f)));
+  }
+
   /** 一覧の文。 */
   describe(): string[] {
     if (this.files.length === 0) return ['（添えかけのファイルは無い。/attach <path> で足す）'];
@@ -350,10 +358,13 @@ export async function uploadDraft(
     bytes: Uint8Array;
   }) => Promise<UploadedAttachment>,
 ): Promise<UploadDraftResult> {
+  // 送ると決めた時点の写しを走査する（生きた配列を走査しない）。上げているあいだの `/attach` / `/detach` が
+  // 走査とずれて、外したファイルを送ったり、後から足した分を混ぜたりしないように（#3558）。
+  const snapshot = [...draft.list()];
   const uploaded: UploadedAttachment[] = [];
   const sent: DraftFile[] = [];
   const limits = await draft.limits();
-  for (const file of draft.list()) {
+  for (const file of snapshot) {
     if (file.uploadedId !== undefined) {
       uploaded.push({
         id: file.uploadedId,
@@ -424,6 +435,7 @@ export async function attachmentsMetaCommand(id: string): Promise<void> {
       `size: ${meta.size}（${formatBytes(meta.size)}）`,
       `sha256: ${meta.sha256}`,
       ...(meta.conversationId === undefined ? [] : [`conversationId: ${meta.conversationId}`]),
+      ...(meta.externalEventId === undefined ? [] : [`externalEventId: ${meta.externalEventId}`]),
       ...(meta.uploadedBy === undefined ? [] : [`uploadedBy: ${meta.uploadedBy}`]),
       `createdAt: ${meta.createdAt}`,
       `expiresAt: ${meta.expiresAt}`,

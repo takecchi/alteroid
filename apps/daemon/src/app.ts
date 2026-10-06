@@ -118,6 +118,7 @@ import {
   RunnerHttpError,
   runnerSetCredentialsCommandSchema,
   scheduleKindSchema,
+  SCHEDULE_EVERY_MINUTES_MAX_MESSAGE,
   scheduleSpecSchema,
   selectArchiveRemovalTargets,
   startSseHeartbeat,
@@ -508,6 +509,11 @@ export function parseAllowedOrigins(raw: string | undefined): {
   return { origins, rejected };
 }
 
+/** 孤立サロゲートを含まないか（`String.prototype.isWellFormed`、ES2024）。tsconfig の `lib` が ES2023 なので最小の型だけ足す。 */
+function isWellFormedString(value: string): boolean {
+  return (value as string & { isWellFormed(): boolean }).isWellFormed();
+}
+
 /**
  * `supersedes`: 送信済みの人間の発言を編集するチャットの口
  * （issue「チャットの送信済みメッセージを編集する」）。
@@ -521,7 +527,17 @@ export function parseAllowedOrigins(raw: string | undefined): {
 const chatBody = z
   .object({
     text: z.string(),
-    conversationId: z.string().min(1).optional(),
+    /**
+     * 会話の id。**孤立サロゲート（JSON の `"\ud83d"` など）を含むものは 400 で断る（#3560）。** 添付の
+     * 結び付け先になる id で、pg の添付の `conversation_id`（text 列）は孤立サロゲートを U+FFFD へ書き換えて
+     * 残す——同じ添付の再 bind が conflict になり、別々の id が同じ値に潰れて取り違えうる。黙って正規化すると
+     * 呼び手が渡した id と違うものを扱うことになるので、入口で断る。エラーには値を混ぜない（`path` だけ）。
+     */
+    conversationId: z
+      .string()
+      .min(1)
+      .refine(isWellFormedString, { message: '孤立サロゲートを含む' })
+      .optional(),
     supersedes: z.string().min(1).optional(),
     /**
      * 発言に結び付ける添付の id（`POST /attachments` が返した id。Issue #3111）。形だけをここで見る。
@@ -6583,7 +6599,13 @@ export function createApp(deps: AppDeps) {
         },
       }),
       jsonBody(scheduleBody, (where) => ({
-        error: 'kind/request/spec の形が不正' + (where === '' ? '' : `: ${where}`),
+        error:
+          'kind/request/spec の形が不正' +
+          (where === '' ? '' : `: ${where}`) +
+          // every の分数の断りは、上限と代わりの書き方を伝える（#3533）。値は混ぜない（固定の文だけ）。
+          (where.split(', ').includes('spec.minutes')
+            ? `（${SCHEDULE_EVERY_MINUTES_MAX_MESSAGE}）`
+            : ''),
       })),
       async (c) => {
         const { kind, request, spec } = c.req.valid('json');

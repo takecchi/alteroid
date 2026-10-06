@@ -599,6 +599,15 @@ describe('「次の自動実行」カード', () => {
     expect(await screen.findByText('予定はない。')).toBeTruthy();
   });
 
+  it('予定が0件でも読めない依頼が在るときは、「予定はない」と言い切らない（#3538）', async () => {
+    renderHome({
+      schedule: { entries: [], unreadable: [{ kind: 'broken-1', reason: '不正な欄: spec' }] },
+    });
+
+    expect(await screen.findByText('読めた範囲では、予定はない。')).toBeTruthy();
+    expect(screen.queryByText('予定はない。')).toBeNull();
+  });
+
   /**
    * **読めないとき（issue #2138 の1）。** 直す前は `schedule.data` しか見ていなかったので、
    * 取れなかったときも空表示のままで、「予定が無い」と「読めていない」が見分けられなかった。
@@ -702,6 +711,26 @@ describe('「作業の進捗」カード', () => {
     });
 
     expect(await screen.findByText(/読めなかった行があり、数は下限/)).toBeTruthy();
+  });
+
+  it('数が空でも下限のときは、「無い」と言い切らず下限の注記だけを出す（#3538）', async () => {
+    const empty = {
+      ...PROGRESS_BODY,
+      backlog: { ...PROGRESS_BODY.backlog, total: 0 },
+      inProgress: { ...PROGRESS_BODY.inProgress, running: 0 },
+    };
+    const partials = [
+      { unreadable: 1, trimmedClosed: 0, unreadableJobs: 0 },
+      { unreadable: 0, trimmedClosed: 1, unreadableJobs: 0 },
+      { unreadable: 0, trimmedClosed: 0, unreadableJobs: 1 },
+    ];
+    for (const completeness of partials) {
+      renderHome({ progress: { ...empty, backlog: { ...empty.backlog, completeness } } });
+
+      expect(await screen.findByText(/読めなかった行があり、数は下限/)).toBeTruthy();
+      expect(screen.queryByText(/未了の仕事も無い/)).toBeNull();
+      cleanup();
+    }
   });
 
   it('読めないときは ErrorNote（0 件と描かない）', async () => {

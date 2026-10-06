@@ -159,6 +159,11 @@ describe('ChatHeader', () => {
     }
   });
 
+  it('notice は role="status" で、成功の知らせも読み上げに伝わる（#3568）', () => {
+    render(<ChatHeader conversationId="c" notice="止めた" />);
+    expect(screen.getByRole('status').textContent).toBe('止めた');
+  });
+
   it('onOpenList を渡したときだけ「会話一覧を開く」を出す', () => {
     const onOpenList = vi.fn();
     const { rerender } = render(<ChatHeader conversationId="c" />);

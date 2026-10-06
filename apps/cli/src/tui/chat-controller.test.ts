@@ -852,7 +852,7 @@ describe('/attach（添えかけ）', () => {
     const { api, controller } = setup();
     await controller.attach(path);
     api.uploadFails = '繋がらない';
-    await controller.send('見て');
+    expect(await controller.send('見て')).toBe(false); // 送らなかった印（app は文を入力欄へ戻す。#3589）
     expect(api.chatCalls).toEqual([]);
     expect(controller.store.getSnapshot().entries.at(-1)?.text).toContain('添えかけは残してある');
     api.uploadFails = null;

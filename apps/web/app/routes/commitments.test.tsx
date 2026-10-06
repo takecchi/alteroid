@@ -1363,13 +1363,90 @@ describe('利用者に内部表現を見せない・入力欄に名前が在る�
     expect(document.body.textContent).not.toContain(CONV_ID);
   });
 
-  it('会話の一覧に無い UUID（承認の id かもしれない）は、会話と言い切らず、文字としても出さない', async () => {
-    stubCommitments([commitment({ origin: 'human', source: CONV_ID })]);
-    renderPage();
+  /** 一覧（`/conversations?limit=…`）と1件（`/conversations/<id>`）を分けて返す。 */
+  function stubConversations(opts: {
+    recent: { conversationId: string; preview: string }[];
+    detail: (id: string) => Response;
+  }) {
+    return stubFetch((url) => {
+      const detail = /\/conversations\/([^/?]+)/.exec(url);
+      if (detail !== null) return opts.detail(detail[1]!);
+      if (url.includes('/conversations')) {
+        return json({
+          conversations: opts.recent.map((c) => ({
+            ...c,
+            updatedAt: new Date().toISOString(),
+            messages: 1,
+          })),
+          hiddenByLimit: 0,
+        });
+      }
+      if (!url.includes('/commitments')) return undefined;
+      return json({ entries: [commitment({ origin: 'human', source: CONV_ID })] });
+    });
+  }
+
+  it('直近の一覧に載っている会話は、1件を引かずに一覧から名前を取る', async () => {
+    const calls = stubConversations({
+      recent: [{ conversationId: CONV_ID, preview: '直近の会話' }],
+      detail: () => json({ error: 'not found' }, 404),
+    });
+    renderPageWithRouter();
+
+    await screen.findByRole('link', { name: /会話「直近の会話」/ });
+    expect(calls.calls.some((url) => url.includes(`/conversations/${CONV_ID}`))).toBe(false);
+  });
+
+  it('直近に無くても1件引ける会話は、会話へのリンクになる', async () => {
+    stubConversations({
+      recent: [],
+      detail: (id) =>
+        json({
+          conversationId: id,
+          messages: [
+            { id: 'm1', at: '2026-01-01T00:00:00.000Z', role: 'inbound', text: '古い会話の最初' },
+            { id: 'm2', at: '2026-01-01T00:01:00.000Z', role: 'outbound', text: '古い会話の返事' },
+          ],
+          readThrough: null,
+          unreadCount: 0,
+          scanned: 2,
+          reachedStart: true,
+          supersededCount: 0,
+        }),
+    });
+    renderPageWithRouter();
+
+    const link = await screen.findByRole('link', { name: /会話「古い会話の返事」/ });
+    expect(link.getAttribute('href')).toBe(`/chat/${CONV_ID}`);
+    expect(document.body.textContent).not.toContain(CONV_ID);
+  });
+
+  it('直近に無く、引いても 404 なら会話ではない（承認の id など）。「人間」とだけ出す', async () => {
+    stubConversations({
+      recent: [],
+      detail: () => json({ error: 'not found' }, 404),
+    });
+    renderPageWithRouter();
 
     await screen.findByText('ドキュメントの誤りを直す');
+    await waitFor(() => expect(document.body.textContent).toContain('人間'));
     expect(document.body.textContent).not.toContain(CONV_ID);
     expect(screen.queryByRole('link', { name: /会話/ })).toBeNull();
+    expect(screen.queryByText(/確かめられなかった/)).toBeNull();
+  });
+
+  it('引くのに失敗したとき（404 以外）は「人間」に潰さず、確かめられなかったと出す', async () => {
+    stubConversations({
+      recent: [],
+      detail: () => json({ error: 'boom' }, 500),
+    });
+    renderPageWithRouter();
+
+    expect(await screen.findByText(/会話？（確かめられなかった）/)).toBeTruthy();
+    expect(screen.queryByRole('link', { name: /会話/ })).toBeNull();
+    expect(document.body.textContent).not.toContain(CONV_ID);
+    // 画面全体は乗っ取らない（仕事の行はそのまま読める）。
+    expect(screen.getByText('ドキュメントの誤りを直す')).toBeTruthy();
   });
 
   it('外部イベントの JSON は、note だけなら文面、平たい欄なら「欄: 値」の行で出る', async () => {

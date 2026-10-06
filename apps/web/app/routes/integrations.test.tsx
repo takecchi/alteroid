@@ -13,11 +13,10 @@
  * 5. 一覧は名前・source・状態・作成者・最終使用・期限・指紋を出す。MCP 登録への案内リンクがある
  * 6. **読めない行は「無い」と言わず、`UnreadableRowsNote` で断り、消すのは確認つき**（#3216）
  */
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { MemoryRouter } from 'react-router';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { json, Providers, storeTestBaseUrl } from '~/test-support';
+import { json, Providers, TestDataRouter, storeTestBaseUrl } from '~/test-support';
 
 import Integrations from './integrations';
 
@@ -112,9 +111,9 @@ function stubKeys(options: { get?: Reply; post?: Reply; revoke?: Reply } = {}): 
 function renderScreen() {
   render(
     <Providers>
-      <MemoryRouter>
+      <TestDataRouter>
         <Integrations />
-      </MemoryRouter>
+      </TestDataRouter>
     </Providers>,
   );
 }
@@ -479,5 +478,77 @@ describe('/integrations 画面 — 読めない行（#3216）', () => {
     });
     // 読めた鍵は残っている。
     expect(screen.getByText('CI')).toBeTruthy();
+  });
+});
+
+describe('/integrations 画面 — 離れる前の確認（#3556）', () => {
+  function unload(): boolean {
+    const event = new Event('beforeunload', { cancelable: true });
+    window.dispatchEvent(event);
+    return event.defaultPrevented;
+  }
+
+  it('発行が成功して欄が空に戻ったら、確認しない。失敗して入力が残るあいだは確認する', async () => {
+    const stub = stubKeys({ post: { status: 500, body: { error: '壊れた' } } });
+    renderScreen();
+    await screen.findByText('CI');
+
+    fill('名前（見分けるための呼び名）', '新しい鍵');
+    fill('source', 'new.src');
+    fireEvent.click(screen.getByRole('button', { name: '発行する' }));
+    await waitFor(() => expect(stub.posts).toHaveLength(1));
+    await screen.findByText(/壊れた/);
+    expect(unload()).toBe(true);
+
+    stub.setPost({
+      status: 200,
+      body: {
+        key: view({ id: 'k-new', name: '新しい鍵', source: 'new.src' }),
+        value: SECRET_VALUE,
+      },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '発行する' }));
+    expect(await screen.findByText('発行した: 新しい鍵')).toBeTruthy();
+    // 欄は空に戻ったが、発行した値が出ているあいだは別の理由で確認する（#3571）。
+    expect(unload()).toBe(true);
+    fireEvent.click(screen.getByRole('button', { name: '値を消して閉じる' }));
+    await waitFor(() => expect(unload()).toBe(false));
+  });
+
+  it('発行した値が出ている間は移動の前に「写していない鍵の値」の確認を出し（値は文に出さない）、閉じた後は出さない（#3571）', async () => {
+    stubKeys();
+    let router:
+      Parameters<NonNullable<Parameters<typeof TestDataRouter>[0]['onRouter']>>[0] | undefined;
+    render(
+      <Providers>
+        <TestDataRouter onRouter={(created) => (router = created)}>
+          <Integrations />
+        </TestDataRouter>
+      </Providers>,
+    );
+    await screen.findByText('CI');
+    fill('名前（見分けるための呼び名）', '新しい鍵');
+    fill('source', 'new.src');
+    fireEvent.click(screen.getByRole('button', { name: '発行する' }));
+    await screen.findByText('発行した: 新しい鍵');
+
+    await act(async () => {
+      void router?.navigate('/elsewhere');
+    });
+    const dialog = await screen.findByRole('alertdialog');
+    expect(within(dialog).getByText('写していない鍵の値があります')).toBeTruthy();
+    expect(dialog.textContent).not.toContain(SECRET_VALUE);
+    // やめると値は残る。
+    fireEvent.click(within(dialog).getByRole('button', { name: 'やめる' }));
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+    expect(screen.getByText('発行した: 新しい鍵')).toBeTruthy();
+
+    // 全部閉じたら、確認なしに移れる。
+    fireEvent.click(screen.getByRole('button', { name: '値を消して閉じる' }));
+    await act(async () => {
+      void router?.navigate('/elsewhere');
+    });
+    expect(await screen.findByText('別の画面')).toBeTruthy();
+    expect(screen.queryByRole('alertdialog')).toBeNull();
   });
 });

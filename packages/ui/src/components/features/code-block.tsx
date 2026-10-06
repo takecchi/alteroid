@@ -30,10 +30,19 @@ export function CodeBlock({
 }) {
   const [copied, setCopied] = useState<'idle' | 'done' | 'failed'>('idle');
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  useEffect(() => () => clearTimeout(timer.current), []);
+  // unmount の後に写しの Promise が解決しても、`done()` はタイマーも状態も触らない（#3579）。
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      clearTimeout(timer.current);
+    };
+  }, []);
 
   const copy = () => {
     const done = (state: 'done' | 'failed') => {
+      if (!mounted.current) return;
       setCopied(state);
       clearTimeout(timer.current);
       timer.current = setTimeout(() => setCopied('idle'), 1600);
