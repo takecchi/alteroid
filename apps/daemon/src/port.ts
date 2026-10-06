@@ -23,7 +23,7 @@ export type PortResolution = { ok: true; port: number } | { ok: false; message: 
 function showSafely(raw: string): string {
   const chars = Array.from(raw);
   const shown = chars.slice(0, MAX_SHOWN_CHARS).join('');
-  const escaped = shown.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029"\\]/g, (ch) => {
+  const escaped = shown.replace(/[\p{Cc}\u2028\u2029"\\]/gu, (ch) => {
     if (ch === '"' || ch === '\\') return `\\${ch}`;
     return `\\u${ch.charCodeAt(0).toString(16).padStart(4, '0')}`;
   });

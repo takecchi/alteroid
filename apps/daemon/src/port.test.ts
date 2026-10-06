@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+
 import { describe, expect, it } from 'vitest';
 
 import { DEFAULT_PORT, resolvePort } from './port.js';
@@ -52,7 +54,7 @@ describe('resolvePort（#3582）', () => {
   it('表示する値の制御文字はエスケープされ、長い値は切り詰められる', () => {
     const control = of('a\nb\u001b[31m\u2028c');
     if (control.ok) throw new Error('断るはず');
-    expect(control.message).not.toMatch(/[\u0000-\u001f\u2028\u2029]/);
+    expect(Array.from(control.message).some((ch) => /[\p{Cc}\u2028\u2029]/u.test(ch))).toBe(false);
     expect(control.message).toContain('\\u000a');
     expect(control.message).toContain('\\u001b');
 
@@ -60,5 +62,22 @@ describe('resolvePort（#3582）', () => {
     if (long.ok) throw new Error('断るはず');
     expect(long.message.length).toBeLessThan(300);
     expect(long.message).toContain('5001');
+  });
+});
+
+describe('index.ts の原文で測る配線（#3582）', () => {
+  const source = readFileSync(new URL('./index.ts', import.meta.url), 'utf8');
+
+  it('生の Number(ALTEROID_PORT) を読まず、resolvePort を起動処理（openStorage）より前に呼ぶ', () => {
+    expect(source).not.toMatch(/Number\(process\.env\.ALTEROID_PORT/);
+    const resolve = source.indexOf('resolvePort(process.env)');
+    const storage = source.indexOf('await openStorage()');
+    expect(resolve).toBeGreaterThan(-1);
+    expect(resolve).toBeLessThan(storage);
+  });
+
+  it('planAuth へ渡る port は resolvePort の結果である', () => {
+    expect(source).toContain('const port = resolvedPort.port;');
+    expect(source).toContain('planAuth(process.env, { port })');
   });
 });
