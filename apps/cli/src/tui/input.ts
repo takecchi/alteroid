@@ -11,8 +11,13 @@ import type { Key } from 'ink';
 import {
   backspace,
   clearBuffer,
+  deleteForward,
+  deleteToLineEnd,
+  deleteWordBack,
   insert,
   moveLeft,
+  moveLineEnd,
+  moveLineStart,
   moveRight,
   moveRowDown,
   moveRowUp,
@@ -55,23 +60,28 @@ export function editText(
   opts: { wrapWidth?: number } = {},
 ): EditResult {
   if (key.ctrl && (input === 'u' || input === 'U')) return result(buffer, clearBuffer(buffer));
-  // macOS は Backspace を `delete` として届ける。どちらもキャレットの前を消す。
-  if (key.backspace || key.delete) return result(buffer, backspace(buffer));
+  if (key.ctrl && !key.meta) {
+    switch (input.toLowerCase()) {
+      case 'a':
+        return result(buffer, moveLineStart(buffer));
+      case 'e':
+        return result(buffer, moveLineEnd(buffer));
+      case 'w':
+        return result(buffer, deleteWordBack(buffer));
+      case 'k':
+        return result(buffer, deleteToLineEnd(buffer));
+    }
+  }
+  if (key.backspace) return result(buffer, backspace(buffer));
+  // Ink 7 は Backspace（\x7f / \b）を `backspace`、Delete キー（ESC [3~）を `delete` として届ける。
+  if (key.delete) return result(buffer, deleteForward(buffer));
+  if (key.home) return result(buffer, moveLineStart(buffer));
+  if (key.end) return result(buffer, moveLineEnd(buffer));
   if (key.leftArrow) return result(buffer, moveLeft(buffer));
   if (key.rightArrow) return result(buffer, moveRight(buffer));
   if (key.upArrow) return result(buffer, moveRowUp(buffer, opts.wrapWidth));
   if (key.downArrow) return result(buffer, moveRowDown(buffer, opts.wrapWidth));
-  if (
-    key.return ||
-    key.escape ||
-    key.tab ||
-    key.ctrl ||
-    key.meta ||
-    key.pageUp ||
-    key.pageDown ||
-    key.home ||
-    key.end
-  ) {
+  if (key.return || key.escape || key.tab || key.ctrl || key.meta || key.pageUp || key.pageDown) {
     return { buffer, changed: false };
   }
   if (input.length > 0) return result(buffer, insert(buffer, sanitizeInsertText(input)));

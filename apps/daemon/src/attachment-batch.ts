@@ -95,15 +95,10 @@ export async function checkAndBindAttachments(
     const bound = await options.bind(ids);
     if (bound.missing.length > 0 || bound.conflicts.length > 0) {
       // 断る（発言・イベントは投函されない）ので、この呼びで結んだ分を戻す。`bind` は部分的に結ぶ設計なので、
-      // 戻さないと結んだ分が他で使えなくなる（#3270）。検査時点で未結び付けだった id だけを戻す: すでに同じ宛先へ
-      // 結んであった id（前の発言で添えたもの）まで戻すと、通った前の発言の添付が外れる。
-      const fresh = new Set(
-        found
-          .filter((meta) => meta.conversationId === undefined && meta.externalEventId === undefined)
-          .map((meta) => meta.id),
-      );
-      const undo = bound.bound.filter((id) => fresh.has(id));
-      if (undo.length > 0) await options.unbind(undo);
+      // 戻さないと結んだ分が他で使えなくなる（#3270）。戻すのは `bind` が「この呼びで新しく結んだ」と返した id だけ:
+      // すでに同じ宛先へ結んであった id（前の発言や、同時に届いた別の呼びが先に結んだもの）まで戻すと、通った発言の
+      // 添付が外れる。検査時点の `getMeta` では、検査から `bind` の間の変化を見分けられない（#3282）。
+      if (bound.newlyBound.length > 0) await options.unbind(bound.newlyBound);
       if (bound.missing.length > 0) return missingOf(bound.missing);
       return conflictOf(bound.conflicts);
     }

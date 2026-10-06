@@ -36,6 +36,8 @@ export interface AttachmentStoreContractOptions {
  * 8. 長い名前（255 を超える・マルチバイト）の往復、複数・重複した id の `bind`（`store` で測る）
  * 9. （`createStore` を渡したとき）サイズの境界ちょうど・`expiresAt` ちょうどと1時間ちょうどの `prune`・
  *    `bind` と `prune` の並行（空のストアで測る）
+ * 4'. `bind` / `bindToExternalEvent` の `newlyBound`（#3282）は、`bound` のうち**呼ぶ前は未結び付けだった id だけ**
+ *    （すでに同じ宛先へ結ばれていたものは `bound` に入るが `newlyBound` には入らない）
  * 10. 0バイト（画像の宣言でも、そうでなくても）は `empty` で断る（#3327。Web の「空のファイルは添えられない」と揃える）
  * 7. `unbind`（#3270）は、その結び付け先に結ばれている id だけを未結び付けへ戻して返す。別の宛先・未結び付け・
  *    無い id は触らない（返さない）。冪等。戻したものは掃除の対象に戻る
@@ -130,8 +132,12 @@ export async function verifyAttachmentStoreContract(
   }
   if ((await store.getMeta(bound.id))?.conversationId !== 'conv-1')
     fail('bind が控えへ反映されない');
+  if (first.newlyBound.join() !== bound.id)
+    fail(`未結び付けだった id が newlyBound に入らない: ${JSON.stringify(first)}`);
   const again = await store.bind([bound.id], 'conv-1');
   if (again.bound.join() !== bound.id) fail('同じ会話への bind は冪等');
+  if (again.newlyBound.length > 0)
+    fail(`すでに結ばれていた id が newlyBound に入った: ${JSON.stringify(again)}`);
   const other = await store.bind([bound.id], 'conv-2');
   if (other.conflicts.join() !== bound.id || other.bound.length > 0)
     fail('別の会話への bind は conflicts');
@@ -156,6 +162,18 @@ export async function verifyAttachmentStoreContract(
   if ((await store.prune(expiry)) !== 1) fail('期限切れの掃除');
   if ((await store.get(bound.id)) !== undefined) fail('期限切れが残った');
   if ((await store.prune(expiry)) !== 0) fail('掃除は冪等');
+
+  // 4'（prune の件数に影響しないよう、掃除の検査のあとで）既結び付けと未結び付けの混在
+  const mixedBound = await store.put({ name: 'mb.txt', mediaType: 'text/plain', bytes: PNG });
+  await store.bind([mixedBound.id], 'conv-mixed');
+  const fresh = await store.put({ name: 'f.txt', mediaType: 'text/plain', bytes: PNG });
+  const mixed = await store.bind([mixedBound.id, fresh.id, 'no-such-id'], 'conv-mixed');
+  if (
+    mixed.bound.join() !== [mixedBound.id, fresh.id].join() ||
+    mixed.newlyBound.join() !== fresh.id ||
+    mixed.missing.join() !== 'no-such-id'
+  )
+    fail(`既結び付けと未結び付けの混在の newlyBound: ${JSON.stringify(mixed)}`);
 
   // uploadedBy（上げた主体の識別子。中身ではない）
   const uploaded = await store.put({
@@ -185,8 +203,13 @@ export async function verifyAttachmentStoreContract(
   if (evMeta?.externalEventId !== 'ev-1') fail('bindToExternalEvent が控えへ反映されない');
   if (evMeta?.conversationId !== undefined)
     fail('外部イベントへの結び付けが conversationId を立てた');
-  if ((await store.bindToExternalEvent([toEvent.id], 'ev-1')).bound.join() !== toEvent.id)
-    fail('同じ外部イベントへの bindToExternalEvent は冪等');
+  if (evFirst.newlyBound.join() !== toEvent.id)
+    fail(`bindToExternalEvent の newlyBound: ${JSON.stringify(evFirst)}`);
+  const evAgain = await store.bindToExternalEvent([toEvent.id], 'ev-1');
+  if (evAgain.bound.join() !== toEvent.id || evAgain.newlyBound.length > 0)
+    fail(
+      `同じ外部イベントへの bindToExternalEvent は冪等で newlyBound に入らない: ${JSON.stringify(evAgain)}`,
+    );
   const evOther = await store.bindToExternalEvent([toEvent.id], 'ev-2');
   if (evOther.conflicts.join() !== toEvent.id || evOther.bound.length > 0)
     fail('別の外部イベントへの bindToExternalEvent は conflicts');

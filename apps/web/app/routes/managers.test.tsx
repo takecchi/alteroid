@@ -1390,7 +1390,7 @@ describe('ManagerRunnerVanishedNote（Issue #1212 running 側。段1）', () => 
     render(<ManagerRunnerVanishedNote runnerVanished={true} />);
     expect(screen.getByText(/宛先の器が名簿から消えている/)).toBeTruthy();
     expect(screen.getByText(/消えた時刻は名簿に残っていないので分からない/)).toBeTruthy();
-    expect(screen.getByText(/lost\s*で絞っても出てこない/)).toBeTruthy();
+    expect(screen.getByText(/「セッションへ戻れず」で絞っても出てこない/)).toBeTruthy();
   });
 
   it('印が無ければ1文字も描かない', () => {

@@ -64,6 +64,12 @@ export interface AttachmentPutInput {
 export interface AttachmentBindResult {
   /** 結び付いた id（すでに同じ会話へ結び付いていた id も含む）。 */
   readonly bound: string[];
+  /**
+   * `bound` のうち、**この呼び出しで新しく結んだ**id（呼ぶ前は未結び付けだったもの）。すでに同じ宛先へ結ばれていた id
+   * （前の発言や、同時に届いた別の呼び出しが先に結んだもの）は含まない。判定は実装が、結ぶのと同じ原子的な操作の中で行う
+   * （#3282。呼び手が先に `getMeta` で見た状態は、`bind` までの間に変わりうる）。断るときに `unbind` してよいのはこれだけ。
+   */
+  readonly newlyBound: string[];
   /** 無かった（消えた・期限切れ・NUL を含む）id。 */
   readonly missing: string[];
   /** すでに**別の**会話へ結び付いていたので触らなかった id。 */
