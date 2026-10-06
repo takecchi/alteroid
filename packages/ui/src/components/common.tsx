@@ -222,8 +222,8 @@ function fitHeight(el: HTMLTextAreaElement): void {
  * - `maxHeight`（CSS の長さ）— 渡すと **内容に合わせて伸び、上限から先は内側をスクロール**する
  *   （リサイズのつまみは出さない）。渡さなければ今までどおり `rows` / `min-h` で決まる固定の高さ
  *   （親を埋める画面向け）
- * - **送信中に呼ぶ側が `disabled` にする欄は、キーボード（⌘/Ctrl + Enter）で送ったときだけ、`disabled` が
- *   解けたところで欄へフォーカスを戻す**（Issue #3301。disabled になるとブラウザはフォーカスを外すので、
+ * - `refocusAfterSubmit`（既定 false。**付けた欄だけ**）— **送信中に呼ぶ側が `disabled` にする欄は、キーボード
+ *   （⌘/Ctrl + Enter）で送ったときだけ、`disabled` が解けたところで欄へフォーカスを戻す**（Issue #3301。disabled になるとブラウザはフォーカスを外すので、
  *   そのままでは続けて打つのにクリックが要る）。ボタンで送ったときは奪わない。送っているあいだに
  *   別の所へフォーカスを移していたら戻さない。成功して欄が消えるなら何も起きない
  * - 案内の文は `SubmitHint` を、押すボタンの隣など好きな場所に置く
@@ -237,11 +237,13 @@ export function Textarea({
   onKeyDown,
   onSubmitShortcut,
   submitDisabled = false,
+  refocusAfterSubmit = false,
   maxHeight,
   ...props
 }: TextareaHTMLAttributes<HTMLTextAreaElement> & {
   onSubmitShortcut?: () => void;
   submitDisabled?: boolean;
+  refocusAfterSubmit?: boolean;
   maxHeight?: string;
 }) {
   const ref = useRef<HTMLTextAreaElement>(null);
@@ -288,7 +290,7 @@ export function Textarea({
         if (isSubmitShortcut(event)) {
           event.preventDefault();
           if (!submitDisabled) {
-            refocus.current = 'armed';
+            if (refocusAfterSubmit) refocus.current = 'armed';
             onSubmitShortcut();
           }
         }

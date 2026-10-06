@@ -155,7 +155,7 @@ describe('Textarea: 送り終わったあとのフォーカス（Issue #3301）'
 
   // 送信中は呼ぶ側が `disabled` にする（見た目はそのまま）。disabled の欄はフォーカスを失うので、
   // **キーボードで送った場合だけ**、戻ったときに欄へフォーカスを返す。
-  function Harness({ done }: { done: { current: () => void } }) {
+  function Harness({ done, refocus = true }: { done: { current: () => void }; refocus?: boolean }) {
     const [busy, setBusy] = useState(false);
     return (
       <>
@@ -165,6 +165,7 @@ describe('Textarea: 送り終わったあとのフォーカス（Issue #3301）'
           disabled={busy}
           onSubmitShortcut={() => setBusy(true)}
           submitDisabled={busy}
+          refocusAfterSubmit={refocus}
         />
         <button type="button" onClick={() => setBusy(true)}>
           送る
@@ -203,6 +204,18 @@ describe('Textarea: 送り終わったあとのフォーカス（Issue #3301）'
     act(() => done.current());
     expect(area.disabled).toBe(false);
     expect(document.activeElement).toBe(area);
+  });
+
+  it('refocusAfterSubmit を付けない欄（既定）は、キーボードで送っても戻さない', () => {
+    const done = { current: () => undefined };
+    render(<Harness done={done} refocus={false} />);
+    const area = screen.getByRole('textbox') as HTMLTextAreaElement;
+    area.focus();
+    fireEvent.keyDown(area, { key: 'Enter', ctrlKey: true });
+    loseFocusLikeBrowser(area);
+    act(() => done.current());
+    expect(area.disabled).toBe(false);
+    expect(document.activeElement).toBe(document.body);
   });
 
   it('ボタンで送ったときは、フォーカスを欄へ奪わない', () => {
