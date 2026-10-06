@@ -929,6 +929,7 @@ export {
   type ProfileService,
   type ProfileServiceOptions,
 } from './profile-service.js';
+export { nonBlankString } from './non-blank-string.js';
 /**
  * 認証トークンのプール（Issue #393「PR1 プールの器」）。**回さない。** 検知も
  * 切替もここには無い——器・設定・入出力の口だけを持つ。

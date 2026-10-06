@@ -149,6 +149,7 @@ import {
 } from '@alteroid/core';
 import {
   AttachmentRejectedError,
+  nonBlankString,
   readAttachmentLimits,
   validateAttachmentBatch,
   type AttachmentLimits,
@@ -969,7 +970,7 @@ const commitmentBody = z.object({
  * できることが最終承認の実体である以上（north_star）、否定する材料の無い閉じ方を
  * 受け付けてはいけない（`commitmentSchema` の `closedReason` の注記）。
  */
-const commitmentCloseBody = z.object({ reason: z.string().min(1) });
+const commitmentCloseBody = z.object({ reason: nonBlankString });
 
 /**
  * 編集後の本文。**空を許さない**（`commitmentBody.body` と同じ制約——空文字を
