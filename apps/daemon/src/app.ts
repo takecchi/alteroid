@@ -160,6 +160,7 @@ import {
   AttachmentRejectedError,
   nonBlankString,
   readAttachmentLimits,
+  stripNul,
   type AttachmentLimits,
 } from '@alteroid/core';
 
@@ -643,7 +644,17 @@ const practiceBody = z.object({
  * 承認待ちの行が要るので、ここ（形の検査）ではなくハンドラで行う（`describeSelectionsViolation`）。
  */
 const answerFields = {
-  answer: z.string().min(1).optional(),
+  /**
+   * **送ったなら、NUL を落として trim した後に1文字以上**（Issue #3384）。空白・全角空白・改行とタブ・
+   * NUL だけの回答は空の回答として記録されてしまう（NUL は承認の入口で落ちて空になる）。
+   * 値は書き換えない（検査だけ。`nonBlankString` と同じ作法）。`.min(1)` は OpenAPI の `minLength` を保つ。
+   * 省略は従来どおり（`selections` だけで答えられる）。
+   */
+  answer: z
+    .string()
+    .min(1)
+    .refine((value) => stripNul(value).trim().length > 0)
+    .optional(),
   selections: z.array(approvalSelectionSchema).min(1).optional(),
 };
 /**
