@@ -4,7 +4,8 @@ import { tmpdir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
 
 import { sha256Hex } from './auth.js';
-import { normalizeAttachmentName, type AttachmentStore } from './attachment.js';
+import { reasonOf } from './dropped-record.js';
+import { attachmentDiskName, normalizeAttachmentName, type AttachmentStore } from './attachment.js';
 
 /**
  * 添付の中身をデーモンの手元へ「写し」として取り出す（Issue #3111 段2。`attachment_fetch` の実体）。
@@ -64,9 +65,11 @@ export async function fetchAttachmentCopy(
   if (!SAFE_ID.test(meta.id)) return { ok: false, reason: 'unsafe' };
   // 名前は保存時に正規化済みだが、置き場の実装を信じず、ここでも区切りを落とす。
   const name = normalizeAttachmentName(meta.name);
+  // ディスク上の名前は NAME_MAX（255 バイト）に収まるよう丸める（#3324）。返す `name`（表示）は丸めない。
+  const diskName = attachmentDiskName(name);
   const base = resolve(copiesDir);
   const dir = resolve(base, meta.id);
-  const path = resolve(dir, name);
+  const path = resolve(dir, diskName);
   if (!dir.startsWith(base + sep) || !path.startsWith(dir + sep)) {
     return { ok: false, reason: 'unsafe' };
   }
@@ -78,13 +81,25 @@ export async function fetchAttachmentCopy(
 
   const existing = await readFile(path).catch(() => undefined);
   if (existing !== undefined && sha256Hex(existing) === sha256) {
-    // 使われた印（掃除が「古い」と読まないように）。
+    // 使われた印（掃除が「古い」と読まないように）。確かめてから印を付けるまでの間に掃除が消した
+    // （印が付けられない・パスが無い）なら、消えたパスを返さず、下で書き直す。
     const now = new Date();
-    await utimes(dir, now, now).catch(() => undefined);
-    return copy(true);
+    const touched = await utimes(dir, now, now).then(
+      () => true,
+      () => false,
+    );
+    if (
+      touched &&
+      (await stat(path).then(
+        () => true,
+        () => false,
+      ))
+    )
+      return copy(true);
   }
   await mkdir(dir, { recursive: true, mode: 0o700 });
-  const tmp = `${path}.${randomUUID()}.tmp`;
+  // 一時ファイルは名前に依らない短い固定の形（名前に足すと NAME_MAX を超える）。
+  const tmp = resolve(dir, `.${randomUUID()}.tmp`);
   try {
     await writeFile(tmp, bytes, { mode: 0o600 });
     await rename(tmp, path);
@@ -120,8 +135,15 @@ export async function pruneAttachmentCopies(
       }
     }
     if (drop) {
-      await rm(dir, { recursive: true, force: true });
-      removed += 1;
+      try {
+        await rm(dir, { recursive: true, force: true });
+        removed += 1;
+      } catch (error) {
+        // 1件の失敗で周回を止めない（残りは次の周でまた掃く）。
+        process.stderr.write(
+          `alteroidd: 添付の写しを消せませんでした (${entry}): ${reasonOf(error)}\n`,
+        );
+      }
     }
   }
   return removed;

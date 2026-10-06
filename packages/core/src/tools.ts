@@ -164,6 +164,7 @@ import {
   scanMemorySections,
 } from './memory.js';
 import type { MemoryPart, MemorySection, MemorySectionLookup } from './memory.js';
+import { stripNul } from './nul-guard.js';
 import { redactProfileFailure } from './profile.js';
 import { renderAccountList } from './account-list.js';
 import { renderPermissionGrantList } from './permission-grant-list.js';
@@ -234,6 +235,7 @@ import {
   UnreadableActiveTokenError,
   UnreadableApprovalError,
   UnreadableCommitmentError,
+  UnreadableJournalEntryError,
   UnreadablePracticeError,
   UnreadableScheduleError,
   UnreadableTokenSettingsError,
@@ -2039,6 +2041,14 @@ const APPROVAL_QUESTION_EXCERPT = 200;
 function describeUnreadableApproval(id: string): string {
   return `承認待ち ${id} は在るが読めない（壊れた行。消されたのではない。id は合っている）。行は書き換えていない。`;
 }
+/**
+ * 日誌の行が**在るが読めない**（`UnreadableJournalEntryError`、issue #3288）ときの応答文。
+ * 「無い（id が違うか、まだ書かれていない）」とは言わない——id は合っていて、行は在る
+ * （形が合わない。未知の種別・版ずれ・手編集）。行は書き換えていない。`label` は「日誌」/「発言」。
+ */
+function describeUnreadableJournalEntry(label: string, id: string): string {
+  return `${label} ${id} は在るが読めない（形が合わない壊れた行。無いのではなく、id は合っている）。行は書き換えていない。`;
+}
 const APPROVAL_PAGE = 8_000;
 /**
  * `approval_trace` の行動の一覧の予算と、1件ぶんの要旨の厚み（issue #847 の案B）。
@@ -2390,6 +2400,10 @@ function describePracticeKindViolation(
 ): string | null {
   if (value === undefined) return null;
   if (practiceKindSchema.safeParse(value).success) return null;
+  // NUL だけの値（issue #3361）。長さは範囲内なので、範囲の文では理由が読めない。
+  if (value.length > 0 && stripNul(value).length === 0) {
+    return `${field} は使えない（NUL（\\u0000）だけの値は空と同じ。${formatPracticeKindRangeJa()}のみ）。`;
+  }
   return `${field} は使えない（${formatPracticeKindRangeJa()}のみ）。`;
 }
 
@@ -6678,7 +6692,15 @@ export function createCloneTools(context: ToolContext) {
         if (offsetError !== null) return text(offsetError);
         // --- 全文モード（1件だけ） ---
         if (id !== undefined) {
-          const entry = await stores.journal.get(id);
+          let entry: JournalEntry | null;
+          try {
+            entry = await stores.journal.get(id);
+          } catch (error) {
+            // 在るが読めない行を「無い」と言わない（issue #3288）。
+            if (error instanceof UnreadableJournalEntryError)
+              return text(describeUnreadableJournalEntry('日誌', id));
+            throw error;
+          }
           if (!entry) return text(`日誌 ${id} は無い（id が違うか、まだ書かれていない）。`);
           const { head, body } = renderJournalEntry(entry);
           if (body === '') return text(`${entry.at} ${head}`);
@@ -12700,7 +12722,14 @@ export function createCloneTools(context: ToolContext) {
         if (offsetError !== null) return text(offsetError);
         // --- 全文モード（発言1件） ---
         if (id !== undefined) {
-          const entry = await stores.journal.get(id);
+          let entry: JournalEntry | null;
+          try {
+            entry = await stores.journal.get(id);
+          } catch (error) {
+            if (error instanceof UnreadableJournalEntryError)
+              return text(describeUnreadableJournalEntry('発言', id));
+            throw error;
+          }
           if (!entry) return text(`発言 ${id} は無い（id が違うか、まだ書かれていない）。`);
           if (entry.type !== 'exchange' || entry.with !== 'human') {
             return text(
@@ -13422,10 +13451,11 @@ export function createCloneTools(context: ToolContext) {
               '**1件も消していない。**',
           );
         }
-        if (before !== undefined && Number.isNaN(Date.parse(before))) {
+        // 存在しない日付（`2026-02-31` は V8 が 3/3 へずらす）や日付でない文字列（`foo 1`）を
+        // 別の時刻として読んで**消す**ので、#3287 の3段で検める（#3358）。
+        if (before !== undefined && !isReadableJournalTimeBoundary(before)) {
           return text(
-            `before に渡された「${before}」は ISO8601 として読めない` +
-              '（例 2026-09-15T00:00:00.000Z）。**1件も消していない。**',
+            describeUnreadableJournalTimeBoundary('before', before) + '**1件も消していない。**',
           );
         }
         // **issue #1720（#1651/#1689 の揃え漏れ）。**

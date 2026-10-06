@@ -16,8 +16,8 @@
  *    持ち主として宣言する手は案内しない（#2862: ログインできる許可済みの人は全員持ち主）
  * 6. **渡す先は環境変数の画面と同じ3値・同じ言い方。** 既定は共通（all）
  */
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
-import { MemoryRouter } from 'react-router';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { createMemoryRouter, Link, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { json, Providers, storeTestBaseUrl } from '~/test-support';
@@ -145,11 +145,25 @@ function stubProfile(
 }
 
 function renderScreen() {
+  // `useBlocker` はデータルーターの中でしか動かない。離れる先のリンクも置く。
+  const router = createMemoryRouter(
+    [
+      {
+        path: '/profile',
+        Component: () => (
+          <>
+            <Link to="/elsewhere">よその画面</Link>
+            <Profile />
+          </>
+        ),
+      },
+      { path: '/elsewhere', Component: () => <p>よその画面です</p> },
+    ],
+    { initialEntries: ['/profile'] },
+  );
   render(
     <Providers>
-      <MemoryRouter>
-        <Profile />
-      </MemoryRouter>
+      <RouterProvider router={router} />
     </Providers>,
   );
 }
@@ -458,6 +472,7 @@ describe('/profile 画面 — 編集する行を切り替える', () => {
     expect(screen.getByRole('button', { name: '本当に保存する' })).toBeTruthy();
 
     fireEvent.click(screen.getAllByRole('button', { name: / を編集する$/ })[1]!);
+    fireEvent.click(await screen.findByRole('button', { name: '破棄して切り替える' }));
 
     expect(screen.queryByRole('button', { name: '本当に保存する' })).toBeNull();
     expect(screen.getByRole('button', { name: '保存する' })).toBeTruthy();
@@ -479,6 +494,7 @@ describe('/profile 画面 — 編集する行を切り替える', () => {
     expect(await screen.findByText('プロファイルが読めなかったので保存していない')).toBeTruthy();
 
     fireEvent.click(screen.getAllByRole('button', { name: / を編集する$/ })[1]!);
+    fireEvent.click(await screen.findByRole('button', { name: '破棄して切り替える' }));
 
     expect(screen.queryByText('プロファイルが読めなかったので保存していない')).toBeNull();
   });
@@ -507,6 +523,7 @@ describe('/profile 画面 — 保存中に別の行へ切り替える', () => {
     await vi.waitFor(() => expect(puts).toHaveLength(1));
 
     fireEvent.click(screen.getAllByRole('button', { name: / を編集する$/ })[1]!);
+    fireEvent.click(await screen.findByRole('button', { name: '破棄して切り替える' }));
     fireEvent.change(screen.getByLabelText('プロファイルの新しい本文'), {
       target: { value: 'export DRAFT=2\n' },
     });
@@ -535,6 +552,7 @@ describe('/profile 画面 — 保存中に別の行へ切り替える', () => {
     await vi.waitFor(() => expect(puts).toHaveLength(1));
 
     fireEvent.click(screen.getAllByRole('button', { name: / を編集する$/ })[0]!);
+    fireEvent.click(await screen.findByRole('button', { name: '破棄して切り替える' }));
     fireEvent.change(screen.getByLabelText('プロファイルの新しい本文'), {
       target: { value: 'export DRAFT=3\n' },
     });
@@ -695,5 +713,114 @@ describe('/profile 画面 — 古いデーモン（旧形式の応答）', () =>
     expect(calls.filter((call) => call.method === 'PUT').map((call) => call.path)).toEqual([
       '/profile',
     ]);
+  });
+});
+
+/**
+ * 書きかけ（元の行から変わっている）があるときだけ、切り替える・閉じる・離れる前に確認する
+ * （#3349 / #3370）。書きかけが無ければ今までどおり確認なしで動く。
+ */
+describe('/profile 画面 — 書きかけを確認なしで捨てない', () => {
+  async function startDirty() {
+    stubProfile();
+    renderScreen();
+    fireEvent.click((await screen.findAllByRole('button', { name: / を編集する$/ }))[0]!);
+    fireEvent.change(screen.getByLabelText('プロファイルの新しい本文'), {
+      target: { value: 'export DRAFT=1\n' },
+    });
+  }
+  const body = () => screen.getByLabelText<HTMLTextAreaElement>('プロファイルの新しい本文');
+
+  it('書きかけのまま別の行の「編集する」を押すと確認が出る。やめれば書きかけが残る', async () => {
+    await startDirty();
+    fireEvent.click(screen.getAllByRole('button', { name: / を編集する$/ })[1]!);
+
+    expect(await screen.findByRole('alertdialog')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'やめる' }));
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+    expect(body().value).toBe('export DRAFT=1\n');
+    expect(screen.getByLabelText<HTMLInputElement>('プロファイルの行の名前').value).toBe('base');
+  });
+
+  it('確認で「破棄して切り替える」を押すと、その行に切り替わる', async () => {
+    await startDirty();
+    fireEvent.click(screen.getAllByRole('button', { name: / を編集する$/ })[1]!);
+    fireEvent.click(await screen.findByRole('button', { name: '破棄して切り替える' }));
+
+    expect(body().value).toBe(RUST.script);
+    expect(screen.getByLabelText<HTMLInputElement>('プロファイルの行の名前').value).toBe('rust');
+  });
+
+  it('書きかけが無ければ、確認なしで切り替わる', async () => {
+    stubProfile();
+    renderScreen();
+    fireEvent.click((await screen.findAllByRole('button', { name: / を編集する$/ }))[0]!);
+    fireEvent.click(screen.getAllByRole('button', { name: / を編集する$/ })[1]!);
+
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    expect(screen.getByLabelText<HTMLInputElement>('プロファイルの行の名前').value).toBe('rust');
+  });
+
+  it('書きかけのまま「編集を閉じる」を押すと確認が出る。破棄すると閉じる', async () => {
+    await startDirty();
+    fireEvent.click(screen.getByRole('button', { name: '編集を閉じる' }));
+
+    expect(await screen.findByRole('alertdialog')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'やめる' }));
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+    expect(body().value).toBe('export DRAFT=1\n');
+
+    fireEvent.click(screen.getByRole('button', { name: '編集を閉じる' }));
+    fireEvent.click(await screen.findByRole('button', { name: '破棄して閉じる' }));
+    expect(screen.queryByLabelText('プロファイルの新しい本文')).toBeNull();
+  });
+
+  it('書きかけが無ければ「編集を閉じる」は確認なしで閉じる', async () => {
+    stubProfile();
+    renderScreen();
+    fireEvent.click((await screen.findAllByRole('button', { name: / を編集する$/ }))[0]!);
+    fireEvent.click(screen.getByRole('button', { name: '編集を閉じる' }));
+
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    expect(screen.queryByLabelText('プロファイルの新しい本文')).toBeNull();
+  });
+
+  it('書きかけのまま画面を離れると確認が出る。破棄すると移動する', async () => {
+    await startDirty();
+    fireEvent.click(screen.getByRole('link', { name: 'よその画面' }));
+
+    expect(await screen.findByText('保存していない変更があります')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'やめる' }));
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+    expect(body().value).toBe('export DRAFT=1\n');
+
+    fireEvent.click(screen.getByRole('link', { name: 'よその画面' }));
+    fireEvent.click(await screen.findByRole('button', { name: '破棄して離れる' }));
+    expect(await screen.findByText('よその画面です')).toBeTruthy();
+  });
+
+  it('書きかけが無ければ確認なしで離れる', async () => {
+    stubProfile();
+    renderScreen();
+    await screen.findByText('base');
+    fireEvent.click(screen.getByRole('link', { name: 'よその画面' }));
+
+    expect(await screen.findByText('よその画面です')).toBeTruthy();
+  });
+
+  it('beforeunload は書きかけのときだけ止める', async () => {
+    stubProfile();
+    renderScreen();
+    fireEvent.click((await screen.findAllByRole('button', { name: / を編集する$/ }))[0]!);
+    const clean = new Event('beforeunload', { cancelable: true });
+    window.dispatchEvent(clean);
+    expect(clean.defaultPrevented).toBe(false);
+
+    fireEvent.change(screen.getByLabelText('プロファイルの新しい本文'), {
+      target: { value: 'export DRAFT=1\n' },
+    });
+    const dirty = new Event('beforeunload', { cancelable: true });
+    window.dispatchEvent(dirty);
+    expect(dirty.defaultPrevented).toBe(true);
   });
 });

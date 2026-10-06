@@ -389,6 +389,32 @@ export const STATEMENTS = [
   // 一覧の主経路は「未了だけを古い順」。閉じた行が積もっても効き続けるよう部分索引。
   `create index if not exists commitments_open_idx
      on commitments (at) where closed_at is null`,
+  // 同じ `at` の未了の行の決め手（入れた順。issue #3285）。`list()` は
+  // `order by at, seq` で、`jsonb_set` で行を書き直しても物理順に左右されない。
+  // **既存の行へは「いまの物理順」ではなく `(at, id)` の順で振る** —— 入れた順は
+  // 残っていないので、決められる中でいちばんそれに近い（`at` は引き受けた時刻）もの。
+  // つまり既存の行は、いまの `list()` と同じ `at` の順のまま、同じ `at` の組の中だけが `id` で決まる。
+  // 順序は「列を足す → 列の中身を振る → 数え始めを最大の後ろへ → 既定を付ける」。
+  // **既定を最後に付ける**のは、先に付けると新しい行が 1 から振られて既存の行の
+  // 前へ割り込むため。2周目以降は、振る文は `seq is null` の行が無ければ何もせず、
+  // 数え始めは既に最大より後ろなら動かさない（`setval` で巻き戻さない）。
+  `alter table commitments add column if not exists seq bigint`,
+  `create sequence if not exists commitments_seq_seq`,
+  `update commitments c set seq = n.rn
+     from (
+       select id,
+         row_number() over (order by at, id)
+           + coalesce((select max(seq) from commitments), 0) as rn
+       from commitments
+       where seq is null
+     ) n
+     where c.id = n.id and c.seq is null`,
+  `select setval('commitments_seq_seq', m.top, true)
+     from (select max(seq) as top from commitments) m,
+          (select last_value, is_called from commitments_seq_seq) s
+     where m.top is not null
+       and m.top >= case when s.is_called then s.last_value + 1 else s.last_value end`,
+  `alter table commitments alter column seq set default nextval('commitments_seq_seq')`,
 
   // --- 記憶の保護状態（human guard。schema.ts の `memory` の doc） -----------
   // 「一度でも人間が書いた記憶を、統合の走行が黙って壊せないようにする」ための
@@ -816,6 +842,20 @@ export const STATEMENTS = [
   `alter table attachments add column if not exists uploaded_by text`,
   // 外部イベントへの結び付け先（#3113 段3）。null 可の列を足すだけで、既存行の意味は変わらない。
   `alter table attachments add column if not exists external_event_id text`,
+  // --- 承認待ちの会話での絞り（#3290）-------------------------------------------
+  // `listApprovals({ conversationId })` の `where` 節（`jobs.ts` の `CONVERSATION_ID_EXPR`）が
+  // 引く式の索引。**列ではなく式索引にした**: 承認の書き込みは `putApproval` /
+  // `updateApproval` が jsonb（`approval`）を丸ごと書く1本の経路で、列を足すと2か所で
+  // 派生値を同期する負債が増える（`withdrawn_at` は `answered_at` と対の終端で、
+  // 絞りの主役だったので列にした。会話 id は jsonb の中の値そのもの）。式索引は
+  // **`create index` が既存の全行を読んで索引を作る**ので、埋め戻し（backfill）の
+  // 文は要らず、書き込みの経路にも触れない。`(approval->>'conversationId', created_at)`
+  // の順にしてあるのは、会話で絞った上での `order by created_at` を索引だけで
+  // 返せるため。非 unique なので既存行が何であっても作れず落ちることは無く
+  // （このファイル冒頭の「危ないのは `drop index` と対の `create index`」にも当たらない）、
+  // 2周目以降は本当の no-op。既存行の意味は変わらない。
+  `create index if not exists approvals_conversation_id_idx
+     on approvals ((approval->>'conversationId'), created_at)`,
 ] as const;
 
 /** `ensureOpenManagerBodyIndex` が作る部分 unique 索引の名前（issue #1041）。 */

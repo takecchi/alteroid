@@ -21,7 +21,14 @@ import type { FC } from 'react';
 import { formatElapsedAgo } from '../format.js';
 import type { ApprovalRow } from './api.js';
 import { allowsOther, slotsOf } from './approvals-form.js';
-import { isOpen, type DetailState, type ListState } from './approvals-controller.js';
+import {
+  isOpen,
+  type DatesState,
+  type DayState,
+  type DetailState,
+  type ListState,
+} from './approvals-controller.js';
+import type { AnsweredDateRow } from './api.js';
 import { oneLine } from './journal-format.js';
 import type { DisplayLine } from './log.js';
 import type { RichSpan } from './markdown.js';
@@ -114,6 +121,128 @@ export const ApprovalList: FC<{ list: ListState; height: number }> = ({ list, he
           <Box key={row.id} flexShrink={0}>
             <Text wrap="truncate-end" {...(index === selected ? { inverse: true } : {})}>
               {`${index === selected ? glyph.caret : ' '} ${approvalListLine(row, list.loadedAt)}`}
+            </Text>
+          </Box>
+        );
+      })}
+    </Box>
+  );
+};
+
+// --- 回答済み（決着した日ごと。#3340） ---------------------------------------
+
+/** 決着した日の 1 行（選択の印は付けない）。 */
+export const answeredDateLine = (row: AnsweredDateRow): string =>
+  `${row.date}  ${String(row.count)} 件`;
+
+/**
+ * その日の件の 1 行（選択の印は付けない）。**抜粋だけ**: 状態（回答済み／取り下げ済み）・決着からの経過・
+ * id・問いの抜粋に、答え（回答済み）か取り下げた理由（取り下げ済み）の抜粋を続ける。全文は詳細。
+ * 決着の日時は `answeredAt`、無ければ `withdrawnAt`（デーモンの日の区切りと同じ決め方）。
+ */
+export function answeredDayLine(row: ApprovalRow, now: number): string {
+  const withdrawn = row.withdrawnAt !== undefined && row.answeredAt === undefined;
+  const settledAt = row.answeredAt ?? row.withdrawnAt ?? row.createdAt;
+  const tail = withdrawn
+    ? `  取り下げた理由: ${row.withdrawnReason === undefined ? '（理由の記録なし）' : oneLine(redactBody(row.withdrawnReason), 60)}`
+    : row.answer === undefined
+      ? ''
+      : `  回答: ${oneLine(redactBody(row.answer), 60)}`;
+  return (
+    `${withdrawn ? '取り下げ済み' : '回答済み'} ${formatElapsedAgo(settledAt, now)} ` +
+    `${shortId(row.id)}  ${oneLine(redactBody(row.question), 80)}${tail}`
+  );
+}
+
+/** 決着した日の一覧の見出し。初回の読み込みが失敗したときは件数を言わない（空ではない）。 */
+export function answeredDatesTitle(dates: DatesState): string {
+  if (dates.status === 'loading' || dates.status === 'idle') return '決着した日を読んでいる…';
+  if (dates.status === 'error' && dates.items.length === 0) {
+    return '決着した日を読めなかった（空ではない）。r で読み直す';
+  }
+  return `回答済み・取り下げ済み（決着した日 ${String(dates.items.length)} 日 · 新しい日が上）`;
+}
+
+/** 決着した日の一覧。窓は選択行が見える範囲だけを描く。 */
+export const AnsweredDatesList: FC<{ dates: DatesState; height: number }> = ({ dates, height }) => {
+  const { items, selected } = dates;
+  const errorLine = dates.error !== null ? `⚠ ${dates.error}` : null;
+  const moreLine = dates.maybeMore ? '…これより古い日があるかもしれない（m で続きを読む）' : null;
+  const fixed = 1 + (errorLine === null ? 0 : 1) + (moreLine === null ? 0 : 1);
+  const cap = Math.max(1, height - fixed);
+  const start = Math.min(Math.max(0, selected - cap + 1), Math.max(0, items.length - cap));
+  return (
+    <Box flexDirection="column" height={height} overflow="hidden" flexShrink={0}>
+      <Text bold wrap="truncate-end">
+        {answeredDatesTitle(dates)}
+      </Text>
+      {errorLine !== null ? (
+        <Text wrap="truncate-end" color={theme.warn}>
+          {errorLine}
+        </Text>
+      ) : null}
+      {dates.status === 'ready' && items.length === 0 ? (
+        <Text dimColor wrap="truncate-end">
+          決着した承認はまだ無い。
+        </Text>
+      ) : null}
+      {items.slice(start, start + cap).map((row, i) => {
+        const index = start + i;
+        return (
+          <Box key={row.date} flexShrink={0}>
+            <Text wrap="truncate-end" {...(index === selected ? { inverse: true } : {})}>
+              {`${index === selected ? glyph.caret : ' '} ${answeredDateLine(row)}`}
+            </Text>
+          </Box>
+        );
+      })}
+      {moreLine !== null ? (
+        <Text dimColor wrap="truncate-end">
+          {moreLine}
+        </Text>
+      ) : null}
+    </Box>
+  );
+};
+
+/** その日の件の見出し。取れなかったのを 0 件と言わない。 */
+export function answeredDayTitle(day: DayState): string {
+  const date = day.date ?? '';
+  if (day.status === 'loading' || day.status === 'idle') return `${date} の承認を読んでいる…`;
+  if (day.status === 'error' && day.items.length === 0) {
+    return `${date} の承認を読めなかった（空ではない）。r で読み直す`;
+  }
+  return `${date} に決着した承認（${String(day.items.length)} 件 · 決着の新しい順）`;
+}
+
+/** その日の件の一覧。窓は選択行が見える範囲だけを描く。 */
+export const AnsweredDayList: FC<{ day: DayState; height: number }> = ({ day, height }) => {
+  const { items, selected } = day;
+  const errorLine = day.error !== null ? `⚠ ${day.error}` : null;
+  const fixed = 1 + (errorLine === null ? 0 : 1);
+  const cap = Math.max(1, height - fixed);
+  const start = Math.min(Math.max(0, selected - cap + 1), Math.max(0, items.length - cap));
+  return (
+    <Box flexDirection="column" height={height} overflow="hidden" flexShrink={0}>
+      <Text bold wrap="truncate-end">
+        {answeredDayTitle(day)}
+      </Text>
+      {errorLine !== null ? (
+        <Text wrap="truncate-end" color={theme.warn}>
+          {errorLine}
+        </Text>
+      ) : null}
+      {day.status === 'ready' && items.length === 0 ? (
+        <Text dimColor wrap="truncate-end">
+          この日に決着した承認は無い。
+        </Text>
+      ) : null}
+      {items.slice(start, start + cap).map((row, i) => {
+        const index = start + i;
+        return (
+          <Box key={row.id} flexShrink={0}>
+            <Text wrap="truncate-end" {...(index === selected ? { inverse: true } : {})}>
+              {`${index === selected ? glyph.caret : ' '} ${answeredDayLine(row, day.loadedAt)}`}
             </Text>
           </Box>
         );

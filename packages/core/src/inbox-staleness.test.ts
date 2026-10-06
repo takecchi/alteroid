@@ -5,7 +5,7 @@ import {
   DAEMON_RUNNER_REGISTRY_SOURCE,
   DAEMON_TOKEN_POOL_REOPENED_SOURCE,
 } from './clone.js';
-import { restoredInboxEventVerdict } from './inbox-staleness.js';
+import { completedTimerRoundVerdict, restoredInboxEventVerdict } from './inbox-staleness.js';
 import type { InboxEvent } from './schema.js';
 
 /**
@@ -184,5 +184,55 @@ describe('restoredInboxEventVerdict が stale と言う合図は、必ず commit
 
   it('候補のうち少なくとも1件は stale である（この歯が空振りしていないことの対照）', () => {
     expect(CANDIDATES.some(([, event]) => restoredInboxEventVerdict(event) === 'stale')).toBe(true);
+  });
+});
+
+/**
+ * #3291 (c)。完了まで済んだのに受信箱の消し込みだけ失敗した timer 行を、再起動の配り直しで
+ * もう一度走らせない。畳むのは**完了済みの回だけ**（`lastScheduledRunAt` 以前）である。
+ */
+describe('completedTimerRoundVerdict（#3291）', () => {
+  const timer = (at: string, cause?: 'schedule' | 'schedule_catchup' | 'manual'): InboxEvent => ({
+    type: 'timer',
+    id: 't-1',
+    at,
+    kind: 'weekly-check',
+    ...(cause === undefined ? {} : { cause }),
+  });
+  const LAST = '2026-08-18T00:00:00.000Z';
+
+  it('回の時刻が lastScheduledRunAt と同じ・以前なら stale（完了済みの回）', () => {
+    expect(completedTimerRoundVerdict(timer(LAST), LAST)).toBe('stale');
+    expect(completedTimerRoundVerdict(timer('2026-08-11T00:00:00.000Z'), LAST)).toBe('stale');
+    expect(completedTimerRoundVerdict(timer(LAST, 'schedule_catchup'), LAST)).toBe('stale');
+  });
+
+  it('まだ走っていない回（lastScheduledRunAt より後）は live — 畳まない', () => {
+    expect(completedTimerRoundVerdict(timer('2026-08-18T00:00:00.001Z'), LAST)).toBe('live');
+    expect(completedTimerRoundVerdict(timer('2026-08-25T00:00:00.000Z'), LAST)).toBe('live');
+  });
+
+  it('時刻は実時刻で比べる（オフセット表記が違っても文字列順に引きずられない）', () => {
+    // 2026-08-18T08:00+09:00 は 2026-08-17T23:00Z ＝ LAST より前。文字列では '2026-08-18T08' > LAST。
+    expect(completedTimerRoundVerdict(timer('2026-08-18T08:00:00+09:00'), LAST)).toBe('stale');
+    // 2026-08-17T20:00-05:00 は 2026-08-18T01:00Z ＝ LAST より後。文字列では LAST より前。
+    expect(completedTimerRoundVerdict(timer('2026-08-17T20:00:00-05:00'), LAST)).toBe('live');
+  });
+
+  it('manual は定期の基準を進めないので判定しない（live）', () => {
+    expect(completedTimerRoundVerdict(timer('2026-08-11T00:00:00.000Z', 'manual'), LAST)).toBe(
+      'live',
+    );
+  });
+
+  it('枠保持の印（heldForUsage）のある行は、完了済みの回でも live — 配り直す（#2814 / #3317）', () => {
+    const held = { ...timer('2026-08-11T00:00:00.000Z'), heldForUsage: true } as InboxEvent;
+    expect(completedTimerRoundVerdict(held, LAST)).toBe('live');
+    expect(completedTimerRoundVerdict(timer('2026-08-11T00:00:00.000Z'), LAST)).toBe('stale');
+  });
+
+  it('基準が無い（未登録・一度も完了していない・読めなかった）なら live、timer 以外も live', () => {
+    expect(completedTimerRoundVerdict(timer('2026-08-11T00:00:00.000Z'), undefined)).toBe('live');
+    expect(completedTimerRoundVerdict(SAMPLE_EVENTS.human_message, LAST)).toBe('live');
   });
 });

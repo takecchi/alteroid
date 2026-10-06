@@ -520,8 +520,9 @@ describe('「承認待ち一覧」', () => {
  * 残る状態を作る。
  */
 describe('「承認待ち一覧」が読めないとき、「答える」を出さない（issue #2138 の2）', () => {
-  it('一度取れた後に /approvals が失敗すると、古い件数のまま「答える」を出し続けない', async () => {
+  it('一度取れた後に /approvals が失敗すると、古い件数は残し、取り直せなかったと注記する（issue #3346）', async () => {
     const stub = renderHome({
+      topology: { frames: [] },
       approvals: [{ id: 'approval-0', createdAt: '2026-08-14T09:00:00.000Z', question: '質問 0' }],
     });
 
@@ -529,15 +530,16 @@ describe('「承認待ち一覧」が読めないとき、「答える」を出�
     await screen.findByRole('link', { name: '答える' });
 
     // `/approvals` だけを失敗に切り替える（他の経路は元のまま存続させる）。
-    stub.setRoute(homeRoute({ approvals: 'fail' }));
+    stub.setRoute(homeRoute({ approvals: 'fail', topology: { frames: [] } }));
     // SWR 既定の `revalidateOnFocus` を使って再取得を起こす（`dedupingInterval: 0` なので即座に
     // 飛ぶ——`test-support.tsx` の `Providers` の設定）。
     window.dispatchEvent(new Event('focus'));
 
-    expect(await screen.findByRole('alert')).toBeTruthy();
-    // 古い `pending`（質問0）が残っていても「答える」は出ず、警告色の枠でもない。
-    expect(screen.queryByRole('link', { name: '答える' })).toBeNull();
-    expect(screen.queryByText('質問 0')).toBeNull();
+    // 進捗のタイルと同じ形（#3069 / #3346）: 中身は残し、画面を奪わず、その場で失敗を言う。
+    expect(await screen.findByText(/最新の承認待ちを取り直せなかった/)).toBeTruthy();
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.getByText('質問 0')).toBeTruthy();
+    expect(screen.getByRole('link', { name: '答える' })).toBeTruthy();
   });
 });
 
