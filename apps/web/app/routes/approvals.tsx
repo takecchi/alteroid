@@ -74,7 +74,7 @@ function UnreadableApprovalNote({ unreadable }: { unreadable: UnreadableApproval
 }
 
 /**
- * 答えは通ったが、送ったあとに打った文が残っている承認（issue #3515）。**黙って消さない。**
+ * 答えは通ったが、送らなかった下書きが残っている承認（issue #3515・#3625）。**黙って消さない。**
  * 承認はもう決着していて回答欄が無いので、残った文をここへ出す。写してから閉じられる。
  */
 function LeftoverDrafts({
@@ -86,11 +86,11 @@ function LeftoverDrafts({
 }) {
   if (leftovers.length === 0) return null;
   return (
-    <ul className="mb-4 flex flex-col gap-3" aria-label="送ったあとに打った文が残っている承認">
+    <ul className="mb-4 flex flex-col gap-3" aria-label="送らなかった下書きが残っている承認">
       {leftovers.map(({ id, source, text }) => (
         <li key={id} className="rounded-md border border-warn/40 bg-warn/10 px-3 py-2 text-sm">
           <p className="mb-2 break-words">
-            <strong>答えは通ったが、送ったあとに打った文が残っている。</strong>
+            <strong>答えは通ったが、送らなかった下書きが残っている。</strong>
             承認はもう決着しているので、ここから送り直すことはできない。必要なら写してから閉じる。
             <span className="mt-1 block text-xs text-muted-foreground">
               対象: {source.question}
@@ -177,7 +177,7 @@ export default function Approvals() {
   /**
    * 答えが通った。**送った時点の下書き（`sent`）と同じ項目だけ**畳み、応答を待つ間に打ち足した
    * 分は残す（issue #3515）。残したものは、承認が未回答の一覧から消えたあとも
-   * 「送ったあとに打った文が残っている」として見せる（`leftovers`）。
+   * 「送らなかった下書きが残っている」として見せる（`leftovers`）。
    */
   function settleDraft(approval: PendingApproval, sent: SentApprovalDraft): void {
     setDrafts((current) => settleApprovalDraft(current, approval.id, sent));
