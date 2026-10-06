@@ -6536,11 +6536,12 @@ export function createApp(deps: AppDeps) {
         // **投函の前に検証し、結び付ける**（弾くなら受信箱に何も積まない）。
         const attached = await bindEventAttachments(attachmentIds, id, principal);
         if (!attached.ok) return c.json(attached.body, attached.status);
+        const at = new Date().toISOString();
         // **受信箱へ永続化できたときだけ 200 を返す**（#3679）。書けなかったら 503 で、受信箱のメモリにも積まない。
         const outcome = await clone.postPersisted({
           type: 'external',
           id,
-          at: new Date().toISOString(),
+          at,
           source,
           payload,
           ...(principal.kind === 'integration'
@@ -6549,6 +6550,16 @@ export function createApp(deps: AppDeps) {
           ...(attached.refs.length === 0 ? {} : { attachments: attached.refs }),
         });
         if (outcome === 'unavailable') return c.json(eventNotPersistedBody(), 503);
+        // 稼働の地図の「外部サービス → クローン」を、受け付けた時刻で光らせる（#3676。
+        // 日誌の external_event はクローンが取り出した時刻なので使わない。`topology-activity.ts` の冒頭）。
+        if (principal.kind === 'integration') {
+          topologyActivity.recordExternal({
+            keyId: principal.keyId,
+            name: principal.name,
+            source,
+            at,
+          });
+        }
         return c.json({ ok: true, id });
       },
     )
@@ -6624,11 +6635,12 @@ export function createApp(deps: AppDeps) {
         const id = randomUUID();
         const attached = await bindEventAttachments(attachmentIds, id, principal);
         if (!attached.ok) return c.json(attached.body, attached.status);
+        const at = new Date().toISOString();
         // **受信箱へ永続化できたときだけ 200 を返す**（#3679）。書けなかったら 503 で、受信箱のメモリにも積まない。
         const outcome = await clone.postPersisted({
           type: 'external',
           id,
-          at: new Date().toISOString(),
+          at,
           source,
           payload,
           ...(principal.kind === 'integration'
@@ -6637,6 +6649,15 @@ export function createApp(deps: AppDeps) {
           ...(attached.refs.length === 0 ? {} : { attachments: attached.refs }),
         });
         if (outcome === 'unavailable') return c.json(eventNotPersistedBody(), 503);
+        // `POST /events` と同じ（#3676）。
+        if (principal.kind === 'integration') {
+          topologyActivity.recordExternal({
+            keyId: principal.keyId,
+            name: principal.name,
+            source,
+            at,
+          });
+        }
         return c.json({ ok: true, id });
       },
     )
