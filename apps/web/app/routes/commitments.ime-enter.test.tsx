@@ -2,8 +2,8 @@
 /**
  * **IME で変換している最中の Enter を、送信として拾わないこと。**
  *
- * `/commitments` 画面には、Enter 単体で送る口が2つある — 「片付ける」の理由欄
- * （`OpenRow`）と「積む」の本文欄（`PushForm`）。**`ChatComposer`（`packages/ui/src/components/features/chat/chat-composer.tsx`）と違い、こちらは
+ * `/commitments``/commitments` 画面で Enter 単体で送る口は「片付ける」の理由欄（`OpenRow`）。
+ * 「積む」の本文欄（`PushForm`）は #3376 で複数行の `Textarea`（Cmd/Ctrl+Enter で送る）になった。**`ChatComposer`（`packages/ui/src/components/features/chat/chat-composer.tsx`）と違い、こちらは
  * 修飾キーを要らない形（Enter 単体）なので、日本語入力の変換確定 Enter が
  * 毎回そのまま送信になっていた。** `chat.ime-enter.test.tsx` が置いた歯（門の
  * 形・測り方）に倣い、この2箇所についても同じ形の歯を置く。
@@ -147,8 +147,16 @@ describe('片付ける（OpenRow）の理由欄 — IME 変換中の Enter', () 
   });
 });
 
+/**
+ * 積む（PushForm）の本文欄は複数行の `Textarea`（#3376）。Enter 単体は改行で送らないので、
+ * 変換確定の Enter が誤送信になる経路そのものが無い。送るのは Cmd/Ctrl+Enter で、
+ * こちらは共有の `Textarea`（`isSubmitShortcut`）が IME の確定を除く。両側を1本の中で通す。
+ */
 describe('積む（PushForm）の本文欄 — IME 変換中の Enter', () => {
-  it('isComposing: true では送らない', async () => {
+  const isPost = (request: Request) =>
+    request.method === 'POST' && request.url.endsWith('/commitments');
+
+  it('Enter 単体は、変換中でも確定後でも送らない（改行）', async () => {
     stubCommitments([]);
     const requests = recordRequests();
     renderPage();
@@ -158,43 +166,52 @@ describe('積む（PushForm）の本文欄 — IME 変換中の Enter', () => {
     fireEvent.change(input, { target: { value: '週明けに設計を見直す' } });
 
     fireEvent.keyDown(input, { key: 'Enter', isComposing: true });
-    await settle();
-    expect(
-      requests.some((request) => request.method === 'POST' && request.url.endsWith('/commitments')),
-    ).toBe(false);
-  });
-
-  it('isComposing: false / keyCode: 229 でも送らない（isComposing が false のまま変換確定を配る実装への備え）', async () => {
-    stubCommitments([]);
-    const requests = recordRequests();
-    renderPage();
-
-    await screen.findByText('未了の仕事はない。');
-    const input = screen.getByLabelText('何を引き受けたか');
-    fireEvent.change(input, { target: { value: '週明けに設計を見直す' } });
-
-    fireEvent.keyDown(input, { key: 'Enter', isComposing: false, keyCode: 229 });
-    await settle();
-    expect(
-      requests.some((request) => request.method === 'POST' && request.url.endsWith('/commitments')),
-    ).toBe(false);
-  });
-
-  it('isComposing: false（229 でもない）では、既存どおり送る', async () => {
-    stubCommitments([]);
-    const requests = recordRequests();
-    renderPage();
-
-    await screen.findByText('未了の仕事はない。');
-    const input = screen.getByLabelText('何を引き受けたか');
-    fireEvent.change(input, { target: { value: '週明けに設計を見直す' } });
-
     fireEvent.keyDown(input, { key: 'Enter', isComposing: false });
+    await settle();
+    expect(requests.some(isPost)).toBe(false);
+  });
+
+  it('Ctrl+Enter でも isComposing: true では送らない', async () => {
+    stubCommitments([]);
+    const requests = recordRequests();
+    renderPage();
+
+    await screen.findByText('未了の仕事はない。');
+    const input = screen.getByLabelText('何を引き受けたか');
+    fireEvent.change(input, { target: { value: '週明けに設計を見直す' } });
+
+    fireEvent.keyDown(input, { key: 'Enter', ctrlKey: true, isComposing: true });
+    await settle();
+    expect(requests.some(isPost)).toBe(false);
+  });
+
+  it('Ctrl+Enter でも isComposing: false / keyCode: 229 では送らない（isComposing が false のまま変換確定を配る実装への備え）', async () => {
+    stubCommitments([]);
+    const requests = recordRequests();
+    renderPage();
+
+    await screen.findByText('未了の仕事はない。');
+    const input = screen.getByLabelText('何を引き受けたか');
+    fireEvent.change(input, { target: { value: '週明けに設計を見直す' } });
+
+    fireEvent.keyDown(input, { key: 'Enter', ctrlKey: true, isComposing: false, keyCode: 229 });
+    await settle();
+    expect(requests.some(isPost)).toBe(false);
+  });
+
+  it('Ctrl+Enter（変換中でも 229 でもない）では送る', async () => {
+    stubCommitments([]);
+    const requests = recordRequests();
+    renderPage();
+
+    await screen.findByText('未了の仕事はない。');
+    const input = screen.getByLabelText('何を引き受けたか');
+    fireEvent.change(input, { target: { value: '週明けに設計を見直す' } });
+
+    fireEvent.keyDown(input, { key: 'Enter', ctrlKey: true, isComposing: false });
 
     const posted = await waitFor(() => {
-      const found = requests.find(
-        (request) => request.method === 'POST' && request.url.endsWith('/commitments'),
-      );
+      const found = requests.find(isPost);
       expect(found).toBeDefined();
       return found!;
     });

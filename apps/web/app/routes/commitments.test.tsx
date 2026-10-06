@@ -399,6 +399,75 @@ describe('/commitments 画面', () => {
     await screen.findByText('未了の仕事はない。');
     expect((screen.getByRole('button', { name: '積む' }) as HTMLButtonElement).disabled).toBe(true);
   });
+
+  /**
+   * #3376: 登録欄は編集欄（`CommitmentBodyEditor`）と同じ `Textarea`。Enter は改行、
+   * Cmd/Ctrl+Enter で送る。以前は1行の `Input` で、Enter が登録を実行していた。
+   */
+  describe('本文欄は複数行（Textarea）', () => {
+    const isPost = (request: Request) =>
+      request.method === 'POST' && request.url.endsWith('/commitments');
+
+    it('textarea で、自動で伸びる（上限の高さを持つ）', async () => {
+      stubCommitments([]);
+      renderPage();
+      const body = await screen.findByLabelText('何を引き受けたか');
+      expect(body.tagName).toBe('TEXTAREA');
+      expect((body as HTMLTextAreaElement).style.maxHeight).toBe('60vh');
+    });
+
+    it('Enter は改行のままで、送られない', async () => {
+      stubCommitments([]);
+      const requests = recordRequests();
+      renderPage();
+      const body = await screen.findByLabelText('何を引き受けたか');
+      fireEvent.change(body, { target: { value: '手順1' } });
+
+      const notPrevented = fireEvent.keyDown(body, { key: 'Enter' });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(notPrevented).toBe(true);
+      expect(requests.some(isPost)).toBe(false);
+    });
+
+    it.each([
+      ['Ctrl', { ctrlKey: true }],
+      ['Cmd', { metaKey: true }],
+    ])('%s+Enter で、複数行の本文がそのまま送られる', async (_name, modifier) => {
+      stubCommitments([]);
+      const requests = recordRequests();
+      renderPage();
+      const body = await screen.findByLabelText('何を引き受けたか');
+      fireEvent.change(body, { target: { value: '次を出す\n- 手順1\n- 手順2' } });
+
+      fireEvent.keyDown(body, { key: 'Enter', ...modifier });
+
+      const posted = await waitFor(() => {
+        const found = requests.find(isPost);
+        expect(found).toBeDefined();
+        return found!;
+      });
+      expect(JSON.parse(await posted.text())).toEqual({ body: '次を出す\n- 手順1\n- 手順2' });
+    });
+
+    it('空のあいだは Cmd/Ctrl+Enter でも送られない', async () => {
+      stubCommitments([]);
+      const requests = recordRequests();
+      renderPage();
+      const body = await screen.findByLabelText('何を引き受けたか');
+      fireEvent.change(body, { target: { value: '  \n ' } });
+
+      fireEvent.keyDown(body, { key: 'Enter', ctrlKey: true });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(requests.some(isPost)).toBe(false);
+    });
+
+    it('送るキーの案内が出る', async () => {
+      stubCommitments([]);
+      renderPage();
+      await screen.findByLabelText('何を引き受けたか');
+      expect(await screen.findByText(/Enter で登録$/)).toBeTruthy();
+    });
+  });
 });
 
 /**
