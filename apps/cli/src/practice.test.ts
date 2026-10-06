@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { makeTempDirSync } from '../../../vitest.tmpdir.js';
 
-import { captureStderr, captureStdout } from './test-support.js';
+import { captureStderr, captureStdout, pretendTty } from './test-support.js';
 
 /**
  * `alteroid practice` — **人間が仕事のやり方を CLI から読んで書き換えられること**
@@ -897,6 +897,38 @@ describe('alteroid practice history / show --version', () => {
     expect(sent[0]?.method).toBe('GET');
     expect(sent[0]?.url).toBe('http://127.0.0.1:4517/practices/review/versions/1');
     expect(read()).toContain('古い本文');
+  });
+
+  // 現行版の show と同じ口（writeShownBody）: パイプへ流す本文は掃除せず、端末へ出すときだけ掃除する（#3455）。
+  const versionBody = 'a\rb\u001b[31mred\u001b[0m\n';
+  it('show --version は、パイプ（非 TTY）のとき本文を1バイトも変えない', async () => {
+    const restore = pretendTty(false);
+    const read = captureStdout();
+    replies.push({
+      status: 200,
+      body: { version: { slug: 'review', version: 1, content: versionBody } },
+    });
+    try {
+      await practiceShowCommand('review', { version: 1 });
+    } finally {
+      restore();
+    }
+    expect(read()).toBe(versionBody);
+  });
+
+  it('show --version は、端末のときだけ制御文字を落とす', async () => {
+    const restore = pretendTty(true);
+    const read = captureStdout();
+    replies.push({
+      status: 200,
+      body: { version: { slug: 'review', version: 1, content: versionBody } },
+    });
+    try {
+      await practiceShowCommand('review', { version: 1 });
+    } finally {
+      restore();
+    }
+    expect(read()).toBe('abred\n');
   });
 
   it('無い版番号を指定したら、そう言う', async () => {
