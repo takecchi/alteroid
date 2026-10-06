@@ -997,7 +997,6 @@ function AxisCard({
   const labelCounts = new Map<string, number>();
   for (const entry of entries)
     labelCounts.set(entry.label, (labelCounts.get(entry.label) ?? 0) + 1);
-  labelCounts.set(entry.label, (labelCounts.get(entry.label) ?? 0) + 1);
   // **カードごとの状態。** 開閉は他のカードへ波及させない（Issue #3537）。
   const [showAll, setShowAll] = useState(false);
   const overflowing = entries.length > AXIS_LIMIT;
