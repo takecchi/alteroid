@@ -24,6 +24,10 @@ import {
   type UploadedAttachment,
 } from '../attachments.js';
 import { createClient } from '../client.js';
+import {
+  fetchConversationApprovals,
+  type ConversationApprovalsRead,
+} from '../conversation-approvals.js';
 import { withErrorReason } from '../format.js';
 import { describeInterruptOutcome } from '../interrupt.js';
 import type { MemorySummary } from '../memory.js';
@@ -235,6 +239,11 @@ export interface TuiApi {
     id: string,
   ): Promise<{ messages: ConversationMessage[]; reachedStart: boolean } | null>;
   /**
+   * その会話のターンから積まれた承認待ち（`GET /approvals?conversationId=<id>&pending=false&order=asc`）。
+   * **投げない**——取れなかったことは `failure` に載る（会話の表示を落とさない。#3261）。
+   */
+  readConversationApprovals(id: string): Promise<ConversationApprovalsRead>;
+  /**
    * `POST /conversations/{id}/read`。`through` は発言の id（時刻はサーバが引く）。失敗は `ApiError`。
    * 返答を画面に表示したときに呼ぶ（`docs/architecture.md`「会話の既読」）。
    */
@@ -411,6 +420,10 @@ export function createTuiApi(target: Target): TuiApi {
       if (!response.ok) throw await failure('会話を読めませんでした', response);
       const body = await response.json();
       return { messages: body.messages, reachedStart: body.reachedStart };
+    },
+
+    readConversationApprovals(id) {
+      return fetchConversationApprovals(client, id);
     },
 
     async markConversationRead(id, through) {

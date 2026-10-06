@@ -4566,6 +4566,80 @@ describe('chat の /conversations と /conversation', () => {
     expect(text).toContain('先頭まで届きました');
   });
 
+  describe('/conversation — その会話のターンから積まれた承認（#3261）', () => {
+    const detail = {
+      conversationId: 'conv-1',
+      messages: [
+        { id: 'm1', at: '2026-10-06T10:00:00.000Z', role: 'inbound' as const, text: 'どうする？' },
+        {
+          id: 'm2',
+          at: '2026-10-06T10:04:00.000Z',
+          role: 'outbound' as const,
+          text: 'A案で進めます',
+        },
+      ],
+      scanned: 10,
+      reachedStart: true,
+    };
+
+    it('承認を時刻順の位置に1行で出し、回答のあとの返答は承認の後ろに並ぶ', async () => {
+      const read = captureStdout();
+      const { calls, client } = stubClient({
+        conversationDetailBody: detail,
+        approvals: [
+          {
+            id: 'abcdef12-3456',
+            createdAt: '2026-10-06T10:01:00.000Z',
+            question: 'A案とB案のどちらにしますか？',
+            answeredAt: '2026-10-06T10:03:00.000Z',
+            answer: 'A案',
+          },
+        ],
+      });
+
+      await runSlashCommand('/conversation conv-1', client, emptyListed());
+
+      const approvalCall = calls.find((call) => call.route === 'GET /approvals');
+      expect(approvalCall?.args).toEqual({
+        query: { conversationId: 'conv-1', pending: 'false', order: 'asc' },
+      });
+      const text = read();
+      const line =
+        '? [2026-10-06T10:01:00.000Z] 確認（承認待ち abcdef12）: A案とB案のどちらにしますか？ ' +
+        '→ 回答済み（2026-10-06T10:03:00.000Z）: A案';
+      expect(text).toContain(line);
+      expect(text.indexOf('どうする？')).toBeLessThan(text.indexOf(line));
+      expect(text.indexOf(line)).toBeLessThan(text.indexOf('A案で進めます'));
+    });
+
+    it('承認を取れなくても会話は出し、取れなかったことを言う（unreadable も言う）', async () => {
+      const read = captureStdout();
+      const failing = stubClient({ conversationDetailBody: detail, approvalsStatus: 500 });
+      await runSlashCommand('/conversation conv-1', failing.client, emptyListed());
+      const failed = read();
+      expect(failed).toContain('A案で進めます');
+      expect(failed).toContain('この会話の承認待ちは取れませんでした');
+
+      const unreadable = stubClient({
+        conversationDetailBody: detail,
+        approvalsUnreadable: [{ id: 'bad-1', reason: 'x' }],
+      });
+      await runSlashCommand('/conversation conv-1', unreadable.client, emptyListed());
+      expect(read()).toContain('読めない承認待ちが 1 件');
+    });
+
+    it('承認の行には /edit の番号を振らない', async () => {
+      captureStdout();
+      const listed = emptyListed();
+      const { client } = stubClient({
+        conversationDetailBody: detail,
+        approvals: [{ id: 'ap-0000001', createdAt: '2026-10-06T10:01:00.000Z', question: 'q' }],
+      });
+      await runSlashCommand('/conversation conv-1', client, listed);
+      expect(listed.messages).toEqual(['m1']);
+    });
+  });
+
   /**
    * **「無い」と「判定できない」を混ぜない。** `messages` が空でも `reachedStart`
    * が偽なら、それは発言が無かったのではなく窓の外にあるかもしれない、である。

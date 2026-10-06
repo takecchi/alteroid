@@ -77,6 +77,12 @@ import {
   markConversationReadAfterReply,
   unreadMark,
 } from './conversations.js';
+import {
+  approvalLine,
+  approvalNoticeLines,
+  fetchConversationApprovals,
+  interleaveApprovals,
+} from './conversation-approvals.js';
 import { formatElapsedAgo } from './format.js';
 import { redactBody, redactError } from './redact.js';
 import { formatCreatedAt, freshnessMarker } from './memory.js';
@@ -1125,7 +1131,10 @@ export async function runSlashCommand(
        */
       listed.messages.length = 0;
       listed.messagesConversationId = id;
-      if (messages.length === 0) {
+      // その会話のターンから積まれた承認を時刻順の位置に1行で出す（#3261）。取れなくても会話は出す。
+      const approvalsRead = await fetchConversationApprovals(client, id);
+      const timeline = interleaveApprovals(messages, approvalsRead.approvals);
+      if (timeline.length === 0) {
         stdout.write(
           reachedStart
             ? '（発言はありません）\n'
@@ -1133,7 +1142,12 @@ export async function runSlashCommand(
                 '（判定できません） — /conversation <番号|id> scan=<N> で広げられます）\n',
         );
       } else {
-        for (const message of messages) {
+        for (const item of timeline) {
+          if (item.kind === 'approval') {
+            stdout.write(`      ${approvalLine(item.approval)}\n`);
+            continue;
+          }
+          const message = item.message;
           const speaker = message.role === 'inbound' ? '人間' : 'クローン';
           const editable = message.role === 'inbound' && message.supersededBy === undefined;
           if (editable) listed.messages.push(message.id);
@@ -1154,6 +1168,7 @@ export async function runSlashCommand(
           }
         }
       }
+      for (const notice of approvalNoticeLines(approvalsRead)) stdout.write(`  ${notice}\n`);
       stdout.write(
         reachedStart
           ? `  （人間との往復を ${scanned} 件遡り、この会話の先頭まで届きました）\n`

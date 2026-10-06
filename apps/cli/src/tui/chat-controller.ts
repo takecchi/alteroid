@@ -28,6 +28,12 @@ import {
 } from '../attachments.js';
 import type { ChatEvent, ConversationMessage, ConversationSummary, TuiApi } from './api.js';
 import type { LogEntry, LogKind } from './log.js';
+import {
+  approvalNoticeLines,
+  approvalText,
+  interleaveApprovals,
+  type ConversationApprovalsRead,
+} from '../conversation-approvals.js';
 import { redactBody, redactedErrorMessage, redactError } from '../redact.js';
 import { Store } from './store.js';
 
@@ -479,7 +485,10 @@ export class ChatController {
       );
       return false;
     }
-    const entries = this.historyEntries(read.messages);
+    const entries = this.historyEntries(
+      read.messages,
+      await this.api.readConversationApprovals(id),
+    );
     this.stopWatch();
     this.store.update(() => ({
       ...initialChatState,
@@ -554,15 +563,30 @@ export class ChatController {
     }
   }
 
-  private historyEntries(messages: ConversationMessage[]): LogEntry[] {
-    const entries: LogEntry[] = messages.map((m) => {
+  /**
+   * 履歴の発言を、その会話のターンから積まれた承認と時刻順に並べて出す（#3261。承認は 'ask' の1行。
+   * 取れなかった・読めない行があるときは、最後に 'system' の断りを足す）。
+   */
+  private historyEntries(
+    messages: ConversationMessage[],
+    approvals: ConversationApprovalsRead,
+  ): LogEntry[] {
+    const entries: LogEntry[] = interleaveApprovals(messages, approvals.approvals).map((item) => {
       this.seq += 1;
+      if (item.kind === 'approval') {
+        return { seq: this.seq, kind: 'ask', text: approvalText(item.approval) };
+      }
+      const m = item.message;
       return {
         seq: this.seq,
         kind: m.role === 'inbound' ? 'user' : 'assistant',
         text: redactBody([m.text, ...attachmentLinesOf(m.attachments)].join('\n')),
       };
     });
+    for (const notice of approvalNoticeLines(approvals)) {
+      this.seq += 1;
+      entries.push({ seq: this.seq, kind: 'system', text: notice });
+    }
     return entries.length > MAX_ENTRIES ? entries.slice(-MAX_ENTRIES) : entries;
   }
 
@@ -577,7 +601,11 @@ export class ChatController {
       const read = await this.api.readConversation(conversationId);
       if (abort.signal.aborted || read === null) return;
       if (!read.reachedStart && read.messages.length === 0) return;
-      const entries = this.historyEntries(read.messages);
+      const entries = this.historyEntries(
+        read.messages,
+        await this.api.readConversationApprovals(conversationId),
+      );
+      if (abort.signal.aborted) return;
       this.store.update((s) => (s.conversationId === conversationId ? { ...s, entries } : s));
       if (!read.reachedStart) {
         this.addSystem(

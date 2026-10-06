@@ -258,6 +258,54 @@ describe('会話の操作', () => {
     expect(api.chatCalls[0]).toEqual({ text: '続き', conversationId: 'c9' });
   });
 
+  describe('履歴の会話を開くと、その会話のターンから積まれた承認も時刻順に出す（#3261）', () => {
+    const base = () => {
+      const ctx = setup();
+      ctx.api.messages.c9 = [
+        { id: '1', at: '2026-10-06T10:00:00.000Z', role: 'inbound', text: 'どうする？' },
+        { id: '2', at: '2026-10-06T10:04:00.000Z', role: 'outbound', text: 'A案で進めます' },
+      ];
+      return ctx;
+    };
+
+    it('承認を ask の1行で、発言と返答のあいだに置く', async () => {
+      const { api, controller, state } = base();
+      api.conversationApprovals.c9 = {
+        approvals: [
+          {
+            id: 'abcdef12-3456',
+            createdAt: '2026-10-06T10:01:00.000Z',
+            question: 'A案とB案のどちらにしますか？',
+            answeredAt: '2026-10-06T10:03:00.000Z',
+            answer: 'A案',
+          },
+        ],
+        unreadable: [],
+      };
+      expect(await controller.openConversation('c9')).toBe(true);
+      expect(api.conversationApprovalCalls).toContain('c9');
+      expect(state().entries.map((e) => [e.kind, e.text])).toEqual([
+        ['user', 'どうする？'],
+        [
+          'ask',
+          '[2026-10-06T10:01:00.000Z] 確認（承認待ち abcdef12）: A案とB案のどちらにしますか？ ' +
+            '→ 回答済み（2026-10-06T10:03:00.000Z）: A案',
+        ],
+        ['assistant', 'A案で進めます'],
+      ]);
+    });
+
+    it('承認を取れなかったら、会話は出して、取れなかったことを system で言う', async () => {
+      const { api, controller, state } = base();
+      api.conversationApprovals.c9 = { approvals: [], unreadable: [], failure: 'HTTP 500' };
+      expect(await controller.openConversation('c9')).toBe(true);
+      const kinds = state().entries.map((e) => e.kind);
+      expect(kinds.slice(0, 2)).toEqual(['user', 'assistant']);
+      const note = state().entries.find((e) => e.kind === 'system');
+      expect(note?.text).toContain('この会話の承認待ちは取れませんでした: HTTP 500');
+    });
+  });
+
   it('窓が先頭に届いていない会話は、中身が空なら開かず、あれば古い側が欠けうる旨を添える', async () => {
     const { api, controller, state, texts } = setup();
     api.messages.empty = [];

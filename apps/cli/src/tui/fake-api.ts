@@ -13,6 +13,7 @@ import {
   type JournalEntry,
 } from '@alteroid/core';
 
+import type { ConversationApprovalsRead } from '../conversation-approvals.js';
 import { ApiError } from './api.js';
 import type {
   ApprovalAnswerBody,
@@ -65,6 +66,10 @@ export interface FakeApi extends TuiApi {
   messages: Record<string, ConversationMessage[]>;
   /** 窓が日誌の先頭に届いていない会話の id。 */
   unreachedStart: Set<string>;
+  /** 会話ごとの、その会話のターンから積まれた承認（`readConversationApprovals` が返す）。 */
+  conversationApprovals: Record<string, ConversationApprovalsRead>;
+  /** `readConversationApprovals` に渡された会話 id。 */
+  conversationApprovalCalls: string[];
   counts: HeaderCounts;
   /** 1 本目 = 最初の接続の台本。文字列は種別だけ（本体なし）、オブジェクトは本体つき。 */
   journal: { events: (string | JournalStreamItem | Error | Promise<void>)[] }[];
@@ -149,6 +154,8 @@ export function fakeApi(): FakeApi {
     conversations: [],
     messages: {},
     unreachedStart: new Set(),
+    conversationApprovals: {},
+    conversationApprovalCalls: [],
     counts: { pendingApprovals: 0, unreadableApprovals: 0, runningManagers: 0 },
     journal: [],
     journalEntries: [],
@@ -239,6 +246,10 @@ export function fakeApi(): FakeApi {
       return Promise.resolve(
         messages === undefined ? null : { messages, reachedStart: !api.unreachedStart.has(id) },
       );
+    },
+    readConversationApprovals(id) {
+      api.conversationApprovalCalls.push(id);
+      return Promise.resolve(api.conversationApprovals[id] ?? { approvals: [], unreadable: [] });
     },
     markConversationRead(id, through) {
       api.readMarks.push({ id, through });
