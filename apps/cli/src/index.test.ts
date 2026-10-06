@@ -392,7 +392,12 @@ describe('サブコマンドの登録（入口が在ること）', () => {
 
   /** **`alteroid integration` が入口として実在すること**（#3113 段2）。 */
   it('alteroid integration は list / create / revoke を持ち、create は --name と --source を要る', () => {
-    expect(subcommandNames('integration')).toEqual(['create', 'list', 'revoke']);
+    expect(subcommandNames('integration')).toEqual([
+      'create',
+      'list',
+      'remove-unreadable',
+      'revoke',
+    ]);
     const integration = program.commands.find((c) => c.name() === 'integration');
     const create = integration?.commands.find((c) => c.name() === 'create');
     expect(create?.options.map((o) => [o.long, o.mandatory])).toEqual([
@@ -409,7 +414,7 @@ describe('サブコマンドの登録（入口が在ること）', () => {
 
   /**
    * **確認を持つ全コマンドの `--yes` の help 文は同じ**（#3214）。非対話で必須なのは全対象で同じ。
-   * `integration revoke` は別の担当（#3211）が直すので、いまは対象に含めない（直ったら外す）。
+   * `integration revoke` も #3211（PR #3229）で揃ったので、例外なく全コマンドを見る。
    */
   it('--yes の help 文は、確認を持つ全コマンドで揃っている', () => {
     const expected = '確認を飛ばす（スクリプト・CI 向け。端末でなければ必須）';
@@ -419,7 +424,6 @@ describe('サブコマンドの登録（入口が在ること）', () => {
         if (option.long !== '--yes') continue;
         const name = path.join(' ');
         found.push(name);
-        if (name === 'integration revoke') continue;
         expect([name, option.description]).toEqual([name, expected]);
       }
       for (const child of command.commands) walk(child, [...path, child.name()]);
@@ -427,6 +431,8 @@ describe('サブコマンドの登録（入口が在ること）', () => {
     for (const command of program.commands) walk(command, [command.name()]);
     expect(found).toContain('reset');
     expect(found).toContain('access remove-unreadable');
+    expect(found).toContain('integration revoke');
+    expect(found).toContain('integration remove-unreadable');
   });
 
   /**

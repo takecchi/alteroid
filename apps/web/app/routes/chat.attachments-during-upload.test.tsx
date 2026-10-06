@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 /**
- * Issue #3215。添付を上げているあいだに足した添付・打ち足した本文が、上げ終えた時点で
+ * Issue #3215・#3248。添付を上げているあいだに足した添付・打ち足した本文が、上げ終えた時点で
  * 黙って消えないこと。消すのは「送った分」だけ（添付は送った key、本文は送った時点の値の
  * ままのときだけ）。
  *
@@ -154,7 +154,31 @@ describe('アップロード中に足したものを、完了時に消さない�
     await waitFor(() => {
       expect(screen.queryByRole('button', { name: 'first.txt を外す' })).toBeNull();
     });
-    expect(textbox.value).toBe('送る本文 と、あとから足した続き');
+    // 送った分（先頭の「送る本文」）は取り除き、打ち足した分だけ残す（#3248）。
+    expect(textbox.value).toBe(' と、あとから足した続き');
+  });
+
+  it('送った本文が先頭に無い編集（前に足した）なら、何も消さず全部残す', async () => {
+    const { release, chatBodies } = setUp();
+    renderChat();
+    const textbox = (await screen.findByPlaceholderText(
+      /クローンに話しかける/,
+    )) as HTMLTextAreaElement;
+    choose([nodeFile('first.txt')]);
+    fireEvent.change(textbox, { target: { value: '送る本文' } });
+    fireEvent.click(await screen.findByRole('button', { name: 'メッセージを送信' }));
+    await screen.findByRole('button', { name: '添付を上げている' });
+
+    fireEvent.change(textbox, { target: { value: '前置き 送る本文' } });
+
+    release();
+    await waitFor(() => {
+      expect(chatBodies.length).toBe(1);
+    });
+    await waitFor(() => {
+      expect(screen.queryByRole('button', { name: 'first.txt を外す' })).toBeNull();
+    });
+    expect(textbox.value).toBe('前置き 送る本文');
   });
 
   it('陰性対照: 足さなければ、送った本文と添付は消える', async () => {

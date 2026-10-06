@@ -699,7 +699,9 @@ export function createRunnerApp(deps: RunnerAppDeps) {
   const revision = deps.revision ?? resolveBuildRevision();
   const taskBreakdownReader = deps.taskBreakdownReader ?? new TaskBreakdownReader();
   /**
-   * 添付を運ぶ2つの口（`POST /managers` / `POST /managers/:id/messages`）の本文の上限。添付の合計上限の
+   * 添付を運ぶ3つの口の本文の上限。`POST /managers` / `POST /managers/:id/messages` は本文全体に
+   * `bodyLimit` で掛け、`POST /managers/:id/resume` は生ログ `entries` も運ぶので、添付の `data` の合計だけを
+   * handler の中で同じ値と比べる。添付の合計上限の
    * base64 に余裕を足した値で、デーモンが先に検める上限を抜けた巨大な本文への最後の歯止めである。
    * 制御面の合鍵（`control`）の内側にだけ置く——鍵の無い呼びは本文を読む前に 401 で終わる。
    */
@@ -1311,6 +1313,19 @@ export function createRunnerApp(deps: RunnerAppDeps) {
       }),
       async (c) => {
         const command = c.req.valid('json');
+        /*
+         * **添付の `data` の合計だけを、他の2口の `bodyLimit` と同じ上限で検める**（Issue #3269）。
+         * `bodyLimit` は使えない——この口の本文は生ログ `entries`（デーモン側に上限が無く、正当な resume が
+         * 添付の上限を超えて大きい）も運ぶので、本文全体に掛けると正当な resume を壊す。**`entries` は
+         * 対象外**で、添付が運ぶ分（`data` の文字数＝本文に載るバイト数）だけを比べる。`data` の合計は本文の
+         * 一部なので、これが上限を超える本文は `/managers` と `/messages` でも 413 になる（ここが厳しくなる
+         * ことは無い）。超えたら何も置かずに断る（`host.resume` を呼ばない）。
+         */
+        const attachmentDataBytes = (command.attachments ?? []).reduce(
+          (sum, item) => sum + item.data.length,
+          0,
+        );
+        if (attachmentDataBytes > attachmentBodyMax) return tooLarge(c);
         if (command.managerId !== c.req.param('id')) {
           return c.json({ error: 'manager_id が経路と本文で食い違っている' as const }, 400);
         }

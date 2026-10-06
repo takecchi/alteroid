@@ -30,6 +30,7 @@ import {
   getChatStream,
   postChat,
   uploadAttachment,
+  ApiError,
   useApi,
   useAttachmentLimits,
   type ChatStreamEvent,
@@ -44,8 +45,9 @@ import {
   newClientMessageId,
   redactError,
 } from '@alteroid/logic';
-import type { ConversationMessage, MessageAttachment } from '@alteroid/logic';
+import type { ConversationMessage, MessageAttachment, PendingApproval } from '@alteroid/logic';
 
+import { ApprovalAnswerCard, approvalDetailPath } from '~/components/approval-answer-card';
 import { usePageVisible } from '~/lib/use-page-visible';
 
 import type { Route } from './+types/chat';
@@ -95,6 +97,48 @@ function attachmentIds(items: readonly PendingAttachment[]): string[] {
   return items.flatMap((item) => (item.meta === undefined ? [] : [item.meta.id]));
 }
 
+/**
+ * 入力欄から、送った分（`sent`）を取り除く（#3248）。**送った分だけを消し、送った後に
+ * 打ち足した分は残す。**
+ *
+ * - 今の本文が送った本文で始まる → その頭を取り除き、残りを返す（のまま同じなら `''`）
+ * - それ以外（前や途中を直した）→ **全部残す**。どこまでが送った分か決められず、
+ *   推測して削ると使い手の編集を失わせる。残して二重に送りうる側のほうが、
+ *   使い手に見えていて直せる（黙って失うほうは取り返せない）
+ */
+function withoutSentText(current: string, sent: string): string {
+  return current.startsWith(sent) ? current.slice(sent.length) : current;
+}
+
+/** 送信失敗の応答が、添付の期限切れ・欠落（400 `attachment_missing`）か。 */
+function isAttachmentMissing(error: unknown): boolean {
+  return error instanceof ApiError && error.status === 400 && error.code === 'attachment_missing';
+}
+
+/**
+ * 同じ `clientMessageId` で中身が違うと断られた（409 `client_message_id_mismatch`。#3243）か。
+ * その id はもう使えない——次の再送は新しい id で送る。
+ */
+function isClientMessageIdMismatch(error: unknown): boolean {
+  return (
+    error instanceof ApiError && error.status === 409 && error.code === 'client_message_id_mismatch'
+  );
+}
+
+/** 積んでおいた送信（`retries` の1件）と、入力欄の今の中身が同じか（本文と添付の並び）。 */
+function sameAsStashed(
+  stashed: { text: string; attachments?: PendingAttachment[] },
+  text: string,
+  attachments: readonly PendingAttachment[],
+): boolean {
+  const before = stashed.attachments ?? [];
+  return (
+    stashed.text === text &&
+    before.length === attachments.length &&
+    before.every((item, index) => item.key === attachments[index]?.key)
+  );
+}
+
 /** 画面に出す1行。届いた順に並べる。 */
 interface Line {
   key: string;
@@ -140,6 +184,27 @@ interface Line {
    * 履歴の人間の発言だけが持つ（付けずに届いた発言・手元の楽観行・クローンの返事は持たない）。
    */
   clientMessageId?: string;
+  /**
+   * この行が承認待ち（`ask_human`）のカードであれば、その承認（#3259）。
+   *
+   * **時刻は `createdAt` に固定する。** 回答・取り下げは同じカードの状態として出し、別の行にしない。
+   * 生配信（SSE の `ask_human`）が作る行は質問しか知らない最小の形で、台帳から読んだ行（履歴）が
+   * 同じ承認を持つようになったら `pendingOwnLines` が承認 id で引き取る。
+   */
+  approval?: PendingApproval;
+}
+
+/** 履歴と手元の行を突き合わせる鍵。承認のカードは本文ではなく承認 id で結ぶ（回答で本文は変わらないが、状態は変わる）。 */
+function lineMatchKey(line: Line): string {
+  return line.approval !== undefined
+    ? `approval\u0000${line.approval.id}`
+    : `${line.role}\u0000${line.text}`;
+}
+
+/** SSE の `ask_human` から、質問しか知らない最小の承認を作る（台帳の行が来たら置き換わる）。 */
+function approvalFromAskEvent(approvalId: string, question: string): PendingApproval {
+  const now = new Date().toISOString();
+  return { id: approvalId, createdAt: now, updatedAt: now, question };
 }
 
 /**
@@ -238,12 +303,12 @@ export function pendingOwnLines(
 ): Line[] {
   const remaining = new Map<string, number>();
   for (const line of historyLines) {
-    const key = `${line.role}\u0000${line.text}`;
+    const key = lineMatchKey(line);
     remaining.set(key, (remaining.get(key) ?? 0) + 1);
   }
   const pending: Line[] = [];
   for (const line of ownedBy(lines, shownId)) {
-    const key = `${line.role}\u0000${line.text}`;
+    const key = lineMatchKey(line);
     const count = remaining.get(key) ?? 0;
     if (count > 0) {
       remaining.set(key, count - 1);
@@ -621,6 +686,12 @@ export function ChatPane({
         text: string;
         supersedes?: string;
         restored?: boolean;
+        /**
+         * 積んだ中身を入力欄へ戻したか（#3247）。戻していれば、入力欄が「再送」の元になる
+         * （使い手が直したものを送る）。戻していない（失敗が届く前に使い手が新しく打ち始めていた）
+         * なら、入力欄は別の発言なので、「再送」は積んだ中身を送って入力欄には触らない。
+         */
+        inComposer?: boolean;
         attachments?: PendingAttachment[];
         /**
          * この送信に付けた `clientMessageId`（#3203）。**再送では同じ値を使う**——サーバが同じ会話で
@@ -1146,71 +1217,23 @@ export function ChatPane({
         },
       }));
 
-    const approvalItems = (conversationApprovals.data?.approvals ?? []).flatMap((approval) => {
-      const items: { at: string; line: Line }[] = [
-        {
-          at: approval.createdAt,
-          line: {
-            key: `a-${approval.id}`,
-            role: 'system',
-            of: shownId,
-            /**
-             * **SSE の `case 'ask_human'`（下）と1文字も違えないこと。** 違えると
-             * `pendingOwnLines` の role＋本文の照合が当たらず、生配信で出た行が
-             * 「まだサーバに引き取られていない行」のままリロード後も残り、同じ
-             * 質問が2つ並ぶ（二重表示）。
-             */
-            text: `確認したいことがある: ${approval.question}\n（承認待ちの画面から答えられる）`,
-          },
-        },
-      ];
-      if (
-        approval.answeredAt !== undefined &&
-        approval.answeredAt !== null &&
-        approval.answer !== undefined &&
-        approval.answer !== null
-      ) {
-        items.push({
-          at: approval.answeredAt,
-          line: {
-            key: `a-${approval.id}-answer`,
-            role: 'system',
-            of: shownId,
-            text: `確認への回答: ${approval.answer}`,
-          },
-        });
-      }
-      /**
-       * **取り下げも出す（issue #974。不変条件Aの取り下げ側）。** クローンが
-       * `approval_withdraw`（`packages/core/src/schema.ts` の `withdrawnAt` の
-       * doc）で理由付きで取り下げた確認は、`answeredAt` と排他的なので上の枝
-       * には乗らない。乗らないまま `historyLines` に何も足さないと、会話には
-       * 質問だけが残って**痕跡なく終わる**——人間は「あの質問、その後どう
-       * なった？」を `/approvals`（`approvals.tsx` の取り下げ表示）まで見に
-       * 行かないと分からない。#963 §5 の判断（取り下げの実行者はクローンで
-       * 人間側に取り下げる口は要らないが、**取り下げられた件と理由が読める
-       * ことは要る**）を、人間が実際に読む場所（会話）でも満たす。
-       *
-       * **`withdrawnReason` が欠けている行でも出す。** スキーマ上 optional
-       * なのは古い行を想定してのことで（`withdrawnAt` の doc）、理由が無くて
-       * も「取り下げられた事実」のほうが主なので行自体は出す。
-       *
-       * `answer` 側と違って `withdrawnReason` の非 null は条件に含めない——
-       * `withdrawnAt` の有無だけで素直に分岐する（issue #974 の指示どおり）。
-       */
-      if (approval.withdrawnAt !== undefined && approval.withdrawnAt !== null) {
-        items.push({
-          at: approval.withdrawnAt,
-          line: {
-            key: `a-${approval.id}-withdrawn`,
-            role: 'system',
-            of: shownId,
-            text: `確認の取り下げ: ${approval.withdrawnReason ?? '（理由の記録なし）'}`,
-          },
-        });
-      }
-      return items;
-    });
+    /*
+     * **承認は1件を1枚のカードにして、`createdAt` の位置に置く（#3259）。** 回答（`answeredAt`）と
+     * 取り下げ（`withdrawnAt`）は別の行にせず、同じカードの状態として出す（回答の時刻もカードの中）。
+     * 回答済みが「まだ返答が無い」に見えない（不変条件A）・取り下げが痕跡なく終わらない
+     * （issue #974）のどちらも、カードが状態と回答・理由を持つことで満たす。
+     * 回答のあとのクローンの返答は、時刻順でカードの後ろに並ぶ。
+     */
+    const approvalItems = (conversationApprovals.data?.approvals ?? []).map((approval) => ({
+      at: approval.createdAt,
+      line: {
+        key: `a-${approval.id}`,
+        role: 'system' as const,
+        of: shownId,
+        text: approval.question,
+        approval,
+      } satisfies Line,
+    }));
 
     return [...messageItems, ...approvalItems]
       .sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0))
@@ -1443,8 +1466,11 @@ export function ChatPane({
     if (restoredAttachments !== undefined) {
       setPending((current) => (current.length === 0 ? restoredAttachments : current));
     }
-    setRetries((prev) => new Map(prev).set(shownId, { ...entry, restored: true }));
-  }, [retries, shownId]);
+    // 戻せたか（入力欄が空だったか）。上の2つの更新と同じ判定を、いまの描画の値で数える。
+    const inComposer = draft === '' && (restoredAttachments === undefined || pending.length === 0);
+    setRetries((prev) => new Map(prev).set(shownId, { ...entry, restored: true, inComposer }));
+    // 戻すのは1度きり（`restored`）。`draft` / `pending` を依存に持つのは、戻せたかの判定のため。
+  }, [retries, shownId, draft, pending]);
 
   /**
    * 中断で積んだ文（`unconfirmed`）が履歴に現れたら（その `clientMessageId` を持つ人間の発言が出たら。
@@ -1491,8 +1517,8 @@ export function ChatPane({
      * `supersedes` — この追送が送信済みの人間の発言を編集したものなら、
      * 置き換える対象の日誌エントリ id（チャットのメッセージ編集、#1010）。
      * 通常の追送では渡らない。
-     * `clearOnlyIfUnchanged` — 真なら入力欄は「送った本文のままのときだけ」空にする（再送、および
-     * 添付を上げて待っていた送信。待つあいだに打ち足した分を消さない。#3215）。
+     * `clearOnlyIfUnchanged` — 真なら入力欄から「送った分」だけを取り除く（再送、および
+     * 添付を上げて待っていた送信。待つあいだに打ち足した分は残す。#3215・#3248）。
      */
     async (
       text: string,
@@ -1520,7 +1546,7 @@ export function ChatPane({
         next.delete(running.id);
         return next;
       });
-      if (clearOnlyIfUnchanged === true) setDraft((current) => (current === text ? '' : current));
+      if (clearOnlyIfUnchanged === true) setDraft((current) => withoutSentText(current, text));
       else setDraft('');
       const lineKey = showOwnLine(
         text,
@@ -1576,7 +1602,14 @@ export function ChatPane({
          */
         setFailures((prev) => new Map(prev).set(running.id, caught));
         // 投函は `open` の前に終わっている（ここへ来るのはそれだけ）。
-        giveBack(running.id, text, lineKey, supersedes, attachments, clientMessageId);
+        giveBack(
+          running.id,
+          text,
+          lineKey,
+          supersedes,
+          attachments,
+          isClientMessageIdMismatch(caught) ? newClientMessageId() : clientMessageId,
+        );
       }
     },
     [api, recordOwnMessage, showOwnLine, giveBack],
@@ -1729,7 +1762,9 @@ export function ChatPane({
               key: `a-${event.approvalId}`,
               role: 'system',
               of: stream.id,
-              text: `確認したいことがある: ${event.question}\n（承認待ちの画面から答えられる）`,
+              text: event.question,
+              // 履歴の行と同じカードで出す（承認 id で引き取られる。`lineMatchKey`）。
+              approval: approvalFromAskEvent(event.approvalId, event.question),
             },
           ]);
           break;
@@ -1889,6 +1924,20 @@ export function ChatPane({
         const sent = new Set(attachments.map((item) => item.key));
         // 送った分（key）だけ消す。上げているあいだに足された添付は残す（#3215）。
         setPending((current) => current.filter((item) => !sent.has(item.key)));
+        /*
+         * 上げているあいだに別の会話へ移っていたら、送った添付は移る前の会話の「しまっておいた
+         * 添付」に居る（上の `setPending` は、いま見ている会話の添えかけにしか効かない）。
+         * そちらからも外す。外さないと、元の会話へ戻ったとき、送り済みの添付が添えかけとして
+         * 現れる（#3249）。
+         */
+        setAttachmentDrafts((previous) => {
+          const kept = previous.get(shownId);
+          if (kept === undefined || !kept.some((item) => sent.has(item.key))) return previous;
+          return new Map(previous).set(
+            shownId,
+            kept.filter((item) => !sent.has(item.key)),
+          );
+        });
         setAttachNotice(undefined);
       }
 
@@ -1930,8 +1979,7 @@ export function ChatPane({
         next.delete(shownId);
         return next;
       });
-      if (retry === true || waitedForUpload)
-        setDraft((current) => (current === text ? '' : current));
+      if (retry === true || waitedForUpload) setDraft((current) => withoutSentText(current, text));
       else setDraft('');
       const lineKey = showOwnLine(
         text,
@@ -2033,7 +2081,15 @@ export function ChatPane({
           setFailures((prev) => new Map(prev).set(stream.id, caught));
           // サーバが受け取った（`open` を見た）後の失敗は、文を戻さない（二重に送らせない）。
           if (!opened) {
-            giveBack(stream.id, text, lineKey, supersedes, attachments, clientMessageId);
+            // 同じ id で中身が違うと 409 になった（#3243）なら、その id は捨てて次の再送で新しく作る。
+            giveBack(
+              stream.id,
+              text,
+              lineKey,
+              supersedes,
+              attachments,
+              isClientMessageIdMismatch(caught) ? newClientMessageId() : clientMessageId,
+            );
           }
         }
       } finally {
@@ -2078,6 +2134,43 @@ export function ChatPane({
       }
     },
     [api, shownId, navigate, recordOwnMessage, showOwnLine, followUp, createStreamWriter, giveBack],
+  );
+
+  /**
+   * **「再送」。入力欄の今の中身を送る（#3247）。** 積んでおいた文・添付（`stashed`）を
+   * そのまま送らない——戻った文を直したり添付を外したりした後に押すと、直す前の中身が
+   * 外したはずの添付つきで届き、直した文は入力欄に残って Enter で二重に届く。
+   *
+   * - 入力欄の今の中身が積んだものと同じ → 最初の `clientMessageId` で送る（サーバが
+   *   受け取り済みなら二重に受けず続きを返す。#3203）
+   * - 違う → **新しい `clientMessageId` で、今の中身を送る。** 同じ id で中身を変えると、
+   *   サーバが 409 `client_message_id_mismatch` で断る（#3243）ので、そもそも使い回さない
+   * - 入力欄が空（本文も添付も）→ 送るものが無いので、積んだものをそのまま送る
+   */
+  const resend = useCallback(
+    (stashed: {
+      text: string;
+      supersedes?: string;
+      attachments?: PendingAttachment[];
+      clientMessageId?: string;
+      inComposer?: boolean;
+    }) => {
+      // 入力欄へ戻していない（使い手が先に別の発言を打ち始めていた）なら、入力欄は別物。
+      // 積んだ中身をそのまま送り、入力欄には触らない（`send` の `retry`）。
+      if (stashed.inComposer !== true || (draft.trim() === '' && pending.length === 0)) {
+        void send(stashed.text, { ...stashed, retry: true });
+        return;
+      }
+      if (sameAsStashed(stashed, draft, pending)) {
+        void send(draft, { ...stashed, attachments: pending, retry: true });
+        return;
+      }
+      void send(draft, {
+        attachments: pending,
+        ...(stashed.supersedes === undefined ? {} : { supersedes: stashed.supersedes }),
+      });
+    },
+    [draft, pending, send],
   );
 
   /**
@@ -2498,6 +2591,25 @@ export function ChatPane({
                    * **すぐ前が自分の発言**のときだけ出す——承認への回答から起きた失敗（間に確認の
                    * 行が挟まる）では、前の発言が失敗の原因とは限らないので出さない。送信中も出さない。
                    */
+                  if (line.approval !== undefined) {
+                    return (
+                      <li key={line.key}>
+                        <ApprovalAnswerCard
+                          approval={line.approval}
+                          showSettledAt
+                          onAnswered={() => void conversationApprovals.mutate()}
+                          trailing={
+                            <Link
+                              to={approvalDetailPath(line.approval.id)}
+                              className="mt-3 inline-block text-[11px] text-primary hover:underline"
+                            >
+                              承認の画面で開く →
+                            </Link>
+                          }
+                        />
+                      </li>
+                    );
+                  }
                   if (line.turnFailure !== undefined) {
                     const previous = index > 0 ? all[index - 1] : undefined;
                     const retryText =
@@ -2647,7 +2759,7 @@ export function ChatPane({
               </span>
               <Button
                 size="sm"
-                onClick={() => void send(unconfirmedText, { ...unconfirmedEntry, retry: true })}
+                onClick={() => unconfirmedEntry !== undefined && resend(unconfirmedEntry)}
               >
                 再送
               </Button>
@@ -2681,13 +2793,18 @@ export function ChatPane({
           ) : (
             <>
               <ErrorNote error={shownFailure} />
+              {isAttachmentMissing(shownFailure) && (
+                <p role="alert" className="mt-2 text-xs text-warn">
+                  添付が期限切れか、サーバに無い。「再送」は同じ添付で送るので、添付を外して付け直してから送る。
+                </p>
+              )}
               {visibleFailure !== undefined && retries.has(shownId) && (
                 <Button
                   size="sm"
                   className="mt-2"
                   onClick={() => {
-                    const pending = retries.get(shownId);
-                    if (pending !== undefined) void send(pending.text, { ...pending, retry: true });
+                    const stashed = retries.get(shownId);
+                    if (stashed !== undefined) resend(stashed);
                   }}
                 >
                   再送

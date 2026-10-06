@@ -1287,6 +1287,26 @@ export function useRevokeIntegrationKey() {
 }
 
 /**
+ * 読めない連携の鍵の行を、id を指して消す（`POST /integration-keys/unreadable/remove`。issue #3216）。
+ * id は `GET /integration-keys` の `rowsUnreadable.rows[].id`。読めない行に無い id を指すとデーモンが何も
+ * 消さずに断る（`ApiError`）。**確認は画面の側が持つ**（`UnreadableRowsNote`）。
+ */
+export function useRemoveUnreadableIntegrationKeys() {
+  const api = useApi();
+  const { mutate } = useSWRConfig();
+  return useCallback(
+    async (ids: readonly string[]) => {
+      const result = await api.api
+        .POST('/integration-keys/unreadable/remove', { body: { ids: [...ids] } })
+        .then(unwrap);
+      await mutate(KEY.integrationKeys);
+      return result;
+    },
+    [api, mutate],
+  );
+}
+
+/**
  * 読めない許可の行を、id を指して消す（`POST /permission-grants/unreadable/remove`。issue #2440）。
  * id は `GET /permission-grants` の `rowsUnreadable.rows[].id`（issue #2536）。
  * 読めない行に無い id を指すとデーモンが何も消さずに断る（`ApiError`）。

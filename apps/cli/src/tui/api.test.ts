@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { AttachmentMissingError } from '../attachments.js';
 import { ApiError, createTuiApi, type ChatEvent } from './api.js';
 
 interface Sent {
@@ -116,6 +117,23 @@ describe('chat（POST /chat の SSE）', () => {
     ]);
     expect(events[0]).toEqual({ type: 'open', conversationId: 'c1' });
     expect(events[5]).toMatchObject({ approvalId: 'a1', question: 'どっち？' });
+  });
+
+  it('400 の code が attachment_missing なら AttachmentMissingError（理由の文を持つ）で失敗する（#3246）', async () => {
+    replies.push(
+      json(
+        { error: '添付が見つからない（期限切れの可能性）: att-9', code: 'attachment_missing' },
+        400,
+      ),
+    );
+    const failure = await collect(
+      createTuiApi(target).chat(
+        { text: 'x', attachments: ['att-9'] },
+        new AbortController().signal,
+      ),
+    ).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(AttachmentMissingError);
+    expect((failure as Error).message).toContain('att-9');
   });
 
   it('401 は既存 CLI と同じ認証の案内文で失敗する', async () => {

@@ -1477,6 +1477,7 @@ export {
   type IntegrationKeyStore,
   type IntegrationLimits,
   type RevokeIntegrationKeyOutcome,
+  type UnreadableIntegrationKey,
 } from './integration-key.js';
 export { verifyIntegrationKeyStoreContract } from './integration-key-contract.js';
 export {
