@@ -16119,6 +16119,12 @@ class Pool implements ManagerPool {
     // `#autoFoldOne` が再び呼ばれることは無いので、吐き出す残りは無い
     // （`#rateLimitJournalFolds` の `flush()` のような後始末は不要）。
     this.#autoFoldSkipJournalWritten.delete(managerId);
+    // **busy の取り直しの数え（`#reattachBusyRetries`、#3196）も同じ契機で外す**（Issue #3265）。
+    // `#reattach` のジョブのループは、委譲が running / waiting_human でなくなると数えを消さずに
+    // `continue` で抜ける。終端（`closed`・`lost` の確定・resume 断念・`abort()` の `stopped`）は
+    // 全部ここを通るので、ここで消せば `continue` の箇所ごとに足さずに済み、後で同じ委譲が
+    // 再び running になって busy に当たっても、上限（`REATTACH_BUSY_MAX_RETRIES`）を前の分で縮めない。
+    this.#reattachBusyRetries.delete(managerId);
   }
 
   /**
