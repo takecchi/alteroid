@@ -12298,7 +12298,15 @@ class Pool implements ManagerPool {
           // 軸に0の行を作る」）。
           ...(event.askedAt === undefined ? {} : { askedAt: event.askedAt }),
         });
-        record.job.status = 'waiting_human';
+        // **終端（`failed` / `lost`）を、遅れて処理される ask で書き戻さない（Issue #3186。
+        // #3160 の `case 'report'` と同じ形）。** 上の `await`（`#ignoreIfMovedAway`）で待つ間に
+        // `closed(failed / lost)` が終端を台帳へ書いていると、無条件の `waiting_human` は台帳を
+        // 非終端へ戻す（クローンには `closed_failed` の知らせが出るのに台帳は待ちのまま／
+        // `lost` は引き取りの契機も消える）。**待ちへの積み・日誌・受信箱への流れは従来どおり**で、
+        // 動かさないのは status だけ。
+        if (record.job.status !== 'failed' && record.job.status !== 'lost') {
+          record.job.status = 'waiting_human';
+        }
         await this.#persist(record);
         await this.#journal({
           type: 'escalation',
@@ -13601,7 +13609,14 @@ class Pool implements ManagerPool {
             event.reason,
         });
         if (event.recovered) {
-          record.job.status = 'running';
+          // **終端（`failed` / `lost`）を、遅れて処理される resume_failed で書き戻さない
+          // （Issue #3186。#3160 と同じ形）。** 上の `await #journal` で待つ間に
+          // `closed(failed / lost)` が終端を書いていると、無条件の `running` は台帳を非終端へ
+          // 戻す。**`runnerSessionSince` の更新と `#notifyResumeFallback` は従来どおり**で、
+          // 動かさないのは status だけ。
+          if (record.job.status !== 'failed' && record.job.status !== 'lost') {
+            record.job.status = 'running';
+          }
           record.attached = true;
           // 前の会話へは戻れなかったが、**器は新しいセッションを持っている**
           // （#579。`ManagerRecord.runnerSessionSince` の doc）。
