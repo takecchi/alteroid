@@ -92,6 +92,13 @@ export interface AttachmentStore {
    */
   bindToExternalEvent(ids: readonly string[], eventId: string): Promise<AttachmentBindResult>;
   /**
+   * 結び付けを戻す（{@link bind} / {@link bindToExternalEvent} の取り消し）。**その `target` に結び付いている id だけ**を
+   * 未結び付けへ戻し、戻した id を返す。未結び付け・別の宛先に結び付いている・無い id は触らない（返さない）。
+   * 冪等。呼び手は「自分の呼び出しで新しく結んだ id」だけを渡すこと（以前から同じ宛先に結んであった id を渡すと、
+   * その結び付けも戻る）。
+   */
+  unbind(ids: readonly string[], target: AttachmentBindTarget): Promise<string[]>;
+  /**
    * 掃除。①`expiresAt` を過ぎたもの、②作成から {@link ATTACHMENT_UNBOUND_TTL_MS} たっても未結び付けのもの、を消す。
    * 消した件数を返す。**中身を読まない。**
    */
@@ -365,6 +372,13 @@ export function isAttachmentPrunable(meta: AttachmentMeta, now: Date): boolean {
 
 /** 結び付け先。**会話か外部イベントのどちらか1つ**（{@link AttachmentMeta.externalEventId}）。 */
 export type AttachmentBindTarget = { conversationId: string } | { externalEventId: string };
+
+/** いま `target` に結び付いているか（{@link AttachmentStore.unbind} が戻してよい id の判定。3実装が同じ規則を使う）。 */
+export function isBoundTo(meta: AttachmentMeta, target: AttachmentBindTarget): boolean {
+  return 'conversationId' in target
+    ? meta.conversationId === target.conversationId
+    : meta.externalEventId === target.externalEventId;
+}
 
 /**
  * いま `target` へ結んでよいか（3実装が同じ規則を使う。pg は同じ条件を SQL で書く）。

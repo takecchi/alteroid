@@ -1497,6 +1497,7 @@ export {
   DEFAULT_ATTACHMENT_LIMITS,
   canBindAttachmentTo,
   isAttachmentImageMediaType,
+  isBoundTo as isAttachmentBoundTo,
   isAttachmentPrunable,
   normalizeAttachmentMediaType,
   normalizeAttachmentName,
