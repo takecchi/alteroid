@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
-import { useBlocker, useNavigate } from 'react-router';
+import { useState } from 'react';
+import { useNavigate } from 'react-router';
 import { Tabs } from 'radix-ui';
 
 import {
@@ -27,6 +27,7 @@ import {
 import { formatDateTime } from '@alteroid/logic';
 import { practiceKindLabel } from './practices';
 
+import { LeaveGuardScope, useReleaseLeaveGuard, useReportDirty } from '~/lib/leave-guard';
 import { useLatest } from '~/lib/use-latest';
 
 import type { Route } from './+types/practice-detail';
@@ -56,10 +57,14 @@ export function clientLoader({ params }: Route.ClientLoaderArgs) {
  * 一覧の右のペインに出る（親の経路 `practices.tsx` の `ListDetail`）。**親は同じままで子の `:slug` だけが
  * 変わる**ので、素のままだと別のやり方へ移っても同じ部品が使い回され、下書き・保存時刻・開いていた版・
  * タブが次のやり方へ持ち越される。**`key={slug}` で作り直す。** 未保存の編集があるときは、作り直しの前に
- * `useBlocker` が移動そのものを止めて確認を出す（「破棄して離れる」を選んだときだけ移り、作り直される）。
+ * `LeaveGuardScope` が移動そのものを止めて確認を出す（「破棄して離れる」を選んだときだけ移り、作り直される）。
  */
 export default function PracticeDetail({ loaderData }: Route.ComponentProps) {
-  return <PracticeDetailBody key={loaderData.slug} slug={loaderData.slug} />;
+  return (
+    <LeaveGuardScope key={loaderData.slug}>
+      <PracticeDetailBody slug={loaderData.slug} />
+    </LeaveGuardScope>
+  );
 }
 
 function PracticeDetailBody({ slug }: { slug: string }) {
@@ -166,17 +171,8 @@ function PracticeDetailBody({ slug }: { slug: string }) {
    * （リンク・戻る）は確認を挟み、タブを閉じる・再読み込みはブラウザの警告に任せる。
    * 削除が通った後の移動は止めない。
    */
-  const leaving = useRef(false);
-  const blocker = useBlocker(() => dirty && !leaving.current);
-  useEffect(() => {
-    if (!dirty) return;
-    const warn = (event: BeforeUnloadEvent) => {
-      event.preventDefault();
-      event.returnValue = '';
-    };
-    window.addEventListener('beforeunload', warn);
-    return () => window.removeEventListener('beforeunload', warn);
-  }, [dirty]);
+  const releaseLeaveGuard = useReleaseLeaveGuard();
+  useReportDirty('draft', dirty);
 
   /** `ifMatch` を渡して保存する。衝突したら下書きを残して、いまの版を見せる。 */
   function save(ifMatch: string | null | undefined = baseVersion) {
@@ -270,7 +266,7 @@ function PracticeDetailBody({ slug }: { slug: string }) {
                   // 読んだ版を送る（#2959）。衝突のあとに開き直したときは、見せたいまの版を送る。
                   deletePractice(slug, deleteConflict?.current?.version ?? data.version)
                     .then(() => {
-                      leaving.current = true;
+                      releaseLeaveGuard();
                       navigate('/practices');
                     })
                     .catch((caught: unknown) => {
@@ -379,19 +375,6 @@ function PracticeDetailBody({ slug }: { slug: string }) {
           </div>
         </div>
       )}
-      <ConfirmDialog
-        open={blocker.state === 'blocked'}
-        onOpenChange={(open) => {
-          if (!open && blocker.state === 'blocked') blocker.reset();
-        }}
-        title="保存していない変更があります"
-        description="このまま離れると、書きかけの内容は失われます。"
-        confirmLabel="破棄して離れる"
-        destructive
-        onConfirm={() => {
-          if (blocker.state === 'blocked') blocker.proceed();
-        }}
-      />
 
       {isLoading && !missing ? (
         <Spinner />
