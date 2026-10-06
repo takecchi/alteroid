@@ -463,13 +463,30 @@ wait_for_deploy() { # <Service名> [制限秒]
 # **既に在る名前は置き換わる**（再実行・鍵の差し替え）。非対話（標準入力はパイプ）なので、
 # 上書きの確認（#3201）を `--yes` で省く。
 #
+# **`--yes` は、器の CLI が知っているときだけ付ける。** デプロイ済みの image が古い間
+# （release / prod は夜に1回入れ替わる）は、`--yes` を知らない CLI が「未知のオプション」で
+# 落ちる。古い CLI には確認自体が無いので、付けなくてよい。同じ `railway ssh` の経路で
+# `alteroid credential set --help` に `--yes` が在るかを1回だけ調べて使い回す。
+# **調べる呼び出しが失敗したら付けない側へ倒す**（setup を壊さないのを優先する）。
+#
 # **値は引数で渡さない。** `railway ssh` の先の `alteroid credential set` が
 # argv から秘密を受け取らない設計なので（`apps/cli/src/credential.ts` の doc）、
 # ここでも stdin で渡す。`ps` に出さないという意図をここで壊さない。
 #
 # `app` が上がっていない・`railway ssh` が届かない、のどちらでも非0を返すだけで
 # die しない — 呼ぶ側（setup.sh）が「置けなかった」を集めて、最後に手順として出す。
+CREDENTIAL_SET_YES=
+credential_set_yes_probed=0
 set_credential() { # <APP_SERVICE> <名前> <値>
   local service="$1" name="$2" value="$3"
-  printf '%s' "$value" | railway ssh --service "$service" -- alteroid credential set "$name" --yes >/dev/null 2>&1
+  if [ "$credential_set_yes_probed" = 0 ]; then
+    credential_set_yes_probed=1
+    local help_text
+    if help_text=$(railway ssh --service "$service" -- alteroid credential set --help </dev/null 2>/dev/null) \
+      && printf '%s' "$help_text" | grep -q -e '--yes'; then
+      CREDENTIAL_SET_YES=--yes
+    fi
+  fi
+  # ${…:+…} は空なら引数を1つも足さない（空文字の引数を渡さない）。
+  printf '%s' "$value" | railway ssh --service "$service" -- alteroid credential set "$name" ${CREDENTIAL_SET_YES:+"$CREDENTIAL_SET_YES"} >/dev/null 2>&1
 }
