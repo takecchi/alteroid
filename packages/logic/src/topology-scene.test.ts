@@ -693,3 +693,105 @@ describe('枠(利用上限)で止まっているマネージャー（usageStoppe
     expect(scene.clone.status).toBe('awaiting');
   });
 });
+
+describe('外部サービス（連携の鍵）の札と線（Issue #3676）', () => {
+  const external = (keyId: string, name: string, lastAt: string) => ({
+    keyId,
+    name,
+    source: 'github',
+    lastAt,
+  });
+
+  it('連携の鍵の線が直近に down なら、その札だけが down で光る', () => {
+    const scene = topologySceneFromSnapshot(
+      snapshot({
+        externals: [
+          external('k1', 'GitHub 連携', ago(1000)),
+          external('k2', 'CI', ago(FLOW_WINDOW_MS + 30_000)),
+        ],
+        links: [
+          { key: 'external:k1~clone', lastDownAt: ago(1000) },
+          { key: 'external:k2~clone', lastDownAt: ago(FLOW_WINDOW_MS + 30_000) },
+        ],
+      }),
+      NOW,
+    );
+    expect(scene.externals?.map((e) => [e.label, e.flow])).toEqual([
+      ['GitHub 連携', 'down'],
+      ['CI', 'idle'],
+    ]);
+  });
+
+  it('札には最後の呼び出しと、時刻の意味・観測の範囲の断りが出る', () => {
+    const scene = topologySceneFromSnapshot(
+      snapshot({
+        externals: [external('k1', 'GitHub 連携', ago(120_000))],
+        links: [{ key: 'external:k1~clone', lastDownAt: ago(120_000) }],
+      }),
+      NOW,
+    );
+    const card = scene.externals?.[0];
+    expect(card?.id).toBe('external:k1');
+    // 状態（正常・仕事なし）は言わない。外部サービスの状態は観測していない。
+    expect(card).not.toHaveProperty('status');
+    const labels = card?.details?.map((d) => d.label) ?? [];
+    expect(labels).toEqual(expect.arrayContaining(['鍵の名前', '鍵 ID', 'source', '最後の呼び出し', '観測の範囲']));
+    const note = card?.details?.find((d) => d.label === '観測の範囲')?.value ?? '';
+    expect(note).toContain('受け付けた時刻ではない');
+    expect(note).toContain('起動後');
+  });
+
+  it('上限を超えた分は「ほか N 件」の札になり、まとめの線が光ればそれが光る', () => {
+    const scene = topologySceneFromSnapshot(
+      snapshot({
+        externals: [external('k1', 'A', ago(1000))],
+        externalsOmitted: 2,
+        links: [
+          { key: 'external:k1~clone', lastDownAt: ago(1000) },
+          { key: 'external-others~clone', lastDownAt: ago(1000) },
+        ],
+      }),
+      NOW,
+    );
+    expect(scene.externals?.map((e) => [e.id, e.label, e.flow])).toEqual([
+      ['external:k1', 'A', 'down'],
+      ['external-others', 'ほか 2 件', 'down'],
+    ]);
+  });
+
+  it('古いデーモン（externals も外部の線も無い）でも落ちず、札は出さない', () => {
+    const scene = topologySceneFromSnapshot(snapshot(), NOW);
+    expect(scene.externals ?? []).toEqual([]);
+  });
+
+  it('知らない key の線・札の無い外部の線は無視する（版ずれ。他の線は壊れない）', () => {
+    const scene = topologySceneFromSnapshot(
+      snapshot({
+        links: [
+          { key: 'external:ghost~clone', lastDownAt: ago(1000) },
+          { key: 'something-new~clone', lastDownAt: ago(1000) },
+          { key: 'human~clone', lastDownAt: ago(1000) },
+        ],
+      }),
+      NOW,
+    );
+    expect(scene.externals ?? []).toEqual([]);
+    expect(scene.human.flow).toBe('down');
+  });
+
+  it('札はあるが線が無い（欠けた）ときは idle に倒す（光を作らない）', () => {
+    const scene = topologySceneFromSnapshot(
+      snapshot({ externals: [external('k1', 'A', ago(1000))] }),
+      NOW,
+    );
+    expect(scene.externals?.[0]?.flow).toBe('idle');
+  });
+
+  it('読めない時刻の lastAt でも落ちない', () => {
+    const scene = topologySceneFromSnapshot(
+      snapshot({ externals: [external('k1', 'A', 'not-a-date')] }),
+      NOW,
+    );
+    expect(scene.externals).toHaveLength(1);
+  });
+});

@@ -74,8 +74,24 @@ export interface SceneRunner {
   status: SceneStatus;
 }
 
+/**
+ * 外部サービスの札（連携の鍵1本ぶん。または上限を超えた分をまとめた「ほか N 件」）。
+ * **`status` を持たない**——観測できるのは最後に呼ばれた時刻だけで、外部サービスの状態
+ * （正常・仕事なし）は観測していない。
+ */
+export interface SceneExternal {
+  id: string;
+  label: string;
+  task?: string;
+  /** 外部サービス → クローンの線。`down` だけが在りうる。 */
+  flow: SceneFlow;
+  details?: readonly SceneDetail[];
+}
+
 export interface TopologySceneData {
   human: { flow: SceneFlow };
+  /** 外部サービス（連携の鍵）。無ければ空（古いデーモンも空。「呼ばれていない」とは言わない）。 */
+  externals: readonly SceneExternal[];
   clone: { task?: string; status: SceneStatus; details?: readonly SceneDetail[] };
   db: {
     label: string;
@@ -459,6 +475,7 @@ export function topologySceneFromSnapshot(
 
   return {
     human: { flow: flowOfLink(links.get('human~clone'), nowMs) },
+    externals: externalScenes(snapshot, links, nowMs),
     clone,
     db: {
       label: storageLabel(snapshot.storage.label),
@@ -476,6 +493,52 @@ export function topologySceneFromSnapshot(
       ),
     ),
   };
+}
+
+/** 外部サービスの札に付ける、時刻の意味と観測の範囲の断り。 */
+const EXTERNAL_SCOPE_NOTE =
+  '時刻はクローンが受信箱から取り出して処理した時刻で、受け付けた時刻ではない' +
+  '（クローンが処理中・利用枠で止まっているあいだは遅れる）。' +
+  'デーモンの起動後に連携の鍵で呼ばれた、直近 10 分のものだけを出す';
+
+/**
+ * 外部サービスの札。**札は `snapshot.externals`（デーモンが載せたもの）からだけ作る**——線の key
+ * から札を起こさない（札の無い `external:<keyId>~clone` は読み手が知らない線で、無視する。
+ * 版ずれで知らない key が来ても落ちず、他の線も壊さない）。
+ * 欄が無い（古いデーモン・観測が無い）ときは空で、「呼ばれていない」とは言わない。
+ */
+function externalScenes(
+  snapshot: TopologySnapshot,
+  links: ReadonlyMap<string, Link>,
+  nowMs: number,
+): SceneExternal[] {
+  const cards: SceneExternal[] = (snapshot.externals ?? []).map((external) => ({
+    id: `external:${external.keyId}`,
+    label: external.name === '' ? external.keyId : external.name,
+    task: `最後の呼び出し: ${formatRelative(external.lastAt, nowMs)}`,
+    flow: flowOfLink(links.get(`external:${external.keyId}~clone`), nowMs),
+    details: [
+      { label: '鍵の名前', value: external.name === '' ? '（名前なし）' : external.name },
+      { label: '鍵 ID', value: external.keyId, mono: true },
+      { label: 'source', value: external.source, mono: true },
+      { label: '最後の呼び出し', value: formatDateTime(external.lastAt, nowMs) },
+      { label: '観測の範囲', value: EXTERNAL_SCOPE_NOTE },
+    ],
+  }));
+  const omitted = snapshot.externalsOmitted ?? 0;
+  if (omitted > 0) {
+    cards.push({
+      id: 'external-others',
+      label: `ほか ${omitted} 件`,
+      task: '札にしていない連携の鍵',
+      flow: flowOfLink(links.get('external-others~clone'), nowMs),
+      details: [
+        { label: '件数', value: `${omitted} 件（地図に載せる上限を超えた連携の鍵）` },
+        { label: '観測の範囲', value: EXTERNAL_SCOPE_NOTE },
+      ],
+    });
+  }
+  return cards;
 }
 
 function managerScenes(
