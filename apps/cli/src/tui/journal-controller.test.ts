@@ -258,7 +258,8 @@ describe('古い側と取りこぼし', () => {
     controller.setFilter([], '', 2);
     await waitFor(() => state().status === 'ready');
     controller.moveSelection(1);
-    await waitFor(() => ids().length === 4);
+    await waitFor(() => ids().length === 3); // 頁は 2 件。境界の e3 は再送されるので e2 だけが増える
+    expect(ids()).toEqual(['e4', 'e3', 'e2']);
     expect(api.journalListCalls.at(-1)).toMatchObject({ until: minute(3) });
   });
 
