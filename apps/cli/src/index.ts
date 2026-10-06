@@ -283,9 +283,7 @@ program
 
 program
   .command('tui')
-  .description(
-    '全画面の TUI を開く（いまは会話の画面。承認待ち・委譲・日誌・記憶は順に足していく。端末でだけ動く）',
-  )
+  .description('全画面の TUI を開く（会話・承認待ち・委譲・日誌・記憶の 5 画面。端末でだけ動く）')
   .action(async () => {
     await launchTui();
   });

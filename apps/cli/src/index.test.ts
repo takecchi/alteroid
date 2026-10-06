@@ -502,4 +502,17 @@ describe('サブコマンドの登録（入口が在ること）', () => {
       .filter((w, i, all) => !w.startsWith('--') && all[i - 1] !== '--cooldown-ms');
     expect(positionals).toHaveLength(policy?.registeredArguments.length ?? -1);
   });
+
+  /**
+   * `tui --help` の説明が、TUI の実際の画面（`TABS`）と合っていること（#3726）。
+   * 「いまは会話の画面。…順に足していく」のまま古くなっていた。画面の表示名が
+   * 説明に全部出ること、古い「順に足していく」が残らないことを見る。
+   */
+  it('tui の説明は TABS の全画面の名前を挙げ、「順に足していく」を含まない', async () => {
+    const { TABS } = await import('./tui/layout.js');
+    const description = program.commands.find((c) => c.name() === 'tui')?.description() ?? '';
+    for (const tab of TABS) expect(description).toContain(tab.label);
+    expect(description).toContain(`${TABS.length} 画面`);
+    expect(description).not.toContain('順に足していく');
+  });
 });
