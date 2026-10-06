@@ -539,6 +539,42 @@ describe('答えの後の行動（issue #847）', () => {
     expect(await screen.findByText(/行動が無いのではなく、記録していない/)).not.toBeNull();
   });
 
+  /** issue #3061: 頭は日本語の種別名。本文を持たない種別は識別子を繰り返さない。 */
+  it('種別は日本語の名前で出し、英語の識別子を出さない（本文を持たない種別も）', async () => {
+    stubApprovals([answered], {
+      trace: () =>
+        json(
+          traceBody({
+            state: 'paired',
+            actions: [
+              {
+                type: 'decision',
+                id: 'j-1',
+                at: '2026-08-19T11:00:01.000Z',
+                decision: 'b に沿って進めた',
+                grounds: '人間の答え',
+                answeredApprovalId: 'a-1',
+              },
+              {
+                type: 'token_rotation',
+                id: 'j-5',
+                at: '2026-08-19T11:00:02.000Z',
+                answeredApprovalId: 'a-1',
+              },
+            ],
+          }),
+        ),
+    });
+    renderPage();
+    fireEvent.click(await screen.findByText('答えの後の行動を見る'));
+    expect(await screen.findByText(/トークンの交代/)).not.toBeNull();
+    expect(screen.getByText(/ 判断$/)).not.toBeNull();
+    const items = Array.from(document.querySelectorAll('li')).map((li) => li.textContent ?? '');
+    const text = items.join('\n');
+    expect(text).not.toMatch(/token_rotation/);
+    expect(text).not.toMatch(/(^|\s)decision(\s|$)/);
+  });
+
   /**
    * 行動一覧の文言が core（`describeTraceAction`。`packages/core/src/trace-action.ts`）
    * と揃うことを固定する（issue #1528）。**この画面はかつて `describeAction` という
