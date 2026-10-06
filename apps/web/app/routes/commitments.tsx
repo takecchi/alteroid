@@ -27,6 +27,8 @@ import {
   useEditCommitment,
   usePushCommitment,
   useCommitments,
+  ApiError,
+  useConversation,
   useConversations,
 } from '@alteroid/swr';
 import { formatDateTime, formatRelative, redactBody } from '@alteroid/logic';
@@ -409,19 +411,68 @@ const CONVERSATION_TITLE_MAX = 24;
 /**
  * 人間の行の出どころ。`source` が会話 id なら「会話『冒頭の一言』」にして会話へのリンクにする。
  *
- * **会話の一覧（直近）に載っていない id は、会話だと言い切らない**——`source` は承認待ちへの
- * 回答の id のこともある（`packages/core/src/schema.ts` の `commitmentRespondedAt` の doc）。
- * その場合は「人間」とだけ出して、リンクも ID も出さない。
+ * **`source` は承認待ちへの回答の id のこともある**（`packages/core/src/schema.ts` の
+ * `commitmentRespondedAt` の doc）ので、会話だと確かめられるまでは言い切らない。
+ *
+ * 1. 直近の一覧（`useConversations()`、30件）に載っていれば、それを使う（行ごとに引かない）。
+ * 2. 載っていない id だけ、`GET /conversations/{id}` で1件引く。**中身（`messages`）ごと返る**が、
+ *    メタだけ返す口は無い（クエリは `scan` と `includeSuperseded` のみ）ので、一覧に無い id に
+ *    限ることで数を抑える。同じ id は SWR が1回にまとめる。
+ * 3. 404 は会話ではない（デーモンは日誌を遡り切って該当が無いときだけ 404 を返す）。「人間」とだけ出す。
+ * 4. 404 以外の失敗と、「窓の外かもしれない」（200 で `messages` が空・`reachedStart: false`）は
+ *    **確かめられなかった**。「人間」に潰さず、その旨を控えめに添える。
  */
 function HumanConversationBadge({ label, source }: { label: string; source: string }) {
-  const { data } = useConversations();
-  const conversation = data?.conversations.find((entry) => entry.conversationId === source);
-  if (conversation === undefined) return <Badge tone="accent">{label}</Badge>;
-  const preview = conversation.preview.trim();
+  const recent = useConversations();
+  const recentSettled = recent.data !== undefined || recent.error !== undefined;
+  const inRecent = recent.data?.conversations.find((entry) => entry.conversationId === source);
+  const single = useConversation(recentSettled && inRecent === undefined ? source : null, {
+    retryOnNotFound: false,
+  });
+
+  if (inRecent !== undefined) {
+    return <ConversationLink label={label} source={source} preview={inRecent.preview} />;
+  }
+  if (single.data !== undefined) {
+    const messages = single.data.messages;
+    // 一覧の題と同じく、失敗の知らせではない最後の発言から取る。
+    const titled =
+      messages.findLast((message) => message.turnFailure === undefined) ?? messages.at(-1);
+    if (titled !== undefined) {
+      return <ConversationLink label={label} source={source} preview={titled.text} />;
+    }
+    // 200 で空: 窓の外に続きが残っているかもしれない（無いとは言えない）。
+    return <UnconfirmedBadge label={label} />;
+  }
+  if (single.error !== undefined) {
+    if (single.error instanceof ApiError && single.error.status === 404) {
+      return <Badge tone="accent">{label}</Badge>;
+    }
+    return <UnconfirmedBadge label={label} />;
+  }
+  return <Badge tone="accent">{label}</Badge>;
+}
+
+function UnconfirmedBadge({ label }: { label: string }) {
+  return (
+    <Badge tone="accent">
+      {label} / <span className="text-muted-foreground">会話？（確かめられなかった）</span>
+    </Badge>
+  );
+}
+
+function ConversationLink({
+  label,
+  source,
+  preview,
+}: {
+  label: string;
+  source: string;
+  preview: string;
+}) {
+  const flat = preview.replace(/\s+/g, ' ').trim();
   const title =
-    preview.length > CONVERSATION_TITLE_MAX
-      ? `${preview.slice(0, CONVERSATION_TITLE_MAX)}…`
-      : preview;
+    flat.length > CONVERSATION_TITLE_MAX ? `${flat.slice(0, CONVERSATION_TITLE_MAX)}…` : flat;
   return (
     <Badge tone="accent">
       {label} /{' '}

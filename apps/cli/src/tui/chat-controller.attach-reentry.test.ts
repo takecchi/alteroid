@@ -111,3 +111,105 @@ describe('TUI: 添付を上げている最中の /detach と /attach', () => {
     expect(controller.hasAttachments()).toBe(true);
   });
 });
+
+// 監査5 (#3111 系統): #3558 の止めは「上げている最中」だけ。上げ終わってから最初のイベントが届くまで
+// （送信は busy だが、添えかけはまだ外れていない）に2回目の Enter を押すと、追送が同じ添えかけを
+// もう一度送る（上げ済みの印があるので再アップロードはされず、同じ id が2つの発言に付く）。
+describe('TUI: 添付を上げ終えて最初のイベントが届く前の2回目の送信', () => {
+  it('同じ添えかけを、追送でもう一度送らない', async () => {
+    const dir = await makeTempDir('alteroid-tui-audit5-');
+    const path = join(dir, 'a.log');
+    await writeFile(path, 'log');
+    const api = fakeApi();
+    const hold = gate();
+    const started = gate(); // 1回目の chat が呼ばれた（上げ終わった）合図。実時間は待たない
+    const realChat = api.chat.bind(api);
+    api.chat = (input, signal) => {
+      started.open();
+      return realChat(input, signal);
+    };
+    const controller = new ChatController(api);
+    await controller.attach(path);
+    api.scripts.push(
+      [hold.wait, { type: 'open', conversationId: 'c1' }, { type: 'done' }], // 1回目: サーバの最初のイベントが遅い
+      [{ type: 'open', conversationId: 'c1' }], // 追送
+    );
+    const first = controller.send('一回目');
+    await started.wait; // 上げ終わり、chat を呼んだが、まだイベントは来ていない
+    const second = controller.send('二回目');
+    hold.open();
+    await Promise.all([first, second]);
+    const withAttachment = api.chatCalls.filter((c) => (c.attachments?.length ?? 0) > 0);
+    expect(withAttachment.map((c) => c.text)).toEqual(['一回目']);
+  });
+});
+
+// 監査5: 添付を上げられずに送らなかったとき、`send` は「送らなかった印」（false。呼び手が文を入力欄へ戻す）を返さない。
+// 呼び手（app.tsx の submit）は Enter の時点で入力欄を空にしており、false のときだけ文を戻す（#3304・#3405・#3430）。
+describe('TUI: 添付を上げられなかった送信は、送らなかった印を返す', () => {
+  it('新しい会話の送信: 上げ失敗で false（打った文は入力欄へ戻る）', async () => {
+    const dir = await makeTempDir('alteroid-tui-audit5-');
+    const path = join(dir, 'a.log');
+    await writeFile(path, 'log');
+    const api = fakeApi();
+    const controller = new ChatController(api);
+    await controller.attach(path);
+    api.uploadFails = '繋がらない';
+    const sent = await controller.send('見て');
+    expect(api.chatCalls).toEqual([]); // 送っていない
+    expect(sent).toBe(false);
+  });
+
+  it('追送: 上げ失敗で false', async () => {
+    const dir = await makeTempDir('alteroid-tui-audit5-');
+    const path = join(dir, 'a.log');
+    await writeFile(path, 'log');
+    const api = fakeApi();
+    const hold = gate();
+    const controller = new ChatController(api);
+    api.scripts.push([{ type: 'open', conversationId: 'c1' }, hold.wait, { type: 'done' }]);
+    const first = controller.send('一回目'); // 添えかけ無し。応答の途中で止める
+    await controller.attach(path);
+    api.uploadFails = '繋がらない';
+    const sent = await controller.send('追送');
+    hold.open();
+    await first;
+    expect(api.chatCalls.map((c) => c.text)).toEqual(['一回目']);
+    expect(sent).toBe(false);
+  });
+});
+
+// 監査5: 追送の添付を上げているあいだに、走っていたターンが終わると、追送は「会話が始まっていないので、続きを送れなかった」と
+// 落ちる（会話は始まっている。busy を見て追送にした時点から状況が変わっただけ）。上げた添付も使われない。
+describe('TUI: 追送の添付を上げている最中にターンが終わった', () => {
+  it('追送は取り下げずに、通常の送信として送る（会話は始まっている）', async () => {
+    const dir = await makeTempDir('alteroid-tui-audit5-');
+    const path = join(dir, 'a.log');
+    await writeFile(path, 'log');
+    const api = fakeApi();
+    const turn = gate();
+    const upload = gate();
+    const realUpload = api.uploadAttachment.bind(api);
+    api.uploadAttachment = async (file) => {
+      await upload.wait;
+      return realUpload(file);
+    };
+    const controller = new ChatController(api);
+    api.scripts.push(
+      [{ type: 'open', conversationId: 'c1' }, turn.wait, { type: 'done' }],
+      [{ type: 'open', conversationId: 'c1' }, { type: 'done' }],
+    );
+    const first = controller.send('一回目');
+    await controller.attach(path);
+    const follow = controller.send('追送'); // busy のあいだなので追送。添付を上げ始める
+    turn.open();
+    await first; // ターンが終わる（busy が下りる）
+    upload.open();
+    const sent = await follow;
+    expect(sent).toBe(true);
+    expect(api.chatCalls.map((c) => [c.text, c.attachments?.length ?? 0])).toEqual([
+      ['一回目', 0],
+      ['追送', 1],
+    ]);
+  });
+});

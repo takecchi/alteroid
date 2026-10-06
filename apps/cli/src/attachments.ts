@@ -212,6 +212,14 @@ export class AttachmentDraft {
     }
   }
 
+  /**
+   * 送ると決めて `discard` した分を、送らなかったときに先頭へ戻す（元の並びのまま。上げ済みの印も残るので、
+   * 次の送信で上げ直さない。#3588）。すでに入っている分は足さない。
+   */
+  restore(files: readonly DraftFile[]): void {
+    this.files.unshift(...files.filter((f) => !this.files.includes(f)));
+  }
+
   /** 一覧の文。 */
   describe(): string[] {
     if (this.files.length === 0) return ['（添えかけのファイルは無い。/attach <path> で足す）'];
