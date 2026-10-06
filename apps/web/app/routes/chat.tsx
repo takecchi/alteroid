@@ -568,7 +568,7 @@ export function ChatPane({
    * 文を失わないための置き場がここで、失敗表示の「再送」が読む。
    */
   const [retries, setRetries] = useState<
-    Map<string | undefined, { text: string; supersedes?: string }>
+    Map<string | undefined, { text: string; supersedes?: string; restored?: boolean }>
   >(new Map());
   const ownLineSeqRef = useRef(0);
   /**
@@ -1304,8 +1304,10 @@ export function ChatPane({
 
   /**
    * **`open` に届く前に送信が失敗したとき、書いた文を使い手へ返す（#3064）。**
-   * 吹き出し（`lineKey`）を外し、送った側の会話（`key`）の下書きが空なら文を戻す
-   * （新しく打ち始めていたら上書きしない）。`retries` には必ず積む。
+   * 吹き出し（`lineKey`）を外し、文を `retries`（キー `key` ＝送った側の会話）へ
+   * 積む。入力欄へ戻すのは下の effect — 失敗が届いた時点で見ている会話を
+   * `shownIdRef` で当てると、切り替え直後（effect が回る前）の窓で取り違える
+   * （#1576）ので、「いま見ている会話のキーに未復元の文があれば戻す」で決める。
    */
   const giveBack = useCallback(
     (key: string | undefined, text: string, lineKey: string, supersedes?: string) => {
@@ -1313,14 +1315,18 @@ export function ChatPane({
       setRetries((prev) =>
         new Map(prev).set(key, { text, ...(supersedes === undefined ? {} : { supersedes }) }),
       );
-      if (key === shownIdRef.current) {
-        setDraft((current) => (current === '' ? text : current));
-      } else {
-        setDrafts((prev) => (prev.get(key) ? prev : new Map(prev).set(key, text)));
-      }
     },
     [],
   );
+
+  // 未復元の文を、その会話を見ているあいだに1度だけ入力欄へ戻す。使い手が
+  // もう打ち始めていたら上書きしない（文は「再送」が持っている）。
+  useEffect(() => {
+    const entry = retries.get(shownId);
+    if (entry === undefined || entry.restored === true) return;
+    setDraft((current) => (current === '' ? entry.text : current));
+    setRetries((prev) => new Map(prev).set(shownId, { ...entry, restored: true }));
+  }, [retries, shownId]);
 
   /**
    * **受信中に続けて打った発言を、購読を張らずに投函だけする。**

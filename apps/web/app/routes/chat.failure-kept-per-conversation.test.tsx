@@ -145,8 +145,10 @@ describe('#1585: 送信/追送の失敗は会話ごとに持ち、切り替え�
     /*
      * Issue #1585 の「確かめていないこと」の1つ:
      * **失敗した発言そのものは、投函に失敗しても A の履歴に残って見える。**
-     * `showOwnLine` はフェッチの前に楽観的に積んでいて、`followUp` の
-     * `catch` は行を取り除かない——`ErrorNote`（上で確かめた別枠の表示）が
+     * （#3064 で変わった: 吹き出しは外れ、文は入力欄へ戻る。ここで見つかるのは
+     * 入力欄の中身。詳細は `chat.send-failure-restore-draft.test.tsx`）
+     * `showOwnLine` はフェッチの前に楽観的に積んでいたが、`followUp` の
+     * `catch` は行を取り除かなかった——`ErrorNote`（上で確かめた別枠の表示）が
      * 唯一の手がかりで、どの発言が失敗したかは行そのものからは分からない。
      */
     expect(screen.getByText('二つ目')).toBeTruthy();
