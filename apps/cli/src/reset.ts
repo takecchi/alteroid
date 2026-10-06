@@ -1,9 +1,9 @@
-import { createInterface } from 'node:readline/promises';
-import { stdin, stdout } from 'node:process';
+import { stdout } from 'node:process';
 
 import { RESET_CONFIRM_GROUPS } from '@alteroid/core/cli-light';
 
 import { describeAuthFailure, forbiddenKindOf, resolveTarget, type Target } from './target.js';
+import { confirmIrreversible, type ConfirmIo } from './confirm.js';
 import { redactError } from './redact.js';
 
 /**
@@ -17,6 +17,11 @@ import { redactError } from './redact.js';
  *
  * **取り消せない操作なので、既定では対話で確認する。** `--yes` を渡すと
  * 確認を飛ばす（スクリプト・CI から呼ぶ用途）。
+ *
+ * **確認の扱いは `confirmIrreversible`（`confirm.ts`）に揃えてある（Issue #3200）。**
+ * 端末でなく `--yes` も無ければ、標準入力に `yes` が流れていても実行せずに断る
+ * （例外＝非 0。何も変更しない）。以前は端末かどうかを見ずに標準入力から `yes` を
+ * 読んでいたので、`echo yes | alteroid reset` が `--yes` 無しで通っていた。
  */
 interface ResetSummary {
   memory: number;
@@ -39,11 +44,12 @@ interface ResetSummary {
   sessionLog?: number;
 }
 
-export async function resetCommand(options: { yes?: boolean } = {}): Promise<void> {
-  if (options.yes !== true && !(await confirm())) {
-    stdout.write('取り消しました。何も変更していません。\n');
-    return;
-  }
+export async function resetCommand(
+  options: { yes?: boolean } = {},
+  io?: ConfirmIo,
+): Promise<void> {
+  // 「取り消せません」「取り消しました」は `confirmIrreversible` が出す（二重にしない）。
+  if (!(await confirmIrreversible(buildConfirmMessage(), options, io))) return;
 
   const target = await resolveTarget();
   const view = (await post(target)) as { cleared: ResetSummary };
@@ -74,31 +80,18 @@ const CONFIRM_GROUPS = RESET_CONFIRM_GROUPS;
 /** テスト（`reset.test.ts`）が group と `SUMMARY_LABELS` の対応を検算するために読む。 */
 export const RESET_CONFIRM_GROUPS_FOR_TEST = CONFIRM_GROUPS;
 
-/** `confirm()` が出す確認の文そのもの。テストから直接読めるよう分けてある（対話は `readline` を使うため）。 */
+/**
+ * 確認の文（何が消えるか）。`confirmIrreversible` の `summary` に渡す。テストから直接読める。
+ * 末尾の改行と「取り消せません。」は `confirmIrreversible` が足すので、ここには持たない。
+ */
 export function buildConfirmMessage(): string {
   const list = CONFIRM_GROUPS.map((group) => group.label).join('・');
   return (
     '本当に削除しますか？\n' +
     `${list}を全部消します。\n` +
     '認証トークンのプール・マネージャーへ降ろす環境変数・Web UI のログイン' +
-    'アカウントは消しません。\n' +
-    '取り消せません。\n'
+    'アカウントは消しません。'
   );
-}
-
-/**
- * **`y` / `Y` ではなく `yes` の全文を要求する。** 1文字の誤打（他の質問への
- * 反射的な `y`）で取り返しのつかない操作が通らないようにするため。
- */
-async function confirm(): Promise<boolean> {
-  stdout.write(buildConfirmMessage());
-  const rl = createInterface({ input: stdin, output: stdout });
-  try {
-    const answer = await rl.question('続けるなら yes と入力してください: ');
-    return answer.trim().toLowerCase() === 'yes';
-  } finally {
-    rl.close();
-  }
 }
 
 export const SUMMARY_LABELS: [keyof ResetSummary, string][] = [

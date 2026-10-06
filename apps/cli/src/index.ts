@@ -1120,12 +1120,13 @@ integrationCommand
  *
  * **既定では対話で確認する**（`resetCommand` の doc）。`--yes` はスクリプト・
  * CI から呼ぶための脱出口——確認そのものを無くすのではなく、確認の主体を
- * 対話の相手から呼び出し側へ移すだけである。
+ * 対話の相手から呼び出し側へ移すだけである。**端末でなく `--yes` も無ければ、実行せずに
+ * 断る**（#3200。他の取り消せない操作の `confirmIrreversible` と同じ）。
  */
 program
   .command('reset')
   .description('ワークスペースをリセットする（トークン情報以外を全部消す。取り消せない）')
-  .option('--yes', '確認を飛ばす（スクリプト・CI 向け）')
+  .option('--yes', '確認を飛ばす（スクリプト・CI 向け。端末でなければ必須）')
   .action(async (options: { yes?: boolean }) => {
     await resetCommand(options);
   });
