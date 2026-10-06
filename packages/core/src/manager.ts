@@ -11856,7 +11856,17 @@ class Pool implements ManagerPool {
         // を参照。`lastFailure.at`（この少し下）と同じく、この境界を跨いだ
         // 瞬間として `new Date().toISOString()` を直接使う。
         record.job.lastReportAt = new Date().toISOString();
-        record.job.status = event.status;
+        // **終端（`failed` / `lost`）を、遅れて処理される report で書き戻さない（Issue #3160）。**
+        // runner の出来事は `void this.#onEvent(...)` で並行に処理されるので、この
+        // `report` が上の `await` で待つ間に `closed(failed / lost)` が終端を台帳へ書く
+        // ことがある。ここで読み直さず `event.status`（`running` / `done`）を書くと、台帳は
+        // 非終端のまま、クローンには `closed_failed` の知らせが出る（食い違い）／`lost` は
+        // 終端が付かず引き取りの契機も消える。**本文（`lastReport` など）と日誌・受信箱への
+        // 流れは従来どおり**で、動かさないのは status だけ。**`done` は idle も兼ねる
+        // （再び走り出せる）ので対象にしない**（`isTerminalJobStatus` は `done` を含むので使わない）。
+        // managerId ごとの直列化は配達の順序に効くので採っていない。
+        const settledByClosed = record.job.status === 'failed' || record.job.status === 'lost';
+        if (!settledByClosed) record.job.status = event.status;
         // **`waiting` が空なら `waiting_human` を名乗らせない（Issue #1592
         // の副作用の疑い、結合テストで再現・確認した）。**
         //
@@ -11883,7 +11893,7 @@ class Pool implements ManagerPool {
         // **`event.status` そのものは書き換えない。** 報告が名乗った値は
         // `lastReportStatus`（この少し下）にそのまま残す——「何を名乗ったか」
         // の記録と「いまの状態をどう数えるか」の判断を1つに畳まない。
-        if (event.status === 'waiting_human' && record.waiting.length === 0) {
+        if (!settledByClosed && event.status === 'waiting_human' && record.waiting.length === 0) {
           record.job.status = 'running';
         }
         // **「書いた瞬間」は書き換え後の値（Issue #1036）。** `event.status`
