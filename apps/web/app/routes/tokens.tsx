@@ -304,7 +304,10 @@ function describeAvailability(state: TokenAvailability): {
     case 'cooling':
       return { label: '休止中', tone: 'warn' };
     case 'disabled':
-      return { label: '無効化済み（人間が外した。戻らない）', tone: 'neutral' };
+      return {
+        label: '無効化済み（人間が外した。自動では戻らない。「戻す」で人間が戻す）',
+        tone: 'neutral',
+      };
     case 'invalidated':
       return { label: '失効（通らないと確定。人間が外すまで戻らない）', tone: 'danger' };
     default:
@@ -632,7 +635,7 @@ function TokenRow({
             ? [
                 {
                   label: '無効化',
-                  value: `${formatDateTime(token.disabledAt)}（人間が明示的に外した。戻らない）`,
+                  value: `${formatDateTime(token.disabledAt)}（人間が明示的に外した。自動では戻らない。「戻す」で人間が戻す）`,
                 },
               ]
             : []),
