@@ -285,6 +285,75 @@ describe('chat: 非対話の入力で送信が失敗したら止まる（#3413�
   });
 });
 
+describe('chat: 未送信の表示とスラッシュコマンドの失敗', () => {
+  it('貼り付けのあと、まだ送っていないと1行言う（末尾の改行を含んでも）', async () => {
+    useStdin(true);
+    const calls = recordFetch((path) => (path === '/chat' ? sse(OK_REPLY) : Response.json({})));
+    const out = captureStdout();
+    const { chatCommand } = await import('./chat.js');
+    const done = chatCommand();
+    await flush();
+    input.emit('keypress', undefined, { name: 'paste-start' });
+    rl.emit('line', 'a');
+    rl.emit('line', 'b');
+    rl.emit('line', '');
+    input.emit('keypress', undefined, { name: 'paste-end' });
+    await flush();
+    const text = out();
+    expect(text).toContain('貼り付けた 3 行。まだ送っていません。Enter で送信');
+    expect(calls.filter((c) => c.path === '/chat')).toHaveLength(0);
+    rl.close();
+    await done;
+  });
+
+  it('非対話では、スラッシュコマンドの通信が失敗したら止まり、後続を送らない', async () => {
+    useStdin(false);
+    const calls = recordFetch((path) => {
+      if (path === '/chat') return sse(OK_REPLY);
+      if (path === '/reports') return Response.json({ error: 'down' }, { status: 500 });
+      return Response.json({});
+    });
+    const out = captureStdout();
+    const { chatCommand } = await import('./chat.js');
+    const done = chatCommand();
+    const settled = done.then(
+      () => null,
+      (error: unknown) => error as Error,
+    );
+    await flush();
+    rl.emit('line', '/reports');
+    await flush();
+    rl.emit('line', 'hello');
+    await flush();
+    const error = await settled;
+    out();
+    expect(error?.message).toContain('/reports');
+    expect(error?.message).toContain('HTTP 500');
+    expect(calls.filter((c) => c.path === '/chat')).toHaveLength(0);
+  });
+
+  it('端末なら、スラッシュコマンドが失敗しても続ける', async () => {
+    useStdin(true);
+    const calls = recordFetch((path) => {
+      if (path === '/chat') return sse(OK_REPLY);
+      if (path === '/reports') return Response.json({ error: 'down' }, { status: 500 });
+      return Response.json({});
+    });
+    const out = captureStdout();
+    const { chatCommand } = await import('./chat.js');
+    const done = chatCommand();
+    await flush();
+    rl.emit('line', '/reports');
+    await flush();
+    rl.emit('line', 'hello');
+    await flush();
+    rl.close();
+    await done;
+    out();
+    expect(calls.filter((c) => c.path === '/chat').map((c) => c.text)).toEqual(['hello']);
+  });
+});
+
 describe('continuesLine', () => {
   it('奇数個の \\ で終わるときだけ続ける', async () => {
     const { continuesLine } = await import('./chat.js');

@@ -109,6 +109,22 @@ export async function chatCommand(): Promise<void> {
   }
   const base = target.baseUrl;
   const client = createClient(base, target.headers);
+  // 非対話（パイプ）の入力では、スラッシュコマンドが HTTP で失敗したら（非 2xx・繋がらない）そこで止める（#3413）。
+  // コマンドは失敗を文にして書くだけで例外にしないので、通信の口で見る。端末なら今まで通り続ける。
+  let slashFailure: string | null = null;
+  const slashClient =
+    stdin.isTTY === true
+      ? client
+      : createClient(base, target.headers, async (input, init) => {
+          try {
+            const response = await fetch(input, init);
+            if (!response.ok) slashFailure ??= `HTTP ${String(response.status)}`;
+            return response;
+          } catch (error) {
+            slashFailure ??= error instanceof Error ? error.message : String(error);
+            throw error;
+          }
+        });
 
   const rl = createInterface({ input: stdin, output: process.stdout });
   // 入力の行は `line` イベントで受けて積み、`ask` が順に取り出す（#3262）。`question()` は、待って
@@ -134,7 +150,16 @@ export async function chatCommand(): Promise<void> {
   const continued: string[] = [];
   const onKeypress = (_: unknown, key: { name?: string } | undefined): void => {
     if (key?.name === 'paste-start') pasting = true;
-    else if (key?.name === 'paste-end') pasting = false;
+    else if (key?.name === 'paste-end') {
+      pasting = false;
+      // 貼った行は、まだ送っていない。次の Enter で送ると分かるようにする（送ったと思わせない）。
+      const partial = (rl as { line?: unknown }).line;
+      const count = pasteLines.length + (typeof partial === 'string' && partial !== '' ? 1 : 0);
+      if (pasteLines.length > 0) {
+        stdout.write(`\n（貼り付けた ${String(count)} 行。まだ送っていません。Enter で送信）\n`);
+        if (waiter !== null && stdin.isTTY === true) rl.prompt(true);
+      }
+    }
   };
   stdin.on('keypress', onKeypress);
   rl.on('line', (text) => {
@@ -203,7 +228,8 @@ export async function chatCommand(): Promise<void> {
       return Promise.resolve(queued);
     }
     if (inputClosed) return Promise.reject(new Error('input closed'));
-    rl.setPrompt(question);
+    // `\` で続けている途中は、続きの形のプロンプトにする（まだ送っていないと分かる）。
+    rl.setPrompt(continued.length > 0 ? '… ' : question);
     rl.prompt();
     return new Promise((resolve, reject) => {
       waiter = { resolve, reject };
@@ -260,9 +286,10 @@ export async function chatCommand(): Promise<void> {
         }
 
         if (line.startsWith('/')) {
+          slashFailure = null;
           const handled = await runSlashCommand(
             line,
-            client,
+            slashClient,
             listed,
             conversationId,
             target,
@@ -270,6 +297,10 @@ export async function chatCommand(): Promise<void> {
             (summary) => confirmInRepl(summary, ask),
           );
           if (handled === 'quit') break;
+          if (slashFailure !== null && !interactive) {
+            abortReason = `コマンド ${line.split(/\s+/)[0] ?? ''} が失敗した（${redactError(slashFailure)}）`;
+            break;
+          }
           continue;
         }
 
