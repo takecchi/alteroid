@@ -227,11 +227,16 @@ describe('会話の操作', () => {
     const { api, controller } = setup();
     await controller.shutdown();
     expect(api.ended).toEqual([]);
+    expect(controller.shutdownFailure).toBeNull();
     api.scripts.push([open('c1'), { type: 'done' }]);
     await controller.send('x');
     api.endFails = true;
     await expect(controller.shutdown()).resolves.toBeUndefined();
     expect(api.ended).toEqual(['c1']);
+    // 握りつぶさない: 終えられなかったことと、あとで終える手段を持つ（終了後に端末へ出す）。
+    expect(controller.shutdownFailure).toContain('会話 c1 を終えられませんでした（終えられない）');
+    expect(controller.shutdownFailure).toContain('会話は終わっておらず');
+    expect(controller.shutdownFailure).toContain('/end');
   });
 
   it('履歴の会話を開き直すと、発言と応答を並べて会話 id を引き継ぐ', async () => {
