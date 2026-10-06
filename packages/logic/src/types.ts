@@ -272,6 +272,8 @@ export type CredentialsState = Ok<paths['/credentials']['get']>;
 export type EnvVarView = CredentialsState['credentials'][number];
 /** 撒く先。`'all'`=共通 / `'app'`=clone だけ / `'runner'`=manager だけ。 */
 export type EnvVarScope = EnvVarView['scope'];
+/** `PUT /credentials` が 200 で返す、正本の指紋と各 runner への反映結果（#3157）。 */
+export type EnvVarUpdateResult = Ok<paths['/credentials']['put']>;
 
 /**
  * 実行環境プロファイル（`GET /profile`。issue #1122）。**名前付きの行の集まり**

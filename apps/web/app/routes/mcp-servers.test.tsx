@@ -218,7 +218,12 @@ describe('/mcp-servers 画面 — 差し替える', () => {
     expect(puts).toEqual([]);
 
     fireEvent.click(screen.getByRole('button', { name: '本当に保存する' }));
-    expect(await screen.findByText(/MCP 連携の登録を差し替えた（確認用の値 b{12}）/)).toBeTruthy();
+    // runner-2 が届いていないので、成功の見出しではなく警告（warn 色）になる（#3157）。
+    const heading = await screen.findByText(
+      /MCP 連携の登録は保存したが、一部の実行環境へ反映できていない（確認用の値 b{12}）/,
+    );
+    expect(heading.className).toContain('text-warn');
+    expect(screen.queryByText(/MCP 連携の登録を差し替えた/)).toBeNull();
     expect(puts).toEqual([next]);
     expect(screen.getByText('足した: notion')).toBeTruthy();
     expect(screen.getByText('外した: linear')).toBeTruthy();

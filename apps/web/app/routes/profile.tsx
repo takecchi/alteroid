@@ -23,7 +23,7 @@ import {
   useSetProfileEntry,
   useSetProfileLegacy,
 } from '@alteroid/swr';
-import { formatDateTime, LEGACY_PROFILE_NOTICE } from '@alteroid/logic';
+import { formatDateTime, hasRunnerPushFailure, LEGACY_PROFILE_NOTICE } from '@alteroid/logic';
 import type {
   NormalizedProfile,
   ProfileEntryView,
@@ -572,6 +572,8 @@ function ProfileEditor({
 function UpdateReport({ label, update }: { label: string; update: ProfileUpdateResult }) {
   // 古いデーモンの応答には無い（`composed` は新しい形で足された）。実行時の倒れ先。
   const composed = (update as Partial<ProfileUpdateResult>).composed;
+  // 実行環境が0台は失敗ではない（`@alteroid/logic` の `hasRunnerPushFailure` の doc）。
+  const partial = hasRunnerPushFailure(update);
   const rows = [
     { label: 'クローン', outcome: update.clone },
     ...update.runners.map((runner) => ({ label: runner.runnerId, outcome: runner })),
@@ -579,7 +581,13 @@ function UpdateReport({ label, update }: { label: string; update: ProfileUpdateR
 
   return (
     <div className="flex flex-col gap-2 text-xs">
-      <p className="font-medium text-ok">{`プロファイルの${label}。`}</p>
+      {partial ? (
+        <p role="alert" className="font-medium text-warn">
+          {`プロファイルの${label}が、一部の実行環境へ反映できていない（保存はできている）。`}
+        </p>
+      ) : (
+        <p className="font-medium text-ok">{`プロファイルの${label}。`}</p>
+      )}
       <p className="font-mono text-[11px] break-all text-muted-foreground">
         {composed === undefined
           ? null
