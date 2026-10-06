@@ -1161,6 +1161,18 @@ program
   });
 
 /**
+ * 入口の最上位が、コマンドの失敗（投げられた例外）を stderr に1行で言い、終了コードを返す。
+ *
+ * 終了コードは**失敗なら 1**（`daemon stop` が止まらなかったときの `process.exitCode = 1`〔#3140〕と
+ * 同じ値）。戻せない操作の確認で使い手がやめた（`ConfirmDeclinedError`、#3450）ときも同じ 1 で、
+ * 「何もしなかった」をスクリプトが成功と区別できる。テストから argv 経由で測れるよう切り出してある。
+ */
+export function reportCliFailure(error: unknown): number {
+  process.stderr.write(`alteroid: ${describeCliFailure(error)}\n`);
+  return 1;
+}
+
+/**
  * 直接起動されたときだけ parseAsync を走らせる。
  *
  * `apps/runner/src/index.ts` / `apps/daemon/src/index.ts` と同じ形（既存の
@@ -1187,7 +1199,6 @@ if (invokedDirectly()) {
     ? launchTui()
     : program.parseAsync(process.argv);
   run.catch((error: unknown) => {
-    process.stderr.write(`alteroid: ${describeCliFailure(error)}\n`);
-    process.exit(1);
+    process.exit(reportCliFailure(error));
   });
 }
