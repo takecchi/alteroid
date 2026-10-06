@@ -3302,8 +3302,11 @@ export function ChatPane({
       setEndNotice(undefined);
       try {
         await endConversation(pressedConversationId);
-        setEndNotice({ fromId: pressedConversationId });
-        navigate('/chat');
+        // 応答を待つ間に別の会話へ移っていたら、そこにとどまる（#3762）。
+        if (shownIdRef.current === pressedConversationId) {
+          setEndNotice({ fromId: pressedConversationId });
+          navigate('/chat');
+        }
       } catch (caught) {
         setEndFailure({ conversationId: pressedConversationId, error: caught });
       } finally {
