@@ -171,12 +171,16 @@ class LocalRunner implements RunnerClient {
    * プロセスなので常に確認できる**——`HttpRunner` と違い、版ずれで欄が
    * 落ちる余地が無い。
    */
-  async start(command: RunnerStartCommand): Promise<{ cwd: string }> {
+  async start(command: RunnerStartCommand): Promise<{ cwd: string; sessionGeneration: string }> {
     return this.#host.start(command);
   }
 
   /** 同上（`start` の doc）。 */
-  async resume(command: RunnerResumeCommand): Promise<{ cwd: string; reusedLiveSession: boolean }> {
+  async resume(command: RunnerResumeCommand): Promise<{
+    cwd: string;
+    reusedLiveSession: boolean;
+    sessionGeneration: string;
+  }> {
     return this.#host.resume(command);
   }
 

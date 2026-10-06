@@ -542,12 +542,16 @@ export interface RunnerHost {
    * 戻り値の `cwd` は、実際にセッションが開いた作業ディレクトリ（Issue #1814）。
    * `command.cwd` の写しではない——`Host#resolveCwd` の doc を見よ。
    */
-  start(command: RunnerStartCommand): Promise<{ cwd: string }>;
+  start(command: RunnerStartCommand): Promise<{ cwd: string; sessionGeneration: string }>;
   /**
    * `RunnerFenceError` を投げうる（世代が古い。呼び出し側は 409 へ変換すること）。
    * 戻り値の `cwd` は `start` と同じ約束（Issue #1814）。
    */
-  resume(command: RunnerResumeCommand): Promise<{ cwd: string; reusedLiveSession: boolean }>;
+  resume(command: RunnerResumeCommand): Promise<{
+    cwd: string;
+    reusedLiveSession: boolean;
+    sessionGeneration: string;
+  }>;
   send(
     managerId: string,
     text: string,
@@ -687,6 +691,24 @@ function tokenFingerprintOf(env: NodeJS.ProcessEnv): string | undefined {
 }
 
 /**
+ * セッションの世代を載せる5種（Issue #3170。`runner-protocol.ts` の `sessionGenerationSchema`）。
+ * **新しい種類の出来事をここへ足すかどうかは、「そのセッションの出来事か」で決める**（委譲に結びつかない
+ * `hello` / `usage` などは載せない）。
+ */
+function withSessionGeneration(event: RunnerEvent, sessionGeneration: string): RunnerEvent {
+  switch (event.type) {
+    case 'closed':
+    case 'session':
+    case 'report':
+    case 'ask':
+    case 'settled':
+      return { ...event, sessionGeneration };
+    default:
+      return event;
+  }
+}
+
+/**
  * `path` がディレクトリとして実在するかを確かめる（Issue #1783）。
  *
  * **`Host#cwdExistsFn` の既定実装。** `statSync` が投げる理由（無い・親が
@@ -741,6 +763,13 @@ class Host implements RunnerHost {
    */
   readonly #profile: ProfileApplier | undefined;
   readonly #sessions = new Map<string, RunnerSession>();
+  /**
+   * セッションごとの世代（Issue #3170。`runner-protocol.ts` の `sessionGenerationSchema`）。**`#create` が
+   * セッションを作るたびに新しい値を振り**、そのセッションが出す `closed` / `session` / `report` / `ask` /
+   * `settled` に `#create` の `emit` が載せる。`resume` が生きているセッションへ短絡した回は、その
+   * セッションの値をそのまま返す（作り直していないので世代は変わらない）。
+   */
+  readonly #generations = new WeakMap<RunnerSession, string>();
   /** 担い手へ渡す添付の置き場（`runner-attachments.ts`）。 */
   readonly #attachmentsRoot: string;
   /**
@@ -1128,11 +1157,14 @@ class Host implements RunnerHost {
     cwd: string,
     provider?: AgentProviderId,
   ): RunnerSession {
+    const sessionGeneration = randomUUID();
     const session = new RunnerSession({
       managerId,
       request,
       cwd: this.#resolveCwd(cwd),
-      emit: this.#emit,
+      // **このセッションが出す5種に、セッションの世代を載せる**（Issue #3170）。ほかの種類
+      // （`hello` / `usage` など）は委譲の世代に結びつかないので載せない。
+      emit: (event) => this.#emit(withSessionGeneration(event, sessionGeneration)),
       ...(this.#queryFn === undefined ? {} : { queryFn: this.#queryFn }),
       // 命令が名指ししていればそれ（#486 S7）。無ければ host の既定＝従来どおり。
       managerProvider: provider ?? this.#managerProvider,
@@ -1167,6 +1199,7 @@ class Host implements RunnerHost {
         ? {}
         : { workerToolWatchClock: this.#workerToolWatchClock }),
     });
+    this.#generations.set(session, sessionGeneration);
     this.#sessions.set(managerId, session);
     this.#knownManagerIds.add(managerId);
     return session;
@@ -1179,7 +1212,7 @@ class Host implements RunnerHost {
    * この器に無くて `workspacePath` へ倒れたかどうかを、この値と自分が送った
    * 値を比べて初めて知れる。
    */
-  async start(command: RunnerStartCommand): Promise<{ cwd: string }> {
+  async start(command: RunnerStartCommand): Promise<{ cwd: string; sessionGeneration: string }> {
     if (this.#sessions.has(command.managerId)) {
       throw new Error(`${command.managerId} は既に走っている`);
     }
@@ -1204,7 +1237,7 @@ class Host implements RunnerHost {
       );
       throw error;
     }
-    return { cwd: session.cwd };
+    return { cwd: session.cwd, ...this.#generationOf(session) };
   }
 
   /**
@@ -1252,7 +1285,11 @@ class Host implements RunnerHost {
    * 合流先のセッションが `#create()` の時点で解決した値をそのまま返す——
    * 新しく作り直したわけではないので `#resolveCwd` を呼び直す理由が無い。
    */
-  async resume(command: RunnerResumeCommand): Promise<{ cwd: string; reusedLiveSession: boolean }> {
+  async resume(command: RunnerResumeCommand): Promise<{
+    cwd: string;
+    reusedLiveSession: boolean;
+    sessionGeneration: string;
+  }> {
     const alive = this.#sessions.get(command.managerId);
     if (alive) {
       alive.checkFence(command.lease);
@@ -1266,7 +1303,7 @@ class Host implements RunnerHost {
           const input = placing instanceof Promise ? await placing : placing;
           alive.push(input.text, input.images);
         }
-        return { cwd: alive.cwd, reusedLiveSession: true };
+        return { cwd: alive.cwd, reusedLiveSession: true, ...this.#generationOf(alive) };
       }
       try {
         await alive.stop('resume 待ちのため、畳み中のセッションの完了を待った。');
@@ -1287,7 +1324,11 @@ class Host implements RunnerHost {
             const input = placing instanceof Promise ? await placing : placing;
             afterWait.push(input.text, input.images);
           }
-          return { cwd: afterWait.cwd, reusedLiveSession: true };
+          return {
+            cwd: afterWait.cwd,
+            reusedLiveSession: true,
+            ...this.#generationOf(afterWait),
+          };
         }
         // 畳みが途中の例外で `#onClosed()` まで届かず、畳み済みの古い
         // セッションが名簿に残ったままだった。手で取り除いて作り直す。
@@ -1307,7 +1348,12 @@ class Host implements RunnerHost {
     // （`start` と同じ形）。
     session.checkFence(command.lease);
     session.resume(command.sessionId, command.entries, resumeInput?.text, resumeInput?.images);
-    return { cwd: session.cwd, reusedLiveSession: false };
+    return { cwd: session.cwd, reusedLiveSession: false, ...this.#generationOf(session) };
+  }
+
+  /** `start` / `resume` の応答へ載せるセッションの世代（Issue #3170）。`#create` を通ったセッションには必ず在る。 */
+  #generationOf(session: RunnerSession): { sessionGeneration: string } {
+    return { sessionGeneration: this.#generations.get(session) ?? '' };
   }
 
   async send(

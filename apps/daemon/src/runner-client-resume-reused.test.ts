@@ -70,6 +70,45 @@ describe('HttpRunner#resume() の reusedLiveSession（#2877）', () => {
 });
 
 /**
+ * **`HttpRunner` は start / resume の応答のセッションの世代を運ぶ**（Issue #3170。
+ * `runnerSessionOpenResultSchema.sessionGeneration`）。欄が無い・形が崩れた回は「分からない」（省く）。
+ */
+describe('HttpRunner の sessionGeneration（#3170）', () => {
+  it('resume: 欄ありは運び、欄なし・形崩れは省く', async () => {
+    expect(await resumeWith({ ok: true, sessionGeneration: 'gen-1' })).toEqual({
+      sessionGeneration: 'gen-1',
+    });
+    expect(await resumeWith({ ok: true })).toEqual({});
+    expect(await resumeWith({ ok: true, sessionGeneration: 7 })).toEqual({});
+  });
+
+  it('start: 欄ありは運び、欄なし・形崩れは省く（cwd は従来どおり）', async () => {
+    const startWith = async (body: unknown) => {
+      const client = await createHttpRunner({
+        baseUrl: 'http://runner.test',
+        token: 'test-runner-token',
+        fetchFn: (async (input: string | URL | Request) => {
+          const path = new URL(typeof input === 'string' ? input : input.toString()).pathname;
+          if (path === '/health')
+            return Response.json({ runnerId: 'r', workspacePath: '/workspace' });
+          if (path === '/managers') return Response.json(body);
+          throw new Error(`想定していないパス: ${path}`);
+        }) as typeof fetch,
+      });
+      return client.start({ managerId: 'mgr-1', request: '調べて', cwd: '/workspace' });
+    };
+    expect(await startWith({ ok: true, cwd: '/workspace', sessionGeneration: 'gen-1' })).toEqual({
+      cwd: '/workspace',
+      sessionGeneration: 'gen-1',
+    });
+    expect(await startWith({ ok: true, cwd: '/workspace' })).toEqual({ cwd: '/workspace' });
+    expect(await startWith({ ok: true, cwd: '/workspace', sessionGeneration: null })).toEqual({
+      cwd: '/workspace',
+    });
+  });
+});
+
+/**
  * **`HttpRunner#list()`（古い daemon も使う読み口）は、`tokenFingerprint` や、まだ誰も知らない欄が
  * 付いた応答を、委譲ごと飛ばさずに読む**（#2877 PR2）。strict な schema に変えると、新しい runner の
  * 委譲が「runner に居ない」側に落ちる（`#1661`）ので、ここで落ちる形にしてある。
