@@ -3,6 +3,8 @@ import { describe, expect, it } from 'vitest';
 import { ApprovalsController, type DetailState } from './approvals-controller.js';
 import { emptyForm, toggleOption } from './approvals-form.js';
 import {
+  answeredDateLine,
+  answeredDayLine,
   approvalDocument,
   approvalListLine,
   approvalListTitle,
@@ -228,5 +230,44 @@ describe('一覧の見出し', () => {
   it('読めて 0 件なら件数を言う', () => {
     const list = { ...new ApprovalsController(fakeApi()).store.getSnapshot().list };
     expect(approvalListTitle({ ...list, status: 'ready' })).toContain('未回答 0 件');
+  });
+});
+
+describe('回答済みの一覧の行（#3340）', () => {
+  const now = Date.parse('2026-09-30T12:00:00.000Z');
+
+  it('日付の行は日付と件数', () => {
+    expect(answeredDateLine({ date: '2026-09-30', count: 3 })).toBe('2026-09-30  3 件');
+  });
+
+  it('回答済みは状態・答えの抜粋、取り下げ済みは取り下げと理由。全文は載せない', () => {
+    const long = 'あ'.repeat(300);
+    const a = answeredDayLine(
+      approvalRow('ap-a', {
+        question: `問い\n二行目${long}`,
+        answeredAt: '2026-09-30T10:00:00.000Z',
+        answer: long,
+      }),
+      now,
+    );
+    expect(a).toContain('回答済み');
+    expect(a).toContain('ap-a');
+    expect(a).toContain('回答: ');
+    expect(a).not.toContain('\n');
+    expect(a).not.toContain(long);
+
+    const w = answeredDayLine(
+      approvalRow('ap-w', {
+        withdrawnAt: '2026-09-30T05:00:00.000Z',
+        withdrawnReason: '自分で答えを見つけた',
+      }),
+      now,
+    );
+    expect(w).toContain('取り下げ済み');
+    expect(w).not.toContain('回答済み');
+    expect(w).toContain('取り下げた理由: 自分で答えを見つけた');
+    expect(
+      answeredDayLine(approvalRow('ap-w2', { withdrawnAt: '2026-09-30T05:00:00.000Z' }), now),
+    ).toContain('（理由の記録なし）');
   });
 });

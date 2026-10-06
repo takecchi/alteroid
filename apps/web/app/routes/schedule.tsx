@@ -1,7 +1,8 @@
 import { ScheduleTabs } from '~/components/group-tabs';
 import { LoadError } from '~/components/load-error';
 import { AlertTriangle } from 'lucide-react';
-import { useId, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
+import { useBlocker } from 'react-router';
 import { Tabs } from 'radix-ui';
 
 import {
@@ -104,6 +105,49 @@ export default function Schedule() {
   const [removing, setRemoving] = useState<string | undefined>(undefined);
   const [confirmingRemove, setConfirmingRemove] = useState<string | undefined>(undefined);
   const [editing, setEditing] = useState<string | undefined>(undefined);
+  /**
+   * **書きかけの入力欄の id の集合（#3374。`commitments.tsx` の `dirtyIds` と同じ形）。**
+   * 離れる前の確認（`useBlocker`・beforeunload）は欄ごとではなくここに1つだけ置く
+   * （ルーターは同時に1つのブロッカーしか扱わない）。どれか1つでも書きかけなら止める。
+   */
+  const [dirtyIds, setDirtyIds] = useState<ReadonlySet<string>>(new Set());
+  const setFieldDirty = useCallback((id: string, dirty: boolean) => {
+    setDirtyIds((current) => {
+      if (current.has(id) === dirty) return current;
+      const next = new Set(current);
+      if (dirty) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  }, []);
+  const anyDirty = dirtyIds.size > 0;
+  const blocker = useBlocker(anyDirty);
+  useEffect(() => {
+    if (!anyDirty) return;
+    const warn = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      // 古いブラウザは returnValue を入れないと出さない。
+      event.returnValue = '';
+    };
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  }, [anyDirty]);
+  /**
+   * 編集欄を切り替える・閉じる前の確認。**開いている編集欄が書きかけのときだけ**挟む
+   * （元の値のままなら今までどおり確認なし）。`next` は切り替え先（閉じるなら `undefined`）。
+   * 編集欄は同時に1つしか開かないので、編集欄の書きかけは `EDIT_DIRTY_ID` の1つで足りる。
+   */
+  const [switchingTo, setSwitchingTo] = useState<{ next: string | undefined } | undefined>(
+    undefined,
+  );
+  function requestEditing(next: string | undefined) {
+    if (next === editing) return;
+    if (editing !== undefined && dirtyIds.has(EDIT_DIRTY_ID)) {
+      setSwitchingTo({ next });
+      return;
+    }
+    setEditing(next);
+  }
   const [failure, setFailure] = useState<unknown>(undefined);
   /**
    * **取れなかったのを0件と描かない**（issue #2324）。一覧をまだ一度も読めていないまま
@@ -128,6 +172,38 @@ export default function Schedule() {
       title="予定"
       description="決まった時刻に動く依頼と、外部からの知らせを、ここで確かめたり手で起こしたりする"
     >
+      <ConfirmDialog
+        open={blocker.state === 'blocked'}
+        onOpenChange={(open) => {
+          if (!open && blocker.state === 'blocked') blocker.reset();
+        }}
+        title="保存していない変更があります"
+        description="このまま離れると、書きかけの内容は失われます。"
+        confirmLabel="破棄して離れる"
+        destructive
+        onConfirm={() => {
+          if (blocker.state === 'blocked') blocker.proceed();
+        }}
+      />
+      {/* 編集中の行の書きかけを、別の行の「編集」・「やめる」で捨てる前に確かめる（#3374）。 */}
+      <ConfirmDialog
+        open={switchingTo !== undefined}
+        onOpenChange={(open) => {
+          if (!open) setSwitchingTo(undefined);
+        }}
+        title="保存していない変更があります"
+        description={
+          switchingTo?.next === undefined
+            ? '編集をやめると、書きかけの内容は失われます。'
+            : '別の依頼の編集に切り替えると、書きかけの内容は失われます。'
+        }
+        confirmLabel={switchingTo?.next === undefined ? '破棄して閉じる' : '破棄して切り替える'}
+        destructive
+        onConfirm={() => {
+          if (switchingTo !== undefined) setEditing(switchingTo.next);
+          setSwitchingTo(undefined);
+        }}
+      />
       <LoadError
         what="スケジュール"
         error={error}
@@ -281,7 +357,7 @@ export default function Schedule() {
                     <Button
                       size="sm"
                       aria-label={`${entry.kind} を編集`}
-                      onClick={() => setEditing(entry.kind)}
+                      onClick={() => requestEditing(entry.kind)}
                     >
                       編集
                     </Button>
@@ -317,8 +393,9 @@ export default function Schedule() {
                 {editing === entry.kind && (
                   <ScheduleEditForm
                     entry={entry}
-                    onCancel={() => setEditing(undefined)}
+                    onCancel={() => requestEditing(undefined)}
                     onSaved={() => setEditing(undefined)}
+                    onDirtyChange={setFieldDirty}
                   />
                 )}
               </li>
@@ -327,8 +404,8 @@ export default function Schedule() {
         )}
       </Card>
 
-      <ScheduleForm existingKinds={existingKinds} />
-      <EventForm />
+      <ScheduleForm existingKinds={existingKinds} onDirtyChange={setFieldDirty} />
+      <EventForm onDirtyChange={setFieldDirty} />
     </Page>
   );
 }
@@ -443,6 +520,26 @@ function ScheduleSpecFields({
       )}
     </div>
   );
+}
+
+/** 書きかけの集合（`Schedule` の `dirtyIds`）での、各欄の id。編集欄は同時に1つしか開かない。 */
+const EDIT_DIRTY_ID = 'edit';
+const SCHEDULE_FORM_DIRTY_ID = 'schedule-form';
+const EVENT_FORM_DIRTY_ID = 'event-form';
+
+/**
+ * 書きかけかどうかをページへ知らせる（離れる前の確認はページが1つだけ持つ。#3374）。
+ * 欄が閉じたら（保存・やめる）書きかけでなくなる。`onDirtyChange` はページが安定した関数で渡す。
+ */
+function useReportDirty(
+  id: string,
+  dirty: boolean,
+  onDirtyChange: (id: string, dirty: boolean) => void,
+) {
+  useEffect(() => {
+    onDirtyChange(id, dirty);
+  }, [id, dirty, onDirtyChange]);
+  useEffect(() => () => onDirtyChange(id, false), [id, onDirtyChange]);
 }
 
 /**
@@ -568,10 +665,14 @@ function ScheduleEditForm({
   entry,
   onCancel,
   onSaved,
+  onDirtyChange,
 }: {
   entry: ScheduleEntry;
+  /** 「やめる」。書きかけがあれば確認を挟むのは呼び出し側（ページ）。 */
   onCancel: () => void;
+  /** 保存に成功したとき。確認なしで閉じる。 */
   onSaved: () => void;
+  onDirtyChange: (id: string, dirty: boolean) => void;
 }) {
   const createSchedule = useCreateSchedule();
   const [specDraft, setSpecDraft] = useState<ScheduleSpecDraft>(() => initialSpecDraft(entry.spec));
@@ -579,6 +680,15 @@ function ScheduleEditForm({
   const { activeTab, setTab } = useRequestTab(entry.request ?? '');
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<unknown>(undefined);
+
+  const initialSpec = initialSpecDraft(entry.spec);
+  const dirty =
+    request !== (entry.request ?? '') ||
+    specDraft.type !== initialSpec.type ||
+    specDraft.at !== initialSpec.at ||
+    specDraft.minutes !== initialSpec.minutes ||
+    specDraft.expression !== initialSpec.expression;
+  useReportDirty(EDIT_DIRTY_ID, dirty, onDirtyChange);
 
   const specUnknown = entry.spec === undefined;
   const ready = !specUnknown && request.trim() !== '';
@@ -665,7 +775,13 @@ const RESERVED_KIND_MESSAGE = '既定の名前（予約名）なので使えな�
  * （`scheduleSpecSchema` の cron のコメント）。だから `daily` / `every` / `cron` の
  * 3つとも置く。
  */
-function ScheduleForm({ existingKinds }: { existingKinds: ReadonlySet<string> }) {
+function ScheduleForm({
+  existingKinds,
+  onDirtyChange,
+}: {
+  existingKinds: ReadonlySet<string>;
+  onDirtyChange: (id: string, dirty: boolean) => void;
+}) {
   const createSchedule = useCreateSchedule();
   const kindId = useId();
   const [kind, setKind] = useState('');
@@ -679,6 +795,8 @@ function ScheduleForm({ existingKinds }: { existingKinds: ReadonlySet<string> })
 
   const ready = kind.trim() !== '' && request.trim() !== '';
   const replacing = existingKinds.has(kind.trim());
+  // 名前か本文が書きかけのとき。周期は既定値が入っていて、送ったあとも残る（続けて仕込むため）ので数えない。
+  useReportDirty(SCHEDULE_FORM_DIRTY_ID, kind !== '' || request !== '', onDirtyChange);
 
   /**
    * **既に在る名前のときだけ確かめる**（#3347。#3201 の「既に値が在るときだけ確認」と同じ線）。
@@ -765,7 +883,7 @@ function ScheduleForm({ existingKinds }: { existingKinds: ReadonlySet<string> })
   );
 }
 
-function EventForm() {
+function EventForm({ onDirtyChange }: { onDirtyChange: (id: string, dirty: boolean) => void }) {
   const postEvent = usePostEvent();
   const sourceId = useId();
   const payloadId = useId();
@@ -774,6 +892,7 @@ function EventForm() {
   const [busy, setBusy] = useState(false);
   const [sent, setSent] = useState<string | undefined>(undefined);
   const [failure, setFailure] = useState<unknown>(undefined);
+  useReportDirty(EVENT_FORM_DIRTY_ID, source !== '' || payload !== '', onDirtyChange);
 
   function submit() {
     if (source.trim() === '') return;

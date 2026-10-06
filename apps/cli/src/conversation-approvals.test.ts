@@ -122,5 +122,9 @@ describe('approvalNoticeLines', () => {
     });
     expect(line).toContain('2 件');
     expect(line).toContain('bad-1');
+    // 絞り（#3319）の意味: この会話の id が書かれた行だけを数えていること、残りは承認の画面で見ること。
+    expect(line).toContain('この会話の id が書かれている行だけ');
+    expect(line).toContain('承認の画面で全件');
+    expect(line).not.toContain('判定できません');
   });
 });

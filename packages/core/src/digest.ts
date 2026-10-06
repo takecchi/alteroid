@@ -14,7 +14,14 @@ import {
   describeUnreadableSchedules,
 } from './store.js';
 import type { Stores } from './store.js';
-import { formatUsd, isCloneActor, summarizeUsage, usageDate } from './usage.js';
+import {
+  describeUnmeteredUsage,
+  describeUnreadableUsageRows,
+  formatUsd,
+  isCloneActor,
+  summarizeUsage,
+  usageDate,
+} from './usage.js';
 
 /**
  * ある期間に何が起きたかの要約（日報と発意 tick の材料）。
@@ -1765,14 +1772,28 @@ async function usageSection(stores: Stores, since: Date, until: Date): Promise<s
   }
 
   const lines = ['## 使った分'];
+  // **取れなかったことは、どの分岐よりも先に書く**（Issue #3359）。消費を報告しない
+  // provider のターン（#486 M7）と、読めずに外した行（#2427）は、`usage_read` が
+  // 同じ関数で出している。ここで落とすと、取れなかったことが日報から消え、
+  // 取れなかったターンしか無い期間が「記録は無い」と読める。無ければ空配列。
+  const unreadableLines = describeUnreadableUsageRows(aggregate.unreadableRows);
+  const unmeteredLines = describeUnmeteredUsage(aggregate.unmeteredRows);
+  const gapLines = [...unreadableLines, ...unmeteredLines];
+  lines.push(...gapLines);
   if (aggregate.since === null) {
-    lines.push('（台帳にまだ記録が無い。この機能を入れる前の分は残っていない）');
+    lines.push(
+      gapLines.length > 0
+        ? '（消費の金額の記録がまだ無い。この機能を入れる前の分は残っていない）'
+        : '（台帳にまだ記録が無い。この機能を入れる前の分は残っていない）',
+    );
     return lines;
   }
 
   const summary = summarizeUsage(aggregate.rows, aggregate.turnRows);
   if (aggregate.rows.length === 0) {
-    lines.push('この期間の記録は無い。');
+    lines.push(
+      gapLines.length > 0 ? 'この期間、消費の金額を取れた記録は無い。' : 'この期間の記録は無い。',
+    );
   } else {
     lines.push(`- 合計: ${formatUsd(summary.total.costUsd)}`);
     lines.push(

@@ -13446,10 +13446,11 @@ export function createCloneTools(context: ToolContext) {
               '**1件も消していない。**',
           );
         }
-        if (before !== undefined && Number.isNaN(Date.parse(before))) {
+        // 存在しない日付（`2026-02-31` は V8 が 3/3 へずらす）や日付でない文字列（`foo 1`）を
+        // 別の時刻として読んで**消す**ので、#3287 の3段で検める（#3358）。
+        if (before !== undefined && !isReadableJournalTimeBoundary(before)) {
           return text(
-            `before に渡された「${before}」は ISO8601 として読めない` +
-              '（例 2026-09-15T00:00:00.000Z）。**1件も消していない。**',
+            describeUnreadableJournalTimeBoundary('before', before) + '**1件も消していない。**',
           );
         }
         // **issue #1720（#1651/#1689 の揃え漏れ）。**

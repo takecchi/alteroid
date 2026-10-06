@@ -100,6 +100,16 @@ function isSettledRaw(raw: unknown): boolean {
 }
 
 /**
+ * 生の承認の行の `conversationId`（文字列のときだけ。それ以外は `undefined`）。
+ * 会話で絞るときに、読めない行がその会話のものかを見るのにだけ使う。
+ */
+function rawConversationId(raw: unknown): string | undefined {
+  if (typeof raw !== 'object' || raw === null) return undefined;
+  const value = (raw as Record<string, unknown>).conversationId;
+  return typeof value === 'string' ? value : undefined;
+}
+
+/**
  * 読めなかった生の承認の行を、値を出さずに要約する（`#read()` の stderr の跡と同じ
  * 検査をやり直す。**不正な欄名だけ**）。
  */
@@ -254,8 +264,14 @@ export class FsJobStore implements JobStore {
     // 読めない行に `answeredAt` / `withdrawnAt` が立っていれば、`pendingOnly` では
     // 「もう保留ではない」側へ寄せて除く（pg が列で絞るのと揃える）。**どちらも読めない
     // ときは数える側へ倒す**。本文は載せず、id と不正な欄名だけを持つ。
+    // **会話で絞るときは、生の `conversationId` がその会話と一致する行だけ**（#3319。
+    // pg が jsonb の式で絞るのと揃える）。会話の id が読めない行は入れない。
     const unreadable = invalidApprovalsRaw
       .filter((raw) => options.pendingOnly !== true || !isSettledRaw(raw))
+      .filter(
+        (raw) =>
+          options.conversationId === undefined || rawConversationId(raw) === options.conversationId,
+      )
       .map((raw): UnreadableApproval => {
         const id = extractRowId(raw);
         const reason = summarizeRawApprovalProblem(raw);
