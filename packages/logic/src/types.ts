@@ -121,6 +121,8 @@ export type PracticeVersion = Ok<paths['/practices/{slug}/versions/{version}']['
 export type ConversationSummary = Ok<paths['/conversations']['get']>['conversations'][number];
 export type ConversationDetail = Ok<paths['/conversations/{id}']['get']>;
 export type ConversationMessage = ConversationDetail['messages'][number];
+/** デーモンの添付の上限（`GET /attachments/limits`。先行検査に使う。#3204）。 */
+export type AttachmentLimits = Ok<paths['/attachments/limits']['get']>;
 /** 発言に添えられた添付の控え（`messages[].attachments`。中身は `GET /attachments/:id` で取る）。 */
 export type MessageAttachment = NonNullable<ConversationMessage['attachments']>[number];
 

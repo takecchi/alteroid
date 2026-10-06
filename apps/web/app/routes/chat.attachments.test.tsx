@@ -10,7 +10,7 @@
  */
 import { File as NodeFile } from 'node:buffer';
 
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider, useParams } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -198,7 +198,7 @@ describe('添えて送る', () => {
     await waitFor(() => {
       expect(seen.some((r) => r.url.endsWith('/chat'))).toBe(true);
     });
-    expect(seen.some((r) => r.url.includes('/attachments'))).toBe(false);
+    expect(seen.some((r) => r.url.includes('/attachments?'))).toBe(false);
     const chat = seen.find((r) => r.url.endsWith('/chat'));
     expect(JSON.parse(new TextDecoder().decode(chat?.body))).toEqual({ text: 'なし' });
   });
@@ -238,6 +238,63 @@ describe('添えて送る', () => {
     expect(await screen.findByText(/big\.png: 画像は 1 つ 5\.0 MB まで/)).toBeTruthy();
     expect(screen.getByRole('button', { name: 'ok.txt を外す' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'big.png を外す' })).toBeNull();
+  });
+
+  describe('上限はデーモンの値で先に検査する（#3204）', () => {
+    const MIB = 1024 * 1024;
+    const DEFAULTS = {
+      maxImageBytes: 5 * MIB,
+      maxFileBytes: 25 * MIB,
+      maxPerMessage: 10,
+      maxTotalBytes: 50 * MIB,
+      retentionDays: 30,
+    };
+
+    /** 上限の口を `limits` で答える（`null` は古いデーモンの 404）。上限が届くまで待つ。 */
+    async function renderWithLimits(limits: typeof DEFAULTS | null) {
+      const stub = stubFetch((url) => {
+        if (url.endsWith('/attachments/limits')) {
+          return limits === null ? json({ error: 'not found' }, 404) : json(limits);
+        }
+        return background(url);
+      });
+      renderChat('/chat');
+      await box();
+      await waitFor(() => {
+        expect(stub.calls.some((url) => url.endsWith('/attachments/limits'))).toBe(true);
+      });
+      await act(async () => {});
+      return stub;
+    }
+
+    it('上限を上げたデーモンでは、既定値を超えてデーモンの内側にある添付を先に断らない。取るのは1回', async () => {
+      const stub = await renderWithLimits({
+        ...DEFAULTS,
+        maxImageBytes: 40 * MIB,
+        maxFileBytes: 200 * MIB,
+        maxTotalBytes: 400 * MIB,
+      });
+      choose([nodeFile('big.png', 6 * MIB, 'image/png')]);
+      expect(await screen.findByRole('button', { name: 'big.png を外す' })).toBeTruthy();
+      choose([nodeFile('huge.bin', 26 * MIB, 'application/octet-stream')]);
+      expect(await screen.findByRole('button', { name: 'huge.bin を外す' })).toBeTruthy();
+      expect(screen.queryByText(/まで/)).toBeNull();
+      expect(stub.calls.filter((url) => url.endsWith('/attachments/limits'))).toHaveLength(1);
+    });
+
+    it('上限を下げたデーモンでは、既定値の内側でも先に断る', async () => {
+      await renderWithLimits({ ...DEFAULTS, maxFileBytes: 1024, maxPerMessage: 1 });
+      choose([nodeFile('a.txt', 2048, 'text/plain'), nodeFile('b.txt', 3, 'text/plain')]);
+      expect(await screen.findByText(/a\.txt: ファイルは 1 つ 1\.0 KB まで/)).toBeTruthy();
+      choose([nodeFile('c.txt', 3, 'text/plain')]);
+      expect(await screen.findByText(/c\.txt: 1回に添えられるのは 1 個まで/)).toBeTruthy();
+    });
+
+    it('口が取れない（古いデーモンの 404）ときは既定値で検査する', async () => {
+      await renderWithLimits(null);
+      choose([nodeFile('big.png', 5 * MIB + 1, 'image/png')]);
+      expect(await screen.findByText(/big\.png: 画像は 1 つ 5\.0 MB まで/)).toBeTruthy();
+    });
   });
 
   it('本文が空でも添付があれば送れる（/chat は text が空文字で attachments つき）。添付も本文も無ければ送れない', async () => {
@@ -364,7 +421,9 @@ describe('添付のある発言の表示', () => {
     renderChat(`/chat/${CONVERSATION_ID}`);
     await screen.findByText('ただの文');
     expect(screen.queryByRole('list', { name: '添付' })).toBeNull();
-    expect(seen.some((r) => r.url.includes('/attachments'))).toBe(false);
+    expect(
+      seen.some((r) => r.url.includes('/attachments') && !r.url.endsWith('/attachments/limits')),
+    ).toBe(false);
   });
 });
 

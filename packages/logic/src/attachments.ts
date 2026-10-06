@@ -6,6 +6,7 @@
  * （`apps/daemon/openapi.json` の `POST /attachments` と `POST /chat`）に合わせてある。
  */
 import { formatBytes } from './format.js';
+import type { AttachmentLimits } from './types.js';
 
 const MIB = 1024 * 1024;
 
@@ -17,6 +18,22 @@ export const ATTACHMENT_OTHER_MAX_BYTES = 25 * MIB;
 export const ATTACHMENT_MAX_COUNT = 10;
 /** 1発言の合計。 */
 export const ATTACHMENT_TOTAL_MAX_BYTES = 50 * MIB;
+
+/**
+ * 先行検査に使う上限。既定は上の組み込みの値（デーモンの既定と同じ）。デーモンが環境変数で変えていれば
+ * `GET /attachments/limits` の値を渡す（取れなければ既定のまま。最終判断はサーバ。#3204）。
+ */
+export type AttachmentCheckLimits = Pick<
+  AttachmentLimits,
+  'maxImageBytes' | 'maxFileBytes' | 'maxPerMessage' | 'maxTotalBytes'
+>;
+
+export const DEFAULT_ATTACHMENT_CHECK_LIMITS: AttachmentCheckLimits = {
+  maxImageBytes: ATTACHMENT_IMAGE_MAX_BYTES,
+  maxFileBytes: ATTACHMENT_OTHER_MAX_BYTES,
+  maxPerMessage: ATTACHMENT_MAX_COUNT,
+  maxTotalBytes: ATTACHMENT_TOTAL_MAX_BYTES,
+};
 
 const IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif']);
 
@@ -46,6 +63,7 @@ interface Sized {
 export function checkAttachments<T extends Sized>(
   existing: readonly Sized[],
   incoming: readonly T[],
+  limits: AttachmentCheckLimits = DEFAULT_ATTACHMENT_CHECK_LIMITS,
 ): { accepted: T[]; rejected: { name: string; reason: string }[] } {
   const accepted: T[] = [];
   const rejected: { name: string; reason: string }[] = [];
@@ -53,16 +71,16 @@ export function checkAttachments<T extends Sized>(
   let total = existing.reduce((sum, item) => sum + item.size, 0);
   for (const file of incoming) {
     const image = isImageMediaType(file.type);
-    const limit = image ? ATTACHMENT_IMAGE_MAX_BYTES : ATTACHMENT_OTHER_MAX_BYTES;
+    const limit = image ? limits.maxImageBytes : limits.maxFileBytes;
     let reason: string | undefined;
-    if (count >= ATTACHMENT_MAX_COUNT) {
-      reason = `1回に添えられるのは ${ATTACHMENT_MAX_COUNT} 個まで`;
+    if (count >= limits.maxPerMessage) {
+      reason = `1回に添えられるのは ${limits.maxPerMessage} 個まで`;
     } else if (file.size === 0) {
       reason = '空のファイルは添えられない';
     } else if (file.size > limit) {
       reason = `${image ? '画像' : 'ファイル'}は 1 つ ${formatBytes(limit)} まで（${formatBytes(file.size)} ある）`;
-    } else if (total + file.size > ATTACHMENT_TOTAL_MAX_BYTES) {
-      reason = `合計は ${formatBytes(ATTACHMENT_TOTAL_MAX_BYTES)} まで`;
+    } else if (total + file.size > limits.maxTotalBytes) {
+      reason = `合計は ${formatBytes(limits.maxTotalBytes)} まで`;
     }
     if (reason === undefined) {
       accepted.push(file);
