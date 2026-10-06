@@ -12,6 +12,7 @@ import {
   Row,
   Select,
   Spinner,
+  SubmitHint,
   Textarea,
   TruncationNote,
 } from './common';
@@ -121,6 +122,43 @@ export const FormControls: Story = {
       <Textarea rows={3} placeholder="Textarea（rows で高さを決め、縦にだけ引き伸ばせる）" />
     </div>
   ),
+};
+
+/** 送るキーつきのテキストエリア。⌘/Ctrl + Enter で送り、内容に合わせて上限（ここでは 10rem）まで伸びる。案内は OS に合わせる。 */
+export const SubmitTextarea: Story = {
+  render: function Render() {
+    const [value, setValue] = useState('');
+    const [sent, setSent] = useState<string[]>([]);
+    return (
+      <div className="max-w-md space-y-2">
+        <Textarea
+          rows={2}
+          value={value}
+          placeholder="書いて ⌘/Ctrl + Enter"
+          maxHeight="10rem"
+          submitDisabled={value.trim() === ''}
+          onChange={(event) => setValue(event.target.value)}
+          onSubmitShortcut={() => {
+            setSent((all) => [...all, value]);
+            setValue('');
+          }}
+        />
+        <div className="flex items-center gap-2">
+          <Button variant="primary" size="sm" disabled={value.trim() === ''}>
+            送信
+          </Button>
+          <SubmitHint action="送信" />
+        </div>
+        <ul className="text-xs text-muted-foreground">
+          {sent.map((text, index) => (
+            <li key={index} className="whitespace-pre-wrap">
+              送った: {text}
+            </li>
+          ))}
+        </ul>
+      </div>
+    );
+  },
 };
 
 export const Feedback: Story = {

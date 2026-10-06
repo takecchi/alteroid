@@ -17,8 +17,10 @@ import type {
   InputHTMLAttributes,
   ReactNode,
   SelectHTMLAttributes,
+  KeyboardEvent,
   TextareaHTMLAttributes,
 } from 'react';
+import { useLayoutEffect, useRef } from 'react';
 
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge as ShadcnBadge } from '@/components/ui/badge';
@@ -29,7 +31,10 @@ import { NativeSelect } from '@/components/ui/native-select';
 import { Spinner as ShadcnSpinner } from '@/components/ui/spinner';
 import { Textarea as ShadcnTextarea } from '@/components/ui/textarea';
 import { useDisplayText } from '@/lib/display-text';
+import { isMacPlatform, submitShortcutLabel, useKeyboardHintsVisible } from '@/lib/platform';
 import { cn } from '@/lib/utils';
+
+import { isSubmitShortcut } from './features/chat/ime';
 
 /**
  * `radix-ui` の `Tabs.Trigger` に付ける見た目。
@@ -197,13 +202,101 @@ export function Badge({
 }
 
 /**
- * **`field-sizing-fixed resize-y`**: shadcn の既定（`field-sizing-content`）は中身に
- * 合わせて伸び続けるが、画面は `rows` で高さを決めて人間が引き伸ばす作りにしてある
- * （チャットの入力欄など）。
+ * 中身に合わせて `textarea` の高さを決める。`field-sizing: content` は Firefox などが対応して
+ * いないので使わず、`scrollHeight` から決める（上限は CSS の `max-height`）。空に戻れば `auto` から
+ * 測り直すので元の高さに戻る。見えていない（`scrollHeight` が 0）ときは決めない。
  */
-export function Textarea({ className, ...props }: TextareaHTMLAttributes<HTMLTextAreaElement>) {
-  return <ShadcnTextarea className={cn('field-sizing-fixed resize-y', className)} {...props} />;
+function fitHeight(el: HTMLTextAreaElement): void {
+  el.style.height = 'auto';
+  if (el.scrollHeight === 0) return;
+  el.style.height = `${el.scrollHeight + (el.offsetHeight - el.clientHeight)}px`;
 }
+
+/**
+ * テキストエリア。**Web UI のテキストエリアはすべてこれを使う**（Issue #3236）。
+ *
+ * - `onSubmitShortcut` — 渡すと **⌘ + Enter / Ctrl + Enter** で呼ぶ（OS を問わず両方。Enter・
+ *   Shift + Enter は改行のまま）。**IME の変換中は呼ばない**（`isSubmitShortcut`）。`submitDisabled`
+ *   が真のあいだも呼ばない（**ボタンの `disabled` と同じ条件を渡す**。キーだけで空送信・二重送信・
+ *   確認の段の飛ばしが起きないように）。呼ぶ側の `onKeyDown` が `preventDefault` したキーには反応しない
+ * - `maxHeight`（CSS の長さ）— 渡すと **内容に合わせて伸び、上限から先は内側をスクロール**する
+ *   （リサイズのつまみは出さない）。渡さなければ今までどおり `rows` / `min-h` で決まる固定の高さ
+ *   （親を埋める画面向け）
+ * - 案内の文は `SubmitHint` を、押すボタンの隣など好きな場所に置く
+ *
+ * **`field-sizing-fixed resize-y`**: shadcn の既定（`field-sizing-content`）は中身に合わせて伸び続けるが、
+ * 画面は `rows` で高さを決める作りにしてある。
+ */
+export function Textarea({
+  className,
+  style,
+  onKeyDown,
+  onSubmitShortcut,
+  submitDisabled = false,
+  maxHeight,
+  ...props
+}: TextareaHTMLAttributes<HTMLTextAreaElement> & {
+  onSubmitShortcut?: () => void;
+  submitDisabled?: boolean;
+  maxHeight?: string;
+}) {
+  const ref = useRef<HTMLTextAreaElement>(null);
+  const grows = maxHeight !== undefined;
+  const value = props.value;
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!grows || el === null) return;
+    fitHeight(el);
+    // 幅が変わると折り返しが変わるので、窓の大きさの変更でも測り直す。
+    const refit = () => fitHeight(el);
+    window.addEventListener('resize', refit);
+    return () => window.removeEventListener('resize', refit);
+  }, [grows, value]);
+  return (
+    <ShadcnTextarea
+      ref={ref}
+      className={cn(
+        'field-sizing-fixed',
+        grows ? 'resize-none overflow-y-auto' : 'resize-y',
+        className,
+      )}
+      style={grows ? { ...style, maxHeight } : style}
+      onKeyDown={(event: KeyboardEvent<HTMLTextAreaElement>) => {
+        onKeyDown?.(event);
+        if (event.defaultPrevented || onSubmitShortcut === undefined) return;
+        if (isSubmitShortcut(event)) {
+          event.preventDefault();
+          if (!submitDisabled) onSubmitShortcut();
+        }
+      }}
+      {...props}
+    />
+  );
+}
+
+/**
+ * 送るキーの案内（「⌘ + Enter で送信」。Mac 以外は「Ctrl + Enter で送信」）。`action` は「送信」「保存」
+ * 「回答」など。**指だけの端末では出さない**（`useKeyboardHintsVisible`）。
+ */
+export function SubmitHint({
+  action,
+  id,
+  className,
+}: {
+  action: string;
+  id?: string;
+  className?: string;
+}) {
+  const visible = useKeyboardHintsVisible();
+  if (!visible) return null;
+  return (
+    <span id={id} className={cn('text-[11px] text-muted-foreground select-none', className)}>
+      {submitShortcutLabel(isMacPlatform())} で{action}
+    </span>
+  );
+}
+
+export { useKeyboardHintsVisible };
 
 export function Input({ className, ...props }: InputHTMLAttributes<HTMLInputElement>) {
   return <ShadcnInput className={className} {...props} />;

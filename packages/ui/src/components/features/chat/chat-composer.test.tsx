@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 /**
  * `ChatComposer` の作り直し（Issue #3224）。ボタンの名前とヒント、送信のショートカット
- * （Mac は ⌘ + Enter だけ、それ以外は Ctrl + Enter だけ。Enter・Shift + Enter では送らない）、
+ * （⌘ + Enter と Ctrl + Enter のどちらでも送る。Enter・Shift + Enter では送らない）、
  * 案内の文、IME 変換中の扱い、`disabled`。実時間は待たない（ヒントは偽の時計とフォーカスで出す）。
  */
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
@@ -80,7 +80,7 @@ describe('ChatComposer: ボタンの名前とヒント', () => {
     setup();
     expect(screen.getByText('⌘ + Enter で送信')).toBeTruthy();
     const send = screen.getByRole('button', { name: 'メッセージを送信' });
-    expect(send.getAttribute('aria-keyshortcuts')).toBe('Meta+Enter');
+    expect(send.getAttribute('aria-keyshortcuts')).toBe('Meta+Enter Control+Enter');
     act(() => send.focus());
     expect(screen.getByRole('tooltip').textContent).toBe('メッセージを送信（⌘ + Enter）');
   });
@@ -106,35 +106,30 @@ describe('ChatComposer: 案内の文', () => {
 });
 
 describe('ChatComposer: 送信のキー', () => {
-  it('Mac 以外: Ctrl + Enter だけが送る（Enter・Shift + Enter・⌘ + Enter は送らない）', () => {
-    const { onSend, textbox } = setup();
-    // 既定動作を止めない = 改行が生きている
-    expect(fireEvent.keyDown(textbox, { key: 'Enter' })).toBe(true);
-    expect(fireEvent.keyDown(textbox, { key: 'Enter', shiftKey: true })).toBe(true);
-    fireEvent.keyDown(textbox, { key: 'Enter', metaKey: true });
-    expect(onSend).not.toHaveBeenCalled();
-    fireEvent.keyDown(textbox, { key: 'Enter', ctrlKey: true });
-    expect(onSend).toHaveBeenCalledTimes(1);
-  });
-
-  it('Mac: ⌘ + Enter だけが送る（Ctrl + Enter・Enter・Shift + Enter は送らない）', () => {
-    setPlatform('MacIntel');
-    const { onSend, textbox } = setup();
-    fireEvent.keyDown(textbox, { key: 'Enter' });
-    fireEvent.keyDown(textbox, { key: 'Enter', shiftKey: true });
-    fireEvent.keyDown(textbox, { key: 'Enter', ctrlKey: true });
-    expect(onSend).not.toHaveBeenCalled();
-    fireEvent.keyDown(textbox, { key: 'Enter', metaKey: true });
-    expect(onSend).toHaveBeenCalledTimes(1);
-  });
+  it.each([
+    ['Mac 以外', ''],
+    ['Mac', 'MacIntel'],
+  ])(
+    '%s: Ctrl + Enter でも ⌘ + Enter でも送る。Enter・Shift + Enter では送らない',
+    (_n, platform) => {
+      if (platform !== '') setPlatform(platform);
+      const { onSend, textbox } = setup();
+      // 既定動作を止めない = 改行が生きている
+      expect(fireEvent.keyDown(textbox, { key: 'Enter' })).toBe(true);
+      expect(fireEvent.keyDown(textbox, { key: 'Enter', shiftKey: true })).toBe(true);
+      expect(onSend).not.toHaveBeenCalled();
+      fireEvent.keyDown(textbox, { key: 'Enter', ctrlKey: true });
+      fireEvent.keyDown(textbox, { key: 'Enter', metaKey: true });
+      expect(onSend).toHaveBeenCalledTimes(2);
+    },
+  );
 
   it.each([
-    ['Mac 以外', '', { ctrlKey: true }],
-    ['Mac', 'MacIntel', { metaKey: true }],
+    ['Ctrl', { ctrlKey: true }],
+    ['⌘', { metaKey: true }],
   ])(
-    '%s: IME 変換中（isComposing / keyCode 229）の送信ショートカットでは送らない',
-    (_n, platform, mod) => {
-      if (platform !== '') setPlatform(platform);
+    '%s + Enter: IME 変換中（isComposing / keyCode 229）の送信ショートカットでは送らない',
+    (_n, mod) => {
       const { onSend, textbox } = setup();
       fireEvent.keyDown(textbox, { key: 'Enter', ...mod, isComposing: true });
       fireEvent.keyDown(textbox, { key: 'Enter', ...mod, keyCode: 229 });
@@ -185,5 +180,32 @@ describe('ChatComposer: 無効・送信中', () => {
     setup({ sending: true, onStopReceiving: stop });
     fireEvent.click(screen.getByRole('button', { name: '受信をやめる' }));
     expect(stop).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('ChatComposer: 指だけの端末', () => {
+  function stubTouchOnly(touch: boolean) {
+    vi.stubGlobal('matchMedia', (query: string) => ({
+      matches: touch && query === '(pointer: coarse) and (hover: none)',
+      media: query,
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+    }));
+  }
+
+  it('キーボードの案内を隠す。ボタンの aria-label とヒントは残り、ヒントにショートカットは添えない', () => {
+    stubTouchOnly(true);
+    const { textbox } = setup();
+    expect(screen.queryByText(/Enter で送信/)).toBeNull();
+    expect(textbox.getAttribute('aria-describedby')).toBeNull();
+    const send = screen.getByRole('button', { name: 'メッセージを送信' });
+    act(() => send.focus());
+    expect(screen.getByRole('tooltip').textContent).toBe('メッセージを送信');
+  });
+
+  it('陰性対照: マウスのある端末（hover あり）では出す', () => {
+    stubTouchOnly(false);
+    setup();
+    expect(screen.getByText('Ctrl + Enter で送信')).toBeTruthy();
   });
 });

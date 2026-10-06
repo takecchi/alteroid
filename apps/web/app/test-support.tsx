@@ -169,7 +169,12 @@ type MediaChangeListener = (event: MediaQueryListEvent) => void;
 
 const mediaChangeListeners = new Set<{ query: string; listener: MediaChangeListener }>();
 
+/** 指だけの端末（`(pointer: coarse) and (hover: none)`）か。既定は偽（マウスのある端末）。 */
+const TOUCH_ONLY_QUERY = '(pointer: coarse) and (hover: none)';
+let touchOnly = false;
+
 function evaluateMediaQuery(query: string): boolean {
+  if (query === TOUCH_ONLY_QUERY) return touchOnly;
   const max = /^\(max-width:\s*(\d+)px\)$/.exec(query);
   if (max !== null) return viewportWidth <= Number(max[1]);
   const min = /^\(min-width:\s*(\d+)px\)$/.exec(query);
@@ -228,6 +233,18 @@ export function setViewportWidth(width: number): void {
   for (const { query, listener } of mediaChangeListeners) {
     // 本物と同じく、そのクエリを新しい幅で評価した結果を載せる。
     listener({ matches: evaluateMediaQuery(query), media: query } as MediaQueryListEvent);
+  }
+}
+
+/**
+ * 指だけの端末として評価させる。登録済みのリスナーへ `change` を配る。後始末はテスト側（`false` へ戻す）。
+ */
+export function setTouchOnly(value: boolean): void {
+  touchOnly = value;
+  for (const { query, listener } of mediaChangeListeners) {
+    if (query === TOUCH_ONLY_QUERY) {
+      listener({ matches: touchOnly, media: query } as MediaQueryListEvent);
+    }
   }
 }
 

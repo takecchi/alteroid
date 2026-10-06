@@ -271,6 +271,28 @@ describe('/profile 画面 — 行を置く', () => {
     expect(screen.queryByRole('alert')).toBeNull();
   });
 
+  it('本文で Ctrl + Enter は「保存する」と同じ（確認へ進むだけ）。確認の段では PUT しない', async () => {
+    const { puts } = stubProfile({ rows: [] });
+    renderScreen();
+
+    fireEvent.click(await screen.findByRole('button', { name: '行を追加する' }));
+    const body = screen.getByLabelText('プロファイルの新しい本文');
+    // 名前が空・本文が空のあいだは進まない（保存ボタンも disabled）。
+    fireEvent.keyDown(body, { key: 'Enter', ctrlKey: true });
+    expect(screen.queryByRole('button', { name: '本当に保存する' })).toBeNull();
+
+    fireEvent.change(screen.getByLabelText('プロファイルの行の名前'), {
+      target: { value: 'rust' },
+    });
+    fireEvent.change(body, { target: { value: 'export A=1\n' } });
+    fireEvent.keyDown(body, { key: 'Enter' });
+    expect(screen.queryByRole('button', { name: '本当に保存する' })).toBeNull();
+    fireEvent.keyDown(body, { key: 'Enter', ctrlKey: true });
+    expect(screen.getByRole('button', { name: '本当に保存する' })).toBeTruthy();
+    fireEvent.keyDown(body, { key: 'Enter', metaKey: true });
+    expect(puts).toEqual([]);
+  });
+
   it('一部の runner へ反映できなかったら、成功の見出しを出さず警告（warn 色）にして、失敗の行も出す（#3157）', async () => {
     stubProfile({
       rows: [],

@@ -335,6 +335,7 @@ function MemoryDetailBody({ slug }: { slug: string }) {
           value={value}
           onChange={edit}
           onSave={() => save()}
+          saveDisabled={!dirty || busy}
           // 出すタブとその並びは今の画面のまま（プレビュー → 編集）。並べては出さない。
           modes={['preview', 'edit']}
           mode={tab}

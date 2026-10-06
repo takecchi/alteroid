@@ -185,6 +185,36 @@ describe('継続する依頼を仕込む', () => {
     });
   });
 
+  it('依頼の本文で Ctrl + Enter（⌘ + Enter でも）なら「仕込む」と同じに送る。Enter だけでは送らない', async () => {
+    stubSchedule([DEFAULT_ENTRY]);
+    renderSchedule();
+
+    await fill('morning-issues', '朝いちで issue を見ておいて');
+    const requestBox = screen.getByLabelText('依頼の本文');
+    fireEvent.keyDown(requestBox, { key: 'Enter' });
+    expect(sent).toEqual([]);
+    fireEvent.keyDown(requestBox, { key: 'Enter', ctrlKey: true });
+
+    await waitFor(() => {
+      expect(sent).toHaveLength(1);
+    });
+    await expect(sent[0]?.read()).resolves.toMatchObject({
+      kind: 'morning-issues',
+      request: '朝いちで issue を見ておいて',
+    });
+  });
+
+  it('kind が空のままなら、ショートカットでも送らない（ボタンの disabled と同じ条件）', async () => {
+    stubSchedule([DEFAULT_ENTRY]);
+    renderSchedule();
+
+    await screen.findByLabelText(/依頼の名前/);
+    const requestBox = screen.getByLabelText('依頼の本文');
+    fireEvent.change(requestBox, { target: { value: '本文だけ' } });
+    fireEvent.keyDown(requestBox, { key: 'Enter', ctrlKey: true });
+    expect(sent).toEqual([]);
+  });
+
   it('kind か本文が空なら送らない（空の依頼を仕込めない）', async () => {
     stubSchedule([DEFAULT_ENTRY]);
     renderSchedule();
