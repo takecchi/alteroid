@@ -66,7 +66,7 @@ function UnreadableApprovalsWarn({ count, className }: { count: number; classNam
  *
  * 台帳の未了の総数（`GET /progress` の `backlog.total`）を出す。**「人間の番」の件数ではない**
  * （API は未了を「人間が動かすもの」と「そうでないもの」に分けて持たない）ので、分けた数を
- * 作らない。数が欠けうる（読めない行・刈られた行）ときは下限として言う。進捗を読めなければ
+ * 作らない。数が欠けうる（読めない行）ときは下限として言う。進捗を読めなければ
  * この行は出さない（0 件と描かない）。
  */
 export function AwaitingYou() {
@@ -136,9 +136,7 @@ export function AwaitingYou() {
   }
 
   const backlog = progress.error === undefined ? progress.data?.backlog : undefined;
-  const backlogPartial =
-    backlog !== undefined &&
-    (backlog.completeness.unreadable !== 0 || backlog.completeness.trimmedClosed !== 0);
+  const backlogPartial = backlog !== undefined && backlog.completeness.unreadable !== 0;
 
   return (
     <AwaitingYouCard

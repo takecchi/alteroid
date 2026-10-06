@@ -369,7 +369,7 @@ describe('/progress 画面 — 取れない値と但し書き', () => {
       body: baseBody({
         backlog: {
           ...baseBody().backlog,
-          completeness: { unreadable: 2, trimmedClosed: 5 },
+          completeness: { unreadable: 2, trimmedClosed: 0 },
         },
       }),
     });
@@ -377,10 +377,24 @@ describe('/progress 画面 — 取れない値と但し書き', () => {
 
     const backlog = within(await card('未完了の仕事'));
     expect(
-      backlog.getByText(
-        /数が実際より少ない可能性があります（読み取れなかった記録 2 件 \/ 古くて整理された完了済みの記録 5 件）/,
-      ),
+      backlog.getByText(/数が実際より少ない可能性があります（読み取れなかった記録 2 件）/),
     ).toBeTruthy();
+  });
+
+  it('対照: 刈られた完了済みの記録だけなら（unreadable が 0）、未完了の数に下限の注記を出さない（#3698）', async () => {
+    stubProgress({
+      body: baseBody({
+        backlog: {
+          ...baseBody().backlog,
+          completeness: { unreadable: 0, trimmedClosed: 5, unreadableJobs: 0 },
+        },
+      }),
+    });
+    renderPage();
+
+    const backlog = within(await card('未完了の仕事'));
+    expect(backlog.queryByText(/数が実際より少ない可能性/)).toBeNull();
+    expect(backlog.queryByText(/少なくともこれだけ/)).toBeNull();
   });
 
   it('completeness.unreadableJobs が 0 でなければ、「実施中」に委譲の欠けの但し書きを出す（#2345）', async () => {

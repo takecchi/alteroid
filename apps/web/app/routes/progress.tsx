@@ -283,7 +283,8 @@ function GithubBlock({ github, observedAt }: { github: Progress['github']; obser
 function BacklogCard({ progress }: { progress: Progress }) {
   const { backlog, github, observedAt } = progress;
   const { byOrigin, age, byState, completeness } = backlog;
-  const partial = completeness.unreadable !== 0 || completeness.trimmedClosed !== 0;
+  // 刈られた完了済みの記録（`trimmedClosed`）は未完了の数に影響しないので、判定に入れない。
+  const partial = completeness.unreadable !== 0;
 
   const items: KeyValueItem[] = [
     {
@@ -323,9 +324,7 @@ function BacklogCard({ progress }: { progress: Progress }) {
         {partial && (
           <p className="text-xs text-warn">
             数が実際より少ない可能性があります（読み取れなかった記録{' '}
-            {count(completeness.unreadable)} 件 / 古くて整理された完了済みの記録{' '}
-            {count(completeness.trimmedClosed)}{' '}
-            件）。上の数は「少なくともこれだけ」と読んでください。
+            {count(completeness.unreadable)} 件）。上の数は「少なくともこれだけ」と読んでください。
           </p>
         )}
         {github.state !== 'not_observed' && (
