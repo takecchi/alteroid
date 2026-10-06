@@ -938,6 +938,13 @@ describe('inboxEventShape の名簿（schema に足した型・欄の足し忘�
           '連携の鍵経由で届いたときの鍵の id と名前（#3113）。名前は人間が付けたラベル（自由文）で、' +
           'この関数は参照しない（`identity` と同じ「単に本体が触れていない欄」）。鍵の値は持たない。',
       },
+      attachments: {
+        emit: 'never',
+        why:
+          '添付の参照（#3113 段3）。ファイル名は外から来る自由文で、中身（bytes）はそもそも受信箱にも日誌にも無い。' +
+          '件数だけでも跡に出す理由が無い。`human_message.attachments`（上）と同じ判断で、対になる' +
+          '`journalEntryShape` の `external_event.attachments` と同時に判断すること、`tag()` は禁止。',
+      },
     },
     self_initiative: {
       reason: { emit: 'size-unnamed' },
@@ -1031,6 +1038,7 @@ describe('inboxEventShape の名簿（schema に足した型・欄の足し忘�
       payload: { token: SECRET },
       identity: SECRET,
       via: { keyId: SECRET, name: SECRET },
+      attachments: [{ id: SECRET, name: SECRET, mediaType: 'image/png', size: 1, sha256: SECRET }],
     },
     self_initiative: {
       type: 'self_initiative',
@@ -1948,6 +1956,12 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
           '連携の鍵経由のときの鍵の id と名前（#3113）。名前は人間が付けたラベル（自由文）なので、' +
           '落ちた記録の跡には載せない（この関数は参照しない）。',
       },
+      attachments: {
+        emit: 'never',
+        why:
+          '添付の参照（#3113 段3）。ファイル名は外から来る自由文で、中身（bytes）はそもそも日誌にも受信箱にも無い。' +
+          '`inboxEventShape` の `external.attachments` と同じ判断で、`tag()` は禁止。',
+      },
     },
     worker_wait: {
       openedAt: { emit: 'tag', token: 'openedAt' },
@@ -2313,6 +2327,7 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
       source: SECRET,
       summary: SECRET,
       via: { keyId: SECRET, name: SECRET },
+      attachments: [{ id: SECRET, name: SECRET, mediaType: 'image/png', size: 1, sha256: SECRET }],
     },
     worker_wait: {
       type: 'worker_wait',

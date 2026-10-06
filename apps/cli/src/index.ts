@@ -623,6 +623,37 @@ permissionCommand
   });
 
 /**
+ * 添付（Issue #3111 段2）。会話に添えるファイルを CLI からも上げ・取り出せる
+ * （`chat` / `tui` の `/attach` と同じ `POST /attachments`・`GET /attachments/:id`）。
+ */
+const attachmentsCommand = program
+  .command('attachments')
+  .description('添付ファイルを上げる・取り出す・控えを見る');
+
+attachmentsCommand
+  .command('put <path>')
+  .description('ファイルを上げて id を出す（発言に添えないと 1 時間で掃除される）')
+  .action(async (path: string) => {
+    await (await import('./attachments.js')).attachmentsPutCommand(path);
+  });
+
+attachmentsCommand
+  .command('get <id>')
+  .description('添付の中身を保存する（既定は控えの名前でカレントへ。既存のファイルは上書きしない）')
+  .option('-o, --output <file>', '保存先（- なら標準出力）')
+  .addHelpText('after', HELP_EXAMPLES.attachmentsGet)
+  .action(async (id: string, options: { output?: string }) => {
+    await (await import('./attachments.js')).attachmentsGetCommand(id, options);
+  });
+
+attachmentsCommand
+  .command('meta <id>')
+  .description('添付の控え（名前・種類・大きさ・sha256・期限）を出す。中身は読まない')
+  .action(async (id: string) => {
+    await (await import('./attachments.js')).attachmentsMetaCommand(id);
+  });
+
+/**
  * 記憶（人格）。**読めるだけの面を作らない。**
  *
  * PRD「インターフェース」は3面で同じことができると書いており、起こせることの

@@ -18,7 +18,10 @@ export type CommandAction =
   | 'resume'
   | 'new'
   | 'end'
-  | 'interrupt';
+  | 'interrupt'
+  | 'attach'
+  | 'attachments'
+  | 'detach';
 
 export interface CommandSpec {
   /** 正式名（先頭の `/` なし・小文字）。 */
@@ -66,6 +69,14 @@ export const COMMANDS: readonly CommandSpec[] = [
     action: 'end',
     describe: '今の会話を終える（学びを記憶へ蒸留する）',
   },
+  {
+    name: 'attach',
+    action: 'attach',
+    describe:
+      '次に送る発言へファイルを添える。<path>（複数回で複数個。送るときに上がる。空の入力の Enter で添付だけも送れる）',
+  },
+  { name: 'attachments', action: 'attachments', describe: '添えかけのファイルの一覧' },
+  { name: 'detach', action: 'detach', describe: '添えかけを外す。<番号|all>' },
   { name: 'interrupt', action: 'interrupt', describe: '走っているターンを止める（Ctrl+C と同じ）' },
   { name: 'help', aliases: ['?'], action: 'help', describe: 'コマンドとキーの一覧' },
   { name: 'exit', aliases: ['quit'], action: 'exit', describe: '終了する（Ctrl+D でも可）' },

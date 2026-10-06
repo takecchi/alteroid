@@ -348,7 +348,10 @@ export const App: FC<AppProps> = ({
         action === 'resume' ||
         action === 'new' ||
         action === 'end' ||
-        action === 'interrupt')
+        action === 'interrupt' ||
+        action === 'attach' ||
+        action === 'attachments' ||
+        action === 'detach')
     ) {
       goTab('chat');
     }
@@ -395,12 +398,21 @@ export const App: FC<AppProps> = ({
       case 'interrupt':
         void controller.interrupt();
         break;
+      case 'attach':
+        void controller.attach(args);
+        break;
+      case 'attachments':
+        controller.listAttachments();
+        break;
+      case 'detach':
+        controller.detach(args);
+        break;
     }
   };
 
   const submit = (text: string): void => {
     setBuffer(emptyBuffer());
-    if (text.length === 0) return;
+    if (text.length === 0 && !controller.hasAttachments()) return;
     const resolved = resolveCommand(text);
     if (resolved.kind === 'command') return runCommand(resolved.spec.action, resolved.args);
     if (resolved.kind === 'unknown') {

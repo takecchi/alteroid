@@ -33,10 +33,15 @@ export type ScriptStep = ChatEvent | Promise<void> | Error;
 export interface ChatCall {
   text: string;
   conversationId?: string;
+  attachments?: string[];
 }
 
 export interface FakeApi extends TuiApi {
   chatCalls: ChatCall[];
+  /** `uploadAttachment()` に渡されたもの。 */
+  uploads: { name: string; mediaType: string; size: number }[];
+  /** 次の（以降の）`uploadAttachment()` を失敗させる理由。 */
+  uploadFails: string | null;
   scripts: ScriptStep[][];
   /** `chatStream()` の台本（呼び出しごとに 1 つ消費する。足りなければ空）。 */
   streamScripts: ScriptStep[][];
@@ -163,10 +168,13 @@ export function fakeApi(): FakeApi {
     approvalListFails: null,
     approvalAnswers: [],
     approvalAnswerFails: null,
+    uploads: [],
+    uploadFails: null,
     async *chat(input, signal) {
       api.chatCalls.push({
         text: input.text,
         ...(input.conversationId === undefined ? {} : { conversationId: input.conversationId }),
+        ...(input.attachments === undefined ? {} : { attachments: input.attachments }),
       });
       const script = api.scripts.shift() ?? [];
       for (const step of script) {
@@ -178,6 +186,18 @@ export function fakeApi(): FakeApi {
         }
         yield step;
       }
+    },
+    async uploadAttachment(file) {
+      api.uploads.push({ name: file.name, mediaType: file.mediaType, size: file.bytes.length });
+      if (api.uploadFails !== null) throw new Error(api.uploadFails);
+      const id = `att-${api.uploads.length}`;
+      return {
+        id,
+        name: file.name,
+        mediaType: file.mediaType,
+        size: file.bytes.length,
+        sha256: 'x',
+      };
     },
     async *chatStream(conversationId, signal) {
       api.streamCalls.push({ conversationId, aborted: () => signal.aborted });

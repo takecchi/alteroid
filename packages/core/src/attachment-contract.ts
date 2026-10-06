@@ -18,6 +18,9 @@ import {
  * 4. `bind` は未結び付けを結び付け（冪等）、別の会話へ結び付いたものは `conflicts`、無いものは `missing`
  * 5. `prune` は①未結び付けのまま1時間たったもの②期限を過ぎたものだけを消し、消した件数を返す。
  *    結び付いた期限内のものは残す
+ * 6. `bindToExternalEvent`（#3113 段3）も `bind` と同じ規則（冪等・別の宛先は `conflicts`・無いものは `missing`）。
+ *    会話と外部イベントは**互いに別の宛先**で、どちらか一方へ結んだものは他方へ結べない。外部イベントへ
+ *    結び付いたものは、未結び付けの掃除（1時間）で消えない
  */
 export async function verifyAttachmentStoreContract(store: AttachmentStore): Promise<void> {
   const fail = (message: string): never => {
@@ -132,4 +135,45 @@ export async function verifyAttachmentStoreContract(store: AttachmentStore): Pro
   if ((await store.getMeta(uploaded.id))?.uploadedBy !== 'account:a1')
     fail('getMeta の uploadedBy');
   if ((await store.get(uploaded.id))?.meta.uploadedBy !== 'account:a1') fail('get の uploadedBy');
+
+  // 6: 外部イベントへの結び付け
+  const toEvent = await store.put({ name: 'e.png', mediaType: 'image/png', bytes: PNG });
+  const toConv = await store.put({ name: 'c.png', mediaType: 'image/png', bytes: PNG });
+  const loose = await store.put({ name: 'l.png', mediaType: 'image/png', bytes: PNG });
+  const evFirst = await store.bindToExternalEvent([toEvent.id, 'no-such-id'], 'ev-1');
+  if (
+    evFirst.bound.join() !== toEvent.id ||
+    evFirst.missing.join() !== 'no-such-id' ||
+    evFirst.conflicts.length > 0
+  ) {
+    fail(`bindToExternalEvent の結果: ${JSON.stringify(evFirst)}`);
+  }
+  const evMeta = await store.getMeta(toEvent.id);
+  if (evMeta?.externalEventId !== 'ev-1') fail('bindToExternalEvent が控えへ反映されない');
+  if (evMeta?.conversationId !== undefined)
+    fail('外部イベントへの結び付けが conversationId を立てた');
+  if ((await store.bindToExternalEvent([toEvent.id], 'ev-1')).bound.join() !== toEvent.id)
+    fail('同じ外部イベントへの bindToExternalEvent は冪等');
+  const evOther = await store.bindToExternalEvent([toEvent.id], 'ev-2');
+  if (evOther.conflicts.join() !== toEvent.id || evOther.bound.length > 0)
+    fail('別の外部イベントへの bindToExternalEvent は conflicts');
+  const evToConv = await store.bind([toEvent.id], 'conv-x');
+  if (evToConv.conflicts.join() !== toEvent.id || evToConv.bound.length > 0)
+    fail('外部イベントへ結び付いたものを会話へ bind できた');
+  if ((await store.bind([toConv.id], 'conv-y')).bound.join() !== toConv.id) fail('会話への bind');
+  const convToEv = await store.bindToExternalEvent([toConv.id], 'ev-3');
+  if (convToEv.conflicts.join() !== toConv.id || convToEv.bound.length > 0)
+    fail('会話へ結び付いたものを外部イベントへ結べた');
+  const afterBinds = await store.getMeta(toEvent.id);
+  if (afterBinds?.externalEventId !== 'ev-1' || afterBinds.conversationId !== undefined)
+    fail('conflicts が外部イベントの結び付けを書き換えた');
+  // 外部イベントへ結び付いたものは、未結び付けの掃除で消えない（未結び付けの loose と、上の uploadedBy の
+  // 節で上げた `uploaded` の2件だけが消える）
+  const later = new Date(Date.now() + ATTACHMENT_UNBOUND_TTL_MS + 5 * 60_000);
+  if ((await store.prune(later)) !== 2)
+    fail('未結び付けの掃除の件数（loose と uploaded の2件のはず）');
+  if ((await store.getMeta(loose.id)) !== undefined) fail('未結び付けが残った');
+  if ((await store.getMeta(toEvent.id)) === undefined)
+    fail('外部イベントへ結び付いたものが掃除で消えた');
+  if ((await store.getMeta(toConv.id)) === undefined) fail('会話へ結び付いたものが掃除で消えた');
 }

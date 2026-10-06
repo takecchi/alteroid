@@ -58,6 +58,13 @@ import {
 import type { InferResponseType } from 'hono/client';
 
 import { confirmInRepl } from './confirm.js';
+import {
+  AttachmentDraft,
+  attachmentLinesOf,
+  describeAttachment,
+  uploadAttachment,
+  uploadDraft,
+} from './attachments.js';
 import { createClient, type DaemonClient } from './client.js';
 import { markConversationReadAfterReply } from './conversations.js';
 import { formatElapsedAgo } from './format.js';
@@ -85,6 +92,8 @@ export async function chatCommand(): Promise<void> {
   const client = createClient(base, target.headers);
 
   const rl = createInterface({ input: stdin, output: stdout });
+  // 次に送る発言へ添えかけのファイル（`/attach`）。
+  const draft = new AttachmentDraft();
   let conversationId: string | null = null;
   // 直前に一覧したもの。番号で引けるようにするため覚えておく。
   const listed: Listed = {
@@ -108,7 +117,13 @@ export async function chatCommand(): Promise<void> {
       } catch {
         break; // Ctrl-C
       }
-      if (line.length === 0) continue;
+      // 空行は、添えかけが無ければ送らない。あれば添付だけの発言として送る。
+      if (line.length === 0 && draft.count === 0) continue;
+
+      if (/^\/(attach|attachments|detach)(\s|$)/.test(line)) {
+        await runAttachmentCommand(line, draft);
+        continue;
+      }
 
       if (line.startsWith('/')) {
         const handled = await runSlashCommand(
@@ -124,7 +139,25 @@ export async function chatCommand(): Promise<void> {
         continue;
       }
 
-      conversationId = await sendMessage(target, line, conversationId);
+      // 添えかけがあれば先に上げる。失敗したら送らず、添えかけを残して理由を出す。
+      let attachmentIds: string[] | undefined;
+      if (draft.count > 0) {
+        const uploaded = await uploadDraft(draft, (file) => uploadAttachment(target, file));
+        if (!uploaded.ok) {
+          stdout.write(
+            `添付を上げられなかったので送っていません: ${uploaded.reason}\n` +
+              '（添えかけは残してあります。/attachments で確認、/detach で外せます）\n',
+          );
+          continue;
+        }
+        attachmentIds = uploaded.uploaded.map((a) => a.id);
+        for (const a of uploaded.uploaded) stdout.write(`  ${describeAttachment(a)}\n`);
+      }
+      conversationId = await sendMessage(target, line, conversationId, undefined, {
+        ...(attachmentIds === undefined ? {} : { attachments: attachmentIds }),
+        // サーバが発言を受けたら添えかけを空にする（受けなかったら残す）。
+        onAccepted: () => draft.clear(),
+      });
     }
   } finally {
     rl.close();
@@ -160,6 +193,12 @@ export async function sendMessage(
    * 足さない（案A: 既存の `/chat` に乗せる）。
    */
   supersedes?: string,
+  options: {
+    /** `POST /attachments` が返した id（発言へ結び付ける）。 */
+    attachments?: string[];
+    /** サーバが発言を受けた（HTTP 2xx）とき。添えかけを空にする合図。 */
+    onAccepted?: () => void;
+  } = {},
 ): Promise<string | null> {
   // SSE は hono/client ではなく生の fetch で受ける（EventSource は POST も
   // ヘッダ付与もできない）。認証ヘッダはここにも要る。
@@ -170,6 +209,9 @@ export async function sendMessage(
       text,
       conversationId: conversationId ?? undefined,
       ...(supersedes === undefined ? {} : { supersedes }),
+      ...(options.attachments === undefined || options.attachments.length === 0
+        ? {}
+        : { attachments: options.attachments }),
     }),
   });
 
@@ -187,6 +229,7 @@ export async function sendMessage(
     return conversationId;
   }
 
+  options.onAccepted?.();
   let nextConversationId = conversationId;
   let wrote = false;
   // 返答が最後まで表示されたか（`done` が来て、`error` / `usage_limited` が無かった）。既読にする条件。
@@ -293,7 +336,10 @@ async function* readSSE(body: ReadableStream<Uint8Array>): AsyncGenerator<SSEEve
   }
 }
 
-const HELP = `/report [日付]        日報（既定は直近。日付は YYYY-MM-DD）
+const HELP = `/attach <path>       次に送る発言にファイルを添える（複数回で複数個。本文を打って送ると一緒に上がる。添えかけがあれば空行の Enter で添付だけも送れる）
+/attachments         添えかけのファイルの一覧
+/detach <番号|all>   添えかけを外す
+/report [日付]        日報（既定は直近。日付は YYYY-MM-DD）
 /reports [件数]       日報の一覧
 /memory              記憶の一覧
 /memory <slug>       記憶の中身（書き換えは alteroid memory edit <slug>）
@@ -913,6 +959,9 @@ export async function runSlashCommand(
           stdout.write(
             `  ${label} [${message.at}] ${speaker}: ${redactBody(message.text)}${edit}\n`,
           );
+          for (const line of attachmentLinesOf(message.attachments)) {
+            stdout.write(`         ${redactBody(line)}\n`);
+          }
         }
       }
       stdout.write(
@@ -3749,6 +3798,48 @@ function summarizeText(value: string): string {
   // 伏せ字を先に掛ける（切ってからだとトークンの途中で切れて形が崩れ、取りこぼす）。
   const single = redactBody(value).replace(/\s+/g, ' ').trim();
   return single.length > 80 ? `${single.slice(0, 80)}…` : single;
+}
+
+/** `/attach <path>` / `/attachments` / `/detach <番号|all>`（添えかけの操作。送るときに上がる）。 */
+export async function runAttachmentCommand(line: string, draft: AttachmentDraft): Promise<void> {
+  const match = /^\/(\w+)\s*([\s\S]*)$/.exec(line.trim());
+  const command = match?.[1] ?? '';
+  const args = (match?.[2] ?? '').trim();
+  if (command === 'attach') {
+    if (args === '') {
+      stdout.write('使い方: /attach <path>\n');
+      return;
+    }
+    const added = await draft.add(unquotePath(args));
+    if (!added.ok) {
+      stdout.write(`添えられません: ${added.reason}\n`);
+      return;
+    }
+    stdout.write(
+      `添えかけ ${draft.count} 件（${added.file.name}）。本文を打って送ると一緒に上がります（空行の Enter なら添付だけを送る）\n`,
+    );
+    return;
+  }
+  if (command === 'attachments') {
+    for (const text of draft.describe()) stdout.write(`${text}\n`);
+    return;
+  }
+  if (args === '') {
+    stdout.write('使い方: /detach <番号|all>\n');
+    return;
+  }
+  const removed = draft.remove(args);
+  stdout.write(
+    removed.ok
+      ? `外した: ${removed.removed.map((f) => f.name).join(', ')}（残り ${draft.count} 件）\n`
+      : `外せません: ${removed.reason}\n`,
+  );
+}
+
+/** パスの前後の引用符（シェルの癖で付けがち）を外す。 */
+function unquotePath(raw: string): string {
+  const match = /^(['"])(.*)\1$/.exec(raw);
+  return match === null ? raw : (match[2] ?? raw);
 }
 
 /**

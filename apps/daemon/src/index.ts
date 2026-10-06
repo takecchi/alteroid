@@ -74,6 +74,7 @@ import {
   type TokenRotationEntry,
   type TokenRotationOutcome,
   readAttachmentLimits,
+  attachmentCopiesDir,
 } from '@alteroid/core';
 
 import { createApp, parseAllowedOrigins } from './app.js';
@@ -1977,6 +1978,7 @@ export async function main(): Promise<void> {
   }
   const attachmentPruner = startAttachmentPruning({
     stores,
+    copiesDir: attachmentCopiesDir(paths.root),
     everyMinutes: attachmentPruneConfig.everyMinutes,
   });
 

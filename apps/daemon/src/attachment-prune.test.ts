@@ -1,5 +1,10 @@
-import { createMemoryStores } from '@alteroid/core';
+import { stat } from 'node:fs/promises';
+import { join } from 'node:path';
+
+import { createMemoryStores, fetchAttachmentCopy } from '@alteroid/core';
 import { describe, expect, it } from 'vitest';
+
+import { makeTempDir } from '../../../vitest.tmpdir.js';
 
 import {
   DEFAULT_ATTACHMENT_PRUNE_EVERY_MINUTES,
@@ -50,6 +55,37 @@ describe('添付ファイルの定期掃除（#3111）', () => {
       expect(await pruner.refresh()).toBe(1);
       expect(await stores.attachments.getMeta(stale.id)).toBeUndefined();
       expect(await stores.attachments.getMeta(kept.id)).toBeDefined();
+    } finally {
+      pruner.stop();
+    }
+  });
+
+  it('1周で attachment_fetch の写しも掃く（24時間より古いものは消え、新しいものは残る）', async () => {
+    const stores = createMemoryStores();
+    const copiesDir = await makeTempDir('alteroid-prune-copies-');
+    const meta = await stores.attachments.put({
+      name: 'a.png',
+      mediaType: 'image/png',
+      bytes: PNG,
+      conversationId: 'c1',
+    });
+    await fetchAttachmentCopy(stores, copiesDir, meta.id);
+    const pruner = startAttachmentPruning({ stores, everyMinutes: 60, copiesDir });
+    try {
+      await pruner.refresh();
+      await expect(stat(join(copiesDir, meta.id))).resolves.toBeTruthy();
+      const later = startAttachmentPruning({
+        stores,
+        everyMinutes: 60,
+        copiesDir,
+        now: () => new Date(Date.now() + 25 * 3_600_000),
+      });
+      try {
+        await later.refresh();
+        await expect(stat(join(copiesDir, meta.id))).rejects.toThrow();
+      } finally {
+        later.stop();
+      }
     } finally {
       pruner.stop();
     }

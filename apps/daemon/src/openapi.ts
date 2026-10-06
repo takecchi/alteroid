@@ -107,7 +107,7 @@ export const attachmentMetaSchema = z.object({
   expiresAt: z.string(),
 });
 
-/** 添付を断るときの応答。`code` は `AttachmentRejection` かこの口の `attachment_missing` / `attachment_conflict`。 */
+/** 添付を断るときの応答。`code` は `AttachmentRejection` かこの口の `attachment_missing` / `attachment_conflict` / `attachment_forbidden`（連携の鍵が、自分で上げていない添付を付けようとした）。 */
 export const attachmentErrorResponseSchema = z.object({
   error: z.string(),
   code: z
@@ -119,6 +119,7 @@ export const attachmentErrorResponseSchema = z.object({
       'media_type_missing',
       'attachment_missing',
       'attachment_conflict',
+      'attachment_forbidden',
     ])
     .optional(),
 });

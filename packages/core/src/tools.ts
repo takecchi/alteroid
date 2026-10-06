@@ -4,6 +4,7 @@ import { createSdkMcpServer, tool as sdkTool } from '@anthropic-ai/claude-agent-
 import { z } from 'zod';
 
 import { describeArchiveRemovedBytesUnit } from './archive-removed-bytes.js';
+import { fallbackAttachmentCopiesDir, fetchAttachmentCopy } from './attachment-fetch.js';
 
 import {
   bySpeaker,
@@ -710,6 +711,12 @@ export interface ToolContext {
    * 本番でこの分岐は通らない。
    */
   queuedInMemory?: () => number | undefined;
+  /**
+   * `attachment_fetch` が添付の写しを置くディレクトリ（クローンの cwd の配下。`attachmentCopiesDir(cwd)`）。
+   * 省略すると `os.tmpdir()` 配下（cwd が無い器・テスト用）。cwd の中に置くのは、クローンの `Read` が
+   * 追加の許可なしで開けるようにするため（`attachment-fetch.ts`）。
+   */
+  attachmentCopiesDir?: string;
 }
 
 export function qualifiedToolName(name: string): string {
@@ -737,6 +744,7 @@ export const CLONE_TOOL_NAMES = [
   'journal_write',
   'journal_read',
   'conversation_read',
+  'attachment_fetch',
   'conversation_post',
   'ask_human',
   'request_permission',
@@ -850,6 +858,7 @@ export const TRACELESS_CLONE_TOOLS = [
   'memory_section_read',
   'journal_read',
   'conversation_read',
+  'attachment_fetch',
   'approvals_list',
   'approval_trace',
   'usage_read',
@@ -12481,6 +12490,48 @@ export function createCloneTools(context: ToolContext) {
     ),
 
     tool(
+      'attachment_fetch',
+      [
+        '人間が会話に添えた添付（画像・動画・PDF・ログなど）の中身を、デーモンの手元のファイルへ取り出す。',
+        'id は発言の通知行（[添付] id=…）か conversation_read の [添付 n件] にある。',
+        '返るパスを **Read で開ける**（クローンの作業ディレクトリの中に置く）。動画は置いて取り出せるところまで（コマ切り出しはしない）。',
+        '同じ中身（sha256 が同じ）の写しが既にあれば書き直さず使い回す。',
+        '**取り出したものは写し**で、正本ではない。器が作り直される・一定時間（24時間）たつと消えうる。必要なら再度取り出す。',
+        '添付は保持期限（既定30日）を過ぎる・未結び付けのまま1時間たつと消える。そのときは「見つからない」と返る。',
+        '**中身は記憶にも日誌にも写さない**（日誌に残るのは道具の使用の記録だけ）。要る事実は自分の言葉で記憶へ書く。',
+      ].join(' '),
+      {
+        id: z.string().min(1).describe('添付の id（通知行の id=… / conversation_read の添付行）'),
+      },
+      async ({ id }) => {
+        try {
+          const result = await fetchAttachmentCopy(
+            stores,
+            context.attachmentCopiesDir ?? fallbackAttachmentCopiesDir(),
+            id,
+          );
+          if (!result.ok) {
+            return text(
+              result.reason === 'not_found'
+                ? `添付 ${id} は見つからない（保持期限が過ぎて消えた、または id の誤り）。人間に再送を頼む。`
+                : `添付 ${id} は取り出せない（置き場が返した id か名前が、置き場所の外へ出る形だった）。`,
+            );
+          }
+          const { copy } = result;
+          return text(
+            `添付 ${id} を取り出した${copy.reused ? '（既にあった写しを使い回した）' : ''}。` +
+              `Read で開ける。\npath=${copy.path}\nname=${copy.name} type=${copy.mediaType} ` +
+              `size=${copy.size} sha256=${copy.sha256}`,
+          );
+        } catch (error) {
+          return text(
+            `添付 ${id} を取り出せなかった: ${reasonOf(error)}（もう一度試すと直る場合がある）`,
+          );
+        }
+      },
+    ),
+
+    tool(
       'conversation_read',
       [
         '人間との会話を日誌から読み返す。要約に潰された後でも逐語はここに残っている。',
@@ -12505,7 +12556,8 @@ export function createCloneTools(context: ToolContext) {
         '② 人間がマネージャーへ直接話しかけた発言も出ない',
         '（日誌には with:"manager" として載り、あなた自身の指示と見分けが付かない）。',
         '**ここに出るもの**: 発言に添付があれば「[添付 n件]」と各添付の id・name・type・size（メタデータだけ）。',
-        '**添付の中身はここには出ない**（画像は届いたターンでだけ画像として渡される。画像以外の取り出し口はまだ無い）。',
+        '**添付の中身はここには出ない**（画像は届いたターンでだけ画像として渡される）。',
+        '画像・動画・PDF・ログなど**どの添付も、attachment_fetch id=<添付の id> で手元に取り出して Read で開ける**（動画は置いて取り出せるところまで）。',
       ].join(' '),
       {
         conversationId: z
@@ -15793,6 +15845,7 @@ function attachmentLines(
         (a) =>
           `\n${indent}  id=${a.id} name=${excerptLine(a.name, 80)} type=${a.mediaType} size=${a.size}`,
       )
-      .join('')
+      .join('') +
+    `\n${indent}  （attachment_fetch id=<id> で取り出して Read で開ける）`
   );
 }

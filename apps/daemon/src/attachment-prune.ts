@@ -1,4 +1,4 @@
-import { reasonOf, type Stores } from '@alteroid/core';
+import { pruneAttachmentCopies, reasonOf, type Stores } from '@alteroid/core';
 
 /**
  * 添付ファイル（`stores.attachments`。#3111 段1a）の保持期間の定期掃除。
@@ -7,6 +7,9 @@ import { reasonOf, type Stores } from '@alteroid/core';
  * 例外でプロセスを落とさない）。掃除そのものは `AttachmentStore.prune(now)` に委ねる——期限切れ
  * （`expiresAt`）と、作成から1時間たっても発言へ結び付いていないものを消す。**日誌には書かない**
  * （添付は記憶ではなく、何も消えなかった周を記録しない。`archive-folder.ts` の同じ判断）。
+ *
+ * **`attachment_fetch` が手元へ置いた写し**（`copiesDir`）も同じ周で掃く——24時間より古いもの、
+ * 元の添付が消えたもの。写しは正本ではないので消えてよい（`attachment-fetch.ts`）。
  */
 
 /** `ALTEROID_ATTACHMENT_PRUNE_EVERY` を読む。値は分。 */
@@ -53,6 +56,8 @@ export interface AttachmentPrunerOptions {
   readonly stores: Pick<Stores, 'attachments'>;
   /** `readAttachmentPruneConfig().everyMinutes`。`null` なら周期を仕込まない。 */
   readonly everyMinutes: number | null;
+  /** `attachment_fetch` の写しの置き場（`attachmentCopiesDir(cwd)`）。無ければ写しは掃かない。 */
+  readonly copiesDir?: string;
   /** テスト用。指定すると `everyMinutes` から求めた間隔を上書きする。 */
   readonly intervalMs?: number;
   readonly now?: () => Date;
@@ -86,12 +91,23 @@ export function startAttachmentPruning(options: AttachmentPrunerOptions): Attach
   };
   options.signal?.addEventListener('abort', stop, { once: true });
 
+  // 写しの掃除の失敗は、添付本体の掃除の結果を巻き込まない。
+  const pruneCopies = async (): Promise<void> => {
+    if (options.copiesDir === undefined) return;
+    try {
+      await pruneAttachmentCopies(options.stores, options.copiesDir, options.now?.() ?? new Date());
+    } catch (error: unknown) {
+      process.stderr.write(`alteroidd: 添付の写しの掃除に失敗しました: ${reasonOf(error)}\n`);
+    }
+  };
+
   const runOnce = (): Promise<number | null> => {
     // 重ねない。
     if (inFlight !== null) return inFlight;
     inFlight = options.stores.attachments
       .prune(options.now?.() ?? new Date())
-      .then((pruned) => {
+      .then(async (pruned) => {
+        await pruneCopies();
         options.onResult?.(pruned);
         return pruned;
       })

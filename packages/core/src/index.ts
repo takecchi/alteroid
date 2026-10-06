@@ -320,6 +320,7 @@ export {
   buildExternalEventPrompt,
   EXTERNAL_EVENT_FRAMING,
   externalViaLine,
+  externalAttachmentSection,
   buildManagerSystemPrompt,
   buildSelfInitiativePrompt,
   buildTimerPrompt,
@@ -1491,6 +1492,7 @@ export {
   ATTACHMENT_UNBOUND_TTL_MS,
   AttachmentRejectedError,
   DEFAULT_ATTACHMENT_LIMITS,
+  canBindAttachmentTo,
   isAttachmentImageMediaType,
   isAttachmentPrunable,
   normalizeAttachmentMediaType,
@@ -1501,6 +1503,7 @@ export {
   validateAttachmentBatch,
   validateAttachmentInput,
   type AttachmentBindResult,
+  type AttachmentBindTarget,
   type AttachmentImageMediaType,
   type AttachmentLimits,
   type AttachmentLimitsConfig,
@@ -1512,3 +1515,11 @@ export {
 } from './attachment.js';
 export { verifyAttachmentStoreContract } from './attachment-contract.js';
 export { resolveTurnAttachments, type ResolvedTurnAttachments } from './attachment-turn.js';
+export {
+  ATTACHMENT_COPY_MAX_AGE_MS,
+  attachmentCopiesDir,
+  fetchAttachmentCopy,
+  pruneAttachmentCopies,
+  type AttachmentCopy,
+  type AttachmentFetchResult,
+} from './attachment-fetch.js';

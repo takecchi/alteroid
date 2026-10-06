@@ -214,7 +214,7 @@
         "operationId": "postAttachments",
         "tags": ["attachments"],
         "summary": "添付を預かる（生のバイト列）",
-        "description": "本文は**生のバイト列**で、名前と MIME はクエリ（`name` / `type`）で運ぶ。**`content-type` は `application/octet-stream` だけを受ける**（それ以外は 415）——CORS の単純リクエストにさせず、ブラウザが必ず preflight を通すため（`deliberateClient` と同じ考え）。認証は他の経路と同じ。本文の上限は添付1つぶんの最大値（超えたら 413）。画像（png / jpeg / webp / gif）は宣言と中身の先頭が一致しなければ 400。返った `id` を `POST /chat` の `attachments` に渡すと発言へ結び付く。結び付けないまま 1 時間たったものは掃除される。",
+        "description": "本文は**生のバイト列**で、名前と MIME はクエリ（`name` / `type`）で運ぶ。**`content-type` は `application/octet-stream` だけを受ける**（それ以外は 415）——CORS の単純リクエストにさせず、ブラウザが必ず preflight を通すため（`deliberateClient` と同じ考え）。認証は他の経路と同じ。本文の上限は添付1つぶんの最大値（超えたら 413）。画像（png / jpeg / webp / gif）は宣言と中身の先頭が一致しなければ 400。返った `id` を `POST /chat` の `attachments` に渡すと発言へ結び付く。結び付けないまま 1 時間たったものは掃除される。**連携の鍵（`altk_`）もこの口だけは通れる**（自分の外部イベントに付ける添付を上げるため。#3113 段3）：`uploadedBy` は `integration:<keyId>` になり、その鍵が `POST /events` で付けられるのは自分が上げた添付だけ。本文の上限は鍵の `maxBodyBytes` ではなく添付の上限（上記）に従い、1 回として鍵の回数（429）に数える。鍵は添付を読み出せない（`GET /attachments/:id` は 403）。",
         "requestBody": {
           "required": true,
           "description": "添付の中身（生のバイト列）。",
@@ -297,7 +297,8 @@
                         "total_too_large",
                         "media_type_missing",
                         "attachment_missing",
-                        "attachment_conflict"
+                        "attachment_conflict",
+                        "attachment_forbidden"
                       ]
                     }
                   },
@@ -325,7 +326,8 @@
                         "total_too_large",
                         "media_type_missing",
                         "attachment_missing",
-                        "attachment_conflict"
+                        "attachment_conflict",
+                        "attachment_forbidden"
                       ]
                     }
                   },
@@ -1863,6 +1865,33 @@
                             }
                           },
                           "required": ["keyId", "name"]
+                        },
+                        "attachments": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "name": {
+                                "type": "string"
+                              },
+                              "mediaType": {
+                                "type": "string"
+                              },
+                              "size": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "sha256": {
+                                "type": "string"
+                              }
+                            },
+                            "required": ["id", "name", "mediaType", "size", "sha256"]
+                          }
                         },
                         "summary": {
                           "type": "string"
@@ -6495,6 +6524,33 @@
                                 },
                                 "required": ["keyId", "name"]
                               },
+                              "attachments": {
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "properties": {
+                                    "id": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "name": {
+                                      "type": "string"
+                                    },
+                                    "mediaType": {
+                                      "type": "string"
+                                    },
+                                    "size": {
+                                      "type": "integer",
+                                      "minimum": 0,
+                                      "maximum": 9007199254740991
+                                    },
+                                    "sha256": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": ["id", "name", "mediaType", "size", "sha256"]
+                                }
+                              },
                               "summary": {
                                 "type": "string"
                               }
@@ -9920,6 +9976,33 @@
                                   },
                                   "required": ["keyId", "name"]
                                 },
+                                "attachments": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "id": {
+                                        "type": "string",
+                                        "minLength": 1
+                                      },
+                                      "name": {
+                                        "type": "string"
+                                      },
+                                      "mediaType": {
+                                        "type": "string"
+                                      },
+                                      "size": {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 9007199254740991
+                                      },
+                                      "sha256": {
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": ["id", "name", "mediaType", "size", "sha256"]
+                                  }
+                                },
                                 "summary": {
                                   "type": "string"
                                 }
@@ -11243,6 +11326,33 @@
                                     }
                                   },
                                   "required": ["keyId", "name"]
+                                },
+                                "attachments": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "id": {
+                                        "type": "string",
+                                        "minLength": 1
+                                      },
+                                      "name": {
+                                        "type": "string"
+                                      },
+                                      "mediaType": {
+                                        "type": "string"
+                                      },
+                                      "size": {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 9007199254740991
+                                      },
+                                      "sha256": {
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": ["id", "name", "mediaType", "size", "sha256"]
+                                  }
                                 },
                                 "summary": {
                                   "type": "string"
@@ -12568,6 +12678,33 @@
                                 },
                                 "required": ["keyId", "name"]
                               },
+                              "attachments": {
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "properties": {
+                                    "id": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "name": {
+                                      "type": "string"
+                                    },
+                                    "mediaType": {
+                                      "type": "string"
+                                    },
+                                    "size": {
+                                      "type": "integer",
+                                      "minimum": 0,
+                                      "maximum": 9007199254740991
+                                    },
+                                    "sha256": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": ["id", "name", "mediaType", "size", "sha256"]
+                                }
+                              },
                               "summary": {
                                 "type": "string"
                               }
@@ -13879,6 +14016,33 @@
                                   }
                                 },
                                 "required": ["keyId", "name"]
+                              },
+                              "attachments": {
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "properties": {
+                                    "id": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "name": {
+                                      "type": "string"
+                                    },
+                                    "mediaType": {
+                                      "type": "string"
+                                    },
+                                    "size": {
+                                      "type": "integer",
+                                      "minimum": 0,
+                                      "maximum": 9007199254740991
+                                    },
+                                    "sha256": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": ["id", "name", "mediaType", "size", "sha256"]
+                                }
                               },
                               "summary": {
                                 "type": "string"
@@ -15836,7 +16000,7 @@
         "operationId": "postEvents",
         "tags": ["events"],
         "summary": "外部イベントをクローンへ届ける",
-        "description": "自作ツール・ショートカット・CI からクローンへ出来事を届ける。何をするかはここで決めない（対応表を持った瞬間に自動化ジョブに戻る）。",
+        "description": "自作ツール・ショートカット・CI からクローンへ出来事を届ける。何をするかはここで決めない（対応表を持った瞬間に自動化ジョブに戻る）。**`attachments`（任意）— `POST /attachments` が返した id を渡すと、その添付がクローンのターンへ届く（画像はモデルへの入力として、すべての添付は通知行として）。** 検証と結び付けは投函の前に行い、断るときはイベントを投函しない。**連携の鍵（`altk_`）で送るときは、その鍵自身が`POST /attachments` で上げた添付だけ**付けられる（別の鍵・アカウント・operator が上げたものは 400）。人間・operator は `POST /chat` と同じ規則（上げた主体は問わない）。結び付いた添付は別のイベント・会話へ使い回せない。",
         "responses": {
           "200": {
             "description": "受信箱へ積んだ。",
@@ -15859,7 +16023,7 @@
             }
           },
           "400": {
-            "description": "本文が JSON として不正。",
+            "description": "本文が JSON として不正。または添付を付けられない（`code`: `attachment_missing`＝無い・期限切れ、`attachment_conflict`＝すでに別の会話・外部イベントに結び付いている、`attachment_forbidden`＝連携の鍵が、その鍵自身が上げていない添付を付けようとした、`too_many`＝個数の上限超え）。いずれもイベントは投函されない。",
             "content": {
               "application/json": {
                 "schema": {
@@ -15867,6 +16031,19 @@
                   "properties": {
                     "error": {
                       "type": "string"
+                    },
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "too_large",
+                        "magic_mismatch",
+                        "too_many",
+                        "total_too_large",
+                        "media_type_missing",
+                        "attachment_missing",
+                        "attachment_conflict",
+                        "attachment_forbidden"
+                      ]
                     }
                   },
                   "required": ["error"]
@@ -15907,7 +16084,7 @@
             }
           },
           "413": {
-            "description": "連携の鍵の本文の上限（既定 1 MiB）を超えた。",
+            "description": "連携の鍵の本文の上限（既定 1 MiB。連携の鍵でだけ。`POST /attachments` には掛からない）を超えた。または添付の合計の上限超え（`code`: `total_too_large`）。",
             "content": {
               "application/json": {
                 "schema": {
@@ -15915,6 +16092,19 @@
                   "properties": {
                     "error": {
                       "type": "string"
+                    },
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "too_large",
+                        "magic_mismatch",
+                        "too_many",
+                        "total_too_large",
+                        "media_type_missing",
+                        "attachment_missing",
+                        "attachment_conflict",
+                        "attachment_forbidden"
+                      ]
                     }
                   },
                   "required": ["error"]
@@ -15950,7 +16140,14 @@
                     "type": "string",
                     "minLength": 1
                   },
-                  "payload": {}
+                  "payload": {},
+                  "attachments": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  }
                 },
                 "required": ["source"]
               }
@@ -15964,7 +16161,7 @@
         "operationId": "postEventsBySource",
         "tags": ["events"],
         "summary": "本文の形を選べない webhook 用の入口",
-        "description": "他人が形を決めている webhook 用。本文をそのまま payload として運ぶので、送り元を改造できなくても届く（GitHub や CI からそのまま叩ける）。JSON として読めない本文は文字列のまま渡す。",
+        "description": "他人が形を決めている webhook 用。本文をそのまま payload として運ぶので、送り元を改造できなくても届く（GitHub や CI からそのまま叩ける）。JSON として読めない本文は文字列のまま渡す。**添付はクエリ `?attachments=<id>&attachments=<id>` で渡す**（本文は payload まるごとなので、`POST /events` の本文の `attachments` とは渡し方だけが違い、検証・結び付け・連携の鍵の扱いは同じ）。クエリを付けない既存の呼び手は何も変わらない。",
         "requestBody": {
           "required": true,
           "description": "**本文まるごとが payload になる。** 送り元が形を決めているので中身は縛らない。JSON として読めない本文は文字列のまま渡す。`content-type: application/json` は必要（ブラウザの単純リクエストで判断材料を書き込まれないため）。サーバは空の本文も受けて空文字列にするが、**spec としては本文を必須にしてある** — 生成クライアントに content-type を必ず付けさせるため（運ぶものが無いなら `{}`）。",
@@ -15991,6 +16188,35 @@
                     }
                   },
                   "required": ["ok", "id"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "本文が JSON として不正。または添付を付けられない（`code`: `attachment_missing`＝無い・期限切れ、`attachment_conflict`＝すでに別の会話・外部イベントに結び付いている、`attachment_forbidden`＝連携の鍵が、その鍵自身が上げていない添付を付けようとした、`too_many`＝個数の上限超え）。いずれもイベントは投函されない。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "too_large",
+                        "magic_mismatch",
+                        "too_many",
+                        "total_too_large",
+                        "media_type_missing",
+                        "attachment_missing",
+                        "attachment_conflict",
+                        "attachment_forbidden"
+                      ]
+                    }
+                  },
+                  "required": ["error"]
                 }
               }
             }
@@ -16028,7 +16254,7 @@
             }
           },
           "413": {
-            "description": "連携の鍵の本文の上限（既定 1 MiB）を超えた。",
+            "description": "連携の鍵の本文の上限（既定 1 MiB。連携の鍵でだけ。`POST /attachments` には掛からない）を超えた。または添付の合計の上限超え（`code`: `total_too_large`）。",
             "content": {
               "application/json": {
                 "schema": {
@@ -16036,6 +16262,19 @@
                   "properties": {
                     "error": {
                       "type": "string"
+                    },
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "too_large",
+                        "magic_mismatch",
+                        "too_many",
+                        "total_too_large",
+                        "media_type_missing",
+                        "attachment_missing",
+                        "attachment_conflict",
+                        "attachment_forbidden"
+                      ]
                     }
                   },
                   "required": ["error"]
@@ -16077,6 +16316,23 @@
           }
         },
         "parameters": [
+          {
+            "in": "query",
+            "name": "attachments",
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              ]
+            }
+          },
           {
             "schema": {
               "type": "string"

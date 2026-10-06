@@ -9,6 +9,7 @@
  */
 import type { ApprovalQuestion, ApprovalSelection, JournalEntry } from '@alteroid/core';
 
+import { uploadAttachment, type UploadedAttachment } from '../attachments.js';
 import { createClient } from '../client.js';
 import { withErrorReason } from '../format.js';
 import { describeInterruptOutcome } from '../interrupt.js';
@@ -52,6 +53,8 @@ export interface ConversationMessage {
   /** `inbound` = 人間の発言 / `outbound` = クローンの返答。 */
   role: 'inbound' | 'outbound';
   text: string;
+  /** 発言に添えた添付のメタデータ（中身は無い）。 */
+  attachments?: { id: string; name: string; mediaType: string; size: number }[];
 }
 
 export interface HeaderCounts {
@@ -195,9 +198,15 @@ export interface TuiApi {
   readonly baseUrl: string;
   /** 失敗（HTTP エラー・接続断）は `ApiError` を投げる。 */
   chat(
-    input: { text: string; conversationId?: string },
+    input: { text: string; conversationId?: string; attachments?: string[] },
     signal: AbortSignal,
   ): AsyncGenerator<ChatEvent>;
+  /** `POST /attachments`（生のバイト列）。失敗は `ApiError` ではなく普通の `Error`（理由つき）。 */
+  uploadAttachment(file: {
+    name: string;
+    mediaType: string;
+    bytes: Uint8Array;
+  }): Promise<UploadedAttachment>;
   /**
    * 履歴の一覧。`reachedStart` が偽なら、窓（`scanned` 件の往復）の外に古い会話が残っているかもしれない
    * （一覧が空でも「無い」とは言えない）。`hiddenByLimit` は窓の中で上限に収まらず省いた会話の数。
@@ -323,6 +332,9 @@ export function createTuiApi(target: Target): TuiApi {
       const body = JSON.stringify({
         text: input.text,
         conversationId: input.conversationId ?? undefined,
+        ...(input.attachments === undefined || input.attachments.length === 0
+          ? {}
+          : { attachments: input.attachments }),
       });
       for await (const event of openStream(
         '/chat',
@@ -334,6 +346,10 @@ export function createTuiApi(target: Target): TuiApi {
         const data = event.json<Record<string, unknown>>() ?? {};
         yield { ...data, type: event.name } as ChatEvent;
       }
+    },
+
+    uploadAttachment(file) {
+      return uploadAttachment(target, file);
     },
 
     async *chatStream(conversationId, signal) {

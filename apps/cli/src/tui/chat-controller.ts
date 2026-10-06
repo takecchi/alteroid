@@ -16,6 +16,12 @@
  *   （考えている…・ここまでの文章）を出し、続きを流す（Issue #2652）。送信と同じ `onEvent` を
  *   共有し、その間は `busy` で、発言は追送になる。
  */
+import {
+  AttachmentDraft,
+  attachmentLinesOf,
+  describeAttachment,
+  uploadDraft,
+} from '../attachments.js';
 import type { ChatEvent, ConversationMessage, ConversationSummary, TuiApi } from './api.js';
 import type { LogEntry, LogKind } from './log.js';
 import { redactBody, redactedErrorMessage, redactError } from '../redact.js';
@@ -47,6 +53,9 @@ export const initialChatState: ChatState = {
 };
 
 const messageOf = redactedErrorMessage;
+
+/** 添えかけが無いときの結果（待たずに同期で進める。送信の前に非同期の隙間を作らない）。 */
+const NO_ATTACHMENTS = { ids: [] as string[], lines: [] as string[] };
 
 interface Deferred<T> {
   promise: Promise<T>;
@@ -98,10 +107,70 @@ export class ChatController {
   /** 履歴から開いた会話の進行中のターンに戻っている接続（無ければ `null`）。自分の送信とは別。 */
   private watch: AbortController | null = null;
 
+  /** 次に送る発言へ添えかけのファイル（`/attach`）。 */
+  private readonly draft = new AttachmentDraft();
   /** 会話ごとに、最後に既読の要求を送った発言の id。 */
   private readonly markedThrough = new Map<string, string>();
 
   constructor(private readonly api: TuiApi) {}
+
+  /** `/attach <path>`。 */
+  async attach(args: string): Promise<void> {
+    const path = args.trim().replace(/^(['"])(.*)\1$/, '$2');
+    if (path === '') {
+      this.addSystem('使い方: /attach <path>');
+      return;
+    }
+    const added = await this.draft.add(path);
+    this.addSystem(
+      added.ok
+        ? `添えかけ ${this.draft.count} 件（${added.file.name}）。本文を打って送ると一緒に上がる（空行の Enter なら添付だけを送る）`
+        : `添えられない: ${added.reason}`,
+    );
+  }
+
+  /** 添えかけがあるか（空の入力欄の Enter で添付だけを送れるか）。 */
+  hasAttachments(): boolean {
+    return this.draft.count > 0;
+  }
+
+  /** `/attachments`。 */
+  listAttachments(): void {
+    this.addSystem(this.draft.describe().join('\n'));
+  }
+
+  /** `/detach <番号|all>`。 */
+  detach(args: string): void {
+    if (args.trim() === '') {
+      this.addSystem('使い方: /detach <番号|all>');
+      return;
+    }
+    const removed = this.draft.remove(args);
+    this.addSystem(
+      removed.ok
+        ? `外した: ${removed.removed.map((f) => f.name).join(', ')}（残り ${this.draft.count} 件）`
+        : `外せない: ${removed.reason}`,
+    );
+  }
+
+  /**
+   * 添えかけを上げて、id を返す（無ければ空配列）。**失敗したら `null`**（送らない。添えかけは残す）。
+   * 受けたら（`accepted()`）空にする。
+   */
+  private async uploadDraft(): Promise<{ ids: string[]; lines: string[] } | null> {
+    if (this.draft.count === 0) return { ids: [], lines: [] };
+    const result = await uploadDraft(this.draft, (file) => this.api.uploadAttachment(file));
+    if (!result.ok) {
+      this.addError(
+        `添付を上げられなかったので送っていない: ${redactError(result.reason)}（添えかけは残してある。/attachments で確認、/detach で外せる）`,
+      );
+      return null;
+    }
+    return {
+      ids: result.uploaded.map((a) => a.id),
+      lines: result.uploaded.map(describeAttachment),
+    };
+  }
 
   /** ログに 1 件足す。 */
   private push(kind: LogKind, text: string): void {
@@ -137,14 +206,16 @@ export class ChatController {
 
   /** 発言を送る。応答中なら追送になる。 */
   async send(text: string): Promise<void> {
-    if (text.length === 0) return;
+    if (text.length === 0 && this.draft.count === 0) return;
     if (this.store.getSnapshot().busy) {
       await this.followUp(text);
       return;
     }
     // まだ `open` が来ていない戻り接続があっても、自分のターンを始めるなら要らない（二重に流れる）。
     this.stopWatch();
-    this.push('user', text);
+    const attached = this.draft.count === 0 ? NO_ATTACHMENTS : await this.uploadDraft();
+    if (attached === null) return;
+    this.push('user', [text, ...attached.lines].filter((l) => l !== '').join('\n'));
     this.set({ busy: true, transient: '考えている…' });
     const abort = new AbortController();
     this.abort = abort;
@@ -155,9 +226,15 @@ export class ChatController {
     try {
       const conversationId = this.store.getSnapshot().conversationId;
       for await (const event of this.api.chat(
-        { text, ...(conversationId === null ? {} : { conversationId }) },
+        {
+          text,
+          ...(conversationId === null ? {} : { conversationId }),
+          ...(attached.ids.length === 0 ? {} : { attachments: attached.ids }),
+        },
         abort.signal,
       )) {
+        // サーバが発言を受けた（イベントが届いた）ので、添えかけは空にする。
+        if (attached.ids.length > 0) this.draft.clear();
         reply.see(event);
         this.onEvent(event, opened);
       }
@@ -264,14 +341,24 @@ export class ChatController {
   }
 
   private async followUp(text: string): Promise<void> {
-    this.push('user', text);
+    const attached = this.draft.count === 0 ? NO_ATTACHMENTS : await this.uploadDraft();
+    if (attached === null) return;
+    this.push('user', [text, ...attached.lines].filter((l) => l !== '').join('\n'));
     const opened = this.opened;
     try {
       if (opened === null) throw new Error('会話が始まっていないので、続きを送れなかった');
       const conversationId = await opened.promise;
       const abort = new AbortController();
       try {
-        for await (const event of this.api.chat({ text, conversationId }, abort.signal)) {
+        for await (const event of this.api.chat(
+          {
+            text,
+            conversationId,
+            ...(attached.ids.length === 0 ? {} : { attachments: attached.ids }),
+          },
+          abort.signal,
+        )) {
+          if (attached.ids.length > 0) this.draft.clear();
           if (event.type === 'open') break;
         }
       } finally {
@@ -456,7 +543,7 @@ export class ChatController {
       return {
         seq: this.seq,
         kind: m.role === 'inbound' ? 'user' : 'assistant',
-        text: redactBody(m.text),
+        text: redactBody([m.text, ...attachmentLinesOf(m.attachments)].join('\n')),
       };
     });
     return entries.length > MAX_ENTRIES ? entries.slice(-MAX_ENTRIES) : entries;

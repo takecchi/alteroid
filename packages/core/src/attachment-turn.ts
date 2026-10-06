@@ -11,7 +11,7 @@ import type { AttachmentRef } from './schema.js';
  * - **画像**（png / jpeg / webp / gif。中身の先頭で再確認する。宣言ではなく中身が決める）は
  *   base64 にして {@link AgentInputImage} へ。モデルへ渡る。
  * - **すべての添付**について通知行を1行ずつ作る（`[添付] id=… name=… type=… size=… sha256=…`）。
- *   画像以外の取り出し口は段2。いまはメタデータだけを渡す。
+ *   画像以外は中身を渡さず、`attachment_fetch` で取り出して `Read` で開ける案内を付ける（段2）。
  * - **見つからない・読めない添付でもターンは続ける。** 通知行で「見つからない（期限切れの可能性）」と言う。
  *
  * 中身は**ここで読むだけ**で、受信箱・日誌・記憶には写さない。
@@ -22,6 +22,9 @@ export interface ResolvedTurnAttachments {
   /** 通知行（添付ごとに1行。`refs` と同じ順）。 */
   readonly noticeLines: string[];
 }
+
+/** 取り出しの案内（画像以外の通知行に付ける。画像も取り出せる）。 */
+export const FETCH_HINT = ' （attachment_fetch で取り出して Read で開ける）';
 
 export async function resolveTurnAttachments(
   stores: { readonly attachments: AttachmentStore },
@@ -46,7 +49,7 @@ export async function resolveTurnAttachments(
     }
     const imageType = sniffAttachmentImageType(found.bytes);
     if (imageType === undefined) {
-      noticeLines.push(`[添付] ${described}`);
+      noticeLines.push(`[添付] ${described}${FETCH_HINT}`);
       continue;
     }
     images.push({
@@ -54,7 +57,7 @@ export async function resolveTurnAttachments(
       data: Buffer.from(found.bytes).toString('base64'),
       name: ref.name,
     });
-    noticeLines.push(`[添付] ${described}（画像として渡した）`);
+    noticeLines.push(`[添付] ${described}（画像として渡した）${FETCH_HINT}`);
   }
   return { images, noticeLines };
 }

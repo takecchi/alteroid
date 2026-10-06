@@ -37,6 +37,12 @@ export const HELP_EXAMPLES = {
     'alteroid progress                       # 既定の窓で',
     'alteroid progress --window-hours 24     # 直近24時間の消化で見込みを出す',
   ),
+  attachmentsGet: examples(
+    'alteroid attachments meta <id>              # 名前・種類・大きさを見る',
+    'alteroid attachments get <id>               # 控えの名前でカレントに保存',
+    'alteroid attachments get <id> -o out.log    # 保存先を指定',
+    'alteroid attachments get <id> -o -          # 標準出力へ',
+  ),
   memorySet: examples(
     'alteroid memory set values -f ./values.md            # ファイルの中身で置き換える',
     'cat ./values.md | alteroid memory set values         # 標準入力から',

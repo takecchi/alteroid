@@ -361,7 +361,7 @@ describe('門番: 既定で拒否（403）', () => {
     expect(journal).not.toContain('ci.other');
   });
 
-  it('openapi の全ルートを回す: 連携の鍵で通るのは source 一致の2口だけで、残りはすべて 403', async () => {
+  it('openapi の全ルートを回す: 連携の鍵で通るのは source 一致の2口と添付のアップロード（POST /attachments）だけで、残りはすべて 403', async () => {
     const app = buildApp();
     const { value } = await issue(app, { source: 'ci.main' });
     const spec = (await (await app.request('/openapi.json')).json()) as {
@@ -375,6 +375,9 @@ describe('門番: 既定で拒否（403）', () => {
     expect(routes.length).toBeGreaterThan(80);
     expect(routes).toContainEqual({ method: 'post', path: '/events' });
     expect(routes).toContainEqual({ method: 'post', path: '/events/{source}' });
+    expect(routes).toContainEqual({ method: 'post', path: '/attachments' });
+    expect(routes).toContainEqual({ method: 'get', path: '/attachments/{id}' });
+    expect(routes).toContainEqual({ method: 'get', path: '/attachments/{id}/meta' });
     expect(routes).toContainEqual({ method: 'post', path: '/integration-keys' });
     expect(routes).toContainEqual({ method: 'post', path: '/integration-keys/{id}/revoke' });
 
@@ -386,6 +389,7 @@ describe('門番: 既定で拒否（403）', () => {
 
     const wrongly: string[] = [];
     const denied: string[] = [];
+    const passedGate: string[] = [];
     await captureStderr(async () => {
       for (const { method, path } of routes) {
         if (isPublic(path)) continue;
@@ -398,15 +402,25 @@ describe('門番: 既定で拒否（403）', () => {
           ...(hasBody ? { body: JSON.stringify({ source: 'other.src' }) } : {}),
         });
         // `POST /events/{source}` はパスの `x` が鍵の source（ci.main）と違うので 403。
+        // `POST /attachments` は門を通る（ここでは content-type が octet-stream でないので、その口自身の 415 で
+        // 止まる。**403 でないこと**が「門を通った」の証拠）。
         if (response.status === 403) denied.push(`${method} ${path}`);
-        else wrongly.push(`${method} ${path} -> ${String(response.status)}`);
+        else if (method === 'post' && path === '/attachments' && response.status === 415) {
+          passedGate.push(`${method} ${path}`);
+        } else wrongly.push(`${method} ${path} -> ${String(response.status)}`);
       }
     });
     expect(wrongly).toEqual([]);
+    expect(passedGate).toEqual(['post /attachments']);
+    // 添付の読み出しは鍵には開かない（上げるだけで、読めない）。
+    expect(denied).toContain('get /attachments/{id}');
+    expect(denied).toContain('get /attachments/{id}/meta');
     expect(denied).toContain('post /events/{source}');
     expect(denied).toContain('get /integration-keys');
     expect(denied).toContain('post /integration-keys');
-    expect(denied.length).toBe(routes.filter(({ path }) => !isPublic(path)).length);
+    expect(denied.length + passedGate.length).toBe(
+      routes.filter(({ path }) => !isPublic(path)).length,
+    );
   });
 
   it('陰性対照: 同じ口は持ち主（operator）には開いている（403 は鍵の資格が理由）', async () => {
@@ -636,7 +650,11 @@ describe('日誌が書けなければ、状態を変えず 500', () => {
 });
 
 describe('部品', () => {
-  it('judgeIntegrationRoute: 通すのは POST /events と source 一致の POST /events/:source だけ', () => {
+  it('judgeIntegrationRoute: 通すのは POST /events・source 一致の POST /events/:source・添付のアップロード POST /attachments だけ', () => {
+    expect(judgeIntegrationRoute('POST', '/attachments', 'ci')).toEqual({
+      allowed: true,
+      via: 'attachment-upload',
+    });
     expect(judgeIntegrationRoute('POST', '/events', 'ci')).toEqual({
       allowed: true,
       via: 'body-source',
@@ -658,6 +676,13 @@ describe('部品', () => {
       ['POST', '/event'],
       ['POST', '/integration-keys'],
       ['PUT', '/events/ci'],
+      // 添付は上げるだけ。読み出し・ほかの形は通さない。
+      ['GET', '/attachments'],
+      ['GET', '/attachments/x'],
+      ['GET', '/attachments/x/meta'],
+      ['POST', '/attachments/'],
+      ['POST', '/attachments/x'],
+      ['PUT', '/attachments'],
     ] as const) {
       expect(judgeIntegrationRoute(method, path, 'ci'), `${method} ${path}`).toEqual({
         allowed: false,

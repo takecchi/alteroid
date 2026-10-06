@@ -489,6 +489,12 @@ export function inboxBacklogDedupeKey(event: InboxEvent): string {
         event.type,
         event.source,
         event.identity ?? JSON.stringify(event.payload ?? null),
+        // **添付の id を鍵に含める（#3113 段3）。** 本文が同じでも添付が違う合図を「同じ中身」と見なすと、
+        // 束ね読み（`#mergedExternalBatch`）が本文を1回だけ出す形で片方の添付を黙って落とす。添付の無い合図は
+        // 鍵が変わらない（既存の鍵と同じ文字列）。
+        ...(event.attachments === undefined || event.attachments.length === 0
+          ? []
+          : [event.attachments.map((ref) => ref.id).join(',')]),
       ].join(DEDUPE_SEPARATOR);
     case 'timer':
       return [event.type, event.kind, event.target ?? '', event.cause ?? 'schedule'].join(

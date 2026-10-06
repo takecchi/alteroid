@@ -684,6 +684,13 @@ export const inboxEventSchema = z.discriminatedUnion('type', [
      * 立てられない**（デーモンが、門番の解決した principal から詰める）。
      */
     via: z.object({ keyId: z.string(), name: z.string() }).optional(),
+    /**
+     * **この出来事に添えた添付の参照**（#3113 段3。メタデータだけ。中身は `stores.attachments`）。
+     * 連携の鍵・人間・operator が `POST /attachments` で上げ、`POST /events` で id を渡したもの。
+     * **`identity` / `via` と同じく、リクエスト本文の `attachments` は id の配列で、参照そのもの（名前・sha256）は
+     * デーモンが置き場の控えから詰める**（外から偽の参照を差し込めない）。
+     */
+    attachments: z.array(attachmentRefSchema).optional(),
   }),
   z.object({
     type: z.literal('self_initiative'),
@@ -1811,6 +1818,8 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
     source: z.string(),
     /** 連携の鍵経由で届いたとき、その鍵の id と名前（#3113）。鍵の値は書かない。 */
     via: z.object({ keyId: z.string(), name: z.string() }).optional(),
+    /** この出来事に添えた添付の参照（#3113 段3。**メタデータだけで、中身は日誌に書かない**）。 */
+    attachments: z.array(attachmentRefSchema).optional(),
     /**
      * 届いた中身。長いものは切って入る。
      *

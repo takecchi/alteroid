@@ -10,11 +10,15 @@
 export type IntegrationRouteVerdict =
   | { allowed: true; via: 'body-source' }
   | { allowed: true; via: 'path-source' }
+  /** `POST /attachments`（自分の送信に付ける添付のアップロード。#3113 段3）。本文の上限は添付の上限に任せる。 */
+  | { allowed: true; via: 'attachment-upload' }
   | { allowed: false };
 
 /**
  * 連携の鍵が通れるのは `POST /events`（本文の source が鍵の source と一致するとき）と
- * `POST /events/:source`（パスが一致するとき）だけ。後者はここで判定する。前者はハンドラが本文を見て判定する。
+ * `POST /events/:source`（パスが一致するとき）、そして**自分の送信に付ける添付のアップロード**
+ * `POST /attachments`（#3113 段3）だけ。後者2つはここで判定する。前者はハンドラが本文を見て判定する。
+ * 添付の読み出し（`GET /attachments/:id` `GET /attachments/:id/meta`）は通さない（鍵は上げるだけで、読めない）。
  * **それ以外（メソッド違い・別のパス・末尾スラッシュ・デコードできないパス）はすべて拒否。**
  */
 export function judgeIntegrationRoute(
@@ -24,6 +28,7 @@ export function judgeIntegrationRoute(
 ): IntegrationRouteVerdict {
   if (method.toUpperCase() !== 'POST') return { allowed: false };
   if (path === '/events') return { allowed: true, via: 'body-source' };
+  if (path === '/attachments') return { allowed: true, via: 'attachment-upload' };
   const prefix = '/events/';
   if (!path.startsWith(prefix)) return { allowed: false };
   const segment = path.slice(prefix.length);

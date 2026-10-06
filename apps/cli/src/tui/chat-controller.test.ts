@@ -1,4 +1,9 @@
+import { writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+
 import { describe, expect, it, vi } from 'vitest';
+
+import { makeTempDir } from '../../../../vitest.tmpdir.js';
 
 import { ChatController, MAX_ENTRIES, RESUME_PROBE_LIMIT } from './chat-controller.js';
 import { fakeApi, gate } from './fake-api.js';
@@ -660,6 +665,46 @@ describe('/resume（明示して進行中の会話へ戻る）', () => {
     expect(state().busy).toBe(true);
     hold.open();
     await flush();
+  });
+});
+
+describe('/attach（添えかけ）', () => {
+  it('送るときに上げ、id を /chat の attachments に入れ、受理後に添えかけを空にする。失敗なら送らず残す', async () => {
+    const dir = await makeTempDir('alteroid-tui-attach-');
+    const path = join(dir, 'a.log');
+    await writeFile(path, 'log');
+    const { api, controller } = setup();
+    await controller.attach(path);
+    api.uploadFails = '繋がらない';
+    await controller.send('見て');
+    expect(api.chatCalls).toEqual([]);
+    expect(controller.store.getSnapshot().entries.at(-1)?.text).toContain('添えかけは残してある');
+    api.uploadFails = null;
+    api.scripts.push([{ type: 'open', conversationId: 'c1' }, { type: 'done' }]);
+    await controller.send('見て');
+    expect(api.chatCalls).toEqual([{ text: '見て', attachments: ['att-2'] }]);
+    expect(
+      controller.store.getSnapshot().entries.some((e) => e.text.includes('[添付] a.log')),
+    ).toBe(true);
+    api.scripts.push([{ type: 'done' }]);
+    await controller.send('次');
+    expect(api.chatCalls[1]).toEqual({ text: '次', conversationId: 'c1' });
+  });
+
+  it('添えかけがあれば空の発言で添付だけを送れる。添えかけが無い空の発言は送らない', async () => {
+    const dir = await makeTempDir('alteroid-tui-attach-');
+    const path = join(dir, 'a.log');
+    await writeFile(path, 'log');
+    const { api, controller } = setup();
+    await controller.send('');
+    expect(api.chatCalls).toEqual([]);
+    expect(controller.hasAttachments()).toBe(false);
+    await controller.attach(path);
+    expect(controller.hasAttachments()).toBe(true);
+    api.scripts.push([{ type: 'open', conversationId: 'c1' }, { type: 'done' }]);
+    await controller.send('');
+    expect(api.chatCalls).toEqual([{ text: '', attachments: ['att-1'] }]);
+    expect(controller.hasAttachments()).toBe(false);
   });
 });
 
