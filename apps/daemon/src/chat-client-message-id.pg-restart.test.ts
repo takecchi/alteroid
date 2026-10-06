@@ -13,10 +13,15 @@ import {
 } from '@alteroid/core';
 import { createPgStoresFromDb } from '@alteroid/storage-pg';
 import type { PGlite } from '@electric-sql/pglite';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 
 import { createApp } from './app.js';
-import { createMigratedPglite } from './pglite-template.test-support.js';
+import { createMigratedPglite, migratedTemplate } from './pglite-template.test-support.js';
+
+// PGlite の雛形（WASM の起動 + migrate）を、最初の歯や beforeEach ではなくここで前払いする（#3034）。
+beforeAll(async () => {
+  await migratedTemplate();
+}, 60_000);
 
 const quietSdk = (() => {
   async function* generate(): AsyncGenerator<SDKMessage, void> {
