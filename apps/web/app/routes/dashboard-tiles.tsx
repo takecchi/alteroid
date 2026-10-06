@@ -213,11 +213,8 @@ function NextRunTile() {
  */
 function UsageTile() {
   // 分の時計で窓を引き直す（#3699）。鍵は日付の文字列だけから作るので、分が進んでも日が同じなら
-  // 鍵は変わらず、日をまたいだときだけ新しい日の窓になる。
-  // 分の時計は、描き直す合図として使う。値そのものは使わない: 最初の描画では、誰も購読していな
-  // かったあいだの古い値を返しうる（購読の後で読み直す）ので、窓の今日を描画の時点の時刻から取る。
-  useMinuteNow();
-  const browserNow = new Date();
+  // 鍵は変わらず、日をまたいだときだけ新しい日の窓になる。最初の描画から新しい時刻が返る（#3721）。
+  const browserNow = new Date(useMinuteNow());
   const usage = useUsage(
     {
       from: shiftedDate(browserNow, -USAGE_WINDOW_DAYS),
