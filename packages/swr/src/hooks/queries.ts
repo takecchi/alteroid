@@ -548,19 +548,43 @@ export function useConversations(limit = 30) {
  * 規則そのものは画面側で再実装しない**（サーバの `supersedes` / `supersededBy`
  * をそのまま束ねるだけ。`packages/core/src/conversation.ts` の
  * `computeSupersededIds` が正本）。
+ *
+ * **`retryOnNotFound: false` は、会話かどうか分からない id を引く画面向け**（未了の仕事の
+ * 出どころ）。404 で再試行しない。既定は `true`（SWR の既定のまま）。
  */
-export function useConversation(id: string | null, options: { includeSuperseded?: boolean } = {}) {
+export function useConversation(
+  id: string | null,
+  options: { includeSuperseded?: boolean; retryOnNotFound?: boolean } = {},
+) {
   const api = useApi();
   const includeSuperseded = options.includeSuperseded ?? false;
-  return useSWR(id === null ? null : KEY.conversation(id, includeSuperseded), ({ id }) =>
-    api.api
-      .GET('/conversations/{id}', {
-        params: {
-          path: { id },
-          query: { includeSuperseded: includeSuperseded ? 'true' : 'false' },
+  const retryOnNotFound = options.retryOnNotFound ?? true;
+  return useSWR(
+    id === null ? null : KEY.conversation(id, includeSuperseded),
+    ({ id }) =>
+      api.api
+        .GET('/conversations/{id}', {
+          params: {
+            path: { id },
+            query: { includeSuperseded: includeSuperseded ? 'true' : 'false' },
+          },
+        })
+        .then(unwrap),
+    retryOnNotFound
+      ? undefined
+      : {
+          // 404（会話ではない id）は待っても変わらない。既定の再試行に任せると、
+          // 日誌を遡る読みを黙って繰り返す。それ以外の失敗は既定どおり再試行する。
+          onErrorRetry: (error, _key, config, revalidate, { retryCount }) => {
+            if (error instanceof ApiError && error.status === 404) return;
+            if (config.errorRetryCount !== undefined && retryCount > config.errorRetryCount) return;
+            setTimeout(
+              () => void revalidate({ retryCount }),
+              Math.round((Math.random() + 0.5) * (1 << Math.min(retryCount, 8))) *
+                config.errorRetryInterval,
+            );
+          },
         },
-      })
-      .then(unwrap),
   );
 }
 
