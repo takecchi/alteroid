@@ -159,12 +159,11 @@ import {
   AttachmentRejectedError,
   nonBlankString,
   readAttachmentLimits,
-  validateAttachmentBatch,
   type AttachmentLimits,
-  type AttachmentRef,
 } from '@alteroid/core';
 
 import { bearerOf, isOperator, type AuthPlan, type AuthVariables, type Principal } from './auth.js';
+import { checkAndBindAttachments, type AttachmentBatchResult } from './attachment-batch.js';
 import { createFixedWindowRateLimiter, judgeIntegrationRoute } from './integration-gate.js';
 import type { JournalBus } from './journal-bus.js';
 import { Scalar } from '@scalar/hono-api-reference';
@@ -190,6 +189,7 @@ import {
   archiveRemoveResponseSchema,
   archiveSessionsResponseSchema,
   attachmentErrorResponseSchema,
+  attachmentLimitsSchema,
   attachmentMetaSchema,
   authProvidersResponseSchema,
   commitmentListResponseSchema,
@@ -2202,115 +2202,25 @@ export function createApp(deps: AppDeps) {
 
   /**
    * **外部イベントに添える添付を検証して結び付ける**（#3113 段3）。`clone.post` の**前**に呼び、`ok: false` なら
-   * イベントを投函しない（添付を黙って落として本文だけ送る、をしない）。`POST /chat` の添付の検査と同じ順
-   * （個数 → 存在 → 合計 → 結び付き → `bind`）で、**連携の鍵のときだけ「同じ鍵が上げたもの」に絞る**
-   * （`uploadedBy` が `integration:<keyId>` でなければ `attachment_forbidden`。別の鍵・アカウント・operator が
-   * 上げたもの、別の source の鍵のものを、この鍵の送信に付けさせない）。人間・operator は `/chat` と同じで
-   * 上げた主体を問わない。**`/chat` のハンドラとは重複している**（後で共通化できる。ATTACH の作業と衝突させないため
-   * 意図的に抜き出していない）。
+   * イベントを投函しない（添付を黙って落として本文だけ送る、をしない）。検査の本体は `POST /chat` と共通
+   * （`checkAndBindAttachments`）。**連携の鍵のときだけ「同じ鍵が上げたもの」に絞る**
+   * （`uploadedBy` が `integration:<keyId>` でなければ `attachment_forbidden`）。人間・operator は
+   * `/chat` と同じで上げた主体を問わない。
    */
-  async function bindEventAttachments(
+  function bindEventAttachments(
     attachmentIds: readonly string[] | undefined,
     eventId: string,
     principal: Principal,
-  ): Promise<
-    | { ok: true; refs: AttachmentRef[] }
-    | {
-        ok: false;
-        status: 400 | 413;
-        body: {
-          error: string;
-          code:
-            | 'attachment_missing'
-            | 'attachment_conflict'
-            | 'attachment_forbidden'
-            | AttachmentRejectedError['code'];
-        };
-      }
-  > {
-    if (attachmentIds === undefined || attachmentIds.length === 0) return { ok: true, refs: [] };
-    const ids = [...new Set(attachmentIds)];
-    try {
-      validateAttachmentBatch(
-        ids.map(() => 0),
-        attachmentLimits,
-      );
-      const metas = await Promise.all(ids.map((id) => stores.attachments.getMeta(id)));
-      const missing = ids.filter((_, index) => metas[index] === undefined);
-      if (missing.length > 0) {
-        return {
-          ok: false,
-          status: 400,
-          body: {
-            error: `添付が見つからない（期限切れの可能性）: ${missing.join(', ')}`,
-            code: 'attachment_missing',
-          },
-        };
-      }
-      const found = metas.filter((meta) => meta !== undefined);
-      validateAttachmentBatch(
-        found.map((meta) => meta.size),
-        attachmentLimits,
-      );
-      if (principal.kind === 'integration') {
-        const mine = uploaderOf(principal);
-        const foreign = found.filter((meta) => meta.uploadedBy !== mine);
-        if (foreign.length > 0) {
-          return {
-            ok: false,
-            status: 400,
-            body: {
-              error: `この連携の鍵が上げた添付だけを付けられる: ${foreign.map((m) => m.id).join(', ')}`,
-              code: 'attachment_forbidden',
-            },
-          };
-        }
-      }
-      const elsewhere = found.filter(
-        (meta) => meta.conversationId !== undefined || meta.externalEventId !== undefined,
-      );
-      const conflict = (list: readonly string[]) =>
-        ({
-          ok: false,
-          status: 400,
-          body: {
-            error: `すでに別の宛先に結び付いた添付は使えない: ${list.join(', ')}`,
-            code: 'attachment_conflict',
-          },
-        }) as const;
-      if (elsewhere.length > 0) return conflict(elsewhere.map((m) => m.id));
-      const bound = await stores.attachments.bindToExternalEvent(ids, eventId);
-      if (bound.missing.length > 0) {
-        return {
-          ok: false,
-          status: 400,
-          body: {
-            error: `添付が見つからない（期限切れの可能性）: ${bound.missing.join(', ')}`,
-            code: 'attachment_missing',
-          },
-        };
-      }
-      if (bound.conflicts.length > 0) return conflict(bound.conflicts);
-      return {
-        ok: true,
-        refs: found.map((meta) => ({
-          id: meta.id,
-          name: meta.name,
-          mediaType: meta.mediaType,
-          size: meta.size,
-          sha256: meta.sha256,
-        })),
-      };
-    } catch (error) {
-      if (error instanceof AttachmentRejectedError) {
-        return {
-          ok: false,
-          status: error.code === 'too_many' ? 400 : 413,
-          body: { error: reasonOf(error), code: error.code },
-        };
-      }
-      throw error;
-    }
+  ): Promise<AttachmentBatchResult> {
+    return checkAndBindAttachments(attachmentIds, {
+      store: stores.attachments,
+      limits: attachmentLimits,
+      bind: (ids) => stores.attachments.bindToExternalEvent(ids, eventId),
+      isBoundElsewhere: (meta) =>
+        meta.conversationId !== undefined || meta.externalEventId !== undefined,
+      conflictMessage: 'すでに別の宛先に結び付いた添付は使えない',
+      onlyUploadedBy: principal.kind === 'integration' ? uploaderOf(principal) : undefined,
+    });
   }
 
   // --- 稼働の地図 ---------------------------------------------------------
@@ -2956,6 +2866,26 @@ export function createApp(deps: AppDeps) {
       },
     )
 
+    // `/attachments/:id` より前に置く（`limits` を id と取り違えない。Hono は定義順に当てる）。
+    .get(
+      '/attachments/limits',
+      describeRoute({
+        tags: ['attachments'],
+        summary: '添付の上限（このデーモンが実際に使っている値）',
+        description:
+          '環境変数（`ALTEROID_ATTACHMENT_MAX_*`）で変えた値を含む、`POST /attachments` と `POST /chat` が' +
+          '実際に使っている上限を返す。CLI・TUI・Web が送る前の検査に使う（最終判定はこのデーモン）。' +
+          '認証は他の経路と同じ（連携の鍵は 403）。',
+        responses: {
+          200: {
+            description: '上限。',
+            content: { 'application/json': { schema: resolver(attachmentLimitsSchema) } },
+          },
+        },
+      }),
+      (c) => c.json(attachmentLimitsSchema.parse(attachmentLimits)),
+    )
+
     .get(
       '/attachments/:id/meta',
       describeRoute({
@@ -3186,75 +3116,16 @@ export function createApp(deps: AppDeps) {
          * **添付を発言へ結び付ける（Issue #3111 段1b）。** 会話 id が決まった後で、`clone.post` の前に
          * 行う。弾くときは受信箱に何も積まない。個数 → 存在 → 合計 → 別の会話への結び付き → `bind` の順。
          */
-        let attachmentRefs: AttachmentRef[] = [];
-        if (attachmentIds !== undefined && attachmentIds.length > 0) {
-          const ids = [...new Set(attachmentIds)];
-          try {
-            // 個数だけを先に（存在しない id を引く前に、数で断る）。
-            validateAttachmentBatch(
-              ids.map(() => 0),
-              attachmentLimits,
-            );
-            const metas = await Promise.all(ids.map((id) => stores.attachments.getMeta(id)));
-            const missing = ids.filter((_, index) => metas[index] === undefined);
-            if (missing.length > 0) {
-              return c.json(
-                {
-                  error: `添付が見つからない（期限切れの可能性）: ${missing.join(', ')}`,
-                  code: 'attachment_missing' as const,
-                },
-                400,
-              );
-            }
-            const found = metas.filter((meta) => meta !== undefined);
-            validateAttachmentBatch(
-              found.map((meta) => meta.size),
-              attachmentLimits,
-            );
-            const elsewhere = found.filter(
-              (meta) => meta.conversationId !== undefined && meta.conversationId !== conversationId,
-            );
-            if (elsewhere.length > 0) {
-              return c.json(
-                {
-                  error: `別の会話に結び付いた添付は使えない: ${elsewhere.map((m) => m.id).join(', ')}`,
-                  code: 'attachment_conflict' as const,
-                },
-                400,
-              );
-            }
-            const bound = await stores.attachments.bind(ids, conversationId);
-            if (bound.missing.length > 0 || bound.conflicts.length > 0) {
-              return c.json(
-                {
-                  error:
-                    bound.missing.length > 0
-                      ? `添付が見つからない（期限切れの可能性）: ${bound.missing.join(', ')}`
-                      : `別の会話に結び付いた添付は使えない: ${bound.conflicts.join(', ')}`,
-                  code: (bound.missing.length > 0
-                    ? 'attachment_missing'
-                    : 'attachment_conflict') as 'attachment_missing' | 'attachment_conflict',
-                },
-                400,
-              );
-            }
-            attachmentRefs = found.map((meta) => ({
-              id: meta.id,
-              name: meta.name,
-              mediaType: meta.mediaType,
-              size: meta.size,
-              sha256: meta.sha256,
-            }));
-          } catch (error) {
-            if (error instanceof AttachmentRejectedError) {
-              return c.json(
-                { error: reasonOf(error), code: error.code },
-                error.code === 'too_many' ? 400 : 413,
-              );
-            }
-            throw error;
-          }
-        }
+        const attached = await checkAndBindAttachments(attachmentIds, {
+          store: stores.attachments,
+          limits: attachmentLimits,
+          bind: (ids) => stores.attachments.bind(ids, conversationId),
+          isBoundElsewhere: (meta) =>
+            meta.conversationId !== undefined && meta.conversationId !== conversationId,
+          conflictMessage: '別の会話に結び付いた添付は使えない',
+        });
+        if (!attached.ok) return c.json(attached.body, attached.status);
+        const attachmentRefs = attached.refs;
 
         // 検査を抜けた。覚えるのは**ここ**（同期）——同時に届いた2本のうち、片方だけがここを通る。
         if (clientMessageId !== undefined) {

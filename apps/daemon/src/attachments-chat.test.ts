@@ -240,6 +240,62 @@ describe('添付: アップロードから クローンのターンまで', () =
   });
 });
 
+describe('GET /attachments/limits（#3204）', () => {
+  it('createApp が実際に使っている上限をそのまま返す（既定値ではない）', async () => {
+    const limits = {
+      maxImageBytes: 7 * 1024 * 1024,
+      maxFileBytes: 31 * 1024 * 1024,
+      maxPerMessage: 3,
+      maxTotalBytes: 40 * 1024 * 1024,
+      retentionDays: 2,
+    };
+    const { app } = setupApp({ limits });
+    const res = await app.request('/attachments/limits', {
+      headers: { authorization: 'Bearer test-token' },
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual(limits);
+  });
+
+  it('`limits` を添付の id と取り違えない（id としては 404 のまま）', async () => {
+    const { app } = setupApp();
+    const headers = { authorization: 'Bearer test-token' };
+    expect((await app.request('/attachments/limits/meta', { headers })).status).toBe(404);
+    expect((await app.request('/attachments/nonexistent', { headers })).status).toBe(404);
+  });
+
+  it('認証が有効な構成では、資格が無ければ 401 で、持ち主の資格なら 200', async () => {
+    const stores: Stores = createMemoryStores();
+    const app = createApp({
+      clone: {} as unknown as CloneHost,
+      stores,
+      token: 'test-token',
+      shutdown: () => undefined,
+      auth: {
+        plan: {
+          enabled: true,
+          providers: [],
+          publicBaseUrl: 'http://127.0.0.1:4517',
+          tokenTtlDays: 30,
+          description: 'テスト',
+        },
+        service: createAuthService({
+          store: stores.auth,
+          providers: createAuthProviderRegistry([]),
+        }),
+      },
+    });
+    expect((await app.request('/attachments/limits')).status).toBe(401);
+    const ok = await app.request('/attachments/limits', {
+      headers: { authorization: 'Bearer test-token' },
+    });
+    expect(ok.status).toBe(200);
+    expect(((await ok.json()) as { maxPerMessage: number }).maxPerMessage).toBe(
+      DEFAULT_ATTACHMENT_LIMITS.maxPerMessage,
+    );
+  });
+});
+
 describe('添付: 認証', () => {
   it('認証が有効な構成では、資格の無い /attachments は受けない（読みも書きも 401）', async () => {
     const stores: Stores = createMemoryStores();

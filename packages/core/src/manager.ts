@@ -3317,11 +3317,37 @@ type ResumeOutcome =
   | 'stopped-meanwhile';
 
 /** デーモン側が持つ1マネージャーの像（正本は JobStore）。 */
+/** セッションの世代を載せる5種（Issue #3170。`runner-protocol.ts` の `sessionGenerationSchema`）。 */
+function isSessionScopedEvent(
+  event: RunnerEvent,
+): event is Extract<RunnerEvent, { type: 'closed' | 'session' | 'report' | 'ask' | 'settled' }> {
+  return (
+    event.type === 'closed' ||
+    event.type === 'session' ||
+    event.type === 'report' ||
+    event.type === 'ask' ||
+    event.type === 'settled'
+  );
+}
+
 interface ManagerRecord {
   job: Job;
   waiting: RunnerWaiting[];
   /** runner に生きたセッションがあるか。無ければ send のときに resume する。 */
   attached: boolean;
+  /**
+   * **いま追っているセッションの世代**（Issue #3170。`runner-protocol.ts` の `sessionGenerationSchema`）。
+   * `start` / `resume` の応答が名乗った値で、**メモリだけで持つ**（台帳へは書かない。デーモンが再起動したら
+   * 次の resume の応答まで「追っていない」へ戻り、世代の判定をしない＝従来どおり）。
+   *
+   * **`undefined` は「追っていない」**であって「世代が無い」ではない。次の3つで立たない:
+   * 古い runner（応答が名乗らない）／デーモンの再起動の直後／**resume を出している最中**（`#resume` が
+   * 出す直前に下ろし、応答で立て直す。応答を受け取れなかった resume は「受理されたか分からない」ので、
+   * 古い値を残して新しいセッションの出来事を捨てる側へ倒さない）。
+   *
+   * 使うのは `#judgeSessionGeneration` だけである。
+   */
+  sessionGeneration?: string;
   /**
    * **`attached` が事実として嘘だったと確かめた時刻**（ISO8601。`ManagerSummary`
    * の同名の欄へそのまま出る）。
@@ -5987,7 +6013,7 @@ class Pool implements ManagerPool {
     this.#rememberTokenIdentity(managerId);
 
     // 委譲はノンブロッキング。起こして即返し、クローンは次の判断へ移る。
-    let started: { cwd?: string };
+    let started: { cwd?: string; sessionGeneration?: string };
     try {
       started = await runner.start({
         managerId,
@@ -6007,6 +6033,10 @@ class Pool implements ManagerPool {
     // runner がセッションを載せてから返る。これより前の生存確認の観測は、この
     // 委譲について何も言っていない（`ManagerRecord.runnerSessionSince` の doc）。
     this.#noteRunnerSessionSince(record);
+    // **いま追うセッションの世代**（Issue #3170。`ManagerRecord.sessionGeneration` の doc）。
+    if (started.sessionGeneration !== undefined && started.sessionGeneration.length > 0) {
+      record.sessionGeneration = started.sessionGeneration;
+    }
     /*
      * **runner が実際に開いた cwd を台帳へ揃える（Issue #1814）。**
      *
@@ -11391,7 +11421,13 @@ class Pool implements ManagerPool {
       // 同じ runner への復帰の窓（Issue #3159）: 受理されたなら、窓の間に届いた `closed` は resume の前の
       // セッションの畳みなので日誌にだけ残して捨てる。受理されなかったなら従来どおり処理し直す。
       if (sameRunner !== undefined) {
-        if (!moved) {
+        // 窓の間に届いた出来事が、応答で追い始めた世代そのもの（新しいセッション）の出来事だと分かるなら、
+        // 古い世代として捨てずに処理する（Issue #3170）。世代の食い違いは `#onEvent` が日誌にだけ残して捨てる。
+        const record = this.#records.get(managerId);
+        if (
+          !moved ||
+          (record !== undefined && this.#judgeSessionGeneration(record, event) === 'current')
+        ) {
           await this.#onEvent(event, fromRunnerId);
           continue;
         }
@@ -11434,6 +11470,27 @@ class Pool implements ManagerPool {
         await this.#onEvent(event, fromRunnerId);
       }
     }
+  }
+
+  /**
+   * 出来事のセッションの世代を、いま追っている世代と比べる（Issue #3170）。
+   *
+   * - `stale` — 双方に世代があり、食い違う。古いセッションの出来事（日誌にだけ残して状態に効かせない）
+   * - `current` — 双方に世代があり、一致する。いま追っているセッション自身の出来事
+   * - `unknown` — どちらかに世代が無い（古い runner／追っていない）。**従来どおり**扱う
+   *
+   * **「世代が無い」を `stale` にも `current` にも倒さない**（後方互換）。`ManagerRecord.sessionGeneration`
+   * を下ろす契機は同じ欄の doc にある。
+   */
+  #judgeSessionGeneration(
+    record: ManagerRecord,
+    event: RunnerEvent,
+  ): 'stale' | 'current' | 'unknown' {
+    if (!isSessionScopedEvent(event)) return 'unknown';
+    const given = event.sessionGeneration;
+    const tracked = record.sessionGeneration;
+    if (given === undefined || given.length === 0 || tracked === undefined) return 'unknown';
+    return given === tracked ? 'current' : 'stale';
   }
 
   /** 移送の窓の間に届いた出来事を、届いた順に預ける（`#deferredEvents`）。同期で呼ぶこと。 */
@@ -11865,6 +11922,9 @@ class Pool implements ManagerPool {
     // `#resolveCwd` の doc）。応答の `cwd` と比べる基準はこの値であって、
     // `record.job.cwd`（`undefined` のことがある）ではない。
     const requestedCwd = cwd ?? runner.workspacePath;
+    // **出す直前に、追っている世代を下ろす**（Issue #3170。`ManagerRecord.sessionGeneration` の doc）。
+    // 応答が返るまで（失敗して返らなければ、その後も）世代の判定はしない。
+    delete record.sessionGeneration;
     const resumed = await runner.resume({
       managerId: record.job.id,
       sessionId,
@@ -11958,6 +12018,11 @@ class Pool implements ManagerPool {
     // この器がこの委譲を持っている——生存確認の観測をここから数え直す
     // （`ManagerRecord.runnerSessionSince` の doc）。
     this.#noteRunnerSessionSince(record);
+    // **応答が名乗った世代を、いま追う世代にする**（Issue #3170）。短絡した（`reusedLiveSession`）回は
+    // 生きていたセッションの世代が返る。名乗らない古い runner の回は立てない（従来どおり）。
+    if (resumed.sessionGeneration !== undefined && resumed.sessionGeneration.length > 0) {
+      record.sessionGeneration = resumed.sessionGeneration;
+    }
     /*
      * **セッションが実際にこの器へ載った**（#669。`Job.sessionInstanceId` の doc）。
      *
@@ -12137,6 +12202,24 @@ class Pool implements ManagerPool {
 
     const record = this.#records.get(event.managerId) ?? (await this.#load(event.managerId));
     if (!record) return;
+
+    // **世代の違う（古いセッションの）出来事は、日誌にだけ残して状態に効かせない**（Issue #3170）。
+    // 窓（`#relocatingTo` / `#sameRunnerResumeWindow`）の外の古い出来事もここで止まる。
+    const generation = this.#judgeSessionGeneration(record, event);
+    if (generation === 'stale' && isSessionScopedEvent(event)) {
+      await this.#journal({
+        type: 'exchange',
+        with: 'manager',
+        role: 'inbound',
+        text:
+          `${EXCHANGE_KIND_DECISION_PREFIX}[${event.managerId}] （古いセッションの出来事のため無視。いま追っている世代は ` +
+          `${record.sessionGeneration ?? '不明'}、この出来事の世代は ${event.sessionGeneration ?? '不明'}）` +
+          (event.type === 'closed'
+            ? `runner 側の終了イベント（status=${event.status}）を受け取った: ${event.reason}`
+            : `古いセッションの ${event.type} を無視した`),
+      });
+      return;
+    }
 
     // **移送の resume が飛んでいる最中の session / report / ask / settled も、`closed` と同じく
     // 結論が出るまで預かる**（Issue #3125）。窓の間は `job.runnerId` がまだ元の runner なので、
@@ -13988,7 +14071,12 @@ class Pool implements ManagerPool {
           return;
         }
         // 同じ runner への復帰の resume の最中の closed も預かる（Issue #3159。`#sameRunnerResumeWindow`）。
-        if (this.#sameRunnerResumeWindow.get(event.managerId) === fromRunnerId) {
+        // **ただし、いま追っているセッション自身の出来事（世代が一致）は預けない**（Issue #3170）。窓は
+        // 「窓の間に届いたものは古い世代」と読む近似で、世代が分かる出来事にはその近似を使わない。
+        if (
+          generation !== 'current' &&
+          this.#sameRunnerResumeWindow.get(event.managerId) === fromRunnerId
+        ) {
           this.#deferEvent(event, fromRunnerId);
           return;
         }

@@ -107,6 +107,20 @@ export const attachmentMetaSchema = z.object({
   expiresAt: z.string(),
 });
 
+/** 添付の上限（`AttachmentLimits`。`createApp` が実際に使っている値。Issue #3204）。 */
+export const attachmentLimitsSchema = z.object({
+  /** 画像（png / jpeg / webp / gif）1つの上限（バイト）。 */
+  maxImageBytes: z.number().int(),
+  /** 画像以外1つの上限（バイト）。 */
+  maxFileBytes: z.number().int(),
+  /** 1発言に添えられる個数。 */
+  maxPerMessage: z.number().int(),
+  /** 1発言の合計（バイト）。 */
+  maxTotalBytes: z.number().int(),
+  /** 保持日数。 */
+  retentionDays: z.number().int(),
+});
+
 /** 添付を断るときの応答。`code` は `AttachmentRejection` かこの口の `attachment_missing` / `attachment_conflict` / `attachment_forbidden`（連携の鍵が、自分で上げていない添付を付けようとした）。 */
 export const attachmentErrorResponseSchema = z.object({
   error: z.string(),

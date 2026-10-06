@@ -306,6 +306,23 @@ export const runnerResumeCommandSchema = z.object({
 export type RunnerResumeCommand = z.infer<typeof runnerResumeCommandSchema>;
 
 /**
+ * **セッションの世代の識別子**（Issue #3170）。runner が `start` / `resume` で**セッション（`RunnerSession`）を
+ * 新しく作るたびに**発行する値（`Host#create`。`randomUUID()`）で、そのセッションが出す `closed` / `session` /
+ * `report` / `ask` / `settled` に載る。`start` / `resume` の応答（`runnerSessionOpenResultSchema.sessionGeneration`）
+ * も同じ値を返す。デーモンは応答で受け取った値を「いま追っている世代」として覚え（`ManagerRecord.sessionGeneration`）、
+ * **値があって、いま追っている世代と違う出来事は日誌にだけ残して状態に効かせない**。
+ *
+ * **既存の識別子を流用しない理由。** `lease.fence` はデーモンが貸し出しを引き取るたびに進める値で、同じ runner への
+ * resume（`same-holder`）では進まない。`instanceId` は runner のプロセスの識別子で、同じプロセスの中の resume では
+ * 変わらない。`Job.sessionInstanceId` は `instanceId` の写しである。どれも「同じ runner への resume のたびに変わる」
+ * を満たさないので、古いセッションの畳み（`closed`）と新しいセッションの出来事を区別できない。
+ *
+ * **省略できる。** 欄を持たない古い runner の出来事は従来どおり処理する（後方互換）。欄が無いことは「世代が
+ * 古い」とも「新しい」とも読まない。
+ */
+const sessionGenerationSchema = z.string().optional();
+
+/**
  * `POST /managers`（start）・`POST /managers/:id/resume` の**応答**（Issue #1814）。
  *
  * **`cwd` は省略されうる。** ローリング再デプロイの窓では、まだこの変更前の runner
@@ -336,6 +353,13 @@ export const runnerSessionOpenResultSchema = z.object({
    * 限界である）。`start` の応答には出ない（常に新しい SDK）。
    */
   reusedLiveSession: z.boolean().optional(),
+  /**
+   * **この応答のセッションの世代**（Issue #3170。`sessionGenerationSchema` の doc）。`start` は新しく作った
+   * セッションの値、`resume` は新しく作ったセッションの値か、短絡した（`reusedLiveSession: true`）生きている
+   * セッションの値。**`undefined` は「分からない」**（欄を持たない古い runner）——デーモンは追っている世代を
+   * 持たない側（従来どおり）へ倒す。
+   */
+  sessionGeneration: sessionGenerationSchema,
 });
 
 export type RunnerSessionOpenResult = z.infer<typeof runnerSessionOpenResultSchema>;
@@ -344,6 +368,8 @@ export type RunnerSessionOpenResult = z.infer<typeof runnerSessionOpenResultSche
 export interface RunnerResumeResult {
   cwd?: string;
   reusedLiveSession?: boolean;
+  /** `runnerSessionOpenResultSchema.sessionGeneration`（Issue #3170）。 */
+  sessionGeneration?: string;
 }
 
 /**
@@ -1115,12 +1141,20 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
      */
     attachmentBodyLimit: z.number().int().positive().optional(),
   }),
-  z.object({ type: z.literal('session'), managerId: z.string(), sessionId: z.string() }),
+  z.object({
+    type: z.literal('session'),
+    managerId: z.string(),
+    sessionId: z.string(),
+    /** セッションの世代（`sessionGenerationSchema`）。 */
+    sessionGeneration: sessionGenerationSchema,
+  }),
   /** SDK が生ログを預けるときの scope。生ログを後から引き当てる鍵になる。 */
   z.object({ type: z.literal('project_key'), managerId: z.string(), projectKey: z.string() }),
   z.object({
     type: z.literal('report'),
     managerId: z.string(),
+    /** セッションの世代（`sessionGenerationSchema`）。 */
+    sessionGeneration: sessionGenerationSchema,
     /**
      * **この報告の一意な id（#206）。`ask` の `requestId` と同型。**
      *
@@ -1523,6 +1557,8 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('ask'),
     managerId: z.string(),
+    /** セッションの世代（`sessionGenerationSchema`）。 */
+    sessionGeneration: sessionGenerationSchema,
     requestId: z.string(),
     /**
      * **`kind` はここでは元から必須（旧 runner もこの版のときから送っていた）。
@@ -1553,6 +1589,8 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('settled'),
     managerId: z.string(),
+    /** セッションの世代（`sessionGenerationSchema`）。 */
+    sessionGeneration: sessionGenerationSchema,
     requestId: z.string(),
     /**
      * **任意欄。`.optional()`（Issue #1586）。** 畳むとき（`runner.ts` の
@@ -2055,6 +2093,8 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('closed'),
     managerId: z.string(),
+    /** セッションの世代（`sessionGenerationSchema`）。 */
+    sessionGeneration: sessionGenerationSchema,
     status: jobStatusSchema,
     reason: z.string(),
     /**
@@ -2829,7 +2869,7 @@ export interface RunnerClient {
    * 呼び出し側（`manager.ts`）は、欠けた回を「頼んだ値のまま」へ倒さず
    * 「実際の値は未確認」と読むこと。
    */
-  start(command: RunnerStartCommand): Promise<{ cwd?: string }>;
+  start(command: RunnerStartCommand): Promise<{ cwd?: string; sessionGeneration?: string }>;
   /** `RunnerFenceError` を投げうる（世代が古い。呼び出し側は 409 へ変換すること）。 */
   resume(command: RunnerResumeCommand): Promise<RunnerResumeResult>;
   /**

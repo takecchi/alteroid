@@ -1633,11 +1633,20 @@ class HttpRunner implements RunnerClient {
    * （`answer()` の `decision` と同じ作法。1つずつ検証し、他欄の形崩れに
    * 巻き込まれない）。
    */
-  async start(command: RunnerStartCommand): Promise<{ cwd?: string }> {
+  async start(command: RunnerStartCommand): Promise<{ cwd?: string; sessionGeneration?: string }> {
     const response = await this.#callWithoutDeadline('POST', '/managers', command);
-    const body = (await response.json()) as { cwd?: unknown };
+    const body = (await response.json()) as { cwd?: unknown; sessionGeneration?: unknown };
     const cwd = runnerSessionOpenResultSchema.shape.cwd.safeParse(body.cwd);
-    return cwd.success && cwd.data !== undefined ? { cwd: cwd.data } : {};
+    // **セッションの世代も1欄ずつ検める**（Issue #3170）。欄が無い・形が崩れた回は省く（分からない）。
+    const generation = runnerSessionOpenResultSchema.shape.sessionGeneration.safeParse(
+      body.sessionGeneration,
+    );
+    return {
+      ...(cwd.success && cwd.data !== undefined ? { cwd: cwd.data } : {}),
+      ...(generation.success && generation.data !== undefined
+        ? { sessionGeneration: generation.data }
+        : {}),
+    };
   }
 
   /** 同上（`start` の doc）。 */
@@ -1647,8 +1656,15 @@ class HttpRunner implements RunnerClient {
       `/managers/${encodeURIComponent(command.managerId)}/resume`,
       command,
     );
-    const body = (await response.json()) as { cwd?: unknown; reusedLiveSession?: unknown };
+    const body = (await response.json()) as {
+      cwd?: unknown;
+      reusedLiveSession?: unknown;
+      sessionGeneration?: unknown;
+    };
     const cwd = runnerSessionOpenResultSchema.shape.cwd.safeParse(body.cwd);
+    const generation = runnerSessionOpenResultSchema.shape.sessionGeneration.safeParse(
+      body.sessionGeneration,
+    );
     // **1欄ずつ検める**（`cwd` と同じ作法）。欄が無い・形が崩れた回は `undefined`（分からない）で、
     // `false` へ倒さない（#2877。古い runner は短絡したかを名乗れない）。
     const reused = runnerSessionOpenResultSchema.shape.reusedLiveSession.safeParse(
@@ -1657,6 +1673,9 @@ class HttpRunner implements RunnerClient {
     return {
       ...(cwd.success && cwd.data !== undefined ? { cwd: cwd.data } : {}),
       ...(reused.success && reused.data !== undefined ? { reusedLiveSession: reused.data } : {}),
+      ...(generation.success && generation.data !== undefined
+        ? { sessionGeneration: generation.data }
+        : {}),
     };
   }
 

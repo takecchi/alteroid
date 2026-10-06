@@ -373,6 +373,60 @@
         ]
       }
     },
+    "/attachments/limits": {
+      "get": {
+        "operationId": "getAttachmentsLimits",
+        "tags": ["attachments"],
+        "summary": "添付の上限（このデーモンが実際に使っている値）",
+        "description": "環境変数（`ALTEROID_ATTACHMENT_MAX_*`）で変えた値を含む、`POST /attachments` と `POST /chat` が実際に使っている上限を返す。CLI・TUI・Web が送る前の検査に使う（最終判定はこのデーモン）。認証は他の経路と同じ（連携の鍵は 403）。",
+        "responses": {
+          "200": {
+            "description": "上限。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "maxImageBytes": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "maxFileBytes": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "maxPerMessage": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "maxTotalBytes": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "retentionDays": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "maxImageBytes",
+                    "maxFileBytes",
+                    "maxPerMessage",
+                    "maxTotalBytes",
+                    "retentionDays"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/attachments/{id}/meta": {
       "get": {
         "operationId": "getAttachmentsByIdMeta",

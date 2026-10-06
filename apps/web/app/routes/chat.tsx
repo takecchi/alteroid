@@ -31,6 +31,7 @@ import {
   postChat,
   uploadAttachment,
   useApi,
+  useAttachmentLimits,
   type ChatStreamEvent,
 } from '@alteroid/swr';
 import {
@@ -2079,12 +2080,19 @@ export function ChatPane({
     [api, shownId, navigate, recordOwnMessage, showOwnLine, followUp, createStreamWriter, giveBack],
   );
 
+  /**
+   * デーモンの添付の上限（#3204。取れなければ `undefined` で、検査は既定値のまま）。
+   * `useSWR` が1回だけ取って覚える。
+   */
+  const { data: attachmentLimits } = useAttachmentLimits();
+
   /** 入力欄へ添付を足す。個数・大きさは先に検査し、断ったものは理由を出す（最終判定はサーバ）。 */
   const attach = useCallback(
     (files: File[]) => {
       const { accepted, rejected } = checkAttachments(
         pending.map((item) => item.file),
         files,
+        attachmentLimits,
       );
       if (accepted.length > 0) {
         setPending((current) => [
@@ -2098,7 +2106,7 @@ export function ChatPane({
           : rejected.map((item) => `${item.name}: ${item.reason}`).join('\n'),
       );
     },
-    [pending],
+    [pending, attachmentLimits],
   );
 
   /**

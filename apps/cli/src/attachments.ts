@@ -22,8 +22,9 @@ import { describeAuthFailure, resolveTarget, type Target } from './target.js';
  * の共通部品をここに置く（口ごとに MIME の表や上限の検査を書き写さない）。
  *
  * - 上げる口は `POST /attachments`（`application/octet-stream`。名前と MIME はクエリ）。
- * - 上限の検査は core の `validateAttachment*`（デーモンと同じ関数）を**既定の上限**で先に通す。
- *   デーモンが環境変数で上限を変えていれば食い違いうる（その場合の最終判断はデーモンの 4xx）。
+ * - 上限の検査は core の `validateAttachment*`（デーモンと同じ関数）を、**デーモンの上限**
+ *   （`GET /attachments/limits`。初回に1回だけ取る）で先に通す。取れなければ既定の上限で検査し、
+ *   最終判断はデーモンの 4xx に任せる（#3204）。
  */
 
 /** 拡張子（小文字・ドット無し）→ MIME。依存を足さない手書きの表。分からなければ octet-stream。 */
@@ -96,7 +97,25 @@ export type DraftResult = { ok: true; file: DraftFile } | { ok: false; reason: s
 export class AttachmentDraft {
   private readonly files: DraftFile[] = [];
 
-  constructor(private readonly limits: AttachmentLimits = DEFAULT_ATTACHMENT_LIMITS) {}
+  private known: AttachmentLimits | undefined;
+
+  /**
+   * 上限そのもの、またはそれを取る関数。取る関数が `null`（接続失敗・壊れた応答などの一時的な失敗）を
+   * 返したら、覚えずに既定値で検査し、次に要るときにまた取る。値（古いデーモンの 404 の既定値を含む）は覚える。
+   */
+  constructor(
+    private readonly source:
+      AttachmentLimits | (() => Promise<AttachmentLimits | null>) = DEFAULT_ATTACHMENT_LIMITS,
+  ) {}
+
+  /** 検査に使う上限。 */
+  async limits(): Promise<AttachmentLimits> {
+    if (this.known !== undefined) return this.known;
+    const got = typeof this.source === 'function' ? await this.source() : this.source;
+    if (got === null) return DEFAULT_ATTACHMENT_LIMITS;
+    this.known = got;
+    return got;
+  }
 
   list(): readonly DraftFile[] {
     return this.files;
@@ -118,9 +137,8 @@ export class AttachmentDraft {
     if (!info.isFile()) return { ok: false, reason: `ファイルではない: ${absolute}` };
     const name = normalizeAttachmentName(basename(absolute));
     const mediaType = mediaTypeOfName(name);
-    const max = isAttachmentImageMediaType(mediaType)
-      ? this.limits.maxImageBytes
-      : this.limits.maxFileBytes;
+    const limits = await this.limits();
+    const max = isAttachmentImageMediaType(mediaType) ? limits.maxImageBytes : limits.maxFileBytes;
     if (info.size > max) {
       return {
         ok: false,
@@ -128,7 +146,7 @@ export class AttachmentDraft {
       };
     }
     try {
-      validateAttachmentBatch([...this.files.map((f) => f.size), info.size], this.limits);
+      validateAttachmentBatch([...this.files.map((f) => f.size), info.size], limits);
     } catch (error) {
       if (error instanceof AttachmentRejectedError) return { ok: false, reason: error.message };
       throw error;
@@ -170,6 +188,34 @@ export class AttachmentDraft {
         `${f.uploadedId === undefined ? '' : ` 上げ済み id=${f.uploadedId}`}  ${f.path}`,
     );
   }
+}
+
+/**
+ * デーモンの添付の上限（`GET /attachments/limits`。#3204）。投げない。
+ * - 取れた値を返す。
+ * - 古いデーモン（404 など、応答はあるが口が無い）は core の既定値を返す（確定。覚えてよい）。
+ * - 接続失敗・壊れた応答は `null`（一時的。呼び手は既定値で検査し、次に取り直す）。
+ * 最終判断はデーモンなので、先行検査が既定値でも壊れはしない。
+ */
+export async function fetchAttachmentLimits(target: Target): Promise<AttachmentLimits | null> {
+  try {
+    const response = await createClient(target.baseUrl, target.headers).attachments.limits.$get();
+    if (response.status === 404) return DEFAULT_ATTACHMENT_LIMITS;
+    if (!response.ok) return null;
+    const body: Partial<Record<keyof AttachmentLimits, unknown>> = await response.json();
+    const keys = Object.keys(DEFAULT_ATTACHMENT_LIMITS) as (keyof AttachmentLimits)[];
+    if (!keys.every((key) => Number.isSafeInteger(body[key]) && (body[key] as number) > 0)) {
+      return null;
+    }
+    return body as AttachmentLimits;
+  } catch {
+    return null;
+  }
+}
+
+/** `chat` が使う添えかけ（上限は `/attach` で取り、値か 404 が返れば以降は覚える。一時的な失敗は次の `/attach` で取り直す）。 */
+export function createAttachmentDraft(target: Target): AttachmentDraft {
+  return new AttachmentDraft(() => fetchAttachmentLimits(target));
 }
 
 function errnoOf(error: unknown): string {
@@ -232,6 +278,7 @@ export async function uploadDraft(
   }) => Promise<UploadedAttachment>,
 ): Promise<UploadDraftResult> {
   const uploaded: UploadedAttachment[] = [];
+  const limits = await draft.limits();
   for (const file of draft.list()) {
     if (file.uploadedId !== undefined) {
       uploaded.push({
@@ -245,7 +292,7 @@ export async function uploadDraft(
     }
     try {
       const bytes = new Uint8Array(await readFile(file.path));
-      validateAttachmentInput({ name: file.name, mediaType: file.mediaType, bytes });
+      validateAttachmentInput({ name: file.name, mediaType: file.mediaType, bytes }, limits);
       const meta = await upload({ name: file.name, mediaType: file.mediaType, bytes });
       file.uploadedId = meta.id;
       uploaded.push(meta);

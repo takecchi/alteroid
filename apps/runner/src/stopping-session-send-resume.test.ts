@@ -187,10 +187,12 @@ describe('畳み中のセッションへの送信・resume（#1660）', () => {
     // **`cwd` は runner が実際に開いた値（Issue #1814）。** 明示の `cwd` が
     // 実在するので倒れず、頼んだ値がそのまま返る。
     // 畳み終わりを待った後に新しいセッションを開いた回なので、短絡していない（#2877）。
+    // 作り直したセッションの世代も運ぶ（Issue #3170。値そのものは毎回変わるので、形だけを見る）。
     expect(await res.json()).toEqual({
       ok: true,
       cwd: '/work/project',
       reusedLiveSession: false,
+      sessionGeneration: expect.any(String),
     });
     await waitUntil(() => s.consumed.includes('追加の一言（畳み中の resume）'));
     expect(s.opened()).toBe(2);

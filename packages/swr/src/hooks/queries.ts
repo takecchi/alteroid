@@ -68,6 +68,7 @@ export function isKeyOfType(key: unknown, type: string): boolean {
 export const KEY = {
   health: { type: 'health' } as const,
   status: { type: 'status' } as const,
+  attachmentLimits: { type: 'attachmentLimits' } as const,
   /**
    * **窓ごとに別のキーになる**（issue #670）。かつてここは
    * `{ type: 'managers' }` の1つだけで、`mutate(KEY.managers)` が呼べていた。
@@ -166,6 +167,30 @@ export function useStatus() {
   return useSWR(KEY.status, () => api.api.GET('/status').then(unwrap), {
     errorRetryInterval: 5000,
   });
+}
+
+/**
+ * デーモンの添付の上限（`GET /attachments/limits`。#3204）。先行検査に使う。
+ * - 取れた値は SWR のキャッシュに覚える（再検証しない）。
+ * - 古いデーモンの 404 は `null` を値として覚える（取り直さない。呼び手は既定値で検査する）。
+ * - 接続失敗など一時的な失敗は `data` が無いまま `error` になり、次にこの hook が使われたとき
+ *   （画面の表示）に取り直す。再試行の自動ループはしない。最終判断はデーモン。
+ */
+export function useAttachmentLimits() {
+  const api = useApi();
+  return useSWR(
+    KEY.attachmentLimits,
+    async () => {
+      const result = await api.api.GET('/attachments/limits');
+      return result.response.status === 404 ? null : unwrap(result);
+    },
+    {
+      revalidateOnFocus: false,
+      revalidateOnReconnect: false,
+      revalidateIfStale: false,
+      shouldRetryOnError: false,
+    },
+  );
 }
 
 /**

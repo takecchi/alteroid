@@ -9,9 +9,18 @@
  */
 import { randomUUID } from 'node:crypto';
 
-import type { ApprovalQuestion, ApprovalSelection, JournalEntry } from '@alteroid/core';
+import type {
+  ApprovalQuestion,
+  ApprovalSelection,
+  AttachmentLimits,
+  JournalEntry,
+} from '@alteroid/core';
 
-import { uploadAttachment, type UploadedAttachment } from '../attachments.js';
+import {
+  fetchAttachmentLimits,
+  uploadAttachment,
+  type UploadedAttachment,
+} from '../attachments.js';
 import { createClient } from '../client.js';
 import { withErrorReason } from '../format.js';
 import { describeInterruptOutcome } from '../interrupt.js';
@@ -203,6 +212,8 @@ export interface TuiApi {
     input: { text: string; conversationId?: string; attachments?: string[] },
     signal: AbortSignal,
   ): AsyncGenerator<ChatEvent>;
+  /** `GET /attachments/limits`。古いデーモン（404）は既定値、一時的な失敗は `null`（失敗は投げない）。 */
+  attachmentLimits(): Promise<AttachmentLimits | null>;
   /** `POST /attachments`（生のバイト列）。失敗は `ApiError` ではなく普通の `Error`（理由つき）。 */
   uploadAttachment(file: {
     name: string;
@@ -350,6 +361,10 @@ export function createTuiApi(target: Target): TuiApi {
         const data = event.json<Record<string, unknown>>() ?? {};
         yield { ...data, type: event.name } as ChatEvent;
       }
+    },
+
+    attachmentLimits() {
+      return fetchAttachmentLimits(target);
     },
 
     uploadAttachment(file) {

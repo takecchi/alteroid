@@ -108,7 +108,7 @@ export class ChatController {
   private watch: AbortController | null = null;
 
   /** 次に送る発言へ添えかけのファイル（`/attach`）。 */
-  private readonly draft = new AttachmentDraft();
+  private readonly draft = new AttachmentDraft(() => this.api.attachmentLimits());
   /** 会話ごとに、最後に既読の要求を送った発言の id。 */
   private readonly markedThrough = new Map<string, string>();
 

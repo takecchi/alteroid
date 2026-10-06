@@ -1,6 +1,7 @@
 import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
+import { DEFAULT_ATTACHMENT_LIMITS, type AttachmentLimits } from '@alteroid/core';
 import { describe, expect, it, vi } from 'vitest';
 
 import { makeTempDir } from '../../../../vitest.tmpdir.js';
@@ -793,5 +794,65 @@ describe('既読（返答を画面に表示したとき。docs/architecture.md�
     ];
     hold.open();
     await vi.waitFor(() => expect(api.readMarks.map((m) => m.through)).toEqual(['m2', 'm3']));
+  });
+});
+
+describe('/attach の上限はデーモンの値で先に検査する（#3204）', () => {
+  const MIB = 1024 * 1024;
+  const limitsOf = (over: Partial<AttachmentLimits>): AttachmentLimits => ({
+    ...DEFAULT_ATTACHMENT_LIMITS,
+    ...over,
+  });
+
+  it('上限を上げたデーモンでは、既定値を超えてデーモンの内側にある添付を断らず、そのまま上げて送る。取るのは1回', async () => {
+    const dir = await makeTempDir('alteroid-tui-attach-');
+    const path = join(dir, 'big.bin');
+    await writeFile(path, Buffer.alloc(DEFAULT_ATTACHMENT_LIMITS.maxFileBytes + MIB));
+    const { api, controller, texts } = setup();
+    api.limits = limitsOf({ maxFileBytes: 200 * MIB, maxTotalBytes: 400 * MIB });
+    await controller.attach(path);
+    await controller.attach(path);
+    expect(texts('system').join('\n')).not.toContain('添えられない');
+    expect(api.limitsCalls).toBe(1);
+    api.scripts.push([{ type: 'open', conversationId: 'c1' }, { type: 'done' }]);
+    await controller.send('見て');
+    expect(api.uploads).toHaveLength(2);
+    expect(api.chatCalls[0]?.attachments).toHaveLength(2);
+  });
+
+  it('一時的な失敗（null）は覚えず、次の /attach で取り直してデーモンの値を使う', async () => {
+    const dir = await makeTempDir('alteroid-tui-attach-');
+    const path = join(dir, 'big.bin');
+    await writeFile(path, Buffer.alloc(DEFAULT_ATTACHMENT_LIMITS.maxFileBytes + MIB));
+    const { api, controller, texts } = setup();
+    api.limits = null;
+    await controller.attach(path);
+    expect(texts('system').join('\n')).toContain('添えられない');
+    api.limits = limitsOf({ maxFileBytes: 200 * MIB });
+    await controller.attach(path);
+    expect(controller.hasAttachments()).toBe(true);
+    expect(api.limitsCalls).toBe(2);
+    await controller.attach(path);
+    expect(api.limitsCalls).toBe(2);
+  });
+
+  it('上限を下げたデーモンでは、既定値の内側でも先に断る', async () => {
+    const dir = await makeTempDir('alteroid-tui-attach-');
+    const path = join(dir, 'a.bin');
+    await writeFile(path, Buffer.alloc(300));
+    const { api, controller, texts } = setup();
+    api.limits = limitsOf({ maxFileBytes: 200 });
+    await controller.attach(path);
+    expect(texts('system').join('\n')).toContain('添えられない');
+    expect(controller.hasAttachments()).toBe(false);
+  });
+
+  it('口が取れず既定値が返るときは、既定を超えるものを断る', async () => {
+    const dir = await makeTempDir('alteroid-tui-attach-');
+    const path = join(dir, 'big.bin');
+    await writeFile(path, Buffer.alloc(DEFAULT_ATTACHMENT_LIMITS.maxFileBytes + MIB));
+    const { controller, texts } = setup();
+    await controller.attach(path);
+    expect(texts('system').join('\n')).toContain('添えられない');
   });
 });
