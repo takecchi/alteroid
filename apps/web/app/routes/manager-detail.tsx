@@ -1407,6 +1407,54 @@ function AskedAtNote({ askedAt }: { askedAt: string | undefined }) {
 }
 
 /**
+ * **`send` の戻り値（`ManagerSendResult`、`packages/core/src/manager.ts` の表）を、使い手向けの
+ * 言い方にする（#3066）。** `outcome` の識別子（`session_missing` など）は画面に出さない。
+ *
+ * **届いたと言ってよいのは `answered` / `delivered` だけ**（許可リスト）。残りは未達で、
+ * 知らない値も未達の側へ倒す——知らない値を成功の見た目にしない。未達は HTTP 200 で返る
+ * もの（`session_missing` / `declined`）が本命で、`unknown`（404）・`unreadable`（409）は
+ * 通常は例外側へ行くが、戻り値で来ても未達として言える形にしてある。
+ * 知らない値は識別子を出さず、`detail`（日本語の文）だけを出す（`archive.tsx` の
+ * `continuityLabel` と同じ作り）。
+ */
+const SEND_OUTCOME_LABELS: Record<string, { label: string; reached: boolean }> = {
+  answered: { label: '確認に答えた', reached: true },
+  delivered: { label: '追加指示を届けた', reached: true },
+  session_missing: {
+    label: '届いていない（担当がこの仕事の会話を持っておらず、入り直せなかった）',
+    reached: false,
+  },
+  declined: {
+    label: '届けていない（世代が食い違う待機中の仕事を畳めなかったため、古い会話へも送らなかった）',
+    reached: false,
+  },
+  unknown: { label: '届いたか確かめられなかった', reached: false },
+  unreadable: { label: '届けていない（台帳の行が読めない形で入っている）', reached: false },
+};
+
+function describeSendResult(result: { outcome: string; detail: string }): {
+  text: string;
+  reached: boolean;
+} {
+  const known = Object.hasOwn(SEND_OUTCOME_LABELS, result.outcome)
+    ? SEND_OUTCOME_LABELS[result.outcome]
+    : undefined;
+  if (known === undefined) return { text: redactBody(result.detail), reached: false };
+  return { text: redactBody(`${known.label}: ${result.detail}`), reached: known.reached };
+}
+
+/** 未達の結果の1行（警告色）。届いた結果は呼び側が灰色で出す。 */
+function SendOutcomeNote({ note }: { note: { text: string; reached: boolean } | undefined }) {
+  if (note === undefined) return null;
+  return (
+    <p className={`mt-2 text-xs ${note.reached ? 'text-muted-foreground' : 'text-warn'}`}>
+      {note.reached ? '' : '⚠ '}
+      {note.text}
+    </p>
+  );
+}
+
+/**
  * **`kind === 'permission'` の見た目（許可／拒否の2ボタン）。1文字も変えて
  * いない**（`askedAtNote` の差し込みを除く。Issue #334 の指示どおり）。
  */
@@ -1424,15 +1472,23 @@ function PermissionWaitingRow({
   const send = useSendManagerMessage();
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<unknown>(undefined);
+  // 戻り値を見る。未達（`session_missing` など、HTTP 200）を成功として黙らせない。
+  const [note, setNote] = useState<{ text: string; reached: boolean } | undefined>(undefined);
 
   function answer(decision: 'allow' | 'deny') {
     setBusy(true);
     setFailure(undefined);
+    setNote(undefined);
     send(id, {
       text: decision === 'allow' ? '許可する' : '許可しない',
       requestId,
       decision,
     })
+      .then((result) => {
+        const described = describeSendResult(result);
+        // 届いたときは今までどおり何も足さない（待ちが解ければ行ごと消える）。
+        if (!described.reached) setNote(described);
+      })
       .catch(setFailure)
       .finally(() => setBusy(false));
   }
@@ -1449,6 +1505,7 @@ function PermissionWaitingRow({
           拒否
         </Button>
       </div>
+      <SendOutcomeNote note={note} />
       <ErrorNote error={failure} className="mt-2" />
     </div>
   );
@@ -1480,6 +1537,7 @@ function QuestionWaitingRow({
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<unknown>(undefined);
+  const [note, setNote] = useState<{ text: string; reached: boolean } | undefined>(undefined);
 
   function submit() {
     // **空文字・空白のみでは送らない。** ボタンの `disabled` だけに頼らない
@@ -1487,9 +1545,15 @@ function QuestionWaitingRow({
     if (text.trim() === '') return;
     setBusy(true);
     setFailure(undefined);
+    setNote(undefined);
     // **`decision` を付けない。** 質問に allow/deny は無い。
     send(id, { text, requestId })
-      .then(() => setText(''))
+      .then((result) => {
+        const described = describeSendResult(result);
+        // 届いていないのに入力を空にしない（書いた答えを残す）。
+        if (described.reached) setText('');
+        else setNote(described);
+      })
       .catch(setFailure)
       .finally(() => setBusy(false));
   }
@@ -1526,6 +1590,7 @@ function QuestionWaitingRow({
           <span className="text-[11px] text-muted-foreground">⌘/Ctrl + Enter</span>
         </div>
       </div>
+      <SendOutcomeNote note={note} />
       <ErrorNote error={failure} className="mt-2" />
     </div>
   );
@@ -1628,7 +1693,7 @@ function SendMessage({
   const send = useSendManagerMessage();
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
-  const [outcome, setOutcome] = useState<string | undefined>(undefined);
+  const [outcome, setOutcome] = useState<{ text: string; reached: boolean } | undefined>(undefined);
   const [failure, setFailure] = useState<unknown>(undefined);
 
   function submit() {
@@ -1638,10 +1703,14 @@ function SendMessage({
     if (text.trim() === '' || noWayBack || busy) return;
     setBusy(true);
     setFailure(undefined);
+    // 前回の結果を消す。次の送信が失敗しても、前回の「届けた」が今回のものに見えない。
+    setOutcome(undefined);
     send(id, { text })
       .then((result) => {
-        setOutcome(redactBody(`${result.outcome}: ${result.detail}`));
-        setText('');
+        const described = describeSendResult(result);
+        setOutcome(described);
+        // 届いていないときは入力を残す（書いた指示を消さない）。
+        if (described.reached) setText('');
       })
       .catch(setFailure)
       .finally(() => setBusy(false));
@@ -1701,7 +1770,7 @@ function SendMessage({
             送る
           </Button>
         </div>
-        {outcome !== undefined && <p className="mt-2 text-xs text-muted-foreground">{outcome}</p>}
+        <SendOutcomeNote note={outcome} />
         <ErrorNote error={failure} className="mt-2" />
       </div>
     </Card>
