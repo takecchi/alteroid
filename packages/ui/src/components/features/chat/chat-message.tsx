@@ -83,109 +83,113 @@ export function ChatMessage({
   const shown = body(text);
   const editing = children !== undefined;
   const viewingOld = versions !== undefined && versions.index < versions.total - 1;
+  // 添付だけで本文が空の人間の発言は、空の吹き出しを出さず添付だけを出す。
+  const attachmentOnly = role === 'human' && text === '' && attachments !== undefined && !editing;
 
   return (
     <li className={cn('group flex flex-col gap-1', role === 'human' ? 'items-end' : 'items-start')}>
-      <div
-        className={cn(
-          'flex min-w-0 max-w-full items-start gap-1',
-          role === 'clone' && 'w-full',
-          // 編集欄が入ると外側は中身の幅に縮む（`items-end` の li の中）ので、
-          // 元の吹き出しより狭くなる。編集中は読む幅の上限（46rem）まで広げる。
-          editing && role !== 'clone' && 'w-full max-w-[46rem]',
-        )}
-      >
-        {onEdit !== undefined && !editing && (
-          <Button
-            size="sm"
-            variant="ghost"
-            aria-label="発言を編集"
-            className="mt-1 shrink-0 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100"
-            onClick={onEdit}
-          >
-            <Pencil className="size-3.5" aria-hidden />
-          </Button>
-        )}
+      {!attachmentOnly && (
         <div
-          data-role={role}
           className={cn(
-            // `break-words`: クローンの行は `Markdown`（components/markdown.tsx）
-            // が自前で `min-w-0 ... break-words` を持つが、人間・システムの行は
-            // 素のテキストを直接ここへ置くだけなので、同じ指定がここに無いと
-            // 長い一続きの文字列（URL・パス等）で吹き出しがはみ出す。
-            'min-w-0 text-sm leading-relaxed break-words',
-            // 読む幅の上限は吹き出し（人間）と事情の行（システム）にだけ掛ける。
-            // クローンの応答は地の上の本文なので、会話欄の幅いっぱい（`w-full`）に置く。
-            role !== 'clone' && 'max-w-[46rem]',
-            // クローンの本文だけ Markdown で描く（下のコメント参照）。
-            // 人間・システムの行は素のテキストのままなので、これまでどおり
-            // 改行をそのまま見せる。
-            role !== 'clone' && 'whitespace-pre-wrap',
-            /*
-             * **吹き出しにするのは人間の発言だけ。** 主色で塗った吹き出しにして、
-             * 「自分の発言」が一目で分かるようにする。
-             *
-             * **クローンの応答は吹き出しにしない**——地の上にそのまま本文として置く。
-             * 応答は見出し・表・コードを含む長い Markdown になりがちで、枠に入れると
-             * 読む幅が枠の内側へ削られ、縦に長い箱が積み重なって読みにくくなる
-             * （人間の言葉で「AIのメッセージはバブルになってなくて良い」）。
-             */
-            // `selection:`: 吹き出しが `bg-primary` なので、既定の `::selection`
-            // （主色の35%、`styles.css`）だと選択範囲が地と同じ色に溶けて、
-            // 範囲選択しても何も見えない（選択自体はできている）。反転色で塗る。
-            role === 'human' &&
-              'rounded-lg bg-primary px-3 py-2 text-primary-foreground selection:bg-primary-foreground selection:text-primary',
-            editing && role !== 'clone' && 'flex-1',
-            role === 'clone' && 'w-full py-1',
-            /*
-             * 事情の行は板にしない（発言ではないので）。左の細い線で「差し込み」で
-             * あることを示す。斜体にしないのは、和文の斜体は字形を歪めるだけで
-             * 読みにくくなるからである。
-             */
-            role === 'system' &&
-              'border-l-2 border-border py-0.5 pl-3 text-xs text-muted-foreground',
+            'flex min-w-0 max-w-full items-start gap-1',
+            role === 'clone' && 'w-full',
+            // 編集欄が入ると外側は中身の幅に縮む（`items-end` の li の中）ので、
+            // 元の吹き出しより狭くなる。編集中は読む幅の上限（46rem）まで広げる。
+            editing && role !== 'clone' && 'w-full max-w-[46rem]',
           )}
         >
-          {editing ? (
-            children
-          ) : role === 'clone' ? (
-            text === '' ? (
-              <span className="text-muted-foreground">…</span>
-            ) : (
-              /*
-               * **クローンの行だけを Markdown にする。** 人間が打った本文
-               * （`role === 'human'`）は素のテキストのままにする —
-               * 自分が書いた文字が勝手に化けないため。
-               *
-               * **受信中かどうかを見分ける信号は無い。** `Line` には
-               * `role` / `text` / `transient` しか無く、`transient` は
-               * 「考えている…」のような進行中の合図（`role: 'system'`）
-               * にしか立たない。クローンの返信行（`role: 'clone'`）は
-               * チャンクが届くたびに `text` を継ぎ足すだけで、「まだ
-               * 受信中か」を示す専用のフィールドを持たない。信号を
-               * 新設するには `packages/` や API 側の変更が要るが、
-               * それは今回の対象外（画面側だけで完結させる）。
-               *
-               * だから毎チャンク、届いた分だけの文字列を Markdown として
-               * パースし直すことになる。**まだ閉じていない ``` や `**`
-               * が受信の途中では正しく解釈されず、閉じた瞬間に表示が
-               * 変わって見える揺れが起きうる**（受信が終われば安定する）。
-               */
-              <Markdown headingOffset={2}>{shown}</Markdown>
-            )
-          ) : transient ? (
-            <span className="inline-flex items-center gap-2">
-              <span className="relative flex size-1.5" aria-hidden>
-                <span className="absolute inset-0 rounded-full bg-primary opacity-60 motion-safe:animate-ping" />
-                <span className="relative size-1.5 rounded-full bg-primary" />
-              </span>
-              {shown}
-            </span>
-          ) : (
-            shown
+          {onEdit !== undefined && !editing && (
+            <Button
+              size="sm"
+              variant="ghost"
+              aria-label="発言を編集"
+              className="mt-1 shrink-0 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100"
+              onClick={onEdit}
+            >
+              <Pencil className="size-3.5" aria-hidden />
+            </Button>
           )}
+          <div
+            data-role={role}
+            className={cn(
+              // `break-words`: クローンの行は `Markdown`（components/markdown.tsx）
+              // が自前で `min-w-0 ... break-words` を持つが、人間・システムの行は
+              // 素のテキストを直接ここへ置くだけなので、同じ指定がここに無いと
+              // 長い一続きの文字列（URL・パス等）で吹き出しがはみ出す。
+              'min-w-0 text-sm leading-relaxed break-words',
+              // 読む幅の上限は吹き出し（人間）と事情の行（システム）にだけ掛ける。
+              // クローンの応答は地の上の本文なので、会話欄の幅いっぱい（`w-full`）に置く。
+              role !== 'clone' && 'max-w-[46rem]',
+              // クローンの本文だけ Markdown で描く（下のコメント参照）。
+              // 人間・システムの行は素のテキストのままなので、これまでどおり
+              // 改行をそのまま見せる。
+              role !== 'clone' && 'whitespace-pre-wrap',
+              /*
+               * **吹き出しにするのは人間の発言だけ。** 主色で塗った吹き出しにして、
+               * 「自分の発言」が一目で分かるようにする。
+               *
+               * **クローンの応答は吹き出しにしない**——地の上にそのまま本文として置く。
+               * 応答は見出し・表・コードを含む長い Markdown になりがちで、枠に入れると
+               * 読む幅が枠の内側へ削られ、縦に長い箱が積み重なって読みにくくなる
+               * （人間の言葉で「AIのメッセージはバブルになってなくて良い」）。
+               */
+              // `selection:`: 吹き出しが `bg-primary` なので、既定の `::selection`
+              // （主色の35%、`styles.css`）だと選択範囲が地と同じ色に溶けて、
+              // 範囲選択しても何も見えない（選択自体はできている）。反転色で塗る。
+              role === 'human' &&
+                'rounded-lg bg-primary px-3 py-2 text-primary-foreground selection:bg-primary-foreground selection:text-primary',
+              editing && role !== 'clone' && 'flex-1',
+              role === 'clone' && 'w-full py-1',
+              /*
+               * 事情の行は板にしない（発言ではないので）。左の細い線で「差し込み」で
+               * あることを示す。斜体にしないのは、和文の斜体は字形を歪めるだけで
+               * 読みにくくなるからである。
+               */
+              role === 'system' &&
+                'border-l-2 border-border py-0.5 pl-3 text-xs text-muted-foreground',
+            )}
+          >
+            {editing ? (
+              children
+            ) : role === 'clone' ? (
+              text === '' ? (
+                <span className="text-muted-foreground">…</span>
+              ) : (
+                /*
+                 * **クローンの行だけを Markdown にする。** 人間が打った本文
+                 * （`role === 'human'`）は素のテキストのままにする —
+                 * 自分が書いた文字が勝手に化けないため。
+                 *
+                 * **受信中かどうかを見分ける信号は無い。** `Line` には
+                 * `role` / `text` / `transient` しか無く、`transient` は
+                 * 「考えている…」のような進行中の合図（`role: 'system'`）
+                 * にしか立たない。クローンの返信行（`role: 'clone'`）は
+                 * チャンクが届くたびに `text` を継ぎ足すだけで、「まだ
+                 * 受信中か」を示す専用のフィールドを持たない。信号を
+                 * 新設するには `packages/` や API 側の変更が要るが、
+                 * それは今回の対象外（画面側だけで完結させる）。
+                 *
+                 * だから毎チャンク、届いた分だけの文字列を Markdown として
+                 * パースし直すことになる。**まだ閉じていない ``` や `**`
+                 * が受信の途中では正しく解釈されず、閉じた瞬間に表示が
+                 * 変わって見える揺れが起きうる**（受信が終われば安定する）。
+                 */
+                <Markdown headingOffset={2}>{shown}</Markdown>
+              )
+            ) : transient ? (
+              <span className="inline-flex items-center gap-2">
+                <span className="relative flex size-1.5" aria-hidden>
+                  <span className="absolute inset-0 rounded-full bg-primary opacity-60 motion-safe:animate-ping" />
+                  <span className="relative size-1.5 rounded-full bg-primary" />
+                </span>
+                {shown}
+              </span>
+            ) : (
+              shown
+            )}
+          </div>
         </div>
-      </div>
+      )}
 
       {attachments !== undefined && !editing && attachments}
 
