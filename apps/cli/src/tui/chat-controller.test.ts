@@ -690,4 +690,20 @@ describe('/attach（添えかけ）', () => {
     await controller.send('次');
     expect(api.chatCalls[1]).toEqual({ text: '次', conversationId: 'c1' });
   });
+
+  it('添えかけがあれば空の発言で添付だけを送れる。添えかけが無い空の発言は送らない', async () => {
+    const dir = await makeTempDir('alteroid-tui-attach-');
+    const path = join(dir, 'a.log');
+    await writeFile(path, 'log');
+    const { api, controller } = setup();
+    await controller.send('');
+    expect(api.chatCalls).toEqual([]);
+    expect(controller.hasAttachments()).toBe(false);
+    await controller.attach(path);
+    expect(controller.hasAttachments()).toBe(true);
+    api.scripts.push([{ type: 'open', conversationId: 'c1' }, { type: 'done' }]);
+    await controller.send('');
+    expect(api.chatCalls).toEqual([{ text: '', attachments: ['att-1'] }]);
+    expect(controller.hasAttachments()).toBe(false);
+  });
 });

@@ -412,7 +412,7 @@ export const App: FC<AppProps> = ({
 
   const submit = (text: string): void => {
     setBuffer(emptyBuffer());
-    if (text.length === 0) return;
+    if (text.length === 0 && !controller.hasAttachments()) return;
     const resolved = resolveCommand(text);
     if (resolved.kind === 'command') return runCommand(resolved.spec.action, resolved.args);
     if (resolved.kind === 'unknown') {
