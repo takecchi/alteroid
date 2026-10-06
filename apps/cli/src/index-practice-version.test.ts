@@ -38,8 +38,17 @@ describe('practice show --version（commander を通す）', () => {
 
     await run(...argv);
 
-    expect(practiceShowCommand).toHaveBeenCalledWith('x', { version: 3 });
+    expect(practiceShowCommand).toHaveBeenCalledWith('x', { version: '3' });
     expect(out()).not.toContain('alteroid ');
+  });
+
+  it('成立しない版番号は、数に直さず打った文字列のまま渡す（エラー文が NaN にならない）', async () => {
+    captureStdout();
+    captureStderr();
+
+    await run('practice', 'show', 'x', '--version', 'abc');
+
+    expect(practiceShowCommand).toHaveBeenCalledWith('x', { version: 'abc' });
   });
 
   it('ルートの -V / --version は、これまでどおり CLI のバージョンを出す', async () => {

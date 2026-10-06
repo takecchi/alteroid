@@ -42,6 +42,7 @@ import {
   PROFILE_ENTRY_NAME,
   mcpServersFingerprintOf,
   RESERVED_SCHEDULE_KINDS,
+  isReservedEventSource,
   ARCHIVE_REMOVE_MANY_JOURNAL_ID_CHARS,
   ARCHIVE_REMOVE_MANY_LIMIT_DEFAULT,
   ARCHIVE_REMOVE_MANY_LIMIT_MAX,
@@ -103,7 +104,10 @@ import {
   reasonOf,
   readConversationPage,
   readConversationWindow,
+  decodeConversationCursor,
+  encodeConversationCursor,
   InvalidConversationCursorError,
+  type ConversationCursor,
   clientMessageIdSchema,
   RECENT_TRACE_LIMIT,
   recentDroppedTraces,
@@ -215,6 +219,7 @@ import {
   credentialsUpdateResponseSchema,
   droppedResponseSchema,
   errorResponseSchema,
+  integrationKeyCreateErrorResponseSchema,
   integrationKeyCreateRequestSchema,
   integrationKeyCreateResponseSchema,
   integrationKeyResponseSchema,
@@ -990,11 +995,6 @@ const conversationsQuery = z.object({
    */
   cursor: z.string().optional(),
 });
-/** `GET /conversations` のカーソルの中身（日誌の継続点）。 */
-const conversationsCursorSchema = z.object({
-  id: z.string().min(1),
-  at: z.string().min(1),
-});
 /**
  * `includeSuperseded`: 編集で畳まれた旧発言・その応答も含めて返すか
  * （issue「チャットの送信済みメッセージを編集する」）。
@@ -1452,19 +1452,29 @@ function noBodyPostRequestBody(description: string) {
 }
 
 /**
+ * 外部イベントの入口（`POST /events` と `POST /events/:source`）の 400。
+ * **ステータスの数値は各経路の `describeRoute` に直に書く**（「実際に返すステータスが宣言されているか」を測る歯が、
+ * リテラルのキーを経路ごとに読むため）。中身（文言・スキーマ）だけをここで共有する。
+ */
+function eventBadRequestResponse() {
+  return {
+    description:
+      '本文が JSON として不正。または source が daemon 自身の予約語（`code`: `reserved_source`＝' +
+      '`token-pool`・`runner-registry`。前後の空白・大文字小文字・全角を正規化した後で比べる）。' +
+      'または添付を付けられない（`code`: `attachment_missing`＝無い・期限切れ、' +
+      '`attachment_conflict`＝すでに別の会話・外部イベントに結び付いている、' +
+      '`attachment_forbidden`＝連携の鍵が、その鍵自身が上げていない添付を付けようとした、' +
+      '`too_many`＝個数の上限超え）。いずれもイベントは投函されない。',
+    content: { 'application/json': { schema: resolver(attachmentErrorResponseSchema) } },
+  };
+}
+
+/**
  * 外部イベントに添付を付けたときの断り（`POST /events` と `POST /events/:source`。#3113 段3）。
  * **断ったらイベントは投函しない**（添付を黙って落として本文だけ送らない）。
  */
 function eventAttachmentResponses() {
   return {
-    400: {
-      description:
-        '本文が JSON として不正。または添付を付けられない（`code`: `attachment_missing`＝無い・期限切れ、' +
-        '`attachment_conflict`＝すでに別の会話・外部イベントに結び付いている、' +
-        '`attachment_forbidden`＝連携の鍵が、その鍵自身が上げていない添付を付けようとした、' +
-        '`too_many`＝個数の上限超え）。いずれもイベントは投函されない。',
-      content: { 'application/json': { schema: resolver(attachmentErrorResponseSchema) } },
-    },
     413: {
       description:
         '連携の鍵の本文の上限（既定 1 MiB。連携の鍵でだけ。`POST /attachments` には掛からない）を超えた。' +
@@ -1481,6 +1491,22 @@ function eventAttachmentResponses() {
  * **403（source の不一致）はここに置かず、各経路の `describeRoute` に直に書く**——「実際に返すステータスが
  * 宣言されているか」を測る歯が、リテラルの `403` を経路ごとに読むため。
  */
+/**
+ * daemon が自分の名として使う `source`（予約語）を外から名乗ったときの断り（400。`code: 'reserved_source'`）。
+ * **エラーには値を混ぜない**（固定の文だけ。`conversationId` の入口の検査と同じ作法）。
+ * 判定は正規化の後（`isReservedEventSource`）。`isDaemonSelfNotice` は `source` だけで「daemon 自身の
+ * 知らせ」とみなし、台帳に載せず受信箱で畳むので、外から名乗らせない（`daemon-self-notice.ts`）。
+ */
+const RESERVED_SOURCE_BODY = {
+  error: 'この source は daemon 自身が使う予約語なので、外からは使えない（何も積んでいない）',
+  code: 'reserved_source',
+} as const;
+const RESERVED_SOURCE_KEY_BODY = {
+  error:
+    'この source は daemon 自身が使う予約語なので、連携の鍵の source にできない（何も作っていない）',
+  code: 'reserved_source',
+} as const;
+
 function integrationKeyEventResponses() {
   return {
     401: {
@@ -2423,6 +2449,7 @@ export function createApp(deps: AppDeps) {
         meta.conversationId !== undefined || meta.externalEventId !== undefined,
       conflictMessage: 'すでに別の宛先に結び付いた添付は使えない',
       onlyUploadedBy: principal.kind === 'integration' ? uploaderOf(principal) : undefined,
+      serializeKey: `externalEvent:${eventId}`,
     });
   }
 
@@ -3386,6 +3413,7 @@ export function createApp(deps: AppDeps) {
             isBoundElsewhere: (meta) =>
               meta.conversationId !== undefined && meta.conversationId !== conversationId,
             conflictMessage: '別の会話に結び付いた添付は使えない',
+            serializeKey: `conversation:${conversationId}`,
           });
         } catch (error) {
           claim?.settle(false);
@@ -3679,16 +3707,12 @@ export function createApp(deps: AppDeps) {
       queryParams(conversationsQuery),
       async (c) => {
         const { limit, scan, cursor } = c.req.valid('query');
-        let cursorPayload: z.infer<typeof conversationsCursorSchema> | undefined;
+        // 符号化はクローンの道具（`conversation_read`）と同じ関数（core）を通す。
+        let cursorPayload: ConversationCursor | undefined;
         if (cursor !== undefined) {
-          try {
-            cursorPayload = decodeCursor(cursor, conversationsCursorSchema);
-          } catch (error) {
-            if (error instanceof InvalidCursorError) {
-              return c.json({ error: error.message }, 400);
-            }
-            throw error;
-          }
+          const decoded = decodeConversationCursor(cursor);
+          if (decoded === null) return c.json({ error: new InvalidCursorError().message }, 400);
+          cursorPayload = decoded;
         }
         /**
          * 既読の記録は全員で1組（`ConversationReadStore`）。基準時刻が無ければここで決める
@@ -3758,9 +3782,7 @@ export function createApp(deps: AppDeps) {
            * `reachedStart: false` のときは「窓が `scan` 件ちょうどだった」だけのこともあるので、
            * 辿った先が空で終わることはある（安全側）。
            */
-          ...(page.next === null
-            ? {}
-            : { nextCursor: encodeCursor({ id: page.next.id, at: page.next.at }) }),
+          ...(page.next === null ? {} : { nextCursor: encodeConversationCursor(page.next) }),
         });
       },
     )
@@ -6249,8 +6271,12 @@ export function createApp(deps: AppDeps) {
             },
           },
           400: {
-            description: '入力の形が不正（何も作っていない）。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+            description:
+              '入力の形が不正、または source が daemon 自身の予約語（`code`: `reserved_source`＝' +
+              '`token-pool`・`runner-registry`）（何も作っていない）。',
+            content: {
+              'application/json': { schema: resolver(integrationKeyCreateErrorResponseSchema) },
+            },
           },
           500: {
             description: '日誌が書けなかった（**状態を変えていない**）。',
@@ -6264,6 +6290,8 @@ export function createApp(deps: AppDeps) {
       })),
       async (c) => {
         const input = c.req.valid('json');
+        // **daemon 自身が使う予約語の source の鍵は作らない**（外から名乗れる鍵になる）。
+        if (isReservedEventSource(input.source)) return c.json(RESERVED_SOURCE_KEY_BODY, 400);
         const at = integrationClock();
         if (input.expiresAt !== undefined && !(Date.parse(input.expiresAt) > at.getTime())) {
           return c.json({ error: 'expiresAt が過去（何も作っていない）' as const }, 400);
@@ -6460,6 +6488,7 @@ export function createApp(deps: AppDeps) {
               '連携の鍵の source と、本文の source が違う（連携の鍵でだけ起きる。人間・operator は任意の source を名乗れる）。',
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
+          400: eventBadRequestResponse(),
           ...integrationKeyEventResponses(),
           ...eventAttachmentResponses(),
         },
@@ -6475,6 +6504,8 @@ export function createApp(deps: AppDeps) {
           noteIntegrationRefusal(c, 403, '本文の source が鍵の source と違う', principal.keyId);
           return c.json({ error: '本文の source が、この連携の鍵の source と違う' as const }, 403);
         }
+        // **予約語は入口で断る（正規化の後。添付の検査より前なので、何も結ばず何も積まない）。**
+        if (isReservedEventSource(source)) return c.json(RESERVED_SOURCE_BODY, 400);
         const id = randomUUID();
         // **投函の前に検証し、結び付ける**（弾くなら受信箱に何も積まない）。
         const attached = await bindEventAttachments(attachmentIds, id, principal);
@@ -6527,6 +6558,7 @@ export function createApp(deps: AppDeps) {
               '連携の鍵の source と、パスの source が違う（連携の鍵でだけ起きる。人間・operator は任意の source を名乗れる）。',
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
+          400: eventBadRequestResponse(),
           ...noBodyPostResponses(),
           ...integrationKeyEventResponses(),
           ...eventAttachmentResponses(),
@@ -6550,6 +6582,8 @@ export function createApp(deps: AppDeps) {
           noteIntegrationRefusal(c, 403, 'パスの source が鍵の source と違う', principal.keyId);
           return c.json({ error: 'パスの source が、この連携の鍵の source と違う' as const }, 403);
         }
+        // **予約語は入口で断る（正規化の後。本文も添付も読む前なので、何も結ばず何も積まない）。**
+        if (isReservedEventSource(source)) return c.json(RESERVED_SOURCE_BODY, 400);
         const raw = await c.req.text();
         let payload: unknown = raw;
         try {

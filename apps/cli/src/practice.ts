@@ -115,7 +115,7 @@ export async function practiceListCommand(): Promise<void> {
 
 export async function practiceShowCommand(
   slug: string,
-  options: { version?: number } = {},
+  options: { version?: number | string } = {},
 ): Promise<void> {
   const conn = await connect('read');
   if (conn === null) return;
@@ -265,6 +265,9 @@ export async function practiceEditCommand(
       stdout.write('変更はありません。\n');
       return;
     }
+    // **全部消した（空白だけも）なら、`set` と同じ断り**（#3456）。書き込まず、編集は
+    // `keepDraftOnFailure` が残して続きのやり方を言う。「変更なし」の判定より後に置く。
+    if (edited.trim().length === 0) throw new Error(emptyBodyMessage(slug));
     try {
       await write(client, target, slug, kind, title, edited, ifMatch);
     } catch (error) {
@@ -291,6 +294,14 @@ export async function practiceEditCommand(
       });
     }
   });
+}
+
+/** 本文が空（空白だけを含む）のときの断り（#3456。`set` と `edit` で同じ文言）。 */
+function emptyBodyMessage(slug: string): string {
+  return (
+    `やり方 ${slug}: 本文が空なので置き換えません（既存の本文は変えていません）。` +
+    '空にしたいときだけ --allow-empty を付けてください。'
+  );
 }
 
 /**
@@ -323,10 +334,7 @@ export async function practiceSetCommand(
       : await readInputFile(options.file, '--file', '--file <path>、または標準入力（-）');
   // 空の本文は通信の前に断る（#3456。`memory set`・`profile set` と同じ線）。空にしたい人だけ `--allow-empty`。
   if (options.allowEmpty !== true && content.trim().length === 0) {
-    throw new Error(
-      `やり方 ${slug}: 本文が空なので置き換えません（既存の本文は変えていません）。` +
-        '空にしたいときだけ --allow-empty を付けてください。',
-    );
+    throw new Error(emptyBodyMessage(slug));
   }
   await write(client, target, slug, kind, title, content);
 }

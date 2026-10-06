@@ -255,6 +255,32 @@ describe('alteroid practice edit', () => {
     expect(sent.filter((s) => s.method === 'PUT')).toHaveLength(0);
   });
 
+  it.each([
+    ['全部消した', ''],
+    ['空白だけにした', ' \n\t\n'],
+  ])(
+    '本文を%sまま閉じたら、PUT せずに set と同じ文言で断り、編集を残す（#3456）',
+    async (_label, body) => {
+      captureStdout();
+      const err = captureStderr();
+      const bodyFile = join(makeTempDirSync('alteroid-practice-empty-'), 'body.txt');
+      writeFileSync(bodyFile, body);
+      process.env.EDITOR = `sh -c 'cat "${bodyFile}" > "$1"' _`;
+      replies.push({ status: 200, body: practiceBody() });
+
+      const error = await practiceEditCommand('review', {}).catch((e: unknown) => e);
+
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toContain('本文が空');
+      expect((error as Error).message).toContain('--allow-empty');
+      expect(sent.map((s) => s.method)).toEqual(['GET']);
+      const mine = /残してあります: (\S+)/.exec(err())?.[1];
+      expect(mine).toBeDefined();
+      expect(readFileSync(mine ?? '', 'utf8')).toBe(body);
+      rmSync(dirname(mine ?? ''), { recursive: true, force: true });
+    },
+  );
+
   it('$EDITOR が本文を変えたら PUT する（種類と題は引き継ぐ）', async () => {
     captureStdout();
     process.env.EDITOR = `sh -c 'printf "編集後の本文\\n" > "$1"' _`;
@@ -1000,6 +1026,15 @@ describe('alteroid practice の読み出しの失敗の理由', () => {
     replies.push({ status: 400, body: {} });
     await expect(practiceShowCommand('review', { version: 1 })).rejects.toThrow(
       '版番号として成立しません: 1',
+    );
+    expect(read()).toBe('');
+  });
+
+  it('show --version: 成立しない版番号の 400 は、打った文字列をそのまま言う（NaN と言わない）', async () => {
+    const read = captureStdout();
+    replies.push({ status: 400, body: {} });
+    await expect(practiceShowCommand('review', { version: 'abc' })).rejects.toThrow(
+      '版番号として成立しません: abc',
     );
     expect(read()).toBe('');
   });

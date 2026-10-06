@@ -12,8 +12,6 @@ import {
   Empty,
   ConfirmDialog,
   ErrorNote,
-  Input,
-  isImeConfirmEnter,
   KeyValueList,
   Spinner,
   SubmitHint,
@@ -36,6 +34,7 @@ import {
   usageHref,
 } from '@alteroid/logic';
 import { terminalFailureNote as sharedTerminalFailureNote } from '~/lib/manager-failure-note';
+import { LeaveGuardScope, useReportDirty } from '~/lib/leave-guard';
 import { unsentInput } from '~/lib/unsent-input';
 
 /**
@@ -155,7 +154,9 @@ export default function ManagerDetail({ loaderData }: Route.ComponentProps) {
   const detailUnavailable = data === undefined && error !== undefined && !notFound;
 
   return (
-    <>
+    // 「話しかける」と質問への答えの書きかけがあるあいだ、移動・タブを閉じる前に確認を挟む（#3556）。
+    // ブロッカーはこの画面に1つだけ。親の `managers.tsx` は持たない（最後に登録したものが勝つため）。
+    <LeaveGuardScope>
       {/*
         詳細は一覧の右のペインに出る（親の経路 `managers.tsx` の `ListDetail`）ので、画面の枠
         （`Page`）も戻るリンクも持たない。画面の h1 は親が持ち、ここの見出しは h2。狭い画面では
@@ -473,7 +474,7 @@ export default function ManagerDetail({ loaderData }: Route.ComponentProps) {
           <Transcript id={id} />
         </div>
       )}
-    </>
+    </LeaveGuardScope>
   );
 }
 
@@ -1587,6 +1588,8 @@ function QuestionWaitingRow({
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<unknown>(undefined);
   const [note, setNote] = useState<{ text: string; reached: boolean } | undefined>(undefined);
+  // 書きかけの答えがあるあいだは、移動・タブを閉じる前に確認する。送れて欄が空になれば外れる。
+  useReportDirty(`question-answer:${requestId}`, text.trim() !== '');
 
   function submit() {
     // **空文字・空白のみでは送らない。** ボタンの `disabled` だけに頼らない
@@ -1746,11 +1749,13 @@ function SendMessage({
   const [busy, setBusy] = useState(false);
   const [outcome, setOutcome] = useState<{ text: string; reached: boolean } | undefined>(undefined);
   const [failure, setFailure] = useState<unknown>(undefined);
+  // 書きかけの指示があるあいだは、移動・タブを閉じる前に確認する。送れて欄が空になれば外れる。
+  useReportDirty('send-message', text.trim() !== '');
 
   function submit() {
-    // **ボタンの `disabled` だけに頼らない。** Enter でもここへ来る。
-    // 送っている最中の Enter も弾く。ボタンは `loading` で塞がるが、Enter の
-    // 道はボタンを経由しないので、押した数だけ割り込みが飛ぶ。
+    // **ボタンの `disabled` だけに頼らない。** ⌘/Ctrl+Enter でもここへ来る（`Textarea` の `submitDisabled` と同じ条件）。
+    // 送っている最中も弾く。ボタンは `loading` で塞がるが、キーの道はボタンを経由しないので、
+    // 押した数だけ割り込みが飛ぶ。
     if (text.trim() === '' || noWayBack || busy) return;
     setBusy(true);
     setFailure(undefined);
@@ -1790,22 +1795,23 @@ function SendMessage({
             </p>
           )
         )}
-        <div className="flex gap-2">
+        <div className="flex items-end gap-2">
           {/*
             **入力欄までは殺さない。** 書きかけの言葉を取り上げる理由が無いし、
             起こし直した後にそのまま送れる。止めるのは送信だけでよい。
+            質問への答え（`QuestionWaitingRow`）と同じ `Textarea`。長文になりうるので Enter は改行のまま、
+            送信は ⌘/Ctrl + Enter（IME の変換中は送らない。門は `Textarea` が持つ）。
           */}
-          <Input
+          <Textarea
+            className="min-w-0 flex-1"
+            rows={2}
             value={text}
             placeholder="追加の指示"
+            aria-label="追加の指示"
             onChange={(event) => setText(event.target.value)}
-            onKeyDown={(event) => {
-              // IME の変換を確定する Enter では送らない（門の形と理由は
-              // `isImeConfirmEnter` の注釈）。ここは Enter 単体で送るので、
-              // 門が無いと確定前の途中の文字列がそのまま割り込む。
-              if (isImeConfirmEnter(event)) return;
-              if (event.key === 'Enter') submit();
-            }}
+            maxHeight="12rem"
+            onSubmitShortcut={submit}
+            submitDisabled={busy || noWayBack || text.trim() === ''}
           />
           {/*
             **理由と結び付ける。** `disabled` だけだと、支援技術には「押せない」
@@ -1822,6 +1828,9 @@ function SendMessage({
           >
             送る
           </Button>
+        </div>
+        <div className="mt-2">
+          <SubmitHint action="送る" />
         </div>
         <SendOutcomeNote note={outcome} />
         <ErrorNote error={failure} className="mt-2" />
