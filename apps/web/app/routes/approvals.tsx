@@ -1,5 +1,5 @@
 import { AlertTriangle } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { ApprovalEntry } from '~/components/approval-entry';
 import {
@@ -21,6 +21,7 @@ import {
 } from '@alteroid/ui';
 import { useAnswerApprovals, useApprovals } from '@alteroid/swr';
 import {
+  chatDraftEpoch,
   describeApprovalLeftover,
   isEmptyQuestionsDraft,
   loadApprovalDrafts,
@@ -148,7 +149,16 @@ export default function Approvals() {
    * **`sessionStorage` にも写す**（issue #3295）。「回答済み」タブへ移るとこのページは unmount
    * されるので、state だけでは書きかけが黙って消える。初期値は保存したものから読む。
    */
-  const [drafts, setDrafts] = useState<ApprovalDrafts>(loadApprovalDrafts);
+  const [drafts, setDraftsState] = useState<ApprovalDrafts>(loadApprovalDrafts);
+  /**
+   * 書きかけを最後に決めた時点の `chatDraftEpoch()`（#3706）。ログアウトで消したあとに、メモリに残った
+   * 書きかけが書き戻らないよう、保存はこの値が今と同じときだけ行う。
+   */
+  const draftsEpoch = useRef(chatDraftEpoch());
+  const setDrafts = useCallback((update: React.SetStateAction<ApprovalDrafts>) => {
+    draftsEpoch.current = chatDraftEpoch();
+    setDraftsState(update);
+  }, []);
   /** 答えが通った承認の、本文と設問の控え（残った下書きを見せるため。issue #3515）。 */
   const [leftoverSources, setLeftoverSources] = useState<ApprovalLeftoverSources>(
     loadApprovalLeftoverSources,
@@ -243,7 +253,7 @@ export default function Approvals() {
     };
   }, [drafts, approvalsList, unansweredIds, leftoverSources, sendingIds]);
   useEffect(() => {
-    saveApprovalDrafts(liveDrafts);
+    saveApprovalDrafts(liveDrafts, draftsEpoch.current);
   }, [liveDrafts]);
   /**
    * 答えが通ったのに下書きが残っている承認。**まだ未回答の一覧に載っている間は出さない**
