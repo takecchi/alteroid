@@ -21,7 +21,7 @@ import {
  * 退避は (k-1) 回目を丸ごと含む（O(N²)）。畳んでよいかどうかを積む瞬間に判定して
  * 記録する門（`packages/core/src/archive-continuity.ts` の `classifyArchiveContinuity`）
  * と、実際に畳む純関数（`packages/core/src/archive-prune.ts` の
- * `selectArchiveRemovalTargets`）、人間の入口（`POST /archive/remove`）、
+ * `selectArchiveRemovalTargets`）、クローン専用の HTTP の口（`POST /archive/remove`）、
  * クローンの道具（`archive_remove_many`）はすでに揃っているが、**どれも
  * 「誰かが呼ばないと動かない」**——書き側（`#onPreCompact`）は無条件に積み続ける
  * ので、自動で刈る側が1つも無いことが残っている穴だった。この PR がそれを塞ぐ。
