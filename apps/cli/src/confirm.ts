@@ -1,5 +1,6 @@
 import { createInterface } from 'node:readline/promises';
-import { stdin, stdout } from 'node:process';
+import { stdin } from 'node:process';
+import { stdout } from './terminal-out.js';
 
 /**
  * 戻せない操作の確認（Issue #3141）。
@@ -32,7 +33,7 @@ function defaultIo(): ConfirmIo {
       stdout.write(text);
     },
     ask: async (question) => {
-      const rl = createInterface({ input: stdin, output: stdout });
+      const rl = createInterface({ input: stdin, output: process.stdout });
       try {
         return await rl.question(question);
       } finally {

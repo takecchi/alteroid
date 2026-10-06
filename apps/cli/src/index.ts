@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { realpathSync } from 'node:fs';
-import { stdout } from 'node:process';
+import { stderr, stdout } from './terminal-out.js';
 import { pathToFileURL } from 'node:url';
 
 import { REMOVE_MANY_LIMIT_DEFAULT, REMOVE_MANY_LIMIT_MAX } from '@alteroid/core/cli-light';
@@ -1187,7 +1187,7 @@ if (invokedDirectly()) {
     ? launchTui()
     : program.parseAsync(process.argv);
   run.catch((error: unknown) => {
-    process.stderr.write(`alteroid: ${describeCliFailure(error)}\n`);
+    stderr.write(`alteroid: ${describeCliFailure(error)}\n`);
     process.exit(1);
   });
 }

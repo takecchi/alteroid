@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { hostname, platform } from 'node:os';
-import { stdout } from 'node:process';
+import { stdout } from './terminal-out.js';
 import { setTimeout as sleep } from 'node:timers/promises';
 
 import { clearCredential, readCredential, writeCredential } from './credentials.js';

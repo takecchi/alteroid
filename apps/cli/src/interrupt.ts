@@ -1,4 +1,4 @@
-import { stdout } from 'node:process';
+import { stdout } from './terminal-out.js';
 
 import { createClient } from './client.js';
 import { withErrorReason } from './format.js';

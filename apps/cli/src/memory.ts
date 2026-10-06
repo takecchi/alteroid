@@ -1,7 +1,8 @@
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { stdin, stdout } from 'node:process';
+import { stdin } from 'node:process';
+import { stderr, stdout, writeShownBody } from './terminal-out.js';
 
 import { createClient, type DaemonClient } from './client.js';
 import { formatElapsedAgo, withErrorReason } from './format.js';
@@ -278,12 +279,12 @@ export async function memoryShowCommand(slug: string): Promise<void> {
     throw new Error(`そんな記憶はありません: ${slug}`);
   }
   const content = doc.content;
-  stdout.write(content.endsWith('\n') ? content : `${content}\n`);
+  writeShownBody(stdout, content.endsWith('\n') ? content : `${content}\n`);
   // **版は stderr へ1行（Issue #2919）。** stdout は本文をそのまま出す口で、パイプや
   // リダイレクトで使う人がいる（版を混ぜると本文が壊れる）。端末では両方見える。
   // 古いデーモンが `version` を返さなければ出さない。
   if (doc.version !== undefined) {
-    process.stderr.write(
+    stderr.write(
       `版: ${doc.version}（読んだ版を前提に消すなら: alteroid memory remove ${slug} --if-match ${doc.version}）\n`,
     );
   }

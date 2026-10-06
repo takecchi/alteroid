@@ -1,4 +1,4 @@
-import { stdout } from 'node:process';
+import { stdout } from './terminal-out.js';
 
 import { describeRevisionStatus } from '@alteroid/core/cli-light';
 import type {

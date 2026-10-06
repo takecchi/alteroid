@@ -1,4 +1,4 @@
-import { stdout } from 'node:process';
+import { stdout } from './terminal-out.js';
 
 import { describeUnreadableRowsList, formatElapsedAgo, withErrorReason } from './format.js';
 import { describeAuthFailure, forbiddenKindOf, resolveTarget, type Target } from './target.js';
