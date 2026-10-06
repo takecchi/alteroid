@@ -255,6 +255,9 @@
                     "conversationId": {
                       "type": "string"
                     },
+                    "externalEventId": {
+                      "type": "string"
+                    },
                     "uploadedBy": {
                       "type": "string"
                     },
@@ -461,6 +464,9 @@
                       "type": "string"
                     },
                     "conversationId": {
+                      "type": "string"
+                    },
+                    "externalEventId": {
                       "type": "string"
                     },
                     "uploadedBy": {

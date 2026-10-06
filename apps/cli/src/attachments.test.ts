@@ -8,6 +8,7 @@ import { makeTempDir } from '../../../vitest.tmpdir.js';
 import {
   AttachmentDraft,
   attachmentsGetCommand,
+  attachmentsMetaCommand,
   createAttachmentDraft,
   describeAttachment,
   fetchAttachmentLimits,
@@ -197,6 +198,27 @@ describe('alteroid attachments get / 表示', () => {
     await attachmentsGetCommand('att-1', { output: out });
     expect([...(await readFile(out))]).toEqual([1, 2, 3, 255]);
     await expect(attachmentsGetCommand('att-1', { output: out })).rejects.toThrow('上書きしない');
+  });
+
+  it('meta は、外部イベントへ結び付いた添付の externalEventId を出す（在るときだけ。#3523）', async () => {
+    const meta = {
+      id: 'att-1',
+      name: 'a.txt',
+      mediaType: 'text/plain',
+      size: 3,
+      sha256: 'x',
+      createdAt: '2026-10-07T00:00:00Z',
+      expiresAt: '2026-10-08T00:00:00Z',
+    };
+    const bodies = [{ ...meta, externalEventId: 'ev-1', uploadedBy: 'integration:key-1' }, meta];
+    vi.stubGlobal('fetch', () => Promise.resolve(Response.json(bodies.shift())));
+    const out = captureStdout();
+    await attachmentsMetaCommand('att-1');
+    const bound = out();
+    expect(bound).toContain('externalEventId: ev-1\n');
+    expect(bound).toContain('uploadedBy: integration:key-1\n');
+    await attachmentsMetaCommand('att-1');
+    expect(out().slice(bound.length)).not.toContain('externalEventId');
   });
 
   it('名前が - の添付は、-o を省くと ./- に書く（標準出力へは流さない）', async () => {
