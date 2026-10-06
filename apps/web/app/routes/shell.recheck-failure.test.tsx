@@ -11,6 +11,7 @@ import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { storeCredential, type Credential } from '@alteroid/logic';
+import { useAuth } from '@alteroid/swr';
 import { json, Providers, stubFetch, storeTestBaseUrl, TEST_BASE_URL } from '~/test-support';
 
 import Shell from './shell';
@@ -32,13 +33,23 @@ const CREDENTIAL: Credential = {
 
 const FULL_SCREEN = '接続先のサーバに繋がらない'; // 全体表示の見出し（フッターの同文の1行とは別）
 
+/**
+ * 配下の画面。**`useAuth` を Shell とは別のインスタンスで使う**（設定・ログイン画面と同じ）。
+ * 再検証をどのインスタンスが始めるかは購読順で決まる（子の effect が先）ので、判断を
+ * インスタンスごとの state に置くと、実アプリでだけ破れる。
+ */
+function Draft() {
+  useAuth();
+  return <input aria-label="下書き" />;
+}
+
 function renderShell() {
   const router = createMemoryRouter(
     [
       {
         path: '/',
         Component: Shell,
-        children: [{ index: true, Component: () => <input aria-label="下書き" /> }],
+        children: [{ index: true, Component: Draft }],
       },
     ],
     { initialEntries: ['/'] },
@@ -61,23 +72,22 @@ function routes(url: string): Response | undefined {
   return undefined;
 }
 /**
- * 入力欄に書きかけを打ち、`/health` を落としてフォーカスで再取得を起こす。
- * `fakeTimers`: RTL の待ちは実時計を要るので、時計を止めるのは入力を済ませた後にする。
- */
-/**
  * 偽の時計を `ms` 進める。**fetch の失敗は実の非同期で返る**ので、小刻みに進めては
  * 実時計側（`setImmediate`。偽にしていない）で結果を取り込ませる。
  */
 async function advance(ms: number): Promise<void> {
-  for (let left = ms; left > 0; left -= 2_500) {
+  for (let left = ms, first = true; first || left > 0; left -= 2_500, first = false) {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(Math.min(2_500, left));
-      await new Promise((resolve) => setImmediate(resolve));
-      await new Promise((resolve) => setImmediate(resolve));
+      for (let i = 0; i < 5; i++) await new Promise((resolve) => setImmediate(resolve));
     });
   }
 }
 
+/**
+ * 入力欄に書きかけを打ち、`/health` を落としてフォーカスで再取得を起こす。
+ * `fakeTimers`: RTL の待ちは実時計を要るので、時計を止めるのは入力を済ませた後にする。
+ */
 async function typeDraftThenFailRecheck(fakeTimers = false): Promise<HTMLInputElement> {
   const input = await screen.findByLabelText<HTMLInputElement>('下書き');
   fireEvent.change(input, { target: { value: '書きかけ' } });
@@ -86,7 +96,10 @@ async function typeDraftThenFailRecheck(fakeTimers = false): Promise<HTMLInputEl
   await act(async () => {
     window.dispatchEvent(new Event('focus'));
   });
-  if (fakeTimers) await advance(1_000);
+  if (fakeTimers) {
+    // 最初の失敗が取り込まれる（帯が出る）まで、時計を進めずに実の非同期だけを回す。
+    for (let i = 0; i < 200 && screen.queryByRole('status') === null; i++) await advance(0);
+  }
   return input;
 }
 

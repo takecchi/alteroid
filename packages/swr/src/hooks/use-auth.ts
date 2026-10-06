@@ -14,7 +14,6 @@
  * `ungranted` を `anonymous` に混ぜてはいけない。混ぜるとログインし直す導線を
  * 出すことになり、**何度やっても解決しない**（許可は CLI からしか与えられない）。
  */
-import { useRef, useState } from 'react';
 import useSWR from 'swr';
 
 import { ApiError, expectOk, unwrap, useApiContext } from '../api';
@@ -46,19 +45,8 @@ export interface AuthState {
   operator: boolean;
 }
 
-/**
- * 確認済みの後の再検証が失敗したときの、自動の再試行の間隔（ms）。**使い切ったら諦める**
- * （合計 60 秒。そのあいだ画面は奪わない。使い切ると `unreachable` が立つ）。
- */
-const RECHECK_RETRY_DELAYS_MS = [5_000, 10_000, 15_000, 30_000];
-
 export function useAuth() {
   const { client, baseUrl, credential, setCredential, clearCredentialIfCurrent } = useApiContext();
-
-  /** 再試行を使い切った（失敗が続いた）。次に成功するまで立てたままにする。 */
-  const [gaveUp, setGaveUp] = useState(false);
-  /** 取れたことがあるか。`onErrorRetry` は `useSWR` の戻りより先に作られるので ref で渡す。 */
-  const verifiedRef = useRef(false);
 
   const query = useSWR<AuthState>(
     // 接続先と鍵が変われば見直す。
@@ -116,25 +104,8 @@ export function useAuth() {
         throw error;
       }
     },
-    {
-      // 認証まわりは「繋がらない」と区別が付くよう、黙って再試行し続けない。
-      // **まだ一度も取れていない（初回の失敗）は再試行しない**——接続先が間違っている
-      // 可能性が高く、画面が「接続先を直す」を出して待つ。確認済みの後の失敗だけ、
-      // 間隔を空けて再試行し、使い切ったら `gaveUp` にする（issue #3063）。
-      onErrorRetry: (_error, _key, _config, revalidate, { retryCount }) => {
-        if (!verifiedRef.current) return;
-        const delay = RECHECK_RETRY_DELAYS_MS[retryCount - 1];
-        if (delay === undefined) {
-          setGaveUp(true);
-          return;
-        }
-        setTimeout(() => void revalidate({ retryCount }), delay);
-      },
-      onSuccess: () => {
-        verifiedRef.current = true;
-        setGaveUp(false);
-      },
-    },
+    // 認証まわりは「繋がらない」と区別が付くよう、黙って再試行し続けない。
+    { shouldRetryOnError: false },
   );
 
   const status: AuthStatus = query.data === undefined ? 'checking' : query.data.status;
@@ -145,13 +116,6 @@ export function useAuth() {
     account: query.data?.account ?? null,
     operator: query.data?.operator ?? false,
     error: query.error as unknown,
-    /**
-     * 確認済みの後の再検証が失敗している最中か（画面は保ったまま知らせる）。`error` は
-     * 立っていて `status` は直前の値のまま。`unreachable` が立つまでは自動で再試行している。
-     */
-    recheckFailing: query.error !== undefined && query.data !== undefined && !gaveUp,
-    /** 失敗が続いて再試行を使い切った、または一度も確認が取れていない失敗。全体表示の合図。 */
-    unreachable: query.error !== undefined && (query.data === undefined || gaveUp),
     isLoading: query.isLoading,
     /** 取り直しの最中（接続の失敗画面の「もう一度試す」が押せなくなる印）。 */
     isValidating: query.isValidating,
