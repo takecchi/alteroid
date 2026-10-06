@@ -167,9 +167,7 @@ describe('#3685: 非 TTY の /edit・/resume・/attach・/detach の失敗で止
       const out = captureStdout();
       const { settled } = await start();
       rl.emit('line', command);
-      await flush();
       rl.emit('line', 'hello');
-      await flush();
       const error = await settled;
       out();
       expect(error?.message).toContain(command.split(' ')[0]);
@@ -184,13 +182,11 @@ describe('#3685: 非 TTY の /edit・/resume・/attach・/detach の失敗で止
       const out = captureStdout();
       await start();
       rl.emit('line', command);
-      await flush();
+      await vi.waitFor(() => expect(out()).toMatch(/添えられません|外せません|エラー/));
       rl.emit('line', 'hello');
-      await flush();
+      await vi.waitFor(() => expect(chats(calls)).toEqual(['hello']));
       rl.close();
       await flush();
-      out();
-      expect(chats(calls)).toEqual(['hello']);
     });
   }
 
