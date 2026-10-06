@@ -415,4 +415,36 @@ describe('移送で引き取れない抜け方をした候補の扱い（#3103 �
       vi.useRealTimers();
     }
   });
+
+  it('併存の見送りが梯子で繰り返し届いても、同じ (委譲, runner) の断りの日誌は1本のまま（#3148）', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const stores = createMemoryStores();
+      await stores.jobs.putJob(jobWith('mgr-dup-ladder', 'runner-a'));
+      const fake = createFakeRegistry();
+      fake.entries.push(entryOf('runner-a', 'lost', 'runner-a'));
+      fake.entries.push(entryOf('http://b-1', 'connected', 'runner-b'));
+      fake.entries.push(entryOf('http://b-2', 'connected', 'runner-b'));
+      // 残りの候補 c は名簿に居るが取りに来ない（client 無し）ので、候補は尽きない。
+      fake.entries.push(entryOf('runner-c', 'connected', 'runner-c'));
+      const runnerB = fakeRunner('runner-b');
+      fake.addClient(runnerB.client);
+      const { pool } = setup(stores, fake.registry);
+
+      await pool.reattachRunner('runner-b');
+      await vi.advanceTimersByTimeAsync(LADDER_MS);
+
+      const refusals = (await journalTexts(stores)).filter((t) =>
+        t.includes('移送先 runner-b が resume を断った'),
+      );
+      expect(refusals.length).toBe(1);
+      expect({
+        status: (await jobOf(stores, 'mgr-dup-ladder'))?.status,
+        resumes: runnerB.resumes.length,
+      }).toEqual({ status: 'running', resumes: 0 });
+      await pool.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
