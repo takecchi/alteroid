@@ -1185,11 +1185,8 @@ class Host implements RunnerHost {
     }
     // **添付は、セッションを作る前に置く。** 置けなければ（sha256 の不一致など）セッションを作らずに断る。
     // 置いた後に最初のターンが走るので、「ファイルが置かれる前に担い手が読む」競りは起きない。
-    const input = await this.#attachmentInput(
-      command.managerId,
-      command.request,
-      command.attachments,
-    );
+    const placing = this.#attachmentInput(command.managerId, command.request, command.attachments);
+    const input = placing instanceof Promise ? await placing : placing;
     if (this.#sessions.has(command.managerId)) {
       throw new Error(`${command.managerId} は既に走っている`);
     }
@@ -1261,11 +1258,12 @@ class Host implements RunnerHost {
       alive.checkFence(command.lease);
       if (!alive.stopping) {
         if (command.message !== undefined) {
-          const input = await this.#attachmentInput(
+          const placing = this.#attachmentInput(
             command.managerId,
             command.message,
             command.attachments,
           );
+          const input = placing instanceof Promise ? await placing : placing;
           alive.push(input.text, input.images);
         }
         return { cwd: alive.cwd, reusedLiveSession: true };
@@ -1281,11 +1279,12 @@ class Host implements RunnerHost {
         if (!afterWait.stopping) {
           // 並行した resume が先に新しいセッションを作っていた。合流する。
           if (command.message !== undefined) {
-            const input = await this.#attachmentInput(
+            const placing = this.#attachmentInput(
               command.managerId,
               command.message,
               command.attachments,
             );
+            const input = placing instanceof Promise ? await placing : placing;
             afterWait.push(input.text, input.images);
           }
           return { cwd: afterWait.cwd, reusedLiveSession: true };
@@ -1296,10 +1295,11 @@ class Host implements RunnerHost {
       }
     }
     // 添付は、セッションを作る前に置く（`start` と同じ理由）。`message` が無ければ使わない。
-    const resumeInput =
+    const resumePlacing =
       command.message === undefined
         ? undefined
-        : await this.#attachmentInput(command.managerId, command.message, command.attachments);
+        : this.#attachmentInput(command.managerId, command.message, command.attachments);
+    const resumeInput = resumePlacing instanceof Promise ? await resumePlacing : resumePlacing;
     const session = this.#create(command.managerId, command.request, command.cwd, command.provider);
     // **この Host インスタンスにとっては初めて見るセッション**（器の入れ替え・
     // デーモンの再起動後の resume、または上の待ちを経て名簿から消えた直後）
@@ -1325,7 +1325,8 @@ class Host implements RunnerHost {
     // resume に回る。
     if (!session || session.stopping) return false;
     // 無いセッションへは置かない（上で `false` を返した）。置けなければ（sha256 の不一致など）積まずに投げる。
-    const input = await this.#attachmentInput(managerId, text, attachments);
+    const placing = this.#attachmentInput(managerId, text, attachments);
+    const input = placing instanceof Promise ? await placing : placing;
     // 置いている間に畳まれたら、積まずに `false`（デーモンは resume に回る）。置いたものは `onClosed` が消す。
     if (session.stopping || this.#sessions.get(managerId) !== session) return false;
     session.push(input.text, input.images);
@@ -1336,12 +1337,22 @@ class Host implements RunnerHost {
    * 担い手へ渡す添付を置いて、入力（本文 + 通知行 + 画像）にする。添付が無ければ `{ text }` のまま。
    * 置く前に、取りこぼしの置き場を掃除する（生きた委譲と、猶予内のものは残す）。
    */
-  async #attachmentInput(
+  #attachmentInput(
     managerId: string,
     text: string,
     attachments: readonly RunnerAttachment[] | undefined,
-  ): Promise<AgentUserInput> {
+  ): AgentUserInput | Promise<AgentUserInput> {
+    // **添付が無ければ同期で返す**（`await` を挟まない）。`send` / `resume` の「畳み中の判定から積むまで」に
+    // 余計な yield を足すと、並行した resume との競り（#1660）の順序が変わる。
     if (attachments === undefined || attachments.length === 0) return { text };
+    return this.#placeAttachmentInput(managerId, text, attachments);
+  }
+
+  async #placeAttachmentInput(
+    managerId: string,
+    text: string,
+    attachments: readonly RunnerAttachment[],
+  ): Promise<AgentUserInput> {
     void pruneStaleAttachmentDirs(
       this.#attachmentsRoot,
       [...this.#sessions.keys(), managerId],
