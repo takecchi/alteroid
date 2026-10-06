@@ -18,17 +18,21 @@ import { json, Providers, sse, stubFetch, type FetchStub, type Route } from '~/t
 import Dashboard from './dashboard';
 
 export interface HomeOptions {
-  usage?: {
-    rows: unknown[];
-    since: string | null;
-    beforeLedger: boolean;
-    notice?: string;
-    turnRows?: unknown[];
-    /** `null` は「応答に `today` が無い」（古いデーモン）。既定は 2026-08-14。 */
-    today?: string | null;
-    unreadableRows?: unknown[];
-  };
-  reports?: unknown[];
+  /** `'fail'` は 500。 */
+  usage?:
+    | 'fail'
+    | {
+        rows: unknown[];
+        since: string | null;
+        beforeLedger: boolean;
+        notice?: string;
+        turnRows?: unknown[];
+        /** `null` は「応答に `today` が無い」（古いデーモン）。既定は 2026-08-14。 */
+        today?: string | null;
+        unreadableRows?: unknown[];
+      };
+  /** `'fail'` は 500。 */
+  reports?: unknown[] | 'fail';
   /** 承認待ちの行。`'fail'` は 500、`{ raw }` は応答の本文をそのまま返す（版のずれ）。 */
   approvals?: unknown[] | 'fail' | { raw: unknown };
   managers?: { managers: unknown; unreadable?: unknown[] } | 'fail';
@@ -75,14 +79,18 @@ export const PROGRESS_BODY = {
 
 /** 経路の表。`hold` は呼び手（`renderHome`）が別に包む。 */
 export function homeRoute(options: HomeOptions = {}): Route {
-  const usage = options.usage ?? { rows: [], since: null, beforeLedger: false };
+  const usageOption = options.usage ?? { rows: [], since: null, beforeLedger: false };
   return (url, init) => {
     if (url.includes('/topology/stream')) {
       return options.topology === undefined
         ? undefined
         : sse(options.topology.frames, { keepOpen: true, signal: init?.signal });
     }
-    if (url.includes('/reports')) return json({ reports: options.reports ?? [] });
+    if (url.includes('/reports')) {
+      return options.reports === 'fail'
+        ? json({ error: 'internal' }, 500)
+        : json({ reports: options.reports ?? [] });
+    }
     if (url.includes('/approvals')) {
       const approvals = options.approvals ?? [];
       if (approvals === 'fail') return json({ error: 'internal' }, 500);
@@ -102,6 +110,8 @@ export function homeRoute(options: HomeOptions = {}): Route {
       return schedule === 'fail' ? json({ error: 'internal' }, 500) : json(schedule);
     }
     if (url.includes('/usage')) {
+      if (usageOption === 'fail') return json({ error: 'internal' }, 500);
+      const usage = usageOption;
       const { today, ...rest } = usage;
       return json({
         ...rest,

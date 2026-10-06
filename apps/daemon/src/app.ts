@@ -57,6 +57,7 @@ import {
   TokenPoolInputError,
   UnreadableAccountError,
   UnreadableCommitmentError,
+  UnreadableJournalEntryError,
   UnreadablePermissionGrantError,
   UnreadablePracticeError,
   approvalUpdatedAt,
@@ -3113,7 +3114,9 @@ export function createApp(deps: AppDeps) {
               '`clientMessageId` が、**別の会話**の発言として既に受け取られている（`code: client_message_id_conflict`）。' +
               'または、**同じ会話**で受け取り済みだが**中身が違う**（`code: client_message_id_mismatch`。' +
               '本文・添付の id の集合・`supersedes` のどれかが1回目と違う。2回目の中身は積まず、添付も結び付けない）。' +
-              '中身が同じ再送は 409 ではなく、二重に受けずに 200（下の説明）。',
+              '中身が同じ再送は 409 ではなく、二重に受けずに 200（下の説明）。' +
+              'または、`supersedes` が指す発言が日誌に**在るが読めない**（`code` は無い。400 の「見つからない」とは別。' +
+              '何も積まない）。',
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
         },
@@ -3187,7 +3190,7 @@ export function createApp(deps: AppDeps) {
         }
 
         /** 検証に落ちた送信の id は覚えない（#3208）。先取りを取り下げてから 400 を返す。 */
-        const failEdit = (body: { error: string }, status: 400) => {
+        const failEdit = (body: { error: string }, status: 400 | 409) => {
           claim?.settle(false);
           return c.json(body, status);
         };
@@ -3210,7 +3213,17 @@ export function createApp(deps: AppDeps) {
             // 対象は `journal.get` で直接引く——`scan`/窓には縛られない、日誌
             // そのものへの厳密な問い合わせである（`conversation_read id=<id>` の
             // 全文モードと同じ考え方）。
-            const target = await stores.journal.get(supersedes);
+            let target: JournalEntry | null;
+            try {
+              target = await stores.journal.get(supersedes);
+            } catch (error) {
+              // 在るが読めない行を「見つからない」（400）と言わない（issue #3288）。
+              // 他の `Unreadable*Error`（承認・やり方・許可）と同じ 409 + `error.message`。
+              if (error instanceof UnreadableJournalEntryError) {
+                return failEdit({ error: error.message }, 409);
+              }
+              throw error;
+            }
             // (2) 指した id が窓の中に無い / その会話のものでない。
             if (
               target === null ||
@@ -3855,13 +3868,29 @@ export function createApp(deps: AppDeps) {
             description: '`through` の発言が日誌に無い（人間との往復でない場合を含む）。',
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
+          409: {
+            description:
+              '`through` の発言は日誌に**在るが読めない**（形が合わない壊れた行。404 の「無い」とは別。' +
+              '既読の位置は動かしていない）。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
         },
       }),
       jsonBody(conversationReadRequestSchema),
       async (c) => {
         const id = c.req.param('id');
         const { through } = c.req.valid('json');
-        const target = await stores.journal.get(through);
+        let target: JournalEntry | null;
+        try {
+          target = await stores.journal.get(through);
+        } catch (error) {
+          // 在るが読めない行を「見つからない」（404）と言わない（issue #3288）。
+          // **既読の位置は動かしていない。**
+          if (error instanceof UnreadableJournalEntryError) {
+            return c.json({ error: error.message }, 409);
+          }
+          throw error;
+        }
         if (target === null || target.type !== 'exchange' || target.with !== 'human') {
           return c.json({ error: `発言 ${through} は見つからない` as const }, 404);
         }
@@ -5270,13 +5299,12 @@ export function createApp(deps: AppDeps) {
           if (localDayRange(answeredOn) === null) {
             return c.json({ error: 'answeredOn は YYYY-MM-DD で指定する' as const }, 400);
           }
-          const settled = await stores.jobs.listApprovals({ pendingOnly: false });
-          const onDay = approvalsSettledOn(
-            conversationId === undefined
-              ? settled.entries
-              : settled.entries.filter((approval) => approval.conversationId === conversationId),
-            answeredOn,
-          );
+          // 会話の絞りはここでもストアに渡す（#3290）。
+          const settled = await stores.jobs.listApprovals({
+            pendingOnly: false,
+            ...(conversationId === undefined ? {} : { conversationId }),
+          });
+          const onDay = approvalsSettledOn(settled.entries, answeredOn);
           // `unreadable` は載せない: 読めない行は決着の日時も分からず、どの日にも置けない
           // （未回答の画面が言う）。
           return c.json(
@@ -5289,16 +5317,16 @@ export function createApp(deps: AppDeps) {
           );
         }
 
-        const approvalList = await stores.jobs.listApprovals({ pendingOnly: pending !== 'false' });
-        const byPending = approvalList.entries;
-        // **`conversationId` は `pending` の直後、`total` を数える前に当てる。**
-        // `total` は「この呼びが対象にしている集合」の件数であって、絞り込みを
-        // 当てる前の全件ではない——`pending` が既にそうしている（未回答のみに
-        // 絞ってから数える）のと同じ順序に揃える。
-        const approvals =
-          conversationId === undefined
-            ? byPending
-            : byPending.filter((approval) => approval.conversationId === conversationId);
+        // **`conversationId` の絞りはストアに渡す**（issue #3290。全件を取ってメモリで
+        // 絞ると、会話を開くたびの費用が承認の総数に比例する）。`pending` の直後、
+        // `total` を数える前に当たる——`total` は「この呼びが対象にしている集合」の件数で
+        // あって、絞り込みを当てる前の全件ではない（`pending` が既にそうしている）。
+        // `unreadable` は会話で絞られない（`JobStore.listApprovals` の doc）。
+        const approvalList = await stores.jobs.listApprovals({
+          pendingOnly: pending !== 'false',
+          ...(conversationId === undefined ? {} : { conversationId }),
+        });
+        const approvals = approvalList.entries;
         // **`total` は `limit` / `cursor` を当てる前の件数。** opt-in していない
         // ときは応答に載せないので、ここで数えておくだけで並べ替えは行わない。
         const total = approvals.length;
