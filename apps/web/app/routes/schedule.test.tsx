@@ -987,3 +987,157 @@ describe('書きかけの依頼を確認なしで消さない（#3374）', () =>
     expect(screen.queryByRole('alertdialog')).toBeNull();
   });
 });
+
+describe('送信中の二重送信の門と、送信中に打ち足した分（#3555・#3506）', () => {
+  /** POST の応答を、テストが解くまで保留にする（実時間の待ちを書かない）。GET /schedule は一覧を返す。 */
+  function holdPosts(entries: unknown[]): {
+    resolveNext: (res: Response) => void;
+    posts: () => string[];
+  } {
+    const pending: ((res: Response) => void)[] = [];
+    const urls: string[] = [];
+    globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+      const request = input instanceof Request ? input : null;
+      const url = request?.url ?? String(input);
+      const method = request?.method ?? init?.method ?? 'GET';
+      if (method === 'GET') return Promise.resolve(json({ entries }));
+      urls.push(url);
+      return new Promise<Response>((resolve) => pending.push(resolve));
+    }) as typeof fetch;
+    return {
+      resolveNext: (res) => {
+        const next = pending.shift();
+        if (next === undefined) throw new Error('保留中の要求が無い');
+        next(res);
+      },
+      posts: () => urls,
+    };
+  }
+
+  const ctrlEnter = { key: 'Enter', ctrlKey: true };
+
+  it('仕込む: 送信中に ⌘/Ctrl+Enter をもう一度押しても、要求は1回だけ', async () => {
+    const held = holdPosts([DEFAULT_ENTRY]);
+    renderSchedule();
+    fireEvent.change(await screen.findByLabelText(/依頼の名前/), { target: { value: 'k1' } });
+    const box = screen.getByLabelText('依頼の本文');
+    fireEvent.change(box, { target: { value: '本文' } });
+
+    // 同じ描画の間に2回（描き直しの前に2回目が届く）。
+    act(() => {
+      fireEvent.keyDown(box, ctrlEnter);
+      fireEvent.keyDown(box, ctrlEnter);
+    });
+    expect(held.posts()).toHaveLength(1);
+    // 描き直したあとの3回目も、応答が返るまでは送らない。
+    fireEvent.keyDown(box, ctrlEnter);
+    expect(held.posts()).toHaveLength(1);
+
+    held.resolveNext(json({ ok: true }));
+    expect(await screen.findByText('仕込んだ: k1')).toBeTruthy();
+    expect(held.posts()).toHaveLength(1);
+  });
+
+  it('仕込む: 確認の枠からの「置き換える」も、送信中は2回目を送らない', async () => {
+    const held = holdPosts([DEFAULT_ENTRY, SPEC_ENTRY]);
+    renderSchedule();
+    await screen.findByText('morning-issues');
+    fireEvent.change(screen.getByLabelText(/依頼の名前/), { target: { value: 'morning-issues' } });
+    const box = screen.getByLabelText('依頼の本文');
+    fireEvent.change(box, { target: { value: '新しい本文' } });
+    fireEvent.click(screen.getByRole('button', { name: '仕込む' }));
+    const dialog = await screen.findByRole('alertdialog');
+    const confirm = within(dialog).getByRole('button', { name: '置き換える' });
+
+    act(() => {
+      fireEvent.click(confirm);
+      fireEvent.click(confirm);
+    });
+    expect(held.posts()).toHaveLength(1);
+    // 送信中に、確認を経ずに ⌘/Ctrl+Enter を押しても送らない。
+    fireEvent.keyDown(box, ctrlEnter);
+    expect(held.posts()).toHaveLength(1);
+
+    held.resolveNext(json({ ok: true }));
+    expect(await screen.findByText('置き換えた: morning-issues')).toBeTruthy();
+    expect(held.posts()).toHaveLength(1);
+  });
+
+  it('編集: 送信中に ⌘/Ctrl+Enter をもう一度押しても、要求は1回だけ', async () => {
+    const held = holdPosts([SPEC_ENTRY]);
+    renderSchedule();
+    fireEvent.click(await screen.findByRole('button', { name: `${SPEC_ENTRY.kind} を編集` }));
+    const panel = await screen.findByRole('group', { name: `${SPEC_ENTRY.kind} を編集` });
+    fireEvent.mouseDown(within(panel).getByRole('tab', { name: '編集' }));
+    const box = within(panel).getByLabelText('依頼の本文');
+    fireEvent.change(box, { target: { value: '直した本文' } });
+
+    act(() => {
+      fireEvent.keyDown(box, ctrlEnter);
+      fireEvent.keyDown(box, ctrlEnter);
+    });
+    expect(held.posts()).toHaveLength(1);
+    held.resolveNext(json({ ok: true }));
+    await waitFor(() => expect(screen.queryByRole('group', { name: /を編集$/ })).toBeNull());
+    expect(held.posts()).toHaveLength(1);
+  });
+
+  it('外部イベント: 送信中に ⌘/Ctrl+Enter をもう一度押しても、要求は1回だけ', async () => {
+    const held = holdPosts([DEFAULT_ENTRY]);
+    renderSchedule();
+    fireEvent.change(await screen.findByLabelText('送り元の名前'), { target: { value: 'ci' } });
+    const box = screen.getByLabelText('知らせの内容');
+    fireEvent.change(box, { target: { value: '{"a":1}' } });
+
+    act(() => {
+      fireEvent.keyDown(box, ctrlEnter);
+      fireEvent.keyDown(box, ctrlEnter);
+    });
+    expect(held.posts()).toHaveLength(1);
+    held.resolveNext(json({ id: 'e1' }));
+    expect(await screen.findByText('受け付けた')).toBeTruthy();
+    expect(held.posts()).toHaveLength(1);
+  });
+
+  it('仕込む: 送信中に本文へ打ち足すと、成功のあとも打ち足し分が残る。足さなければ空になる', async () => {
+    const held = holdPosts([DEFAULT_ENTRY]);
+    renderSchedule();
+    const kindBox = (await screen.findByLabelText(/依頼の名前/)) as HTMLInputElement;
+    const box = screen.getByLabelText('依頼の本文') as HTMLTextAreaElement;
+    fireEvent.change(kindBox, { target: { value: 'k1' } });
+    fireEvent.change(box, { target: { value: '朝の依頼' } });
+    fireEvent.click(screen.getByRole('button', { name: '仕込む' }));
+
+    fireEvent.change(box, { target: { value: '朝の依頼 続き' } });
+    held.resolveNext(json({ ok: true }));
+    expect(await screen.findByText('仕込んだ: k1')).toBeTruthy();
+    expect(box.value).toBe('続き');
+    expect(kindBox.value).toBe('');
+
+    // 追記しなければ、これまでどおり空になる。
+    fireEvent.change(kindBox, { target: { value: 'k2' } });
+    fireEvent.change(box, { target: { value: '別の依頼' } });
+    fireEvent.click(screen.getByRole('button', { name: '仕込む' }));
+    held.resolveNext(json({ ok: true }));
+    expect(await screen.findByText('仕込んだ: k2')).toBeTruthy();
+    expect(box.value).toBe('');
+  });
+
+  it('外部イベント: 送信中に内容へ打ち足すと、成功のあとも打ち足し分が残る。足さなければ空になる', async () => {
+    const held = holdPosts([DEFAULT_ENTRY]);
+    renderSchedule();
+    fireEvent.change(await screen.findByLabelText('送り元の名前'), { target: { value: 'ci' } });
+    const box = screen.getByLabelText('知らせの内容') as HTMLTextAreaElement;
+    fireEvent.change(box, { target: { value: 'build failed' } });
+    fireEvent.click(screen.getByRole('button', { name: '送る' }));
+
+    fireEvent.change(box, { target: { value: 'build failed on main' } });
+    held.resolveNext(json({ id: 'e1' }));
+    await waitFor(() => expect(box.value).toBe('on main'));
+
+    fireEvent.change(box, { target: { value: 'second' } });
+    fireEvent.click(screen.getByRole('button', { name: '送る' }));
+    held.resolveNext(json({ id: 'e2' }));
+    await waitFor(() => expect(box.value).toBe(''));
+  });
+});
