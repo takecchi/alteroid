@@ -163,6 +163,16 @@ describe('ChatMessageEditor: キー操作', () => {
     expect(onCancel).toHaveBeenCalledTimes(1);
   });
 
+  it('IME の変換中の Escape（isComposing / keyCode 229）では閉じない（#3394）', () => {
+    const { box, onCancel } = setup();
+    fireEvent.keyDown(box, { key: 'Escape', isComposing: true });
+    fireEvent.keyDown(box, { key: 'Escape', keyCode: 229 });
+    expect(onCancel).not.toHaveBeenCalled();
+    // 変換が終われば、Escape はやめる操作に戻る。
+    fireEvent.keyDown(box, { key: 'Escape' });
+    expect(onCancel).toHaveBeenCalledTimes(1);
+  });
+
   it('IME の変換を確定する Enter（isComposing / keyCode 229）では確定しない', () => {
     const { box, onConfirm } = setup();
     fireEvent.keyDown(box, { key: 'Enter', ctrlKey: true, isComposing: true });

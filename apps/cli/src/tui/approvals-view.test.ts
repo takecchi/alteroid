@@ -178,7 +178,7 @@ describe('最下行と入力欄', () => {
     expect(approvalStatusText(detailOf({ mode: 'confirm', notice: 'x' }), 3).text).toContain(
       'y で送る',
     );
-    expect(approvalStatusText(detailOf({ notice: '結果', error: '失敗' }), 3)).toEqual({
+    expect(approvalStatusText(detailOf({ notice: '結果' }), 0)).toEqual({
       text: '結果',
       tone: 'dim',
     });
@@ -191,6 +191,22 @@ describe('最下行と入力欄', () => {
     expect(approvalStatusText(detailOf({ approval: null, missing: true }), 0).text).toContain(
       '見つからない',
     );
+  });
+
+  it('操作の結果が残っていても、取り直しの失敗と窓の外の行数を隠さない（#3368）', () => {
+    // notice は詳細を閉じるまで消えない。後ろの状態を隠すと、取り直しが止まっていても健全に見える。
+    expect(approvalStatusText(detailOf({ notice: '結果', error: '失敗' }), 0)).toEqual({
+      text: '結果 · ⚠ 取り直せなかった: 失敗',
+      tone: 'warn',
+    });
+    expect(approvalStatusText(detailOf({ notice: '結果' }), 3)).toEqual({
+      text: '結果 · ↓ あと 3 行',
+      tone: 'dim',
+    });
+    expect(approvalStatusText(detailOf({ notice: '結果', error: '失敗' }), 3)).toEqual({
+      text: '結果 · ⚠ 取り直せなかった: 失敗 · ↓ あと 3 行',
+      tone: 'warn',
+    });
   });
 
   it('入力欄のプレースホルダは、いま何を書く欄かを言う', () => {

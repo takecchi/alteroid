@@ -18,16 +18,14 @@ import { captureStdout } from './test-support.js';
  * 実例と同じ形）。`fetch` を差し替えて本物の型付きクライアント（`hono/client`）を
  * 通す形は `conversations.test.ts` / `memory.test.ts` と同じ。
  */
-vi.mock('./target.js', () => ({
+vi.mock('./target.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./target.js')>()),
   // `vi.fn()` にしてあるのは、「ログインしていない」note 分岐だけ1件
   // `mockResolvedValueOnce` で上書きしたいため（`login.test.ts` と同じ理由）。
   resolveTarget: vi.fn(() =>
     Promise.resolve({ baseUrl: 'http://127.0.0.1:4517', headers: {}, note: null, remote: false }),
   ),
-  // #1641: `runnersVacateCommand` が失敗時に `describeAuthFailure` を呼ぶように
-  // なった（`memory.test.ts` / `practice.test.ts` と同じスタブ。ここでは認証の
-  // 判別そのものは見ないので、常に `null`＝「判別できない」を返す）。
-  describeAuthFailure: () => null,
+  // `describeAuthFailure` は本物を使う（401/403 を例外にする歯のため。#3446）。
 }));
 
 const { renderRunners, runnersCommand, runnersVacateCommand } = await import('./runners.js');
@@ -556,14 +554,24 @@ describe('runnersCommand', () => {
     expect(read()).toBe('https://runner.example.com にログインしていません（alteroid login）\n');
   });
 
-  it('応答が失敗（ok でない）なら、読めなかったと書く（renderRunners は呼ばない）', async () => {
+  it('応答が失敗（ok でない）なら、読めなかったと例外で言う（stdout に書かず、renderRunners は呼ばない。#3446）', async () => {
     replies.push({ status: 500, body: {} });
     const read = captureStdout();
 
-    await runnersCommand();
-
     // 理由が読めない本文（`{}`）でも、状態コードは載せる（固定の文言だけにしない）。
-    expect(read()).toBe('runner の一覧を読めませんでした（HTTP 500）\n');
+    await expect(runnersCommand()).rejects.toThrow('runner の一覧を読めませんでした（HTTP 500）');
+    expect(read()).toBe('');
+  });
+
+  it.each([
+    [401, '認証されませんでした'],
+    [403, 'access grant'],
+  ])('%i は describeAuthFailure の文を例外で言う（#3446）', async (status, phrase) => {
+    replies.push({ status, body: {} });
+    const read = captureStdout();
+
+    await expect(runnersCommand()).rejects.toThrow(phrase);
+    expect(read()).toBe('');
   });
 
   it('応答が失敗（500 + { error }）なら、状態コードとデーモンの理由も書く', async () => {
@@ -573,11 +581,10 @@ describe('runnersCommand', () => {
     });
     const read = captureStdout();
 
-    await runnersCommand();
-
-    expect(read()).toBe(
-      'runner の一覧を読めませんでした（HTTP 500）: 一覧の読み出しが失敗した（runners のテスト用）\n',
+    await expect(runnersCommand()).rejects.toThrow(
+      'runner の一覧を読めませんでした（HTTP 500）: 一覧の読み出しが失敗した（runners のテスト用）',
     );
+    expect(read()).toBe('');
   });
 });
 

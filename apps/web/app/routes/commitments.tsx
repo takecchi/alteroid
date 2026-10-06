@@ -1416,34 +1416,26 @@ function PushForm({ onDirtyChange }: { onDirtyChange: (id: string, dirty: boolea
         <label htmlFor={inputId} className="text-xs font-medium text-muted-foreground">
           何を引き受けたか
         </label>
-        <Input
+        {/*
+          複数行の `Textarea`（編集欄 `CommitmentBodyEditor` と同じ部品。#3376）。**Enter は改行**で、
+          登録は積むボタン・Cmd/Ctrl+Enter（共有の `Textarea` の `onSubmitShortcut`）。
+          IME の変換確定の Enter は改行にもならず送りにもならない（`isSubmitShortcut` が除く）。
+        */}
+        <Textarea
           id={inputId}
           aria-describedby={bodyHintId}
+          rows={3}
+          maxHeight="60vh"
           value={body}
           placeholder="例: 金曜までに週次レビューを出す"
           onChange={(event) => setBody(event.target.value)}
-          onKeyDown={(event) => {
-            // IME 変換中の Enter を拾わない。ここは Enter 単体で送るので、
-            // 変換確定の Enter がそのまま誤送信になる（`ChatComposer` の
-            // ⌘/Ctrl+Enter より直接踏む形）。門の形と理由（`event.nativeEvent.isComposing`
-            // を見る理由・`keyCode === 229` を併用する理由）は `packages/ui/src/components/features/chat/ime.ts` の `isImeConfirmEnter` と `packages/ui/src/components/features/chat/chat-composer.tsx` の
-            // 「IME で変換している最中の Enter では送らない。」のコメントを参照。
-            if (
-              event.key === 'Enter' &&
-              (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229)
-            ) {
-              return;
-            }
-            if (event.key === 'Enter') {
-              event.preventDefault();
-              void submit();
-            }
-          }}
+          onSubmitShortcut={() => void submit()}
+          submitDisabled={body.trim() === '' || busy}
         />
         <FieldHint id={bodyHintId} className="-mt-1">
           何を引き受けたかを全文で書く。切って短く見せるのは一覧側の仕事。
         </FieldHint>
-        <div>
+        <div className="flex items-center gap-2">
           <Button
             variant="primary"
             loading={busy}
@@ -1452,6 +1444,7 @@ function PushForm({ onDirtyChange }: { onDirtyChange: (id: string, dirty: boolea
           >
             積む
           </Button>
+          <SubmitHint action="登録" />
         </div>
         <ErrorNote error={failure} />
       </div>

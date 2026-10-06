@@ -53,11 +53,12 @@ export async function permissionListCommand(options: PermissionListOptions = {})
   const client = createClient(target.baseUrl, target.headers);
   const response = await client['permission-grants'].$get();
   if (!response.ok) {
+    // 失敗は例外で上へ通す（＝終了コードが 0 でなくなる。#3446）。
     const described = describeAuthFailure(response.status, target);
-    stdout.write(
-      `${described ?? (await withErrorReason(`許可の一覧を読めませんでした（${response.status}）`, response))}\n`,
+    if (described !== null) throw new Error(described);
+    throw new Error(
+      await withErrorReason(`許可の一覧を読めませんでした（${response.status}）`, response),
     );
-    return;
   }
   const { grants, rowsUnreadable } = (await response.json()) as {
     grants: PermissionGrant[];

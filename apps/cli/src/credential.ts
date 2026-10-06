@@ -193,14 +193,15 @@ export async function credentialRemoveCommand(
   const target = await resolveTarget();
   const current = (await request(target, '/credentials')) as CredentialsView;
   if (!current.credentials.some((entry) => entry.name === name)) {
-    stdout.write(`${name} は正本に置かれていません。\n`);
+    // 無い名前は例外にする（#3449。`token remove` と同じ）。打ち間違いを成功と同じ
+    // 終わり方にしない。
     // **器の環境変数の側は消えない。** ここで黙ると、「外したのにマネージャーが
-    // まだ持っている」理由が人間には分からない。
-    stdout.write(
-      'なおデーモン（クローン）の環境変数に同じ名前が在れば、そちらが配られます' +
-        '（この口が持つのは正本の側だけです）。\n',
+    // まだ持っている」理由が人間には分からないので、例外の文に入れる。
+    throw new Error(
+      `${name} は正本に置かれていません。\n` +
+        'なおデーモン（クローン）の環境変数に同じ名前が在れば、そちらが配られます' +
+        '（この口が持つのは正本の側だけです）。',
     );
-    return;
   }
 
   const confirmed = await confirmIrreversible(
