@@ -1141,3 +1141,53 @@ describe('送信中の二重送信の門と、送信中に打ち足した分（#
     await waitFor(() => expect(box.value).toBe(''));
   });
 });
+
+describe('編集の保存中に打ち足した分を、成功で閉じて消さない（#3506）', () => {
+  /** POST の応答をテストが解くまで保留にする。 */
+  function holdSave(): { resolveNext: (res: Response) => void } {
+    const pending: ((res: Response) => void)[] = [];
+    globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+      const method = (input instanceof Request ? input.method : init?.method) ?? 'GET';
+      if (method === 'GET') return Promise.resolve(json({ entries: [SPEC_ENTRY] }));
+      return new Promise<Response>((resolve) => pending.push(resolve));
+    }) as typeof fetch;
+    return {
+      resolveNext: (res) => {
+        const next = pending.shift();
+        if (next === undefined) throw new Error('保留中の要求が無い');
+        next(res);
+      },
+    };
+  }
+
+  async function openAndEdit(): Promise<HTMLTextAreaElement> {
+    fireEvent.click(await screen.findByRole('button', { name: `${SPEC_ENTRY.kind} を編集` }));
+    const panel = await screen.findByRole('group', { name: `${SPEC_ENTRY.kind} を編集` });
+    fireEvent.mouseDown(within(panel).getByRole('tab', { name: '編集' }));
+    const box = within(panel).getByLabelText('依頼の本文') as HTMLTextAreaElement;
+    fireEvent.change(box, { target: { value: '直した本文' } });
+    fireEvent.click(within(panel).getByRole('button', { name: '保存する' }));
+    return box;
+  }
+
+  it('送信中に追記して成功しても、編集欄は開いたまま追記が残る', async () => {
+    const held = holdSave();
+    renderSchedule();
+    const box = await openAndEdit();
+
+    fireEvent.change(box, { target: { value: '直した本文 さらに追記' } });
+    held.resolveNext(json({ ok: true }));
+    await waitFor(() => expect(screen.getByRole('button', { name: '保存する' })).toBeTruthy());
+    expect(box.value).toBe('直した本文 さらに追記');
+    expect(screen.getByRole('group', { name: `${SPEC_ENTRY.kind} を編集` })).toBeTruthy();
+  });
+
+  it('追記しなければ、成功で編集欄が閉じる', async () => {
+    const held = holdSave();
+    renderSchedule();
+    await openAndEdit();
+
+    held.resolveNext(json({ ok: true }));
+    await waitFor(() => expect(screen.queryByRole('group', { name: /を編集$/ })).toBeNull());
+  });
+});
