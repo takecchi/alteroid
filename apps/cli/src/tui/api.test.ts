@@ -518,6 +518,33 @@ describe('承認待ちの口（#2591。本物の createTuiApi を通す）', () 
     expect(all).toEqual({ approvals: [], unreadable: [] });
   });
 
+  it('GET /approvals/answered-dates: limit と beforeDate を送り、日と件数をそのまま返す（#3340）', async () => {
+    const api = createTuiApi(target);
+    replies.push(json({ dates: [{ date: '2026-09-30', count: 2 }] }));
+    expect(await api.listAnsweredDates({ limit: 30 })).toEqual([{ date: '2026-09-30', count: 2 }]);
+    expect(new URL(sent[0]?.url ?? '').pathname).toBe('/approvals/answered-dates');
+    expect(searchOf(0)).toEqual({ limit: '30' });
+
+    replies.push(json({ dates: [] }));
+    await api.listAnsweredDates({ limit: 30, beforeDate: '2026-09-30' });
+    expect(searchOf(1)).toEqual({ limit: '30', beforeDate: '2026-09-30' });
+
+    replies.push(json({ error: 'beforeDate は YYYY-MM-DD で指定する' }, 400));
+    await expect(api.listAnsweredDates({ limit: 30, beforeDate: 'x' })).rejects.toThrow(
+      /YYYY-MM-DD/,
+    );
+  });
+
+  it('GET /approvals?answeredOn=: answeredOn だけを送る（order・pending は付けない）。400 の理由は ApiError へ（#3340）', async () => {
+    const api = createTuiApi(target);
+    replies.push(json({ approvals: [{ id: 'a1', createdAt: 't', question: 'q' }] }));
+    expect((await api.listApprovalsAnsweredOn('2026-09-30')).map((a) => a.id)).toEqual(['a1']);
+    expect(searchOf(0)).toEqual({ answeredOn: '2026-09-30' });
+
+    replies.push(json({ error: 'answeredOn は YYYY-MM-DD で指定する' }, 400));
+    await expect(api.listApprovalsAnsweredOn('2026-02-30')).rejects.toThrow(/YYYY-MM-DD/);
+  });
+
   it('POST /approvals/{id}/answer: 自由文・選択どちらも本文をそのまま送る', async () => {
     const api = createTuiApi(target);
     replies.push(json({ ok: true }));

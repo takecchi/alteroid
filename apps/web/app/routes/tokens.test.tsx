@@ -251,7 +251,7 @@ describe('/tokens 画面 — プールの4状態', () => {
     expect(disabledRow.textContent).toContain(
       '人間が明示的に外した。自動では戻らない。「戻す」で人間が戻す',
     );
-    expect(within(disabledRow).getByRole('button', { name: '戻す' })).toBeTruthy();
+    expect(within(disabledRow).getByRole('button', { name: 'disabled-token を戻す' })).toBeTruthy();
     expect(disabledRow.textContent).not.toMatch(/外した。戻らない/);
     // 4状態が4つとも別の label に付いていること（同じトークンに畳まれていない）。
     expect(screen.getByText('ready-token')).toBeTruthy();
@@ -821,7 +821,7 @@ describe('/tokens 画面 — 追加・削除・無効化/有効化（2026-09-14�
     renderTokens();
     await waitForPoolLoaded();
 
-    fireEvent.click(screen.getByRole('button', { name: '無効化する' }));
+    fireEvent.click(screen.getByRole('button', { name: 'token-a を無効化する' }));
 
     expect(await screen.findByText(/無効化済み/)).toBeTruthy();
     expect(puts).toEqual([[{ id: 't-a', label: 'token-a', order: 0, disabled: true }]]);
@@ -858,7 +858,7 @@ describe('/tokens 画面 — 追加・削除・無効化/有効化（2026-09-14�
     expect(await screen.findByText('token-a')).toBeTruthy();
 
     dropRow('t-a');
-    fireEvent.click(screen.getAllByRole('button', { name: '無効化する' })[0]!);
+    fireEvent.click(screen.getByRole('button', { name: 'token-a を無効化する' }));
 
     expect(await screen.findByText(/id t-a のトークンは見つかりません/)).toBeTruthy();
     await waitFor(() => expect(screen.queryByText('token-a')).toBeNull());
@@ -880,10 +880,35 @@ describe('/tokens 画面 — 追加・削除・無効化/有効化（2026-09-14�
     renderTokens();
     await waitForPoolLoaded();
 
-    fireEvent.click(screen.getByRole('button', { name: '戻す' }));
+    fireEvent.click(screen.getByRole('button', { name: 'token-a を戻す' }));
 
     expect(await screen.findByText('使用可能')).toBeTruthy();
     expect(puts).toEqual([[{ id: 't-a', label: 'token-a', order: 0, disabled: false }]]);
+  });
+
+  it('行のボタン（無効化する・戻す・削除）は、どのトークンかを aria-label に持つ。見える文言は変えない（#3378）', async () => {
+    stubCrudScreen([
+      { id: 't-a', label: 'token-a', order: 0, sha256: 'a'.repeat(12) },
+      {
+        id: 't-b',
+        label: 'token-b',
+        order: 1,
+        sha256: 'b'.repeat(12),
+        disabledAt: '2026-08-01T00:00:00.000Z',
+      },
+    ]);
+    renderTokens();
+    await waitForPoolLoaded();
+    expect(await screen.findByText('token-a')).toBeTruthy();
+
+    const disable = screen.getByRole('button', { name: 'token-a を無効化する' });
+    expect(disable.textContent).toBe('無効化する');
+    const enable = screen.getByRole('button', { name: 'token-b を戻す' });
+    expect(enable.textContent).toBe('戻す');
+    expect(screen.getByRole('button', { name: 'token-a を削除' }).textContent).toBe('削除');
+    expect(screen.getByRole('button', { name: 'token-b を削除' }).textContent).toBe('削除');
+    // 名前だけでは行を特定できない状態（同じ名前のボタンが並ぶ）には戻っていない。
+    expect(screen.queryByRole('button', { name: '無効化する' })).toBeNull();
   });
 });
 
@@ -1338,7 +1363,7 @@ describe('/tokens 画面 — 日誌が書けず保存しなかった 500（#2886
     renderTokens();
     await waitForPoolLoaded();
 
-    fireEvent.click(screen.getByRole('button', { name: '無効化する' }));
+    fireEvent.click(screen.getByRole('button', { name: 'existing-token を無効化する' }));
 
     expect(await screen.findByText(JOURNAL_MESSAGE)).toBeTruthy();
     expect(screen.getByText(HINT)).toBeTruthy();
@@ -1362,7 +1387,7 @@ describe('/tokens 画面 — 日誌が書けず保存しなかった 500（#2886
     renderTokens();
     await waitForPoolLoaded();
 
-    fireEvent.click(screen.getByRole('button', { name: '無効化する' }));
+    fireEvent.click(screen.getByRole('button', { name: 'existing-token を無効化する' }));
 
     expect(await screen.findByText('トークンのプールを保存できなかった')).toBeTruthy();
     expect(screen.queryByText(HINT)).toBeNull();

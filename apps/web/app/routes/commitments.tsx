@@ -131,7 +131,7 @@ export default function Commitments() {
         }}
       />
 
-      <PushForm />
+      <PushForm onDirtyChange={setRowDirty} />
 
       {/* `keepPreviousData` のとき `isLoading` は別キーの初回読み込みでも真になる。一覧を置き換えてよいのは、出せるデータが無いときだけ（#3074）。 */}
       {isLoading && data === undefined ? (
@@ -979,10 +979,14 @@ const EDITOR_TAB_TRIGGER_ACTIVE_CLASS = 'border-primary text-foreground';
 function CommitmentBodyEditor({
   commitment,
   onCancel,
+  onRequestCancel,
   onDirtyChange,
 }: {
   commitment: Commitment;
+  /** 確認なしで閉じる。保存に成功したときだけ使う（保存直後は下書きが元と違って見えるため）。 */
   onCancel: () => void;
+  /** 「やめる」。書きかけがあれば確認を挟むのは呼び出し側（行）。 */
+  onRequestCancel: () => void;
   onDirtyChange: (id: string, dirty: boolean) => void;
 }) {
   const editCommitment = useEditCommitment();
@@ -1090,7 +1094,7 @@ function CommitmentBodyEditor({
           保存
         </Button>
         {tab === 'edit' && <SubmitHint action="保存" />}
-        <Button size="sm" onClick={onCancel}>
+        <Button size="sm" onClick={onRequestCancel}>
           やめる
         </Button>
       </div>
@@ -1143,6 +1147,26 @@ function OpenRow({
    * サーバ側の線が変わった日に画面だけが黙ってずれる。
    */
   const [editing, setEditing] = useState(false);
+  // この行の編集欄が書きかけか（編集欄が知らせてくる。ページへ渡す前にここでも持つ）。
+  const [editDirty, setEditDirty] = useState(false);
+  const [confirmingDiscard, setConfirmingDiscard] = useState(false);
+  const reportDirty = useCallback(
+    (id: string, dirty: boolean) => {
+      setEditDirty(dirty);
+      onDirtyChange(id, dirty);
+    },
+    [onDirtyChange],
+  );
+  function closeEditor() {
+    setEditing(false);
+    setEditDirty(false);
+    setConfirmingDiscard(false);
+  }
+  /** 「編集をやめる」「やめる」。書きかけがあるときだけ確かめる（#3375）。 */
+  function requestCloseEditor() {
+    if (editDirty) setConfirmingDiscard(true);
+    else closeEditor();
+  }
 
   async function submit() {
     if (reason.trim() === '') return;
@@ -1171,7 +1195,12 @@ function OpenRow({
         <button
           type="button"
           className="ml-auto text-[11px] text-muted-foreground underline hover:text-foreground pointer-coarse:-my-3.5 pointer-coarse:-mr-3 pointer-coarse:px-3 pointer-coarse:py-3.5"
-          onClick={() => setEditing((current) => !current)}
+          aria-label={
+            editing
+              ? `「${snippet(commitment.body)}」の編集をやめる`
+              : `「${snippet(commitment.body)}」の本文を編集`
+          }
+          onClick={() => (editing ? requestCloseEditor() : setEditing(true))}
         >
           {editing ? '編集をやめる' : '本文を編集'}
         </button>
@@ -1186,12 +1215,23 @@ function OpenRow({
       {editing ? (
         <CommitmentBodyEditor
           commitment={commitment}
-          onCancel={() => setEditing(false)}
-          onDirtyChange={onDirtyChange}
+          onCancel={closeEditor}
+          onRequestCancel={requestCloseEditor}
+          onDirtyChange={reportDirty}
         />
       ) : (
         <CommitmentBody commitment={commitment} />
       )}
+
+      <ConfirmDialog
+        open={confirmingDiscard}
+        onOpenChange={setConfirmingDiscard}
+        title="保存していない変更があります"
+        description="編集をやめると、書きかけの内容は失われます。"
+        confirmLabel="破棄して閉じる"
+        destructive
+        onConfirm={closeEditor}
+      />
 
       <label htmlFor={reasonId} className="mt-2 block text-xs font-medium text-muted-foreground">
         片付けた理由
@@ -1330,6 +1370,9 @@ function ClosedReasonBody({ commitment }: { commitment: Commitment }) {
   }
 }
 
+/** 書きかけの集合（`dirtyIds`）での「仕事を登録する」欄の id。行の id（commitment.id）と衝突しない。 */
+const PUSH_FORM_DIRTY_ID = 'push-form';
+
 /**
  * 人間の手で積む口。
  *
@@ -1337,13 +1380,20 @@ function ClosedReasonBody({ commitment }: { commitment: Commitment }) {
  * 困る」ときなので、クローンのターンを1回起こさないと書けないのは重い。
  * CLI の `/commit` と同じ経路である（片方でしかできないことを作らない）。
  */
-function PushForm() {
+function PushForm({ onDirtyChange }: { onDirtyChange: (id: string, dirty: boolean) => void }) {
   const pushCommitment = usePushCommitment();
   const inputId = useId();
   const bodyHintId = useId();
   const [body, setBody] = useState('');
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<unknown>(undefined);
+
+  // 書きかけ（空でない）かどうかをページへ知らせる。編集欄と同じ仕組み（離れる前の確認はページに1つ。#2764）。
+  const dirty = body !== '';
+  useEffect(() => {
+    onDirtyChange(PUSH_FORM_DIRTY_ID, dirty);
+  }, [dirty, onDirtyChange]);
+  useEffect(() => () => onDirtyChange(PUSH_FORM_DIRTY_ID, false), [onDirtyChange]);
 
   async function submit() {
     if (body.trim() === '') return;

@@ -272,6 +272,46 @@ export function normalizeAttachmentName(raw: string): string {
   return name === '' || name === '.' || name === '..' ? 'file' : name;
 }
 
+/** ディスク上のパスに使う名前の長さの上限（UTF-8 のバイト数）。NAME_MAX（255）に余裕を残す。 */
+export const ATTACHMENT_DISK_NAME_MAX_BYTES = 200;
+
+/** 拡張子として残す長さの上限（`.` を含む UTF-8 のバイト数）。これより長い「拡張子」は拡張子とみなさない。 */
+const ATTACHMENT_DISK_EXT_MAX_BYTES = 32;
+
+/** `text` を UTF-8 で `maxBytes` バイト以内に、コードポイントの途中で切らずに丸める。 */
+function truncateUtf8(text: string, maxBytes: number): string {
+  let bytes = 0;
+  let out = '';
+  for (const char of text) {
+    const size = Buffer.byteLength(char, 'utf8');
+    if (bytes + size > maxBytes) break;
+    bytes += size;
+    out += char;
+  }
+  return out;
+}
+
+/**
+ * ディスク上のパス（写し・担い手の置き場）に使う名前。{@link normalizeAttachmentName} を通したうえで、
+ * UTF-8 で {@link ATTACHMENT_DISK_NAME_MAX_BYTES} バイト以内に丸める（Linux の NAME_MAX は 255 **バイト**。
+ * 正規化は UTF-16 の 255 単位までなので、日本語の名前は 86 文字ほどで超える。Issue #3324）。拡張子は残し、
+ * コードポイントの途中では切らない。**表示や控え（`AttachmentMeta.name`・通知行）には使わない**。
+ */
+export function attachmentDiskName(name: string): string {
+  const normalized = normalizeAttachmentName(name);
+  if (Buffer.byteLength(normalized, 'utf8') <= ATTACHMENT_DISK_NAME_MAX_BYTES) return normalized;
+  const dot = normalized.lastIndexOf('.');
+  const ext =
+    dot > 0 && Buffer.byteLength(normalized.slice(dot), 'utf8') <= ATTACHMENT_DISK_EXT_MAX_BYTES
+      ? normalized.slice(dot)
+      : '';
+  const stem = truncateUtf8(
+    ext === '' ? normalized : normalized.slice(0, dot),
+    ATTACHMENT_DISK_NAME_MAX_BYTES - Buffer.byteLength(ext, 'utf8'),
+  ).trimEnd();
+  return stem === '' ? `file${ext}` : `${stem}${ext}`;
+}
+
 /**
  * 1つぶんの検証。通れば正規化した名前と MIME を返す。
  * - 宣言 MIME が画像なのに中身が一致しない → `magic_mismatch`

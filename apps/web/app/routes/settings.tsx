@@ -662,6 +662,10 @@ function ShutdownDaemon() {
 
       <dialog
         ref={dialogRef}
+        // 実行中は Esc（cancel）でも閉じない（「やめる」が押せないのと揃える。#3349）。
+        onCancel={(event) => {
+          if (busy) event.preventDefault();
+        }}
         className="w-[min(28rem,calc(100vw-2rem))] rounded-md border border-border bg-card p-0 text-foreground backdrop:bg-black/50"
       >
         <div className="p-4">
@@ -796,6 +800,10 @@ function ResetWorkspace() {
 
       <dialog
         ref={dialogRef}
+        // 実行中は Esc（cancel）でも閉じない（「やめる」が押せないのと揃える。#3349）。
+        onCancel={(event) => {
+          if (busy) event.preventDefault();
+        }}
         className="w-[min(28rem,calc(100vw-2rem))] rounded-md border border-border bg-card p-0 text-foreground backdrop:bg-black/50"
       >
         <div className="p-4">
