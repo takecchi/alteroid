@@ -13,6 +13,7 @@ import {
   resolveScratchSweepGraceMs,
   resolveScratchSweepIntervalMs,
   type ScratchSweeperOptions,
+  unsafeNodeModulesTarget,
 } from './scratch-sweep.js';
 import { rm } from 'node:fs/promises';
 import type { ProcessSpawnFn } from './unpushed-work.js';
@@ -381,6 +382,217 @@ describe('/tmp の委譲の作業場の片付け（#3039）', () => {
     expect(event?.removed.map((i) => i.name).sort()).toEqual(['mgr-aaaa1111', 'mgr-bbbb2222']);
   });
 
+  describe('node_modules の片付け（猶予後・git が無視するものだけ）', () => {
+    /** .gitignore に node_modules/ を持つ push 済みの clone と、その中の node_modules を作る。 */
+    async function makeIgnoredNm(dir: string): Promise<{ repo: string; nm: string }> {
+      const repo = await makeClone(dir);
+      await writeFile(path.join(repo, '.gitignore'), 'node_modules/\n');
+      g(repo, 'add', '.gitignore');
+      g(repo, 'commit', '-qm', 'ignore nm');
+      g(repo, 'push', '-q', 'origin', 'main');
+      g(repo, 'fetch', '-q', 'origin');
+      const nm = path.join(repo, 'node_modules');
+      await mkdir(path.join(nm, 'pkg'), { recursive: true });
+      await writeFile(path.join(nm, 'pkg', 'index.js'), 'x');
+      return { repo, nm };
+    }
+
+    it('無視されている node_modules だけが消え、作業場・未 push・未追跡・stash は残る', async () => {
+      const { repo, nm } = await makeIgnoredNm('mgr-aaaa1111');
+      await writeFile(path.join(repo, 'b.txt'), 'two\n');
+      g(repo, 'add', 'b.txt');
+      g(repo, 'commit', '-qm', 'unpushed');
+      await writeFile(path.join(repo, 'wip.txt'), 'wip');
+      await writeFile(path.join(repo, 'a.txt'), 'stashed\n');
+      g(repo, 'stash', 'push', '-q');
+      known = [ID_A]; // 畳まれた委譲（live には居ない）
+      const s = sweeper();
+      await expire(s);
+      const event = await s.sweep(ctl.signal, 'r1');
+      expect(existsSync(nm)).toBe(false);
+      expect(existsSync(path.join(repo, 'b.txt'))).toBe(true);
+      expect(existsSync(path.join(repo, 'wip.txt'))).toBe(true);
+      expect(g(repo, 'stash', 'list')).not.toBe('');
+      expect(event?.removed).toMatchObject([
+        { name: 'mgr-aaaa1111', kind: 'node_modules', count: 1, paths: ['repo/node_modules'] },
+      ]);
+      // 同じ作業場で入れ直されたら、また消える。
+      await mkdir(nm, { recursive: true });
+      await writeFile(path.join(nm, 'again.js'), 'x');
+      t += 10;
+      expect((await s.sweep(ctl.signal, 'r1'))?.removed).toMatchObject([{ kind: 'node_modules' }]);
+      expect(existsSync(nm)).toBe(false);
+    });
+
+    it('作業場ごと残すと決まったもの（未 push）でも node_modules は片付ける', async () => {
+      const { repo, nm } = await makeIgnoredNm('mgr-aaaa1111');
+      await writeFile(path.join(repo, 'b.txt'), 'two\n');
+      g(repo, 'add', 'b.txt');
+      g(repo, 'commit', '-qm', 'unpushed');
+      const s = sweeper();
+      await expire(s);
+      const event = await s.sweep(ctl.signal, 'r1');
+      expect(existsSync(nm)).toBe(false);
+      expect(existsSync(path.join(repo, 'b.txt'))).toBe(true);
+      expect(event?.removed.map((i) => i.kind)).toEqual(['node_modules']);
+      expect(event?.kept).toMatchObject([{ reason: 'unpushed-commits' }]);
+    });
+
+    it('.gitignore に無い node_modules は消えない', async () => {
+      const repo = await makeClone('mgr-aaaa1111');
+      const nm = path.join(repo, 'node_modules');
+      await mkdir(nm);
+      await writeFile(path.join(nm, 'f.js'), 'x');
+      known = [ID_A];
+      const s = sweeper();
+      await expire(s);
+      await s.sweep(ctl.signal, 'r1');
+      expect(existsSync(path.join(nm, 'f.js'))).toBe(true);
+      expect(rmCalls).toEqual([]);
+    });
+
+    it('追跡済みのファイルを含む node_modules は消えない', async () => {
+      const { repo, nm } = await makeIgnoredNm('mgr-aaaa1111');
+      g(repo, 'add', '-f', 'node_modules/pkg/index.js');
+      g(repo, 'commit', '-qm', 'track a file in nm');
+      g(repo, 'push', '-q', 'origin', 'main');
+      g(repo, 'fetch', '-q', 'origin');
+      known = [ID_A];
+      const s = sweeper();
+      await expire(s);
+      await s.sweep(ctl.signal, 'r1');
+      expect(existsSync(path.join(nm, 'pkg', 'index.js'))).toBe(true);
+      expect(rmCalls).toEqual([]);
+    });
+
+    it('check-ignore が通っても（多重防御）、ls-files に追跡済みが出れば消さない', async () => {
+      const { repo, nm } = await makeIgnoredNm('mgr-aaaa1111');
+      g(repo, 'add', '-f', 'node_modules/pkg/index.js');
+      g(repo, 'commit', '-qm', 'track a file in nm');
+      g(repo, 'push', '-q', 'origin', 'main');
+      g(repo, 'fetch', '-q', 'origin');
+      known = [ID_A];
+      const s = sweeper();
+      await expire(s);
+      // check-ignore だけを常に成功（exit 0）にする。
+      spawnFn = (o) =>
+        o.args[0] === 'check-ignore'
+          ? realSpawn({ ...o, command: 'true', args: [] })
+          : realSpawn(o);
+      await s.sweep(ctl.signal, 'r1');
+      expect(existsSync(path.join(nm, 'pkg', 'index.js'))).toBe(true);
+      expect(rmCalls).toEqual([]);
+    });
+
+    it('生きたセッションの作業場は猶予後でも触らない。猶予未満も触らない', async () => {
+      const { nm } = await makeIgnoredNm('mgr-aaaa1111');
+      live = [ID_A];
+      const s = sweeper();
+      t = 0;
+      await s.sweep(ctl.signal, 'r1');
+      t = GRACE * 100;
+      expect(await s.sweep(ctl.signal, 'r1')).toBeNull();
+      expect(existsSync(nm)).toBe(true);
+      // 閉じた直後は猶予未満。
+      live = [];
+      known = [ID_A];
+      await s.sweep(ctl.signal, 'r1');
+      t += GRACE - 1;
+      await s.sweep(ctl.signal, 'r1');
+      expect(existsSync(nm)).toBe(true);
+      t += 1;
+      expect((await s.sweep(ctl.signal, 'r1'))?.removed).toMatchObject([{ kind: 'node_modules' }]);
+      expect(existsSync(nm)).toBe(false);
+    });
+
+    it('消す直前に再開された委譲の node_modules は消さない', async () => {
+      const { nm } = await makeIgnoredNm('mgr-aaaa1111');
+      known = [ID_A];
+      const s = sweeper();
+      await expire(s);
+      spawnFn = (o) => {
+        live = [ID_A];
+        return realSpawn(o);
+      };
+      await s.sweep(ctl.signal, 'r1');
+      expect(existsSync(nm)).toBe(true);
+      expect(rmCalls).toEqual([]);
+    });
+
+    it('symlink の node_modules は消さず、辿らない', async () => {
+      const repo = await makeClone('mgr-aaaa1111');
+      await writeFile(path.join(repo, '.gitignore'), 'node_modules\n');
+      g(repo, 'add', '.gitignore');
+      g(repo, 'commit', '-qm', 'ignore');
+      g(repo, 'push', '-q', 'origin', 'main');
+      g(repo, 'fetch', '-q', 'origin');
+      const outside = await makeTempDir('scratch-sweep-nm-outside-');
+      await writeFile(path.join(outside, 'precious'), 'p');
+      await symlink(outside, path.join(repo, 'node_modules'));
+      known = [ID_A];
+      const s = sweeper();
+      await expire(s);
+      await s.sweep(ctl.signal, 'r1');
+      expect(existsSync(path.join(repo, 'node_modules'))).toBe(true);
+      expect(existsSync(path.join(outside, 'precious'))).toBe(true);
+      expect(rmCalls).toEqual([]);
+      await rm(outside, { recursive: true, force: true });
+    });
+
+    it('途中が symlink（realpath が合わない）なら rm を呼ばず unsafe-target で残す', async () => {
+      const { nm } = await makeIgnoredNm('mgr-aaaa1111');
+      known = [ID_A];
+      const s = sweeper({ realpathFn: async () => '/somewhere/else' });
+      await expire(s);
+      const event = await s.sweep(ctl.signal, 'r1');
+      expect(existsSync(nm)).toBe(true);
+      expect(rmCalls).toEqual([]);
+      expect(event?.kept).toMatchObject([{ reason: 'unsafe-target' }]);
+    });
+
+    it('git 作業ツリーの外の node_modules は消さない（中身のある非 git ディレクトリとして残る）', async () => {
+      const dir = path.join(root, 'mgr-aaaa1111');
+      await mkdir(path.join(dir, 'node_modules'), { recursive: true });
+      await writeFile(path.join(dir, 'node_modules', 'f.js'), 'x');
+      await writeFile(path.join(dir, 'notes.txt'), 'n');
+      const s = sweeper();
+      await expire(s);
+      const event = await s.sweep(ctl.signal, 'r1');
+      expect(existsSync(path.join(dir, 'node_modules', 'f.js'))).toBe(true);
+      expect(event?.kept).toMatchObject([
+        { reason: 'non-git-content', count: 1, files: { count: 1, names: ['notes.txt'] } },
+      ]);
+    });
+  });
+
+  describe('孤児の非 git の作業場・ファイル（中身があれば残す）', () => {
+    it('中身のある非 git ディレクトリとファイルは残り、空のものと node_modules だけのものは消える', async () => {
+      await mkdir(path.join(root, 'mgr-aaaa1111', 'sub'), { recursive: true });
+      await writeFile(path.join(root, 'mgr-aaaa1111', 'sub', 'result.txt'), 'data');
+      await writeFile(path.join(root, 'mgr-bbbb2222.log'), 'important log');
+      await mkdir(path.join(root, 'mgr-cccc3333', 'empty-sub'), { recursive: true });
+      await writeFile(path.join(root, 'mgr-dddd4444.log'), '');
+      await mkdir(path.join(root, 'mgr-eeee5555', 'node_modules', 'p'), { recursive: true });
+      await writeFile(path.join(root, 'mgr-eeee5555', 'node_modules', 'p', 'i.js'), 'x');
+      const s = sweeper();
+      await expire(s);
+      const event = await s.sweep(ctl.signal, 'r1');
+      expect(existsSync(path.join(root, 'mgr-aaaa1111', 'sub', 'result.txt'))).toBe(true);
+      expect(existsSync(path.join(root, 'mgr-bbbb2222.log'))).toBe(true);
+      expect(event?.removed.map((i) => i.name).sort()).toEqual([
+        'mgr-cccc3333',
+        'mgr-dddd4444.log',
+        'mgr-eeee5555',
+      ]);
+      expect(
+        event?.kept.map((i) => `${i.name}:${i.reason ?? ''}:${String(i.files?.count)}`).sort(),
+      ).toEqual(['mgr-aaaa1111:non-git-content:1', 'mgr-bbbb2222.log:non-git-content:1']);
+      expect(event?.kept.find((i) => i.name === 'mgr-aaaa1111')?.files?.names).toEqual([
+        'sub/result.txt',
+      ]);
+    });
+  });
+
   it('当たらない名前（.pnpm-store・21文字・mgr-c65）には降りず、触らない', async () => {
     for (const name of ['.pnpm-store', 'abcdefghijklmnopqrstu', 'mgr-c65', 'tsx-1001']) {
       await mkdir(path.join(root, name, 'x'), { recursive: true });
@@ -404,9 +616,8 @@ describe('/tmp の委譲の作業場の片付け（#3039）', () => {
   });
 
   it('ファイルと .git の無いディレクトリは猶予後に消す。シンボリックリンクは追わず、リンクだけ消す', async () => {
-    await writeFile(path.join(root, 'mgr-aaaa1111-p10-verify.log'), 'log');
+    await writeFile(path.join(root, 'mgr-aaaa1111-p10-verify.log'), '');
     await mkdir(path.join(root, 'mgr-bbbb2222-logs'));
-    await writeFile(path.join(root, 'mgr-bbbb2222-logs', 'x.log'), 'log');
     const outside = await makeTempDir('scratch-sweep-outside-');
     await writeFile(path.join(outside, 'precious'), 'p');
     await symlink(outside, path.join(root, 'mgr-cccc3333'));
@@ -449,7 +660,7 @@ describe('/tmp の委譲の作業場の片付け（#3039）', () => {
   });
 
   it('rm が失敗したら残した（rm-failed）として運ぶ', async () => {
-    await writeFile(path.join(root, 'mgr-aaaa1111.log'), 'x');
+    await writeFile(path.join(root, 'mgr-aaaa1111.log'), '');
     const s = sweeper({
       rmFn: async () => {
         throw new Error('EBUSY');
@@ -460,7 +671,7 @@ describe('/tmp の委譲の作業場の片付け（#3039）', () => {
   });
 
   it('中断された回は何も消さない', async () => {
-    await writeFile(path.join(root, 'mgr-aaaa1111.log'), 'x');
+    await writeFile(path.join(root, 'mgr-aaaa1111.log'), '');
     const s = sweeper();
     await expire(s);
     const aborted = new AbortController();
@@ -470,7 +681,7 @@ describe('/tmp の委譲の作業場の片付け（#3039）', () => {
   });
 
   it('statfs の観測と、取れなかった理由', async () => {
-    await writeFile(path.join(root, 'mgr-aaaa1111.log'), 'x');
+    await writeFile(path.join(root, 'mgr-aaaa1111.log'), '');
     const ok = sweeper({
       statfsFn: async () => ({ bsize: 4096, blocks: 100, bfree: 40, files: 1000, ffree: 250 }),
     });
@@ -481,7 +692,7 @@ describe('/tmp の委譲の作業場の片付け（#3039）', () => {
       totalInodes: 1000,
       usedInodes: 750,
     });
-    await writeFile(path.join(root, 'mgr-bbbb2222.log'), 'x');
+    await writeFile(path.join(root, 'mgr-bbbb2222.log'), '');
     const ng = sweeper({
       statfsFn: async () => {
         throw new Error('ENOSYS');
@@ -511,6 +722,7 @@ describe('消す直前の安全検査（基点・対象の形）', () => {
       startedAt: 0,
       now: () => 0,
       readdirFn: async () => names.map(file),
+      sizeFn: async () => 0,
       rmFn: async (p) => {
         calls.push(p);
       },
@@ -542,6 +754,79 @@ describe('消す直前の安全検査（基点・対象の形）', () => {
   it('正しい形（基点の直下・mgr- 規則）なら rm を呼ぶ', async () => {
     const { calls } = await run('/tmp/scratch-guard-base', ['mgr-aaaa1111.log']);
     expect(calls).toEqual(['/tmp/scratch-guard-base/mgr-aaaa1111.log']);
+  });
+});
+
+describe('node_modules を消す直前の安全検査（基点・対象の形）', () => {
+  const real = async (p: string): Promise<string> => p;
+  const BASE = '/tmp/nm-guard-base';
+
+  it.each(['', '/', 'relative/tmp', '.', '/tmp/..'])('基点が %j なら安全でない', async (base) => {
+    expect(
+      await unsafeNodeModulesTarget(base, `${base}/mgr-aaaa1111/repo/node_modules`, real),
+    ).toBeDefined();
+  });
+
+  it.each([
+    [BASE], // 基点そのもの
+    [`${BASE}/mgr-aaaa1111`], // 作業場そのもの
+    [`${BASE}/mgr-aaaa1111/repo/src`], // 名前が node_modules でない
+    [`${BASE}/other/node_modules`], // mgr- 規則でない
+    [`${BASE}/node_modules`], // 基点の直下（作業場の下でない）
+    [`${BASE}/mgr-aaaa1111/../../etc/node_modules`], // 基点の外
+    ['/etc/node_modules'], // 基点の外
+  ])('対象 %j は安全でない', async (target) => {
+    expect(await unsafeNodeModulesTarget(BASE, target, real)).toBeDefined();
+  });
+
+  it('正しい形は通り、途中の symlink（realpath のずれ）は通らない', async () => {
+    const ok = `${BASE}/mgr-aaaa1111/repo/node_modules`;
+    expect(await unsafeNodeModulesTarget(BASE, ok, real)).toBeUndefined();
+    expect(await unsafeNodeModulesTarget(BASE, ok, async () => '/x/y')).toBeDefined();
+    // 基点自身が symlink でも、実体＋相対パスが一致すれば通る。
+    expect(
+      await unsafeNodeModulesTarget(BASE, ok, async (p) =>
+        p === BASE ? '/real/base' : '/real/base/mgr-aaaa1111/repo/node_modules',
+      ),
+    ).toBeUndefined();
+    expect(
+      await unsafeNodeModulesTarget(BASE, ok, async () => {
+        throw new Error('ENOENT');
+      }),
+    ).toBeDefined();
+  });
+
+  it('基点が空・/・相対のとき、sweep から rm が1度も呼ばれない', async () => {
+    const dirEntry = (name: string) => ({ name, isDirectory: () => true });
+    const trueSpawn: ProcessSpawnFn = (o) =>
+      spawn('true', [], { env: {}, signal: o.signal, stdio: ['ignore', 'pipe', 'pipe'] });
+    for (const base of ['', '/', 'relative/tmp']) {
+      const calls: string[] = [];
+      const s = new ScratchSweeper({
+        tmpRoot: base,
+        spawn: trueSpawn,
+        env: {},
+        liveManagerIds: () => [],
+        knownManagerIds: () => ['mgr-aaaa1111-0000'],
+        graceMs: 0,
+        startedAt: 0,
+        now: () => 0,
+        readdirFn: async () => [
+          { name: 'mgr-aaaa1111', isDirectory: () => true, isSymbolicLink: () => false },
+        ],
+        gitReaddirFn: async (dir) =>
+          dir.endsWith('mgr-aaaa1111')
+            ? [dirEntry('repo')]
+            : dir.endsWith('repo')
+              ? [dirEntry('.git'), dirEntry('node_modules')]
+              : [],
+        rmFn: async (p) => {
+          calls.push(p);
+        },
+      });
+      await s.sweep(new AbortController().signal, 'r1');
+      expect(calls, `base=${JSON.stringify(base)}`).toEqual([]);
+    }
   });
 });
 

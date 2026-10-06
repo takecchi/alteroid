@@ -44,7 +44,7 @@ describe('runner の周期と shutdown（#3039）', () => {
   it('猶予の過ぎた作業場を消して scratch_sweep を出し、shutdown 後は動かない', async () => {
     // 周期（setInterval）だけを偽の時計にし、I/O は実物のまま。実時間では待たない。
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
-    await writeFile(path.join(tmp, 'mgr-aaaa1111-x.log'), 'x');
+    await writeFile(path.join(tmp, 'mgr-aaaa1111-x.log'), '');
     let readdirCalls = 0;
     let readdirDone = 0;
     const events: RunnerEvent[] = [];
@@ -147,6 +147,19 @@ describe('デーモン側: 日誌とクローンへの知らせ（#3039）', () 
     expect(text).toContain('mgr-aaaa1111');
     expect(text).toContain('repo/scratch.txt');
     expect(text).toContain('inode 900/1000');
+    expect(inbox.filter((e) => e.type === 'external')).toEqual([]);
+
+    send({
+      type: 'scratch_sweep',
+      runnerId: 'runner-x',
+      removed: [
+        { name: 'mgr-cccc3333', kind: 'node_modules', count: 1, paths: ['repo/node_modules'] },
+      ],
+      kept: [],
+    });
+    await vi.waitFor(async () => {
+      expect(JSON.stringify(await stores.journal.list())).toContain('repo/node_modules');
+    });
     expect(inbox.filter((e) => e.type === 'external')).toEqual([]);
 
     send({

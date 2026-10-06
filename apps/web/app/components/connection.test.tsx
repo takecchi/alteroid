@@ -540,6 +540,78 @@ describe('接続先を足す・直す・消す', () => {
 });
 
 /**
+ * **名前の欄は日本語で打つ。だから IME の変換を確定する Enter で、足す・保存するを
+ * 走らせないこと**（門の形は `packages/ui/src/components/features/chat/ime.ts` の
+ * `isImeConfirmEnter`）。門が無いと、名前を確定した瞬間に接続先が足されて繋ぎ替わる。
+ *
+ * 同じ欄・同じキーで `isComposing` だけを反転させ、両側を1本の中で通す（変換中→
+ * 何も起きない、確定後→足される／保存される）。
+ */
+describe('接続先の入力欄は、IME の確定の Enter では送らない', () => {
+  it('追加: 名前の欄の変換中の Enter では足さず、確定後の Enter で足す', async () => {
+    renderWithEndpoints();
+
+    fireEvent.change(screen.getByLabelText('追加する接続先の URL'), {
+      target: { value: 'https://stg.example.com' },
+    });
+    const label = await screen.findByLabelText('追加する接続先の名前（任意）');
+    fireEvent.change(label, { target: { value: 'けんしょう' } });
+
+    fireEvent.keyDown(label, { key: 'Enter', isComposing: true });
+    fireEvent.keyDown(label, { key: 'Enter', keyCode: 229 });
+    expect(localStorage.getItem('alteroid.apiBaseUrl')).toBe(TEST_BASE_URL);
+
+    fireEvent.change(label, { target: { value: '検証' } });
+    fireEvent.keyDown(label, { key: 'Enter' });
+    await waitFor(() => {
+      expect(localStorage.getItem('alteroid.apiBaseUrl')).toBe('https://stg.example.com');
+    });
+    expect(JSON.parse(localStorage.getItem('alteroid.endpoints') ?? '[]')).toContainEqual({
+      url: 'https://stg.example.com',
+      label: '検証',
+    });
+  });
+
+  it('追加: URL の欄の変換中の Enter でも足さない', async () => {
+    renderWithEndpoints();
+
+    const url = await screen.findByLabelText('追加する接続先の URL');
+    fireEvent.change(url, { target: { value: 'https://stg.example.com' } });
+    fireEvent.keyDown(url, { key: 'Enter', isComposing: true });
+    expect(localStorage.getItem('alteroid.apiBaseUrl')).toBe(TEST_BASE_URL);
+
+    fireEvent.keyDown(url, { key: 'Enter' });
+    await waitFor(() => {
+      expect(localStorage.getItem('alteroid.apiBaseUrl')).toBe('https://stg.example.com');
+    });
+  });
+
+  it('名前の変更: 変換中の Enter では保存せず、確定後の Enter で保存する', async () => {
+    renderWithEndpoints();
+
+    fireEvent.click(await screen.findByRole('button', { name: '名前を変更' }));
+    const input = screen.getByLabelText('選択中の接続先の名前');
+    fireEvent.change(input, { target: { value: 'てもと' } });
+    fireEvent.keyDown(input, { key: 'Enter', isComposing: true });
+
+    // 編集欄が開いたまま（保存されていない）。
+    expect(screen.getByLabelText('選択中の接続先の名前')).toBeTruthy();
+    expect(JSON.parse(localStorage.getItem('alteroid.endpoints') ?? '[]')).toEqual([
+      { url: TEST_BASE_URL },
+    ]);
+
+    fireEvent.change(input, { target: { value: '手元' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await waitFor(() => {
+      expect(JSON.parse(localStorage.getItem('alteroid.endpoints') ?? '[]')).toContainEqual({
+        url: TEST_BASE_URL,
+        label: '手元',
+      });
+    });
+  });
+});
+
+/**
  * 説明文に内部語を出さない（#2782）。環境変数名は括弧の補足としてだけ残し、
  * CORS・ヘッダ名・API のパスは「開発者向けの詳細」の先に置く。
  */

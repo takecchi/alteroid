@@ -989,11 +989,15 @@ export type RunnerUnpushedWorkOutcome = z.infer<typeof runnerUnpushedWorkOutcome
 export const scratchSweepItemSchema = z.object({
   /** `/tmp` 直下のエントリ名。 */
   name: z.string(),
-  kind: z.enum(['directory', 'file', 'symlink']),
+  kind: z.enum(['directory', 'file', 'symlink', 'node_modules']),
   /** この runner が過去に走らせた委譲のうち、名前の規則に当たったもの。知らなければ無い。 */
   managerId: z.string().optional(),
   /** 未追跡のファイル（件数と、上限つきの名前。残した項目に載る）。 */
   untracked: z.object({ count: z.number().int(), names: z.array(z.string()) }).optional(),
+  /** `node_modules` を消した項目: 消した `node_modules` の、作業場からの相対パス（上限つき）。件数は `count`。 */
+  paths: z.array(z.string()).optional(),
+  /** `non-git-content` で残した項目: 通常ファイルの件数と名前（上限つき）。 */
+  files: z.object({ count: z.number().int(), names: z.array(z.string()) }).optional(),
   /** 残した項目: 理由。 */
   reason: z
     .enum([
@@ -1003,6 +1007,7 @@ export const scratchSweepItemSchema = z.object({
       'worktree-dependency',
       'rm-failed',
       'untracked-files',
+      'non-git-content',
       'stash',
       'unsafe-target',
     ])
@@ -2308,6 +2313,9 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
    * `statfs` は余力の観測（inode とバイト）であって、**警告の閾値ではない**。
    * **旧 daemon との組み合わせ**: 未知の type は daemon の `safeParse` で落ち、
    * `RunnerDroppedEventReport` に残るだけで接続は切れない（`rescue_ref` と同じ扱い）。
+   * `node_modules` の片付け（`kind: 'node_modules'`・`paths`）と `non-git-content` を足した後も同じ:
+   * 旧 daemon は未知の欄（`paths` / `files`）は捨てるが、**未知の列挙値（`kind` / `reason`）を含む
+   * 出来事は全体が `safeParse` で落ちる**（接続は切れず、その1件が届かないだけ）。
    */
   scratchSweepEventSchema,
 ]);

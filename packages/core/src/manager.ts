@@ -15153,6 +15153,9 @@ class Pool implements ManagerPool {
     const label = (i: ScratchSweepItem): string =>
       `${i.name}（${i.kind}${i.managerId === undefined ? '' : `、委譲 ${i.managerId}`}）`;
     const removedLines = event.removed.map((i) => {
+      if (i.kind === 'node_modules') {
+        return `  - 消した ${i.name} の node_modules ${String(i.count ?? 0)} 件: ${(i.paths ?? []).join(', ')}`;
+      }
       const untracked =
         i.untracked === undefined
           ? ''
@@ -15162,7 +15165,8 @@ class Pool implements ManagerPool {
     const keptLines = event.kept.map(
       (i) =>
         `  - 残した ${label(i)} 理由 ${i.reason ?? '(不明)'}: ${i.detail ?? ''}` +
-        (i.untracked === undefined ? '' : ` 未追跡: ${i.untracked.names.join(', ')}`),
+        (i.untracked === undefined ? '' : ` 未追跡: ${i.untracked.names.join(', ')}`) +
+        (i.files === undefined ? '' : ` ファイル: ${i.files.names.join(', ')}`),
     );
     const statfsLine =
       event.statfs === undefined
