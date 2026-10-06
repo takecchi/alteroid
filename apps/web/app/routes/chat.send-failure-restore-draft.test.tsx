@@ -8,7 +8,7 @@
  * - 失敗表示に「再送」を出し、押すと同じ文を送り直す
  * - 会話を切り替えた後に失敗が届いたら、送った側の会話の下書きへ戻す
  */
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider, useParams } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
@@ -209,8 +209,10 @@ describe('#3064: 送信が失敗したら書いた文を失わせない', () => 
     await typeAndSend(LONG);
     await router.navigate(`/chat/${B}`);
     expect(await findShownConversation(B)).toBeTruthy();
-    rejectFollowUp(new TypeError(BOOM));
-    await new Promise((r) => setTimeout(r, 20));
+    // 失敗の反映（state・effect）まで流し切る。実時間は待たない。
+    await act(async () => {
+      rejectFollowUp(new TypeError(BOOM));
+    });
 
     // B の入力欄は汚れない。
     expect((await box()).value).toBe('');
