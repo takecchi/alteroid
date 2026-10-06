@@ -90,6 +90,23 @@ const BOTTOM_THRESHOLD_PX = 32;
 class TurnFailedError extends Error {}
 
 /**
+ * `done` / `error` / `usage_limited` のどれも来ないまま、接続が正常に閉じた（プロキシ・再起動など、#3564）。
+ * 途中までの返信は完成したものではない。文言は CLI・TUI（#3410）にそろえる。
+ */
+class StreamClosedEarlyError extends Error {
+  constructor() {
+    super(
+      '応答が途中で切れた（done も error も来ないまま接続が閉じた）。出ているのは受け取った分だけ',
+    );
+  }
+}
+
+/** ストリームの終端（これらのどれかを見たら、閉じてよい）。 */
+function isStreamTerminal(event: ChatStreamEvent): boolean {
+  return event.type === 'done' || event.type === 'error' || event.type === 'usage_limited';
+}
+
+/**
  * 添付を見せる部品。**添付のある発言が画面に出たときだけ読み込む**（別チャンク。
  * バンドル予算のため、最初の読み込みへ入れない）。
  */
@@ -121,6 +138,14 @@ function sizedOf(item: PendingAttachment): { name: string; size: number; type: s
 /** 上げ終えた添付の id（`POST /chat` の `attachments`）。 */
 function attachmentIds(items: readonly PendingAttachment[]): string[] {
   return items.flatMap((item) => (item.meta === undefined ? [] : [item.meta.id]));
+}
+
+/**
+ * すでに上げてある添付（発言に付いている控え）を、送る形へ直す。`meta` を持つので上げ直さない。
+ * 編集の添付の引き継ぎ（#3399）と、失敗したターンの再送（#3566）が使う。
+ */
+function carriedAttachments(items: readonly MessageAttachment[]): PendingAttachment[] {
+  return items.map((meta) => ({ key: `e-${meta.id}`, meta }));
 }
 
 /**
@@ -685,6 +710,8 @@ function ConversationList({
       renderLink={(target, slot) => (
         <Link
           to={target.id === undefined ? '/chat' : `/chat/${target.id}`}
+          // 開いている会話を読み上げへ伝える（色の class だけでは伝わらない、#3568）。
+          aria-current={target.id !== undefined && target.id === activeId ? 'page' : undefined}
           onClick={onNavigate}
           className={slot.className}
         >
@@ -913,8 +940,14 @@ export function ChatPane({
       flushDraftSave();
     };
   }, [flushDraftSave]);
-  /** 添付を上げている最中か。真のあいだは送れない。 */
-  const [uploading, setUploading] = useState(false);
+  /**
+   * 添付を上げている最中か。真のあいだは、**上げ始めた会話の**入力欄は送れない。
+   * 押した時点の会話 id を持ち、描画で `shownId` と一致するときだけ composer へ渡す
+   * （`interruptNotice` と同じ形。持たないと、別の会話へ移っても入力欄を塞ぐ、#3567）。
+   */
+  const [uploading, setUploading] = useState<{ conversationId: string | undefined } | undefined>(
+    undefined,
+  );
   /** 会話を離れているあいだ、その会話の添えかけの添付をしまっておく（`drafts` と同じ鍵・同じ扱い）。 */
   const [attachmentDrafts, setAttachmentDrafts] = useState<
     Map<string | undefined, PendingAttachment[]>
@@ -930,7 +963,9 @@ export function ChatPane({
    * ボタンの二重打鍵を防ぐためだけの、この画面だけの状態——サーバ側の状態には
    * 対応しない。
    */
-  const [interrupting, setInterrupting] = useState(false);
+  const [interrupting, setInterrupting] = useState<{ conversationId: string } | undefined>(
+    undefined,
+  );
   /**
    * `POST /clone/interrupt` の応答を人間の言葉にしたもの（`describeCloneInterruptOutcome`）。
    * 失敗（ネットワーク断・403 等）は `interruptFailure`（下）へ回すので、
@@ -979,7 +1014,9 @@ export function ChatPane({
    * （Issue #2171）。ボタンの二重打鍵を防ぐためだけの、この画面だけの状態
    * ——`interrupting` と同じ理由・同じ形。
    */
-  const [endingConversation, setEndingConversation] = useState(false);
+  const [endingConversation, setEndingConversation] = useState<
+    { conversationId: string } | undefined
+  >(undefined);
   /**
    * 「会話を終える」が成功した結果（#2759）。終えた会話の id を持つ。成功すると画面は
    * 新しい会話（`/chat`）へ移るので、**移った先の見出しの下に1行で出す**——何も
@@ -2220,7 +2257,7 @@ export function ChatPane({
       const waitedForUpload = attachments.some((item) => item.meta === undefined);
       if (waitedForUpload) {
         awaited = true;
-        setUploading(true);
+        setUploading({ conversationId: shownId });
         setFailures((prev) => {
           if (!prev.has(shownId)) return prev;
           const next = new Map(prev);
@@ -2256,7 +2293,7 @@ export function ChatPane({
           setFailures((prev) => new Map(prev).set(shownId, caught));
           return;
         } finally {
-          setUploading(false);
+          setUploading(undefined);
         }
       }
       if (attachments.length > 0) {
@@ -2353,6 +2390,8 @@ export function ChatPane({
         shownId,
       );
       let opened = false;
+      // 終端（`done` / `error` / `usage_limited`）を見たか。見ないまま閉じたら失敗として出す（#3564）。
+      let sawTerminal = false;
 
       const { setTransient, apply } = createStreamWriter(stream, controller);
 
@@ -2439,7 +2478,26 @@ export function ChatPane({
             continue;
           }
 
+          if (isStreamTerminal(message.data)) sawTerminal = true;
           apply(message.data);
+        }
+        if (!sawTerminal && !controller.signal.aborted) {
+          if (opened) {
+            // 受け取った分の返信は残す。完成したように見せない。
+            setFailures((prev) => new Map(prev).set(stream.id, new StreamClosedEarlyError()));
+          } else {
+            // 受け取られたか分からない。中断（#3121）と同じ道で文を積む（自動では送らない）。
+            giveBack(
+              stream.id,
+              text,
+              lineKey,
+              supersedes,
+              attachments,
+              clientMessageId,
+              true,
+              stream.id === undefined ? adoptedId : undefined,
+            );
+          }
         }
       } catch (caught) {
         /*
@@ -2628,6 +2686,7 @@ export function ChatPane({
     void (async () => {
       let stream: Stream | undefined;
       let writer: ReturnType<typeof createStreamWriter> | undefined;
+      let sawTerminal = false;
       try {
         for await (const message of getChatStream(api, id, { signal: controller.signal })) {
           if (message.event === 'open') {
@@ -2648,7 +2707,13 @@ export function ChatPane({
             writer.setTransient('考えている…');
             continue;
           }
+          if (isStreamTerminal(message.data)) sawTerminal = true;
           writer?.apply(message.data);
+        }
+        // 再生が終端を見ないまま閉じた（#3564）。始める前（`stream` 無し）は何も見せていないので黙る。
+        if (stream !== undefined && !sawTerminal && !controller.signal.aborted) {
+          const closedId = stream.id;
+          setFailures((prev) => new Map(prev).set(closedId, new StreamClosedEarlyError()));
         }
       } catch (caught) {
         if (!controller.signal.aborted && stream !== undefined) {
@@ -2699,10 +2764,7 @@ export function ChatPane({
       if ((text === '' && editAttachments.length === 0) || line.journalId === undefined) return;
       setEditingKey(undefined);
       // 引き継ぐ添付は、すでに上げてある（`meta`）ので上げ直さない。
-      const carried: PendingAttachment[] = editAttachments.map((meta) => ({
-        key: `e-${meta.id}`,
-        meta,
-      }));
+      const carried = carriedAttachments(editAttachments);
       // 入力欄の文を送るのではないので、入力欄の書きかけには触らない（#3391）。
       await send(text, { supersedes: line.journalId, draft: 'keep', attachments: carried });
     },
@@ -2754,7 +2816,7 @@ export function ChatPane({
    */
   const handleInterrupt = useCallback(
     async (pressedConversationId: string) => {
-      setInterrupting(true);
+      setInterrupting({ conversationId: pressedConversationId });
       /*
        * **送信経路の `failures` はここで触らない（#1585）。** 前はここでも
        * `setFailure(undefined)` を呼んで1つだけの `failure` を消していた——
@@ -2779,7 +2841,7 @@ export function ChatPane({
       } catch (caught) {
         setInterruptFailure({ conversationId: pressedConversationId, error: caught });
       } finally {
-        setInterrupting(false);
+        setInterrupting(undefined);
       }
     },
     [interruptClone],
@@ -2810,7 +2872,7 @@ export function ChatPane({
    */
   const handleEndConversation = useCallback(
     async (pressedConversationId: string) => {
-      setEndingConversation(true);
+      setEndingConversation({ conversationId: pressedConversationId });
       setEndFailure(undefined);
       setEndNotice(undefined);
       try {
@@ -2820,7 +2882,7 @@ export function ChatPane({
       } catch (caught) {
         setEndFailure({ conversationId: pressedConversationId, error: caught });
       } finally {
-        setEndingConversation(false);
+        setEndingConversation(undefined);
       }
     },
     [endConversation, navigate],
@@ -2833,6 +2895,10 @@ export function ChatPane({
    * （上の doc）。`shownId` はこの render の同期処理でしか進まない state
    * なので、この比較は常に「この render の時点で正しい」答えを返す。
    */
+  const visibleUploading = uploading !== undefined && uploading.conversationId === shownId;
+  const visibleInterrupting = interrupting !== undefined && interrupting.conversationId === shownId;
+  const visibleEnding =
+    endingConversation !== undefined && endingConversation.conversationId === shownId;
   const visibleInterruptNotice =
     interruptNotice !== undefined && interruptNotice.conversationId === shownId
       ? interruptNotice.text
@@ -2904,9 +2970,9 @@ export function ChatPane({
         subtitle={headerSubtitle}
         onOpenList={onOpenList}
         onInterrupt={shownId === undefined ? undefined : () => void handleInterrupt(shownId)}
-        interrupting={interrupting}
+        interrupting={visibleInterrupting}
         onEnd={shownId === undefined ? undefined : () => void handleEndConversation(shownId)}
-        ending={endingConversation}
+        ending={visibleEnding}
         /*
          * 「ターンを止める」の結果（3値のどれか）。呼べなかった失敗
          * （ネットワーク断・403 等）は下の `ErrorNote`（`visibleInterruptFailure`）に
@@ -3039,13 +3105,13 @@ export function ChatPane({
                   }
                   if (line.turnFailure !== undefined) {
                     const previous = index > 0 ? all[index - 1] : undefined;
-                    const retryText =
+                    const retryLine =
                       line.turnFailure === 'failed' &&
                       index === all.length - 1 &&
                       !sending &&
                       previous?.role === 'human' &&
-                      previous.text.trim() !== ''
-                        ? previous.text
+                      (previous.text.trim() !== '' || (previous.attachments?.length ?? 0) > 0)
+                        ? previous
                         : undefined;
                     return (
                       <ChatTurnFailure
@@ -3053,10 +3119,15 @@ export function ChatPane({
                         kind={line.turnFailure}
                         text={line.text}
                         onRetry={
-                          retryText === undefined
+                          retryLine === undefined
                             ? undefined
                             : // 入力欄の文を送るのではないので、書きかけには触らない（#3391）。
-                              () => void send(retryText, { draft: 'keep' })
+                              // 元の発言の添付も付ける（付けないと、返信は添付を読まずに返る、#3566）。
+                              () =>
+                                void send(retryLine.text, {
+                                  draft: 'keep',
+                                  attachments: carriedAttachments(retryLine.attachments ?? []),
+                                })
                         }
                       />
                     );
@@ -3178,7 +3249,7 @@ export function ChatPane({
         value={draft}
         onChange={setDraft}
         onSend={() => {
-          if (uploading) return;
+          if (visibleUploading) return;
           // 編集の送信が失敗して戻った文は、編集の続きとして送る（`supersedes` を保つ。#3393）。
           if (editContinuation !== undefined) resend(editContinuation);
           else void send(draft, { attachments: pending });
@@ -3198,7 +3269,7 @@ export function ChatPane({
               }
         }
         sending={sending}
-        uploading={uploading}
+        uploading={visibleUploading}
         attachments={composerAttachments}
         onAttach={attach}
         onRemoveAttachment={(key) => {
