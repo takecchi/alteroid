@@ -74,7 +74,7 @@ type Reply = { status: number; body: unknown };
  * `fetch(new Request(...))` の形で呼ぶので、method も本文も落ちる。
  * `profile.test.tsx` の同じ断り書きと同じ理由）。
  */
-function stubMcp(options: { get?: Reply; put?: Reply } = {}) {
+function stubMcp(options: { get?: Reply; put?: Reply; putGate?: Promise<void> } = {}) {
   let stored: unknown = STORED;
   const puts: unknown[] = [];
 
@@ -91,6 +91,8 @@ function stubMcp(options: { get?: Reply; put?: Reply } = {}) {
         mcpServers: Record<string, unknown>;
       };
       puts.push(body);
+      // 保存の完了を、テストが好きな時点まで止める（実時間の待ちは使わない）。
+      await options.putGate;
       const reply = options.put ?? { status: 200, body: UPDATED };
       if (reply.status === 200) stored = { mcpServers: body.mcpServers };
       return json(reply.body, reply.status);
@@ -434,5 +436,34 @@ describe('/mcp-servers 画面 — 書きかけを確認なしで捨てない', (
     const dirty = new Event('beforeunload', { cancelable: true });
     window.dispatchEvent(dirty);
     expect(dirty.defaultPrevented).toBe(true);
+  });
+});
+
+describe('保存中の追記は、成功しても消えない', () => {
+  it('保存中に編集欄へ打ち足すと、編集欄は閉じず追記が残る', async () => {
+    let release: () => void = () => {};
+    const putGate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const { puts } = stubMcp({ putGate });
+    renderScreen();
+
+    fireEvent.click(await screen.findByRole('button', { name: '編集する' }));
+    const editor = screen.getByLabelText<HTMLTextAreaElement>('MCP サーバの新しい登録');
+    const next = { mcpServers: { notion: { type: 'sse', url: 'https://example.com/sse' } } };
+    fireEvent.change(editor, { target: { value: JSON.stringify(next) } });
+    fireEvent.click(screen.getByRole('button', { name: '保存する' }));
+    fireEvent.click(screen.getByRole('button', { name: '本当に保存する' }));
+    await waitFor(() => expect(puts).toHaveLength(1));
+
+    const appended = JSON.stringify(next) + '\n// 追記';
+    fireEvent.change(editor, { target: { value: appended } });
+    release();
+
+    // 結果は出るが、編集欄は閉じず、追記が残る。
+    await screen.findByText(/MCP 連携の登録/);
+    expect(screen.getByLabelText<HTMLTextAreaElement>('MCP サーバの新しい登録').value).toBe(
+      appended,
+    );
   });
 });

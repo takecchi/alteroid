@@ -854,3 +854,33 @@ describe('/profile 画面 — 書きかけを確認なしで捨てない', () =>
     expect(dirty.defaultPrevented).toBe(true);
   });
 });
+
+describe('保存中の追記は、成功しても消えない', () => {
+  it('保存中に本文へ打ち足すと、編集欄は閉じず追記が残り、基準は保存した本文へ進む', async () => {
+    let release: () => void = () => {};
+    const promise = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const { puts } = stubProfile({ putGate: promise });
+    renderScreen();
+
+    fireEvent.click((await screen.findAllByRole('button', { name: / を編集する$/ }))[0]!);
+    const body = screen.getByLabelText<HTMLTextAreaElement>('プロファイルの新しい本文');
+    fireEvent.change(body, { target: { value: 'export A=1\n' } });
+    fireEvent.click(screen.getByRole('button', { name: '保存する' }));
+    fireEvent.click(screen.getByRole('button', { name: '本当に保存する' }));
+    await vi.waitFor(() => expect(puts).toHaveLength(1));
+
+    fireEvent.change(body, { target: { value: 'export A=1\nexport B=2\n' } });
+    release();
+
+    // 結果は出るが、編集欄は閉じない。
+    expect(await screen.findByText('プロファイルの行 base を更新した。')).toBeTruthy();
+    expect(screen.getByLabelText<HTMLTextAreaElement>('プロファイルの新しい本文').value).toBe(
+      'export A=1\nexport B=2\n',
+    );
+    // 保存済みの基準は送った本文。追記ぶんは未保存の差分なので、そのまま保存できる。
+    expect(screen.queryByText('変更はまだ無い。')).toBeNull();
+    expect(screen.getByRole('button', { name: '保存する' }).hasAttribute('disabled')).toBe(false);
+  });
+});
