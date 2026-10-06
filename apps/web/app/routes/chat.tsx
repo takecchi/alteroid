@@ -2952,6 +2952,7 @@ export function ChatPane({
     },
     [
       api,
+      adjustUploading,
       shownId,
       retries,
       navigate,
