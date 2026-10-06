@@ -1,4 +1,13 @@
-import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react';
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react';
 import { useBlocker } from 'react-router';
 
 import { ConfirmDialog } from '@alteroid/ui';
@@ -37,7 +46,13 @@ const DRAFT_NOTICE: LeaveNotice = {
 
 type ReportDirty = (id: string, dirty: boolean, notice?: LeaveNotice) => void;
 
-const LeaveGuardContext = createContext<ReportDirty | undefined>(undefined);
+interface LeaveGuardApi {
+  report: ReportDirty;
+  /** 以降の移動を止めない（削除が通った後の移動など）。戻せない。 */
+  release: () => void;
+}
+
+const LeaveGuardContext = createContext<LeaveGuardApi | undefined>(undefined);
 
 /**
  * 画面ごとに1つだけ置く。中の欄が `useReportDirty` で知らせた書きかけのどれか1つでもあれば、
@@ -56,14 +71,20 @@ export function LeaveGuardScope({ children }: { children: ReactNode }) {
       return next;
     });
   }, []);
+  // 削除が通った後の移動のように、確認を挟まず離れたいとき（`useReleaseLeaveGuard`）。
+  const released = useRef(false);
+  const release = useCallback(() => {
+    released.current = true;
+  }, []);
+  const api = useMemo<LeaveGuardApi>(() => ({ report, release }), [report, release]);
   const anyDirty = dirtyIds.size > 0;
   // 文言を持つ欄（取り直せない値など）があれば、書きかけの既定よりそちらを先に言う。
   const notice = [...dirtyIds.values()].find((n) => n !== undefined) ?? DRAFT_NOTICE;
-  const blocker = useBlocker(anyDirty);
+  const blocker = useBlocker(() => anyDirty && !released.current);
   useBeforeUnloadGuard(anyDirty);
 
   return (
-    <LeaveGuardContext.Provider value={report}>
+    <LeaveGuardContext.Provider value={api}>
       <ConfirmDialog
         open={blocker.state === 'blocked'}
         onOpenChange={(open) => {
@@ -87,9 +108,20 @@ export function LeaveGuardScope({ children }: { children: ReactNode }) {
  * `id` は同じ画面の中で欄ごとに別にする。
  */
 export function useReportDirty(id: string, dirty: boolean, notice?: LeaveNotice) {
-  const report = useContext(LeaveGuardContext);
+  const report = useContext(LeaveGuardContext)?.report;
   useEffect(() => {
     report?.(id, dirty, notice);
   }, [id, dirty, notice, report]);
   useEffect(() => () => report?.(id, false), [id, report]);
 }
+
+/**
+ * 外側の `LeaveGuardScope` の確認を、これ以降やめる関数を返す。削除が通った直後の `navigate` の前に呼ぶ
+ * （書きかけの報告は次の描画まで消えないので、報告を待つと自分の移動を自分で止めてしまう）。
+ */
+export function useReleaseLeaveGuard(): () => void {
+  const release = useContext(LeaveGuardContext)?.release;
+  return release ?? noop;
+}
+
+function noop() {}

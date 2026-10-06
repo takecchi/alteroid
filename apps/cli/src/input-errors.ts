@@ -64,6 +64,17 @@ export function describeEditorFailure(
 }
 
 /**
+ * シェルへ渡すパスを1語に包む（#3728）。`shell: true` は引数を引用符なしで連結するので、
+ * 一時ファイルのパスに空白・記号（`TMPDIR` など）が入ると、エディタが別のファイルを開き、
+ * 読み戻す先とずれて書いたものが保存されない。POSIX は単一引用符（中の `'` は `'\\''`）、
+ * Windows（cmd.exe）は二重引用符で包む。
+ */
+export function quoteForShell(path: string, platform: NodeJS.Platform = process.platform): string {
+  if (platform === 'win32') return `"${path}"`;
+  return `'${path.replaceAll("'", "'\\''")}'`;
+}
+
+/**
  * `$VISUAL` / `$EDITOR`（無ければ `vi`）でファイルを開き、閉じるまで待つ。
  *
  * **起こす前に、エディタのコマンドが在るかを見る。** `shell: true` で起こすので、
@@ -79,7 +90,7 @@ export async function openEditor(path: string, alternative: string): Promise<voi
     throw describeEditorFailure(editor, { code: 127 }, alternative);
   }
   await new Promise<void>((resolve, reject) => {
-    const child = spawn(editor, [path], { stdio: 'inherit', shell: true });
+    const child = spawn(editor, [quoteForShell(path)], { stdio: 'inherit', shell: true });
     child.on('error', (error) => reject(describeEditorFailure(editor, { error }, alternative)));
     child.on('close', (code, signal) => {
       if (code === 0) resolve();

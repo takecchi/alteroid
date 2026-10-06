@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 
-import { stripNul } from '@alteroid/core';
+import { stripNulWellFormed } from '@alteroid/core';
 
 /**
  * **`POST /chat` の `clientMessageId` の重複を判定するときに比べる「発言の中身」の指紋**（Issue #3243）。
@@ -8,9 +8,10 @@ import { stripNul } from '@alteroid/core';
  * 同じ id が再び届いたとき、1回目と今回の中身が同じなら再送（200 の `duplicate: true`）、違えば
  * 呼び手の取り違え（409 `client_message_id_mismatch`）。比べる中身は本文・添付の id・`supersedes` の3つ。
  *
- * - **本文は `stripNul` を通す。** 日誌（fs・pg・インメモリ）は本文から NUL を落として残すので、日誌から
- *   取り出した本文と、受け取ったままの本文を、同じ規則に揃えてから比べる（揃えないと、NUL を含む本文の
- *   再送が「中身が違う」と読まれる）。
+ * - **本文は `stripNulWellFormed` を通す**（NUL を落とし、孤立サロゲートを U+FFFD に置き換える。pg の
+ *   `stripNulls` と同じ規則）。日誌は本文から NUL を落として残し、pg は孤立サロゲートも U+FFFD に直して残す
+ *   ので、日誌から取り出した本文と、受け取ったままの本文を、同じ規則に揃えてから比べる（揃えないと、
+ *   該当する本文の再送が「中身が違う」と読まれる。#3634）。添付の id と `supersedes` にも同じ規則を掛ける。
  * - **添付は id の集合として比べる**（重複を除いて並べ替える）。サーバは添付の id を重複除去してから
  *   結び付けるので、同じ id を2度書いても中身は変わらない。順序は、再送する側が一覧を作り直す
  *   （集合から組み直す）ことがあり、順序の違いだけで黙って捨てるより受けるほうが害が小さいので無視する。
@@ -26,8 +27,10 @@ export interface ClientMessageContent {
 }
 
 export function clientMessageFingerprint(content: ClientMessageContent): string {
-  const ids = [...new Set(content.attachmentIds ?? [])].sort();
+  const ids = [...new Set((content.attachmentIds ?? []).map(stripNulWellFormed))].sort();
+  const supersedes =
+    content.supersedes === undefined ? null : stripNulWellFormed(content.supersedes);
   // 区切り文字の取り違えで別の中身が同じ指紋にならないよう、JSON の配列で畳む。
-  const canonical = JSON.stringify([stripNul(content.text), ids, content.supersedes ?? null]);
+  const canonical = JSON.stringify([stripNulWellFormed(content.text), ids, supersedes]);
   return createHash('sha256').update(canonical).digest('hex');
 }

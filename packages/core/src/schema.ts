@@ -18,6 +18,7 @@ import type {
 // `turn_usage` の doc）ので循環しない。日誌の `turn_usage.layer` / `.site` /
 // `.models` は台帳（`UsageStore`）の同名の列と**同じ値**であるべきなので、
 // 書き写して2つの定義を持たず、ここから読む。
+import { MEMORY_SLUG_RULE, PRACTICE_SLUG_RULE } from './slug-rule.js';
 import { usageLayerSchema, usageSiteSchema, usageTotalsSchema } from './usage.js';
 
 /**
@@ -38,8 +39,8 @@ const isoDateTime = z.string().datetime({ offset: true });
 export const memorySlugSchema = z
   .string()
   .min(1)
-  .max(128)
-  .regex(/^[a-z0-9][a-z0-9._-]*$/, 'slug は英小文字・数字・. _ - のみ');
+  .max(MEMORY_SLUG_RULE.maxLength)
+  .regex(MEMORY_SLUG_RULE.pattern, MEMORY_SLUG_RULE.message);
 
 // ---------------------------------------------------------------------------
 // 記憶の frontmatter（#170「目次 → 詳細（オンデマンド）＋ 階層」）
@@ -4729,8 +4730,8 @@ export type ChatStreamEvent = z.infer<typeof chatStreamEventSchema>;
 export const practiceSlugSchema = z
   .string()
   .min(1)
-  .max(128)
-  .regex(/^[a-z0-9][a-z0-9._-]*$/, 'slug は英小文字・数字・. _ - のみ');
+  .max(PRACTICE_SLUG_RULE.maxLength)
+  .regex(PRACTICE_SLUG_RULE.pattern, PRACTICE_SLUG_RULE.message);
 
 /**
  * 仕事の**種類**（実装 / 調査 / 相談 / レビュー / 日報 …）。**自由文字列である。**

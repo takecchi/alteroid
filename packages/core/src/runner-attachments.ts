@@ -11,6 +11,11 @@ import {
   type AttachmentLimits,
   formatImageLimit,
   readAttachmentLimits,
+  TurnImageBudget,
+  turnImageOverNotice,
+  turnImageLimitsOf,
+  type TurnAttachmentLimits,
+  type TurnImageOverReason,
 } from './attachment.js';
 import { sha256Hex } from './auth.js';
 import { stripNul } from './nul-guard.js';
@@ -98,6 +103,11 @@ export interface PlacedAttachment {
   readonly image?: AgentInputImage;
   /** 中身は画像だが画像の上限を超えるので渡さなかった。そのときの上限（バイト。#3325）。 */
   readonly imageOverLimit?: number;
+  /**
+   * 中身は画像で1枚の上限以内だが、1メッセージの画像の枚数（`count`）または合計（`bytes`）の予算を超えるので
+   * 渡さなかった（#3696）。`limit` はそのときの上限（枚数・バイト）。
+   */
+  readonly imageOverTurnLimit?: { readonly reason: TurnImageOverReason; readonly limit: number };
 }
 
 export interface PlaceAttachmentsOptions {
@@ -108,7 +118,7 @@ export interface PlaceAttachmentsOptions {
   /** 担い手の子プロセスの gid（降ろす構成のとき）。無ければ runner と同じ UID で、0700 / 0400。 */
   readonly childGid?: number;
   /** 画像の上限の取り元。既定は runner の環境変数（{@link readAttachmentLimits}。担い手の置き場が読むものと同じ）。 */
-  readonly limits?: AttachmentLimits;
+  readonly limits?: TurnAttachmentLimits;
 }
 
 const ownUid = (): number | undefined =>
@@ -154,7 +164,11 @@ export async function placeRunnerAttachments(
   options: PlaceAttachmentsOptions,
 ): Promise<PlacedAttachment[]> {
   const { root, managerId, attachments, childGid } = options;
-  const maxImageBytes = (options.limits ?? readAttachmentLimits().limits).maxImageBytes;
+  const limits = options.limits ?? readAttachmentLimits().limits;
+  const maxImageBytes = limits.maxImageBytes;
+  // 1メッセージの画像の予算（#3696）。添付の順に使うので、超えるのは後ろの画像から。
+  const turnLimits = turnImageLimitsOf(limits);
+  const budget = new TurnImageBudget(turnLimits);
   if (!SAFE_SEGMENT.test(managerId)) {
     throw new RunnerAttachmentRejectedError('managerId が dir 名にできない形');
   }
@@ -220,6 +234,10 @@ export async function placeRunnerAttachments(
         throw error;
       }
       const imageType = sniffAttachmentImageType(bytes);
+      const overTurn =
+        imageType === undefined || bytes.length > maxImageBytes
+          ? undefined
+          : budget.take(bytes.length);
       placed.push({
         id: attachment.id,
         name,
@@ -231,10 +249,24 @@ export async function placeRunnerAttachments(
           ? {}
           : bytes.length > maxImageBytes
             ? { imageOverLimit: maxImageBytes }
-            : // 受け取った文字列（改行・空白・url-safe を黙って許す復号）ではなく、検めた bytes から作り直した正規の base64。
-              {
-                image: { mediaType: imageType, data: Buffer.from(bytes).toString('base64'), name },
-              }),
+            : overTurn !== undefined
+              ? {
+                  imageOverTurnLimit: {
+                    reason: overTurn,
+                    limit:
+                      overTurn === 'count'
+                        ? turnLimits.maxTurnImages
+                        : turnLimits.maxTurnImageBytes,
+                  },
+                }
+              : // 受け取った文字列（改行・空白・url-safe を黙って許す復号）ではなく、検めた bytes から作り直した正規の base64。
+                {
+                  image: {
+                    mediaType: imageType,
+                    data: Buffer.from(bytes).toString('base64'),
+                    name,
+                  },
+                }),
       });
     }
   } catch (error) {
@@ -252,9 +284,18 @@ export function placedAttachmentNoticeLine(placed: PlacedAttachment): string {
   return (
     `[添付] id=${placed.id} name=${stripNul(placed.name)} type=${placed.mediaType} ` +
     `size=${placed.size} sha256=${placed.sha256} path=${placed.path}` +
-    (placed.imageOverLimit === undefined
-      ? `${placed.image === undefined ? '' : '（画像としても渡した）'}（Read で開ける）`
-      : `（画像の上限（${formatImageLimit(placed.imageOverLimit)}）を超えるので画像としては渡していない。path で Read で開ける）`)
+    (placed.imageOverTurnLimit !== undefined
+      ? turnImageOverNotice(
+          placed.imageOverTurnLimit.reason,
+          {
+            maxTurnImages: placed.imageOverTurnLimit.limit,
+            maxTurnImageBytes: placed.imageOverTurnLimit.limit,
+          },
+          'path で Read で開ける',
+        )
+      : placed.imageOverLimit === undefined
+        ? `${placed.image === undefined ? '' : '（画像としても渡した）'}（Read で開ける）`
+        : `（画像の上限（${formatImageLimit(placed.imageOverLimit)}）を超えるので画像としては渡していない。path で Read で開ける）`)
   );
 }
 

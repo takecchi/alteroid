@@ -90,6 +90,13 @@ describe('chat: 応答を待つ間に複数行が届いたとき', () => {
       const requests: string[] = [];
       vi.stubGlobal('fetch', (url: unknown, init?: RequestInit) => {
         requests.push(`${init?.method ?? 'GET'} ${new URL(String(url)).pathname}`);
+        if (new URL(String(url)).pathname === '/chat') {
+          return Promise.resolve(
+            sse(
+              'event: open\ndata: {"conversationId":"c1"}\n\nevent: done\ndata: {"type":"done"}\n\n',
+            ),
+          );
+        }
         return Promise.resolve(Response.json({}));
       });
       const out = captureStdout();

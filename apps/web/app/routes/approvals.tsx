@@ -1,5 +1,5 @@
 import { AlertTriangle } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { ApprovalEntry } from '~/components/approval-entry';
 import {
@@ -21,6 +21,7 @@ import {
 } from '@alteroid/ui';
 import { useAnswerApprovals, useApprovals } from '@alteroid/swr';
 import {
+  chatDraftEpoch,
   describeApprovalLeftover,
   isEmptyQuestionsDraft,
   loadApprovalDrafts,
@@ -148,7 +149,16 @@ export default function Approvals() {
    * **`sessionStorage` にも写す**（issue #3295）。「回答済み」タブへ移るとこのページは unmount
    * されるので、state だけでは書きかけが黙って消える。初期値は保存したものから読む。
    */
-  const [drafts, setDrafts] = useState<ApprovalDrafts>(loadApprovalDrafts);
+  const [drafts, setDraftsState] = useState<ApprovalDrafts>(loadApprovalDrafts);
+  /**
+   * 書きかけを最後に決めた時点の `chatDraftEpoch()`（#3706）。ログアウトで消したあとに、メモリに残った
+   * 書きかけが書き戻らないよう、保存はこの値が今と同じときだけ行う。
+   */
+  const draftsEpoch = useRef(chatDraftEpoch());
+  const setDrafts = useCallback((update: React.SetStateAction<ApprovalDrafts>) => {
+    draftsEpoch.current = chatDraftEpoch();
+    setDraftsState(update);
+  }, []);
   /** 答えが通った承認の、本文と設問の控え（残った下書きを見せるため。issue #3515）。 */
   const [leftoverSources, setLeftoverSources] = useState<ApprovalLeftoverSources>(
     loadApprovalLeftoverSources,
@@ -160,17 +170,19 @@ export default function Approvals() {
   /** 同じ描画の中の2回目の押下を止める（state は次の描画まで古い）。 */
   const bulkBusyRef = useRef(false);
   /**
-   * カードが個別に送信中の id（#3626）。まとめ送信の対象から外し、保存先の下書きも
-   * 送信中は落とさない（#3666。一覧から消える描画と `onAnswered` の間の一瞬）。
-   * ref は押下の直後に読むため、state は描画のため。
+   * 送信中の id（カードの個別送信とまとめ送信の両方。#3626）。まとめ送信の対象から外し、
+   * 保存先の下書きも送信中は落とさない（#3666。一覧から消える描画と、答えが通ったあとに
+   * 下書きを畳む・残すまでの間の一瞬）。ref は押下の直後に読むため、state は描画のため。
    */
   const sendingIdsRef = useRef<Set<string>>(new Set());
   const [sendingIds, setSendingIds] = useState<ReadonlySet<string>>(new Set());
 
-  function setCardSending(id: string, sending: boolean): void {
+  function setSending(ids: readonly string[], sending: boolean): void {
     const next = new Set(sendingIdsRef.current);
-    if (sending) next.add(id);
-    else next.delete(id);
+    for (const id of ids) {
+      if (sending) next.add(id);
+      else next.delete(id);
+    }
     sendingIdsRef.current = next;
     setSendingIds(next);
   }
@@ -241,7 +253,7 @@ export default function Approvals() {
     };
   }, [drafts, approvalsList, unansweredIds, leftoverSources, sendingIds]);
   useEffect(() => {
-    saveApprovalDrafts(liveDrafts);
+    saveApprovalDrafts(liveDrafts, draftsEpoch.current);
   }, [liveDrafts]);
   /**
    * 答えが通ったのに下書きが残っている承認。**まだ未回答の一覧に載っている間は出さない**
@@ -278,6 +290,10 @@ export default function Approvals() {
     const targets = pendingDrafts.filter(([id]) => !sendingIdsRef.current.has(id));
     if (targets.length === 0) return;
     bulkBusyRef.current = true;
+    // 送る id を送信中として持つ。答えが通って一覧から消える描画のあいだも、保存先の下書きを
+    // 落とさない（#3666。下の `settleDraft` で畳む・残すが決まるまで）。
+    const targetIds = targets.map(([id]) => id);
+    setSending(targetIds, true);
     // 送るときに下書きを控える。応答を待つ間に打ち足した分を、成功のあとに消さないため。
     const sentTexts = drafts.texts;
     const sentQuestions = drafts.questions;
@@ -308,6 +324,7 @@ export default function Approvals() {
       setBulkFailure(caught);
     } finally {
       bulkBusyRef.current = false;
+      setSending(targetIds, false);
       setBulkBusy(false);
     }
   }
@@ -376,7 +393,7 @@ export default function Approvals() {
                 onAnswered={(sent) => settleDraft(approval, sent)}
                 bulkError={bulkErrors[approval.id]}
                 bulkBusy={bulkBusy}
-                onSendingChange={(sending) => setCardSending(approval.id, sending)}
+                onSendingChange={(sending) => setSending([approval.id], sending)}
               />
             </li>
           ))}
