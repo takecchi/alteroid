@@ -510,6 +510,19 @@ export interface ToolContext {
   /** いま人間と繋がっている会話へイベントを流す（繋がっていなければ捨てる）。 */
   emit(event: ChatStreamEvent): void;
   /**
+   * **承認カードを出す道具が、カードの `createdAt` を決める前に await する口**（#3605）。
+   *
+   * いまのターンの返答の本文のうち、**ここまでに `emit`（SSE）へ流した分で、まだ日誌へ書いていない分**を
+   * 1件の `exchange`（outbound）として書く。承認は台帳の `createdAt` の位置に並ぶので、カードより前に
+   * 見せた本文を、カードより前の時刻で日誌に残すための口である（受信中の並び＝確定後の並び）。
+   * 書くものが無ければ何もしない。
+   *
+   * **省略できる（省略時は何もしない）。** 会話のターンを持たない context（マネージャー・蒸留のサイドクエリ・
+   * 単体のテスト）には、割るべき返答が無い。**カードを出す道具（`ask_human` / `request_permission`）だけが
+   * 呼ぶ**——ふつうの道具は履歴にカードが残らないので、割ると行が増えるだけになる。
+   */
+  flushReply?(): Promise<void>;
+  /**
    * いまのターンの会話 id（#768）。`ask_human` が `PendingApproval.conversationId`
    * を埋めるために読む。マネージャー発の確認・蒸留・timer など内部ターンでは
    * 会話へ紐づいていないので、**呼んだ結果として** `undefined` を返してよい
@@ -7040,6 +7053,8 @@ export function createCloneTools(context: ToolContext) {
         // 挙動を変えない）。`conversationId` 自体の省略は上の関数冒頭の
         // 歯（`typeof context.conversationId !== 'function'`）が落とす。
         const conversationId = getConversationId();
+        // **カードの時刻を決める前に、ここまでに見せた本文を日誌へ書く**（#3605。`ToolContext.flushReply`）。
+        await context.flushReply?.();
         const approval: PendingApproval = {
           id: randomUUID(),
           createdAt: new Date().toISOString(),
@@ -7142,6 +7157,8 @@ export function createCloneTools(context: ToolContext) {
           `通る例: ${allows.join(' / ')}\n通らない例: ${denies.join(' / ')}\n` +
           `${describePermissionEvidence(rule, context.recentDenials)}\n` +
           `許可するなら「${PERMISSION_GRANT_CONSENT_PHRASE}」とだけ答える（句点や言い換えがあると記録しない）。`;
+        // **`ask_human` と同じ**（カードの時刻を決める前に、ここまでに見せた本文を日誌へ書く。#3605）。
+        await context.flushReply?.();
         const approval: PendingApproval = {
           id: randomUUID(),
           createdAt: new Date().toISOString(),
