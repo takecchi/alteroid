@@ -72,15 +72,33 @@ const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout
 
 /**
  * 出るはずのものが出るまで待つ。固定の待ちは遅い環境で負けるので、条件が成り立ったら
- * すぐ返る。既定のタイムアウトは vitest の testTimeout（5s）より短くする（成り立たないとき
- * 「テストがタイムアウト」ではなく、待ったあとの expect の差分が出る）。
+ * すぐ返る。**時間切れになったら throw する**（成り立たないまま戻ると、後ろに `expect` を
+ * 置かないテストが、条件が偽のまま通ってしまう。#3520）。`description` には何を待っていたかを
+ * 書く（失敗メッセージに出る）。
+ *
+ * 既定のタイムアウトは vitest の testTimeout（5s）より短くする（成り立たないとき
+ * 「テストがタイムアウト」ではなく、何を待ったかの付いたエラーが出る）。
  */
 export async function waitFor(
   predicate: () => boolean,
-  { tickMs = 20, timeoutMs = 3_000 } = {},
+  { tickMs = 20, timeoutMs = 3_000, description }: WaitOptions = {},
 ): Promise<void> {
   const deadline = Date.now() + timeoutMs;
-  while (!predicate() && Date.now() < deadline) await sleep(tickMs);
+  while (!predicate()) {
+    if (Date.now() >= deadline) {
+      throw new Error(
+        `waitFor: ${timeoutMs}ms 待ったが条件が成り立たなかった: ${description ?? predicate.toString()}`,
+      );
+    }
+    await sleep(tickMs);
+  }
+}
+
+export interface WaitOptions {
+  tickMs?: number;
+  timeoutMs?: number;
+  /** 何を待っているか。時間切れのエラー文言に出る。 */
+  description?: string;
 }
 
 /** 1 文字ずつ打つ（IME の確定や貼り付けではなく、キー入力として届く形）。 */
