@@ -918,6 +918,17 @@ describe('日誌（ライブで流れる一覧と全文）', () => {
     expect(h.api.journalListCalls).toHaveLength(1); // 撃っていない
   });
 
+  it('初めて開く /journal の引数の誤りの断りは、読み込みの開始で消えず画面に出る（#3484）', async () => {
+    const h = start((api) => {
+      api.journalEntries = entries(2);
+    });
+    await type(h.stdin, '/journal type=bogus');
+    h.stdin.write(ENTER);
+    await waitFor(() => h.frame().includes('日誌（絞り:'));
+    await waitFor(() => h.frame().includes('type= に知らない値が入っています: bogus'));
+    expect(h.api.journalListCalls).toHaveLength(1); // 絞りの無い日誌が開く（断りだけが出る）
+  });
+
   it('取れなかったのを空と描かない', async () => {
     const h = start((api) => {
       api.journalListFails = '繋がらない';
