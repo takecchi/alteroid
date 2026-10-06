@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { createInterface } from 'node:readline/promises';
 import { stdin } from 'node:process';
-import { stdout } from './terminal-out.js';
+import { stderr, stdout } from './terminal-out.js';
 
 import {
   approvalUpdatedAt,
@@ -198,6 +198,11 @@ export async function chatCommand(): Promise<void> {
   let interrupting = false;
   rl.on('SIGINT', () => {
     if (waiter !== null || inputClosed) {
+      // Ctrl+C は取り消し。書きかけ（`\` の続き・貼り付け）は送らず捨てる（#3682）。close の後始末が渡してしまうので先に空にする。
+      const discarded = continued.length + pasteLines.length;
+      continued.splice(0);
+      pasteLines.splice(0);
+      if (discarded > 0) stderr.write('\n（書きかけの入力を捨てました。送っていません）\n');
       rl.close();
       return;
     }
@@ -235,6 +240,16 @@ export async function chatCommand(): Promise<void> {
       waiter = { resolve, reject };
     });
   };
+  // 送ろうとして、サーバが受けなかった本文（#3686）。失敗したら、使い手が打ったままを端末へ戻す。
+  let unsent = null as string | null;
+  const reprintUnsent = (): void => {
+    const body = unsent;
+    unsent = null;
+    if (body === null) return;
+    const out = interactive ? stdout : stderr;
+    out.write('送れなかった本文:\n');
+    out.writeRaw(`${body}\n`);
+  };
   // 次に送る発言へ添えかけのファイル（`/attach`）。
   const draft = createAttachmentDraft(target);
   // `/edit <番号|id>` で始めた編集（確定か `/edit-cancel` まで。#3642）。中は `draft` が元の添付も持つ。
@@ -263,6 +278,7 @@ export async function chatCommand(): Promise<void> {
 
   try {
     for (;;) {
+      unsent = null;
       let line: string;
       try {
         line = (await ask('> ')).trim();
@@ -280,7 +296,14 @@ export async function chatCommand(): Promise<void> {
         }
 
         if (/^\/(attach|attachments|detach)(\s|$)/.test(line)) {
-          await runAttachmentCommand(line, draft);
+          slashFailure = null;
+          await runAttachmentCommand(line, draft, (reason) => {
+            slashFailure ??= reason;
+          });
+          if (slashFailure !== null && !interactive) {
+            abortReason = `コマンド ${line.split(/\s+/)[0] ?? ''} が失敗した（${redactError(slashFailure)}）`;
+            break;
+          }
           continue;
         }
 
@@ -291,10 +314,17 @@ export async function chatCommand(): Promise<void> {
         }
 
         if (/^\/resume(\s|$)/.test(line)) {
-          const resumed = await runResumeCommand(line, target);
+          slashFailure = null;
+          const resumed = await runResumeCommand(line, target, (reason) => {
+            slashFailure ??= reason;
+          });
           if (resumed !== null) {
             conversationId = resumed;
             unopened = null;
+          }
+          if (slashFailure !== null && !interactive) {
+            abortReason = `コマンド ${line.split(/\s+/)[0] ?? ''} が失敗した（${redactError(slashFailure)}）`;
+            break;
           }
           continue;
         }
@@ -309,6 +339,9 @@ export async function chatCommand(): Promise<void> {
             target,
             // 戻せない操作の確認は、この REPL の readline で聞く（`confirm.ts`）。
             (summary) => confirmInRepl(summary, ask),
+            (reason) => {
+              slashFailure ??= reason;
+            },
           );
           if (handled === 'quit') break;
           if (slashFailure !== null && !interactive) {
@@ -362,6 +395,8 @@ export async function chatCommand(): Promise<void> {
           for (const a of uploaded.uploaded) stdout.write(`  ${describeAttachment(a)}\n`);
         }
         let sendFailure: string | null = null;
+        // 送れなかったとき、本文を端末へ戻すための控え。サーバが受けたら外す（#3686）。
+        unsent = line;
         // 編集の確定は、編集する発言の会話へ `supersedes` 付きで送る（いま話している会話は変えない）。
         const edit = editing;
         const sentTo = await sendMessage(
@@ -376,6 +411,7 @@ export async function chatCommand(): Promise<void> {
             ...(attachmentIds === undefined ? {} : { attachments: attachmentIds }),
             // サーバが発言を受けたら、送った分の添えかけを外す（受けなかったら残す）。編集はここで終わる。
             onAccepted: () => {
+              unsent = null;
               draft.discard(sentFiles);
               if (edit !== null) editing = null;
             },
@@ -391,6 +427,7 @@ export async function chatCommand(): Promise<void> {
           },
         );
         if (edit === null) conversationId = sentTo;
+        if (sendFailure !== null) reprintUnsent();
         if (sendFailure !== null && !interactive) {
           abortReason = `送信に失敗した（${sendFailure}）`;
           break;
@@ -398,6 +435,7 @@ export async function chatCommand(): Promise<void> {
       } catch (error) {
         const reason = redactError(error instanceof Error ? error.message : String(error));
         stdout.write(`エラー: ${reason}\n`);
+        reprintUnsent();
         if (!interactive) {
           abortReason = reason;
           break;
@@ -464,7 +502,7 @@ export async function sendMessage(
     onUnopened?: (clientMessageId: string) => void;
     /** `400 attachment_missing`（添付が無い・期限切れ）で断られたとき。サーバの理由の文を渡す（#3246）。 */
     onAttachmentMissing?: (message: string) => void;
-    /** サーバが発言を受け取らなかった（HTTP 非 2xx）とき。理由の文を渡す（非対話の入力で止める判断に使う。#3413）。 */
+    /** サーバが発言を受け取らなかった（HTTP 非 2xx）とき、または応答が `error`・切断・終端の無い終わりになったとき。理由の文を渡す（非対話の入力で止める判断に使う。#3413・#3684）。 */
     onFailed?: (reason: string) => void;
   } = {},
 ): Promise<string | null> {
@@ -510,7 +548,12 @@ export async function sendMessage(
   }
 
   options.onAccepted?.();
-  const next = await renderChatEvents(target, readSSE(response.body), conversationId);
+  const next = await renderChatEvents(
+    target,
+    readSSE(response.body),
+    conversationId,
+    options.onFailed,
+  );
   if (conversationId === null && next === null) options.onUnopened?.(clientMessageId);
   return next;
 }
@@ -557,6 +600,8 @@ async function renderChatEvents(
   target: Target,
   events: AsyncIterable<SSEEvent>,
   conversationId: string | null,
+  /** 応答が `error`・切断・終端の無い終わりで終わったとき、理由の文を渡す（非対話の入力で止める判断に使う。#3684）。`usage_limited` は呼ばない。 */
+  onFailed?: (reason: string) => void,
 ): Promise<string | null> {
   let nextConversationId = conversationId;
   let wrote = false;
@@ -624,6 +669,7 @@ async function renderChatEvents(
               '    （この発言は保持されていて、次に枠が開いたときに配り直されて試し直される）\n',
             );
           }
+          onFailed?.('利用の枠の上限に達した（発言は保持されていて、あとで配り直される）');
           failedOrLimited = true;
           break;
         }
@@ -636,6 +682,7 @@ async function renderChatEvents(
           failedOrLimited = true;
           const data = event.json<{ message: string }>();
           stdout.write(`\nエラー: ${data ? redactError(data.message) : '不明'}\n`);
+          onFailed?.(`応答がエラーで終わった（${data ? redactError(data.message) : '不明'}）`);
           break;
         }
         default:
@@ -649,6 +696,9 @@ async function renderChatEvents(
     stdout.write(
       `\nエラー: 応答が途中で切れました（${redactError(error instanceof Error ? error.message : String(error))}）\n`,
     );
+    onFailed?.(
+      `応答が途中で切れた（${redactError(error instanceof Error ? error.message : String(error))}）`,
+    );
     failedOrLimited = true;
   }
 
@@ -661,6 +711,7 @@ async function renderChatEvents(
         ? '  ! 応答が来ないまま接続が閉じました。発言が受け取られたかは分かりません\n'
         : '  ! 応答が途中で切れました（done も error も来ないまま接続が閉じました。出ているのは受け取った分だけです）\n',
     );
+    onFailed?.('応答が終端の無いまま切れた（done も error も来なかった）');
   }
   if (completed && !failedOrLimited && nextConversationId !== null) {
     await markConversationReadAfterReply(target, nextConversationId);
@@ -749,7 +800,17 @@ async function probeInProgress(target: Target, conversationId: string): Promise<
  * 戻り値は、以後の発言がつながる会話 id。戻れなかったら `null`（今の会話のまま）。
  * 離れても（接続が切れても）ターン自体は止めない（この口は発言も中断も送らない）。
  */
-export async function runResumeCommand(line: string, target: Target): Promise<string | null> {
+export async function runResumeCommand(
+  line: string,
+  target: Target,
+  onFailed?: (reason: string) => void,
+): Promise<string | null> {
+  const fail = (error: unknown): null => {
+    const reason = redactError(error instanceof Error ? error.message : String(error));
+    stdout.write(`エラー: ${reason}\n`);
+    onFailed?.(reason);
+    return null;
+  };
   const requested = line.replace(/^\/resume\s*/, '').trim();
   const id = requested.length > 0 ? requested : undefined;
   let candidates: string[];
@@ -760,16 +821,12 @@ export async function runResumeCommand(line: string, target: Target): Promise<st
       const client = createClient(target.baseUrl, target.headers);
       const response = await client.conversations.$get({ query: {} });
       if (!response.ok) {
-        stdout.write(`エラー: 会話の一覧を読めませんでした: ${await errorDetail(response)}\n`);
-        return null;
+        return fail(new Error(`会話の一覧を読めませんでした: ${await errorDetail(response)}`));
       }
       const { conversations } = await response.json();
       candidates = conversations.slice(0, RESUME_PROBE_LIMIT).map((c) => c.conversationId);
     } catch (error) {
-      stdout.write(
-        `エラー: ${redactError(error instanceof Error ? error.message : String(error))}\n`,
-      );
-      return null;
+      return fail(error);
     }
   }
   let found: string | null = null;
@@ -780,10 +837,7 @@ export async function runResumeCommand(line: string, target: Target): Promise<st
         break;
       }
     } catch (error) {
-      stdout.write(
-        `エラー: ${redactError(error instanceof Error ? error.message : String(error))}\n`,
-      );
-      return null;
+      return fail(error);
     }
   }
   if (found === null) {
@@ -799,10 +853,7 @@ export async function runResumeCommand(line: string, target: Target): Promise<st
   try {
     body = await openChatStream(target, found, abort.signal);
   } catch (error) {
-    stdout.write(
-      `エラー: ${redactError(error instanceof Error ? error.message : String(error))}\n`,
-    );
-    return null;
+    return fail(error);
   }
   let failure: unknown = null;
   async function* events(): AsyncGenerator<SSEEvent> {
@@ -813,12 +864,13 @@ export async function runResumeCommand(line: string, target: Target): Promise<st
       failure = error;
     }
   }
-  const resumed = await renderChatEvents(target, events(), found);
+  const resumed = await renderChatEvents(target, events(), found, onFailed);
   if (failure !== null) {
     const reason = failure instanceof Error ? failure.message : String(failure);
     stdout.write(
       `エラー: 進行中の応答に戻れませんでした: 接続が切れました（${redactError(reason)}）\n`,
     );
+    onFailed?.(`進行中の応答に戻れませんでした: 接続が切れました（${redactError(reason)}）`);
   }
   return resumed;
 }
@@ -1011,6 +1063,8 @@ export async function runSlashCommand(
    * 実行しない**（確認の無いまま消さない）。
    */
   confirm?: (summary: string) => Promise<boolean>,
+  /** 通信の口を通らない失敗（`/edit` の送信）を呼び手へ知らせる。非対話の入力で止める判断に使う（#3685）。 */
+  onFailed?: (reason: string) => void,
 ): Promise<'ok' | 'quit'> {
   const [command, ...rest] = line.split(/\s+/);
 
@@ -1078,8 +1132,8 @@ export async function runSlashCommand(
      */
     case '/schedule': {
       if (rest.length >= 3) {
-        const [kind, ...tail] = rest;
-        const parsed = takeWhen(tail);
+        const [kind] = rest;
+        const parsed = takeWhen(rawTail(line, 2));
         if (parsed === null || parsed.request.length === 0) {
           stdout.write(
             '周期は HH:MM（毎日その時刻）／30m・30（分ごと）／cron <5項目>（例: cron 0 10 * * 1）\n',
@@ -1553,8 +1607,8 @@ export async function runSlashCommand(
      * マネージャー・台帳の行には触れない——巻き戻しのロジックは無い。
      */
     case '/edit': {
-      const [reference, ...bodyParts] = rest;
-      const text = bodyParts.join(' ');
+      const [reference] = rest;
+      const text = rawTail(line, 2);
       if (!reference || text.length === 0) {
         stdout.write(
           '使い方: /edit <番号|id> <新しい本文>（1行で直す。元の添付は付けたまま送る）、または\n' +
@@ -1586,7 +1640,10 @@ export async function runSlashCommand(
       // 元の発言に付いていた添付は、外さずに新しい版へ引き継ぐ（上げ直さない。Web と同じ。#3399 決定 a・#3630）。
       // 期限切れで無くなっていれば、サーバが 400 attachment_missing で断り、sendMessage が理由を出す。
       const carried = (listed.messageAttachments[id] ?? []).map((a) => a.id);
-      await sendMessage(target, text, owningConversationId, id, { attachments: carried });
+      await sendMessage(target, text, owningConversationId, id, {
+        attachments: carried,
+        ...(onFailed === undefined ? {} : { onFailed }),
+      });
       return 'ok';
     }
 
@@ -1733,7 +1790,7 @@ export async function runSlashCommand(
       ) {
         return 'ok';
       }
-      const reason = rest.slice(1).join(' ').trim();
+      const reason = rawTail(line, 2);
       const response = await client.managers[':id'].$delete({
         param: { id },
         // 空文字を送らない（`reason` は `min(1)`）。**書かなかったことを空文字で
@@ -1798,8 +1855,8 @@ export async function runSlashCommand(
      * 回答へ化ける形になり、#313 と同じ穴を CLI 側に開けることになる。
      */
     case '/msg': {
-      const [reference, ...bodyParts] = rest;
-      const text = bodyParts.join(' ');
+      const [reference] = rest;
+      const text = rawTail(line, 2);
       if (!reference || text.length === 0) {
         stdout.write('使い方: /msg <番号|manager_id> <本文>\n');
         return 'ok';
@@ -1837,8 +1894,8 @@ export async function runSlashCommand(
      * 許可/拒否の意思が無い（`apps/web` の `QuestionWaitingRow` と同じ約束）。
      */
     case '/reply': {
-      const [reference, ...bodyParts] = rest;
-      const text = bodyParts.join(' ');
+      const [reference] = rest;
+      const text = rawTail(line, 2);
       if (!reference || text.length === 0) {
         stdout.write('使い方: /reply <番号|requestId> <本文>\n');
         return 'ok';
@@ -1920,8 +1977,8 @@ export async function runSlashCommand(
         return 'ok';
       }
 
-      const [reference, ...reasonParts] = rest;
-      const reason = reasonParts.join(' ');
+      const [reference] = rest;
+      const reason = rawTail(line, 2);
       const target = await resolveWaitingTarget(reference ?? '', listed.waiting, client);
       if (!target.ok) {
         stdout.write(`${target.message}\n`);
@@ -2000,7 +2057,7 @@ export async function runSlashCommand(
         ) {
           return 'ok';
         }
-        const reason = rest.slice(2).join(' ').trim();
+        const reason = rawTail(line, 3);
         const response = await client.archive[':id'].$delete({
           param: { id: removeId },
           // 空文字を送らない（/stop と同じ約束——書かなかったことと空文字を
@@ -2351,7 +2408,7 @@ export async function runSlashCommand(
     }
 
     case '/answer': {
-      const [reference, ...answerParts] = rest;
+      const [reference] = rest;
       if (!reference) {
         stdout.write('使い方: /answer <番号|id> <回答>\n');
         return 'ok';
@@ -2398,16 +2455,14 @@ export async function runSlashCommand(
           return 'ok';
         }
         if (target.questions !== undefined && target.questions.length > 0) {
-          structured = parseStructuredAnswer(
-            tokenizeWithQuotes(line.replace(/^\S+\s*/, '')).slice(1),
-          );
+          structured = parseStructuredAnswer(rawTail(line, 2));
         }
       }
       if (structured !== null && 'error' in structured) {
         stdout.write(`${redactError(structured.error)}\n`);
         return 'ok';
       }
-      const answer = structured === null ? answerParts.join(' ') : structured.supplement;
+      const answer = structured === null ? rawTail(line, 2) : structured.supplement;
       if (answer.length === 0 && structured === null) {
         stdout.write('使い方: /answer <番号|id> <回答>\n');
         return 'ok';
@@ -2534,7 +2589,7 @@ export async function runSlashCommand(
      * 困る」ときなので、クローンのターンを1回起こさないと書けないのは重い。
      */
     case '/commit': {
-      const body = rest.join(' ');
+      const body = rawTail(line, 1);
       if (body.length === 0) {
         stdout.write('使い方: /commit <本文>（引き受けたままの仕事として台帳へ積みます）\n');
         return 'ok';
@@ -2560,11 +2615,11 @@ export async function runSlashCommand(
     }
 
     case '/done': {
-      const [reference, ...reasonParts] = rest;
+      const [reference] = rest;
       // **理由は必須**（Web の `commitments.tsx` の `reason.trim() === ''` と同じ。
       // issue #3143）。閉じた理由は人間が後から読んで否定する材料なので、
       // 書かれていないまま「閉じた」事実だけを残さない。送る前に断る。
-      const reason = reasonParts.join(' ').trim();
+      const reason = rawTail(line, 2);
       if (!reference || reason.length === 0) {
         stdout.write(
           '使い方: /done <番号|id> <理由>（番号は /commitments の並び）\n' +
@@ -2617,8 +2672,8 @@ export async function runSlashCommand(
      * 静かに嘘になる。
      */
     case '/commit-edit': {
-      const [reference, ...bodyParts] = rest;
-      const body = bodyParts.join(' ').trim();
+      const [reference] = rest;
+      const body = rawTail(line, 2);
       if (!reference || body.length === 0) {
         stdout.write('使い方: /commit-edit <番号|id> <新しい本文>（番号は /commitments の並び）\n');
         return 'ok';
@@ -3617,21 +3672,24 @@ type ScheduleSpecInput =
  * `09:00` なら毎日その時刻、`30m` / `30` なら分ごと、`cron` なら**続く5項目**が式。
  * cron 式は空白を含むので、依頼の本文との境目を語数で決める（引用符を人間に
  * 要求すると、シェルの引用と混ざって書けなくなる）。読めなければ null。
+ * 依頼の本文は、周期の部分（cron なら `cron` と5項目）の後ろの生の文字列をそのまま返す
+ * （改行・インデント・連続した空白を潰さない）。
  */
-function takeWhen(tokens: string[]): { spec: ScheduleSpecInput; request: string } | null {
-  const [head, ...tail] = tokens;
-  if (head === undefined) return null;
+function takeWhen(when: string): { spec: ScheduleSpecInput; request: string } | null {
+  // `when` は `/schedule <kind>` の後ろの生の文字列。依頼文は生のまま返す（#3723。#3683 と同じ）。
+  const [head, ...tail] = when.trim().split(/\s+/);
+  if (head === undefined || head === '') return null;
 
   if (head === 'cron') {
     // cron の標準は5項目（分・時・日・月・曜日）
     if (tail.length < 6) return null;
     return {
       spec: { type: 'cron', expression: tail.slice(0, 5).join(' ') },
-      request: tail.slice(5).join(' '),
+      request: rawTail(when, 6),
     };
   }
 
-  const request = tail.join(' ');
+  const request = rawTail(when, 1);
   if (/^(?:[01]?\d|2[0-3]):[0-5]\d$/.test(head)) {
     return { spec: { type: 'daily', at: head }, request };
   }
@@ -4097,29 +4155,41 @@ function tokenizeQuoted(text: string): string[] {
  * 引用符も効く**（`--other q2="ただし 来週"` が1語になる）。`tokenizeQuoted`（`/answers` 用）は
  * 引用符が語の先頭にあるときだけ効くので、`設問id=文` の形には使えない。
  */
-function tokenizeWithQuotes(text: string): string[] {
-  const tokens: string[] = [];
+function tokenizeWithQuotes(text: string): QuotedToken[] {
+  const tokens: QuotedToken[] = [];
   let current = '';
   let started = false;
+  let start = 0;
   let quote: '"' | "'" | null = null;
+  let index = 0;
   for (const char of text) {
     if (quote !== null) {
       if (char === quote) quote = null;
       else current += char;
     } else if (char === '"' || char === "'") {
       quote = char;
+      if (!started) start = index;
       started = true;
     } else if (/\s/.test(char)) {
-      if (started) tokens.push(current);
+      if (started) tokens.push({ value: current, start, end: index });
       current = '';
       started = false;
     } else {
       current += char;
+      if (!started) start = index;
       started = true;
     }
+    index += char.length;
   }
-  if (started) tokens.push(current);
+  if (started) tokens.push({ value: current, start, end: index });
   return tokens;
+}
+
+/** `tokenizeWithQuotes` の1語。`start`/`end` は元の文字列での位置（引用符を含む）。 */
+interface QuotedToken {
+  value: string;
+  start: number;
+  end: number;
 }
 
 /**
@@ -4130,10 +4200,14 @@ function tokenizeWithQuotes(text: string): string[] {
  * トークンは補足の自由文になる。**突き合わせはデーモンが行う**（知らない id は 400 で返る）。
  */
 function parseStructuredAnswer(
-  tokens: string[],
+  text: string,
 ): { selections: ApprovalSelection[]; supplement: string } | { error: string } {
+  const tokens = tokenizeWithQuotes(text);
   const selections: ApprovalSelection[] = [];
-  const supplement: string[] = [];
+  // 補足は、隣り合う語の間の生の空白（改行・インデント・連続した空白）を保って繋ぐ（#3723）。
+  // フラグを挟んだ語どうしは、空白1つで繋ぐ。
+  let supplement = '';
+  let lastSupplement = -1;
   const entryOf = (questionId: string): ApprovalSelection => {
     let entry = selections.find((candidate) => candidate.questionId === questionId);
     if (entry === undefined) {
@@ -4143,17 +4217,22 @@ function parseStructuredAnswer(
     return entry;
   };
   for (let i = 0; i < tokens.length; i += 1) {
-    const token = tokens[i] ?? '';
-    const flag = /^--(select|other)(?:=([\s\S]*))?$/.exec(token);
+    const token = tokens[i];
+    if (token === undefined) break;
+    const flag = /^--(select|other)(?:=([\s\S]*))?$/.exec(token.value);
     if (flag === null) {
-      supplement.push(token);
+      const previous = lastSupplement === i - 1 ? tokens[lastSupplement] : undefined;
+      if (previous !== undefined) supplement += text.slice(previous.end, token.start);
+      else if (supplement !== '') supplement += ' ';
+      supplement += token.value;
+      lastSupplement = i;
       continue;
     }
     const name = flag[1] as 'select' | 'other';
     let value = flag[2];
     if (value === undefined) {
       i += 1;
-      value = tokens[i];
+      value = tokens[i]?.value;
     }
     const eq = value === undefined ? -1 : value.indexOf('=');
     if (value === undefined || eq <= 0) {
@@ -4180,7 +4259,7 @@ function parseStructuredAnswer(
   if (selections.length === 0) {
     return { error: '--select か --other に1つ以上の設問を書いてください' };
   }
-  return { selections, supplement: supplement.join(' ') };
+  return { selections, supplement };
 }
 
 /** `/answers` の1件ぶん — どの承認待ちに、何を答えるか。 */
@@ -4520,18 +4599,24 @@ export function runEditDraftCommand(
 }
 
 /** `/attach <path>` / `/attachments` / `/detach <番号|all>`（添えかけの操作。送るときに上がる）。 */
-export async function runAttachmentCommand(line: string, draft: AttachmentDraft): Promise<void> {
+export async function runAttachmentCommand(
+  line: string,
+  draft: AttachmentDraft,
+  onFailed?: (reason: string) => void,
+): Promise<void> {
   const match = /^\/(\w+)\s*([\s\S]*)$/.exec(line.trim());
   const command = match?.[1] ?? '';
   const args = (match?.[2] ?? '').trim();
   if (command === 'attach') {
     if (args === '') {
       stdout.write('使い方: /attach <path>\n');
+      onFailed?.('使い方の誤り（/attach <path>）');
       return;
     }
     const added = await draft.add(interpretAttachPath(args));
     if (!added.ok) {
       stdout.write(`添えられません: ${added.reason}\n`);
+      onFailed?.(`添えられません: ${added.reason}`);
       return;
     }
     stdout.write(
@@ -4545,9 +4630,11 @@ export async function runAttachmentCommand(line: string, draft: AttachmentDraft)
   }
   if (args === '') {
     stdout.write('使い方: /detach <番号|all>\n');
+    onFailed?.('使い方の誤り（/detach <番号|all>）');
     return;
   }
   const removed = draft.remove(args);
+  if (!removed.ok) onFailed?.(`外せません: ${removed.reason}`);
   stdout.write(
     removed.ok
       ? `外した: ${removed.removed.map((f) => f.name).join(', ')}（残り ${draft.count} 件）\n`
@@ -4570,4 +4657,15 @@ export function parseEventPayload(body: string): unknown {
   } catch {
     return body;
   }
+}
+
+/**
+ * スラッシュコマンドの行から、先頭の `skip` 個のトークン（コマンド名・参照など）と、その直後の
+ * 区切りの空白を除いた残りを、生のまま返す（#3683）。本文の中の改行・インデント・連続した空白は
+ * 潰さない。末尾の空白だけ落とす。
+ */
+export function rawTail(line: string, skip: number): string {
+  let rest = line.trimStart();
+  for (let i = 0; i < skip; i += 1) rest = rest.replace(/^\S+\s*/, '');
+  return rest.trimEnd();
 }

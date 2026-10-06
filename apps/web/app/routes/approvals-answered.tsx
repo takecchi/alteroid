@@ -4,6 +4,7 @@ import { Link } from 'react-router';
 import { ApprovalEntry } from '~/components/approval-entry';
 import { ApprovalsTabs } from '~/components/group-tabs';
 import { LoadError } from '~/components/load-error';
+import { useMinuteNow } from '~/lib/use-now';
 import {
   Button,
   Page,
@@ -215,6 +216,8 @@ export default function ApprovalsAnswered({ loaderData }: Route.ComponentProps) 
 /** 右のペイン。`approvalId` が無ければその日の件の一覧、在ればその1件の詳細。 */
 function DayBody({ date, approvalId }: { date: string; approvalId: string | undefined }) {
   const { data, error, isLoading, isValidating, mutate } = useApprovalsAnsweredOn(date);
+  // 「決着したのは …（N分前）」を古いまま残さない（#3700。#3596 と同じ形）。
+  const now = useMinuteNow();
 
   const approvals: PendingApproval[] | undefined = Array.isArray(data?.approvals)
     ? data.approvals
@@ -293,7 +296,7 @@ function DayBody({ date, approvalId }: { date: string; approvalId: string | unde
               {settledAt(selected) !== undefined && (
                 <p className="mb-2 text-[11px] text-muted-foreground">
                   決着したのは {formatDateTime(settledAt(selected)!)}（
-                  {formatRelative(settledAt(selected)!)}）
+                  {formatRelative(settledAt(selected)!, now)}）
                 </p>
               )}
               <ApprovalEntry approval={selected} />

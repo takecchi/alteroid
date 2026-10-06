@@ -1,6 +1,8 @@
 import { AlertTriangle } from 'lucide-react';
 import { Link } from 'react-router';
 
+import { useMinuteNow } from '~/lib/use-now';
+
 import {
   AwaitingApprovalRow,
   AwaitingCountRow,
@@ -66,12 +68,14 @@ function UnreadableApprovalsWarn({ count, className }: { count: number; classNam
  *
  * 台帳の未了の総数（`GET /progress` の `backlog.total`）を出す。**「人間の番」の件数ではない**
  * （API は未了を「人間が動かすもの」と「そうでないもの」に分けて持たない）ので、分けた数を
- * 作らない。数が欠けうる（読めない行・刈られた行）ときは下限として言う。進捗を読めなければ
+ * 作らない。数が欠けうる（読めない行）ときは下限として言う。進捗を読めなければ
  * この行は出さない（0 件と描かない）。
  */
 export function AwaitingYou() {
   const approvals = useApprovals(true);
   const progress = useProgress();
+  // 「N分前」を古いまま残さない。進捗の取り直しが失敗し続けても止まらない（#3700。#3596 と同じ形）。
+  const now = useMinuteNow();
 
   // 配列でない応答は「読めていない」へ倒す（`?? []` で0件にしない）。
   const list = Array.isArray(approvals.data?.approvals) ? approvals.data.approvals : undefined;
@@ -136,9 +140,7 @@ export function AwaitingYou() {
   }
 
   const backlog = progress.error === undefined ? progress.data?.backlog : undefined;
-  const backlogPartial =
-    backlog !== undefined &&
-    (backlog.completeness.unreadable !== 0 || backlog.completeness.trimmedClosed !== 0);
+  const backlogPartial = backlog !== undefined && backlog.completeness.unreadable !== 0;
 
   return (
     <AwaitingYouCard
@@ -155,7 +157,7 @@ export function AwaitingYou() {
           <AwaitingApprovalRow
             key={approval.id}
             question={redactBody(approval.question)}
-            meta={formatRelative(approval.createdAt)}
+            meta={formatRelative(approval.createdAt, now)}
             renderLink={({ className, children }) => (
               <Link to="/approvals" className={className}>
                 {children}

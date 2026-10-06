@@ -7621,6 +7621,7 @@ describe('GET /progress（#2241 の HTTP 面）', () => {
     throughput: {
       commitmentsOpened: number;
       commitmentsClosed: number;
+      mayBeUndercounted: boolean;
       delegationsEnded: { count: number; basis: string };
     };
     forecast: {
@@ -7656,6 +7657,8 @@ describe('GET /progress（#2241 の HTTP 面）', () => {
     expect(body.forecast.state).toBe('unavailable');
     expect(body.forecast.reason).toBe('ledger_younger_than_window');
     expect(body.throughput.delegationsEnded).toEqual({ count: 0, basis: 'updatedAt' });
+    // 刈りが無いので、窓の中の件数は数え落としていない（#3698）。
+    expect(body.throughput.mayBeUndercounted).toBe(false);
   });
 
   // **#2245 段1で反転した。** 以前は「github は常に not_observed」を固定していた（観測を載せる

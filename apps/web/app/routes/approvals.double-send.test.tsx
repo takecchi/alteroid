@@ -223,4 +223,24 @@ describe('答えが通った直後に、保存先の下書きが一瞬落ちな�
       expect(call.texts).toEqual({ 'a-one': '答え。追記です' });
     }
   });
+
+  it('まとめ送信: 一覧から消える描画のあいだも、保存先へ「その承認の下書きの無い」状態を書かない', async () => {
+    const s = stub([one, two], []);
+    renderPage();
+    const boxes = await typeTwo();
+    fireEvent.click(await screen.findByRole('button', { name: 'まとめて送る' }));
+    await waitFor(() => expect(s.bulk).toEqual([['a-one', 'a-two']]));
+    // 応答を待つ間に、一件目へ打ち足す。
+    fireEvent.change(boxes[0]!, { target: { value: '一件目の答え。追記' } });
+    saved.calls.length = 0;
+
+    s.releaseBulk();
+    await screen.findByRole('list', { name: '送らなかった下書きが残っている承認' });
+    await waitFor(() => expect(screen.queryAllByPlaceholderText(/答える/)).toHaveLength(0));
+
+    expect(saved.calls.length).toBeGreaterThan(0);
+    for (const call of saved.calls) {
+      expect(call.texts).toHaveProperty('a-one', '一件目の答え。追記');
+    }
+  });
 });

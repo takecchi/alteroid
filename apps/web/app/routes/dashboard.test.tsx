@@ -526,6 +526,22 @@ describe('「承認待ち一覧」', () => {
     expect(row.textContent).toContain('下限');
   });
 
+  it('刈られた完了済みの行だけ（unreadable が 0）なら、未了の数を下限と言わない（#3698）', async () => {
+    renderHome({
+      approvals: [approval(0)],
+      progress: {
+        ...PROGRESS_BODY,
+        backlog: {
+          ...PROGRESS_BODY.backlog,
+          completeness: { unreadable: 0, trimmedClosed: 4, unreadableJobs: 0 },
+        },
+      },
+    });
+
+    const row = (await screen.findByRole('link', { name: '仕事へ' })).closest('li')!;
+    expect(row.textContent).not.toContain('下限');
+  });
+
   it('対照: 欠けていない既定の応答では、下限と言わない', async () => {
     renderHome({ approvals: [approval(0)] });
 
@@ -709,6 +725,30 @@ describe('ホームのカードの文に内部の語を出さない（#2772）',
     expect(await screen.findByText(/何かを任せると、ここに出る/)).toBeTruthy();
   });
 
+  it('閉じた件数は、数え落としうるとき（mayBeUndercounted が真）だけ「以上」と言う。偽・欄が無いときは言わない（#3698）', async () => {
+    renderHome({
+      progress: {
+        ...PROGRESS_BODY,
+        throughput: { ...PROGRESS_BODY.throughput, mayBeUndercounted: true },
+      },
+    });
+    expect(await screen.findByText(/閉じた仕事 12 件以上/)).toBeTruthy();
+    cleanup();
+
+    renderHome({
+      progress: {
+        ...PROGRESS_BODY,
+        throughput: { ...PROGRESS_BODY.throughput, mayBeUndercounted: false },
+      },
+    });
+    expect((await screen.findByText(/閉じた仕事 12 件/)).textContent).not.toContain('以上');
+    cleanup();
+
+    // 古いデーモン（欄が無い）
+    renderHome();
+    expect((await screen.findByText(/閉じた仕事 12 件/)).textContent).not.toContain('以上');
+  });
+
   it('今日の利用: 記録が無いときも「台帳」と言わず、待てばよいことを言う', async () => {
     renderHome({ usage: { rows: [], since: '2026-08-01T00:00:00.000Z', beforeLedger: true } });
     const early = await screen.findByText(/今日の分はまだ記録が無い/);
@@ -733,6 +773,22 @@ describe('「作業の進捗」カード', () => {
     expect(linkTo('/progress')).toBeTruthy();
   });
 
+  it('刈られた完了済みの行だけ（unreadable が 0）なら、下限と言わず、空なら「無い」と言う（#3698）', async () => {
+    const empty = {
+      ...PROGRESS_BODY,
+      backlog: {
+        ...PROGRESS_BODY.backlog,
+        total: 0,
+        completeness: { unreadable: 0, trimmedClosed: 3, unreadableJobs: 0 },
+      },
+      inProgress: { ...PROGRESS_BODY.inProgress, running: 0 },
+    };
+    renderHome({ progress: empty });
+
+    expect(await screen.findByText(/いま動いている作業も未了の仕事も無い/)).toBeTruthy();
+    expect(screen.queryByText(/数は下限/)).toBeNull();
+  });
+
   it('読めなかった行が在るときは、数が下限だと言う', async () => {
     renderHome({
       progress: {
@@ -755,7 +811,6 @@ describe('「作業の進捗」カード', () => {
     };
     const partials = [
       { unreadable: 1, trimmedClosed: 0, unreadableJobs: 0 },
-      { unreadable: 0, trimmedClosed: 1, unreadableJobs: 0 },
       { unreadable: 0, trimmedClosed: 0, unreadableJobs: 1 },
     ];
     for (const completeness of partials) {

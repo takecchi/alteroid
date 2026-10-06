@@ -62,6 +62,16 @@ export function stripNul(value: string): string {
 }
 
 /**
+ * 本文から NUL を落とし、孤立サロゲートを U+FFFD に置き換える（正しいサロゲート対は変えない）。
+ * pg の `stripNulls`（`storage-pg/src/db.ts`）が文字列1本に掛ける規則と同じ（#3055）。
+ * pg の日誌が残す本文と、受け取ったままの本文を、同じ形に揃えて比べたいときに使う（#3634）。
+ */
+export function stripNulWellFormed(value: string): string {
+  // `toWellFormed`（ES2024）は tsconfig の `lib`（ES2023）に型が無いので、最小の型だけ足して呼ぶ。
+  return (stripNul(value) as string & { toWellFormed(): string }).toWellFormed();
+}
+
+/**
  * 構造のある本文（日誌の1行など）の文字列と、オブジェクトの欄名から NUL を落とす（issue #3011）。
  * pg の `stripNulls`（`storage-pg/src/db.ts`）と同じ規則で、fs・インメモリが同じ結果になるように置く。
  * 鍵には使わない（鍵は {@link assertNoNul} で断る）。

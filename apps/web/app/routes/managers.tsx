@@ -770,7 +770,10 @@ export default function Managers() {
               search={search}
             />
           }
-          detail={<Outlet />}
+          /* 詳細は選んでいる委譲の id で key して、委譲ごとに作り直す（issue #3629）。key が無いと A の
+             「話しかける」の書きかけ・停止の確認・送信中/失敗の表示が B へ引き継がれ、A 宛てに書いた
+             指示が B に届く。一覧と絞りは `detail` の外なので作り直さない。 */
+          detail={<Outlet key={selectedId} />}
         />
       </div>
     </Page>

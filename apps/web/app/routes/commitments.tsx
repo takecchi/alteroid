@@ -1,11 +1,12 @@
 import { WorkTabs } from '~/components/group-tabs';
 import { LoadError } from '~/components/load-error';
+import { useReportDirty, LeaveGuardScope } from '~/lib/leave-guard';
 import { useLatest } from '~/lib/use-latest';
 import { unsentInput } from '~/lib/unsent-input';
 import { AlertTriangle } from 'lucide-react';
-import { Fragment, useCallback, useEffect, useId, useState } from 'react';
+import { Fragment, useEffect, useId, useState } from 'react';
 import { Tabs } from 'radix-ui';
-import { Link, useBlocker } from 'react-router';
+import { Link } from 'react-router';
 
 import {
   Markdown,
@@ -50,35 +51,17 @@ import type { Commitment, UnreadableCommitment, UnreadableJob } from '@alteroid/
  * 並べ替えや優先度の札を足さないこと — 足した瞬間に「やることの一覧」になる。
  */
 export default function Commitments() {
+  return (
+    <LeaveGuardScope>
+      <CommitmentsPage />
+    </LeaveGuardScope>
+  );
+}
+
+function CommitmentsPage() {
   const [showClosed, setShowClosed] = useState(false);
-  /**
-   * **書きかけの編集欄の id の集合（#2764）。** 行ごとに「本文を編集」を同時に開けるので、
-   * 離れる前の確認（`useBlocker`・beforeunload）は編集欄ごとではなくここに1つだけ置く
-   * （ルーターは同時に1つのブロッカーしか扱わず、最後に登録されたものだけで判定する）。
-   * どれか1つでも書きかけなら止める。
-   */
-  const [dirtyIds, setDirtyIds] = useState<ReadonlySet<string>>(new Set());
-  const setRowDirty = useCallback((id: string, dirty: boolean) => {
-    setDirtyIds((current) => {
-      if (current.has(id) === dirty) return current;
-      const next = new Set(current);
-      if (dirty) next.add(id);
-      else next.delete(id);
-      return next;
-    });
-  }, []);
-  const anyDirty = dirtyIds.size > 0;
-  const blocker = useBlocker(anyDirty);
-  useEffect(() => {
-    if (!anyDirty) return;
-    const warn = (event: BeforeUnloadEvent) => {
-      event.preventDefault();
-      // 古いブラウザは returnValue を入れないと出さない。
-      event.returnValue = '';
-    };
-    window.addEventListener('beforeunload', warn);
-    return () => window.removeEventListener('beforeunload', warn);
-  }, [anyDirty]);
+  // 離れる前の確認（移動・タブを閉じる前）は `LeaveGuardScope` が1つだけ持ち、編集欄・登録欄が
+  // `useReportDirty` で書きかけを知らせる（#2764）。どれか1つでも書きかけなら止める。
   const { data, error, isLoading, isValidating, mutate } = useCommitments(showClosed);
 
   // 並びはデーモンが決めている（未了が古い順、片付いたものが新しい順で後ろ）。
@@ -121,21 +104,7 @@ export default function Commitments() {
         className="mb-4"
       />
 
-      <ConfirmDialog
-        open={blocker.state === 'blocked'}
-        onOpenChange={(open) => {
-          if (!open && blocker.state === 'blocked') blocker.reset();
-        }}
-        title="保存していない変更があります"
-        description="このまま離れると、書きかけの内容は失われます。"
-        confirmLabel="破棄して離れる"
-        destructive
-        onConfirm={() => {
-          if (blocker.state === 'blocked') blocker.proceed();
-        }}
-      />
-
-      <PushForm onDirtyChange={setRowDirty} />
+      <PushForm />
 
       {/* `keepPreviousData` のとき `isLoading` は別キーの初回読み込みでも真になる。一覧を置き換えてよいのは、出せるデータが無いときだけ（#3074）。 */}
       {isLoading && data === undefined ? (
@@ -157,11 +126,7 @@ export default function Commitments() {
             ) : (
               <ul>
                 {open.map((commitment) => (
-                  <OpenRow
-                    key={commitment.id}
-                    commitment={commitment}
-                    onDirtyChange={setRowDirty}
-                  />
+                  <OpenRow key={commitment.id} commitment={commitment} />
                 ))}
               </ul>
             )}
@@ -1040,7 +1005,8 @@ function CommitmentBodyEditor({
   onCancel: () => void;
   /** 「やめる」。書きかけがあれば確認を挟むのは呼び出し側（行）。 */
   onRequestCancel: () => void;
-  onDirtyChange: (id: string, dirty: boolean) => void;
+  /** 行が自分の「書きかけか」を持つために知らせる（ページの確認は `useReportDirty` が受け持つ）。 */
+  onDirtyChange: (dirty: boolean) => void;
 }) {
   const editCommitment = useEditCommitment();
   const [draft, setDraft] = useState<string | undefined>(undefined);
@@ -1053,16 +1019,12 @@ function CommitmentBodyEditor({
   /** 応答が返った時点の「いまの下書き」（送った時点と比べる。issue #3515）。 */
   const latestDraft = useLatest(draft);
 
-  /**
-   * 書きかけかどうかをページへ知らせる（離れる前の確認はページが1つだけ持つ。#2764）。
-   * 編集欄が閉じたら（保存・やめる）書きかけでなくなる。
-   */
-  // `onDirtyChange` はページが安定した関数（useCallback）で渡す。
-  const id = commitment.id;
+  // 書きかけかどうかをスコープへ知らせる。編集欄が閉じたら（保存・やめる）書きかけでなくなる。
+  useReportDirty(commitment.id, dirty);
   useEffect(() => {
-    onDirtyChange(id, dirty);
-  }, [id, dirty, onDirtyChange]);
-  useEffect(() => () => onDirtyChange(id, false), [id, onDirtyChange]);
+    onDirtyChange(dirty);
+  }, [dirty, onDirtyChange]);
+  useEffect(() => () => onDirtyChange(false), [onDirtyChange]);
 
   function save() {
     // 保存中は何もしない。ボタン・⌘/Ctrl+Enter・⌘/Ctrl+S のどの経路もここを通る（#3300）。
@@ -1172,13 +1134,7 @@ function snippet(body: string): string {
   return flat.length > SNIPPET_MAX ? `${flat.slice(0, SNIPPET_MAX)}…` : flat;
 }
 
-function OpenRow({
-  commitment,
-  onDirtyChange,
-}: {
-  commitment: Commitment;
-  onDirtyChange: (id: string, dirty: boolean) => void;
-}) {
+function OpenRow({ commitment }: { commitment: Commitment }) {
   const closeCommitment = useCloseCommitment();
   const reasonId = useId();
   const reasonHintId = useId();
@@ -1210,13 +1166,6 @@ function OpenRow({
   // この行の編集欄が書きかけか（編集欄が知らせてくる。ページへ渡す前にここでも持つ）。
   const [editDirty, setEditDirty] = useState(false);
   const [confirmingDiscard, setConfirmingDiscard] = useState(false);
-  const reportDirty = useCallback(
-    (id: string, dirty: boolean) => {
-      setEditDirty(dirty);
-      onDirtyChange(id, dirty);
-    },
-    [onDirtyChange],
-  );
   function closeEditor() {
     setEditing(false);
     setEditDirty(false);
@@ -1278,7 +1227,7 @@ function OpenRow({
           commitment={commitment}
           onCancel={closeEditor}
           onRequestCancel={requestCloseEditor}
-          onDirtyChange={reportDirty}
+          onDirtyChange={setEditDirty}
         />
       ) : (
         <CommitmentBody commitment={commitment} />
@@ -1431,7 +1380,7 @@ function ClosedReasonBody({ commitment }: { commitment: Commitment }) {
   }
 }
 
-/** 書きかけの集合（`dirtyIds`）での「仕事を登録する」欄の id。行の id（commitment.id）と衝突しない。 */
+/** 書きかけの集合（`LeaveGuardScope`）での「仕事を登録する」欄の id。行の id（commitment.id）と衝突しない。 */
 const PUSH_FORM_DIRTY_ID = 'push-form';
 
 /**
@@ -1441,7 +1390,7 @@ const PUSH_FORM_DIRTY_ID = 'push-form';
  * 困る」ときなので、クローンのターンを1回起こさないと書けないのは重い。
  * CLI の `/commit` と同じ経路である（片方でしかできないことを作らない）。
  */
-function PushForm({ onDirtyChange }: { onDirtyChange: (id: string, dirty: boolean) => void }) {
+function PushForm() {
   const pushCommitment = usePushCommitment();
   const inputId = useId();
   const bodyHintId = useId();
@@ -1449,12 +1398,8 @@ function PushForm({ onDirtyChange }: { onDirtyChange: (id: string, dirty: boolea
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<unknown>(undefined);
 
-  // 書きかけ（空でない）かどうかをページへ知らせる。編集欄と同じ仕組み（離れる前の確認はページに1つ。#2764）。
-  const dirty = body !== '';
-  useEffect(() => {
-    onDirtyChange(PUSH_FORM_DIRTY_ID, dirty);
-  }, [dirty, onDirtyChange]);
-  useEffect(() => () => onDirtyChange(PUSH_FORM_DIRTY_ID, false), [onDirtyChange]);
+  // 書きかけ（空でない）かどうかをスコープへ知らせる（離れる前の確認はページに1つ。#2764）。
+  useReportDirty(PUSH_FORM_DIRTY_ID, body !== '');
 
   async function submit() {
     if (body.trim() === '') return;

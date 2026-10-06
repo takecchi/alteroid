@@ -461,6 +461,56 @@ describe('summarizeProgress — forecast', () => {
     });
   });
 
+  describe('throughput.mayBeUndercounted（#3698。history_incomplete と同じ条件を、見込みの順序と独立に計算する）', () => {
+    const under = (
+      entries: ProgressCommitmentRow[],
+      extra: { trimmedClosed?: number } = {},
+    ): boolean => summarize(entries, [], extra).throughput.mayBeUndercounted;
+
+    it('trimmedClosed = 0 なら偽（片付き行が窓の中にしか無くても）', () => {
+      expect(under(anchored(closedInWindow(3)))).toBe(false);
+    });
+
+    it('trimmedClosed > 0 で、残っている最古の closedAt が窓より前なら偽', () => {
+      expect(
+        under(anchored([row('old-closed', OLD, { closedAt: '2026-09-23T11:59:59.999Z' })]), {
+          trimmedClosed: 7,
+        }),
+      ).toBe(false);
+    });
+
+    it('trimmedClosed > 0 で、残っている最古の closedAt が窓の中なら真', () => {
+      expect(under(anchored(closedInWindow(3)), { trimmedClosed: 1 })).toBe(true);
+    });
+
+    it('残っている最古の closedAt がちょうど from なら真（窓は from を含む）', () => {
+      expect(under(anchored([row('edge', OLD, { closedAt: FROM })]), { trimmedClosed: 1 })).toBe(
+        true,
+      );
+    });
+
+    it('trimmedClosed > 0 で片付き行が1件も残っていなければ真', () => {
+      expect(under(anchored([]), { trimmedClosed: 1 })).toBe(true);
+    });
+
+    it('ledger_younger_than_window が見込みで先に勝つ台帳でも、刈りがあれば真（独立に計算する）', () => {
+      const s = summarize([row('young', '2026-09-25T00:00:00.000Z')], [], { trimmedClosed: 3 });
+      expect(s.forecast).toMatchObject({ reason: 'ledger_younger_than_window' });
+      expect(s.throughput.mayBeUndercounted).toBe(true);
+    });
+
+    it('未了が0件で見込みが estimated(0) でも、刈りがあれば真', () => {
+      // 未了の行を作らない（`anchored` は未了の錨を足すので使わない。at は窓の前なので台帳は窓を覆う）
+      const s = summarize(closedInWindow(3), [], { trimmedClosed: 2 });
+      expect(s.forecast).toMatchObject({ state: 'estimated', hoursToDrain: 0 });
+      expect(s.throughput.mayBeUndercounted).toBe(true);
+    });
+
+    it('台帳が窓より若くても、刈りが無ければ偽', () => {
+      expect(under([row('young', '2026-09-25T00:00:00.000Z')])).toBe(false);
+    });
+  });
+
   describe('複数の reason が当たるときの優先順位', () => {
     it('ledger_younger_than_window は history_incomplete と closed_too_few に先立つ', () => {
       const f = summarize([row('young', '2026-09-25T00:00:00.000Z')], [], {

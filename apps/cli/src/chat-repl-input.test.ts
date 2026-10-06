@@ -196,7 +196,7 @@ describe('chat: 複数行の入力（#3412）', () => {
   });
 
   it('行末の \\ で次の行へ続け、/ で始まる行は続けない', async () => {
-    useStdin(false);
+    useStdin(true);
     const calls = recordFetch((path) => (path === '/chat' ? sse(OK_REPLY) : Response.json({})));
     const out = captureStdout();
     const { chatCommand } = await import('./chat.js');
