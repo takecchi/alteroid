@@ -53,6 +53,7 @@ import type {
   AgentManagerSessionSpec,
   AgentSpawnOptions,
   AgentSpawnProcess,
+  AgentUserInput,
 } from './agent-session.js';
 import { mapCodexApproval } from './codex-approval.js';
 import {
@@ -72,6 +73,7 @@ import {
   type CodexSandboxMode,
   type CodexThreadItem,
   type CodexTurn,
+  type CodexUserInput,
   type CodexTokenUsageBreakdown,
   type CodexCommandExecutionApprovalResponse,
   type CodexFileChangeApprovalResponse,
@@ -489,7 +491,7 @@ class CodexManagerSession implements CodexSession {
         started = await this.#guard(
           client.request('turn/start', {
             threadId,
-            input: [{ type: 'text', text: next.value.text, text_elements: [] }],
+            input: toCodexInput(next.value),
           }),
         );
       } catch (error) {
@@ -854,4 +856,21 @@ function answerOf(
 function describeClientError(error: CodexAppServerClientError): string {
   // 本文（行）は載せない。種類だけ。
   return error.kind;
+}
+
+/**
+ * 中立の入力を Codex の `turn/start` の `input` へ写す。画像は `{type:'image', url:'data:...'}`。
+ * 一時ファイル（`localImage`）にしない理由: 書き出しと後片付けが要らず、app-server が
+ * 別のファイル系にいても届き、ターンの途中で落ちても残骸が出ない。
+ */
+export function toCodexInput(next: AgentUserInput): CodexUserInput[] {
+  return [
+    { type: 'text', text: next.text, text_elements: [] },
+    ...(next.images ?? []).map(
+      (image): CodexUserInput => ({
+        type: 'image',
+        url: `data:${image.mediaType};base64,${image.data}`,
+      }),
+    ),
+  ];
 }

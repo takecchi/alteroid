@@ -17,6 +17,15 @@ import type { ChatStreamEvent } from './schema.js';
 import type { Stores } from './store.js';
 import { createMemoryStores } from './testing.js';
 
+/** `content` の text 部分。配列なら text ブロックを結合する（画像は含めない）。 */
+function contentText(content: unknown): string {
+  if (!Array.isArray(content)) return String(content);
+  return content
+    .filter((b): b is { type: 'text'; text: string } => (b as { type?: unknown }).type === 'text')
+    .map((b) => b.text)
+    .join('');
+}
+
 /**
  * SDK を実際に呼ばずにクローンループを検証する。
  *
@@ -26,6 +35,11 @@ import { createMemoryStores } from './testing.js';
 export interface FakeCall {
   options: Options;
   inputs: string[];
+  /**
+   * 入力ごとの生の `content`（文字列のまま、または text / image ブロックの配列）。
+   * `inputs` は常に text 部分だけ（配列なら text ブロックを結合）なので、既存の検査は変わらない。
+   */
+  inputBlocks?: unknown[];
   /**
    * **この呼び出しが本流のセッションのものか、サイドクエリのものか**（#890）。
    *
@@ -162,6 +176,7 @@ export function fakeSdk(
     const call: FakeCall = {
       options: params.options ?? {},
       inputs: [],
+      inputBlocks: [],
       kind: typeof params.prompt === 'string' ? 'sideQuery' : 'session',
     };
     const callIndex = calls.length;
@@ -193,8 +208,9 @@ export function fakeSdk(
 
       let turnIndex = 0;
       for await (const message of prompt as AsyncIterable<{ message: { content: unknown } }>) {
-        const text = String(message.message.content);
+        const text = contentText(message.message.content);
         call.inputs.push(text);
+        (call.inputBlocks ??= []).push(message.message.content);
         if (options.delayMs !== undefined) {
           await new Promise((resolve) => setTimeout(resolve, options.delayMs));
         }
@@ -709,6 +725,7 @@ export function fakeGatedSdk() {
     const call: FakeCall = {
       options: params.options ?? {},
       inputs: [],
+      inputBlocks: [],
       kind: typeof params.prompt === 'string' ? 'sideQuery' : 'session',
     };
     calls.push(call);
@@ -726,7 +743,8 @@ export function fakeGatedSdk() {
       }>) {
         // **本文を控えてから止める。** 止めてから控えると「ターンが始まった」を
         // テストから観測できず、順番待ちを作れたことが確かめられない。
-        call.inputs.push(String(message.message.content));
+        call.inputs.push(contentText(message.message.content));
+        (call.inputBlocks ??= []).push(message.message.content);
         await gate;
         yield {
           type: 'assistant',

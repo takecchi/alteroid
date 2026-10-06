@@ -27,6 +27,7 @@ import {
   buildCloneSessionOptions,
   foldClaudeMessage,
 } from './claude-provider.js';
+import { toSdkContent } from './claude-user-content.js';
 import { readSessionUsage } from './usage.js';
 
 /** SDK の `query()` の型。テスト用の差し替え口の型であって、中立の口には出ない。 */
@@ -49,7 +50,7 @@ async function* toSdkInput(input: AsyncIterable<AgentUserInput>): AsyncGenerator
   for await (const next of input) {
     yield {
       type: 'user',
-      message: { role: 'user', content: next.text },
+      message: { role: 'user', content: toSdkContent(next) },
       parent_tool_use_id: null,
     };
   }

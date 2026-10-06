@@ -48,6 +48,16 @@ import type { UsageTotals } from './usage.js';
 /** マネージャーへ流す1通のユーザー入力（クローン・人間からの一言）。 */
 export interface AgentUserInput {
   readonly text: string;
+  /** 本文に添える画像。無ければ（または空なら）文字列だけの従来の入力と同じ。 */
+  readonly images?: readonly AgentInputImage[];
+}
+
+/** ユーザー入力に添える1枚の画像。base64 文字列で持つ（どの provider も最終形が base64 のため）。 */
+export interface AgentInputImage {
+  readonly mediaType: 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif';
+  /** base64（データ URL の接頭辞は付けない）。 */
+  readonly data: string;
+  readonly name?: string;
 }
 
 // ---------------------------------------------------------------------------
