@@ -1360,6 +1360,42 @@ describe('承認待ち（一覧と詳細・答える）', () => {
     await waitFor(() => h.frame().includes('承認待ち（未回答 2 件'));
   });
 
+  it('回答済み・取り下げ済みの詳細で a・i を押すと、答え済みか取り下げ済みかを最下行で断る（#3663）', async () => {
+    const h = start((api) => {
+      fixture(api);
+      const done = approvalRow('ap-done', {
+        question: '夜のリリースを待つか',
+        answeredAt: '2026-09-30T10:00:00.000Z',
+        answer: '待たない',
+      });
+      const gone = approvalRow('ap-gone', {
+        question: '取り下げた確認',
+        withdrawnAt: '2026-09-30T05:00:00.000Z',
+        withdrawnReason: '自分で見つけた',
+      });
+      api.answeredDateRows = [{ date: '2026-09-30', count: 2 }];
+      api.answeredOnRows = { '2026-09-30': [done, gone] };
+      api.approvalRows = [...api.approvalRows, done, gone];
+    });
+    await openList(h);
+    await press(h.stdin, 'd');
+    await waitFor(() => h.frame().includes('2026-09-30  2 件'));
+    await press(h.stdin, ENTER);
+    await waitFor(() => h.frame().includes('ap-gone'));
+    await press(h.stdin, ENTER);
+    await waitFor(() => h.frame().includes('[回答済み] ap-done'));
+    expect(h.frame()).not.toContain('もう答えられない:');
+    await press(h.stdin, 'a');
+    expect(h.frame()).toContain('もう答えられない: この承認待ちは回答済み');
+    await press(h.stdin, ESC);
+    await waitFor(() => h.frame().includes('2026-09-30 に決着した承認'));
+    await press(h.stdin, DOWN);
+    await press(h.stdin, ENTER);
+    await waitFor(() => h.frame().includes('ap-gone'));
+    await press(h.stdin, 'i');
+    expect(h.frame()).toContain('もう答えられない: この承認待ちは取り下げ済み');
+  });
+
   it('一覧は古い順に 1 件 1 行。設問が在れば要約、無ければ質問の抜粋。全文や設問の中身は載せない', async () => {
     const h = start(fixture);
     await openList(h);
