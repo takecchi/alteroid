@@ -81,7 +81,10 @@ export function clientLoader({ params }: Route.ClientLoaderArgs) {
  * 「最下部にいる」と判定し、狭すぎると丸め誤差で最下部にいるのに追従
  * しない、の両方に転びうる）。
  */
+let replyGroupSeq = 0;
 const BOTTOM_THRESHOLD_PX = 32;
+/** 返信行を1つも持たない集合（state の初期値。同じ参照を使い回して余計な再描画を避ける）。 */
+const NO_REPLY_KEYS: ReadonlySet<string> = new Set();
 
 /**
  * ストリームの `error` イベント（ターンが失敗した）由来の失敗。入力欄の上の帯が、ネットワーク断・
@@ -254,6 +257,13 @@ interface Line {
    * `failed` はもう一度送れば試し直せる、`held` は枠が開けばクローンが自分で試し直す。
    */
   turnFailure?: 'failed' | 'held';
+  /**
+   * 同じストリーム（＝1ターン）の返信行をまとめる印（#3593）。`ask_human`・道具を挟んで返信が
+   * 複数の行に分かれても、日誌には**ターン末に1つの発言**（本文を連結したもの）として載る
+   * （`clone.ts` の `exchange` の書き込み）。`pendingOwnLines` は、この印を持つ行の連結を履歴の
+   * 1発言と突き合わせる。画面の中だけのもの。
+   */
+  replyGroup?: string;
   journalId?: string;
   /** この発言に添えられた添付の控え（中身ではない。表示の部品が取りに行く）。 */
   attachments?: readonly MessageAttachment[];
@@ -388,8 +398,28 @@ export function pendingOwnLines(
   for (const line of historyLines) {
     if (line.approval !== undefined) historyApprovals.set(line.approval.id, line.approval);
   }
+  /*
+   * **分かれた返信（#3593）は、連結した本文で履歴の1発言と突き合わせる。** 日誌はターンの本文を
+   * 1つの発言として載せるので、行ごとに照合すると、履歴が引き取っても手元の行が全部残って二重に出る。
+   * 連結が当たらなければ、行ごとの照合へ落ちる（一致を確認できないものは落とさない）。
+   */
+  const groups = new Map<string, Line[]>();
+  for (const line of ownedBy(lines, shownId)) {
+    if (line.replyGroup === undefined || line.role !== 'clone') continue;
+    groups.set(line.replyGroup, [...(groups.get(line.replyGroup) ?? []), line]);
+  }
+  const absorbedGroups = new Set<string>();
+  for (const [group, members] of groups) {
+    if (members.length < 2) continue;
+    const key = `clone\u0000${members.map((member) => member.text).join('')}`;
+    const count = remaining.get(key) ?? 0;
+    if (count === 0) continue;
+    remaining.set(key, count - 1);
+    absorbedGroups.add(group);
+  }
   const pending: Line[] = [];
   for (const line of ownedBy(lines, shownId)) {
+    if (line.replyGroup !== undefined && absorbedGroups.has(line.replyGroup)) continue;
     const key = lineMatchKey(line);
     const count = remaining.get(key) ?? 0;
     if (count > 0) {
@@ -1163,7 +1193,10 @@ export function ChatPane({
   const streamRef = useRef<Stream | undefined>(undefined);
   /**
    * **終端（`done`/`error`）を見ないまま途中で終わったかもしれない返信行**のキー
-   * （会話 id → `replyKey`）。Issue #2662。
+   * （会話 id → `replyKey` の集合）。Issue #2662。
+   *
+   * **1本のストリームに返信行は複数ある**（`ask_human`・道具・`usage_limited` を挟んで
+   * 続く text は新しい行で始まる。#3593）ので、値は集合である。
    *
    * サーバの再生（`GET /chat/:id/stream`）は進行中のターンを**頭から**流す。資格が
    * 替わって効果が張り直された・会話を切り替えて戻った・自分の送信が途中で切れた、の
@@ -1175,7 +1208,7 @@ export function ChatPane({
    * 読むのは再生の効果だけ。`done` まで届いて確定した行は外れているので消えない。
    * render では読まないので ref でよい。
    */
-  const unfinishedReplyRef = useRef(new Map<string, string>());
+  const unfinishedReplyRef = useRef(new Map<string, Set<string>>());
   /**
    * その会話の、終端を見なかった途中の返信行を捨てる（再生の `open` から、進行中かどうかを
    * 問わず呼ぶ。Issue #2662）。進行中なら再生が頭から積み直し、進行中でなければ確定した
@@ -1185,8 +1218,11 @@ export function ChatPane({
     const stale = unfinishedReplyRef.current.get(conversationId);
     if (stale === undefined) return;
     unfinishedReplyRef.current.delete(conversationId);
-    setLines((previous) => previous.filter((line) => line.key !== stale));
-    setActiveReplyKey((key) => (key === stale ? undefined : key));
+    setLines((previous) => previous.filter((line) => !stale.has(line.key)));
+    setActiveReplyKeys((keys) => {
+      if (![...keys].some((key) => stale.has(key))) return keys;
+      return new Set([...keys].filter((key) => !stale.has(key)));
+    });
   }, []);
   /**
    * いま見えている会話を、受信の途中からも読めるようにしたもの。
@@ -1197,8 +1233,9 @@ export function ChatPane({
   const shownIdRef = useRef(shownId);
 
   /**
-   * **いま `append`（下）が `key` で引いて中身を継ぎ足しうるクローンの返信の
-   * `key`。** 無ければ `undefined`。
+   * **いま走っているストリームが積んだクローンの返信行の `key`（複数。#3593）。**
+   * 無ければ空。1本のストリームの返信は、`ask_human`・道具を挟むたびに別の行になる。
+   * 以下、単数で書いてある箇所は、この集合の要素ごとに読むこと（旧名 `activeReplyKey`）。
    *
    * ⚠️ **`pendingOwnLines` による刈り込み（下の不変条件チェック）から、この
    * `key` を持つ行だけを除外するために要る。** クローンの返信は完成するまで
@@ -1220,7 +1257,7 @@ export function ChatPane({
    * 同じ tick で `setLines` を呼んでいる箇所であり、React は同じコミットへ
    * まとめる。
    */
-  const [activeReplyKey, setActiveReplyKey] = useState<string | undefined>(undefined);
+  const [activeReplyKeys, setActiveReplyKeys] = useState<ReadonlySet<string>>(NO_REPLY_KEYS);
 
   /**
    * 直前に見ていた会話。`retainedBy`（上）が「いま」に加えて残す2つ目の持ち主。
@@ -1672,7 +1709,7 @@ export function ChatPane({
     pendingOwnLines(lines, shownId, historyLines).map((line) => line.key),
   );
   const settled = ownedBy(lines, shownId).some(
-    (line) => !pendingCurrentKeys.has(line.key) && line.key !== activeReplyKey,
+    (line) => !pendingCurrentKeys.has(line.key) && !activeReplyKeys.has(line.key),
   );
   if (settled) {
     setLines((previous) => {
@@ -1681,7 +1718,7 @@ export function ChatPane({
       );
       const next = previous.filter(
         (line) =>
-          line.of !== shownId || stillPendingKeys.has(line.key) || line.key === activeReplyKey,
+          line.of !== shownId || stillPendingKeys.has(line.key) || activeReplyKeys.has(line.key),
       );
       return next.length === previous.length ? previous : next;
     });
@@ -2072,6 +2109,17 @@ export function ChatPane({
 
     // クローンの応答は細切れで届く。1行に継ぎ足していく。
     let replyKey: string | undefined;
+    /** このストリームが積んだ返信行のキー（settle で `unfinishedReplyRef` から外す）。 */
+    const ownReplyKeys = new Set<string>();
+    let replyCount = 0;
+    const replyGroup = `g-${Date.now()}-${(replyGroupSeq += 1)}`;
+    /** 返信行を閉じる。次の text は新しい行で始まる（#3593）。 */
+    const endReply = () => {
+      replyKey = undefined;
+    };
+    /** 続きの text が来たら、この会話の「〜を実行中…」などの合図を消す。 */
+    const dropTransients = (previous: Line[]) =>
+      previous.filter((line) => !(line.transient === true && line.of === stream.id));
     const append = (chunk: string) => {
       if (!writable()) return;
       setLines((previous) => {
@@ -2097,9 +2145,11 @@ export function ChatPane({
     };
     /** 終端まで届いた＝この返信行は確定した。再生の頭出しで捨てる対象から外す。 */
     const settleReply = () => {
-      if (stream.id !== undefined && unfinishedReplyRef.current.get(stream.id) === replyKey) {
-        unfinishedReplyRef.current.delete(stream.id);
-      }
+      if (stream.id === undefined) return;
+      const unfinished = unfinishedReplyRef.current.get(stream.id);
+      if (unfinished === undefined) return;
+      for (const key of ownReplyKeys) unfinished.delete(key);
+      if (unfinished.size === 0) unfinishedReplyRef.current.delete(stream.id);
     };
     const apply = (event: ChatStreamEvent) => {
       switch (event.type) {
@@ -2118,25 +2168,34 @@ export function ChatPane({
           setTransient('考えている…');
           break;
         case 'tool':
+          endReply();
           setTransient(`${event.tool} を実行中…`);
           break;
         case 'text':
           if (replyKey === undefined) {
             if (writable()) setLiveNote({ id: stream.id, text: '返信の受信を始めた' });
-            replyKey = `c-${Date.now()}`;
-            const key = replyKey;
-            if (stream.id !== undefined) unfinishedReplyRef.current.set(stream.id, key);
+            replyCount += 1;
+            // 同じ ms に2行始まっても衝突しないよう、通し番号を付ける。
+            const key = `c-${Date.now()}-${replyCount}`;
+            replyKey = key;
+            ownReplyKeys.add(key);
+            if (stream.id !== undefined) {
+              const unfinished = unfinishedReplyRef.current.get(stream.id) ?? new Set<string>();
+              unfinished.add(key);
+              unfinishedReplyRef.current.set(stream.id, unfinished);
+            }
             // `pendingOwnLines` による刈り込みから、この行が完成するまで
-            // 守る（`activeReplyKey` の doc）。
-            setActiveReplyKey(key);
+            // 守る（`activeReplyKeys` の doc）。
+            setActiveReplyKeys((keys) => new Set(keys).add(key));
             setLines((previous) => [
-              ...previous.filter((line) => line.transient !== true),
-              { key, role: 'clone', text: '', of: stream.id },
+              ...dropTransients(previous),
+              { key, role: 'clone', text: '', of: stream.id, replyGroup },
             ]);
           }
           append(event.text);
           break;
         case 'ask_human':
+          endReply();
           setLines((previous) => [
             ...previous.filter((line) => line.transient !== true),
             {
@@ -2174,6 +2233,7 @@ export function ChatPane({
          * 送り直してしまう（すでに保持されている分と重複する）。
          */
         case 'usage_limited':
+          endReply();
           setLines((previous) => [
             ...previous.filter((line) => line.transient !== true),
             {
@@ -2627,7 +2687,7 @@ export function ChatPane({
           // このストリームが積んだ返信は、もう `append` から継ぎ足されない
           // （このストリームのやりとりが終わったので）——刈り込みから守る
           // 理由が消えたので、`pendingOwnLines` の対象に戻す。
-          setActiveReplyKey(undefined);
+          setActiveReplyKeys(NO_REPLY_KEYS);
         }
       }
     },
@@ -2790,7 +2850,7 @@ export function ChatPane({
           if (streamRef.current === ended) {
             setSending(false);
             streamRef.current = undefined;
-            setActiveReplyKey(undefined);
+            setActiveReplyKeys(NO_REPLY_KEYS);
           }
         }
       }
