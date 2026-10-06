@@ -672,7 +672,9 @@ async function renderChatEvents(
     stdout.write(
       `\nエラー: 応答が途中で切れました（${redactError(error instanceof Error ? error.message : String(error))}）\n`,
     );
-    onFailed?.(`応答が途中で切れた（${redactError(error instanceof Error ? error.message : String(error))}）`);
+    onFailed?.(
+      `応答が途中で切れた（${redactError(error instanceof Error ? error.message : String(error))}）`,
+    );
     failedOrLimited = true;
   }
 
