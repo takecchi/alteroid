@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { captureStdout } from './test-support.js';
 
@@ -228,6 +228,33 @@ describe('alteroid daemon stop', () => {
     await daemonStopCommand();
 
     expect(read()).toBe(expected);
+  });
+
+  // Issue #3140 — 止まらなかった・確かめられなかったを、成功（0）と見分けられるようにする。
+  describe('終了コード', () => {
+    let saved: typeof process.exitCode;
+    beforeEach(() => {
+      saved = process.exitCode;
+      process.exitCode = undefined;
+    });
+    afterEach(() => {
+      process.exitCode = saved;
+    });
+
+    it.each([
+      ['stopped', undefined],
+      ['not-running', undefined],
+      ['stale', undefined],
+      ['unresponsive', 1],
+      ['unknown', 1],
+    ] as const)('%s のときの終了コードは %s', async (outcome, expected) => {
+      vi.mocked(daemon.stop).mockResolvedValue(outcome);
+      captureStdout();
+
+      await daemonStopCommand();
+
+      expect(process.exitCode).toBe(expected);
+    });
   });
 });
 
