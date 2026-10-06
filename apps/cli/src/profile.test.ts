@@ -548,6 +548,29 @@ describe('alteroid profile edit', () => {
     expect(sent.some((s) => s.method === 'PUT')).toBe(false);
   });
 
+  it('無い行を作るとき、雛形のまま閉じたら「変更はありません」と言って PUT しない', async () => {
+    setReply('GET', '/profile', { status: 200, body: profileBody([]) });
+    const read = captureStdout();
+
+    await profileEditCommand('fresh');
+
+    expect(read()).toBe('変更はありません。\n');
+    expect(sent.some((s) => s.method === 'PUT')).toBe(false);
+  });
+
+  it('無い行を作るとき、雛形に1行足したら PUT する', async () => {
+    setReply('GET', '/profile', { status: 200, body: profileBody([]) });
+    setReply('PUT', '/profile/fresh', { status: 200, body: updateBody([{ name: 'fresh', scope: 'all' }]) });
+    editWith = async (path) => {
+      await writeFile(path, `${await readFile(path, 'utf8')}export A=1\n`);
+    };
+    captureStdout();
+
+    await profileEditCommand('fresh');
+
+    expect(sent.some((s) => s.method === 'PUT')).toBe(true);
+  });
+
   it('撒く先だけを変えるなら、本文が同じでも PUT する（外れる側が出るので更新である）', async () => {
     setReply('GET', '/profile', {
       status: 200,

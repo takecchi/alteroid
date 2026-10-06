@@ -683,6 +683,23 @@ describe('alteroid memory の読み出しの失敗の理由', () => {
     }
   });
 
+  it('edit: 無い記憶を作るとき、雛形のまま閉じたら書かずに「変更はありません」と言う', async () => {
+    const out = captureStdout();
+    const savedEditor = process.env.EDITOR;
+    process.env.EDITOR = 'true';
+    replies.push({ status: 404, body: { error: 'not found' } });
+
+    try {
+      await memoryEditCommand('fresh');
+    } finally {
+      if (savedEditor === undefined) delete process.env.EDITOR;
+      else process.env.EDITOR = savedEditor;
+    }
+
+    expect(out()).toContain('変更はありません');
+    expect(sent.map((s) => s.method)).toEqual(['GET']);
+  });
+
   /** Issue #2743: 読んだ版を持ち回り、エディタを開いている間の別の書き手を黙って消さない。 */
   describe('edit の前提の版（Issue #2743）', () => {
     let savedEditor: string | undefined;
