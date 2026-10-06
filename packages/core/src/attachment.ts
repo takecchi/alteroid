@@ -298,7 +298,8 @@ export function normalizeAttachmentName(raw: string): string {
     .replace(/[\u0001-\u001f\u007f-\u009f/\\\p{Cf}]/gu, '_')
     .trim();
   if (name.length > ATTACHMENT_NAME_MAX_LENGTH) {
-    name = toWellFormed(name.slice(0, ATTACHMENT_NAME_MAX_LENGTH));
+    // 切ったあとにも前後の空白を除く（除かないと、もう一度通したときに名前が変わる）。
+    name = toWellFormed(name.slice(0, ATTACHMENT_NAME_MAX_LENGTH)).trim();
   }
   return name === '' || name === '.' || name === '..' ? 'file' : name;
 }
