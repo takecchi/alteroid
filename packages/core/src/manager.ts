@@ -10573,6 +10573,13 @@ class Pool implements ManagerPool {
             ) {
               record.job.lease = releaseLease(record.job.lease, this.#now());
               await this.#persist(record);
+              // 返したことは日誌に残す（`releaseLease` の doc が挙げる契機のうち、この1つだけは
+              // 持ち主自身の `closed` ではなく 4xx の答えに拠っている。黙って返さない）。
+              await this.#journal({
+                type: 'decision',
+                decision: `[${job.id}] 移送先 ${runnerId} に貸した貸し出しを返した（resume を 4xx で断られ、そこではセッションが起きていない）`,
+                grounds: reasonOf(error),
+              });
             }
           } else {
             this.#relocationRefusals.delete(job.id);

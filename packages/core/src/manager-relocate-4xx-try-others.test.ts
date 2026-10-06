@@ -230,6 +230,13 @@ describe('移送先 1 台の 4xx は、その runner の都合として扱い、
       status: job?.status,
       runnerId: job?.runnerId,
     }).toEqual({ resumesOnC: 1, status: 'running', runnerId: 'runner-c' });
+    // b に貸した貸し出しを返したことが日誌に残る（`releaseLease` の doc。黙って返さない）
+    const decisions = (await stores.journal.list({ limit: 200 })).flatMap((entry) =>
+      entry.type === 'decision' ? [entry.decision] : [],
+    );
+    expect(
+      decisions.some((text) => text.includes('移送先 runner-b に貸した貸し出しを返した')),
+    ).toBe(true);
     await pool.stop();
   });
 
