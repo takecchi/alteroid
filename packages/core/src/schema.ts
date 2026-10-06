@@ -678,6 +678,12 @@ export const inboxEventSchema = z.discriminatedUnion('type', [
      * なので外部が名乗れる」という代償を広げるものではない。
      */
     identity: z.string().optional(),
+    /**
+     * **連携の鍵（`integration-key.ts`）経由で届いたとき、その鍵の id と名前**（#3113）。鍵の値は持たない。
+     * 日誌の `external_event` に写し、プロンプトに名前を添える。**`identity` と同じく、リクエスト本文からは
+     * 立てられない**（デーモンが、門番の解決した principal から詰める）。
+     */
+    via: z.object({ keyId: z.string(), name: z.string() }).optional(),
   }),
   z.object({
     type: z.literal('self_initiative'),
@@ -1806,6 +1812,8 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
     at: isoDateTime,
     /** どこから届いたか（webhook の呼び出し元が名乗る名前）。 */
     source: z.string(),
+    /** 連携の鍵経由で届いたとき、その鍵の id と名前（#3113）。鍵の値は書かない。 */
+    via: z.object({ keyId: z.string(), name: z.string() }).optional(),
     /**
      * 届いた中身。長いものは切って入る。
      *
