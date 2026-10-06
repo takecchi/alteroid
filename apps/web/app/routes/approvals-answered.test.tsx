@@ -13,7 +13,7 @@
  *
  * 時刻は閲覧者の端末の時間帯（`formatDateTime`）で出す。日付の区切りだけがデーモンの `localDate`。
  */
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider, useParams } from 'react-router';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -617,5 +617,41 @@ describe('枠', () => {
       within(tabs).getByRole('link', { name: '未回答' }).getAttribute('aria-current'),
     ).toBeNull();
     expect(screen.getByRole('heading', { level: 1 }).closest('header')).not.toBeNull();
+  });
+});
+
+/**
+ * #3700。「決着したのは …（N分前）」は、再描画のきっかけが無くても分単位で更新される。
+ * 偽のタイマーで時計を進める（実時間は待たない）。約束の解決は `advanceTimersByTimeAsync(0)` で流す。
+ */
+describe('「決着したのは …（N分前）」は分の時計で更新される（#3700）', () => {
+  it('分が進むと「たった今」が「N分前」に変わる', async () => {
+    const start = new Date('2026-10-07T12:00:00.000Z').getTime();
+    vi.useFakeTimers({ now: start, toFake: ['setInterval', 'clearInterval', 'Date'] });
+    Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
+    try {
+      const settled = approval({
+        id: 'a-now',
+        answeredAt: new Date(start).toISOString(),
+        answer: 'はい',
+        answeredVia: { kind: 'operator', auth: 'operator-token' },
+      });
+      stubApi({ dates: [{ date: '2026-10-07', count: 1 }], days: { '2026-10-07': [settled] } });
+      renderAt('/approvals/answered/2026-10-07/a-now');
+      for (let i = 0; i < 20; i += 1) {
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(0);
+        });
+      }
+      const line = () => screen.getByText(/決着したのは/).textContent;
+      expect(line()).toContain('（たった今）');
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(3 * 60_000);
+      });
+      expect(line()).toContain('（3分前）');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

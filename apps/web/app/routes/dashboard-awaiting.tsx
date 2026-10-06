@@ -1,6 +1,8 @@
 import { AlertTriangle } from 'lucide-react';
 import { Link } from 'react-router';
 
+import { useMinuteNow } from '~/lib/use-now';
+
 import {
   AwaitingApprovalRow,
   AwaitingCountRow,
@@ -72,6 +74,8 @@ function UnreadableApprovalsWarn({ count, className }: { count: number; classNam
 export function AwaitingYou() {
   const approvals = useApprovals(true);
   const progress = useProgress();
+  // 「N分前」を古いまま残さない。進捗の取り直しが失敗し続けても止まらない（#3700。#3596 と同じ形）。
+  const now = useMinuteNow();
 
   // 配列でない応答は「読めていない」へ倒す（`?? []` で0件にしない）。
   const list = Array.isArray(approvals.data?.approvals) ? approvals.data.approvals : undefined;
@@ -155,7 +159,7 @@ export function AwaitingYou() {
           <AwaitingApprovalRow
             key={approval.id}
             question={redactBody(approval.question)}
-            meta={formatRelative(approval.createdAt)}
+            meta={formatRelative(approval.createdAt, now)}
             renderLink={({ className, children }) => (
               <Link to="/approvals" className={className}>
                 {children}
