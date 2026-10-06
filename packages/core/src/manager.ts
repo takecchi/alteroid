@@ -55,6 +55,7 @@ import {
   describeRunnerEntries,
   isFencedRunnerError,
   isRetryableRunnerError,
+  isRunnerSpecificRefusal,
   listRunnerManagers,
   RUNNER_CAPABILITY_AWAITING_BACKGROUND_SIGNAL,
   RunnerHttpError,
@@ -2848,6 +2849,41 @@ function workspaceLocatorFrom(
   }
 }
 
+/** 移送で `runner-volume` を `unknown` へ落とすときの理由（Issue #3099 / #207）。 */
+const RELOCATED_WORKSPACE_REASON =
+  '別の runner へ移送した。移送で workspace の中身は運ばれていない（元の runner の volume に在った作業は、' +
+  '移送先には無い）ので、移送先の volume に残ると言えない。';
+
+/**
+ * **別の runner へ移した後の locator**（Issue #3099）。`job.runnerId` を付け替える箇所で、cwd が
+ * 変わったかどうかに関係なく呼ぶ。
+ *
+ * - `unknown`: `runnerId` を移送先へ付け替える（`runnerId` と `path` は確かめずに言える。`schema.ts`）。
+ * - `runner-volume`: **`unknown` へ落とす。** 移送先へ付け替えると「作業は移送先の volume に在る」と
+ *   主張することになるが、移送で中身は運ばれていない。元の runner のまま残すと、落ちた器を
+ *   指し続ける。どちらも偽の永続性を言うので、確かめられないことを理由つきで書く（#207）。
+ * - `shared-volume` / `git`: `runnerId` を持たない。**1文字も変えない。**
+ */
+function workspaceAfterRelocation(
+  workspace: WorkspaceLocator | undefined,
+  toRunnerId: string,
+): WorkspaceLocator | undefined {
+  if (workspace === undefined) return undefined;
+  switch (workspace.kind) {
+    case 'unknown':
+      return { ...workspace, runnerId: toRunnerId };
+    case 'runner-volume':
+      return {
+        kind: 'unknown',
+        runnerId: toRunnerId,
+        path: workspace.path,
+        reason: RELOCATED_WORKSPACE_REASON,
+      };
+    default:
+      return workspace;
+  }
+}
+
 /** userinfo がアカウント名（`git@` 等）で、秘密ではない慣習の scheme。 */
 const WORKSPACE_REPOSITORY_USERNAME_ONLY_PROTOCOLS: ReadonlySet<string> = new Set([
   'ssh:',
@@ -5493,6 +5529,13 @@ class Pool implements ManagerPool {
   readonly #reattachDelays = new Map<string, number>();
   /** いま resume を投げている最中のマネージャー（同じ session を二本起こさない）。 */
   readonly #resuming = new Set<string>();
+  /**
+   * 移送の resume を**その runner の都合で**断られた回の控え（`managerId` → 断った移送先の `runnerId`。
+   * Issue #3098）。候補を全部断られたかの判定（`#noteRelocationRefusal`）にだけ使う。
+   * 移送が受理された・lost に確定した回に消える。メモリだけ（デーモンの再起動で消える。再起動後は
+   * 移送先がもう一度断れば、また積み直される）。
+   */
+  readonly #relocationRefusals = new Map<string, Set<string>>();
   /**
    * **別の runner へ移す resume を投げている最中の、移送先**（`managerId` → 移送先の `runnerId`。
    * Issue #3097）。`#reattach` が `relocating` のときだけ resume の前に立て、結果が出たら必ず外す。
@@ -10522,6 +10565,7 @@ class Pool implements ManagerPool {
           // **由来も一緒に消す**（#579。片方だけ残さない）。
           record.sessionMissingKind = undefined;
           record.job.status = 'running';
+          this.#relocationRefusals.delete(job.id);
           await this.#persist(record);
           // `runner.send()` の失敗は無視する（畳んで待つのと同じ理由——本体の
           // resume は既に成功しているので、この一言が届かなくても致命ではない）。
@@ -10576,7 +10620,36 @@ class Pool implements ManagerPool {
               ...this.#statusAtDelivery(job.id),
             });
           } else if (isRetryableRunnerError(error)) retry = true;
-          else {
+          else if (
+            relocating &&
+            isRunnerSpecificRefusal(error) &&
+            !(await this.#noteRelocationRefusal(record, runnerId, error))
+          ) {
+            // **移送先1台の断りは、委譲の運命ではない**（Issue #3098）。lost に確定せず、
+            // `#unresumable` も立てず、この移送先だけ見送る。ほかの候補（`relocateFrom` が
+            // 並行に起こした `#reattach`、あとから名乗る runner の `hello`）が引き取れる。
+            //
+            // **この移送先へ貸した貸し出しは返す。** `#claimForResume` が resume の前に貸して
+            // いるので、残すとほかの候補の関門が `held` で断り、期限（TTL）が切れるまで移れない。
+            // 返してよい根拠: 4xx は runner が命令を受け取らなかったという答えで、この移送先では
+            // セッションが起きていない（起きていれば応答は 2xx）。`closed` の自己失効と同じく
+            // 世代は残る（`releaseLease`）。
+            if (
+              record.job.lease?.runnerId === runnerId &&
+              record.job.lease.releasedAt === undefined
+            ) {
+              record.job.lease = releaseLease(record.job.lease, this.#now());
+              await this.#persist(record);
+              // 返したことは日誌に残す（`releaseLease` の doc が挙げる契機のうち、この1つだけは
+              // 持ち主自身の `closed` ではなく 4xx の答えに拠っている。黙って返さない）。
+              await this.#journal({
+                type: 'decision',
+                decision: `[${job.id}] 移送先 ${runnerId} に貸した貸し出しを返した（resume を 4xx で断られ、そこではセッションが起きていない）`,
+                grounds: reasonOf(error),
+              });
+            }
+          } else {
+            this.#relocationRefusals.delete(job.id);
             // 挑み直さないと決めたので、**ジョブ側に覚える**（runner 単位の `retry`
             // では表せない。同じ runner の別ジョブが予約を積むたびに巻き込まれる）。
             // 台帳にも書く — 記憶は器と一緒に消えるが、諦めた事実は消えない。
@@ -10830,6 +10903,52 @@ class Pool implements ManagerPool {
       return open[0] ?? null;
     }
     return this.#runners.get(runnerId);
+  }
+
+  /**
+   * 移送先 `refusedBy` が resume を**その runner の都合で**断った。ほかに試せる候補が残っているか
+   * （Issue #3098）。残っていなければ真（＝呼び出し元が従来どおり lost に確定する）。
+   *
+   * 候補は `relocateFrom` が取り直しを起こす相手と同じ（名簿で `connected`・元の宛先以外）。
+   * **まだ断っていない候補が1台でも居れば偽**——その候補の `#reattach` が（並行に、あるいは
+   * 名乗りのときに）引き取るので、ここで確定しない。**全員が断った回に限り**真を返すので、
+   * 無限には試さない。残りを判定できない（名簿に居ない）回は「居ない」側＝真に倒す（従来の振る舞い）。
+   * 偽のときは、残りの候補へ取り直しを予約する（並行に起こされた候補が `busy` で抜けていた回の拾い直し）。
+   */
+  async #noteRelocationRefusal(
+    record: ManagerRecord,
+    refusedBy: string,
+    error: unknown,
+  ): Promise<boolean> {
+    const id = record.job.id;
+    const refused = this.#relocationRefusals.get(id) ?? new Set<string>();
+    refused.add(refusedBy);
+    this.#relocationRefusals.set(id, refused);
+    const origin = record.job.runnerId;
+    const remaining = new Set(
+      this.#runners
+        .entries()
+        .filter((entry) => entry.runnerId !== undefined && entry.runnerId !== origin)
+        .filter((entry) => entry.state === 'connected')
+        .map((entry) => entry.runnerId as string)
+        .filter((candidate) => !refused.has(candidate)),
+    );
+    const exhausted = remaining.size === 0;
+    await this.#journal({
+      type: 'decision',
+      decision:
+        `[${id}] 移送先 ${refusedBy} が resume を断った（その runner の都合として扱う）。` +
+        (exhausted
+          ? '残りの候補が無いので、戻せなかったものとして確定する'
+          : `ほかの候補（${[...remaining].join(', ')}）へ移すのを試す`),
+      grounds: reasonOf(error),
+    });
+    // **残りの候補へ取り直しを予約する。** 並行に起こされた候補の `#reattach` は、この移送先が
+    // resume 中（`#resuming`）だと `busy` で黙って抜けている——ここで予約しないと、その候補は
+    // 次の名乗りまで誰にも試されない。梯子は `#scheduleReattach`（間隔は伸びるが、断られた候補の
+    // 数が上限なので無限にはならない）。
+    for (const candidate of remaining) this.#scheduleReattach(candidate);
+    return exhausted;
   }
 
   /**
@@ -11357,7 +11476,14 @@ class Pool implements ManagerPool {
     }
 
     record.attached = true;
+    const previousRunnerId = record.job.runnerId;
     record.job.runnerId = runner.runnerId;
+    // **宛先を付け替えた（移送）なら、locator も揃える**（Issue #3099）。cwd が倒れた回だけ作り直す
+    // と、倒れなかった移送で `runnerId` が元の器を指したまま残る。cwd が倒れた回で作り直した
+    // `runner-volume` も、ここで同じく `unknown` へ落ちる（`workspaceAfterRelocation`）。
+    if (previousRunnerId !== undefined && previousRunnerId !== runner.runnerId) {
+      record.job.workspace = workspaceAfterRelocation(record.job.workspace, runner.runnerId);
+    }
     // **宛先が変わった瞬間でもある**（#579）。`runner.resume()` が返った時点で、
     // この器がこの委譲を持っている——生存確認の観測をここから数え直す
     // （`ManagerRecord.runnerSessionSince` の doc）。

@@ -2429,6 +2429,40 @@ export function isRetryableRunnerError(error: unknown): boolean {
   return error.status >= 500;
 }
 
+/**
+ * **委譲の中身（命令そのもの）が不正だという断り**（Issue #3098）。どの runner へ送っても同じ答えが返る。
+ *
+ * runner の `POST /managers/:id/resume`（`apps/runner/src/app.ts`）が自分で返す 4xx は、本文の形が
+ * 不正（400）と、経路の `:id` と本文の `managerId` の食い違い（400）だけである。どちらもデーモンが
+ * 組み立てた命令の欠陥で、別の runner へ回しても直らない。415 / 422 は本文の型・意味の不正を表す
+ * 一般の用法で、同じ側に置く。**409（世代で拒まれた）はここに含めない**——別の扱い（`isFencedRunnerError`）。
+ */
+export function isInvalidDelegationRefusal(error: unknown): boolean {
+  return (
+    error instanceof RunnerHttpError &&
+    (error.status === 400 || error.status === 415 || error.status === 422)
+  );
+}
+
+/**
+ * **1台の runner の都合による断り**（Issue #3098）。その runner だけの事情（鍵・設定・口を持たない版・
+ * 手前の proxy の制限など。401 / 403 / 404 / 405 / 413 ほか）で、ほかの runner なら受けられるかもしれない。
+ *
+ * 再試行扱いの失敗（`isRetryableRunnerError`）・世代の拒み（409）・委譲そのものの不正
+ * （`isInvalidDelegationRefusal`）は含めない。**移送のとき（別の runner を探せるとき）だけ**
+ * `#reattach` が「ほかの候補を試す」へ倒すのに使う。移送ではない元の runner への復帰では使わない。
+ */
+export function isRunnerSpecificRefusal(error: unknown): boolean {
+  return (
+    error instanceof RunnerHttpError &&
+    error.status >= 400 &&
+    error.status < 500 &&
+    error.status !== 409 &&
+    !isRetryableRunnerError(error) &&
+    !isInvalidDelegationRefusal(error)
+  );
+}
+
 // ---------------------------------------------------------------------------
 // デーモン側から見た runner
 // ---------------------------------------------------------------------------

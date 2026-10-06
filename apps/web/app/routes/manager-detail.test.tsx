@@ -601,6 +601,10 @@ describe('待ちは kind で質問と実行許可を出し分ける（#334）', 
     expect(await screen.findByText('種別が来なかった確認')).toBeTruthy();
     expect(screen.getByRole('button', { name: '許可' })).toBeTruthy();
     expect(screen.getByRole('button', { name: '拒否' })).toBeTruthy();
+    // 「拒否」は取り返しのつく操作なので danger（赤）にしない（#3091）。
+    expect(screen.getByRole('button', { name: '拒否' }).className).not.toContain(
+      'border-destructive/40',
+    );
     expect(screen.queryByPlaceholderText('この質問への答えを、自分の言葉で書く')).toBeNull();
   });
 });

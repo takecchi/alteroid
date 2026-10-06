@@ -10,7 +10,7 @@
  * **これが無いと「仕込んだのに一度も動いていない」ことに気づけない**（#96 が直した
  * 位相の消失がまさにその形で出る）。
  */
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
@@ -245,6 +245,112 @@ describe('「今すぐ回す」の表示', () => {
 
     expect(await screen.findByRole('alert')).toBeTruthy();
     expect(screen.queryByText(/^起こした/)).toBeNull();
+  });
+});
+
+/**
+ * 「今すぐ回す」を続けて押せない（issue #3079）。直す前は、ボタンを押せなくするのが `running` の
+ * 描き直しの後だけで、同じ描画の間に届く2回目のクリックが `POST /schedule/:kind/run` をもう一度
+ * 送り、ターンを2回起こしえた。時間では止めない — 応答が返るまで、その kind のボタンだけを押せなくする。
+ * 応答は保留の Promise で止め、解くことで進める（実時間は待たない）。
+ */
+describe('「今すぐ回す」を、応答が返るまで続けて押せない', () => {
+  const OTHER_ENTRY = { ...REQUEST_ENTRY, kind: 'other', description: '毎日 10:00' };
+
+  /** 起こす要求（POST）の応答を、テストが解くまで保留にする。 */
+  function holdRuns(): { resolveNext: (res: Response) => void; posts: () => number } {
+    const pending: ((res: Response) => void)[] = [];
+    const inner = globalThis.fetch;
+    globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+      const method = (input instanceof Request ? input.method : init?.method) ?? 'GET';
+      if (method !== 'POST') return inner(input, init);
+      sent.push({
+        url: input instanceof Request ? input.url : String(input),
+        method,
+        read: () => Promise.resolve(undefined),
+      });
+      return new Promise<Response>((resolve) => pending.push(resolve));
+    }) as typeof fetch;
+    return {
+      resolveNext: (res) => {
+        const next = pending.shift();
+        if (next === undefined) throw new Error('保留中の要求が無い');
+        next(res);
+      },
+      posts: () => sent.filter((s) => s.method === 'POST').length,
+    };
+  }
+
+  it('同じ描画の間に2回クリックしても、POST は1回しか送られない', async () => {
+    stubSchedule([DEFAULT_ENTRY]);
+    const held = holdRuns();
+    renderSchedule();
+
+    const button = await screen.findByRole('button', { name: '今すぐ回す' });
+    // `fireEvent` は1回ごとに act で描き直しを済ませるので、2回を1つの act に入れて、
+    // 「描き直しの前に2回目が届く」同じ描画の間を作る。
+    act(() => {
+      fireEvent.click(button);
+      fireEvent.click(button);
+    });
+
+    expect(held.posts()).toBe(1);
+    held.resolveNext(json({ ok: true }));
+    await screen.findByText(/^起こした/);
+    expect(held.posts()).toBe(1);
+  });
+
+  it('応答が返るまで押せず、成功で返った後はまた押せて、2回目の POST が送れる', async () => {
+    stubSchedule([DEFAULT_ENTRY]);
+    const held = holdRuns();
+    renderSchedule();
+
+    const button = await screen.findByRole('button', { name: '今すぐ回す' });
+    fireEvent.click(button);
+    await waitFor(() => expect((button as HTMLButtonElement).disabled).toBe(true));
+
+    held.resolveNext(json({ ok: true }));
+    await waitFor(() => expect((button as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(button);
+    expect(held.posts()).toBe(2);
+    held.resolveNext(json({ ok: true }));
+    await waitFor(() => expect((button as HTMLButtonElement).disabled).toBe(false));
+  });
+
+  it('失敗で返った後もまた押せて、2回目の POST が送れる', async () => {
+    stubSchedule([DEFAULT_ENTRY]);
+    const held = holdRuns();
+    renderSchedule();
+
+    const button = await screen.findByRole('button', { name: '今すぐ回す' });
+    fireEvent.click(button);
+    await waitFor(() => expect((button as HTMLButtonElement).disabled).toBe(true));
+
+    held.resolveNext(json({ error: 'boom' }, 500));
+    expect(await screen.findByRole('alert')).toBeTruthy();
+    await waitFor(() => expect((button as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(button);
+    expect(held.posts()).toBe(2);
+    held.resolveNext(json({ ok: true }));
+    await screen.findByText(/^起こした/);
+  });
+
+  it('別の行のボタンは、片方の応答待ちの間も押せる', async () => {
+    stubSchedule([DEFAULT_ENTRY, OTHER_ENTRY]);
+    const held = holdRuns();
+    renderSchedule();
+
+    const buttons = await screen.findAllByRole('button', { name: '今すぐ回す' });
+    act(() => {
+      fireEvent.click(buttons[0]!);
+      fireEvent.click(buttons[1]!);
+      fireEvent.click(buttons[0]!);
+    });
+
+    expect(held.posts()).toBe(2);
+    held.resolveNext(json({ ok: true }));
+    held.resolveNext(json({ ok: true }));
+    await waitFor(() => expect((buttons[0] as HTMLButtonElement).disabled).toBe(false));
   });
 });
 
