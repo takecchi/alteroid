@@ -279,3 +279,29 @@ describe('添付: 認証', () => {
     expect(ok.status).toBe(200);
   });
 });
+
+describe('添付だけの発言（本文が空）', () => {
+  it('空本文と添付1件は 200 で、ターンの入力に image ブロックと通知行が在る', async () => {
+    const { app, blocks } = setupApp();
+    const meta = (await (await upload(app, PNG)).json()) as Meta;
+    const res = await chat(app, { text: '', conversationId: 'conv-e', attachments: [meta.id] });
+    expect(res.status).toBe(200);
+    await res.text();
+
+    expect(blocks).toHaveLength(1);
+    const content = blocks[0] as { type: string; text?: string }[];
+    expect(content.filter((b) => b.type === 'image')).toHaveLength(1);
+    // 本文が空でも、通知行が本文として渡る（人間の発言の部分に空行を前置きしない）。
+    const text = content.find((b) => b.type === 'text')?.text ?? '';
+    expect(text).toContain(
+      `[添付] id=${meta.id} name=shot.png type=image/png size=${PNG.length} sha256=${meta.sha256}（画像として渡した）`,
+    );
+  });
+
+  it('空本文で添付が無ければ（attachments が空配列でも）従来どおり 400', async () => {
+    const { app, stores } = setupApp();
+    expect((await chat(app, { text: '' })).status).toBe(400);
+    expect((await chat(app, { text: '', attachments: [] })).status).toBe(400);
+    expect(await stores.journal.list({ types: ['exchange'], with: ['human'] })).toEqual([]);
+  });
+});

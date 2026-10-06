@@ -707,3 +707,31 @@ describe('collectConversations（失敗の知らせは一覧の題にしない�
     expect('turnFailure' in toMessage(plain)).toBe(false);
   });
 });
+
+describe('collectConversations: 添付だけの発言の抜粋', () => {
+  const ref = { id: 'a', name: 'x.png', mediaType: 'image/png', size: 1, sha256: 's' };
+  it('本文が空で添付がある発言が題になるときは、件数を抜粋にする', () => {
+    const entries: JournalEntry[] = [
+      exchange({
+        id: 'e1',
+        at: '2026-08-20T00:01:00.000Z',
+        conversationId: 'c1',
+        text: '',
+        attachments: [ref, ref],
+      }),
+    ];
+    expect(collectConversations(entries)[0]?.preview).toBe('[添付 2 件]');
+  });
+  it('本文があればそれを抜粋にする', () => {
+    const entries: JournalEntry[] = [
+      exchange({
+        id: 'e1',
+        at: '2026-08-20T00:01:00.000Z',
+        conversationId: 'c1',
+        text: 'ひとこと',
+        attachments: [ref],
+      }),
+    ];
+    expect(collectConversations(entries)[0]?.preview).toBe('ひとこと');
+  });
+});

@@ -12283,7 +12283,9 @@ export function humanTurnText(
   const bodyOf = (event: HumanMessage): string => {
     const body = editedTurnBody(event, priorTexts.get(event.id));
     const notice = attachmentNotices.get(event.id);
-    return notice === undefined ? body : `${body}\n\n${notice}`;
+    // 添付だけで本文が空の発言は、通知行だけを本文にする（先頭に空行を残さない）。
+    if (notice === undefined) return body;
+    return event.text === '' && event.supersedes === undefined ? notice : `${body}\n\n${notice}`;
   };
   if (events.length === 1) return bodyOf(head);
 
@@ -12328,7 +12330,8 @@ function editedTurnBody(event: HumanMessage, priorText: string | undefined): str
       ? `[system] これは既出発言（id=${event.supersedes}）の編集である。` +
         '（編集前の本文は引けなかった。）'
       : `[system] これは既出発言（id=${event.supersedes}）の編集である。編集前の本文:\n\n${priorText}`;
-  return `${notice}\n\n---\n\n${event.text}`;
+  // 本文が空（添付だけの編集）なら、区切りの後ろに何も置かない。
+  return event.text === '' ? notice : `${notice}\n\n---\n\n${event.text}`;
 }
 
 /**

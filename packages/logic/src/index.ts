@@ -15,6 +15,7 @@
  * import は `TS2835` で型検査を落とす（`apps/cli/src/logic-import.test.ts` が見張る）。
  */
 export * from './approval-questions.js';
+export * from './attachments.js';
 export * from './auth.js';
 export * from './config.js';
 export * from './format.js';

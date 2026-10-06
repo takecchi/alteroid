@@ -21,6 +21,7 @@ import {
   renderReportLine,
   renderWaitingList,
   runSlashCommand,
+  sendMessage,
   type Listed,
 } from './chat.js';
 import type { Target } from './target.js';
@@ -1905,6 +1906,12 @@ function stubClient(
         },
       },
     },
+    events: {
+      $post: (args: unknown) => {
+        calls.push({ route: 'POST /events', args });
+        return Promise.resolve(reply(200, { id: 'evt-1' }));
+      },
+    },
     commitments: {
       $get: (args: unknown) => {
         calls.push({ route: 'GET /commitments', args });
@@ -2397,7 +2404,7 @@ describe('chat の台帳コマンド', () => {
    * 番号で引けないと、人間が UUID を写す作業をすることになる（`/answer` と同じ理由）。
    * 理由が空のまま閉じると「閉じた」という事実だけが残り、人間が後から否定できない。
    */
-  it('/done は番号を id へ引き直し、理由を書かなくても何をもって閉じたかを残す', async () => {
+  it('/done は番号を id へ引き直し、書かれた理由を送る', async () => {
     captureStdout();
     const { calls, client } = stubClient({
       commitments: [commitment({ id: 'cmt-1' }), commitment({ id: 'cmt-2' })],
@@ -2405,14 +2412,64 @@ describe('chat の台帳コマンド', () => {
     const listed = emptyListed();
 
     await runSlashCommand('/commitments', client, listed);
-    await runSlashCommand('/done 2', client, listed);
+    await runSlashCommand('/done 2 片付けた', client, listed);
 
     const close = calls.find((call) => call.route === 'POST /commitments/:id/close');
     expect(close).toBeDefined();
     expect((close?.args as { param: { id: string } }).param).toEqual({ id: 'cmt-2' });
-    const { reason } = (close?.args as { json: { reason: string } }).json;
-    expect(reason.length).toBeGreaterThan(0);
-    expect(reason).toContain('/done');
+    expect((close?.args as { json: { reason: string } }).json.reason).toBe('片付けた');
+  });
+
+  /**
+   * 閉じた理由は人間が後から読んで否定する材料なので、Web（`commitments.tsx` の
+   * `reason.trim() === ''` で送らない）と同じく、理由が無ければ送らない（#3143）。
+   */
+  it('/done は理由が無い・空白だけなら何も送らず、使い方と理由が要る旨を出す（#3143）', async () => {
+    const out = captureStdout();
+    const { calls, client } = stubClient({ commitments: [commitment({ id: 'cmt-1' })] });
+    const listed = emptyListed();
+
+    await runSlashCommand('/commitments', client, listed);
+    await runSlashCommand('/done 1', client, listed);
+    await runSlashCommand('/done 1    ', client, listed);
+
+    expect(calls.some((call) => call.route === 'POST /commitments/:id/close')).toBe(false);
+    expect(out()).toContain('使い方: /done <番号|id> <理由>');
+    expect(out()).toContain('理由が要ります');
+  });
+
+  it('/event は本文が JSON ならその値を、読めなければ文字列を、空なら空文字列を送る（#3146）', async () => {
+    captureStdout();
+    const { calls, client } = stubClient();
+
+    await runSlashCommand('/event ci {"a":1}', client, emptyListed());
+    await runSlashCommand('/event ci [1,"x"]', client, emptyListed());
+    await runSlashCommand('/event ci 42', client, emptyListed());
+    await runSlashCommand('/event ci ビルドが  落ちた', client, emptyListed());
+    await runSlashCommand('/event ci {"a":1', client, emptyListed());
+    await runSlashCommand('/event ci', client, emptyListed());
+
+    const sent = calls
+      .filter((call) => call.route === 'POST /events')
+      .map((call) => (call.args as { json: unknown }).json);
+    expect(sent).toEqual([
+      { source: 'ci', payload: { a: 1 } },
+      { source: 'ci', payload: [1, 'x'] },
+      { source: 'ci', payload: 42 },
+      { source: 'ci', payload: 'ビルドが  落ちた' },
+      { source: 'ci', payload: '{"a":1' },
+      { source: 'ci', payload: '' },
+    ]);
+  });
+
+  it('/event は source が無ければ何も送らず、使い方を出す', async () => {
+    const out = captureStdout();
+    const { calls, client } = stubClient();
+
+    await runSlashCommand('/event', client, emptyListed());
+
+    expect(calls.some((call) => call.route === 'POST /events')).toBe(false);
+    expect(out()).toContain('使い方: /event');
   });
 
   it('/commit-edit は番号を id へ引き直し、新しい本文を PATCH で送る（#1058）', async () => {
@@ -2493,7 +2550,7 @@ describe('chat の台帳コマンド', () => {
     });
     const listedConflict = emptyListed();
     await runSlashCommand('/commitments', conflictClient, listedConflict);
-    await runSlashCommand('/done 1', conflictClient, listedConflict);
+    await runSlashCommand('/done 1 片付けた', conflictClient, listedConflict);
     const conflictText = conflict();
     vi.restoreAllMocks();
 
@@ -2504,7 +2561,7 @@ describe('chat の台帳コマンド', () => {
     });
     const listedMissing = emptyListed();
     await runSlashCommand('/commitments', missingClient, listedMissing);
-    await runSlashCommand('/done 1', missingClient, listedMissing);
+    await runSlashCommand('/done 1 片付けた', missingClient, listedMissing);
     const missingText = missing();
 
     expect(conflictText).toContain('既に片付いています');
@@ -2526,7 +2583,7 @@ describe('chat の台帳コマンド', () => {
     });
     const listedServerError = emptyListed();
     await runSlashCommand('/commitments', serverErrorClient, listedServerError);
-    await runSlashCommand('/done 1', serverErrorClient, listedServerError);
+    await runSlashCommand('/done 1 片付けた', serverErrorClient, listedServerError);
     const serverErrorText = serverError();
     vi.restoreAllMocks();
 
@@ -2538,7 +2595,7 @@ describe('chat の台帳コマンド', () => {
     });
     const listedBadRequest = emptyListed();
     await runSlashCommand('/commitments', badRequestClient, listedBadRequest);
-    await runSlashCommand('/done 1', badRequestClient, listedBadRequest);
+    await runSlashCommand('/done 1 片付けた', badRequestClient, listedBadRequest);
     const badRequestText = badRequest();
 
     expect(serverErrorText).toContain('台帳の書き込みが失敗した（issue #2172 のテスト用）');
@@ -2560,7 +2617,7 @@ describe('chat の台帳コマンド', () => {
       approvals: ['approval-1'],
     };
 
-    await runSlashCommand('/done 1', client, listed);
+    await runSlashCommand('/done 1 片付けた', client, listed);
 
     expect(calls).toEqual([]);
     expect(read()).toContain('/commitments の一覧にありません');
@@ -4602,6 +4659,8 @@ describe('chat の /edit（送信済みの自分の発言を編集する）', ()
     globalThis.fetch = ((input: unknown, init?: RequestInit) => {
       const url = typeof input === 'string' ? input : String(input);
       const body: unknown = init?.body === undefined ? undefined : JSON.parse(String(init.body));
+      // 返答の後の既読（GET /conversations/:id と POST …/read）はここで見たいものではない。
+      if (!url.endsWith('/chat')) return Promise.resolve(new Response('{}', { status: 404 }));
       sent.push({ url, body });
       const ok = reply.status >= 200 && reply.status < 300;
       const text = ok ? 'event: done\ndata: {"type":"done"}\n\n' : JSON.stringify(reply.body);
@@ -6073,5 +6132,112 @@ describe('戻せない操作の確認（REPL。#3141）', () => {
     expect(summaries[0]).toContain('mgr-1');
     expect(summaries[1]).toContain('sess-1.jsonl');
     expect(summaries[1]).toContain('戻りません');
+  });
+});
+
+/**
+ * `alteroid chat`（REPL）は、返答を表示し終えたとき会話を既読にする
+ * （`docs/architecture.md`「会話の既読」。Web の `useMarkConversationRead` と同じ意味）。
+ */
+describe('chat の既読（返答を表示したとき）', () => {
+  const target: Target = {
+    baseUrl: 'http://127.0.0.1:4517',
+    headers: { authorization: 'Bearer token' },
+    remote: false,
+    note: null,
+  };
+  let originalFetch: typeof fetch;
+  let requests: { method: string; url: string; body: unknown }[];
+
+  function stubFetch(sse: string, readStatus = 200): void {
+    originalFetch = globalThis.fetch;
+    requests = [];
+    globalThis.fetch = ((input: unknown, init?: RequestInit) => {
+      const url =
+        typeof input === 'string' ? input : input instanceof Request ? input.url : String(input);
+      const method = (
+        init?.method ?? (input instanceof Request ? input.method : 'GET')
+      ).toUpperCase();
+      const raw = init?.body ?? (input instanceof Request ? input.body : undefined);
+      requests.push({ method, url, body: typeof raw === 'string' ? JSON.parse(raw) : undefined });
+      const json = (body: unknown, status = 200) =>
+        Promise.resolve(
+          new Response(JSON.stringify(body), {
+            status,
+            headers: { 'content-type': 'application/json' },
+          }),
+        );
+      if (url.endsWith('/chat')) {
+        return Promise.resolve(
+          new Response(sse, { status: 200, headers: { 'content-type': 'text/event-stream' } }),
+        );
+      }
+      if (url.endsWith('/read')) {
+        return readStatus === 200
+          ? json({ readThrough: 't', unreadCount: 0 })
+          : json({ error: '既読にできない理由' }, readStatus);
+      }
+      return json({
+        conversationId: 'c1',
+        messages: [
+          { id: 'm1', at: 't1', role: 'inbound', text: '質問' },
+          { id: 'm2', at: 't2', role: 'outbound', text: '答え' },
+        ],
+        scanned: 2,
+        reachedStart: true,
+        supersededCount: 0,
+      });
+    }) as typeof fetch;
+  }
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  const frame = (name: string, data: unknown) =>
+    `event: ${name}\ndata: ${JSON.stringify(data)}\n\n`;
+  const reply =
+    frame('open', { conversationId: 'c1' }) +
+    frame('text', { text: '答え\n' }) +
+    frame('done', { type: 'done' });
+  const readRequests = () => requests.filter((r) => r.url.endsWith('/read'));
+
+  it('返答が done まで表示されたら、取り直した最後の発言の id で既読にする', async () => {
+    stubFetch(reply);
+    captureStdout();
+    const id = await sendMessage(target, '質問', null);
+    expect(id).toBe('c1');
+    expect(readRequests()).toEqual([
+      {
+        method: 'POST',
+        url: 'http://127.0.0.1:4517/conversations/c1/read',
+        body: { through: 'm2' },
+      },
+    ]);
+  });
+
+  it('done が来ない（接続が切れた）なら既読にしない', async () => {
+    stubFetch(frame('open', { conversationId: 'c1' }) + frame('text', { text: '途中' }));
+    captureStdout();
+    await sendMessage(target, '質問', null);
+    expect(requests.filter((r) => !r.url.endsWith('/chat'))).toEqual([]);
+  });
+
+  it('error で終わったら既読にしない', async () => {
+    stubFetch(reply + frame('error', { message: '失敗' }));
+    captureStdout();
+    await sendMessage(target, '質問', null);
+    expect(requests.filter((r) => !r.url.endsWith('/chat'))).toEqual([]);
+  });
+
+  it('既読の要求が失敗しても、返答は残り会話 id も返り、1 行だけ知らせる', async () => {
+    stubFetch(reply, 500);
+    const read = captureStdout();
+    const id = await sendMessage(target, '質問', null);
+    expect(id).toBe('c1');
+    const text = read();
+    expect(text).toContain('答え');
+    expect(text).toContain('この会話を既読にできませんでした');
+    expect(text).toContain('既読にできない理由');
   });
 });
