@@ -66,7 +66,7 @@ import {
   uploadDraft,
 } from './attachments.js';
 import { createClient, type DaemonClient } from './client.js';
-import { markConversationReadAfterReply } from './conversations.js';
+import { fetchUnreadTotalLine, markConversationReadAfterReply } from './conversations.js';
 import { formatElapsedAgo } from './format.js';
 import { redactBody, redactError } from './redact.js';
 import { formatCreatedAt, freshnessMarker } from './memory.js';
@@ -983,6 +983,8 @@ export async function runSlashCommand(
         return 'ok';
       }
       const { conversations, scanned, reachedStart, hiddenByLimit } = await response.json();
+      // 未読の総数の1行は `alteroid conversations list` と同じ関数（取れなくても一覧は出す）。
+      stdout.write(`${await fetchUnreadTotalLine(client)}\n`);
       listed.conversations.length = 0;
       if (conversations.length === 0) {
         stdout.write('（会話はまだありません）\n');
