@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 
-import { createRunnerHost } from '@alteroid/core';
+import { createRunnerHost, readAttachmentLimits, runnerAttachmentBodyLimit } from '@alteroid/core';
 import { describe, expect, it } from 'vitest';
 
 import { createRunnerApp, Outbox } from './app.js';
@@ -57,5 +57,11 @@ describe('runner の hello の managerProvider', () => {
 
   it('命令で名指しされて起こせる provider を managerProviders で名乗る（#486 S7。既定の provider とは別の軸）', async () => {
     expect((await helloFrame()).managerProviders).toEqual(['claude', 'codex']);
+  });
+
+  it('添付を運ぶ口の本文の上限を attachmentBodyLimit で名乗る（#3111 段3。デーモンが送る前に検める）', async () => {
+    expect((await helloFrame()).attachmentBodyLimit).toBe(
+      runnerAttachmentBodyLimit(readAttachmentLimits().limits),
+    );
   });
 });

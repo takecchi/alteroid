@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createManagerPool, type ManagerPool } from './manager.js';
 import { createLocalRunner } from './runner-local.js';
@@ -32,7 +32,11 @@ interface Fake {
   emit(event: RunnerEvent): void;
 }
 
-function fakeRunner(options: { capable: boolean; sendDelivers?: boolean }): Fake {
+function fakeRunner(options: {
+  capable: boolean;
+  sendDelivers?: boolean;
+  bodyLimit?: number;
+}): Fake {
   const runnerId = 'runner-x';
   const base = createLocalRunner({ runnerId, workspacePath: '/work/project', env: {} });
   const starts: RunnerStartCommand[] = [];
@@ -51,6 +55,7 @@ function fakeRunner(options: { capable: boolean; sendDelivers?: boolean }): Fake
         type: 'hello',
         runnerId,
         capabilities: options.capable ? [RUNNER_CAPABILITY_MANAGER_ATTACHMENTS] : [],
+        ...(options.bodyLimit === undefined ? {} : { attachmentBodyLimit: options.bodyLimit }),
       });
     },
     async start(command: RunnerStartCommand) {
@@ -211,9 +216,8 @@ describe('manager_start の attachments（Issue #3111 段3）', () => {
       mediaType: 'text/plain',
       bytes: BYTES,
     });
-    await expect(
-      call('manager_start', { request: '依頼', attachments: [meta.id] }),
-    ).rejects.toThrow(/名乗っていない/);
+    const out = await call('manager_start', { request: '依頼', attachments: [meta.id] });
+    expect(out).toContain('名乗っていない');
     expect(fake.starts).toEqual([]);
     expect(await pool.list()).toEqual([]);
     await stop();
@@ -326,6 +330,78 @@ describe('manager_send の attachments（Issue #3111 段3）', () => {
     expect(result.outcome).toBe('unknown');
     expect(result.detail).toContain('添付を載せられない');
     expect(fake.sends).toEqual([]);
+    await stop();
+  });
+});
+
+describe('runner が名乗った本文の上限での検め（hello.attachmentBodyLimit。Issue #3111 段3）', () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  it('名乗った上限を超える添付は、manager_start / manager_send とも送らずにエラー文を返す', async () => {
+    const fake = fakeRunner({ capable: true, bodyLimit: 4000 });
+    const { stores, call, stop } = await harness(fake);
+    const big = await stores.attachments.put({
+      name: 'big.bin',
+      mediaType: 'application/octet-stream',
+      bytes: new Uint8Array(5000),
+    });
+    const started = await call('manager_start', { request: '依頼', attachments: [big.id] });
+    expect(started).toContain('上限 4000 バイトを超える');
+    expect(started).toContain('runner が名乗った値');
+    expect(fake.starts).toEqual([]);
+
+    // 添付なしで起こしてから、送る側も検める。
+    const ok = await call('manager_start', { request: '最初' });
+    const managerId = /マネージャー (\S+) を起こした/.exec(ok)?.[1] ?? '';
+    const sent = await call('manager_send', { managerId, message: 'これ', attachments: [big.id] });
+    expect(sent).toContain('上限 4000 バイトを超える');
+    expect(sent).toContain('何も送っていない');
+    expect(fake.sends).toEqual([]);
+    expect(fake.resumes).toEqual([]);
+    await stop();
+  });
+
+  it('名乗った上限の内側なら送られる', async () => {
+    const fake = fakeRunner({ capable: true, bodyLimit: 4000 });
+    const { stores, call, stop } = await harness(fake);
+    const small = await stores.attachments.put({
+      name: 's.bin',
+      mediaType: 'application/octet-stream',
+      bytes: new Uint8Array(1000),
+    });
+    await call('manager_start', { request: '依頼', attachments: [small.id] });
+    expect(fake.starts).toHaveLength(1);
+    await stop();
+  });
+
+  it('上限を名乗らない runner は、デーモン側の既定値（runnerAttachmentBodyLimit）で検める', async () => {
+    // デーモンの合計上限を小さくすると既定の本文上限も小さくなる（約 2.1MiB）。
+    vi.stubEnv('ALTEROID_ATTACHMENT_MAX_TOTAL_BYTES', '1000');
+    const fake = fakeRunner({ capable: true });
+    const { stores, call, stop } = await harness(fake, {
+      attachmentLimits: {
+        maxImageBytes: 8 * 1024 * 1024,
+        maxFileBytes: 8 * 1024 * 1024,
+        maxPerMessage: 10,
+        maxTotalBytes: 16 * 1024 * 1024,
+        retentionDays: 30,
+      },
+    });
+    const big = await stores.attachments.put({
+      name: 'big.bin',
+      mediaType: 'application/octet-stream',
+      bytes: new Uint8Array(3 * 1024 * 1024),
+    });
+    const out = await call('manager_start', { request: '依頼', attachments: [big.id] });
+    expect(out).toContain('上限を名乗らない版なので、デーモン側の既定値');
+    expect(fake.starts).toEqual([]);
+    const small = await stores.attachments.put({
+      name: 's.bin',
+      mediaType: 'application/octet-stream',
+      bytes: new Uint8Array(1000),
+    });
+    await call('manager_start', { request: '依頼', attachments: [small.id] });
+    expect(fake.starts).toHaveLength(1);
     await stop();
   });
 });

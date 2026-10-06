@@ -69,7 +69,13 @@ import {
   isPidsUnderPressure,
 } from './manager-auto-fold.js';
 import { isManagerFoldCandidate } from './manager-fold-candidate.js';
-import { attachmentRefsOf } from './manager-attachments.js';
+import {
+  attachmentRefsOf,
+  estimateAttachmentBodyBytes,
+  ManagerAttachmentsRefusedError,
+} from './manager-attachments.js';
+import { readAttachmentLimits } from './attachment.js';
+import { runnerAttachmentBodyLimit } from './runner-attachments.js';
 import type {
   RunnerAttachment,
   RunnerClient,
@@ -5196,6 +5202,8 @@ class Pool implements ManagerPool {
    * 「名乗りを受けたか」は `#runnerCapabilities` の鍵で見る（`hello` ごとに必ず書かれる）。
    */
   readonly #runnerStartableProviders = new Map<string, ReadonlySet<string>>();
+  /** runner が名乗った、添付を運ぶ口の本文の上限（`hello.attachmentBodyLimit`）。名乗らない器は持たない。 */
+  readonly #runnerAttachmentBodyLimits = new Map<string, number>();
   /**
    * **枠で止まった委譲**の managerId（`case 'usage_notice'` の `reached` で立ち、
    * {@link Pool.resumeStoppedByUsage} が下ろす）。
@@ -5823,8 +5831,8 @@ class Pool implements ManagerPool {
     // **添付を運ぶなら、その runner が解せることを確かめてから起こす**（解さない版は欄を黙って捨てる）。
     const startAttachments = input.attachments ?? [];
     if (startAttachments.length > 0) {
-      const refused = await this.#attachmentsRefusal(runner);
-      if (refused !== undefined) throw new Error(refused);
+      const refused = await this.#attachmentsRefusal(runner, startAttachments, input.request);
+      if (refused !== undefined) throw new ManagerAttachmentsRefusedError(refused);
     }
     /*
      * **`cwd` を省いた依頼で、runner から `workspacePath` を一度も聞けていない
@@ -6106,7 +6114,7 @@ class Pool implements ManagerPool {
       };
     }
     if (!pending && sendAttachments.length > 0) {
-      const refused = await this.#attachmentsRefusal(runner);
+      const refused = await this.#attachmentsRefusal(runner, sendAttachments, message);
       if (refused !== undefined)
         return { outcome: 'unknown', detail: `${refused}（何も送っていない）` };
     }
@@ -7575,9 +7583,24 @@ class Pool implements ManagerPool {
    * `undefined`、名乗っていなければ断る理由。**名乗りを受けていなければ少し待つ**（`connect` は `hello` を待たない）。
    * 名乗らない版（旧い runner）は `attachments` 欄を黙って捨てて 200 を返すので、送らずに断る。
    */
-  async #attachmentsRefusal(runner: RunnerClient): Promise<string | undefined> {
+  async #attachmentsRefusal(
+    runner: RunnerClient,
+    attachments: readonly RunnerAttachment[],
+    text: string,
+  ): Promise<string | undefined> {
     await this.#awaitHello(runner.runnerId);
     if (this.runnerHasCapability(runner.runnerId, RUNNER_CAPABILITY_MANAGER_ATTACHMENTS)) {
+      // **その runner の本文の上限で検める**（名乗らない版はデーモン側の既定値）。超えるなら送らずに断る。
+      const named = this.#runnerAttachmentBodyLimits.get(runner.runnerId);
+      const limit = named ?? runnerAttachmentBodyLimit(readAttachmentLimits().limits);
+      const estimate = estimateAttachmentBodyBytes(attachments, text);
+      if (estimate > limit) {
+        return (
+          `添付を載せた本文の見積もり ${estimate} バイトが、runner（runnerId=${runner.runnerId}）の上限 ` +
+          `${limit} バイトを超える（${named === undefined ? '上限を名乗らない版なので、デーモン側の既定値' : 'runner が名乗った値'}）。` +
+          '添付を減らすか、小さくして送り直すこと'
+        );
+      }
       return undefined;
     }
     return (
@@ -11927,6 +11950,11 @@ class Pool implements ManagerPool {
       // 能力の名乗り（#1394 段(C)）。欄を送らない旧い runner は空集合 ——
       // 前の名乗りを持ち越さない（同じ runnerId の器が入れ替わって版が下がりうる）。
       this.#runnerCapabilities.set(event.runnerId, new Set(event.capabilities ?? []));
+      if (event.attachmentBodyLimit === undefined) {
+        this.#runnerAttachmentBodyLimits.delete(event.runnerId);
+      } else {
+        this.#runnerAttachmentBodyLimits.set(event.runnerId, event.attachmentBodyLimit);
+      }
       if (event.managerProviders === undefined) {
         this.#runnerStartableProviders.delete(event.runnerId);
       } else {

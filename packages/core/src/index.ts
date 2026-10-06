@@ -1537,5 +1537,7 @@ export {
 export {
   attachmentRefsOf,
   loadManagerAttachments,
+  estimateAttachmentBodyBytes,
+  ManagerAttachmentsRefusedError,
   type LoadedManagerAttachments,
 } from './manager-attachments.js';

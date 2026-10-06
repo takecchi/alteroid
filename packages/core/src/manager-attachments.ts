@@ -92,6 +92,29 @@ export async function loadManagerAttachments(
   return { ok: true, attachments };
 }
 
+/**
+ * 添付つきの命令の本文（JSON）の大きさの見積もり（バイト）。base64 の `data` と、名前・メタデータ・本文・
+ * 封筒の余裕を足す。runner が名乗る上限（`hello.attachmentBodyLimit`）との比較に使う。
+ */
+export function estimateAttachmentBodyBytes(
+  attachments: readonly RunnerAttachment[],
+  text: string,
+): number {
+  const items = attachments.reduce(
+    (sum, item) => sum + item.data.length + Buffer.byteLength(item.name) * 2 + 256,
+    0,
+  );
+  return items + Buffer.byteLength(text) * 2 + 1024;
+}
+
+/** 送る前の検めで、添付を送らずに断ったこと（道具がエラー文にして返す）。 */
+export class ManagerAttachmentsRefusedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ManagerAttachmentsRefusedError';
+  }
+}
+
 /** 日誌に残す参照（メタデータだけ。**中身（`data`）は落とす**）。 */
 export function attachmentRefsOf(attachments: readonly RunnerAttachment[]): AttachmentRef[] {
   return attachments.map((item) => ({

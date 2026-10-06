@@ -1127,6 +1127,8 @@ export function createRunnerApp(deps: RunnerAppDeps) {
                   capabilities: RUNNER_CAPABILITIES,
                   // 名指しの provider で起こせる印（#486 S7）。無い旧い runner には送っても無視される。
                   managerProviders: RUNNER_MANAGER_PROVIDERS,
+                  // 添付を運ぶ口の本文の上限（デーモンが送る前に検める。`runnerAttachmentBodyLimit`）。
+                  attachmentBodyLimit: attachmentBodyMax,
                   ...(deps.managerProvider === undefined
                     ? {}
                     : { managerProvider: deps.managerProvider }),

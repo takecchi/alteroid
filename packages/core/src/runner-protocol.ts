@@ -1105,6 +1105,15 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
      * `managerProvider`（既定の provider）とは別の軸。値域を縛らないのは `managerProvider` と同じ。
      */
     managerProviders: z.array(z.string()).optional(),
+    /**
+     * この runner が `POST /managers` / `/managers/:id/messages` で受ける本文の上限（バイト。Issue #3111 段3。
+     * `runnerAttachmentBodyLimit` が runner 自身の `readAttachmentLimits` から計算した値）。
+     * **器ごとの事実を名乗らせる**（デーモンの設定と二重管理にしない）。デーモンは添付を送る前にこの値で
+     * 本文の大きさを見積もって検め、超えるなら送らずに断る。**無ければ**（`manager-attachments` を名乗るが
+     * 上限を名乗らない版）デーモン側の既定値で検める。`managerProviders` と同じく別の optional 欄にした
+     * （`capabilities` は名前の集合で、値を持てない）。
+     */
+    attachmentBodyLimit: z.number().int().positive().optional(),
   }),
   z.object({ type: z.literal('session'), managerId: z.string(), sessionId: z.string() }),
   /** SDK が生ログを預けるときの scope。生ログを後から引き当てる鍵になる。 */

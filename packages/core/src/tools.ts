@@ -6,7 +6,11 @@ import { z } from 'zod';
 import { describeArchiveRemovedBytesUnit } from './archive-removed-bytes.js';
 import { fallbackAttachmentCopiesDir, fetchAttachmentCopy } from './attachment-fetch.js';
 import { readAttachmentLimits, type AttachmentLimits } from './attachment.js';
-import { attachmentRefsOf, loadManagerAttachments } from './manager-attachments.js';
+import {
+  attachmentRefsOf,
+  loadManagerAttachments,
+  ManagerAttachmentsRefusedError,
+} from './manager-attachments.js';
 
 import {
   bySpeaker,
@@ -10844,6 +10848,10 @@ export function createCloneTools(context: ToolContext) {
             }${providerNote}${handedNote}: ${request}`,
             grounds: `委譲しようとしたが、状態の変更が失敗した: ${reasonOf(error)}`,
           });
+          // 送る前の検めで断った（上限超過・名乗らない runner）。道具のエラー文として返す。
+          if (error instanceof ManagerAttachmentsRefusedError) {
+            return text(`${reasonOf(error)}。マネージャーは起こしていない。`);
+          }
           throw error;
         }
 
