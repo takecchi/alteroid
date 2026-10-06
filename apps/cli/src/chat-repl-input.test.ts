@@ -1,0 +1,297 @@
+import { EventEmitter } from 'node:events';
+import { syncBuiltinESMExports } from 'node:module';
+import { PassThrough } from 'node:stream';
+
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { captureStdout } from './test-support.js';
+
+/**
+ * `chat`（REPL）の入力まわり。偽の readline（`EventEmitter`）と偽の標準入力を使うので、実時間の待ちは無い。
+ * - #3411: 応答中の Ctrl+C は `POST /clone/interrupt` を呼んで REPL を続ける。入力待ちの Ctrl+C は終了。
+ * - #3412: 貼り付け（bracketed paste）の複数行は1発言。行末の `\` で続ける。
+ * - #3413: 標準入力が端末でないとき、送信が失敗したらそこで止まり、非 0 で終える（投げる）。
+ */
+class FakeRl extends EventEmitter {
+  closed = false;
+  setPrompt(): void {}
+  prompt(): void {}
+  close(): void {
+    if (this.closed) return;
+    this.closed = true;
+    this.emit('close');
+  }
+}
+
+let rl: FakeRl;
+vi.mock('node:readline/promises', () => ({
+  createInterface: () => rl,
+}));
+
+vi.mock('./target.js', async (orig) => ({
+  ...(await orig<typeof import('./target.js')>()),
+  resolveTarget: async () => ({
+    baseUrl: 'http://127.0.0.1:4517',
+    headers: {},
+    remote: false,
+    note: null,
+  }),
+}));
+
+const realStdin = Object.getOwnPropertyDescriptor(process, 'stdin');
+let input: PassThrough & { isTTY?: boolean };
+
+function useStdin(isTTY: boolean): void {
+  input = Object.assign(new PassThrough(), { isTTY });
+  Object.defineProperty(process, 'stdin', { value: input, configurable: true });
+  syncBuiltinESMExports();
+}
+
+beforeEach(() => {
+  rl = new FakeRl();
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+  if (realStdin !== undefined) Object.defineProperty(process, 'stdin', realStdin);
+  syncBuiltinESMExports();
+});
+
+const sse = (body: string): Response =>
+  new Response(body, { headers: { 'content-type': 'text/event-stream' } });
+const OK_REPLY =
+  'event: open\ndata: {"conversationId":"c1"}\n\nevent: done\ndata: {"type":"done"}\n\n';
+
+/** マイクロタスクとタイマー前の処理を流す（待たない。`setImmediate` は次の周回で即時に走る）。 */
+const flush = async (): Promise<void> => {
+  for (let i = 0; i < 5; i += 1) await new Promise<void>((resolve) => setImmediate(resolve));
+};
+
+function recordFetch(handler: (path: string, text: string | null) => Promise<Response> | Response) {
+  const calls: { path: string; text: string | null }[] = [];
+  vi.stubGlobal('fetch', (url: unknown, init?: RequestInit) => {
+    const path = new URL(String(url)).pathname;
+    const text =
+      path === '/chat' ? (JSON.parse(String(init?.body)) as { text: string }).text : null;
+    calls.push({ path, text });
+    return Promise.resolve(handler(path, text));
+  });
+  return calls;
+}
+
+describe('chat: 応答中の Ctrl+C（#3411）', () => {
+  it('応答中は /clone/interrupt を呼んで REPL を続け、閉じない', async () => {
+    useStdin(true);
+    let release: (() => void) | null = null;
+    let chats = 0;
+    const calls = recordFetch((path) => {
+      if (path === '/chat') {
+        chats += 1;
+        if (chats > 1) return sse(OK_REPLY);
+        return new Promise<Response>((resolve) => {
+          release = () => {
+            resolve(sse(OK_REPLY));
+          };
+        });
+      }
+      if (path === '/clone/interrupt') return Response.json({ outcome: 'interrupted' });
+      return Response.json({});
+    });
+    const out = captureStdout();
+    const { chatCommand } = await import('./chat.js');
+    const done = chatCommand();
+    await flush();
+    rl.emit('line', 'hello');
+    await flush();
+    expect(release).not.toBeNull();
+
+    rl.emit('SIGINT');
+    await flush();
+    expect(calls.map((c) => c.path)).toContain('/clone/interrupt');
+    expect(rl.closed).toBe(false);
+
+    // 応答が終わったら、次の入力を待つ（REPL は続いている）。
+    release!();
+    await flush();
+    expect(rl.closed).toBe(false);
+    rl.emit('line', 'again');
+    await flush();
+    rl.close();
+    await done;
+    const text = out();
+    expect(text).toContain('いま走っていたクローンのターンを止めた');
+    expect(calls.filter((c) => c.path === '/chat').map((c) => c.text)).toEqual(['hello', 'again']);
+    // 会話は終えない間は /end を呼ばない。閉じたあとに1回だけ。
+    expect(calls.filter((c) => c.path === '/chat/c1/end')).toHaveLength(1);
+  });
+
+  it('止められなかったら理由を言い、REPL は続ける', async () => {
+    useStdin(true);
+    let release: (() => void) | null = null;
+    recordFetch((path) => {
+      if (path === '/chat') {
+        return new Promise<Response>((resolve) => {
+          release = () => {
+            resolve(sse(OK_REPLY));
+          };
+        });
+      }
+      if (path === '/clone/interrupt') return Response.json({ error: 'boom' }, { status: 500 });
+      return Response.json({});
+    });
+    const out = captureStdout();
+    const { chatCommand } = await import('./chat.js');
+    const done = chatCommand();
+    await flush();
+    rl.emit('line', 'hello');
+    await flush();
+    rl.emit('SIGINT');
+    await flush();
+    expect(rl.closed).toBe(false);
+    release!();
+    await flush();
+    rl.close();
+    await done;
+    expect(out()).toContain('クローンのターンを止められませんでした');
+  });
+
+  it('入力を待っている間の Ctrl+C は、今まで通り終了する', async () => {
+    useStdin(true);
+    const calls = recordFetch(() => Response.json({}));
+    const out = captureStdout();
+    const { chatCommand } = await import('./chat.js');
+    const done = chatCommand();
+    await flush();
+    rl.emit('SIGINT');
+    await done;
+    out();
+    expect(rl.closed).toBe(true);
+    expect(calls.map((c) => c.path)).not.toContain('/clone/interrupt');
+  });
+});
+
+describe('chat: 複数行の入力（#3412）', () => {
+  it('貼り付けの複数行は1発言になり、次の Enter で送る', async () => {
+    useStdin(true);
+    const calls = recordFetch((path) => (path === '/chat' ? sse(OK_REPLY) : Response.json({})));
+    const out = captureStdout();
+    const { chatCommand } = await import('./chat.js');
+    const done = chatCommand();
+    await flush();
+    input.emit('keypress', undefined, { name: 'paste-start' });
+    rl.emit('line', '以下を直して');
+    rl.emit('line', 'func main() {');
+    input.emit('keypress', undefined, { name: 'paste-end' });
+    await flush();
+    expect(calls.filter((c) => c.path === '/chat')).toHaveLength(0);
+    rl.emit('line', '}');
+    await flush();
+    rl.close();
+    await done;
+    out();
+    expect(calls.filter((c) => c.path === '/chat').map((c) => c.text)).toEqual([
+      '以下を直して\nfunc main() {\n}',
+    ]);
+  });
+
+  it('行末の \\ で次の行へ続け、/ で始まる行は続けない', async () => {
+    useStdin(false);
+    const calls = recordFetch((path) => (path === '/chat' ? sse(OK_REPLY) : Response.json({})));
+    const out = captureStdout();
+    const { chatCommand } = await import('./chat.js');
+    const done = chatCommand();
+    await flush();
+    rl.emit('line', '一行目\\');
+    await flush();
+    expect(calls.filter((c) => c.path === '/chat')).toHaveLength(0);
+    rl.emit('line', '二行目');
+    await flush();
+    rl.emit('line', '/attach C:\\dir\\');
+    await flush();
+    rl.close();
+    await done;
+    const text = out();
+    expect(calls.filter((c) => c.path === '/chat').map((c) => c.text)).toEqual(['一行目\n二行目']);
+    // `/attach` は続きにされず、そのまま解釈された（`\` で終わる行を次の行と繋げていない）。
+    expect(text).not.toContain('エラー: input closed');
+  });
+
+  it('続きの途中で入力が閉じたら、そこまでを1発言として送る', async () => {
+    useStdin(false);
+    const calls = recordFetch((path) => (path === '/chat' ? sse(OK_REPLY) : Response.json({})));
+    const out = captureStdout();
+    const { chatCommand } = await import('./chat.js');
+    const done = chatCommand();
+    await flush();
+    rl.emit('line', '途中\\');
+    rl.close();
+    await done;
+    out();
+    expect(calls.filter((c) => c.path === '/chat').map((c) => c.text)).toEqual(['途中']);
+  });
+});
+
+describe('chat: 非対話の入力で送信が失敗したら止まる（#3413）', () => {
+  it('失敗した行で止まり、会話を閉じて、投げる（残りの行は送らない）', async () => {
+    useStdin(false);
+    const calls = recordFetch((path, text) => {
+      if (path === '/chat' && text === 'hello') return sse(OK_REPLY);
+      if (path === '/chat') return Response.json({ error: 'busy' }, { status: 503 });
+      return Response.json({});
+    });
+    const out = captureStdout();
+    const { chatCommand } = await import('./chat.js');
+    const done = chatCommand();
+    const settled = done.then(
+      () => null,
+      (error: unknown) => error as Error,
+    );
+    await flush();
+    rl.emit('line', 'hello');
+    await flush();
+    rl.emit('line', '503 a');
+    await flush();
+    rl.emit('line', 'third');
+    await flush();
+    const error = await settled;
+    out();
+    expect(error).toBeInstanceOf(Error);
+    expect(error?.message).toContain('送信に失敗した');
+    expect(error?.message).toContain('busy');
+    expect(calls.filter((c) => c.path === '/chat').map((c) => c.text)).toEqual(['hello', '503 a']);
+    expect(calls.filter((c) => c.path === '/chat/c1/end')).toHaveLength(1);
+  });
+
+  it('端末なら、失敗しても1行言って入力へ戻る（終了コードは変えない）', async () => {
+    useStdin(true);
+    const calls = recordFetch((path, text) => {
+      if (path === '/chat' && text === '503 a')
+        return Response.json({ error: 'busy' }, { status: 503 });
+      return path === '/chat' ? sse(OK_REPLY) : Response.json({});
+    });
+    const out = captureStdout();
+    const { chatCommand } = await import('./chat.js');
+    const done = chatCommand();
+    await flush();
+    rl.emit('line', '503 a');
+    await flush();
+    rl.emit('line', 'second');
+    await flush();
+    rl.close();
+    await done;
+    out();
+    expect(calls.filter((c) => c.path === '/chat').map((c) => c.text)).toEqual(['503 a', 'second']);
+  });
+});
+
+describe('continuesLine', () => {
+  it('奇数個の \\ で終わるときだけ続ける', async () => {
+    const { continuesLine } = await import('./chat.js');
+    expect(continuesLine('a\\')).toBe(true);
+    expect(continuesLine('a\\\\')).toBe(false);
+    expect(continuesLine('a\\\\\\')).toBe(true);
+    expect(continuesLine('a')).toBe(false);
+    expect(continuesLine('')).toBe(false);
+  });
+});
