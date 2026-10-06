@@ -120,7 +120,8 @@ export function helpLines(): string[] {
   }
   lines.push(
     'キー:',
-    '  Enter 送信 / Shift+Enter か行末の \\ + Enter で改行',
+    '  Enter 送信 / 改行は、行末の \\ + Enter か Alt+Enter（どの端末でも効く）',
+    '    Shift+Enter は、端末が Shift+Enter を区別して送る設定のときだけ改行（そうでなければ Enter と同じで送信になる）',
     '  Esc 入力欄を抜ける（そのあと 1〜5 で画面を移る、Tab か i で戻る）',
     '  PgUp / PgDn 会話ログのスクロール（末尾へ届くと追従に戻る）',
     '  日誌の画面: ↑↓ 選ぶ / Enter 全文 / f 種別で絞る / n 最新へ戻って追従 / m 古い側 / r 読み直し',
@@ -129,7 +130,7 @@ export function helpLines(): string[] {
     '  会話で承認待ちが来たら、Esc のあと a でその詳細へ飛べる',
     '  記憶の画面（読むだけ）: ↑↓ 選ぶ / Enter 本文 / r 読み直し / Esc 一覧へ',
     '  Ctrl+C 走っているターンを止める / Ctrl+D（入力欄が空のとき）終了',
-    '  Ctrl+U 入力欄を空にする',
+    '  入力欄の編集: ← → ↑ ↓ / Home・End か Ctrl+A・Ctrl+E で行頭・行末 / Ctrl+W 直前の語を消す（空白で区切る） / Ctrl+K 行末まで消す / Delete 後ろの1字 / Ctrl+U 空にする',
     '  `//` で始めると、先頭の `/` を 1 つ外した文をそのまま送る',
   );
   return lines;
