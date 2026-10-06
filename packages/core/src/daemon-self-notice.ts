@@ -47,6 +47,44 @@ export const DAEMON_TOKEN_POOL_REOPENED_SOURCE = 'token-pool';
 export const DAEMON_RUNNER_REGISTRY_SOURCE = 'runner-registry';
 
 /**
+ * **daemon が自分の名として使う `external` の `source`（予約語）の一覧。正本はここ1か所。**
+ *
+ * `isDaemonSelfNotice`（受信箱・台帳の判定）と、`POST /events` / `POST /events/:source` /
+ * `POST /integration-keys`（`apps/daemon/src/app.ts`）の入口の検査（{@link isReservedEventSource}）が
+ * **同じこの一覧を使う**。daemon が新しく自分の名で `external` を出すようになったら、**ここへ足す**
+ * （足さないと、その名は外から名乗れてしまう）。
+ *
+ * 2026-10-07 の全走査（`type: 'external'` を `clone.post` / `#post` へ渡す箇所）で、daemon 自身が出す
+ * `external` の `source` はこの2つだけだった。日誌（`external_event` の `source: 'runner'` など）は受信箱の
+ * `external` ではなく、`isDaemonSelfNotice` も見ないので、ここには入れない。
+ */
+export const DAEMON_RESERVED_EVENT_SOURCES = [
+  DAEMON_TOKEN_POOL_REOPENED_SOURCE,
+  DAEMON_RUNNER_REGISTRY_SOURCE,
+] as const;
+
+/**
+ * 入口が `source` を予約語と突き合わせる前に掛ける正規化（前後の空白を落とし、NFKC にし、小文字にする）。
+ *
+ * **断る判定は必ずこの後に置く。** 生の文字列の完全一致だけだと、`Token-Pool`・` token-pool`・全角の綴りが
+ * すり抜け、クローンの目には daemon 自身の名と見分けがつかない綴りが外から入る。判定は部分一致にはしない
+ * （`token-pool-2` のような別の名は通す）。
+ */
+export function normalizeEventSource(source: string): string {
+  return source.normalize('NFKC').trim().toLowerCase();
+}
+
+/**
+ * `source` が daemon の予約語（{@link DAEMON_RESERVED_EVENT_SOURCES}）か。**入口の検査用**で、
+ * {@link normalizeEventSource} の後で比べる。{@link isDaemonSelfNotice} は daemon が自分で出した合図の
+ * 完全一致で見る（内部の発行側は正本の定数をそのまま渡すので、正規化は要らない）。
+ */
+export function isReservedEventSource(source: string): boolean {
+  const normalized = normalizeEventSource(source);
+  return DAEMON_RESERVED_EVENT_SOURCES.some((reserved) => reserved === normalized);
+}
+
+/**
  * `event` が、デーモン自身が自分の受信箱へ出した合図か。
  *
  * **対象はいまのところ2つ** — {@link DAEMON_TOKEN_POOL_REOPENED_SOURCE}
@@ -67,24 +105,34 @@ export const DAEMON_RUNNER_REGISTRY_SOURCE = 'runner-registry';
  * （2つとも見る）である。対象が重なるからといって同じ関数に寄せない——
  * 問う相手が違う。
  *
- * **⚠️ 払っている代償。** `source` は自由文字列である
- * （`schema.ts` の `inboxEventSchema` の `external` 枝、`source: z.string()`）。
- * `POST /events` / `POST /events/:source`（`apps/daemon/src/app.ts`）から
- * 外部の呼び手が `source: "token-pool"` あるいは `"runner-registry"` を送れば、
- * その本物の外部イベントも台帳に載らず、受信箱でも畳まれる——この関数は合図の
- * 中身（型と `source` の文字列）しか見えず、発行元がデーモン自身か外部かを
- * 区別する手段を持たない。**それでも受け入れているのは、この2つがデーモンが
- * 自分の名として使う予約語であり、外から同じ名を名乗るのは名前空間の衝突だと
- * 考えているからである。** 衝突を見分ける手段をこの関数は持てない——持たせる
- * なら受信箱か API の入口に「デーモン自身が出した」印を足すことになり、それは
- * この関数の——延いては #852 の——範囲を超える。**`inboxCollapseKey` はこの
- * 代償をそのまま引き継ぐ。新しい代償ではなく、既存の判断に乗っただけである。**
+ * **⚠️ この関数は `source` の文字列だけで判定する。だから入口で外からの名乗りを
+ * 断っている。** `source` は自由文字列である（`schema.ts` の `inboxEventSchema` の
+ * `external` 枝、`source: z.string()`）。この関数は合図の中身（型と `source` の
+ * 文字列）しか見えず、発行元がデーモン自身か外部かを区別する手段を持たない。
+ * 外部の呼び手が予約語（{@link DAEMON_RESERVED_EVENT_SOURCES}）を名乗れると、その
+ * 本物の外部イベントも台帳に載らず、受信箱でも畳まれ、添付つきなら添付もクローンへ
+ * 届かない。
+ *
+ * **かつては、これを名前空間の約束（予約語）だけで受け入れていた**（#852）。
+ * **連携の鍵（`altk_`）で外部が `POST /events` を呼ぶようになったので、約束だけに
+ * 頼るのをやめた**（依頼者の決定）: `POST /events` / `POST /events/:source`
+ * （`apps/daemon/src/app.ts`）は、予約語の `source` を {@link isReservedEventSource}
+ * （前後の空白・大文字小文字・全角を正規化した後で比べる）で見て **400
+ * （`code: 'reserved_source'`）で断り、受信箱へ何も積まない**。`POST /integration-keys` も、
+ * 予約語の `source` の鍵を作らせない（発行より前に出た鍵が名乗っても、使う側の入口で
+ * 同じく断る）。**この関数と入口の検査は同じ一覧を使う**ので、片方だけ直してずれることは
+ * ない。
+ *
+ * **守れているのは「外の口」だけである。** daemon 自身が `clone.post` へ内部から出す
+ * 合図（`wake()` の token-pool、`postToClone` と `manager.ts` の runner-registry）は
+ * HTTP の入口を通らないので、この検査に掛からず、従来どおり `isDaemonSelfNotice` が真になる。
+ * 外の口以外（たとえば将来足す別の入口）から `external` を積む経路を作るときは、
+ * 同じ検査を通すこと。**`inboxCollapseKey` もこの判定をそのまま使う。**
  */
 export function isDaemonSelfNotice(event: InboxEvent): boolean {
   return (
     event.type === 'external' &&
-    (event.source === DAEMON_TOKEN_POOL_REOPENED_SOURCE ||
-      event.source === DAEMON_RUNNER_REGISTRY_SOURCE)
+    DAEMON_RESERVED_EVENT_SOURCES.some((reserved) => reserved === event.source)
   );
 }
 
