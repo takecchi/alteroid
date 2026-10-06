@@ -299,7 +299,7 @@ describe('/permissions 画面 — 読めない行（issue #2536）', () => {
     await renderPermissions();
 
     expect(screen.queryByText(/読めない許可の行/)).toBeNull();
-    expect(screen.queryByRole('button', { name: 'この行を消す' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'grant-bad の行を消す' })).toBeNull();
   });
 
   it('読めない行しか無いとき、「許可は無い」と言わず、件数と id・不正な欄名を断る。id の無い行にはボタンが無い', async () => {
@@ -318,7 +318,7 @@ describe('/permissions 画面 — 読めない行（issue #2536）', () => {
     expect(screen.getByText(/id が取れない行が 1 件ある/)).toBeTruthy();
     expect(screen.getByText(/許可が無い、とは言えない/)).toBeTruthy();
     expect(screen.queryByText('有効な許可はありません。')).toBeNull();
-    expect(screen.getAllByRole('button', { name: 'この行を消す' })).toHaveLength(1);
+    expect(screen.getAllByRole('button', { name: 'grant-bad の行を消す' })).toHaveLength(1);
   });
 
   it('読めない行が在っても、読めた許可は今までどおり出る', async () => {
@@ -364,7 +364,7 @@ describe('/permissions 画面 — 読めない行（issue #2536）', () => {
     }) as typeof fetch;
 
     await renderPermissions();
-    fireEvent.click(await screen.findByRole('button', { name: 'この行を消す' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'grant-bad の行を消す' }));
     // 押しただけでは消さない（#3091。共有部品なので permissions / access で挙動が揃う）。
     const dialog = await screen.findByRole('alertdialog');
     expect(dialog.textContent).toContain('元に戻せません');
@@ -373,7 +373,7 @@ describe('/permissions 画面 — 読めない行（issue #2536）', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: 'やめる' }));
     await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
     expect(posts).toEqual([]);
-    fireEvent.click(screen.getByRole('button', { name: 'この行を消す' }));
+    fireEvent.click(screen.getByRole('button', { name: 'grant-bad の行を消す' }));
     fireEvent.click(
       within(await screen.findByRole('alertdialog')).getByRole('button', { name: '消す' }),
     );

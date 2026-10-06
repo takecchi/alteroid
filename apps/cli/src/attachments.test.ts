@@ -167,6 +167,33 @@ describe('alteroid attachments get / 表示', () => {
     await expect(attachmentsGetCommand('att-1', { output: out })).rejects.toThrow('上書きしない');
   });
 
+  it('名前が - の添付は、-o を省くと ./- に書く（標準出力へは流さない）', async () => {
+    const dir = await makeTempDir('alteroid-cli-attach-');
+    vi.stubGlobal('fetch', (input: unknown) => {
+      const url = input instanceof Request ? input.url : String(input);
+      return Promise.resolve(
+        url.endsWith('/meta')
+          ? Response.json({ id: 'att-1', name: '-', mediaType: 'text/plain', size: 3, sha256: 'x' })
+          : new Response(Uint8Array.from([7, 8, 9])),
+      );
+    });
+    vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    const written: unknown[] = [];
+    vi.spyOn(process.stdout, 'write').mockImplementation((chunk: unknown) => {
+      written.push(chunk);
+      return true;
+    });
+    const previous = process.cwd();
+    process.chdir(dir);
+    try {
+      await attachmentsGetCommand('att-1', {});
+    } finally {
+      process.chdir(previous);
+    }
+    expect(written).toEqual([]);
+    expect([...(await readFile(join(dir, '-')))]).toEqual([7, 8, 9]);
+  });
+
   it('添付のある発言は [添付] name (type, size) id=… で出る（中身は出ない）', () => {
     const line = describeAttachment({
       id: 'i1',
