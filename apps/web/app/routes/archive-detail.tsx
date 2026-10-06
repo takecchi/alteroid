@@ -106,7 +106,7 @@ function Removed({ removedAt, bytes }: { removedAt: string; bytes: number }) {
     <div className="p-4 text-sm">
       <Badge tone="warn">本文は削除済み</Badge>
       <p className="mt-2 text-muted-foreground">
-        {formatDateTime(removedAt)} に本文を消しました（消した本文は {bytes}バイト）。
+        {formatDateTime(removedAt)} に本文を消しました（消した本文は {formatBytes(bytes)}）。
         一覧の行は残っていますが、中身は戻せません。
       </p>
     </div>

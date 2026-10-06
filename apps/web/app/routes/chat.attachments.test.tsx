@@ -93,6 +93,17 @@ const nodeFile = (name: string, bytes: number[] | number, type: string) =>
     },
   ) as unknown as File;
 
+/**
+ * 大きさだけを持つ偽のファイル。中身は 1 バイトしか作らず、`size` だけを申告値にする。
+ * 選ぶ段階（上限の検査・チップの表示）は `size` / `name` / `type` しか見ず、本文は読まない。
+ * 上げる（`uploadAttachment` が本文を読む）経路では使わないこと — そこは `nodeFile` で実体を持たせる。
+ */
+const sizedFile = (name: string, size: number, type: string) => {
+  const file = nodeFile(name, 1, type);
+  Object.defineProperty(file, 'size', { value: size });
+  return file;
+};
+
 function choose(files: File[]) {
   const input = document.querySelector('input[type=file]') as HTMLInputElement;
   Object.defineProperty(input, 'files', { value: files, configurable: true });
@@ -236,7 +247,7 @@ describe('添えて送る', () => {
     renderChat('/chat');
     await box();
     choose([
-      nodeFile('big.png', 5 * 1024 * 1024 + 1, 'image/png'),
+      sizedFile('big.png', 5 * 1024 * 1024 + 1, 'image/png'),
       nodeFile('ok.txt', 3, 'text/plain'),
     ]);
     expect(await screen.findByText(/big\.png: 画像は 1 つ 5\.0 MB まで/)).toBeTruthy();
@@ -278,9 +289,9 @@ describe('添えて送る', () => {
         maxFileBytes: 200 * MIB,
         maxTotalBytes: 400 * MIB,
       });
-      choose([nodeFile('big.png', 6 * MIB, 'image/png')]);
+      choose([sizedFile('big.png', 6 * MIB, 'image/png')]);
       expect(await screen.findByRole('button', { name: 'big.png を外す' })).toBeTruthy();
-      choose([nodeFile('huge.bin', 26 * MIB, 'application/octet-stream')]);
+      choose([sizedFile('huge.bin', 26 * MIB, 'application/octet-stream')]);
       expect(await screen.findByRole('button', { name: 'huge.bin を外す' })).toBeTruthy();
       expect(screen.queryByText(/まで/)).toBeNull();
       expect(stub.calls.filter((url) => url.endsWith('/attachments/limits'))).toHaveLength(1);
@@ -296,7 +307,7 @@ describe('添えて送る', () => {
 
     it('口が取れない（古いデーモンの 404）ときは既定値で検査する', async () => {
       await renderWithLimits(null);
-      choose([nodeFile('big.png', 5 * MIB + 1, 'image/png')]);
+      choose([sizedFile('big.png', 5 * MIB + 1, 'image/png')]);
       expect(await screen.findByText(/big\.png: 画像は 1 つ 5\.0 MB まで/)).toBeTruthy();
     });
   });

@@ -1,4 +1,5 @@
 import {
+  compareCodeUnits,
   hasNul,
   jobSchema,
   prepareApprovalForWrite,
@@ -18,11 +19,17 @@ import type {
   UnreadableApproval,
   UnreadableJob,
 } from '@alteroid/core';
-import { and, asc, eq, inArray, isNull, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNull, sql, type SQL } from 'drizzle-orm';
 
 import type { Db } from './db.js';
 import { stripNulls } from './db.js';
 import { approvals, jobs } from './schema.js';
+
+/**
+ * `approvals` の会話 id（jsonb の `conversationId`）。**`migrate.ts` の `approvals_conversation_id_idx`
+ * と同じ式でなければ索引は効かない。**
+ */
+const CONVERSATION_ID_EXPR = sql`(${approvals.approval}->>'conversationId')`;
 
 /**
  * 不正な行を要約する。**`issue.message` は使わない**——zod の既定メッセージが
@@ -425,36 +432,82 @@ export class PgJobStore implements JobStore {
     });
   }
 
-  async listApprovals(options: { pendingOnly?: boolean } = {}): Promise<ApprovalList> {
+  async listApprovals(
+    options: { pendingOnly?: boolean; conversationId?: string } = {},
+  ): Promise<ApprovalList> {
     // 未回答かつ未取り下げだけを「保留」とする（#963。3実装で揃える —
     // `storage-fs` の `jobs.ts` / `testing.ts` の同名フィルタと同じ条件）。
-    const rows = await this.#db
-      .select({ id: approvals.id, approval: approvals.approval })
-      .from(approvals)
-      .where(
-        options.pendingOnly === true
-          ? and(isNull(approvals.answeredAt), isNull(approvals.withdrawnAt))
-          : undefined,
-      )
-      .orderBy(asc(approvals.createdAt));
+    const pendingWhere =
+      options.pendingOnly === true
+        ? and(isNull(approvals.answeredAt), isNull(approvals.withdrawnAt))
+        : undefined;
+    const select = (where: SQL | undefined) =>
+      this.#db
+        .select({ id: approvals.id, createdAt: approvals.createdAt, approval: approvals.approval })
+        .from(approvals)
+        .where(where)
+        .orderBy(asc(approvals.createdAt));
+
     // **読めない行は飛ばして消さず、`unreadable` に別欄で返す**（issue #2298）。
     // `pendingOnly` の絞りは列（`answered_at` / `withdrawn_at`）で SQL が済ませている
     // ので、読めない行も未回答・未取り下げのものだけが来る。id は列から取れる。
     const entries: PendingApproval[] = [];
-    const unreadable: UnreadableApproval[] = [];
-    for (const row of rows) {
-      const parsed = pendingApprovalSchema.safeParse(row.approval);
-      if (parsed.success) {
-        entries.push(parsed.data);
-        continue;
+    const unreadable: Array<{ createdAt: Date; row: UnreadableApproval }> = [];
+    const collect = (
+      rows: ReadonlyArray<{ id: string; createdAt: Date; approval: unknown }>,
+      keep: boolean,
+    ): void => {
+      for (const row of rows) {
+        const parsed = pendingApprovalSchema.safeParse(row.approval);
+        if (parsed.success) {
+          if (keep) entries.push(parsed.data);
+          continue;
+        }
+        const reason = summarizeInvalidFields(parsed.error.issues);
+        process.stderr.write(
+          `${describeUnreadableApprovalRow({ op: 'listApprovals', id: row.id, reason })}\n`,
+        );
+        unreadable.push({ createdAt: row.createdAt, row: { id: row.id, reason } });
       }
-      const reason = summarizeInvalidFields(parsed.error.issues);
-      process.stderr.write(
-        `${describeUnreadableApprovalRow({ op: 'listApprovals', id: row.id, reason })}\n`,
-      );
-      unreadable.push({ id: row.id, reason });
+    };
+
+    if (options.conversationId === undefined) {
+      collect(await select(pendingWhere), true);
+      return { entries, unreadable: unreadable.map((u) => u.row) };
     }
-    return { entries, unreadable };
+
+    // **会話の絞りは SQL で当てる**（#3290。`approvals_conversation_id_idx` — 式
+    // `(approval->>'conversationId')` の索引 — が効く）。一致した行だけを `entries` に
+    // する。NUL を含む会話 id の行は存在しえない（書き込みが落とす）ので「一致なし」
+    // （DB に投げるとエラーになる。`getApproval` と同じ扱い）。
+    const conversationId = options.conversationId;
+    const matchesNothing = hasNul(conversationId);
+    if (!matchesNothing) {
+      collect(
+        await select(and(pendingWhere, sql`${CONVERSATION_ID_EXPR} = ${conversationId}`)),
+        true,
+      );
+    }
+    // **`unreadable` は会話で絞らない**（絞る前の挙動を変えない。読めない行はどの
+    // 会話のものかも分からない）。読めるかどうかは行を `pendingApprovalSchema` に通さ
+    // ないと分からないので、一致しなかった行も検査する（`entries` には載せない）。
+    // **この検査の費用は全行ぶん残る** — 無くすなら `ApprovalList.unreadable` の
+    // 契約を変える判断になる（#3290 の PR 本文）。
+    collect(
+      await select(
+        matchesNothing
+          ? pendingWhere
+          : and(pendingWhere, sql`${CONVERSATION_ID_EXPR} is distinct from ${conversationId}`),
+      ),
+      false,
+    );
+    // 絞りなしの呼びと同じ並び（`created_at` の昇順）にそろえる。
+    unreadable.sort(
+      (a, b) =>
+        a.createdAt.getTime() - b.createdAt.getTime() ||
+        compareCodeUnits(a.row.id ?? '', b.row.id ?? ''),
+    );
+    return { entries, unreadable: unreadable.map((u) => u.row) };
   }
 
   async getApproval(id: string): Promise<PendingApproval | null> {
