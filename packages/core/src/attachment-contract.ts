@@ -36,7 +36,7 @@ export interface AttachmentStoreContractOptions {
  * 8. 長い名前（255 を超える・マルチバイト）の往復、複数・重複した id の `bind`（`store` で測る）
  * 9. （`createStore` を渡したとき）サイズの境界ちょうど・`expiresAt` ちょうどと1時間ちょうどの `prune`・
  *    `bind` と `prune` の並行（空のストアで測る）
- *    **0バイトの扱いは測らない**（#3327 で決める）
+ * 10. 0バイト（画像の宣言でも、そうでなくても）は `empty` で断る（#3327。Web の「空のファイルは添えられない」と揃える）
  * 7. `unbind`（#3270）は、その結び付け先に結ばれている id だけを未結び付けへ戻して返す。別の宛先・未結び付け・
  *    無い id は触らない（返さない）。冪等。戻したものは掃除の対象に戻る
  * 6. `bindToExternalEvent`（#3113 段3）も `bind` と同じ規則（冪等・別の宛先は `conflicts`・無いものは `missing`）。
@@ -94,6 +94,15 @@ export async function verifyAttachmentStoreContract(
   await rejected(
     () => store.put({ name: 'x.jpg', mediaType: 'image/jpeg', bytes: PNG }),
     'magic_mismatch',
+  );
+  // 10: 0バイトは断る（#3327）
+  await rejected(
+    () => store.put({ name: 'e.txt', mediaType: 'text/plain', bytes: new Uint8Array(0) }),
+    'empty',
+  );
+  await rejected(
+    () => store.put({ name: 'e.png', mediaType: 'image/png', bytes: new Uint8Array(0) }),
+    'empty',
   );
   const big = new Uint8Array(5 * 1024 * 1024 + 1);
   big.set(PNG);

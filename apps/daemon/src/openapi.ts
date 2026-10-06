@@ -131,6 +131,7 @@ export const attachmentErrorResponseSchema = z.object({
       'too_many',
       'total_too_large',
       'media_type_missing',
+      'empty',
       'attachment_missing',
       'attachment_conflict',
       'attachment_forbidden',

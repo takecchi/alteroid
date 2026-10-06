@@ -214,7 +214,7 @@
         "operationId": "postAttachments",
         "tags": ["attachments"],
         "summary": "添付を預かる（生のバイト列）",
-        "description": "本文は**生のバイト列**で、名前と MIME はクエリ（`name` / `type`）で運ぶ。**`content-type` は `application/octet-stream` だけを受ける**（それ以外は 415）——CORS の単純リクエストにさせず、ブラウザが必ず preflight を通すため（`deliberateClient` と同じ考え）。認証は他の経路と同じ。本文の上限は添付1つぶんの最大値（超えたら 413）。画像（png / jpeg / webp / gif）は宣言と中身の先頭が一致しなければ 400。返った `id` を `POST /chat` の `attachments` に渡すと発言へ結び付く。結び付けないまま 1 時間たったものは掃除される。**連携の鍵（`altk_`）もこの口だけは通れる**（自分の外部イベントに付ける添付を上げるため。#3113 段3）：`uploadedBy` は `integration:<keyId>` になり、その鍵が `POST /events` で付けられるのは自分が上げた添付だけ。本文の上限は鍵の `maxBodyBytes` ではなく添付の上限（上記）に従い、1 回として鍵の回数（429）に数える。鍵は添付を読み出せない（`GET /attachments/:id` は 403）。",
+        "description": "本文は**生のバイト列**で、名前と MIME はクエリ（`name` / `type`）で運ぶ。**`content-type` は `application/octet-stream` だけを受ける**（それ以外は 415）——CORS の単純リクエストにさせず、ブラウザが必ず preflight を通すため（`deliberateClient` と同じ考え）。認証は他の経路と同じ。本文の上限は添付1つぶんの最大値（超えたら 413）。画像（png / jpeg / webp / gif）は宣言と中身の先頭が一致しなければ 400。0バイトの本文も 400（`code`: `empty`。Web・CLI・TUI と揃えて断る）。返った `id` を `POST /chat` の `attachments` に渡すと発言へ結び付く。結び付けないまま 1 時間たったものは掃除される。**連携の鍵（`altk_`）もこの口だけは通れる**（自分の外部イベントに付ける添付を上げるため。#3113 段3）：`uploadedBy` は `integration:<keyId>` になり、その鍵が `POST /events` で付けられるのは自分が上げた添付だけ。本文の上限は鍵の `maxBodyBytes` ではなく添付の上限（上記）に従い、1 回として鍵の回数（429）に数える。鍵は添付を読み出せない（`GET /attachments/:id` は 403）。",
         "requestBody": {
           "required": true,
           "description": "添付の中身（生のバイト列）。",
@@ -279,7 +279,7 @@
             }
           },
           "400": {
-            "description": "クエリが不正、または受け付けない中身（`code`: `magic_mismatch` / `media_type_missing`）。",
+            "description": "クエリが不正、または受け付けない中身（`code`: `magic_mismatch` / `media_type_missing` / `empty`＝0バイト）。",
             "content": {
               "application/json": {
                 "schema": {
@@ -296,6 +296,7 @@
                         "too_many",
                         "total_too_large",
                         "media_type_missing",
+                        "empty",
                         "attachment_missing",
                         "attachment_conflict",
                         "attachment_forbidden"
@@ -325,6 +326,7 @@
                         "too_many",
                         "total_too_large",
                         "media_type_missing",
+                        "empty",
                         "attachment_missing",
                         "attachment_conflict",
                         "attachment_forbidden"
@@ -16690,6 +16692,7 @@
                         "too_many",
                         "total_too_large",
                         "media_type_missing",
+                        "empty",
                         "attachment_missing",
                         "attachment_conflict",
                         "attachment_forbidden"
@@ -16751,6 +16754,7 @@
                         "too_many",
                         "total_too_large",
                         "media_type_missing",
+                        "empty",
                         "attachment_missing",
                         "attachment_conflict",
                         "attachment_forbidden"
@@ -16860,6 +16864,7 @@
                         "too_many",
                         "total_too_large",
                         "media_type_missing",
+                        "empty",
                         "attachment_missing",
                         "attachment_conflict",
                         "attachment_forbidden"
@@ -16921,6 +16926,7 @@
                         "too_many",
                         "total_too_large",
                         "media_type_missing",
+                        "empty",
                         "attachment_missing",
                         "attachment_conflict",
                         "attachment_forbidden"
