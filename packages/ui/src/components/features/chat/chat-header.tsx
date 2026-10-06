@@ -107,6 +107,7 @@ export function ChatHeader({
               <Button
                 size="sm"
                 onClick={() => setConfirmingEnd(true)}
+                data-chat-end
                 loading={ending}
                 title="クローンがここまでの学びを記憶にまとめる"
               >
@@ -124,6 +125,15 @@ export function ChatHeader({
           description="クローンがここまでの学びを記憶にまとめます。会話は一覧に残り、あとから開いて続きを話せます。"
           confirmLabel="終える"
           cancelLabel="やめる"
+          /*
+           * 閉じたら、押した「会話を終える」へ戻す（#3595）。既定の戻し先は開く前にフォーカスの
+           * あった要素だが、押した直後に読み込み中（disabled）になる・押す前にフォーカスが無い
+           * （Safari はボタンを押してもフォーカスしない）と、body へ落ちて迷子になる。
+           */
+          onCloseAutoFocus={(event) => {
+            event.preventDefault();
+            document.querySelector<HTMLElement>('[data-chat-end]')?.focus();
+          }}
           onConfirm={() => {
             setConfirmingEnd(false);
             onEnd();

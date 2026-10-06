@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useSyncExternalStore } from 'react';
 
 /**
  * `intervalMs` ごとに更新される現在時刻（`Date.now()`）。**`enabled` が偽のあいだは刻まない**
@@ -19,4 +19,72 @@ export function useNowMs(intervalMs: number, enabled = true): number {
     return () => clearInterval(timer);
   }, [intervalMs, enabled]);
   return now;
+}
+
+/*
+ * **分単位で更新される「いま」（相対の時刻「たった今」「N分前」の再計算用。#3596）。**
+ *
+ * 画面ごとに `setInterval` を持たせない。承認カードや会話一覧の行は何十個も並びうるので、
+ * 刻みは**1本だけ**（購読者が1つでもいて、タブが見えているあいだだけ）にして、全員に同じ値を配る。
+ *
+ * - 購読者が0になれば刻みを止める。**タブが隠れているあいだも止める**（見えていない値のために
+ *   起きない）。見えるようになった（`visibilitychange`）瞬間に、止まっていた分を追いつかせて、刻みを再開する。
+ * - `enabled` が偽なら購読しない（相対の時刻を出していないときに回さない）。
+ * - 値は呼び出しの時点の `Date.now()` で、分の境界へ丸めない。丸めると、いま作ったばかりの
+ *   行（作成時刻が丸めた値より後）が「まもなく」（未来）になる。
+ */
+const MINUTE_MS = 60_000;
+const minuteListeners = new Set<() => void>();
+let minuteSnapshot = Date.now();
+let minuteTimer: ReturnType<typeof setInterval> | undefined;
+const minuteServerSnapshot = Date.now();
+
+function refreshMinute(): void {
+  minuteSnapshot = Date.now();
+  for (const listener of [...minuteListeners]) listener();
+}
+
+function syncMinuteTimer(): void {
+  const shouldRun = minuteListeners.size > 0 && document.visibilityState === 'visible';
+  if (shouldRun && minuteTimer === undefined) {
+    minuteTimer = setInterval(refreshMinute, MINUTE_MS);
+  } else if (!shouldRun && minuteTimer !== undefined) {
+    clearInterval(minuteTimer);
+    minuteTimer = undefined;
+  }
+}
+
+function onMinuteVisibility(): void {
+  // 隠れていたあいだに進んだ分を、見えた瞬間に追いつかせる。
+  if (document.visibilityState === 'visible' && minuteListeners.size > 0) refreshMinute();
+  syncMinuteTimer();
+}
+
+function subscribeMinute(listener: () => void): () => void {
+  if (minuteListeners.size === 0) {
+    document.addEventListener('visibilitychange', onMinuteVisibility);
+    // 誰も見ていなかったあいだに古くなった値を、最初の購読で更新する（購読の直後に React が読み直す）。
+    minuteSnapshot = Date.now();
+  }
+  minuteListeners.add(listener);
+  syncMinuteTimer();
+  return () => {
+    minuteListeners.delete(listener);
+    if (minuteListeners.size === 0) {
+      document.removeEventListener('visibilitychange', onMinuteVisibility);
+    }
+    syncMinuteTimer();
+  };
+}
+
+function subscribeNothing(): () => void {
+  return () => {};
+}
+
+export function useMinuteNow(enabled = true): number {
+  return useSyncExternalStore(
+    enabled ? subscribeMinute : subscribeNothing,
+    () => minuteSnapshot,
+    () => minuteServerSnapshot,
+  );
 }

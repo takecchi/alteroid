@@ -30,6 +30,7 @@ export function ConfirmDialog({
   cancelLabel = 'やめる',
   destructive = false,
   onConfirm,
+  onCloseAutoFocus,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -40,10 +41,15 @@ export function ConfirmDialog({
   /** 消す・失効させる操作なら真（確かめるボタンが警告の色になる）。 */
   destructive?: boolean;
   onConfirm: () => void;
+  /**
+   * 閉じたあとのフォーカスの戻し先を呼ぶ側が決める（`event.preventDefault()` してから移す）。
+   * 既定では、開く前にフォーカスのあった要素へ戻る。
+   */
+  onCloseAutoFocus?: (event: Event) => void;
 }) {
   return (
     <AlertDialog open={open} onOpenChange={onOpenChange}>
-      <AlertDialogContent>
+      <AlertDialogContent {...(onCloseAutoFocus === undefined ? {} : { onCloseAutoFocus })}>
         <AlertDialogHeader>
           <AlertDialogTitle>{title}</AlertDialogTitle>
           {description !== undefined && (
