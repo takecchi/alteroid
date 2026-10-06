@@ -2472,7 +2472,9 @@ function describeStringArrayElementLengthViolation(
   value: readonly string[] | undefined,
 ): string | null {
   if (value === undefined) return null;
-  const emptyIndex = value.findIndex((entry) => entry.length === 0);
+  // **NUL を落としてから数える**（issue #3460。`describeStringLengthViolation` と同じ形）。
+  // 値そのものは書き換えない（数えるだけ）。
+  const emptyIndex = value.findIndex((entry) => stripNul(entry).length === 0);
   if (emptyIndex === -1) return null;
   return (
     `${field} は使えない（${emptyIndex} 番目（0起点）が空文字。各要素とも` +
