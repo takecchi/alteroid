@@ -5,6 +5,8 @@ import { z } from 'zod';
 
 import { describeArchiveRemovedBytesUnit } from './archive-removed-bytes.js';
 import { fallbackAttachmentCopiesDir, fetchAttachmentCopy } from './attachment-fetch.js';
+import { readAttachmentLimits, type AttachmentLimits } from './attachment.js';
+import { attachmentRefsOf, loadManagerAttachments } from './manager-attachments.js';
 
 import {
   bySpeaker,
@@ -717,7 +719,23 @@ export interface ToolContext {
    * 追加の許可なしで開けるようにするため（`attachment-fetch.ts`）。
    */
   attachmentCopiesDir?: string;
+  /**
+   * `manager_start` / `manager_send` の `attachments`（担い手へ渡す添付）の上限（個数・合計）。省略すると
+   * `readAttachmentLimits()`（環境変数。置き場が読むものと同じ）。主にテスト用の口。
+   */
+  attachmentLimits?: AttachmentLimits;
 }
+
+/**
+ * `manager_start` / `manager_send` の `attachments` 引数の説明（Issue #3111 段3）。
+ * **人間の添付は、渡さない限り担い手には見えない**（クローンの受信箱にだけ届く）ことを名指しする。
+ */
+const MANAGER_ATTACHMENTS_DESCRIPTION =
+  '人間の添付を担い手にも見せたいときに、その添付の id（通知行の id=… / conversation_read の添付行）を渡す。' +
+  '渡したものは担い手の手元にファイルとして置かれ（通知行にパスが付くので Read で開ける）、画像は画像としても見える。' +
+  '渡さない添付は担い手には見えない。**記憶には写らない**（日誌に残るのは渡した添付の参照だけで、中身は残らない）。' +
+  '見つからない添付（保持期限切れ・id の誤り）があれば、何も送らずにエラーを返す。個数・合計には人間の発言と同じ上限がある。' +
+  '確認への回答（requestId / decision）には載せられない。';
 
 export function qualifiedToolName(name: string): string {
   return `mcp__${MCP_SERVER_NAME}__${name}`;
@@ -10737,6 +10755,10 @@ export function createCloneTools(context: ToolContext) {
           .string()
           .describe('依頼内容。人間が Claude Code に書くのと同じ粒度で、背景と狙いを添えて書く'),
         cwd: z.string().optional().describe('作業ディレクトリ。省略時はデーモンの既定'),
+        attachments: z
+          .array(z.string().min(1))
+          .optional()
+          .describe(MANAGER_ATTACHMENTS_DESCRIPTION),
         runnerId: z
           .string()
           .optional()
@@ -10749,9 +10771,10 @@ export function createCloneTools(context: ToolContext) {
         ...providerShape,
       },
       async (rawArgs) => {
-        const { request, cwd, runnerId, provider } = rawArgs as unknown as {
+        const { request, cwd, runnerId, provider, attachments } = rawArgs as unknown as {
           request: string;
           cwd?: string | undefined;
+          attachments?: string[] | undefined;
           runnerId?: string | undefined;
           provider?: string | undefined;
         };
@@ -10766,6 +10789,19 @@ export function createCloneTools(context: ToolContext) {
         // 欄を新しく作らないという Issue の設計要件を、ここでも守る。内部
         // ターン（マネージャー発の確認・蒸留・timer）では undefined になる。
         const conversationId = getConversationId();
+
+        // **添付は、日誌にも命令にも触れる前に読む。** 見つからなければ何も送らず（日誌も書かず）、道具のエラー文を返す。
+        const handover = await loadManagerAttachments(
+          stores,
+          attachments ?? [],
+          context.attachmentLimits ?? readAttachmentLimits().limits,
+        );
+        if (!handover.ok) return text(handover.message);
+        const handedRefs = attachmentRefsOf(handover.attachments);
+        const handedNote =
+          handedRefs.length === 0
+            ? ''
+            : `（添付 ${handedRefs.length} 件を渡す: ${handedRefs.map((ref) => `${ref.id} ${ref.name}`).join(', ')}）`;
 
         /**
          * **能力を広げる道具（issue #2145。teto の判断、#2123/#2134 と同じ
@@ -10782,7 +10818,7 @@ export function createCloneTools(context: ToolContext) {
             type: 'decision',
             decision: `マネージャーを起こそうとしている${
               runnerId === undefined ? '' : `（指名: runnerId=${runnerId}）`
-            }${providerNote}: ${request}`,
+            }${providerNote}${handedNote}: ${request}`,
             grounds: '委譲の判断',
           },
           'act-not-performed',
@@ -10796,6 +10832,7 @@ export function createCloneTools(context: ToolContext) {
             ...(runnerId === undefined ? {} : { runnerId }),
             ...(provider === undefined ? {} : { provider }),
             ...(conversationId === undefined ? {} : { conversationId }),
+            ...(handover.attachments.length === 0 ? {} : { attachments: handover.attachments }),
           });
         } catch (error) {
           // 日誌には「起こそうとしている」が残っているので、打ち消す
@@ -10804,7 +10841,7 @@ export function createCloneTools(context: ToolContext) {
             type: 'decision',
             decision: `マネージャーを起こせなかった${
               runnerId === undefined ? '' : `（指名: runnerId=${runnerId}）`
-            }${providerNote}: ${request}`,
+            }${providerNote}${handedNote}: ${request}`,
             grounds: `委譲しようとしたが、状態の変更が失敗した: ${reasonOf(error)}`,
           });
           throw error;
@@ -10818,7 +10855,7 @@ export function createCloneTools(context: ToolContext) {
             `マネージャー ${started.managerId} を起こした（${describeStartedCwd(started)}` +
             `${runnerId === undefined ? '' : `, 指名: runnerId=${runnerId}`}${
               provider === undefined ? '' : `, provider=${provider}`
-            }）: ${request}`,
+            }）${handedNote}: ${request}`,
           grounds: '委譲の判断',
         });
         // **置き先が pids 飽和と判定されていれば言う（#2626 期待2）。** 明示指名でも
@@ -10879,6 +10916,10 @@ export function createCloneTools(context: ToolContext) {
         message: z
           .string()
           .describe('マネージャーへの本文。deny のときは、なぜ駄目でどうしてほしいかを書く'),
+        attachments: z
+          .array(z.string().min(1))
+          .optional()
+          .describe(MANAGER_ATTACHMENTS_DESCRIPTION),
         // **`deny` は人間の意思表示の代弁であって、機械が状態の辻褄合わせに
         // 使ってよい値ではない（issue #963 §4。同じ言葉が `ask_human` /
         // `approval_withdraw` の doc にも置いてある）。** 受け取るマネージャーは
@@ -10906,11 +10947,19 @@ export function createCloneTools(context: ToolContext) {
               '受信箱に届いていない確認に、生ログから答える手段は無い（#572）',
           ),
       },
-      async ({ managerId, message, decision, requestId }) => {
+      async ({ managerId, message, decision, requestId, attachments }) => {
         if (!context.managers) return NO_POOL;
+        // 添付は、送る前に読む。見つからなければ何も送らずに道具のエラー文を返す。
+        const handover = await loadManagerAttachments(
+          stores,
+          attachments ?? [],
+          context.attachmentLimits ?? readAttachmentLimits().limits,
+        );
+        if (!handover.ok) return text(handover.message);
         const result = await context.managers.send(managerId, message, {
           ...(decision === undefined ? {} : { decision }),
           ...(requestId === undefined ? {} : { requestId }),
+          ...(handover.attachments.length === 0 ? {} : { attachments: handover.attachments }),
         });
         // **`outcome` ごとに言い分ける**（`manager_stop` と同じ形。#563）。
         // `detail` は既に理由を持っているが、それだけだと「起こし直せばよいのか」が

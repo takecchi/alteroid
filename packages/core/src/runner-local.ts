@@ -20,6 +20,7 @@ import type {
   RunnerRescueRefDeleteRequest,
   RunnerRescueRefDeleteResult,
   RunnerSetCredentialsCommand,
+  RunnerAttachment,
   RunnerStartCommand,
   UnpushedWorkResult,
 } from './runner-protocol.js';
@@ -64,6 +65,8 @@ export interface LocalRunnerOptions {
    * 効く形にすると、器が違うだけでできることが変わってしまう（M4 受け入れ基準1）。
    */
   profile?: ProfileVessel;
+  /** 担い手へ渡す添付の置き場（`RunnerHostOptions.attachmentsRoot`）。主にテスト用。 */
+  attachmentsRoot?: string;
 }
 
 export function createLocalRunner(options: LocalRunnerOptions): RunnerClient {
@@ -109,6 +112,9 @@ class LocalRunner implements RunnerClient {
         : { withheldEnvKeys: options.withheldEnvKeys }),
       ...(options.credentials === undefined ? {} : { credentials: options.credentials }),
       ...(options.profile === undefined ? {} : { profile: options.profile }),
+      ...(options.attachmentsRoot === undefined
+        ? {}
+        : { attachmentsRoot: options.attachmentsRoot }),
     });
   }
 
@@ -184,8 +190,12 @@ class LocalRunner implements RunnerClient {
    * 経路は同じ入力（セッションの無い `managerId`）に対して違う結果を返して
    * いた。
    */
-  async send(managerId: string, text: string): Promise<boolean> {
-    return this.#host.send(managerId, text);
+  async send(
+    managerId: string,
+    text: string,
+    attachments?: readonly RunnerAttachment[],
+  ): Promise<boolean> {
+    return this.#host.send(managerId, text, attachments);
   }
 
   async answer(managerId: string, answer: RunnerAnswerCommand): Promise<RunnerAnswerOutcome> {

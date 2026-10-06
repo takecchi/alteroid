@@ -234,6 +234,27 @@ export const runnerProviderSchema = z.custom<AgentProviderId>(
  */
 export const RUNNER_MANAGER_PROVIDERS: readonly string[] = AGENT_PROVIDER_IDS;
 
+/**
+ * 担い手へ渡す添付（Issue #3111 段3）。**中身（`data`）を命令の本文に base64 で載せて運ぶ**——
+ * runner は記憶ストアの鍵も、デーモンとのファイルシステムの共有も持たず、向きは
+ * 「デーモンが押し込む」だけが許されるので、runner が取りに行く別ルートは作らない。
+ * 同じ要求で運ぶので、ファイルが置かれる前に最初のターンが走る競りも起きない。
+ *
+ * runner は `sha256` を中身と照合し、合わなければ置かずに断る（`runner-attachments.ts`）。
+ * `id` / `name` はパスの部品になるので、置く側が検めてから使う（スキーマは形だけを見る）。
+ */
+export const runnerAttachmentSchema = z.object({
+  id: z.string().min(1),
+  name: z.string(),
+  mediaType: z.string(),
+  size: z.number().int().nonnegative(),
+  sha256: z.string().min(1),
+  /** 中身（base64。データ URL の接頭辞は付けない）。 */
+  data: z.string(),
+});
+
+export type RunnerAttachment = z.infer<typeof runnerAttachmentSchema>;
+
 export const runnerStartCommandSchema = z.object({
   managerId: z.string().min(1),
   request: z.string().min(1),
@@ -243,6 +264,8 @@ export const runnerStartCommandSchema = z.object({
   lease: runnerLeaseSchema.optional(),
   /** このセッションを動かす provider。省略は runner の既定（`runnerProviderSchema` の doc）。 */
   provider: runnerProviderSchema.optional(),
+  /** 最初のターンに添える添付（`runnerAttachmentSchema`）。省略は従来どおり。 */
+  attachments: z.array(runnerAttachmentSchema).optional(),
 });
 
 export type RunnerStartCommand = z.infer<typeof runnerStartCommandSchema>;
@@ -273,6 +296,11 @@ export const runnerResumeCommandSchema = z.object({
    * 指名されていた委譲にだけ付く。省略は runner の既定。
    */
   provider: runnerProviderSchema.optional(),
+  /**
+   * `message` に添える添付（`runnerAttachmentSchema`）。**`message` が無ければ使わない。**
+   * 担い手が done で、`manager_send` が resume から入り直す回に、添付を黙って落とさないために要る。
+   */
+  attachments: z.array(runnerAttachmentSchema).optional(),
 });
 
 export type RunnerResumeCommand = z.infer<typeof runnerResumeCommandSchema>;
@@ -330,7 +358,11 @@ export interface RunnerResumeResult {
  * 命令の意味が変わらないところに新しい任意フィールドを増やさない、というだけの
  * 選択である。
  */
-export const runnerMessageCommandSchema = z.object({ text: z.string().min(1) });
+export const runnerMessageCommandSchema = z.object({
+  text: z.string().min(1),
+  /** `text` に添える添付（`runnerAttachmentSchema`）。省略は従来どおり。 */
+  attachments: z.array(runnerAttachmentSchema).optional(),
+});
 
 /**
  * マネージャーの道具の鍵の差し替え（roadmap M4 の穴埋め）。
@@ -811,12 +843,18 @@ export interface RunnerAnswerOutcome {
  * - `awaiting-background-signal`: 報告に `awaitingBackground`（背景処理の完了を
  *   待って畳んだ印）を載せる版である。これを名乗らない器では、印が無いことを
  *   「背景処理を待っていない」と読めない
+ * - `manager-attachments`: `start` / `resume` / `messages` の命令の `attachments`（担い手へ渡す添付。
+ *   Issue #3111 段3）を解して置く版である。**これを名乗らない器へ添付を送ると、欄は黙って捨てられる**
+ *   （zod は未知の欄を落とすだけ）ので、デーモンは名乗らない器へ添付を送らずに断る
  */
 export const RUNNER_CAPABILITY_AWAITING_BACKGROUND_SIGNAL = 'awaiting-background-signal';
+
+export const RUNNER_CAPABILITY_MANAGER_ATTACHMENTS = 'manager-attachments';
 
 /** この版の runner が名乗る能力の一覧（`hello.capabilities` にそのまま載せる）。 */
 export const RUNNER_CAPABILITIES: readonly string[] = [
   RUNNER_CAPABILITY_AWAITING_BACKGROUND_SIGNAL,
+  RUNNER_CAPABILITY_MANAGER_ATTACHMENTS,
 ];
 
 /**
@@ -2809,7 +2847,11 @@ export interface RunnerClient {
    * 返し、無ければ例外を投げる」実装と「例外を投げず `false` を返す」実装の
    * 両方が、この契約を満たす。**
    */
-  send(managerId: string, text: string): Promise<boolean>;
+  send(
+    managerId: string,
+    text: string,
+    attachments?: readonly RunnerAttachment[],
+  ): Promise<boolean>;
   /**
    * `delivered: false` = その確認は runner 側に無い（既に解けた / 別の宛先）。
    * `decision` は runner.ts が確定した allow/deny（#322）——**`delivered` が

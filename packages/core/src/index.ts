@@ -1060,6 +1060,8 @@ export {
   runnerPlacementResourcesSchema,
   runnerProfileFingerprintSchema,
   runnerProfileResultSchema,
+  runnerAttachmentSchema,
+  RUNNER_CAPABILITY_MANAGER_ATTACHMENTS,
   runnerResumeCommandSchema,
   runnerSessionOpenResultSchema,
   runnerSetCredentialsCommandSchema,
@@ -1071,6 +1073,7 @@ export {
   unpushedWorkTreeSchema,
   waitingKindSchema,
   type RunnerAnswerCommand,
+  type RunnerAttachment,
   type RunnerRescueRefDeleteRequest,
   type RunnerRescueRefDeleteResult,
   type RunnerAnswerOutcome,
@@ -1494,3 +1497,20 @@ export {
   type AttachmentCopy,
   type AttachmentFetchResult,
 } from './attachment-fetch.js';
+export {
+  composeAttachmentInput,
+  defaultRunnerAttachmentsRoot,
+  placeRunnerAttachments,
+  placedAttachmentNoticeLine,
+  pruneStaleAttachmentDirs,
+  removeManagerAttachments,
+  runnerAttachmentBodyLimit,
+  RunnerAttachmentRejectedError,
+  RUNNER_ATTACHMENT_STALE_MS,
+  type PlacedAttachment,
+} from './runner-attachments.js';
+export {
+  attachmentRefsOf,
+  loadManagerAttachments,
+  type LoadedManagerAttachments,
+} from './manager-attachments.js';

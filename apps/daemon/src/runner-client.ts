@@ -1,6 +1,7 @@
 import type {
   RunnerAnswerCommand,
   RunnerAnswerOutcome,
+  RunnerAttachment,
   RunnerClient,
   RunnerCredentialFingerprint,
   RunnerEvent,
@@ -1669,8 +1670,17 @@ class HttpRunner implements RunnerClient {
    * なった——`manager.ts` の `#sendDetectingMissingSession` は例外と `false`
    * の両方を「セッションが無い」として読む。
    */
-  async send(managerId: string, text: string): Promise<boolean> {
-    await this.#call('POST', `/managers/${encodeURIComponent(managerId)}/messages`, { text });
+  async send(
+    managerId: string,
+    text: string,
+    attachments?: readonly RunnerAttachment[],
+  ): Promise<boolean> {
+    await this.#call('POST', `/managers/${encodeURIComponent(managerId)}/messages`, {
+      text,
+      // 添付が無ければ欄ごと省く。欄を知らない古い runner は黙って捨てるので、添付を送る前に
+      // `ManagerPool` が `manager-attachments` の名乗りを確かめている（`RUNNER_CAPABILITY_MANAGER_ATTACHMENTS`）。
+      ...(attachments === undefined || attachments.length === 0 ? {} : { attachments }),
+    });
     return true;
   }
 

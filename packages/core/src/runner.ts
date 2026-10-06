@@ -57,6 +57,7 @@ import type {
   AgentSessionLog,
   AgentSessionLogKey,
   AgentSpawnOptions,
+  AgentInputImage,
   AgentUserInput,
 } from './agent-session.js';
 import { CONTEXT_USAGE_CATEGORY_LIMIT } from './context-usage.js';
@@ -93,6 +94,13 @@ import {
 import { readCgroupEventCounters, type CgroupEventCounters } from './runner-resources.js';
 import { RunnerSdkSession } from './runner-sdk-session.js';
 import {
+  composeAttachmentInput,
+  defaultRunnerAttachmentsRoot,
+  placeRunnerAttachments,
+  pruneStaleAttachmentDirs,
+  removeManagerAttachments,
+} from './runner-attachments.js';
+import {
   BACKGROUND_TASK_OWNER_LIMIT,
   RunnerSubagentStopState,
   SUBAGENT_BACKGROUND_WAIT_MS,
@@ -116,6 +124,7 @@ import type {
   RunnerProfileFingerprint,
   RunnerProfileResult,
   RunnerResumeCommand,
+  RunnerAttachment,
   RunnerStartCommand,
   UnpushedWorkResult,
 } from './runner-protocol.js';
@@ -396,6 +405,11 @@ export interface RunnerHostOptions {
   /** SDK 子プロセスを別 UID で走らせる（コンテナ構成の既定）。 */
   childUser?: RunnerChildUser;
   /**
+   * 担い手へ渡す添付を置く場所（Issue #3111 段3。`runner-attachments.ts`）。省略は
+   * `os.tmpdir()` 配下の `alteroid-attachments`。主にテスト用の口。
+   */
+  attachmentsRoot?: string;
+  /**
    * 権限モード。省略すると `env` の `ALTEROID_MANAGER_PERMISSION_MODE`、
    * それも無ければ `auto`。
    */
@@ -534,7 +548,11 @@ export interface RunnerHost {
    * 戻り値の `cwd` は `start` と同じ約束（Issue #1814）。
    */
   resume(command: RunnerResumeCommand): Promise<{ cwd: string; reusedLiveSession: boolean }>;
-  send(managerId: string, text: string): Promise<boolean>;
+  send(
+    managerId: string,
+    text: string,
+    attachments?: readonly RunnerAttachment[],
+  ): Promise<boolean>;
   /**
    * `delivered: false` = その確認は runner 側に無い。`decision` は確定した
    * allow/deny（#322。`decideAnswer` の doc）。同一プロセスなので常に付く。
@@ -723,6 +741,8 @@ class Host implements RunnerHost {
    */
   readonly #profile: ProfileApplier | undefined;
   readonly #sessions = new Map<string, RunnerSession>();
+  /** 担い手へ渡す添付の置き場（`runner-attachments.ts`）。 */
+  readonly #attachmentsRoot: string;
   /**
    * デーモンから降りてきた MCP の登録（#325 段3）と、その指紋。**置いていなければ
    * `undefined`。** 値は `#buildOptions` へ渡す以外に外へ出さない。
@@ -778,6 +798,7 @@ class Host implements RunnerHost {
     this.#env = options.env ?? process.env;
     this.#withheldEnvKeys = [...WITHHELD_ENV_KEYS, ...(options.withheldEnvKeys ?? [])];
     this.#childUser = options.childUser;
+    this.#attachmentsRoot = options.attachmentsRoot ?? defaultRunnerAttachmentsRoot();
     this.#peer = options.peer;
     this.#credentials = options.credentials;
     this.#permissionMode = options.permissionMode ?? resolvePermissionMode(this.#env);
@@ -1126,7 +1147,11 @@ class Host implements RunnerHost {
       ...(this.#peer === undefined ? {} : { peer: this.#peer }),
       profileEnv: () => this.#profile?.env() ?? {},
       mcpServers: () => this.#mcpServers?.servers,
-      onClosed: () => this.#sessions.delete(managerId),
+      onClosed: () => {
+        this.#sessions.delete(managerId);
+        // 担い手へ渡した添付も、委譲が畳まれたら消す（取りこぼしは `#placeAttachments` の掃除が拾う）。
+        void removeManagerAttachments(this.#attachmentsRoot, managerId).catch(() => undefined);
+      },
       onDelegationProcessSpawned: (pid) => this.#noteDelegationProcessSpawned(pid, managerId),
       onDelegationProcessExited: (pid) => this.#noteDelegationProcessExited(pid),
       ...(this.#spawnAgentProcessFn === undefined
@@ -1158,15 +1183,28 @@ class Host implements RunnerHost {
     if (this.#sessions.has(command.managerId)) {
       throw new Error(`${command.managerId} は既に走っている`);
     }
+    // **添付は、セッションを作る前に置く。** 置けなければ（sha256 の不一致など）セッションを作らずに断る。
+    // 置いた後に最初のターンが走るので、「ファイルが置かれる前に担い手が読む」競りは起きない。
+    const input = await this.#attachmentInput(
+      command.managerId,
+      command.request,
+      command.attachments,
+    );
+    if (this.#sessions.has(command.managerId)) {
+      throw new Error(`${command.managerId} は既に走っている`);
+    }
     const session = this.#create(command.managerId, command.request, command.cwd, command.provider);
     try {
       // **新しいセッションなので拒む判定は起きない。** `checkFence` は
       // 「まだ世代を覚えていない」ときは無条件に覚えるだけである
       // （`RunnerSession#checkFence` の doc）。
       session.checkFence(command.lease);
-      session.begin(command.request);
+      session.begin(input.text, input.images);
     } catch (error) {
       this.#sessions.delete(command.managerId);
+      void removeManagerAttachments(this.#attachmentsRoot, command.managerId).catch(
+        () => undefined,
+      );
       throw error;
     }
     return { cwd: session.cwd };
@@ -1222,7 +1260,14 @@ class Host implements RunnerHost {
     if (alive) {
       alive.checkFence(command.lease);
       if (!alive.stopping) {
-        if (command.message !== undefined) alive.push(command.message);
+        if (command.message !== undefined) {
+          const input = await this.#attachmentInput(
+            command.managerId,
+            command.message,
+            command.attachments,
+          );
+          alive.push(input.text, input.images);
+        }
         return { cwd: alive.cwd, reusedLiveSession: true };
       }
       try {
@@ -1235,7 +1280,14 @@ class Host implements RunnerHost {
       if (afterWait !== undefined) {
         if (!afterWait.stopping) {
           // 並行した resume が先に新しいセッションを作っていた。合流する。
-          if (command.message !== undefined) afterWait.push(command.message);
+          if (command.message !== undefined) {
+            const input = await this.#attachmentInput(
+              command.managerId,
+              command.message,
+              command.attachments,
+            );
+            afterWait.push(input.text, input.images);
+          }
           return { cwd: afterWait.cwd, reusedLiveSession: true };
         }
         // 畳みが途中の例外で `#onClosed()` まで届かず、畳み済みの古い
@@ -1243,17 +1295,26 @@ class Host implements RunnerHost {
         this.#sessions.delete(command.managerId);
       }
     }
+    // 添付は、セッションを作る前に置く（`start` と同じ理由）。`message` が無ければ使わない。
+    const resumeInput =
+      command.message === undefined
+        ? undefined
+        : await this.#attachmentInput(command.managerId, command.message, command.attachments);
     const session = this.#create(command.managerId, command.request, command.cwd, command.provider);
     // **この Host インスタンスにとっては初めて見るセッション**（器の入れ替え・
     // デーモンの再起動後の resume、または上の待ちを経て名簿から消えた直後）
     // なので、比べる前の世代が無い。拒む判定は起きず、覚えるだけになる
     // （`start` と同じ形）。
     session.checkFence(command.lease);
-    session.resume(command.sessionId, command.entries, command.message);
+    session.resume(command.sessionId, command.entries, resumeInput?.text, resumeInput?.images);
     return { cwd: session.cwd, reusedLiveSession: false };
   }
 
-  async send(managerId: string, text: string): Promise<boolean> {
+  async send(
+    managerId: string,
+    text: string,
+    attachments?: readonly RunnerAttachment[],
+  ): Promise<boolean> {
     const session = this.#sessions.get(managerId);
     // **畳み中（`stopping`）なら積まずに `false` を返す。** `push()` は
     // `this.#sdkSession.stopped` を見て黙って捨てるだけなので、ここで
@@ -1263,8 +1324,36 @@ class Host implements RunnerHost {
     // 404 `{ error: 'not found' }`）に乗せる——デーモンはこれを見て
     // resume に回る。
     if (!session || session.stopping) return false;
-    session.push(text);
+    // 無いセッションへは置かない（上で `false` を返した）。置けなければ（sha256 の不一致など）積まずに投げる。
+    const input = await this.#attachmentInput(managerId, text, attachments);
+    // 置いている間に畳まれたら、積まずに `false`（デーモンは resume に回る）。置いたものは `onClosed` が消す。
+    if (session.stopping || this.#sessions.get(managerId) !== session) return false;
+    session.push(input.text, input.images);
     return true;
+  }
+
+  /**
+   * 担い手へ渡す添付を置いて、入力（本文 + 通知行 + 画像）にする。添付が無ければ `{ text }` のまま。
+   * 置く前に、取りこぼしの置き場を掃除する（生きた委譲と、猶予内のものは残す）。
+   */
+  async #attachmentInput(
+    managerId: string,
+    text: string,
+    attachments: readonly RunnerAttachment[] | undefined,
+  ): Promise<AgentUserInput> {
+    if (attachments === undefined || attachments.length === 0) return { text };
+    void pruneStaleAttachmentDirs(
+      this.#attachmentsRoot,
+      [...this.#sessions.keys(), managerId],
+      Date.now(),
+    ).catch(() => undefined);
+    const placed = await placeRunnerAttachments({
+      root: this.#attachmentsRoot,
+      managerId,
+      attachments,
+      ...(this.#childUser === undefined ? {} : { childGid: this.#childUser.gid }),
+    });
+    return composeAttachmentInput(text, placed);
   }
 
   async answer(managerId: string, answer: RunnerAnswerCommand): Promise<RunnerAnswerOutcome> {
@@ -2207,8 +2296,8 @@ class RunnerSession {
     this.#sdkSession.checkFence(lease, this.#id);
   }
 
-  begin(request: string): void {
-    this.push(request);
+  begin(request: string, images?: readonly AgentInputImage[]): void {
+    this.push(request, images);
     this.#open();
   }
 
@@ -2219,9 +2308,14 @@ class RunnerSession {
    * からである。人間の不在で止まってよいのは承認待ちの仕事だけで（PRD「自律」）、
    * 器が落ちたことを理由に止まったままにはしない。
    */
-  resume(sessionId: string, entries: unknown[] | undefined, message: string | undefined): void {
+  resume(
+    sessionId: string,
+    entries: unknown[] | undefined,
+    message: string | undefined,
+    images?: readonly AgentInputImage[],
+  ): void {
     this.#resumeState.beginResume(sessionId, entries);
-    if (message !== undefined) this.push(message);
+    if (message !== undefined) this.push(message, images);
     this.#open(sessionId);
   }
 
@@ -2292,9 +2386,11 @@ class RunnerSession {
    * だけの前提である。** 固定しているのは `runner-wakeup.test.ts` の
    * 「`task_notification` を受けても `byCause.input` は増えない」の1本のみ。
    */
-  push(text: string): void {
+  push(text: string, images?: readonly AgentInputImage[]): void {
     if (this.#sdkSession.stopped) return;
-    this.#sdkSession.enqueueInput({ text });
+    this.#sdkSession.enqueueInput(
+      images === undefined || images.length === 0 ? { text } : { text, images },
+    );
     this.#sdkSession.setStatus('running');
     this.#sdkSession.wakeInput();
   }

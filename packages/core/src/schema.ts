@@ -1150,7 +1150,10 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
      */
     supersedes: z.string().optional(),
     /**
-     * この発言に添えた添付の参照（`with: 'human'` かつ `role: 'inbound'` のときだけ。Issue #3111）。
+     * この発言に添えた添付の参照（`with: 'human'` かつ `role: 'inbound'` のとき。Issue #3111）。
+     * **`with: 'manager'` かつ `role: 'outbound'` のときは、クローンが担い手（マネージャー）へ渡した添付**
+     * （`manager_start` / `manager_send` の `attachments`。段3。「どの添付をどの担い手に渡したか」を後から追う印で、
+     * `managerId` と対で読む）。
      * **メタデータだけで、中身（bytes）は日誌に書かない。**
      */
     attachments: z.array(attachmentRefSchema).optional(),

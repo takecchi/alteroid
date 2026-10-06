@@ -1,10 +1,13 @@
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 
-import type { BuildRevision, RunnerEvent, RunnerHost } from '@alteroid/core';
+import type { AttachmentLimits, BuildRevision, RunnerEvent, RunnerHost } from '@alteroid/core';
 import {
   DEFAULT_SSE_HEARTBEAT_MS,
+  readAttachmentLimits,
   readExecutionResources,
   reasonOf,
+  RunnerAttachmentRejectedError,
+  runnerAttachmentBodyLimit,
   resolveBuildRevision,
   RUNNER_CAPABILITIES,
   RUNNER_MANAGER_PROVIDERS,
@@ -21,6 +24,8 @@ import {
 } from '@alteroid/core';
 import { zValidator } from '@hono/zod-validator';
 import { Hono } from 'hono';
+import { bodyLimit } from 'hono/body-limit';
+import type { Context } from 'hono';
 import { createMiddleware } from 'hono/factory';
 import { streamSSE } from 'hono/streaming';
 
@@ -103,6 +108,11 @@ export interface RunnerAppDeps {
    * 固定値を確かめる。
    */
   taskBreakdownReader?: TaskBreakdownReader;
+  /**
+   * 担い手へ渡す添付の上限（Issue #3111 段3）。`POST /managers` と `/managers/:id/messages` の本文の上限
+   * （`runnerAttachmentBodyLimit`）を決める。省略は `readAttachmentLimits()`（環境変数。デーモンと同じ値を置くこと）。
+   */
+  attachmentLimits?: AttachmentLimits;
   /**
    * この runner のマネージャー層の provider id（`ALTEROID_MANAGER_PROVIDER` を解いたもの。
    * #486 段 S1）。`hello` に載せてデーモンへ名乗る。省略（旧い呼び出し・テスト）は
@@ -688,6 +698,19 @@ export function createRunnerApp(deps: RunnerAppDeps) {
   // 焼き込み・実行時の環境変数はどちらもプロセスの寿命の間に変わらない）。
   const revision = deps.revision ?? resolveBuildRevision();
   const taskBreakdownReader = deps.taskBreakdownReader ?? new TaskBreakdownReader();
+  /**
+   * 添付を運ぶ2つの口（`POST /managers` / `POST /managers/:id/messages`）の本文の上限。添付の合計上限の
+   * base64 に余裕を足した値で、デーモンが先に検める上限を抜けた巨大な本文への最後の歯止めである。
+   * 制御面の合鍵（`control`）の内側にだけ置く——鍵の無い呼びは本文を読む前に 401 で終わる。
+   */
+  const attachmentBodyMax = runnerAttachmentBodyLimit(
+    deps.attachmentLimits ?? readAttachmentLimits().limits,
+  );
+  const tooLarge = (c: Context) =>
+    c.json(
+      { ok: false, error: `本文が大きすぎる（${attachmentBodyMax} バイトまで。置いていない）` },
+      413,
+    );
 
   /**
    * 制御面の門番。**runner の中から叩けても、鍵が無ければ通らない。**
@@ -1246,6 +1269,7 @@ export function createRunnerApp(deps: RunnerAppDeps) {
      */
     .post(
       '/managers',
+      bodyLimit({ maxSize: attachmentBodyMax, onError: tooLarge }),
       zValidator('json', runnerStartCommandSchema, (result, c) => {
         if (!result.success) {
           return c.json({ ok: false, error: '起動命令の入力の形が不正（置いていない）' }, 400);
@@ -1256,8 +1280,16 @@ export function createRunnerApp(deps: RunnerAppDeps) {
         // **`cwd` は実際に開いた値（Issue #1814）。** `command.cwd` の写しではない
         // ——`Host#start` の doc を見よ。デーモンはこれと自分が送った値を比べて、
         // 倒れたかどうかを知る。
-        const { cwd } = await host.start(c.req.valid('json'));
-        return c.json({ ok: true, cwd });
+        try {
+          const { cwd } = await host.start(c.req.valid('json'));
+          return c.json({ ok: true, cwd });
+        } catch (error) {
+          // 添付を置けなかった（sha256 の不一致など）。セッションは作っていない。再送しても同じ結果なので 4xx。
+          if (error instanceof RunnerAttachmentRejectedError) {
+            return c.json({ ok: false, error: reasonOf(error) }, 422);
+          }
+          throw error;
+        }
       },
     )
 
@@ -1284,6 +1316,9 @@ export function createRunnerApp(deps: RunnerAppDeps) {
         try {
           resumed = await host.resume(command);
         } catch (error) {
+          if (error instanceof RunnerAttachmentRejectedError) {
+            return c.json({ ok: false, error: reasonOf(error) }, 422);
+          }
           /*
            * **世代が古い resume は 409、Hono の既定 500 に落とさない。**
            *
@@ -1313,6 +1348,7 @@ export function createRunnerApp(deps: RunnerAppDeps) {
      */
     .post(
       '/managers/:id/messages',
+      bodyLimit({ maxSize: attachmentBodyMax, onError: tooLarge }),
       zValidator('json', runnerMessageCommandSchema, (result, c) => {
         if (!result.success) {
           return c.json({ ok: false, error: 'メッセージの入力の形が不正（置いていない）' }, 400);
@@ -1320,7 +1356,16 @@ export function createRunnerApp(deps: RunnerAppDeps) {
         return undefined;
       }),
       async (c) => {
-        const delivered = await host.send(c.req.param('id'), c.req.valid('json').text);
+        const command = c.req.valid('json');
+        let delivered: boolean;
+        try {
+          delivered = await host.send(c.req.param('id'), command.text, command.attachments);
+        } catch (error) {
+          if (error instanceof RunnerAttachmentRejectedError) {
+            return c.json({ ok: false, error: reasonOf(error) }, 422);
+          }
+          throw error;
+        }
         if (!delivered) return c.json({ error: 'not found' as const }, 404);
         return c.json({ ok: true });
       },
