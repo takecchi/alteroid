@@ -621,7 +621,7 @@
             }
           },
           "400": {
-            "description": "`text` が空、または本文が JSON として不正。または `supersedes` の検証に落ちた——`conversationId` が無いのに `supersedes` がある、指した id が見つからない・この会話のものではない、クローンの応答（outbound）を指している、既に別の編集に置き換えられている、のいずれか。",
+            "description": "`text` が空で添付も無い、または本文が JSON として不正。または `supersedes` の検証に落ちた——`conversationId` が無いのに `supersedes` がある、指した id が見つからない・この会話のものではない、クローンの応答（outbound）を指している、既に別の編集に置き換えられている、のいずれか。",
             "content": {
               "application/json": {
                 "schema": {
@@ -645,8 +645,7 @@
                 "type": "object",
                 "properties": {
                   "text": {
-                    "type": "string",
-                    "minLength": 1
+                    "type": "string"
                   },
                   "conversationId": {
                     "type": "string",

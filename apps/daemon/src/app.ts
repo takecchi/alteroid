@@ -507,17 +507,26 @@ export function parseAllowedOrigins(raw: string | undefined): {
  * `afterId`/`afterAt` と同じ作法）が持つ。`min(1)` だけを課すのは、空文字列を
  * 「編集」として受け付けると `conversationId` に空文字を許すのと同じ穴になるため。
  */
-const chatBody = z.object({
-  text: z.string().min(1),
-  conversationId: z.string().min(1).optional(),
-  supersedes: z.string().min(1).optional(),
+const chatBody = z
+  .object({
+    text: z.string(),
+    conversationId: z.string().min(1).optional(),
+    supersedes: z.string().min(1).optional(),
+    /**
+     * 発言に結び付ける添付の id（`POST /attachments` が返した id。Issue #3111）。形だけをここで見る。
+     * 個数・合計・存在・別の会話への結び付きの検査は、ハンドラが持つ（上限は環境変数で変わるので、
+     * spec に固定の `maxItems` を書かない）。
+     */
+    attachments: z.array(z.string().min(1)).optional(),
+  })
   /**
-   * 発言に結び付ける添付の id（`POST /attachments` が返した id。Issue #3111）。形だけをここで見る。
-   * 個数・合計・存在・別の会話への結び付きの検査は、ハンドラが持つ（上限は環境変数で変わるので、
-   * spec に固定の `maxItems` を書かない）。
+   * **本文は空でもよいが、添付が1件以上あるときだけ**（添付だけの発言。Issue #3111）。
+   * 添付の無い空本文は従来どおり 400。`min(1)` を外した代わりの条件をここに置く。
    */
-  attachments: z.array(z.string().min(1)).optional(),
-});
+  .refine((body) => body.text.length > 0 || (body.attachments?.length ?? 0) > 0, {
+    message: 'text が空のときは attachments が要る',
+    path: ['text'],
+  });
 
 /**
  * 添付のアップロードのクエリ（`POST /attachments`）。本文は生のバイト列なので、名前と MIME はここで運ぶ。
@@ -2792,7 +2801,7 @@ export function createApp(deps: AppDeps) {
           },
           400: {
             description:
-              '`text` が空、または本文が JSON として不正。または `supersedes` の検証に' +
+              '`text` が空で添付も無い、または本文が JSON として不正。または `supersedes` の検証に' +
               '落ちた——`conversationId` が無いのに `supersedes` がある、指した id が' +
               '見つからない・この会話のものではない、クローンの応答（outbound）を指して' +
               'いる、既に別の編集に置き換えられている、のいずれか。',
@@ -2801,7 +2810,7 @@ export function createApp(deps: AppDeps) {
         },
       }),
       jsonBody(chatBody, (where) => ({
-        error: 'text が空、または本文の形が不正' + (where === '' ? '' : `: ${where}`),
+        error: 'text が空（添付も無い）、または本文の形が不正' + (where === '' ? '' : `: ${where}`),
       })),
       async (c) => {
         const {

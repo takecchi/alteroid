@@ -185,6 +185,8 @@ export async function daemonStopCommand(): Promise<void> {
       return;
     case 'unresponsive':
       stdout.write('alteroidd が停止要求に応じません。ログを確認してください。\n');
+      // 止まっていない＝失敗。スクリプトから成功と見分けが付くよう非 0（#3140）。
+      process.exitCode = 1;
       return;
     case 'unknown':
       // 確かめられなかっただけで、「居ない」と確定したわけではない
@@ -196,6 +198,9 @@ export async function daemonStopCommand(): Promise<void> {
           '状態ファイルは残したままにしました。ネットワークや負荷を確認してから、' +
           '`alteroid daemon status` で様子を見てください。\n',
       );
+      // 止まったと確かめられなかった＝成功とは言えないので非 0（#3140）。
+      // 'stale'（状態ファイルを片付けた＝居なかった）と 'not-running' は 0 のまま。
+      process.exitCode = 1;
       return;
   }
 }

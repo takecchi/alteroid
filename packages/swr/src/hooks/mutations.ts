@@ -895,13 +895,46 @@ export function useRemoveUnreadableTokens() {
   );
 }
 
-/** プールから1本外す。 */
+/**
+ * 削除・無効化・有効化の対象の id が、取り直した一覧に無かった（別のタブや CLI が先に消した）。
+ * PUT は送っていない。CLI の `のトークンは見つかりません`（`apps/cli/src/token.ts`）と同じ意味。
+ * `ApiError`（404）を継承するので、`ErrorNote` や `status` で分岐する読み手はそのまま動く。
+ */
+export class TokenNotFoundError extends ApiError {
+  readonly tokenId: string;
+
+  constructor(id: string) {
+    super(
+      404,
+      `id ${id} のトークンは見つかりません（既に無い。別の画面か CLI で消された。一覧を取り直した）`,
+    );
+    this.name = 'TokenNotFoundError';
+    this.tokenId = id;
+  }
+}
+
+/**
+ * 取り直した一覧に `id` が無ければ、PUT を送らずに一覧のキャッシュだけ引き直して
+ * `TokenNotFoundError` を投げる（消えた行を画面から消すため）。
+ */
+async function assertTokenPresent(
+  tokens: readonly AgentTokenView[],
+  id: string,
+  refresh: () => Promise<unknown>,
+): Promise<void> {
+  if (tokens.some((token) => token.id === id)) return;
+  await refresh();
+  throw new TokenNotFoundError(id);
+}
+
+/** プールから1本外す。無い id なら PUT せず `TokenNotFoundError`。 */
 export function useRemoveToken() {
   const api = useApi();
   const { mutate } = useSWRConfig();
   return useCallback(
     async (id: string) => {
       const current = await api.api.GET('/tokens').then(unwrap);
+      await assertTokenPresent(current.tokens, id, () => mutate(KEY.tokens));
       const inputs = current.tokens.filter((token) => token.id !== id).map(toTokenInput);
       const result = await api.api.PUT('/tokens', { body: { tokens: inputs } }).then(unwrap);
       await mutate(KEY.tokens);
@@ -918,6 +951,7 @@ export function useSetTokenDisabled() {
   return useCallback(
     async (id: string, disabled: boolean) => {
       const current = await api.api.GET('/tokens').then(unwrap);
+      await assertTokenPresent(current.tokens, id, () => mutate(KEY.tokens));
       const inputs = current.tokens.map((token) =>
         token.id === id ? { ...toTokenInput(token), disabled } : toTokenInput(token),
       );

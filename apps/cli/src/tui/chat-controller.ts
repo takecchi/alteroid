@@ -69,6 +69,26 @@ function deferred<T>(): Deferred<T> {
 /** `/resume`（id 無し）が進行中かを確かめに行く会話の数（履歴の新しい順）。 */
 export const RESUME_PROBE_LIMIT = 5;
 
+/**
+ * 1 本の受信で返答が最後まで画面に出たか。`done` が来て、`error` / `usage_limited`（返答が出ていない）が
+ * 無かったときだけ真。完了前に離れた・接続が切れた場合は `done` が来ないので偽（未読のまま残る）。
+ */
+class ReplyOutcome {
+  conversationId: string | null = null;
+  private done = false;
+  private failed = false;
+
+  see(event: ChatEvent): void {
+    if (event.type === 'open') this.conversationId = event.conversationId;
+    else if (event.type === 'done') this.done = true;
+    else if (event.type === 'error' || event.type === 'usage_limited') this.failed = true;
+  }
+
+  get displayed(): boolean {
+    return this.done && !this.failed;
+  }
+}
+
 export class ChatController {
   readonly store = new Store<ChatState>(initialChatState);
   private seq = 0;
@@ -77,6 +97,9 @@ export class ChatController {
   private opened: Deferred<string> | null = null;
   /** 履歴から開いた会話の進行中のターンに戻っている接続（無ければ `null`）。自分の送信とは別。 */
   private watch: AbortController | null = null;
+
+  /** 会話ごとに、最後に既読の要求を送った発言の id。 */
+  private readonly markedThrough = new Map<string, string>();
 
   constructor(private readonly api: TuiApi) {}
 
@@ -127,12 +150,15 @@ export class ChatController {
     this.abort = abort;
     const opened = deferred<string>();
     this.opened = opened;
+    // 返答が最後まで画面に出たか。出たなら会話を既読にする（`docs/architecture.md`「会話の既読」）。
+    const reply = new ReplyOutcome();
     try {
       const conversationId = this.store.getSnapshot().conversationId;
       for await (const event of this.api.chat(
         { text, ...(conversationId === null ? {} : { conversationId }) },
         abort.signal,
       )) {
+        reply.see(event);
         this.onEvent(event, opened);
       }
     } catch (error) {
@@ -144,6 +170,42 @@ export class ChatController {
       if (this.abort === abort) this.abort = null;
       if (this.opened === opened) this.opened = null;
     }
+    if (reply.displayed && !abort.signal.aborted) await this.markReplyRead(reply.conversationId);
+  }
+
+  /**
+   * 返答が日誌に載った後の会話を読み直し、最後の発言まで既読にする（Web の `useMarkConversationRead` と
+   * 同じ: SSE は発言の id を運ばないので、取り直した詳細の最後の発言を `through` にする）。
+   */
+  private async markReplyRead(conversationId: string | null): Promise<void> {
+    const id = conversationId ?? this.store.getSnapshot().conversationId;
+    if (id === null) return;
+    try {
+      const read = await this.api.readConversation(id);
+      if (read === null) return;
+      await this.markRead(id, read.messages);
+    } catch (error) {
+      this.reportReadFailure(error);
+    }
+  }
+
+  /** 表示した発言の最後（`messages` は古い順）まで既読にする。失敗しても会話は奪わず、1行だけ残す。 */
+  private async markRead(conversationId: string, messages: ConversationMessage[]): Promise<void> {
+    const latest = messages[messages.length - 1];
+    if (latest === undefined) return;
+    // 同じ位置を重ねて送らない（Web の `useMarkConversationRead` と同じ。失敗したら覚えを外して次に送り直す）。
+    if (this.markedThrough.get(conversationId) === latest.id) return;
+    this.markedThrough.set(conversationId, latest.id);
+    try {
+      await this.api.markConversationRead(conversationId, latest.id);
+    } catch (error) {
+      this.markedThrough.delete(conversationId);
+      this.reportReadFailure(error);
+    }
+  }
+
+  private reportReadFailure(error: unknown): void {
+    this.addSystem(`この会話を既読にできなかった（${messageOf(error)}）`);
   }
 
   private onEvent(event: ChatEvent, opened: Deferred<string>): void {
@@ -256,12 +318,26 @@ export class ChatController {
     this.addSystem('会話を終えた（学びを記憶へ蒸留している）。次の発言から新しい会話になる');
   }
 
+  /**
+   * `shutdown` で会話を終えられなかったときの断り（成功・会話なしなら `null`）。終了後は ink の
+   * 描画が畳まれる（代替画面は捨てられる）ので、ログへは積まず、呼び出し側が画面を戻した後に
+   * 端末へ書く（`main.tsx` の `runApp`）。
+   */
+  shutdownFailure: string | null = null;
+
   /** 終了前の後始末: 受信をやめ、会話があれば終える（既存 CLI の chat と同じ）。 */
   async shutdown(): Promise<void> {
     this.abort?.abort();
     this.stopWatch();
     const id = this.store.getSnapshot().conversationId;
-    if (id !== null) await this.api.endConversation(id).catch(() => undefined);
+    if (id === null) return;
+    try {
+      await this.api.endConversation(id);
+    } catch (error) {
+      this.shutdownFailure =
+        `会話 ${id} を終えられませんでした（${messageOf(error)}）。会話は終わっておらず、学びの蒸留も走っていません。` +
+        'あとで Web の会話画面の「会話を終える」か、alteroid tui の /conversations から開き直して /end で終えられます';
+    }
   }
 
   /** 履歴の一覧。`at` は読んだ時刻（「何分前」の基準）。 */
@@ -312,6 +388,8 @@ export class ChatController {
       );
     }
     this.resume(id);
+    // 開いて表示した発言は「画面に表示されたとき」に当たる（表示した最後の発言まで既読）。
+    await this.markRead(id, read.messages);
     return true;
   }
 
@@ -402,6 +480,9 @@ export class ChatController {
           '遡れた範囲だけを出している。これより古い発言は窓の外に残っているかもしれない',
         );
       }
+      if (this.store.getSnapshot().conversationId === conversationId) {
+        await this.markRead(conversationId, read.messages);
+      }
     } catch (error) {
       if (!abort.signal.aborted) this.addError(messageOf(error));
     }
@@ -430,9 +511,11 @@ export class ChatController {
     opened.resolve(conversationId);
     let active = false;
     let refresh = false;
+    const reply = new ReplyOutcome();
     try {
       for await (const event of this.api.chatStream(conversationId, abort.signal)) {
         if (!live()) break;
+        if (active) reply.see(event);
         if (event.type === 'open') {
           if (event.inProgress !== true) {
             refresh = true;
@@ -446,6 +529,8 @@ export class ChatController {
         if (active) this.onEvent(event, opened);
       }
       if (refresh && live()) await this.refreshHistory(conversationId, abort);
+      // 戻って流した進行中のターンの返答が最後まで画面に出たなら、既読にする。
+      if (active && reply.displayed && live()) await this.markReplyRead(conversationId);
     } catch (error) {
       if (live()) this.addError(messageOf(error));
     } finally {

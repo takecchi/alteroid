@@ -121,6 +121,8 @@ export type PracticeVersion = Ok<paths['/practices/{slug}/versions/{version}']['
 export type ConversationSummary = Ok<paths['/conversations']['get']>['conversations'][number];
 export type ConversationDetail = Ok<paths['/conversations/{id}']['get']>;
 export type ConversationMessage = ConversationDetail['messages'][number];
+/** 発言に添えられた添付の控え（`messages[].attachments`。中身は `GET /attachments/:id` で取る）。 */
+export type MessageAttachment = NonNullable<ConversationMessage['attachments']>[number];
 
 export type RunnerSummary = Ok<paths['/runners']['get']>['runners'][number];
 /**

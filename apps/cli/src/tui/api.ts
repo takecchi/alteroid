@@ -210,6 +210,11 @@ export interface TuiApi {
   readConversation(
     id: string,
   ): Promise<{ messages: ConversationMessage[]; reachedStart: boolean } | null>;
+  /**
+   * `POST /conversations/{id}/read`。`through` は発言の id（時刻はサーバが引く）。失敗は `ApiError`。
+   * 返答を画面に表示したときに呼ぶ（`docs/architecture.md`「会話の既読」）。
+   */
+  markConversationRead(id: string, through: string): Promise<void>;
   endConversation(id: string): Promise<void>;
   /**
    * `GET /chat/{id}/stream`。進行中のターンの途中経過に戻る（発言は投函しない）。最初に
@@ -357,6 +362,14 @@ export function createTuiApi(target: Target): TuiApi {
       if (!response.ok) throw await failure('会話を読めませんでした', response);
       const body = await response.json();
       return { messages: body.messages, reachedStart: body.reachedStart };
+    },
+
+    async markConversationRead(id, through) {
+      const response = await client.conversations[':id'].read.$post({
+        param: { id },
+        json: { through },
+      });
+      if (!response.ok) throw await failure('既読にできませんでした', response);
     },
 
     async endConversation(id) {
