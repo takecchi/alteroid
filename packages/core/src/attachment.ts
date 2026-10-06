@@ -151,6 +151,15 @@ export const DEFAULT_ATTACHMENT_LIMITS: AttachmentLimits = {
   retentionDays: ATTACHMENT_RETENTION_DAYS_DEFAULT,
 };
 
+/**
+ * 画像の上限を人間向けの文にする（MiB で割り切れれば `5 MiB`、そうでなければ `1000 B`）。
+ * 中身が画像でも上限を超える添付を画像として渡さないときの通知行に使う（#3325）。
+ */
+export function formatImageLimit(bytes: number): string {
+  const mib = 1024 * 1024;
+  return bytes % mib === 0 ? `${bytes / mib} MiB` : `${bytes} B`;
+}
+
 export interface AttachmentLimitsConfig {
   readonly limits: AttachmentLimits;
   /** 読めなかった設定値についての注意（呼び出し元が人間に見せる）。 */
@@ -198,7 +207,10 @@ export function readAttachmentLimits(env: NodeJS.ProcessEnv = process.env): Atta
 // ---------------------------------------------------------------------------
 
 export type AttachmentRejection =
-  'too_large' | 'magic_mismatch' | 'too_many' | 'total_too_large' | 'media_type_missing';
+  'too_large' | 'magic_mismatch' | 'too_many' | 'total_too_large' | 'media_type_missing' | 'empty';
+
+/** 0バイトの添付を断る文（Web の `checkAttachments` と同じ文。#3327）。 */
+export const ATTACHMENT_EMPTY_MESSAGE = '空のファイルは添えられない';
 
 /** 添付を受け付けない理由。型で見分ける（文言で見分けない）。 */
 export class AttachmentRejectedError extends Error {
@@ -327,6 +339,7 @@ export function attachmentDiskName(name: string): string {
 
 /**
  * 1つぶんの検証。通れば正規化した名前と MIME を返す。
+ * - 0バイト → `empty`（画像の宣言でも。Web・CLI・TUI と揃えて断る。#3327）
  * - 宣言 MIME が画像なのに中身が一致しない → `magic_mismatch`
  * - 画像は `maxImageBytes`、それ以外は `maxFileBytes` を超えると `too_large`
  */
@@ -337,6 +350,9 @@ export function validateAttachmentInput(
   const mediaType = normalizeAttachmentMediaType(input.mediaType);
   if (mediaType === '') {
     throw new AttachmentRejectedError('media_type_missing', 'mediaType が空');
+  }
+  if (input.bytes.length === 0) {
+    throw new AttachmentRejectedError('empty', ATTACHMENT_EMPTY_MESSAGE);
   }
   const image = isAttachmentImageMediaType(mediaType);
   const max = image ? limits.maxImageBytes : limits.maxFileBytes;

@@ -1,12 +1,12 @@
-import { writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { makeTempDir } from '../../../vitest.tmpdir.js';
 
 import { type ConfirmIo } from './confirm.js';
-import { captureStdout, pretendTty } from './test-support.js';
+import { captureStderr, captureStdout, pretendTty } from './test-support.js';
 
 /**
  * `alteroid profile` — #333。この3つ（index / login / profile）はこれまで
@@ -35,12 +35,15 @@ vi.mock('./target.js', async (importOriginal) => ({
     Promise.resolve({ baseUrl: 'http://127.0.0.1:4517', headers: {}, note: null, remote: false }),
 }));
 
+/** 人間がエディタで書いた結果の代わり（#3453）。起こされたファイルを書き換えてから閉じる。 */
+let editWith: ((path: string) => Promise<void>) | undefined;
 vi.mock('node:child_process', () => ({
-  spawn: vi.fn(() => ({
+  spawn: vi.fn((_editor: string, args: string[]) => ({
     on(event: string, cb: (code: number) => void) {
       // `child.on('error', reject)` は先に登録されるが、ここでは呼ばない
       // （エディタは常に成功する前提のテストだけを置く）。
-      if (event === 'close') cb(0);
+      if (event === 'close')
+        void (editWith?.(args[0] ?? '') ?? Promise.resolve()).then(() => cb(0));
       return undefined;
     },
   })),
@@ -90,6 +93,7 @@ beforeEach(() => {
   originalFetch = globalThis.fetch;
   replies = new Map();
   sent = [];
+  editWith = undefined;
   stubFetch();
   // `openEditor` は起こす前にエディタが在るかを見る（#2867）。`spawn` は差し替えて
   // あるので中身は起きないが、在ると見える名前を置く（器に vi が無くても通るように）
@@ -582,6 +586,43 @@ describe('alteroid profile edit', () => {
     await expect(profileEditCommand('../x')).rejects.toThrow('行の名前の形が不正');
     expect(sent).toEqual([]);
   });
+
+  it('保存の失敗（500）でも、書いた内容を 0600 のまま残し、場所と set --file を案内して失敗する（#3453）', async () => {
+    setReply('GET', '/profile', {
+      status: 200,
+      body: profileBody([entryOf('default', 'export FOO=bar\n')]),
+    });
+    setReply('PUT', '/profile/default', { status: 500, body: { error: 'boom' } });
+    editWith = (path) => writeFile(path, 'export TOKEN=long-secret\n');
+    captureStdout();
+    const err = captureStderr();
+
+    await expect(profileEditCommand()).rejects.toThrow();
+
+    const mine = /残してあります: (\S+)/.exec(err())?.[1];
+    expect(mine).toBeDefined();
+    expect(await readFile(mine ?? '', 'utf8')).toBe('export TOKEN=long-secret\n');
+    expect((await stat(mine ?? '')).mode & 0o777).toBe(0o600);
+    expect(err()).toContain(`alteroid profile set default --file ${mine ?? ''}`);
+    await rm(dirname(mine ?? ''), { recursive: true, force: true });
+  });
+
+  it('本文を空にして閉じたときの断りでも、一時ファイルを残して案内する（#3453）', async () => {
+    setReply('GET', '/profile', {
+      status: 200,
+      body: profileBody([entryOf('default', 'export FOO=bar\n')]),
+    });
+    editWith = (path) => writeFile(path, '  \n');
+    captureStdout();
+    const err = captureStderr();
+
+    await expect(profileEditCommand()).rejects.toThrow();
+
+    const mine = /残してあります: (\S+)/.exec(err())?.[1];
+    expect(mine).toBeDefined();
+    expect(await readFile(mine ?? '', 'utf8')).toBe('  \n');
+    await rm(dirname(mine ?? ''), { recursive: true, force: true });
+  });
 });
 
 /**
@@ -938,7 +979,10 @@ describe('alteroid profile set の上書き確認（#3201）', () => {
     stubReplies(true);
     const { io } = fakeIo({ isTTY: true, answer: 'no' });
 
-    await profileSetCommand('rust', { file: await scriptFile() }, io);
+    // やめたことは例外で伝わる（入口が非 0 にする。#3450）。
+    await expect(profileSetCommand('rust', { file: await scriptFile() }, io)).rejects.toThrow(
+      '取り消しました。何も変更していません。',
+    );
 
     expect(wrote()).toBe(false);
   });

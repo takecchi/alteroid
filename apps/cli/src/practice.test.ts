@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { makeTempDirSync } from '../../../vitest.tmpdir.js';
 
-import { captureStdout } from './test-support.js';
+import { captureStderr, captureStdout } from './test-support.js';
 
 /**
  * `alteroid practice` — **人間が仕事のやり方を CLI から読んで書き換えられること**
@@ -193,6 +193,56 @@ describe('alteroid practice set', () => {
   });
 });
 
+describe('alteroid practice set の空の本文（#3456）', () => {
+  it.each([
+    ['空', ''],
+    ['空白だけ', ' \n\t\n'],
+  ])(
+    '既存のやり方があるとき、本文が%sなら、上書きせずに断る（--allow-empty を案内する）',
+    async (_name, body) => {
+      const read = captureStdout();
+      replies.push({ status: 200, body: practiceBody() });
+
+      const error = await practiceSetCommand('review', { file: fileWith(body) }).catch(
+        (e: unknown) => e,
+      );
+
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toContain('本文が空');
+      expect((error as Error).message).toContain('--allow-empty');
+      expect(sent.filter((entry) => entry.method === 'PUT')).toEqual([]);
+      expect(read()).not.toContain('書き換えました');
+    },
+  );
+
+  it('新しく作るときも、本文が空なら断る（profile set と同じ）', async () => {
+    captureStdout();
+    replies.push({ status: 404, body: { error: 'not found' } });
+
+    await expect(
+      practiceSetCommand('new-one', { file: fileWith(''), kind: '調査', title: '題' }),
+    ).rejects.toThrow('--allow-empty');
+    expect(sent.filter((entry) => entry.method === 'PUT')).toEqual([]);
+  });
+
+  it('--allow-empty を付けたときだけ、空の本文で置き換える', async () => {
+    const read = captureStdout();
+    replies.push({ status: 200, body: practiceBody() });
+    replies.push({ status: 200, body: practiceBody({ content: '' }) });
+
+    await practiceSetCommand('review', { file: fileWith(''), allowEmpty: true });
+
+    const puts = sent.filter((entry) => entry.method === 'PUT');
+    expect(puts).toHaveLength(1);
+    expect(JSON.parse(puts[0]?.body ?? '{}')).toEqual({
+      kind: 'レビュー',
+      title: 'レビューの進め方',
+      content: '',
+    });
+    expect(read()).toContain('書き換えました: review');
+  });
+});
+
 describe('alteroid practice edit', () => {
   it('新しいやり方で --kind / --title が欠けていたら、エディタも PUT も開かず例外で断る（#3139）', async () => {
     captureStdout();
@@ -277,6 +327,23 @@ describe('alteroid practice edit', () => {
     const content = JSON.parse(sent[1]?.body ?? '{}') as { content: string };
     expect(content.content).toContain('実行される定義ではなく');
     expect(content.content).not.toContain('permissions');
+  });
+
+  it('409 以外の保存の失敗（500）でも、書いた内容を残し、場所と set --file を案内して失敗する（#3453）', async () => {
+    captureStdout();
+    const err = captureStderr();
+    process.env.EDITOR = `sh -c 'printf "編集後の本文\\n" > "$1"' _`;
+    replies.push({ status: 200, body: practiceBody() });
+    replies.push({ status: 500, body: { error: 'boom' } });
+
+    const error = await practiceEditCommand('review', {}).catch((e: unknown) => e);
+
+    expect(String(error)).toContain('HTTP 500');
+    const mine = /残してあります: (\S+)/.exec(err())?.[1];
+    expect(mine).toBeDefined();
+    expect(readFileSync(mine ?? '', 'utf8')).toBe('編集後の本文\n');
+    expect(err()).toContain(`alteroid practice set review --file ${mine ?? ''}`);
+    rmSync(dirname(mine ?? ''), { recursive: true, force: true });
   });
 });
 

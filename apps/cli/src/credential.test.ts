@@ -599,7 +599,10 @@ describe('alteroid credential set の上書き確認（#3201）', () => {
     captureStdout();
     const { io } = fakeIo({ isTTY: true, answer: 'no' });
 
-    await credentialSetCommand('NPM_TOKEN', { file }, io);
+    // やめたことは例外で伝わる（入口が非 0 にする。#3450）。
+    await expect(credentialSetCommand('NPM_TOKEN', { file }, io)).rejects.toThrow(
+      '取り消しました。何も変更していません。',
+    );
 
     expect(sent.some((entry) => entry.method === 'PUT')).toBe(false);
   });

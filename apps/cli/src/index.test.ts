@@ -449,7 +449,17 @@ describe('サブコマンドの登録（入口が在ること）', () => {
         .sort();
 
     expect(optionsOf('edit')).toEqual(['--kind', '--title']);
-    expect(optionsOf('set')).toEqual(['--file', '--kind', '--title']);
+    // `--allow-empty`（#3456）: 空の本文で置き換えるときだけ付ける。
+    expect(optionsOf('set')).toEqual(['--allow-empty', '--file', '--kind', '--title']);
+  });
+
+  it('memory set / practice set の help に --allow-empty が出る（#3456）', () => {
+    for (const parent of ['memory', 'practice']) {
+      const set = program.commands
+        .find((c) => c.name() === parent)
+        ?.commands.find((c) => c.name() === 'set');
+      expect(set?.helpInformation()).toContain('--allow-empty');
+    }
   });
 
   /**

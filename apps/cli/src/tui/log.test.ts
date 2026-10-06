@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 
+import { cellWidth } from './wrap.js';
+
 import {
   cachedLogRowCount,
   clearLogLinesCache,
@@ -118,5 +120,31 @@ describe('logWindow / scroll', () => {
   it('一番上より上へは行かない。全部が 1 画面に収まるなら動かない', () => {
     expect(scrollUp(12, 100, 10, 50)).toBe(10);
     expect(scrollUp('bottom', 8, 10)).toBe('bottom');
+  });
+});
+
+describe('本文のタブ（#3407）', () => {
+  it('logLines は、タブを空白へ展開してから折り返す（行末の文字が欠けず、幅を超えない）', () => {
+    clearLogLinesCache();
+    const entries: LogEntry[] = [
+      { seq: 1, kind: 'system', text: 'a\tb\tc\td END' },
+      {
+        seq: 2,
+        kind: 'assistant',
+        text: '```go\nfunc main() {\n\tfmt.Println("hello world") // ENDMARK\n}\n```',
+      },
+    ];
+    const rows = logLines(entries, 40);
+    const joined = rows.map((r) => r.text).join('\n');
+    expect(joined).not.toContain('\t');
+    expect(joined).toContain('END');
+    // 折り返されても欠けない（行をまたぐので、行頭の字下げを除いて繋げて見る）。
+    expect(rows.map((r) => r.text.trim()).join('')).toContain('ENDMARK');
+    for (const row of rows) expect(cellWidth(row.text)).toBeLessThanOrEqual(40);
+  });
+
+  it('streamLines（ストリーミング中）も展開する', () => {
+    const rows = streamLines('x\ty\tz', 40, 10);
+    expect(rows.map((r) => r.text).join('')).not.toContain('\t');
   });
 });

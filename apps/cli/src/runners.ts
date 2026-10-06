@@ -1,4 +1,4 @@
-import { stdout } from 'node:process';
+import { stdout } from './terminal-out.js';
 
 import { describeRevisionStatus } from '@alteroid/core/cli-light';
 import type {
@@ -67,7 +67,10 @@ export async function runnersCommand(): Promise<void> {
  * **応答は「立てた」ことの確認であって「空き終わった」ことの確認ではない**
  * （`app.ts` の `POST /runners/vacate` の doc）。だから終わったとは言わず、
  * 進捗を追う口を名指しする。名簿に無い runnerId でもデーモンは同じ 200 を返すので、
- * 「そんな器は無い」とはここでも言えない（言わない）。
+ * 「そんな器は無い」とは**デーモンの応答からは**言えない。だから**CLI が先に `GET /runners`
+ * （`alteroid runners` と同じ口）で名簿を引き**、名簿に無い runnerId は立てずに断る（#3451。
+ * 打ち間違いのまま台数を減らして、空いていない器を落とさないため）。名簿を読めないときも
+ * 「立てた」とは言わず失敗にする。
  *
  * **失敗（HTTP の 4xx/5xx）は例外で上へ通す（＝終了コードが 0 でなくなる）。**
  * 上の「緩さ」は**成功の意味**の話（「立てた」までしか確認しない）であって、
@@ -88,6 +91,28 @@ export async function runnersVacateCommand(runnerId: string): Promise<void> {
   // 何もせず 0 で返すと「空けた」と誤読される。読み取り系（`runnersCommand`）は今のまま。
   if (target.note !== null) throw new Error(target.note);
   const client = createClient(target.baseUrl, target.headers);
+  // **先に名簿（`GET /runners`）で runnerId が在るかを確かめる**（#3451）。デーモンは名簿に無い
+  // runnerId にも同じ 200 を返す（契約は変えない）ので、打ち間違いを「立てた」と言わないための
+  // CLI 側の確認。名簿を読めないときも、立てずに失敗にする。確かめてから立てるまでの間の競合は
+  // 1回の往復分だけ残る。
+  const rosterResponse = await client.runners.$get();
+  if (!rosterResponse.ok) {
+    const described = describeAuthFailure(rosterResponse.status, target);
+    if (described !== null) throw new Error(described);
+    throw new Error(
+      await withErrorReason(
+        `runner の名簿を読めなかったので、runner ${runnerId} を空けると立てていません（HTTP ${String(rosterResponse.status)}）`,
+        rosterResponse,
+      ),
+    );
+  }
+  const roster = await rosterResponse.json();
+  if (!roster.runners.some((runner) => runner.runnerId === runnerId)) {
+    throw new Error(
+      `runner ${runnerId} は名簿に無いので、空けると立てていません（runnerId の打ち間違いかもしれません。` +
+        '名簿は alteroid runners で見られます）。',
+    );
+  }
   const response = await client.runners.vacate.$post({ json: { runnerId } });
   if (!response.ok) {
     const described = describeAuthFailure(response.status, target);
