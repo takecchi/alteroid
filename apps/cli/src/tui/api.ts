@@ -306,6 +306,13 @@ export interface TuiApi {
 /** 人間へそのまま見せてよい文言を持つ失敗。 */
 export class ApiError extends Error {}
 
+/**
+ * 発言をサーバが受け取らなかった失敗（繋がらない・非 ok の応答）。`open` などのイベントが 1 つも来ないうちに
+ * これで終わった送信は、受け取られていないと言えるので、呼び手は文を入力欄へ戻してよい。
+ * 2xx のあとで切れた失敗（受け取られたか分からない）はこれにしない（#3304 の取り直しの対象）。
+ */
+export class NotDeliveredError extends ApiError {}
+
 const CHAT_EVENT_NAMES = new Set([
   'open',
   'queued',
@@ -349,7 +356,9 @@ export function createTuiApi(target: Target): TuiApi {
       });
     } catch (error) {
       if (signal.aborted) return;
-      throw new ApiError(`${what}: デーモンに繋がりません（${redactError(String(error))}）`);
+      throw new NotDeliveredError(
+        `${what}: デーモンに繋がりません（${redactError(String(error))}）`,
+      );
     }
     if (!response.ok || !response.body) {
       // 添付が無い・期限切れ（400 の `code`）は、呼び手が上げ直せるよう型で渡す（#3246）。
@@ -362,7 +371,7 @@ export function createTuiApi(target: Target): TuiApi {
         );
         if (missing !== null) throw new AttachmentMissingError(redactError(missing));
       }
-      throw await failure(what, response);
+      throw new NotDeliveredError((await failure(what, response)).message);
     }
     try {
       for await (const event of readSSE(response.body)) yield event;

@@ -3,7 +3,12 @@ import { useState } from 'react';
 import type { ReactNode } from 'react';
 import { Link } from 'react-router';
 
-import { ApprovalCard, ErrorNote, type ApprovalQuestionsAnswer } from '@alteroid/ui';
+import {
+  ApprovalCard,
+  ErrorNote,
+  type ApprovalQuestionsAnswer,
+  type ApprovalQuestionsDraft,
+} from '@alteroid/ui';
 import { useAnswerApproval } from '@alteroid/swr';
 import { formatDateTime, formatRelative, summarizeQuestions } from '@alteroid/logic';
 import type { PendingApproval } from '@alteroid/logic';
@@ -43,6 +48,8 @@ export function ApprovalAnswerCard({
   approval,
   draft,
   onDraftChange,
+  questionsDraft,
+  onQuestionsDraftChange,
   onAnswered,
   bulkError,
   footer,
@@ -53,6 +60,9 @@ export function ApprovalAnswerCard({
   /** 下書き。親が持つときだけ渡す（まとめ送信のため）。渡さなければカードの中で持つ。 */
   draft?: string;
   onDraftChange?: (text: string) => void;
+  /** 設問のフォームの書きかけ。親が持つときだけ渡す（会話の画面。会話を移っても残す）。 */
+  questionsDraft?: ApprovalQuestionsDraft;
+  onQuestionsDraftChange?: (draft: ApprovalQuestionsDraft) => void;
   /** この id に答えが通った。 */
   onAnswered?: () => void;
   /** 直前のまとめ送信でこの id が駄目だった理由（無ければ何も出さない）。 */
@@ -161,6 +171,9 @@ export function ApprovalAnswerCard({
           : undefined
       }
       onSubmitQuestions={(answer) => void submitQuestions(answer)}
+      {...(questionsDraft === undefined || onQuestionsDraftChange === undefined
+        ? {}
+        : { questionsDraft, onQuestionsDraftChange })}
       busy={busy}
       footer={footer}
       error={errors}
