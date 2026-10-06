@@ -215,6 +215,11 @@ export function pendingOwnLines(
   return pending;
 }
 
+/** 履歴にある、同じ文の人間の発言の数（#3121。積んだ文が受け取られたかの照合）。 */
+function countHuman(lines: Line[], text: string): number {
+  return lines.filter((line) => line.role === 'human' && line.text === text).length;
+}
+
 /** 版の切り替え（`< 2/2 >`）が1つ差し出す、編集前のある版。 */
 export interface EditedVersion {
   /** その版で実際に送った本文。 */
@@ -568,8 +573,22 @@ export function ChatPane({
    * 文を失わないための置き場がここで、失敗表示の「再送」が読む。
    */
   const [retries, setRetries] = useState<
-    Map<string | undefined, { text: string; supersedes?: string; restored?: boolean }>
+    Map<
+      string | undefined,
+      {
+        text: string;
+        supersedes?: string;
+        restored?: boolean;
+        /**
+         * `open` の前に**中断された**送信（#3121）。サーバが受け取ったか分からない。
+         * 値は送る前に履歴にあった同じ文の人間の発言の数で、これを超えて履歴に
+         * 現れたら、受け取られていたと見て下ろす。
+         */
+        unconfirmed?: number;
+      }
+    >
   >(new Map());
+  const historyLinesRef = useRef<Line[]>([]);
   const ownLineSeqRef = useRef(0);
   /**
    * `POST /clone/interrupt` を呼んでいる最中かどうか（#1398 c23-1/c30-2）。
@@ -1310,10 +1329,20 @@ export function ChatPane({
    * （#1576）ので、「いま見ている会話のキーに未復元の文があれば戻す」で決める。
    */
   const giveBack = useCallback(
-    (key: string | undefined, text: string, lineKey: string, supersedes?: string) => {
+    (
+      key: string | undefined,
+      text: string,
+      lineKey: string,
+      supersedes?: string,
+      unconfirmed?: number,
+    ) => {
       setLines((previous) => previous.filter((line) => line.key !== lineKey));
       setRetries((prev) =>
-        new Map(prev).set(key, { text, ...(supersedes === undefined ? {} : { supersedes }) }),
+        new Map(prev).set(key, {
+          text,
+          ...(supersedes === undefined ? {} : { supersedes }),
+          ...(unconfirmed === undefined ? {} : { unconfirmed }),
+        }),
       );
     },
     [],
@@ -1327,6 +1356,31 @@ export function ChatPane({
     setDraft((current) => (current === '' ? entry.text : current));
     setRetries((prev) => new Map(prev).set(shownId, { ...entry, restored: true }));
   }, [retries, shownId]);
+
+  useEffect(() => {
+    historyLinesRef.current = historyLines;
+  }, [historyLines]);
+
+  /**
+   * 中断で積んだ文（`unconfirmed`）と同じ文が、履歴に送る前より多く現れたら、
+   * サーバは受け取っていた——積んだ文と表示を下ろす（二重送信を誘わない、#3121）。
+   * 入力欄は、戻した文のまま（使い手が手を入れていない）ときだけ空にする。
+   */
+  const unconfirmedEntry = retries.get(shownId);
+  const unconfirmedText =
+    unconfirmedEntry?.unconfirmed === undefined ? undefined : unconfirmedEntry.text;
+  const unconfirmedSeen =
+    unconfirmedEntry?.unconfirmed !== undefined &&
+    countHuman(historyLines, unconfirmedEntry.text) > unconfirmedEntry.unconfirmed;
+  useEffect(() => {
+    if (!unconfirmedSeen || unconfirmedText === undefined) return;
+    setRetries((prev) => {
+      const next = new Map(prev);
+      next.delete(shownId);
+      return next;
+    });
+    setDraft((current) => (current === unconfirmedText ? '' : current));
+  }, [unconfirmedSeen, unconfirmedText, shownId]);
 
   /**
    * **受信中に続けて打った発言を、購読を張らずに投函だけする。**
@@ -1686,6 +1740,7 @@ export function ChatPane({
       else setDraft('');
       const lineKey = showOwnLine(text);
       let opened = false;
+      const baseline = countHuman(historyLinesRef.current, text);
 
       const { setTransient, apply } = createStreamWriter(stream, controller);
 
@@ -1781,6 +1836,11 @@ export function ChatPane({
           if (!opened) giveBack(stream.id, text, lineKey, supersedes);
         }
       } finally {
+        // `open` の前に中断された（受信をやめる・会話の切り替え）。受け取られたか
+        // 分からないので、文は積むだけで自動では送らない（#3121）。
+        if (!opened && controller.signal.aborted) {
+          giveBack(stream.id, text, lineKey, supersedes, baseline);
+        }
         // `open` を一度も見ないまま終わったなら、追送は投函先を持てない。
         // 待たせたままにすると、続けて打った発言が永久に返ってこない
         // （既に確定していれば、この reject は無視される）。
@@ -2329,8 +2389,34 @@ export function ChatPane({
         sending={sending}
         onStopReceiving={() => streamRef.current?.controller.abort()}
         error={
-          shownFailure === undefined || shownFailure === null ? undefined : shownFailure instanceof
-            TurnFailedError ? (
+          (shownFailure === undefined || shownFailure === null) && unconfirmedText !== undefined ? (
+            <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+              <span>
+                送れたか確かめられなかった。サーバが受け取っていれば会話に出る（二重に送らないよう、確かめてから再送する）
+              </span>
+              <Button
+                size="sm"
+                onClick={() => void send(unconfirmedText, { ...unconfirmedEntry, retry: true })}
+              >
+                再送
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => {
+                  setRetries((prev) => {
+                    const next = new Map(prev);
+                    next.delete(shownId);
+                    return next;
+                  });
+                  setDraft((current) => (current === unconfirmedText ? '' : current));
+                }}
+              >
+                破棄
+              </Button>
+            </div>
+          ) : shownFailure === undefined ||
+            shownFailure === null ? undefined : shownFailure instanceof TurnFailedError ? (
             <TurnFailureNote
               message={shownFailure.message}
               action={(kind) =>
