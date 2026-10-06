@@ -13,6 +13,7 @@ import { ApiProvider } from '@alteroid/swr';
 import { DocumentTitle } from '@alteroid/ui';
 
 import { WebDisplayTextProvider } from '~/lib/display-text';
+import { usePreventWindowFileDrop } from '~/lib/use-prevent-file-drop';
 
 import './app.css';
 
@@ -75,6 +76,7 @@ export function Layout({ children }: { children: ReactNode }) {
 }
 
 export default function App() {
+  usePreventWindowFileDrop();
   return (
     <ApiProvider>
       {/* ui の部品へ伏せ字を渡す。全 route を包む（既定は恒等で、外すと伏せずに出る。root.redact.test.tsx が固定） */}
