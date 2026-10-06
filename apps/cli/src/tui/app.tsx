@@ -122,6 +122,12 @@ interface PickerState {
   scanned: number;
   reachedStart: boolean;
   hiddenByLimit: number;
+  /** 続きの頁の継続点（無ければ「もっと見る」の行を出さない。#3643）。 */
+  nextCursor?: string | undefined;
+  /** 「もっと見る」を読んでいる最中（二重に選べない）。 */
+  moreLoading: boolean;
+  /** 直近の「もっと見る」の失敗の理由（一覧は残す）。 */
+  moreError: string | null;
   selected: number;
   /** 一覧を読んだ時刻（「何分前」の基準。描画のたびに時刻を読まない）。 */
   loadedAt: number;
@@ -310,11 +316,13 @@ export const App: FC<AppProps> = ({
       scanned: 0,
       reachedStart: true,
       hiddenByLimit: 0,
+      moreLoading: false,
+      moreError: null,
       selected: 0,
       loadedAt: 0,
     });
     controller.listConversations().then(
-      ({ items, at, scanned, reachedStart, hiddenByLimit }) =>
+      ({ items, at, scanned, reachedStart, hiddenByLimit, nextCursor }) =>
         setPicker((p) =>
           p === null
             ? p
@@ -324,6 +332,9 @@ export const App: FC<AppProps> = ({
                 scanned,
                 reachedStart,
                 hiddenByLimit,
+                nextCursor,
+                moreLoading: false,
+                moreError: null,
                 selected: 0,
                 loadedAt: at,
               },
@@ -332,6 +343,38 @@ export const App: FC<AppProps> = ({
         setPicker(null);
         controller.addError(redactedErrorMessage(error));
       },
+    );
+  };
+
+  /** 履歴の一覧の「もっと見る」。`nextCursor` で次の 1 頁を末尾へ足す（#3643）。 */
+  const loadMoreConversations = (): void => {
+    const p = pickerRef.current;
+    if (p === null || p.nextCursor === undefined || p.moreLoading) return;
+    const cursor = p.nextCursor;
+    setPicker({ ...p, moreLoading: true, moreError: null });
+    controller.listConversations(cursor).then(
+      (page) =>
+        setPicker((cur) => {
+          // 閉じた・開き直した一覧には混ぜない。
+          if (cur === null || cur.nextCursor !== cursor) return cur;
+          const seen = new Set(cur.items.map((i) => i.conversationId));
+          return {
+            ...cur,
+            items: [...cur.items, ...page.items.filter((i) => !seen.has(i.conversationId))],
+            scanned: page.scanned,
+            reachedStart: page.reachedStart,
+            hiddenByLimit: page.hiddenByLimit,
+            nextCursor: page.nextCursor,
+            moreLoading: false,
+            moreError: null,
+          };
+        }),
+      (error: unknown) =>
+        setPicker((cur) =>
+          cur === null || cur.nextCursor !== cursor
+            ? cur
+            : { ...cur, moreLoading: false, moreError: redactedErrorMessage(error) },
+        ),
     );
   };
 
@@ -812,10 +855,13 @@ export const App: FC<AppProps> = ({
       if (key.escape) setPicker(null);
       else if (key.upArrow) setPicker({ ...p, selected: Math.max(0, p.selected - 1) });
       else if (key.downArrow) {
-        setPicker({ ...p, selected: Math.min(Math.max(0, p.items.length - 1), p.selected + 1) });
+        const rows = p.items.length + (p.status === 'ready' && p.nextCursor !== undefined ? 1 : 0);
+        setPicker({ ...p, selected: Math.min(Math.max(0, rows - 1), p.selected + 1) });
       } else if (key.return) {
         const item = p.items[p.selected];
-        if (item !== undefined) {
+        if (item === undefined) {
+          if (p.status === 'ready' && p.selected === p.items.length) loadMoreConversations();
+        } else {
           setPicker(null);
           void controller.openConversation(item.conversationId).then((ok) => {
             if (ok) setAnchor('bottom');
@@ -1050,6 +1096,9 @@ export const App: FC<AppProps> = ({
           scanned={picker.scanned}
           reachedStart={picker.reachedStart}
           hiddenByLimit={picker.hiddenByLimit}
+          nextCursor={picker.nextCursor}
+          moreLoading={picker.moreLoading}
+          moreError={picker.moreError}
           selected={picker.selected}
           height={layout.bodyHeight}
           now={picker.loadedAt}

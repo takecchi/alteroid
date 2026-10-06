@@ -411,11 +411,26 @@ export class ChatController {
       return false;
     }
     if (this.store.getSnapshot().busy) return this.followUp(text);
+    return this.sendTurn(text, null);
+  }
+
+  /**
+   * 通常の送信の本体。`uploaded` が `null` なら、ここで添えかけを上げる。**上げ済みの分を渡されたら、それだけを送る**
+   * （追送からの切り替え。上げているあいだに足された分は、生きた添えかけに残して次の発言のために取っておく。#3632）。
+   */
+  private async sendTurn(
+    text: string,
+    uploaded: { ids: string[]; lines: string[]; files: DraftFile[] } | null,
+  ): Promise<boolean> {
     // まだ `open` が来ていない戻り接続があっても、自分のターンを始めるなら要らない（二重に流れる）。
     this.stopWatch();
     // 覚えが無いときは待たずに進む（送信の前に非同期の隙間を作らない）。
-    if (this.unopened !== null && !(await this.adoptUnopened())) return false;
-    const attached = this.draft.count === 0 ? NO_ATTACHMENTS : await this.uploadDraft();
+    if (this.unopened !== null && !(await this.adoptUnopened())) {
+      if (uploaded !== null) this.draft.restore(uploaded.files); // 送っていない。上げ済みの分は戻す
+      return false;
+    }
+    const attached =
+      uploaded ?? (this.draft.count === 0 ? NO_ATTACHMENTS : await this.uploadDraft());
     if (attached === null) return false; // 送っていない（呼び手は文を入力欄へ戻す。#3589）
     const userSeq = this.push('user', [text, ...attached.lines].filter((l) => l !== '').join('\n'));
     this.set({ busy: true, transient: '考えている…' });
@@ -575,11 +590,11 @@ export class ChatController {
     const attached = this.draft.count === 0 ? NO_ATTACHMENTS : await this.uploadDraft();
     if (attached === null) return false; // 送っていない（呼び手は文を入力欄へ戻す。#3589）
     // 添付を上げているあいだに走っていたターンが終わったなら、追送ではなく通常の送信として送る（会話は始まっている。
-    // 添えかけを戻せば、上げ済みの印があるので上げ直さない）。添付の無い追送は同期で読むので、この形にならない。
+    // 上げ済みの分だけを送る。上げているあいだに `/attach` で足された分は添えかけに残す。#3632）。
+    // 添付の無い追送は同期で読むので、この形にならない。
     const opened = this.opened;
     if (opened === null && attached.files.length > 0 && !this.store.getSnapshot().busy) {
-      this.draft.restore(attached.files);
-      return this.send(text);
+      return this.sendTurn(text, attached);
     }
     const userSeq = this.push('user', [text, ...attached.lines].filter((l) => l !== '').join('\n'));
     // 送るたびに付ける（#3203・#3304。通常の送信と同じ）。会話は `open` で決まってから送るので、
@@ -693,17 +708,25 @@ export class ChatController {
     }
   }
 
-  /** 履歴の一覧。`at` は読んだ時刻（「何分前」の基準）。 */
-  async listConversations(): Promise<{
+  /** 履歴の一覧。`at` は読んだ時刻（「何分前」の基準）。`cursor` は「もっと見る」の続きの頁（#3643）。 */
+  async listConversations(cursor?: string): Promise<{
     items: ConversationSummary[];
     at: number;
     scanned: number;
     reachedStart: boolean;
     hiddenByLimit: number;
+    nextCursor?: string;
   }> {
-    const { conversations, scanned, reachedStart, hiddenByLimit } =
-      await this.api.listConversations();
-    return { items: conversations, at: Date.now(), scanned, reachedStart, hiddenByLimit };
+    const { conversations, scanned, reachedStart, hiddenByLimit, nextCursor } =
+      await this.api.listConversations(cursor);
+    return {
+      items: conversations,
+      at: Date.now(),
+      scanned,
+      reachedStart,
+      hiddenByLimit,
+      ...(nextCursor === undefined ? {} : { nextCursor }),
+    };
   }
 
   /** 履歴の会話を開き直す。 */
