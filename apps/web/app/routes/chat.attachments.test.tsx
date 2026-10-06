@@ -346,3 +346,44 @@ describe('添付のある発言の表示', () => {
     expect(seen.some((r) => r.url.includes('/attachments'))).toBe(false);
   });
 });
+
+describe('会話ごとの添えかけの添付', () => {
+  const A = 'conv-att-a';
+  const B = 'conv-att-b';
+  function route(url: string): Response | undefined {
+    if (url.includes(`/conversations/${A}`)) return json({ conversationId: A, messages: [] });
+    if (url.includes(`/conversations/${B}`)) return json({ conversationId: B, messages: [] });
+    return background(url);
+  }
+  function renderRouted(initial: string) {
+    const router = createMemoryRouter(
+      [
+        { path: '/chat', Component: Harness },
+        { path: '/chat/:conversationId', Component: Harness },
+      ],
+      { initialEntries: [initial] },
+    );
+    render(
+      <Providers>
+        <RouterProvider router={router} />
+      </Providers>,
+    );
+    return router;
+  }
+
+  it('A で添えて B へ移ると B には出ず、A へ戻ると添付が戻る', async () => {
+    stubFetch(route);
+    const router = renderRouted(`/chat/${A}`);
+    await box();
+    choose([nodeFile('only-a.txt', 3, 'text/plain')]);
+    await screen.findByRole('button', { name: 'only-a.txt を外す' });
+
+    await router.navigate(`/chat/${B}`);
+    await waitFor(() => {
+      expect(screen.queryByRole('button', { name: 'only-a.txt を外す' })).toBeNull();
+    });
+
+    await router.navigate(`/chat/${A}`);
+    expect(await screen.findByRole('button', { name: 'only-a.txt を外す' })).toBeTruthy();
+  });
+});

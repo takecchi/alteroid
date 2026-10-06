@@ -609,6 +609,10 @@ export function ChatPane({
   const [pending, setPending] = useState<PendingAttachment[]>([]);
   /** 添付を上げている最中か。真のあいだは送れない。 */
   const [uploading, setUploading] = useState(false);
+  /** 会話を離れているあいだ、その会話の添えかけの添付をしまっておく（`drafts` と同じ鍵・同じ扱い）。 */
+  const [attachmentDrafts, setAttachmentDrafts] = useState<
+    Map<string | undefined, PendingAttachment[]>
+  >(new Map());
   /** 添えようとして断った理由（個数・大きさ。クライアントの先行検査）。 */
   const [attachNotice, setAttachNotice] = useState<string>();
   const attachSeqRef = useRef(0);
@@ -964,8 +968,20 @@ export function ChatPane({
         return next;
       });
       setDraft(drafts.get(routeId) ?? '');
-      // 添付は会話をまたいで持ち越さない（別の会話へ送ってしまう事故を避ける）。
-      setPending([]);
+      /*
+       * **添えかけの添付も、下書きと同じく会話ごとにしまい、戻ったら戻す。**
+       * 使い手が選んだファイルを、会話を移っただけで黙って失わせない。しまうのは
+       * メモリの中だけ（`File` は `localStorage` 等へ永続化できない。下書き `drafts` も
+       * もともとメモリ内なので、リロードで消える点は同じ）。別の会話へ送ってしまう
+       * 事故は、表示（`pending`）がいま見ている会話のものだけであることで避ける。
+       */
+      setAttachmentDrafts((previous) => {
+        const next = new Map(previous);
+        next.set(shownId, pending);
+        next.delete(routeId);
+        return next;
+      });
+      setPending(attachmentDrafts.get(routeId) ?? []);
       setAttachNotice(undefined);
     }
   }
