@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
 import { createManagerPool } from './manager.js';
-import { RunnerHttpError } from './runner-protocol.js';
 import type {
   RunnerAnswerOutcome,
   RunnerClient,
@@ -203,12 +202,16 @@ describe('runner の取り直し（reattach）と abort の交差（listJobs の
     // その間に人間が、まだ順番の来ていない2本目を止める。runner に居ないので stop は即座に確定する。
     const aborted = await pool.abort('mgr-second', '人間が止めた');
     expect(aborted.outcome).toBe('stopped');
-    expect((await stores.jobs.listJobs()).find((j) => j.id === 'mgr-second')?.status).toBe('stopped');
+    expect((await stores.jobs.listJobs()).find((j) => j.id === 'mgr-second')?.status).toBe(
+      'stopped',
+    );
     release();
     await reattach;
 
     expect(runnerA.resumes.map((command) => command.managerId)).toEqual(['mgr-first']);
-    expect((await stores.jobs.listJobs()).find((j) => j.id === 'mgr-second')?.status).toBe('stopped');
+    expect((await stores.jobs.listJobs()).find((j) => j.id === 'mgr-second')?.status).toBe(
+      'stopped',
+    );
   });
 
   it('起動時の引き取り（restore）が先の委譲を resume している最中に、後ろの委譲を人間が止め切っても、その委譲を起こし直さない（#3603 の同じ型）', async () => {
@@ -243,11 +246,15 @@ describe('runner の取り直し（reattach）と abort の交差（listJobs の
     // その間に人間が、まだ順番の来ていない2本目を止める。台帳は stopped になる。
     const aborted = await pool.abort('mgr-second', '人間が止めた');
     expect(aborted.outcome).toBe('stopped');
-    expect((await stores.jobs.listJobs()).find((j) => j.id === 'mgr-second')?.status).toBe('stopped');
+    expect((await stores.jobs.listJobs()).find((j) => j.id === 'mgr-second')?.status).toBe(
+      'stopped',
+    );
     release();
     await restoring;
 
     expect(runnerA.resumes.map((command) => command.managerId)).toEqual(['mgr-first']);
-    expect((await stores.jobs.listJobs()).find((j) => j.id === 'mgr-second')?.status).toBe('stopped');
+    expect((await stores.jobs.listJobs()).find((j) => j.id === 'mgr-second')?.status).toBe(
+      'stopped',
+    );
   });
 });
