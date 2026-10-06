@@ -348,7 +348,10 @@ export const App: FC<AppProps> = ({
         action === 'resume' ||
         action === 'new' ||
         action === 'end' ||
-        action === 'interrupt')
+        action === 'interrupt' ||
+        action === 'attach' ||
+        action === 'attachments' ||
+        action === 'detach')
     ) {
       goTab('chat');
     }
@@ -394,6 +397,15 @@ export const App: FC<AppProps> = ({
         break;
       case 'interrupt':
         void controller.interrupt();
+        break;
+      case 'attach':
+        void controller.attach(args);
+        break;
+      case 'attachments':
+        controller.listAttachments();
+        break;
+      case 'detach':
+        controller.detach(args);
         break;
     }
   };

@@ -1,5 +1,6 @@
 import { stdout } from 'node:process';
 
+import { attachmentLinesOf } from './attachments.js';
 import { createClient, type DaemonClient } from './client.js';
 import { formatElapsedAgo, withErrorReason } from './format.js';
 import { describeAuthFailure, resolveTarget, type Target } from './target.js';
@@ -51,6 +52,8 @@ export interface ConversationMessage {
    * 畳まれた側に付く）。
    */
   supersededBy?: string;
+  /** 発言に添えた添付のメタデータ（中身は `alteroid attachments get`）。 */
+  attachments?: { id: string; name: string; mediaType: string; size: number }[];
 }
 
 export interface ConversationsListOptions {
@@ -304,6 +307,9 @@ export function renderConversationDetail(
       lines.push(
         `  [${message.at}] ${speaker} (id: ${message.id}): ${redactBody(message.text)}${edit}`,
       );
+      for (const line of attachmentLinesOf(message.attachments)) {
+        lines.push(`      ${redactBody(line)}`);
+      }
     }
   }
   lines.push('');
