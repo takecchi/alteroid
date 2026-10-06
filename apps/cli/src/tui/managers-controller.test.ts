@@ -201,6 +201,20 @@ describe('詳細', () => {
     expect(state().detail?.notice).toBe('✗ 送れない');
   });
 
+  it('届いていない・送らなかった outcome（session_missing / declined）は false を返し、結果は出す（#3487）', async () => {
+    const { api, controller, state } = setup((a) => {
+      a.managerRows = [managerRow('a')];
+    });
+    await controller.open('a');
+    for (const outcome of ['session_missing', 'declined']) {
+      api.sendManagerMessage = () => Promise.resolve({ outcome, detail: '送っていない' });
+      expect(await controller.sendMessage('やって')).toBe(false);
+      expect(state().detail?.notice).toBe(`${outcome}: 送っていない`);
+    }
+    api.sendManagerMessage = () => Promise.resolve({ outcome: 'answered', detail: '解いた' });
+    expect(await controller.sendMessage('やって')).toBe(true);
+  });
+
   it('busy のときは送らず false を返し、「送信中」と言う（黙って捨てない。#3367）', async () => {
     const { api, controller, state } = setup((a) => {
       a.managerRows = [managerRow('a')];

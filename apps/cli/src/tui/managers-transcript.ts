@@ -10,7 +10,7 @@
  */
 import { codePointBoundary } from '@alteroid/core/cli-light';
 
-import { redactBody } from '../redact.js';
+import { redactBody, sanitizeForTerminal } from '../redact.js';
 import type { LogEntry, LogKind } from './log.js';
 
 /** 抜粋の長さ。道具の入力。 */
@@ -70,7 +70,8 @@ function blocksToPieces(role: 'user' | 'assistant', content: unknown): Piece[] {
         }
         break;
       case 'tool_use': {
-        const name = typeof block['name'] === 'string' ? block['name'] : '(道具名なし)';
+        const name =
+          typeof block['name'] === 'string' ? sanitizeForTerminal(block['name']) : '(道具名なし)';
         const input = block['input'] === undefined ? '' : JSON.stringify(block['input']);
         out.push({
           kind: 'tool',
@@ -119,7 +120,12 @@ export function transcriptLinePieces(line: string): Piece[] {
   }
   // user / assistant 以外（result・system・summary など）。種類名と抜粋を残す。
   const rest = excerpt(redactBody(line), TOOL_INPUT_EXCERPT);
-  return [{ kind: 'system', text: `[${typeof type === 'string' ? type : '種類なし'}] ${rest}` }];
+  return [
+    {
+      kind: 'system',
+      text: `[${typeof type === 'string' ? sanitizeForTerminal(type) : '種類なし'}] ${rest}`,
+    },
+  ];
 }
 
 /**

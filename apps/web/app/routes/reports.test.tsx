@@ -615,7 +615,7 @@ describe('日報', () => {
     }));
   }
 
-  it('返った件数が上限（60）ちょうどなら、これより古いかもしれないと言う', async () => {
+  it('返った件数が上限（60）ちょうどなら、これより古いかもしれないと言い、読み足すボタンを出す', async () => {
     const reports = makeReports(60);
     stubFetch((url) => {
       if (url.endsWith('/reports') || url.includes('/reports?')) return json({ reports });
@@ -624,9 +624,8 @@ describe('日報', () => {
 
     renderReports();
 
-    expect(
-      await screen.findByText(/直近 60 件のみ表示している。これより古い日報があるかもしれない。/),
-    ).toBeTruthy();
+    expect(await screen.findByText(/これより古い日報があるかもしれない。/)).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'もっと古い日報を読む' })).toBeTruthy();
   });
 
   it('上限に達していなければ、その但し書きは出さない（雑音にしない）', async () => {
@@ -640,5 +639,111 @@ describe('日報', () => {
 
     await screen.findByText(/2026-06-03/);
     expect(screen.queryByText(/これより古い日報があるかもしれない/)).toBeNull();
+    expect(screen.queryByRole('button', { name: 'もっと古い日報を読む' })).toBeNull();
+  });
+});
+
+describe('もっと古い日報を読む（#3464）', () => {
+  /** 新しい順に `count` 件（`from` の日から1日ずつ遡る。`at` は日の 22:00Z）。 */
+  function newestFirst(from: string, count: number, prefix: string) {
+    const start = Date.parse(`${from}T00:00:00Z`);
+    return Array.from({ length: count }, (_, index) => {
+      const date = new Date(start - index * 86_400_000).toISOString().slice(0, 10);
+      return {
+        type: 'daily_report' as const,
+        id: `${prefix}-${index}`,
+        at: `${date}T22:00:00.000Z`,
+        date,
+        body: `${prefix} ${index} の本文`,
+      };
+    });
+  }
+  const FULL = newestFirst('2026-09-30', 60, 'new');
+  const last = FULL[59]!;
+
+  function reportRows(): HTMLElement[] {
+    return within(screen.getByRole('list', { name: '日報' })).getAllByRole('listitem');
+  }
+
+  function stubReports(older: (query: URLSearchParams) => Response) {
+    const calls: string[] = [];
+    stubFetch((url) => {
+      const parsed = new URL(url);
+      if (parsed.pathname === '/reports') {
+        calls.push(url);
+        return parsed.searchParams.has('beforeDate')
+          ? older(parsed.searchParams)
+          : json({ reports: FULL });
+      }
+      if (parsed.pathname.startsWith('/reports/')) return json({ reports: [FULL[0]] });
+      return undefined;
+    });
+    return calls;
+  }
+
+  it('押すと最後の行の date と at を beforeDate / beforeAt に渡して続きを読み、後ろへ足す', async () => {
+    const older = newestFirst('2026-08-01', 2, 'old');
+    const calls = stubReports(() => json({ reports: older }));
+    renderReports();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'もっと古い日報を読む' }));
+
+    await screen.findByText('2026-07-31 の日報');
+    const rows = reportRows();
+    expect(rows).toHaveLength(62);
+    // 今の一覧の後ろへ足す（並べ直さない）
+    expect(rows.slice(-2).map((row) => row.textContent)).toEqual([
+      expect.stringContaining('2026-08-01 の日報'),
+      expect.stringContaining('2026-07-31 の日報'),
+    ]);
+    const call = new URL(calls.find((href) => href.includes('beforeDate'))!);
+    expect(call.searchParams.get('beforeDate')).toBe(last.date);
+    expect(call.searchParams.get('beforeAt')).toBe(last.at);
+    expect(call.searchParams.get('limit')).toBe('60');
+    // limit 未満しか返らなかったので、続きは無いとみなす
+    expect(screen.queryByRole('button', { name: 'もっと古い日報を読む' })).toBeNull();
+  });
+
+  it('limit ちょうど返れば、さらに続きを読める', async () => {
+    stubReports(() => json({ reports: newestFirst('2026-08-01', 60, 'old') }));
+    renderReports();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'もっと古い日報を読む' }));
+    await waitFor(() => expect(reportRows()).toHaveLength(120));
+    expect(screen.getByRole('button', { name: 'もっと古い日報を読む' })).toBeTruthy();
+  });
+
+  it('読み足しに失敗しても、それまでの一覧は残り、失敗だけを出す（押し直せる）', async () => {
+    let attempt = 0;
+    stubReports(() => {
+      attempt += 1;
+      return attempt === 1
+        ? json({ error: 'internal' }, 500)
+        : json({ reports: newestFirst('2026-08-01', 1, 'old') });
+    });
+    renderReports();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'もっと古い日報を読む' }));
+
+    expect(await screen.findByText(/もっと古い日報を読み込めませんでした/)).toBeTruthy();
+    // 画面全体は奪われない: 一覧も本文も残る
+    expect(reportRows()).toHaveLength(60);
+    expect(await screen.findByText('new 0 の本文')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'もっと古い日報を読む' }));
+    await screen.findByText('2026-08-01 の日報');
+    expect(reportRows()).toHaveLength(61);
+    expect(screen.queryByText(/もっと古い日報を読み込めませんでした/)).toBeNull();
+  });
+
+  it('読み足した行も、押すとその日報の詳細へ行く', async () => {
+    const older = newestFirst('2026-08-01', 1, 'old');
+    stubReports(() => json({ reports: older }));
+    renderReports();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'もっと古い日報を読む' }));
+    await screen.findByText('2026-08-01 の日報');
+    const link = within(reportRows().at(-1)!).getByRole('link');
+    expect(link.getAttribute('href')).toBe('/reports/2026-08-01/old-0');
   });
 });

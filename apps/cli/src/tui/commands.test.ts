@@ -58,4 +58,18 @@ describe('resolveCommand', () => {
     const text = helpLines().join('\n');
     for (const c of COMMANDS) expect(text).toContain(`/${c.name}`);
   });
+
+  it('help は改行のキーと、Shift+Enter が端末によっては送信になることを案内する', () => {
+    const text = helpLines().join('\n');
+    expect(text).toContain('Alt+Enter');
+    expect(text).toContain('行末の \\ + Enter');
+    expect(text).toMatch(/Shift\+Enter[^\n]*送信になる/);
+  });
+
+  it('help は入力欄の編集キー（Home/End・Ctrl+A/E/W/K・Delete）を案内する', () => {
+    const text = helpLines().join('\n');
+    for (const k of ['Home', 'End', 'Ctrl+A', 'Ctrl+E', 'Ctrl+W', 'Ctrl+K', 'Delete']) {
+      expect(text).toContain(k);
+    }
+  });
 });

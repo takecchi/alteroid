@@ -1,7 +1,7 @@
-import { readFile, writeFile } from 'node:fs/promises';
+import { readdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import { DEFAULT_ATTACHMENT_LIMITS } from '@alteroid/core';
+import { attachmentDiskName, DEFAULT_ATTACHMENT_LIMITS } from '@alteroid/core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { makeTempDir } from '../../../vitest.tmpdir.js';
@@ -246,6 +246,46 @@ describe('alteroid attachments get / 表示', () => {
     }
     expect(written).toEqual([]);
     expect([...(await readFile(join(dir, '-')))]).toEqual([7, 8, 9]);
+  });
+
+  // `-o` 省略時の保存名の検査。meta と本体を fetch で差し替え、カレントを一時ディレクトリへ移して
+  // get を呼び、できたファイル名を返す。
+  async function getIntoCwd(name: string): Promise<{ dir: string; names: string[] }> {
+    const dir = await makeTempDir('alteroid-cli-attach-');
+    vi.stubGlobal('fetch', (input: unknown) => {
+      const url = input instanceof Request ? input.url : String(input);
+      return Promise.resolve(
+        url.endsWith('/meta')
+          ? Response.json({ id: 'att-1', name, mediaType: 'text/plain', size: 3, sha256: 'x' })
+          : new Response(Uint8Array.from([7, 8, 9])),
+      );
+    });
+    vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    const previous = process.cwd();
+    process.chdir(dir);
+    try {
+      await attachmentsGetCommand('att-1', {});
+    } finally {
+      process.chdir(previous);
+    }
+    return { dir, names: await readdir(dir) };
+  }
+
+  it('-o を省くと、UTF-8 で 255 バイトを超える長い名前も、拡張子を残して NAME_MAX 以内に丸めて書く（#3521）', async () => {
+    // 正規化（UTF-16 で 255 単位まで）は通るが、UTF-8 では 304 バイトで NAME_MAX（255）を超える。
+    const name = `${'あ'.repeat(100)}.txt`;
+    const { dir, names } = await getIntoCwd(name);
+    expect(names).toHaveLength(1);
+    const [saved] = names as [string];
+    expect(Buffer.byteLength(saved, 'utf8')).toBeLessThanOrEqual(255);
+    expect(saved.endsWith('.txt')).toBe(true);
+    expect(saved).toBe(attachmentDiskName(name));
+    expect([...(await readFile(join(dir, saved)))]).toEqual([7, 8, 9]);
+  });
+
+  it('-o を省くと、短い名前は今までと同じ名前で書く', async () => {
+    const { names } = await getIntoCwd('メモ.txt');
+    expect(names).toEqual(['メモ.txt']);
   });
 
   it('添付のある発言は [添付] name (type, size) id=… で出る（中身は出ない）', () => {

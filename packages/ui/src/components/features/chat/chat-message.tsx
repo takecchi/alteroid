@@ -41,7 +41,7 @@ export interface ChatMessageVersions {
   total: number;
   onPrevious: () => void;
   onNext: () => void;
-  hidden?: readonly { role: 'human' | 'clone'; text: string }[];
+  hidden?: readonly { role: 'human' | 'clone' | 'approval'; text: string }[];
 }
 
 /**
@@ -236,7 +236,11 @@ export function ChatMessage({
               {versions.hidden.map((entry, index) => (
                 <p key={index}>
                   <span className="mr-1 font-semibold">
-                    {entry.role === 'human' ? '人間' : 'クローン'}
+                    {entry.role === 'human'
+                      ? '人間'
+                      : entry.role === 'approval'
+                        ? '確認'
+                        : 'クローン'}
                   </span>
                   {body(entry.text)}
                 </p>
