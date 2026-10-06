@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { ReactNode } from 'react';
+import type { ReactNode, SetStateAction } from 'react';
 import { Link, useNavigate } from 'react-router';
 
 import {
@@ -48,9 +48,13 @@ import {
   isEmptyQuestionsDraft,
   loadApprovalDrafts,
   loadChatDraft,
+  loadChatDraftMark,
+  loadEditDrafts,
   newClientMessageId,
   saveApprovalDrafts,
   saveChatDraft,
+  saveChatDraftMark,
+  saveEditDraft,
   redactError,
 } from '@alteroid/logic';
 import type {
@@ -448,11 +452,57 @@ function applyFocusIntent(intent: FocusIntent): boolean {
   return false;
 }
 
+/**
+ * 失敗した（または枠が閉じて保留になった）ターンの返信行に付ける印（#3705）。`error` を受けた時点で、
+ * そのターンの `replyGroup` に付ける。
+ *
+ * サーバは失敗したターンの返信を日誌に載せず、`turnFailure` の知らせだけを載せる。手元の途中の返信は
+ * 「履歴に当たらないものは落とさない」ので居残り、知らせの後ろに並んで「もう一度送る」を隠す。
+ * **履歴に同じ種類の知らせが増えたら、その分の手元のターンを引き取って落とす。** 受信中（履歴に知らせが
+ * まだ無い）は落とさず、受け取った分を見せ続ける。
+ */
+export interface FailedTurn {
+  /** そのターンの会話（`Line.of`）。 */
+  of: string | undefined;
+  kind: 'failed' | 'held';
+  /** 印を付けた時点で、履歴にあった同じ種類の知らせの数。`undefined`（履歴を見ていなかった）なら引き取らない。 */
+  baseline: number | undefined;
+}
+
+/** 履歴の知らせが引き取った分の `replyGroup`（印を付けた順に、増えた知らせを1つずつ割り当てる）。 */
+function claimedFailedGroups(
+  failedTurns: ReadonlyMap<string, FailedTurn> | undefined,
+  shownId: string | undefined,
+  historyLines: Line[],
+): Set<string> {
+  const claimed = new Set<string>();
+  if (failedTurns === undefined || failedTurns.size === 0) return claimed;
+  const counts = { failed: 0, held: 0 };
+  for (const line of historyLines) {
+    if (line.turnFailure !== undefined) counts[line.turnFailure] += 1;
+  }
+  const consumed = { failed: 0, held: 0 };
+  for (const [group, turn] of failedTurns) {
+    if (turn.of !== shownId || turn.baseline === undefined) continue;
+    const start = Math.max(turn.baseline, consumed[turn.kind]);
+    if (counts[turn.kind] > start) {
+      claimed.add(group);
+      consumed[turn.kind] = start + 1;
+    }
+  }
+  return claimed;
+}
+
 export function pendingOwnLines(
   lines: Line[],
   shownId: string | undefined,
   historyLines: Line[],
+  failedTurns?: ReadonlyMap<string, FailedTurn>,
 ): Line[] {
+  const claimedGroups = claimedFailedGroups(failedTurns, shownId, historyLines);
+  const owned = ownedBy(lines, shownId).filter(
+    (line) => line.replyGroup === undefined || !claimedGroups.has(line.replyGroup),
+  );
   const remaining = new Map<string, number>();
   for (const line of historyLines) {
     const key = lineMatchKey(line);
@@ -468,7 +518,7 @@ export function pendingOwnLines(
    * 連結が当たらなければ、行ごとの照合へ落ちる（一致を確認できないものは落とさない）。
    */
   const groups = new Map<string, Line[]>();
-  for (const line of ownedBy(lines, shownId)) {
+  for (const line of owned) {
     if (line.replyGroup === undefined || line.role !== 'clone') continue;
     groups.set(line.replyGroup, [...(groups.get(line.replyGroup) ?? []), line]);
   }
@@ -482,7 +532,7 @@ export function pendingOwnLines(
     absorbedGroups.add(group);
   }
   const pending: Line[] = [];
-  for (const line of ownedBy(lines, shownId)) {
+  for (const line of owned) {
     if (line.replyGroup !== undefined && absorbedGroups.has(line.replyGroup)) continue;
     const key = lineMatchKey(line);
     const count = remaining.get(key) ?? 0;
@@ -898,6 +948,10 @@ export function ChatPane({
    */
   const [shownId, setShownId] = useState(routeId);
   const [lines, setLines] = useState<Line[]>([]);
+  /** 失敗・保留で終わったターンの印（#3705）。`replyGroup` → 印。履歴に知らせが現れたら、そのターンの手元の返信を落とす。 */
+  const [failedTurns, setFailedTurns] = useState<ReadonlyMap<string, FailedTurn>>(new Map());
+  /** いまの履歴の行。受信の `error` の時点で、履歴にある知らせの数を数えるために読む（#3705）。 */
+  const historyLinesRef = useRef<Line[]>([]);
   // 書きかけの本文は会話ごとに `sessionStorage` にも残す（再読み込み・タブの破棄から戻る。#3400）。
   const [draft, setDraft] = useState(() => loadChatDraft(routeId));
   /**
@@ -936,7 +990,13 @@ export function ChatPane({
    * チャットの画面を離れる・再読み込みするとここの state は消えるので、`sessionStorage` にも写す。
    * 会話で書きかけた答えを承認の画面で開いても続きが出て、逆も同じ。
    */
-  const [approvalDrafts, setApprovalDrafts] = useState<ApprovalDrafts>(loadApprovalDrafts);
+  const [approvalDrafts, setApprovalDraftsState] = useState<ApprovalDrafts>(loadApprovalDrafts);
+  /** 書きかけを最後に決めた時点の `chatDraftEpoch()`。ログアウトの後にメモリから書き戻さない（#3706）。 */
+  const approvalDraftsEpoch = useRef(chatDraftEpoch());
+  const setApprovalDrafts = useCallback((update: SetStateAction<ApprovalDrafts>) => {
+    approvalDraftsEpoch.current = chatDraftEpoch();
+    setApprovalDraftsState(update);
+  }, []);
   /**
    * 送信経路（`send`/`followUp`、ストリームの `error` イベント）の失敗。**会話 id ごとに持つ（#1585）。**
    *
@@ -1060,9 +1120,17 @@ export function ChatPane({
    * 押した時点の会話 id を持ち、描画で `shownId` と一致するときだけ composer へ渡す
    * （`interruptNotice` と同じ形。持たないと、別の会話へ移っても入力欄を塞ぐ、#3567）。
    */
-  const [uploading, setUploading] = useState<{ conversationId: string | undefined } | undefined>(
-    undefined,
-  );
+  const [uploading, setUploading] = useState<ReadonlyMap<string | undefined, number>>(new Map());
+  /** 会話 `id` の「上げている最中」の数を1つ増やす／減らす。別の会話の上げ終わりは、この会話の印に触れない（#3709）。 */
+  const adjustUploading = useCallback((id: string | undefined, delta: 1 | -1) => {
+    setUploading((previous) => {
+      const next = new Map(previous);
+      const count = (next.get(id) ?? 0) + delta;
+      if (count > 0) next.set(id, count);
+      else next.delete(id);
+      return next;
+    });
+  }, []);
   /** 会話を離れているあいだ、その会話の添えかけの添付をしまっておく（`drafts` と同じ鍵・同じ扱い）。 */
   const [attachmentDrafts, setAttachmentDrafts] = useState<
     Map<string | undefined, PendingAttachment[]>
@@ -1174,10 +1242,11 @@ export function ChatPane({
    * 添付（#3399）は**編集では引き継ぐ**——外さない限り、新しい版にも付ける。同じ会話の中なら、
    * サーバは同じ添付の結び直しを受ける（冪等）。
    *
-   * 画面の状態として持つだけで、`sessionStorage` へは残さない（再読み込みで消える。ログアウトは
-   * 画面ごと畳むので、ここから漏れない）。
+   * `sessionStorage` にも本文と同じ作法で残す（#3707。鍵は発言の id、残すのは本文と引き継ぐ添付の控え、
+   * 元のままなら残さない、間引き、ログアウトの `clearChatDrafts`・epoch に乗せる）。再読み込みの後は
+   * ここへ読み戻すので、鉛筆を押せば書きかけから再開でき、書きかけの印も出る。
    */
-  const [editDrafts, setEditDrafts] = useState<ReadonlyMap<string, EditDraft>>(new Map());
+  const [editDrafts, setEditDrafts] = useState<ReadonlyMap<string, EditDraft>>(loadEditDrafts);
   const editDraft = editingKey === undefined ? '' : (editDrafts.get(editingKey)?.text ?? '');
   const editAttachments = useMemo(
     () => (editingKey === undefined ? [] : (editDrafts.get(editingKey)?.attachments ?? [])),
@@ -1191,16 +1260,16 @@ export function ChatPane({
       }),
     [],
   );
-  const dropEditDraft = useCallback(
-    (key: string) =>
-      setEditDrafts((previous) => {
-        if (!previous.has(key)) return previous;
-        const next = new Map(previous);
-        next.delete(key);
-        return next;
-      }),
-    [],
-  );
+  const dropEditDraft = useCallback((key: string) => {
+    // 保存したものも待たずに消す（確定が通ったあと・元のままになったあとに復元されない）。
+    saveEditDraft(key, undefined);
+    setEditDrafts((previous) => {
+      if (!previous.has(key)) return previous;
+      const next = new Map(previous);
+      next.delete(key);
+      return next;
+    });
+  }, []);
   /**
    * 「受信を始めた」「返信が終わった」を読み上げるための知らせ（#3568）。本文の流れは読まない。
    * 会話（`id`）を持たせ、いま見ている会話のものだけ出す。
@@ -1576,14 +1645,17 @@ export function ChatPane({
     [conversationApprovals.data],
   );
   useEffect(() => {
-    saveApprovalDrafts({
-      texts: Object.fromEntries(
-        Object.entries(approvalDrafts.texts).filter(([id]) => !settledApprovalIds.has(id)),
-      ),
-      questions: Object.fromEntries(
-        Object.entries(approvalDrafts.questions).filter(([id]) => !settledApprovalIds.has(id)),
-      ),
-    });
+    saveApprovalDrafts(
+      {
+        texts: Object.fromEntries(
+          Object.entries(approvalDrafts.texts).filter(([id]) => !settledApprovalIds.has(id)),
+        ),
+        questions: Object.fromEntries(
+          Object.entries(approvalDrafts.questions).filter(([id]) => !settledApprovalIds.has(id)),
+        ),
+      },
+      approvalDraftsEpoch.current,
+    );
   }, [approvalDrafts, settledApprovalIds]);
   // 生配信の分岐（`useMemo` の中）から、いまの会話の承認を取り直す口（#3299）。
   const refetchApprovalsRef = useRef<() => void>(() => {});
@@ -1780,7 +1852,7 @@ export function ChatPane({
    * を見るように揃えてある。
    */
   const pendingCurrentKeys = new Set(
-    pendingOwnLines(lines, shownId, historyLines).map((line) => line.key),
+    pendingOwnLines(lines, shownId, historyLines, failedTurns).map((line) => line.key),
   );
   const settled = ownedBy(lines, shownId).some(
     (line) => !pendingCurrentKeys.has(line.key) && !activeReplyKeys.has(line.key),
@@ -1788,7 +1860,7 @@ export function ChatPane({
   if (settled) {
     setLines((previous) => {
       const stillPendingKeys = new Set(
-        pendingOwnLines(previous, shownId, historyLines).map((line) => line.key),
+        pendingOwnLines(previous, shownId, historyLines, failedTurns).map((line) => line.key),
       );
       const next = previous.filter(
         (line) =>
@@ -1814,15 +1886,103 @@ export function ChatPane({
    * そのまま残る（`role` が一致しないので `pendingOwnLines` の照合対象にも
    * ならない）。
    */
+  useEffect(() => {
+    historyLinesRef.current = historyLines;
+  }, [historyLines]);
   const all = useMemo(() => {
-    const pending = pendingOwnLines(lines, shownId, historyLines);
+    const pending = pendingOwnLines(lines, shownId, historyLines, failedTurns);
     // 手元の位置に残したカードは、履歴の側では出さない（二重にしない。#3396）。
     const held = heldApprovalIds(pending);
     return [
       ...historyLines.filter((line) => line.approval === undefined || !held.has(line.approval.id)),
       ...pending,
     ];
-  }, [historyLines, lines, shownId]);
+  }, [historyLines, lines, shownId, failedTurns]);
+
+  /*
+   * **発言ごとの編集の書きかけを `sessionStorage` へ残す（#3707）。** 本文の書きかけ（上）と同じ作法——
+   * 入力のたびには書かず `DRAFT_SAVE_DELAY_MS` 間引く／タブを隠す・離れるときは待っている分をすぐ書く／
+   * 待つあいだにログアウトされたら書き戻さない（epoch）。元の発言と同じもの（`hasEditDraft` が偽）は残さない。
+   * 確定が通った・元のままキャンセルした書きかけは `dropEditDraft` が消す。
+   */
+  const allRef = useRef<Line[]>([]);
+  useEffect(() => {
+    allRef.current = all;
+  }, [all]);
+  /** 鉛筆を押した時点の元の発言（いま画面に無い会話の発言でも、元のままかを見分けるため）。 */
+  const editOriginals = useRef(new Map<string, Line>());
+  const pendingEditSave = useRef<{ drafts: ReadonlyMap<string, EditDraft>; epoch: number } | null>(
+    null,
+  );
+  const flushEditSave = useCallback(() => {
+    const waiting = pendingEditSave.current;
+    if (waiting === null) return;
+    pendingEditSave.current = null;
+    if (waiting.epoch !== chatDraftEpoch()) return;
+    for (const [key, saved] of waiting.drafts) {
+      const original =
+        allRef.current.find((line) => line.key === key) ?? editOriginals.current.get(key);
+      saveEditDraft(
+        key,
+        original !== undefined && !hasEditDraft(saved, original) ? undefined : saved,
+      );
+    }
+  }, []);
+  useEffect(() => {
+    pendingEditSave.current = { drafts: editDrafts, epoch: chatDraftEpoch() };
+    const timer = setTimeout(flushEditSave, DRAFT_SAVE_DELAY_MS);
+    return () => clearTimeout(timer);
+  }, [editDrafts, flushEditSave]);
+  useEffect(() => {
+    window.addEventListener('pagehide', flushEditSave);
+    return () => {
+      window.removeEventListener('pagehide', flushEditSave);
+      flushEditSave();
+    };
+  }, [flushEditSave]);
+
+  /*
+   * **入力欄へ戻した文の印（`unconfirmed`・`supersedes`・`clientMessageId`）も、本文と一緒に残す（#3708）。**
+   * `retries`（メモリ）にしか無いと、再読み込みの後は本文だけが普通の下書きに戻り、「送れたか確かめられなかった」
+   * の案内が消えて二重送信や編集の取り違えを誘う。会話ごとに、その会話を初めて見るときに1度だけ読み戻す
+   * （本文の書きかけが在るときだけ）。戻したあとは `retries` の変化に合わせて書き直す／消す。
+   * 入力欄へ戻せていない（`restored` になる前、または使い手が先に打ち始めていた）文の印は触らない。
+   */
+  const markTried = useRef(new Set<string | undefined>());
+  useEffect(() => {
+    const entry = retries.get(shownId);
+    if (!markTried.current.has(shownId)) {
+      markTried.current.add(shownId);
+      if (entry === undefined) {
+        const text = loadChatDraft(shownId);
+        const mark = text === '' ? undefined : loadChatDraftMark(shownId);
+        if (mark !== undefined) {
+          setRetries((prev) =>
+            prev.has(shownId)
+              ? prev
+              : new Map(prev).set(shownId, { text, restored: true, inComposer: true, ...mark }),
+          );
+          return;
+        }
+      }
+    }
+    if (entry === undefined) {
+      saveChatDraftMark(shownId, undefined);
+    } else if (entry.restored === true && entry.inComposer === true) {
+      saveChatDraftMark(
+        shownId,
+        entry.unconfirmed === undefined && entry.supersedes === undefined
+          ? undefined
+          : {
+              ...(entry.clientMessageId === undefined
+                ? {}
+                : { clientMessageId: entry.clientMessageId }),
+              ...(entry.unconfirmed === undefined ? {} : { unconfirmed: true as const }),
+              ...(entry.supersedes === undefined ? {} : { supersedes: entry.supersedes }),
+            },
+      );
+    }
+  }, [retries, shownId]);
 
   const handleScroll = useCallback(() => {
     const el = scrollContainerRef.current;
@@ -2187,6 +2347,17 @@ export function ChatPane({
     const ownReplyKeys = new Set<string>();
     let replyCount = 0;
     const replyGroup = `g-${Date.now()}-${(replyGroupSeq += 1)}`;
+    /** このターンの返信行に「失敗・保留」の印を付ける（#3705）。付けるのは1ターンに1度。 */
+    const markFailedTurn = (kind: 'failed' | 'held') => {
+      const baseline = owns()
+        ? historyLinesRef.current.filter((line) => line.turnFailure === kind).length
+        : undefined;
+      setFailedTurns((previous) =>
+        previous.has(replyGroup)
+          ? previous
+          : new Map(previous).set(replyGroup, { of: stream.id, kind, baseline }),
+      );
+    };
     /** 返信行を閉じる。次の text は新しい行で始まる（#3593）。 */
     const endReply = () => {
       replyKey = undefined;
@@ -2308,12 +2479,15 @@ export function ChatPane({
          */
         case 'usage_limited':
           endReply();
+          markFailedTurn('held');
           setLines((previous) => [
             ...previous.filter((line) => line.transient !== true),
             {
               key: `u-${Date.now()}`,
               role: 'system',
               of: stream.id,
+              // 履歴に `held` の知らせが現れたら、返信行と一緒に引き取られる（#3705）。
+              replyGroup,
               text: `${redactError(event.message)}\n（この発言は保持されていて、次に枠が開いたときに配り直されて試し直される）`,
             },
           ]);
@@ -2339,6 +2513,7 @@ export function ChatPane({
          */
         case 'error':
           settleReply();
+          markFailedTurn('failed');
           setFailures((prev) => new Map(prev).set(stream.id, new TurnFailedError(event.message)));
           if (owns()) refetchApprovalsRef.current();
           break;
@@ -2448,7 +2623,7 @@ export function ChatPane({
       const waitedForUpload = attachments.some((item) => item.meta === undefined);
       if (waitedForUpload) {
         awaited = true;
-        setUploading({ conversationId: shownId });
+        adjustUploading(shownId, 1);
         setFailures((prev) => {
           if (!prev.has(shownId)) return prev;
           const next = new Map(prev);
@@ -2484,7 +2659,7 @@ export function ChatPane({
           setFailures((prev) => new Map(prev).set(shownId, caught));
           return;
         } finally {
-          setUploading(undefined);
+          adjustUploading(shownId, -1);
         }
       }
       if (attachments.length > 0) {
@@ -3092,7 +3267,7 @@ export function ChatPane({
    * （上の doc）。`shownId` はこの render の同期処理でしか進まない state
    * なので、この比較は常に「この render の時点で正しい」答えを返す。
    */
-  const visibleUploading = uploading !== undefined && uploading.conversationId === shownId;
+  const visibleUploading = (uploading.get(shownId) ?? 0) > 0;
   const visibleInterrupting = interrupting !== undefined && interrupting.conversationId === shownId;
   const visibleEnding =
     endingConversation !== undefined && endingConversation.conversationId === shownId;
@@ -3419,6 +3594,7 @@ export function ChatPane({
                         isEditable
                           ? () => {
                               setEditingKey(line.key);
+                              editOriginals.current.set(line.key, line);
                               // 書きかけがあればそこから再開する。無ければ元の本文で始める（#3565）。
                               setEditDrafts((previous) =>
                                 previous.has(line.key)
