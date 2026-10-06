@@ -26,6 +26,11 @@ function fakeClone(): CloneHost {
       posted.push(event);
       return 'conversation-1';
     },
+    // `POST /events*` は受信箱へ書けてから 200 を返す（#3679）。
+    postPersisted: async (event: InboxEvent) => {
+      posted.push(event);
+      return 'persisted' as const;
+    },
     subscribe: () => () => undefined,
     stop: () => Promise.resolve(),
   } as unknown as CloneHost;
