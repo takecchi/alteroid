@@ -126,17 +126,13 @@ export function ApprovalQuestionsForm({
   const supplement = current.supplement;
   const supplementId = useId();
   const formRef = useRef<HTMLFormElement>(null);
-  // 同じ描画の中で続けて呼ばれても取りこぼさないよう、最新の値を ref に持つ。
-  const latest = useRef(current);
-  latest.current = current;
   const change = (next: ApprovalQuestionsDraft) => {
-    latest.current = next;
     if (onDraftChange !== undefined) onDraftChange(next);
     else setOwnDraft(next);
   };
 
   function update(id: string, patch: (current: DraftOf) => DraftOf): void {
-    const base = latest.current;
+    const base = current;
     change({ ...base, drafts: { ...base.drafts, [id]: patch(base.drafts[id] ?? EMPTY) } });
   }
 
@@ -175,7 +171,7 @@ export function ApprovalQuestionsForm({
           // ⌘/Ctrl + Enter は「回答」ボタンと同じ form の submit（空・送信中は送らない）。
           onSubmitShortcut={() => formRef.current?.requestSubmit()}
           submitDisabled={empty || busy}
-          onChange={(event) => change({ ...latest.current, supplement: event.target.value })}
+          onChange={(event) => change({ ...current, supplement: event.target.value })}
         />
       </div>
       <div className="flex flex-wrap items-center gap-2">
