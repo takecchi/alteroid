@@ -92,3 +92,22 @@ describe('切り替えの履歴の取得に失敗したとき（issue #2324）',
     expect(within(historyCard()).queryByRole('alert')).toBeNull();
   });
 });
+
+describe('切り替えの履歴を読み込んでいる間（issue #3070）', () => {
+  it('読み込み中は Badge の 0 を出さず、読めたら件数を出す', async () => {
+    let release: (res: Response) => void = () => {};
+    const pending = new Promise<Response>((resolve) => {
+      release = resolve;
+    });
+    stubJournal(() => pending);
+    renderPage();
+
+    const card = await waitFor(() => historyCard());
+    expect(within(card).queryByText('0')).toBeNull();
+    expect(screen.queryByText('切り替えの記録がまだ1件も無い。')).toBeNull();
+
+    release(json({ entries: [] }));
+    expect(await screen.findByText('切り替えの記録がまだ1件も無い。')).toBeTruthy();
+    expect(within(historyCard()).getByText('0')).toBeTruthy();
+  });
+});
