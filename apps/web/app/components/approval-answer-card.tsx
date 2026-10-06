@@ -3,7 +3,12 @@ import { useState } from 'react';
 import type { ReactNode } from 'react';
 import { Link } from 'react-router';
 
-import { ApprovalCard, ErrorNote, type ApprovalQuestionsAnswer } from '@alteroid/ui';
+import {
+  ApprovalCard,
+  ErrorNote,
+  type ApprovalQuestionsAnswer,
+  type ApprovalQuestionsDraft,
+} from '@alteroid/ui';
 import { useAnswerApproval } from '@alteroid/swr';
 import { formatDateTime, formatRelative, summarizeQuestions } from '@alteroid/logic';
 import type { PendingApproval } from '@alteroid/logic';
@@ -31,19 +36,20 @@ export function isApprovalWithdrawn(approval: PendingApproval): boolean {
 /**
  * 承認1件の詳細へ行く先。**リンクを作る箇所はここ1つにまとめてある。**
  *
- * いまは承認の画面（`/approvals`）全体へのリンクにしている（暫定）。承認の画面を未回答と
- * 回答済みの2ページに分ける作業（#3237）で URL の形が決まったら、この関数だけを差し替える。
+ * 日付なしの入口（`/approvals/item/:id`。`routes/approvals-item.tsx`）を返す。回答済みの詳細
+ * （`/approvals/answered/:date/:id`）の日付はデーモンの `localDate()` で決まり、id だけでは組めない
+ * ので、入口が正しい日（未回答なら `/approvals`）へ replace で移す。
  */
 export function approvalDetailPath(approvalId: string): string {
-  // 1件への URL が決まるまでは使わない（呼ぶ側は id を渡しておく）。
-  void approvalId;
-  return '/approvals';
+  return `/approvals/item/${encodeURIComponent(approvalId)}`;
 }
 
 export function ApprovalAnswerCard({
   approval,
   draft,
   onDraftChange,
+  questionsDraft,
+  onQuestionsDraftChange,
   onAnswered,
   bulkError,
   footer,
@@ -54,6 +60,9 @@ export function ApprovalAnswerCard({
   /** 下書き。親が持つときだけ渡す（まとめ送信のため）。渡さなければカードの中で持つ。 */
   draft?: string;
   onDraftChange?: (text: string) => void;
+  /** 設問のフォームの書きかけ。親が持つときだけ渡す（会話の画面。会話を移っても残す）。 */
+  questionsDraft?: ApprovalQuestionsDraft;
+  onQuestionsDraftChange?: (draft: ApprovalQuestionsDraft) => void;
   /** この id に答えが通った。 */
   onAnswered?: () => void;
   /** 直前のまとめ送信でこの id が駄目だった理由（無ければ何も出さない）。 */
@@ -162,6 +171,9 @@ export function ApprovalAnswerCard({
           : undefined
       }
       onSubmitQuestions={(answer) => void submitQuestions(answer)}
+      {...(questionsDraft === undefined || onQuestionsDraftChange === undefined
+        ? {}
+        : { questionsDraft, onQuestionsDraftChange })}
       busy={busy}
       footer={footer}
       error={errors}

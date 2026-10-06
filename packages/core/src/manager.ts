@@ -14098,9 +14098,14 @@ class Pool implements ManagerPool {
         // 同じ runner への復帰の resume の最中の closed も預かる（Issue #3159。`#sameRunnerResumeWindow`）。
         // **ただし、いま追っているセッション自身の出来事（世代が一致）は預けない**（Issue #3170）。窓は
         // 「窓の間に届いたものは古い世代」と読む近似で、世代が分かる出来事にはその近似を使わない。
+        // **ただし、同じ委譲の預けた列（`#deferredEvents`）が空でない間は、一致する `closed` も列の後ろへ
+        // 並べる**（Issue #3266）。その場で処理すると、先に届いて預けた `report`（窓が閉じるときに
+        // 処理し直す。Issue #3234）より先に `closed(done)` が処理され、`lastReportAt` が古いまま
+        // 「report 無しの done」と誤って知らせる。窓が閉じるとき列は届いた順に処理し直され、一致する
+        // `closed` は受理された回でも処理される（`#endRelocationWindow`）。列が空なら従来どおりその場で処理する。
         if (
-          generation !== 'current' &&
-          this.#sameRunnerResumeWindow.get(event.managerId) === fromRunnerId
+          this.#sameRunnerResumeWindow.get(event.managerId) === fromRunnerId &&
+          (generation !== 'current' || (this.#deferredEvents.get(event.managerId)?.length ?? 0) > 0)
         ) {
           this.#deferEvent(event, fromRunnerId);
           return;
@@ -16119,6 +16124,12 @@ class Pool implements ManagerPool {
     // `#autoFoldOne` が再び呼ばれることは無いので、吐き出す残りは無い
     // （`#rateLimitJournalFolds` の `flush()` のような後始末は不要）。
     this.#autoFoldSkipJournalWritten.delete(managerId);
+    // **busy の取り直しの数え（`#reattachBusyRetries`、#3196）も同じ契機で外す**（Issue #3265）。
+    // `#reattach` のジョブのループは、委譲が running / waiting_human でなくなると数えを消さずに
+    // `continue` で抜ける。終端（`closed`・`lost` の確定・resume 断念・`abort()` の `stopped`）は
+    // 全部ここを通るので、ここで消せば `continue` の箇所ごとに足さずに済み、後で同じ委譲が
+    // 再び running になって busy に当たっても、上限（`REATTACH_BUSY_MAX_RETRIES`）を前の分で縮めない。
+    this.#reattachBusyRetries.delete(managerId);
   }
 
   /**

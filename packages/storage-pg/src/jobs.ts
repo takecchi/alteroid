@@ -25,6 +25,12 @@ import { stripNulls } from './db.js';
 import { approvals, jobs } from './schema.js';
 
 /**
+ * `approvals` の会話 id（jsonb の `conversationId`）。**`migrate.ts` の `approvals_conversation_id_idx`
+ * と同じ式でなければ索引は効かない。**
+ */
+const CONVERSATION_ID_EXPR = sql`(${approvals.approval}->>'conversationId')`;
+
+/**
  * 不正な行を要約する。**`issue.message` は使わない**——zod の既定メッセージが
  * 将来 `received`（実際の値）を含む形に変わっても、ここを通す限り値は漏れない。
  * 出すのは「どの欄が」だけである（`PgScheduleStore` の `summarizeInvalidFields`
@@ -425,17 +431,33 @@ export class PgJobStore implements JobStore {
     });
   }
 
-  async listApprovals(options: { pendingOnly?: boolean } = {}): Promise<ApprovalList> {
+  async listApprovals(
+    options: { pendingOnly?: boolean; conversationId?: string } = {},
+  ): Promise<ApprovalList> {
     // 未回答かつ未取り下げだけを「保留」とする（#963。3実装で揃える —
     // `storage-fs` の `jobs.ts` / `testing.ts` の同名フィルタと同じ条件）。
+    const pendingWhere =
+      options.pendingOnly === true
+        ? and(isNull(approvals.answeredAt), isNull(approvals.withdrawnAt))
+        : undefined;
+    // **会話の絞りは SQL で当てる**（#3290。`approvals_conversation_id_idx` — 式
+    // `(approval->>'conversationId')` の索引 — が効く）。**読めない行も同じ式で絞る**
+    // （#3319）: 会話で絞ったときの `unreadable` は、生の jsonb の `conversationId` が
+    // その会話と一致する行だけ。**一致しない行は読まない**（全行の検査はしない）。
+    // NUL を含む会話 id の行は存在しえない（書き込みが落とす）ので、DB に投げずに
+    // 「一致なし」（DB に投げるとエラーになる。`getApproval` と同じ扱い）。
+    const conversationId = options.conversationId;
+    if (conversationId !== undefined && hasNul(conversationId)) {
+      return { entries: [], unreadable: [] };
+    }
+    const where =
+      conversationId === undefined
+        ? pendingWhere
+        : and(pendingWhere, sql`${CONVERSATION_ID_EXPR} = ${conversationId}`);
     const rows = await this.#db
       .select({ id: approvals.id, approval: approvals.approval })
       .from(approvals)
-      .where(
-        options.pendingOnly === true
-          ? and(isNull(approvals.answeredAt), isNull(approvals.withdrawnAt))
-          : undefined,
-      )
+      .where(where)
       .orderBy(asc(approvals.createdAt));
     // **読めない行は飛ばして消さず、`unreadable` に別欄で返す**（issue #2298）。
     // `pendingOnly` の絞りは列（`answered_at` / `withdrawn_at`）で SQL が済ませている

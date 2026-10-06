@@ -44,7 +44,11 @@ import {
   type CloneToolsTransport,
 } from './clone-tools-transport.js';
 import { CONTEXT_USAGE_CATEGORY_LIMIT } from './context-usage.js';
-import { restoredInboxEventVerdict, type RestoredInboxEventVerdict } from './inbox-staleness.js';
+import {
+  completedTimerRoundVerdict,
+  restoredInboxEventVerdict,
+  type RestoredInboxEventVerdict,
+} from './inbox-staleness.js';
 import {
   denialInputAbsence,
   denialInputShape,
@@ -3213,12 +3217,20 @@ class Clone implements CloneHost {
    */
   async #recordPermissionGrantIfConsented(
     approval: PendingApproval,
-    answer: string,
+    rawAnswer: string,
     answeredAt: string,
     via: AnswerApprovalVia | undefined,
   ): Promise<void> {
     const { permissionRequest } = approval;
     if (permissionRequest === undefined) return;
+
+    // **同意の判定は、承認の行に残る値（NUL を落とした後）で行う**（issue #3385）。
+    // `answerApproval` の `answer` は入口の `stripNulDeep`（`job-input.ts` の
+    // `prepareApprovalForWrite`）より前の値で、`trim()` は NUL を落とさない。落とす前の値で
+    // 判定すると、行に残る値は定型文ちょうどなのに許可が記録されず、起動時の拾い直し
+    // （`#reconcilePermissionGrant`。保存後の値を読む）とは結果が食い違う。NUL は落として
+    // 残すという `nul-guard.ts` の方針に揃え、許可に残す `answer` も同じ値にする。
+    const answer = stripNul(rawAnswer);
 
     const grounds = `approvalId=${approval.id}・rule=${permissionRequest.rule}`;
 
@@ -4619,7 +4631,7 @@ class Clone implements CloneHost {
    */
   async #dropStaleRedelivery(
     record: PendingInboxEvent,
-    context: { readonly alone: boolean },
+    context: { readonly alone: boolean; readonly completedRound?: boolean },
   ): Promise<void> {
     await this.#journalIncomingBody(record.event);
     await this.#journal({
@@ -4632,9 +4644,14 @@ class Clone implements CloneHost {
           ? ''
           : `＝器が入れ替わった回数。同じ起動で一緒に拾い直した未読が ${this.#restoredCohort} 件あり、` +
             `配達回数は残っている未読の全行で一緒に進む — この合図の処理が落ちた回数ではない`) +
-        `、${record.at} に受け取ったもの）、もう効く先の無い種類だったので` +
-        `ターンを起こさずに消した（モデルへは1文字も渡していない。本文は` +
-        `直前の行に残してある。まだ要る状況なら、この種類の合図は作り直される）: ` +
+        `、${record.at} に受け取ったもの）、` +
+        (context.completedRound === true
+          ? `その回は既に完了していた（定期の依頼の \`lastScheduledRunAt\` 以前）ので` +
+            `ターンを起こさずに消した（モデルへは1文字も渡していない。本文は` +
+            `直前の行に残してある。完了した回を二度走らせないための畳みで、まだ走っていない回は畳まない）: `
+          : `もう効く先の無い種類だったので` +
+            `ターンを起こさずに消した（モデルへは1文字も渡していない。本文は` +
+            `直前の行に残してある。まだ要る状況なら、この種類の合図は作り直される）: `) +
         `${inboxEventShape(record.event)}`,
     });
   }
@@ -6661,6 +6678,27 @@ class Clone implements CloneHost {
    * `#reconcileUndeliveredAnswers(claimedIds)` へ渡す（同メソッドの doc
    * 「`claimedIds` の意味」）。
    */
+  /**
+   * 拾い直した未読の timer 行の kind ごとに、定期の依頼の `lastScheduledRunAt` を引く
+   * （`completedTimerRoundVerdict` の材料。#3291）。timer 行が無ければストアを読まない。
+   * **読めなければ空を返す** — 判定できないなら畳まず配る（「消えるより配り直す」）。
+   */
+  async #lastScheduledRunAtByKind(
+    pending: readonly PendingInboxEvent[],
+  ): Promise<Map<string, string>> {
+    const byKind = new Map<string, string>();
+    if (!pending.some((record) => record.event.type === 'timer')) return byKind;
+    try {
+      const list = await this.#stores.schedules.list();
+      for (const plan of list.entries) {
+        if (plan.lastScheduledRunAt !== undefined) byKind.set(plan.kind, plan.lastScheduledRunAt);
+      }
+    } catch (error) {
+      noteDroppedRecord('定期の依頼の完了済みの回の確認', '', error);
+    }
+    return byKind;
+  }
+
   async #restoreUnreadPass(): Promise<ReadonlySet<string>> {
     let pending: PendingInboxEvent[];
     try {
@@ -6755,10 +6793,23 @@ class Clone implements CloneHost {
     // 1文字も変わらない。**ループの中でもう一度呼び直さない**——issue #903
     // が「二重に呼ぶ理由が無いことをコードの形でも示す」とした判断を、
     // ここでも踏襲する（1回だけ計算し、`decided` から読むだけにする）。
-    const decided = pending.map((record) => ({
-      record,
-      verdict: restoredInboxEventVerdict(record.event),
-    }));
+    //
+    // **完了済みの回の timer 行も畳む**（#3291 の (c)）。完了まで済んだのに受信箱の消し込みだけ
+    // 失敗して落ちた行は、`lastScheduledRunAt` 以前の回なので、配ると完了済みの回が二度走る
+    // （`completedTimerRoundVerdict` の doc）。畳み方は上の stale と同じ（`#dropStaleRedelivery`
+    // が跡を残し、`staleBuffer` でまとめて消す）。`restoredInboxEventVerdict` 自体は合図だけで
+    // 答える純関数のまま、ストアの状態を要る側をここで足す。
+    const completedRounds = await this.#lastScheduledRunAtByKind(pending);
+    const completedRoundIds = new Set<string>();
+    const decided = pending.map((record) => {
+      const base = restoredInboxEventVerdict(record.event);
+      if (base === 'stale' || record.event.type !== 'timer') return { record, verdict: base };
+      const completed =
+        completedTimerRoundVerdict(record.event, completedRounds.get(record.event.kind)) ===
+        'stale';
+      if (completed) completedRoundIds.add(record.event.id);
+      return { record, verdict: completed ? ('stale' as const) : base };
+    });
 
     // **live と判定した record を先にまとめ、1回だけ「配り直した」を書く**
     // （オーナーが直接名指しした表示のうちの1行。issue #903 はストアの
@@ -6873,7 +6924,10 @@ class Clone implements CloneHost {
         // 見出しの1行を日誌へ書く——落ちた分が何件で何だったかが読めなければ、
         // 「無い」の種類（届かなかった／畳まれた／そもそも起きなかった）が
         // 区別できなくなる。
-        await this.#dropStaleRedelivery(record, { alone });
+        await this.#dropStaleRedelivery(record, {
+          alone,
+          completedRound: completedRoundIds.has(record.event.id),
+        });
         // ⚠️ **`staleBuffer` へ積むのは、この journal 書き込みの直後・他の
         // どんな早期 return よりも前でなければならない**（issue #903 の
         // 実装中に見つけた自分のバグ）。すぐ下（数行後）に `#stopped` /
@@ -8706,6 +8760,20 @@ class Clone implements CloneHost {
             }
           } else {
             this.#timerTurnRetries.delete(event.kind);
+            // **枠保持で終わった回は、完了を記録する前に受信箱の行へ印を付ける**（#3317）。
+            // 完了（`completeRun`）を記録すると永続状態は「完了して消し込みだけ失敗した回」と
+            // 同じ見た目になり、再起動の配り直しが畳んでしまう（#2814 が配り直すと決めた回）。
+            // 印は行に書く（`#heldForUsage` はメモリで再起動を越えない）。同じ id の `put` は
+            // 配達回数を保って上書きする。**印を書けなかったら `completeRun` を呼ばない** —
+            // 印（`pendingRun`）が残れば次の起動でスケジューラが配り直す（二重の側へ倒れ、回は失われない）。
+            if (outcome.status === 'failed' && outcome.heldForUsage) {
+              try {
+                await this.#stores.inbox.put({ ...event, heldForUsage: true }, event.at);
+              } catch (error) {
+                noteDroppedRecord('枠保持の印の書き込み', inboxEventShape(event), error);
+                return;
+              }
+            }
             await this.#completeScheduledRun(event.kind, event.at, cause);
           }
         }

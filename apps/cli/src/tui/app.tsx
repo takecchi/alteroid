@@ -15,6 +15,8 @@ import type { ConversationSummary, TuiApi } from './api.js';
 import type { ChatController } from './chat-controller.js';
 import type { ApprovalsController } from './approvals-controller.js';
 import {
+  AnsweredDatesList,
+  AnsweredDayList,
   ApprovalList,
   approvalDocument,
   approvalStatusText,
@@ -33,9 +35,11 @@ import {
 import type { HeaderFeed } from './header-feed.js';
 import {
   HINT_AP_CONFIRM,
-  HINT_AP_DETAIL,
+  approvalDetailHint,
   HINT_AP_FORM,
   HINT_AP_INPUT,
+  HINT_AP_DATES,
+  HINT_AP_DAY,
   HINT_AP_LIST,
   HINT_INPUT,
   HINT_JOURNAL_DETAIL,
@@ -245,6 +249,8 @@ export const App: FC<AppProps> = ({
   };
 
   const quittingRef = useRef(false);
+  /** 委譲の詳細で、書きかけを捨てて戻る 2 度目の Esc を待っている（#3367）。 */
+  const mgrDiscardArmedRef = useRef(false);
   const quit = (): void => {
     if (quittingRef.current) return;
     quittingRef.current = true;
@@ -411,9 +417,10 @@ export const App: FC<AppProps> = ({
   };
 
   const submit = (text: string): void => {
-    setBuffer(emptyBuffer());
-    if (text.length === 0 && !controller.hasAttachments()) return;
     const resolved = resolveCommand(text);
+    // 未知のコマンドとして断るときは、書いた文を消さない（`/var/log/…` で始まる普通の文を打ち直させない。#3406）。
+    if (resolved.kind !== 'unknown') setBuffer(emptyBuffer());
+    if (text.length === 0 && !controller.hasAttachments()) return;
     if (resolved.kind === 'command') return runCommand(resolved.spec.action, resolved.args);
     if (resolved.kind === 'unknown') {
       controller.addSystem(
@@ -422,7 +429,10 @@ export const App: FC<AppProps> = ({
       return;
     }
     setAnchor('bottom');
-    void controller.send(resolved.text);
+    // 前の送信を引けなくて送らなかったときは、打った文を入力欄へ戻す（打ち直しを求めない。#3304）。
+    void controller.send(resolved.text).then((sent) => {
+      if (!sent && isEmptyBuffer(bufferRef.current)) setBuffer(bufferOf(text));
+    });
   };
 
   /** 委譲の詳細の入力欄の Enter。スラッシュコマンドは解決し、それ以外は追加指示として送る。 */
@@ -438,7 +448,10 @@ export const App: FC<AppProps> = ({
       return;
     }
     setMgrAnchor('bottom');
-    void managers.sendMessage(resolved.text);
+    // 送れなかった（失敗・送信中）ときは、打った文を入力欄へ戻す（#3367。会話の #3304 と同じ形）。
+    void managers.sendMessage(resolved.text).then((sent) => {
+      if (!sent && isEmptyBuffer(mgrBufferRef.current)) setMgrBuffer(bufferOf(text));
+    });
   };
 
   /** 生ログの総行数（ハンドラの中で最新の状態から数える）。 */
@@ -471,6 +484,7 @@ export const App: FC<AppProps> = ({
     }
     const detail = state.detail;
     if (detail === null) return false;
+    if (!key.escape) mgrDiscardArmedRef.current = false;
     if (detail.confirmStop) {
       // 確認中は全部のキーをここで受ける。y だけが確定。
       if (input === 'y') void managers.confirmStop();
@@ -479,6 +493,15 @@ export const App: FC<AppProps> = ({
     }
     const step = pageStep(mgrLogHeight);
     if (key.escape) {
+      // 書きかけは黙って捨てない。1 度目の Esc は残して言い、もう一度押したら捨てて戻る（#3367）。
+      if (!isEmptyBuffer(mgrBufferRef.current) && !mgrDiscardArmedRef.current) {
+        mgrDiscardArmedRef.current = true;
+        managers.setNotice(
+          '書きかけの追加指示が残っている。もう一度 Esc で捨てて一覧へ戻る（i で続きを書く）',
+        );
+        return true;
+      }
+      mgrDiscardArmedRef.current = false;
       setMgrAnchor('bottom');
       setMgrBuffer(emptyBuffer());
       managers.back();
@@ -514,7 +537,7 @@ export const App: FC<AppProps> = ({
 
   /**
    * 承認待ちタブの nav ゾーンのキー。消費したら true。数字・`/` は呼び出し側の共通処理へ落とす。
-   * 一覧: ↑↓ 選択 / Enter 詳細 / r 更新。
+   * 一覧: ↑↓ 選択 / Enter 詳細 / d 回答済み（決着した日 → その日の件 → 詳細）/ r 更新。
    * 詳細（読む）: Esc 一覧へ / a・i・Enter・Tab 答える / ↑↓ PgUp PgDn / r 更新。
    * 詳細（答える）: ↑↓ 移動 / Space・Enter 選ぶ（文字欄では書く）/ s 確認へ / Esc 読む画面へ。
    * 確認: y だけが送る。それ以外は全部、フォームへ戻る。
@@ -524,6 +547,33 @@ export const App: FC<AppProps> = ({
     key: Parameters<Parameters<typeof useInput>[0]>[1],
   ): boolean => {
     const state = approvals.store.getSnapshot();
+    // 回答済み（決着した日 → その日の件 → 既存の詳細。#3340）。
+    if (state.view === 'dates') {
+      if (key.upArrow) approvals.moveDatesSelection(-1);
+      else if (key.downArrow) approvals.moveDatesSelection(1);
+      else if (key.pageUp) approvals.moveDatesSelection(-pageStep(layout.bodyHeight));
+      else if (key.pageDown) approvals.moveDatesSelection(pageStep(layout.bodyHeight));
+      else if (key.return) approvals.openDay();
+      else if (key.escape || input === 'd') approvals.leaveDates();
+      else if (input === 'm') void approvals.loadMoreDates();
+      else if (input === 'r') void approvals.loadDates();
+      else return false;
+      return true;
+    }
+    if (state.view === 'day') {
+      if (key.upArrow) approvals.moveDaySelection(-1);
+      else if (key.downArrow) approvals.moveDaySelection(1);
+      else if (key.pageUp) approvals.moveDaySelection(-pageStep(layout.bodyHeight));
+      else if (key.pageDown) approvals.moveDaySelection(pageStep(layout.bodyHeight));
+      else if (key.return) {
+        setApAnchor(apLogHeight);
+        setApBuffer(emptyBuffer());
+        approvals.openDayItem();
+      } else if (key.escape) approvals.leaveDay();
+      else if (input === 'r') void approvals.loadDay();
+      else return false;
+      return true;
+    }
     if (state.view === 'list') {
       if (key.upArrow) approvals.moveSelection(-1);
       else if (key.downArrow) approvals.moveSelection(1);
@@ -533,7 +583,8 @@ export const App: FC<AppProps> = ({
         setApAnchor(apLogHeight);
         setApBuffer(emptyBuffer());
         approvals.openSelected();
-      } else if (input === 'r') void approvals.reload();
+      } else if (input === 'd') approvals.openDates();
+      else if (input === 'r') void approvals.reload();
       else return false;
       return true;
     }
@@ -606,7 +657,7 @@ export const App: FC<AppProps> = ({
       if (key.escape) journal.cancelFilter();
       else if (key.upArrow) journal.moveFilterCursor(-1);
       else if (key.downArrow) journal.moveFilterCursor(1);
-      else if (input === ' ') journal.toggleFilterDraft();
+      else if (isSpaceKey(input)) journal.toggleFilterDraft();
       else if (key.return) {
         setJAnchor('bottom');
         journal.applyFilter();
@@ -827,13 +878,17 @@ export const App: FC<AppProps> = ({
       : tab === 'approvals'
         ? ap.view === 'list'
           ? HINT_AP_LIST
-          : ap.detail?.mode === 'confirm'
-            ? HINT_AP_CONFIRM
-            : zone === 'input'
-              ? HINT_AP_INPUT
-              : ap.detail?.mode === 'form'
-                ? HINT_AP_FORM
-                : HINT_AP_DETAIL
+          : ap.view === 'dates'
+            ? HINT_AP_DATES
+            : ap.view === 'day'
+              ? HINT_AP_DAY
+              : ap.detail?.mode === 'confirm'
+                ? HINT_AP_CONFIRM
+                : zone === 'input'
+                  ? HINT_AP_INPUT
+                  : ap.detail?.mode === 'form'
+                    ? HINT_AP_FORM
+                    : approvalDetailHint(ap.detailFrom)
         : tab === 'journal'
           ? jr.view === 'filter'
             ? HINT_JOURNAL_FILTER
@@ -878,6 +933,10 @@ export const App: FC<AppProps> = ({
               cursorTop={cursorTop}
             />
           </>
+        ) : ap.view === 'dates' ? (
+          <AnsweredDatesList dates={ap.dates} height={layout.bodyHeight} />
+        ) : ap.view === 'day' ? (
+          <AnsweredDayList day={ap.day} height={layout.bodyHeight} />
         ) : (
           <ApprovalList list={ap.list} height={layout.bodyHeight} />
         )

@@ -83,6 +83,7 @@ import {
 } from './dropped-record.js';
 import { collapseErrorCause } from './error-cause.js';
 import { renderApprovalTrace, traceApproval } from './approval-trace.js';
+import { stripNulDeep } from './nul-guard.js';
 import { validatePermissionRequest } from './permission-rule.js';
 import { encodeRunnerCursor, resolveRunnerCursor } from './runner-cursor.js';
 import { encodeTokenCursor, resolveTokenCursor } from './token-cursor.js';
@@ -163,6 +164,7 @@ import {
   resolveMemoryDocKind,
   scanMemorySections,
 } from './memory.js';
+import { stripNul } from './nul-guard.js';
 import type { MemoryPart, MemorySection, MemorySectionLookup } from './memory.js';
 import { redactProfileFailure } from './profile.js';
 import { renderAccountList } from './account-list.js';
@@ -234,6 +236,7 @@ import {
   UnreadableActiveTokenError,
   UnreadableApprovalError,
   UnreadableCommitmentError,
+  UnreadableJournalEntryError,
   UnreadablePracticeError,
   UnreadableScheduleError,
   UnreadableTokenSettingsError,
@@ -2039,6 +2042,14 @@ const APPROVAL_QUESTION_EXCERPT = 200;
 function describeUnreadableApproval(id: string): string {
   return `承認待ち ${id} は在るが読めない（壊れた行。消されたのではない。id は合っている）。行は書き換えていない。`;
 }
+/**
+ * 日誌の行が**在るが読めない**（`UnreadableJournalEntryError`、issue #3288）ときの応答文。
+ * 「無い（id が違うか、まだ書かれていない）」とは言わない——id は合っていて、行は在る
+ * （形が合わない。未知の種別・版ずれ・手編集）。行は書き換えていない。`label` は「日誌」/「発言」。
+ */
+function describeUnreadableJournalEntry(label: string, id: string): string {
+  return `${label} ${id} は在るが読めない（形が合わない壊れた行。無いのではなく、id は合っている）。行は書き換えていない。`;
+}
 const APPROVAL_PAGE = 8_000;
 /**
  * `approval_trace` の行動の一覧の予算と、1件ぶんの要旨の厚み（issue #847 の案B）。
@@ -2354,8 +2365,11 @@ function describeStringLengthViolation(
 ): string | null {
   if (value === undefined) return null;
   const { min, max } = range;
-  const withinRange =
-    (min === undefined || value.length >= min) && (max === undefined || value.length <= max);
+  // **NUL を落としてから数える**（issue #3435）。ストアや日誌は NUL を落として残すので、
+  // NUL を落とす前の値で数えると、NUL だけの理由・本文が「1文字以上」を通って空として残る。
+  // 値そのものは書き換えない（数えるだけ）。min も max も同じ長さで見る。
+  const length = stripNul(value).length;
+  const withinRange = (min === undefined || length >= min) && (max === undefined || length <= max);
   if (withinRange) return null;
   return `${field} は使えない（${formatStringLengthJa(range)}のみ）。`;
 }
@@ -2390,6 +2404,10 @@ function describePracticeKindViolation(
 ): string | null {
   if (value === undefined) return null;
   if (practiceKindSchema.safeParse(value).success) return null;
+  // NUL だけの値（issue #3361）。長さは範囲内なので、範囲の文では理由が読めない。
+  if (value.length > 0 && stripNul(value).length === 0) {
+    return `${field} は使えない（NUL（\\u0000）だけの値は空と同じ。${formatPracticeKindRangeJa()}のみ）。`;
+  }
   return `${field} は使えない（${formatPracticeKindRangeJa()}のみ）。`;
 }
 
@@ -2454,7 +2472,9 @@ function describeStringArrayElementLengthViolation(
   value: readonly string[] | undefined,
 ): string | null {
   if (value === undefined) return null;
-  const emptyIndex = value.findIndex((entry) => entry.length === 0);
+  // **NUL を落としてから数える**（issue #3460。`describeStringLengthViolation` と同じ形）。
+  // 値そのものは書き換えない（数えるだけ）。
+  const emptyIndex = value.findIndex((entry) => stripNul(entry).length === 0);
   if (emptyIndex === -1) return null;
   return (
     `${field} は使えない（${emptyIndex} 番目（0起点）が空文字。各要素とも` +
@@ -6678,7 +6698,15 @@ export function createCloneTools(context: ToolContext) {
         if (offsetError !== null) return text(offsetError);
         // --- 全文モード（1件だけ） ---
         if (id !== undefined) {
-          const entry = await stores.journal.get(id);
+          let entry: JournalEntry | null;
+          try {
+            entry = await stores.journal.get(id);
+          } catch (error) {
+            // 在るが読めない行を「無い」と言わない（issue #3288）。
+            if (error instanceof UnreadableJournalEntryError)
+              return text(describeUnreadableJournalEntry('日誌', id));
+            throw error;
+          }
           if (!entry) return text(`日誌 ${id} は無い（id が違うか、まだ書かれていない）。`);
           const { head, body } = renderJournalEntry(entry);
           if (body === '') return text(`${entry.at} ${head}`);
@@ -6821,17 +6849,23 @@ export function createCloneTools(context: ToolContext) {
               ].join('\n'),
             );
           }
-          return text(
-            [
-              since === undefined &&
-              until === undefined &&
-              types === undefined &&
-              withFilter === undefined
+          // **afterId があるときは「まだ空」と言わない（issue #3286）。** 続きの位置は
+          // 実在の行を指している（指す行が無ければ上で JournalAnchorNotFoundError）ので、
+          // 日誌は空ではない。0件は「この位置より先（古い側）に行が無い」だけである。
+          const emptyNote =
+            afterId !== undefined &&
+            since === undefined &&
+            until === undefined &&
+            types === undefined &&
+            withFilter === undefined
+              ? '（この位置より先（古い側）に日誌の行は無い。日誌が空なのではない）'
+              : since === undefined &&
+                  until === undefined &&
+                  types === undefined &&
+                  withFilter === undefined
                 ? '（日誌はまだ空）'
-                : '（その条件に当たる日誌は無い）',
-              ...horizonNoteLines,
-            ].join('\n'),
-          );
+                : '（その条件に当たる日誌は無い）';
+          return text([emptyNote, ...horizonNoteLines].join('\n'));
         }
 
         // **予算を先に決めて、入るところまで積む。** 件数から出力量を決めると、
@@ -7064,7 +7098,12 @@ export function createCloneTools(context: ToolContext) {
           .describe('この規則が拒むべき具体的なコマンド例（1件以上、1件も規則に一致しないこと）'),
         reason: z.string().describe('なぜこの許可が要るか。人間が承認画面で読む理由文'),
       },
-      async ({ rule, allows, denies, reason }) => {
+      async (args) => {
+        // **検算は、承認の行に残る値と同じもので行う（#3386）。** 承認の行は `putApproval` の入口で
+        // NUL を落として残す（`stripNulDeep`）ので、落とす前の値で検算すると、通ったはずの要求が
+        // 残った値では自己矛盾する（denies の例が規則に一致する・規則が `Bash()` になる）。
+        // 質問文・`permissionRequest`・検算の3つが同じ値を見るよう、入口で1度だけ落とす。
+        const { rule, allows, denies, reason } = stripNulDeep(args);
         const validation = validatePermissionRequest({ rule, allows, denies });
         if (!validation.ok) {
           return text(
@@ -7828,7 +7867,9 @@ export function createCloneTools(context: ToolContext) {
         // 許さない」に揃える——ただし検査そのものはここ（ハンドラの先頭）で
         // 行い、保存層（fs / pg の `scheduledRequestSchema.parse(entry)`）へは
         // 空文字を1文字も渡さない。doc は `request` の入力スキーマ側にある。
-        if (request.length === 0) {
+        // **「空」は NUL を落とした後で見る（#3438）。** ストアは NUL を落として残すので、落とす前の長さで
+        // 見ると NUL だけの `request` が日誌（「設定しようとしている」）より先へ進んでしまう。
+        if (stripNul(request).length === 0) {
           return text('request が空文字は使えない（依頼の本文を渡すこと）。');
         }
         if (RESERVED_SCHEDULE_KINDS.includes(parsedKind.data)) {
@@ -8517,7 +8558,10 @@ export function createCloneTools(context: ToolContext) {
       async ({ body, source }) => {
         // **issue #1752（#1651/#1689/#1720 の揃え漏れ。非数値の欄。issue 本文の
         // 再現テスト対象）。**
-        const bodyError = describeStringLengthViolation('body', body, { min: 1 });
+        // **NUL を落とした後の値で検める**（Issue #3388）。台帳の入口は本文から NUL を落として
+        // 残す（`nul-guard.ts`）ので、生の値で数えると NUL だけの本文が通り、空の本文になる。
+        // 落とした後に本文が残るなら、今までどおり通す（保存するのは落とす前の値のまま）。
+        const bodyError = describeStringLengthViolation('body', stripNul(body), { min: 1 });
         if (bodyError !== null) return text(bodyError);
         const entry = {
           id: randomUUID(),
@@ -8806,7 +8850,10 @@ export function createCloneTools(context: ToolContext) {
       },
       async ({ id, body }) => {
         // **issue #1752（#1651/#1689/#1720 の揃え漏れ。非数値の欄）。**
-        const bodyError = describeStringLengthViolation('body', body, { min: 1 });
+        // **NUL を落とした後の値で検める**（Issue #3388）。台帳の入口は本文から NUL を落として
+        // 残す（`nul-guard.ts`）ので、生の値で数えると NUL だけの本文が通り、空の本文になる。
+        // 落とした後に本文が残るなら、今までどおり通す（保存するのは落とす前の値のまま）。
+        const bodyError = describeStringLengthViolation('body', stripNul(body), { min: 1 });
         if (bodyError !== null) return text(bodyError);
         // **読めない行は本文の書き直しを通さず「名乗る」だけにとどめる**
         // （issue #2148 の決定 (2)(3)）。読める本文が無い以上、書き直した後に
@@ -12694,7 +12741,14 @@ export function createCloneTools(context: ToolContext) {
         if (offsetError !== null) return text(offsetError);
         // --- 全文モード（発言1件） ---
         if (id !== undefined) {
-          const entry = await stores.journal.get(id);
+          let entry: JournalEntry | null;
+          try {
+            entry = await stores.journal.get(id);
+          } catch (error) {
+            if (error instanceof UnreadableJournalEntryError)
+              return text(describeUnreadableJournalEntry('発言', id));
+            throw error;
+          }
           if (!entry) return text(`発言 ${id} は無い（id が違うか、まだ書かれていない）。`);
           if (entry.type !== 'exchange' || entry.with !== 'human') {
             return text(
@@ -13416,10 +13470,11 @@ export function createCloneTools(context: ToolContext) {
               '**1件も消していない。**',
           );
         }
-        if (before !== undefined && Number.isNaN(Date.parse(before))) {
+        // 存在しない日付（`2026-02-31` は V8 が 3/3 へずらす）や日付でない文字列（`foo 1`）を
+        // 別の時刻として読んで**消す**ので、#3287 の3段で検める（#3358）。
+        if (before !== undefined && !isReadableJournalTimeBoundary(before)) {
           return text(
-            `before に渡された「${before}」は ISO8601 として読めない` +
-              '（例 2026-09-15T00:00:00.000Z）。**1件も消していない。**',
+            describeUnreadableJournalTimeBoundary('before', before) + '**1件も消していない。**',
           );
         }
         // **issue #1720（#1651/#1689 の揃え漏れ）。**

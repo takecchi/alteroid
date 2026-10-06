@@ -1,9 +1,10 @@
 import { readFile, stat, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { basename, resolve } from 'node:path';
-import { stdout } from 'node:process';
+import { basename, resolve, sep } from 'node:path';
+import { stderr, stdout } from './terminal-out.js';
 
 import {
+  ATTACHMENT_EMPTY_MESSAGE,
   AttachmentRejectedError,
   DEFAULT_ATTACHMENT_LIMITS,
   isAttachmentImageMediaType,
@@ -154,6 +155,7 @@ export class AttachmentDraft {
       return { ok: false, reason: `読めない: ${absolute}（${errnoOf(error)}）` };
     }
     if (!info.isFile()) return { ok: false, reason: `ファイルではない: ${absolute}` };
+    if (info.size === 0) return { ok: false, reason: ATTACHMENT_EMPTY_MESSAGE };
     const name = normalizeAttachmentName(basename(absolute));
     const mediaType = mediaTypeOfName(name);
     const limits = await this.limits();
@@ -396,7 +398,7 @@ export async function attachmentsPutCommand(path: string): Promise<void> {
   if (!result.ok) throw new Error(result.reason);
   const meta = result.uploaded[0]!;
   stdout.write(`${meta.id}\n`);
-  process.stderr.write(`${describeAttachment(meta)}（1 時間以内に発言へ添えないと掃除される）\n`);
+  stderr.write(`${describeAttachment(meta)}（1 時間以内に発言へ添えないと掃除される）\n`);
 }
 
 export async function attachmentsMetaCommand(id: string): Promise<void> {
@@ -454,7 +456,9 @@ export async function attachmentsGetCommand(
       );
     }
     // 名前は保存時に正規化済みだが、ここでも区切りを落として basename にする。
-    output = normalizeAttachmentName((await metaResponse.json()).name);
+    // `./` を前に付ける: 名前が `-` でも標準出力（`-o -`）と取り違えない（#3330）。
+    // `path.join('.', name)` は `./` を畳んで `-` に戻すので使えない。
+    output = `.${sep}${normalizeAttachmentName((await metaResponse.json()).name)}`;
   }
   // 中身は生のバイト列なので hono/client ではなく生の fetch（認証ヘッダは `target`）。
   const response = await fetch(`${target.baseUrl}/attachments/${encodeURIComponent(id)}`, {
@@ -471,7 +475,7 @@ export async function attachmentsGetCommand(
   }
   const bytes = new Uint8Array(await response.arrayBuffer());
   if (output === '-') {
-    stdout.write(bytes);
+    stdout.writeRaw(bytes);
     return;
   }
   try {
@@ -485,5 +489,5 @@ export async function attachmentsGetCommand(
     }
     throw error;
   }
-  process.stderr.write(`${output} に書いた（${bytes.length} バイト）\n`);
+  stderr.write(`${output} に書いた（${bytes.length} バイト）\n`);
 }

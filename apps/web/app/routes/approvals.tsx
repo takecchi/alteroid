@@ -1,18 +1,28 @@
-import { describeTraceAction } from '@alteroid/core/trace-action';
 import { AlertTriangle } from 'lucide-react';
-import { useMemo, useState } from 'react';
-import { Link } from 'react-router';
+import { useEffect, useMemo, useState } from 'react';
 
-import { Page, Button, Card, Empty, ErrorNote, Spinner, cn } from '@alteroid/ui';
-import { useAnswerApprovals, useApprovalTrace, useApprovals, useConversation } from '@alteroid/swr';
-import { formatDateTime, journalTypeLabel, redactBody } from '@alteroid/logic';
-import type { PendingApproval, UnreadableApproval } from '@alteroid/logic';
-
+import { ApprovalEntry } from '~/components/approval-entry';
+import { isApprovalAnswered, isApprovalWithdrawn } from '~/components/approval-answer-card';
+import { ApprovalsTabs } from '~/components/group-tabs';
 import {
-  ApprovalAnswerCard,
-  isApprovalAnswered,
-  isApprovalWithdrawn,
-} from '~/components/approval-answer-card';
+  Page,
+  Button,
+  Card,
+  EMPTY_QUESTIONS_DRAFT,
+  Empty,
+  ErrorNote,
+  Spinner,
+  type ApprovalQuestionsDraft,
+} from '@alteroid/ui';
+import { useAnswerApprovals, useApprovals } from '@alteroid/swr';
+import {
+  isEmptyQuestionsDraft,
+  loadApprovalDrafts,
+  saveApprovalDrafts,
+  type ApprovalDrafts,
+  type PendingApproval,
+  type UnreadableApproval,
+} from '@alteroid/logic';
 
 /** `Record` から1つの key を落とした新しい `Record` を作る（同じ参照は返さない）。 */
 function without<T>(record: Record<string, T>, key: string): Record<string, T> {
@@ -47,15 +57,18 @@ function UnreadableApprovalNote({ unreadable }: { unreadable: UnreadableApproval
         {ids.length > 0 &&
           `（id: ${ids.join(', ')}${idsRest > 0 ? ` …ほか ${idsRest} 件は省略` : ''}）`}
         。<strong>壊れた行であって、回答済みでも取り下げ済みでもない。</strong>
-        この一覧には載っていない。
+        未回答の一覧にも、回答済みの一覧にも載っていない。
       </span>
     </div>
   );
 }
 
 export default function Approvals() {
-  const [showAnswered, setShowAnswered] = useState(false);
-  const { data, error, isLoading } = useApprovals(!showAnswered);
+  /**
+   * **未回答だけを読む**（`GET /approvals?pending=true`）。回答済み・取り下げ済みは別のページ
+   * （`approvals-answered.tsx`。タブの「回答済み」）で、日付ごとに読む。
+   */
+  const { data, error, isLoading } = useApprovals(true);
   /**
    * **形の違う応答（`approvals` が配列でない）は「0件」ではなく「読めていない」へ倒す**
    * （issue #2308。外枠 `shell.tsx` の PR #2307 と同じ判断）。デーモンと画面は別デプロイで
@@ -80,23 +93,41 @@ export default function Approvals() {
   const answerApprovals = useAnswerApprovals();
 
   /**
-   * 各カードの下書き。**カードをまたいで持つのは「まとめて送る」の対象を決める
-   * ためである。** 個別の「回答する」「許可」「却下」ボタンはこの下書きを直接見て
+   * 各カードの下書き（自由記述と設問の選択）。**カードをまたいで持つのは「まとめて送る」の対象を
+   * 決めるためである。** 個別の「回答する」「許可」「却下」ボタンはこの下書きを直接見て
    * 動くので、1件ずつ内容を見て別々に答える自由はそのまま残る — まとめて送るのは
    * 「書かれた分をまとめて1回で送る」だけの追加であって、答え方を変えない。
+   *
+   * **`sessionStorage` にも写す**（issue #3295）。「回答済み」タブへ移るとこのページは unmount
+   * されるので、state だけでは書きかけが黙って消える。初期値は保存したものから読む。
    */
-  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const [drafts, setDrafts] = useState<ApprovalDrafts>(loadApprovalDrafts);
   /** 直前のまとめ送信で駄目だった id ごとの理由。カードの下に出す。 */
   const [bulkErrors, setBulkErrors] = useState<Record<string, string>>({});
   const [bulkBusy, setBulkBusy] = useState(false);
   const [bulkFailure, setBulkFailure] = useState<unknown>(undefined);
 
   function setDraft(id: string, text: string): void {
-    setDrafts((current) => ({ ...current, [id]: text }));
+    setDrafts((current) => ({
+      ...current,
+      texts: text === '' ? without(current.texts, id) : { ...current.texts, [id]: text },
+    }));
+  }
+
+  function setQuestionsDraft(id: string, draft: ApprovalQuestionsDraft): void {
+    setDrafts((current) => ({
+      ...current,
+      questions: isEmptyQuestionsDraft(draft)
+        ? without(current.questions, id)
+        : { ...current.questions, [id]: draft },
+    }));
   }
 
   function clearDraft(id: string): void {
-    setDrafts((current) => without(current, id));
+    setDrafts((current) => {
+      if (!(id in current.texts) && !(id in current.questions)) return current;
+      return { texts: without(current.texts, id), questions: without(current.questions, id) };
+    });
     setBulkErrors((current) => without(current, id));
   }
 
@@ -111,7 +142,26 @@ export default function Approvals() {
       ),
     [approvalsList],
   );
-  const pendingDrafts = Object.entries(drafts).filter(
+  /**
+   * 保存するのは、一覧から消えた id（回答済み・取り下げ）を除いたもの。**一覧を読めているときだけ**
+   * 除く（`approvalsList` が在るとき）。読み込みに失敗して空に見えるだけのときは除かない
+   * （書きかけを黙って失わせない。`approvalsList` は失敗・形の違う応答では `undefined`）。
+   */
+  const liveDrafts = useMemo<ApprovalDrafts>(() => {
+    if (approvalsList === undefined) return drafts;
+    return {
+      texts: Object.fromEntries(
+        Object.entries(drafts.texts).filter(([id]) => unansweredIds.has(id)),
+      ),
+      questions: Object.fromEntries(
+        Object.entries(drafts.questions).filter(([id]) => unansweredIds.has(id)),
+      ),
+    };
+  }, [drafts, approvalsList, unansweredIds]);
+  useEffect(() => {
+    saveApprovalDrafts(liveDrafts);
+  }, [liveDrafts]);
+  const pendingDrafts = Object.entries(drafts.texts).filter(
     ([id, text]) => text.trim() !== '' && unansweredIds.has(id),
   );
 
@@ -143,21 +193,10 @@ export default function Approvals() {
 
   return (
     <Page
+      tabs={<ApprovalsTabs />}
       title="承認待ち"
       description="記憶に根拠が無かったこと。ここで答えると、同じ判断は次から聞かれなくなる"
     >
-      {/*
-        **表示の切り替えは見出しの `action` ではなく本文の先頭に置く（#2765）。**
-        `Page` の見出し帯は横並び1行固定で、`action` は `shrink-0` のまま幅を取る。
-        390px では「回答済み・取り下げ済みも見る」（194px）が居座り、題と説明文が
-        残りの約148pxに押し込まれて説明文が4行（末尾が1文字残り）になった。
-        これは一覧の絞り込みであって見出しの操作ではないので、本文の側で右寄せにする。
-      */}
-      <div className="mb-4 flex justify-end">
-        <Button size="sm" onClick={() => setShowAnswered((v) => !v)}>
-          {showAnswered ? '未回答だけ' : '回答済み・取り下げ済みも見る'}
-        </Button>
-      </div>
       <ErrorNote error={error} className="mb-4" />
       <UnreadableApprovalNote unreadable={unreadable} />
 
@@ -197,21 +236,21 @@ export default function Approvals() {
       ) : approvalsList === undefined || approvalsList.length === 0 ? (
         <Card>
           <Empty>
-            {showAnswered
-              ? '記録がまだない。'
-              : unreadable.length > 0
-                ? '読めた範囲では、答えを待っているものはない。'
-                : '答えを待っているものはない。クローンは進んでいる。'}
+            {unreadable.length > 0
+              ? '読めた範囲では、答えを待っているものはない。'
+              : '答えを待っているものはない。クローンは進んでいる。'}
           </Empty>
         </Card>
       ) : (
-        <ul className="flex flex-col gap-3">
+        <ul className="flex flex-col gap-3" aria-label="承認待ちの一覧">
           {approvalsList.map((approval) => (
             <li key={approval.id}>
               <ApprovalEntry
                 approval={approval}
-                draft={drafts[approval.id] ?? ''}
+                draft={drafts.texts[approval.id] ?? ''}
                 onDraftChange={(text) => setDraft(approval.id, text)}
+                questionsDraft={drafts.questions[approval.id] ?? EMPTY_QUESTIONS_DRAFT}
+                onQuestionsDraftChange={(next) => setQuestionsDraft(approval.id, next)}
                 onAnswered={() => clearDraft(approval.id)}
                 bulkError={bulkErrors[approval.id]}
               />
@@ -220,263 +259,5 @@ export default function Approvals() {
         </ul>
       )}
     </Page>
-  );
-}
-
-/**
- * 承認の1件。見た目は `@alteroid/ui` の `ApprovalCard`（Twin Plate）に任せ、ここは
- * データの取り方と送り方だけを持つ。
- *
- * **今の画面の表示をそのまま出すために、部品の省略可能な口を使っている。**
- * - `time`: 時刻は `formatDateTime` と `formatRelative`（`@alteroid/logic`）の2つの
- *   span のまま。時間帯は閲覧者の端末に任せる（部品の `Timestamp` は JST 固定）
- * - 回答欄の送るキーは部品が持つ（`Textarea` の `onSubmitShortcut`）。IME の確定の
- *   ⌘/Ctrl + Enter は送信に数えない（issue #2259。会話と約束の入力欄と同じ）
- * - `trailing`: 会話のパネルは、エラーの後ろ（カードのいちばん下）に置く
- */
-function ApprovalEntry({
-  approval,
-  draft,
-  onDraftChange,
-  onAnswered,
-  bulkError,
-}: {
-  approval: PendingApproval;
-  /** まとめて送るための下書き。親が持つので、カードをまたいで数えられる。 */
-  draft: string;
-  onDraftChange: (text: string) => void;
-  /** この id に答えが通った（個別送信・まとめ送信どちらでも呼ぶ）。 */
-  onAnswered: () => void;
-  /** 直前のまとめ送信でこの id が駄目だった理由（無ければ何も出さない）。 */
-  bulkError?: string;
-}) {
-  // 状態の導出・回答の送信・エラー表示は会話の画面と共有のカードが持つ（#3259）。
-  // ここが足すのは、この画面だけのもの（答えの後の経緯・確認が上がった会話）。
-  return (
-    <ApprovalAnswerCard
-      approval={approval}
-      draft={draft}
-      onDraftChange={onDraftChange}
-      onAnswered={onAnswered}
-      bulkError={bulkError}
-      /*
-        **答えの後にクローンが何をしたか（issue #847 の案B）。** 答え済みの件だけに
-        出し、開いたときだけ読む（`useApprovalTrace` の doc）。
-      */
-      footer={
-        isApprovalAnswered(approval) && !isApprovalWithdrawn(approval) ? (
-          <TracePanel approvalId={approval.id} />
-        ) : undefined
-      }
-      /*
-        **この確認が上がった会話（issue #782 の3）。** 4状態を別々に出す
-        （`ConversationPanel` の doc）。
-      */
-      trailing={
-        <div className="mt-3 border-t border-border pt-3">
-          {approval.conversationId === undefined || approval.conversationId === null ? (
-            <p className="text-[11px] text-muted-foreground italic">
-              この確認は会話に紐づいていない（マネージャー発・内部ターンには紐づけられる会話が存在しない）
-            </p>
-          ) : (
-            <ConversationPanel conversationId={approval.conversationId} />
-          )}
-        </div>
-      }
-    />
-  );
-}
-
-/** `describeTraceAction` が本文を持つ4種。それ以外は種別名（英語の識別子）を返すだけ。 */
-const TRACE_TYPES_WITH_BODY = new Set(['decision', 'memory_update', 'tool_use', 'exchange']);
-
-/**
- * 行動1件の本文。本文を持たない種別は使わず、頭に出す日本語の種別名（`journalTypeLabel`）に
- * 任せる（issue #3061）。core の `describeTraceAction` は CLI と共有なので変えず、ここで包む。
- */
-function traceActionBody(entry: Parameters<typeof describeTraceAction>[0]): string | null {
-  if (!TRACE_TYPES_WITH_BODY.has(entry.type)) return null;
-  if (entry.type === 'tool_use' && entry.outcome !== undefined) {
-    // core は `道具 <名前>（failed）: <入力>` と英語の値を括弧に入れる（CLI と共有で固定）。
-    // Web では括弧の中だけ日本語にする。未知の値は素の値のまま出して情報を消さない（issue #3077）。
-    const head = `道具 ${entry.tool}`;
-    const rest = describeTraceAction({ ...entry, outcome: undefined }).slice(head.length);
-    return `${head}（${TOOL_OUTCOME_LABELS[entry.outcome] ?? entry.outcome}）${rest}`;
-  }
-  return describeTraceAction(entry);
-}
-
-/** `tool_use` の `outcome`（`failed` / `interrupted`）の日本語名。 */
-const TOOL_OUTCOME_LABELS: Record<string, string> = {
-  failed: '失敗',
-  interrupted: '中断',
-};
-
-/**
- * 承認の答えと、答えを受けたターンでクローンが取った行動を対で出す（issue #847 の案B）。
- *
- * **「対が無い」を1つの顔にしない。** 理由の文言はデーモンが返す `state` ごとに
- * 出し分ける（core の `approval-trace.ts` の doc と同じ分け方。`TRACE_MISSING`）。
- * 行動の本文は日誌の行の要旨で、解釈や一般化は足さない。
- */
-function TracePanel({ approvalId }: { approvalId: string }) {
-  const [open, setOpen] = useState(false);
-  const trace = useApprovalTrace(open ? approvalId : null);
-
-  if (!open) {
-    return (
-      <div className="mt-2">
-        <Button size="sm" onClick={() => setOpen(true)}>
-          答えの後の行動を見る
-        </Button>
-      </div>
-    );
-  }
-  if (trace.isLoading) return <Spinner label="答えの後の行動を読み込み中" />;
-  if (trace.error !== undefined) return <ErrorNote error={trace.error} className="mt-2" />;
-  const data = trace.data;
-  if (data === undefined) return null;
-  if (data.state !== 'paired') {
-    return (
-      <p className="mt-2 text-[11px] text-muted-foreground italic">
-        {TRACE_MISSING[data.state] ?? `対が無い（${data.state}）`}
-        {data.truncated ? `（答えの後 ${data.scanned} 行までしか見ていない）` : ''}
-      </p>
-    );
-  }
-  return (
-    <div className="mt-2">
-      <p className="mb-1 text-[11px] font-semibold text-muted-foreground">
-        答えの後の行動（この承認の印を持つもの。古い順）
-      </p>
-      <ul className="flex flex-col gap-1">
-        {data.actions.map((entry) => (
-          <li
-            key={entry.id}
-            className="rounded border border-border bg-muted p-2 text-xs break-words whitespace-pre-wrap"
-          >
-            <span className="mr-1 text-[10px] text-muted-foreground">
-              {formatDateTime(entry.at)} {journalTypeLabel(entry.type)}
-            </span>
-            {traceActionBody(entry)}
-          </li>
-        ))}
-      </ul>
-      {data.actionsOmitted > 0 && (
-        <p className="mt-1 text-[11px] text-muted-foreground">
-          ほか {data.actionsOmitted} 件は数えただけで持っていない
-        </p>
-      )}
-      {data.unstampedInTurn > 0 && (
-        <p className="mt-1 text-[11px] text-muted-foreground">
-          同じターンの区間に、印を持たないクローンの行動が {data.unstampedInTurn}{' '}
-          件在る（区間の終わりは推定）
-        </p>
-      )}
-    </div>
-  );
-}
-
-/**
- * 対が無い理由の言い方。**キーは `state` の全値ではない**（`paired` は一覧を出す）。
- * 知らない値が来たら（デーモンが先に新しい値を返す版ずれ）、上の `??` が値を
- * そのまま出す——空欄にしない。
- */
-const TRACE_MISSING: Record<string, string> = {
-  unanswered: 'まだ答えが無い',
-  withdrawn: '取り下げ済みなので答えは無い',
-  no_turn_start: '答えを受けたターンの入口の行が無い（まだ配られていないか、見た窓の外）',
-  turn_before_recording:
-    '答えを受けたターンは在るが、対で記録し始める前の答えである（行動が無いのではなく、記録していない）',
-  unstamped_actions: '⚠️ 答えのターンに印を持たない行動が在る。記録が動いていない疑いがある',
-  no_actions: '答えの後にこの承認に紐づいた行動は記録されていない',
-};
-
-/**
- * 承認カードに、その確認が上がった会話を出す（issue #782 の3）。
- *
- * **4状態を別々に出す（不変条件A）。** 「機構が無い」（呼び出し元。
- * `approval.conversationId` が無い場合）「読み出せなかった」「まだ返答が
- * 無い」「在る」を同じ表示に潰さない——潰すと、たとえば「読み込み中」が
- * 「まだ返答が無い」に見え、届くはずの発言がまだ届いていないだけなのに
- * 「クローンは黙ったままだ」と誤解される。
- *
- * ⚠️ **見出しは「この確認が上がった会話」であって「この確認への返答」では
- * ない**（不変条件D。ここは変えていない）。outbound の `exchange` には
- * `approvalId` が積まれるようになった（issue #782 の1。PR #1319）が、
- * `packages/core/src/conversation.ts` の `toMessage()` はそれを
- * `ConversationMessage` へ写していない——だから `GET /conversations/:id`
- * の応答にも無く、この画面までは届いていない。ここは会話全体を古い順に
- * 出すだけで、どの発言がこの確認への回答かは特定しない。時刻の近さで
- * 「この返答はこの確認への返答だ」と決めつけない。
- */
-function ConversationPanel({ conversationId }: { conversationId: string }) {
-  const conversation = useConversation(conversationId);
-
-  // ② 読み出せなかった（読み込み中）。「まだ返答が無い」に潰さない。
-  if (conversation.isLoading) {
-    return <Spinner label="この確認が上がった会話を読み込み中" />;
-  }
-  // ② 読み出せなかった（失敗）。理由をそのまま出す。
-  if (conversation.error !== undefined) {
-    return <ErrorNote error={conversation.error} />;
-  }
-
-  const messages = conversation.data?.messages ?? [];
-  const hasCloneReply = messages.some((message) => message.role === 'outbound');
-
-  // ③ まだ返答が無い。会話は取れたが、クローンの発言が0件（人間の発言しか
-  // 無い場合も含む——「クローンが黙ったまま」という事実そのものを出す）。
-  if (!hasCloneReply) {
-    return (
-      <div>
-        <p className="text-[11px] text-muted-foreground italic">
-          この会話にはまだクローンの発言が無い
-        </p>
-        <OpenInChat conversationId={conversationId} />
-      </div>
-    );
-  }
-
-  // ④ 在る。
-  return (
-    <div>
-      <p className="mb-2 text-[11px] font-semibold text-muted-foreground">この確認が上がった会話</p>
-      <ul className="flex flex-col gap-2">
-        {messages.map((message) => (
-          <li
-            key={message.id}
-            className={cn(
-              'rounded border border-border p-2 text-xs break-words whitespace-pre-wrap',
-              message.role === 'inbound' ? 'bg-background' : 'bg-muted',
-            )}
-          >
-            <span className="mr-1 text-[10px] text-muted-foreground">
-              {message.role === 'inbound' ? '人間' : 'クローン'}
-            </span>
-            {redactBody(message.text)}
-          </li>
-        ))}
-      </ul>
-      <OpenInChat conversationId={conversationId} />
-    </div>
-  );
-}
-
-/**
- * **この会話をチャットの画面で開く（issue #2069）。** パネルに出すのは会話を
- * 読むためだけの写しで、続きを書くにはチャットへ移る必要がある。その会話は
- * `/chat/:conversationId`（`routes.ts`）で開けるので、会話を読めた2状態
- * （③ ④）にだけ出す。②（読み込み中・失敗）には出さない——読めなかった会話を
- * 開けるかのように見せないため。①（会話が無い）には開く先が無い。
- */
-function OpenInChat({ conversationId }: { conversationId: string }) {
-  return (
-    <Link
-      to={`/chat/${conversationId}`}
-      className="mt-2 inline-block text-[11px] text-primary hover:underline"
-    >
-      この会話をチャットで開く →
-    </Link>
   );
 }

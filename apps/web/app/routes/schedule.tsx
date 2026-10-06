@@ -1,7 +1,8 @@
 import { ScheduleTabs } from '~/components/group-tabs';
 import { LoadError } from '~/components/load-error';
 import { AlertTriangle } from 'lucide-react';
-import { useId, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
+import { useBlocker } from 'react-router';
 import { Tabs } from 'radix-ui';
 
 import {
@@ -24,6 +25,7 @@ import {
   cn,
 } from '@alteroid/ui';
 import {
+  ApiError,
   useCreateSchedule,
   usePostEvent,
   useRemoveSchedule,
@@ -103,6 +105,49 @@ export default function Schedule() {
   const [removing, setRemoving] = useState<string | undefined>(undefined);
   const [confirmingRemove, setConfirmingRemove] = useState<string | undefined>(undefined);
   const [editing, setEditing] = useState<string | undefined>(undefined);
+  /**
+   * **書きかけの入力欄の id の集合（#3374。`commitments.tsx` の `dirtyIds` と同じ形）。**
+   * 離れる前の確認（`useBlocker`・beforeunload）は欄ごとではなくここに1つだけ置く
+   * （ルーターは同時に1つのブロッカーしか扱わない）。どれか1つでも書きかけなら止める。
+   */
+  const [dirtyIds, setDirtyIds] = useState<ReadonlySet<string>>(new Set());
+  const setFieldDirty = useCallback((id: string, dirty: boolean) => {
+    setDirtyIds((current) => {
+      if (current.has(id) === dirty) return current;
+      const next = new Set(current);
+      if (dirty) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  }, []);
+  const anyDirty = dirtyIds.size > 0;
+  const blocker = useBlocker(anyDirty);
+  useEffect(() => {
+    if (!anyDirty) return;
+    const warn = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      // 古いブラウザは returnValue を入れないと出さない。
+      event.returnValue = '';
+    };
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  }, [anyDirty]);
+  /**
+   * 編集欄を切り替える・閉じる前の確認。**開いている編集欄が書きかけのときだけ**挟む
+   * （元の値のままなら今までどおり確認なし）。`next` は切り替え先（閉じるなら `undefined`）。
+   * 編集欄は同時に1つしか開かないので、編集欄の書きかけは `EDIT_DIRTY_ID` の1つで足りる。
+   */
+  const [switchingTo, setSwitchingTo] = useState<{ next: string | undefined } | undefined>(
+    undefined,
+  );
+  function requestEditing(next: string | undefined) {
+    if (next === editing) return;
+    if (editing !== undefined && dirtyIds.has(EDIT_DIRTY_ID)) {
+      setSwitchingTo({ next });
+      return;
+    }
+    setEditing(next);
+  }
   const [failure, setFailure] = useState<unknown>(undefined);
   /**
    * **取れなかったのを0件と描かない**（issue #2324）。一覧をまだ一度も読めていないまま
@@ -110,6 +155,16 @@ export default function Schedule() {
    * 断定になる。再検証の失敗で `data` が残っているときは当たらず、一覧をそのまま出す。
    */
   const listUnavailable = data === undefined && error !== undefined;
+  /**
+   * 「仕込む」で置き換わる名前（#3347）。画面が既に持っている一覧から導く（取得は足さない）。
+   * 読めない行（`unreadable`）も名前が取れれば数える。本文を持たない行は既定の仕込み
+   * （予約名）で、置き換わるのではなく断られる（409）ので数えない。
+   * **一覧が読めていないとき（`data` が無い）は空**——確かめようが無いので送る側を止めない。
+   */
+  const existingKinds: ReadonlySet<string> = new Set([
+    ...(data?.entries ?? []).filter((entry) => entry.request !== undefined).map((e) => e.kind),
+    ...(data?.unreadable ?? []).flatMap((entry) => (entry.kind != null ? [entry.kind] : [])),
+  ]);
 
   return (
     <Page
@@ -117,6 +172,38 @@ export default function Schedule() {
       title="予定"
       description="決まった時刻に動く依頼と、外部からの知らせを、ここで確かめたり手で起こしたりする"
     >
+      <ConfirmDialog
+        open={blocker.state === 'blocked'}
+        onOpenChange={(open) => {
+          if (!open && blocker.state === 'blocked') blocker.reset();
+        }}
+        title="保存していない変更があります"
+        description="このまま離れると、書きかけの内容は失われます。"
+        confirmLabel="破棄して離れる"
+        destructive
+        onConfirm={() => {
+          if (blocker.state === 'blocked') blocker.proceed();
+        }}
+      />
+      {/* 編集中の行の書きかけを、別の行の「編集」・「やめる」で捨てる前に確かめる（#3374）。 */}
+      <ConfirmDialog
+        open={switchingTo !== undefined}
+        onOpenChange={(open) => {
+          if (!open) setSwitchingTo(undefined);
+        }}
+        title="保存していない変更があります"
+        description={
+          switchingTo?.next === undefined
+            ? '編集をやめると、書きかけの内容は失われます。'
+            : '別の依頼の編集に切り替えると、書きかけの内容は失われます。'
+        }
+        confirmLabel={switchingTo?.next === undefined ? '破棄して閉じる' : '破棄して切り替える'}
+        destructive
+        onConfirm={() => {
+          if (switchingTo !== undefined) setEditing(switchingTo.next);
+          setSwitchingTo(undefined);
+        }}
+      />
       <LoadError
         what="スケジュール"
         error={error}
@@ -270,7 +357,7 @@ export default function Schedule() {
                     <Button
                       size="sm"
                       aria-label={`${entry.kind} を編集`}
-                      onClick={() => setEditing(entry.kind)}
+                      onClick={() => requestEditing(entry.kind)}
                     >
                       編集
                     </Button>
@@ -306,8 +393,9 @@ export default function Schedule() {
                 {editing === entry.kind && (
                   <ScheduleEditForm
                     entry={entry}
-                    onCancel={() => setEditing(undefined)}
+                    onCancel={() => requestEditing(undefined)}
                     onSaved={() => setEditing(undefined)}
+                    onDirtyChange={setFieldDirty}
                   />
                 )}
               </li>
@@ -316,8 +404,8 @@ export default function Schedule() {
         )}
       </Card>
 
-      <ScheduleForm />
-      <EventForm />
+      <ScheduleForm existingKinds={existingKinds} onDirtyChange={setFieldDirty} />
+      <EventForm onDirtyChange={setFieldDirty} />
     </Page>
   );
 }
@@ -434,6 +522,26 @@ function ScheduleSpecFields({
   );
 }
 
+/** 書きかけの集合（`Schedule` の `dirtyIds`）での、各欄の id。編集欄は同時に1つしか開かない。 */
+const EDIT_DIRTY_ID = 'edit';
+const SCHEDULE_FORM_DIRTY_ID = 'schedule-form';
+const EVENT_FORM_DIRTY_ID = 'event-form';
+
+/**
+ * 書きかけかどうかをページへ知らせる（離れる前の確認はページが1つだけ持つ。#3374）。
+ * 欄が閉じたら（保存・やめる）書きかけでなくなる。`onDirtyChange` はページが安定した関数で渡す。
+ */
+function useReportDirty(
+  id: string,
+  dirty: boolean,
+  onDirtyChange: (id: string, dirty: boolean) => void,
+) {
+  useEffect(() => {
+    onDirtyChange(id, dirty);
+  }, [id, dirty, onDirtyChange]);
+  useEffect(() => () => onDirtyChange(id, false), [id, onDirtyChange]);
+}
+
 /**
  * 依頼本文の入力。**プレビュー / 編集タブ**（人間の依頼:
  * 「人が編集できるものに関しては記憶と同じで、タブとしてデフォルトが
@@ -455,7 +563,8 @@ function ScheduleSpecFields({
 function RequestEditor({
   value,
   onChange,
-  initialValue,
+  activeTab,
+  onTabChange,
   placeholder,
   label,
   onSubmit,
@@ -463,7 +572,8 @@ function RequestEditor({
 }: {
   value: string;
   onChange: (value: string) => void;
-  initialValue: string;
+  activeTab: string;
+  onTabChange: (tab: string) => void;
   placeholder?: string;
   /** 本文の欄の名前（入力するとプレースホルダは消えるので、名前は別に持つ）。 */
   label: string;
@@ -472,11 +582,8 @@ function RequestEditor({
   /** そのボタンの `disabled` と同じ条件。 */
   submitDisabled: boolean;
 }) {
-  const [tab, setTab] = useState<string | undefined>(undefined);
-  const activeTab = tab ?? (initialValue.trim() === '' ? 'edit' : 'preview');
-
   return (
-    <Tabs.Root value={activeTab} onValueChange={setTab}>
+    <Tabs.Root value={activeTab} onValueChange={onTabChange}>
       <Tabs.List className="mb-1 flex shrink-0 gap-1 border-b border-border">
         <Tabs.Trigger
           value="preview"
@@ -526,6 +633,16 @@ function RequestEditor({
   );
 }
 
+/**
+ * 依頼の本文のタブ（編集・プレビュー）の状態。**送るキーの案内は textarea が出ている編集のタブだけ**
+ * に出すので、案内を置く親も見えるよう親が持つ（#3300）。既定は下の規則（`RequestEditor` の doc）。
+ */
+function useRequestTab(initialValue: string) {
+  const [tab, setTab] = useState<string | undefined>(undefined);
+  const activeTab = tab ?? (initialValue.trim() === '' ? 'edit' : 'preview');
+  return { activeTab, setTab };
+}
+
 // ---------------------------------------------------------------------------
 // 仕込まれた依頼を直す
 // ---------------------------------------------------------------------------
@@ -548,16 +665,30 @@ function ScheduleEditForm({
   entry,
   onCancel,
   onSaved,
+  onDirtyChange,
 }: {
   entry: ScheduleEntry;
+  /** 「やめる」。書きかけがあれば確認を挟むのは呼び出し側（ページ）。 */
   onCancel: () => void;
+  /** 保存に成功したとき。確認なしで閉じる。 */
   onSaved: () => void;
+  onDirtyChange: (id: string, dirty: boolean) => void;
 }) {
   const createSchedule = useCreateSchedule();
   const [specDraft, setSpecDraft] = useState<ScheduleSpecDraft>(() => initialSpecDraft(entry.spec));
   const [request, setRequest] = useState(entry.request ?? '');
+  const { activeTab, setTab } = useRequestTab(entry.request ?? '');
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<unknown>(undefined);
+
+  const initialSpec = initialSpecDraft(entry.spec);
+  const dirty =
+    request !== (entry.request ?? '') ||
+    specDraft.type !== initialSpec.type ||
+    specDraft.at !== initialSpec.at ||
+    specDraft.minutes !== initialSpec.minutes ||
+    specDraft.expression !== initialSpec.expression;
+  useReportDirty(EDIT_DIRTY_ID, dirty, onDirtyChange);
 
   const specUnknown = entry.spec === undefined;
   const ready = !specUnknown && request.trim() !== '';
@@ -605,7 +736,8 @@ function ScheduleEditForm({
       <RequestEditor
         value={request}
         onChange={setRequest}
-        initialValue={entry.request ?? ''}
+        activeTab={activeTab}
+        onTabChange={setTab}
         label="依頼の本文"
         placeholder="依頼の本文（時刻が来たらそのままクローンへ渡る）"
         onSubmit={submit}
@@ -615,7 +747,7 @@ function ScheduleEditForm({
         <Button variant="primary" size="sm" loading={busy} disabled={!ready} onClick={submit}>
           保存する
         </Button>
-        <SubmitHint action="保存" />
+        {activeTab === 'edit' && <SubmitHint action="保存" />}
         <Button size="sm" onClick={onCancel} disabled={busy}>
           やめる
         </Button>
@@ -629,6 +761,8 @@ function ScheduleEditForm({
 // 新規に仕込む
 // ---------------------------------------------------------------------------
 
+const RESERVED_KIND_MESSAGE = '既定の名前（予約名）なので使えない。別の名前にする';
+
 /**
  * 継続する依頼を仕込む。
  *
@@ -641,33 +775,60 @@ function ScheduleEditForm({
  * （`scheduleSpecSchema` の cron のコメント）。だから `daily` / `every` / `cron` の
  * 3つとも置く。
  */
-function ScheduleForm() {
+function ScheduleForm({
+  existingKinds,
+  onDirtyChange,
+}: {
+  existingKinds: ReadonlySet<string>;
+  onDirtyChange: (id: string, dirty: boolean) => void;
+}) {
   const createSchedule = useCreateSchedule();
   const kindId = useId();
   const [kind, setKind] = useState('');
   const [request, setRequest] = useState('');
+  const { activeTab, setTab } = useRequestTab('');
   const [specDraft, setSpecDraft] = useState<ScheduleSpecDraft>(DEFAULT_SPEC_DRAFT);
   const [busy, setBusy] = useState(false);
-  const [done, setDone] = useState<string | undefined>(undefined);
+  const [done, setDone] = useState<{ kind: string; replaced: boolean } | undefined>(undefined);
   const [failure, setFailure] = useState<unknown>(undefined);
+  const [confirming, setConfirming] = useState(false);
 
   const ready = kind.trim() !== '' && request.trim() !== '';
+  const replacing = existingKinds.has(kind.trim());
+  // 名前か本文が書きかけのとき。周期は既定値が入っていて、送ったあとも残る（続けて仕込むため）ので数えない。
+  useReportDirty(SCHEDULE_FORM_DIRTY_ID, kind !== '' || request !== '', onDirtyChange);
 
+  /**
+   * **既に在る名前のときだけ確かめる**（#3347。#3201 の「既に値が在るときだけ確認」と同じ線）。
+   * 新規はそのまま送る。やめれば何も送らず、入力はそのまま残る。
+   */
   function submit() {
     if (!ready) return;
+    if (replacing) {
+      setConfirming(true);
+      return;
+    }
+    send(false);
+  }
+
+  function send(replaced: boolean) {
     setBusy(true);
     setFailure(undefined);
     setDone(undefined);
 
     createSchedule({ kind: kind.trim(), request: request.trim(), spec: specDraftToSpec(specDraft) })
       .then(() => {
-        setDone(kind.trim());
+        setDone({ kind: kind.trim(), replaced });
         setRequest('');
         setKind('');
       })
       .catch(setFailure)
       .finally(() => setBusy(false));
   }
+
+  // 予約名（既定の仕込みの名前）はデーモンが 409 で断る。英語の `reserved kind` をそのまま出さない。
+  // 予約名の一覧は画面に出さない（内部の識別子を利用者に見せない。#2782）ので、名前は挙げない。
+  const reservedKindRefused = failure instanceof ApiError && failure.status === 409;
 
   return (
     <Card className="mb-4">
@@ -689,7 +850,8 @@ function ScheduleForm() {
         <RequestEditor
           value={request}
           onChange={setRequest}
-          initialValue=""
+          activeTab={activeTab}
+          onTabChange={setTab}
           label="依頼の本文"
           placeholder="依頼の本文（時刻が来たらそのままクローンへ渡る）"
           onSubmit={submit}
@@ -699,18 +861,29 @@ function ScheduleForm() {
           <Button variant="primary" loading={busy} disabled={!ready} onClick={submit}>
             仕込む
           </Button>
-          <SubmitHint action="登録" />
+          {activeTab === 'edit' && <SubmitHint action="仕込む" />}
           {done !== undefined && (
-            <span className="font-mono text-[11px] text-muted-foreground">仕込んだ: {done}</span>
+            <span className="font-mono text-[11px] text-muted-foreground">
+              {done.replaced ? '置き換えた' : '仕込んだ'}: {done.kind}
+            </span>
           )}
         </div>
-        <ErrorNote error={failure} />
+        <ConfirmDialog
+          open={confirming}
+          onOpenChange={setConfirming}
+          title={`予定「${kind.trim()}」を置き換えますか`}
+          description="同じ名前の依頼が既に在る。前の依頼の本文と周期が置き換わり、元に戻せない（前回動いた時刻は保たれる）。"
+          confirmLabel="置き換える"
+          destructive
+          onConfirm={() => send(true)}
+        />
+        <ErrorNote error={reservedKindRefused ? RESERVED_KIND_MESSAGE : failure} />
       </div>
     </Card>
   );
 }
 
-function EventForm() {
+function EventForm({ onDirtyChange }: { onDirtyChange: (id: string, dirty: boolean) => void }) {
   const postEvent = usePostEvent();
   const sourceId = useId();
   const payloadId = useId();
@@ -719,6 +892,7 @@ function EventForm() {
   const [busy, setBusy] = useState(false);
   const [sent, setSent] = useState<string | undefined>(undefined);
   const [failure, setFailure] = useState<unknown>(undefined);
+  useReportDirty(EVENT_FORM_DIRTY_ID, source !== '' || payload !== '', onDirtyChange);
 
   function submit() {
     if (source.trim() === '') return;

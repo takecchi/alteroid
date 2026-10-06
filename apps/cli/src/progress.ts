@@ -1,4 +1,4 @@
-import { stdout } from 'node:process';
+import { stdout } from './terminal-out.js';
 
 import { describeProgress } from '@alteroid/core/cli-light';
 
@@ -19,7 +19,7 @@ import { redactError } from './redact.js';
  *
  * 失敗の扱い: 400（daemon が断る範囲外）は daemon の文言（欄名は --window-hours に打ち替える）を例外で上へ通す
  * （`index.ts` の `parseAsync(...).catch(...)` が stderr へ出して終了コード 1）。
- * それ以外は既存の読み取り系（`dropped.ts` など）に揃えて stdout へ書いて戻る。
+ * それ以外（401・403・500 など）も同じく例外で上へ通す（#3446。`usage.ts` と同じ）。
  */
 
 export interface ProgressOptions {
@@ -55,9 +55,9 @@ export async function progressCommand(options: ProgressOptions = {}): Promise<vo
           : redactError(errorBody.error).replaceAll('windowHours', '--window-hours'),
       );
     }
+    // 失敗は例外で上へ通す（＝終了コードが 0 でなくなる。#3446）。
     const described = describeAuthFailure(response.status, target);
-    stdout.write(`${described ?? `進捗を読めませんでした（HTTP ${String(response.status)}）`}\n`);
-    return;
+    throw new Error(described ?? `進捗を読めませんでした（HTTP ${String(response.status)}）`);
   }
   const body = await response.json();
   stdout.write(`${describeProgress(body)}\n`);

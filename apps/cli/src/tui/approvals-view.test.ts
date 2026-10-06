@@ -3,6 +3,8 @@ import { describe, expect, it } from 'vitest';
 import { ApprovalsController, type DetailState } from './approvals-controller.js';
 import { emptyForm, toggleOption } from './approvals-form.js';
 import {
+  answeredDateLine,
+  answeredDayLine,
   approvalDocument,
   approvalListLine,
   approvalListTitle,
@@ -176,7 +178,7 @@ describe('最下行と入力欄', () => {
     expect(approvalStatusText(detailOf({ mode: 'confirm', notice: 'x' }), 3).text).toContain(
       'y で送る',
     );
-    expect(approvalStatusText(detailOf({ notice: '結果', error: '失敗' }), 3)).toEqual({
+    expect(approvalStatusText(detailOf({ notice: '結果' }), 0)).toEqual({
       text: '結果',
       tone: 'dim',
     });
@@ -189,6 +191,22 @@ describe('最下行と入力欄', () => {
     expect(approvalStatusText(detailOf({ approval: null, missing: true }), 0).text).toContain(
       '見つからない',
     );
+  });
+
+  it('操作の結果が残っていても、取り直しの失敗と窓の外の行数を隠さない（#3368）', () => {
+    // notice は詳細を閉じるまで消えない。後ろの状態を隠すと、取り直しが止まっていても健全に見える。
+    expect(approvalStatusText(detailOf({ notice: '結果', error: '失敗' }), 0)).toEqual({
+      text: '結果 · ⚠ 取り直せなかった: 失敗',
+      tone: 'warn',
+    });
+    expect(approvalStatusText(detailOf({ notice: '結果' }), 3)).toEqual({
+      text: '結果 · ↓ あと 3 行',
+      tone: 'dim',
+    });
+    expect(approvalStatusText(detailOf({ notice: '結果', error: '失敗' }), 3)).toEqual({
+      text: '結果 · ⚠ 取り直せなかった: 失敗 · ↓ あと 3 行',
+      tone: 'warn',
+    });
   });
 
   it('入力欄のプレースホルダは、いま何を書く欄かを言う', () => {
@@ -228,5 +246,44 @@ describe('一覧の見出し', () => {
   it('読めて 0 件なら件数を言う', () => {
     const list = { ...new ApprovalsController(fakeApi()).store.getSnapshot().list };
     expect(approvalListTitle({ ...list, status: 'ready' })).toContain('未回答 0 件');
+  });
+});
+
+describe('回答済みの一覧の行（#3340）', () => {
+  const now = Date.parse('2026-09-30T12:00:00.000Z');
+
+  it('日付の行は日付と件数', () => {
+    expect(answeredDateLine({ date: '2026-09-30', count: 3 })).toBe('2026-09-30  3 件');
+  });
+
+  it('回答済みは状態・答えの抜粋、取り下げ済みは取り下げと理由。全文は載せない', () => {
+    const long = 'あ'.repeat(300);
+    const a = answeredDayLine(
+      approvalRow('ap-a', {
+        question: `問い\n二行目${long}`,
+        answeredAt: '2026-09-30T10:00:00.000Z',
+        answer: long,
+      }),
+      now,
+    );
+    expect(a).toContain('回答済み');
+    expect(a).toContain('ap-a');
+    expect(a).toContain('回答: ');
+    expect(a).not.toContain('\n');
+    expect(a).not.toContain(long);
+
+    const w = answeredDayLine(
+      approvalRow('ap-w', {
+        withdrawnAt: '2026-09-30T05:00:00.000Z',
+        withdrawnReason: '自分で答えを見つけた',
+      }),
+      now,
+    );
+    expect(w).toContain('取り下げ済み');
+    expect(w).not.toContain('回答済み');
+    expect(w).toContain('取り下げた理由: 自分で答えを見つけた');
+    expect(
+      answeredDayLine(approvalRow('ap-w2', { withdrawnAt: '2026-09-30T05:00:00.000Z' }), now),
+    ).toContain('（理由の記録なし）');
   });
 });

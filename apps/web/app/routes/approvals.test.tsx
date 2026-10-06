@@ -125,6 +125,7 @@ let originalFetch: typeof fetch;
 beforeEach(() => {
   originalFetch = globalThis.fetch;
   localStorage.clear();
+  sessionStorage.clear();
   storeTestBaseUrl();
 });
 
@@ -229,7 +230,10 @@ describe('/approvals 画面のまとめ送信', () => {
     fireEvent.click(screen.getByRole('button', { name: 'まとめて送る' }));
     await waitFor(() => expect(bulkRequests).toHaveLength(1));
 
-    const items = await screen.findAllByRole('listitem');
+    // 上のタブの帯も list なので、カードの一覧に絞る。
+    const items = within(await screen.findByRole('list', { name: '承認待ちの一覧' })).getAllByRole(
+      'listitem',
+    );
     expect(items).toHaveLength(2);
 
     // 通った側（質問1）: エラーは出ず、下書きは消える。
@@ -868,7 +872,10 @@ describe('メタ行の job id が委譲の詳細へのリンクになる（issue
     renderPage();
 
     expect(await screen.findByText('本番に出してよいか')).toBeTruthy();
-    expect(screen.queryByRole('link')).toBeNull();
+    // 上のタブの帯のリンクは数えない（カードの一覧の中にリンクが無いこと）。
+    expect(
+      within(screen.getByRole('list', { name: '承認待ちの一覧' })).queryByRole('link'),
+    ).toBeNull();
   });
 });
 
@@ -1040,15 +1047,28 @@ describe('/approvals 画面: 読めない承認待ちの断り', () => {
 });
 
 describe('見出し帯に幅を取る操作を置かない（#2765）', () => {
-  it('「回答済み・取り下げ済みも見る」は見出し帯（header）の外にある', async () => {
-    // jsdom はレイアウトを持たず折り返しを測れない（390px で見出しの列が約148px、説明文が
-    // 4行になった実寸はブラウザで測った）。原因だった「見出し帯の右に居座る」配置が
-    // 戻らないことを、DOM の位置で固定する。
+  /*
+    以前は「回答済み・取り下げ済みも見る」のトグルを本文の先頭に置いていた（見出し帯の右に居座ると、
+    390px で見出しの列が約148px、説明文が4行になった。実寸はブラウザで測った）。#3237 でトグルは
+    なくなり、回答済みへはタブ（「未回答 / 回答済み」）で行く。jsdom はレイアウトを持たず折り返しを
+    測れないので、同じ原因（見出し帯の中に操作が居座る）が戻らないことを、DOM の位置で固定する。
+  */
+  it('トグルのボタンは無く、「未回答 / 回答済み」のタブは見出し帯（header）の外にある', async () => {
     stubApprovals([]);
     renderPage();
 
-    const toggle = await screen.findByRole('button', { name: '回答済み・取り下げ済みも見る' });
-    expect(toggle.closest('header')).toBeNull();
+    await screen.findByText(/答えを待っているものはない/);
+    expect(screen.queryByRole('button', { name: /回答済み・取り下げ済みも見る/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: '未回答だけ' })).toBeNull();
+
+    const tabs = screen.getByRole('navigation', { name: '承認のページ' });
+    expect(tabs.closest('header')).toBeNull();
+    expect(within(tabs).getByRole('link', { name: '未回答' }).getAttribute('href')).toBe(
+      '/approvals',
+    );
+    expect(within(tabs).getByRole('link', { name: '回答済み' }).getAttribute('href')).toBe(
+      '/approvals/answered',
+    );
     // 見出しと説明文は header の中に残っている。
     const heading = screen.getByRole('heading', { name: '承認待ち' });
     expect(heading.closest('header')).not.toBeNull();

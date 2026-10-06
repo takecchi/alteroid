@@ -1,24 +1,40 @@
 import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { makeTempDir } from '../../../vitest.tmpdir.js';
 import { captureStdout } from './test-support.js';
 
-/** readline に流す行（尽きたら Ctrl-C 相当で投げる）。 */
-const lines: string[] = [];
+/**
+ * readline に流す行（尽きたら閉じる）。**`run` ごとに作り直し、偽の readline は作られた時点の配列を握る。**
+ * 共有の1本だと、時間切れで置き去りになった前のテストの `chatCommand` が、次のテストの行を横取りして送る。
+ */
+let lines: string[] = [];
 
 vi.mock('node:readline/promises', () => ({
-  createInterface: () => ({
-    question: async () => {
-      const next = lines.shift();
-      if (next === undefined) throw new Error('closed');
-      return next;
-    },
-    once: () => undefined,
-    close: () => undefined,
-  }),
+  // `chat.ts` は `line` / `close` イベントで読む（#3262）。`prompt()` のたびに次の行を流し、尽きたら閉じる。
+  createInterface: () => {
+    const mine = lines;
+    const handlers: { line?: (text: string) => void; close?: () => void } = {};
+    return {
+      on: (_event: 'line', handler: (text: string) => void) => {
+        handlers.line = handler;
+      },
+      once: (_event: 'close', handler: () => void) => {
+        handlers.close = handler;
+      },
+      setPrompt: () => undefined,
+      prompt: () => {
+        queueMicrotask(() => {
+          const next = mine.shift();
+          if (next === undefined) handlers.close?.();
+          else handlers.line?.(next);
+        });
+      },
+      close: () => undefined,
+    };
+  },
 }));
 
 vi.mock('./target.js', async (orig) => ({
@@ -31,6 +47,13 @@ vi.mock('./target.js', async (orig) => ({
   }),
 }));
 
+// chat.ts（ink・react・api-client まで引く）の初回の読み込みは、負荷の高い器で数秒かかる。最初のテストの
+// 5秒に含めない（含めると時間切れのあと、置き去りの実行が次のテストへ食い込む）。
+let chatCommand: typeof import('./chat.js').chatCommand;
+beforeAll(async () => {
+  ({ chatCommand } = await import('./chat.js'));
+}, 60_000);
+
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
@@ -41,7 +64,7 @@ async function run(
   /** n 回目（0 始まり）の /chat への応答を差し替える。 */
   chatReply: (n: number) => Response | undefined = () => undefined,
 ): Promise<{ chatBodies: Record<string, unknown>[]; uploads: number; output: string }> {
-  lines.push(...input);
+  lines = [...input];
   const chatBodies: Record<string, unknown>[] = [];
   let uploads = 0;
   vi.stubGlobal('fetch', (url: unknown, init?: RequestInit) => {
@@ -71,7 +94,6 @@ async function run(
     return Promise.resolve(Response.json({}));
   });
   const out = captureStdout();
-  const { chatCommand } = await import('./chat.js');
   await chatCommand();
   const output = out();
   return { chatBodies, uploads, output };

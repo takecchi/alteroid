@@ -414,7 +414,7 @@ describe('サブコマンドの登録（入口が在ること）', () => {
 
   /**
    * **確認を持つ全コマンドの `--yes` の help 文は同じ**（#3214）。非対話で必須なのは全対象で同じ。
-   * `integration revoke` は別の担当（#3211）が直すので、いまは対象に含めない（直ったら外す）。
+   * `integration revoke` も #3211（PR #3229）で揃ったので、例外なく全コマンドを見る。
    */
   it('--yes の help 文は、確認を持つ全コマンドで揃っている', () => {
     const expected = '確認を飛ばす（スクリプト・CI 向け。端末でなければ必須）';
@@ -424,7 +424,6 @@ describe('サブコマンドの登録（入口が在ること）', () => {
         if (option.long !== '--yes') continue;
         const name = path.join(' ');
         found.push(name);
-        if (name === 'integration revoke') continue;
         expect([name, option.description]).toEqual([name, expected]);
       }
       for (const child of command.commands) walk(child, [...path, child.name()]);
@@ -432,6 +431,7 @@ describe('サブコマンドの登録（入口が在ること）', () => {
     for (const command of program.commands) walk(command, [command.name()]);
     expect(found).toContain('reset');
     expect(found).toContain('access remove-unreadable');
+    expect(found).toContain('integration revoke');
     expect(found).toContain('integration remove-unreadable');
   });
 
@@ -449,7 +449,17 @@ describe('サブコマンドの登録（入口が在ること）', () => {
         .sort();
 
     expect(optionsOf('edit')).toEqual(['--kind', '--title']);
-    expect(optionsOf('set')).toEqual(['--file', '--kind', '--title']);
+    // `--allow-empty`（#3456）: 空の本文で置き換えるときだけ付ける。
+    expect(optionsOf('set')).toEqual(['--allow-empty', '--file', '--kind', '--title']);
+  });
+
+  it('memory set / practice set の help に --allow-empty が出る（#3456）', () => {
+    for (const parent of ['memory', 'practice']) {
+      const set = program.commands
+        .find((c) => c.name() === parent)
+        ?.commands.find((c) => c.name() === 'set');
+      expect(set?.helpInformation()).toContain('--allow-empty');
+    }
   });
 
   /**

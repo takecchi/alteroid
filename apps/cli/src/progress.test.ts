@@ -209,11 +209,25 @@ describe('progressCommand', () => {
     await expect(progressCommand({ windowHours: '' })).rejects.toThrow('--window-hours');
   });
 
-  it('401 は describeAuthFailure の文言を書いて戻る', async () => {
+  it('401 は describeAuthFailure の文言を例外で言う（stdout に書かない。#3446）', async () => {
     replies.push({ status: 401, body: {} });
     const read = captureStdout();
-    await progressCommand();
-    expect(read()).toContain('認証されませんでした');
+    await expect(progressCommand()).rejects.toThrow('認証されませんでした');
+    expect(read()).toBe('');
+  });
+
+  it('403 は例外にする（#3446）', async () => {
+    replies.push({ status: 403, body: {} });
+    const read = captureStdout();
+    await expect(progressCommand()).rejects.toThrow('access grant');
+    expect(read()).toBe('');
+  });
+
+  it('500 は状態コードを載せて例外にする（#3446）', async () => {
+    replies.push({ status: 500, body: {} });
+    const read = captureStdout();
+    await expect(progressCommand()).rejects.toThrow('進捗を読めませんでした（HTTP 500）');
+    expect(read()).toBe('');
   });
 });
 

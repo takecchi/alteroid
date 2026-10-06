@@ -460,11 +460,12 @@ function VacateRunner({ runnerId }: { runnerId: string }) {
       {confirming ? (
         <>
           <p className="text-[11px] text-muted-foreground">
-            この実行環境で動いている委譲を止めて、他の実行環境へ移す。本当に移すか。
+            この実行環境（{runnerId}）で動いている委譲を止めて、他の実行環境へ移す。本当に移すか。
           </p>
           <Button
             size="sm"
             disabled={busy}
+            aria-label={`${runnerId} から仕事を移すのを確定する`}
             onClick={() => {
               setBusy(true);
               setError(null);
@@ -476,12 +477,23 @@ function VacateRunner({ runnerId }: { runnerId: string }) {
           >
             本当に移す
           </Button>
-          <Button size="sm" variant="ghost" disabled={busy} onClick={() => setConfirming(false)}>
+          <Button
+            size="sm"
+            variant="ghost"
+            disabled={busy}
+            aria-label={`${runnerId} から仕事を移すのをやめる`}
+            onClick={() => setConfirming(false)}
+          >
             移すのをやめる
           </Button>
         </>
       ) : (
-        <Button size="sm" variant="ghost" onClick={() => setConfirming(true)}>
+        <Button
+          size="sm"
+          variant="ghost"
+          aria-label={`${runnerId} から仕事を移す`}
+          onClick={() => setConfirming(true)}
+        >
           この実行環境から仕事を移す
         </Button>
       )}
@@ -650,6 +662,10 @@ function ShutdownDaemon() {
 
       <dialog
         ref={dialogRef}
+        // 実行中は Esc（cancel）でも閉じない（「やめる」が押せないのと揃える。#3349）。
+        onCancel={(event) => {
+          if (busy) event.preventDefault();
+        }}
         className="w-[min(28rem,calc(100vw-2rem))] rounded-md border border-border bg-card p-0 text-foreground backdrop:bg-black/50"
       >
         <div className="p-4">
@@ -784,6 +800,10 @@ function ResetWorkspace() {
 
       <dialog
         ref={dialogRef}
+        // 実行中は Esc（cancel）でも閉じない（「やめる」が押せないのと揃える。#3349）。
+        onCancel={(event) => {
+          if (busy) event.preventDefault();
+        }}
         className="w-[min(28rem,calc(100vw-2rem))] rounded-md border border-border bg-card p-0 text-foreground backdrop:bg-black/50"
       >
         <div className="p-4">

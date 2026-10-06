@@ -131,7 +131,7 @@ export default function Commitments() {
         }}
       />
 
-      <PushForm />
+      <PushForm onDirtyChange={setRowDirty} />
 
       {/* `keepPreviousData` のとき `isLoading` は別キーの初回読み込みでも真になる。一覧を置き換えてよいのは、出せるデータが無いときだけ（#3074）。 */}
       {isLoading && data === undefined ? (
@@ -979,10 +979,14 @@ const EDITOR_TAB_TRIGGER_ACTIVE_CLASS = 'border-primary text-foreground';
 function CommitmentBodyEditor({
   commitment,
   onCancel,
+  onRequestCancel,
   onDirtyChange,
 }: {
   commitment: Commitment;
+  /** 確認なしで閉じる。保存に成功したときだけ使う（保存直後は下書きが元と違って見えるため）。 */
   onCancel: () => void;
+  /** 「やめる」。書きかけがあれば確認を挟むのは呼び出し側（行）。 */
+  onRequestCancel: () => void;
   onDirtyChange: (id: string, dirty: boolean) => void;
 }) {
   const editCommitment = useEditCommitment();
@@ -1006,6 +1010,8 @@ function CommitmentBodyEditor({
   useEffect(() => () => onDirtyChange(id, false), [id, onDirtyChange]);
 
   function save() {
+    // 保存中は何もしない。ボタン・⌘/Ctrl+Enter・⌘/Ctrl+S のどの経路もここを通る（#3300）。
+    if (busy) return;
     if (draft === undefined || draft.trim() === '') return;
     setBusy(true);
     setFailure(undefined);
@@ -1063,8 +1069,8 @@ function CommitmentBodyEditor({
             // **Enter は改行のまま**（送信のキーにしない）。長文になりうる本文
             // 欄なので、`Input`（片付ける理由・積む本文）と違って Enter 単体
             // 送信にしていない——だからここには IME の門（`isComposing` /
-            // `keyCode === 229`）を付けていない。送信は保存ボタンか
-            // Cmd/Ctrl+S だけで、どちらも Enter 単体の確定と衝突しない
+            // `keyCode === 229`）を付けていない。送信は保存ボタン・Cmd/Ctrl+Enter（共有の
+            // `Textarea` の `onSubmitShortcut`。#3242）・Cmd/Ctrl+S で、どれも Enter 単体の確定と衝突しない
             // （`memory-detail.tsx` と同じ設計）。
             onChange={(event) => setDraft(event.target.value)}
             onKeyDown={(event) => {
@@ -1087,8 +1093,8 @@ function CommitmentBodyEditor({
         >
           保存
         </Button>
-        <SubmitHint action="保存" />
-        <Button size="sm" onClick={onCancel}>
+        {tab === 'edit' && <SubmitHint action="保存" />}
+        <Button size="sm" onClick={onRequestCancel}>
           やめる
         </Button>
       </div>
@@ -1141,6 +1147,26 @@ function OpenRow({
    * サーバ側の線が変わった日に画面だけが黙ってずれる。
    */
   const [editing, setEditing] = useState(false);
+  // この行の編集欄が書きかけか（編集欄が知らせてくる。ページへ渡す前にここでも持つ）。
+  const [editDirty, setEditDirty] = useState(false);
+  const [confirmingDiscard, setConfirmingDiscard] = useState(false);
+  const reportDirty = useCallback(
+    (id: string, dirty: boolean) => {
+      setEditDirty(dirty);
+      onDirtyChange(id, dirty);
+    },
+    [onDirtyChange],
+  );
+  function closeEditor() {
+    setEditing(false);
+    setEditDirty(false);
+    setConfirmingDiscard(false);
+  }
+  /** 「編集をやめる」「やめる」。書きかけがあるときだけ確かめる（#3375）。 */
+  function requestCloseEditor() {
+    if (editDirty) setConfirmingDiscard(true);
+    else closeEditor();
+  }
 
   async function submit() {
     if (reason.trim() === '') return;
@@ -1169,7 +1195,12 @@ function OpenRow({
         <button
           type="button"
           className="ml-auto text-[11px] text-muted-foreground underline hover:text-foreground pointer-coarse:-my-3.5 pointer-coarse:-mr-3 pointer-coarse:px-3 pointer-coarse:py-3.5"
-          onClick={() => setEditing((current) => !current)}
+          aria-label={
+            editing
+              ? `「${snippet(commitment.body)}」の編集をやめる`
+              : `「${snippet(commitment.body)}」の本文を編集`
+          }
+          onClick={() => (editing ? requestCloseEditor() : setEditing(true))}
         >
           {editing ? '編集をやめる' : '本文を編集'}
         </button>
@@ -1184,12 +1215,23 @@ function OpenRow({
       {editing ? (
         <CommitmentBodyEditor
           commitment={commitment}
-          onCancel={() => setEditing(false)}
-          onDirtyChange={onDirtyChange}
+          onCancel={closeEditor}
+          onRequestCancel={requestCloseEditor}
+          onDirtyChange={reportDirty}
         />
       ) : (
         <CommitmentBody commitment={commitment} />
       )}
+
+      <ConfirmDialog
+        open={confirmingDiscard}
+        onOpenChange={setConfirmingDiscard}
+        title="保存していない変更があります"
+        description="編集をやめると、書きかけの内容は失われます。"
+        confirmLabel="破棄して閉じる"
+        destructive
+        onConfirm={closeEditor}
+      />
 
       <label htmlFor={reasonId} className="mt-2 block text-xs font-medium text-muted-foreground">
         片付けた理由
@@ -1328,6 +1370,9 @@ function ClosedReasonBody({ commitment }: { commitment: Commitment }) {
   }
 }
 
+/** 書きかけの集合（`dirtyIds`）での「仕事を登録する」欄の id。行の id（commitment.id）と衝突しない。 */
+const PUSH_FORM_DIRTY_ID = 'push-form';
+
 /**
  * 人間の手で積む口。
  *
@@ -1335,13 +1380,20 @@ function ClosedReasonBody({ commitment }: { commitment: Commitment }) {
  * 困る」ときなので、クローンのターンを1回起こさないと書けないのは重い。
  * CLI の `/commit` と同じ経路である（片方でしかできないことを作らない）。
  */
-function PushForm() {
+function PushForm({ onDirtyChange }: { onDirtyChange: (id: string, dirty: boolean) => void }) {
   const pushCommitment = usePushCommitment();
   const inputId = useId();
   const bodyHintId = useId();
   const [body, setBody] = useState('');
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<unknown>(undefined);
+
+  // 書きかけ（空でない）かどうかをページへ知らせる。編集欄と同じ仕組み（離れる前の確認はページに1つ。#2764）。
+  const dirty = body !== '';
+  useEffect(() => {
+    onDirtyChange(PUSH_FORM_DIRTY_ID, dirty);
+  }, [dirty, onDirtyChange]);
+  useEffect(() => () => onDirtyChange(PUSH_FORM_DIRTY_ID, false), [onDirtyChange]);
 
   async function submit() {
     if (body.trim() === '') return;
@@ -1364,34 +1416,26 @@ function PushForm() {
         <label htmlFor={inputId} className="text-xs font-medium text-muted-foreground">
           何を引き受けたか
         </label>
-        <Input
+        {/*
+          複数行の `Textarea`（編集欄 `CommitmentBodyEditor` と同じ部品。#3376）。**Enter は改行**で、
+          登録は積むボタン・Cmd/Ctrl+Enter（共有の `Textarea` の `onSubmitShortcut`）。
+          IME の変換確定の Enter は改行にもならず送りにもならない（`isSubmitShortcut` が除く）。
+        */}
+        <Textarea
           id={inputId}
           aria-describedby={bodyHintId}
+          rows={3}
+          maxHeight="60vh"
           value={body}
           placeholder="例: 金曜までに週次レビューを出す"
           onChange={(event) => setBody(event.target.value)}
-          onKeyDown={(event) => {
-            // IME 変換中の Enter を拾わない。ここは Enter 単体で送るので、
-            // 変換確定の Enter がそのまま誤送信になる（`ChatComposer` の
-            // ⌘/Ctrl+Enter より直接踏む形）。門の形と理由（`event.nativeEvent.isComposing`
-            // を見る理由・`keyCode === 229` を併用する理由）は `packages/ui/src/components/features/chat/ime.ts` の `isImeConfirmEnter` と `packages/ui/src/components/features/chat/chat-composer.tsx` の
-            // 「IME で変換している最中の Enter では送らない。」のコメントを参照。
-            if (
-              event.key === 'Enter' &&
-              (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229)
-            ) {
-              return;
-            }
-            if (event.key === 'Enter') {
-              event.preventDefault();
-              void submit();
-            }
-          }}
+          onSubmitShortcut={() => void submit()}
+          submitDisabled={body.trim() === '' || busy}
         />
         <FieldHint id={bodyHintId} className="-mt-1">
           何を引き受けたかを全文で書く。切って短く見せるのは一覧側の仕事。
         </FieldHint>
-        <div>
+        <div className="flex items-center gap-2">
           <Button
             variant="primary"
             loading={busy}
@@ -1400,6 +1444,7 @@ function PushForm() {
           >
             積む
           </Button>
+          <SubmitHint action="登録" />
         </div>
         <ErrorNote error={failure} />
       </div>

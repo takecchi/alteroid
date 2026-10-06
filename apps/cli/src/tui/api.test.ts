@@ -84,6 +84,34 @@ describe('chat（POST /chat の SSE）', () => {
     });
   });
 
+  it('渡した clientMessageId をそのまま送る（open の前に終わった送信を引き直すため。#3304）', async () => {
+    replies.push(sse(''));
+    await collect(
+      createTuiApi(target).chat(
+        { text: 'hi', clientMessageId: 'cm-1' },
+        new AbortController().signal,
+      ),
+    );
+    expect(JSON.parse(sent[0]?.body ?? '')).toMatchObject({ clientMessageId: 'cm-1' });
+  });
+
+  it('GET /client-messages/{id}: 受け取り済みは会話 id、404 は null、それ以外の失敗は例外（#3304）', async () => {
+    const api = createTuiApi(target);
+    replies.push(json({ conversationId: 'c9' }));
+    expect(await api.findClientMessage('cm-1')).toBe('c9');
+    expect(sent[0]).toMatchObject({
+      url: 'http://127.0.0.1:4517/client-messages/cm-1',
+      method: 'GET',
+    });
+    expect(sent[0]?.headers).toMatchObject({ authorization: 'Bearer tok' });
+    replies.push(json({ error: '受け取っていない clientMessageId' }, 404));
+    expect(await api.findClientMessage('cm-2')).toBeNull();
+    replies.push(json({ error: 'boom' }, 500));
+    await expect(api.findClientMessage('cm-3')).rejects.toThrow(
+      /前の送信が受け取られたか確かめられませんでした（HTTP 500）/,
+    );
+  });
+
   it('9 種のイベントを型付きで渡し、未知のイベントは無視する', async () => {
     replies.push(
       sse(
@@ -488,6 +516,55 @@ describe('承認待ちの口（#2591。本物の createTuiApi を通す）', () 
     const all = await api.listApprovals({ pending: false });
     expect(searchOf(1)).toEqual({ order: 'asc', pending: 'false' });
     expect(all).toEqual({ approvals: [], unreadable: [] });
+  });
+
+  it('GET /approvals/answered-dates: limit と beforeDate を送り、日と件数をそのまま返す（#3340）', async () => {
+    const api = createTuiApi(target);
+    replies.push(json({ dates: [{ date: '2026-09-30', count: 2 }] }));
+    expect(await api.listAnsweredDates({ limit: 30 })).toEqual([{ date: '2026-09-30', count: 2 }]);
+    expect(new URL(sent[0]?.url ?? '').pathname).toBe('/approvals/answered-dates');
+    expect(searchOf(0)).toEqual({ limit: '30' });
+
+    replies.push(json({ dates: [] }));
+    await api.listAnsweredDates({ limit: 30, beforeDate: '2026-09-30' });
+    expect(searchOf(1)).toEqual({ limit: '30', beforeDate: '2026-09-30' });
+
+    replies.push(json({ error: 'beforeDate は YYYY-MM-DD で指定する' }, 400));
+    await expect(api.listAnsweredDates({ limit: 30, beforeDate: 'x' })).rejects.toThrow(
+      /YYYY-MM-DD/,
+    );
+  });
+
+  it('GET /approvals?answeredOn=: answeredOn だけを送る（order・pending は付けない）。400 の理由は ApiError へ（#3340）', async () => {
+    const api = createTuiApi(target);
+    replies.push(json({ approvals: [{ id: 'a1', createdAt: 't', question: 'q' }] }));
+    expect((await api.listApprovalsAnsweredOn('2026-09-30')).map((a) => a.id)).toEqual(['a1']);
+    expect(searchOf(0)).toEqual({ answeredOn: '2026-09-30' });
+
+    replies.push(json({ error: 'answeredOn は YYYY-MM-DD で指定する' }, 400));
+    await expect(api.listApprovalsAnsweredOn('2026-02-30')).rejects.toThrow(/YYYY-MM-DD/);
+  });
+
+  it('GET /approvals/{id}: 1回で1件を引く（pending・order は付けない）。404 は null、他の失敗は ApiError（「無い」と言わない）', async () => {
+    const api = createTuiApi(target);
+    replies.push(
+      json({
+        approval: { id: 'a 1', createdAt: 't', question: 'q', updatedAt: 't' },
+        settledOn: '2026-09-30',
+      }),
+    );
+    expect((await api.readApproval('a 1'))?.id).toBe('a 1');
+    expect(sent).toHaveLength(1);
+    expect(new URL(sent[0]?.url ?? '').pathname).toBe('/approvals/a%201');
+    expect(searchOf(0)).toEqual({});
+
+    replies.push(json({ error: 'not found' }, 404));
+    expect(await api.readApproval('nope')).toBeNull();
+
+    replies.push(json({ error: '読めない行' }, 409));
+    await expect(api.readApproval('bad')).rejects.toThrow(/読めない行/);
+    replies.push(json({ error: 'boom' }, 500));
+    await expect(api.readApproval('x')).rejects.toThrow(/承認を読めませんでした/);
   });
 
   it('POST /approvals/{id}/answer: 自由文・選択どちらも本文をそのまま送る', async () => {

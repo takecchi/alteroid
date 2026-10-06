@@ -176,6 +176,25 @@ export class PgAttachmentStore implements AttachmentStore {
     };
   }
 
+  async unbind(ids: readonly string[], target: AttachmentBindTarget): Promise<string[]> {
+    const queryable = [...new Set(ids.filter((id) => !hasNul(id)))];
+    if (queryable.length === 0) return [];
+    const updated = await this.#db
+      .update(attachments)
+      .set('conversationId' in target ? { conversationId: null } : { externalEventId: null })
+      .where(
+        and(
+          inArray(attachments.id, queryable),
+          'conversationId' in target
+            ? eq(attachments.conversationId, target.conversationId)
+            : eq(attachments.externalEventId, target.externalEventId),
+        ),
+      )
+      .returning({ id: attachments.id });
+    const done = new Set(updated.map((row) => row.id));
+    return queryable.filter((id) => done.has(id));
+  }
+
   async prune(now: Date): Promise<number> {
     const unboundBefore = new Date(now.getTime() - ATTACHMENT_UNBOUND_TTL_MS);
     const removed = await this.#db

@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 
 import { parseCron } from './cron.js';
 import { noteBackgroundFailure, reasonOf } from './dropped-record.js';
+import { compareIsoInstant } from './iso-instant.js';
 import { isWrittenDailyReport } from './schema.js';
 import type {
   InboxEvent,
@@ -10,7 +11,7 @@ import type {
   ScheduledRequest,
   UnreadableSchedule,
 } from './schema.js';
-import type { JournalQuery, JournalStore, ScheduleStore } from './store.js';
+import type { InboxStore, JournalQuery, JournalStore, ScheduleStore } from './store.js';
 
 /**
  * スケジューラ — 時間起点のジョブ（PRD「自律」の起点②）。
@@ -160,6 +161,16 @@ export interface SchedulerOptions {
    */
   schedules?: ScheduleStore;
   /**
+   * 受信箱の読み取り口。**読むだけで、配達回数を進めない `peekPending()` しか使わない**
+   * （`claimPending()` は器の `#restoreUnread` だけが呼ぶ）。
+   *
+   * 器の入れ替えの直後、**同じ回の未読の timer 行が受信箱に残っているなら、
+   * スケジューラはその回を撃たない**（`#firstDue` の doc。未読の側が配り直す
+   * ——#2814）。渡さなければ従来どおり、受信箱を見ずに撃つ（二重になりうる）。
+   * 読めなかったときも撃つ側へ倒れる（消えるより二重の方が安い）。
+   */
+  inbox?: Pick<InboxStore, 'peekPending'>;
+  /**
    * 位相を読めなかった・保存できなかったことを外へ出す口。
    *
    * **黙って落とさない。** 落ちても時計は止まらず、影響は「その回をもう一度起こす／
@@ -225,6 +236,12 @@ export function createScheduler(options: SchedulerOptions): Scheduler {
   return new TimerScheduler(options);
 }
 
+/** 受信箱に未読で残っている timer 行のうち、`#firstDue` が見る欄だけ。 */
+interface UnreadTimer {
+  at: string;
+  cause: 'schedule' | 'schedule_catchup' | 'manual' | undefined;
+}
+
 class TimerScheduler implements Scheduler {
   /** 既定の仕込み（日報・発意）。 */
   readonly #base: ScheduleEntry[];
@@ -236,6 +253,7 @@ class TimerScheduler implements Scheduler {
   readonly #post: (event: InboxEvent) => void;
   readonly #now: () => Date;
   readonly #store: ScheduleStore | undefined;
+  readonly #inbox: Pick<InboxStore, 'peekPending'> | undefined;
   readonly #due = new Map<string, number>();
   /** 直近の読み直しで読めなかった継続中の依頼（`Scheduler.unreadable`）。 */
   #unreadable: UnreadableSchedule[] = [];
@@ -282,11 +300,12 @@ class TimerScheduler implements Scheduler {
   /** 位相の書き込み。**直列**に流す（同じ kind の前後関係が入れ替わらないように）。 */
   #writes: Promise<void> = Promise.resolve();
 
-  constructor({ entries, post, now, schedules, onError }: SchedulerOptions) {
+  constructor({ entries, post, now, schedules, inbox, onError }: SchedulerOptions) {
     this.#base = entries;
     this.#post = post;
     this.#now = now ?? (() => new Date());
     this.#store = schedules;
+    this.#inbox = inbox;
     this.#onError =
       onError ??
       ((message): void => {
@@ -398,6 +417,8 @@ class TimerScheduler implements Scheduler {
     this.#unreadable = list.unreadable;
     const now = this.#now();
     const seen = new Set<string>();
+    // 受信箱の未読 timer は、`#firstDue` が要る依頼が在るときに1度だけ読む。
+    let unreadTimers: Map<string, UnreadTimer[]> | undefined;
 
     for (const plan of plans) {
       // 既定の仕込みと同じ名前は乗っ取らせない（日報を「定期の依頼」で潰せてしまう）
@@ -421,7 +442,8 @@ class TimerScheduler implements Scheduler {
       // この器で見るのは初めて」で、本当の取りこぼしを拾ってよい場面
       // （`#firstDue` の doc）。
       const specChanged = existing !== undefined;
-      const due = this.#firstDue(entry, plan, now, specChanged);
+      unreadTimers ??= await this.#readUnreadTimers();
+      const due = this.#firstDue(entry, plan, now, specChanged, unreadTimers.get(plan.kind) ?? []);
       this.#due.set(plan.kind, due.at.getTime());
       if (due.catchUp) this.#catchUp.add(plan.kind);
       else this.#catchUp.delete(plan.kind);
@@ -482,12 +504,25 @@ class TimerScheduler implements Scheduler {
     plan: ScheduledRequest,
     now: Date,
     specChanged: boolean,
+    unread: readonly UnreadTimer[],
   ): { at: Date; catchUp: boolean } {
     // **引き受けたまま終わっていない発火があるなら、まずそれを配り直す。**
     // claim の直後に器が落ちると、モデルには何も届いていないのに印だけが残る。
     // ここで拾わないと、日次なら翌日・週次なら翌週までその回が消える。
     // `specChanged` より先に見る — 周期を差し替えても配り直しは止めない。
-    if (plan.pendingRun !== undefined) return { at: now, catchUp: false };
+    //
+    // **ただし、その回の timer 行が受信箱に未読で残っているなら撃たない**（#3291）。
+    // 器の入れ替えで未読は `#restoreUnread` が元の回として配り直す（#2814 の
+    // 「未読の側が配り直す」）ので、ここでも撃つと同じ回が二重に走る。
+    // **「同じ回」は `pendingRun.at` と行の `event.at` が同じ時刻であること**
+    // （`claimRun` は `event.at` をそのまま `pendingRun.at` に置く。実時刻で比べる）。
+    if (plan.pendingRun !== undefined) {
+      const pendingAt = plan.pendingRun.at;
+      if (unread.some((row) => compareIsoInstant(row.at, pendingAt) === 0)) {
+        return { at: entry.nextAt(now), catchUp: false };
+      }
+      return { at: now, catchUp: false };
+    }
 
     if (specChanged) return { at: entry.nextAt(now), catchUp: false };
 
@@ -496,7 +531,46 @@ class TimerScheduler implements Scheduler {
     const seed = new Date(plan.lastScheduledRunAt ?? plan.createdAt);
     if (Number.isNaN(seed.getTime())) return { at: entry.nextAt(now), catchUp: false };
 
-    return dueFromSeed(entry, seed, now);
+    const due = dueFromSeed(entry, seed, now);
+    // 取りこぼしの拾い直しも同じ。印（`pendingRun`）が無い回は、引き受ける前に落ちた
+    // 回（受信箱で待っていた行）でありうる。**拾い直す回の時刻は、錨から数えた次の
+    // 格子点（`entry.nextAt(seed)`）である。** 行の `event.at` は発火した時刻で、
+    // 格子点そのものではない（遅れて刻みが回れば後ろにずれる）ので、一致ではなく
+    // 「格子点以後に発火した定刻の行」で同じ回と見る。手で起こした行（`manual`）は
+    // 定期の回ではないので数えない。
+    if (due.catchUp) {
+      const slot = entry.nextAt(seed);
+      const covered = unread.some(
+        (row) => row.cause !== 'manual' && compareIsoInstant(row.at, slot.toISOString()) >= 0,
+      );
+      if (covered) return { at: entry.nextAt(now), catchUp: false };
+    }
+    return due;
+  }
+
+  /**
+   * 受信箱に未読で残っている timer 行を、kind ごとに返す。**読むだけである**
+   * （`peekPending` は配達回数を進めない）。口が無い・読めないときは空
+   * （撃つ側へ倒れる。黙らず `onError` へ出す）。
+   */
+  async #readUnreadTimers(): Promise<Map<string, UnreadTimer[]>> {
+    const byKind = new Map<string, UnreadTimer[]>();
+    if (this.#inbox === undefined) return byKind;
+    try {
+      const peek = await this.#inbox.peekPending();
+      for (const { event } of peek.entries) {
+        if (event.type !== 'timer') continue;
+        const rows = byKind.get(event.kind) ?? [];
+        rows.push({ at: event.at, cause: event.cause });
+        byKind.set(event.kind, rows);
+      }
+    } catch (error) {
+      this.#onError(
+        `受信箱の未読の timer を読めなかった（同じ回が二重に走りうる側へ倒れる）: ${reasonOf(error)}`,
+      );
+      return new Map();
+    }
+    return byKind;
   }
 
   /**

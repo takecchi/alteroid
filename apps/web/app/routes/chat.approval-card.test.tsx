@@ -9,7 +9,7 @@
  * 2. 答えると同じカードが「回答済」になり、回答がカードに出る。カードの位置は動かない
  * 3. 答えを受けたクローンの返答は、時刻順でカードの後ろに並ぶ
  * 4. 設問つきの承認は、設問を開く口がカードに出る
- * 5. 承認の詳細への導線がある（暫定で `/approvals`。`approvalDetailPath`）
+ * 5. 承認の詳細への導線がある（`approvalDetailPath` が返す日付なしの入口 `/approvals/item/:id`。正しい日への移動は `approvals-item.test.tsx`）
  */
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider, useParams } from 'react-router';
@@ -186,13 +186,13 @@ describe('会話の中の承認のカード（#3259）', () => {
     expect(screen.getByRole('button', { name: '選択肢を開いて答える' })).toBeTruthy();
   });
 
-  it('承認の詳細への導線がある（暫定で承認の画面）', async () => {
+  it('承認の詳細への導線がある（日付なしの入口。そこで正しい日へ移る）', async () => {
     stubTimeline({ approval: UNANSWERED });
     renderChat(`/chat/${ID}`);
 
     await screen.findByText('本番に出してよいか');
     const link = screen.getByRole('link', { name: /承認の画面で開く/ });
-    expect(link.getAttribute('href')).toBe('/approvals');
+    expect(link.getAttribute('href')).toBe(`/approvals/item/${UNANSWERED.id}`);
   });
 
   it('回答済みで読み込まれたカードは、回答の時刻もカードの中に出る', async () => {

@@ -92,6 +92,13 @@ export interface AttachmentStore {
    */
   bindToExternalEvent(ids: readonly string[], eventId: string): Promise<AttachmentBindResult>;
   /**
+   * 結び付けを戻す（{@link bind} / {@link bindToExternalEvent} の取り消し）。**その `target` に結び付いている id だけ**を
+   * 未結び付けへ戻し、戻した id を返す。未結び付け・別の宛先に結び付いている・無い id は触らない（返さない）。
+   * 冪等。呼び手は「自分の呼び出しで新しく結んだ id」だけを渡すこと（以前から同じ宛先に結んであった id を渡すと、
+   * その結び付けも戻る）。
+   */
+  unbind(ids: readonly string[], target: AttachmentBindTarget): Promise<string[]>;
+  /**
    * 掃除。①`expiresAt` を過ぎたもの、②作成から {@link ATTACHMENT_UNBOUND_TTL_MS} たっても未結び付けのもの、を消す。
    * 消した件数を返す。**中身を読まない。**
    */
@@ -109,6 +116,11 @@ export const ATTACHMENT_MAX_FILE_BYTES_DEFAULT = 25 * MIB;
 export const ATTACHMENT_MAX_PER_MESSAGE_DEFAULT = 10;
 export const ATTACHMENT_MAX_TOTAL_BYTES_DEFAULT = 50 * MIB;
 export const ATTACHMENT_RETENTION_DAYS_DEFAULT = 30;
+/**
+ * 保持日数の上限（約100年）。`expiresAt` は `new Date(now + 日数 × 86_400_000).toISOString()` で作るので、
+ * 巨大な値は `RangeError: Invalid time value` で全 `put` を 500 にする（Issue #3326）。
+ */
+export const ATTACHMENT_RETENTION_DAYS_MAX = 36_500;
 /** 未結び付けのまま残してよい時間（作成から。1時間）。 */
 export const ATTACHMENT_UNBOUND_TTL_MS = 60 * 60_000;
 
@@ -139,6 +151,15 @@ export const DEFAULT_ATTACHMENT_LIMITS: AttachmentLimits = {
   retentionDays: ATTACHMENT_RETENTION_DAYS_DEFAULT,
 };
 
+/**
+ * 画像の上限を人間向けの文にする（MiB で割り切れれば `5 MiB`、そうでなければ `1000 B`）。
+ * 中身が画像でも上限を超える添付を画像として渡さないときの通知行に使う（#3325）。
+ */
+export function formatImageLimit(bytes: number): string {
+  const mib = 1024 * 1024;
+  return bytes % mib === 0 ? `${bytes / mib} MiB` : `${bytes} B`;
+}
+
 export interface AttachmentLimitsConfig {
   readonly limits: AttachmentLimits;
   /** 読めなかった設定値についての注意（呼び出し元が人間に見せる）。 */
@@ -147,16 +168,20 @@ export interface AttachmentLimitsConfig {
 
 /**
  * 環境変数から上限を読む（`readArchiveFoldConfig` と同じ作法: 読めない値は `notes` へ落として既定へ倒す）。
- * 正の整数だけを受ける。
+ * 正の整数だけを受ける。保持日数は {@link ATTACHMENT_RETENTION_DAYS_MAX} まで（超えたら既定へ倒す）。
  */
 export function readAttachmentLimits(env: NodeJS.ProcessEnv = process.env): AttachmentLimitsConfig {
   const notes: string[] = [];
-  const read = (name: string, fallback: number): number => {
+  const read = (name: string, fallback: number, max?: number): number => {
     const raw = env[name]?.trim();
     if (raw === undefined || raw.length === 0) return fallback;
     const parsed = Number(raw);
     if (!Number.isSafeInteger(parsed) || parsed <= 0) {
       notes.push(`${name}="${raw}" は正の整数として読めないので既定 ${fallback} を使う`);
+      return fallback;
+    }
+    if (max !== undefined && parsed > max) {
+      notes.push(`${name}="${raw}" は上限 ${max} を超えているので既定 ${fallback} を使う`);
       return fallback;
     }
     return parsed;
@@ -167,7 +192,11 @@ export function readAttachmentLimits(env: NodeJS.ProcessEnv = process.env): Atta
       maxFileBytes: read(ATTACHMENT_MAX_FILE_BYTES_ENV, ATTACHMENT_MAX_FILE_BYTES_DEFAULT),
       maxPerMessage: read(ATTACHMENT_MAX_PER_MESSAGE_ENV, ATTACHMENT_MAX_PER_MESSAGE_DEFAULT),
       maxTotalBytes: read(ATTACHMENT_MAX_TOTAL_BYTES_ENV, ATTACHMENT_MAX_TOTAL_BYTES_DEFAULT),
-      retentionDays: read(ATTACHMENT_RETENTION_DAYS_ENV, ATTACHMENT_RETENTION_DAYS_DEFAULT),
+      retentionDays: read(
+        ATTACHMENT_RETENTION_DAYS_ENV,
+        ATTACHMENT_RETENTION_DAYS_DEFAULT,
+        ATTACHMENT_RETENTION_DAYS_MAX,
+      ),
     },
     notes,
   };
@@ -178,7 +207,10 @@ export function readAttachmentLimits(env: NodeJS.ProcessEnv = process.env): Atta
 // ---------------------------------------------------------------------------
 
 export type AttachmentRejection =
-  'too_large' | 'magic_mismatch' | 'too_many' | 'total_too_large' | 'media_type_missing';
+  'too_large' | 'magic_mismatch' | 'too_many' | 'total_too_large' | 'media_type_missing' | 'empty';
+
+/** 0バイトの添付を断る文（Web の `checkAttachments` と同じ文。#3327）。 */
+export const ATTACHMENT_EMPTY_MESSAGE = '空のファイルは添えられない';
 
 /** 添付を受け付けない理由。型で見分ける（文言で見分けない）。 */
 export class AttachmentRejectedError extends Error {
@@ -252,12 +284,12 @@ export const ATTACHMENT_NAME_MAX_LENGTH = 255;
 
 /**
  * ファイル名の正規化。NUL を落とし、孤立サロゲートを U+FFFD に変え（`stripNulls` と同じ規則）、
- * 制御文字とパス区切り（`/` `\`）を `_` にし、前後の空白を除く。`.` / `..` / 空は `file` にする。
+ * 制御文字（C0・DEL・C1）・書式制御文字（`\p{Cf}`。双方向制御・ゼロ幅など。表示の偽装に使われる）・パス区切り（`/` `\`）を `_` にし、前後の空白を除く。`.` / `..` / 空は `file` にする。
  */
 export function normalizeAttachmentName(raw: string): string {
   let name = toWellFormed(stripNul(raw))
     // eslint-disable-next-line no-control-regex
-    .replace(/[\u0001-\u001f\u007f/\\]/g, '_')
+    .replace(/[\u0001-\u001f\u007f-\u009f/\\\p{Cf}]/gu, '_')
     .trim();
   if (name.length > ATTACHMENT_NAME_MAX_LENGTH) {
     name = toWellFormed(name.slice(0, ATTACHMENT_NAME_MAX_LENGTH));
@@ -265,8 +297,49 @@ export function normalizeAttachmentName(raw: string): string {
   return name === '' || name === '.' || name === '..' ? 'file' : name;
 }
 
+/** ディスク上のパスに使う名前の長さの上限（UTF-8 のバイト数）。NAME_MAX（255）に余裕を残す。 */
+export const ATTACHMENT_DISK_NAME_MAX_BYTES = 200;
+
+/** 拡張子として残す長さの上限（`.` を含む UTF-8 のバイト数）。これより長い「拡張子」は拡張子とみなさない。 */
+const ATTACHMENT_DISK_EXT_MAX_BYTES = 32;
+
+/** `text` を UTF-8 で `maxBytes` バイト以内に、コードポイントの途中で切らずに丸める。 */
+function truncateUtf8(text: string, maxBytes: number): string {
+  let bytes = 0;
+  let out = '';
+  for (const char of text) {
+    const size = Buffer.byteLength(char, 'utf8');
+    if (bytes + size > maxBytes) break;
+    bytes += size;
+    out += char;
+  }
+  return out;
+}
+
+/**
+ * ディスク上のパス（写し・担い手の置き場）に使う名前。{@link normalizeAttachmentName} を通したうえで、
+ * UTF-8 で {@link ATTACHMENT_DISK_NAME_MAX_BYTES} バイト以内に丸める（Linux の NAME_MAX は 255 **バイト**。
+ * 正規化は UTF-16 の 255 単位までなので、日本語の名前は 86 文字ほどで超える。Issue #3324）。拡張子は残し、
+ * コードポイントの途中では切らない。**表示や控え（`AttachmentMeta.name`・通知行）には使わない**。
+ */
+export function attachmentDiskName(name: string): string {
+  const normalized = normalizeAttachmentName(name);
+  if (Buffer.byteLength(normalized, 'utf8') <= ATTACHMENT_DISK_NAME_MAX_BYTES) return normalized;
+  const dot = normalized.lastIndexOf('.');
+  const ext =
+    dot > 0 && Buffer.byteLength(normalized.slice(dot), 'utf8') <= ATTACHMENT_DISK_EXT_MAX_BYTES
+      ? normalized.slice(dot)
+      : '';
+  const stem = truncateUtf8(
+    ext === '' ? normalized : normalized.slice(0, dot),
+    ATTACHMENT_DISK_NAME_MAX_BYTES - Buffer.byteLength(ext, 'utf8'),
+  ).trimEnd();
+  return stem === '' ? `file${ext}` : `${stem}${ext}`;
+}
+
 /**
  * 1つぶんの検証。通れば正規化した名前と MIME を返す。
+ * - 0バイト → `empty`（画像の宣言でも。Web・CLI・TUI と揃えて断る。#3327）
  * - 宣言 MIME が画像なのに中身が一致しない → `magic_mismatch`
  * - 画像は `maxImageBytes`、それ以外は `maxFileBytes` を超えると `too_large`
  */
@@ -277,6 +350,9 @@ export function validateAttachmentInput(
   const mediaType = normalizeAttachmentMediaType(input.mediaType);
   if (mediaType === '') {
     throw new AttachmentRejectedError('media_type_missing', 'mediaType が空');
+  }
+  if (input.bytes.length === 0) {
+    throw new AttachmentRejectedError('empty', ATTACHMENT_EMPTY_MESSAGE);
   }
   const image = isAttachmentImageMediaType(mediaType);
   const max = image ? limits.maxImageBytes : limits.maxFileBytes;
@@ -365,6 +441,13 @@ export function isAttachmentPrunable(meta: AttachmentMeta, now: Date): boolean {
 
 /** 結び付け先。**会話か外部イベントのどちらか1つ**（{@link AttachmentMeta.externalEventId}）。 */
 export type AttachmentBindTarget = { conversationId: string } | { externalEventId: string };
+
+/** いま `target` に結び付いているか（{@link AttachmentStore.unbind} が戻してよい id の判定。3実装が同じ規則を使う）。 */
+export function isBoundTo(meta: AttachmentMeta, target: AttachmentBindTarget): boolean {
+  return 'conversationId' in target
+    ? meta.conversationId === target.conversationId
+    : meta.externalEventId === target.externalEventId;
+}
 
 /**
  * いま `target` へ結んでよいか（3実装が同じ規則を使う。pg は同じ条件を SQL で書く）。

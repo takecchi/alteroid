@@ -5,9 +5,12 @@ import { join, resolve, sep } from 'node:path';
 
 import type { AgentInputImage, AgentUserInput } from './agent-session.js';
 import {
+  attachmentDiskName,
   normalizeAttachmentName,
   sniffAttachmentImageType,
   type AttachmentLimits,
+  formatImageLimit,
+  readAttachmentLimits,
 } from './attachment.js';
 import { sha256Hex } from './auth.js';
 import { stripNul } from './nul-guard.js';
@@ -32,7 +35,7 @@ import type { RunnerAttachment } from './runner-protocol.js';
  * - `root` と各 dir が **runner 自身の所有の実在の dir（symlink でない）** であることを確かめてから使う
  *   （`/tmp` は誰でも書けるので、担い手が先に同名の symlink を置いておく経路を断つ）。
  * - `id` と `managerId` は dir 名にしてよい形だけ（`..` や区切りを通さない）。名前は
- *   {@link normalizeAttachmentName} を通し、解決後のパスが置き場の外へ出ないことをここでも確かめる。
+ *   {@link normalizeAttachmentName} を通し、ディスク上の名前は {@link attachmentDiskName}（UTF-8 で 200 バイトまで）で丸め、解決後のパスが置き場の外へ出ないことをここでも確かめる。
  *
  * ## 掃除
  *
@@ -59,6 +62,8 @@ const PER_ATTACHMENT_OVERHEAD_BYTES = 4096;
 
 /**
  * runner の `POST /managers` と `/managers/:id/messages` が受ける本文の上限（バイト）。
+ * `POST /managers/:id/resume` も同じ値で検める——ただし生ログ `entries`（添付の上限と無関係に大きい）も
+ * 運ぶので、本文全体ではなく **添付の `data` の合計だけ**を比べる（`entries` は対象外）。
  *
  * 添付の合計上限（`maxTotalBytes`）の base64（×4/3）に、個数ぶんのメタデータと依頼文の余裕を足す。
  * **デーモンが添付の上限（個数・合計）を先に検めて送るので、これは「検めを抜けた巨大な本文」への最後の歯止め**
@@ -89,8 +94,10 @@ export interface PlacedAttachment {
   readonly sha256: string;
   /** 置いたパス（担い手が `Read` で開ける）。 */
   readonly path: string;
-  /** 画像として渡す分（中身の先頭で確かめた画像だけ）。 */
+  /** 画像として渡す分（中身の先頭で確かめた画像で、画像の上限以内のものだけ）。 */
   readonly image?: AgentInputImage;
+  /** 中身は画像だが画像の上限を超えるので渡さなかった。そのときの上限（バイト。#3325）。 */
+  readonly imageOverLimit?: number;
 }
 
 export interface PlaceAttachmentsOptions {
@@ -100,6 +107,8 @@ export interface PlaceAttachmentsOptions {
   readonly attachments: readonly RunnerAttachment[];
   /** 担い手の子プロセスの gid（降ろす構成のとき）。無ければ runner と同じ UID で、0700 / 0400。 */
   readonly childGid?: number;
+  /** 画像の上限の取り元。既定は runner の環境変数（{@link readAttachmentLimits}。担い手の置き場が読むものと同じ）。 */
+  readonly limits?: AttachmentLimits;
 }
 
 const ownUid = (): number | undefined =>
@@ -121,12 +130,20 @@ async function assertOwnDirectory(path: string): Promise<void> {
   }
 }
 
-async function ensureDirectory(path: string, mode: number, childGid: number | undefined) {
+/** dir を用意する。**この呼び出しが実際に作った（EEXIST でなかった）ときだけ `true`**（Issue #3268。失敗時の掃除の対象を決める）。 */
+async function ensureDirectory(
+  path: string,
+  mode: number,
+  childGid: number | undefined,
+): Promise<boolean> {
+  let madeHere = true;
   await mkdir(path, { mode }).catch((error: unknown) => {
     if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+    madeHere = false;
   });
   await assertOwnDirectory(path);
   if (childGid !== undefined) await chown(path, ownUid() ?? -1, childGid);
+  return madeHere;
 }
 
 /**
@@ -137,6 +154,7 @@ export async function placeRunnerAttachments(
   options: PlaceAttachmentsOptions,
 ): Promise<PlacedAttachment[]> {
   const { root, managerId, attachments, childGid } = options;
+  const maxImageBytes = (options.limits ?? readAttachmentLimits().limits).maxImageBytes;
   if (!SAFE_SEGMENT.test(managerId)) {
     throw new RunnerAttachmentRejectedError('managerId が dir 名にできない形');
   }
@@ -159,7 +177,9 @@ export async function placeRunnerAttachments(
   const managerDir = resolve(base, managerId);
   const dirMode = childGid === undefined ? 0o700 : 0o750;
   const fileMode = childGid === undefined ? 0o400 : 0o440;
+  // この呼び出しが作った dir と、置いたファイルだけを積む（以前のメッセージが置いた同じ id の dir は消さない）。
   const created: string[] = [];
+  const placedFiles: string[] = [];
   const placed: PlacedAttachment[] = [];
   try {
     await mkdir(base, { recursive: true, mode: 0o755 });
@@ -169,14 +189,14 @@ export async function placeRunnerAttachments(
     for (const { attachment, bytes } of decoded) {
       const name = normalizeAttachmentName(attachment.name);
       const dir = resolve(managerDir, attachment.id);
-      const path = resolve(dir, name);
+      // ディスク上の名前は NAME_MAX に収まるよう丸める（#3324）。`name`（通知行・画像の名前）は丸めない。
+      const path = resolve(dir, attachmentDiskName(name));
       if (!dir.startsWith(managerDir + sep) || !path.startsWith(dir + sep)) {
         throw new RunnerAttachmentRejectedError(
           `添付 ${attachment.id} の置き先が置き場の外へ出る形だった`,
         );
       }
-      await ensureDirectory(dir, dirMode, childGid);
-      created.push(dir);
+      if (await ensureDirectory(dir, dirMode, childGid)) created.push(dir);
       const tmp = resolve(dir, `.${randomUUID()}.tmp`);
       try {
         // `wx`（O_EXCL）は symlink を辿らない。
@@ -188,6 +208,7 @@ export async function placeRunnerAttachments(
           await handle.close();
         }
         await rename(tmp, path);
+        placedFiles.push(path);
       } catch (error) {
         await rm(tmp, { force: true }).catch(() => undefined);
         throw error;
@@ -202,10 +223,14 @@ export async function placeRunnerAttachments(
         path,
         ...(imageType === undefined
           ? {}
-          : { image: { mediaType: imageType, data: attachment.data, name } }),
+          : bytes.length > maxImageBytes
+            ? { imageOverLimit: maxImageBytes }
+            : { image: { mediaType: imageType, data: attachment.data, name } }),
       });
     }
   } catch (error) {
+    // 既存の dir の中では、この呼び出しが置いたファイルだけを消す。新しく作った dir は丸ごと消す。
+    for (const file of placedFiles) await rm(file, { force: true }).catch(() => undefined);
     for (const dir of created)
       await rm(dir, { recursive: true, force: true }).catch(() => undefined);
     throw error;
@@ -218,7 +243,9 @@ export function placedAttachmentNoticeLine(placed: PlacedAttachment): string {
   return (
     `[添付] id=${placed.id} name=${stripNul(placed.name)} type=${placed.mediaType} ` +
     `size=${placed.size} sha256=${placed.sha256} path=${placed.path}` +
-    `${placed.image === undefined ? '' : '（画像としても渡した）'}（Read で開ける）`
+    (placed.imageOverLimit === undefined
+      ? `${placed.image === undefined ? '' : '（画像としても渡した）'}（Read で開ける）`
+      : `（画像の上限（${formatImageLimit(placed.imageOverLimit)}）を超えるので画像としては渡していない。path で Read で開ける）`)
   );
 }
 

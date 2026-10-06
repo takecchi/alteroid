@@ -6,7 +6,7 @@
  * - 一覧は未回答のみ、`order=asc`（古い順 — 番号を振って使う前提の並びを実装によらず揃える）。
  * - 設問が在れば `{ selections, answer? }`、無ければ `{ answer }`（自由文）。
  * - 400 などの失敗は、デーモンの理由（本文の `error`）をそのまま見せる。黙って閉じない。
- * - 詳細は一覧に無くても開ける（回答済み・取り下げ済みは `pending=false` で探す）。
+ * - 詳細は一覧に無くても開ける（回答済み・取り下げ済みは `GET /approvals/{id}` で1件引く）。
  *
  * 取り直し: ヘッダの `HeaderFeed.onEvent`（journal の SSE）を合図にまとめて取り直す。
  * 詳細が開いていれば同じ 1 回の読みで詳細も更新する（`pending=true` に無いときだけ全件を読む）。
@@ -15,7 +15,13 @@
  * 専用操作。後者は自由文で答える承認待ちとして扱い、`/allow` `/deny`（マネージャーへの
  * `decision` つきメッセージ）には触れない。
  */
-import { ApiError, type ApprovalRow, type TuiApi, type UnreadableApproval } from './api.js';
+import {
+  ApiError,
+  type AnsweredDateRow,
+  type ApprovalRow,
+  type TuiApi,
+  type UnreadableApproval,
+} from './api.js';
 import {
   buildAnswer,
   emptyForm,
@@ -73,16 +79,50 @@ export interface DetailState {
   readonly loadedAt: number;
 }
 
+/** 決着した日の一覧（回答済み・取り下げ済みを日ごとに辿る入口。#3340）。 */
+export interface DatesState {
+  readonly status: 'idle' | 'loading' | 'ready' | 'error';
+  /** 新しい日が上（デーモンが並べた順のまま）。 */
+  readonly items: readonly AnsweredDateRow[];
+  readonly selected: number;
+  /** 読み込みの失敗（前の一覧は残す）。 */
+  readonly error: string | null;
+  /** 直近の読みがちょうど `limit` 件だった（= これより古い日があるかもしれない）。 */
+  readonly maybeMore: boolean;
+  readonly loadedAt: number;
+}
+
+/** 1 日ぶんの決着した件（回答済み・取り下げ済み。決着の新しい順）。 */
+export interface DayState {
+  readonly date: string | null;
+  readonly status: 'idle' | 'loading' | 'ready' | 'error';
+  readonly items: readonly ApprovalRow[];
+  readonly selected: number;
+  readonly error: string | null;
+  readonly loadedAt: number;
+}
+
 export interface ApprovalsState {
-  readonly view: 'list' | 'detail';
+  /** list = 未回答 / detail = 1 件 / dates = 決着した日 / day = その日の件。 */
+  readonly view: 'list' | 'detail' | 'dates' | 'day';
   readonly list: ListState;
   readonly detail: DetailState | null;
+  readonly dates: DatesState;
+  readonly day: DayState;
+  /** 詳細を開いた元（Esc で戻る先）。 */
+  readonly detailFrom: 'list' | 'day';
 }
+
+/** 決着した日の一覧を 1 回に読む日数（続きは `loadMoreDates`）。 */
+export const ANSWERED_DATES_LIMIT = 30;
 
 export const initialApprovalsState: ApprovalsState = {
   view: 'list',
   list: { status: 'idle', items: [], unreadable: [], selected: 0, error: null, loadedAt: 0 },
   detail: null,
+  dates: { status: 'idle', items: [], selected: 0, error: null, maybeMore: false, loadedAt: 0 },
+  day: { date: null, status: 'idle', items: [], selected: 0, error: null, loadedAt: 0 },
+  detailFrom: 'list',
 };
 
 const messageOf = redactedErrorMessage;
@@ -215,11 +255,9 @@ export class ApprovalsController {
     const id = detail.id;
     let found: ApprovalRow | undefined = pending.approvals.find((a) => a.id === id);
     if (found === undefined) {
-      // 未回答の一覧に無い: 回答済み・取り下げ済みか、そもそも無いか。
+      // 未回答の一覧に無い: 回答済み・取り下げ済みか、そもそも無いか。全件は読まず、id で1件引く。
       try {
-        found = (await this.api.listApprovals({ pending: false })).approvals.find(
-          (a) => a.id === id,
-        );
+        found = (await this.api.readApproval(id)) ?? undefined;
       } catch (error) {
         if (gen !== this.gen) return;
         this.markDetailError(messageOf(error));
@@ -283,11 +321,16 @@ export class ApprovalsController {
   }
 
   /** id から開く（会話の `ask_human` の案内・`/approvals <id>`）。一覧に無くても探す。 */
-  async open(id: string, seed: ApprovalRow | null = null): Promise<void> {
+  async open(
+    id: string,
+    seed: ApprovalRow | null = null,
+    from: 'list' | 'day' = 'list',
+  ): Promise<void> {
     this.gen += 1;
     this.store.update((s) => ({
       ...s,
       view: 'detail',
+      detailFrom: from,
       detail: {
         id,
         approval: seed,
@@ -305,11 +348,185 @@ export class ApprovalsController {
     await this.reload();
   }
 
-  /** 一覧へ戻る（詳細とフォームを捨てる）。 */
+  /**
+   * 元の画面へ戻る（詳細とフォームを捨てる）。その日の件から開いたならその日へ、それ以外は未回答の一覧へ。
+   */
   back(): void {
     this.gen += 1;
+    const from = this.store.getSnapshot().detailFrom;
+    if (from === 'day') {
+      this.store.update((s) =>
+        s.view === 'detail' ? { ...s, view: 'day', detail: null, detailFrom: 'list' } : s,
+      );
+      void this.loadDay();
+      return;
+    }
     this.store.update((s) => (s.view === 'list' ? s : { ...s, view: 'list', detail: null }));
     void this.reload();
+  }
+
+  // --- 回答済み（決着した日ごと。#3340） -------------------------------------
+
+  private datesGen = 0;
+  private dayGen = 0;
+
+  private setDates(patch: Partial<DatesState>): void {
+    this.store.update((s) => ({ ...s, dates: { ...s.dates, ...patch } }));
+  }
+
+  private setDay(patch: Partial<DayState>): void {
+    this.store.update((s) => ({ ...s, day: { ...s.day, ...patch } }));
+  }
+
+  /** 未回答の一覧から、決着した日の一覧へ。開くたびに読み直す（前の一覧は読み込み中も残す）。 */
+  openDates(): void {
+    this.store.update((s) => (s.view === 'list' ? { ...s, view: 'dates' } : s));
+    void this.loadDates();
+  }
+
+  /** 決着した日の一覧から、未回答の一覧へ戻る。 */
+  leaveDates(): void {
+    this.store.update((s) => (s.view === 'dates' ? { ...s, view: 'list' } : s));
+  }
+
+  /** 決着した日を先頭から読み直す。失敗しても前の一覧を残し、失敗は `error` に出す（0 件と描かない）。 */
+  async loadDates(): Promise<void> {
+    const gen = ++this.datesGen;
+    if (this.store.getSnapshot().dates.items.length === 0) {
+      this.setDates({ status: 'loading', error: null });
+    }
+    let rows: AnsweredDateRow[];
+    try {
+      rows = await this.api.listAnsweredDates({ limit: ANSWERED_DATES_LIMIT });
+    } catch (error) {
+      if (gen !== this.datesGen) return;
+      this.setDates({
+        status: this.store.getSnapshot().dates.items.length > 0 ? 'ready' : 'error',
+        error: messageOf(error),
+      });
+      return;
+    }
+    if (gen !== this.datesGen) return;
+    this.store.update((s) => {
+      const keptDate = s.dates.items[s.dates.selected]?.date;
+      const at = keptDate === undefined ? -1 : rows.findIndex((r) => r.date === keptDate);
+      return {
+        ...s,
+        dates: {
+          status: 'ready',
+          items: rows,
+          selected: at >= 0 ? at : Math.min(s.dates.selected, Math.max(0, rows.length - 1)),
+          error: null,
+          maybeMore: rows.length === ANSWERED_DATES_LIMIT,
+          loadedAt: this.now(),
+        },
+      };
+    });
+  }
+
+  /** 古い側へ続きを読む（いま見えている最後の日より古い日から）。続きが無さそうなら何もしない。 */
+  async loadMoreDates(): Promise<void> {
+    const { items, maybeMore } = this.store.getSnapshot().dates;
+    const last = items[items.length - 1];
+    if (!maybeMore || last === undefined) return;
+    const gen = ++this.datesGen;
+    let rows: AnsweredDateRow[];
+    try {
+      rows = await this.api.listAnsweredDates({
+        limit: ANSWERED_DATES_LIMIT,
+        beforeDate: last.date,
+      });
+    } catch (error) {
+      if (gen !== this.datesGen) return;
+      this.setDates({ error: messageOf(error) });
+      return;
+    }
+    if (gen !== this.datesGen) return;
+    this.store.update((s) => ({
+      ...s,
+      dates: {
+        ...s.dates,
+        items: [...s.dates.items, ...rows],
+        error: null,
+        maybeMore: rows.length === ANSWERED_DATES_LIMIT,
+        loadedAt: this.now(),
+      },
+    }));
+  }
+
+  moveDatesSelection(delta: number): void {
+    this.store.update((s) => {
+      const max = Math.max(0, s.dates.items.length - 1);
+      const selected = Math.min(max, Math.max(0, s.dates.selected + delta));
+      return selected === s.dates.selected ? s : { ...s, dates: { ...s.dates, selected } };
+    });
+  }
+
+  /** 選んでいる日の件を開く。 */
+  openDay(): void {
+    const { items, selected } = this.store.getSnapshot().dates;
+    const row = items[selected];
+    if (row === undefined) return;
+    this.store.update((s) => ({
+      ...s,
+      view: 'day',
+      day: { date: row.date, status: 'loading', items: [], selected: 0, error: null, loadedAt: 0 },
+    }));
+    void this.loadDay();
+  }
+
+  /** その日の件から、決着した日の一覧へ戻る。 */
+  leaveDay(): void {
+    this.store.update((s) => (s.view === 'day' ? { ...s, view: 'dates' } : s));
+  }
+
+  /** いま開いている日の件を読み直す。失敗しても前の件を残し、0 件と描かない。 */
+  async loadDay(): Promise<void> {
+    const date = this.store.getSnapshot().day.date;
+    if (date === null) return;
+    const gen = ++this.dayGen;
+    let rows: ApprovalRow[];
+    try {
+      rows = await this.api.listApprovalsAnsweredOn(date);
+    } catch (error) {
+      if (gen !== this.dayGen) return;
+      this.setDay({
+        status: this.store.getSnapshot().day.items.length > 0 ? 'ready' : 'error',
+        error: messageOf(error),
+      });
+      return;
+    }
+    if (gen !== this.dayGen) return;
+    this.store.update((s) => {
+      const keptId = s.day.items[s.day.selected]?.id;
+      const at = keptId === undefined ? -1 : rows.findIndex((r) => r.id === keptId);
+      return {
+        ...s,
+        day: {
+          date,
+          status: 'ready',
+          items: rows,
+          selected: at >= 0 ? at : Math.min(s.day.selected, Math.max(0, rows.length - 1)),
+          error: null,
+          loadedAt: this.now(),
+        },
+      };
+    });
+  }
+
+  moveDaySelection(delta: number): void {
+    this.store.update((s) => {
+      const max = Math.max(0, s.day.items.length - 1);
+      const selected = Math.min(max, Math.max(0, s.day.selected + delta));
+      return selected === s.day.selected ? s : { ...s, day: { ...s.day, selected } };
+    });
+  }
+
+  /** その日の件から、既存の詳細（`open`）へ。Esc でその日へ戻る。 */
+  openDayItem(): void {
+    const { items, selected } = this.store.getSnapshot().day;
+    const row = items[selected];
+    if (row !== undefined) void this.open(row.id, row, 'day');
   }
 
   // --- 答える -------------------------------------------------------------

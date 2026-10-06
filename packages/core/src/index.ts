@@ -412,6 +412,15 @@ export {
   type JournalStoreQueryEdgeContractSubject,
 } from './journal-query-edge-contract.js';
 /**
+ * `JournalStore.get` の「在るが読めない」の契約（issue #3288）。読めない行を持てる実装
+ * （`storage-fs` / `storage-pg`）の歯がこれを呼ぶ。インメモリは読めない行を持てないので対象外
+ * （`UnreadableJournalEntryError` の doc）。
+ */
+export {
+  verifyJournalStoreUnreadableGetContract,
+  type JournalStoreUnreadableGetContractSubject,
+} from './journal-unreadable-get-contract.js';
+/**
  * `JournalStore.oldestAt()`（日誌の地平。issue #1510）の契約。3実装
  * （インメモリ / `storage-fs` / `storage-pg`）それぞれの歯がこれを呼んで
  * 揃っていることを測る — 1つで測って3つとも測ったことにしない
@@ -436,8 +445,10 @@ export { journalWindowCrossesHorizon } from './journal-horizon.js';
  */
 export {
   isReadableJournalTimeBoundary,
+  isOffsetQualifiedTimeBoundary,
   normalizeJournalTimeBoundary,
   describeUnreadableJournalTimeBoundary,
+  describeOffsetRequiredTimeBoundary,
 } from './journal-time.js';
 /**
  * 日誌を語で探す（`JournalQuery.q`。issue #250）ときの、照合の唯一の正本。
@@ -451,7 +462,7 @@ export {
   JOURNAL_SEARCH_UNCOVERED_LIST,
   JOURNAL_SEARCH_UNCOVERED_LIST_MD,
   JOURNAL_SEARCH_UNSEARCHABLE_TYPES,
-  journalSearchText,
+  journalSearchValues,
   matchesJournalSearch,
   type JournalSearchTarget,
 } from './journal-search.js';
@@ -541,6 +552,7 @@ export { verifyTranscriptArchiveContract } from './archive-contract.js';
 /** アーカイブの sessionId の入口の検査（issue #2233。3実装とも同じ例外で断る）。 */
 export { InvalidArchiveSessionIdError, assertArchivableSessionId } from './archive-session-id.js';
 export { verifyCommitmentFoldContract } from './commitment-fold-contract.js';
+export { verifyCommitmentTieOrderContract } from './commitment-tie-order-contract.js';
 export { verifyMcpServerStoreContract } from './mcp-server-contract.js';
 export { verifyProfileStoreContract } from './profile-store-contract.js';
 /**
@@ -552,6 +564,7 @@ export { verifyProfileStoreContract } from './profile-store-contract.js';
 export { verifyPermissionGrantStoreContract } from './permission-grant-contract.js';
 export { verifyPracticeStoreContract } from './practice-contract.js';
 export { verifyListOrderContract } from './list-order-contract.js';
+export { verifyApprovalConversationFilterContract } from './approval-conversation-filter-contract.js';
 export { compareCodeUnits } from './code-unit-order.js';
 export { verifyStoreIsolationContract } from './store-isolation-contract.js';
 /**
@@ -1482,6 +1495,7 @@ export {
 export { verifyIntegrationKeyStoreContract } from './integration-key-contract.js';
 export {
   ATTACHMENT_IMAGE_MEDIA_TYPES,
+  ATTACHMENT_DISK_NAME_MAX_BYTES,
   ATTACHMENT_MAX_FILE_BYTES_DEFAULT,
   ATTACHMENT_MAX_FILE_BYTES_ENV,
   ATTACHMENT_MAX_IMAGE_BYTES_DEFAULT,
@@ -1490,14 +1504,18 @@ export {
   ATTACHMENT_MAX_PER_MESSAGE_ENV,
   ATTACHMENT_MAX_TOTAL_BYTES_DEFAULT,
   ATTACHMENT_MAX_TOTAL_BYTES_ENV,
+  ATTACHMENT_EMPTY_MESSAGE,
   ATTACHMENT_NAME_MAX_LENGTH,
   ATTACHMENT_RETENTION_DAYS_DEFAULT,
   ATTACHMENT_RETENTION_DAYS_ENV,
+  ATTACHMENT_RETENTION_DAYS_MAX,
   ATTACHMENT_UNBOUND_TTL_MS,
   AttachmentRejectedError,
   DEFAULT_ATTACHMENT_LIMITS,
+  attachmentDiskName,
   canBindAttachmentTo,
   isAttachmentImageMediaType,
+  isBoundTo as isAttachmentBoundTo,
   isAttachmentPrunable,
   normalizeAttachmentMediaType,
   normalizeAttachmentName,

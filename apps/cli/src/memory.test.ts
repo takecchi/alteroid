@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeTempDir } from '../../../vitest.tmpdir.js';
 
 import { type ConfirmIo } from './confirm.js';
-import { captureStdout, pretendTty } from './test-support.js';
+import { captureStderr, captureStdout, pretendTty } from './test-support.js';
 
 /**
  * `alteroid memory` — 記憶を人間が CLI から直せること。
@@ -18,10 +18,11 @@ import { captureStdout, pretendTty } from './test-support.js';
  * ここで見たいのは **`PUT /memory/<slug>` が実際に組み立てられるか**なので、
  * 差し替えるのはもっと外側（`fetch`）にする。
  */
-vi.mock('./target.js', () => ({
+// `describeAuthFailure` は本物を使う（一覧・履歴の 401/403 を例外にする歯のため。#3452）。
+vi.mock('./target.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./target.js')>()),
   resolveTarget: () =>
     Promise.resolve({ baseUrl: 'http://127.0.0.1:4517', headers: {}, note: null }),
-  describeAuthFailure: () => null,
 }));
 
 const {
@@ -119,6 +120,59 @@ describe('alteroid memory set', () => {
 
     expect(String(error)).toContain('書き換えられませんでした');
     expect(String(error)).not.toContain('次の会話から');
+  });
+});
+
+describe('alteroid memory set の空の本文（#3456）', () => {
+  async function emptyFile(content: string): Promise<string> {
+    const dir = await makeTempDir('alteroid-memory-test-');
+    const path = join(dir, 'empty.md');
+    await writeFile(path, content, 'utf8');
+    return path;
+  }
+
+  it.each([
+    ['空', ''],
+    ['空白だけ', ' \n\t\n'],
+  ])(
+    '既存の記憶があるとき、本文が%sなら、上書きせずに断る（--allow-empty を案内する）',
+    async (_name, body) => {
+      const read = captureStdout();
+      replies.push({ status: 200, body: { document: { slug: 'x', content: '大事な記憶\n' } } });
+
+      const error = await memorySetCommand('x', { file: await emptyFile(body), yes: true }).catch(
+        (e: unknown) => e,
+      );
+
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toContain('本文が空');
+      expect((error as Error).message).toContain('--allow-empty');
+      expect(sent.filter((entry) => entry.method === 'PUT')).toEqual([]);
+      expect(read()).not.toContain('書き換えました');
+    },
+  );
+
+  it('新しく作るときも、本文が空なら断る（profile set と同じ）', async () => {
+    captureStdout();
+    replies.push({ status: 404, body: { error: 'not found' } });
+
+    await expect(memorySetCommand('x', { file: await emptyFile('') })).rejects.toThrow(
+      '--allow-empty',
+    );
+    expect(sent.filter((entry) => entry.method === 'PUT')).toEqual([]);
+  });
+
+  it('--allow-empty を付けたときだけ、空の本文で置き換える', async () => {
+    const read = captureStdout();
+    replies.push({ status: 200, body: { document: { slug: 'x', content: '大事な記憶\n' } } });
+    replies.push({ status: 200, body: { document: { slug: 'x', content: '' } } });
+
+    await memorySetCommand('x', { file: await emptyFile(''), yes: true, allowEmpty: true });
+
+    const puts = sent.filter((entry) => entry.method === 'PUT');
+    expect(puts).toHaveLength(1);
+    expect(JSON.parse(puts[0]?.body ?? '{}')).toEqual({ content: '' });
+    expect(read()).toContain('書き換えました: x');
   });
 });
 
@@ -551,11 +605,24 @@ describe('alteroid memory の読み出しの失敗の理由', () => {
     const read = captureStdout();
     replies.push({ status: 500, body: { error: '一覧が読めない（memory のテスト用）' } });
 
-    await memoryListCommand();
+    const error = await memoryListCommand().then(
+      () => null,
+      (e: unknown) => e as Error,
+    );
 
-    const text = read();
-    expect(text).toContain('記憶の一覧を読めませんでした（HTTP 500）');
-    expect(text).toContain('一覧が読めない（memory のテスト用）');
+    // 例外で通す（＝終了コードが非 0 になる。#3452）。stdout に書いて 0 で返さない。
+    expect(error?.message).toContain('記憶の一覧を読めませんでした（HTTP 500）');
+    expect(error?.message).toContain('一覧が読めない（memory のテスト用）');
+    expect(read()).toBe('');
+  });
+
+  it('list: 401 / 403 は describeAuthFailure の文で例外にする（#3452）', async () => {
+    const read = captureStdout();
+    replies.push({ status: 401, body: {} });
+    await expect(memoryListCommand()).rejects.toThrow('認証されませんでした');
+    replies.push({ status: 403, body: {} });
+    await expect(memoryListCommand()).rejects.toThrow('access grant');
+    expect(read()).toBe('');
   });
 
   it('show: 404 は「無い」のまま', async () => {
@@ -689,6 +756,25 @@ describe('alteroid memory の読み出しの失敗の理由', () => {
       expect(text).toContain('alteroid memory edit values');
       await rm(dirname(mine ?? ''), { recursive: true, force: true });
     });
+
+    it('409 以外の保存の失敗（500）でも、書いた内容を残し、場所と set --file を案内して失敗する（#3453）', async () => {
+      captureStdout();
+      const err = captureStderr();
+      replies.push({
+        status: 200,
+        body: { document: { slug: 'values', content: '# 価値観\n' }, version: 'v-read' },
+      });
+      replies.push({ status: 500, body: { error: 'boom' } });
+
+      const error = await memoryEditCommand('values').catch((e: unknown) => e);
+
+      expect(String(error)).toContain('HTTP 500');
+      const mine = /残してあります: (\S+)/.exec(err())?.[1];
+      expect(mine).toBeDefined();
+      expect(await readFile(mine ?? '', 'utf8')).toBe('人間の編集\n');
+      expect(err()).toContain(`alteroid memory set values --file ${mine ?? ''}`);
+      await rm(dirname(mine ?? ''), { recursive: true, force: true });
+    });
   });
 });
 
@@ -775,7 +861,10 @@ describe('alteroid memory set の上書き確認（#3201）', () => {
     replies.push(existing);
     const { io } = fakeIo({ isTTY: true, answer: 'no' });
 
-    await memorySetCommand('values', { file }, io);
+    // やめたことは例外で伝わる（入口が非 0 にする。#3450）。
+    await expect(memorySetCommand('values', { file }, io)).rejects.toThrow(
+      '取り消しました。何も変更していません。',
+    );
 
     expect(methods()).toEqual(['GET']);
   });

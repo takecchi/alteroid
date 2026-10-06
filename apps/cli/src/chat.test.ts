@@ -1790,10 +1790,24 @@ function stubClient(
     ) => { id: string; ok: boolean; error?: string }[];
     /** `GET /approvals` が返す一覧。既定は空。 */
     approvals?: ApprovalLike[];
+    /** `GET /approvals/answered-dates` が返す `dates`（#3239）。既定は空。 */
+    approvalsAnsweredDates?: { date: string; count: number }[];
+    /** `GET /approvals/answered-dates` の応答コードと本体（400 などの試験用）。 */
+    approvalsAnsweredDatesStatus?: number;
+    approvalsAnsweredDatesBody?: unknown;
+    /** `GET /approvals?answeredOn=` の応答コードと本体（400 などの試験用）。渡さなければ `approvals` を返す。 */
+    approvalsAnsweredOnStatus?: number;
+    approvalsAnsweredOnBody?: unknown;
     /** `GET /approvals` の応答コード。既定は 200（#2583: 取れなかったときの試験用）。 */
     approvalsStatus?: number;
     /** `GET /approvals` の `unreadable`（#2298）。渡さなければ鍵ごと無い（0件と同じ）。 */
     approvalsUnreadable?: { id?: string; reason: string }[];
+    /**
+     * `GET /approvals/:id` の応答コードと本体（#3312）。渡さなければ `approvals` から id で探し、
+     * 在れば `{ approval, settledOn: null }`、無ければ 404。
+     */
+    approvalByIdStatus?: number;
+    approvalByIdBody?: unknown;
     /** `GET /approvals/:id/trace` の応答コードと本体（issue #847）。既定は 404。 */
     approvalTraceStatus?: number;
     approvalTraceBody?: unknown;
@@ -1988,6 +2002,14 @@ function stubClient(
     approvals: {
       $get: (args: unknown) => {
         calls.push({ route: 'GET /approvals', args });
+        if (
+          options.approvalsAnsweredOnStatus !== undefined &&
+          (args as { query?: { answeredOn?: string } }).query?.answeredOn !== undefined
+        ) {
+          return Promise.resolve(
+            reply(options.approvalsAnsweredOnStatus, options.approvalsAnsweredOnBody),
+          );
+        }
         return Promise.resolve(
           reply(options.approvalsStatus ?? 200, {
             approvals: options.approvals ?? [],
@@ -1996,6 +2018,17 @@ function stubClient(
               : { unreadable: options.approvalsUnreadable }),
           }),
         );
+      },
+      'answered-dates': {
+        $get: (args: unknown) => {
+          calls.push({ route: 'GET /approvals/answered-dates', args });
+          return Promise.resolve(
+            reply(
+              options.approvalsAnsweredDatesStatus ?? 200,
+              options.approvalsAnsweredDatesBody ?? { dates: options.approvalsAnsweredDates ?? [] },
+            ),
+          );
+        },
       },
       answer: {
         $post: (args: { json: AnswersRequest }) => {
@@ -2007,6 +2040,18 @@ function stubClient(
         },
       },
       ':id': {
+        $get: (args: { param: { id: string } }) => {
+          calls.push({ route: 'GET /approvals/:id', args });
+          if (options.approvalByIdStatus !== undefined) {
+            return Promise.resolve(reply(options.approvalByIdStatus, options.approvalByIdBody));
+          }
+          const found = (options.approvals ?? []).find((entry) => entry.id === args.param.id);
+          return Promise.resolve(
+            found === undefined
+              ? reply(404, { error: 'not found' })
+              : reply(200, { approval: found, settledOn: null }),
+          );
+        },
         answer: {
           $post: (args: unknown) => {
             calls.push({ route: 'POST /approvals/:id/answer', args });
@@ -2723,6 +2768,49 @@ describe('chat の設問つきの承認待ち（issue #2525）', () => {
     expect(text).toContain('--select');
   });
 
+  it('/approval <id> は id で1件引く口（GET /approvals/:id）を1回だけ呼ぶ（全件は読まない）', async () => {
+    const read = captureStdout();
+    const { calls, client } = stubClient({ approvals: [approval] });
+
+    await runSlashCommand('/approval ap-q', client, emptyListed());
+
+    expect(calls.map((call) => call.route)).toEqual(['GET /approvals/:id']);
+    expect((calls[0]?.args as { param: { id: string } }).param).toEqual({ id: 'ap-q' });
+    expect(read()).toContain('Q1 [id=target] デプロイ先は？');
+  });
+
+  it('/approval <番号> は今までどおり、一覧の並びから id を引いて全件から探す', async () => {
+    captureStdout();
+    const { calls, client } = stubClient({ approvals: [approval] });
+
+    await runSlashCommand('/approval 1', client, listedOne());
+
+    expect(calls.map((call) => call.route)).toEqual(['GET /approvals']);
+    expect((calls[0]?.args as { query: unknown }).query).toEqual({
+      order: 'asc',
+      pending: 'false',
+    });
+  });
+
+  it('/approval <id>: 404 は見つかりませんでした。他の失敗（409・500）は、見つからないとは言わず読めなかったと言う', async () => {
+    const readMissing = captureStdout();
+    const missing = stubClient({ approvals: [] });
+    await runSlashCommand('/approval nope', missing.client, emptyListed());
+    expect(readMissing()).toContain('見つかりませんでした');
+
+    for (const status of [409, 500]) {
+      const read = captureStdout();
+      const failed = stubClient({
+        approvalByIdStatus: status,
+        approvalByIdBody: { error: '読めない行' },
+      });
+      await runSlashCommand('/approval ap-q', failed.client, emptyListed());
+      const text = read();
+      expect(text, String(status)).toContain('承認待ちを読めませんでした');
+      expect(text, String(status)).not.toContain('見つかりませんでした');
+    }
+  });
+
   it('/answer --select / --other は selections として送る（補足の自由文も併用できる）', async () => {
     const read = captureStdout();
     const { calls, client } = stubClient({ approvals: [approval] });
@@ -2811,6 +2899,40 @@ describe('chat の設問つきの承認待ち（issue #2525）', () => {
 
     expect(sentJson(calls)).toBeNull();
     expect(read()).toContain('回答を送っていません');
+  });
+
+  it('/answer <id> --select は id で1件引く口（GET /approvals/:id）を1回だけ呼び、全件は読まない。番号は従来どおり全件', async () => {
+    captureStdout();
+    const byId = stubClient({ approvals: [approval] });
+    await runSlashCommand('/answer ap-q --select target=railway', byId.client, emptyListed());
+    expect(byId.calls.filter((c) => c.route.startsWith('GET')).map((c) => c.route)).toEqual([
+      'GET /approvals/:id',
+    ]);
+    expect(sentJson(byId.calls)?.param).toEqual({ id: 'ap-q' });
+
+    const byNumber = stubClient({ approvals: [approval] });
+    await runSlashCommand('/answer 1 --select target=railway', byNumber.client, listedOne());
+    expect(byNumber.calls.filter((c) => c.route.startsWith('GET')).map((c) => c.route)).toEqual([
+      'GET /approvals',
+    ]);
+  });
+
+  it('/answer <id> --select: 404 は見つからなかった、409・500 は読めなかったと言い、どちらも送らない', async () => {
+    const readMissing = captureStdout();
+    const missing = stubClient({ approvals: [] });
+    await runSlashCommand('/answer nope --select a=b', missing.client, emptyListed());
+    expect(readMissing()).toContain('見つからなかった');
+    expect(sentJson(missing.calls)).toBeNull();
+
+    for (const status of [409, 500]) {
+      const read = captureStdout();
+      const failed = stubClient({ approvalByIdStatus: status, approvalByIdBody: { error: 'x' } });
+      await runSlashCommand('/answer ap-q --select a=b', failed.client, emptyListed());
+      const text = read();
+      expect(text, String(status)).toContain('承認待ちを読めなかったので、回答を送っていません');
+      expect(text, String(status)).not.toContain('見つからなかった');
+      expect(sentJson(failed.calls), String(status)).toBeNull();
+    }
   });
 
   it('一覧に居ても取ってきた中に無ければ、送らずに言って止まる（#2583）', async () => {
@@ -3177,6 +3299,145 @@ describe('chat の /approvals（一覧）', () => {
    * 理由ごと読めること（既定は `pending=true` の一覧からは対象外——だから
    * `/approvals all` を足した）。
    */
+  describe('/approvals answered（#3239: 決着した日ごとに見る）', () => {
+    const answered = {
+      id: 'appr-a',
+      createdAt: '2026-09-30T00:00:00.000Z',
+      question: '夜のリリースを待つか\n2行目は一覧に出さない',
+      answeredAt: '2026-09-30T10:00:00.000Z',
+      answer: '待たない',
+    };
+    const withdrawn = {
+      id: 'appr-w',
+      createdAt: '2026-09-30T00:00:00.000Z',
+      question: '取り下げた確認',
+      withdrawnAt: '2026-09-30T05:00:00.000Z',
+      withdrawnReason: '自分で答えを見つけた',
+    };
+
+    it('日付なしは answered-dates を呼び、日付と件数を返された順（新しい日が上）に出す', async () => {
+      const read = captureStdout();
+      const { client, calls } = stubClient({
+        approvalsAnsweredDates: [
+          { date: '2026-09-30', count: 3 },
+          { date: '2026-09-29', count: 1 },
+        ],
+      });
+
+      await runSlashCommand('/approvals answered', client, emptyListed());
+
+      const call = calls.find((c) => c.route === 'GET /approvals/answered-dates');
+      expect((call?.args as { query: Record<string, unknown> }).query).toEqual({ limit: '14' });
+      const text = read();
+      expect(text.indexOf('2026-09-30  3 件')).toBeGreaterThanOrEqual(0);
+      expect(text.indexOf('2026-09-30  3 件')).toBeLessThan(text.indexOf('2026-09-29  1 件'));
+      // 既存の一覧（GET /approvals）は叩かない
+      expect(calls.some((c) => c.route === 'GET /approvals')).toBe(false);
+    });
+
+    it('limit= と before= を渡せる。ちょうど limit 件なら続きがあるかもしれないと言う', async () => {
+      const read = captureStdout();
+      const { client, calls } = stubClient({
+        approvalsAnsweredDates: [{ date: '2026-09-29', count: 1 }],
+      });
+
+      await runSlashCommand('/approvals answered limit=1 before=2026-09-30', client, emptyListed());
+
+      const call = calls.find((c) => c.route === 'GET /approvals/answered-dates');
+      expect((call?.args as { query: Record<string, unknown> }).query).toEqual({
+        limit: '1',
+        beforeDate: '2026-09-30',
+      });
+      expect(read()).toContain('直近 1 件のみ表示している');
+    });
+
+    it('日付つきは answeredOn だけを渡す（pending・order は付けない）', async () => {
+      captureStdout();
+      const { client, calls } = stubClient({ approvals: [answered] });
+
+      await runSlashCommand('/approvals answered 2026-09-30', client, emptyListed());
+
+      const call = calls.find((c) => c.route === 'GET /approvals');
+      expect((call?.args as { query: Record<string, unknown> }).query).toEqual({
+        answeredOn: '2026-09-30',
+      });
+    });
+
+    it('その日の件を返された順に、抜粋だけで出す。取り下げ済みは取り下げと分かる', async () => {
+      const read = captureStdout();
+      const { client } = stubClient({ approvals: [answered, withdrawn] });
+
+      await runSlashCommand('/approvals answered 2026-09-30', client, emptyListed());
+
+      const text = read();
+      expect(text).toContain('2026-09-30 に決着した承認 2 件');
+      expect(text.indexOf('appr-a')).toBeLessThan(text.indexOf('appr-w'));
+      expect(text).toContain('回答済み  夜のリリースを待つか 2行目は一覧に出さない');
+      expect(text).toContain('回答: 待たない');
+      expect(text).toContain('取り下げ済み  取り下げた確認');
+      expect(text).toContain('取り下げた理由: 自分で答えを見つけた');
+      expect(text).toContain('/approval <id>');
+    });
+
+    it('一覧は全文を載せない（長い問い・答えは切る）', async () => {
+      const read = captureStdout();
+      const long = 'あ'.repeat(500);
+      const { client } = stubClient({
+        approvals: [{ ...answered, question: long, answer: long }],
+      });
+
+      await runSlashCommand('/approvals answered 2026-09-30', client, emptyListed());
+
+      expect(read()).not.toContain(long);
+    });
+
+    it('番号は振らず、未回答の一覧（listed.approvals）を書き換えない', async () => {
+      const read = captureStdout();
+      const { client } = stubClient({ approvals: [answered] });
+      const listed = { ...emptyListed(), approvals: ['keep-1', 'keep-2'] };
+
+      await runSlashCommand('/approvals answered 2026-09-30', client, listed);
+
+      expect(listed.approvals).toEqual(['keep-1', 'keep-2']);
+      expect(read()).not.toMatch(/\[1\]/);
+    });
+
+    it('その日に無ければ「ありません」、日付が不正（400）ならデーモンの言葉をそのまま出す', async () => {
+      const read = captureStdout();
+      const empty = stubClient({ approvals: [] });
+      await runSlashCommand('/approvals answered 2026-09-01', empty.client, emptyListed());
+      expect(read()).toContain('（2026-09-01 に決着した承認はありません）');
+
+      const read2 = captureStdout();
+      const bad = stubClient({
+        approvalsAnsweredOnStatus: 400,
+        approvalsAnsweredOnBody: { error: 'answeredOn は YYYY-MM-DD で指定する' },
+      });
+      await runSlashCommand('/approvals answered 2026-02-30', bad.client, emptyListed());
+      const text = read2();
+      expect(text).toContain('answeredOn は YYYY-MM-DD で指定する');
+      expect(text).not.toContain('ありません');
+    });
+
+    it('取得に失敗したのを「ありません」と言わない（目次・その日の件の両方）', async () => {
+      const read = captureStdout();
+      const dates = stubClient({
+        approvalsAnsweredDatesStatus: 500,
+        approvalsAnsweredDatesBody: { error: 'boom' },
+      });
+      await runSlashCommand('/approvals answered', dates.client, emptyListed());
+      expect(read()).not.toContain('まだありません');
+      expect(read()).toContain('読めませんでした');
+    });
+
+    it('help に載っている', async () => {
+      const read = captureStdout();
+      const { client } = stubClient();
+      await runSlashCommand('/help', client, emptyListed());
+      expect(read()).toContain('/approvals answered <YYYY-MM-DD>');
+    });
+  });
+
   describe('/approvals all（issue #963: 取り下げ済み・回答済みも見る）', () => {
     it('引数無しの /approvals は pending を渡さない（既定の挙動を変えない）', async () => {
       captureStdout();
@@ -4564,6 +4825,80 @@ describe('chat の /conversations と /conversation', () => {
     expect(human).toBeLessThan(clone);
     expect(text).toContain('42');
     expect(text).toContain('先頭まで届きました');
+  });
+
+  describe('/conversation — その会話のターンから積まれた承認（#3261）', () => {
+    const detail = {
+      conversationId: 'conv-1',
+      messages: [
+        { id: 'm1', at: '2026-10-06T10:00:00.000Z', role: 'inbound' as const, text: 'どうする？' },
+        {
+          id: 'm2',
+          at: '2026-10-06T10:04:00.000Z',
+          role: 'outbound' as const,
+          text: 'A案で進めます',
+        },
+      ],
+      scanned: 10,
+      reachedStart: true,
+    };
+
+    it('承認を時刻順の位置に1行で出し、回答のあとの返答は承認の後ろに並ぶ', async () => {
+      const read = captureStdout();
+      const { calls, client } = stubClient({
+        conversationDetailBody: detail,
+        approvals: [
+          {
+            id: 'abcdef12-3456',
+            createdAt: '2026-10-06T10:01:00.000Z',
+            question: 'A案とB案のどちらにしますか？',
+            answeredAt: '2026-10-06T10:03:00.000Z',
+            answer: 'A案',
+          },
+        ],
+      });
+
+      await runSlashCommand('/conversation conv-1', client, emptyListed());
+
+      const approvalCall = calls.find((call) => call.route === 'GET /approvals');
+      expect(approvalCall?.args).toEqual({
+        query: { conversationId: 'conv-1', pending: 'false', order: 'asc' },
+      });
+      const text = read();
+      const line =
+        '? [2026-10-06T10:01:00.000Z] 確認（承認待ち abcdef12）: A案とB案のどちらにしますか？ ' +
+        '→ 回答済み（2026-10-06T10:03:00.000Z）: A案';
+      expect(text).toContain(line);
+      expect(text.indexOf('どうする？')).toBeLessThan(text.indexOf(line));
+      expect(text.indexOf(line)).toBeLessThan(text.indexOf('A案で進めます'));
+    });
+
+    it('承認を取れなくても会話は出し、取れなかったことを言う（unreadable も言う）', async () => {
+      const read = captureStdout();
+      const failing = stubClient({ conversationDetailBody: detail, approvalsStatus: 500 });
+      await runSlashCommand('/conversation conv-1', failing.client, emptyListed());
+      const failed = read();
+      expect(failed).toContain('A案で進めます');
+      expect(failed).toContain('この会話の承認待ちは取れませんでした');
+
+      const unreadable = stubClient({
+        conversationDetailBody: detail,
+        approvalsUnreadable: [{ id: 'bad-1', reason: 'x' }],
+      });
+      await runSlashCommand('/conversation conv-1', unreadable.client, emptyListed());
+      expect(read()).toContain('読めない承認待ちが 1 件');
+    });
+
+    it('承認の行には /edit の番号を振らない', async () => {
+      captureStdout();
+      const listed = emptyListed();
+      const { client } = stubClient({
+        conversationDetailBody: detail,
+        approvals: [{ id: 'ap-0000001', createdAt: '2026-10-06T10:01:00.000Z', question: 'q' }],
+      });
+      await runSlashCommand('/conversation conv-1', client, listed);
+      expect(listed.messages).toEqual(['m1']);
+    });
   });
 
   /**

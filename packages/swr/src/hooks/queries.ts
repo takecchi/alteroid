@@ -104,6 +104,16 @@ export const KEY = {
    */
   conversationApprovals: (conversationId: string) =>
     ({ type: 'approvals', pending: false, conversationId }) as const,
+  /**
+   * 回答済みの画面（`approvals/answered`）の2つの読み。**どちらも `type` は `approvals` のまま
+   * 揃えてある**（上の `conversationApprovals` と同じ理由——`escalation` が届いたときの束での
+   * 無効化から外れると、答えが付いた直後の画面だけ古いまま取り残される）。
+   */
+  approvalsAnsweredDates: (limit: number) =>
+    ({ type: 'approvals', answeredDates: true, limit }) as const,
+  approvalsAnsweredOn: (date: string) => ({ type: 'approvals', answeredOn: date }) as const,
+  /** 承認を id で1件（`GET /approvals/{id}`）。`type` は `approvals` のまま（上と同じ理由）。 */
+  approvalById: (id: string) => ({ type: 'approvals', byId: id }) as const,
   commitments: (includeClosed: boolean) => ({ type: 'commitments', includeClosed }) as const,
   reports: (limit: number) => ({ type: 'reports', limit }) as const,
   report: (date: string) => ({ type: 'report', date }) as const,
@@ -305,6 +315,30 @@ export function useApprovals(pending = true) {
 }
 
 /**
+ * 承認が決着した日と件数（`GET /approvals/answered-dates`。新しい日が上）。回答済みの画面の
+ * 左の目次。**日はデーモンの `localDate()` で決まる**（日報と同じ区切り。ブラウザの TZ ではない）。
+ * `GET /reports` と同じく封筒は無いので、続きが在るかは `limit` 件ちょうど返ったかで判る。
+ */
+export function useAnsweredApprovalDates(limit = 60) {
+  const api = useApi();
+  return useSWR(KEY.approvalsAnsweredDates(limit), ({ limit }) =>
+    api.api.GET('/approvals/answered-dates', { params: { query: { limit } } }).then(unwrap),
+  );
+}
+
+/**
+ * その日に決着した承認（回答済み・取り下げ済み）を決着の新しい順に（`GET /approvals?answeredOn=`）。
+ * 並びも「その日」の意味もデーモンが決める——**画面で並べ直さない**。`null` なら取りに行かない
+ * （日がまだ決まっていない）。
+ */
+export function useApprovalsAnsweredOn(date: string | null) {
+  const api = useApi();
+  return useSWR(date === null ? null : KEY.approvalsAnsweredOn(date), ({ answeredOn }) =>
+    api.api.GET('/approvals', { params: { query: { answeredOn } } }).then(unwrap),
+  );
+}
+
+/**
  * ある会話に上がった確認（`ask_human`）だけの一覧（issue #782 の2）。
  *
  * **`chat.tsx` がチャットの履歴へ質問・回答を織り込むために読む。** 質問は
@@ -407,7 +441,10 @@ export function useProgress(windowHours?: number) {
           params: { query: windowHours === undefined ? {} : { windowHours: String(windowHours) } },
         })
         .then(unwrap),
-    { refreshInterval: 30_000 },
+    // **窓を替えて別キーになっても、前の数を出したままにする（#3419。`useCommitments` の #3074 と同じ）。**
+    // 前のキーのデータは読み込み中だけ `data` に載り、`isLoading` は真になる。
+    // 画面は、その間「前の期間の数」と数のそばで言うこと。
+    { refreshInterval: 30_000, keepPreviousData: true },
   );
 }
 
@@ -418,21 +455,27 @@ export function useProgress(windowHours?: number) {
  */
 export function useUsage(query: UsageQuery = {}) {
   const api = useApi();
-  return useSWR(KEY.usage(query), ({ from, to, managerId, layer, site, tokenId }) =>
-    api.api
-      .GET('/usage', {
-        params: {
-          query: {
-            ...(from === undefined ? {} : { from }),
-            ...(to === undefined ? {} : { to }),
-            ...(managerId === undefined ? {} : { managerId }),
-            ...(layer === undefined ? {} : { layer }),
-            ...(site === undefined ? {} : { site }),
-            ...(tokenId === undefined ? {} : { tokenId }),
+  return useSWR(
+    KEY.usage(query),
+    ({ from, to, managerId, layer, site, tokenId }) =>
+      api.api
+        .GET('/usage', {
+          params: {
+            query: {
+              ...(from === undefined ? {} : { from }),
+              ...(to === undefined ? {} : { to }),
+              ...(managerId === undefined ? {} : { managerId }),
+              ...(layer === undefined ? {} : { layer }),
+              ...(site === undefined ? {} : { site }),
+              ...(tokenId === undefined ? {} : { tokenId }),
+            },
           },
-        },
-      })
-      .then(unwrap),
+        })
+        .then(unwrap),
+    // **絞り込みや期間を替えて別キーになっても、前の中身を出したままにする（#3419。`useCommitments` の #3074 と同じ）。**
+    // 前のキーのデータは読み込み中だけ `data` に載り、`isLoading` は真になる。
+    // 画面は、その間「前の条件の数字」と数のそばで言うこと。
+    { keepPreviousData: true },
   );
 }
 
@@ -519,6 +562,22 @@ export function useConversation(id: string | null, options: { includeSuperseded?
       })
       .then(unwrap),
   );
+}
+
+/**
+ * 承認を id で1件、決着した日つきで（`GET /approvals/{id}`）。`/approvals/item/:approvalId` の入口が
+ * 移り先を決める1回の読み。**`id` が null なら取りに行かない。** 無ければ（404）`null`、
+ * それ以外の失敗は投げる（SWR の `error`）。
+ */
+export function useApprovalById(id: string | null) {
+  const api = useApi();
+  return useSWR(id === null ? null : KEY.approvalById(id), async ({ byId }) => {
+    const result = await api.api.GET('/approvals/{id}', { params: { path: { id: byId } } });
+    // 404 は「無い」（`null`）。それ以外の失敗（5xx・409＝読めない行・繋がらない）は投げる——
+    // 「無い」と「確かめられなかった」を取り違えない。
+    if (result.response.status === 404) return null;
+    return unwrap(result);
+  });
 }
 
 /**

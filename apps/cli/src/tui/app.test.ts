@@ -2,6 +2,7 @@ import { createElement } from 'react';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { App } from './app.js';
+import { NotDeliveredError } from './api.js';
 import { ApprovalsController } from './approvals-controller.js';
 import { ChatController } from './chat-controller.js';
 import {
@@ -240,10 +241,33 @@ describe('会話', () => {
     h.stdin.write(ENTER);
     await waitFor(() => h.frame().includes('不明なコマンド: /exti'));
     expect(h.api.chatCalls).toEqual([]);
+    // 断った文は入力欄に残る（#3406）。消して、// で始め直す。
+    expect(h.frame()).toContain('/exti');
+    h.stdin.write('\x15');
     await type(h.stdin, '//exit は終了です');
     h.stdin.write(ENTER);
     await waitFor(() => h.api.chatCalls.length === 1);
     expect(h.api.chatCalls[0]?.text).toBe('/exit は終了です');
+  });
+
+  it('未知のコマンドとして断った文は、入力欄を空にしない（#3406）', async () => {
+    const h = start();
+    await type(h.stdin, '/var/log/app.log が壊れている');
+    h.stdin.write(ENTER);
+    await waitFor(() => h.frame().includes('不明なコマンド: /var/log/app.log'));
+    expect(h.frame()).toContain('❯ /var/log/app.log が壊れている');
+    expect(h.api.chatCalls).toEqual([]);
+  });
+
+  it('受け取られなかった送信は、文を入力欄へ戻す（#3405）', async () => {
+    const h = start((api) => {
+      api.scripts.push([new NotDeliveredError('送信できませんでした（HTTP 503）')]);
+    });
+    await type(h.stdin, '大事な長い文章');
+    h.stdin.write(ENTER);
+    await waitFor(() => h.frame().includes('✗ 送信できませんでした（HTTP 503）'));
+    await waitFor(() => h.frame().includes('❯ 大事な長い文章'));
+    expect(h.frame()).toContain('送れなかった発言');
   });
 
   it('Shift+Enter（modifyOtherKeys）と行末の \\ で改行でき、送らない', async () => {
@@ -514,6 +538,70 @@ describe('委譲（マネージャーの一覧と詳細）', () => {
     await waitFor(() => h.frame().includes('メッセージ'));
   });
 
+  it('追加指示の送信に失敗したら、書いた文は入力欄に残り、失敗を言う（#3367）', async () => {
+    const h = start((api) => {
+      managersFixture(api);
+      api.sendManagerMessage = () => Promise.reject(new Error('送れない'));
+    });
+    await openList(h);
+    h.stdin.write(ENTER);
+    await waitFor(() => h.frame().includes('Esc 一覧へ'));
+    h.stdin.write('i');
+    await type(h.stdin, '大事な指示');
+    h.stdin.write(ENTER);
+    await waitFor(() => h.frame().includes('✗ 送れない'));
+    // 後ろに 1 文字足して、欄に文が残っていた（空になっていない）ことを確かめる。
+    await type(h.stdin, '。');
+    await waitFor(() => h.frame().includes('❯ 大事な指示。'));
+    expect(h.frame()).toContain('❯ 大事な指示。');
+  });
+
+  it('送信中に Enter を押しても文は消えず、送信中と言う（#3367）', async () => {
+    const g = gate();
+    const h = start((api) => {
+      managersFixture(api);
+      api.sendManagerMessage = async (id, text) => {
+        api.managerMessages.push({ id, text });
+        await g.wait;
+        return { outcome: 'delivered', detail: '届いた' };
+      };
+    });
+    await openList(h);
+    h.stdin.write(ENTER);
+    await waitFor(() => h.frame().includes('Esc 一覧へ'));
+    h.stdin.write('i');
+    await type(h.stdin, '一つ目');
+    h.stdin.write(ENTER);
+    await waitFor(() => h.api.managerMessages.length === 1);
+    await type(h.stdin, '二つ目');
+    h.stdin.write(ENTER);
+    await waitFor(() => h.frame().includes('送信中'));
+    await type(h.stdin, '。');
+    await waitFor(() => h.frame().includes('❯ 二つ目。'));
+    expect(h.frame()).toContain('❯ 二つ目。');
+    expect(h.api.managerMessages).toHaveLength(1);
+    g.open();
+  });
+
+  it('書きかけのまま Esc を二度押しても、すぐには捨てない。もう一度 Esc で捨てて戻る（#3367）', async () => {
+    const h = start(managersFixture);
+    await openList(h);
+    h.stdin.write(ENTER);
+    await waitFor(() => h.frame().includes('Esc 一覧へ'));
+    h.stdin.write('i');
+    await type(h.stdin, '書きかけ');
+    h.stdin.write(ESC); // 入力欄を抜ける
+    await waitFor(() => h.frame().includes('Esc 一覧へ'));
+    h.stdin.write(ESC);
+    await waitFor(() => h.frame().includes('もう一度 Esc'));
+    expect(h.frame()).toContain('もう一度 Esc');
+    expect(h.frame()).not.toContain('委譲（絞り: すべて');
+    expect(h.frame()).toContain('書きかけ');
+    h.stdin.write(ESC);
+    await waitFor(() => h.frame().includes('委譲（絞り: すべて'));
+    expect(h.frame()).toContain('委譲（絞り: すべて');
+  });
+
   it('止めるには確認を挟む。y 以外では止めない', async () => {
     const h = start(managersFixture);
     await openList(h);
@@ -772,7 +860,7 @@ describe('日誌（ライブで流れる一覧と全文）', () => {
     await waitFor(() => h.frame().includes('種別で絞り込む'));
     expect(h.frame()).toContain('[ ] turn_usage'); // 14 種すべてが選べる
     h.stdin.write(DOWN); // decision
-    h.stdin.write(' ');
+    h.stdin.write('\u3000'); // IME オンの Space は全角で届く（#3369）
     await waitFor(() => h.frame().includes('[x] decision'));
     h.stdin.write(ENTER);
     await waitFor(() => h.frame().includes('絞り: type=decision'));
@@ -1005,7 +1093,49 @@ describe('承認待ち（一覧と詳細・答える）', () => {
     await press(h.stdin, DOWN);
     await press(h.stdin, ENTER);
     await waitFor(() => h.frame().includes('二行目の説明'));
+    // 未回答から開いた詳細の案内は今までどおり
+    expect(h.frame()).toContain('Esc 一覧へ');
   }
+
+  it('d で回答済み: 決着した日 → その日の件 → 詳細 → Esc でその日へ → Esc で日付へ → Esc で未回答へ（#3340）', async () => {
+    const h = start((api) => {
+      fixture(api);
+      const done = approvalRow('ap-done', {
+        question: '夜のリリースを待つか',
+        answeredAt: '2026-09-30T10:00:00.000Z',
+        answer: '待たない',
+      });
+      const gone = approvalRow('ap-gone', {
+        question: '取り下げた確認',
+        withdrawnAt: '2026-09-30T05:00:00.000Z',
+        withdrawnReason: '自分で見つけた',
+      });
+      api.answeredDateRows = [{ date: '2026-09-30', count: 2 }];
+      api.answeredOnRows = { '2026-09-30': [done, gone] };
+      api.approvalRows = [...api.approvalRows, done, gone];
+    });
+    await openList(h);
+    await press(h.stdin, 'd');
+    await waitFor(() => h.frame().includes('2026-09-30  2 件'));
+    expect(h.frame()).toContain('決着した日 1 日');
+    await press(h.stdin, ENTER);
+    await waitFor(() => h.frame().includes('ap-gone'));
+    const frame = h.frame();
+    expect(frame).toContain('回答済み');
+    expect(frame).toContain('回答: 待たない');
+    expect(frame).toContain('取り下げた理由: 自分で見つけた');
+    await press(h.stdin, ENTER);
+    await waitFor(() => h.frame().includes('[回答済み] ap-done'));
+    // フッタの案内も、Esc の戻り先（その日）に合わせる
+    expect(h.frame()).toContain('Esc その日へ');
+    expect(h.frame()).not.toContain('Esc 一覧へ');
+    h.stdin.write(ESC);
+    await waitFor(() => h.frame().includes('2026-09-30 に決着した承認'));
+    h.stdin.write(ESC);
+    await waitFor(() => h.frame().includes('2026-09-30  2 件'));
+    h.stdin.write(ESC);
+    await waitFor(() => h.frame().includes('承認待ち（未回答 2 件'));
+  });
 
   it('一覧は古い順に 1 件 1 行。設問が在れば要約、無ければ質問の抜粋。全文や設問の中身は載せない', async () => {
     const h = start(fixture);

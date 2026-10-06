@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { withPathLock, writeFileAtomic } from '@alteroid/storage-fs/light';
 
 import { stateDir } from './paths.js';
+import { stderr } from './terminal-out.js';
 
 /**
  * `alteroid login` で受け取ったアクセストークンの保管先
@@ -160,7 +161,7 @@ async function quarantineUnreadable(): Promise<void> {
   const path = credentialsPath();
   const dest = `${path}.unreadable-${filenameSafeIsoNow()}`;
   await rename(path, dest);
-  process.stderr.write(`alteroid: 読めない資格ファイルを退避しました: ${dest}\n`);
+  stderr.write(`alteroid: 読めない資格ファイルを退避しました: ${dest}\n`);
 }
 
 /**

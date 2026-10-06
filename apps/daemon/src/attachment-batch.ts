@@ -40,6 +40,11 @@ export interface AttachmentBatchOptions {
   readonly limits: AttachmentLimits;
   /** 結び付け先（`store.bind(ids, conversationId)` / `store.bindToExternalEvent(ids, eventId)`）。 */
   readonly bind: (ids: readonly string[]) => Promise<AttachmentBindResult>;
+  /**
+   * 結び付けを戻す（`store.unbind(ids, target)`）。`bind` が `missing` / `conflicts` を返して断るとき、**その呼びで
+   * 新しく結んだ分だけ**を渡す（以前から同じ宛先に結んであった分は渡さない）。
+   */
+  readonly unbind: (ids: readonly string[]) => Promise<unknown>;
   /** すでに「別の」宛先に結び付いているか。会話は同じ会話への結び付きを許し、外部イベントはどの結び付きも許さない。 */
   readonly isBoundElsewhere: (meta: AttachmentMeta) => boolean;
   /** 結び付き済みで断るときの文言の頭（`: <id, ...>` が続く）。 */
@@ -88,8 +93,20 @@ export async function checkAndBindAttachments(
     const elsewhere = found.filter(options.isBoundElsewhere);
     if (elsewhere.length > 0) return conflictOf(elsewhere.map((m) => m.id));
     const bound = await options.bind(ids);
-    if (bound.missing.length > 0) return missingOf(bound.missing);
-    if (bound.conflicts.length > 0) return conflictOf(bound.conflicts);
+    if (bound.missing.length > 0 || bound.conflicts.length > 0) {
+      // 断る（発言・イベントは投函されない）ので、この呼びで結んだ分を戻す。`bind` は部分的に結ぶ設計なので、
+      // 戻さないと結んだ分が他で使えなくなる（#3270）。検査時点で未結び付けだった id だけを戻す: すでに同じ宛先へ
+      // 結んであった id（前の発言で添えたもの）まで戻すと、通った前の発言の添付が外れる。
+      const fresh = new Set(
+        found
+          .filter((meta) => meta.conversationId === undefined && meta.externalEventId === undefined)
+          .map((meta) => meta.id),
+      );
+      const undo = bound.bound.filter((id) => fresh.has(id));
+      if (undo.length > 0) await options.unbind(undo);
+      if (bound.missing.length > 0) return missingOf(bound.missing);
+      return conflictOf(bound.conflicts);
+    }
     return {
       ok: true,
       refs: found.map((meta) => ({

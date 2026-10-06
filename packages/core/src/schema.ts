@@ -6,6 +6,7 @@ import { cgroupEventsDeltaSchema, type CgroupEventsDelta } from './cgroup-events
 import { CRON_EXPRESSION_MAX, isCronExpression } from './cron.js';
 import type { JobStatusLike } from './job-status-running.js';
 import type { JournalDiagnosticsEntryLike } from './journal-diagnostics-format.js';
+import { stripNul } from './nul-guard.js';
 import type { SystemErrorFactsLike } from './system-error-format.js';
 import { systemErrorFactsSchema, type SystemErrorFacts } from './system-error.js';
 import type { TraceActionLike } from './trace-action.js';
@@ -655,6 +656,16 @@ export const inboxEventSchema = z.discriminatedUnion('type', [
      * 別に持たせてある。
      */
     cause: z.enum(['schedule', 'schedule_catchup', 'manual']).optional(),
+    /**
+     * この回が**枠保持**（`heldForUsage`。使用量の枠が閉じていて動けなかった）で終わった印（#3317）。
+     *
+     * 枠保持で終わった回も `completeRun` が走るので、永続状態は「`lastScheduledRunAt` がその回の時刻・
+     * `pendingRun` なし・行は未読」で、**完了して受信箱の消し込みだけ失敗した回と同じ見た目**になる
+     * （`#heldForUsage` はメモリにしか無く再起動を越えない）。再起動の配り直しは、完了済みの回
+     * （`at <= lastScheduledRunAt`）の行を stale として畳むが、**この印のある行は畳まず配り直す**（#2814）。
+     * 印は `Clone` が枠保持にしたときだけ、行を書き直して付ける。外から積む合図が付ける欄ではない。
+     */
+    heldForUsage: z.boolean().optional(),
   }),
   z.object({
     type: z.literal('external'),
@@ -4717,7 +4728,16 @@ export const practiceSlugSchema = z
  * 書こうとした人間が、器に拒まれる形を作らない。表記ゆれは**そのぶんの代償**として
  * 引き受ける（束ねる側が寄せればよく、器が弾く理由にはならない）。
  */
-export const practiceKindSchema = z.string().min(1).max(128);
+export const practiceKindSchema = z
+  .string()
+  .min(1)
+  .max(128)
+  // **NUL だけの値は空と同じ（issue #3361）。** ストアは NUL を落として残す（`nul-guard.ts`）ので、
+  // NUL だけの kind は落とした後に空になり、保存層の `practiceSchema` が投げて HTTP が 500 になる。
+  // 落とした後の形で入口が断る（HTTP の `practiceBody` も道具 `practice_write` もこれを通る）。
+  .refine((kind) => stripNul(kind).length > 0, {
+    message: 'NUL（\\u0000）だけの値は空と同じ',
+  });
 
 /**
  * 一覧に出す分（本文を含まない）。

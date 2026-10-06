@@ -95,7 +95,7 @@ describe('一覧', () => {
 });
 
 describe('詳細を開く', () => {
-  it('一覧に無い id（回答済み・取り下げ済み）は全件から探す。どこにも無ければ missing', async () => {
+  it('一覧に無い id（回答済み・取り下げ済み）は id で1件引く（全件は読まない）。どこにも無ければ missing', async () => {
     const { api, controller, state } = setup((a) => {
       a.approvalRows = [
         approvalRow('open'),
@@ -103,13 +103,38 @@ describe('詳細を開く', () => {
       ];
     });
     await controller.open('done');
-    expect(api.approvalListCalls).toEqual([{ pending: true }, { pending: false }]);
+    expect(api.approvalListCalls).toEqual([{ pending: true }]);
+    expect(api.approvalReadCalls).toEqual(['done']);
     expect(state().detail?.approval?.answer).toBe('済み');
     expect(state().detail?.missing).toBe(false);
 
     await controller.open('nowhere');
+    expect(api.approvalReadCalls).toEqual(['done', 'nowhere']);
+    expect(api.approvalListCalls.every((call) => call.pending)).toBe(true);
     expect(state().detail?.approval).toBeNull();
     expect(state().detail?.missing).toBe(true);
+  });
+
+  it('id で引くのに失敗したら、無い（missing）とは言わず、失敗を出す', async () => {
+    const { api, controller, state } = setup((a) => {
+      a.approvalRows = [approvalRow('done', { answeredAt: '2026-10-02T01:00:00.000Z' })];
+      a.approvalReadFails = '読めない行';
+    });
+    await controller.open('done');
+    expect(api.approvalReadCalls).toEqual(['done']);
+    expect(state().detail?.missing).toBe(false);
+    expect(state().detail?.error).toBe('読めない行');
+  });
+
+  it('読み直し（reload）でも、一覧に無い id は id で1件引く', async () => {
+    const { api, controller, state } = setup((a) => {
+      a.approvalRows = [approvalRow('done', { answeredAt: '2026-10-02T01:00:00.000Z' })];
+    });
+    await controller.open('done');
+    await controller.reload();
+    expect(api.approvalReadCalls).toEqual(['done', 'done']);
+    expect(api.approvalListCalls.every((call) => call.pending)).toBe(true);
+    expect(state().detail?.approval?.id).toBe('done');
   });
 
   it('未回答の一覧に在れば、全件は読まない', async () => {
@@ -308,5 +333,147 @@ describe('enter（#2599）', () => {
     controller.enter();
     await waitFor(() => state().list.status === 'ready');
     expect(state().list.items.map((a) => a.id)).toEqual(['a']);
+  });
+});
+
+describe('回答済みを決着した日ごとに辿る（#3340）', () => {
+  const answered = approvalRow('ap-a', {
+    question: '夜のリリースを待つか',
+    answeredAt: '2026-09-30T10:00:00.000Z',
+    answer: '待たない',
+  });
+  const withdrawn = approvalRow('ap-w', {
+    question: '取り下げた確認',
+    withdrawnAt: '2026-09-30T05:00:00.000Z',
+    withdrawnReason: '自分で答えを見つけた',
+  });
+
+  function fixture(api: FakeApi): void {
+    api.answeredDateRows = [
+      { date: '2026-09-30', count: 2 },
+      { date: '2026-09-29', count: 1 },
+    ];
+    api.answeredOnRows = { '2026-09-30': [answered, withdrawn] };
+    api.approvalRows = [answered, withdrawn];
+  }
+
+  it('決着した日を新しい日が上の順に読み、日を選ぶとその日の件（決着の新しい順）を読む', async () => {
+    const { controller, state, api } = setup(fixture);
+    controller.openDates();
+    await waitFor(() => state().dates.status === 'ready');
+
+    expect(state().view).toBe('dates');
+    expect(state().dates.items.map((d) => `${d.date}:${d.count}`)).toEqual([
+      '2026-09-30:2',
+      '2026-09-29:1',
+    ]);
+    expect(api.answeredDateCalls[0]).toEqual({ limit: 30 });
+
+    controller.openDay();
+    await waitFor(() => state().day.status === 'ready');
+    expect(state().view).toBe('day');
+    expect(api.answeredOnCalls).toEqual(['2026-09-30']);
+    // 画面で並べ直さない（デーモンが返した順のまま）。取り下げ済みも出る。
+    expect(state().day.items.map((r) => r.id)).toEqual(['ap-a', 'ap-w']);
+  });
+
+  it('その日の件から既存の詳細を開け、Esc 相当（back）でその日へ戻る。日付から未回答の一覧へも戻れる', async () => {
+    const { controller, state } = setup(fixture);
+    controller.openDates();
+    await waitFor(() => state().dates.status === 'ready');
+    controller.openDay();
+    await waitFor(() => state().day.status === 'ready');
+    controller.moveDaySelection(1);
+    controller.openDayItem();
+    await waitFor(() => state().view === 'detail');
+    expect(state().detail?.id).toBe('ap-w');
+    expect(state().detail?.approval?.withdrawnReason).toBe('自分で答えを見つけた');
+
+    controller.back();
+    expect(state().view).toBe('day');
+    expect(state().detail).toBeNull();
+    // 選んでいた行は保たれる
+    await waitFor(() => state().day.status === 'ready');
+    expect(state().day.selected).toBe(1);
+
+    controller.leaveDay();
+    expect(state().view).toBe('dates');
+    controller.leaveDates();
+    expect(state().view).toBe('list');
+  });
+
+  it('未回答の一覧から開いた詳細は、今までどおり未回答の一覧へ戻る（既存の挙動を変えない）', async () => {
+    const { controller, state } = setup((api) => {
+      api.approvalRows = [approvalRow('ap-open')];
+    });
+    controller.enter();
+    await waitFor(() => state().list.status === 'ready');
+    controller.openSelected();
+    await waitFor(() => state().view === 'detail');
+    controller.back();
+    expect(state().view).toBe('list');
+  });
+
+  it('日付の一覧がちょうど limit（30）件なら続きがあるかもしれないと持ち、loadMoreDates で古い側を足す', async () => {
+    const rows = Array.from({ length: 35 }, (_, i) => ({
+      date: new Date(Date.UTC(2026, 0, 35 - i)).toISOString().slice(0, 10),
+      count: 1,
+    }));
+    const { controller, state, api } = setup((a) => {
+      a.answeredDateRows = rows;
+    });
+    controller.openDates();
+    await waitFor(() => state().dates.status === 'ready');
+    expect(state().dates.items).toHaveLength(30);
+    expect(state().dates.maybeMore).toBe(true);
+
+    await controller.loadMoreDates();
+    expect(api.answeredDateCalls[1]).toEqual({ limit: 30, beforeDate: rows[29]!.date });
+    expect(state().dates.items).toHaveLength(35);
+    expect(state().dates.maybeMore).toBe(false);
+    // 続きが無ければもう取りに行かない
+    await controller.loadMoreDates();
+    expect(api.answeredDateCalls).toHaveLength(2);
+  });
+
+  it('30 件に満たなければ続きは無いとする', async () => {
+    const { controller, state } = setup(fixture);
+    controller.openDates();
+    await waitFor(() => state().dates.status === 'ready');
+    expect(state().dates.maybeMore).toBe(false);
+  });
+
+  it('取得に失敗したのを 0 件にしない（初回は error・前の一覧は残す）', async () => {
+    const { controller, state, api } = setup((a) => {
+      a.answeredDatesFail = '接続できない';
+    });
+    controller.openDates();
+    await waitFor(() => state().dates.status === 'error');
+    expect(state().dates.items).toEqual([]);
+    expect(state().dates.error).toContain('接続できない');
+
+    api.answeredDatesFail = null;
+    api.answeredDateRows = [{ date: '2026-09-30', count: 1 }];
+    await controller.loadDates();
+    expect(state().dates.status).toBe('ready');
+    api.answeredDatesFail = '一瞬切れた';
+    await controller.loadDates();
+    // 再読み込みの失敗では、読めていた一覧を消さずに失敗を言う
+    expect(state().dates.status).toBe('ready');
+    expect(state().dates.items).toHaveLength(1);
+    expect(state().dates.error).toContain('一瞬切れた');
+  });
+
+  it('その日の件の取得失敗も 0 件にしない（日付の形が不正な 400 の理由もそのまま）', async () => {
+    const { controller, state } = setup((a) => {
+      a.answeredDateRows = [{ date: '2026-09-30', count: 1 }];
+      a.answeredOnFail = 'answeredOn は YYYY-MM-DD で指定する';
+    });
+    controller.openDates();
+    await waitFor(() => state().dates.status === 'ready');
+    controller.openDay();
+    await waitFor(() => state().day.status === 'error');
+    expect(state().day.items).toEqual([]);
+    expect(state().day.error).toContain('YYYY-MM-DD');
   });
 });

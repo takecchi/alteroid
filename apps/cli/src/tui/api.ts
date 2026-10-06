@@ -24,6 +24,10 @@ import {
   type UploadedAttachment,
 } from '../attachments.js';
 import { createClient } from '../client.js';
+import {
+  fetchConversationApprovals,
+  type ConversationApprovalsRead,
+} from '../conversation-approvals.js';
 import { withErrorReason } from '../format.js';
 import { describeInterruptOutcome } from '../interrupt.js';
 import type { MemorySummary } from '../memory.js';
@@ -152,6 +156,12 @@ export interface ApprovalRow {
   permissionRequest?: { rule: string; allows: string[]; denies: string[] };
 }
 
+/** 承認が決着した日と件数（`GET /approvals/answered-dates`。日はデーモンの `localDate()`）。 */
+export interface AnsweredDateRow {
+  date: string;
+  count: number;
+}
+
 /** 読めない承認待ちの行（壊れた行。「無い」でも「回答済み」でもない）。 */
 export interface UnreadableApproval {
   id?: string;
@@ -211,9 +221,20 @@ export interface TuiApi {
   readonly baseUrl: string;
   /** 失敗（HTTP エラー・接続断）は `ApiError` を投げる。 */
   chat(
-    input: { text: string; conversationId?: string; attachments?: string[] },
+    input: {
+      text: string;
+      conversationId?: string;
+      attachments?: string[];
+      /** 呼び手が名乗らせたいとき（`open` の前に終わった送信を、あとで引き直す。#3304）。無ければ api が採番する。 */
+      clientMessageId?: string;
+    },
     signal: AbortSignal,
   ): AsyncGenerator<ChatEvent>;
+  /**
+   * `GET /client-messages/{clientMessageId}`（#3304）。受け取り済みならその会話の id、**受け取っていなければ
+   * （404）`null`**。それ以外の失敗は `ApiError` を投げる（「受け取っていない」と「確かめられなかった」を取り違えない）。
+   */
+  findClientMessage(clientMessageId: string): Promise<string | null>;
   /** `GET /attachments/limits`。古いデーモン（404）は既定値、一時的な失敗は `null`（失敗は投げない）。 */
   attachmentLimits(): Promise<AttachmentLimits | null>;
   /** `POST /attachments`（生のバイト列）。失敗は `ApiError` ではなく普通の `Error`（理由つき）。 */
@@ -234,6 +255,11 @@ export interface TuiApi {
   readConversation(
     id: string,
   ): Promise<{ messages: ConversationMessage[]; reachedStart: boolean } | null>;
+  /**
+   * その会話のターンから積まれた承認待ち（`GET /approvals?conversationId=<id>&pending=false&order=asc`）。
+   * **投げない**——取れなかったことは `failure` に載る（会話の表示を落とさない。#3261）。
+   */
+  readConversationApprovals(id: string): Promise<ConversationApprovalsRead>;
   /**
    * `POST /conversations/{id}/read`。`through` は発言の id（時刻はサーバが引く）。失敗は `ApiError`。
    * 返答を画面に表示したときに呼ぶ（`docs/architecture.md`「会話の既読」）。
@@ -266,6 +292,21 @@ export interface TuiApi {
     unreadable: UnreadableApproval[];
   }>;
   /**
+   * `GET /approvals/{id}`。承認を id で1件（回答済み・取り下げ済みも）。`null` は 404（無い）。
+   * 読めない行（409）・5xx は `ApiError`（「無い」と言わない）。
+   */
+  readApproval(id: string): Promise<ApprovalRow | null>;
+  /**
+   * `GET /approvals/answered-dates`。決着のあった日と件数を新しい日が上の順に。`beforeDate` はその日**より古い**日から
+   * （前の頁の最後の日。封筒は無く、続きが在るかは `limit` 件ちょうど返ったかで判る）。
+   */
+  listAnsweredDates(query: { limit: number; beforeDate?: string }): Promise<AnsweredDateRow[]>;
+  /**
+   * `GET /approvals?answeredOn=<日付>`。その日に決着した承認（回答済み・取り下げ済み）を決着の新しい順に。
+   * 並びはデーモンが決める（画面で並べ直さない）。日付の形が不正なら 400（デーモンの理由が `ApiError` に入る）。
+   */
+  listApprovalsAnsweredOn(date: string): Promise<ApprovalRow[]>;
+  /**
    * `POST /approvals/{id}/answer`。失敗（400 の理由・404・409）は `ApiError`。メッセージにデーモンの
    * 理由（本文の `error`）がそのまま入る。
    */
@@ -285,6 +326,13 @@ export interface TuiApi {
 
 /** 人間へそのまま見せてよい文言を持つ失敗。 */
 export class ApiError extends Error {}
+
+/**
+ * 発言をサーバが受け取らなかった失敗（繋がらない・非 ok の応答）。`open` などのイベントが 1 つも来ないうちに
+ * これで終わった送信は、受け取られていないと言えるので、呼び手は文を入力欄へ戻してよい。
+ * 2xx のあとで切れた失敗（受け取られたか分からない）はこれにしない（#3304 の取り直しの対象）。
+ */
+export class NotDeliveredError extends ApiError {}
 
 const CHAT_EVENT_NAMES = new Set([
   'open',
@@ -329,7 +377,9 @@ export function createTuiApi(target: Target): TuiApi {
       });
     } catch (error) {
       if (signal.aborted) return;
-      throw new ApiError(`${what}: デーモンに繋がりません（${redactError(String(error))}）`);
+      throw new NotDeliveredError(
+        `${what}: デーモンに繋がりません（${redactError(String(error))}）`,
+      );
     }
     if (!response.ok || !response.body) {
       // 添付が無い・期限切れ（400 の `code`）は、呼び手が上げ直せるよう型で渡す（#3246）。
@@ -342,7 +392,7 @@ export function createTuiApi(target: Target): TuiApi {
         );
         if (missing !== null) throw new AttachmentMissingError(redactError(missing));
       }
-      throw await failure(what, response);
+      throw new NotDeliveredError((await failure(what, response)).message);
     }
     try {
       for await (const event of readSSE(response.body)) yield event;
@@ -359,8 +409,8 @@ export function createTuiApi(target: Target): TuiApi {
       const body = JSON.stringify({
         text: input.text,
         conversationId: input.conversationId ?? undefined,
-        // 発言ごとに名乗る（Issue #3203）。TUI は送信を中断して再送する経路を持たないので、判定には使わない。
-        clientMessageId: randomUUID(),
+        // 発言ごとに名乗る（Issue #3203）。新しい会話で `open` の前に終わった送信は、呼び手がこの id で引き直す（#3304）。
+        clientMessageId: input.clientMessageId ?? randomUUID(),
         ...(input.attachments === undefined || input.attachments.length === 0
           ? {}
           : { attachments: input.attachments }),
@@ -375,6 +425,17 @@ export function createTuiApi(target: Target): TuiApi {
         const data = event.json<Record<string, unknown>>() ?? {};
         yield { ...data, type: event.name } as ChatEvent;
       }
+    },
+
+    async findClientMessage(clientMessageId) {
+      const response = await client['client-messages'][':clientMessageId'].$get({
+        param: { clientMessageId },
+      });
+      if (response.status === 404) return null;
+      if (!response.ok) {
+        throw await failure('前の送信が受け取られたか確かめられませんでした', response);
+      }
+      return (await response.json()).conversationId;
     },
 
     attachmentLimits() {
@@ -411,6 +472,10 @@ export function createTuiApi(target: Target): TuiApi {
       if (!response.ok) throw await failure('会話を読めませんでした', response);
       const body = await response.json();
       return { messages: body.messages, reachedStart: body.reachedStart };
+    },
+
+    readConversationApprovals(id) {
+      return fetchConversationApprovals(client, id);
     },
 
     async markConversationRead(id, through) {
@@ -508,6 +573,25 @@ export function createTuiApi(target: Target): TuiApi {
       return { outcome, detail };
     },
 
+    async listAnsweredDates(query) {
+      const response = await client.approvals['answered-dates'].$get({
+        query: {
+          limit: String(query.limit),
+          ...(query.beforeDate === undefined ? {} : { beforeDate: query.beforeDate }),
+        },
+      });
+      if (!response.ok) throw await failure('承認が決着した日を読めませんでした', response);
+      return (await response.json()).dates;
+    },
+
+    async listApprovalsAnsweredOn(date) {
+      const response = await client.approvals.$get({ query: { answeredOn: date } });
+      if (!response.ok) {
+        throw await failure(`${date} に決着した承認を読めませんでした`, response);
+      }
+      return (await response.json()).approvals as ApprovalRow[];
+    },
+
     async listApprovals(query) {
       const response = await client.approvals.$get({
         query: { order: 'asc', ...(query.pending ? {} : { pending: 'false' as const }) },
@@ -518,6 +602,13 @@ export function createTuiApi(target: Target): TuiApi {
         approvals: body.approvals as ApprovalRow[],
         unreadable: (body.unreadable ?? []) as UnreadableApproval[],
       };
+    },
+
+    async readApproval(id) {
+      const response = await client.approvals[':id'].$get({ param: { id } });
+      if (response.status === 404) return null;
+      if (!response.ok) throw await failure('承認を読めませんでした', response);
+      return (await response.json()).approval as ApprovalRow;
     },
 
     async answerApproval(id, body) {

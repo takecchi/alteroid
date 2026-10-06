@@ -11,7 +11,19 @@
 export interface NavTab {
   to: string;
   label: string;
+  /**
+   * 前方一致にしない（その経路そのものにいるときだけ選ばれる）。**別のタブの経路が、このタブの
+   * 経路の配下に入っているとき**に付ける（`/approvals` と `/approvals/answered`。付けないと
+   * 回答済みのページで「未回答」も選ばれて、2つのタブが同時に選ばれる）。
+   */
+  end?: boolean;
 }
+
+/** 承認: 答えを待っているもの（未回答）と、決着した記録（回答済み・取り下げ済み）。 */
+export const APPROVALS_TABS: readonly NavTab[] = [
+  { to: '/approvals', label: '未回答', end: true },
+  { to: '/approvals/answered', label: '回答済み' },
+];
 
 /** 仕事: 未了の仕事の台帳・その集計。 */
 export const WORK_TABS: readonly NavTab[] = [
@@ -86,7 +98,7 @@ export interface NavItemDef {
 export const NAV_ITEMS: readonly NavItemDef[] = [
   { to: '/', label: 'ホーム', paths: ['/'] },
   { to: '/chat', label: '会話', paths: ['/chat'] },
-  { to: '/approvals', label: '承認待ち', paths: ['/approvals'] },
+  { to: '/approvals', label: '承認待ち', paths: prefixesOf(APPROVALS_TABS) },
   { to: '/commitments', label: '仕事', paths: prefixesOf(WORK_TABS), section: '仕事' },
   { to: '/managers', label: 'マネージャー', paths: ['/managers'], section: '仕事' },
   { to: '/reports', label: '日報', paths: ['/reports'], section: '記録' },

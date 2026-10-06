@@ -13,9 +13,11 @@ import {
   type JournalEntry,
 } from '@alteroid/core';
 
+import type { ConversationApprovalsRead } from '../conversation-approvals.js';
 import { ApiError } from './api.js';
 import type {
   ApprovalAnswerBody,
+  AnsweredDateRow,
   ApprovalRow,
   UnreadableApproval,
   ChatEvent,
@@ -42,6 +44,14 @@ export interface ChatCall {
 
 export interface FakeApi extends TuiApi {
   chatCalls: ChatCall[];
+  /** `chat()` に渡された `clientMessageId`（`chatCalls` と同じ順）。 */
+  chatClientMessageIds: (string | undefined)[];
+  /** サーバが受け取り済みの発言（`clientMessageId` → 会話 id）。`findClientMessage` が引く。 */
+  receivedClientMessages: Record<string, string>;
+  /** `findClientMessage` に渡された id。 */
+  clientMessageLookups: string[];
+  /** 非 null なら `findClientMessage` がこの理由で失敗する。 */
+  clientMessageLookupFails: string | null;
   /** `uploadAttachment()` に渡されたもの。 */
   uploads: { name: string; mediaType: string; size: number }[];
   /** 次の（以降の）`uploadAttachment()` を失敗させる理由。 */
@@ -65,6 +75,10 @@ export interface FakeApi extends TuiApi {
   messages: Record<string, ConversationMessage[]>;
   /** 窓が日誌の先頭に届いていない会話の id。 */
   unreachedStart: Set<string>;
+  /** 会話ごとの、その会話のターンから積まれた承認（`readConversationApprovals` が返す）。 */
+  conversationApprovals: Record<string, ConversationApprovalsRead>;
+  /** `readConversationApprovals` に渡された会話 id。 */
+  conversationApprovalCalls: string[];
   counts: HeaderCounts;
   /** 1 本目 = 最初の接続の台本。文字列は種別だけ（本体なし）、オブジェクトは本体つき。 */
   journal: { events: (string | JournalStreamItem | Error | Promise<void>)[] }[];
@@ -102,6 +116,20 @@ export interface FakeApi extends TuiApi {
   approvalRows: ApprovalRow[];
   unreadableApprovals: UnreadableApproval[];
   approvalListCalls: { pending: boolean }[];
+  /** `readApproval`（id で1件）に渡された id。 */
+  approvalReadCalls: string[];
+  /** 次の `readApproval` を失敗させる。 */
+  approvalReadFails: string | null;
+  /** 新しい日が上の「決着した日と件数」（`listAnsweredDates` が返す）。 */
+  answeredDateRows: AnsweredDateRow[];
+  answeredDateCalls: { limit: number; beforeDate?: string }[];
+  /** 次の `listAnsweredDates` を失敗させる。 */
+  answeredDatesFail: string | null;
+  /** 日付 → その日の件（決着の新しい順。デーモンが並べた形で渡す）。無い日は空。 */
+  answeredOnRows: Record<string, ApprovalRow[]>;
+  answeredOnCalls: string[];
+  /** 次の `listApprovalsAnsweredOn` を失敗させる。 */
+  answeredOnFail: string | null;
   /** 次の `listApprovals` を失敗させる。 */
   approvalListFails: string | null;
   /** 受け取った回答（デーモンへ届いた本文そのまま）。 */
@@ -139,6 +167,10 @@ export function fakeApi(): FakeApi {
   const api: FakeApi = {
     baseUrl: 'http://127.0.0.1:4517',
     chatCalls: [],
+    chatClientMessageIds: [],
+    receivedClientMessages: {},
+    clientMessageLookups: [],
+    clientMessageLookupFails: null,
     scripts: [],
     streamScripts: [],
     streamCalls: [],
@@ -149,6 +181,8 @@ export function fakeApi(): FakeApi {
     conversations: [],
     messages: {},
     unreachedStart: new Set(),
+    conversationApprovals: {},
+    conversationApprovalCalls: [],
     counts: { pendingApprovals: 0, unreadableApprovals: 0, runningManagers: 0 },
     journal: [],
     journalEntries: [],
@@ -173,6 +207,14 @@ export function fakeApi(): FakeApi {
     approvalRows: [],
     unreadableApprovals: [],
     approvalListCalls: [],
+    approvalReadCalls: [],
+    approvalReadFails: null,
+    answeredDateRows: [],
+    answeredDateCalls: [],
+    answeredDatesFail: null,
+    answeredOnRows: {},
+    answeredOnCalls: [],
+    answeredOnFail: null,
     approvalListFails: null,
     approvalAnswers: [],
     approvalAnswerFails: null,
@@ -184,7 +226,15 @@ export function fakeApi(): FakeApi {
       api.limitsCalls += 1;
       return api.limits;
     },
+    findClientMessage(clientMessageId) {
+      api.clientMessageLookups.push(clientMessageId);
+      if (api.clientMessageLookupFails !== null) {
+        return Promise.reject(new ApiError(api.clientMessageLookupFails));
+      }
+      return Promise.resolve(api.receivedClientMessages[clientMessageId] ?? null);
+    },
     async *chat(input, signal) {
+      api.chatClientMessageIds.push(input.clientMessageId);
       api.chatCalls.push({
         text: input.text,
         ...(input.conversationId === undefined ? {} : { conversationId: input.conversationId }),
@@ -240,6 +290,10 @@ export function fakeApi(): FakeApi {
         messages === undefined ? null : { messages, reachedStart: !api.unreachedStart.has(id) },
       );
     },
+    readConversationApprovals(id) {
+      api.conversationApprovalCalls.push(id);
+      return Promise.resolve(api.conversationApprovals[id] ?? { approvals: [], unreadable: [] });
+    },
     markConversationRead(id, through) {
       api.readMarks.push({ id, through });
       return api.readMarkFails === null
@@ -293,6 +347,24 @@ export function fakeApi(): FakeApi {
         ? api.approvalRows.filter((r) => r.answeredAt === undefined && r.withdrawnAt === undefined)
         : api.approvalRows;
       return Promise.resolve({ approvals: rows, unreadable: api.unreadableApprovals });
+    },
+    readApproval(id) {
+      api.approvalReadCalls.push(id);
+      if (api.approvalReadFails !== null) return Promise.reject(new Error(api.approvalReadFails));
+      return Promise.resolve(api.approvalRows.find((r) => r.id === id) ?? null);
+    },
+    listAnsweredDates(query) {
+      api.answeredDateCalls.push(query);
+      if (api.answeredDatesFail !== null) return Promise.reject(new Error(api.answeredDatesFail));
+      const older = api.answeredDateRows.filter(
+        (r) => query.beforeDate === undefined || r.date < query.beforeDate,
+      );
+      return Promise.resolve(older.slice(0, query.limit));
+    },
+    listApprovalsAnsweredOn(date) {
+      api.answeredOnCalls.push(date);
+      if (api.answeredOnFail !== null) return Promise.reject(new Error(api.answeredOnFail));
+      return Promise.resolve(api.answeredOnRows[date] ?? []);
     },
     answerApproval(id, body) {
       api.approvalAnswers.push({ id, body });

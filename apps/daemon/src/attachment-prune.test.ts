@@ -110,4 +110,31 @@ describe('添付ファイルの定期掃除（#3111）', () => {
       pruner.stop();
     }
   });
+
+  it('添付本体の prune が失敗していても、写しの掃除は走る（#3329）', async () => {
+    const stores = createMemoryStores();
+    const copiesDir = await makeTempDir('alteroid-prune-copies-fail-');
+    const meta = await stores.attachments.put({
+      name: 'a.png',
+      mediaType: 'image/png',
+      bytes: PNG,
+      conversationId: 'c1',
+    });
+    await fetchAttachmentCopy(stores, copiesDir, meta.id);
+    stores.attachments.prune = async () => {
+      throw new Error('boom');
+    };
+    const pruner = startAttachmentPruning({
+      stores,
+      everyMinutes: 60,
+      copiesDir,
+      now: () => new Date(Date.now() + 25 * 3_600_000),
+    });
+    try {
+      expect(await pruner.refresh()).toBeNull();
+      await expect(stat(join(copiesDir, meta.id))).rejects.toThrow();
+    } finally {
+      pruner.stop();
+    }
+  });
 });
