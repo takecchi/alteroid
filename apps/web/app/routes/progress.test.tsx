@@ -726,6 +726,68 @@ describe('/progress 画面 — 期間の切替', () => {
     expect(stub.calls.some((url) => url.includes('windowHours=168'))).toBe(true);
   });
 
+  it('知らない windowHours は、既定の7日で表示したまま、指定の値を注記で言う（#3741）', async () => {
+    const stub = stubProgress();
+    renderPage('/progress?windowHours=48');
+
+    await card('未完了の仕事');
+    expect(
+      screen.getByText('指定された期間（48）は選べないので、既定の 7日で表示しています'),
+    ).toBeTruthy();
+    expect(stub.calls.some((url) => url.includes('windowHours=168'))).toBe(true);
+    expect(stub.calls.every((url) => !url.includes('windowHours=48'))).toBe(true);
+    // どのチップも選ばれていない形（7日を押せば選び直せる。下のテスト）。
+    expect(screen.getByRole('radio', { name: '7日' }).getAttribute('aria-checked')).toBe('false');
+  });
+
+  it('知らない値が長すぎるときは、切って出す（#3741）', async () => {
+    stubProgress();
+    renderPage(`/progress?windowHours=${'9'.repeat(100)}`);
+
+    await card('未完了の仕事');
+    expect(screen.getByText(`指定された期間（${'9'.repeat(40)}…）`, { exact: false })).toBeTruthy();
+    expect(screen.queryByText('9'.repeat(41), { exact: false })).toBeNull();
+  });
+
+  it('対照: windowHours が無い・空文字・正しい値なら、注記は出ない（#3741）', async () => {
+    for (const entry of [
+      '/progress',
+      '/progress?windowHours=',
+      '/progress?windowHours=24',
+      '/progress?windowHours=168',
+      '/progress?windowHours=720',
+    ]) {
+      stubProgress();
+      renderPage(entry);
+      await card('未完了の仕事');
+      expect(screen.queryByText(/選べないので/), entry).toBeNull();
+      cleanup();
+    }
+  });
+
+  it('知らない値のあと、期間を選び直すと注記が消える（#3741）', async () => {
+    stubProgress();
+    const router = renderPage('/progress?windowHours=48');
+    await card('未完了の仕事');
+    expect(screen.getByText(/選べないので/)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('radio', { name: '24時間' }));
+
+    await waitFor(() => expect(screen.queryByText(/選べないので/)).toBeNull());
+    expect(router.state.location.search).toBe('?windowHours=24');
+  });
+
+  it('知らない値のとき、選択中に見える7日を押しても、URL が正しい値になり注記が消える（#3741）', async () => {
+    stubProgress();
+    const router = renderPage('/progress?windowHours=48');
+    await card('未完了の仕事');
+
+    fireEvent.click(screen.getByRole('radio', { name: '7日' }));
+
+    await waitFor(() => expect(screen.queryByText(/選べないので/)).toBeNull());
+    expect(router.state.location.search).toBe('?windowHours=168');
+  });
+
   it('チップで切り替えると、URL と要求の windowHours が変わる', async () => {
     const stub = stubProgress();
     const router = renderPage();

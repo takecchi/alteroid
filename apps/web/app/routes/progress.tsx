@@ -60,10 +60,26 @@ function parseWindow(raw: string | null): WindowHours {
   return found ?? DEFAULT_WINDOW;
 }
 
+/** URL の値は使い手が書いたものなのでそのまま出すが、長すぎるときは切る。 */
+const RAW_VALUE_MAX = 40;
+function clipRawValue(raw: string): string {
+  const chars = Array.from(raw);
+  return chars.length > RAW_VALUE_MAX ? `${chars.slice(0, RAW_VALUE_MAX).join('')}…` : raw;
+}
+
 export default function ProgressPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const rawWindow = searchParams.get(WINDOW_PARAM);
   const windowHours = useMemo(() => parseWindow(rawWindow), [rawWindow]);
+  /**
+   * **知らない値は黙って読み替えない（issue #3741。`usage.tsx` の `invalidFrom` と同じ線）。**
+   * 既定の窓で表示したまま、読めなかった生の値を注記で言う。パラメタが無い・空文字は
+   * 「指定なし」なので言わない。選び直せば URL が正しい値になり、注記は消える。
+   */
+  const invalidWindow =
+    rawWindow !== null && rawWindow !== '' && !WINDOWS.some((hours) => String(hours) === rawWindow)
+      ? rawWindow
+      : null;
   const { data, error, isLoading, isValidating, mutate } = useProgress(windowHours);
   // 表示中の data を最後に読めた窓。失敗したとき、いまの窓と違えば「前の期間の数字」と言う（#3419）。
   const [okWindow, setOkWindow] = useState<number>();
@@ -94,10 +110,17 @@ export default function ProgressPage() {
         <ChoiceChips
           label="期間の長さ"
           options={WINDOWS.map((hours) => ({ value: String(hours), label: WINDOW_LABEL[hours] }))}
-          value={String(windowHours)}
+          // 知らない値のときは、どのチップも選ばれていない形にする。7日を押せば選び直せて、注記が消える（#3741）。
+          value={invalidWindow ?? String(windowHours)}
           onChange={(value) => selectWindow(parseWindow(value))}
         />
       </div>
+
+      {invalidWindow !== null && (
+        <p className="mb-4 text-xs text-warn">
+          {`指定された期間（${clipRawValue(invalidWindow)}）は選べないので、既定の ${WINDOW_LABEL[DEFAULT_WINDOW]}で表示しています`}
+        </p>
+      )}
 
       {error !== undefined && data === undefined ? (
         <Card>
