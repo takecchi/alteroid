@@ -455,7 +455,8 @@ function ScheduleSpecFields({
 function RequestEditor({
   value,
   onChange,
-  initialValue,
+  activeTab,
+  onTabChange,
   placeholder,
   label,
   onSubmit,
@@ -463,7 +464,8 @@ function RequestEditor({
 }: {
   value: string;
   onChange: (value: string) => void;
-  initialValue: string;
+  activeTab: string;
+  onTabChange: (tab: string) => void;
   placeholder?: string;
   /** 本文の欄の名前（入力するとプレースホルダは消えるので、名前は別に持つ）。 */
   label: string;
@@ -472,11 +474,8 @@ function RequestEditor({
   /** そのボタンの `disabled` と同じ条件。 */
   submitDisabled: boolean;
 }) {
-  const [tab, setTab] = useState<string | undefined>(undefined);
-  const activeTab = tab ?? (initialValue.trim() === '' ? 'edit' : 'preview');
-
   return (
-    <Tabs.Root value={activeTab} onValueChange={setTab}>
+    <Tabs.Root value={activeTab} onValueChange={onTabChange}>
       <Tabs.List className="mb-1 flex shrink-0 gap-1 border-b border-border">
         <Tabs.Trigger
           value="preview"
@@ -526,6 +525,16 @@ function RequestEditor({
   );
 }
 
+/**
+ * 依頼の本文のタブ（編集・プレビュー）の状態。**送るキーの案内は textarea が出ている編集のタブだけ**
+ * に出すので、案内を置く親も見えるよう親が持つ（#3300）。既定は下の規則（`RequestEditor` の doc）。
+ */
+function useRequestTab(initialValue: string) {
+  const [tab, setTab] = useState<string | undefined>(undefined);
+  const activeTab = tab ?? (initialValue.trim() === '' ? 'edit' : 'preview');
+  return { activeTab, setTab };
+}
+
 // ---------------------------------------------------------------------------
 // 仕込まれた依頼を直す
 // ---------------------------------------------------------------------------
@@ -556,6 +565,7 @@ function ScheduleEditForm({
   const createSchedule = useCreateSchedule();
   const [specDraft, setSpecDraft] = useState<ScheduleSpecDraft>(() => initialSpecDraft(entry.spec));
   const [request, setRequest] = useState(entry.request ?? '');
+  const { activeTab, setTab } = useRequestTab(entry.request ?? '');
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<unknown>(undefined);
 
@@ -605,7 +615,8 @@ function ScheduleEditForm({
       <RequestEditor
         value={request}
         onChange={setRequest}
-        initialValue={entry.request ?? ''}
+        activeTab={activeTab}
+        onTabChange={setTab}
         label="依頼の本文"
         placeholder="依頼の本文（時刻が来たらそのままクローンへ渡る）"
         onSubmit={submit}
@@ -615,7 +626,7 @@ function ScheduleEditForm({
         <Button variant="primary" size="sm" loading={busy} disabled={!ready} onClick={submit}>
           保存する
         </Button>
-        <SubmitHint action="保存" />
+        {activeTab === 'edit' && <SubmitHint action="保存" />}
         <Button size="sm" onClick={onCancel} disabled={busy}>
           やめる
         </Button>
@@ -646,6 +657,7 @@ function ScheduleForm() {
   const kindId = useId();
   const [kind, setKind] = useState('');
   const [request, setRequest] = useState('');
+  const { activeTab, setTab } = useRequestTab('');
   const [specDraft, setSpecDraft] = useState<ScheduleSpecDraft>(DEFAULT_SPEC_DRAFT);
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState<string | undefined>(undefined);
@@ -689,7 +701,8 @@ function ScheduleForm() {
         <RequestEditor
           value={request}
           onChange={setRequest}
-          initialValue=""
+          activeTab={activeTab}
+          onTabChange={setTab}
           label="依頼の本文"
           placeholder="依頼の本文（時刻が来たらそのままクローンへ渡る）"
           onSubmit={submit}
@@ -699,7 +712,7 @@ function ScheduleForm() {
           <Button variant="primary" loading={busy} disabled={!ready} onClick={submit}>
             仕込む
           </Button>
-          <SubmitHint action="登録" />
+          {activeTab === 'edit' && <SubmitHint action="仕込む" />}
           {done !== undefined && (
             <span className="font-mono text-[11px] text-muted-foreground">仕込んだ: {done}</span>
           )}

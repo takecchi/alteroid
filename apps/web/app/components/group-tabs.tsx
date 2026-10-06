@@ -3,6 +3,7 @@ import { NavLink } from 'react-router';
 import { SectionTabs } from '@alteroid/ui';
 
 import {
+  APPROVALS_TABS,
   JOURNAL_TABS,
   MEMORY_TABS,
   SCHEDULE_TABS,
@@ -23,7 +24,11 @@ export function GroupTabs({ label, tabs }: { label: string; tabs: readonly NavTa
       label={label}
       tabs={tabs}
       renderLink={(tab, slot) => (
-        <NavLink to={tab.to} className={({ isActive }) => slot.className(isActive)}>
+        <NavLink
+          to={tab.to}
+          end={'end' in tab ? tab.end === true : false}
+          className={({ isActive }) => slot.className(isActive)}
+        >
           {slot.children}
         </NavLink>
       )}
@@ -31,6 +36,8 @@ export function GroupTabs({ label, tabs }: { label: string; tabs: readonly NavTa
   );
 }
 
+/** 承認（未回答・回答済み）。 */
+export const ApprovalsTabs = () => <GroupTabs label="承認のページ" tabs={APPROVALS_TABS} />;
 /** 仕事（未了の仕事・作業の進捗）。 */
 export const WorkTabs = () => <GroupTabs label="仕事のページ" tabs={WORK_TABS} />;
 /** 日誌（日誌・記録の失敗・アーカイブ）。 */

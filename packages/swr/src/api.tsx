@@ -541,3 +541,22 @@ function describeError(error: unknown, response: Response): string {
   }
   return `${response.status} ${response.statusText}`.trim();
 }
+
+/**
+ * **`clientMessageId` から、受け取り済みの発言の会話を引く**（`GET /client-messages/:clientMessageId`。#3258）。
+ * 新しい会話の送信が `open` の前に中断され、会話 id を知らないときに使う。受け取っていれば会話の id、
+ * **受け取っていなければ（404）`undefined`**。それ以外の失敗（5xx・繋がらない・401）は `ApiError` などを
+ * 投げる——「受け取っていない」と「確かめられなかった」を取り違えない。
+ */
+export async function findConversationByClientMessageId(
+  client: AlteroidClient,
+  clientMessageId: string,
+  options?: { signal?: AbortSignal },
+): Promise<string | undefined> {
+  const result = await client.api.GET('/client-messages/{clientMessageId}', {
+    params: { path: { clientMessageId } },
+    ...(options?.signal === undefined ? {} : { signal: options.signal }),
+  });
+  if (result.response.status === 404) return undefined;
+  return unwrap(result).conversationId;
+}

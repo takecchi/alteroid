@@ -77,6 +77,12 @@ import {
   markConversationReadAfterReply,
   unreadMark,
 } from './conversations.js';
+import {
+  approvalLine,
+  approvalNoticeLines,
+  fetchConversationApprovals,
+  interleaveApprovals,
+} from './conversation-approvals.js';
 import { formatElapsedAgo } from './format.js';
 import { redactBody, redactError } from './redact.js';
 import { formatCreatedAt, freshnessMarker } from './memory.js';
@@ -102,16 +108,47 @@ export async function chatCommand(): Promise<void> {
   const client = createClient(base, target.headers);
 
   const rl = createInterface({ input: stdin, output: stdout });
+  // 入力の行は `line` イベントで受けて積み、`ask` が順に取り出す（#3262）。`question()` は、待って
+  // いない間に届いた行（応答待ちの間にパイプで流れ込んだ2行目以降）をどこにも渡さず捨てる。
+  // REPL の問い（`confirmInRepl`）も同じ `ask` なので、次に積まれた行がその答えになる。
+  const pendingLines: string[] = [];
+  let waiter: { resolve: (line: string) => void; reject: (error: Error) => void } | null = null;
+  let inputClosed = false;
+  rl.on('line', (text) => {
+    if (waiter === null) {
+      pendingLines.push(text);
+      return;
+    }
+    const { resolve } = waiter;
+    waiter = null;
+    resolve(text);
+  });
   // 入力が閉じたら、待っている質問を打ち切る（#3217）。node v22 は、パイプの EOF では
-  // `question()` を resolve も reject もしない（端末の Ctrl-D は ABORT_ERR で reject される）。
-  // すでに閉じた後に聞いても、渡した signal が中断済みなので即座に reject される。
-  const inputClosed = new AbortController();
-  rl.once('close', () => inputClosed.abort());
-  const ask = (question: string): Promise<string> =>
-    rl.question(question, { signal: inputClosed.signal });
+  // `question()` を resolve も reject もしない。積んだ行は閉じた後でも先に読ませ、尽きたら reject する。
+  rl.once('close', () => {
+    inputClosed = true;
+    waiter?.reject(new Error('input closed'));
+    waiter = null;
+  });
+  const ask = (question: string): Promise<string> => {
+    const queued = pendingLines.shift();
+    if (queued !== undefined) {
+      stdout.write(question);
+      return Promise.resolve(queued);
+    }
+    if (inputClosed) return Promise.reject(new Error('input closed'));
+    rl.setPrompt(question);
+    rl.prompt();
+    return new Promise((resolve, reject) => {
+      waiter = { resolve, reject };
+    });
+  };
   // 次に送る発言へ添えかけのファイル（`/attach`）。
   const draft = createAttachmentDraft(target);
   let conversationId: string | null = null;
+  // 新しい会話で、2xx のあと `open` の前に SSE が終わった送信の `clientMessageId`（#3304）。次の送信の前に、
+  // `GET /client-messages/:id` で会話を引き直す（引かずに送ると、次の発言が新しい会話に入って会話が黙って分かれる）。
+  let unopened: string | null = null;
   // 直前に一覧したもの。番号で引けるようにするため覚えておく。
   const listed: Listed = {
     approvals: [],
@@ -147,7 +184,10 @@ export async function chatCommand(): Promise<void> {
 
         if (/^\/resume(\s|$)/.test(line)) {
           const resumed = await runResumeCommand(line, target);
-          if (resumed !== null) conversationId = resumed;
+          if (resumed !== null) {
+            conversationId = resumed;
+            unopened = null;
+          }
           continue;
         }
 
@@ -163,6 +203,25 @@ export async function chatCommand(): Promise<void> {
           );
           if (handled === 'quit') break;
           continue;
+        }
+
+        // 前の送信が `open` の前に終わっていたら、受け取られたかを引いて会話を取り直す。引けなかったら、
+        // 黙って新しい会話として送らない（readline は入力を残せないので、もう一度送ってもらう）。
+        if (conversationId === null && unopened !== null) {
+          try {
+            const found = await findClientMessage(target, unopened);
+            unopened = null;
+            if (found !== undefined) {
+              conversationId = found;
+              stdout.write(`前の送信は受け取られていました。その会話（${found}）へ送ります\n`);
+            }
+          } catch (error) {
+            stdout.write(
+              `前の送信が受け取られたか確かめられなかったので、送っていません（${redactError(error instanceof Error ? error.message : String(error))}）。\n` +
+                '同じ内容をもう一度送ってください（確かめ直します。添えかけは残してあります）\n',
+            );
+            continue;
+          }
         }
 
         // 添えかけがあれば先に上げる。失敗したら送らず、添えかけを残して理由を出す。
@@ -185,6 +244,10 @@ export async function chatCommand(): Promise<void> {
           ...(attachmentIds === undefined ? {} : { attachments: attachmentIds }),
           // サーバが発言を受けたら、送った分の添えかけを外す（受けなかったら残す）。
           onAccepted: () => draft.discard(sentFiles),
+          // 新しい会話で `open` の前に終わったら、次の送信の前に会話を引き直せるよう id を覚える（#3304）。
+          onUnopened: (clientMessageId) => {
+            unopened = clientMessageId;
+          },
           // 添付が期限切れ（サーバが掃除した）なら、上げ済みの印を捨てて、次の送信で上げ直す（#3246）。
           onAttachmentMissing: (message) => {
             stdout.write(`${expireUploads(sentFiles, message)}\n`);
@@ -235,10 +298,16 @@ export async function sendMessage(
     attachments?: string[];
     /** サーバが発言を受けた（HTTP 2xx）とき。添えかけを空にする合図。 */
     onAccepted?: () => void;
+    /**
+     * 新しい会話（`conversationId` 無し）の送信が、2xx のあと `open` を見ないまま終わったとき。受け取られたかは
+     * 分からない。この発言の `clientMessageId` を渡す（あとで `findClientMessage` で引く。#3304）。
+     */
+    onUnopened?: (clientMessageId: string) => void;
     /** `400 attachment_missing`（添付が無い・期限切れ）で断られたとき。サーバの理由の文を渡す（#3246）。 */
     onAttachmentMissing?: (message: string) => void;
   } = {},
 ): Promise<string | null> {
+  const clientMessageId = randomUUID();
   // SSE は hono/client ではなく生の fetch で受ける（EventSource は POST も
   // ヘッダ付与もできない）。認証ヘッダはここにも要る。
   const response = await fetch(`${target.baseUrl}/chat`, {
@@ -247,9 +316,8 @@ export async function sendMessage(
     body: JSON.stringify({
       text,
       conversationId: conversationId ?? undefined,
-      // 発言ごとに名乗る（Issue #3203）。CLI は送信を中断して再送する経路を持たないので、判定には使わない
-      // （Web と同じく、履歴に自分の発言の id が残る）。
-      clientMessageId: randomUUID(),
+      // 発言ごとに名乗る（Issue #3203）。新しい会話で `open` の前に終わった送信は、この id で会話を引き直す（#3304）。
+      clientMessageId,
       ...(supersedes === undefined ? {} : { supersedes }),
       ...(options.attachments === undefined || options.attachments.length === 0
         ? {}
@@ -277,7 +345,39 @@ export async function sendMessage(
   }
 
   options.onAccepted?.();
-  return renderChatEvents(target, readSSE(response.body), conversationId);
+  const next = await renderChatEvents(target, readSSE(response.body), conversationId);
+  if (conversationId === null && next === null) options.onUnopened?.(clientMessageId);
+  return next;
+}
+
+/**
+ * **`clientMessageId` から、受け取り済みの発言の会話を引く**（`GET /client-messages/:clientMessageId`。#3304）。
+ * 受け取っていれば会話の id、**受け取っていなければ（404）`undefined`**。それ以外の失敗（5xx・繋がらない・認証）は
+ * 投げる——「受け取っていない」と「確かめられなかった」を取り違えない。
+ */
+export async function findClientMessage(
+  target: Target,
+  clientMessageId: string,
+): Promise<string | undefined> {
+  const response = await fetch(
+    `${target.baseUrl}/client-messages/${encodeURIComponent(clientMessageId)}`,
+    { headers: target.headers },
+  );
+  if (response.status === 404) return undefined;
+  if (!response.ok) {
+    const described = describeAuthFailure(response.status, target);
+    if (described !== null) throw new Error(described);
+    throw new Error(await errorDetail({ status: response.status, json: () => response.json() }));
+  }
+  const body: unknown = await response.json();
+  const id =
+    typeof body === 'object' && body !== null && 'conversationId' in body
+      ? (body as { conversationId?: unknown }).conversationId
+      : undefined;
+  if (typeof id !== 'string' || id.length === 0) {
+    throw new Error('応答に会話 id がありませんでした');
+  }
+  return id;
 }
 
 /**
@@ -1149,7 +1249,10 @@ export async function runSlashCommand(
        */
       listed.messages.length = 0;
       listed.messagesConversationId = id;
-      if (messages.length === 0) {
+      // その会話のターンから積まれた承認を時刻順の位置に1行で出す（#3261）。取れなくても会話は出す。
+      const approvalsRead = await fetchConversationApprovals(client, id);
+      const timeline = interleaveApprovals(messages, approvalsRead.approvals);
+      if (timeline.length === 0) {
         stdout.write(
           reachedStart
             ? '（発言はありません）\n'
@@ -1157,7 +1260,12 @@ export async function runSlashCommand(
                 '（判定できません） — /conversation <番号|id> scan=<N> で広げられます）\n',
         );
       } else {
-        for (const message of messages) {
+        for (const item of timeline) {
+          if (item.kind === 'approval') {
+            stdout.write(`      ${approvalLine(item.approval)}\n`);
+            continue;
+          }
+          const message = item.message;
           const speaker = message.role === 'inbound' ? '人間' : 'クローン';
           const editable = message.role === 'inbound' && message.supersededBy === undefined;
           if (editable) listed.messages.push(message.id);
@@ -1178,6 +1286,7 @@ export async function runSlashCommand(
           }
         }
       }
+      for (const notice of approvalNoticeLines(approvalsRead)) stdout.write(`  ${notice}\n`);
       stdout.write(
         reachedStart
           ? `  （人間との往復を ${scanned} 件遡り、この会話の先頭まで届きました）\n`

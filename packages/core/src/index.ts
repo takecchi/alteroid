@@ -460,7 +460,7 @@ export {
   JOURNAL_SEARCH_UNCOVERED_LIST,
   JOURNAL_SEARCH_UNCOVERED_LIST_MD,
   JOURNAL_SEARCH_UNSEARCHABLE_TYPES,
-  journalSearchText,
+  journalSearchValues,
   matchesJournalSearch,
   type JournalSearchTarget,
 } from './journal-search.js';
@@ -1507,6 +1507,7 @@ export {
   DEFAULT_ATTACHMENT_LIMITS,
   canBindAttachmentTo,
   isAttachmentImageMediaType,
+  isBoundTo as isAttachmentBoundTo,
   isAttachmentPrunable,
   normalizeAttachmentMediaType,
   normalizeAttachmentName,

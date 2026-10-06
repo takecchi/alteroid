@@ -91,7 +91,7 @@ export class PgPersonaStore implements PersonaStore {
     // SQL の1文で完結するので、JS 側からは新旧の content を突き合わせられない
     // ——別途 SELECT する（fs 版の `#writeNow` が先に `read()` するのと同じ形）。
     const prior = await this.#readPrior(key);
-    const body = stripNulls(ensureTrailingNewline(content));
+    const body = ensureTrailingNewline(stripNulls(content));
     const now = new Date();
     const returning = {
       slug: memory.slug,
@@ -290,7 +290,13 @@ export class PgPersonaStore implements PersonaStore {
   async append(slug: string, content: string): Promise<MemoryDocument> {
     const key = this.#slug(slug);
     const prior = await this.#readPrior(key);
-    const body = stripNulls(ensureTrailingNewline(content));
+    const stripped = stripNulls(content);
+    const body = ensureTrailingNewline(stripped);
+    // **既存の文書へ足すときは、NUL を落とした結果が空なら改行を足さない。** in-memory / fs は
+    // 「連結してから正規化」なので、`append('\0')` は既存の末尾の改行＋区切りの改行で終わる
+    // （空行は1つ）。ここで空の本文に改行を足すと空行が2つになる（issue #3284）。
+    // 新規作成（下の values）は空でも `'\n'` になり、3実装とも同じ。
+    const tail = stripped === '' ? '' : body;
     const now = new Date();
     const rows = await this.#db
       .insert(memory)
@@ -301,8 +307,8 @@ export class PgPersonaStore implements PersonaStore {
         target: memory.slug,
         set: {
           content: sql`case
-            when right(${memory.content}, 1) = E'\n' then ${memory.content} || E'\n' || ${body}
-            else ${memory.content} || E'\n\n' || ${body}
+            when right(${memory.content}, 1) = E'\n' then ${memory.content} || E'\n' || ${tail}
+            else ${memory.content} || E'\n\n' || ${tail}
           end`,
           updatedAt: now,
         },

@@ -494,7 +494,8 @@ describe('alteroid conversations show', () => {
 
     await conversationsShowCommand('conv-1');
 
-    expect(sent).toHaveLength(1);
+    // 会話の取得に続けて、その会話の承認を1回取る（#3261）。
+    expect(sent).toHaveLength(2);
     expect(sent[0]?.url).toBe('http://127.0.0.1:4517/conversations/conv-1');
     const text = read();
     const human = text.indexOf('設計どうする？');
@@ -681,6 +682,99 @@ describe('alteroid conversations show', () => {
     await conversationsShowCommand('conv-1');
 
     expect(read().endsWith('\n')).toBe(true);
+  });
+});
+
+describe('alteroid conversations show — その会話のターンから積まれた承認（#3261）', () => {
+  const detail = {
+    conversationId: 'conv-1',
+    messages: [
+      { id: 'm1', at: '2026-10-06T10:00:00.000Z', role: 'inbound', text: 'どうする？' },
+      { id: 'm2', at: '2026-10-06T10:04:00.000Z', role: 'outbound', text: 'A案で進めます' },
+    ],
+    scanned: 10,
+    reachedStart: true,
+  };
+  const approval = {
+    id: 'abcdef12-3456',
+    createdAt: '2026-10-06T10:01:00.000Z',
+    question: 'A案とB案のどちらにしますか？',
+    answeredAt: '2026-10-06T10:03:00.000Z',
+    answer: 'A案',
+  };
+
+  it('承認を、条件つきの口で取り、発言と承認と返答を時刻順に1行で出す', async () => {
+    const read = captureStdout();
+    replies.push({ status: 200, body: detail });
+    replies.push({ status: 200, body: { approvals: [approval] } });
+
+    await conversationsShowCommand('conv-1');
+
+    const url = new URL(sent[1]?.url ?? '');
+    expect(url.pathname).toBe('/approvals');
+    expect(url.searchParams.get('conversationId')).toBe('conv-1');
+    expect(url.searchParams.get('pending')).toBe('false');
+    expect(url.searchParams.get('order')).toBe('asc');
+    const text = read();
+    const line =
+      '? [2026-10-06T10:01:00.000Z] 確認（承認待ち abcdef12）: A案とB案のどちらにしますか？ ' +
+      '→ 回答済み（2026-10-06T10:03:00.000Z）: A案';
+    expect(text).toContain(line);
+    // 回答のあとのクローンの返答は、承認の行の後ろに並ぶ。
+    expect(text.indexOf('どうする？')).toBeLessThan(text.indexOf(line));
+    expect(text.indexOf(line)).toBeLessThan(text.indexOf('A案で進めます'));
+  });
+
+  it('未回答・取り下げも1行で出す', async () => {
+    const read = captureStdout();
+    replies.push({ status: 200, body: detail });
+    replies.push({
+      status: 200,
+      body: {
+        approvals: [
+          { id: 'open-0001', createdAt: '2026-10-06T10:01:00.000Z', question: 'まだ' },
+          {
+            id: 'gone-0001',
+            createdAt: '2026-10-06T10:02:00.000Z',
+            question: 'やめた',
+            withdrawnAt: '2026-10-06T10:02:30.000Z',
+            withdrawnReason: '不要になった',
+          },
+        ],
+      },
+    });
+
+    await conversationsShowCommand('conv-1');
+
+    const text = read();
+    expect(text).toContain('確認（承認待ち open-000）: まだ → 未回答');
+    expect(text).toContain('→ 取り下げ（2026-10-06T10:02:30.000Z）: 不要になった');
+  });
+
+  it('承認を取れなくても会話は出し、取れなかったことを1行で言う', async () => {
+    const read = captureStdout();
+    replies.push({ status: 200, body: detail });
+    replies.push({ status: 500, body: { error: '承認が読めない' } });
+
+    await conversationsShowCommand('conv-1');
+
+    const text = read();
+    expect(text).toContain('A案で進めます');
+    expect(text).toContain('この会話の承認待ちは取れませんでした');
+    expect(text).toContain('承認が読めない');
+  });
+
+  it('読めない承認待ちがあれば、それも言う', async () => {
+    const read = captureStdout();
+    replies.push({ status: 200, body: detail });
+    replies.push({
+      status: 200,
+      body: { approvals: [], unreadable: [{ id: 'bad-1', reason: 'x' }] },
+    });
+
+    await conversationsShowCommand('conv-1');
+
+    expect(read()).toContain('読めない承認待ちが 1 件');
   });
 });
 

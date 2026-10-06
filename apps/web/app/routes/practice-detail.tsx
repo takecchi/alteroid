@@ -176,6 +176,8 @@ function PracticeDetailBody({ slug }: { slug: string }) {
 
   /** `ifMatch` を渡して保存する。衝突したら下書きを残して、いまの版を見せる。 */
   function save(ifMatch: string | null | undefined = baseVersion) {
+    // 保存中は何もしない。ボタン・⌘/Ctrl+Enter・⌘/Ctrl+S のどの経路もここを通る（#3300）。
+    if (busy) return;
     // 衝突のあとは、再取得で「変更なし」に見えても、人間が選んだ上書きは通す。
     if (!canSave && !(conflict !== undefined && hasDraft && kind.trim() !== '')) return;
     setBusy(true);
@@ -268,7 +270,7 @@ function PracticeDetailBody({ slug }: { slug: string }) {
           )}
           {!loadFailed && (
             <>
-              <SubmitHint action="保存" />
+              {activeTab === 'edit' && <SubmitHint action="保存" />}
               <Button
                 variant="primary"
                 size="sm"

@@ -84,6 +84,34 @@ describe('chat（POST /chat の SSE）', () => {
     });
   });
 
+  it('渡した clientMessageId をそのまま送る（open の前に終わった送信を引き直すため。#3304）', async () => {
+    replies.push(sse(''));
+    await collect(
+      createTuiApi(target).chat(
+        { text: 'hi', clientMessageId: 'cm-1' },
+        new AbortController().signal,
+      ),
+    );
+    expect(JSON.parse(sent[0]?.body ?? '')).toMatchObject({ clientMessageId: 'cm-1' });
+  });
+
+  it('GET /client-messages/{id}: 受け取り済みは会話 id、404 は null、それ以外の失敗は例外（#3304）', async () => {
+    const api = createTuiApi(target);
+    replies.push(json({ conversationId: 'c9' }));
+    expect(await api.findClientMessage('cm-1')).toBe('c9');
+    expect(sent[0]).toMatchObject({
+      url: 'http://127.0.0.1:4517/client-messages/cm-1',
+      method: 'GET',
+    });
+    expect(sent[0]?.headers).toMatchObject({ authorization: 'Bearer tok' });
+    replies.push(json({ error: '受け取っていない clientMessageId' }, 404));
+    expect(await api.findClientMessage('cm-2')).toBeNull();
+    replies.push(json({ error: 'boom' }, 500));
+    await expect(api.findClientMessage('cm-3')).rejects.toThrow(
+      /前の送信が受け取られたか確かめられませんでした（HTTP 500）/,
+    );
+  });
+
   it('9 種のイベントを型付きで渡し、未知のイベントは無視する', async () => {
     replies.push(
       sse(

@@ -10,15 +10,27 @@ import { captureStdout } from './test-support.js';
 const lines: string[] = [];
 
 vi.mock('node:readline/promises', () => ({
-  createInterface: () => ({
-    question: async () => {
-      const next = lines.shift();
-      if (next === undefined) throw new Error('closed');
-      return next;
-    },
-    once: () => undefined,
-    close: () => undefined,
-  }),
+  // `chat.ts` は `line` / `close` イベントで読む（#3262）。`prompt()` のたびに次の行を流し、尽きたら閉じる。
+  createInterface: () => {
+    const handlers: { line?: (text: string) => void; close?: () => void } = {};
+    return {
+      on: (_event: 'line', handler: (text: string) => void) => {
+        handlers.line = handler;
+      },
+      once: (_event: 'close', handler: () => void) => {
+        handlers.close = handler;
+      },
+      setPrompt: () => undefined,
+      prompt: () => {
+        queueMicrotask(() => {
+          const next = lines.shift();
+          if (next === undefined) handlers.close?.();
+          else handlers.line?.(next);
+        });
+      },
+      close: () => undefined,
+    };
+  },
 }));
 
 vi.mock('./target.js', async (orig) => ({
@@ -77,7 +89,8 @@ async function run(
   return { chatBodies, uploads, output };
 }
 
-describe('chat: 添えかけがあるときの空行（添付だけの発言）', () => {
+// 初回は chat.ts（大きい）の読み込みで既定の5秒を超えうる。
+describe('chat: 添えかけがあるときの空行（添付だけの発言）', { timeout: 30000 }, () => {
   it('/attach のあとの空行で text:"" と attachments が /chat に送られ、その後の空行は送らない', async () => {
     const dir = await makeTempDir('alteroid-chat-only-');
     const path = join(dir, 'a.log');

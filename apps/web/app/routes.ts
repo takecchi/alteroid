@@ -22,6 +22,11 @@ export default [
     // 一覧（左）と中身（右）の1画面。`practices.tsx` が親で、中身は子の経路が右に出る。
     route('practices', 'routes/practices.tsx', [route(':slug', 'routes/practice-detail.tsx')]),
     route('approvals', 'routes/approvals.tsx'),
+    // 回答済み・取り下げ済みを日ごとに読む。未回答の画面とは別のチャンク（`approvals.tsx` は未回答だけ）。
+    // 日報（`reports/:date?/:reportId?`）と同じ形: 日付が無ければ最新の日、`approvalId` が在れば1件の詳細。
+    route('approvals/answered/:date?/:approvalId?', 'routes/approvals-answered.tsx'),
+    // 日付なしで承認1件を開く入口（会話などから）。正しい日の詳細 / 未回答のページへ replace で移すだけ。
+    route('approvals/item/:approvalId', 'routes/approvals-item.tsx'),
     route('commitments', 'routes/commitments.tsx'),
     // 同じ日に複数あるので、日付だけでは1件に定まらない（`reports.tsx` の選択の doc）。
     route('reports/:date?/:reportId?', 'routes/reports.tsx'),

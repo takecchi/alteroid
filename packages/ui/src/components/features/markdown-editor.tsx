@@ -25,7 +25,7 @@ const SAVE_HINT = '⌘/Ctrl + S で保存';
  * - **書きかけ（`value`）は呼ぶ側が持つ**（この部品は写さない）。タブを行き来しても、
  *   取得し直しが走っても書きかけは消えない
  * - プレビューが映すのは保存前の `value` そのもの（本文を書き換えない）
- * - ⌘ / Ctrl + S と ⌘ / Ctrl + Enter で `onSave`（渡したときだけ。⌘/Ctrl + Enter は `saveDisabled` のあいだ呼ばない）
+ * - ⌘ / Ctrl + S と ⌘ / Ctrl + Enter で `onSave`（渡したときだけ。どちらも `saveDisabled` のあいだは呼ばない）
  *
  * 足したもの:
  *
@@ -120,7 +120,8 @@ export function MarkdownEditor({
       onKeyDown={(event) => {
         if (onSave !== undefined && (event.metaKey || event.ctrlKey) && event.key === 's') {
           event.preventDefault();
-          onSave();
+          // ⌘/Ctrl+Enter と同じ門（`saveDisabled` のあいだは呼ばない。保存中の二重送信を防ぐ。#3300）。
+          if (!saveDisabled) onSave();
         }
       }}
     />

@@ -180,7 +180,7 @@ export class PgJournalStore implements JournalStore {
       // 0件という契約がそのまま満たされる。
       ...(query.with === undefined ? [] : [inArray(sql`(${journal.entry}->>'with')`, query.with)]),
       // **`q` も `where` 節（＝ `limit` より前）で効かせる**（issue #250。`with` と
-      // 同じ段）。組み立ては `journalSearchTextSql` / `likePattern`。
+      // 同じ段）。組み立ては `journalSearchFieldMatchesSql` / `likePattern`。
       // NUL を含む q に一致する行は存在しえない（書き込みが落とす。issue #3011）ので0件。
       ...(query.q === undefined
         ? []
@@ -342,34 +342,36 @@ function byteLength(value: unknown): number {
  * 配列から消す」に当たらない、純粋な追加である）。
  */
 function journalSearchMatches(q: string): SQL {
-  return sql`${journalSearchTextSql()} ilike ${likePattern(q)} escape ${sql.raw("'\\'")}`;
+  // 空の語は「絞らない」。欄ごとの `OR` に任せると、欄を持たない種別だけが落ちる（JS 側の `matchesJournalSearch` と同じ）。
+  if (q === '') return sql`true`;
+  const pattern = likePattern(q);
+  return sql`(${journalSearchFieldMatchesSql(pattern)})`;
 }
 
 /**
- * 照合の対象になる文字列を SQL の式として組み立てる。
+ * 照合を SQL の式として組み立てる。**欄ごとに別々に `ILIKE` を当て、`OR` で繋ぐ**
+ * （どれか1つの欄に含まれれば当たり。欄をまたいで当てない。issue #3289）。
  *
  * **`JOURNAL_SEARCH_FIELDS` から組み立てる。欄名をここへ書き写さない** ——
- * JS 側（`journalSearchText`）と同じ定数・同じ順序・同じ区切り（改行1つ）で
- * 繋ぐことで、両者が作る文字列そのものが1バイトも違わなくなる
- * （`packages/core/src/journal-search.ts` の doc）。**書き写すと、片方だけ直して
- * 他方を忘れる形ができ、食い違いは特定の種別 × 特定の語のときだけ出る。**
+ * JS 側（`journalSearchValues` / `matchesJournalSearch`）と同じ定数から作るので、
+ * 見る欄がずれない（`packages/core/src/journal-search.ts` の doc）。**書き写すと、
+ * 片方だけ直して他方を忘れる形ができ、食い違いは特定の種別 × 特定の語のときだけ出る。**
  *
- * `coalesce(…, '')` で無い欄を空文字列にするのも JS 側と揃えるためである
- * （飛ばすと繋ぎ目の数が変わる）。改行は `chr(10)` で作る —— リテラルの
- * `E'\n'` は `standard_conforming_strings` の設定に意味が依存する。
+ * `coalesce(…, '')` は欄が無い（`->>` が NULL）ときに `false` へ倒すためである
+ * （NULL のままだと `OR` の結果が NULL になりうる）。
  *
  * **欄名は SQL リテラルとして直に埋める**（`sql.raw`）。`->>` の右辺を
  * バインド変数にすると `jsonb ->> unknown` が `->>(jsonb,int)` と
  * `->>(jsonb,text)` のどちらか決まらず落ちる。埋める値は**このモジュールの
  * 定数だけ**で外から来ないが、それに依存しないよう下で形を検算している。
  */
-function journalSearchTextSql(): SQL {
+function journalSearchFieldMatchesSql(pattern: string): SQL {
   return sql.join(
     JOURNAL_SEARCH_FIELDS.map(
       (field) =>
-        sql`coalesce(${journal.entry}->>${sql.raw(`'${assertPlainFieldName(field)}'`)}, '')`,
+        sql`coalesce(${journal.entry}->>${sql.raw(`'${assertPlainFieldName(field)}'`)}, '') ilike ${pattern} escape ${sql.raw("'\\'")}`,
     ),
-    sql` || chr(10) || `,
+    sql` or `,
   );
 }
 

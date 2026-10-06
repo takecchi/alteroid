@@ -2145,6 +2145,10 @@ function createMemoryInboxStore(): InboxStore {
       // fs（`FsInboxStore.put`）/ pg（`PgInboxStore.put`）と同じく、形の
       // 崩れた event を書く前に拒む（issue #1668）。
       const value = inboxEventSchema.parse(event);
+      // 外側の `at` は fs（`FsInboxStore.put`）/ pg と同じ `Z` 付きの ISO 表記に正規化して保存する
+      // （issue #2927 項目2・#3292）。読めない時刻は `RangeError` で拒み、何も保存しない
+      // （pg の `new Date(at)` も同じ）。
+      const normalizedAt = new Date(at).toISOString();
       // 配達回数は保つ（本文だけを差し替える）。
       const deliveries = unread.get(value.id)?.deliveries ?? 0;
       // **既存の行を一旦 `delete` してから `set` し直す。** `Map` はキーの
@@ -2153,7 +2157,7 @@ function createMemoryInboxStore(): InboxStore {
       // （どちらも「既存の行を除いてから足す」形で末尾へ回る）と同着
       // （同じ `at`）のときの並びが食い違っていた（issue #1652）。
       unread.delete(value.id);
-      unread.set(value.id, { event: value, at, deliveries });
+      unread.set(value.id, { event: value, at: normalizedAt, deliveries });
     },
     async remove(id: string): Promise<void> {
       unread.delete(id);

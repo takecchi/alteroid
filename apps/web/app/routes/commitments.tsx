@@ -1006,6 +1006,8 @@ function CommitmentBodyEditor({
   useEffect(() => () => onDirtyChange(id, false), [id, onDirtyChange]);
 
   function save() {
+    // 保存中は何もしない。ボタン・⌘/Ctrl+Enter・⌘/Ctrl+S のどの経路もここを通る（#3300）。
+    if (busy) return;
     if (draft === undefined || draft.trim() === '') return;
     setBusy(true);
     setFailure(undefined);
@@ -1063,8 +1065,8 @@ function CommitmentBodyEditor({
             // **Enter は改行のまま**（送信のキーにしない）。長文になりうる本文
             // 欄なので、`Input`（片付ける理由・積む本文）と違って Enter 単体
             // 送信にしていない——だからここには IME の門（`isComposing` /
-            // `keyCode === 229`）を付けていない。送信は保存ボタンか
-            // Cmd/Ctrl+S だけで、どちらも Enter 単体の確定と衝突しない
+            // `keyCode === 229`）を付けていない。送信は保存ボタン・Cmd/Ctrl+Enter（共有の
+            // `Textarea` の `onSubmitShortcut`。#3242）・Cmd/Ctrl+S で、どれも Enter 単体の確定と衝突しない
             // （`memory-detail.tsx` と同じ設計）。
             onChange={(event) => setDraft(event.target.value)}
             onKeyDown={(event) => {
@@ -1087,7 +1089,7 @@ function CommitmentBodyEditor({
         >
           保存
         </Button>
-        <SubmitHint action="保存" />
+        {tab === 'edit' && <SubmitHint action="保存" />}
         <Button size="sm" onClick={onCancel}>
           やめる
         </Button>

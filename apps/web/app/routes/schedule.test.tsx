@@ -685,3 +685,29 @@ describe('入力欄にラベルが在る（#2787）', () => {
     expect(screen.queryByText('daily_report')).toBeNull();
   });
 });
+
+describe('送るキーの案内（#3300）', () => {
+  it('新規の仕込みでは、編集のタブでだけ出て、動詞はボタンの「仕込む」と合う', async () => {
+    stubSchedule([DEFAULT_ENTRY]);
+    renderSchedule();
+
+    await screen.findByRole('button', { name: '仕込む' });
+    // 新規は編集のタブが既定。
+    expect(screen.getByText(/Enter で仕込む$/)).toBeTruthy();
+    expect(screen.queryByText(/Enter で登録$/)).toBeNull();
+    const panel = screen.getByRole('button', { name: '仕込む' }).closest('.flex-col')!;
+    fireEvent.mouseDown(within(panel as HTMLElement).getByRole('tab', { name: 'プレビュー' }));
+    await waitFor(() => expect(screen.queryByText(/Enter で仕込む$/)).toBeNull());
+  });
+
+  it('既存の依頼の編集では、プレビューのうちは出ず、編集のタブにすると出る', async () => {
+    stubSchedule([SPEC_ENTRY]);
+    renderSchedule();
+
+    fireEvent.click(await screen.findByRole('button', { name: / を編集$/ }));
+    const panel = await screen.findByRole('group', { name: `${SPEC_ENTRY.kind} を編集` });
+    expect(within(panel).queryByText(/Enter で保存$/)).toBeNull();
+    fireEvent.mouseDown(within(panel).getByRole('tab', { name: '編集' }));
+    expect(await within(panel).findByText(/Enter で保存$/)).toBeTruthy();
+  });
+});
