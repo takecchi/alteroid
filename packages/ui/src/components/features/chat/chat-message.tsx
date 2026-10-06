@@ -57,6 +57,7 @@ export interface ChatMessageVersions {
  *   （送信中の楽観行はまだサーバに無いので、編集の入口を出してはいけない）
  * - `attachments` —— 発言に添えられたものを本文の下に描く（描く部品は呼ぶ側が渡す。ここは通信を知らない）。
  *   編集中は出さない
+ * - `hasDraft` —— その発言に編集の書きかけが残っているとき。鉛筆を常に見せ、小さな点と名前で知らせる（#3565）
  * - `children` —— 渡すと本文の代わりに描く（編集中の下書き `ChatMessageEditor` など）
  *
  * クローンの本文が空（最初のチャンクがまだ届いていない）なら「…」を出す。
@@ -66,6 +67,7 @@ export function ChatMessage({
   text,
   transient = false,
   onEdit,
+  hasDraft = false,
   versions,
   attachments,
   children,
@@ -74,6 +76,7 @@ export function ChatMessage({
   text: string;
   transient?: boolean;
   onEdit?: () => void;
+  hasDraft?: boolean;
   versions?: ChatMessageVersions;
   attachments?: ReactNode;
   children?: ReactNode;
@@ -102,11 +105,20 @@ export function ChatMessage({
             <Button
               size="sm"
               variant="ghost"
-              aria-label="発言を編集"
-              className="mt-1 shrink-0 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 pointer-coarse:opacity-60 pointer-coarse:group-focus-within:opacity-100 pointer-coarse:focus-visible:opacity-100"
+              aria-label={hasDraft ? '発言を編集（書きかけあり）' : '発言を編集'}
+              className={cn(
+                'relative mt-1 shrink-0 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 pointer-coarse:opacity-60 pointer-coarse:group-focus-within:opacity-100 pointer-coarse:focus-visible:opacity-100',
+                hasDraft && 'opacity-100',
+              )}
               onClick={onEdit}
             >
               <Pencil className="size-3.5" aria-hidden />
+              {hasDraft && (
+                <span
+                  aria-hidden
+                  className="absolute top-1 right-1 size-1.5 rounded-full bg-warn"
+                />
+              )}
             </Button>
           )}
           <div

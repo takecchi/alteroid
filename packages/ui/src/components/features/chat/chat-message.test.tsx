@@ -72,6 +72,14 @@ describe('ChatMessage: 編集の入口', () => {
     );
   });
 
+  it('hasDraft のときは、鉛筆を常に見せ、名前で書きかけを知らせる（#3565）', () => {
+    const { rerender } = render(<ChatMessage role="human" text="やあ" onEdit={() => {}} />);
+    expect(screen.queryByRole('button', { name: /書きかけ/ })).toBeNull();
+    rerender(<ChatMessage role="human" text="やあ" onEdit={() => {}} hasDraft />);
+    const button = screen.getByRole('button', { name: '発言を編集（書きかけあり）' });
+    expect(button.className.split(/\s+/)).toContain('opacity-100');
+  });
+
   it('onEdit を渡したときだけ鉛筆が出る。編集中（children）は出ない', () => {
     const onEdit = vi.fn();
     const { rerender } = render(<ChatMessage role="human" text="やあ" />);
