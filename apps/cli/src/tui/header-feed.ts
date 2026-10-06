@@ -112,6 +112,7 @@ export class HeaderFeed {
       if (this.stopped) return;
       this.store.update((s) =>
         s.counts?.pendingApprovals === counts.pendingApprovals &&
+        s.counts.unreadableApprovals === counts.unreadableApprovals &&
         s.counts.runningManagers === counts.runningManagers
           ? s
           : { ...s, counts },

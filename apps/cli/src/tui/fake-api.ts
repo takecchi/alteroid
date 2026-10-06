@@ -130,7 +130,7 @@ export function fakeApi(): FakeApi {
     conversations: [],
     messages: {},
     unreachedStart: new Set(),
-    counts: { pendingApprovals: 0, runningManagers: 0 },
+    counts: { pendingApprovals: 0, unreadableApprovals: 0, runningManagers: 0 },
     journal: [],
     journalEntries: [],
     journalListCalls: [],

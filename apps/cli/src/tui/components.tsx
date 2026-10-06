@@ -165,7 +165,11 @@ const CaretLine: FC<{ line: string; col: number }> = ({ line, col }) => {
 
 export const Header: FC<{ baseUrl: string; state: HeaderState }> = ({ baseUrl, state }) => {
   const { counts, live } = state;
-  const approvals = counts === null ? '-' : String(counts.pendingApprovals);
+  const unreadable = counts?.unreadableApprovals ?? 0;
+  const approvals =
+    counts === null
+      ? '-'
+      : `${String(counts.pendingApprovals)}${unreadable > 0 ? `（読めない ${String(unreadable)}）` : ''}`;
   const running = counts === null ? '-' : String(counts.runningManagers);
   return (
     <Box flexShrink={0}>
@@ -174,7 +178,11 @@ export const Header: FC<{ baseUrl: string; state: HeaderState }> = ({ baseUrl, s
           alteroid
         </Text>
         {` ─ ${baseUrl} ─ `}
-        <Text {...(counts !== null && counts.pendingApprovals > 0 ? { color: theme.warn } : {})}>
+        <Text
+          {...(counts !== null && (counts.pendingApprovals > 0 || unreadable > 0)
+            ? { color: theme.warn }
+            : {})}
+        >
           {`承認待ち ${approvals}`}
         </Text>
         {` ─ 実行中の委譲 ${running}`}
@@ -188,9 +196,12 @@ export const Tabs: FC<{ active: TabId; counts: HeaderState['counts'] }> = ({ act
   <Box flexShrink={0}>
     <Text wrap="truncate-end">
       {TABS.map((tab) => {
+        const unreadable = tab.id === 'approvals' ? (counts?.unreadableApprovals ?? 0) : 0;
         const badge =
-          tab.id === 'approvals' && counts !== null && counts.pendingApprovals > 0
-            ? ` ${String(counts.pendingApprovals)}`
+          tab.id === 'approvals' &&
+          counts !== null &&
+          (counts.pendingApprovals > 0 || unreadable > 0)
+            ? `${counts.pendingApprovals > 0 ? ` ${String(counts.pendingApprovals)}` : ''}${unreadable > 0 ? ` ⚠読めない ${String(unreadable)}` : ''}`
             : tab.id === 'managers' && counts !== null && counts.runningManagers > 0
               ? ` ${String(counts.runningManagers)}`
               : '';
@@ -198,6 +209,7 @@ export const Tabs: FC<{ active: TabId; counts: HeaderState['counts'] }> = ({ act
           <Text
             key={tab.id}
             {...(tab.id === active ? { inverse: true, bold: true } : { dimColor: true })}
+            {...(unreadable > 0 ? { color: theme.warn } : {})}
           >
             {`[${tab.key} ${tab.label}${badge}]`}
             {tab.id === active ? '' : ' '}
