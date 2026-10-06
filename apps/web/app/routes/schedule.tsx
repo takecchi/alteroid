@@ -1,6 +1,7 @@
 import { ScheduleTabs } from '~/components/group-tabs';
 import { LoadError } from '~/components/load-error';
 import { unsentInput } from '~/lib/unsent-input';
+import { useLatest } from '~/lib/use-latest';
 import { AlertTriangle } from 'lucide-react';
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { useBlocker } from 'react-router';
@@ -703,6 +704,8 @@ function ScheduleEditForm({
   const { activeTab, setTab } = useRequestTab(entry.request ?? '');
   const { busy, begin, end } = useSending();
   const [failure, setFailure] = useState<unknown>(undefined);
+  /** 応答が返った時点の「いまの欄」（送った時点と比べる。#3506）。 */
+  const latestFields = useLatest({ request, specDraft });
 
   const initialSpec = initialSpecDraft(entry.spec);
   const dirty =
@@ -720,12 +723,27 @@ function ScheduleEditForm({
     // 送信中は何もしない。ボタン・⌘/Ctrl+Enter のどちらもここを通る（#3555）。
     if (!ready || !begin()) return;
     setFailure(undefined);
+    // 送った値を控える。成功のあと、いまの欄が送った値と同じときだけ閉じる（#3506。commitments の本文編集と同じ形）。
+    const sentRequest = request;
+    const sentSpec = specDraft;
     createSchedule({
       kind: entry.kind,
       request: request.trim(),
       spec: specDraftToSpec(specDraft),
     })
-      .then(onSaved)
+      .then(() => {
+        // 応答を待つ間に打ち足した・書き換えた分があるときは閉じず、編集欄を開いたまま残す。
+        const now = latestFields.current;
+        if (true ||
+          now.request === sentRequest &&
+          now.specDraft.type === sentSpec.type &&
+          now.specDraft.at === sentSpec.at &&
+          now.specDraft.minutes === sentSpec.minutes &&
+          now.specDraft.expression === sentSpec.expression
+        ) {
+          onSaved();
+        }
+      })
       .catch(setFailure)
       .finally(end);
   }
