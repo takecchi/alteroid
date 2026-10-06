@@ -5,8 +5,8 @@ import {
   sniffAttachmentImageType,
   TurnImageBudget,
   turnImageOverNotice,
-  type AttachmentLimits,
   type AttachmentStore,
+  type TurnAttachmentLimits,
 } from './attachment.js';
 import { stripNul } from './nul-guard.js';
 import type { AttachmentRef } from './schema.js';
@@ -51,7 +51,7 @@ export async function resolveTurnAttachmentGroups(
   stores: { readonly attachments: AttachmentStore },
   groups: readonly (readonly AttachmentRef[])[],
   /** 既定は {@link readAttachmentLimits}（環境変数。`attachment_fetch` などと同じ流れ）。 */
-  limits: AttachmentLimits = readAttachmentLimits().limits,
+  limits: TurnAttachmentLimits = readAttachmentLimits().limits,
 ): Promise<ResolvedTurnAttachments[]> {
   const budget = new TurnImageBudget(limits);
   const results: ResolvedTurnAttachments[] = groups.map(() => ({ images: [], noticeLines: [] }));
@@ -105,7 +105,7 @@ export async function resolveTurnAttachments(
   stores: { readonly attachments: AttachmentStore },
   refs: readonly AttachmentRef[],
   /** 既定は {@link readAttachmentLimits}（環境変数。`attachment_fetch` などと同じ流れ）。 */
-  limits: AttachmentLimits = readAttachmentLimits().limits,
+  limits: TurnAttachmentLimits = readAttachmentLimits().limits,
 ): Promise<ResolvedTurnAttachments> {
   const [only] = await resolveTurnAttachmentGroups(stores, [refs], limits);
   return only ?? { images: [], noticeLines: [] };

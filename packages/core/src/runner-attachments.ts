@@ -13,6 +13,8 @@ import {
   readAttachmentLimits,
   TurnImageBudget,
   turnImageOverNotice,
+  turnImageLimitsOf,
+  type TurnAttachmentLimits,
   type TurnImageOverReason,
 } from './attachment.js';
 import { sha256Hex } from './auth.js';
@@ -116,7 +118,7 @@ export interface PlaceAttachmentsOptions {
   /** 担い手の子プロセスの gid（降ろす構成のとき）。無ければ runner と同じ UID で、0700 / 0400。 */
   readonly childGid?: number;
   /** 画像の上限の取り元。既定は runner の環境変数（{@link readAttachmentLimits}。担い手の置き場が読むものと同じ）。 */
-  readonly limits?: AttachmentLimits;
+  readonly limits?: TurnAttachmentLimits;
 }
 
 const ownUid = (): number | undefined =>
@@ -165,7 +167,8 @@ export async function placeRunnerAttachments(
   const limits = options.limits ?? readAttachmentLimits().limits;
   const maxImageBytes = limits.maxImageBytes;
   // 1メッセージの画像の予算（#3696）。添付の順に使うので、超えるのは後ろの画像から。
-  const budget = new TurnImageBudget(limits);
+  const turnLimits = turnImageLimitsOf(limits);
+  const budget = new TurnImageBudget(turnLimits);
   if (!SAFE_SEGMENT.test(managerId)) {
     throw new RunnerAttachmentRejectedError('managerId が dir 名にできない形');
   }
@@ -250,7 +253,10 @@ export async function placeRunnerAttachments(
               ? {
                   imageOverTurnLimit: {
                     reason: overTurn,
-                    limit: overTurn === 'count' ? limits.maxTurnImages : limits.maxTurnImageBytes,
+                    limit:
+                      overTurn === 'count'
+                        ? turnLimits.maxTurnImages
+                        : turnLimits.maxTurnImageBytes,
                   },
                 }
               : // 受け取った文字列（改行・空白・url-safe を黙って許す復号）ではなく、検めた bytes から作り直した正規の base64。

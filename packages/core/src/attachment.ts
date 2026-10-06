@@ -153,14 +153,21 @@ export interface AttachmentLimits {
   readonly maxTotalBytes: number;
   /** 保持日数。 */
   readonly retentionDays: number;
-  /**
-   * 1ターン（担い手なら1メッセージ）で**画像として渡す**枚数（#3696）。入口の検査（受け付け・保存）には使わない。
-   * 超えた分は画像として渡さず、通知行で開け方を言う。
-   */
+}
+
+/**
+ * ターンの画像の予算（#3696）。**{@link AttachmentLimits}（入口の検査の上限。`GET /attachments/limits` の形）とは
+ * 型を分けてある**: 受け付け・保存を妨げず、ターン時に画像として渡すかどうかだけを決めるので、クライアントは知らなくてよい。
+ */
+export interface TurnImageLimits {
+  /** 1ターン（担い手なら1メッセージ）で画像として渡す枚数。超えた分は通知行で開け方を言う。 */
   readonly maxTurnImages: number;
-  /** 1ターンで画像として渡す合計 raw バイト（#3696。使い方は {@link maxTurnImages} と同じ）。 */
+  /** 1ターンで画像として渡す合計 raw バイト。 */
   readonly maxTurnImageBytes: number;
 }
+
+/** ターンの画像の予算を使う側（クローン・担い手）が受ける上限。欄が無ければ既定を使う。 */
+export type TurnAttachmentLimits = AttachmentLimits & Partial<TurnImageLimits>;
 
 export const DEFAULT_ATTACHMENT_LIMITS: AttachmentLimits = {
   maxImageBytes: ATTACHMENT_MAX_IMAGE_BYTES_DEFAULT,
@@ -168,9 +175,20 @@ export const DEFAULT_ATTACHMENT_LIMITS: AttachmentLimits = {
   maxPerMessage: ATTACHMENT_MAX_PER_MESSAGE_DEFAULT,
   maxTotalBytes: ATTACHMENT_MAX_TOTAL_BYTES_DEFAULT,
   retentionDays: ATTACHMENT_RETENTION_DAYS_DEFAULT,
+};
+
+export const DEFAULT_TURN_IMAGE_LIMITS: TurnImageLimits = {
   maxTurnImages: ATTACHMENT_MAX_TURN_IMAGES_DEFAULT,
   maxTurnImageBytes: ATTACHMENT_MAX_TURN_IMAGE_BYTES_DEFAULT,
 };
+
+/** 上限からターンの画像の予算を取り出す（欄が無ければ既定）。 */
+export function turnImageLimitsOf(limits: Partial<TurnImageLimits>): TurnImageLimits {
+  return {
+    maxTurnImages: limits.maxTurnImages ?? DEFAULT_TURN_IMAGE_LIMITS.maxTurnImages,
+    maxTurnImageBytes: limits.maxTurnImageBytes ?? DEFAULT_TURN_IMAGE_LIMITS.maxTurnImageBytes,
+  };
+}
 
 /**
  * 画像の上限を人間向けの文にする（MiB で割り切れれば `5 MiB`、そうでなければ `1000 B`）。
@@ -192,10 +210,10 @@ export type TurnImageOverReason = 'count' | 'bytes';
 export class TurnImageBudget {
   #count = 0;
   #bytes = 0;
-  readonly #limits: Pick<AttachmentLimits, 'maxTurnImages' | 'maxTurnImageBytes'>;
+  readonly #limits: TurnImageLimits;
 
-  constructor(limits: Pick<AttachmentLimits, 'maxTurnImages' | 'maxTurnImageBytes'>) {
-    this.#limits = limits;
+  constructor(limits: Partial<TurnImageLimits>) {
+    this.#limits = turnImageLimitsOf(limits);
   }
 
   /** 枠に入るなら使って `undefined`。入らないなら理由（枠は使わない）。 */
@@ -214,16 +232,17 @@ export class TurnImageBudget {
  */
 export function turnImageOverNotice(
   reason: TurnImageOverReason,
-  limits: Pick<AttachmentLimits, 'maxTurnImages' | 'maxTurnImageBytes'>,
+  turnLimits: Partial<TurnImageLimits>,
   openHint: string,
 ): string {
+  const limits = turnImageLimitsOf(turnLimits);
   return reason === 'count'
     ? `（このターンの画像は上限（${limits.maxTurnImages} 枚）までで、これは超えた分なので画像としては渡していない。${openHint}）`
     : `（このターンの画像の合計の上限（${formatImageLimit(limits.maxTurnImageBytes)}）を超えるので画像としては渡していない。${openHint}）`;
 }
 
 export interface AttachmentLimitsConfig {
-  readonly limits: AttachmentLimits;
+  readonly limits: AttachmentLimits & TurnImageLimits;
   /** 読めなかった設定値についての注意（呼び出し元が人間に見せる）。 */
   readonly notes: string[];
 }

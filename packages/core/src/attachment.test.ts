@@ -96,7 +96,8 @@ describe('添付: 上限', () => {
     const defaults = readAttachmentLimits({});
     expect(defaults.limits.maxTurnImages).toBe(20);
     expect(defaults.limits.maxTurnImageBytes).toBe(16 * 1024 * 1024);
-    expect(DEFAULT_ATTACHMENT_LIMITS.maxTurnImages).toBe(20);
+    // 入口の検査の上限（`GET /attachments/limits` の形。CLI が欄の有無で読む）には、ターンの欄を混ぜない。
+    expect(Object.keys(DEFAULT_ATTACHMENT_LIMITS)).not.toContain('maxTurnImages');
     const changed = readAttachmentLimits({
       ALTEROID_ATTACHMENT_MAX_TURN_IMAGES: '5',
       ALTEROID_ATTACHMENT_MAX_TURN_IMAGE_BYTES: '1000',
