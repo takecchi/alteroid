@@ -371,6 +371,51 @@ export async function conversationsReadCommand(id: string): Promise<void> {
 }
 
 /**
+ * `alteroid chat`（REPL）が返答を表示し終えたとき、その会話を既読にする
+ * （`docs/architecture.md`「会話の既読」の「送信して返答が画面に表示されたとき」）。
+ *
+ * Web（`useMarkConversationRead`）と同じ意味にしてある: SSE は発言の id を運ばないので、
+ * 返答が日誌に載った後に `GET /conversations/:id` を取り直し、既定ビューの最後の発言
+ * （編集で畳まれた `supersededBy` 付きは除く）を `through` に `POST /conversations/:id/read` する。
+ * 時刻はサーバが引く。
+ *
+ * **失敗しても投げない。** 返答はもう表示してあり、既読にできなかったことで会話を奪わない。
+ * 黙って捨てず、1行だけ出す（次の返答で、また試す）。
+ */
+export async function markConversationReadAfterReply(
+  target: Target,
+  conversationId: string,
+): Promise<void> {
+  try {
+    const client = createClient(target.baseUrl, target.headers);
+    const detail = await client.conversations[':id'].$get({
+      param: { id: conversationId },
+      query: {},
+    });
+    if (!detail.ok) {
+      throw new Error(
+        await withErrorReason(`会話を読めませんでした（HTTP ${String(detail.status)}）`, detail),
+      );
+    }
+    const { messages } = await detail.json();
+    const latest = messages.filter((m) => m.supersededBy === undefined).at(-1);
+    if (latest === undefined) return;
+    const response = await client.conversations[':id'].read.$post({
+      param: { id: conversationId },
+      json: { through: latest.id },
+    });
+    if (!response.ok) {
+      throw new Error(
+        await withErrorReason(`既読にできませんでした（HTTP ${String(response.status)}）`, response),
+      );
+    }
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    stdout.write(`  （この会話を既読にできませんでした: ${redactBody(reason)}）\n`);
+  }
+}
+
+/**
  * 繋ぎ先を決めて型付きクライアントを作る。**繋げない理由はそのまま出す。**
  * `memory.ts` の同名関数と同じ理由（例外にすると人間向けの案内が例外の見た目になる）。
  */
