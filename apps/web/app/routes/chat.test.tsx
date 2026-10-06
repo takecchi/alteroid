@@ -1180,11 +1180,8 @@ describe('吹き出しの折り返し（本2）', () => {
 /**
  * 送信まわりのボタンの狭幅対応（本6）。
  *
- * 「送る」「受信をやめる」は、狭い画面（`md` 未満）ではラベルを畳みアイコンだけに
- * する（`hidden md:inline`）。**これは「実際に隠れた」ことの試験ではない。**
- * jsdom は CSS を1つも持たないので、`hidden md:inline` が画面上で本当にラベルを
- * 隠すことはここでは1つも観測できない。固定できるのは、ラベルを包む `<span>` に
- * そのクラス名が書かれていることまでである。
+ * 「送る」「受信をやめる」は、どちらもアイコンだけのボタンで、名前は `aria-label` が担う。
+ * 文字のラベルを持たないことは `textContent` が空であることで固定する。
  *
  * `aria-label` は別に固定する。**ラベルの `<span>` を `hidden` にしても、jsdom は
  * CSS を評価しないのでアクセシブルネームの計算はラベルの文字列を通常どおり拾える。
@@ -1227,7 +1224,7 @@ describe('送信ボタンの狭幅対応（本6）', () => {
     expect(sendButton.getAttribute('aria-label')).toBe('メッセージを送信');
   });
 
-  it('受信中は「受信をやめる」のラベルも hidden md:inline を持つ span に包まれ、aria-label も明示されている。かつ送信ボタンは消えず両方とも出ている', async () => {
+  it('受信中は「受信をやめる」もアイコンだけで文字のラベルを持たず、aria-label を明示している。かつ送信ボタンは消えず両方とも出ている', async () => {
     stubFetch((url, init) => {
       if (url.endsWith('/chat')) {
         return sse(
@@ -1248,13 +1245,13 @@ describe('送信ボタンの狭幅対応（本6）', () => {
     renderChat();
     await send('やあ');
 
-    const stopButton = await screen.findByRole('button', { name: '受信をやめる' });
-    const stopLabel = within(stopButton).getByText('受信をやめる');
-    expect(stopLabel.tagName).toBe('SPAN');
-    const stopClasses = stopLabel.className.split(/\s+/);
-    expect(stopClasses).toContain('hidden');
-    expect(stopClasses).toContain('md:inline');
-    expect(stopButton.getAttribute('aria-label')).toBe('受信をやめる');
+    const stopButton = await screen.findByRole('button', {
+      name: '受信をやめる（クローンのターンは止まらない）',
+    });
+    expect(stopButton.textContent).toBe('');
+    expect(stopButton.getAttribute('aria-label')).toBe(
+      '受信をやめる（クローンのターンは止まらない）',
+    );
 
     // 「受信をやめる」は送信の代わりではない。並べて出ている。
     expect(screen.getByRole('button', { name: 'メッセージを送信' })).toBeTruthy();

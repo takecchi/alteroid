@@ -136,7 +136,9 @@ describe('#1585: 送信/追送の失敗は会話ごとに持ち、切り替え�
 
     const { router } = renderChat(`/chat/${CONVERSATION_A}`);
     await typeAndSend('一つ目');
-    expect(await screen.findByRole('button', { name: '受信をやめる' })).toBeTruthy();
+    expect(
+      await screen.findByRole('button', { name: '受信をやめる（クローンのターンは止まらない）' }),
+    ).toBeTruthy();
 
     await typeAndSend('二つ目');
 
@@ -231,7 +233,9 @@ describe('#1585: 送信/追送の失敗は会話ごとに持ち、切り替え�
     // 1回目のストリームが完全に畳まれ、`streamRef.current` が空になるのを待つ
     // （でないと2回目が `followUp` に回り、`send` の冒頭のクリアを通らない）。
     await waitFor(() => {
-      expect(screen.queryByRole('button', { name: '受信をやめる' })).toBeNull();
+      expect(
+        screen.queryByRole('button', { name: '受信をやめる（クローンのターンは止まらない）' }),
+      ).toBeNull();
     });
 
     // 同じ A で次の送信をやり直す。
