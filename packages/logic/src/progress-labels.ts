@@ -3,7 +3,7 @@
  *
  * **core の値は変えない。** `describeGithubCi`（core）は `success` / `failure` / `pending` を
  * 字面のまま出す（CLI・クローンの道具が読む原本）。Web は値を受け取ったあと、表示の直前に
- * この層で日本語へ写す。#2608 の歯（`progress.test.tsx`）は「core と Web が同じ値・同じ並び・同じ
+ * この層で日本語へ写す。`progress.test.tsx` が「core と Web が同じ値・同じ並び・同じ
  * 数を持つ」ことを測っていて、この表の写しだけを逆に戻して原本と突き合わせる。
  */
 
@@ -37,7 +37,7 @@ export function githubObservedByLabel(observedBy: string): string {
 
 /**
  * `github_observation` の要旨（日誌）の「open」と「limit」の写し。`/progress` の Stat の見出し
- * （「開いている Issue」「開いている PR」。#2835）と同じ言い方に揃える。
+ * （「開いている Issue」「開いている PR」）と同じ言い方に揃える。
  */
 export const GITHUB_OPEN_LABEL = {
   issue: { raw: 'open Issue', localized: '開いている Issue' },

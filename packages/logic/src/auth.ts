@@ -61,7 +61,7 @@ export function readCredential(baseUrl: string): Credential | null {
 
 export function storeCredential(baseUrl: string, credential: Credential | null): void {
   if (typeof localStorage === 'undefined') return;
-  // 資格情報を捨てるとき（ログアウト）は、端末に残した書きかけの本文も消す（#3400）。
+  // 資格情報を捨てるとき（ログアウト）は、端末に残した書きかけの本文も消す。
   if (credential === null) clearChatDrafts();
   if (credential === null) localStorage.removeItem(keyFor(baseUrl));
   else localStorage.setItem(keyFor(baseUrl), JSON.stringify(credential));
@@ -107,7 +107,7 @@ export function storePendingLogin(pending: PendingLogin | null): void {
 
 /** この端末を人間が見分けるための名前（`alteroid access list` に並ぶ）。 */
 export function deviceLabel(): string {
-  // `location` を直に書かない。DOM の lib を持たない側（`apps/cli`）が型検査に載せても通すため（#2558）。
+  // `location` を直に書かない。DOM の lib を持たない側（`apps/cli`）が型検査に載せても通すため。
   const host = (globalThis as { location?: { host: string } }).location?.host ?? 'web';
   return `Web UI (${host})`.slice(0, 200);
 }

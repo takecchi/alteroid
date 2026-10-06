@@ -1,6 +1,6 @@
 /**
  * runner への反映（`PUT /credentials` / `PUT|DELETE /profile/:name` / 旧 `PUT /profile` /
- * `PUT /mcp-servers`）の成否から、「成功の見出しを出してよいか」を言う純関数（#3157）。
+ * `PUT /mcp-servers`）の成否から、「成功の見出しを出してよいか」を言う純関数。
  *
  * ## 何を「一部失敗」と数えるか（応答の形を読んだ判定）
  *
