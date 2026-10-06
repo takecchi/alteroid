@@ -285,4 +285,163 @@ describe('POST /chat の clientMessageId', () => {
     await sendAndRead(app, { text: '同じ本文', conversationId: 'conv-i', clientMessageId: 'two' });
     expect(await inboundOf(stores)).toHaveLength(2);
   });
+
+  describe('中身の違う重複は 409（client_message_id_mismatch、Issue #3243）', () => {
+    const PNG1 = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 9, 8, 7, 6, 5]);
+    const PNG2 = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]);
+
+    async function upload(app: App, bytes: Uint8Array): Promise<string> {
+      const res = await app.request('/attachments?name=shot.png&type=image%2Fpng', {
+        method: 'POST',
+        headers: { 'content-type': 'application/octet-stream' },
+        body: bytes as RequestInit['body'],
+      });
+      return ((await res.json()) as { id: string }).id;
+    }
+
+    async function expectMismatch(res: Response) {
+      expect(res.status).toBe(409);
+      expect(((await res.json()) as { code?: string }).code).toBe('client_message_id_mismatch');
+    }
+
+    it('本文が違う再送は 409。1回目の本文だけが日誌に残り、ターンは増えない', async () => {
+      const { app, stores, inputs } = setupApp();
+      await sendAndRead(app, { text: '一回目', conversationId: 'conv-m1', clientMessageId: 'mm1' });
+      await expectMismatch(
+        await post(app, { text: '直した', conversationId: 'conv-m1', clientMessageId: 'mm1' }),
+      );
+      const rows = await inboundOf(stores);
+      expect(rows.map((e) => (e.type === 'exchange' ? e.text : ''))).toEqual(['一回目']);
+      expect(inputs.count).toBe(1);
+    });
+
+    it('添付が違う再送は 409。2回目の添付は結び付かない', async () => {
+      const { app, stores } = setupApp();
+      const a1 = await upload(app, PNG1);
+      const a2 = await upload(app, PNG2);
+      await sendAndRead(app, {
+        text: 't',
+        conversationId: 'conv-m2',
+        clientMessageId: 'mm2',
+        attachments: [a1],
+      });
+      await expectMismatch(
+        await post(app, {
+          text: 't',
+          conversationId: 'conv-m2',
+          clientMessageId: 'mm2',
+          attachments: [a2],
+        }),
+      );
+      expect((await stores.attachments.getMeta(a2))?.conversationId).toBeUndefined();
+    });
+
+    it('添付の有無が違う再送も 409', async () => {
+      const { app } = setupApp();
+      const a1 = await upload(app, PNG1);
+      await sendAndRead(app, { text: 't', conversationId: 'conv-m3', clientMessageId: 'mm3' });
+      await expectMismatch(
+        await post(app, {
+          text: 't',
+          conversationId: 'conv-m3',
+          clientMessageId: 'mm3',
+          attachments: [a1],
+        }),
+      );
+    });
+
+    it('添付の順序・重複だけが違う再送は同じ中身として 200（duplicate）', async () => {
+      const { app, stores } = setupApp();
+      const a1 = await upload(app, PNG1);
+      const a2 = await upload(app, PNG2);
+      await sendAndRead(app, {
+        text: 't',
+        conversationId: 'conv-m4',
+        clientMessageId: 'mm4',
+        attachments: [a1, a2],
+      });
+      const again = await sendAndRead(app, {
+        text: 't',
+        conversationId: 'conv-m4',
+        clientMessageId: 'mm4',
+        attachments: [a2, a1, a2],
+      });
+      expect(again.find((e) => e.event === 'open')?.data).toMatchObject({ duplicate: true });
+      expect(await inboundOf(stores)).toHaveLength(1);
+    });
+
+    it('supersedes が違う再送は 409、同じなら 200', async () => {
+      const { app, stores } = setupApp();
+      await sendAndRead(app, { text: '最初', conversationId: 'conv-m5', clientMessageId: 'mm5a' });
+      await sendAndRead(app, { text: '二つ目', conversationId: 'conv-m5', clientMessageId: 'mm5b' });
+      const [first, second] = await inboundOf(stores);
+      const edit = {
+        text: '直した',
+        conversationId: 'conv-m5',
+        supersedes: first?.id,
+        clientMessageId: 'mm5c',
+      };
+      await sendAndRead(app, edit);
+      await expectMismatch(await post(app, { ...edit, supersedes: second?.id }));
+      await expectMismatch(
+        await post(app, { text: '直した', conversationId: 'conv-m5', clientMessageId: 'mm5c' }),
+      );
+      const same = await sendAndRead(app, edit);
+      expect(same.find((e) => e.event === 'open')?.data).toMatchObject({ duplicate: true });
+    });
+
+    it('日誌だけが覚えている（メモリの記憶が無い別のアプリ）ときも、中身を比べる', async () => {
+      const first = setupApp();
+      const a1 = await upload(first.app, PNG1);
+      const body = {
+        text: '再起動前\u0000',
+        conversationId: 'conv-m6',
+        clientMessageId: 'mm6',
+        attachments: [a1],
+      };
+      await sendAndRead(first.app, body);
+      const queryFn = countingSdk({ count: 0 });
+      const clone = createClone({
+        stores: first.stores,
+        queryFn,
+        env: {},
+        runners: createRunnerRegistry([
+          createLocalRunner({ workspacePath: '/work', queryFn, env: {} }),
+        ]),
+        redeliveryGate: ALWAYS_REDELIVER,
+      });
+      const reborn = createApp({
+        clone,
+        stores: first.stores,
+        token: 'test-token',
+        shutdown: () => undefined,
+      });
+      // 同じ中身（本文の NUL は日誌が落とす。同じ正規化を通して比べるので重複と読む）。
+      const same = await sendAndRead(reborn, body);
+      expect(same.find((e) => e.event === 'open')?.data).toMatchObject({ duplicate: true });
+      await expectMismatch(await post(reborn, { ...body, text: '別の本文' }));
+      await expectMismatch(await post(reborn, { ...body, attachments: undefined }));
+    });
+
+    it('別の会話の id は、中身が違っても client_message_id_conflict のまま', async () => {
+      const { app } = setupApp();
+      await sendAndRead(app, { text: 'a', conversationId: 'conv-m7a', clientMessageId: 'mm7' });
+      const res = await post(app, { text: 'b', conversationId: 'conv-m7b', clientMessageId: 'mm7' });
+      expect(res.status).toBe(409);
+      expect(((await res.json()) as { code?: string }).code).toBe('client_message_id_conflict');
+    });
+
+    it('同時に届いた同じ id で本文が違う2本は、片方が 200、片方が 409（mismatch）', async () => {
+      const { app, stores } = setupApp();
+      const [a, b] = await Promise.all([
+        post(app, { text: 'いち', conversationId: 'conv-m8', clientMessageId: 'mm8' }),
+        post(app, { text: 'に', conversationId: 'conv-m8', clientMessageId: 'mm8' }),
+      ]);
+      expect([a.status, b.status].sort()).toEqual([200, 409]);
+      const loser = a.status === 409 ? a : b;
+      expect(((await loser.json()) as { code?: string }).code).toBe('client_message_id_mismatch');
+      await (a.status === 200 ? a : b).text();
+      expect(await inboundOf(stores)).toHaveLength(1);
+    });
+  });
 });

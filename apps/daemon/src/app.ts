@@ -163,6 +163,7 @@ import {
 } from '@alteroid/core';
 
 import { bearerOf, isOperator, type AuthPlan, type AuthVariables, type Principal } from './auth.js';
+import { clientMessageFingerprint } from './client-message-fingerprint.js';
 import { checkAndBindAttachments, type AttachmentBatchResult } from './attachment-batch.js';
 import { createFixedWindowRateLimiter, judgeIntegrationRoute } from './integration-gate.js';
 import type { JournalBus } from './journal-bus.js';
@@ -2125,8 +2126,46 @@ export function createApp(deps: AppDeps) {
    * **日誌を引く側（`findReceivedClientMessage`）が耐久の本体**で、こちらは取りこぼしの窓を塞ぐだけ。
    * プロセスが落ちれば消える（日誌に載った分は日誌が覚えている）。古いものから捨てる上限つき。
    */
-  const receivedClientMessages = new Map<string, string>();
+  const receivedClientMessages = new Map<string, ReceivedClientMessage>();
   const RECEIVED_CLIENT_MESSAGES_MAX = 2048;
+  /** 受け取り済みの `clientMessageId` の、会話の id と発言の中身の指紋（`clientMessageFingerprint`）。 */
+  interface ReceivedClientMessage {
+    readonly conversationId: string;
+    readonly fingerprint: string;
+  }
+
+  /**
+   * 重複と判定した再送への応え（Issue #3243）。別の会話なら 409 `client_message_id_conflict`、同じ会話で
+   * 中身が違えば 409 `client_message_id_mismatch`、同じなら `undefined`（= 呼び手が `replayReceivedMessage`）。
+   * **別の会話の判定が先**——会話が違えば、中身を比べても意味がない。
+   */
+  function rejectDuplicateClientMessage(
+    c: Context<{ Variables: AuthVariables }>,
+    received: ReceivedClientMessage,
+    clientMessageId: string,
+    request: { conversationId: string | undefined; fingerprint: string },
+  ) {
+    if (request.conversationId !== undefined && request.conversationId !== received.conversationId) {
+      return c.json(
+        {
+          error: `clientMessageId ${clientMessageId} は別の会話の発言として受け取り済み` as const,
+          code: 'client_message_id_conflict' as const,
+        },
+        409,
+      );
+    }
+    if (request.fingerprint !== received.fingerprint) {
+      return c.json(
+        {
+          error:
+            `clientMessageId ${clientMessageId} は中身（本文・添付・supersedes）の違う発言として受け取り済み` as const,
+          code: 'client_message_id_mismatch' as const,
+        },
+        409,
+      );
+    }
+    return undefined;
+  }
   /** 日誌から探すときに遡る、人間との往復の件数。再送は直後に来るので、直近だけでよい。 */
   const CLIENT_MESSAGE_LOOKUP_SCAN = 200;
 
@@ -2134,7 +2173,9 @@ export function createApp(deps: AppDeps) {
    * この `clientMessageId` を、もう受け取っているか。受け取っていれば、その会話の id を返す。
    * 先にメモリ（受け取った直後の窓）、無ければ日誌の直近（再起動をまたぐ）を引く。
    */
-  async function findReceivedClientMessage(clientMessageId: string): Promise<string | undefined> {
+  async function findReceivedClientMessage(
+    clientMessageId: string,
+  ): Promise<ReceivedClientMessage | undefined> {
     const remembered = receivedClientMessages.get(clientMessageId);
     if (remembered !== undefined) return remembered;
     const recent = await readConversationWindow(stores.journal, {
@@ -2147,7 +2188,15 @@ export function createApp(deps: AppDeps) {
         entry.clientMessageId === clientMessageId &&
         entry.conversationId !== undefined
       ) {
-        return entry.conversationId;
+        return {
+          conversationId: entry.conversationId,
+          // 日誌の本文は NUL を落として残してある。指紋の側が同じ規則を通すので、比べ方はずれない。
+          fingerprint: clientMessageFingerprint({
+            text: entry.text,
+            attachmentIds: entry.attachments?.map((ref) => ref.id),
+            supersedes: entry.supersedes,
+          }),
+        };
       }
     }
     return undefined;
@@ -2157,10 +2206,13 @@ export function createApp(deps: AppDeps) {
    * 受け取ったことを覚える。**同期で呼ぶ**（`await` を挟まずに「無ければ入れる」を1歩にして、同時に届いた
    * 2本のうち片方だけが先に入れるようにする）。先に覚えていれば、その会話の id を返して何もしない。
    */
-  function claimClientMessage(clientMessageId: string, conversationId: string): string | undefined {
+  function claimClientMessage(
+    clientMessageId: string,
+    received: ReceivedClientMessage,
+  ): ReceivedClientMessage | undefined {
     const existing = receivedClientMessages.get(clientMessageId);
     if (existing !== undefined) return existing;
-    receivedClientMessages.set(clientMessageId, conversationId);
+    receivedClientMessages.set(clientMessageId, received);
     if (receivedClientMessages.size > RECEIVED_CLIENT_MESSAGES_MAX) {
       const oldest = receivedClientMessages.keys().next();
       if (oldest.done !== true) receivedClientMessages.delete(oldest.value);
@@ -2978,7 +3030,8 @@ export function createApp(deps: AppDeps) {
           '（送った側が、自分の発言が履歴に現れたかを本文でなく id で確かめられる）。' +
           '**同じ値が再び届いたら二重に受けない**——何も積まず、`open`（`duplicate: true`）の後、' +
           '進行中のターンがあれば途中経過から続きを流して閉じる（`GET /chat/:conversationId/stream` と同じ）。' +
-          '別の会話で受け取り済みの値は 409。重複の判定は、直近の日誌（人間との往復200件）と受け取り直後の記憶で行う。',
+          'ただし**中身（本文・添付の id の集合・`supersedes`）が1回目と違う**なら、黙って捨てずに 409（`client_message_id_mismatch`）。' +
+          '別の会話で受け取り済みの値も 409（`client_message_id_conflict`）。重複の判定は、直近の日誌（人間との往復200件）と受け取り直後の記憶で行う。',
         responses: {
           200: {
             description: 'SSE ストリーム。',
@@ -2998,7 +3051,9 @@ export function createApp(deps: AppDeps) {
           409: {
             description:
               '`clientMessageId` が、**別の会話**の発言として既に受け取られている（`code: client_message_id_conflict`）。' +
-              '同じ会話に同じ値が届いた場合は 409 ではなく、二重に受けずに 200（下の説明）。',
+              'または、**同じ会話**で受け取り済みだが**中身が違う**（`code: client_message_id_mismatch`。' +
+              '本文・添付の id の集合・`supersedes` のどれかが1回目と違う。2回目の中身は積まず、添付も結び付けない）。' +
+              '中身が同じ再送は 409 ではなく、二重に受けずに 200（下の説明）。',
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
         },
@@ -3022,20 +3077,20 @@ export function createApp(deps: AppDeps) {
          * あれば途中経過から続きを流して `done` / `error` で閉じる）で応える。`open` には
          * `duplicate: true` を付ける。**別の会話で受けていたら 409**（同じ id を別の発言に使うのは呼び手の取り違え）。
          */
+        const fingerprint = clientMessageFingerprint({
+          text,
+          attachmentIds: attachmentIds,
+          supersedes,
+        });
         if (clientMessageId !== undefined) {
           const received = await findReceivedClientMessage(clientMessageId);
           if (received !== undefined) {
-            if (given !== undefined && given !== received) {
-              return c.json(
-                {
-                  error:
-                    `clientMessageId ${clientMessageId} は別の会話の発言として受け取り済み` as const,
-                  code: 'client_message_id_conflict' as const,
-                },
-                409,
-              );
-            }
-            return replayReceivedMessage(c, received, clientMessageId);
+            return (
+              rejectDuplicateClientMessage(c, received, clientMessageId, {
+                conversationId: given,
+                fingerprint,
+              }) ?? replayReceivedMessage(c, received.conversationId, clientMessageId)
+            );
           }
         }
 
@@ -3129,19 +3184,14 @@ export function createApp(deps: AppDeps) {
 
         // 検査を抜けた。覚えるのは**ここ**（同期）——同時に届いた2本のうち、片方だけがここを通る。
         if (clientMessageId !== undefined) {
-          const raced = claimClientMessage(clientMessageId, conversationId);
+          const raced = claimClientMessage(clientMessageId, { conversationId, fingerprint });
           if (raced !== undefined) {
-            if (raced !== conversationId) {
-              return c.json(
-                {
-                  error:
-                    `clientMessageId ${clientMessageId} は別の会話の発言として受け取り済み` as const,
-                  code: 'client_message_id_conflict' as const,
-                },
-                409,
-              );
-            }
-            return replayReceivedMessage(c, raced, clientMessageId);
+            return (
+              rejectDuplicateClientMessage(c, raced, clientMessageId, {
+                conversationId,
+                fingerprint,
+              }) ?? replayReceivedMessage(c, raced.conversationId, clientMessageId)
+            );
           }
         }
 
