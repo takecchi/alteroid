@@ -205,7 +205,9 @@ export class ChatController {
 
   /**
    * 添えかけを上げて、id を返す（無ければ空配列）。**失敗したら `null`**（送らない。添えかけは残す）。
-   * 受けたら、送った分（`files`）だけ空にする（待つあいだに足された分は残す。#3245）。
+   * 上げ終えた分（`files`）は、その時点で添えかけから外して「送り中」にする（上げ終えてから最初のイベントが
+   * 届くまでの2回目の送信が、同じ添えかけをもう一度送らないように。#3588）。サーバが受けなかったら
+   * `draft.restore` で戻す（上げ済みの印は残る。#3245・#3246）。待つあいだに足された分は元から対象外（#3245）。
    */
   private async uploadDraft(): Promise<{
     ids: string[];
@@ -226,6 +228,7 @@ export class ChatController {
       );
       return null;
     }
+    this.draft.discard(result.files);
     return {
       ids: result.uploaded.map((a) => a.id),
       lines: result.uploaded.map(describeAttachment),
@@ -349,7 +352,7 @@ export class ChatController {
     // 覚えが無いときは待たずに進む（送信の前に非同期の隙間を作らない）。
     if (this.unopened !== null && !(await this.adoptUnopened())) return false;
     const attached = this.draft.count === 0 ? NO_ATTACHMENTS : await this.uploadDraft();
-    if (attached === null) return true;
+    if (attached === null) return false; // 送っていない（呼び手は文を入力欄へ戻す。#3589）
     const userSeq = this.push('user', [text, ...attached.lines].filter((l) => l !== '').join('\n'));
     this.set({ busy: true, transient: '考えている…' });
     const abort = new AbortController();
@@ -372,8 +375,6 @@ export class ChatController {
         },
         abort.signal,
       )) {
-        // サーバが発言を受けた（イベントが届いた）ので、送った分の添えかけは外す（あとから足した分は残す）。
-        this.draft.discard(attached.files);
         reply.see(event);
         this.onEvent(event, opened);
       }
@@ -388,6 +389,8 @@ export class ChatController {
         this.addError(messageOf(error));
       }
     } finally {
+      // イベントが 1 つも来ていない: サーバが発言を受けたか分からない（受けていない）ので、添えかけを戻す。
+      if (!reply.sawEvent) this.draft.restore(attached.files);
       this.flushStreaming();
       opened.reject(new Error('会話が始まらないまま接続が終わったので、続きを送れなかった'));
       this.set({ busy: false, transient: null });
@@ -505,9 +508,15 @@ export class ChatController {
   /** 追送。**`false` は送らなかった（サーバが受け取っていない）印**で、呼び手は文を入力欄へ戻す。 */
   private async followUp(text: string): Promise<boolean> {
     const attached = this.draft.count === 0 ? NO_ATTACHMENTS : await this.uploadDraft();
-    if (attached === null) return true;
-    const userSeq = this.push('user', [text, ...attached.lines].filter((l) => l !== '').join('\n'));
+    if (attached === null) return false; // 送っていない（呼び手は文を入力欄へ戻す。#3589）
+    // 添付を上げているあいだに走っていたターンが終わったなら、追送ではなく通常の送信として送る（会話は始まっている。
+    // 添えかけを戻せば、上げ済みの印があるので上げ直さない）。添付の無い追送は同期で読むので、この形にならない。
     const opened = this.opened;
+    if (opened === null && attached.files.length > 0 && !this.store.getSnapshot().busy) {
+      this.draft.restore(attached.files);
+      return this.send(text);
+    }
+    const userSeq = this.push('user', [text, ...attached.lines].filter((l) => l !== '').join('\n'));
     // 送るたびに付ける（#3203・#3304。通常の送信と同じ）。会話は `open` で決まってから送るので、
     // 通常の送信の `unopened`（会話が決まる前に終わった送信の取り直し）は要らない。
     const clientMessageId = randomUUID();
@@ -531,7 +540,6 @@ export class ChatController {
           },
           abort.signal,
         )) {
-          this.draft.discard(attached.files);
           sawEvent = true;
           if (event.type === 'open') break;
         }
@@ -548,6 +556,7 @@ export class ChatController {
           : messageOf(error),
       );
     }
+    if (!sawEvent) this.draft.restore(attached.files);
     if (rejected) this.markUnsent(userSeq);
     return !rejected;
   }

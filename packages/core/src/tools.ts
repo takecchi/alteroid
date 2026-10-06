@@ -7029,6 +7029,11 @@ export function createCloneTools(context: ToolContext) {
           const violation = describeQuestionsViolation(questions);
           if (violation !== null) return text(`承認待ちには積まなかった: ${violation}`);
         }
+        // **空白だけも断る**（#3600。`commitment_close`（#3544）・HTTP の `nonBlankString`（#3142）と揃える）。
+        const questionError =
+          describeStringLengthViolation('question', question, { min: 1 }) ??
+          describeBlankViolation('question', question);
+        if (questionError !== null) return text(`承認待ちには積まなかった: ${questionError}`);
         // **いまのターンの会話 id を積む（#768）。** マネージャー発の確認・蒸留・
         // timer など内部ターンでは呼んだ結果が `undefined` になるので、その場合は
         // ここも undefined のままになる（= 今までどおり `self` へ積まれる。
@@ -7122,6 +7127,13 @@ export function createCloneTools(context: ToolContext) {
           return text(
             `request_permission を拒否した（キューに積んでいない）: ${validation.reason}`,
           );
+        }
+        // **空白だけも断る**（#3600。`commitment_close`（#3544）・HTTP の `nonBlankString`（#3142）と揃える）。
+        const reasonError =
+          describeStringLengthViolation('reason', reason, { min: 1 }) ??
+          describeBlankViolation('reason', reason);
+        if (reasonError !== null) {
+          return text(`request_permission を拒否した（キューに積んでいない）: ${reasonError}`);
         }
 
         const conversationId = getConversationId();
@@ -7412,7 +7424,10 @@ export function createCloneTools(context: ToolContext) {
       },
       async ({ id, reason }) => {
         // **issue #1752（#1651/#1689/#1720 の揃え漏れ。非数値の欄）。**
-        const reasonError = describeStringLengthViolation('reason', reason, { min: 1 });
+        // **空白だけも断る**（#3600。`commitment_close`（#3544）・HTTP の `nonBlankString`（#3142）と揃える）。
+        const reasonError =
+          describeStringLengthViolation('reason', reason, { min: 1 }) ??
+          describeBlankViolation('reason', reason);
         if (reasonError !== null) return text(reasonError);
         let existing: PendingApproval | null;
         try {
@@ -9032,7 +9047,10 @@ export function createCloneTools(context: ToolContext) {
         if (qError !== null) return text(qError);
         const untilLengthError = describeStringLengthViolation('until', until, { min: 1 });
         if (untilLengthError !== null) return text(untilLengthError);
-        const reasonError = describeStringLengthViolation('reason', reason, { min: 1 });
+        // **空白だけも断る**（#3580。`commitment_close`（#3544）・HTTP の `nonBlankString`（#3142）と揃える）。
+        const reasonError =
+          describeStringLengthViolation('reason', reason, { min: 1 }) ??
+          describeBlankViolation('reason', reason);
         if (reasonError !== null) return text(reasonError);
         // 🔴 **絞り込みの無い呼びを断る（issue #844 の受け入れ基準）。**
         // `origin` が4値全部を含む呼びは「絞り込みが無い」のと同じであり、
@@ -9413,7 +9431,10 @@ export function createCloneTools(context: ToolContext) {
         if (sourcesElementError !== null) return text(sourcesElementError);
         const beforeLengthError = describeStringLengthViolation('before', before, { min: 1 });
         if (beforeLengthError !== null) return text(beforeLengthError);
-        const reasonError = describeStringLengthViolation('reason', reason, { min: 1 });
+        // **空白だけも断る**（#3600。`commitment_close`（#3544）・HTTP の `nonBlankString`（#3142）と揃える）。
+        const reasonError =
+          describeStringLengthViolation('reason', reason, { min: 1 }) ??
+          describeBlankViolation('reason', reason);
         if (reasonError !== null) return text(reasonError);
         // 🔴 **絞り込みの無い呼びを断る（#972。commitment_close_many の origin と同じ形）。**
         // ⚠️ **ここでの「全部」は選べる5種類（human_message / human_answer を
@@ -13492,7 +13513,10 @@ export function createCloneTools(context: ToolContext) {
         if (sessionIdsElementError !== null) return text(sessionIdsElementError);
         const beforeLengthError = describeStringLengthViolation('before', before, { min: 1 });
         if (beforeLengthError !== null) return text(beforeLengthError);
-        const summaryError = describeStringLengthViolation('summary', summary, { min: 1 });
+        // **空白だけも断る**（#3600。`commitment_close`（#3544）・HTTP の `nonBlankString`（#3142）と揃える）。
+        const summaryError =
+          describeStringLengthViolation('summary', summary, { min: 1 }) ??
+          describeBlankViolation('summary', summary);
         if (summaryError !== null) return text(summaryError);
         // 🔴 絞り込みの無い呼びを断る（`POST /archive/remove` と同じ判定・同じ理由）。
         if (sessionIds === undefined && before === undefined && minStoredBytes === undefined) {

@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 /**
- * issue #3404: 会話の一覧が 30 件で止まり、31 件目以降へ辿り着けなかった。
- * 「もっと見る」で `limit` を増やして取り直す。続きが無ければボタンを出さない。
+ * issue #3404 / #3550: 会話の一覧が 30 件で止まり、31 件目以降（201 件目以降、`scan` の窓の外）へ
+ * 辿り着けなかった。「もっと見る」で、応答の `nextCursor` を `cursor` に渡して続きを足す。
+ * 続きが無ければボタンを出さない。
  * 続きの取得に失敗しても、一覧は消さず、画面の上のエラーも出さず、一覧の下に小さく言う。
  */
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
@@ -36,18 +37,23 @@ function renderChat() {
   );
 }
 
-function conversations(shown: number, total: number) {
+function page(
+  from: number,
+  count: number,
+  extra: { nextCursor?: string; reachedStart?: boolean; hiddenByLimit?: number } = {},
+) {
   return {
-    conversations: Array.from({ length: shown }, (_, index) => ({
-      conversationId: `c${index}`,
-      preview: `会話 ${index}`,
+    conversations: Array.from({ length: count }, (_, index) => ({
+      conversationId: `c${from + index}`,
+      preview: `会話 ${from + index}`,
       updatedAt: '2026-10-06T00:00:00.000Z',
       messages: 2,
       unreadCount: 0,
     })),
-    scanned: total,
-    reachedStart: true,
-    hiddenByLimit: Math.max(0, total - shown),
+    scanned: 2000,
+    reachedStart: extra.reachedStart ?? true,
+    hiddenByLimit: extra.hiddenByLimit ?? 0,
+    ...(extra.nextCursor === undefined ? {} : { nextCursor: extra.nextCursor }),
   };
 }
 
@@ -66,60 +72,141 @@ afterEach(() => {
   globalThis.fetch = originalFetch;
 });
 
-function limitOf(url: string): number {
-  return Number(new URL(url).searchParams.get('limit'));
+function cursorOf(url: string): string | null {
+  return new URL(url).searchParams.get('cursor');
 }
 
-describe('会話の一覧の「もっと見る」（issue #3404）', () => {
-  it('押すと limit を増やして取り直し、続きが出る。もう続きが無ければボタンは消える', async () => {
-    const stub = stubFetch((url) => {
-      if (url.includes('/approvals')) return json({ approvals: [] });
-      if (url.includes('/conversations')) {
-        return json(limitOf(url) >= 60 ? conversations(45, 45) : conversations(30, 45));
-      }
-      return undefined;
+function rows() {
+  return within(screen.getByRole('list', { name: '会話' })).getAllByRole('listitem');
+}
+
+/** 継続点を返す口。`pagesByCursor` は cursor（無ければ ''）→ 応答。 */
+function serve(pagesByCursor: Record<string, () => Response>) {
+  return stubFetch((url) => {
+    if (url.includes('/approvals')) return json({ approvals: [] });
+    if (url.includes('/conversations')) return pagesByCursor[cursorOf(url) ?? '']?.();
+    return undefined;
+  });
+}
+
+describe('会話の一覧の「もっと見る」（issue #3404 / #3550）', () => {
+  it('押すと nextCursor を渡して続きを足す。続きが無くなればボタンは消える', async () => {
+    const stub = serve({
+      '': () => json(page(0, 30, { nextCursor: 'k1', hiddenByLimit: 15 })),
+      k1: () => json(page(30, 15)),
     });
 
     renderChat();
-    const list = await screen.findByRole('list', { name: '会話' });
-    expect(within(list).getAllByRole('listitem')).toHaveLength(30);
+    await screen.findByRole('list', { name: '会話' });
+    expect(rows()).toHaveLength(30);
 
     fireEvent.click(screen.getByRole('button', MORE));
 
     await waitFor(() => {
-      expect(
-        within(screen.getByRole('list', { name: '会話' })).getAllByRole('listitem'),
-      ).toHaveLength(45);
+      expect(rows()).toHaveLength(45);
     });
-    expect(stub.calls.some((url) => url.includes('/conversations') && limitOf(url) === 60)).toBe(
+    expect(stub.calls.some((url) => url.includes('/conversations') && cursorOf(url) === 'k1')).toBe(
       true,
     );
+    // 30 件ずつの頁で、`limit` を増やす取り直しではない。
+    expect(
+      stub.calls
+        .filter((url) => url.includes('/conversations'))
+        .every((url) => new URL(url).searchParams.get('limit') === '30'),
+    ).toBe(true);
     expect(screen.queryByRole('button', MORE)).toBeNull();
   });
 
-  it('最初から続きが無ければ、ボタンを出さない', async () => {
-    stubFetch((url) => {
-      if (url.includes('/approvals')) return json({ approvals: [] });
-      if (url.includes('/conversations')) return json(conversations(3, 3));
-      return undefined;
+  it('200 件を超えても、窓（scan）の外でも、継続点を辿って続けられる', async () => {
+    serve({
+      '': () => json(page(0, 30, { nextCursor: 'k1', hiddenByLimit: 400 })),
+      k1: () => json(page(30, 30, { nextCursor: 'k2', hiddenByLimit: 340 })),
+      // 窓の中は出し切ったが、窓が日誌の先頭に届いていない。続きは継続点で辿る。
+      k2: () => json(page(60, 2, { nextCursor: 'k3', reachedStart: false })),
+      k3: () => json(page(62, 1)),
     });
+
+    renderChat();
+    await screen.findByRole('list', { name: '会話' });
+    for (const expected of [60, 62, 63]) {
+      fireEvent.click(await screen.findByRole('button', MORE));
+      await waitFor(() => {
+        expect(rows()).toHaveLength(expected);
+      });
+    }
+    await waitFor(() => {
+      expect(screen.queryByRole('button', MORE)).toBeNull();
+    });
+  });
+
+  it('窓が先頭に届いていないとき、続きがあればボタンを出し、届いていない旨も言う', async () => {
+    serve({
+      '': () => json(page(0, 3, { nextCursor: 'k1', reachedStart: false })),
+      k1: () => json(page(3, 1)),
+    });
+
+    renderChat();
+    await screen.findByRole('list', { name: '会話' });
+    expect(screen.getByRole('button', MORE)).toBeTruthy();
+    expect(screen.getByText(/先頭には届いていない/)).toBeTruthy();
+  });
+
+  it('頁をまたいで同じ会話が現れても、1 行だけ出す', async () => {
+    serve({
+      '': () => json(page(0, 3, { nextCursor: 'k1' })),
+      k1: () => json(page(2, 3)),
+    });
+
+    renderChat();
+    await screen.findByRole('list', { name: '会話' });
+    fireEvent.click(screen.getByRole('button', MORE));
+    await waitFor(() => {
+      expect(rows()).toHaveLength(5);
+    });
+  });
+
+  it('最初から続きが無ければ、ボタンを出さない', async () => {
+    serve({ '': () => json(page(0, 3)) });
 
     renderChat();
     await screen.findByRole('list', { name: '会話' });
     expect(screen.queryByRole('button', MORE)).toBeNull();
   });
 
-  it('続きの取得に失敗したら、一覧は残し、一覧の下に小さく言う。もう一度押せば取り直せる', async () => {
-    let failMore = true;
+  it('読み込み中は押せない', async () => {
+    let release: (response: Response) => void = () => {};
+    const pending = new Promise<Response>((resolve) => {
+      release = resolve;
+    });
     stubFetch((url) => {
       if (url.includes('/approvals')) return json({ approvals: [] });
       if (url.includes('/conversations')) {
-        if (limitOf(url) >= 60) {
-          return failMore ? json({ error: 'internal' }, 500) : json(conversations(40, 40));
-        }
-        return json(conversations(30, 40));
+        return cursorOf(url) === 'k1'
+          ? (pending as unknown as Response)
+          : json(page(0, 30, { nextCursor: 'k1' }));
       }
       return undefined;
+    });
+
+    renderChat();
+    await screen.findByRole('list', { name: '会話' });
+    fireEvent.click(screen.getByRole('button', MORE));
+
+    const busy = await screen.findByRole('button', { name: '読み込み中…' });
+    expect((busy as HTMLButtonElement).disabled).toBe(true);
+    expect(rows()).toHaveLength(30);
+
+    release(json(page(30, 2)));
+    await waitFor(() => {
+      expect(rows()).toHaveLength(32);
+    });
+  });
+
+  it('続きの取得に失敗したら、一覧は残し、一覧の下に小さく言う。もう一度押せば取り直せる', async () => {
+    let failMore = true;
+    serve({
+      '': () => json(page(0, 30, { nextCursor: 'k1' })),
+      k1: () => (failMore ? json({ error: 'internal' }, 500) : json(page(30, 10))),
     });
 
     renderChat();
@@ -129,9 +216,7 @@ describe('会話の一覧の「もっと見る」（issue #3404）', () => {
     const note = await screen.findByRole('alert');
     expect(note.textContent).toContain('続きを読めなかった');
     // 一覧は消えず、ボタンも残る。「まだ会話がない。」にもならない。
-    expect(
-      within(screen.getByRole('list', { name: '会話' })).getAllByRole('listitem'),
-    ).toHaveLength(30);
+    expect(rows()).toHaveLength(30);
     expect(screen.queryByText('まだ会話がない。')).toBeNull();
     // 画面の上の ErrorNote（別の alert）は出ていない。
     expect(screen.getAllByRole('alert')).toHaveLength(1);
@@ -139,10 +224,17 @@ describe('会話の一覧の「もっと見る」（issue #3404）', () => {
     failMore = false;
     fireEvent.click(screen.getByRole('button', MORE));
     await waitFor(() => {
-      expect(
-        within(screen.getByRole('list', { name: '会話' })).getAllByRole('listitem'),
-      ).toHaveLength(40);
+      expect(rows()).toHaveLength(40);
     });
     expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('続きを返さない（nextCursor が無い）のに省略があるときは、ボタンではなく但し書きで言う', async () => {
+    serve({ '': () => json(page(0, 3, { hiddenByLimit: 4 })) });
+
+    renderChat();
+    await screen.findByRole('list', { name: '会話' });
+    expect(screen.queryByRole('button', MORE)).toBeNull();
+    expect(screen.getByText(/ほか 4 件は省略/)).toBeTruthy();
   });
 });

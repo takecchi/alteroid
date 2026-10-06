@@ -111,6 +111,7 @@ import {
   createRunnerTokenSync,
   createTokenSpread,
 } from './token-spread.js';
+import { resolvePort } from './port.js';
 import { openStorage } from './storage.js';
 
 export { createApp, parseAllowedOrigins, type AppDeps, type AppType } from './app.js';
@@ -1037,6 +1038,13 @@ function assertTokenRotationEventHandled(event: never): never {
  * chat を開いていなくてもクローンは生きている。
  */
 export async function main(): Promise<void> {
+  // **port は起動処理（記憶を開く・認証の案内など）より前に読む（#3582）。** 読めない値は
+  // ここで断る — 黙って既定やランダムな port へ倒すと設定の誤りが成功に見える。
+  // 投げた理由は呼び出し元の `起動に失敗しました` として出る。
+  const resolvedPort = resolvePort(process.env);
+  if (!resolvedPort.ok) throw new Error(resolvedPort.message);
+  const port = resolvedPort.port;
+
   // 記憶の置き場（ローカルの fs か、クラウドの PostgreSQL か）。器が違っても
   // 上の階層は同じものを見る（roadmap M4 受け入れ基準1）。
   const storage = await openStorage();
@@ -1589,7 +1597,6 @@ export async function main(): Promise<void> {
     }
   }
 
-  const port = Number(process.env.ALTEROID_PORT ?? '4517');
   const hostname = process.env.ALTEROID_BIND || DEFAULT_BIND;
 
   // 入口の認証。**設定されていなければ従来どおり要求しない** — 境界の導入が

@@ -137,7 +137,7 @@ describe('画面の骨組み', () => {
 
   it('全画面では端末の行数ぶんに収まる（はみ出さない）', async () => {
     const h = start(undefined, { rows: 20 });
-    await waitFor(() => h.frame().includes('Ctrl+D'));
+    await waitFor(() => h.frame().includes('^D 終了'));
     expect(h.frame().split('\n').length).toBeLessThanOrEqual(20);
   });
 
@@ -964,7 +964,10 @@ describe('日誌（ライブで流れる一覧と全文）', () => {
     await waitFor(() => h.api.journalListCalls.length === 2);
     expect(h.api.journalListCalls[1]).toMatchObject({ until: minute(51) });
     await waitFor(() => h.journal.store.getSnapshot().entries.length === 150);
-    await waitFor(() => h.frame().includes('これより古い記録は無い（全 150 件）'));
+    // 継続の頁は新しい行を足したので、終端は言い切らない（次の読みで何も増えなければ end）。
+    await waitFor(() =>
+      h.frame().includes('古い側はまだ在る（先頭まで上がるか m で読み足す · いま 150 件）'),
+    );
   });
 
   it('Enter で 1 件の全文を開き、Esc で一覧へ戻る（PgDn で読み進められる）', async () => {

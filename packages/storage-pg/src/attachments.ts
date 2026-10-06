@@ -4,6 +4,7 @@ import {
   hasNul,
   prepareAttachment,
   readAttachmentLimits,
+  reasonOf,
   type AttachmentBindResult,
   type AttachmentBindTarget,
   type AttachmentMeta,
@@ -163,6 +164,8 @@ export class PgAttachmentStore implements AttachmentStore {
       const rest = queryable.filter((id) => !bound.has(id));
       if (rest.length > 0) {
         // 残りは、すでに同じ宛先へ結ばれている（冪等。新しくはない）か、別の宛先（conflicts）か、無い。
+        // UPDATE は上でもう確定している。この SELECT が落ちたら、呼び手には `newlyBound` が届かないので、
+        // この呼びで新しく結んだ分をここで戻してから元の例外を投げ直す（#3592。戻しも落ちたら stderr へ1行残す）。
         const others = await this.#db
           .select({
             id: attachments.id,
@@ -170,7 +173,15 @@ export class PgAttachmentStore implements AttachmentStore {
             externalEventId: attachments.externalEventId,
           })
           .from(attachments)
-          .where(and(inArray(attachments.id, rest), notExpired));
+          .where(and(inArray(attachments.id, rest), notExpired))
+          .catch(async (error: unknown) => {
+            await this.unbind([...newlyBound], target).catch((rollbackError: unknown) => {
+              process.stderr.write(
+                `alteroidd: 添付の結び付けを戻せなかった（${'conversationId' in target ? '会話' : '外部イベント'}へ結んだ ${newlyBound.size} 件が残る）: ${reasonOf(rollbackError)}\n`,
+              );
+            });
+            throw error;
+          });
         for (const row of others) {
           const same =
             'conversationId' in target

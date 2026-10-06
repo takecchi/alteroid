@@ -94,6 +94,8 @@ const ERROR_NAMES = new Set(['e', 'err', 'error', 'cause', 'failure']);
 const ALLOWED_CUSTOM_CLASSES = new Set<string>([
   'JournalAnchorNotFoundError',
   'InvalidCursorError',
+  // #3550。文は固定のリテラル2つだけ（継続点・id・時刻の値を載せない。`conversation.ts` の `readConversationPage`）。
+  'InvalidConversationCursorError',
   'UnreadableApprovalError',
   'CredentialEntryRejectedError',
   'TokenPoolInputError',

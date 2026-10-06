@@ -244,6 +244,37 @@ describe('alteroid conversations list', () => {
     expect(url.searchParams.get('scan')).toBe('9000');
   });
 
+  it('nextCursor が在れば続きの読み方を出し、--cursor はクエリへそのまま渡す（#3550）', async () => {
+    const read = captureStdout();
+    replies.push({
+      status: 200,
+      body: {
+        conversations: [],
+        scanned: 2000,
+        reachedStart: false,
+        hiddenByLimit: 0,
+        nextCursor: 'abc_DEF-123',
+      },
+    });
+
+    await conversationsListCommand({ cursor: 'prev-cursor' });
+
+    expect(new URL(sent[0]?.url ?? '').searchParams.get('cursor')).toBe('prev-cursor');
+    expect(read()).toContain('続きを読むには: alteroid conversations list --cursor abc_DEF-123');
+  });
+
+  it('nextCursor が無ければ続きの案内を出さない（#3550）', async () => {
+    const read = captureStdout();
+    replies.push({
+      status: 200,
+      body: { conversations: [], scanned: 3, reachedStart: true, hiddenByLimit: 0 },
+    });
+
+    await conversationsListCommand();
+
+    expect(read()).not.toContain('--cursor');
+  });
+
   it('空でも、そう言う（黙って何も出さない形にしない）', async () => {
     const read = captureStdout();
     replies.push({

@@ -9,7 +9,14 @@ import useSWR from 'swr';
 
 import { ApiError, unwrap, useApi } from '../api';
 import { normalizeProfile } from '@alteroid/logic';
-import type { JournalEntryType, ManagerStatus, UsageLayer, UsageSite } from '@alteroid/logic';
+import type {
+  ConversationsResponse,
+  ConversationSummary,
+  JournalEntryType,
+  ManagerStatus,
+  UsageLayer,
+  UsageSite,
+} from '@alteroid/logic';
 
 export interface UsageQuery {
   from?: string;
@@ -129,7 +136,11 @@ export const KEY = {
   practiceVersions: (slug: string) => ({ type: 'practiceVersions', slug }) as const,
   practiceVersion: (slug: string, version: number) =>
     ({ type: 'practiceVersion', slug, version }) as const,
-  conversations: (limit: number) => ({ type: 'conversations', limit }) as const,
+  /**
+   * `pages` は「もっと見る」で何頁ぶん読むか（#3550）。頁数が違えば別の取得なので、キーに含める。
+   * `isKeyOfType(key, 'conversations')` は `type` だけを見るので、楽観更新・既読・SSE の無効化の束ねは変わらない。
+   */
+  conversations: (limit: number, pages = 1) => ({ type: 'conversations', limit, pages }) as const,
   /**
    * **`includeSuperseded` をキーに含める（チャットのメッセージ編集、#1010）。**
    *
@@ -533,14 +544,64 @@ export function usePracticeVersion(slug: string, version: number | undefined) {
 }
 
 /**
- * **`keepPreviousData`（一覧の「もっと見る」、#3404）。** `limit` を増やすと鍵が変わるので、
+ * 会話の一覧。**`pages` 頁ぶんを、継続点（`nextCursor`）で順に辿って1つの一覧にする**（「もっと見る」、
+ * #3404 → #3550。`limit` を増やして取り直す形では 201 件目以降と `scan` の窓の外へ辿り着けなかった）。
+ *
+ * - **1 頁目は `cursor` 無し**（従来と同じ呼び）。2 頁目以降は**直前の頁の応答の `nextCursor`** を渡す。
+ *   取り直すたびに先頭から辿り直すので、新しい発言で並びが動いても、頁の継ぎ目で会話を落とさない
+ *   （保存した継続点を使い回すと、先頭に新しい会話が入った分だけ押し出された会話が、どの頁にも出なくなる）。
+ * - **同じ会話が頁をまたいで現れたら、先の（新しい側の）頁の1件だけを残す。**
+ * - `reachedStart` / `hiddenByLimit` / `scanned` / `nextCursor` は**最後に読んだ頁**のもの
+ *   （どこまで辿ったかを言う）。`windowsComplete` は、**どの頁の窓も**日誌の先頭に届いていたか
+ *   （偽なら、一覧の `messages` は下限である）。
+ * - どの頁かの取得に失敗したら、一覧全体を失敗にする（SWR の `error`）。**頁の欠けた一覧を成功のように
+ *   返さない**。`keepPreviousData` なら直前の一覧は残る。
+ *
+ * **`keepPreviousData`（一覧の「もっと見る」、#3404）。** `pages` を増やすと鍵が変わるので、
  * 既定のままだと取り直しの間（と失敗したとき）に一覧が消える。真なら直前の一覧を残す。
  */
-export function useConversations(limit = 30, options: { keepPreviousData?: boolean } = {}) {
+export function useConversations(
+  limit = 30,
+  options: { keepPreviousData?: boolean; pages?: number } = {},
+) {
   const api = useApi();
+  const pages = Math.max(1, options.pages ?? 1);
   return useSWR(
-    KEY.conversations(limit),
-    ({ limit }) => api.api.GET('/conversations', { params: { query: { limit } } }).then(unwrap),
+    KEY.conversations(limit, pages),
+    async ({ limit }) => {
+      const seen = new Set<string>();
+      const conversations: ConversationSummary[] = [];
+      let windowsComplete = true;
+      let cursor: string | undefined;
+      let last: ConversationsResponse | undefined;
+      let first: ConversationsResponse | undefined;
+      for (let index = 0; index < pages; index += 1) {
+        const page: ConversationsResponse = await api.api
+          .GET('/conversations', {
+            params: { query: { limit, ...(cursor === undefined ? {} : { cursor }) } },
+          })
+          .then(unwrap);
+        first ??= page;
+        last = page;
+        if (page.reachedStart === false) windowsComplete = false;
+        for (const conversation of page.conversations) {
+          if (seen.has(conversation.conversationId)) continue;
+          seen.add(conversation.conversationId);
+          conversations.push(conversation);
+        }
+        cursor = page.nextCursor;
+        if (cursor === undefined) break;
+      }
+      // `pages >= 1` なので `first` / `last` は必ず入る。
+      const { readStateUnreadable } = first as ConversationsResponse;
+      const tail = last as ConversationsResponse;
+      return {
+        ...tail,
+        conversations,
+        windowsComplete,
+        ...(readStateUnreadable === undefined ? {} : { readStateUnreadable }),
+      };
+    },
     // 失敗した直後にもう一度押したとき、SWR の重複排除（既定 2 秒）で取り直しを飲ませない。
     options.keepPreviousData === true ? { keepPreviousData: true, dedupingInterval: 0 } : undefined,
   );
@@ -555,19 +616,36 @@ export function useConversations(limit = 30, options: { keepPreviousData?: boole
  * 規則そのものは画面側で再実装しない**（サーバの `supersedes` / `supersededBy`
  * をそのまま束ねるだけ。`packages/core/src/conversation.ts` の
  * `computeSupersededIds` が正本）。
+ *
+ * **`retryOnNotFound: false` は、会話かどうか分からない id を引く画面向け**（未了の仕事の
+ * 出どころ）。404 で再試行しない。既定は `true`（SWR の既定のまま）。
  */
-export function useConversation(id: string | null, options: { includeSuperseded?: boolean } = {}) {
+export function useConversation(
+  id: string | null,
+  options: { includeSuperseded?: boolean; retryOnNotFound?: boolean } = {},
+) {
   const api = useApi();
   const includeSuperseded = options.includeSuperseded ?? false;
-  return useSWR(id === null ? null : KEY.conversation(id, includeSuperseded), ({ id }) =>
-    api.api
-      .GET('/conversations/{id}', {
-        params: {
-          path: { id },
-          query: { includeSuperseded: includeSuperseded ? 'true' : 'false' },
+  const retryOnNotFound = options.retryOnNotFound ?? true;
+  return useSWR(
+    id === null ? null : KEY.conversation(id, includeSuperseded),
+    ({ id }) =>
+      api.api
+        .GET('/conversations/{id}', {
+          params: {
+            path: { id },
+            query: { includeSuperseded: includeSuperseded ? 'true' : 'false' },
+          },
+        })
+        .then(unwrap),
+    retryOnNotFound
+      ? undefined
+      : {
+          // 404（会話ではない id）は待っても変わらない。既定の再試行に任せると、
+          // 日誌を遡る読みを黙って繰り返す。それ以外の失敗は既定どおり再試行する。
+          shouldRetryOnError: (error: Error) =>
+            !(error instanceof ApiError && error.status === 404),
         },
-      })
-      .then(unwrap),
   );
 }
 

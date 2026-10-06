@@ -445,6 +445,12 @@ export const conversationsResponseSchema = z.object({
    * で会話15件・先頭到達。`limit` の上限 200 にも画面の既定 30 にも遠い）。
    */
   hiddenByLimit: z.number().int(),
+  /**
+   * 続きが在るときだけ載る継続点（次の呼びの `cursor` へそのまま渡す）。**`/approvals` / `/commitments` の
+   * `nextCursor` と同じ名前・同じ形**（不透明な文字列。無ければ鍵ごと無い）。`hiddenByLimit > 0`
+   * か `reachedStart === false` のどちらかなら載る。窓（`scan`）の外の会話も、これを辿れば読める。
+   */
+  nextCursor: z.string().optional(),
   readStateUnreadable: readStateUnreadableSchema,
 });
 
