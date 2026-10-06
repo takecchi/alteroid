@@ -376,6 +376,49 @@ describe('/profile 画面 — 行を置く', () => {
   });
 });
 
+/**
+ * 別の行の「編集する」へ切り替えたとき、前の行の確認の枠と失敗の表示を残さない（issue #3073）。
+ * 確認・失敗は `ProfileEditor` の中の state なので、親の `setEditor` だけでは畳まれなかった。
+ */
+describe('/profile 画面 — 編集する行を切り替える', () => {
+  it('確認の枠が出たまま別の行の「編集する」を押すと、確認は畳まれ、PUT は走らない', async () => {
+    const { puts } = stubProfile();
+    renderScreen();
+
+    fireEvent.click((await screen.findAllByRole('button', { name: '編集する' }))[0]!);
+    fireEvent.change(screen.getByLabelText('プロファイルの新しい本文'), {
+      target: { value: 'export A=1\n' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '保存する' }));
+    expect(screen.getByRole('button', { name: '本当に保存する' })).toBeTruthy();
+
+    fireEvent.click(screen.getAllByRole('button', { name: '編集する' })[1]!);
+
+    expect(screen.queryByRole('button', { name: '本当に保存する' })).toBeNull();
+    expect(screen.getByRole('button', { name: '保存する' })).toBeTruthy();
+    expect(puts).toEqual([]);
+  });
+
+  it('保存の失敗が出たまま別の行の「編集する」を押すと、前の行の失敗は消える', async () => {
+    stubProfile({
+      put: { status: 400, body: { error: 'プロファイルが読めなかったので保存していない' } },
+    });
+    renderScreen();
+
+    fireEvent.click((await screen.findAllByRole('button', { name: '編集する' }))[0]!);
+    fireEvent.change(screen.getByLabelText('プロファイルの新しい本文'), {
+      target: { value: 'export (\n' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '保存する' }));
+    fireEvent.click(screen.getByRole('button', { name: '本当に保存する' }));
+    expect(await screen.findByText('プロファイルが読めなかったので保存していない')).toBeTruthy();
+
+    fireEvent.click(screen.getAllByRole('button', { name: '編集する' })[1]!);
+
+    expect(screen.queryByText('プロファイルが読めなかったので保存していない')).toBeNull();
+  });
+});
+
 describe('/profile 画面 — 行を外す', () => {
   it('「この行を外す」は確認を挟んでから、その行だけの DELETE を送る', async () => {
     const { deletes } = stubProfile();

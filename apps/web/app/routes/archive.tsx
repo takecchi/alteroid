@@ -224,7 +224,7 @@ function EntryRow({ entry }: { entry: ArchiveEntry }) {
         <span className="font-medium">{formatDateTime(entry.at)} の会話</span>
         {removed && <Badge tone="warn">本文は削除済み</Badge>}
         {entry.continuity !== undefined && (
-          <Badge tone="neutral" title={entry.continuity}>
+          <Badge tone="neutral" title={continuityLabel(entry.continuity)}>
             {continuityLabel(entry.continuity)}
           </Badge>
         )}

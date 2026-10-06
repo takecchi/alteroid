@@ -137,34 +137,36 @@ export default function Memory() {
                     key: document.slug,
                     href: `/memory/${document.slug}`,
                     current: document.slug === selectedSlug,
-                    // 行全体をリンクにしない（#2808）。リンクは題名だけにして、名前・サイズ・日時は
-                    // 選択・コピーできる文字にする（`ListDetailItems` の `lead` / `extra`）。
+                    // 行全体をリンクにする（#3107）。ほかの一覧（マネージャー・日報）と同じく、行のどこを
+                    // 押しても開く。かつては題名だけをリンクにして、名前・サイズ・日時を選択・コピーできる
+                    // 文字にしていた（#2808。`ListDetailItems` の `lead` / `extra`）が、題名の文字の上で
+                    // しか開かず、ほかの一覧と使用感がずれていた。
                     // 一覧の1行は Markdown 化の対象外（`components/markdown.tsx` の doc）
-                    lead: (
-                      <span
-                        className="mr-1.5 shrink-0 text-[10px] text-muted-foreground"
-                        title={kindHint(document.kind)}
-                      >
-                        {kindLabel(document.kind)}
-                      </span>
-                    ),
-                    children: document.title,
-                    extra: (
+                    children: (
                       <>
-                        <p className="truncate font-mono text-[11px] text-muted-foreground">
+                        <span className="flex items-baseline">
+                          <span
+                            className="mr-1.5 shrink-0 text-[10px] text-muted-foreground"
+                            title={kindHint(document.kind)}
+                          >
+                            {kindLabel(document.kind)}
+                          </span>
+                          <span className="min-w-0 flex-1 truncate">{document.title}</span>
+                        </span>
+                        <span className="block truncate font-mono text-[11px] text-muted-foreground">
                           {document.slug}
-                        </p>
+                        </span>
                         {document.description !== undefined && (
-                          <p className="line-clamp-2 break-words text-[11px] text-muted-foreground">
+                          <span className="line-clamp-2 break-words text-[11px] text-muted-foreground">
                             {freshnessMark(document.descriptionFreshness)}
                             {document.description}
-                          </p>
+                          </span>
                         )}
-                        <p className="mt-0.5 truncate text-[11px] text-muted-foreground">
+                        <span className="mt-0.5 block truncate text-[11px] text-muted-foreground">
                           {formatBytes(document.bytes)} · 作成{' '}
                           {formatCreatedAtRelative(document.createdAt)} · 更新{' '}
                           {formatRelative(document.updatedAt)}
-                        </p>
+                        </span>
                       </>
                     ),
                   }))}
