@@ -398,6 +398,9 @@ async function renderChatEvents(
   // 返答が最後まで表示されたか（`done` が来て、`error` / `usage_limited` が無かった）。既読にする条件。
   let completed = false;
   let failedOrLimited = false;
+  // `done` / `error` / `usage_limited` のどれかで終わったか（例外で切れたときも、そちらの文で言うので真にする）。
+  let ended = false;
+  let sawEvent = false;
   // **本文は改行までためて、行ごとに伏せてから書く**（#2635）。チャンクごとに伏せると、
   // 2つのチャンクにまたがったトークンはどちらの断片も規則に合わずに出る。端末へ書いた
   // ものは取り消せないので、まだ改行の来ていない残りは `pending` に持ち、ほかの出来事の
@@ -411,6 +414,7 @@ async function renderChatEvents(
 
   try {
     for await (const event of events) {
+      sawEvent = true;
       if (event.name !== 'text') flushPending();
       switch (event.name) {
         case 'open': {
@@ -447,6 +451,7 @@ async function renderChatEvents(
           break;
         }
         case 'usage_limited': {
+          ended = true;
           const data = event.json<{ message: string }>();
           if (data) {
             stdout.write(`\n  ! ${redactError(data.message)}\n`);
@@ -458,9 +463,11 @@ async function renderChatEvents(
           break;
         }
         case 'done':
+          ended = true;
           completed = true;
           break;
         case 'error': {
+          ended = true;
           failedOrLimited = true;
           const data = event.json<{ message: string }>();
           stdout.write(`\nエラー: ${data ? redactError(data.message) : '不明'}\n`);
@@ -473,6 +480,7 @@ async function renderChatEvents(
   } catch (error) {
     // 応答の途中で切れた（SSE の切断）。ここまでに知った会話 id を返し、REPL が続けられるようにする。
     flushPending();
+    ended = true;
     stdout.write(
       `\nエラー: 応答が途中で切れました（${redactError(error instanceof Error ? error.message : String(error))}）\n`,
     );
@@ -481,6 +489,14 @@ async function renderChatEvents(
 
   flushPending();
   if (wrote) stdout.write('\n');
+  if (!ended) {
+    // 終端が無いまま正常に閉じた（プロキシ・再起動など）。途中までの返答を、完成したものに見せない（#3410）。
+    stdout.write(
+      !sawEvent
+        ? '  ! 応答が来ないまま接続が閉じました。発言が受け取られたかは分かりません\n'
+        : '  ! 応答が途中で切れました（done も error も来ないまま接続が閉じました。出ているのは受け取った分だけです）\n',
+    );
+  }
   if (completed && !failedOrLimited && nextConversationId !== null) {
     await markConversationReadAfterReply(target, nextConversationId);
   }
