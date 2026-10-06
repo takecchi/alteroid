@@ -1,4 +1,9 @@
-import { formatUsd, summarizeUsage, usageDate } from '@alteroid/core/usage';
+import {
+  describeUnreadableUsageRows,
+  formatUsd,
+  summarizeUsage,
+  usageDate,
+} from '@alteroid/core/usage';
 import { CalendarClock, Coins, Hourglass } from 'lucide-react';
 import { Link } from 'react-router';
 
@@ -203,6 +208,11 @@ function UsageTile() {
   const today: string | undefined = usage.data?.today;
   const todayRows = usage.data?.rows.filter((row) => row.date === today) ?? [];
   const todayTurnRows = usage.data?.turnRows.filter((row) => row.date === today) ?? [];
+  // 注記（`UnreadableUsageRowsNote`）に渡すのと同じ集合。外した行が在るなら、記録は在る。
+  const unreadableRows = usage.data?.unreadableRows?.filter(
+    (row) => row.date === undefined || row.date === today,
+  );
+  const hasUnreadable = describeUnreadableUsageRows(unreadableRows).length > 0;
 
   return (
     <HomeTile
@@ -232,11 +242,17 @@ function UsageTile() {
         <Empty>サーバの今日が分からない（サーバが古い可能性がある）。</Empty>
       ) : usage.data.since === null ? (
         // `$0.00` と出さない。まだ記録が1件も無いのを「使っていない」に見せない。
-        <Empty>まだ記録が無い。作業が動き出すと、使った分がここに記録される。</Empty>
+        <Empty>
+          {hasUnreadable
+            ? '読めた記録は無い。読めずに外した行がある（下の注記）。'
+            : 'まだ記録が無い。作業が動き出すと、使った分がここに記録される。'}
+        </Empty>
       ) : usage.data.beforeLedger && todayRows.length === 0 ? (
         // 0 と出さない。`beforeLedger` は窓（今日の前後2日）に対する判定で、今日そのものではない。
         <Empty>
-          今日の分はまだ記録が無い。記録は途中から始まったので、その前の分は残っていない。作業が動けば、この先の分が記録される。
+          {hasUnreadable
+            ? '今日の分は、読めた記録が無い。読めずに外した行がある（下の注記）。'
+            : '今日の分はまだ記録が無い。記録は途中から始まったので、その前の分は残っていない。作業が動けば、この先の分が記録される。'}
         </Empty>
       ) : (
         <>
@@ -248,12 +264,7 @@ function UsageTile() {
         </>
       )}
       {usage.data !== undefined && today !== undefined && (
-        <UnreadableUsageRowsNote
-          rows={usage.data.unreadableRows?.filter(
-            (row) => row.date === undefined || row.date === today,
-          )}
-          className="mt-2"
-        />
+        <UnreadableUsageRowsNote rows={unreadableRows} className="mt-2" />
       )}
     </HomeTile>
   );
