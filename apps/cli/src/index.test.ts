@@ -401,6 +401,7 @@ describe('サブコマンドの登録（入口が在ること）', () => {
       ['--expires', false],
       ['--max-body-bytes', false],
       ['--rate-per-minute', false],
+      ['--json', false],
     ]);
     const revoke = integration?.commands.find((c) => c.name() === 'revoke');
     expect((revoke?.options ?? []).map((o) => o.long)).toEqual(['--yes']);

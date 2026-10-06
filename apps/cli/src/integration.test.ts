@@ -153,6 +153,27 @@ describe('integration create', () => {
     ]);
   });
 
+  it('--json: 標準出力はデーモンの応答の JSON だけ（値を含む）。警告は標準エラーへ（#3220）', async () => {
+    setReply('POST', '/integration-keys', {
+      status: 200,
+      body: { key: view(), value: SECRET_VALUE },
+    });
+    const out = captureStdout();
+    const errChunks: string[] = [];
+    vi.spyOn(process.stderr, 'write').mockImplementation((chunk: unknown) => {
+      errChunks.push(String(chunk));
+      return true;
+    });
+    await integrationCreateCommand({ name: 'CI', source: 'ci.main', json: true }, NOW);
+    const parsed = JSON.parse(out()) as { key: { id: string }; value: string };
+    expect(parsed.value).toBe(SECRET_VALUE);
+    expect(parsed.key.id).toBe('k-1');
+    const err = errChunks.join('');
+    expect(err).toContain('二度と表示されません');
+    expect(err).toContain('ログに残さない');
+    expect(err).not.toContain(SECRET_VALUE);
+  });
+
   it('期限（期間・日時）と上限を送る', async () => {
     setReply('POST', '/integration-keys', {
       status: 200,

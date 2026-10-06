@@ -71,6 +71,7 @@ export const HELP_EXAMPLES = {
   integrationCreate: examples(
     'alteroid integration create --name "CI" --source ci.main              # 無期限・既定の上限',
     'alteroid integration create --name "CI" --source ci.main --expires 90d --rate-per-minute 10',
+    'alteroid integration create --name "CI" --source ci.main --json      # 値は標準出力の JSON（value）。警告は標準エラー。値をログに残さない',
     'alteroid integration list                                             # 状態・最終使用を見る',
   ),
   tokenPolicy: examples(
