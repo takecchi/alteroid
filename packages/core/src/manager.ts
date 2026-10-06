@@ -10260,7 +10260,7 @@ class Pool implements ManagerPool {
    * ストリームが切れただけ（器はそのまま）なら、`list()` にセッションがそのまま
    * 並ぶので何も起きない。**生死は台帳ではなく runner に聞く。**
    */
-  async #reattach(runnerId: string): Promise<void> {
+  async #reattach(runnerId: string, viaLadder = false): Promise<void> {
     if (this.#stopped) return;
     // **重なった名乗りを捨てない。** 起動直後の名乗りを処理している最中に器が
     // 入れ替わるのは、まさに拾いたい場合そのものである。ここで return するだけ
@@ -10314,6 +10314,21 @@ class Pool implements ManagerPool {
        */
       const sighting = this.#sighting(runnerId);
       if (sighting.duplicates !== undefined && sighting.duplicates > 1) {
+        /*
+         * **併存が解けた次の回に取り直せるよう、梯子を予約する**（Issue #3148）。見送って
+         * 梯子を残さないと、解けた後に取り直す契機は `hello` しか無く、来なければ委譲は
+         * `running` のまま誰にも拾われない（「挑み直しは続ける」の知らせと `mayClaim` の
+         * 「回数では諦めない」に反する）。**時間で解けるとは限らない**ので間隔は上限に
+         * 固定する（短く叩かない）。梯子から来た回（`viaLadder`）は、既に出した併存の
+         * 日誌・知らせを出し直さない（出し直すと梯子が回るたびに積まれる）。`hello` 由来の
+         * 回は従来どおり毎回出す（上の doc）。
+         */
+        retry = true;
+        this.#reattachDelays.set(runnerId, REATTACH_RETRY_MAX_MS);
+        if (viaLadder) {
+          await this.#refuseRelocationsBeforeGate(runnerId, sighting.duplicates);
+          return;
+        }
         await this.#journal({
           type: 'decision',
           decision: `runnerId=${runnerId} の取り直しを見送った（併存を関門より前で検出。#pushProfile と runner.list() は誤解決した相手へ走らせていない）`,
@@ -10797,7 +10812,7 @@ class Pool implements ManagerPool {
     this.#reattachDelays.set(runnerId, Math.min(delay * 2, REATTACH_RETRY_MAX_MS));
     const timer = setTimeout(() => {
       this.#reattachTimers.delete(runnerId);
-      if (!this.#stopped) void this.#reattach(runnerId);
+      if (!this.#stopped) void this.#reattach(runnerId, true);
     }, delay);
     // デーモンの停止をこのタイマーで引き延ばさない。
     timer.unref?.();
@@ -11074,6 +11089,9 @@ class Pool implements ManagerPool {
   ): Promise<boolean> {
     const id = record.job.id;
     const refused = this.#relocationRefusals.get(id) ?? new Set<string>();
+    // **既に控えにある runner の断りは、判断の日誌を書き直さない**（Issue #3148。併存の見送りが
+    // 梯子で繰り返し届いても、同じ (委譲, runner) の断りを積まない）。
+    const alreadyRefused = refused.has(refusedBy);
     refused.add(refusedBy);
     this.#relocationRefusals.set(id, refused);
     const origin = record.job.runnerId;
@@ -11086,15 +11104,17 @@ class Pool implements ManagerPool {
         .filter((candidate) => !refused.has(candidate)),
     );
     const exhausted = remaining.size === 0;
-    await this.#journal({
-      type: 'decision',
-      decision:
-        `[${id}] 移送先 ${refusedBy} が resume を断った（その runner の都合として扱う）。` +
-        (exhausted
-          ? '残りの候補が無いので、戻せなかったものとして確定する'
-          : `ほかの候補（${[...remaining].join(', ')}）へ移すのを試す`),
-      grounds: reasonOf(error),
-    });
+    if (!alreadyRefused) {
+      await this.#journal({
+        type: 'decision',
+        decision:
+          `[${id}] 移送先 ${refusedBy} が resume を断った（その runner の都合として扱う）。` +
+          (exhausted
+            ? '残りの候補が無いので、戻せなかったものとして確定する'
+            : `ほかの候補（${[...remaining].join(', ')}）へ移すのを試す`),
+        grounds: reasonOf(error),
+      });
+    }
     // **残りの候補へ取り直しを予約する。** 並行に起こされた候補の `#reattach` は、この移送先が
     // resume 中（`#resuming`）だと `busy` で黙って抜けている——ここで予約しないと、その候補は
     // 次の名乗りまで誰にも試されない。梯子は `#scheduleReattach`（間隔は伸びるが、断られた候補の
@@ -11949,7 +11969,17 @@ class Pool implements ManagerPool {
         // を参照。`lastFailure.at`（この少し下）と同じく、この境界を跨いだ
         // 瞬間として `new Date().toISOString()` を直接使う。
         record.job.lastReportAt = new Date().toISOString();
-        record.job.status = event.status;
+        // **終端（`failed` / `lost`）を、遅れて処理される report で書き戻さない（Issue #3160）。**
+        // runner の出来事は `void this.#onEvent(...)` で並行に処理されるので、この
+        // `report` が上の `await` で待つ間に `closed(failed / lost)` が終端を台帳へ書く
+        // ことがある。ここで読み直さず `event.status`（`running` / `done`）を書くと、台帳は
+        // 非終端のまま、クローンには `closed_failed` の知らせが出る（食い違い）／`lost` は
+        // 終端が付かず引き取りの契機も消える。**本文（`lastReport` など）と日誌・受信箱への
+        // 流れは従来どおり**で、動かさないのは status だけ。**`done` は idle も兼ねる
+        // （再び走り出せる）ので対象にしない**（`isTerminalJobStatus` は `done` を含むので使わない）。
+        // managerId ごとの直列化は配達の順序に効くので採っていない。
+        const settledByClosed = record.job.status === 'failed' || record.job.status === 'lost';
+        if (!settledByClosed) record.job.status = event.status;
         // **`waiting` が空なら `waiting_human` を名乗らせない（Issue #1592
         // の副作用の疑い、結合テストで再現・確認した）。**
         //
@@ -11976,7 +12006,7 @@ class Pool implements ManagerPool {
         // **`event.status` そのものは書き換えない。** 報告が名乗った値は
         // `lastReportStatus`（この少し下）にそのまま残す——「何を名乗ったか」
         // の記録と「いまの状態をどう数えるか」の判断を1つに畳まない。
-        if (event.status === 'waiting_human' && record.waiting.length === 0) {
+        if (!settledByClosed && event.status === 'waiting_human' && record.waiting.length === 0) {
           record.job.status = 'running';
         }
         // **「書いた瞬間」は書き換え後の値（Issue #1036）。** `event.status`

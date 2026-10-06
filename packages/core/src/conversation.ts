@@ -317,7 +317,13 @@ export function collectConversations(
       startedAt: first.at,
       updatedAt: last.at,
       messages: visible.length,
-      preview: preview(titled.text),
+      // 添付だけで本文が空の発言は、一覧の抜粋が空になるので件数で示す。
+      preview:
+        titled.text.trim() === '' &&
+        titled.attachments !== undefined &&
+        titled.attachments.length > 0
+          ? `[添付 ${titled.attachments.length} 件]`
+          : preview(titled.text),
       unread: countUnread(visible, readThrough),
       readThrough,
     });
