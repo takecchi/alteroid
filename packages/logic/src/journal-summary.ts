@@ -1,9 +1,8 @@
 /**
  * 日誌エントリを1行に潰す（一覧・通知・CLI で同じ文言を使うため）。
  *
- * もとは `packages/swr/src/hooks/queries.ts` に在った（#2558 で移設）。**React にも
- * SWR にも依存しない**ので、純ロジックの層に置き、`apps/cli` からも読めるようにした。
- * 文言・ロジックは1文字も変えていない。`@alteroid/swr` は再 export している。
+ * **React にも SWR にも依存しない**ので、純ロジックの層に置き、`apps/cli` からも読める。
+ * `@alteroid/swr` は再 export している。
  */
 import { summarizeJournalDiagnosticsEntry } from '@alteroid/core/journal-diagnostics-format';
 
@@ -18,20 +17,20 @@ import {
 import type { JournalEntry } from './types.js';
 
 /**
- * 成功した `github_observation` の CI の軸を1行にする（#2608）。
- *
- * **`@alteroid/core` の `describeGithubCi`（`progress-github.ts`）と1文字も違えない写し。**
- * core 本体の値の import はブラウザバンドルへサーバ専用のドメイン層を入れてしまう
- * （`@alteroid/core/journal-search` の分離の経緯）ので、ここへ写して持つ。
- * 文言を結ぶ歯は `journal-summary.test.ts` が持つ（core の関数と突き合わせる）。
- */
-/**
  * 表示の言い方。`'raw'`（既定）は core の原本と同じ字面（CLI の TUI が使う）。`'localized'` は
  * Web の表示用で、値（success など・observedBy）を `progress-labels.ts` の表で日本語へ写す。
  * 並び・件数・断り書きは同じで、写すのは表に載った語だけ。
  */
 export type JournalSummaryStyle = 'raw' | 'localized';
 
+/**
+ * 成功した `github_observation` の CI の軸を1行にする。
+ *
+ * **`@alteroid/core` の `describeGithubCi`（`progress-github.ts`）と1文字も違えない写し。**
+ * core 本体の値の import はブラウザバンドルへサーバ専用のドメイン層を入れてしまう
+ * （`@alteroid/core/journal-search` の分離と同じ理由）ので、ここへ写して持つ。
+ * 文言を結ぶ歯は `journal-summary.test.ts` が持つ（core の関数と突き合わせる）。
+ */
 export function describeGithubCiText(
   ok: {
     ci?: {
@@ -79,14 +78,12 @@ function summarizeJournalEntryRaw(entry: JournalEntry, style: JournalSummaryStyl
     case 'decision':
       return `${entry.decision}（根拠: ${entry.grounds}）`;
     case 'escalation':
-      // **取り下げを先に見る（#963）。** `withdrawnAt` と `answeredAt` は
+      // **取り下げを先に見る。** `withdrawnAt` と `answeredAt` は
       // 正常な経路では両立しない（`schema.ts` の `journalEntrySchema` の
       // `escalation` 分岐、`withdrawnAt` の doc）。この分岐が無いと、
       // `approval_withdraw` が積む行（`answeredAt` 未設定）が「確認:」
-      // （＝まだ誰も答えていない新しい質問）と誤読される——日誌フィード・
-      // ダッシュボードのどちらも、取り下げた事実が読めなくなる
-      // （issue #963 の受け入れ基準「取り下げの事実と理由が日誌に残る」は、
-      // 行が在るだけでなく人間が読んで分かることを指す）。
+      // （＝まだ誰も答えていない新しい質問）と誤読され、取り下げた事実が
+      // 日誌フィード・ダッシュボードのどちらでも読めなくなる。
       if (entry.withdrawnAt !== undefined) return `取り下げ済み: ${entry.question}`;
       return entry.answeredAt === undefined
         ? `確認: ${entry.question}`
@@ -99,7 +96,7 @@ function summarizeJournalEntryRaw(entry: JournalEntry, style: JournalSummaryStyl
       // （`memory_delete` の「削除直前 N 文字」）ので、バイトの注記は
       // `:` の手前——`cause`/`action` と同じ構造化された括弧の中——に置き、
       // 自由文の `summary` はコロンの後ろへ分ける（1行の中でも、単位の
-      // 混ざる場所を分ける。#318 のコメントで実際に読み違いが起きている）。
+      // 混ざる場所を分ける）。
       //
       // `action` と `bytesBefore`/`bytesAfter` は `optional`——この区別が
       // 導入される前の古いエントリは両方とも無い。無いことを `0` として
@@ -124,12 +121,8 @@ function summarizeJournalEntryRaw(entry: JournalEntry, style: JournalSummaryStyl
         : `⚠ ${entry.date} の日報は作れなかった: ${entry.unavailable}`;
     case 'external_event':
       return `${entry.source}: ${entry.summary}`;
-    // **`worker_wait` / `turn_usage` / `context_usage` / `inbox_flow` は
-    // `@alteroid/core/journal-diagnostics-format` へ移した（issue #2016）。**
-    // CLI（`apps/cli/src/chat.ts` の `/journal`）がこの4種の要約を空欄の
-    // まま出していたため、同じ文言を CLI とここで共有する口として切り出した
-    // ——文言・ロジックは1文字も変えていない（移設のみ。
-    // `journal-diagnostics-format.ts` 冒頭の doc）。
+    // この4種の要約は、CLI（`apps/cli/src/chat.ts` の `/journal`）と共有するため
+    // `@alteroid/core/journal-diagnostics-format` に在る。
     case 'worker_wait':
     case 'turn_usage':
     case 'context_usage':
@@ -149,7 +142,7 @@ function summarizeJournalEntryRaw(entry: JournalEntry, style: JournalSummaryStyl
         ? `${entry.repo}: ${GITHUB_OPEN_LABEL.issue[style]} ${entry.result.openIssues} 件 / ${GITHUB_OPEN_LABEL.pull[style]} ${entry.result.openPulls} 件` +
             (entry.result.truncated ? GITHUB_TRUNCATED_NOTE[style] : '') +
             by(entry.observedBy) +
-            // **CI の軸を落とさない（#2608）。** `ci` が無いのは「観測していない」、
+            // **CI の軸を落とさない。** `ci` が無いのは「観測していない」、
             // `ciUnavailable` は「取れなかった」で、どちらも 0 件ではない。
             ` / ${describeGithubCiText(entry.result, style)}`
         : `${entry.repo}: 取れなかった${by(entry.observedBy)}: ${entry.result.reason}`;
@@ -185,7 +178,7 @@ function summarizeJournalEntryRaw(entry: JournalEntry, style: JournalSummaryStyl
  * 日誌エントリを人間が読む1行に潰す（一覧と通知で同じ文言を使うため）。
  *
  * **本文（`text`・`summary`・`question`・`reason` など、人や agent が書いた自由文）は伏せ字を
- * 通してから返す**（issue #2600。`redactBody`）。Web の一覧・ダッシュボードと TUI が共有する
+ * 通してから返す**（`redactBody`）。Web の一覧・ダッシュボードと TUI が共有する
  * 出口で、ここで掛ければ全部に効く。
  */
 export function summarizeJournalEntry(
