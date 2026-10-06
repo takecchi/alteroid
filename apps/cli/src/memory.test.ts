@@ -713,6 +713,35 @@ describe('alteroid memory の読み出しの失敗の理由', () => {
       else process.env.EDITOR = savedEditor;
     });
 
+    it.each([
+      ['全部消した', ''],
+      ['空白だけにした', ' \n\t\n'],
+    ])(
+      '本文を%sまま閉じたら、PUT せずに set と同じ文言で断り、編集を残す（#3456）',
+      async (_label, body) => {
+        captureStdout();
+        const err = captureStderr();
+        const bodyFile = join(await makeTempDir('alteroid-memory-test-'), 'body.txt');
+        await writeFile(bodyFile, body, 'utf8');
+        process.env.EDITOR = `sh -c 'cat "${bodyFile}" > "$1"' _`;
+        replies.push({
+          status: 200,
+          body: { document: { slug: 'values', content: '# 価値観\n' }, version: 'v-read' },
+        });
+
+        const error = await memoryEditCommand('values').catch((e: unknown) => e);
+
+        expect(error).toBeInstanceOf(Error);
+        expect((error as Error).message).toContain('本文が空');
+        expect((error as Error).message).toContain('--allow-empty');
+        expect(sent.map((s) => s.method)).toEqual(['GET']);
+        const mine = /残してあります: (\S+)/.exec(err())?.[1];
+        expect(mine).toBeDefined();
+        expect(await readFile(mine ?? '', 'utf8')).toBe(body);
+        await rm(dirname(mine ?? ''), { recursive: true, force: true });
+      },
+    );
+
     it('GET で読んだ version を、PUT の ifMatch に載せる', async () => {
       captureStdout();
       replies.push({
