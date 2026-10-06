@@ -482,6 +482,7 @@ describe('道具の JSON Schema の説明文に、検査と同じ範囲の文字
       { properties?: Record<string, { description?: string }> } | undefined;
     const description = schema?.properties?.['everyMinutes']?.description;
     expect(description).toBeTruthy();
-    expect(description).toContain(formatIntRangeJa({ min: 1 }));
+    // 上限（1年 = 525600 分。#3533）が入った後の範囲。
+    expect(description).toContain(formatIntRangeJa({ min: 1, max: 525_600 }));
   });
 });

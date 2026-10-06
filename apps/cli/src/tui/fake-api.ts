@@ -71,6 +71,8 @@ export interface FakeApi extends TuiApi {
   /** 非 null なら `markConversationRead` がこの理由で失敗する。 */
   readMarkFails: string | null;
   interrupts: number;
+  /** 非 null なら `interrupt()` がこの理由で失敗する。 */
+  interruptFails: string | null;
   conversations: ConversationSummary[];
   messages: Record<string, ConversationMessage[]>;
   /** 窓が日誌の先頭に届いていない会話の id。 */
@@ -178,6 +180,7 @@ export function fakeApi(): FakeApi {
     readMarks: [],
     readMarkFails: null,
     interrupts: 0,
+    interruptFails: null,
     conversations: [],
     messages: {},
     unreachedStart: new Set(),
@@ -306,6 +309,7 @@ export function fakeApi(): FakeApi {
     },
     interrupt() {
       api.interrupts += 1;
+      if (api.interruptFails !== null) return Promise.reject(new Error(api.interruptFails));
       return Promise.resolve('いま走っていたクローンのターンを止めた。');
     },
     listManagers(query) {

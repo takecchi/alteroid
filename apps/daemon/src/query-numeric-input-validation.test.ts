@@ -346,7 +346,10 @@ describe('JSON 本文の数値欄は jsonBody() 経由で既に安全（回帰�
     });
     const text = await res.text();
     expect(res.status, `本文: ${text}`).toBe(400);
-    expect(JSON.parse(text)).toEqual({ error: 'kind/request/spec の形が不正: spec.minutes' });
+    expect(JSON.parse(text)).toEqual({
+      error:
+        'kind/request/spec の形が不正: spec.minutes（every の分数は 1以上525600（1年）以下の整数のみ。それより長い周期は cron 式か単発の予定で書く）',
+    });
     expect(text).not.toMatch(/"code"|"success"|"expected"/);
   });
 

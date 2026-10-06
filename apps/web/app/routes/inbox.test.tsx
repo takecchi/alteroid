@@ -12,11 +12,10 @@
  *   「実行する」を押せる形を作らない）
  */
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import type { InboxBacklog, InboxEventType } from '@alteroid/logic';
-import { json, Providers, stubFetch, storeTestBaseUrl } from '~/test-support';
+import { json, Providers, TestDataRouter, stubFetch, storeTestBaseUrl } from '~/test-support';
 
 import Inbox from './inbox';
 
@@ -101,9 +100,9 @@ function stubInboxRemove(
 function renderInbox(): void {
   render(
     <Providers>
-      <MemoryRouter>
+      <TestDataRouter>
         <Inbox />
-      </MemoryRouter>
+      </TestDataRouter>
     </Providers>,
   );
 }

@@ -44,6 +44,12 @@ export function approvalDetailPath(approvalId: string): string {
   return `/approvals/item/${encodeURIComponent(approvalId)}`;
 }
 
+/** 送った時点の下書き（`onAnswered` へ渡す）。 */
+export interface SentApprovalDraft {
+  text: string;
+  questions?: ApprovalQuestionsDraft;
+}
+
 export function ApprovalAnswerCard({
   approval,
   draft,
@@ -63,8 +69,11 @@ export function ApprovalAnswerCard({
   /** 設問のフォームの書きかけ。親が持つときだけ渡す（会話の画面。会話を移っても残す）。 */
   questionsDraft?: ApprovalQuestionsDraft;
   onQuestionsDraftChange?: (draft: ApprovalQuestionsDraft) => void;
-  /** この id に答えが通った。 */
-  onAnswered?: () => void;
+  /**
+   * この id に答えが通った。**送った時点の下書き**（`sent`）を渡す。呼ぶ側は、いまの下書きが
+   * これと同じときだけ畳む（応答を待つ間に打ち足した分を消さない。issue #3515）。
+   */
+  onAnswered?: (sent: SentApprovalDraft) => void;
   /** 直前のまとめ送信でこの id が駄目だった理由（無ければ何も出さない）。 */
   bulkError?: string;
   /** 回答済みのときの経緯などを置く口。 */
@@ -85,11 +94,13 @@ export function ApprovalAnswerCard({
   const state = withdrawn ? 'withdrawn' : answered ? 'answered' : 'unanswered';
 
   async function send(request: () => Promise<void>) {
+    // 送るときに下書きを控える。成功したあとの「いまの下書き」ではなく、これと比べさせる。
+    const sent: SentApprovalDraft = { text: currentDraft, questions: questionsDraft };
     setBusy(true);
     setFailure(undefined);
     try {
       await request();
-      onAnswered?.();
+      onAnswered?.(sent);
     } catch (caught) {
       setFailure(caught);
     } finally {

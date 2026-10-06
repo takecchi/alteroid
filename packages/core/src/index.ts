@@ -1387,6 +1387,7 @@ export {
 } from './workspace-reset.js';
 
 /** テスト用ユーティリティ（本番の配線には出てこない）。 */
+export { MemoryAttachmentStore } from './attachment-memory.js';
 export {
   captureStderr,
   createMemoryStores,
@@ -1516,6 +1517,7 @@ export {
   canBindAttachmentTo,
   isAttachmentImageMediaType,
   isBoundTo as isAttachmentBoundTo,
+  isAttachmentExpired,
   isAttachmentPrunable,
   normalizeAttachmentMediaType,
   normalizeAttachmentName,

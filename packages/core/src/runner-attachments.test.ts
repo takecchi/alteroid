@@ -196,6 +196,34 @@ describe('placeRunnerAttachments（Issue #3111 段3）', () => {
   });
 });
 
+describe('placeRunnerAttachments の規約の隙（#3561）', () => {
+  it('同じ id が2つ以上あれば、何も置かずに断る（通知行の sha256 と path の中身が食い違うのを防ぐ）', async () => {
+    const root = await makeTempDir('runner-att-');
+    const batch = [
+      attachmentOf('dup-id', 'a.txt', Buffer.from('first')),
+      attachmentOf('dup-id', 'a.txt', Buffer.from('second!')),
+    ];
+    await expect(
+      placeRunnerAttachments({ root, managerId: 'mgr-x', attachments: batch }),
+    ).rejects.toBeInstanceOf(RunnerAttachmentRejectedError);
+    // 置く前に断る（半端な dir も残さない）。
+    expect(await readdir(root)).toEqual([]);
+  });
+
+  it('画像として渡す data は、受け取った文字列ではなく検めた中身から作った正規の base64 である', async () => {
+    const root = await makeTempDir('runner-att-');
+    const item = attachmentOf('img-1', 'p.png', PNG);
+    // Node の base64 復号は空白・改行・url-safe 文字を黙って許す。sha256 は復号後の中身で合ってしまう。
+    const wrapped = (item.data.match(/.{1,16}/g) ?? []).join('\n');
+    const placed = await placeRunnerAttachments({
+      root,
+      managerId: 'mgr-y',
+      attachments: [{ ...item, data: wrapped }],
+    });
+    expect(placed[0]?.image?.data).toBe(item.data);
+  });
+});
+
 describe('掃除', () => {
   it('removeManagerAttachments はその委譲の dir だけを消す', async () => {
     const root = await makeTempDir('runner-att-');

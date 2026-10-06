@@ -14,10 +14,9 @@
  * 6. **読めない行は「無い」と言わず、`UnreadableRowsNote` で断り、消すのは確認つき**（#3216）
  */
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { json, Providers, storeTestBaseUrl } from '~/test-support';
+import { json, Providers, TestDataRouter, storeTestBaseUrl } from '~/test-support';
 
 import Integrations from './integrations';
 
@@ -112,9 +111,9 @@ function stubKeys(options: { get?: Reply; post?: Reply; revoke?: Reply } = {}): 
 function renderScreen() {
   render(
     <Providers>
-      <MemoryRouter>
+      <TestDataRouter>
         <Integrations />
-      </MemoryRouter>
+      </TestDataRouter>
     </Providers>,
   );
 }
@@ -479,5 +478,37 @@ describe('/integrations 画面 — 読めない行（#3216）', () => {
     });
     // 読めた鍵は残っている。
     expect(screen.getByText('CI')).toBeTruthy();
+  });
+});
+
+describe('/integrations 画面 — 離れる前の確認（#3556）', () => {
+  function unload(): boolean {
+    const event = new Event('beforeunload', { cancelable: true });
+    window.dispatchEvent(event);
+    return event.defaultPrevented;
+  }
+
+  it('発行が成功して欄が空に戻ったら、確認しない。失敗して入力が残るあいだは確認する', async () => {
+    const stub = stubKeys({ post: { status: 500, body: { error: '壊れた' } } });
+    renderScreen();
+    await screen.findByText('CI');
+
+    fill('名前（見分けるための呼び名）', '新しい鍵');
+    fill('source', 'new.src');
+    fireEvent.click(screen.getByRole('button', { name: '発行する' }));
+    await waitFor(() => expect(stub.posts).toHaveLength(1));
+    await screen.findByText(/壊れた/);
+    expect(unload()).toBe(true);
+
+    stub.setPost({
+      status: 200,
+      body: {
+        key: view({ id: 'k-new', name: '新しい鍵', source: 'new.src' }),
+        value: SECRET_VALUE,
+      },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '発行する' }));
+    expect(await screen.findByText('発行した: 新しい鍵')).toBeTruthy();
+    await waitFor(() => expect(unload()).toBe(false));
   });
 });

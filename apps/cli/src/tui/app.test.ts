@@ -165,6 +165,21 @@ describe('画面の骨組み', () => {
     h.stdin.write(ENTER);
     await waitFor(() => h.frame().includes('承認待ちは無い。'));
   });
+
+  it('会話の入力欄に書きかけがあるとき、他の画面から / を打っても「/」で置き換えて消さない（#3488）', async () => {
+    const h = start();
+    await type(h.stdin, '書きかけ');
+    h.stdin.write(ESC);
+    await waitFor(() => h.frame().includes('1-5 画面'));
+    h.stdin.write('4');
+    await waitFor(() => h.frame().includes('日誌（絞り:'));
+    h.stdin.write('/');
+    await waitFor(() => h.frame().includes('メッセージ') || h.frame().includes('❯ '));
+    // 入力ゾーンへ戻っている。続けて打った文字が書きかけの末尾へ付く（キー順に処理されるので待ちは要らない）。
+    await type(h.stdin, '続き');
+    await waitFor(() => h.frame().includes('❯ 書きかけ続き'));
+    expect(h.frame()).not.toContain('❯ /');
+  });
 });
 
 describe('会話', () => {
@@ -341,6 +356,81 @@ describe('中断・履歴・終了', () => {
     await waitFor(() => h.frame().includes('ターンを止めた'));
     expect(h.api.interrupts).toBe(1);
     expect(h.exited()).toBe(false);
+  });
+
+  it('会話以外の画面の Ctrl+C は、結果を最下行にも出す（成功。#3489）', async () => {
+    const h = start();
+    h.stdin.write(ESC);
+    await waitFor(() => h.frame().includes('1-5 画面'));
+    h.stdin.write('4');
+    await waitFor(() => h.frame().includes('日誌（絞り:'));
+    h.stdin.write(CTRL_C);
+    await waitFor(() => h.frame().includes('ターンを止めた'));
+    expect(h.frame()).toContain('日誌（絞り:');
+    expect(h.frame()).toContain('ターンを止めた');
+    expect(h.api.interrupts).toBe(1);
+    expect(h.exited()).toBe(false);
+  });
+
+  it('会話以外の画面の Ctrl+C が失敗したら、失敗を最下行に出す（成功のように見せない。#3489）', async () => {
+    const h = start((api) => {
+      api.interruptFails = '止められませんでした（HTTP 500）';
+    });
+    h.stdin.write(ESC);
+    await waitFor(() => h.frame().includes('1-5 画面'));
+    h.stdin.write('5');
+    await waitFor(() => h.frame().includes('記憶（'));
+    expect(h.frame()).toContain('記憶（');
+    h.stdin.write(CTRL_C);
+    await waitFor(() => h.frame().includes('✗ 止められませんでした'));
+    expect(h.frame()).toContain('✗ 止められませんでした');
+    // 次のキーで消えて、キーヒントへ戻る。
+    h.stdin.write('r');
+    await waitFor(() => !h.frame().includes('✗ 止められませんでした'));
+    expect(h.frame()).not.toContain('✗ 止められませんでした');
+    expect(h.frame()).toContain('1-5 画面');
+  });
+
+  it('書きかけが在るとき、他の画面の Ctrl+D は 1 度目で案内を出し、2 度目で終了する（#3490）', async () => {
+    const h = start();
+    await type(h.stdin, '書きかけ');
+    h.stdin.write(ESC);
+    await waitFor(() => h.frame().includes('1-5 画面'));
+    h.stdin.write('4');
+    await waitFor(() => h.frame().includes('日誌（絞り:'));
+    h.stdin.write(CTRL_D);
+    await waitFor(() => h.frame().includes('もう一度 ^D'));
+    expect(h.exited()).toBe(false);
+    h.stdin.write(CTRL_D);
+    await waitFor(() => h.exited());
+    expect(h.exited()).toBe(true);
+  });
+
+  it('書きかけが在っても、間に別のキーを挟めば 1 度目からやり直す（#3490）', async () => {
+    const h = start();
+    await type(h.stdin, '書きかけ');
+    h.stdin.write(ESC);
+    await waitFor(() => h.frame().includes('1-5 画面'));
+    h.stdin.write('4');
+    await waitFor(() => h.frame().includes('日誌（絞り:'));
+    h.stdin.write(CTRL_D);
+    await waitFor(() => h.frame().includes('もう一度 ^D'));
+    h.stdin.write('r');
+    await waitFor(() => !h.frame().includes('もう一度 ^D'));
+    h.stdin.write(CTRL_D);
+    await waitFor(() => h.frame().includes('もう一度 ^D'));
+    expect(h.exited()).toBe(false);
+  });
+
+  it('入力欄に書きかけがあるときの Ctrl+D も、1 度目は案内だけで、2 度目で終了する（#3490）', async () => {
+    const h = start();
+    await type(h.stdin, 'ab');
+    h.stdin.write(CTRL_D);
+    await waitFor(() => h.frame().includes('もう一度 ^D'));
+    expect(h.exited()).toBe(false);
+    h.stdin.write(CTRL_D);
+    await waitFor(() => h.exited());
+    expect(h.exited()).toBe(true);
   });
 
   it('/conversations で履歴を選び、開き直した会話から続けて話せる', async () => {
@@ -733,6 +823,25 @@ describe('委譲（マネージャーの一覧と詳細）', () => {
     expect(h.frame()).toContain('生ログはまだ無い');
   });
 
+  it('委譲の書きかけが在るまま日誌へ移っても、Ctrl+D は 1 度目で案内を出し、2 度目で終了する（#3490）', async () => {
+    const h = start(managersFixture);
+    await openList(h);
+    h.stdin.write(ENTER);
+    await waitFor(() => h.frame().includes('Esc 一覧へ'));
+    h.stdin.write('i');
+    await type(h.stdin, '書きかけ');
+    h.stdin.write(ESC);
+    await waitFor(() => h.frame().includes('1-5 画面'));
+    h.stdin.write('4');
+    await waitFor(() => h.frame().includes('日誌（絞り:'));
+    h.stdin.write(CTRL_D);
+    await waitFor(() => h.frame().includes('もう一度 ^D'));
+    expect(h.exited()).toBe(false);
+    h.stdin.write(CTRL_D);
+    await waitFor(() => h.exited());
+    expect(h.exited()).toBe(true);
+  });
+
   it('詳細の入力欄に書きかけがあるときの Ctrl+D では終了しない', async () => {
     const h = start(managersFixture);
     await openList(h);
@@ -951,6 +1060,18 @@ describe('日誌（ライブで流れる一覧と全文）', () => {
     h.stdin.write(ENTER);
     await waitFor(() => h.frame().includes('type= に知らない値が入っています: bogus'));
     expect(h.api.journalListCalls).toHaveLength(1); // 撃っていない
+  });
+
+  it('初めて開く /journal の引数の誤りの断りは、読み込みの開始で消えず画面に出る（#3484）', async () => {
+    const h = start((api) => {
+      api.journalEntries = entries(2);
+    });
+    await type(h.stdin, '/journal type=bogus');
+    h.stdin.write(ENTER);
+    // 読み込みが済んでから（開く読み込みの開始が断りを消すかどうか）を見る。
+    await waitFor(() => h.frame().includes('発言2'));
+    expect(h.frame()).toContain('type= に知らない値が入っています: bogus');
+    expect(h.api.journalListCalls).toHaveLength(1); // 絞りの無い日誌が開く（断りだけが出る）
   });
 
   it('取れなかったのを空と描かない', async () => {
