@@ -460,6 +460,8 @@ wait_for_deploy() { # <Service名> [制限秒]
 
 # マネージャーへ降ろす環境変数を正本（デーモンの記憶ストア）へ置く
 # （`alteroid credential set` と同じ操作を `railway ssh` 越しに非対話で行う）。
+# **既に在る名前は置き換わる**（再実行・鍵の差し替え）。非対話（標準入力はパイプ）なので、
+# 上書きの確認（#3201）を `--yes` で省く。
 #
 # **値は引数で渡さない。** `railway ssh` の先の `alteroid credential set` が
 # argv から秘密を受け取らない設計なので（`apps/cli/src/credential.ts` の doc）、
@@ -469,5 +471,5 @@ wait_for_deploy() { # <Service名> [制限秒]
 # die しない — 呼ぶ側（setup.sh）が「置けなかった」を集めて、最後に手順として出す。
 set_credential() { # <APP_SERVICE> <名前> <値>
   local service="$1" name="$2" value="$3"
-  printf '%s' "$value" | railway ssh --service "$service" -- alteroid credential set "$name" >/dev/null 2>&1
+  printf '%s' "$value" | railway ssh --service "$service" -- alteroid credential set "$name" --yes >/dev/null 2>&1
 }

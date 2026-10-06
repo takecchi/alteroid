@@ -693,7 +693,8 @@ memoryCommand
   .addHelpText('after', HELP_EXAMPLES.memorySet)
   .description('ファイル（または標準入力）の内容で丸ごと置き換える')
   .option('-f, --file <path>', '読み込むファイル（省略か - で標準入力）')
-  .action(async (slug: string, options: { file?: string }) => {
+  .option('--yes', '確認を飛ばす（スクリプト・CI 向け。端末でなければ必須）')
+  .action(async (slug: string, options: { file?: string; yes?: boolean }) => {
     await memorySetCommand(slug, options);
   });
 
@@ -835,9 +836,12 @@ profileCommand
     '撒く先。all=共通(既定) / app=clone だけ / runner=manager だけ。' +
       '省略すると今の撒く先を引き継ぐ（置かれていなければ all）',
   )
-  .action(async (name: string | undefined, options: { file?: string; scope?: string }) => {
-    await profileSetCommand(name, options);
-  });
+  .option('--yes', '確認を飛ばす（スクリプト・CI 向け。端末でなければ必須）')
+  .action(
+    async (name: string | undefined, options: { file?: string; scope?: string; yes?: boolean }) => {
+      await profileSetCommand(name, options);
+    },
+  );
 
 profileCommand
   .command('rm <名前>')
@@ -942,6 +946,7 @@ credentialCommand
     '--no-secret',
     '値を非シークレット扱いにする（新規行にのみ効く。API/CLI/Web UI でそのまま見える）',
   )
+  .option('--yes', '確認を飛ばす（スクリプト・CI 向け。端末でなければ必須）')
   .addHelpText(
     'after',
     '\n値はコマンドライン引数では受け取りません（argv は同じ器の他のプロセスから' +
@@ -954,9 +959,14 @@ credentialCommand
       '\nCLAUDE_CODE_OAUTH_TOKEN はここへは置けません（正本はプールの側です）:\n' +
       '  alteroid token add --label <名前> -f <path>\n',
   )
-  .action(async (name: string, options: { file?: string; scope?: string; secret?: boolean }) => {
-    await credentialSetCommand(name, options);
-  });
+  .action(
+    async (
+      name: string,
+      options: { file?: string; scope?: string; secret?: boolean; yes?: boolean },
+    ) => {
+      await credentialSetCommand(name, options);
+    },
+  );
 
 credentialCommand
   .command('remove <名前>')

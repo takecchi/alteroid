@@ -406,7 +406,7 @@ ALTEROID_EXTRA_SETUP=export RUSTUP_HOME=/opt/rust/rustup CARGO_HOME=/opt/rust/ca
 
 ```sh
 printf '%s\n' 'export RUSTUP_HOME=/opt/rust/rustup' 'export PATH=/opt/rust/cargo/bin:$PATH' \
-  | alteroid profile set rust --scope runner
+  | alteroid profile set rust --scope runner --yes
 ```
 
 `set` は**その行の**全文置換である（他の行は変えない）。`--scope` を省くと既存の行の撒く先を保つ（新しい行なら `all`）。置いた行と撒く先は `alteroid profile list`、runner へ届いたかは `alteroid profile status` で確かめる。
@@ -575,7 +575,7 @@ railway ssh --service app
 
 alteroid credential list                              # 名前と指紋（値は出ない）
 printf %s 'github_pat_xxx' > /tmp/pat && alteroid credential set GH_TOKEN -f /tmp/pat && rm /tmp/pat
-alteroid credential set GIT_AUTHOR_NAME -f - <<< 'takecchi'
+alteroid credential set GIT_AUTHOR_NAME -f - --yes <<< 'takecchi'
 alteroid credential remove SOME_OLD_KEY --yes         # 外す（runner の器からも消える。railway ssh 越しは端末でないので確認を --yes で省く）
 ```
 

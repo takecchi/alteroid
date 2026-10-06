@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { makeTempDir } from '../../../vitest.tmpdir.js';
 
+import { type ConfirmIo } from './confirm.js';
 import { captureStdout, pretendTty } from './test-support.js';
 
 /**
@@ -81,15 +82,16 @@ describe('alteroid memory set', () => {
     const dir = await makeTempDir('alteroid-memory-test-');
     const path = join(dir, 'values.md');
     await writeFile(path, '# 価値観\n\n嘘をつかない。\n', 'utf8');
+    // 在るかを見る GET（無い記憶なので 404 = 新規作成。確認は出ない）、続いて PUT。
+    replies.push({ status: 404, body: { error: 'not found' } });
     replies.push({ status: 200, body: { document: { slug: 'values', content: 'x' } } });
 
     await memorySetCommand('values', { file: path });
 
-    expect(sent).toHaveLength(1);
-    expect(sent[0]?.method).toBe('PUT');
-    expect(sent[0]?.url).toBe('http://127.0.0.1:4517/memory/values');
+    expect(sent.map((entry) => entry.method)).toEqual(['GET', 'PUT']);
+    expect(sent[1]?.url).toBe('http://127.0.0.1:4517/memory/values');
     // **本文の形も見る。** `{ content }` は `memoryBody`（デーモン側）の形である。
-    expect(JSON.parse(sent[0]?.body ?? '{}')).toEqual({
+    expect(JSON.parse(sent[1]?.body ?? '{}')).toEqual({
       content: '# 価値観\n\n嘘をつかない。\n',
     });
     // どこに効くかを言う（言わないと、書けたのに反映を待つ人が出る）。
@@ -110,6 +112,7 @@ describe('alteroid memory set', () => {
     const dir = await makeTempDir('alteroid-memory-test-');
     const path = join(dir, 'x.md');
     await writeFile(path, 'なにか', 'utf8');
+    replies.push({ status: 404, body: { error: 'not found' } });
     replies.push({ status: 400, body: { error: '記憶のスラッグが不正' } });
 
     const error = await memorySetCommand('..', { file: path }).catch((e: unknown) => e);
@@ -292,6 +295,7 @@ describe('#1641 の再現（Issue 本文）', () => {
     const dir = await makeTempDir('alteroid-memory-test-');
     const path = join(dir, 'x.md');
     await writeFile(path, 'なにか', 'utf8');
+    replies.push({ status: 404, body: { error: 'not found' } });
     replies.push({ status: 500, body: { error: '内部エラー' } });
 
     // デーモンが返した理由も添える（状態コードだけを見せない）。
@@ -302,6 +306,7 @@ describe('#1641 の再現（Issue 本文）', () => {
     const dir = await makeTempDir('alteroid-memory-test-');
     const path = join(dir, 'x.md');
     await writeFile(path, 'なにか', 'utf8');
+    replies.push({ status: 404, body: { error: 'not found' } });
     replies.push({ status: 401, body: {} });
 
     const error = await memorySetCommand('some-slug', { file: path }).catch((e: unknown) => e);
@@ -700,5 +705,90 @@ describe('alteroid memory remove の確認（#3141）', () => {
       restore();
     }
     expect(sent.some((entry) => entry.method === 'DELETE')).toBe(false);
+  });
+});
+
+describe('alteroid memory set の上書き確認（#3201）', () => {
+  function fakeIo(over: { isTTY: boolean; answer?: string }) {
+    const asked: string[] = [];
+    const written: string[] = [];
+    const io: ConfirmIo = {
+      isTTY: over.isTTY,
+      write: (text) => {
+        written.push(text);
+      },
+      ask: (question) => {
+        asked.push(question);
+        return Promise.resolve(over.answer ?? '');
+      },
+    };
+    return { io, asked, written };
+  }
+
+  async function bodyFile(): Promise<string> {
+    const dir = await makeTempDir('alteroid-memory-test-');
+    const path = join(dir, 'values.md');
+    await writeFile(path, '新しい本文\n', 'utf8');
+    return path;
+  }
+
+  const existing = { status: 200, body: { document: { slug: 'values', content: '古い本文' } } };
+  const methods = () => sent.map((entry) => entry.method);
+
+  it('新規作成（無い記憶）は確認せずに置く（非対話でも）', async () => {
+    captureStdout();
+    const file = await bodyFile();
+    replies.push({ status: 404, body: { error: 'not found' } });
+    const { io, asked } = fakeIo({ isTTY: false });
+
+    await memorySetCommand('values', { file }, io);
+
+    expect(asked).toEqual([]);
+    expect(methods()).toEqual(['GET', 'PUT']);
+  });
+
+  it('既に在るとき、非対話で --yes が無ければ PUT せずに断る（何も変えない）', async () => {
+    const file = await bodyFile();
+    replies.push(existing);
+    const { io } = fakeIo({ isTTY: false, answer: 'yes' });
+
+    await expect(memorySetCommand('values', { file }, io)).rejects.toThrow('--yes');
+
+    expect(methods()).toEqual(['GET']);
+  });
+
+  it('端末で yes と答えれば置き換える。確認の文は slug と、前の本文が残らないことを言う', async () => {
+    captureStdout();
+    const file = await bodyFile();
+    replies.push(existing);
+    const { io, written } = fakeIo({ isTTY: true, answer: 'yes' });
+
+    await memorySetCommand('values', { file }, io);
+
+    expect(written.join('')).toContain('記憶 values を置き換えます。前の本文は残りません');
+    expect(methods()).toEqual(['GET', 'PUT']);
+  });
+
+  it('端末で yes 以外なら置かない', async () => {
+    captureStdout();
+    const file = await bodyFile();
+    replies.push(existing);
+    const { io } = fakeIo({ isTTY: true, answer: 'no' });
+
+    await memorySetCommand('values', { file }, io);
+
+    expect(methods()).toEqual(['GET']);
+  });
+
+  it('--yes なら聞かずに置き換える（非対話でも）', async () => {
+    captureStdout();
+    const file = await bodyFile();
+    replies.push(existing);
+    const { io, asked } = fakeIo({ isTTY: false });
+
+    await memorySetCommand('values', { file, yes: true }, io);
+
+    expect(asked).toEqual([]);
+    expect(methods()).toEqual(['GET', 'PUT']);
   });
 });

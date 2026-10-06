@@ -6,7 +6,7 @@ import { stdin, stdout } from 'node:process';
 import { createClient, type DaemonClient } from './client.js';
 import { formatElapsedAgo, withErrorReason } from './format.js';
 import { describeAuthFailure, resolveTarget, type Target } from './target.js';
-import { confirmIrreversible } from './confirm.js';
+import { confirmIrreversible, type ConfirmIo } from './confirm.js';
 import { openEditor, readInputFile } from './input-errors.js';
 
 /**
@@ -350,13 +350,32 @@ export async function memoryEditCommand(slug: string): Promise<void> {
   }
 }
 
-/** ファイル（または標準入力）の内容で丸ごと置き換える。 */
+/**
+ * ファイル（または標準入力）の内容で丸ごと置き換える。
+ *
+ * **既に在る記憶を置き換えるときだけ確認する（Issue #3201。`confirm.ts`）。** 新しく置くときは
+ * そのまま実行する。在るかは `readDoc`（`GET /memory/:slug`。`memory edit` / `remove` と同じ
+ * 読み出し）を1回だけ打って決める。記憶には版の履歴が無く（`PUT` は後勝ち）、置き換えると
+ * 前の本文は残らない。
+ *
+ * **確認は入力を読む前に出す。** 標準入力から本文を読むと端末の入力を使い切ってしまい、その後の
+ * `yes` を聞けない。
+ */
 export async function memorySetCommand(
   slug: string,
-  options: { file?: string } = {},
+  options: { file?: string; yes?: boolean } = {},
+  io?: ConfirmIo,
 ): Promise<void> {
   const conn = await connect('write');
   if (conn === null) return;
+  if ((await readDoc(conn.client, conn.target, slug)) !== null) {
+    const confirmed = await confirmIrreversible(
+      `記憶 ${slug} を置き換えます。前の本文は残りません（控えるなら alteroid memory show ${slug}）。`,
+      options,
+      io,
+    );
+    if (!confirmed) return;
+  }
   const content =
     options.file === undefined || options.file === '-'
       ? await readAll()
