@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
-import { useBlocker, useNavigate } from 'react-router';
+import { useState } from 'react';
+import { useNavigate } from 'react-router';
 
 import {
   DocumentTitle,
@@ -18,6 +18,7 @@ import {
 } from '@alteroid/swr';
 import { formatCreatedAt, formatDateTime } from '@alteroid/logic';
 
+import { LeaveGuardScope, useReleaseLeaveGuard, useReportDirty } from '~/lib/leave-guard';
 import { useLatest } from '~/lib/use-latest';
 
 import type { Route } from './+types/memory-detail';
@@ -34,7 +35,11 @@ export function clientLoader({ params }: Route.ClientLoaderArgs) {
  * 選んだときだけ移り、作り直される）。
  */
 export default function MemoryDetail({ loaderData }: Route.ComponentProps) {
-  return <MemoryDetailBody key={loaderData.slug} slug={loaderData.slug} />;
+  return (
+    <LeaveGuardScope key={loaderData.slug}>
+      <MemoryDetailBody slug={loaderData.slug} />
+    </LeaveGuardScope>
+  );
 }
 
 function MemoryDetailBody({ slug }: { slug: string }) {
@@ -167,18 +172,8 @@ function MemoryDetailBody({ slug }: { slug: string }) {
    * **未保存の変更があるまま離れない（#2764）。** アプリ内の移動（リンク・戻る）は確認を挟み、
    * タブを閉じる・再読み込みはブラウザの警告に任せる。削除が通った後の移動は止めない。
    */
-  const leaving = useRef(false);
-  const blocker = useBlocker(() => dirty && !leaving.current);
-  useEffect(() => {
-    if (!dirty) return;
-    const warn = (event: BeforeUnloadEvent) => {
-      event.preventDefault();
-      // 古いブラウザは returnValue を入れないと出さない。
-      event.returnValue = '';
-    };
-    window.addEventListener('beforeunload', warn);
-    return () => window.removeEventListener('beforeunload', warn);
-  }, [dirty]);
+  const releaseLeaveGuard = useReleaseLeaveGuard();
+  useReportDirty('draft', dirty);
 
   const description =
     savedAt !== undefined
@@ -232,7 +227,7 @@ function MemoryDetailBody({ slug }: { slug: string }) {
                   // 読んだ版を送る（#2916）。衝突のあとに開き直したときは、見せたいまの版を送る。
                   deleteMemory(slug, deleteConflict?.current?.version ?? data.version)
                     .then(() => {
-                      leaving.current = true;
+                      releaseLeaveGuard();
                       navigate('/memory');
                     })
                     .catch((caught: unknown) => {
@@ -328,19 +323,6 @@ function MemoryDetailBody({ slug }: { slug: string }) {
           </div>
         </div>
       )}
-      <ConfirmDialog
-        open={blocker.state === 'blocked'}
-        onOpenChange={(open) => {
-          if (!open && blocker.state === 'blocked') blocker.reset();
-        }}
-        title="保存していない変更があります"
-        description="このまま離れると、書きかけの内容は失われます。"
-        confirmLabel="破棄して離れる"
-        destructive
-        onConfirm={() => {
-          if (blocker.state === 'blocked') blocker.proceed();
-        }}
-      />
 
       {isLoading && !missing ? (
         <Spinner />

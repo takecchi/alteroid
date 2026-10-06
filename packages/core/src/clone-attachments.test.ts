@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { setup, waitForDone } from './clone-test-harness.js';
 import { createCloneTools } from './tools.js';
@@ -128,5 +128,34 @@ describe('発言の添付', () => {
     expect(text).toContain('[添付 1件]');
     expect(text).toContain(`id=${png.id} name=shot.png type=image/png size=${png.size}`);
     expect(text).not.toContain(PNG_BASE64);
+  });
+});
+
+describe('発言の添付: ターンの画像の枚数の上限（#3696）', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('環境変数の上限を超えた分は image にならず、通知行が理由と開け方を言う（添付の順）', async () => {
+    vi.stubEnv('ALTEROID_ATTACHMENT_MAX_TURN_IMAGES', '2');
+    const s = setup(() => '見た');
+    const refs: AttachmentRef[] = [];
+    for (let i = 0; i < 3; i += 1) {
+      refs.push(await put(s.stores, `p${i}.png`, 'image/png', Uint8Array.from([...PNG, i])));
+    }
+    s.clone.post(withAttachments('3枚', refs));
+    await waitForDone(s.events);
+
+    const call = s.calls.find((c) => c.kind === 'session');
+    const blocks = call?.inputBlocks?.[0] as { type: string }[];
+    expect(blocks.filter((block) => block.type === 'image')).toHaveLength(2);
+    const lines = (call?.inputs[0] ?? '').split('\n').filter((l) => l.startsWith('[添付]'));
+    expect(lines).toHaveLength(3);
+    expect(lines[0]).toContain('name=p0.png');
+    expect(lines[0]).toContain('（画像として渡した）');
+    expect(lines[2]).toContain('name=p2.png');
+    expect(lines[2]).toContain(
+      '（このターンの画像は上限（2 枚）までで、これは超えた分なので画像としては渡していない。attachment_fetch で取り出して Read で開ける）',
+    );
   });
 });

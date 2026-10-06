@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { setup, waitFor } from './clone-test-harness.js';
 import type { FakeCall } from './clone-test-harness.js';
@@ -169,6 +169,38 @@ describe('外部イベントの添付 — 束ね読みで黙って落とさな�
     expect(merged).toContain('**3 件**');
     expect(merged.split(`[添付] id=${a.id}`).length - 1).toBe(1);
     expect(imagesOf(call)).toEqual([b64(PNG_A)]);
+    await s.clone.stop();
+  }, 15_000);
+});
+
+describe('外部イベントの添付 — ターンの画像の枚数の上限（#3696）', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('環境変数の上限を超えた分は image にならず、通知行が理由と開け方を言う', async () => {
+    vi.stubEnv('ALTEROID_ATTACHMENT_MAX_TURN_IMAGES', '2');
+    const s = setup(() => 'ok');
+    s.clone.post(humanMessage('先客'));
+    await waitFor(() => (s.calls[0]?.inputs.length ?? 0) === 1, '先客のターンが投げられる');
+    const refs: AttachmentRef[] = [];
+    for (let i = 0; i < 3; i += 1) {
+      refs.push(await put(s.stores, `p${i}.png`, 'image/png', Uint8Array.from([...PNG_A, i])));
+    }
+    s.clone.post(external('e1', refs));
+    await waitFor(
+      () => (s.calls[0]?.inputs ?? []).some((input) => input.includes('外部から出来事')),
+      '外部イベントのターンが投げられる',
+    );
+    const call = s.calls[0] as FakeCall;
+    expect(imagesOf(call)).toHaveLength(2);
+    const input = call.inputs.find((i) => i.includes('外部から出来事')) ?? '';
+    const lines = input.split('\n').filter((l) => l.startsWith('[添付]'));
+    expect(lines).toHaveLength(3);
+    expect(lines[2]).toContain('name=p2.png');
+    expect(lines[2]).toContain(
+      '（このターンの画像は上限（2 枚）までで、これは超えた分なので画像としては渡していない。attachment_fetch で取り出して Read で開ける）',
+    );
     await s.clone.stop();
   }, 15_000);
 });
