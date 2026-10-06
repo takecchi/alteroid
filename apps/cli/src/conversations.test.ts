@@ -87,7 +87,7 @@ describe('alteroid conversations list', () => {
 
     await conversationsListCommand();
 
-    expect(sent).toHaveLength(1);
+    expect(sent).toHaveLength(2);
     expect(sent[0]?.method).toBe('GET');
     // `query` は常に渡す（型が要求する）。中身が空なら `hono/client`（4.13.5 以降。
     // `appendQueryParams` が空の searchParams のときは `?` を付けない）はクエリ無しの
@@ -238,7 +238,7 @@ describe('alteroid conversations list', () => {
 
     await conversationsListCommand({ limit: '5', scan: '9000' });
 
-    expect(sent).toHaveLength(1);
+    expect(sent).toHaveLength(2);
     const url = new URL(sent[0]?.url ?? '');
     expect(url.searchParams.get('limit')).toBe('5');
     expect(url.searchParams.get('scan')).toBe('9000');
@@ -331,6 +331,104 @@ describe('alteroid conversations list の未読', () => {
     const lines = read().split('\n');
     expect(lines.find((l) => l.includes('conv-unread'))).toContain('未読 2');
     expect(lines.find((l) => l.includes('conv-read'))).not.toContain('未読');
+  });
+});
+
+describe('alteroid conversations list の未読の総数', () => {
+  const emptyList = {
+    status: 200,
+    body: { conversations: [], scanned: 0, reachedStart: true, hiddenByLimit: 0 },
+  };
+
+  it('GET /conversations/unread-count の数を「未読のある会話 N 件」で出す（一覧の外の分も含む総数）', async () => {
+    const read = captureStdout();
+    replies.push(emptyList, { status: 200, body: { count: 7, capped: false } });
+    await conversationsListCommand();
+    expect(sent.map((s) => s.url)).toEqual([
+      'http://127.0.0.1:4517/conversations',
+      'http://127.0.0.1:4517/conversations/unread-count',
+    ]);
+    expect(read()).toContain('未読のある会話 7 件');
+    expect(read()).not.toContain('取れませんでした');
+  });
+
+  it('0件でも 0 と言う（取れなかった場合と区別できる）', async () => {
+    const read = captureStdout();
+    replies.push(emptyList, { status: 200, body: { count: 0, capped: false } });
+    await conversationsListCommand();
+    expect(read()).toContain('未読のある会話 0 件');
+  });
+
+  it('capped のときは下限として「N 件以上」と言う（Web の「N+」と同じ意味）', async () => {
+    const read = captureStdout();
+    replies.push(emptyList, { status: 200, body: { count: 99, capped: true } });
+    await conversationsListCommand();
+    expect(read()).toContain('未読のある会話 99 件以上');
+  });
+
+  it('総数が 500 でも一覧は出し、取れなかったと1行で言う（例外にしない）', async () => {
+    const read = captureStdout();
+    replies.push(
+      {
+        status: 200,
+        body: {
+          conversations: [
+            {
+              conversationId: 'conv-1',
+              startedAt: '2026-08-16T10:00:00.000Z',
+              updatedAt: '2026-08-16T10:05:00.000Z',
+              messages: 3,
+              preview: '設計の相談',
+            },
+          ],
+          scanned: 5,
+          reachedStart: true,
+          hiddenByLimit: 0,
+        },
+      },
+      { status: 500, body: { error: 'boom' } },
+    );
+    await conversationsListCommand();
+    const text = read();
+    expect(text).toContain('conv-1');
+    expect(text).toContain('未読のある会話の総数は取れませんでした（HTTP 500）');
+    expect(text).not.toMatch(/未読のある会話 \d+ 件/);
+  });
+
+  it('古いデーモン（404）でも一覧は出し、口が無いと1行で言う', async () => {
+    const read = captureStdout();
+    replies.push(emptyList, { status: 404, body: { error: 'not found' } });
+    await conversationsListCommand();
+    const text = read();
+    expect(text).toContain('会話はまだありません');
+    expect(text).toContain('未読のある会話の総数は取れませんでした');
+    expect(text).toContain('古い版');
+  });
+
+  it('通信が途切れて総数だけ失敗しても、一覧は出す', async () => {
+    const read = captureStdout();
+    replies.push(emptyList);
+    const realFetch = globalThis.fetch;
+    let calls = 0;
+    globalThis.fetch = ((...args: Parameters<typeof fetch>) => {
+      calls += 1;
+      return calls === 1 ? realFetch(...args) : Promise.reject(new Error('socket hang up'));
+    }) as typeof fetch;
+    await conversationsListCommand();
+    const text = read();
+    expect(text).toContain('会話はまだありません');
+    expect(text).toContain('取れませんでした（socket hang up）');
+  });
+
+  it('既読の記録が読めない・形が違う応答は、0 件と言わず読めていないと言う', async () => {
+    const read = captureStdout();
+    replies.push(emptyList, {
+      status: 200,
+      body: { count: 0, capped: false, readStateUnreadable: '読めない' },
+    });
+    await conversationsListCommand();
+    expect(read()).toContain('取れませんでした');
+    expect(read()).not.toContain('未読のある会話 0 件');
   });
 });
 

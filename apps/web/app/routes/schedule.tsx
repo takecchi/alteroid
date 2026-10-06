@@ -1,7 +1,7 @@
 import { ScheduleTabs } from '~/components/group-tabs';
 import { LoadError } from '~/components/load-error';
 import { AlertTriangle } from 'lucide-react';
-import { useId, useState } from 'react';
+import { useId, useRef, useState } from 'react';
 import { Tabs } from 'radix-ui';
 
 import {
@@ -92,7 +92,13 @@ export default function Schedule() {
   const { data, error, isLoading, isValidating, mutate } = useSchedule();
   const runSchedule = useRunSchedule();
   const removeSchedule = useRemoveSchedule();
-  const [running, setRunning] = useState<string | undefined>(undefined);
+  // 「今すぐ回す」を送っている最中の kind。`running`（state）は描き直された後にしか効かないので、
+  // 同じ描画の間に届く2回目のクリックは `runningRef` が同期的に弾く（#3079）。応答が返るまで
+  // （成功・失敗とも）その kind のボタンだけを押せなくする。時間では止めない。
+  const runningRef = useRef<Set<string>>(new Set());
+  const [running, setRunning] = useState<ReadonlySet<string>>(new Set());
+  // 「今すぐ回す」を起こせた行（issue #3075）。押した行だけ。次の操作（別の行・同じ行の再押下・失敗）で消す。
+  const [ran, setRan] = useState<string | undefined>(undefined);
   const [removing, setRemoving] = useState<string | undefined>(undefined);
   const [confirmingRemove, setConfirmingRemove] = useState<string | undefined>(undefined);
   const [editing, setEditing] = useState<string | undefined>(undefined);
@@ -216,17 +222,31 @@ export default function Schedule() {
                 </div>
                 <Button
                   size="sm"
-                  loading={running === entry.kind}
+                  loading={running.has(entry.kind)}
                   onClick={() => {
-                    setRunning(entry.kind);
+                    if (runningRef.current.has(entry.kind)) return;
+                    runningRef.current.add(entry.kind);
+                    setRunning(new Set(runningRef.current));
+                    setRan(undefined);
                     setFailure(undefined);
                     runSchedule(entry.kind)
+                      // デーモンは `scheduler.run` が真なら `{ ok: true }` を返すだけで、ターンの結果は
+                      // 待たない。だから「起こした」までしか言わない（「終わった」とは書かない）。
+                      .then(() => setRan(entry.kind))
                       .catch(setFailure)
-                      .finally(() => setRunning(undefined));
+                      .finally(() => {
+                        runningRef.current.delete(entry.kind);
+                        setRunning(new Set(runningRef.current));
+                      });
                   }}
                 >
                   今すぐ回す
                 </Button>
+                {ran === entry.kind && (
+                  <span role="status" className="shrink-0 text-[11px] text-muted-foreground">
+                    起こした（結果は待っていない）
+                  </span>
+                )}
                 {/*
                   **既定の仕込みには外すボタンを出さない。** デーモンが名前を
                   守っている（`RESERVED_SCHEDULE_KINDS`）ので押しても断られる。

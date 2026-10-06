@@ -807,6 +807,7 @@ function ManagersList({
     olderStatus,
     isLoadingOlder,
     olderError,
+    olderRefreshError,
     loadOlder,
     reload,
     isReloading,
@@ -960,6 +961,19 @@ function ManagersList({
         状態が「全部読み終えた」と同じ顔で出る
         （`use-managers-window.ts` の `ManagersOlderStatus` の doc）。
       */}
+      {/*
+        **読み足した頁の取り直しの失敗は、古い行を残したまま言う**（issue #3092。画面を奪わない）。
+        先頭の頁は新しいので、これが無いと止まった行が今の値に見える。先頭の頁の失敗は上の
+        `LoadError` が言うので、二重には出さない。
+      */}
+      {!isLoadingInitial &&
+        managers.length > 0 &&
+        olderRefreshError !== undefined &&
+        error === undefined && (
+          <p role="status" className="mx-3 mb-2 text-xs text-warn">
+            「もっと見る」で読み足した行を最新に取り直せなかった。先頭の頁より後ろの行は、前に読めたときのもの。
+          </p>
+        )}
       {!isLoadingInitial && managers.length > 0 && (
         <div className="p-3">
           {olderStatus === 'progress' && (

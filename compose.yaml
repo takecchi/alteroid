@@ -215,6 +215,13 @@ x-shared-env: &shared-env
   # 加えておらず、直すには器を焼き直す必要がある（issue #698 の実装時点の
   # 判断。理由は PR 本文）。
   ALTEROID_ARCHIVE_FOLD_EVERY: ${ALTEROID_ARCHIVE_FOLD_EVERY:-}
+  # 添付ファイルの上限と掃除（#3111 段1a。`packages/core/src/attachment.ts`・`apps/daemon/src/attachment-prune.ts`）。
+  ALTEROID_ATTACHMENT_MAX_IMAGE_BYTES: ${ALTEROID_ATTACHMENT_MAX_IMAGE_BYTES:-}
+  ALTEROID_ATTACHMENT_MAX_FILE_BYTES: ${ALTEROID_ATTACHMENT_MAX_FILE_BYTES:-}
+  ALTEROID_ATTACHMENT_MAX_PER_MESSAGE: ${ALTEROID_ATTACHMENT_MAX_PER_MESSAGE:-}
+  ALTEROID_ATTACHMENT_MAX_TOTAL_BYTES: ${ALTEROID_ATTACHMENT_MAX_TOTAL_BYTES:-}
+  ALTEROID_ATTACHMENT_RETENTION_DAYS: ${ALTEROID_ATTACHMENT_RETENTION_DAYS:-}
+  ALTEROID_ATTACHMENT_PRUNE_EVERY: ${ALTEROID_ATTACHMENT_PRUNE_EVERY:-}
   TZ: ${TZ:-Asia/Tokyo}
   # 入口の認証（誰がこの HTTP API を叩いてよいか）。**人間が置くのはここ1か所**で、
   # **走っている runner には残らない** — `docker/alteroid-runner` が `exec` の前に

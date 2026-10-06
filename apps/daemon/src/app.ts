@@ -154,6 +154,13 @@ import {
   type RemoveUnreadableRowsOptions,
   type RemoveUnreadableRowsResult,
 } from '@alteroid/core';
+import {
+  AttachmentRejectedError,
+  readAttachmentLimits,
+  validateAttachmentBatch,
+  type AttachmentLimits,
+  type AttachmentRef,
+} from '@alteroid/core';
 
 import { bearerOf, isOperator, type AuthPlan, type AuthVariables, type Principal } from './auth.js';
 import { createFixedWindowRateLimiter, judgeIntegrationRoute } from './integration-gate.js';
@@ -180,6 +187,8 @@ import {
   archiveRemovedResponseSchema,
   archiveRemoveResponseSchema,
   archiveSessionsResponseSchema,
+  attachmentErrorResponseSchema,
+  attachmentMetaSchema,
   authProvidersResponseSchema,
   commitmentListResponseSchema,
   progressResponseSchema,
@@ -309,6 +318,11 @@ export interface AppDeps {
    * 本番は渡さない（Issue #2268）。
    */
   now?: () => Date;
+  /**
+   * 添付の上限（Issue #3111）。省略すれば `readAttachmentLimits()`（環境変数。ストアが読むものと同じ）。
+   * `POST /attachments` の本文の上限（1つぶんの最大値）と、`POST /chat` の個数・合計の検査に使う。
+   */
+  attachmentLimits?: AttachmentLimits;
   /** 時間起点のジョブ。テストの HTTP 層検証では省略できる。 */
   scheduler?: Scheduler;
   /**
@@ -497,6 +511,66 @@ const chatBody = z.object({
   text: z.string().min(1),
   conversationId: z.string().min(1).optional(),
   supersedes: z.string().min(1).optional(),
+  /**
+   * 発言に結び付ける添付の id（`POST /attachments` が返した id。Issue #3111）。形だけをここで見る。
+   * 個数・合計・存在・別の会話への結び付きの検査は、ハンドラが持つ（上限は環境変数で変わるので、
+   * spec に固定の `maxItems` を書かない）。
+   */
+  attachments: z.array(z.string().min(1)).optional(),
+});
+
+/**
+ * 添付のアップロードのクエリ（`POST /attachments`）。本文は生のバイト列なので、名前と MIME はここで運ぶ。
+ * `type` は MIME の形（`type/subtype`）だけを見る。マジックバイトの照合は `AttachmentStore.put` が持つ。
+ */
+const attachmentUploadQuery = z.object({
+  name: z.string().optional(),
+  type: z.string().regex(/^[\w!#$&^.+-]+\/[\w!#$&^.+-]+(\s*;.*)?$/, 'MIME の形ではない'),
+});
+
+/**
+ * 添付の中身を返すときの `content-type` に使ってよい形。宣言された MIME は人間が決めた文字列なので、
+ * ヘッダに入れて壊れない形でなければ `application/octet-stream` に倒す。
+ */
+const SAFE_MEDIA_TYPE = /^[\w!#$&^.+-]+\/[\w!#$&^.+-]+$/;
+
+/**
+ * `content-disposition: attachment` の値。ファイル名は RFC 5987（`filename*=UTF-8''…`）で符号化し、
+ * 古いクライアント向けに ASCII だけの `filename` を並べる。
+ */
+function attachmentDisposition(name: string): string {
+  const fallback = name.replace(/[^\x20-\x7e]|["\\%]/g, '_');
+  const encoded = encodeURIComponent(name).replace(
+    /['()*]/g,
+    (ch) => `%${ch.charCodeAt(0).toString(16).toUpperCase()}`,
+  );
+  return `attachment; filename="${fallback}"; filename*=UTF-8''${encoded}`;
+}
+
+/**
+ * 添付を上げた主体の識別子（`AttachmentMeta.uploadedBy`）。持ち主（operator）は `operator`、
+ * アカウントは `account:<id>`、連携の鍵は `integration:<keyId>`。トークンや資格そのものは入れない。
+ */
+function uploaderOf(principal: Principal): string {
+  if (principal.kind === 'operator') return 'operator';
+  if (principal.kind === 'integration') return `integration:${principal.keyId}`;
+  return `account:${principal.account.id}`;
+}
+
+/**
+ * `POST /attachments` の門番。**本文の content-type は `application/octet-stream` だけを受ける。**
+ *
+ * `deliberateClient` と同じ考え方である：`application/octet-stream` は CORS の単純リクエストの
+ * content-type（`text/plain` / `multipart/form-data` / `application/x-www-form-urlencoded`）に入らないので、
+ * ブラウザは必ず preflight を通す。CORS ヘッダを返さない（または列挙したオリジンだけに返す）この
+ * デーモンでは、人間が開いた任意のページが `no-cors` の fetch や HTML form で添付を預けられない。
+ * 本文に `multipart` を受けない理由も同じ（form から飛ばせてしまう）。
+ */
+const octetStreamClient = createMiddleware(async (c, next) => {
+  if (mimeEssence(c.req.header('content-type')) !== 'application/octet-stream') {
+    return c.json({ error: 'content-type: application/octet-stream が要る' as const }, 415);
+  }
+  await next();
 });
 
 /**
@@ -1988,6 +2062,9 @@ async function probe(
 export function createApp(deps: AppDeps) {
   const { clone, stores } = deps;
   const sseHeartbeatMs = deps.sseHeartbeatMs ?? DEFAULT_SSE_HEARTBEAT_MS;
+  const attachmentLimits = deps.attachmentLimits ?? readAttachmentLimits().limits;
+  /** `POST /attachments` の本文の上限。1つぶんの最大値（画像と、それ以外のファイルの大きいほう）。 */
+  const attachmentBodyMax = Math.max(attachmentLimits.maxImageBytes, attachmentLimits.maxFileBytes);
 
   // --- 稼働の地図 ---------------------------------------------------------
   // 線の活動は日誌の追記から数える。**日誌の流れが配線されていなければ線は空のまま**
@@ -2542,6 +2619,144 @@ export function createApp(deps: AppDeps) {
       (c) => c.json(statusResponseSchema.parse({ storage: deps.storage ?? '' })),
     )
 
+    // --- 添付（Issue #3111 段1b） -------------------------------------------
+    .post(
+      '/attachments',
+      describeRoute({
+        tags: ['attachments'],
+        summary: '添付を預かる（生のバイト列）',
+        description:
+          '本文は**生のバイト列**で、名前と MIME はクエリ（`name` / `type`）で運ぶ。' +
+          '**`content-type` は `application/octet-stream` だけを受ける**（それ以外は 415）——' +
+          'CORS の単純リクエストにさせず、ブラウザが必ず preflight を通すため（`deliberateClient` と同じ考え）。' +
+          '認証は他の経路と同じ。本文の上限は添付1つぶんの最大値（超えたら 413）。画像（png / jpeg / webp / gif）は' +
+          '宣言と中身の先頭が一致しなければ 400。返った `id` を `POST /chat` の `attachments` に渡すと発言へ結び付く。' +
+          '結び付けないまま 1 時間たったものは掃除される。',
+        requestBody: {
+          required: true,
+          description: '添付の中身（生のバイト列）。',
+          content: {
+            'application/octet-stream': { schema: { type: 'string', format: 'binary' } },
+          },
+        },
+        responses: {
+          200: {
+            description: '預かった。控え（中身を含まない）を返す。',
+            content: { 'application/json': { schema: resolver(attachmentMetaSchema) } },
+          },
+          400: {
+            description:
+              'クエリが不正、または受け付けない中身（`code`: `magic_mismatch` / `media_type_missing`）。',
+            content: { 'application/json': { schema: resolver(attachmentErrorResponseSchema) } },
+          },
+          413: {
+            description: '大きすぎる（`code`: `too_large`）。',
+            content: { 'application/json': { schema: resolver(attachmentErrorResponseSchema) } },
+          },
+          415: {
+            description: 'content-type が application/octet-stream ではない。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+        },
+      }),
+      octetStreamClient,
+      bodyLimit({
+        maxSize: attachmentBodyMax,
+        onError: (c) =>
+          c.json(
+            {
+              error: `添付は 1 つ ${attachmentBodyMax} バイトまで`,
+              code: 'too_large' as const,
+            },
+            413,
+          ),
+      }),
+      queryParams(attachmentUploadQuery),
+      async (c) => {
+        const { name, type } = c.req.valid('query');
+        const bytes = new Uint8Array(await c.req.arrayBuffer());
+        try {
+          const meta = await stores.attachments.put({
+            name: name ?? '',
+            mediaType: type,
+            bytes,
+            // 誰が上げたか（識別子だけ）。門番（`authenticate`）が `c` に載せた principal から作る。
+            uploadedBy: uploaderOf(c.get('principal')),
+          });
+          return c.json(meta, 200);
+        } catch (error) {
+          if (error instanceof AttachmentRejectedError) {
+            return c.json(
+              { error: reasonOf(error), code: error.code },
+              error.code === 'too_large' ? 413 : 400,
+            );
+          }
+          throw error;
+        }
+      },
+    )
+
+    .get(
+      '/attachments/:id/meta',
+      describeRoute({
+        tags: ['attachments'],
+        summary: '添付の控え（メタデータだけ）',
+        description: '中身を読まずに、名前・MIME・大きさ・sha256・結び付き・期限を返す。',
+        responses: {
+          200: {
+            description: '控え。',
+            content: { 'application/json': { schema: resolver(attachmentMetaSchema) } },
+          },
+          404: {
+            description: '無い（消えた・期限切れ）。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+        },
+      }),
+      async (c) => {
+        const meta = await stores.attachments.getMeta(c.req.param('id'));
+        if (meta === undefined) return c.json({ error: 'not found' as const }, 404);
+        return c.json(meta);
+      },
+    )
+
+    .get(
+      '/attachments/:id',
+      describeRoute({
+        tags: ['attachments'],
+        summary: '添付の中身を返す',
+        description:
+          '預かった中身をそのまま返す。`content-type` は控えの MIME。**`content-disposition: attachment`**' +
+          '（ファイル名は RFC 5987）と **`x-content-type-options: nosniff`** を付ける——人間が上げた中身を' +
+          'ブラウザがこのオリジンの文書として開かないため。',
+        responses: {
+          200: {
+            description: '中身。',
+            content: {
+              'application/octet-stream': { schema: { type: 'string', format: 'binary' } },
+            },
+          },
+          404: {
+            description: '無い（消えた・期限切れ）。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+        },
+      }),
+      async (c) => {
+        const found = await stores.attachments.get(c.req.param('id'));
+        if (found === undefined) return c.json({ error: 'not found' as const }, 404);
+        const { meta, bytes } = found;
+        return c.body(bytes as Uint8Array<ArrayBuffer>, 200, {
+          'content-type': SAFE_MEDIA_TYPE.test(meta.mediaType)
+            ? meta.mediaType
+            : 'application/octet-stream',
+          'content-length': String(bytes.length),
+          'content-disposition': attachmentDisposition(meta.name),
+          'x-content-type-options': 'nosniff',
+        });
+      },
+    )
+
     // --- chat（SSE） -------------------------------------------------------
     .post(
       '/chat',
@@ -2589,7 +2804,12 @@ export function createApp(deps: AppDeps) {
         error: 'text が空、または本文の形が不正' + (where === '' ? '' : `: ${where}`),
       })),
       async (c) => {
-        const { text, conversationId: given, supersedes } = c.req.valid('json');
+        const {
+          text,
+          conversationId: given,
+          supersedes,
+          attachments: attachmentIds,
+        } = c.req.valid('json');
 
         /*
          * **送信済みの人間の発言を編集する口の検証。** `clone.post` を呼ぶ前に
@@ -2664,6 +2884,80 @@ export function createApp(deps: AppDeps) {
 
         const conversationId = given ?? randomUUID();
 
+        /*
+         * **添付を発言へ結び付ける（Issue #3111 段1b）。** 会話 id が決まった後で、`clone.post` の前に
+         * 行う。弾くときは受信箱に何も積まない。個数 → 存在 → 合計 → 別の会話への結び付き → `bind` の順。
+         */
+        let attachmentRefs: AttachmentRef[] = [];
+        if (attachmentIds !== undefined && attachmentIds.length > 0) {
+          const ids = [...new Set(attachmentIds)];
+          try {
+            // 個数だけを先に（存在しない id を引く前に、数で断る）。
+            validateAttachmentBatch(
+              ids.map(() => 0),
+              attachmentLimits,
+            );
+            const metas = await Promise.all(ids.map((id) => stores.attachments.getMeta(id)));
+            const missing = ids.filter((_, index) => metas[index] === undefined);
+            if (missing.length > 0) {
+              return c.json(
+                {
+                  error: `添付が見つからない（期限切れの可能性）: ${missing.join(', ')}`,
+                  code: 'attachment_missing' as const,
+                },
+                400,
+              );
+            }
+            const found = metas.filter((meta) => meta !== undefined);
+            validateAttachmentBatch(
+              found.map((meta) => meta.size),
+              attachmentLimits,
+            );
+            const elsewhere = found.filter(
+              (meta) => meta.conversationId !== undefined && meta.conversationId !== conversationId,
+            );
+            if (elsewhere.length > 0) {
+              return c.json(
+                {
+                  error: `別の会話に結び付いた添付は使えない: ${elsewhere.map((m) => m.id).join(', ')}`,
+                  code: 'attachment_conflict' as const,
+                },
+                400,
+              );
+            }
+            const bound = await stores.attachments.bind(ids, conversationId);
+            if (bound.missing.length > 0 || bound.conflicts.length > 0) {
+              return c.json(
+                {
+                  error:
+                    bound.missing.length > 0
+                      ? `添付が見つからない（期限切れの可能性）: ${bound.missing.join(', ')}`
+                      : `別の会話に結び付いた添付は使えない: ${bound.conflicts.join(', ')}`,
+                  code: (bound.missing.length > 0
+                    ? 'attachment_missing'
+                    : 'attachment_conflict') as 'attachment_missing' | 'attachment_conflict',
+                },
+                400,
+              );
+            }
+            attachmentRefs = found.map((meta) => ({
+              id: meta.id,
+              name: meta.name,
+              mediaType: meta.mediaType,
+              size: meta.size,
+              sha256: meta.sha256,
+            }));
+          } catch (error) {
+            if (error instanceof AttachmentRejectedError) {
+              return c.json(
+                { error: reasonOf(error), code: error.code },
+                error.code === 'too_many' ? 400 : 413,
+              );
+            }
+            throw error;
+          }
+        }
+
         return streamSSE(c, async (stream) => {
           const pump = chatEventPump();
           const unsubscribe = clone.subscribe(conversationId, (event) => pump.push(event));
@@ -2697,6 +2991,7 @@ export function createApp(deps: AppDeps) {
                 text,
                 conversationId,
                 ...(supersedes === undefined ? {} : { supersedes }),
+                ...(attachmentRefs.length === 0 ? {} : { attachments: attachmentRefs }),
               });
 
               await stream.writeSSE({ event: 'open', data: JSON.stringify({ conversationId }) });
@@ -3064,6 +3359,8 @@ export function createApp(deps: AppDeps) {
           ...(message.supersedes === undefined ? {} : { supersedes: message.supersedes }),
           ...(message.supersededBy === undefined ? {} : { supersededBy: message.supersededBy }),
           ...(message.turnFailure === undefined ? {} : { turnFailure: message.turnFailure }),
+          // 添付のメタデータ（中身は `GET /attachments/:id`）。無い発言には載せない。
+          ...(message.attachments === undefined ? {} : { attachments: message.attachments }),
         }));
 
         /*

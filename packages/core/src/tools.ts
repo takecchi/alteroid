@@ -12504,6 +12504,8 @@ export function createCloneTools(context: ToolContext) {
         '（approvals_list の一覧モードは**まだ答えが来ていない件**だけを出すが、id を渡す全文モードは答えが付いた件も開けて、回答の本文もそこに出る）。',
         '② 人間がマネージャーへ直接話しかけた発言も出ない',
         '（日誌には with:"manager" として載り、あなた自身の指示と見分けが付かない）。',
+        '**ここに出るもの**: 発言に添付があれば「[添付 n件]」と各添付の id・name・type・size（メタデータだけ）。',
+        '**添付の中身はここには出ない**（画像は届いたターンでだけ画像として渡される。画像以外の取り出し口はまだ無い）。',
       ].join(' '),
       {
         conversationId: z
@@ -12596,7 +12598,7 @@ export function createCloneTools(context: ToolContext) {
             : '';
           return text(
             `${entry.at} [${roleLabel(entry.role)}] id=${entry.id}（${describePage(part)}）` +
-              `\n\n${part.body}${tail}`,
+              `\n\n${part.body}${tail}${attachmentLines(entry.attachments, '')}`,
           );
         }
 
@@ -12711,7 +12713,8 @@ export function createCloneTools(context: ToolContext) {
               (message.supersededBy === undefined
                 ? ''
                 : `（畳み込み済み。編集後は id=${message.supersededBy}）`) +
-              `\n  ${excerptLine(message.text, CONVERSATION_EXCHANGE_EXCERPT)}`,
+              `\n  ${excerptLine(message.text, CONVERSATION_EXCHANGE_EXCERPT)}` +
+              attachmentLines(message.attachments, '  '),
           );
           // **会話は新しい側から積む。** 表示は古い順のままだが、予算で切れるときに
           // 落とすのは古い側である（会話を開く動機はたいてい直近の続きを思い出すこと
@@ -12761,7 +12764,8 @@ export function createCloneTools(context: ToolContext) {
             (message) =>
               `${message.at} [${roleLabel(message.role)}] id=${message.id}` +
               ` conversation=${message.conversationId ?? '(無し)'}\n` +
-              `  ${excerptLine(message.text, CONVERSATION_EXCHANGE_EXCERPT)}`,
+              `  ${excerptLine(message.text, CONVERSATION_EXCHANGE_EXCERPT)}` +
+              attachmentLines(message.attachments, '  '),
           );
           // 積む形そのものは `renderListing` が持つ（一覧ごとに手で書かない）。
           return text(
@@ -15769,4 +15773,25 @@ function managerProviderOf(
   if (summary.managerProvider !== undefined) return summary.managerProvider;
   if (summary.runnerId === undefined) return undefined;
   return managers?.runnerReportedManagerProvider?.(summary.runnerId);
+}
+
+/**
+ * 発言に添えた添付のメタデータを行にする（Issue #3111 段1b）。**中身は出さない**（`conversation_read` は
+ * 一覧の道具で、中身は別の取り口に回す。`listing-and-detail` の約束）。添付が無ければ空文字。
+ * 名前は抜粋にする（255 文字まで入るので、10 個並べても溢れない長さへ締める）。
+ */
+function attachmentLines(
+  attachments: readonly { id: string; name: string; mediaType: string; size: number }[] | undefined,
+  indent: string,
+): string {
+  if (attachments === undefined || attachments.length === 0) return '';
+  return (
+    `\n${indent}[添付 ${attachments.length}件]` +
+    attachments
+      .map(
+        (a) =>
+          `\n${indent}  id=${a.id} name=${excerptLine(a.name, 80)} type=${a.mediaType} size=${a.size}`,
+      )
+      .join('')
+  );
 }

@@ -10,7 +10,7 @@
  * この画面が「実行中」としか言わないと、同じ仕事を見て人間とクローンで見えている
  * ものが食い違う（北極星 禁止1 を逆向きに踏む）。
  */
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -133,8 +133,12 @@ function renderDetailWithMessages(
     outcome: 'delivered',
     detail: '追加指示として届けた。',
   },
+  // 渡すと、解けるまで POST の応答を返さない（送信中の見た目を測る歯が使う）。
+  gate?: Promise<void>,
 ) {
   const sent: { url: string; method: string; body?: unknown }[] = [];
+  // 次の送信への応答。途中で差し替えられる（「次の送信が失敗する」歯が使う）。
+  const reply = { status: 200, body: sendResult as unknown };
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const request = input instanceof Request ? input : new Request(input, init);
     const { url, method } = request;
@@ -148,7 +152,8 @@ function renderDetailWithMessages(
         .json()
         .catch(() => undefined);
       sent.push({ url, method, body });
-      return json(sendResult);
+      if (gate !== undefined) await gate;
+      return json(reply.body, reply.status);
     }
     if (url.includes(`/managers/${manager.managerId}`)) return json({ manager });
     // 知らない URL は「繋がらない」（`stubFetch` と同じ扱い）。
@@ -166,7 +171,7 @@ function renderDetailWithMessages(
       <RouterProvider router={router} />
     </Providers>,
   );
-  return { sent };
+  return { sent, reply };
 }
 
 /**
@@ -524,6 +529,53 @@ describe('待ちは kind で質問と実行許可を出し分ける（#334）', 
   });
 
   /**
+   * **押したほうのボタンだけが回る（#3068）。** かつては `busy` が真偽値1本で、
+   * 「許可」だけが `loading={busy}`、「拒否」は `disabled={busy}` だった。
+   * 「拒否」を押すと、押していない「許可」が回り、押した「拒否」は灰色になるだけだった。
+   * 回る輪は `Button` の `loading` が描く `animate-spin` の svg で測る。
+   */
+  it('「拒否」を押すと回るのは「拒否」で、「許可」は回らず塞がる。「許可」でも逆になる', async () => {
+    for (const [pressed, other] of [
+      ['拒否', '許可'],
+      ['許可', '拒否'],
+    ] as const) {
+      let release: () => void = () => {};
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const { sent } = renderDetailWithMessages(
+        {
+          ...BASE,
+          status: 'waiting_human',
+          waiting: [
+            { requestId: 'req-p', summary: 'Bash の実行許可: ls', kind: 'permission', askedAt },
+          ],
+        },
+        { outcome: 'answered', detail: '解いた。' },
+        gate,
+      );
+      expect(await screen.findByText('Bash の実行許可: ls')).toBeTruthy();
+      fireEvent.click(screen.getByRole('button', { name: pressed }));
+      await waitFor(() => expect(sent).toHaveLength(1));
+
+      const pressedButton = screen.getByRole('button', { name: pressed });
+      const otherButton = screen.getByRole('button', { name: other });
+      expect(pressedButton.querySelector('.animate-spin')).not.toBeNull();
+      expect(otherButton.querySelector('.animate-spin')).toBeNull();
+      expect((pressedButton as HTMLButtonElement).disabled).toBe(true);
+      expect((otherButton as HTMLButtonElement).disabled).toBe(true);
+
+      release();
+      await waitFor(() =>
+        expect(
+          screen.getByRole('button', { name: pressed }).querySelector('.animate-spin'),
+        ).toBeNull(),
+      );
+      cleanup();
+    }
+  });
+
+  /**
    * **版のずれの倒れ先。** `packages/api-client` は型だけで実行時検証を
    * 持たない（`packages/api-client/src/index.ts`）ので、古いデーモン＋新しい
    * 画面という組み合わせでは実際に `kind` というキー自体が届かないことが
@@ -549,6 +601,10 @@ describe('待ちは kind で質問と実行許可を出し分ける（#334）', 
     expect(await screen.findByText('種別が来なかった確認')).toBeTruthy();
     expect(screen.getByRole('button', { name: '許可' })).toBeTruthy();
     expect(screen.getByRole('button', { name: '拒否' })).toBeTruthy();
+    // 「拒否」は取り返しのつく操作なので danger（赤）にしない（#3091）。
+    expect(screen.getByRole('button', { name: '拒否' }).className).not.toContain(
+      'border-destructive/40',
+    );
     expect(screen.queryByPlaceholderText('この質問への答えを、自分の言葉で書く')).toBeNull();
   });
 });
@@ -872,7 +928,12 @@ describe('詳細でも、`live` は繋がっていないことを文で言うが
     expect(button.hasAttribute('disabled')).toBe(false);
     fireEvent.click(button);
 
-    expect(await screen.findByText('delivered: 追加指示として届けた。')).toBeTruthy();
+    expect(
+      await screen.findByText(
+        // 表示は使い手向けの言い方に変えた（#3066）。識別子（`delivered`）はもう出さない。
+        '追加指示を届けた: 追加指示として届けた。',
+      ),
+    ).toBeTruthy();
     expect(
       sent.some(
         (entry) => entry.url.endsWith('/managers/mgr-1/messages') && entry.method === 'POST',
@@ -907,7 +968,12 @@ describe('詳細でも、`live` は繋がっていないことを文で言うが
     expect(button.hasAttribute('disabled')).toBe(false);
     fireEvent.click(button);
 
-    expect(await screen.findByText('delivered: 追加指示として届けた。')).toBeTruthy();
+    expect(
+      await screen.findByText(
+        // 表示は使い手向けの言い方に変えた（#3066）。識別子（`delivered`）はもう出さない。
+        '追加指示を届けた: 追加指示として届けた。',
+      ),
+    ).toBeTruthy();
     expect(
       sent.some(
         (entry) => entry.url.endsWith('/managers/mgr-1/messages') && entry.method === 'POST',
@@ -993,7 +1059,12 @@ describe('「話しかける」の Enter は、IME の確定と送信中の連�
     expect(sent.length).toBe(0);
 
     fireEvent.keyDown(input, { key: 'Enter' });
-    expect(await screen.findByText('delivered: 追加指示として届けた。')).toBeTruthy();
+    expect(
+      await screen.findByText(
+        // 表示は使い手向けの言い方に変えた（#3066）。識別子（`delivered`）はもう出さない。
+        '追加指示を届けた: 追加指示として届けた。',
+      ),
+    ).toBeTruthy();
     expect(sent.length).toBe(1);
   });
 
@@ -1007,7 +1078,12 @@ describe('「話しかける」の Enter は、IME の確定と送信中の連�
     fireEvent.keyDown(input, { key: 'Enter' });
     fireEvent.keyDown(input, { key: 'Enter' });
 
-    expect(await screen.findByText('delivered: 追加指示として届けた。')).toBeTruthy();
+    expect(
+      await screen.findByText(
+        // 表示は使い手向けの言い方に変えた（#3066）。識別子（`delivered`）はもう出さない。
+        '追加指示を届けた: 追加指示として届けた。',
+      ),
+    ).toBeTruthy();
     expect(sent.length).toBe(1);
   });
 });
@@ -1033,6 +1109,18 @@ describe('「話しかける」の Enter は、IME の確定と送信中の連�
  * （`/managers` へ戻る）まで見る。
  */
 describe('停止は status で出し分けない', () => {
+  /**
+   * 「停止する」は押した瞬間には実行せず、確認（`alertdialog`）を挟む（#3067。
+   * #2781 の `memory-detail.test.tsx` と同じ作り）。**確認のボタンも名前が「停止する」**
+   * （操作の名前と同じにする約束）なので、ダイアログの中から取る。
+   * 既存の歯は、確認を経ても停止が届く形に直した（期待値は弱めていない）。
+   */
+  async function stopWithConfirm() {
+    fireEvent.click(await screen.findByRole('button', { name: '停止する' }));
+    const dialog = await screen.findByRole('alertdialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: '停止する' }));
+  }
+
   /**
    * **この `Record` が数え上げの持ち主である。**
    *
@@ -1108,7 +1196,7 @@ describe('停止は status で出し分けない', () => {
     const button = screen.getByRole('button', { name: '停止する' });
     // 描いたうえで、押せる（`disabled` で塞ぐ形へ逃げていない）。
     expect(button.hasAttribute('disabled')).toBe(false);
-    fireEvent.click(button);
+    await stopWithConfirm();
 
     // 行為が最後まで届いた（一覧へ戻っている）。
     expect(await screen.findByText('マネージャー一覧')).toBeTruthy();
@@ -1129,8 +1217,33 @@ describe('停止は status で出し分けない', () => {
 
     const button = await screen.findByRole('button', { name: '停止する' });
     expect(button.hasAttribute('disabled')).toBe(false);
-    fireEvent.click(button);
+    await stopWithConfirm();
 
+    expect(await screen.findByText('マネージャー一覧')).toBeTruthy();
+    expect(sent.map((entry) => entry.method)).toEqual(['DELETE']);
+  });
+
+  /**
+   * **確認を出すだけでは停止しない（#3067）。** 押した瞬間に `DELETE` が飛ぶ形へ戻すと、
+   * 「確認が出る」だけの歯は通ってしまうので、**確認の前後で `DELETE` の数を数える**。
+   * 確認の文は、コードで確かめた範囲（待機中のセッションも畳まれる・進行中の作業は失われる・
+   * 待っている確認は畳まれる）だけを言う。
+   */
+  it('押しただけでは止まらず、確認で「やめる」なら止めずに閉じ、「停止する」で初めて DELETE が飛ぶ', async () => {
+    const { sent } = renderDetailWithAbort({ ...BASE, status: 'done' });
+    fireEvent.click(await screen.findByRole('button', { name: '停止する' }));
+
+    const dialog = await screen.findByRole('alertdialog');
+    expect(dialog.textContent).toContain('待機中のセッションも畳まれます');
+    expect(dialog.textContent).toContain('進行中の作業は失われ');
+    expect(sent).toHaveLength(0);
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'やめる' }));
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+    expect(sent).toHaveLength(0);
+    expect(screen.queryByText('マネージャー一覧')).toBeNull();
+
+    await stopWithConfirm();
     expect(await screen.findByText('マネージャー一覧')).toBeTruthy();
     expect(sent.map((entry) => entry.method)).toEqual(['DELETE']);
   });
@@ -1165,7 +1278,7 @@ describe('停止は status で出し分けない', () => {
       </Providers>,
     );
 
-    fireEvent.click(await screen.findByRole('button', { name: '停止する' }));
+    await stopWithConfirm();
 
     // 理由が画面に出る。
     expect(await screen.findByText(/マネージャーは居ない/)).toBeTruthy();
@@ -2189,5 +2302,137 @@ describe('詳細のマネージャー層の provider（#486 S9）', () => {
     expect(await screen.findByText('provider')).toBeTruthy();
     expect(screen.getByText(/^不明/)).toBeTruthy();
     expect(screen.queryByText('claude')).toBeNull();
+  });
+});
+
+/**
+ * **`send` の戻り値の見せ方（#3066）。**
+ *
+ * かつては `${outcome}: ${detail}` を灰色でそのまま出し、未達（HTTP 200 の
+ * `session_missing` / `declined`）も届いた回と同じ見た目で、入力欄も空にした。
+ * 次の送信が失敗しても前回の結果が残った。許可待ち・質問の行は戻り値を見なかった。
+ */
+describe('「話しかける」と待ちの行は、send の戻り値を使い手向けの言葉で出す（#3066）', () => {
+  const askedAt = '2026-08-23T01:00:00.000Z';
+  const RAW = ['answered', 'delivered', 'session_missing', 'unknown', 'unreadable', 'declined'];
+
+  it.each([
+    ['answered', '確認に答えた', false],
+    ['delivered', '追加指示を届けた', false],
+    ['session_missing', '届いていない', true],
+    ['declined', '届けていない（世代が食い違う', true],
+    ['unknown', '届いたか確かめられなかった', true],
+    ['unreadable', '届けていない（台帳の行が読めない', true],
+  ])('%s は日本語で出て、識別子は出ない（未達は警告色）', async (outcome, label, unreached) => {
+    renderDetailWithMessages(
+      { ...BASE, status: 'running', live: true },
+      { outcome, detail: '詳細の文。' },
+    );
+    expect(await screen.findByText('実行中')).toBeTruthy();
+    fireEvent.change(screen.getByPlaceholderText('追加の指示'), { target: { value: '続けて' } });
+    fireEvent.click(screen.getByRole('button', { name: '送る' }));
+
+    const note = await screen.findByText(new RegExp(`^(⚠ )?${label.replace(/[（]/g, '\\（')}`));
+    expect(note.textContent).toContain('詳細の文。');
+    for (const raw of RAW) expect(note.textContent).not.toContain(raw);
+    expect(note.className.includes('text-warn')).toBe(unreached);
+    expect(note.className.includes('text-muted-foreground')).toBe(!unreached);
+  });
+
+  it('届いていないときは入力欄を空にしない。届いたときは空にする', async () => {
+    const { reply } = renderDetailWithMessages(
+      { ...BASE, status: 'running', live: true },
+      { outcome: 'session_missing', detail: '入り直せなかった。' },
+    );
+    expect(await screen.findByText('実行中')).toBeTruthy();
+    const input = screen.getByPlaceholderText('追加の指示') as HTMLInputElement;
+    fireEvent.change(input, { target: { value: '書いた指示' } });
+    fireEvent.click(screen.getByRole('button', { name: '送る' }));
+    expect(await screen.findByText(/入り直せなかった。/)).toBeTruthy();
+    expect(input.value).toBe('書いた指示');
+
+    reply.body = { outcome: 'delivered', detail: '届いた。' };
+    fireEvent.click(screen.getByRole('button', { name: '送る' }));
+    expect(await screen.findByText(/追加指示を届けた: 届いた。/)).toBeTruthy();
+    expect(input.value).toBe('');
+  });
+
+  it('知らない outcome は識別子を出さず、detail だけを未達の色で出す', async () => {
+    renderDetailWithMessages(
+      { ...BASE, status: 'running', live: true },
+      { outcome: 'brand_new_value', detail: '新しい種類の結果。' },
+    );
+    expect(await screen.findByText('実行中')).toBeTruthy();
+    fireEvent.change(screen.getByPlaceholderText('追加の指示'), { target: { value: 'x' } });
+    fireEvent.click(screen.getByRole('button', { name: '送る' }));
+    const note = await screen.findByText(/新しい種類の結果。/);
+    expect(note.textContent).not.toContain('brand_new_value');
+    expect(note.className.includes('text-warn')).toBe(true);
+  });
+
+  it('次の送信が失敗したら、前回の結果は消えてエラーだけが残る', async () => {
+    const { reply } = renderDetailWithMessages({ ...BASE, status: 'running', live: true });
+    expect(await screen.findByText('実行中')).toBeTruthy();
+    const input = screen.getByPlaceholderText('追加の指示');
+    fireEvent.change(input, { target: { value: '1通目' } });
+    fireEvent.click(screen.getByRole('button', { name: '送る' }));
+    expect(await screen.findByText(/追加指示を届けた/)).toBeTruthy();
+
+    reply.status = 404;
+    reply.body = { error: 'not found' };
+    fireEvent.change(input, { target: { value: '2通目' } });
+    fireEvent.click(screen.getByRole('button', { name: '送る' }));
+    await waitFor(() => expect(screen.queryByText(/追加指示を届けた/)).toBeNull());
+  });
+
+  it('許可待ちの行は、未達の戻り値を警告として出す（届いたときは足さない）', async () => {
+    const { reply } = renderDetailWithMessages(
+      {
+        ...BASE,
+        status: 'waiting_human',
+        waiting: [
+          { requestId: 'req-p', summary: 'Bash の実行許可: ls', kind: 'permission', askedAt },
+        ],
+      },
+      { outcome: 'session_missing', detail: '入り直せなかった。' },
+    );
+    expect(await screen.findByText('Bash の実行許可: ls')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: '拒否' }));
+    const note = await screen.findByText(/届いていない.*入り直せなかった。/);
+    expect(note.className.includes('text-warn')).toBe(true);
+    expect(note.textContent).not.toContain('session_missing');
+
+    // 押し直すと前回の結果は消え、届いた回は何も足さない。
+    reply.body = { outcome: 'answered', detail: '解いた。' };
+    fireEvent.click(screen.getByRole('button', { name: '許可' }));
+    await waitFor(() => expect(screen.queryByText(/入り直せなかった。/)).toBeNull());
+    expect(screen.queryByText(/確認に答えた/)).toBeNull();
+  });
+
+  it('質問の行は、未達なら書いた答えを残して警告を出し、届けば空にする', async () => {
+    const { reply } = renderDetailWithMessages(
+      {
+        ...BASE,
+        status: 'waiting_human',
+        waiting: [
+          { requestId: 'req-q', summary: 'DB はどちらにする？', kind: 'question', askedAt },
+        ],
+      },
+      { outcome: 'declined', detail: '畳めなかった。' },
+    );
+    expect(await screen.findByText('DB はどちらにする？')).toBeTruthy();
+    const textarea = screen.getByPlaceholderText(
+      'この質問への答えを、自分の言葉で書く',
+    ) as HTMLTextAreaElement;
+    fireEvent.change(textarea, { target: { value: 'PostgreSQL' } });
+    fireEvent.click(screen.getByRole('button', { name: '送信' }));
+    const note = await screen.findByText(/届けていない.*畳めなかった。/);
+    expect(note.className.includes('text-warn')).toBe(true);
+    expect(textarea.value).toBe('PostgreSQL');
+
+    reply.body = { outcome: 'answered', detail: '解いた。' };
+    fireEvent.click(screen.getByRole('button', { name: '送信' }));
+    await waitFor(() => expect(textarea.value).toBe(''));
+    expect(screen.queryByText(/畳めなかった。/)).toBeNull();
   });
 });

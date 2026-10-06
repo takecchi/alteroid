@@ -76,6 +76,10 @@ export function useJournalLive(): JournalLive {
     let attempt = 0;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let stopped = false;
+    // 一度でも切れた（offline になった）後の最初の `open` が「繋ぎ直し」。
+    // 初回の接続は各画面がマウント時に取るので取り直さない。この旗は effect ごと
+    // なので、アンマウント→再マウント（新しい effect）では立たない。
+    let lost = false;
 
     async function connect(): Promise<void> {
       setStatus('connecting');
@@ -84,6 +88,10 @@ export function useJournalLive(): JournalLive {
           attempt = 0;
           if (message.event === 'open') {
             setStatus('live');
+            if (lost) {
+              lost = false;
+              refetchMounted(mutateRef.current);
+            }
             continue;
           }
           const entry = message.data;
@@ -97,6 +105,7 @@ export function useJournalLive(): JournalLive {
       if (stopped || controller.signal.aborted) return;
 
       setStatus('offline');
+      lost = true;
       const wait = Math.min(RETRY_BASE_MS * 2 ** attempt, RETRY_MAX_MS);
       attempt += 1;
       timer = setTimeout(() => void connect(), wait);
@@ -113,6 +122,36 @@ export function useJournalLive(): JournalLive {
   }, [client, baseUrl]);
 
   return { status, recent, receivedCount };
+}
+
+/**
+ * 繋ぎ直したとき、いま表示中（マウント中）のキーを1回取り直す。
+ *
+ * サーバは切れていた間の出来事を再生しないので、取り直さないと次の出来事・
+ * フォーカス・遷移まで古いままになる。
+ *
+ * **データ引数なしの `mutate(述語)` は再検証だけである**（swr@2.5.1 の
+ * `internalMutate`: `args.length < 3` なら `startRevalidate()` へ進むだけで、
+ * キャッシュは書かない・捨てない）。再検証の窓口を持つのはマウント中のキー
+ * だけなので、マウントされていないキーは何も起きず、次のマウントで取る。
+ * 取り直している間も古い値は残る（空・スピナーに置き換わらない）。
+ * `useSWRInfinite` の集約キー（`$inf$`）は SWR が述語から常に除外する
+ * （`use-managers-window.ts` の doc を参照。頁1の再検証に便乗する作りなので、
+ * 頁1が取り直されれば読み足した頁も追随する）。
+ *
+ * **除くもの。** `profile` / `mcpServers` は値に鍵が入りうるので、画面が開いている
+ * あいだ勝手に運ばないと決めてある（`revalidateOnFocus: false`）。`authState`
+ * （`useAuth`）は、取り直しが失敗すると画面全体が置き換わる（#3063）うえ、
+ * 認証の状態は SSE の再接続では変わらない。
+ */
+const REFETCH_EXCLUDED_TYPES = new Set(['profile', 'mcpServers', 'authState']);
+
+function refetchMounted(mutate: ReturnType<typeof useSWRConfig>['mutate']): void {
+  void mutate((key) => {
+    const type =
+      typeof key === 'object' && key !== null ? (key as { type?: unknown }).type : undefined;
+    return !(typeof type === 'string' && REFETCH_EXCLUDED_TYPES.has(type));
+  });
 }
 
 /**

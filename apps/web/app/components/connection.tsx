@@ -207,6 +207,17 @@ export function ConnectionCard({ compact = false }: { compact?: boolean }) {
         )}
 
         {/*
+          **取り直しの失敗は、古い置き場を残したまま言う**（issue #3092）。SWR は再取得が失敗しても
+          直前の `data` を残して `error` を立てるので、`data` だけ見ると前に読めた置き場が今の値に
+          見える。`status.error` は `data` が無い枝（上の「取得できません」）でしか見ていなかった。
+        */}
+        {health.data !== undefined && status.data !== undefined && status.error !== undefined && (
+          <p className="text-xs text-warn">
+            記憶の置き場を取り直せなかった。上の置き場は前に読めたときのもの。
+          </p>
+        )}
+
+        {/*
           ここは「ドメインが違うときどうするか」の答えを画面の中に置いている。
           設定を触るのは大抵それで詰まったときなので、別の文書へ飛ばさない。
           本文は平易な言い方にし、環境変数名は括弧の補足で残す。CORS・ヘッダ名など

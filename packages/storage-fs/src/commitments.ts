@@ -562,10 +562,19 @@ export class FsCommitmentStore implements CommitmentStore {
         closedIds.push(entry.id);
         return { ...entry, closedAt: at, closedReason: reason, closedBy: by };
       });
+      // **読めない行も、`close()` と同じ筋で閉じる（issue #3096。issue #2148 で `close()` だけが
+      // 閉じられるようになり、`closeMany()` が取り残されていた）。** 既に閉じている読めない行は
+      // 「いま自分が閉じた」ではないので戻り値に入れない。pg は `closed_at` 列を行の形と独立に
+      // 進めるので、`closeMany()` も読めない行を閉じる（3実装で答えを揃える）。
+      const unreadable = file.unreadable.map((row) => {
+        if (row.id === undefined || !targets.has(row.id) || row.closed !== undefined) return row;
+        if (!closedIds.includes(row.id)) closedIds.push(row.id);
+        return { ...row, closed: { at, reason, by } };
+      });
       return {
         next: trimClosed({
           entries,
-          unreadable: file.unreadable,
+          unreadable,
           trimmedClosedCount: file.trimmedClosedCount,
         }),
         result: closedIds,

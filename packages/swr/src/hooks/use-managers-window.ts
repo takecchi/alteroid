@@ -74,6 +74,12 @@
  * で頁ごとに結果を見て、失敗した頁は前回の値のまま `setOlderPages` に渡す
  * （画面を空にしない）。
  *
+ * **失敗は state に残して画面へ渡す（issue #3092）。** 失敗した頁が古い行のまま残るだけだと、
+ * 先頭の頁は新しいので一覧全体が最新に見え、止まった行が今の値に見える（`error` は先頭の頁、
+ * `olderError` は「もっと見る」の失敗だけ）。そこで取り直しの失敗を `olderRefreshError` に載せる
+ * （古い行は残したまま。`olderError` / `blocked` とは別物で、押し直す口を塞がない）。次の取り直しが
+ * 全頁通れば消える。
+ *
  * **走っている間に来た分は取りこぼさない —— 最大1回の追い撃ち。** 背景の
  * 取り直しが1本（`R1`）走っている間にもう一度 `first.isValidating` が
  * `true → false` になったら（＝別の SSE がもう1本、頁1の再検証を終わらせた
@@ -203,6 +209,12 @@ export interface ManagersWindow {
    * 変える）まで出す。
    */
   olderError: unknown;
+  /**
+   * 読み足した頁（2頁目以降）の**背景の取り直し**が失敗した理由（issue #3092）。`undefined` は
+   * 直近の取り直しが全頁通った（または、まだ1回も走っていない）。立っているとき、`managers` の
+   * うち先頭の頁より後ろの行は**前に読めたときのもの**である（行は消さずに残してある）。
+   */
+  olderRefreshError: unknown;
   loadOlder: () => void;
   /** 先頭の頁を取り直す（読み込みの失敗からの「もう一度試す」。issue #2799）。 */
   reload: () => void;
@@ -228,6 +240,8 @@ export function useManagersWindow(status: readonly ManagerStatus[]): ManagersWin
   const [olderPages, setOlderPages] = useState<OlderPage[]>([]);
   const [isLoadingOlder, setLoadingOlder] = useState(false);
   const [olderError, setOlderError] = useState<unknown>(undefined);
+  /** 背景の取り直しの失敗（issue #3092）。`olderError`（「もっと見る」の失敗）とは別に持つ。 */
+  const [olderRefreshError, setOlderRefreshError] = useState<unknown>(undefined);
   /**
    * 最後に読んだ「もっと見る」の頁の件数。`undefined` は「まだ1回も押して
    * いない」＝判定は先頭の頁の件数で行う、である。**0 と `undefined` を
@@ -342,6 +356,11 @@ export function useManagersWindow(status: readonly ManagerStatus[]): ManagersWin
             refreshed.set(anchorKey(result.value.after), result.value.managers);
           }
         }
+        // **失敗は言う**（issue #3092）。1頁でも落ちたら理由を立て、全頁通れば消す。
+        const rejected = results.find(
+          (result): result is PromiseRejectedResult => result.status === 'rejected',
+        );
+        setOlderRefreshError(rejected === undefined ? undefined : rejected.reason);
         if (refreshed.size > 0) {
           setOlderPages((previous) =>
             previous.map((existing) => {
@@ -414,6 +433,7 @@ export function useManagersWindow(status: readonly ManagerStatus[]): ManagersWin
     olderStatus,
     isLoadingOlder,
     olderError,
+    olderRefreshError,
     loadOlder,
     reload: () => void first.mutate(),
     isReloading: first.isValidating,

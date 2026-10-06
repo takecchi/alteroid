@@ -79,24 +79,21 @@ export async function inboxRemoveCommand(options: InboxRemoveOptions): Promise<v
 
   const types = splitList(options.types);
   if (types.length === 0) {
-    stdout.write(
-      '--types に最低1種類を指定してください（カンマ区切り。例 --types manager_message）\n',
+    throw new Error(
+      '--types に最低1種類を指定してください（カンマ区切り。例 --types manager_message）',
     );
-    return;
   }
 
   const sources = options.sources === undefined ? undefined : splitList(options.sources);
   if (sources !== undefined && sources.length === 0) {
-    stdout.write('--sources を渡すなら最低1件は指定してください\n');
-    return;
+    throw new Error('--sources を渡すなら最低1件は指定してください');
   }
 
   let limit: number | undefined;
   if (options.limit !== undefined) {
     limit = Number(options.limit);
     if (!Number.isInteger(limit) || limit < 1) {
-      stdout.write(`--limit には1以上の整数を渡してください（渡された値: ${options.limit}）\n`);
-      return;
+      throw new Error(`--limit には1以上の整数を渡してください（渡された値: ${options.limit}）`);
     }
   }
 
