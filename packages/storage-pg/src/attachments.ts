@@ -182,7 +182,8 @@ export class PgAttachmentStore implements AttachmentStore {
     }
     return {
       bound: ids.filter((id) => bound.has(id)),
-      newlyBound: ids.filter((id) => newlyBound.has(id)),
+      // 重ねて渡された同じ id は最初の1回だけ数える（memory・fs と同じ。bound・missing・conflicts は渡した数のまま）。
+      newlyBound: ids.filter((id, index) => newlyBound.has(id) && ids.indexOf(id) === index),
       missing: ids.filter((id) => !bound.has(id) && !conflicts.has(id)),
       conflicts: ids.filter((id) => conflicts.has(id)),
     };

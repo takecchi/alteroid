@@ -12,6 +12,7 @@ import {
   ApprovalAnswerCard,
   isApprovalAnswered,
   isApprovalWithdrawn,
+  type SentApprovalDraft,
 } from '~/components/approval-answer-card';
 
 /**
@@ -45,7 +46,7 @@ export function ApprovalEntry({
   questionsDraft?: ApprovalQuestionsDraft;
   onQuestionsDraftChange?: (draft: ApprovalQuestionsDraft) => void;
   /** この id に答えが通った（個別送信・まとめ送信どちらでも呼ぶ）。 */
-  onAnswered?: () => void;
+  onAnswered?: (sent: SentApprovalDraft) => void;
   /** 直前のまとめ送信でこの id が駄目だった理由（無ければ何も出さない）。 */
   bulkError?: string;
 }) {

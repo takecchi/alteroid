@@ -175,6 +175,18 @@ export async function verifyAttachmentStoreContract(
   )
     fail(`既結び付けと未結び付けの混在の newlyBound: ${JSON.stringify(mixed)}`);
 
+  // 4''（#3559）: 同じ id を重ねて渡しても、newlyBound は最初の1回だけ数える（3実装で同じ）
+  const dupFresh = await store.put({ name: 'd.txt', mediaType: 'text/plain', bytes: PNG });
+  const dup = await store.bind([dupFresh.id, dupFresh.id], 'conv-dup');
+  if (dup.newlyBound.join() !== dupFresh.id)
+    fail(`同じ id を重ねて渡した bind の newlyBound が重なる: ${JSON.stringify(dup)}`);
+  const dupEvFresh = await store.put({ name: 'de.txt', mediaType: 'text/plain', bytes: PNG });
+  const dupEv = await store.bindToExternalEvent([dupEvFresh.id, dupEvFresh.id], 'ev-dup');
+  if (dupEv.newlyBound.join() !== dupEvFresh.id)
+    fail(
+      `同じ id を重ねて渡した bindToExternalEvent の newlyBound が重なる: ${JSON.stringify(dupEv)}`,
+    );
+
   // uploadedBy（上げた主体の識別子。中身ではない）
   const uploaded = await store.put({
     name: 'u.png',
