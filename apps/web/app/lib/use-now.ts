@@ -36,6 +36,10 @@ export function useNowMs(intervalMs: number, enabled = true): number {
 const MINUTE_MS = 60_000;
 const minuteListeners = new Set<() => void>();
 let minuteSnapshot = Date.now();
+// 値が古いかもしれない印。誰も購読していないあいだは時計が止まっているので、最初と、購読者が0に
+// なったときに立てる。立っているあいだの最初の getSnapshot が1度だけ読み直して下ろす
+// （毎回 Date.now() を返さない。同じ描画の中の全員が同じ値を受け取り、店が変わらなければ同じ値を返す）。
+let minuteStale = true;
 let minuteTimer: ReturnType<typeof setInterval> | undefined;
 const minuteServerSnapshot = Date.now();
 
@@ -63,8 +67,10 @@ function onMinuteVisibility(): void {
 function subscribeMinute(listener: () => void): () => void {
   if (minuteListeners.size === 0) {
     document.addEventListener('visibilitychange', onMinuteVisibility);
-    // 誰も見ていなかったあいだに古くなった値を、最初の購読で更新する（購読の直後に React が読み直す）。
+    // 描画から購読までのあいだに進んだ分に備えて読み直す
+    // （値が変わっていれば、購読の直後に React が読み直して描き直す）。
     minuteSnapshot = Date.now();
+    minuteStale = false;
   }
   minuteListeners.add(listener);
   syncMinuteTimer();
@@ -72,9 +78,23 @@ function subscribeMinute(listener: () => void): () => void {
     minuteListeners.delete(listener);
     if (minuteListeners.size === 0) {
       document.removeEventListener('visibilitychange', onMinuteVisibility);
+      minuteStale = true;
     }
     syncMinuteTimer();
   };
+}
+
+function getMinuteSnapshot(): number {
+  if (minuteStale && minuteListeners.size === 0) {
+    minuteSnapshot = Date.now();
+    minuteStale = false;
+  }
+  return minuteSnapshot;
+}
+
+function getMinuteSnapshotPassive(): number {
+  // 購読しない呼び手は、印を下ろさない（下ろすと、あとで購読する画面の最初の描画が古くなる）。
+  return minuteSnapshot;
 }
 
 function subscribeNothing(): () => void {
@@ -84,7 +104,7 @@ function subscribeNothing(): () => void {
 export function useMinuteNow(enabled = true): number {
   return useSyncExternalStore(
     enabled ? subscribeMinute : subscribeNothing,
-    () => minuteSnapshot,
+    enabled ? getMinuteSnapshot : getMinuteSnapshotPassive,
     () => minuteServerSnapshot,
   );
 }

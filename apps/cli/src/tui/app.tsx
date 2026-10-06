@@ -440,7 +440,9 @@ export const App: FC<AppProps> = ({
         action === 'interrupt' ||
         action === 'attach' ||
         action === 'attachments' ||
-        action === 'detach')
+        action === 'detach' ||
+        action === 'edit' ||
+        action === 'editCancel')
     ) {
       goTab('chat');
     }
@@ -500,6 +502,23 @@ export const App: FC<AppProps> = ({
       case 'detach':
         controller.detach(args);
         break;
+      case 'edit':
+        // 元の本文は入力欄へ入れて直せるようにする。読んでいるあいだに書き始めていたら、その書きかけを潰さない。
+        void controller.edit(args).then((original) => {
+          if (original === null) return;
+          if (isEmptyBuffer(bufferRef.current)) {
+            setBuffer(bufferOf(original));
+            setAnchor('bottom');
+          } else {
+            controller.addSystem(
+              '入力欄に書きかけがあるので、元の本文は入れていない（上の「元の本文」を写すか、/edit-cancel でやめてやり直す）',
+            );
+          }
+        });
+        break;
+      case 'editCancel':
+        controller.cancelEdit();
+        break;
     }
   };
 
@@ -507,7 +526,8 @@ export const App: FC<AppProps> = ({
     const resolved = resolveCommand(text);
     // 未知のコマンドとして断るときは、書いた文を消さない（`/var/log/…` で始まる普通の文を打ち直させない。#3406）。
     if (resolved.kind !== 'unknown') setBuffer(emptyBuffer());
-    if (text.length === 0 && !controller.hasAttachments()) return;
+    // 編集の途中の空 Enter は黙って捨てず、送れない理由を出す（`send` が断る）。
+    if (text.length === 0 && !controller.hasAttachments() && !controller.isEditing()) return;
     if (resolved.kind === 'command') return runCommand(resolved.spec.action, resolved.args, 'chat');
     if (resolved.kind === 'unknown') {
       controller.addSystem(

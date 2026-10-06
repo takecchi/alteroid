@@ -176,6 +176,139 @@ describe('alteroid login', () => {
   });
 });
 
+describe('alteroid login — 認可待ち中の一時的な失敗（#3727）', () => {
+  const HEALTH = {
+    auth: { enabled: true, providers: [{ id: 'google', label: 'Google', kind: 'oauth' }] },
+  };
+  const startBody = (expiresAt = '2999-01-01T00:00:00.000Z') => ({
+    requestId: 'req-t',
+    authorizationUrl: 'https://accounts.example.com/auth?req=t',
+    claimSecret: 'secret-t',
+    expiresAt,
+  });
+  const READY = {
+    status: 'ready',
+    token: 'token-t',
+    account: { id: 'acc-t', email: 'person@example.com', displayName: null },
+    granted: true,
+  };
+  type Step = { status: number; body: unknown } | { reject: Error };
+
+  /** health・start の後ろへ、claim の応答列を順に返す fetch。 */
+  function stubSequence(claims: Step[], expiresAt?: string): void {
+    const steps: Step[] = [
+      { status: 200, body: HEALTH },
+      { status: 200, body: startBody(expiresAt) },
+      ...claims,
+    ];
+    globalThis.fetch = ((input: unknown, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : String(input);
+      sent.push({ url, method: init?.method ?? 'GET' });
+      const step = steps.shift();
+      if (step === undefined) throw new Error('想定外の fetch');
+      if ('reject' in step) return Promise.reject(step.reject);
+      return Promise.resolve(
+        new Response(JSON.stringify(step.body), {
+          status: step.status,
+          headers: { 'content-type': 'application/json' },
+        }),
+      );
+    }) as typeof fetch;
+  }
+
+  it('待ちの間に fetch が1回 reject しても、続けて ready を受ければログインできる', async () => {
+    stubSequence([
+      { reject: new TypeError('fetch failed') },
+      { status: 202, body: { status: 'pending' } },
+      { status: 200, body: READY },
+    ]);
+    const read = captureStdout();
+
+    await loginCommand({});
+
+    expect(credentials.writeCredential).toHaveBeenCalledWith(
+      'http://127.0.0.1:4517',
+      expect.objectContaining({ token: 'token-t' }),
+    );
+    expect(read()).toContain('待ちを続けています');
+  });
+
+  it('待ちの間の 502 / 429 でも、続けて ready を受ければログインできる', async () => {
+    stubSequence([
+      { status: 502, body: { error: 'bad gateway' } },
+      { status: 429, body: {} },
+      { status: 200, body: READY },
+    ]);
+    captureStdout();
+
+    await loginCommand({});
+
+    expect(credentials.writeCredential).toHaveBeenCalledTimes(1);
+  });
+
+  it('claimSecret 違いなどの 400 は、待っても直らないので即座に止まる', async () => {
+    stubSequence([{ status: 400, body: { error: 'claimSecret が違う' } }]);
+    captureStdout();
+
+    await expect(loginCommand({})).rejects.toThrow('ログインに失敗しました: 400');
+    expect(credentials.writeCredential).not.toHaveBeenCalled();
+  });
+
+  it('通信失敗の後の 400（引き取り済み）は、やり直しを案内する', async () => {
+    stubSequence([
+      { reject: new TypeError('fetch failed') },
+      { status: 400, body: { error: 'ログイン要求が見つからない（既に引き取り済みの可能性）' } },
+    ]);
+    captureStdout();
+
+    await expect(loginCommand({})).rejects.toThrow(/alteroid login をやり直してください/);
+    expect(credentials.writeCredential).not.toHaveBeenCalled();
+  });
+
+  it('200 を受けた後に本文が読めなければ、再試行せずやり直しを案内して止まる', async () => {
+    const steps: (() => Promise<Response>)[] = [
+      () => Promise.resolve(Response.json(HEALTH)),
+      () => Promise.resolve(Response.json(startBody())),
+      () => Promise.resolve(new Response('{broken', { status: 200 })),
+    ];
+    let claimCalls = 0;
+    globalThis.fetch = ((input: unknown) => {
+      if (String(input).endsWith('/claim')) claimCalls += 1;
+      const step = steps.shift();
+      if (step === undefined) throw new Error('想定外の fetch');
+      return step();
+    }) as typeof fetch;
+    captureStdout();
+
+    await expect(loginCommand({})).rejects.toThrow(/alteroid login をやり直してください/);
+    expect(claimCalls).toBe(1);
+    expect(credentials.writeCredential).not.toHaveBeenCalled();
+  });
+
+  it('一時的な失敗が期限まで続けば、期限切れに「最後に繋がらなかった理由」を添えて止まる', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(new Date('2030-01-01T00:00:00.000Z'));
+      // 偽の sleep が偽の時計を 1.5 秒ずつ進める（実時間は待たない）。
+      const timers = await import('node:timers/promises');
+      vi.mocked(timers.setTimeout).mockImplementation(() => {
+        vi.setSystemTime(Date.now() + 1500);
+        return Promise.resolve(undefined);
+      });
+      const failing = Array.from({ length: 50 }, (): Step => ({
+        reject: new TypeError('fetch failed'),
+      }));
+      stubSequence(failing, '2030-01-01T00:00:05.000Z');
+      captureStdout();
+
+      await expect(loginCommand({})).rejects.toThrow(/期限が切れました[\s\S]*fetch failed/);
+      expect(credentials.writeCredential).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe('alteroid logout', () => {
   const STORED = {
     token: 'tok-1',

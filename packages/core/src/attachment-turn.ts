@@ -8,6 +8,7 @@ import {
   type AttachmentStore,
   type TurnAttachmentLimits,
 } from './attachment.js';
+import { imageDimensionOverNotice, isImageOverDimension } from './attachment-image-size.js';
 import { stripNul } from './nul-guard.js';
 import type { AttachmentRef } from './schema.js';
 
@@ -21,6 +22,9 @@ import type { AttachmentRef } from './schema.js';
  *   **ただし中身が画像でも、大きさが `limits.maxImageBytes` を超えるなら画像としては渡さない**（#3325。
  *   宣言が画像以外なら「その他」の上限で保存できるので、モデル側の画像の上限でターンが落ちないように）。
  *   通知行で理由と `attachment_fetch` での開け方を言う。
+ * - **寸法**（幅・高さのどちらかが 8000px 超。中身のヘッダから読む）の画像も、画像としては渡さず通知行で言う（#3697）。
+ *   外す理由の優先は 1枚の大きさ（#3325）→ 寸法 → ターンの予算（#3696）。寸法で外したものは予算を使わない。
+ *   寸法が読めない（壊れた・切れたヘッダ）ときは断れる根拠が無いので、今までどおり画像として渡す。
  * - **ターンの画像には枚数と合計の予算がある**（#3696。`limits.maxTurnImages` / `maxTurnImageBytes`）。
  *   **新しい発言から数えて**枠に入る分だけを画像として渡し、同じ発言の中は後ろの画像から外す。
  *   外したものは画像としては渡さず、通知行で理由と開け方を言う（受け付けと保存は妨げない）。
@@ -82,6 +86,10 @@ export async function resolveTurnAttachmentGroups(
         out.noticeLines.push(
           `[添付] ${described}（画像の上限（${formatImageLimit(limits.maxImageBytes)}）を超えるので画像としては渡していない。${OPEN_HINT}）`,
         );
+        continue;
+      }
+      if (isImageOverDimension(found.bytes, imageType)) {
+        out.noticeLines.push(`[添付] ${described}${imageDimensionOverNotice(OPEN_HINT)}`);
         continue;
       }
       const over = budget.take(found.bytes.length);
