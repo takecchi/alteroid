@@ -2901,6 +2901,40 @@ describe('chat の設問つきの承認待ち（issue #2525）', () => {
     expect(read()).toContain('回答を送っていません');
   });
 
+  it('/answer <id> --select は id で1件引く口（GET /approvals/:id）を1回だけ呼び、全件は読まない。番号は従来どおり全件', async () => {
+    captureStdout();
+    const byId = stubClient({ approvals: [approval] });
+    await runSlashCommand('/answer ap-q --select target=railway', byId.client, emptyListed());
+    expect(byId.calls.filter((c) => c.route.startsWith('GET')).map((c) => c.route)).toEqual([
+      'GET /approvals/:id',
+    ]);
+    expect(sentJson(byId.calls)?.param).toEqual({ id: 'ap-q' });
+
+    const byNumber = stubClient({ approvals: [approval] });
+    await runSlashCommand('/answer 1 --select target=railway', byNumber.client, listedOne());
+    expect(byNumber.calls.filter((c) => c.route.startsWith('GET')).map((c) => c.route)).toEqual([
+      'GET /approvals',
+    ]);
+  });
+
+  it('/answer <id> --select: 404 は見つからなかった、409・500 は読めなかったと言い、どちらも送らない', async () => {
+    const readMissing = captureStdout();
+    const missing = stubClient({ approvals: [] });
+    await runSlashCommand('/answer nope --select a=b', missing.client, emptyListed());
+    expect(readMissing()).toContain('見つからなかった');
+    expect(sentJson(missing.calls)).toBeNull();
+
+    for (const status of [409, 500]) {
+      const read = captureStdout();
+      const failed = stubClient({ approvalByIdStatus: status, approvalByIdBody: { error: 'x' } });
+      await runSlashCommand('/answer ap-q --select a=b', failed.client, emptyListed());
+      const text = read();
+      expect(text, String(status)).toContain('承認待ちを読めなかったので、回答を送っていません');
+      expect(text, String(status)).not.toContain('見つからなかった');
+      expect(sentJson(failed.calls), String(status)).toBeNull();
+    }
+  });
+
   it('一覧に居ても取ってきた中に無ければ、送らずに言って止まる（#2583）', async () => {
     const read = captureStdout();
     const { calls, client } = stubClient({ approvals: [] });
