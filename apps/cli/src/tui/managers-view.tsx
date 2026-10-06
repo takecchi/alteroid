@@ -89,7 +89,9 @@ export function managerNotes(row: ManagerRow): string[] {
     );
   }
   if (row.lastFailure !== undefined) {
-    notes.push(`直近の失敗: ${row.lastFailure.code}（${row.lastFailure.at}）`);
+    notes.push(
+      `直近の失敗: ${sanitizeForTerminal(row.lastFailure.code)}（${sanitizeForTerminal(row.lastFailure.at)}）`,
+    );
   }
   return notes.map(sanitizeForTerminal);
 }

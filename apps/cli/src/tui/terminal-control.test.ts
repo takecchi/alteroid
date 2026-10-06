@@ -30,6 +30,8 @@ import {
   memoryDescriptionLine,
   memoryTitleLine,
 } from './memory-view.js';
+import { parseTranscript } from './managers-transcript.js';
+import { managerNotes } from './managers-view.js';
 import { renderFullscreen } from './test-helpers.js';
 
 /**
@@ -38,8 +40,9 @@ import { renderFullscreen } from './test-helpers.js';
  * 新しいテストに実時間の待ちは無い（描画は同期、操作は await するだけ）。
  */
 const CSI8 = String.fromCharCode(0x9b);
-/** 掃除すると `abcdef` になる。 */
-const EVIL = `a\u0007b\u0008c\u0000d\re${CSI8}2Jf`;
+const OSC8 = String.fromCharCode(0x9d);
+/** 掃除すると `abcdef` になる。末尾は C1 の OSC（OSC 52）と、U+009B に SGR が続く列（Ink は素通しにする）。 */
+const EVIL = `a\u0007b\u0008c\u0000d\re${CSI8}2Jf${OSC8}52;c;aGk=\u0007${CSI8}31m`;
 const CLEAN = 'abcdef';
 
 // eslint-disable-next-line no-control-regex -- 制御文字の検出そのものが目的
@@ -98,6 +101,39 @@ describe('記憶の一覧と詳細', () => {
     const head = draw(createElement(MemoryDetailHead, { detail }));
     expect(head).toContain(`s${CLEAN}`);
     expect(head).toContain(`t${CLEAN}`);
+  });
+});
+
+describe('記憶の詳細の本文', () => {
+  it('本文の制御文字を落とし、\\r は行の区切りにせず落とす', async () => {
+    const api = fakeApi();
+    api.memoryRows = [memoryRow('m')];
+    api.memoryDocs['m'] = memoryDoc('m', `real\rFAKE\n${EVIL}\r\n次`);
+    const controller = new MemoryController(api, { debounceMs: 5 });
+    await controller.open('m', null);
+    const text = controller.store
+      .getSnapshot()
+      .detail!.body.map((b) => b.text)
+      .join('\n');
+    expect(text).toBe(`realFAKE\n${CLEAN}\n次`);
+  });
+});
+
+describe('委譲の生ログの道具名・type・直近の失敗', () => {
+  it('描く文字列に制御文字が残らない', () => {
+    const tool = JSON.stringify({
+      type: 'assistant',
+      message: { content: [{ type: 'tool_use', name: `n${EVIL}`, input: {} }] },
+    });
+    const other = JSON.stringify({ type: `t${EVIL}` });
+    const texts = parseTranscript(`${tool}\n${other}`).map((e) => e.text);
+    expect(texts.join('\n')).toContain(`n${CLEAN}`);
+    expect(texts.join('\n')).toContain(`[t${CLEAN}]`);
+    expectNoControl(texts.join('\n'));
+    const notes = managerNotes(
+      managerRow('m', { lastFailure: { code: `c${EVIL}`, via: 'x', at: `a${EVIL}` } }),
+    );
+    expect(notes.join('\n')).toContain(`c${CLEAN}（a${CLEAN}）`);
   });
 });
 
