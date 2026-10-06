@@ -1,5 +1,6 @@
 import {
   accountUsageStateSchema,
+  attachmentRefSchema,
   agentTokenInputSchema,
   agentTokenViewSchema,
   APPROVAL_TRACE_STATES,
@@ -89,6 +90,34 @@ import { createApp } from './app.js';
 
 /** ハンドラが手で返す `{ error: '...' }`（404 / 400 / 409 / 415 / 503）。 */
 export const errorResponseSchema = z.object({ error: z.string() });
+
+/** 添付の控え（`AttachmentMeta`。中身を含まない。Issue #3111）。 */
+export const attachmentMetaSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  mediaType: z.string(),
+  size: z.number().int(),
+  sha256: z.string(),
+  conversationId: z.string().optional(),
+  createdAt: z.string(),
+  expiresAt: z.string(),
+});
+
+/** 添付を断るときの応答。`code` は `AttachmentRejection` かこの口の `attachment_missing` / `attachment_conflict`。 */
+export const attachmentErrorResponseSchema = z.object({
+  error: z.string(),
+  code: z
+    .enum([
+      'too_large',
+      'magic_mismatch',
+      'too_many',
+      'total_too_large',
+      'media_type_missing',
+      'attachment_missing',
+      'attachment_conflict',
+    ])
+    .optional(),
+});
 
 /**
  * **日誌が書けなかったので、状態を変えずに断った** 500 の本文（issue #2742 の続き。
@@ -362,6 +391,8 @@ const conversationMessageSchema = z.object({
    * 付いていない発言は通常の発言（または印を持たない古い行）。
    */
   turnFailure: z.enum(['failed', 'held']).optional(),
+  /** 発言に添えた添付のメタデータ（中身は `GET /attachments/:id`）。無い発言には付かない。 */
+  attachments: z.array(attachmentRefSchema).optional(),
 });
 
 export const conversationDetailResponseSchema = z.object({
