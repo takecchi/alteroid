@@ -1440,6 +1440,26 @@ export interface Turn {
    */
   approvalId: string | null;
   text: string;
+  /**
+   * **人間（SSE）へ流した本文のうち、まだ日誌へ書いていない分を含む、返答の本文の全部**（#3605）。
+   * 日誌へ書く本文の元はこちらである（`text` は `TurnOutcome.text` 用で、assistant メッセージが
+   * 処理し終えた時点でしか伸びない）。
+   *
+   * **なぜ `text` でなくこちらか。** 道具の実行は、クローンが直前の assistant メッセージを処理し終える
+   * 前に始まりうる（`text_delta` はすでに流れ、`text` はまだ伸びていない）。承認カードを出す道具が
+   * 本文を日誌へ書くとき `text` を元にすると、**受信中に見えていた前半が欠ける**。区切りは「その時点まで
+   * に SSE へ流した本文」で決める——受信中に見せた順番と同じ順番で日誌に残すため。
+   *
+   * 伸ばす所: `text_delta`（流した片）・逐次配信が来ていない回の完成品（流した本文）・逐次配信の回で
+   * 片が1つも無かった assistant メッセージの本文（人間には出ないが、日誌には従来どおり残す）。
+   * 縮める所: SDK が「応答ではない」と印を付けたメッセージの分（`turn.rejected`。従来どおり返答に
+   * しない）。
+   */
+  reply: string;
+  /** `reply` のうち、ここまでを日誌へ書いた（文字数）。 */
+  replyWritten: number;
+  /** 直前の assistant メッセージを処理し終えた時点の `reply.length`（そのメッセージの片の範囲を知る）。 */
+  replyMessageStart: number;
   /** 逐次配信（stream_event）で本文を流したか。流していなければ完成品を流す。 */
   streamed: boolean;
   /**
@@ -8875,6 +8895,9 @@ class Clone implements CloneHost {
         conversationId,
         approvalId,
         text: '',
+        reply: '',
+        replyWritten: 0,
+        replyMessageStart: 0,
         streamed: false,
         rejected: null,
         failure: null,
@@ -10177,6 +10200,8 @@ class Clone implements CloneHost {
         ),
       },
       emit: (event) => this.#emit(this.#sdkSession.turn?.conversationId ?? null, event),
+      // **承認カードを出す道具が、カードの時刻を決める前に呼ぶ**（#3605。`ToolContext.flushReply`）。
+      flushReply: () => this.#flushReply(),
       managers: this.#managers,
       ...(this.#profileService === undefined ? {} : { profile: this.#profileService }),
       ...(this.#accountUsage === undefined ? {} : { accountUsage: this.#accountUsage }),
@@ -11909,7 +11934,10 @@ class Clone implements CloneHost {
 
       case 'text_delta': {
         const turn = this.#sdkSession.turn;
-        if (turn) turn.streamed = true;
+        if (turn) {
+          turn.streamed = true;
+          turn.reply += event.text;
+        }
         this.#emit(turn?.conversationId ?? null, { type: 'text', text: event.text });
         return;
       }
@@ -11930,21 +11958,34 @@ class Clone implements CloneHost {
         // `usage_limited` / `error` に任せる。
         const rejected = assistantFailureOf(event.errorCode, said);
         if (rejected !== undefined) {
-          if (turn) turn.rejected = rejected;
+          if (turn) {
+            turn.rejected = rejected;
+            // このメッセージの分として流れた片は返答にしない（日誌へ書かない）。書き済みの分は戻せない。
+            turn.reply = turn.reply.slice(0, Math.max(turn.replyMessageStart, turn.replyWritten));
+            turn.replyMessageStart = turn.reply.length;
+          }
           return;
         }
 
+        // 逐次配信の回で、このメッセージの片が1つも流れていなければ、本文は人間に出ていない。
+        // 日誌には従来どおり残す（`reply` へだけ足す）。
+        const unstreamedInStreamedTurn =
+          turn !== null && turn.streamed && turn.reply.length === turn.replyMessageStart;
         for (const block of event.blocks) {
           if (block.type === 'text') {
             if (turn) turn.text += block.text;
             // 逐次配信が来ていない環境でも、人間に本文が届かないことは無いようにする
             if (!turn?.streamed) {
+              if (turn) turn.reply += block.text;
               this.#emit(turn?.conversationId ?? null, { type: 'text', text: block.text });
+            } else if (turn !== null && unstreamedInStreamedTurn) {
+              turn.reply += block.text;
             }
           } else if (block.type === 'tool_use') {
             this.#emit(turn?.conversationId ?? null, { type: 'tool', tool: block.name });
           }
         }
+        if (turn) turn.replyMessageStart = turn.reply.length;
         return;
       }
 
@@ -12053,40 +12094,9 @@ class Clone implements CloneHost {
         // 「クローンの発言」として無印で残せるかどうかがこれで変わる。**
         const failure = event.failure ?? turn?.rejected ?? undefined;
 
-        if (turn && turn.text.trim().length > 0) {
-          // 内部ターン（蒸留・自律）も必ず残す。見えない層を作らない。
-          //
-          // **失敗したターンの本文には印を付ける。** 本文を捨てないのは、人間は
-          // それを画面で現に見ている（逐次配信）ので、履歴から消すと見たものが
-          // 探せなくなるからである。**無印で残さないのは、日誌が digest を通って
-          // 次の日報の材料になるからである** — 印が無いと「クローンがそう言った」
-          // として翌日の日報に効いてしまう。
-          await this.#journal({
-            type: 'exchange',
-            with: turn.conversationId === null ? 'self' : 'human',
-            role: 'outbound',
-            // **kind の接頭辞は self 側（内部ターン）にだけ付ける。** human 側
-            // （`with: 'human'`）は、その1欄で「人間との生の往復である」ことが
-            // 既に構造化されて分かる——本文は人間が画面で現に見ているものと1文字も
-            // 変えない（`exchange-kind.ts` の doc）。
-            text:
-              (turn.conversationId === null ? EXCHANGE_KIND_REPLY_PREFIX : '') +
-              (failure === undefined
-                ? turn.text
-                : `（このターンは失敗して終わった。以下は失敗する前に出ていた本文である）\n${turn.text}`),
-            ...(turn.conversationId === null ? {} : { conversationId: turn.conversationId }),
-            // **issue #782 の1。`conversationId` が無い（＝ `with: 'self'`）行には
-            // 立てない** —— 会話 id を持たない承認への回答は今までどおり内部
-            // ターンのままで、`approvalId` が付くと人間の会話の一部であるかの
-            // ように読めてしまう（`schema.ts` の `exchange.approvalId` の doc）。
-            ...(turn.conversationId === null || turn.approvalId === null
-              ? {}
-              : { approvalId: turn.approvalId }),
-            // **issue #847 の案B。** 上の `approvalId` と違い、会話の有無を問わず
-            // 立てる（`schema.ts` の `exchange.answeredApprovalId` の doc）。
-            ...(turn.approvalId === null ? {} : { answeredApprovalId: turn.approvalId }),
-          });
-        }
+        // 残りの本文（承認カードを出す道具が割った分より後）を書く。内部ターン（蒸留・自律）も必ず
+        // 残す。見えない層を作らない。書く形は `#journalReply`。
+        if (turn) await this.#journalReply(turn, failure !== undefined);
 
         // **成否を見ずに `done` を出していたのがこの穴の本体である。** 直す前は
         // ここで `result` の成否を一度も見ておらず、`error_during_execution` や
@@ -12287,6 +12297,68 @@ class Clone implements CloneHost {
     // が失敗して上で return した回はここへ来ないので、カウンタは戻らず次の
     // 窓へ持ち越される（`#writeInboxFlow` の doc）。
     this.#inboxFlow.reset();
+  }
+
+  /**
+   * 返答の本文のうち、まだ日誌へ書いていない分（`turn.reply.slice(turn.replyWritten)`）を、人間との
+   * outbound の `exchange` として**1件**書く。**`type: 'exchange'` の書き込みはここ1か所だけ**
+   * （ターン末の `turn_ended` と、承認カードを出す道具の `ToolContext.flushReply` の両方がここを通る。
+   * `exchange-kind-coverage.test.ts` の数え方を崩さないため、そして2つの経路で付ける欄を食い違わせないため）。
+   *
+   * **1ターンが承認カードで割れたとき、各行に同じ欄を付ける**（`conversationId`・`approvalId`・
+   * `answeredApprovalId`。`approval-trace` が `answeredApprovalId` で対にするので欠けさせない）。
+   * 書くものが空白だけなら書かず、書き済みの印も進めない（次の行の頭に付く）。
+   *
+   * **失敗の前置きは `failed` のとき（＝ターン末）の行にだけ付く。** 失敗するまでに割れて書けた前の行は、
+   * 失敗の前に出ていた本文として無印で残る。
+   */
+  async #journalReply(turn: Turn, failed: boolean): Promise<void> {
+    const pending = turn.reply.slice(turn.replyWritten);
+    if (pending.trim().length === 0) return;
+    // **await の前に印を進める**。割る口が並行して呼ばれても、同じ本文を2度書かない。
+    turn.replyWritten = turn.reply.length;
+    await this.#journal({
+      type: 'exchange',
+      with: turn.conversationId === null ? 'self' : 'human',
+      role: 'outbound',
+      // **kind の接頭辞は self 側（内部ターン）にだけ付ける。** human 側
+      // （`with: 'human'`）は、その1欄で「人間との生の往復である」ことが
+      // 既に構造化されて分かる——本文は人間が画面で現に見ているものと1文字も
+      // 変えない（`exchange-kind.ts` の doc）。
+      //
+      // **失敗したターンの本文には印を付ける。** 本文を捨てないのは、人間は
+      // それを画面で現に見ている（逐次配信）ので、履歴から消すと見たものが
+      // 探せなくなるからである。**無印で残さないのは、日誌が digest を通って
+      // 次の日報の材料になるからである** — 印が無いと「クローンがそう言った」
+      // として翌日の日報に効いてしまう。
+      text:
+        (turn.conversationId === null ? EXCHANGE_KIND_REPLY_PREFIX : '') +
+        (failed
+          ? `（このターンは失敗して終わった。以下は失敗する前に出ていた本文である）\n${pending}`
+          : pending),
+      ...(turn.conversationId === null ? {} : { conversationId: turn.conversationId }),
+      // **issue #782 の1。`conversationId` が無い（＝ `with: 'self'`）行には
+      // 立てない** —— 会話 id を持たない承認への回答は今までどおり内部
+      // ターンのままで、`approvalId` が付くと人間の会話の一部であるかの
+      // ように読めてしまう（`schema.ts` の `exchange.approvalId` の doc）。
+      ...(turn.conversationId === null || turn.approvalId === null
+        ? {}
+        : { approvalId: turn.approvalId }),
+      // **issue #847 の案B。** 上の `approvalId` と違い、会話の有無を問わず
+      // 立てる（`schema.ts` の `exchange.answeredApprovalId` の doc）。
+      ...(turn.approvalId === null ? {} : { answeredApprovalId: turn.approvalId }),
+    });
+  }
+
+  /**
+   * `ToolContext.flushReply` の実体（#3605）。承認カードを出す道具が、カードの `createdAt` を決める前に
+   * 呼ぶ。**会話のあるターン（人間に見せるターン）だけ割る**——内部ターン（`conversationId === null`）の
+   * 承認は会話の履歴に出ないので、割っても並びは変わらず行が増えるだけになる。
+   */
+  async #flushReply(): Promise<void> {
+    const turn = this.#sdkSession.turn;
+    if (turn === null || turn.conversationId === null) return;
+    await this.#journalReply(turn, false);
   }
 
   /** 日誌の書き込み失敗でクローンのセッションを殺さない。 */
@@ -13393,7 +13465,7 @@ export function commitmentFor(event: InboxEvent): Commitment | null {
       };
     case 'external':
       // **デーモン自身が自分へ出した合図には、始末をつける相手が居ない。**
-      // `isDaemonSelfNotice` の doc に理由と、払っている代償の全文がある。
+      // `isDaemonSelfNotice` の doc に理由と、外から予約語を名乗らせない入口の断りの全文がある。
       if (isDaemonSelfNotice(event)) return null;
       return {
         ...base,

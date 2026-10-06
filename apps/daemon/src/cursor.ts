@@ -13,7 +13,7 @@ import { z } from 'zod';
  * `/journal` は別 PR で使う予定がある。`/reports` はこれを使わない——不透明なカーソルと「応答を1バイトも
  * 変えない」を同時に満たせなかったため、応答に既に載っている `date`/`at` をそのまま
  * 使う可視の複合キー（`beforeDate` ＋ `beforeAt`）になった（`apps/daemon/src/reports.ts`
- * の `listDailyReportsBefore`）。`/conversations` は #3550 でこの符号化を使うようになった（中身は日誌の継続点 `{ id, at }`。
+ * の `listDailyReportsBefore`）。`/conversations` は #3550 でこの形（base64url の JSON）を使うようになった（符号化は core の `encodeConversationCursor` / `decodeConversationCursor` で、クローンの道具 `conversation_read` と共有する。#3644。中身は日誌の継続点 `{ id, at }`。
  * 並びは日誌の順序なので、位置ではなく継続点で辿る）。**「4口で揃える」だった時期があるが、
  * いまはそう書けない** — 決まった口が増えるたびにここを更新すること。
  *
