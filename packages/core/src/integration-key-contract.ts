@@ -117,15 +117,15 @@ export async function verifyIntegrationKeyStoreContract(store: IntegrationKeySto
   await expectNulRejected(
     fail,
     'id の NUL',
-    () => store.putIntegrationKey(make({ id: 'x\u0000y', sha256: 'f'.repeat(64) })),
-    'x',
+    () => store.putIntegrationKey(make({ id: 'qx7\u0000qx7', sha256: 'f'.repeat(64) })),
+    'qx7',
   );
   await expectNulRejected(
     fail,
     'createdBy の NUL',
     () =>
-      store.putIntegrationKey(make({ id: 'k-n', sha256: 'f'.repeat(64), createdBy: 'o\u0000p' })),
-    'o',
+      store.putIntegrationKey(make({ id: 'k-n', sha256: 'f'.repeat(64), createdBy: 'zk9\u0000zk9' })),
+    'zk9',
   );
   await store.putIntegrationKey(make({ id: 'k-n', sha256: 'f'.repeat(64), name: 'a\u0000b' }));
   if ((await store.getIntegrationKey('k-n'))?.name !== 'ab') fail('name の NUL を落として残さない');
