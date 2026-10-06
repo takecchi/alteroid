@@ -19,7 +19,9 @@ import { redactErrorText, redactSecretsInBody } from '@alteroid/core/redact';
  *
  * 外から来た文字列（クローンの返答・ツール出力・取得した Web の中身・上流 API の文言）に
  * `ESC [2J`（画面消去）・`ESC ] 0 ; … BEL`（タイトル書き換え）・OSC 52（クリップボード）が
- * 入っていると、使う人の端末がそれを実行する。TUI は Ink が落とすが、CLI の `stdout.write` は落とさない。
+ * 入っていると、使う人の端末がそれを実行する。CLI の `stdout.write` は落とさない。
+ * **TUI も Ink には頼らない**（#3498）。Ink 7.1.1 は SGR と OSC を残し、BEL・BS・NUL・`\r`・C1 の OSC（U+009D）・
+ * U+009B に SGR が続く列を素通しにする。TUI は描く文字列を、組み立てたあとにこの関数へ通す。
  *
  * **落とすもの（SGR＝色も含めて全部）:**
  * - ESC で始まる列: CSI（`ESC [ … 終端`）・OSC / DCS / SOS / PM / APC（`ESC ] … BEL|ST` など。中身ごと）・

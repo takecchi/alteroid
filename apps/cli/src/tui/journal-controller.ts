@@ -59,6 +59,11 @@ export interface JournalState {
   readonly horizonNote: string | undefined;
   /** 取りこぼし確認が同じ時刻の詰まりで止まった。 */
   readonly newerBlocked: boolean;
+  /**
+   * 取りこぼし確認（`refreshNewer`）が失敗した。穴が空いたままなので、次の取りこぼし確認が成功しても
+   * 下ろさない（`since` が穴を飛び越えるため）。`load()`（`r`・絞りの変更）で読み直すと下りる。
+   */
+  readonly newerFailed: boolean;
   readonly selectedId: string | null;
   /** 最新に張り付いて追従中。 */
   readonly follow: boolean;
@@ -68,6 +73,8 @@ export interface JournalState {
   readonly loadedAt: number;
   /** 種別の選択画面の下書きとカーソル。 */
   readonly filterDraft: readonly JournalType[];
+  /** 選択画面の語の下書き（開いたとき `q` を写す。`c` で空にし、Enter で反映する）。 */
+  readonly qDraft: string;
   readonly filterCursor: number;
   /** 詳細に開いている 1 件（捨てられても読めるよう、実体を持つ）。 */
   readonly detail: JournalEntry | null;
@@ -85,12 +92,14 @@ export const initialJournalState: JournalState = {
   olderLoading: false,
   horizonNote: undefined,
   newerBlocked: false,
+  newerFailed: false,
   selectedId: null,
   follow: true,
   trimmed: 0,
   error: null,
   loadedAt: 0,
   filterDraft: [],
+  qDraft: '',
   filterCursor: 0,
   detail: null,
 };
@@ -168,6 +177,7 @@ export class JournalController {
       error: null,
       olderLoading: false,
       newerBlocked: false,
+      newerFailed: false,
       view: 'list',
       detail: null,
     });
@@ -318,7 +328,7 @@ export class JournalController {
       }
     } catch (error) {
       if (gen !== this.gen) return;
-      this.patch({ error: messageOf(error) });
+      this.patch({ error: messageOf(error), newerFailed: true });
     }
   }
 
@@ -383,7 +393,13 @@ export class JournalController {
   }
 
   openFilter(): void {
-    this.store.update((s) => ({ ...s, view: 'filter', filterDraft: s.types, filterCursor: 0 }));
+    this.store.update((s) => ({
+      ...s,
+      view: 'filter',
+      filterDraft: s.types,
+      qDraft: s.q,
+      filterCursor: 0,
+    }));
   }
 
   moveFilterCursor(delta: number): void {
@@ -406,13 +422,13 @@ export class JournalController {
   }
 
   clearFilterDraft(): void {
-    this.patch({ filterDraft: [] });
+    this.patch({ filterDraft: [], qDraft: '' });
   }
 
   applyFilter(): void {
     const s = this.store.getSnapshot();
-    // 語（q）は選択画面では触らない（`/journal q=…` で決める）。
-    this.setFilter(s.filterDraft, s.q);
+    // 語は下書きのまま渡す（開いたときは今の語。`c` で外した分だけ外れる。決めるのは `/journal q=…`）。
+    this.setFilter(s.filterDraft, s.qDraft);
   }
 
   cancelFilter(): void {
@@ -449,7 +465,7 @@ export class JournalController {
     this.patch({ view: 'list', detail: null });
   }
 
-  /** 一覧の最上行に一言出す（コマンドの引数の誤りなど）。次の読み込みで消える。 */
+  /** 一覧の最上行に一言出す（コマンドの引数の誤りなど）。開く読み込み（`load()`）の開始で消える——開く前に載せない。 */
   note(message: string): void {
     this.patch({ error: message });
   }

@@ -532,10 +532,17 @@ export function usePracticeVersion(slug: string, version: number | undefined) {
   );
 }
 
-export function useConversations(limit = 30) {
+/**
+ * **`keepPreviousData`（一覧の「もっと見る」、#3404）。** `limit` を増やすと鍵が変わるので、
+ * 既定のままだと取り直しの間（と失敗したとき）に一覧が消える。真なら直前の一覧を残す。
+ */
+export function useConversations(limit = 30, options: { keepPreviousData?: boolean } = {}) {
   const api = useApi();
-  return useSWR(KEY.conversations(limit), ({ limit }) =>
-    api.api.GET('/conversations', { params: { query: { limit } } }).then(unwrap),
+  return useSWR(
+    KEY.conversations(limit),
+    ({ limit }) => api.api.GET('/conversations', { params: { query: { limit } } }).then(unwrap),
+    // 失敗した直後にもう一度押したとき、SWR の重複排除（既定 2 秒）で取り直しを飲ませない。
+    options.keepPreviousData === true ? { keepPreviousData: true, dedupingInterval: 0 } : undefined,
   );
 }
 

@@ -2,12 +2,17 @@ import { AlertTriangle } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 
 import { ApprovalEntry } from '~/components/approval-entry';
-import { isApprovalAnswered, isApprovalWithdrawn } from '~/components/approval-answer-card';
+import {
+  isApprovalAnswered,
+  isApprovalWithdrawn,
+  type SentApprovalDraft,
+} from '~/components/approval-answer-card';
 import { ApprovalsTabs } from '~/components/group-tabs';
 import {
   Page,
   Button,
   Card,
+  CodeBlock,
   EMPTY_QUESTIONS_DRAFT,
   Empty,
   ErrorNote,
@@ -16,10 +21,15 @@ import {
 } from '@alteroid/ui';
 import { useAnswerApprovals, useApprovals } from '@alteroid/swr';
 import {
+  describeApprovalLeftover,
   isEmptyQuestionsDraft,
   loadApprovalDrafts,
+  loadApprovalLeftoverSources,
   saveApprovalDrafts,
+  saveApprovalLeftoverSources,
+  settleApprovalDraft,
   type ApprovalDrafts,
+  type ApprovalLeftoverSources,
   type PendingApproval,
   type UnreadableApproval,
 } from '@alteroid/logic';
@@ -63,6 +73,43 @@ function UnreadableApprovalNote({ unreadable }: { unreadable: UnreadableApproval
   );
 }
 
+/**
+ * 答えは通ったが、送ったあとに打った文が残っている承認（issue #3515）。**黙って消さない。**
+ * 承認はもう決着していて回答欄が無いので、残った文をここへ出す。写してから閉じられる。
+ */
+function LeftoverDrafts({
+  leftovers,
+  onDiscard,
+}: {
+  leftovers: { id: string; source: { question: string }; text: string }[];
+  onDiscard: (id: string) => void;
+}) {
+  if (leftovers.length === 0) return null;
+  return (
+    <ul className="mb-4 flex flex-col gap-3" aria-label="送ったあとに打った文が残っている承認">
+      {leftovers.map(({ id, source, text }) => (
+        <li key={id} className="rounded-md border border-warn/40 bg-warn/10 px-3 py-2 text-sm">
+          <p className="mb-2 break-words">
+            <strong>答えは通ったが、送ったあとに打った文が残っている。</strong>
+            承認はもう決着しているので、ここから送り直すことはできない。必要なら写してから閉じる。
+            <span className="mt-1 block text-xs text-muted-foreground">
+              対象: {source.question}
+            </span>
+          </p>
+          <CodeBlock label="残った文" maxHeight="12rem">
+            {text}
+          </CodeBlock>
+          <div className="mt-2">
+            <Button size="sm" onClick={() => onDiscard(id)}>
+              閉じる（捨てる）
+            </Button>
+          </div>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 export default function Approvals() {
   /**
    * **未回答だけを読む**（`GET /approvals?pending=true`）。回答済み・取り下げ済みは別のページ
@@ -102,6 +149,10 @@ export default function Approvals() {
    * されるので、state だけでは書きかけが黙って消える。初期値は保存したものから読む。
    */
   const [drafts, setDrafts] = useState<ApprovalDrafts>(loadApprovalDrafts);
+  /** 答えが通った承認の、本文と設問の控え（残った下書きを見せるため。issue #3515）。 */
+  const [leftoverSources, setLeftoverSources] = useState<ApprovalLeftoverSources>(
+    loadApprovalLeftoverSources,
+  );
   /** 直前のまとめ送信で駄目だった id ごとの理由。カードの下に出す。 */
   const [bulkErrors, setBulkErrors] = useState<Record<string, string>>({});
   const [bulkBusy, setBulkBusy] = useState(false);
@@ -123,12 +174,27 @@ export default function Approvals() {
     }));
   }
 
-  function clearDraft(id: string): void {
-    setDrafts((current) => {
-      if (!(id in current.texts) && !(id in current.questions)) return current;
-      return { texts: without(current.texts, id), questions: without(current.questions, id) };
-    });
-    setBulkErrors((current) => without(current, id));
+  /**
+   * 答えが通った。**送った時点の下書き（`sent`）と同じ項目だけ**畳み、応答を待つ間に打ち足した
+   * 分は残す（issue #3515）。残したものは、承認が未回答の一覧から消えたあとも
+   * 「送ったあとに打った文が残っている」として見せる（`leftovers`）。
+   */
+  function settleDraft(approval: PendingApproval, sent: SentApprovalDraft): void {
+    setDrafts((current) => settleApprovalDraft(current, approval.id, sent));
+    setLeftoverSources((current) => ({
+      ...current,
+      [approval.id]: { question: approval.question, questions: approval.questions ?? undefined },
+    }));
+    setBulkErrors((current) => without(current, approval.id));
+  }
+
+  /** 残った下書きを使い手が閉じる（写し終えた・要らない）。 */
+  function discardLeftover(id: string): void {
+    setDrafts((current) => ({
+      texts: without(current.texts, id),
+      questions: without(current.questions, id),
+    }));
+    setLeftoverSources((current) => without(current, id));
   }
 
   // 今読み込めている未回答の一覧に実在するものだけを対象にする。別経路で
@@ -149,24 +215,49 @@ export default function Approvals() {
    */
   const liveDrafts = useMemo<ApprovalDrafts>(() => {
     if (approvalsList === undefined) return drafts;
+    // 答えが通ったあとに残した下書き（`leftoverSources` に在る id）は、一覧から消えても保つ。
+    const keep = (id: string) => unansweredIds.has(id) || id in leftoverSources;
     return {
-      texts: Object.fromEntries(
-        Object.entries(drafts.texts).filter(([id]) => unansweredIds.has(id)),
-      ),
-      questions: Object.fromEntries(
-        Object.entries(drafts.questions).filter(([id]) => unansweredIds.has(id)),
-      ),
+      texts: Object.fromEntries(Object.entries(drafts.texts).filter(([id]) => keep(id))),
+      questions: Object.fromEntries(Object.entries(drafts.questions).filter(([id]) => keep(id))),
     };
-  }, [drafts, approvalsList, unansweredIds]);
+  }, [drafts, approvalsList, unansweredIds, leftoverSources]);
   useEffect(() => {
     saveApprovalDrafts(liveDrafts);
   }, [liveDrafts]);
+  /**
+   * 答えが通ったのに下書きが残っている承認。**まだ未回答の一覧に載っている間は出さない**
+   * （カードの回答欄にそのまま見えている。一覧の再取得で消えたら出る）。
+   */
+  const leftovers = useMemo(
+    () =>
+      Object.entries(leftoverSources)
+        .filter(([id]) => !unansweredIds.has(id))
+        .map(([id, source]) => ({ id, source, text: describeApprovalLeftover(source, drafts, id) }))
+        .filter((entry) => entry.text !== ''),
+    [leftoverSources, unansweredIds, drafts],
+  );
+  const liveLeftoverSources = useMemo<ApprovalLeftoverSources>(
+    () =>
+      Object.fromEntries(
+        Object.entries(leftoverSources).filter(
+          ([id]) => id in drafts.texts || id in drafts.questions,
+        ),
+      ),
+    [leftoverSources, drafts],
+  );
+  useEffect(() => {
+    saveApprovalLeftoverSources(liveLeftoverSources);
+  }, [liveLeftoverSources]);
   const pendingDrafts = Object.entries(drafts.texts).filter(
     ([id, text]) => text.trim() !== '' && unansweredIds.has(id),
   );
 
   async function submitBulk(): Promise<void> {
     if (pendingDrafts.length === 0) return;
+    // 送るときに下書きを控える。応答を待つ間に打ち足した分を、成功のあとに消さないため。
+    const sentTexts = drafts.texts;
+    const sentQuestions = drafts.questions;
     setBulkBusy(true);
     setBulkFailure(undefined);
     try {
@@ -174,7 +265,13 @@ export default function Approvals() {
       const nextErrors: Record<string, string> = {};
       for (const result of results) {
         if (result.ok) {
-          clearDraft(result.id);
+          const approval = approvalsList?.find((a) => a.id === result.id);
+          if (approval !== undefined) {
+            settleDraft(approval, {
+              text: sentTexts[result.id] ?? '',
+              questions: sentQuestions[result.id],
+            });
+          }
         } else {
           nextErrors[result.id] = result.error ?? '不明な失敗';
         }
@@ -219,6 +316,7 @@ export default function Approvals() {
         </div>
       )}
       <ErrorNote error={bulkFailure} className="mb-4" />
+      <LeftoverDrafts leftovers={leftovers} onDiscard={discardLeftover} />
 
       {isLoading ? (
         <Spinner />
@@ -251,7 +349,7 @@ export default function Approvals() {
                 onDraftChange={(text) => setDraft(approval.id, text)}
                 questionsDraft={drafts.questions[approval.id] ?? EMPTY_QUESTIONS_DRAFT}
                 onQuestionsDraftChange={(next) => setQuestionsDraft(approval.id, next)}
-                onAnswered={() => clearDraft(approval.id)}
+                onAnswered={(sent) => settleDraft(approval, sent)}
                 bulkError={bulkErrors[approval.id]}
               />
             </li>
