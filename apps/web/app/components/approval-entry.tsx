@@ -6,6 +6,7 @@ import { Button, ErrorNote, Spinner, cn } from '@alteroid/ui';
 import { useApprovalTrace, useConversation } from '@alteroid/swr';
 import { formatDateTime, journalTypeLabel, redactBody } from '@alteroid/logic';
 import type { PendingApproval } from '@alteroid/logic';
+import type { ApprovalQuestionsDraft } from '@alteroid/ui';
 
 import {
   ApprovalAnswerCard,
@@ -28,6 +29,8 @@ export function ApprovalEntry({
   approval,
   draft,
   onDraftChange,
+  questionsDraft,
+  onQuestionsDraftChange,
   onAnswered,
   bulkError,
 }: {
@@ -38,6 +41,9 @@ export function ApprovalEntry({
    */
   draft?: string;
   onDraftChange?: (text: string) => void;
+  /** 設問のフォームの書きかけ。`draft` と同じく未回答の画面だけが渡す（タブを移っても残すため）。 */
+  questionsDraft?: ApprovalQuestionsDraft;
+  onQuestionsDraftChange?: (draft: ApprovalQuestionsDraft) => void;
   /** この id に答えが通った（個別送信・まとめ送信どちらでも呼ぶ）。 */
   onAnswered?: () => void;
   /** 直前のまとめ送信でこの id が駄目だった理由（無ければ何も出さない）。 */
@@ -50,6 +56,8 @@ export function ApprovalEntry({
       approval={approval}
       draft={draft}
       onDraftChange={onDraftChange}
+      questionsDraft={questionsDraft}
+      onQuestionsDraftChange={onQuestionsDraftChange}
       onAnswered={onAnswered}
       bulkError={bulkError}
       /*
