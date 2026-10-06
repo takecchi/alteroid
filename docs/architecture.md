@@ -110,7 +110,7 @@
 - **本文の上限は添付の上限から計算する**（`runnerAttachmentBodyLimit`: 合計上限の base64 ぶん＋個数ぶんのメタデータ＋依頼文の余裕）。`POST /managers` と `/messages` は超過を **413** で断る。これは検めを抜けた巨大な本文への最後の歯止めで、能力の上限ではない。**上限は器ごとの事実を正にする**: runner は自分の上限を `hello.attachmentBodyLimit`（バイト）で名乗り、デーモンは送る前にその runner の上限で本文の大きさを見積もって検める。超えるなら送らず、道具が理由を返す（黙って落とさない）。上限を名乗らない runner はデーモン側の既定値で検める。そのため `ALTEROID_ATTACHMENT_MAX_*` を両方へ同じ値で置く二重管理は要らない
 - **能力の名乗りで判定する。** runner は `hello.capabilities` に `manager-attachments` を名乗る。**名乗らない runner（旧い版・名乗りをまだ受けていない）へ、デーモンは添付を送らない**（欄は zod が黙って捨てるだけで 200 が返るので、送れば「渡したつもりで渡っていない」になる。理由を言って断る）。添付の無い命令は従来どおりで、名乗りを待たない
 - **runner 側の置き場は `/tmp/alteroid-attachments/<managerId>/<id>/<名前>`**（`os.tmpdir()` 配下。作業ディレクトリの外なので、作業場の片付けの対象にならない）。**所有は runner のまま、グループを担い手の子プロセスの gid にして、dir は 0750・ファイルは 0440**（子を降ろさない構成は同じ UID なので 0700 / 0400）。担い手は読めるが、書き換え・差し替えはできない。**担い手に書ける dir を作らない**のが要点で、runner が書く先を担い手が symlink へ差し替える経路（特権の踏み台）を構造で塞ぐ。置く前に、置き場の root と各 dir が runner 自身の所有の実在の dir（symlink でない）であることを確かめる
-- **委譲が閉じたら消す。** 取りこぼしは、scratch-sweep の周期と、次に添付を置くときに、24時間たったものを消す
+- **委譲が閉じたら消す。** その委譲の dir ごと消す。取りこぼし（runner の異常終了など）は、生きた委譲に当たらず最後に触れてから24時間を過ぎたものを、runner の scratch-sweep の周期（`ALTEROID_SCRATCH_SWEEP_INTERVAL_MS`）と、次に添付を置くときに消す
 - 担い手には通知行（`[添付] id=… name=… type=… size=… sha256=… path=…`）が本文に足され、画像は画像としても渡る。画像以外は `Read` で開く
 - 日誌には、渡した添付の控えだけが `with: 'manager'` の outbound `exchange` に残る。中身は書かない
 
@@ -404,6 +404,8 @@ core にストアのインターフェースを切り、ドライバを差し替
 
 - **`AttachmentStore` は記憶（`PersonaStore`）から独立している。** 中身（bytes）は記憶・日誌・受信箱のどこにも書かない。日誌の `exchange` と受信箱の発言に載るのは控え（`AttachmentRef`: id・名前・種類・大きさ・sha256）だけで、中身が保持期間で消えても控えが残る
 - **検証は3実装（インメモリ・fs・pg）で同じ関数を通る**（`prepareAttachment`）。名前の正規化・MIME の正規化・画像のマジックバイト照合・上限・sha256 の計算・id の払い出しは core が持ち、ドライバは置くだけである。契約は `attachment-contract.ts` で3実装を同じ形で測る
+- **0バイトの添付は core が `empty` として断る**（`prepareAttachment` を通るので3実装に同じに効く）。`POST /attachments` は 400（`code: empty`）を返し、Web・CLI・TUI は送る前に同じ文（「空のファイルは添えられない」）で断る
+- **中身が画像でも、画像の上限（既定 5 MiB）を超える添付は、ターンで画像として渡さない**（宣言が画像以外なら、その他の上限で受け付けはする）。通知行で理由と開け方を言う。開け方は、クローンは `attachment_fetch`、担い手は置き場の path を `Read`
 - **中身は一覧で読まない。** `getMeta` と `prune` は bytes を読まない（pg は `bytes` 列を SELECT しない）。中身を読む `get` の呼び手は、クローンのターンへ画像として渡す経路・`attachment_fetch`・`GET /attachments/:id`・担い手への受け渡しである
 - **寿命は2本。** ①`expiresAt`（作成から既定30日。`ALTEROID_ATTACHMENT_RETENTION_DAYS`）を過ぎたもの、②発言（会話）へ結び付いていない（`bind` されていない）まま作成から1時間たったもの（上げただけで送らなかった残骸）を、デーモンが `AttachmentStore.prune` で定期的に消す（周期は `ALTEROID_ATTACHMENT_PRUNE_EVERY`。分。既定60。`off` で止める）。掃除は日誌に書かない
 - **`uploadedBy` は誰が上げたかの識別子だけ**（認証済みの主体を表す文字列。トークンや資格は入れない）。上げた主体が分からない経路では持たない
