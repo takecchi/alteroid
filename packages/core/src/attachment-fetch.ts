@@ -5,7 +5,7 @@ import { join, resolve, sep } from 'node:path';
 
 import { sha256Hex } from './auth.js';
 import { reasonOf } from './dropped-record.js';
-import { normalizeAttachmentName, type AttachmentStore } from './attachment.js';
+import { attachmentDiskName, normalizeAttachmentName, type AttachmentStore } from './attachment.js';
 
 /**
  * 添付の中身をデーモンの手元へ「写し」として取り出す（Issue #3111 段2。`attachment_fetch` の実体）。
@@ -65,9 +65,11 @@ export async function fetchAttachmentCopy(
   if (!SAFE_ID.test(meta.id)) return { ok: false, reason: 'unsafe' };
   // 名前は保存時に正規化済みだが、置き場の実装を信じず、ここでも区切りを落とす。
   const name = normalizeAttachmentName(meta.name);
+  // ディスク上の名前は NAME_MAX（255 バイト）に収まるよう丸める（#3324）。返す `name`（表示）は丸めない。
+  const diskName = attachmentDiskName(name);
   const base = resolve(copiesDir);
   const dir = resolve(base, meta.id);
-  const path = resolve(dir, name);
+  const path = resolve(dir, diskName);
   if (!dir.startsWith(base + sep) || !path.startsWith(dir + sep)) {
     return { ok: false, reason: 'unsafe' };
   }
@@ -96,7 +98,8 @@ export async function fetchAttachmentCopy(
       return copy(true);
   }
   await mkdir(dir, { recursive: true, mode: 0o700 });
-  const tmp = `${path}.${randomUUID()}.tmp`;
+  // 一時ファイルは名前に依らない短い固定の形（名前に足すと NAME_MAX を超える）。
+  const tmp = resolve(dir, `.${randomUUID()}.tmp`);
   try {
     await writeFile(tmp, bytes, { mode: 0o600 });
     await rename(tmp, path);

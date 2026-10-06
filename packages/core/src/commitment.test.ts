@@ -13,6 +13,7 @@ import {
   isDaemonSelfNotice,
 } from './clone.js';
 import { verifyCommitmentFoldContract } from './commitment-fold-contract.js';
+import { verifyCommitmentTieOrderContract } from './commitment-tie-order-contract.js';
 import { verifyStoreIsolationContract } from './store-isolation-contract.js';
 import { buildActivityDigest } from './digest.js';
 import type { CloneHost } from './host.js';
@@ -2476,6 +2477,10 @@ describe('台帳の契約（インメモリ）', () => {
   it('畳み込みの契約（#1041。3実装で同じことを測る。⚠ 名乗れるのはプロセス内で原子であることまで）', async () => {
     const stores = createMemoryStores();
     await verifyCommitmentFoldContract(stores.commitments);
+  });
+
+  it('同じ at の未了の並びの契約（#3285。3実装で同じことを測る。入れた順のまま、editBody・close・closeMany の後も）', async () => {
+    await verifyCommitmentTieOrderContract(createMemoryStores().commitments);
   });
 
   it('ストアが返す値は書いた側の握りと別物である（#1072。3実装で同じことを測る）', async () => {

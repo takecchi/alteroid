@@ -11,7 +11,7 @@
  * 位相の消失がまさにその形で出る）。
  */
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { MemoryRouter } from 'react-router';
+import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { json, Providers, storeTestBaseUrl } from '~/test-support';
@@ -106,14 +106,21 @@ function stubSchedule(entries: unknown[], unreadable?: unknown[]): void {
   }) as typeof fetch;
 }
 
-function renderSchedule(): void {
+/** 書きかけの確認が `useBlocker` を使うので、データルーターで包む（実アプリと同じ）。 */
+function renderSchedule() {
+  const router = createMemoryRouter(
+    [
+      { path: '/', Component: Schedule },
+      { path: '/elsewhere', Component: () => <p>別の画面</p> },
+    ],
+    { initialEntries: ['/'] },
+  );
   render(
     <Providers>
-      <MemoryRouter>
-        <Schedule />
-      </MemoryRouter>
+      <RouterProvider router={router} />
     </Providers>,
   );
+  return router;
 }
 
 describe('継続する依頼を仕込む', () => {
@@ -225,6 +232,100 @@ describe('継続する依頼を仕込む', () => {
     expect(sent).toEqual([]);
     // 押せないことは見た目でも分かる（黙って無反応にしない）。
     expect(button.hasAttribute('disabled')).toBe(true);
+  });
+});
+
+describe('既に在る名前で仕込むときだけ、置き換わると確かめる（#3347）', () => {
+  async function fill(kind: string, request: string): Promise<void> {
+    fireEvent.change(await screen.findByLabelText(/依頼の名前/), { target: { value: kind } });
+    fireEvent.change(screen.getByLabelText('依頼の本文'), { target: { value: request } });
+  }
+
+  it('在る名前なら送る前に確認を挟み、やめれば送らず入力も残る', async () => {
+    stubSchedule([DEFAULT_ENTRY, SPEC_ENTRY]);
+    renderSchedule();
+    await screen.findByText('morning-issues');
+
+    await fill('morning-issues', '新しい本文');
+    fireEvent.click(screen.getByRole('button', { name: '仕込む' }));
+
+    const dialog = await screen.findByRole('alertdialog');
+    expect(within(dialog).getByText(/本文と周期が置き換わ/)).toBeTruthy();
+    expect(within(dialog).getByText(/前回動いた時刻は保たれ/)).toBeTruthy();
+    expect(sent).toEqual([]);
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'やめる' }));
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+    expect(sent).toEqual([]);
+    expect((screen.getByLabelText('依頼の本文') as HTMLTextAreaElement).value).toBe('新しい本文');
+  });
+
+  it('確かめて進めると送り、結果は「置き換えた」と言う（「仕込んだ」とは別）', async () => {
+    stubSchedule([DEFAULT_ENTRY, SPEC_ENTRY]);
+    renderSchedule();
+    await screen.findByText('morning-issues');
+
+    await fill('morning-issues', '新しい本文');
+    fireEvent.click(screen.getByRole('button', { name: '仕込む' }));
+    const dialog = await screen.findByRole('alertdialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: '置き換える' }));
+
+    await waitFor(() => expect(sent).toHaveLength(1));
+    await expect(sent[0]?.read()).resolves.toMatchObject({
+      kind: 'morning-issues',
+      request: '新しい本文',
+    });
+    expect(await screen.findByText('置き換えた: morning-issues')).toBeTruthy();
+    expect(screen.queryByText(/仕込んだ: /)).toBeNull();
+  });
+
+  it('新しい名前なら確認なしでそのまま送り、「仕込んだ」と言う', async () => {
+    stubSchedule([DEFAULT_ENTRY, SPEC_ENTRY]);
+    renderSchedule();
+    await screen.findByText('morning-issues');
+
+    await fill('another', '本文');
+    fireEvent.click(screen.getByRole('button', { name: '仕込む' }));
+
+    await waitFor(() => expect(sent).toHaveLength(1));
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    expect(await screen.findByText('仕込んだ: another')).toBeTruthy();
+  });
+
+  it('一覧が読めていないときは確認で止めず、そのまま送る', async () => {
+    globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+      const request = input instanceof Request ? input : null;
+      const method = request?.method ?? init?.method ?? 'GET';
+      if (method === 'GET') return Promise.reject(new TypeError('Failed to fetch'));
+      sent.push({ url: request?.url ?? '', method, read: async () => undefined });
+      return Promise.resolve(json({ ok: true }));
+    }) as typeof fetch;
+    renderSchedule();
+
+    await fill('morning-issues', '本文');
+    fireEvent.click(screen.getByRole('button', { name: '仕込む' }));
+    await waitFor(() => expect(sent).toHaveLength(1));
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+  });
+
+  it('予約名（409）は日本語で断り、入力を残す', async () => {
+    globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+      const request = input instanceof Request ? input : null;
+      const method = request?.method ?? init?.method ?? 'GET';
+      if (method === 'GET') return Promise.resolve(json({ entries: [DEFAULT_ENTRY] }));
+      return Promise.resolve(json({ error: 'reserved kind' }, 409));
+    }) as typeof fetch;
+    renderSchedule();
+
+    await fill('daily_report', '本文');
+    fireEvent.click(screen.getByRole('button', { name: '仕込む' }));
+
+    expect(
+      await screen.findByText(/既定の名前（予約名）なので使えない。別の名前にする/),
+    ).toBeTruthy();
+    expect(screen.queryByText(/reserved kind/)).toBeNull();
+    expect((screen.getByLabelText(/依頼の名前/) as HTMLInputElement).value).toBe('daily_report');
+    expect((screen.getByLabelText('依頼の本文') as HTMLTextAreaElement).value).toBe('本文');
   });
 });
 
@@ -709,5 +810,180 @@ describe('送るキーの案内（#3300）', () => {
     expect(within(panel).queryByText(/Enter で保存$/)).toBeNull();
     fireEvent.mouseDown(within(panel).getByRole('tab', { name: '編集' }));
     expect(await within(panel).findByText(/Enter で保存$/)).toBeTruthy();
+  });
+});
+
+/**
+ * 書きかけの依頼を、確認なしで消さない（#3374）。編集の切り替え・「やめる」は、元の値から
+ * 変わっているときだけ確かめる。画面を離れるときは、新規の登録・編集・イベントのどれも守る。
+ */
+describe('書きかけの依頼を確認なしで消さない（#3374）', () => {
+  const OTHER_ENTRY = {
+    ...SPEC_ENTRY,
+    kind: 'evening-review',
+    description: '毎日 18:00',
+    request: '夕方にレビューを見ておいて',
+    spec: { type: 'daily', at: '18:00' },
+  };
+
+  async function openEdit(kind: string) {
+    fireEvent.click(await screen.findByRole('button', { name: `${kind} を編集` }));
+    return screen.findByRole('group', { name: `${kind} を編集` });
+  }
+
+  async function typeRequest(panel: HTMLElement, text: string) {
+    fireEvent.mouseDown(within(panel).getByRole('tab', { name: '編集' }));
+    fireEvent.change(await within(panel).findByPlaceholderText(/依頼の本文/), {
+      target: { value: text },
+    });
+  }
+
+  it('編集中に別の行の「編集」を押すと、書きかけがあれば確認を挟む。やめれば元の編集欄が残る', async () => {
+    stubSchedule([SPEC_ENTRY, OTHER_ENTRY]);
+    renderSchedule();
+    const panel = await openEdit(SPEC_ENTRY.kind);
+    await typeRequest(panel, '書きかけ');
+
+    fireEvent.click(screen.getByRole('button', { name: `${OTHER_ENTRY.kind} を編集` }));
+
+    const dialog = await screen.findByRole('alertdialog');
+    expect(within(dialog).getByText('保存していない変更があります')).toBeTruthy();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'やめる' }));
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+    expect(screen.queryByRole('group', { name: `${OTHER_ENTRY.kind} を編集` })).toBeNull();
+    expect(
+      (
+        within(
+          screen.getByRole('group', { name: `${SPEC_ENTRY.kind} を編集` }),
+        ).getByPlaceholderText(/依頼の本文/) as HTMLTextAreaElement
+      ).value,
+    ).toBe('書きかけ');
+  });
+
+  it('「破棄して切り替える」を押すと、別の行の編集欄へ替わる', async () => {
+    stubSchedule([SPEC_ENTRY, OTHER_ENTRY]);
+    renderSchedule();
+    const panel = await openEdit(SPEC_ENTRY.kind);
+    await typeRequest(panel, '書きかけ');
+    fireEvent.click(screen.getByRole('button', { name: `${OTHER_ENTRY.kind} を編集` }));
+
+    fireEvent.click(await screen.findByRole('button', { name: '破棄して切り替える' }));
+
+    expect(await screen.findByRole('group', { name: `${OTHER_ENTRY.kind} を編集` })).toBeTruthy();
+    expect(screen.queryByRole('group', { name: `${SPEC_ENTRY.kind} を編集` })).toBeNull();
+  });
+
+  it('周期だけ直したときも書きかけとして確認する', async () => {
+    stubSchedule([SPEC_ENTRY, OTHER_ENTRY]);
+    renderSchedule();
+    const panel = await openEdit(SPEC_ENTRY.kind);
+    fireEvent.change(within(panel).getByLabelText('時刻'), { target: { value: '10:15' } });
+
+    fireEvent.click(within(panel).getByRole('button', { name: 'やめる' }));
+
+    expect(await screen.findByRole('alertdialog')).toBeTruthy();
+  });
+
+  it('書きかけが無ければ、切り替えも「やめる」も確認なしで動く', async () => {
+    stubSchedule([SPEC_ENTRY, OTHER_ENTRY]);
+    renderSchedule();
+    const panel = await openEdit(SPEC_ENTRY.kind);
+
+    fireEvent.click(screen.getByRole('button', { name: `${OTHER_ENTRY.kind} を編集` }));
+    const other = await screen.findByRole('group', { name: `${OTHER_ENTRY.kind} を編集` });
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    expect(panel.isConnected).toBe(false);
+
+    fireEvent.click(within(other).getByRole('button', { name: 'やめる' }));
+    await waitFor(() => expect(other.isConnected).toBe(false));
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+  });
+
+  it('書きかけのとき「やめる」は確認を挟み、「破棄して閉じる」で閉じる。元の値に戻せば確認しない', async () => {
+    stubSchedule([SPEC_ENTRY]);
+    renderSchedule();
+    const panel = await openEdit(SPEC_ENTRY.kind);
+    await typeRequest(panel, '書きかけ');
+
+    fireEvent.click(within(panel).getByRole('button', { name: 'やめる' }));
+    fireEvent.click(await screen.findByRole('button', { name: '破棄して閉じる' }));
+    await waitFor(() => expect(panel.isConnected).toBe(false));
+
+    const again = await openEdit(SPEC_ENTRY.kind);
+    await typeRequest(again, '書きかけ');
+    await typeRequest(again, SPEC_ENTRY.request);
+    fireEvent.click(within(again).getByRole('button', { name: 'やめる' }));
+    await waitFor(() => expect(again.isConnected).toBe(false));
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+  });
+
+  it('保存に成功して閉じるときは、確認を挟まない', async () => {
+    stubSchedule([SPEC_ENTRY]);
+    renderSchedule();
+    const panel = await openEdit(SPEC_ENTRY.kind);
+    await typeRequest(panel, '直した本文');
+
+    fireEvent.click(within(panel).getByRole('button', { name: '保存する' }));
+
+    await waitFor(() => expect(panel.isConnected).toBe(false));
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+  });
+
+  async function expectGuarded(
+    router: ReturnType<typeof renderSchedule>,
+    makeDirty: () => Promise<void> | void,
+  ) {
+    const clean = new Event('beforeunload', { cancelable: true });
+    window.dispatchEvent(clean);
+    expect(clean.defaultPrevented).toBe(false);
+
+    await makeDirty();
+
+    const dirty = new Event('beforeunload', { cancelable: true });
+    window.dispatchEvent(dirty);
+    expect(dirty.defaultPrevented).toBe(true);
+    await act(async () => {
+      void router.navigate('/elsewhere');
+    });
+    expect(await screen.findByRole('alertdialog')).toBeTruthy();
+    expect(router.state.location.pathname).toBe('/');
+    fireEvent.click(screen.getByRole('button', { name: '破棄して離れる' }));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/elsewhere'));
+  }
+
+  it('「継続する依頼を登録する」の書きかけは、離れる前に確認する', async () => {
+    stubSchedule([DEFAULT_ENTRY]);
+    const router = renderSchedule();
+    const kindBox = await screen.findByLabelText(/依頼の名前/);
+    await expectGuarded(router, () => {
+      fireEvent.change(kindBox, { target: { value: 'half-typed' } });
+    });
+  });
+
+  it('編集欄の書きかけは、離れる前に確認する', async () => {
+    stubSchedule([SPEC_ENTRY]);
+    const router = renderSchedule();
+    const panel = await openEdit(SPEC_ENTRY.kind);
+    await expectGuarded(router, () => typeRequest(panel, '書きかけ'));
+  });
+
+  it('「外部イベントを送る」の書きかけは、離れる前に確認する', async () => {
+    stubSchedule([DEFAULT_ENTRY]);
+    const router = renderSchedule();
+    const box = await screen.findByLabelText('知らせの内容');
+    await expectGuarded(router, () => {
+      fireEvent.change(box, { target: { value: '{"a":1}' } });
+    });
+  });
+
+  it('何も書いていなければ、確認なしで移動できる', async () => {
+    stubSchedule([SPEC_ENTRY]);
+    const router = renderSchedule();
+    await openEdit(SPEC_ENTRY.kind);
+    await act(async () => {
+      void router.navigate('/elsewhere');
+    });
+    await waitFor(() => expect(router.state.location.pathname).toBe('/elsewhere'));
+    expect(screen.queryByRole('alertdialog')).toBeNull();
   });
 });

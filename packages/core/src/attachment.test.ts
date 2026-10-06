@@ -4,6 +4,7 @@ import {
   ATTACHMENT_RETENTION_DAYS_ENV,
   AttachmentRejectedError,
   DEFAULT_ATTACHMENT_LIMITS,
+  attachmentDiskName,
   normalizeAttachmentName,
   readAttachmentLimits,
   sniffAttachmentImageType,
@@ -99,6 +100,27 @@ describe('添付: ファイル名', () => {
     expect(normalizeAttachmentName('..')).toBe('file');
     expect(normalizeAttachmentName('')).toBe('file');
     expect(normalizeAttachmentName('日本語.pdf')).toBe('日本語.pdf');
+  });
+
+  it('ディスク名: 200 バイトまでは触らず、超えたら拡張子を残してコードポイントの途中で切らずに丸める（#3324）', () => {
+    expect(attachmentDiskName('日本語.pdf')).toBe('日本語.pdf');
+    const long = attachmentDiskName(`${'あ'.repeat(100)}.pdf`);
+    expect(long.endsWith('.pdf')).toBe(true);
+    expect(Buffer.byteLength(long, 'utf8')).toBeLessThanOrEqual(200);
+    expect(long).toBe(`${'あ'.repeat(65)}.pdf`);
+    // 4 バイト文字（サロゲートペア）も途中で切らない。
+    const emoji = attachmentDiskName('😀'.repeat(100));
+    expect(Buffer.byteLength(emoji, 'utf8')).toBeLessThanOrEqual(200);
+    expect(emoji).toBe('😀'.repeat(50));
+    expect(emoji).not.toContain('\ufffd');
+    // 長すぎる「拡張子」は拡張子とみなさない。ドットだけ・先頭ドットでも空にならない。
+    expect(
+      Buffer.byteLength(attachmentDiskName(`a.${'b'.repeat(250)}`), 'utf8'),
+    ).toBeLessThanOrEqual(200);
+    expect(
+      Buffer.byteLength(attachmentDiskName(`.${'b'.repeat(250)}`), 'utf8'),
+    ).toBeLessThanOrEqual(200);
+    expect(attachmentDiskName('')).toBe('file');
   });
 });
 

@@ -137,7 +137,8 @@ describe('/archive/:id', () => {
     renderPage();
 
     expect(await screen.findByText('本文は削除済み')).toBeTruthy();
-    expect(screen.getByText(/1234バイト/)).toBeTruthy();
+    expect(screen.getByText(/消した本文は 1.2 KB）/)).toBeTruthy();
+    expect(screen.queryByText(/1234/)).toBeNull();
     expect(screen.queryByText(/読み込めませんでした/)).toBeNull();
     expect(screen.queryByTestId('archive-body')).toBeNull();
   });

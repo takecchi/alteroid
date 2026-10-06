@@ -13,8 +13,8 @@
  * 5. **403 に宣言の案内を出さない。** 本文が何であれ（かつての `requireOwner` の本文でも）、持ち主として宣言する手は案内しない（#2862）
  * 6. **保存したら 実行環境ごとの反映結果を出す**（配り損ねを小さく出さない）
  */
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
-import { MemoryRouter } from 'react-router';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { createMemoryRouter, Link, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { json, Providers, storeTestBaseUrl } from '~/test-support';
@@ -103,11 +103,25 @@ function stubMcp(options: { get?: Reply; put?: Reply } = {}) {
 }
 
 function renderScreen() {
+  // `useBlocker` はデータルーターの中でしか動かない。離れる先のリンクも置く。
+  const router = createMemoryRouter(
+    [
+      {
+        path: '/mcp-servers',
+        Component: () => (
+          <>
+            <Link to="/elsewhere">よその画面</Link>
+            <McpServersPage />
+          </>
+        ),
+      },
+      { path: '/elsewhere', Component: () => <p>よその画面です</p> },
+    ],
+    { initialEntries: ['/mcp-servers'] },
+  );
   render(
     <Providers>
-      <MemoryRouter>
-        <McpServersPage />
-      </MemoryRouter>
+      <RouterProvider router={router} />
     </Providers>,
   );
 }
@@ -347,5 +361,78 @@ describe('/mcp-servers 画面 — 差し替える', () => {
     expect(screen.getByLabelText('実行環境ごとの反映結果').textContent).toContain(
       'runner-1: 外した',
     );
+  });
+});
+
+/** 書きかけがあるときだけ、閉じる・離れる前に確認する（#3370）。 */
+describe('/mcp-servers 画面 — 書きかけを確認なしで捨てない', () => {
+  const EDITOR = 'MCP サーバの新しい登録';
+
+  async function startDirty() {
+    stubMcp();
+    renderScreen();
+    fireEvent.click(await screen.findByRole('button', { name: '編集する' }));
+    fireEvent.change(screen.getByLabelText(EDITOR), { target: { value: '{ 書きかけ' } });
+  }
+
+  it('書きかけのまま「編集を閉じる」を押すと確認が出る。やめれば残り、破棄すると閉じる', async () => {
+    await startDirty();
+    fireEvent.click(screen.getByRole('button', { name: '編集を閉じる' }));
+
+    expect(await screen.findByRole('alertdialog')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'やめる' }));
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+    expect(screen.getByLabelText<HTMLTextAreaElement>(EDITOR).value).toContain('書きかけ');
+
+    fireEvent.click(screen.getByRole('button', { name: '編集を閉じる' }));
+    fireEvent.click(await screen.findByRole('button', { name: '破棄して閉じる' }));
+    expect(screen.queryByLabelText(EDITOR)).toBeNull();
+  });
+
+  it('書きかけが無ければ「編集を閉じる」は確認なしで閉じる', async () => {
+    stubMcp();
+    renderScreen();
+    fireEvent.click(await screen.findByRole('button', { name: '編集する' }));
+    fireEvent.click(screen.getByRole('button', { name: '編集を閉じる' }));
+
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    expect(screen.queryByLabelText(EDITOR)).toBeNull();
+  });
+
+  it('書きかけのまま画面を離れると確認が出る。破棄すると移動する', async () => {
+    await startDirty();
+    fireEvent.click(screen.getByRole('link', { name: 'よその画面' }));
+
+    expect(await screen.findByText('保存していない変更があります')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'やめる' }));
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+    expect(screen.getByLabelText<HTMLTextAreaElement>(EDITOR).value).toContain('書きかけ');
+
+    fireEvent.click(screen.getByRole('link', { name: 'よその画面' }));
+    fireEvent.click(await screen.findByRole('button', { name: '破棄して離れる' }));
+    expect(await screen.findByText('よその画面です')).toBeTruthy();
+  });
+
+  it('書きかけが無ければ確認なしで離れる', async () => {
+    stubMcp();
+    renderScreen();
+    await screen.findByRole('button', { name: '編集する' });
+    fireEvent.click(screen.getByRole('link', { name: 'よその画面' }));
+
+    expect(await screen.findByText('よその画面です')).toBeTruthy();
+  });
+
+  it('beforeunload は書きかけのときだけ止める', async () => {
+    stubMcp();
+    renderScreen();
+    fireEvent.click(await screen.findByRole('button', { name: '編集する' }));
+    const clean = new Event('beforeunload', { cancelable: true });
+    window.dispatchEvent(clean);
+    expect(clean.defaultPrevented).toBe(false);
+
+    fireEvent.change(screen.getByLabelText(EDITOR), { target: { value: '{}' } });
+    const dirty = new Event('beforeunload', { cancelable: true });
+    window.dispatchEvent(dirty);
+    expect(dirty.defaultPrevented).toBe(true);
   });
 });

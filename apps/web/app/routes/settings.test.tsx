@@ -968,3 +968,73 @@ describe('知らない runner の state に倒れ先がある（#2010）', () =>
     expect(await screen.findByText('繋がらない（つなぎ直しを試している）')).toBeTruthy();
   });
 });
+
+/**
+ * 「リセット」「サーバを止める」の窓は、実行中に Esc（`<dialog>` の `cancel`）で閉じない（#3349）。
+ * 「やめる」ボタンが実行中は押せないのに Esc だけ素通しで、結果を見ないまま窓が閉じていた。
+ * 実行中でないときは今までどおり Esc で閉じられる。
+ */
+describe('実行中は窓の Esc（cancel）を止める — #3349', () => {
+  function renderPending() {
+    stubFetch((url) => {
+      if (url.includes('/runners')) return json({ runners: [], daemonRevision: DAEMON_UNKNOWN });
+      if (url.includes('/auth/providers')) return json({ providers: [] });
+      if (url.includes('/me')) return json({ status: 'open' });
+      if (url.includes('/health')) return json({ ok: true });
+      return json({});
+    });
+    const stubbed = globalThis.fetch;
+    let release!: (response: Response) => void;
+    const pending = new Promise<Response>((resolve) => {
+      release = resolve;
+    });
+    let called = false;
+    globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      if (url.includes('/shutdown') || url.includes('/reset')) {
+        called = true;
+        return pending;
+      }
+      return stubbed(input, init);
+    }) as typeof fetch;
+    const router = createMemoryRouter([{ path: '/', Component: Settings }], {
+      initialEntries: ['/'],
+    });
+    render(
+      <Providers>
+        <RouterProvider router={router} />
+      </Providers>,
+    );
+    return { release, wasCalled: () => called };
+  }
+
+  const cases = [
+    { name: 'サーバを止める', open: 'alteroid のサーバを止める', word: 'stop', run: '止める' },
+    { name: 'リセット', open: 'リセットする', word: 'reset', run: '本当に削除する' },
+  ];
+
+  for (const c of cases) {
+    it(`${c.name}: 実行中は cancel を止め、終われば cancel は通る`, async () => {
+      const { release, wasCalled } = renderPending();
+      fireEvent.click(await screen.findByRole('button', { name: c.open }));
+      const input = await screen.findByPlaceholderText(c.word);
+      const dialog = input.closest('dialog')!;
+
+      // 実行前は Esc で閉じられる。
+      expect(fireEvent(dialog, new Event('cancel', { cancelable: true }))).toBe(true);
+
+      fireEvent.change(input, { target: { value: c.word } });
+      fireEvent.click(screen.getByRole('button', { name: c.run }));
+      await waitFor(() => expect(wasCalled()).toBe(true));
+
+      // 実行中は Esc を止める。
+      expect(fireEvent(dialog, new Event('cancel', { cancelable: true }))).toBe(false);
+
+      // 失敗で終わらせる（成功の報告の形に依らず、「終わったら cancel は通る」だけを見る）。
+      release(json({ error: '失敗' }, 500));
+      await waitFor(() =>
+        expect(fireEvent(dialog, new Event('cancel', { cancelable: true }))).toBe(true),
+      );
+    });
+  }
+});

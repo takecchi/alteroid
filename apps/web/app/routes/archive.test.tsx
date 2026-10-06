@@ -17,12 +17,17 @@
  * `globalThis.fetch` を自分で差し替え、状態（`removedAt` が付くかどうか）を持つ。
  */
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { MemoryRouter } from 'react-router';
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { json, Providers, storeTestBaseUrl } from '~/test-support';
 
 import Archive from './archive';
+import { formatDateTime } from '@alteroid/logic';
+
+/** 行の名前（一覧の見出しと同じ「<日時> の会話」。ボタンの aria-label はこれに操作を足す）。 */
+const AT = '2026-09-01T00:00:00.000Z';
+const rowName = (at: string): string => `${formatDateTime(at)} の会話`;
 
 let originalFetch: typeof fetch;
 
@@ -160,7 +165,9 @@ describe('/archive 画面 — 一覧・集計・削除（#776）', () => {
 
     await renderArchive();
 
-    const links = await screen.findAllByRole('link', { name: '本文を読む' });
+    const links = await screen.findAllByRole('link', {
+      name: `${rowName(AT)}の本文を読む`,
+    });
     expect(links).toHaveLength(1);
     expect(links[0]!.getAttribute('href')).toBe('/archive/live%20a.jsonl');
   });
@@ -256,7 +263,7 @@ describe('/archive 画面 — 一覧・集計・削除（#776）', () => {
     clone.querySelectorAll('details').forEach((el) => el.remove());
     const text = clone.textContent ?? '';
     for (const word of [/continues/, /zzz/, /UTF-8/, /置き場/]) expect(text).not.toMatch(word);
-    expect(text).toMatch(/消した本文は 7バイト/);
+    expect(text).toMatch(/消した本文は 7 B/);
   });
 
   it('空のとき、何が起きるとここに出るかを言い、コマンド名・パス・内部の語を出さない（#2792）', async () => {
@@ -286,7 +293,7 @@ describe('/archive 画面 — 一覧・集計・削除（#776）', () => {
     await renderArchive();
 
     expect(await screen.findByText('本文は削除済み')).toBeTruthy();
-    expect(screen.queryByRole('button', { name: '本文を消す' })).toBeNull();
+    expect(screen.queryByRole('button', { name: `${rowName(AT)}の本文を消す` })).toBeNull();
   });
 
   it('消した本文のバイト数は、保存量とは単位が違うと読める文言で出す（issue #2270 / #2074）', async () => {
@@ -308,11 +315,11 @@ describe('/archive 画面 — 一覧・集計・削除（#776）', () => {
     // 消した量（`removedBytes`）は「消した本文の素の UTF-8 バイト数」。
     // 使用量とは単位が違い、置き場で解放した量でもないと言う。
     const removedLine = screen.getByText(/削除:/);
-    expect(removedLine.textContent).toContain('消した本文は 1000000バイト');
+    expect(removedLine.textContent).toContain('消した本文は 976.6 KB');
     expect(removedLine.textContent).toContain('使用量とは数え方が違う');
     expect(removedLine.textContent).toContain('空いた容量とは一致しません');
     // 単位の区別なしの「（1000000バイト）」の形は出さない。
-    expect(screen.queryByText(/（1000000バイト）/)).toBeNull();
+    expect(screen.queryByText(/1000000/)).toBeNull();
   });
 
   it('「本文を消す」で DELETE /archive/:id を叩き、成功すれば一覧が「本文は削除済み」に変わる', async () => {
@@ -326,7 +333,7 @@ describe('/archive 画面 — 一覧・集計・削除（#776）', () => {
     ]);
 
     await renderArchive();
-    fireEvent.click(await screen.findByRole('button', { name: '本文を消す' }));
+    fireEvent.click(await screen.findByRole('button', { name: `${rowName(AT)}の本文を消す` }));
     // 押しただけでは消さない（#3091）。「やめる」で閉じても DELETE は飛ばない。
     const dialog = await screen.findByRole('alertdialog');
     expect(dialog.textContent).toContain('元に戻せません');
@@ -334,7 +341,7 @@ describe('/archive 画面 — 一覧・集計・削除（#776）', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: 'やめる' }));
     await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
     expect(deletes).toHaveLength(0);
-    fireEvent.click(screen.getByRole('button', { name: '本文を消す' }));
+    fireEvent.click(screen.getByRole('button', { name: `${rowName(AT)}の本文を消す` }));
     fireEvent.click(
       within(await screen.findByRole('alertdialog')).getByRole('button', { name: '消す' }),
     );
@@ -342,7 +349,7 @@ describe('/archive 画面 — 一覧・集計・削除（#776）', () => {
     await waitFor(() => {
       expect(screen.getByText('本文は削除済み')).toBeTruthy();
     });
-    expect(screen.queryByRole('button', { name: '本文を消す' })).toBeNull();
+    expect(screen.queryByRole('button', { name: `${rowName(AT)}の本文を消す` })).toBeNull();
   });
 
   /**
@@ -363,7 +370,7 @@ describe('/archive 画面 — 一覧・集計・削除（#776）', () => {
     );
 
     await renderArchive();
-    fireEvent.click(await screen.findByRole('button', { name: '本文を消す' }));
+    fireEvent.click(await screen.findByRole('button', { name: `${rowName(AT)}の本文を消す` }));
     fireEvent.click(
       within(await screen.findByRole('alertdialog')).getByRole('button', { name: '消す' }),
     );
@@ -372,15 +379,19 @@ describe('/archive 画面 — 一覧・集計・削除（#776）', () => {
     expect(await screen.findByText(/走行中のマネージャー mgr-1 の退避なので消せない/)).toBeTruthy();
 
     // 理由の入力欄が現れる。理由なしでは押せない。
-    const input = await screen.findByPlaceholderText('走行中のマネージャーの退避——上書きする理由');
-    const overrideButton = screen.getByRole('button', { name: '理由を付けて消す' });
+    const input = await screen.findByRole('textbox', {
+      name: '走行中のマネージャーの退避を上書きする理由',
+    });
+    const overrideButton = screen.getByRole('button', {
+      name: `${rowName(AT)}の本文を理由を付けて消す`,
+    });
     expect(overrideButton).toHaveProperty('disabled', true);
 
     fireEvent.change(input, { target: { value: '本番障害の調査で緊急に消す必要があった' } });
     expect(overrideButton).toHaveProperty('disabled', false);
 
     // 「本文を消す」の確認を開いて閉じても、書いた理由は失われない（#3091）。
-    fireEvent.click(screen.getByRole('button', { name: '本文を消す' }));
+    fireEvent.click(screen.getByRole('button', { name: `${rowName(AT)}の本文を消す` }));
     fireEvent.click(
       within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'やめる' }),
     );
@@ -394,5 +405,120 @@ describe('/archive 画面 — 一覧・集計・削除（#776）', () => {
     await waitFor(() => {
       expect(screen.getByText('本文は削除済み')).toBeTruthy();
     });
+  });
+});
+
+/**
+ * 行のどこを押しても詳細へ行く（#3377。記憶・やり方の一覧 #3107 と揃える）。ただし行の中の
+ * ボタン・入力欄・details は、それぞれの操作だけが効き、遷移には化けない。
+ */
+describe('/archive 画面 — 行のどこを押しても詳細へ遷移する（#3377）', () => {
+  const ENTRY: StubEntry = {
+    id: 'sess-5-a.jsonl',
+    sessionId: 'sess-5',
+    at: AT,
+    storedBytes: 10,
+  };
+
+  function LocationProbe() {
+    const location = useLocation();
+    return <p data-testid="location">{location.pathname}</p>;
+  }
+
+  async function renderWithRoutes(): Promise<void> {
+    render(
+      <Providers>
+        <MemoryRouter initialEntries={['/archive']}>
+          <LocationProbe />
+          <Routes>
+            <Route path="/archive" element={<Archive />} />
+            <Route path="/archive/:id" element={<p>詳細の画面</p>} />
+          </Routes>
+        </MemoryRouter>
+      </Providers>,
+    );
+    await screen.findByText('一覧');
+  }
+
+  const path = (): string => screen.getByTestId('location').textContent ?? '';
+
+  it('題・余白・使用量の文字を押すと詳細へ行く', async () => {
+    stubArchiveScreen([ENTRY]);
+    await renderWithRoutes();
+    const title = await screen.findByText(rowName(AT), { selector: 'li span' });
+    fireEvent.click(title);
+    expect(path()).toBe('/archive/sess-5-a.jsonl');
+  });
+
+  it('使用量の行や行の余白（li 自体）を押しても詳細へ行く', async () => {
+    stubArchiveScreen([ENTRY]);
+    await renderWithRoutes();
+    fireEvent.click(await screen.findByText(/使用量 10 B/));
+    expect(path()).toBe('/archive/sess-5-a.jsonl');
+  });
+
+  it('消された行は読める本文が無いので、押しても遷移しない', async () => {
+    stubArchiveScreen([
+      { ...ENTRY, storedBytes: 0, removedAt: '2026-09-03T00:00:00.000Z', removedBytes: 5 },
+    ]);
+    await renderWithRoutes();
+    fireEvent.click(await screen.findByText('本文は削除済み'));
+    expect(path()).toBe('/archive');
+  });
+
+  it('「本文を消す」は確認を開くだけで、遷移しない。確認の窓の中の操作も遷移しない', async () => {
+    const { deletes } = stubArchiveScreen([ENTRY]);
+    await renderWithRoutes();
+    fireEvent.click(await screen.findByRole('button', { name: `${rowName(AT)}の本文を消す` }));
+    const dialog = await screen.findByRole('alertdialog');
+    expect(path()).toBe('/archive');
+    fireEvent.click(within(dialog).getByText('元に戻せません', { exact: false }));
+    expect(path()).toBe('/archive');
+    fireEvent.click(within(dialog).getByRole('button', { name: '消す' }));
+    await waitFor(() => expect(screen.getByText('本文は削除済み')).toBeTruthy());
+    expect(deletes).toHaveLength(1);
+    expect(path()).toBe('/archive');
+  });
+
+  it('「詳しい情報」の開閉・理由の入力欄・「理由を付けて消す」は遷移しない', async () => {
+    stubArchiveScreen([ENTRY], { denyManagerId: 'mgr-1' });
+    await renderWithRoutes();
+    fireEvent.click(await screen.findByText('詳しい情報（開発者向け）'));
+    expect(path()).toBe('/archive');
+
+    fireEvent.click(await screen.findByRole('button', { name: `${rowName(AT)}の本文を消す` }));
+    fireEvent.click(
+      within(await screen.findByRole('alertdialog')).getByRole('button', { name: '消す' }),
+    );
+    const input = await screen.findByRole('textbox', {
+      name: '走行中のマネージャーの退避を上書きする理由',
+    });
+    fireEvent.click(input);
+    fireEvent.change(input, { target: { value: '調査のため' } });
+    expect(path()).toBe('/archive');
+    fireEvent.click(screen.getByRole('button', { name: `${rowName(AT)}の本文を理由を付けて消す` }));
+    await waitFor(() => expect(screen.getByText('本文は削除済み')).toBeTruthy());
+    expect(path()).toBe('/archive');
+  });
+
+  it('文字を選んでいる最中（ドラッグで選択した後）は遷移しない', async () => {
+    stubArchiveScreen([ENTRY]);
+    await renderWithRoutes();
+    const title = await screen.findByText(rowName(AT), { selector: 'li span' });
+    const range = document.createRange();
+    range.selectNodeContents(title);
+    const selection = window.getSelection()!;
+    selection.removeAllRanges();
+    selection.addRange(range);
+    fireEvent.click(title);
+    expect(path()).toBe('/archive');
+    selection.removeAllRanges();
+  });
+
+  it('行ボタンの aria-label は今までどおり（#3345）', async () => {
+    stubArchiveScreen([ENTRY]);
+    await renderWithRoutes();
+    expect(await screen.findByRole('link', { name: `${rowName(AT)}の本文を読む` })).toBeTruthy();
+    expect(screen.getByRole('button', { name: `${rowName(AT)}の本文を消す` })).toBeTruthy();
   });
 });

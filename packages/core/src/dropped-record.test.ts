@@ -927,6 +927,12 @@ describe('inboxEventShape の名簿（schema に足した型・欄の足し忘�
       kind: { emit: 'tag', token: 'kind' },
       target: { emit: 'tag', token: 'target' },
       cause: { emit: 'tag', token: 'cause' },
+      heldForUsage: {
+        emit: 'never',
+        why:
+          '枠保持で終わった回の印（#3317）。真偽値で自由文を運ばないが、この関数は参照しない' +
+          '（再起動の配り直しの判定 `completedTimerRoundVerdict` が読む欄で、跡に載せる情報ではない）。',
+      },
     },
     external: {
       source: { emit: 'size', token: 'source' },
@@ -1037,6 +1043,7 @@ describe('inboxEventShape の名簿（schema に足した型・欄の足し忘�
       kind: 'daily_report',
       target: '2026-08-16',
       cause: 'schedule_catchup',
+      heldForUsage: true,
     },
     external: {
       type: 'external',

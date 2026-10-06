@@ -17,6 +17,7 @@ import type { ConversationApprovalsRead } from '../conversation-approvals.js';
 import { ApiError } from './api.js';
 import type {
   ApprovalAnswerBody,
+  AnsweredDateRow,
   ApprovalRow,
   UnreadableApproval,
   ChatEvent,
@@ -115,6 +116,16 @@ export interface FakeApi extends TuiApi {
   approvalRows: ApprovalRow[];
   unreadableApprovals: UnreadableApproval[];
   approvalListCalls: { pending: boolean }[];
+  /** 新しい日が上の「決着した日と件数」（`listAnsweredDates` が返す）。 */
+  answeredDateRows: AnsweredDateRow[];
+  answeredDateCalls: { limit: number; beforeDate?: string }[];
+  /** 次の `listAnsweredDates` を失敗させる。 */
+  answeredDatesFail: string | null;
+  /** 日付 → その日の件（決着の新しい順。デーモンが並べた形で渡す）。無い日は空。 */
+  answeredOnRows: Record<string, ApprovalRow[]>;
+  answeredOnCalls: string[];
+  /** 次の `listApprovalsAnsweredOn` を失敗させる。 */
+  answeredOnFail: string | null;
   /** 次の `listApprovals` を失敗させる。 */
   approvalListFails: string | null;
   /** 受け取った回答（デーモンへ届いた本文そのまま）。 */
@@ -192,6 +203,12 @@ export function fakeApi(): FakeApi {
     approvalRows: [],
     unreadableApprovals: [],
     approvalListCalls: [],
+    answeredDateRows: [],
+    answeredDateCalls: [],
+    answeredDatesFail: null,
+    answeredOnRows: {},
+    answeredOnCalls: [],
+    answeredOnFail: null,
     approvalListFails: null,
     approvalAnswers: [],
     approvalAnswerFails: null,
@@ -324,6 +341,19 @@ export function fakeApi(): FakeApi {
         ? api.approvalRows.filter((r) => r.answeredAt === undefined && r.withdrawnAt === undefined)
         : api.approvalRows;
       return Promise.resolve({ approvals: rows, unreadable: api.unreadableApprovals });
+    },
+    listAnsweredDates(query) {
+      api.answeredDateCalls.push(query);
+      if (api.answeredDatesFail !== null) return Promise.reject(new Error(api.answeredDatesFail));
+      const older = api.answeredDateRows.filter(
+        (r) => query.beforeDate === undefined || r.date < query.beforeDate,
+      );
+      return Promise.resolve(older.slice(0, query.limit));
+    },
+    listApprovalsAnsweredOn(date) {
+      api.answeredOnCalls.push(date);
+      if (api.answeredOnFail !== null) return Promise.reject(new Error(api.answeredOnFail));
+      return Promise.resolve(api.answeredOnRows[date] ?? []);
     },
     answerApproval(id, body) {
       api.approvalAnswers.push({ id, body });

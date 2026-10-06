@@ -417,6 +417,9 @@ export class ChatController {
     if (attached === null) return;
     this.push('user', [text, ...attached.lines].filter((l) => l !== '').join('\n'));
     const opened = this.opened;
+    // 送るたびに付ける（#3203・#3304。通常の送信と同じ）。会話は `open` で決まってから送るので、
+    // 通常の送信の `unopened`（会話が決まる前に終わった送信の取り直し）は要らない。
+    const clientMessageId = randomUUID();
     try {
       if (opened === null) throw new Error('会話が始まっていないので、続きを送れなかった');
       const conversationId = await opened.promise;
@@ -427,6 +430,7 @@ export class ChatController {
             text,
             conversationId,
             ...(attached.ids.length === 0 ? {} : { attachments: attached.ids }),
+            clientMessageId,
           },
           abort.signal,
         )) {

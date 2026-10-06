@@ -2344,6 +2344,9 @@ export async function main(): Promise<void> {
     // 既定の仕込み（日報・発意 tick）の位相もここに置く（同じ理由。位相を持たないと
     // 再起動のたびに `now + 周期` へ戻り、短い間隔の再デプロイで発意が一度も来ない）。
     schedules: stores.schedules,
+    // 器の入れ替えの直後、同じ回の未読の timer 行が受信箱に残っているなら撃たない（#3291）。
+    // 読むだけの口（`peekPending`）で、配達回数は進めない。
+    inbox: stores.inbox,
     // 位相の読み書きが落ちたことを黙らせない。時計は止まらないので、ここが唯一
     // 「効いていない」に気づける場所である。
     onError: (message) => {

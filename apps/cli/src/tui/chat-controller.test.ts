@@ -169,6 +169,22 @@ describe('追送（応答中の発言）', () => {
     expect(state().entries.map((e) => e.text)).toEqual(['一つ目', '追送です', '応答']);
   });
 
+  it('追送にも、送るたびに別の clientMessageId を付ける（#3334）', async () => {
+    const { api, controller } = setup();
+    const hold = gate();
+    api.scripts.push([open('c1'), hold.wait, { type: 'done' }], [open('c1')], [open('c1')]);
+    const first = controller.send('一つ目');
+    await new Promise((r) => setTimeout(r, 0));
+    await controller.send('追送一');
+    await controller.send('追送二');
+    hold.open();
+    await first;
+    const ids = api.chatClientMessageIds;
+    expect(ids).toHaveLength(3);
+    for (const id of ids) expect(id).toMatch(/^[0-9a-f-]{36}$/);
+    expect(new Set(ids).size).toBe(3);
+  });
+
   it('新しい会話で id が未確定でも、open を待ってその会話へ投函する', async () => {
     const { api, controller } = setup();
     const lateOpen = gate();

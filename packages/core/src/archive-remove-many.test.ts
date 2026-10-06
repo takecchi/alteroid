@@ -274,7 +274,8 @@ describe('archive_remove_many（アーカイブ済み生ログの本文を絞り
       dryRun: false,
     });
 
-    expect(reply).toContain('ISO8601');
+    expect(reply).toContain('日時として読めない');
+    expect(reply).toContain('ISO 8601');
     expect(reply).toContain('1件も消していない');
     expect(await stores.archive.read(oldId)).toEqual({ kind: 'body', body: 'AAA' });
   });

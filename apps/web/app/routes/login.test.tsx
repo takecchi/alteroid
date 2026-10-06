@@ -10,7 +10,7 @@
  * （`packages/swr/src/hooks/use-auth.test.tsx` と同じ作り方 — 鍵を保存してから
  * `/health` は enabled、`/auth/me` は 403 を返す）。
  */
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
@@ -361,5 +361,67 @@ describe('コンソールから手で設定した接続先が、描画しただ�
     // (c) 描画しただけで localStorage から消えたり、別の値に上書きされたり
     //     していない。
     expect(localStorage.getItem('alteroid.apiBaseUrl')).toBe(CONSOLE_SET_URL);
+  });
+});
+
+/**
+ * #3379。結果が既に分かっている（`checking` でない）あとの再検証の失敗で、前回の画面ごと
+ * エラーだけの画面に差し替えない。前回の画面を残し、再試行つきの読み込み失敗を上に足す。
+ * 初回から読めないとき（結果が1度も無い）だけ、今までどおりエラーだけの画面にする。
+ */
+describe('再検証の一過性の失敗でも、前回の画面を残して再試行の口を足す（#3379）', () => {
+  function renderUngrantedFlaky() {
+    let failing = false;
+    stubFetch((url) => {
+      if (url.endsWith('/health')) return failing ? json({ error: 'boom' }, 500) : json(HEALTH);
+      if (url.endsWith('/auth/me')) return json({ error: '使う許可が無い' }, 403);
+      return undefined;
+    });
+    render(
+      <Providers>
+        <Login />
+      </Providers>,
+    );
+    return {
+      setFailing: (value: boolean) => {
+        failing = value;
+      },
+    };
+  }
+
+  it('「許可されたか確認する」の確認が失敗しても、アカウントとコマンドの画面は残り、再試行で戻る', async () => {
+    const flaky = renderUngrantedFlaky();
+    expect(await screen.findByText('まだ使う許可が無い')).toBeTruthy();
+
+    flaky.setFailing(true);
+    fireEvent.click(screen.getByRole('button', { name: '許可されたか確認する' }));
+
+    // エラーが上に足される。再試行の口が在る。
+    const retry = await screen.findByRole('button', { name: /もう一度試す/ });
+    // 前回の画面（アカウント id・実行するコマンド）は消えない。
+    expect(screen.getByText('まだ使う許可が無い')).toBeTruthy();
+    expect(screen.getByDisplayValue('alteroid access grant acc-1')).toBeTruthy();
+    expect(screen.getByText('acc-1')).toBeTruthy();
+    expect(screen.queryByText('接続先のサーバに繋がらない')).toBeNull();
+
+    // 直ったあとに再試行すると、エラーが消える。
+    flaky.setFailing(false);
+    fireEvent.click(retry);
+    await waitFor(() => expect(screen.queryByRole('button', { name: /もう一度試す/ })).toBeNull());
+    expect(screen.getByText('まだ使う許可が無い')).toBeTruthy();
+  });
+
+  it('初回から読めないときは、今までどおりエラーの画面（再試行の口つき）にする', async () => {
+    localStorage.clear();
+    storeTestBaseUrl();
+    stubFetch(() => undefined);
+    render(
+      <Providers>
+        <Login />
+      </Providers>,
+    );
+    expect(await screen.findByText('接続先のサーバに繋がらない')).toBeTruthy();
+    expect(screen.getByRole('button', { name: /もう一度試す/ })).toBeTruthy();
+    expect(screen.queryByText('まだ使う許可が無い')).toBeNull();
   });
 });

@@ -156,6 +156,12 @@ export interface ApprovalRow {
   permissionRequest?: { rule: string; allows: string[]; denies: string[] };
 }
 
+/** 承認が決着した日と件数（`GET /approvals/answered-dates`。日はデーモンの `localDate()`）。 */
+export interface AnsweredDateRow {
+  date: string;
+  count: number;
+}
+
 /** 読めない承認待ちの行（壊れた行。「無い」でも「回答済み」でもない）。 */
 export interface UnreadableApproval {
   id?: string;
@@ -285,6 +291,16 @@ export interface TuiApi {
     approvals: ApprovalRow[];
     unreadable: UnreadableApproval[];
   }>;
+  /**
+   * `GET /approvals/answered-dates`。決着のあった日と件数を新しい日が上の順に。`beforeDate` はその日**より古い**日から
+   * （前の頁の最後の日。封筒は無く、続きが在るかは `limit` 件ちょうど返ったかで判る）。
+   */
+  listAnsweredDates(query: { limit: number; beforeDate?: string }): Promise<AnsweredDateRow[]>;
+  /**
+   * `GET /approvals?answeredOn=<日付>`。その日に決着した承認（回答済み・取り下げ済み）を決着の新しい順に。
+   * 並びはデーモンが決める（画面で並べ直さない）。日付の形が不正なら 400（デーモンの理由が `ApiError` に入る）。
+   */
+  listApprovalsAnsweredOn(date: string): Promise<ApprovalRow[]>;
   /**
    * `POST /approvals/{id}/answer`。失敗（400 の理由・404・409）は `ApiError`。メッセージにデーモンの
    * 理由（本文の `error`）がそのまま入る。
@@ -541,6 +557,25 @@ export function createTuiApi(target: Target): TuiApi {
       if (!response.ok) throw await failure('止められませんでした', response);
       const { outcome, detail } = await response.json();
       return { outcome, detail };
+    },
+
+    async listAnsweredDates(query) {
+      const response = await client.approvals['answered-dates'].$get({
+        query: {
+          limit: String(query.limit),
+          ...(query.beforeDate === undefined ? {} : { beforeDate: query.beforeDate }),
+        },
+      });
+      if (!response.ok) throw await failure('承認が決着した日を読めませんでした', response);
+      return (await response.json()).dates;
+    },
+
+    async listApprovalsAnsweredOn(date) {
+      const response = await client.approvals.$get({ query: { answeredOn: date } });
+      if (!response.ok) {
+        throw await failure(`${date} に決着した承認を読めませんでした`, response);
+      }
+      return (await response.json()).approvals as ApprovalRow[];
     },
 
     async listApprovals(query) {
