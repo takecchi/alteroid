@@ -2080,13 +2080,28 @@ export async function runSlashCommand(
         stdout.write(`[${reference}] は /approvals の一覧にありません\n`);
         return 'ok';
       }
-      const response = await client.approvals.$get({ query: { order: 'asc', pending: 'false' } });
-      if (!response.ok) {
-        stdout.write(`${await withDetail('承認待ちを読めませんでした', response)}\n`);
-        return 'ok';
+      // **id（番号でない参照）は、id で1件引く口（`GET /approvals/:id`）1回で済ませる。**
+      // 番号は `/approvals` の並びから id を引いた後も、従来どおり全件から探す。
+      let approval;
+      if (/^\d+$/.test(reference)) {
+        const response = await client.approvals.$get({
+          query: { order: 'asc', pending: 'false' },
+        });
+        if (!response.ok) {
+          stdout.write(`${await withDetail('承認待ちを読めませんでした', response)}\n`);
+          return 'ok';
+        }
+        const { approvals } = await response.json();
+        approval = approvals.find((entry) => entry.id === id);
+      } else {
+        const response = await client.approvals[':id'].$get({ param: { id } });
+        // 404 だけが「見つからない」。それ以外の失敗（409＝読めない行・5xx）は、読めなかったと言う。
+        if (response.status !== 404 && !response.ok) {
+          stdout.write(`${await withDetail('承認待ちを読めませんでした', response)}\n`);
+          return 'ok';
+        }
+        approval = response.ok ? (await response.json()).approval : undefined;
       }
-      const { approvals } = await response.json();
-      const approval = approvals.find((entry) => entry.id === id);
       if (approval === undefined) {
         stdout.write(`[${reference}] （${id}）は見つかりませんでした\n`);
         return 'ok';
@@ -2132,15 +2147,31 @@ export async function runSlashCommand(
       // 承認待ちへ、構造化のつもりの字面をそのまま自由文として送ってしまうため。
       let structured: ReturnType<typeof parseStructuredAnswer> | null = null;
       if (/(^|\s)--(select|other)(=|\s|$)/.test(line)) {
-        const lookup = await client.approvals.$get({ query: { order: 'asc', pending: 'false' } });
-        if (!lookup.ok) {
-          stdout.write(
-            `${await withDetail('承認待ちを読めなかったので、回答を送っていません', lookup)}\n`,
-          );
-          return 'ok';
+        // id（番号でない参照）は `GET /approvals/:id` 1回。番号は従来どおり全件から探す。
+        let target;
+        if (/^\d+$/.test(reference)) {
+          const lookup = await client.approvals.$get({
+            query: { order: 'asc', pending: 'false' },
+          });
+          if (!lookup.ok) {
+            stdout.write(
+              `${await withDetail('承認待ちを読めなかったので、回答を送っていません', lookup)}\n`,
+            );
+            return 'ok';
+          }
+          const { approvals } = await lookup.json();
+          target = approvals.find((entry) => entry.id === id);
+        } else {
+          const lookup = await client.approvals[':id'].$get({ param: { id } });
+          // 404 だけが「見つからない」。409（読めない行）・5xx は読めなかったと言う。
+          if (lookup.status !== 404 && !lookup.ok) {
+            stdout.write(
+              `${await withDetail('承認待ちを読めなかったので、回答を送っていません', lookup)}\n`,
+            );
+            return 'ok';
+          }
+          target = lookup.ok ? (await lookup.json()).approval : undefined;
         }
-        const { approvals } = await lookup.json();
-        const target = approvals.find((entry) => entry.id === id);
         if (target === undefined) {
           stdout.write(`[${reference}] （${id}）は見つからなかったので、回答を送っていません\n`);
           return 'ok';

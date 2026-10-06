@@ -95,7 +95,7 @@ describe('一覧', () => {
 });
 
 describe('詳細を開く', () => {
-  it('一覧に無い id（回答済み・取り下げ済み）は全件から探す。どこにも無ければ missing', async () => {
+  it('一覧に無い id（回答済み・取り下げ済み）は id で1件引く（全件は読まない）。どこにも無ければ missing', async () => {
     const { api, controller, state } = setup((a) => {
       a.approvalRows = [
         approvalRow('open'),
@@ -103,13 +103,38 @@ describe('詳細を開く', () => {
       ];
     });
     await controller.open('done');
-    expect(api.approvalListCalls).toEqual([{ pending: true }, { pending: false }]);
+    expect(api.approvalListCalls).toEqual([{ pending: true }]);
+    expect(api.approvalReadCalls).toEqual(['done']);
     expect(state().detail?.approval?.answer).toBe('済み');
     expect(state().detail?.missing).toBe(false);
 
     await controller.open('nowhere');
+    expect(api.approvalReadCalls).toEqual(['done', 'nowhere']);
+    expect(api.approvalListCalls.every((call) => call.pending)).toBe(true);
     expect(state().detail?.approval).toBeNull();
     expect(state().detail?.missing).toBe(true);
+  });
+
+  it('id で引くのに失敗したら、無い（missing）とは言わず、失敗を出す', async () => {
+    const { api, controller, state } = setup((a) => {
+      a.approvalRows = [approvalRow('done', { answeredAt: '2026-10-02T01:00:00.000Z' })];
+      a.approvalReadFails = '読めない行';
+    });
+    await controller.open('done');
+    expect(api.approvalReadCalls).toEqual(['done']);
+    expect(state().detail?.missing).toBe(false);
+    expect(state().detail?.error).toBe('読めない行');
+  });
+
+  it('読み直し（reload）でも、一覧に無い id は id で1件引く', async () => {
+    const { api, controller, state } = setup((a) => {
+      a.approvalRows = [approvalRow('done', { answeredAt: '2026-10-02T01:00:00.000Z' })];
+    });
+    await controller.open('done');
+    await controller.reload();
+    expect(api.approvalReadCalls).toEqual(['done', 'done']);
+    expect(api.approvalListCalls.every((call) => call.pending)).toBe(true);
+    expect(state().detail?.approval?.id).toBe('done');
   });
 
   it('未回答の一覧に在れば、全件は読まない', async () => {
