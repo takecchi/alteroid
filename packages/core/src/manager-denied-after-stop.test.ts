@@ -111,14 +111,18 @@ describe('止めた委譲に遅れて届く permission_denied', () => {
       input: {},
       via: 'live',
     });
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    // 実時間では待たない（#2146）。拒否の日誌は「受信箱へ回すか」の判定より先に書かれるので、
+    // それが現れるまで待ち、さらに `#emit` までの残りの非同期の段を流しきってから受信箱を見る。
+    // 日誌に残ること自体も測っている（受信箱へ回さないだけで、黙って捨てない。Issue #3094）。
+    await vi.waitFor(async () => {
+      const texts = (await stores.journal.list({ types: ['exchange'] })).map((entry) =>
+        entry.type === 'exchange' ? entry.text : '',
+      );
+      if (!texts.some((text) => text.includes('実行が確認へ上がらずに止められた')))
+        throw new Error('拒否の日誌がまだ書かれていない');
+    });
+    for (let i = 0; i < 20; i += 1) await Promise.resolve();
 
     expect(inbox.slice(before)).toEqual([]);
-
-    // 日誌には残る（受信箱へ回さないだけで、黙って捨てない。Issue #3094）。
-    const texts = (await stores.journal.list({ types: ['exchange'] })).map((entry) =>
-      entry.type === 'exchange' ? entry.text : '',
-    );
-    expect(texts.some((text) => text.includes('実行が確認へ上がらずに止められた'))).toBe(true);
   });
 });
