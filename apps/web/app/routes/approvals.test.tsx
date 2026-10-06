@@ -33,18 +33,18 @@ import Approvals from './approvals';
  * 「取り直しが投げた」経路は、`mutate` そのものを拒否させないと通らない。
  */
 const refresh = vi.hoisted(() => ({ rejects: false }));
+// apps/web は `swr` を直接の依存に持たない（型が引けない）ので、形は最小限だけ書く。
+type MutateFn = (...args: unknown[]) => Promise<unknown>;
 vi.mock('swr', async (importOriginal) => {
-  const original = await importOriginal<typeof import('swr')>();
+  const original = await importOriginal<{ useSWRConfig: () => { mutate: MutateFn } }>();
   return {
     ...original,
     useSWRConfig: () => {
       const config = original.useSWRConfig();
       return {
         ...config,
-        mutate: ((...args: Parameters<typeof config.mutate>) =>
-          refresh.rejects
-            ? Promise.reject(new Error('refresh failed'))
-            : config.mutate(...args)) as typeof config.mutate,
+        mutate: (...args: unknown[]) =>
+          refresh.rejects ? Promise.reject(new Error('refresh failed')) : config.mutate(...args),
       };
     },
   };
