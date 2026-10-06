@@ -282,7 +282,9 @@ const EXPECTED_SITE_COUNT: Record<string, number> = {
   // 畳みの要約3箇所（`EXCHANGE_KIND_THINNING_PREFIX`）にまとめた）。
   // + 2（#3022。`#recordStaleRunnerUsage` が、移った後に古い runner から届いた消費の累積を積まなかった
   // 理由を `EXCHANGE_KIND_GAUGE_PREFIX` で、台帳へ積めなかったことを `EXCHANGE_KIND_FAILURE_PREFIX` で書く）。
-  'manager.ts': 49,
+  // + 1（#3054。`#ignoreIfMovedAway` が、移った後に古い runner から届いた session / report / ask /
+  // settled を台帳・受信箱へ流さずに捨てたことを `EXCHANGE_KIND_DECISION_PREFIX` で書く）。
+  'manager.ts': 50,
 };
 
 describe('type: exchange の書き込み全箇所が kind 接頭辞を持つ（issue #1332）', () => {

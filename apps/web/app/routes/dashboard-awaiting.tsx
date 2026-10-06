@@ -1,3 +1,4 @@
+import { AlertTriangle } from 'lucide-react';
 import { Link } from 'react-router';
 
 import {
@@ -22,6 +23,28 @@ const APPROVAL_LIMIT = 5;
 const APPROVALS_MALFORMED_MESSAGE = '承認待ちを読めていない（応答の形が想定と違う）';
 
 /**
+ * 読めない承認待ちの警告（issue #3062）。**「承認待ちはない」とは言わない**——読めない行は
+ * 回答済みでも取り下げ済みでもなく、待っているものかもしれない。文言と語は `/approvals` の
+ * `UnreadableApprovalNote` に揃える。0件なら描かない。
+ */
+function UnreadableApprovalsWarn({ count, className }: { count: number; className?: string }) {
+  if (count === 0) return null;
+  return (
+    <div
+      role="status"
+      className={`flex items-start gap-2 rounded-md border border-warn/40 bg-warn/10 px-3 py-2 text-sm text-warn ${className ?? ''}`}
+    >
+      <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden />
+      <span className="min-w-0 break-words">
+        読めない承認待ちが {count} 件ある。
+        <strong>壊れた行であって、回答済みでも取り下げ済みでもない。</strong>
+        この一覧には載っていない。
+      </span>
+    </div>
+  );
+}
+
+/**
  * 「承認待ち一覧」—— 人間が手を動かすものだけ。承認待ちと、未了の仕事の件数。
  * 何も待っていなければ1行に畳む。
  *
@@ -33,6 +56,8 @@ const APPROVALS_MALFORMED_MESSAGE = '承認待ちを読めていない（応答�
  *   デーモンと画面は版がずれうる。読めていないのに「ない」と描くと嘘になる
  * - **一度取れたあとの取り直しの失敗**（SWR は直前の `data` を残す）で、古い件数のまま
  *   「答える」を出し続けない（issue #2138 の2）。`error` を `data` より先に見る
+ * - **読めない行（`unreadable`）だけのときも「承認待ちはない」と描かない**（issue #3062）。
+ *   `calm` の代わりに警告を出す。読める承認待ちと混在するときも、一覧の上に同じ警告を足す
  * - 読めていないとき（読み込み中・失敗・形が違う）は、**警告色にしない**（待っているものが
  *   あるように見せない）
  *
@@ -73,7 +98,23 @@ export function AwaitingYou() {
       </AwaitingYouCard>
     );
   }
-  if (pending.length === 0) return <AwaitingYouCalm />;
+  const unreadableCount = Array.isArray(approvals.data.unreadable)
+    ? approvals.data.unreadable.length
+    : 0;
+  if (pending.length === 0) {
+    if (unreadableCount === 0) return <AwaitingYouCalm />;
+    return (
+      <AwaitingYouCard
+        action={
+          <Link to="/approvals" className={HOME_LINK_CLASS}>
+            見る
+          </Link>
+        }
+      >
+        <UnreadableApprovalsWarn count={unreadableCount} className="m-4" />
+      </AwaitingYouCard>
+    );
+  }
 
   const backlog = progress.error === undefined ? progress.data?.backlog : undefined;
   const backlogPartial =
@@ -88,6 +129,7 @@ export function AwaitingYou() {
         </Link>
       }
     >
+      <UnreadableApprovalsWarn count={unreadableCount} className="m-4 mb-0" />
       <ul>
         {pending.slice(0, APPROVAL_LIMIT).map((approval) => (
           <AwaitingApprovalRow

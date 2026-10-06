@@ -1191,7 +1191,8 @@ function RotationHistory() {
   /**
    * **取れなかったのを0件と描かない**（issue #2324）。履歴をまだ一度も読めていないまま
    * 失敗したとき、失敗は `LoadError` が言う。再検証の失敗で `data` が残っている
-   * ときは当たらず、履歴をそのまま出す。
+   * ときは当たらず、履歴をそのまま出す。件数の Badge は読み込み中（`data` も `error` も
+   * 無い）も出さない（issue #3070。`profile.tsx` と同じ `data === undefined` の形）。
    */
   const listUnavailable = data === undefined && error !== undefined;
 
@@ -1200,7 +1201,7 @@ function RotationHistory() {
       <CardHeader
         title="切り替えの履歴（エラー状況）"
         subtitle="トークンの切り替えの記録を新しい順に表示する。出来事は省かずに全部出す"
-        action={listUnavailable ? undefined : <Badge>{entries.length}</Badge>}
+        action={data === undefined ? undefined : <Badge>{entries.length}</Badge>}
       />
       <LoadError
         what="切り替えの履歴"

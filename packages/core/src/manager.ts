@@ -11477,6 +11477,9 @@ class Pool implements ManagerPool {
 
     switch (event.type) {
       case 'session': {
+        // **移った後に届いた古い runner の session は台帳・受信箱へ流さない（Issue #3054。
+        // #1716 の残り）。** 判定と理由は `#ignoreIfMovedAway` の doc を見よ。
+        if (await this.#ignoreIfMovedAway(record, fromRunnerId, event.managerId, 'session')) return;
         record.job.sessionId = event.sessionId;
         record.attached = true;
         // **器が自分でそう名乗った**（#579）。`start` / `resume` の返りと同じく、
@@ -11516,6 +11519,9 @@ class Pool implements ManagerPool {
           await this.#persist(record);
           return;
         }
+        // **移った後に届いた古い runner の report は台帳・受信箱へ流さない（Issue #3054。
+        // #1716 の残り）。** 判定と理由は `#ignoreIfMovedAway` の doc を見よ。
+        if (await this.#ignoreIfMovedAway(record, fromRunnerId, event.managerId, 'report')) return;
         // **reportId で冪等に（#206）。** `ask` の `requestId`（直後の
         // `case 'ask':` の `#askedOf` を参照）と同型 — 同じ報告が二度届いても、
         // 台帳・日誌・クローンの受信箱のどれにも二度書かない。
@@ -11833,6 +11839,9 @@ class Pool implements ManagerPool {
           });
           return;
         }
+        // **移った後に届いた古い runner の ask は台帳・受信箱へ流さない（Issue #3054。
+        // #1716 の残り）。** 判定と理由は `#ignoreIfMovedAway` の doc を見よ。
+        if (await this.#ignoreIfMovedAway(record, fromRunnerId, event.managerId, 'ask')) return;
         // **requestId で冪等に。** 同じ確認が二度届いても、待ちを積み直さず、
         // 日誌にも二度書かず、クローンへも二度配らない。二度目を配ると、答えた
         // はずの確認がもう一度クローンへ届く（そしてその再送は runner 側で既に
@@ -11954,6 +11963,9 @@ class Pool implements ManagerPool {
       }
 
       case 'settled': {
+        // **移った後に届いた古い runner の settled は台帳・受信箱へ流さない（Issue #3054。
+        // #1716 の残り）。** 判定と理由は `#ignoreIfMovedAway` の doc を見よ。
+        if (await this.#ignoreIfMovedAway(record, fromRunnerId, event.managerId, 'settled')) return;
         // **消える前に取る（Issue #1586）。** `record.waiting` から外す前に
         // 該当行の `summary` を控えておく——`withdrawn` の journal に「何の
         // 確認だったか」を残すのに要る。`stopped` の後に届いた回は `abort()`
@@ -14171,6 +14183,33 @@ class Pool implements ManagerPool {
       registered !== null &&
       registered.has(record.job.runnerId)
     );
+  }
+
+  /**
+   * **移った後に届いた古い runner の `session` / `report` / `ask` / `settled` を、日誌にだけ残して
+   * 捨てる**（Issue #3054。#1716 の残り）。真を返したら呼び出し側は `return` する。
+   *
+   * 判定は `#movedAwayFrom`（`case 'closed'` と同じ。名簿が判定不能なら移ったとは言わない＝従来どおり）。
+   * 台帳・受信箱・`#emit` には触れない——触ると、引き取り先で走っている委譲の `status` / `lastReport` /
+   * `sessionId` を古い側の値で上書きし、答えの届かない確認をクローンへ配ってしまう。
+   */
+  async #ignoreIfMovedAway(
+    record: ManagerRecord,
+    fromRunnerId: string,
+    managerId: string,
+    kind: string,
+  ): Promise<boolean> {
+    if (!this.#movedAwayFrom(record, fromRunnerId)) return false;
+    await this.#journal({
+      type: 'exchange',
+      with: 'manager',
+      role: 'inbound',
+      text:
+        `${EXCHANGE_KIND_DECISION_PREFIX}[${managerId}] （runner-id 不一致のため無視。` +
+        `いまの宛先は ${record.job.runnerId ?? '不明'}、この出来事は ${fromRunnerId} から）` +
+        `移った後に届いた古い runner の ${kind} を無視した`,
+    });
+    return true;
   }
 
   /**

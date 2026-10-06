@@ -178,7 +178,9 @@ function countText(hint: WorkspaceCloneHint): string {
 
 /**
  * 「在る退避 ref」を返す**唯一の述語**。`tree.pushed` を直接読まず、ここを通すこと。
- * 後で `pushed.removal`（削除済みの印。#2841）が入ったら、ここだけを直せばよい。
+ * `pushed.removal`（削除済みの印。#2841）が在り `failureKind` が無い回は、デーモンの後始末が
+ * origin から ref を消した記録なので、「在る」とは読まない（`undefined`。#3060）。
+ * `failureKind` が在る回は消せていないので、従来どおり生きている扱いのままにする。
  *
  * ref と commit は**コマンドとして案内に埋め込む**ので、形を確かめる。外れたら
  * `invalid`（手順は出さない）。値そのものは案内へ出さない（台帳の中身を信用しない）。
@@ -193,6 +195,7 @@ const RESCUE_COMMIT_PATTERN = /^[0-9a-f]{7,64}$/;
 function liveRescueRef(tree: RescueWorktree | undefined): LiveRescue | undefined {
   const pushed = tree?.pushed;
   if (pushed === undefined) return undefined;
+  if (pushed.removal !== undefined && pushed.removal.failureKind === undefined) return undefined;
   return RESCUE_REF_PATTERN.test(pushed.ref) && RESCUE_COMMIT_PATTERN.test(pushed.commit)
     ? { kind: 'ok', ref: pushed.ref, commit: pushed.commit, at: pushed.at }
     : { kind: 'invalid', at: pushed.at };

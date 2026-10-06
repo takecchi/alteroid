@@ -93,6 +93,8 @@ export default function Schedule() {
   const runSchedule = useRunSchedule();
   const removeSchedule = useRemoveSchedule();
   const [running, setRunning] = useState<string | undefined>(undefined);
+  // 「今すぐ回す」を起こせた行（issue #3075）。押した行だけ。次の操作（別の行・同じ行の再押下・失敗）で消す。
+  const [ran, setRan] = useState<string | undefined>(undefined);
   const [removing, setRemoving] = useState<string | undefined>(undefined);
   const [confirmingRemove, setConfirmingRemove] = useState<string | undefined>(undefined);
   const [editing, setEditing] = useState<string | undefined>(undefined);
@@ -219,14 +221,23 @@ export default function Schedule() {
                   loading={running === entry.kind}
                   onClick={() => {
                     setRunning(entry.kind);
+                    setRan(undefined);
                     setFailure(undefined);
                     runSchedule(entry.kind)
+                      // デーモンは `scheduler.run` が真なら `{ ok: true }` を返すだけで、ターンの結果は
+                      // 待たない。だから「起こした」までしか言わない（「終わった」とは書かない）。
+                      .then(() => setRan(entry.kind))
                       .catch(setFailure)
                       .finally(() => setRunning(undefined));
                   }}
                 >
                   今すぐ回す
                 </Button>
+                {ran === entry.kind && (
+                  <span role="status" className="shrink-0 text-[11px] text-muted-foreground">
+                    起こした（結果は待っていない）
+                  </span>
+                )}
                 {/*
                   **既定の仕込みには外すボタンを出さない。** デーモンが名前を
                   守っている（`RESERVED_SCHEDULE_KINDS`）ので押しても断られる。
