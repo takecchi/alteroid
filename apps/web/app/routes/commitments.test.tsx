@@ -1426,3 +1426,81 @@ describe('本文の編集: 未保存のまま離れる前に確認する（#2764
     expect(event.defaultPrevented).toBe(true);
   });
 });
+
+/**
+ * issue #3074: 「片付けたものも見る」を初めて押すと別の SWR キーになる。そこで一覧全体を
+ * スピナーに置き換えると、未了の行の書きかけ（本文の下書き・片付ける理由）が unmount で
+ * 黙って消える。閉じた分を読んでいる間も、未了の行は出したままにする。
+ */
+describe('「片付けたものも見る」の初回読み込み中も、未了の行の書きかけを保つ（#3074）', () => {
+  /** 閉じた分（includeClosed=true）の応答だけを遅らせる。 */
+  function stubSlowClosed(open: Commitment[], closed: Commitment[]) {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    stubFetch(async (url) => {
+      if (!url.includes('/commitments')) return undefined;
+      if (url.includes('includeClosed=true')) {
+        await gate;
+        return json({ entries: [...open, ...closed] });
+      }
+      return json({ entries: open });
+    });
+    return release;
+  }
+
+  it('本文の書きかけが、閉じた分の読み込み中も消えない', async () => {
+    const release = stubSlowClosed(
+      [commitment({ origin: 'human', body: 'もとの本文' })],
+      [commitment({ id: 'cmt-9', body: '片付いた依頼', closedAt: new Date().toISOString() })],
+    );
+    renderPage();
+
+    await screen.findByText('もとの本文');
+    fireEvent.click(screen.getByRole('button', { name: '本文を編集' }));
+    const tabsRoot = screen.getByRole('tablist').parentElement!;
+    fireEvent.mouseDown(await screen.findByRole('tab', { name: '編集' }));
+    const textarea = (await within(tabsRoot).findByRole('textbox')) as HTMLTextAreaElement;
+    fireEvent.change(textarea, { target: { value: '書きかけの本文' } });
+
+    fireEvent.click(screen.getByRole('button', { name: '片付けたものも見る' }));
+
+    // 読み込み中: 未了の行はそのまま、書きかけも残っている。
+    expect(screen.getByRole('tablist')).toBeTruthy();
+    expect((within(tabsRoot).getByRole('textbox') as HTMLTextAreaElement).value).toBe(
+      '書きかけの本文',
+    );
+    // 閉じた分が空だと誤読させない（読み込み中は「記録はまだない」と言わない）。
+    expect(screen.queryByText('完了した仕事の記録はまだない。')).toBeNull();
+
+    release();
+    await screen.findByText('片付いた依頼');
+    expect((within(tabsRoot).getByRole('textbox') as HTMLTextAreaElement).value).toBe(
+      '書きかけの本文',
+    );
+  });
+
+  it('片付ける理由の書きかけが、閉じた分の読み込み中も消えない', async () => {
+    const release = stubSlowClosed(
+      [commitment({ body: 'もとの本文' })],
+      [commitment({ id: 'cmt-9', body: '片付いた依頼', closedAt: new Date().toISOString() })],
+    );
+    renderPage();
+
+    await screen.findByText('もとの本文');
+    const reason = screen.getByLabelText(/を片付けた理由$/) as HTMLInputElement;
+    fireEvent.change(reason, { target: { value: '書きかけの理由' } });
+
+    fireEvent.click(screen.getByRole('button', { name: '片付けたものも見る' }));
+
+    expect((screen.getByLabelText(/を片付けた理由$/) as HTMLInputElement).value).toBe(
+      '書きかけの理由',
+    );
+    release();
+    await screen.findByText('片付いた依頼');
+    expect((screen.getByLabelText(/を片付けた理由$/) as HTMLInputElement).value).toBe(
+      '書きかけの理由',
+    );
+  });
+});
