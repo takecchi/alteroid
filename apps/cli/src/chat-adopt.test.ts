@@ -1,6 +1,6 @@
-import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { captureStdout } from './test-support.js';
+import { captureStdout, pretendStdinTty } from './test-support.js';
 
 /**
  * readline に流す行（尽きたら閉じる）。**`run` ごとに作り直し、偽の readline は作られた時点の配列を握る。**
@@ -14,8 +14,8 @@ vi.mock('node:readline/promises', () => ({
     const mine = lines;
     const handlers: { line?: (text: string) => void; close?: () => void } = {};
     return {
-      on: (_event: 'line', handler: (text: string) => void) => {
-        handlers.line = handler;
+      on: (event: string, handler: (text: string) => void) => {
+        if (event === 'line') handlers.line = handler;
       },
       once: (_event: 'close', handler: () => void) => {
         handlers.close = handler;
@@ -50,7 +50,14 @@ beforeAll(async () => {
   ({ chatCommand } = await import('./chat.js'));
 }, 60_000);
 
+// 対話の入力（端末）の形。非対話では、送信の失敗で止まる（#3413）。
+let restoreStdinTty: () => void;
+beforeEach(() => {
+  restoreStdinTty = pretendStdinTty(true);
+});
+
 afterEach(() => {
+  restoreStdinTty();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });

@@ -13,6 +13,7 @@ import {
   createMemoryStores,
   createRunnerRegistry,
   DEFAULT_ATTACHMENT_LIMITS,
+  MemoryAttachmentStore,
   type CloneHost,
   type Stores,
 } from '@alteroid/core';
@@ -68,8 +69,16 @@ function recordingSdk(blocks: unknown[]): typeof import('@anthropic-ai/claude-ag
   }) as unknown as typeof import('@anthropic-ai/claude-agent-sdk').query;
 }
 
-function setupApp(options: { limits?: typeof DEFAULT_ATTACHMENT_LIMITS } = {}) {
-  const stores = createMemoryStores();
+function setupApp(
+  options: { limits?: typeof DEFAULT_ATTACHMENT_LIMITS; attachmentsNow?: () => Date } = {},
+) {
+  const stores =
+    options.attachmentsNow === undefined
+      ? createMemoryStores()
+      : {
+          ...createMemoryStores(),
+          attachments: new MemoryAttachmentStore({ now: options.attachmentsNow }),
+        };
   const blocks: unknown[] = [];
   const queryFn = recordingSdk(blocks);
   const clone = createClone({
@@ -239,6 +248,31 @@ describe('添付: アップロードから クローンのターンまで', () =
     const journal = await stores.journal.list({ types: ['exchange'], with: ['human'] });
     expect(journal.some((e) => e.type === 'exchange' && e.text === '別会話')).toBe(false);
     expect(journal.some((e) => e.type === 'exchange' && e.text === '無い')).toBe(false);
+  });
+
+  it('期限（expiresAt）を過ぎた添付は、prune の前でも GET は 404・/chat の結び付けは attachment_missing（#3522）', async () => {
+    let now = new Date('2026-06-01T00:00:00.000Z');
+    const { app, stores } = setupApp({ attachmentsNow: () => now });
+    const meta = (await (await upload(app, PNG)).json()) as Meta & { expiresAt: string };
+    expect((await app.request(`/attachments/${meta.id}`)).status).toBe(200);
+    // 期限ちょうど（prune と同じ向き）。時計を進めるだけで、prune は走らせない。
+    now = new Date(meta.expiresAt);
+    expect((await app.request(`/attachments/${meta.id}`)).status).toBe(404);
+    expect((await app.request(`/attachments/${meta.id}/meta`)).status).toBe(404);
+
+    const res = await chat(app, {
+      text: '期限切れ',
+      conversationId: 'conv-x',
+      attachments: [meta.id],
+    });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { code: string; error: string };
+    expect(body.code).toBe('attachment_missing');
+    expect(body.error).toContain('添付が見つからない（期限切れの可能性）');
+    expect(body.error).toContain(meta.id);
+    // 結ばれず、発言も残らない。
+    const journal = await stores.journal.list({ types: ['exchange'], with: ['human'] });
+    expect(journal.some((e) => e.type === 'exchange' && e.text === '期限切れ')).toBe(false);
   });
 
   it('個数が上限を超える /chat は 400', async () => {

@@ -73,6 +73,68 @@ export function clearBuffer(buf: TextBuffer): TextBuffer {
   return isEmptyBuffer(buf) ? buf : emptyBuffer();
 }
 
+/** キャレットのある論理行（改行で区切った行）の先頭の index。 */
+function lineStart(value: string, cursor: number): number {
+  return value.lastIndexOf('\n', cursor - 1) + 1;
+}
+
+/** キャレットのある論理行の末尾（改行の手前、または末尾）の index。 */
+function lineEnd(value: string, cursor: number): number {
+  const i = value.indexOf('\n', cursor);
+  return i === -1 ? value.length : i;
+}
+
+/** 論理行の先頭へ（Home / Ctrl+A）。折り返した表示行ではなく、改行で区切った行の先頭。 */
+export function moveLineStart(buf: TextBuffer): TextBuffer {
+  const to = lineStart(buf.value, buf.cursor);
+  return to === buf.cursor ? buf : { value: buf.value, cursor: to };
+}
+
+/** 論理行の末尾へ（End / Ctrl+E）。 */
+export function moveLineEnd(buf: TextBuffer): TextBuffer {
+  const to = lineEnd(buf.value, buf.cursor);
+  return to === buf.cursor ? buf : { value: buf.value, cursor: to };
+}
+
+/** キャレットの後ろの 1 文字を消す（Delete）。 */
+export function deleteForward(buf: TextBuffer): TextBuffer {
+  if (buf.cursor >= buf.value.length) return buf;
+  const n = stepForward(buf.value, buf.cursor);
+  return {
+    value: buf.value.slice(0, buf.cursor) + buf.value.slice(buf.cursor + n),
+    cursor: buf.cursor,
+  };
+}
+
+/**
+ * 直前の語を消す（Ctrl+W）。語は空白（改行を除く）で区切る — 日本語は語の切れ目が無いので、
+ * 空白の無い連なりは 1 語として消える。行頭なら直前の改行 1 つを消す。
+ */
+export function deleteWordBack(buf: TextBuffer): TextBuffer {
+  if (buf.cursor === 0) return buf;
+  const { value } = buf;
+  if (value[buf.cursor - 1] === '\n') {
+    return {
+      value: value.slice(0, buf.cursor - 1) + value.slice(buf.cursor),
+      cursor: buf.cursor - 1,
+    };
+  }
+  const blank = (ch: string | undefined): boolean => ch === ' ' || ch === '\t' || ch === '　';
+  let i = buf.cursor;
+  while (i > 0 && blank(value[i - 1])) i -= 1;
+  while (i > 0 && !blank(value[i - 1]) && value[i - 1] !== '\n') i -= 1;
+  return { value: value.slice(0, i) + value.slice(buf.cursor), cursor: i };
+}
+
+/** キャレットから論理行の末尾までを消す（Ctrl+K）。すでに行末なら、続く改行 1 つを消す。 */
+export function deleteToLineEnd(buf: TextBuffer): TextBuffer {
+  const end = lineEnd(buf.value, buf.cursor);
+  const to = end === buf.cursor ? Math.min(buf.value.length, end + 1) : end;
+  return to === buf.cursor
+    ? buf
+    : { value: buf.value.slice(0, buf.cursor) + buf.value.slice(to), cursor: buf.cursor };
+}
+
 export function moveLeft(buf: TextBuffer): TextBuffer {
   return buf.cursor === 0
     ? buf

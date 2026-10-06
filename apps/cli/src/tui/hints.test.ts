@@ -55,11 +55,21 @@ describe('フッタのキーヒント', () => {
     }
   });
 
+  it('日誌の一覧のフッタは、読み直しの r と / コマンドを案内する（#3485）', () => {
+    expect(HINT_JOURNAL_LIST).toContain('r 更新');
+    expect(HINT_JOURNAL_LIST).toContain('/ コマンド');
+  });
+
   it('詳細の案内は開いた元で変わる（その日の件から開いたら Esc はその日へ。未回答から開いたら今のまま）', () => {
     expect(approvalDetailHint('list')).toBe(HINT_AP_DETAIL);
     expect(HINT_AP_DETAIL).toContain('Esc 一覧へ');
     expect(approvalDetailHint('day')).toBe(HINT_AP_DETAIL_FROM_DAY);
     expect(HINT_AP_DETAIL_FROM_DAY).toContain('Esc その日へ');
     expect(HINT_AP_DETAIL_FROM_DAY).not.toContain('Esc 一覧へ');
+  });
+
+  it('入力欄のフッタは改行のキー（行末の \\ + Enter）を案内する', () => {
+    expect(HINT_INPUT).toContain('\\+Enter 改行');
+    expect(HINT_MGR_INPUT).toContain('\\+Enter 改行');
   });
 });

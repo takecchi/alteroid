@@ -19,3 +19,4 @@ export * from './status-dot';
 export * from './timestamp';
 export * from './toaster';
 export * from './topology';
+export * from './windowed-text';

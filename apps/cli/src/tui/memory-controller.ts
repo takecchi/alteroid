@@ -10,7 +10,7 @@ import { codePointBoundary } from '@alteroid/core/cli-light';
 import type { MemoryDoc, MemoryRow, TuiApi } from './api.js';
 import type { HeaderFeed } from './header-feed.js';
 import type { LogEntry } from './log.js';
-import { redactedErrorMessage } from '../redact.js';
+import { redactedErrorMessage, sanitizeForTerminal } from '../redact.js';
 import { Store } from './store.js';
 
 /** journal の出来事が続けて届いても、取り直しはこの間隔にまとめる。 */
@@ -199,10 +199,13 @@ export class MemoryController {
           };
         }
         const unchanged = s.detail.doc?.content === doc.content;
-        const cut = doc.content.length > MEMORY_DETAIL_CHARS;
+        // 本文は markdown と折り返しを通るが、どちらも消毒はしない（`\r` は行の区切りになる）。
+        // 入口で1回掃除する（`\r` は区切りではなく落とす）。
+        const content = sanitizeForTerminal(doc.content);
+        const cut = content.length > MEMORY_DETAIL_CHARS;
         const text = cut
-          ? doc.content.slice(0, codePointBoundary(doc.content, MEMORY_DETAIL_CHARS))
-          : doc.content;
+          ? content.slice(0, codePointBoundary(content, MEMORY_DETAIL_CHARS))
+          : content;
         return {
           ...s,
           detail: {
@@ -210,7 +213,7 @@ export class MemoryController {
             doc,
             // 本文が変わらなければ同じ参照を保つ（折り返しのキャッシュが効く）。
             body: unchanged ? s.detail.body : [{ seq: (this.seq += 1), kind: 'assistant', text }],
-            cutFrom: cut ? doc.content.length : null,
+            cutFrom: cut ? content.length : null,
             status: 'ready',
             error: null,
             loadedAt: this.now(),

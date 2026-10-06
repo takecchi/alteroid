@@ -1,5 +1,6 @@
 import {
   canBindAttachmentTo,
+  isAttachmentExpired,
   isBoundTo,
   isAttachmentPrunable,
   prepareAttachment,
@@ -31,13 +32,23 @@ export class MemoryAttachmentStore implements AttachmentStore {
 
   async get(id: string): Promise<{ meta: AttachmentMeta; bytes: Uint8Array } | undefined> {
     if (hasNul(id)) return undefined;
-    const row = this.#rows.get(id);
+    const row = this.#readableRow(id);
     return row === undefined ? undefined : { meta: row.meta, bytes: Uint8Array.from(row.bytes) };
   }
 
   async getMeta(id: string): Promise<AttachmentMeta | undefined> {
     if (hasNul(id)) return undefined;
-    return this.#rows.get(id)?.meta;
+    return this.#readableRow(id)?.meta;
+  }
+
+  /** 期限を過ぎたものは、prune が走る前でも「無い」（#3522）。 */
+  #readableRow(id: string): { meta: AttachmentMeta; bytes: Uint8Array } | undefined {
+    const row = this.#rows.get(id);
+    return row === undefined || isAttachmentExpired(row.meta, this.#now()) ? undefined : row;
+  }
+
+  #now(): Date {
+    return this.#options.now?.() ?? new Date();
   }
 
   async bind(ids: readonly string[], conversationId: string): Promise<AttachmentBindResult> {
@@ -56,20 +67,24 @@ export class MemoryAttachmentStore implements AttachmentStore {
   /** 結び付け先は会話か外部イベントのどちらか1つ。同じ宛先なら冪等、別の宛先なら conflict。 */
   #bindTo(ids: readonly string[], target: AttachmentBindTarget): AttachmentBindResult {
     const bound: string[] = [];
+    const newlyBound: string[] = [];
     const missing: string[] = [];
     const conflicts: string[] = [];
     for (const id of ids) {
-      const row = hasNul(id) ? undefined : this.#rows.get(id);
+      const row = hasNul(id) ? undefined : this.#readableRow(id);
       if (row === undefined) {
         missing.push(id);
       } else if (!canBindAttachmentTo(row.meta, target)) {
         conflicts.push(id);
       } else {
+        if (row.meta.conversationId === undefined && row.meta.externalEventId === undefined) {
+          newlyBound.push(id);
+        }
         row.meta = { ...row.meta, ...target };
         bound.push(id);
       }
     }
-    return { bound, missing, conflicts };
+    return { bound, newlyBound, missing, conflicts };
   }
 
   async unbind(ids: readonly string[], target: AttachmentBindTarget): Promise<string[]> {
