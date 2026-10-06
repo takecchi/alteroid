@@ -890,8 +890,19 @@ export interface JobStore {
    * 落とさず、`unreadable` に別欄で返す**（issue #2298。`CommitmentStore.list` と同じ形）。
    * **メモリ実装（`testing.ts`）は常に空**——`putApproval` がスキーマを通すので、壊れた行を
    * 持てない。
+   *
+   * **`conversationId` を渡すと、`entries` をその会話で上がった確認（`conversationId`
+   * が一致するもの）だけに絞る**（issue #3290。`GET /approvals?conversationId=` が
+   * 全件を取ってメモリで絞っていたのをストアへ寄せた）。`pendingOnly` と併用でき、
+   * 絞りだけで並びは変えない。**`unreadable` は絞らない** —— 読めない行は
+   * どの会話のものかも分からないので、`conversationId` を渡しても `pendingOnly` の
+   * 絞りだけを当てたものが返る（絞る前の挙動を変えない）。3実装（fs / pg / インメモリ）で
+   * 揃えること（`verifyApprovalConversationFilterContract`）。
    */
-  listApprovals(options?: { pendingOnly?: boolean }): Promise<ApprovalList>;
+  listApprovals(options?: {
+    pendingOnly?: boolean;
+    conversationId?: string;
+  }): Promise<ApprovalList>;
   /**
    * 承認待ち1件を id で読む。**無ければ `null`。在るが読めない行（版ずれ・手編集で
    * `pendingApprovalSchema` に合わなくなった行）は `null` ではなく

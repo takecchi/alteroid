@@ -5224,16 +5224,16 @@ export function createApp(deps: AppDeps) {
           c.req.query('limit') !== undefined ||
           c.req.query('cursor') !== undefined;
 
-        const approvalList = await stores.jobs.listApprovals({ pendingOnly: pending !== 'false' });
-        const byPending = approvalList.entries;
-        // **`conversationId` は `pending` の直後、`total` を数える前に当てる。**
-        // `total` は「この呼びが対象にしている集合」の件数であって、絞り込みを
-        // 当てる前の全件ではない——`pending` が既にそうしている（未回答のみに
-        // 絞ってから数える）のと同じ順序に揃える。
-        const approvals =
-          conversationId === undefined
-            ? byPending
-            : byPending.filter((approval) => approval.conversationId === conversationId);
+        // **`conversationId` の絞りはストアに渡す**（issue #3290。全件を取ってメモリで
+        // 絞ると、会話を開くたびの費用が承認の総数に比例する）。`pending` の直後、
+        // `total` を数える前に当たる——`total` は「この呼びが対象にしている集合」の件数で
+        // あって、絞り込みを当てる前の全件ではない（`pending` が既にそうしている）。
+        // `unreadable` は会話で絞られない（`JobStore.listApprovals` の doc）。
+        const approvalList = await stores.jobs.listApprovals({
+          pendingOnly: pending !== 'false',
+          ...(conversationId === undefined ? {} : { conversationId }),
+        });
+        const approvals = approvalList.entries;
         // **`total` は `limit` / `cursor` を当てる前の件数。** opt-in していない
         // ときは応答に載せないので、ここで数えておくだけで並べ替えは行わない。
         const total = approvals.length;

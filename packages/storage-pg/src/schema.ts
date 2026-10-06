@@ -157,7 +157,13 @@ export const jobs = pgTable('jobs', {
   job: jsonb('job').notNull(),
 });
 
-/** 承認待ちキュー。 */
+/**
+ * 承認待ちキュー。
+ *
+ * 会話での絞り（`listApprovals({ conversationId })`、#3290）は jsonb の
+ * `approval->>'conversationId'` を引く。索引 `approvals_conversation_id_idx` は式索引で、
+ * drizzle の表定義には書かず `migrate.ts` だけが持つ（列を足していない）。
+ */
 export const approvals = pgTable('approvals', {
   id: text('id').primaryKey(),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull(),

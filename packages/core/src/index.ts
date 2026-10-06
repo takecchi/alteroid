@@ -552,6 +552,7 @@ export { verifyProfileStoreContract } from './profile-store-contract.js';
 export { verifyPermissionGrantStoreContract } from './permission-grant-contract.js';
 export { verifyPracticeStoreContract } from './practice-contract.js';
 export { verifyListOrderContract } from './list-order-contract.js';
+export { verifyApprovalConversationFilterContract } from './approval-conversation-filter-contract.js';
 export { compareCodeUnits } from './code-unit-order.js';
 export { verifyStoreIsolationContract } from './store-isolation-contract.js';
 /**
