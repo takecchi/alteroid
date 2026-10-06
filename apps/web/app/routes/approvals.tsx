@@ -41,7 +41,7 @@ function UnreadableApprovalNote({ unreadable }: { unreadable: UnreadableApproval
         {ids.length > 0 &&
           `（id: ${ids.join(', ')}${idsRest > 0 ? ` …ほか ${idsRest} 件は省略` : ''}）`}
         。<strong>壊れた行であって、回答済みでも取り下げ済みでもない。</strong>
-        この一覧には載っていない。
+        未回答の一覧にも、回答済みの一覧にも載っていない。
       </span>
     </div>
   );

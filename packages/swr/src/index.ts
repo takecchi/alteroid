@@ -15,6 +15,7 @@ export * from './hooks/mutations';
 export * from './hooks/queries';
 export * from './hooks/use-auth';
 export * from './hooks/use-journal-live';
+export * from './hooks/use-answered-dates-window';
 export * from './hooks/use-journal-window';
 export * from './hooks/use-managers-window';
 export * from './hooks/use-topology';
