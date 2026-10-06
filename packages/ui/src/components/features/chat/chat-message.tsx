@@ -55,6 +55,8 @@ export interface ChatMessageVersions {
  *   いま手を動かしている、という同じ事実だからである
  * - `onEdit` —— 渡したときだけ鉛筆を出す。**サーバで確定した人間の発言にだけ渡すこと**
  *   （送信中の楽観行はまだサーバに無いので、編集の入口を出してはいけない）
+ * - `attachments` —— 発言に添えられたものを本文の下に描く（描く部品は呼ぶ側が渡す。ここは通信を知らない）。
+ *   編集中は出さない
  * - `children` —— 渡すと本文の代わりに描く（編集中の下書き `ChatMessageEditor` など）
  *
  * クローンの本文が空（最初のチャンクがまだ届いていない）なら「…」を出す。
@@ -65,6 +67,7 @@ export function ChatMessage({
   transient = false,
   onEdit,
   versions,
+  attachments,
   children,
 }: {
   role: ChatRole;
@@ -72,6 +75,7 @@ export function ChatMessage({
   transient?: boolean;
   onEdit?: () => void;
   versions?: ChatMessageVersions;
+  attachments?: ReactNode;
   children?: ReactNode;
 }) {
   // 伏せるのは描画の直前だけ（`text` も編集の下書きも元のまま持つ。issue #2600）。
@@ -182,6 +186,8 @@ export function ChatMessage({
           )}
         </div>
       </div>
+
+      {attachments !== undefined && !editing && attachments}
 
       {/*
         **ChatGPT 風の版切り替え（`< 2/2 >`）。** `versions` は編集で

@@ -43,25 +43,24 @@ interface Sized {
  * すでに添えたもの（`existing`）へ `incoming` を足してよいかを順に検査する。
  * 通ったものを `accepted`、断ったものを理由つきで `rejected` に返す（通ったものだけ足せばよい）。
  */
-export function checkAttachments(
+export function checkAttachments<T extends Sized>(
   existing: readonly Sized[],
-  incoming: readonly Sized[],
-): { accepted: Sized[]; rejected: { name: string; reason: string }[] } {
-  const accepted: Sized[] = [];
+  incoming: readonly T[],
+): { accepted: T[]; rejected: { name: string; reason: string }[] } {
+  const accepted: T[] = [];
   const rejected: { name: string; reason: string }[] = [];
   let count = existing.length;
   let total = existing.reduce((sum, item) => sum + item.size, 0);
   for (const file of incoming) {
-    const limit = isImageMediaType(file.type)
-      ? ATTACHMENT_IMAGE_MAX_BYTES
-      : ATTACHMENT_OTHER_MAX_BYTES;
+    const image = isImageMediaType(file.type);
+    const limit = image ? ATTACHMENT_IMAGE_MAX_BYTES : ATTACHMENT_OTHER_MAX_BYTES;
     let reason: string | undefined;
     if (count >= ATTACHMENT_MAX_COUNT) {
       reason = `1回に添えられるのは ${ATTACHMENT_MAX_COUNT} 個まで`;
     } else if (file.size === 0) {
       reason = '空のファイルは添えられない';
     } else if (file.size > limit) {
-      reason = `${isImageMediaType(file.type) ? '画像' : 'ファイル'}は 1 つ ${formatBytes(limit)} まで（${formatBytes(file.size)} ある）`;
+      reason = `${image ? '画像' : 'ファイル'}は 1 つ ${formatBytes(limit)} まで（${formatBytes(file.size)} ある）`;
     } else if (total + file.size > ATTACHMENT_TOTAL_MAX_BYTES) {
       reason = `合計は ${formatBytes(ATTACHMENT_TOTAL_MAX_BYTES)} まで`;
     }

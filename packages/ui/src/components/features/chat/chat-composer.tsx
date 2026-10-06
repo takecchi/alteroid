@@ -1,9 +1,18 @@
-import { Send, Square } from 'lucide-react';
-import { type ReactNode, useLayoutEffect, useRef } from 'react';
+import { Paperclip, Send, Square } from 'lucide-react';
+import { lazy, type ReactNode, Suspense, useLayoutEffect, useRef, useState } from 'react';
 
 import { Button, Textarea } from '../../common';
 
+import type { ComposerAttachment } from './attachment-tray';
 import { isSubmitShortcut } from './ime';
+
+export type { ComposerAttachment } from './attachment-tray';
+
+/**
+ * 送る前の添付のチップ。**添付があるときだけ読み込む**（別チャンク。バンドル予算 1.125 MiB の
+ * 内側に収めるため、入力欄の本体には入れない）。
+ */
+const AttachmentTray = lazy(() => import('./attachment-tray'));
 
 /**
  * 入力欄の高さの上限。画面の高さの 40% と 15rem の小さいほう。
@@ -38,6 +47,10 @@ function fitHeight(el: HTMLTextAreaElement): void {
  * - 狭い画面ではボタンの文言を隠して記号だけにする（入力欄と幅を取り合うため）。
  *   読み上げの名前は `aria-label` で持つ
  *
+ * - **添付**（`onAttach` を渡したときだけ有効）— クリップ型のボタン・貼り付け（クリップボードの
+ *   ファイル）・ドラッグ＆ドロップのどれからも `onAttach(files)` が呼ばれる。個数や大きさの
+ *   検査・上げる処理は呼ぶ側が持つ。`uploading` のあいだは送れない
+ *
  * `error` には送信・中断の失敗を渡す（入力欄の上に出る）。渡すと `mb-2` の `div` で
  * 包む。**失敗が無いときは `undefined` を渡す**（空の `div` の余白が残る）。
 
@@ -50,6 +63,10 @@ export function ChatComposer({
   onStopReceiving,
   error,
   placeholder = 'クローンに話しかける（⌘/Ctrl + Enter で送信）',
+  attachments = [],
+  onAttach,
+  onRemoveAttachment,
+  uploading = false,
 }: {
   value: string;
   onChange: (value: string) => void;
@@ -59,8 +76,18 @@ export function ChatComposer({
   onStopReceiving?: () => void;
   error?: ReactNode;
   placeholder?: string;
+  attachments?: readonly ComposerAttachment[];
+  onAttach?: (files: File[]) => void;
+  onRemoveAttachment?: (key: string) => void;
+  /** 添付を上げている最中か。真のあいだは送れない（二重に上げない）。 */
+  uploading?: boolean;
 }) {
+  // 本文が空の発言はサーバが受けない（`POST /chat` の `text` は 1 文字以上）ので、
+  // 添付だけでは送れない。
   const empty = value.trim() === '';
+  const fileInput = useRef<HTMLInputElement>(null);
+  const [dragging, setDragging] = useState(false);
+  const hasFiles = (types: readonly string[] | undefined) => types?.includes('Files') === true;
   const box = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
     const el = box.current?.querySelector('textarea');
@@ -72,9 +99,58 @@ export function ChatComposer({
     return () => window.removeEventListener('resize', refit);
   }, [value]);
   return (
-    <div className="shrink-0 border-t border-border bg-background pt-3 pb-[calc(0.75rem+var(--safe-bottom))] pl-[calc(1rem+var(--safe-left))] pr-[calc(1rem+var(--safe-right))] md:pl-[calc(1.5rem+var(--safe-left))] md:pr-[calc(1.5rem+var(--safe-right))]">
+    <div
+      onDragOver={(event) => {
+        if (onAttach === undefined || !hasFiles(event.dataTransfer?.types)) return;
+        event.preventDefault();
+        setDragging(true);
+      }}
+      onDragLeave={() => setDragging(false)}
+      onDrop={(event) => {
+        setDragging(false);
+        if (onAttach === undefined || !hasFiles(event.dataTransfer?.types)) return;
+        event.preventDefault();
+        onAttach([...event.dataTransfer.files]);
+      }}
+      className={`shrink-0 border-t border-border bg-background pt-3 pb-[calc(0.75rem+var(--safe-bottom))] pl-[calc(1rem+var(--safe-left))] pr-[calc(1rem+var(--safe-right))] md:pl-[calc(1.5rem+var(--safe-left))] md:pr-[calc(1.5rem+var(--safe-right))] ${dragging ? 'bg-accent/40' : ''}`}
+    >
       {error !== undefined && <div className="mb-2">{error}</div>}
+      {attachments.length > 0 && (
+        <Suspense fallback={null}>
+          <AttachmentTray
+            attachments={attachments}
+            onRemove={onRemoveAttachment}
+            disabled={uploading}
+          />
+        </Suspense>
+      )}
       <div className="flex items-end gap-2">
+        {onAttach !== undefined && (
+          <>
+            <input
+              ref={fileInput}
+              type="file"
+              multiple
+              hidden
+              aria-label="添えるファイルを選ぶ"
+              onChange={(event) => {
+                const files = [...(event.target.files ?? [])];
+                // 同じファイルをもう一度選べるよう、選び終えたら空へ戻す。
+                event.target.value = '';
+                if (files.length > 0) onAttach(files);
+              }}
+            />
+            <Button
+              variant="default"
+              disabled={uploading}
+              onClick={() => fileInput.current?.click()}
+              title="ファイルを添える（貼り付け・ドラッグ＆ドロップでも添えられる）"
+              aria-label="ファイルを添える"
+            >
+              <Paperclip className="size-3.5" aria-hidden />
+            </Button>
+          </>
+        )}
         <div ref={box} className="min-w-0 flex-1">
           {/*
             **受信中も打てる。** 塞ぐと、順番待ちのあいだに言い足したいことが
@@ -87,6 +163,15 @@ export function ChatComposer({
             value={value}
             placeholder={placeholder}
             onChange={(event) => onChange(event.target.value)}
+            onPaste={(event) => {
+              // 画像のスクリーンショットなど、ファイルだけが入っているときだけ引き取る
+              // （表計算のコピーのように文字も入っているときは、文字の貼り付けを邪魔しない）。
+              const files = [...event.clipboardData.files];
+              if (onAttach === undefined || files.length === 0) return;
+              if (event.clipboardData.getData('text/plain') !== '') return;
+              event.preventDefault();
+              onAttach(files);
+            }}
             onKeyDown={(event) => {
               /*
                 **IME で変換している最中の Enter では送らない。**（判定は `isSubmitShortcut`
@@ -147,7 +232,13 @@ export function ChatComposer({
             <span className="hidden md:inline">受信をやめる</span>
           </Button>
         )}
-        <Button variant="primary" disabled={empty} onClick={onSend} aria-label="送る">
+        <Button
+          variant="primary"
+          disabled={empty}
+          loading={uploading}
+          onClick={onSend}
+          aria-label={uploading ? '添付を上げている' : '送る'}
+        >
           <Send className="size-3.5" aria-hidden />
           <span className="hidden md:inline">送る</span>
         </Button>
