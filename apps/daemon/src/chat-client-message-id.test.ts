@@ -6,10 +6,13 @@
 import type { Options, Query, SDKMessage } from '@anthropic-ai/claude-agent-sdk';
 import {
   ALWAYS_REDELIVER,
+  createAuthProviderRegistry,
+  createAuthService,
   createClone,
   createLocalRunner,
   createMemoryStores,
   createRunnerRegistry,
+  type CloneHost,
 } from '@alteroid/core';
 import { describe, expect, it } from 'vitest';
 
@@ -598,5 +601,145 @@ describe('POST /chat の clientMessageId', () => {
       ).toBeUndefined();
       expect(await inboundOf(stores)).toHaveLength(1);
     });
+  });
+});
+
+describe('GET /client-messages/:clientMessageId（受け取った会話を引く。Issue #3258）', () => {
+  const PNG1 = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 9, 8, 7, 6, 5]);
+
+  async function upload(app: App, bytes: Uint8Array): Promise<string> {
+    const res = await app.request('/attachments?name=shot.png&type=image%2Fpng', {
+      method: 'POST',
+      headers: { 'content-type': 'application/octet-stream' },
+      body: bytes as RequestInit['body'],
+    });
+    return ((await res.json()) as { id: string }).id;
+  }
+
+  it('新しい会話で受け取った id から、決まった会話の id を返す', async () => {
+    const { app } = setupApp();
+    const first = await sendAndRead(app, { text: '新規', clientMessageId: 'look1' });
+    const conversationId = first.find((e) => e.event === 'open')?.data.conversationId;
+    const res = await app.request('/client-messages/look1');
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ conversationId });
+  });
+
+  it('日誌に載った後（メモリの記憶が無い別のアプリ）でも引ける', async () => {
+    const first = setupApp();
+    await sendAndRead(first.app, {
+      text: 'x',
+      conversationId: 'conv-l2',
+      clientMessageId: 'look2',
+    });
+    const queryFn = countingSdk({ count: 0 });
+    const reborn = createApp({
+      clone: createClone({
+        stores: first.stores,
+        queryFn,
+        env: {},
+        runners: createRunnerRegistry([
+          createLocalRunner({ workspacePath: '/work', queryFn, env: {} }),
+        ]),
+        redeliveryGate: ALWAYS_REDELIVER,
+      }),
+      stores: first.stores,
+      token: 'test-token',
+      shutdown: () => undefined,
+    });
+    const res = await reborn.request('/client-messages/look2');
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ conversationId: 'conv-l2' });
+  });
+
+  it('受け取っていなければ 404、形が不正なら 400。何も積まない', async () => {
+    const { app, stores } = setupApp();
+    expect((await app.request('/client-messages/never')).status).toBe(404);
+    expect((await app.request(`/client-messages/${'a'.repeat(129)}`)).status).toBe(400);
+    expect(await inboundOf(stores)).toHaveLength(0);
+  });
+
+  it('検査に落ちて取り下げられた送信の id は 404（覚えていないのと同じ）', async () => {
+    const { app } = setupApp();
+    const res = await post(app, {
+      text: '添付つき',
+      attachments: ['no-such-attachment'],
+      clientMessageId: 'look3',
+    });
+    expect(res.status).toBe(400);
+    expect((await app.request('/client-messages/look3')).status).toBe(404);
+  });
+
+  it('資格が無ければ 401（認証が有効な構成）', async () => {
+    const stores = createMemoryStores();
+    const app = createApp({
+      clone: {} as unknown as CloneHost,
+      stores,
+      token: 'test-token',
+      shutdown: () => undefined,
+      auth: {
+        plan: {
+          enabled: true,
+          providers: [],
+          publicBaseUrl: 'http://127.0.0.1:4517',
+          tokenTtlDays: 30,
+          description: 'テスト',
+        },
+        service: createAuthService({
+          store: stores.auth,
+          providers: createAuthProviderRegistry([]),
+        }),
+      },
+    });
+    expect((await app.request('/client-messages/x')).status).toBe(401);
+    expect(
+      (await app.request('/client-messages/x', { headers: { authorization: 'Bearer test-token' } }))
+        .status,
+    ).toBe(404);
+  });
+
+  it('#3258 の流れ: 取り直した会話へ、同じ id の再送は重複の 200、直した本文（新しい id）の添付は同じ会話なら受かる', async () => {
+    const { app, stores, inputs } = setupApp();
+    const attachment = await upload(app, PNG1);
+    // 1回目（新しい会話）。クライアントは open を見られなかったものとして、id から引き直す。
+    await sendAndRead(app, {
+      text: '一回目',
+      attachments: [attachment],
+      clientMessageId: 'adopt1',
+    });
+    const looked = (await (await app.request('/client-messages/adopt1')).json()) as {
+      conversationId: string;
+    };
+    // 同じ id・同じ中身の再送は、取り直した会話へ送れば重複の 200（積まない）。
+    const again = await sendAndRead(app, {
+      text: '一回目',
+      attachments: [attachment],
+      conversationId: looked.conversationId,
+      clientMessageId: 'adopt1',
+    });
+    expect(again.find((e) => e.event === 'open')?.data).toMatchObject({
+      conversationId: looked.conversationId,
+      duplicate: true,
+    });
+    // 直した本文（新しい id）で、同じ会話へ同じ添付を結ぶのは許される。
+    const edited = await sendAndRead(app, {
+      text: '直した',
+      attachments: [attachment],
+      conversationId: looked.conversationId,
+      clientMessageId: 'adopt2',
+    });
+    expect(edited.find((e) => e.event === 'open')?.data).toMatchObject({
+      conversationId: looked.conversationId,
+    });
+    expect(await inboundOf(stores)).toHaveLength(2);
+    expect(inputs.count).toBe(2);
+    // 取り直さずに新しい会話として送ると、添付は最初の会話に結び付いていて弾かれる（直す前の赤）。
+    const wrong = await post(app, {
+      text: '直した2',
+      attachments: [attachment],
+      clientMessageId: 'adopt3',
+    });
+    expect(wrong.status).toBe(400);
+    expect(((await wrong.json()) as { code?: string }).code).toBe('attachment_conflict');
   });
 });

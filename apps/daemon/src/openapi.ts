@@ -738,6 +738,9 @@ export const approvalTraceResponseSchema = z.object({
 
 export const okResponseSchema = z.object({ ok: z.literal(true) });
 
+/** `GET /client-messages/:clientMessageId` の応え（Issue #3258）。受け取った会話の id だけを返す。 */
+export const clientMessageLookupResponseSchema = z.object({ conversationId: z.string() });
+
 /**
  * `POST /clone/interrupt` の応答（#1398 c23-1）。`interrupted` は止めた、`idle` は
  * 走っているターンが無かった、`unsupported` はこの器のクローンが止める口を持たない。

@@ -746,6 +746,74 @@
         }
       }
     },
+    "/client-messages/{clientMessageId}": {
+      "get": {
+        "operationId": "getClientMessagesByClientMessageId",
+        "tags": ["chat"],
+        "summary": "`clientMessageId` から受け取った会話を引く",
+        "description": "`POST /chat` で受け取った発言の `clientMessageId` から、その会話の id を返す。新しい会話の送信が `open` の前に中断され、会話 id を知らないときに、受け取られたかを確かめて会話を取り直すための口。引き方は `POST /chat` の重複の確認と同じ（直近の日誌の人間との往復200件と、受け取り直後の記憶）。受け取っていない（検査に落ちて取り下げられた分を含む）・遡れる範囲に無いときは 404。",
+        "responses": {
+          "200": {
+            "description": "受け取り済み。その会話の id。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "conversationId": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["conversationId"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`clientMessageId` の形が不正（英数字・`_` `-` の1〜128字）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "受け取っていない。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "clientMessageId",
+            "required": true
+          }
+        ]
+      }
+    },
     "/chat/{conversationId}/stream": {
       "get": {
         "operationId": "getChatByConversationIdStream",

@@ -223,6 +223,7 @@ import {
   journalListResponseSchema,
   loginClaimResponseSchema,
   loginStartResponseSchema,
+  clientMessageLookupResponseSchema,
   managerActionResponseSchema,
   managerDetailResponseSchema,
   managersListResponseSchema,
@@ -3313,6 +3314,55 @@ export function createApp(deps: AppDeps) {
             },
           );
         });
+      },
+    )
+    /**
+     * **`clientMessageId` から、受け取った会話を引く口**（Issue #3258）。
+     *
+     * 新しい会話（`conversationId` 無し）の送信が `open` の前に中断されると、送った側は会話 id を知らず、
+     * 受け取られたかを履歴で確かめられない。次の送信を新しい会話として送ると、受け取り済みの添付が
+     * `attachment_conflict`（400）で弾かれる。**送った側が id から会話を取り直す**ための読み取り口。
+     * 引き方は `POST /chat` の重複の確認と同じ `findReceivedClientMessage`（受け取り直後の記憶と、直近の日誌）。
+     * 添付の検査の途中の1本目は、その結果を待つ（落ちて取り下げられたなら 404。すぐ終わる）。
+     * 副作用は無い。連携の鍵は通さない（許可表に無い GET は既定で 403）。
+     */
+    .get(
+      '/client-messages/:clientMessageId',
+      describeRoute({
+        tags: ['chat'],
+        summary: '`clientMessageId` から受け取った会話を引く',
+        description:
+          '`POST /chat` で受け取った発言の `clientMessageId` から、その会話の id を返す。' +
+          '新しい会話の送信が `open` の前に中断され、会話 id を知らないときに、受け取られたかを確かめて会話を取り直すための口。' +
+          '引き方は `POST /chat` の重複の確認と同じ（直近の日誌の人間との往復200件と、受け取り直後の記憶）。' +
+          '受け取っていない（検査に落ちて取り下げられた分を含む）・遡れる範囲に無いときは 404。',
+        responses: {
+          200: {
+            description: '受け取り済み。その会話の id。',
+            content: {
+              'application/json': { schema: resolver(clientMessageLookupResponseSchema) },
+            },
+          },
+          400: {
+            description: '`clientMessageId` の形が不正（英数字・`_` `-` の1〜128字）。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+          404: {
+            description: '受け取っていない。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+        },
+      }),
+      async (c) => {
+        const parsed = clientMessageIdSchema.safeParse(c.req.param('clientMessageId'));
+        if (!parsed.success) {
+          return c.json({ error: 'clientMessageId は英数字・_ - の1〜128字' as const }, 400);
+        }
+        const received = await findReceivedClientMessage(parsed.data);
+        if (received === undefined) {
+          return c.json({ error: '受け取っていない clientMessageId' as const }, 404);
+        }
+        return c.json({ conversationId: received.conversationId });
       },
     )
 
