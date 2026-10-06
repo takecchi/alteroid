@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { createInterface } from 'node:readline/promises';
 import { stdin, stdout } from 'node:process';
 
@@ -214,6 +215,9 @@ export async function sendMessage(
     body: JSON.stringify({
       text,
       conversationId: conversationId ?? undefined,
+      // 発言ごとに名乗る（Issue #3203）。CLI は送信を中断して再送する経路を持たないので、判定には使わない
+      // （Web と同じく、履歴に自分の発言の id が残る）。
+      clientMessageId: randomUUID(),
       ...(supersedes === undefined ? {} : { supersedes }),
       ...(options.attachments === undefined || options.attachments.length === 0
         ? {}

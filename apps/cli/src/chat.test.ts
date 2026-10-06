@@ -4711,6 +4711,7 @@ describe('chat の /edit（送信済みの自分の発言を編集する）', ()
       text: '直した文',
       conversationId: 'conv-1',
       supersedes: 'm1',
+      clientMessageId: expect.stringMatching(/^[A-Za-z0-9_-]{1,128}$/),
     });
   });
 

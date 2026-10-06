@@ -57,7 +57,7 @@ async function collect<T>(gen: AsyncGenerator<T>): Promise<T[]> {
 }
 
 describe('chat（POST /chat の SSE）', () => {
-  it('Web・既存 CLI と同じ body（text と conversationId だけ）を認証ヘッダ付きで送る', async () => {
+  it('Web・既存 CLI と同じ body（text・conversationId・clientMessageId）を認証ヘッダ付きで送る', async () => {
     replies.push(sse('event: open\ndata: {"conversationId":"c1"}\n\n'));
     const api = createTuiApi(target);
     await collect(api.chat({ text: 'やあ', conversationId: 'c0' }, new AbortController().signal));
@@ -67,13 +67,20 @@ describe('chat（POST /chat の SSE）', () => {
       authorization: 'Bearer tok',
       'content-type': 'application/json',
     });
-    expect(JSON.parse(sent[0]?.body ?? '')).toEqual({ text: 'やあ', conversationId: 'c0' });
+    expect(JSON.parse(sent[0]?.body ?? '')).toEqual({
+      text: 'やあ',
+      conversationId: 'c0',
+      clientMessageId: expect.stringMatching(/^[A-Za-z0-9_-]{1,128}$/),
+    });
   });
 
   it('新しい会話では conversationId を送らない', async () => {
     replies.push(sse(''));
     await collect(createTuiApi(target).chat({ text: 'hi' }, new AbortController().signal));
-    expect(JSON.parse(sent[0]?.body ?? '')).toEqual({ text: 'hi' });
+    expect(JSON.parse(sent[0]?.body ?? '')).toEqual({
+      text: 'hi',
+      clientMessageId: expect.stringMatching(/^[A-Za-z0-9_-]{1,128}$/),
+    });
   });
 
   it('9 種のイベントを型付きで渡し、未知のイベントは無視する', async () => {
