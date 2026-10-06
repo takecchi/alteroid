@@ -9,6 +9,8 @@ import {
   verifyJournalStoreOrderContract,
   verifyJournalStorePageContract,
   verifyJournalStoreQueryEdgeContract,
+  verifyJournalStoreUnreadableGetContract,
+  UnreadableJournalEntryError,
   verifyJournalStoreSearchContract,
   verifyJournalStoreWithContract,
   verifyPermissionGrantStoreContract,
@@ -338,7 +340,7 @@ describe('PgJournalStore', () => {
       expect(joined).not.toContain(secret);
     });
 
-    it('get(): スキーマに合わない行なら、跡を残して null を返す（無いのではなく読めない）', async () => {
+    it('get(): スキーマに合わない行なら、跡を残して UnreadableJournalEntryError を投げる（無いのではなく読めない）', async () => {
       await db.execute(
         sql`insert into journal (id, at, type, entry)
             values (
@@ -354,14 +356,24 @@ describe('PgJournalStore', () => {
             )`,
       );
 
-      let found: JournalEntry | null = null;
+      let thrown: unknown;
       const lines = await captureStderr(async () => {
-        found = await stores.journal.get('broken-1');
+        try {
+          await stores.journal.get('broken-1');
+        } catch (error) {
+          thrown = error;
+        }
       });
 
       // `id` は在るが読めない——今までどおり null（`JournalStore.get` の
       // 契約は変えない。存在の有無は id 列で判定できるが、それは別の話）。
-      expect(found).toBeNull();
+      // **issue #3288 で反転した。** 上の「null」は欠陥の固定だった: 在る行を null と返すと、呼び出し元
+      // （`journal_read id=`）が「まだ書かれていない」と言ってしまう。契約を変え、「無い」は null・
+      // 「在るが読めない」は `UnreadableJournalEntryError`（`UnreadableApprovalError` と同じ線）にした。
+      // 跡を残すこと・本文が跡に混ざらないことは変えていない（下の2つの expect はそのまま）。
+      expect(thrown).toBeInstanceOf(UnreadableJournalEntryError);
+      expect((thrown as UnreadableJournalEntryError).id).toBe('broken-1');
+      expect((thrown as Error).message).not.toContain(secret);
       const joined = lines.join('');
       expect(joined).toContain('type=future-type');
       expect(joined).not.toContain(secret);
@@ -637,6 +649,27 @@ describe('PgJournalStore', () => {
   describe('query edge 契約（issue #425）', () => {
     it('types: []=0件／limit: 0=0件／types 未指定=絞らない／指定=その種別だけ／limit:N(N>=1)はN件で切る／同時指定でも0件', async () => {
       await verifyJournalStoreQueryEdgeContract(stores.journal);
+    });
+  });
+
+  /**
+   * `JournalStore.get` の「在るが読めない」の契約（issue #3288）を、**pg 実装**（PGlite）に対して測る。
+   * fs は `packages/storage-fs/src/index.test.ts`。インメモリは読めない行を持てず対象外。
+   */
+  describe('get の「在るが読めない」契約（issue #3288）', () => {
+    it('読めない行の get は UnreadableJournalEntryError／無い id は null／読める行と list は巻き込まれない', async () => {
+      await verifyJournalStoreUnreadableGetContract(stores.journal, async () => {
+        const id = 'unreadable-contract-1';
+        await db.execute(
+          sql`insert into journal (id, at, type, entry)
+              values (${id}, '2026-08-12T00:00:00.000Z', 'no-such-type', ${JSON.stringify({
+                type: 'no-such-type',
+                id,
+                at: '2026-08-12T00:00:00.000Z',
+              })}::jsonb)`,
+        );
+        return id;
+      });
     });
   });
 
