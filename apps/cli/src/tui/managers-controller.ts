@@ -193,7 +193,8 @@ export class ManagersController {
       });
     } catch (error) {
       if (gen !== this.listGen) return;
-      this.setList({ status: 'error', error: messageOf(error) });
+      // 読み足しの応答は世代違いで捨てられる。立てた印を残さない（残すと「読んでいる…」が出続けて m も効かない）。
+      this.setList({ status: 'error', error: messageOf(error), olderLoading: false });
     }
   }
 
@@ -326,7 +327,8 @@ export class ManagersController {
     const detail = this.store.getSnapshot().detail;
     if (detail === null) return;
     const { id } = detail;
-    const gen = this.detailGen;
+    // 取り直しごとに世代を進める（後から始めたものが勝つ。開き直し・戻るでも進むので、それらも古い応答を捨てる）。
+    const gen = ++this.detailGen;
     const [manager, transcript] = await Promise.allSettled([
       this.api.readManager(id),
       this.api.readManagerTranscript(id),

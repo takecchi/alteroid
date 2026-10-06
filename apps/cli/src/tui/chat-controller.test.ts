@@ -1138,23 +1138,23 @@ describe('新しい会話で open の前に終わった送信の取り直し（#
   }
 
   for (const how of ['abort', 'disconnect'] as const) {
-    it(`受け取り済みなら、次の送信はその会話へ送る。添えかけは残っていて、会話も切り替わる（${how}）`, async () => {
+    it(`受け取り済みなら、次の送信はその会話へ送る。届いた添付は添えかけから外し、一行で言う（#3652）（${how}）`, async () => {
       const s = setup();
-      const { api, controller, state } = s;
+      const { api, controller, state, texts } = s;
       await abortBeforeOpen(s, how);
       expect(state().conversationId).toBeNull();
-      expect(controller.hasAttachments()).toBe(true);
+      expect(controller.hasAttachments()).toBe(true); // 送れなかったときの打ち直しのため、確かめるまでは残す
       const firstId = api.chatClientMessageIds[0];
       expect(firstId).toBeTypeOf('string');
       api.receivedClientMessages[firstId as string] = 'c9';
       api.scripts.push([open('c9'), { type: 'done' }]);
       await controller.send('次');
       expect(api.clientMessageLookups).toEqual([firstId]);
-      expect(api.chatCalls[1]).toEqual({
-        text: '次',
-        conversationId: 'c9',
-        attachments: ['att-1'],
-      });
+      // 最初の会話に結び付いて届いている添付は、二重に添えない。本文は今までどおり。
+      expect(api.chatCalls[1]).toEqual({ text: '次', conversationId: 'c9' });
+      expect(texts('system').filter((t) => t.includes('添えかけから外した'))).toEqual([
+        '前の送信に添えていたファイル 1 件は届いているので、添えかけから外した',
+      ]);
       expect(api.chatClientMessageIds[1]).not.toBe(firstId);
       expect(state().conversationId).toBe('c9');
       expect(controller.hasAttachments()).toBe(false);
@@ -1284,5 +1284,158 @@ describe('古い側を捨てたら断る（#3409）', () => {
     const { controller, state } = setup();
     for (let i = 0; i < MAX_ENTRIES; i += 1) controller.addSystem(`n${String(i)}`);
     expect(state().entries.filter((e) => e.dropped !== undefined)).toEqual([]);
+  });
+});
+
+describe('会話を開いている最中の送信（#3648）', () => {
+  const msgs = [{ id: '1', at: '2026-10-06T10:00:00.000Z', role: 'inbound' as const, text: 'q' }];
+
+  /** `readConversation` を門で止める。 */
+  function gated(s: ReturnType<typeof setup>) {
+    const g = gate();
+    const read = s.api.readConversation.bind(s.api);
+    s.api.readConversation = async (id) => {
+      await g.wait;
+      return read(id);
+    };
+    return g;
+  }
+
+  it('openConversation の await のあいだの送信は断り、入力を戻せる形（false）で返す。API へは送らない', async () => {
+    const s = setup();
+    s.api.messages.cA = msgs;
+    const g = gated(s);
+    const opening = s.controller.openConversation('cA');
+    expect(await s.controller.send('途中の発言')).toBe(false);
+    expect(s.api.chatCalls).toEqual([]);
+    expect(s.texts('user')).toEqual([]);
+    expect(s.texts('system').at(-1)).toContain('会話を開いている最中');
+    g.open();
+    expect(await opening).toBe(true);
+    expect(s.state().conversationId).toBe('cA');
+    s.api.scripts.push([open('cA'), { type: 'done' }]);
+    expect(await s.controller.send('開いたあと')).toBe(true);
+    expect(s.api.chatCalls[0]?.conversationId).toBe('cA');
+  });
+
+  it('resumeConversation の await のあいだも同じ。別の会話を重ねて開くのも断る', async () => {
+    const s = setup();
+    s.api.messages.cA = msgs;
+    s.api.streamScripts.push([{ type: 'open', conversationId: 'cA', inProgress: true }]);
+    const g = gated(s);
+    const resuming = s.controller.resumeConversation('cA');
+    expect(await s.controller.send('途中')).toBe(false);
+    expect(await s.controller.openConversation('cB')).toBe(false);
+    expect(s.api.chatCalls).toEqual([]);
+    g.open();
+    await resuming;
+    expect(s.state().conversationId).toBe('cA');
+  });
+
+  it('開くのに失敗したら、切り替え中の印は外れて送れる', async () => {
+    const s = setup();
+    expect(await s.controller.openConversation('none')).toBe(false);
+    s.api.scripts.push([open('c1'), { type: 'done' }]);
+    expect(await s.controller.send('x')).toBe(true);
+  });
+});
+
+describe('応答中の /end は断る（#3647）', () => {
+  it('終了の API を呼ばず、応答中であることと止め方を言う', async () => {
+    const { api, controller, state, texts } = setup();
+    const g = gate();
+    api.scripts.push([open('c1'), g.wait, { type: 'done' }]);
+    const sending = controller.send('x');
+    await vi.waitFor(() => expect(state().conversationId).toBe('c1'));
+    await controller.endConversation();
+    expect(api.ended).toEqual([]);
+    expect(state().conversationId).toBe('c1');
+    expect(texts('system').at(-1)).toBe('応答中は会話を終えられない（Ctrl+C で止めてから /end）');
+    g.open();
+    await sending;
+    await controller.endConversation();
+    expect(api.ended).toEqual(['c1']);
+  });
+});
+
+describe('a キーの行き先（#3650）', () => {
+  const ap = (id: string, createdAt: string, extra: object = {}) => ({
+    id,
+    createdAt,
+    question: id,
+    ...extra,
+  });
+
+  it('履歴から開いた会話の未回答の承認を拾い、答え済み・取り下げ済みは外し、最も古い未回答を指す', async () => {
+    const { api, controller, state } = setup();
+    api.messages.c9 = [{ id: '1', at: '2026-10-06T10:00:00.000Z', role: 'inbound', text: 'q' }];
+    api.conversationApprovals.c9 = {
+      approvals: [
+        ap('done-1', '2026-10-06T10:01:00.000Z', { answeredAt: '2026-10-06T10:02:00.000Z' }),
+        ap('old-2', '2026-10-06T10:03:00.000Z'),
+        ap('gone-3', '2026-10-06T10:04:00.000Z', { withdrawnAt: '2026-10-06T10:05:00.000Z' }),
+        ap('new-4', '2026-10-06T10:06:00.000Z'),
+      ],
+      unreadable: [],
+    };
+    await controller.openConversation('c9');
+    expect(state().pendingAsk).toBe('old-2');
+    expect(await controller.nextPendingAsk()).toBe('old-2');
+  });
+
+  it('1ターンに2件の ask_human が来ても、最初の分から指す。答え済みになったら次へ進み、尽きたら null', async () => {
+    const { api, controller, state } = setup();
+    api.scripts.push([
+      open('c1'),
+      { type: 'ask_human', approvalId: 'a1', question: 'Q1' },
+      { type: 'ask_human', approvalId: 'a2', question: 'Q2' },
+      { type: 'done' },
+    ]);
+    await controller.send('x');
+    expect(state().pendingAsk).toBe('a1');
+    api.conversationApprovals.c1 = {
+      approvals: [
+        ap('a1', '2026-10-06T10:00:00.000Z', { answeredAt: '2026-10-06T10:01:00.000Z' }),
+        ap('a2', '2026-10-06T10:00:30.000Z'),
+      ],
+      unreadable: [],
+    };
+    expect(await controller.nextPendingAsk()).toBe('a2');
+    expect(state().pendingAsk).toBe('a2');
+    api.conversationApprovals.c1 = {
+      approvals: [
+        ap('a1', '2026-10-06T10:00:00.000Z', { answeredAt: 'x' }),
+        ap('a2', '2026-10-06T10:00:30.000Z', { answeredAt: 'y' }),
+      ],
+      unreadable: [],
+    };
+    expect(await controller.nextPendingAsk()).toBeNull();
+    expect(state().pendingAsk).toBeNull();
+  });
+
+  it('確かめられなかったときは、断りを1行出して覚えている先頭を返す（投げない）', async () => {
+    const { api, controller, texts } = setup();
+    api.scripts.push([
+      open('c1'),
+      { type: 'ask_human', approvalId: 'a1', question: 'Q1' },
+      { type: 'done' },
+    ]);
+    await controller.send('x');
+    api.conversationApprovals.c1 = { approvals: [], unreadable: [], failure: '接続できない' };
+    expect(await controller.nextPendingAsk()).toBe('a1');
+    expect(texts('system').at(-1)).toContain('確かめられなかった');
+  });
+
+  it('新しい会話では覚えを捨てる', async () => {
+    const { api, controller, state } = setup();
+    api.scripts.push([
+      open('c1'),
+      { type: 'ask_human', approvalId: 'a1', question: 'Q1' },
+      { type: 'done' },
+    ]);
+    await controller.send('x');
+    controller.newConversation();
+    expect(state().pendingAsk).toBeNull();
+    expect(await controller.nextPendingAsk()).toBeNull();
   });
 });
