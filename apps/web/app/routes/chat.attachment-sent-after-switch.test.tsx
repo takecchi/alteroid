@@ -114,7 +114,15 @@ describe('送った添付は、会話を移っても元の会話の添えかけ�
     fireEvent.click(await screen.findByRole('button', { name: 'メッセージを送信' }));
     await screen.findByRole('button', { name: '添付を上げている' });
 
-    await router.navigate(`/chat/${B}`);
+    /*
+     * 移る操作は act の中で流し切る。**B の受動 effect（`shownId` の変化で「持ち主の違う受信を止める」）が
+     * 放す前に走り終えていること**が要る。走る前に放すと、上げ終えて立ったストリーム（持ち主 A）を
+     * その effect が止め、送信は「受け取れたか不明」として積まれ、A に戻ると添付が正当に戻る
+     * （#3121）——別の筋書きになり、このテストが1/30で落ちた。
+     */
+    await act(async () => {
+      await router.navigate(`/chat/${B}`);
+    });
     expect(await findShownConversation(B)).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'first.txt を外す' })).toBeNull();
 
@@ -123,8 +131,12 @@ describe('送った添付は、会話を移っても元の会話の添えかけ�
     });
     await waitFor(() => expect(chatPosted).toBe(1));
 
-    await router.navigate(`/chat/${A}`);
+    await act(async () => {
+      await router.navigate(`/chat/${A}`);
+    });
     expect(await findShownConversation(A)).toBeTruthy();
+    // 戻したときの復元は effect。流し切ってから見る（流す前に見ると、戻っていても通ってしまう）。
+    await act(async () => undefined);
     expect(screen.queryByRole('button', { name: 'first.txt を外す' })).toBeNull();
   });
 });
