@@ -343,7 +343,8 @@ describe('alteroid practice edit', () => {
    */
   it('無い slug でも開ける。雛形は「実行される定義ではない」と言い、許可の一覧を作らない', async () => {
     captureStdout();
-    process.env.EDITOR = `sh -c 'cat "$1" > "$1.seen"' _`;
+    // 雛形を読み取り、1行足して閉じる（足さずに閉じると書かない。下のテスト）。
+    process.env.EDITOR = `sh -c 'cat "$1" > "$1.seen"; echo 追記 >> "$1"' _`;
     replies.push({ status: 404, body: { error: 'not found' } });
     replies.push({ status: 200, body: practiceBody({ slug: 'fresh' }) });
 
@@ -353,6 +354,17 @@ describe('alteroid practice edit', () => {
     const content = JSON.parse(sent[1]?.body ?? '{}') as { content: string };
     expect(content.content).toContain('実行される定義ではなく');
     expect(content.content).not.toContain('permissions');
+  });
+
+  it('無いやり方を作るとき、雛形のまま閉じたら PUT を打たない', async () => {
+    const read = captureStdout();
+    process.env.EDITOR = 'true';
+    replies.push({ status: 404, body: { error: 'not found' } });
+
+    await practiceEditCommand('fresh', { kind: '調査', title: '調べ方' });
+
+    expect(read()).toContain('変更はありません');
+    expect(sent.map((s) => s.method)).toEqual(['GET']);
   });
 
   it('409 以外の保存の失敗（500）でも、書いた内容を残し、場所と set --file を案内して失敗する（#3453）', async () => {

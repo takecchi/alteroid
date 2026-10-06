@@ -158,6 +158,22 @@ describe('GET /topology', () => {
     expect(body.links.find((l) => l.key === 'clone~manager:m1')?.lastUpAt).toBeUndefined();
   });
 
+  it('日誌の external_event は via 付きでも外部サービスの線にしない（受け付けた時刻で入れる。#3676）', async () => {
+    const { app, journal } = setup();
+    // 日誌の行の at はクローンが取り出した時刻。線は受け付けたハンドラが入れる
+    // （`integration-keys.test.ts` の「稼働状況の図の外部サービスの線」）。
+    await journal.append({ type: 'external_event', source: 'internal', summary: '{}' });
+    await journal.append({
+      type: 'external_event',
+      source: 'github',
+      summary: '{}',
+      via: { keyId: 'k1', name: 'GitHub 連携' },
+    });
+    const body = topologyResponseSchema.parse(await (await app.request('/topology')).json());
+    expect(body.externals).toBeUndefined();
+    expect(body.links).toEqual([]);
+  });
+
   it('台帳に読めない委譲の行が在れば、managers が空でも unreadable が載る。無ければ鍵ごと無い（#2705）', async () => {
     const rows = [{ id: 'mgr-bad', reason: '不正な欄: status' }];
     const broken = setup({ managers: [], unreadable: rows });

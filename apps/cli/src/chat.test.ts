@@ -2872,7 +2872,7 @@ describe('chat の設問つきの承認待ち（issue #2525）', () => {
 
     await runSlashCommand('/answer 1 railway で  お願い', client, listedOne());
 
-    expect(sentJson(calls)?.json).toEqual({ answer: 'railway で お願い' });
+    expect(sentJson(calls)?.json).toEqual({ answer: 'railway で  お願い' });
   });
 
   it('設問の無い承認待ちには、--select / --other の字面があっても自由文のまま送る（#2583）', async () => {

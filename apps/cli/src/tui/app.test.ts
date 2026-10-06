@@ -1753,6 +1753,37 @@ describe('承認待ち（一覧と詳細・答える）', () => {
     await waitFor(() => h.frame().includes('書きかけx'));
     expect(h.exited()).toBe(false);
   });
+
+  it('答えるフォームに選んだ分が在るまま Esc で詳細を閉じても、すぐには捨てない。もう一度 Esc で捨てて一覧へ戻る', async () => {
+    const h = start(fixture);
+    await openChoiceDetail(h);
+    await press(h.stdin, 'a');
+    await press(h.stdin, SPACE); // Railway
+    await waitFor(() => h.frame().includes('(●) a) Railway'));
+    await press(h.stdin, ESC); // フォームから読む画面へ（書きかけは残る）
+    await waitFor(() => h.frame().includes('Esc 一覧へ'));
+    await press(h.stdin, ESC);
+    await waitFor(() => h.frame().includes('もう一度 Esc'));
+    expect(h.frame()).toContain('[未回答] ap-choice'); // まだ詳細に居る
+    await press(h.stdin, 'a'); // 続きから書ける
+    await waitFor(() => h.frame().includes('(●) a) Railway'));
+    await press(h.stdin, ESC);
+    await waitFor(() => h.frame().includes('Esc 一覧へ'));
+    await press(h.stdin, ESC);
+    await waitFor(() => h.frame().includes('もう一度 Esc'));
+    await press(h.stdin, ESC);
+    await waitFor(() => h.frame().includes('承認待ち（未回答 2 件'));
+  });
+
+  it('選んでも書いてもいなければ、Esc 一度で一覧へ戻る', async () => {
+    const h = start(fixture);
+    await openChoiceDetail(h);
+    await press(h.stdin, 'a');
+    await press(h.stdin, ESC);
+    await waitFor(() => h.frame().includes('Esc 一覧へ'));
+    await press(h.stdin, ESC);
+    await waitFor(() => h.frame().includes('承認待ち（未回答 2 件'));
+  });
 });
 
 describe('履歴の選択の断り書き（#2585）', () => {

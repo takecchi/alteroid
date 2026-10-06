@@ -138,3 +138,12 @@ export function buildAnswer(
     unanswered: questions.length - answered.length,
   };
 }
+
+/** 選んだものも書いた文も無い（開いただけ）。書きかけとして守る要が無い。 */
+export function isBlankForm(form: FormState): boolean {
+  return (
+    form.text.length === 0 &&
+    Object.values(form.picks).every((ids) => ids.length === 0) &&
+    Object.values(form.others).every((text) => text.length === 0)
+  );
+}
