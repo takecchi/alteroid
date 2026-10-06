@@ -5,6 +5,7 @@ import { stdin, stdout } from 'node:process';
 
 import { redactedExcerpt } from '@alteroid/core/redact';
 import {
+  hasRunnerPushFailure,
   LEGACY_PROFILE_NOTICE,
   normalizeProfile,
   type NormalizedProfile,
@@ -294,10 +295,15 @@ export async function profileRemoveCommand(nameArg: string): Promise<void> {
   const result = (await (profile.legacy
     ? request(target, '/profile', { method: 'PUT', body: JSON.stringify({ script: '' }) })
     : request(target, `/profile/${encodeURIComponent(name)}`, { method: 'DELETE' }))) as UpdateView;
-  stdout.write(`プロファイルの行 ${name} を外しました。\n`);
+  stdout.write(
+    hasRunnerPushFailure(result)
+      ? `警告: プロファイルの行 ${name} は外しましたが、一部の runner へ反映できていません。\n`
+      : `プロファイルの行 ${name} を外しました。\n`,
+  );
   describeComposed(result);
   report('クローン', result.clone);
   for (const runner of result.runners) report(runner.runnerId, runner);
+  failOnPartialPush(result);
 }
 
 /**
@@ -310,9 +316,25 @@ export async function profileClearCommand(): Promise<void> {
     method: 'PUT',
     body: JSON.stringify({ script: '' }),
   })) as UpdateView;
-  stdout.write('プロファイルを全部外しました。\n');
+  stdout.write(
+    hasRunnerPushFailure(result)
+      ? '警告: プロファイルを全部外しましたが、一部の runner へ反映できていません。\n'
+      : 'プロファイルを全部外しました。\n',
+  );
   report('クローン', result.clone);
   for (const runner of result.runners) report(runner.runnerId, runner);
+  failOnPartialPush(result);
+}
+
+/**
+ * 一部の runner へ反映できていなければ、見出しと台ごとの結果を出した**後で**例外にする
+ * （`index.ts` が stderr へ出して終了コード 1。保存は済んでいる）。
+ */
+function failOnPartialPush(result: UpdateView): void {
+  if (!hasRunnerPushFailure(result)) return;
+  throw new Error(
+    'runner への反映が一部失敗しました（プロファイルの保存は済んでいます。失敗した runner へは次に名乗ったときに降ろし直します）',
+  );
 }
 
 function describeComposed(result: UpdateView): void {
@@ -345,8 +367,11 @@ async function put(
       }))) as UpdateView;
 
   const row = result.entries?.find((entry) => entry.name === name);
+  const sha = row?.sha256 ?? (result as { sha256?: string }).sha256 ?? '?';
   stdout.write(
-    `プロファイルの行 ${name} を更新しました (sha256 ${row?.sha256 ?? (result as { sha256?: string }).sha256 ?? '?'})\n`,
+    hasRunnerPushFailure(result)
+      ? `警告: プロファイルの行 ${name} は保存しましたが、一部の runner へ反映できていません (sha256 ${sha})\n`
+      : `プロファイルの行 ${name} を更新しました (sha256 ${sha})\n`,
   );
   stdout.write(`  撒く先: ${describeScope(row?.scope ?? 'all')}\n`);
   if (legacy) stdout.write(`（${LEGACY_PROFILE_NOTICE}）\n`);
@@ -362,6 +387,7 @@ async function put(
   // ここを大きく書くと、効いていない相手が居ることに誰も気づけなくなる。
   stdout.write('（これから起こす仕事には即座に効きます。走行中の仕事は gh / git だけが\n');
   stdout.write('  次の呼び出しから拾います — それ以外は次の仕事から）\n');
+  failOnPartialPush(result);
 }
 
 function report(label: string, result: ApplyResult): void {

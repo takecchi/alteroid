@@ -87,7 +87,7 @@ const UPDATED = {
   ],
   composed: { clone: { sha256: 'e'.repeat(12) }, runner: { sha256: 'f'.repeat(12) } },
   clone: { ok: true, names: ['PATH'] },
-  runners: [{ runnerId: 'runner-1', ok: false, error: 'runner に届かなかった' }],
+  runners: [{ runnerId: 'runner-1', ok: true, names: ['PATH'] }],
 };
 
 type Reply = { status: number; body: unknown };
@@ -265,8 +265,44 @@ describe('/profile 画面 — 行を置く', () => {
 
     expect(await screen.findByText(/プロファイルの行 rust を更新した。/)).toBeTruthy();
     expect(puts).toEqual([{ name: 'rust', body: { script: next, scope: 'runner' } }]);
-    // 合成後の識別用の値と、反映できなかった runner を小さく出さない。
+    // 合成後の識別用の値と、runner ごとの結果を出す。全部届いたので成功の見出し（警告ではない）。
     expect(screen.getByText(/クローン用 e{12} \/ マネージャー用 f{12}/)).toBeTruthy();
+    expect(screen.getAllByText(/反映した（PATH）/)).toHaveLength(2);
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('一部の runner へ反映できなかったら、成功の見出しを出さず警告（warn 色）にして、失敗の行も出す（#3157）', async () => {
+    stubProfile({
+      rows: [],
+      put: {
+        status: 200,
+        body: {
+          ...UPDATED,
+          runners: [
+            { runnerId: 'runner-1', ok: true },
+            { runnerId: 'runner-2', ok: false, error: 'runner に届かなかった' },
+          ],
+        },
+      },
+    });
+    renderScreen();
+
+    fireEvent.click(await screen.findByRole('button', { name: '行を追加する' }));
+    fireEvent.change(screen.getByLabelText('プロファイルの行の名前'), {
+      target: { value: 'rust' },
+    });
+    fireEvent.change(screen.getByLabelText('プロファイルの新しい本文'), {
+      target: { value: 'export A=1\n' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '保存する' }));
+    fireEvent.click(screen.getByRole('button', { name: '本当に保存する' }));
+
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toContain(
+      'プロファイルの行 rust を更新したが、一部の実行環境へ反映できていない',
+    );
+    expect(alert.className).toContain('text-warn');
+    expect(screen.queryByText(/プロファイルの行 rust を更新した。/)).toBeNull();
     expect(screen.getByText(/反映できなかった — runner に届かなかった/)).toBeTruthy();
   });
 

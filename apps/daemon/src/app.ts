@@ -156,6 +156,7 @@ import {
 } from '@alteroid/core';
 import {
   AttachmentRejectedError,
+  nonBlankString,
   readAttachmentLimits,
   validateAttachmentBatch,
   type AttachmentLimits,
@@ -983,7 +984,7 @@ const commitmentBody = z.object({
  * できることが最終承認の実体である以上（north_star）、否定する材料の無い閉じ方を
  * 受け付けてはいけない（`commitmentSchema` の `closedReason` の注記）。
  */
-const commitmentCloseBody = z.object({ reason: z.string().min(1) });
+const commitmentCloseBody = z.object({ reason: nonBlankString });
 
 /**
  * 編集後の本文。**空を許さない**（`commitmentBody.body` と同じ制約——空文字を
@@ -8842,8 +8843,9 @@ export function createApp(deps: AppDeps) {
         tags: ['archive'],
         summary: 'アーカイブ済み生ログを絞り込んでまとめて tombstone する',
         description:
-          '人間の入口から、アーカイブ済み生ログの本文を絞り込んでまとめて消す' +
-          '（issue #698）。**既定は試算（`dryRun` を省略すると true）で、1件も' +
+          'クローン専用の口（クローンの道具 `archive_remove_many` と同じ関数。' +
+          'CLI・Web UI には出さない）。アーカイブ済み生ログの本文を絞り込んで' +
+          'まとめて消す（issue #698）。**既定は試算（`dryRun` を省略すると true）で、1件も' +
           '消さない。** `sessionIds` / `before` / `minStoredBytes` のどれも' +
           '渡さない呼びは断る——絞り込みが無いのと同じで、1回でアーカイブを' +
           '空にできてしまう。走行中のマネージャーの退避（`skipped.inUse`）と' +

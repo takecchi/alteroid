@@ -3894,6 +3894,17 @@ export const jobSchema = z.object({
    */
   lease: jobLeaseSchema.optional(),
   /**
+   * **`lost` に確定した後に `closed(status: 'done')` が届き、クローンへ知らせた時刻**
+   * （Issue #3161）。`manager.ts` の `case 'closed'` の「lost の後の closed」の項。
+   *
+   * `closed` には冪等キーが無いので、同じ委譲へ `done` が二重に届いたときに知らせを
+   * 1回に保つ印をここへ持つ。**台帳（`Job`）に置くのはデーモンの再起動をまたいでも
+   * 効かせるため**——runner は SSE の再接続で `Last-Event-ID` から同じ出来事を配り直す
+   * ことがあり（`runner-protocol.ts` の `reportId` の doc）、プロセス内の集合では
+   * 再起動の後の二重を止められない。**欠けている＝まだ知らせていない。**
+   */
+  lateDoneNotifiedAt: isoDateTime.optional(),
+  /**
    * **この委譲のセッションが最後に実際に置かれた器**（runner の `/health` の
    * `instanceId`）。器の入れ替えを、話しかけられた委譲へ告げるかの判定材料である
    * （#669。`manager.ts` の `#runnerSwappedSinceSession`）。

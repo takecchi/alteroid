@@ -212,6 +212,13 @@ describe('normalizeTokenPool', () => {
     expect(result.map((t) => t.id)).toEqual(['tok-a']);
   });
 
+  it('agentTokenInputSchema は label が空白だけの入力を弾く（trim 後に空）。普通の label は通る', () => {
+    for (const label of ['', ' ', '\t\n', '\u3000']) {
+      expect(agentTokenInputSchema.safeParse({ label, value: 'tok-aaa' }).success).toBe(false);
+    }
+    expect(agentTokenInputSchema.safeParse({ label: ' a ', value: 'tok-aaa' }).success).toBe(true);
+  });
+
   it('agentTokenInputSchema には invalidatedAt / invalidatedReason を渡す口が無い（人間は disabled でしか外せない）', () => {
     // `agentTokenInputSchema` の型（`AgentTokenInput`）にそもそも無いフィールド
     // なので、`unknown` を経由して渡す（実行時に無視される／弾かれることを見る）。

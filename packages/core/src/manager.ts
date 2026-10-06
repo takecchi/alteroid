@@ -13841,6 +13841,62 @@ class Pool implements ManagerPool {
           return;
         }
         /*
+         * **`lost` に確定した後に届いた `closed` で、status を動かさない（Issue #3161）。**
+         * デーモンが `lost` に確定して `#retire()` した後で、元の runner から `closed` が
+         * 届くと、`#load()` が像を作り直し、下の `record.job.status = event.status` が
+         * `lost` を `done` へ書き換えていた。**`stopped` の後と同じ扱いにする**——
+         * 台帳は `lost` のまま、日誌に残す。
+         *
+         * **`lost` は「成果を誰も確かめていない」状態である。** だから後から
+         * `closed(done)` が届いたことは、確かめる材料として人間に見えている必要がある
+         * （成果が出ている可能性がある。`#notifyUnresumable` の「戻れなかったことは
+         * 仕事が終わっていない証拠ではない」と同じ向き）。`done` のときだけ、クローンの
+         * 受信箱へ `report` を1回だけ出す。`failed` / `lost` は日誌だけ（受信箱へは
+         * 出さない——lost のままで、新しい材料が無い）。
+         *
+         * **「1回だけ」は `Job.lateDoneNotifiedAt` で持つ**（`closed` に冪等キーが無い。
+         * 台帳に置くので、デーモンの再起動をまたいだ二重も止まる）。**印を先に永続して
+         * から出す**——出す前に落ちれば知らせは落ちるが、本文は日誌に先に残してある。
+         * 二重に出るよりは日誌から辿れるほうを採った。
+         *
+         * **この位置にある理由:** 上の runner-id 不一致の捨てを通った後（＝いまの宛先の
+         * runner からの `closed` だけがここへ来る）で、`selfFenced` の枝より前
+         * （`lost` の委譲は引き取り直しの梯子に載せない）。
+         */
+        if (record.job.status === 'lost') {
+          const notifyDone = event.status === 'done' && record.job.lateDoneNotifiedAt === undefined;
+          const notice = notifyDone
+            ? [
+                `この委譲 ${event.managerId} は \`lost\` と確定していたが、後から runner が \`closed\`（status=done）を届けた。`,
+                '台帳の状態は `lost` のまま変えていない。',
+                '**成果が出ている可能性がある** — `lost` は成果を誰も確かめていない状態なので、' +
+                  '成果が実際に出ているか（PR・コミット・送信済みのメール・登録済みの予定・投稿先など）を確かめること。' +
+                  '確かめるまで「終わった」とも「終わっていない」とも言わない。',
+                `closed の reason: ${event.reason}`,
+              ].join('\n')
+            : undefined;
+          await this.#journal({
+            type: 'exchange',
+            with: 'manager',
+            role: 'inbound',
+            text:
+              `${EXCHANGE_KIND_DECISION_PREFIX}[${event.managerId}] （lost 確定済みのため status は動かさない）` +
+              `runner 側の終了イベント（status=${event.status}）を受け取った: ${event.reason}` +
+              (notice !== undefined
+                ? `。done なのでクローンへ知らせる: ${notice}`
+                : event.status === 'done'
+                  ? '。done は既に知らせてあるので重ねて知らせない'
+                  : '。受信箱へは出さない'),
+          });
+          if (notice !== undefined) {
+            record.job.lateDoneNotifiedAt = new Date(this.#now()).toISOString();
+            await this.#persist(record);
+            this.#emit(event.managerId, 'report', notice);
+          }
+          this.#retire(event.managerId);
+          return;
+        }
+        /*
          * **自己失効は「終わった」ではない（M5 PR4）。**
          *
          * runner が「デーモンと連絡が取れないので貸し出し期限が切れた」と言って畳んだ

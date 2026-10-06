@@ -272,6 +272,8 @@ export type CredentialsState = Ok<paths['/credentials']['get']>;
 export type EnvVarView = CredentialsState['credentials'][number];
 /** 撒く先。`'all'`=共通 / `'app'`=clone だけ / `'runner'`=manager だけ。 */
 export type EnvVarScope = EnvVarView['scope'];
+/** `PUT /credentials` が 200 で返す、正本の指紋と各 runner への反映結果（#3157）。 */
+export type EnvVarUpdateResult = Ok<paths['/credentials']['put']>;
 
 /**
  * 実行環境プロファイル（`GET /profile`。issue #1122）。**名前付きの行の集まり**
@@ -352,3 +354,16 @@ export type InboxBacklog = Ok<paths['/inbox']['get']>;
 
 /** 稼働の地図の1スナップショット（`GET /topology`）の委譲1行。 */
 export type TopologySnapshotManager = TopologySnapshot['managers'][number];
+
+/**
+ * 連携の鍵の一覧（`GET /integration-keys`。#3113 段2）。CLI の `alteroid integration list` と同じもの。
+ * **値（`altk_...`）も sha256 の全体も載らない**（`fingerprint` は先頭12桁）。
+ */
+export type IntegrationKeysState = Ok<paths['/integration-keys']['get']>;
+export type IntegrationKeyView = IntegrationKeysState['keys'][number];
+/** 発行の応答（`POST /integration-keys`）。`value` はこの応答でだけ見える。 */
+export type IntegrationKeyIssued = Ok<paths['/integration-keys']['post']>;
+/** 発行の入力。 */
+export type IntegrationKeyInput = NonNullable<
+  paths['/integration-keys']['post']['requestBody']
+>['content']['application/json'];
