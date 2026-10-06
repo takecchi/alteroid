@@ -150,15 +150,20 @@ export function isOffsetQualifiedTimeBoundary(value: string): boolean {
   return OFFSET_QUALIFIED_TIME_PATTERN.test(value) && isReadableJournalTimeBoundary(value);
 }
 
-/** 時差の無い境界を一括操作の口が断るときの共通の言い方。 */
+/**
+ * 時差の無い境界を一括操作の口が断るときの共通の言い方。
+ * 形は {@link describeUnreadableJournalTimeBoundary}（ISO 8601・受け付ける形の例・実在しない日付も断る）に
+ * 揃え、この門に固有の「時差が必須」と時差つきの例（`Z` と `+09:00`）を残す（#3389）。判定は変えない。
+ */
 export function describeOffsetRequiredTimeBoundary(
   field: string,
   value: string,
   example: string,
 ): string {
   return (
-    `${field} に渡された「${value}」は ISO8601 として読めない、または時差が無い` +
-    `（時差 Z か +09:00 を必ず書くこと。例 ${example} / 2026-09-11T19:00+09:00）。`
+    `${field} に渡された「${value}」は日時として読めない、または時差が無い` +
+    `（ISO 8601 で指定する。時差 Z か +09:00 を必ず書くこと。受け付ける形の例 ${example} / ` +
+    '2026-09-11T19:00+09:00。実在しない日付も断る）。'
   );
 }
 

@@ -245,7 +245,7 @@ describe('commitment_close_many（絞り込みでの一括 close。issue #844）
 
       // 断ったことは戻り値でも見る——検査を消しても `Date.parse` が NaN を返して
       // 何も当たらないので、閉じた件数だけでは「断った」と「0件だった」を区別できない。
-      expect(reply.includes(`until に渡された「${until}」は ISO8601 として読めない`)).toBe(!closes);
+      expect(reply.includes(`until に渡された「${until}」は日時として読めない`)).toBe(!closes);
 
       expect((await stores.commitments.get(atBoundary.id))?.closedAt !== undefined).toBe(closes);
       expect((await stores.commitments.get(afterBoundary.id))?.closedAt).toBeUndefined();

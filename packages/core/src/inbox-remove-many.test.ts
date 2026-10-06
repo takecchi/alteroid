@@ -453,9 +453,7 @@ describe('inbox_remove_many（絞り込みでの一括削除。issue #972）', (
       });
 
       // 断ったことは戻り値でも見る（`commitment_close_many` の 7b と同じ理由）。
-      expect(reply.includes(`before に渡された「${before}」は ISO8601 として読めない`)).toBe(
-        !removes,
-      );
+      expect(reply.includes(`before に渡された「${before}」は日時として読めない`)).toBe(!removes);
 
       const rest = (await stores.inbox.peekPending()).entries;
       expect(rest.map((r) => r.event.id)).toEqual(removes ? ['evt-1'] : ['evt-0', 'evt-1']);
