@@ -4,7 +4,6 @@ import {
   ATTACHMENT_IMAGE_MAX_BYTES,
   ATTACHMENT_MAX_COUNT,
   ATTACHMENT_OTHER_MAX_BYTES,
-  ATTACHMENT_TOTAL_MAX_BYTES,
   attachmentMediaType,
   checkAttachments,
   isImageMediaType,

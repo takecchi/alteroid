@@ -1,5 +1,5 @@
 import { X } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef } from 'react';
 
 import { Button } from '../../common';
 
@@ -14,16 +14,16 @@ export interface ComposerAttachment {
 }
 
 function Thumbnail({ blob, name }: { blob: Blob; name: string }) {
-  const [url, setUrl] = useState<string>();
+  const image = useRef<HTMLImageElement>(null);
   useEffect(() => {
     const created = URL.createObjectURL(blob);
-    setUrl(created);
+    // state を経由せず DOM へ直接書く（effect の中の setState は連鎖描画になる）。
+    if (image.current !== null) image.current.src = created;
     // 後片付け: 外したとき・画面を離れたときに blob: URL を解放する。
     return () => URL.revokeObjectURL(created);
   }, [blob]);
-  if (url === undefined) return <span className="size-8 shrink-0 rounded bg-muted" aria-hidden />;
   return (
-    <img src={url} alt={`${name} の縮小表示`} className="size-8 shrink-0 rounded object-cover" />
+    <img ref={image} alt={`${name} の縮小表示`} className="size-8 shrink-0 rounded object-cover" />
   );
 }
 
