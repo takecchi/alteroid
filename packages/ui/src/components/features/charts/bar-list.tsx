@@ -5,8 +5,10 @@ import { cn } from '@/lib/utils';
 import { TruncationNote } from '../../common';
 
 export interface BarListItem {
-  /** 行の識別と表示（モデル名・層・トークン id）。 */
+  /** 行の表示（モデル名・層・トークン名）。同じ表示名の行があり得るので、識別には使わない（`id` が無いときだけ代わりに使う）。 */
   label: string;
+  /** 行の識別（React の key）。表示名が重なり得る呼び手は渡す。同じ一覧の中で一意にすること。 */
+  id?: string | undefined;
   value: number;
   /** 名前を押して降りる先を描く（リンクにするのは画面。この層はルーターを知らない）。 */
   renderLabel?: (label: ReactNode) => ReactNode;
@@ -50,7 +52,7 @@ export function BarList({
           const ratio = max > 0 ? item.value / max : 0;
           return (
             <li
-              key={item.label}
+              key={item.id ?? item.label}
               className="border-b border-border px-4 py-2 text-sm last:border-b-0"
             >
               <div className="flex items-center justify-between gap-2">

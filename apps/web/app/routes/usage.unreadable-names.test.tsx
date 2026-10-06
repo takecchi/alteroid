@@ -8,7 +8,7 @@
 import { USAGE_ESTIMATE_NOTICE, ZERO_USAGE } from '@alteroid/core/usage';
 import { cleanup, render, screen, within } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { json, Providers, stubFetch, storeTestBaseUrl } from '~/test-support';
 
@@ -110,9 +110,9 @@ describe('/usage 画面 — 名前の一覧が読めないとき', () => {
 
     await screen.findByRole('heading', { name: 'マネージャー別' });
     const managers = axisCard('マネージャー別');
-    expect(within(managers).getAllByText('（一覧に無い委譲）')).toHaveLength(2);
+    expect(within(managers).getAllByText(/^（一覧に無い委譲）/)).toHaveLength(2);
     expect(
-      within(axisCard('認証トークン別')).getAllByText('（一覧に無い認証トークン）'),
+      within(axisCard('認証トークン別')).getAllByText(/^（一覧に無い認証トークン）/),
     ).toHaveLength(2);
     expect(screen.queryByText(/一覧を読めていない/)).toBeNull();
     expect(within(managers).queryByText('mgr-aaaa')).toBeNull();
@@ -144,5 +144,21 @@ describe('/usage 画面 — 名前の一覧が読めないとき', () => {
     expect(within(tokens).getByText('共有の鍵')).toBeTruthy();
     expect(screen.queryByText(/一覧に無い|一覧を読めていない/)).toBeNull();
     expect(within(managers).queryByText('mgr-aaaa')).toBeNull();
+  });
+});
+
+describe('/usage 表示名が重なる行（issue #3739）', () => {
+  it('一覧に無い委譲・トークンが複数あると、id の先頭を添えて別々に出す。key の警告も出ない', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    stubLists({ managers: json({ managers: [] }), tokens: json({ tokens: [] }) });
+    renderUsage();
+    await screen.findByRole('heading', { name: 'マネージャー別' });
+    const managers = within(axisCard('マネージャー別'));
+    expect(await managers.findByText('（一覧に無い委譲）（mgr-aaaa）')).toBeTruthy();
+    expect(managers.getByText('（一覧に無い委譲）（mgr-bbbb）')).toBeTruthy();
+    const tokens = within(axisCard('認証トークン別'));
+    expect(tokens.getByText('（一覧に無い認証トークン）（tok-aaaa）')).toBeTruthy();
+    expect(tokens.getByText('（一覧に無い認証トークン）（tok-bbbb）')).toBeTruthy();
+    expect(error).not.toHaveBeenCalled();
   });
 });
