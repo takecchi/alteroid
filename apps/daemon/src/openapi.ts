@@ -10,6 +10,7 @@ import {
   integrationSourceSchema,
   jobSchema,
   jobStatusSchema,
+  nonBlankString,
   githubObservationInputSchema,
   journalEntrySchema,
   memoryDocumentMetaSchema,
@@ -2726,7 +2727,7 @@ export const archiveRemoveManyRequestSchema = z.object({
   requireContainment: z.boolean().optional(),
   dryRun: z.boolean().optional(),
   limit: z.number().int().min(1).optional(),
-  reason: z.string().min(1),
+  reason: nonBlankString,
 });
 
 /**
@@ -2888,7 +2889,7 @@ export const inboxRemoveManyRequestSchema = z.object({
   types: z.array(z.enum(INBOX_EVENT_TYPE_ORDER)).min(1),
   sources: z.array(z.string().min(1)).min(1).optional(),
   before: z.string().min(1).optional(),
-  reason: z.string().min(1),
+  reason: nonBlankString,
   dryRun: z.boolean().optional(),
   limit: z.number().int().min(1).optional(),
 });

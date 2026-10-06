@@ -983,3 +983,29 @@ describe('クローン — 人間が待っている合図を待ち行列の先�
     await s.clone.stop();
   }, 15_000);
 });
+
+describe('humanTurnText（添付だけの発言）', () => {
+  const event = (text: string, supersedes?: string) => ({
+    type: 'human_message' as const,
+    id: 'e1',
+    at: '2026-10-06T00:00:00.000Z',
+    text,
+    conversationId: 'c',
+    ...(supersedes === undefined ? {} : { supersedes }),
+  });
+
+  it('本文が空なら通知行だけが本文になる（空行を前置きしない）', () => {
+    expect(humanTurnText([event('')], new Map(), new Map([['e1', '[添付] id=a']]))).toBe(
+      '[添付] id=a',
+    );
+    expect(humanTurnText([event('こんにちは')], new Map(), new Map([['e1', '[添付] id=a']]))).toBe(
+      'こんにちは\n\n[添付] id=a',
+    );
+  });
+
+  it('本文が空の編集は、区切りの後ろに何も置かない', () => {
+    const text = humanTurnText([event('', 'old')], new Map([['e1', '元']]), new Map());
+    expect(text.endsWith('編集前の本文:\n\n元')).toBe(true);
+    expect(text).not.toContain('---');
+  });
+});

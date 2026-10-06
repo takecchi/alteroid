@@ -145,6 +145,26 @@ describe('/archive 画面 — 一覧・集計・削除（#776）', () => {
     expect(screen.getByText(/1234バイト/)).toBeTruthy();
   });
 
+  it('本文のある行から詳細（/archive/:id）へ行ける。消された行には出さない（#3137）', async () => {
+    stubArchiveScreen([
+      { id: 'live a.jsonl', sessionId: 's', at: '2026-09-01T00:00:00.000Z', storedBytes: 10 },
+      {
+        id: 'gone.jsonl',
+        sessionId: 's',
+        at: '2026-09-02T00:00:00.000Z',
+        storedBytes: 0,
+        removedAt: '2026-09-03T00:00:00.000Z',
+        removedBytes: 5,
+      },
+    ]);
+
+    await renderArchive();
+
+    const links = await screen.findAllByRole('link', { name: '本文を読む' });
+    expect(links).toHaveLength(1);
+    expect(links[0]!.getAttribute('href')).toBe('/archive/live%20a.jsonl');
+  });
+
   it('sessionId ごとの集計（GET /archive/sessions）を出す', async () => {
     stubArchiveScreen([], {
       sessions: [

@@ -48,6 +48,11 @@ import {
   profileStatusCommand,
 } from './profile.js';
 import {
+  integrationCreateCommand,
+  integrationListCommand,
+  integrationRevokeCommand,
+} from './integration.js';
+import {
   mcpClearCommand,
   mcpEditCommand,
   mcpListCommand,
@@ -180,6 +185,8 @@ export async function daemonStopCommand(): Promise<void> {
       return;
     case 'unresponsive':
       stdout.write('alteroidd が停止要求に応じません。ログを確認してください。\n');
+      // 止まっていない＝失敗。スクリプトから成功と見分けが付くよう非 0（#3140）。
+      process.exitCode = 1;
       return;
     case 'unknown':
       // 確かめられなかっただけで、「居ない」と確定したわけではない
@@ -191,6 +198,9 @@ export async function daemonStopCommand(): Promise<void> {
           '状態ファイルは残したままにしました。ネットワークや負荷を確認してから、' +
           '`alteroid daemon status` で様子を見てください。\n',
       );
+      // 止まったと確かめられなかった＝成功とは言えないので非 0（#3140）。
+      // 'stale'（状態ファイルを片付けた＝居なかった）と 'not-running' は 0 のまま。
+      process.exitCode = 1;
       return;
   }
 }
@@ -1015,6 +1025,51 @@ daemonCommand
   .description('デーモンの状態を見る')
   .action(async () => {
     await daemonStatusCommand();
+  });
+
+/**
+ * `alteroid integration` — 連携の鍵（外のサービスへ渡す、固定の1つの source で外部イベントを
+ * 送れる鍵。#3113 段2）。Web UI の `/integrations` と同じ3本の口を打つ。
+ */
+const integrationCommand = program
+  .command('integration')
+  .description('連携の鍵（外のサービスが外部イベントを送るための鍵）を一覧・発行・失効する');
+
+integrationCommand
+  .command('list')
+  .description('連携の鍵を並べる（名前・source・状態・期限・最終使用。値は出ない）')
+  .action(async () => {
+    await integrationListCommand();
+  });
+
+integrationCommand
+  .command('create')
+  .addHelpText('after', HELP_EXAMPLES.integrationCreate)
+  .description('連携の鍵を発行する（値はこの1回だけ表示される）')
+  .requiredOption('--name <名前>', '見分けるための名前')
+  .requiredOption('--source <source>', '送れる唯一の source（^[a-z0-9._-]{1,64}$）')
+  .option('--expires <日時か期間>', '期限（例: 2027-01-01T00:00:00Z / 30d / 12h）。省略は無期限')
+  .option('--max-body-bytes <N>', '本文の上限バイト（既定 1048576）')
+  .option('--rate-per-minute <N>', '1分あたりの回数の上限（既定 60）')
+  .action(
+    async (options: {
+      name: string;
+      source: string;
+      expires?: string;
+      maxBodyBytes?: string;
+      ratePerMinute?: string;
+    }) => {
+      await integrationCreateCommand(options);
+    },
+  );
+
+integrationCommand
+  .command('revoke')
+  .description('連携の鍵を失効させる（取り消せない。既定で確認する）')
+  .argument('<id>', '鍵の id（alteroid integration list で見る）')
+  .option('--yes', '確認を飛ばす（スクリプト・CI 向け）')
+  .action(async (id: string, options: { yes?: boolean }) => {
+    await integrationRevokeCommand(id, options);
   });
 
 /**

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { captureStdout } from './test-support.js';
 
@@ -229,6 +229,33 @@ describe('alteroid daemon stop', () => {
 
     expect(read()).toBe(expected);
   });
+
+  // Issue #3140 — 止まらなかった・確かめられなかったを、成功（0）と見分けられるようにする。
+  describe('終了コード', () => {
+    let saved: typeof process.exitCode;
+    beforeEach(() => {
+      saved = process.exitCode;
+      process.exitCode = undefined;
+    });
+    afterEach(() => {
+      process.exitCode = saved;
+    });
+
+    it.each([
+      ['stopped', undefined],
+      ['not-running', undefined],
+      ['stale', undefined],
+      ['unresponsive', 1],
+      ['unknown', 1],
+    ] as const)('%s のときの終了コードは %s', async (outcome, expected) => {
+      vi.mocked(daemon.stop).mockResolvedValue(outcome);
+      captureStdout();
+
+      await daemonStopCommand();
+
+      expect(process.exitCode).toBe(expected);
+    });
+  });
 });
 
 describe('alteroid daemon status', () => {
@@ -361,6 +388,22 @@ describe('サブコマンドの登録（入口が在ること）', () => {
     expect(set?.registeredArguments.map((arg) => [arg.name(), arg.required])).toEqual([
       ['file', true],
     ]);
+  });
+
+  /** **`alteroid integration` が入口として実在すること**（#3113 段2）。 */
+  it('alteroid integration は list / create / revoke を持ち、create は --name と --source を要る', () => {
+    expect(subcommandNames('integration')).toEqual(['create', 'list', 'revoke']);
+    const integration = program.commands.find((c) => c.name() === 'integration');
+    const create = integration?.commands.find((c) => c.name() === 'create');
+    expect(create?.options.map((o) => [o.long, o.mandatory])).toEqual([
+      ['--name', true],
+      ['--source', true],
+      ['--expires', false],
+      ['--max-body-bytes', false],
+      ['--rate-per-minute', false],
+    ]);
+    const revoke = integration?.commands.find((c) => c.name() === 'revoke');
+    expect((revoke?.options ?? []).map((o) => o.long)).toEqual(['--yes']);
   });
 
   /**

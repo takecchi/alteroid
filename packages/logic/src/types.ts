@@ -121,6 +121,8 @@ export type PracticeVersion = Ok<paths['/practices/{slug}/versions/{version}']['
 export type ConversationSummary = Ok<paths['/conversations']['get']>['conversations'][number];
 export type ConversationDetail = Ok<paths['/conversations/{id}']['get']>;
 export type ConversationMessage = ConversationDetail['messages'][number];
+/** 発言に添えられた添付の控え（`messages[].attachments`。中身は `GET /attachments/:id` で取る）。 */
+export type MessageAttachment = NonNullable<ConversationMessage['attachments']>[number];
 
 export type RunnerSummary = Ok<paths['/runners']['get']>['runners'][number];
 /**
@@ -350,3 +352,16 @@ export type InboxBacklog = Ok<paths['/inbox']['get']>;
 
 /** 稼働の地図の1スナップショット（`GET /topology`）の委譲1行。 */
 export type TopologySnapshotManager = TopologySnapshot['managers'][number];
+
+/**
+ * 連携の鍵の一覧（`GET /integration-keys`。#3113 段2）。CLI の `alteroid integration list` と同じもの。
+ * **値（`altk_...`）も sha256 の全体も載らない**（`fingerprint` は先頭12桁）。
+ */
+export type IntegrationKeysState = Ok<paths['/integration-keys']['get']>;
+export type IntegrationKeyView = IntegrationKeysState['keys'][number];
+/** 発行の応答（`POST /integration-keys`）。`value` はこの応答でだけ見える。 */
+export type IntegrationKeyIssued = Ok<paths['/integration-keys']['post']>;
+/** 発行の入力。 */
+export type IntegrationKeyInput = NonNullable<
+  paths['/integration-keys']['post']['requestBody']
+>['content']['application/json'];

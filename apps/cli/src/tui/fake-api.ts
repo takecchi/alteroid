@@ -43,6 +43,10 @@ export interface FakeApi extends TuiApi {
   /** `chatStream()` に渡された会話 id と、その接続が abort されたか。 */
   streamCalls: { conversationId: string; aborted: () => boolean }[];
   ended: string[];
+  /** `markConversationRead` の呼び出し（会話 id と `through`）。 */
+  readMarks: { id: string; through: string }[];
+  /** 非 null なら `markConversationRead` がこの理由で失敗する。 */
+  readMarkFails: string | null;
   interrupts: number;
   conversations: ConversationSummary[];
   messages: Record<string, ConversationMessage[]>;
@@ -126,6 +130,8 @@ export function fakeApi(): FakeApi {
     streamScripts: [],
     streamCalls: [],
     ended: [],
+    readMarks: [],
+    readMarkFails: null,
     interrupts: 0,
     conversations: [],
     messages: {},
@@ -199,6 +205,12 @@ export function fakeApi(): FakeApi {
       return Promise.resolve(
         messages === undefined ? null : { messages, reachedStart: !api.unreachedStart.has(id) },
       );
+    },
+    markConversationRead(id, through) {
+      api.readMarks.push({ id, through });
+      return api.readMarkFails === null
+        ? Promise.resolve()
+        : Promise.reject(new Error(api.readMarkFails));
     },
     endConversation(id) {
       api.ended.push(id);

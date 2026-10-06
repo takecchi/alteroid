@@ -2819,6 +2819,16 @@ describe('HTTP API', () => {
       });
     });
 
+    it('reason が空白だけだと400（CLI・API からも Web と同じく trim 後に空を弾く）', async () => {
+      for (const reason of [' ', '\t\n', '\u3000']) {
+        const response = await app.request(
+          '/inbox/remove',
+          json({ types: ['manager_message'], reason, dryRun: false }),
+        );
+        expect(response.status).toBe(400);
+      }
+    });
+
     it('types が空配列だと400（zod の min(1) が弾く）', async () => {
       const response = await app.request('/inbox/remove', json({ types: [], reason: 'x' }));
       expect(response.status).toBe(400);
@@ -3085,6 +3095,14 @@ describe('HTTP API', () => {
    * 実際に読む口（`GET /archive/:id` / `GET /archive`）で確かめる。**
    */
   describe('POST /archive/remove', () => {
+    it('reason が空白だけだと400', async () => {
+      const response = await app.request(
+        '/archive/remove',
+        json({ minStoredBytes: 0, reason: '  ', dryRun: false }),
+      );
+      expect(response.status).toBe(400);
+    });
+
     it('既定（dryRun省略）は試算だけで1件も消さない（GET /archive/:id が本文を返し続ける）', async () => {
       const idA = (await stores.archive.archive('sess-dry', 'A')).id;
       await stores.archive.archive('sess-dry', 'AB'); // newest, idA を含む(前方一致)
@@ -5158,6 +5176,11 @@ describe('HTTP API', () => {
     expect((await app.request(`/commitments/${other.id}/close`, json({ reason: '' }))).status).toBe(
       400,
     );
+    expect((await stores.commitments.get(other.id))?.closedAt).toBeUndefined();
+    // 空白だけの理由も同じ（trim 後に空）
+    expect(
+      (await app.request(`/commitments/${other.id}/close`, json({ reason: ' \n ' }))).status,
+    ).toBe(400);
     expect((await stores.commitments.get(other.id))?.closedAt).toBeUndefined();
   });
 
@@ -10640,6 +10663,27 @@ describe('認証トークンのプール', () => {
     const body = (await response.json()) as { tokens: unknown[]; settings: { rotateOn: string } };
     expect(body.tokens).toEqual([]);
     expect(body.settings.rotateOn).toBe('free_exhausted');
+  });
+
+  it('PUT /tokens は label が空白だけの行を 400 で弾き、プールを変えない', async () => {
+    const withTokens = createApp({
+      clone: fake.clone,
+      stores,
+      token: 'test-token',
+      shutdown: () => undefined,
+      tokens: createTokenPoolService({ stores }),
+    });
+    const put = await withTokens.request('/tokens', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ tokens: [{ label: '   ', value: 'tok-blank-label' }] }),
+    });
+    expect(put.status).toBe(400);
+    const body = (await put.json()) as { error: string };
+    expect(body.error).toContain('label');
+    expect(JSON.stringify(body)).not.toContain('tok-blank-label');
+    const get = await withTokens.request('/tokens');
+    expect(((await get.json()) as { tokens: unknown[] }).tokens).toEqual([]);
   });
 
   it('PUT で置いたトークンが GET で読み直せる。値は応答のどこにも出ない', async () => {

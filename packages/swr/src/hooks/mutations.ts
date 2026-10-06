@@ -22,6 +22,8 @@ import type {
   EnvVarScope,
   InboxEventType,
   InboxRemoveManyResult,
+  IntegrationKeyInput,
+  IntegrationKeyIssued,
   McpServers,
   MemoryDocument,
   McpServersUpdateResult,
@@ -893,13 +895,46 @@ export function useRemoveUnreadableTokens() {
   );
 }
 
-/** プールから1本外す。 */
+/**
+ * 削除・無効化・有効化の対象の id が、取り直した一覧に無かった（別のタブや CLI が先に消した）。
+ * PUT は送っていない。CLI の `のトークンは見つかりません`（`apps/cli/src/token.ts`）と同じ意味。
+ * `ApiError`（404）を継承するので、`ErrorNote` や `status` で分岐する読み手はそのまま動く。
+ */
+export class TokenNotFoundError extends ApiError {
+  readonly tokenId: string;
+
+  constructor(id: string) {
+    super(
+      404,
+      `id ${id} のトークンは見つかりません（既に無い。別の画面か CLI で消された。一覧を取り直した）`,
+    );
+    this.name = 'TokenNotFoundError';
+    this.tokenId = id;
+  }
+}
+
+/**
+ * 取り直した一覧に `id` が無ければ、PUT を送らずに一覧のキャッシュだけ引き直して
+ * `TokenNotFoundError` を投げる（消えた行を画面から消すため）。
+ */
+async function assertTokenPresent(
+  tokens: readonly AgentTokenView[],
+  id: string,
+  refresh: () => Promise<unknown>,
+): Promise<void> {
+  if (tokens.some((token) => token.id === id)) return;
+  await refresh();
+  throw new TokenNotFoundError(id);
+}
+
+/** プールから1本外す。無い id なら PUT せず `TokenNotFoundError`。 */
 export function useRemoveToken() {
   const api = useApi();
   const { mutate } = useSWRConfig();
   return useCallback(
     async (id: string) => {
       const current = await api.api.GET('/tokens').then(unwrap);
+      await assertTokenPresent(current.tokens, id, () => mutate(KEY.tokens));
       const inputs = current.tokens.filter((token) => token.id !== id).map(toTokenInput);
       const result = await api.api.PUT('/tokens', { body: { tokens: inputs } }).then(unwrap);
       await mutate(KEY.tokens);
@@ -916,6 +951,7 @@ export function useSetTokenDisabled() {
   return useCallback(
     async (id: string, disabled: boolean) => {
       const current = await api.api.GET('/tokens').then(unwrap);
+      await assertTokenPresent(current.tokens, id, () => mutate(KEY.tokens));
       const inputs = current.tokens.map((token) =>
         token.id === id ? { ...toTokenInput(token), disabled } : toTokenInput(token),
       );
@@ -1026,7 +1062,12 @@ export function useRemoveArchive() {
           },
         })
         .then(unwrap);
-      await Promise.all([mutate(KEY.archive), mutate(KEY.archiveSessions)]);
+      await Promise.all([
+        mutate(KEY.archive),
+        mutate(KEY.archiveSessions),
+        // 開いている本文があれば取り直す（消えたものを読ませ続けない）。
+        mutate((key) => isKeyOfType(key, 'archiveBody')),
+      ]);
       return result;
     },
     [api, mutate],
@@ -1203,6 +1244,43 @@ export function useSetMcpServers() {
       const updated = await api.api.PUT('/mcp-servers', { body: { mcpServers } }).then(unwrap);
       await mutate(KEY.mcpServers);
       return updated;
+    },
+    [api, mutate],
+  );
+}
+
+/**
+ * 連携の鍵を発行する（`POST /integration-keys`。#3113 段2）。**応答の `value` が鍵の値を見られる唯一の機会**
+ * なので、呼び出し側（`routes/integrations.tsx`）は state にだけ持ち、どこにも保存しない。
+ *
+ * **一覧の取り直しの失敗は、発行の失敗にしない。** 発行は済んでいる（値は手元にある）ので、ここで投げると
+ * 画面が「失敗した」と言い、人間が値を受け取れないまま作り直すことになる。取り直しの失敗は一覧の
+ * `error`（`useIntegrationKeys`）が言う。
+ */
+export function useIssueIntegrationKey() {
+  const api = useApi();
+  const { mutate } = useSWRConfig();
+  return useCallback(
+    async (input: IntegrationKeyInput): Promise<IntegrationKeyIssued> => {
+      const issued = await api.api.POST('/integration-keys', { body: input }).then(unwrap);
+      await mutate(KEY.integrationKeys).catch(() => undefined);
+      return issued;
+    },
+    [api, mutate],
+  );
+}
+
+/** 連携の鍵を失効させる（`POST /integration-keys/:id/revoke`）。**確認は画面の側が持つ。** 取り直しの失敗は失効の失敗にしない。 */
+export function useRevokeIntegrationKey() {
+  const api = useApi();
+  const { mutate } = useSWRConfig();
+  return useCallback(
+    async (id: string) => {
+      const result = await api.api
+        .POST('/integration-keys/{id}/revoke', { params: { path: { id } }, body: {} })
+        .then(unwrap);
+      await mutate(KEY.integrationKeys).catch(() => undefined);
+      return result;
     },
     [api, mutate],
   );

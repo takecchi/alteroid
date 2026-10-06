@@ -128,6 +128,7 @@ const CASES: [string, string][] = [
   ['/journal', '日誌'],
   ['/dropped', '日誌'],
   ['/archive', '日誌'],
+  ['/archive/entry-1', '日誌'],
   ['/memory', '記憶とやり方'],
   ['/memory/some-slug', '記憶とやり方'],
   ['/practices', '記憶とやり方'],
