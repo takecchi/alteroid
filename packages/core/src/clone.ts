@@ -4217,7 +4217,14 @@ class Clone implements CloneHost {
     if (head === undefined) return;
     const priorTexts = await this.#resolvePriorTexts(events);
     // 添付（Issue #3111 段1b）。中身はここで読むだけで、受信箱・日誌・記憶へは写さない。
-    const { images, notices } = await resolveTurnAttachments(this.#stores.attachments, events);
+    const images: AgentInputImage[] = [];
+    const notices = new Map<string, string>();
+    for (const event of events) {
+      if (event.attachments === undefined || event.attachments.length === 0) continue;
+      const resolved = await resolveTurnAttachments(this.#stores, event.attachments);
+      images.push(...resolved.images);
+      notices.set(event.id, resolved.noticeLines.join('\n'));
+    }
     await this.#runTurn(
       head.conversationId,
       humanTurnText(events, priorTexts, notices),

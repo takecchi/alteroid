@@ -4,11 +4,13 @@ import { stripNul } from './nul-guard.js';
 import type { AttachmentRef } from './schema.js';
 
 /**
- * 人間の発言に添えられた添付を、クローンのターンへ渡す形にする（Issue #3111 段1b）。
+ * 添付の参照を、クローンのターンへ渡す形にする（Issue #3111 段1b）。**人間の発言に限らない汎用の関数**
+ * （外部イベントなど、添付を運ぶ他の起点も同じ関数を通す。呼び出し側が起点ごとに通知行を本文のどこへ
+ * 置くかだけを決める）。
  *
  * - **画像**（png / jpeg / webp / gif。中身の先頭で再確認する。宣言ではなく中身が決める）は
  *   base64 にして {@link AgentInputImage} へ。モデルへ渡る。
- * - **すべての添付**について、本文へ通知行を1行足す（`[添付] id=… name=… type=… size=… sha256=…`）。
+ * - **すべての添付**について通知行を1行ずつ作る（`[添付] id=… name=… type=… size=… sha256=…`）。
  *   画像以外の取り出し口は段2。いまはメタデータだけを渡す。
  * - **見つからない・読めない添付でもターンは続ける。** 通知行で「見つからない（期限切れの可能性）」と言う。
  *
@@ -17,46 +19,40 @@ import type { AttachmentRef } from './schema.js';
 export interface ResolvedTurnAttachments {
   /** モデルへ渡す画像（添付の順）。 */
   readonly images: AgentInputImage[];
-  /** 発言（`human_message` の id）ごとの通知行。添付の無い発言は入らない。 */
-  readonly notices: Map<string, string>;
+  /** 通知行（添付ごとに1行。`refs` と同じ順）。 */
+  readonly noticeLines: string[];
 }
 
 export async function resolveTurnAttachments(
-  store: AttachmentStore,
-  events: readonly { readonly id: string; readonly attachments?: readonly AttachmentRef[] }[],
+  stores: { readonly attachments: AttachmentStore },
+  refs: readonly AttachmentRef[],
 ): Promise<ResolvedTurnAttachments> {
   const images: AgentInputImage[] = [];
-  const notices = new Map<string, string>();
-  for (const event of events) {
-    const refs = event.attachments ?? [];
-    if (refs.length === 0) continue;
-    const lines: string[] = [];
-    for (const ref of refs) {
-      const described = `id=${ref.id} name=${stripNul(ref.name)} type=${ref.mediaType} size=${ref.size} sha256=${ref.sha256}`;
-      let found: Awaited<ReturnType<AttachmentStore['get']>>;
-      try {
-        found = await store.get(ref.id);
-      } catch {
-        lines.push(`[添付] ${described} 中身を読めなかった（置き場の失敗。再送で直る場合がある）`);
-        continue;
-      }
-      if (found === undefined) {
-        lines.push(`[添付] ${described} 見つからない（期限切れの可能性）`);
-        continue;
-      }
-      const imageType = sniffAttachmentImageType(found.bytes);
-      if (imageType === undefined) {
-        lines.push(`[添付] ${described}`);
-        continue;
-      }
-      images.push({
-        mediaType: imageType,
-        data: Buffer.from(found.bytes).toString('base64'),
-        name: ref.name,
-      });
-      lines.push(`[添付] ${described}（画像として渡した）`);
+  const noticeLines: string[] = [];
+  for (const ref of refs) {
+    const described = `id=${ref.id} name=${stripNul(ref.name)} type=${ref.mediaType} size=${ref.size} sha256=${ref.sha256}`;
+    let found: Awaited<ReturnType<AttachmentStore['get']>>;
+    try {
+      found = await stores.attachments.get(ref.id);
+    } catch {
+      noticeLines.push(`[添付] ${described} 中身を読めなかった（置き場の失敗。再送で直る場合がある）`);
+      continue;
     }
-    notices.set(event.id, lines.join('\n'));
+    if (found === undefined) {
+      noticeLines.push(`[添付] ${described} 見つからない（期限切れの可能性）`);
+      continue;
+    }
+    const imageType = sniffAttachmentImageType(found.bytes);
+    if (imageType === undefined) {
+      noticeLines.push(`[添付] ${described}`);
+      continue;
+    }
+    images.push({
+      mediaType: imageType,
+      data: Buffer.from(found.bytes).toString('base64'),
+      name: ref.name,
+    });
+    noticeLines.push(`[添付] ${described}（画像として渡した）`);
   }
-  return { images, notices };
+  return { images, noticeLines };
 }

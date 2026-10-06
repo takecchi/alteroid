@@ -35,6 +35,11 @@ export interface AttachmentMeta {
   readonly sha256: string;
   /** 結び付けた会話。未結び付けなら無い。 */
   readonly conversationId?: string;
+  /**
+   * 誰が上げたか（認証済みの主体を表す識別子。例 `operator` / `account:<id>`）。**中身ではなく識別子だけ**。
+   * 上げた主体が分からない・記録しない経路では無い。
+   */
+  readonly uploadedBy?: string;
   /** ISO 8601。 */
   readonly createdAt: string;
   /** ISO 8601。 */
@@ -47,6 +52,8 @@ export interface AttachmentPutInput {
   readonly bytes: Uint8Array;
   /** 最初から結び付けて置くとき。無ければ未結び付け（後で `bind`）。 */
   readonly conversationId?: string;
+  /** 上げた主体の識別子（任意。{@link AttachmentMeta.uploadedBy}）。 */
+  readonly uploadedBy?: string;
 }
 
 export interface AttachmentBindResult {
@@ -324,6 +331,9 @@ export function prepareAttachment(
     size: input.bytes.length,
     sha256: sha256Hex(input.bytes),
     ...(input.conversationId === undefined ? {} : { conversationId: input.conversationId }),
+    ...(input.uploadedBy === undefined || input.uploadedBy === ''
+      ? {}
+      : { uploadedBy: stripNul(input.uploadedBy) }),
     createdAt: now.toISOString(),
     expiresAt: new Date(now.getTime() + limits.retentionDays * 86_400_000).toISOString(),
   };

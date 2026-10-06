@@ -255,6 +255,9 @@
                     "conversationId": {
                       "type": "string"
                     },
+                    "uploadedBy": {
+                      "type": "string"
+                    },
                     "createdAt": {
                       "type": "string"
                     },
@@ -400,6 +403,9 @@
                       "type": "string"
                     },
                     "conversationId": {
+                      "type": "string"
+                    },
+                    "uploadedBy": {
                       "type": "string"
                     },
                     "createdAt": {

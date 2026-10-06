@@ -24,6 +24,7 @@ const META_COLUMNS = {
   name: attachments.name,
   size: attachments.size,
   conversationId: attachments.conversationId,
+  uploadedBy: attachments.uploadedBy,
   createdAt: attachments.createdAt,
   expiresAt: attachments.expiresAt,
 } as const;
@@ -35,6 +36,7 @@ interface MetaRow {
   name: string;
   size: number | string;
   conversationId: string | null;
+  uploadedBy: string | null;
   createdAt: Date | string;
   expiresAt: Date | string;
 }
@@ -47,6 +49,7 @@ function toMeta(row: MetaRow): AttachmentMeta {
     size: toNumber(row.size),
     sha256: row.sha256,
     ...(row.conversationId === null ? {} : { conversationId: row.conversationId }),
+    ...(row.uploadedBy === null ? {} : { uploadedBy: row.uploadedBy }),
     createdAt: toIso(row.createdAt),
     expiresAt: toIso(row.expiresAt),
   };
@@ -78,6 +81,7 @@ export class PgAttachmentStore implements AttachmentStore {
       size: meta.size,
       bytes: Buffer.from(input.bytes),
       conversationId: meta.conversationId ?? null,
+      uploadedBy: meta.uploadedBy ?? null,
       createdAt: new Date(meta.createdAt),
       expiresAt: new Date(meta.expiresAt),
     });

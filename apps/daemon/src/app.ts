@@ -536,6 +536,14 @@ function attachmentDisposition(name: string): string {
 }
 
 /**
+ * 添付を上げた主体の識別子（`AttachmentMeta.uploadedBy`）。持ち主（operator）は `operator`、
+ * アカウントは `account:<id>`。トークンや資格そのものは入れない。
+ */
+function uploaderOf(principal: Principal): string {
+  return principal.kind === 'operator' ? 'operator' : `account:${principal.account.id}`;
+}
+
+/**
  * `POST /attachments` の門番。**本文の content-type は `application/octet-stream` だけを受ける。**
  *
  * `deliberateClient` と同じ考え方である：`application/octet-stream` は CORS の単純リクエストの
@@ -2501,6 +2509,8 @@ export function createApp(deps: AppDeps) {
             name: name ?? '',
             mediaType: type,
             bytes,
+            // 誰が上げたか（識別子だけ）。門番（`authenticate`）が `c` に載せた principal から作る。
+            uploadedBy: uploaderOf(c.get('principal')),
           });
           return c.json(meta, 200);
         } catch (error) {

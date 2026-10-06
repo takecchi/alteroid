@@ -1485,3 +1485,4 @@ export {
   type AttachmentStoreOptions,
 } from './attachment.js';
 export { verifyAttachmentStoreContract } from './attachment-contract.js';
+export { resolveTurnAttachments, type ResolvedTurnAttachments } from './attachment-turn.js';

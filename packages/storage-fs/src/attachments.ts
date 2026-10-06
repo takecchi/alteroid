@@ -33,6 +33,7 @@ const metaSchema = z.object({
   size: z.number().int().nonnegative(),
   sha256: z.string(),
   conversationId: z.string().optional(),
+  uploadedBy: z.string().optional(),
   createdAt: z.string(),
   expiresAt: z.string(),
 });

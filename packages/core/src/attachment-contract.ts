@@ -38,6 +38,7 @@ export async function verifyAttachmentStoreContract(store: AttachmentStore): Pro
   if (meta.size !== PNG.length) fail('size');
   if (!/^[0-9a-f]{64}$/.test(meta.sha256)) fail('sha256 の形');
   if (meta.conversationId !== undefined) fail('未結び付けの put に conversationId が付いた');
+  if (meta.uploadedBy !== undefined) fail('uploadedBy を渡さない put に uploadedBy が付いた');
   if (!(Date.parse(meta.expiresAt) > Date.parse(meta.createdAt))) fail('expiresAt > createdAt');
   const got = await store.get(meta.id);
   if (got === undefined || !same(got.bytes, PNG)) fail('get が中身を返さない');
@@ -119,4 +120,15 @@ export async function verifyAttachmentStoreContract(store: AttachmentStore): Pro
   if ((await store.prune(expiry)) !== 1) fail('期限切れの掃除');
   if ((await store.get(bound.id)) !== undefined) fail('期限切れが残った');
   if ((await store.prune(expiry)) !== 0) fail('掃除は冪等');
+
+  // uploadedBy（上げた主体の識別子。中身ではない）
+  const uploaded = await store.put({
+    name: 'u.png',
+    mediaType: 'image/png',
+    bytes: PNG,
+    uploadedBy: 'account:a1',
+  });
+  if (uploaded.uploadedBy !== 'account:a1') fail('put が uploadedBy を返さない');
+  if ((await store.getMeta(uploaded.id))?.uploadedBy !== 'account:a1') fail('getMeta の uploadedBy');
+  if ((await store.get(uploaded.id))?.meta.uploadedBy !== 'account:a1') fail('get の uploadedBy');
 }
