@@ -1,4 +1,4 @@
-import { readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -925,5 +925,84 @@ describe('alteroid memory set の上書き確認（#3201）', () => {
 
     expect(asked).toEqual([]);
     expect(methods()).toEqual(['GET', 'PUT']);
+  });
+});
+
+/**
+ * Issue #3728: slug は、一時ファイルを作る前に検査する（`profile edit` の `parseName` と同じ位置）。
+ * `join(dir, `${slug}.md`)` は `..` を畳むので、検査が後だと一時ディレクトリの外の .md を
+ * 雛形で書き換え、空白・記号入りの slug ではエディタが別のファイルを開いた。
+ *
+ * **実際の一時領域・ホームには書かない。** `TMPDIR` を使い捨てのディレクトリへ向け、その外側に
+ * 置いた目印のファイルが変わらないことを見る。
+ */
+describe('alteroid memory edit は slug を一時ファイルの前に検査する（#3728）', () => {
+  let sandbox: string;
+  let fakeTmp: string;
+  let opened: string;
+  const saved = { tmp: process.env.TMPDIR, editor: process.env.EDITOR, visual: process.env.VISUAL };
+
+  beforeEach(async () => {
+    sandbox = await makeTempDir('alteroid-memory-slug-');
+    fakeTmp = join(sandbox, 'tmp');
+    opened = join(sandbox, 'editor-opened');
+    await mkdir(fakeTmp);
+    process.env.TMPDIR = fakeTmp;
+    delete process.env.VISUAL;
+    process.env.ALTEROID_TEST_OPENED = opened;
+    // 開かれたら目印を作り、本文も書く（開いてしまえば保存して PUT へ進む）。
+    process.env.EDITOR = `sh -c 'printf x > "$ALTEROID_TEST_OPENED"; printf "人間の編集\\n" > "$1"' _`;
+    captureStdout();
+  });
+  afterEach(() => {
+    for (const [key, value] of [
+      ['TMPDIR', saved.tmp],
+      ['EDITOR', saved.editor],
+      ['VISUAL', saved.visual],
+    ] as const) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    delete process.env.ALTEROID_TEST_OPENED;
+  });
+
+  it('`../` で一時ディレクトリの外へ出る slug は、外のファイルを書き換えず、通信もエディタも起こさない', async () => {
+    const outside = join(sandbox, 'outside.md');
+    await writeFile(outside, '使い手が書いたもの\n', 'utf8');
+    replies.push({ status: 404, body: { error: 'not found' } });
+
+    // fakeTmp/alteroid-memory-XXXX/../../outside.md == sandbox/outside.md
+    const error = await memoryEditCommand('../../outside').catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(Error);
+    expect(await readFile(outside, 'utf8')).toBe('使い手が書いたもの\n');
+    expect(await readdir(fakeTmp)).toEqual([]);
+    expect(sent).toEqual([]);
+    await expect(readFile(opened, 'utf8')).rejects.toThrow();
+  });
+
+  it.each(['my note', 'a;b', '$(id)', 'Upper', 'a/b', '.hidden', '', 'x'.repeat(129)])(
+    '規則に合わない slug %j は、一時ファイルも GET も PUT もエディタも無しで、使える形を言って断る',
+    async (slug) => {
+      const error = await memoryEditCommand(slug).catch((e: unknown) => e);
+
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toContain('英小文字・数字・. _ - のみ');
+      expect(await readdir(fakeTmp)).toEqual([]);
+      expect(sent).toEqual([]);
+      await expect(readFile(opened, 'utf8')).rejects.toThrow();
+    },
+  );
+
+  it('一時ファイルのパスに空白が入っても（TMPDIR）、エディタは1つのファイルとして開く', async () => {
+    const spaced = join(sandbox, 'tmp with space');
+    await mkdir(spaced);
+    process.env.TMPDIR = spaced;
+    replies.push({ status: 404, body: { error: 'not found' } });
+
+    await memoryEditCommand('values');
+
+    expect(sent.map((s) => s.method)).toEqual(['GET', 'PUT']);
+    expect(JSON.parse(sent[1]?.body ?? '{}')).toMatchObject({ content: '人間の編集\n' });
   });
 });
