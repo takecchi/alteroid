@@ -81,6 +81,22 @@ describe('saveHint', () => {
   });
 });
 
+describe('saveDisabled', () => {
+  it('⌘/Ctrl + S も ⌘/Ctrl + Enter も、saveDisabled のあいだは onSave を呼ばない（#3300）', () => {
+    const onSave = vi.fn();
+    const { rerender } = render(
+      <MarkdownEditor value="" onChange={() => undefined} onSave={onSave} saveDisabled />,
+    );
+    const box = screen.getByRole('textbox');
+    fireEvent.keyDown(box, { key: 's', ctrlKey: true });
+    fireEvent.keyDown(box, { key: 'Enter', ctrlKey: true });
+    expect(onSave).not.toHaveBeenCalled();
+    rerender(<MarkdownEditor value="" onChange={() => undefined} onSave={onSave} />);
+    fireEvent.keyDown(screen.getByRole('textbox'), { key: 's', ctrlKey: true });
+    expect(onSave).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('emptyPreview', () => {
   it('既定: 空のプレビューは「まだ何も書いていない」と言う', () => {
     render(<MarkdownEditor value="" onChange={() => undefined} defaultMode="preview" />);

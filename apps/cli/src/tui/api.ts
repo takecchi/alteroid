@@ -215,9 +215,20 @@ export interface TuiApi {
   readonly baseUrl: string;
   /** 失敗（HTTP エラー・接続断）は `ApiError` を投げる。 */
   chat(
-    input: { text: string; conversationId?: string; attachments?: string[] },
+    input: {
+      text: string;
+      conversationId?: string;
+      attachments?: string[];
+      /** 呼び手が名乗らせたいとき（`open` の前に終わった送信を、あとで引き直す。#3304）。無ければ api が採番する。 */
+      clientMessageId?: string;
+    },
     signal: AbortSignal,
   ): AsyncGenerator<ChatEvent>;
+  /**
+   * `GET /client-messages/{clientMessageId}`（#3304）。受け取り済みならその会話の id、**受け取っていなければ
+   * （404）`null`**。それ以外の失敗は `ApiError` を投げる（「受け取っていない」と「確かめられなかった」を取り違えない）。
+   */
+  findClientMessage(clientMessageId: string): Promise<string | null>;
   /** `GET /attachments/limits`。古いデーモン（404）は既定値、一時的な失敗は `null`（失敗は投げない）。 */
   attachmentLimits(): Promise<AttachmentLimits | null>;
   /** `POST /attachments`（生のバイト列）。失敗は `ApiError` ではなく普通の `Error`（理由つき）。 */
@@ -368,8 +379,8 @@ export function createTuiApi(target: Target): TuiApi {
       const body = JSON.stringify({
         text: input.text,
         conversationId: input.conversationId ?? undefined,
-        // 発言ごとに名乗る（Issue #3203）。TUI は送信を中断して再送する経路を持たないので、判定には使わない。
-        clientMessageId: randomUUID(),
+        // 発言ごとに名乗る（Issue #3203）。新しい会話で `open` の前に終わった送信は、呼び手がこの id で引き直す（#3304）。
+        clientMessageId: input.clientMessageId ?? randomUUID(),
         ...(input.attachments === undefined || input.attachments.length === 0
           ? {}
           : { attachments: input.attachments }),
@@ -384,6 +395,17 @@ export function createTuiApi(target: Target): TuiApi {
         const data = event.json<Record<string, unknown>>() ?? {};
         yield { ...data, type: event.name } as ChatEvent;
       }
+    },
+
+    async findClientMessage(clientMessageId) {
+      const response = await client['client-messages'][':clientMessageId'].$get({
+        param: { clientMessageId },
+      });
+      if (response.status === 404) return null;
+      if (!response.ok) {
+        throw await failure('前の送信が受け取られたか確かめられませんでした', response);
+      }
+      return (await response.json()).conversationId;
     },
 
     attachmentLimits() {

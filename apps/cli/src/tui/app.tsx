@@ -422,7 +422,10 @@ export const App: FC<AppProps> = ({
       return;
     }
     setAnchor('bottom');
-    void controller.send(resolved.text);
+    // 前の送信を引けなくて送らなかったときは、打った文を入力欄へ戻す（打ち直しを求めない。#3304）。
+    void controller.send(resolved.text).then((sent) => {
+      if (!sent && isEmptyBuffer(bufferRef.current)) setBuffer(bufferOf(text));
+    });
   };
 
   /** 委譲の詳細の入力欄の Enter。スラッシュコマンドは解決し、それ以外は追加指示として送る。 */

@@ -72,6 +72,9 @@ export type UnreadableCommitment = Ok<paths['/commitments']['get']>['unreadable'
  */
 export type ApprovalAnswerResult = Ok<paths['/approvals/answer']['post']>['results'][number];
 
+/** 承認が決着した日と件数（`GET /approvals/answered-dates`。日はデーモンの `localDate()`）。 */
+export type AnsweredApprovalDate = Ok<paths['/approvals/answered-dates']['get']>['dates'][number];
+
 export type DailyReport = Ok<paths['/reports']['get']>['reports'][number];
 
 /** `GET /progress` の応答（Issue #2241）。率（%）は持たない。 */

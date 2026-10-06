@@ -104,6 +104,14 @@ export const KEY = {
    */
   conversationApprovals: (conversationId: string) =>
     ({ type: 'approvals', pending: false, conversationId }) as const,
+  /**
+   * 回答済みの画面（`approvals/answered`）の2つの読み。**どちらも `type` は `approvals` のまま
+   * 揃えてある**（上の `conversationApprovals` と同じ理由——`escalation` が届いたときの束での
+   * 無効化から外れると、答えが付いた直後の画面だけ古いまま取り残される）。
+   */
+  approvalsAnsweredDates: (limit: number) =>
+    ({ type: 'approvals', answeredDates: true, limit }) as const,
+  approvalsAnsweredOn: (date: string) => ({ type: 'approvals', answeredOn: date }) as const,
   commitments: (includeClosed: boolean) => ({ type: 'commitments', includeClosed }) as const,
   reports: (limit: number) => ({ type: 'reports', limit }) as const,
   report: (date: string) => ({ type: 'report', date }) as const,
@@ -301,6 +309,30 @@ export function useApprovals(pending = true) {
         params: { query: { pending: pending ? 'true' : 'false', order: 'asc' } },
       })
       .then(unwrap),
+  );
+}
+
+/**
+ * 承認が決着した日と件数（`GET /approvals/answered-dates`。新しい日が上）。回答済みの画面の
+ * 左の目次。**日はデーモンの `localDate()` で決まる**（日報と同じ区切り。ブラウザの TZ ではない）。
+ * `GET /reports` と同じく封筒は無いので、続きが在るかは `limit` 件ちょうど返ったかで判る。
+ */
+export function useAnsweredApprovalDates(limit = 60) {
+  const api = useApi();
+  return useSWR(KEY.approvalsAnsweredDates(limit), ({ limit }) =>
+    api.api.GET('/approvals/answered-dates', { params: { query: { limit } } }).then(unwrap),
+  );
+}
+
+/**
+ * その日に決着した承認（回答済み・取り下げ済み）を決着の新しい順に（`GET /approvals?answeredOn=`）。
+ * 並びも「その日」の意味もデーモンが決める——**画面で並べ直さない**。`null` なら取りに行かない
+ * （日がまだ決まっていない）。
+ */
+export function useApprovalsAnsweredOn(date: string | null) {
+  const api = useApi();
+  return useSWR(date === null ? null : KEY.approvalsAnsweredOn(date), ({ answeredOn }) =>
+    api.api.GET('/approvals', { params: { query: { answeredOn } } }).then(unwrap),
   );
 }
 

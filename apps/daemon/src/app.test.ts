@@ -6818,6 +6818,17 @@ describe('GET /journal の since/until の正規化（issue #1515）', () => {
     const body = (await res.json()) as { error: string };
     expect(body.error).toContain('until に渡された「not-a-datetime」は日時として読めない');
   });
+
+  // #3287。`Date.parse` が緩く読む「foo 1」と、3/3 へずれる実在しない日付を断る。
+  // 断る文言には受け付ける形の例が入る。
+  it.each(['foo 1', '2026-02-31'])('since=%s は400で、受け付ける形の例を添える', async (since) => {
+    await stores.journal.append({ type: 'decision', decision: 'd', grounds: 'g' });
+    const res = await app.request(`/journal?since=${encodeURIComponent(since)}`);
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toContain(`since に渡された「${since}」は日時として読めない`);
+    expect(body.error).toContain('2026-10-06T09:00:00+09:00');
+  });
 });
 
 /**

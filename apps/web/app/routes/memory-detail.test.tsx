@@ -840,3 +840,34 @@ describe('削除は読んだ版を ifMatch（クエリ）として送り、衝�
     expect(new URL(urls[1] ?? '').searchParams.get('ifMatch')).toBe(V2);
   });
 });
+
+describe('保存の門（#3300）', () => {
+  it('保存中に ⌘/Ctrl + S をもう一度押しても PUT は1回だけ', async () => {
+    const puts: unknown[] = [];
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = input instanceof Request ? input : new Request(input, init);
+      if (request.method === 'PUT') {
+        puts.push(await request.json());
+        await gate;
+        return json({ document: { ...DOC, content: '二重に押す' }, version: 'v2' });
+      }
+      return json({ document: DOC });
+    }) as typeof fetch;
+    mountDetail('notes');
+
+    fireEvent.mouseDown(await screen.findByRole('tab', { name: '編集' }));
+    const textarea = await screen.findByRole('textbox');
+    fireEvent.change(textarea, { target: { value: '二重に押す' } });
+
+    fireEvent.keyDown(textarea, { key: 's', ctrlKey: true });
+    await waitFor(() => expect(puts).toHaveLength(1));
+    fireEvent.keyDown(textarea, { key: 's', ctrlKey: true });
+    release();
+    await screen.findByText(/保存した/);
+    expect(puts).toHaveLength(1);
+  });
+});
