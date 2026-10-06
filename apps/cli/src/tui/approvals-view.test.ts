@@ -212,6 +212,12 @@ describe('最下行と入力欄', () => {
   it('入力欄のプレースホルダは、いま何を書く欄かを言う', () => {
     expect(composerPlaceholder(detailOf({ busy: true }))).toBe('送信中…');
     expect(composerPlaceholder(detailOf())).toContain('a で答える');
+    // 回答済み・取り下げ済みはもう答えられないので、a を案内しない。
+    const settled = composerPlaceholder(
+      detailOf({ approval: approvalRow('ap-1', { answeredAt: '2026-09-30T10:00:00.000Z' }) }),
+    );
+    expect(settled).not.toContain('a で答える');
+    expect(settled).toContain('答えられない');
     expect(composerPlaceholder(detailOf({ mode: 'form', form: emptyForm(2) }))).toContain(
       '「その他」',
     );

@@ -105,3 +105,68 @@ describe('ApprovalCard: trailing と error の順序', () => {
     expect(empty).toHaveLength(0);
   });
 });
+
+/**
+ * 承認が並んだとき、回答欄とボタンがどの確認のものかを区別できること（Issue #3701）。
+ * ボタンの名前（「許可」など）は変えず、`aria-describedby` で確認の文を結ぶ（accessible description）。
+ * jest-dom は ui の依存に無いので、description は `aria-describedby` の指す要素の文字から読む。
+ */
+describe('ApprovalCard: どの確認への操作かの区別', () => {
+  function descriptionOf(el: HTMLElement): string {
+    const ids = (el.getAttribute('aria-describedby') ?? '').split(/\s+/).filter((i) => i !== '');
+    return ids.map((id) => document.getElementById(id)?.textContent ?? '').join(' ');
+  }
+
+  it('2件並ぶと、回答欄と「許可」の description / 回答欄の名前が、各カードの確認の文になる', () => {
+    render(
+      <>
+        <ApprovalCard {...base} question="本番へデプロイしてよいか" />
+        <ApprovalCard {...base} question="古いブランチを消してよいか" />
+      </>,
+    );
+    const boxes = screen.getAllByRole('textbox');
+    const allows = screen.getAllByRole('button', { name: '許可' });
+    expect(boxes).toHaveLength(2);
+    expect(allows).toHaveLength(2);
+    expect(boxes[0]?.getAttribute('aria-label')).toBe('「本番へデプロイしてよいか」への回答');
+    expect(boxes[1]?.getAttribute('aria-label')).toBe('「古いブランチを消してよいか」への回答');
+    expect(screen.getByRole('textbox', { name: /デプロイ/ })).toBe(boxes[0]);
+    expect(descriptionOf(boxes[0] as HTMLElement)).toBe('本番へデプロイしてよいか');
+    expect(descriptionOf(boxes[1] as HTMLElement)).toBe('古いブランチを消してよいか');
+    expect(descriptionOf(allows[0] as HTMLElement)).toBe('本番へデプロイしてよいか');
+    expect(descriptionOf(allows[1] as HTMLElement)).toBe('古いブランチを消してよいか');
+    for (const name of ['却下', '回答する']) {
+      const buttons = screen.getAllByRole('button', { name });
+      expect(buttons.map((b) => descriptionOf(b))).toEqual([
+        '本番へデプロイしてよいか',
+        '古いブランチを消してよいか',
+      ]);
+    }
+  });
+
+  it('長い確認の文は、回答欄の名前では冒頭だけにする', () => {
+    render(<ApprovalCard {...base} question={`${'あ'.repeat(40)}\n2行目`} />);
+    expect(screen.getByRole('textbox').getAttribute('aria-label')).toBe(
+      `「${'あ'.repeat(30)}…」への回答`,
+    );
+  });
+
+  it('設問つき: 「選択肢を開いて答える」と「回答」が各カードの確認の文に結ばれる', () => {
+    globalThis.ResizeObserver ??= class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    };
+    const questions = [{ id: 'q1', prompt: 'どちら？', options: [{ id: 'a', label: 'A' }] }];
+    render(
+      <>
+        <ApprovalCard {...base} question="一つ目の確認" questions={questions} />
+        <ApprovalCard {...base} question="二つ目の確認" questions={questions} />
+      </>,
+    );
+    const opens = screen.getAllByRole('button', { name: '選択肢を開いて答える' });
+    expect(opens.map((b) => descriptionOf(b))).toEqual(['一つ目の確認', '二つ目の確認']);
+    const submits = screen.getAllByRole('button', { name: '回答', hidden: true });
+    expect(submits.map((b) => descriptionOf(b))).toEqual(['一つ目の確認', '二つ目の確認']);
+  });
+});

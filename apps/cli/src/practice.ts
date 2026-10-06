@@ -115,7 +115,7 @@ export async function practiceListCommand(): Promise<void> {
 
 export async function practiceShowCommand(
   slug: string,
-  options: { version?: number } = {},
+  options: { version?: number | string } = {},
 ): Promise<void> {
   const conn = await connect('read');
   if (conn === null) return;
@@ -231,10 +231,11 @@ export async function practiceEditCommand(
   // クローンが同じやり方へ書くと、版が変わっていて 409 になる（黙って上書きしない）。無い slug は
   // `null`（「読んだ時には無かった」）。古いデーモンが `version` を返さなければ前提なしで書く。
   const ifMatch = current === null ? null : current.version;
+  const initial = template(slug);
   const dir = await mkdtemp(join(tmpdir(), 'alteroid-practice-'));
   const path = join(dir, `${slug}.md`);
   try {
-    await writeFile(path, current?.content ?? template(slug), 'utf8');
+    await writeFile(path, current?.content ?? initial, 'utf8');
     await openEditor(path, 'alteroid practice set <slug> --file <path>');
   } catch (error) {
     // まだ人間は何も書いていない（エディタが起きなかった・異常終了した）。
@@ -253,11 +254,12 @@ export async function practiceEditCommand(
   await keepDraftOnFailure(dir, path, resume, async (keep) => {
     const edited = await readFile(path, 'utf8');
 
+    // **新しく作るときは、雛形のまま閉じたら「何も書かなかった」である**（雛形は案内文で、
+    // そのまま書くとやり方として保存される）。
     if (
-      current !== null &&
-      edited === current.content &&
-      kind === current.kind &&
-      title === current.title
+      current === null
+        ? edited === initial
+        : edited === current.content && kind === current.kind && title === current.title
     ) {
       // **書き換えていないなら書き込まない**（`memory edit` と同じ理由——
       // 同じ内容でも `PUT` は日誌へ `decision` を積むので、押し戻すたびに

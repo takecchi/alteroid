@@ -160,17 +160,19 @@ export default function Approvals() {
   /** 同じ描画の中の2回目の押下を止める（state は次の描画まで古い）。 */
   const bulkBusyRef = useRef(false);
   /**
-   * カードが個別に送信中の id（#3626）。まとめ送信の対象から外し、保存先の下書きも
-   * 送信中は落とさない（#3666。一覧から消える描画と `onAnswered` の間の一瞬）。
-   * ref は押下の直後に読むため、state は描画のため。
+   * 送信中の id（カードの個別送信とまとめ送信の両方。#3626）。まとめ送信の対象から外し、
+   * 保存先の下書きも送信中は落とさない（#3666。一覧から消える描画と、答えが通ったあとに
+   * 下書きを畳む・残すまでの間の一瞬）。ref は押下の直後に読むため、state は描画のため。
    */
   const sendingIdsRef = useRef<Set<string>>(new Set());
   const [sendingIds, setSendingIds] = useState<ReadonlySet<string>>(new Set());
 
-  function setCardSending(id: string, sending: boolean): void {
+  function setSending(ids: readonly string[], sending: boolean): void {
     const next = new Set(sendingIdsRef.current);
-    if (sending) next.add(id);
-    else next.delete(id);
+    for (const id of ids) {
+      if (sending) next.add(id);
+      else next.delete(id);
+    }
     sendingIdsRef.current = next;
     setSendingIds(next);
   }
@@ -278,6 +280,10 @@ export default function Approvals() {
     const targets = pendingDrafts.filter(([id]) => !sendingIdsRef.current.has(id));
     if (targets.length === 0) return;
     bulkBusyRef.current = true;
+    // 送る id を送信中として持つ。答えが通って一覧から消える描画のあいだも、保存先の下書きを
+    // 落とさない（#3666。下の `settleDraft` で畳む・残すが決まるまで）。
+    const targetIds = targets.map(([id]) => id);
+    setSending(targetIds, true);
     // 送るときに下書きを控える。応答を待つ間に打ち足した分を、成功のあとに消さないため。
     const sentTexts = drafts.texts;
     const sentQuestions = drafts.questions;
@@ -308,6 +314,7 @@ export default function Approvals() {
       setBulkFailure(caught);
     } finally {
       bulkBusyRef.current = false;
+      setSending(targetIds, false);
       setBulkBusy(false);
     }
   }
@@ -376,7 +383,7 @@ export default function Approvals() {
                 onAnswered={(sent) => settleDraft(approval, sent)}
                 bulkError={bulkErrors[approval.id]}
                 bulkBusy={bulkBusy}
-                onSendingChange={(sending) => setCardSending(approval.id, sending)}
+                onSendingChange={(sending) => setSending([approval.id], sending)}
               />
             </li>
           ))}

@@ -109,8 +109,11 @@ export function ApprovalQuestionsForm({
   onSubmit,
   draft,
   onDraftChange,
+  describedBy,
 }: {
   questions: readonly ApprovalQuestionView[];
+  /** 確認の文の要素の id。「回答」と補足欄を結び、どの確認への操作かを区別させる（カードが渡す）。 */
+  describedBy?: string;
   busy?: boolean;
   onSubmit: (answer: ApprovalQuestionsAnswer) => void;
   /**
@@ -168,6 +171,7 @@ export function ApprovalQuestionsForm({
           value={supplement}
           disabled={busy}
           maxHeight="10rem"
+          aria-describedby={describedBy}
           // ⌘/Ctrl + Enter は「回答」ボタンと同じ form の submit（空・送信中は送らない）。
           onSubmitShortcut={() => formRef.current?.requestSubmit()}
           submitDisabled={empty || busy}
@@ -176,7 +180,14 @@ export function ApprovalQuestionsForm({
         />
       </div>
       <div className="flex flex-wrap items-center gap-2">
-        <Button variant="primary" size="sm" type="submit" loading={busy} disabled={empty}>
+        <Button
+          variant="primary"
+          size="sm"
+          type="submit"
+          loading={busy}
+          disabled={empty}
+          aria-describedby={describedBy}
+        >
           回答
         </Button>
         <SubmitHint action="回答" />

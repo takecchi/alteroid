@@ -93,6 +93,18 @@ describe('フッタのキーヒント', () => {
     expect(HINT_AP_DETAIL_FROM_DAY).not.toContain('Esc 一覧へ');
   });
 
+  it('もう答えられない承認待ち（回答済み・取り下げ済み）の詳細の案内に、a 答える を出さない', () => {
+    for (const from of ['list', 'day'] as const) {
+      expect(approvalDetailHint(from, true)).toContain('a 答える');
+      const settled = approvalDetailHint(from, false);
+      expect(settled).not.toContain('a 答える');
+      expect(settled).toContain('^C 中断');
+      expect(settled.length).toBeLessThanOrEqual(80);
+    }
+    expect(approvalDetailHint('day', false)).toContain('Esc その日へ');
+    expect(approvalDetailHint('list', false)).toContain('Esc 一覧へ');
+  });
+
   it('入力欄のフッタは改行のキー（行末の \\ + Enter）を案内する', () => {
     expect(HINT_INPUT).toContain('\\+Enter 改行');
     expect(HINT_MGR_INPUT).toContain('\\+Enter 改行');
