@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Link, useNavigate } from 'react-router';
 
@@ -29,11 +29,20 @@ import {
   useMarkConversationRead,
   getChatStream,
   postChat,
+  uploadAttachment,
   useApi,
   type ChatStreamEvent,
 } from '@alteroid/swr';
-import { formatDateTime, formatRelative, redactError } from '@alteroid/logic';
-import type { ConversationMessage } from '@alteroid/logic';
+import {
+  attachmentMediaType,
+  checkAttachments,
+  formatBytes,
+  formatDateTime,
+  formatRelative,
+  isPreviewableImage,
+  redactError,
+} from '@alteroid/logic';
+import type { ConversationMessage, MessageAttachment } from '@alteroid/logic';
 
 import { usePageVisible } from '~/lib/use-page-visible';
 
@@ -62,6 +71,27 @@ const BOTTOM_THRESHOLD_PX = 32;
  * 403 のような「呼べなかった」失敗（ただの `Error`）と見分けて、利用者向けの文で描くための型。
  */
 class TurnFailedError extends Error {}
+
+/**
+ * 添付を見せる部品。**添付のある発言が画面に出たときだけ読み込む**（別チャンク。
+ * バンドル予算のため、最初の読み込みへ入れない）。
+ */
+const MessageAttachments = lazy(() => import('~/components/message-attachments'));
+
+/**
+ * 入力欄に添えた、まだ送っていない添付。`meta` は上げた後に入る（上げるのは送るとき。
+ * 上げ終えたものは、後の失敗で送り直しても二重に上げない）。
+ */
+interface PendingAttachment {
+  key: string;
+  file: File;
+  meta?: MessageAttachment;
+}
+
+/** 上げ終えた添付の id（`POST /chat` の `attachments`）。 */
+function attachmentIds(items: readonly PendingAttachment[]): string[] {
+  return items.flatMap((item) => (item.meta === undefined ? [] : [item.meta.id]));
+}
 
 /** 画面に出す1行。届いた順に並べる。 */
 interface Line {
@@ -101,6 +131,8 @@ interface Line {
    */
   turnFailure?: 'failed' | 'held';
   journalId?: string;
+  /** この発言に添えられた添付の控え（中身ではない。表示の部品が取りに行く）。 */
+  attachments?: readonly MessageAttachment[];
 }
 
 /**
@@ -579,6 +611,7 @@ export function ChatPane({
         text: string;
         supersedes?: string;
         restored?: boolean;
+        attachments?: PendingAttachment[];
         /**
          * `open` の前に**中断された**送信（#3121）。サーバが受け取ったか分からない。
          * 値は送る前に履歴にあった同じ文の人間の発言の数で、これを超えて履歴に
@@ -589,6 +622,17 @@ export function ChatPane({
     >
   >(new Map());
   const historyLinesRef = useRef<Line[]>([]);
+  /** 入力欄に添えた添付（送る前）。上げるのは `send` のとき。 */
+  const [pending, setPending] = useState<PendingAttachment[]>([]);
+  /** 添付を上げている最中か。真のあいだは送れない。 */
+  const [uploading, setUploading] = useState(false);
+  /** 会話を離れているあいだ、その会話の添えかけの添付をしまっておく（`drafts` と同じ鍵・同じ扱い）。 */
+  const [attachmentDrafts, setAttachmentDrafts] = useState<
+    Map<string | undefined, PendingAttachment[]>
+  >(new Map());
+  /** 添えようとして断った理由（個数・大きさ。クライアントの先行検査）。 */
+  const [attachNotice, setAttachNotice] = useState<string>();
+  const attachSeqRef = useRef(0);
   const ownLineSeqRef = useRef(0);
   /**
    * `POST /clone/interrupt` を呼んでいる最中かどうか（#1398 c23-1/c30-2）。
@@ -941,6 +985,21 @@ export function ChatPane({
         return next;
       });
       setDraft(drafts.get(routeId) ?? '');
+      /*
+       * **添えかけの添付も、下書きと同じく会話ごとにしまい、戻ったら戻す。**
+       * 使い手が選んだファイルを、会話を移っただけで黙って失わせない。しまうのは
+       * メモリの中だけ（`File` は `localStorage` 等へ永続化できない。下書き `drafts` も
+       * もともとメモリ内なので、リロードで消える点は同じ）。別の会話へ送ってしまう
+       * 事故は、表示（`pending`）がいま見ている会話のものだけであることで避ける。
+       */
+      setAttachmentDrafts((previous) => {
+        const next = new Map(previous);
+        next.set(shownId, pending);
+        next.delete(routeId);
+        return next;
+      });
+      setPending(attachmentDrafts.get(routeId) ?? []);
+      setAttachNotice(undefined);
     }
   }
 
@@ -1064,6 +1123,9 @@ export function ChatPane({
           // 見るので、ここでは単に「サーバ確定済みの発言である」ことを表す。
           journalId: message.id,
           ...(message.turnFailure === undefined ? {} : { turnFailure: message.turnFailure }),
+          ...(message.attachments === undefined || message.attachments.length === 0
+            ? {}
+            : { attachments: message.attachments }),
         },
       }));
 
@@ -1304,7 +1366,7 @@ export function ChatPane({
   useEffect(() => () => streamRef.current?.controller.abort(), []);
 
   /** 打った本文を画面へ積む。送信の入口が2つ（新規・追送）あるので1本にしてある。 */
-  const showOwnLine = useCallback((text: string) => {
+  const showOwnLine = useCallback((text: string, attachments?: readonly MessageAttachment[]) => {
     const key = `h-${ownLineSeqRef.current++}-${text.slice(0, 8)}`;
     // 最下部にいなくても、送った直後だけは追従してよい（上の
     // `justSentOwnLineRef` のコメント参照）。
@@ -1316,6 +1378,7 @@ export function ChatPane({
         role: 'human',
         text,
         of: shownIdRef.current,
+        ...(attachments === undefined || attachments.length === 0 ? {} : { attachments }),
       },
     ]);
     return key;
@@ -1334,6 +1397,7 @@ export function ChatPane({
       text: string,
       lineKey: string,
       supersedes?: string,
+      attachments?: PendingAttachment[],
       unconfirmed?: number,
     ) => {
       setLines((previous) => previous.filter((line) => line.key !== lineKey));
@@ -1341,6 +1405,7 @@ export function ChatPane({
         new Map(prev).set(key, {
           text,
           ...(supersedes === undefined ? {} : { supersedes }),
+          ...(attachments === undefined || attachments.length === 0 ? {} : { attachments }),
           ...(unconfirmed === undefined ? {} : { unconfirmed }),
         }),
       );
@@ -1354,6 +1419,11 @@ export function ChatPane({
     const entry = retries.get(shownId);
     if (entry === undefined || entry.restored === true) return;
     setDraft((current) => (current === '' ? entry.text : current));
+    // 添付も同じ扱い（上げ終えたものは `meta` を持つので、再送で二重に上げない）。
+    const restoredAttachments = entry.attachments;
+    if (restoredAttachments !== undefined) {
+      setPending((current) => (current.length === 0 ? restoredAttachments : current));
+    }
     setRetries((prev) => new Map(prev).set(shownId, { ...entry, restored: true }));
   }, [retries, shownId]);
 
@@ -1405,7 +1475,13 @@ export function ChatPane({
      * 置き換える対象の日誌エントリ id（チャットのメッセージ編集、#1010）。
      * 通常の追送では渡らない。
      */
-    async (text: string, running: Stream, supersedes?: string, retry?: boolean) => {
+    async (
+      text: string,
+      running: Stream,
+      supersedes?: string,
+      retry?: boolean,
+      attachments: PendingAttachment[] = [],
+    ) => {
       /*
        * **この追送が向かう会話（`running.id`）ぶんの失敗だけを消す（#1585）。**
        * 前回この会話で失敗していても、次に送ろうとしたのだから立て直しの
@@ -1426,7 +1502,10 @@ export function ChatPane({
       });
       if (retry) setDraft((current) => (current === text ? '' : current));
       else setDraft('');
-      const lineKey = showOwnLine(text);
+      const lineKey = showOwnLine(
+        text,
+        attachments.flatMap((item) => (item.meta === undefined ? [] : [item.meta])),
+      );
 
       try {
         // 新しい会話は `open` まで id が決まらない。決まるまで待ってから投函する
@@ -1436,7 +1515,12 @@ export function ChatPane({
         try {
           for await (const message of postChat(
             api,
-            { text, conversationId, ...(supersedes === undefined ? {} : { supersedes }) },
+            {
+              text,
+              conversationId,
+              ...(supersedes === undefined ? {} : { supersedes }),
+              attachments: attachmentIds(attachments),
+            },
             {
               signal: controller.signal,
             },
@@ -1471,7 +1555,7 @@ export function ChatPane({
          */
         setFailures((prev) => new Map(prev).set(running.id, caught));
         // 投函は `open` の前に終わっている（ここへ来るのはそれだけ）。
-        giveBack(running.id, text, lineKey, supersedes);
+        giveBack(running.id, text, lineKey, supersedes, attachments);
       }
     },
     [api, recordOwnMessage, showOwnLine, giveBack],
@@ -1693,6 +1777,18 @@ export function ChatPane({
     return { setTransient, apply };
   }, []);
 
+  /** 入力欄のチップへ渡す形。画像だけ縮小表示の中身を持たせる。 */
+  const composerAttachments = useMemo(
+    () =>
+      pending.map((item) => ({
+        key: item.key,
+        name: item.file.name,
+        sizeLabel: formatBytes(item.file.size),
+        ...(isPreviewableImage(item.file.type) ? { preview: item.file } : {}),
+      })),
+    [pending],
+  );
+
   const send = useCallback(
     /**
      * `options.supersedes` — 送信済みの人間の発言を編集して送り直すときだけ
@@ -1700,10 +1796,66 @@ export function ChatPane({
      * #1010）。渡さない通常の送信では今までどおり `conversationId` だけを
      * 運ぶ。
      */
-    async (text: string, options?: { supersedes?: string; retry?: boolean }) => {
-      if (text.trim() === '') return;
+    async (
+      text: string,
+      options?: { supersedes?: string; retry?: boolean; attachments?: PendingAttachment[] },
+    ) => {
+      // 本文が空でも添付があれば送る（サーバも添付のある空本文を受ける）。
+      if (text.trim() === '' && (options?.attachments?.length ?? 0) === 0) return;
       const supersedes = options?.supersedes;
       const retry = options?.retry;
+
+      /*
+       * **添付は、何かを消す前に上げる。** 上げるのに失敗したら、書きかけも添付も
+       * そのまま残してエラーだけ出す（下書きを消すのは上げ終えた後）。上げ終えたものは
+       * `meta` を持って state に残るので、直して送り直しても二重に上げない。
+       * 上げているあいだは `uploading` が送信ボタンを止める。
+       */
+      let attachments = options?.attachments ?? [];
+      if (attachments.some((item) => item.meta === undefined)) {
+        setUploading(true);
+        setFailures((prev) => {
+          if (!prev.has(shownId)) return prev;
+          const next = new Map(prev);
+          next.delete(shownId);
+          return next;
+        });
+        const uploaded: PendingAttachment[] = [];
+        try {
+          for (const item of attachments) {
+            if (item.meta !== undefined) {
+              uploaded.push(item);
+              continue;
+            }
+            try {
+              const meta = await uploadAttachment(api, item.file, {
+                name: item.file.name,
+                type: attachmentMediaType(item.file),
+              });
+              uploaded.push({ ...item, meta });
+              setPending((current) =>
+                current.map((entry) => (entry.key === item.key ? { ...entry, meta } : entry)),
+              );
+            } catch (caught) {
+              throw new Error(
+                `${item.file.name} を上げられなかった: ${redactError(caught instanceof Error ? caught.message : String(caught))}`,
+                { cause: caught },
+              );
+            }
+          }
+          attachments = uploaded;
+        } catch (caught) {
+          setFailures((prev) => new Map(prev).set(shownId, caught));
+          return;
+        } finally {
+          setUploading(false);
+        }
+      }
+      if (attachments.length > 0) {
+        const sent = new Set(attachments.map((item) => item.key));
+        setPending((current) => (retry ? current.filter((item) => !sent.has(item.key)) : []));
+        setAttachNotice(undefined);
+      }
 
       /*
        * **走っているストリームがあるなら、張り替えずに投函だけする。**
@@ -1712,7 +1864,7 @@ export function ChatPane({
        */
       const running = streamRef.current;
       if (running !== undefined) {
-        await followUp(text, running, supersedes, retry);
+        await followUp(text, running, supersedes, retry, attachments);
         return;
       }
 
@@ -1738,7 +1890,10 @@ export function ChatPane({
       });
       if (retry) setDraft((current) => (current === text ? '' : current));
       else setDraft('');
-      const lineKey = showOwnLine(text);
+      const lineKey = showOwnLine(
+        text,
+        attachments.flatMap((item) => (item.meta === undefined ? [] : [item.meta])),
+      );
       let opened = false;
       const baseline = countHuman(historyLinesRef.current, text);
 
@@ -1778,6 +1933,7 @@ export function ChatPane({
             text,
             ...(shownId === undefined ? {} : { conversationId: shownId }),
             ...(supersedes === undefined ? {} : { supersedes }),
+            attachments: attachmentIds(attachments),
           },
           { signal: controller.signal },
         )) {
@@ -1833,13 +1989,13 @@ export function ChatPane({
         if (!controller.signal.aborted) {
           setFailures((prev) => new Map(prev).set(stream.id, caught));
           // サーバが受け取った（`open` を見た）後の失敗は、文を戻さない（二重に送らせない）。
-          if (!opened) giveBack(stream.id, text, lineKey, supersedes);
+          if (!opened) giveBack(stream.id, text, lineKey, supersedes, attachments);
         }
       } finally {
         // `open` の前に中断された（受信をやめる・会話の切り替え）。受け取られたか
         // 分からないので、文は積むだけで自動では送らない（#3121）。
         if (!opened && controller.signal.aborted) {
-          giveBack(stream.id, text, lineKey, supersedes, baseline);
+          giveBack(stream.id, text, lineKey, supersedes, attachments, baseline);
         }
         // `open` を一度も見ないまま終わったなら、追送は投函先を持てない。
         // 待たせたままにすると、続けて打った発言が永久に返ってこない
@@ -1877,6 +2033,28 @@ export function ChatPane({
       }
     },
     [api, shownId, navigate, recordOwnMessage, showOwnLine, followUp, createStreamWriter, giveBack],
+  );
+
+  /** 入力欄へ添付を足す。個数・大きさは先に検査し、断ったものは理由を出す（最終判定はサーバ）。 */
+  const attach = useCallback(
+    (files: File[]) => {
+      const { accepted, rejected } = checkAttachments(
+        pending.map((item) => item.file),
+        files,
+      );
+      if (accepted.length > 0) {
+        setPending((current) => [
+          ...current,
+          ...accepted.map((file) => ({ key: `f-${attachSeqRef.current++}`, file })),
+        ]);
+      }
+      setAttachNotice(
+        rejected.length === 0
+          ? undefined
+          : rejected.map((item) => `${item.name}: ${item.reason}`).join('\n'),
+      );
+    },
+    [pending],
   );
 
   /**
@@ -2333,6 +2511,13 @@ export function ChatPane({
                             }
                           : undefined
                       }
+                      attachments={
+                        line.attachments === undefined ? undefined : (
+                          <Suspense fallback={null}>
+                            <MessageAttachments attachments={line.attachments} />
+                          </Suspense>
+                        )
+                      }
                       versions={
                         versions !== undefined &&
                         versionIndex !== undefined &&
@@ -2385,11 +2570,25 @@ export function ChatPane({
       <ChatComposer
         value={draft}
         onChange={setDraft}
-        onSend={() => void send(draft)}
+        onSend={() => {
+          if (!uploading) void send(draft, { attachments: pending });
+        }}
         sending={sending}
+        uploading={uploading}
+        attachments={composerAttachments}
+        onAttach={attach}
+        onRemoveAttachment={(key) => {
+          setPending((current) => current.filter((item) => item.key !== key));
+          setAttachNotice(undefined);
+        }}
         onStopReceiving={() => streamRef.current?.controller.abort()}
         error={
-          (shownFailure === undefined || shownFailure === null) && unconfirmedText !== undefined ? (
+          attachNotice !== undefined && (shownFailure === undefined || shownFailure === null) ? (
+            <p role="alert" className="text-xs whitespace-pre-line text-warn">
+              {attachNotice}
+            </p>
+          ) : (shownFailure === undefined || shownFailure === null) &&
+            unconfirmedText !== undefined ? (
             <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
               <span>
                 送れたか確かめられなかった。サーバが受け取っていれば会話に出る（二重に送らないよう、確かめてから再送する）
