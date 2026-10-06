@@ -292,6 +292,11 @@ export interface TuiApi {
     unreadable: UnreadableApproval[];
   }>;
   /**
+   * `GET /approvals/{id}`。承認を id で1件（回答済み・取り下げ済みも）。`null` は 404（無い）。
+   * 読めない行（409）・5xx は `ApiError`（「無い」と言わない）。
+   */
+  readApproval(id: string): Promise<ApprovalRow | null>;
+  /**
    * `GET /approvals/answered-dates`。決着のあった日と件数を新しい日が上の順に。`beforeDate` はその日**より古い**日から
    * （前の頁の最後の日。封筒は無く、続きが在るかは `limit` 件ちょうど返ったかで判る）。
    */
@@ -588,6 +593,13 @@ export function createTuiApi(target: Target): TuiApi {
         approvals: body.approvals as ApprovalRow[],
         unreadable: (body.unreadable ?? []) as UnreadableApproval[],
       };
+    },
+
+    async readApproval(id) {
+      const response = await client.approvals[':id'].$get({ param: { id } });
+      if (response.status === 404) return null;
+      if (!response.ok) throw await failure('承認を読めませんでした', response);
+      return (await response.json()).approval as ApprovalRow;
     },
 
     async answerApproval(id, body) {

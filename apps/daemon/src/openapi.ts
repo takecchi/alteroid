@@ -718,6 +718,16 @@ export const approvalsAnsweredDatesResponseSchema = z.object({
   dates: z.array(z.object({ date: z.string(), count: z.number().int().positive() })),
 });
 
+/**
+ * `GET /approvals/:id` の応答。承認1件（`GET /approvals` の1行と同じ形。`updatedAt` つき）と、
+ * 決着した日（デーモンの `localDate()`。`GET /approvals?answeredOn=` と同じ関数で決める。
+ * 未決着なら `null`）。
+ */
+export const approvalByIdResponseSchema = z.object({
+  approval: pendingApprovalSchema.extend({ updatedAt: isoDateTimeSchema }),
+  settledOn: z.string().nullable(),
+});
+
 export const approvalsAnswerResponseSchema = z.object({
   results: z.array(z.object({ id: z.string(), ok: z.boolean(), error: z.string().optional() })),
 });
