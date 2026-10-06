@@ -1,13 +1,16 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
+import { DEFAULT_ATTACHMENT_LIMITS } from '@alteroid/core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { makeTempDir } from '../../../vitest.tmpdir.js';
 import {
   AttachmentDraft,
   attachmentsGetCommand,
+  createAttachmentDraft,
   describeAttachment,
+  fetchAttachmentLimits,
   mediaTypeOfName,
   uploadAttachment,
   uploadDraft,
@@ -187,5 +190,86 @@ describe('alteroid attachments get / 表示', () => {
       0,
     );
     expect(text).toContain(line);
+  });
+});
+
+describe('添付の上限はデーモンの値で先に検査する（#3204）', () => {
+  const MIB = 1024 * 1024;
+  const raised = {
+    maxImageBytes: 40 * MIB,
+    maxFileBytes: 200 * MIB,
+    maxPerMessage: 30,
+    maxTotalBytes: 400 * MIB,
+    retentionDays: 7,
+  };
+  const lowered = {
+    maxImageBytes: 100,
+    maxFileBytes: 200,
+    maxPerMessage: 2,
+    maxTotalBytes: 1000,
+    retentionDays: 1,
+  };
+
+  /** `GET /attachments/limits` に `reply` を返す偽の fetch。呼ばれた URL を控える。 */
+  function stubLimits(reply: () => Response | Promise<Response>): string[] {
+    const urls: string[] = [];
+    vi.stubGlobal('fetch', (input: unknown) => {
+      urls.push(String(input));
+      return Promise.resolve(reply());
+    });
+    return urls;
+  }
+
+  it('fetchAttachmentLimits は GET /attachments/limits の値を返す', async () => {
+    const urls = stubLimits(() => Response.json(raised));
+    expect(await fetchAttachmentLimits(target)).toEqual(raised);
+    expect(urls).toEqual(['http://127.0.0.1:4517/attachments/limits']);
+  });
+
+  it('取れなければ（古いデーモンの 404・接続失敗・壊れた応答）既定値で検査する', async () => {
+    stubLimits(() => new Response('not found', { status: 404 }));
+    expect(await fetchAttachmentLimits(target)).toEqual(DEFAULT_ATTACHMENT_LIMITS);
+    vi.stubGlobal('fetch', () => Promise.reject(new Error('ECONNREFUSED')));
+    expect(await fetchAttachmentLimits(target)).toEqual(DEFAULT_ATTACHMENT_LIMITS);
+    stubLimits(() => Response.json({ maxImageBytes: 'x' }));
+    expect(await fetchAttachmentLimits(target)).toEqual(DEFAULT_ATTACHMENT_LIMITS);
+  });
+
+  it('上限を上げたデーモンでは、既定値を超えてデーモンの内側にある添付を先に断らず、上げる前の読み込み検査も通す。取るのは1回', async () => {
+    const dir = await makeTempDir('alteroid-cli-attach-');
+    const path = join(dir, 'big.bin');
+    await writeFile(path, Buffer.alloc(DEFAULT_ATTACHMENT_LIMITS.maxFileBytes + MIB));
+    const urls = stubLimits(() => Response.json(raised));
+    const draft = createAttachmentDraft(target);
+    expect((await draft.add(path)).ok).toBe(true);
+    expect((await draft.add(path)).ok).toBe(true);
+    expect(urls).toHaveLength(1);
+    const uploaded = await uploadDraft(draft, async (file) => ({
+      id: 'att-1',
+      name: file.name,
+      mediaType: file.mediaType,
+      size: file.bytes.length,
+      sha256: 'x',
+    }));
+    expect(uploaded.ok).toBe(true);
+  });
+
+  it('上限を下げたデーモンでは、既定値の内側でも先に断る', async () => {
+    const dir = await makeTempDir('alteroid-cli-attach-');
+    const path = join(dir, 'a.bin');
+    await writeFile(path, Buffer.alloc(300));
+    stubLimits(() => Response.json(lowered));
+    const draft = createAttachmentDraft(target);
+    const result = await draft.add(path);
+    expect(result.ok ? '' : result.reason).toContain('大きすぎる');
+  });
+
+  it('口が取れないときは既定値で検査する（既定を超えれば断る）', async () => {
+    const dir = await makeTempDir('alteroid-cli-attach-');
+    const path = join(dir, 'big.bin');
+    await writeFile(path, Buffer.alloc(DEFAULT_ATTACHMENT_LIMITS.maxFileBytes + MIB));
+    stubLimits(() => new Response('', { status: 404 }));
+    const result = await createAttachmentDraft(target).add(path);
+    expect(result.ok ? '' : result.reason).toContain('大きすぎる');
   });
 });

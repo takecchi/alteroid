@@ -60,6 +60,7 @@ import type { InferResponseType } from 'hono/client';
 import { confirmInRepl } from './confirm.js';
 import {
   AttachmentDraft,
+  createAttachmentDraft,
   attachmentLinesOf,
   describeAttachment,
   uploadAttachment,
@@ -93,7 +94,7 @@ export async function chatCommand(): Promise<void> {
 
   const rl = createInterface({ input: stdin, output: stdout });
   // 次に送る発言へ添えかけのファイル（`/attach`）。
-  const draft = new AttachmentDraft();
+  const draft = createAttachmentDraft(target);
   let conversationId: string | null = null;
   // 直前に一覧したもの。番号で引けるようにするため覚えておく。
   const listed: Listed = {

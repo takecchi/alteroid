@@ -7,7 +7,11 @@ import {
   foldSelections,
   matchesJournalSearch,
 } from '@alteroid/core/cli-light';
-import type { JournalEntry } from '@alteroid/core';
+import {
+  DEFAULT_ATTACHMENT_LIMITS,
+  type AttachmentLimits,
+  type JournalEntry,
+} from '@alteroid/core';
 
 import { ApiError } from './api.js';
 import type {
@@ -42,6 +46,10 @@ export interface FakeApi extends TuiApi {
   uploads: { name: string; mediaType: string; size: number }[];
   /** 次の（以降の）`uploadAttachment()` を失敗させる理由。 */
   uploadFails: string | null;
+  /** `attachmentLimits()` が返す上限（既定は core の既定値）。 */
+  limits: AttachmentLimits;
+  /** `attachmentLimits()` が呼ばれた回数。 */
+  limitsCalls: number;
   scripts: ScriptStep[][];
   /** `chatStream()` の台本（呼び出しごとに 1 つ消費する。足りなければ空）。 */
   streamScripts: ScriptStep[][];
@@ -170,6 +178,12 @@ export function fakeApi(): FakeApi {
     approvalAnswerFails: null,
     uploads: [],
     uploadFails: null,
+    limits: DEFAULT_ATTACHMENT_LIMITS,
+    limitsCalls: 0,
+    async attachmentLimits() {
+      api.limitsCalls += 1;
+      return api.limits;
+    },
     async *chat(input, signal) {
       api.chatCalls.push({
         text: input.text,
