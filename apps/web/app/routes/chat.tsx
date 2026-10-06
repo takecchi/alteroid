@@ -3049,6 +3049,7 @@ export function ChatPane({
   const visibleFailure = failures.has(shownId) ? failures.get(shownId) : undefined;
 
   const shownFailure = visibleFailure ?? visibleInterruptFailure ?? visibleEndFailure;
+  const hasShownFailure = shownFailure !== undefined && shownFailure !== null;
 
   /**
    * 「会話を終える」の結果の文を出してよいか（#2759）。終えた直後の新しい会話
@@ -3422,70 +3423,85 @@ export function ChatPane({
         }}
         onStopReceiving={() => streamRef.current?.controller.abort()}
         error={
-          attachNotice !== undefined && (shownFailure === undefined || shownFailure === null) ? (
-            <p role="alert" className="text-xs break-words whitespace-pre-line text-warn">
-              {attachNotice}
-            </p>
-          ) : (shownFailure === undefined || shownFailure === null) &&
-            unconfirmedText !== undefined ? (
-            <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-              <span>
-                送れたか確かめられなかった。サーバが受け取っていれば会話に出る（二重に送らないよう、確かめてから再送する）
-              </span>
-              <Button
-                size="sm"
-                onClick={() => unconfirmedEntry !== undefined && resend(unconfirmedEntry)}
-              >
-                再送
-              </Button>
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() => {
-                  setRetries((prev) => {
-                    const next = new Map(prev);
-                    next.delete(shownId);
-                    return next;
-                  });
-                  setDraft((current) => (current === unconfirmedText ? '' : current));
-                }}
-              >
-                破棄
-              </Button>
-            </div>
-          ) : shownFailure === undefined ||
-            shownFailure === null ? undefined : shownFailure instanceof TurnFailedError ? (
-            <TurnFailureNote
-              message={shownFailure.message}
-              action={(kind) =>
-                kind === 'auth' ? (
-                  <Link to="/tokens" className="text-xs underline underline-offset-2">
-                    認証トークンの画面を開く
-                  </Link>
-                ) : undefined
-              }
-            />
-          ) : (
-            <>
-              <ErrorNote error={shownFailure} />
-              {isAttachmentMissing(shownFailure) && (
-                <p role="alert" className="mt-2 text-xs text-warn">
-                  添付が期限切れか、サーバに無い。「再送」は同じ添付で送るので、添付を外して付け直してから送る。
+          /*
+           * **3つを排他にしない（#3594）。** 添付を断った理由・送信の失敗・未確認の送信の操作
+           * （再送／破棄）は別の事実で、どれかが出ているあいだ他が隠れると、選んだファイルが
+           * 理由なく落ちたり、再送／破棄の操作が見えなくなったりする。**並べて出す。**
+           */
+          attachNotice === undefined &&
+          unconfirmedText === undefined &&
+          !hasShownFailure ? undefined : (
+            <div className="flex flex-col gap-2">
+              {attachNotice !== undefined && (
+                <p role="alert" className="text-xs break-words whitespace-pre-line text-warn">
+                  {attachNotice}
                 </p>
               )}
-              {visibleFailure !== undefined && retries.has(shownId) && (
-                <Button
-                  size="sm"
-                  className="mt-2"
-                  onClick={() => {
-                    const stashed = retries.get(shownId);
-                    if (stashed !== undefined) resend(stashed);
-                  }}
-                >
-                  再送
-                </Button>
+              {unconfirmedText !== undefined && (
+                <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                  <span>
+                    送れたか確かめられなかった。サーバが受け取っていれば会話に出る（二重に送らないよう、確かめてから再送する）
+                  </span>
+                  <Button
+                    size="sm"
+                    onClick={() => unconfirmedEntry !== undefined && resend(unconfirmedEntry)}
+                  >
+                    再送
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => {
+                      setRetries((prev) => {
+                        const next = new Map(prev);
+                        next.delete(shownId);
+                        return next;
+                      });
+                      setDraft((current) => (current === unconfirmedText ? '' : current));
+                    }}
+                  >
+                    破棄
+                  </Button>
+                </div>
               )}
-            </>
+              {shownFailure === undefined ||
+              shownFailure === null ? undefined : shownFailure instanceof TurnFailedError ? (
+                <TurnFailureNote
+                  message={shownFailure.message}
+                  action={(kind) =>
+                    kind === 'auth' ? (
+                      <Link to="/tokens" className="text-xs underline underline-offset-2">
+                        認証トークンの画面を開く
+                      </Link>
+                    ) : undefined
+                  }
+                />
+              ) : (
+                <div>
+                  <ErrorNote error={shownFailure} />
+                  {isAttachmentMissing(shownFailure) && (
+                    <p role="alert" className="mt-2 text-xs text-warn">
+                      添付が期限切れか、サーバに無い。「再送」は同じ添付で送るので、添付を外して付け直してから送る。
+                    </p>
+                  )}
+                  {/* 未確認の送信の「再送」が上に出ているときは、同じ再送をもう1つ出さない。 */}
+                  {visibleFailure !== undefined &&
+                    retries.has(shownId) &&
+                    unconfirmedText === undefined && (
+                      <Button
+                        size="sm"
+                        className="mt-2"
+                        onClick={() => {
+                          const stashed = retries.get(shownId);
+                          if (stashed !== undefined) resend(stashed);
+                        }}
+                      >
+                        再送
+                      </Button>
+                    )}
+                </div>
+              )}
+            </div>
           )
         }
       />

@@ -77,7 +77,10 @@ function gate() {
 
 const text = (value: string) => ({ event: 'text', data: { type: 'text', text: value } });
 const tool = (name: string) => ({ event: 'tool', data: { type: 'tool', tool: name } });
-const ask = { event: 'ask_human', data: { type: 'ask_human', approvalId: 'ap-1', question: QUESTION } };
+const ask = {
+  event: 'ask_human',
+  data: { type: 'ask_human', approvalId: 'ap-1', question: QUESTION },
+};
 
 const order = () =>
   within(screen.getByRole('list', { name: 'やりとり' }))
@@ -191,7 +194,13 @@ describe('再生の頭出しは、分かれた返信を全部捨ててから積�
         return sse(
           replays === 1
             ? [open, text('前半です'), tool('Bash'), text('後半です')]
-            : [open, text('前半です'), tool('Bash'), text('後半です'), { ...text('。'), after: more.promise }],
+            : [
+                open,
+                text('前半です'),
+                tool('Bash'),
+                text('後半です'),
+                { ...text('。'), after: more.promise },
+              ],
           { keepOpen: true, signal: init?.signal, delayMs: 0 },
         );
       }
