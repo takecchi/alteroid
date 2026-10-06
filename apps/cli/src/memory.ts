@@ -2,6 +2,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { stdin } from 'node:process';
+import { MEMORY_SLUG_RULE, describeSlugViolation } from '@alteroid/core/cli-light';
 import { stderr, stdout, writeShownBody } from './terminal-out.js';
 
 import { createClient, type DaemonClient } from './client.js';
@@ -298,6 +299,11 @@ export async function memoryShowCommand(slug: string): Promise<void> {
  * 雛形を入れる。
  */
 export async function memoryEditCommand(slug: string): Promise<void> {
+  // **slug は、通信も一時ファイルも作る前に検査する（#3728。`profile edit` の `parseName` と同じ位置）。**
+  // `join(dir, `${slug}.md`)` は `..` を畳むので、検査が後だと一時ディレクトリの外の .md を書き換え、
+  // 空白・記号入りの slug ではエディタが別のファイルを開く。規則は core が持つ（`memorySlugSchema` と同じ定数）。
+  const violation = describeSlugViolation(slug, MEMORY_SLUG_RULE);
+  if (violation !== null) throw new Error(`記憶の名前が不正です: ${violation}`);
   const conn = await connect('write');
   if (conn === null) return;
   const { client, target } = conn;

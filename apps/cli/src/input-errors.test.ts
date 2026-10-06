@@ -10,6 +10,7 @@ import {
   describeEditorFailure,
   editorCommandExists,
   openEditor,
+  quoteForShell,
   readInputFile,
 } from './input-errors.js';
 
@@ -146,5 +147,16 @@ describe('openEditor（#2867）', () => {
       stdio: 'inherit',
       shell: true,
     });
+  });
+});
+
+describe('quoteForShell（#3728）', () => {
+  it('POSIX は単一引用符で包み、中の単一引用符を閉じて開き直す', () => {
+    expect(quoteForShell('/tmp/a b/c.md', 'linux')).toBe("'/tmp/a b/c.md'");
+    expect(quoteForShell("/tmp/it's;$(x).md", 'linux')).toBe("'/tmp/it'\\''s;$(x).md'");
+  });
+
+  it('Windows は二重引用符で包む', () => {
+    expect(quoteForShell('C:\\Temp\\a b\\c.md', 'win32')).toBe('"C:\\Temp\\a b\\c.md"');
   });
 });
