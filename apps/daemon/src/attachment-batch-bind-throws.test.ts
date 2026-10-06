@@ -39,6 +39,7 @@ describe('checkAndBindAttachments: bind が途中で例外を投げた回は、�
         isBoundElsewhere: (meta) =>
           meta.conversationId !== undefined || meta.externalEventId !== undefined,
         conflictMessage: 'すでに別の宛先に結び付いた添付は使えない',
+        serializeKey: `externalEvent:${eventId}`,
       });
     // 検査（getMeta）は通り、`bind` の中で、1つ目を結んだあと2つ目の読み出しで置き場が壊れる
     // （検査の後で b の meta.json をディレクトリへ差し替える）。

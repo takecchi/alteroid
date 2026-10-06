@@ -274,6 +274,7 @@ describe('/resume（REPL から進行中のターンへ戻る）', () => {
       messages: [],
       messagesConversationId: null,
       messageAttachments: {},
+      messageTexts: {},
     });
     expect(out()).toContain('/resume [id]');
   });

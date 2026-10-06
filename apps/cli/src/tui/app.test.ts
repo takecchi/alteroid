@@ -42,6 +42,7 @@ interface Harness {
   journal: JournalController;
   memory: MemoryController;
   stdin: FakeStdin;
+  stdout: { rows: number; emit: (event: string) => boolean };
   frame: () => string;
   unmount: () => void;
   exited: () => boolean;
@@ -76,7 +77,7 @@ function start(
   const memory = new MemoryController(api, { debounceMs: 10 });
   memory.attach(feed);
   feed.start();
-  const { app, stdin, lastFrame } = renderFullscreen(
+  const { app, stdin, stdout, lastFrame } = renderFullscreen(
     createElement(App, {
       api,
       controller,
@@ -103,6 +104,7 @@ function start(
     journal,
     memory,
     stdin,
+    stdout: stdout as unknown as Harness['stdout'],
     frame: lastFrame,
     unmount: () => app.unmount(),
     exited: () => exited,
@@ -1373,6 +1375,9 @@ describe('承認待ち（一覧と詳細・答える）', () => {
     await waitFor(() => h.frame().includes('[回答済み] ap-done'));
     // フッタの案内も、Esc の戻り先（その日）に合わせる
     expect(h.frame()).toContain('Esc その日へ');
+    // 回答済みの詳細は答えられない。a を案内しない（a は何もしない）。
+    expect(h.frame()).not.toContain('a 答える');
+    expect(h.frame()).not.toContain('a で答える');
     expect(h.frame()).not.toContain('Esc 一覧へ');
     h.stdin.write(ESC);
     await waitFor(() => h.frame().includes('2026-09-30 に決着した承認'));
@@ -1380,6 +1385,42 @@ describe('承認待ち（一覧と詳細・答える）', () => {
     await waitFor(() => h.frame().includes('2026-09-30  2 件'));
     h.stdin.write(ESC);
     await waitFor(() => h.frame().includes('承認待ち（未回答 2 件'));
+  });
+
+  it('回答済み・取り下げ済みの詳細で a・i を押すと、答え済みか取り下げ済みかを最下行で断る（#3663）', async () => {
+    const h = start((api) => {
+      fixture(api);
+      const done = approvalRow('ap-done', {
+        question: '夜のリリースを待つか',
+        answeredAt: '2026-09-30T10:00:00.000Z',
+        answer: '待たない',
+      });
+      const gone = approvalRow('ap-gone', {
+        question: '取り下げた確認',
+        withdrawnAt: '2026-09-30T05:00:00.000Z',
+        withdrawnReason: '自分で見つけた',
+      });
+      api.answeredDateRows = [{ date: '2026-09-30', count: 2 }];
+      api.answeredOnRows = { '2026-09-30': [done, gone] };
+      api.approvalRows = [...api.approvalRows, done, gone];
+    });
+    await openList(h);
+    await press(h.stdin, 'd');
+    await waitFor(() => h.frame().includes('2026-09-30  2 件'));
+    await press(h.stdin, ENTER);
+    await waitFor(() => h.frame().includes('ap-gone'));
+    await press(h.stdin, ENTER);
+    await waitFor(() => h.frame().includes('[回答済み] ap-done'));
+    expect(h.frame()).not.toContain('もう答えられない:');
+    await press(h.stdin, 'a');
+    expect(h.frame()).toContain('もう答えられない: この承認待ちは回答済み');
+    await press(h.stdin, ESC);
+    await waitFor(() => h.frame().includes('2026-09-30 に決着した承認'));
+    await press(h.stdin, DOWN);
+    await press(h.stdin, ENTER);
+    await waitFor(() => h.frame().includes('ap-gone'));
+    await press(h.stdin, 'i');
+    expect(h.frame()).toContain('もう答えられない: この承認待ちは取り下げ済み');
   });
 
   it('一覧は古い順に 1 件 1 行。設問が在れば要約、無ければ質問の抜粋。全文や設問の中身は載せない', async () => {
@@ -1742,6 +1783,37 @@ describe('承認待ち（一覧と詳細・答える）', () => {
     await waitFor(() => h.frame().includes('書きかけx'));
     expect(h.exited()).toBe(false);
   });
+
+  it('答えるフォームに選んだ分が在るまま Esc で詳細を閉じても、すぐには捨てない。もう一度 Esc で捨てて一覧へ戻る', async () => {
+    const h = start(fixture);
+    await openChoiceDetail(h);
+    await press(h.stdin, 'a');
+    await press(h.stdin, SPACE); // Railway
+    await waitFor(() => h.frame().includes('(●) a) Railway'));
+    await press(h.stdin, ESC); // フォームから読む画面へ（書きかけは残る）
+    await waitFor(() => h.frame().includes('Esc 一覧へ'));
+    await press(h.stdin, ESC);
+    await waitFor(() => h.frame().includes('もう一度 Esc'));
+    expect(h.frame()).toContain('[未回答] ap-choice'); // まだ詳細に居る
+    await press(h.stdin, 'a'); // 続きから書ける
+    await waitFor(() => h.frame().includes('(●) a) Railway'));
+    await press(h.stdin, ESC);
+    await waitFor(() => h.frame().includes('Esc 一覧へ'));
+    await press(h.stdin, ESC);
+    await waitFor(() => h.frame().includes('もう一度 Esc'));
+    await press(h.stdin, ESC);
+    await waitFor(() => h.frame().includes('承認待ち（未回答 2 件'));
+  });
+
+  it('選んでも書いてもいなければ、Esc 一度で一覧へ戻る', async () => {
+    const h = start(fixture);
+    await openChoiceDetail(h);
+    await press(h.stdin, 'a');
+    await press(h.stdin, ESC);
+    await waitFor(() => h.frame().includes('Esc 一覧へ'));
+    await press(h.stdin, ESC);
+    await waitFor(() => h.frame().includes('承認待ち（未回答 2 件'));
+  });
 });
 
 describe('履歴の選択の断り書き（#2585）', () => {
@@ -1809,6 +1881,59 @@ describe('履歴の選択の断り書き（#2585）', () => {
     await open(h);
     expect(h.frame()).toContain('会話はまだありません');
     expect(h.frame()).not.toContain('先頭には届いていない');
+  });
+});
+
+describe('端末の大きさが変わったとき（#3651）', () => {
+  it('全画面で起動したあと行数が閾値未満へ縮んでも、入力欄とフッタが切れない', async () => {
+    const h = start(() => undefined, { rows: 24 });
+    await waitFor(() => h.frame().includes('^D 終了'));
+    h.stdout.rows = 6;
+    h.stdout.emit('resize');
+    await waitFor(() => h.frame().includes('^D 終了') && h.frame().includes('❯'));
+  });
+});
+
+describe('会話の画面の a キー（#3650）', () => {
+  it('履歴から開いた会話の、答え済みを飛ばして未回答の承認の詳細を開く', async () => {
+    const h = start((api) => {
+      api.messages.c9 = [{ id: '1', at: '2026-10-06T10:00:00.000Z', role: 'inbound', text: 'q' }];
+      api.conversationApprovals.c9 = {
+        approvals: [
+          { id: 'ans-1', createdAt: '2026-10-06T10:01:00.000Z', question: 'x', answeredAt: 'y' },
+          { id: 'open-2', createdAt: '2026-10-06T10:02:00.000Z', question: 'まだ未回答' },
+        ],
+        unreadable: [],
+      };
+      api.approvalRows = [approvalRow('open-2', { question: 'まだ未回答の質問' })];
+    });
+    await h.controller.openConversation('c9');
+    h.stdin.write(ESC);
+    await waitFor(() => h.frame().includes('1-5 画面'));
+    await press(h.stdin, 'a');
+    await waitFor(() => h.frame().includes('まだ未回答の質問')).catch((e: unknown) => {
+      throw new Error(`${String(e)}\n${h.frame()}`);
+    });
+  });
+
+  it('答え済みだけなら、a は何も指さず画面を移さない', async () => {
+    const h = start((api) => {
+      api.messages.c9 = [{ id: '1', at: '2026-10-06T10:00:00.000Z', role: 'inbound', text: 'q' }];
+      api.conversationApprovals.c9 = {
+        approvals: [
+          { id: 'ans-1', createdAt: '2026-10-06T10:01:00.000Z', question: 'x', answeredAt: 'y' },
+        ],
+        unreadable: [],
+      };
+    });
+    await h.controller.openConversation('c9');
+    h.stdin.write(ESC);
+    await waitFor(() => h.frame().includes('1-5 画面'));
+    await press(h.stdin, 'a');
+    // 答え済みだけなら `a` は何も指さない（pendingAsk が立たない）ので、承認待ちへは移らない。
+    expect(h.controller.store.getSnapshot().pendingAsk).toBeNull();
+    expect(h.frame()).toContain('1 会話');
+    expect(h.frame()).not.toContain('承認待ちの詳細');
   });
 });
 
