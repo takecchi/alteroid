@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { InboxEvent } from './schema.js';
 import { createMemoryStores } from './testing.js';
+import type { ManagerPool } from './manager.js';
 import { createCloneTools } from './tools.js';
 
 /**
@@ -22,6 +23,7 @@ function harness() {
     conversationId: () => undefined,
     memoryCause: () => 'clone',
     dropQueuedInboxEvents: async (ids) => ids.length,
+    managers: { runningManagerOwning: () => undefined } as unknown as ManagerPool,
   });
   return {
     stores,
