@@ -36,6 +36,7 @@ import {
   usageHref,
 } from '@alteroid/logic';
 import { terminalFailureNote as sharedTerminalFailureNote } from '~/lib/manager-failure-note';
+import { useLatest } from '~/lib/use-latest';
 
 /**
  * **`manager-activity.ts` は `@alteroid/core` 本体（`.`）とは別の軽い口
@@ -1740,8 +1741,9 @@ function SendMessage({
   const noWayBack = !live && (sessionId === undefined || sessionId === null);
   const send = useSendManagerMessage();
   const [text, setText] = useState('');
+  const latestText = useLatest(text);
   const [busy, setBusy] = useState(false);
-  const [outcome, setOutcome] = useState<{ text: string; reached: boolean } | undefined>(undefined);
+  const [outcome,setOutcome] = useState<{ text: string; reached: boolean } | undefined>(undefined);
   const [failure, setFailure] = useState<unknown>(undefined);
 
   function submit() {
@@ -1753,12 +1755,13 @@ function SendMessage({
     setFailure(undefined);
     // 前回の結果を消す。次の送信が失敗しても、前回の「届けた」が今回のものに見えない。
     setOutcome(undefined);
-    send(id, { text })
+    const sentText = text;
+    send(id, { text: sentText })
       .then((result) => {
         const described = describeSendResult(result);
         setOutcome(described);
-        // 届いていないときは入力を残す（書いた指示を消さない）。
-        if (described.reached) setText('');
+        // 届いていないときは入力を残す（書いた指示を消さない）。送っている間に打ち足した分も残す。
+        if (described.reached && latestText.current === sentText) setText('');
       })
       .catch(setFailure)
       .finally(() => setBusy(false));

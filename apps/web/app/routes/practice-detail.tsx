@@ -174,6 +174,16 @@ function PracticeDetailBody({ slug }: { slug: string }) {
     return () => window.removeEventListener('beforeunload', warn);
   }, [dirty]);
 
+  /**
+   * いまの下書き3欄。保存の応答が返った時点の値と、送った値を突き合わせるために持つ
+   * （`.then` の中の値は送った時点のもので、保存中の追記は見えない）。
+   */
+  const latestDraft = useRef<{
+    kind: string | undefined;
+    title: string | undefined;
+    content: string | undefined;
+  }>({ kind: undefined, title: undefined, content: undefined });
+
   /** `ifMatch` を渡して保存する。衝突したら下書きを残して、いまの版を見せる。 */
   function save(ifMatch: string | null | undefined = baseVersion) {
     // 保存中は何もしない。ボタン・⌘/Ctrl+Enter・⌘/Ctrl+S のどの経路もここを通る（#3300）。
@@ -182,12 +192,26 @@ function PracticeDetailBody({ slug }: { slug: string }) {
     if (!canSave && !(conflict !== undefined && hasDraft && kind.trim() !== '')) return;
     setBusy(true);
     setFailure(undefined);
-    savePractice(slug, kind, title, content, ifMatch)
+    const sent = { kind, title, content };
+    savePractice(slug, sent.kind, sent.title, sent.content, ifMatch)
       .then(({ practice, version }) => {
         setSavedAt(practice.updatedAt);
         setLastSaved({ replaces: data === undefined ? null : data.version, version });
-        // 保存できたら下書きを畳んで、またサーバの値に追従させる。
-        discardDraft();
+        const now = latestDraft.current;
+        // 送った時点の3欄と同じときだけ畳む。欄が未編集（undefined）なら読み込み値を送っている。
+        const same =
+          (now.kind ?? loadedKind) === sent.kind &&
+          (now.title ?? loadedTitle) === sent.title &&
+          (now.content ?? loadedContent) === sent.content;
+        if (same) {
+          // 保存できたら下書きを畳んで、またサーバの値に追従させる。
+          discardDraft();
+        } else {
+          // 保存中に追記があった。追記は消さず、次の保存の基準だけ今回保存した版へ進める
+          // （古い版のままだと次の保存が偽の 409 になる）。
+          setBaseVersion(version);
+          setConflict(undefined);
+        }
       })
       .catch((caught: unknown) => {
         if (caught instanceof PracticeConflictError) setConflict(caught);
@@ -198,6 +222,7 @@ function PracticeDetailBody({ slug }: { slug: string }) {
 
   /** 最新を読み直す＝自分の下書きを捨てて、いまの版に追従する。 */
   function discardDraft() {
+    latestDraft.current = { kind: undefined, title: undefined, content: undefined };
     setDraftKind(undefined);
     setDraftTitle(undefined);
     setDraftContent(undefined);
@@ -433,6 +458,7 @@ function PracticeDetailBody({ slug }: { slug: string }) {
                 placeholder="例: 実装・調査・相談・レビュー・日報"
                 onChange={(event) => {
                   touch();
+                  latestDraft.current.kind = event.target.value;
                   setDraftKind(event.target.value);
                 }}
               />
@@ -445,6 +471,7 @@ function PracticeDetailBody({ slug }: { slug: string }) {
                 placeholder="一覧で見る短い題"
                 onChange={(event) => {
                   touch();
+                  latestDraft.current.title = event.target.value;
                   setDraftTitle(event.target.value);
                 }}
               />
@@ -457,6 +484,7 @@ function PracticeDetailBody({ slug }: { slug: string }) {
                 spellCheck={false}
                 onChange={(event) => {
                   touch();
+                  latestDraft.current.content = event.target.value;
                   setDraftContent(event.target.value);
                 }}
                 // 親の高さを埋める形のまま（`maxHeight` は渡さない）。
