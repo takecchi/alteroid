@@ -3,6 +3,8 @@ import { describe, expect, it } from 'vitest';
 
 import {
   HINT_AP_CONFIRM,
+  HINT_AP_DATES,
+  HINT_AP_DAY,
   HINT_AP_DETAIL,
   HINT_AP_FORM,
   HINT_AP_INPUT,
@@ -27,6 +29,8 @@ describe('フッタのキーヒント', () => {
     for (const hint of [
       HINT_INPUT,
       HINT_AP_CONFIRM,
+      HINT_AP_DATES,
+      HINT_AP_DAY,
       HINT_AP_DETAIL,
       HINT_AP_FORM,
       HINT_AP_INPUT,

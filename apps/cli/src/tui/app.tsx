@@ -15,6 +15,8 @@ import type { ConversationSummary, TuiApi } from './api.js';
 import type { ChatController } from './chat-controller.js';
 import type { ApprovalsController } from './approvals-controller.js';
 import {
+  AnsweredDatesList,
+  AnsweredDayList,
   ApprovalList,
   approvalDocument,
   approvalStatusText,
@@ -36,6 +38,8 @@ import {
   HINT_AP_DETAIL,
   HINT_AP_FORM,
   HINT_AP_INPUT,
+  HINT_AP_DATES,
+  HINT_AP_DAY,
   HINT_AP_LIST,
   HINT_INPUT,
   HINT_JOURNAL_DETAIL,
@@ -517,7 +521,7 @@ export const App: FC<AppProps> = ({
 
   /**
    * 承認待ちタブの nav ゾーンのキー。消費したら true。数字・`/` は呼び出し側の共通処理へ落とす。
-   * 一覧: ↑↓ 選択 / Enter 詳細 / r 更新。
+   * 一覧: ↑↓ 選択 / Enter 詳細 / d 回答済み（決着した日 → その日の件 → 詳細）/ r 更新。
    * 詳細（読む）: Esc 一覧へ / a・i・Enter・Tab 答える / ↑↓ PgUp PgDn / r 更新。
    * 詳細（答える）: ↑↓ 移動 / Space・Enter 選ぶ（文字欄では書く）/ s 確認へ / Esc 読む画面へ。
    * 確認: y だけが送る。それ以外は全部、フォームへ戻る。
@@ -527,6 +531,33 @@ export const App: FC<AppProps> = ({
     key: Parameters<Parameters<typeof useInput>[0]>[1],
   ): boolean => {
     const state = approvals.store.getSnapshot();
+    // 回答済み（決着した日 → その日の件 → 既存の詳細。#3340）。
+    if (state.view === 'dates') {
+      if (key.upArrow) approvals.moveDatesSelection(-1);
+      else if (key.downArrow) approvals.moveDatesSelection(1);
+      else if (key.pageUp) approvals.moveDatesSelection(-pageStep(layout.bodyHeight));
+      else if (key.pageDown) approvals.moveDatesSelection(pageStep(layout.bodyHeight));
+      else if (key.return) approvals.openDay();
+      else if (key.escape || input === 'd') approvals.leaveDates();
+      else if (input === 'm') void approvals.loadMoreDates();
+      else if (input === 'r') void approvals.loadDates();
+      else return false;
+      return true;
+    }
+    if (state.view === 'day') {
+      if (key.upArrow) approvals.moveDaySelection(-1);
+      else if (key.downArrow) approvals.moveDaySelection(1);
+      else if (key.pageUp) approvals.moveDaySelection(-pageStep(layout.bodyHeight));
+      else if (key.pageDown) approvals.moveDaySelection(pageStep(layout.bodyHeight));
+      else if (key.return) {
+        setApAnchor(apLogHeight);
+        setApBuffer(emptyBuffer());
+        approvals.openDayItem();
+      } else if (key.escape) approvals.leaveDay();
+      else if (input === 'r') void approvals.loadDay();
+      else return false;
+      return true;
+    }
     if (state.view === 'list') {
       if (key.upArrow) approvals.moveSelection(-1);
       else if (key.downArrow) approvals.moveSelection(1);
@@ -536,7 +567,8 @@ export const App: FC<AppProps> = ({
         setApAnchor(apLogHeight);
         setApBuffer(emptyBuffer());
         approvals.openSelected();
-      } else if (input === 'r') void approvals.reload();
+      } else if (input === 'd') approvals.openDates();
+      else if (input === 'r') void approvals.reload();
       else return false;
       return true;
     }
@@ -830,13 +862,17 @@ export const App: FC<AppProps> = ({
       : tab === 'approvals'
         ? ap.view === 'list'
           ? HINT_AP_LIST
-          : ap.detail?.mode === 'confirm'
-            ? HINT_AP_CONFIRM
-            : zone === 'input'
-              ? HINT_AP_INPUT
-              : ap.detail?.mode === 'form'
-                ? HINT_AP_FORM
-                : HINT_AP_DETAIL
+          : ap.view === 'dates'
+            ? HINT_AP_DATES
+            : ap.view === 'day'
+              ? HINT_AP_DAY
+              : ap.detail?.mode === 'confirm'
+                ? HINT_AP_CONFIRM
+                : zone === 'input'
+                  ? HINT_AP_INPUT
+                  : ap.detail?.mode === 'form'
+                    ? HINT_AP_FORM
+                    : HINT_AP_DETAIL
         : tab === 'journal'
           ? jr.view === 'filter'
             ? HINT_JOURNAL_FILTER
@@ -881,6 +917,10 @@ export const App: FC<AppProps> = ({
               cursorTop={cursorTop}
             />
           </>
+        ) : ap.view === 'dates' ? (
+          <AnsweredDatesList dates={ap.dates} height={layout.bodyHeight} />
+        ) : ap.view === 'day' ? (
+          <AnsweredDayList day={ap.day} height={layout.bodyHeight} />
         ) : (
           <ApprovalList list={ap.list} height={layout.bodyHeight} />
         )

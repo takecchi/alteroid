@@ -16,7 +16,10 @@ export const HINT_JOURNAL_DETAIL = 'Esc 一覧へ · ↑↓ PgUp/PgDn 読み進�
 export const HINT_JOURNAL_FILTER = '↑↓ 選ぶ · Space 切替 · Enter 適用 · c 全部外す · Esc やめる';
 export const HINT_MEM_LIST = '↑↓ 選ぶ · Enter 開く（読むだけ） · r 更新 · 1-5 画面 · / コマンド';
 export const HINT_MEM_DETAIL = 'Esc 一覧へ · ↑↓ PgUp/PgDn 読み進める · r 更新 · 1-5 画面';
-export const HINT_AP_LIST = '↑↓ 選ぶ · Enter 詳細 · r 更新 · 1-5 画面 · / コマンド';
+export const HINT_AP_LIST = '↑↓ 選ぶ · Enter 詳細 · d 回答済み · r 更新 · 1-5 画面 · / コマンド';
+export const HINT_AP_DATES =
+  '↑↓ 選ぶ · Enter その日の件 · m 古い日を読む · Esc 未回答へ · r 更新 · 1-5 画面';
+export const HINT_AP_DAY = '↑↓ 選ぶ · Enter 詳細 · Esc 日付へ · r 更新 · 1-5 画面';
 export const HINT_AP_DETAIL = 'Esc 一覧へ · a 答える · ↑↓ PgUp/PgDn 読み進める · r 更新 · 1-5 画面';
 export const HINT_AP_FORM =
   '↑↓ 移動 · Space 選ぶ/書く · s 送る前の確認 · Esc 読む画面へ（書きかけは残る）';
