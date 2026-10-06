@@ -14,6 +14,7 @@ import {
   ErrorNote,
   Input,
   isImeConfirmEnter,
+  isSubmitShortcut,
   KeyValueList,
   Spinner,
   Textarea,
@@ -1606,7 +1607,7 @@ function QuestionWaitingRow({
           onChange={(event) => setText(event.target.value)}
           onKeyDown={(event) => {
             // 長文になりうるので Enter は改行のまま。送信は Cmd/Ctrl+Enter。
-            if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
+            if (isSubmitShortcut(event)) {
               event.preventDefault();
               submit();
             }
