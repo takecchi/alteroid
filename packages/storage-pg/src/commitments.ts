@@ -142,11 +142,12 @@ export class PgCommitmentStore implements CommitmentStore {
     // `packages/core/src/store.ts`）。
     if (options?.includeClosed !== true) return { ...open, trimmedClosed: 0 };
 
+    // 閉じた側も同じ closedAt は入れた順の昇順（fs / in-memory の安定整列と同じ。issue #3285）
     const closedRows = await this.#db
       .select({ id: commitments.id, at: commitments.at, commitment: commitments.commitment })
       .from(commitments)
       .where(isNotNull(commitments.closedAt))
-      .orderBy(desc(commitments.closedAt));
+      .orderBy(desc(commitments.closedAt), asc(commitments.seq), asc(commitments.id));
     const closed = splitReadableRows(closedRows);
     return {
       entries: [...open.entries, ...closed.entries],
