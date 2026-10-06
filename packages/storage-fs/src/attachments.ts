@@ -5,11 +5,13 @@ import { join } from 'node:path';
 import {
   ATTACHMENT_UNBOUND_TTL_MS,
   assertNoNul,
+  canBindAttachmentTo,
   hasNul,
   isAttachmentPrunable,
   prepareAttachment,
   readAttachmentLimits,
   type AttachmentBindResult,
+  type AttachmentBindTarget,
   type AttachmentMeta,
   type AttachmentPutInput,
   type AttachmentStore,
@@ -33,6 +35,7 @@ const metaSchema = z.object({
   size: z.number().int().nonnegative(),
   sha256: z.string(),
   conversationId: z.string().optional(),
+  externalEventId: z.string().optional(),
   uploadedBy: z.string().optional(),
   createdAt: z.string(),
   expiresAt: z.string(),
@@ -74,8 +77,12 @@ export class FsAttachmentStore implements AttachmentStore {
     }
     const parsed = metaSchema.safeParse(json);
     if (!parsed.success) return undefined;
-    const { conversationId, ...rest } = parsed.data;
-    return { ...rest, ...(conversationId === undefined ? {} : { conversationId }) };
+    const { conversationId, externalEventId, ...rest } = parsed.data;
+    return {
+      ...rest,
+      ...(conversationId === undefined ? {} : { conversationId }),
+      ...(externalEventId === undefined ? {} : { externalEventId }),
+    };
   }
 
   async put(input: AttachmentPutInput): Promise<AttachmentMeta> {
@@ -115,6 +122,21 @@ export class FsAttachmentStore implements AttachmentStore {
 
   async bind(ids: readonly string[], conversationId: string): Promise<AttachmentBindResult> {
     assertNoNul('conversationId', conversationId);
+    return this.#bindTo(ids, { conversationId });
+  }
+
+  async bindToExternalEvent(
+    ids: readonly string[],
+    eventId: string,
+  ): Promise<AttachmentBindResult> {
+    assertNoNul('eventId', eventId);
+    return this.#bindTo(ids, { externalEventId: eventId });
+  }
+
+  async #bindTo(
+    ids: readonly string[],
+    target: AttachmentBindTarget,
+  ): Promise<AttachmentBindResult> {
     const bound: string[] = [];
     const missing: string[] = [];
     const conflicts: string[] = [];
@@ -128,13 +150,12 @@ export class FsAttachmentStore implements AttachmentStore {
         const outcome = await withPathLock(join(dir, META_FILE), async () => {
           const meta = await this.#readMeta(dir);
           if (meta === undefined) return 'missing' as const;
-          if (meta.conversationId !== undefined && meta.conversationId !== conversationId) {
-            return 'conflict' as const;
-          }
-          if (meta.conversationId === undefined) {
+          if (!canBindAttachmentTo(meta, target)) return 'conflict' as const;
+          // 同じ宛先に結び付いている（冪等）なら書き直さない。
+          if (meta.conversationId === undefined && meta.externalEventId === undefined) {
             await writeFileAtomic(
               join(dir, META_FILE),
-              `${JSON.stringify({ ...meta, conversationId })}\n`,
+              `${JSON.stringify({ ...meta, ...target })}\n`,
               { mode: 0o600 },
             );
           }

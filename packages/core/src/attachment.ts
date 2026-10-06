@@ -12,7 +12,7 @@ import { assertNoNul, stripNul } from './nul-guard.js';
  * ## 寿命
  *
  * - `expiresAt`（既定: 作成から30日）を過ぎたものは {@link AttachmentStore.prune} が消す。
- * - **発言へ結び付いていない**（`conversationId` が無い）まま作成から1時間たったものも消す
+ * - **発言へ結び付いていない**（`conversationId` も `externalEventId` も無い）まま作成から1時間たったものも消す
  *   （アップロードしただけで送らなかった残骸）。結び付けは {@link AttachmentStore.bind}。
  *
  * ## NUL
@@ -36,8 +36,13 @@ export interface AttachmentMeta {
   /** 結び付けた会話。未結び付けなら無い。 */
   readonly conversationId?: string;
   /**
+   * 結び付けた外部イベントの id（#3113 段3）。**結び付け先は会話か外部イベントのどちらか1つ**
+   * （{@link AttachmentStore.bindToExternalEvent}）。未結び付けなら無い。
+   */
+  readonly externalEventId?: string;
+  /**
    * 誰が上げたか（認証済みの主体を表す識別子。例 `operator` / `account:<id>`）。**中身ではなく識別子だけ**。
-   * 上げた主体が分からない・記録しない経路では無い。
+   * 連携の鍵が上げたものは `integration:<keyId>`（#3113 段3）。上げた主体が分からない・記録しない経路では無い。
    */
   readonly uploadedBy?: string;
   /** ISO 8601。 */
@@ -75,8 +80,17 @@ export interface AttachmentStore {
   get(id: string): Promise<{ meta: AttachmentMeta; bytes: Uint8Array } | undefined>;
   /** 控えだけ。**中身を読まない**（pg は bytes 列を SELECT しない）。 */
   getMeta(id: string): Promise<AttachmentMeta | undefined>;
-  /** 発言（会話）へ結び付ける。未結び付けの掃除の判定に使う。冪等。 */
+  /**
+   * 発言（会話）へ結び付ける。未結び付けの掃除の判定に使う。冪等。
+   * **すでに別の会話・外部イベントへ結び付いていたものは `conflicts`**（触らない）。
+   */
   bind(ids: readonly string[], conversationId: string): Promise<AttachmentBindResult>;
+  /**
+   * 外部イベント（受信箱の `external` の id）へ結び付ける（#3113 段3）。{@link bind} と同じ規則で、
+   * 冪等・別の宛先（会話、別の外部イベント）に結び付いていたものは `conflicts`・無いものは `missing`。
+   * 結び付いたものは {@link isAttachmentPrunable} の「未結び付け」に数えない。
+   */
+  bindToExternalEvent(ids: readonly string[], eventId: string): Promise<AttachmentBindResult>;
   /**
    * 掃除。①`expiresAt` を過ぎたもの、②作成から {@link ATTACHMENT_UNBOUND_TTL_MS} たっても未結び付けのもの、を消す。
    * 消した件数を返す。**中身を読まない。**
@@ -344,6 +358,27 @@ export function isAttachmentPrunable(meta: AttachmentMeta, now: Date): boolean {
   if (Date.parse(meta.expiresAt) <= now.getTime()) return true;
   return (
     meta.conversationId === undefined &&
+    meta.externalEventId === undefined &&
     Date.parse(meta.createdAt) + ATTACHMENT_UNBOUND_TTL_MS <= now.getTime()
+  );
+}
+
+/** 結び付け先。**会話か外部イベントのどちらか1つ**（{@link AttachmentMeta.externalEventId}）。 */
+export type AttachmentBindTarget = { conversationId: string } | { externalEventId: string };
+
+/**
+ * いま `target` へ結んでよいか（3実装が同じ規則を使う。pg は同じ条件を SQL で書く）。
+ * 未結び付けか、**同じ宛先**のときだけ真。別の会話・別の外部イベント・種類の違う宛先なら偽（conflict）。
+ */
+export function canBindAttachmentTo(meta: AttachmentMeta, target: AttachmentBindTarget): boolean {
+  if ('conversationId' in target) {
+    return (
+      meta.externalEventId === undefined &&
+      (meta.conversationId ?? target.conversationId) === target.conversationId
+    );
+  }
+  return (
+    meta.conversationId === undefined &&
+    (meta.externalEventId ?? target.externalEventId) === target.externalEventId
   );
 }

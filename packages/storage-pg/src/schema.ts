@@ -1044,6 +1044,7 @@ export const attachments = pgTable(
     size: bigint('size', { mode: 'number' }).notNull(),
     bytes: bytea('bytes').notNull(),
     conversationId: text('conversation_id'),
+    externalEventId: text('external_event_id'),
     uploadedBy: text('uploaded_by'),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull(),
     expiresAt: timestamp('expires_at', { withTimezone: true, mode: 'date' }).notNull(),

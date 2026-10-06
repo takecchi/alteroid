@@ -140,7 +140,7 @@ import { createRecentMap } from './recent.js';
 import { describeSituation, describeSituationUnavailable, readAtLabel } from './situation.js';
 import { countSupersedingReports, describeSuperseded } from './superseded.js';
 import { describeValidity, inboxEventValidity } from './inbox-validity.js';
-import type { JobStatus } from './schema.js';
+import type { AttachmentRef, JobStatus } from './schema.js';
 import { DEFAULT_TOKEN_COOLDOWN_MS, toAgentTokenView } from './token-pool.js';
 import { parseNoticeResetAt } from './usage-reset-text.js';
 import type { RunnerRegistry } from './runner-protocol.js';
@@ -149,6 +149,7 @@ import {
   buildDailyReportPrompt,
   buildDistillPrompt,
   buildExternalEventPrompt,
+  externalAttachmentSection,
   EXTERNAL_EVENT_FRAMING,
   externalViaLine,
   buildSelfInitiativePrompt,
@@ -4336,7 +4337,12 @@ class Clone implements CloneHost {
       await this.#journalIncomingBody(event);
     }
 
-    await this.#runInternal(externalBatchPrompt(events));
+    const attached = await this.#resolveExternalAttachments(events);
+    await this.#runInternal(
+      externalBatchPrompt(events, attached.noticeLines),
+      'normal',
+      attached.images,
+    );
   }
 
   /**
@@ -4900,8 +4906,33 @@ class Clone implements CloneHost {
         summary: journalPayload(event.payload),
         // **どの連携の鍵（id と名前）経由か**（#3113）。鍵の値は書かない。
         ...(event.via === undefined ? {} : { via: event.via }),
+        // **添付の参照だけ**（#3113 段3。中身は書かない）。
+        ...(event.attachments === undefined || event.attachments.length === 0
+          ? {}
+          : { attachments: event.attachments.map((ref) => ({ ...ref })) }),
       });
     }
+  }
+
+  /**
+   * 外部イベントに添えられた添付を、ターンへ渡す形にする（#3113 段3）。**束ねた合図すべての添付を集める**
+   * （同じ id は1回だけ。束の鍵が添付の id を含むので、添付の違う合図は通常は束ならないが、ここでも
+   * 黙って落とさない）。見つからない添付でもターンは続ける（`resolveTurnAttachments` の通知行が言う）。
+   */
+  async #resolveExternalAttachments(
+    events: readonly ExternalEvent[],
+  ): Promise<{ images: AgentInputImage[]; noticeLines: string[] }> {
+    const seen = new Set<string>();
+    const refs: AttachmentRef[] = [];
+    for (const event of events) {
+      for (const ref of event.attachments ?? []) {
+        if (seen.has(ref.id)) continue;
+        seen.add(ref.id);
+        refs.push(ref);
+      }
+    }
+    if (refs.length === 0) return { images: [], noticeLines: [] };
+    return resolveTurnAttachments(this.#stores, refs);
   }
 
   #conversationOf(event: InboxEvent): string | null {
@@ -8680,6 +8711,8 @@ class Clone implements CloneHost {
 
       case 'external': {
         const body = renderPayload(event.payload, event.at);
+        // 添付（#3113 段3）。中身はここで読むだけで、受信箱・日誌・記憶へは写さない。
+        const attached = await this.#resolveExternalAttachments([event]);
         // **日誌の書き込みは配達のたびに**（`manager_message` と同じ理由。畳む回でも
         // 同じものを書くので1本にまとめてある: `#journalIncomingBody`）。
         await this.#journalIncomingBody(event);
@@ -8690,7 +8723,12 @@ class Clone implements CloneHost {
             source: event.source,
             body,
             ...(event.via === undefined ? {} : { viaKeyNames: [event.via.name] }),
+            ...(attached.noticeLines.length === 0
+              ? {}
+              : { attachmentNoticeLines: attached.noticeLines }),
           }),
+          'normal',
+          attached.images,
         );
         return;
       }
@@ -8845,8 +8883,13 @@ class Clone implements CloneHost {
    * `case 'human_answer'` が `#runTurn(this.#conversationOf(event), …)` を
    * 直接呼び、会話 id を持つ承認への回答だけ人間の会話へ載る。
    */
-  async #runInternal(text: string, kind: 'normal' | 'distill' = 'normal'): Promise<TurnOutcome> {
-    return this.#runTurn(null, text, kind);
+  async #runInternal(
+    text: string,
+    kind: 'normal' | 'distill' = 'normal',
+    /** 本文に添える画像（外部イベントの添付。#3113 段3）。渡さなければ文字列だけの入力。 */
+    images: readonly AgentInputImage[] = [],
+  ): Promise<TurnOutcome> {
+    return this.#runTurn(null, text, kind, null, images);
   }
 
   // -------------------------------------------------------------------------
@@ -12965,7 +13008,10 @@ function managerReportBatchPrompt(
  * 書き（`journalPayload`）、プロンプトの側は省いた量と `journal_read` での取り方を
  * 名乗る（`renderPayload` の doc）。
  */
-function externalBatchPrompt(events: ExternalEvent[]): string {
+function externalBatchPrompt(
+  events: ExternalEvent[],
+  attachmentNoticeLines: readonly string[] = [],
+): string {
   const head = events[0];
   if (head === undefined) return '';
 
@@ -12979,6 +13025,7 @@ function externalBatchPrompt(events: ExternalEvent[]): string {
     `[system] 外部から出来事が届いた（source: ${head.source}）。人間はこれを見ていない。`,
     ...(via === null ? [] : [via]),
     EXTERNAL_EVENT_FRAMING,
+    ...externalAttachmentSection(attachmentNoticeLines),
     `処理待ちのあいだに、同じ中身の合図を続けて **${events.length} 件** まとめて渡す` +
       '（本文は1回だけ。全件で `source` と中身が一致している）。',
     `届いた時刻（届いた順）: ${timestamps}`,
