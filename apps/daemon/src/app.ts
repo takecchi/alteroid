@@ -5623,7 +5623,10 @@ export function createApp(deps: AppDeps) {
         summary: '連携の鍵の一覧',
         description:
           '外のサービスへ渡した連携の鍵の一覧（失効・期限切れを含む）。**値も sha256 の全体も返さない**' +
-          '（`fingerprint` は sha256 の先頭12桁で、見分けるためだけの値）。',
+          '（`fingerprint` は sha256 の先頭12桁で、見分けるためだけの値）。行が読めない（版ずれ・手編集）' +
+          '鍵が在るときだけ、`rowsUnreadable`（件数と id・不正な欄名。名前などの中身は載せない）が付く。' +
+          '読めない行しか無いと `keys` は空だが「鍵が無い」とは限らない（読めない行の鍵は使えない）。' +
+          'id を `POST /integration-keys/unreadable/remove` に渡して消せる。',
         responses: {
           200: {
             description: '連携の鍵の一覧。',
@@ -5636,8 +5639,95 @@ export function createApp(deps: AppDeps) {
       humanOnly,
       async (c) => {
         const keys = await stores.integrationKeys.listIntegrationKeys();
+        // **読めない行は、1件でも在るときだけ `rowsUnreadable` に載せる**（issue #3216。`GET /access` と同じ形）。
+        const rowsUnreadable = toRowsUnreadable(
+          await stores.integrationKeys.listUnreadableIntegrationKeys(),
+        );
         return c.json(
-          integrationKeysListResponseSchema.parse({ keys: keys.map(integrationKeyView) }),
+          integrationKeysListResponseSchema.parse({
+            keys: keys.map(integrationKeyView),
+            ...(rowsUnreadable === undefined ? {} : { rowsUnreadable }),
+          }),
+        );
+      },
+    )
+
+    /**
+     * **読めない連携の鍵の行を、id で指して消す**（issue #3216。`POST /access/unreadable/remove`・
+     * `POST /permission-grants/unreadable/remove` と同じ形・同じ確認・同じ日誌の残し方）。読めない行は
+     * `/integration-keys/:id/revoke` が 404 で触らないので、片付ける口はここだけである。`:id` と取り違えない
+     * よう、別の語（`unreadable`）の下に置く。
+     *
+     * **日誌を先に書き、書けなければ状態を変えずに 500。** 日誌に残すのは消す id と件数だけ（名前・source・
+     * sha256 などの中身は書かない）。読めない行に無い id が1つでもあれば何も消さず 404（指された文字列は
+     * 返さない）。読めた鍵には触れない。資格は `humanOnly`（連携の鍵では管理できない）。
+     */
+    .post(
+      '/integration-keys/unreadable/remove',
+      describeRoute({
+        tags: ['integration-keys'],
+        summary: '読めない連携の鍵の行を、id を指して消す',
+        description:
+          '読めない（型に合わない形で入っている）連携の鍵の行だけを、id を指して消す。読める鍵には触れない。' +
+          'id が取れない行はこの口では消せない（`auth/integration-keys.json` を手で直す）。1つでも読めない行に' +
+          '無い id があれば何も消さない。消した id と件数を日誌に残す（行の中身は残さない）。',
+        responses: {
+          200: {
+            description: '消した id と件数。',
+            content: {
+              'application/json': { schema: resolver(unreadableRowsRemoveResponseSchema) },
+            },
+          },
+          400: {
+            description: '入力の形が不正（何も消していない）。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+          404: {
+            description:
+              '指した id のうち、読めない行に無いものがあった（何も消していない。日誌も書いていない）。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+          500: {
+            description:
+              '日誌が書けなかった（**状態を変えていない**）か、消すのに失敗した。理由の本文は返さない。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+        },
+      }),
+      humanOnly,
+      jsonBody(unreadableRowsRemoveRequestSchema, (where) => ({
+        error:
+          '読めない行の id の入力の形が不正（何も消していない）' +
+          (where === '' ? '' : `: ${where}`),
+      })),
+      async (c) => {
+        const result = await removeUnreadableRowsWithJournal({
+          stores,
+          subject: '連携の鍵',
+          actor: describeActor(c.get('principal')),
+          route: 'POST /integration-keys/unreadable/remove',
+          requested: c.req.valid('json').ids,
+          remove: (ids, options) =>
+            stores.integrationKeys.removeUnreadableIntegrationKeys(ids, options),
+        });
+        if (result.kind === 'unknown') {
+          return c.json(
+            {
+              error:
+                `指した id のうち ${String(result.count)} 件が、読めない連携の鍵の行に無い` +
+                '（何も消していない。id は `GET /integration-keys` の `rowsUnreadable.rows[].id`（alteroid integration list）で確かめる）',
+            },
+            404,
+          );
+        }
+        if (result.kind === 'failed') {
+          return c.json({ error: '連携の鍵を保存できなかった' as const }, 500);
+        }
+        return c.json(
+          unreadableRowsRemoveResponseSchema.parse({
+            removedIds: result.ids,
+            count: result.ids.length,
+          }),
         );
       },
     )
@@ -5765,6 +5855,11 @@ export function createApp(deps: AppDeps) {
             description: '該当する鍵が無い。',
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
+          409: {
+            description:
+              '鍵の行が読めない形で入っている（失効できない）。`POST /integration-keys/unreadable/remove` で消す。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
           500: {
             description: '日誌が書けなかった（**状態を変えていない**）。',
             content: { 'application/json': { schema: resolver(journalWriteFailedResponseSchema) } },
@@ -5777,7 +5872,22 @@ export function createApp(deps: AppDeps) {
       async (c) => {
         const id = c.req.param('id');
         const before = await stores.integrationKeys.getIntegrationKey(id);
-        if (before === null) return c.json({ error: 'not found' as const }, 404);
+        if (before === null) {
+          // 読めない形で入っている行は「無い」ではなく 409 で言い分ける（`/permission-grants/:id/revoke` と同じ。#3216）。
+          const unreadable = await stores.integrationKeys.listUnreadableIntegrationKeys();
+          if (unreadable.some((row) => row.id === id)) {
+            return c.json(
+              {
+                error:
+                  `連携の鍵 ${id} は読めない形で入っている（消されたのでも、失効したのでもない）。` +
+                  '失効はこの口ではできない。' +
+                  '消すには `POST /integration-keys/unreadable/remove`（alteroid integration remove-unreadable <id>）を使う。',
+              },
+              409,
+            );
+          }
+          return c.json({ error: 'not found' as const }, 404);
+        }
         if (before.revokedAt !== null) {
           return c.json(integrationKeyResponseSchema.parse({ key: integrationKeyView(before) }));
         }

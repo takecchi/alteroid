@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 import { randomToken, sha256Hex } from './auth.js';
 import { assertNoNul, stripNul } from './nul-guard.js';
+import type { RemoveUnreadableRowsOptions, RemoveUnreadableRowsResult } from './store.js';
 
 /**
  * **連携の鍵（integration key）。** 外のサービス（人間でない相手）へ渡す、権限を絞った鍵。
@@ -57,6 +58,21 @@ export const integrationKeyRecordSchema = z.object({
 
 export type IntegrationKeyRecord = z.infer<typeof integrationKeyRecordSchema>;
 
+/**
+ * 連携の鍵の1行が {@link integrationKeyRecordSchema} として読めなかったときに、その行の代わりに外へ出すもの
+ * （issue #3216。`UnreadablePermissionGrant` と同じ線）。**`list` が黙って飛ばすと、鍵が消えたのか読めないのか
+ * が見えない。** 外へ返す形は `toRowsUnreadable`（`rowsUnreadable: { count, rows }`）。
+ *
+ * **⚠️ 行の中身（名前・source・sha256 など）を決して載せないこと。** 識別に使うのは id だけで、取れなければ
+ * 載せない。`reason` は「どの欄が不正か」だけ。
+ */
+export interface UnreadableIntegrationKey {
+  /** 行から取れた id（文字列のときだけ）。 */
+  id?: string | undefined;
+  /** なぜ読めなかったか（不正な欄名だけ。値は載せない）。 */
+  reason: string;
+}
+
 export type RevokeIntegrationKeyOutcome =
   | { status: 'not_found' }
   | { status: 'already_revoked'; key: IntegrationKeyRecord }
@@ -83,6 +99,23 @@ export interface IntegrationKeyStore {
   markIntegrationKeyUsed(id: string, at: string): Promise<void>;
   /** `revokedAt` が空のときだけ立てる（冪等。先に立った時刻は動かさない）。 */
   revokeIntegrationKey(id: string, at: string): Promise<RevokeIntegrationKeyOutcome>;
+  /**
+   * `listIntegrationKeys()` が飛ばした行（`integrationKeyRecordSchema` に合わない。版ずれ・手編集）を、中身を含まない
+   * 形（id と不正な欄名だけ）で返す（issue #3216。`PermissionGrantStore.listUnreadable` と同じ線）。読めない行しか
+   * 無いと `listIntegrationKeys()` は空で「鍵がまだ無い」と読める——その言い分けの元になる。
+   * **読めない行の鍵は使えない（`find` にも `get` にも現れない）。** fail-closed で、誤って通ることは無い。
+   */
+  listUnreadableIntegrationKeys(): Promise<UnreadableIntegrationKey[]>;
+  /**
+   * **読めない行を、id で指して消す**（issue #3216。`PermissionGrantStore.removeUnreadable` と同じ契約）。
+   * 指された id が**すべて**読めない行に在るときだけ消す（1つでも違えば何も消さず `unknown`。読める行・無い id・id が
+   * 取れない行を指した場合を含む）。消すと決まったら {@link RemoveUnreadableRowsOptions.beforeRemove} を書き込みの
+   * 排他区間の中で、消す前に呼ぶ（投げたら何も消さずに投げ直す）。読める行には触れない。NUL を含む id は「無い」。
+   */
+  removeUnreadableIntegrationKeys(
+    ids: readonly string[],
+    options?: RemoveUnreadableRowsOptions,
+  ): Promise<RemoveUnreadableRowsResult>;
 }
 
 export function issueIntegrationKeyValue(): string {
