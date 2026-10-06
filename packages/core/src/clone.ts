@@ -3201,7 +3201,7 @@ class Clone implements CloneHost {
    * 「人間がそう答えた」ことの証拠にならない**（クローンが自分で `answer`
    * を偽造できる）。`via === undefined` は、呼び出し側（CLI・内部呼び出し）
    * が経路を渡さなかった場合——**既定は不許可**（`.claude/skills/
-   * auth-and-access/SKILL.md` の通る資格2種類のうち、①アクセストークン
+   * auth-and-access/SKILL.md` の通る資格3種類のうち、①アクセストークン
    * だけがここでの「人間の証拠」になる）。
    *
    * **記録に失敗しても、この関数は投げない。** `answerApproval` 本体

@@ -1,6 +1,6 @@
 ---
 name: auth-and-access
-description: ログイン・アクセス許可（alteroid login / access grant、Google OAuth、認証トークン）を触るときに読む。通る資格2種類、既定で認証を要求しない理由、許可は複数出せるが分けないのはデータの側、不変条件をストアの1操作に閉じる3つの関数、鍵を落とす2か所。PRD「権限境界」との違いも。
+description: ログイン・アクセス許可（alteroid login / access grant、Google OAuth、認証トークン）を触るときに読む。通る資格3種類（3つ目は外のサービスに渡す連携の鍵）、既定で認証を要求しない理由、許可は複数出せるが分けないのはデータの側、不変条件をストアの1操作に閉じる3つの関数、鍵を落とす2か所。PRD「権限境界」との違いも。
 ---
 
 # ログインとアクセス許可（入口の認証）
@@ -11,7 +11,7 @@ description: ログイン・アクセス許可（alteroid login / access grant�
 
 - マルチユーザーではない（PRD 非ゴール）。**持ち主が複数の端末・複数のログイン手段から入れるようにするための層**であって、利用者ごとにデータを分けない
   - **⚠️ 非ゴールが禁じているのは「データを分けること」であって「入口の数」ではない。** 許可は複数のアカウントへ出せる（下の項目）。**境界はデータの側に在る** — 「アカウントごとの記憶」「アカウントごとの日誌」を作りたくなったら、そこが越えてはいけない線である（逐語は `grep -Fn -- '境界はデータの側に在る' docs/PRD.md`）
-- **通る資格は2種類**。①`Authorization: Bearer <アクセストークン>`（`alteroid login` で発行。許可されたアカウントのものだけ通る）②`Authorization: Bearer <state/daemon.json の token>`（＝**実行環境の持ち主**。CLI が使う）。**`/access/*` と `/tokens` は①②のどちらでも叩ける**（2026-09-06 のオーナー決定で同格にした）。**②でなければ叩けない経路の一覧を持つのは歯である** —— 数え上げの持ち主は `scripts/require-operator-routes.test.ts` の `EXPECTED_OPERATOR_ROUTES` で、配線と一覧の一致を測っている（逐語は `grep -Fn -- 'const EXPECTED_OPERATOR_ROUTES' scripts/require-operator-routes.test.ts`）
+- **通る資格は3種類**（③連携の鍵 `altk_` は外のサービスに渡すもので、この下の連携の鍵の項）。①`Authorization: Bearer <アクセストークン>`（`alteroid login` で発行。許可されたアカウントのものだけ通る）②`Authorization: Bearer <state/daemon.json の token>`（＝**実行環境の持ち主**。CLI が使う）。**`/access/*` と `/tokens` は①②のどちらでも叩ける**（2026-09-06 のオーナー決定で同格にした）。**②でなければ叩けない経路の一覧を持つのは歯である** —— 数え上げの持ち主は `scripts/require-operator-routes.test.ts` の `EXPECTED_OPERATOR_ROUTES` で、配線と一覧の一致を測っている（逐語は `grep -Fn -- 'const EXPECTED_OPERATOR_ROUTES' scripts/require-operator-routes.test.ts`）
   - ②が「最初の1人を誰が通すか」の出口である。守っているのは**ファイルの許可**であって新しい秘密ではない。これが無いと誰も `access grant` を実行できない
 - **第3の資格として「連携の鍵（integration key）」がある**（`altk_` ＋ 32 バイトの乱数。#3113 段1。発行・一覧・失効は `POST /integration-keys`・`GET /integration-keys`・`POST /integration-keys/:id/revoke`。コアは `packages/core/src/integration-key.ts`、門番は `apps/daemon/src/app.ts` の `authenticateIntegrationKey`）。外のサービス（人間でない相手）へ渡す鍵で、**種類そのものが「固定の1つの `source` で外部イベントを送る」という1つの能力だけを表す**。
   - **これは行為ごとのスコープではない。「人間でない相手に渡す認証情報の配布範囲」の境界である**（north_star 禁止2 が認める実行環境の境界）。**`scopes: [...]` のような選べる一覧を足さないこと** —— 足した瞬間に、上の「行為ごとのスコープを足さないこと」と地雷表の `permissions.yaml` に当たる。足したくなったら、鍵の種類を増やすのではなく、まず別の資格が要るのかを人間に確認する

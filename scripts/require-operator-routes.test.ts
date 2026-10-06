@@ -197,7 +197,7 @@ export function countRequireOperatorReferences(
 /**
  * `requireOperator` が配線されている経路のリテラル一覧。
  *
- * **この一覧を変えたら、`docs/architecture.md` の「通る資格は2種類ある」の表も
+ * **この一覧を変えたら、`docs/architecture.md` の「通る資格は3種類である」の表も
  * 直す必要がある。**
  *
  * **⚠️ この歯は doc を検査していない。** doc が古びたことは、この歯では
@@ -443,7 +443,7 @@ describe('2つの門（requireOperator / requireOwner）の配線が、決め打
               ? `配線に新しく現れたがリテラル一覧に無い経路: ${extra.join(', ')}`
               : '',
             'app.ts の requireOperator の配線が変わったなら、このファイルの ' +
-              'EXPECTED_OPERATOR_ROUTES を直し、docs/architecture.md の「通る資格は2種類ある」の ' +
+              'EXPECTED_OPERATOR_ROUTES を直し、docs/architecture.md の「通る資格は3種類である」の ' +
               '表も直す必要がないか人間へ確認すること（この歯は doc を検査していない）。',
           ]
             .filter((line) => line.length > 0)
