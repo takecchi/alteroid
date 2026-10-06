@@ -72,4 +72,12 @@ describe('resolveCommand', () => {
       expect(text).toContain(k);
     }
   });
+
+  it('help は、書きかけがあるときの終了が二度押し（^D か /exit）であることを案内する（#3490・#3518）', () => {
+    const exit = COMMANDS.find((c) => c.action === 'exit');
+    expect(exit?.describe).toMatch(/書きかけ[^\n]*もう一度/);
+    const text = helpLines().join('\n');
+    expect(text).toMatch(/Ctrl\+D[^\n]*書きかけ[^\n]*もう一度/);
+    expect(text).not.toContain('Ctrl+D（入力欄が空のとき）終了');
+  });
 });
