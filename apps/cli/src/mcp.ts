@@ -10,7 +10,7 @@ import { confirmIrreversible } from './confirm.js';
 import { createClient } from './client.js';
 import { describeAuthFailure, forbiddenKindOf, resolveTarget, type Target } from './target.js';
 import { redactError } from './redact.js';
-import { openEditor, readInputFile } from './input-errors.js';
+import { keepDraftOnFailure, openEditor, readInputFile } from './input-errors.js';
 
 /**
  * `alteroid mcp` — 人間の MCP 連携の登録（`.mcp.json` の `mcpServers` と同じ形）を
@@ -179,6 +179,14 @@ export async function mcpEditCommand(): Promise<void> {
     // 中身は人間が置いた鍵そのものになりうる。一時ファイルでも絞る。
     await writeFile(path, original, { encoding: 'utf8', mode: 0o600 });
     await openEditor(path, 'alteroid mcp set <file>');
+  } catch (error) {
+    // まだ人間は何も書いていない（エディタが起きなかった・異常終了した）。
+    await rm(dir, { recursive: true, force: true });
+    throw error;
+  }
+  // **成功したときと「変更なし」のときだけ、一時ディレクトリを消す。** 失敗（JSON の書き損じ・保存）は
+  // 人間が書いた内容を 0600 のまま残し、場所と続きのやり方を言う（#3453）。
+  await keepDraftOnFailure(dir, path, `alteroid mcp set ${path}`, async () => {
     const edited = await readFile(path, 'utf8');
 
     if (edited === original) {
@@ -186,9 +194,7 @@ export async function mcpEditCommand(): Promise<void> {
       return;
     }
     await put(target, parseMcpJson(edited), Object.keys(current.mcpServers));
-  } finally {
-    await rm(dir, { recursive: true, force: true });
-  }
+  });
 }
 
 /**

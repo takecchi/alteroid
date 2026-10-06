@@ -7,7 +7,7 @@ import { createClient, type DaemonClient } from './client.js';
 import { formatElapsedAgo, withErrorReason } from './format.js';
 import { describeAuthFailure, resolveTarget, type Target } from './target.js';
 import { confirmIrreversible, type ConfirmIo } from './confirm.js';
-import { openEditor, readInputFile } from './input-errors.js';
+import { keepDraftOnFailure, openEditor, readInputFile } from './input-errors.js';
 
 /**
  * `alteroid memory` — 記憶（人格）を読む・書き換える・消す。
@@ -305,49 +305,58 @@ export async function memoryEditCommand(slug: string): Promise<void> {
 
   const dir = await mkdtemp(join(tmpdir(), 'alteroid-memory-'));
   const path = join(dir, `${slug}.md`);
-  // **衝突したときだけ、人間が書いた内容を含む一時ディレクトリを消さない。**
-  let keep = false;
   try {
     await writeFile(path, current ?? template(slug), 'utf8');
     await openEditor(path, 'alteroid memory set <slug> --file <path>');
-    const edited = await readFile(path, 'utf8');
-
-    if (current !== null && edited === current) {
-      // **書き換えていないなら書き込まない。** 同じ本文でも `PUT` は日誌へ
-      // `memory_update` を積むので、押し戻すたびに「人間が書き換えた」が
-      // 増えていく（後から経緯を読む側が、実際には無かった変更を数える）。
-      stdout.write('変更はありません。\n');
-      return;
-    }
-    try {
-      await write(client, target, slug, edited, ifMatch);
-    } catch (error) {
-      if (!(error instanceof MemoryConflictCliError)) throw error;
-      // **人間が書いた内容を失わない。** 消さずに残し、いまの版も隣へ置いて、
-      // 見比べる道具（`diff`）と次の手を案内する。
-      keep = true;
-      const theirs = join(dir, `${slug}.current.md`);
-      if (error.current !== null) await writeFile(theirs, error.current, 'utf8');
-      stdout.write(
-        [
-          `書き換えていません: ${slug} は、あなたが読んだ後に変わっています（クローンなど別の書き手が書いたか、消されました）。`,
-          `  あなたの編集（残してあります）: ${path}`,
-          error.current === null
-            ? '  いまの記憶: 無い（消されています）'
-            : `  いまの記憶: ${theirs}`,
-          ...(error.current === null ? [] : [`  見比べる: diff -u ${theirs} ${path}`]),
-          `  取り込んだら \`alteroid memory edit ${slug}\` で開き直して直してください。`,
-          `  そのまま置き換えてよいなら \`alteroid memory set ${slug} --file ${path}\`（クローンの書き込みを消します）。`,
-          '',
-        ].join('\n'),
-      );
-      throw new Error(`記憶が読んだ後に変わっていたので書き換えませんでした: ${slug}`, {
-        cause: error,
-      });
-    }
-  } finally {
-    if (!keep) await rm(dir, { recursive: true, force: true });
+  } catch (error) {
+    // まだ人間は何も書いていない（エディタが起きなかった・異常終了した）。
+    await rm(dir, { recursive: true, force: true });
+    throw error;
   }
+  // **成功したときと「変更なし」のときだけ、一時ディレクトリを消す。** 保存の失敗（衝突以外も）は
+  // 人間が書いた内容を残し、場所と続きのやり方を言う（#3453）。衝突は下で自分で案内する。
+  await keepDraftOnFailure(
+    dir,
+    path,
+    `alteroid memory set ${slug} --file ${path}`,
+    async (keep) => {
+      const edited = await readFile(path, 'utf8');
+
+      if (current !== null && edited === current) {
+        // **書き換えていないなら書き込まない。** 同じ本文でも `PUT` は日誌へ
+        // `memory_update` を積むので、押し戻すたびに「人間が書き換えた」が
+        // 増えていく（後から経緯を読む側が、実際には無かった変更を数える）。
+        stdout.write('変更はありません。\n');
+        return;
+      }
+      try {
+        await write(client, target, slug, edited, ifMatch);
+      } catch (error) {
+        if (!(error instanceof MemoryConflictCliError)) throw error;
+        // **人間が書いた内容を失わない。** 消さずに残し、いまの版も隣へ置いて、
+        // 見比べる道具（`diff`）と次の手を案内する。
+        keep();
+        const theirs = join(dir, `${slug}.current.md`);
+        if (error.current !== null) await writeFile(theirs, error.current, 'utf8');
+        stdout.write(
+          [
+            `書き換えていません: ${slug} は、あなたが読んだ後に変わっています（クローンなど別の書き手が書いたか、消されました）。`,
+            `  あなたの編集（残してあります）: ${path}`,
+            error.current === null
+              ? '  いまの記憶: 無い（消されています）'
+              : `  いまの記憶: ${theirs}`,
+            ...(error.current === null ? [] : [`  見比べる: diff -u ${theirs} ${path}`]),
+            `  取り込んだら \`alteroid memory edit ${slug}\` で開き直して直してください。`,
+            `  そのまま置き換えてよいなら \`alteroid memory set ${slug} --file ${path}\`（クローンの書き込みを消します）。`,
+            '',
+          ].join('\n'),
+        );
+        throw new Error(`記憶が読んだ後に変わっていたので書き換えませんでした: ${slug}`, {
+          cause: error,
+        });
+      }
+    },
+  );
 }
 
 /**

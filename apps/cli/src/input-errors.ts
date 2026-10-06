@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { constants } from 'node:fs';
-import { access, readFile, stat } from 'node:fs/promises';
+import { access, readFile, rm, stat } from 'node:fs/promises';
 import { delimiter, join } from 'node:path';
 
 /**
@@ -120,4 +120,51 @@ export async function editorCommandExists(
     }
   }
   return false;
+}
+
+/**
+ * `edit` 系（memory / practice / profile / mcp）の「エディタを閉じた後」を走らせる。
+ * **失敗したら、人間が書いた内容（一時ファイル）を消さずに残す**（#3453）。
+ *
+ * 保存の失敗（500・接続切れ・401/403・400）も、JSON の書き損じも、空の本文の断りも、
+ * 書いた側から見れば「書いたものが無くなる」理由にならない。**消すのは成功したときと
+ * 「変更なし」で戻ったときだけ**。失敗したら、残した場所と続きのやり方を stderr に言い、
+ * 元の例外をそのまま投げ直す（終了コードは `index.ts` が非0にする）。
+ *
+ * 一時ファイルの権限はここでは変えない。呼び出し側が作ったまま（profile / mcp は
+ * 秘密が入りうるので 0600）残る。
+ *
+ * 衝突（409）のように、呼び出し側が自分で残して案内するときは `keep()` を呼ぶ。
+ * その場合はここでは案内を足さない。
+ *
+ * @param dir 一時ディレクトリ（成功・変更なしのときだけ消す）
+ * @param path 人間が書いたファイル
+ * @param resume 続きのやり方（実在する打ち方。例: `alteroid memory set <slug> --file <path>`）
+ */
+export async function keepDraftOnFailure(
+  dir: string,
+  path: string,
+  resume: string,
+  work: (keep: () => void) => Promise<void>,
+): Promise<void> {
+  let kept = false;
+  try {
+    await work(() => {
+      kept = true;
+    });
+  } catch (error) {
+    if (!kept) {
+      kept = true;
+      process.stderr.write(
+        [
+          `あなたの編集を残してあります: ${path}`,
+          `  直したら \`${resume}\` で渡し直せます。いらなければ ${dir} ごと消してください。`,
+          '',
+        ].join('\n'),
+      );
+    }
+    throw error;
+  } finally {
+    if (!kept) await rm(dir, { recursive: true, force: true });
+  }
 }

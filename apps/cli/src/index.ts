@@ -258,6 +258,15 @@ program
   .description('クローンと会話し、クローンに仕事を任せる')
   .version(describeCliVersion(), '-V, --version', 'バージョンを出す');
 
+// **ルートのオプション（`-V, --version`）は、サブコマンドの名前より前でだけ読む（#3454）。**
+// これが無いと、`practice show <slug> --version 3` のようにサブコマンドの後ろへ置いた
+// `--version <n>` をルートの `-V, --version` が先に食い、過去の版ではなく CLI の
+// バージョンを出して 0 で終わる（`--version=3` だけが効いた）。サブコマンドごとに
+// 名前を変えず、打ち方（`--version 3` / `--version=3`）はそのままにできる。
+// 他のコマンドへの効き: ルートのオプションは `-V` だけなので、後ろへ置いた `-V` が
+// 「バージョンを出す」ではなく「そのサブコマンドの未知のオプション」になる。
+program.enablePositionalOptions();
+
 program
   .command('init')
   .description('人格データディレクトリ（~/.alteroid）を初期化する')
