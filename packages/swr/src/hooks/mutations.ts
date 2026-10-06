@@ -348,6 +348,9 @@ export function useAnswerApproval() {
  * **1件が駄目でも残りは進む。** サーバは `answers` と同じ順で `results` を返す
  * ので、そのまま呼び出し側へ渡す — ここで成功件数へ畳むと、どの id が通らな
  * かったかが画面から見えなくなる。
+ *
+ * **答えが通ったあとの取り直しの失敗は、呼び出し側へ伝えない**（issue #3627）。
+ * 投げるのは `POST` が失敗したときだけである。
  */
 export function useAnswerApprovals() {
   const api = useApi();
@@ -357,7 +360,14 @@ export function useAnswerApprovals() {
       const { results } = await api.api
         .POST('/approvals/answer', { body: { answers } })
         .then(unwrap);
-      await Promise.all([mutate(KEY.approvals(true)), mutate(KEY.approvals(false))]);
+      // **取り直しの失敗で throw しない（issue #3627）。** 答えはもう通っている。
+      // 投げると画面は「通信そのものの失敗」と読み、下書きを全部残して、送り直しが 409 になる。
+      // 取り直せなかった分は SWR の次の再検証が拾う。
+      try {
+        await Promise.all([mutate(KEY.approvals(true)), mutate(KEY.approvals(false))]);
+      } catch {
+        // 握り潰すのは取り直しだけ。`results` は必ず返す。
+      }
       return results;
     },
     [api, mutate],
