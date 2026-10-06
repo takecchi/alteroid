@@ -210,11 +210,17 @@ export async function chatCommand(): Promise<void> {
     interrupting = true;
     void requestInterrupt(client, target)
       .then(
-        (message) => stdout.write(`\n${message}\n`),
-        (error: unknown) =>
+        (message) => {
+          // 先に届いていた改行前の断片を書き切ってから、止めた文を出す（#3769）。
+          flushRenderedText?.();
+          stdout.write(`\n${message}\n`);
+        },
+        (error: unknown) => {
+          flushRenderedText?.();
           stdout.write(
             `\nエラー: ${redactError(error instanceof Error ? error.message : String(error))}\n`,
-          ),
+          );
+        },
       )
       .finally(() => {
         interrupting = false;
@@ -588,6 +594,9 @@ export async function findClientMessage(
   return id;
 }
 
+/** 描いている応答が、改行前のまま溜めている本文の断片を書き切る口（描いていなければ `null`）。 */
+let flushRenderedText: (() => void) | null = null;
+
 /**
  * chat の SSE（`POST /chat` と `GET /chat/{id}/stream` の応答）を端末へ描く。
  *
@@ -623,6 +632,9 @@ async function renderChatEvents(
     stdout.write(redactBody(pending));
     pending = '';
   };
+  // 描いている間だけ、溜めた断片を書き切る口を公開する。Ctrl-C で止めた文は、先に届いていた断片の後ろへ回さない（#3769）。
+  const outerFlush = flushRenderedText;
+  flushRenderedText = flushPending;
 
   try {
     for await (const event of events) {
@@ -708,6 +720,7 @@ async function renderChatEvents(
   }
 
   flushPending();
+  flushRenderedText = outerFlush;
   if (wrote) stdout.write('\n');
   if (!ended) {
     // 終端が無いまま正常に閉じた（プロキシ・再起動など）。途中までの返答を、完成したものに見せない（#3410）。

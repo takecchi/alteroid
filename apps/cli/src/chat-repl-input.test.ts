@@ -126,6 +126,62 @@ describe('chat: 応答中の Ctrl+C（#3411）', () => {
     expect(calls.filter((c) => c.path === '/chat/c1/end')).toHaveLength(1);
   });
 
+  it.each([
+    [
+      '止められたとき',
+      () => Response.json({ outcome: 'interrupted' }),
+      'いま走っていたクローンのターンを止めた',
+    ],
+    ['止められなかったとき', () => Response.json({ error: 'boom' }, { status: 500 }), 'エラー:'],
+  ])(
+    '行の途中（改行前の断片が溜まっている間）に止めたら、%s、断片を書き切ってから止めた文を出す（#3769）',
+    async (_name, interruptResponse, notice) => {
+      useStdin(true);
+      const encoder = new TextEncoder();
+      let stream!: ReadableStreamDefaultController<Uint8Array>;
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          stream = controller;
+        },
+      });
+      recordFetch((path) => {
+        if (path === '/chat') return sse(body as unknown as string);
+        if (path === '/clone/interrupt') return interruptResponse();
+        return Response.json({});
+      });
+      const out = captureStdout();
+      const { chatCommand } = await import('./chat.js');
+      const done = chatCommand();
+      await flush();
+      rl.emit('line', 'hello');
+      await flush();
+      stream.enqueue(
+        encoder.encode(
+          'event: open\ndata: {"conversationId":"c1"}\n\n' +
+            'event: text\ndata: {"text":"こんにちは、今日は"}\n\n',
+        ),
+      );
+      await flush();
+      // 改行が来ていないので、断片はまだ書かれていない。
+      expect(out()).not.toContain('こんにちは、今日は');
+
+      rl.emit('SIGINT');
+      await flush();
+      const text = out();
+      expect(text).toContain('こんにちは、今日は');
+      expect(text).toContain(notice);
+      expect(text.indexOf('こんにちは、今日は')).toBeLessThan(text.indexOf(notice));
+      // 止めた文は、閉じた行の次の行から始まる。
+      expect(text).toMatch(new RegExp(`こんにちは、今日は\\n+[^\\n]*${notice}`));
+
+      stream.enqueue(encoder.encode('event: done\ndata: {"type":"done"}\n\n'));
+      stream.close();
+      await flush();
+      rl.close();
+      await done;
+    },
+  );
+
   it('止められなかったら理由を言い、REPL は続ける', async () => {
     useStdin(true);
     let release: (() => void) | null = null;

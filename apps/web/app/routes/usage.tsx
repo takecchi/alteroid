@@ -907,22 +907,22 @@ function UsageBody({
           */}
           <AxisCard
             title="マネージャー別"
-            entries={[...summary.byManager]
-              .sort((a, b) => b.totals.costUsd - a.totals.costUsd)
-              .map((entry) => ({
-                label:
-                  entry.managerId === CLONE_ACTOR_ID ? 'クローン' : labels.manager(entry.managerId),
-                costUsd: entry.totals.costUsd,
-                ...(isDelegationActorId(entry.managerId)
-                  ? { href: `/managers/${entry.managerId}` }
-                  : {}),
-              }))}
+            entries={summary.byManager.map((entry) => ({
+              id: entry.managerId,
+              label:
+                entry.managerId === CLONE_ACTOR_ID ? 'クローン' : labels.manager(entry.managerId),
+              costUsd: entry.totals.costUsd,
+              ...(isDelegationActorId(entry.managerId)
+                ? { href: `/managers/${entry.managerId}` }
+                : {}),
+            }))}
           />
           <AxisCard
             title="モデル別"
-            entries={[...summary.byModel]
-              .sort((a, b) => b.totals.costUsd - a.totals.costUsd)
-              .map((entry) => ({ label: entry.model, costUsd: entry.totals.costUsd }))}
+            entries={summary.byModel.map((entry) => ({
+              label: entry.model,
+              costUsd: entry.totals.costUsd,
+            }))}
           />
           {/*
             **モデル別と層別を1つにしない。** 既定でクローンとマネージャーは
@@ -931,21 +931,17 @@ function UsageBody({
           */}
           <AxisCard
             title="誰が使ったか"
-            entries={[...summary.byLayer]
-              .sort((a, b) => b.totals.costUsd - a.totals.costUsd)
-              .map((entry) => ({
-                label: usageLayerLabel(entry.layer),
-                costUsd: entry.totals.costUsd,
-              }))}
+            entries={summary.byLayer.map((entry) => ({
+              label: usageLayerLabel(entry.layer),
+              costUsd: entry.totals.costUsd,
+            }))}
           />
           <AxisCard
             title="どこで使ったか"
-            entries={[...summary.bySite]
-              .sort((a, b) => b.totals.costUsd - a.totals.costUsd)
-              .map((entry) => ({
-                label: usageSiteLabel(entry.site),
-                costUsd: entry.totals.costUsd,
-              }))}
+            entries={summary.bySite.map((entry) => ({
+              label: usageSiteLabel(entry.site),
+              costUsd: entry.totals.costUsd,
+            }))}
           />
           {/*
             **`tokenId` が null の要素を落とさない。** 落とすとこの軸だけ合計に
@@ -967,16 +963,15 @@ function UsageBody({
           */}
           <AxisCard
             title="認証トークン別"
-            entries={[...summary.byToken]
-              .sort((a, b) => b.totals.costUsd - a.totals.costUsd)
-              .map((entry) => ({
-                label:
-                  entry.tokenId === null
-                    ? '（認証トークンの分からない分）'
-                    : labels.token(entry.tokenId),
-                costUsd: entry.totals.costUsd,
-                ...(entry.tokenId !== null ? { href: tokensHref({ tokenId: entry.tokenId }) } : {}),
-              }))}
+            entries={summary.byToken.map((entry) => ({
+              id: entry.tokenId,
+              label:
+                entry.tokenId === null
+                  ? '（認証トークンの分からない分）'
+                  : labels.token(entry.tokenId),
+              costUsd: entry.totals.costUsd,
+              ...(entry.tokenId !== null ? { href: tokensHref({ tokenId: entry.tokenId }) } : {}),
+            }))}
           />
         </div>
       )}
@@ -993,8 +988,15 @@ function AxisCard({
 }: {
   title: string;
   /** `href` を持つ行だけ `label` を `<Link>` にする（issue #2046）。文言は変えない。 */
-  entries: { label: string; costUsd: number; href?: string }[];
+  entries: { id?: string | null; label: string; costUsd: number; href?: string }[];
 }) {
+  // 金額の多い順（呼ぶ側は並べ替えない）。
+  entries = [...entries].sort((a, b) => b.costUsd - a.costUsd);
+  // 表示名が重なる行（一覧に無い委譲が複数・同じラベルのトークンなど）は、見分けられるよう
+  // id の先頭（`shortId`）を添える。重ならない行は今のまま。
+  const labelCounts = new Map<string, number>();
+  for (const entry of entries)
+    labelCounts.set(entry.label, (labelCounts.get(entry.label) ?? 0) + 1);
   // **カードごとの状態。** 開閉は他のカードへ波及させない（Issue #3537）。
   const [showAll, setShowAll] = useState(false);
   const overflowing = entries.length > AXIS_LIMIT;
@@ -1014,11 +1016,14 @@ function AxisCard({
       <BarList
         {...(showAll ? {} : { limit: AXIS_LIMIT })}
         formatValue={formatUsd}
-        empty="無し。"
         items={entries.map((entry) => {
           const { href } = entry;
           return {
-            label: entry.label,
+            id: entry.id ?? undefined,
+            label:
+              entry.id && (labelCounts.get(entry.label) ?? 0) > 1
+                ? `${entry.label}（${shortId(entry.id)}）`
+                : entry.label,
             value: entry.costUsd,
             ...(href === undefined
               ? {}
