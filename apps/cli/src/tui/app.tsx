@@ -411,9 +411,10 @@ export const App: FC<AppProps> = ({
   };
 
   const submit = (text: string): void => {
-    setBuffer(emptyBuffer());
-    if (text.length === 0 && !controller.hasAttachments()) return;
     const resolved = resolveCommand(text);
+    // 未知のコマンドとして断るときは、書いた文を消さない（`/var/log/…` で始まる普通の文を打ち直させない。#3406）。
+    if (resolved.kind !== 'unknown') setBuffer(emptyBuffer());
+    if (text.length === 0 && !controller.hasAttachments()) return;
     if (resolved.kind === 'command') return runCommand(resolved.spec.action, resolved.args);
     if (resolved.kind === 'unknown') {
       controller.addSystem(
