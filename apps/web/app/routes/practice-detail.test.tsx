@@ -658,3 +658,46 @@ describe('削除は読んだ版を ifMatch（クエリ）として送り、衝�
     expect(new URL(urls[1] ?? '').searchParams.get('ifMatch')).toBe(V2);
   });
 });
+
+describe('保存の門と送るキーの案内（#3300）', () => {
+  it('保存中に Ctrl+S をもう一度押しても PUT は1回だけ', async () => {
+    const puts: unknown[] = [];
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = input instanceof Request ? input : new Request(input, init);
+      if (request.method === 'PUT') {
+        puts.push(await request.json());
+        await gate;
+        return json({ practice: { ...PRACTICE, content: '書き換えた' }, version: 'v2' });
+      }
+      return json({ practice: PRACTICE });
+    }) as typeof fetch;
+    mountDetail('daily-report');
+
+    fireEvent.mouseDown(await screen.findByRole('tab', { name: '編集' }));
+    const box = await screen.findByLabelText('本文');
+    fireEvent.change(box, { target: { value: '書き換えた' } });
+
+    fireEvent.keyDown(box, { key: 's', ctrlKey: true });
+    await waitFor(() => expect(puts).toHaveLength(1));
+    fireEvent.keyDown(box, { key: 's', ctrlKey: true });
+    fireEvent.keyDown(box, { key: 'Enter', ctrlKey: true });
+    release();
+    await screen.findByText(/保存した/);
+    expect(puts).toHaveLength(1);
+  });
+
+  it('送るキーの案内は、textarea が出ている編集のタブでだけ出る', async () => {
+    renderDetail('daily-report', docRoute(PRACTICE));
+
+    await screen.findByRole('heading', { name: '見出し' });
+    expect(screen.queryByText(/で保存$/)).toBeNull();
+    fireEvent.mouseDown(screen.getByRole('tab', { name: '編集' }));
+    expect(await screen.findByText(/Enter で保存$/)).toBeTruthy();
+    fireEvent.mouseDown(screen.getByRole('tab', { name: 'プレビュー' }));
+    await waitFor(() => expect(screen.queryByText(/で保存$/)).toBeNull());
+  });
+});
