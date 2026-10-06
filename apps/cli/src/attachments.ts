@@ -349,10 +349,13 @@ export async function uploadDraft(
     bytes: Uint8Array;
   }) => Promise<UploadedAttachment>,
 ): Promise<UploadDraftResult> {
+  // 送ると決めた時点の写しを走査する（生きた配列を走査しない）。上げているあいだの `/attach` / `/detach` が
+  // 走査とずれて、外したファイルを送ったり、後から足した分を混ぜたりしないように（#3558）。
+  const snapshot = [...draft.list()];
   const uploaded: UploadedAttachment[] = [];
   const sent: DraftFile[] = [];
   const limits = await draft.limits();
-  for (const file of draft.list()) {
+  for (const file of snapshot) {
     if (file.uploadedId !== undefined) {
       uploaded.push({
         id: file.uploadedId,

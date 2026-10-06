@@ -145,6 +145,8 @@ export class ChatController {
 
   /** 次に送る発言へ添えかけのファイル（`/attach`）。 */
   private readonly draft = new AttachmentDraft(() => this.api.attachmentLimits());
+  /** 添えかけを上げている最中か（Web の `uploading` と同じ。2回目の送信と `/detach` を止める。#3558）。 */
+  private uploading = false;
   /**
    * 新しい会話（`conversationId` 無し）で `open` の前に終わった送信の `clientMessageId`（#3304）。受け取られたか
    * 分からないので、次の送信の前に `GET /client-messages/:id` で引き、受け取り済みならその会話へ送る
@@ -189,6 +191,10 @@ export class ChatController {
       this.addSystem('使い方: /detach <番号|all>');
       return;
     }
+    if (this.uploading) {
+      this.addSystem('外せない: 添付を上げている最中（上がってから外す）');
+      return;
+    }
     const removed = this.draft.remove(args);
     this.addSystem(
       removed.ok
@@ -207,7 +213,13 @@ export class ChatController {
     files: DraftFile[];
   } | null> {
     if (this.draft.count === 0) return NO_ATTACHMENTS;
-    const result = await uploadDraft(this.draft, (file) => this.api.uploadAttachment(file));
+    this.uploading = true;
+    let result: Awaited<ReturnType<typeof uploadDraft>>;
+    try {
+      result = await uploadDraft(this.draft, (file) => this.api.uploadAttachment(file));
+    } finally {
+      this.uploading = false;
+    }
     if (!result.ok) {
       this.addError(
         `添付を上げられなかったので送っていない: ${redactError(result.reason)}（添えかけは残してある。/attachments で確認、/detach で外せる）`,
@@ -327,6 +339,10 @@ export class ChatController {
    */
   async send(text: string): Promise<boolean> {
     if (text.length === 0 && this.draft.count === 0) return true;
+    if (this.uploading) {
+      this.addSystem('添付を上げている最中なので、送っていない（上がってからもう一度送る）');
+      return false;
+    }
     if (this.store.getSnapshot().busy) return this.followUp(text);
     // まだ `open` が来ていない戻り接続があっても、自分のターンを始めるなら要らない（二重に流れる）。
     this.stopWatch();
