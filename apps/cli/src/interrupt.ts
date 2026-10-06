@@ -1,8 +1,8 @@
 import { stdout } from './terminal-out.js';
 
-import { createClient } from './client.js';
+import { createClient, type DaemonClient } from './client.js';
 import { withErrorReason } from './format.js';
-import { describeAuthFailure, resolveTarget } from './target.js';
+import { describeAuthFailure, resolveTarget, type Target } from './target.js';
 
 /**
  * `alteroid interrupt` — いま走っているクローンのターンを止める（#1398 c23-1）。
@@ -44,6 +44,14 @@ export async function interruptCommand(): Promise<void> {
   const target = await resolveTarget();
   if (target.note !== null) throw new Error(target.note);
   const client = createClient(target.baseUrl, target.headers);
+  stdout.write(`${await requestInterrupt(client, target)}\n`);
+}
+
+/**
+ * `POST /clone/interrupt` を呼んで、結果を人間の言葉にして返す。失敗は投げる。
+ * `alteroid interrupt` と、`chat`（REPL）の応答中の Ctrl+C（#3411）が使う。
+ */
+export async function requestInterrupt(client: DaemonClient, target: Target): Promise<string> {
   const response = await client.clone.interrupt.$post();
   if (!response.ok) {
     const described = describeAuthFailure(response.status, target);
@@ -55,7 +63,7 @@ export async function interruptCommand(): Promise<void> {
       ),
     );
   }
-  stdout.write(`${describeInterruptOutcome((await response.json()).outcome)}\n`);
+  return describeInterruptOutcome((await response.json()).outcome);
 }
 
 /** 応答の3値を人間の言葉にする。 */

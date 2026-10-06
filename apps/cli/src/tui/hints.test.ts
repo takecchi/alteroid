@@ -62,4 +62,9 @@ describe('フッタのキーヒント', () => {
     expect(HINT_AP_DETAIL_FROM_DAY).toContain('Esc その日へ');
     expect(HINT_AP_DETAIL_FROM_DAY).not.toContain('Esc 一覧へ');
   });
+
+  it('入力欄のフッタは改行のキー（行末の \\ + Enter）を案内する', () => {
+    expect(HINT_INPUT).toContain('\\+Enter 改行');
+    expect(HINT_MGR_INPUT).toContain('\\+Enter 改行');
+  });
 });

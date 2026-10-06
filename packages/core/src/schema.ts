@@ -2594,7 +2594,10 @@ export const scheduleSpecSchema = z.discriminatedUnion('type', [
     expression: z
       .string()
       .max(CRON_EXPRESSION_MAX)
-      .refine(isCronExpression, 'cron 式として読めない（例: 毎週月曜 10:00 なら `0 10 * * 1`）'),
+      .refine(
+        isCronExpression,
+        'cron 式として読めない（分 時 日 月 曜の5欄だけ。秒つきは使えない。例: 毎週月曜 10:00 なら `0 10 * * 1`）',
+      ),
   }),
 ]);
 
