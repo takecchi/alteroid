@@ -170,9 +170,13 @@ export interface ProgressBacklog {
     notApplicable: number;
   };
   /**
-   * 0 でなければ上の数は欠けうる。`unreadable` / `trimmedClosed` は台帳の行、
+   * `unreadable` / `unreadableJobs` が 0 でなければ上の数は欠けうる。`unreadable` は台帳の行、
    * `unreadableJobs` は委譲の行（issue #2345）——0 でなければ `byState.delegated`・
    * `inProgress` の各数・`throughput.delegationsEnded` は読めた委譲の分しか数えていない。
+   *
+   * **`trimmedClosed`（刈られた片付き行の累計）は backlog の数には効かない。** 刈られるのは
+   * 片付き行だけで、未了（`closedAt` が無い）の数・内訳・齢は刈りの影響を受けない。効くのは
+   * 窓の中の完了・引き受けの件数と見込みで、前者は `throughput.mayBeUndercounted` が言う。
    */
   completeness: { unreadable: number; trimmedClosed: number; unreadableJobs: number };
 }
@@ -195,6 +199,18 @@ export interface ProgressInProgress {
 export interface ProgressThroughput {
   commitmentsOpened: number;
   commitmentsClosed: number;
+  /**
+   * `commitmentsOpened` / `commitmentsClosed` が、刈られた完了済みの行のぶん数え落としうるか。
+   * 真のとき、この2つは「少なくともこれだけ」である。
+   *
+   * 条件は `history_incomplete` と同じ（`trimmedClosed > 0` かつ、残っている片付き行の最古の
+   * `closedAt` が窓の始まり以後、残りが1件も無いときも含む）。**見込みの判定順とは独立に
+   * 計算する**——`ledger_younger_than_window` が先に勝つ台帳でも、刈りがあれば真になる。
+   * 引き受けも同じ条件で欠ける：刈られるのは片付き行で、片付き行の `at` は `closedAt`
+   * 以前なので、窓の中の `at` を持つ行が刈られうるのは、刈られた `closedAt` が窓の始まり以後の
+   * ときだけである（刈りは古い `closedAt` から）。
+   */
+  mayBeUndercounted: boolean;
   /**
    * 終端状態（{@link isTerminalJobStatus}）かつ `updatedAt` が窓の中の委譲。
    * **近似である**——`Job` に終端時刻の欄が無く、終端後に `updatedAt` が動けば
@@ -402,9 +418,14 @@ export function summarizeProgress(input: SummarizeProgressInput): ProgressSummar
     },
   };
 
+  // 窓の中の件数を、刈りで数え落としうるか。見込みの判定順とは独立に計算する。
+  const historyIncomplete =
+    commitments.trimmedClosed > 0 && (closedOldestMs === null || closedOldestMs >= fromMs);
+
   const throughput: ProgressThroughput = {
     commitmentsOpened: opened,
     commitmentsClosed: closed,
+    mayBeUndercounted: historyIncomplete,
     delegationsEnded: { count: delegationsEnded, basis: 'updatedAt' },
   };
 
@@ -435,10 +456,7 @@ export function summarizeProgress(input: SummarizeProgressInput): ProgressSummar
     forecast = estimated(0);
   } else if (ledgerOldestMs === null || ledgerOldestMs > fromMs) {
     forecast = unavailable('ledger_younger_than_window');
-  } else if (
-    commitments.trimmedClosed > 0 &&
-    (closedOldestMs === null || closedOldestMs >= fromMs)
-  ) {
+  } else if (historyIncomplete) {
     forecast = unavailable('history_incomplete');
   } else if (closed < MIN_CLOSED_IN_WINDOW) {
     forecast = unavailable('closed_too_few');

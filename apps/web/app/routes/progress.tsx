@@ -406,9 +406,19 @@ function ThroughputCard({ progress }: { progress: Progress }) {
             hint="最後に更新された時刻からの概算です（終わった正確な時刻は記録されていません）"
           />
         </StatRow>
+        {mayBeUndercounted(throughput) && (
+          <p className="text-xs text-warn">
+            この期間の件数は、古い記録が整理されたため実際より少ない可能性があります。「引き受けた」「完了にした」は「少なくともこれだけ」と読んでください。
+          </p>
+        )}
       </Section>
     </Card>
   );
+}
+
+/** 古いデーモン（欄が無い応答）では、型は boolean でも無いことを許す。無いときは注記を出さない。 */
+function mayBeUndercounted(throughput: Progress['throughput']): boolean {
+  return (throughput as { mayBeUndercounted?: boolean }).mayBeUndercounted === true;
 }
 
 const UNAVAILABLE_REASONS: Record<string, string> = {

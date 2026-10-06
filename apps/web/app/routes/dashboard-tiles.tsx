@@ -56,6 +56,14 @@ function progressPartial(progress: Progress): boolean {
   return completeness.unreadable !== 0 || unreadableJobs !== 0;
 }
 
+/**
+ * 窓の中で閉じた件数を、刈られた完了済みの行のぶん数え落としうるか（#3698）。真なら件数は下限。
+ * 古いデーモンだと欄が無い。無いときは何も言わない。
+ */
+function closedUndercounted(progress: Progress): boolean {
+  return (progress.throughput as { mayBeUndercounted?: boolean }).mayBeUndercounted === true;
+}
+
 /** 窓の時間数を、日で割り切れるときは日で言う（168 時間 → 7 日）。 */
 function windowText(hours: number): string {
   return hours >= 24 && hours % 24 === 0 ? `${hours / 24} 日` : `${hours} 時間`;
@@ -98,7 +106,7 @@ function ProgressTile() {
             label="実行中の任せた作業"
             value={String(data.inProgress.running)}
             unit="件"
-            hint={`未了の仕事 ${data.backlog.total} 件・直近 ${windowText(data.window.hours)}で閉じた仕事 ${data.throughput.commitmentsClosed} 件`}
+            hint={`未了の仕事 ${data.backlog.total} 件・直近 ${windowText(data.window.hours)}で閉じた仕事 ${data.throughput.commitmentsClosed} 件${closedUndercounted(data) ? '以上' : ''}`}
           />
           {progressPartial(data) ? (
             // 数が下限でしかないときは「無い」と言い切らない（issue #3538）。下限の注記だけにする。

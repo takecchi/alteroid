@@ -397,6 +397,38 @@ describe('/progress 画面 — 取れない値と但し書き', () => {
     expect(backlog.queryByText(/少なくともこれだけ/)).toBeNull();
   });
 
+  it('throughput.mayBeUndercounted が真なら、完了の速度に「少なくともこれだけ」の注記を出す（#3698）', async () => {
+    stubProgress({
+      body: baseBody({
+        throughput: { ...baseBody().throughput, mayBeUndercounted: true },
+      }),
+    });
+    renderPage();
+
+    const throughput = within(await card('完了の速度'));
+    expect(
+      throughput.getByText(/この期間の件数は、古い記録が整理されたため実際より少ない可能性/),
+    ).toBeTruthy();
+    expect(throughput.getByText(/「少なくともこれだけ」と読んでください/)).toBeTruthy();
+    // 未完了の数の注記は、これでは出ない。
+    expect(within(await card('未完了の仕事')).queryByText(/数が実際より少ない可能性/)).toBeNull();
+  });
+
+  it('対照: mayBeUndercounted が偽、または欄が無い（古いデーモン）なら、完了の速度に注記を出さず、落ちない（#3698）', async () => {
+    stubProgress({
+      body: baseBody({
+        throughput: { ...baseBody().throughput, mayBeUndercounted: false },
+      }),
+    });
+    renderPage();
+    expect(within(await card('完了の速度')).queryByText(/実際より少ない可能性/)).toBeNull();
+    cleanup();
+
+    stubProgress();
+    renderPage();
+    expect(within(await card('完了の速度')).queryByText(/実際より少ない可能性/)).toBeNull();
+  });
+
   it('completeness.unreadableJobs が 0 でなければ、「実施中」に委譲の欠けの但し書きを出す（#2345）', async () => {
     stubProgress({
       body: baseBody({

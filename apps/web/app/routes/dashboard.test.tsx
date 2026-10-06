@@ -725,6 +725,30 @@ describe('ホームのカードの文に内部の語を出さない（#2772）',
     expect(await screen.findByText(/何かを任せると、ここに出る/)).toBeTruthy();
   });
 
+  it('閉じた件数は、数え落としうるとき（mayBeUndercounted が真）だけ「以上」と言う。偽・欄が無いときは言わない（#3698）', async () => {
+    renderHome({
+      progress: {
+        ...PROGRESS_BODY,
+        throughput: { ...PROGRESS_BODY.throughput, mayBeUndercounted: true },
+      },
+    });
+    expect(await screen.findByText(/閉じた仕事 12 件以上/)).toBeTruthy();
+    cleanup();
+
+    renderHome({
+      progress: {
+        ...PROGRESS_BODY,
+        throughput: { ...PROGRESS_BODY.throughput, mayBeUndercounted: false },
+      },
+    });
+    expect((await screen.findByText(/閉じた仕事 12 件/)).textContent).not.toContain('以上');
+    cleanup();
+
+    // 古いデーモン（欄が無い）
+    renderHome();
+    expect((await screen.findByText(/閉じた仕事 12 件/)).textContent).not.toContain('以上');
+  });
+
   it('今日の利用: 記録が無いときも「台帳」と言わず、待てばよいことを言う', async () => {
     renderHome({ usage: { rows: [], since: '2026-08-01T00:00:00.000Z', beforeLedger: true } });
     const early = await screen.findByText(/今日の分はまだ記録が無い/);
