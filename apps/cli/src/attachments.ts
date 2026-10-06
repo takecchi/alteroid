@@ -1,6 +1,6 @@
 import { readFile, stat, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { basename, resolve } from 'node:path';
+import { basename, resolve, sep } from 'node:path';
 import { stdout } from 'node:process';
 
 import {
@@ -454,7 +454,9 @@ export async function attachmentsGetCommand(
       );
     }
     // 名前は保存時に正規化済みだが、ここでも区切りを落として basename にする。
-    output = normalizeAttachmentName((await metaResponse.json()).name);
+    // `./` を前に付ける: 名前が `-` でも標準出力（`-o -`）と取り違えない（#3330）。
+    // `path.join('.', name)` は `./` を畳んで `-` に戻すので使えない。
+    output = `.${sep}${normalizeAttachmentName((await metaResponse.json()).name)}`;
   }
   // 中身は生のバイト列なので hono/client ではなく生の fetch（認証ヘッダは `target`）。
   const response = await fetch(`${target.baseUrl}/attachments/${encodeURIComponent(id)}`, {

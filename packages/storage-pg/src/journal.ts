@@ -9,6 +9,7 @@ import {
   stripNulDeep,
   noteDroppedJournalRow,
   noteDroppedJournalRowsSummary,
+  UnreadableJournalEntryError,
 } from '@alteroid/core';
 import type {
   JournalEntry,
@@ -265,7 +266,8 @@ export class PgJournalStore implements JournalStore {
       byteLength(row.entry),
     );
     noteDroppedJournalRowsSummary(dropped);
-    return null;
+    // 行は在る。「無い」（`null`）と言わない（issue #3288。fs と揃える）。
+    throw new UnreadableJournalEntryError({ id });
   }
 
   /**
