@@ -212,6 +212,22 @@ describe('JSON の口（hono/client）', () => {
     expect(list.conversations.map((c) => c.conversationId)).toEqual(['c1']);
     expect(list).toMatchObject({ scanned: 1, reachedStart: true, hiddenByLimit: 0 }); // #2585
     expect(sent[0]?.url).toContain('/conversations');
+    expect(sent[0]?.url).not.toContain('cursor');
+    expect('nextCursor' in list).toBe(false);
+
+    // 続きの頁（#3643）。継続点を query に載せ、応答の nextCursor を返す。
+    replies.push(
+      json({
+        conversations: [],
+        scanned: 1,
+        reachedStart: false,
+        hiddenByLimit: 0,
+        nextCursor: 'next-2',
+      }),
+    );
+    const more = await api.listConversations('cur-1');
+    expect(sent.at(-1)?.url).toContain('cursor=cur-1');
+    expect(more.nextCursor).toBe('next-2');
 
     replies.push(
       json({
