@@ -13468,9 +13468,12 @@ export function createCloneTools(context: ToolContext) {
         }
         // 存在しない日付（`2026-02-31` は V8 が 3/3 へずらす）や日付でない文字列（`foo 1`）を
         // 別の時刻として読んで**消す**ので、#3287 の3段で検める（#3358）。
-        if (before !== undefined && !isReadableJournalTimeBoundary(before)) {
+        // 元に戻せない一括削除なので時差も必須にする（#3482。`inbox_remove_many` の before・
+        // HTTP の `POST /archive/remove` と同じ門。#2462・#3390）。この門は内側で上の3段も通す。
+        if (before !== undefined && !isOffsetQualifiedTimeBoundary(before)) {
           return text(
-            describeUnreadableJournalTimeBoundary('before', before) + '**1件も消していない。**',
+            describeOffsetRequiredTimeBoundary('before', before, '2026-09-15T00:00:00.000Z') +
+              '**1件も消していない。**',
           );
         }
         // **issue #1720（#1651/#1689 の揃え漏れ）。**
