@@ -1513,17 +1513,29 @@ describe('閉じた分が0件のときの再検証で「記録はまだない」
     fireEvent.click(screen.getByRole('button', { name: '片付けたものも見る' }));
     await screen.findByText('完了した仕事の記録はまだない。');
 
-    // 再検証を遅らせて走らせる（フォーカス復帰・mutate と同じ経路）。
+    // 再検証の応答は試験が握る Promise で止める（実時間は待たない）。
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let held = 0;
     const inner = globalThis.fetch;
     globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      held += 1;
+      await gate;
       return inner(input, init);
     }) as typeof fetch;
-    act(() => {
+    // フォーカス復帰と同じ経路で再検証を起こし、マイクロタスクを流し切る。
+    await act(async () => {
       window.dispatchEvent(new Event('focus'));
     });
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    // 再検証が本当に走って止まっている（でなければこの試験は何も見ていない）。
+    expect(held).toBeGreaterThan(0);
 
+    expect(screen.getByText('完了した仕事の記録はまだない。')).toBeTruthy();
+    await act(async () => {
+      release();
+    });
     expect(screen.getByText('完了した仕事の記録はまだない。')).toBeTruthy();
   });
 });
