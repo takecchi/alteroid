@@ -30,6 +30,7 @@ import {
   getChatStream,
   postChat,
   uploadAttachment,
+  ApiError,
   useApi,
   useAttachmentLimits,
   type ChatStreamEvent,
@@ -93,6 +94,48 @@ interface PendingAttachment {
 /** 上げ終えた添付の id（`POST /chat` の `attachments`）。 */
 function attachmentIds(items: readonly PendingAttachment[]): string[] {
   return items.flatMap((item) => (item.meta === undefined ? [] : [item.meta.id]));
+}
+
+/**
+ * 入力欄から、送った分（`sent`）を取り除く（#3248）。**送った分だけを消し、送った後に
+ * 打ち足した分は残す。**
+ *
+ * - 今の本文が送った本文で始まる → その頭を取り除き、残りを返す（のまま同じなら `''`）
+ * - それ以外（前や途中を直した）→ **全部残す**。どこまでが送った分か決められず、
+ *   推測して削ると使い手の編集を失わせる。残して二重に送りうる側のほうが、
+ *   使い手に見えていて直せる（黙って失うほうは取り返せない）
+ */
+function withoutSentText(current: string, sent: string): string {
+  return current.startsWith(sent) ? current.slice(sent.length) : current;
+}
+
+/** 送信失敗の応答が、添付の期限切れ・欠落（400 `attachment_missing`）か。 */
+function isAttachmentMissing(error: unknown): boolean {
+  return error instanceof ApiError && error.status === 400 && error.code === 'attachment_missing';
+}
+
+/**
+ * 同じ `clientMessageId` で中身が違うと断られた（409 `client_message_id_mismatch`。#3243）か。
+ * その id はもう使えない——次の再送は新しい id で送る。
+ */
+function isClientMessageIdMismatch(error: unknown): boolean {
+  return (
+    error instanceof ApiError && error.status === 409 && error.code === 'client_message_id_mismatch'
+  );
+}
+
+/** 積んでおいた送信（`retries` の1件）と、入力欄の今の中身が同じか（本文と添付の並び）。 */
+function sameAsStashed(
+  stashed: { text: string; attachments?: PendingAttachment[] },
+  text: string,
+  attachments: readonly PendingAttachment[],
+): boolean {
+  const before = stashed.attachments ?? [];
+  return (
+    stashed.text === text &&
+    before.length === attachments.length &&
+    before.every((item, index) => item.key === attachments[index]?.key)
+  );
 }
 
 /** 画面に出す1行。届いた順に並べる。 */
@@ -621,6 +664,12 @@ export function ChatPane({
         text: string;
         supersedes?: string;
         restored?: boolean;
+        /**
+         * 積んだ中身を入力欄へ戻したか（#3247）。戻していれば、入力欄が「再送」の元になる
+         * （使い手が直したものを送る）。戻していない（失敗が届く前に使い手が新しく打ち始めていた）
+         * なら、入力欄は別の発言なので、「再送」は積んだ中身を送って入力欄には触らない。
+         */
+        inComposer?: boolean;
         attachments?: PendingAttachment[];
         /**
          * この送信に付けた `clientMessageId`（#3203）。**再送では同じ値を使う**——サーバが同じ会話で
@@ -1443,8 +1492,11 @@ export function ChatPane({
     if (restoredAttachments !== undefined) {
       setPending((current) => (current.length === 0 ? restoredAttachments : current));
     }
-    setRetries((prev) => new Map(prev).set(shownId, { ...entry, restored: true }));
-  }, [retries, shownId]);
+    // 戻せたか（入力欄が空だったか）。上の2つの更新と同じ判定を、いまの描画の値で数える。
+    const inComposer = draft === '' && (restoredAttachments === undefined || pending.length === 0);
+    setRetries((prev) => new Map(prev).set(shownId, { ...entry, restored: true, inComposer }));
+    // 戻すのは1度きり（`restored`）。`draft` / `pending` を依存に持つのは、戻せたかの判定のため。
+  }, [retries, shownId, draft, pending]);
 
   /**
    * 中断で積んだ文（`unconfirmed`）が履歴に現れたら（その `clientMessageId` を持つ人間の発言が出たら。
@@ -1491,8 +1543,8 @@ export function ChatPane({
      * `supersedes` — この追送が送信済みの人間の発言を編集したものなら、
      * 置き換える対象の日誌エントリ id（チャットのメッセージ編集、#1010）。
      * 通常の追送では渡らない。
-     * `clearOnlyIfUnchanged` — 真なら入力欄は「送った本文のままのときだけ」空にする（再送、および
-     * 添付を上げて待っていた送信。待つあいだに打ち足した分を消さない。#3215）。
+     * `clearOnlyIfUnchanged` — 真なら入力欄から「送った分」だけを取り除く（再送、および
+     * 添付を上げて待っていた送信。待つあいだに打ち足した分は残す。#3215・#3248）。
      */
     async (
       text: string,
@@ -1520,7 +1572,7 @@ export function ChatPane({
         next.delete(running.id);
         return next;
       });
-      if (clearOnlyIfUnchanged === true) setDraft((current) => (current === text ? '' : current));
+      if (clearOnlyIfUnchanged === true) setDraft((current) => withoutSentText(current, text));
       else setDraft('');
       const lineKey = showOwnLine(
         text,
@@ -1576,7 +1628,14 @@ export function ChatPane({
          */
         setFailures((prev) => new Map(prev).set(running.id, caught));
         // 投函は `open` の前に終わっている（ここへ来るのはそれだけ）。
-        giveBack(running.id, text, lineKey, supersedes, attachments, clientMessageId);
+        giveBack(
+          running.id,
+          text,
+          lineKey,
+          supersedes,
+          attachments,
+          isClientMessageIdMismatch(caught) ? newClientMessageId() : clientMessageId,
+        );
       }
     },
     [api, recordOwnMessage, showOwnLine, giveBack],
@@ -1889,6 +1948,20 @@ export function ChatPane({
         const sent = new Set(attachments.map((item) => item.key));
         // 送った分（key）だけ消す。上げているあいだに足された添付は残す（#3215）。
         setPending((current) => current.filter((item) => !sent.has(item.key)));
+        /*
+         * 上げているあいだに別の会話へ移っていたら、送った添付は移る前の会話の「しまっておいた
+         * 添付」に居る（上の `setPending` は、いま見ている会話の添えかけにしか効かない）。
+         * そちらからも外す。外さないと、元の会話へ戻ったとき、送り済みの添付が添えかけとして
+         * 現れる（#3249）。
+         */
+        setAttachmentDrafts((previous) => {
+          const kept = previous.get(shownId);
+          if (kept === undefined || !kept.some((item) => sent.has(item.key))) return previous;
+          return new Map(previous).set(
+            shownId,
+            kept.filter((item) => !sent.has(item.key)),
+          );
+        });
         setAttachNotice(undefined);
       }
 
@@ -1930,8 +2003,7 @@ export function ChatPane({
         next.delete(shownId);
         return next;
       });
-      if (retry === true || waitedForUpload)
-        setDraft((current) => (current === text ? '' : current));
+      if (retry === true || waitedForUpload) setDraft((current) => withoutSentText(current, text));
       else setDraft('');
       const lineKey = showOwnLine(
         text,
@@ -2033,7 +2105,15 @@ export function ChatPane({
           setFailures((prev) => new Map(prev).set(stream.id, caught));
           // サーバが受け取った（`open` を見た）後の失敗は、文を戻さない（二重に送らせない）。
           if (!opened) {
-            giveBack(stream.id, text, lineKey, supersedes, attachments, clientMessageId);
+            // 同じ id で中身が違うと 409 になった（#3243）なら、その id は捨てて次の再送で新しく作る。
+            giveBack(
+              stream.id,
+              text,
+              lineKey,
+              supersedes,
+              attachments,
+              isClientMessageIdMismatch(caught) ? newClientMessageId() : clientMessageId,
+            );
           }
         }
       } finally {
@@ -2078,6 +2158,43 @@ export function ChatPane({
       }
     },
     [api, shownId, navigate, recordOwnMessage, showOwnLine, followUp, createStreamWriter, giveBack],
+  );
+
+  /**
+   * **「再送」。入力欄の今の中身を送る（#3247）。** 積んでおいた文・添付（`stashed`）を
+   * そのまま送らない——戻った文を直したり添付を外したりした後に押すと、直す前の中身が
+   * 外したはずの添付つきで届き、直した文は入力欄に残って Enter で二重に届く。
+   *
+   * - 入力欄の今の中身が積んだものと同じ → 最初の `clientMessageId` で送る（サーバが
+   *   受け取り済みなら二重に受けず続きを返す。#3203）
+   * - 違う → **新しい `clientMessageId` で、今の中身を送る。** 同じ id で中身を変えると、
+   *   サーバが 409 `client_message_id_mismatch` で断る（#3243）ので、そもそも使い回さない
+   * - 入力欄が空（本文も添付も）→ 送るものが無いので、積んだものをそのまま送る
+   */
+  const resend = useCallback(
+    (stashed: {
+      text: string;
+      supersedes?: string;
+      attachments?: PendingAttachment[];
+      clientMessageId?: string;
+      inComposer?: boolean;
+    }) => {
+      // 入力欄へ戻していない（使い手が先に別の発言を打ち始めていた）なら、入力欄は別物。
+      // 積んだ中身をそのまま送り、入力欄には触らない（`send` の `retry`）。
+      if (stashed.inComposer !== true || (draft.trim() === '' && pending.length === 0)) {
+        void send(stashed.text, { ...stashed, retry: true });
+        return;
+      }
+      if (sameAsStashed(stashed, draft, pending)) {
+        void send(draft, { ...stashed, attachments: pending, retry: true });
+        return;
+      }
+      void send(draft, {
+        attachments: pending,
+        ...(stashed.supersedes === undefined ? {} : { supersedes: stashed.supersedes }),
+      });
+    },
+    [draft, pending, send],
   );
 
   /**
@@ -2647,7 +2764,7 @@ export function ChatPane({
               </span>
               <Button
                 size="sm"
-                onClick={() => void send(unconfirmedText, { ...unconfirmedEntry, retry: true })}
+                onClick={() => unconfirmedEntry !== undefined && resend(unconfirmedEntry)}
               >
                 再送
               </Button>
@@ -2681,13 +2798,18 @@ export function ChatPane({
           ) : (
             <>
               <ErrorNote error={shownFailure} />
+              {isAttachmentMissing(shownFailure) && (
+                <p role="alert" className="mt-2 text-xs text-warn">
+                  添付が期限切れか、サーバに無い。「再送」は同じ添付で送るので、添付を外して付け直してから送る。
+                </p>
+              )}
               {visibleFailure !== undefined && retries.has(shownId) && (
                 <Button
                   size="sm"
                   className="mt-2"
                   onClick={() => {
-                    const pending = retries.get(shownId);
-                    if (pending !== undefined) void send(pending.text, { ...pending, retry: true });
+                    const stashed = retries.get(shownId);
+                    if (stashed !== undefined) resend(stashed);
                   }}
                 >
                   再送

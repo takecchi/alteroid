@@ -24,6 +24,7 @@ import {
   sendMessage,
   type Listed,
 } from './chat.js';
+import { unreadMark } from './conversations.js';
 import type { Target } from './target.js';
 import { captureStdout } from './test-support.js';
 
@@ -4262,6 +4263,28 @@ describe('chat の /stop', () => {
  * `reachedStart` が偽なら「無い」ではなく「判定できない」と言う必要がある。
  */
 describe('chat の /conversations と /conversation', () => {
+  it('/conversations は未読のある会話の行に、conversations list と同じ未読の印を付ける（#3219）', async () => {
+    const read = captureStdout();
+    const row = (conversationId: string, unreadCount?: number) => ({
+      conversationId,
+      startedAt: '2026-08-16T10:00:00.000Z',
+      updatedAt: '2026-08-16T10:05:00.000Z',
+      messages: 4,
+      preview: 'p',
+      ...(unreadCount === undefined ? {} : { unreadCount }),
+    });
+    const { client } = stubClient({
+      conversations: [row('conv-unread', 3), row('conv-read', 0), row('conv-unknown')],
+    });
+
+    await runSlashCommand('/conversations', client, emptyListed());
+
+    const lines = read().split('\n');
+    expect(lines.find((l) => l.includes('conv-unread'))?.endsWith(unreadMark(3))).toBe(true);
+    expect(lines.find((l) => l.includes('conv-read'))).not.toContain('未読');
+    expect(lines.find((l) => l.includes('conv-unknown'))).not.toContain('未読');
+  });
+
   it('/conversations は一覧と、遡った件数（scanned）を出す', async () => {
     const read = captureStdout();
     const { calls, client } = stubClient({

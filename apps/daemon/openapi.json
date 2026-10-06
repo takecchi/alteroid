@@ -15611,7 +15611,7 @@
         "operationId": "getIntegrationKeys",
         "tags": ["integration-keys"],
         "summary": "連携の鍵の一覧",
-        "description": "外のサービスへ渡した連携の鍵の一覧（失効・期限切れを含む）。**値も sha256 の全体も返さない**（`fingerprint` は sha256 の先頭12桁で、見分けるためだけの値）。",
+        "description": "外のサービスへ渡した連携の鍵の一覧（失効・期限切れを含む）。**値も sha256 の全体も返さない**（`fingerprint` は sha256 の先頭12桁で、見分けるためだけの値）。行が読めない（版ずれ・手編集）鍵が在るときだけ、`rowsUnreadable`（件数と id・不正な欄名。名前などの中身は載せない）が付く。読めない行しか無いと `keys` は空だが「鍵が無い」とは限らない（読めない行の鍵は使えない）。id を `POST /integration-keys/unreadable/remove` に渡して消せる。",
         "responses": {
           "200": {
             "description": "連携の鍵の一覧。",
@@ -15711,6 +15711,32 @@
                           "limits"
                         ]
                       }
+                    },
+                    "rowsUnreadable": {
+                      "type": "object",
+                      "properties": {
+                        "count": {
+                          "type": "integer",
+                          "exclusiveMinimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "rows": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "reason": {
+                                "type": "string"
+                              }
+                            },
+                            "required": ["id", "reason"]
+                          }
+                        }
+                      },
+                      "required": ["count", "rows"]
                     }
                   },
                   "required": ["keys"]
@@ -15907,6 +15933,109 @@
         }
       }
     },
+    "/integration-keys/unreadable/remove": {
+      "post": {
+        "operationId": "postIntegrationKeysUnreadableRemove",
+        "tags": ["integration-keys"],
+        "summary": "読めない連携の鍵の行を、id を指して消す",
+        "description": "読めない（型に合わない形で入っている）連携の鍵の行だけを、id を指して消す。読める鍵には触れない。id が取れない行はこの口では消せない（`auth/integration-keys.json` を手で直す）。1つでも読めない行に無い id があれば何も消さない。消した id と件数を日誌に残す（行の中身は残さない）。",
+        "responses": {
+          "200": {
+            "description": "消した id と件数。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "removedIds": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "count": {
+                      "type": "integer",
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": ["removedIds", "count"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "入力の形が不正（何も消していない）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "指した id のうち、読めない行に無いものがあった（何も消していない。日誌も書いていない）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "日誌が書けなかった（**状態を変えていない**）か、消すのに失敗した。理由の本文は返さない。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "ids": {
+                    "minItems": 1,
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  }
+                },
+                "required": ["ids"]
+              }
+            }
+          }
+        }
+      }
+    },
     "/integration-keys/{id}/revoke": {
       "post": {
         "operationId": "postIntegrationKeysByIdRevoke",
@@ -16027,6 +16156,22 @@
           },
           "404": {
             "description": "該当する鍵が無い。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "鍵の行が読めない形で入っている（失効できない）。`POST /integration-keys/unreadable/remove` で消す。",
             "content": {
               "application/json": {
                 "schema": {

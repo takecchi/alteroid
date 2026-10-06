@@ -1,5 +1,6 @@
 import { exampleBaseUrl } from '~/lib/integration-example';
 import { SettingsTabs } from '~/components/group-tabs';
+import { UnreadableRowsNote } from '~/components/unreadable-rows-note';
 import { LoadError } from '~/components/load-error';
 import { settingsDocumentTitle } from '~/lib/nav';
 import { useNowMs } from '~/lib/use-now';
@@ -24,6 +25,7 @@ import {
   useApiContext,
   useIntegrationKeys,
   useIssueIntegrationKey,
+  useRemoveUnreadableIntegrationKeys,
   useRevokeIntegrationKey,
 } from '@alteroid/swr';
 import { formatDateTime } from '@alteroid/logic';
@@ -36,7 +38,8 @@ import type {
 /**
  * `/integrations` — 連携の鍵（外のサービスへ渡す、固定の1つの `source` で外部イベントを送る鍵。
  * #3113 段2）の一覧・発行・失効。`alteroid integration list|create|revoke` と同じ3本の口
- * （`GET`・`POST /integration-keys`、`POST /integration-keys/:id/revoke`）を打つ。経路は足していない。
+ * （`GET`・`POST /integration-keys`、`POST /integration-keys/:id/revoke`）に加え、読めない行を消す
+ * `POST /integration-keys/unreadable/remove`（#3216。`alteroid integration remove-unreadable` と同じ）を打つ。
  *
  * 特定のサービスの名前・分岐は持たない（`source` は人間が決める文字列）。
  *
@@ -77,6 +80,7 @@ const STATUS_VIEW: Record<KeyStatus, { label: string; tone: 'ok' | 'neutral' | '
 
 export default function Integrations() {
   const { data, error, isLoading, isValidating, mutate } = useIntegrationKeys();
+  const removeUnreadable = useRemoveUnreadableIntegrationKeys();
   // 値は state にだけ置く（新しいものが上。発行のたびに前の値を消さない——まだ控えていないかもしれない）。
   const [issued, setIssued] = useState<IntegrationKeyIssued[]>([]);
   // 期限切れの判定に使う（刻んで、期限が過ぎたら画面を開いたままでも「期限切れ」へ変える）。
@@ -125,10 +129,24 @@ export default function Integrations() {
               retrying={isValidating}
             />
           </div>
+          {/* 読めない行は一覧の前に言う（#3216。0件なら鍵ごと無いので何も出ない）。 */}
+          {data?.rowsUnreadable !== undefined && (
+            <UnreadableRowsNote
+              noun="連携の鍵"
+              unreadable={data.rowsUnreadable}
+              removeUnreadable={removeUnreadable}
+              hand="integration-keys.json"
+            />
+          )}
           {isLoading ? (
             <Spinner />
           ) : data === undefined ? null : data.keys.length === 0 ? (
-            <Empty>連携の鍵はまだ無い。</Empty>
+            data.rowsUnreadable !== undefined ? (
+              // 読めない行が在るので「鍵がまだ無い」とは言えない（CLI の `integration list` と同じ文言）。
+              <Empty>読めた連携の鍵は無い（連携の鍵がまだ無い、とは言えない）。</Empty>
+            ) : (
+              <Empty>連携の鍵はまだ無い。</Empty>
+            )
           ) : (
             <ul>
               {data.keys.map((key) => (
