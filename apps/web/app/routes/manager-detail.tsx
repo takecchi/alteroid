@@ -1532,7 +1532,7 @@ function PermissionWaitingRow({
         </Button>
         <Button
           size="sm"
-          variant="danger"
+          // 「拒否」は取り返しのつく操作なので danger にしない（#3091）。
           loading={busy === 'deny'}
           disabled={busy === 'allow'}
           onClick={() => answer('deny')}

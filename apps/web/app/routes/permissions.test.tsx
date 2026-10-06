@@ -11,7 +11,7 @@
  * - **取り消し（`revoke`）は確認の一手を挟むまで叩かない**
  * - 取り消し済みの行には取り消しボタンが無い
  */
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -364,6 +364,18 @@ describe('/permissions 画面 — 読めない行（issue #2536）', () => {
 
     await renderPermissions();
     fireEvent.click(await screen.findByRole('button', { name: 'この行を消す' }));
+    // 押しただけでは消さない（#3091。共有部品なので permissions / access で挙動が揃う）。
+    const dialog = await screen.findByRole('alertdialog');
+    expect(dialog.textContent).toContain('元に戻せません');
+    expect(dialog.textContent).toContain('grant-bad');
+    expect(posts).toEqual([]);
+    fireEvent.click(within(dialog).getByRole('button', { name: 'やめる' }));
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+    expect(posts).toEqual([]);
+    fireEvent.click(screen.getByRole('button', { name: 'この行を消す' }));
+    fireEvent.click(
+      within(await screen.findByRole('alertdialog')).getByRole('button', { name: '消す' }),
+    );
 
     await waitFor(() => {
       expect(posts).toEqual([{ ids: ['grant-bad'] }]);
