@@ -44,10 +44,7 @@ interface ResetSummary {
   sessionLog?: number;
 }
 
-export async function resetCommand(
-  options: { yes?: boolean } = {},
-  io?: ConfirmIo,
-): Promise<void> {
+export async function resetCommand(options: { yes?: boolean } = {}, io?: ConfirmIo): Promise<void> {
   // 「取り消せません」「取り消しました」は `confirmIrreversible` が出す（二重にしない）。
   if (!(await confirmIrreversible(buildConfirmMessage(), options, io))) return;
 
