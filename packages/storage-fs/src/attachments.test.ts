@@ -1,7 +1,11 @@
 import { readdir, rm, utimes, writeFile, mkdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import { ATTACHMENT_UNBOUND_TTL_MS, verifyAttachmentStoreContract } from '@alteroid/core';
+import {
+  ATTACHMENT_UNBOUND_TTL_MS,
+  captureStderr,
+  verifyAttachmentStoreContract,
+} from '@alteroid/core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { makeTempDir } from '../../../vitest.tmpdir.js';
@@ -218,6 +222,14 @@ describe('FsAttachmentStore: bind が途中で例外を投げた回（#3592）',
     const b = await store.put({ name: 'b.png', mediaType: 'image/png', bytes: PNG });
     await breakMeta(b.id);
     vi.spyOn(store, 'unbind').mockRejectedValueOnce(new Error('EIO-rollback'));
-    await expect(store.bind([a.id, b.id], 'conv-1')).rejects.toMatchObject({ code: 'EISDIR' });
+    const lines = await captureStderr(async () => {
+      await expect(store.bind([a.id, b.id], 'conv-1')).rejects.toMatchObject({ code: 'EISDIR' });
+    });
+    // 戻せなかったことは黙らず、stderr に1行（件数・宛先の種類・理由。名前や中身は出さない）。
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain('添付の結び付けを戻せなかった');
+    expect(lines[0]).toContain('会話へ結んだ 1 件');
+    expect(lines[0]).toContain('EIO-rollback');
+    expect(lines[0]).not.toContain('a.png');
   });
 });

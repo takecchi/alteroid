@@ -1,4 +1,4 @@
-import { verifyAttachmentStoreContract } from '@alteroid/core';
+import { captureStderr, verifyAttachmentStoreContract } from '@alteroid/core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { PgAttachmentStore } from './attachments.js';
@@ -111,5 +111,46 @@ describe('PgAttachmentStore: bind が途中で例外を投げた回（#3592）',
     ).rejects.toThrow('EIO');
     expect((await real.getMeta(a.id))?.externalEventId).toBeUndefined();
     expect((await real.getMeta(b.id))?.conversationId).toBe('conv-other');
+  });
+
+  it('戻しも落ちたら、元の例外を投げ、戻せなかったことを stderr へ1行残す', async () => {
+    const real = new PgAttachmentStore(client.withLogger({ logQuery: () => undefined }));
+    const a = await real.put({ name: 'a.png', mediaType: 'image/png', bytes: PNG });
+    const b = await real.put({ name: 'b.png', mediaType: 'image/png', bytes: PNG });
+    await real.bind([b.id], 'conv-other');
+    const db = client.withLogger({ logQuery: () => undefined });
+    let updates = 0;
+    const failing = new Proxy(db, {
+      get(target, prop) {
+        if (prop === 'select') {
+          return () => ({
+            from: () => ({ where: () => Promise.reject(new Error('EIO')) }),
+          });
+        }
+        if (prop === 'update') {
+          // 1回目（結ぶ UPDATE）は通し、2回目（戻しの UPDATE）は落とす。
+          updates += 1;
+          if (updates > 1) {
+            return () => ({
+              set: () => ({
+                where: () => ({ returning: () => Promise.reject(new Error('EIO-rollback')) }),
+              }),
+            });
+          }
+        }
+        const value = Reflect.get(target, prop, target) as unknown;
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+    const lines = await captureStderr(async () => {
+      await expect(
+        new PgAttachmentStore(failing).bindToExternalEvent([a.id, b.id], 'ev-1'),
+      ).rejects.toThrow('EIO');
+    });
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain('添付の結び付けを戻せなかった');
+    expect(lines[0]).toContain('外部イベントへ結んだ 1 件');
+    expect(lines[0]).toContain('EIO-rollback');
+    expect(lines[0]).not.toContain('a.png');
   });
 });
