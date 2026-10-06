@@ -1169,7 +1169,8 @@ function OpenRow({
   }
 
   async function submit() {
-    if (reason.trim() === '') return;
+    // Enter はボタン（`loading` で塞がる）を通らないので、送信中の門はここで持つ。
+    if (busy || reason.trim() === '') return;
     setBusy(true);
     setFailure(undefined);
     try {

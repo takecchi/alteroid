@@ -138,6 +138,12 @@ describe('添付: ファイル名', () => {
     expect(normalizeAttachmentName('日本語\u00e9.pdf')).toBe('日本語\u00e9.pdf');
   });
 
+  it('normalizeAttachmentName は冪等である: 255 単位で切った結果が空白で終わっても、もう一度通すと名前が変わらない（#3524）', () => {
+    const once = normalizeAttachmentName(`${'a'.repeat(254)} b`);
+    expect(normalizeAttachmentName(once)).toBe(once);
+    expect(once).toBe('a'.repeat(254));
+  });
+
   it('ディスク名: 200 バイトまでは触らず、超えたら拡張子を残してコードポイントの途中で切らずに丸める（#3324）', () => {
     expect(attachmentDiskName('日本語.pdf')).toBe('日本語.pdf');
     const long = attachmentDiskName(`${'あ'.repeat(100)}.pdf`);

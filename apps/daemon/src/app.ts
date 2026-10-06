@@ -1015,12 +1015,24 @@ const archiveRemoveQuery = z.object({
   overrideReason: z.string().optional(),
 });
 const managerMessageBody = z.object({
-  text: z.string().min(1),
+  // **「空」は NUL を落とした後で見る**（#3461）。マネージャーのストアは NUL を落とすので、
+  // 落とす前の長さで見ると NUL だけの text が空の追加指示として届く。
+  text: z
+    .string()
+    .min(1)
+    .refine((value) => stripNul(value).length > 0),
   /** 許可確認への回答なら付ける。複数を待っているときは省略できない。 */
   requestId: z.string().min(1).optional(),
   decision: z.enum(['allow', 'deny']).optional(),
 });
-const abortBody = z.object({ reason: z.string().min(1).optional() });
+const abortBody = z.object({
+  // NUL だけの reason は、止めた後の文言と日誌の理由が空欄になるので入口で断る（#3461）。
+  reason: z
+    .string()
+    .min(1)
+    .refine((value) => stripNul(value).length > 0)
+    .optional(),
+});
 /**
  * 継続中の依頼の仕込み（人間の手からも同じことができる口）。
  *
@@ -1053,7 +1065,12 @@ const commitmentBody = z.object({
     .min(1)
     .refine((value) => stripNul(value).length > 0),
   /** どこから来たか（会話 id・issue 番号など。分かるときだけ）。 */
-  source: z.string().min(1).optional(),
+  // NUL だけの source は、ストアが NUL を落として空の source で残すので断る（Issue #3436）。
+  source: z
+    .string()
+    .min(1)
+    .refine((value) => stripNul(value).length > 0)
+    .optional(),
 });
 
 /**
