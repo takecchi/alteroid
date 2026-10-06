@@ -11,6 +11,7 @@ import {
   type ProfileState,
 } from '@alteroid/logic';
 
+import { confirmIrreversible } from './confirm.js';
 import { describeScope } from './credential.js';
 import { describeAuthFailure, forbiddenKindOf, resolveTarget, type Target } from './target.js';
 import { openEditor, readInputFile } from './input-errors.js';
@@ -284,12 +285,23 @@ export async function profileEditCommand(
   }
 }
 
-/** 1行を外す。他の行は変えない。 */
-export async function profileRemoveCommand(nameArg: string): Promise<void> {
+/**
+ * 1行を外す。他の行は変えない。**戻せない操作なので確認する**（Issue #3141。`confirm.ts`）。
+ * 行の本文（スクリプト）は外すと残らない。外す前に `profile show <名前>` で控えられる。
+ */
+export async function profileRemoveCommand(
+  nameArg: string,
+  options: { yes?: boolean } = {},
+): Promise<void> {
   const name = parseName(nameArg);
   const target = await resolveTarget();
   const profile = await fetchProfile(target);
   assertLegacySupports(profile, name);
+  const confirmed = await confirmIrreversible(
+    `プロファイルの行 ${name} を外します。行の本文は残りません（控えるなら alteroid profile show ${name}）。`,
+    options,
+  );
+  if (!confirmed) return;
   // 古いデーモンには DELETE /profile/:name が無い。default の行は全部外す口（空の PUT）へ倒す。
   const result = (await (profile.legacy
     ? request(target, '/profile', { method: 'PUT', body: JSON.stringify({ script: '' }) })
@@ -304,7 +316,13 @@ export async function profileRemoveCommand(nameArg: string): Promise<void> {
  * 全行を外す（旧来の `clear` の意味）。**旧来の全文置換の口（`PUT /profile`、空）を
  * 1回で叩く** — 行ごとに `DELETE` を並べると、途中で落ちたとき半端に残る。
  */
-export async function profileClearCommand(): Promise<void> {
+export async function profileClearCommand(options: { yes?: boolean } = {}): Promise<void> {
+  // **戻せない操作なので確認する**（Issue #3141。`confirm.ts`）。全行の本文が残らない。
+  const confirmed = await confirmIrreversible(
+    'プロファイルの全行を外します。行の本文は残りません（控えるなら alteroid profile show）。',
+    options,
+  );
+  if (!confirmed) return;
   const target = await resolveTarget();
   const result = (await request(target, '/profile', {
     method: 'PUT',

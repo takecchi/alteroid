@@ -303,9 +303,15 @@ export async function practiceSetCommand(
 /**
  * やり方を1つ消す。
  *
- * **確認を求めない**（`memory remove` と同じ理由——Web UI に確認の段が
- * 無く、CLI にだけ `--yes` を要求すると「CLI だけができないこと」を作る）。
+ * **確認を求めない（Issue #3141 で、戻せるかを見直したうえで残した）。** `memory remove` と違い、
+ * やり方は**版の履歴が消した後も残る**（`PracticeStore.remove` の doc、#1309）ので、
+ * `practice history <slug>` と `practice show <slug> --version <n>` で本文を読み、
+ * `practice set` で作り直せる。戻せない操作にだけ確認を足す方針（`confirm.ts`）なので、ここには足さない。
  * 消した事実は日誌に残る。
+ *
+ * **経緯: かつての理由は「Web UI に確認の段が無く、CLI にだけ `--yes` を要求すると
+ * 『CLI だけができないこと』を作る」だった。** Web が確認を挟んだ今、その理由は偽であり、
+ * 確認を省く根拠は「履歴から戻せる」に置き換えた。**履歴ごと消える`reset` は別で、確認がある。**
  *
  * **失敗は例外で上へ通す（＝終了コードが 0 でなくなる）。** `memory.ts` の
  * `memoryRemoveCommand` と同じ理由（#1621 / #1641）。

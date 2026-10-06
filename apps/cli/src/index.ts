@@ -536,9 +536,10 @@ accessCommand
 accessCommand
   .command('revoke <accountId>')
   .addHelpText('after', HELP_EXAMPLES.accessRevoke)
-  .description('alteroid を使う許可を取り消す')
-  .action(async (accountId: string) => {
-    await accessRevokeCommand(accountId);
+  .description('alteroid を使う許可を取り消す（取り消せない。既定は対話で確認する）')
+  .option('--yes', '確認を飛ばす（スクリプト・CI 向け）')
+  .action(async (accountId: string, options: { yes?: boolean }) => {
+    await accessRevokeCommand(accountId, options);
   });
 
 accessCommand
@@ -603,9 +604,10 @@ permissionCommand
 
 permissionCommand
   .command('revoke <id>')
-  .description('許可を取り消す（次の Bash 呼び出しから効く）')
-  .action(async (id: string) => {
-    await permissionRevokeCommand(id);
+  .description('許可を取り消す（次の Bash 呼び出しから効く。取り消せない。既定は対話で確認する）')
+  .option('--yes', '確認を飛ばす（スクリプト・CI 向け）')
+  .action(async (id: string, options: { yes?: boolean }) => {
+    await permissionRevokeCommand(id, options);
   });
 
 /**
@@ -654,12 +656,13 @@ memoryCommand
 
 memoryCommand
   .command('remove <slug>')
-  .description('記憶を1つ消す（消した事実は日誌に残る）')
+  .description('記憶を1つ消す（消した事実は日誌に残るが、本文は戻らない。既定は対話で確認する）')
   .option(
     '--if-match <version>',
     '読んだ版（memory show が stderr に出す版）。いまの版と違えば消さずに失敗する。省略すると消す直前に読んだ版で照合する',
   )
-  .action(async (slug: string, options: { ifMatch?: string }) => {
+  .option('--yes', '確認を飛ばす（スクリプト・CI 向け）')
+  .action(async (slug: string, options: { ifMatch?: string; yes?: boolean }) => {
     await memoryRemoveCommand(slug, options);
   });
 
@@ -795,16 +798,18 @@ profileCommand
 
 profileCommand
   .command('rm <名前>')
-  .description('1行を外す（他の行は変えない）')
-  .action(async (name: string) => {
-    await profileRemoveCommand(name);
+  .description('1行を外す（他の行は変えない。取り消せない。既定は対話で確認する）')
+  .option('--yes', '確認を飛ばす（スクリプト・CI 向け）')
+  .action(async (name: string, options: { yes?: boolean }) => {
+    await profileRemoveCommand(name, options);
   });
 
 profileCommand
   .command('clear')
-  .description('全行を外す')
-  .action(async () => {
-    await profileClearCommand();
+  .description('全行を外す（取り消せない。既定は対話で確認する）')
+  .option('--yes', '確認を飛ばす（スクリプト・CI 向け）')
+  .action(async (options: { yes?: boolean }) => {
+    await profileClearCommand(options);
   });
 
 /**
@@ -846,15 +851,17 @@ mcpCommand
   .addHelpText('after', HELP_EXAMPLES.mcpSet)
   .description('.mcp.json（{ "mcpServers": { … } }）の内容で丸ごと置き換える')
   .argument('<file>', '読み込むファイル（- で標準入力）')
-  .action(async (file: string) => {
-    await mcpSetCommand(file);
+  .option('--yes', '確認を飛ばす（スクリプト・CI 向け）')
+  .action(async (file: string, options: { yes?: boolean }) => {
+    await mcpSetCommand(file, options);
   });
 
 mcpCommand
   .command('clear')
-  .description('登録を全部外す')
-  .action(async () => {
-    await mcpClearCommand();
+  .description('登録を全部外す（取り消せない。既定は対話で確認する）')
+  .option('--yes', '確認を飛ばす（スクリプト・CI 向け）')
+  .action(async (options: { yes?: boolean }) => {
+    await mcpClearCommand(options);
   });
 
 /**
@@ -910,9 +917,10 @@ credentialCommand
 
 credentialCommand
   .command('remove <名前>')
-  .description('1つ外す（runner の器からも消す）')
-  .action(async (name: string) => {
-    await credentialRemoveCommand(name);
+  .description('1つ外す（runner の器からも消す。取り消せない。既定は対話で確認する）')
+  .option('--yes', '確認を飛ばす（スクリプト・CI 向け）')
+  .action(async (name: string, options: { yes?: boolean }) => {
+    await credentialRemoveCommand(name, options);
   });
 
 /**
@@ -950,9 +958,10 @@ tokenCommand
 
 tokenCommand
   .command('remove <id>')
-  .description('トークンを1本消す')
-  .action(async (id: string) => {
-    await tokenRemoveCommand(id);
+  .description('トークンを1本消す（取り消せない。既定は対話で確認する）')
+  .option('--yes', '確認を飛ばす（スクリプト・CI 向け）')
+  .action(async (id: string, options: { yes?: boolean }) => {
+    await tokenRemoveCommand(id, options);
   });
 
 tokenCommand

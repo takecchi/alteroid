@@ -6,6 +6,7 @@ import { stdin, stdout } from 'node:process';
 import { createClient, type DaemonClient } from './client.js';
 import { formatElapsedAgo, withErrorReason } from './format.js';
 import { describeAuthFailure, resolveTarget, type Target } from './target.js';
+import { confirmIrreversible } from './confirm.js';
 import { openEditor, readInputFile } from './input-errors.js';
 
 /**
@@ -366,9 +367,15 @@ export async function memorySetCommand(
 /**
  * 記憶を1つ消す。
  *
- * **確認を求めない。** Web には確認の段が無く（ボタン1つで消える）、CLI にだけ
- * `--yes` を要求すると「CLI だけができないこと」を作る。消した事実は日誌に残るので、
- * 記憶から消えても記録からは消えない（`DELETE /memory/:slug` の description）。
+ * **戻せない操作なので確認する（Issue #3141）。** 端末なら対話で `yes` を求め、
+ * `--yes` で省ける。端末でなく `--yes` も無ければ実行せず断る（`confirm.ts`）。
+ * 日誌に残るのは消した事実と大きさ（`bytesBefore`）だけで、本文は残らず、記憶には版の履歴も
+ * 無い（`apps/daemon/src/app.ts` の `DELETE /memory/:slug`）。
+ *
+ * **経緯: かつてはここに「確認を求めない。Web には確認の段が無く（ボタン1つで消える）、
+ * CLI にだけ `--yes` を要求すると『CLI だけができないこと』を作る」と書いていた。** その後 Web が
+ * `ConfirmDialog`（#2781）を挟んだので前提が偽になり、CLI の側が確認の無い入口として
+ * 残っていた（入口の等価性。#3141）。
  *
  * **失敗は例外で上へ通す（＝終了コードが 0 でなくなる）。** 書き込み系（消す
  * 操作）なので、`reset.ts` / `access.ts` / `token.ts` / `alteroid interrupt`
@@ -394,11 +401,19 @@ export async function memorySetCommand(
  */
 export async function memoryRemoveCommand(
   slug: string,
-  options: { ifMatch?: string } = {},
+  options: { ifMatch?: string; yes?: boolean } = {},
 ): Promise<void> {
   const conn = await connect('write');
   if (conn === null) return;
   const { client, target } = conn;
+  if (
+    !(await confirmIrreversible(
+      `記憶 ${slug} を消します。本文は戻りません（日誌には消した事実と大きさだけが残ります）。`,
+      options,
+    ))
+  ) {
+    return;
+  }
   // **`--if-match` があれば、それだけで照合する**（Issue #2919）。人間が判断の根拠にしたのは
   // `memory show` で読んだ内容なので、消す直前に読み直した版へ差し替えない。
   // 無ければ、消す直前に読んだ版を前提にする（上の段落）。

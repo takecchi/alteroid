@@ -3,6 +3,7 @@ import { stdin, stdout } from 'node:process';
 import { CREDENTIAL_NAME } from '@alteroid/core/cli-light';
 
 import { describeAuthFailure, forbiddenKindOf, resolveTarget, type Target } from './target.js';
+import { confirmIrreversible } from './confirm.js';
 import { redactError } from './redact.js';
 import { readInputFile } from './input-errors.js';
 
@@ -160,7 +161,14 @@ export async function credentialSetCommand(
   reportRunners(view);
 }
 
-export async function credentialRemoveCommand(name: string): Promise<void> {
+/**
+ * 環境変数を1つ外す。**戻せない操作なので確認する**（Issue #3141。`confirm.ts`）。値は
+ * `credential list` にも出ず（指紋だけ）、外すと正本から消える。戻すには元の値が要る。
+ */
+export async function credentialRemoveCommand(
+  name: string,
+  options: { yes?: boolean } = {},
+): Promise<void> {
   const target = await resolveTarget();
   const current = (await request(target, '/credentials')) as CredentialsView;
   if (!current.credentials.some((entry) => entry.name === name)) {
@@ -173,6 +181,12 @@ export async function credentialRemoveCommand(name: string): Promise<void> {
     );
     return;
   }
+
+  const confirmed = await confirmIrreversible(
+    `環境変数 ${name} を外します。値は読み出せないので、戻すには元の値が要ります（runner の器からも消えます）。`,
+    options,
+  );
+  if (!confirmed) return;
 
   // 空文字が「外す」である（`PUT /credentials` の doc）。
   const view = (await put(target, [{ name, value: '' }])) as CredentialsUpdateView;

@@ -7,6 +7,7 @@ import {
 } from '@alteroid/core/cli-light';
 import type { PermissionGrant } from '@alteroid/core';
 
+import { confirmIrreversible } from './confirm.js';
 import { createClient } from './client.js';
 import { describeUnreadableRowsList, withErrorReason } from './format.js';
 import { describeAuthFailure, resolveTarget } from './target.js';
@@ -115,7 +116,20 @@ export async function permissionListCommand(options: PermissionListOptions = {})
   stdout.write('\n');
 }
 
-export async function permissionRevokeCommand(id: string): Promise<void> {
+/**
+ * 許可を取り消す。**確認する**（Issue #3141。`confirm.ts`）。取り消しを元に戻す口は無い
+ * （`PermissionGrantStore` に取り消しを外す操作が無く、許可は `request_permission` の
+ * 承認でしか増えない）。同じ許可がほしければ、クローンに頼み直して承認し直す。
+ */
+export async function permissionRevokeCommand(
+  id: string,
+  options: { yes?: boolean } = {},
+): Promise<void> {
+  const confirmed = await confirmIrreversible(
+    `許可 ${id} を取り消します。元に戻す口は無く、同じ許可は、クローンに頼み直して承認し直すまで戻りません。`,
+    options,
+  );
+  if (!confirmed) return;
   const target = await resolveTarget();
   // 未ログインの note も例外にする（#2456、クローン teto の判断 2026-09-30）。
   // 何もせず 0 で返すと「取り消した」と誤読される。読み取り系（一覧）は今のまま。
