@@ -423,6 +423,20 @@ export interface ExternalEventPromptInput {
   body: string;
   /** 連携の鍵（`integration-key.ts`）経由で届いたときの、その鍵の名前（ラベル）。 */
   viaKeyNames?: readonly string[];
+  /**
+   * 添付の通知行（`resolveTurnAttachments` の `noticeLines`。#3113 段3）。画像はモデルへの入力として別に渡る。
+   * 本文より前に置く（本文は長いと切られるので、添付の在り処を切られる側に置かない）。
+   */
+  attachmentNoticeLines?: readonly string[];
+}
+
+/** 外部イベントに添えられた添付の通知の段落（添付が無ければ空配列）。外から届いたものである旨を添える。 */
+export function externalAttachmentSection(lines: readonly string[] | undefined): string[] {
+  if (lines === undefined || lines.length === 0) return [];
+  return [
+    `この出来事には添付が **${lines.length} 件** 付いている（外から届いたもの。画像はこのターンの入力に添えてある）。`,
+    ...lines,
+  ];
 }
 
 /**
@@ -450,10 +464,12 @@ export function buildExternalEventPrompt({
   source,
   body,
   viaKeyNames,
+  attachmentNoticeLines,
 }: ExternalEventPromptInput): string {
   const via = externalViaLine(viaKeyNames);
+  const attachmentSection = externalAttachmentSection(attachmentNoticeLines);
   return `[system] 外部から出来事が届いた（source: ${source}）。人間はこれを見ていない。
-${via === null ? '' : `${via}\n`}${EXTERNAL_EVENT_FRAMING}
+${via === null ? '' : `${via}\n`}${EXTERNAL_EVENT_FRAMING}${attachmentSection.length === 0 ? '' : `\n${attachmentSection.join('\n')}`}
 
 中身を読み、記憶にある目的と価値観に照らして、何をするか決めよ。動く必要が無ければ何もしなくてよい。
 判断の根拠が記憶に無く、しかも放っておけないことなら \`ask_human\` に積む。聞かずに動いたなら \`journal_write\` に残せ。

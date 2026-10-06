@@ -5,6 +5,7 @@ import {
   prepareAttachment,
   readAttachmentLimits,
   type AttachmentBindResult,
+  type AttachmentBindTarget,
   type AttachmentMeta,
   type AttachmentPutInput,
   type AttachmentStore,
@@ -24,6 +25,7 @@ const META_COLUMNS = {
   name: attachments.name,
   size: attachments.size,
   conversationId: attachments.conversationId,
+  externalEventId: attachments.externalEventId,
   uploadedBy: attachments.uploadedBy,
   createdAt: attachments.createdAt,
   expiresAt: attachments.expiresAt,
@@ -36,6 +38,7 @@ interface MetaRow {
   name: string;
   size: number | string;
   conversationId: string | null;
+  externalEventId: string | null;
   uploadedBy: string | null;
   createdAt: Date | string;
   expiresAt: Date | string;
@@ -49,6 +52,7 @@ function toMeta(row: MetaRow): AttachmentMeta {
     size: toNumber(row.size),
     sha256: row.sha256,
     ...(row.conversationId === null ? {} : { conversationId: row.conversationId }),
+    ...(row.externalEventId === null ? {} : { externalEventId: row.externalEventId }),
     ...(row.uploadedBy === null ? {} : { uploadedBy: row.uploadedBy }),
     createdAt: toIso(row.createdAt),
     expiresAt: toIso(row.expiresAt),
@@ -81,6 +85,7 @@ export class PgAttachmentStore implements AttachmentStore {
       size: meta.size,
       bytes: Buffer.from(input.bytes),
       conversationId: meta.conversationId ?? null,
+      externalEventId: meta.externalEventId ?? null,
       uploadedBy: meta.uploadedBy ?? null,
       createdAt: new Date(meta.createdAt),
       expiresAt: new Date(meta.expiresAt),
@@ -110,17 +115,44 @@ export class PgAttachmentStore implements AttachmentStore {
 
   async bind(ids: readonly string[], conversationId: string): Promise<AttachmentBindResult> {
     assertNoNul('conversationId', conversationId);
+    return this.#bindTo(ids, { conversationId });
+  }
+
+  async bindToExternalEvent(
+    ids: readonly string[],
+    eventId: string,
+  ): Promise<AttachmentBindResult> {
+    assertNoNul('eventId', eventId);
+    return this.#bindTo(ids, { externalEventId: eventId });
+  }
+
+  /** 結び付け先は会話か外部イベントのどちらか1つ（`canBindAttachmentTo` と同じ規則を SQL で書く）。 */
+  async #bindTo(ids: readonly string[], target: AttachmentBindTarget): Promise<AttachmentBindResult> {
     const queryable = [...new Set(ids.filter((id) => !hasNul(id)))];
     const bound = new Set<string>();
     const conflicts = new Set<string>();
     if (queryable.length > 0) {
       const updated = await this.#db
         .update(attachments)
-        .set({ conversationId })
+        .set(target)
         .where(
           and(
             inArray(attachments.id, queryable),
-            or(isNull(attachments.conversationId), eq(attachments.conversationId, conversationId)),
+            'conversationId' in target
+              ? and(
+                  isNull(attachments.externalEventId),
+                  or(
+                    isNull(attachments.conversationId),
+                    eq(attachments.conversationId, target.conversationId),
+                  ),
+                )
+              : and(
+                  isNull(attachments.conversationId),
+                  or(
+                    isNull(attachments.externalEventId),
+                    eq(attachments.externalEventId, target.externalEventId),
+                  ),
+                ),
           ),
         )
         .returning({ id: attachments.id });
@@ -148,7 +180,11 @@ export class PgAttachmentStore implements AttachmentStore {
       .where(
         or(
           lte(attachments.expiresAt, now),
-          and(isNull(attachments.conversationId), lte(attachments.createdAt, unboundBefore)),
+          and(
+            isNull(attachments.conversationId),
+            isNull(attachments.externalEventId),
+            lte(attachments.createdAt, unboundBefore),
+          ),
         ),
       )
       .returning({ id: attachments.id });

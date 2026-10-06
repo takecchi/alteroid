@@ -1,14 +1,17 @@
 import {
+  canBindAttachmentTo,
   isAttachmentPrunable,
   prepareAttachment,
   readAttachmentLimits,
   type AttachmentBindResult,
+  type AttachmentBindTarget,
   type AttachmentMeta,
   type AttachmentPutInput,
   type AttachmentStore,
   type AttachmentStoreOptions,
 } from './attachment.js';
 import { assertNoNul, hasNul } from './nul-guard.js';
+
 
 /** インメモリの添付置き場（テストと `createMemoryStores()` 用。契約は `attachment-contract.ts`）。 */
 export class MemoryAttachmentStore implements AttachmentStore {
@@ -39,6 +42,22 @@ export class MemoryAttachmentStore implements AttachmentStore {
 
   async bind(ids: readonly string[], conversationId: string): Promise<AttachmentBindResult> {
     assertNoNul('conversationId', conversationId);
+    return this.#bindTo(ids, { conversationId });
+  }
+
+  async bindToExternalEvent(
+    ids: readonly string[],
+    eventId: string,
+  ): Promise<AttachmentBindResult> {
+    assertNoNul('eventId', eventId);
+    return this.#bindTo(ids, { externalEventId: eventId });
+  }
+
+  /** 結び付け先は会話か外部イベントのどちらか1つ。同じ宛先なら冪等、別の宛先なら conflict。 */
+  #bindTo(
+    ids: readonly string[],
+    target: AttachmentBindTarget,
+  ): AttachmentBindResult {
     const bound: string[] = [];
     const missing: string[] = [];
     const conflicts: string[] = [];
@@ -46,13 +65,10 @@ export class MemoryAttachmentStore implements AttachmentStore {
       const row = hasNul(id) ? undefined : this.#rows.get(id);
       if (row === undefined) {
         missing.push(id);
-      } else if (
-        row.meta.conversationId !== undefined &&
-        row.meta.conversationId !== conversationId
-      ) {
+      } else if (!canBindAttachmentTo(row.meta, target)) {
         conflicts.push(id);
       } else {
-        row.meta = { ...row.meta, conversationId };
+        row.meta = { ...row.meta, ...target };
         bound.push(id);
       }
     }

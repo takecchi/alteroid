@@ -649,6 +649,19 @@ const eventBody = z.object({
   /** 何から届いたか。クローンが判断の手がかりにする。 */
   source: z.string().min(1),
   payload: z.unknown().optional(),
+  /**
+   * この出来事に添える添付の id（`POST /attachments` が返した id。#3113 段3）。形だけをここで見る。
+   * 個数・合計・存在・結び付き・上げた主体の検査はハンドラが持つ（`chatBody.attachments` と同じ作法）。
+   */
+  attachments: z.array(z.string().min(1)).optional(),
+});
+/**
+ * `POST /events/:source` の添付（#3113 段3）。本文まるごとが payload なので、添付の id はクエリで運ぶ
+ * （`?attachments=<id>&attachments=<id>`。1つなら文字列、複数なら配列で届く）。空の値は無いものとして扱う
+ * （この欄が入る前から `?attachments=` を付けていた呼び手を壊さない）。
+ */
+const eventSourceQuery = z.object({
+  attachments: z.union([z.string(), z.array(z.string())]).optional(),
 });
 /**
  * `beforeDate` / `beforeAt`（issue #432）。**可視の複合キーでページングする
@@ -1299,6 +1312,30 @@ function noBodyPostRequestBody(description: string) {
     description,
     // 中身は縛らない（free-form）。ここで伝えたいのは形ではなく content-type である。
     content: { 'application/json': { schema: {} } },
+  };
+}
+
+
+/**
+ * 外部イベントに添付を付けたときの断り（`POST /events` と `POST /events/:source`。#3113 段3）。
+ * **断ったらイベントは投函しない**（添付を黙って落として本文だけ送らない）。
+ */
+function eventAttachmentResponses() {
+  return {
+    400: {
+      description:
+        '本文が JSON として不正。または添付を付けられない（`code`: `attachment_missing`＝無い・期限切れ、' +
+        '`attachment_conflict`＝すでに別の会話・外部イベントに結び付いている、' +
+        '`attachment_forbidden`＝連携の鍵が、その鍵自身が上げていない添付を付けようとした、' +
+        '`too_many`＝個数の上限超え）。いずれもイベントは投函されない。',
+      content: { 'application/json': { schema: resolver(attachmentErrorResponseSchema) } },
+    },
+    413: {
+      description:
+        '連携の鍵の本文の上限（既定 1 MiB。連携の鍵でだけ。`POST /attachments` には掛からない）を超えた。' +
+        'または添付の合計の上限超え（`code`: `total_too_large`）。',
+      content: { 'application/json': { schema: resolver(attachmentErrorResponseSchema) } },
+    },
   };
 }
 
@@ -2066,6 +2103,119 @@ export function createApp(deps: AppDeps) {
   /** `POST /attachments` の本文の上限。1つぶんの最大値（画像と、それ以外のファイルの大きいほう）。 */
   const attachmentBodyMax = Math.max(attachmentLimits.maxImageBytes, attachmentLimits.maxFileBytes);
 
+  /**
+   * **外部イベントに添える添付を検証して結び付ける**（#3113 段3）。`clone.post` の**前**に呼び、`ok: false` なら
+   * イベントを投函しない（添付を黙って落として本文だけ送る、をしない）。`POST /chat` の添付の検査と同じ順
+   * （個数 → 存在 → 合計 → 結び付き → `bind`）で、**連携の鍵のときだけ「同じ鍵が上げたもの」に絞る**
+   * （`uploadedBy` が `integration:<keyId>` でなければ `attachment_forbidden`。別の鍵・アカウント・operator が
+   * 上げたもの、別の source の鍵のものを、この鍵の送信に付けさせない）。人間・operator は `/chat` と同じで
+   * 上げた主体を問わない。**`/chat` のハンドラとは重複している**（後で共通化できる。ATTACH の作業と衝突させないため
+   * 意図的に抜き出していない）。
+   */
+  async function bindEventAttachments(
+    attachmentIds: readonly string[] | undefined,
+    eventId: string,
+    principal: Principal,
+  ): Promise<
+    | { ok: true; refs: AttachmentRef[] }
+    | {
+        ok: false;
+        status: 400 | 413;
+        body: {
+          error: string;
+          code:
+            | 'attachment_missing'
+            | 'attachment_conflict'
+            | 'attachment_forbidden'
+            | AttachmentRejectedError['code'];
+        };
+      }
+  > {
+    if (attachmentIds === undefined || attachmentIds.length === 0) return { ok: true, refs: [] };
+    const ids = [...new Set(attachmentIds)];
+    try {
+      validateAttachmentBatch(
+        ids.map(() => 0),
+        attachmentLimits,
+      );
+      const metas = await Promise.all(ids.map((id) => stores.attachments.getMeta(id)));
+      const missing = ids.filter((_, index) => metas[index] === undefined);
+      if (missing.length > 0) {
+        return {
+          ok: false,
+          status: 400,
+          body: {
+            error: `添付が見つからない（期限切れの可能性）: ${missing.join(', ')}`,
+            code: 'attachment_missing',
+          },
+        };
+      }
+      const found = metas.filter((meta) => meta !== undefined);
+      validateAttachmentBatch(
+        found.map((meta) => meta.size),
+        attachmentLimits,
+      );
+      if (principal.kind === 'integration') {
+        const mine = uploaderOf(principal);
+        const foreign = found.filter((meta) => meta.uploadedBy !== mine);
+        if (foreign.length > 0) {
+          return {
+            ok: false,
+            status: 400,
+            body: {
+              error: `この連携の鍵が上げた添付だけを付けられる: ${foreign.map((m) => m.id).join(', ')}`,
+              code: 'attachment_forbidden',
+            },
+          };
+        }
+      }
+      const elsewhere = found.filter(
+        (meta) => meta.conversationId !== undefined || meta.externalEventId !== undefined,
+      );
+      const conflict = (list: readonly string[]) =>
+        ({
+          ok: false,
+          status: 400,
+          body: {
+            error: `すでに別の宛先に結び付いた添付は使えない: ${list.join(', ')}`,
+            code: 'attachment_conflict',
+          },
+        }) as const;
+      if (elsewhere.length > 0) return conflict(elsewhere.map((m) => m.id));
+      const bound = await stores.attachments.bindToExternalEvent(ids, eventId);
+      if (bound.missing.length > 0) {
+        return {
+          ok: false,
+          status: 400,
+          body: {
+            error: `添付が見つからない（期限切れの可能性）: ${bound.missing.join(', ')}`,
+            code: 'attachment_missing',
+          },
+        };
+      }
+      if (bound.conflicts.length > 0) return conflict(bound.conflicts);
+      return {
+        ok: true,
+        refs: found.map((meta) => ({
+          id: meta.id,
+          name: meta.name,
+          mediaType: meta.mediaType,
+          size: meta.size,
+          sha256: meta.sha256,
+        })),
+      };
+    } catch (error) {
+      if (error instanceof AttachmentRejectedError) {
+        return {
+          ok: false,
+          status: error.code === 'too_many' ? 400 : 413,
+          body: { error: reasonOf(error), code: error.code },
+        };
+      }
+      throw error;
+    }
+  }
+
   // --- 稼働の地図 ---------------------------------------------------------
   // 線の活動は日誌の追記から数える。**日誌の流れが配線されていなければ線は空のまま**
   // （流れていないのではなく、観測していない）。購読はデーモンが起きている間ずっと
@@ -2347,9 +2497,12 @@ export function createApp(deps: AppDeps) {
    * 1. 未知・失効・期限切れは **401**。
    * 2. 通すのは `POST /events`（本文の source が鍵の source と一致するときだけ。本文を読むハンドラが判定し、
    *    不一致は 403）と `POST /events/:source`（パスが一致するときだけ）。**不一致も、それ以外のすべての口
-   *    （鍵の管理の口を含む）も 403。**
-   * 3. 鍵ごとの回数（メモリ上の固定窓）を超えたら **429** と `Retry-After`。
-   * 4. 本文が鍵の `maxBodyBytes` を超えたら **413**。
+   *    （鍵の管理の口を含む）も 403。** 例外が1つ: **自分の送信に付ける添付のアップロード `POST /attachments`**
+   *    （#3113 段3。添付の読み出しは通さない）。
+   * 3. 鍵ごとの回数（メモリ上の固定窓）を超えたら **429** と `Retry-After`（アップロードも1回に数える）。
+   * 4. 本文が鍵の `maxBodyBytes` を超えたら **413**。**`/events*` にだけ掛ける**（添付のアップロードには
+   *    掛けず、添付の上限 `attachmentBodyMax` とストアの検証に任せる。1 MiB 超の画像を上げられないと
+   *    添付の意味が無いため）。
    *
    * **断った試み（401/403/413/429）は日誌に書かず、デーモンのログへ**（鍵の値は出さない）。
    */
@@ -2378,12 +2531,13 @@ export function createApp(deps: AppDeps) {
       source: key.source,
       limits,
     });
-    if (!judgeIntegrationRoute(c.req.method, c.req.path, key.source).allowed) {
+    const routeVerdict = judgeIntegrationRoute(c.req.method, c.req.path, key.source);
+    if (!routeVerdict.allowed) {
       refuse(403, 'この鍵が通れない口');
       return c.json(
         {
           error:
-            'この連携の鍵では、この操作はできない（固定の source への外部イベントだけ）' as const,
+            'この連携の鍵では、この操作はできない（固定の source への外部イベントと、それに付ける添付のアップロードだけ）' as const,
         },
         403,
       );
@@ -2396,6 +2550,11 @@ export function createApp(deps: AppDeps) {
         { error: '連携の鍵の回数の上限を超えた（Retry-After の後でやり直す）' as const },
         429,
       );
+    }
+    // 添付のアップロードの本文上限は、その口自身の `bodyLimit(attachmentBodyMax)` が持つ。
+    if (routeVerdict.via === 'attachment-upload') {
+      await next();
+      return;
     }
     return bodyLimit({
       maxSize: limits.maxBodyBytes,
@@ -5646,15 +5805,16 @@ export function createApp(deps: AppDeps) {
         summary: '外部イベントをクローンへ届ける',
         description:
           '自作ツール・ショートカット・CI からクローンへ出来事を届ける。何をするかはここで' +
-          '決めない（対応表を持った瞬間に自動化ジョブに戻る）。',
+          '決めない（対応表を持った瞬間に自動化ジョブに戻る）。' +
+          '**`attachments`（任意）— `POST /attachments` が返した id を渡すと、その添付がクローンのターンへ届く' +
+          '（画像はモデルへの入力として、すべての添付は通知行として）。** 検証と結び付けは投函の前に行い、' +
+          '断るときはイベントを投函しない。**連携の鍵（`altk_`）で送るときは、その鍵自身が' +
+          '`POST /attachments` で上げた添付だけ**付けられる（別の鍵・アカウント・operator が上げたものは 400）。' +
+          '人間・operator は `POST /chat` と同じ規則（上げた主体は問わない）。結び付いた添付は別のイベント・会話へ使い回せない。',
         responses: {
           200: {
             description: '受信箱へ積んだ。',
             content: { 'application/json': { schema: resolver(eventAcceptedResponseSchema) } },
-          },
-          400: {
-            description: '本文が JSON として不正。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
           403: {
             description:
@@ -5662,13 +5822,14 @@ export function createApp(deps: AppDeps) {
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
           ...integrationKeyEventResponses(),
+          ...eventAttachmentResponses(),
         },
       }),
       jsonBody(eventBody, (where) => ({
         error: 'source/payload の形が不正' + (where === '' ? '' : `: ${where}`),
       })),
-      (c) => {
-        const { source, payload } = c.req.valid('json');
+      async (c) => {
+        const { source, payload, attachments: attachmentIds } = c.req.valid('json');
         const principal = c.get('principal');
         // **連携の鍵は、本文の source が鍵の source と一致するときだけ通す**（不一致は 403。日誌には書かない）。
         if (principal.kind === 'integration' && source !== principal.source) {
@@ -5676,6 +5837,9 @@ export function createApp(deps: AppDeps) {
           return c.json({ error: '本文の source が、この連携の鍵の source と違う' as const }, 403);
         }
         const id = randomUUID();
+        // **投函の前に検証し、結び付ける**（弾くなら受信箱に何も積まない）。
+        const attached = await bindEventAttachments(attachmentIds, id, principal);
+        if (!attached.ok) return c.json(attached.body, attached.status);
         clone.post({
           type: 'external',
           id,
@@ -5685,6 +5849,7 @@ export function createApp(deps: AppDeps) {
           ...(principal.kind === 'integration'
             ? { via: { keyId: principal.keyId, name: principal.name } }
             : {}),
+          ...(attached.refs.length === 0 ? {} : { attachments: attached.refs }),
         });
         return c.json({ ok: true, id });
       },
@@ -5702,7 +5867,10 @@ export function createApp(deps: AppDeps) {
         description:
           '他人が形を決めている webhook 用。本文をそのまま payload として運ぶので、送り元を' +
           '改造できなくても届く（GitHub や CI からそのまま叩ける）。JSON として読めない本文は' +
-          '文字列のまま渡す。',
+          '文字列のまま渡す。' +
+          '**添付はクエリ `?attachments=<id>&attachments=<id>` で渡す**（本文は payload まるごとなので、' +
+          '`POST /events` の本文の `attachments` とは渡し方だけが違い、検証・結び付け・連携の鍵の扱いは同じ）。' +
+          'クエリを付けない既存の呼び手は何も変わらない。',
         requestBody: noBodyPostRequestBody(
           '**本文まるごとが payload になる。** 送り元が形を決めているので中身は縛らない。' +
             'JSON として読めない本文は文字列のまま渡す。`content-type: application/json` は' +
@@ -5722,11 +5890,21 @@ export function createApp(deps: AppDeps) {
           },
           ...noBodyPostResponses(),
           ...integrationKeyEventResponses(),
+          ...eventAttachmentResponses(),
         },
       }),
       deliberateClient,
+      queryParams(eventSourceQuery),
       async (c) => {
         const source = c.req.param('source');
+        const rawAttachments = c.req.valid('query').attachments;
+        const attachmentIds = (
+          rawAttachments === undefined
+            ? []
+            : Array.isArray(rawAttachments)
+              ? rawAttachments
+              : [rawAttachments]
+        ).filter((id) => id !== '');
         const principal = c.get('principal');
         // 門番がパスで判定済みだが、ルートの解釈とずれても通さないよう、ここでも突き合わせる（二重の門）。
         if (principal.kind === 'integration' && source !== principal.source) {
@@ -5741,6 +5919,8 @@ export function createApp(deps: AppDeps) {
           // JSON でなければ本文のまま渡す
         }
         const id = randomUUID();
+        const attached = await bindEventAttachments(attachmentIds, id, principal);
+        if (!attached.ok) return c.json(attached.body, attached.status);
         clone.post({
           type: 'external',
           id,
@@ -5750,6 +5930,7 @@ export function createApp(deps: AppDeps) {
           ...(principal.kind === 'integration'
             ? { via: { keyId: principal.keyId, name: principal.name } }
             : {}),
+          ...(attached.refs.length === 0 ? {} : { attachments: attached.refs }),
         });
         return c.json({ ok: true, id });
       },

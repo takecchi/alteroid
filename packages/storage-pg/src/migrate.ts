@@ -814,6 +814,8 @@ export const STATEMENTS = [
   `create index if not exists attachments_created_at_idx on attachments (created_at)`,
   // 添付を上げた主体の識別子（#3111 段1b）。null 可の列を足すだけで、既存行の意味は変わらない。
   `alter table attachments add column if not exists uploaded_by text`,
+  // 外部イベントへの結び付け先（#3113 段3）。null 可の列を足すだけで、既存行の意味は変わらない。
+  `alter table attachments add column if not exists external_event_id text`,
 ] as const;
 
 /** `ensureOpenManagerBodyIndex` が作る部分 unique 索引の名前（issue #1041）。 */
