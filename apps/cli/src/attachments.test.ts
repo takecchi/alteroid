@@ -148,6 +148,38 @@ describe('/attach から送るまで', () => {
     expect(small.count).toBe(0);
   });
 
+  it('0 バイトのファイルは先に断る（Web と同じ文。#3327）', async () => {
+    const dir = await makeTempDir('alteroid-cli-attach-empty-');
+    const empty = join(dir, 'empty.txt');
+    await writeFile(empty, '');
+    const draft = new AttachmentDraft();
+    const result = await draft.add(empty);
+    expect(result.ok ? '' : result.reason).toContain('空のファイルは添えられない');
+    expect(draft.count).toBe(0);
+  });
+
+  it('サーバの 400 empty も同じ文で出る（#3327）', async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ error: '空のファイルは添えられない', code: 'empty' }), {
+          status: 400,
+          headers: { 'content-type': 'application/json' },
+        }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    try {
+      await expect(
+        uploadAttachment(target, {
+          name: 'e.txt',
+          mediaType: 'text/plain',
+          bytes: new Uint8Array(0),
+        }),
+      ).rejects.toThrow('空のファイルは添えられない');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('MIME は拡張子の表から。分からなければ octet-stream', () => {
     expect(mediaTypeOfName('a.PNG')).toBe('image/png');
     expect(mediaTypeOfName('x.mp4')).toBe('video/mp4');

@@ -1,12 +1,28 @@
 import { AlertTriangle } from 'lucide-react';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 
 import { ApprovalEntry } from '~/components/approval-entry';
 import { isApprovalAnswered, isApprovalWithdrawn } from '~/components/approval-answer-card';
 import { ApprovalsTabs } from '~/components/group-tabs';
-import { Page, Button, Card, Empty, ErrorNote, Spinner } from '@alteroid/ui';
+import {
+  Page,
+  Button,
+  Card,
+  EMPTY_QUESTIONS_DRAFT,
+  Empty,
+  ErrorNote,
+  Spinner,
+  type ApprovalQuestionsDraft,
+} from '@alteroid/ui';
 import { useAnswerApprovals, useApprovals } from '@alteroid/swr';
-import type { PendingApproval, UnreadableApproval } from '@alteroid/logic';
+import {
+  isEmptyQuestionsDraft,
+  loadApprovalDrafts,
+  saveApprovalDrafts,
+  type ApprovalDrafts,
+  type PendingApproval,
+  type UnreadableApproval,
+} from '@alteroid/logic';
 
 /** `Record` から1つの key を落とした新しい `Record` を作る（同じ参照は返さない）。 */
 function without<T>(record: Record<string, T>, key: string): Record<string, T> {
@@ -41,7 +57,7 @@ function UnreadableApprovalNote({ unreadable }: { unreadable: UnreadableApproval
         {ids.length > 0 &&
           `（id: ${ids.join(', ')}${idsRest > 0 ? ` …ほか ${idsRest} 件は省略` : ''}）`}
         。<strong>壊れた行であって、回答済みでも取り下げ済みでもない。</strong>
-        この一覧には載っていない。
+        未回答の一覧にも、回答済みの一覧にも載っていない。
       </span>
     </div>
   );
@@ -77,23 +93,41 @@ export default function Approvals() {
   const answerApprovals = useAnswerApprovals();
 
   /**
-   * 各カードの下書き。**カードをまたいで持つのは「まとめて送る」の対象を決める
-   * ためである。** 個別の「回答する」「許可」「却下」ボタンはこの下書きを直接見て
+   * 各カードの下書き（自由記述と設問の選択）。**カードをまたいで持つのは「まとめて送る」の対象を
+   * 決めるためである。** 個別の「回答する」「許可」「却下」ボタンはこの下書きを直接見て
    * 動くので、1件ずつ内容を見て別々に答える自由はそのまま残る — まとめて送るのは
    * 「書かれた分をまとめて1回で送る」だけの追加であって、答え方を変えない。
+   *
+   * **`sessionStorage` にも写す**（issue #3295）。「回答済み」タブへ移るとこのページは unmount
+   * されるので、state だけでは書きかけが黙って消える。初期値は保存したものから読む。
    */
-  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const [drafts, setDrafts] = useState<ApprovalDrafts>(loadApprovalDrafts);
   /** 直前のまとめ送信で駄目だった id ごとの理由。カードの下に出す。 */
   const [bulkErrors, setBulkErrors] = useState<Record<string, string>>({});
   const [bulkBusy, setBulkBusy] = useState(false);
   const [bulkFailure, setBulkFailure] = useState<unknown>(undefined);
 
   function setDraft(id: string, text: string): void {
-    setDrafts((current) => ({ ...current, [id]: text }));
+    setDrafts((current) => ({
+      ...current,
+      texts: text === '' ? without(current.texts, id) : { ...current.texts, [id]: text },
+    }));
+  }
+
+  function setQuestionsDraft(id: string, draft: ApprovalQuestionsDraft): void {
+    setDrafts((current) => ({
+      ...current,
+      questions: isEmptyQuestionsDraft(draft)
+        ? without(current.questions, id)
+        : { ...current.questions, [id]: draft },
+    }));
   }
 
   function clearDraft(id: string): void {
-    setDrafts((current) => without(current, id));
+    setDrafts((current) => {
+      if (!(id in current.texts) && !(id in current.questions)) return current;
+      return { texts: without(current.texts, id), questions: without(current.questions, id) };
+    });
     setBulkErrors((current) => without(current, id));
   }
 
@@ -108,7 +142,26 @@ export default function Approvals() {
       ),
     [approvalsList],
   );
-  const pendingDrafts = Object.entries(drafts).filter(
+  /**
+   * 保存するのは、一覧から消えた id（回答済み・取り下げ）を除いたもの。**一覧を読めているときだけ**
+   * 除く（`approvalsList` が在るとき）。読み込みに失敗して空に見えるだけのときは除かない
+   * （書きかけを黙って失わせない。`approvalsList` は失敗・形の違う応答では `undefined`）。
+   */
+  const liveDrafts = useMemo<ApprovalDrafts>(() => {
+    if (approvalsList === undefined) return drafts;
+    return {
+      texts: Object.fromEntries(
+        Object.entries(drafts.texts).filter(([id]) => unansweredIds.has(id)),
+      ),
+      questions: Object.fromEntries(
+        Object.entries(drafts.questions).filter(([id]) => unansweredIds.has(id)),
+      ),
+    };
+  }, [drafts, approvalsList, unansweredIds]);
+  useEffect(() => {
+    saveApprovalDrafts(liveDrafts);
+  }, [liveDrafts]);
+  const pendingDrafts = Object.entries(drafts.texts).filter(
     ([id, text]) => text.trim() !== '' && unansweredIds.has(id),
   );
 
@@ -194,8 +247,10 @@ export default function Approvals() {
             <li key={approval.id}>
               <ApprovalEntry
                 approval={approval}
-                draft={drafts[approval.id] ?? ''}
+                draft={drafts.texts[approval.id] ?? ''}
                 onDraftChange={(text) => setDraft(approval.id, text)}
+                questionsDraft={drafts.questions[approval.id] ?? EMPTY_QUESTIONS_DRAFT}
+                onQuestionsDraftChange={(next) => setQuestionsDraft(approval.id, next)}
                 onAnswered={() => clearDraft(approval.id)}
                 bulkError={bulkErrors[approval.id]}
               />

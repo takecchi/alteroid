@@ -11,6 +11,7 @@ import {
   jobSchema,
   jobStatusSchema,
   nonBlankString,
+  stripNul,
   githubObservationInputSchema,
   journalEntrySchema,
   memoryDocumentMetaSchema,
@@ -131,6 +132,7 @@ export const attachmentErrorResponseSchema = z.object({
       'too_many',
       'total_too_large',
       'media_type_missing',
+      'empty',
       'attachment_missing',
       'attachment_conflict',
       'attachment_forbidden',
@@ -2749,6 +2751,20 @@ export const archiveRemovedResponseSchema = z.object({
 });
 
 /**
+ * 絞り込みの配列の要素（`inbox/remove` の `sources`・`archive/remove` の
+ * `sessionIds`）。**`.min(1)` は NUL を落とす前の長さで数える**ので、`'\0'` だけの
+ * 要素は空として断られず先へ流れ、ストア側（NUL を落として残す）の値の何にも
+ * 一致しない「0件」として返っていた（issue #3460）。NUL を落とした後の長さでも見る。
+ * 値そのものは書き換えない（数えるだけ）。
+ */
+const nulOnlyRejectedString = z
+  .string()
+  .min(1)
+  .refine((value) => stripNul(value).length > 0, {
+    message: 'NUL だけの値は空として断る',
+  });
+
+/**
  * `POST /archive/remove` の入力（issue #698）。`POST /inbox/remove`
  * （#972）と同じ設計を踏襲する——絞り込み・既定（`dryRun` を省略すると
  * 試算）・`reason` 必須。
@@ -2763,7 +2779,7 @@ export const archiveRemovedResponseSchema = z.object({
  * 残骸を、内容が失われることを承知の上で人間が明示的に畳むときだけ。
  */
 export const archiveRemoveManyRequestSchema = z.object({
-  sessionIds: z.array(z.string().min(1)).min(1).optional(),
+  sessionIds: z.array(nulOnlyRejectedString).min(1).optional(),
   before: z.string().min(1).optional(),
   minStoredBytes: z.number().int().min(0).optional(),
   requireContainment: z.boolean().optional(),
@@ -2929,7 +2945,7 @@ export const inboxBacklogResponseSchema = z.object({
  */
 export const inboxRemoveManyRequestSchema = z.object({
   types: z.array(z.enum(INBOX_EVENT_TYPE_ORDER)).min(1),
-  sources: z.array(z.string().min(1)).min(1).optional(),
+  sources: z.array(nulOnlyRejectedString).min(1).optional(),
   before: z.string().min(1).optional(),
   reason: nonBlankString,
   dryRun: z.boolean().optional(),

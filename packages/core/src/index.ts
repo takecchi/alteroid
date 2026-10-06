@@ -445,8 +445,10 @@ export { journalWindowCrossesHorizon } from './journal-horizon.js';
  */
 export {
   isReadableJournalTimeBoundary,
+  isOffsetQualifiedTimeBoundary,
   normalizeJournalTimeBoundary,
   describeUnreadableJournalTimeBoundary,
+  describeOffsetRequiredTimeBoundary,
 } from './journal-time.js';
 /**
  * 日誌を語で探す（`JournalQuery.q`。issue #250）ときの、照合の唯一の正本。
@@ -1502,6 +1504,7 @@ export {
   ATTACHMENT_MAX_PER_MESSAGE_ENV,
   ATTACHMENT_MAX_TOTAL_BYTES_DEFAULT,
   ATTACHMENT_MAX_TOTAL_BYTES_ENV,
+  ATTACHMENT_EMPTY_MESSAGE,
   ATTACHMENT_NAME_MAX_LENGTH,
   ATTACHMENT_RETENTION_DAYS_DEFAULT,
   ATTACHMENT_RETENTION_DAYS_ENV,

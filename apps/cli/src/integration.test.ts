@@ -277,9 +277,10 @@ describe('integration revoke', () => {
     setReply('GET', '/integration-keys', list);
     const out = captureStdout();
     const { io } = fakeIo(true, 'y');
-    await integrationRevokeCommand('k-1', { io });
+    // やめたことは例外で伝わる（入口が非 0 にする。#3450）。stdout には言わない。
+    await expect(integrationRevokeCommand('k-1', { io })).rejects.toThrow('何も変更していません');
     expect(calls()).toEqual(['GET /integration-keys']);
-    expect(out()).toContain('何も変更していません');
+    expect(out()).not.toContain('取り消しました');
   });
 
   it('端末でなく --yes も無ければ、標準入力の yes では通さず、POST せずに断る（非 0）', async () => {
@@ -399,7 +400,9 @@ describe('読めない連携の鍵の行（#3216）', () => {
 
   it('remove-unreadable: 端末で yes 以外なら POST しない。端末でなく --yes も無ければ断る（非 0）。--yes は確認を飛ばす', async () => {
     captureStdout();
-    await integrationRemoveUnreadableCommand(['bad-1'], { io: fakeIo(true, 'y').io });
+    await expect(
+      integrationRemoveUnreadableCommand(['bad-1'], { io: fakeIo(true, 'y').io }),
+    ).rejects.toThrow('取り消しました');
     expect(sent).toEqual([]);
     const noTty = fakeIo(false, 'yes');
     await expect(integrationRemoveUnreadableCommand(['bad-1'], { io: noTty.io })).rejects.toThrow(

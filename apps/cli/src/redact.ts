@@ -14,14 +14,48 @@
  */
 import { redactErrorText, redactSecretsInBody } from '@alteroid/core/redact';
 
-/** 本文（会話・委譲・承認待ち・日誌の自由文）。 */
-export function redactBody(text: string): string {
-  return redactSecretsInBody(text, undefined);
+/**
+ * 端末へ書く文字列から、端末が解釈してしまう制御文字を落とす（#3414 #3448 #3455）。
+ *
+ * 外から来た文字列（クローンの返答・ツール出力・取得した Web の中身・上流 API の文言）に
+ * `ESC [2J`（画面消去）・`ESC ] 0 ; … BEL`（タイトル書き換え）・OSC 52（クリップボード）が
+ * 入っていると、使う人の端末がそれを実行する。TUI は Ink が落とすが、CLI の `stdout.write` は落とさない。
+ *
+ * **落とすもの（SGR＝色も含めて全部）:**
+ * - ESC で始まる列: CSI（`ESC [ … 終端`）・OSC / DCS / SOS / PM / APC（`ESC ] … BEL|ST` など。中身ごと）・
+ *   その他の 2 文字以上の ESC 列（`ESC ( B` など）・単独の ESC
+ * - 8 ビット形の C1（U+0080〜U+009F）。CSI（U+009B）・OSC（U+009D）の列は中身ごと、残りは1字ずつ
+ * - C0（U+0000〜U+001F）のうち `\n`（U+000A）と `\t`（U+0009）以外。`\r`・BEL・BS・FF・VT・NUL を含む
+ * - DEL（U+007F）
+ *
+ * **`\r` は落とす。** 行頭へ戻る文字なので、同じ行の前の文字を上書きして偽の表示を作れる。
+ * CRLF の `\r\n` は `\n` になり、見た目は変わらない（この CLI は自分では `\r` を書かない）。
+ *
+ * **秘密の伏せ字との順序は「掃除が先、伏せ字が後」**（{@link redactBody}・{@link redactError}）。
+ * 伏せ字が先だと、秘密の途中へ制御文字を挟まれたとき（`ghp_aaaa` `ESC[0m` `bbbb…`）、規則に合わずに
+ * 伏せ字をすり抜け、掃除のあとで1つの秘密に繋がって端末へ出る。先に掃除すれば、伏せ字の網は
+ * 端末へ出るのと同じ文字列を見る。
+ *
+ * 冪等である（掃除済みの文字列に掛け直しても変わらない）。
+ */
+// 長い列から順に並べる。OSC / DCS 系は終端（BEL・ESC \・U+009C）まで。終端が無いものは、
+// 下の「ESC + 1 字」の規則が ESC と次の1字を落とす（残る本文は見えるだけで、実行されない）。
+const TERMINAL_CONTROL_SEQUENCES =
+  // eslint-disable-next-line no-control-regex -- 制御文字の検出そのものが目的
+  /\u001b[\]PX^_][^\u0007\u001b\u009c]*(?:\u0007|\u001b\\|\u009c)|\u001b\[[0-?]*[ -/]*[@-~]|\u009b[0-?]*[ -/]*[@-~]|\u009d[^\u0007\u001b\u009c]*(?:\u0007|\u001b\\|\u009c)|\u001b[ -/]*[0-~]|[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g;
+
+export function sanitizeForTerminal(text: string): string {
+  return text.replace(TERMINAL_CONTROL_SEQUENCES, '');
 }
 
-/** error の文。 */
+/** 本文（会話・委譲・承認待ち・日誌の自由文）。端末向けの掃除を先に通す。 */
+export function redactBody(text: string): string {
+  return redactSecretsInBody(sanitizeForTerminal(text), undefined);
+}
+
+/** error の文。端末向けの掃除を先に通す。 */
 export function redactError(text: string): string {
-  return redactErrorText(text, undefined);
+  return redactErrorText(sanitizeForTerminal(text), undefined);
 }
 
 /** `unknown` の例外・値を error の文にして伏せる（`Error` なら message）。 */

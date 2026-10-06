@@ -1,12 +1,13 @@
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { stdin, stdout } from 'node:process';
+import { stdin } from 'node:process';
+import { stderr, stdout, writeShownBody } from './terminal-out.js';
 
 import { createClient, type DaemonClient } from './client.js';
 import { withErrorReason } from './format.js';
 import { describeAuthFailure, resolveTarget, type Target } from './target.js';
-import { openEditor, readInputFile } from './input-errors.js';
+import { keepDraftOnFailure, openEditor, readInputFile } from './input-errors.js';
 
 /**
  * `alteroid practice` — 仕事のやり方を読む・書き換える・消す（#1055 段3③）。
@@ -153,12 +154,12 @@ export async function practiceShowCommand(
     throw new Error(`そんなやり方はありません: ${slug}`);
   }
   const content = found.content;
-  stdout.write(content.endsWith('\n') ? content : `${content}\n`);
+  writeShownBody(stdout, content.endsWith('\n') ? content : `${content}\n`);
   // **版は stderr へ1行（Issue #2984。`memory show` と同じ）。** stdout は本文をそのまま出す口で、
   // パイプやリダイレクトで使う人がいる（版を混ぜると本文が壊れる）。端末では両方見える。
   // 古いデーモンが `version` を返さなければ出す版が無い。
   if (found.version !== undefined) {
-    process.stderr.write(
+    stderr.write(
       `版: ${found.version}（読んだ版を前提に消すなら: alteroid practice remove ${slug} --if-match ${found.version}）\n`,
     );
   }
@@ -232,11 +233,24 @@ export async function practiceEditCommand(
   const ifMatch = current === null ? null : current.version;
   const dir = await mkdtemp(join(tmpdir(), 'alteroid-practice-'));
   const path = join(dir, `${slug}.md`);
-  // **衝突したときだけ、人間が書いた内容を含む一時ディレクトリを消さない。**
-  let keep = false;
   try {
     await writeFile(path, current?.content ?? template(slug), 'utf8');
     await openEditor(path, 'alteroid practice set <slug> --file <path>');
+  } catch (error) {
+    // まだ人間は何も書いていない（エディタが起きなかった・異常終了した）。
+    await rm(dir, { recursive: true, force: true });
+    throw error;
+  }
+  // **成功したときと「変更なし」のときだけ、一時ディレクトリを消す。** 保存の失敗（衝突以外も）は
+  // 人間が書いた内容を残し、場所と続きのやり方を言う（#3453）。衝突は下で自分で案内する。
+  // 種類と題は、いまと違う（新しいやり方や --kind / --title を渡した）ときだけ `set` へ持ち越す。
+  const shellQuote = (value: string): string => `'${value.replaceAll("'", "'\\''")}'`;
+  const resume = [
+    `alteroid practice set ${slug} --file ${path}`,
+    ...(kind === current?.kind ? [] : [`--kind ${shellQuote(kind)}`]),
+    ...(title === current?.title ? [] : [`--title ${shellQuote(title)}`]),
+  ].join(' ');
+  await keepDraftOnFailure(dir, path, resume, async (keep) => {
     const edited = await readFile(path, 'utf8');
 
     if (
@@ -256,7 +270,7 @@ export async function practiceEditCommand(
     } catch (error) {
       if (!(error instanceof PracticeConflictCliError)) throw error;
       // **人間が書いた内容を失わない。** 消さずに残し、いまの版も隣へ置いて、見比べる道具と次の手を案内する。
-      keep = true;
+      keep();
       const theirs = join(dir, `${slug}.current.md`);
       if (error.current !== null) await writeFile(theirs, error.current.content, 'utf8');
       stdout.write(
@@ -276,9 +290,7 @@ export async function practiceEditCommand(
         cause: error,
       });
     }
-  } finally {
-    if (!keep) await rm(dir, { recursive: true, force: true });
-  }
+  });
 }
 
 /**
@@ -289,7 +301,7 @@ export async function practiceEditCommand(
  */
 export async function practiceSetCommand(
   slug: string,
-  options: { file?: string; kind?: string; title?: string } = {},
+  options: { file?: string; kind?: string; title?: string; allowEmpty?: boolean } = {},
 ): Promise<void> {
   const conn = await connect('write');
   if (conn === null) return;
@@ -309,6 +321,13 @@ export async function practiceSetCommand(
     options.file === undefined || options.file === '-'
       ? await readAll()
       : await readInputFile(options.file, '--file', '--file <path>、または標準入力（-）');
+  // 空の本文は通信の前に断る（#3456。`memory set`・`profile set` と同じ線）。空にしたい人だけ `--allow-empty`。
+  if (options.allowEmpty !== true && content.trim().length === 0) {
+    throw new Error(
+      `やり方 ${slug}: 本文が空なので置き換えません（既存の本文は変えていません）。` +
+        '空にしたいときだけ --allow-empty を付けてください。',
+    );
+  }
   await write(client, target, slug, kind, title, content);
 }
 

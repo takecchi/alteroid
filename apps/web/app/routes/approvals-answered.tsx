@@ -1,9 +1,11 @@
+import { AlertTriangle } from 'lucide-react';
 import { Link } from 'react-router';
 
 import { ApprovalEntry } from '~/components/approval-entry';
 import { ApprovalsTabs } from '~/components/group-tabs';
 import { LoadError } from '~/components/load-error';
 import {
+  Button,
   Page,
   ListDetail,
   ListDetailItems,
@@ -12,9 +14,9 @@ import {
   Spinner,
   cn,
 } from '@alteroid/ui';
-import { useAnsweredApprovalDates, useApprovalsAnsweredOn } from '@alteroid/swr';
+import { useAnsweredDatesWindow, useApprovals, useApprovalsAnsweredOn } from '@alteroid/swr';
 import { formatDateTime, formatRelative, redactBody } from '@alteroid/logic';
-import type { AnsweredApprovalDate, PendingApproval } from '@alteroid/logic';
+import type { PendingApproval } from '@alteroid/logic';
 
 import type { Route } from './+types/approvals-answered';
 
@@ -23,10 +25,10 @@ export function clientLoader({ params }: Route.ClientLoaderArgs) {
 }
 
 /**
- * 左の目次に読む日数。**窓の大きさは日報（`reports.tsx` の `REPORTS_LIMIT`）と同じ 60。**
+ * 左の目次に1回で読む日数（最初の頁も「もっと古い日を読む」の1頁も同じ）。
  * `GET /approvals/answered-dates` は総数を返さない（`GET /reports` と同じ。続きが在るかは
- * `limit` 件ちょうど返ったかで判る）ので、ちょうど一致したときだけ「これより古い日が
- * あるかもしれない」と言う——黙って切り捨てない。
+ * `limit` 件ちょうど返ったかで判る）ので、ちょうど一致したときだけ「もっと古い日を読む」を出す。
+ * 読み足しは `useAnsweredDatesWindow`（`beforeDate` で続きを読み、いまの一覧の後ろへ足す）。
  */
 const DATES_LIMIT = 60;
 
@@ -49,19 +51,65 @@ const approvalHref = (date: string, id: string) => `${dayHref(date)}/${encodeURI
  * - 並びはデーモンが決める（目次は新しい日が上・件は決着の新しい順）。**ここで並べ直さない**
  * - 取れなかったのを0件と描かない（#2324 と同じ。目次・その日の件の両方）
  */
+/**
+ * 読めない承認待ちの案内（#3297）。**回答済みの指定では、デーモンは `unreadable` を載せない**
+ * （決着の日時も分からず、どの日にも置けない）ので、未回答の側の一覧から件数を取って1行だけ言う。
+ * 件数は `/approvals` の警告・ナビの札と同じ `useApprovals(true)` の `unreadable`。
+ *
+ * **取れなかったのを0件と描かない。** 読み込み中・失敗・形違いのときは何も出さない
+ * （「読めない承認は無い」とも言わない。SWR は失敗しても古い `data` を残すので、失敗を先に見る）。
+ */
+function UnreadableApprovalsPointer() {
+  const { data, error } = useApprovals(true);
+  if (error !== undefined || !Array.isArray(data?.unreadable) || data.unreadable.length === 0) {
+    return null;
+  }
+  return (
+    <div
+      role="status"
+      className="mx-4 mt-4 flex shrink-0 items-start gap-2 rounded-md border border-warn/40 bg-warn/10 px-3 py-2 text-sm text-warn md:mx-6"
+    >
+      <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden />
+      <span className="min-w-0 break-words">
+        読めない承認待ちが {data.unreadable.length} 件ある（
+        <Link to="/approvals" className="underline">
+          未回答のページで見る
+        </Link>
+        ）。壊れた行であって、回答済みでも取り下げ済みでもないので、この一覧には載らない。
+      </span>
+    </div>
+  );
+}
+
 export default function ApprovalsAnswered({ loaderData }: Route.ComponentProps) {
   const { date, approvalId } = loaderData;
-  const list = useAnsweredApprovalDates(DATES_LIMIT);
+  const {
+    first: list,
+    dates,
+    hasMore,
+    isLoadingOlder,
+    olderError,
+    loadOlder,
+  } = useAnsweredDatesWindow(DATES_LIMIT);
 
   /**
    * 形の違う応答（`dates` が配列でない）は「0件」ではなく「読めていない」へ倒す（#2308 と同じ。
    * デーモンと画面は別デプロイで版がずれうる）。
    */
-  const dates: AnsweredApprovalDate[] = Array.isArray(list.data?.dates) ? list.data.dates : [];
   const datesMalformed = list.data !== undefined && !Array.isArray(list.data.dates);
   const selectedDate = date ?? dates[0]?.date;
   /** 一覧をまだ一度も読めていないまま失敗した。失敗は上の `LoadError` が言う。 */
   const listUnavailable = (list.data === undefined && list.error !== undefined) || datesMalformed;
+  /**
+   * URL で開いた日が、読み込んだ範囲に載っていない（もっと古い日か、その日に決着した承認が無い）。
+   * その日の件は右に出る（`DayBody` は目次と独立に取る）。左で「今ここ」を示せないので、そう言う。
+   * 日報（`reports.tsx`）は黙って選択無しにしている。
+   */
+  const selectedOutsideList =
+    date !== undefined &&
+    !listUnavailable &&
+    !list.isLoading &&
+    !dates.some((entry) => entry.date === date);
 
   return (
     // 余白とスクロールは外す（`ListDetail` が左右のペインをそれぞれスクロールさせる。`reports.tsx` と同じ）。
@@ -72,6 +120,7 @@ export default function ApprovalsAnswered({ loaderData }: Route.ComponentProps) 
       className="overflow-hidden p-0 md:p-0"
     >
       <div className="flex h-full flex-col">
+        <UnreadableApprovalsPointer />
         <LoadError
           what="承認の日付の一覧"
           error={datesMalformed ? new Error('日付の一覧が読めない形で届いた') : list.error}
@@ -112,10 +161,36 @@ export default function ApprovalsAnswered({ loaderData }: Route.ComponentProps) 
             )
           }
           listFooter={
-            dates.length === DATES_LIMIT ? (
-              <p className="px-4 py-2 text-[11px] text-muted-foreground">
-                直近 {DATES_LIMIT} 日のみ表示している。これより古い日があるかもしれない。
-              </p>
+            selectedOutsideList || hasMore || olderError !== undefined ? (
+              <div className="flex flex-col gap-2 px-4 py-2">
+                {selectedOutsideList && (
+                  <p className="text-[11px] text-muted-foreground">
+                    開いている {date} は、この目次に読み込んだ日の中に無い（もっと古い日か、その日に
+                    決着した承認が無い）。
+                  </p>
+                )}
+                <LoadError
+                  what="もっと古い日"
+                  error={olderError}
+                  onRetry={loadOlder}
+                  retrying={isLoadingOlder}
+                />
+                {hasMore && (
+                  <>
+                    <p className="text-[11px] text-muted-foreground">
+                      いま読んでいるのは {dates.length} 日ぶん。これより古い日があるかもしれない。
+                    </p>
+                    <Button
+                      variant="default"
+                      size="sm"
+                      loading={isLoadingOlder}
+                      onClick={loadOlder}
+                    >
+                      もっと古い日を読む
+                    </Button>
+                  </>
+                )}
+              </div>
             ) : undefined
           }
           emptyDetail={
