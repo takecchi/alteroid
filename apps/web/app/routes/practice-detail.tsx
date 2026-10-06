@@ -12,6 +12,7 @@ import {
   Spinner,
   TAB_TRIGGER_ACTIVE_CLASS,
   TAB_TRIGGER_CLASS,
+  SubmitHint,
   Textarea,
   cn,
 } from '@alteroid/ui';
@@ -266,15 +267,18 @@ function PracticeDetailBody({ slug }: { slug: string }) {
             </>
           )}
           {!loadFailed && (
-            <Button
-              variant="primary"
-              size="sm"
-              loading={busy}
-              disabled={!canSave}
-              onClick={() => save()}
-            >
-              {dirty ? '保存する' : '変更なし'}
-            </Button>
+            <>
+              <SubmitHint action="保存" />
+              <Button
+                variant="primary"
+                size="sm"
+                loading={busy}
+                disabled={!canSave}
+                onClick={() => save()}
+              >
+                {dirty ? '保存する' : '変更なし'}
+              </Button>
+            </>
           )}
         </div>
       </header>
@@ -453,6 +457,9 @@ function PracticeDetailBody({ slug }: { slug: string }) {
                   touch();
                   setDraftContent(event.target.value);
                 }}
+                // 親の高さを埋める形のまま（`maxHeight` は渡さない）。
+                onSubmitShortcut={() => save()}
+                submitDisabled={!canSave || busy}
                 onKeyDown={(event) => {
                   if ((event.metaKey || event.ctrlKey) && event.key === 's') {
                     event.preventDefault();

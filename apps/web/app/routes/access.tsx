@@ -133,8 +133,13 @@ function AccessBody({
   );
 }
 
+/** 一覧の行の名前（行ごとの操作ボタンの `aria-label` にも使う）。 */
+function accountName(account: AccessAccount): string {
+  return account.email ?? account.displayName ?? '(名前なし)';
+}
+
 function AccountRow({ account }: { account: AccessAccount }) {
-  const name = account.email ?? account.displayName ?? '(名前なし)';
+  const name = accountName(account);
   const via = account.identities
     .map((identity) =>
       identity.email === null ? identity.provider : `${identity.provider} (${identity.email})`,
@@ -217,12 +222,18 @@ function AccessGrantControl({ account }: { account: AccessAccount }) {
             variant="primary"
             size="sm"
             loading={busy}
+            aria-label={`${accountName(account)} を許可する`}
             onClick={() => void run(() => grantAccess(account.id))}
           >
             許可する
           </Button>
         ) : !confirming ? (
-          <Button variant="danger" size="sm" onClick={() => setConfirming(true)}>
+          <Button
+            variant="danger"
+            size="sm"
+            aria-label={`${accountName(account)} の許可を取り消す`}
+            onClick={() => setConfirming(true)}
+          >
             許可を取り消す
           </Button>
         ) : (
@@ -234,6 +245,7 @@ function AccessGrantControl({ account }: { account: AccessAccount }) {
               variant="danger"
               size="sm"
               loading={busy}
+              aria-label={`${accountName(account)} の許可を本当に取り消す`}
               onClick={() => void run(() => revokeAccess(account.id))}
             >
               本当に取り消す

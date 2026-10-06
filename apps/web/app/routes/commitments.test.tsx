@@ -335,16 +335,16 @@ describe('/commitments 画面', () => {
     renderPage();
 
     await screen.findByText('ドキュメントの誤りを直す');
-    const close = screen.getByRole('button', { name: '片付いた' });
+    const close = screen.getByRole('button', { name: '「ドキュメントの誤りを直す」が片付いた' });
     expect((close as HTMLButtonElement).disabled).toBe(true);
 
     // 空白だけでも通さない（見た目上は書いたように見えるので、ここが抜けやすい）。
     fireEvent.change(screen.getByLabelText(/を片付けた理由$/), {
       target: { value: '   ' },
     });
-    expect((screen.getByRole('button', { name: '片付いた' }) as HTMLButtonElement).disabled).toBe(
-      true,
-    );
+    expect(
+      (screen.getByRole('button', { name: /が片付いた$/ }) as HTMLButtonElement).disabled,
+    ).toBe(true);
   });
 
   it('理由を書いて片付けると、その id と理由が閉じる経路へ乗る', async () => {
@@ -356,7 +356,7 @@ describe('/commitments 画面', () => {
     fireEvent.change(screen.getByLabelText(/を片付けた理由$/), {
       target: { value: 'PR #99 をマージした' },
     });
-    fireEvent.click(screen.getByRole('button', { name: '片付いた' }));
+    fireEvent.click(screen.getByRole('button', { name: /が片付いた$/ }));
 
     const closed = await waitFor(() => {
       const found = requests.find((request) => request.url.includes('/commitments/cmt-42/close'));

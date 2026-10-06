@@ -1,12 +1,12 @@
 import { ArrowUp, Plus, Square } from 'lucide-react';
-import { lazy, type ReactNode, Suspense, useId, useLayoutEffect, useRef, useState } from 'react';
+import { lazy, type ReactNode, Suspense, useId, useRef, useState } from 'react';
 
-import { Button, Textarea } from '../../common';
+import { isMacPlatform, submitShortcutLabel } from '@/lib/platform';
+
+import { Button, SubmitHint, Textarea, useKeyboardHintsVisible } from '../../common';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../../ui/tooltip';
 
 import type { ComposerAttachment } from './attachment-tray';
-import { isPlatformSubmitShortcut } from './ime';
-import { isMacPlatform, submitShortcutLabel } from './platform';
 
 export type { ComposerAttachment } from './attachment-tray';
 
@@ -23,17 +23,7 @@ const AttachmentTray = lazy(() => import('./attachment-tray'));
  * （Chrome は dvh ごと縮む。iOS は縮まないので上限を 40% に抑えて余裕を見る）。
  * 15rem は 1 行 24px で約 10 行、デスクトップ（1 行 20px）で 12 行。これを超えたら内側をスクロールする。
  */
-const MAX_HEIGHT_CLASS = 'max-h-[min(40dvh,15rem)]';
-
-/**
- * 中身に合わせて `textarea` の高さを決める。`field-sizing: content` は Firefox などが
- * 対応していないので使わず、`scrollHeight` から決める（上限は CSS の `max-height`）。
- * 空に戻れば `auto` から測り直すので元の高さに戻る。
- */
-function fitHeight(el: HTMLTextAreaElement): void {
-  el.style.height = 'auto';
-  el.style.height = `${el.scrollHeight + (el.offsetHeight - el.clientHeight)}px`;
-}
+const MAX_HEIGHT = 'min(40dvh,15rem)';
 
 /**
  * ボタンのヒント（ホバーとキーボードのフォーカスで出る）。
@@ -68,9 +58,9 @@ const ROUND_BUTTON = 'size-11 rounded-full p-0 md:size-8';
  * └────────────────────────────────┘
  * ```
  *
- * - **⌘ + Enter（macOS）／ Ctrl + Enter（それ以外）で送る。** Enter 単体・Shift + Enter は
+ * - **⌘ + Enter / Ctrl + Enter（どちらでも）で送る。** Enter 単体・Shift + Enter は
  *   textarea の既定（改行）のまま。IME の変換を確定する Enter では送らない（`ime.ts`）。
- *   案内の文はその OS の修飾キーで出す（`platform.ts`）
+ *   案内の文は OS に合わせた修飾キーで出し、指だけの端末では隠す（`SubmitHint`）
  * - [+]（ファイルを添付）と [▶]（メッセージを送信）は、ホバーとキーボードのフォーカスでヒントを出す。
  *   読み上げの名前は `aria-label` で持つ
  * - **受信中も送れる。**「受信をやめる」は「送る」の代わりではないので並べて出す——
@@ -123,21 +113,12 @@ export function ChatComposer({
   const empty = value.trim() === '' && attachments.length === 0;
   const cannotSend = empty || disabled || uploading;
   const mac = isMacPlatform();
+  const hintsVisible = useKeyboardHintsVisible();
   const shortcut = submitShortcutLabel(mac);
   const hintId = useId();
   const fileInput = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
   const hasFiles = (types: readonly string[] | undefined) => types?.includes('Files') === true;
-  const box = useRef<HTMLDivElement>(null);
-  useLayoutEffect(() => {
-    const el = box.current?.querySelector('textarea');
-    if (el == null) return;
-    fitHeight(el);
-    // 幅が変わると折り返しが変わるので、向きの変更や窓の大きさの変更でも測り直す。
-    const refit = () => fitHeight(el);
-    window.addEventListener('resize', refit);
-    return () => window.removeEventListener('resize', refit);
-  }, [value]);
   const send = () => {
     if (!cannotSend) onSend();
   };
@@ -175,7 +156,7 @@ export function ChatComposer({
               </Suspense>
             </div>
           )}
-          <div ref={box}>
+          <div>
             {/*
               **受信中も打てる。** 塞ぐと、順番待ちのあいだに言い足したいことが
               あっても待つしかなく、サーバ側にある「まとめて1ターンで読む」機構
@@ -184,8 +165,9 @@ export function ChatComposer({
             <Textarea
               rows={1}
               disabled={disabled}
-              aria-describedby={hintId}
-              className={`min-h-11 resize-none overflow-y-auto rounded-none border-0 bg-transparent px-3 py-3 shadow-none focus-visible:ring-0 disabled:bg-transparent dark:bg-transparent dark:disabled:bg-transparent ${MAX_HEIGHT_CLASS}`}
+              aria-describedby={hintsVisible ? hintId : undefined}
+              maxHeight={MAX_HEIGHT}
+              className="min-h-11 rounded-none border-0 bg-transparent px-3 py-3 shadow-none focus-visible:ring-0 disabled:bg-transparent dark:bg-transparent dark:disabled:bg-transparent"
               value={value}
               placeholder={placeholder}
               onChange={(event) => onChange(event.target.value)}
@@ -198,17 +180,9 @@ export function ChatComposer({
                 event.preventDefault();
                 onAttach(files);
               }}
-              onKeyDown={(event) => {
-                /*
-                  **IME で変換している最中の ⌘/Ctrl + Enter では送らない**（判定は `isPlatformSubmitShortcut` が持つ。
-                  `ime.ts` の `isImeConfirmEnter`）。変換中でも `input` は飛ぶので、門が無いと
-                  確定前の途中の文字列がそのまま投函される。Enter 単体・Shift + Enter は既定（改行）に任せる。
-                */
-                if (isPlatformSubmitShortcut(event, mac)) {
-                  event.preventDefault();
-                  send();
-                }
-              }}
+              // ⌘/Ctrl + Enter で送る。IME の変換中は送らない（`Textarea` の `onSubmitShortcut`）。
+              onSubmitShortcut={onSend}
+              submitDisabled={cannotSend}
             />
           </div>
           <div className="flex items-center gap-2 px-2 pb-2">
@@ -240,12 +214,7 @@ export function ChatComposer({
                 </Hint>
               </>
             )}
-            <span
-              id={hintId}
-              className="min-w-0 truncate text-[11px] text-muted-foreground select-none"
-            >
-              {shortcut} で送信
-            </span>
+            <SubmitHint action="送信" id={hintId} className="min-w-0 truncate" />
             <div className="ml-auto flex items-center gap-2">
               {/*
                 **「受信をやめる」は「送る」の代わりではない。** 並べて出す —
@@ -268,7 +237,15 @@ export function ChatComposer({
                   </Button>
                 </Hint>
               )}
-              <Hint label={uploading ? '添付を上げている' : `メッセージを送信（${shortcut}）`}>
+              <Hint
+                label={
+                  uploading
+                    ? '添付を上げている'
+                    : hintsVisible
+                      ? `メッセージを送信（${shortcut}）`
+                      : 'メッセージを送信'
+                }
+              >
                 <Button
                   variant="primary"
                   className={ROUND_BUTTON}
@@ -276,7 +253,7 @@ export function ChatComposer({
                   loading={uploading}
                   onClick={send}
                   aria-label={uploading ? '添付を上げている' : 'メッセージを送信'}
-                  aria-keyshortcuts={mac ? 'Meta+Enter' : 'Control+Enter'}
+                  aria-keyshortcuts="Meta+Enter Control+Enter"
                 >
                   {!uploading && <ArrowUp className="size-4" aria-hidden />}
                 </Button>

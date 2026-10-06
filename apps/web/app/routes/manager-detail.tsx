@@ -14,9 +14,9 @@ import {
   ErrorNote,
   Input,
   isImeConfirmEnter,
-  isSubmitShortcut,
   KeyValueList,
   Spinner,
+  SubmitHint,
   Textarea,
 } from '@alteroid/ui';
 import {
@@ -1478,6 +1478,14 @@ function SendOutcomeNote({ note }: { note: { text: string; reached: boolean } | 
  * **`kind === 'permission'` の見た目（許可／拒否の2ボタン）。1文字も変えて
  * いない**（`askedAtNote` の差し込みを除く。Issue #334 の指示どおり）。
  */
+const WAITING_LABEL_MAX = 20;
+
+/** 許可待ちの行の「許可」「拒否」の名前に入れる、依頼の頭の数文字（同じ名前のボタンが並ぶので行を区別する）。 */
+function waitingLabel(summary: string): string {
+  const flat = redactBody(summary).replace(/\s+/g, ' ').trim();
+  return `「${flat.length > WAITING_LABEL_MAX ? `${flat.slice(0, WAITING_LABEL_MAX)}…` : flat}」`;
+}
+
 function PermissionWaitingRow({
   id,
   requestId,
@@ -1526,6 +1534,7 @@ function PermissionWaitingRow({
           size="sm"
           variant="primary"
           loading={busy === 'allow'}
+          aria-label={`${waitingLabel(summary)}を許可`}
           disabled={busy === 'deny'}
           onClick={() => answer('allow')}
         >
@@ -1535,6 +1544,7 @@ function PermissionWaitingRow({
           size="sm"
           // 「拒否」は取り返しのつく操作なので danger にしない（#3091）。
           loading={busy === 'deny'}
+          aria-label={`${waitingLabel(summary)}を拒否`}
           disabled={busy === 'allow'}
           onClick={() => answer('deny')}
         >
@@ -1605,13 +1615,10 @@ function QuestionWaitingRow({
           placeholder="この質問への答えを、自分の言葉で書く"
           disabled={busy}
           onChange={(event) => setText(event.target.value)}
-          onKeyDown={(event) => {
-            // 長文になりうるので Enter は改行のまま。送信は Cmd/Ctrl+Enter。
-            if (isSubmitShortcut(event)) {
-              event.preventDefault();
-              submit();
-            }
-          }}
+          maxHeight="12rem"
+          // 長文になりうるので Enter は改行のまま。送信は ⌘/Ctrl + Enter（IME の変換中は送らない）。
+          onSubmitShortcut={submit}
+          submitDisabled={busy || text.trim() === ''}
         />
         <div className="mt-2 flex flex-wrap items-center gap-2">
           <Button
@@ -1623,7 +1630,7 @@ function QuestionWaitingRow({
           >
             送信
           </Button>
-          <span className="text-[11px] text-muted-foreground">⌘/Ctrl + Enter</span>
+          <SubmitHint action="送信" />
         </div>
       </div>
       <SendOutcomeNote note={note} />
