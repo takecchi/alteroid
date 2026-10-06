@@ -35,7 +35,9 @@ export async function resolveTurnAttachments(
     try {
       found = await stores.attachments.get(ref.id);
     } catch {
-      noticeLines.push(`[添付] ${described} 中身を読めなかった（置き場の失敗。再送で直る場合がある）`);
+      noticeLines.push(
+        `[添付] ${described} 中身を読めなかった（置き場の失敗。再送で直る場合がある）`,
+      );
       continue;
     }
     if (found === undefined) {
