@@ -25,6 +25,7 @@ import {
 import {
   buildAnswer,
   emptyForm,
+  isBlankForm,
   moveCursor,
   setOther,
   setText,
@@ -543,6 +544,18 @@ export class ApprovalsController {
     this.setDetail(d.id, { mode: 'form', form, confirm: null, notice: null });
     // 設問の無い承認待ちは文字欄が 1 つだけ（カーソルは常にそこ）。
     return (d.approval?.questions ?? []).length === 0 ? 'edit' : 'form';
+  }
+
+  /** 答えるフォームに、選んだ分か書いた分が残っているか（詳細を閉じると捨てる分）。 */
+  hasDraft(): boolean {
+    const form = this.currentDetail()?.form ?? null;
+    return form !== null && !isBlankForm(form);
+  }
+
+  /** 詳細の最下行に一言出す（書きかけを捨てる前の案内など）。 */
+  setNotice(notice: string): void {
+    const d = this.currentDetail();
+    if (d !== null) this.setDetail(d.id, { notice, noticeTone: 'warn' });
   }
 
   /** フォームを閉じて読む画面へ戻る（書きかけは残す）。 */
