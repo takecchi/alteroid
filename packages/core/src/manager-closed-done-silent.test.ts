@@ -122,6 +122,7 @@ interface ManualSetup {
 async function runningManualSetup(
   managerId: string,
   jobOverrides: Partial<Job> = {},
+  existingStores?: Stores,
 ): Promise<ManualSetup> {
   const job: Job = {
     id: managerId,
@@ -135,8 +136,8 @@ async function runningManualSetup(
     runnerId: 'runner-primary',
     ...jobOverrides,
   };
-  const stores = createMemoryStores();
-  await stores.jobs.putJob(job);
+  const stores = existingStores ?? createMemoryStores();
+  if (existingStores === undefined) await stores.jobs.putJob(job);
 
   const fake = manualRunner();
   fake.alive.push({
@@ -273,6 +274,27 @@ describe('report 無しの closed(done)（#3189）', () => {
     // 積みの知らせ（「背景処理の完了待ちで畳んでいた報告をまとめて配る」）のほうが出ている。
     expect(notices[0]).toContain('背景処理の完了待ちで畳んでいた報告をまとめて配る');
     expect(notices[0]).not.toContain('report を出さないまま');
+  });
+
+  it('(a) デーモンを作り直した後でも、再起動の前に report を受け取っていれば、report 無しの closed(done) は無音', async () => {
+    const first = await runningManualSetup('mgr-restart');
+    first.fake.raw({ type: 'session', managerId: 'mgr-restart', sessionId: 'sess-1' });
+    await settle();
+    first.fake.raw(reportOf('mgr-restart'));
+    await settle();
+    await first.pool.stop();
+    // 台帳には、器が持ったと確かめた時刻と、report の時刻が残っている。
+    const persisted = (await first.stores.jobs.listJobs()).find((j) => j.id === 'mgr-restart');
+    expect(persisted?.runnerSessionSince).toBeDefined();
+    expect(persisted?.lastReportAt).toBeDefined();
+
+    // デーモンの再起動: 同じ台帳から新しい pool を作る（プロセス内の像は空）。
+    const second = await runningManualSetup('mgr-restart', {}, first.stores);
+    const before = second.inbox.length;
+    second.fake.closed('mgr-restart', 'done', SESSION_CLOSED);
+    await settle();
+    await second.pool.stop();
+    expect(noticesAbout(second.inbox, before, 'mgr-restart')).toHaveLength(0);
   });
 
   it('(c) 判定できないとき（器がセッションを置いた時刻が無く、report の記録だけが在る）は、無音へ倒さず知らせる', async () => {

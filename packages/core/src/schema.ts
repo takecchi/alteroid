@@ -3911,6 +3911,15 @@ export const jobSchema = z.object({
    */
   lateDoneNotifiedAt: isoDateTime.optional(),
   /**
+   * **器がこの委譲のセッションを持ったと、デーモンが確かめた直近の時刻**（Issue #3189）。
+   * `ManagerRecord.runnerSessionSince` の写しで、書くのは start / resume の後・runner の
+   * `session` の名乗り・`resume_failed`（recovered）の4箇所。**`closed(done)` が「このセッション
+   * で report を受け取ったか」を `lastReportAt` と突き合わせて判定する材料**で、台帳に置くのは
+   * デーモンの再起動をまたいで効かせるため。**欠けている＝この欄を書く前の行（または一度も
+   * 確かめていない行）。判定できない側に倒す**（`reportSeenInSession` の `unknown`）。
+   */
+  runnerSessionSince: isoDateTime.optional(),
+  /**
    * **この委譲のセッションが最後に実際に置かれた器**（runner の `/health` の
    * `instanceId`）。器の入れ替えを、話しかけられた委譲へ告げるかの判定材料である
    * （#669。`manager.ts` の `#runnerSwappedSinceSession`）。

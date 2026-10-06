@@ -4511,9 +4511,8 @@ type SynthesizedNoticeLabel = string;
  * - `'none'` — 一度も受け取っていない（`lastReportAt` が無い）。報告無しで終わった
  * - `'unknown'` — 判定できない。**知らせる側へ倒す**（黙って無音へ倒さない。AGENTS.md「静かに失敗する道具」の
  *   「判定できない」という3つ目の状態）。2通り:
- *   (1) `runnerSessionSince` が無い（デーモンの再起動直後の像。`ManagerRecord.runnerSessionSince` は
- *   プロセス内にしか置かない）——`lastReportAt` は永続しているので、**前のデーモンの時代の report** かもしれず、
- *   いまのセッションのものとは言えない
+ *   (1) `Job.runnerSessionSince` が無い（この欄を書く前の古い行。欄は台帳に永続するので、デーモンの再起動では
+ *   欠けない）——`lastReportAt` が在っても、それがいまのセッションのものとは言えない
  *   (2) どちらかが日時として読めない（`jobSchema.lastReportAt` は `z.string()` で、形を保証していない）
  *
  * **なぜこの2欄で「このセッションで report が来ていない」と言えるか。** `runnerSessionSince` は
@@ -5950,7 +5949,7 @@ class Pool implements ManagerPool {
     // **ここで初めて「器が持っている」が確定する**（#579）。`runner.start()` は
     // runner がセッションを載せてから返る。これより前の生存確認の観測は、この
     // 委譲について何も言っていない（`ManagerRecord.runnerSessionSince` の doc）。
-    record.runnerSessionSince = new Date(this.#now()).toISOString();
+    this.#noteRunnerSessionSince(record);
     /*
      * **runner が実際に開いた cwd を台帳へ揃える（Issue #1814）。**
      *
@@ -11740,7 +11739,7 @@ class Pool implements ManagerPool {
     // **宛先が変わった瞬間でもある**（#579）。`runner.resume()` が返った時点で、
     // この器がこの委譲を持っている——生存確認の観測をここから数え直す
     // （`ManagerRecord.runnerSessionSince` の doc）。
-    record.runnerSessionSince = new Date(this.#now()).toISOString();
+    this.#noteRunnerSessionSince(record);
     /*
      * **セッションが実際にこの器へ載った**（#669。`Job.sessionInstanceId` の doc）。
      *
@@ -11942,7 +11941,7 @@ class Pool implements ManagerPool {
         record.attached = true;
         // **器が自分でそう名乗った**（#579）。`start` / `resume` の返りと同じく、
         // この瞬間は器がこの委譲を持っていることが確定している。
-        record.runnerSessionSince = new Date(this.#now()).toISOString();
+        this.#noteRunnerSessionSince(record);
         await this.#persist(record);
         return;
       }
@@ -13638,7 +13637,7 @@ class Pool implements ManagerPool {
           record.attached = true;
           // 前の会話へは戻れなかったが、**器は新しいセッションを持っている**
           // （#579。`ManagerRecord.runnerSessionSince` の doc）。
-          record.runnerSessionSince = new Date(this.#now()).toISOString();
+          this.#noteRunnerSessionSince(record);
           await this.#persist(record);
           this.#notifyResumeFallback(record, event.sessionId, event.reason);
           return;
@@ -14121,7 +14120,7 @@ class Pool implements ManagerPool {
          * `closed_failed` の issue #799 と同じ）。
          */
         if (event.status === 'done' && !this.#withheldReports.has(event.managerId)) {
-          const seen = reportSeenInSession(record.job.lastReportAt, record.runnerSessionSince);
+          const seen = reportSeenInSession(record.job.lastReportAt, record.job.runnerSessionSince);
           if (seen !== 'seen') {
             const body = [
               `この委譲 ${event.managerId} は、report を出さないまま終わった（closed の status=done。台帳の状態は done）。`,
@@ -14130,7 +14129,7 @@ class Pool implements ManagerPool {
                 '確かめるまで「終わった」とも「終わっていない」とも言わない。',
               ...(seen === 'unknown'
                 ? [
-                    'このセッションで report を受け取ったかは判定できなかった（デーモンの再起動直後などで' +
+                    'このセッションで report を受け取ったかは判定できなかった（この欄を書く前の古い行などで' +
                       '比較する時刻が無い）ため、念のため知らせている。',
                   ]
                 : []),
@@ -15590,6 +15589,22 @@ class Pool implements ManagerPool {
       // 成功した場合の話であって、**失敗は台帳にも日誌にも跡を残さない**。
       noteDroppedRecord('ジョブ台帳', `job id=${record.job.id} status=${record.job.status}`, error);
     }
+  }
+
+  /**
+   * **器がこの委譲を持ったと確かめた時刻を、像と台帳の両方へ書く**（#579 / Issue #3189）。
+   *
+   * 像（`ManagerRecord.runnerSessionSince`）は従来どおりプロセス内にしか置かない——生存確認
+   * （`#noteMissingSessions`）と未 push 観測の判定（`shutdownObservationArrivedAfterSwap`）は
+   * 「再起動後は欄が無い」ことを前提に倒れ先を決めているので、読み手を変えない。
+   * **台帳（`Job.runnerSessionSince`）へも同じ値を書くのは、`closed(done)` が「このセッションで
+   * report を受け取ったか」を再起動をまたいで判定するため**（{@link reportSeenInSession}）。
+   * 呼び出し元は4箇所とも、この後で `#persist` する。
+   */
+  #noteRunnerSessionSince(record: ManagerRecord): void {
+    const at = new Date(this.#now()).toISOString();
+    record.runnerSessionSince = at;
+    record.job.runnerSessionSince = at;
   }
 
   /**
