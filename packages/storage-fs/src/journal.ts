@@ -11,6 +11,7 @@ import {
   matchesJournalSearch,
   noteDroppedJournalRow,
   noteDroppedJournalRowsSummary,
+  UnreadableJournalEntryError,
 } from '@alteroid/core';
 import type {
   JournalEntry,
@@ -186,6 +187,12 @@ export class FsJournalStore implements JournalStore {
           noteDroppedJournalRowsSummary(dropped);
           return entry;
         }
+        // 読めなかった行の id が引かれた id なら、「無い」ではなく「在るが読めない」
+        // （issue #3288。`list()` は従来どおり飛ばす）。
+        if (entry === null && rawRowId(lines[i]) === id) {
+          noteDroppedJournalRowsSummary(dropped);
+          throw new UnreadableJournalEntryError({ id });
+        }
       }
     }
     noteDroppedJournalRowsSummary(dropped);
@@ -304,6 +311,23 @@ export class FsJournalStore implements JournalStore {
  * 健全なはず）。**「読めなかった」と「そんな行は無い」を跡なしで混ぜない**
  * ようにするのが、この関数が新しく持つ役割である。
  */
+/**
+ * 読めなかった行から `id` だけを取り出す（`get` が「無い」と「在るが読めない」を分けるため）。
+ * JSON として読めない行・`id` が文字列でない行は `undefined`（id を名乗れない行は、どの id の
+ * 「在るが読めない」にもならない）。
+ */
+function rawRowId(line: string | undefined): string | undefined {
+  if (!line) return undefined;
+  try {
+    const raw: unknown = JSON.parse(line);
+    if (typeof raw !== 'object' || raw === null) return undefined;
+    const id = (raw as { id?: unknown }).id;
+    return typeof id === 'string' ? id : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function parseLine(line: string | undefined, dropped: Map<string, number>): JournalEntry | null {
   if (!line) return null;
   const bytes = Buffer.byteLength(line, 'utf8');
