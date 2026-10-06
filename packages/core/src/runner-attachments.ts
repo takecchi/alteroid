@@ -5,6 +5,7 @@ import { join, resolve, sep } from 'node:path';
 
 import type { AgentInputImage, AgentUserInput } from './agent-session.js';
 import {
+  attachmentDiskName,
   normalizeAttachmentName,
   sniffAttachmentImageType,
   type AttachmentLimits,
@@ -32,7 +33,7 @@ import type { RunnerAttachment } from './runner-protocol.js';
  * - `root` と各 dir が **runner 自身の所有の実在の dir（symlink でない）** であることを確かめてから使う
  *   （`/tmp` は誰でも書けるので、担い手が先に同名の symlink を置いておく経路を断つ）。
  * - `id` と `managerId` は dir 名にしてよい形だけ（`..` や区切りを通さない）。名前は
- *   {@link normalizeAttachmentName} を通し、解決後のパスが置き場の外へ出ないことをここでも確かめる。
+ *   {@link normalizeAttachmentName} を通し、ディスク上の名前は {@link attachmentDiskName}（UTF-8 で 200 バイトまで）で丸め、解決後のパスが置き場の外へ出ないことをここでも確かめる。
  *
  * ## 掃除
  *
@@ -181,7 +182,8 @@ export async function placeRunnerAttachments(
     for (const { attachment, bytes } of decoded) {
       const name = normalizeAttachmentName(attachment.name);
       const dir = resolve(managerDir, attachment.id);
-      const path = resolve(dir, name);
+      // ディスク上の名前は NAME_MAX に収まるよう丸める（#3324）。`name`（通知行・画像の名前）は丸めない。
+      const path = resolve(dir, attachmentDiskName(name));
       if (!dir.startsWith(managerDir + sep) || !path.startsWith(dir + sep)) {
         throw new RunnerAttachmentRejectedError(
           `添付 ${attachment.id} の置き先が置き場の外へ出る形だった`,
