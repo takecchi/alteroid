@@ -335,6 +335,10 @@ export async function memoryEditCommand(slug: string): Promise<void> {
         stdout.write('変更はありません。\n');
         return;
       }
+      // **全部消した（空白だけも）なら、`set` と同じ断り**（#3456）。書き込まず、編集は
+      // `keepDraftOnFailure` が残して続きのやり方を言う。**「変更なし」の判定より後**に置く
+      // （元から空の記憶を触らずに閉じたのは、変更なしである）。
+      if (edited.trim().length === 0) throw new Error(`記憶 ${slug}: ${EMPTY_BODY_MESSAGE}`);
       try {
         await write(client, target, slug, edited, ifMatch);
       } catch (error) {
