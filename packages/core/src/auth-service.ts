@@ -264,109 +264,135 @@ export function createAuthService(options: AuthServiceOptions): AuthService {
         return { status: 'error', reason: 'exchange_failed' };
       }
 
-      const at = now().toISOString();
-      const existing = await store.findIdentity(provider.id, profile.subject);
+      /**
+       * ここから先は器（ストア）の読み書きだけ。**例外を `completeLogin` の外へ抜けさせない**
+       * （issue #3771）。抜けると要求は `processing` のまま残り、端末の `claim` は
+       * 「交換中」として TTL まで `pending` を受け取り続け、最後に `expired` と言われる
+       * （実際は失敗なのに）。認可コードは一度きりなので、やり直しもできない。
+       * だから失敗として `failed` へ落とし、端末が `failed` を受け取れるようにする。
+       */
+      try {
+        const at = now().toISOString();
+        const existing = await store.findIdentity(provider.id, profile.subject);
 
-      let account: AuthAccount;
-      if (existing !== null) {
-        const found = await store.getAccount(existing.accountId);
-        if (found === null) {
-          await fail(request, 'exchange_failed');
-          return { status: 'error', reason: 'exchange_failed' };
-        }
-        account = await touchAccountLogin(store, found, at);
-        // プロバイダ側のメールだけ追従する。**account.email は触らない**
-        // （本人が選んだ連絡先を、プロバイダ側の変更で書き換えない）。
-        await store.putIdentity({
-          ...existing,
-          email: profile.email,
-          emailVerified: profile.emailVerified,
-          lastLoginAt: at,
-        });
-      } else {
-        /**
-         * 初めて見る identity（にこの時点では見える）。**メールが一致しても
-         * 既存アカウントへ相乗りさせない。**
-         *
-         * 別プロバイダで同じメールを名乗れる以上、メール一致での自動結合は
-         * 「他人のメールでアカウントを作れば持ち主になれる」経路になる。
-         * ここでは必ず別アカウントとして作り、許可は人間が CLI で明示的に与える。
-         * 結合（同一人物の複数ログイン手段を束ねる）は identity 側に accountId が
-         * あるので後から足せる。
-         *
-         * **メールの衝突検査（大小文字違いの攻撃者を弾く）は
-         * `createAccountWithIdentity` の1操作の中で行う（issue #1751 / #1741）。**
-         * 直す前はここ（読んでから書く外側）に `findAccountByEmail` を置いていたが、
-         * **別々の** identity が同じ検証済みメールで同時に初回ログインすると、
-         * 両方がここで「衝突なし」を見てしまい、両方の候補にメールが乗った
-         * （memory / fs は重複したアカウントができ、pg は一意索引の生の例外で
-         * 片方が reject された）。だから衝突の有無は候補を渡すだけにして、
-         * 判断そのものはストアの1操作の結果（`outcome.account`）に委ねる——
-         * ここでは判断しない。
-         */
-        const candidateAccount: AuthAccount = {
-          id: newId(),
-          displayName: profile.displayName,
-          email: profile.emailVerified ? profile.email : null,
-          createdAt: at,
-          lastLoginAt: at,
-          grantedAt: null,
-          grantedBy: null,
-          ownerDeclaredAt: null,
-        };
-
-        /**
-         * **account の作成・identity の作成・メールの衝突検査を1操作で行う**
-         * （issue #1714 / #1751 / #1741）。
-         *
-         * 上の `findIdentity` は早期の門前払いでしかない。同じ
-         * `(provider, subject)` の2つのログインが同時に着くと、両方がここまで
-         * `null` を見て進む。「読む→検査→書く」に割ったままだと両方が別の
-         * account を作ってしまうので、`putAccount` + `putIdentity` の対を
-         * ストアの1操作へ渡し、在れば作らず既存を返させる。メールの衝突検査も
-         * 同じ理由で同じ操作の中にある——**この結果だけを信じる**（渡した
-         * `candidateAccount` をそのまま使わない）。
-         */
-        const outcome = await store.createAccountWithIdentity({
-          account: candidateAccount,
-          identity: {
-            provider: provider.id,
-            subject: profile.subject,
-            accountId: candidateAccount.id,
-            email: profile.email,
-            emailVerified: profile.emailVerified,
-            createdAt: at,
-            lastLoginAt: at,
-          },
-        });
-
-        if (outcome.created) {
-          account = outcome.account;
-        } else {
-          // 負けた側。既存 identity のログインと同じ扱いに落とす
-          // （直上の `existing !== null` の分岐と同じ処理）。
-          const found = await store.getAccount(outcome.existing.accountId);
+        let account: AuthAccount;
+        if (existing !== null) {
+          const found = await store.getAccount(existing.accountId);
           if (found === null) {
-            await fail(request, 'exchange_failed');
+            await fail(claimedForExchange, 'exchange_failed');
             return { status: 'error', reason: 'exchange_failed' };
           }
           account = await touchAccountLogin(store, found, at);
+          // プロバイダ側のメールだけ追従する。**account.email は触らない**
+          // （本人が選んだ連絡先を、プロバイダ側の変更で書き換えない）。
           await store.putIdentity({
-            ...outcome.existing,
+            ...existing,
             email: profile.email,
             emailVerified: profile.emailVerified,
             lastLoginAt: at,
           });
+        } else {
+          /**
+           * 初めて見る identity（にこの時点では見える）。**メールが一致しても
+           * 既存アカウントへ相乗りさせない。**
+           *
+           * 別プロバイダで同じメールを名乗れる以上、メール一致での自動結合は
+           * 「他人のメールでアカウントを作れば持ち主になれる」経路になる。
+           * ここでは必ず別アカウントとして作り、許可は人間が CLI で明示的に与える。
+           * 結合（同一人物の複数ログイン手段を束ねる）は identity 側に accountId が
+           * あるので後から足せる。
+           *
+           * **メールの衝突検査（大小文字違いの攻撃者を弾く）は
+           * `createAccountWithIdentity` の1操作の中で行う（issue #1751 / #1741）。**
+           * 直す前はここ（読んでから書く外側）に `findAccountByEmail` を置いていたが、
+           * **別々の** identity が同じ検証済みメールで同時に初回ログインすると、
+           * 両方がここで「衝突なし」を見てしまい、両方の候補にメールが乗った
+           * （memory / fs は重複したアカウントができ、pg は一意索引の生の例外で
+           * 片方が reject された）。だから衝突の有無は候補を渡すだけにして、
+           * 判断そのものはストアの1操作の結果（`outcome.account`）に委ねる——
+           * ここでは判断しない。
+           */
+          const candidateAccount: AuthAccount = {
+            id: newId(),
+            displayName: profile.displayName,
+            email: profile.emailVerified ? profile.email : null,
+            createdAt: at,
+            lastLoginAt: at,
+            grantedAt: null,
+            grantedBy: null,
+            ownerDeclaredAt: null,
+          };
+
+          /**
+           * **account の作成・identity の作成・メールの衝突検査を1操作で行う**
+           * （issue #1714 / #1751 / #1741）。
+           *
+           * 上の `findIdentity` は早期の門前払いでしかない。同じ
+           * `(provider, subject)` の2つのログインが同時に着くと、両方がここまで
+           * `null` を見て進む。「読む→検査→書く」に割ったままだと両方が別の
+           * account を作ってしまうので、`putAccount` + `putIdentity` の対を
+           * ストアの1操作へ渡し、在れば作らず既存を返させる。メールの衝突検査も
+           * 同じ理由で同じ操作の中にある——**この結果だけを信じる**（渡した
+           * `candidateAccount` をそのまま使わない）。
+           */
+          const outcome = await store.createAccountWithIdentity({
+            account: candidateAccount,
+            identity: {
+              provider: provider.id,
+              subject: profile.subject,
+              accountId: candidateAccount.id,
+              email: profile.email,
+              emailVerified: profile.emailVerified,
+              createdAt: at,
+              lastLoginAt: at,
+            },
+          });
+
+          if (outcome.created) {
+            account = outcome.account;
+          } else {
+            // 負けた側。既存 identity のログインと同じ扱いに落とす
+            // （直上の `existing !== null` の分岐と同じ処理）。
+            const found = await store.getAccount(outcome.existing.accountId);
+            if (found === null) {
+              await fail(claimedForExchange, 'exchange_failed');
+              return { status: 'error', reason: 'exchange_failed' };
+            }
+            account = await touchAccountLogin(store, found, at);
+            await store.putIdentity({
+              ...outcome.existing,
+              email: profile.email,
+              emailVerified: profile.emailVerified,
+              lastLoginAt: at,
+            });
+          }
         }
+
+        await store.putLoginRequest({
+          ...claimedForExchange,
+          status: 'authenticated',
+          accountId: account.id,
+        });
+
+        return { status: 'ok', accountId: account.id, granted: account.grantedAt !== null };
+      } catch (error) {
+        // 後始末（`failed` への書き込み）自体も同じ器に頼るので、失敗しうる。握りつぶさず
+        // stderr に1行出す（NUL のメールを断ったときと同じ流儀。固定の文と例外の名前だけで、
+        // 値は載せない）。どちらでも呼び出し側へは `exchange_failed` を返す。
+        const cause = error instanceof Error ? error.name : 'unknown';
+        process.stderr.write(
+          `alteroid: ログインの交換の後の器の操作が失敗した（${cause}）。要求を failed に落とす\n`,
+        );
+        try {
+          await fail(claimedForExchange, 'exchange_failed');
+        } catch (failError) {
+          const failCause = failError instanceof Error ? failError.name : 'unknown';
+          process.stderr.write(
+            `alteroid: ログイン要求を failed に落とせなかった（${failCause}）。要求は processing のまま残る\n`,
+          );
+        }
+        return { status: 'error', reason: 'exchange_failed' };
       }
-
-      await store.putLoginRequest({
-        ...claimedForExchange,
-        status: 'authenticated',
-        accountId: account.id,
-      });
-
-      return { status: 'ok', accountId: account.id, granted: account.grantedAt !== null };
     },
 
     async claim({ requestId, claimSecret }) {
