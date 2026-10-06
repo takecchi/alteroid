@@ -709,6 +709,46 @@ describe('/attach（添えかけ）', () => {
   });
 });
 
+describe('追送の待ちのあいだに足した添えかけ（#3245）', () => {
+  // ファイルの読み込みを挟むので、マクロタスクも何度か回す（実時間は待たない）。
+  const settle = async () => {
+    for (let i = 0; i < 10; i += 1) await new Promise((r) => setTimeout(r, 0));
+  };
+
+  it('追送が待っているあいだに /attach した分は、最初のイベントのあとも残る（送った分だけ空にする）', async () => {
+    const dir = await makeTempDir('alteroid-tui-attach-');
+    const a = join(dir, 'a.log');
+    const b = join(dir, 'b.log');
+    await writeFile(a, 'a');
+    await writeFile(b, 'b');
+    const { api, controller, texts } = setup();
+    const hold = gate();
+    const end = gate();
+    api.scripts.push([hold.wait, open('c1'), end.wait, { type: 'done' }], [open('c1')]);
+    const first = controller.send('最初');
+    await settle();
+    await controller.attach(a);
+    const followUp = controller.send('追送');
+    await settle();
+    // 追送は a を上げて、会話が決まる（opened）のを待っている。そのあいだに b を足す。
+    await controller.attach(b);
+    hold.open();
+    await settle();
+    expect(api.chatCalls[1]).toEqual({
+      text: '追送',
+      conversationId: 'c1',
+      attachments: ['att-1'],
+    });
+    expect(controller.hasAttachments()).toBe(true);
+    controller.listAttachments();
+    const listing = texts('system').at(-1) ?? '';
+    expect(listing).toContain('b.log');
+    expect(listing).not.toContain('a.log');
+    end.open();
+    await Promise.all([first, followUp]);
+  });
+});
+
 describe('既読（返答を画面に表示したとき。docs/architecture.md「会話の既読」）', () => {
   const withReply = (api: ReturnType<typeof fakeApi>) => {
     api.messages.c1 = [

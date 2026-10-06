@@ -168,7 +168,7 @@ function RunnerPushWarning({
   className,
 }: {
   update: EnvVarUpdateResult;
-  /** 「正本に〇〇」の〇〇（置いた・外した・保存した）。 */
+  /** 「環境変数を〇〇」の〇〇（置いた・外した・保存した）。 */
   saved: string;
   className?: string;
 }) {
@@ -180,7 +180,7 @@ function RunnerPushWarning({
       className={`flex flex-col gap-1 rounded-md border border-warn/40 bg-warn/10 px-3 py-2 text-xs text-warn ${className ?? ''}`}
     >
       <p className="font-medium">
-        {`正本には${saved}が、${String(failed.length)} 台の実行環境へ反映できていない。`}
+        {`環境変数を${saved}が、${String(failed.length)} 台の実行環境へ反映できていない。`}
       </p>
       <ul className="flex flex-col gap-1">
         {failed.map((runner) => (

@@ -185,6 +185,36 @@ describe('継続する依頼を仕込む', () => {
     });
   });
 
+  it('依頼の本文で Ctrl + Enter（⌘ + Enter でも）なら「仕込む」と同じに送る。Enter だけでは送らない', async () => {
+    stubSchedule([DEFAULT_ENTRY]);
+    renderSchedule();
+
+    await fill('morning-issues', '朝いちで issue を見ておいて');
+    const requestBox = screen.getByLabelText('依頼の本文');
+    fireEvent.keyDown(requestBox, { key: 'Enter' });
+    expect(sent).toEqual([]);
+    fireEvent.keyDown(requestBox, { key: 'Enter', ctrlKey: true });
+
+    await waitFor(() => {
+      expect(sent).toHaveLength(1);
+    });
+    await expect(sent[0]?.read()).resolves.toMatchObject({
+      kind: 'morning-issues',
+      request: '朝いちで issue を見ておいて',
+    });
+  });
+
+  it('kind が空のままなら、ショートカットでも送らない（ボタンの disabled と同じ条件）', async () => {
+    stubSchedule([DEFAULT_ENTRY]);
+    renderSchedule();
+
+    await screen.findByLabelText(/依頼の名前/);
+    const requestBox = screen.getByLabelText('依頼の本文');
+    fireEvent.change(requestBox, { target: { value: '本文だけ' } });
+    fireEvent.keyDown(requestBox, { key: 'Enter', ctrlKey: true });
+    expect(sent).toEqual([]);
+  });
+
   it('kind か本文が空なら送らない（空の依頼を仕込めない）', async () => {
     stubSchedule([DEFAULT_ENTRY]);
     renderSchedule();
@@ -210,7 +240,7 @@ describe('「今すぐ回す」の表示', () => {
     stubSchedule([DEFAULT_ENTRY, OTHER_ENTRY]);
     renderSchedule();
 
-    const buttons = await screen.findAllByRole('button', { name: '今すぐ回す' });
+    const buttons = await screen.findAllByRole('button', { name: / を今すぐ回す$/ });
     expect(screen.queryByText(/^起こした/)).toBeNull();
     fireEvent.click(buttons[0]!);
 
@@ -241,7 +271,7 @@ describe('「今すぐ回す」の表示', () => {
     }) as typeof fetch;
     renderSchedule();
 
-    fireEvent.click(await screen.findByRole('button', { name: '今すぐ回す' }));
+    fireEvent.click(await screen.findByRole('button', { name: / を今すぐ回す$/ }));
 
     expect(await screen.findByRole('alert')).toBeTruthy();
     expect(screen.queryByText(/^起こした/)).toBeNull();
@@ -286,7 +316,7 @@ describe('「今すぐ回す」を、応答が返るまで続けて押せない'
     const held = holdRuns();
     renderSchedule();
 
-    const button = await screen.findByRole('button', { name: '今すぐ回す' });
+    const button = await screen.findByRole('button', { name: / を今すぐ回す$/ });
     // `fireEvent` は1回ごとに act で描き直しを済ませるので、2回を1つの act に入れて、
     // 「描き直しの前に2回目が届く」同じ描画の間を作る。
     act(() => {
@@ -305,7 +335,7 @@ describe('「今すぐ回す」を、応答が返るまで続けて押せない'
     const held = holdRuns();
     renderSchedule();
 
-    const button = await screen.findByRole('button', { name: '今すぐ回す' });
+    const button = await screen.findByRole('button', { name: / を今すぐ回す$/ });
     fireEvent.click(button);
     await waitFor(() => expect((button as HTMLButtonElement).disabled).toBe(true));
 
@@ -322,7 +352,7 @@ describe('「今すぐ回す」を、応答が返るまで続けて押せない'
     const held = holdRuns();
     renderSchedule();
 
-    const button = await screen.findByRole('button', { name: '今すぐ回す' });
+    const button = await screen.findByRole('button', { name: / を今すぐ回す$/ });
     fireEvent.click(button);
     await waitFor(() => expect((button as HTMLButtonElement).disabled).toBe(true));
 
@@ -340,7 +370,7 @@ describe('「今すぐ回す」を、応答が返るまで続けて押せない'
     const held = holdRuns();
     renderSchedule();
 
-    const buttons = await screen.findAllByRole('button', { name: '今すぐ回す' });
+    const buttons = await screen.findAllByRole('button', { name: / を今すぐ回す$/ });
     act(() => {
       fireEvent.click(buttons[0]!);
       fireEvent.click(buttons[1]!);
@@ -359,7 +389,7 @@ describe('継続中の依頼を外す', () => {
     stubSchedule([REQUEST_ENTRY]);
     renderSchedule();
 
-    fireEvent.click(await screen.findByRole('button', { name: '外す' }));
+    fireEvent.click(await screen.findByRole('button', { name: / を外す$/ }));
 
     expect(await screen.findByRole('alertdialog')).toBeTruthy();
     expect(screen.getByText('予定「morning-issues」を外しますか')).toBeTruthy();
@@ -374,7 +404,7 @@ describe('継続中の依頼を外す', () => {
     stubSchedule([REQUEST_ENTRY]);
     renderSchedule();
 
-    fireEvent.click(await screen.findByRole('button', { name: '外す' }));
+    fireEvent.click(await screen.findByRole('button', { name: / を外す$/ }));
     fireEvent.click(
       within(await screen.findByRole('alertdialog')).getByRole('button', { name: '外す' }),
     );
@@ -396,7 +426,7 @@ describe('継続中の依頼を外す', () => {
     renderSchedule();
 
     expect(await screen.findByText('既定（外せない）')).toBeTruthy();
-    expect(screen.queryByRole('button', { name: '外す' })).toBeNull();
+    expect(screen.queryByRole('button', { name: / を外す$/ })).toBeNull();
   });
 });
 
@@ -483,14 +513,19 @@ describe('仕込まれた依頼を編集できる（#496）', () => {
     // 仕込まれた依頼（SPEC_ENTRY）の行にだけ「編集」が出る。
     await screen.findByText('毎日 22:00 に日報');
     expect(screen.queryByText('daily_report')).toBeNull();
-    expect(screen.getAllByRole('button', { name: '編集' })).toHaveLength(1);
+    expect(screen.getAllByRole('button', { name: / を編集$/ })).toHaveLength(1);
+    // どの行のボタンかが名前で分かる（#3213）。既定の行にも「今すぐ回す」は在る。
+    expect(screen.getByRole('button', { name: `${SPEC_ENTRY.kind} を編集` })).toBeTruthy();
+    expect(screen.getByRole('button', { name: `${SPEC_ENTRY.kind} を外す` })).toBeTruthy();
+    expect(screen.getByRole('button', { name: `${SPEC_ENTRY.kind} を今すぐ回す` })).toBeTruthy();
+    expect(screen.getByRole('button', { name: `${DEFAULT_ENTRY.kind} を今すぐ回す` })).toBeTruthy();
   });
 
   it('開くと、いまの周期（時刻）と本文が入っている', async () => {
     stubSchedule([SPEC_ENTRY]);
     renderSchedule();
 
-    fireEvent.click(await screen.findByRole('button', { name: '編集' }));
+    fireEvent.click(await screen.findByRole('button', { name: / を編集$/ }));
 
     const panel = await screen.findByRole('group', { name: `${SPEC_ENTRY.kind} を編集` });
 
@@ -511,7 +546,7 @@ describe('仕込まれた依頼を編集できる（#496）', () => {
     stubSchedule([SPEC_ENTRY]);
     renderSchedule();
 
-    fireEvent.click(await screen.findByRole('button', { name: '編集' }));
+    fireEvent.click(await screen.findByRole('button', { name: / を編集$/ }));
     const panel = await screen.findByRole('group', { name: `${SPEC_ENTRY.kind} を編集` });
 
     // プレビューが Markdown として本文を描いている（編集タブの textarea は
@@ -524,7 +559,7 @@ describe('仕込まれた依頼を編集できる（#496）', () => {
     stubSchedule([SPEC_ENTRY]);
     renderSchedule();
 
-    fireEvent.click(await screen.findByRole('button', { name: '編集' }));
+    fireEvent.click(await screen.findByRole('button', { name: / を編集$/ }));
     const panel = await screen.findByRole('group', { name: `${SPEC_ENTRY.kind} を編集` });
 
     // 周期を直す（09:00 → 18:30）。
@@ -559,7 +594,7 @@ describe('仕込まれた依頼を編集できる（#496）', () => {
     stubSchedule([REQUEST_ENTRY]);
     renderSchedule();
 
-    fireEvent.click(await screen.findByRole('button', { name: '編集' }));
+    fireEvent.click(await screen.findByRole('button', { name: / を編集$/ }));
     const panel = await screen.findByRole('group', { name: `${REQUEST_ENTRY.kind} を編集` });
 
     // 周期の入力欄そのものが出ない（読めないことを画面に書き、推測で埋めない）。

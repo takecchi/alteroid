@@ -531,6 +531,7 @@ function UnreadableRowsNote({ unreadable }: { unreadable: TokensRowsUnreadable }
                   <Button
                     variant="danger"
                     size="sm"
+                    aria-label={`${row.id} の行を消す`}
                     loading={busyId === row.id}
                     onClick={() => setConfirmingId(row.id as string)}
                   >

@@ -14,6 +14,7 @@ import {
   KeyValueList,
   Select,
   Spinner,
+  SubmitHint,
   Textarea,
 } from '@alteroid/ui';
 import {
@@ -278,14 +279,23 @@ function EntryRow({
         ⚠ 本文には鍵が丸ごと入っていることがある。表示するのは、周りに見られない場所で。
       </p>
       <div className="mt-2 flex flex-wrap items-center gap-2">
-        <Button size="sm" onClick={() => setShown((value) => !value)}>
+        <Button
+          size="sm"
+          aria-label={`${entry.name} の本文を${shown ? '隠す' : '表示する'}`}
+          onClick={() => setShown((value) => !value)}
+        >
           {shown ? '本文を隠す' : '本文を表示する'}
         </Button>
-        <Button size="sm" onClick={onEdit}>
+        <Button size="sm" aria-label={`${entry.name} を編集する`} onClick={onEdit}>
           編集する
         </Button>
         {!confirming && !legacy && (
-          <Button variant="danger" size="sm" onClick={() => setConfirming(true)}>
+          <Button
+            variant="danger"
+            size="sm"
+            aria-label={`${entry.name} の行を外す`}
+            onClick={() => setConfirming(true)}
+          >
             この行を外す
           </Button>
         )}
@@ -305,7 +315,13 @@ function EntryRow({
             この行に書いてあった環境は無くなる。
           </p>
           <div className="flex flex-wrap items-center gap-2">
-            <Button variant="danger" size="sm" loading={busy} onClick={() => void remove()}>
+            <Button
+              variant="danger"
+              size="sm"
+              loading={busy}
+              aria-label={`${entry.name} の行を本当に外す`}
+              onClick={() => void remove()}
+            >
               本当に外す
             </Button>
             <Button variant="ghost" size="sm" disabled={busy} onClick={() => setConfirming(false)}>
@@ -477,6 +493,10 @@ function ProfileEditor({
               <Textarea
                 aria-label="プロファイルの新しい本文"
                 className="min-h-64 font-mono text-xs"
+                maxHeight="60vh"
+                // 保存ボタンと同じ（確認の段へ進むだけ。確認は飛ばさない）。
+                onSubmitShortcut={() => setConfirming(true)}
+                submitDisabled={unchanged || !nameValid || scriptEmpty || confirming || busy}
                 spellCheck={false}
                 autoComplete="off"
                 value={editor.script}
@@ -527,6 +547,7 @@ function ProfileEditor({
                 >
                   保存する
                 </Button>
+                <SubmitHint action="保存" />
                 <Button variant="ghost" size="sm" disabled={busy} onClick={() => setEditor(null)}>
                   編集を閉じる
                 </Button>

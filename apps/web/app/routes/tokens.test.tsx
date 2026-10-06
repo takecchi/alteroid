@@ -559,7 +559,9 @@ describe('/tokens 画面 — 空のプール', () => {
     expect(await screen.findByText(/捨てずに持ち越す/)).toBeTruthy();
     expect(screen.queryByText(/一緒に捨てる/)).toBeNull();
     expect(screen.getByText(/番号が取れない行は、ここでは消せない/)).toBeTruthy();
-    expect(screen.getAllByRole('button', { name: 'この行を消す' })).toHaveLength(1);
+    expect(screen.getAllByRole('button', { name: / の行を消す$/ })).toHaveLength(1);
+    // どの行のボタンかが名前で分かる（#3213）。
+    expect(screen.getByRole('button', { name: 'tok-bad の行を消す' })).toBeTruthy();
   });
 
   it('「この行を消す」は id を指して POST /tokens/unreadable/remove を呼ぶ。値は送らない（#2354）', async () => {
@@ -594,7 +596,7 @@ describe('/tokens 画面 — 空のプール', () => {
 
     renderTokens();
 
-    fireEvent.click(await screen.findByRole('button', { name: 'この行を消す' }));
+    fireEvent.click(await screen.findByRole('button', { name: / の行を消す$/ }));
     // 確認を経て初めて消す（#3067。確認のボタンは「消す」）。押しただけでは POST しない。
     const dialog = await screen.findByRole('alertdialog');
     expect(dialog.textContent).toContain('元に戻せません');
@@ -602,7 +604,7 @@ describe('/tokens 画面 — 空のプール', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: 'やめる' }));
     await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
     expect(posts).toEqual([]);
-    fireEvent.click(screen.getByRole('button', { name: 'この行を消す' }));
+    fireEvent.click(screen.getByRole('button', { name: / の行を消す$/ }));
     fireEvent.click(
       within(await screen.findByRole('alertdialog')).getByRole('button', { name: '消す' }),
     );
@@ -651,7 +653,7 @@ describe('/tokens 画面 — 空のプール', () => {
 
     renderTokens();
 
-    fireEvent.click(await screen.findByRole('button', { name: 'この行を消す' }));
+    fireEvent.click(await screen.findByRole('button', { name: / の行を消す$/ }));
     // 確認を経て初めて消す（#3067。確認のボタンは「消す」）。
     fireEvent.click(
       within(await screen.findByRole('alertdialog')).getByRole('button', { name: '消す' }),

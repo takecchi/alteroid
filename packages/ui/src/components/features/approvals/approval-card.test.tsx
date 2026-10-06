@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 /**
- * `ApprovalCard` の省略可能な口（`time` / `isSubmitKey` / `trailing`）と、その既定。
+ * `ApprovalCard` の省略可能な口（`time` / `trailing`）と、その既定。
  *
  * 口は画面（`apps/web/app/routes/approvals.tsx`）が今の表示をそのまま出すために足した。
  * **口を渡さないときの振る舞いは変えていない**——既定の側もここで押さえる。
@@ -51,7 +51,7 @@ describe('ApprovalCard: time', () => {
   });
 });
 
-describe('ApprovalCard: isSubmitKey', () => {
+describe('ApprovalCard: 送るキー', () => {
   function typeAndPress(init: KeyboardEventInit & { isComposing?: boolean }, props = {}) {
     const onSubmit = vi.fn();
     render(<ApprovalCard {...base} draft="答え" onSubmit={onSubmit} {...props} />);
@@ -71,17 +71,10 @@ describe('ApprovalCard: isSubmitKey', () => {
     expect(typeAndPress({ key: 'Enter', ctrlKey: true, isComposing: true })).not.toHaveBeenCalled();
   });
 
-  it('isSubmitKey を渡すと、その判定で送る（IME の確定の Enter も呼び側の判定に従う）', () => {
-    const isSubmitKey = (event: { metaKey: boolean; ctrlKey: boolean; key: string }) =>
-      (event.metaKey || event.ctrlKey) && event.key === 'Enter';
-    const sent = typeAndPress({ key: 'Enter', ctrlKey: true, isComposing: true }, { isSubmitKey });
-    expect(sent).toHaveBeenCalledWith('答え');
+  it('空の回答・送信中は、ショートカットでも送らない（ボタンの disabled と同じ条件）', () => {
+    expect(typeAndPress({ key: 'Enter', ctrlKey: true }, { draft: '  ' })).not.toHaveBeenCalled();
     cleanup();
-    expect(typeAndPress({ key: 'Enter' }, { isSubmitKey })).not.toHaveBeenCalled();
-    cleanup();
-    expect(
-      typeAndPress({ key: 'a', ctrlKey: true }, { isSubmitKey: () => true }),
-    ).toHaveBeenCalled();
+    expect(typeAndPress({ key: 'Enter', ctrlKey: true }, { busy: true })).not.toHaveBeenCalled();
   });
 });
 

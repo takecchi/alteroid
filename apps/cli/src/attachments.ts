@@ -179,6 +179,17 @@ export class AttachmentDraft {
     this.files.splice(0, this.files.length);
   }
 
+  /**
+   * 指定した分だけ外す（同じ `DraftFile` で引く）。送った分だけを空にするための口（#3245）: 上げて送る
+   * 応答を待つあいだに `/attach` で足された分は残す。
+   */
+  discard(sent: readonly DraftFile[]): void {
+    for (const file of sent) {
+      const index = this.files.indexOf(file);
+      if (index >= 0) this.files.splice(index, 1);
+    }
+  }
+
   /** 一覧の文。 */
   describe(): string[] {
     if (this.files.length === 0) return ['（添えかけのファイルは無い。/attach <path> で足す）'];
@@ -263,7 +274,13 @@ export async function uploadAttachment(
 }
 
 export type UploadDraftResult =
-  { ok: true; uploaded: UploadedAttachment[] } | { ok: false; reason: string };
+  | {
+      ok: true;
+      uploaded: UploadedAttachment[];
+      /** `uploaded` と同じ並びの添えかけ（送った分。送れたら `draft.discard(files)` で外す）。 */
+      files: DraftFile[];
+    }
+  | { ok: false; reason: string };
 
 /**
  * 添えかけを全部上げて、id を揃える。**失敗したら添えかけは残す**（上げ済みの印は残し、再送で上げ直さない）。
@@ -278,6 +295,7 @@ export async function uploadDraft(
   }) => Promise<UploadedAttachment>,
 ): Promise<UploadDraftResult> {
   const uploaded: UploadedAttachment[] = [];
+  const sent: DraftFile[] = [];
   const limits = await draft.limits();
   for (const file of draft.list()) {
     if (file.uploadedId !== undefined) {
@@ -288,6 +306,7 @@ export async function uploadDraft(
         size: file.size,
         sha256: '',
       });
+      sent.push(file);
       continue;
     }
     try {
@@ -296,12 +315,13 @@ export async function uploadDraft(
       const meta = await upload({ name: file.name, mediaType: file.mediaType, bytes });
       file.uploadedId = meta.id;
       uploaded.push(meta);
+      sent.push(file);
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       return { ok: false, reason: `${file.name}: ${reason}` };
     }
   }
-  return { ok: true, uploaded };
+  return { ok: true, uploaded, files: sent };
 }
 
 // ---------------------------------------------------------------------------

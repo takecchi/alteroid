@@ -142,7 +142,7 @@ describe('/archive 画面 — 一覧・集計・削除（#776）', () => {
     // 識別子は「詳しい情報」の先にだけ在る
     expect(screen.getByText('sess-1-a.jsonl').closest('details')).not.toBeNull();
     expect(screen.getByText('sess-1').closest('details')).not.toBeNull();
-    expect(screen.getByText(/1234バイト/)).toBeTruthy();
+    expect(screen.getByText(/使用量 1.2 KB/)).toBeTruthy();
   });
 
   it('本文のある行から詳細（/archive/:id）へ行ける。消された行には出さない（#3137）', async () => {
@@ -184,6 +184,7 @@ describe('/archive 画面 — 一覧・集計・削除（#776）', () => {
     expect(await screen.findByText(/からの会話/)).toBeTruthy();
     expect(screen.getByText('sess-repeated').closest('details')).not.toBeNull();
     expect(screen.getByText('行数 68')).toBeTruthy();
+    expect(screen.getByText('使用量合計 999 B（最大1行 500 B）')).toBeTruthy();
   });
 
   it('折りたたみの外に UUID の形の文字列を出さない', async () => {
@@ -303,7 +304,7 @@ describe('/archive 画面 — 一覧・集計・削除（#776）', () => {
     await renderArchive();
 
     // 保存量（`storedBytes`）は「使用量」。置き場が実際に使っている量である。
-    expect(await screen.findByText(/使用量 11452バイト/)).toBeTruthy();
+    expect(await screen.findByText(/使用量 11.2 KB/)).toBeTruthy();
     // 消した量（`removedBytes`）は「消した本文の素の UTF-8 バイト数」。
     // 使用量とは単位が違い、置き場で解放した量でもないと言う。
     const removedLine = screen.getByText(/削除:/);
