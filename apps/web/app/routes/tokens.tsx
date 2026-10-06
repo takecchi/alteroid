@@ -11,6 +11,7 @@ import {
   Button,
   Card,
   CardHeader,
+  ConfirmDialog,
   Empty,
   ErrorNote,
   Input,
@@ -470,6 +471,8 @@ function PoolCard({
 function UnreadableRowsNote({ unreadable }: { unreadable: TokensRowsUnreadable }) {
   const removeUnreadable = useRemoveUnreadableTokens();
   const [busyId, setBusyId] = useState<string | null>(null);
+  // 確認を出している行の id（押した瞬間には消さない。#3067 / #2781）。
+  const [confirmingId, setConfirmingId] = useState<string | null>(null);
   const [failure, setFailure] = useState<unknown>(undefined);
 
   async function remove(id: string) {
@@ -516,10 +519,22 @@ function UnreadableRowsNote({ unreadable }: { unreadable: TokensRowsUnreadable }
                     variant="danger"
                     size="sm"
                     loading={busyId === row.id}
-                    onClick={() => void remove(row.id as string)}
+                    onClick={() => setConfirmingId(row.id as string)}
                   >
                     この行を消す
                   </Button>
+                  {/* 消した行は戻せない。押した瞬間には実行せず確認を挟む（#3067 / #2781） */}
+                  <ConfirmDialog
+                    open={confirmingId === row.id}
+                    onOpenChange={(open) => {
+                      if (!open) setConfirmingId(null);
+                    }}
+                    title={`読めないトークンの行「${row.id}」を消しますか`}
+                    description="この行は消え、元に戻せません。中身はこの画面では読めないので、消したあとに同じものを入れ直すには元の値が要ります。"
+                    confirmLabel="消す"
+                    destructive
+                    onConfirm={() => void remove(row.id as string)}
+                  />
                 </>
               )}
             </li>
@@ -548,6 +563,7 @@ function TokenRow({
   const rejected = token.lastRejectedAt !== undefined || token.lastRejectedReason !== undefined;
   const setDisabled = useSetTokenDisabled();
   const removeToken = useRemoveToken();
+  const [confirmingRemove, setConfirmingRemove] = useState(false);
   const [busy, setBusy] = useState<'disable' | 'enable' | 'remove' | null>(null);
   const [failure, setFailure] = useState<unknown>(undefined);
   const rowRef = useRef<HTMLLIElement>(null);
@@ -723,10 +739,20 @@ function TokenRow({
           size="sm"
           loading={busy === 'remove'}
           disabled={busy !== null}
-          onClick={() => void remove()}
+          onClick={() => setConfirmingRemove(true)}
         >
           削除
         </Button>
+        {/* 消したトークンは戻せない。押した瞬間には実行せず確認を挟む（#3067 / #2781） */}
+        <ConfirmDialog
+          open={confirmingRemove}
+          onOpenChange={setConfirmingRemove}
+          title={`トークン「${token.label}」を削除しますか`}
+          description="このトークンはプールから外れ、元に戻せません。値はこの画面には出ていないので、入れ直すには claude setup-token の出力がもう一度要ります。"
+          confirmLabel="削除する"
+          destructive
+          onConfirm={() => void remove()}
+        />
       </div>
     </li>
   );
