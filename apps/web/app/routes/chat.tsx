@@ -149,6 +149,25 @@ function sizedOf(item: PendingAttachment): { name: string; size: number; type: s
   };
 }
 
+const attachmentMarkOf = (entry: {
+  attachments?: PendingAttachment[];
+  lostAttachments?: { count: number; names: string[] };
+}): Pick<ChatDraftMark, 'attachmentCount' | 'attachmentNames'> => {
+  const items = entry.attachments ?? [];
+  if (items.length > 0) {
+    return {
+      attachmentCount: items.length,
+      attachmentNames: items.map((item) => sizedOf(item).name),
+    };
+  }
+  return entry.lostAttachments === undefined
+    ? {}
+    : {
+        attachmentCount: entry.lostAttachments.count,
+        attachmentNames: entry.lostAttachments.names,
+      };
+};
+
 /** 上げ終えた添付の id（`POST /chat` の `attachments`）。 */
 function attachmentIds(items: readonly PendingAttachment[]): string[] {
   return items.flatMap((item) => (item.meta === undefined ? [] : [item.meta.id]));
@@ -1074,6 +1093,11 @@ export function ChatPane({
          * 新しい会話ではなく、この会話へ送る（受け取り済みの添付が別の会話へ結ばれて 400 になるのを避ける）。
          */
         conversationId?: string;
+        /**
+         * 再読み込みで復元した印が、添付つきの送信のものだった（#3708）。ファイルの実体は残せないので
+         * 戻せていない。案内に件数と名前を出し、使い手が添え直して送るか、本文だけで送るかを選ぶ。
+         */
+        lostAttachments?: { count: number; names: string[] };
       }
     >
   >(new Map());
@@ -1957,6 +1981,7 @@ export function ChatPane({
       entry.unconfirmed === undefined && entry.supersedes === undefined
         ? undefined
         : {
+            ...attachmentMarkOf(entry),
             ...(entry.clientMessageId === undefined
               ? {}
               : { clientMessageId: entry.clientMessageId }),
@@ -1982,7 +2007,24 @@ export function ChatPane({
           setRetries((prev) =>
             prev.has(shownId)
               ? prev
-              : new Map(prev).set(shownId, { text, restored: true, inComposer: true, ...mark }),
+              : new Map(prev).set(shownId, {
+                  text,
+                  restored: true,
+                  inComposer: true,
+                  ...(mark.clientMessageId === undefined
+                    ? {}
+                    : { clientMessageId: mark.clientMessageId }),
+                  ...(mark.unconfirmed === undefined ? {} : { unconfirmed: mark.unconfirmed }),
+                  ...(mark.supersedes === undefined ? {} : { supersedes: mark.supersedes }),
+                  ...(mark.attachmentCount === undefined
+                    ? {}
+                    : {
+                        lostAttachments: {
+                          count: mark.attachmentCount,
+                          names: mark.attachmentNames ?? [],
+                        },
+                      }),
+                }),
           );
           return;
         }
@@ -3749,6 +3791,15 @@ export function ChatPane({
                   <span>
                     送れたか確かめられなかった。サーバが受け取っていれば会話に出る（二重に送らないよう、確かめてから再送する）
                   </span>
+                  {unconfirmedEntry?.lostAttachments !== undefined && pending.length === 0 && (
+                    <span data-lost-attachments className="basis-full text-warn">
+                      添えていたファイル {unconfirmedEntry.lostAttachments.count} 件
+                      {unconfirmedEntry.lostAttachments.names.length === 0
+                        ? ''
+                        : `（${unconfirmedEntry.lostAttachments.names.join('、')}）`}
+                      は、再読み込みで戻せなかった。添え直してから再送するか、本文だけで再送する
+                    </span>
+                  )}
                   <Button
                     size="sm"
                     onClick={() => unconfirmedEntry !== undefined && resend(unconfirmedEntry)}

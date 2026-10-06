@@ -78,6 +78,12 @@ export interface ChatDraftMark {
   clientMessageId?: string;
   unconfirmed?: true;
   supersedes?: string;
+  /**
+   * 元の送信に添えていた添付の件数と名前（#3708）。ファイルの実体は残せないので、再読み込みの後に
+   * 「戻せなかった」と言うための控え。無い（古い形）なら添付なしとして読む。
+   */
+  attachmentCount?: number;
+  attachmentNames?: string[];
 }
 
 /** 保存した印を読む。無い・壊れている・知らない形のときは `undefined`（投げない）。 */
@@ -87,13 +93,26 @@ export function loadChatDraftMark(conversationId: string | undefined): ChatDraft
     if (raw === null || raw === undefined) return undefined;
     const value: unknown = JSON.parse(raw);
     if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
-    const { clientMessageId, unconfirmed, supersedes } = value as Record<string, unknown>;
+    const { clientMessageId, unconfirmed, supersedes, attachmentCount, attachmentNames } =
+      value as Record<string, unknown>;
     const mark: ChatDraftMark = {};
     if (typeof clientMessageId === 'string' && clientMessageId !== '') {
       mark.clientMessageId = clientMessageId;
     }
     if (unconfirmed === true) mark.unconfirmed = true;
     if (typeof supersedes === 'string' && supersedes !== '') mark.supersedes = supersedes;
+    if (
+      typeof attachmentCount === 'number' &&
+      Number.isInteger(attachmentCount) &&
+      attachmentCount > 0
+    ) {
+      mark.attachmentCount = attachmentCount;
+      if (Array.isArray(attachmentNames)) {
+        mark.attachmentNames = attachmentNames
+          .filter((name): name is string => typeof name === 'string')
+          .slice(0, 5);
+      }
+    }
     // 戻した文の印として意味があるのは、確かめられなかった送信か編集の続きだけ。
     return mark.unconfirmed === true || mark.supersedes !== undefined ? mark : undefined;
   } catch {
