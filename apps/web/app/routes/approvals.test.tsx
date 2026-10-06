@@ -603,7 +603,35 @@ describe('答えの後の行動（issue #847）', () => {
     });
     renderPage();
     fireEvent.click(await screen.findByText('答えの後の行動を見る'));
-    expect(await screen.findByText(/道具 Bash（failed）/)).not.toBeNull();
+    expect(await screen.findByText(/道具 Bash（失敗）/)).not.toBeNull();
+  });
+
+  /** issue #3077: outcome は日本語。未知の値は素の値のまま出す。入力の後続は保つ。 */
+  it('tool_use の outcome は日本語で出し、未知の値は素のまま出す', async () => {
+    const tool = (id: string, outcome: string) => ({
+      type: 'tool_use',
+      id,
+      at: '2026-08-19T11:00:01.000Z',
+      actor: 'clone',
+      tool: 'Bash',
+      outcome,
+      input: { command: 'ls' },
+      answeredApprovalId: 'a-1',
+    });
+    stubApprovals([answered], {
+      trace: () =>
+        json(
+          traceBody({
+            state: 'paired',
+            actions: [tool('j-2', 'interrupted'), tool('j-3', 'zzz_unknown')],
+          } as never),
+        ),
+    });
+    renderPage();
+    fireEvent.click(await screen.findByText('答えの後の行動を見る'));
+    expect(await screen.findByText(/道具 Bash（中断）: \{"command":"ls"\}/)).not.toBeNull();
+    expect(screen.getByText(/道具 Bash（zzz_unknown）: /)).not.toBeNull();
+    expect(document.body.textContent).not.toMatch(/interrupted|failed/);
   });
 
   it('exchange with=human は「人間への返答: 」を、それ以外は「発言: 」を前に置く（core と同じ文言）', async () => {

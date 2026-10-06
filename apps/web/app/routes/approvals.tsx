@@ -429,8 +429,22 @@ const TRACE_TYPES_WITH_BODY = new Set(['decision', 'memory_update', 'tool_use', 
  * 任せる（issue #3061）。core の `describeTraceAction` は CLI と共有なので変えず、ここで包む。
  */
 function traceActionBody(entry: Parameters<typeof describeTraceAction>[0]): string | null {
-  return TRACE_TYPES_WITH_BODY.has(entry.type) ? describeTraceAction(entry) : null;
+  if (!TRACE_TYPES_WITH_BODY.has(entry.type)) return null;
+  if (entry.type === 'tool_use' && entry.outcome !== undefined) {
+    // core は `道具 <名前>（failed）: <入力>` と英語の値を括弧に入れる（CLI と共有で固定）。
+    // Web では括弧の中だけ日本語にする。未知の値は素の値のまま出して情報を消さない（issue #3077）。
+    const head = `道具 ${entry.tool}`;
+    const rest = describeTraceAction({ ...entry, outcome: undefined }).slice(head.length);
+    return `${head}（${TOOL_OUTCOME_LABELS[entry.outcome] ?? entry.outcome}）${rest}`;
+  }
+  return describeTraceAction(entry);
 }
+
+/** `tool_use` の `outcome`（`failed` / `interrupted`）の日本語名。 */
+const TOOL_OUTCOME_LABELS: Record<string, string> = {
+  failed: '失敗',
+  interrupted: '中断',
+};
 
 /**
  * 承認の答えと、答えを受けたターンでクローンが取った行動を対で出す（issue #847 の案B）。
