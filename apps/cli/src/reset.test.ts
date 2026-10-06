@@ -174,11 +174,17 @@ describe('alteroid reset --yes', () => {
  * 消した後の報告と食い違わずに言うことを固定する。
  *
  * `confirm()` 自体は `readline` を使う対話なので、直接叩かず
- * `buildConfirmMessage()`（出す文字列そのもの）を読む。
+ * `buildConfirmMessage('http://127.0.0.1:4517')`（出す文字列そのもの）を読む。
  */
 describe('確認の文（buildConfirmMessage） — issue #2196', () => {
   it('「仕事のやり方」が確認の文に出る（消える前に知らされる）', () => {
-    expect(buildConfirmMessage()).toContain('仕事のやり方');
+    expect(buildConfirmMessage('http://127.0.0.1:4517')).toContain('仕事のやり方');
+  });
+
+  it('接続先（どのデーモンを消すか）が確認の文に出る（#3214）', () => {
+    expect(buildConfirmMessage('https://alteroid.example.com')).toContain(
+      '接続先: https://alteroid.example.com',
+    );
   });
 
   it('消した後の報告の見出し（SUMMARY_LABELS）が、全キーどこかの確認の group に載っている', () => {
@@ -243,7 +249,7 @@ describe('確認の扱い（confirmIrreversible に揃える） — issue #3200'
     expect(message).toContain('--yes');
     expect(message).toContain('何も変更していません');
     // 何が消えるかの文（reset の今の文）はそのまま添える。
-    expect(message).toContain(buildConfirmMessage());
+    expect(message).toContain(buildConfirmMessage('http://127.0.0.1:4517'));
     expect(asked).toEqual([]);
     expect(sent).toEqual([]);
   });
@@ -258,7 +264,7 @@ describe('確認の扱い（confirmIrreversible に揃える） — issue #3200'
     expect(sent[0]).toMatchObject({ method: 'POST', body: { confirm: true } });
     expect(asked).toEqual(['続けるなら yes と入力してください: ']);
     const shown = written.join('');
-    expect(shown).toContain(buildConfirmMessage());
+    expect(shown).toContain(buildConfirmMessage('http://127.0.0.1:4517'));
     expect(shown.match(/取り消せません。/g)).toHaveLength(1);
     expect(out).toContain('リセットしました');
   });
