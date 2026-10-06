@@ -45,7 +45,9 @@ import {
   formatDateTime,
   formatRelative,
   isPreviewableImage,
+  loadChatDraft,
   newClientMessageId,
+  saveChatDraft,
   redactError,
 } from '@alteroid/logic';
 import type { ConversationMessage, MessageAttachment, PendingApproval } from '@alteroid/logic';
@@ -91,8 +93,18 @@ const MessageAttachments = lazy(() => import('~/components/message-attachments')
  */
 interface PendingAttachment {
   key: string;
-  file: File;
+  /** 選んだファイル。**無いものは、すでにサーバにある添付**（発言の編集で引き継いだもの。`meta` を持つ）。 */
+  file?: File;
   meta?: MessageAttachment;
+}
+
+/** 検査（個数・大きさ）に渡す形。引き継いだ添付は控え（`meta`）から作る。 */
+function sizedOf(item: PendingAttachment): { name: string; size: number; type: string } {
+  return {
+    name: item.file?.name ?? item.meta?.name ?? '',
+    size: item.file?.size ?? item.meta?.size ?? 0,
+    type: item.file?.type ?? item.meta?.mediaType ?? '',
+  };
 }
 
 /** 上げ終えた添付の id（`POST /chat` の `attachments`）。 */
@@ -370,7 +382,46 @@ export interface EditedVersion {
    * この版のすぐ後に続いていた、いまは既定ビューから畳まれているやりとり
    * （この版自身の発言は含まない）。古い順。
    */
-  hiddenFollowUps: { role: 'human' | 'clone'; text: string }[];
+  hiddenFollowUps: { role: 'human' | 'clone' | 'approval'; text: string }[];
+}
+
+/** 決着した（回答済みか取り下げ済み）承認か。 */
+function isSettledApproval(approval: PendingApproval): boolean {
+  return (
+    (approval.answeredAt !== undefined && approval.answeredAt !== null) ||
+    (approval.withdrawnAt !== undefined && approval.withdrawnAt !== null)
+  );
+}
+
+/** 畳まれた版の後ろに出す、決着済みの確認の1行。 */
+function describeFoldedApproval(approval: PendingApproval): string {
+  const settled =
+    approval.withdrawnAt !== undefined && approval.withdrawnAt !== null
+      ? '（取り下げ済み）'
+      : approval.answer
+        ? `（回答: ${approval.answer}）`
+        : '（回答済み）';
+  return `${approval.question}${settled}`;
+}
+
+/**
+ * 編集で畳まれた区間（畳まれた発言のいちばん古い時刻から、畳んだ編集の時刻まで）。
+ * 畳むかどうかの規則そのものはサーバ（`supersededBy`）が持つ。ここはその区間に上がった承認を
+ * 見分けるためだけに、同じ印から区間を引く（承認は発言の id を持たないので、時刻で当てる）。
+ */
+function foldedSpans(messages: readonly ConversationMessage[]): { start: string; end: string }[] {
+  const starts = new Map<string, string>();
+  for (const message of messages) {
+    if (message.supersededBy === undefined) continue;
+    const current = starts.get(message.supersededBy);
+    if (current === undefined || message.at < current) starts.set(message.supersededBy, message.at);
+  }
+  const spans: { start: string; end: string }[] = [];
+  for (const [editId, start] of starts) {
+    const edit = messages.find((message) => message.id === editId);
+    if (edit !== undefined) spans.push({ start, end: edit.at });
+  }
+  return spans;
 }
 
 /**
@@ -395,6 +446,7 @@ export interface EditedVersion {
 export function buildEditVersions(
   messages: ConversationMessage[],
   headId: string,
+  approvals: readonly PendingApproval[] = [],
 ): EditedVersion[] | undefined {
   const byId = new Map(messages.map((message) => [message.id, message]));
   const head = byId.get(headId);
@@ -415,15 +467,32 @@ export function buildEditVersions(
     const nextId = ids[index + 1];
     // この版のすぐ後に畳まれた分——「次の版に隠された発言」のうち、
     // この版自身（`id`）を除いたもの（＝この版が受け取った応答など）。
-    const hiddenFollowUps: EditedVersion['hiddenFollowUps'] =
+    const next = nextId === undefined ? undefined : byId.get(nextId);
+    const folded: { at: string; role: 'human' | 'clone' | 'approval'; text: string }[] =
       nextId === undefined
         ? []
         : messages
             .filter((entry) => entry.supersededBy === nextId && entry.id !== id)
             .map((entry) => ({
+              at: entry.at,
               role: entry.role === 'inbound' ? ('human' as const) : ('clone' as const),
               text: entry.text,
             }));
+    // この版の区間（この版の発言から、次の版の発言まで）に上がった、決着済みの確認も畳む（#3397）。
+    if (message !== undefined && next !== undefined) {
+      for (const approval of approvals) {
+        if (!isSettledApproval(approval)) continue;
+        if (approval.createdAt < message.at || approval.createdAt >= next.at) continue;
+        folded.push({
+          at: approval.createdAt,
+          role: 'approval',
+          text: describeFoldedApproval(approval),
+        });
+      }
+    }
+    const hiddenFollowUps = folded
+      .sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0))
+      .map(({ role, text }) => ({ role, text }));
     return { text: message?.text ?? '', hiddenFollowUps };
   });
 }
@@ -641,7 +710,8 @@ export function ChatPane({
    */
   const [shownId, setShownId] = useState(routeId);
   const [lines, setLines] = useState<Line[]>([]);
-  const [draft, setDraft] = useState('');
+  // 書きかけの本文は会話ごとに `sessionStorage` にも残す（再読み込み・タブの破棄から戻る。#3400）。
+  const [draft, setDraft] = useState(() => loadChatDraft(routeId));
   /**
    * 「いま見ている会話ではない」会話の下書き（#1618）。**キーは会話 id
    * （`shownId` と同じ形。新しい会話＝id 無しは `undefined` という1つの鍵に
@@ -758,6 +828,14 @@ export function ChatPane({
   >(new Map());
   /** 入力欄に添えた添付（送る前）。上げるのは `send` のとき。 */
   const [pending, setPending] = useState<PendingAttachment[]>([]);
+  /*
+   * 本文の書きかけを、いま見ている会話の鍵で残す。**残すのは本文だけ**（添付・承認の回答・編集の
+   * 続きは残さない）。空なら鍵ごと消えるので、送信（入力欄が空になる）で消え、失敗して戻した文は
+   * また残る。入力のたびに書く（間引かない。1回は本文の長さぶんの書き込みで、判断は #3400）。
+   */
+  useEffect(() => {
+    saveChatDraft(shownId, draft);
+  }, [shownId, draft]);
   /** 添付を上げている最中か。真のあいだは送れない。 */
   const [uploading, setUploading] = useState(false);
   /** 会話を離れているあいだ、その会話の添えかけの添付をしまっておく（`drafts` と同じ鍵・同じ扱い）。 */
@@ -854,6 +932,11 @@ export function ChatPane({
   const [editingKey, setEditingKey] = useState<string | undefined>(undefined);
   /** 編集中の textarea の下書き。確定 (`confirmEdit`) が読み、取消で捨てる。 */
   const [editDraft, setEditDraft] = useState('');
+  /**
+   * 編集中の発言の添付（#3399）。**編集では引き継ぐ**——外さない限り、新しい版にも付ける。
+   * 同じ会話の中なら、サーバは同じ添付の結び直しを受ける（冪等）。
+   */
+  const [editAttachments, setEditAttachments] = useState<MessageAttachment[]>([]);
   /**
    * 版の切り替え（`< 2/2 >`）がいま見せている版の添字（0始まり）。
    * key は `Line.journalId`（編集された発言の、いま既定ビューに出ている側の
@@ -1120,7 +1203,7 @@ export function ChatPane({
         next.delete(routeId);
         return next;
       });
-      setDraft(drafts.get(routeId) ?? '');
+      setDraft(drafts.get(routeId) ?? loadChatDraft(routeId));
       /*
        * **添えかけの添付も、下書きと同じく会話ごとにしまい、戻ったら戻す。**
        * 使い手が選んだファイルを、会話を移っただけで黙って失わせない。しまうのは
@@ -1294,16 +1377,27 @@ export function ChatPane({
      * （issue #974）のどちらも、カードが状態と回答・理由を持つことで満たす。
      * 回答のあとのクローンの返答は、時刻順でカードの後ろに並ぶ。
      */
-    const approvalItems = (conversationApprovals.data?.approvals ?? []).map((approval) => ({
-      at: approval.createdAt,
-      line: {
-        key: `a-${approval.id}`,
-        role: 'system' as const,
-        of: shownId,
-        text: approval.question,
-        approval,
-      } satisfies Line,
-    }));
+    /*
+     * **決着済みの承認は、編集で畳まれた区間のものなら畳む（#3397。版を戻せば`hidden`に出る）。
+     * 未回答は区間の中でも常に出す** —— クローンが答えを待っているので、隠すと答えられない。
+     */
+    const spans = foldedSpans(history.data?.messages ?? []);
+    const approvalItems = (conversationApprovals.data?.approvals ?? [])
+      .filter(
+        (approval) =>
+          !isSettledApproval(approval) ||
+          !spans.some((span) => approval.createdAt >= span.start && approval.createdAt < span.end),
+      )
+      .map((approval) => ({
+        at: approval.createdAt,
+        line: {
+          key: `a-${approval.id}`,
+          role: 'system' as const,
+          of: shownId,
+          text: approval.question,
+          approval,
+        } satisfies Line,
+      }));
 
     return [...messageItems, ...approvalItems]
       .sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0))
@@ -1329,11 +1423,15 @@ export function ChatPane({
       if (message.role !== 'inbound') continue;
       if (message.supersededBy !== undefined) continue; // 隠された側は入口にしない
       if (message.supersedes === undefined) continue; // 編集していない発言
-      const chain = buildEditVersions(messages, message.id);
+      const chain = buildEditVersions(
+        messages,
+        message.id,
+        conversationApprovals.data?.approvals ?? [],
+      );
       if (chain !== undefined) result.set(message.id, chain);
     }
     return result;
-  }, [history.data]);
+  }, [history.data, conversationApprovals.data]);
 
   /**
    * **同じ会話へ繰り返し戻った分も、`lines` 自体から刈る（issue #446 の
@@ -1932,9 +2030,11 @@ export function ChatPane({
     () =>
       pending.map((item) => ({
         key: item.key,
-        name: item.file.name,
-        sizeLabel: formatBytes(item.file.size),
-        ...(isPreviewableImage(item.file.type) ? { preview: item.file } : {}),
+        name: sizedOf(item).name,
+        sizeLabel: formatBytes(sizedOf(item).size),
+        ...(item.file !== undefined && isPreviewableImage(item.file.type)
+          ? { preview: item.file }
+          : {}),
       })),
     [pending],
   );
@@ -2029,14 +2129,15 @@ export function ChatPane({
         const uploaded: PendingAttachment[] = [];
         try {
           for (const item of attachments) {
-            if (item.meta !== undefined) {
+            const file = item.file;
+            if (item.meta !== undefined || file === undefined) {
               uploaded.push(item);
               continue;
             }
             try {
-              const meta = await uploadAttachment(api, item.file, {
-                name: item.file.name,
-                type: attachmentMediaType(item.file),
+              const meta = await uploadAttachment(api, file, {
+                name: file.name,
+                type: attachmentMediaType(file),
               });
               uploaded.push({ ...item, meta });
               setPending((current) =>
@@ -2044,7 +2145,7 @@ export function ChatPane({
               );
             } catch (caught) {
               throw new Error(
-                `${item.file.name} を上げられなかった: ${redactError(caught instanceof Error ? caught.message : String(caught))}`,
+                `${file.name} を上げられなかった: ${redactError(caught instanceof Error ? caught.message : String(caught))}`,
                 { cause: caught },
               );
             }
@@ -2373,7 +2474,7 @@ export function ChatPane({
   const attach = useCallback(
     (files: File[]) => {
       const { accepted, rejected } = checkAttachments(
-        pending.map((item) => item.file),
+        pending.map(sizedOf),
         files,
         attachmentLimits,
       );
@@ -2494,12 +2595,17 @@ export function ChatPane({
   const confirmEdit = useCallback(
     async (line: Line) => {
       const text = editDraft.trim();
-      if (text === '' || line.journalId === undefined) return;
+      if ((text === '' && editAttachments.length === 0) || line.journalId === undefined) return;
       setEditingKey(undefined);
+      // 引き継ぐ添付は、すでに上げてある（`meta`）ので上げ直さない。
+      const carried: PendingAttachment[] = editAttachments.map((meta) => ({
+        key: `e-${meta.id}`,
+        meta,
+      }));
       // 入力欄の文を送るのではないので、入力欄の書きかけには触らない（#3391）。
-      await send(text, { supersedes: line.journalId, draft: 'keep' });
+      await send(text, { supersedes: line.journalId, draft: 'keep', attachments: carried });
     },
-    [editDraft, send],
+    [editDraft, editAttachments, send],
   );
 
   /**
@@ -2890,6 +2996,7 @@ export function ChatPane({
                           ? () => {
                               setEditingKey(line.key);
                               setEditDraft(line.text);
+                              setEditAttachments([...(line.attachments ?? [])]);
                             }
                           : undefined
                       }
@@ -2926,6 +3033,16 @@ export function ChatPane({
                         <ChatMessageEditor
                           value={editDraft}
                           onChange={setEditDraft}
+                          attachments={editAttachments.map((attachment) => ({
+                            id: attachment.id,
+                            name: attachment.name,
+                            sizeLabel: formatBytes(attachment.size),
+                          }))}
+                          onRemoveAttachment={(id) =>
+                            setEditAttachments((current) =>
+                              current.filter((attachment) => attachment.id !== id),
+                            )
+                          }
                           onConfirm={() => void confirmEdit(line)}
                           onCancel={() => setEditingKey(undefined)}
                         />

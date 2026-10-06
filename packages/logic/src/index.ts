@@ -17,6 +17,7 @@
 export * from './approval-questions.js';
 export * from './attachments.js';
 export * from './auth.js';
+export * from './chat-drafts.js';
 export * from './client-message-id.js';
 export * from './config.js';
 export * from './format.js';
