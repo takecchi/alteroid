@@ -2423,6 +2423,7 @@ export function createApp(deps: AppDeps) {
         meta.conversationId !== undefined || meta.externalEventId !== undefined,
       conflictMessage: 'すでに別の宛先に結び付いた添付は使えない',
       onlyUploadedBy: principal.kind === 'integration' ? uploaderOf(principal) : undefined,
+      serializeKey: `externalEvent:${eventId}`,
     });
   }
 
@@ -3386,6 +3387,7 @@ export function createApp(deps: AppDeps) {
             isBoundElsewhere: (meta) =>
               meta.conversationId !== undefined && meta.conversationId !== conversationId,
             conflictMessage: '別の会話に結び付いた添付は使えない',
+            serializeKey: `conversation:${conversationId}`,
           });
         } catch (error) {
           claim?.settle(false);
