@@ -30,6 +30,14 @@ import {
 /** 引き取りを試す間隔。CLI（`apps/cli/src/login.ts`）と揃えてある。 */
 export const CLAIM_INTERVAL_MS = 1500;
 
+/** 通信の失敗と 5xx を、続けて何回まで撃ち直すか。超えたら失敗として返す。 */
+export const CLAIM_MAX_RETRIES = 4;
+
+/** 待てば直りうる失敗（通信が落ちた・5xx）。4xx は待っても変わらない。 */
+function isTransient(error: unknown): boolean {
+  return !(error instanceof ApiError) || error.status >= 500;
+}
+
 export interface LoginStart {
   requestId: string;
   authorizationUrl: string;
@@ -105,7 +113,8 @@ export async function claimOnce(
 /**
  * 引き取れるまで叩き続ける。
  *
- * `signal` で中断でき、`expiresAt` を過ぎたら諦める（永久に回さない）。
+ * `signal` で中断でき、`expiresAt` を過ぎたら諦める（永久に回さない）。通信の失敗と 5xx は
+ * `CLAIM_MAX_RETRIES` 回まで撃ち直す（一度の失敗で、認可を済ませた待ちを捨てない）。
  */
 export async function claimUntilReady(
   client: AlteroidClient,
@@ -116,14 +125,27 @@ export async function claimUntilReady(
     options.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   const deadline = Date.parse(pending.expiresAt);
 
+  let failures = 0;
+
   for (;;) {
     if (options.signal?.aborted === true) return { status: 'failed', message: '中断した' };
     if (Number.isFinite(deadline) && Date.now() > deadline) {
       return { status: 'failed', message: 'ログインの有効期限が切れた。やり直してほしい' };
     }
 
-    const outcome = await claimOnce(client, pending);
-    if (outcome.status !== 'pending') return outcome;
+    try {
+      const outcome = await claimOnce(client, pending);
+      if (outcome.status !== 'pending') return outcome;
+      failures = 0;
+    } catch (error) {
+      // 通信の失敗と 5xx だけを数回まで撃ち直す。それ以外はそのまま投げる。
+      if (!isTransient(error)) throw error;
+      failures += 1;
+      if (failures > CLAIM_MAX_RETRIES) {
+        const reason = error instanceof Error ? error.message : String(error);
+        return { status: 'failed', message: `サーバと通信できず、引き取れなかった（${reason}）` };
+      }
+    }
 
     await sleep(CLAIM_INTERVAL_MS);
   }
