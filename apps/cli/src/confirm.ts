@@ -83,7 +83,16 @@ export async function confirmInRepl(
   write: (text: string) => void = (text) => {
     stdout.write(text);
   },
+  isTTY: boolean = stdin.isTTY === true,
 ): Promise<boolean> {
+  // 標準入力が端末でない REPL（パイプ）では、流れてきた `yes` で通さない（#3141・#3200 と同じ線）。
+  if (!isTTY) {
+    write(
+      `${summary}\n取り消せない操作です。端末ではなく対話で確認できないので、実行しません（何も変更していません）。` +
+        '確認を省くには、REPL ではなく単発のコマンドに --yes を付けてください。\n',
+    );
+    return false;
+  }
   write(`${summary}\n取り消せません。\n`);
   let answer: string;
   try {

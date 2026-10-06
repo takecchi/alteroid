@@ -73,4 +73,35 @@ describe('chat: 応答を待つ間に複数行が届いたとき', () => {
     expect(sent).toEqual(['one', 'two', 'three']);
     expect(paths).toContain('/chat/c1/end');
   }, 30000);
+
+  it.each([
+    {
+      tty: false,
+      label: '標準入力が端末でない（パイプ）と、流れてきた yes でも戻せない操作を実行しない',
+      stops: 0,
+    },
+    { tty: true, label: '端末なら、次の行の yes を確認の答えとして読み、実行する', stops: 1 },
+  ])(
+    '/stop の確認: $label',
+    async ({ tty, stops }) => {
+      const input = Object.assign(new PassThrough(), { isTTY: tty });
+      Object.defineProperty(process, 'stdin', { value: input, configurable: true });
+      syncBuiltinESMExports();
+      const requests: string[] = [];
+      vi.stubGlobal('fetch', (url: unknown, init?: RequestInit) => {
+        requests.push(`${init?.method ?? 'GET'} ${new URL(String(url)).pathname}`);
+        return Promise.resolve(Response.json({}));
+      });
+      const out = captureStdout();
+      const { chatCommand } = await import('./chat.js');
+      const done = chatCommand();
+      input.write('/stop mgr-1\nyes\n');
+      input.end();
+      await done;
+      const text = out();
+      expect(requests.filter((r) => r === 'DELETE /managers/mgr-1')).toHaveLength(stops);
+      if (!tty) expect(text).toContain('何も変更していません');
+    },
+    30000,
+  );
 });
