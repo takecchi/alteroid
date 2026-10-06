@@ -133,6 +133,8 @@ function renderDetailWithMessages(
     outcome: 'delivered',
     detail: '追加指示として届けた。',
   },
+  // 渡すと、解けるまで POST の応答を返さない（送信中の見た目を測る歯が使う）。
+  gate?: Promise<void>,
 ) {
   const sent: { url: string; method: string; body?: unknown }[] = [];
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -148,6 +150,7 @@ function renderDetailWithMessages(
         .json()
         .catch(() => undefined);
       sent.push({ url, method, body });
+      if (gate !== undefined) await gate;
       return json(sendResult);
     }
     if (url.includes(`/managers/${manager.managerId}`)) return json({ manager });
@@ -521,6 +524,53 @@ describe('待ちは kind で質問と実行許可を出し分ける（#334）', 
     await waitFor(() => expect(sent).toHaveLength(1));
     // **今までどおり `decision` を送る。** ここは1文字も変えていない。
     expect(sent[0]?.body).toEqual({ text: '許可する', requestId: 'req-p', decision: 'allow' });
+  });
+
+  /**
+   * **押したほうのボタンだけが回る（#3068）。** かつては `busy` が真偽値1本で、
+   * 「許可」だけが `loading={busy}`、「拒否」は `disabled={busy}` だった。
+   * 「拒否」を押すと、押していない「許可」が回り、押した「拒否」は灰色になるだけだった。
+   * 回る輪は `Button` の `loading` が描く `animate-spin` の svg で測る。
+   */
+  it('「拒否」を押すと回るのは「拒否」で、「許可」は回らず塞がる。「許可」でも逆になる', async () => {
+    for (const [pressed, other] of [
+      ['拒否', '許可'],
+      ['許可', '拒否'],
+    ] as const) {
+      let release: () => void = () => {};
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const { sent } = renderDetailWithMessages(
+        {
+          ...BASE,
+          status: 'waiting_human',
+          waiting: [
+            { requestId: 'req-p', summary: 'Bash の実行許可: ls', kind: 'permission', askedAt },
+          ],
+        },
+        { outcome: 'answered', detail: '解いた。' },
+        gate,
+      );
+      expect(await screen.findByText('Bash の実行許可: ls')).toBeTruthy();
+      fireEvent.click(screen.getByRole('button', { name: pressed }));
+      await waitFor(() => expect(sent).toHaveLength(1));
+
+      const pressedButton = screen.getByRole('button', { name: pressed });
+      const otherButton = screen.getByRole('button', { name: other });
+      expect(pressedButton.querySelector('.animate-spin')).not.toBeNull();
+      expect(otherButton.querySelector('.animate-spin')).toBeNull();
+      expect((pressedButton as HTMLButtonElement).disabled).toBe(true);
+      expect((otherButton as HTMLButtonElement).disabled).toBe(true);
+
+      release();
+      await waitFor(() =>
+        expect(
+          screen.getByRole('button', { name: pressed }).querySelector('.animate-spin'),
+        ).toBeNull(),
+      );
+      cleanup();
+    }
   });
 
   /**
