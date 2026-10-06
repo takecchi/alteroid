@@ -1426,3 +1426,53 @@ describe('本文の編集: 未保存のまま離れる前に確認する（#2764
     expect(event.defaultPrevented).toBe(true);
   });
 });
+
+/**
+ * 「片付けたものも見る」を初めて押すと別キーの取得が走る。そのあいだ一覧全体を
+ * スピナーへ置き換えると、未了の行（`OpenRow`）が unmount されて書きかけが黙って消える。
+ */
+describe('「片付けたものも見る」で未了の行の書きかけが消えない', () => {
+  it('閉じた分の応答が遅くても、本文の書きかけと片付ける理由が残る', async () => {
+    stubFetch(async (url) => {
+      if (!url.includes('/commitments')) return undefined;
+      if (url.includes('includeClosed=true')) {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        return json({
+          entries: [
+            commitment({ id: 'open-1', origin: 'human', body: '未了の本文' }),
+            commitment({
+              id: 'closed-1',
+              body: '片付いた本文',
+              closedAt: new Date().toISOString(),
+              closedReason: 'r',
+            }),
+          ],
+        });
+      }
+      return json({ entries: [commitment({ id: 'open-1', origin: 'human', body: '未了の本文' })] });
+    });
+    renderPage();
+
+    await screen.findByText('未了の本文');
+    fireEvent.change(screen.getByLabelText(/を片付けた理由$/), {
+      target: { value: '書きかけの理由' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '本文を編集' }));
+    const tabsRoot = screen.getByRole('tablist').parentElement!;
+    fireEvent.mouseDown(await screen.findByRole('tab', { name: '編集' }));
+    fireEvent.change(await within(tabsRoot).findByRole('textbox'), {
+      target: { value: '書きかけの本文' },
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: '片付けたものも見る' }));
+    await screen.findByText('片付いた本文');
+
+    const tabsAfter = screen.getByRole('tablist').parentElement!;
+    expect((within(tabsAfter).getByRole('textbox') as HTMLTextAreaElement).value).toBe(
+      '書きかけの本文',
+    );
+    expect((screen.getByLabelText(/を片付けた理由$/) as HTMLInputElement).value).toBe(
+      '書きかけの理由',
+    );
+  });
+});

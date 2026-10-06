@@ -74,13 +74,15 @@ export default function Commitments() {
     window.addEventListener('beforeunload', warn);
     return () => window.removeEventListener('beforeunload', warn);
   }, [anyDirty]);
-  const { data, error, isLoading, isValidating, mutate } = useCommitments(showClosed);
+  const { data, error, isLoading, isValidating, mutate } = useCommitments(false);
 
   // 並びはデーモンが決めている（未了が古い順、片付いたものが新しい順で後ろ）。
   // **ここで並べ直さない** — 並べ直すと齢の見え方が CLI・クローンと食い違う。
-  const all = data?.entries ?? [];
-  const open = all.filter((commitment) => !isClosed(commitment));
-  const closed = all.filter(isClosed);
+  // **一覧の取得は常に未了のキーだけ。** 「片付けたものも見る」で別キーへ切り替えて
+  // 一覧全体を読み込み中に置き換えると、未了の行（`OpenRow`）が unmount されて、書きかけの
+  // 本文・片付ける理由が黙って消える（離れる前の確認の対象からも外れる）。閉じた分は
+  // `ClosedCard` が自分だけで読む。
+  const open = (data?.entries ?? []).filter((commitment) => !isClosed(commitment));
   // **読めない行（issue #296）。**「無い」でも「片付いた」でもない第3の状態。
   const unreadable = data?.unreadable ?? [];
   // **保持上限を超えて物理削除された片付き行の累計（issue #416）。**
@@ -167,26 +169,40 @@ export default function Commitments() {
             置く。**ただし fs 実装は保持上限を超えた古い片付き行を物理削除する
             （issue #416）——削除された累計件数は上の TrimmedClosedNote が持つ。**
           */}
-          {showClosed && (
-            <Card>
-              <CardHeader
-                title="完了した仕事"
-                subtitle="新しい順。何をもって終わりとしたかを残す"
-              />
-              {closed.length === 0 ? (
-                <Empty>完了した仕事の記録はまだない。</Empty>
-              ) : (
-                <ul>
-                  {closed.map((commitment) => (
-                    <ClosedRow key={commitment.id} commitment={commitment} />
-                  ))}
-                </ul>
-              )}
-            </Card>
-          )}
+          {showClosed && <ClosedCard />}
         </>
       )}
     </Page>
+  );
+}
+
+/** 片付いた仕事。押されたときだけ読み、読んでいるあいだも未了の一覧は置き換えない。 */
+function ClosedCard() {
+  const { data, error, isLoading, isValidating, mutate } = useCommitments(true);
+  const closed = (data?.entries ?? []).filter(isClosed);
+  return (
+    <Card>
+      <CardHeader title="完了した仕事" subtitle="新しい順。何をもって終わりとしたかを残す" />
+      {isLoading ? (
+        <Spinner />
+      ) : data === undefined && error !== undefined ? (
+        <LoadError
+          what="完了した仕事の一覧"
+          error={error}
+          onRetry={() => mutate()}
+          retrying={isValidating}
+          className="m-4"
+        />
+      ) : closed.length === 0 ? (
+        <Empty>完了した仕事の記録はまだない。</Empty>
+      ) : (
+        <ul>
+          {closed.map((commitment) => (
+            <ClosedRow key={commitment.id} commitment={commitment} />
+          ))}
+        </ul>
+      )}
+    </Card>
   );
 }
 
