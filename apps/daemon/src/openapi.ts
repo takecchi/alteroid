@@ -710,6 +710,14 @@ export const approvalsResponseSchema = z.object({
   nextCursor: z.string().optional(),
 });
 
+/**
+ * `GET /approvals/answered-dates` の応答。決着のあった日（デーモンの `localDate()`）と、その日に
+ * 決着した件数（回答済み＋取り下げ済み）。新しい日が上。**封筒は持たない**（`/reports` と同じ）。
+ */
+export const approvalsAnsweredDatesResponseSchema = z.object({
+  dates: z.array(z.object({ date: z.string(), count: z.number().int().positive() })),
+});
+
 export const approvalsAnswerResponseSchema = z.object({
   results: z.array(z.object({ id: z.string(), ok: z.boolean(), error: z.string().optional() })),
 });
@@ -737,6 +745,9 @@ export const approvalTraceResponseSchema = z.object({
 });
 
 export const okResponseSchema = z.object({ ok: z.literal(true) });
+
+/** `GET /client-messages/:clientMessageId` の応え（Issue #3258）。受け取った会話の id だけを返す。 */
+export const clientMessageLookupResponseSchema = z.object({ conversationId: z.string() });
 
 /**
  * `POST /clone/interrupt` の応答（#1398 c23-1）。`interrupted` は止めた、`idle` は

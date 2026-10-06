@@ -80,6 +80,7 @@ describe('confirmInRepl（REPL の readline で聞く。#3141）', () => {
         (text) => {
           written.push(text);
         },
+        true,
       ),
     ).resolves.toBe(true);
     expect(written.join('')).toContain('取り消せません。');
@@ -94,6 +95,7 @@ describe('confirmInRepl（REPL の readline で聞く。#3141）', () => {
         (text) => {
           written.push(text);
         },
+        true,
       ),
     ).resolves.toBe(false);
     expect(written.join('')).toContain('取り消しました。何も変更していません。');
@@ -108,8 +110,30 @@ describe('confirmInRepl（REPL の readline で聞く。#3141）', () => {
         (text) => {
           written.push(text);
         },
+        true,
       ),
     ).resolves.toBe(false);
     expect(written.join('')).toContain('何も変更していません');
+  });
+
+  it('標準入力が端末でない（パイプ）ときは、聞かずに断る。流れてきた yes でも通さない', async () => {
+    const written: string[] = [];
+    let asked = 0;
+    await expect(
+      confirmInRepl(
+        '消します。',
+        async () => {
+          asked += 1;
+          return 'yes';
+        },
+        (text) => {
+          written.push(text);
+        },
+        false,
+      ),
+    ).resolves.toBe(false);
+    expect(asked).toBe(0);
+    expect(written.join('')).toContain('何も変更していません');
+    expect(written.join('')).toContain('--yes');
   });
 });

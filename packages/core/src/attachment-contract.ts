@@ -18,6 +18,8 @@ import {
  * 4. `bind` は未結び付けを結び付け（冪等）、別の会話へ結び付いたものは `conflicts`、無いものは `missing`
  * 5. `prune` は①未結び付けのまま1時間たったもの②期限を過ぎたものだけを消し、消した件数を返す。
  *    結び付いた期限内のものは残す
+ * 7. `unbind`（#3270）は、その結び付け先に結ばれている id だけを未結び付けへ戻して返す。別の宛先・未結び付け・
+ *    無い id は触らない（返さない）。冪等。戻したものは掃除の対象に戻る
  * 6. `bindToExternalEvent`（#3113 段3）も `bind` と同じ規則（冪等・別の宛先は `conflicts`・無いものは `missing`）。
  *    会話と外部イベントは**互いに別の宛先**で、どちらか一方へ結んだものは他方へ結べない。外部イベントへ
  *    結び付いたものは、未結び付けの掃除（1時間）で消えない
@@ -176,4 +178,39 @@ export async function verifyAttachmentStoreContract(store: AttachmentStore): Pro
   if ((await store.getMeta(toEvent.id)) === undefined)
     fail('外部イベントへ結び付いたものが掃除で消えた');
   if ((await store.getMeta(toConv.id)) === undefined) fail('会話へ結び付いたものが掃除で消えた');
+
+  // 7: unbind（部分的に結ぶ bind / bindToExternalEvent の取り消し。**その宛先に結ばれている id だけ**を戻す）
+  const uc1 = await store.put({ name: 'u1.png', mediaType: 'image/png', bytes: PNG });
+  const uc2 = await store.put({ name: 'u2.png', mediaType: 'image/png', bytes: PNG });
+  const ue1 = await store.put({ name: 'u3.png', mediaType: 'image/png', bytes: PNG });
+  const unb = await store.put({ name: 'u4.png', mediaType: 'image/png', bytes: PNG });
+  await store.bind([uc1.id], 'conv-u1');
+  await store.bind([uc2.id], 'conv-u2');
+  await store.bindToExternalEvent([ue1.id], 'ev-u1');
+  const undone = await store.unbind([uc1.id, uc2.id, ue1.id, unb.id, 'no-such-id', uc1.id], {
+    conversationId: 'conv-u1',
+  });
+  if (undone.join() !== uc1.id) fail(`unbind の戻り値: ${JSON.stringify(undone)}`);
+  if ((await store.getMeta(uc1.id))?.conversationId !== undefined)
+    fail('unbind が結び付けを戻さない');
+  if ((await store.getMeta(uc2.id))?.conversationId !== 'conv-u2')
+    fail('unbind が別の会話の結び付けを外した');
+  if ((await store.getMeta(ue1.id))?.externalEventId !== 'ev-u1')
+    fail('会話の unbind が外部イベントの結び付けを外した');
+  if ((await store.unbind([uc1.id], { conversationId: 'conv-u1' })).length > 0)
+    fail('unbind は冪等（戻したものを再度戻したと返さない）');
+  if ((await store.unbind([ue1.id], { externalEventId: 'ev-other' })).length > 0)
+    fail('unbind が別の外部イベントの結び付けを外した');
+  if ((await store.unbind([uc2.id], { externalEventId: 'conv-u2' })).length > 0)
+    fail('外部イベントの unbind が会話の結び付けを外した');
+  if ((await store.unbind([ue1.id], { externalEventId: 'ev-u1' })).join() !== ue1.id)
+    fail('外部イベントの unbind が戻さない');
+  const ue1After = await store.getMeta(ue1.id);
+  if (ue1After?.externalEventId !== undefined || ue1After?.conversationId !== undefined)
+    fail('外部イベントの unbind が結び付けを残した');
+  // 戻したものは別の宛先へ結べる。戻していないものは結べない
+  if ((await store.bind([uc1.id], 'conv-u3')).bound.join() !== uc1.id)
+    fail('unbind したものを別の会話へ bind できない');
+  if ((await store.bind([uc2.id], 'conv-u3')).conflicts.join() !== uc2.id)
+    fail('unbind の対象外だったものが別の会話へ結べた');
 }

@@ -59,6 +59,8 @@ const PER_ATTACHMENT_OVERHEAD_BYTES = 4096;
 
 /**
  * runner の `POST /managers` と `/managers/:id/messages` が受ける本文の上限（バイト）。
+ * `POST /managers/:id/resume` も同じ値で検める——ただし生ログ `entries`（添付の上限と無関係に大きい）も
+ * 運ぶので、本文全体ではなく **添付の `data` の合計だけ**を比べる（`entries` は対象外）。
  *
  * 添付の合計上限（`maxTotalBytes`）の base64（×4/3）に、個数ぶんのメタデータと依頼文の余裕を足す。
  * **デーモンが添付の上限（個数・合計）を先に検めて送るので、これは「検めを抜けた巨大な本文」への最後の歯止め**

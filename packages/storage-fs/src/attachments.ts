@@ -6,6 +6,7 @@ import {
   ATTACHMENT_UNBOUND_TTL_MS,
   assertNoNul,
   canBindAttachmentTo,
+  isAttachmentBoundTo,
   hasNul,
   isAttachmentPrunable,
   prepareAttachment,
@@ -169,6 +170,30 @@ export class FsAttachmentStore implements AttachmentStore {
       }
     }
     return { bound, missing, conflicts };
+  }
+
+  async unbind(ids: readonly string[], target: AttachmentBindTarget): Promise<string[]> {
+    const unbound: string[] = [];
+    for (const id of new Set(ids)) {
+      const dir = this.#idDir(id);
+      if (dir === undefined) continue;
+      try {
+        const done = await withPathLock(join(dir, META_FILE), async () => {
+          const meta = await this.#readMeta(dir);
+          if (meta === undefined || !isAttachmentBoundTo(meta, target)) return false;
+          const rest: { -readonly [K in keyof AttachmentMeta]: AttachmentMeta[K] } = { ...meta };
+          delete rest.conversationId;
+          delete rest.externalEventId;
+          await writeFileAtomic(join(dir, META_FILE), `${JSON.stringify(rest)}\n`, { mode: 0o600 });
+          return true;
+        });
+        if (done) unbound.push(id);
+      } catch (error) {
+        // 掃除が先にディレクトリごと消した。戻すものが無いのと同じ。
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      }
+    }
+    return unbound;
   }
 
   async prune(now: Date): Promise<number> {

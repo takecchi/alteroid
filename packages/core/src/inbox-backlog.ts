@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import { isDaemonSelfNotice } from './daemon-self-notice.js';
+import { compareIsoInstant, earliestIsoInstant } from './iso-instant.js';
 import type { InboxEvent, UnreadableInboxEvent } from './schema.js';
 import { describeUnreadableInboxEvents } from './store.js';
 import type { PendingInboxEvent } from './store.js';
@@ -1021,10 +1022,9 @@ export function summarizeInboxBacklog(
 ): InboxBacklogBreakdown {
   const total = rows.length;
 
-  const oldestAt = rows.reduce<string | undefined>(
-    (min, row) => (min === undefined || row.at < min ? row.at : min),
-    undefined,
-  );
+  // 実時刻で最古を選び、返すのは元の行の `at`（表記は変えない）。文字列の `<` で比べない
+  // （issue #2451・#3293。`+09:00` と `Z` の行が同居すると取り違える）。
+  const oldestAt = earliestIsoInstant(rows.map((row) => row.at));
 
   const byTypeCounts = new Map<InboxEvent['type'], number>();
   const bySourceCounts = new Map<string, number>();
@@ -1082,7 +1082,10 @@ export function summarizeInboxBacklog(
         humanType,
         (humanOriginatedByTypeCounts.get(humanType) ?? 0) + 1,
       );
-      if (humanOriginatedOldestAt === undefined || row.at < humanOriginatedOldestAt) {
+      if (
+        humanOriginatedOldestAt === undefined ||
+        compareIsoInstant(row.at, humanOriginatedOldestAt) < 0
+      ) {
         humanOriginatedOldestAt = row.at;
       }
       if (row.deliveries === 0) humanOriginatedUndelivered += 1;

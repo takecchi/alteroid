@@ -13,6 +13,7 @@ import {
   type JournalEntry,
 } from '@alteroid/core';
 
+import type { ConversationApprovalsRead } from '../conversation-approvals.js';
 import { ApiError } from './api.js';
 import type {
   ApprovalAnswerBody,
@@ -42,6 +43,14 @@ export interface ChatCall {
 
 export interface FakeApi extends TuiApi {
   chatCalls: ChatCall[];
+  /** `chat()` に渡された `clientMessageId`（`chatCalls` と同じ順）。 */
+  chatClientMessageIds: (string | undefined)[];
+  /** サーバが受け取り済みの発言（`clientMessageId` → 会話 id）。`findClientMessage` が引く。 */
+  receivedClientMessages: Record<string, string>;
+  /** `findClientMessage` に渡された id。 */
+  clientMessageLookups: string[];
+  /** 非 null なら `findClientMessage` がこの理由で失敗する。 */
+  clientMessageLookupFails: string | null;
   /** `uploadAttachment()` に渡されたもの。 */
   uploads: { name: string; mediaType: string; size: number }[];
   /** 次の（以降の）`uploadAttachment()` を失敗させる理由。 */
@@ -65,6 +74,10 @@ export interface FakeApi extends TuiApi {
   messages: Record<string, ConversationMessage[]>;
   /** 窓が日誌の先頭に届いていない会話の id。 */
   unreachedStart: Set<string>;
+  /** 会話ごとの、その会話のターンから積まれた承認（`readConversationApprovals` が返す）。 */
+  conversationApprovals: Record<string, ConversationApprovalsRead>;
+  /** `readConversationApprovals` に渡された会話 id。 */
+  conversationApprovalCalls: string[];
   counts: HeaderCounts;
   /** 1 本目 = 最初の接続の台本。文字列は種別だけ（本体なし）、オブジェクトは本体つき。 */
   journal: { events: (string | JournalStreamItem | Error | Promise<void>)[] }[];
@@ -139,6 +152,10 @@ export function fakeApi(): FakeApi {
   const api: FakeApi = {
     baseUrl: 'http://127.0.0.1:4517',
     chatCalls: [],
+    chatClientMessageIds: [],
+    receivedClientMessages: {},
+    clientMessageLookups: [],
+    clientMessageLookupFails: null,
     scripts: [],
     streamScripts: [],
     streamCalls: [],
@@ -149,6 +166,8 @@ export function fakeApi(): FakeApi {
     conversations: [],
     messages: {},
     unreachedStart: new Set(),
+    conversationApprovals: {},
+    conversationApprovalCalls: [],
     counts: { pendingApprovals: 0, unreadableApprovals: 0, runningManagers: 0 },
     journal: [],
     journalEntries: [],
@@ -184,7 +203,15 @@ export function fakeApi(): FakeApi {
       api.limitsCalls += 1;
       return api.limits;
     },
+    findClientMessage(clientMessageId) {
+      api.clientMessageLookups.push(clientMessageId);
+      if (api.clientMessageLookupFails !== null) {
+        return Promise.reject(new ApiError(api.clientMessageLookupFails));
+      }
+      return Promise.resolve(api.receivedClientMessages[clientMessageId] ?? null);
+    },
     async *chat(input, signal) {
+      api.chatClientMessageIds.push(input.clientMessageId);
       api.chatCalls.push({
         text: input.text,
         ...(input.conversationId === undefined ? {} : { conversationId: input.conversationId }),
@@ -239,6 +266,10 @@ export function fakeApi(): FakeApi {
       return Promise.resolve(
         messages === undefined ? null : { messages, reachedStart: !api.unreachedStart.has(id) },
       );
+    },
+    readConversationApprovals(id) {
+      api.conversationApprovalCalls.push(id);
+      return Promise.resolve(api.conversationApprovals[id] ?? { approvals: [], unreadable: [] });
     },
     markConversationRead(id, through) {
       api.readMarks.push({ id, through });

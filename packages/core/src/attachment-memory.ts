@@ -1,5 +1,6 @@
 import {
   canBindAttachmentTo,
+  isBoundTo,
   isAttachmentPrunable,
   prepareAttachment,
   readAttachmentLimits,
@@ -69,6 +70,21 @@ export class MemoryAttachmentStore implements AttachmentStore {
       }
     }
     return { bound, missing, conflicts };
+  }
+
+  async unbind(ids: readonly string[], target: AttachmentBindTarget): Promise<string[]> {
+    const unbound: string[] = [];
+    for (const id of new Set(ids)) {
+      const row = hasNul(id) ? undefined : this.#rows.get(id);
+      if (row !== undefined && isBoundTo(row.meta, target)) {
+        const rest: { -readonly [K in keyof AttachmentMeta]: AttachmentMeta[K] } = { ...row.meta };
+        delete rest.conversationId;
+        delete rest.externalEventId;
+        row.meta = rest;
+        unbound.push(id);
+      }
+    }
+    return unbound;
   }
 
   async prune(now: Date): Promise<number> {

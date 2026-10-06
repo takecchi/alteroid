@@ -6,13 +6,14 @@
  * 1回で届く。設問を持たない承認待ちは、これまでの回答欄のまま。
  */
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { createMemoryRouter, RouterProvider } from 'react-router';
+import { createMemoryRouter, RouterProvider, useParams } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import type { PendingApproval } from '@alteroid/logic';
 import { json, Providers, storeTestBaseUrl } from '~/test-support';
 
 import Approvals from './approvals';
+import ApprovalsAnswered from './approvals-answered';
 
 function approval(over: Partial<PendingApproval> = {}): PendingApproval {
   return {
@@ -44,6 +45,10 @@ function stub(approvals: PendingApproval[], failAnswer = false) {
       typeof input === 'string' ? input : input instanceof URL ? input.href : input.url,
     );
     if (url.pathname === '/approvals') return json({ approvals });
+    // 回答済みのページの目次（決着した日）。その日の件は上の `/approvals`（`answeredOn` 付き）が返す。
+    if (url.pathname === '/approvals/answered-dates') {
+      return json({ dates: [{ date: '2026-08-19', count: approvals.length }] });
+    }
     if (/^\/approvals\/[^/]+\/answer$/.test(url.pathname) && input instanceof Request) {
       answers.push({ path: url.pathname, body: await input.clone().json() });
       return failAnswer
@@ -70,6 +75,25 @@ function renderPage() {
   const router = createMemoryRouter([{ path: '/', Component: Approvals }], {
     initialEntries: ['/'],
   });
+  render(
+    <Providers>
+      <RouterProvider router={router} />
+    </Providers>,
+  );
+}
+
+function renderAnsweredDetail(url: string) {
+  function Routed() {
+    const { date, approvalId } = useParams();
+    const Page = ApprovalsAnswered as unknown as (props: {
+      loaderData: { date: string | undefined; approvalId: string | undefined };
+    }) => React.ReactElement;
+    return <Page loaderData={{ date, approvalId }} />;
+  }
+  const router = createMemoryRouter(
+    [{ path: '/approvals/answered/:date?/:approvalId?', Component: Routed }],
+    { initialEntries: [url] },
+  );
   render(
     <Providers>
       <RouterProvider router={router} />
@@ -151,8 +175,9 @@ describe('/approvals の設問つき承認待ち', () => {
         answeredAt: '2026-08-19T11:00:00.000Z',
       }),
     ]);
-    renderPage();
-    fireEvent.click(await screen.findByRole('button', { name: '回答済み・取り下げ済みも見る' }));
+    // 回答済みは別のページ（`/approvals/answered/:date/:approvalId`）の詳細で読む（#3237。
+    // 以前は未回答の画面のトグルで切り替えていた）。
+    renderAnsweredDetail('/approvals/answered/2026-08-19/a-1');
     expect(await screen.findByText(/Q1 デプロイ先: \(a\) Railway/)).toBeTruthy();
     expect(screen.queryByRole('radio')).toBeNull();
   });

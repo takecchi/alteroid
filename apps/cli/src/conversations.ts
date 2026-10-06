@@ -2,6 +2,13 @@ import { stdout } from 'node:process';
 
 import { attachmentLinesOf } from './attachments.js';
 import { createClient, type DaemonClient } from './client.js';
+import {
+  approvalLine,
+  approvalNoticeLines,
+  fetchConversationApprovals,
+  interleaveApprovals,
+  type ConversationApprovalsRead,
+} from './conversation-approvals.js';
 import { formatElapsedAgo, withErrorReason } from './format.js';
 import { describeAuthFailure, resolveTarget, type Target } from './target.js';
 import { redactBody } from './redact.js';
@@ -257,10 +264,12 @@ export async function conversationsShowCommand(
     );
   }
   const { messages, scanned, reachedStart, supersededCount } = await response.json();
+  // その会話のターンから積まれた承認を時刻順の位置に出す（#3261）。**取れなくても会話は出す。**
+  const approvals = await fetchConversationApprovals(client, id);
   // `renderConversationDetail` も改行で終わらずに返す（理由は上の
   // `renderConversationsList` の呼び出しと同じ。#326）。
   stdout.write(
-    `${renderConversationDetail(id, messages, scanned, reachedStart, supersededCount)}\n`,
+    `${renderConversationDetail(id, messages, scanned, reachedStart, supersededCount, approvals)}\n`,
   );
 }
 
@@ -281,9 +290,11 @@ export function renderConversationDetail(
   scanned: number,
   reachedStart: boolean,
   supersededCount: number,
+  approvals?: ConversationApprovalsRead,
 ): string {
   const lines: string[] = [`── 会話 ${id} ──`];
-  if (messages.length === 0) {
+  const timeline = interleaveApprovals(messages, approvals?.approvals ?? []);
+  if (timeline.length === 0) {
     lines.push(
       reachedStart
         ? '（発言はありません）'
@@ -291,7 +302,12 @@ export function renderConversationDetail(
             '--scan を増やして確かめてください）',
     );
   } else {
-    for (const message of messages) {
+    for (const item of timeline) {
+      if (item.kind === 'approval') {
+        lines.push(`  ${approvalLine(item.approval)}`);
+        continue;
+      }
+      const message = item.message;
       const speaker = message.role === 'inbound' ? '人間' : 'クローン';
       // **どれが畳まれた版で、どの編集に置き換えられたかを読める形にする。**
       // `--include-superseded` を付けたときだけ、どちらかが付きうる
@@ -313,6 +329,9 @@ export function renderConversationDetail(
     }
   }
   lines.push('');
+  for (const notice of approvalNoticeLines(approvals ?? { approvals: [], unreadable: [] })) {
+    lines.push(notice);
+  }
   lines.push(
     reachedStart
       ? `（人間との往復を ${scanned} 件遡り、この会話の先頭まで届いた）`

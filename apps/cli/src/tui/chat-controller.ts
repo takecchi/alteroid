@@ -16,6 +16,8 @@
  *   （考えている…・ここまでの文章）を出し、続きを流す（Issue #2652）。送信と同じ `onEvent` を
  *   共有し、その間は `busy` で、発言は追送になる。
  */
+import { randomUUID } from 'node:crypto';
+
 import {
   AttachmentDraft,
   AttachmentMissingError,
@@ -28,6 +30,12 @@ import {
 } from '../attachments.js';
 import type { ChatEvent, ConversationMessage, ConversationSummary, TuiApi } from './api.js';
 import type { LogEntry, LogKind } from './log.js';
+import {
+  approvalNoticeLines,
+  approvalText,
+  interleaveApprovals,
+  type ConversationApprovalsRead,
+} from '../conversation-approvals.js';
 import { redactBody, redactedErrorMessage, redactError } from '../redact.js';
 import { Store } from './store.js';
 
@@ -113,6 +121,14 @@ export class ChatController {
 
   /** 次に送る発言へ添えかけのファイル（`/attach`）。 */
   private readonly draft = new AttachmentDraft(() => this.api.attachmentLimits());
+  /**
+   * 新しい会話（`conversationId` 無し）で `open` の前に終わった送信の `clientMessageId`（#3304）。受け取られたか
+   * 分からないので、次の送信の前に `GET /client-messages/:id` で引き、受け取り済みならその会話へ送る
+   * （添付が最初の会話に結び付いたまま新しい会話として送ると `attachment_conflict` になる）。
+   */
+  private unopened: string | null = null;
+  /** {@link unopened} を引いている最中か（二重に引かない）。 */
+  private lookingUp = false;
   /** 会話ごとに、最後に既読の要求を送った発言の id。 */
   private readonly markedThrough = new Map<string, string>();
 
@@ -213,17 +229,50 @@ export class ChatController {
     this.store.update((s) => ({ ...s, ...patch }));
   }
 
-  /** 発言を送る。応答中なら追送になる。 */
-  async send(text: string): Promise<void> {
-    if (text.length === 0 && this.draft.count === 0) return;
+  /**
+   * 前の送信（新しい会話で `open` の前に終わったもの）が受け取られていたか引き、受け取り済みならその会話を
+   * 「いまの会話」にする（404 なら覚えを捨てて新しい会話のまま）。**引けなかったら `false`**（黙って新しい会話として
+   * 送らない。理由と、もう一度送ると引き直すことを出す）。
+   */
+  private async adoptUnopened(): Promise<boolean> {
+    const id = this.unopened;
+    if (id === null || this.store.getSnapshot().conversationId !== null) return true;
+    if (this.lookingUp) return false;
+    this.lookingUp = true;
+    try {
+      const found = await this.api.findClientMessage(id);
+      this.unopened = null;
+      if (found !== null) {
+        this.set({ conversationId: found });
+        this.addSystem(`前の送信は受け取られていた。その会話（${found}）へ送る`);
+      }
+      return true;
+    } catch (error) {
+      this.addError(
+        `前の送信が受け取られたか確かめられなかったので、送っていない（${messageOf(error)}）。もう一度送ると確かめ直す（入力と添えかけは残してある）`,
+      );
+      return false;
+    } finally {
+      this.lookingUp = false;
+    }
+  }
+
+  /**
+   * 発言を送る。応答中なら追送になる。**`false` は送らなかった印**（前の送信を引けなかった）で、呼び手は
+   * 入力を入力欄へ戻す。
+   */
+  async send(text: string): Promise<boolean> {
+    if (text.length === 0 && this.draft.count === 0) return true;
     if (this.store.getSnapshot().busy) {
       await this.followUp(text);
-      return;
+      return true;
     }
     // まだ `open` が来ていない戻り接続があっても、自分のターンを始めるなら要らない（二重に流れる）。
     this.stopWatch();
+    // 覚えが無いときは待たずに進む（送信の前に非同期の隙間を作らない）。
+    if (this.unopened !== null && !(await this.adoptUnopened())) return false;
     const attached = this.draft.count === 0 ? NO_ATTACHMENTS : await this.uploadDraft();
-    if (attached === null) return;
+    if (attached === null) return true;
     this.push('user', [text, ...attached.lines].filter((l) => l !== '').join('\n'));
     this.set({ busy: true, transient: '考えている…' });
     const abort = new AbortController();
@@ -232,13 +281,16 @@ export class ChatController {
     this.opened = opened;
     // 返答が最後まで画面に出たか。出たなら会話を既読にする（`docs/architecture.md`「会話の既読」）。
     const reply = new ReplyOutcome();
+    const clientMessageId = randomUUID();
+    const conversationId = this.store.getSnapshot().conversationId;
+    let rejected = false;
     try {
-      const conversationId = this.store.getSnapshot().conversationId;
       for await (const event of this.api.chat(
         {
           text,
           ...(conversationId === null ? {} : { conversationId }),
           ...(attached.ids.length === 0 ? {} : { attachments: attached.ids }),
+          clientMessageId,
         },
         abort.signal,
       )) {
@@ -249,6 +301,7 @@ export class ChatController {
       }
     } catch (error) {
       if (error instanceof AttachmentMissingError) {
+        rejected = true; // サーバは発言を受けていない
         this.addError(`${expireUploads(attached.files, error.message)}（${messageOf(error)}）`);
       } else if (!abort.signal.aborted) {
         this.addError(messageOf(error));
@@ -259,8 +312,14 @@ export class ChatController {
       this.set({ busy: false, transient: null });
       if (this.abort === abort) this.abort = null;
       if (this.opened === opened) this.opened = null;
+      // 新しい会話で `open` の前に終わった（受信をやめた・接続が切れた）なら、受け取られたか分からない。
+      // 次の送信の前に、この id で会話を引き直す（#3304）。
+      if (conversationId === null && reply.conversationId === null && !rejected) {
+        this.unopened = clientMessageId;
+      }
     }
     if (reply.displayed && !abort.signal.aborted) await this.markReplyRead(reply.conversationId);
+    return true;
   }
 
   /**
@@ -399,6 +458,7 @@ export class ChatController {
   newConversation(): boolean {
     if (this.refuseWhileBusy()) return false;
     this.stopWatch();
+    this.unopened = null;
     this.store.update(() => ({ ...initialChatState }));
     this.addSystem('新しい会話を始めた');
     return true;
@@ -418,6 +478,7 @@ export class ChatController {
       return;
     }
     this.stopWatch();
+    this.unopened = null;
     this.store.update(() => ({ ...initialChatState }));
     this.addSystem('会話を終えた（学びを記憶へ蒸留している）。次の発言から新しい会話になる');
   }
@@ -479,8 +540,12 @@ export class ChatController {
       );
       return false;
     }
-    const entries = this.historyEntries(read.messages);
+    const entries = this.historyEntries(
+      read.messages,
+      await this.api.readConversationApprovals(id),
+    );
     this.stopWatch();
+    this.unopened = null;
     this.store.update(() => ({
       ...initialChatState,
       conversationId: id,
@@ -554,15 +619,30 @@ export class ChatController {
     }
   }
 
-  private historyEntries(messages: ConversationMessage[]): LogEntry[] {
-    const entries: LogEntry[] = messages.map((m) => {
+  /**
+   * 履歴の発言を、その会話のターンから積まれた承認と時刻順に並べて出す（#3261。承認は 'ask' の1行。
+   * 取れなかった・読めない行があるときは、最後に 'system' の断りを足す）。
+   */
+  private historyEntries(
+    messages: ConversationMessage[],
+    approvals: ConversationApprovalsRead,
+  ): LogEntry[] {
+    const entries: LogEntry[] = interleaveApprovals(messages, approvals.approvals).map((item) => {
       this.seq += 1;
+      if (item.kind === 'approval') {
+        return { seq: this.seq, kind: 'ask', text: approvalText(item.approval) };
+      }
+      const m = item.message;
       return {
         seq: this.seq,
         kind: m.role === 'inbound' ? 'user' : 'assistant',
         text: redactBody([m.text, ...attachmentLinesOf(m.attachments)].join('\n')),
       };
     });
+    for (const notice of approvalNoticeLines(approvals)) {
+      this.seq += 1;
+      entries.push({ seq: this.seq, kind: 'system', text: notice });
+    }
     return entries.length > MAX_ENTRIES ? entries.slice(-MAX_ENTRIES) : entries;
   }
 
@@ -577,7 +657,11 @@ export class ChatController {
       const read = await this.api.readConversation(conversationId);
       if (abort.signal.aborted || read === null) return;
       if (!read.reachedStart && read.messages.length === 0) return;
-      const entries = this.historyEntries(read.messages);
+      const entries = this.historyEntries(
+        read.messages,
+        await this.api.readConversationApprovals(conversationId),
+      );
+      if (abort.signal.aborted) return;
       this.store.update((s) => (s.conversationId === conversationId ? { ...s, entries } : s));
       if (!read.reachedStart) {
         this.addSystem(
