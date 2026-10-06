@@ -772,6 +772,8 @@ class Host implements RunnerHost {
   readonly #generations = new WeakMap<RunnerSession, string>();
   /** 担い手へ渡す添付の置き場（`runner-attachments.ts`）。 */
   readonly #attachmentsRoot: string;
+  /** 委譲ごとの、走り残っている添付の置き場の削除（完了したら消す）。Issue #3267。 */
+  readonly #attachmentRemovals = new Map<string, Promise<void>>();
   /**
    * デーモンから降りてきた MCP の登録（#325 段3）と、その指紋。**置いていなければ
    * `undefined`。** 値は `#buildOptions` へ渡す以外に外へ出さない。
@@ -1198,7 +1200,7 @@ class Host implements RunnerHost {
       onClosed: () => {
         this.#sessions.delete(managerId);
         // 担い手へ渡した添付も、委譲が畳まれたら消す（取りこぼしは `#placeAttachments` の掃除が拾う）。
-        void removeManagerAttachments(this.#attachmentsRoot, managerId).catch(() => undefined);
+        this.#removeAttachments(managerId);
       },
       onDelegationProcessSpawned: (pid) => this.#noteDelegationProcessSpawned(pid, managerId),
       onDelegationProcessExited: (pid) => this.#noteDelegationProcessExited(pid),
@@ -1248,9 +1250,7 @@ class Host implements RunnerHost {
       session.begin(input.text, input.images);
     } catch (error) {
       this.#sessions.delete(command.managerId);
-      void removeManagerAttachments(this.#attachmentsRoot, command.managerId).catch(
-        () => undefined,
-      );
+      this.#removeAttachments(command.managerId);
       throw error;
     }
     return { cwd: session.cwd, ...this.#generationOf(session) };
@@ -1410,11 +1410,33 @@ class Host implements RunnerHost {
     return this.#placeAttachmentInput(managerId, text, attachments);
   }
 
+  /**
+   * 委譲の添付の置き場を消し、その Promise を握る（Issue #3267）。握らないと、畳みの `onClosed` が
+   * 投げた削除が遅れて走り、畳み待ちから作り直した resume が置き直した添付を消す。
+   * 失敗は握りつぶす（取りこぼしは `#placeAttachmentInput` の掃除が拾う）。
+   */
+  #removeAttachments(managerId: string): void {
+    const removal: Promise<void> = removeManagerAttachments(this.#attachmentsRoot, managerId)
+      .catch(() => undefined)
+      .finally(() => {
+        if (this.#attachmentRemovals.get(managerId) === removal) {
+          this.#attachmentRemovals.delete(managerId);
+        }
+      });
+    this.#attachmentRemovals.set(managerId, removal);
+  }
+
   async #placeAttachmentInput(
     managerId: string,
     text: string,
     attachments: readonly RunnerAttachment[],
   ): Promise<AgentUserInput> {
+    // 走り残った削除があれば、置く前にそれを待つ。添付が無い回は `#attachmentInput` が同期で返すので、
+    // ここへ来ない（#1660 の順序は変わらない）。待つ間に握られた新しい削除も待つ。
+    for (let removal = this.#attachmentRemovals.get(managerId); removal !== undefined; ) {
+      await removal;
+      removal = this.#attachmentRemovals.get(managerId);
+    }
     void pruneStaleAttachmentDirs(
       this.#attachmentsRoot,
       [...this.#sessions.keys(), managerId],
