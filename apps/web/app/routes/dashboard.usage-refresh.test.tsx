@@ -180,7 +180,7 @@ describe('「今日の利用」の定期更新（issue #3699）', () => {
 
   it('定期更新の取り直しが失敗しても、前の値を残して注記する（#3346）', async () => {
     const cost = { value: 0.02 as number | 'fail' };
-    const stub = renderHomeWith(cost);
+    renderHomeWith(cost);
     await tick(10);
     expect(screen.getByText('$0.0200')).toBeTruthy();
 
