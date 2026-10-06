@@ -486,6 +486,27 @@ describe('もっと遡る（過去方向のカーソル送り）', () => {
     expect(stub.calls.filter((url) => url.includes('/journal'))).toHaveLength(3);
   });
 
+  it('初回が失敗し SSE で1件入っても「もう一度試す」が在り、押して成功すると帯が消える', async () => {
+    let calls = 0;
+    stubFetch((url) => {
+      if (!url.includes('/journal')) return undefined;
+      calls += 1;
+      if (calls === 1) return json({ error: 'boom' }, 500);
+      return json({ entries: [RECENT_EXCHANGE], scanned: 1 });
+    });
+
+    renderJournal({ status: 'live', recent: [RECENT_EXCHANGE] });
+
+    expect(await screen.findByText(/日誌を読み込めませんでした/)).toBeTruthy();
+    // 一覧は仮想化で jsdom には描かれない（上の recent のテストと同じ）。帯に再試行が在ることを見る。
+    fireEvent.click(screen.getByRole('button', { name: /もう一度試す/ }));
+
+    await waitFor(() => {
+      expect(screen.queryByText(/日誌を読み込めませんでした/)).toBeNull();
+    });
+    expect(calls).toBe(2);
+  });
+
   it('next が先を指すなら、100件未満で返っても終端にせず、継続点（afterId/afterAt）で読み継ぐ（Issue #2604 / #2605）', async () => {
     // 読めない行が1行あって99件で返った初期読み込み。以前はここで終端（「これより古い
     // 記録は無い」）になり、「もっと遡る」が出なかった。

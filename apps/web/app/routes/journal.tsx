@@ -428,8 +428,9 @@ function JournalBody({
       <LoadError
         what="日誌"
         error={error}
-        // 取り直しは作り直し（行の読み足しが消える）なので、行が残っているときは出さない。
-        {...(listUnavailable ? { onRetry } : {})}
+        // 初回の失敗の後に SSE の新着で行が入っても、取り直しは出す。`error` は初回の失敗だけで、
+        // 作り直しで消えるのは SSE 由来の行だけ（読み直した一覧が上書きするので重ならない）。
+        onRetry={onRetry}
         className="mb-4"
       />
       {/* 読み足しの失敗。一覧は残したまま、その場で撃ち直す（成功すると下りる）。 */}
