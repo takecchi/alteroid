@@ -123,6 +123,8 @@ function MemoryDetailBody({ slug }: { slug: string }) {
 
   /** `ifMatch` を渡して保存する。衝突したら下書きを残して、いまの版を見せる。 */
   function save(ifMatch: string | null | undefined = baseVersion) {
+    // 保存中は何もしない。ボタン・⌘/Ctrl+Enter・⌘/Ctrl+S のどの経路もここを通る（#3300）。
+    if (busy) return;
     if (draft === undefined) return;
     setBusy(true);
     setFailure(undefined);

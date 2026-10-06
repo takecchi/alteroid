@@ -412,6 +412,15 @@ export {
   type JournalStoreQueryEdgeContractSubject,
 } from './journal-query-edge-contract.js';
 /**
+ * `JournalStore.get` の「在るが読めない」の契約（issue #3288）。読めない行を持てる実装
+ * （`storage-fs` / `storage-pg`）の歯がこれを呼ぶ。インメモリは読めない行を持てないので対象外
+ * （`UnreadableJournalEntryError` の doc）。
+ */
+export {
+  verifyJournalStoreUnreadableGetContract,
+  type JournalStoreUnreadableGetContractSubject,
+} from './journal-unreadable-get-contract.js';
+/**
  * `JournalStore.oldestAt()`（日誌の地平。issue #1510）の契約。3実装
  * （インメモリ / `storage-fs` / `storage-pg`）それぞれの歯がこれを呼んで
  * 揃っていることを測る — 1つで測って3つとも測ったことにしない
@@ -451,7 +460,7 @@ export {
   JOURNAL_SEARCH_UNCOVERED_LIST,
   JOURNAL_SEARCH_UNCOVERED_LIST_MD,
   JOURNAL_SEARCH_UNSEARCHABLE_TYPES,
-  journalSearchText,
+  journalSearchValues,
   matchesJournalSearch,
   type JournalSearchTarget,
 } from './journal-search.js';
@@ -541,6 +550,7 @@ export { verifyTranscriptArchiveContract } from './archive-contract.js';
 /** アーカイブの sessionId の入口の検査（issue #2233。3実装とも同じ例外で断る）。 */
 export { InvalidArchiveSessionIdError, assertArchivableSessionId } from './archive-session-id.js';
 export { verifyCommitmentFoldContract } from './commitment-fold-contract.js';
+export { verifyCommitmentTieOrderContract } from './commitment-tie-order-contract.js';
 export { verifyMcpServerStoreContract } from './mcp-server-contract.js';
 export { verifyProfileStoreContract } from './profile-store-contract.js';
 /**

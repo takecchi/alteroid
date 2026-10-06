@@ -57,6 +57,7 @@ import {
   TokenPoolInputError,
   UnreadableAccountError,
   UnreadableCommitmentError,
+  UnreadableJournalEntryError,
   UnreadablePermissionGrantError,
   UnreadablePracticeError,
   approvalUpdatedAt,
@@ -181,6 +182,7 @@ import {
   accessAccountResponseSchema,
   accessListResponseSchema,
   approvalsAnswerResponseSchema,
+  approvalsAnsweredDatesResponseSchema,
   approvalsResponseSchema,
   approvalTraceResponseSchema,
   archiveListResponseSchema,
@@ -270,6 +272,7 @@ import {
   usageResponseSchema,
 } from './openapi.js';
 import { InvalidCursorError, decodeCursor, encodeCursor } from './cursor.js';
+import { answeredDates, approvalsSettledOn } from './approvals-answered.js';
 import { createTopologyActivityTracker, type WorkerToolBus } from './topology-activity.js';
 import {
   createStorageHealthTracker,
@@ -826,6 +829,30 @@ const approvalsQuery = z.object({
   limit: z.coerce.number().int().min(1).optional(),
   cursor: z.string().optional(),
   conversationId: z.string().optional(),
+  /**
+   * 「その日に決着した承認だけ」（`YYYY-MM-DD`。**opt-in**——渡さない呼びの応答は1バイトも
+   * 変わらない）。**日は日報と同じ `localDate()`（デーモンの TZ）で決める**。決着の日時は
+   * `answeredAt`、無ければ `withdrawnAt`（取り下げ済みも「決着した」件。外すと、従来 Web で
+   * 見えていた取り下げ済みが見えなくなる）で、**決着の新しい順**（同時刻は id の降順）に返す。
+   * 中身の判定は `approvals-answered.ts`。
+   *
+   * **`pending=true`（明示）・`order` / `limit` / `cursor` とは併用できない**（400）。未回答だけを
+   * 求めながら決着した日を指す呼びは矛盾しているし、並びは決着の新しい順で固定なので
+   * `order` / `cursor`（`(createdAt, id)` の位置）は意味を持たない。黙って片方を無視しない。
+   * `conversationId` は併用できる（その会話の件に絞る）。
+   * 形の検査はハンドラが `localDayRange` で行う（`/reports/:date` と同じ。2月30日を通さない）。
+   */
+  answeredOn: z.string().optional(),
+});
+
+/**
+ * `GET /approvals/answered-dates` の `limit` / `beforeDate`（`reportsQuery` と同じ既定・上限・
+ * 向き）。`beforeDate` は前の頁の最後の日で、**それより古い日**を返す。封筒は持たない
+ * ——続きが在るかは `limit` 件ちょうど返ったかで判る。
+ */
+const approvalsAnsweredDatesQuery = z.object({
+  limit: z.coerce.number().int().min(1).max(365).default(7),
+  beforeDate: z.string().optional(),
 });
 
 /**
@@ -3087,7 +3114,9 @@ export function createApp(deps: AppDeps) {
               '`clientMessageId` が、**別の会話**の発言として既に受け取られている（`code: client_message_id_conflict`）。' +
               'または、**同じ会話**で受け取り済みだが**中身が違う**（`code: client_message_id_mismatch`。' +
               '本文・添付の id の集合・`supersedes` のどれかが1回目と違う。2回目の中身は積まず、添付も結び付けない）。' +
-              '中身が同じ再送は 409 ではなく、二重に受けずに 200（下の説明）。',
+              '中身が同じ再送は 409 ではなく、二重に受けずに 200（下の説明）。' +
+              'または、`supersedes` が指す発言が日誌に**在るが読めない**（`code` は無い。400 の「見つからない」とは別。' +
+              '何も積まない）。',
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
         },
@@ -3161,7 +3190,7 @@ export function createApp(deps: AppDeps) {
         }
 
         /** 検証に落ちた送信の id は覚えない（#3208）。先取りを取り下げてから 400 を返す。 */
-        const failEdit = (body: { error: string }, status: 400) => {
+        const failEdit = (body: { error: string }, status: 400 | 409) => {
           claim?.settle(false);
           return c.json(body, status);
         };
@@ -3184,7 +3213,17 @@ export function createApp(deps: AppDeps) {
             // 対象は `journal.get` で直接引く——`scan`/窓には縛られない、日誌
             // そのものへの厳密な問い合わせである（`conversation_read id=<id>` の
             // 全文モードと同じ考え方）。
-            const target = await stores.journal.get(supersedes);
+            let target: JournalEntry | null;
+            try {
+              target = await stores.journal.get(supersedes);
+            } catch (error) {
+              // 在るが読めない行を「見つからない」（400）と言わない（issue #3288）。
+              // 他の `Unreadable*Error`（承認・やり方・許可）と同じ 409 + `error.message`。
+              if (error instanceof UnreadableJournalEntryError) {
+                return failEdit({ error: error.message }, 409);
+              }
+              throw error;
+            }
             // (2) 指した id が窓の中に無い / その会話のものでない。
             if (
               target === null ||
@@ -3829,13 +3868,29 @@ export function createApp(deps: AppDeps) {
             description: '`through` の発言が日誌に無い（人間との往復でない場合を含む）。',
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
+          409: {
+            description:
+              '`through` の発言は日誌に**在るが読めない**（形が合わない壊れた行。404 の「無い」とは別。' +
+              '既読の位置は動かしていない）。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
         },
       }),
       jsonBody(conversationReadRequestSchema),
       async (c) => {
         const id = c.req.param('id');
         const { through } = c.req.valid('json');
-        const target = await stores.journal.get(through);
+        let target: JournalEntry | null;
+        try {
+          target = await stores.journal.get(through);
+        } catch (error) {
+          // 在るが読めない行を「見つからない」（404）と言わない（issue #3288）。
+          // **既読の位置は動かしていない。**
+          if (error instanceof UnreadableJournalEntryError) {
+            return c.json({ error: error.message }, 409);
+          }
+          throw error;
+        }
         if (target === null || target.type !== 'exchange' || target.with !== 'human') {
           return c.json({ error: `発言 ${through} は見つからない` as const }, 404);
         }
@@ -5196,7 +5251,12 @@ export function createApp(deps: AppDeps) {
           'ない）。並びは `order`（既定 `asc`）で、`(createdAt, id)` の比較で決める' +
           '（ストアの生の並びには乗らない。理由は `apps/daemon/src/app.ts` の' +
           '`approvalsCursorSchema` の doc）。`conversationId` を渡すと、その会話で' +
-          '上がった確認だけに絞る（`pending`/`order`/`limit`/`cursor` と併用できる）。',
+          '上がった確認だけに絞る（`pending`/`order`/`limit`/`cursor` と併用できる）。' +
+          '`answeredOn=YYYY-MM-DD`（opt-in）を渡すと、**その日（デーモンの `localDate()` で決まる日。' +
+          '日報と同じ区切り）に決着した承認だけ**を、決着の新しい順（同時刻は id の降順）に返す。' +
+          '**決着の日時は `answeredAt`、無ければ `withdrawnAt`**（取り下げ済みも決着した件。外すと' +
+          '取り下げ済みが画面から見えなくなる）。日付の形が不正（2月30日など）、`pending=true` の' +
+          '明示、`order`/`limit`/`cursor` との併用は 400。この指定では `unreadable` は載せない。',
         responses: {
           200: {
             description: '承認待ちの一覧。',
@@ -5214,7 +5274,7 @@ export function createApp(deps: AppDeps) {
       }),
       queryParams(approvalsQuery),
       async (c) => {
-        const { pending, order, limit, cursor, conversationId } = c.req.valid('query');
+        const { pending, order, limit, cursor, conversationId, answeredOn } = c.req.valid('query');
         // **opt-in の判定は生のクエリで行う。** `order` は既定値を持つので
         // `c.req.valid('query')` だけでは「渡されたか」が分からない
         // （`grep -Fn -- '取れない軸に 0 の行を作る' AGENTS.md` の地雷と同じ形——
@@ -5225,6 +5285,38 @@ export function createApp(deps: AppDeps) {
           c.req.query('order') !== undefined ||
           c.req.query('limit') !== undefined ||
           c.req.query('cursor') !== undefined;
+
+        // **決着した日の指定（`answeredOn`）は、別の絞りと食い違う指定を先に断る。**
+        // `pending` は既定値を持つので、明示されたかは生のクエリで見る（`optedIn` と同じ理由）。
+        if (answeredOn !== undefined) {
+          if (c.req.query('pending') === 'true') {
+            return c.json({ error: 'answeredOn は pending=true と併用できない' }, 400);
+          }
+          if (optedIn) {
+            return c.json({ error: 'answeredOn は order / limit / cursor と併用できない' }, 400);
+          }
+          // `/reports/:date` と同じ検査（現物のカレンダー妥当性まで見る）。
+          if (localDayRange(answeredOn) === null) {
+            return c.json({ error: 'answeredOn は YYYY-MM-DD で指定する' as const }, 400);
+          }
+          const settled = await stores.jobs.listApprovals({ pendingOnly: false });
+          const onDay = approvalsSettledOn(
+            conversationId === undefined
+              ? settled.entries
+              : settled.entries.filter((approval) => approval.conversationId === conversationId),
+            answeredOn,
+          );
+          // `unreadable` は載せない: 読めない行は決着の日時も分からず、どの日にも置けない
+          // （未回答の画面が言う）。
+          return c.json(
+            approvalsResponseSchema.parse({
+              approvals: onDay.map((approval) => ({
+                ...approval,
+                updatedAt: approvalUpdatedAt(approval),
+              })),
+            }),
+          );
+        }
 
         const approvalList = await stores.jobs.listApprovals({ pendingOnly: pending !== 'false' });
         const byPending = approvalList.entries;
@@ -5302,6 +5394,54 @@ export function createApp(deps: AppDeps) {
           }
         }
         return c.json(approvalsResponseSchema.parse(responseBody));
+      },
+    )
+
+    /**
+     * 決着のあった日と件数（`GET /approvals?answeredOn=` で日ごとに開くための目次）。
+     *
+     * **`/approvals/:id/...` に食われない**: 既存の `/approvals/` 配下の GET は `/:id/trace`
+     * （3区間）だけで、2区間のこの経路とは当たらない。`GET /approvals/:id` は無い。
+     * 将来 `GET /approvals/:id` を足すなら、**この経路より後ろに登録しないこと**
+     * （`answered-dates` が id として読まれる）。
+     */
+    .get(
+      '/approvals/answered-dates',
+      describeRoute({
+        tags: ['approvals'],
+        summary: '承認が決着した日と件数',
+        description:
+          '回答済み・取り下げ済みの承認について、**決着した日**（デーモンの `localDate()`。日報と同じ区切り）' +
+          'ごとの件数を**新しい日が上**の順に返す。決着の日時は `answeredAt`、無ければ `withdrawnAt`' +
+          '（`GET /approvals?answeredOn=` と同じ意味）。`limit`（既定 7・上限 365。`GET /reports` と同じ）と' +
+          '`beforeDate`（前の頁の最後の日。**それより古い日**を返す）で続きを取る。**封筒は持たない**' +
+          ' — 続きが在るかは `limit` 件ちょうど返ったかで判る。',
+        responses: {
+          200: {
+            description: '決着のあった日と件数（日付の新しい順）。',
+            content: {
+              'application/json': { schema: resolver(approvalsAnsweredDatesResponseSchema) },
+            },
+          },
+          400: {
+            description: 'クエリが不正、または `beforeDate` が `YYYY-MM-DD` 形式ではない。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+        },
+      }),
+      queryParams(approvalsAnsweredDatesQuery),
+      async (c) => {
+        const { limit, beforeDate } = c.req.valid('query');
+        if (beforeDate !== undefined && localDayRange(beforeDate) === null) {
+          return c.json({ error: 'beforeDate は YYYY-MM-DD で指定する' as const }, 400);
+        }
+        const settled = await stores.jobs.listApprovals({ pendingOnly: false });
+        return c.json({
+          dates: answeredDates(settled.entries, {
+            limit,
+            ...(beforeDate === undefined ? {} : { beforeDate }),
+          }),
+        });
       },
     )
 

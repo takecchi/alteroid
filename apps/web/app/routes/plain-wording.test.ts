@@ -22,6 +22,7 @@ const SCREENS = [
   'commitments',
   'schedule',
   'approvals',
+  'approvals-answered',
   'settings',
   'env-vars',
   'profile',
