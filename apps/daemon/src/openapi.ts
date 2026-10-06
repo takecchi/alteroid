@@ -124,7 +124,7 @@ export const attachmentLimitsSchema = z.object({
   retentionDays: z.number().int(),
 });
 
-/** 添付を断るときの応答。`code` は `AttachmentRejection` かこの口の `attachment_missing` / `attachment_conflict` / `attachment_forbidden`（連携の鍵が、自分で上げていない添付を付けようとした）、外部イベントの入口が予約語の source を断る `reserved_source`。 */
+/** 添付を断るときの応答。`code` は `AttachmentRejection` かこの口の `attachment_missing` / `attachment_conflict` / `attachment_forbidden`（連携の鍵が、自分で上げていない添付を付けようとした）、外部イベントの入口が予約語の source を断る `reserved_source`、NUL・孤立サロゲートを含む source を断る `invalid_source`。 */
 export const attachmentErrorResponseSchema = z.object({
   error: z.string(),
   code: z
@@ -139,6 +139,7 @@ export const attachmentErrorResponseSchema = z.object({
       'attachment_conflict',
       'attachment_forbidden',
       'reserved_source',
+      'invalid_source',
     ])
     .optional(),
 });
