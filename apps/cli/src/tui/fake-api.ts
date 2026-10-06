@@ -47,7 +47,7 @@ export interface FakeApi extends TuiApi {
   /** 次の（以降の）`uploadAttachment()` を失敗させる理由。 */
   uploadFails: string | null;
   /** `attachmentLimits()` が返す上限（既定は core の既定値）。 */
-  limits: AttachmentLimits;
+  limits: AttachmentLimits | null;
   /** `attachmentLimits()` が呼ばれた回数。 */
   limitsCalls: number;
   scripts: ScriptStep[][];

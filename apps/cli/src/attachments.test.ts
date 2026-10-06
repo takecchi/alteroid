@@ -226,13 +226,65 @@ describe('添付の上限はデーモンの値で先に検査する（#3204）',
     expect(urls).toEqual(['http://127.0.0.1:4517/attachments/limits']);
   });
 
-  it('取れなければ（古いデーモンの 404・接続失敗・壊れた応答）既定値で検査する', async () => {
+  it('古いデーモンの 404 は既定値（確定）、接続失敗・壊れた応答は null（一時的）', async () => {
     stubLimits(() => new Response('not found', { status: 404 }));
     expect(await fetchAttachmentLimits(target)).toEqual(DEFAULT_ATTACHMENT_LIMITS);
     vi.stubGlobal('fetch', () => Promise.reject(new Error('ECONNREFUSED')));
-    expect(await fetchAttachmentLimits(target)).toEqual(DEFAULT_ATTACHMENT_LIMITS);
+    expect(await fetchAttachmentLimits(target)).toBeNull();
     stubLimits(() => Response.json({ maxImageBytes: 'x' }));
-    expect(await fetchAttachmentLimits(target)).toEqual(DEFAULT_ATTACHMENT_LIMITS);
+    expect(await fetchAttachmentLimits(target)).toBeNull();
+  });
+
+  /** 先頭 `replies` を順に返し、尽きたら最後を返す。 */
+  function stubSequence(replies: (() => Response | Promise<Response>)[]): string[] {
+    let i = 0;
+    return stubLimits(() => replies[Math.min(i++, replies.length - 1)]!());
+  }
+
+  async function bigFile(): Promise<string> {
+    const dir = await makeTempDir('alteroid-cli-attach-');
+    const path = join(dir, 'big.bin');
+    await writeFile(path, Buffer.alloc(DEFAULT_ATTACHMENT_LIMITS.maxFileBytes + MIB));
+    return path;
+  }
+
+  it('接続失敗のあとは覚えず、次の /attach で取り直してデーモンの値を使う', async () => {
+    const path = await bigFile();
+    const urls = stubSequence([
+      () => {
+        throw new Error('ECONNREFUSED');
+      },
+      () => Response.json(raised),
+    ]);
+    const draft = createAttachmentDraft(target);
+    const first = await draft.add(path);
+    expect(first.ok ? '' : first.reason).toContain('大きすぎる');
+    expect((await draft.add(path)).ok).toBe(true);
+    expect((await draft.add(path)).ok).toBe(true);
+    expect(urls).toHaveLength(2);
+  });
+
+  it('壊れた応答のあとも取り直す', async () => {
+    const path = await bigFile();
+    const urls = stubSequence([
+      () => Response.json({ maxImageBytes: 'x' }),
+      () => new Response('<html>', { status: 200 }),
+      () => Response.json(raised),
+    ]);
+    const draft = createAttachmentDraft(target);
+    expect((await draft.add(path)).ok).toBe(false);
+    expect((await draft.add(path)).ok).toBe(false);
+    expect((await draft.add(path)).ok).toBe(true);
+    expect(urls).toHaveLength(3);
+  });
+
+  it('404（古いデーモン）は覚えて、取り直さない', async () => {
+    const path = await bigFile();
+    const urls = stubLimits(() => new Response('', { status: 404 }));
+    const draft = createAttachmentDraft(target);
+    expect((await draft.add(path)).ok).toBe(false);
+    expect((await draft.add(path)).ok).toBe(false);
+    expect(urls).toHaveLength(1);
   });
 
   it('上限を上げたデーモンでは、既定値を超えてデーモンの内側にある添付を先に断らず、上げる前の読み込み検査も通す。取るのは1回', async () => {
