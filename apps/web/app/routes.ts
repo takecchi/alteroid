@@ -38,6 +38,8 @@ export default [
     route('mcp-servers', 'routes/mcp-servers.tsx'),
     route('dropped', 'routes/dropped.tsx'),
     route('archive', 'routes/archive.tsx'),
+    // 退避した生ログ1件の本文を読むだけの画面（#3137。CLI の `/archive <id>` と同じ口）。
+    route('archive/:id', 'routes/archive-detail.tsx'),
     // CLI の `alteroid inbox remove` と同じ口（issue #972 / #1042）。
     route('inbox', 'routes/inbox.tsx'),
     route('schedule', 'routes/schedule.tsx'),

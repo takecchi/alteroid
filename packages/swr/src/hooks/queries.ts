@@ -7,7 +7,7 @@
  */
 import useSWR from 'swr';
 
-import { unwrap, useApi } from '../api';
+import { ApiError, unwrap, useApi } from '../api';
 import { normalizeProfile } from '@alteroid/logic';
 import type { JournalEntryType, ManagerStatus, UsageLayer, UsageSite } from '@alteroid/logic';
 
@@ -141,6 +141,7 @@ export const KEY = {
   dropped: { type: 'dropped' } as const,
   archive: { type: 'archive' } as const,
   archiveSessions: { type: 'archiveSessions' } as const,
+  archiveBody: (id: string) => ({ type: 'archiveBody', id }) as const,
   inbox: { type: 'inbox' } as const,
 };
 
@@ -657,6 +658,51 @@ export function useArchive() {
 export function useArchiveSessions() {
   const api = useApi();
   return useSWR(KEY.archiveSessions, () => api.api.GET('/archive/sessions').then(unwrap));
+}
+
+/** `useArchiveBody` の結果。本文が消された退避（410）は失敗ではなく、1つの正当な状態である。 */
+export type ArchiveBody =
+  | { kind: 'body'; body: string }
+  | { kind: 'removed'; removedAt: string; bytes: number };
+
+/**
+ * 退避した生ログ1件の本文（`GET /archive/{id}`、`text/plain` の JSONL。CLI の `/archive <id>`
+ * と同じ口）。**大きくなりうる**ので、呼び出し側は一度に全部を描かないこと
+ * （`routes/archive-detail.tsx`）。
+ *
+ * - **410 は例外にしない。** 本文だけ消された行（tombstone）は `{ kind: 'removed' }` で返す。
+ *   応答の形が読めなければ例外（読めない応答を「消された」と言わない）。
+ * - **404 と5xxは `ApiError`**（呼び出し側が「無い」と「読めなかった」を分ける）。
+ * - **本文が空の200（`Content-Length: 0`）は `''`。** `openapi-fetch` はこれを `data: undefined`
+ *   で返し、`unwrap` に通すと「200 OK」という失敗になる。
+ * - `null` を渡すと取りに行かない。再取得（フォーカス・再接続）は止める——大きな本文を
+ *   画面を開いているあいだ何度も運ばせない。
+ */
+export function useArchiveBody(id: string | null) {
+  const api = useApi();
+  return useSWR(
+    id === null ? null : KEY.archiveBody(id),
+    async ({ id }): Promise<ArchiveBody> => {
+      const result = await api.api.GET('/archive/{id}', {
+        params: { path: { id } },
+        parseAs: 'text',
+      });
+      const { status } = result.response;
+      if (status === 410) {
+        const removed: unknown = result.error;
+        const { removedAt, bytes } = (
+          typeof removed === 'object' && removed !== null ? removed : {}
+        ) as { removedAt?: unknown; bytes?: unknown };
+        if (typeof removedAt === 'string' && typeof bytes === 'number') {
+          return { kind: 'removed', removedAt, bytes };
+        }
+        throw new ApiError(status, '消された印の応答が読めない');
+      }
+      if (result.response.ok && result.data === undefined) return { kind: 'body', body: '' };
+      return { kind: 'body', body: unwrap(result) };
+    },
+    { revalidateOnFocus: false, revalidateOnReconnect: false },
+  );
 }
 
 /**

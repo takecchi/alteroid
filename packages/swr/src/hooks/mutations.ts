@@ -1060,7 +1060,12 @@ export function useRemoveArchive() {
           },
         })
         .then(unwrap);
-      await Promise.all([mutate(KEY.archive), mutate(KEY.archiveSessions)]);
+      await Promise.all([
+        mutate(KEY.archive),
+        mutate(KEY.archiveSessions),
+        // 開いている本文があれば取り直す（消えたものを読ませ続けない）。
+        mutate((key) => isKeyOfType(key, 'archiveBody')),
+      ]);
       return result;
     },
     [api, mutate],
