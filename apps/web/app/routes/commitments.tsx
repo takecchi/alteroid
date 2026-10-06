@@ -18,6 +18,7 @@ import {
   FieldHint,
   Input,
   Spinner,
+  SubmitHint,
   Textarea,
   cn,
 } from '@alteroid/ui';
@@ -1054,6 +1055,9 @@ function CommitmentBodyEditor({
           <Textarea
             aria-label="仕事の本文"
             className="min-h-32 font-mono text-xs leading-relaxed"
+            maxHeight="60vh"
+            onSubmitShortcut={save}
+            submitDisabled={!dirty || value.trim() === '' || busy}
             value={value}
             spellCheck={false}
             // **Enter は改行のまま**（送信のキーにしない）。長文になりうる本文
@@ -1083,6 +1087,7 @@ function CommitmentBodyEditor({
         >
           保存
         </Button>
+        <SubmitHint action="保存" />
         <Button size="sm" onClick={onCancel}>
           やめる
         </Button>
@@ -1220,6 +1225,7 @@ function OpenRow({
           size="sm"
           className="shrink-0"
           loading={busy}
+          aria-label={`「${snippet(commitment.body)}」が片付いた`}
           // **理由なしでは閉じられない。** 「閉じた」だけが残ると、人間が後から
           // 否定できない（north_star の最終承認はそこで成り立っている）。
           disabled={reason.trim() === ''}

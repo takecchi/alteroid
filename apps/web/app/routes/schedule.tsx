@@ -19,6 +19,7 @@ import {
   Spinner,
   TAB_TRIGGER_ACTIVE_CLASS,
   TAB_TRIGGER_CLASS,
+  SubmitHint,
   Textarea,
   cn,
 } from '@alteroid/ui';
@@ -222,6 +223,7 @@ export default function Schedule() {
                 </div>
                 <Button
                   size="sm"
+                  aria-label={`${entry.kind} を今すぐ回す`}
                   loading={running.has(entry.kind)}
                   onClick={() => {
                     if (runningRef.current.has(entry.kind)) return;
@@ -265,12 +267,17 @@ export default function Schedule() {
                   </span>
                 ) : (
                   <>
-                    <Button size="sm" onClick={() => setEditing(entry.kind)}>
+                    <Button
+                      size="sm"
+                      aria-label={`${entry.kind} を編集`}
+                      onClick={() => setEditing(entry.kind)}
+                    >
                       編集
                     </Button>
                     <Button
                       size="sm"
                       variant="danger"
+                      aria-label={`${entry.kind} を外す`}
                       loading={removing === entry.kind}
                       onClick={() => setConfirmingRemove(entry.kind)}
                     >
@@ -451,6 +458,8 @@ function RequestEditor({
   initialValue,
   placeholder,
   label,
+  onSubmit,
+  submitDisabled,
 }: {
   value: string;
   onChange: (value: string) => void;
@@ -458,6 +467,10 @@ function RequestEditor({
   placeholder?: string;
   /** 本文の欄の名前（入力するとプレースホルダは消えるので、名前は別に持つ）。 */
   label: string;
+  /** ⌘/Ctrl + Enter で呼ぶ（保存・登録のボタンと同じ処理）。 */
+  onSubmit: () => void;
+  /** そのボタンの `disabled` と同じ条件。 */
+  submitDisabled: boolean;
 }) {
   const [tab, setTab] = useState<string | undefined>(undefined);
   const activeTab = tab ?? (initialValue.trim() === '' ? 'edit' : 'preview');
@@ -500,7 +513,10 @@ function RequestEditor({
         <Textarea
           aria-label={label}
           rows={6}
-          className="max-h-64 min-h-24 resize-y font-mono text-xs leading-relaxed"
+          className="min-h-24 font-mono text-xs leading-relaxed"
+          maxHeight="16rem"
+          onSubmitShortcut={onSubmit}
+          submitDisabled={submitDisabled}
           value={value}
           placeholder={placeholder}
           onChange={(event) => onChange(event.target.value)}
@@ -592,11 +608,14 @@ function ScheduleEditForm({
         initialValue={entry.request ?? ''}
         label="依頼の本文"
         placeholder="依頼の本文（時刻が来たらそのままクローンへ渡る）"
+        onSubmit={submit}
+        submitDisabled={!ready || busy}
       />
       <div className="mt-2 flex items-center gap-2">
         <Button variant="primary" size="sm" loading={busy} disabled={!ready} onClick={submit}>
           保存する
         </Button>
+        <SubmitHint action="保存" />
         <Button size="sm" onClick={onCancel} disabled={busy}>
           やめる
         </Button>
@@ -673,11 +692,14 @@ function ScheduleForm() {
           initialValue=""
           label="依頼の本文"
           placeholder="依頼の本文（時刻が来たらそのままクローンへ渡る）"
+          onSubmit={submit}
+          submitDisabled={!ready || busy}
         />
         <div className="flex items-center gap-2">
           <Button variant="primary" loading={busy} disabled={!ready} onClick={submit}>
             仕込む
           </Button>
+          <SubmitHint action="登録" />
           {done !== undefined && (
             <span className="font-mono text-[11px] text-muted-foreground">仕込んだ: {done}</span>
           )}
@@ -746,6 +768,9 @@ function EventForm() {
           rows={4}
           value={payload}
           className="font-mono text-xs"
+          maxHeight="12rem"
+          onSubmitShortcut={submit}
+          submitDisabled={source.trim() === '' || busy}
           placeholder="JSON でも素のテキストでもよい"
           onChange={(event) => setPayload(event.target.value)}
         />
@@ -753,6 +778,7 @@ function EventForm() {
           <Button variant="primary" loading={busy} disabled={source.trim() === ''} onClick={submit}>
             送る
           </Button>
+          <SubmitHint action="送信" />
           {sent !== undefined && (
             <span className="text-[11px] text-muted-foreground">受け付けた</span>
           )}

@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { makeTempDir } from '../../../vitest.tmpdir.js';
 
+import { type ConfirmIo } from './confirm.js';
 import { captureStdout, pretendTty } from './test-support.js';
 
 /**
@@ -72,6 +73,8 @@ beforeEach(async () => {
   replies = new Map();
   sent = [];
   stubFetch();
+  // 既定は「正本が空」。set は在るかを見るために先に GET /credentials を打つ（#3201）。
+  setReply('GET', '/credentials', { status: 200, body: { credentials: [] } });
   dir = await makeTempDir('alteroid-cli-credential-');
 });
 
@@ -258,6 +261,7 @@ describe('alteroid credential set', () => {
 
     // **改行は落ちている。** 落とさないと「見た目は同じなのに指紋が違う」鍵ができる。
     expect(sent).toEqual([
+      expect.objectContaining({ method: 'GET' }),
       expect.objectContaining({
         method: 'PUT',
         body: { credentials: [{ name: 'NPM_TOKEN', value: DUMMY }] },
@@ -300,7 +304,7 @@ describe('alteroid credential set', () => {
 
     await credentialSetCommand('SOME_VALUE', { file: path });
 
-    expect(sent[0]?.body).toEqual({ credentials: [{ name: 'SOME_VALUE', value: 'a b  c' }] });
+    expect(sent[1]?.body).toEqual({ credentials: [{ name: 'SOME_VALUE', value: 'a b  c' }] });
   });
 
   it('--scope --no-secret を渡すと、そのまま本文へ乗る', async () => {
@@ -314,7 +318,7 @@ describe('alteroid credential set', () => {
 
     await credentialSetCommand('TZ', { file: path, scope: 'app', secret: false });
 
-    expect(sent[0]?.body).toEqual({
+    expect(sent[1]?.body).toEqual({
       credentials: [{ name: 'TZ', value: 'Asia/Tokyo', scope: 'app', secret: false }],
     });
   });
@@ -330,7 +334,7 @@ describe('alteroid credential set', () => {
 
     await credentialSetCommand('NPM_TOKEN', { file: path });
 
-    expect(sent[0]?.body).toEqual({ credentials: [{ name: 'NPM_TOKEN', value: DUMMY }] });
+    expect(sent[1]?.body).toEqual({ credentials: [{ name: 'NPM_TOKEN', value: DUMMY }] });
   });
 
   it('--scope に不正な値を渡すと、サーバへ送らずに断る', async () => {
@@ -350,7 +354,7 @@ describe('alteroid credential set', () => {
     await expect(credentialSetCommand('NPM_TOKEN', { file: path })).rejects.toThrow(
       /alteroid credential remove NPM_TOKEN/,
     );
-    expect(sent).toEqual([]);
+    expect(sent.filter((entry) => entry.method !== 'GET')).toEqual([]);
   });
 
   it('デーモンが 400 で断ったら、その理由をそのまま出す（名前を疑えるようにする）', async () => {
@@ -509,5 +513,103 @@ describe('alteroid credential remove の確認（#3141）', () => {
       restore();
     }
     expect(sent.some((entry) => entry.method === 'PUT')).toBe(false);
+  });
+});
+
+describe('alteroid credential set の上書き確認（#3201）', () => {
+  const existing = {
+    status: 200,
+    body: { credentials: [{ name: 'NPM_TOKEN', sha256: 'cccccccccccc', updatedAt: 'now' }] },
+  };
+  const putOk = {
+    status: 200,
+    body: { credentials: [], runners: [{ runnerId: 'runner-1', ok: true }] },
+  };
+
+  function fakeIo(over: { isTTY: boolean; answer?: string }) {
+    const asked: string[] = [];
+    const written: string[] = [];
+    const io: ConfirmIo = {
+      isTTY: over.isTTY,
+      write: (text) => {
+        written.push(text);
+      },
+      ask: (question) => {
+        asked.push(question);
+        return Promise.resolve(over.answer ?? '');
+      },
+    };
+    return { io, asked, written };
+  }
+
+  async function valueFile(): Promise<string> {
+    const path = join(dir, 'value.txt');
+    await writeFile(path, DUMMY, 'utf8');
+    return path;
+  }
+
+  it('新規作成（無い名前）は確認せずに置く（非対話でも）', async () => {
+    const file = await valueFile();
+    setReply('PUT', '/credentials', putOk);
+    captureStdout();
+    const { io, asked } = fakeIo({ isTTY: false });
+
+    await credentialSetCommand('NPM_TOKEN', { file }, io);
+
+    expect(asked).toEqual([]);
+    expect(sent.some((entry) => entry.method === 'PUT')).toBe(true);
+  });
+
+  it('既に在る名前は、非対話で --yes が無ければ PUT せずに断る（何も変えない）。値は読まない', async () => {
+    const file = await valueFile();
+    setReply('GET', '/credentials', existing);
+    setReply('PUT', '/credentials', putOk);
+    captureStdout();
+    const { io } = fakeIo({ isTTY: false, answer: 'yes' });
+
+    const error = await credentialSetCommand('NPM_TOKEN', { file }, io).catch((e: unknown) => e);
+
+    expect(String(error)).toContain('--yes');
+    expect(String(error)).toContain('NPM_TOKEN');
+    expect(String(error)).not.toContain(DUMMY);
+    expect(sent.filter((entry) => entry.method !== 'GET')).toEqual([]);
+  });
+
+  it('端末で yes と答えれば置き換える。確認の文は名前を言い、値を出さない', async () => {
+    const file = await valueFile();
+    setReply('GET', '/credentials', existing);
+    setReply('PUT', '/credentials', putOk);
+    captureStdout();
+    const { io, written } = fakeIo({ isTTY: true, answer: 'yes' });
+
+    await credentialSetCommand('NPM_TOKEN', { file }, io);
+
+    expect(written.join('')).toContain('環境変数 NPM_TOKEN を置き換えます');
+    expect(written.join('')).not.toContain(DUMMY);
+    expect(sent.some((entry) => entry.method === 'PUT')).toBe(true);
+  });
+
+  it('端末で yes 以外なら置かない', async () => {
+    const file = await valueFile();
+    setReply('GET', '/credentials', existing);
+    captureStdout();
+    const { io } = fakeIo({ isTTY: true, answer: 'no' });
+
+    await credentialSetCommand('NPM_TOKEN', { file }, io);
+
+    expect(sent.some((entry) => entry.method === 'PUT')).toBe(false);
+  });
+
+  it('--yes なら聞かずに置き換える（非対話でも）', async () => {
+    const file = await valueFile();
+    setReply('GET', '/credentials', existing);
+    setReply('PUT', '/credentials', putOk);
+    captureStdout();
+    const { io, asked } = fakeIo({ isTTY: false });
+
+    await credentialSetCommand('NPM_TOKEN', { file, yes: true }, io);
+
+    expect(asked).toEqual([]);
+    expect(sent.some((entry) => entry.method === 'PUT')).toBe(true);
   });
 });

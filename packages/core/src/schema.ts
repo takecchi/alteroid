@@ -3947,6 +3947,21 @@ export const jobSchema = z.object({
    */
   runnerSessionSince: isoDateTime.optional(),
   /**
+   * **report 無しの `closed(done)` の知らせ（`closed_done_silent`。#3189）を積んだときの
+   * `runnerSessionSince` の値**（Issue #3233）。同じセッションについて知らせを1回に保つ印で、
+   * `manager.ts` の `case 'closed'` の「report が無いまま `closed(done)` だけが届いたこと」の項。
+   *
+   * `closed` には冪等キーが無く、SSE の再配達で同じ `closed(done)` が2度届くと知らせが「×2」に
+   * なっていた。セッションは1回しか閉じず、resume / start すれば `runnerSessionSince` が新しくなる
+   * ので、「1セッションにつき1回」がそのまま正しい線になる。`lateDoneNotifiedAt` と同じく台帳に置く
+   * （デーモンの再起動をまたいでも効かせるため）。**欠けている＝まだ知らせていない。**
+   * **`runnerSessionSince` がまだ無いセッション**（既に生きている器へ付け直しただけで start / resume を
+   * 通っていない行など）では、値の代わりに空文字を書く＝「セッションの時刻が無いまま知らせた」。
+   * start / resume / session の名乗りで `runnerSessionSince` が立てば空文字とは一致しなくなるので、
+   * 新しい終わりは従来どおり知らせる。
+   */
+  silentDoneNotifiedFor: z.union([isoDateTime, z.literal('')]).optional(),
+  /**
    * **この委譲のセッションが最後に実際に置かれた器**（runner の `/health` の
    * `instanceId`）。器の入れ替えを、話しかけられた委譲へ告げるかの判定材料である
    * （#669。`manager.ts` の `#runnerSwappedSinceSession`）。

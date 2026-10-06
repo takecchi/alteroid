@@ -1,11 +1,10 @@
 import { useState } from 'react';
-import type { KeyboardEvent, ReactNode } from 'react';
+import type { ReactNode } from 'react';
 
 import { useDisplayText } from '@/lib/display-text';
 
-import { Badge, Button, Card, Textarea } from '../../common';
+import { Badge, Button, Card, SubmitHint, Textarea } from '../../common';
 import { Markdown } from '../../markdown';
-import { isSubmitShortcut } from '../chat/ime';
 import { Timestamp } from '../timestamp';
 import {
   ApprovalQuestionsForm,
@@ -39,9 +38,8 @@ export const APPROVAL_QUICK_ANSWERS = {
  * - `jobLink` はどのマネージャーの件かへのリンク（画面が `<Link>` で渡す）
  * - `footer` は回答済みのときの経緯（画面の `TracePanel`）などを置く口
  * - **省略可能な口（既定の振る舞いは変えない）。** 画面が今の表示をそのまま出せるように
- *   足した: `time`（時刻の位置に差し込む。渡すと `Timestamp` は出ない）・`isSubmitKey`
- *   （送るキーの判定。既定は `isSubmitShortcut`）・`trailing`（`error` の後ろ。カードの
- *   いちばん下）
+ *   足した: `time`（時刻の位置に差し込む。渡すと `Timestamp` は出ない）・`trailing`
+ *   （`error` の後ろ。カードのいちばん下）
  */
 export function ApprovalCard({
   state,
@@ -61,7 +59,6 @@ export function ApprovalCard({
   error,
   footer,
   trailing,
-  isSubmitKey = isSubmitShortcut,
   questions,
   questionsSummary,
   onSubmitQuestions,
@@ -88,8 +85,6 @@ export function ApprovalCard({
   footer?: ReactNode;
   /** `error` の後ろ（カードのいちばん下）に置くもの。 */
   trailing?: ReactNode;
-  /** 回答欄で「送る」キーかの判定。既定は `isSubmitShortcut`（IME の確定の Enter を除く）。 */
-  isSubmitKey?: (event: KeyboardEvent<HTMLTextAreaElement>) => boolean;
   /** 設問つきの承認待ちの設問（無い・空なら普通の回答欄）。 */
   questions?: readonly ApprovalQuestionView[];
   /**
@@ -234,13 +229,10 @@ export function ApprovalCard({
             value={draft}
             placeholder="答える（書いておくと「まとめて送る」の対象になる。この場ですぐ送ってもよい）"
             onChange={(event) => onDraftChange?.(event.target.value)}
-            onKeyDown={(event) => {
-              // 長文になりうるので Enter は改行のまま。送信は Cmd/Ctrl+Enter。
-              if (isSubmitKey(event)) {
-                event.preventDefault();
-                if (draft.trim() !== '') onSubmit?.(draft);
-              }
-            }}
+            maxHeight="12rem"
+            // 長文になりうるので Enter は改行のまま。送信は ⌘/Ctrl + Enter（IME の変換中は送らない）。
+            onSubmitShortcut={() => onSubmit?.(draft)}
+            submitDisabled={draft.trim() === '' || busy}
           />
           {/*
             **本3 で `Button` が狭い画面で `h-11`（44px）になり、以前より
@@ -271,7 +263,7 @@ export function ApprovalCard({
             >
               却下
             </Button>
-            <span className="text-[11px] text-muted-foreground">⌘/Ctrl + Enter</span>
+            <SubmitHint action="回答" />
           </div>
         </div>
       )}

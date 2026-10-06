@@ -184,7 +184,7 @@ describe('入力欄の上の帯', () => {
     renderChat(`/chat/${CONVERSATION}`);
     const box = await screen.findByPlaceholderText(/クローンに話しかける/);
     fireEvent.change(box, { target: { value: 'こんにちは' } });
-    fireEvent.click(screen.getByRole('button', { name: '送る' }));
+    fireEvent.click(screen.getByRole('button', { name: 'メッセージを送信' }));
 
     expect(
       await screen.findByText(/クローンの認証が通らず、返事を作れませんでした。/),

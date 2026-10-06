@@ -175,7 +175,7 @@ alteroid が目指すのは「人間が自分の PC で Claude Code に指示し
 - **動画・PDF・ログなど画像以外は、置き場から取り出せる。** クローンは道具 `attachment_fetch` で手元へ取り出し、`Read` で開く
 - **クローンは、担い手（マネージャー・作業者）にも添付を渡せる**（`manager_start` / `manager_send` の `attachments`）。人間がクローンに見せたものを担い手に見せられなければ、委譲で能力が落ちる
 - **添付は記憶へ自動では写さない。** 中身を覚えておく必要があれば、クローンが自分の言葉で記憶へ書く
-- **上限と保持期間は環境変数で変えられる。** 既定は、1つあたり画像 5 MiB・その他 25 MiB、1発言に10個・合計 50 MiB、保持30日（`ALTEROID_ATTACHMENT_MAX_IMAGE_BYTES` / `_MAX_FILE_BYTES` / `_MAX_PER_MESSAGE` / `_MAX_TOTAL_BYTES` / `_RETENTION_DAYS`）
+- **上限と保持期間は環境変数で変えられる。** 既定は、1つあたり画像 5 MiB・その他 25 MiB、1発言に10個・合計 50 MiB、保持30日（`ALTEROID_ATTACHMENT_MAX_IMAGE_BYTES` / `_MAX_FILE_BYTES` / `_MAX_PER_MESSAGE` / `_MAX_TOTAL_BYTES` / `_RETENTION_DAYS`）。クライアント（CLI・TUI・Web）の先行検査は、デーモンの上限（`GET /attachments/limits`）に従う。
 
 **非ゴールから外した経緯**: 当初は「UI は API の上に将来誰でも作れる」として非ゴールに置いていた。実際に使ってみて **CLI が読みにくく、作者自身の日常の道具として成立していない**ため、公式の画面を持つことにした。非公式の UI を妨げるものではない（API は変わらず公開されている）。
 

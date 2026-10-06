@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { makeTempDir } from '../../../vitest.tmpdir.js';
 
+import { type ConfirmIo } from './confirm.js';
 import { captureStdout, pretendTty } from './test-support.js';
 
 /**
@@ -459,6 +460,7 @@ describe('alteroid profile set', () => {
 
   it('不正な --scope・名前・空の本文は PUT する前に落ちる', async () => {
     captureStdout();
+    setReply('GET', '/profile', { status: 200, body: profileBody([]) });
     const dir = await makeTempDir('alteroid-profile-set-');
     const path = join(dir, 'p.sh');
     await writeFile(path, 'export A=1\n', 'utf8');
@@ -474,7 +476,8 @@ describe('alteroid profile set', () => {
     await expect(profileSetCommand('a', { file: empty })).rejects.toThrow(
       '本文が空では行を置けない',
     );
-    expect(sent).toEqual([]);
+    // 在るかを見る GET は出るが、書き込み（PUT）は1つも出ない。
+    expect(sent.filter((entry) => entry.method !== 'GET')).toEqual([]);
   });
 });
 
@@ -791,7 +794,8 @@ describe('古いデーモン（旧形式の応答）', () => {
     await writeFile(path, 'export NEW=1\n', 'utf8');
     const read = captureStdout();
 
-    await profileSetCommand(undefined, { file: path });
+    // 旧形式でも default は「在る行」なので、上書きの確認を --yes で省く（#3201）。
+    await profileSetCommand(undefined, { file: path, yes: true });
 
     const put = sent.find((entry) => entry.method === 'PUT');
     expect(new URL(put?.url ?? 'http://x/').pathname).toBe('/profile');
@@ -855,5 +859,98 @@ describe('alteroid profile rm / clear の確認（#3141）', () => {
       restore();
     }
     expect(sent.some((entry) => entry.method !== 'GET')).toBe(false);
+  });
+});
+
+describe('alteroid profile set の上書き確認（#3201）', () => {
+  function fakeIo(over: { isTTY: boolean; answer?: string }) {
+    const asked: string[] = [];
+    const written: string[] = [];
+    const io: ConfirmIo = {
+      isTTY: over.isTTY,
+      write: (text) => {
+        written.push(text);
+      },
+      ask: (question) => {
+        asked.push(question);
+        return Promise.resolve(over.answer ?? '');
+      },
+    };
+    return { io, asked, written };
+  }
+
+  async function scriptFile(): Promise<string> {
+    const dir = await makeTempDir('alteroid-profile-set-');
+    const path = join(dir, 'p.sh');
+    await writeFile(path, 'export RUST=2\n', 'utf8');
+    return path;
+  }
+
+  function stubReplies(existing: boolean): void {
+    setReply('GET', '/profile', {
+      status: 200,
+      body: profileBody(existing ? [entryOf('rust', 'export RUST=1\n')] : []),
+    });
+    setReply('PUT', '/profile/rust', {
+      status: 200,
+      body: updateBody([{ name: 'rust', scope: 'all' }]),
+    });
+  }
+  const wrote = () => sent.some((entry) => entry.method === 'PUT');
+
+  it('新規作成（無い行）は確認せずに置く（非対話でも）', async () => {
+    captureStdout();
+    stubReplies(false);
+    const { io, asked } = fakeIo({ isTTY: false });
+
+    await profileSetCommand('rust', { file: await scriptFile() }, io);
+
+    expect(asked).toEqual([]);
+    expect(wrote()).toBe(true);
+  });
+
+  it('既に在る行は、非対話で --yes が無ければ PUT せずに断る（何も変えない）', async () => {
+    stubReplies(true);
+    const { io } = fakeIo({ isTTY: false, answer: 'yes' });
+
+    await expect(profileSetCommand('rust', { file: await scriptFile() }, io)).rejects.toThrow(
+      '--yes',
+    );
+
+    expect(wrote()).toBe(false);
+  });
+
+  it('端末で yes と答えれば置き換える。確認の文は行の名前と、前の本文が残らないことを言う', async () => {
+    captureStdout();
+    stubReplies(true);
+    const { io, written } = fakeIo({ isTTY: true, answer: 'yes' });
+
+    await profileSetCommand('rust', { file: await scriptFile() }, io);
+
+    expect(written.join('')).toContain(
+      'プロファイルの行 rust を置き換えます。前の本文は残りません',
+    );
+    expect(wrote()).toBe(true);
+  });
+
+  it('端末で yes 以外なら置かない', async () => {
+    captureStdout();
+    stubReplies(true);
+    const { io } = fakeIo({ isTTY: true, answer: 'no' });
+
+    await profileSetCommand('rust', { file: await scriptFile() }, io);
+
+    expect(wrote()).toBe(false);
+  });
+
+  it('--yes なら聞かずに置き換える（非対話でも）', async () => {
+    captureStdout();
+    stubReplies(true);
+    const { io, asked } = fakeIo({ isTTY: false });
+
+    await profileSetCommand('rust', { file: await scriptFile(), yes: true }, io);
+
+    expect(asked).toEqual([]);
+    expect(wrote()).toBe(true);
   });
 });

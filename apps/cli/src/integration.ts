@@ -1,7 +1,7 @@
-import { stdin, stdout } from 'node:process';
-import { createInterface } from 'node:readline/promises';
+import { stderr, stdout } from 'node:process';
 
 import { createClient } from './client.js';
+import { confirmIrreversible, type ConfirmIo } from './confirm.js';
 import { describeAuthFailure, resolveTarget, type Target } from './target.js';
 import { errorReason } from './format.js';
 import { redactError } from './redact.js';
@@ -143,6 +143,8 @@ export interface IntegrationCreateOptions {
   expires?: string;
   maxBodyBytes?: string;
   ratePerMinute?: string;
+  /** デーモンの応答（`{ key, value }`）をそのまま JSON で標準出力へ出す。警告は標準エラーへ（#3220）。 */
+  json?: boolean;
 }
 
 export async function integrationCreateCommand(
@@ -179,6 +181,17 @@ export async function integrationCreateCommand(
   const response = await client['integration-keys'].$post({ json });
   if (!response.ok) await fail(response, target, '/integration-keys');
   const created = (await response.json()) as { key: IntegrationKeyView; value: string };
+  if (options.json === true) {
+    // --json のとき標準出力は JSON だけ（他コマンドの --json と同じ整形）。値は JSON の
+    // `value` にだけ入り、警告は標準エラーへ出す（`KEY=$(... --json | jq -r .value)` で受けても
+    // 警告は混ざらない）。値を標準出力へ出す以上、呼び出し側のログ・CI の出力に残らないよう案内する。
+    stdout.write(`${JSON.stringify(created, null, 2)}\n`);
+    stderr.write(
+      'この値は二度と表示されません（alteroid は sha256 しか保存していません）。標準出力の JSON の value に入っています。\n' +
+        '値をログに残さないでください（CI のログ・シェルの履歴・出力の保存先に注意。変数や秘密の保管先へ直接受けてください）。\n',
+    );
+    return;
+  }
   stdout.write(renderIntegrationCreated(created.key, created.value, target.baseUrl));
 }
 
@@ -213,13 +226,21 @@ export function renderIntegrationCreated(
 
 export interface IntegrationRevokeOptions {
   yes?: boolean;
-  /** 確認の問い。既定は端末（`readline`）。テストが差し替える。 */
-  ask?: (question: string) => Promise<string>;
+  /** 確認の口。既定は端末。テストが差し替える（`confirm.ts` の `ConfirmIo`）。 */
+  io?: ConfirmIo;
 }
 
 /**
- * 失効。**取り消せない操作なので、既定では対話で確認する**（`alteroid reset` と同じ作法。
- * `yes` の全文を要求し、`--yes` はスクリプト向けの脱出口）。失効は即座に効き、元には戻せない。
+ * 失効。**取り消せない操作なので、他の戻せない操作と同じ `confirmIrreversible`
+ * （`confirm.ts`）を通す**（#3141 / #3200 / #3211）。端末なら `yes` の全文を要求し、
+ * `--yes` で省略でき、端末でなく `--yes` も無ければ実行せずに断る（例外＝終了コード非 0）。
+ * 失効は即座に効き、元には戻せない。
+ *
+ * **順序は resolveTarget → 一覧で確認 → 確認 → POST。** 存在と失効済みの確認
+ * （`GET /integration-keys`）は `--yes` のときも行う——無い id は断り、失効済みなら
+ * 「すでに失効しています」と言って POST しない（失効は何度叩いても同じ状態になるので成功の 0。
+ * `permission revoke` の「取り消し済みなら重ねて叩いても失敗しません」・`credential remove` の
+ * 「正本に置かれていません」と同じ扱い。**無い id** は非 0）。
  */
 export async function integrationRevokeCommand(
   id: string,
@@ -227,42 +248,28 @@ export async function integrationRevokeCommand(
 ): Promise<void> {
   const target = await resolveTarget();
   const client = createClient(target.baseUrl, target.headers);
-  if (options.yes !== true) {
-    const listed = await client['integration-keys'].$get();
-    if (!listed.ok) await fail(listed, target, '/integration-keys');
-    const { keys } = (await listed.json()) as { keys: IntegrationKeyView[] };
-    const key = keys.find((row) => row.id === id);
-    if (key === undefined) throw new Error('該当する連携の鍵がありません（何も失効していません）');
-    if (key.revokedAt !== null) {
-      stdout.write(`すでに失効しています: ${key.name}（失効 ${key.revokedAt}）\n`);
-      return;
-    }
-    stdout.write(
-      `連携の鍵「${key.name}」（source=${key.source}）を失効させます。\n` +
-        '以後この鍵で送ってくる外のサービスは 401 になります。取り消せません。\n',
-    );
-    const ask = options.ask ?? askOnTerminal;
-    const answer = await ask('続けるなら yes と入力してください: ');
-    if (answer.trim().toLowerCase() !== 'yes') {
-      stdout.write('取り消しました。何も変更していません。\n');
-      return;
-    }
+  const listed = await client['integration-keys'].$get();
+  if (!listed.ok) await fail(listed, target, '/integration-keys');
+  const { keys } = (await listed.json()) as { keys: IntegrationKeyView[] };
+  const key = keys.find((row) => row.id === id);
+  if (key === undefined) throw new Error('該当する連携の鍵がありません（何も失効していません）');
+  if (key.revokedAt !== null) {
+    stdout.write(`すでに失効しています: ${key.name}（失効 ${key.revokedAt}）\n`);
+    return;
   }
+  const confirmed = await confirmIrreversible(
+    `連携の鍵「${key.name}」（source=${key.source}）を失効させます。\n` +
+      '以後この鍵で送ってくる外のサービスは 401 になります。',
+    { yes: options.yes },
+    options.io,
+  );
+  if (!confirmed) return;
   const response = await client['integration-keys'][':id'].revoke.$post({ param: { id } });
   if (!response.ok) await fail(response, target, `/integration-keys/${id}/revoke`);
-  const { key } = (await response.json()) as { key: IntegrationKeyView };
+  const { key: revoked } = (await response.json()) as { key: IntegrationKeyView };
   stdout.write(
-    `連携の鍵を失効させました: ${key.name}（source=${key.source}、失効 ${key.revokedAt ?? '?'}）\n`,
+    `連携の鍵を失効させました: ${revoked.name}（source=${revoked.source}、失効 ${revoked.revokedAt ?? '?'}）\n`,
   );
-}
-
-async function askOnTerminal(question: string): Promise<string> {
-  const rl = createInterface({ input: stdin, output: stdout });
-  try {
-    return await rl.question(question);
-  } finally {
-    rl.close();
-  }
 }
 
 /** 失敗を次にやることの分かる文言にして投げる。値はここに来ない（失敗した応答に値は無い）。 */
@@ -276,7 +283,9 @@ async function fail(
   if (response.status === 404) throw new Error('該当する連携の鍵がありません');
   const reason = await errorReason(response);
   if (response.status === 400) {
-    throw new Error(`${reason ?? '入力が不正です'}（何も変更していません）`);
+    // デーモンの文がすでに括弧（「…（何も作っていない）」）で終わっていれば、重ねない。
+    const text = reason ?? '入力が不正です';
+    throw new Error(/[）)]$/.test(text) ? text : `${text}（何も変更していません）`);
   }
   throw new Error(
     reason === null

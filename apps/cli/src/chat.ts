@@ -62,6 +62,7 @@ import { confirmInRepl } from './confirm.js';
 import {
   AttachmentDraft,
   createAttachmentDraft,
+  type DraftFile,
   attachmentLinesOf,
   describeAttachment,
   uploadAttachment,
@@ -94,6 +95,13 @@ export async function chatCommand(): Promise<void> {
   const client = createClient(base, target.headers);
 
   const rl = createInterface({ input: stdin, output: stdout });
+  // 入力が閉じたら、待っている質問を打ち切る（#3217）。node v22 は、パイプの EOF では
+  // `question()` を resolve も reject もしない（端末の Ctrl-D は ABORT_ERR で reject される）。
+  // すでに閉じた後に聞いても、渡した signal が中断済みなので即座に reject される。
+  const inputClosed = new AbortController();
+  rl.once('close', () => inputClosed.abort());
+  const ask = (question: string): Promise<string> =>
+    rl.question(question, { signal: inputClosed.signal });
   // 次に送る発言へ添えかけのファイル（`/attach`）。
   const draft = createAttachmentDraft(target);
   let conversationId: string | null = null;
@@ -115,9 +123,9 @@ export async function chatCommand(): Promise<void> {
     for (;;) {
       let line: string;
       try {
-        line = (await rl.question('> ')).trim();
+        line = (await ask('> ')).trim();
       } catch {
-        break; // Ctrl-C
+        break; // Ctrl-C・入力の終わり（EOF）
       }
       // 空行は、添えかけが無ければ送らない。あれば添付だけの発言として送る。
       if (line.length === 0 && draft.count === 0) continue;
@@ -141,7 +149,7 @@ export async function chatCommand(): Promise<void> {
           conversationId,
           target,
           // 戻せない操作の確認は、この REPL の readline で聞く（`confirm.ts`）。
-          (summary) => confirmInRepl(summary, (question) => rl.question(question)),
+          (summary) => confirmInRepl(summary, ask),
         );
         if (handled === 'quit') break;
         continue;
@@ -149,6 +157,7 @@ export async function chatCommand(): Promise<void> {
 
       // 添えかけがあれば先に上げる。失敗したら送らず、添えかけを残して理由を出す。
       let attachmentIds: string[] | undefined;
+      let sentFiles: DraftFile[] = [];
       if (draft.count > 0) {
         const uploaded = await uploadDraft(draft, (file) => uploadAttachment(target, file));
         if (!uploaded.ok) {
@@ -159,12 +168,13 @@ export async function chatCommand(): Promise<void> {
           continue;
         }
         attachmentIds = uploaded.uploaded.map((a) => a.id);
+        sentFiles = uploaded.files;
         for (const a of uploaded.uploaded) stdout.write(`  ${describeAttachment(a)}\n`);
       }
       conversationId = await sendMessage(target, line, conversationId, undefined, {
         ...(attachmentIds === undefined ? {} : { attachments: attachmentIds }),
-        // サーバが発言を受けたら添えかけを空にする（受けなかったら残す）。
-        onAccepted: () => draft.clear(),
+        // サーバが発言を受けたら、送った分の添えかけを外す（受けなかったら残す）。
+        onAccepted: () => draft.discard(sentFiles),
       });
     }
   } finally {

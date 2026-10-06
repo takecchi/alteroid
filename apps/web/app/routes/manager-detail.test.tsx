@@ -464,8 +464,8 @@ describe('待ちは kind で質問と実行許可を出し分ける（#334）', 
 
     expect(await screen.findByText('DB はどちらにする？')).toBeTruthy();
     // allow/deny の概念が無いので、許可・拒否ボタンは出ない。
-    expect(screen.queryByRole('button', { name: '許可' })).toBeNull();
-    expect(screen.queryByRole('button', { name: '拒否' })).toBeNull();
+    expect(screen.queryByRole('button', { name: /を許可$/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /を拒否$/ })).toBeNull();
     // 待ち始めた時刻（絶対表記）。書式は既存の startedAt/updatedAt と同じ道具
     // （`formatDateTime`）で出ている。
     expect(screen.getByText(/08\/23 10:00/)).toBeTruthy();
@@ -520,7 +520,7 @@ describe('待ちは kind で質問と実行許可を出し分ける（#334）', 
     expect(screen.queryByPlaceholderText('この質問への答えを、自分の言葉で書く')).toBeNull();
     expect(screen.getByText(/08\/23 10:00/)).toBeTruthy();
 
-    const allow = screen.getByRole('button', { name: '許可' });
+    const allow = screen.getByRole('button', { name: '「Bash の実行許可: ls」を許可' });
     fireEvent.click(allow);
 
     await waitFor(() => expect(sent).toHaveLength(1));
@@ -555,11 +555,13 @@ describe('待ちは kind で質問と実行許可を出し分ける（#334）', 
         gate,
       );
       expect(await screen.findByText('Bash の実行許可: ls')).toBeTruthy();
-      fireEvent.click(screen.getByRole('button', { name: pressed }));
+      fireEvent.click(screen.getByRole('button', { name: `「Bash の実行許可: ls」を${pressed}` }));
       await waitFor(() => expect(sent).toHaveLength(1));
 
-      const pressedButton = screen.getByRole('button', { name: pressed });
-      const otherButton = screen.getByRole('button', { name: other });
+      const pressedButton = screen.getByRole('button', {
+        name: `「Bash の実行許可: ls」を${pressed}`,
+      });
+      const otherButton = screen.getByRole('button', { name: `「Bash の実行許可: ls」を${other}` });
       expect(pressedButton.querySelector('.animate-spin')).not.toBeNull();
       expect(otherButton.querySelector('.animate-spin')).toBeNull();
       expect((pressedButton as HTMLButtonElement).disabled).toBe(true);
@@ -568,7 +570,9 @@ describe('待ちは kind で質問と実行許可を出し分ける（#334）', 
       release();
       await waitFor(() =>
         expect(
-          screen.getByRole('button', { name: pressed }).querySelector('.animate-spin'),
+          screen
+            .getByRole('button', { name: `「Bash の実行許可: ls」を${pressed}` })
+            .querySelector('.animate-spin'),
         ).toBeNull(),
       );
       cleanup();
@@ -599,12 +603,12 @@ describe('待ちは kind で質問と実行許可を出し分ける（#334）', 
     });
 
     expect(await screen.findByText('種別が来なかった確認')).toBeTruthy();
-    expect(screen.getByRole('button', { name: '許可' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: '拒否' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: '「種別が来なかった確認」を許可' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: '「種別が来なかった確認」を拒否' })).toBeTruthy();
     // 「拒否」は取り返しのつく操作なので danger（赤）にしない（#3091）。
-    expect(screen.getByRole('button', { name: '拒否' }).className).not.toContain(
-      'border-destructive/40',
-    );
+    expect(
+      screen.getByRole('button', { name: '「種別が来なかった確認」を拒否' }).className,
+    ).not.toContain('border-destructive/40');
     expect(screen.queryByPlaceholderText('この質問への答えを、自分の言葉で書く')).toBeNull();
   });
 });
@@ -2397,14 +2401,14 @@ describe('「話しかける」と待ちの行は、send の戻り値を使い�
       { outcome: 'session_missing', detail: '入り直せなかった。' },
     );
     expect(await screen.findByText('Bash の実行許可: ls')).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: '拒否' }));
+    fireEvent.click(screen.getByRole('button', { name: '「Bash の実行許可: ls」を拒否' }));
     const note = await screen.findByText(/届いていない.*入り直せなかった。/);
     expect(note.className.includes('text-warn')).toBe(true);
     expect(note.textContent).not.toContain('session_missing');
 
     // 押し直すと前回の結果は消え、届いた回は何も足さない。
     reply.body = { outcome: 'answered', detail: '解いた。' };
-    fireEvent.click(screen.getByRole('button', { name: '許可' }));
+    fireEvent.click(screen.getByRole('button', { name: '「Bash の実行許可: ls」を許可' }));
     await waitFor(() => expect(screen.queryByText(/入り直せなかった。/)).toBeNull());
     expect(screen.queryByText(/確認に答えた/)).toBeNull();
   });

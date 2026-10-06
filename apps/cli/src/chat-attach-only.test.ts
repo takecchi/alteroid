@@ -16,6 +16,7 @@ vi.mock('node:readline/promises', () => ({
       if (next === undefined) throw new Error('closed');
       return next;
     },
+    once: () => undefined,
     close: () => undefined,
   }),
 }));

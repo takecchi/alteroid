@@ -45,7 +45,7 @@ export const HELP_EXAMPLES = {
   ),
   memorySet: examples(
     'alteroid memory set values -f ./values.md            # ファイルの中身で置き換える',
-    'cat ./values.md | alteroid memory set values         # 標準入力から',
+    'cat ./values.md | alteroid memory set values --yes   # 標準入力から（端末ではないので、置き換えの確認は --yes で省く）',
     'alteroid memory edit values                          # エディタで開く（VISUAL か EDITOR）',
   ),
   practiceShow: examples(
@@ -71,6 +71,7 @@ export const HELP_EXAMPLES = {
   integrationCreate: examples(
     'alteroid integration create --name "CI" --source ci.main              # 無期限・既定の上限',
     'alteroid integration create --name "CI" --source ci.main --expires 90d --rate-per-minute 10',
+    'alteroid integration create --name "CI" --source ci.main --json      # 値は標準出力の JSON（value）。警告は標準エラー。値をログに残さない',
     'alteroid integration list                                             # 状態・最終使用を見る',
   ),
   tokenPolicy: examples(

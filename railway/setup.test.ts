@@ -49,6 +49,8 @@ type Options = {
   branch?: string | null;
   /** `railway ssh -- alteroid credential set` をこけさせる（正本へ置く段） */
   sshCredentialFails?: boolean;
+  /** 器の CLI が古く、`credential set` が --yes を知らない（--help に出ず、渡せば落ちる） */
+  oldCli?: boolean;
 };
 
 /** `.env` を1つ書いて setup.sh を通し、投げられた入力と終了状態を返す。 */
@@ -71,6 +73,7 @@ function run(env: string, options: Options = {}): Promise<Run> {
       ...(options.domainList ? { FAKE_DOMAIN_LIST: options.domainList } : {}),
       ...(options.workspaces ? { FAKE_WORKSPACES: JSON.stringify(options.workspaces) } : {}),
       ...(options.sshCredentialFails ? { FAKE_SSH_CREDENTIAL_FAILS: '1' } : {}),
+      ...(options.oldCli ? { FAKE_OLD_CLI: '1' } : {}),
     },
     allowFailure: options.allowFailure,
     onEnvFile: options.onEnvFile,
@@ -176,6 +179,7 @@ type Scenarios = {
   credentialsGitConfigSystemIgnored: Run;
   credentialsNone: Run;
   credentialsSshFails: Run;
+  credentialsOldCli: Run;
   credentialsRunners2: Run;
   runners3: Run;
   runnersBad: Run[];
@@ -310,6 +314,11 @@ async function prepareScenarios(): Promise<Scenarios> {
     s.credentialsSshFails = await run([MINIMAL, 'GH_TOKEN=github_pat_test', ''].join('\n'), {
       sshCredentialFails: true,
       allowFailure: true,
+    });
+  });
+  task('credentialsOldCli', async () => {
+    s.credentialsOldCli = await run([MINIMAL, 'GH_TOKEN=github_pat_test', ''].join('\n'), {
+      oldCli: true,
     });
   });
   task('credentialsRunners2', async () => {
@@ -848,6 +857,19 @@ describe('GitHub の鍵を正本（DB）へ置く', () => {
     expect(byName.GIT_AUTHOR_EMAIL).toMatchObject({ service: 'app', value: 't@example.com' });
     expect(byName.GIT_COMMITTER_NAME).toMatchObject({ service: 'app', value: 'tester' });
     expect(byName.GIT_COMMITTER_EMAIL).toMatchObject({ service: 'app', value: 't@example.com' });
+  });
+
+  it('--help に --yes が出る新しい CLI では --yes を付けて置く（既存の名前で断られない。#3201）', () => {
+    const r = scenarios.credentialsFull;
+    expect(r.credentials.length).toBeGreaterThan(0);
+    expect(r.credentials.every((c) => c.yes)).toBe(true);
+  });
+
+  it('--help に --yes が出ない古い CLI では --yes を付けずに置く（未知のオプションで落とさない。#3201）', () => {
+    const r = scenarios.credentialsOldCli;
+    expect(r.exitCode).toBe(0);
+    expect(r.credentials.map((c) => c.name)).toEqual(['GH_TOKEN']);
+    expect(r.credentials.every((c) => !c.yes)).toBe(true);
   });
 
   it('GIT_AUTHOR_* が無ければ GH_TOKEN だけ置く（身元が空なら置かない）', () => {

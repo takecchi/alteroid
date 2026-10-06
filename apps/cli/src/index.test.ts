@@ -401,9 +401,32 @@ describe('サブコマンドの登録（入口が在ること）', () => {
       ['--expires', false],
       ['--max-body-bytes', false],
       ['--rate-per-minute', false],
+      ['--json', false],
     ]);
     const revoke = integration?.commands.find((c) => c.name() === 'revoke');
     expect((revoke?.options ?? []).map((o) => o.long)).toEqual(['--yes']);
+  });
+
+  /**
+   * **確認を持つ全コマンドの `--yes` の help 文は同じ**（#3214）。非対話で必須なのは全対象で同じ。
+   * `integration revoke` は別の担当（#3211）が直すので、いまは対象に含めない（直ったら外す）。
+   */
+  it('--yes の help 文は、確認を持つ全コマンドで揃っている', () => {
+    const expected = '確認を飛ばす（スクリプト・CI 向け。端末でなければ必須）';
+    const found: string[] = [];
+    const walk = (command: (typeof program.commands)[number], path: string[]): void => {
+      for (const option of command.options) {
+        if (option.long !== '--yes') continue;
+        const name = path.join(' ');
+        found.push(name);
+        if (name === 'integration revoke') continue;
+        expect([name, option.description]).toEqual([name, expected]);
+      }
+      for (const child of command.commands) walk(child, [...path, child.name()]);
+    };
+    for (const command of program.commands) walk(command, [command.name()]);
+    expect(found).toContain('reset');
+    expect(found).toContain('access remove-unreadable');
   });
 
   /**

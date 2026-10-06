@@ -103,7 +103,7 @@ async function box() {
 async function sendTextAndAbort() {
   const view = renderChat(`/chat/${A}`);
   fireEvent.change(await box(), { target: { value: TEXT } });
-  fireEvent.click(screen.getByRole('button', { name: '送る' }));
+  fireEvent.click(screen.getByRole('button', { name: 'メッセージを送信' }));
   await waitFor(() => expect(posts).toBe(1));
   await view.router.navigate(`/chat/${B}`);
   expect(await findShownConversation(B)).toBeTruthy();
@@ -189,7 +189,7 @@ describe('#3203: 受け取りの判定は clientMessageId で行う', () => {
     await reopenA(router);
     fireEvent.click(await screen.findByRole('button', { name: '破棄' }));
     fireEvent.change(await box(), { target: { value: TEXT } });
-    fireEvent.click(screen.getByRole('button', { name: '送る' }));
+    fireEvent.click(screen.getByRole('button', { name: 'メッセージを送信' }));
     await waitFor(() => expect(posts).toBe(2));
     const bodies = await postedBodies();
     expect(bodies[1]?.clientMessageId).toBeTruthy();

@@ -41,7 +41,7 @@ function noop(): void {}
  * **今の画面の表示をそのまま出すために、部品の省略可能な口を使っている。**
  * - `time`: 時刻は `formatDateTime` と `formatRelative`（`@alteroid/logic`）の2つの
  *   span のまま。時間帯は閲覧者の端末に任せる（部品の `Timestamp` は JST 固定）
- * - `isSubmitKey` は渡さない。部品の既定（`isSubmitShortcut`）に任せ、IME の確定の
+ * - 回答欄の送るキーは部品が持つ（`Textarea` の `onSubmitShortcut`）。IME の確定の
  *   ⌘/Ctrl + Enter は送信に数えない（issue #2259。会話と約束の入力欄と同じ）
  * - `trailing`: 会話のパネルは、エラーの後ろ（カードのいちばん下）に置く
  */

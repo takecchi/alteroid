@@ -12,7 +12,7 @@ import {
   type ProfileState,
 } from '@alteroid/logic';
 
-import { confirmIrreversible } from './confirm.js';
+import { confirmIrreversible, type ConfirmIo } from './confirm.js';
 import { describeScope } from './credential.js';
 import { describeAuthFailure, forbiddenKindOf, resolveTarget, type Target } from './target.js';
 import { openEditor, readInputFile } from './input-errors.js';
@@ -231,23 +231,39 @@ export async function profileStatusCommand(): Promise<void> {
   }
 }
 
-/** ファイルか標準入力から、1行を丸ごと置き換える。 */
+/**
+ * ファイルか標準入力から、1行を丸ごと置き換える。
+ *
+ * **既に在る行を置き換えるときだけ確認する**（Issue #3201。`confirm.ts`）。在るかは、この
+ * コマンドが元から読んでいた `GET /profile`（`fetchProfile`）の行一覧で決める（新しい呼び出しは
+ * 足していない）。置き換えると前の本文は残らない（控えるなら `profile show`）。確認は入力を
+ * 読む前に出す（標準入力を読み切ると、端末の `yes` を聞けない）。
+ */
 export async function profileSetCommand(
   nameArg: string | undefined,
-  options: { file?: string; scope?: string },
+  options: { file?: string; scope?: string; yes?: boolean },
+  io?: ConfirmIo,
 ): Promise<void> {
   // 先に検査する（標準入力を読み終えてから「綴りが違う」で落とさない）。
   const name = parseName(nameArg);
   const scope = parseScope(options.scope);
+  const target = await resolveTarget();
+  const profile = await fetchProfile(target);
+  assertLegacySupports(profile, name, scope);
+  if (profile.entries.some((row) => row.name === name)) {
+    const confirmed = await confirmIrreversible(
+      `プロファイルの行 ${name} を置き換えます。前の本文は残りません（控えるなら alteroid profile show ${name}）。`,
+      options,
+      io,
+    );
+    if (!confirmed) return;
+  }
   const script =
     options.file === undefined || options.file === '-'
       ? await readAll()
       : await readInputFile(options.file, '--file', '--file <path>、または標準入力（-）');
   // 空の本文は通信の前に断る（`put` も同じ検査を持つ）。
   if (script.trim().length === 0) throw new Error(EMPTY_BODY_MESSAGE);
-  const target = await resolveTarget();
-  const profile = await fetchProfile(target);
-  assertLegacySupports(profile, name, scope);
   await put(name, script, target, scope, profile.legacy);
 }
 
@@ -324,6 +340,8 @@ export async function profileRemoveCommand(
  */
 export async function profileClearCommand(options: { yes?: boolean } = {}): Promise<void> {
   const target = await resolveTarget();
+  // 未ログインなら確認を出す前に断る（Issue #3214）。
+  if (target.note !== null) throw new Error(target.note);
   // **戻せない操作なので確認する**（Issue #3141。`confirm.ts`）。全行の本文が残らない。
   const confirmed = await confirmIrreversible(
     'プロファイルの全行を外します。行の本文は残りません（控えるなら alteroid profile show）。',

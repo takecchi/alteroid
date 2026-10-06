@@ -5672,11 +5672,18 @@ class Pool implements ManagerPool {
    * 反転して、失敗した回の `closed(lost)` を捨てる。だから別の印にして、預かる列（`#deferredEvents`）と
    * 閉じ方（`#endRelocationWindow`）だけを共有する。
    *
-   * **預かるのは `closed` だけ**（`session` / `report` / `ask` / `settled` は預けない）。`closed` だけが
-   * 終端状態（`lost` / `done` / `failed`）を台帳へ書き、貸し出しの返却と `#retire` まで進める。ほかの4種は
-   * 古いセッションのものでも事実の報告で、預けて遅らせても得るものが無い一方、受理の後まで遅らせると
-   * 新しいセッションの `ask` / `report` を待たせる。`closed` には世代の識別子が無い（Issue #3170）ので、
-   * 窓の間に届いたものは古い世代と読む。
+   * **預かるのは `closed` と `report` だけ**（`session` / `ask` / `settled` は預けない）。`closed` だけが
+   * 終端状態（`lost` / `done` / `failed`）を台帳へ書き、貸し出しの返却と `#retire` まで進める。
+   * `session` / `ask` / `settled` は古いセッションのものでも事実の報告で、預けて遅らせても得るものが無い
+   * 一方、受理の後まで遅らせると新しいセッションの `ask` を待たせる。`closed` には世代の識別子が無い
+   * （Issue #3170）ので、窓の間に届いたものは古い世代と読む。
+   *
+   * **`report` も預ける（Issue #3234）。** その場で処理すると `lastReportAt` が resume の応答の前の時刻で
+   * 書かれ、応答が `runnerSessionSince` をそれより後へ進めるので、あとの `closed(done)` で
+   * 「このセッションで report を受け取っていない」（#3189 / #3199 の判定）と誤る。預けて、窓が閉じたとき
+   * （応答の後）に処理し直せば `lastReportAt` が応答の後になる。処理し直すのは、resume が受理されなかった
+   * ときと、受理されて世代が追っている世代と一致する／世代が無い（古い runner）ときだけ。世代が違うものは
+   * 日誌にだけ残す（#3125 の移送の窓と同じ扱い）。
    */
   readonly #sameRunnerResumeWindow = new Map<string, string>();
   /**
@@ -11424,9 +11431,14 @@ class Pool implements ManagerPool {
         // 窓の間に届いた出来事が、応答で追い始めた世代そのもの（新しいセッション）の出来事だと分かるなら、
         // 古い世代として捨てずに処理する（Issue #3170）。世代の食い違いは `#onEvent` が日誌にだけ残して捨てる。
         const record = this.#records.get(managerId);
+        const generation =
+          record === undefined ? 'unknown' : this.#judgeSessionGeneration(record, event);
+        // `report`（Issue #3234）は、世代が一致するか、世代が無い（古い runner）ときも処理し直す。
+        // 世代が違うものは下で日誌にだけ残す。`closed` は世代が一致するときだけ（従来どおり）。
         if (
           !moved ||
-          (record !== undefined && this.#judgeSessionGeneration(record, event) === 'current')
+          generation === 'current' ||
+          (event.type === 'report' && generation === 'unknown')
         ) {
           await this.#onEvent(event, fromRunnerId);
           continue;
@@ -12236,6 +12248,16 @@ class Pool implements ManagerPool {
         this.#deferEvent(event, fromRunnerId);
         return;
       }
+      // **同じ runner への復帰の resume の最中の report も預かる**（Issue #3234。`#sameRunnerResumeWindow`）。
+      // `session` / `ask` / `settled` は預けない（同じ doc）。世代の判定は窓が閉じるとき（応答で追う世代が
+      // 決まった後）に行うので、ここでは世代で選り分けない。
+      if (
+        event.type === 'report' &&
+        this.#sameRunnerResumeWindow.get(event.managerId) === fromRunnerId
+      ) {
+        this.#deferEvent(event, fromRunnerId);
+        return;
+      }
     }
 
     switch (event.type) {
@@ -12305,8 +12327,11 @@ class Pool implements ManagerPool {
         // **デーモンが受け取った時刻**（#358）。runner がこの報告を包んだ時刻
         // でも、クローンのターンへ入った時刻でもない — `lastReportAt` の doc
         // を参照。`lastFailure.at`（この少し下）と同じく、この境界を跨いだ
-        // 瞬間として `new Date().toISOString()` を直接使う。
-        record.job.lastReportAt = new Date().toISOString();
+        // 瞬間として、デーモンの時計（`this.#now()`。本番は `Date.now`）で書く。
+        // **`runnerSessionSince`（`#noteRunnerSessionSince`）と同じ時計で書く**（Issue #3234）。
+        // 判定（{@link reportSeenInSession}）はこの2つの前後を比べるので、別の時計だと注入した時計の
+        // 試験で前後が崩れる（本番では同じ `Date.now` なので値は変わらない）。
+        record.job.lastReportAt = new Date(this.#now()).toISOString();
         // **終端（`failed` / `lost`）を、遅れて処理される report で書き戻さない（Issue #3160）。**
         // runner の出来事は `void this.#onEvent(...)` で並行に処理されるので、この
         // `report` が上の `await` で待つ間に `closed(failed / lost)` が終端を台帳へ書く
@@ -14483,7 +14508,23 @@ class Pool implements ManagerPool {
          */
         if (event.status === 'done' && !this.#withheldReports.has(event.managerId)) {
           const seen = reportSeenInSession(record.job.lastReportAt, record.job.runnerSessionSince);
-          if (seen !== 'seen') {
+          // **同じセッションについては1回だけ**（Issue #3233）。印は知らせを積んだときの
+          // `runnerSessionSince`。resume / start で新しいセッションになれば値が変わるので、
+          // 新しい終わりは従来どおり知らせる。`runnerSessionSince` がまだ無いセッションは空文字で印を打つ
+          // （`Job.silentDoneNotifiedFor` の doc）。
+          const sessionKey = record.job.runnerSessionSince ?? '';
+          const alreadyNotified = record.job.silentDoneNotifiedFor === sessionKey;
+          if (seen !== 'seen' && alreadyNotified) {
+            await this.#journal({
+              type: 'exchange',
+              with: 'manager',
+              role: 'inbound',
+              text:
+                `${EXCHANGE_KIND_DECISION_PREFIX}[${event.managerId}] report 無しの closed(done)。` +
+                `同じセッション（${sessionKey === '' ? '開始時刻は不明' : sessionKey}）については知らせ済みなので重ねて知らせない: ` +
+                event.reason,
+            });
+          } else if (seen !== 'seen') {
             const body = [
               `この委譲 ${event.managerId} は、report を出さないまま終わった（closed の status=done。台帳の状態は done）。`,
               '**成果が出ているとは限らない** — 成果が実際に出ているか' +
@@ -14506,6 +14547,9 @@ class Pool implements ManagerPool {
                 `（${seen === 'none' ? 'report は一度も受け取っていない' : '判定できないので知らせる側へ倒した'}）。` +
                 `クローンへ知らせる: ${body}`,
             });
+            // **印を先に台帳へ書く**（`lateDoneNotifiedAt` と同じ。本文は上で日誌へ残してある）。
+            record.job.silentDoneNotifiedFor = sessionKey;
+            await this.#persist(record);
             this.#queueSynthesizedNotice(event.managerId, 'closed_done_silent', body);
           }
         }
