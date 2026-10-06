@@ -1559,6 +1559,36 @@ describe('承認待ち（一覧と詳細・答える）', () => {
     expect(h.frame()).not.toContain('設問に答える');
   });
 
+  it('詳細を読み進めたあと別のタブへ移って戻っても、読む位置は先頭へ戻らない。開き直せば先頭から読む', async () => {
+    const h = start((api) => {
+      api.approvalRows = [
+        approvalRow('ap-long', {
+          question: Array.from({ length: 80 }, (_, i) => `長い質問の${String(i)}行目`).join('\n'),
+        }),
+      ];
+      api.counts = { pendingApprovals: 1, unreadableApprovals: 0, runningManagers: 0 };
+    });
+    await type(h.stdin, '/approvals');
+    h.stdin.write(ENTER);
+    await waitFor(() => h.frame().includes('承認待ち（未回答 1 件'));
+    await press(h.stdin, ENTER);
+    await waitFor(() => h.frame().includes('長い質問の0行目'));
+    expect(h.frame()).not.toContain('長い質問の79行目');
+    for (let i = 0; i < 20; i += 1) h.stdin.write('\x1b[6~');
+    await waitFor(() => h.frame().includes('長い質問の79行目'));
+    expect(h.frame()).not.toContain('長い質問の0行目');
+    await press(h.stdin, '4'); // 日誌へ
+    await waitFor(() => h.frame().includes('日誌（絞り:'));
+    await press(h.stdin, '2'); // 承認待ちへ戻る
+    await waitFor(() => h.frame().includes('長い質問の79行目'));
+    expect(h.frame()).not.toContain('長い質問の0行目');
+    // 一覧へ戻って開き直せば、先頭から読む。
+    await press(h.stdin, ESC);
+    await waitFor(() => h.frame().includes('承認待ち（未回答 1 件'));
+    await press(h.stdin, ENTER);
+    await waitFor(() => h.frame().includes('長い質問の0行目'));
+  });
+
   it('実行許可の承認待ちは、規則と例と「許可します」の答え方を出す。自由文で答える', async () => {
     const h = start((api) => {
       api.approvalRows = [

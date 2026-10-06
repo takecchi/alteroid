@@ -376,11 +376,11 @@ export const App: FC<AppProps> = ({
     void approvals.open(id);
   };
 
+  /** タブを移るだけでは、開いている詳細の読む位置を動かさない（開く・開き直すときだけ先頭へ置く）。 */
   const goTab = (next: TabId): void => {
     setTab(next);
     if (next === 'approvals') {
       approvals.enter();
-      setApAnchor(apLogHeight);
     }
     if (next === 'managers') managers.enter();
     if (next === 'journal') journal.enter();
