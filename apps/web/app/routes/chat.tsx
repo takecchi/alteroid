@@ -59,6 +59,7 @@ import {
 } from '@alteroid/logic';
 import type {
   ApprovalDrafts,
+  ChatDraftMark,
   ConversationMessage,
   MessageAttachment,
   PendingApproval,
@@ -1950,6 +1951,27 @@ export function ChatPane({
    */
   const markTried = useRef(new Set<string | undefined>());
   useEffect(() => {
+    const markOf = (
+      entry: NonNullable<ReturnType<typeof retries.get>>,
+    ): ChatDraftMark | undefined =>
+      entry.unconfirmed === undefined && entry.supersedes === undefined
+        ? undefined
+        : {
+            ...(entry.clientMessageId === undefined
+              ? {}
+              : { clientMessageId: entry.clientMessageId }),
+            ...(entry.unconfirmed === undefined ? {} : { unconfirmed: true as const }),
+            ...(entry.supersedes === undefined ? {} : { supersedes: entry.supersedes }),
+          };
+    // 別の会話で積まれて、まだ入力欄へ戻していない文（見ていない会話の中断）。本文と印を先に残す。
+    // 入力欄が空でないなら、使い手の書きかけを上書きしない。
+    for (const [key, other] of retries) {
+      if (key === shownId || other.restored === true) continue;
+      const mark = markOf(other);
+      if (mark === undefined) continue;
+      if (loadChatDraft(key) === '') saveChatDraft(key, other.text);
+      saveChatDraftMark(key, mark);
+    }
     const entry = retries.get(shownId);
     if (!markTried.current.has(shownId)) {
       markTried.current.add(shownId);
@@ -1966,21 +1988,9 @@ export function ChatPane({
         }
       }
     }
-    if (entry === undefined) {
-      saveChatDraftMark(shownId, undefined);
-    } else if (entry.restored === true && entry.inComposer === true) {
-      saveChatDraftMark(
-        shownId,
-        entry.unconfirmed === undefined && entry.supersedes === undefined
-          ? undefined
-          : {
-              ...(entry.clientMessageId === undefined
-                ? {}
-                : { clientMessageId: entry.clientMessageId }),
-              ...(entry.unconfirmed === undefined ? {} : { unconfirmed: true as const }),
-              ...(entry.supersedes === undefined ? {} : { supersedes: entry.supersedes }),
-            },
-      );
+    if (entry === undefined) saveChatDraftMark(shownId, undefined);
+    else if (entry.restored === true && entry.inComposer === true) {
+      saveChatDraftMark(shownId, markOf(entry));
     }
   }, [retries, shownId]);
 
