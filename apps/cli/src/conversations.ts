@@ -94,9 +94,43 @@ export async function conversationsListCommand(
   // `renderConversationsList` は改行で終わらずに返す（末尾に改行が無いことは
   // `.claude/skills/mutation-testing/mutate-selftest.mjs` が固定している）。
   // 端末の次のプロンプトや後続の書き込みが最終行へ食い込まないよう、ここで足す（#326）。
+  // **総数の取得は一覧の後で、失敗しても一覧を奪わない。** 一覧は `--limit` の外の
+  // 会話を数えない。Web の左ナビのバッジと同じ数（`GET /conversations/unread-count`）を
+  // 見出しに1行足す。
+  const unreadLine = await fetchUnreadTotalLine(client);
   stdout.write(
-    `${renderConversationsList(conversations, scanned, reachedStart, hiddenByLimit, now)}\n`,
+    `${unreadLine}\n${renderConversationsList(conversations, scanned, reachedStart, hiddenByLimit, now)}\n`,
   );
+}
+
+/**
+ * 「未読のある会話 N 件」の1行（Web の左ナビのバッジ `shell.tsx` と同じ数・同じ意味）。
+ *
+ * **取れなかったときは黙らず、取れなかったと1行で言う**（数を 0 として出さない——「未読なし」と
+ * 読める）。ここで例外を投げると、取れている一覧まで出なくなる（一過性の失敗で一覧を奪わない）ので
+ * 投げない。古いデーモンは 404 を返す（口が無い）ので、それも一覧を壊さず1行で言う。
+ */
+async function fetchUnreadTotalLine(client: DaemonClient): Promise<string> {
+  const unavailable = (reason: string): string =>
+    `未読のある会話の総数は取れませんでした（${reason}）`;
+  try {
+    const response = await client.conversations['unread-count'].$get();
+    if (response.status === 404) {
+      return unavailable('このデーモンは総数の口を持たない。古い版かもしれない');
+    }
+    if (!response.ok) return unavailable(`HTTP ${String(response.status)}`);
+    const body: Partial<Awaited<ReturnType<typeof response.json>>> = await response.json();
+    // Web と同じく、形の違う応答・既読の記録が読めない旨の応答は「読めていない」側へ倒す。
+    if (typeof body.count !== 'number' || body.readStateUnreadable !== undefined) {
+      return unavailable('既読の記録が読めないか、応答の形が想定と違う');
+    }
+    // `capped` のときの `count` は下限（Web は「N+」）。
+    return body.capped === true
+      ? `未読のある会話 ${body.count} 件以上（数え切れていない）`
+      : `未読のある会話 ${body.count} 件`;
+  } catch (error) {
+    return unavailable(error instanceof Error ? error.message : String(error));
+  }
 }
 
 /**
