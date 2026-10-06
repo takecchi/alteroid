@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 /**
  * 日付なしの入口（`/approvals/item/:approvalId`）。回答済みの詳細の日付はデーモンの `localDate()` で
- * 決まるので、ブラウザは決着の日時の前後1日を `answeredOn` で引き、その承認を返した日を採る。
+ * 決まるので、ブラウザは `GET /approvals/{id}` の1回で `settledOn` を受け取り、その日へ移る。
  */
 import { cleanup, render, screen } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider, useLocation, useParams } from 'react-router';
@@ -26,35 +26,27 @@ function approval(over: Partial<PendingApproval> = {}): PendingApproval {
   };
 }
 
-/** `days`: デーモンが「その日に決着した」と答える承認。`trace` が無ければ 404。 */
-function stub(options: { trace?: PendingApproval; days?: Record<string, PendingApproval[]> }) {
-  const asked: string[] = [];
+/**
+ * `GET /approvals/{id}` だけを答える。`found` が無ければ 404、`status` を渡せばその失敗。
+ * 返した呼び出し（メソッドとパス＋クエリ）を `calls` に残す。
+ */
+function stub(options: {
+  found?: { approval: PendingApproval; settledOn: string | null };
+  status?: number;
+}) {
+  const calls: string[] = [];
   globalThis.fetch = (async (input: RequestInfo | URL) => {
     const href = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
     const url = new URL(href);
-    if (/^\/approvals\/[^/]+\/trace$/.test(url.pathname)) {
-      if (options.trace === undefined) return json({ error: 'not found' }, 404);
-      return json({
-        approval: options.trace,
-        state: 'paired',
-        questionEntry: null,
-        answerEntry: null,
-        turnStarts: [],
-        actions: [],
-        actionsOmitted: 0,
-        unstampedInTurn: 0,
-        scanned: 0,
-        truncated: false,
-      });
-    }
-    if (url.pathname === '/approvals') {
-      const date = url.searchParams.get('answeredOn') ?? '';
-      asked.push(date);
-      return json({ approvals: options.days?.[date] ?? [] });
+    calls.push(`${url.pathname}${url.search}`);
+    if (/^\/approvals\/[^/]+$/.test(url.pathname)) {
+      if (options.status !== undefined) return json({ error: 'boom' }, options.status);
+      if (options.found === undefined) return json({ error: 'not found' }, 404);
+      return json(options.found);
     }
     return Promise.reject(new TypeError(`Failed to fetch: ${href}`));
   }) as typeof fetch;
-  return asked;
+  return calls;
 }
 
 let originalFetch: typeof fetch;
@@ -96,9 +88,9 @@ function renderItem(id = 'a-1') {
 }
 
 describe('日付なしの入口', () => {
-  it('回答済み: デーモンがその承認を返した日の詳細へ replace で移る', async () => {
+  it('回答済み: デーモンが返した決着の日の詳細へ replace で移る。呼ぶのは1回だけ', async () => {
     const a = approval({ answeredAt: '2026-09-30T05:00:00.000Z', answer: 'はい' });
-    stub({ trace: a, days: { '2026-09-30': [a] } });
+    const calls = stub({ found: { approval: a, settledOn: '2026-09-30' } });
     const router = renderItem();
 
     expect((await screen.findByTestId('where')).textContent).toBe(
@@ -106,58 +98,67 @@ describe('日付なしの入口', () => {
     );
     // replace: 入口を履歴に残さない（戻るで入口に戻って、また移るのを繰り返さない）
     expect(router.state.historyAction).toBe('REPLACE');
+    // 日を探して何度も引かない（1回の移動で `GET /approvals/{id}` の1回だけ）
+    expect(calls).toEqual(['/approvals/a-1']);
   });
 
   it('デーモンの日が決着の UTC の日と違っても（UTC 15:00 以降は東京で翌日）、デーモンが返した日を採る', async () => {
     const a = approval({ answeredAt: '2026-09-30T20:00:00.000Z', answer: 'はい' });
-    stub({ trace: a, days: { '2026-10-01': [a] } });
+    stub({ found: { approval: a, settledOn: '2026-10-01' } });
     renderItem();
     expect((await screen.findByTestId('where')).textContent).toBe(
       '/approvals/answered/2026-10-01/a-1',
     );
   });
 
-  it('前の日（西の TZ）でも見つける', async () => {
+  it('前の日（西の TZ）でも、デーモンが返した日を採る', async () => {
     const a = approval({ answeredAt: '2026-09-30T03:00:00.000Z' });
-    stub({ trace: a, days: { '2026-09-29': [a] } });
+    stub({ found: { approval: a, settledOn: '2026-09-29' } });
     renderItem();
     expect((await screen.findByTestId('where')).textContent).toBe(
       '/approvals/answered/2026-09-29/a-1',
     );
   });
 
-  it('取り下げ済みは withdrawnAt の日を探す', async () => {
+  it('取り下げ済み: デーモンが返した日の詳細へ移る', async () => {
     const a = approval({ withdrawnAt: '2026-09-30T05:00:00.000Z', withdrawnReason: 'x' });
-    const asked = stub({ trace: a, days: { '2026-09-30': [a] } });
+    stub({ found: { approval: a, settledOn: '2026-09-30' } });
     renderItem();
     expect((await screen.findByTestId('where')).textContent).toBe(
       '/approvals/answered/2026-09-30/a-1',
     );
-    expect(asked).toContain('2026-09-30');
   });
 
-  it('未回答は未回答のページへ移る（日付は引かない）', async () => {
-    const asked = stub({ trace: approval() });
+  it('id は URL へエンコードして引き、移り先の URL にもエンコードして載せる', async () => {
+    const a = approval({ id: 'a/b c', answeredAt: '2026-09-30T05:00:00.000Z' });
+    const calls = stub({ found: { approval: a, settledOn: '2026-09-30' } });
+    renderItem(encodeURIComponent('a/b c'));
+    await screen.findByTestId('where');
+    expect(calls).toEqual(['/approvals/a%2Fb%20c']);
+  });
+
+  it('未回答は未回答のページへ移る（呼ぶのは1回だけ）', async () => {
+    const calls = stub({ found: { approval: approval(), settledOn: null } });
     renderItem();
     expect((await screen.findByTestId('where')).textContent).toBe('/approvals');
-    expect(asked).toEqual([]);
+    expect(calls).toEqual(['/approvals/a-1']);
   });
 
-  it('どの日にも見つからなければ、日を推測せず、特定できなかったと言う', async () => {
-    const a = approval({ answeredAt: '2026-09-30T05:00:00.000Z' });
-    stub({ trace: a, days: {} });
+  it('404 なら、見つからないと言い、どこへも移らない（回答済みのページへのリンクは出す）', async () => {
+    stub({});
     renderItem();
-    expect(await screen.findByText(/決着した日を特定できなかった/)).toBeTruthy();
+    expect(await screen.findByText(/この承認は見つからなかった/)).toBeTruthy();
     expect(screen.queryByTestId('where')).toBeNull();
     expect(screen.getByRole('link', { name: '回答済みの承認へ' }).getAttribute('href')).toBe(
       '/approvals/answered',
     );
   });
 
-  it('承認が引けなければ（404）、エラーを出し、どこへも移らない', async () => {
-    stub({});
+  it('読めなかった（500）ときは、見つからないとは言わず、読み込めなかったと言い、どこへも移らない', async () => {
+    stub({ status: 500 });
     renderItem();
     expect(await screen.findByRole('alert')).toBeTruthy();
+    expect(screen.queryByText(/見つからなかった/)).toBeNull();
     expect(screen.queryByTestId('where')).toBeNull();
   });
 });

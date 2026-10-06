@@ -183,6 +183,7 @@ import {
   accessAccountResponseSchema,
   accessListResponseSchema,
   approvalsAnswerResponseSchema,
+  approvalByIdResponseSchema,
   approvalsAnsweredDatesResponseSchema,
   approvalsResponseSchema,
   approvalTraceResponseSchema,
@@ -273,7 +274,7 @@ import {
   usageResponseSchema,
 } from './openapi.js';
 import { InvalidCursorError, decodeCursor, encodeCursor } from './cursor.js';
-import { answeredDates, approvalsSettledOn } from './approvals-answered.js';
+import { answeredDates, approvalSettledDate, approvalsSettledOn } from './approvals-answered.js';
 import { createTopologyActivityTracker, type WorkerToolBus } from './topology-activity.js';
 import {
   createStorageHealthTracker,
@@ -5403,10 +5404,9 @@ export function createApp(deps: AppDeps) {
     /**
      * 決着のあった日と件数（`GET /approvals?answeredOn=` で日ごとに開くための目次）。
      *
-     * **`/approvals/:id/...` に食われない**: 既存の `/approvals/` 配下の GET は `/:id/trace`
-     * （3区間）だけで、2区間のこの経路とは当たらない。`GET /approvals/:id` は無い。
-     * 将来 `GET /approvals/:id` を足すなら、**この経路より後ろに登録しないこと**
-     * （`answered-dates` が id として読まれる）。
+     * **`GET /approvals/:id`（下）に食われない**: `/approvals/:id` は2区間で、この経路と
+     * 同じ形をしている。**`GET /approvals/:id` はこの経路より後ろに登録すること**
+     * （先に登録すると `answered-dates` が id として読まれる。`approvals-answered.test.ts` が固定する）。
      */
     .get(
       '/approvals/answered-dates',
@@ -5445,6 +5445,61 @@ export function createApp(deps: AppDeps) {
             ...(beforeDate === undefined ? {} : { beforeDate }),
           }),
         });
+      },
+    )
+
+    /**
+     * 承認を id で1件返し、決着した日を載せる。
+     *
+     * **`GET /approvals/answered-dates` より後ろに登録している**（上の注意書き）。`POST` の
+     * `/approvals/answer` / `/approvals/:id/answer` とは、メソッドが違うので当たらない。
+     *
+     * `settledOn` は `GET /approvals?answeredOn=` の日と**同じ関数**（`approvalSettledDate`）で
+     * 決める。未決着は `null`。在るが読めない行は、`/approvals/:id/trace` と同じく 409
+     * （「無い」と言わない）。
+     */
+    .get(
+      '/approvals/:id',
+      describeRoute({
+        tags: ['approvals'],
+        summary: '承認を id で1件読み、決着した日を返す',
+        description:
+          '承認1件と、決着した日（`settledOn`。デーモンの `localDate()`・日報と同じ区切り。決着の日時は ' +
+          '`answeredAt`、無ければ `withdrawnAt`。`GET /approvals?answeredOn=` と同じ意味）を返す。' +
+          '未回答・未取り下げなら `settledOn` は `null`。回答済みの詳細（`/approvals/answered/<日>/<id>`）へ' +
+          '移るために、一覧を引かずに日を知る口。',
+        responses: {
+          200: {
+            description: '承認と決着した日。',
+            content: { 'application/json': { schema: resolver(approvalByIdResponseSchema) } },
+          },
+          404: {
+            description: '該当する承認待ちが無い。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+          409: {
+            description:
+              '承認待ちの行は在るが読めない形で入っている（版ずれ・手編集）。消されたのではない。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+        },
+      }),
+      async (c) => {
+        let approval: Awaited<ReturnType<typeof stores.jobs.getApproval>>;
+        try {
+          approval = await stores.jobs.getApproval(c.req.param('id'));
+        } catch (error) {
+          if (error instanceof UnreadableApprovalError)
+            return c.json({ error: error.message }, 409);
+          throw error;
+        }
+        if (approval === null) return c.json({ error: 'not found' as const }, 404);
+        return c.json(
+          approvalByIdResponseSchema.parse({
+            approval: { ...approval, updatedAt: approvalUpdatedAt(approval) },
+            settledOn: approvalSettledDate(approval) ?? null,
+          }),
+        );
       },
     )
 

@@ -441,29 +441,37 @@ describe('alteroid inbox show', () => {
   });
 
   /**
-   * **読み取り専用コマンドの作法**（`dropped.ts` / `runners.ts` / `usage.ts`
-   * と同じ）——HTTP のエラーは stdout へ書いて正常終了する。読み取りに
-   * 失敗しても状態は何も変わっていないので、`inboxRemoveCommand`（書き込み
-   * 系。失敗を例外で通す）とは事情が違う。
+   * **読み取りの HTTP 失敗も例外で通す**（#3446。`usage.ts` と同じ）。stdout に書いて
+   * 正常終了すると、cron やスクリプトからは成功に見える。未ログイン（`target.note`）の
+   * 読み取りを 0 のままにする #2456 の決定とは別の話である。
    */
-  it('403（許可が無い）は stdout へ書いて正常終了する（例外にしない）', async () => {
+  it('403（許可が無い）は例外にする（stdout に書かない）', async () => {
     replies = [{ status: 403, body: { error: 'このアカウントには alteroid を使う許可が無い' } }];
     const read = captureStdout();
 
-    await inboxShowCommand();
-
-    expect(read()).toContain('受信箱の内訳を読めませんでした（403）');
+    await expect(inboxShowCommand()).rejects.toThrow('access grant');
+    expect(read()).toBe('');
   });
 
-  it('5xx も stdout へ書いて正常終了する', async () => {
+  it('401 は describeAuthFailure の文で例外にする', async () => {
+    replies = [{ status: 401, body: {} }];
+    const read = captureStdout();
+
+    await expect(inboxShowCommand()).rejects.toThrow('認証されませんでした');
+    expect(read()).toBe('');
+  });
+
+  it('5xx も例外にする', async () => {
     replies = [{ status: 500, body: { error: '受信箱の集計が失敗した（テスト用）' } }];
     const read = captureStdout();
 
-    await inboxShowCommand();
-
-    const text = read();
-    expect(text).toContain('受信箱の内訳を読めませんでした（500）');
-    expect(text).toContain('受信箱の集計が失敗した（テスト用）');
+    const error = await inboxShowCommand().then(
+      () => null,
+      (e: unknown) => e as Error,
+    );
+    expect(error?.message).toContain('受信箱の内訳を読めませんでした（500）');
+    expect(error?.message).toContain('受信箱の集計が失敗した（テスト用）');
+    expect(read()).toBe('');
   });
 
   it('繋がらない（fetch そのものが失敗する）も投げる', async () => {

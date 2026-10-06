@@ -56,13 +56,18 @@ export interface PracticeSummary {
 export async function practiceListCommand(): Promise<void> {
   const conn = await connect('read');
   if (conn === null) return;
-  const { client } = conn;
+  const { client, target } = conn;
   const response = await client.practices.$get();
   if (!response.ok) {
-    stdout.write(
-      `${await withErrorReason(`やり方の一覧を読めませんでした（HTTP ${String(response.status)}）`, response)}\n`,
+    // 失敗は例外で上へ通す（＝終了コードが 0 でなくなる。#3452。`read` と同じ）。
+    const described = describeAuthFailure(response.status, target);
+    if (described !== null) throw new Error(described);
+    throw new Error(
+      await withErrorReason(
+        `やり方の一覧を読めませんでした（HTTP ${String(response.status)}）`,
+        response,
+      ),
     );
-    return;
   }
   const { practices, unreadable = [] } = (await response.json()) as {
     practices: PracticeSummary[];
@@ -113,7 +118,7 @@ export async function practiceShowCommand(
 ): Promise<void> {
   const conn = await connect('read');
   if (conn === null) return;
-  const { client } = conn;
+  const { client, target } = conn;
 
   if (options.version !== undefined) {
     const response = await client.practices[':slug'].versions[':version'].$get({
@@ -121,19 +126,21 @@ export async function practiceShowCommand(
     });
     if (!response.ok) {
       // 「無い」は 404 だけ。5xx 等を「そんな版はありません」と言わない。
-      stdout.write(
-        `${
-          response.status === 400
-            ? `版番号として成立しません: ${String(options.version)}`
-            : response.status === 404
-              ? `そんな版はありません: ${slug} 版${String(options.version)}`
-              : await withErrorReason(
-                  `版を読めませんでした: ${slug} 版${String(options.version)}（HTTP ${String(response.status)}）`,
-                  response,
-                )
-        }\n`,
+      // 失敗は例外で上へ通す（＝終了コードが 0 でなくなる。#3452）。
+      if (response.status === 400) {
+        throw new Error(`版番号として成立しません: ${String(options.version)}`);
+      }
+      if (response.status === 404) {
+        throw new Error(`そんな版はありません: ${slug} 版${String(options.version)}`);
+      }
+      const described = describeAuthFailure(response.status, target);
+      if (described !== null) throw new Error(described);
+      throw new Error(
+        await withErrorReason(
+          `版を読めませんでした: ${slug} 版${String(options.version)}（HTTP ${String(response.status)}）`,
+          response,
+        ),
       );
-      return;
     }
     const body = await response.json();
     const content = 'version' in body ? body.version.content : '';
@@ -164,13 +171,18 @@ export async function practiceShowCommand(
 export async function practiceHistoryCommand(slug: string): Promise<void> {
   const conn = await connect('read');
   if (conn === null) return;
-  const { client } = conn;
+  const { client, target } = conn;
   const response = await client.practices[':slug'].versions.$get({ param: { slug } });
   if (!response.ok) {
-    stdout.write(
-      `${await withErrorReason(`版の履歴を読めませんでした（HTTP ${String(response.status)}）`, response)}\n`,
+    // 失敗は例外で上へ通す（＝終了コードが 0 でなくなる。#3452）。
+    const described = describeAuthFailure(response.status, target);
+    if (described !== null) throw new Error(described);
+    throw new Error(
+      await withErrorReason(
+        `版の履歴を読めませんでした（HTTP ${String(response.status)}）`,
+        response,
+      ),
     );
-    return;
   }
   const { versions } = (await response.json()) as {
     versions: Array<{ version: number; kind: string; title: string; at: string; chars: number }>;

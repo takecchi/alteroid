@@ -116,6 +116,10 @@ export interface FakeApi extends TuiApi {
   approvalRows: ApprovalRow[];
   unreadableApprovals: UnreadableApproval[];
   approvalListCalls: { pending: boolean }[];
+  /** `readApproval`（id で1件）に渡された id。 */
+  approvalReadCalls: string[];
+  /** 次の `readApproval` を失敗させる。 */
+  approvalReadFails: string | null;
   /** 新しい日が上の「決着した日と件数」（`listAnsweredDates` が返す）。 */
   answeredDateRows: AnsweredDateRow[];
   answeredDateCalls: { limit: number; beforeDate?: string }[];
@@ -203,6 +207,8 @@ export function fakeApi(): FakeApi {
     approvalRows: [],
     unreadableApprovals: [],
     approvalListCalls: [],
+    approvalReadCalls: [],
+    approvalReadFails: null,
     answeredDateRows: [],
     answeredDateCalls: [],
     answeredDatesFail: null,
@@ -341,6 +347,11 @@ export function fakeApi(): FakeApi {
         ? api.approvalRows.filter((r) => r.answeredAt === undefined && r.withdrawnAt === undefined)
         : api.approvalRows;
       return Promise.resolve({ approvals: rows, unreadable: api.unreadableApprovals });
+    },
+    readApproval(id) {
+      api.approvalReadCalls.push(id);
+      if (api.approvalReadFails !== null) return Promise.reject(new Error(api.approvalReadFails));
+      return Promise.resolve(api.approvalRows.find((r) => r.id === id) ?? null);
     },
     listAnsweredDates(query) {
       api.answeredDateCalls.push(query);

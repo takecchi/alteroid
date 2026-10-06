@@ -18,10 +18,11 @@ import { captureStderr, captureStdout, pretendTty } from './test-support.js';
  * ここで見たいのは **`PUT /memory/<slug>` が実際に組み立てられるか**なので、
  * 差し替えるのはもっと外側（`fetch`）にする。
  */
-vi.mock('./target.js', () => ({
+// `describeAuthFailure` は本物を使う（一覧・履歴の 401/403 を例外にする歯のため。#3452）。
+vi.mock('./target.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./target.js')>()),
   resolveTarget: () =>
     Promise.resolve({ baseUrl: 'http://127.0.0.1:4517', headers: {}, note: null }),
-  describeAuthFailure: () => null,
 }));
 
 const {
@@ -551,11 +552,24 @@ describe('alteroid memory の読み出しの失敗の理由', () => {
     const read = captureStdout();
     replies.push({ status: 500, body: { error: '一覧が読めない（memory のテスト用）' } });
 
-    await memoryListCommand();
+    const error = await memoryListCommand().then(
+      () => null,
+      (e: unknown) => e as Error,
+    );
 
-    const text = read();
-    expect(text).toContain('記憶の一覧を読めませんでした（HTTP 500）');
-    expect(text).toContain('一覧が読めない（memory のテスト用）');
+    // 例外で通す（＝終了コードが非 0 になる。#3452）。stdout に書いて 0 で返さない。
+    expect(error?.message).toContain('記憶の一覧を読めませんでした（HTTP 500）');
+    expect(error?.message).toContain('一覧が読めない（memory のテスト用）');
+    expect(read()).toBe('');
+  });
+
+  it('list: 401 / 403 は describeAuthFailure の文で例外にする（#3452）', async () => {
+    const read = captureStdout();
+    replies.push({ status: 401, body: {} });
+    await expect(memoryListCommand()).rejects.toThrow('認証されませんでした');
+    replies.push({ status: 403, body: {} });
+    await expect(memoryListCommand()).rejects.toThrow('access grant');
+    expect(read()).toBe('');
   });
 
   it('show: 404 は「無い」のまま', async () => {

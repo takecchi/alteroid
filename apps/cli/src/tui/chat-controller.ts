@@ -28,7 +28,13 @@ import {
   type DraftFile,
   uploadDraft,
 } from '../attachments.js';
-import type { ChatEvent, ConversationMessage, ConversationSummary, TuiApi } from './api.js';
+import {
+  NotDeliveredError,
+  type ChatEvent,
+  type ConversationMessage,
+  type ConversationSummary,
+  type TuiApi,
+} from './api.js';
 import type { LogEntry, LogKind } from './log.js';
 import {
   approvalNoticeLines,
@@ -87,6 +93,16 @@ function deferred<T>(): Deferred<T> {
   return { promise, resolve, reject };
 }
 
+/**
+ * `done` も `error` も無いまま接続が閉じたときの 1 行（例外で切れたときは別の文を出す）。出ているのは受け取った分だけ。
+ * 1 つもイベントが来ていなければ、受け取られたかも分からない。
+ */
+function closedQuietlyNotice(sawEvent: boolean): string {
+  return sawEvent
+    ? '応答が途中で切れた（done も error も来ないまま接続が閉じた）。出ているのは受け取った分だけ'
+    : '応答が来ないまま接続が閉じた。発言が受け取られたかは分からない（次の送信の前に確かめ直す）';
+}
+
 /** `/resume`（id 無し）が進行中かを確かめに行く会話の数（履歴の新しい順）。 */
 export const RESUME_PROBE_LIMIT = 5;
 
@@ -98,11 +114,19 @@ class ReplyOutcome {
   conversationId: string | null = null;
   private done = false;
   private failed = false;
+  /** 1 つでもイベントが来たか。 */
+  sawEvent = false;
 
   see(event: ChatEvent): void {
+    this.sawEvent = true;
     if (event.type === 'open') this.conversationId = event.conversationId;
     else if (event.type === 'done') this.done = true;
     else if (event.type === 'error' || event.type === 'usage_limited') this.failed = true;
+  }
+
+  /** 終端（`done` / `error` / `usage_limited`）が来たか。無いまま閉じたら、途中で切れている。 */
+  get ended(): boolean {
+    return this.done || this.failed;
   }
 
   get displayed(): boolean {
@@ -198,7 +222,7 @@ export class ChatController {
   }
 
   /** ログに 1 件足す。 */
-  private push(kind: LogKind, text: string): void {
+  private push(kind: LogKind, text: string): number {
     this.seq += 1;
     const entry: LogEntry = { seq: this.seq, kind, text };
     this.store.update((s) => {
@@ -208,6 +232,20 @@ export class ChatController {
         entries: entries.length > MAX_ENTRIES ? entries.slice(-MAX_ENTRIES) : entries,
       };
     });
+    return entry.seq;
+  }
+
+  /**
+   * 送れなかった発言の行を、送ったように見える `user` から `system` の断りへ差し替える（文は残す）。
+   * 文そのものは、呼び手が入力欄へ戻す（Web の #3064 と同じ）。
+   */
+  private markUnsent(seq: number): void {
+    this.store.update((s) => ({
+      ...s,
+      entries: s.entries.map((e) =>
+        e.seq === seq ? { ...e, kind: 'system' as const, text: `送れなかった発言:\n${e.text}` } : e,
+      ),
+    }));
   }
 
   addSystem(text: string): void {
@@ -263,17 +301,14 @@ export class ChatController {
    */
   async send(text: string): Promise<boolean> {
     if (text.length === 0 && this.draft.count === 0) return true;
-    if (this.store.getSnapshot().busy) {
-      await this.followUp(text);
-      return true;
-    }
+    if (this.store.getSnapshot().busy) return this.followUp(text);
     // まだ `open` が来ていない戻り接続があっても、自分のターンを始めるなら要らない（二重に流れる）。
     this.stopWatch();
     // 覚えが無いときは待たずに進む（送信の前に非同期の隙間を作らない）。
     if (this.unopened !== null && !(await this.adoptUnopened())) return false;
     const attached = this.draft.count === 0 ? NO_ATTACHMENTS : await this.uploadDraft();
     if (attached === null) return true;
-    this.push('user', [text, ...attached.lines].filter((l) => l !== '').join('\n'));
+    const userSeq = this.push('user', [text, ...attached.lines].filter((l) => l !== '').join('\n'));
     this.set({ busy: true, transient: '考えている…' });
     const abort = new AbortController();
     this.abort = abort;
@@ -284,6 +319,7 @@ export class ChatController {
     const clientMessageId = randomUUID();
     const conversationId = this.store.getSnapshot().conversationId;
     let rejected = false;
+    let closedQuietly = false;
     try {
       for await (const event of this.api.chat(
         {
@@ -299,11 +335,14 @@ export class ChatController {
         reply.see(event);
         this.onEvent(event, opened);
       }
+      closedQuietly = !reply.ended && !abort.signal.aborted;
     } catch (error) {
       if (error instanceof AttachmentMissingError) {
         rejected = true; // サーバは発言を受けていない
         this.addError(`${expireUploads(attached.files, error.message)}（${messageOf(error)}）`);
       } else if (!abort.signal.aborted) {
+        // 繋がらない・非 ok の応答で、イベントが 1 つも来ていない: サーバは発言を受けていない。
+        if (error instanceof NotDeliveredError && !reply.sawEvent) rejected = true;
         this.addError(messageOf(error));
       }
     } finally {
@@ -317,6 +356,11 @@ export class ChatController {
       if (conversationId === null && reply.conversationId === null && !rejected) {
         this.unopened = clientMessageId;
       }
+    }
+    if (closedQuietly) this.addSystem(closedQuietlyNotice(reply.sawEvent));
+    if (rejected) {
+      this.markUnsent(userSeq);
+      return false;
     }
     if (reply.displayed && !abort.signal.aborted) await this.markReplyRead(reply.conversationId);
     return true;
@@ -412,18 +456,25 @@ export class ChatController {
     }
   }
 
-  private async followUp(text: string): Promise<void> {
+  /** 追送。**`false` は送らなかった（サーバが受け取っていない）印**で、呼び手は文を入力欄へ戻す。 */
+  private async followUp(text: string): Promise<boolean> {
     const attached = this.draft.count === 0 ? NO_ATTACHMENTS : await this.uploadDraft();
-    if (attached === null) return;
-    this.push('user', [text, ...attached.lines].filter((l) => l !== '').join('\n'));
+    if (attached === null) return true;
+    const userSeq = this.push('user', [text, ...attached.lines].filter((l) => l !== '').join('\n'));
     const opened = this.opened;
     // 送るたびに付ける（#3203・#3304。通常の送信と同じ）。会話は `open` で決まってから送るので、
     // 通常の送信の `unopened`（会話が決まる前に終わった送信の取り直し）は要らない。
     const clientMessageId = randomUUID();
+    // 受け取られていないと言えるのは、投函に着く前（会話が決まらなかった）と、投函して 1 つもイベントが来ないうちの
+    // 繋がらない・非 ok の応答。接続が途中で切れた場合は、受け取られたか分からない（送り直さない）。
+    let posted = false;
+    let sawEvent = false;
+    let rejected = false;
     try {
       if (opened === null) throw new Error('会話が始まっていないので、続きを送れなかった');
       const conversationId = await opened.promise;
       const abort = new AbortController();
+      posted = true;
       try {
         for await (const event of this.api.chat(
           {
@@ -435,18 +486,24 @@ export class ChatController {
           abort.signal,
         )) {
           this.draft.discard(attached.files);
+          sawEvent = true;
           if (event.type === 'open') break;
         }
       } finally {
         abort.abort();
       }
     } catch (error) {
+      rejected =
+        !sawEvent &&
+        (!posted || error instanceof AttachmentMissingError || error instanceof NotDeliveredError);
       this.addError(
         error instanceof AttachmentMissingError
           ? `${expireUploads(attached.files, error.message)}（${messageOf(error)}）`
           : messageOf(error),
       );
     }
+    if (rejected) this.markUnsent(userSeq);
+    return !rejected;
   }
 
   /** Ctrl+C / `/interrupt`: 走っているクローンのターンを止める。 */
@@ -721,6 +778,8 @@ export class ChatController {
         if (active) this.onEvent(event, opened);
       }
       if (refresh && live()) await this.refreshHistory(conversationId, abort);
+      // 戻って流したターンが、`done` も `error` も無いまま閉じた。
+      if (active && !reply.ended && live()) this.addSystem(closedQuietlyNotice(true));
       // 戻って流した進行中のターンの返答が最後まで画面に出たなら、既読にする。
       if (active && reply.displayed && live()) await this.markReplyRead(conversationId);
     } catch (error) {
