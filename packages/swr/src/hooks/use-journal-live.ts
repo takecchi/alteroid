@@ -76,6 +76,7 @@ export function useJournalLive(): JournalLive {
     let attempt = 0;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let stopped = false;
+    let opened = false;
 
     async function connect(): Promise<void> {
       setStatus('connecting');
@@ -84,6 +85,12 @@ export function useJournalLive(): JournalLive {
           attempt = 0;
           if (message.event === 'open') {
             setStatus('live');
+            // 2度目以降の open は繋ぎ直し。切れていた間の出来事は流れてこない
+            // （サーバは途中から再生しない）ので、表示中のキーを1回取り直す。
+            // 初回は各画面がマウント時に取るので要らない。マウントされていない
+            // キーは再取得されず、次のマウントで取る。
+            if (opened) void mutateRef.current(() => true);
+            opened = true;
             continue;
           }
           const entry = message.data;

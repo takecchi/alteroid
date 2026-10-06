@@ -323,3 +323,54 @@ describe('プールの状態（GET /tokens）の取り直し', () => {
     expect(tokensCallCount(stub)).toBe(before);
   });
 });
+
+/**
+ * 切れていた間の変化を取り直す。サーバは途中から再生しないので、繋ぎ直した後の
+ * 2度目以降の `open` で表示中のキーを1回取り直す。初回の `open` は各画面が
+ * マウント時に取るので取り直さない。
+ */
+describe('再接続時の取り直し', () => {
+  it('初回の open では表示中のキーを取り直さない', async () => {
+    const stub = renderProbe([{ event: 'open', data: { ok: true } }]);
+
+    await screen.findByText(MANAGER_ID);
+    await waitFor(() => {
+      expect(stub.calls.filter((url) => url.endsWith('/journal/stream')).length).toBe(1);
+    });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(countsOf(stub)).toEqual({ manager: 1, transcript: 1 });
+  });
+
+  it('切断後の再接続の open で表示中のキーを取り直す', async () => {
+    let streams = 0;
+    const stub = stubFetch((url, init) => {
+      if (url.endsWith('/journal/stream')) {
+        streams += 1;
+        // 1本目は open の後で閉じる（切断）。2本目は張りっぱなし。
+        return sse([{ event: 'open', data: { ok: true } }], {
+          keepOpen: streams > 1,
+          signal: init?.signal,
+        });
+      }
+      if (url.endsWith(`/managers/${MANAGER_ID}`)) return json(MANAGER_DETAIL);
+      if (url.endsWith(`/managers/${MANAGER_ID}/transcript`)) {
+        return new Response('{"line":1}\n', { status: 200 });
+      }
+      return undefined;
+    });
+    render(
+      <Providers>
+        <Probe />
+      </Providers>,
+    );
+
+    await screen.findByText(MANAGER_ID);
+    // 再接続の待ち（1秒）を越えるまで待つ。
+    await waitFor(() => expect(streams).toBe(2), { timeout: 4000 });
+    await waitFor(() => {
+      const after = countsOf(stub);
+      expect(after.manager).toBeGreaterThan(1);
+      expect(after.transcript).toBeGreaterThan(1);
+    });
+  });
+});
