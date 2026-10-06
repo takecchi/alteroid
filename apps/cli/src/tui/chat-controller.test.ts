@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { makeTempDir } from '../../../../vitest.tmpdir.js';
 
+import { AttachmentMissingError } from '../attachments.js';
 import { ChatController, MAX_ENTRIES, RESUME_PROBE_LIMIT } from './chat-controller.js';
 import { fakeApi, gate } from './fake-api.js';
 
@@ -746,6 +747,44 @@ describe('追送の待ちのあいだに足した添えかけ（#3245）', () =>
     expect(listing).not.toContain('a.log');
     end.open();
     await Promise.all([first, followUp]);
+  });
+});
+
+describe('掃除された添付の id を使い回さない（#3246）', () => {
+  it('送信が attachment_missing で落ちたら、上げ済みの印を捨てて、次の送信で上げ直す。使い手へその旨を出す', async () => {
+    const dir = await makeTempDir('alteroid-tui-attach-');
+    const path = join(dir, 'a.log');
+    await writeFile(path, 'log');
+    const { api, controller, texts } = setup();
+    await controller.attach(path);
+    api.scripts.push([new AttachmentMissingError('添付が見つからない（期限切れの可能性）: att-1')]);
+    await controller.send('見て');
+    expect(api.uploads).toHaveLength(1);
+    expect(texts('error').at(-1)).toContain('次の送信で上げ直す');
+    expect(controller.hasAttachments()).toBe(true);
+    api.scripts.push([open('c1'), { type: 'done' }]);
+    await controller.send('見て');
+    expect(api.uploads).toHaveLength(2);
+    expect(api.chatCalls[1]).toEqual({ text: '見て', attachments: ['att-2'] });
+    expect(controller.hasAttachments()).toBe(false);
+  });
+
+  it('応答が名指しした添付だけを捨てる（名指しが無ければ、その送信の分を全部）', async () => {
+    const dir = await makeTempDir('alteroid-tui-attach-');
+    const a = join(dir, 'a.log');
+    const b = join(dir, 'b.log');
+    await writeFile(a, 'a');
+    await writeFile(b, 'b');
+    const { api, controller } = setup();
+    await controller.attach(a);
+    await controller.attach(b);
+    api.scripts.push([new AttachmentMissingError('添付が見つからない（期限切れの可能性）: att-2')]);
+    await controller.send('x');
+    api.scripts.push([open('c1'), { type: 'done' }]);
+    await controller.send('x');
+    // att-1（a.log）は上げ直さず、att-2（b.log）だけ上げ直す。
+    expect(api.uploads.map((u) => u.name)).toEqual(['a.log', 'b.log', 'b.log']);
+    expect(api.chatCalls[1]?.attachments).toEqual(['att-1', 'att-3']);
   });
 });
 
