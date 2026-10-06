@@ -11026,9 +11026,26 @@ class Pool implements ManagerPool {
     return this.#runners.get(runnerId);
   }
 
-  /** 戻せないと確定する（`#unresumable` を立て、台帳へ書き、知らせ、像から外す）。 */
+  /**
+   * 戻せないと確定する（`#unresumable` を立て、台帳へ書き、知らせ、像から外す）。
+   *
+   * **止めた後は状態を動かさない（Issue #3185。`closed` などが持つ R4 の門と同じ形）。** 引数の
+   * `record` は呼び出し側が取った時点の写しで、その後に `abort()` が `stopped` を書いていることが
+   * ある。冒頭で最新（`#records` の像、無ければ台帳）を読み、`stopped` なら status も `#unresumable` も
+   * 知らせも触らず、日誌にだけ残して戻る。**`#retire` も呼ばない** — `stopped` を書くのは `abort()` だけで、
+   * `abort()` は同じ呼びの中で `#retire` まで済ませる（`outcome === 'stopped'` の分岐）。
+   */
   async #confirmLost(record: ManagerRecord, error: unknown): Promise<void> {
     const { job } = record;
+    const latest = this.#records.get(job.id)?.job ?? (await this.#latestJobOf(job.id)) ?? job;
+    if (latest.status === 'stopped' || job.status === 'stopped') {
+      await this.#journal({
+        type: 'decision',
+        decision: `[${job.id}] 戻せなかったとして確定するのを見送った（止めた後は状態を動かさない。台帳は stopped のまま）`,
+        grounds: `確定しようとした理由: ${reasonOf(error)}`,
+      });
+      return;
+    }
     this.#relocationRefusals.delete(job.id);
     // 挑み直さないと決めたので、**ジョブ側に覚える**（runner 単位の `retry`
     // では表せない。同じ runner の別ジョブが予約を積むたびに巻き込まれる）。
@@ -11060,7 +11077,10 @@ class Pool implements ManagerPool {
       if (job.status !== 'running' && job.status !== 'waiting_human') continue;
       if (this.#unresumable.has(job.id) || !this.#shouldRelocateFrom(job.runnerId)) continue;
       const known = this.#records.get(job.id);
-      const record = known ?? { job: { ...job }, waiting: [], attached: false };
+      // **古い写し（ループの先頭で取った `job`）で確定しない**（Issue #3185）。この間に `abort()` が
+      // `stopped` を書いていることがあるので、確定の直前に台帳を読み直した行から写しを作る。
+      const fresh = known === undefined ? ((await this.#latestJobOf(job.id)) ?? job) : job;
+      const record = known ?? { job: { ...fresh }, waiting: [], attached: false };
       const reason = new Error(
         `runnerId=${runnerId} が併存している（${duplicates} 件）ので、移送先として取り直しを見送った`,
       );
@@ -14988,6 +15008,15 @@ class Pool implements ManagerPool {
       (entry) => entry.id === managerId,
     );
     return row === undefined ? undefined : describeUnreadableManagerRow(managerId, row.reason);
+  }
+
+  /** 台帳の最新の1行（`#records` へは載せない）。読めない・無いなら `null`（呼び出し側が写しへ倒す）。 */
+  async #latestJobOf(managerId: string): Promise<Job | null> {
+    try {
+      return (await this.#stores.jobs.listJobs()).find((entry) => entry.id === managerId) ?? null;
+    } catch {
+      return null;
+    }
   }
 
   async #load(managerId: string): Promise<ManagerRecord | null> {
