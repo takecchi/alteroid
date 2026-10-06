@@ -12,7 +12,7 @@ import { codePointBoundary } from '@alteroid/core/cli-light';
 import type { JournalEntry } from '@alteroid/core';
 
 import { JOURNAL_DETAIL_CHARS } from './journal-window.js';
-import { redactBody } from '../redact.js';
+import { redactBody, sanitizeForTerminal } from '../redact.js';
 
 export type JournalType = JournalEntry['type'];
 
@@ -30,7 +30,7 @@ export function summarizeJournalEntry(entry: JournalEntry): string {
     return '（要旨を作れなかった。全文は Enter で読める）';
   }
   const unknown: { type: string } = entry;
-  return `（この画面が知らない種別: ${unknown.type}）`;
+  return sanitizeForTerminal(`（この画面が知らない種別: ${unknown.type}）`);
 }
 
 /**
@@ -47,7 +47,10 @@ export const SUMMARY_LIMIT = 300;
 
 /** 一覧の 1 行（選択の印は付けない）。 */
 export function journalListLine(entry: JournalEntry, now: number): string {
-  return `${formatDateTime(entry.at, now)} [${entry.type}] ${oneLine(summarizeJournalEntry(entry), SUMMARY_LIMIT)}`;
+  // 種別・時刻は redactBody を通らない欄。組み立てたあとで掃除する。
+  return sanitizeForTerminal(
+    `${formatDateTime(entry.at, now)} [${entry.type}] ${oneLine(summarizeJournalEntry(entry), SUMMARY_LIMIT)}`,
+  );
 }
 
 /** 絞りの表示（0 件の文言とタイトルで使う）。 */

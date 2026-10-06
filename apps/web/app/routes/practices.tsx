@@ -2,6 +2,7 @@ import { MemoryTabs } from '~/components/group-tabs';
 import { LoadError } from '~/components/load-error';
 import { AlertTriangle } from 'lucide-react';
 import { useId, useState } from 'react';
+import { useBeforeUnloadGuard } from '~/lib/leave-guard';
 import { Link, Outlet, useNavigate, useParams } from 'react-router';
 
 import {
@@ -84,6 +85,9 @@ export default function Practices() {
   const slugId = useId();
   const [slug, setSlug] = useState('');
   const { slug: selectedSlug } = useParams();
+  // 開く前の名前が残っている間は、タブを閉じる前に確認する（開いた名前は書きかけではない）。
+  // 移動の確認（`useBlocker`）は置かない: ルーターのブロッカーは1つで、子の経路（`practice-detail.tsx`）が持つ。
+  useBeforeUnloadGuard(slug !== '' && slug !== selectedSlug);
 
   const practices = data?.practices ?? [];
   // **読めなかった行**（`GET /practices` の `unreadable`。issue #2346）。1件でも在るときだけ

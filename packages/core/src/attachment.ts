@@ -298,7 +298,8 @@ export function normalizeAttachmentName(raw: string): string {
     .replace(/[\u0001-\u001f\u007f-\u009f/\\\p{Cf}]/gu, '_')
     .trim();
   if (name.length > ATTACHMENT_NAME_MAX_LENGTH) {
-    name = toWellFormed(name.slice(0, ATTACHMENT_NAME_MAX_LENGTH));
+    // 切ったあとにも前後の空白を除く（除かないと、もう一度通したときに名前が変わる）。
+    name = toWellFormed(name.slice(0, ATTACHMENT_NAME_MAX_LENGTH)).trim();
   }
   return name === '' || name === '.' || name === '..' ? 'file' : name;
 }
@@ -435,9 +436,19 @@ export function prepareAttachment(
   };
 }
 
+/**
+ * 期限（`expiresAt`）を過ぎているか（ちょうどの瞬間も過ぎたと数える）。**3実装の `get` / `getMeta` / `bind` /
+ * `bindToExternalEvent` は、これが真のものを「無い」と扱う**（#3522。prune が走る前でも読めず・結べない。
+ * 結んだ発言の添付が、あとの prune で黙って消えるのを防ぐ）。{@link isAttachmentPrunable} の期限の条件と同じ。
+ * pg は同じ条件を SQL で書く。
+ */
+export function isAttachmentExpired(meta: AttachmentMeta, now: Date): boolean {
+  return Date.parse(meta.expiresAt) <= now.getTime();
+}
+
 /** 掃除の対象か（インメモリ・fs が使う。pg は同じ条件を SQL で書く）。 */
 export function isAttachmentPrunable(meta: AttachmentMeta, now: Date): boolean {
-  if (Date.parse(meta.expiresAt) <= now.getTime()) return true;
+  if (isAttachmentExpired(meta, now)) return true;
   return (
     meta.conversationId === undefined &&
     meta.externalEventId === undefined &&

@@ -1,5 +1,6 @@
 import { ScheduleTabs } from '~/components/group-tabs';
 import { LoadError } from '~/components/load-error';
+import { LeaveGuardScope, useReportDirty } from '~/lib/leave-guard';
 import { AlertTriangle } from 'lucide-react';
 import { useMemo, useState } from 'react';
 
@@ -96,10 +97,12 @@ export default function Inbox() {
       title="受信箱"
       description="まだ処理し終えていない合図を、絞り込んでまとめて消す。まず試算でき、試算では1件も消さない"
     >
-      <div className="flex flex-col gap-4">
-        <InboxBacklogCard />
-        <InboxRemoveCard />
-      </div>
+      <LeaveGuardScope>
+        <div className="flex flex-col gap-4">
+          <InboxBacklogCard />
+          <InboxRemoveCard />
+        </div>
+      </LeaveGuardScope>
     </Page>
   );
 }
@@ -319,6 +322,15 @@ function InboxRemoveCard() {
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<unknown>(undefined);
   const [result, setResult] = useState<InboxRemoveManyResult | null>(null);
+  // 書きかけ = 絞り込みに入力がある、かつ実行（消した）で済んでいない。実行の結果が出ている間は
+  // 欄がそのまま残るが、使い手が書いたものはもう使い終わっているので確認しない（欄を触ると結果が消え、また書きかけになる）。
+  const executed = result !== null && !result.dryRun;
+  useReportDirty(
+    'inbox-remove',
+    !executed &&
+      (selectedTypes.size > 0 ||
+        [sourcesText, beforeText, reason, limitText].some((field) => field !== '')),
+  );
 
   const types = useMemo(
     () => INBOX_TYPE_ORDER.filter((type) => selectedTypes.has(type)),

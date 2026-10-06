@@ -41,7 +41,7 @@ export interface ChatMessageVersions {
   total: number;
   onPrevious: () => void;
   onNext: () => void;
-  hidden?: readonly { role: 'human' | 'clone'; text: string }[];
+  hidden?: readonly { role: 'human' | 'clone' | 'approval'; text: string }[];
 }
 
 /**
@@ -103,7 +103,7 @@ export function ChatMessage({
               size="sm"
               variant="ghost"
               aria-label="発言を編集"
-              className="mt-1 shrink-0 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100"
+              className="mt-1 shrink-0 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 pointer-coarse:opacity-60 pointer-coarse:group-focus-within:opacity-100 pointer-coarse:focus-visible:opacity-100"
               onClick={onEdit}
             >
               <Pencil className="size-3.5" aria-hidden />
@@ -236,7 +236,11 @@ export function ChatMessage({
               {versions.hidden.map((entry, index) => (
                 <p key={index}>
                   <span className="mr-1 font-semibold">
-                    {entry.role === 'human' ? '人間' : 'クローン'}
+                    {entry.role === 'human'
+                      ? '人間'
+                      : entry.role === 'approval'
+                        ? '確認'
+                        : 'クローン'}
                   </span>
                   {body(entry.text)}
                 </p>

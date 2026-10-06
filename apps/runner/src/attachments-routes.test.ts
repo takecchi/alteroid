@@ -130,6 +130,20 @@ describe('POST /managers の添付（Issue #3111 段3）', () => {
     expect(host?.list()).toEqual([]);
   });
 
+  it('同じ id の添付が2つあれば 422 で断り、セッションを作らず何も置かない（#3561）', async () => {
+    const { root, post } = await setup();
+    const res = await post(
+      '/managers',
+      start([
+        attachmentOf('att-1', 'run.log', Buffer.from('first')),
+        attachmentOf('att-1', 'run.log', Buffer.from('second!')),
+      ]),
+    );
+    expect(res.status).toBe(422);
+    expect(host?.list()).toEqual([]);
+    await expect(readFile(join(root, 'mgr-abc123', 'att-1', 'run.log'))).rejects.toThrow();
+  });
+
   it('本文の上限（添付の合計上限から計算した値）を超えれば 413。本文は読まない', async () => {
     const { post } = await setup();
     const limit = runnerAttachmentBodyLimit(LIMITS);

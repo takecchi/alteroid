@@ -23,6 +23,8 @@
  * 返ってきたものを控えておく。
  */
 
+import { clearChatDrafts } from './chat-drafts.js';
+
 /** 引き取り（claim）時に受け取る、このデーモンでの自分。 */
 export interface StoredAccount {
   id: string;
@@ -59,6 +61,8 @@ export function readCredential(baseUrl: string): Credential | null {
 
 export function storeCredential(baseUrl: string, credential: Credential | null): void {
   if (typeof localStorage === 'undefined') return;
+  // 資格情報を捨てるとき（ログアウト）は、端末に残した書きかけの本文も消す（#3400）。
+  if (credential === null) clearChatDrafts();
   if (credential === null) localStorage.removeItem(keyFor(baseUrl));
   else localStorage.setItem(keyFor(baseUrl), JSON.stringify(credential));
 }
