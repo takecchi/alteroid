@@ -18,12 +18,37 @@
  */
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { PendingApproval } from '@alteroid/logic';
 import { json, Providers, storeTestBaseUrl } from '~/test-support';
 
 import Approvals from './approvals';
+
+/**
+ * 一覧の取り直し（`useSWRConfig().mutate`）を、必要なときだけ拒否させる（#3627）。
+ *
+ * **fetch を繋がらなくしても `mutate(key)` は拒否されない**（SWR は取り直しの失敗を
+ * キャッシュの `error` に入れるだけで、`mutate` の約束は解決する）。だから hook の
+ * 「取り直しが投げた」経路は、`mutate` そのものを拒否させないと通らない。
+ */
+const refresh = vi.hoisted(() => ({ rejects: false }));
+vi.mock('swr', async (importOriginal) => {
+  const original = await importOriginal<typeof import('swr')>();
+  return {
+    ...original,
+    useSWRConfig: () => {
+      const config = original.useSWRConfig();
+      return {
+        ...config,
+        mutate: ((...args: Parameters<typeof config.mutate>) =>
+          refresh.rejects
+            ? Promise.reject(new Error('refresh failed'))
+            : config.mutate(...args)) as typeof config.mutate,
+      };
+    },
+  };
+});
 
 function approval(over: Partial<PendingApproval> = {}): PendingApproval {
   return {
@@ -74,16 +99,12 @@ function stubApprovals(
     trace?: (id: string) => Response | Promise<Response>;
     /** `GET /approvals` の `unreadable`（#2298）。渡さなければ鍵ごと無い（0件と同じ）。 */
     unreadable?: { id?: string; reason: string }[];
-    /**
-     * まとめ送信の POST が届いたあとの `GET /approvals`（＝答えを送ったあとの取り直し）を
-     * 繋がらなくする（#3627）。POST 自体は成功する。
-     */
-    refreshFailsAfterBulk?: boolean;
+    /** まとめ送信の POST が届いたあと、一覧の取り直し（`mutate`）を拒否させる（#3627）。 */
+    refreshRejectsAfterBulk?: boolean;
   } = {},
 ): ApprovalsStub {
   const calls: string[] = [];
   const bulkRequests: { id: string; answer: string }[][] = [];
-  let bulkPosted = false;
 
   globalThis.fetch = (async (input: RequestInfo | URL) => {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
@@ -91,9 +112,6 @@ function stubApprovals(
     const path = new URL(url).pathname;
 
     if (path === '/approvals') {
-      if (options.refreshFailsAfterBulk === true && bulkPosted) {
-        return Promise.reject(new TypeError(`Failed to fetch: ${url}`));
-      }
       return json({
         approvals,
         ...(options.unreadable === undefined ? {} : { unreadable: options.unreadable }),
@@ -106,7 +124,7 @@ function stubApprovals(
           ? ((await input.clone().json()) as { answers: { id: string; answer: string }[] })
           : { answers: [] };
       bulkRequests.push(body.answers);
-      bulkPosted = true;
+      if (options.refreshRejectsAfterBulk === true) refresh.rejects = true;
       const resolve =
         options.bulkResults ?? ((answers) => answers.map((entry) => ({ id: entry.id, ok: true })));
       return json({ results: resolve(body.answers) });
@@ -137,6 +155,7 @@ beforeEach(() => {
   localStorage.clear();
   sessionStorage.clear();
   storeTestBaseUrl();
+  refresh.rejects = false;
 });
 
 afterEach(() => {
@@ -266,10 +285,10 @@ describe('/approvals 画面のまとめ送信', () => {
    * 「通信そのものの失敗」にしない——下書きを全部残すと、送り直しが 409 になる（#3627）。
    */
   it('POST は通り、取り直しだけが失敗したとき: bulkFailure は出ず、通った承認の下書きは畳まれる', async () => {
-    const { bulkRequests, calls } = stubApprovals(
+    const { bulkRequests } = stubApprovals(
       [approval({ id: 'a-1', question: '質問1' }), approval({ id: 'a-2', question: '質問2' })],
       {
-        refreshFailsAfterBulk: true,
+        refreshRejectsAfterBulk: true,
         bulkResults: (answers) =>
           answers.map((entry) =>
             entry.id === 'a-2'
@@ -300,13 +319,8 @@ describe('/approvals 画面のまとめ送信', () => {
     expect((within(items[1]!).getByPlaceholderText(/答える/) as HTMLTextAreaElement).value).toBe(
       '却下する',
     );
-    // 取り直しは試みている（試みずに通ったのではない）。
-    expect(calls.filter((url) => new URL(url).pathname === '/approvals').length).toBeGreaterThan(1);
-    // `bulkFailure` の ErrorNote は出ない。取り直しの失敗は一覧側の `error`（1つ）として
-    // 出るだけで、まとめ送信の失敗としては二重に出ない。
-    expect(
-      screen.queryAllByRole('alert').filter((el) => /Failed to fetch/.test(el.textContent ?? '')),
-    ).toHaveLength(1);
+    // 取り直しの失敗を、まとめ送信の失敗（`bulkFailure`）として出さない。
+    expect(screen.queryByText(/refresh failed/)).toBeNull();
   });
 
   it('個別の「回答する」ボタンは、まとめ送りとは無関係にその場で即送信できる', async () => {
