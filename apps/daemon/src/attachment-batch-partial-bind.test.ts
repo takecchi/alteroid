@@ -85,4 +85,26 @@ describe('checkAndBindAttachments は、400 で断った回に添付を結び付
     expect((await store.getMeta(a.id))?.externalEventId).toBeUndefined();
     expect((await eventBatch([a.id], 'ev-3')).ok).toBe(true);
   });
+
+  it('検査のあと bind の前に、同時に届いた別の発言が同じ id を同じ会話へ結んでも、断られた回はそれを戻さない（#3282）', async () => {
+    const store = createMemoryStores().attachments;
+    const a = await store.put({ name: 'a.png', mediaType: 'image/png', bytes: PNG });
+    const b = await store.put({ name: 'b.png', mediaType: 'image/png', bytes: PNG });
+    // bind の直前（getMeta で A が未結び付けと見たあと）に割り込む: 別の発言が A を conv-1 へ結び、別の会話が B を取る。
+    const racing: AttachmentStore = Object.create(store, {
+      bind: {
+        value: async (ids: readonly string[], conversationId: string) => {
+          expect((await store.bind([a.id], 'conv-1')).bound).toEqual([a.id]);
+          expect((await store.bind([b.id], 'conv-2')).bound).toEqual([b.id]);
+          return store.bind(ids, conversationId);
+        },
+      },
+    });
+    const result = await chatBatch(racing, [a.id, b.id], 'conv-1');
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.body.code).toBe('attachment_conflict');
+    // 先に通った発言が結んだ A は、結ばれたまま残る。
+    expect((await store.getMeta(a.id))?.conversationId).toBe('conv-1');
+    expect((await store.getMeta(b.id))?.conversationId).toBe('conv-2');
+  });
 });
