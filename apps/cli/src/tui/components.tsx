@@ -16,6 +16,7 @@ import stringWidth from 'string-width';
 
 import type { ConversationSummary } from './api.js';
 import { formatElapsedAgo } from '../format.js';
+import { sanitizeForTerminal } from '../redact.js';
 import type { HeaderState } from './header-feed.js';
 import { oneLine } from './journal-format.js';
 import { TABS, type TabId } from './layout.js';
@@ -40,11 +41,11 @@ const LogLine: FC<{ line: DisplayLine }> = ({ line }) => {
                 {...(span.underline ? { underline: true } : {})}
                 {...(span.strikethrough ? { strikethrough: true } : {})}
               >
-                {span.text}
+                {sanitizeForTerminal(span.text)}
               </Text>
             ))
           : line.text.length > 0
-            ? line.text
+            ? sanitizeForTerminal(line.text)
             : ' '}
       </Text>
     </Box>
@@ -291,11 +292,13 @@ export const ConversationPicker: FC<{
       ))}
       {shown.map((item, i) => {
         const index = start + i;
-        const preview = oneLine(item.preview, 120);
+        const preview = oneLine(sanitizeForTerminal(item.preview), 120);
         return (
           <Box key={item.conversationId} flexShrink={0}>
             <Text wrap="truncate-end" {...(index === selected ? { inverse: true } : {})}>
-              {`${index === selected ? glyph.caret : ' '} ${formatElapsedAgo(item.updatedAt, now)} (${String(item.messages)}件) ${preview}`}
+              {sanitizeForTerminal(
+                `${index === selected ? glyph.caret : ' '} ${formatElapsedAgo(item.updatedAt, now)} (${String(item.messages)}件) ${preview}`,
+              )}
             </Text>
           </Box>
         );

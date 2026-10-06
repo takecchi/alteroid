@@ -210,7 +210,9 @@ describe('ChatComposer', () => {
 
   it('受信中は「受信をやめる」を「送る」と並べて出し、但し書きも出す', () => {
     composer({ sending: true, onStopReceiving: () => undefined });
-    expect(screen.getByRole('button', { name: '受信をやめる' })).toBeTruthy();
+    expect(
+      screen.getByRole('button', { name: '受信をやめる（クローンのターンは止まらない）' }),
+    ).toBeTruthy();
     expect(screen.getByRole('button', { name: 'メッセージを送信' })).toBeTruthy();
     expect(screen.getByText(/画面を閉じてもクローンは考え続ける/)).toBeTruthy();
   });

@@ -8,11 +8,12 @@ import {
   Page,
   ListDetail,
   ListDetailItems,
+  Button,
   Empty,
   Spinner,
   cn,
 } from '@alteroid/ui';
-import { useReport, useReports } from '@alteroid/swr';
+import { useReport, useReportsWindow } from '@alteroid/swr';
 import { formatDateTime, redactBody } from '@alteroid/logic';
 
 import type { DailyReport } from '@alteroid/logic';
@@ -136,41 +137,32 @@ function ReportMarkdown({ children }: { children: string }) {
 }
 
 /**
- * 一覧に読む件数。**窓の大きさそのものは変えない**（Issue #426 の G3。
- * 決め方が未決なので、決まっていない基準で動かすより「切ったことと定量を
- * 言う」ほうを先に片付ける）。ここで名前を付けるのは、切ったかどうかの
- * 判定（下の `isReportsWindowFull`）と読む件数を同じ値に揃えるためで、
- * 生の `60` を2箇所に書くと片方だけ直して食い違う。
+ * 一覧に1回で読む件数（最初の頁も「もっと古い日報を読む」の1頁も同じ）。
+ *
+ * **`GET /reports` は総件数を返さない**（`apps/daemon/src/app.ts` の `/reports` の
+ * `describeRoute` が逐語で言っている——「**封筒は持たない** — 続きが在るかは `limit` 件
+ * ちょうど返ったかで判る。」）。だから `limit` 件ちょうど返ったときだけ、「もっと古い日報を
+ * 読む」を出す。読み足しは `useReportsWindow`（`beforeDate` ＋ `beforeAt` で続きを読み、
+ * いまの一覧の後ろへ足す。Issue #3464）。
  */
 const REPORTS_LIMIT = 60;
 
-/**
- * 返ってきた件数が要求した上限とちょうど一致するか——**これより古い日報が
- * あるかもしれない**という唯一の合図である。
- *
- * **`GET /reports` は総件数を返さない。** `apps/daemon/src/app.ts` の
- * `/reports` の `describeRoute` が逐語で言っている——
- * 「**封筒は持たない** — 続きが在るかは `limit` 件ちょうど返ったかで判る。」
- * （`grep -Fn -- 'ちょうど返ったかで判る' apps/daemon/src/app.ts` で当たる）。だから
- * `TruncationNote`（正確な `total` が要る）は使えない——`tokens.tsx` の
- * `RotationHistory` が `GET /journal` に対して既にこの形を採っている。
- * 日報は日次で単調増加するので、運用日数が `REPORTS_LIMIT` を超えた時点で
- * この判定は常に真になる（Issue 本文の指摘そのもの）。
- */
-function isReportsWindowFull(count: number): boolean {
-  return count === REPORTS_LIMIT;
-}
-
 export default function Reports({ loaderData }: Route.ComponentProps) {
   const { date, reportId } = loaderData;
-  const list = useReports(REPORTS_LIMIT);
+  const {
+    first: list,
+    reports,
+    hasMore,
+    isLoadingOlder,
+    olderError,
+    loadOlder,
+  } = useReportsWindow(REPORTS_LIMIT);
 
   /*
     **並べ直さない。** 並びはデーモンが決める（`apps/daemon/src/reports.ts` が
     日付の新しい順・同じ日は書いた時刻の新しい順に返す）。ここで並べ直すと、
     「最新の日報」が CLI・クローンとこの画面で食い違う。
   */
-  const reports = list.data?.reports ?? [];
   // 日付の指定が無ければ最新を出す。空の画面から始めない。
   const selectedDate = date ?? reports[0]?.date;
   /*
@@ -300,17 +292,31 @@ export default function Reports({ loaderData }: Route.ComponentProps) {
             )
           }
           listFooter={
-            /*
-              **`GET /reports` は総件数を返さないので `TruncationNote` は
-              使えない**（あちらは正確な `total` が要る）。取れた件数が
-              要求した上限とちょうど一致するときだけ、「これより古い日報が
-              あるかもしれない」と明示する——黙って切り捨てない
-              （`tokens.tsx` の `RotationHistory` と同じ形。Issue #426 の G3）。
-            */
-            isReportsWindowFull(reports.length) ? (
-              <p className="px-4 py-2 text-[11px] text-muted-foreground">
-                直近 {REPORTS_LIMIT} 件のみ表示している。これより古い日報があるかもしれない。
-              </p>
+            hasMore || olderError !== undefined ? (
+              <div className="flex flex-col gap-2 px-4 py-2">
+                <LoadError
+                  what="もっと古い日報"
+                  error={olderError}
+                  onRetry={loadOlder}
+                  retrying={isLoadingOlder}
+                />
+                {hasMore && (
+                  <>
+                    <p className="text-[11px] text-muted-foreground">
+                      いま読んでいるのは {reports.length}{' '}
+                      件ぶん。これより古い日報があるかもしれない。
+                    </p>
+                    <Button
+                      variant="default"
+                      size="sm"
+                      loading={isLoadingOlder}
+                      onClick={loadOlder}
+                    >
+                      もっと古い日報を読む
+                    </Button>
+                  </>
+                )}
+              </div>
             ) : undefined
           }
           emptyDetail={

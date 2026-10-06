@@ -7853,7 +7853,7 @@ export function createCloneTools(context: ToolContext) {
           .string()
           .optional()
           .describe(
-            'cron 式で起こす（ローカル時刻。例: 毎週月曜 10:00 なら `0 10 * * 1`）。' +
+            'cron 式で起こす（ローカル時刻。分 時 日 月 曜の5欄だけ。例: 毎週月曜 10:00 なら `0 10 * * 1`）。' +
               '曜日や月の指定が要るときはこれを使う。周期はどれか1つだけ渡す',
           ),
       },
@@ -7893,7 +7893,7 @@ export function createCloneTools(context: ToolContext) {
         }
         if (cron !== undefined && !isCronExpression(cron)) {
           return text(
-            `cron "${cron}" は cron 式として読めない（例: 毎週月曜 10:00 なら \`0 10 * * 1\`）。`,
+            `cron "${cron}" は cron 式として読めない（分 時 日 月 曜の5欄だけ。秒つきは使えない。例: 毎週月曜 10:00 なら \`0 10 * * 1\`）。`,
           );
         }
         // **issue #1651 の後始末。** HTTP の `scheduleBody`（`spec` を
@@ -8563,6 +8563,14 @@ export function createCloneTools(context: ToolContext) {
         // 落とした後に本文が残るなら、今までどおり通す（保存するのは落とす前の値のまま）。
         const bodyError = describeStringLengthViolation('body', stripNul(body), { min: 1 });
         if (bodyError !== null) return text(bodyError);
+        // **source も落とした後で見る**（Issue #3436）。台帳の入口は source からも NUL を落として残すので、
+        // NUL だけ・空文字は空の source の行になる。HTTP（`POST /commitments`）の `.min(1)` と揃えて断る
+        // （省略は今までどおり通る）。
+        if (source !== undefined && stripNul(source).length === 0) {
+          return text(
+            'source が空です。NUL だけ・空文字は指定できません。source は分かるときだけ、実のある文字列で渡し、無いなら省略してください。',
+          );
+        }
         const entry = {
           id: randomUUID(),
           at: new Date().toISOString(),
@@ -13472,9 +13480,12 @@ export function createCloneTools(context: ToolContext) {
         }
         // 存在しない日付（`2026-02-31` は V8 が 3/3 へずらす）や日付でない文字列（`foo 1`）を
         // 別の時刻として読んで**消す**ので、#3287 の3段で検める（#3358）。
-        if (before !== undefined && !isReadableJournalTimeBoundary(before)) {
+        // 元に戻せない一括削除なので時差も必須にする（#3482。`inbox_remove_many` の before・
+        // HTTP の `POST /archive/remove` と同じ門。#2462・#3390）。この門は内側で上の3段も通す。
+        if (before !== undefined && !isOffsetQualifiedTimeBoundary(before)) {
           return text(
-            describeUnreadableJournalTimeBoundary('before', before) + '**1件も消していない。**',
+            describeOffsetRequiredTimeBoundary('before', before, '2026-09-15T00:00:00.000Z') +
+              '**1件も消していない。**',
           );
         }
         // **issue #1720（#1651/#1689 の揃え漏れ）。**

@@ -529,6 +529,7 @@ describe('委譲（マネージャーの一覧と詳細）', () => {
     h.stdin.write(ENTER);
     await waitFor(() => h.frame().includes('不明なコマンド: /exti'));
     expect(h.api.managerMessages).toEqual([]);
+    h.stdin.write('\x15'); // 断った文は欄に残る（#3486）。消して // で始め直す
     await type(h.stdin, '//stop ではなく文');
     h.stdin.write(ENTER);
     await waitFor(() => h.api.managerMessages.length === 1);
@@ -536,6 +537,37 @@ describe('委譲（マネージャーの一覧と詳細）', () => {
     await type(h.stdin, '/chat');
     h.stdin.write(ENTER);
     await waitFor(() => h.frame().includes('メッセージ'));
+  });
+
+  it('委譲の詳細で、未知のコマンドとして断った文は入力欄を空にしない（#3486）', async () => {
+    const h = start(managersFixture);
+    await openList(h);
+    h.stdin.write(ENTER);
+    await waitFor(() => h.frame().includes('Esc 一覧へ'));
+    h.stdin.write('i');
+    await type(h.stdin, '/var/log/app.log が壊れている');
+    h.stdin.write(ENTER);
+    await waitFor(() => h.frame().includes('不明なコマンド: /var/log/app.log'));
+    expect(h.frame()).toContain('❯ /var/log/app.log が壊れている');
+    expect(h.api.managerMessages).toEqual([]);
+  });
+
+  it('追加指示が届いていない（session_missing）と返されたら、書いた文は入力欄に残る（#3487）', async () => {
+    const h = start((api) => {
+      managersFixture(api);
+      api.sendManagerMessage = () =>
+        Promise.resolve({ outcome: 'session_missing', detail: '届いていない' });
+    });
+    await openList(h);
+    h.stdin.write(ENTER);
+    await waitFor(() => h.frame().includes('Esc 一覧へ'));
+    h.stdin.write('i');
+    await type(h.stdin, '大事な指示');
+    h.stdin.write(ENTER);
+    await waitFor(() => h.frame().includes('session_missing: 届いていない'));
+    await type(h.stdin, '。');
+    await waitFor(() => h.frame().includes('❯ 大事な指示。'));
+    expect(h.frame()).toContain('❯ 大事な指示。');
   });
 
   it('追加指示の送信に失敗したら、書いた文は入力欄に残り、失敗を言う（#3367）', async () => {
@@ -916,6 +948,18 @@ describe('日誌（ライブで流れる一覧と全文）', () => {
     h.stdin.write(ENTER);
     await waitFor(() => h.frame().includes('type= に知らない値が入っています: bogus'));
     expect(h.api.journalListCalls).toHaveLength(1); // 撃っていない
+  });
+
+  it('初めて開く /journal の引数の誤りの断りは、読み込みの開始で消えず画面に出る（#3484）', async () => {
+    const h = start((api) => {
+      api.journalEntries = entries(2);
+    });
+    await type(h.stdin, '/journal type=bogus');
+    h.stdin.write(ENTER);
+    // 読み込みが済んでから（開く読み込みの開始が断りを消すかどうか）を見る。
+    await waitFor(() => h.frame().includes('発言2'));
+    expect(h.frame()).toContain('type= に知らない値が入っています: bogus');
+    expect(h.api.journalListCalls).toHaveLength(1); // 絞りの無い日誌が開く（断りだけが出る）
   });
 
   it('取れなかったのを空と描かない', async () => {

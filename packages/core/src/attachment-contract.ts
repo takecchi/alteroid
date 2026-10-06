@@ -36,6 +36,8 @@ export interface AttachmentStoreContractOptions {
  * 8. 長い名前（255 を超える・マルチバイト）の往復、複数・重複した id の `bind`（`store` で測る）
  * 9. （`createStore` を渡したとき）サイズの境界ちょうど・`expiresAt` ちょうどと1時間ちょうどの `prune`・
  *    `bind` と `prune` の並行（空のストアで測る）
+ * 4'. `bind` / `bindToExternalEvent` の `newlyBound`（#3282）は、`bound` のうち**呼ぶ前は未結び付けだった id だけ**
+ *    （すでに同じ宛先へ結ばれていたものは `bound` に入るが `newlyBound` には入らない）
  * 10. 0バイト（画像の宣言でも、そうでなくても）は `empty` で断る（#3327。Web の「空のファイルは添えられない」と揃える）
  * 7. `unbind`（#3270）は、その結び付け先に結ばれている id だけを未結び付けへ戻して返す。別の宛先・未結び付け・
  *    無い id は触らない（返さない）。冪等。戻したものは掃除の対象に戻る
@@ -130,8 +132,12 @@ export async function verifyAttachmentStoreContract(
   }
   if ((await store.getMeta(bound.id))?.conversationId !== 'conv-1')
     fail('bind が控えへ反映されない');
+  if (first.newlyBound.join() !== bound.id)
+    fail(`未結び付けだった id が newlyBound に入らない: ${JSON.stringify(first)}`);
   const again = await store.bind([bound.id], 'conv-1');
   if (again.bound.join() !== bound.id) fail('同じ会話への bind は冪等');
+  if (again.newlyBound.length > 0)
+    fail(`すでに結ばれていた id が newlyBound に入った: ${JSON.stringify(again)}`);
   const other = await store.bind([bound.id], 'conv-2');
   if (other.conflicts.join() !== bound.id || other.bound.length > 0)
     fail('別の会話への bind は conflicts');
@@ -156,6 +162,18 @@ export async function verifyAttachmentStoreContract(
   if ((await store.prune(expiry)) !== 1) fail('期限切れの掃除');
   if ((await store.get(bound.id)) !== undefined) fail('期限切れが残った');
   if ((await store.prune(expiry)) !== 0) fail('掃除は冪等');
+
+  // 4'（prune の件数に影響しないよう、掃除の検査のあとで）既結び付けと未結び付けの混在
+  const mixedBound = await store.put({ name: 'mb.txt', mediaType: 'text/plain', bytes: PNG });
+  await store.bind([mixedBound.id], 'conv-mixed');
+  const fresh = await store.put({ name: 'f.txt', mediaType: 'text/plain', bytes: PNG });
+  const mixed = await store.bind([mixedBound.id, fresh.id, 'no-such-id'], 'conv-mixed');
+  if (
+    mixed.bound.join() !== [mixedBound.id, fresh.id].join() ||
+    mixed.newlyBound.join() !== fresh.id ||
+    mixed.missing.join() !== 'no-such-id'
+  )
+    fail(`既結び付けと未結び付けの混在の newlyBound: ${JSON.stringify(mixed)}`);
 
   // uploadedBy（上げた主体の識別子。中身ではない）
   const uploaded = await store.put({
@@ -185,8 +203,13 @@ export async function verifyAttachmentStoreContract(
   if (evMeta?.externalEventId !== 'ev-1') fail('bindToExternalEvent が控えへ反映されない');
   if (evMeta?.conversationId !== undefined)
     fail('外部イベントへの結び付けが conversationId を立てた');
-  if ((await store.bindToExternalEvent([toEvent.id], 'ev-1')).bound.join() !== toEvent.id)
-    fail('同じ外部イベントへの bindToExternalEvent は冪等');
+  if (evFirst.newlyBound.join() !== toEvent.id)
+    fail(`bindToExternalEvent の newlyBound: ${JSON.stringify(evFirst)}`);
+  const evAgain = await store.bindToExternalEvent([toEvent.id], 'ev-1');
+  if (evAgain.bound.join() !== toEvent.id || evAgain.newlyBound.length > 0)
+    fail(
+      `同じ外部イベントへの bindToExternalEvent は冪等で newlyBound に入らない: ${JSON.stringify(evAgain)}`,
+    );
   const evOther = await store.bindToExternalEvent([toEvent.id], 'ev-2');
   if (evOther.conflicts.join() !== toEvent.id || evOther.bound.length > 0)
     fail('別の外部イベントへの bindToExternalEvent は conflicts');
@@ -365,6 +388,42 @@ async function verifyWithSmallLimits(
     fail('未結び付けが1時間の1ms前に消えた');
   if ((await clocked.prune(new Date(unboundAt))) !== 1) fail('未結び付けが1時間ちょうどで消えない');
   if ((await clocked.getMeta(unbound.id)) !== undefined) fail('未結び付けが1時間ちょうどで残った');
+
+  // 9（#3522）: 期限を過ぎたものは、prune が走る前でも読めず・結べない（prune が消すものは読めない）。
+  //   境界は prune と同じ向き（expiresAt ちょうどで「無い」、1ms 前はまだある）。結び付いて期限内のものは変えない。
+  let readNow = T0;
+  const expiring = await createStore({ now: () => readNow });
+  const keep = await expiring.put({ name: 'k.txt', mediaType: 'text/plain', bytes: PNG });
+  const late = await expiring.put({ name: 'l.txt', mediaType: 'text/plain', bytes: PNG });
+  const late2 = await expiring.put({ name: 'm.txt', mediaType: 'text/plain', bytes: PNG });
+  const lateBound = await expiring.put({ name: 'b.txt', mediaType: 'text/plain', bytes: PNG });
+  await expiring.bind([lateBound.id], 'conv-x');
+  const dueAt = Date.parse(keep.expiresAt);
+  readNow = new Date(dueAt - 1);
+  if ((await expiring.getMeta(keep.id)) === undefined)
+    fail('expiresAt の1ms前に getMeta が無いと答えた');
+  if ((await expiring.get(keep.id)) === undefined) fail('expiresAt の1ms前に get が無いと答えた');
+  readNow = new Date(dueAt);
+  if ((await expiring.getMeta(keep.id)) !== undefined)
+    fail('expiresAt ちょうどで getMeta が答えた');
+  if ((await expiring.get(keep.id)) !== undefined) fail('expiresAt ちょうどで get が答えた');
+  if ((await expiring.getMeta(lateBound.id)) !== undefined)
+    fail('結び付いていても期限切れの getMeta が答えた');
+  readNow = new Date(dueAt + 1000);
+  const lateBind = await expiring.bind([late.id], 'conv-late');
+  if (lateBind.bound.length > 0 || lateBind.newlyBound.length > 0 || lateBind.conflicts.length > 0)
+    fail(`期限切れの bind が通った: ${JSON.stringify(lateBind)}`);
+  if (lateBind.missing.join() !== late.id) fail('期限切れの bind が missing にならない');
+  const lateEvent = await expiring.bindToExternalEvent([late2.id], 'ev-late');
+  if (lateEvent.bound.length > 0 || lateEvent.missing.join() !== late2.id)
+    fail(`期限切れの bindToExternalEvent が missing にならない: ${JSON.stringify(lateEvent)}`);
+  // 期限内で結び付いているものを、同じ宛先へ結び直しても変わらない（冪等）。
+  readNow = new Date(dueAt - 1);
+  const again = await expiring.bind([lateBound.id], 'conv-x');
+  if (again.bound.join() !== lateBound.id || again.newlyBound.length > 0)
+    fail('期限内で結び付いたものの冪等な bind が変わった');
+  if ((await expiring.getMeta(lateBound.id))?.conversationId !== 'conv-x')
+    fail('期限内で結び付いたものが読めない');
 
   // 9: bind と prune の並行。どちらが先でもよいが、答えと結果が食い違ってはならない
   //（bound と答えたのに無い・missing と答えたのに残っている、は許さない）

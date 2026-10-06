@@ -7,6 +7,7 @@ import {
   assertNoNul,
   canBindAttachmentTo,
   isAttachmentBoundTo,
+  isAttachmentExpired,
   hasNul,
   isAttachmentPrunable,
   prepareAttachment,
@@ -107,7 +108,7 @@ export class FsAttachmentStore implements AttachmentStore {
   async get(id: string): Promise<{ meta: AttachmentMeta; bytes: Uint8Array } | undefined> {
     const dir = this.#idDir(id);
     if (dir === undefined) return undefined;
-    const meta = await this.#readMeta(dir);
+    const meta = await this.#readLiveMeta(dir);
     if (meta === undefined) return undefined;
     try {
       return { meta, bytes: new Uint8Array(await readFile(join(dir, DATA_FILE))) };
@@ -119,7 +120,14 @@ export class FsAttachmentStore implements AttachmentStore {
 
   async getMeta(id: string): Promise<AttachmentMeta | undefined> {
     const dir = this.#idDir(id);
-    return dir === undefined ? undefined : this.#readMeta(dir);
+    return dir === undefined ? undefined : this.#readLiveMeta(dir);
+  }
+
+  /** 期限を過ぎたものは、prune が走る前でも「無い」（#3522）。prune と bind は期限切れも読む（`#readMeta`）。 */
+  async #readLiveMeta(dir: string): Promise<AttachmentMeta | undefined> {
+    const meta = await this.#readMeta(dir);
+    const now = this.#options.now?.() ?? new Date();
+    return meta === undefined || isAttachmentExpired(meta, now) ? undefined : meta;
   }
 
   async bind(ids: readonly string[], conversationId: string): Promise<AttachmentBindResult> {
@@ -140,6 +148,7 @@ export class FsAttachmentStore implements AttachmentStore {
     target: AttachmentBindTarget,
   ): Promise<AttachmentBindResult> {
     const bound: string[] = [];
+    const newlyBound: string[] = [];
     const missing: string[] = [];
     const conflicts: string[] = [];
     for (const id of ids) {
@@ -150,7 +159,7 @@ export class FsAttachmentStore implements AttachmentStore {
       }
       try {
         const outcome = await withPathLock(join(dir, META_FILE), async () => {
-          const meta = await this.#readMeta(dir);
+          const meta = await this.#readLiveMeta(dir);
           if (meta === undefined) return 'missing' as const;
           if (!canBindAttachmentTo(meta, target)) return 'conflict' as const;
           // 同じ宛先に結び付いている（冪等）なら書き直さない。
@@ -160,17 +169,24 @@ export class FsAttachmentStore implements AttachmentStore {
               `${JSON.stringify({ ...meta, ...target })}\n`,
               { mode: 0o600 },
             );
+            return 'newly' as const;
           }
           return 'bound' as const;
         });
-        (outcome === 'bound' ? bound : outcome === 'conflict' ? conflicts : missing).push(id);
+        if (outcome === 'newly') newlyBound.push(id);
+        (outcome === 'bound' || outcome === 'newly'
+          ? bound
+          : outcome === 'conflict'
+            ? conflicts
+            : missing
+        ).push(id);
       } catch (error) {
         // 掃除が先にディレクトリごと消した（ロックファイルを置けない）。「無い」と同じ。
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
         missing.push(id);
       }
     }
-    return { bound, missing, conflicts };
+    return { bound, newlyBound, missing, conflicts };
   }
 
   async unbind(ids: readonly string[], target: AttachmentBindTarget): Promise<string[]> {
