@@ -39,7 +39,7 @@ export const SCHEDULE_TABS: readonly NavTab[] = [
 ];
 
 /**
- * 設定: 接続先・利用状況・認証・実行環境。**8つあるのでサイドバーには出さず、設定の
+ * 設定: 接続先・利用状況・認証・実行環境。**9つあるのでサイドバーには出さず、設定の
  * ページ群のタブにする。**
  */
 export const SETTINGS_TABS: readonly NavTab[] = [
