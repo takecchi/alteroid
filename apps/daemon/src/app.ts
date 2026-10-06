@@ -189,6 +189,7 @@ import {
   archiveRemoveResponseSchema,
   archiveSessionsResponseSchema,
   attachmentErrorResponseSchema,
+  attachmentLimitsSchema,
   attachmentMetaSchema,
   authProvidersResponseSchema,
   commitmentListResponseSchema,
@@ -2866,6 +2867,26 @@ export function createApp(deps: AppDeps) {
           throw error;
         }
       },
+    )
+
+    // `/attachments/:id` より前に置く（`limits` を id と取り違えない。Hono は定義順に当てる）。
+    .get(
+      '/attachments/limits',
+      describeRoute({
+        tags: ['attachments'],
+        summary: '添付の上限（このデーモンが実際に使っている値）',
+        description:
+          '環境変数（`ALTEROID_ATTACHMENT_MAX_*`）で変えた値を含む、`POST /attachments` と `POST /chat` が' +
+          '実際に使っている上限を返す。CLI・TUI・Web が送る前の検査に使う（最終判定はこのデーモン）。' +
+          '認証は他の経路と同じ（連携の鍵は 403）。',
+        responses: {
+          200: {
+            description: '上限。',
+            content: { 'application/json': { schema: resolver(attachmentLimitsSchema) } },
+          },
+        },
+      }),
+      (c) => c.json(attachmentLimitsSchema.parse(attachmentLimits)),
     )
 
     .get(
