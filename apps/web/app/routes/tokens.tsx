@@ -192,7 +192,13 @@ function PoolAndSettings() {
   // **そして普通はここまで来ない** —— 未 grant なら `use-auth` が `ungranted` を
   // 返し、`shell` がログイン画面へ振る。残してあるのは、その手前をすり抜けた
   // 場合に汎用の `ErrorNote` へ投げっぱなしにしないためである。
-  if (error instanceof ApiError && error.status === 403) {
+  //
+  // **説明カードに置き換えるのは、一覧がまだ読めていないときだけ（`data === undefined`）。**
+  // 一度読めたあとの再取得（フォーカス復帰・書き込み後の取り直し）が 403 で返っても、
+  // SWR は `data` を保っている——それを説明カードで消さず、下の `LoadError` が一覧の上の
+  // 注記として言う（方針「一時的な失敗で画面を乗っ取らない」。他の画面の
+  // `data === undefined && error !== undefined` と同じ向き）。
+  if (data === undefined && error instanceof ApiError && error.status === 403) {
     return (
       <Card>
         <CardHeader title="トークン一覧・切り替えの設定" />
