@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { ChatController, MAX_ENTRIES, RESUME_PROBE_LIMIT } from './chat-controller.js';
 import { fakeApi, gate } from './fake-api.js';
@@ -660,5 +660,93 @@ describe('/resume（明示して進行中の会話へ戻る）', () => {
     expect(state().busy).toBe(true);
     hold.open();
     await flush();
+  });
+});
+
+describe('既読（返答を画面に表示したとき。docs/architecture.md「会話の既読」）', () => {
+  const withReply = (api: ReturnType<typeof fakeApi>) => {
+    api.messages.c1 = [
+      { id: 'm1', at: 't', role: 'inbound', text: '質問' },
+      { id: 'm2', at: 't', role: 'outbound', text: '答え' },
+    ];
+  };
+
+  it('送信して返答が done まで表示されたら、取り直した最後の発言まで既読にする', async () => {
+    const { api, controller } = setup();
+    withReply(api);
+    api.scripts.push([open('c1'), { type: 'text', text: '答え' }, { type: 'done' }]);
+    await controller.send('質問');
+    expect(api.readMarks).toEqual([{ id: 'c1', through: 'm2' }]);
+  });
+
+  it('done が来ない（接続が切れた）なら既読にしない', async () => {
+    const { api, controller } = setup();
+    withReply(api);
+    api.scripts.push([open('c1'), { type: 'text', text: '途中' }, new Error('切れた')]);
+    await controller.send('質問');
+    expect(api.readMarks).toEqual([]);
+  });
+
+  it('error / usage_limited で終わったら既読にしない', async () => {
+    const { api, controller } = setup();
+    withReply(api);
+    api.scripts.push([open('c1'), { type: 'error', message: '失敗' }, { type: 'done' }]);
+    await controller.send('質問');
+    api.scripts.push([open('c1'), { type: 'usage_limited', message: '枠' }, { type: 'done' }]);
+    await controller.send('もう一度');
+    expect(api.readMarks).toEqual([]);
+  });
+
+  it('既読の要求が失敗しても、返答も会話も残り、1 行だけ知らせる', async () => {
+    const { api, controller, state, texts } = setup();
+    withReply(api);
+    api.readMarkFails = '落ちた';
+    api.scripts.push([open('c1'), { type: 'text', text: '答え' }, { type: 'done' }]);
+    await controller.send('質問');
+    expect(texts('assistant')).toEqual(['答え']);
+    expect(state()).toMatchObject({ conversationId: 'c1', busy: false });
+    expect(texts('system')).toEqual(['この会話を既読にできなかった（落ちた）']);
+    // 失敗の後は、同じ位置でも次の機会に送り直す。
+    api.readMarkFails = null;
+    api.scripts.push([open('c1'), { type: 'done' }]);
+    await controller.send('続き');
+    expect(api.readMarks.map((m) => m.through)).toEqual(['m2', 'm2']);
+  });
+
+  it('履歴から開いて表示したときも、表示した最後の発言まで既読にする', async () => {
+    const { api, controller } = setup();
+    withReply(api);
+    await controller.openConversation('c1');
+    expect(api.readMarks).toEqual([{ id: 'c1', through: 'm2' }]);
+  });
+
+  it('開けなかった会話・発言の無い会話は既読にしない', async () => {
+    const { api, controller } = setup();
+    api.unreachedStart.add('c2');
+    api.messages.c2 = [];
+    await controller.openConversation('c2');
+    await controller.openConversation('nai');
+    expect(api.readMarks).toEqual([]);
+  });
+
+  it('戻った進行中のターンが done まで表示されたら、既読にする', async () => {
+    const { api, controller } = setup();
+    withReply(api);
+    const hold = gate();
+    api.streamScripts.push([
+      { type: 'open', conversationId: 'c1', inProgress: true },
+      { type: 'text', text: '続き' },
+      hold.wait,
+      { type: 'done' },
+    ]);
+    await controller.openConversation('c1');
+    expect(api.readMarks.map((m) => m.through)).toEqual(['m2']);
+    // 続きが日誌に載り、done が来る。
+    api.messages.c1 = [
+      ...(api.messages.c1 ?? []),
+      { id: 'm3', at: 't', role: 'outbound', text: '続き' },
+    ];
+    hold.open();
+    await vi.waitFor(() => expect(api.readMarks.map((m) => m.through)).toEqual(['m2', 'm3']));
   });
 });

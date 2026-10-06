@@ -286,9 +286,12 @@ const EXPECTED_SITE_COUNT: Record<string, number> = {
   // settled を台帳・受信箱へ流さずに捨てたことを `EXCHANGE_KIND_DECISION_PREFIX` で書く）。
   // + 1（#3097。`#endRelocationWindow` が、移送の resume が飛んでいる最中に届いた元の runner の
   // `closed` を、移送が受理されたので捨てたことを `EXCHANGE_KIND_DECISION_PREFIX` で書く）。
+  // + 1（#3159。`#endRelocationWindow` が、同じ runner への復帰の resume が飛んでいる最中に届いた
+  // `closed` を、resume が受理されたので古いセッションの畳みとして捨てたことを
+  // `EXCHANGE_KIND_DECISION_PREFIX` で書く）。
   // + 1（#3161。`case 'closed'` が、`lost` に確定した後に届いた `closed` で status を動かさなかったことを
   // `EXCHANGE_KIND_DECISION_PREFIX` で書く）。
-  'manager.ts': 52,
+  'manager.ts': 53,
 };
 
 describe('type: exchange の書き込み全箇所が kind 接頭辞を持つ（issue #1332）', () => {
