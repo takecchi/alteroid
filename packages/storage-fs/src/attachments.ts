@@ -183,21 +183,26 @@ export class FsAttachmentStore implements AttachmentStore {
         continue;
       }
       try {
-        const outcome = await withPathLock(join(dir, META_FILE), async () => {
-          const meta = await this.#readLiveMeta(dir);
-          if (meta === undefined) return 'missing' as const;
-          if (!canBindAttachmentTo(meta, target)) return 'conflict' as const;
-          // 同じ宛先に結び付いている（冪等）なら書き直さない。
-          if (meta.conversationId === undefined && meta.externalEventId === undefined) {
-            await writeFileAtomic(
-              join(dir, META_FILE),
-              `${JSON.stringify({ ...meta, ...target })}\n`,
-              { mode: 0o600 },
-            );
-            return 'newly' as const;
-          }
-          return 'bound' as const;
-        });
+        // `createDir: false`: 無い id のロックのために空のディレクトリを作らない（ENOENT は下で「無い」になる。#3781）。
+        const outcome = await withPathLock(
+          join(dir, META_FILE),
+          async () => {
+            const meta = await this.#readLiveMeta(dir);
+            if (meta === undefined) return 'missing' as const;
+            if (!canBindAttachmentTo(meta, target)) return 'conflict' as const;
+            // 同じ宛先に結び付いている（冪等）なら書き直さない。
+            if (meta.conversationId === undefined && meta.externalEventId === undefined) {
+              await writeFileAtomic(
+                join(dir, META_FILE),
+                `${JSON.stringify({ ...meta, ...target })}\n`,
+                { mode: 0o600 },
+              );
+              return 'newly' as const;
+            }
+            return 'bound' as const;
+          },
+          { createDir: false },
+        );
         if (outcome === 'newly') newlyBound.push(id);
         (outcome === 'bound' || outcome === 'newly'
           ? bound
@@ -219,15 +224,21 @@ export class FsAttachmentStore implements AttachmentStore {
       const dir = this.#idDir(id);
       if (dir === undefined) continue;
       try {
-        const done = await withPathLock(join(dir, META_FILE), async () => {
-          const meta = await this.#readMeta(dir);
-          if (meta === undefined || !isAttachmentBoundTo(meta, target)) return false;
-          const rest: { -readonly [K in keyof AttachmentMeta]: AttachmentMeta[K] } = { ...meta };
-          delete rest.conversationId;
-          delete rest.externalEventId;
-          await writeFileAtomic(join(dir, META_FILE), `${JSON.stringify(rest)}\n`, { mode: 0o600 });
-          return true;
-        });
+        const done = await withPathLock(
+          join(dir, META_FILE),
+          async () => {
+            const meta = await this.#readMeta(dir);
+            if (meta === undefined || !isAttachmentBoundTo(meta, target)) return false;
+            const rest: { -readonly [K in keyof AttachmentMeta]: AttachmentMeta[K] } = { ...meta };
+            delete rest.conversationId;
+            delete rest.externalEventId;
+            await writeFileAtomic(join(dir, META_FILE), `${JSON.stringify(rest)}\n`, {
+              mode: 0o600,
+            });
+            return true;
+          },
+          { createDir: false },
+        );
         if (done) unbound.push(id);
       } catch (error) {
         // 掃除が先にディレクトリごと消した。戻すものが無いのと同じ。
@@ -262,15 +273,21 @@ export class FsAttachmentStore implements AttachmentStore {
         // 更新時刻はロックを取る前に見る（ロックファイルを置くとディレクトリの更新時刻が進むため）。
         const staleOrphan = meta === undefined && (await this.#isStaleOrphan(dir, now));
         if (meta === undefined ? !staleOrphan : !isAttachmentPrunable(meta, now)) continue;
-        const removed = await withPathLock(join(dir, META_FILE), async () => {
-          const latest = await this.#readMeta(dir);
-          if (latest === undefined ? !staleOrphan : !isAttachmentPrunable(latest, now))
-            return false;
-          await rm(dir, { recursive: true, force: true });
-          return true;
-        });
+        // 列挙してからロックを取るまでに別の prune が消していたら、空のディレクトリを作り直さず飛ばす（#3781）。
+        const removed = await withPathLock(
+          join(dir, META_FILE),
+          async () => {
+            const latest = await this.#readMeta(dir);
+            if (latest === undefined ? !staleOrphan : !isAttachmentPrunable(latest, now))
+              return false;
+            await rm(dir, { recursive: true, force: true });
+            return true;
+          },
+          { createDir: false },
+        );
         if (removed) count += 1;
       } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
         failures.push(`${name}: ${reasonOf(error)}`);
       }
     }
