@@ -1,7 +1,7 @@
 import { AlertTriangle } from 'lucide-react';
 import { useState } from 'react';
 
-import { Button, ErrorNote } from '@alteroid/ui';
+import { Button, ConfirmDialog, ErrorNote } from '@alteroid/ui';
 
 /**
  * 読めない行の断り（`GET /permission-grants` / `GET /access` の `rowsUnreadable`。issue #2536）。
@@ -28,6 +28,8 @@ export function UnreadableRowsNote({
   hand: string;
 }) {
   const [busyId, setBusyId] = useState<string | null>(null);
+  // 確認を出している行の id（押した瞬間には消さない。#3091。`routes/tokens.tsx` の #3067 と同じ形）。
+  const [confirmingId, setConfirmingId] = useState<string | null>(null);
   const [failure, setFailure] = useState<unknown>(undefined);
 
   async function remove(id: string) {
@@ -64,10 +66,27 @@ export function UnreadableRowsNote({
                 variant="danger"
                 size="sm"
                 loading={busyId === row.id}
-                onClick={() => void remove(row.id)}
+                onClick={() => setConfirmingId(row.id)}
               >
                 この行を消す
               </Button>
+              {/*
+                消した行は戻せない（#3091）。デーモンは行をファイル／テーブルから落とすだけで、
+                値は返さず日誌にも id しか残さない（`removeUnreadable` の doc）ので、退避も
+                取り消しも無い。permissions と access の両方がこの部品を通るので、確認も
+                ここに1つだけ置く。
+              */}
+              <ConfirmDialog
+                open={confirmingId === row.id}
+                onOpenChange={(open) => {
+                  if (!open) setConfirmingId(null);
+                }}
+                title={`読めない${noun}の行「${row.id}」を消しますか`}
+                description={`この行は消え、元に戻せません。中身はこの画面では読めないので、消したあとに同じ${noun}を入れ直すには元の内容が要ります。`}
+                confirmLabel="消す"
+                destructive
+                onConfirm={() => void remove(row.id)}
+              />
             </li>
           ))}
         </ul>

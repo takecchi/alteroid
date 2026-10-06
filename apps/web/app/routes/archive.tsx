@@ -8,6 +8,7 @@ import {
   Button,
   Card,
   CardHeader,
+  ConfirmDialog,
   Empty,
   ErrorNote,
   Input,
@@ -196,6 +197,9 @@ function EntryRow({ entry }: { entry: ArchiveEntry }) {
   const removeArchive = useRemoveArchive();
   const [reason, setReason] = useState('');
   const [busy, setBusy] = useState(false);
+  // 「本文を消す」の確認を出しているか（押した瞬間には消さない。#3091）。
+  // `reason`（理由欄）は別の state なので、確認を開いても閉じても失われない。
+  const [confirming, setConfirming] = useState(false);
   const [failure, setFailure] = useState<unknown>(undefined);
 
   const removed = entry.removedAt !== undefined;
@@ -251,10 +255,25 @@ function EntryRow({ entry }: { entry: ArchiveEntry }) {
               size="sm"
               loading={busy}
               disabled={busy}
-              onClick={() => void remove()}
+              onClick={() => setConfirming(true)}
             >
               本文を消す
             </Button>
+            {/*
+              本文は戻せない（#3091）。`stores.archive.remove` は fs では本体の `.jsonl` を空へ
+              切り詰め、pg では `body` を `''` に更新する。復元の口は無く、日誌に残るのは
+              id とバイト数だけである。「理由を付けて消す」は、理由の入力が前段なので
+              確認を足さない（#3091）。
+            */}
+            <ConfirmDialog
+              open={confirming}
+              onOpenChange={setConfirming}
+              title="退避した会話の本文を消しますか"
+              description="本文は空になり、元に戻せません。退避の記録（日時・識別子）は残ります。走行中のマネージャーの退避だった場合は、このあと理由の入力を求めます。"
+              confirmLabel="消す"
+              destructive
+              onConfirm={() => void remove()}
+            />
           </div>
 
           {denied && (
