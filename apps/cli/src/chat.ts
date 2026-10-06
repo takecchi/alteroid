@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { createInterface } from 'node:readline/promises';
-import { stdin, stdout } from 'node:process';
+import { stdin } from 'node:process';
+import { stdout } from './terminal-out.js';
 
 import {
   approvalUpdatedAt,
@@ -34,6 +35,7 @@ import {
 import {
   ARCHIVE_REMOVED_BYTES_UNIT_NOTE,
   describeGithubCi,
+  codePointBoundary,
   JOURNAL_SEARCH_UNCOVERED_LIST,
 } from '@alteroid/core/cli-light';
 import {
@@ -107,7 +109,7 @@ export async function chatCommand(): Promise<void> {
   const base = target.baseUrl;
   const client = createClient(base, target.headers);
 
-  const rl = createInterface({ input: stdin, output: stdout });
+  const rl = createInterface({ input: stdin, output: process.stdout });
   // 入力の行は `line` イベントで受けて積み、`ask` が順に取り出す（#3262）。`question()` は、待って
   // いない間に届いた行（応答待ちの間にパイプで流れ込んだ2行目以降）をどこにも渡さず捨てる。
   // REPL の問い（`confirmInRepl`）も同じ `ask` なので、次に積まれた行がその答えになる。
@@ -4233,7 +4235,7 @@ function isJournalDiagnosticsEntry(
 function summarizeText(value: string): string {
   // 伏せ字を先に掛ける（切ってからだとトークンの途中で切れて形が崩れ、取りこぼす）。
   const single = redactBody(value).replace(/\s+/g, ' ').trim();
-  return single.length > 80 ? `${single.slice(0, 80)}…` : single;
+  return single.length > 80 ? `${single.slice(0, codePointBoundary(single, 80))}…` : single;
 }
 
 /** `/attach <path>` / `/attachments` / `/detach <番号|all>`（添えかけの操作。送るときに上がる）。 */

@@ -1,4 +1,5 @@
-import { stdin, stdout } from 'node:process';
+import { stdin } from 'node:process';
+import { stdout } from './terminal-out.js';
 
 import { CREDENTIAL_NAME } from '@alteroid/core/cli-light';
 import { hasRunnerPushFailure } from '@alteroid/logic';

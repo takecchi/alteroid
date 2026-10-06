@@ -1,7 +1,7 @@
 import { readFile, stat, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, resolve, sep } from 'node:path';
-import { stdout } from 'node:process';
+import { stderr, stdout } from './terminal-out.js';
 
 import {
   AttachmentRejectedError,
@@ -396,7 +396,7 @@ export async function attachmentsPutCommand(path: string): Promise<void> {
   if (!result.ok) throw new Error(result.reason);
   const meta = result.uploaded[0]!;
   stdout.write(`${meta.id}\n`);
-  process.stderr.write(`${describeAttachment(meta)}（1 時間以内に発言へ添えないと掃除される）\n`);
+  stderr.write(`${describeAttachment(meta)}（1 時間以内に発言へ添えないと掃除される）\n`);
 }
 
 export async function attachmentsMetaCommand(id: string): Promise<void> {
@@ -473,7 +473,7 @@ export async function attachmentsGetCommand(
   }
   const bytes = new Uint8Array(await response.arrayBuffer());
   if (output === '-') {
-    stdout.write(bytes);
+    stdout.writeRaw(bytes);
     return;
   }
   try {
@@ -487,5 +487,5 @@ export async function attachmentsGetCommand(
     }
     throw error;
   }
-  process.stderr.write(`${output} に書いた（${bytes.length} バイト）\n`);
+  stderr.write(`${output} に書いた（${bytes.length} バイト）\n`);
 }

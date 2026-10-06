@@ -1,4 +1,4 @@
-import { stdout } from 'node:process';
+import { stdout } from './terminal-out.js';
 
 import { RESET_CONFIRM_GROUPS } from '@alteroid/core/cli-light';
 

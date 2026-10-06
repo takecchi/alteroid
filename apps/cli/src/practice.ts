@@ -1,7 +1,8 @@
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { stdin, stdout } from 'node:process';
+import { stdin } from 'node:process';
+import { stderr, stdout, writeShownBody } from './terminal-out.js';
 
 import { createClient, type DaemonClient } from './client.js';
 import { withErrorReason } from './format.js';
@@ -153,12 +154,12 @@ export async function practiceShowCommand(
     throw new Error(`そんなやり方はありません: ${slug}`);
   }
   const content = found.content;
-  stdout.write(content.endsWith('\n') ? content : `${content}\n`);
+  writeShownBody(stdout, content.endsWith('\n') ? content : `${content}\n`);
   // **版は stderr へ1行（Issue #2984。`memory show` と同じ）。** stdout は本文をそのまま出す口で、
   // パイプやリダイレクトで使う人がいる（版を混ぜると本文が壊れる）。端末では両方見える。
   // 古いデーモンが `version` を返さなければ出す版が無い。
   if (found.version !== undefined) {
-    process.stderr.write(
+    stderr.write(
       `版: ${found.version}（読んだ版を前提に消すなら: alteroid practice remove ${slug} --if-match ${found.version}）\n`,
     );
   }

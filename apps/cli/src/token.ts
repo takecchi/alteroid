@@ -1,4 +1,5 @@
-import { stdin, stdout } from 'node:process';
+import { stdin } from 'node:process';
+import { stdout } from './terminal-out.js';
 
 import { describeAuthFailure, forbiddenKindOf, resolveTarget, type Target } from './target.js';
 import { confirmIrreversible } from './confirm.js';
