@@ -560,7 +560,10 @@ describe('alteroid profile edit', () => {
 
   it('無い行を作るとき、雛形に1行足したら PUT する', async () => {
     setReply('GET', '/profile', { status: 200, body: profileBody([]) });
-    setReply('PUT', '/profile/fresh', { status: 200, body: updateBody([{ name: 'fresh', scope: 'all' }]) });
+    setReply('PUT', '/profile/fresh', {
+      status: 200,
+      body: updateBody([{ name: 'fresh', scope: 'all' }]),
+    });
     editWith = async (path) => {
       await writeFile(path, `${await readFile(path, 'utf8')}export A=1\n`);
     };
