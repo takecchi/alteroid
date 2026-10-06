@@ -2490,3 +2490,31 @@ describe('「話しかける」と待ちの行は、send の戻り値を使い�
     expect(document.activeElement).toBe(textarea);
   });
 });
+
+describe('「話しかける」: 送信中の追記は、届いても消えない', () => {
+  it('送っている間に打ち足すと、届いた後も追記が入力欄に残る', async () => {
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const { sent } = renderDetailWithMessages(
+      { ...BASE, status: 'running', live: true },
+      undefined,
+      gate,
+    );
+    expect(await screen.findByText('実行中')).toBeTruthy();
+
+    const input = screen.getByPlaceholderText('追加の指示') as HTMLTextAreaElement;
+    fireEvent.change(input, { target: { value: '続けて' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await waitFor(() => expect(sent).toHaveLength(1));
+
+    fireEvent.change(input, { target: { value: '続けて、あとこれも' } });
+    release();
+
+    expect(await screen.findByText('追加指示を届けた: 追加指示として届けた。')).toBeTruthy();
+    expect((screen.getByPlaceholderText('追加の指示') as HTMLTextAreaElement).value).toBe(
+      '続けて、あとこれも',
+    );
+  });
+});
