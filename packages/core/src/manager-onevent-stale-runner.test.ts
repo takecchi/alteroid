@@ -65,9 +65,8 @@ import { createMemoryStores } from './testing.js';
  * の古いジョブは判定材料が無いので、これまでどおり処理する（能力を
  * 削らない）。
  *
- * **他の `case`（`session` / `report` / `ask` 等）には広げていない。** Issue
- * #1716 が名指しして疑ったのはこの2つだけで、他の分岐まで同じ確認を足すのは
- * この変更が答えるべき範囲を超える——広げるなら別に判断すること。
+ * **`session` / `report` / `ask` / `settled` にも同じ確認を足した**
+ * （Issue #3054）。`tool_use` / `note` など表示寄りの分岐には広げていない。
  *
  * ## ⚠️ 「不一致」だけでは足りなかった（レビューで発見・修正）
  *
@@ -345,6 +344,63 @@ describe('#onEvent: 移った後に届く古い runner の出来事', () => {
     expect(after?.runnerId).toBe('runner-b');
     expect(after?.lease?.runnerId).toBe('runner-b');
     expect(after?.lease?.releasedAt).toBeUndefined();
+  });
+
+  it('runner-b へ移った後に届く runner-a の古い report は、台帳の status・lastReport を巻き戻さず受信箱へも回さない', async () => {
+    const { stores, runnerA, inbox } = await setupRelocated();
+    runnerA.emit?.({
+      type: 'report',
+      managerId: 'mgr-race',
+      status: 'failed',
+      text: 'runner-a からの古い報告（遅延して届いた）',
+      reportId: 'stale-report-1',
+    } as RunnerEvent);
+    for (let i = 0; i < 20; i += 1) await Promise.resolve();
+    const after = (await stores.jobs.listJobs()).find((j) => j.id === 'mgr-race');
+    expect(after?.runnerId).toBe('runner-b');
+    expect(after?.status).toBe('running');
+    expect(after?.lastReport).toBe('途中まで進めた');
+    expect(inbox.filter((e) => JSON.stringify(e).includes('古い報告'))).toEqual([]);
+  });
+
+  it('runner-b へ移った後に届く runner-a の古い ask は、waiting_human にせず受信箱へも回さない', async () => {
+    const { stores, runnerA, inbox } = await setupRelocated();
+    runnerA.emit?.({
+      type: 'ask',
+      managerId: 'mgr-race',
+      requestId: 'stale-ask-1',
+      summary: 'runner-a の古い確認',
+      kind: 'permission',
+    } as RunnerEvent);
+    for (let i = 0; i < 20; i += 1) await Promise.resolve();
+    const after = (await stores.jobs.listJobs()).find((j) => j.id === 'mgr-race');
+    expect(after?.status).toBe('running');
+    expect(inbox.filter((e) => JSON.stringify(e).includes('古い確認'))).toEqual([]);
+  });
+
+  it('runner-b へ移った後に届く runner-a の古い session は、sessionId を上書きしない', async () => {
+    const { stores, runnerA } = await setupRelocated();
+    runnerA.emit?.({
+      type: 'session',
+      managerId: 'mgr-race',
+      sessionId: 'sess-stale-from-a',
+    } as RunnerEvent);
+    for (let i = 0; i < 20; i += 1) await Promise.resolve();
+    const after = (await stores.jobs.listJobs()).find((j) => j.id === 'mgr-race');
+    expect(after?.runnerId).toBe('runner-b');
+    expect(after?.sessionId).toBe('sess-before-relocate');
+  });
+
+  it('runner-b へ移った後に届く runner-a の古い settled は、確認の取り下げとして受信箱へ回さない', async () => {
+    const { runnerA, inbox } = await setupRelocated();
+    const before = inbox.length;
+    runnerA.emit?.({
+      type: 'settled',
+      managerId: 'mgr-race',
+      requestId: 'stale-ask-2',
+    } as RunnerEvent);
+    for (let i = 0; i < 20; i += 1) await Promise.resolve();
+    expect(inbox.length).toBe(before);
   });
 
   /**

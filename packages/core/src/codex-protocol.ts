@@ -217,8 +217,14 @@ export interface CodexUserInputText {
   text_elements?: unknown[];
 }
 
-/** 送る入力。alteroid が送るのは文字列だけ。 */
-export type CodexUserInput = CodexUserInputText;
+/** 画像（URL 形。`data:<mime>;base64,...` を渡す）。スキーマの `UserInput` の `type: image` + `url`。 */
+export interface CodexUserInputImage {
+  type: 'image';
+  url: string;
+}
+
+/** 送る入力。本文のテキストと、添付があれば画像。 */
+export type CodexUserInput = CodexUserInputText | CodexUserInputImage;
 
 // ---------------------------------------------------------------------------
 // thread / turn

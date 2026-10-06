@@ -29,17 +29,34 @@ export function toNumber(value: number | string): number {
 }
 
 /**
- * NUL 文字（`\u0000`）を落とす。
+ * `String.prototype.toWellFormed`（ES2024、Node 20+）。tsconfig の `lib` は ES2023 なので
+ * 型が無く、ここで最小の型だけを足して呼ぶ。
+ */
+function toWellFormed(value: string): string {
+  return (value as string & { toWellFormed(): string }).toWellFormed();
+}
+
+/**
+ * NUL 文字（`\u0000`）を落とし、孤立サロゲートを U+FFFD に置き換える。
  *
  * PostgreSQL の `text` と `jsonb` は NUL を含む文字列を**受け付けない**。
  * マネージャーと作業者の全ツール実行を日誌に落とす以上、バイナリ由来の NUL が
  * 混ざる経路は現実にある。そこで挿入が落ちると、fs なら残る記録が pg では
  * 静かに消える — 「聞かずに実行した判断は必ず日誌に残る」（PRD「権限境界」）が
  * 器によって崩れる。**器の都合で記録を失うくらいなら、1文字を落として残す。**
+ *
+ * **孤立サロゲート**（例 `'abc\ud83d'`）も同じ形の穴である（#3055）。JS の文字列には
+ * `JSON.parse('"\\ud83d"')` や UTF-16 の途中で切った文字列として普通に入り、fs のストアは
+ * そのまま残せる。node-postgres は `text` 列では U+FFFD へ化けて通すが、`jsonb` は
+ * `JSON.stringify` が出すエスケープ `\ud83d` を PostgreSQL が `22P02` で拒む。受信箱の行や
+ * 台帳の依頼が書けず、器によって記録が消える。方針は NUL と同じで、1文字を
+ * U+FFFD に変えて記録を残す（`toWellFormed()`。正しいサロゲート対は変わらない）。
+ * 文字列の値もオブジェクトのキーも通す。関数名は呼び出しが多いので NUL だけの名のまま。
  */
 export function stripNulls<T>(value: T): T {
   if (typeof value === 'string') {
-    return (value.includes('\u0000') ? value.replaceAll('\u0000', '') : value) as T;
+    const noNul = value.includes('\u0000') ? value.replaceAll('\u0000', '') : value;
+    return toWellFormed(noNul) as T;
   }
   if (Array.isArray(value)) return value.map((item) => stripNulls(item)) as T;
   if (value !== null && typeof value === 'object') {

@@ -4,6 +4,7 @@ import { PassThrough } from 'node:stream';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { AgentEvent } from './agent-events.js';
+import type { AgentUserInput } from './agent-session.js';
 import type {
   AgentChildProcess,
   AgentManagerSessionSpec,
@@ -180,12 +181,12 @@ class FakeAppServer extends EventEmitter {
 
 /** 外から流し込める入力のストリーム。 */
 class InputFeed {
-  readonly #items: string[] = [];
+  readonly #items: (string | AgentUserInput)[] = [];
   #ended = false;
   #waiter: (() => void) | undefined;
   pulled = 0;
 
-  push(text: string): void {
+  push(text: string | AgentUserInput): void {
     this.#items.push(text);
     this.#waiter?.();
   }
@@ -195,12 +196,12 @@ class InputFeed {
     this.#waiter?.();
   }
 
-  async *stream(): AsyncGenerator<{ text: string }> {
+  async *stream(): AsyncGenerator<AgentUserInput> {
     for (;;) {
       const next = this.#items.shift();
       if (next !== undefined) {
         this.pulled += 1;
-        yield { text: next };
+        yield typeof next === 'string' ? { text: next } : next;
         continue;
       }
       if (this.#ended) return;
@@ -612,6 +613,26 @@ describe('CodexManagerDriver: ターン', () => {
     expect(first[0]).toMatchObject({ blocks: [{ type: 'tool_use', name: 'commandExecution' }] });
     expect(first[3]).toMatchObject({ blocks: [{ type: 'text', text: '答え: 一件目' }] });
     expect(first[4]).toMatchObject({ succeeded: true, body: '答え: 一件目', denials: [] });
+  });
+
+  it('画像つきの入力は turn/start の input に text + image（data URL）で載り、画像が無ければ text だけ', async () => {
+    const h = setup({ env: { CODEX_API_KEY: FAKE_KEY } });
+    h.server.script.onTurn = (_n, _t, id) => h.server.completeTurn(id);
+    h.feed.push({ text: '見て', images: [{ mediaType: 'image/png', data: 'QUJD' }] });
+    h.feed.push('画像なし');
+    const done = h.run();
+    await until(() => h.server.paramsOf('turn/start').length === 2, '2件の turn/start');
+    await until(() => h.events.filter((e) => e.type === 'turn_ended').length === 2, '完了');
+    h.feed.end();
+    await done;
+    const starts = h.server.paramsOf('turn/start');
+    expect((starts[0] as Json)['input']).toEqual([
+      { type: 'text', text: '見て', text_elements: [] },
+      { type: 'image', url: 'data:image/png;base64,QUJD' },
+    ]);
+    expect((starts[1] as Json)['input']).toEqual([
+      { type: 'text', text: '画像なし', text_elements: [] },
+    ]);
   });
 
   it('turn/start が RPC エラーで返ったら、そのターンだけ失敗にして次の入力へ進む', async () => {

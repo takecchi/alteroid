@@ -124,9 +124,19 @@ export class FsInboxStore implements InboxStore {
     });
   }
 
+  /**
+   * 名指しで消す。**id が一致する読めない行（`invalidEventsRaw`）も消す**（issue #3056 の 1。
+   * pg の列 id の DELETE と同じ）。「読めない行は消さずに残す」（#1966 / #2024）は、書き戻し・
+   * まとめての削除・自動の片付けで黙って失わないための線で、id を名指しした削除は意図した
+   * 操作である（人間の決定 2026-10-06）。id が取れない読めない行は名指しできないので残る。
+   */
   async remove(id: string): Promise<void> {
     await this.#update((file) => ({
-      next: { ...file, events: file.events.filter((entry) => entry.event.id !== id) },
+      next: {
+        ...file,
+        events: file.events.filter((entry) => entry.event.id !== id),
+        invalidEventsRaw: file.invalidEventsRaw.filter((raw) => extractEventId(raw) !== id),
+      },
       result: undefined,
     }));
   }
@@ -211,6 +221,9 @@ export class FsInboxStore implements InboxStore {
    * `ids` を `Set` にしてから見るので、重複があっても対象の判定は変わらない
    * ——同じ行が複数回消えることも、戻り値に同じ id が複数回入ることも無い。
    *
+   * **id が一致する読めない行（`invalidEventsRaw`）も消し、戻り値に入れる**（issue #3056 の 1。
+   * `remove()` の doc）。
+   *
    * `ids` が空なら `#update` を呼ばずに `[]` を返す（`FsCommitmentStore
    * .closeMany` と同じ理由——ファイルの中身が1バイトも変わらない）。
    */
@@ -224,7 +237,15 @@ export class FsInboxStore implements InboxStore {
         removedIds.push(entry.event.id);
         return false;
       });
-      return { next: { ...file, events }, result: removedIds };
+      // id が一致する読めない行も消し、戻り値に入れる（pg の `DELETE … RETURNING id` と同じ。
+      // `remove()` の doc）。同じ id の行が複数在っても、戻り値には1回しか入れない。
+      const invalidEventsRaw = file.invalidEventsRaw.filter((raw) => {
+        const id = extractEventId(raw);
+        if (id === undefined || !targets.has(id)) return true;
+        if (!removedIds.includes(id)) removedIds.push(id);
+        return false;
+      });
+      return { next: { ...file, events, invalidEventsRaw }, result: removedIds };
     });
   }
 

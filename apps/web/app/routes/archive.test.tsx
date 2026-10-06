@@ -223,6 +223,13 @@ describe('/archive 画面 — 一覧・集計・削除（#776）', () => {
 
     expect(await screen.findByText('前回の続き')).toBeTruthy();
     expect(screen.getByText('前回との関係は不明')).toBeTruthy();
+    // issue #3061: 吹き出し（title）も日本語。上の本文検査は title を外してから見ているので別に測る。
+    const titles = Array.from(document.querySelectorAll('[title]')).map((el) =>
+      el.getAttribute('title'),
+    );
+    expect(titles).toContain('前回の続き');
+    expect(titles).toContain('前回との関係は不明');
+    expect(titles.join('\n')).not.toMatch(/continues|zzz/);
     const clone = document.body.cloneNode(true) as HTMLElement;
     clone.querySelectorAll('details,[title]').forEach((el) => el.removeAttribute('title'));
     clone.querySelectorAll('details').forEach((el) => el.remove());
