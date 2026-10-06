@@ -150,6 +150,7 @@ import {
   type AuthAccount,
   type AuthService,
   NulNotAllowedError,
+  stripNul,
   InvalidCredentialNameError,
   type TokenPolicyChange,
   type TokenPoolChange,
@@ -536,8 +537,11 @@ const chatBody = z
   /**
    * **本文は空でもよいが、添付が1件以上あるときだけ**（添付だけの発言。Issue #3111）。
    * 添付の無い空本文は従来どおり 400。`min(1)` を外した代わりの条件をここに置く。
+   *
+   * **「空」は NUL を落とした後で見る**（#3437）。ストアは本文の NUL を落として残すので、落とす前の長さで
+   * 見ると NUL だけの `text` が空の発言として日誌へ入る。
    */
-  .refine((body) => body.text.length > 0 || (body.attachments?.length ?? 0) > 0, {
+  .refine((body) => stripNul(body.text).length > 0 || (body.attachments?.length ?? 0) > 0, {
     message: 'text が空のときは attachments が要る',
     path: ['text'],
   });
