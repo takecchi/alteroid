@@ -87,15 +87,9 @@ export function homeRoute(options: HomeOptions = {}): Route {
         : sse(options.topology.frames, { keepOpen: true, signal: init?.signal });
     }
     if (url.includes('/reports')) {
-      return options.reports === 'fail'
-        ? json({ error: 'internal' }, 500)
-        : json(
-            options.reports !== undefined &&
-              !Array.isArray(options.reports) &&
-              options.reports !== 'fail'
-              ? options.reports.raw
-              : { reports: options.reports ?? [] },
-          );
+      const reports = options.reports ?? [];
+      if (reports === 'fail') return json({ error: 'internal' }, 500);
+      return json(Array.isArray(reports) ? { reports } : reports.raw);
     }
     if (url.includes('/approvals')) {
       const approvals = options.approvals ?? [];
