@@ -1517,6 +1517,10 @@ export {
   ATTACHMENT_MAX_PER_MESSAGE_ENV,
   ATTACHMENT_MAX_TOTAL_BYTES_DEFAULT,
   ATTACHMENT_MAX_TOTAL_BYTES_ENV,
+  ATTACHMENT_MAX_TURN_IMAGES_DEFAULT,
+  ATTACHMENT_MAX_TURN_IMAGES_ENV,
+  ATTACHMENT_MAX_TURN_IMAGE_BYTES_DEFAULT,
+  ATTACHMENT_MAX_TURN_IMAGE_BYTES_ENV,
   ATTACHMENT_EMPTY_MESSAGE,
   ATTACHMENT_NAME_MAX_LENGTH,
   ATTACHMENT_RETENTION_DAYS_DEFAULT,
@@ -1550,7 +1554,11 @@ export {
   type AttachmentStoreOptions,
 } from './attachment.js';
 export { verifyAttachmentStoreContract } from './attachment-contract.js';
-export { resolveTurnAttachments, type ResolvedTurnAttachments } from './attachment-turn.js';
+export {
+  resolveTurnAttachments,
+  resolveTurnAttachmentGroups,
+  type ResolvedTurnAttachments,
+} from './attachment-turn.js';
 export {
   ATTACHMENT_COPY_MAX_AGE_MS,
   attachmentCopiesDir,

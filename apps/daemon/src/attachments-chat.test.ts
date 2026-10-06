@@ -294,7 +294,10 @@ describe('GET /attachments/limits（#3204）', () => {
       maxTotalBytes: 40 * 1024 * 1024,
       retentionDays: 2,
     };
-    const { app } = setupApp({ limits });
+    // ターンの画像の枠（#3696）は入口の検査に使わないので、ここには出さない（値を変えても応答は同じ）。
+    const { app } = setupApp({
+      limits: { ...limits, maxTurnImages: 3, maxTurnImageBytes: 123 },
+    });
     const res = await app.request('/attachments/limits', {
       headers: { authorization: 'Bearer test-token' },
     });

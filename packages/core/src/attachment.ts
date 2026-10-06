@@ -122,6 +122,10 @@ export const ATTACHMENT_MAX_FILE_BYTES_DEFAULT = 25 * MIB;
 export const ATTACHMENT_MAX_PER_MESSAGE_DEFAULT = 10;
 export const ATTACHMENT_MAX_TOTAL_BYTES_DEFAULT = 50 * MIB;
 export const ATTACHMENT_RETENTION_DAYS_DEFAULT = 30;
+/** 1ターン（担い手なら1メッセージ）で画像として渡す枚数の既定（#3696。API は 20 枚を超えると全画像に 2000px の制限を掛ける）。 */
+export const ATTACHMENT_MAX_TURN_IMAGES_DEFAULT = 20;
+/** 1ターンで画像として渡す合計 raw バイトの既定（#3696。base64 で約 21.4 MB。API の 1 リクエスト 32 MB に収める）。 */
+export const ATTACHMENT_MAX_TURN_IMAGE_BYTES_DEFAULT = 16 * MIB;
 /**
  * 保持日数の上限（約100年）。`expiresAt` は `new Date(now + 日数 × 86_400_000).toISOString()` で作るので、
  * 巨大な値は `RangeError: Invalid time value` で全 `put` を 500 にする（Issue #3326）。
@@ -135,6 +139,8 @@ export const ATTACHMENT_MAX_FILE_BYTES_ENV = 'ALTEROID_ATTACHMENT_MAX_FILE_BYTES
 export const ATTACHMENT_MAX_PER_MESSAGE_ENV = 'ALTEROID_ATTACHMENT_MAX_PER_MESSAGE';
 export const ATTACHMENT_MAX_TOTAL_BYTES_ENV = 'ALTEROID_ATTACHMENT_MAX_TOTAL_BYTES';
 export const ATTACHMENT_RETENTION_DAYS_ENV = 'ALTEROID_ATTACHMENT_RETENTION_DAYS';
+export const ATTACHMENT_MAX_TURN_IMAGES_ENV = 'ALTEROID_ATTACHMENT_MAX_TURN_IMAGES';
+export const ATTACHMENT_MAX_TURN_IMAGE_BYTES_ENV = 'ALTEROID_ATTACHMENT_MAX_TURN_IMAGE_BYTES';
 
 export interface AttachmentLimits {
   /** 画像（png / jpeg / webp / gif）1つ。 */
@@ -147,6 +153,13 @@ export interface AttachmentLimits {
   readonly maxTotalBytes: number;
   /** 保持日数。 */
   readonly retentionDays: number;
+  /**
+   * 1ターン（担い手なら1メッセージ）で**画像として渡す**枚数（#3696）。入口の検査（受け付け・保存）には使わない。
+   * 超えた分は画像として渡さず、通知行で開け方を言う。
+   */
+  readonly maxTurnImages: number;
+  /** 1ターンで画像として渡す合計 raw バイト（#3696。使い方は {@link maxTurnImages} と同じ）。 */
+  readonly maxTurnImageBytes: number;
 }
 
 export const DEFAULT_ATTACHMENT_LIMITS: AttachmentLimits = {
@@ -155,6 +168,8 @@ export const DEFAULT_ATTACHMENT_LIMITS: AttachmentLimits = {
   maxPerMessage: ATTACHMENT_MAX_PER_MESSAGE_DEFAULT,
   maxTotalBytes: ATTACHMENT_MAX_TOTAL_BYTES_DEFAULT,
   retentionDays: ATTACHMENT_RETENTION_DAYS_DEFAULT,
+  maxTurnImages: ATTACHMENT_MAX_TURN_IMAGES_DEFAULT,
+  maxTurnImageBytes: ATTACHMENT_MAX_TURN_IMAGE_BYTES_DEFAULT,
 };
 
 /**
@@ -164,6 +179,47 @@ export const DEFAULT_ATTACHMENT_LIMITS: AttachmentLimits = {
 export function formatImageLimit(bytes: number): string {
   const mib = 1024 * 1024;
   return bytes % mib === 0 ? `${bytes / mib} MiB` : `${bytes} B`;
+}
+
+/** ターンの画像の予算で外した理由（#3696）。`count` は枚数、`bytes` は合計。 */
+export type TurnImageOverReason = 'count' | 'bytes';
+
+/**
+ * 1ターン（担い手なら1メッセージ）の画像の予算（#3696）。`take` を呼ぶ順が「枠に入れる優先順」になる。
+ * 入ったものだけが枠を使う（外したものは使わない。1枚の上限（#3325）で外したものは、そもそも `take` を呼ばない）。
+ * 枚数を先に見る。枠に入らなかったものがあっても、あとの小さいものは枠に残りがあれば入る。
+ */
+export class TurnImageBudget {
+  #count = 0;
+  #bytes = 0;
+  readonly #limits: Pick<AttachmentLimits, 'maxTurnImages' | 'maxTurnImageBytes'>;
+
+  constructor(limits: Pick<AttachmentLimits, 'maxTurnImages' | 'maxTurnImageBytes'>) {
+    this.#limits = limits;
+  }
+
+  /** 枠に入るなら使って `undefined`。入らないなら理由（枠は使わない）。 */
+  take(size: number): TurnImageOverReason | undefined {
+    if (this.#count + 1 > this.#limits.maxTurnImages) return 'count';
+    if (this.#bytes + size > this.#limits.maxTurnImageBytes) return 'bytes';
+    this.#count += 1;
+    this.#bytes += size;
+    return undefined;
+  }
+}
+
+/**
+ * ターンの画像の予算で外した理由を、通知行の末尾の括弧書きにする（#3696）。`openHint` は開け方
+ * （クローンは `attachment_fetch で取り出して Read で開ける`、担い手は `path で Read で開ける`）。
+ */
+export function turnImageOverNotice(
+  reason: TurnImageOverReason,
+  limits: Pick<AttachmentLimits, 'maxTurnImages' | 'maxTurnImageBytes'>,
+  openHint: string,
+): string {
+  return reason === 'count'
+    ? `（このターンの画像は上限（${limits.maxTurnImages} 枚）までで、これは超えた分なので画像としては渡していない。${openHint}）`
+    : `（このターンの画像の合計の上限（${formatImageLimit(limits.maxTurnImageBytes)}）を超えるので画像としては渡していない。${openHint}）`;
 }
 
 export interface AttachmentLimitsConfig {
@@ -202,6 +258,11 @@ export function readAttachmentLimits(env: NodeJS.ProcessEnv = process.env): Atta
         ATTACHMENT_RETENTION_DAYS_ENV,
         ATTACHMENT_RETENTION_DAYS_DEFAULT,
         ATTACHMENT_RETENTION_DAYS_MAX,
+      ),
+      maxTurnImages: read(ATTACHMENT_MAX_TURN_IMAGES_ENV, ATTACHMENT_MAX_TURN_IMAGES_DEFAULT),
+      maxTurnImageBytes: read(
+        ATTACHMENT_MAX_TURN_IMAGE_BYTES_ENV,
+        ATTACHMENT_MAX_TURN_IMAGE_BYTES_DEFAULT,
       ),
     },
     notes,

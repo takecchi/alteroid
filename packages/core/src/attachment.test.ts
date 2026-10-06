@@ -92,6 +92,27 @@ describe('添付: 上限', () => {
     expect(bad.notes).toHaveLength(1);
   });
 
+  it('ターンの画像の枚数・合計は既定 20 枚・16 MiB で、環境変数で変えられる（#3696）', () => {
+    const defaults = readAttachmentLimits({});
+    expect(defaults.limits.maxTurnImages).toBe(20);
+    expect(defaults.limits.maxTurnImageBytes).toBe(16 * 1024 * 1024);
+    expect(DEFAULT_ATTACHMENT_LIMITS.maxTurnImages).toBe(20);
+    const changed = readAttachmentLimits({
+      ALTEROID_ATTACHMENT_MAX_TURN_IMAGES: '5',
+      ALTEROID_ATTACHMENT_MAX_TURN_IMAGE_BYTES: '1000',
+    });
+    expect(changed.limits.maxTurnImages).toBe(5);
+    expect(changed.limits.maxTurnImageBytes).toBe(1000);
+    expect(changed.notes).toEqual([]);
+    const bad = readAttachmentLimits({
+      ALTEROID_ATTACHMENT_MAX_TURN_IMAGES: '0',
+      ALTEROID_ATTACHMENT_MAX_TURN_IMAGE_BYTES: 'big',
+    });
+    expect(bad.limits.maxTurnImages).toBe(20);
+    expect(bad.limits.maxTurnImageBytes).toBe(16 * 1024 * 1024);
+    expect(bad.notes).toHaveLength(2);
+  });
+
   it('保持日数は上限（36500 日）まで。超えたら notes に落として既定へ倒し、put が RangeError にならない（#3326）', async () => {
     const atMax = readAttachmentLimits({
       [ATTACHMENT_RETENTION_DAYS_ENV]: '36500',
