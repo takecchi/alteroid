@@ -193,6 +193,8 @@ import { CloneDistillMemoryState } from './clone-distill-memory-state.js';
 import { CloneInboxFlow } from './clone-inbox-flow.js';
 import { CloneNotices } from './clone-notices.js';
 import { CloneSdkSession } from './clone-sdk-session.js';
+import { resolveTurnAttachments } from './attachment-turn.js';
+import { stripNul } from './nul-guard.js';
 import { composeTurnInputText, turnInputEntry } from './turn-input.js';
 import type { AccountUsageState } from './usage-snapshot.js';
 import {
@@ -4214,7 +4216,15 @@ class Clone implements CloneHost {
     const head = events[0];
     if (head === undefined) return;
     const priorTexts = await this.#resolvePriorTexts(events);
-    await this.#runTurn(head.conversationId, humanTurnText(events, priorTexts));
+    // 添付（Issue #3111 段1b）。中身はここで読むだけで、受信箱・日誌・記憶へは写さない。
+    const { images, notices } = await resolveTurnAttachments(this.#stores.attachments, events);
+    await this.#runTurn(
+      head.conversationId,
+      humanTurnText(events, priorTexts, notices),
+      'normal',
+      null,
+      images,
+    );
   }
 
   /**
@@ -5329,6 +5339,19 @@ class Clone implements CloneHost {
         text: event.text,
         conversationId: event.conversationId,
         ...(event.supersedes === undefined ? {} : { supersedes: event.supersedes }),
+        // 添付はメタデータだけを写す（中身は `stores.attachments`。日誌へは書かない）。
+        // ファイル名は `stripNul`（pg の `stripNulls` と同じ規則）を通す。
+        ...(event.attachments === undefined || event.attachments.length === 0
+          ? {}
+          : {
+              attachments: event.attachments.map((ref) => ({
+                id: ref.id,
+                name: stripNul(ref.name),
+                mediaType: ref.mediaType,
+                size: ref.size,
+                sha256: ref.sha256,
+              })),
+            }),
       }),
     );
 
@@ -12246,10 +12269,16 @@ function isExternalEvent(event: InboxEvent): event is ExternalEvent {
 export function humanTurnText(
   events: HumanMessage[],
   priorTexts: ReadonlyMap<string, string> = new Map(),
+  attachmentNotices: ReadonlyMap<string, string> = new Map(),
 ): string {
   const head = events[0];
   if (head === undefined) return '';
-  if (events.length === 1) return editedTurnBody(head, priorTexts.get(head.id));
+  const bodyOf = (event: HumanMessage): string => {
+    const body = editedTurnBody(event, priorTexts.get(event.id));
+    const notice = attachmentNotices.get(event.id);
+    return notice === undefined ? body : `${body}\n\n${notice}`;
+  };
+  if (events.length === 1) return bodyOf(head);
 
   return [
     `[system] 前のターンを処理しているあいだに人間から届いた発言を、続けて **${events.length} 件** ` +
@@ -12263,7 +12292,7 @@ export function humanTurnText(
       (event, index) =>
         `**(${index + 1}) ${event.at}**` +
         `${event.supersedes === undefined ? '' : '（既出発言の編集）'}` +
-        `\n\n${editedTurnBody(event, priorTexts.get(event.id))}\n`,
+        `\n\n${bodyOf(event)}\n`,
     ),
   ].join('\n');
 }
