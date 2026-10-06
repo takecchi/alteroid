@@ -372,3 +372,40 @@ describe('添付だけの発言（本文が空）', () => {
     expect(await stores.journal.list({ types: ['exchange'], with: ['human'] })).toEqual([]);
   });
 });
+
+describe('孤立サロゲートを含む会話 id は入口で断る（#3560）', () => {
+  // `POST /chat` の `conversationId` は JSON の `"\ud83d"` も通り、pg の添付は U+FFFD へ書き換えて残す
+  // （同じ添付の再 bind が conflict になる・別々の id が同じ値に潰れる）。黙って正規化せず 400 で断る。
+  it.each([
+    ['上位だけ', 'conv-\ud83d'],
+    ['下位だけ', 'conv-\ude00-x'],
+    ['上位の後ろに下位でないもの', 'conv-\ud83dx'],
+  ])('%s: 400 で、何も積まず、添付も結ばない', async (_label, conversationId) => {
+    const { app, stores } = setupApp();
+    const meta = (await (await upload(app, PNG)).json()) as Meta;
+
+    const res = await chat(app, { text: '孤立', conversationId, attachments: [meta.id] });
+
+    expect(res.status).toBe(400);
+    const body = await res.text();
+    expect(body).toContain('conversationId');
+    expect(body).not.toContain(conversationId);
+    const journal = await stores.journal.list({ types: ['exchange'], with: ['human'] });
+    expect(journal.some((e) => e.type === 'exchange' && e.text === '孤立')).toBe(false);
+    expect((await stores.inbox.peekPending()).entries).toEqual([]);
+    expect((await stores.attachments.getMeta(meta.id))?.conversationId).toBeUndefined();
+  });
+
+  it('正しいサロゲート対（絵文字）を含む会話 id は従来どおり通り、添付も結ばれる', async () => {
+    const { app, stores } = setupApp();
+    const meta = (await (await upload(app, PNG)).json()) as Meta;
+    const res = await chat(app, {
+      text: '絵文字',
+      conversationId: 'conv-\u{1f600}',
+      attachments: [meta.id],
+    });
+    expect(res.status).toBe(200);
+    await res.text();
+    expect((await stores.attachments.getMeta(meta.id))?.conversationId).toBe('conv-\u{1f600}');
+  });
+});
