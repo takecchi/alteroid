@@ -191,7 +191,12 @@ function stubCrudScreen(
     return json({ tokens: rows, settings: DEFAULT_SETTINGS });
   }) as typeof fetch;
 
-  return { puts };
+  /** 別のタブや CLI が先に1本消した状態を作る（画面はまだ古い一覧を持っている）。 */
+  const dropRow = (id: string) => {
+    rows = rows.filter((row) => row.id !== id);
+  };
+
+  return { puts, dropRow };
 }
 
 describe('/tokens 画面 — プールの4状態', () => {
@@ -818,6 +823,45 @@ describe('/tokens 画面 — 追加・削除・無効化/有効化（2026-09-14�
 
     expect(await screen.findByText(/無効化済み/)).toBeTruthy();
     expect(puts).toEqual([[{ id: 't-a', label: 'token-a', order: 0, disabled: true }]]);
+  });
+
+  it('別の所で先に消された行を「削除する」と、PUT せず「見つかりません」を出し、その行は画面から消える（#3147）', async () => {
+    const { puts, dropRow } = stubCrudScreen([
+      { id: 't-a', label: 'token-a', order: 0, sha256: 'a'.repeat(12) },
+      { id: 't-b', label: 'token-b', order: 1, sha256: 'b'.repeat(12) },
+    ]);
+    renderTokens();
+    await waitForPoolLoaded();
+    expect(await screen.findByText('token-a')).toBeTruthy();
+
+    dropRow('t-a');
+    fireEvent.click(screen.getAllByText('削除')[0]!);
+    fireEvent.click(
+      within(await screen.findByRole('alertdialog')).getByRole('button', { name: '削除する' }),
+    );
+
+    expect(await screen.findByText(/id t-a のトークンは見つかりません/)).toBeTruthy();
+    await waitFor(() => expect(screen.queryByText('token-a')).toBeNull());
+    expect(screen.getByText('token-b')).toBeTruthy();
+    expect(puts).toHaveLength(0);
+  });
+
+  it('別の所で先に消された行を「無効化する」と、PUT せず「見つかりません」を出し、その行は画面から消える（#3147）', async () => {
+    const { puts, dropRow } = stubCrudScreen([
+      { id: 't-a', label: 'token-a', order: 0, sha256: 'a'.repeat(12) },
+      { id: 't-b', label: 'token-b', order: 1, sha256: 'b'.repeat(12) },
+    ]);
+    renderTokens();
+    await waitForPoolLoaded();
+    expect(await screen.findByText('token-a')).toBeTruthy();
+
+    dropRow('t-a');
+    fireEvent.click(screen.getAllByRole('button', { name: '無効化する' })[0]!);
+
+    expect(await screen.findByText(/id t-a のトークンは見つかりません/)).toBeTruthy();
+    await waitFor(() => expect(screen.queryByText('token-a')).toBeNull());
+    expect(screen.getByText('token-b')).toBeTruthy();
+    expect(puts).toHaveLength(0);
   });
 
   it('戻す（有効化）と disabled: false で PUT される', async () => {
