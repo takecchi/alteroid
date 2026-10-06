@@ -862,7 +862,8 @@ export function ChatPane({
     saveChatDraft(waiting.id, waiting.text);
   }, []);
   useEffect(() => {
-    if (pendingDraftSave.current !== null && pendingDraftSave.current.id !== shownId) flushDraftSave();
+    if (pendingDraftSave.current !== null && pendingDraftSave.current.id !== shownId)
+      flushDraftSave();
     if (draft === '') {
       pendingDraftSave.current = null;
       saveChatDraft(shownId, '');
