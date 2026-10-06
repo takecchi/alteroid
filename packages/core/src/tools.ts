@@ -83,6 +83,7 @@ import {
 } from './dropped-record.js';
 import { collapseErrorCause } from './error-cause.js';
 import { renderApprovalTrace, traceApproval } from './approval-trace.js';
+import { stripNulDeep } from './nul-guard.js';
 import { validatePermissionRequest } from './permission-rule.js';
 import { encodeRunnerCursor, resolveRunnerCursor } from './runner-cursor.js';
 import { encodeTokenCursor, resolveTokenCursor } from './token-cursor.js';
@@ -7087,7 +7088,12 @@ export function createCloneTools(context: ToolContext) {
           .describe('この規則が拒むべき具体的なコマンド例（1件以上、1件も規則に一致しないこと）'),
         reason: z.string().describe('なぜこの許可が要るか。人間が承認画面で読む理由文'),
       },
-      async ({ rule, allows, denies, reason }) => {
+      async (args) => {
+        // **検算は、承認の行に残る値と同じもので行う（#3386）。** 承認の行は `putApproval` の入口で
+        // NUL を落として残す（`stripNulDeep`）ので、落とす前の値で検算すると、通ったはずの要求が
+        // 残った値では自己矛盾する（denies の例が規則に一致する・規則が `Bash()` になる）。
+        // 質問文・`permissionRequest`・検算の3つが同じ値を見るよう、入口で1度だけ落とす。
+        const { rule, allows, denies, reason } = stripNulDeep(args);
         const validation = validatePermissionRequest({ rule, allows, denies });
         if (!validation.ok) {
           return text(
