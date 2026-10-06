@@ -4,7 +4,8 @@ import { SettingsTabs } from '~/components/group-tabs';
 import { LoadError } from '~/components/load-error';
 import { settingsDocumentTitle } from '~/lib/nav';
 import { maskUrl } from '@alteroid/core/mask-url';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { useBlocker } from 'react-router';
 
 import {
   Page,
@@ -12,6 +13,7 @@ import {
   Button,
   Card,
   CardHeader,
+  ConfirmDialog,
   ErrorNote,
   KeyValueList,
   Spinner,
@@ -200,6 +202,24 @@ function McpServersEditor({ current }: { current: McpServersState }) {
   const original = toMcpJson(current.mcpServers);
   const unchanged = editing && draft === original;
   const parsed = editing ? parseMcpJson(draft) : null;
+  // 編集欄が開いていて、元の登録から変わっていれば書きかけ（#3370）。
+  const dirty = editing && !unchanged;
+  const [confirmingClose, setConfirmingClose] = useState(false);
+  /**
+   * **書きかけがあるまま離れない。** `memory-detail.tsx` と同じ形: アプリ内の移動は確認を挟み、
+   * タブを閉じる・再読み込みはブラウザの警告に任せる。
+   */
+  const blocker = useBlocker(() => dirty);
+  useEffect(() => {
+    if (!dirty) return;
+    const warn = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      // 古いブラウザは returnValue を入れないと出さない。
+      event.returnValue = '';
+    };
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  }, [dirty]);
   const draftClears = parsed !== null && parsed.ok && Object.keys(parsed.servers).length === 0;
 
   async function submit(servers: McpServers) {
@@ -293,7 +313,15 @@ function McpServersEditor({ current }: { current: McpServersState }) {
                   {draftClears ? '空で保存する（外す）' : '保存する'}
                 </Button>
                 <SubmitHint action="保存" />
-                <Button variant="ghost" size="sm" disabled={busy} onClick={() => setDraft(null)}>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  disabled={busy}
+                  onClick={() => {
+                    if (dirty) setConfirmingClose(true);
+                    else setDraft(null);
+                  }}
+                >
                   編集を閉じる
                 </Button>
                 {unchanged && (
@@ -351,6 +379,31 @@ function McpServersEditor({ current }: { current: McpServersState }) {
 
         {result !== null && <UpdateReport before={result.before} update={result.update} />}
       </div>
+      <ConfirmDialog
+        open={confirmingClose}
+        onOpenChange={setConfirmingClose}
+        title="書きかけの編集があります"
+        description="このまま閉じると、いま書いている内容は失われます。"
+        confirmLabel="破棄して閉じる"
+        destructive
+        onConfirm={() => {
+          setDraft(null);
+          setConfirmingClose(false);
+        }}
+      />
+      <ConfirmDialog
+        open={blocker.state === 'blocked'}
+        onOpenChange={(open) => {
+          if (!open && blocker.state === 'blocked') blocker.reset();
+        }}
+        title="保存していない変更があります"
+        description="このまま離れると、書きかけの内容は失われます。"
+        confirmLabel="破棄して離れる"
+        destructive
+        onConfirm={() => {
+          if (blocker.state === 'blocked') blocker.proceed();
+        }}
+      />
     </Card>
   );
 }
