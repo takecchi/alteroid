@@ -24,6 +24,10 @@ import type { JournalStore } from './store.js';
  * 5. **`''`（空文字列）= 絞らない**（`matchesJournalSearch` の doc）
  * 6. **`limit` より前に効く**（`with` の契約4と同じ形。#418 の穴の本体）
  *
+ * 加えて**欄ごとに別々に当てる**こと（issue #3289）。全欄を繋いだ1本の文字列に当てると、
+ * 欄をまたぐ `q` が当たり、`q: '\n'` が探す欄を持たない種別（`worker_wait`）にも当たる。
+ * 3実装で揃える（pg は欄ごとの `ILIKE` の `OR`）。
+ *
  * そして**対象外の欄が本当に対象外であること**（`tool_use` の `input`）と、
  * **対象内の欄が本当に対象内であること**（`tool_use` の `error`。#924）も
  * 測る。ここが実装ごとに違うと、「当たらない」の意味が実装ごとに変わる。
@@ -78,6 +82,33 @@ export async function verifyJournalStoreSearchContract(
     outcome: 'failed',
     error: `${TAG}: キュウリの育て方`,
   });
+
+  // 欄ごとの照合（issue #3289）。2つの欄に分けて持つ行（`decision` と `grounds`）は、
+  // 欄をまたぐ q に当たってはならない。間に別の欄（`error`）が空で挟まるので、全欄を改行で繋ぐと
+  // `'alpha\n\nbeta'` が当たっていた。1つの欄の中の改行は従来どおり当たる。
+  const split = await journal.append({
+    type: 'decision',
+    decision: `${TAG}: alpha`,
+    grounds: 'beta',
+  });
+  const oneField = await journal.append({
+    type: 'exchange',
+    with: 'human',
+    role: 'inbound',
+    text: `${TAG}: gamma\ndelta`,
+  });
+  // 探す欄を持たない種別。`q: '\n'` のような区切りだけの語が当たってはならない。
+  const fieldless = await journal.append({
+    type: 'worker_wait',
+    openedAt: new Date().toISOString(),
+    tasks: 1,
+    turns: 1,
+    byCause: { notification: 0, continuation: 0, input: 0 },
+    toolless: 0,
+    notifications: 0,
+    submits: 0,
+    settled: true,
+  } as never);
 
   const ids = async (q: string, extra: { limit?: number } = {}): Promise<string[]> =>
     (await journal.list({ q, ...extra })).map((entry) => entry.id);
@@ -151,6 +182,48 @@ export async function verifyJournalStoreSearchContract(
     throw new Error(
       "JournalStore の q 契約（5: ''=絞らない）が破れている — " +
         `q: '' が、積んだ行（id=${target.id}）を返さなかった（0件へ倒している疑い）。`,
+    );
+  }
+
+  // --- 契約: 欄ごとに別々に当てる（issue #3289） ---
+  for (const crossing of [
+    'alpha\nbeta',
+    'alpha\n\nbeta',
+    `${TAG}: alpha\nbeta`,
+    `alpha\n\n\nbeta`,
+  ]) {
+    if ((await ids(crossing)).includes(split.id)) {
+      throw new Error(
+        'JournalStore の q 契約（欄ごとに当てる）が破れている — ' +
+          `decision と grounds に分けて持つ行（id=${split.id}）が、欄をまたぐ q: ${JSON.stringify(crossing)} に当たった。`,
+      );
+    }
+  }
+  for (const word of ['alpha', 'beta']) {
+    if (!(await ids(word)).includes(split.id)) {
+      throw new Error(
+        'JournalStore の q 契約（欄ごとに当てる）が破れている — ' +
+          `decision と grounds に分けて持つ行（id=${split.id}）が、1つの欄の中の語 q: ${JSON.stringify(word)} に当たらなかった。`,
+      );
+    }
+  }
+  if (!(await ids('gamma\ndelta')).includes(oneField.id)) {
+    throw new Error(
+      'JournalStore の q 契約（欄ごとに当てる）が破れている — ' +
+        `1つの欄の中の改行を含む q: 'gamma\\ndelta' が、その欄を持つ行（id=${oneField.id}）に当たらなかった。`,
+    );
+  }
+  if ((await ids('\n')).includes(fieldless.id)) {
+    throw new Error(
+      'JournalStore の q 契約（欄ごとに当てる）が破れている — ' +
+        `探す欄を持たない種別（worker_wait。id=${fieldless.id}）が、q: '\\n' に当たった。`,
+    );
+  }
+  // 空の語は「絞らない」。探す欄を持たない種別も含めて全件に当たる（契約5と同じ線）。
+  if (!(await ids('')).includes(fieldless.id)) {
+    throw new Error(
+      "JournalStore の q 契約（''=絞らない）が破れている — " +
+        `q: '' が、探す欄を持たない種別（worker_wait。id=${fieldless.id}）を返さなかった。`,
     );
   }
 
