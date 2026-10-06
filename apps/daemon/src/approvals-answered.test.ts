@@ -57,8 +57,11 @@ function requestOver(stores: Stores) {
     token: 'test-token',
     shutdown: () => {},
   });
-  return async (path: string) =>
-    app.request(path, { headers: { authorization: 'Bearer test-token' } });
+  return async (path: string, init: RequestInit = {}) =>
+    app.request(path, {
+      ...init,
+      headers: { authorization: 'Bearer test-token', ...(init.headers as object | undefined) },
+    });
 }
 
 function approval(id: string, over: Partial<PendingApproval> = {}): PendingApproval {
@@ -89,7 +92,7 @@ const SEED: PendingApproval[] = [
   approval('ap-open'),
 ];
 
-type Get = (path: string) => Promise<Response>;
+type Get = (path: string, init?: RequestInit) => Promise<Response>;
 
 /** fs / pg 共通。 */
 function suite(open: () => Promise<{ get: Get; stores: Stores }>) {
@@ -252,6 +255,105 @@ function suite(open: () => Promise<{ get: Get; stores: Stores }>) {
     expect(Object.keys((await response.json()) as object)).toEqual(['dates']);
     // 3区間の既存の口は今までどおり id として読まれる（無い id は 404）
     expect((await get('/approvals/answered-dates/trace')).status).toBe(404);
+  });
+
+  it('GET /approvals/:id: 承認1件と、決着した日（localDate）を返す。日の境界は answeredOn と同じ', async () => {
+    const { get } = await seeded();
+    const settledOn = async (id: string) => {
+      const response = await get(`/approvals/${id}`);
+      expect(response.status, id).toBe(200);
+      return (await response.json()) as {
+        approval: { id: string; question: string; updatedAt: string };
+        settledOn: string | null;
+      };
+    };
+    // 東京の日の最後の 1ms / 最初の 1ms（UTC の日付とは別）
+    expect((await settledOn('ap-a')).settledOn).toBe('2026-09-29');
+    expect((await settledOn('ap-b')).settledOn).toBe('2026-09-30');
+    expect((await settledOn('ap-c')).settledOn).toBe('2026-09-30');
+    expect((await settledOn('ap-f')).settledOn).toBe('2026-10-01');
+    // 取り下げ済みは withdrawnAt の日
+    expect((await settledOn('ap-d')).settledOn).toBe('2026-09-30');
+    // 両方在る行は回答の日
+    expect((await settledOn('ap-g')).settledOn).toBe('2026-09-28');
+    // 中身は一覧の1行と同じ（updatedAt つき）
+    const body = await settledOn('ap-d');
+    expect(body.approval).toMatchObject({
+      id: 'ap-d',
+      question: '質問 ap-d',
+      updatedAt: '2026-09-30T05:00:00.000Z',
+    });
+  });
+
+  it('GET /approvals/:id: 未回答・未取り下げの settledOn は null（鍵は在る）', async () => {
+    const { get } = await seeded();
+    const response = await get('/approvals/ap-open');
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { approval: { id: string }; settledOn: null };
+    expect(Object.keys(body)).toEqual(['approval', 'settledOn']);
+    expect(body.approval.id).toBe('ap-open');
+    expect(body.settledOn).toBeNull();
+  });
+
+  it('GET /approvals/:id: settledOn の日は、その id を answeredOn が返す日と必ず一致する（二重の定義が無い）', async () => {
+    const { get } = await seeded();
+    for (const row of SEED) {
+      const { settledOn } = (await (await get(`/approvals/${row.id}`)).json()) as {
+        settledOn: string | null;
+      };
+      if (settledOn === null) {
+        expect(row.id).toBe('ap-open');
+        continue;
+      }
+      expect(await ids(get, `?answeredOn=${settledOn}`), row.id).toContain(row.id);
+    }
+  });
+
+  it('GET /approvals/:id: 日の区切りはデーモンの TZ に従う', async () => {
+    const { get } = await seeded();
+    const before = process.env.TZ;
+    try {
+      process.env.TZ = 'America/Los_Angeles';
+      // ap-e（UTC 9/30 05:00）は、ロサンゼルスでは 9/29 の 22:00
+      const body = (await (await get('/approvals/ap-e')).json()) as { settledOn: string };
+      expect(body.settledOn).toBe('2026-09-29');
+    } finally {
+      process.env.TZ = before ?? 'Asia/Tokyo';
+    }
+  });
+
+  it('GET /approvals/:id: 無い id は /approvals/:id/trace と同じ形の 404', async () => {
+    const { get } = await seeded();
+    const byId = await get('/approvals/no-such');
+    expect(byId.status).toBe(404);
+    const trace = await get('/approvals/no-such/trace');
+    expect(trace.status).toBe(404);
+    const byIdBody = await byId.json();
+    expect(byIdBody).toEqual(await trace.json());
+    expect(byIdBody).toEqual({ error: 'not found' });
+  });
+
+  it('GET /approvals/:id は answered-dates / answer の経路を食わない', async () => {
+    const { get } = await seeded();
+    // answered-dates は目次のまま（id として読まれて 404 / approval 形にならない）
+    const dates = await get('/approvals/answered-dates');
+    expect(dates.status).toBe(200);
+    expect(Object.keys((await dates.json()) as object)).toEqual(['dates']);
+    // 同じ形の他の経路は今までどおり
+    const post = { method: 'POST', headers: { 'content-type': 'application/json' } };
+    const bulk = await get('/approvals/answer', {
+      ...post,
+      body: JSON.stringify({ answers: [{ id: 'ap-open', answer: 'よい' }] }),
+    });
+    expect(bulk.status).toBe(200);
+    expect(Object.keys((await bulk.json()) as object)).toEqual(['results']);
+    const one = await get('/approvals/ap-open/answer', {
+      ...post,
+      body: JSON.stringify({ answer: 'よい' }),
+    });
+    expect(one.status).not.toBe(404);
+    // 3区間の既存の口も今までどおり
+    expect((await get('/approvals/ap-a/trace')).status).toBe(200);
   });
 
   it('日の区切りはデーモンの TZ に従う（同じ瞬間でも TZ が違えば日が違う）', async () => {

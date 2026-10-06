@@ -8,7 +8,7 @@ import { makeTempDir } from '../../../../vitest.tmpdir.js';
 
 import { AttachmentMissingError } from '../attachments.js';
 import { ChatController, MAX_ENTRIES, RESUME_PROBE_LIMIT } from './chat-controller.js';
-import { ApiError } from './api.js';
+import { ApiError, NotDeliveredError } from './api.js';
 import { fakeApi, gate } from './fake-api.js';
 
 const open = (conversationId: string) => ({ type: 'open' as const, conversationId });
@@ -147,6 +147,90 @@ describe('send', () => {
     const { api, controller } = setup();
     await controller.send('');
     expect(api.chatCalls).toEqual([]);
+  });
+});
+
+describe('受け取られないまま失敗した送信は、文を戻せる形で返る（#3405）', () => {
+  it('繋がらない・非 ok の応答（イベントが 1 つも来ない）は false。送ったように見える行は「送れなかった発言」の断りに替わる', async () => {
+    const { api, controller, state, texts } = setup();
+    api.scripts.push([new NotDeliveredError('送信できませんでした（HTTP 503）')]);
+    expect(await controller.send('書いた長い文')).toBe(false);
+    expect(texts('user')).toEqual([]);
+    expect(texts('system')).toEqual(['送れなかった発言:\n書いた長い文']);
+    expect(texts('error')).toEqual(['送信できませんでした（HTTP 503）']);
+    expect(state()).toMatchObject({ busy: false, transient: null });
+    expect(controller.hasAttachments()).toBe(false);
+  });
+
+  it('受け取られたか分からない失敗（接続が途中で切れた）は true のまま。行も残す（送り直さない）', async () => {
+    const { api, controller, texts } = setup();
+    api.scripts.push([new ApiError('送信できませんでした: 接続が切れました（x）')]);
+    expect(await controller.send('書いた文')).toBe(true);
+    expect(texts('user')).toEqual(['書いた文']);
+  });
+
+  it('イベントが来たあとの失敗は、受け取られているので true', async () => {
+    const { api, controller, texts } = setup();
+    api.scripts.push([open('c1'), new NotDeliveredError('途中')]);
+    expect(await controller.send('書いた文')).toBe(true);
+    expect(texts('user')).toEqual(['書いた文']);
+  });
+
+  it('追送が受け取られなかったとき（会話が決まらない・非 ok）も false で、行は断りに替わる', async () => {
+    const { api, controller, texts } = setup();
+    const g = gate();
+    api.scripts.push([g.wait, open('c1'), { type: 'done' }]);
+    api.scripts.push([new NotDeliveredError('送信できませんでした（HTTP 409）')]);
+    const first = controller.send('一つ目');
+    const follow = controller.send('追送');
+    g.open();
+    expect(await follow).toBe(false);
+    await first;
+    expect(texts('system')).toContain('送れなかった発言:\n追送');
+    expect(texts('user')).toEqual(['一つ目']);
+  });
+
+  it('追送で会話が決まらないまま接続が終わったときも false', async () => {
+    const { api, controller } = setup();
+    const g = gate();
+    api.scripts.push([g.wait, new Error('落ちた')]);
+    const first = controller.send('一つ目');
+    const follow = controller.send('追送');
+    g.open();
+    expect(await follow).toBe(false);
+    await first;
+  });
+});
+
+describe('done も error も無いまま閉じたら、途中で切れたと言う（#3410）', () => {
+  it('open のあとで閉じたら、受け取った分だけを出していると言う。既読にしない', async () => {
+    const { api, controller, texts } = setup();
+    api.scripts.push([open('c1'), { type: 'text', text: '途中' }]);
+    await controller.send('質問');
+    expect(texts('assistant')).toEqual(['途中']);
+    expect(texts('system').join('\n')).toContain('応答が途中で切れた');
+    expect(api.readMarks).toEqual([]);
+  });
+
+  it('open の前に閉じたら、受け取られたか分からないと言う', async () => {
+    const { api, controller, texts } = setup();
+    api.scripts.push([]);
+    await controller.send('質問');
+    expect(texts('system').join('\n')).toContain('受け取られたかは分からない');
+  });
+
+  it('done で閉じたら何も足さない', async () => {
+    const { api, controller, texts } = setup();
+    api.scripts.push([open('c1'), { type: 'text', text: '答え' }, { type: 'done' }]);
+    await controller.send('質問');
+    expect(texts('system')).toEqual([]);
+  });
+
+  it('error / usage_limited で閉じたときは、その知らせだけで足さない', async () => {
+    const { api, controller, texts } = setup();
+    api.scripts.push([open('c1'), { type: 'error', message: '失敗' }]);
+    await controller.send('質問');
+    expect(texts('system').join('\n')).not.toContain('途中で切れた');
   });
 });
 

@@ -10,7 +10,7 @@
  * この画面が「実行中」としか言わないと、同じ仕事を見て人間とクローンで見えている
  * ものが食い違う（北極星 禁止1 を逆向きに踏む）。
  */
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -2457,5 +2457,36 @@ describe('「話しかける」と待ちの行は、send の戻り値を使い�
     fireEvent.click(screen.getByRole('button', { name: '「DB はどちらにする？」へ答えを送信' }));
     await waitFor(() => expect(textarea.value).toBe(''));
     expect(screen.queryByText(/畳めなかった。/)).toBeNull();
+  });
+
+  it('質問の行は、⌘/Ctrl+Enter で送って未達だったとき、欄へフォーカスを戻す（#3301）', async () => {
+    renderDetailWithMessages(
+      {
+        ...BASE,
+        status: 'waiting_human',
+        waiting: [
+          { requestId: 'req-q', summary: 'DB はどちらにする？', kind: 'question', askedAt },
+        ],
+      },
+      { outcome: 'declined', detail: '畳めなかった。' },
+    );
+    expect(await screen.findByText('DB はどちらにする？')).toBeTruthy();
+    const textarea = screen.getByPlaceholderText(
+      'この質問への答えを、自分の言葉で書く',
+    ) as HTMLTextAreaElement;
+    fireEvent.change(textarea, { target: { value: 'PostgreSQL' } });
+    textarea.focus();
+    fireEvent.keyDown(textarea, { key: 'Enter', ctrlKey: true });
+    expect(textarea.disabled).toBe(true);
+    // jsdom は disabled にしてもフォーカスを外さない（blur() も効かない）。ブラウザは外すので真似る。
+    act(() => {
+      textarea.disabled = false;
+      textarea.blur();
+      textarea.disabled = true;
+    });
+    expect(document.activeElement).toBe(document.body);
+    await screen.findByText(/届けていない.*畳めなかった。/);
+    await waitFor(() => expect(textarea.disabled).toBe(false));
+    expect(document.activeElement).toBe(textarea);
   });
 });

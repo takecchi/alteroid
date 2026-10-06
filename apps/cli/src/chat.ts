@@ -398,6 +398,9 @@ async function renderChatEvents(
   // 返答が最後まで表示されたか（`done` が来て、`error` / `usage_limited` が無かった）。既読にする条件。
   let completed = false;
   let failedOrLimited = false;
+  // `done` / `error` / `usage_limited` のどれかで終わったか（例外で切れたときも、そちらの文で言うので真にする）。
+  let ended = false;
+  let sawEvent = false;
   // **本文は改行までためて、行ごとに伏せてから書く**（#2635）。チャンクごとに伏せると、
   // 2つのチャンクにまたがったトークンはどちらの断片も規則に合わずに出る。端末へ書いた
   // ものは取り消せないので、まだ改行の来ていない残りは `pending` に持ち、ほかの出来事の
@@ -411,6 +414,7 @@ async function renderChatEvents(
 
   try {
     for await (const event of events) {
+      sawEvent = true;
       if (event.name !== 'text') flushPending();
       switch (event.name) {
         case 'open': {
@@ -447,6 +451,7 @@ async function renderChatEvents(
           break;
         }
         case 'usage_limited': {
+          ended = true;
           const data = event.json<{ message: string }>();
           if (data) {
             stdout.write(`\n  ! ${redactError(data.message)}\n`);
@@ -458,9 +463,11 @@ async function renderChatEvents(
           break;
         }
         case 'done':
+          ended = true;
           completed = true;
           break;
         case 'error': {
+          ended = true;
           failedOrLimited = true;
           const data = event.json<{ message: string }>();
           stdout.write(`\nエラー: ${data ? redactError(data.message) : '不明'}\n`);
@@ -473,6 +480,7 @@ async function renderChatEvents(
   } catch (error) {
     // 応答の途中で切れた（SSE の切断）。ここまでに知った会話 id を返し、REPL が続けられるようにする。
     flushPending();
+    ended = true;
     stdout.write(
       `\nエラー: 応答が途中で切れました（${redactError(error instanceof Error ? error.message : String(error))}）\n`,
     );
@@ -481,6 +489,14 @@ async function renderChatEvents(
 
   flushPending();
   if (wrote) stdout.write('\n');
+  if (!ended) {
+    // 終端が無いまま正常に閉じた（プロキシ・再起動など）。途中までの返答を、完成したものに見せない（#3410）。
+    stdout.write(
+      !sawEvent
+        ? '  ! 応答が来ないまま接続が閉じました。発言が受け取られたかは分かりません\n'
+        : '  ! 応答が途中で切れました（done も error も来ないまま接続が閉じました。出ているのは受け取った分だけです）\n',
+    );
+  }
   if (completed && !failedOrLimited && nextConversationId !== null) {
     await markConversationReadAfterReply(target, nextConversationId);
   }
@@ -2080,13 +2096,28 @@ export async function runSlashCommand(
         stdout.write(`[${reference}] は /approvals の一覧にありません\n`);
         return 'ok';
       }
-      const response = await client.approvals.$get({ query: { order: 'asc', pending: 'false' } });
-      if (!response.ok) {
-        stdout.write(`${await withDetail('承認待ちを読めませんでした', response)}\n`);
-        return 'ok';
+      // **id（番号でない参照）は、id で1件引く口（`GET /approvals/:id`）1回で済ませる。**
+      // 番号は `/approvals` の並びから id を引いた後も、従来どおり全件から探す。
+      let approval;
+      if (/^\d+$/.test(reference)) {
+        const response = await client.approvals.$get({
+          query: { order: 'asc', pending: 'false' },
+        });
+        if (!response.ok) {
+          stdout.write(`${await withDetail('承認待ちを読めませんでした', response)}\n`);
+          return 'ok';
+        }
+        const { approvals } = await response.json();
+        approval = approvals.find((entry) => entry.id === id);
+      } else {
+        const response = await client.approvals[':id'].$get({ param: { id } });
+        // 404 だけが「見つからない」。それ以外の失敗（409＝読めない行・5xx）は、読めなかったと言う。
+        if (response.status !== 404 && !response.ok) {
+          stdout.write(`${await withDetail('承認待ちを読めませんでした', response)}\n`);
+          return 'ok';
+        }
+        approval = response.ok ? (await response.json()).approval : undefined;
       }
-      const { approvals } = await response.json();
-      const approval = approvals.find((entry) => entry.id === id);
       if (approval === undefined) {
         stdout.write(`[${reference}] （${id}）は見つかりませんでした\n`);
         return 'ok';
@@ -2132,15 +2163,31 @@ export async function runSlashCommand(
       // 承認待ちへ、構造化のつもりの字面をそのまま自由文として送ってしまうため。
       let structured: ReturnType<typeof parseStructuredAnswer> | null = null;
       if (/(^|\s)--(select|other)(=|\s|$)/.test(line)) {
-        const lookup = await client.approvals.$get({ query: { order: 'asc', pending: 'false' } });
-        if (!lookup.ok) {
-          stdout.write(
-            `${await withDetail('承認待ちを読めなかったので、回答を送っていません', lookup)}\n`,
-          );
-          return 'ok';
+        // id（番号でない参照）は `GET /approvals/:id` 1回。番号は従来どおり全件から探す。
+        let target;
+        if (/^\d+$/.test(reference)) {
+          const lookup = await client.approvals.$get({
+            query: { order: 'asc', pending: 'false' },
+          });
+          if (!lookup.ok) {
+            stdout.write(
+              `${await withDetail('承認待ちを読めなかったので、回答を送っていません', lookup)}\n`,
+            );
+            return 'ok';
+          }
+          const { approvals } = await lookup.json();
+          target = approvals.find((entry) => entry.id === id);
+        } else {
+          const lookup = await client.approvals[':id'].$get({ param: { id } });
+          // 404 だけが「見つからない」。409（読めない行）・5xx は読めなかったと言う。
+          if (lookup.status !== 404 && !lookup.ok) {
+            stdout.write(
+              `${await withDetail('承認待ちを読めなかったので、回答を送っていません', lookup)}\n`,
+            );
+            return 'ok';
+          }
+          target = lookup.ok ? (await lookup.json()).approval : undefined;
         }
-        const { approvals } = await lookup.json();
-        const target = approvals.find((entry) => entry.id === id);
         if (target === undefined) {
           stdout.write(`[${reference}] （${id}）は見つからなかったので、回答を送っていません\n`);
           return 'ok';

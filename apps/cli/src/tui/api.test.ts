@@ -545,6 +545,28 @@ describe('承認待ちの口（#2591。本物の createTuiApi を通す）', () 
     await expect(api.listApprovalsAnsweredOn('2026-02-30')).rejects.toThrow(/YYYY-MM-DD/);
   });
 
+  it('GET /approvals/{id}: 1回で1件を引く（pending・order は付けない）。404 は null、他の失敗は ApiError（「無い」と言わない）', async () => {
+    const api = createTuiApi(target);
+    replies.push(
+      json({
+        approval: { id: 'a 1', createdAt: 't', question: 'q', updatedAt: 't' },
+        settledOn: '2026-09-30',
+      }),
+    );
+    expect((await api.readApproval('a 1'))?.id).toBe('a 1');
+    expect(sent).toHaveLength(1);
+    expect(new URL(sent[0]?.url ?? '').pathname).toBe('/approvals/a%201');
+    expect(searchOf(0)).toEqual({});
+
+    replies.push(json({ error: 'not found' }, 404));
+    expect(await api.readApproval('nope')).toBeNull();
+
+    replies.push(json({ error: '読めない行' }, 409));
+    await expect(api.readApproval('bad')).rejects.toThrow(/読めない行/);
+    replies.push(json({ error: 'boom' }, 500));
+    await expect(api.readApproval('x')).rejects.toThrow(/承認を読めませんでした/);
+  });
+
   it('POST /approvals/{id}/answer: 自由文・選択どちらも本文をそのまま送る', async () => {
     const api = createTuiApi(target);
     replies.push(json({ ok: true }));

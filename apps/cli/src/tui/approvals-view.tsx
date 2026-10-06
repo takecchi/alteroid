@@ -460,7 +460,7 @@ export function approvalDocument(detail: DetailState, width: number): ApprovalDo
   return { rows: b.rows, focusRow };
 }
 
-/** 詳細の最下行（ログ直下の 1 行）。優先: 確認 > 送信中・操作の結果 > 取り直しの失敗 > 窓の外 > 操作の案内。 */
+/** 詳細の最下行（ログ直下の 1 行）。優先: 確認 > 送信中・操作の結果（あれば失敗・窓の外を並べる） > 取り直しの失敗 > 窓の外 > 操作の案内。 */
 export function approvalStatusText(
   detail: DetailState,
   hiddenBelow: number,
@@ -468,8 +468,13 @@ export function approvalStatusText(
   if (detail.mode === 'confirm') {
     return { text: 'y で送る / それ以外のキーで戻る（送ったあとは答え直せない）', tone: 'warn' };
   }
+  // 操作の結果（notice）はフォームへ入るまで残るので、後ろの状態（取り直しの失敗・窓の外の行数）を隠さず並べる（#3368）。
   if (detail.notice !== null) {
-    return { text: detail.notice, tone: detail.noticeTone === 'warn' ? 'warn' : 'dim' };
+    const parts = [detail.notice];
+    if (detail.error !== null) parts.push(`⚠ 取り直せなかった: ${detail.error}`);
+    if (hiddenBelow > 0) parts.push(`↓ あと ${String(hiddenBelow)} 行`);
+    const warn = detail.noticeTone === 'warn' || detail.error !== null;
+    return { text: parts.join(' · '), tone: warn ? 'warn' : 'dim' };
   }
   if (detail.error !== null) return { text: `⚠ 取り直せなかった: ${detail.error}`, tone: 'warn' };
   if (detail.missing && detail.approval === null) {
