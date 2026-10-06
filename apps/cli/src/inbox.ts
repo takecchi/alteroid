@@ -212,10 +212,9 @@ function describeExecuteCommand(options: InboxRemoveOptions): string {
  * 返すことは無い**——集計は `apps/daemon/src/app.ts` の `GET /inbox` ハンドラで
  * 1回しか行われず、CLI はその JSON をそのまま描くだけである。
  *
- * **HTTP のエラーは stdout へ書いて正常終了する。** `dropped.ts` /
- * `runners.ts` / `usage.ts` と同じ、読み取り専用コマンドの作法——書き込み系
- * （`inboxRemoveCommand`）が「消えたのか消えなかったのか」を終了コードで
- * 区別するのとは事情が違い、読み取りに失敗しても状態は何も変わっていない。
+ * **HTTP のエラーは例外で上へ通す**（`usage.ts` と同じ。#3446）。stdout へ書いて正常終了すると、
+ * cron やスクリプトからは成功に見える。未ログイン（`target.note`）の読み取りだけは、
+ * #2456 の決定どおり note を出して正常終了のままである。
  * **繋がらない（ネットワークそのものの失敗）はここで握り潰さない**——それは
  * 上と同じ理由で例外のまま上（`index.ts` の
  * `program.parseAsync(...).catch(...)`）へ通す。
@@ -229,10 +228,12 @@ export async function inboxShowCommand(): Promise<void> {
   const client = createClient(target.baseUrl, target.headers);
   const response = await client.inbox.$get();
   if (!response.ok) {
-    stdout.write(
-      `${await withErrorReason(`受信箱の内訳を読めませんでした（${response.status}）`, response)}\n`,
+    // 失敗は例外で上へ通す（＝終了コードが 0 でなくなる。#3446）。
+    const described = describeAuthFailure(response.status, target);
+    if (described !== null) throw new Error(described);
+    throw new Error(
+      await withErrorReason(`受信箱の内訳を読めませんでした（${response.status}）`, response),
     );
-    return;
   }
   const breakdown = (await response.json()) as InboxBacklogBreakdown;
   stdout.write(`${renderInboxBacklog(breakdown)}\n`);

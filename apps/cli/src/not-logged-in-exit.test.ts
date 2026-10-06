@@ -9,7 +9,8 @@ import { captureStdout } from './test-support.js';
  * 1）**。読み取り系は今のまま note を stdout に出して正常 return（終了コード 0）。
  *
  * 書き込み系: interrupt / memory の edit・set・remove / practice の edit・set・remove /
- * runners vacate / permission revoke / inbox remove。読み取り系の代表: usage /
+ * runners vacate / permission revoke / inbox remove / conversations read（既読の位置を
+ * 進める。#3447）。読み取り系の代表: usage /
  * progress / runners / permission list / memory list・show / practice list・show・history /
  * inbox show。
  *
@@ -48,6 +49,7 @@ const {
 const { runnersCommand, runnersVacateCommand } = await import('./runners.js');
 const { permissionListCommand, permissionRevokeCommand } = await import('./permission.js');
 const { inboxRemoveCommand, inboxShowCommand } = await import('./inbox.js');
+const { conversationsReadCommand } = await import('./conversations.js');
 const { usageCommand } = await import('./usage.js');
 const { progressCommand } = await import('./progress.js');
 
@@ -77,6 +79,7 @@ const writes: [string, () => Promise<void>][] = [
   ['practice remove', () => practiceRemoveCommand('foo')],
   ['runners vacate', () => runnersVacateCommand('runner-1')],
   ['permission revoke', () => permissionRevokeCommand('grant-1')],
+  ['conversations read', () => conversationsReadCommand('conv-1')],
   [
     'inbox remove',
     () => inboxRemoveCommand({ types: 'manager_message', reason: 'test', execute: true }),

@@ -22,9 +22,9 @@ export default function MessageAttachments({
   attachments: readonly MessageAttachment[];
 }) {
   return (
-    <ul aria-label="添付" className="flex max-w-[46rem] flex-wrap gap-2">
+    <ul aria-label="添付" className="flex max-w-full min-w-0 flex-wrap gap-2 sm:max-w-[46rem]">
       {attachments.map((attachment) => (
-        <li key={attachment.id}>
+        <li key={attachment.id} className="min-w-0 max-w-full">
           {isPreviewableImage(attachment.mediaType) ? (
             <ImageAttachment attachment={attachment} />
           ) : (
@@ -72,7 +72,10 @@ function ImageAttachment({ attachment }: { attachment: MessageAttachment }) {
   }
   if ('error' in state) {
     return (
-      <span role="alert" className="block rounded-md border border-border px-2 py-1 text-xs">
+      <span
+        role="alert"
+        className="block max-w-full min-w-0 rounded-md border border-border px-2 py-1 text-xs break-words"
+      >
         {attachment.name}: {state.error}
       </span>
     );

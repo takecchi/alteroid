@@ -80,6 +80,10 @@ type Respond = () => Response | Promise<Response>;
 function stubApi(options: {
   dates?: { date: string; count: number }[] | Respond;
   days?: Record<string, PendingApproval[] | Respond>;
+  /** `beforeDate` 付き（読み足し）の目次。渡さなければ `dates` をそのまま返す（従来どおり）。 */
+  olderDates?: (beforeDate: string) => Response | Promise<Response>;
+  /** 未回答の側の一覧（`GET /approvals?pending=true`。読めない行の案内の元）。既定は空の一覧。 */
+  pending?: object | Respond;
   conversation?: (id: string) => Response | Promise<Response>;
 }): Stub {
   const calls: string[] = [];
@@ -89,10 +93,16 @@ function stubApi(options: {
     const url = new URL(href);
 
     if (url.pathname === '/approvals/answered-dates') {
+      const before = url.searchParams.get('beforeDate');
+      if (before !== null && options.olderDates !== undefined) return options.olderDates(before);
       const { dates = [] } = options;
       return typeof dates === 'function' ? dates() : json({ dates });
     }
     if (url.pathname === '/approvals') {
+      if (url.searchParams.get('pending') === 'true') {
+        const { pending = { approvals: [] } } = options;
+        return typeof pending === 'function' ? (pending as Respond)() : json(pending);
+      }
       const day = options.days?.[url.searchParams.get('answeredOn') ?? ''];
       if (typeof day === 'function') return day();
       return json({ approvals: day ?? [] });
@@ -196,7 +206,11 @@ describe('左の目次（決着した日と件数）', () => {
     expect(
       (await screen.findByRole('link', { name: /2026-09-30/ })).getAttribute('aria-current'),
     ).toBe('page');
-    const dayCalls = stub.calls.filter((href) => new URL(href).pathname === '/approvals');
+    // 未回答の側の取得（`pending=true`。読めない行の案内の元）は別なので、その日の件だけを数える。
+    const dayCalls = stub.calls.filter(
+      (href) =>
+        new URL(href).pathname === '/approvals' && new URL(href).searchParams.has('answeredOn'),
+    );
     expect(dayCalls.map((href) => new URL(href).searchParams.get('answeredOn'))).toEqual([
       '2026-09-30',
     ]);
@@ -207,7 +221,10 @@ describe('左の目次（決着した日と件数）', () => {
     renderAt('/approvals/answered/2026-09-30');
     await screen.findByText('夜のリリースを待つか');
 
-    const href = stub.calls.find((call) => new URL(call).pathname === '/approvals')!;
+    const href = stub.calls.find(
+      (call) =>
+        new URL(call).pathname === '/approvals' && new URL(call).searchParams.has('answeredOn'),
+    )!;
     const params = new URL(href).searchParams;
     expect(params.get('answeredOn')).toBe('2026-09-30');
     for (const forbidden of ['pending', 'order', 'limit', 'cursor']) {
@@ -222,15 +239,179 @@ describe('左の目次（決着した日と件数）', () => {
     expect(await screen.findByText('まだ無い。')).toBeTruthy();
     expect(screen.getByText('回答済みの承認はまだ無い。')).toBeTruthy();
   });
+});
 
-  it('日数が窓の大きさ（60）ちょうどなら、これより古い日があるかもしれないと言う', async () => {
-    const many = Array.from({ length: 60 }, (_, index) => ({
-      date: new Date(Date.UTC(2026, 0, 60 - index)).toISOString().slice(0, 10),
-      count: 1,
-    }));
-    stubApi({ dates: many });
+/** 新しい日が上の `count` 日ぶん（`from` の日から1日ずつ遡る）。 */
+function daysBack(from: string, count: number): { date: string; count: number }[] {
+  const start = Date.parse(`${from}T00:00:00Z`);
+  return Array.from({ length: count }, (_, index) => ({
+    date: new Date(start - index * 86_400_000).toISOString().slice(0, 10),
+    count: 1,
+  }));
+}
+
+describe('もっと古い日を読む（#3297）', () => {
+  const FULL = daysBack('2026-09-30', 60); // 窓の大きさ（60）ちょうど → 続きがあるかもしれない
+  const lastOfFull = FULL[59]!.date;
+
+  it('窓ちょうどなら「もっと古い日を読む」を出し、押すと beforeDate で続きを読んで後ろへ足す', async () => {
+    const older = [
+      { date: '2026-06-01', count: 2 },
+      { date: '2026-05-31', count: 1 },
+    ];
+    const stub = stubApi({
+      dates: FULL,
+      olderDates: (before) => {
+        expect(before).toBe(lastOfFull);
+        return json({ dates: older });
+      },
+    });
     renderAt('/approvals/answered');
-    expect(await screen.findByText(/直近 60 日のみ表示している/)).toBeTruthy();
+
+    const more = await screen.findByRole('button', { name: 'もっと古い日を読む' });
+    expect(dateRows()).toHaveLength(60);
+    fireEvent.click(more);
+
+    await screen.findByText('2026-05-31');
+    const rows = dateRows();
+    expect(rows).toHaveLength(62);
+    // 今の一覧の後ろに足す（並べ直さない）
+    expect(rows.slice(-2).map((row) => row.querySelector('span')?.textContent)).toEqual([
+      '2026-06-01',
+      '2026-05-31',
+    ]);
+    const call = stub.calls.find((href) => href.includes('beforeDate'))!;
+    expect(new URL(call).searchParams.get('beforeDate')).toBe(lastOfFull);
+    expect(new URL(call).searchParams.get('limit')).toBe('60');
+    // limit 未満しか返らなかったので、続きは無いとみなす
+    expect(screen.queryByRole('button', { name: 'もっと古い日を読む' })).toBeNull();
+  });
+
+  it('limit ちょうど返れば、さらに続きを読める', async () => {
+    const second = daysBack('2026-06-01', 60);
+    stubApi({
+      dates: FULL,
+      olderDates: (before) =>
+        before === lastOfFull ? json({ dates: second }) : json({ dates: [] }),
+    });
+    renderAt('/approvals/answered');
+
+    fireEvent.click(await screen.findByRole('button', { name: 'もっと古い日を読む' }));
+    await waitFor(() => expect(dateRows()).toHaveLength(120));
+    expect(screen.getByRole('button', { name: 'もっと古い日を読む' })).toBeTruthy();
+  });
+
+  it('limit 未満なら「もっと古い日を読む」を出さない', async () => {
+    stubApi({ dates: daysBack('2026-09-30', 59) });
+    renderAt('/approvals/answered');
+
+    await screen.findByText('2026-09-30');
+    expect(screen.queryByRole('button', { name: 'もっと古い日を読む' })).toBeNull();
+  });
+
+  it('読み足しに失敗しても、それまでの一覧は残り、失敗だけを出す（押し直せる）', async () => {
+    let attempt = 0;
+    stubApi({
+      dates: FULL,
+      olderDates: () => {
+        attempt += 1;
+        return attempt === 1
+          ? json({ error: 'internal' }, 500)
+          : json({ dates: [{ date: '2026-05-31', count: 1 }] });
+      },
+    });
+    renderAt('/approvals/answered');
+
+    fireEvent.click(await screen.findByRole('button', { name: 'もっと古い日を読む' }));
+
+    expect(await screen.findByText(/もっと古い日を読み込めませんでした/)).toBeTruthy();
+    // 画面全体は奪われない: 一覧もその日の件も残る
+    expect(dateRows()).toHaveLength(60);
+    expect(screen.getByRole('heading', { name: '2026-09-30 に決着した承認' })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'もっと古い日を読む' }));
+    await screen.findByText('2026-05-31');
+    expect(dateRows()).toHaveLength(61);
+    expect(screen.queryByText(/もっと古い日を読み込めませんでした/)).toBeNull();
+  });
+
+  it('読み込んだ範囲の外の日を URL で開くと、その日の件は出て、目次には載っていないと言う', async () => {
+    stubApi({
+      dates: DATES,
+      days: { '2026-01-05': [OLDER] },
+    });
+    renderAt('/approvals/answered/2026-01-05');
+
+    expect(await screen.findByText('朝の migrate を当てるか')).toBeTruthy();
+    expect(
+      screen.getByText(/開いている 2026-01-05 は、この目次に読み込んだ日の中に無い/),
+    ).toBeTruthy();
+    // 目次のどの行も選択中ではない
+    for (const row of dateRows()) {
+      expect(within(row).getByRole('link').getAttribute('aria-current')).toBeNull();
+    }
+  });
+
+  it('目次に載っている日を開いたときは、その注記を出さない', async () => {
+    stubApi({ dates: DATES, days: { '2026-09-30': [NEWER] } });
+    renderAt('/approvals/answered/2026-09-30');
+
+    await screen.findByText('夜のリリースを待つか');
+    expect(screen.queryByText(/この目次に読み込んだ日の中に無い/)).toBeNull();
+  });
+});
+
+describe('読めない承認待ちの案内（#3297）', () => {
+  const UNREADABLE = { approvals: [], unreadable: [{ id: 'bad-1' }, { id: null }] };
+
+  it('読めない行があるときだけ、件数と未回答のページへのリンクを出す', async () => {
+    stubApi({ dates: DATES, pending: UNREADABLE });
+    renderAt('/approvals/answered');
+
+    const note = await screen.findByText(/読めない承認待ちが 2 件ある/);
+    const link = within(note.closest('[role="status"]') as HTMLElement).getByRole('link', {
+      name: '未回答のページで見る',
+    });
+    expect(link.getAttribute('href')).toBe('/approvals');
+  });
+
+  it('読めない行が無ければ出さない（0 件とも言わない）', async () => {
+    stubApi({ dates: DATES, pending: { approvals: [] } });
+    renderAt('/approvals/answered');
+
+    await screen.findByText('2026-09-29');
+    await waitFor(() => expect(screen.queryByText(/読めない承認待ち/)).toBeNull());
+    expect(screen.queryByText(/0 件ある/)).toBeNull();
+  });
+
+  it('unreadable が空配列でも出さない', async () => {
+    stubApi({ dates: DATES, pending: { approvals: [], unreadable: [] } });
+    renderAt('/approvals/answered');
+
+    await screen.findByText('2026-09-29');
+    expect(screen.queryByText(/読めない承認待ち/)).toBeNull();
+  });
+
+  it.each([
+    ['サーバの失敗（500）', (() => json({ error: 'internal' }, 500)) as Respond],
+    ['通信の失敗', (() => Promise.reject(new TypeError('Failed to fetch'))) as Respond],
+  ])('未回答の側の取得が%s: 案内を出さない（0 件とも言わない）', async (_, fail) => {
+    const stub = stubApi({ dates: DATES, pending: fail });
+    renderAt('/approvals/answered');
+
+    await screen.findByText('2026-09-29');
+    await waitFor(() =>
+      expect(stub.calls.some((href) => href.includes('pending=true'))).toBe(true),
+    );
+    expect(screen.queryByText(/読めない承認待ち/)).toBeNull();
+  });
+
+  it('unreadable が配列でない形違いの応答でも出さず、落ちない', async () => {
+    stubApi({ dates: DATES, pending: { approvals: [], unreadable: 'oops' } });
+    renderAt('/approvals/answered');
+
+    await screen.findByText('2026-09-29');
+    expect(screen.queryByText(/読めない承認待ち/)).toBeNull();
   });
 });
 

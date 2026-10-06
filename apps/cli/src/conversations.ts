@@ -354,7 +354,9 @@ export function renderConversationDetail(
  * **進めるのは、いま読み出した最新の発言まで**——読み出した後に届いた発言は未読のまま残る。
  */
 export async function conversationsReadCommand(id: string): Promise<void> {
-  const conn = await connect();
+  // 状態を変える口（既読の位置を進める）なので、未ログインの遠隔先は例外で終える
+  // （#2456 の書き込み系と同じ。#3447）。
+  const conn = await connect('write');
   if (conn === null) return;
   const { client, target } = conn;
   const detail = await client.conversations[':id'].$get({ param: { id }, query: {} });
@@ -367,14 +369,22 @@ export async function conversationsReadCommand(id: string): Promise<void> {
       await withErrorReason(`会話を読めませんでした（HTTP ${String(detail.status)}）`, detail),
     );
   }
-  const { messages } = await detail.json();
+  const body = await detail.json();
+  const { messages } = body;
   const latest = messages[messages.length - 1];
   if (latest === undefined) {
-    stdout.write(
+    // 見える範囲に発言が無い。未読が無いと確かめられるときだけ、何もせず成功で終える。
+    // 未読が残る・数えられない（既読の状態が読めない）ときは、既読にできていないので
+    // 成功に見せずに例外で終える（#3447。終了コードが 0 でなくなる）。
+    const unread: unknown = body.unreadCount;
+    if (unread === 0 && !('readStateUnreadable' in body)) {
+      stdout.write(`未読の発言はありません: ${id}\n`);
+      return;
+    }
+    throw new Error(
       '既読にする発言が見つかりませんでした（古すぎて見える範囲の外にあるのかもしれません。' +
-        `alteroid conversations show ${id} --scan で範囲を広げて確かめてください）\n`,
+        `alteroid conversations show ${id} --scan で範囲を広げて確かめてください）`,
     );
-    return;
   }
   const response = await client.conversations[':id'].read.$post({
     param: { id },
@@ -447,9 +457,12 @@ export async function markConversationReadAfterReply(
  * 繋ぎ先を決めて型付きクライアントを作る。**繋げない理由はそのまま出す。**
  * `memory.ts` の同名関数と同じ理由（例外にすると人間向けの案内が例外の見た目になる）。
  */
-async function connect(): Promise<{ client: DaemonClient; target: Target } | null> {
+async function connect(
+  access: 'read' | 'write' = 'read',
+): Promise<{ client: DaemonClient; target: Target } | null> {
   const target = await resolveTarget();
   if (target.note !== null) {
+    if (access === 'write') throw new Error(target.note);
     stdout.write(`${target.note}\n`);
     return null;
   }

@@ -40,10 +40,15 @@ export async function runnersCommand(): Promise<void> {
   const client = createClient(target.baseUrl, target.headers);
   const response = await client.runners.$get();
   if (!response.ok) {
-    stdout.write(
-      `${await withErrorReason(`runner の一覧を読めませんでした（HTTP ${String(response.status)}）`, response)}\n`,
+    // 失敗は例外で上へ通す（＝終了コードが 0 でなくなる。#3446。`usage.ts` と同じ）。
+    const described = describeAuthFailure(response.status, target);
+    if (described !== null) throw new Error(described);
+    throw new Error(
+      await withErrorReason(
+        `runner の一覧を読めませんでした（HTTP ${String(response.status)}）`,
+        response,
+      ),
     );
-    return;
   }
   // **`now` はここで1回だけ取る**（issue #2141 段1）。`renderRunners` はテストで
   // 差し込めるよう引数で受ける。

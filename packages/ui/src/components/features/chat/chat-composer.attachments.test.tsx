@@ -75,3 +75,43 @@ describe('ChatComposer: 添付', () => {
     ).toBe(true);
   });
 });
+
+describe('ChatComposer: 添付のチップの並び（#3402 / #3401）', () => {
+  const items = Array.from({ length: 10 }, (_, i) => ({
+    key: `k${i}`,
+    name: `${'x'.repeat(100)}-${i}.pdf`,
+    sizeLabel: '1 MB',
+  }));
+
+  it('チップの並びは高さに上限があり、内側をスクロールする（入力欄を押し広げない）', async () => {
+    render(
+      <ChatComposer
+        value=""
+        onChange={() => undefined}
+        onSend={() => undefined}
+        onAttach={() => undefined}
+        attachments={items}
+      />,
+    );
+    const list = await screen.findByRole('list', { name: '添付' });
+    const classes = (list.getAttribute('class') ?? '').split(/\s+/);
+    expect(classes).toContain('overflow-y-auto');
+    expect(classes.some((name) => name.startsWith('max-h-'))).toBe(true);
+    // 10 件とも並ぶ（畳んで隠さない）。
+    expect(list.querySelectorAll('li')).toHaveLength(10);
+  });
+
+  it('長い名前は切れるが、title に全体が入る', async () => {
+    render(
+      <ChatComposer
+        value=""
+        onChange={() => undefined}
+        onSend={() => undefined}
+        onAttach={() => undefined}
+        attachments={items.slice(0, 1)}
+      />,
+    );
+    const name = await screen.findByTitle(items[0]?.name ?? '');
+    expect(name.textContent).toBe(items[0]?.name);
+  });
+});
