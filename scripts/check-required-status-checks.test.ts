@@ -7,7 +7,10 @@ import { describe, expect, it } from 'vitest';
 import {
   compareRequiredStatusChecks,
   contextsFromProtection,
+  contextsFromRules,
   formatComparison,
+  isBranchNotProtected,
+  resolveLiveRequiredChecks,
   // @ts-expect-error -- 素の .mjs（型宣言を持たない build 用スクリプト）を読む
 } from './check-required-status-checks-core.mjs';
 
@@ -215,5 +218,133 @@ describe('赤の意味が、失敗の文そのものに書いてある', () => {
     const text = formatComparison(result);
     expect(text).toContain('contexts と checks が食い違っている');
     expect(text).toContain('宣言を直す前にそちらを見ること');
+  });
+});
+
+/**
+ * **ruleset へ移った main を読む（#3052）。** 旧来の protection が 404 `Branch not protected`
+ * でも、ruleset 由来の required を `rules/branches/main` から読んで宣言と突き合わせる。
+ * 404 は「未保護」という事実であって、空とのずれ（誤って赤）でも一致（誤って緑）でもない。
+ */
+const NOT_PROTECTED = { status: 'absent' } as const;
+const rulesBody = (names: string[]): unknown => [
+  { type: 'deletion', ruleset_id: 1 },
+  {
+    type: 'required_status_checks',
+    parameters: {
+      strict_required_status_checks_policy: false,
+      required_status_checks: names.map((context) => ({ context, integration_id: 15368 })),
+    },
+    ruleset_id: 24535054,
+  },
+];
+const okRules = (names: string[]) => ({ status: 'ok', body: rulesBody(names) }) as const;
+const okProtection = (names: string[]) => ({ status: 'ok', body: protectionWith(names) }) as const;
+const DECLARED = ['ci', 'image', 'no-attribution-trailers'];
+
+function verdictOf(protection: unknown, rules: unknown): Comparison & { reasons?: string[] } {
+  const { live, reasons } = resolveLiveRequiredChecks(protection, rules);
+  return compareRequiredStatusChecks(DECLARED, live, reasons);
+}
+
+describe('ruleset 由来の required を読む（#3052）', () => {
+  it('rules/branches の応答から required_status_checks の context だけを取り出す', () => {
+    expect(contextsFromRules(rulesBody(['image', 'ci']))).toEqual({ names: ['ci', 'image'] });
+  });
+
+  it('required_status_checks の規則が無い配列は空（読めた事実）。配列でなければ null', () => {
+    expect(contextsFromRules([{ type: 'deletion' }])).toEqual({ names: [] });
+    expect(contextsFromRules({ message: 'Not Found' })).toBeNull();
+    expect(contextsFromRules(null)).toBeNull();
+  });
+
+  it('複数の ruleset が required を持てば和をとる（重複は1つにする）', () => {
+    const rules = [
+      ...(rulesBody(['ci']) as unknown[]),
+      ...(rulesBody(['ci', 'image']) as unknown[]),
+    ];
+    expect(contextsFromRules(rules)).toEqual({ names: ['ci', 'image'] });
+  });
+
+  it('404 の見分け: 「Branch not protected」を伴う 404 だけが未保護。別の 404・403 は違う', () => {
+    expect(isBranchNotProtected('gh: Branch not protected (HTTP 404)')).toBe(true);
+    expect(isBranchNotProtected('gh: Not Found (HTTP 404)')).toBe(false);
+    expect(isBranchNotProtected('gh: Resource not accessible by integration (HTTP 403)')).toBe(
+      false,
+    );
+  });
+
+  it('ruleset だけ（protection は 404）で宣言と一致すれば match。空とのずれにも読めなかったにもしない', () => {
+    const result = verdictOf(NOT_PROTECTED, okRules(DECLARED));
+    expect(result.verdict).toBe('match');
+    const text = formatComparison(result);
+    expect(text).toContain('OK — ');
+    expect(text).toContain('未保護（404 Branch not protected）');
+  });
+
+  it('protection 404 で ruleset が宣言より少なければ drift（404 のせいで緑にならない）', () => {
+    const result = verdictOf(NOT_PROTECTED, okRules(['ci', 'image']));
+    expect(result.verdict).toBe('drift');
+    expect(result.missing).toEqual(['no-attribution-trailers']);
+  });
+
+  it('protection 404 で ruleset にも required が無ければ drift（空は空という事実）', () => {
+    const result = verdictOf(NOT_PROTECTED, { status: 'ok', body: [{ type: 'deletion' }] });
+    expect(result.verdict).toBe('drift');
+    expect(result.live).toEqual([]);
+  });
+
+  it('protection と ruleset の両方に在れば和をとる（片方だけでは足りない分を補い合う）', () => {
+    expect(
+      verdictOf(okProtection(['ci', 'image']), okRules(['no-attribution-trailers'])).verdict,
+    ).toBe('match');
+    const extra = verdictOf(
+      okProtection(['ci', 'image', 'lint']),
+      okRules(['no-attribution-trailers']),
+    );
+    expect(extra.verdict).toBe('drift');
+    expect(extra.extra).toEqual(['lint']);
+  });
+
+  it('両方が同じ名前を持っていても一致（重複は1つ）', () => {
+    expect(verdictOf(okProtection(DECLARED), okRules(DECLARED)).verdict).toBe('match');
+  });
+
+  it('protection が 403 など（404 以外）で読めなければ unreadable。ruleset が一致していても緑にしない', () => {
+    const result = verdictOf(
+      { status: 'error', detail: 'gh: Resource not accessible (HTTP 403)' },
+      okRules(DECLARED),
+    );
+    expect(result.verdict).toBe('unreadable');
+    const text = formatComparison(result);
+    expect(text).toContain('旧来の protection: 読めなかった');
+    expect(text).toContain('HTTP 403');
+    expect(text).not.toContain('OK — ');
+  });
+
+  it('ruleset が読めなければ unreadable（protection 404 を「空」とみなして drift にもしない）', () => {
+    const result = verdictOf(NOT_PROTECTED, {
+      status: 'error',
+      detail: 'gh: Server Error (HTTP 500)',
+    });
+    expect(result.verdict).toBe('unreadable');
+    expect(formatComparison(result)).toContain('ruleset（rules/branches）: 読めなかった');
+  });
+
+  it('両方読めなければ、両方の理由を並べる', () => {
+    const result = verdictOf(
+      { status: 'error', detail: 'HTTP 403' },
+      { status: 'error', detail: 'HTTP 500' },
+    );
+    expect(result.verdict).toBe('unreadable');
+    const text = formatComparison(result);
+    expect(text).toContain('HTTP 403');
+    expect(text).toContain('HTTP 500');
+  });
+
+  it('ruleset の応答が規則の配列でなければ unreadable', () => {
+    expect(verdictOf(NOT_PROTECTED, { status: 'ok', body: { message: 'x' } }).verdict).toBe(
+      'unreadable',
+    );
   });
 });

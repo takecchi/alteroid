@@ -8,7 +8,7 @@
  * 「403 に専用の文言がある」「追加・削除・無効化/有効化は既存の一覧を土台に
  * `PUT /tokens` を全置換で呼ぶ」の各点。文言の細部より、この規律が壊れていないかを見る。
  */
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -234,8 +234,20 @@ describe('/tokens 画面 — プールの4状態', () => {
 
     expect(screen.getByText('使用可能')).toBeTruthy();
     expect(screen.getByText('休止中')).toBeTruthy();
-    expect(screen.getByText('無効化済み（人間が外した。戻らない）')).toBeTruthy();
+    // 同じ行に「戻す」ボタンがあるので、「戻らない」と言い切らない（#3071）。デーモンは
+    // 無効化を自動では解かない（解くのは `disabled: false` を送る人間の操作だけ）ので、
+    // 「自動では戻らない」と言い、戻し方を添える。
+    expect(
+      screen.getByText('無効化済み（人間が外した。自動では戻らない。「戻す」で人間が戻す）'),
+    ).toBeTruthy();
     expect(screen.getByText('失効（通らないと確定。人間が外すまで戻らない）')).toBeTruthy();
+    // 無効化済みの行は「戻す」を持ち、文面は「戻らない」で言い切らない。
+    const disabledRow = screen.getByText('disabled-token').closest('li') as HTMLElement;
+    expect(disabledRow.textContent).toContain(
+      '人間が明示的に外した。自動では戻らない。「戻す」で人間が戻す',
+    );
+    expect(within(disabledRow).getByRole('button', { name: '戻す' })).toBeTruthy();
+    expect(disabledRow.textContent).not.toMatch(/外した。戻らない/);
     // 4状態が4つとも別の label に付いていること（同じトークンに畳まれていない）。
     expect(screen.getByText('ready-token')).toBeTruthy();
     expect(screen.getByText('cooling-token')).toBeTruthy();

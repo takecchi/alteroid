@@ -188,16 +188,25 @@ describe('slug 欄の補足文', () => {
   });
 });
 
-/** 行全体をリンクにしない（#2808）。リンクは題だけで、slug と文字数・日時の文字は `<a>` の外に在る。 */
-describe('一覧の行は題だけがリンク', () => {
-  it('題はリンク、slug と文字数・日時の文字はリンクの外', async () => {
+/**
+ * 行全体をリンクにしない（#2808）。リンクは題だけで、slug と文字数・日時の文字は `<a>` の外に在る。
+ *
+ * **期待を反転した（#3107）。** 題の文字の上でしか開かず、ほかの一覧（マネージャー・日報）と
+ * 使用感がずれていた（オーナーの依頼）。ほかの一覧と同じ `ListDetailItems` の既定の形
+ * （行全体が1本のリンク）に揃えた。#2808 の「一覧の行の文字を選んでコピーできる」は、ほかの一覧と
+ * 同じく効かなくなる（承知の上での選択）。保証は弱めていない: 行の中身がどれもリンクの内に在り、
+ * リンクが1行に1本だけであることを測る。
+ */
+describe('一覧の行は行全体がリンク', () => {
+  it('題・slug・文字数・日時の文字はどれも同じ1本のリンクの内に在る', async () => {
     renderPractices([practice({ slug: 'daily-report', title: '日報の書き方' })]);
 
-    const link = await screen.findByRole('link', { name: '日報の書き方' });
+    const link = await screen.findByRole('link', { name: /日報の書き方/ });
     expect(link.getAttribute('href')).toBe('/practices/daily-report');
     expect(link.closest('li')?.querySelectorAll('a')).toHaveLength(1);
-    expect(screen.getByText('daily-report').closest('a')).toBeNull();
-    expect(screen.getByText(/作成 3日前/).closest('a')).toBeNull();
+    expect(screen.getByText('daily-report').closest('a')).toBe(link);
+    expect(screen.getByText(/作成 3日前/).closest('a')).toBe(link);
+    expect(screen.getByText('日報の書き方').closest('a')).toBe(link);
   });
 });
 

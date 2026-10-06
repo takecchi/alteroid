@@ -27,7 +27,7 @@ import type {
   AgentCloneTools,
 } from './agent-clone-session.js';
 import type { AgentProvider } from './agent-ports.js';
-import type { AgentUserInput } from './agent-session.js';
+import type { AgentInputImage, AgentUserInput } from './agent-session.js';
 import { ClaudeCloneDriver } from './claude-clone-driver.js';
 import { CLAUDE_PROVIDER } from './claude-provider.js';
 import { describeArchiveContinuityForJournal } from './archive-continuity.js';
@@ -8710,6 +8710,11 @@ class Clone implements CloneHost {
      * 由来しないターンには紐づける承認が無いことをそのまま表す。
      */
     approvalId: string | null = null,
+    /**
+     * 本文に添える画像（段1b）。モデルへ渡す入力（`AgentUserInput.images`）へそのまま通す。
+     * 呼び出し元が渡さなければ従来どおり文字列だけの入力になる。
+     */
+    images: readonly AgentInputImage[] = [],
   ): Promise<TurnOutcome> {
     if (kind !== 'distill') this.#distillMemory.markActivity();
 
@@ -8757,6 +8762,7 @@ class Clone implements CloneHost {
             body: text,
           }),
         ),
+        images,
       );
       // 入力がモデルへ渡った瞬間から最初の出力までは「考えている」。
       // **`#ensureQuery` より後で送る** — セッションの起動そのものはまだ考え
@@ -9551,7 +9557,7 @@ class Clone implements CloneHost {
     ].join('\n');
   }
 
-  #pushInput(text: string): void {
+  #pushInput(text: string, images: readonly AgentInputImage[] = []): void {
     // **`#usageBlockedAccumulatedChars` を積む場所はここ1か所だけ**
     // （`#usageBlockedAccumulatedChars` の doc。Issue #1240）。モデルへ実際に
     // 渡す文字列の長さそのものを数える——`#runTurn` 側で数え直すと、並び順
@@ -9559,7 +9565,7 @@ class Clone implements CloneHost {
     // 別の場所（`turn_ended` の成功枝）で 0 へ戻すので、健全なセッションでは
     // ここは大きくならない。**
     this.#usageBlockedAccumulatedChars += text.length;
-    this.#sdkSession.enqueueInput({ text });
+    this.#sdkSession.enqueueInput(images.length === 0 ? { text } : { text, images });
     this.#sdkSession.wakeInput();
   }
 

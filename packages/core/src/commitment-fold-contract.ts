@@ -64,6 +64,10 @@ import type { CommitmentStore } from './store.js';
  *    ことそのもの。⚠ **`await` を挟んで直列に呼ぶ形では、これは測れない**
  *    （#1041 の欠陥は「読んでから書く」あいだに割り込まれることなので、割り込む
  *    隙間を作らない呼び方では、壊れた実装でも緑になる）
+ *
+ * （8 は NUL の扱い。issue #3011）
+ *
+ * 9. **陰性対照: `source` の無いマネージャー起因の同文は畳まない**（#3056）
  */
 export async function verifyCommitmentFoldContract(
   store: CommitmentStore,
@@ -237,6 +241,26 @@ export async function verifyCommitmentFoldContract(
     });
     if (srcC.opened || !srcC.folded)
       fail(`NULを含む source が同じ行を畳まない: ${JSON.stringify(srcC)}`);
+  }
+
+  // 9. 陰性対照: `source` の無いマネージャー起因の同文は畳まない（#3056）。`source` が
+  //    無い行どうしを「同じマネージャー」とは言えない。直す前は fs / in-memory だけが
+  //    `undefined === undefined` で畳み、pg（`source` 必須で畳む）と割れていた
+  {
+    const noSource = {
+      id: 'fold-9a',
+      at: '2026-01-03T00:00:00.000Z',
+      origin: 'manager',
+      body: '出所の無い同じ一言',
+    } as const;
+    const noSourceTwin = { ...noSource, id: 'fold-9b', at: '2026-01-03T00:00:01.000Z' };
+    const a = await store.open(noSource);
+    if (!a.opened) fail(`source の無い1件目が開いていない: ${JSON.stringify(a)}`);
+    const b = await store.open(noSourceTwin);
+    if (!b.opened || b.folded)
+      fail(
+        `source の無い同文が畳まれた（出所の分からない行どうしを同一視した）: ${JSON.stringify(b)}`,
+      );
   }
 
   // **`concurrent: false` では、この 7 を飛ばす。** 同時の2件目を弾くのは DB の部分
