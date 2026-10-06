@@ -251,6 +251,7 @@ describe('/access 画面 — grant / revoke', () => {
     ]);
 
     await renderAccess();
+    expect(screen.getByRole('button', { name: 'granted@example.com を許可する' })).toBeTruthy();
     fireEvent.click(screen.getByText('許可する'));
 
     await waitForCall(stub.calls, /\/access\/acct-b\/grant$/);
@@ -260,6 +261,9 @@ describe('/access 画面 — grant / revoke', () => {
     const stub = stubAccessAndGrant([account({ id: 'acct-a', granted: true })]);
 
     await renderAccess();
+    expect(
+      screen.getByRole('button', { name: 'granted@example.com の許可を取り消す' }),
+    ).toBeTruthy();
     fireEvent.click(screen.getByText('許可を取り消す'));
 
     // 1回目の押下では叩かない。確認の文言と「本当に取り消す」が出る。
@@ -278,6 +282,9 @@ describe('/access 画面 — grant / revoke', () => {
 
     // 確認してから叩く。
     fireEvent.click(screen.getByText('許可を取り消す'));
+    expect(
+      screen.getByRole('button', { name: 'granted@example.com の許可を本当に取り消す' }),
+    ).toBeTruthy();
     fireEvent.click(screen.getByText('本当に取り消す'));
     await waitForCall(stub.calls, /\/access\/acct-a\/revoke$/);
   });

@@ -1220,6 +1220,7 @@ function OpenRow({
           size="sm"
           className="shrink-0"
           loading={busy}
+          aria-label={`「${snippet(commitment.body)}」が片付いた`}
           // **理由なしでは閉じられない。** 「閉じた」だけが残ると、人間が後から
           // 否定できない（north_star の最終承認はそこで成り立っている）。
           disabled={reason.trim() === ''}

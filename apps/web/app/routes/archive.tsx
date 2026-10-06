@@ -16,7 +16,7 @@ import {
   Spinner,
 } from '@alteroid/ui';
 import { useRemoveArchive, useArchive, useArchiveSessions, ApiError } from '@alteroid/swr';
-import { formatDateTime } from '@alteroid/logic';
+import { formatBytes, formatDateTime } from '@alteroid/logic';
 import type { ArchiveEntry, ArchiveSessionSummary } from '@alteroid/logic';
 
 /**
@@ -139,7 +139,8 @@ function SessionRow({ session }: { session: ArchiveSessionSummary }) {
         <span className="font-medium">{formatDateTime(session.firstAt)} からの会話</span>
         <Badge>行数 {session.rows}</Badge>
         <span className="text-muted-foreground">
-          使用量合計 {session.storedBytes}バイト（最大1行 {session.maxStoredBytes}バイト）
+          使用量合計 {formatBytes(session.storedBytes)}（最大1行{' '}
+          {formatBytes(session.maxStoredBytes)}）
         </span>
       </div>
       <div className="mt-1 text-muted-foreground">
@@ -234,7 +235,7 @@ function EntryRow({ entry }: { entry: ArchiveEntry }) {
           </Badge>
         )}
       </div>
-      <div className="mt-1 text-muted-foreground">使用量 {entry.storedBytes}バイト</div>
+      <div className="mt-1 text-muted-foreground">使用量 {formatBytes(entry.storedBytes)}</div>
       {!removed && (
         <div className="mt-2">
           {/* 読むだけの画面（#3137）。消された行は読める本文が無いので出さない。 */}
