@@ -270,23 +270,26 @@ describe('器と札の名前（#2772）', () => {
 });
 
 describe('外部サービスの札（Issue #3676）', () => {
-  it.each([1000, 360])('（%ipx）札は外部サービスとして出て、状態は言わず、光る線は down の1本だけ', (w) => {
-    stubFrameWidth(w);
-    const { container } = render(<SystemTopology {...externalsScene} />);
-    const names = Array.from(container.querySelectorAll('button')).map((b) =>
-      b.getAttribute('aria-label'),
-    );
-    // 状態（正常・仕事なし等）を付けない。外部サービスの状態は観測していない。
-    expect(names).toContain('外部サービス GitHub 連携');
-    expect(names).toContain('外部サービス CI');
-    expect(names).toContain('外部サービス ほか 2 件');
-    // 光（Pulse）はアクティブな線だけ。down の `GitHub 連携` の線に、下りの色の光が流れる
-    const lit = container.querySelector('[data-edge="x-external:k1"]')!;
-    expect(lit.querySelector('animateMotion')).not.toBeNull();
-    expect(lit.querySelector('.fill-primary')).not.toBeNull();
-    expect(container.querySelector('[data-edge="x-external:k2"] animateMotion')).toBeNull();
-    expect(container.querySelector('[data-edge="x-external-others"] animateMotion')).toBeNull();
-  });
+  it.each([1000, 360])(
+    '（%ipx）札は外部サービスとして出て、状態は言わず、光る線は down の1本だけ',
+    (w) => {
+      stubFrameWidth(w);
+      const { container } = render(<SystemTopology {...externalsScene} />);
+      const names = Array.from(container.querySelectorAll('button')).map((b) =>
+        b.getAttribute('aria-label'),
+      );
+      // 状態（正常・仕事なし等）を付けない。外部サービスの状態は観測していない。
+      expect(names).toContain('外部サービス GitHub 連携');
+      expect(names).toContain('外部サービス CI');
+      expect(names).toContain('外部サービス ほか 2 件');
+      // 光（Pulse）はアクティブな線だけ。down の `GitHub 連携` の線に、下りの色の光が流れる
+      const lit = container.querySelector('[data-edge="x-external:k1"]')!;
+      expect(lit.querySelector('animateMotion')).not.toBeNull();
+      expect(lit.querySelector('.fill-primary')).not.toBeNull();
+      expect(container.querySelector('[data-edge="x-external:k2"] animateMotion')).toBeNull();
+      expect(container.querySelector('[data-edge="x-external-others"] animateMotion')).toBeNull();
+    },
+  );
 
   it('読み上げには名前と最後の呼び出しが出て、いま呼ばれた札はそれも言う', () => {
     stubFrameWidth(1000);

@@ -318,24 +318,23 @@ describe.each([
     externals: externalsOf(n),
   });
 
-  it.each(externalShapes.map((s) => [`外部 ${s[0]} 枚・作業者 ${JSON.stringify(s[1])}`, s] as const))(
-    '%s のとき、別々の線は重ならず交わらず、札を突き抜けない',
-    (_label, [n, counts]) => {
-      const laid = layout(withExternals(n, counts));
-      const segs = segments(laid);
-      const clashes = segs.flatMap((s, i) =>
-        segs
-          .slice(i + 1)
-          .filter((t) => t.edge !== s.edge && clash(s, t))
-          .map((t) => `${s.edge} × ${t.edge}`),
-      );
-      expect(clashes).toEqual([]);
-      const pierced = segs.flatMap((s) =>
-        laid.nodes.filter((node) => piercesBox(s, node.box)).map((node) => `${s.edge} → ${node.key}`),
-      );
-      expect(pierced).toEqual([]);
-    },
-  );
+  it.each(
+    externalShapes.map((s) => [`外部 ${s[0]} 枚・作業者 ${JSON.stringify(s[1])}`, s] as const),
+  )('%s のとき、別々の線は重ならず交わらず、札を突き抜けない', (_label, [n, counts]) => {
+    const laid = layout(withExternals(n, counts));
+    const segs = segments(laid);
+    const clashes = segs.flatMap((s, i) =>
+      segs
+        .slice(i + 1)
+        .filter((t) => t.edge !== s.edge && clash(s, t))
+        .map((t) => `${s.edge} × ${t.edge}`),
+    );
+    expect(clashes).toEqual([]);
+    const pierced = segs.flatMap((s) =>
+      laid.nodes.filter((node) => piercesBox(s, node.box)).map((node) => `${s.edge} → ${node.key}`),
+    );
+    expect(pierced).toEqual([]);
+  });
 
   it('外部の札は種類 external で出て、線は札とクローンの edges に載る（ホバーで強調できる）', () => {
     const laid = layout(withExternals(3, [1]));

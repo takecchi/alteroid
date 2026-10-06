@@ -276,7 +276,8 @@ function summarize({ clone, db, runners, managers, externals }: TopologyScene): 
     `クローン: ${STATUS[clone.status].label}${clone.task ? `（${clone.task}）` : ''}`,
     // 外部サービスは状態を観測していない。名前と、最後に呼ばれた時刻（task）だけを言う。
     ...(externals ?? []).map(
-      (x) => `外部サービス ${x.label}${x.task ? `（${x.task}）` : ''}${x.flow === 'down' ? '。いま呼ばれた' : ''}`,
+      (x) =>
+        `外部サービス ${x.label}${x.task ? `（${x.task}）` : ''}${x.flow === 'down' ? '。いま呼ばれた' : ''}`,
     ),
     `記憶ストア: ${STATUS[db.status].label}`,
     runners.length === 0

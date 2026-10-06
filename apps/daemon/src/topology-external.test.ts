@@ -69,7 +69,11 @@ describe('スナップショットの外部サービス', () => {
   it('連携の鍵で受けた呼び出しは external:<keyId>~clone を down で光らせる', () => {
     const activity = createTopologyActivityTracker();
     activity.record(
-      externalEvent({ via: { keyId: 'k1', name: 'GitHub 連携' }, source: 'github', at: iso(-2_000) }),
+      externalEvent({
+        via: { keyId: 'k1', name: 'GitHub 連携' },
+        source: 'github',
+        at: iso(-2_000),
+      }),
     );
     const snapshot = buildTopologySnapshot(inputs({ activity }));
     expect(snapshot.links).toContainEqual({
@@ -110,8 +114,12 @@ describe('スナップショットの外部サービス', () => {
   it('観測の窓（10分）を過ぎた鍵は札も線も出さない', () => {
     const activity = createTopologyActivityTracker();
     const window = topologyModule.TOPOLOGY_EXTERNAL_WINDOW_MS;
-    activity.record(externalEvent({ via: { keyId: 'old', name: '古い' }, at: iso(-window - 1_000) }));
-    activity.record(externalEvent({ via: { keyId: 'new', name: '新しい' }, at: iso(-window + 1_000) }));
+    activity.record(
+      externalEvent({ via: { keyId: 'old', name: '古い' }, at: iso(-window - 1_000) }),
+    );
+    activity.record(
+      externalEvent({ via: { keyId: 'new', name: '新しい' }, at: iso(-window + 1_000) }),
+    );
     const snapshot = buildTopologySnapshot(inputs({ activity }));
     expect(snapshot.externals?.map((e) => e.keyId)).toEqual(['new']);
     expect(snapshot.links.map((l) => l.key)).not.toContain('external:old~clone');

@@ -644,7 +644,12 @@ export function layoutNarrow(scene: TopologyScene): TopologyLayout {
   // 下辺へ上る（マネージャーの線は左の余白を通るので交わらない）。0 枚なら何も足さない。
   const externals = scene.externals ?? [];
   let rowY = daemonContainer.y + daemonContainer.h + GAP;
-  const extBoxes: Box[] = externals.map((_, i) => ({ x: 48, y: rowY + i * ROW_H, w: 248, h: NODE_H }));
+  const extBoxes: Box[] = externals.map((_, i) => ({
+    x: 48,
+    y: rowY + i * ROW_H,
+    w: 248,
+    h: NODE_H,
+  }));
   const extEdges: LaidEdge[] = [];
   if (externals.length > 0) {
     // 下の札ほど外側（右）の幹へ。上の札の横線が、下の札の幹まで届かない（交わらない）。

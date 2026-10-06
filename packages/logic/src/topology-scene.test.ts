@@ -735,7 +735,9 @@ describe('外部サービス（連携の鍵）の札と線（Issue #3676）', ()
     // 状態（正常・仕事なし）は言わない。外部サービスの状態は観測していない。
     expect(card).not.toHaveProperty('status');
     const labels = card?.details?.map((d) => d.label) ?? [];
-    expect(labels).toEqual(expect.arrayContaining(['鍵の名前', '鍵 ID', 'source', '最後の呼び出し', '観測の範囲']));
+    expect(labels).toEqual(
+      expect.arrayContaining(['鍵の名前', '鍵 ID', 'source', '最後の呼び出し', '観測の範囲']),
+    );
     const note = card?.details?.find((d) => d.label === '観測の範囲')?.value ?? '';
     expect(note).toContain('受け付けた時刻ではない');
     expect(note).toContain('起動後');

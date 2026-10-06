@@ -364,7 +364,9 @@ describe('外部サービス（連携の鍵）', () => {
     });
 
     // 札は状態を言わない（外部サービスの状態は観測していない）。
-    expect(await within(mapCard()).findByRole('button', { name: '外部サービス GitHub 連携' })).toBeTruthy();
+    expect(
+      await within(mapCard()).findByRole('button', { name: '外部サービス GitHub 連携' }),
+    ).toBeTruthy();
     expect(node(/^外部サービス CI$/)).toBeTruthy();
     await waitFor(() => expect(pulses('x-external:k1')).toBeGreaterThan(0));
     expect(pulses('x-external:k2')).toBe(0);
@@ -385,7 +387,9 @@ describe('外部サービス（連携の鍵）', () => {
       },
     });
 
-    expect(await within(mapCard()).findByRole('button', { name: '外部サービス ほか 3 件' })).toBeTruthy();
+    expect(
+      await within(mapCard()).findByRole('button', { name: '外部サービス ほか 3 件' }),
+    ).toBeTruthy();
   });
 
   it('古いデーモン（externals を載せない）では外部の札を出さず、他の札は今までどおり', async () => {
