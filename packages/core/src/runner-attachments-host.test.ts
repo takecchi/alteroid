@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { readFile, readdir } from 'node:fs/promises';
+import { mkdir, readFile, readdir, utimes } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import type { Query, SDKMessage, query as sdkQuery } from '@anthropic-ai/claude-agent-sdk';
@@ -278,6 +278,47 @@ describe('ローカル構成（同一プロセスの LocalRunner）でも同じ�
       expect(await readFile(join(root, 'mgr-abc123', 'att-log', 'x.log'))).toEqual(log);
     } finally {
       await runner.stop('mgr-abc123').catch(() => undefined);
+    }
+  });
+});
+
+describe('Host: 取りこぼした置き場の定期掃除（#3205）', () => {
+  it('周期で古い置き場は消え、生きた委譲の置き場は古くても残る', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    try {
+      const root = await makeTempDir('runner-att-live-');
+      const scratch = await makeTempDir('runner-att-scratch-');
+      const fake = fakeSdk();
+      const host = createRunnerHost({
+        runnerId: 'runner-att',
+        workspacePath: '/workspace',
+        emit: () => undefined,
+        queryFn: fake.fn,
+        env: { PATH: '/usr/bin' },
+        attachmentsRoot: root,
+        scratchSweep: { tmpRoot: scratch, intervalMs: 20 },
+        cwdExistsFn: () => true,
+        readCgroupEventCountersFn: async () => ({}),
+        finishUnpushedWorkFn: async () => ({ cwd: '/workspace', worktrees: [] }),
+      });
+      hosts.push(host);
+      await host.start({
+        managerId: 'mgr-live',
+        request: '調べて',
+        cwd: '/workspace',
+        attachments: [attachmentOf('att-1', 'a.txt', Buffer.from('x'), 'text/plain')],
+      });
+      await mkdir(join(root, 'mgr-dead', 'att-1'), { recursive: true });
+      const old = new Date(Date.now() - 25 * 60 * 60_000);
+      await utimes(join(root, 'mgr-live'), old, old);
+      await utimes(join(root, 'mgr-dead'), old, old);
+      await vi.advanceTimersByTimeAsync(20);
+      for (let i = 0; i < 5000 && (await readdir(root)).includes('mgr-dead'); i += 1) {
+        await new Promise<void>((resolve) => setImmediate(resolve));
+      }
+      expect(await readdir(root)).toEqual(['mgr-live']);
+    } finally {
+      vi.useRealTimers();
     }
   });
 });

@@ -766,6 +766,7 @@ class Host implements RunnerHost {
   #scratchTimer: ReturnType<typeof setInterval> | null = null;
   readonly #scratchAbort = new AbortController();
   #scratchRunning: Promise<void> | null = null;
+  #attachmentPruning: Promise<void> | null = null;
   /** この runner が起こした委譲 id（片付けの記録に委譲 id を付けるため）。 */
   readonly #knownManagerIds = new Set<string>();
   /**
@@ -842,6 +843,21 @@ class Host implements RunnerHost {
       // 同時に走るのは1本まで（前の回が遅れていれば今回は見送る）。見張りで終了を引き延ばさない。
       const scratchTimer = setInterval(
         () => {
+          // 担い手向け添付の置き場の取りこぼし（#3205）。添付を置かない間も、同じ周期で掃く
+          // （猶予は `RUNNER_ATTACHMENT_STALE_MS`、生きた委譲は残す）。作業場の片付けとは独立に1本まで。
+          if (this.#attachmentPruning === null) {
+            const prune = pruneStaleAttachmentDirs(
+              this.#attachmentsRoot,
+              [...this.#sessions.keys()],
+              Date.now(),
+            )
+              .catch(() => 0)
+              .then(() => undefined)
+              .finally(() => {
+                this.#attachmentPruning = null;
+              });
+            this.#attachmentPruning = prune;
+          }
           if (this.#scratchRunning !== null || this.#scratchAbort.signal.aborted) return;
           const run = sweeper
             .sweep(this.#scratchAbort.signal, this.runnerId)

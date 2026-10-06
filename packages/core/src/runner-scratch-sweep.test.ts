@@ -1,4 +1,4 @@
-import { writeFile, mkdir, readdir, rm } from 'node:fs/promises';
+import { writeFile, mkdir, readdir, rm, utimes } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 
@@ -94,6 +94,43 @@ describe('runner の周期と shutdown（#3039）', () => {
     await new Promise((r) => setImmediate(r));
     expect(readdirCalls).toBe(afterShutdown);
     expect(existsSync(path.join(tmp, 'mgr-bbbb2222'))).toBe(true);
+  });
+});
+
+describe('担い手向け添付の置き場の定期掃除（#3205）', () => {
+  let tmp: string;
+  let host: RunnerHost | undefined;
+  beforeEach(async () => {
+    tmp = await makeTempDir('runner-att-prune-');
+  });
+  afterEach(async () => {
+    vi.useRealTimers();
+    await host?.shutdown().catch(() => undefined);
+    await rm(tmp, { recursive: true, force: true });
+  });
+
+  it('添付を置かない間も、周期で古い置き場が消える。生きた委譲でなく新しいものは残る', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    const scratch = path.join(tmp, 'scratch');
+    const root = path.join(tmp, 'attachments');
+    await mkdir(scratch);
+    const old = new Date(Date.now() - 25 * 60 * 60_000);
+    for (const id of ['mgr-stale', 'mgr-fresh']) {
+      await mkdir(path.join(root, id, 'att'), { recursive: true });
+      await writeFile(path.join(root, id, 'att', 'a.txt'), 'x');
+    }
+    await utimes(path.join(root, 'mgr-stale'), old, old);
+    host = createRunnerHost({
+      runnerId: 'runner-x',
+      workspacePath: '/work',
+      emit: () => undefined,
+      env: { PATH: process.env.PATH },
+      attachmentsRoot: root,
+      scratchSweep: { tmpRoot: scratch, intervalMs: 20 },
+    });
+    await vi.advanceTimersByTimeAsync(20);
+    await settle(() => !existsSync(path.join(root, 'mgr-stale')));
+    expect(existsSync(path.join(root, 'mgr-fresh'))).toBe(true);
   });
 });
 
