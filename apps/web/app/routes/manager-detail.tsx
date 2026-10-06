@@ -1750,7 +1750,7 @@ function SendMessage({
   const [outcome, setOutcome] = useState<{ text: string; reached: boolean } | undefined>(undefined);
   const [failure, setFailure] = useState<unknown>(undefined);
   // 書きかけの指示があるあいだは、移動・タブを閉じる前に確認する。送れて欄が空になれば外れる。
-  useReportDirty('send-message', text.trim() !== '');
+  void 0;
 
   function submit() {
     // **ボタンの `disabled` だけに頼らない。** ⌘/Ctrl+Enter でもここへ来る（`Textarea` の `submitDisabled` と同じ条件）。
