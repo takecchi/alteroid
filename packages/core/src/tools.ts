@@ -8563,6 +8563,14 @@ export function createCloneTools(context: ToolContext) {
         // 落とした後に本文が残るなら、今までどおり通す（保存するのは落とす前の値のまま）。
         const bodyError = describeStringLengthViolation('body', stripNul(body), { min: 1 });
         if (bodyError !== null) return text(bodyError);
+        // **source も落とした後で見る**（Issue #3436）。台帳の入口は source からも NUL を落として残すので、
+        // NUL だけ・空文字は空の source の行になる。HTTP（`POST /commitments`）の `.min(1)` と揃えて断る
+        // （省略は今までどおり通る）。
+        if (source !== undefined && stripNul(source).length === 0) {
+          return text(
+            'source が空です。NUL だけ・空文字は指定できません。source は分かるときだけ、実のある文字列で渡し、無いなら省略してください。',
+          );
+        }
         const entry = {
           id: randomUUID(),
           at: new Date().toISOString(),
