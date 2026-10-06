@@ -259,12 +259,12 @@ export const ATTACHMENT_NAME_MAX_LENGTH = 255;
 
 /**
  * ファイル名の正規化。NUL を落とし、孤立サロゲートを U+FFFD に変え（`stripNulls` と同じ規則）、
- * 制御文字とパス区切り（`/` `\`）を `_` にし、前後の空白を除く。`.` / `..` / 空は `file` にする。
+ * 制御文字（C0・DEL・C1）・書式制御文字（`\p{Cf}`。双方向制御・ゼロ幅など。表示の偽装に使われる）・パス区切り（`/` `\`）を `_` にし、前後の空白を除く。`.` / `..` / 空は `file` にする。
  */
 export function normalizeAttachmentName(raw: string): string {
   let name = toWellFormed(stripNul(raw))
     // eslint-disable-next-line no-control-regex
-    .replace(/[\u0001-\u001f\u007f/\\]/g, '_')
+    .replace(/[\u0001-\u001f\u007f-\u009f/\\\p{Cf}]/gu, '_')
     .trim();
   if (name.length > ATTACHMENT_NAME_MAX_LENGTH) {
     name = toWellFormed(name.slice(0, ATTACHMENT_NAME_MAX_LENGTH));
