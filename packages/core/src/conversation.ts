@@ -141,6 +141,11 @@ export interface ConversationMessage {
    * 添付の無い発言には付けない。
    */
   attachments?: AttachmentRef[];
+  /**
+   * 送った側が付けた発言の id（`schema.ts` の `exchange.clientMessageId` をそのまま写す。Issue #3203）。
+   * 付けずに届いた発言（別の経路・古い行）には付けない。
+   */
+  clientMessageId?: string;
 }
 
 /**
@@ -394,6 +399,7 @@ export function toMessage(entry: Exchange): ConversationMessage {
     ...(entry.attachments === undefined || entry.attachments.length === 0
       ? {}
       : { attachments: entry.attachments }),
+    ...(entry.clientMessageId === undefined ? {} : { clientMessageId: entry.clientMessageId }),
   };
 }
 

@@ -455,6 +455,11 @@ const conversationMessageSchema = z.object({
   turnFailure: z.enum(['failed', 'held']).optional(),
   /** 発言に添えた添付のメタデータ（中身は `GET /attachments/:id`）。無い発言には付かない。 */
   attachments: z.array(attachmentRefSchema).optional(),
+  /**
+   * 送った側が付けた発言の id（`POST /chat` の `clientMessageId`。Issue #3203）。人間の発言（`inbound`）で、
+   * 送った側が名乗ったものだけに付く。**送った側が「自分の発言が履歴に現れたか」を本文でなく id で確かめる**ための欄。
+   */
+  clientMessageId: z.string().optional(),
 });
 
 export const conversationDetailResponseSchema = z.object({

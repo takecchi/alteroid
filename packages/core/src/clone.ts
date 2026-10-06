@@ -5382,6 +5382,8 @@ class Clone implements CloneHost {
         text: event.text,
         conversationId: event.conversationId,
         ...(event.supersedes === undefined ? {} : { supersedes: event.supersedes }),
+        // 送った側の発言 id（#3203）。無い発言には付けない（`undefined` のキーを作らない）。
+        ...(event.clientMessageId === undefined ? {} : { clientMessageId: event.clientMessageId }),
         // 添付はメタデータだけを写す（中身は `stores.attachments`。日誌へは書かない）。
         // ファイル名は `stripNul`（pg の `stripNulls` と同じ規則）を通す。
         ...(event.attachments === undefined || event.attachments.length === 0

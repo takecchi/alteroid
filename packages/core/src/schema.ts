@@ -525,6 +525,14 @@ export const approvalSelectionSchema = z.object({
 export type ApprovalSelection = z.infer<typeof approvalSelectionSchema>;
 
 /**
+ * `POST /chat` の `clientMessageId`（Issue #3203）の形。クライアントが発言ごとに作る一意な文字列で、
+ * UUID でも `[A-Za-z0-9_-]` の1〜128字でもよい。ログ・URL・ファイル名に出ても壊れない文字だけに絞る。
+ */
+export const clientMessageIdSchema = z
+  .string()
+  .regex(/^[A-Za-z0-9_-]{1,128}$/, 'clientMessageId は英数字・_ - の1〜128字');
+
+/**
  * 発言に添えた添付の参照（Issue #3111 段1b）。**中身（bytes）は持たない**——中身は
  * `stores.attachments` に在り、受信箱・日誌・記憶のどこにも書かない。
  */
@@ -563,6 +571,14 @@ export const inboxEventSchema = z.discriminatedUnion('type', [
     supersedes: z.string().optional(),
     /** 添付の参照（メタデータだけ。中身は `stores.attachments`）。`Clone#record` が日誌の `exchange` へ写す。 */
     attachments: z.array(attachmentRefSchema).optional(),
+    /**
+     * クライアントが発言ごとに作る一意な id（Issue #3203）。`POST /chat` の `clientMessageId` から、受信箱の
+     * `human_message` と日誌の inbound `exchange` へそのまま通す。**サーバが発行する `id` ではない。**
+     * 送った側が「自分の発言が履歴に現れたか」を本文でなく id で確かめるための印で、同じ会話に同じ値が
+     * 再び届いたら二重に受けない（`POST /chat` の冪等）。**任意欄。** 無い発言（別の経路・古い行）は
+     * 「id を持たない」であって「別の発言」ではない。値の形の検査は `POST /chat` の入口が持つ（`clientMessageIdSchema`）。
+     */
+    clientMessageId: z.string().optional(),
   }),
   z.object({
     type: z.literal('human_answer'),
@@ -1170,6 +1186,14 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
      * **メタデータだけで、中身（bytes）は日誌に書かない。**
      */
     attachments: z.array(attachmentRefSchema).optional(),
+    /**
+     * クライアントが発言ごとに作る一意な id（Issue #3203）。`POST /chat` の `clientMessageId` から、受信箱の
+     * `human_message` と日誌の inbound `exchange` へそのまま通す。**サーバが発行する `id` ではない。**
+     * 送った側が「自分の発言が履歴に現れたか」を本文でなく id で確かめるための印で、同じ会話に同じ値が
+     * 再び届いたら二重に受けない（`POST /chat` の冪等）。**任意欄。** 無い発言（別の経路・古い行）は
+     * 「id を持たない」であって「別の発言」ではない。値の形の検査は `POST /chat` の入口が持つ（`clientMessageIdSchema`）。
+     */
+    clientMessageId: z.string().optional(),
     /**
      * **この行は返信ではなく、「このターンには返せなかった」という知らせである**
      * （`with: 'human'` かつ `role: 'outbound'` のときだけ付く）。

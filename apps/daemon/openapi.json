@@ -511,7 +511,7 @@
         "operationId": "postChat",
         "tags": ["chat"],
         "summary": "クローンと話す（SSE）",
-        "description": "人間の発言をクローンの受信箱へ積み、クローンの応答を SSE で流す。**SSE。** `event:` にイベント名（`open` / `queued` / `text` / `thinking` / `tool` / `ask_human` / `done` / `error`）、`data:` に対応する JSON が入る。`data:` の 形は下記スキーマ（`open` は `{conversationId}` のみで別枠、他は `chatStreamEventSchema` の各枝）。人間が chat を閉じてもクローンのターンは走り続ける（人間の不在で止まるのは承認待ちの仕事だけ）。**`queued` と `thinking` は別の状態である。** `queued` は受信箱に積んだ（受理したが順番待ち。先客のターンが走っていれば、ここで数分待つことがある）、`thinking` は入力がモデルへ渡って最初の出力を待っている。前者の後に後者が来る。**発言が日誌に載るのも `queued` の時点である**ので、`GET /conversations` にはターンの順番を待たずに現れる。**コメント行（`:` で始まる行）の heartbeat が周期的に流れる。SSE の仕様上クライアントは読み捨ててよい**（無音のまま死んだ接続を掃除するための送信でもある）。**`supersedes` — 送信済みの人間の発言を編集する。** この会話の中の、自分の過去の発言（`role: inbound`）の id を渡すと、その発言は既定ビュー・`conversation_read` から畳まれ、この発言が編集後の版として応答を受ける（編集前のターンで起きた副作用——承認待ち・記憶・マネージャー・台帳の行——は一切取り消さない）。`conversationId` と併せて渡すこと。編集できるのは**人間の発言だけ**（クローンの応答は指せない）。",
+        "description": "人間の発言をクローンの受信箱へ積み、クローンの応答を SSE で流す。**SSE。** `event:` にイベント名（`open` / `queued` / `text` / `thinking` / `tool` / `ask_human` / `done` / `error`）、`data:` に対応する JSON が入る。`data:` の 形は下記スキーマ（`open` は `{conversationId, clientMessageId?}`（重複の再送のときは `duplicate: true` も）で別枠、他は `chatStreamEventSchema` の各枝）。人間が chat を閉じてもクローンのターンは走り続ける（人間の不在で止まるのは承認待ちの仕事だけ）。**`queued` と `thinking` は別の状態である。** `queued` は受信箱に積んだ（受理したが順番待ち。先客のターンが走っていれば、ここで数分待つことがある）、`thinking` は入力がモデルへ渡って最初の出力を待っている。前者の後に後者が来る。**発言が日誌に載るのも `queued` の時点である**ので、`GET /conversations` にはターンの順番を待たずに現れる。**コメント行（`:` で始まる行）の heartbeat が周期的に流れる。SSE の仕様上クライアントは読み捨ててよい**（無音のまま死んだ接続を掃除するための送信でもある）。**`supersedes` — 送信済みの人間の発言を編集する。** この会話の中の、自分の過去の発言（`role: inbound`）の id を渡すと、その発言は既定ビュー・`conversation_read` から畳まれ、この発言が編集後の版として応答を受ける（編集前のターンで起きた副作用——承認待ち・記憶・マネージャー・台帳の行——は一切取り消さない）。`conversationId` と併せて渡すこと。編集できるのは**人間の発言だけ**（クローンの応答は指せない）。**`clientMessageId` — 送った側が発言ごとに作る一意な id（任意。英数字・`_` `-` の1〜128字）。** 受信箱の発言と日誌の発言に残り、`open` と `GET /conversations/:id` の `messages` で返る（送った側が、自分の発言が履歴に現れたかを本文でなく id で確かめられる）。**同じ値が再び届いたら二重に受けない**——何も積まず、`open`（`duplicate: true`）の後、進行中のターンがあれば途中経過から続きを流して閉じる（`GET /chat/:conversationId/stream` と同じ）。別の会話で受け取り済みの値は 409。重複の判定は、直近の日誌（人間との往復200件）と受け取り直後の記憶で行う。",
         "responses": {
           "200": {
             "description": "SSE ストリーム。",
@@ -623,7 +623,23 @@
             }
           },
           "400": {
-            "description": "`text` が空で添付も無い、または本文が JSON として不正。または `supersedes` の検証に落ちた——`conversationId` が無いのに `supersedes` がある、指した id が見つからない・この会話のものではない、クローンの応答（outbound）を指している、既に別の編集に置き換えられている、のいずれか。",
+            "description": "`text` が空で添付も無い、または本文が JSON として不正。または `supersedes` の検証に落ちた——`conversationId` が無いのに `supersedes` がある、指した id が見つからない・この会話のものではない、クローンの応答（outbound）を指している、既に別の編集に置き換えられている、のいずれか。`clientMessageId` の形が不正（英数字・`_` `-` の1〜128字）のときも 400。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`clientMessageId` が、**別の会話**の発言として既に受け取られている（`code: client_message_id_conflict`）。同じ会話に同じ値が届いた場合は 409 ではなく、二重に受けずに 200（下の説明）。",
             "content": {
               "application/json": {
                 "schema": {
@@ -663,6 +679,10 @@
                       "type": "string",
                       "minLength": 1
                     }
+                  },
+                  "clientMessageId": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9_-]{1,128}$"
                   }
                 },
                 "required": ["text"]
@@ -1164,6 +1184,9 @@
                               },
                               "required": ["id", "name", "mediaType", "size", "sha256"]
                             }
+                          },
+                          "clientMessageId": {
+                            "type": "string"
                           }
                         },
                         "required": ["id", "at", "role", "text"]
@@ -1459,6 +1482,9 @@
                             },
                             "required": ["id", "name", "mediaType", "size", "sha256"]
                           }
+                        },
+                        "clientMessageId": {
+                          "type": "string"
                         },
                         "turnFailure": {
                           "type": "string",
@@ -6111,6 +6137,9 @@
                                   "required": ["id", "name", "mediaType", "size", "sha256"]
                                 }
                               },
+                              "clientMessageId": {
+                                "type": "string"
+                              },
                               "turnFailure": {
                                 "type": "string",
                                 "enum": ["failed", "held"]
@@ -9563,6 +9592,9 @@
                                     "required": ["id", "name", "mediaType", "size", "sha256"]
                                   }
                                 },
+                                "clientMessageId": {
+                                  "type": "string"
+                                },
                                 "turnFailure": {
                                   "type": "string",
                                   "enum": ["failed", "held"]
@@ -10913,6 +10945,9 @@
                                     },
                                     "required": ["id", "name", "mediaType", "size", "sha256"]
                                   }
+                                },
+                                "clientMessageId": {
+                                  "type": "string"
                                 },
                                 "turnFailure": {
                                   "type": "string",
@@ -12265,6 +12300,9 @@
                                   "required": ["id", "name", "mediaType", "size", "sha256"]
                                 }
                               },
+                              "clientMessageId": {
+                                "type": "string"
+                              },
                               "turnFailure": {
                                 "type": "string",
                                 "enum": ["failed", "held"]
@@ -13603,6 +13641,9 @@
                                   },
                                   "required": ["id", "name", "mediaType", "size", "sha256"]
                                 }
+                              },
+                              "clientMessageId": {
+                                "type": "string"
                               },
                               "turnFailure": {
                                 "type": "string",
