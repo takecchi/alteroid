@@ -424,7 +424,10 @@ describe('/commitments 画面', () => {
       fireEvent.change(body, { target: { value: '手順1' } });
 
       const notPrevented = fireEvent.keyDown(body, { key: 'Enter' });
-      await new Promise((resolve) => setTimeout(resolve, 20));
+      // 実時間で待たない（#2146）。送る経路は同期で fetch まで進むので、マイクロタスクを流せば足りる。
+      await act(async () => {
+        for (let i = 0; i < 10; i += 1) await Promise.resolve();
+      });
       expect(notPrevented).toBe(true);
       expect(requests.some(isPost)).toBe(false);
     });
@@ -457,7 +460,10 @@ describe('/commitments 画面', () => {
       fireEvent.change(body, { target: { value: '  \n ' } });
 
       fireEvent.keyDown(body, { key: 'Enter', ctrlKey: true });
-      await new Promise((resolve) => setTimeout(resolve, 20));
+      // 実時間で待たない（#2146）。送る経路は同期で fetch まで進むので、マイクロタスクを流せば足りる。
+      await act(async () => {
+        for (let i = 0; i < 10; i += 1) await Promise.resolve();
+      });
       expect(requests.some(isPost)).toBe(false);
     });
 
