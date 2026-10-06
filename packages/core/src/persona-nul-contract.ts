@@ -6,6 +6,8 @@ import type { PersonaStore } from './store.js';
  *
  * - 本文の NUL は、`write` も `append` も **fs も含めて落として残す**（pg は元から落としていた）
  * - slug は入口のスキーマ（`memorySlugSchema`）が NUL を含めて弾く。3実装とも投げる
+ * - **末尾が `\n\0` の本文**は、NUL を落としてから末尾の改行を足す（足してから落とすと空行が1つ余る。
+ *   pg だけが順序を逆にしていた。issue #3284）。`write` も `append` も同じ
  *
  * 書いた文書は消して終わる。vitest に依存しない。
  */
@@ -26,6 +28,24 @@ export async function verifyPersonaNulContract(persona: PersonaStore): Promise<v
   if (appended.content.includes('\u0000') || !appended.content.includes('追記')) {
     fail(`appendで NUL が残る・欠ける: ${JSON.stringify(appended.content)}`);
   }
+
+  // 末尾が `\n\0` の本文。NUL を先に落とすので、改行は1つのまま（issue #3284）。
+  const tail = await persona.write(slug, 'x\n\u0000');
+  if (tail.content !== 'x\n')
+    fail(`write('x\\n\\0')の返り値の末尾に空行が余る・欠ける: ${JSON.stringify(tail.content)}`);
+  const tailRead = await persona.read(slug);
+  if (tailRead?.content !== 'x\n')
+    fail(
+      `write('x\\n\\0')の読み戻しの末尾に空行が余る・欠ける: ${JSON.stringify(tailRead?.content)}`,
+    );
+  const tailAppended = await persona.append(slug, 'y\n\u0000');
+  if (tailAppended.content !== 'x\n\ny\n')
+    fail(`append('y\\n\\0')の末尾に空行が余る・欠ける: ${JSON.stringify(tailAppended.content)}`);
+
+  // NUL だけの追記。連結してから正規化するので、空行は1つだけ増える（pg が空の本文に改行を足して2つにしていた）。
+  const nulOnly = await persona.append(slug, '\u0000');
+  if (nulOnly.content !== 'x\n\ny\n\n')
+    fail(`append('\\0')の空行が1つにならない: ${JSON.stringify(nulOnly.content)}`);
 
   for (const bad of ['persona-\u0000-nul']) {
     let thrown: unknown;
