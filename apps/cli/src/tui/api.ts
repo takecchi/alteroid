@@ -57,6 +57,11 @@ export interface ConversationMessage {
 export interface HeaderCounts {
   /** 未回答の承認待ち。読めない行（`unreadable`）は数えない。 */
   pendingApprovals: number;
+  /**
+   * 読めない承認待ちの行数（`unreadable`）。`pendingApprovals` には足さない（待っているとは限らない）
+   * が、0 件の顔にもしない — ヘッダとタブが警告で言う（#3090）。古いデーモンが返さなければ 0。
+   */
+  unreadableApprovals: number;
   /** 状態が `running` の委譲。 */
   runningManagers: number;
 }
@@ -374,8 +379,12 @@ export function createTuiApi(target: Target): TuiApi {
       ]);
       if (!approvals.ok) throw await failure('承認待ちを読めませんでした', approvals);
       if (!managers.ok) throw await failure('委譲を読めませんでした', managers);
+      const approvalsBody = await approvals.json();
       return {
-        pendingApprovals: (await approvals.json()).approvals.length,
+        pendingApprovals: approvalsBody.approvals.length,
+        unreadableApprovals: Array.isArray(approvalsBody.unreadable)
+          ? approvalsBody.unreadable.length
+          : 0,
         runningManagers: (await managers.json()).managers.filter((m) => m.status === 'running')
           .length,
       };

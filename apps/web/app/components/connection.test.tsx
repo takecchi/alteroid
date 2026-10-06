@@ -16,7 +16,7 @@
  *
  * この画面には、これまでテストが無かった。
  */
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { json, Providers, stubFetch, storeTestBaseUrl, TEST_BASE_URL } from '~/test-support';
@@ -671,5 +671,50 @@ describe('記憶の行は認証の後ろの /status から取る（#2869）', ()
     );
     expect(await screen.findByText('取得できません（ログインが要る場合があります）')).toBeTruthy();
     expect(screen.getByText('応答あり')).toBeTruthy();
+  });
+});
+
+/**
+ * issue #3092: `status.error` は `data` が無い枝でしか見ていなかったので、一度読めた後の
+ * 取り直しの失敗が見えなかった（記憶の置き場が前回のまま出続ける）。古い値は残し、注記する。
+ */
+describe('置き場の取り直しの失敗（issue #3092）', () => {
+  it('取れたあとの /status の取り直しが失敗しても、置き場は残したまま、失敗を言う。通れば消える', async () => {
+    let statusFailing = false;
+    stubFetch((url) => {
+      if (url.includes('/health')) {
+        return json({
+          ok: true,
+          pid: 1,
+          operator: false,
+          auth: { enabled: false, providers: [] },
+        });
+      }
+      if (url.includes('/status')) {
+        return statusFailing ? json({ error: 'internal' }, 500) : json({ storage: '/data/store' });
+      }
+      return undefined;
+    });
+    render(
+      <Providers>
+        <ConnectionCard />
+      </Providers>,
+    );
+    expect(await screen.findByText('/data/store')).toBeTruthy();
+    expect(screen.queryByText(/取り直せなかった/)).toBeNull();
+
+    statusFailing = true;
+    act(() => {
+      window.dispatchEvent(new Event('focus'));
+    });
+    expect(await screen.findByText(/取り直せなかった/)).toBeTruthy();
+    expect(screen.getByText('/data/store')).toBeTruthy();
+
+    statusFailing = false;
+    act(() => {
+      window.dispatchEvent(new Event('focus'));
+    });
+    await waitFor(() => expect(screen.queryByText(/取り直せなかった/)).toBeNull());
+    expect(screen.getByText('/data/store')).toBeTruthy();
   });
 });

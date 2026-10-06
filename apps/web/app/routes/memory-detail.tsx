@@ -78,7 +78,13 @@ function MemoryDetailBody({ slug }: { slug: string }) {
 
   // 記憶が無い slug は 404 になる。それは「これから書く」場合なので、
   // 失敗ではなく空の編集画面として扱う。
-  const missing = error !== undefined && (error as { status?: number }).status === 404;
+  const notFound = error !== undefined && (error as { status?: number }).status === 404;
+  const missing = notFound && data === undefined;
+  /**
+   * 読めた後の取り直しが 404（別の手段で消された。issue #3092）。`data` が残っているので
+   * `missing` には含めない（「これから書く」ではない）。
+   */
+  const goneAfterRead = notFound && data !== undefined;
 
   /**
    * **取れなかったのを空の記憶と描かない**（issue #2319）。本文をまだ一度も
@@ -188,7 +194,7 @@ function MemoryDetailBody({ slug }: { slug: string }) {
           )}
         </div>
         <div className="flex shrink-0 items-center gap-2">
-          {!missing && data !== undefined && (
+          {!missing && !goneAfterRead && data !== undefined && (
             <>
               <Button
                 variant="danger"
@@ -238,7 +244,18 @@ function MemoryDetailBody({ slug }: { slug: string }) {
         </div>
       </header>
 
-      {!missing && <ErrorNote error={error} className="mb-3" />}
+      {!missing && !goneAfterRead && <ErrorNote error={error} className="mb-3" />}
+      {/*
+        **読めた後の取り直しが 404 のとき（issue #3092）。** この記憶が別の手段で消された（または
+        見つからなくなった）。`missing`（まだ無い＝これから書く）とは別で、本文と書きかけは消さずに
+        残し、その旨を注記する。保存は読んだ版を `ifMatch` に送る既存の経路のままなので、消された
+        ものを黙って蘇らせず、「ほかで消された」の確認（自分の内容で上書きする）に当たる。
+      */}
+      {goneAfterRead && (
+        <p role="alert" className="mb-3 rounded-lg border border-warn/50 p-3 text-sm text-warn">
+          この記憶は、読んだ後に別の手段で消された（または見つからない）。下の内容は前に読めたときのもので、書きかけもそのまま残してある。保存するときは、消されたものを書き戻すかどうかを確認する。
+        </p>
+      )}
       <ErrorNote error={failure} className="mb-3" />
       {deleteConflict !== undefined && (
         <div role="alert" className="mb-3 rounded-lg border border-destructive/50 p-3 text-sm">

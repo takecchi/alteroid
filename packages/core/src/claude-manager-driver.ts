@@ -28,6 +28,7 @@ import type {
   AgentUserInput,
 } from './agent-session.js';
 import { buildManagerSessionOptions, foldClaudeMessage } from './claude-provider.js';
+import { toSdkContent } from './claude-user-content.js';
 import { isDaemonAnsweredTool } from './daemon-answered-tool.js';
 import { readSessionUsage } from './usage.js';
 
@@ -51,7 +52,7 @@ async function* toSdkInput(input: AsyncIterable<AgentUserInput>): AsyncGenerator
   for await (const next of input) {
     yield {
       type: 'user',
-      message: { role: 'user', content: next.text },
+      message: { role: 'user', content: toSdkContent(next) },
       parent_tool_use_id: null,
     };
   }

@@ -5,7 +5,7 @@
  * 読めていないのに空の編集欄が出ると、既存の記憶を空のまま上書き保存できてしまう。
  * 404（これから書く）だけは失敗ではないので、空の編集欄を出す。
  */
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
@@ -117,5 +117,62 @@ describe('記憶の取得に失敗したとき（issue #2319）', () => {
     expect(calls).toBeGreaterThanOrEqual(2);
     expect(screen.getByText('本文だよ')).toBeTruthy();
     expect(screen.getByRole('button', { name: /保存する|変更なし/ })).toBeTruthy();
+  });
+});
+
+/**
+ * issue #3092: 読めた後の取り直しが 404（ほかの手段で消された）になったとき。以前は `missing` が
+ * 「これから書く」と同じ扱いで、失敗の表示が消え、残った本文だけが編集欄に出ていた。
+ *
+ * 方針: 本文と書きかけは消さない。「消された（または見つからない）」を注記する。保存は読んだ版を
+ * `ifMatch` に送る既存の経路のままなので、消されたものを黙って蘇らせず、409（消された）の確認に
+ * 当たる。
+ */
+describe('読めた後の取り直しが 404 になったとき（issue #3092）', () => {
+  const V1 = 'a'.repeat(64);
+
+  function stubGoneAfterRead() {
+    const puts: unknown[] = [];
+    let gone = false;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = input instanceof Request ? input : new Request(input, init);
+      if (new URL(request.url).pathname !== '/memory/notes') {
+        return Promise.reject(new TypeError(`Failed to fetch: ${request.url}`));
+      }
+      if (request.method === 'PUT') {
+        puts.push(await request.json());
+        return json({ error: '消えている', current: null }, 409);
+      }
+      return gone ? json({ error: 'not found' }, 404) : json({ document: DOC, version: V1 });
+    }) as typeof fetch;
+    return {
+      puts,
+      vanish: () => {
+        gone = true;
+      },
+    };
+  }
+
+  it('本文と書きかけは残したまま、消された旨を言い、削除は出さない。保存は消された確認に当たる', async () => {
+    const stub = stubGoneAfterRead();
+    renderPage();
+    fireEvent.mouseDown(await screen.findByRole('tab', { name: '編集' }));
+    const box = await screen.findByRole('textbox');
+    fireEvent.change(box, { target: { value: '人間の書きかけ' } });
+    expect(screen.getByRole('button', { name: '削除' })).toBeTruthy();
+
+    stub.vanish();
+    act(() => {
+      window.dispatchEvent(new Event('focus'));
+    });
+
+    expect(await screen.findByText(/別の手段で消された/)).toBeTruthy();
+    expect((screen.getByRole('textbox') as HTMLTextAreaElement).value).toBe('人間の書きかけ');
+    expect(screen.queryByRole('button', { name: '削除' })).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: '保存する' }));
+    await waitFor(() => expect(stub.puts).toEqual([{ content: '人間の書きかけ', ifMatch: V1 }]));
+    expect((await screen.findAllByText(/ほかで消された/)).length).toBeGreaterThan(0);
+    expect((screen.getByRole('textbox') as HTMLTextAreaElement).value).toBe('人間の書きかけ');
   });
 });

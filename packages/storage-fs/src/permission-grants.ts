@@ -183,7 +183,7 @@ export class FsPermissionGrantStore implements PermissionGrantStore {
       // 無い・取り消し済みなら記録しない（Issue #1687。`PermissionGrantStore.markUsed` の doc）。
       if (found === undefined || found.revokedAt !== undefined)
         return { next: file, result: false };
-      if (found.lastUsedAt !== undefined && found.lastUsedAt >= at) {
+      if (found.lastUsedAt !== undefined && compareIsoInstant(found.lastUsedAt, at) >= 0) {
         return { next: file, result: true };
       }
       const next = permissionGrantSchema.parse({ ...found, lastUsedAt: at });

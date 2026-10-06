@@ -18,7 +18,7 @@
  */
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { json, Providers, storeTestBaseUrl } from '~/test-support';
 
@@ -97,7 +97,9 @@ type Reply = { status: number; body: unknown };
  * `fetch(new Request(...))` の形で呼ぶので、method も本文も落ちる。
  * `env-vars.test.tsx` の同じ断り書きと同じ理由）。
  */
-function stubProfile(options: { rows?: Row[]; get?: Reply; put?: Reply; del?: Reply } = {}) {
+function stubProfile(
+  options: { rows?: Row[]; get?: Reply; put?: Reply; del?: Reply; putGate?: Promise<void> } = {},
+) {
   let rows = options.rows ?? [BASE, RUST];
   const puts: { name: string; body: { script: string; scope?: string } }[] = [];
   const deletes: string[] = [];
@@ -118,6 +120,8 @@ function stubProfile(options: { rows?: Row[]; get?: Reply; put?: Reply; del?: Re
         scope?: string;
       };
       puts.push({ name, body });
+      // 保存の完了を、テストが好きな時点まで止める（実時間の待ちは使わない）。
+      await options.putGate;
       const reply = options.put ?? { status: 200, body: UPDATED };
       if (reply.status === 200) {
         rows = [
@@ -373,6 +377,127 @@ describe('/profile 画面 — 行を置く', () => {
     ).toBeGreaterThan(0);
     expect(screen.queryByText('alteroid access owner <アカウント id>')).toBeNull();
     expect(screen.queryByText(/持ち主として宣言してください/)).toBeNull();
+  });
+});
+
+/**
+ * 別の行の「編集する」へ切り替えたとき、前の行の確認の枠と失敗の表示を残さない（issue #3073）。
+ * 確認・失敗は `ProfileEditor` の中の state なので、親の `setEditor` だけでは畳まれなかった。
+ */
+describe('/profile 画面 — 編集する行を切り替える', () => {
+  it('確認の枠が出たまま別の行の「編集する」を押すと、確認は畳まれ、PUT は走らない', async () => {
+    const { puts } = stubProfile();
+    renderScreen();
+
+    fireEvent.click((await screen.findAllByRole('button', { name: '編集する' }))[0]!);
+    fireEvent.change(screen.getByLabelText('プロファイルの新しい本文'), {
+      target: { value: 'export A=1\n' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '保存する' }));
+    expect(screen.getByRole('button', { name: '本当に保存する' })).toBeTruthy();
+
+    fireEvent.click(screen.getAllByRole('button', { name: '編集する' })[1]!);
+
+    expect(screen.queryByRole('button', { name: '本当に保存する' })).toBeNull();
+    expect(screen.getByRole('button', { name: '保存する' })).toBeTruthy();
+    expect(puts).toEqual([]);
+  });
+
+  it('保存の失敗が出たまま別の行の「編集する」を押すと、前の行の失敗は消える', async () => {
+    stubProfile({
+      put: { status: 400, body: { error: 'プロファイルが読めなかったので保存していない' } },
+    });
+    renderScreen();
+
+    fireEvent.click((await screen.findAllByRole('button', { name: '編集する' }))[0]!);
+    fireEvent.change(screen.getByLabelText('プロファイルの新しい本文'), {
+      target: { value: 'export (\n' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '保存する' }));
+    fireEvent.click(screen.getByRole('button', { name: '本当に保存する' }));
+    expect(await screen.findByText('プロファイルが読めなかったので保存していない')).toBeTruthy();
+
+    fireEvent.click(screen.getAllByRole('button', { name: '編集する' })[1]!);
+
+    expect(screen.queryByText('プロファイルが読めなかったので保存していない')).toBeNull();
+  });
+});
+
+describe('/profile 画面 — 保存中に別の行へ切り替える', () => {
+  function gate() {
+    let release!: () => void;
+    const promise = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    return { promise, release };
+  }
+
+  it('保存中に別の行の「編集する」を押すと、前の行の保存が終わっても新しい行の編集欄と書きかけは残る', async () => {
+    const { promise, release } = gate();
+    const { puts } = stubProfile({ putGate: promise });
+    renderScreen();
+
+    fireEvent.click((await screen.findAllByRole('button', { name: '編集する' }))[0]!);
+    fireEvent.change(screen.getByLabelText('プロファイルの新しい本文'), {
+      target: { value: 'export A=1\n' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '保存する' }));
+    fireEvent.click(screen.getByRole('button', { name: '本当に保存する' }));
+    await vi.waitFor(() => expect(puts).toHaveLength(1));
+
+    fireEvent.click(screen.getAllByRole('button', { name: '編集する' })[1]!);
+    fireEvent.change(screen.getByLabelText('プロファイルの新しい本文'), {
+      target: { value: 'export DRAFT=2\n' },
+    });
+    release();
+
+    // 前の行の保存の結果は、行の名前つきで出る（書き込み自体は起きたので隠さない）。
+    expect(await screen.findByText('プロファイルの行 base を更新した。')).toBeTruthy();
+    expect(screen.getByLabelText<HTMLTextAreaElement>('プロファイルの新しい本文').value).toBe(
+      'export DRAFT=2\n',
+    );
+    expect(screen.getByLabelText<HTMLInputElement>('プロファイルの行の名前').value).toBe('rust');
+  });
+
+  it('新しい行（「行を追加する」）を保存中に別の行の「編集する」を押しても、同じく書きかけは残る', async () => {
+    const { promise, release } = gate();
+    const { puts } = stubProfile({ putGate: promise });
+    renderScreen();
+
+    fireEvent.click(await screen.findByRole('button', { name: '行を追加する' }));
+    fireEvent.change(screen.getByLabelText('プロファイルの行の名前'), { target: { value: 'new' } });
+    fireEvent.change(screen.getByLabelText('プロファイルの新しい本文'), {
+      target: { value: 'export N=1\n' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '保存する' }));
+    fireEvent.click(screen.getByRole('button', { name: '本当に保存する' }));
+    await vi.waitFor(() => expect(puts).toHaveLength(1));
+
+    fireEvent.click(screen.getAllByRole('button', { name: '編集する' })[0]!);
+    fireEvent.change(screen.getByLabelText('プロファイルの新しい本文'), {
+      target: { value: 'export DRAFT=3\n' },
+    });
+    release();
+
+    expect(await screen.findByText('プロファイルの行 new を更新した。')).toBeTruthy();
+    expect(screen.getByLabelText<HTMLTextAreaElement>('プロファイルの新しい本文').value).toBe(
+      'export DRAFT=3\n',
+    );
+  });
+
+  it('切り替えずに保存が終われば、従来どおり編集欄は閉じる', async () => {
+    stubProfile();
+    renderScreen();
+
+    fireEvent.click((await screen.findAllByRole('button', { name: '編集する' }))[0]!);
+    fireEvent.change(screen.getByLabelText('プロファイルの新しい本文'), {
+      target: { value: 'export A=1\n' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '保存する' }));
+    fireEvent.click(screen.getByRole('button', { name: '本当に保存する' }));
+
+    expect(await screen.findByText('プロファイルの行 base を更新した。')).toBeTruthy();
+    expect(screen.queryByLabelText('プロファイルの新しい本文')).toBeNull();
   });
 });
 

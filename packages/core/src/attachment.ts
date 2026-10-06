@@ -1,0 +1,339 @@
+import { randomUUID } from 'node:crypto';
+
+import { sha256Hex } from './auth.js';
+import { assertNoNul, stripNul } from './nul-guard.js';
+
+/**
+ * 添付ファイルの置き場（Issue #3111 段1a。**置き場所だけ**で、HTTP・クローン・Web はまだ触らない）。
+ *
+ * **記憶（memory）とは独立である。** 添付の中身は記憶へ書かない。人間が会話に添えた
+ * 画像・動画・ファイルのバイト列を、期限つきで預かるだけの場所である。
+ *
+ * ## 寿命
+ *
+ * - `expiresAt`（既定: 作成から30日）を過ぎたものは {@link AttachmentStore.prune} が消す。
+ * - **発言へ結び付いていない**（`conversationId` が無い）まま作成から1時間たったものも消す
+ *   （アップロードしただけで送らなかった残骸）。結び付けは {@link AttachmentStore.bind}。
+ *
+ * ## NUL
+ *
+ * 鍵（`id`・`conversationId`）の NUL は書く口では {@link NulNotAllowedError} で断り、読む口
+ * （`get`・`getMeta`）は「無い」と答える（`nul-guard.ts` の決め）。ファイル名は NUL・孤立サロゲートを
+ * 落として残す（{@link normalizeAttachmentName}）。
+ */
+
+/** 添付1つの控え。中身（bytes）は持たない。 */
+export interface AttachmentMeta {
+  readonly id: string;
+  /** 正規化済みのファイル名（パス区切りを含まない）。 */
+  readonly name: string;
+  /** 宣言された MIME（小文字・パラメータ除去済み）。 */
+  readonly mediaType: string;
+  /** バイト数。 */
+  readonly size: number;
+  /** 中身の SHA-256（16進）。core が計算する。 */
+  readonly sha256: string;
+  /** 結び付けた会話。未結び付けなら無い。 */
+  readonly conversationId?: string;
+  /** ISO 8601。 */
+  readonly createdAt: string;
+  /** ISO 8601。 */
+  readonly expiresAt: string;
+}
+
+export interface AttachmentPutInput {
+  readonly name: string;
+  readonly mediaType: string;
+  readonly bytes: Uint8Array;
+  /** 最初から結び付けて置くとき。無ければ未結び付け（後で `bind`）。 */
+  readonly conversationId?: string;
+}
+
+export interface AttachmentBindResult {
+  /** 結び付いた id（すでに同じ会話へ結び付いていた id も含む）。 */
+  readonly bound: string[];
+  /** 無かった（消えた・期限切れ・NUL を含む）id。 */
+  readonly missing: string[];
+  /** すでに**別の**会話へ結び付いていたので触らなかった id。 */
+  readonly conflicts: string[];
+}
+
+export interface AttachmentStore {
+  /**
+   * 預かる。ファイル名の正規化・MIME の正規化・マジックバイトと上限の検証・SHA-256 の計算・id の払い出しは
+   * ここで行う（3実装で同じ {@link prepareAttachment}）。検証に落ちたら {@link AttachmentRejectedError}。
+   */
+  put(input: AttachmentPutInput): Promise<AttachmentMeta>;
+  /** 控えと中身。無ければ `undefined`。 */
+  get(id: string): Promise<{ meta: AttachmentMeta; bytes: Uint8Array } | undefined>;
+  /** 控えだけ。**中身を読まない**（pg は bytes 列を SELECT しない）。 */
+  getMeta(id: string): Promise<AttachmentMeta | undefined>;
+  /** 発言（会話）へ結び付ける。未結び付けの掃除の判定に使う。冪等。 */
+  bind(ids: readonly string[], conversationId: string): Promise<AttachmentBindResult>;
+  /**
+   * 掃除。①`expiresAt` を過ぎたもの、②作成から {@link ATTACHMENT_UNBOUND_TTL_MS} たっても未結び付けのもの、を消す。
+   * 消した件数を返す。**中身を読まない。**
+   */
+  prune(now: Date): Promise<number>;
+}
+
+// ---------------------------------------------------------------------------
+// 上限
+// ---------------------------------------------------------------------------
+
+const MIB = 1024 * 1024;
+
+export const ATTACHMENT_MAX_IMAGE_BYTES_DEFAULT = 5 * MIB;
+export const ATTACHMENT_MAX_FILE_BYTES_DEFAULT = 25 * MIB;
+export const ATTACHMENT_MAX_PER_MESSAGE_DEFAULT = 10;
+export const ATTACHMENT_MAX_TOTAL_BYTES_DEFAULT = 50 * MIB;
+export const ATTACHMENT_RETENTION_DAYS_DEFAULT = 30;
+/** 未結び付けのまま残してよい時間（作成から。1時間）。 */
+export const ATTACHMENT_UNBOUND_TTL_MS = 60 * 60_000;
+
+export const ATTACHMENT_MAX_IMAGE_BYTES_ENV = 'ALTEROID_ATTACHMENT_MAX_IMAGE_BYTES';
+export const ATTACHMENT_MAX_FILE_BYTES_ENV = 'ALTEROID_ATTACHMENT_MAX_FILE_BYTES';
+export const ATTACHMENT_MAX_PER_MESSAGE_ENV = 'ALTEROID_ATTACHMENT_MAX_PER_MESSAGE';
+export const ATTACHMENT_MAX_TOTAL_BYTES_ENV = 'ALTEROID_ATTACHMENT_MAX_TOTAL_BYTES';
+export const ATTACHMENT_RETENTION_DAYS_ENV = 'ALTEROID_ATTACHMENT_RETENTION_DAYS';
+
+export interface AttachmentLimits {
+  /** 画像（png / jpeg / webp / gif）1つ。 */
+  readonly maxImageBytes: number;
+  /** その他（動画・ファイル）1つ。 */
+  readonly maxFileBytes: number;
+  /** 1発言の個数。 */
+  readonly maxPerMessage: number;
+  /** 1発言の合計バイト数。 */
+  readonly maxTotalBytes: number;
+  /** 保持日数。 */
+  readonly retentionDays: number;
+}
+
+export const DEFAULT_ATTACHMENT_LIMITS: AttachmentLimits = {
+  maxImageBytes: ATTACHMENT_MAX_IMAGE_BYTES_DEFAULT,
+  maxFileBytes: ATTACHMENT_MAX_FILE_BYTES_DEFAULT,
+  maxPerMessage: ATTACHMENT_MAX_PER_MESSAGE_DEFAULT,
+  maxTotalBytes: ATTACHMENT_MAX_TOTAL_BYTES_DEFAULT,
+  retentionDays: ATTACHMENT_RETENTION_DAYS_DEFAULT,
+};
+
+export interface AttachmentLimitsConfig {
+  readonly limits: AttachmentLimits;
+  /** 読めなかった設定値についての注意（呼び出し元が人間に見せる）。 */
+  readonly notes: string[];
+}
+
+/**
+ * 環境変数から上限を読む（`readArchiveFoldConfig` と同じ作法: 読めない値は `notes` へ落として既定へ倒す）。
+ * 正の整数だけを受ける。
+ */
+export function readAttachmentLimits(env: NodeJS.ProcessEnv = process.env): AttachmentLimitsConfig {
+  const notes: string[] = [];
+  const read = (name: string, fallback: number): number => {
+    const raw = env[name]?.trim();
+    if (raw === undefined || raw.length === 0) return fallback;
+    const parsed = Number(raw);
+    if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+      notes.push(`${name}="${raw}" は正の整数として読めないので既定 ${fallback} を使う`);
+      return fallback;
+    }
+    return parsed;
+  };
+  return {
+    limits: {
+      maxImageBytes: read(ATTACHMENT_MAX_IMAGE_BYTES_ENV, ATTACHMENT_MAX_IMAGE_BYTES_DEFAULT),
+      maxFileBytes: read(ATTACHMENT_MAX_FILE_BYTES_ENV, ATTACHMENT_MAX_FILE_BYTES_DEFAULT),
+      maxPerMessage: read(ATTACHMENT_MAX_PER_MESSAGE_ENV, ATTACHMENT_MAX_PER_MESSAGE_DEFAULT),
+      maxTotalBytes: read(ATTACHMENT_MAX_TOTAL_BYTES_ENV, ATTACHMENT_MAX_TOTAL_BYTES_DEFAULT),
+      retentionDays: read(ATTACHMENT_RETENTION_DAYS_ENV, ATTACHMENT_RETENTION_DAYS_DEFAULT),
+    },
+    notes,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// 検証
+// ---------------------------------------------------------------------------
+
+export type AttachmentRejection =
+  'too_large' | 'magic_mismatch' | 'too_many' | 'total_too_large' | 'media_type_missing';
+
+/** 添付を受け付けない理由。型で見分ける（文言で見分けない）。 */
+export class AttachmentRejectedError extends Error {
+  readonly code: AttachmentRejection;
+
+  constructor(code: AttachmentRejection, message: string) {
+    super(message);
+    this.name = 'AttachmentRejectedError';
+    this.code = code;
+  }
+}
+
+/** マジックバイトで中身を確かめる画像の MIME。 */
+export const ATTACHMENT_IMAGE_MEDIA_TYPES = [
+  'image/png',
+  'image/jpeg',
+  'image/webp',
+  'image/gif',
+] as const;
+
+export type AttachmentImageMediaType = (typeof ATTACHMENT_IMAGE_MEDIA_TYPES)[number];
+
+/** `Content-Type` 風の宣言を、小文字・パラメータ除去の形へ。 */
+export function normalizeAttachmentMediaType(raw: string): string {
+  return stripNul(raw).split(';')[0]!.trim().toLowerCase();
+}
+
+export function isAttachmentImageMediaType(
+  mediaType: string,
+): mediaType is AttachmentImageMediaType {
+  return (ATTACHMENT_IMAGE_MEDIA_TYPES as readonly string[]).includes(mediaType);
+}
+
+function startsWith(bytes: Uint8Array, offset: number, signature: readonly number[]): boolean {
+  if (bytes.length < offset + signature.length) return false;
+  return signature.every((byte, index) => bytes[offset + index] === byte);
+}
+
+/**
+ * 中身の先頭で画像の種類を判定する（png / jpeg / webp / gif。手書き。依存なし）。
+ * どれにも当たらなければ `undefined`。
+ */
+export function sniffAttachmentImageType(bytes: Uint8Array): AttachmentImageMediaType | undefined {
+  if (startsWith(bytes, 0, [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) return 'image/png';
+  if (startsWith(bytes, 0, [0xff, 0xd8, 0xff])) return 'image/jpeg';
+  // "GIF87a" / "GIF89a"
+  if (
+    startsWith(bytes, 0, [0x47, 0x49, 0x46, 0x38]) &&
+    (bytes[4] === 0x37 || bytes[4] === 0x39) &&
+    bytes[5] === 0x61
+  ) {
+    return 'image/gif';
+  }
+  // "RIFF" <size 4 bytes> "WEBP"
+  if (
+    startsWith(bytes, 0, [0x52, 0x49, 0x46, 0x46]) &&
+    startsWith(bytes, 8, [0x57, 0x45, 0x42, 0x50])
+  ) {
+    return 'image/webp';
+  }
+  return undefined;
+}
+
+/** `String.prototype.toWellFormed`（ES2024）。tsconfig の `lib` が ES2023 なので最小の型だけ足す。 */
+function toWellFormed(value: string): string {
+  return (value as string & { toWellFormed(): string }).toWellFormed();
+}
+
+/** 保存するファイル名の長さの上限（UTF-16 コード単位）。 */
+export const ATTACHMENT_NAME_MAX_LENGTH = 255;
+
+/**
+ * ファイル名の正規化。NUL を落とし、孤立サロゲートを U+FFFD に変え（`stripNulls` と同じ規則）、
+ * 制御文字とパス区切り（`/` `\`）を `_` にし、前後の空白を除く。`.` / `..` / 空は `file` にする。
+ */
+export function normalizeAttachmentName(raw: string): string {
+  let name = toWellFormed(stripNul(raw))
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\u0001-\u001f\u007f/\\]/g, '_')
+    .trim();
+  if (name.length > ATTACHMENT_NAME_MAX_LENGTH) {
+    name = toWellFormed(name.slice(0, ATTACHMENT_NAME_MAX_LENGTH));
+  }
+  return name === '' || name === '.' || name === '..' ? 'file' : name;
+}
+
+/**
+ * 1つぶんの検証。通れば正規化した名前と MIME を返す。
+ * - 宣言 MIME が画像なのに中身が一致しない → `magic_mismatch`
+ * - 画像は `maxImageBytes`、それ以外は `maxFileBytes` を超えると `too_large`
+ */
+export function validateAttachmentInput(
+  input: Pick<AttachmentPutInput, 'name' | 'mediaType' | 'bytes'>,
+  limits: AttachmentLimits = DEFAULT_ATTACHMENT_LIMITS,
+): { name: string; mediaType: string } {
+  const mediaType = normalizeAttachmentMediaType(input.mediaType);
+  if (mediaType === '') {
+    throw new AttachmentRejectedError('media_type_missing', 'mediaType が空');
+  }
+  const image = isAttachmentImageMediaType(mediaType);
+  const max = image ? limits.maxImageBytes : limits.maxFileBytes;
+  if (input.bytes.length > max) {
+    throw new AttachmentRejectedError(
+      'too_large',
+      `${image ? '画像' : 'ファイル'}は 1 つ ${max} バイトまで（${input.bytes.length} バイト）`,
+    );
+  }
+  if (image && sniffAttachmentImageType(input.bytes) !== mediaType) {
+    throw new AttachmentRejectedError(
+      'magic_mismatch',
+      `宣言された ${mediaType} と中身の先頭が一致しない`,
+    );
+  }
+  return { name: normalizeAttachmentName(input.name), mediaType };
+}
+
+/**
+ * 1発言ぶんの検証（個数・合計）。`sizes` は発言に添える全添付のバイト数。
+ * 1つぶんは {@link validateAttachmentInput} が見る。
+ */
+export function validateAttachmentBatch(
+  sizes: readonly number[],
+  limits: AttachmentLimits = DEFAULT_ATTACHMENT_LIMITS,
+): void {
+  if (sizes.length > limits.maxPerMessage) {
+    throw new AttachmentRejectedError(
+      'too_many',
+      `1 発言に添えられるのは ${limits.maxPerMessage} 個まで（${sizes.length} 個）`,
+    );
+  }
+  const total = sizes.reduce((sum, size) => sum + size, 0);
+  if (total > limits.maxTotalBytes) {
+    throw new AttachmentRejectedError(
+      'total_too_large',
+      `1 発言の合計は ${limits.maxTotalBytes} バイトまで（${total} バイト）`,
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 3実装が共有する組み立て
+// ---------------------------------------------------------------------------
+
+/** ストア実装が受ける共通の設定。 */
+export interface AttachmentStoreOptions {
+  /** 既定は {@link readAttachmentLimits}（環境変数）。 */
+  readonly limits?: AttachmentLimits;
+  /** テスト用。既定は `() => new Date()`。 */
+  readonly now?: () => Date;
+}
+
+/** `put` の前半（検証・id・sha256・期限）。3実装が同じ結果を作るようここへ置く。 */
+export function prepareAttachment(
+  input: AttachmentPutInput,
+  limits: AttachmentLimits,
+  now: Date,
+): AttachmentMeta {
+  const { name, mediaType } = validateAttachmentInput(input, limits);
+  if (input.conversationId !== undefined) assertNoNul('conversationId', input.conversationId);
+  return {
+    id: randomUUID(),
+    name,
+    mediaType,
+    size: input.bytes.length,
+    sha256: sha256Hex(input.bytes),
+    ...(input.conversationId === undefined ? {} : { conversationId: input.conversationId }),
+    createdAt: now.toISOString(),
+    expiresAt: new Date(now.getTime() + limits.retentionDays * 86_400_000).toISOString(),
+  };
+}
+
+/** 掃除の対象か（インメモリ・fs が使う。pg は同じ条件を SQL で書く）。 */
+export function isAttachmentPrunable(meta: AttachmentMeta, now: Date): boolean {
+  if (Date.parse(meta.expiresAt) <= now.getTime()) return true;
+  return (
+    meta.conversationId === undefined &&
+    Date.parse(meta.createdAt) + ATTACHMENT_UNBOUND_TTL_MS <= now.getTime()
+  );
+}

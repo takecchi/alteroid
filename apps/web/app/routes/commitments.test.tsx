@@ -1426,3 +1426,116 @@ describe('本文の編集: 未保存のまま離れる前に確認する（#2764
     expect(event.defaultPrevented).toBe(true);
   });
 });
+
+/**
+ * issue #3074: 「片付けたものも見る」を初めて押すと別の SWR キーになる。そこで一覧全体を
+ * スピナーに置き換えると、未了の行の書きかけ（本文の下書き・片付ける理由）が unmount で
+ * 黙って消える。閉じた分を読んでいる間も、未了の行は出したままにする。
+ */
+describe('「片付けたものも見る」の初回読み込み中も、未了の行の書きかけを保つ（#3074）', () => {
+  /** 閉じた分（includeClosed=true）の応答だけを遅らせる。 */
+  function stubSlowClosed(open: Commitment[], closed: Commitment[]) {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    stubCommitments(open, closed);
+    const inner = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input instanceof Request ? input.url : String(input);
+      if (url.includes('includeClosed=true')) await gate;
+      return inner(input, init);
+    }) as typeof fetch;
+    return release;
+  }
+
+  it('本文の書きかけが、閉じた分の読み込み中も消えない', async () => {
+    const release = stubSlowClosed(
+      [commitment({ origin: 'human', body: 'もとの本文' })],
+      [commitment({ id: 'cmt-9', body: '片付いた依頼', closedAt: new Date().toISOString() })],
+    );
+    renderPage();
+
+    await screen.findByText('もとの本文');
+    fireEvent.click(screen.getByRole('button', { name: '本文を編集' }));
+    const tabsRoot = screen.getByRole('tablist').parentElement!;
+    fireEvent.mouseDown(await screen.findByRole('tab', { name: '編集' }));
+    const textarea = (await within(tabsRoot).findByRole('textbox')) as HTMLTextAreaElement;
+    fireEvent.change(textarea, { target: { value: '書きかけの本文' } });
+
+    fireEvent.click(screen.getByRole('button', { name: '片付けたものも見る' }));
+
+    // 読み込み中: 未了の行はそのまま、書きかけも残っている。
+    expect(screen.getByRole('tablist')).toBeTruthy();
+    expect((within(tabsRoot).getByRole('textbox') as HTMLTextAreaElement).value).toBe(
+      '書きかけの本文',
+    );
+    // 閉じた分が空だと誤読させない（読み込み中は「記録はまだない」と言わない）。
+    expect(screen.queryByText('完了した仕事の記録はまだない。')).toBeNull();
+
+    release();
+    await screen.findByText('片付いた依頼');
+    expect((within(tabsRoot).getByRole('textbox') as HTMLTextAreaElement).value).toBe(
+      '書きかけの本文',
+    );
+  });
+
+  it('片付ける理由の書きかけが、閉じた分の読み込み中も消えない', async () => {
+    const release = stubSlowClosed(
+      [commitment({ body: 'もとの本文' })],
+      [commitment({ id: 'cmt-9', body: '片付いた依頼', closedAt: new Date().toISOString() })],
+    );
+    renderPage();
+
+    await screen.findByText('もとの本文');
+    const reason = screen.getByLabelText(/を片付けた理由$/) as HTMLInputElement;
+    fireEvent.change(reason, { target: { value: '書きかけの理由' } });
+
+    fireEvent.click(screen.getByRole('button', { name: '片付けたものも見る' }));
+
+    expect((screen.getByLabelText(/を片付けた理由$/) as HTMLInputElement).value).toBe(
+      '書きかけの理由',
+    );
+    release();
+    await screen.findByText('片付いた依頼');
+    expect((screen.getByLabelText(/を片付けた理由$/) as HTMLInputElement).value).toBe(
+      '書きかけの理由',
+    );
+  });
+});
+
+describe('閉じた分が0件のときの再検証で「記録はまだない」がちらつかない（#3074）', () => {
+  it('閉じた分を読み終えた後の再検証中も、空の表示のまま（スピナーに戻らない）', async () => {
+    stubCommitments([commitment({ body: 'もとの本文' })], []);
+    renderPage();
+
+    await screen.findByText('もとの本文');
+    fireEvent.click(screen.getByRole('button', { name: '片付けたものも見る' }));
+    await screen.findByText('完了した仕事の記録はまだない。');
+
+    // 再検証の応答は試験が握る Promise で止める（実時間は待たない）。
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let held = 0;
+    const inner = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      held += 1;
+      await gate;
+      return inner(input, init);
+    }) as typeof fetch;
+    // フォーカス復帰と同じ経路で再検証を起こし、マイクロタスクを流し切る。
+    await act(async () => {
+      window.dispatchEvent(new Event('focus'));
+    });
+    // 再検証が本当に走って止まっている（でなければこの試験は何も見ていない）。
+    await waitFor(() => expect(held).toBeGreaterThan(0));
+
+    expect(screen.getByText('完了した仕事の記録はまだない。')).toBeTruthy();
+    await act(async () => {
+      release();
+    });
+    expect(screen.getByText('完了した仕事の記録はまだない。')).toBeTruthy();
+  });
+});

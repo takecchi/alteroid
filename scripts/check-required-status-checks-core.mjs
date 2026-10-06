@@ -87,6 +87,111 @@ export function contextsFromProtection(protection) {
   return { names: [...primary].sort(), disagreement };
 }
 
+/**
+ * `GET /repos/{o}/{r}/rules/branches/{branch}` の応答（そのブランチに効いている規則の
+ * 配列。**出所を問わない** —— ruleset 由来の規則が入る）から required な context 名を取り出す。
+ *
+ * 実物の応答（2026-10-06）:
+ * `[{type:"deletion",...},{type:"required_status_checks",parameters:{required_status_checks:
+ * [{context:"ci",integration_id:15368},...]},ruleset_id:24535054,...}]`
+ *
+ * 配列でなければ `null`（＝読めなかった）。**配列で `required_status_checks` の規則が
+ * 1つも無いときは空の names を返す** —— 「規則は読めたが required は無い」という事実で
+ * あって、「読めなかった」とは別である。規則が複数（複数 ruleset）あれば和をとる。
+ */
+export function contextsFromRules(rules) {
+  if (!Array.isArray(rules)) return null;
+  const names = [];
+  for (const rule of rules) {
+    if (rule === null || typeof rule !== 'object' || rule.type !== 'required_status_checks') {
+      continue;
+    }
+    const list = rule.parameters?.required_status_checks;
+    if (!Array.isArray(list)) return null; // 規則は在るのに中身が読めない形 —— 空扱いしない
+    for (const check of list) {
+      if (check !== null && typeof check === 'object' && typeof check.context === 'string') {
+        names.push(check.context);
+      }
+    }
+  }
+  return { names: [...new Set(names)].sort() };
+}
+
+/**
+ * `gh api` の失敗（stderr）が「旧来のブランチ保護が無い」を意味するかを見分ける。
+ *
+ * **404 だけでは足りない。** 404 は「リポジトリや枝が見えない（権限不足でも 404 になる）」
+ * でも返る。「未保護」と言ってよいのは、404 かつ本文が `Branch not protected` のときだけ。
+ */
+export function isBranchNotProtected(detail) {
+  return typeof detail === 'string' && /Branch not protected/.test(detail) && /404/.test(detail);
+}
+
+/**
+ * 旧来の protection と ruleset 由来の規則、2つの読み出し結果から「生きている required」を決める。
+ *
+ * 入力は `{ status: 'ok', body } | { status: 'absent' } | { status: 'error', detail }`。
+ * `absent` は protection にだけ在りうる（404 `Branch not protected` ＝ 未保護という事実）。
+ *
+ * - protection ok / rules ok: 和をとる（出所を `sources` に載せる）。
+ * - protection absent / rules ok: rules だけ。**未保護は「何も足さない」という事実**であって、
+ *   空とのずれ扱い（誤って赤）にも、読めなかったの一致扱い（誤って緑）にもしない。
+ * - どちらかが error・形が違う: 読めなかった。**片方が読めないと和が決まらない**ので、
+ *   読めた側だけで緑にも赤にもしない。どの口がなぜ読めなかったかを `reasons` に全部載せる。
+ */
+export function resolveLiveRequiredChecks(protection, rules) {
+  const reasons = [];
+  let fromProtection = { names: [], disagreement: null };
+  let protectionAbsent = false;
+
+  if (protection.status === 'absent') {
+    protectionAbsent = true;
+  } else if (protection.status === 'ok') {
+    const parsed = contextsFromProtection(protection.body);
+    if (parsed === null) {
+      reasons.push('旧来の protection: 応答に required_status_checks が読み取れる形で無かった');
+    } else {
+      fromProtection = parsed;
+    }
+  } else {
+    reasons.push(`旧来の protection: 読めなかった（${protection.detail}）`);
+  }
+
+  let fromRules = null;
+  if (rules.status === 'ok') {
+    fromRules = contextsFromRules(rules.body);
+    if (fromRules === null) {
+      reasons.push('ruleset（rules/branches）: 応答が規則の配列として読み取れなかった');
+    }
+  } else {
+    reasons.push(`ruleset（rules/branches）: 読めなかった（${rules.detail ?? rules.status}）`);
+  }
+
+  if (reasons.length > 0 || fromRules === null) {
+    return { live: null, reasons };
+  }
+
+  const names = [...new Set([...fromProtection.names, ...fromRules.names])].sort();
+  return {
+    live: {
+      names,
+      disagreement: fromProtection.disagreement,
+      sources: {
+        protection: protectionAbsent
+          ? '未保護（404 Branch not protected）'
+          : [...fromProtection.names],
+        rulesets: [...fromRules.names],
+      },
+    },
+    reasons: [],
+  };
+}
+
+function formatSources(sources) {
+  const part = (value) => (Array.isArray(value) ? value.join(' / ') || '（空）' : value);
+  return `旧来の protection: ${part(sources.protection)} / ruleset: ${part(sources.rulesets)}`;
+}
+
 function sameSet(a, b) {
   const left = new Set(a);
   const right = new Set(b);
@@ -101,10 +206,10 @@ function sameSet(a, b) {
  *
  * `live` が `null`（読めなかった）のときは `verdict: 'unreadable'` を返す。
  */
-export function compareRequiredStatusChecks(declared, live) {
+export function compareRequiredStatusChecks(declared, live, reasons = []) {
   const declaredSorted = [...declared].sort();
   if (live === null) {
-    return { verdict: 'unreadable', declared: declaredSorted };
+    return { verdict: 'unreadable', declared: declaredSorted, reasons };
   }
 
   const liveNames = live.names;
@@ -119,6 +224,7 @@ export function compareRequiredStatusChecks(declared, live) {
     missing,
     extra,
     disagreement: live.disagreement,
+    sources: live.sources ?? null,
   };
 }
 
@@ -133,19 +239,24 @@ export function compareRequiredStatusChecks(declared, live) {
 export function formatComparison(result) {
   if (result.verdict === 'match') {
     return (
-      `check-required-status-checks: OK — 宣言と protection が一致 ` +
-      `(${result.declared.join(' / ')})`
+      `check-required-status-checks: OK — 宣言と main の required（protection ∪ ruleset）が一致 ` +
+      `(${result.declared.join(' / ')})` +
+      (result.sources ? `\n  出所 — ${formatSources(result.sources)}` : '')
     );
   }
 
   if (result.verdict === 'unreadable') {
     return (
-      'check-required-status-checks: 判定できなかった — ブランチ保護を読めなかった。\n' +
+      'check-required-status-checks: 判定できなかった — main の required を読み切れなかった。\n' +
       '【赤の意味】これは「ずれていない」ではない。**読めていない**。\n' +
       'ブランチ保護の読み出しは administration 相当の権限を要求し、GitHub Actions の\n' +
       '既定の GITHUB_TOKEN には付けられない（`permissions:` に administration は無い）。\n' +
+      '旧来の protection と ruleset の両方が読めて初めて和が決まる。読めなかった口:\n' +
+      (result.reasons ?? []).map((reason) => `  - ${reason}`).join('\n') +
+      ((result.reasons ?? []).length > 0 ? '\n' : '') +
       `宣言の側だけは読めている: ${result.declared.join(' / ')}\n` +
-      '手元で確かめるなら: gh api repos/takecchi/alteroid/branches/main/protection'
+      '手元で確かめるなら: gh api repos/takecchi/alteroid/branches/main/protection ' +
+      '/ gh api repos/takecchi/alteroid/rules/branches/main'
     );
   }
 
@@ -157,6 +268,7 @@ export function formatComparison(result) {
     `  宣言: ${result.declared.join(' / ') || '（空）'}`,
     `  protection: ${result.live.join(' / ') || '（空）'}`,
   ];
+  if (result.sources) lines.push(`  出所 — ${formatSources(result.sources)}`);
   if (result.missing.length > 0) {
     lines.push(`  宣言に在って protection に無い: ${result.missing.join(' / ')}`);
   }

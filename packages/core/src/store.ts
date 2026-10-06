@@ -2,6 +2,7 @@ import type { SessionStore } from '@anthropic-ai/claude-agent-sdk';
 import { createHash } from 'node:crypto';
 
 import type { ArchiveContinuity } from './archive-continuity.js';
+import type { AttachmentStore } from './attachment.js';
 import type { AuthStore } from './auth.js';
 import type {
   ConversationBaselineResult,
@@ -1490,9 +1491,10 @@ export interface CommitmentOpenResult {
  * 別の会話で送る）まで1件に潰しかねない——その保証を弱める理由がここには無い。
  *
  * **`source` が無い行（`undefined`）どうしは重複と数えない。** `manager_message`
- * の `commitmentFor` は必ず `source` を持つので、`source` が `undefined` になるのは
- * 他の origin だけだが、`entry.origin !== 'manager'` を先に弾いているのでここへは
- * 来ない——念のための防御である。
+ * の `commitmentFor` は必ず `source` を持つが、API が直接受けた `origin: 'manager'`
+ * の行は `source` を持たないことがある。出所の分からない行どうしを「同じマネージャー」
+ * とは言えないので畳まない（pg の `foldable` と同じ。直す前は `undefined === undefined`
+ * で畳み、fs / in-memory だけが pg と割れていた。#3056）。
  *
  * **閉じたあとの同文は畳まない。** 一度閉じれば「未了」ではなくなるので、同じ
  * マネージャーが同じ文言をもう一度報告してきても、それは新しい未了として台帳に
@@ -1507,7 +1509,7 @@ export function findOpenManagerDuplicate(
   entries: readonly Commitment[],
   entry: Commitment,
 ): Commitment | undefined {
-  if (entry.origin !== 'manager') return undefined;
+  if (entry.origin !== 'manager' || entry.source === undefined) return undefined;
   return entries.find(
     (existing) =>
       existing.closedAt === undefined &&
@@ -1738,7 +1740,13 @@ export interface InboxStore {
    */
   put(event: InboxEvent, at: string): Promise<void>;
 
-  /** 処理を終えた合図を消す。無ければ何もしない。 */
+  /**
+   * 処理を終えた合図を消す。無ければ何もしない。
+   *
+   * **id を名指しした削除は、読めない行（`peekPending().unreadable`）にも効く**（issue #3056 の 1。
+   * 3実装で同じ。`removeMany` も同じ）。「読めない行は消さずに残す」（#1966 / #2024）は
+   * まとめての削除・自動の片付けで黙って失わないための線で、名指しは意図した操作である。
+   */
   remove(id: string): Promise<void>;
 
   /**
@@ -3397,6 +3405,12 @@ export interface Stores {
    * 見えるが fs では見えない」という能力差が生まれる（north_star 禁止1）。
    */
   usage: UsageStore;
+  /**
+   * 添付ファイル（画像・動画・ファイル）の置き場（Issue #3111）。記憶（memory）とは独立で、期限つきで預かる。
+   *
+   * **省略可能にしないこと**（`usage` と同じ理由。片方の器でだけ添付が預けられない能力差を作らない）。
+   */
+  attachments: AttachmentStore;
   /**
    * SDK のセッション生ログの預け先（M4 のクラウド構成でだけ付く）。
    *

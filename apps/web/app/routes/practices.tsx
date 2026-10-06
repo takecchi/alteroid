@@ -197,26 +197,28 @@ export default function Practices() {
                     key: practice.slug,
                     href: `/practices/${practice.slug}`,
                     current: practice.slug === selectedSlug,
-                    // 行全体をリンクにしない（#2808）。リンクは題だけにして、名前・文字数・日時は
-                    // 選択・コピーできる文字にする（`ListDetailItems` の `lead` / `extra`）。
-                    lead: (
-                      <span className="mr-1.5 shrink-0 text-[10px] text-muted-foreground">
-                        {practiceKindLabel(practice.kind)}
-                      </span>
-                    ),
-                    children: practice.title,
-                    extra: (
+                    // 行全体をリンクにする（#3107）。ほかの一覧（マネージャー・日報）と同じく、行のどこを
+                    // 押しても開く。かつては題だけをリンクにして、名前・文字数・日時を選択・コピーできる
+                    // 文字にしていた（#2808。`ListDetailItems` の `lead` / `extra`）が、題の文字の上で
+                    // しか開かず、ほかの一覧と使用感がずれていた。
+                    children: (
                       <>
-                        <p className="truncate font-mono text-[11px] text-muted-foreground">
+                        <span className="flex items-baseline">
+                          <span className="mr-1.5 shrink-0 text-[10px] text-muted-foreground">
+                            {practiceKindLabel(practice.kind)}
+                          </span>
+                          <span className="min-w-0 flex-1 truncate">{practice.title}</span>
+                        </span>
+                        <span className="block truncate font-mono text-[11px] text-muted-foreground">
                           {practice.slug}
-                        </p>
-                        <p className="mt-0.5 truncate text-[11px] text-muted-foreground">
+                        </span>
+                        <span className="mt-0.5 block truncate text-[11px] text-muted-foreground">
                           {/* `chars` は本文の文字数（コードポイント数。`practiceMetaSchema` の
                               doc）。`formatBytes` を当てると「B / KB」と名乗ってしまっていた
                               （#1340）。CLI とクローンの道具と同じく「文字」と刷る。 */}
                           {practice.chars} 文字 · 作成 {formatRelative(practice.createdAt)} · 更新{' '}
                           {formatRelative(practice.updatedAt)}
-                        </p>
+                        </span>
                       </>
                     ),
                   }))}

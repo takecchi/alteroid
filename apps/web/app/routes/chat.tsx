@@ -11,6 +11,7 @@ import {
   ChatTurnFailure,
   ConversationList as UiConversationList,
   Drawer,
+  Button,
   Card,
   Empty,
   ErrorNote,
@@ -212,6 +213,11 @@ export function pendingOwnLines(
     pending.push(line);
   }
   return pending;
+}
+
+/** 履歴にある、同じ文の人間の発言の数（#3121。積んだ文が受け取られたかの照合）。 */
+function countHuman(lines: Line[], text: string): number {
+  return lines.filter((line) => line.role === 'human' && line.text === text).length;
 }
 
 /** 版の切り替え（`< 2/2 >`）が1つ差し出す、編集前のある版。 */
@@ -560,6 +566,30 @@ export function ChatPane({
    * **その描画の時点で決まっている `shownId`** をキーに引いてから決める。
    */
   const [failures, setFailures] = useState<Map<string | undefined, unknown>>(new Map());
+  /**
+   * **`open` に届く前に失敗した送信の、送り直しの手がかり（#3064）。** キーは
+   * `failures` と同じ（失敗が出る会話）で、`failures` を消すのと同じ場所で消す。
+   * 文は下書きにも戻すが、使い手がもう新しく打ち始めていれば戻せない——そのとき
+   * 文を失わないための置き場がここで、失敗表示の「再送」が読む。
+   */
+  const [retries, setRetries] = useState<
+    Map<
+      string | undefined,
+      {
+        text: string;
+        supersedes?: string;
+        restored?: boolean;
+        /**
+         * `open` の前に**中断された**送信（#3121）。サーバが受け取ったか分からない。
+         * 値は送る前に履歴にあった同じ文の人間の発言の数で、これを超えて履歴に
+         * 現れたら、受け取られていたと見て下ろす。
+         */
+        unconfirmed?: number;
+      }
+    >
+  >(new Map());
+  const historyLinesRef = useRef<Line[]>([]);
+  const ownLineSeqRef = useRef(0);
   /**
    * `POST /clone/interrupt` を呼んでいる最中かどうか（#1398 c23-1/c30-2）。
    * ボタンの二重打鍵を防ぐためだけの、この画面だけの状態——サーバ側の状態には
@@ -1275,19 +1305,82 @@ export function ChatPane({
 
   /** 打った本文を画面へ積む。送信の入口が2つ（新規・追送）あるので1本にしてある。 */
   const showOwnLine = useCallback((text: string) => {
+    const key = `h-${ownLineSeqRef.current++}-${text.slice(0, 8)}`;
     // 最下部にいなくても、送った直後だけは追従してよい（上の
     // `justSentOwnLineRef` のコメント参照）。
     justSentOwnLineRef.current = true;
     setLines((previous) => [
       ...previous,
       {
-        key: `h-${previous.length}-${text.slice(0, 8)}`,
+        key,
         role: 'human',
         text,
         of: shownIdRef.current,
       },
     ]);
+    return key;
   }, []);
+
+  /**
+   * **`open` に届く前に送信が失敗したとき、書いた文を使い手へ返す（#3064）。**
+   * 吹き出し（`lineKey`）を外し、文を `retries`（キー `key` ＝送った側の会話）へ
+   * 積む。入力欄へ戻すのは下の effect — 失敗が届いた時点で見ている会話を
+   * `shownIdRef` で当てると、切り替え直後（effect が回る前）の窓で取り違える
+   * （#1576）ので、「いま見ている会話のキーに未復元の文があれば戻す」で決める。
+   */
+  const giveBack = useCallback(
+    (
+      key: string | undefined,
+      text: string,
+      lineKey: string,
+      supersedes?: string,
+      unconfirmed?: number,
+    ) => {
+      setLines((previous) => previous.filter((line) => line.key !== lineKey));
+      setRetries((prev) =>
+        new Map(prev).set(key, {
+          text,
+          ...(supersedes === undefined ? {} : { supersedes }),
+          ...(unconfirmed === undefined ? {} : { unconfirmed }),
+        }),
+      );
+    },
+    [],
+  );
+
+  // 未復元の文を、その会話を見ているあいだに1度だけ入力欄へ戻す。使い手が
+  // もう打ち始めていたら上書きしない（文は「再送」が持っている）。
+  useEffect(() => {
+    const entry = retries.get(shownId);
+    if (entry === undefined || entry.restored === true) return;
+    setDraft((current) => (current === '' ? entry.text : current));
+    setRetries((prev) => new Map(prev).set(shownId, { ...entry, restored: true }));
+  }, [retries, shownId]);
+
+  useEffect(() => {
+    historyLinesRef.current = historyLines;
+  }, [historyLines]);
+
+  /**
+   * 中断で積んだ文（`unconfirmed`）と同じ文が、履歴に送る前より多く現れたら、
+   * サーバは受け取っていた——積んだ文と表示を下ろす（二重送信を誘わない、#3121）。
+   * 入力欄は、戻した文のまま（使い手が手を入れていない）ときだけ空にする。
+   */
+  const unconfirmedEntry = retries.get(shownId);
+  const unconfirmedText =
+    unconfirmedEntry?.unconfirmed === undefined ? undefined : unconfirmedEntry.text;
+  const unconfirmedSeen =
+    unconfirmedEntry?.unconfirmed !== undefined &&
+    countHuman(historyLines, unconfirmedEntry.text) > unconfirmedEntry.unconfirmed;
+  useEffect(() => {
+    if (!unconfirmedSeen || unconfirmedText === undefined) return;
+    setRetries((prev) => {
+      const next = new Map(prev);
+      next.delete(shownId);
+      return next;
+    });
+    setDraft((current) => (current === unconfirmedText ? '' : current));
+  }, [unconfirmedSeen, unconfirmedText, shownId]);
 
   /**
    * **受信中に続けて打った発言を、購読を張らずに投函だけする。**
@@ -1312,7 +1405,7 @@ export function ChatPane({
      * 置き換える対象の日誌エントリ id（チャットのメッセージ編集、#1010）。
      * 通常の追送では渡らない。
      */
-    async (text: string, running: Stream, supersedes?: string) => {
+    async (text: string, running: Stream, supersedes?: string, retry?: boolean) => {
       /*
        * **この追送が向かう会話（`running.id`）ぶんの失敗だけを消す（#1585）。**
        * 前回この会話で失敗していても、次に送ろうとしたのだから立て直しの
@@ -1325,8 +1418,15 @@ export function ChatPane({
         next.delete(running.id);
         return next;
       });
-      setDraft('');
-      showOwnLine(text);
+      setRetries((prev) => {
+        if (!prev.has(running.id)) return prev;
+        const next = new Map(prev);
+        next.delete(running.id);
+        return next;
+      });
+      if (retry) setDraft((current) => (current === text ? '' : current));
+      else setDraft('');
+      const lineKey = showOwnLine(text);
 
       try {
         // 新しい会話は `open` まで id が決まらない。決まるまで待ってから投函する
@@ -1370,9 +1470,11 @@ export function ChatPane({
          * 確定した id へ移す必要は無い（`failures` の doc）。
          */
         setFailures((prev) => new Map(prev).set(running.id, caught));
+        // 投函は `open` の前に終わっている（ここへ来るのはそれだけ）。
+        giveBack(running.id, text, lineKey, supersedes);
       }
     },
-    [api, recordOwnMessage, showOwnLine],
+    [api, recordOwnMessage, showOwnLine, giveBack],
   );
 
   /**
@@ -1598,9 +1700,10 @@ export function ChatPane({
      * #1010）。渡さない通常の送信では今までどおり `conversationId` だけを
      * 運ぶ。
      */
-    async (text: string, options?: { supersedes?: string }) => {
+    async (text: string, options?: { supersedes?: string; retry?: boolean }) => {
       if (text.trim() === '') return;
       const supersedes = options?.supersedes;
+      const retry = options?.retry;
 
       /*
        * **走っているストリームがあるなら、張り替えずに投函だけする。**
@@ -1609,7 +1712,7 @@ export function ChatPane({
        */
       const running = streamRef.current;
       if (running !== undefined) {
-        await followUp(text, running, supersedes);
+        await followUp(text, running, supersedes, retry);
         return;
       }
 
@@ -1627,8 +1730,17 @@ export function ChatPane({
         next.delete(shownId);
         return next;
       });
-      setDraft('');
-      showOwnLine(text);
+      setRetries((prev) => {
+        if (!prev.has(shownId)) return prev;
+        const next = new Map(prev);
+        next.delete(shownId);
+        return next;
+      });
+      if (retry) setDraft((current) => (current === text ? '' : current));
+      else setDraft('');
+      const lineKey = showOwnLine(text);
+      let opened = false;
+      const baseline = countHuman(historyLinesRef.current, text);
 
       const { setTransient, apply } = createStreamWriter(stream, controller);
 
@@ -1670,6 +1782,7 @@ export function ChatPane({
           { signal: controller.signal },
         )) {
           if (message.event === 'open') {
+            opened = true;
             if (stream.id === undefined) {
               // **順番が大事。** 先にストリームの所属を新しい id へ移してから
               // state を動かす。逆にすると、上の effect がこのストリームを
@@ -1719,8 +1832,15 @@ export function ChatPane({
          */
         if (!controller.signal.aborted) {
           setFailures((prev) => new Map(prev).set(stream.id, caught));
+          // サーバが受け取った（`open` を見た）後の失敗は、文を戻さない（二重に送らせない）。
+          if (!opened) giveBack(stream.id, text, lineKey, supersedes);
         }
       } finally {
+        // `open` の前に中断された（受信をやめる・会話の切り替え）。受け取られたか
+        // 分からないので、文は積むだけで自動では送らない（#3121）。
+        if (!opened && controller.signal.aborted) {
+          giveBack(stream.id, text, lineKey, supersedes, baseline);
+        }
         // `open` を一度も見ないまま終わったなら、追送は投函先を持てない。
         // 待たせたままにすると、続けて打った発言が永久に返ってこない
         // （既に確定していれば、この reject は無視される）。
@@ -1756,7 +1876,7 @@ export function ChatPane({
         }
       }
     },
-    [api, shownId, navigate, recordOwnMessage, showOwnLine, followUp, createStreamWriter],
+    [api, shownId, navigate, recordOwnMessage, showOwnLine, followUp, createStreamWriter, giveBack],
   );
 
   /**
@@ -2269,8 +2389,34 @@ export function ChatPane({
         sending={sending}
         onStopReceiving={() => streamRef.current?.controller.abort()}
         error={
-          shownFailure === undefined || shownFailure === null ? undefined : shownFailure instanceof
-            TurnFailedError ? (
+          (shownFailure === undefined || shownFailure === null) && unconfirmedText !== undefined ? (
+            <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+              <span>
+                送れたか確かめられなかった。サーバが受け取っていれば会話に出る（二重に送らないよう、確かめてから再送する）
+              </span>
+              <Button
+                size="sm"
+                onClick={() => void send(unconfirmedText, { ...unconfirmedEntry, retry: true })}
+              >
+                再送
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => {
+                  setRetries((prev) => {
+                    const next = new Map(prev);
+                    next.delete(shownId);
+                    return next;
+                  });
+                  setDraft((current) => (current === unconfirmedText ? '' : current));
+                }}
+              >
+                破棄
+              </Button>
+            </div>
+          ) : shownFailure === undefined ||
+            shownFailure === null ? undefined : shownFailure instanceof TurnFailedError ? (
             <TurnFailureNote
               message={shownFailure.message}
               action={(kind) =>
@@ -2282,7 +2428,21 @@ export function ChatPane({
               }
             />
           ) : (
-            <ErrorNote error={shownFailure} />
+            <>
+              <ErrorNote error={shownFailure} />
+              {visibleFailure !== undefined && retries.has(shownId) && (
+                <Button
+                  size="sm"
+                  className="mt-2"
+                  onClick={() => {
+                    const pending = retries.get(shownId);
+                    if (pending !== undefined) void send(pending.text, { ...pending, retry: true });
+                  }}
+                >
+                  再送
+                </Button>
+              )}
+            </>
           )
         }
       />

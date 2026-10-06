@@ -198,6 +198,56 @@ describe('継続する依頼を仕込む', () => {
   });
 });
 
+/**
+ * 「今すぐ回す」を押したら、起こした旨を短く出す（issue #3075）。直す前は成功しても何も変わらず、
+ * 押せたのか・もう一度押すべきかが分からなかった。デーモンはターンの結果を待たないので、
+ * 「終わった」とは書かない。
+ */
+describe('「今すぐ回す」の表示', () => {
+  const OTHER_ENTRY = { ...REQUEST_ENTRY, kind: 'other', description: '毎日 10:00' };
+
+  it('押すと、その行だけに「起こした」を出し、「終わった」とは言わない', async () => {
+    stubSchedule([DEFAULT_ENTRY, OTHER_ENTRY]);
+    renderSchedule();
+
+    const buttons = await screen.findAllByRole('button', { name: '今すぐ回す' });
+    expect(screen.queryByText(/^起こした/)).toBeNull();
+    fireEvent.click(buttons[0]!);
+
+    const note = await screen.findByText(/^起こした/);
+    expect(sent[0]?.url).toMatch(/\/schedule\/daily_report\/run$/);
+    expect(note.textContent).not.toMatch(/終わ|完了|成功/);
+    expect(screen.getAllByText(/^起こした/)).toHaveLength(1);
+    expect(note.closest('li')?.textContent).toContain('毎日 22:00 に日報');
+
+    // 別の行を押すと、表示はそちらへ移る（前の行には残らない）。
+    fireEvent.click(buttons[1]!);
+    await waitFor(() => expect(sent).toHaveLength(2));
+    await waitFor(() =>
+      expect(screen.getByText(/^起こした/).closest('li')?.textContent).toContain('毎日 10:00'),
+    );
+    expect(screen.getAllByText(/^起こした/)).toHaveLength(1);
+  });
+
+  it('失敗したときは「起こした」を出さない（失敗は ErrorNote が言う）', async () => {
+    stubSchedule([DEFAULT_ENTRY]);
+    const ok = globalThis.fetch;
+    globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+      const request = input instanceof Request ? input : null;
+      const method = request?.method ?? init?.method ?? 'GET';
+      return method === 'POST'
+        ? Promise.resolve(json({ error: 'not found' }, 404))
+        : ok(input, init);
+    }) as typeof fetch;
+    renderSchedule();
+
+    fireEvent.click(await screen.findByRole('button', { name: '今すぐ回す' }));
+
+    expect(await screen.findByRole('alert')).toBeTruthy();
+    expect(screen.queryByText(/^起こした/)).toBeNull();
+  });
+});
+
 describe('継続中の依頼を外す', () => {
   it('「外す」を押しただけでは外さず、確認を出す。やめれば外さない（#2781）', async () => {
     stubSchedule([REQUEST_ENTRY]);
