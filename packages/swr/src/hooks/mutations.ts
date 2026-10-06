@@ -852,40 +852,6 @@ export function useRemoveEnvVar() {
 }
 
 /**
- * トークンの全置換（`GET /tokens` → 加工 → `PUT /tokens`）を、同じ API クライアントの中で
- * 1本ずつ直列に流す（Issue #3608）。
- *
- * 行ごとの送信中の門は行の中にしか無いので、別の行を続けて押すと2つの書き込みが同じ古い
- * 一覧を土台にし、後から着いた `PUT` が先の変更を巻き戻していた。前の書き込みが終わって
- * から次の `GET` を撃てば、後ろは先の結果を土台にする。
- *
- * **列は API クライアントごとに持つ**（`WeakMap` の鍵が `useApi()` の返す client）。モジュールの
- * 大域に1本だけ持つと、テストどうし・接続先どうし（client は接続先と鍵の世代ごとに作り直される）
- * で無関係な書き込みが互いを待ち、前の失敗や保留がもらい事故になる。WeakMap なので client が
- * 捨てられれば列も落ちる。
- *
- * **前の書き込みが失敗しても後ろは止めない**（失敗は各呼び手の Promise にだけ返す）。
- * **別タブ・CLI との同時の書き込みは塞がない**（全置換の API に版の照合が無い。サーバ側の仕事）。
- * 列に入れるのは一覧を全置換する3つだけ。`POST /tokens/unreadable/remove`（id 指定でサーバが
- * 排他の中で読んで消す）と `PUT /tokens/policy`（設定だけを書き、一覧を置き換えない）は、
- * 古い一覧を土台にしないので入れない。
- */
-const tokenWriteTails = new WeakMap<object, Promise<unknown>>();
-
-function serializeTokenWrite<T>(client: object, run: () => Promise<T>): Promise<T> {
-  const tail = tokenWriteTails.get(client) ?? Promise.resolve();
-  const next = tail.then(run, run);
-  tokenWriteTails.set(
-    client,
-    next.then(
-      () => undefined,
-      () => undefined,
-    ),
-  );
-  return next;
-}
-
-/**
  * 認証トークンのプールへ1本足す（`PUT /tokens`）。
  *
  * **`GET /tokens` → 加工 → `PUT /tokens`（全置換）の形。** `apps/cli/src/token.ts`
@@ -896,16 +862,15 @@ export function useAddToken() {
   const api = useApi();
   const { mutate } = useSWRConfig();
   return useCallback(
-    (label: string, value: string) =>
-      serializeTokenWrite(api, async () => {
-        const current = await api.api.GET('/tokens').then(unwrap);
-        const inputs = current.tokens.map(toTokenInput);
-        const result = await api.api
-          .PUT('/tokens', { body: { tokens: [...inputs, { label, value }] } })
-          .then(unwrap);
-        await mutate(KEY.tokens);
-        return result;
-      }),
+    async (label: string, value: string) => {
+      const current = await api.api.GET('/tokens').then(unwrap);
+      const inputs = current.tokens.map(toTokenInput);
+      const result = await api.api
+        .PUT('/tokens', { body: { tokens: [...inputs, { label, value }] } })
+        .then(unwrap);
+      await mutate(KEY.tokens);
+      return result;
+    },
     [api, mutate],
   );
 }
@@ -967,15 +932,14 @@ export function useRemoveToken() {
   const api = useApi();
   const { mutate } = useSWRConfig();
   return useCallback(
-    (id: string) =>
-      serializeTokenWrite(api, async () => {
-        const current = await api.api.GET('/tokens').then(unwrap);
-        await assertTokenPresent(current.tokens, id, () => mutate(KEY.tokens));
-        const inputs = current.tokens.filter((token) => token.id !== id).map(toTokenInput);
-        const result = await api.api.PUT('/tokens', { body: { tokens: inputs } }).then(unwrap);
-        await mutate(KEY.tokens);
-        return result;
-      }),
+    async (id: string) => {
+      const current = await api.api.GET('/tokens').then(unwrap);
+      await assertTokenPresent(current.tokens, id, () => mutate(KEY.tokens));
+      const inputs = current.tokens.filter((token) => token.id !== id).map(toTokenInput);
+      const result = await api.api.PUT('/tokens', { body: { tokens: inputs } }).then(unwrap);
+      await mutate(KEY.tokens);
+      return result;
+    },
     [api, mutate],
   );
 }
@@ -985,17 +949,16 @@ export function useSetTokenDisabled() {
   const api = useApi();
   const { mutate } = useSWRConfig();
   return useCallback(
-    (id: string, disabled: boolean) =>
-      serializeTokenWrite(api, async () => {
-        const current = await api.api.GET('/tokens').then(unwrap);
-        await assertTokenPresent(current.tokens, id, () => mutate(KEY.tokens));
-        const inputs = current.tokens.map((token) =>
-          token.id === id ? { ...toTokenInput(token), disabled } : toTokenInput(token),
-        );
-        const result = await api.api.PUT('/tokens', { body: { tokens: inputs } }).then(unwrap);
-        await mutate(KEY.tokens);
-        return result;
-      }),
+    async (id: string, disabled: boolean) => {
+      const current = await api.api.GET('/tokens').then(unwrap);
+      await assertTokenPresent(current.tokens, id, () => mutate(KEY.tokens));
+      const inputs = current.tokens.map((token) =>
+        token.id === id ? { ...toTokenInput(token), disabled } : toTokenInput(token),
+      );
+      const result = await api.api.PUT('/tokens', { body: { tokens: inputs } }).then(unwrap);
+      await mutate(KEY.tokens);
+      return result;
+    },
     [api, mutate],
   );
 }
