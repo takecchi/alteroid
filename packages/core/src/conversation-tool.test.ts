@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
+import {
+  encodeConversationCursor,
+  readConversationPage,
+  type ConversationCursor,
+} from './conversation.js';
 import type { JournalQuery } from './store.js';
 import type { Stores } from './store.js';
 import { createMemoryStores } from './testing.js';
@@ -836,5 +841,77 @@ describe('conversation_read — 一覧の cursor の頁送り（#3644）', () =>
 
     expect(reply).toContain('cursor');
     expect(idsOf(reply)).toEqual([]);
+  });
+
+  it('HTTP の口（readConversationPage の next を符号化したもの）の cursor を、そのまま受ける', async () => {
+    const stores = createMemoryStores();
+    for (let i = 0; i < 4; i += 1) await humanTurn(stores, `conv-${i}`, `質問${i}`, `返答${i}`);
+    const first = await readConversationPage(stores.journal, { limit: 2, scan: 2000 });
+    expect(first.next).not.toBeNull();
+    // 形は base64url の JSON { id, at }（GET /conversations の nextCursor と同じ）。
+    const cursor = encodeConversationCursor(first.next as ConversationCursor);
+    expect(JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8'))).toEqual(first.next);
+
+    const reply = await tools(stores)('conversation_read', { limit: 2, cursor });
+
+    expect(idsOf(reply)).toEqual(['conv-1', 'conv-0']);
+  });
+
+  it('続きの案内に、渡した since / until / scan / limit を引き継ぐ', async () => {
+    const stores = createMemoryStores();
+    for (let i = 0; i < 5; i += 1) await humanTurn(stores, `conv-${i}`, `質問${i}`, `返答${i}`);
+
+    const reply = await tools(stores)('conversation_read', {
+      limit: 2,
+      until: '2099-01-01T00:00:00.000Z',
+    });
+
+    expect(reply).toMatch(
+      /続きを読むには: conversation_read cursor=\S+ until=2099-01-01T00:00:00.000Z limit=2/,
+    );
+  });
+
+  it('until で窓を切っても、cursor を辿って全会話が重複なく読める', async () => {
+    const stores = createMemoryStores();
+    for (let i = 0; i < 5; i += 1) await humanTurn(stores, `conv-${i}`, `質問${i}`, `返答${i}`);
+    const call = tools(stores);
+
+    const seen: string[] = [];
+    let cursor: string | undefined;
+    for (let guard = 0; guard < 10; guard += 1) {
+      const reply = await call('conversation_read', {
+        limit: 2,
+        until: '2099-01-01T00:00:00.000Z',
+        ...(cursor === undefined ? {} : { cursor }),
+      });
+      seen.push(...idsOf(reply));
+      cursor = cursorOf(reply);
+      if (cursor === undefined) break;
+    }
+    expect(seen).toEqual(['conv-4', 'conv-3', 'conv-2', 'conv-1', 'conv-0']);
+  });
+
+  it('指す発言が無い cursor は、先頭から返さず断る', async () => {
+    const stores = createMemoryStores();
+    await humanTurn(stores, 'conv-0', '質問', '返答');
+    const cursor = encodeConversationCursor({ id: 'jrn-missing', at: '2026-01-01T00:00:00.000Z' });
+
+    const reply = await tools(stores)('conversation_read', { cursor });
+
+    expect(reply).toContain('cursor が使えない');
+    expect(idsOf(reply)).toEqual([]);
+  });
+
+  it('conversationId / q のときは cursor を使わない、と言う', async () => {
+    const stores = createMemoryStores();
+    await humanTurn(stores, 'conv-0', '質問', '返答');
+    const call = tools(stores);
+    const cursor = encodeConversationCursor({ id: 'x', at: 'y' });
+
+    const byId = await call('conversation_read', { conversationId: 'conv-0', cursor });
+    const byQuery = await call('conversation_read', { q: '質問', cursor });
+
+    expect(byId).toContain('cursor は会話の一覧のときだけ効く');
+    expect(byQuery).toContain('cursor は会話の一覧のときだけ効く');
   });
 });

@@ -360,6 +360,8 @@ export {
   preview,
   reachedStart,
   readConversationPage,
+  encodeConversationCursor,
+  decodeConversationCursor,
   readConversationWindow,
   searchExchanges,
   toMessage,

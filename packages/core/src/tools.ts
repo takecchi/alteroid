@@ -14,12 +14,17 @@ import {
 
 import {
   bySpeaker,
-  collectConversations,
   conversationMessages,
+  decodeConversationCursor,
+  encodeConversationCursor,
   humanExchanges,
+  InvalidConversationCursorError,
   reachedStart,
+  readConversationPage,
   readConversationWindow,
   searchExchanges,
+  type ConversationCursor,
+  type ConversationPage,
 } from './conversation.js';
 import {
   commitmentPosition,
@@ -12695,6 +12700,9 @@ export function createCloneTools(context: ToolContext) {
         'conversationId を指定するとその会話の中身を古い順に読める。',
         'q だけを指定すると窓の中を語で探す（新しい順）。',
         '何も指定しなければ会話の一覧（新しい順）。',
+        '一覧が limit・文字数の予算・scan の窓で切れたら、末尾に「続きを読むには: conversation_read cursor=…」が出るので、' +
+          'その cursor をそのまま渡すと続き（limit の上限 200 や窓の外も含む）から読める。続きが無ければ出ない。' +
+          'GET /conversations（人間の口）と同じ cursor である。',
         '人間自身の発言だけを見るなら speaker: "human" を指定する',
         '（既定 both は人間とクローンの両方の発言を含む）。',
         '一覧の本文は抜粋で、全文が要る1件は id を渡して取る。',
@@ -12753,6 +12761,16 @@ export function createCloneTools(context: ToolContext) {
           .describe(
             `一覧モードで返す会話の本数（${formatIntRangeJa({ min: 1, max: 200 })}。既定 20）。conversationId / q のときは効かない`,
           ),
+        // **#3644。** `GET /conversations` の `cursor` と同じ継続点（符号化は core の
+        // `encodeConversationCursor` / `decodeConversationCursor` 1か所）。
+        cursor: z
+          .string()
+          .optional()
+          .describe(
+            '一覧モードの続きを読む位置。前回の応答の末尾「続きを読むには」に出た cursor をそのまま渡す' +
+              '（自分で組み立てない。GET /conversations の nextCursor と同じもの）。' +
+              '同じ since / until を付けて呼ぶこと。conversationId / q のときは効かない',
+          ),
         id: z
           .string()
           .optional()
@@ -12779,6 +12797,7 @@ export function createCloneTools(context: ToolContext) {
         until: untilInput,
         scan,
         limit,
+        cursor: cursorInput,
         id,
         offset = 0,
         includeSuperseded = false,
@@ -12842,17 +12861,56 @@ export function createCloneTools(context: ToolContext) {
 
         // --- ここから一覧系。まず窓を取り、遡った件数と先頭到達を毎回言う ---
         const scanLimit = scan ?? 2000;
+        // **会話の一覧（`conversationId` も `q` も無い呼び）だけが cursor で頁を送る（#3644）。**
+        const listMode = conversationId === undefined && q === undefined;
+        let cursor: ConversationCursor | undefined;
+        if (listMode && cursorInput !== undefined) {
+          const decoded = decodeConversationCursor(cursorInput);
+          if (decoded === null) {
+            return text(
+              'cursor が壊れている（この道具か GET /conversations が返したものではないか、書き換えられている）。' +
+                'cursor は前回の応答の「続きを読むには」に出たものをそのまま渡すこと（自分で組み立てない）。' +
+                '先頭から読み直すなら cursor を省いて呼ぶこと。**会話は読んでいない。**',
+            );
+          }
+          cursor = decoded;
+        }
+        let listPage: ConversationPage | undefined;
+        let entries: Awaited<ReturnType<typeof readConversationWindow>> = [];
         /**
          * 窓の組み立ては `readConversationWindow` 1か所に閉じる（issue #418）。
          * `types: ['exchange']` と `with: ['human']` をここで手組みし直さない
          * — 手組みし直した場所ができるたびに `with` を絞り忘れる余地が生まれる
          * （`GET /conversations` / `GET /conversations/:id` と同じ理由）。
          */
-        const entries = await readConversationWindow(stores.journal, {
-          scan: scanLimit,
-          ...(since === undefined ? {} : { since }),
-          ...(until === undefined ? {} : { until }),
-        });
+        if (listMode) {
+          // 一覧は頁（`readConversationPage`。`GET /conversations` と同じ関数・同じ規則）で読む。
+          try {
+            listPage = await readConversationPage(stores.journal, {
+              limit: limit ?? 20,
+              scan: scanLimit,
+              ...(cursor === undefined ? {} : { cursor }),
+              ...(since === undefined ? {} : { since }),
+              ...(until === undefined ? {} : { until }),
+            });
+          } catch (error) {
+            // 継続点が指す発言が見当たらないのは「判定できない」である。黙って先頭から返さない。
+            if (error instanceof InvalidConversationCursorError) {
+              return text(
+                `cursor が使えない（${error.message}。別の日誌のものか、書き換えられている）。` +
+                  '先頭から読み直すなら cursor を省いて呼ぶこと。**会話は読んでいない。**',
+              );
+            }
+            throw error;
+          }
+        } else {
+          entries = await readConversationWindow(stores.journal, {
+            scan: scanLimit,
+            ...(since === undefined ? {} : { since }),
+            ...(until === undefined ? {} : { until }),
+          });
+        }
+        const scannedCount = listPage === undefined ? entries.length : listPage.scanned;
         // **`since` を渡されたら「先頭に届いた」とは言えない。**
         //
         // `reachedStart` が答えるのは「ストアが行を出し切ったか」だけである。
@@ -12864,7 +12922,7 @@ export function createCloneTools(context: ToolContext) {
         // 実際には `since` より古い側に在りうるのに、下の分岐が
         // 「当たる発言は無い」を選ぶ。これはこの道具が塞いでいる欠陥
         // （観測の欠落を「無い」と報告する形）そのものである。
-        const exhausted = reachedStart(entries.length, scanLimit);
+        const exhausted = reachedStart(scannedCount, scanLimit);
         const reached = exhausted && since === undefined;
         // **「日誌を」ではなく「人間との往復を」。** #418 より前は `entries` に
         // マネージャー / 内部ターンとの往復も混ざっていたので「日誌を N 件」が
@@ -12872,13 +12930,23 @@ export function createCloneTools(context: ToolContext) {
         // が `with: ['human']` を先に効かせるので、`entries.length` は人間との
         // 往復の件数である——文言もそれに合わせる。
         const scanNote =
-          `（人間との往復を ${entries.length} 件遡った。` +
+          `（人間との往復を ${scannedCount} 件遡った。` +
           (reached
             ? '先頭に届いている）'
             : exhausted
               ? `since=${since} より新しい範囲は出し切ったが、それより古い側は見ていない。` +
                 'since を外すか古い方へずらすこと）'
-              : 'この窓より古いものは見ていない。scan を増やすか until で窓をずらすこと）');
+              : listMode
+                ? 'この窓より古いものは見ていない。続きは「続きを読むには」の cursor で読める）'
+                : 'この窓より古いものは見ていない。scan を増やすか until で窓をずらすこと）');
+        // cursor は一覧のときだけ効く。渡されたのに使わなかったなら、そう言う。
+        const cursorIgnoredNote =
+          !listMode && cursorInput !== undefined
+            ? [
+                '（cursor は会話の一覧のときだけ効く。conversationId / q のときは使っていない。' +
+                  '古い側は until で窓をずらすこと）',
+              ]
+            : [];
 
         // --- 会話の中身（conversationId 指定、古い順） ---
         //
@@ -12960,6 +13028,7 @@ export function createCloneTools(context: ToolContext) {
               }),
               '（本文は抜粋。全文は conversation_read id=<id> で取れる）',
               ...(supersededNote === undefined ? [] : [supersededNote]),
+              ...cursorIgnoredNote,
               scanNote,
             ].join('\n'),
           );
@@ -12994,6 +13063,7 @@ export function createCloneTools(context: ToolContext) {
                   '切られる側は変わらない）ので、until で窓を古い方へずらすこと。',
               }),
               '（本文は抜粋。全文は conversation_read id=<id> で取れる）',
+              ...cursorIgnoredNote,
               scanNote,
             ].join('\n'),
           );
@@ -13010,14 +13080,36 @@ export function createCloneTools(context: ToolContext) {
         // そのまま省略へ回る。**`slice` の後の件数だけを見ると、`limit` で消えた分が
         // 出力のどこにも現れない**（`omitted` は予算の切り口しか数えない）ので、
         // 「20 件出して、日誌の先頭に届いている」と読める応答のまま 80 件が消える。
-        const allConversations = collectConversations(entries);
+        // 一覧モードでここへ来たとき `listPage` は必ず在る（上で組んでいる）。
+        const listing = listPage as ConversationPage;
         const listLimit = limit ?? 20;
-        const conversations = allConversations.slice(0, listLimit);
-        const hiddenByLimit = allConversations.length - conversations.length;
+        const conversations = listing.conversations;
+        const hiddenByLimit = listing.hiddenByLimit;
+        const windowTotal = conversations.length + hiddenByLimit;
+        // **続きの取り方（#3644）。** 出せた最後の会話の位置（予算で切れたときは出せた所まで、
+        // `limit` で切れたときや窓の外が残るときは頁の継続点）。`GET /conversations` の `nextCursor` と同じ cursor。
+        // 渡した絞り（since / until / scan / limit）は続きの呼びにも付ける（付け忘れると窓が変わる）。
+        const continuation = (resume: ConversationCursor | null): string[] => {
+          if (resume === null) return [];
+          const args = [
+            `cursor=${encodeConversationCursor(resume)}`,
+            ...(sinceInput === undefined ? [] : [`since=${sinceInput}`]),
+            ...(untilInput === undefined ? [] : [`until=${untilInput}`]),
+            ...(scan === undefined ? [] : [`scan=${scan}`]),
+            ...(limit === undefined ? [] : [`limit=${limit}`]),
+          ];
+          return [
+            `続きを読むには: conversation_read ${args.join(' ')}` +
+              '（limit の上限や窓の外もこれで辿れる。続きが無くなれば、この行は出ない）',
+          ];
+        };
         if (conversations.length === 0) {
-          return text(
-            (reached ? '会話はまだ無い。' : 'この窓には無い（判定できない）。') + `\n${scanNote}`,
-          );
+          const emptyNote = !reached
+            ? 'この窓には無い（判定できない）。'
+            : cursor === undefined
+              ? '会話はまだ無い。'
+              : 'この cursor より古い会話は無い。';
+          return text([emptyNote, ...continuation(listing.next), scanNote].join('\n'));
         }
         const lines = conversations.map(
           (conversation) =>
@@ -13029,6 +13121,7 @@ export function createCloneTools(context: ToolContext) {
         // 予算の側で切れたかどうかは `renderListing` しか知らないので、
         // 断り書きが出たことをここで受け取る。
         let cutByBudget = false;
+        let shownByBudget = conversations.length;
         // 積む形そのものは `renderListing` が持つ（一覧ごとに手で書かない）。
         const body = renderListing(lines, {
           budget: CONVERSATION_LIST_BUDGET,
@@ -13036,11 +13129,12 @@ export function createCloneTools(context: ToolContext) {
           // `limit` で落ちた分も合わせて「古い側」として1つの数で言う。
           omitted: ({ rest, shown }) => {
             cutByBudget = true;
+            shownByBudget = shown;
             return (
-              `…ほか ${rest + hiddenByLimit} 件は省略（この窓に ${allConversations.length} 件あり、` +
+              `…ほか ${rest + hiddenByLimit} 件は省略（この窓に ${windowTotal} 件あり、` +
               `新しい順に ${shown} 件だけ出した）。` +
               '省いたのは**古い側**である。limit を増やしても出てこない（予算のほうで切れているので、' +
-              '増やした分がそのまま省略へ回る）ので、until で窓を古い方へずらすこと。'
+              '増やした分がそのまま省略へ回る）。続きは下の cursor で読むこと。'
             );
           },
         });
@@ -13052,12 +13146,20 @@ export function createCloneTools(context: ToolContext) {
           // 「その言い方も契約に入れる」という判断であって、通し方の調整ではない。
           // 予算の側と区別が要るのは**語ではなく勧める手**なので、そちらで分ける。
           notes.push(
-            `…ほか ${hiddenByLimit} 件は省略（この窓に ${allConversations.length} 件あり、` +
+            `…ほか ${hiddenByLimit} 件は省略（この窓に ${windowTotal} 件あり、` +
               `新しい順に ${conversations.length} 件だけ出した）。` +
               '省いたのは**古い側**で、切ったのは limit=' +
               `${listLimit} である。予算にはまだ余りがあるので、limit を増やせば出る。`,
           );
         }
+        // 予算で切れたなら、出せた最後の会話の位置から。そうでなければ頁の継続点。
+        const lastShown = conversations[shownByBudget - 1];
+        const resume = cutByBudget
+          ? ((lastShown === undefined
+              ? undefined
+              : listing.positions.get(lastShown.conversationId)) ?? listing.next)
+          : listing.next;
+        notes.push(...continuation(resume));
         notes.push('（各会話の中身は conversation_read conversationId=<id> で古い順に読める）');
         if (speaker !== 'both') {
           notes.push(
