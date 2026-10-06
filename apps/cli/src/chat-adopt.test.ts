@@ -1,13 +1,17 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { captureStdout } from './test-support.js';
 
-/** readline に流す行（尽きたら Ctrl-C 相当で投げる）。 */
-const lines: string[] = [];
+/**
+ * readline に流す行（尽きたら閉じる）。**`run` ごとに作り直し、偽の readline は作られた時点の配列を握る。**
+ * 共有の1本だと、時間切れで置き去りになった前のテストの `chatCommand` が、次のテストの行を横取りして送る。
+ */
+let lines: string[] = [];
 
 vi.mock('node:readline/promises', () => ({
   // `chat.ts` は `line` / `close` イベントで読む（#3262）。`prompt()` のたびに次の行を流し、尽きたら閉じる。
   createInterface: () => {
+    const mine = lines;
     const handlers: { line?: (text: string) => void; close?: () => void } = {};
     return {
       on: (_event: 'line', handler: (text: string) => void) => {
@@ -19,7 +23,7 @@ vi.mock('node:readline/promises', () => ({
       setPrompt: () => undefined,
       prompt: () => {
         queueMicrotask(() => {
-          const next = lines.shift();
+          const next = mine.shift();
           if (next === undefined) handlers.close?.();
           else handlers.line?.(next);
         });
@@ -39,6 +43,13 @@ vi.mock('./target.js', async (orig) => ({
   }),
 }));
 
+// chat.ts（ink・react・api-client まで引く）の初回の読み込みは、負荷の高い器で数秒かかる。最初のテストの
+// 5秒に含めない（含めると時間切れのあと、置き去りの実行が次のテストへ食い込む）。
+let chatCommand: typeof import('./chat.js').chatCommand;
+beforeAll(async () => {
+  ({ chatCommand } = await import('./chat.js'));
+}, 60_000);
+
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
@@ -57,7 +68,7 @@ async function run(
   chatReply: (n: number) => Response,
   lookup: (n: number, id: string) => Response,
 ): Promise<{ chatBodies: Record<string, unknown>[]; lookups: string[]; output: string }> {
-  lines.push(...input);
+  lines = [...input];
   const chatBodies: Record<string, unknown>[] = [];
   const lookups: string[] = [];
   vi.stubGlobal('fetch', (url: unknown, init?: RequestInit) => {
@@ -74,7 +85,6 @@ async function run(
     return Promise.resolve(Response.json({}));
   });
   const out = captureStdout();
-  const { chatCommand } = await import('./chat.js');
   await chatCommand();
   return { chatBodies, lookups, output: out() };
 }

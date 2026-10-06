@@ -1,4 +1,5 @@
 import { summarizeQuestions } from '@alteroid/core';
+import { codePointBoundary } from '@alteroid/core/cli-light';
 
 import type { DaemonClient } from './client.js';
 import { withErrorReason } from './format.js';
@@ -115,7 +116,7 @@ export function interleaveApprovals<M extends { at: string }>(
 function oneLine(value: string, max: number): string {
   // 伏せ字を先に掛ける（切ってからだとトークンの途中で切れて形が崩れ、取りこぼす）。
   const single = redactBody(value).replace(/\s+/g, ' ').trim();
-  return single.length > max ? `${single.slice(0, max)}…` : single;
+  return single.length > max ? `${single.slice(0, codePointBoundary(single, max))}…` : single;
 }
 
 /**

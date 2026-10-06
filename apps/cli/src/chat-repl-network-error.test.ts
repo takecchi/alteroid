@@ -1,17 +1,21 @@
 import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { makeTempDir } from '../../../vitest.tmpdir.js';
 import { captureStdout } from './test-support.js';
 
-/** readline に流す行（尽きたら Ctrl-C 相当で投げる）。 */
-const lines: string[] = [];
+/**
+ * readline に流す行（尽きたら閉じる）。**`run` ごとに作り直し、偽の readline は作られた時点の配列を握る。**
+ * 共有の1本だと、時間切れで置き去りになった前のテストの `chatCommand` が、次のテストの行を横取りして送る。
+ */
+let lines: string[] = [];
 
 vi.mock('node:readline/promises', () => ({
   // `chat.ts` は `line` / `close` イベントで読む（#3262）。`prompt()` のたびに次の行を流し、尽きたら閉じる。
   createInterface: () => {
+    const mine = lines;
     const handlers: { line?: (text: string) => void; close?: () => void } = {};
     return {
       on: (_event: 'line', handler: (text: string) => void) => {
@@ -23,7 +27,7 @@ vi.mock('node:readline/promises', () => ({
       setPrompt: () => undefined,
       prompt: () => {
         queueMicrotask(() => {
-          const next = lines.shift();
+          const next = mine.shift();
           if (next === undefined) handlers.close?.();
           else handlers.line?.(next);
         });
@@ -43,8 +47,14 @@ vi.mock('./target.js', async (orig) => ({
   }),
 }));
 
+// chat.ts（ink・react・api-client まで引く）の初回の読み込みは、負荷の高い器で数秒かかる。最初のテストの
+// 5秒に含めない（含めると時間切れのあと、置き去りの実行が次のテストへ食い込む）。
+let chatCommand: typeof import('./chat.js').chatCommand;
+beforeAll(async () => {
+  ({ chatCommand } = await import('./chat.js'));
+}, 60_000);
+
 afterEach(() => {
-  lines.length = 0;
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
@@ -57,7 +67,7 @@ async function run(
   input: string[],
   handler: (path: string, call: number) => Promise<Response>,
 ): Promise<{ calls: { path: string; body: Record<string, unknown> | null }[]; text: string }> {
-  lines.push(...input);
+  lines = [...input];
   const calls: { path: string; body: Record<string, unknown> | null }[] = [];
   const count: Record<string, number> = {};
   vi.stubGlobal('fetch', (url: unknown, init?: RequestInit) => {
@@ -71,13 +81,11 @@ async function run(
     return handler(path, count[path]);
   });
   const out = captureStdout();
-  const { chatCommand } = await import('./chat.js');
   await chatCommand();
   return { calls, text: out() };
 }
 
-// 初回は chat.ts（大きい）の読み込みで既定の5秒を超えうる。
-describe('chat: done も error も無いまま閉じたら言う（#3410）', { timeout: 30000 }, () => {
+describe('chat: done も error も無いまま閉じたら言う（#3410）', () => {
   it('open のあとで閉じたら、途中で切れたと言う', async () => {
     const { text } = await run(['one'], () =>
       Promise.resolve(
@@ -102,7 +110,7 @@ describe('chat: done も error も無いまま閉じたら言う（#3410）', { 
   });
 });
 
-describe('chat: 通信の例外で REPL を落とさない（#3218）', { timeout: 30000 }, () => {
+describe('chat: 通信の例外で REPL を落とさない（#3218）', () => {
   it('発言の送信が例外（fetch 失敗）でも、1行言って入力に戻り、次の発言を送れる', async () => {
     const { calls, text } = await run(['one', 'two'], (path, call) =>
       path === '/chat' && call === 1

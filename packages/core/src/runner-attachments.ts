@@ -9,6 +9,8 @@ import {
   normalizeAttachmentName,
   sniffAttachmentImageType,
   type AttachmentLimits,
+  formatImageLimit,
+  readAttachmentLimits,
 } from './attachment.js';
 import { sha256Hex } from './auth.js';
 import { stripNul } from './nul-guard.js';
@@ -92,8 +94,10 @@ export interface PlacedAttachment {
   readonly sha256: string;
   /** 置いたパス（担い手が `Read` で開ける）。 */
   readonly path: string;
-  /** 画像として渡す分（中身の先頭で確かめた画像だけ）。 */
+  /** 画像として渡す分（中身の先頭で確かめた画像で、画像の上限以内のものだけ）。 */
   readonly image?: AgentInputImage;
+  /** 中身は画像だが画像の上限を超えるので渡さなかった。そのときの上限（バイト。#3325）。 */
+  readonly imageOverLimit?: number;
 }
 
 export interface PlaceAttachmentsOptions {
@@ -103,6 +107,8 @@ export interface PlaceAttachmentsOptions {
   readonly attachments: readonly RunnerAttachment[];
   /** 担い手の子プロセスの gid（降ろす構成のとき）。無ければ runner と同じ UID で、0700 / 0400。 */
   readonly childGid?: number;
+  /** 画像の上限の取り元。既定は runner の環境変数（{@link readAttachmentLimits}。担い手の置き場が読むものと同じ）。 */
+  readonly limits?: AttachmentLimits;
 }
 
 const ownUid = (): number | undefined =>
@@ -148,6 +154,7 @@ export async function placeRunnerAttachments(
   options: PlaceAttachmentsOptions,
 ): Promise<PlacedAttachment[]> {
   const { root, managerId, attachments, childGid } = options;
+  const maxImageBytes = (options.limits ?? readAttachmentLimits().limits).maxImageBytes;
   if (!SAFE_SEGMENT.test(managerId)) {
     throw new RunnerAttachmentRejectedError('managerId が dir 名にできない形');
   }
@@ -216,7 +223,9 @@ export async function placeRunnerAttachments(
         path,
         ...(imageType === undefined
           ? {}
-          : { image: { mediaType: imageType, data: attachment.data, name } }),
+          : bytes.length > maxImageBytes
+            ? { imageOverLimit: maxImageBytes }
+            : { image: { mediaType: imageType, data: attachment.data, name } }),
       });
     }
   } catch (error) {
@@ -234,7 +243,9 @@ export function placedAttachmentNoticeLine(placed: PlacedAttachment): string {
   return (
     `[添付] id=${placed.id} name=${stripNul(placed.name)} type=${placed.mediaType} ` +
     `size=${placed.size} sha256=${placed.sha256} path=${placed.path}` +
-    `${placed.image === undefined ? '' : '（画像としても渡した）'}（Read で開ける）`
+    (placed.imageOverLimit === undefined
+      ? `${placed.image === undefined ? '' : '（画像としても渡した）'}（Read で開ける）`
+      : `（画像の上限（${formatImageLimit(placed.imageOverLimit)}）を超えるので画像としては渡していない。path で Read で開ける）`)
   );
 }
 

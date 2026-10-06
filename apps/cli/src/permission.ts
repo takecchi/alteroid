@@ -1,4 +1,4 @@
-import { stdout } from 'node:process';
+import { stdout } from './terminal-out.js';
 
 import {
   assessPermissionGrantStaleness,
@@ -130,11 +130,10 @@ export async function permissionRevokeCommand(
   // 未ログインの note も例外にする（#2456、クローン teto の判断 2026-09-30）。
   // 何もせず 0 で返すと「取り消した」と誤読される。読み取り系（一覧）は今のまま。
   if (target.note !== null) throw new Error(target.note);
-  const confirmed = await confirmIrreversible(
+  await confirmIrreversible(
     `許可 ${id} を取り消します。元に戻す口は無く、同じ許可は、クローンに頼み直して承認し直すまで戻りません。`,
     options,
   );
-  if (!confirmed) return;
   const client = createClient(target.baseUrl, target.headers);
   const response = await client['permission-grants'][':id'].revoke.$post({ param: { id } });
   // **失敗を握り潰さない。** 取り消しは安全側への操作なので「取り消せたか」を
@@ -170,11 +169,10 @@ export async function permissionRemoveUnreadableCommand(
   // 未ログインなら確認を出す前に断る（Issue #3214）。
   if (target.note !== null) throw new Error(target.note);
   // 戻せない操作なので確認する（#3141。`confirm.ts`）。壊れた行は中身を出さずに消すので、消すと残らない。
-  const confirmed = await confirmIrreversible(
+  await confirmIrreversible(
     `読めない許可の行（id: ${ids.join(', ')}）を消します。壊れた行は消すと残りません。`,
     options,
   );
-  if (!confirmed) return;
   const client = createClient(target.baseUrl, target.headers);
   const response = await client['permission-grants'].unreadable.remove.$post({
     json: { ids: [...ids] },

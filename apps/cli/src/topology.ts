@@ -1,4 +1,4 @@
-import { stdout } from 'node:process';
+import { stdout } from './terminal-out.js';
 
 import { createClient } from './client.js';
 import { withErrorReason } from './format.js';
@@ -303,7 +303,7 @@ export async function topologyCommand(options: TopologyOptions = {}): Promise<vo
   }
   const view = await response.json();
   if (options.json === true) {
-    stdout.write(`${JSON.stringify(view, null, 2)}\n`);
+    stdout.writeRaw(`${JSON.stringify(view, null, 2)}\n`);
     return;
   }
   stdout.write(`${renderTopology(view as TopologyView)}\n`);
@@ -334,9 +334,9 @@ async function watchTopology(
   const paint = (): void => {
     if (latest === null) return;
     const warning = notice === null ? '' : `\n${notice}`;
-    stdout.write(
-      `${tty ? CLEAR_SCREEN : ''}${renderTopology(latest)}${warning}\n${tty ? '' : '\n'}`,
-    );
+    // 画面消去は自前の制御列なので掃除せずに書く。地図の中身（外から来た文字列を含む）は掃除する。
+    if (tty) stdout.writeRaw(CLEAR_SCREEN);
+    stdout.write(`${renderTopology(latest)}${warning}\n${tty ? '' : '\n'}`);
   };
   const ticker = !json && tty ? setInterval(paint, 1000) : null;
 
@@ -373,7 +373,7 @@ async function watchTopology(
           const body = event.json<{ error?: unknown }>();
           const kind = typeof body?.error === 'string' ? body.error : 'unknown';
           if (json) {
-            stdout.write(`${JSON.stringify({ type: 'unavailable', error: kind })}\n`);
+            stdout.writeRaw(`${JSON.stringify({ type: 'unavailable', error: kind })}\n`);
           } else {
             notice = `⚠️ デーモンが地図を組めていない（理由の種別: ${redactError(kind)}）。復旧すると続きを描く。`;
             if (latest === null) stdout.write(`${notice}\n`);
@@ -386,7 +386,7 @@ async function watchTopology(
         if (view === null) continue;
         notice = null;
         latest = view;
-        if (json) stdout.write(`${JSON.stringify(view)}\n`);
+        if (json) stdout.writeRaw(`${JSON.stringify(view)}\n`);
         else paint();
       }
     } catch (error) {
