@@ -5,6 +5,7 @@
 // （`revision.ts` は焼き込んだ正典と zod を読むので初期チャンクへ入れられない）。
 import { SettingsTabs } from '~/components/group-tabs';
 import { settingsDocumentTitle } from '~/lib/nav';
+import { useLogout } from '~/lib/use-logout';
 import { describeRevisionStatus } from '@alteroid/core/revision';
 import { Fragment, useRef, useState } from 'react';
 
@@ -54,14 +55,7 @@ export default function Settings() {
 
 function Account() {
   const auth = useAuth();
-  const [logoutError, setLogoutError] = useState<string | null>(null);
-
-  const handleLogout = () => {
-    setLogoutError(null);
-    void auth.logout().then((result) => {
-      if (!result.ok) setLogoutError(result.message);
-    });
-  };
+  const { busy, error: logoutError, logout, discard } = useLogout();
 
   return (
     <Card>
@@ -101,7 +95,7 @@ function Account() {
               ]}
             />
             <div className="mt-3 flex items-center gap-2">
-              <Button size="sm" onClick={handleLogout}>
+              <Button size="sm" loading={busy} onClick={logout}>
                 ログアウト
               </Button>
               <span className="text-[11px] text-muted-foreground">
@@ -113,10 +107,7 @@ function Account() {
                 <span className="break-words">サーバ側を失効させられなかった: {logoutError}</span>
                 <button
                   type="button"
-                  onClick={() => {
-                    setLogoutError(null);
-                    auth.discardCredential();
-                  }}
+                  onClick={discard}
                   className="shrink-0 underline hover:text-foreground"
                 >
                   この画面から鍵だけを捨てる
