@@ -8,7 +8,7 @@
  * 「403 に専用の文言がある」「追加・削除・無効化/有効化は既存の一覧を土台に
  * `PUT /tokens` を全置換で呼ぶ」の各点。文言の細部より、この規律が壊れていないかを見る。
  */
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -578,6 +578,17 @@ describe('/tokens 画面 — 空のプール', () => {
     renderTokens();
 
     fireEvent.click(await screen.findByRole('button', { name: 'この行を消す' }));
+    // 確認を経て初めて消す（#3067。確認のボタンは「消す」）。押しただけでは POST しない。
+    const dialog = await screen.findByRole('alertdialog');
+    expect(dialog.textContent).toContain('元に戻せません');
+    expect(posts).toEqual([]);
+    fireEvent.click(within(dialog).getByRole('button', { name: 'やめる' }));
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+    expect(posts).toEqual([]);
+    fireEvent.click(screen.getByRole('button', { name: 'この行を消す' }));
+    fireEvent.click(
+      within(await screen.findByRole('alertdialog')).getByRole('button', { name: '消す' }),
+    );
 
     await waitFor(() => {
       expect(posts).toEqual([{ ids: ['tok-bad'] }]);
@@ -624,6 +635,10 @@ describe('/tokens 画面 — 空のプール', () => {
     renderTokens();
 
     fireEvent.click(await screen.findByRole('button', { name: 'この行を消す' }));
+    // 確認を経て初めて消す（#3067。確認のボタンは「消す」）。
+    fireEvent.click(
+      within(await screen.findByRole('alertdialog')).getByRole('button', { name: '消す' }),
+    );
 
     await waitFor(() => {
       expect(posts).toEqual([{ ids: ['tok-bad'] }]);
@@ -742,10 +757,41 @@ describe('/tokens 画面 — 追加・削除・無効化/有効化（2026-09-14�
 
     const rows = screen.getAllByText('削除');
     fireEvent.click(rows[0]!);
+    // 確認を経て初めて消す（#3067。期待値は弱めていない）。
+    fireEvent.click(
+      within(await screen.findByRole('alertdialog')).getByRole('button', { name: '削除する' }),
+    );
 
     await screen.findByText('token-b');
     expect(screen.queryByText('token-a')).toBeNull();
     expect(puts).toEqual([[{ id: 't-b', label: 'token-b', order: 1 }]]);
+  });
+
+  it('「削除」は押しただけでは PUT せず、「やめる」で閉じ、「削除する」で初めて PUT する（#3067）', async () => {
+    const { puts } = stubCrudScreen([
+      { id: 't-a', label: 'token-a', order: 0, sha256: 'a'.repeat(12) },
+    ]);
+    renderTokens();
+    await waitForPoolLoaded();
+    expect(await screen.findByText('token-a')).toBeTruthy();
+
+    fireEvent.click(screen.getByText('削除'));
+    const dialog = await screen.findByRole('alertdialog');
+    // 事実どおり: 戻せない・値は画面に出ていないので入れ直しには元の出力が要る。
+    expect(dialog.textContent).toContain('元に戻せません');
+    expect(dialog.textContent).toContain('claude setup-token の出力がもう一度要ります');
+    expect(puts).toHaveLength(0);
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'やめる' }));
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+    expect(puts).toHaveLength(0);
+    expect(screen.getByText('token-a')).toBeTruthy();
+
+    fireEvent.click(screen.getByText('削除'));
+    fireEvent.click(
+      within(await screen.findByRole('alertdialog')).getByRole('button', { name: '削除する' }),
+    );
+    await waitFor(() => expect(puts).toHaveLength(1));
   });
 
   it('無効化すると disabled: true で PUT され、バッジが「無効化済み」に変わる', async () => {

@@ -10,6 +10,7 @@ import {
   Card,
   CardHeader,
   Empty,
+  ConfirmDialog,
   ErrorNote,
   Input,
   isImeConfirmEnter,
@@ -132,6 +133,8 @@ export default function ManagerDetail({ loaderData }: Route.ComponentProps) {
   const { search } = useLocation();
   const abortManager = useAbortManager();
   const [busy, setBusy] = useState(false);
+  // 停止の確認を出しているか。押した瞬間には停止せず確認を挟む（#3067 / #2781）。
+  const [confirmingStop, setConfirmingStop] = useState(false);
   const [failure, setFailure] = useState<unknown>(undefined);
 
   const manager = data?.manager;
@@ -201,19 +204,35 @@ export default function ManagerDetail({ loaderData }: Route.ComponentProps) {
               variant="danger"
               size="sm"
               loading={busy}
-              onClick={() => {
-                setBusy(true);
-                setFailure(undefined);
-                // 本文が要る（サーバ側に json バリデータが付いている）。
-                abortManager(id, '人間が画面から停止した')
-                  .then(() => navigate({ pathname: '/managers', search }))
-                  .catch(setFailure)
-                  .finally(() => setBusy(false));
-              }}
+              onClick={() => setConfirmingStop(true)}
             >
               停止する
             </Button>
           ) : undefined}
+          {/*
+            **確認の文は、コードで確かめた事実だけを書く。** 停止は `ManagerPool.abort`
+            （`packages/core/src/manager.ts`）が、runner のセッションを止めて台帳を
+            `stopped` へ書き、答えを待っていた確認（`waiting`）を畳む。`done`（待機中）も
+            同じ道を通る。進行中のターンの作業が失われることは、`manager_stop` の断りが
+            言う事実（`STALE_TOKEN_RESTART_ADVICE`）と同じである。
+          */}
+          <ConfirmDialog
+            open={confirmingStop}
+            onOpenChange={setConfirmingStop}
+            title="このマネージャーを停止しますか"
+            description="セッションを止めます（待機中のセッションも畳まれます）。進行中の作業は失われ、答えを待っている確認は畳まれます。停止すると一覧へ戻ります。"
+            confirmLabel="停止する"
+            destructive
+            onConfirm={() => {
+              setBusy(true);
+              setFailure(undefined);
+              // 本文が要る（サーバ側に json バリデータが付いている）。
+              abortManager(id, '人間が画面から停止した')
+                .then(() => navigate({ pathname: '/managers', search }))
+                .catch(setFailure)
+                .finally(() => setBusy(false));
+            }}
+          />
         </div>
       </header>
 
@@ -1096,8 +1115,8 @@ function SystemErrorNote({ manager }: { manager: ManagerSummary }) {
  *
  * - **定数の文面はクローンの道具の名（`manager_stop` の断り）を名指しするが、
  *   その道具はこの画面には無い。** 人間はここでは「停止する」ボタンを押す
- *   だけで、押した瞬間に `abortManager` が呼ばれて一覧へ戻る（クローン向けの
- *   断りに相当する確認の一手が無い）。定数をそのまま転記すると、押しても
+ *   だけで、確認のダイアログを経て `abortManager` が呼ばれ、一覧へ戻る（クローン向けの
+ *   断りに相当する未 push の確認は出ない）。定数をそのまま転記すると、押しても
  *   出てこない道具名を人間に読ませることになる
  * - **`LostNote`（このファイル、上）が既に採っている作法に倣う**——
  *   確かめ先の主は「起こし直す前に、まず外へ出た成果（PR・コミット・送信済みのメール・登録済みの予定・投稿先など）を

@@ -10,7 +10,7 @@
  * この画面が「実行中」としか言わないと、同じ仕事を見て人間とクローンで見えている
  * ものが食い違う（北極星 禁止1 を逆向きに踏む）。
  */
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -1056,6 +1056,18 @@ describe('「話しかける」の Enter は、IME の確定と送信中の連�
  */
 describe('停止は status で出し分けない', () => {
   /**
+   * 「停止する」は押した瞬間には実行せず、確認（`alertdialog`）を挟む（#3067。
+   * #2781 の `memory-detail.test.tsx` と同じ作り）。**確認のボタンも名前が「停止する」**
+   * （操作の名前と同じにする約束）なので、ダイアログの中から取る。
+   * 既存の歯は、確認を経ても停止が届く形に直した（期待値は弱めていない）。
+   */
+  async function stopWithConfirm() {
+    fireEvent.click(await screen.findByRole('button', { name: '停止する' }));
+    const dialog = await screen.findByRole('alertdialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: '停止する' }));
+  }
+
+  /**
    * **この `Record` が数え上げの持ち主である。**
    *
    * 画面の側は状態を1つも数え上げない（数え上げると、状態が増えた日に黙って
@@ -1130,7 +1142,7 @@ describe('停止は status で出し分けない', () => {
     const button = screen.getByRole('button', { name: '停止する' });
     // 描いたうえで、押せる（`disabled` で塞ぐ形へ逃げていない）。
     expect(button.hasAttribute('disabled')).toBe(false);
-    fireEvent.click(button);
+    await stopWithConfirm();
 
     // 行為が最後まで届いた（一覧へ戻っている）。
     expect(await screen.findByText('マネージャー一覧')).toBeTruthy();
@@ -1151,8 +1163,33 @@ describe('停止は status で出し分けない', () => {
 
     const button = await screen.findByRole('button', { name: '停止する' });
     expect(button.hasAttribute('disabled')).toBe(false);
-    fireEvent.click(button);
+    await stopWithConfirm();
 
+    expect(await screen.findByText('マネージャー一覧')).toBeTruthy();
+    expect(sent.map((entry) => entry.method)).toEqual(['DELETE']);
+  });
+
+  /**
+   * **確認を出すだけでは停止しない（#3067）。** 押した瞬間に `DELETE` が飛ぶ形へ戻すと、
+   * 「確認が出る」だけの歯は通ってしまうので、**確認の前後で `DELETE` の数を数える**。
+   * 確認の文は、コードで確かめた範囲（待機中のセッションも畳まれる・進行中の作業は失われる・
+   * 待っている確認は畳まれる）だけを言う。
+   */
+  it('押しただけでは止まらず、確認で「やめる」なら止めずに閉じ、「停止する」で初めて DELETE が飛ぶ', async () => {
+    const { sent } = renderDetailWithAbort({ ...BASE, status: 'done' });
+    fireEvent.click(await screen.findByRole('button', { name: '停止する' }));
+
+    const dialog = await screen.findByRole('alertdialog');
+    expect(dialog.textContent).toContain('待機中のセッションも畳まれます');
+    expect(dialog.textContent).toContain('進行中の作業は失われ');
+    expect(sent).toHaveLength(0);
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'やめる' }));
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+    expect(sent).toHaveLength(0);
+    expect(screen.queryByText('マネージャー一覧')).toBeNull();
+
+    await stopWithConfirm();
     expect(await screen.findByText('マネージャー一覧')).toBeTruthy();
     expect(sent.map((entry) => entry.method)).toEqual(['DELETE']);
   });
@@ -1187,7 +1224,7 @@ describe('停止は status で出し分けない', () => {
       </Providers>,
     );
 
-    fireEvent.click(await screen.findByRole('button', { name: '停止する' }));
+    await stopWithConfirm();
 
     // 理由が画面に出る。
     expect(await screen.findByText(/マネージャーは居ない/)).toBeTruthy();
