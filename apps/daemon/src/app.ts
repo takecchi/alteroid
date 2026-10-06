@@ -102,7 +102,9 @@ import {
   fingerprintOf,
   noteDroppedRecord,
   reasonOf,
+  readConversationPage,
   readConversationWindow,
+  InvalidConversationCursorError,
   clientMessageIdSchema,
   RECENT_TRACE_LIMIT,
   recentDroppedTraces,
@@ -951,6 +953,8 @@ const approvalsCursorSchema = z.object({
  * を返しているのに、この人間向けの口だけが黙っていた。**応答に
  * `reachedStart` と `hiddenByLimit` を足し、この口も言うようにした。**
  *
+ * **（#3550 で `cursor` / `nextCursor` を足した。以下は足す前の判断の記録。）**
+ *
  * **いつページングを足すか — 数ではなく断り書きの有無で判断する。**
  * `hiddenByLimit > 0` の断り書きが実際に画面や CLI に出るようになったら、
  * ページング（あるいは `limit` を画面から動かせる形）を検討する時期である。
@@ -971,6 +975,21 @@ const approvalsCursorSchema = z.object({
 const conversationsQuery = z.object({
   limit: z.coerce.number().int().min(1).max(200).default(20),
   scan: z.coerce.number().int().min(1).max(10000).default(2000),
+  /**
+   * 続きの頁（応答の `nextCursor` をそのまま渡す）。**`/approvals` / `/commitments` と同じ形**
+   * （不透明な `cursor` ＋ 応答の `nextCursor`。続きが無ければ `nextCursor` は鍵ごと無い。
+   * 壊れた・使えない `cursor` は 400）。**`limit` を増やして取り直す必要はもう無い。**
+   *
+   * 中身は日誌の継続点（`{ id, at }`。頁の最後の会話の最新の人間との発言、または窓の最後に読んだ
+   * 発言）。並びは会話の最新の発言の日誌の順序なので、同じミリ秒の同着も飛ばさず重複しない。
+   * **`scan` の窓の外も、継続点を辿れば読める**（`readConversationPage` の doc）。
+   */
+  cursor: z.string().optional(),
+});
+/** `GET /conversations` のカーソルの中身（日誌の継続点）。 */
+const conversationsCursorSchema = z.object({
+  id: z.string().min(1),
+  at: z.string().min(1),
 });
 /**
  * `includeSuperseded`: 編集で畳まれた旧発言・その応答も含めて返すか
@@ -3637,38 +3656,36 @@ export function createApp(deps: AppDeps) {
           '新しい順。`scanned` は人間との往復を何件遡ったか（マネージャーとの往復・内部' +
           'ターンは数えない。issue #418）、`reachedStart` はその窓が日誌の先頭に届いたかで、' +
           '遡り切れていないことが分かる（黙って打ち切らない）。`hiddenByLimit` は、その窓の' +
-          '**中で** `limit` に収まらず落とした会話の数（窓の外は数えていない）。',
+          '**中で** `limit` に収まらず落とした会話の数（窓の外は数えていない）。' +
+          '続きが在る（`hiddenByLimit > 0` か `reachedStart` が偽）ときは `nextCursor` が載り、' +
+          '次の呼びの `cursor` へそのまま渡すと、その続き（窓の外も含む）から読める。' +
+          '`/approvals` / `/commitments` と同じ形で、続きが無ければ `nextCursor` は無い。' +
+          '壊れた `cursor`・指す発言が見当たらない `cursor` は 400。',
         responses: {
           200: {
             description: '会話の一覧（新しい順）。',
             content: { 'application/json': { schema: resolver(conversationsResponseSchema) } },
           },
           400: {
-            description: 'クエリが不正。',
+            description: 'クエリが不正、または `cursor` が壊れている・指す発言が見当たらない。',
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
         },
       }),
       queryParams(conversationsQuery),
       async (c) => {
-        const { limit, scan } = c.req.valid('query');
-        /**
-         * 窓の組み立て（`types: ['exchange']` と `with: ['human']`）は
-         * `@alteroid/core` の `readConversationWindow` 1か所に閉じる（issue
-         * #418）。ここで手組みし直さない — 手組みし直した場所ができるたびに
-         * `with` を絞り忘れる余地が生まれる（この issue の症状そのもの）。
-         */
-        const entries = await readConversationWindow(stores.journal, { scan });
-
-        /**
-         * 畳み直しの規則そのものは `@alteroid/core` の `conversation.ts` が持つ。
-         *
-         * **こことクローンの道具（`conversation_read`）で同じ関数を呼ぶ。** 規則を
-         * 両側に写すと、片方を直してもう片方を忘れたときに「人間には見えるが
-         * クローンには見えない」がまた1つ増える — それは、その道具を足す動機に
-         * なった欠陥そのものである。日誌の順序をそのまま会話の順序にする理由
-         * （同じミリ秒の前後は時刻からは決められない）も、移設先に書いてある。
-         */
+        const { limit, scan, cursor } = c.req.valid('query');
+        let cursorPayload: z.infer<typeof conversationsCursorSchema> | undefined;
+        if (cursor !== undefined) {
+          try {
+            cursorPayload = decodeCursor(cursor, conversationsCursorSchema);
+          } catch (error) {
+            if (error instanceof InvalidCursorError) {
+              return c.json({ error: error.message }, 400);
+            }
+            throw error;
+          }
+        }
         /**
          * 既読の記録は全員で1組（`ConversationReadStore`）。基準時刻が無ければここで決める
          * （どの経路でも決まる）。数え方は `collectConversations` が持つ——ここで数え直さない。
@@ -3677,8 +3694,30 @@ export function createApp(deps: AppDeps) {
           stores.conversationReads,
           (deps.now ?? (() => new Date()))().toISOString(),
         );
-        const allConversations = collectConversations(entries, readView);
-        const conversations = allConversations.slice(0, limit).map(({ unread, ...summary }) => ({
+        /**
+         * 窓の組み立て（`types: ['exchange']` と `with: ['human']`）も、畳み直しの規則も、継続点で
+         * 頁を送る規則も `@alteroid/core`（`conversation.ts` の `readConversationPage`）が持つ。
+         * ここで手組みし直さない — 手組みし直した場所ができるたびに `with` を絞り忘れる余地が
+         * 生まれる（issue #418 の症状そのもの）。**クローンの道具（`conversation_read`）と同じ
+         * 規則を通す**ので、人間には見えるがクローンには見えない、が増えない。
+         */
+        let page: Awaited<ReturnType<typeof readConversationPage>>;
+        try {
+          page = await readConversationPage(stores.journal, {
+            limit,
+            scan,
+            readView,
+            ...(cursorPayload === undefined ? {} : { cursor: cursorPayload }),
+          });
+        } catch (error) {
+          // **継続点が指す発言が見当たらないのは、判定できないという第3の状態である。** 黙って先頭から
+          // 返さず 400 にする（`GET /journal` の `JournalAnchorNotFoundError` と同じ）。
+          if (error instanceof InvalidConversationCursorError) {
+            return c.json({ error: error.message }, 400);
+          }
+          throw error;
+        }
+        const conversations = page.conversations.map(({ unread, ...summary }) => ({
           ...summary,
           unreadCount: unread,
         }));
@@ -3688,37 +3727,36 @@ export function createApp(deps: AppDeps) {
             ? {}
             : { readStateUnreadable: readView.unreadable }),
           /**
-           * 遡った範囲。**#418 より前は「日誌の `exchange` を何件見たか」
-           * だったが、いまは「人間との往復を何件見たか」である**
-           * （`readConversationWindow` が `with: ['human']` を `limit` より
-           * 前で効かせるため）。ここより古い**人間との**会話は出てこない
-           * （`scan` を増やせば見える）。
+           * 遡った範囲。**人間との往復を何件見たか**（`readConversationWindow` が `with: ['human']` を
+           * `limit` より前で効かせるため。issue #418）。`cursor` を渡した呼びでは、その継続点より
+           * 古い側から数える。窓の外の会話は、`nextCursor` を辿れば出てくる。
            */
-          scanned: entries.length,
+          scanned: page.scanned,
           /**
-           * 窓（`scan`）が日誌の先頭に届いたか。**`GET /conversations/:id`
-           * と同じ関数・同じ意味で揃えてある**（`reachedStart`。
-           * `@alteroid/core`）— 窓が出し切れているかを言うだけで、`limit`
-           * とは無関係（`limit` の側は `hiddenByLimit` が持つ）。
+           * 窓（`scan`）が日誌の先頭に届いたか。**`GET /conversations/:id` と同じ関数・同じ意味で
+           * 揃えてある**（`reachedStart`。`@alteroid/core`）— 窓が出し切れているかを言うだけで、
+           * `limit` とは無関係（`limit` の側は `hiddenByLimit` が持つ）。
            */
-          reachedStart: reachedStart(entries.length, scan),
+          reachedStart: page.reachedStart,
           /**
-           * **この窓の中で** `limit` に収まらず落とした会話の数。
+           * **この窓の中で** `limit` に収まらず落とした会話の数。`nextCursor` を辿れば出てくる。
            *
-           * `collectConversations(entries)` は窓の全件を既に数え上げているので、
-           * `slice` の前後の差を取るだけでよい —— **この数を出すために追加の
-           * 走査は1件も要らない。** `limit` を置いた意味（応答を大きくしない）は
-           * 薄まらない。
+           * ⚠️ **窓の中の数であって、窓の外は数えていない。** `reachedStart` が偽なら、この窓より
+           * さらに古い会話が在りうる（この数には現れない）。そのときも `nextCursor` が載る。
            *
-           * ⚠️ **窓の中の数であって、窓の外は数えていない。** `reachedStart` が
-           * 偽なら、この窓よりさらに古い会話が在りうる（それはこの数には
-           * 現れない — `scan` を増やして初めて見える）。
-           *
-           * `conversation_read`（`packages/core/src/tools.ts` の
-           * `hiddenByLimit`）が既に同じことを言っているのに、この人間向けの
-           * 口だけが黙っていた（#418 の裏返し）。名前もそちらに揃えてある。
+           * `conversation_read`（`packages/core/src/tools.ts` の `hiddenByLimit`）と名前を揃えてある。
            */
-          hiddenByLimit: allConversations.length - conversations.length,
+          hiddenByLimit: page.hiddenByLimit,
+          /**
+           * 続きが在るときだけ載る継続点（`cursor` へそのまま渡す。`/approvals` / `/commitments` と
+           * 同じ名前・同じ形）。**`hiddenByLimit > 0` か `reachedStart === false` のどちらかなら載る**
+           * ——窓の外が残るのに黙って途切れない。無ければ鍵ごと無い（既存の応答は1バイトも変わらない）。
+           * `reachedStart: false` のときは「窓が `scan` 件ちょうどだった」だけのこともあるので、
+           * 辿った先が空で終わることはある（安全側）。
+           */
+          ...(page.next === null
+            ? {}
+            : { nextCursor: encodeCursor({ id: page.next.id, at: page.next.at }) }),
         });
       },
     )
