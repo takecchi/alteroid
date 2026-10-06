@@ -72,7 +72,8 @@ export const COMMANDS: readonly CommandSpec[] = [
   {
     name: 'attach',
     action: 'attach',
-    describe: '次に送る発言へファイルを添える。<path>（複数回で複数個。送るときに上がる）',
+    describe:
+      '次に送る発言へファイルを添える。<path>（複数回で複数個。送るときに上がる。空の入力の Enter で添付だけも送れる）',
   },
   { name: 'attachments', action: 'attachments', describe: '添えかけのファイルの一覧' },
   { name: 'detach', action: 'detach', describe: '添えかけを外す。<番号|all>' },

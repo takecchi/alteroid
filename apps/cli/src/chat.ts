@@ -115,7 +115,8 @@ export async function chatCommand(): Promise<void> {
       } catch {
         break; // Ctrl-C
       }
-      if (line.length === 0) continue;
+      // 空行は、添えかけが無ければ送らない。あれば添付だけの発言として送る。
+      if (line.length === 0 && draft.count === 0) continue;
 
       if (/^\/(attach|attachments|detach)(\s|$)/.test(line)) {
         await runAttachmentCommand(line, draft);
@@ -300,7 +301,7 @@ async function* readSSE(body: ReadableStream<Uint8Array>): AsyncGenerator<SSEEve
   }
 }
 
-const HELP = `/attach <path>       次に送る発言にファイルを添える（複数回で複数個。本文を打って送ると一緒に上がる）
+const HELP = `/attach <path>       次に送る発言にファイルを添える（複数回で複数個。本文を打って送ると一緒に上がる。添えかけがあれば空行の Enter で添付だけも送れる）
 /attachments         添えかけのファイルの一覧
 /detach <番号|all>   添えかけを外す
 /report [日付]        日報（既定は直近。日付は YYYY-MM-DD）
@@ -3756,7 +3757,7 @@ export async function runAttachmentCommand(line: string, draft: AttachmentDraft)
       return;
     }
     stdout.write(
-      `添えかけ ${draft.count} 件（${added.file.name}）。本文を打って送ると一緒に上がります\n`,
+      `添えかけ ${draft.count} 件（${added.file.name}）。本文を打って送ると一緒に上がります（空行の Enter なら添付だけを送る）\n`,
     );
     return;
   }

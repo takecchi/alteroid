@@ -102,9 +102,14 @@ export class ChatController {
     const added = await this.draft.add(path);
     this.addSystem(
       added.ok
-        ? `添えかけ ${this.draft.count} 件（${added.file.name}）。本文を打って送ると一緒に上がる`
+        ? `添えかけ ${this.draft.count} 件（${added.file.name}）。本文を打って送ると一緒に上がる（空行の Enter なら添付だけを送る）`
         : `添えられない: ${added.reason}`,
     );
+  }
+
+  /** 添えかけがあるか（空の入力欄の Enter で添付だけを送れるか）。 */
+  hasAttachments(): boolean {
+    return this.draft.count > 0;
   }
 
   /** `/attachments`。 */
@@ -179,7 +184,7 @@ export class ChatController {
 
   /** 発言を送る。応答中なら追送になる。 */
   async send(text: string): Promise<void> {
-    if (text.length === 0) return;
+    if (text.length === 0 && this.draft.count === 0) return;
     if (this.store.getSnapshot().busy) {
       await this.followUp(text);
       return;
@@ -188,7 +193,7 @@ export class ChatController {
     this.stopWatch();
     const attached = this.draft.count === 0 ? NO_ATTACHMENTS : await this.uploadDraft();
     if (attached === null) return;
-    this.push('user', [text, ...attached.lines].join('\n'));
+    this.push('user', [text, ...attached.lines].filter((l) => l !== '').join('\n'));
     this.set({ busy: true, transient: '考えている…' });
     const abort = new AbortController();
     this.abort = abort;
@@ -277,7 +282,7 @@ export class ChatController {
   private async followUp(text: string): Promise<void> {
     const attached = this.draft.count === 0 ? NO_ATTACHMENTS : await this.uploadDraft();
     if (attached === null) return;
-    this.push('user', [text, ...attached.lines].join('\n'));
+    this.push('user', [text, ...attached.lines].filter((l) => l !== '').join('\n'));
     const opened = this.opened;
     try {
       if (opened === null) throw new Error('会話が始まっていないので、続きを送れなかった');

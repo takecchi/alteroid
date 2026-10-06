@@ -57,7 +57,7 @@ export async function resolveTurnAttachments(
       data: Buffer.from(found.bytes).toString('base64'),
       name: ref.name,
     });
-    noticeLines.push(`[添付] ${described}（画像として渡した。${FETCH_HINT.slice(1)}）`);
+    noticeLines.push(`[添付] ${described}（画像として渡した）${FETCH_HINT}`);
   }
   return { images, noticeLines };
 }
