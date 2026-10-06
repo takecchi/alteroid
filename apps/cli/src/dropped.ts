@@ -9,7 +9,7 @@ import type { DroppedTraceOrigin } from '@alteroid/core';
 
 import { createClient } from './client.js';
 import { withErrorReason } from './format.js';
-import { resolveTarget } from './target.js';
+import { describeAuthFailure, resolveTarget } from './target.js';
 
 /**
  * `alteroid dropped` — 握り潰しの跡（記録・読み出しの失敗の跡。本文は1文字も
@@ -48,18 +48,22 @@ export async function droppedCommand(): Promise<void> {
   }
   const client = createClient(target.baseUrl, target.headers);
   const response = await client.dropped.$get();
+  // 失敗は例外で上へ通す（＝終了コードが 0 でなくなる。#3446。`usage.ts` と同じ）。
   if (response.status === 404) {
-    stdout.write(
+    throw new Error(
       'このデーモンには GET /dropped が無い（版が古い可能性がある。' +
-        'alteroid daemon stop && alteroid chat でデーモンを更新してください）\n',
+        'alteroid daemon stop && alteroid chat でデーモンを更新してください）',
     );
-    return;
   }
   if (!response.ok) {
-    stdout.write(
-      `${await withErrorReason(`握り潰しの跡を読めませんでした（HTTP ${String(response.status)}）`, response)}\n`,
+    const described = describeAuthFailure(response.status, target);
+    if (described !== null) throw new Error(described);
+    throw new Error(
+      await withErrorReason(
+        `握り潰しの跡を読めませんでした（HTTP ${String(response.status)}）`,
+        response,
+      ),
     );
-    return;
   }
   stdout.write(`${renderDropped(await response.json())}\n`);
 }
