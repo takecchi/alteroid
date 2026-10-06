@@ -164,6 +164,7 @@ import {
   scanMemorySections,
 } from './memory.js';
 import type { MemoryPart, MemorySection, MemorySectionLookup } from './memory.js';
+import { stripNul } from './nul-guard.js';
 import { redactProfileFailure } from './profile.js';
 import { renderAccountList } from './account-list.js';
 import { renderPermissionGrantList } from './permission-grant-list.js';
@@ -2399,6 +2400,10 @@ function describePracticeKindViolation(
 ): string | null {
   if (value === undefined) return null;
   if (practiceKindSchema.safeParse(value).success) return null;
+  // NUL だけの値（issue #3361）。長さは範囲内なので、範囲の文では理由が読めない。
+  if (value.length > 0 && stripNul(value).length === 0) {
+    return `${field} は使えない（NUL（\\u0000）だけの値は空と同じ。${formatPracticeKindRangeJa()}のみ）。`;
+  }
   return `${field} は使えない（${formatPracticeKindRangeJa()}のみ）。`;
 }
 

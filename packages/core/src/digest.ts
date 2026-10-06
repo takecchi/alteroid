@@ -1,5 +1,6 @@
 import { providerGapsSection } from './provider-gaps.js';
 import { excerptLine } from './excerpt.js';
+import { compareIsoInstant } from './iso-instant.js';
 import { scanJournalPages } from './journal-scan.js';
 // **型だけを取る**（`import type` は実行時に消えるので、`manager.ts` との間に
 // 実行時の循環を作らない）。字面の生成元をここに置く理由は
@@ -681,14 +682,14 @@ function groupEscalations(
     let answeredInWindow = existing?.answeredInWindow;
     if (
       entry.answer !== undefined &&
-      (answeredInWindow === undefined || entry.at > answeredInWindow.at)
+      (answeredInWindow === undefined || compareIsoInstant(entry.at, answeredInWindow.at) > 0)
     ) {
       answeredInWindow = { answer: entry.answer, at: entry.at };
     }
     let withdrawnInWindow = existing?.withdrawnInWindow;
     if (
       entry.withdrawnAt !== undefined &&
-      (withdrawnInWindow === undefined || entry.at > withdrawnInWindow.at)
+      (withdrawnInWindow === undefined || compareIsoInstant(entry.at, withdrawnInWindow.at) > 0)
     ) {
       withdrawnInWindow = { reason: entry.withdrawnReason ?? '', at: entry.at };
     }
@@ -696,7 +697,10 @@ function groupEscalations(
       approvalId: entry.approvalId,
       question: existing?.question ?? entry.question,
       managerId: existing?.managerId ?? entry.managerId,
-      at: existing === undefined || entry.at > existing.at ? entry.at : existing.at,
+      at:
+        existing === undefined || compareIsoInstant(entry.at, existing.at) > 0
+          ? entry.at
+          : existing.at,
       answeredInWindow,
       withdrawnInWindow,
     });
@@ -1194,8 +1198,9 @@ export async function buildActivityDigest(
   const settled = (await stores.commitments.list({ includeClosed: true })).entries.filter(
     (entry) =>
       entry.closedAt !== undefined &&
-      entry.closedAt >= window.since.toISOString() &&
-      entry.closedAt < until.toISOString(),
+      // **実時刻で比べる**（#2451。文字列では `+09:00` 表記の時刻を数え違える。#3360）。
+      compareIsoInstant(entry.closedAt, window.since.toISOString()) >= 0 &&
+      compareIsoInstant(entry.closedAt, until.toISOString()) < 0,
   );
 
   // **境界を JS 側で切り直す理由。** `JournalQuery.until` は「以前＝含む」
@@ -1205,7 +1210,7 @@ export async function buildActivityDigest(
   // ここで `entry.at < untilIso` を掛けて決め直す。**二重に見えるが、
   // 片方だけでは足りない**——クエリ側を外すと OOM の本体（#1283）そのものに
   // 戻り、JS 側を外すと境界のミリ秒が1件ずれる。
-  const withinWindow = (entry: JournalEntry): boolean => entry.at < untilIso;
+  const withinWindow = (entry: JournalEntry): boolean => compareIsoInstant(entry.at, untilIso) < 0;
 
   // **`exchange` は別の走査にする。** `JournalQuery.with` はストアの絞りと
   // して `exchange` にしか効かない契約（`store.ts` の doc）——残り5種別と
