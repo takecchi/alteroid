@@ -46,17 +46,30 @@ export function newline(buf: TextBuffer): TextBuffer {
   return insert(buf, '\n');
 }
 
-const isHighSurrogate = (code: number): boolean => code >= 0xd800 && code <= 0xdbff;
-const isLowSurrogate = (code: number): boolean => code >= 0xdc00 && code <= 0xdfff;
-
-/** サロゲートペア（絵文字など）は 2 単位ぶん 1 文字として歩く（間に入ると文字列が壊れる）。 */
-function stepBack(value: string, i: number): number {
-  return isLowSurrogate(value.charCodeAt(i - 1)) && isHighSurrogate(value.charCodeAt(i - 2))
-    ? 2
-    : 1;
+/**
+ * 書記素（⚠️ の VS16・ZWJ でつないだ絵文字・結合文字の濁点を含む）を 1 単位として歩く。
+ * 折り返し（`wrapLine`）・ログの `wrapLogical` と同じ区切りなので、間に入って文字列を壊さない。
+ * 書記素は改行をまたがない（`\r\n` は 1 単位で、改行を含めて割る）ので、`idx` のある行だけを割る。
+ */
+function graphemeBounds(value: string, idx: number): { start: number; end: number } | undefined {
+  const from = lineStart(value, idx);
+  let index = from;
+  for (const { segment } of GRAPHEMES.segment(value.slice(from, lineEnd(value, idx) + 1))) {
+    const end = index + segment.length;
+    if (idx < end) return { start: index, end };
+    index = end;
+  }
+  return undefined;
 }
+/** キャレット `i` の直前の書記素の長さ（UTF-16 単位）。 */
+function stepBack(value: string, i: number): number {
+  const b = graphemeBounds(value, i - 1);
+  return b ? i - b.start : 1;
+}
+/** キャレット `i` の直後の書記素の長さ（UTF-16 単位）。 */
 function stepForward(value: string, i: number): number {
-  return isHighSurrogate(value.charCodeAt(i)) && isLowSurrogate(value.charCodeAt(i + 1)) ? 2 : 1;
+  const b = graphemeBounds(value, i);
+  return b ? b.end - i : 1;
 }
 
 export function backspace(buf: TextBuffer): TextBuffer {
@@ -184,40 +197,42 @@ function normalizeWidth(width?: number): number | undefined {
     : Math.max(1, Math.floor(width));
 }
 
-function charAt(text: string, i: number): string {
-  const cp = text.codePointAt(i);
-  return cp === undefined ? '' : String.fromCodePoint(cp);
-}
-
 /**
  * 1 論理行を `cap` セル以内の `[from, to)` へ割る。貪欲で、単語の途中で切るより直前の
  * 空白を優先する（空白は行末に残すので、全区間で行を過不足なく覆う）。`cap` より広い
  * 1 文字でも必ず 1 行を進める（無限ループしない）。
  */
 function wrapLine(line: string, cap: number): { from: number; to: number }[] {
+  const graphemes: { text: string; at: number; w: number }[] = [];
+  let at = 0;
+  for (const { segment } of GRAPHEMES.segment(line)) {
+    graphemes.push({ text: segment, at, w: stringWidth(segment) });
+    at += segment.length;
+  }
   const segments: { from: number; to: number }[] = [];
-  let from = 0;
+  let g = 0;
   for (;;) {
+    const from = graphemes[g]?.at ?? line.length;
     let cells = 0;
-    let i = from;
-    let lastSpace = -1;
-    while (i < line.length) {
-      const ch = charAt(line, i);
-      const w = stringWidth(ch);
-      if (cells + w > cap) break;
-      cells += w;
-      i += ch.length;
-      if (ch === ' ') lastSpace = i;
+    let k = g;
+    let lastSpace = -1; // 直前の空白の「次の書記素」の添字
+    while (k < graphemes.length) {
+      const cur = graphemes[k];
+      if (!cur || cells + cur.w > cap) break;
+      cells += cur.w;
+      k += 1;
+      if (cur.text === ' ') lastSpace = k;
     }
-    if (i >= line.length) {
+    if (k >= graphemes.length) {
       segments.push({ from, to: line.length });
       return segments;
     }
-    let to = lastSpace > from && charAt(line, i) !== ' ' ? lastSpace : i;
-    if (to <= from) to = from + charAt(line, from).length;
+    let next = lastSpace > g && graphemes[k]?.text !== ' ' ? lastSpace : k;
+    if (next <= g) next = g + 1;
+    const to = graphemes[next]?.at ?? line.length;
     segments.push({ from, to });
-    from = to;
-    if (from >= line.length) return segments;
+    g = next;
+    if (g >= graphemes.length) return segments;
   }
 }
 

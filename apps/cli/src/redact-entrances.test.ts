@@ -57,6 +57,7 @@ function emptyListed(): Listed {
     messages: [],
     messagesConversationId: null,
     messageAttachments: {},
+    messageTexts: {},
   };
 }
 
