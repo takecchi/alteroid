@@ -424,6 +424,35 @@ export function reachedStart(returned: number, scan: number): boolean {
 export type ConversationCursor = JournalCursor;
 
 /**
+ * 継続点の外から見た形（不透明な文字列）。**`GET /conversations` の `nextCursor` / `cursor` と、クローンの
+ * 道具 `conversation_read` の cursor が同じ符号化を通る**（base64url の JSON `{ id, at }`）。両側で書き写さない
+ * ——片方だけ直すと、人間の口の cursor がクローンの道具で読めなくなる（その逆も）。
+ */
+export function encodeConversationCursor(cursor: ConversationCursor): string {
+  return Buffer.from(JSON.stringify({ id: cursor.id, at: cursor.at }), 'utf8').toString(
+    'base64url',
+  );
+}
+
+/**
+ * `encodeConversationCursor` の逆。**読めなければ `null`**（base64url・JSON として読めない、または
+ * 空でない文字列の `id` / `at` を持たない）。呼ぶ側が 400 や平文の断りへ変える。指す発言が実在するかは
+ * `readConversationPage` が確かめる（`InvalidConversationCursorError`）。
+ */
+export function decodeConversationCursor(raw: string): ConversationCursor | null {
+  let json: unknown;
+  try {
+    json = JSON.parse(Buffer.from(raw, 'base64url').toString('utf8'));
+  } catch {
+    return null;
+  }
+  if (typeof json !== 'object' || json === null) return null;
+  const { id, at } = json as Record<string, unknown>;
+  if (typeof id !== 'string' || id === '' || typeof at !== 'string' || at === '') return null;
+  return { id, at };
+}
+
+/**
  * 継続点が使えないときに投げる。呼び出し側（HTTP）が 400 へ変換する。**黙って先頭へ倒さない**
  * （`JournalAnchorNotFoundError` と同じ理由。継続点が引けないのは「判定できない」である）。
  */
@@ -458,6 +487,12 @@ export interface ConversationPage {
    * `hiddenByLimit > 0` か `reachedStart === false` のどちらかなら非 `null`。
    */
   next: ConversationCursor | null;
+  /**
+   * 会話ごとの位置（その会話の**最新の人間との発言**。`conversations` に載らなかった会話も含む）。
+   * 呼ぶ側が `conversations` の先頭 n 件だけを出したとき（文字数の予算で切るクローンの道具）、
+   * 出せた最後の会話の位置を継続点にする。
+   */
+  positions: ReadonlyMap<string, ConversationCursor>;
 }
 
 /**
@@ -470,6 +505,7 @@ export interface ConversationPage {
 async function conversationIdsNewerThan(
   journal: Pick<JournalStore, 'listPage'>,
   anchor: ConversationCursor,
+  until?: string,
 ): Promise<Set<string>> {
   const ids = new Set<string>();
   let after: JournalCursor = anchor;
@@ -479,6 +515,7 @@ async function conversationIdsNewerThan(
       with: ['human'],
       order: 'asc',
       after,
+      ...(until === undefined ? {} : { until }),
       limit: NEWER_IDS_PAGE,
     });
     for (const entry of page.entries) {
@@ -512,9 +549,12 @@ export async function readConversationPage(
     scan: number;
     cursor?: ConversationCursor;
     readView?: ConversationReadView;
+    /** 窓を時刻で切る（`readConversationWindow` と同じ。ISO 8601 の正規化は呼ぶ側）。 */
+    since?: string;
+    until?: string;
   },
 ): Promise<ConversationPage> {
-  const { limit, scan, cursor, readView } = options;
+  const { limit, scan, cursor, readView, since, until } = options;
   let exclude: ReadonlySet<string> = new Set();
   if (cursor !== undefined) {
     let anchor: JournalEntry | null;
@@ -534,13 +574,15 @@ export async function readConversationPage(
     ) {
       throw new InvalidConversationCursorError('カーソルが指す発言が見当たらない');
     }
-    const newer = await conversationIdsNewerThan(journal, cursor);
+    const newer = await conversationIdsNewerThan(journal, cursor, until);
     if (anchor.conversationId !== undefined) newer.add(anchor.conversationId);
     exclude = newer;
   }
 
   const entries = await readConversationWindow(journal, {
     scan,
+    ...(since === undefined ? {} : { since }),
+    ...(until === undefined ? {} : { until }),
     ...(cursor === undefined ? {} : { after: cursor }),
   });
   const fresh =
@@ -577,5 +619,12 @@ export async function readConversationPage(
     const lastRead = entries[entries.length - 1];
     if (lastRead !== undefined) next = { id: lastRead.id, at: lastRead.at };
   }
-  return { conversations, scanned: entries.length, reachedStart: reached, hiddenByLimit, next };
+  return {
+    conversations,
+    scanned: entries.length,
+    reachedStart: reached,
+    hiddenByLimit,
+    next,
+    positions: headOf,
+  };
 }

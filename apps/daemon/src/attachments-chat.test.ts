@@ -443,3 +443,43 @@ describe('孤立サロゲートを含む会話 id は入口で断る（#3560）'
     expect((await stores.attachments.getMeta(meta.id))?.conversationId).toBe('conv-\u{1f600}');
   });
 });
+
+describe('NUL を含む会話 id は入口で断る（#3631）', () => {
+  // 添付つきは bind の NulNotAllowedError が 400 に変換されず 500 になっていた。添付なしは pg の日誌が
+  // NUL を落として残し、別々の id が 1 つに潰れうる。どちらも入口で 400 にする。エラーには値を混ぜない。
+  it('添付つき: 500 にせず 400 で断り、何も積まず、添付も結ばない', async () => {
+    const { app, stores } = setupApp();
+    const meta = (await (await upload(app, PNG)).json()) as Meta;
+
+    const res = await chat(app, {
+      text: 'nul',
+      conversationId: 'conv-\u0000x',
+      attachments: [meta.id],
+    });
+
+    expect(res.status).toBe(400);
+    const body = await res.text();
+    expect(body).toContain('conversationId');
+    expect(body).not.toContain('\u0000');
+    expect(body).not.toContain('u0000');
+    const journal = await stores.journal.list({ types: ['exchange'], with: ['human'] });
+    expect(journal.some((e) => e.type === 'exchange' && e.text === 'nul')).toBe(false);
+    expect((await stores.inbox.peekPending()).entries).toEqual([]);
+    expect((await stores.attachments.getMeta(meta.id))?.conversationId).toBeUndefined();
+  });
+
+  it('添付なし: 400 で断り、何も積まない', async () => {
+    const { app, stores } = setupApp();
+
+    const res = await chat(app, { text: 'nul-no-attach', conversationId: 'conv-\u0000x' });
+
+    expect(res.status).toBe(400);
+    const body = await res.text();
+    expect(body).toContain('conversationId');
+    expect(body).not.toContain('\u0000');
+    expect(body).not.toContain('u0000');
+    const journal = await stores.journal.list({ types: ['exchange'], with: ['human'] });
+    expect(journal.some((e) => e.type === 'exchange' && e.text === 'nul-no-attach')).toBe(false);
+    expect((await stores.inbox.peekPending()).entries).toEqual([]);
+  });
+});

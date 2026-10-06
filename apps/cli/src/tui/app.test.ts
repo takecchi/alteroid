@@ -796,6 +796,31 @@ describe('委譲（マネージャーの一覧と詳細）', () => {
     expect(h.frame()).toContain('これより古い委譲は無い（全 60 件）');
   });
 
+  it('r で取り直しても、読み足した古い側の頁と選択位置を失わない', async () => {
+    const h = start((api) => {
+      api.managerRows = Array.from({ length: 60 }, (_, i) =>
+        managerRow(`mgr-${String(100 - i)}`, { request: `依頼${String(i)}` }),
+      );
+    });
+    await openList(h);
+    h.stdin.write('m');
+    await waitFor(() => h.frame().includes('60 件読み込み済み'));
+    h.stdin.write('\x1b[B'.repeat(54)); // 55 行目（mgr-46）まで下げる
+    const selectedLine = () =>
+      h
+        .frame()
+        .split('\n')
+        .some((l) => l.includes('❯') && l.includes('mgr-46'));
+    await waitFor(selectedLine);
+    const before = h.api.managerListCalls.length;
+    h.stdin.write('r');
+    await waitFor(() => h.api.managerListCalls.length > before);
+    // 先頭の頁だけに戻ると、ここが 50 件・選択が先頭になる。
+    await waitFor(() => h.frame().includes('これより古い委譲は無い（全 60 件）'));
+    expect(h.api.managerListCalls.at(-1)).toEqual({ limit: 60 });
+    expect(selectedLine()).toBe(true);
+  });
+
   it('長い生ログは可視窓だけを描き、PgUp で遡り、PgDn で末尾追従に戻る', async () => {
     const h = start((api) => {
       api.managerRows = [managerRow('mgr-long')];

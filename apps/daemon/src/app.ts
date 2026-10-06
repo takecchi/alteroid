@@ -103,7 +103,10 @@ import {
   reasonOf,
   readConversationPage,
   readConversationWindow,
+  decodeConversationCursor,
+  encodeConversationCursor,
   InvalidConversationCursorError,
+  type ConversationCursor,
   clientMessageIdSchema,
   RECENT_TRACE_LIMIT,
   recentDroppedTraces,
@@ -162,6 +165,7 @@ import {
 } from '@alteroid/core';
 import {
   AttachmentRejectedError,
+  hasNul,
   nonBlankString,
   readAttachmentLimits,
   stripNul,
@@ -533,11 +537,15 @@ const chatBody = z
      * 結び付け先になる id で、pg の添付の `conversation_id`（text 列）は孤立サロゲートを U+FFFD へ書き換えて
      * 残す——同じ添付の再 bind が conflict になり、別々の id が同じ値に潰れて取り違えうる。黙って正規化すると
      * 呼び手が渡した id と違うものを扱うことになるので、入口で断る。エラーには値を混ぜない（`path` だけ）。
+     * **NUL を含むものも 400 で断る（#3631）。** 添付つきは `bind` の `assertNoNul` が 400 に変換されず 500 に
+     * なり、添付なしは pg の日誌が NUL を落として残し、別々の id が 1 つに潰れうる（`nul-guard.ts`:
+     * 鍵は入口で断る）。
      */
     conversationId: z
       .string()
       .min(1)
       .refine(isWellFormedString, { message: '孤立サロゲートを含む' })
+      .refine((id) => !hasNul(id), { message: 'NUL を含む' })
       .optional(),
     supersedes: z.string().min(1).optional(),
     /**
@@ -984,11 +992,6 @@ const conversationsQuery = z.object({
    * **`scan` の窓の外も、継続点を辿れば読める**（`readConversationPage` の doc）。
    */
   cursor: z.string().optional(),
-});
-/** `GET /conversations` のカーソルの中身（日誌の継続点）。 */
-const conversationsCursorSchema = z.object({
-  id: z.string().min(1),
-  at: z.string().min(1),
 });
 /**
  * `includeSuperseded`: 編集で畳まれた旧発言・その応答も含めて返すか
@@ -3674,16 +3677,12 @@ export function createApp(deps: AppDeps) {
       queryParams(conversationsQuery),
       async (c) => {
         const { limit, scan, cursor } = c.req.valid('query');
-        let cursorPayload: z.infer<typeof conversationsCursorSchema> | undefined;
+        // 符号化はクローンの道具（`conversation_read`）と同じ関数（core）を通す。
+        let cursorPayload: ConversationCursor | undefined;
         if (cursor !== undefined) {
-          try {
-            cursorPayload = decodeCursor(cursor, conversationsCursorSchema);
-          } catch (error) {
-            if (error instanceof InvalidCursorError) {
-              return c.json({ error: error.message }, 400);
-            }
-            throw error;
-          }
+          const decoded = decodeConversationCursor(cursor);
+          if (decoded === null) return c.json({ error: new InvalidCursorError().message }, 400);
+          cursorPayload = decoded;
         }
         /**
          * 既読の記録は全員で1組（`ConversationReadStore`）。基準時刻が無ければここで決める
@@ -3753,9 +3752,7 @@ export function createApp(deps: AppDeps) {
            * `reachedStart: false` のときは「窓が `scan` 件ちょうどだった」だけのこともあるので、
            * 辿った先が空で終わることはある（安全側）。
            */
-          ...(page.next === null
-            ? {}
-            : { nextCursor: encodeCursor({ id: page.next.id, at: page.next.at }) }),
+          ...(page.next === null ? {} : { nextCursor: encodeConversationCursor(page.next) }),
         });
       },
     )
