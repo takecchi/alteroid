@@ -1433,7 +1433,7 @@ class Host implements RunnerHost {
   ): Promise<AgentUserInput> {
     // 走り残った削除があれば、置く前にそれを待つ。添付が無い回は `#attachmentInput` が同期で返すので、
     // ここへ来ない（#1660 の順序は変わらない）。待つ間に握られた新しい削除も待つ。
-    for (let removal = this.#attachmentRemovals.get(managerId); removal !== undefined; ) {
+    for (let removal = this.#attachmentRemovals.get(managerId); removal !== undefined;) {
       await removal;
       removal = this.#attachmentRemovals.get(managerId);
     }
