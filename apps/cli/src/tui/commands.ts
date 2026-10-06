@@ -120,7 +120,7 @@ export function helpLines(): string[] {
   }
   lines.push(
     'キー:',
-    '  Enter 送信 / 改行は、行末の \\ + Enter か Alt+Enter（どの端末でも効く）',
+    '  Enter 送信 / 改行は、行末の \\ + Enter か Alt+Enter（Alt を Meta として送る端末のとき）',
     '    Shift+Enter は、端末が Shift+Enter を区別して送る設定のときだけ改行（そうでなければ Enter と同じで送信になる）',
     '  Esc 入力欄を抜ける（そのあと 1〜5 で画面を移る、Tab か i で戻る）',
     '  PgUp / PgDn 会話ログのスクロール（末尾へ届くと追従に戻る）',
