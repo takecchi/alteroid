@@ -6,6 +6,7 @@
  * - 戻った添付を外してから押せば、外した添付は付けない
  * - 中身が変わっていなければ、最初の `clientMessageId` で送る（サーバが受け取り済みなら重複で返す）
  * - 添付の期限切れ（400 `attachment_missing`）は、「再送」では抜けられないので外して付け直す案内を出す
+ *   （#3778 で変更: 手元のファイルを持つ添付は控えを外し、再送で上げ直す。案内は引き継いだ添付のときだけ）
  * - 同じ id で中身が違うと 409 `client_message_id_mismatch`（#3243）。次の再送は新しい id で送る
  *
  * 実時間の待ちは使わない。
@@ -86,8 +87,10 @@ interface ChatBody {
 /** `/chat` への POST を控える。`replies[i]` が i 回目の応答（足りなければ成功）。 */
 function setUp(replies: (() => Response)[]) {
   const bodies: ChatBody[] = [];
+  let uploads = 0;
   stubFetch((url, init) => {
-    if (url.includes('/attachments?')) return json(META);
+    // 上げるたびに新しい id（att-1, att-2, ...）。上げ直しが走ったかを id で見分ける（#3778）。
+    if (url.includes('/attachments?')) return json({ ...META, id: `att-${++uploads}` });
     if (url.endsWith('/chat')) {
       const reply = replies[bodies.length - 1];
       if (reply !== undefined) return reply();
@@ -174,8 +177,11 @@ describe('#3247: 「再送」は入力欄の今の中身を送る', () => {
     expect(bodies[1]?.clientMessageId).not.toBe(bodies[0]?.clientMessageId);
   });
 
-  it('添付の期限切れ（400 attachment_missing）では、外して付け直す案内が出る', async () => {
-    setUp([
+  // 元の期待は「外して付け直す案内が出る」だった。#3778 で反転した——手元のファイルを持つ添付は、
+  // CLI の `expireUploads`（#3246）と同じく控えを外し、再送で上げ直す。外して付け直す案内が出るのは、
+  // 上げ直せない引き継いだ添付（`file` が無い）のとき（`chat.carried-attachment-expired.test.tsx`）。
+  it('添付の期限切れ（400 attachment_missing）では、手元のファイルは再送で上げ直して新しい id で送る', async () => {
+    const bodies = setUp([
       () =>
         json(
           { error: '添付が見つからない（期限切れの可能性）: att-1', code: 'attachment_missing' },
@@ -185,7 +191,14 @@ describe('#3247: 「再送」は入力欄の今の中身を送る', () => {
     renderChat();
     choose([nodeFile('first.txt')]);
     await typeAndSend('添付つき');
-    expect(await screen.findByText(/添付を外して付け直/)).toBeTruthy();
+    expect(await screen.findByText(/手元のファイルを上げ直す/)).toBeTruthy();
+    expect(screen.queryByText(/添付を外して付け直/)).toBeNull();
+
+    fireEvent.click(await screen.findByRole('button', { name: '再送' }));
+    await waitFor(() => expect(bodies.length).toBe(2));
+    expect(bodies[0]?.attachments).toEqual(['att-1']);
+    expect(bodies[1]?.attachments).toEqual(['att-2']);
+    expect(bodies[1]?.clientMessageId).not.toBe(bodies[0]?.clientMessageId);
   });
 
   it('409 client_message_id_mismatch の後の再送は、新しい id で送る', async () => {
