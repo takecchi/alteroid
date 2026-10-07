@@ -246,48 +246,183 @@ describe('chat: 応答中の Ctrl+C は、いま送った発言を対象にす�
     void done.catch(() => undefined);
   });
 
-  it('（陰性対照）/resume の再生は対象が分からないので、従来どおり対象を付けずに呼ぶ', async () => {
-    const calls = stubDaemon({
-      chats: [],
-      interrupt: [{ outcome: 'interrupted' }],
-    });
-    vi.stubGlobal(
-      'fetch',
-      ((original: typeof fetch) => (url: unknown, init?: RequestInit) => {
-        const path = new URL(String(url)).pathname;
-        if (path === '/chat/c9/stream') {
-          calls.push({ path, body: null, aborted: () => false });
-          return Promise.resolve(
-            new Response(
-              new ReadableStream<Uint8Array>({
-                start(controller) {
+});
+
+type Pending = { clientMessageId: string; state: string };
+
+/**
+ * `/resume c9` の再生。`GET /chat/c9/stream` は呼ばれるたびに `open`（`pending` を載せるか省くか）だけを流して
+ * 閉じずに待ち、signal が abort されたら本文を落とす。`streams` は張った接続（最後が再生の接続）。
+ */
+async function resumeAndInterrupt(options: {
+  open: { inProgress: boolean; pending?: Pending[] };
+  interrupt: { outcome: string }[];
+  /** 偽なら、再生の接続には `open` を流さずに Ctrl+C を押す。 */
+  opened?: boolean;
+}) {
+  const calls = stubDaemon({ chats: [], interrupt: options.interrupt });
+  const streams: { aborted: () => boolean }[] = [];
+  vi.stubGlobal(
+    'fetch',
+    ((original: typeof fetch) => (url: unknown, init?: RequestInit) => {
+      const path = new URL(String(url)).pathname;
+      if (path === '/chat/c9/stream') {
+        const signal = init?.signal ?? undefined;
+        streams.push({ aborted: () => signal?.aborted === true });
+        const isProbe = streams.length === 1;
+        return Promise.resolve(
+          new Response(
+            new ReadableStream<Uint8Array>({
+              start(controller) {
+                if (options.opened !== false || isProbe) {
                   controller.enqueue(
                     encoder.encode(
-                      'event: open\ndata: {"conversationId":"c9","inProgress":true}\n\n',
+                      `event: open\ndata: ${JSON.stringify({ conversationId: 'c9', ...options.open })}\n\n`,
                     ),
                   );
-                },
-              }),
-              { headers: { 'content-type': 'text/event-stream' } },
-            ),
-          );
-        }
-        return original(url as string, init);
-      })(globalThis.fetch),
-    );
-    const out = captureStdout();
-    const { chatCommand } = await import('./chat.js');
-    const done = chatCommand();
-    await flush();
-    rl.emit('line', '/resume c9');
-    await flush();
-    rl.emit('SIGINT');
-    await flush();
-
-    expect(interruptsOf(calls)).toHaveLength(1);
-    expect(interruptsOf(calls)[0]?.body).toBeNull();
-    expect(out()).toContain('いま走っていたクローンのターンを止めた');
+                }
+                signal?.addEventListener('abort', () => {
+                  controller.error(new DOMException('This operation was aborted', 'AbortError'));
+                });
+              },
+            }),
+            { headers: { 'content-type': 'text/event-stream' } },
+          ),
+        );
+      }
+      return original(url as string, init);
+    })(globalThis.fetch),
+  );
+  const out = captureStdout();
+  const { chatCommand } = await import('./chat.js');
+  const done = chatCommand();
+  await flush();
+  rl.emit('line', '/resume c9');
+  await flush();
+  rl.emit('SIGINT');
+  await flush();
+  const finish = (): void => {
     rl.close();
     void done.catch(() => undefined);
+  };
+  return { calls, out, streams, finish };
+}
+
+describe('/resume の再生中の Ctrl+C は、open の pending から対象を決める（#3990）', () => {
+  it('running が複数（まとめ読み）なら、その先頭の1件を対象に付けて呼ぶ。順番待ちの発言は対象にしない', async () => {
+    const { calls, out, finish } = await resumeAndInterrupt({
+      open: {
+        inProgress: true,
+        pending: [
+          { clientMessageId: 'm-run1', state: 'running' },
+          { clientMessageId: 'm-run2', state: 'running' },
+          { clientMessageId: 'm-queued', state: 'queued' },
+        ],
+      },
+      interrupt: [{ outcome: 'interrupted' }],
+    });
+
+    expect(interruptsOf(calls)).toHaveLength(1);
+    expect(interruptsOf(calls)[0]?.body).toEqual({
+      conversationId: 'c9',
+      clientMessageId: 'm-run1',
+    });
+    expect(out()).toContain('いま走っていたクローンのターンを止めた');
+    finish();
+  });
+
+  it('running が無く starting があれば、starting を対象にする', async () => {
+    const { calls, finish } = await resumeAndInterrupt({
+      open: {
+        inProgress: true,
+        pending: [
+          { clientMessageId: 'm-start', state: 'starting' },
+          { clientMessageId: 'm-held', state: 'held' },
+        ],
+      },
+      interrupt: [{ outcome: 'starting' }],
+    });
+    expect(interruptsOf(calls)[0]?.body).toEqual({
+      conversationId: 'c9',
+      clientMessageId: 'm-start',
+    });
+    finish();
+  });
+
+  it('withdrawn なら再生のストリームを閉じ、切断のエラーは出さず、送れなかった本文の戻しも出さない', async () => {
+    const { calls, out, streams, finish } = await resumeAndInterrupt({
+      open: {
+        inProgress: true,
+        pending: [{ clientMessageId: 'm-run', state: 'running' }],
+      },
+      interrupt: [{ outcome: 'withdrawn' }],
+    });
+    expect(interruptsOf(calls)).toHaveLength(1);
+    // 探す接続と再生の接続。再生の側が閉じられている。
+    expect(streams.at(-1)?.aborted()).toBe(true);
+    expect(out()).toContain('順番待ちだった発言を取り下げました（送っていません）');
+    expect(out()).not.toContain('途中で切れました');
+    expect(out()).not.toContain('接続が切れました');
+    expect(out()).not.toContain('送れなかった本文');
+    finish();
+  });
+
+  it('not_target なら、先客のターンは止めていないと言う', async () => {
+    const { out, finish } = await resumeAndInterrupt({
+      open: {
+        inProgress: true,
+        pending: [{ clientMessageId: 'm-run', state: 'running' }],
+      },
+      interrupt: [{ outcome: 'not_target' }],
+    });
+    expect(out()).toContain('先客のターンは止めていません');
+    finish();
+  });
+
+  it('走っているのが別の起点（pending は順番待ちだけ）なら、順番待ちを取り下げに行かず、呼ばずに対象が分からないと言う', async () => {
+    const { calls, out, finish } = await resumeAndInterrupt({
+      open: {
+        inProgress: true,
+        pending: [
+          { clientMessageId: 'm-held', state: 'held' },
+          { clientMessageId: 'm-queued', state: 'queued' },
+        ],
+      },
+      interrupt: [{ outcome: 'withdrawn' }],
+    });
+    expect(interruptsOf(calls)).toHaveLength(0);
+    expect(out()).toContain('止める対象が分からない');
+    finish();
+  });
+
+  it('inProgress なのに pending が空なら、呼ばずに対象が分からないと言う', async () => {
+    const { calls, out, finish } = await resumeAndInterrupt({
+      open: { inProgress: true, pending: [] },
+      interrupt: [{ outcome: 'interrupted' }],
+    });
+    expect(interruptsOf(calls)).toHaveLength(0);
+    expect(out()).toContain('止める対象が分からない');
+    finish();
+  });
+
+  it('古いデーモン（pending を返さない）では、対象を省いて先客のターンを止めないよう、呼ばずに言う', async () => {
+    const { calls, out, finish } = await resumeAndInterrupt({
+      open: { inProgress: true },
+      interrupt: [{ outcome: 'interrupted' }],
+    });
+    expect(interruptsOf(calls)).toHaveLength(0);
+    expect(out()).toContain('止める対象が分からない');
+    finish();
+  });
+
+  it('再生の open がまだ届いていない間の Ctrl+C は、何も止めず、呼ばない', async () => {
+    const { calls, out, finish } = await resumeAndInterrupt({
+      open: { inProgress: true, pending: [{ clientMessageId: 'm-run', state: 'running' }] },
+      interrupt: [{ outcome: 'interrupted' }],
+      opened: false,
+    });
+    expect(interruptsOf(calls)).toHaveLength(0);
+    expect(out()).toContain('何も止めていません');
+    finish();
   });
 });

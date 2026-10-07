@@ -123,9 +123,12 @@ const READ_CANCELLED_NOTICE =
  * いま送った発言（#3956）。Ctrl+C はこの発言のターンだけを止める。`conversationId` は `open` を受けるまで
  * 分からない（新しい会話）。`withdrawn` は順番待ちを取り下げた印で、サーバは取り下げた発言の SSE に終端を流さない
  * ので、呼び手が自分でストリームを閉じる（`withdraw`）。
+ *
+ * `/resume` の再生は自分が打った発言ではないので、`open` の `pending` から決める（#3990）。決められない間は
+ * `clientMessageId` が `null` で、Ctrl+C は呼ばずに対象が分からないと言う（対象を省くと先客のターンを止める）。
  */
 export interface TurnHandle {
-  readonly clientMessageId: string;
+  clientMessageId: string | null;
   conversationId: string | null;
   withdrawn: boolean;
   withdraw: () => void;
@@ -368,6 +371,13 @@ export async function chatCommand(): Promise<void> {
         flushRenderedText?.();
         stdout.write(
           '\n会話がまだ確定していないので、何も止めていません。少し待ってから、もう一度 Ctrl+C を押してください。\n',
+        );
+        return;
+      }
+      if (turn.clientMessageId === null) {
+        flushRenderedText?.();
+        stdout.write(
+          '\n止める対象が分からないので、何も止めていません（走っているのが、この会話の別の起点のターンかもしれません）。\n',
         );
         return;
       }
@@ -1020,10 +1030,13 @@ async function renderChatEvents(
       if (event.name !== 'text') flushPending();
       switch (event.name) {
         case 'open': {
-          const data = event.json<{ conversationId: string }>();
+          const data = event.json<{ conversationId: string; pending?: unknown }>();
           if (data) {
             nextConversationId = data.conversationId;
-            if (turn !== undefined) turn.conversationId = data.conversationId;
+            if (turn !== undefined) {
+              turn.conversationId = data.conversationId;
+              if (resuming) turn.clientMessageId = pickResumeTarget(data.pending);
+            }
           }
           break;
         }
@@ -1208,6 +1221,30 @@ async function openChatStream(
   return response.body;
 }
 
+/**
+ * `/resume` の再生で Ctrl+C が止める発言を、`open.pending` から決める（#3990）。`running`、無ければ `starting`
+ * の先頭。まとめ読みで複数あっても、同じターンなので1件で止まる（デーモンは対象のどれかが処理中なら止める）。
+ *
+ * `held`・`queued` は選ばない: 再生しているのは走っているターンで、それが `pending` に無い（`clientMessageId` を
+ * 持たない別の起点）のに順番待ちを選ぶと、見ているターンは止まらず、別の発言を取り下げてしまう。
+ * `pending` を返さない古いデーモンも `null`（対象を省くと先客のターンを止めうる）。
+ */
+function pickResumeTarget(pending: unknown): string | null {
+  if (!Array.isArray(pending)) return null;
+  const entries = pending.filter(
+    (p): p is { clientMessageId: string; state: string } =>
+      typeof p === 'object' &&
+      p !== null &&
+      typeof (p as { clientMessageId?: unknown }).clientMessageId === 'string' &&
+      typeof (p as { state?: unknown }).state === 'string',
+  );
+  for (const state of ['running', 'starting']) {
+    const found = entries.find((p) => p.state === state);
+    if (found !== undefined) return found.clientMessageId;
+  }
+  return null;
+}
+
 /** `GET /chat/{id}/stream` の最初の `open` だけ読み、`inProgress` を返して接続を閉じる。 */
 async function probeInProgress(
   target: Target,
@@ -1295,6 +1332,16 @@ export async function runResumeCommand(
     return null;
   }
   const abort = new AbortController();
+  // 対象は再生の `open` で決める（探した時点の `pending` は、その後に変わりうる）。それまでは会話も未確定扱い。
+  const turn: TurnHandle = {
+    clientMessageId: null,
+    conversationId: null,
+    withdrawn: false,
+    withdraw: () => {
+      turn.withdrawn = true;
+      abort.abort();
+    },
+  };
   let body: ReadableStream<Uint8Array>;
   try {
     body = await openChatStream(
@@ -1306,7 +1353,7 @@ export async function runResumeCommand(
     return fail(error);
   }
   // 例外で切れたら `renderChatEvents` の catch が、描きかけの行を書き切ったうえで切断の文を1つだけ言う。
-  return renderChatEvents(target, readSSE(body), found, onFailed, true, hooks);
+  return renderChatEvents(target, readSSE(body), found, onFailed, true, hooks, turn);
 }
 
 const HELP = `（入力）            応答中の Ctrl-C でターンを止める（会話は続く。入力待ちの Ctrl-C は終了）。
