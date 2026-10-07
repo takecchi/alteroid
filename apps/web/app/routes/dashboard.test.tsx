@@ -82,7 +82,7 @@ describe('「今日の利用」', () => {
       usage: {
         rows: [
           {
-            date: '2026-08-14',
+            date: usageDate(new Date()),
             managerId: 'm1',
             model: 'claude-opus-4',
             updatedAt: '2026-08-14T10:00:00.000Z',
@@ -181,6 +181,27 @@ describe('「今日の利用」の今日はデーモンの応答の today で決
       vi.useRealTimers();
     }
   });
+
+  it('応答の today が取得した窓の外（端末の時計がずれている）とき、0 と出さず、分からないと出す（#3967）', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(browserNow);
+    try {
+      renderHome({
+        usage: {
+          rows: [],
+          since: '2026-08-01T00:00:00.000Z',
+          beforeLedger: false,
+          today: '2026-08-14',
+        },
+      });
+
+      expect(await screen.findByText(/サーバの今日が分からない/)).toBeTruthy();
+      expect(renderedMoneyTexts()).toEqual(new Set());
+      expect(linkTo('/usage')).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe('「今日の利用」カードの読めずに外した行（#2427）', () => {
@@ -191,7 +212,7 @@ describe('「今日の利用」カードの読めずに外した行（#2427）',
   const base = { rows: [], since: '2026-08-01T00:00:00.000Z', beforeLedger: false };
 
   it('今日の行が読めずに外れていれば、合計に入っていないと言う', async () => {
-    renderHome({ usage: { ...base, unreadableRows: [unreadable('2026-08-14')] } });
+    renderHome({ usage: { ...base, unreadableRows: [unreadable(usageDate(new Date()))] } });
 
     expect(await screen.findByText(/合計に入っていない/)).toBeTruthy();
   });
@@ -211,7 +232,7 @@ describe('「今日の利用」カードの読めずに外した行（#2427）',
 
   it('#3614: 記録が空（since が null）でも外した行が在れば、「記録が無い」と言い切らない', async () => {
     renderHome({
-      usage: { ...base, since: null, unreadableRows: [unreadable('2026-08-14')] },
+      usage: { ...base, since: null, unreadableRows: [unreadable(usageDate(new Date()))] },
     });
 
     expect(await screen.findByText(/読めずに外した行がある/)).toBeTruthy();

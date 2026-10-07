@@ -1,5 +1,5 @@
 // 日誌の SSE（/journal/stream）の経路を置かない: 置くと購読が増えたことに気づけないため
-import { USAGE_ESTIMATE_NOTICE } from '@alteroid/core/usage';
+import { USAGE_ESTIMATE_NOTICE, usageDate } from '@alteroid/core/usage';
 import { render } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 
@@ -94,7 +94,7 @@ export function homeRoute(options: HomeOptions = {}): Route {
       const { today, ...rest } = usage;
       return json({
         ...rest,
-        ...(today === null ? {} : { today: today ?? '2026-08-14' }),
+        ...(today === null ? {} : { today: today ?? usageDate(new Date()) }),
         notice: usage.notice ?? USAGE_ESTIMATE_NOTICE,
         turnRows: usage.turnRows ?? [],
         breakdown: null,
