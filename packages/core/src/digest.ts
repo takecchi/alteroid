@@ -708,13 +708,7 @@ export async function buildActivityDigest(
     sections.push('', '## 記憶の更新');
     const shownMemoryUpdates = memoryUpdates.slice(0, MAX_ITEMS);
     for (const entry of shownMemoryUpdates) {
-      // `queries.ts` の `summarizeJournalEntry` と同じ言い方に揃える
-      // （`action`/`cause` を1つの括弧にまとめ、バイトの注記を `/` で続ける）。
-      // 単位はバイト（`schema.ts` の `bytesBefore`/`bytesAfter` の doc）。
-      // `action`/`bytesBefore`/`bytesAfter` はこの区別が導入される前の
-      // 古いエントリでは `undefined` — 無いことを `0` として出すと
-      // 「変化が無かった」と読めてしまうので、値が無いときは「不明」と
-      // 明示する（`tools.ts`/`queries.ts` と同じ扱い）。
+      // 無いバイト数を `0` として出さない: 「変化が無かった」と読めてしまうため
       const action = entry.action === undefined ? '' : `/${entry.action}`;
       const bytes =
         entry.bytesBefore === undefined || entry.bytesAfter === undefined
@@ -731,9 +725,6 @@ export async function buildActivityDigest(
 
   if (externalsCount > 0) {
     sections.push('', '## 届いた外部イベント');
-    // **なぜ実数ではないか、をここでも1行で言う。** 上の件数行は単位（日誌の
-    // 行数）だけを名乗り、理由はここに置く——1行を長くしすぎないための分け方
-    // （行と節、両方の doc を参照）。
     sections.push(
       'この件数は届いた合図の実数ではない —— 受信箱を通った合図は配達のたびに1行' +
         '書かれ（配り直し・畳んでターンを起こさない回も含む）、デーモンが受信箱を' +
@@ -747,11 +738,6 @@ export async function buildActivityDigest(
       ...omitted(externalsCount, shownExternals.length, journalWhere('external_event')),
     );
 
-    // **発行元別の件数（正確な総数。Issue #783）。** 15,047 件がどの発行元の
-    // ものかが分からなければ、そこから原因へ降りる経路が無い。既存の個別行・
-    // `omitted()` の行は消さず、ここに足すだけ（`createSourceTally` の doc）。
-    // **`retained` ではなく走査した全件を数えている**（`externalSourceTally`
-    // は `DIGEST_RETAIN_LIMIT` の外で push している——上のコメント参照）。
     sections.push(
       '',
       '**発行元（source）別の件数（正確な総数。上限 `DIGEST_SOURCE_TALLY_LIMIT`=' +
@@ -762,18 +748,12 @@ export async function buildActivityDigest(
     for (const row of shownBySourceRows) {
       sections.push(`- ${row.source}: ${row.count} 件`);
     }
-    // **表示上限（`MAX_ITEMS`）を超えた、追跡済みの発行元を畳む。** 件数と
-    // 発行元の数の両方を出す——片方だけだと「何件消えたか」「何種類消えたか」
-    // のどちらかが分からなくなる。
+    // 畳むときは件数と発行元の数の両方を出す: 片方だけだと「何件消えたか」「何種類消えたか」のどちらかが分からなくなるため
     const foldedSourceRows = bySourceRows.slice(shownBySourceRows.length);
     if (foldedSourceRows.length > 0) {
       const foldedCount = foldedSourceRows.reduce((sum, row) => sum + row.count, 0);
       sections.push(`- その他: ${foldedCount} 件（${foldedSourceRows.length} の発行元）`);
     }
-    // **上限（`DIGEST_SOURCE_TALLY_LIMIT`）を超えて現れた発行元ぶんの件数。**
-    // 黙って捨てない——ただし発行元の「数」は原理的に出せない（キー数に上限を
-    // 置いている以上、数えるには上限を外すしかない。`createSourceTally` の
-    // doc）。この行は妥協の跡ではなく、有界であることそのものの帰結である。
     if (externalSourceTally.overflowCount > 0) {
       sections.push(
         '- 上限（`DIGEST_SOURCE_TALLY_LIMIT`）を超えて現れた発行元: ' +
@@ -781,22 +761,7 @@ export async function buildActivityDigest(
           'キー数に上限を置いている以上、数えるには上限を外すしかない）',
       );
     }
-    // ⚠️ **ここに「内訳が合計に届かない」注記は不要である。** `externalSourceTally`
-    // は `DIGEST_RETAIN_LIMIT` の外（走査した全件）で数えているので、上の行の
-    // 合計は常に `externalsCount` に一致する（`DIGEST_SOURCE_TALLY_LIMIT` に
-    // 当たった分は「その他」「上限を超えて」の2行が黙らず引き受ける）。
-    // 以前 main に着地した先行実装（issue #783、PR #1322）は `summarizeExternalSources`
-    // （`externals`＝保持の上限で切られた側）から内訳を作っていたため、
-    // 「合計が件数行に届かない」注記が要った——**この実装ではその前提が
-    // 成り立たないので、その注記は復活させない**（同じ注記を残すと (b) の下では
-    // 嘘になる）。
-
-    // **本文の形（Issue #783。⚠️ ここは依頼の外で足した追加判断——`summarizeExternalSources`
-    // が返す「本文の種類・最頻件数」を消さずに残すが、母数を上と分離する）。**
-    // `summary` は `renderPayload` が末尾へ可変値を付けることがある実質無限の
-    // 異なり数を持つ軸なので、正確な総数側（上）へは載せない——**保持した標本**
-    // （`externals` = `externalBucket.retained`）を母数に明示し、別ブロックに
-    // 分ける（`summarizeExternalSources` の doc）。
+    // 本文の形は正確な総数側へ載せず、母数を明示した別ブロックにする: `summary` は可変値が付いて実質無限の異なり数を持つため
     sections.push(
       '',
       `**本文の形（保持した ${externals.length} 件の標本。上の件数とは母数が違う）** —— ` +
@@ -823,43 +788,27 @@ export async function buildActivityDigest(
 
   sections.push('', ...(await usageSection(stores, window.since, until)));
 
-  // provider が持たない能力。空・未指定なら何も足さない（出力は変わらない）。
   const gapSection = providerGapsSection(providerGaps);
   if (gapSection.length > 0) sections.push('', ...gapSection);
 
   return sections.join('\n');
 }
 
-/**
- * この期間にいくら使ったか。
- *
- * **これは判断の材料である。** 委譲を続けてよいか、重い仕事をいま投げてよいかは、
- * 使った量が見えなければ勘で決めるしかない。実際に支出上限へ当たって走行中の
- * マネージャーが2本同時に落ちたことがあり、そのときクローンには事前に知る手段が
- * 無かった。日報では「どの委譲が高かったか」「どの層（クローン / マネージャー / 作業者）が
- * 高いか」が、委譲の粒度を直す材料になる。
- *
- * **取れなかったものを 0 と書かない。** 台帳が無かった期間は「記録が無い」であって
- * 「使っていない」ではない。
- */
+// 取れなかったものを 0 と書かない: 台帳が無かった期間は「記録が無い」であって「使っていない」ではないため
 async function usageSection(stores: Stores, since: Date, until: Date): Promise<string[]> {
   let aggregate;
   try {
     aggregate = await stores.usage.aggregate({
       from: usageDate(since),
-      // 上端は含まないので 1ms 引いてから日付にする（境界の日が余分に入らない）。
+      // 上端は含まないので 1ms 引いてから日付にする: 境界の日が余分に入らないため
       to: usageDate(new Date(until.getTime() - 1)),
     });
   } catch {
-    // 台帳が読めないこと自体で digest を落とさない。ただし黙らない。
     return ['## 使った分', '（台帳を読めなかった。集計は出せない）'];
   }
 
   const lines = ['## 使った分'];
-  // **取れなかったことは、どの分岐よりも先に書く**（Issue #3359）。消費を報告しない
-  // provider のターン（#486 M7）と、読めずに外した行（#2427）は、`usage_read` が
-  // 同じ関数で出している。ここで落とすと、取れなかったことが日報から消え、
-  // 取れなかったターンしか無い期間が「記録は無い」と読める。無ければ空配列。
+  // 取れなかったことをどの分岐よりも先に書く: 落とすと、取れなかったターンしか無い期間が「記録は無い」と読めるため
   const unreadableLines = describeUnreadableUsageRows(aggregate.unreadableRows);
   const unmeteredLines = describeUnmeteredUsage(aggregate.unmeteredRows);
   const gapLines = [...unreadableLines, ...unmeteredLines];
@@ -885,11 +834,8 @@ async function usageSection(stores: Stores, since: Date, until: Date): Promise<s
         `入力: ${summary.total.inputTokens.toLocaleString('en-US')} / ` +
         `キャッシュ読み: ${summary.total.cacheReadInputTokens.toLocaleString('en-US')}`,
     );
-    // 高い順。どの層・どの委譲に効くかを先に見せる。
     const top = <T extends { totals: { costUsd: number } }>(entries: readonly T[]) =>
       [...entries].sort((a, b) => b.totals.costUsd - a.totals.costUsd).slice(0, MAX_ITEMS);
-    // **合図は `usageOmitted` から取る（4軸とも同じ関数を通す）。** 超えて
-    // いなければ空文字が返るので、その行には何も足さない。
     const shownModels = top(summary.byModel);
     const modelExtra = usageOmitted(summary.byModel.length, shownModels.length, 'model', '件');
     lines.push(
@@ -897,8 +843,7 @@ async function usageSection(stores: Stores, since: Date, until: Date): Promise<s
         .map((entry) => `${entry.model} ${formatUsd(entry.totals.costUsd)}`)
         .join(' / ')}${modelExtra === '' ? '' : ` / ${modelExtra}`}`,
     );
-    // **誰が**使ったか。モデル別と別に出す — `ALTEROID_CLONE_MODEL` を置けば
-    // クローンとマネージャーは同じモデル帯に並び、モデル名では層を見分けられない。
+    // モデル別と別に層別を出す: `ALTEROID_CLONE_MODEL` を置けばクローンとマネージャーが同じモデル帯に並び、モデル名では層を見分けられないため
     const shownLayers = top(summary.byLayer);
     const layerExtra = usageOmitted(summary.byLayer.length, shownLayers.length, 'layer', '件');
     lines.push(
@@ -918,9 +863,7 @@ async function usageSection(stores: Stores, since: Date, until: Date): Promise<s
     for (const entry of shownManagers) {
       lines.push(`  - ${entry.managerId}: ${formatUsd(entry.totals.costUsd)}`);
     }
-    // **「`usage_read` で全部見える」と書かない。** あちらも軸ごとに打ち切るので
-    // 嘘になる。実際に打てる手（続きを辿る呼び方）をそのまま書く——文言は
-    // `usageOmitted` から取る（同じ関数を4軸とも通す理由は同関数の doc）。
+    // 「`usage_read` で全部見える」と書かない: `usage_read` も軸ごとに打ち切るので嘘になるため
     const managerExtra = usageOmitted(
       summary.byManager.length,
       shownManagers.length,
@@ -936,8 +879,7 @@ async function usageSection(stores: Stores, since: Date, until: Date): Promise<s
     );
   }
   if (aggregate.beforeLayers) {
-    // **層の始点を台帳の始点と混ぜない。** 層の軸のほうが後から入ったので、それより
-    // 前の行の層と場所は既定値であって観測ではない。
+    // 層の始点を台帳の始点と混ぜない: 層の軸のほうが後から入り、それより前の行の層と場所は既定値であって観測ではないため
     lines.push(
       '- この期間の一部は層と場所の軸の始点' +
         `（${aggregate.layersSince ?? 'まだ1件も記録が無い'}）より前で、` +
@@ -948,12 +890,6 @@ async function usageSection(stores: Stores, since: Date, until: Date): Promise<s
   return lines;
 }
 
-/**
- * 一覧に載せるための抜粋。
- *
- * **切ったことを黙らない。** 省いた分量が出ていれば、続きが要るかどうかを
- * 読んだ側が判断できる（報告の全文は `manager_report` で取れる）。
- */
 function brief(value: string, limit = 200): string {
   return excerptLine(value, limit);
 }
