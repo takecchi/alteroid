@@ -343,8 +343,8 @@ function Runners() {
                 <Profile runner={runner} />
               </div>
               <PushHealth runner={runner} />
-              {runner.runnerId === undefined || runner.state === 'vacating' ? null : (
-                <VacateRunner runnerId={runner.runnerId} />
+              {runner.runnerId === undefined ? null : (
+                <VacateRunner runnerId={runner.runnerId} vacating={runner.state === 'vacating'} />
               )}
             </li>
           ))}
@@ -356,7 +356,8 @@ function Runners() {
 
 // 1回目の押下では叩かず確認を挟む: 空けると載っている委譲が他の器へ移り、走っているマネージャーを動かす操作のため
 // 叩いた後も「空き終わった」とは言わない: 応答は立てたことの確認だけのため
-function VacateRunner({ runnerId }: { runnerId: string }) {
+// 移している最中でも外さず、ボタンだけ引っ込める: 一覧の取り直しで外すと、押した結果（握手を飛ばした警告）が見えないまま消えるため
+function VacateRunner({ runnerId, vacating }: { runnerId: string; vacating: boolean }) {
   const vacate = useVacateRunner();
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -373,6 +374,7 @@ function VacateRunner({ runnerId }: { runnerId: string }) {
       </p>
     );
   }
+  if (vacating) return null;
   return (
     <div className="mt-2 flex flex-wrap items-center gap-1.5">
       {confirming ? (

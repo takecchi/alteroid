@@ -770,6 +770,50 @@ describe('runner を空ける（vacate）', () => {
     ).toBeTruthy();
   });
 
+  it('指示のあと一覧が vacating に変わっても、結果（握手を飛ばした警告）は消えない（#4010）', async () => {
+    let vacated = false;
+    stubFetch((url) => {
+      if (url.includes('/runners/vacate')) {
+        vacated = true;
+        return json({
+          ok: true,
+          handshakeSkipped: {
+            reason: 'jobs_unreadable',
+            message: '一覧を読めなかったので握手を飛ばした',
+            retry: true,
+          },
+        });
+      }
+      if (url.includes('/runners')) {
+        return json({
+          runners: [vacated ? { ...BASE, state: 'vacating' } : BASE],
+          daemonRevision: DAEMON_UNKNOWN,
+        });
+      }
+      if (url.includes('/auth/providers')) return json({ providers: [] });
+      if (url.includes('/me')) return json({ status: 'open' });
+      if (url.includes('/health')) return json({ ok: true });
+      return json({});
+    });
+    const router = createMemoryRouter([{ path: '/', Component: Settings }], {
+      initialEntries: ['/'],
+    });
+    render(
+      <Providers>
+        <RouterProvider router={router} />
+      </Providers>,
+    );
+
+    fireEvent.click(await screen.findByText('この実行環境から仕事を移す'));
+    fireEvent.click(screen.getByText('本当に移す'));
+
+    expect(
+      await screen.findByText(/引き継ぎの連絡は飛ばした（一覧を読めなかったので握手を飛ばした）/),
+    ).toBeTruthy();
+    expect(await screen.findByText('仕事を他へ移している最中')).toBeTruthy();
+    expect(screen.queryByText('この実行環境から仕事を移す')).toBeNull();
+  });
+
   it('仕事を他へ移している最中の器と、名乗っていない器には出さない', async () => {
     renderWithVacate([
       { ...BASE, state: 'vacating' },
