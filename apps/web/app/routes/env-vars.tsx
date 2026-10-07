@@ -338,12 +338,30 @@ function AddEnvVarForm() {
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<unknown>(undefined);
   const [result, setResult] = useState<EnvVarUpdateResult | undefined>(undefined);
+  const [confirming, setConfirming] = useState(false);
+  const [refusal, setRefusal] = useState<string | undefined>(undefined);
   useReportDirty('add-env-var', name !== '' || value !== '');
+
+  // 一覧が読めていないときは確かめようが無いので、送る側を止めない
+  const { data } = useCredentials();
+  const existing = data?.credentials.find((entry) => entry.name === name.trim());
 
   const canSubmit = name.trim().length > 0 && value.length > 0;
 
-  async function submit() {
+  function submit() {
     if (!canSubmit) return;
+    setRefusal(undefined);
+    if (existing === undefined) {
+      void send();
+    } else if (existing.secret !== secret) {
+      // 送らずに断る: サーバの 400 は名前が既にあるとは言わず、シークレットかどうかは作成後に変えられないため
+      setRefusal(`「${existing.name}」は既にある。値や渡す先は、一覧の「編集」から変える`);
+    } else {
+      setConfirming(true);
+    }
+  }
+
+  async function send() {
     const sentName = name;
     const sentValue = value;
     setBusy(true);
@@ -401,17 +419,20 @@ function AddEnvVarForm() {
           この画面にも他の経路にも表示しない。新規行にのみ効き、後から変更できない）
         </label>
 
-        <ErrorNote error={failure} />
+        <ErrorNote error={refusal ?? failure} />
         {result !== undefined && <RunnerPushWarning update={result} saved="置いた" />}
+        <ConfirmDialog
+          open={confirming}
+          onOpenChange={setConfirming}
+          title={`環境変数「${name.trim()}」を置き換えますか`}
+          description="同じ名前の変数が既に在る。前の値は置き換わり、元に戻せない。"
+          confirmLabel="置き換える"
+          destructive
+          onConfirm={() => void send()}
+        />
 
         <div>
-          <Button
-            variant="primary"
-            size="sm"
-            disabled={!canSubmit}
-            loading={busy}
-            onClick={() => void submit()}
-          >
+          <Button variant="primary" size="sm" disabled={!canSubmit} loading={busy} onClick={submit}>
             置く
           </Button>
         </div>
