@@ -140,12 +140,24 @@ describe('POST /plugins/:name', () => {
     const json = (await response.json()) as { ok: boolean; plugin: unknown };
     expect(json).toEqual({
       ok: true,
-      plugin: { name: 'p-one', sha: SHA, contentSha256: body.contentSha256 },
+      plugin: {
+        name: 'p-one',
+        sha: SHA,
+        contentSha256: body.contentSha256,
+        enableHooks: false,
+        enableMcp: false,
+      },
     });
 
     const h = await health(app);
     expect(h.plugins?.plugins).toEqual([
-      { name: 'p-one', sha: SHA, contentSha256: body.contentSha256 },
+      {
+        name: 'p-one',
+        sha: SHA,
+        contentSha256: body.contentSha256,
+        enableHooks: false,
+        enableMcp: false,
+      },
     ]);
     const raw = JSON.stringify(h.plugins);
     expect(raw).not.toContain('dummy-content');
@@ -158,7 +170,13 @@ describe('POST /plugins/:name', () => {
     const second = wirePlugin('p-one', 'dummy-content-2');
     expect((await post(app, 'p-one', second)).status).toBe(200);
     expect((await health(app)).plugins?.plugins).toEqual([
-      { name: 'p-one', sha: SHA, contentSha256: second.contentSha256 },
+      {
+        name: 'p-one',
+        sha: SHA,
+        contentSha256: second.contentSha256,
+        enableHooks: false,
+        enableMcp: false,
+      },
     ]);
   });
 

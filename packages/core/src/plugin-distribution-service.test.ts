@@ -142,6 +142,8 @@ describe('plugin を配る（apply / syncRunner）', () => {
               name: 'p-all',
               sha: SHA_A,
               contentSha256: (await s.stores.plugins.get('p-all'))!.contentSha256,
+              enableHooks: false,
+              enableMcp: false,
             },
           ],
           updatedAt: expect.any(String),
@@ -169,6 +171,56 @@ describe('plugin を配る（apply / syncRunner）', () => {
     expect(await s.service.syncRunner(s.runner)).toBeNull();
     expect(sent).toBe(0);
     expect(retained).toBe(0);
+  });
+
+  it('同じ sha・同じ files でフラグだけ変えても、送り直す', async () => {
+    await s.stores.plugins.put(pluginInput('p-all'));
+    await s.service.apply();
+    for (const flags of [{ enableMcp: true }, { enableHooks: true }, {}]) {
+      await s.stores.plugins.put(pluginInput('p-all', flags));
+      const sent: boolean[] = [];
+      const realSet = s.runner.setPlugin?.bind(s.runner);
+      s.runner.setPlugin = async (plugin) => {
+        sent.push(plugin.enableHooks || plugin.enableMcp);
+        return realSet!(plugin);
+      };
+      await s.service.syncRunner(s.runner);
+      expect(sent).toHaveLength(1);
+      const held = (await s.runner.plugins?.())?.plugins[0];
+      expect(held).toMatchObject({
+        enableHooks: 'enableHooks' in flags,
+        enableMcp: 'enableMcp' in flags,
+      });
+      s.runner.setPlugin = realSet;
+      expect(await s.service.syncRunner(s.runner)).toBeNull();
+    }
+  });
+
+  it('フラグの欄が無い古い runner の指紋は「差あり」として送り直す', async () => {
+    await s.stores.plugins.put(pluginInput('p-all'));
+    await s.service.apply();
+    const real = s.runner.plugins?.bind(s.runner);
+    s.runner.plugins = async () => {
+      const found = await real!();
+      return found === undefined
+        ? undefined
+        : {
+            ...found,
+            plugins: found.plugins.map(({ name, sha, contentSha256 }) => ({
+              name,
+              sha,
+              contentSha256,
+            })),
+          };
+    };
+    let sent = 0;
+    const realSet = s.runner.setPlugin?.bind(s.runner);
+    s.runner.setPlugin = async (plugin) => {
+      sent += 1;
+      return realSet!(plugin);
+    };
+    await s.service.syncRunner(s.runner);
+    expect(sent).toBe(1);
   });
 
   it('差のある plugin だけを1本ずつ送り、最後に残す名前の一覧を送る', async () => {
