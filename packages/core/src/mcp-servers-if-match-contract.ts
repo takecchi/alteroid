@@ -69,7 +69,9 @@ export async function verifyMcpServersIfMatchContract(store: McpServerStore): Pr
   // 同じ版を前提にした同時の書き込みは、ちょうど1つだけが通る。
   const base = mcpServersVersionOf(await store.read());
   const racers = [1, 2, 3, 4].map((n) =>
-    conflictOf(() => store.write({ [`if-match-racer-${String(n)}`]: { command: 'dummy' } }, { ifMatch: base })),
+    conflictOf(() =>
+      store.write({ [`if-match-racer-${String(n)}`]: { command: 'dummy' } }, { ifMatch: base }),
+    ),
   );
   const outcomes = await Promise.all(racers);
   if (outcomes.filter((o) => o === null).length !== 1) {
