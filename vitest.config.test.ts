@@ -2,10 +2,6 @@ import { describe, expect, it } from 'vitest';
 
 import rootConfig, { MAX_WORKERS_CAP, defaultMaxWorkers } from './vitest.config.js';
 
-/**
- * root の vitest 設定が置く worker 数の上限（#2905）の歯。理由は
- * `vitest.config.ts` の `MAX_WORKERS_CAP` の doc に在る。
- */
 describe('vitest の worker 数の上限（#2905）', () => {
   it('CPU の多い器では上限で頭打ちになる（共有の runner は 32）', () => {
     expect(defaultMaxWorkers(32)).toBe(MAX_WORKERS_CAP);
