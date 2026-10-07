@@ -314,6 +314,13 @@ describe('添付: ファイル名', () => {
     expect(attachmentDiskName('')).toBe('file');
   });
 
+  it('ディスク名: 丸めて空白が落ちた結果が「.」や「..」なら file にする（#4072）', () => {
+    expect(attachmentDiskName(`..${' '.repeat(250)}x`)).toBe('file');
+    expect(attachmentDiskName(`.${' '.repeat(250)}x`)).toBe('file');
+    const once = attachmentDiskName(`..${' '.repeat(250)}x`);
+    expect(attachmentDiskName(once)).toBe(once);
+  });
+
   it('ディスク名: 切り口が ZWJ・ZWNJ の直後に来ても、孤立した ZWJ・ZWNJ は残さない（#3998）', () => {
     const lone = /[‌‍]/;
     // 絵文字（4 バイト）+ ZWJ（3 バイト）で 189 + 4 + 3 = 196 バイト。次の絵文字は切り落とされる。

@@ -821,7 +821,7 @@ export function attachmentDiskName(name: string): string {
       ATTACHMENT_DISK_NAME_MAX_BYTES - Buffer.byteLength(ext, 'utf8'),
     ),
   );
-  return stem === '' ? `file${ext}` : `${stem}${ext}`;
+  return stem === '' || stem === '.' || stem === '..' ? `file${ext}` : `${stem}${ext}`;
 }
 
 /**
