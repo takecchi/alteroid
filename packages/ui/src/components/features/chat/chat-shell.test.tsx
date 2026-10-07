@@ -1,10 +1,4 @@
 // @vitest-environment jsdom
-/**
- * `ConversationList` / `ChatHeader` / `ChatComposer` の省略可能な口と、その既定。
- *
- * 口は `newConversationTabStop` だけ（画面が従来の Tab の順路を保つために足した）。
- * **口を渡さないときの振る舞いは変えていない**——既定の側もここで押さえる。
- */
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -102,7 +96,6 @@ describe('ConversationList: 枠・空・但し書き', () => {
       />,
     );
     expect(screen.queryByText('まだ会話がない。')).toBeNull();
-    // 本当に0件で成功したときは、いままでどおり言う。
     rerender(<ConversationList items={[]} activeId={undefined} renderLink={renderLink} />);
     expect(screen.getByText('まだ会話がない。')).toBeTruthy();
   });
@@ -226,7 +219,6 @@ describe('ChatComposer', () => {
 });
 
 describe('ChatComposer: 入力に合わせて高さが伸びる', () => {
-  // jsdom は寸法を計算しないので、scrollHeight をテキストの行数から返す。
   function stubHeights(lineHeight: number) {
     const proto = HTMLTextAreaElement.prototype;
     vi.spyOn(proto, 'scrollHeight', 'get').mockImplementation(function (this: HTMLTextAreaElement) {
@@ -257,7 +249,7 @@ describe('ChatComposer: 入力に合わせて高さが伸びる', () => {
   it('上限は CSS の max-height で掛かり、超えた分は内側をスクロールする', () => {
     stubHeights(24);
     const { el } = box(Array.from({ length: 30 }, () => 'a').join('\n'));
-    expect(el.style.height).toBe('720px'); // 測った高さはそのまま入れ、止めるのは max-height
+    expect(el.style.height).toBe('720px');
     const classes = el.className.split(/\s+/);
     expect(el.style.maxHeight.replace(/\s/g, '')).toBe('min(40dvh,15rem)');
     expect(classes).toContain('overflow-y-auto');

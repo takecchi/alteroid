@@ -1,9 +1,4 @@
 // @vitest-environment jsdom
-/**
- * `ChatComposer` の作り直し（Issue #3224）。ボタンの名前とヒント、送信のショートカット
- * （⌘ + Enter と Ctrl + Enter のどちらでも送る。Enter・Shift + Enter では送らない）、
- * 案内の文、IME 変換中の扱い、`disabled`。実時間は待たない（ヒントは偽の時計とフォーカスで出す）。
- */
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -27,7 +22,6 @@ function setup(props: Partial<React.ComponentProps<typeof ChatComposer>> = {}) {
   return { onSend, textbox: screen.getByRole('textbox') as HTMLTextAreaElement };
 }
 
-/** Radix の吹き出しの位置決めが要る。jsdom には無いので、何もしない版を置く。 */
 class NoopResizeObserver {
   observe(): void {}
   unobserve(): void {}
@@ -114,7 +108,6 @@ describe('ChatComposer: 送信のキー', () => {
     (_n, platform) => {
       if (platform !== '') setPlatform(platform);
       const { onSend, textbox } = setup();
-      // 既定動作を止めない = 改行が生きている
       expect(fireEvent.keyDown(textbox, { key: 'Enter' })).toBe(true);
       expect(fireEvent.keyDown(textbox, { key: 'Enter', shiftKey: true })).toBe(true);
       expect(onSend).not.toHaveBeenCalled();
