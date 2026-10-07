@@ -637,6 +637,20 @@ async function renderChatEvents(
     stdout.write(redactBody(pending));
     pending = '';
   };
+  // **順番待ち・考え始めは、端末のときだけ、上書きされる1行で出す**（#3829）。パイプへは足さない
+  // （出力を読む道具に、本文でない行を混ぜない）。本文を書いたあとは出さない: 改行の無い本文の
+  // 行の途中へ書くと、次の消去がその本文の行を消してしまう。
+  let statusShown = false;
+  const clearStatus = (): void => {
+    if (!statusShown) return;
+    stdout.writeRaw('\r\x1b[2K');
+    statusShown = false;
+  };
+  const showStatus = (label: string): void => {
+    if (!stdout.isTTY || wrote) return;
+    stdout.writeRaw(`  … ${label}`);
+    statusShown = true;
+  };
   // 描いている間だけ、溜めた断片を書き切る口を公開する。Ctrl-C で止めた文は、先に届いていた断片の後ろへ回さない（#3769）。
   const outerFlush = flushRenderedText;
   flushRenderedText = flushPending;
@@ -644,6 +658,7 @@ async function renderChatEvents(
   try {
     for await (const event of events) {
       sawEvent = true;
+      clearStatus();
       if (event.name !== 'text') flushPending();
       switch (event.name) {
         case 'open': {
@@ -704,12 +719,19 @@ async function renderChatEvents(
           onFailed?.(`応答がエラーで終わった（${data ? redactError(data.message) : '不明'}）`);
           break;
         }
+        case 'queued':
+          showStatus('順番を待っている');
+          break;
+        case 'thinking':
+          showStatus('考えている');
+          break;
         default:
           break;
       }
     }
   } catch (error) {
     // 応答の途中で切れた（SSE の切断）。ここまでに知った会話 id を返し、REPL が続けられるようにする。
+    clearStatus();
     flushPending();
     ended = true;
     const reason = redactError(error instanceof Error ? error.message : String(error));
@@ -724,6 +746,7 @@ async function renderChatEvents(
     failedOrLimited = true;
   }
 
+  clearStatus();
   flushPending();
   flushRenderedText = outerFlush;
   if (wrote) stdout.write('\n');
