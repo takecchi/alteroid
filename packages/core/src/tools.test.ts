@@ -2294,13 +2294,6 @@ describe('クローンの道具', () => {
         expect((await h.stores.persona.read('values'))?.content).toBe(original);
       });
 
-      /**
-       * ⭐ Issue #1213 の核心。断りが「改行を含む」としか言わないと、渡した
-       * 値に本当は改行が無いのに（例えば長さの都合で別の道具に断られた場合）
-       * 呼び手が改行を探し続けて直し方を誤る。ここでは断りの応答が、呼び手が
-       * 自分の側で照合できる証拠（渡した値の全文字数・改行の位置・前後の
-       * 抜粋）を実際に名乗ることを確かめる。
-       */
       it('description の断りには、全文字数・改行の位置・前後の抜粋（証拠）が出る（#1213）', async () => {
         const h = harness();
         const original = `---\ndescription: 旧\n---\n${longBody}`;
@@ -2308,7 +2301,7 @@ describe('クローンの道具', () => {
 
         const before = 'あ'.repeat(10);
         const after = 'い'.repeat(10);
-        const value = `${before}\n${after}`; // 全21文字、11文字目が \n
+        const value = `${before}\n${after}`;
 
         const reply = await fmBased(h, {
           slug: 'values',
@@ -2317,12 +2310,9 @@ describe('クローンの道具', () => {
         });
 
         expect(reply).toContain('description');
-        // 全文字数。
         expect(reply).toContain(`${value.length}`);
         expect(reply).toContain('21');
-        // 改行の位置（1始まり）。
         expect(reply).toContain('11');
-        // 前後の抜粋——エスケープされた \n が見え、生の改行は含まない。
         expect(reply).toContain(`${before}\\n${after}`);
         expect(reply).not.toMatch(/[\r\n]/);
       });
@@ -2357,15 +2347,6 @@ describe('クローンの道具', () => {
         expect((await h.stores.persona.read('values'))?.description).toBe('a---b（1行のまま）');
       });
 
-      /**
-       * ⭐⭐ Issue #1213 が明示的に求める回帰確認（核心そのもの）。
-       *
-       * 報告者は「改行を1文字も含まない長い description」を渡して改行の
-       * 断りを受けたと主張していた。現物を確かめると、断りが見ているのは
-       * `containsMemoryFrontmatterLineBreak`（`/[\r\n]/` の有無）だけで、
-       * 長さは1バイトも見ていない——だからこの形は本来ここでは断られない
-       * はずである。**それを機械で固定する。**
-       */
       it('改行を1文字も含まない長い description（約400文字）は断られず、応答に「改行」という語も出ない（#1213）', async () => {
         const h = harness();
         await h.stores.persona.write('values', `---\ndescription: 旧\n---\n${longBody}`);
@@ -2388,7 +2369,6 @@ describe('クローンの道具', () => {
 
     it('malformed な frontmatter には断り、何も変わっていない', async () => {
       const h = harness();
-      // 末尾の改行は `PersonaStore.write` の契約（#370。上の longBody と同じ理由）。
       const malformed = '---\nno colon here\n---\n本文\n';
       await h.stores.persona.write('values', malformed);
 
@@ -2446,21 +2426,10 @@ describe('クローンの道具', () => {
         });
 
         expect(reply).toContain('断った');
-        // 断り文が出たことだけでなく、frontmatter 込みで内容が1文字も変わっていないことを確かめる
-        // （断ってから書いてしまう実装が生存しないように）。
         expect((await h.stores.persona.read('values'))?.content).toBe(original);
       });
 
-      // **`unknown`（履歴が無い）は、この口ではテストできない。** `memory_write`
-      // と違い `memory_frontmatter_set` は「既に在る文書にしか使えない」ので、
-      // 保護状態を問う時点で必ず一度 `persona.write()` を通っている——
-      // `createMemoryStores()`（インメモリの器）はそこで必ず `contentSha256` を
-      // 立てるため、書き込み済みの文書が `unknown` になる経路が無い（`unknown`
-      // は「索引を失った」ことを表す状態で、fs/pg の索引破損でしか作れない。
-      // `memory_delete` の human guard テストも同じ理由で `unknown` を
-      // テストしていない）。`human` と `unknown` は `denialMessage` の中で
-      // 同じ分岐（`guardFullReplace` の switch）を通るので、`human` 側の
-      // テスト（直上）が同じコードパスを検査している。
+      // `unknown` は試さない: インメモリの器は書き込み済みの文書を `unknown` にできないため
 
       it('断りの応答は4要素を持つ。ただし4つ目は memory_append を勧めない（要旨を直したい人には無意味）', async () => {
         const h = harness();
@@ -2474,14 +2443,10 @@ describe('クローンの道具', () => {
           summary: '直したつもり',
         });
 
-        // (1) なぜ断ったか
         expect(reply).toContain('人間の書き込みの履歴が在る');
-        // (2) どうすれば通るか
         expect(reply).toContain('ask_human');
         expect(reply).toContain('values');
-        // (3) いま何も失われていない
         expect(reply).toMatch(/変わっていない|残っている/);
-        // (4) memory_append は代わりにならないと明言する（勧めない）。
         expect(reply).toContain('memory_append');
         expect(reply).toContain('代わりにならない');
       });
@@ -2541,25 +2506,12 @@ describe('クローンの道具', () => {
     });
   });
 
-  /**
-   * `memory_outline`（読むだけ）と `memory_section_move`（節を別の文書へ移す）
-   * ——#318 案 (b)。
-   *
-   * **この2本の存在理由は「本文がツール呼び出しにも応答にも一度も現れない」
-   * ことである。** だからここで測るのも、文言の一致ではなくその性質のほうで
-   * ある——目印の文字列が応答に出ないこと、frontmatter が1バイトも動かない
-   * こと、断ったときに**両方の文書が1文字も変わっていない**こと。
-   *
-   * **`toBe(original)` で丸ごと比べる。** 「断り文が出た」だけを測ると、
-   * 断ってから書いてしまう実装がそのまま生存する。
-   */
   describe('memory_outline / memory_section_move（本文を出さずに節を移す。#318 案 (b)）', () => {
     async function markHuman(h: Harness, slug: string, content: string): Promise<void> {
       await h.stores.persona.write(slug, content);
       await h.stores.persona.markHumanTouched(slug, new Date().toISOString());
     }
 
-    /** 目印。応答にも呼び出しにも出てはいけない本文（`memory_delete` の歯と同じ形）。 */
     const SECRET = 'SECRET-XYZ-999';
 
     const source = [
@@ -2581,12 +2533,6 @@ describe('クローンの道具', () => {
       '',
     ].join('\n');
 
-    /**
-     * **複数節を1回で移す歯のための足場。** 兄弟が3つ（節A・節B・節C）並ぶ
-     * だけの単純な文書——`source` は兄弟が2つ（`## 事例` / `## 次`）しか無い
-     * ので、「3節まとめて」を測る歯にはこちらを使う。目印は節ごとに変える
-     * （同一だと節id が衝突する。`outlineId` の doc と同じ理由）。
-     */
     const multi = [
       '---',
       'description: 複数節',
@@ -2606,16 +2552,6 @@ describe('クローンの道具', () => {
       '',
     ].join('\n');
 
-    /**
-     * `memory_outline` を実際に呼び、**出力そのもの**と、そこから引いた
-     * `{ id, heading }` の列（出た順）を返す。
-     *
-     * **`outlineId` と分けてあるのは、赤の出どころをアサーションにするためである。**
-     * `outlineId` は見つからないと生の例外を投げるので、「目次にこの節が出るか」を
-     * 測る歯がそれに頼ると、**落ちた理由が自分のアサーションではなくヘルパの
-     * throw になる** — 変異試験でそれが実際に起きた（`side` を無視する変異で、
-     * 端から端までの歯だけ AssertionError が出ずに落ちた）。
-     */
     async function outlineOf(
       h: Harness,
       slug: string,
@@ -2632,7 +2568,6 @@ describe('クローンの道具', () => {
       return { outline, entries };
     }
 
-    /** `memory_outline` の出力から節id を引く（本物の経路を通す）。 */
     async function outlineId(h: Harness, slug: string, heading: string): Promise<string> {
       const { outline, entries } = await outlineOf(h, slug);
       const hit = entries.find((entry) => entry.heading === heading);
@@ -2655,7 +2590,6 @@ describe('クローンの道具', () => {
         expect(outline).not.toContain('芯である');
         expect(outline).not.toContain('description:');
         expect(outline).not.toContain('type: premise');
-        // 出るのは節id・見出し行・文字数だけ。
         expect(outline).toContain('# 私について');
         expect(outline).toContain('## 事例');
         expect(outline).toMatch(/\[[0-9a-f]{8}-[0-9a-f]{8}\]/);
@@ -2668,23 +2602,6 @@ describe('クローンの道具', () => {
         expect(await h.call('memory_outline', { slug: 'nope' })).toContain('存在しない');
       });
 
-      /**
-       * ⭐ **この歯がこの改修の受け入れ基準そのものである。**
-       *
-       * 直している詰まりは「**肥大化を防ぐ道具が、肥大化そのものによって
-       * 使えなくなる**」——目次の予算は先頭から詰めるので、大きな文書では
-       * **末尾側の節id が出てこない** ⟹ `memory_section_move` の指し先が手に
-       * 入らない ⟹ 割りたい文書ほど割れない。25万字級の `premise` で実際に
-       * この形へ入っている。
-       *
-       * **だから測るのは「向きが出せること」ではなく「取った id が実際に
-       * 移せること」である。** 目次の文言だけを測る歯は、`memory_section_move`
-       * が受け取れない形の id を出しても緑のままになる。
-       *
-       * 足場は**節ごとに見出しも中身も変えてある** — 中身まで同一の節は節id が
-       * 衝突し、`renderMemoryOutline` がその行へ ⚠ を付ける（動かせない行に
-       * なるので、測りたい形ではない）。
-       */
       it('⭐ side=tail で取った節id は、そのまま memory_section_move へ渡せる（既定の目次には出てこない節）', async () => {
         const h = harness();
         const last = `# 節0239: ${'み'.repeat(40)}`;
@@ -2694,19 +2611,15 @@ describe('クローンの道具', () => {
         }).join('\n');
         await seed(h, 'big', `---\ndescription: 節の多い文書\ntype: premise\n---\n${body}`);
 
-        // 既定の目次には末尾の節が出てこない（＝ここが詰まりである）。
         const head = await outlineOf(h, 'big');
         expect(head.entries.map((entry) => entry.heading)).not.toContain(last);
         expect(head.outline).toMatch(/…末尾 \d+ 節は省略/);
         expect(head.outline).toContain('side=tail');
 
-        // 向きを渡すと取れる。**取れたことをアサーションで測る**（ヘルパの
-        // 生の例外に頼ると、赤の出どころが自分のアサーションでなくなる）。
         const tail = await outlineOf(h, 'big', 'tail');
         const hit = tail.entries.filter((entry) => entry.heading === last);
         expect(hit).toHaveLength(1);
 
-        // 取った id はそのまま移し先へ通る。
         const reply = await h.call('memory_section_move', {
           fromSlug: 'big',
           sections: [hit[0]!.id],
@@ -2749,20 +2662,12 @@ describe('クローンの道具', () => {
         expect(from?.content).not.toContain('## 事例');
         expect(to?.content).toContain('## 事例');
         expect(to?.content).toContain(SECRET);
-        // 入れ子の子（### だから）は親と一緒に動く。
         expect(from?.content).not.toContain('### だから');
         expect(to?.content).toContain('### だから');
-        // 動かしていない節は残る。
         expect(from?.content).toContain('## 次');
         expect(reply).toContain('移した');
       });
 
-      /**
-       * issue #1382（#916 comment 7 の項目14-2 から切り出し）: 移した節の
-       * 子孫に、見出しの階層が直近の親より2段以上飛んでいるものが在れば、
-       * 応答に警告を1件足す（拒否ではない——移動そのものは通常どおり
-       * 完了し、出どころ・移し先の中身も通常どおり動く）。
-       */
       it('⚠ 移した節の子孫に階層飛び（### を挟まず ## → ####）が在ると、応答に警告が付く。移動は拒否されない', async () => {
         const h = harness();
         const jumpy = [
@@ -2793,26 +2698,18 @@ describe('クローンの道具', () => {
           summary: '親の話題を付録へ移した',
         });
 
-        // 移動そのものは拒否されず、いつもどおり完了している。
         expect(reply).toContain('移した');
         const from = await h.stores.persona.read('jumpy');
         const to = await h.stores.persona.read('jumpy-appendix');
         expect(from?.content).not.toContain('## 親の話題');
         expect(to?.content).toContain('## 親の話題');
-        // 無関係な規則も親と一緒に動く（これが#1382の実害そのもの）。
         expect(to?.content).toContain(SECRET);
 
-        // 警告そのもの。拒否の語は名乗らない。
         expect(reply).toContain('階層');
         expect(reply).toContain('子孫 1 件のうち 1 件');
         expect(reply).not.toContain('何も変わっていない');
       });
 
-      /**
-       * 上の歯の対照。**通常の1段ずつの入れ子（`source` の `## 事例` →
-       * `### だから`）では、この警告が1文字も出ないこと**を見る——
-       * 「正しい入れ子の移動まで警告してしまう」当てすぎを歯で防ぐ。
-       */
       it('通常の1段ずつの入れ子を移しても、階層飛びの警告は出ない（当てすぎない）', async () => {
         const h = harness();
         await seed(h);
@@ -2829,15 +2726,6 @@ describe('クローンの道具', () => {
         expect(reply).not.toContain('階層');
       });
 
-      /**
-       * **#662 段1: 省略の断り書きに `total`/`shown` を足した分の歯。**
-       *
-       * 前置き（`${ordered.length} 節を移した`）から件数を復元させるのでは
-       * なく、断り書き自身が「何節のうち何節を出したか」を名乗ることを測る。
-       * あわせて、③（届かない範囲を名乗る）として案内している
-       * `memory_outline slug=<toSlug>` が実在する経路であること——省いた節も
-       * 含めて移った先の目次に出ること——を実測する。
-       */
       it('省略の断り書きが total/shown を名乗り、移った先の見出しは memory_outline slug=<toSlug> で確かめられる', async () => {
         const h = harness();
         const sectionCount = 30;
@@ -2847,8 +2735,6 @@ describe('クローンの道具', () => {
         }).join('\n');
         await seed(h, 'many-sections', `---\ndescription: 節の多い文書\ntype: fact\n---\n${body}`);
         const { entries } = await outlineOf(h, 'many-sections');
-        // 前提: 予算内で全節の id が取れていること（そうでなければ、以下の
-        // 「30節を移した」という前提そのものが崩れる）。
         expect(entries).toHaveLength(sectionCount);
 
         const reply = await h.call('memory_section_move', {
@@ -2858,61 +2744,17 @@ describe('クローンの道具', () => {
           summary: '節をまとめて付録へ移した',
         });
 
-        // 予算（MEMORY_SECTION_MOVE_LIST_BUDGET=2,000字）で実際に切れたこと
-        // （切れていなければ、下の assert は何も測っていない）。
         expect(reply).toMatch(/…ほか \d+ 節は一覧から省略/);
-        // **`total`/`shown` を名乗っていること。**
         expect(reply).toMatch(/移した 30 節のうち \d+ 節だけ出した/);
 
-        // **③ の実践の実測。** 一覧から省かれた最後の節（節29）を含め、
-        // 移った先の目次に全節が出ることを確かめる（案内する経路が実在する）。
         const outline = await h.call('memory_outline', { slug: 'many-sections-appendix' });
         expect(outline).toContain('記憶 many-sections-appendix の目次');
         expect(outline).toContain('節29');
       });
 
-      /**
-       * ⭐ 記憶の肥大への恒久対策——節の移動で「毎ターンの床」がどう動くか。
-       *
-       * ## いまの機序（2026-09-08 に premise の載せ方を反転させた後）
-       *
-       * **⚠️ かつてこの doc は「出どころ（premise）の全文からその分が消える
-       * ので床は減る」と書いていたが、これは偽である。** premise はもう
-       * 全文を焼かない——人間が載せ方を反転させた
-       * （`grep -Fn -- '受け入れ基準は、人間が載せ方を反転させた時点で意味を失った' packages/core/src/memory.ts`）。
-       * **主張（assert）そのものはこの反転の前後で変わっていない**（予算内の
-       * 文書では実際に床は減る）。偽だったのは説明であって、歯ではない。
-       *
-       * **premise が毎ターン焼かれるのは本文ではなく「カード」**——要旨＋節の
-       * 目次（節id・見出し・文字数を1行に並べたもの。`renderPremiseCard`）
-       * である。本文は1文字も載らない（開くのは `memory_section_read`）。
-       *
-       * ⟹ **節を既存の `fact` へ移すと、出どころのカードから目次の1行
-       * （移した節ぶん）が消え、移し先は `fact` なので目次にも1行しか増えない
-       * （`fact` はカードではなく目次の1行にしか現れない——
-       * `renderMemoryDocuments` の不変条件）。** 動くのは「消えた1行」と
-       * 「増えた1行」の差だけであり、**本文の量そのものは移す前も後も焼き込みに
-       * 一度も乗っていない**——だから床が減るのは「本文が消えたから」ではなく、
-       * 「目次の1行が消えたから」である。
-       *
-       * ## ⚠️ これが成り立つのは「出どころの目次が予算に収まっているとき」だけ
-       *
-       * 目次には1文書あたり `MEMORY_PROMPT_OUTLINE_BUDGET`（6,000文字）の
-       * 予算が掛かる。**予算の内側**では目次の費用が乗っている節の数に比例
-       * するので、節を1つ移せば目次からその1行が確実に消え、床は減る——
-       * **この歯が測っているのはその内側の挙動だけである。**
-       *
-       * **予算に張り付いた文書ではそうならない。** 目次の費用は節数ではなく
-       * **予算そのもの**（省略の断り書きを含めて常に予算いっぱい）になるので、
-       * 節をどれだけ移しても出どころの目次の文字数はほとんど動かない。⟹
-       * 「予算に張り付いた側」で床がどう動く（動かない）かは、この歯ではなく
-       * 対になる歯（`目次の予算に張り付いた premise から大量の節を fact へ
-       * 移しても…`）が測る。
-       */
       it('⭐ premise から既存の fact へ節を移すと、毎ターンの床は減ると応答が言う', async () => {
         const h = harness();
         await seed(h);
-        // 移し先を先に fact として作っておく。
         await h.stores.persona.write(
           'about-me-appendix',
           '---\ntype: fact\ndescription: 付録\n---\n# 付録\n既存の本文\n',
@@ -2928,57 +2770,11 @@ describe('クローンの道具', () => {
 
         expect(reply).toContain('毎ターンの床');
         expect(reply).toContain('fact');
-        // delta が符号つきの負の数（減った）で出る。
         expect(reply).toMatch(
           /毎ターンの床（焼き込み全体。いま読み直した値）: [\d,]+ 文字から [\d,]+ 文字へ（-[\d,]+）/,
         );
       });
 
-      /**
-       * ⭐⭐ **予算の内側と外側は別の現象である。この歯は「外側」を測る。**
-       *
-       * 上の歯（`premise から既存の fact へ節を移すと、毎ターンの床は減る`）が
-       * 測っているのは、出どころ premise の節の目次が
-       * `MEMORY_PROMPT_OUTLINE_BUDGET`（6,000文字）の**内側**に収まっている
-       * ときの挙動である。そこでは目次の費用が節数に比例するので、節を1つ
-       * 移せば目次からその1行が確実に消え、床は減る。
-       *
-       * **予算に張り付いた文書ではその比例関係が壊れる。** 目次の費用は
-       * 「乗っている節の数」ではなく「予算そのもの」（省略の断り書きを含めて
-       * 常に予算いっぱい）になる。⟹ 節を大量に移しても、移す前・移した後の
-       * 両方で目次が予算に張り付いたままなら、出どころのカードの大きさは
-       * ほとんど動かない——**移した本文の量に比例しない。**
-       *
-       * ## ⚠️ 符号にも単調性にも触れない（実測に基づく判断）
-       *
-       * マネージャーが実物の `measureMemoryFloor` を import し、premise 1文書・
-       * 要旨2,900字・見出し40字均一の合成入力で実測した値（残り節数 →
-       * totalChars）: 1,416節→10,193 ／ 916節→10,181（−12）／ 200節→10,179
-       * （−14）／ 120節→10,135（−58）／ 80節→8,697（−1,496、ここで省略が
-       * 消える＝崖）。⟹ **91.5%（1,296節）を移しても床は −58 文字**——差の列
-       * （0, 0, −12, −12, −14, −58）は単調非増加だったが、**マネージャーは
-       * 非単調（増えたり減ったりする実測）を再現できなかった。** それでも
-       * 符号を assert しないのは、断り書きの中の数字（節数・文字数の桁）が
-       * 1文字動くだけで符号が反転しうるほど値そのものが小さい領域に居るから
-       * である——**この領域で保証できるのは「（本文の量に比べて）動かない」
-       * という大きさの話だけ**であって、「どちらへ動くか」でも「動く量が
-       * 単調か」でもない。だからここで固定するのは Δ の絶対値が小さいこと
-       * （移した本文の量に比例しないこと）だけであり、**符号にも単調性にも
-       * 触れない。**
-       *
-       * ## 種の作り方
-       *
-       * 見出し40字前後・400節の premise を作る（崖は見出し40字均一で85節
-       * 前後——300節移した後の残り100節でも、まだ崖の手前＝張り付いたままの
-       * 領域に留まる。この文書の見出しは「節0000: 」のぶん40字よりやや長く、
-       * 崖はむしろ手前に寄るので、100節はさらに余裕を持って張り付き側に居る）。
-       * 移し先は既存の fact として先に作る（上の歯と同じ作法）。節id は
-       * `memory_outline` ではなく `scanMemorySections` で直接読む——
-       * `memory_outline` は応答自身の予算（`MEMORY_OUTLINE_BUDGET`）で
-       * 切られるので、400節ぶんの id は1回の呼び出しでは取れない
-       * （下の「移した節の列挙」の歯が同じ理由で同じ手を使っている。
-       * `grep -Fn -- 'scanMemorySections で読み直し、全節の id を渡す' packages/core/src/tools.test.ts`）。
-       */
       it('⭐ 目次の予算に張り付いた premise から大量の節を fact へ移しても、毎ターンの床は移した本文の量に比例して減らない（そしてそれは欠陥ではなく設計である）', async () => {
         const h = harness();
         const sectionCount = 400;
@@ -2992,25 +2788,17 @@ describe('クローンの道具', () => {
           'big-toc',
           `---\ndescription: 目次が予算に張り付いた文書\ntype: premise\n---\n${bigTocBody}`,
         );
-        // 移し先は先に fact として作っておく（上の歯と同じ作法）。
         await h.stores.persona.write(
           'big-toc-appendix',
           '---\ntype: fact\ndescription: 大量移動の受け皿\n---\n# 付録\n既存の本文\n',
         );
 
-        // **前提の assert・その1（移す前）**: すでに目次が予算に張り付いて
-        // いること。でなければ、この歯は「予算内側」の歯と同じ現象を測る
-        // だけになる。
         const before = await h.stores.persona.documents();
         expect(renderMemoryDocuments(before)).toContain('目次から省略');
 
-        // `memory_outline` は応答自身の予算で切られるので400節ぶんの id は
-        // 1回で取れない——`scanMemorySections` で直接読む。
         const doc = await h.stores.persona.read('big-toc');
         if (doc === null) throw new Error('big-toc が見つからない（seed に失敗した）');
         const { sections } = scanMemorySections(doc.content);
-        // 前提: 全節を読めている（読めていなければ「300節を移した」という
-        // 前提そのものが崩れる）。
         expect(sections).toHaveLength(sectionCount);
         const moved = sections.slice(0, moveCount);
 
@@ -3021,23 +2809,14 @@ describe('クローンの道具', () => {
           summary: '張り付いた目次から先頭寄りの節をまとめて付録へ移した',
         });
 
-        // **前提の assert・その2（移した後）**: 出どころの目次はまだ予算に
-        // 張り付いている。400節中300節を移しても、残り100節はまだ崖
-        // （見出し40字前後で85節前後）の手前——でなければ、この歯は
-        // 「途中で予算内側へ落ちた」ケースを測ることになり、上の歯と同じ
-        // 現象を二重に固定するだけになる。
         const after = await h.stores.persona.documents();
         expect(renderMemoryDocuments(after)).toContain('目次から省略');
 
-        // 対照: 移した本文の量が大きいこと（そもそも小さい操作だった、と
-        // いう反論を消す）。応答自身が名乗る「合計 N 文字」を読む。
         const movedMatch = /合計 ([\d,]+) 文字）を big-toc-appendix の末尾へ移した/.exec(reply);
         if (movedMatch === null) throw new Error(`応答から移した文字数を読めない:\n${reply}`);
         const movedChars = Number(movedMatch[1]!.replace(/,/g, ''));
         expect(movedChars).toBeGreaterThanOrEqual(10_000);
 
-        // ⭐ 床の増減の絶対値を、応答の「毎ターンの床」の一言から正規表現で
-        // 抜き出す。**符号は見ない**（上の doc「符号にも単調性にも触れない」）。
         const floorMatch =
           /毎ターンの床（焼き込み全体。いま読み直した値）: [\d,]+ 文字から [\d,]+ 文字へ（([+-][\d,]+)）/.exec(
             reply,
@@ -3045,39 +2824,15 @@ describe('クローンの道具', () => {
         if (floorMatch === null) throw new Error(`応答から毎ターンの床の遷移を読めない:\n${reply}`);
         const delta = Math.abs(Number(floorMatch[1]!.replace(/,/g, '')));
 
-        // ⭐ 本体の assert: 移した本文の量（10,000文字以上）に対して、床の
-        // 増減はその比ではない小ささである。上界の 500 はマネージャーの実測
-        // （91.5% 移して −58 文字）に十分な余裕を持たせた値で、実装の内部
-        // 定数からは導いていない——「本文の量に比例しない」ことを示すための
-        // 恣意的な小ささである。
+        // 上界の 500 は実装の定数から導かない: 「本文の量に比例しない」ことを示すための恣意的な小ささのため
         expect(delta).toBeLessThan(500);
-        // 対照: 移した本文の量が Δ の絶対値の何十倍もあること
-        // （`Math.max(delta, 1)` は delta が 0 のときの0除算を避けるだけで、
-        // 判定の意味は変えない）。
         expect(movedChars).toBeGreaterThan(Math.max(delta, 1) * 20);
 
-        // ⭐ **応答が「どちらの領域に居るか」を名乗ること。**
-        // `describeMemoryFloor` は `slug` でこの一言を引かない——`memory_section_move`
-        // が渡す `slug` は常に**移し先**（`toSlug`）なので、引くと張り付いている当の
-        // 文書（`fromSlug`）を一度も名乗れない。⟹ `before` / `after` の
-        // `outlineSaturatedPremise` を突き合わせ、状態が動いた premise を**それ自身の
-        // slug で**名乗る（`memory.ts` の `describeMemoryFloor` の doc
-        // 「なぜ `input.slug` では引かないか」）。
-        // ⟹ ここで名乗られるのは `fromSlug`（`big-toc`）であって、`slug` として
-        // 渡された `toSlug`（`big-toc-appendix`。区分は fact なので目次の予算の
-        // 対象ですらない）ではない。**これが無いと、この歯は「床が動かない」ことは
-        // 測れても「動かないと応答が言う」ことを測っていない。**
         expect(reply).toContain('張り付いている');
         expect(reply).toContain('big-toc の節の目次は1文書あたりの予算');
         expect(reply).not.toContain('big-toc-appendix の節の目次');
       });
 
-      /**
-       * **frontmatter は添字で運ばれるだけで一度も書き直されない。** だから
-       * キーの順序も余分な空白も、1バイトも動かない
-       * （`applyMemoryFrontmatterPatch` は `description` → `type` → `parent`
-       * の順に正規化する。こちらはそれすら起きない）。
-       */
       it('出どころの frontmatter がバイト同一である（キーの順序・空白も含めて）', async () => {
         const h = harness();
         const odd = [
@@ -3135,17 +2890,11 @@ describe('クローンの道具', () => {
 
         const from = await h.stores.persona.read('log');
         const to = await h.stores.persona.read('log-appendix');
-        // 片方だけ残っていない＝どちらの文書もフェンスが偶数個である。
         expect((from?.content.match(/^```/gm) ?? []).length).toBe(0);
         expect((to?.content.match(/^```/gm) ?? []).length).toBe(2);
         expect(from?.content).toContain('## 次');
       });
 
-      /**
-       * **⭐ この道具の存在理由そのものを測る歯。** 本文が応答に出れば、
-       * 呼び出しを 0 文字にした意味が消える（文脈へ入ってしまう）。
-       * `memory_delete` の「削除の日誌に本文が写っていない」と同じ形である。
-       */
       it('⭐ 応答に古い本文が1文字も出ない（名指しするのは見出しと節id だけ）', async () => {
         const h = harness();
         await seed(h);
@@ -3160,7 +2909,6 @@ describe('クローンの道具', () => {
 
         expect(reply).not.toContain(SECRET);
         expect(reply).not.toContain('子の節である');
-        // 呼び手が「意図した節か」を確かめられるだけの名指しはする。
         expect(reply).toContain('## 事例');
         expect(reply).toContain(id);
       });
@@ -3180,7 +2928,6 @@ describe('クローンの道具', () => {
         expect(reply).toContain('移した先 about-me-appendix');
         expect(reply).toContain('新規作成');
         expect(reply).toContain('出どころ about-me');
-        // 出どころ側は減った文字数が符号つきで出る。
         expect(reply).toMatch(/→ [\d,]+ 文字（-[\d,]+）/);
       });
 
@@ -3206,12 +2953,10 @@ describe('クローンの道具', () => {
           bytesBefore: Buffer.byteLength(before, 'utf8'),
         });
         expect(moveIn).toMatchObject({ slug: 'about-me-appendix', cause: 'clone', bytesBefore: 0 });
-        // 減った側・増えた側が、推測ではなく action の値そのもので分かる。
         expect((moveOut as { bytesAfter: number }).bytesAfter).toBeLessThan(
           Buffer.byteLength(before, 'utf8'),
         );
         expect((moveIn as { bytesAfter: number }).bytesAfter).toBeGreaterThan(0);
-        // 本文は日誌へ写さない。
         for (const entry of entries) expect(JSON.stringify(entry)).not.toContain(SECRET);
       });
 
@@ -3291,7 +3036,6 @@ describe('クローンの道具', () => {
         expect(reply).not.toContain(`${SECRET}-A`);
         expect(reply).not.toContain(`${SECRET}-B`);
         expect(reply).not.toContain(`${SECRET}-C`);
-        // 呼び手が「意図した節か」を確かめられるだけの名指しはする。
         expect(reply).toContain('## 節A');
         expect(reply).toContain('## 節B');
         expect(reply).toContain('## 節C');
