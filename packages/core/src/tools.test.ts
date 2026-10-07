@@ -9676,8 +9676,6 @@ describe('manager_list は走行中・返事待ちを窓から落とさない（
     for (const id of ['mgr-live-00', 'mgr-live-01', 'mgr-live-02']) {
       expect(reply, `${id} が窓の外へ落ちた`).toContain(id);
     }
-    // **id が出るだけでは足りない**——先に出ていることまで見る（終端が先に
-    // 積まれると、そのぶん走行中の件数が窓を分け合うことになる）。
     expect(reply.indexOf('mgr-live-00')).toBeLessThan(reply.indexOf('mgr-done-0000'));
   });
 
@@ -9687,13 +9685,10 @@ describe('manager_list は走行中・返事待ちを窓から落とさない（
     const reply = await h.call('manager_list', {});
 
     expect(reply).toMatch(/…ほか \d+ 件は省略（全 61 件）。走行中・返事待ちを先に出し/);
-    // **稼働状態を1度も見ていなかった時代の字面。** 戻ったらここで赤くなる。
     expect(reply).not.toContain('走っているものから順に出している');
   });
 
   it('status の絞りは文字数の予算（LIST_BUDGET）より前に効く——#418 と同じ形の穴を作らない', async () => {
-    // 予算の後に絞ると、絞りに当たらない行（ここでは終端60件）が窓を食い尽くし、
-    // 狙った行が窓の外へ落ちる。`commitment_list` の `origin` と同じ形の歯である。
     const h = flooded({ terminal: 60, inFlight: ['running', 'running'] });
 
     const reply = await h.call('manager_list', { status: ['running'] });
@@ -9701,7 +9696,6 @@ describe('manager_list は走行中・返事待ちを窓から落とさない（
     expect(reply).toContain('mgr-live-00');
     expect(reply).toContain('mgr-live-01');
     expect(reply).not.toContain('mgr-done-');
-    // 絞った後は2件しか無いので、予算は拘束条件にならない（切れたら赤くなる）。
     expect(reply).not.toMatch(/…ほか \d+ 件は省略/);
   });
 
@@ -9713,11 +9707,7 @@ describe('manager_list は走行中・返事待ちを窓から落とさない（
 
     const reply = await h.call('manager_list', { status: ['running'] });
 
-    // 予算で実際に切れたこと（切れていなければ断り書きは出ておらず、
-    // 下の assert は何も測っていない）。
     expect(reply).toMatch(/…ほか \d+ 件は省略/);
-    // **母数は絞った後の40件でなければならない。** 絞る前の60件だと、絞りの
-    // 効き目が嘘になる。
     expect(reply).toContain('status: running に絞った 40 件のうち');
     expect(reply).not.toContain('全 60 件');
   });
@@ -9727,45 +9717,22 @@ describe('manager_list は走行中・返事待ちを窓から落とさない（
 
     const reply = await h.call('manager_list', { status: ['running'] });
 
-    // 予算に切られない場所に置いてある行。**絞っても動かさない。**
     expect(reply).toContain('件数: 全 6 本');
-    // 絞ったことは、件数の行とは別の1行で読める。
     expect(reply).toContain('絞り込み: status: running に当たるのは 1 件');
     expect(reply).not.toContain('mgr-done-');
   });
 
-  /**
-   * **`status: []` は「絞らない」へ倒す。この面の他の一覧とは逆である。**
-   *
-   * 人間の入口に揃えた（逐語:
-   * `grep -Fn -- '**`status=`（空）は絞らない。**' apps/daemon/src/app.ts` —
-   * 「0件へ倒すと、絞りを解除した画面が『マネージャーが消えた』ように見える」）。
-   *
-   * **⚠️ MCP 側の既存の契約は逆である** —— `journal_read` の `types` / `with`、
-   * `commitment_list` の `origin` は `[]` を0件として扱う（逐語:
-   * `grep -Fn -- '**`[]`（空配列）= 0件。** 「どれにも当たらない」という指定として扱う。' packages/core/src/store.ts`）。
-   * **どちらへ倒したかを歯で固定しておかないと、コードを読むまで分からない。**
-   * 倒した理由は `tools.ts` の `view` の doc が持つ（ストアの問い合わせではなく、
-   * `GET /managers?status=` との等価性がこの引数を足した理由そのものだから）。
-   *
-   * **黙って無視しないことも一緒に測る** —— 逆の契約に慣れた呼び手が「0件だ」と
-   * 読まないように、絞らなかったことを出力の側で言う。
-   */
   it('status: [] は絞らない（0件へ倒さない）。ただし黙って無視せず、絞らなかったと言う', async () => {
     const h = flooded({ terminal: 3, inFlight: ['running'] });
 
     const empty = await h.call('manager_list', { status: [] });
     const plain = await h.call('manager_list', {});
 
-    // 0件へ倒れていないこと（＝ `[].includes(...)` が常に false になる形が戻ったら赤くなる）
     expect(empty).toContain('mgr-live-00');
     expect(empty).toContain('mgr-done-0000');
     expect(empty).not.toContain('絞り込みに当たる委譲は無い');
-    // 絞ったと嘘を言わないこと（母数は全体のまま）
     expect(empty).not.toMatch(/status:\s*に絞った/);
-    // **黙って無視しない。**
     expect(empty).toContain('絞り込み: status に空の配列が渡ったので、絞らずに全件を出した');
-    // **出る委譲そのものは、渡さなかった呼びと1バイトも違わない**（注記の行だけが増える）。
     expect(
       empty
         .split('\n')
@@ -9781,25 +9748,9 @@ describe('manager_list は走行中・返事待ちを窓から落とさない（
 
     expect(reply).toContain('この status の絞り込みに当たる委譲は無い');
     expect(reply).not.toContain('マネージャーは1本も居ない');
-    // 絞る前の実像は残っている。
     expect(reply).toContain('件数: 全 3 本');
   });
 
-  /**
-   * **`status` を渡さない呼びは、並び以外を1文字も変えない**（opt-in）。
-   *
-   * 測り方: 6値すべてを渡した呼び（＝1本も落ちない絞り）と、渡さない呼びを
-   * 突き合わせる。**絞り込みの注記の1行を除いて、残りが1バイトも違わない**
-   * ことを見る（`GET /managers` が `managersQuery` の doc で逐語に言っている
-   * 「クエリを1つも渡さない呼びは、この変更の前と応答が1バイトも変わらない」と
-   * 同じ約束を、こちらの面でも測る）。
-   *
-   * **⚠️ 断り書きの字面は、この歯の対象外である。** あれは #688 の3 を直した
-   * ときに意図して変えた（実装が実際にやっていることを言わせるため）ので、
-   * 上の別の歯が持つ。
-   * ここは足場を小さくして予算に切らせない——切らせると意図した変更のほうが
-   * 混ざり込む。
-   */
   it('status を渡さない呼びは、絞り込みの注記が付かないだけで他と同じものを出す', async () => {
     const h = flooded({ terminal: 3, inFlight: ['running'] });
 
@@ -9821,32 +9772,10 @@ describe('manager_list は走行中・返事待ちを窓から落とさない（
   });
 });
 
-/**
- * `manager_list` が `lost`（判断待ち）を第2群として扱うこと、と件数の行が
- * `lost` の本数を名乗ること（#688）。
- *
- * **直した穴**: `lost` は「前のセッションへ戻れなかった」の1点しか観測しておらず、
- * **成果が既に外へ出ていることがある（PR・コミット・送信済みのメール・登録済みの予定・投稿先など）**（逐語:
- * `grep -Fn -- '**ただし `lost` は「成果が無い」ではない。**' packages/core/src/schema.ts`）。
- * ⟹ 誰かが確かめるまで終われない状態なのに、**本数がどの面からも読めなかった**
- * ——`describeManagerCounts` は1度も数えず、`compareManagerAttention`（#689）は
- * `lost` を終端の袋に入れたままだったので古い側から窓の外へ落ちた。
- *
- * **日報（`buildActivityDigest`）は1バイトも変えていない。** `isManagerInFlight` に
- * `lost` を足すと `MAX_ITEMS` の枠を食う（`digest.ts` の
- * `isManagerAwaitingJudgement` の doc）——だから群は**この一覧の側だけ**で3つに
- * している。
- */
 describe('manager_list は lost を判断待ちの群として窓に入れる（#688）', () => {
-  /** 並びの起点。**時刻は全部ここからの引き算で作る**（手で書き並べない）。 */
   const NEWEST = Date.parse('2026-09-07T12:00:00.000Z');
   const minutesBefore = (minutes: number) => new Date(NEWEST - minutes * 60_000).toISOString();
 
-  /**
-   * 委譲1本ぶんの足場。**`request` を厚くしてある**——1件の行の長さはここで
-   * 決まる（`LIST_REQUEST_EXCERPT` で抜粋される）ので、`LIST_BUDGET` を実際に
-   * 溢れさせるために要る。
-   */
   function entry(managerId: string, status: JobStatus, minutesAgo: number): ManagerSummary {
     return {
       managerId,
@@ -9861,11 +9790,6 @@ describe('manager_list は lost を判断待ちの群として窓に入れる（
     };
   }
 
-  /**
-   * 台帳を作る。**渡した順ではなく `startedAt` 降順で積む**——偽物の `list()` は
-   * `running` 配列をそのまま写して返すので、ここで順序を崩すと**本物では起きない
-   * 並びを測ることになる**（#689 の `flooded` と同じ理由）。
-   */
   function pool(entries: readonly ManagerSummary[]): Harness {
     const h = harness();
     for (const item of [...entries].sort((a, b) => b.startedAt.localeCompare(a.startedAt))) {
@@ -9874,17 +9798,8 @@ describe('manager_list は lost を判断待ちの群として窓に入れる（
     return h;
   }
 
-  /**
-   * ⭐ **この節の本体。** 終端（`done` / `failed` / `stopped`）が予算を溢れさせても、
-   * `lost` は本文に出る。
-   *
-   * **⭐ `lost` は `startedAt` の*古い側*に置く。** 新しい側に置くと、**群を分ける
-   * 実装を消しても偶然通ってしまい、この歯は何も測れなくなる**（`ManagerPool.list()`
-   * の並びが `startedAt` 降順なので、新しい側に置けば並べ直しが無くても先頭に来る）。
-   */
   it('⭐ 終端が大量に溜まっても、lost は必ず本文に出る（古い側に置いても落ちない）', async () => {
     const terminal = Array.from({ length: 60 }, (_, index) =>
-      // 新しい側を終端で埋める（0〜59 分前）。
       entry(
         `mgr-term-${String(index).padStart(4, '0')}`,
         index % 2 === 0 ? 'done' : 'failed',
@@ -9892,7 +9807,6 @@ describe('manager_list は lost を判断待ちの群として窓に入れる（
       ),
     );
     const lost = Array.from({ length: 3 }, (_, index) =>
-      // **いちばん古い側**（20,000 分前〜）。
       entry(`mgr-lost-${String(index).padStart(2, '0')}`, 'lost', 20_000 + index),
     );
     const h = pool([...terminal, ...lost]);
@@ -9903,41 +9817,20 @@ describe('manager_list は lost を判断待ちの群として窓に入れる（
     for (const id of ['mgr-lost-00', 'mgr-lost-01', 'mgr-lost-02']) {
       expect(reply, `${id} が窓の外へ落ちた`).toContain(id);
     }
-    // **id が出るだけでは足りない**——終端より先に出ていることまで見る。
-    //
-    // **#857 で、比べる相手を `mgr-term-0000`（`done`）から `mgr-term-0001`
-    // （`failed`）へ変えた。** 群2 の中に副順位（軸1）が入ったので、`lastReport`
-    // を持たない `failed`（副順位 0）が `done`（分類の対象外＝副順位はいちばん
-    // 後ろ）より先に出るようになり、**`mgr-term-0000` は予算の窓の外へ落ちた**
-    // （`indexOf` が -1 を返し、「-1 より小さい」を測る意味の無い比較になっていた）。
-    // **群1 → 群2 という測定の中身は1バイトも変えていない**——比べる相手を、
-    // 窓に残っている終端へ付け替えただけである。
-    //
-    // **窓に在ることを先に測る**（`indexOf` の -1 と「先に出る」を混ぜない）。
     expect(reply, 'mgr-term-0001 が窓の外へ落ち、群の順序を測れていない').toContain(
       'mgr-term-0001',
     );
     expect(reply.indexOf('mgr-lost-00')).toBeLessThan(reply.indexOf('mgr-term-0001'));
   });
 
-  /**
-   * **群の順序は 走行中・返事待ち → `lost` → その他である**（3群）。
-   *
-   * **⭐ 測定条件を反転させてある**——`lost` を**新しい側**、走行中・返事待ちを
-   * **いちばん古い側**に置く。こうしないと、群の順位を入れ替える変異
-   * （`lost` を第1群、走行中を第2群にする）が `startedAt` の並びのおかげで
-   * 偶然通る。
-   */
   it('走行中・返事待ちは lost より先に出る（lost を新しい側に置いても順序が逆にならない）', async () => {
     const lost = Array.from({ length: 3 }, (_, index) =>
-      // **いちばん新しい側**（0〜2 分前）。
       entry(`mgr-lost-${String(index).padStart(2, '0')}`, 'lost', index),
     );
     const terminal = Array.from({ length: 60 }, (_, index) =>
       entry(`mgr-term-${String(index).padStart(4, '0')}`, 'done', 1_000 + index),
     );
     const inFlight = (['running', 'waiting_human'] as const).map((status, index) =>
-      // **いちばん古い側**（30,000 分前〜）。
       entry(`mgr-live-${String(index).padStart(2, '0')}`, status, 30_000 + index),
     );
     const h = pool([...lost, ...terminal, ...inFlight]);
@@ -9945,24 +9838,14 @@ describe('manager_list は lost を判断待ちの群として窓に入れる（
     const reply = await h.call('manager_list', {});
 
     expect(reply).toMatch(/…ほか \d+ 件は省略/);
-    // 3群とも窓に入っていること（入っていなければ順序は測れない）。
     for (const id of ['mgr-live-00', 'mgr-live-01', 'mgr-lost-00', 'mgr-term-0000']) {
       expect(reply, `${id} が窓の外へ落ちた`).toContain(id);
     }
-    // 第1群 → 第2群 → 第3群。
     expect(reply.indexOf('mgr-live-00')).toBeLessThan(reply.indexOf('mgr-lost-00'));
     expect(reply.indexOf('mgr-live-01')).toBeLessThan(reply.indexOf('mgr-lost-00'));
     expect(reply.indexOf('mgr-lost-00')).toBeLessThan(reply.indexOf('mgr-term-0000'));
   });
 
-  /**
-   * **件数の行は予算に切られない場所である**（`describeManagerCounts` の doc）。
-   * ⟹ 一覧の本文から `lost` が落ちても、本数だけは必ず読める。
-   *
-   * **到達口の綴りまで測る。** 本数だけ出ても名指しできない（本文は `LIST_BUDGET`
-   * で切られる）ので、`status: ["lost"]` を渡せることが本文から読めなければ
-   * 直っていない。
-   */
   it('件数の行が lost の本数と、名指しの引き方を出す', async () => {
     const h = pool([
       entry('mgr-lost-00', 'lost', 10),
@@ -9974,40 +9857,21 @@ describe('manager_list は lost を判断待ちの群として窓に入れる（
 
     expect(reply).toContain('件数: 全 3 本');
     expect(reply).toContain('戻れなかった(lost) 2 本');
-    // 「終わった」と読ませない。
     expect(reply).toContain('「戻れなかった(lost)」は「終わった」ではない');
-    // 名指しで引く綴り（#689 で入った到達口）。
     expect(reply).toContain('status: ["lost"]');
-    // **確かめる前に起こし直させない**（同じ仕事が2本になる）。
     expect(reply).toContain('確かめる前に manager_start で起こし直さないこと');
   });
 
-  /**
-   * ⭐ **`lost` が 0 本のときは、件数の行に区分ごと出さない**（#688）。
-   *
-   * `describeManagerCounts` の既存の作法（「0 の行は作らない」）に揃える——
-   * 「戻れなかった 0本」と書くと、観測して 0 だったのか、そもそも数えていない
-   * のかが読めなくなる（AGENTS.md の地雷「取れない軸に 0 の行を作る」）。
-   */
   it('⭐ lost が 0 本なら件数の行にも断り書きにも1文字も出ない（0 の行を作らない）', async () => {
     const h = pool([entry('mgr-done-00', 'done', 10), entry('mgr-fail-00', 'failed', 11)]);
 
     const reply = await h.call('manager_list', {});
 
-    // 件数の行は出ている（＝この歯が測っているのは「区分が無いこと」だけである）。
     expect(reply).toContain('件数: 全 2 本');
-    // 区分の見出しも、それに付く断り書きも1文字も出ない。
     expect(reply).not.toContain('戻れなかった(lost)');
     expect(reply).not.toContain('status: ["lost"]');
   });
 
-  /**
-   * **`lost` を全部確かめても、落ちた委譲を全部見たことにはならない**（#1212 の §7 の3つ目）。
-   *
-   * 器が黙って消えた委譲は `running` のまま残り、直近のターンが失敗で終わった委譲は
-   * `done` のまま残る——どちらも `status: ["lost"]` では引けない。⟹ 件数の行から、
-   * 残りの2つへ辿る綴りまで読めなければ直っていない。
-   */
   it('件数の行が、lost の外に残る2つ（running のまま・done のまま）へ辿る綴りを出す', async () => {
     const h = pool([entry('mgr-lost-00', 'lost', 10), entry('mgr-done-00', 'done', 11)]);
 
@@ -10018,14 +9882,6 @@ describe('manager_list は lost を判断待ちの群として窓に入れる（
     expect(reply).toContain('status: ["done"]');
   });
 
-  /**
-   * ⭐ **陽性対照とやりすぎよけ**: `lost` が 0 本なら、辿る綴りも出さない。
-   *
-   * 器が黙った委譲（`runnerLostSince`）や、直近のターンが失敗で終わった委譲
-   * （`lastFailure`）が在っても出さない——それぞれの行には既に ⚠ が付くので、
-   * この1文が効くのは「`lost` を全部見た」と読みかける場面だけである。
-   * `lost` 以外の区分に綴りを出す形は、ここで赤くなる。
-   */
   it('⭐ lost が 0 本なら、器が黙った委譲や失敗で終わった委譲が在っても辿る綴りは出ない', async () => {
     const orphaned = entry('mgr-run-00', 'running', 10);
     orphaned.runnerLostSince = minutesBefore(5);
@@ -10042,15 +9898,6 @@ describe('manager_list は lost を判断待ちの群として窓に入れる（
     expect(reply).not.toContain('status: ["done"]');
   });
 
-  /**
-   * **件数の行が「枠(利用上限)で止まっている」本数を出す（#1212 残件2の続き）。**
-   *
-   * `describeManagerCounts` の doc の新しい節（「枠(利用上限)で止まっている
-   * 本数」）どおり、これは `status` の分割ではなく横断する軸なので、
-   * 上の区分（走行中・返事待ち・lost 等）とは足し合わせないことを本文自身が
-   * 断る。**名指しで絞る綴りは無い**（`status` の値ではないため）ので、
-   * 代わりに「一覧の各行に付く注記を見ること」を案内する。
-   */
   it('件数の行が「枠(利用上限)で止まっている」本数と、横断する軸である断りを出す', async () => {
     const running = entry('mgr-run-00', 'running', 10);
     running.usageStoppedAt = minutesBefore(3);
@@ -10063,18 +9910,12 @@ describe('manager_list は lost を判断待ちの群として窓に入れる（
 
     expect(reply).toContain('件数: 全 3 本');
     expect(reply).toContain('枠(利用上限)で止まっている 2 本');
-    // 横断する軸であることの断り——足し合わせない。
     expect(reply).toContain('status の分割ではなく横断する軸である');
     expect(reply).toContain('上の内訳には足し合わせない');
-    // 絞る綴りは無い代わりに、行の注記を見るよう案内する。
     expect(reply).toContain('名指しで絞る綴りは無い');
     expect(reply).toContain('この一覧の各行に付く注記');
   });
 
-  /**
-   * ⭐ **`usageStopped` が 0 本のときは、件数の行に区分ごと出さない**
-   * （#1212 残件2の続き。`lost` と同じ「0 の行は作らない」作法）。
-   */
   it('⭐ 枠(利用上限)で止まっている委譲が0本なら件数の行にも断り書きにも1文字も出ない', async () => {
     const h = pool([entry('mgr-done-00', 'done', 10), entry('mgr-fail-00', 'failed', 11)]);
 
@@ -10085,10 +9926,6 @@ describe('manager_list は lost を判断待ちの群として窓に入れる（
     expect(reply).not.toContain('横断する軸である');
   });
 
-  /**
-   * **件数の行が「宛先の runner が名簿から消えている」本数を出す**
-   * （Issue #1212 running 側。段1。`usageStopped` と同じ形）。
-   */
   it('件数の行が「宛先の runner が名簿から消えている」本数と、横断する軸である断りを出す', async () => {
     const running1 = entry('mgr-run-00', 'running', 10);
     running1.runnerVanished = true;
@@ -10107,10 +9944,6 @@ describe('manager_list は lost を判断待ちの群として窓に入れる（
     expect(reply).toContain('この一覧の各行に付く注記');
   });
 
-  /**
-   * ⭐ **`runnerVanished` が 0 本のときは、件数の行に区分ごと出さない**
-   * （`usageStopped` と同じ「0 の行は作らない」作法）。
-   */
   it('⭐ 宛先の runner が名簿から消えている委譲が0本なら件数の行にも断り書きにも1文字も出ない', async () => {
     const h = pool([entry('mgr-done-00', 'done', 10), entry('mgr-fail-00', 'failed', 11)]);
 
@@ -10120,14 +9953,6 @@ describe('manager_list は lost を判断待ちの群として窓に入れる（
     expect(reply).not.toContain('宛先の runner が名簿から消えている');
   });
 
-  /**
-   * ⭐ **#1414 が running 側に作った穴そのものを塞いだことを測る**
-   * （Issue #1212 running 側。段1）。「lost を全部確かめても落ちた委譲を
-   * 全部見たことにはならない」という辿る綴りは `lost > 0` のときしか出ない
-   * （直上の describe の陰性対照が固定している）——`runnerVanished` の
-   * 辿る綴りは**その `lost` の条件と無関係に**、自分自身の本数だけで出る
-   * ことを固定する。
-   */
   it('⭐ lost が 0 本でも、runnerVanished が在れば辿る綴りが出る（#1414 が running 側に作らなかった穴）', async () => {
     const running = entry('mgr-run-00', 'running', 10);
     running.runnerVanished = true;
@@ -10136,33 +9961,13 @@ describe('manager_list は lost を判断待ちの群として窓に入れる（
 
     const reply = await h.call('manager_list', {});
 
-    // **`lost` は0本である**（この一覧に `lost` の委譲は1本も無い）。
     expect(reply).not.toContain('戻れなかった(lost)');
-    // それでも `runnerVanished` の辿る綴りは出る——`lost` の条件に混ぜていない。
     expect(reply).toContain('宛先の runner が名簿から消えている 1 本');
     expect(reply).toContain('この一覧の各行に付く注記');
     expect(reply).toContain('確かめる前に manager_start で起こし直さないこと');
   });
 });
 
-/**
- * `manager_list`（絞った先）に継続点（`cursor`）を足す（issue #662 段1）。
- *
- * **直した穴**: `status` で群は掘れるが、絞った先が予算（`LIST_BUDGET`）を
- * 超えたらそこで終わり、押し出された終端を辿る手段が無かった（依頼者が
- * 今日そこで実際に止まった——全 396 本のうち十数本しか出ず、絞った先へ
- * 届かなかった）。
- *
- * **群の順序（走行中・返事待ち → `lost` → その他、各群の中は `startedAt`
- * 降順）は #688 のまま1バイトも変えていない**——`resolveManagerCursor` は
- * keyset フィルタなので、既に整列済みの配列に対して絞るだけであり、相対
- * 順序は保たれる。
- *
- * `resolveManagerCursor`（`manager-cursor.ts`）の分岐は、そちらの歯
- * （`manager-cursor.test.ts`）が I/O 無しで直接測っている。ここで測るのは、
- * 実際の道具（`ManagerPool` の代わり・`status` 絞り・`LIST_BUDGET` の予算
- * 切り）に配線した結果である。
- */
 describe('manager_list（絞った先）に継続点（cursor）を足す（#662 段1）', () => {
   const NEWEST = Date.parse('2026-09-10T12:00:00.000Z');
   const minutesBefore = (minutes: number) => new Date(NEWEST - minutes * 60_000).toISOString();
@@ -10181,7 +9986,6 @@ describe('manager_list（絞った先）に継続点（cursor）を足す（#662
     };
   }
 
-  /** `startedAt` 降順で積む（本物の `ManagerPool.list()` と同じ並び）。 */
   function pool(entries: readonly ManagerSummary[]): Harness {
     const h = harness();
     for (const item of [...entries].sort((a, b) => b.startedAt.localeCompare(a.startedAt))) {
@@ -10236,10 +10040,6 @@ describe('manager_list（絞った先）に継続点（cursor）を足す（#662
   });
 
   it('群の順序は cursor をまたいでも保たれる（走行中・返事待ちは最初の頁に出る）', async () => {
-    // running/waiting_human（rank0）はいちばん古い側、lost（rank1）は中間、
-    // done（rank2）は新しい側に置く——`ManagerPool.list()` は startedAt 降順
-    // なので、並べ替えを外すと done が先頭に来てしまう（#689 の flooded と
-    // 同じ測定条件の反転）。
     const inFlight = (['running', 'waiting_human'] as const).map((status, index) =>
       entry(`mgr-live-${index}`, status, 30_000 + index),
     );
@@ -10254,7 +10054,6 @@ describe('manager_list（絞った先）に継続点（cursor）を足す（#662
     const first = await h.call('manager_list', {});
 
     expect(first).toMatch(/…ほか \d+ 件は省略/);
-    // 3群とも窓に入っていること（入っていなければ順序は測れない）。
     for (const id of ['mgr-live-0', 'mgr-live-1', 'mgr-lost-0', 'mgr-term-0']) {
       expect(first, `${id} が1頁目の窓の外へ落ちた`).toContain(id);
     }
@@ -10271,7 +10070,6 @@ describe('manager_list（絞った先）に継続点（cursor）を足す（#662
     const first = await h.call('manager_list', { status: ['running'] });
     const cursor = extractCursor(first);
 
-    // status を変えずに cursor だけ渡す（＝ status 未指定）呼びは食い違う。
     const reply = await h.call('manager_list', { cursor });
 
     expect(reply).toContain('食い違う');
@@ -10304,24 +10102,7 @@ describe('manager_list（絞った先）に継続点（cursor）を足す（#662
   });
 });
 
-/**
- * `manager_report` が「報告はまだ無い」と答える直前に生ログを見に行く（#323）。
- *
- * Issue の症状は「マネージャーは書き終えた（生ログに `end_turn` まで残る）のに、
- * クローン側は『まだ何も報告していない』としか読めない」——**この2つを区別する
- * 材料がどちらの層にも無かった**。ここでは `describeMissingReport` が返す
- * 3つの言い分け（生ログにも無い／生ログには在る＝配られていない／読めなかった・
- * 判定できない）を1本ずつ固定する。
- */
 describe('manager_report: 報告が空のとき、生ログを見て言い分ける（#323）', () => {
-  /**
-   * JSONL の1行（assistant、本文つき）。
-   *
-   * **`stopReason` は既定で付けない**（呼び手が明示しない限り、生ログの行に
-   * `stop_reason` 欄が無い状態を作る）。「本文がある＝終わっている」と決め
-   * つけない実装（#323 の偽陽性直し）を測るには、テスト側も「終わっている
-   * ことを示す行」と「そう示していない行」を作り分けで書く必要がある。
-   */
   function assistantLine(
     text: string,
     options: { timestamp?: string; isSidechain?: boolean; stopReason?: string } = {},
@@ -10341,23 +10122,18 @@ describe('manager_report: 報告が空のとき、生ログを見て言い分け
   it('part: request では生ログを見ない（往復を無条件に増やさない）', async () => {
     const h = harness();
     await h.call('manager_start', { request: '調べて' });
-    // 依頼文が記録に無い状態を作る（`request` は必須欄なので直接書き換える）。
     h.running[0]!.request = '';
     h.setTranscript('mgr-1', assistantLine('この本文は part=request では見に行かれないはず'));
 
     const reply = await h.call('manager_report', { managerId: 'mgr-1', part: 'request' });
 
     expect(reply).toContain('依頼文が記録に無い');
-    // 生ログには一度も問い合わせていない。
     expect(h.transcriptCalls).toEqual([]);
   });
 
   it('生ログにも本文が無いとき「まだ無い」のままで、⚠は出さない（本文の無い assistant 行だけの生ログ）', async () => {
     const h = harness();
     await h.call('manager_start', { request: '調べて' });
-    // lastReport は未設定のまま（＝まだ書いていないかもしれない状態）。
-    // 生ログには assistant の行はあるが、本文（text）を持たない
-    // （tool_use だけの行——道具呼び出しはしたが、まだ喋っていない）。
     const noBodyTranscript = [
       JSON.stringify({
         type: 'user',
@@ -10396,9 +10172,6 @@ describe('manager_report: 報告が空のとき、生ログを見て言い分け
         timestamp: '2026-08-26T20:30:00.000Z',
         message: { role: 'user', content: 'ping' },
       }),
-      // **stop_reason: 'end_turn' を明示する。** これが無いと「そのターンが
-      // 終わったこと」を示せず、#323 として名乗ってはいけない
-      // （`describeMissingReport` の3分岐——直上の doc）。
       assistantLine(reportBody, { timestamp: '2026-08-26T20:31:59.107Z', stopReason: 'end_turn' }),
     ].join('\n');
     h.setTranscript('mgr-1', transcript);
@@ -10411,16 +10184,12 @@ describe('manager_report: 報告が空のとき、生ログを見て言い分け
     expect(reply).toContain('2026-08-26T20:31:59.107Z');
     expect(reply).toMatch(new RegExp(`約\\s*${reportBody.length}\\s*文字`));
     expect(reply).toContain('manager_transcript managerId=mgr-1 offset=');
-    // 本文そのものは積まない（返すのは「在る」ことと timestamp・長さだけ）。
     expect(reply).not.toContain(reportBody);
   });
 
   it('生ログの最後の発言が end_turn ではない（ターン途中）とき、断定しない——⚠ も #323 も付けない', async () => {
     const h = harness();
     await h.call('manager_start', { request: '調べて' });
-    // 実測（コーディネーターの報告）: 本文（type: 'text'）を持つ行でも
-    // stop_reason が 'tool_use' のことがある——道具を挟む前の語り
-    // （ターンの途中）。健全に働いている最中を欠陥として名乗ってはいけない。
     const midTurnBody = 'これから道具を呼ぶ前の語り（ターンはまだ終わっていない）';
     const transcript = [
       assistantLine(midTurnBody, { timestamp: '2026-08-26T20:31:59.107Z', stopReason: 'tool_use' }),
@@ -10434,15 +10203,12 @@ describe('manager_report: 報告が空のとき、生ログを見て言い分け
     expect(reply).toContain('2026-08-26T20:31:59.107Z');
     expect(reply).toContain('stop_reason=tool_use');
     expect(reply).toContain('まだ終わっていない');
-    // 本文そのものは積まない。
     expect(reply).not.toContain(midTurnBody);
   });
 
   it('生ログの最後の発言に stop_reason 欄が無いとき、終わっているかどちらとも名乗らない', async () => {
     const h = harness();
     await h.call('manager_start', { request: '調べて' });
-    // stopReason を渡さない＝ message に stop_reason 欄が無い行を作る
-    // （版が古い・欄が欠けている、を模す）。
     const unknownBody = '古い形式か何かで stop_reason が欠けている行';
     const transcript = [assistantLine(unknownBody, { timestamp: '2026-08-26T20:33:00.000Z' })].join(
       '\n',
@@ -10451,7 +10217,6 @@ describe('manager_report: 報告が空のとき、生ログを見て言い分け
 
     const reply = await h.call('manager_report', { managerId: 'mgr-1' });
 
-    // 「終わっていない」とも「終わった＝配られていない」とも言わない。
     expect(reply).not.toContain('⚠');
     expect(reply).not.toContain('#323');
     expect(reply).not.toContain('まだ終わっていない');
@@ -10471,14 +10236,9 @@ describe('manager_report: 報告が空のとき、生ログを見て言い分け
 
     const workerOnlyReply = await h.call('manager_report', { managerId: 'mgr-1' });
 
-    // 作業者の発言しか無いなら、マネージャー自身の発言としては見つからない。
     expect(workerOnlyReply).not.toContain('⚠');
     expect(workerOnlyReply).toContain('生ログにも本文は無い');
 
-    // マネージャー自身の発言（isSidechain: false）の**後に**作業者の発言が
-    // 続く生ログを作る。末尾から遡る実装が、末尾の作業者の行を素通りして
-    // その手前のマネージャー自身の行まで正しく遡れるかを見る
-    // （末尾がたまたま一致するだけでは検算できないので、順序を逆にする）。
     const withManagerLine = [
       assistantLine('マネージャー自身の発言', {
         timestamp: '2026-08-26T20:32:10.000Z',
@@ -10525,10 +10285,6 @@ describe('manager_report: 報告が空のとき、生ログを見て言い分け
   it('上限（REPORT_GENERATED_PROBE_CHARS）まで遡っても見つからなかったら「見つからなかった」であって「無い」ではない', async () => {
     const h = harness();
     await h.call('manager_start', { request: '調べて' });
-    // 200,000 文字を超え、かつ改行が1つも無い巨大な1行（JSON として parse
-    // できない）。末尾から切り出した断片は「途中で千切れているかもしれない
-    // 先頭」として捨てられるので、この生ログは実質1行も読めない——
-    // 「生ログ全体を見て無かった」とは言えない状態を作る。
     const huge = 'x'.repeat(250_000);
     h.setTranscript('mgr-1', huge);
 
@@ -10542,13 +10298,6 @@ describe('manager_report: 報告が空のとき、生ログを見て言い分け
   });
 });
 
-/**
- * `manager_transcript` — 可観測性の最下段（セッションそのものの生ログ）。
- *
- * **`manager_report` に `part: 'transcript'` を足す形にしなかった理由**は
- * 実装側のコメントに書いた（`null` の意味が違う・大きさの桁が違う・契約が
- * 2つになる）。ここではその実物を保証ごとに1本ずつ確かめる。
- */
 describe('manager_transcript（生ログへ降りる）', () => {
   it('生ログの全文へ降りられる（lastReport の抜粋ではなく transcript() の中身が返る）', async () => {
     const h = harness();
@@ -10568,9 +10317,6 @@ describe('manager_transcript（生ログへ降りる）', () => {
     await h.call('manager_start', { request: '調べて' });
     const body = 'x'.repeat(9_000);
     h.setTranscript('mgr-1', body);
-    // **`lastReport` にも同じ内容を置いておく。** この保証（切ったら黙らない）は
-    // 「本文がどこから来たか」（それは別の歯が守る）とは独立に測りたいので、
-    // 本文の出所を差し替える変異が紛れ込んでも実害が出ないようにしてある。
     for (const summary of h.running) summary.lastReport = body;
 
     const reply = await h.call('manager_transcript', { managerId: 'mgr-1' });
@@ -10583,13 +10329,9 @@ describe('manager_transcript（生ログへ降りる）', () => {
   it('offset で続きが取れる', async () => {
     const h = harness();
     await h.call('manager_start', { request: '調べて' });
-    // **`offset` の指定は 8,000（`TRANSCRIPT_PAGE`）を直接使う。** 前の応答の
-    // 「続きの取り方」の文言から offset を抜き出す形にすると、この保証が
-    // tail の文言（テスト2が守る対象）に依存してしまい、2つの歯が分離しなく
-    // なる（tail を黙らせる変異が offset のテストまで巻き込んで倒す）。
+    // offset は 8,000（`TRANSCRIPT_PAGE`）を直接使う: 前の応答の「続きの取り方」の文言から抜き出すと、tail の文言のテストと分離しなくなるため
     const body = `${'a'.repeat(8_000)}TAIL-MARK`;
     h.setTranscript('mgr-1', body);
-    // 同じ理由で lastReport にも同じ内容を置く（上のテストのコメント参照）。
     for (const summary of h.running) summary.lastReport = body;
 
     const first = await h.call('manager_transcript', { managerId: 'mgr-1' });
@@ -10605,8 +10347,6 @@ describe('manager_transcript（生ログへ降りる）', () => {
   it('3段のどこにも無いとき「無い」と言う（黙って空を返さない）', async () => {
     const h = harness();
     await h.call('manager_start', { request: '調べて' });
-    // setTranscript しない＝走行中の runner・退避済みアーカイブ・預かった
-    // セッションの生ログ、3段のどこにも無い状態を模す。
 
     const reply = await h.call('manager_transcript', { managerId: 'mgr-1' });
 
@@ -10616,10 +10356,6 @@ describe('manager_transcript（生ログへ降りる）', () => {
     expect(reply).toMatch(/アーカイブ/);
   });
 
-  /**
-   * #698 — 本文が退避から読めたときは archive id を出力へ添える。**これで
-   * 読んだ直後に `archive_remove` で消せる**（id を手に入れる唯一の経路）。
-   */
   it('退避から読めた本文には archive id が添う（archive_remove で消せるように）', async () => {
     const h = harness();
     await h.call('manager_start', { request: '調べて' });
@@ -10643,10 +10379,6 @@ describe('manager_transcript（生ログへ降りる）', () => {
     expect(reply).not.toContain('archive_remove');
   });
 
-  /**
-   * #698 — 退避はあったが本文が消されている（tombstone）ときは、`missing`
-   * （3段のどこにも無い）とは別の文言になる。「無い」と同じ字面に畳まない。
-   */
   it('本文が消されている（tombstone）ときは、missing とは別の文言で言う', async () => {
     const h = harness();
     await h.call('manager_start', { request: '調べて' });
@@ -10661,7 +10393,6 @@ describe('manager_transcript（生ログへ降りる）', () => {
     expect(reply).toContain('消されている');
     expect(reply).toContain('mgr-1-removed-0001.jsonl');
     expect(reply).toContain('123');
-    // **missing の文言（直上の歯）と混ざらない。**
     expect(reply).not.toContain('3段のどこにも見当たらなかった');
   });
 
@@ -10675,17 +10406,10 @@ describe('manager_transcript（生ログへ降りる）', () => {
     expect(reply).toContain('manager_transcript');
   });
 
-  /**
-   * #634 — 3段のどこにも生ログが無いとき、「まだ引き渡していない」と
-   * 「引き渡せずに消えた」を言い分ける（PR #628 が範囲外として報告した穴）。
-   * 材料は `ManagerPool.runnerIdOf()`（往復なし）と `runnerBacklog()`
-   * （キャッシュ。往復なし）だけで、新しい往復は無い。
-   */
   describe('生ログが無いとき、脚の状態から「まだ引き渡していない」と「引き渡せずに消えた」を言い分ける（#634）', () => {
     it('器が入れ替わった後（instanceSwapped: true）: 「引き渡せずに消えた可能性が高い」', async () => {
       const h = harness();
       await h.call('manager_start', { request: '調べて' });
-      // setTranscript しない = 3段のどこにも無い。
       h.setRunnerBacklog([
         {
           runnerId: 'runner-test',
@@ -10702,10 +10426,7 @@ describe('manager_transcript（生ログへ降りる）', () => {
       expect(reply).toContain('引き渡せずに消えた可能性が高い');
       expect(reply).toContain('7 件');
       expect(reply).toContain('runner-test');
-      // **「可能性が高い」と「そうである」を混ぜない。** archive が含まれて
-      // いたかは runner が種別を名乗らない以上わからない、と明記すること。
       expect(reply).toContain('archive が含まれていたかもここからは言えない');
-      // 3つ目の状態（「id 自体が台帳に無い場合と区別できない」）の断りは消さない。
       expect(reply).toContain('区別できない');
     });
 
@@ -10726,7 +10447,6 @@ describe('manager_transcript（生ログへ降りる）', () => {
 
       expect(reply).toContain('まだ引き渡していない可能性がある');
       expect(reply).toContain('4 件');
-      // `describeRunnerLegState` を再利用しているので、待ってよいことも読める。
       expect(reply).toContain('まだ届いていない。届く見込みがある');
       expect(reply).not.toContain('引き渡せずに消えた');
     });
@@ -10752,7 +10472,6 @@ describe('manager_transcript（生ログへ降りる）', () => {
     it('どちらとも言えない（runnerBacklog に材料が無い）: 「判定できない」', async () => {
       const h = harness();
       await h.call('manager_start', { request: '調べて' });
-      // setRunnerBacklog を呼ばない = まだ一度も観測していない。
 
       const reply = await h.call('manager_transcript', { managerId: 'mgr-1' });
 
@@ -10790,14 +10509,6 @@ describe('manager_transcript（生ログへ降りる）', () => {
   });
 });
 
-/**
- * `manager_transcript` の絞り（since/until/type/contains。issue #2188）。
- *
- * **絞りの計算そのもの**（窓の両端・時刻の無い行・読めない行・type の複数・
- * contains・組み合わせ）は `transcript-filter.test.ts` が測る。ここで測るのは
- * **道具の応答の形**——数え上げの行が出ること・続きの案内に絞りが載ること・
- * 絞りを1つも渡さないと出力が今と1文字も変わらないこと。
- */
 describe('manager_transcript（生ログを絞る。#2188）', () => {
   const assistantLine = (extra: string) =>
     `{"type":"assistant","timestamp":"2026-01-01T10:00:00.000Z"${extra}}`;
@@ -10922,15 +10633,6 @@ describe('manager_transcript（生ログを絞る。#2188）', () => {
   });
 });
 
-/**
- * `archive_remove` — アーカイブ済みセッション生ログの本文を1件消す（#698）。
- *
- * **雛形は `memory_delete`。** 同じ作法（存在しない id を黙って成功にしない・
- * `summary` を必須にする）を測る。**走行中のマネージャーの退避は、HTTP の口
- * （`app.test.ts`）とここ（クローンの道具）の両方で拒めることを別々に測る**
- * ——判定所は `ManagerPool.runningManagerOwning()` 1箇所で、2箇所に書くと
- * 片方だけ直る形になる。
- */
 describe('archive_remove（退避済み生ログの本文を消す）', () => {
   it('存在しない id は黙って成功にしない', async () => {
     const h = harness();
@@ -10962,7 +10664,6 @@ describe('archive_remove（退避済み生ログの本文を消す）', () => {
       { type: 'decision'; decision: string; grounds: string } | undefined;
     expect(entry).toBeDefined();
     expect(entry?.grounds).toBe('もう要らないので消した');
-    // **本文は日誌へ写さない**（`BODY` という語が journal に出ない）。
     expect(entries.some((e) => e.type === 'decision' && e.decision.includes('BODY'))).toBe(false);
   });
 
@@ -10976,13 +10677,6 @@ describe('archive_remove（退避済み生ログの本文を消す）', () => {
     expect(reply).toContain('前から消されている');
   });
 
-  /**
-   * ⚠️ ここだけは文言そのものを見る——測りたいのが、消したバイト数の断りが
-   * 単位を誤読させないことそのものだから（Issue #2074 / PR #2076 の残り）。
-   * 消した量を出す口（単体削除の応答・日誌・二重削除・`manager_transcript`・
-   * `manager_report`）が、`archive_remove_many` と同じ断り（素の UTF-8
-   * バイト数で、`storedBytes` とは別の単位）を1つの正本から出すことを測る。
-   */
   it('消したバイト数に、置き場で解放した量ではないという単位の断りが付く（応答・日誌・二重削除。#2074）', async () => {
     const h = harness();
     const archiveId = (await h.stores.archive.archive('sess-unit', 'BODY\n')).id;
@@ -11024,7 +10718,6 @@ describe('archive_remove（退避済み生ログの本文を消す）', () => {
     }
   });
 
-  /** ⭐ 走行中のマネージャーの退避は、クローンの道具からも消せない（#698）。 */
   it('走行中のマネージャーの退避は消せない（どのマネージャーが走行中かを言う）', async () => {
     const h = harness();
     const archiveId = (await h.stores.archive.archive('sess-running', 'BODY\n')).id;
@@ -11034,16 +10727,9 @@ describe('archive_remove（退避済み生ログの本文を消す）', () => {
 
     expect(reply).toContain('消せない');
     expect(reply).toContain('mgr-running-1');
-    // 拒んだので何も変わっていない。
     expect(await h.stores.archive.read(archiveId)).toEqual({ kind: 'body', body: 'BODY\n' });
   });
 
-  /**
-   * ⭐ north_star 禁止2（追加制限禁止）——既定拒否は方針であり、方針は
-   * 設定で開けられなければならない。`overrideReason` が開ける口。**理由を
-   * 残さず黙って通る経路は無い**——override したら journal に事実と理由が
-   * 残ることを測る。
-   */
   it('overrideReason を渡せば走行中でも消せる（理由が journal に残る）', async () => {
     const h = harness();
     const archiveId = (await h.stores.archive.archive('sess-override', 'BODY\n')).id;
@@ -11058,7 +10744,6 @@ describe('archive_remove（退避済み生ログの本文を消す）', () => {
     expect(reply).toContain('消した');
     expect(reply).toContain('override');
     expect(reply).toContain('mgr-running-2');
-    // 本文は実際に落ちている（override が通った）。
     expect(await h.stores.archive.read(archiveId)).toMatchObject({ kind: 'removed' });
 
     const entries = await h.stores.journal.list({ types: ['decision'] });
@@ -11102,7 +10787,6 @@ describe('archive_remove（退避済み生ログの本文を消す）', () => {
   it('走行中でなければ overrideReason を渡さなくても普通に消せる（override の有無で通常経路が変わらない）', async () => {
     const h = harness();
     const archiveId = (await h.stores.archive.archive('sess-not-running', 'BODY\n')).id;
-    // setRunningManagerOwning しない ＝ 誰も走行中に抱えていない。
 
     const reply = await h.call('archive_remove', { archiveId, summary: '掃除' });
 
@@ -11110,12 +10794,6 @@ describe('archive_remove（退避済み生ログの本文を消す）', () => {
     expect(reply).not.toContain('override');
   });
 
-  /**
-   * `context.managers` が無い場面（委譲の道具が配線されていない内部ターン）
-   * では、走行中かどうかを確かめる材料が無い——安全側に倒して消させない。
-   * `harness()` は常に `managers` を渡すので、ここだけは `createCloneTools`
-   * を直接呼ぶ。
-   */
   it('managers が配線されていない場面では、安全側に倒して消させない', async () => {
     const stores = createMemoryStores();
     const archiveId = (await stores.archive.archive('sess-no-pool', 'BODY\n')).id;
@@ -11134,19 +10812,10 @@ describe('archive_remove（退避済み生ログの本文を消す）', () => {
       .join('');
 
     expect(text).toContain('消せない');
-    // 拒んだので何も変わっていない。
     expect(await stores.archive.read(archiveId)).toEqual({ kind: 'body', body: 'BODY\n' });
   });
 });
 
-/**
- * 状態の表示が、**観測していないことまで語らない**こと。
- *
- * ここで固定しているのは「何を言うか」ではなく「**何を言わないか**」である。
- * デーモンが観測できるのは限られている（セッションへ戻れたか / 拒否があったか /
- * マネージャーのターンが終わったか）のに、文言はその先まで — 仕事が失われた、
- * 走っている、走っている手は無い — と断定していた。断定は静かに間違う。
- */
 describe('一覧の文言は、観測した分しか言わない', () => {
   /**
    * **実際に起きた誤りをそのまま置いてある。**
@@ -20348,7 +20017,6 @@ describe('#857: lost / failed の中を「依頼者が何を知らないか」�
     };
   }
 
-  /** `startedAt` 降順で積む（本物の `ManagerPool.list()` と同じ並び）。 */
   function pool(entries: readonly ManagerSummary[]): Harness {
     const h = harness();
     for (const item of [...entries].sort((a, b) => b.startedAt.localeCompare(a.startedAt))) {
