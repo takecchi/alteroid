@@ -113,6 +113,15 @@ describe('編集の書きかけ（#3707）', () => {
     expect([...loadEditDrafts().keys()]).toEqual(['m2']);
   });
 
+  it('編集で足したファイルの名前（lostNames）も残して読み戻す（#3779）', () => {
+    saveEditDraft('m1', { text: '直した', attachments: [], lostNames: ['extra.txt'] });
+    expect(loadEditDrafts().get('m1')).toEqual({
+      text: '直した',
+      attachments: [],
+      lostNames: ['extra.txt'],
+    });
+  });
+
   it('壊れた値は読み飛ばし、ほかを巻き込まない。本文の鍵とも混ざらない', () => {
     sessionStorage.setItem('alteroid.editDraft:bad', '{oops');
     sessionStorage.setItem('alteroid.editDraft:bad2', JSON.stringify({ text: 1 }));
