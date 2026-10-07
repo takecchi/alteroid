@@ -120,6 +120,25 @@ export const STATEMENTS = [
      deliveries integer not null default 0
    )`,
   `create index if not exists inbox_events_at_idx on inbox_events (at)`,
+  // 同じ `at` の決め手（入れた順。#4059）。手順と理由は台帳の `seq` と同じ:
+  // 入れた順は残っていないので、既存の行へは物理順ではなく `(at, id)` で振る。
+  `alter table inbox_events add column if not exists seq bigint`,
+  `create sequence if not exists inbox_events_seq_seq`,
+  `update inbox_events e set seq = n.rn
+     from (
+       select id,
+         row_number() over (order by at, id)
+           + coalesce((select max(seq) from inbox_events), 0) as rn
+       from inbox_events
+       where seq is null
+     ) n
+     where e.id = n.id and e.seq is null`,
+  `select setval('inbox_events_seq_seq', m.top, true)
+     from (select max(seq) as top from inbox_events) m,
+          (select last_value, is_called from inbox_events_seq_seq) s
+     where m.top is not null
+       and m.top >= case when s.is_called then s.last_value + 1 else s.last_value end`,
+  `alter table inbox_events alter column seq set default nextval('inbox_events_seq_seq')`,
 
   `create table if not exists archive (
      id text primary key,
