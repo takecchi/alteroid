@@ -932,6 +932,98 @@ describe('alteroid profile rm / clear の確認（#3141）', () => {
   });
 });
 
+describe('alteroid profile rm は、確認の前に在るかを確かめる（#3838）', () => {
+  function fakeIo(over: { isTTY: boolean; answer?: string }) {
+    const asked: string[] = [];
+    const written: string[] = [];
+    const io: ConfirmIo = {
+      isTTY: over.isTTY,
+      write: (text) => {
+        written.push(text);
+      },
+      ask: (question) => {
+        asked.push(question);
+        return Promise.resolve(over.answer ?? '');
+      },
+    };
+    return { io, asked, written };
+  }
+  const requests = () => sent.map((entry) => `${entry.method} ${new URL(entry.url).pathname}`);
+
+  it('無い行は、確認を出さずに失敗する。要求は GET /profile だけ（再現）', async () => {
+    setReply('GET', '/profile', {
+      status: 200,
+      body: profileBody([entryOf('rust', 'export R=1\n')]),
+    });
+    const { io, asked, written } = fakeIo({ isTTY: true, answer: 'yes' });
+
+    await expect(profileRemoveCommand('ghost', {}, io)).rejects.toThrow(
+      'プロファイルに行 ghost は無い',
+    );
+
+    expect(asked).toEqual([]);
+    expect(written).toEqual([]);
+    expect(requests()).toEqual(['GET /profile']);
+  });
+
+  it('無い行は、端末でなく --yes も無くても「無い」で失敗する（--yes の案内に化けない）', async () => {
+    setReply('GET', '/profile', { status: 200, body: profileBody([]) });
+    const { io } = fakeIo({ isTTY: false });
+
+    const error = await profileRemoveCommand('ghost', {}, io).catch((e: unknown) => e);
+
+    expect(String(error)).toContain('プロファイルに行 ghost は無い');
+    expect(String(error)).not.toContain('--yes');
+    expect(requests()).toEqual(['GET /profile']);
+  });
+
+  it('在る行は、従来どおり 確認 → DELETE', async () => {
+    captureStdout();
+    setReply('GET', '/profile', {
+      status: 200,
+      body: profileBody([entryOf('rust', 'export R=1\n')]),
+    });
+    setReply('DELETE', '/profile/rust', { status: 200, body: updateBody([]) });
+    const { io, asked, written } = fakeIo({ isTTY: true, answer: 'yes' });
+
+    await profileRemoveCommand('rust', {}, io);
+
+    expect(written.join('')).toContain('プロファイルの行 rust を外します');
+    expect(asked).toHaveLength(1);
+    expect(requests()).toEqual(['GET /profile', 'DELETE /profile/rust']);
+  });
+
+  it('在る行でも、確認に yes と答えなければ DELETE は打たない', async () => {
+    setReply('GET', '/profile', {
+      status: 200,
+      body: profileBody([entryOf('rust', 'export R=1\n')]),
+    });
+    const { io } = fakeIo({ isTTY: true, answer: 'no' });
+
+    await expect(profileRemoveCommand('rust', {}, io)).rejects.toThrow();
+
+    expect(requests()).toEqual(['GET /profile']);
+  });
+
+  it('古いデーモン（旧形式）は、行の有無を見ず、従来どおり 確認 → 空の PUT', async () => {
+    captureStdout();
+    setReply('GET', '/profile', {
+      status: 200,
+      body: { script: 'export OLD=1\n', updatedAt: '2026-08-01T00:00:00Z', sha256: 'o', bytes: 13 },
+    });
+    setReply('PUT', '/profile', {
+      status: 200,
+      body: { updatedAt: 'T', clone: { ok: true }, runners: [] },
+    });
+    const { io, asked } = fakeIo({ isTTY: true, answer: 'yes' });
+
+    await profileRemoveCommand('default', {}, io);
+
+    expect(asked).toHaveLength(1);
+    expect(requests()).toEqual(['GET /profile', 'PUT /profile']);
+  });
+});
+
 describe('alteroid profile set の上書き確認（#3201）', () => {
   function fakeIo(over: { isTTY: boolean; answer?: string }) {
     const asked: string[] = [];

@@ -317,14 +317,22 @@ export async function profileEditCommand(
 export async function profileRemoveCommand(
   nameArg: string,
   options: { yes?: boolean } = {},
+  io?: ConfirmIo,
 ): Promise<void> {
   const name = parseName(nameArg);
   const target = await resolveTarget();
   const profile = await fetchProfile(target);
   assertLegacySupports(profile, name);
+  // **確認の前に、在るかを見る**（Issue #3838）。上で元から読んでいる行の一覧を使う（新しい呼び出しは
+  // 足していない）。無い名前には確認も DELETE も出さず、DELETE の 404 と同じ文言で失敗する。
+  // **古いデーモン（`legacy`）は見ない**——行の一覧が旧形式の合成で、空の PUT へ倒す既存の挙動のまま。
+  if (!profile.legacy && !profile.entries.some((row) => row.name === name)) {
+    throw new Error(`プロファイルに行 ${name} は無い`);
+  }
   await confirmIrreversible(
     `プロファイルの行 ${name} を外します。行の本文は残りません（控えるなら alteroid profile show ${name}）。`,
     options,
+    io,
   );
   // 古いデーモンには DELETE /profile/:name が無い。default の行は全部外す口（空の PUT）へ倒す。
   const result = (await (profile.legacy

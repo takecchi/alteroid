@@ -432,13 +432,19 @@ export async function conversationsReadCommand(id: string): Promise<void> {
 export async function markConversationReadAfterReply(
   target: Target,
   conversationId: string,
+  /** 渡されたら、Ctrl+C などでの取り消しに使う。取り消したら何も言わずに終える（取り消した旨は呼び手が言う）。 */
+  signal?: AbortSignal,
 ): Promise<void> {
+  const options = signal === undefined ? undefined : { init: { signal } };
   try {
     const client = createClient(target.baseUrl, target.headers);
-    const detail = await client.conversations[':id'].$get({
-      param: { id: conversationId },
-      query: {},
-    });
+    const detail = await client.conversations[':id'].$get(
+      {
+        param: { id: conversationId },
+        query: {},
+      },
+      options,
+    );
     if (!detail.ok) {
       throw new Error(
         await withErrorReason(`会話を読めませんでした（HTTP ${String(detail.status)}）`, detail),
@@ -447,10 +453,13 @@ export async function markConversationReadAfterReply(
     const { messages } = await detail.json();
     const latest = messages.filter((m) => m.supersededBy === undefined).at(-1);
     if (latest === undefined) return;
-    const response = await client.conversations[':id'].read.$post({
-      param: { id: conversationId },
-      json: { through: latest.id },
-    });
+    const response = await client.conversations[':id'].read.$post(
+      {
+        param: { id: conversationId },
+        json: { through: latest.id },
+      },
+      options,
+    );
     if (!response.ok) {
       throw new Error(
         await withErrorReason(
@@ -460,6 +469,7 @@ export async function markConversationReadAfterReply(
       );
     }
   } catch (error) {
+    if (signal?.aborted === true) return;
     const reason = error instanceof Error ? error.message : String(error);
     stdout.write(`  （この会話を既読にできませんでした: ${redactBody(reason)}）\n`);
   }

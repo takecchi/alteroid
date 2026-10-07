@@ -6,25 +6,6 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { createRunnerApp, Outbox } from './app.js';
 
-/**
- * Issue #275: `await stream.writeSSE()` が**例外を投げずに正常返却**したのに、
- * 相手には届いていなかった1件（無音切断）が跡なく消える。
- *
- * `apps/runner/src/events-write-failure.test.ts`（#358）が測るのは
- * 「`writeSSE` が**投げた**とき」の手当てで、そちらは `writing` 変数経由で
- * 既に直っている。**ここが測るのはその裏側**——`writeSSE` が投げずに戻った
- * 場合は `writing = null` が即座に走り、`finally` の再投入（`if (writing !==
- * null) outbox.push(...)`）を素通りする。これは #358 の直し方そのものが
- * 意図的に踏んでいない窓であり、直したのは `Outbox.recordSent` /
- * `Outbox.sentSince`（SSE の `id` / `Last-Event-ID`）である。
- *
- * **測り方は #358 の歯（`events-write-failure.test.ts`）と対で読む。**
- * `writeSSE` は本物のまま実行させ（投げさせない）、書き終わった直後に
- * 読まずに `reader.cancel()` する——「runner から見れば成功したが、相手は
- * 1バイトも受け取っていない」状態を、送った側のバッファに残った未読の
- * bytes として作る。「戻った」で終わらせず、`Last-Event-ID` を持った
- * 2本目の接続がその出来事を実際に受け取れることまで確かめる。
- */
 const TOKEN = 'daemon-only-token';
 const TOKEN_SHA256 = createHash('sha256').update(TOKEN, 'utf8').digest('hex');
 
@@ -40,7 +21,6 @@ function newHost(): RunnerHost {
   });
 }
 
-/** `events-write-failure.test.ts` と同じ形——期限で読み、来なければ空のまま返す。 */
 async function readUntil(
   reader: ReadableStreamDefaultReader<Uint8Array>,
   needle: string,
@@ -82,16 +62,7 @@ describe('runner の /events: 無音切断（writeSSE が投げずに戻る）�
     let wroteEvent = false;
     let cancelFirst: (() => Promise<void>) | null = null;
     let cancelled = false;
-    // **`event` 種別の書き込みが始まった瞬間に、相手側の reader を切る。**
-    //
-    // hono の `write()` は内部で例外を握り潰す（`catch {}`）ので、`writer.write`
-    // がどう終わっても `writeSSE` 自体は投げない。**だから「相手が切れたのは
-    // 書いている最中」を再現するには、writeSSE の中で切る必要がある** ——
-    // 外側で `reader` を読まずに待つ形だと、hono の内部ストリームの
-    // backpressure（既定 highWaterMark=1）に阻まれて `hello` の次の
-    // チャンクが詰まったまま `writeSSE` 自体が戻らず、テストがデッドロック
-    // する（実測）。ロジック本体（`app.ts`）は1行も変えていない——ここで
-    // 動かしているのは「相手がいつ切れるか」というテスト側の時刻だけである。
+    // 外側で `reader` を読まずに待たず、`writeSSE` の中で切る: hono の backpressure で `hello` の次のチャンクが詰まり、`writeSSE` が戻らずデッドロックするため。
     const spy = vi.spyOn(SSEStreamingApi.prototype, 'writeSSE').mockImplementation(async function (
       this: SSEStreamingApi,
       message: SSEMessage,
@@ -117,23 +88,12 @@ describe('runner の /events: 無音切断（writeSSE が投げずに戻る）�
       const firstBody = first.body;
       if (firstBody === null) throw new Error('SSE の応答に本文が無い');
       const firstReader = firstBody.getReader();
-      // **ここが要点——1バイトも読まずに切る。** 上のモックが、`event`
-      // 種別の書き込みが始まった瞬間にこれを呼ぶ。`write()` は例外を出さない
-      // ので runner 側からは「投げずに戻った」ようにしか見えない——これが
-      // 「相手には届いていない無音切断」のこのテストでの表現である。
       cancelFirst = () => firstReader.cancel();
 
-      // **`writeSSE` が実際に返り終えるまで待つ。** それより前段（`hello` の
-      // 段階）で切ると、#358 の経路（`queue`/`writing` からの再投入）を
-      // 測ることになり、ここで確かめたい「投げずに戻った後」の窓を踏まない。
       await expect.poll(() => wroteEvent, { timeout: 1000 }).toBe(true);
 
-      // `finally` は走るが、`writing === null` なので outbox へは戻らない
-      // ——直す前はここで本当に消えていた。
       await expect.poll(() => outbox.pending, { timeout: 1000 }).toBe(0);
 
-      // 2本目: 直前に受け取れた最後の連番として `seq - 1`（＝1件も受け取れて
-      // いない）を申告する。
       const second = await app.request('/events', {
         headers: bearer({ 'Last-Event-ID': String(seq - 1) }),
       });
@@ -143,8 +103,6 @@ describe('runner の /events: 無音切断（writeSSE が投げずに戻る）�
 
       const redelivered = await readUntil(secondReader, JSON.stringify(event), 1000);
       expect(redelivered).toContain(JSON.stringify(event));
-      // **フレームの `id` にも連番が乗ること。** SSE のフレーム側だけで
-      // 完結させる設計（`OutboxSeq` の doc）そのものを、配線の末端で確認する。
       expect(redelivered).toContain(`id: ${String(seq)}`);
 
       await secondReader.cancel();
@@ -197,7 +155,6 @@ describe('runner の /events: 無音切断（writeSSE が投げずに戻る）�
       await expect.poll(() => wroteEvent, { timeout: 1000 }).toBe(true);
       await expect.poll(() => outbox.pending, { timeout: 1000 }).toBe(0);
 
-      // `Last-Event-ID` を付けない、素の再接続。
       const second = await app.request('/events', { headers: bearer() });
       const secondBody = second.body;
       if (secondBody === null) throw new Error('SSE の応答に本文が無い');
@@ -217,7 +174,6 @@ describe('runner の /events: 無音切断（writeSSE が投げずに戻る）�
 describe('runner の入れ替わり後の無音切断（#3036）', () => {
   it('前の runner の高い Last-Event-ID を申告されても、新しい runner（連番1から）の控えを1回ずつ配り直す', async () => {
     const host = newHost();
-    // **新しい runner の箱**——連番は1から数え直す。
     const outbox = new Outbox();
     const lost: RunnerEvent = { type: 'session', managerId: 'mgr-swap', sessionId: 'sess-lost' };
     const seq = outbox.push(lost);
@@ -255,7 +211,6 @@ describe('runner の入れ替わり後の無音切断（#3036）', () => {
       await expect.poll(() => wroteEvent, { timeout: 1000 }).toBe(true);
       await expect.poll(() => outbox.pending, { timeout: 1000 }).toBe(0);
 
-      // デーモンは前の runner の連番 50 を握ったまま繋ぎ直す。
       const second = await app.request('/events', {
         headers: bearer({ 'Last-Event-ID': '50' }),
       });
@@ -265,7 +220,6 @@ describe('runner の入れ替わり後の無音切断（#3036）', () => {
 
       const seen = await readUntil(secondReader, JSON.stringify(lost), 1000);
       expect(seen).toContain(JSON.stringify(lost));
-      // 二重配信にならない: 同じ出来事のフレームは1本だけ。
       expect(seen.split(JSON.stringify(lost)).length - 1).toBe(1);
       await secondReader.cancel();
     } finally {
@@ -281,7 +235,6 @@ describe('Outbox.recordSent / sentSince（#275）', () => {
     const e1: RunnerEvent = { type: 'session', managerId: 'a', sessionId: '1' };
     const e2: RunnerEvent = { type: 'session', managerId: 'a', sessionId: '2' };
     const e3: RunnerEvent = { type: 'session', managerId: 'a', sessionId: '3' };
-    // 連番は箱が振ったものだけを使う（箱の外の連番は #3036 で別扱い）。
     const record = (event: RunnerEvent): number => {
       const seq = outbox.push(event);
       outbox.recordSent(event, seq, '2026-01-01T00:00:00.000Z');
@@ -308,11 +261,6 @@ describe('Outbox.recordSent / sentSince（#275）', () => {
     expect(outbox.sentSince(0).map((i) => i.seq)).toEqual([1, 2]);
   });
 
-  /**
-   * **#3808: 読み返して書いた出来事を、控えへ積み直さない。** 1本目で書いたが届かず、
-   * 2本目（読み返し）も届かずに切れ、3本目が同じ `Last-Event-ID` で繋ぐ。積み直すと
-   * 控えに同じ連番が2つ入り、3本目で同じ出来事が2回流れる。
-   */
   it('読み返しの書き込みも無音で切れ続けても、3本目で同じ連番は1回だけ流れ、控えは増えない（#3808）', async () => {
     const host = newHost();
     const outbox = new Outbox();
@@ -321,7 +269,6 @@ describe('Outbox.recordSent / sentSince（#275）', () => {
 
     const realWriteSSE = SSEStreamingApi.prototype.writeSSE;
     let eventWrites = 0;
-    // 3本目からは切らない。それまでは、イベントを書く瞬間に相手の reader を切る。
     let cancelCurrent: (() => Promise<void>) | null = null;
     const spy = vi.spyOn(SSEStreamingApi.prototype, 'writeSSE').mockImplementation(async function (
       this: SSEStreamingApi,
@@ -351,21 +298,17 @@ describe('Outbox.recordSent / sentSince（#275）', () => {
         return res.body.getReader();
       };
 
-      // 1本目: 書いたが届かない。
       const first = await open(bearer());
       cancelCurrent = () => first.cancel();
       await expect.poll(() => eventWrites, { timeout: 1000 }).toBe(1);
       await expect.poll(() => outbox.pending, { timeout: 1000 }).toBe(0);
 
-      // 2本目: 読み返して書くが、これも届かない。
       const second = await open(bearer({ 'Last-Event-ID': String(seq - 1) }));
       cancelCurrent = () => second.cancel();
       await expect.poll(() => eventWrites, { timeout: 1000 }).toBe(2);
-      // 書き込みの直後の `recordSent` まで進ませる（実時間の待ちではない）。
       await new Promise<void>((resolve) => setImmediate(resolve));
       expect(outbox.sentSince(seq - 1).map((i) => i.seq)).toEqual([seq]);
 
-      // 3本目: 同じ申告。同じ出来事が1回だけ流れる。
       const third = await open(bearer({ 'Last-Event-ID': String(seq - 1) }));
       const seen = await readUntil(third, JSON.stringify(event), 1000);
       expect(seen.split(JSON.stringify(event)).length - 1).toBe(1);
@@ -378,12 +321,6 @@ describe('Outbox.recordSent / sentSince（#275）', () => {
     }
   });
 
-  /**
-   * **#3036: 箱が一度も振っていない連番（前の runner の高い値）を申告されたら、控えを
-   * 全部返す。** 返さないと、runner が入れ替わって連番が1から数え直しになったあと、
-   * 無音切断で消えた分が配り直されない。**境界**: 振った最大（`nextSeq - 1`）ちょうどは
-   * 「箱の中」であり、何も返さない（取れた分を二重に配らない）。
-   */
   it('箱が振っていない連番の申告は、控えを全部返す。振った最大ちょうどは何も返さない（#3036）', () => {
     const outbox = new Outbox();
     const e1: RunnerEvent = { type: 'session', managerId: 'a', sessionId: '1' };
@@ -399,12 +336,6 @@ describe('Outbox.recordSent / sentSince（#275）', () => {
     expect(outbox.sentSince(s1).map((i) => i.seq)).toEqual([s2]);
   });
 
-  /**
-   * **上限（`Outbox.SENT_HISTORY_LIMIT`）を超えた分は古い順に捨てる。**
-   *
-   * 直す前の挙動（無条件に消える）より悪くはならない、という設計そのものの
-   * 検査——上限に当たっても例外にはならず、単に古い方から読めなくなる。
-   */
   it('SENT_HISTORY_LIMIT を超えた分は古い方から捨てる', () => {
     const outbox = new Outbox();
     const limit = Outbox.SENT_HISTORY_LIMIT;
@@ -412,7 +343,6 @@ describe('Outbox.recordSent / sentSince（#275）', () => {
       const event: RunnerEvent = { type: 'session', managerId: 'a', sessionId: String(i) };
       outbox.recordSent(event, i, '2026-01-01T00:00:00.000Z');
     }
-    // 直後（1〜5）は捨てられている——lastEventId=0 から見ても現れない。
     const all = outbox.sentSince(0);
     expect(all.length).toBe(limit);
     expect(all[0]?.seq).toBe(6);

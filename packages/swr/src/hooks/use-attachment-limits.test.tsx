@@ -1,8 +1,4 @@
 // @vitest-environment jsdom
-/**
- * `useAttachmentLimits`（`GET /attachments/limits`。#3204）。成功と 404（古いデーモン）は覚えて取り直さず、
- * 接続失敗や壊れた応答のような一時的な失敗は、次にこの hook が使われたとき（画面の表示）に取り直す。
- */
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import { useState } from 'react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -47,7 +43,6 @@ function Probe() {
   );
 }
 
-/** 子を出し入れして「次の画面表示」を作る（SWR のキャッシュは `Providers` が持つので残る）。 */
 function Toggle() {
   const [shown, setShown] = useState(true);
   return (
