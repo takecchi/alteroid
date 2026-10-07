@@ -571,6 +571,18 @@ export function pendingOwnLines(
     const key = lineMatchKey(line);
     remaining.set(key, (remaining.get(key) ?? 0) + 1);
   }
+  /*
+   * **id を持つ手元の人間の行（送った発言。#3826）は、履歴の同じ id の行だけが引き取る。** 本文だけで
+   * 見ると、過去の同じ本文（「はい」）が、いま送った行を引き取って消してしまう。id を持たない履歴の
+   * 行（id 無しで届いた発言）とは、従来どおり本文で突き合わせる。
+   */
+  const historyIds = new Set<string>();
+  const historyUnlabeled = new Map<string, number>();
+  for (const line of historyLines) {
+    if (line.role !== 'human') continue;
+    if (line.clientMessageId !== undefined) historyIds.add(line.clientMessageId);
+    else historyUnlabeled.set(line.text, (historyUnlabeled.get(line.text) ?? 0) + 1);
+  }
   const historyApprovals = new Map<string, PendingApproval>();
   for (const line of historyLines) {
     if (line.approval !== undefined) historyApprovals.set(line.approval.id, line.approval);
@@ -598,9 +610,21 @@ export function pendingOwnLines(
   for (const line of owned) {
     if (line.replyGroup !== undefined && absorbedGroups.has(line.replyGroup)) continue;
     const key = lineMatchKey(line);
-    const count = remaining.get(key) ?? 0;
-    if (count > 0) {
-      remaining.set(key, count - 1);
+    const labeled = line.role === 'human' && line.clientMessageId !== undefined;
+    let taken: boolean;
+    if (labeled && historyIds.has(line.clientMessageId ?? '')) {
+      historyIds.delete(line.clientMessageId ?? '');
+      taken = true;
+    } else if (labeled) {
+      const unlabeled = historyUnlabeled.get(line.text) ?? 0;
+      taken = unlabeled > 0;
+      if (taken) historyUnlabeled.set(line.text, unlabeled - 1);
+    } else {
+      const count = remaining.get(key) ?? 0;
+      taken = count > 0;
+      if (taken) remaining.set(key, count - 1);
+    }
+    if (taken) {
       /*
        * **承認のカードは、手元の行より前にいる行がまだ引き取られていないあいだ、手元の位置に残す
        * （#3396）。** 手元の行（送った発言・受信中の本文）は履歴の後ろに置くので、カードを履歴の側へ
@@ -2186,6 +2210,8 @@ export function ChatPane({
       attachments: readonly MessageAttachment[] | undefined,
       /** 行の持ち主＝**送った先の会話**。いま見ている会話ではない（別の会話へ移ったあとに送ることがある。#3395）。 */
       owner: string | undefined,
+      /** この送信に付けた `clientMessageId`。履歴が引き取るかを、本文ではなくこれで見る（#3826）。 */
+      clientMessageId: string,
     ) => {
       const key = `h-${ownLineSeqRef.current++}-${text.slice(0, 8)}`;
       // 最下部にいなくても、送った直後だけは追従してよい（上の
@@ -2198,6 +2224,7 @@ export function ChatPane({
           role: 'human',
           text,
           of: owner,
+          clientMessageId,
           ...(attachments === undefined || attachments.length === 0 ? {} : { attachments }),
         },
       ]);
@@ -2340,6 +2367,7 @@ export function ChatPane({
         text,
         attachments.flatMap((item) => (item.meta === undefined ? [] : [item.meta])),
         running.id,
+        clientMessageId,
       );
 
       try {
@@ -2944,6 +2972,7 @@ export function ChatPane({
         text,
         attachments.flatMap((item) => (item.meta === undefined ? [] : [item.meta])),
         shownId,
+        clientMessageId,
       );
       let opened = false;
       // 終端（`done` / `error` / `usage_limited`）を見たか。見ないまま閉じたら失敗として出す（#3564）。
