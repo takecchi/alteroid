@@ -2071,69 +2071,15 @@ class Clone implements CloneHost {
     });
   }
 
-  /**
-   * 受け取った合図を未読として器に置く。
-   *
-   * **`post` は同期で返り値を持たない**（7種類の起点すべてがそう呼ぶ）ので、書き
-   * 込みは待てない。したがって「受理した」と「書けた」の間には窓が残る。**そこは
-   * 塞げないが、塞げるのは残り全部である** — この直しの前は「受理してから処理を
-   * 終えるまで」丸ごとが失われる窓で、そこにはターン1本ぶん（マネージャーの委譲を
-   * 含めば数分から数十分）が入っていた。
-   *
-   * **失敗しても post を落とさない。** 未読を書けないことでその合図の処理まで
-   * 止めたら、いま直そうとしているものより広い穴になる。
-   *
-   * **一時的な失敗は `REMEMBER_RETRY_ATTEMPTS` 回まで拾い直す（issue #1085）。**
-   * `#forget` の `inbox.remove` の拾い直しと対になる形——同じストアへの
-   * 書き込みで、器の瞬断だけで即座に諦めない。**有界にする。** 尽きても
-   * この約束（`#unread` に積むもの）は reject しない——reject すると
-   * `#forget` の `await written` が例外で終わり、消し込みそのものが止まる。
-   * 拾い直しても書けなかった最後だけ跡を残す。
-   *
-   * **その跡の文言は `canQueue` で分かれる（issue #1144）。** `canQueue: true`
-   * （呼び出し元がこの呼びの直後に必ず `#inbox.push` する通常経路）なら
-   * 「書けなかった」であって「合図を失った」ではない——このプロセスが
-   * 生きているあいだは配達される。失うのは器が入れ替わったとき
-   * （`#restoreUnread` はストアからしか拾い直せないため）だけである。
-   * `canQueue: false`（`post()` の片付けの窓——`#inbox.push` を一度も
-   * 通らない）なら、その合図はストアにもメモリの待ち行列にも無く、
-   * **本当に失われている**——跡はそう名乗る（`noteInboxEventLost`）。
-   * 呼び出し元（`post()`）が自分がどちらの経路に居るかを知っているので、
-   * ここへ引数として渡させる（`#foldIntoPendingCollapse` が既に持つ同名の
-   * 区別をそのまま流用する——新しい概念を発明しない）。
-   *
-   * 跡は stderr へ1行だけ残す（本文を出さない理由は `dropped-record.ts`。
-   * ここへ来る合図には人間の発言・webhook の本文・マネージャーの報告が入り、
-   * テスト出力（`railway/setup.test.ts` の差分アサーション）に `GH_TOKEN` が
-   * 全文で出た前例がある。#52）。
-   *
-   * **`arrived`（Issue #783 段0）はここで、書き込みの成否を問わずに数える。**
-   * `inbox_flow.arrived` の doc が言う「受理した瞬間であって書けた時刻ではない」
-   * を体現している場所そのもの——拾い直しの結果を待たず関数の入口で数える。
-   */
+  // 失敗しても post を落とさない: 未読を書けないことでその合図の処理まで止めると、直そうとしているものより広い穴になるため
+  // 跡に本文を出さない: 合図には人間の発言・webhook の本文が入り、テスト出力に `GH_TOKEN` が全文で出た前例があるため
+  // `arrived` は書き込みの成否を問わず入口で数える: `inbox_flow.arrived` は受理した瞬間であって書けた時刻ではないため
   #remember(event: InboxEvent, options: { readonly canQueue: boolean }): void {
     this.#inboxFlow.arrived(event.type);
     this.#delivery.setUnread(event.id, this.#persistUnread(event, options));
   }
 
-  /**
-   * `#remember` の書き込みを、一時的な失敗なら `REMEMBER_RETRY_ATTEMPTS` 回まで
-   * 拾い直す（issue #1085）。
-   *
-   * **`#forget` の `inbox.remove` の拾い直しと同じ形。** 間隔は
-   * `REMEMBER_RETRY_MS * attempt`（線形に伸ばす）で、`FORGET_RETRY_MS` と
-   * 同じ値を使う——同じストアの同じ種類の瞬断（一瞬の詰まり・接続の瞬断）に
-   * 対して、書く側と消す側で待ち方を変える理由が無い。
-   *
-   * **尽きても reject しない。** 呼び出し元（`#remember`）がこの約束を
-   * `#unread` へそのまま積み、`#forget` が `await written` で待つ——ここで
-   * reject すると、書けなかった合図の消し込みまで例外で止まってしまう
-   * （`#forget` の doc）。尽きたら跡だけ残して正常に終える。
-   *
-   * **`options.canQueue` は跡の文言だけを分ける（issue #1144）。** 拾い直しの
-   * 回数・間隔・「尽きても reject しない」という挙動そのものは経路によらず
-   * 同じ——変わるのは、尽きたときに何を stderr へ残すかだけである。
-   */
+  // 尽きても reject しない。`#forget` が `await written` で待つので、reject すると書けなかった合図の消し込みまで例外で止まるため
   async #persistUnread(event: InboxEvent, options: { readonly canQueue: boolean }): Promise<void> {
     const failure = await this.#tryPersistUnread(event);
     if (failure === null) return;
@@ -2144,11 +2090,6 @@ class Clone implements CloneHost {
     }
   }
 
-  /**
-   * `#persistUnread` の書き込み部分（拾い直しの回数・間隔はここ1か所）。書けたら `null`、尽きたら最後の
-   * エラーを返す（reject しない）。跡を残すかどうかは呼び手が決める（`post` は残して続行、
-   * `postPersisted` は呼び手へ失敗を返す）。
-   */
   async #tryPersistUnread(event: InboxEvent): Promise<{ readonly error: unknown } | null> {
     let last: unknown;
     for (let attempt = 0; attempt < REMEMBER_RETRY_ATTEMPTS; attempt += 1) {
@@ -2165,49 +2106,13 @@ class Clone implements CloneHost {
     return { error: last };
   }
 
-  /**
-   * 人間の発言を、受理した瞬間に日誌へ残して合図を出す。
-   *
-   * **「一件ずつ判断する」と「発言の記録も一件ずつ待たせる」は別のことである。**
-   * ターンの直列は意図された設計（architecture.md「同時実行モデル」）だが、
-   * 記録をその直列の後ろに置いていたのは帰結であって設計ではなかった。後ろに
-   * 置くと、先客（蒸留・マネージャーとの往復・自律の起点）が走っているあいだ
-   * **日誌にその発言が存在しない** — 日誌から組み立てる `GET /conversations`
-   * にも出ないので、器（端末・タブ・アプリ）を替えた人からは発言そのものが
-   * 消えて見える。「続きから話せること自体が要件」（north_star 禁止1）に
-   * 対して、直列が可視性まで直列にしていた。
-   *
-   * **記録が先、通知は後**（`journal-bus.ts` と同じ順）。日誌へ載れば
-   * `GET /journal/stream` にもそのまま流れるので、**この1か所で「送った本人の
-   * 画面」以外の観測者3種（開き直した人・別端末・API の利用者）が同時に埋まる。**
-   * `queued` はそれに加えて、**まだ順番が来ていない**という日誌に残せない状態
-   * （残すと古くなる）を、いま見ている購読者へ渡すためのものである。
-   *
-   * **失敗しても post を落とさない**（`#remember` と同じ理由）。跡は `#journal`
-   * が `journalEntryShape` へ畳んで stderr へ落とす。
-   *
-   * **人間の発言だけを見る。** 他の6種は起点ごとに違う型で日誌へ残っており
-   * （`manager_message` は `exchange`、`external` は `external_event`、
-   * `timer` は走らせるかどうかを決めた後）、そこは「受け取ったこと」ではなく
-   * 「何をしたか」の記録である。ここへ寄せると意味の違う2つを1つの型に潰す。
-   */
+  // 記録をターンの直列の後ろに置かない: 先客が走っているあいだ日誌にその発言が存在せず、`GET /conversations` にも出ないので、器を替えた人からは発言そのものが消えて見えるため
+  // 記録が先、通知は後: 日誌へ載れば `GET /journal/stream` にもそのまま流れ、この1か所で送った本人以外の観測者が同時に埋まるため。人間の発言だけを見る: 他の6種は起点ごとに違う型で「何をしたか」を残しており、寄せると意味の違う2つを1つの型に潰すため
   #record(event: InboxEvent): void {
     if (event.type !== 'human_message') return;
 
-    // 前の発言の追記が器へ入ってから次を渡す（`#recordChain` の理由）。
-    //
-    // **`supersedes` はそのまま日誌へ通すだけである。** 受信箱の `human_message`
-    // が持つ「この発言が置き換える過去の人間の発言の id」を、日誌の `exchange`
-    // へそのまま写す（`schema.ts` の `exchange.supersedes` の doc）。畳み込みの
-    // 解釈（どれを既定ビューから隠すか）はここでは一切しない——それは
-    // `conversation.ts` の `computeSupersededIds` が持つ射影であって、記録の
-    // 時点で何かを取り消す・巻き戻すものではない（制約(B)）。
-    // 列そのものは失敗で切らない。**1本書けなかったことで以後の発言の記録まで
-    // 止めない**（`#journal` は自分で握るので普通は来ないが、列は器の外の失敗にも
-    // 耐える形で持つ）。待っている側（`#handle`）には元の約束を渡す。この3行
-    // （繋ぐ・戻す・控える）は `CloneDelivery#chainRecord` へそのまま移した
-    // （Issue #1190「配送」束。await の構造・Promise の同一性は変えていない
-    // ——同メソッドの doc を見よ）。
+    // `supersedes` はそのまま日誌へ通すだけにする: 畳み込みの解釈は `computeSupersededIds` の射影が持ち、記録の時点で何かを取り消さないため
+    // 列は失敗で切らない: 1本書けなかったことで以後の発言の記録まで止めないため
     this.#delivery.chainRecord(event.id, () =>
       this.#journal({
         type: 'exchange',
@@ -2216,10 +2121,7 @@ class Clone implements CloneHost {
         text: event.text,
         conversationId: event.conversationId,
         ...(event.supersedes === undefined ? {} : { supersedes: event.supersedes }),
-        // 送った側の発言 id（#3203）。無い発言には付けない（`undefined` のキーを作らない）。
         ...(event.clientMessageId === undefined ? {} : { clientMessageId: event.clientMessageId }),
-        // 添付はメタデータだけを写す（中身は `stores.attachments`。日誌へは書かない）。
-        // ファイル名は `stripNul`（pg の `stripNulls` と同じ規則）を通す。
         ...(event.attachments === undefined || event.attachments.length === 0
           ? {}
           : {
@@ -2234,143 +2136,16 @@ class Clone implements CloneHost {
       }),
     );
 
-    // 同期で呼ぶ。`post` から見て、この合図は日誌の書き込みを待たずに届く
-    // （待てるのは記録の**順序**だけで、通知を待たせる理由は無い）。
     this.#emit(event.conversationId, { type: 'queued' });
   }
 
-  /**
-   * 頼まれたことを未了として台帳へ開く。
-   *
-   * **合図の id をそのまま未了の id にする。** 配り直しでも同じ id になるので、
-   * `CommitmentStore.open` の冪等性がそのまま「二度開かない・閉じたものを開き直さない」
-   * になる。別の id を振ると、器が落ちるたびに片付いた依頼が蘇る。
-   *
-   * **開くのは「誰かが渡してきたもの」だけである**（人間の発言・人間の回答・
-   * マネージャーからの一件・外部イベント）。`timer` と `self_initiative` は起こされた
-   * こと自体であって渡されたものではなく、しかも `timer` には既に器がある
-   * （`ScheduledRequest.pendingRun`）。ここで開くと発意 tick のたびに未了が1件増え、
-   * 台帳が数時間で読めなくなる。**クローン自身が気づいたことは `commitment_open` で
-   * 自分で開く** — 人間が「あ、これ直さなきゃ」と思ったときにメモするのと同じ形で、
-   * 器が代わりに決めることではない。
-   *
-   * **`external` にも同じ結論に達する場合がある**（デーモン自身が自分の受信箱へ
-   * 出す合図。`isDaemonSelfNotice` の doc）。理由はここに書いた2つとは別で
-   * （起こされたことそのものではなく、渡してきた相手が最初から居ない）、型では
-   * なく `source` で決まる点も違うが、行き着く先（台帳を開かない）は同じである。
-   *
-   * **マネージャー起因の重複は畳む（Issue #954 提案3）。** 429 などの
-   * 合流窓（`manager.ts` の `SynthesizedNoticeStreak` / `isCrossWindowStreakEligible`）
-   * は `turn_failed` 単独の束にしか掛からないので、すり抜けた同文の連投——
-   * あるいは合流窓を持たない別の経路からの同文連投——が起きても、台帳側に
-   * もう一段の壁を置く。**同一マネージャー（`origin: 'manager'` かつ同じ
-   * `source`）× 同一本文 × まだ開いている行**が既にあれば、新しい行を増やさず
-   * 既存の行に任せる。**対象は台帳だけ**——
-   * 受信箱（`#remember`）はここより前で既に書き終えているので、この畳み込みで
-   * 減るのは台帳の行数だけである（受信箱側の膨張は別の穴。Issue #954 コメント
-   * `the-phage-dev` 2026-09-14T18:03:28Z）。
-   *
-   * **⭐ 畳むのはここではない。`CommitmentStore.open` の中である（Issue #1041）。**
-   * かつてここは `list()` を読み、{@link hasOpenManagerDuplicate} を当て、畳まないと
-   * 決めたら `open()` を呼んでいた——**読みと書きのあいだを排他するものが無いので、
-   * 同じストアを指す2つのデーモンが同時に post すると両方が「重複なし」と読んで
-   * 両方が開き、台帳が2行に割れた**（#1041。PR #1089 の歯がこれを決定的に赤くした）。
-   * **判定と書き込みを1操作へ畳んだので、ここに `list()` は無い。**
-   *
-   * ⛔ **読んでから書く形へ戻さないこと。** どこにアプリ層（この関数）の壁を
-   * 置いても、プロセスを跨いだ瞬間に同じ穴が開く——アプリ層はプロセスを跨いだ
-   * 共有状態を持たないので、ここに置く排他はプロセスの中にしか効かないが、
-   * この欠陥は**2つのプロセスのあいだ**に在る。**直す場所は呼び出し側では
-   * なく `CommitmentStore.open` 自身でなければならない理由がここにある**
-   * ——実際、fs（`FsCommitmentStore`）がプロセスを跨いで排他できるように
-   * なったのは issue #1113 / #1050 で `open` の内部（`withPathLock`）に
-   * advisory なファイルロックを足したからで、アプリ層に壁を足したからでは
-   * ない（`store.ts` の `CommitmentStore.open` の doc）。
-   *
-   * **失敗しても post を落とさない**（`#remember` と同じ理由。跡は stderr へ1行、
-   * かつ #856 以降は日誌にも1行——下の分岐を見よ）。
-   *
-   * **戻り値（{@link CommitOutcome}）は Issue #856 で足した。** 台帳を実際に
-   * 開けたか（`'opened'`）、`open()` を呼んだが既に在ったか（`'existed'`）、
-   * 開く前に畳んだか（`'folded'`）、開こうとして落ちたか（`'failed'`）を
-   * 区別して `#committed` に残す。**区別する理由は `#commitmentNoticeFor` 側に
-   * ある** — 再読した台帳に id が見当たらないとき、「畳んだから見当たらない
-   * （既存行に任せた——正常）」「既に在ったから見当たらない（`open()` の
-   * 冪等性そのもの——正常。配り直された合図が閉じた行に当たった場合を含む）」
-   * と「載せ損なったから見当たらない（異常）」を見分けられないと、前2つを
-   * 黙って「載せ損なった」と誤って断ることになる。
-   *
-   * **`'existed'` を区別しないと何が起きるか（Issue #856 のレビューで見つかった
-   * 欠陥）。** `CommitmentStore.open` は `boolean` を返す——`false` は
-   * 「同じ id が既に在ったので何もしなかった」を意味する（`store.ts` の doc）。
-   * この戻り値を見ずに「例外を投げなければ `'opened'`」と一律に記録すると、
-   * **配り直された合図が既に閉じている行に当たったとき**（`open()` は
-   * `false` を返す）も `'opened'` と記録され、`#commitmentNoticeFor` は
-   * 再読した一覧（未了だけ）にその id が無いことを「載せ損なった」と誤って
-   * 断る。断り書きは `commitment_open` で載せ直すことを促すが、**それは
-   * `open()` をもう一度呼ぶだけ**——`open()` の doc が名指しで警告している
-   * 事故（一度片付けた仕事が配り直しのたびに開き直る）がそのまま起きる。
-   *
-   * **Issue #1060 (段1)。台帳に新しい行を実際に開けた（`opened: true`）とき、
-   * 開いた id を機械自身の言葉で日誌へ1行残す。** 現状、名乗る経路は3つ
-   * ある（`commitment_open` ツール・`commitment_close` ツール・この受信箱
-   * 経由の自動 open）が、**このうち自動 open だけが名乗った id を機械側の
-   * 記録にまったく残していなかった**——`#commitmentNoticeFor` が本文の
-   * 先頭に載せる「いま届いたこの一件も台帳に載せた（id: X）」は会話履歴には
-   * 残るが日誌には残らず、`#journalIncomingBody` が書くのは合図の**本文**
-   * だけで id は1文字も書かない。**その結果、後で `commitment_close` が
-   * 「台帳に無い」と答えたとき、「台帳に載った後にその行が消えた」（#856
-   * 本体）のか「クローンが id を書き写し間違えた」のかが原理的に区別
-   * できなかった。** この1行がその区別の材料になる（実際に使う側は
-   * `commitment_close` ツールの段3。`tools.ts` の doc）。
-   *
-   * **種別は `decision` にしない。** `decision` は「クローンが自分で決めて
-   * 引き受けた判断」の面を持つ（`commitment_open` ツールの doc「自分で
-   * 決めて引き受けたことは日誌に残す」）——器が受信箱の合図から自動で
-   * 開いた行をここへ混ぜると、その面の意味が変わる（自分で決めたのでは
-   * なく、受信箱の合図に応じて器が機械的に開いただけである）。すぐ下の
-   * **失敗**経路が既に `exchange/self/outbound` を使っているので、同じ
-   * 経路の成否を同じ種別で揃える。**検索（`journal_read` の `q`）は種別を
-   * 跨いで当たる**（`journal-search.ts` の `SEARCHABLE_FIELDS_BY_TYPE` が
-   * 決めているのは「`exchange` の対象欄は `text`」だけで、種別自体を絞る
-   * 仕組みではない）ので、種別を揃えなくても突き合わせには支障が無い。
-   *
-   * **`text` に id を素の形で必ず含める。** これが唯一の目的である——
-   * `journal_read` の `q: <id>` で本文検索したとき当たるようにするため
-   * （`journal-search.ts` の `SEARCHABLE_FIELDS_BY_TYPE` で `exchange` は
-   * `['text']` が対象）。
-   *
-   * **量の上限は「台帳に開いた行1本につき日誌1行」である。** `opened: true`
-   * のときにしか書かないので、`'existed'` / `'folded'`（配り直された合図・
-   * 畳んだ合図）では1行も増えない。**⟹ 受信箱の合図の本数には比例しない**
-   * ——#954 / #783 が数えている合図側の膨張はそのまま乗らない。乗るのは
-   * 台帳の行の生成数で、これは `commitment_open` ツールが既に1行ずつ
-   * 払っているのと同じ量である。
-   *
-   * **記録は名乗りより先に済む。** この追記は、この `.then()` チェーン
-   * そのもの——`#committed` に控えるプロミスの鎖——の中で行う。
-   * `#commitmentNoticeFor` はこの鎖（`this.#delivery.getCommitted(pending.id)`）を
-   * `await` してから初めて `list()` で再読し、名乗る文面を組み立てる
-   * （下の `#commitmentNoticeFor` 冒頭のコメント「この合図の記帳が済んで
-   * から読む」）。**⟹ 「記録してから名乗る」という順序は、気をつけて書く
-   * 運用上の約束ではなく、この鎖の構造そのものによって強制される。**
-   * 途中の経路を素通りする書き方（例: 追記を待たずに `'opened'` を先に
-   * 確定させる）に変えると、この保証は消える。
-   *
-   * **Issue #1060 (段2)。「記録を残す」という観測を足す実装自体が、それが
-   * 塞ごうとしている穴と同じ形の穴を開けうる。** この追記が通常の `#journal`
-   * を経由すると、失敗は stderr の1行（`noteDroppedRecord`）だけに沈み、
-   * クローンには一切見えない——**記録が黙って落ちれば、後から「記録が無い」
-   * を「機械は名乗っていない」と誤読することになる。それはまさに、この段が
-   * 塞ごうとしている穴と同じ形である。** だからここでは `#journal` を経由
-   * せず `this.#stores.journal.append(...)` を直接 `try`/`catch` する（跡は
-   * 同じく `noteDroppedRecord`。`#journal` 自身の doc が禁じている「日誌の
-   * 失敗から日誌へ書き直す」循環は、ここでは作らない——失敗しても日誌へは
-   * 一切書き直さず、`CommitOutcome` の値だけで下流へ事実を渡す）。失敗したら
-   * `'unrecorded'`（台帳には開けたが、開いた id の機械側の記録を残せ
-   * なかった）を返す。`CommitOutcome` はこのファイルの中で閉じているので、
-   * 型を見れば枝を使う箇所をすべて洗い出せる。
-   */
+  // 合図の id をそのまま未了の id にする: 配り直しでも同じ id になり、`CommitmentStore.open` の冪等性が「二度開かない・閉じたものを開き直さない」になるため
+  // `timer` と `self_initiative` では開かない: 起こされたこと自体で、開くと発意 tick のたびに未了が1件増えて台帳が数時間で読めなくなるため。`external` でもデーモン自身の合図（`isDaemonSelfNotice`）では開かない
+  // 読んでから書く形へ戻さない: 重複判定は `CommitmentStore.open` の中で行う。アプリ層の排他はプロセスを跨げず、同じストアを指す2つのデーモンが両方「重複なし」と読んで台帳が2行に割れるため
+  // 失敗しても post を落とさない
+  // 種別は `decision` にしない: 器が受信箱の合図から機械的に開いた行を混ぜると、クローンが自分で決めて引き受けた判断という面の意味が変わるため
+  // 記録を名乗りより先に済ませる（この `.then()` チェーンの中で行う）: `#commitmentNoticeFor` がこの鎖を `await` してから再読するので、追記を待たずに `'opened'` を先に確定させるとその保証が消えるため
+  // `#journal` を経由せず直接 append する: 通常の `#journal` だと失敗が stderr に沈んで「記録が無い」と「名乗っていない」を区別できず、日誌の失敗から日誌へ書き直す循環も作るため。失敗したら `'unrecorded'` を返す
   #commit(event: InboxEvent): void {
     const entry = commitmentFor(event);
     if (entry === null) return;
@@ -2379,8 +2154,6 @@ class Clone implements CloneHost {
       this.#stores.commitments.open(entry).then(
         async (result): Promise<CommitOutcome> => {
           if (!result.opened) return result.folded ? 'folded' : 'existed';
-          // **Issue #1060 (段1)。** 上の doc を見よ——`#journal` を経由せず
-          // 直接 append する（失敗を日誌へ書き直す循環を作らないため）。
           try {
             await this.#stores.journal.append({
               type: 'exchange',
@@ -2391,10 +2164,7 @@ class Clone implements CloneHost {
                 `合図: ${inboxEventShape(event)}`,
             });
           } catch (error) {
-            // **Issue #1060 (段2)。** ここから `#journal` を呼び直さない
-            // （`#journal` 自身の doc が禁じる循環と同じ形になる）。跡は
-            // stderr の1行のみ——`'unrecorded'` を返すことで、記録の欠落
-            // そのものを `#commitmentNoticeFor` の断り書きへ伝える。
+            // ここから `#journal` を呼び直さない: 日誌の失敗から日誌へ書き直す循環になるため
             noteDroppedRecord(
               '機械が名乗った id の記帳（#commit 成功時）',
               inboxEventShape(event),
@@ -2406,12 +2176,7 @@ class Clone implements CloneHost {
         },
         (error: unknown): Promise<CommitOutcome> => {
           noteDroppedRecord('未了の記帳', inboxEventShape(event), error);
-          // **Issue #856 (B)。** `noteDroppedRecord` の跡は stderr の1行
-          // だけで、クローンはこれを読む手段を持たない（`dropped-record.ts`
-          // の doc）。`noteDroppedRecord` 自身の「本文を出さない」契約は
-          // 変えず、ここから別に日誌へも1件残す——`#journal` は
-          // best-effort で失敗を吸収するので、これが失敗しても post は
-          // 落ちない（`#journal` の doc）。
+          // stderr の跡はクローンが読めないので、日誌へも1件残す
           return this.#journal({
             type: 'exchange',
             with: 'self',
