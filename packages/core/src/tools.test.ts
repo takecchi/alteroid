@@ -10817,14 +10817,6 @@ describe('archive_remove（退避済み生ログの本文を消す）', () => {
 });
 
 describe('一覧の文言は、観測した分しか言わない', () => {
-  /**
-   * **実際に起きた誤りをそのまま置いてある。**
-   *
-   * 2026-08-16T03:15 に落ちたマネージャーは、その直前に PR #59 を出し、CI を
-   * 通し、マージまで届いていた。1分半後に器が作り直されて `lost` になり、
-   * 一覧は「この仕事は途中で失われている（完了ではない）」と言った。
-   * デーモンは PR を見ていないのだから、これは観測ではなく推測だった。
-   */
   it('lost に「完了ではない」と書かない（成果の有無は観測していない）', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'PR を出して' });
@@ -10835,21 +10827,13 @@ describe('一覧の文言は、観測した分しか言わない', () => {
 
     const reply = await h.call('manager_list', {});
 
-    // 断定へ戻したら、ここで落ちる。
     expect(reply).not.toContain('途中で失われている');
     expect(reply).not.toContain('完了ではない');
-    // 観測した分（戻れなかった）は言い切る。
     expect(reply).toContain('戻れなかった');
-    // **次の一手を渡す。** 「断定をやめる」だけだと、読んだ側は結局
-    // 起こし直すか放置するかを勘で決めることになる。
     expect(reply).toMatch(/リモート|PR/);
     expect(reply).toContain('確かめ');
   });
 
-  /**
-   * **PR #42 の分け方は保つ。** 断定を外したせいで `lost` が `done`（終えて
-   * 待っている）と同じ顔になったら、失われた仕事が黙って片付く方の欠陥へ戻る。
-   */
   it('lost は done と混ざらない（起こし直す対象として見分けられる）', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
@@ -10861,25 +10845,15 @@ describe('一覧の文言は、観測した分しか言わない', () => {
     done.status = 'done';
 
     const reply = await h.call('manager_list', {});
-    // mgr-2 の目印が消えると `indexOf` が -1 になり、`doneEntry` は末尾の1文字になって
-    // 下の `not.toContain('⚠')` が緑のまま残る。切り出す前に在ることを確かめる。
     expect(reply).toContain('mgr-2');
     const lostEntry = reply.slice(reply.indexOf('mgr-1'), reply.indexOf('mgr-2'));
     const doneEntry = reply.slice(reply.indexOf('mgr-2'));
 
     expect(lostEntry).toContain('⚠');
     expect(lostEntry).toContain('manager_start');
-    // done 側には「起こし直せ」の案内が付かない（話しかければ続く）。
     expect(doneEntry).not.toContain('⚠');
   });
 
-  /**
-   * **`running` は「動いている」ではない。**
-   *
-   * 分類器か deny 規則がその場で拒否すると、その仕事は `running` のまま手が
-   * 止まる。それが日誌と（繰り返したときだけ）受信箱にしか出ておらず、一覧を
-   * 見ているクローンには「走っている」としか読めなかった。
-   */
   it('拒否で手が止まっていることが、状態に添えて一覧に出る', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
@@ -10890,24 +10864,13 @@ describe('一覧の文言は、観測した分しか言わない', () => {
 
     const reply = await h.call('manager_list', {});
 
-    // 状態の値そのものは動かさない（`openapi.json` の外向きの面を触らない）。
     expect(reply).toContain('[running]');
     expect(reply).toContain('Bash 4件');
     expect(reply).toContain('Write 1件');
-    // **なぜ一覧に出す必要があったのか**まで書く（クローンには回っていない）。
     expect(reply).toContain('クローンには回ってきていない');
     expect(reply).toContain('journal_read');
   });
 
-  /**
-   * **Issue #1289 — `describeDenials` も拒否の出所を断定しない。**
-   *
-   * `manager.ts` の `case 'permission_denied'` は #1267 で断定を外したが、
-   * `manager_list` / `manager_report` が読む一覧の一文（`describeDenials`）には
-   * 同じ向きの断定「この確認はクローンには回ってきていないので、手が止まっている
-   * 可能性がある」がそのまま残っていた。`permission-denied.test.ts` の
-   * 「拒否の出所を断定せず…（#1267）」と同じ形で、ここでも固定する。
-   */
   it('describeDenials も拒否の出所を断定せず、2つの場合分けと「まず担い手の拒否文を読ませる」案内が載る（#1289）', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
@@ -10915,13 +10878,10 @@ describe('一覧の文言は、観測した分しか言わない', () => {
 
     const reply = await h.call('manager_list', {});
 
-    // **断定した旧文言が戻っていないこと。**
     expect(reply).not.toContain(
       'この確認はクローンには回ってきていないので、手が止まっている可能性がある',
     );
 
-    // 2つの場合分け——器側（分類器・deny 規則）と alteroid 自身の
-    // `PreToolUse` フックの両方が、条件付きの文として載る。
     expect(reply).toContain(
       '(a) 器の分類器か deny 規則なら、この確認はクローンには回ってきていないので手が止まる。',
     );
@@ -10929,30 +10889,21 @@ describe('一覧の文言は、観測した分しか言わない', () => {
     expect(reply).toContain('bash-wait-guard.ts');
     expect(reply).toContain('自力で抜けられることがある');
 
-    // 「まず担い手自身の拒否文を読ませる」案内が、場合分けより前に来る。
     const guidanceAt = reply.indexOf('まず担い手自身に返っている拒否文を読ませること');
     const branchAAt = reply.indexOf('(a) 器の分類器か deny 規則なら');
     expect(guidanceAt).toBeGreaterThan(-1);
     expect(guidanceAt).toBeLessThan(branchAAt);
 
-    // **既存の断り書きが落ちていないこと。**
     expect(reply).toContain('journal_read');
     expect(reply).toContain('件数はデーモンを作り直すと数え直しになる');
   });
 
-  /**
-   * Issue #373 — マネージャー自身と作業者の拒否を同じ数へ畳まず、一覧の字面でも
-   * 3値（マネージャー／作業者／層不明）のまま出す。`層不明` を黙って消したり
-   * マネージャー側へ混ぜたりすると、クローンが誤った相手へ指示を出しうる
-   * （2026-08-24 コメント #5393921053 が記録した実害）。
-   */
   it('拒否の層（マネージャー／作業者／層不明）が一覧の字面でも3値のまま出る', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
     h.denied.set('mgr-1', [
       { tool: 'Bash', count: 2, actor: 'manager' },
       { tool: 'Edit', count: 1, actor: 'worker' },
-      // `via: 'result'` は SDK 側に判定材料が無いので `actor` キーそのものが無い。
       { tool: 'Write', count: 3 },
     ]);
 
@@ -10972,21 +10923,6 @@ describe('一覧の文言は、観測した分しか言わない', () => {
     expect(reply).not.toContain('止められた道具');
   });
 
-  /**
-   * **Issue #830 — `manager_list` に出ていて `manager_report` に出ていなかった。**
-   *
-   * `denialLine` の呼び出しは `manager_list` と人間の CLI の2箇所だけで、
-   * `manager_report` には1つも無かった。**この道具自身の案内が「まず
-   * manager_report を見ること」と言っている**ので、案内どおりに動いたクローンは
-   * 拒否を1文字も見ないまま「報告がまだ無い」とだけ読んだ。**案内が嘘をついて
-   * いた**（#714 が `lastFailure` で塞いだのと同じ形——人間の面には出て、
-   * クローンの面には渡っていない）。
-   *
-   * 測るのは `lastFailure` / `lastSystemError` の歯と同じ3つ（在る回に出る／
-   * 無い回に1文字も増えない／`part: 'request'` では出さない）に、**報告が空の
-   * 回にも出る**を足したもの——拒否で手が止まった委譲は報告を書かないので、
-   * **そちらが本命の枝である。**
-   */
   it('manager_report は拒否を出し、字面が manager_list と割れない（#830）', async () => {
     const h = harness();
     await h.call('manager_start', { request: '依頼の本文' });
@@ -10999,14 +10935,9 @@ describe('一覧の文言は、観測した分しか言わない', () => {
 
     expect(reply).toContain('Bash 1件 [作業者]');
     expect(reply).toContain('クローンには回ってきていない');
-    // 本文の**上**に置く（`failureNote` / `systemErrorNote` と同じ順）。
-    // **先に見出しが在ることを確かめる**（#2008）——無いと `indexOf` が -1 になり、
-    // 順序の比較は `-1 < n` で素通りする。
     expect(reply).toContain('止められた道具');
     expect(reply.indexOf('止められた道具')).toBeLessThan(reply.indexOf('終わった'));
 
-    // **字面の生成元が1箇所であること。** 2つの口が別の語で同じ欄を呼ぶと、
-    // 面をまたいで読む人間がそこで詰まる（`describeDenials` の doc）。
     const list = await h.call('manager_list', {});
     const line = (text: string) =>
       text
@@ -11016,17 +10947,9 @@ describe('一覧の文言は、観測した分しか言わない', () => {
     expect(line(reply)).toBe(line(list));
   });
 
-  /**
-   * **報告が空の回こそ拒否がいちばん効く（#830 の本命）。**
-   *
-   * 分類器か deny 規則で手が止まった委譲は `running` のまま報告を書かないので、
-   * `manager_report` の「報告はまだ無い」の枝に落ちる。**ここで黙ると、クローンは
-   * 「まだ書いていない」と「番人に止められて書けない」を区別できない。**
-   */
   it('manager_report は報告が空でも拒否を出す（黙って「まだ無い」で終わらせない・#830）', async () => {
     const h = harness();
     await h.call('manager_start', { request: '依頼の本文' });
-    // **報告を立てない。** 拒否で止まった委譲の形そのもの。
     h.denied.set('mgr-1', [{ tool: 'Bash', count: 1, actor: 'worker' }]);
 
     const reply = await h.call('manager_report', { managerId: 'mgr-1' });
@@ -11035,18 +10958,12 @@ describe('一覧の文言は、観測した分しか言わない', () => {
     expect(reply).toContain('クローンには回ってきていない');
   });
 
-  /**
-   * **止められた後に委譲が報告を返したか（#1455）。** 拒否の件数だけでは、止められても
-   * 進んでいるのか止まっているのかが読めなかった。`lastAt` と `lastReportAt` を
-   * 突き合わせた3値が、manager_list と manager_report の同じ行に出る。
-   */
   it('拒否の行に「止められた後に報告が届いたか」を3値で添える（#1455）', async () => {
     const h = harness();
     await h.call('manager_start', { request: '依頼の本文' });
     const target = h.running[0];
     if (!target) throw new Error('準備に失敗');
 
-    // 報告が拒否より後 → 届いている
     target.lastReport = '進めた';
     target.lastReportAt = '2026-09-24T07:10:00.000Z';
     h.denied.set('mgr-1', [
@@ -11058,7 +10975,6 @@ describe('一覧の文言は、観測した分しか言わない', () => {
       '後にも報告が届いている',
     );
 
-    // 報告が拒否より前 → まだ届いていない
     h.denied.set('mgr-1', [
       { tool: 'Bash', count: 2, actor: 'worker', lastAt: '2026-09-24T07:20:00.000Z' },
     ]);
@@ -11066,7 +10982,6 @@ describe('一覧の文言は、観測した分しか言わない', () => {
       '最後に止められた（2026-09-24T07:20:00.000Z）後の報告はまだ届いていない',
     );
 
-    // 時刻の取れていない拒否 → 判定できない（どちらへも畳まない）
     h.denied.set('mgr-1', [{ tool: 'Bash', count: 2, actor: 'worker' }]);
     const unknown = await h.call('manager_list', {});
     expect(unknown).toContain('判定できない');
@@ -11108,24 +11023,13 @@ describe('一覧の文言は、観測した分しか言わない', () => {
 
     const reply = await h.call('manager_list', {});
 
-    // 新しい側（末尾）から3種。
     expect(reply).toContain('tool-6 7件');
     expect(reply).toContain('tool-4 5件');
     expect(reply).not.toContain('tool-3');
-    // 黙って落とさない。
     expect(reply).toContain('ほか 4 種');
     expect(reply).toContain('全 28 件');
   });
 
-  /**
-   * **Issue #1105 — `manager_list` / `manager_report` の一覧に、分類・理由・
-   * 拒否文が journal_read を遡らず載る。**
-   *
-   * 値そのものは journal（`case 'permission_denied':` の `denialSuffix`）に
-   * 既に無条件で残っている——ここへ足すのは同じクローンが読める口を
-   * `manager_list`/`manager_report` にも増やすだけで、新しい読み手を作る
-   * ものではない（`ManagerDenial.reasonType` の doc）。
-   */
   it('分類・理由・拒否文が一覧の行に載る（journal_read を遡らない・#1105）', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
@@ -11145,7 +11049,6 @@ describe('一覧の文言は、観測した分しか言わない', () => {
     expect(list).toContain('理由: この形は共有資源を起動しうる');
     expect(list).toContain('モデルへの拒否文: Blocked by classifier');
 
-    // `manager_report` も同じ字面（生成元が1箇所であること・#830 と同じ確かめ方）。
     const report = await h.call('manager_report', { managerId: 'mgr-1' });
     expect(report).toContain('分類: classifier');
     expect(report).toContain('理由: この形は共有資源を起動しうる');
@@ -11177,15 +11080,6 @@ describe('一覧の文言は、観測した分しか言わない', () => {
     expect(reply).not.toContain('モデルへの拒否文:');
   });
 
-  /**
-   * **issue #1105 後半 — 拒否より前に見た入力の先頭（`inputHead`）も
-   * `manager_list` / `manager_report` の行に載る。**
-   *
-   * `reasonType` / `reason` / `message` とは出所が違う——journal にすら
-   * 同じ字面が無い値をここで初めて渡す（`denialReasonTag` の doc）。それでも
-   * 埋め込み先（`manager_list`/`manager_report`）は同じで、生成元も1箇所
-   * （`denialReasonTag`）のままである。
-   */
   it('入力の先頭（inputHead）が一覧の行に載る（journal_read には無い値・issue #1105）', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
@@ -11202,7 +11096,6 @@ describe('一覧の文言は、観測した分しか言わない', () => {
     const list = await h.call('manager_list', {});
     expect(list).toContain('入力の先頭: sed -i 1s/.../ 538-comment.md');
 
-    // `manager_report` も同じ字面（生成元が1箇所であること・#830 と同じ確かめ方）。
     const report = await h.call('manager_report', { managerId: 'mgr-1' });
     expect(report).toContain('入力の先頭: sed -i 1s/.../ 538-comment.md');
   });
@@ -11218,13 +11111,6 @@ describe('一覧の文言は、観測した分しか言わない', () => {
     expect(reply).not.toContain('入力の先頭:');
   });
 
-  /**
-   * **`done` は「マネージャー自身のターンが終わった」でしかない。**
-   *
-   * その下で作業者が走っているかは、デーモンには見えていない（作業者の生存も
-   * worktree の更新時刻も、ここからは読めない）。「走っている手は無く」は
-   * 観測ではなく推測だった。
-   */
   it('done を畳んだときに「走っている手は無い」と断定しない', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
@@ -11235,7 +11121,6 @@ describe('一覧の文言は、観測した分しか言わない', () => {
     const reply = await h.call('manager_stop', { managerId: 'mgr-1' });
 
     expect(reply).toContain('待機中（done）');
-    // 断定へ戻したら、ここで落ちる。
     expect(reply).not.toContain('走っている手は無く');
     expect(reply).toContain('作業者');
     expect(reply).toContain('見えていない');
@@ -11278,8 +11163,6 @@ describe('usage_read（人間が見られるものはクローンからも見ら
     expect(CLONE_ALLOWED_TOOLS).toContain(qualifiedToolName('usage_read'));
   });
 
-  // Issue #2156。以前は from / to を形すら確かめずに店へ渡し、黙ってその文字列で絞っていた。
-  // `GET /usage` と同じ判定（`isRealUsageDate`）で断る。
   for (const [name, value] of [
     ['from', '2026-02-30'],
     ['to', '2026-13-01'],
@@ -11316,12 +11199,9 @@ describe('usage_read（人間が見られるものはクローンからも見ら
     expect(reply).toContain('合計 $2.00');
     expect(reply).toContain('claude-opus-5');
     expect(reply).toContain('claude-sonnet-5');
-    // **推定であることを落とさない。** 台帳の数字を確定として見せない。
     expect(reply).toContain('請求明細ではない');
   });
 
-  // Issue #486 M7。CLI・Web・`GET /usage` と同じく、消費を報告しない provider の
-  // ターンは 0 ではなく「取れなかった」として合計の隣に出す。無ければ1文字も足さない。
   it('消費を報告しない provider のターンは、合計の隣に「取れなかった」と出す', async () => {
     const h = harness();
     await spent(h);
@@ -11387,8 +11267,6 @@ describe('usage_read（人間が見られるものはクローンからも見ら
   });
 
   it('台帳の始点より前を聞かれたら「0」ではなく「記録が無い」と言う', async () => {
-    // 過去分は掘り起こさないと決めた。だから始点を黙って隠さない — 台帳が無かった
-    // 期間を「使っていない期間」に見せると、それは嘘になる。
     const h = harness();
     await spent(h);
 
@@ -11405,18 +11283,9 @@ describe('usage_read（人間が見られるものはクローンからも見ら
     const reply = await h.call('usage_read', { from: '2026-09-01', to: '2026-09-30' });
 
     expect(reply).toContain('その範囲には記録が無い');
-    // 台帳自体は始まっているので、その始点は分かる。
     expect(reply).toContain('台帳の始点: 2026-08-14');
   });
 
-  /**
-   * issue #2211: `to` が `from` より前だと絞り込みは常に0件になる（issue
-   * #2155）が、以前は CLI（`alteroid usage` / chat の `/usage`）と Web
-   * （`usage.tsx`）だけが「絞り込みが逆」と注記し、`usage_read` は黙って
-   * 「その範囲には記録が無い」（＝「使っていない」と読める）を返していた。
-   * 同じ `describeUsageDateOrder`（core）を通して、同じ文言を応答の先頭に
-   * 添える。
-   */
   it('to が from より前なら、注記を応答の先頭に添える（CLI・Web と同じ文言）', async () => {
     const h = harness();
     await spent(h);
@@ -11428,7 +11297,6 @@ describe('usage_read（人間が見られるものはクローンからも見ら
         'to（2026-09-01）が from（2026-09-10）より前なので、この範囲には1日も入らない\n',
       ),
     ).toBe(true);
-    // 注記の後ろに続く0件の行を「使っていない」と読めないよう、理由が先に来る。
     expect(reply).toContain('その範囲には記録が無い');
   });
 
@@ -11531,13 +11399,6 @@ describe('usage_read の Web 検索の回数（webSearchRequests。Issue #1950�
   });
 });
 
-/**
- * `usage_read` の「取れなかった区切り」（`describeUnreadableUsage`。Issue #2086）。
- *
- * 文言そのものは core（`describeUnreadableUsage`。`usage.test.ts` が本体を
- * 測る）が1箇所で持つ。ここで見るのは `renderUsage` の合計の内訳行に実際に
- * 繋がっているかと、無ければ1文字も増やさないことだけである。
- */
 describe('usage_read の取れなかった区切り（unreadable。Issue #2086）', () => {
   it('unreadable が無ければ、それらしい行を出さない', async () => {
     const h = harness();
@@ -11598,10 +11459,6 @@ describe('usage_read の取れなかった区切り（unreadable。Issue #2086�
   });
 });
 
-/**
- * `usage_read` の回数の軸（「起きた回数」＝ターン数。`tools.ts` の
- * `formatUsageAxisLine` / `usageAxisEntries`）。
- */
 describe('usage_read の回数の軸（起きた回数）', () => {
   const models = {
     'claude-opus-5': {
@@ -11642,9 +11499,7 @@ describe('usage_read の回数の軸（起きた回数）', () => {
 
     const reply = await h.call('usage_read', {});
 
-    // モデル別の行そのものには回数の接尾辞が付かない。
     expect(reply).toContain('  claude-opus-5: $2.00\n');
-    // 回数が1つでも出ているときは、モデル別に出ない理由を書く。
     expect(reply).toContain(
       'モデル別に回数は出さない（1ターンが複数のモデル行を作るので、回数をモデルへ帰属させられない）。',
     );
@@ -11652,8 +11507,6 @@ describe('usage_read の回数の軸（起きた回数）', () => {
 
   it('turnsSince が null のとき「まだ1件も記録していない」と言い、出力のどこにも 0回 が現れない', async () => {
     const h = harness();
-    // **増分が空の record。** 台帳・層の軸は始まる（ledger が upsert される）が、
-    // 回数もモデル行も1つも増えない——`fold.delta` が空になる（全部ゼロの累積）。
     await h.stores.usage.record({
       layer: 'manager',
       site: 'session',
@@ -11686,8 +11539,6 @@ describe('usage_read の回数の軸（起きた回数）', () => {
     const h = harness();
     await spentOnce(h);
 
-    // `from` を省略した照会は回数の軸の始点より前を含みうるので、常に真になる
-    // （他の3つの `before*` と同じ形）。
     const reply = await h.call('usage_read', {});
 
     expect(reply).toContain(
@@ -11696,11 +11547,6 @@ describe('usage_read の回数の軸（起きた回数）', () => {
   });
 });
 
-/**
- * 台帳に1行も無い委譲（Issue #98「台帳が取りこぼした委譲」）。
- *
- * **判定は「台帳に1行も無いか」の1つだけ。** `status` では絞らない。
- */
 describe('usage_read の台帳に1行も無い委譲（Issue #98）', () => {
   const models = {
     'claude-opus-5': {
@@ -11746,14 +11592,8 @@ describe('usage_read の台帳に1行も無い委譲（Issue #98）', () => {
     expect(reply).toContain('2026-08-25T12:00:00.000Z');
   });
 
-  /**
-   * ⚠️ **期間で絞ると壊れることを測る歯。** 台帳の行そのものが照会範囲の外に
-   * あっても、その managerId は「記録が無い」に化けてはいけない。
-   */
   it('期間で絞っても、範囲の外で記録された委譲は取りこぼしとして出ない', async () => {
     const h = harness();
-    // 台帳の since を1月に固定する（since の cutoff とこのテストの主題を
-    // 混同しないため、別の managerId で先に record する）。
     await spent(h, 'mgr-anchor', '2026-01-01', '2026-01-01T00:00:00.000Z');
     h.running.push({
       managerId: 'mgr-old-record',
@@ -11767,7 +11607,6 @@ describe('usage_read の台帳に1行も無い委譲（Issue #98）', () => {
     });
     await spent(h, 'mgr-old-record', '2026-05-01', '2026-05-01T00:30:00.000Z');
 
-    // 8月だけを狭く照会する——1月・5月の行は範囲の外に落ちる。
     const reply = await h.call('usage_read', { from: '2026-08-01', to: '2026-08-31' });
 
     expect(reply).toContain('その範囲には記録が無い');
@@ -11776,7 +11615,6 @@ describe('usage_read の台帳に1行も無い委譲（Issue #98）', () => {
 
   it('since より前に createdAt を持つ委譲は出さない', async () => {
     const h = harness();
-    // 台帳の since はこの record で 2026-08-20 に決まる。
     await spent(h, 'mgr-recorded', '2026-08-20', '2026-08-20T00:00:00.000Z');
     h.running.push({
       managerId: 'mgr-before-ledger',
@@ -11804,15 +11642,6 @@ describe('usage_read の台帳に1行も無い委譲（Issue #98）', () => {
     expect(reply).toContain('0件');
   });
 
-  /**
-   * **`context.managers` が `undefined` のとき、0 と出さない。** 蒸留の
-   * サイドクエリでだけ起こる（`ToolContext.managers` の doc）。「確かめられ
-   * なかった」と明示し、「取りこぼしは無い」（0件）と同じ形にしない。
-   *
-   * ⚠️ **`apps/daemon/src/app.ts` の `GET /usage` とは前提が違う。** そちらの
-   * `clone.managers` は non-optional なので、この分岐は起こらない
-   * （`unrecordedManagersLines` の doc）。
-   */
   it('context.managers が無いときは「確かめられなかった」と言い、0 とは言わない', async () => {
     const stores = createMemoryStores();
     await stores.usage.record({
@@ -11859,7 +11688,6 @@ describe('usage_read の5軸と、打ち切りから続きへ辿る道', () => {
       managerId: string;
       costUsd: number;
       date?: string;
-      /** 既定は固定値（大半のテストは時刻に依存しない）。issue #1673 の再現だけが変える。 */
       at?: string;
     },
   ) {
@@ -11874,7 +11702,6 @@ describe('usage_read の5軸と、打ち切りから続きへ辿る道', () => {
     });
   }
 
-  /** `usage_read` の打ち切りの行から `axis="…", cursor="…"` を抜き出す。 */
   function extractUsageCursor(reply: string, axis: string): string {
     const found = reply.match(new RegExp(`axis="${axis}", cursor="([^"]+)" で続きが出る`));
     if (!found) throw new Error(`usage_read の続きの cursor が見つからない: ${reply}`);
@@ -11882,7 +11709,6 @@ describe('usage_read の5軸と、打ち切りから続きへ辿る道', () => {
   }
 
   it('層と場所の軸を出す（モデル名では層を見分けられない）', async () => {
-    // 2件とも同じモデル id である。`ALTEROID_CLONE_MODEL` を置けば実際にこうなる。
     const h = harness();
     await record(h, { layer: 'manager', site: 'session', managerId: 'mgr-1', costUsd: 2 });
     await record(h, { layer: 'clone', site: 'distill', managerId: 'clone', costUsd: 0.5 });
@@ -11918,7 +11744,6 @@ describe('usage_read の5軸と、打ち切りから続きへ辿る道', () => {
   });
 
   it('打ち切ったら、続きの取り方をその行に書く（「残り N 件」で終わらせない）', async () => {
-    // **黙って切り捨てない**うえに、**続きへ辿れないことも作らない。**
     const h = harness();
     for (let i = 0; i < 20; i += 1) {
       await record(h, {
@@ -11935,26 +11760,8 @@ describe('usage_read の5軸と、打ち切りから続きへ辿る道', () => {
     expect(reply).toMatch(/axis="manager", cursor="[A-Za-z0-9_-]+" で続きが出る/);
   });
 
-  /**
-   * **#406 の変異試験で確定させた向き。** 「切ったら黙らない」の逆——
-   * **切っていないのに断り書きが出る**方向は、いままでこの軸の打ち切りに
-   * 対する専用の歯を1本も持っていなかった（`renderListing` 側は
-   * `excerpt.test.ts` の「予算に収まるなら全件そのまま出す」が既に守って
-   * いるが、この軸ごとの打ち切りは `renderListing` を通らない手書きの
-   * ループ——`tools.ts` の `renderUsage` 内、`USAGE_AXIS_LIMIT` の直後の
-   * `if (entries.length > USAGE_AXIS_LIMIT)` ——なので、そちらの歯は
-   * ここには効かない）。
-   *
-   * **`'は出していない'` を目印にする理由**: `'残り'` だけだと
-   * `ACCOUNT_USAGE_TITLE`（「アカウント全体の残り」）に常に一致し、
-   * 打ち切りの有無と無関係に真になる（偽陽性）。`'は出していない'` は
-   * 打ち切りの断り書き（`tools.ts` の3箇所——usage_read の軸モード・
-   * usage_read のまとめ表示・self_status の台帳突き合わせ）だけが持つ
-   * 語なので、この断り書きの有無だけを見る。
-   */
   it('打ち切っていないなら、断り書きは1つも出ない（USAGE_AXIS_LIMIT 未満）', async () => {
     const h = harness();
-    // USAGE_AXIS_LIMIT(14) を下回る件数——正常系。どの軸も打ち切られない。
     for (let i = 0; i < 5; i += 1) {
       await record(h, {
         layer: 'manager',
@@ -11966,7 +11773,6 @@ describe('usage_read の5軸と、打ち切りから続きへ辿る道', () => {
 
     const reply = await h.call('usage_read', {});
 
-    // 中身そのものは出ていることの確認(0件で通っているのではない)。
     expect(reply).toContain('マネージャー別:');
     expect(reply).toContain('mgr-00');
     expect(reply).not.toContain('は出していない');
@@ -11987,21 +11793,17 @@ describe('usage_read の5軸と、打ち切りから続きへ辿る道', () => {
     const cursor = extractUsageCursor(summary, 'manager');
     const reply = await h.call('usage_read', { axis: 'manager', cursor });
 
-    // まとめ表示の先頭14件と続きが重ならない（同じ並びを1か所で決めている）。
     expect(reply).toContain('mgr-14');
     expect(reply).toContain('mgr-19');
     expect(reply).not.toContain('mgr-13');
-    // 他の軸もアカウント全体の残りも出さない（続きを辿るたびに全体が返らない）。
     expect(reply).not.toContain('日別');
     expect(reply).not.toContain('アカウント全体の残り');
   });
 
   it('cursor が最後の頁を指していても、黙って空を返さない', async () => {
-    // 空の一覧だけでは「この軸には記録が無い」と「cursor がもう続きを持たない」を区別できない。
     const h = harness();
     await record(h, { layer: 'manager', site: 'session', managerId: 'mgr-1', costUsd: 1 });
 
-    // mgr-1 自身を錨にする＝「mgr-1 まではもう見た」——それより後ろは無い。
     const cursor = encodeUsageCursor({ axis: 'manager', label: 'mgr-1', cost: 1 });
     const reply = await h.call('usage_read', { axis: 'manager', cursor });
 
@@ -12016,7 +11818,6 @@ describe('usage_read の5軸と、打ち切りから続きへ辿る道', () => {
     const reply = await h.call('usage_read', { axis: 'manager', cursor: '!!!not-a-cursor!!!' });
 
     expect(reply).toContain('cursor が壊れている');
-    // 黙って先頭へは倒さない——本来の中身（mgr-1）を出していない。
     expect(reply).not.toContain('mgr-1:');
   });
 
@@ -12024,7 +11825,6 @@ describe('usage_read の5軸と、打ち切りから続きへ辿る道', () => {
     const h = harness();
     await record(h, { layer: 'manager', site: 'session', managerId: 'mgr-1', costUsd: 1 });
 
-    // 'model' 軸の cursor を 'manager' 軸へ渡す。
     const wrongAxisCursor = encodeUsageCursor({ axis: 'model', label: 'claude-opus-5', cost: 1 });
     const reply = await h.call('usage_read', { axis: 'manager', cursor: wrongAxisCursor });
 
@@ -12032,14 +11832,6 @@ describe('usage_read の5軸と、打ち切りから続きへ辿る道', () => {
     expect(reply).not.toContain('mgr-1:');
   });
 
-  /**
-   * **issue #1673 の再現。** まとめ表示 → 続きの間に、最下位（まとめ表示にも
-   * 続きにも出ていない行）が別の記録で費用を積んで先頭へ来ると、旧実装
-   * （素の配列添字 `offset`）は mgr-15 を両方の応答からも落とし、代わりに
-   * まとめ表示で既に見せた mgr-14 を続きの頁で重複させていた。
-   * cursor（keyset）はこの2つを両方直す——重複せず、mgr-15 は「順位が
-   * 上がった」枠に出る（黙って消えない）。
-   */
   it('#1673: まとめ表示→続きの間に最下位の行が伸びて先頭へ来ても、欠落せず重複もしない', async () => {
     const h = harness();
     const FIRST_CALL_AT = '2026-08-14T10:00:00.000Z';
@@ -12067,8 +11859,6 @@ describe('usage_read の5軸と、打ち切りから続きへ辿る道', () => {
     expect(summary).not.toContain('mgr-15');
     const cursor = extractUsageCursor(summary, 'manager');
 
-    // まとめ表示を見てから続きを取りに行くまでの間に、mgr-15 が費用を積んで
-    // 先頭（最上位）へ移る。委譲が並行して走っている器では普通に起こる。
     await record(h, {
       layer: 'manager',
       site: 'session',
@@ -12079,29 +11869,13 @@ describe('usage_read の5軸と、打ち切りから続きへ辿る道', () => {
 
     const continuation = await h.call('usage_read', { axis: 'manager', cursor });
 
-    // 欠落しない: mgr-15 は「順位が上がった」枠で出る。
     expect(continuation).toContain('順位が上がった');
     expect(continuation).toContain('mgr-15');
 
-    // 重複しない: 続きの頁の本体（「順位が上がった」節より前）に、まとめ表示で
-    // 既に見せた mgr-14 が再び出てはいけない。
     const [body] = continuation.split('⚠ 順位が上がった');
     expect(body).not.toContain('mgr-14');
   });
 
-  /**
-   * **issue #1719 の再現（`usage_read` の軸モード。道具の層の歯）。**
-   *
-   * `usage-cursor.test.ts` の B10 は `findUsageCursorTies` を直接呼んで錨を
-   * 組み立てるので、`tools.ts` 側の呼び出し（`encodeUsageCursor` に
-   * `tiedAtAsOf: findUsageCursorTies(...)` を渡す行）が丸ごと抜けても気づけ
-   * ない——道具の層の歯が別に要る理由である。
-   *
-   * **通るのは軸モードの「続きへ辿る」側**（`USAGE_AXIS_PAGE`＝100 で打ち切る
-   * 側）——まとめ表示の `USAGE_AXIS_LIMIT`＝14 側ではない。1回目の呼び出しから
-   * `axis: 'manager'` を指定しているので、まとめ表示を経由せず、100件目で
-   * 直接打ち切られる。
-   */
   it('#1719: 軸モードの続きへ辿る間に、最下位の行が asOf と同じミリ秒のまま追い越しても欠落しない（同着）', async () => {
     const h = harness();
     const FIRST_CALL_AT = '2026-08-14T10:00:00.000Z';
@@ -12114,7 +11888,6 @@ describe('usage_read の5軸と、打ち切りから続きへ辿る道', () => {
         at: FIRST_CALL_AT,
       });
     }
-    // 100件目（mgr-099, 費用1）の錨より下位・非表示。かつ asOf をちょうど作る行。
     await record(h, {
       layer: 'manager',
       site: 'session',
@@ -12123,12 +11896,10 @@ describe('usage_read の5軸と、打ち切りから続きへ辿る道', () => {
       at: FIRST_CALL_AT,
     });
 
-    // 1回目から axis を指定する＝軸モード。まとめ表示を経由しない。
     const first = await h.call('usage_read', { axis: 'manager' });
     expect(first).not.toContain('mgr-100');
     const cursor = extractUsageCursor(first, 'manager');
 
-    // 前回と同じミリ秒（asOf と同着）のまま、mgr-100 が費用を積んで錨を追い越す。
     await record(h, {
       layer: 'manager',
       site: 'session',
@@ -12143,13 +11914,9 @@ describe('usage_read の5軸と、打ち切りから続きへ辿る道', () => {
     expect(continuation).toContain('mgr-100');
   });
 
-  /**
-   * **記録が増えない対照。** cursor（keyset）に切り替えても、通常の場合
-   * （途中で記録が増えない）は複数頁を欠落・重複なく辿れること。
-   */
   it('記録が増えない場合は、cursor で複数頁を欠落・重複なく辿れる', async () => {
     const h = harness();
-    const total = 250; // USAGE_AXIS_PAGE(100) を跨いで最低3頁になる件数。
+    const total = 250;
     for (let i = 0; i < total; i += 1) {
       await record(h, {
         layer: 'manager',
@@ -12169,17 +11936,16 @@ describe('usage_read の5軸と、打ち切りから続きへ辿る道', () => {
         'usage_read',
         cursor === undefined ? { axis: 'manager' } : { axis: 'manager', cursor },
       );
-      expect(reply).not.toContain('順位が上がった'); // 記録は増えていない。
+      expect(reply).not.toContain('順位が上がった');
       for (const m of reply.matchAll(/^ {2}(mgr-\d{4}): /gm)) seen.push(m[1]!);
       const next = reply.match(/axis="manager", cursor="([^"]+)" で続きが出る/);
       if (!next) break;
       cursor = next[1];
     }
 
-    // 欠落しない: 全件そろう。重複しない: 同じラベルが2度出てこない。
     expect(new Set(seen).size).toBe(total);
     expect(seen.length).toBe(total);
-    expect(pages).toBeGreaterThan(1); // 複数頁であることの前提そのものの確認。
+    expect(pages).toBeGreaterThan(1);
   });
 
   it('層の軸の始点を台帳の始点と混ぜない', async () => {
@@ -12264,7 +12030,6 @@ describe('usage_read はアカウント全体の残りも返す（人間と同�
   });
 
   it('使用率が付かない枠を 0% と書かない', async () => {
-    // `five_hour` には utilization が付かないことがある（実測）。
     const call = withAccount(() => ({
       state: 'ok',
       usage: {
@@ -12280,7 +12045,6 @@ describe('usage_read はアカウント全体の残りも返す（人間と同�
   });
 
   it('枠が来なかったら「0%」ではなく「取れなかった」', async () => {
-    // `rate_limits_available: true` でも `rate_limits: null` があり得る（実測）。
     const call = withAccount(() => ({
       state: 'ok',
       usage: {
@@ -12327,13 +12091,6 @@ describe('usage_read はアカウント全体の残りも返す（人間と同�
   });
 });
 
-/**
- * `self_status`（いま自分がどう走っているか）。
- *
- * **`CloneRuntimeFacts` の整形そのものは self.test.ts が確かめる。** ここで見るのは
- * tools.ts 側だけの仕事 — その場で読み直す記憶の大きさと、台帳との突き合わせが、
- * `stores` の実物と正しく噛み合っているか。
- */
 describe('self_status（いま自分がどう走っているか）', () => {
   const RUNTIME: CloneRuntimeFacts = {
     revision: { commit: null, short: null, source: null },
@@ -12351,9 +12108,6 @@ describe('self_status（いま自分がどう走っているか）', () => {
     mcpServers: [],
     sessionId: null,
     resumedFrom: null,
-    // **意図的に、以下で書き込む記憶の総文字数とは違う値にしてある。** 「いまの
-    // 総文字数」と区別できることを見るための固定値であって、実際の構築時の値を
-    // 模したものではない。
     injectedMemoryChars: heuristicChars(3),
     systemPromptChars: heuristicChars(999),
     lastContextUsage: null,
@@ -12396,14 +12150,13 @@ describe('self_status（いま自分がどう走っているか）', () => {
 
     expect(reply).toContain('2 文書');
     expect(reply).toContain(`${totalMemory.length.toLocaleString('en-US')} 文字`);
-    // 焼き込んだ時点の文字数（固定値 3）が、いまの総文字数とは別の行として出る。
     expect(reply).toContain('焼き込んだ記憶の文字数（このセッションを組み立てた時点）: 3 文字');
   });
 
   it('記憶を書き換えたあとに呼んでも、いまの総文字数は読み直した値が出る', async () => {
     const h = harness(() => RUNTIME);
     await writeBased(h, { slug: 'values', content: '# 価値観\n\n最初の版', summary: '1' });
-    await h.call('self_status', {}); // 1回目（内容は見ない。副作用が無いことの前提づくり）
+    await h.call('self_status', {});
 
     await writeBased(h, {
       slug: 'values',
@@ -12415,16 +12168,9 @@ describe('self_status（いま自分がどう走っているか）', () => {
     const reply = await h.call('self_status', {});
 
     expect(reply).toContain(`${totalMemory.length.toLocaleString('en-US')} 文字`);
-    // 焼き込んだ時点（固定値 3）は書き換えても動かない — 別の軸であることの確認。
     expect(reply).toContain('組み立てた時点）: 3 文字');
   });
 
-  /**
-   * ⭐ 記憶の肥大への恒久対策——`self_status` の記憶内訳に区分ごとの
-   * 小計（premise 合計 / fact 目次合計）を足す。
-   *
-   * **既存の `- 総文字数: N 文字（M 文書）` の行の文言は変えない**（歯で固定）。
-   */
   describe('記憶内訳の区分ごとの小計（premise 合計 / fact 目次合計。記憶の肥大への恒久対策）', () => {
     it('既存の「総文字数」の行の文言は変わっていない', async () => {
       const h = harness(() => RUNTIME);
@@ -12438,20 +12184,8 @@ describe('self_status（いま自分がどう走っているか）', () => {
       );
     });
 
-    /**
-     * ⭐⭐ **蓋が噛んだら、この行はそれを名乗る**（`MEMORY_PREMISE_CARD_BUDGET`）。
-     *
-     * 名乗らないと、この行の「毎ターン『要旨＋節の目次』が焼かれる」が落ちた
-     * 文書について嘘になる——`self_status` はクローンが記憶の大きさを見る面な
-     * ので、ここが嘘をつくと「premise を足しても安い」と読める
-     * （`MemoryFloor.demotedPremiseDocs` の doc）。
-     *
-     * **⚠️ この歯が測っていないこと**: 断り書きの*文言*が実装のふるまいと
-     * 合っているかは測っていない。字面が現れることしか見ない。
-     */
     it('⭐⭐ 束ねた予算に当たっているときは、カードを落とした件数を同じ行で名乗る', async () => {
       const h = harness(() => RUNTIME);
-      // カードが1文書あたりの予算に張り付く形を、束ねた予算を超える枚数だけ積む。
       const body = Array.from(
         { length: 200 },
         (_, n) => `## 節${n} ${'見出し'.repeat(4)}\n\n本文\n`,
@@ -12461,7 +12195,6 @@ describe('self_status（いま自分がどう走っているか）', () => {
         await writeBased(h, { slug: `big-${i}`, content, summary: String(i) });
       }
       const floor = measureMemoryFloor(await h.stores.persona.documents());
-      // 前提: 足場が実際に蓋を噛ませている（噛んでいなければこの歯は空振りである）。
       expect(floor.demotedPremiseDocs).toBeGreaterThan(0);
 
       const reply = await h.call('self_status', {});
@@ -12470,7 +12203,6 @@ describe('self_status（いま自分がどう走っているか）', () => {
         `⚠️ うち ${floor.demotedPremiseDocs.toLocaleString('en-US')} 文書は束ねた予算に当たって` +
           'カードを落とし、1行になっている',
       );
-      // 直し方と開く口を名指ししている（載せないことを能力の削除にしないための条件）。
       expect(reply).toContain('memory_outline');
     });
 
@@ -12517,11 +12249,6 @@ describe('self_status（いま自分がどう走っているか）', () => {
       expect(reply).toMatch(/\[fact\] fact-doc:/);
       expect(reply).toMatch(/\d[\d,]* bytes \/ [\d,]+ 文字/);
     });
-
-    // **並びが寄与の大きい順であることの歯は `flooded()` を使うため、
-    // それが定義されているスコープ（下の
-    // `describe('一覧は例外なく件数で壊れない…')`）に置いてある——
-    // `grep -Fn -- '⭐ 並びは寄与の大きい順で' packages/core/src/tools.test.ts`。
   });
 
   it('鍵・トークンの値を出さない（profile_write で置いた値が self_status に出ない）', async () => {
@@ -12537,7 +12264,7 @@ describe('self_status（いま自分がどう走っているか）', () => {
   });
 
   it('SDK モデル id がまだ分からなければ、突き合わせをせずそう言う', async () => {
-    const h = harness(() => RUNTIME); // sdkModel: null
+    const h = harness(() => RUNTIME);
 
     const reply = await h.call('self_status', {});
 
@@ -12570,25 +12297,9 @@ describe('self_status（いま自分がどう走っているか）', () => {
 
     expect(reply).toContain('claude-fable-9000');
     expect(reply).toContain('managerId: "mgr-7"');
-    // 「載っている／いない」という断定ではなく、軸（managerId 付きの行）を出す。
     expect(reply).not.toMatch(/あなたの消費が(台帳に)?載って/);
   });
 
-  /**
-   * **#406 の変異試験（`renderLedgerCrossReference` の打ち切り断り書きを
-   * 空にする変異）は、いまの test 一式（本ファイル全件）で生存した——
-   * その理由は「歯が無い」であって「変異が届いていない」ではないことを、
-   * 到達性の証人（sdkModel を与えた器で USAGE_AXIS_LIMIT(14) を超えさせる
-   * 一時テスト）で別途確かめてある。この節は `renderListing` を通らない
-   * 手書きのループ（`tools.ts` の `renderLedgerCrossReference`、
-   * `if (entries.length > USAGE_AXIS_LIMIT)` 直下）なので、
-   * `excerpt.test.ts` 側の「予算に収まるなら全件そのまま出す」歯は
-   * ここには効かない。**
-   *
-   * ここが直接見るのは逆方向——**切っていないのに断り書きが出ないこと**。
-   * `USAGE_AXIS_LIMIT`(14) を下回る件数なら、`残り`/`は出していない`が
-   * 1つも出てはいけない。
-   */
   it('台帳の突き合わせが USAGE_AXIS_LIMIT 未満なら、打ち切りの断り書きは出ない', async () => {
     const h = harness(() => ({ ...RUNTIME, sdkModel: 'claude-fable-9000' }));
     for (let i = 0; i < 5; i += 1) {
@@ -12616,7 +12327,6 @@ describe('self_status（いま自分がどう走っているか）', () => {
 
     const reply = await h.call('self_status', {});
 
-    // 中身そのものは出ていることの確認(0件で通っているのではない)。
     expect(reply).toContain('claude-fable-9000');
     expect(reply).toContain('managerId: "mgr-00"');
     expect(reply).not.toContain('は出していない');
@@ -12651,14 +12361,6 @@ describe('self_status（いま自分がどう走っているか）', () => {
   });
 });
 
-/**
- * `journalEntrySchema` の `memory_update.action` は **optional** で足した。
- *
- * 「書いた」と「消した」の区別がこれまで `summary` の自由文にしか無かった
- * （PR #144 で潰したのと同じ形の欠陥）ので機械可読な区別を足すが、optional に
- * したのは既存の日誌エントリを1件も壊さないためである。ここではその意味
- * そのもの——`action` の無いエントリが今も通ること——を固定する。
- */
 describe('journalEntrySchema の memory_update（action の後方互換）', () => {
   it('action の無い既存エントリ（action 導入前の形）が今も通る', () => {
     const legacy = {
@@ -12695,22 +12397,7 @@ describe('journalEntrySchema の memory_update（action の後方互換）', () 
   });
 });
 
-/**
- * `journalEntrySchema` の `turn_usage.contextUsage.categories[].kind` は
- * **optional** で足した（#804）。
- *
- * **この歯が守っているのは「日誌は読み出し時にも検証される」ことである。**
- * `kind` を必須にすると、この欄が増える前に書かれた `turn_usage` の行が
- * `safeParse` に落ち、**行ごと `list()` の結果から消える**
- * （`packages/storage-fs/src/journal.ts` の `parseLine` /
- * `packages/storage-pg/src/journal.ts` の `list`）。`journal_read`・日報・
- * 蒸留はどれもそこを通るので、**1つの欄を必須にしただけで、既に記録済みの
- * ターンの消費が静かに読めなくなる。**
- *
- * `memory_update.action` の後方互換の歯（直上）と同じ形・同じ理由である。
- */
 describe('journalEntrySchema の turn_usage.contextUsage.categories[].kind（後方互換。#804）', () => {
-  /** `kind` を持たない軸だけを積んだ、この欄が増える前の形の行。 */
   const legacyRow = {
     type: 'turn_usage' as const,
     id: 'j-804-legacy',
@@ -12730,8 +12417,6 @@ describe('journalEntrySchema の turn_usage.contextUsage.categories[].kind（後
     const result = journalEntrySchema.safeParse(legacyRow);
 
     expect(result.success).toBe(true);
-    // **通ったことだけでは足りない。** `safeParse` が成功しても軸そのものが
-    // 剥ぎ取られていれば内訳は読めないので、欄が残っていることまで測る。
     if (result.success && result.data.type === 'turn_usage') {
       expect(result.data.contextUsage?.categories).toEqual([
         { name: 'System prompt', tokens: 8_000 },
@@ -12771,20 +12456,12 @@ describe('journalEntrySchema の turn_usage.contextUsage.categories[].kind（後
       },
     });
 
-    // **未知の値でも書き込み（`append` の `parse`）が落ちないことが本題である。**
-    // 落ちれば、1つの未知の軸のせいでそのターンの消費が丸ごと記録できない。
     expect(result.success).toBe(true);
     if (result.success && result.data.type === 'turn_usage') {
       expect(result.data.contextUsage?.categories?.[0]?.kind).toBe('invented-by-a-later-sdk');
     }
   });
 });
-/**
- * `journalEntrySchema` の `subagent_stall`（Issue #357）。`token_rotation` と
- * 同じ形で `text` と構造の両方を持つ——ここでは構造側（`safeParse` の可否）を
- * 固定する。人間が読む本文側の描画は `renderJournalEntry` の歯
- * （「journal_read で subagent_stall を絞れる」describe）が持つ。
- */
 describe('journalEntrySchema の subagent_stall（Issue #357）', () => {
   const full = {
     type: 'subagent_stall' as const,
@@ -12827,34 +12504,7 @@ describe('journalEntrySchema の subagent_stall（Issue #357）', () => {
   });
 });
 
-/**
- * `journal_read`（クローンが読む面）が `memory_update` の `action` /
- * `bytesBefore` / `bytesAfter` を出すこと（#339）。
- *
- * 記録側（`memory_write` 等）は既に action / バイト数を日誌へ書いているが
- * （上のテスト群）、読み出す面がそれを出していなかった。ここで測るのは
- * 読み出し側——`renderJournalEntry` の `memory_update` 分岐——である。
- */
-/**
- * `journal_read` が `turn_usage` の**文脈の内訳**を出すか（#804）。
- *
- * ## なぜ歯が要るのか —— この整形には既存の歯が1本も無かった
- *
- * `turn_usage` の `contextUsage` を `journal_read` が出す配線は、この PR の前は
- * **どのテストも触っていなかった**（実測 2026-09-11: `grep -rn "文脈: " --include='*.test.ts'`
- * が 0 件）。⟹ 合計の行も内訳の行も、消しても誰も落ちない状態だった。
- *
- * この欄が在る理由そのものが「**取れているのに読めない、は『取れていない』と
- * 同じである**」なので（`tools.ts` の既存コメント）、読める側に歯を置く。
- *
- * ## ⚠️ この歯が測っていないこと
- *
- * **SDK が返す数の正しさは測っていない。** 日誌へ直接書いた値を、整形が
- * そのまま出すかだけを見る。値の出所（`#observeContextUsage` の写し方）は
- * `clone-turn-usage.test.ts`（旧 `clone.test.ts`。#1744 で分割済み）の側が持つ。
- */
 describe('journal_read — turn_usage の文脈の内訳（#804）', () => {
-  /** 内訳を持つ `turn_usage` の1行を日誌へ直接積む。 */
   const appendTurnUsage = async (
     h: ReturnType<typeof harness>,
     contextUsage: Record<string, unknown>,
@@ -12864,12 +12514,6 @@ describe('journal_read — turn_usage の文脈の内訳（#804）', () => {
       layer: 'clone',
       site: 'session',
       managerId: CLONE_ACTOR_ID,
-      // journalEntrySchema の turn_usage.models は record（オブジェクト）——
-      // 空配列ではない。ここが `[]` だったのは、インメモリの
-      // JournalStore.append が journalEntrySchema.parse を通していなかった
-      // 頃（issue #1668 の直し前）に見えなかった latent なずれで、fs / pg
-      // （どちらも append() で journalEntrySchema.parse を通す）にこの入力を
-      // 当てれば元から throw していた。
       models: {},
       summary: 'ターンの消費',
       contextUsage,
@@ -12896,25 +12540,16 @@ describe('journal_read — turn_usage の文脈の内訳（#804）', () => {
 
     const reply = await h.call('journal_read', { id: entry.id });
 
-    // 合計（既存の行）は残っている。
     expect(reply).toContain('文脈: 12,000 トークン / 200,000（6%）');
-    // 内訳が出る。
     expect(reply).toContain('システムプロンプト 8,000 トークン');
     expect(reply).toContain('MCP の道具の説明文 1,000 トークン（37 本）');
-    // **記憶の焼き込みがどちらに入るかを名指しする**（取り違えを塞ぐ）。
     expect(reply).toContain('**記憶の焼き込みはここに入る**');
     expect(reply).toContain('**alteroid の記憶ではない**');
-    // カテゴリ別、名前が SDK 由来であるという断り、**そして `kind`（#804）**。
     expect(reply).toContain('System prompt 8,000 [used]');
     expect(reply).toContain('MCP tools 1,000 [deferred]');
     expect(reply).toContain('名前は SDK の版で変わりうる');
   });
 
-  /**
-   * ⭐⭐⭐ **`kind` の無い軸は「分類なし」と名乗る**（#804。この欄が増える前に
-   * 書かれた行、または SDK が返さなかった軸と同じ形）。⛔ `used` へは倒さない
-   * ——`[used]` と書けば「毎ターン払っている入力」だと読めてしまう。
-   */
   it('⭐⭐⭐ kind の無い軸は「分類なし」と名乗る（used へ倒さない）', async () => {
     const h = harness();
     const entry = await appendTurnUsage(h, {
@@ -12941,7 +12576,6 @@ describe('journal_read — turn_usage の文脈の内訳（#804）', () => {
     const reply = await h.call('journal_read', { id: entry.id });
 
     expect(reply).toContain('文脈: 12,000 トークン');
-    // 内訳の見出しも、0 の行も出ない。
     expect(reply).not.toContain('内訳:');
     expect(reply).not.toContain('システムプロンプト');
     expect(reply).not.toContain('MCP の道具の説明文');
@@ -12960,7 +12594,6 @@ describe('journal_read — turn_usage の文脈の内訳（#804）', () => {
     const reply = await h.call('journal_read', { id: entry.id });
 
     expect(reply).toContain('MCP の道具の説明文 1,000 トークン（37 本）');
-    // 渡していない軸は出ない。
     expect(reply).not.toContain('システムプロンプト');
     expect(reply).not.toContain('CLAUDE.md 系');
   });
