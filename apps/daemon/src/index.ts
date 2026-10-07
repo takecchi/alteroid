@@ -22,6 +22,8 @@ import {
   createProfileApplier,
   createCredentialService,
   createMcpServerService,
+  createCodexChatgptAuthService,
+  startCodexDeviceLogin,
   createProfileService,
   createProfileVessel,
   createRunnerRegistry,
@@ -59,6 +61,7 @@ import {
   readAttachmentLimits,
   attachmentCopiesDir,
 } from '@alteroid/core';
+import { codexLoginEnvOf } from './codex-login-env.js';
 
 import { createApp, parseAllowedOrigins } from './app.js';
 import { startTokenRotationWatch, type TokenRotationWatch } from './token-watch.js';
@@ -602,6 +605,20 @@ export async function main(): Promise<void> {
 
   const mcpServerService = createMcpServerService({ stores, runners });
 
+  // Codex の ChatGPT ログインの正本（#3939）。インスタンスは1つだけ作り、HTTP の口とマネージャーの
+  // プール（runner の名乗りのたびの降ろし直し・書き戻し）の両方へ渡す。
+  const codexAuthService = createCodexChatgptAuthService({
+    store: stores.codexAuth,
+    runners,
+    journal: async (entry) => {
+      await stores.journal.append(entry);
+    },
+    // ログインはデーモンの器で、一時的な CODEX_HOME の app-server で回す（イメージは1つで、codex は
+    // デーモンの器にも在る）。**記憶ストアの鍵などデーモンの env を子へ渡さない** —— 渡すのは
+    // 道具を探す PATH と、外へ出るための名前（プロキシ・証明書）だけ。
+    startDeviceLogin: () => startCodexDeviceLogin({ env: codexLoginEnvOf(bootEnvSnapshot) }),
+  });
+
   const credentialService = createCredentialService({
     stores,
     runners,
@@ -755,6 +772,7 @@ export async function main(): Promise<void> {
     // `storage.withheldEnvKeys` は使わない: pg 構成では `ALTEROID_DATABASE_URL` を含み、それはクローンが記憶ストアへ到達するために要る鍵のため。
     withheldEnvKeys: [...AUTH_WITHHELD_ENV_KEYS],
     mcpServerService,
+    codexAuthService,
     self,
     credentials: () => agentTokenHolder.values(),
     tokenIdentity: () => agentTokenHolder.identity(),
@@ -1051,6 +1069,7 @@ export async function main(): Promise<void> {
     profile: profileService,
     credentials: credentialService,
     mcpServers: mcpServerService,
+    codexAuth: codexAuthService,
     tokens: tokenPoolService,
     clearSessionLog: storage.clearSessionLog,
   });

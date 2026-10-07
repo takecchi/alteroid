@@ -118,6 +118,7 @@ import type { AnswerApprovalVia, CloneHost, PostPersistOutcome } from './host.js
 import { createRunnerRegistry, type RunnerClient } from './runner-protocol.js';
 import {
   createManagerPool,
+  type CodexAuthRunnerSync,
   type ManagerPool,
   type ManagerSummary,
   type WorkerToolEvent,
@@ -1354,6 +1355,12 @@ export interface CloneOptions {
    */
   mcpServerService?: McpServerService;
   /**
+   * Codex の ChatGPT ログインの正本の持ち主（#3939）。**デーモンが作った同じインスタンスを渡すこと**
+   * （`mcpServerService` と同じ理由。runner が名乗るたびの降ろし直しと、runner からの書き戻しが
+   * マネージャーのプールを通る）。
+   */
+  codexAuthService?: CodexAuthRunnerSync;
+  /**
    * アカウント全体の利用状況（claude.ai 側の値）を読む口。
    *
    * **人間が `claude.ai/settings/usage` で見られるものを、クローンにも渡す。**
@@ -2411,6 +2418,7 @@ class Clone implements CloneHost {
       credentialService,
       withheldEnvKeys,
       mcpServerService,
+      codexAuthService,
       accountUsage,
       scheduler,
       onScheduledRunNotStarted,
@@ -2469,6 +2477,7 @@ class Clone implements CloneHost {
         ...(profileService === undefined ? {} : { profile: profileService }),
         ...(credentialService === undefined ? {} : { credentials: credentialService }),
         ...(mcpServerService === undefined ? {} : { mcpServers: mcpServerService }),
+        ...(codexAuthService === undefined ? {} : { codexAuth: codexAuthService }),
         // マネージャーからの報告・質問も、人間の発言と同じ受信箱を通る。
         post: (event) => this.post(event),
         runners: runners ?? createRunnerRegistry([]),

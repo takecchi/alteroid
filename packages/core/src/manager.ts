@@ -2979,6 +2979,21 @@ export function resolveWorkspacePolicy(env: NodeJS.ProcessEnv = process.env): Wo
  */
 export type WorkerToolEvent = Extract<RunnerEvent, { type: 'tool_running' | 'tool_end' }>;
 
+/**
+ * Codex の ChatGPT ログインの正本の持ち主（#3939）のうち、`ManagerPool` が使う部分。
+ * **どちらも投げない**（失敗は持ち主の側が日誌に残す）。
+ */
+export interface CodexAuthRunnerSync {
+  /** 1台の runner へ、いま正本に在るログインを降ろし直す（無ければ外す）。 */
+  syncRunner(runner: RunnerClient): Promise<void>;
+  /** runner の `codex_auth`（書き戻し・失効）を受ける。`runner` は繋がっていなければ `null`。 */
+  onRunnerNotice(
+    event: Extract<RunnerEvent, { type: 'codex_auth' }>,
+    runnerId: string,
+    runner: RunnerClient | null,
+  ): Promise<void>;
+}
+
 export interface ManagerPoolOptions {
   /**
    * いま撒かれている認証トークンの身元（Issue #393 PR3）。**マネージャーの
@@ -3043,6 +3058,13 @@ export interface ManagerPoolOptions {
    * **降ろし直しも更新（`apply`）と同じ列を通す。**
    */
   mcpServers?: McpServerService;
+  /**
+   * Codex の ChatGPT ログインの正本の持ち主（#3939。`codex-chatgpt-auth-service.ts`）。
+   *
+   * **MCP の登録と同じ理由でここに要る** — runner は記憶ストアを読めないので、器が作り直された
+   * ときに降ろすのはデーモンの責任である。runner からの書き戻し・失効の知らせもここへ渡す。
+   */
+  codexAuth?: CodexAuthRunnerSync;
   /**
    * いまの時刻（既定は `Date.now`）。**貸し出し期限の判定のために口を開けてある。**
    *
@@ -5109,6 +5131,7 @@ class Pool implements ManagerPool {
   readonly #profile: ProfileService | undefined;
   readonly #credentials: CredentialService | undefined;
   readonly #mcpServers: McpServerService | undefined;
+  readonly #codexAuth: CodexAuthRunnerSync | undefined;
   /**
    * MCP の登録を受け取る口を持たないと分かった runner（#325 段3）。**挑み直しの
    * 予約から外すためだけに持つ**（`#settlePushRetry`）。名乗り直しのたびに
@@ -5798,6 +5821,7 @@ class Pool implements ManagerPool {
     profile,
     credentials,
     mcpServers,
+    codexAuth,
     now,
     leaseTtlMs,
     withheldReportFlushMs,
@@ -5816,6 +5840,7 @@ class Pool implements ManagerPool {
     this.#profile = profile;
     this.#credentials = credentials;
     this.#mcpServers = mcpServers;
+    this.#codexAuth = codexAuth;
     // **即時の配布の結果も、名乗りのときの配布と同じ帳面に積む（Issue #1699 / #1717）。**
     for (const unsubscribe of [
       profile?.onPushed?.((results) => this.#recordDirectPushResults('profile', results)),
@@ -10374,6 +10399,9 @@ class Pool implements ManagerPool {
       // runner のメモリに置いた登録は消えているので、ここで降ろさないと最初の
       // マネージャーが連携0本で走り出す。
       await this.#pushMcpServers(runner);
+      // **Codex の ChatGPT ログインも同じ位置で降ろす（#3939）。** runner はメモリと CODEX_HOME に
+      // しか持たないので、器ごと入れ替わった runner では消えている。失敗は相手の側が日誌に残す。
+      await this.#codexAuth?.syncRunner(runner).catch(() => undefined);
       // **認証トークンも同じ位置で降ろす。** プロファイルと同じ理由——名乗り
       // 任せにすると、最初のマネージャーが古いトークンで走り出しうる。
       await this.#pushAgentToken(runner);
@@ -10548,6 +10576,8 @@ class Pool implements ManagerPool {
         // 登録をメモリにしか持たないので、器ごと入れ替わった runner では消えている。
         // 降ろし直さないと、再デプロイのたびにマネージャー・作業者の連携が0本へ戻る。
         await this.#pushMcpServers(runner);
+        // **Codex の ChatGPT ログインも同じ位置で降ろす（#3939。#connectTo と同じ）。**
+        await this.#codexAuth?.syncRunner(runner).catch(() => undefined);
         // **認証トークンも同じ位置で降ろす（Issue #393）。** 直上の理由がそのまま
         // 効く —— **器が入れ替わっていれば置いた鍵も消えている。** この経路にだけ
         // 無かったので、繋ぎ直してきた runner は`#connectTo`と違って鍵が降りず、
@@ -12130,6 +12160,15 @@ class Pool implements ManagerPool {
       // **runner の /tmp の片付け**（Issue #3039）。委譲に結びつかない（runner 単位）ので、
       // `shutting_down` と同じく record を引く前に処理する。
       await this.#onScratchSweep(event, fromRunnerId);
+      return;
+    }
+
+    if (event.type === 'codex_auth') {
+      // **Codex の ChatGPT ログインの書き戻し・失効**（#3939）。runner 単位。正本の持ち主
+      // （`CodexChatgptAuthService`）へ渡すだけで、委譲の台帳には触れない。
+      if (this.#codexAuth === undefined) return;
+      const runner = await this.#runners.get(fromRunnerId).catch(() => null);
+      await this.#codexAuth.onRunnerNotice(event, fromRunnerId, runner);
       return;
     }
 

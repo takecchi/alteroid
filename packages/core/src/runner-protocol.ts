@@ -2395,6 +2395,28 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
    * 出来事は全体が `safeParse` で落ちる**（接続は切れず、その1件が届かないだけ）。
    */
   scratchSweepEventSchema,
+  /**
+   * Codex の ChatGPT ログインについての runner の知らせ（#3939。`codex-auth-mirror.ts`）。
+   *
+   * - `changed`: Codex がトークンを更新して `CODEX_HOME/auth.json` を書き換えた。**値は載せない**
+   *   （指紋と、書き換えの元になった版だけ）。デーモンは制御面
+   *   （`POST /codex-auth/write-back`）で値を取りに行き、版の compare-and-swap で正本へ書き戻す。
+   * - `failed`: 認証が切れた・失効した・更新に失敗した。理由は伏せ字を通した文。
+   *
+   * **委譲に結びつかない**（runner 単位）。日誌に書くのはデーモンで、値は書かない。
+   *
+   * **旧 daemon との組み合わせ**: 未知の type は daemon の `safeParse` で落ち、
+   * `RunnerDroppedEventReport` に残るだけで接続は切れない（`scratch_sweep` と同じ扱い）。
+   * 書き戻しは起きず、runner の手元の `auth.json` は Codex が更新したまま残る。
+   */
+  z.object({
+    type: z.literal('codex_auth'),
+    runnerId: z.string(),
+    kind: z.enum(['changed', 'failed']),
+    baseRevision: z.string(),
+    fingerprint: z.string().optional(),
+    reason: z.string().optional(),
+  }),
 ]);
 
 export type RunnerEvent = z.infer<typeof runnerEventSchema>;
@@ -2451,6 +2473,37 @@ export class RunnerMcpServersUnsupportedError extends Error {
         'この runner で起こすマネージャー・作業者は記憶ストアの登録を持たずに走る。runner を上げれば次の名乗りで降りる）',
     );
     this.name = 'RunnerMcpServersUnsupportedError';
+  }
+}
+
+/**
+ * 相手の runner が Codex の ChatGPT ログインを受け取る口（`POST /codex-auth`）を持たない（#3939）。
+ * 古い版の runner である（404）。`RunnerMcpServersUnsupportedError` と同じく、挑み直しに数えない。
+ */
+/** `POST /codex-auth` の本文（#3939）。`null` は外す。 */
+export const runnerSetCodexAuthCommandSchema = z.object({
+  codexAuth: z.object({ value: z.string(), revision: z.string().min(1) }).nullable(),
+});
+
+/** `POST /codex-auth/write-back` の本文（#3939）。 */
+export const runnerTakeCodexAuthWriteBackCommandSchema = z.object({
+  fingerprint: z.string().min(1),
+});
+
+/** `POST /codex-auth/write-back` の応答の `writeBack`（#3939）。 */
+export const runnerCodexAuthWriteBackSchema = z.object({
+  value: z.string(),
+  baseRevision: z.string(),
+  fingerprint: z.string(),
+});
+
+export class RunnerCodexAuthUnsupportedError extends Error {
+  constructor(runnerId: string) {
+    super(
+      `${runnerId} は Codex の ChatGPT ログインを受け取る口を持たない（古い版の runner。` +
+        'この runner の peer の Codex は CODEX_API_KEY が無ければ認証を持たずに走る。runner を上げれば次の名乗りで降りる）',
+    );
+    this.name = 'RunnerCodexAuthUnsupportedError';
   }
 }
 
@@ -3033,6 +3086,20 @@ export interface RunnerClient {
    * 降ろさない（押し込みを試みたことにもしない）。
    */
   setMcpServers?(servers: McpServers): Promise<RunnerMcpServersFingerprint | undefined>;
+  /**
+   * Codex の ChatGPT ログイン（#3939）を降ろす。`null` は外す（ログアウト）。
+   * **runner が繋ぎ直すたびに降ろし直すこと**（`setMcpServers` と同じ。runner はメモリと
+   * `CODEX_HOME` にしか持たない）。口を持たない相手（古い runner）には
+   * `RunnerCodexAuthUnsupportedError` を投げる。**省略できる**（持たない実装へは降ろさない）。
+   */
+  setCodexAuth?(push: { value: string; revision: string } | null): Promise<void>;
+  /**
+   * runner が `codex_auth`（`changed`）で知らせた書き換えの値を取りに行く（#3939）。指紋が一致する
+   * ものが無ければ `null`。**省略できる。**
+   */
+  takeCodexAuthWriteBack?(
+    fingerprint: string,
+  ): Promise<{ value: string; baseRevision: string; fingerprint: string } | null>;
   /**
    * 口を閉じる。
    *

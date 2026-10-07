@@ -2352,6 +2352,36 @@ const credentialFingerprintWithMetaSchema = runnerCredentialFingerprintSchema.ex
   value: z.string().optional(),
 });
 
+/**
+ * Codex の ChatGPT ログインの状態（#3939）。**値（`auth.json` の中身）は返さない。**
+ * 返すのはログイン済みか・アカウント・プラン・最終更新・指紋・最後の失敗だけ。
+ */
+export const codexAuthStatusResponseSchema = z.object({
+  loggedIn: z.boolean(),
+  email: z.string().nullable(),
+  planType: z.string().nullable(),
+  updatedAt: z.string().nullable(),
+  /** 値の sha256 の先頭12桁。 */
+  fingerprint: z.string().nullable(),
+  /** 切れた・失効した・更新に失敗した事実（再ログインで消える）。 */
+  failure: z.object({ at: z.string(), reason: z.string() }).nullable(),
+});
+
+/** デバイスコードのログイン1本の状態（#3939）。 */
+export const codexLoginResponseSchema = z.object({
+  id: z.string(),
+  state: z.enum(['pending', 'succeeded', 'failed', 'canceled', 'expired']),
+  /** 人間がブラウザで開く確認用 URL。 */
+  verificationUrl: z.string(),
+  /** 人間が入力する1回限りのコード。 */
+  userCode: z.string(),
+  startedAt: z.string(),
+  finishedAt: z.string().nullable(),
+  error: z.string().nullable(),
+});
+
+export const codexLogoutResponseSchema = z.object({ removed: z.boolean() });
+
 export const credentialsResponseSchema = z.object({
   credentials: z.array(credentialFingerprintWithMetaSchema),
 });

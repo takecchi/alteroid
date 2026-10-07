@@ -1141,6 +1141,9 @@ export {
   runnerSessionOpenResultSchema,
   runnerSetCredentialsCommandSchema,
   runnerSetMcpServersCommandSchema,
+  runnerSetCodexAuthCommandSchema,
+  runnerTakeCodexAuthWriteBackCommandSchema,
+  runnerCodexAuthWriteBackSchema,
   runnerSetProfileCommandSchema,
   runnerStartCommandSchema,
   runnerWaitingSchema,
@@ -1510,6 +1513,13 @@ export { verifyTokenPoolContract } from './token-pool-contract.js';
 export { verifyCodexChatgptAuthContract } from './codex-chatgpt-auth-contract.js';
 /** Codex の ChatGPT ログイン（#3939）。正本の形・状態・デバイスコードのログイン。 */
 export * from './codex-chatgpt-auth.js';
+export {
+  createCodexChatgptAuthService,
+  type CodexChatgptAuthService,
+  type CodexChatgptAuthServiceOptions,
+  type CodexLoginView,
+} from './codex-chatgpt-auth-service.js';
+export { RunnerCodexAuthUnsupportedError } from './runner-protocol.js';
 export {
   CODEX_DEVICE_LOGIN_TIMEOUT_MS,
   startCodexDeviceLogin,
