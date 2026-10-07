@@ -82,11 +82,19 @@ describe('chat: 応答中の Ctrl+C（#3411）', () => {
       if (path === '/chat') {
         chats += 1;
         if (chats > 1) return sse(OK_REPLY);
-        return new Promise<Response>((resolve) => {
-          release = () => {
-            resolve(sse(OK_REPLY));
-          };
-        });
+        // 会話が分かっている（open を受けた）あとの応答待ち。対象の発言を指して止める（#3956）。
+        const [opened, rest] = OK_REPLY.split('event: done');
+        return sse(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode(opened ?? ''));
+              release = () => {
+                controller.enqueue(new TextEncoder().encode(`event: done${rest ?? ''}`));
+                controller.close();
+              };
+            },
+          }) as unknown as string,
+        );
       }
       if (path === '/clone/interrupt') return Response.json({ outcome: 'interrupted' });
       return Response.json({});
@@ -176,11 +184,18 @@ describe('chat: 応答中の Ctrl+C（#3411）', () => {
     let release: (() => void) | null = null;
     recordFetch((path) => {
       if (path === '/chat') {
-        return new Promise<Response>((resolve) => {
-          release = () => {
-            resolve(sse(OK_REPLY));
-          };
-        });
+        const [opened, rest] = OK_REPLY.split('event: done');
+        return sse(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode(opened ?? ''));
+              release = () => {
+                controller.enqueue(new TextEncoder().encode(`event: done${rest ?? ''}`));
+                controller.close();
+              };
+            },
+          }) as unknown as string,
+        );
       }
       if (path === '/clone/interrupt') return Response.json({ error: 'boom' }, { status: 500 });
       return Response.json({});

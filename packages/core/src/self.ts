@@ -116,9 +116,10 @@ export interface SelfFacts {
   /** 入口の認証の状態（`planAuth` の一行説明）。 */
   auth: string;
   /**
-   * 実際に走っているモデル。既定から差し替えられていればその値。
+   * クローンが実際に走っているモデル。既定から差し替えられていればその値。
+   * マネージャー層・作業者層は持たない: 実際に効くのは runner の環境変数で、デーモンの環境からは取れないため（#3947）。
    */
-  models: { clone: string; manager: string; worker: string };
+  models: { clone: string };
 }
 
 /**
@@ -255,7 +256,15 @@ export interface CloneRuntimeFacts {
    * `#forgetObservedFacts`）——前のセッションの文脈占有は自分のものではない。
    */
   lastContextUsage: ContextUsageObservation | null;
+  /**
+   * 接続中の runner が名乗ったマネージャー・作業者のモデルの行（`collectRunnerModelLines`）。
+   * 実行時に引く値なので、システムプロンプトには載せない。空・未指定なら何も足さない。
+   */
+  runnerModels?: readonly string[];
 }
+
+/** 接続中の runner が名乗ったモデルの節の見出し。 */
+export const RUNNER_MODELS_HEADING = '## 接続中の runner が名乗ったモデル（マネージャー・作業者）';
 
 /** まだ観測していない値の言い方。埋めるのではなく、取れていない理由を言う。 */
 function unknownBecause(reason: string): string {
@@ -467,6 +476,10 @@ export function describeCloneRuntime(facts: CloneRuntimeFacts): string {
     // 読み替えが起きていた欠陥への直接の対処）。
     `- ${CLONE_RUNTIME_ITEMS.lastTurnUsedTokens}: ${lastTurnContextUsage.used}`,
     `- ${CLONE_RUNTIME_ITEMS.lastTurnUnusedTokens}: ${lastTurnContextUsage.unused}`,
+    // **項目ではない**（行頭を `- ` にしない。`tools.test.ts` の項目名の歯が拾わない形）。
+    ...(facts.runnerModels === undefined || facts.runnerModels.length === 0
+      ? []
+      : ['', RUNNER_MODELS_HEADING, '', ...facts.runnerModels.map((line) => `  ${line}`)]),
   ].join('\n');
 }
 
@@ -494,7 +507,7 @@ export function buildSelfKnowledge(facts?: SelfFacts): string {
     );
   } else {
     lines.push(
-      `- 層の対応: あなた（クローン / ${facts.models.clone}）→ マネージャー（${facts.models.manager}）→ 作業者（${facts.models.worker}）。あなたが \`manager_start\` で起こすのがマネージャーで、その下に作業者が居る`,
+      `- 層の対応: あなた（クローン / ${facts.models.clone}）→ マネージャー → 作業者。あなたが \`manager_start\` で起こすのがマネージャーで、その下に作業者が居る。マネージャーと作業者のモデルは runner ごとに決まるので、ここには書かない — \`self_status\`（接続中の runner が名乗った分）と \`manager_list\`（委譲ごと）で確かめること`,
       '',
       '## いまのあなたが走っている環境',
       '',

@@ -102,6 +102,8 @@ function fakeClone() {
 
   const managerList: ManagerSummary[] = [];
   const managerDenials = new Map<string, ManagerDenial[]>();
+  /** `ManagerPool.runnerReportedModels()` の返り値。無ければ不明。 */
+  const runnerModels = new Map<string, { manager?: string; worker?: string }>();
   const transcripts = new Map<string, string>();
   /** `transcript()` を `kind: 'removed'` にする（#698）。 */
   const removedTranscripts = new Map<
@@ -175,6 +177,9 @@ function fakeClone() {
     },
     runnerBacklog() {
       return [];
+    },
+    runnerReportedModels(runnerId) {
+      return runnerModels.get(runnerId);
     },
     async runnerIdOf(managerId) {
       return managerList.find((manager) => manager.managerId === managerId)?.runnerId;
@@ -306,6 +311,7 @@ function fakeClone() {
     posted,
     droppedFromDelivery,
     managerList,
+    runnerModels,
     managerDenials,
     transcripts,
     removedTranscripts,
@@ -893,6 +899,54 @@ describe('HTTP API', () => {
     const second = await app.request('/clone/interrupt', post);
     expect(await second.json()).toEqual({ outcome: 'idle' });
     expect(calls).toBe(2);
+  });
+
+  it('走っているターンを止める口（#3956）: 対象を渡すとクローンへそのまま通し、取り下げ等の答えも返す', async () => {
+    const targets: unknown[] = [];
+    const outcomes = ['withdrawn', 'not_target', 'starting', 'interrupted'] as const;
+    fake.clone.interruptTurn = async (target) => {
+      targets.push(target);
+      return outcomes[targets.length - 1] ?? 'idle';
+    };
+    const body = { conversationId: 'conv-x', clientMessageId: 'cm-1' };
+
+    for (const expected of outcomes) {
+      const response = await app.request('/clone/interrupt', json(body));
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ outcome: expected });
+    }
+    expect(targets).toEqual([body, body, body, body]);
+  });
+
+  it('走っているターンを止める口（#3956）: 対象を省く（本文なし・{}）と、対象なしで呼ぶ', async () => {
+    const targets: unknown[] = [];
+    fake.clone.interruptTurn = async (...args) => {
+      targets.push(args.length === 0 ? 'none' : args[0]);
+      return 'interrupted';
+    };
+
+    expect((await app.request('/clone/interrupt', post)).status).toBe(200);
+    expect((await app.request('/clone/interrupt', json({}))).status).toBe(200);
+    expect(targets).toEqual(['none', 'none']);
+  });
+
+  it('走っているターンを止める口（#3956）: 対象が片方だけ・形が不正・JSON が壊れていれば 400 で、何も止めない', async () => {
+    let calls = 0;
+    fake.clone.interruptTurn = async () => {
+      calls += 1;
+      return 'interrupted';
+    };
+
+    for (const body of [
+      json({ conversationId: 'conv-x' }),
+      json({ clientMessageId: 'cm-1' }),
+      json({ conversationId: 'conv-x', clientMessageId: 'bad id!' }),
+      { ...post, body: '{not json' },
+    ]) {
+      const response = await app.request('/clone/interrupt', body);
+      expect(response.status).toBe(400);
+    }
+    expect(calls).toBe(0);
   });
 
   it('記憶を API から読んで書き換えられる（人間の制御手段1）', async () => {
@@ -3913,6 +3967,97 @@ describe('HTTP API', () => {
    * **状態は置き換えない。** 拒否は `running` に映らない（拒否があったことしか
    * 観測していない）ので、`status` はそのままにして添える。
    */
+  it('モデルの表記は、名乗りのある runner の委譲にだけ一覧と詳細へ載る（取れなければ欄ごと無い。#3921）', async () => {
+    const base = {
+      status: 'running' as const,
+      live: true,
+      cwd: '/work/project',
+      request: '仕事',
+      startedAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:01:00.000Z',
+      waiting: [],
+    };
+    fake.managerList.push(
+      { ...base, managerId: 'mgr-named', runnerId: 'r1' },
+      { ...base, managerId: 'mgr-half', runnerId: 'r2' },
+      { ...base, managerId: 'mgr-old', runnerId: 'r3' },
+      { ...base, managerId: 'mgr-unplaced' },
+    );
+    fake.runnerModels.set('r1', { manager: 'opus', worker: 'sonnet' });
+    fake.runnerModels.set('r2', { worker: 'haiku' });
+
+    type Row = { managerId: string; managerModel?: string; workerModel?: string };
+    const list = (await (await app.request('/managers')).json()) as { managers: Row[] };
+    const byId = new Map(list.managers.map((m) => [m.managerId, m]));
+    expect(byId.get('mgr-named')).toMatchObject({ managerModel: 'opus', workerModel: 'sonnet' });
+    // 片方だけ名乗られたら名乗られた側だけ。もう一方を既定の帯で埋めない。
+    expect(byId.get('mgr-half')).toMatchObject({ workerModel: 'haiku' });
+    expect(byId.get('mgr-half')).not.toHaveProperty('managerModel');
+    // 名乗りを受けていない旧い runner・置き先の無い委譲は、欄ごと無い。
+    for (const id of ['mgr-old', 'mgr-unplaced']) {
+      expect(byId.get(id)).not.toHaveProperty('managerModel');
+      expect(byId.get(id)).not.toHaveProperty('workerModel');
+    }
+
+    const detail = (await (await app.request('/managers/mgr-named')).json()) as { manager: Row };
+    expect(detail.manager).toMatchObject({ managerModel: 'opus', workerModel: 'sonnet' });
+    const silent = (await (await app.request('/managers/mgr-old')).json()) as { manager: Row };
+    expect(silent.manager).not.toHaveProperty('managerModel');
+    expect(silent.manager).not.toHaveProperty('workerModel');
+  });
+
+  it('地図に、委譲ごとのモデルとクローンのモデルが載る（配線が無ければ欄なし。#3921）', async () => {
+    fake.managerList.push(
+      {
+        managerId: 'mgr-a',
+        status: 'running',
+        live: true,
+        cwd: '/work',
+        request: '仕事',
+        startedAt: '2026-01-01T00:00:00.000Z',
+        updatedAt: '2026-01-01T00:01:00.000Z',
+        waiting: [],
+        runnerId: 'r1',
+      },
+      {
+        managerId: 'mgr-b',
+        status: 'running',
+        live: true,
+        cwd: '/work',
+        request: '仕事',
+        startedAt: '2026-01-01T00:00:00.000Z',
+        updatedAt: '2026-01-01T00:01:00.000Z',
+        waiting: [],
+      },
+    );
+    fake.runnerModels.set('r1', { manager: 'opus', worker: 'sonnet' });
+    type Topology = {
+      clone: { model?: string };
+      managers: { managerId: string; managerModel?: string; workerModel?: string }[];
+    };
+
+    const bare = (await (await app.request('/topology')).json()) as Topology;
+    expect(bare.clone).not.toHaveProperty('model');
+    expect(bare.clone).not.toHaveProperty('provider');
+    const a = bare.managers.find((m) => m.managerId === 'mgr-a');
+    expect(a).toMatchObject({ managerModel: 'opus', workerModel: 'sonnet' });
+    expect(a).not.toHaveProperty('managerProvider');
+    const b = bare.managers.find((m) => m.managerId === 'mgr-b');
+    expect(b).not.toHaveProperty('managerModel');
+    expect(b).not.toHaveProperty('workerModel');
+
+    const wired = createApp({
+      clone: fake.clone,
+      stores,
+      token: 'test-token',
+      shutdown: () => undefined,
+      cloneModel: 'opus',
+    });
+    const body = (await (await wired.request('/topology')).json()) as Topology;
+    expect(body.clone).toMatchObject({ model: 'opus' });
+    expect(body.clone).not.toHaveProperty('provider');
+  });
+
   it('一覧と詳細に managerProvider を載せない（層は常に Claude。2026-10-07 の決定）', async () => {
     fake.managerList.push({
       managerId: 'mgr-plain',
@@ -5491,6 +5636,81 @@ describe('HTTP API', () => {
     });
     expect(patched.status).toBe(400);
     expect((await stores.commitments.get(id))?.body).toBe('空の確認');
+  });
+
+  /**
+   * Issue #3786。`ifMatch`（読んだ時の `editedAt ?? at`）で、読んだ後に変わった本文を黙って上書きしない。
+   * 409 の本文は `{ error, current }`（記憶・予定の `ifMatch` と同じ形）。
+   */
+  describe('PATCH /commitments/:id の ifMatch（Issue #3786）', () => {
+    const at = '2026-08-12T00:00:00.000Z';
+    const patch = (id: string, body: unknown) =>
+      app.request(`/commitments/${id}`, { ...json(body), method: 'PATCH' });
+    const openHuman = (id = 'cm-1') =>
+      stores.commitments.open({ id, at, origin: 'human', body: '最初' });
+
+    it('版が合えば書け、書くと版が editedAt へ進む。省略は従来どおり後勝ち', async () => {
+      await openHuman();
+      const ok = await patch('cm-1', { body: '版つき', ifMatch: at });
+      expect(ok.status).toBe(200);
+      const edited = await stores.commitments.get('cm-1');
+      expect(edited?.body).toBe('版つき');
+
+      const next = await patch('cm-1', { body: '二回目', ifMatch: edited?.editedAt });
+      expect(next.status).toBe(200);
+
+      const lastWins = await patch('cm-1', { body: '後勝ち' });
+      expect(lastWins.status).toBe(200);
+      expect((await stores.commitments.get('cm-1'))?.body).toBe('後勝ち');
+    });
+
+    it('版が古ければ 409 で書かれず、current が最新の行。片付き済みの 409 とは current の鍵で見分ける', async () => {
+      await openHuman();
+      // 読んだ（版 = at）後に別の書き手が直した
+      await stores.commitments.editBody('cm-1', '別の書き手', '2026-08-13T00:00:00.000Z', 'human');
+      const stale = await patch('cm-1', { body: '古い版から', ifMatch: at });
+      expect(stale.status).toBe(409);
+      const body = (await stale.json()) as { error: string; current: unknown };
+      expect(body.current).toMatchObject({
+        id: 'cm-1',
+        body: '別の書き手',
+        editedAt: '2026-08-13T00:00:00.000Z',
+      });
+      expect((await stores.commitments.get('cm-1'))?.body).toBe('別の書き手');
+      // 書いていないので、編集の日誌は積まれない
+      expect(await stores.journal.list({ types: ['decision'] })).toHaveLength(0);
+
+      await openHuman('cm-2');
+      await stores.commitments.close('cm-2', '2026-08-14T00:00:00.000Z', '済んだ', 'human');
+      const closed = await patch('cm-2', { body: '閉じた後', ifMatch: at });
+      expect(closed.status).toBe(409);
+      expect('current' in ((await closed.json()) as object)).toBe(false);
+    });
+
+    it('読んだ後に行が消えていれば 409 で current は null', async () => {
+      await openHuman();
+      // ハンドラの事前の get をすり抜けて消える競合を、editBody の手前で消して作る
+      const original = stores.commitments.editBody.bind(stores.commitments);
+      stores.commitments.editBody = async (...args) => {
+        await stores.commitments.clear();
+        return original(...args);
+      };
+      const response = await patch('cm-1', { body: '消えた後', ifMatch: at });
+      expect(response.status).toBe(409);
+      expect(await response.json()).toEqual({
+        error: '引き受けた仕事が読んだ後に変わっています（書き換えていません）',
+        current: null,
+      });
+    });
+
+    it('同じ版を前提にした同時の2書き込みは、1件だけ通る', async () => {
+      await openHuman();
+      const [a, b] = await Promise.all([
+        patch('cm-1', { body: 'A', ifMatch: at }),
+        patch('cm-1', { body: 'B', ifMatch: at }),
+      ]);
+      expect([a.status, b.status].sort()).toEqual([200, 409]);
+    });
   });
 
   /**

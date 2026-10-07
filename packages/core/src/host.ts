@@ -36,6 +36,23 @@ export type AnswerApprovalVia =
   | { kind: 'operator'; auth: 'disabled' | 'operator-token' }
   | { kind: 'account'; accountId: string };
 
+/** `interruptTurn` が止める対象の発言（`POST /chat` の `clientMessageId` で指す）。 */
+export interface InterruptTarget {
+  readonly conversationId: string;
+  readonly clientMessageId: string;
+}
+
+/**
+ * `interruptTurn` の結果。
+ *
+ * - `interrupted`: その発言のターン（対象を省いたときは走っているターン）を止めた
+ * - `withdrawn`: 発言がまだ順番待ちだったので取り下げた（器からも外し、配らない）
+ * - `not_target`: 走っているのは別の起点のターンなので、止めていない
+ * - `starting`: 発言は取り出し済みだがターンはまだ始まっておらず、止めるものが無かった（もう一度呼べば止まる）
+ * - `idle`: 止めるものが無かった（既に答え終わっている）
+ */
+export type InterruptOutcome = 'interrupted' | 'withdrawn' | 'not_target' | 'starting' | 'idle';
+
 /** {@link CloneHost.postPersisted} の結果。 */
 export type PostPersistOutcome = 'persisted' | 'unavailable';
 
@@ -106,12 +123,13 @@ export interface CloneHost {
 
   /**
    * **いま走っているクローンのターンを止める**（#1398 c23-1）。止めるものが
-   * 無ければ `'idle'`。セッションと受信箱には触らない（`Clone#interruptTurn` の doc）。
+   * 無ければ `'idle'`。`target` を渡したときは、その発言のターンだけを止め、順番待ちなら
+   * 取り下げる（`Clone#interruptTurn` の doc）。
    *
    * **省略可能にしてある** —— この面を実装する偽物（テスト）が多く、足していない
    * 実装では HTTP の口が「この器では止められない」と答える。
    */
-  interruptTurn?(): Promise<'interrupted' | 'idle'>;
+  interruptTurn?(target?: InterruptTarget): Promise<InterruptOutcome>;
 
   /**
    * **いまクローンが走らせているターン**（稼働の地図 `GET /topology` の `clone.state`）。
