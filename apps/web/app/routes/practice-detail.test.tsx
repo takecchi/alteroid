@@ -1,13 +1,4 @@
 // @vitest-environment jsdom
-/**
- * やり方の詳細（`/practices/:slug` 画面、#1055 段3③）。
- *
- * `memory-detail.test.tsx` と同じ骨組み（プレビュー/編集タブ、書きかけを
- * 失わないこと、404 は「これから書く」として編集タブを既定にすること、
- * 保存や削除）に加えて、`PracticeStore` 固有の点を測る——`kind` / `title`
- * も編集タブに在ること、保存の PUT 本文が `kind`/`title`/`content` の3つを
- * 持つこと（`memory` は `content` だけなので、ここが違いの本体）。
- */
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { createMemoryRouter, Link, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -32,15 +23,10 @@ afterEach(() => {
   globalThis.fetch = originalFetch;
 });
 
-/**
- * ルートモジュールの props（`loaderData`）が渡るのは framework mode だけ
- * （`memory-detail.test.tsx` と同じ理由）。
- */
 function Harness({ slug }: { slug: string }) {
   const loaderData = clientLoader({ params: { slug } } as Route.ClientLoaderArgs);
   return (
     <>
-      {/* 離れる先のリンク（本番では左の一覧や上のタブが担う。一覧との組み合わせは practices-list-detail.test.tsx） */}
       <Link to="/practices">やり方</Link>
       <PracticeDetail {...({ loaderData } as Route.ComponentProps)} />
     </>
@@ -98,7 +84,6 @@ describe('既定タブ', () => {
   it('やり方は在るが本文が空のときは編集タブが既定（読むものが無い）', async () => {
     renderDetail('empty', docRoute({ ...PRACTICE, slug: 'empty', content: '' }));
 
-    // kind / title / content の3つの入力欄が編集タブに出る。
     expect(((await screen.findByLabelText('種類')) as HTMLInputElement).value).toBe('日報');
     expect((screen.getByLabelText('題') as HTMLInputElement).value).toBe('日報の書き方');
     expect(screen.getByRole('tab', { name: 'プレビュー' })).toBeTruthy();
@@ -109,7 +94,6 @@ describe('既定タブ', () => {
       url.includes('/practices/new-one') ? json({ error: 'not found' }, 404) : undefined,
     );
 
-    // 本文の textarea が編集タブとして最初から出ている。
     const textareas = await screen.findAllByRole('textbox');
     expect(textareas.length).toBeGreaterThan(0);
     expect(screen.queryByRole('heading', { name: '見出し' })).toBeNull();
@@ -209,7 +193,6 @@ describe('保存', () => {
 });
 
 describe('削除', () => {
-  /** DELETE を打ったか。`openapi-fetch` は `Request` で呼ぶので、メソッドは `entries` の `request` で読む。 */
   function deleted(stub: ReturnType<typeof stubFetch>): number {
     return stub.entries.filter((entry) => entry.request?.method === 'DELETE').length;
   }
@@ -254,13 +237,7 @@ describe('削除', () => {
   });
 });
 
-/**
- * 版の履歴（#1309）を含めた route stub。
- *
- * `docRoute` は `url.includes` が緩いので、`/versions` 付きの URL も
- * 誤って本体の応答にマッチしてしまう——履歴タブの試験では順序（版の
- * エンドポイントを先に見る）を自分で組む。
- */
+// 版のエンドポイントを先に見る: docRoute は url.includes が緩く、/versions 付きの URL も本体の応答にマッチしてしまうため
 function historyRoute(
   doc: Practice,
   versions: PracticeVersionSummary[],
@@ -317,7 +294,6 @@ describe('履歴タブ（#1309）', () => {
     fireEvent.click(await screen.findByText('旧題'));
 
     await screen.findByText(/旧本文/);
-    // 読み取り専用——textarea を持たない（編集タブの本文欄と区別する）。
     expect(screen.queryByLabelText('本文')).toBeNull();
   });
 
@@ -329,15 +305,6 @@ describe('履歴タブ（#1309）', () => {
   });
 });
 
-/**
- * **「履歴」タブが、版を読めなかったときも `Spinner` のまま回り続けないこと
- * （issue #2139）。**
- *
- * 直す前は `usePracticeVersions` / `usePracticeVersion` のどちらも `error`
- * を受けておらず、失敗しても `history === undefined` / `historyDetail ===
- * undefined` のままなので `Spinner` が回り続け、「読めていない」のか
- * 「読んでいる途中」なのか見分けが付かなかった。
- */
 describe('履歴タブが読めないとき（issue #2139）', () => {
   const versions: PracticeVersionSummary[] = [
     {
@@ -351,7 +318,6 @@ describe('履歴タブが読めないとき（issue #2139）', () => {
   ];
   const contents = { 1: '# 旧本文' };
 
-  /** 版の一覧（`/versions`）だけを失敗させる。本体・版1本は正常。 */
   function historyRouteVersionsFail(doc: Practice): FetchRoute {
     return (url) => {
       if (/\/practices\/[^/]+\/versions\/\d+/.exec(url)) return undefined;
@@ -361,7 +327,6 @@ describe('履歴タブが読めないとき（issue #2139）', () => {
     };
   }
 
-  /** 版1本（`/versions/:version`）だけを失敗させる。一覧・本体は正常。 */
   function historyRouteVersionDetailFail(
     doc: Practice,
     versions: PracticeVersionSummary[],
@@ -412,7 +377,7 @@ describe('生 HTML の扱い', () => {
 
 describe('見出し（#2763 と同じ作り）', () => {
   it('slug は h2 で、長くても折り返せる（縮む側は見出しを包む div、ボタン群は縮まない）', async () => {
-    // jsdom はレイアウトを持たないので実寸は測れない。指定そのものを固定する。
+    // 実寸を測らない: jsdom はレイアウトを持たないため
     renderDetail('daily-report', docRoute(PRACTICE));
 
     const heading = await screen.findByRole('heading', { level: 2, name: 'daily-report' });
@@ -424,7 +389,6 @@ describe('見出し（#2763 と同じ作り）', () => {
   });
 });
 
-/** 未保存の編集があるまま離れない（#2764。`memory-detail.test.tsx` と同じ穴）。 */
 describe('未保存の編集を離れる前に確認する', () => {
   it('書きかけのまま他の画面へのリンクを押すと確認が出る。やめれば留まる', async () => {
     renderDetail('daily-report', docRoute(PRACTICE));
@@ -457,9 +421,6 @@ describe('未保存の編集を離れる前に確認する', () => {
   });
 });
 
-/**
- * 保存は読んだ版を前提にし、衝突しても下書きを捨てない（#2853。`memory-detail.test.tsx` と同じ形）。
- */
 describe('保存は読んだ版を前提にし、衝突しても下書きを捨てない', () => {
   const V1 = 'a'.repeat(64);
   const V2 = 'b'.repeat(64);
@@ -471,7 +432,6 @@ describe('保存は読んだ版を前提にし、衝突しても下書きを捨�
     updatedAt: '2026-08-22T02:00:00.000Z',
   };
 
-  /** PUT の本文を控え、`putResponses` を順に返す。GET は `getVersions` を順に返す（最後の値を使い回す）。 */
   function stubPut(putResponses: Response[], getVersions: string[] = [V1]) {
     const putBodies: unknown[] = [];
     let gets = 0;
@@ -576,10 +536,6 @@ describe('保存は読んだ版を前提にし、衝突しても下書きを捨�
   });
 });
 
-/**
- * 削除は読んだ版を前提にする（#2959 / #2881）。衝突したら消さず、いまの内容を見せ、
- * 自動では再送しない。人間がもう一度確認して消すときは、見せたいまの版を送る。
- */
 describe('削除は読んだ版を ifMatch（クエリ）として送り、衝突しても消さない', () => {
   const V1 = 'a'.repeat(64);
   const V2 = 'b'.repeat(64);
@@ -589,7 +545,6 @@ describe('削除は読んだ版を ifMatch（クエリ）として送り、衝�
     updatedAt: '2026-08-22T02:00:00.000Z',
   };
 
-  /** DELETE の URL を控え、`deleteResponses` を順に返す。GET は常に PRACTICE（版 V1）。 */
   function stubDelete(deleteResponses: Response[]) {
     const deleteUrls: string[] = [];
     globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -641,7 +596,6 @@ describe('削除は読んだ版を ifMatch（クエリ）として送り、衝�
     expect(alert.textContent).toContain('消していない');
     expect(alert.textContent).toContain('クローンが書いた本文');
     expect(screen.queryByRole('alertdialog')).toBeNull();
-    // この画面に留まっている（移動していない）。自動では再送していない。
     expect(screen.getByRole('button', { name: '削除' })).toBeTruthy();
     expect(urls).toHaveLength(1);
   });
