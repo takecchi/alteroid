@@ -6602,7 +6602,6 @@ export function createCloneTools(context: ToolContext) {
               'あり、そのときはこれを上げても実際に載る内容は動かない——古い側へ進むには' +
               '`offset` を使うこと。',
           ),
-        // **issue #1720。** 同上（`.int().min(0).max(RECENT_TRACE_LIMIT)`）。
         offset: z
           .number()
           .optional()
@@ -6629,10 +6628,7 @@ export function createCloneTools(context: ToolContext) {
         if (all.length === 0) {
           return text([describeDroppedTraceEmpty(), origin, since].join(' '));
         }
-        // **offset は「直近から何件を除いてから見るか」。** 除いた残り
-        // （`windowed`）が、この呼びが到達できる全域である——`limit` と予算の
-        // どちらで切れても、次に渡す offset は同じ式（`skip + shown`）で
-        // 組めるようにするため、この1本の窓に両方の切り口を通す。
+        // `limit` と予算の両方をこの1本の窓に通す: どちらで切れても、次に渡す offset を同じ式（`skip + shown`）で組めるようにするため
         const skip = Math.min(offset, all.length);
         const windowed = skip === 0 ? all : all.slice(0, all.length - skip);
         if (windowed.length === 0) {
@@ -6644,10 +6640,7 @@ export function createCloneTools(context: ToolContext) {
         }
         const traces = windowed.slice(-limit);
         const fill = fillListingBudget(traces, SELF_DROPPED_BUDGET, true);
-        // **まだ古い側に残っている件数。** `limit` で除外された分（`windowed`
-        // のうち `traces` に入らなかった分）と、予算で除外された分
-        // （`fill.rest`）の両方を1つに数える——呼び手に「どちらが原因か」を
-        // 区別させない（#662 が指摘した非対称の直し）。
+        // 残りは `limit` で除外された分と予算で除外された分を1つに数える: 呼び手にどちらが原因かを区別させないため
         const remaining = windowed.length - fill.shown;
         const nextOffset = skip + fill.shown;
         const lines = [...fill.lines];
@@ -6674,10 +6667,8 @@ export function createCloneTools(context: ToolContext) {
         'マネージャー（あなたが起こす Claude Code）に仕事を任せる。',
         '起動して即返るので、完了を待たずに次の判断へ移ってよい。同時に何本走らせてもよい。',
         '依頼できるのは実装だけではない。調査・設計の相談・外部サービスの確認・レビューも同じように頼める。',
-        // **#3940。** Codex に頼める器があることをクローンに見せる（どの器かは runner_list の peer の行）。
         'Codex に作業を頼めるマネージャーの器があれば（runner_list の peer の行）、依頼文に「Codex にやらせて」と' +
           '書けば、マネージャーが peer で Codex に頼む。その器を runnerId で名指しできる。',
-        // **#2626 期待2。**
         '置き先は資源で自動配置される（runner_list の説明を参照）。新しいプロセスを起こせない' +
           '（pids 飽和）と判定された器は、飽和していない器が居れば自動配置から外れる。' +
           '全台が飽和でも、runnerId で名指ししても断らず起こす——置き先が飽和と判定されていれば' +
@@ -6711,13 +6702,10 @@ export function createCloneTools(context: ToolContext) {
           runnerId?: string | undefined;
         };
         if (!context.managers) return NO_POOL;
-        // **クローンには渡させない。呼び出し文脈から自動で読む**（issue #1003
-        // 段2・#781）。この道具の引数に conversationId は無い——手で維持する
-        // 欄を新しく作らないという Issue の設計要件を、ここでも守る。内部
-        // ターン（マネージャー発の確認・蒸留・timer）では undefined になる。
+        // conversationId はクローンに渡させず呼び出し文脈から自動で読む: 手で維持する欄を新しく作らないため
         const conversationId = getConversationId();
 
-        // **添付は、日誌にも命令にも触れる前に読む。** 見つからなければ何も送らず（日誌も書かず）、道具のエラー文を返す。
+        // 添付は日誌にも命令にも触れる前に読む: 見つからなければ何も送らず日誌も書かないため
         const handover = await loadManagerAttachments(
           stores,
           attachments ?? [],
@@ -6730,14 +6718,7 @@ export function createCloneTools(context: ToolContext) {
             ? ''
             : `（添付 ${handedRefs.length} 件を渡す: ${handedRefs.map((ref) => `${ref.id} ${ref.name}`).join(', ')}）`;
 
-        /**
-         * **能力を広げる道具（issue #2145。teto の判断、#2123/#2134 と同じ
-         * 設計）。** 新しい担い手を起こす、いちばん強い広げ方——日誌を先に
-         * 書き、書けなければ起こさずに道具のエラーで返す。`started.managerId`・
-         * 実際に使われた cwd（`describeStartedCwd`）は起こした後でないと
-         * 分からないので、先に書く行はそれを含まない形にし、後で分かる分は
-         * 2行目として `appendJournalOrDrop`（best-effort）で足す。
-         */
+        // 日誌を先に書く: 書けなければ起こさずに道具のエラーで返すため
         await appendJournalOrThrow(
           'manager_start',
           stores.journal,
@@ -6761,8 +6742,6 @@ export function createCloneTools(context: ToolContext) {
             ...(handover.attachments.length === 0 ? {} : { attachments: handover.attachments }),
           });
         } catch (error) {
-          // 日誌には「起こそうとしている」が残っているので、打ち消す
-          // （best-effort。落ちても noteDroppedRecord で跡を残すだけ）。
           await appendJournalOrDrop('manager_start', stores.journal, {
             type: 'decision',
             decision: `マネージャーを起こせなかった${
@@ -6770,15 +6749,12 @@ export function createCloneTools(context: ToolContext) {
             }${handedNote}: ${request}`,
             grounds: `委譲しようとしたが、状態の変更が失敗した: ${reasonOf(error)}`,
           });
-          // 送る前の検めで断った（上限超過・名乗らない runner）。道具のエラー文として返す。
           if (error instanceof ManagerAttachmentsRefusedError) {
             return text(`${reasonOf(error)}。マネージャーは起こしていない。`);
           }
           throw error;
         }
 
-        // 起動自体はもう効いている。後で分かった managerId・cwd を2行目として
-        // 足す（落ちても道具の結果は変えない——`appendJournalOrDrop` の doc）。
         await appendJournalOrDrop('manager_start', stores.journal, {
           type: 'decision',
           decision:
@@ -6786,8 +6762,7 @@ export function createCloneTools(context: ToolContext) {
             `${runnerId === undefined ? '' : `, 指名: runnerId=${runnerId}`}）${handedNote}: ${request}`,
           grounds: '委譲の判断',
         });
-        // **置き先が pids 飽和と判定されていれば言う（#2626 期待2）。** 明示指名でも
-        // 自動配置（全台が飽和）でも断っていない——起こしたうえで、材料つきで知らせる。
+        // pids 飽和の置き先でも断らない: 起こしたうえで、材料つきで知らせる
         const saturation =
           started.runnerId === undefined
             ? undefined
@@ -6812,26 +6787,16 @@ export function createCloneTools(context: ToolContext) {
         'requestId か decision を付けたときだけ回答として扱う（止まっていたその仕事だけが再開する）。',
         'どちらも無い本文は、相手が返事待ちでも回答にはならず追加指示として届く。',
         '許可確認への回答では decision を必ず付けること。',
-        // **答える先の無い合図に decision を付けさせない（#1105 P0）。** 器の分類器・
-        // deny 規則の拒否は requestId を持たないが、requestId 無しの decision は
-        // 待ちがちょうど1件ならその1件へ当たる（`manager.ts` の `#choosePending`）
-        // ——無関係の確認を許可してしまう。理由の全文は `manager.ts` の
-        // `DENIAL_REPLY_ROUTE` の doc。
+        // 答える先の無い合図に decision を付けさせない: requestId 無しの decision は待ちが1件ならその1件へ当たり、無関係の確認を許可してしまうため
         '「確認へ上がらずに止められた」合図（分類器・deny 規則の拒否）には requestId が無く、' +
           '許可として答える口は無い。decision を付けずに、別の形を追加指示として送ること' +
           '（requestId 無しの decision は、そのマネージャーが別に待っている確認へ回答として当たりうる）。',
-        // **5つ目の形を名指しする（#563）。** かつてこの場合は `ManagerSendResult` に
-        // ならず例外として貫通していたので、クローンが受け取るのは生の例外文言だった
-        // ——「何が起きたか」も「次に何をすればよいか」も、この説明文から読めなかった。
         'manager_list が [running] と出していても、runner の側でセッションが畳まれていることがある' +
           '（その合図が届かなかった窓）。そのときは resume から入り直して届けるので、' +
           '返り値にそう書いてある。入り直せなかったときも「そんな id は無い」ではなく' +
           '「セッションが無い」と返る——委譲そのものは台帳に在るので、manager_start で' +
           '起こし直す前に、返ってきた文言をそのまま読むこと。',
-        // **「セッションが無い」を「仕事が失われた」と読ませない（#563）。**
-        // 完遂した後に畳まれた回も同じ形に見え、デーモンには区別する材料が無い。
-        // 決めつけたクローンは完遂済みの仕事を委譲し直す（`gh pr create` が二度
-        // 走りうる）。理由の全文は `manager.ts` の `sendFailureDetail` の doc。
+        // 「セッションが無い」を「仕事が失われた」と読ませない: 完遂後に畳まれた回も同じ形に見え、決めつけると完遂済みの仕事を委譲し直すため
         'セッションが無いことは、その仕事が失われたことを意味しない——完遂した後に' +
           'セッションが畳まれ、終端イベントだけが届かなかった回も同じ形になる。' +
           '委譲し直す前に必ず manager_report を見ること（報告が空でも、生ログから' +
@@ -6846,22 +6811,12 @@ export function createCloneTools(context: ToolContext) {
           .array(z.string().min(1))
           .optional()
           .describe(MANAGER_ATTACHMENTS_DESCRIPTION),
-        // **`deny` は人間の意思表示の代弁であって、機械が状態の辻褄合わせに
-        // 使ってよい値ではない（issue #963 §4。同じ言葉が `ask_human` /
-        // `approval_withdraw` の doc にも置いてある）。** 受け取るマネージャーは
-        // `deny` を「人間が拒否した」としてしか読めない——他の理由（例えば
-        // 承認待ちが取り下げられて宛先を失った）で待ちを終わらせたいときに、
-        // ここへ `deny` を機械的に流すのは人間の承認の偽造になる。そういう
-        // 場面でも、答えるのは人間かクローンであって、この口が自動で選ぶ値では
-        // ない。
+        // `deny` を機械的に流さない: 受け取るマネージャーは「人間が拒否した」としか読めず、人間の承認の偽造になるため
         decision: z
           .enum(['allow', 'deny'])
           .optional()
           .describe('許可確認への回答のとき必須。それ以外では不要'),
-        // **生ログの id を渡しても通らない（#572）。** `ask_human` の `requestId` と
-        // 同じ素性で、同じ罠がある——`#choosePending` は `record.waiting` を id で
-        // 線形一致させるだけなので、名前空間の違う id は「待っていない」に落ちる。
-        // **その文言は「まだ届いていない」と見分けが付かない。**
+        // 生ログの id では通らない: 名前空間の違う id は「待っていない」に落ち、「まだ届いていない」と見分けが付かないため
         requestId: z
           .string()
           .optional()
@@ -6875,11 +6830,9 @@ export function createCloneTools(context: ToolContext) {
       },
       async ({ managerId, message, decision, requestId, attachments }) => {
         if (!context.managers) return NO_POOL;
-        // **空文字・NUL だけは断る**（#3544。HTTP の `POST /managers/:id/messages` の `min(1)` と
-        // 「NUL を落として空なら断る」（#3461）に揃える）。**空白だけは HTTP も通すので、ここでも断らない。**
+        // 空白だけは断らない: HTTP も通すため
         const messageError = describeStringLengthViolation('message', message, { min: 1 });
         if (messageError !== null) return text(messageError);
-        // 添付は、送る前に読む。見つからなければ何も送らずに道具のエラー文を返す。
         const handover = await loadManagerAttachments(
           stores,
           attachments ?? [],
@@ -6891,10 +6844,7 @@ export function createCloneTools(context: ToolContext) {
           ...(requestId === undefined ? {} : { requestId }),
           ...(handover.attachments.length === 0 ? {} : { attachments: handover.attachments }),
         });
-        // **`outcome` ごとに言い分ける**（`manager_stop` と同じ形。#563）。
-        // `detail` は既に理由を持っているが、それだけだと「起こし直せばよいのか」が
-        // 読めない——`session_missing` は**そのものは居る**側なので、`manager_start`
-        // で起こし直すと同じ仕事が2本になりうる。そこだけは必ず言い足す。
+        // `session_missing` は必ず言い足す: そのものは居る側なので、`manager_start` で起こし直すと同じ仕事が2本になりうるため
         if (result.outcome === 'session_missing') {
           return text(
             `[${managerId}] ${result.detail}\n` +
@@ -6905,24 +6855,8 @@ export function createCloneTools(context: ToolContext) {
               RESTART_BEFORE_CHECK_ADVICE,
           );
         }
-        // **「届けた」が保証している範囲を、届けたその場で名乗る（#1170）。**
-        // `delivered` が観測したのは「runner の resume の口を叩いて、それが成功を
-        // 返した」までで、**相手がこの本文を読んだかは1度も見ていない**。
-        // `detail`（「追加指示として届けた。」）は日本語として後者（読んで動いた）を
-        // 意味するように読めるので、**呼ぶ側はこの1文から保証の粒度を判断できない**。
-        //
-        // **挙動は1バイトも変えていない。** 名簿が `state: 'lost'` と判定した器に
-        // 載っている委譲へも `send()` は実際に届く（`manager.ts` の `isLive()` の
-        // doc が持つ実測。`#markSilent` は `entry.client` を落とさず `Registry#get()`
-        // は `entry.state` を見ない）。塞ぐと**人間が自分の言葉で繋ぎ直す唯一の手**が
-        // 消える（north_star 禁止1）。前例は `ba4053d`（#67）で、**あのときも直したのは
-        // 注記であって送信ボタンではない。** ここで足すのも言い方だけである。
-        //
-        // **「同じ本文で立て直さないこと」は落とせない。** 実害はそこで出た（#1170 の
-        // 観測、2026-09-17T01:4xZ）——送った直後の `manager_list` が `lost` のまま
-        // だったので、クローンは2本ぶんの指示を失ったと判断し、**内容を写して新しい
-        // 委譲として出し直した。** 直上の `session_missing` の枝と `situation.ts` の
-        // `LOST_NOTICE` が、既に同じ歯止めを別の理由で持っている。
+        // 「届けた」が保証する範囲を名乗る: 観測したのは resume の口が成功を返したところまでで、相手がこの本文を読んだかは見ていないため
+        // 「同じ本文で立て直さないこと」は落とさない: 送った直後の `manager_list` が `lost` のままで、クローンが指示を失ったと判断し出し直した実害があるため
         if (result.outcome === 'delivered') {
           return text(
             `[${managerId}] ${result.detail}\n` +
@@ -6940,21 +6874,8 @@ export function createCloneTools(context: ToolContext) {
       },
     ),
 
-    /**
-     * **止める手。**
-     *
-     * 人間は Web UI と CLI から1本ずつ止められる（`DELETE /managers/:id`）。
-     * クローンにそれが無いと、暴走したマネージャーも、報告を出したのに終わらない
-     * マネージャーも、**無応答のまま放置するしか手が無い**（north_star 禁止1:
-     * 能力の削除）。実際にそうなった。
-     *
-     * 通す口は人間と同じ `ManagerPool.abort` である。**クローン用の停止を別に
-     * 作らない** — 挙動が2種類あると、人間とクローンで見えている状態が食い違う。
-     *
-     * これは**クローンの道具**であって、マネージャーには渡らない（この MCP は
-     * クローン側にしか配線が無い）。マネージャーが自分や隣の仕事を止められる
-     * ようになると、M4 の制御面分離が意味を失う。
-     */
+    // クローン用の停止を別に作らない: 挙動が2種類あると、人間とクローンで見えている状態が食い違うため
+    // マネージャーには渡さない: 自分や隣の仕事を止められると M4 の制御面分離が意味を失うため
     tool(
       'manager_stop',
       [
@@ -6986,9 +6907,7 @@ export function createCloneTools(context: ToolContext) {
       async ({ managerId, reason, force }) => {
         if (!context.managers) return NO_POOL;
         const pool = context.managers;
-        // **3状態（Issue #2342）。** 以前は `pool.list()` の失敗を `[]` に倒していて、
-        // 「居ない」と「読めなかった」が区別できなかった——読めなかっただけなのに
-        // 走行中の断り（#1037）を素通りし、「一覧から消えている」と書いていた。
+        // 3状態にする: `pool.list()` の失敗を `[]` に倒すと「居ない」と「読めなかった」が区別できないため
         type ManagerLookup =
           | { kind: 'found'; manager: ManagerSummary }
           | { kind: 'absent' }
@@ -7004,14 +6923,9 @@ export function createCloneTools(context: ToolContext) {
           return manager === undefined ? { kind: 'absent' } : { kind: 'found', manager };
         };
 
-        // 止める前の状態を控える。**既に終わっていた仕事を止めたときに、それを
-        // そうと言えるようにする**ため（黙って何もしないのが一番悪い）。
         const beforeLookup = await find();
         const before = beforeLookup.kind === 'found' ? beforeLookup.manager : undefined;
 
-        // **止める前に読めなかったとき、走行中かどうか判定できない。** `force` が
-        // 無ければ running の断り（下）と同じく、abort を呼ばずに断る。`force: true`
-        // なら素通りして止める（暴走を止める道を塞がない。下のコメント）。
         if (beforeLookup.kind === 'unreadable' && force !== true) {
           return text(
             `[${managerId}] 止めていない。**いまの状態を一覧から読めなかった**ので、` +
@@ -7023,46 +6937,18 @@ export function createCloneTools(context: ToolContext) {
           );
         }
 
-        // **ターンの途中（running）は、既定では abort を呼ばずに断る（#1037）。**
-        //
-        // `before?.status === 'done'` の下の分岐は、止めた*後*に「もともと待機中
-        // だった」と言い分けるだけで、止める*前*には何も言わない——`running` を
-        // 畳むときも同じように何も言わずに畳んでいた。判定材料（`before.status`）
-        // はここに既に在るのに、`running` 側だけ使われていなかった。
-        //
-        // **なぜ既定で断るのか。** 人間が Web UI から止めるときは、画面にターンが
-        // 走っている様子が見えている——止める前に「いま動いている」と気づける。
-        // クローンにはその画面が無い。`before.status === 'running'` はクローンが
-        // 持てる同じ情報のクローン向けの等価物であって、それを使わずに黙って
-        // abort するのは、人間が持っている材料をクローンに渡し損ねているだけで
-        // ある（north_star 禁止1 の裏側——デグレードさせない）。
-        //
-        // **なぜ force を必ず残すのか。** 暴走している委譲を止める道を塞いでは
-        // いけない——止められなくなるほうが、誤って畳むより危険である。だから
-        // これは制限の追加（禁止2）ではなく、既定の向きを変えるだけにする。
-        // `force: true` を渡せば、この分岐は素通りしてこれまでどおり abort する。
-        //
-        // **`waiting_human` はここに含めない。** `waiting_human` はクローン自身
-        // への問い（`ask_human` 相当）で止まっている状態で、その問いを立てたのは
-        // クローン自身だから、待っていること自体は既に知っている。見えていない
-        // のは `running`（いまターンの途中で、クローンが一度も観測していない進行
-        // 中の作業）のほうである。
+        // running は既定で abort を呼ばずに断る: クローンには人間の画面のようにターンが走っている様子が見えないため
+        // `force` を必ず残す: 暴走している委譲を止める道を塞ぐほうが、誤って畳むより危険なため
+        // `waiting_human` は含めない: クローン自身が立てた問いで、待っていること自体は既に知っているため
         if (before?.status === 'running' && force !== true) {
-          // **要点を先頭・短くする（#1037 コメント）。** 「⚠ の1行を足す」形の
-          // 断りは読まれても流される実例が在る——読み飛ばせない形にするには、
-          // 長い説明の奥に核心（force で止まる）を埋めないことが要る。
+          // 要点を先頭・短くする: 「⚠ の1行を足す」形の断りは読まれても流されるため、核心（force で止まる）を長い説明の奥に埋めない
           const lastReportLine =
             before.lastReportAt === undefined
               ? '直近の報告は一度も届いていない。'
               : `直近の報告は ${before.lastReportAt}` +
                 '（最後に終えたターンのもの。いま走っているターンの中身ではない）。';
 
-          // **「畳むと未 push の実装が失われる」を一般論から実物へ替える
-          // （#1039）。⛔ この調べものが失敗しても、この断り（＝止める道が
-          // 塞がっていないこと）は必ず返す** ——`pool.unpushedWork()` は
-          // 自分自身は例外を投げない設計だが、念のためここでも捕まえる。
-          // `force: true` の経路（この if の外）と `manager_list` からは
-          // 呼ばない。
+          // この調べものが失敗しても断りは必ず返す: 止める道が塞がっていないことを守るため、例外を投げない設計でも念のため捕まえる
           const unpushedWork = await pool
             .unpushedWork(managerId, {
               signal: AbortSignal.timeout(MANAGER_STOP_UNPUSHED_WORK_TIMEOUT_MS),
@@ -7073,9 +6959,7 @@ export function createCloneTools(context: ToolContext) {
               reason: `確かめようとして例外が飛んだ: ${reasonOf(error)}`,
             }));
 
-          // **具体（未 push・CI）は、作業ツリーが1本以上見つかったか、探索に失敗した
-          // ときだけ足す（Issue #2970）。** 作業ツリー0本で失敗も無い仕事（git を使わない
-          // 仕事）に、git/CI 前提の文面を毎回出さない。拒否する条件は変えない。
+          // 具体（未 push・CI）は作業ツリーが見つかったか探索に失敗したときだけ足す: git を使わない仕事に git/CI 前提の文面を毎回出さないため
           const gitConcrete =
             unpushedWork.kind === 'unavailable' ||
             !isEmptyCompleteUnpushedWorkObservation({
@@ -7099,20 +6983,13 @@ export function createCloneTools(context: ToolContext) {
 
         const result = await pool.abort(managerId, reason, 'clone');
 
-        // **outcome ごとに言い分ける。** 以前は `outcome` が常に `'stopped'` で、
-        // 止まっていない・不明なときも「止めた」と機械可読な形で答えていた
-        // （R1）。ここで4値をそのまま文言に写す。
         if (result.outcome === 'unreadable') {
-          // **読めない行を「居ない」と言わない（issue #2359）。** 台帳に行は在るが
-          // 読めない形で入っている。止めていない・行は書き換えていない。
-          // **#2342（止める前の状態を一覧から読めなかった）とは別の話**で、あちらは
-          // 下の `absent` 枝の中に残る——一覧が読めなかったのではなく、行が読めない。
+          // 読めない行を「居ない」と言わない
           return text(`${managerId} は止められなかった: ${result.detail}`);
         }
         if (result.outcome === 'absent') {
-          // **エラーで終わらせず、何が起きているかを言う。**
           if (beforeLookup.kind === 'unreadable') {
-            // **読めなかったことを「居ない」と言い切らない（#2342）。**
+            // 読めなかったことを「居ない」と言い切らない
             return text(
               `${managerId} は止められなかった: ${result.detail}\n` +
                 `止める前の状態を一覧から読めなかった（${beforeLookup.reason}）ので、` +
@@ -7134,14 +7011,13 @@ export function createCloneTools(context: ToolContext) {
 
         const afterLookup = await find();
         const after = afterLookup.kind === 'found' ? afterLookup.manager : undefined;
-        // 止めた後の状態の言い方。**読めなかったときは「消えている」と言わない**（#2342）。
+        // 読めなかったときは「消えている」と言わない
         const afterUnreadable =
           afterLookup.kind === 'unreadable'
             ? `止めた後の状態を一覧から読めなかった（${afterLookup.reason}）`
             : undefined;
 
         if (result.outcome === 'not_stopped') {
-          // **止まっていないと確かめた（明確な失敗）。「止めた」と言わない。**
           return text(
             `[${managerId}] ${result.detail}\n` +
               `**止まっていない。** runner には ${managerId} のセッションがまだ残っている。` +
@@ -7151,8 +7027,7 @@ export function createCloneTools(context: ToolContext) {
         }
 
         if (result.outcome === 'unknown') {
-          // **確かめられなかった（不明）。「止めた」とも「止まっていない」とも
-          // 言い切らない。**
+          // 「止めた」とも「止まっていない」とも言い切らない
           return text(
             `[${managerId}] ${result.detail}\n` +
               '止まったかは**未確認**である（runner に確認が取れなかった）。' +
@@ -7160,14 +7035,10 @@ export function createCloneTools(context: ToolContext) {
           );
         }
 
-        // ここに来るのは outcome === 'stopped'（sessionGone === true を確かめた）。
         const lines = [`[${managerId}] ${result.detail}`];
 
         if (before?.status === 'done') {
-          // **`done` は「マネージャー自身のターンが終わって待機中」でしかない。**
-          // その下で作業者が走っているかは、デーモンからは見えていない（作業者の
-          // 生存も worktree の更新時刻も、ここからは読めない）。前の文言は
-          // 「走っている手は無く」と断定していたが、それは観測ではなく推測である。
+          // 「走っている手は無い」と断定しない: `done` はマネージャー自身のターンが終わっただけで、作業者の生存はデーモンから見えないため
           lines.push(
             'もともと待機中（done）だった仕事である。マネージャー自身のターンは終わっていたので、' +
               '畳んだのは記録である。ただし **`done` は「その下で誰も動いていない」ことまでは' +
@@ -7181,18 +7052,7 @@ export function createCloneTools(context: ToolContext) {
               ? '一覧からも消えている。'
               : `いまの状態: ${describeManagerState(after.status, after.live, after.awaitingBackground)}。`,
         );
-        // **畳んだターンの本文へ、止めた直後に到達できるようにする（Issue
-        // #1038）。** 誤って止めたことに気づく契機が、止めた直後には無かった
-        // のが実害——件数と時刻しか言わない `withheld` の案内（すぐ下と別物）
-        // とは違い、ここは**いま畳んだターンの中身そのもの**を扱う。
-        //
-        // ⛔ **届いていない本文を待ってこの応答を止めない。** `abort()` は
-        // `runner.stop()` を待った直後に `status` を書くが、この report
-        // イベントは HTTP 越しの runner では別経路で後から届く
-        // （`schema.ts` の `lastFoldedTurn` の doc「順序の注意」）——
-        // `manager_stop` の応答を組む時点でまだ届いていないことは普通にある。
-        // **2段にする**: 届いていれば抜粋を、届いていなければ
-        // `manager_report` への案内を出す。
+        // 届いていない本文を待ってこの応答を止めない: report イベントは HTTP 越しの runner では後から届くため、届いていれば抜粋を、届いていなければ `manager_report` への案内を出す
         lines.push(
           after?.lastFoldedTurn === undefined
             ? '畳んだターンの本文はまだ台帳に届いていない（別経路で後から届くことがある）。' +
@@ -7205,109 +7065,32 @@ export function createCloneTools(context: ToolContext) {
       },
     ),
 
-    /**
-     * **#358 のうち、runner→デーモンの脚の滞留は、この一覧では観測できた分だけ出す
-     * （案b・案b の第2段）。**
-     *
-     * `RunnerPlacementResources.pendingEvents` / `oldestPendingAt` は runner
-     * ごとに取れる（`apps/daemon/src/runner-client.ts` の `resources()`）。
-     * これを読むには `ManagerPool.runners({ resources: true })` を呼ぶ必要が
-     * あり、**この一覧（`runner_list` ではなく `manager_list`）から毎回それを
-     * 呼ぶ形は採らない**——`runners()` の doc（`ManagerPool.runners` の
-     * JSDoc）が守っている「既定では `resources()` を呼ばない＝この一覧のために
-     * ネットワーク往復を足さない」を破ることになり、かつ `runner_list` の
-     * `resources: true` というクローンの明示的な opt-in を、`manager_list`
-     * 側から自動で踏み潰すことにもなる（north_star 禁止2）。**この判断は
-     * 案b の第2段でも変えていない**——`manager_list` 自身はいまも
-     * `resources()` を一度も呼ばない（`manager.test.ts` の歯）。
-     *
-     * **代わりに、`ManagerPool.runnerBacklog()`（キャッシュ。往復を足さない）
-     * を読む。** ここが読む値には2つの由来があり、**どちらも往復を新しく
-     * 足していない。**
-     *
-     * 1. `runners({ resources: true })` が呼ばれるたび（＝クローンが
-     *    `runner_list resources: true` を明示的に選ぶたび）——`resources()`
-     *    の応答から拾う。
-     * 2. **10秒ごとの生存確認（`RunnerRegistry` の heartbeat）が、
-     *    `identity()` の応答から同じ2欄を拾う（案b の第2段）。** 元々10秒
-     *    ごとに走っている往復に乗せているだけなので、こちらも新しい往復では
-     *    ない。`identity()` を持つ runner については、`runner_list` を
-     *    一度も `resources: true` で呼んでいなくても、この経路で自然に
-     *    warm する。
-     *
-     * どちらの由来かは呼び出し側から区別しない（`RunnerBacklogSnapshot` は
-     * 同じ形）——`runnerBacklog()` が観測時刻の新しいほうを採って合流させる。
-     *
-     * **それでも「常に新しい」わけではない。** `identity()` を持たない
-     * runner（`LocalRunner`・古い器）は2の経路を一切通らないので、
-     * `runner_list resources: true` を一度も呼んでいなければ、その runner は
-     * 依然 cold（行が出ない）である。「行が無い＝滞留0」ではなく「0件
-     * だったか、まだ観測していないかのどちらか」——`describeRunnerBacklog`
-     * の doc、この道具の description の断りを参照。値が出ても**それは
-     * 観測した時点の値であって現在値ではない**ので、行には必ず観測時刻を
-     * 添える。
-     *
-     * ## この判断は #579 でも変えていない（読む側が確かめられるように書いておく）
-     *
-     * #579 で **heartbeat が `GET /managers` を引くようになった**（`⚠ 宛先の
-     * runner は … セッションを持っていなかった` の行が、誰かが送るのを待たずに
-     * 立つようになった）。**増えた往復は heartbeat の側だけである** — この道具の
-     * ハンドラはいまも `runner.list()` も `resources()` も呼ばず、名簿の像を
-     * 同期に読むだけである（`manager.test.ts` の歯が両方を数えている）。
-     * ⟹ ここが守っているもの（**一覧の側から自動で往復を払わない＝クローンの
-     * opt-in を踏み潰さない**。north_star 禁止2）はそのまま生きている。
-     */
+    // `resources()` を毎回呼ばない: 一覧のためにネットワーク往復を足し、`runner_list resources: true` というクローンの明示的な opt-in を自動で踏み潰すため、代わりにキャッシュの `runnerBacklog()` を読む
     tool(
       'manager_list',
       [
         'マネージャーの一覧と状態を見る。何が走っていて、何が返事待ちかが分かる。',
-        // **状態の名前を「観測」より強く読ませない。** running は「走らせた」で
-        // あって「進んでいる」ではなく、done は「マネージャーのターンが終わった」
-        // であって「仕事が終わった」ではない。⚠ の行がその差を埋める。
+        // 状態の名前を「観測」より強く読ませない: running は「走らせた」で「進んでいる」ではなく、done は「ターンが終わった」で「仕事が終わった」ではないため
         '状態の名前はデーモンが観測できた範囲でしかないので、⚠ の行まで読むこと。',
-        // **#621 / #643**: `done` が「手が空いた」と「背景処理の完了を待って
-        // 畳んだ」を潰していた。字面（`done/背景処理待ち×N`）を足しただけでは
-        // クローンには届かない——道具の説明文に何を意味するかを書く（上の
-        // `resources: true` / #572 の行と同じ理由）。
         'done/背景処理待ち×N は、そのマネージャーが自分で起こした背景処理（run_in_background の子）や' +
           '作業者への委譲の完了を待って畳んだだけで、手が空いたのではないという意味である。' +
-          // **#756 で直した。** ここは「N はそのとき握り潰した報告の本数」と
-          // 言っていたが、N を描くのは `digest.ts` の `awaitingBackground.tasks`
-          // である。`ManagerAwaitingBackground` の doc は逐語で
-          // 「`withheldReports` と1つに畳まない。」と名指しで禁じている。
           'N は器が名乗った背景タスクの在り高であって、握り潰した報告の本数ではない' +
           '（同じ1本が3つのタスクを待ちながら2回畳めば、在り高3・握り潰し2になる）。' +
           '握り潰した報告の中身は manager_report と日誌（decision）に在る。' +
           '**この印は器が名乗った分にだけ立つ** — この欄を送らない古い器では、背景処理を待っていても' +
           '立たない。だから **印が無いことを「手が空いている」と読まないこと。**',
-        // **Issue #1104。** 同じ合図が繰り返し畳んで届いていた原因は「いつから
-        // 待っているか」を憶えている場所が無かったことだった——回数ではなく
-        // 経過時間で判断できるよう、その時刻をこの一覧で名乗る。
         '背景処理待ち×N の直後に「（<時刻> から）」が付くことがある。それはこの委譲が' +
           '最初に背景処理待ちへ入った時刻（ISO 8601、UTC）で、経過時間そのもの（「N時間」等）' +
           'ではない——ここは呼ばれるたびに答えが変わる計算をしない場所なので、経過は' +
           'いまの時刻と見比べて自分で出すこと。時刻が付かないのは「そう名乗られていない」' +
           '場合であって「待ち始めていない」ではない（この印が立つ条件は直前の断りと同じ）。',
         '依頼文と報告は抜粋なので、全文が要るなら manager_report で取ること。',
-        // **#579**: 「runner にセッションが無い」を、誰かが送るまで待たずに
-        // 名乗れるようになった。⚠ の行そのものの字面は変えていない——変えたのは
-        // **立つ時機**である。ここに書くのは、この一覧を読む側が「送るまで
-        // 分からない」という前の性質のまま読み続けないようにするためである
-        // （JSDoc に書いてもクローンには届かない。上の resources: true と同じ理由）。
         '「runner にセッションが無い」は、10秒ごとの生存確認が runner に一覧を' +
           '聞いて観測する（走行中・返事待ちのものだけを見る）。誰かが manager_send を' +
           '打つのを待たない。ただし観測できた回にだけ立つので、**行が出ないことを' +
           '「セッションは在る」と読まないこと** — 器に聞けなかっただけの回もある。' +
           '待機中（done）のものはこの観測の対象外である（完遂してセッションを畳んだ' +
           '回と区別が付かず、区別できないものに ⚠ を付けると本当に困っている1本が埋もれる）。',
-        // #358 案b の第2段: `manager_list` 自身はいまも `resources()` を
-        // 呼ばない（往復を増やさない、という設計判断は変えていない）。
-        // **ただしキャッシュは2つの経路で warm する** — (1) runner_list を
-        // resources: true で明示的に呼ぶ (2) 10秒ごとの生存確認が
-        // identity() を持つ runner から自動で拾う。**(2) を持たない runner
-        // （LocalRunner・古い器）は (1) を待つしかなく、依然 cold になりうる**
-        // ——「行が無い＝滞留0」ではなく「0件だったか、まだ観測していないか
-        // のどちらか」。出ている行も観測した時点の値であって「いま」ではない。
         '器（runner）側の未送出の滞留は、runner_list を resources: true で明示的に呼んだとき、' +
           'または10秒ごとの生存確認が対応する runner から自動で拾ったときに、それぞれ' +
           'キャッシュされる（それ以外の経路では更新されない）。生存確認からの自動更新に' +
@@ -7316,20 +7099,11 @@ export function createCloneTools(context: ToolContext) {
           '読まないこと。0件だったか、まだ観測していないかのどちらかである。出ている行も' +
           '観測した時点の値であって現在値ではないので、最新の値が要るなら runner_list を' +
           'resources: true で呼び直すこと。',
-        // **#572**: 「道具の応答待ちのまま、誰も待っていない」の ⚠ が何を
-        // 意味するかを、道具の説明文（クローンが毎回読む値そのもの）にも
-        // 書く。JSDoc に書いてもクローンには届かない（`resources: true` の
-        // 説明文を足したときと同じ理由。`tools.test.ts` に歯が在る）。
         '生ログの末尾が stop_reason: tool_use のまま対応する tool_result が無く、かつ返事待ちが空の' +
           'ものには ⚠ の行が出る（道具を回しているなら、その応答を待っているのはデーモンのはずなので、' +
           'これは矛盾である）。この行に時刻の閾値は置いていない——何分経ったかは判定していないので、' +
           '行に出ている timestamp を読んで判断すること。返事待ちが在るものにはこの行を出さない' +
           '（確認は届いていて、クローンがまだ答えていないだけの正常な状態である）。',
-        // **Issue #1394 段⑤・④⑥⑦。** ⚠ の表示はこの道具からは畳まない
-        // （段⑤のまま）が、**同じ判定を使って runner_list が自動で畳むことが
-        // ある**（段④⑥⑦）——「畳む操作はどの道具からも行われない」だった
-        // 頃の文言のまま放置しない（AGENTS.md「実装が実際にやっていること
-        // だけを書く」）。
         '「畳む候補」の ⚠ は、status が done で背景処理待ちの印が無く、状態の判定が' +
           'active で、最後のターン終了から一定時間が経った委譲に出す印である。' +
           'ただし、器が「背景処理待ちの印を送る版」だと名乗った（runner の hello の能力）委譲にしか出ない' +
@@ -7340,31 +7114,17 @@ export function createCloneTools(context: ToolContext) {
           '逼迫していれば（上限の80%以上）、同じ候補の判定を満たす委譲をデーモンが自動で畳む' +
           '（未 push の実装・未コミットの変更が無いことも確かめたうえで。#1394 段④⑥⑦）。' +
           '何を畳んだ・見送ったかは runner_list の応答と日誌（journal_read、decision）に出る。',
-        // **並びを名乗る（#688 の3 を直した）。** ここに書いてある順序と実装が食い違うと、
-        // クローンは「出ていない＝無い」と読む。実装が実際にやっていることだけを書く。
         '走行中・返事待ち（running / waiting_human）を先に出し、次に lost（前のセッションへ戻れなかったもの。' +
           '成果がリモートに届いているかを誰も確かめていない＝判断待ちである）、' +
           'そのあとに残りの終端（done / failed / stopped）を出す。' +
           '各群の中は startedAt の新しい順である。',
         'status で状態を絞れる（省略すると絞らない）。先頭の件数の行は**絞る前の全体**を出すので、絞っても全体の実像は消えない。',
-        // **`[]` の倒し方はクローンが読む面にも書く。** JSDoc に書いてもクローンには
-        // 届かない（上の `resources: true` / #572 の行と同じ理由）。そして**この面の
-        // 他の一覧（journal_read の types / commitment_list の origin）は `[]` を
-        // 0件として扱う**ので、ここだけ違うことを黙っていると、その契約に慣れた
-        // 読み手が「0件だ」と読む。
+        // `[]` の倒し方はクローンが読む面にも書く: 他の一覧は `[]` を0件として扱うので、ここだけ違うことを黙っていると読み手が「0件だ」と読むため
         'status に空の配列を渡した呼びは絞らない（渡さなかったのと同じ全件が出る。' +
           'そのときは「絞らずに全件を出した」と応答に書く）。' +
           '**journal_read の types / commitment_list の origin とは倒し方が違う** — ' +
           'あちらは [] を「どれにも当たらない」＝0件として扱う。',
-        // **#662 段1。** `commitment_list` の同じ行に寄せた文言。
         '絞った先が予算で切れたら、断り書きが次に打つ cursor を案内する。それを cursor へ渡すと続きから読める。',
-        // **Issue #914 提案1**: 走っているプロセスの env は起動時に凍るので、
-        // 認証トークンを回した直後、この委譲がターンの境界（確認待ち・
-        // 背景処理が無い状態）へ達するまでは古い鍵のまま走り続ける
-        // （`.claude/skills/token-pool/SKILL.md` の「走行中には届かない」）。
-        // それ自体は正常な遅れだが、境界へ一度も達しなければ、この委譲は
-        // ずっと古い鍵のまま 429 を返し続ける——気づく手段が3箇所の時刻の
-        // 突き合わせしか無かった。
         '認証トークンの世代の行（`describeTokenGeneration` の doc）が出ているマネージャーでは、' +
           'この委譲が最後に起こした／自動で開き直した時点の世代と、いまの現役の世代を比べられる。' +
           '⚠ が付いていれば世代が食い違っている——回した直後の短い遅れなら自然に消える。' +
@@ -7372,12 +7132,6 @@ export function createCloneTools(context: ToolContext) {
           '世代が測れていないときも行は出る——' +
           '「分からない」の理由（プール未配線／未観測／デーモンの再起動をまたいだ引き取り）を' +
           '名乗る（Issue #988）。再起動をまたいだ場合だけ manager_stop → manager_start が効く。',
-        // **Issue #914 オーナー提案(2)。** 世代番号の直接比較（提案1）は
-        // daemon 側の記憶（bookkeeping）が前提だが、その記憶が「分からない」
-        // 側に落ちる場面（プール未配線／未観測／再起動をまたいだ引き取り）
-        // では提案1は何も言えない。この行はそこを埋める独立の材料——
-        // 429 の文言そのもの（SDK の生の事実）とトークンプール（DB 正本）
-        // だけを見るので、daemon の bookkeeping が追いついていなくても効く。
         '429 で落ちたとき、SDK が返す文言に書かれていた resets 時刻を、認証トークンの' +
           'プールの各鍵の冷却期限と突き合わせた行も出ることがある。「世代ずれの疑い」なら、' +
           'この委譲は現役ではない古い鍵を掴んだまま走っている可能性が高い——鍵が通る状態へ' +
@@ -7389,12 +7143,7 @@ export function createCloneTools(context: ToolContext) {
           'この行は出ない。',
       ].join(' '),
       {
-        // **人間の入口（`GET /managers`）にだけ在った絞りを、クローンにも渡す**
-        // （#670 / PR #672 で HTTP 側に入った。片方だけが持つのは能力の削除＝
-        // north_star 禁止1）。**知らない値は zod が弾く**——`jobStatusSchema`
-        // をそのまま使うのは、綴りを間違えた呼びが「その状態のものは0件」として
-        // 返る形（絞り込みが効いていないことに気づけない形）を作らないためである
-        // （`apps/daemon/src/app.ts` の `managersQuery.status` の doc と同じ理由）。
+        // `jobStatusSchema` をそのまま使う: 綴りを間違えた呼びが「その状態のものは0件」として返り、絞り込みが効いていないことに気づけない形を作らないため
         status: z
           .array(jobStatusSchema)
           .optional()
@@ -7404,10 +7153,6 @@ export function createCloneTools(context: ToolContext) {
               '空の配列 [] も絞らない（渡さなかったのと同じ。0件にはならない）。' +
               '先頭の件数の行は絞る前の全体を出す',
           ),
-        // **#662 段1。** `commitment_list` の `cursor` と同じ契約（不透明な
-        // 文字列。自分で組み立てない）。cursor は「刷られた一覧の status」を
-        // 覚えているので、status を変えて渡すと明示のエラーになる
-        // （`manager-cursor.ts` の doc「cursor は status を持つ」）。
         cursor: z
           .string()
           .optional()
