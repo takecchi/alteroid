@@ -302,12 +302,29 @@ function ConversationPanel({ conversationId }: { conversationId: string }) {
               {message.role === 'inbound' ? '人間' : 'クローン'}
             </span>
             {redactBody(message.text)}
+            {!!message.attachments?.length && (
+              <span className="block text-[11px] text-muted-foreground">
+                ［添付 {message.attachments.length}件:{' '}
+                {message.attachments.map(attachmentLabel).join('、')}］
+              </span>
+            )}
           </li>
         ))}
       </ul>
       <OpenInChat conversationId={conversationId} />
     </div>
   );
+}
+
+/**
+ * 引用の添付は名前だけを添える（中身の取得・プレビューは `MessageAttachments` を lazy で
+ * 読む必要があり、この画面のために取りに行かない）。名前が空・読めない形のときは、
+ * 推測で埋めず無いと分かる形で出す。名前の扱いはチャット（`MessageAttachments`）に合わせ、そのまま出す。
+ */
+function attachmentLabel(attachment: { name?: unknown }): string {
+  return typeof attachment.name === 'string' && attachment.name.trim() !== ''
+    ? attachment.name
+    : '名前の無い添付';
 }
 
 /**
