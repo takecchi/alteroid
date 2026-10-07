@@ -644,6 +644,8 @@ export function useRemoveProfileEntry() {
     async (name: string): Promise<ProfileUpdateResult> => {
       const result = await api.api.DELETE('/profile/{name}', { params: { path: { name } } });
       throwIfProfileRejected(result);
+      // 404（行が無い）でも取り直してから投げる: 既に外されていると、行が一覧に残り続け、開いている編集欄から蘇るため
+      if (result.response.status === 404) await mutate(KEY.profile);
       const updated = unwrap(result);
       await mutate(KEY.profile);
       return updated;

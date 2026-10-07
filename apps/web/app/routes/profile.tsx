@@ -21,6 +21,7 @@ import {
   Textarea,
 } from '@alteroid/ui';
 import {
+  ApiError,
   ProfileRejectedError,
   useProfile,
   useRemoveProfileEntry,
@@ -75,7 +76,10 @@ function ProfileBody() {
   // ProfileEditor を key で作り直す: 確認の枠と保存の失敗は ProfileEditor の中の state で、別の行へ切り替えても親の setEditor では畳めないため
   const [editorSerial, setEditorSerial] = useState(0);
   const editorSerialRef = useRef(0);
-  const [result, setResult] = useState<{ label: string; update: ProfileUpdateResult } | null>(null);
+  const [result, setResult] = useState<{
+    label: string;
+    update: ProfileUpdateResult | null;
+  } | null>(null);
   const [pending, setPending] = useState<
     { kind: 'switch'; entry: ProfileEntryView } | { kind: 'close' } | null
   >(null);
@@ -128,7 +132,17 @@ function ProfileBody() {
                     if (dirty) setPending({ kind: 'switch', entry });
                     else openEntry(entry);
                   }}
-                  onRemoved={(label, update) => setResult({ label, update })}
+                  onRemoved={(name, update) => {
+                    setResult({
+                      label:
+                        update === null ? `行 ${name} は既に外されていた` : `行 ${name} を外した`,
+                      update,
+                    });
+                    // 外した行を開いている編集欄は閉じる: 残すと保存で、外された行を確認だけで作り直すため
+                    setEditor((current) =>
+                      current?.existing === true && current.name === name ? null : current,
+                    );
+                  }}
                 />
               )
             )}
@@ -153,7 +167,11 @@ function ProfileBody() {
           <Card>
             <CardHeader title="反映結果" />
             <div className="px-4 py-3">
-              <UpdateReport label={result.label} update={result.update} />
+              {result.update === null ? (
+                <p className="text-xs break-words">{`${result.label}（一覧を取り直した）。`}</p>
+              ) : (
+                <UpdateReport label={result.label} update={result.update} />
+              )}
             </div>
           </Card>
         )}
@@ -196,7 +214,7 @@ function ProfileList({
 }: {
   profile: NormalizedProfile;
   onEdit: (entry: ProfileEntryView) => void;
-  onRemoved: (label: string, update: ProfileUpdateResult) => void;
+  onRemoved: (name: string, update: ProfileUpdateResult | null) => void;
 }) {
   if (profile.entries.length === 0) {
     return (
@@ -252,7 +270,7 @@ function EntryRow({
   entry: ProfileEntryView;
   legacy: boolean;
   onEdit: () => void;
-  onRemoved: (label: string, update: ProfileUpdateResult) => void;
+  onRemoved: (name: string, update: ProfileUpdateResult | null) => void;
 }) {
   const removeEntry = useRemoveProfileEntry();
   const [shown, setShown] = useState(false);
@@ -266,10 +284,15 @@ function EntryRow({
     setFailure(undefined);
     try {
       const update = await removeEntry(entry.name);
-      onRemoved(`行 ${entry.name} を外した`, update);
+      onRemoved(entry.name, update);
     } catch (caught) {
-      setFailure(caught);
-      setConfirming(false);
+      // 404 は失敗の注記にせず親へ渡す: 取り直しで行が消え、注記を出す先も無くなるため
+      if (caught instanceof ApiError && caught.status === 404) {
+        onRemoved(entry.name, null);
+      } else {
+        setFailure(caught);
+        setConfirming(false);
+      }
     } finally {
       setBusy(false);
     }
