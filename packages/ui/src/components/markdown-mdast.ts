@@ -170,7 +170,7 @@ function convert(tree: Root, idPrefix: string, options: MdastOptions): Out[] {
 
   function imageLink(src: string, alt?: string | null, title?: string | null): El {
     const p: Record<string, unknown> = { href: src };
-    if (title !== null && title !== undefined) p.title = title;
+    if (title !== null && title !== undefined) p.title = display(title);
     const label = display(alt ?? '');
     return el('a', p, [label === '' ? '画像' : '画像: ' + label]);
   }
@@ -230,7 +230,7 @@ function convert(tree: Root, idPrefix: string, options: MdastOptions): Out[] {
         // 押せる見た目だけ残ると、押して画面を開き直すだけの偽のリンクになる
         if (href === '') return all(node);
         const p: Record<string, unknown> = { href };
-        if (node.title !== null && node.title !== undefined) p.title = node.title;
+        if (node.title !== null && node.title !== undefined) p.title = display(node.title);
         return el('a', p, all(node));
       }
       case 'image': {
@@ -239,8 +239,8 @@ function convert(tree: Root, idPrefix: string, options: MdastOptions): Out[] {
           return imageLink(src, node.alt, node.title);
         }
         const p: Record<string, unknown> = { src };
-        if (node.alt !== null && node.alt !== undefined) p.alt = node.alt;
-        if (node.title !== null && node.title !== undefined) p.title = node.title;
+        if (node.alt !== null && node.alt !== undefined) p.alt = display(node.alt);
+        if (node.title !== null && node.title !== undefined) p.title = display(node.title);
         return el('img', p);
       }
       case 'linkReference': {
@@ -249,7 +249,7 @@ function convert(tree: Root, idPrefix: string, options: MdastOptions): Out[] {
         const href = safeUrl(def.url || '');
         if (href === '') return all(node);
         const p: Record<string, unknown> = { href };
-        if (def.title !== null && def.title !== undefined) p.title = def.title;
+        if (def.title !== null && def.title !== undefined) p.title = display(def.title);
         return el('a', p, all(node));
       }
       case 'imageReference': {
@@ -259,8 +259,11 @@ function convert(tree: Root, idPrefix: string, options: MdastOptions): Out[] {
         if (options.remoteImages === false && src !== '') {
           return imageLink(src, node.alt, def.title);
         }
-        const p: Record<string, unknown> = { src, alt: node.alt };
-        if (def.title !== null && def.title !== undefined) p.title = def.title;
+        const p: Record<string, unknown> = {
+          src,
+          alt: node.alt === null || node.alt === undefined ? node.alt : display(node.alt),
+        };
+        if (def.title !== null && def.title !== undefined) p.title = display(def.title);
         if (p.alt === null || p.alt === undefined) delete p.alt;
         return el('img', p);
       }
