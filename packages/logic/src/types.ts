@@ -24,24 +24,24 @@ export type ManagerStatus = ManagerSummary['status'];
  */
 export type ManagerDenial = NonNullable<ManagerSummary['denials']>[number];
 /**
- * 委譲の行が読めなかったもの（issue #2345）。「居ない」でも「畳まれた」でもない第3の
+ * 委譲の行が読めなかったもの。「居ない」でも「畳まれた」でもない第3の
  * 状態——`GET /managers` の `unreadable`（1件でも在るときだけ載る）から導く。
  */
 export type UnreadableJob = NonNullable<Ok<paths['/managers']['get']>['unreadable']>[number];
 
 export type PendingApproval = Ok<paths['/approvals']['get']>['approvals'][number];
-/** 承認待ちの設問（`ask_human` の `questions`。選択肢つき。issue #2525）。 */
+/** 承認待ちの設問（`ask_human` の `questions`。選択肢つき）。 */
 export type ApprovalQuestion = NonNullable<PendingApproval['questions']>[number];
 /** 設問ごとの回答（`PendingApproval.selections`。`POST /approvals/{id}/answer` が受けるのと同じ形）。 */
 export type ApprovalSelection = NonNullable<PendingApproval['selections']>[number];
 /**
- * 承認待ちの行が読めなかったもの（issue #2298）。「無い」でも「回答済み」でもない
+ * 承認待ちの行が読めなかったもの。「無い」でも「回答済み」でもない
  * 第3の状態——`GET /approvals` の `unreadable`（1件でも在るときだけ載る）から導く。
  */
 export type UnreadableApproval = NonNullable<Ok<paths['/approvals']['get']>['unreadable']>[number];
 
 /**
- * 受信箱の行が読めなかったもの（issue #2344）。「無い」でも「処理済み」でもない第3の状態
+ * 受信箱の行が読めなかったもの。「無い」でも「処理済み」でもない第3の状態
  * ——`GET /inbox` の `unreadable`（1件でも在るときだけ載る）から導く。
  */
 export type UnreadableInboxEvent = NonNullable<Ok<paths['/inbox']['get']>['unreadable']>[number];
@@ -49,16 +49,15 @@ export type UnreadableInboxEvent = NonNullable<Ok<paths['/inbox']['get']>['unrea
 /**
  * 引き受けたまま終わっていない仕事の台帳の1行（`GET /commitments`）。
  *
- * **`respondedAt`（issue #1003）を含む。** サーバ（`apps/daemon/src/openapi.ts`
+ * **`respondedAt` を含む。** サーバ（`apps/daemon/src/openapi.ts`
  * の `commitmentListResponseSchema`）が `commitmentSchema` へ `updatedAt` /
  * `respondedAt` を加算した形で返すので、ここも生成 spec からそのまま導く
  * ——手で複製すると、サーバ側の形が変わったときに画面側だけ古いまま残り、
- * かつ「古いままである」ことがどこにも現れない（この文書の冒頭が言う
- * 二重管理そのもの）。
+ * かつ「古いままである」ことがどこにも現れない。
  */
 export type Commitment = Ok<paths['/commitments']['get']>['entries'][number];
 /**
- * 台帳の行が読めなかったもの（issue #296）。「無い」でも「片付いた」でもない
+ * 台帳の行が読めなかったもの。「無い」でも「片付いた」でもない
  * 第3の状態——`GET /commitments` の `unreadable` をそのまま導く。
  */
 export type UnreadableCommitment = Ok<paths['/commitments']['get']>['unreadable'][number];
@@ -77,19 +76,19 @@ export type AnsweredApprovalDate = Ok<paths['/approvals/answered-dates']['get']>
 
 export type DailyReport = Ok<paths['/reports']['get']>['reports'][number];
 
-/** `GET /progress` の応答（Issue #2241）。率（%）は持たない。 */
+/** `GET /progress` の応答。率（%）は持たない。 */
 export type Progress = Ok<paths['/progress']['get']>;
 export type ProgressForecast = Progress['forecast'];
 export type ProgressForecastBasis = ProgressForecast['basis'];
 
 export type ScheduleEntry = Ok<paths['/schedule']['get']>['entries'][number];
 /**
- * 継続中の依頼の行が読めなかったもの（issue #2343）。「無い」でも「消された」でもない
+ * 継続中の依頼の行が読めなかったもの。「無い」でも「消された」でもない
  * 第3の状態——`GET /schedule` の `unreadable`（1件でも在るときだけ載る）から導く。
  */
 export type UnreadableSchedule = NonNullable<Ok<paths['/schedule']['get']>['unreadable']>[number];
 /**
- * 周期そのもの（#496）。仕込まれた依頼だけが持つので `entry.spec` は
+ * 周期そのもの。仕込まれた依頼だけが持つので `entry.spec` は
  * optional — 編集画面はここが無いデーモン（この画面より古い版）と話すことが
  * あるので、`undefined` を握り潰さないこと（`schedule.tsx` の doc）。
  */
@@ -99,21 +98,21 @@ export type MemorySummary = Ok<paths['/memory']['get']>['documents'][number];
 export type MemoryDocument = Ok<paths['/memory/{slug}']['get']>['document'];
 
 /**
- * 仕事のやり方（#1055 段3③）。`PracticeStore` の3入口（クローンの道具・
+ * 仕事のやり方。`PracticeStore` の3入口（クローンの道具・
  * HTTP・Web UI）のうち、これは Web UI 側が使う型——サーバの
  * `practiceMetaSchema` / `practiceSchema`（`packages/core/src/schema.ts`）から
  * 生成 spec 経由で導く。手で複製しない（この冒頭の doc と同じ理由）。
  */
 export type PracticeSummary = Ok<paths['/practices']['get']>['practices'][number];
 /**
- * やり方の行が読めなかったもの（issue #2346）。「無い」でも「消された」でもない
+ * やり方の行が読めなかったもの。「無い」でも「消された」でもない
  * 第3の状態——`GET /practices` の `unreadable`（1件でも在るときだけ載る）から導く。
  */
 export type UnreadablePractice = NonNullable<Ok<paths['/practices']['get']>['unreadable']>[number];
 export type Practice = Ok<paths['/practices/{slug}']['get']>['practice'];
 
 /**
- * やり方の追記専用の版の履歴（#1309）。一覧はメタだけ（本文を含まない）——
+ * やり方の追記専用の版の履歴。一覧はメタだけ（本文を含まない）——
  * `PracticeSummary` と同じ理由。
  */
 export type PracticeVersionSummary = Ok<
@@ -126,7 +125,7 @@ export type ConversationsResponse = Ok<paths['/conversations']['get']>;
 export type ConversationSummary = ConversationsResponse['conversations'][number];
 export type ConversationDetail = Ok<paths['/conversations/{id}']['get']>;
 export type ConversationMessage = ConversationDetail['messages'][number];
-/** デーモンの添付の上限（`GET /attachments/limits`。先行検査に使う。#3204）。 */
+/** デーモンの添付の上限（`GET /attachments/limits`。先行検査に使う）。 */
 export type AttachmentLimits = Ok<paths['/attachments/limits']['get']>;
 /** 発言に添えられた添付の控え（`messages[].attachments`。中身は `GET /attachments/:id` で取る）。 */
 export type MessageAttachment = NonNullable<ConversationMessage['attachments']>[number];
@@ -170,7 +169,7 @@ export type UsageRow = UsageAggregate['rows'][number];
  */
 export type UsageTurnRow = UsageAggregate['turnRows'][number];
 /**
- * 消費を報告しない provider のターン（Issue #486 M7）。**欄が無いときは応答に鍵ごと無い**ので
+ * 消費を報告しない provider のターン。**欄が無いときは応答に鍵ごと無い**ので
  * 配列の要素の型だけを取り出す。
  */
 export type UsageUnmeteredRow = NonNullable<UsageAggregate['unmeteredRows']>[number];
@@ -189,7 +188,7 @@ export type UsageSite = UsageRow['site'];
  */
 export type AccountUsageState = UsageAggregate['account'];
 /**
- * 台帳に1行も無い委譲（Issue #98）。**全期間で判定する**——`from` / `to` などの
+ * 台帳に1行も無い委譲。**全期間で判定する**——`from` / `to` などの
  * 絞り込みには影響されない（`apps/daemon/src/openapi.ts` の
  * `unrecordedManagerSchema` の doc）。
  */
@@ -204,21 +203,19 @@ export type UnrecordedManager = UsageAggregate['unrecordedManagers'][number];
 export type TokensState = Ok<paths['/tokens']['get']>;
 export type AgentTokenView = TokensState['tokens'][number];
 /**
- * **`settings` / `settingsUnreadable` はどちらか一方だけが在る**（issue
- * #2095）。回す契機・冷却の設定が壊れていて読めないとき、デーモンは
+ * **`settings` / `settingsUnreadable` はどちらか一方だけが在る。**
+ * 回す契機・冷却の設定が壊れていて読めないとき、デーモンは
  * `settings` を省いて `settingsUnreadable.reason` を返す——既定値では埋めない
  * （`apps/daemon/src/openapi.ts` の `tokensResponseSchema` の doc）。
  *
  * `TokenRotationSettings` 自体は「読めたときの形」を指す（`NonNullable`）。
  * 「読めないかもしれない」ことは呼び出し側が `TokensState['settings']` を
  * 直接見て分岐する——`PoolAndSettings`（`routes/tokens.tsx`）がその形。
- * **きちんとした表示はこの PR の範囲外**（Web 側の別 Issue の領域。ここでは
- * 落ちずに理由を出す最小限にとどめる）。
  */
 export type TokenRotationSettings = NonNullable<TokensState['settings']>;
 export type TokensSettingsUnreadable = NonNullable<TokensState['settingsUnreadable']>;
 /**
- * プールの行が読めなかったもの（issue #2346）。**`settingsUnreadable` の行版。**
+ * プールの行が読めなかったもの。**`settingsUnreadable` の行版。**
  * 1件でも在るときだけ載る。`rows` は id・ラベル・不正な欄名だけで、トークンの値は
  * 型に無い。
  */
@@ -241,19 +238,19 @@ export type TokenRotationEntry = Extract<JournalEntry, { type: 'token_rotation' 
  * `alteroid access list` と同じもの。
  *
  * **`apps/web/app/routes/access.tsx` は読み取り専用**——`grant` / `revoke`
- * はこの画面には無い（Issue #213。理由はその画面の doc）。
+ * はこの画面には無い（理由はその画面の doc）。
  */
 export type AccessState = Ok<paths['/access']['get']>;
 export type AccessAccount = AccessState['accounts'][number];
 /**
- * 読めないアカウントの行（`GET /access` の `rowsUnreadable`。issue #2536）。1件でも在るときだけ載る。
+ * 読めないアカウントの行（`GET /access` の `rowsUnreadable`）。1件でも在るときだけ載る。
  * `rows` は id と不正な欄名だけで、email などの中身は型に無い。`rows` に無い行（id が取れない行）も
  * `count` には数える。
  */
 export type AccessRowsUnreadable = NonNullable<AccessState['rowsUnreadable']>;
 
 /**
- * 人間が承認した Bash 許可の一覧（`GET /permission-grants`。Issue #863）。
+ * 人間が承認した Bash 許可の一覧（`GET /permission-grants`）。
  * CLI の `alteroid permission list` と同じもの
  * （`apps/cli/src/permission.ts`）。
  *
@@ -264,7 +261,7 @@ export type AccessRowsUnreadable = NonNullable<AccessState['rowsUnreadable']>;
 export type PermissionGrantsState = Ok<paths['/permission-grants']['get']>;
 export type PermissionGrant = PermissionGrantsState['grants'][number];
 /**
- * 読めない許可の行（`GET /permission-grants` の `rowsUnreadable`。issue #2536）。1件でも在るときだけ載る。
+ * 読めない許可の行（`GET /permission-grants` の `rowsUnreadable`）。1件でも在るときだけ載る。
  * `rows` は id と不正な欄名だけで、許可の本文は型に無い。
  */
 export type PermissionGrantsRowsUnreadable = NonNullable<PermissionGrantsState['rowsUnreadable']>;
@@ -279,12 +276,12 @@ export type CredentialsState = Ok<paths['/credentials']['get']>;
 export type EnvVarView = CredentialsState['credentials'][number];
 /** 撒く先。`'all'`=共通 / `'app'`=clone だけ / `'runner'`=manager だけ。 */
 export type EnvVarScope = EnvVarView['scope'];
-/** `PUT /credentials` が 200 で返す、正本の指紋と各 runner への反映結果（#3157）。 */
+/** `PUT /credentials` が 200 で返す、正本の指紋と各 runner への反映結果。 */
 export type EnvVarUpdateResult = Ok<paths['/credentials']['put']>;
 
 /**
- * 実行環境プロファイル（`GET /profile`。issue #1122）。**名前付きの行の集まり**
- * （`entries`。名前のコード単位順につなげて効く。2026-10-03）。
+ * 実行環境プロファイル（`GET /profile`）。**名前付きの行の集まり**
+ * （`entries`。名前のコード単位順につなげて効く）。
  *
  * **`entries[].script` は本文そのもの**で、鍵が丸ごと入りうる（`credentials` と違って
  * 指紋に畳まれていない）。置かれていなければ `entries: []`。`script` / `updatedAt` /
@@ -299,7 +296,7 @@ export type ProfileScope = ProfileEntryView['scope'];
 export type ProfileUpdateResult = Ok<paths['/profile/{name}']['put']>;
 
 /**
- * 人間の MCP 連携の登録（`GET /mcp-servers`。#325 段4）。
+ * 人間の MCP 連携の登録（`GET /mcp-servers`）。
  *
  * **値を丸ごと含む**（`env` / `headers` / `args` に鍵が入りうる）。置かれていなければ
  * `mcpServers: {}` で、`updatedAt` は載らない。
@@ -324,7 +321,7 @@ export type DroppedState = Ok<paths['/dropped']['get']>;
 /**
  * セッション生ログの退避（`GET /archive`）。可観測性の最下段——CLI の
  * `/archive` / `/archive <id>` / `/archive sessions` / `/archive remove <id>`
- * と同じ口（#698 / #776）。
+ * と同じ口。
  */
 export type ArchiveListState = Ok<paths['/archive']['get']>;
 export type ArchiveEntry = ArchiveListState['entries'][number];
@@ -338,7 +335,7 @@ export type ArchiveSessionSummary = ArchiveSessionsState['sessions'][number];
 export type ArchiveRemoveResult = Ok<paths['/archive/{id}']['delete']>;
 
 /**
- * 受信箱（`inbox_events`）の絞り込み一括削除（`POST /inbox/remove`。issue #972）。
+ * 受信箱（`inbox_events`）の絞り込み一括削除（`POST /inbox/remove`）。
  * CLI の `alteroid inbox remove` と同じ口——人間の入口なので、クローンの道具
  * `inbox_remove_many` が構造的に除く `human_message` / `human_answer` も含めて
  * 7種類すべてを選べる（`apps/daemon/src/openapi.ts` の
@@ -352,7 +349,7 @@ export type InboxEventType = InboxRemoveManyRequestBody['types'][number];
 export type InboxRemoveManyResult = Ok<paths['/inbox/remove']['post']>;
 
 /**
- * 受信箱の滞留の内訳（`GET /inbox`。issue #783 段0）。クローンの道具
+ * 受信箱の滞留の内訳（`GET /inbox`）。クローンの道具
  * `manager_list` の中にしか出ていなかった内訳を、人間の入口（Web UI）から
  * 読む——`@alteroid/core` の `InboxBacklogBreakdown` を JSON へ写したもの
  * （`apps/daemon/src/openapi.ts` の `inboxBacklogResponseSchema`）。
@@ -363,7 +360,7 @@ export type InboxBacklog = Ok<paths['/inbox']['get']>;
 export type TopologySnapshotManager = TopologySnapshot['managers'][number];
 
 /**
- * 連携の鍵の一覧（`GET /integration-keys`。#3113 段2）。CLI の `alteroid integration list` と同じもの。
+ * 連携の鍵の一覧（`GET /integration-keys`）。CLI の `alteroid integration list` と同じもの。
  * **値（`altk_...`）も sha256 の全体も載らない**（`fingerprint` は先頭12桁）。
  */
 export type IntegrationKeysState = Ok<paths['/integration-keys']['get']>;

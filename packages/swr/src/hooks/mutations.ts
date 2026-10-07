@@ -118,7 +118,7 @@ function roughPreview(text: string): string {
 }
 
 /**
- * 読んだ後に別の書き手が記憶を書き換えていた（`PUT /memory/{slug}` の 409、Issue #2743）。
+ * 読んだ後に別の書き手が記憶を書き換えていた（`PUT /memory/{slug}` の 409）。
  *
  * **何も書いていない。** 人間の下書きは呼び出し側が持っているので、捨てずに「いまの版」を
  * 見せて選ばせるために、デーモンが返した `current` を載せて投げる。`current` が `null` なら、
@@ -138,7 +138,7 @@ export class MemoryConflictError extends ApiError {
  * 記憶を書き換える（人間の直接編集）。
  *
  * `ifMatch` は**読んだ時の版**（`GET /memory/{slug}` の `version`。読んだ時に無かったなら `null`）。
- * 渡すと、いまの版と違えば何も書かずに `MemoryConflictError` を投げる。省略すると従来どおり後勝ち。
+ * 渡すと、いまの版と違えば何も書かずに `MemoryConflictError` を投げる。省略すると後勝ち。
  * 衝突のときは、画面がいまの版を見せられるよう記憶のキャッシュも引き直す。
  */
 export function useSaveMemory() {
@@ -172,10 +172,10 @@ export function useSaveMemory() {
 /**
  * 記憶を消す。
  *
- * `ifMatch` は**読んだ時の版**（`GET /memory/{slug}` の `version`。クエリで送る。Issue #2916 / #2881）。
+ * `ifMatch` は**読んだ時の版**（`GET /memory/{slug}` の `version`。クエリで送る）。
  * 渡すと、いまの版と違えば**何も消さず** `MemoryConflictError` を投げる（`current` にいまの版）。
  * 取り消せない操作なので、衝突しても自動では再送しない——呼び出し側がいまの内容を見せてから
- * もう一度確認を取る。**省略すると、デーモンは 428 で断る（何も消さない。#2881 段階3）。**
+ * もう一度確認を取る。**省略すると、デーモンは 428 で断る（何も消さない）。**
  */
 export function useDeleteMemory() {
   const api = useApi();
@@ -205,7 +205,7 @@ export function useDeleteMemory() {
 }
 
 /**
- * 読んだ後に別の書き手がやり方を書き換えていた（`PUT /practices/{slug}` の 409、Issue #2853）。
+ * 読んだ後に別の書き手がやり方を書き換えていた（`PUT /practices/{slug}` の 409）。
  * `MemoryConflictError` と同じ形。**何も書いていない**ので、人間の下書きは呼び出し側が持ったまま、
  * `current`（いまの版。`null` なら読んだ後に消された）を見せて選ばせる。`ApiError` を継承する。
  */
@@ -220,13 +220,13 @@ export class PracticeConflictError extends ApiError {
 }
 
 /**
- * 仕事のやり方を書く（全文置換。無ければ作る、#1055 段3③）。
+ * 仕事のやり方を書く（全文置換。無ければ作る）。
  *
  * `useSaveMemory` と違い `kind` / `title` も一緒に送る——`PracticeStore.write`
  * は `content` だけの部分更新を持たない（`practiceSchema` の doc）。
  *
  * `ifMatch` は**読んだ時の版**（`GET /practices/{slug}` の `version`。読んだ時に無かったなら `null`）。
- * 渡すと、いまの版と違えば何も書かずに `PracticeConflictError` を投げる。省略すると従来どおり後勝ち。
+ * 渡すと、いまの版と違えば何も書かずに `PracticeConflictError` を投げる。省略すると後勝ち。
  */
 export function useSavePractice() {
   const api = useApi();
@@ -260,10 +260,10 @@ export function useSavePractice() {
 /**
  * やり方を消す。
  *
- * `ifMatch` は**読んだ時の版**（`GET /practices/{slug}` の `version`。クエリで送る。Issue #2959 / #2881）。
+ * `ifMatch` は**読んだ時の版**（`GET /practices/{slug}` の `version`。クエリで送る）。
  * 渡すと、いまの版と違えば**何も消さず** `PracticeConflictError` を投げる（`current` にいまの版）。
  * 取り消せない操作なので、衝突しても自動では再送しない——呼び出し側がいまの内容を見せてから
- * もう一度確認を取る。**省略すると、デーモンは 428 で断る（何も消さない。段階2）**——読めない形で入っている行だけは版なしで消せる。
+ * もう一度確認を取る。**省略すると、デーモンは 428 で断る（何も消さない）**——読めない形で入っている行だけは版なしで消せる。
  */
 export function useDeletePractice() {
   const api = useApi();
@@ -295,7 +295,7 @@ export function useDeletePractice() {
 /**
  * 承認待ちに答える。
  *
- * **成功でも失敗でも一覧を取り直す（issue #1619）。** 個別に答える経路は、
+ * **成功でも失敗でも一覧を取り直す。** 個別に答える経路は、
  * 裏で先に片付いている（クローンが `approval_withdraw` で取り下げた・別の
  * タブや CLI が先に答えた）と 409（`withdrawn` / `already answered`）を
  * 返す——`unwrap` がそこで例外を投げて抜けると、取り直しに一度も届かない
@@ -321,7 +321,7 @@ export function useAnswerApproval() {
           .POST('/approvals/{id}/answer', {
             params: { path: { id } },
             // 選択肢で答えたときは `answer` が補足になる（API の約束。どちらか一方は必須）。
-            // `selections` を渡さない呼び方は、これまでと同じ `{ answer }` のまま。
+            // `selections` を渡さない呼び方は `{ answer }` だけを送る。
             body: {
               ...(answer === undefined ? {} : { answer }),
               ...(selections === undefined ? {} : { selections }),
@@ -349,7 +349,7 @@ export function useAnswerApproval() {
  * ので、そのまま呼び出し側へ渡す — ここで成功件数へ畳むと、どの id が通らな
  * かったかが画面から見えなくなる。
  *
- * **答えが通ったあとの取り直しの失敗は、呼び出し側へ伝えない**（issue #3627）。
+ * **答えが通ったあとの取り直しの失敗は、呼び出し側へ伝えない。**
  * 投げるのは `POST` が失敗したときだけである。
  */
 export function useAnswerApprovals() {
@@ -360,7 +360,7 @@ export function useAnswerApprovals() {
       const { results } = await api.api
         .POST('/approvals/answer', { body: { answers } })
         .then(unwrap);
-      // **取り直しの失敗で throw しない（issue #3627）。** 答えはもう通っている。
+      // **取り直しの失敗で throw しない。** 答えはもう通っている。
       // 投げると画面は「通信そのものの失敗」と読み、下書きを全部残して、送り直しが 409 になる。
       // 取り直せなかった分は SWR の次の再検証が拾う。
       try {
@@ -380,7 +380,7 @@ export function useAnswerApprovals() {
  * **片方だけ回すと、切り替えた先が古いままになる。** 画面は表示の切り替えで
  * キーを変えるので、いま見ているほうしか回さないと「積んだのに出てこない」が起きる。
  *
- * **進捗（`KEY.progress`）も回す（#3747）。** ホームの「未了の仕事 N 件」と進捗の画面は
+ * **進捗（`KEY.progress`）も回す。** ホームの「未了の仕事 N 件」と進捗の画面は
  * `GET /progress` の `backlog.total` を読む。回さないと、積んだ・片付けた直後にホームや
  * 進捗へ移ると前の件数が出る。進捗のキーは窓（`windowHours`）ごとに別になるので、
  * 型で束ねて指す。
@@ -456,8 +456,7 @@ export function useCloseCommitment() {
  *
  * **⚠️ サーバの規則（誰が直せるか）をここへ写さないこと。** 写すと、
  * サーバ側の線が変わった日に画面だけが黙ってずれる。これは下の
- * `useRemoveSchedule` が持つ線と同じもので、issue #580 の (C) で台帳の編集も
- * そちらへ寄せた。
+ * `useRemoveSchedule` が持つ線と同じものである。
  */
 export function useEditCommitment() {
   const api = useApi();
@@ -574,7 +573,7 @@ export function useCreateSchedule() {
  * 外せない**（デーモンが同じ名前で守っている）。画面側でボタンを隠して表現しないこと
  * — 隠すと「なぜ押せないか」が消える。押せて、断られた理由がその場に出るほうが読める。
  * ここに名前を書き写さないこと — 数え上げを持つのは `RESERVED_SCHEDULE_KINDS` だけ
- * である（#701 / #756 と同じ理由。増えても直すのはあちらだけでよい）。
+ * である（増えても直すのはあちらだけでよい）。
  */
 export function useRemoveSchedule() {
   const api = useApi();
@@ -657,7 +656,7 @@ export function useResetWorkspace() {
 
 /**
  * デーモンを止める（`POST /shutdown`。CLI の `alteroid daemon stop` と同じ
- * 受け口。issue #1124 の (A)）。
+ * 受け口）。
  *
  * **確認は呼び出し側（`settings.tsx` の `ShutdownDaemon`）の仕事。** `POST
  * /reset` と違い、この口自体はサーバ側で確認の印（`confirm: true` 相当）を
@@ -665,10 +664,9 @@ export function useResetWorkspace() {
  * 確認を経ない直接呼び出しを止める二重の網は無く、呼ぶ前の確認だけが
  * 唯一の網である。
  *
- * **資格は `authenticate` だけ**（`requireOperator` は要求しない。issue
- * #1124 の (B) がその強さを「意図」として確定させている）ので、`useSetEnvVar`
- * `useDeclareOwner` と違って `requireOwner` の前置きは無い。ただし `requireOwner` も
- * いまは素通しで、許可済みなら全員通る（#2862 / PR #2945）ので、403 になるのは
+ * **資格は `authenticate` だけ**（`requireOperator` は要求しない。意図した強さである）ので、
+ * `useSetEnvVar` `useDeclareOwner` と違って `requireOwner` の前置きは無い。ただし
+ * `requireOwner` も素通しで、許可済みなら全員通るので、403 になるのは
  * どちらも許可の無いアカウントだけである。
  *
  * **呼んだ後にキャッシュは引き直さない。** デーモンが止まるので、この画面
@@ -684,19 +682,12 @@ export function useShutdownDaemon() {
 
 /**
  * 実行環境の持ち主として宣言する／取り消す（`POST /access/:id/owner`
- * `.../owner/revoke`。issue #1198）。
+ * `.../owner/revoke`）。
  *
- * **注記: 以下の「常に 403」は #2862 以前の記述である。** 2026-10-05 のオーナー決定
- * （#2862 / PR #2945）で、デーモンの `requireOwner` は素通しになった。許可済みで
- * ログインできるアカウントは全員持ち主として通り、403 になるのは許可の無いアカウント
- * （`authenticate`）だけである。この口が宣言の仕組みを残していること自体は #2948 の別件。
- *
- * **（以前の記述）`requireOperator`。** ブラウザは構造的に operator になれない
- * （`apps/daemon/src/app.ts` の `requireOwner` の doc の「なぜ `requireOperator`
- * と分けるのか」）ので、**Web UI から呼ぶと常に 403 になる。** それでもボタンを
- * 出す理由は `routes/access.tsx` の doc にある（`env-vars.tsx` `settings.tsx` と
- * 同じ「ボタンは隠さない」方針——押せない理由を消さず、端末で打つコマンドを
- * 案内する）。
+ * **`requireOwner`。** 許可済みでログインできるアカウントは全員持ち主として通り、
+ * 403 になるのは許可の無いアカウント（`authenticate`）だけである。ボタンを隠さない
+ * 理由は `routes/access.tsx` の doc にある（`env-vars.tsx` `settings.tsx` と
+ * 同じ「ボタンは隠さない」方針）。
  *
  * `body: {}` の理由は `useRunSchedule` と同じ（spec が本文を必須にしている。
  * デーモンの門番 `deliberateClient` が `content-type: application/json` を要求する）。
@@ -740,8 +731,8 @@ export function useRevokeOwnerDeclaration() {
  * 400 で拒否する——`apps/cli/src/credential.ts` と同じ資格・同じ制約）。
  *
  * **`requireOwner`。** ただし中身は素通しで、許可済みでログインできるアカウントは全員
- * 持ち主として通る（2026-10-05 オーナー決定、#2862 / PR #2945）。403 が返るのは許可の
- * 無いアカウント（`authenticate`）だけ。宣言（`ownerDeclaredAt`。issue #1198）は
+ * 持ち主として通る。403 が返るのは許可の
+ * 無いアカウント（`authenticate`）だけ。宣言（`ownerDeclaredAt`）は
  * いまは資格の判断に使っていない。呼び出し側（`env-vars.tsx`）はボタンを隠さず、失敗を `ErrorNote` で
  * 見せること（`settings.tsx` の `ResetWorkspace` と同じ「隠さない」方針）。
  */
@@ -782,16 +773,14 @@ export class ProfileRejectedError extends ApiError {
 }
 
 /**
- * 実行環境プロファイルの**1行**（名前付き）を置く（`PUT /profile/:name`。issue #1122、
- * 行ごとの形は 2026-10-03）。`scope` の省略は「既存の行の撒く先を保つ」（新しい行なら all）。
+ * 実行環境プロファイルの**1行**（名前付き）を置く（`PUT /profile/:name`）。`scope` の省略は「既存の行の撒く先を保つ」（新しい行なら all）。
  *
  * **確認は呼び出し側（`routes/profile.tsx`）の仕事。** 送った本文はデーモンの
  * `process.env` を土台にその場で評価される＝記憶ストアの鍵を持つプロセスでの
  * 任意コマンド実行である（`.claude/skills/env-profile/SKILL.md`）。サーバ側に
  * 確認の印は無いので、呼ぶ前の確認だけが網になる（`useShutdownDaemon` と同じ事情）。
  *
- * **`requireOwner`。** ただし中身は素通しで、許可済みなら全員通る（2026-10-05 オーナー決定、
- * #2862 / PR #2945）。403 になるのは許可の無いアカウント（`authenticate`）だけ。ボタンは隠さない。
+ * **`requireOwner`。** ただし中身は素通しで、許可済みなら全員通る。403 になるのは許可の無いアカウント（`authenticate`）だけ。ボタンは隠さない。
  */
 export function useSetProfileEntry() {
   const api = useApi();
@@ -873,10 +862,10 @@ export function useRemoveEnvVar() {
 
 /**
  * トークンの全置換（`GET /tokens` → 加工 → `PUT /tokens`）を、同じ API クライアントの中で
- * 1本ずつ直列に流す（Issue #3608）。
+ * 1本ずつ直列に流す。
  *
  * 行ごとの送信中の門は行の中にしか無いので、別の行を続けて押すと2つの書き込みが同じ古い
- * 一覧を土台にし、後から着いた `PUT` が先の変更を巻き戻していた。前の書き込みが終わって
+ * 一覧を土台にし、後から着いた `PUT` が先の変更を巻き戻す。前の書き込みが終わって
  * から次の `GET` を撃てば、後ろは先の結果を土台にする。
  *
  * **列は API クライアントごとに持つ**（`WeakMap` の鍵が `useApi()` の返す client）。モジュールの
@@ -931,7 +920,7 @@ export function useAddToken() {
 }
 
 /**
- * 読めないトークンの行を、id を指して消す（`POST /tokens/unreadable/remove`。issue #2354）。
+ * 読めないトークンの行を、id を指して消す（`POST /tokens/unreadable/remove`）。
  * 追加・削除・無効化（全文置換）は読めない行を持ち越すので、消す口はこれだけ。
  * 読めない行に無い id を指すとデーモンが何も消さずに断る（`ApiError`）。
  */
@@ -1026,7 +1015,7 @@ function toTokenInput(token: AgentTokenView): { id: string; label: string; order
 }
 
 /**
- * 回す契機・冷却の既定を変える（`PUT /tokens/policy`。Issue #1123）。
+ * 回す契機・冷却の既定を変える（`PUT /tokens/policy`）。
  *
  * **`alteroid token policy` / `PUT /tokens/policy` と同じ口・同じ資格**
  * （`authenticate` だけ。`apps/daemon/src/app.ts` の `.put('/tokens/policy', …)`
@@ -1071,7 +1060,7 @@ export function useEndConversation() {
 }
 
 /**
- * いま走っているクローンのターンを止める（`POST /clone/interrupt`。#1398 c23-1/c30-2）。
+ * いま走っているクローンのターンを止める（`POST /clone/interrupt`）。
  *
  * CLI の `alteroid interrupt`（`apps/cli/src/interrupt.ts`）と同じ口・同じ資格
  * （`deliberateClient`——`/chat/:conversationId/end` と同じ）。**資格の判定は
@@ -1098,7 +1087,7 @@ export function useInterruptClone() {
 /**
  * アーカイブ済み生ログの本文を1件消す（`DELETE /archive/:id`。tombstone——
  * 行そのものは残る。CLI の `/archive remove` / クローンの道具 `archive_remove`
- * と同じ口。#698 / #776）。
+ * と同じ口）。
  *
  * **409 をここで握り潰さない。** 走行中のマネージャーの退避は既定で拒まれる
  * ——`overrideReason` を渡さずに呼んで 409 が返ったら、`unwrap` がそのまま
@@ -1144,7 +1133,7 @@ export interface InboxRemoveManyInput {
 /**
  * 受信箱（`inbox_events`）の未読を、絞り込んでまとめて畳む（消す）。
  * `POST /inbox/remove`——CLI の `alteroid inbox remove`（`apps/cli/src/inbox.ts`）
- * と同じ口（issue #972）。
+ * と同じ口。
  *
  * **`dryRun` は呼び出し側が決める。** ここでは既定を持たない——「既定は試算」は
  * 呼び出し側（`routes/inbox.tsx`）が「試算する」ボタンで `dryRun: true` を、
@@ -1159,10 +1148,8 @@ export interface InboxRemoveManyInput {
  * コメントと同じ理由——判定を複製すると、サーバ側の文言や条件が変わったとき
  * ここだけ古いまま残る）。
  *
- * **`GET /inbox`（issue #783 段0）が入ったので、実行（`dryRun: false`）の
- * 後だけ `KEY.inbox` を引き直す。** ⚠️ **かつてここには「`GET /inbox` のような
- * 一覧は無く……引き直す必要はない」と書いてあったが、#783 段0でその前提が
- * 消えた——いまは在る。** 試算（`dryRun: true`）は何も変更しないので引き直さ
+ * **実行（`dryRun: false`）の後だけ `KEY.inbox`（`GET /inbox`）を引き直す。**
+ * 試算（`dryRun: true`）は何も変更しないので引き直さ
  * ない（`routes/inbox.tsx` の `InboxBacklogCard` が「絞り込みを変えたら前の
  * 試算結果を無効にする」のと同じく、無駄な GET を送らない側へ倒す）。消した
  * id は日誌にも残るが、日誌は SSE（`use-journal-live.ts`）が別途拾うので、
@@ -1194,9 +1181,9 @@ export function useInboxRemoveMany() {
 }
 
 /**
- * 許可を与える／取り消す（`POST /access/:id/grant` `.../revoke`。Issue #213）。
+ * 許可を与える／取り消す（`POST /access/:id/grant` `.../revoke`）。
  *
- * **資格は `authenticate` だけ**（2026-09-06 の同格化。`apps/daemon/src/app.ts` の
+ * **資格は `authenticate` だけ**（`apps/daemon/src/app.ts` の
  * 該当経路の doc）なので、許可を持つアカウントなら Web UI からも通る。サーバの規則
  * （誰が許可できるか・持ち主の排他）はここへ写さない —— 返ってきた失敗をそのまま
  * 見せる（`useDeclareOwner` と同じ方針）。
@@ -1235,7 +1222,7 @@ export function useRevokeAccess() {
 }
 
 /**
- * 許可を取り消す（`POST /permission-grants/:id/revoke`。Issue #863）。CLI の
+ * 許可を取り消す（`POST /permission-grants/:id/revoke`）。CLI の
  * `alteroid permission revoke <id>` と同じ口。
  *
  * **行は消さず `revokedAt` を立てるだけ**（`useRevokeAccess` と同じ「終端は
@@ -1281,7 +1268,7 @@ export function useVacateRunner() {
 }
 
 /**
- * 人間の MCP 連携の登録を丸ごと差し替える（`PUT /mcp-servers`。#325 段4）。
+ * 人間の MCP 連携の登録を丸ごと差し替える（`PUT /mcp-servers`）。
  * **空の `{}` は「外す」**（`alteroid mcp clear` と同じ）。
  *
  * **形の検査はデーモンに任せる**（`parseMcpServers` が正本）。400 の本文は
@@ -1307,7 +1294,7 @@ export function useSetMcpServers() {
 }
 
 /**
- * 連携の鍵を発行する（`POST /integration-keys`。#3113 段2）。**応答の `value` が鍵の値を見られる唯一の機会**
+ * 連携の鍵を発行する（`POST /integration-keys`）。**応答の `value` が鍵の値を見られる唯一の機会**
  * なので、呼び出し側（`routes/integrations.tsx`）は state にだけ持ち、どこにも保存しない。
  *
  * **一覧の取り直しの失敗は、発行の失敗にしない。** 発行は済んでいる（値は手元にある）ので、ここで投げると
@@ -1344,7 +1331,7 @@ export function useRevokeIntegrationKey() {
 }
 
 /**
- * 読めない連携の鍵の行を、id を指して消す（`POST /integration-keys/unreadable/remove`。issue #3216）。
+ * 読めない連携の鍵の行を、id を指して消す（`POST /integration-keys/unreadable/remove`）。
  * id は `GET /integration-keys` の `rowsUnreadable.rows[].id`。読めない行に無い id を指すとデーモンが何も
  * 消さずに断る（`ApiError`）。**確認は画面の側が持つ**（`UnreadableRowsNote`）。
  */
@@ -1364,8 +1351,8 @@ export function useRemoveUnreadableIntegrationKeys() {
 }
 
 /**
- * 読めない許可の行を、id を指して消す（`POST /permission-grants/unreadable/remove`。issue #2440）。
- * id は `GET /permission-grants` の `rowsUnreadable.rows[].id`（issue #2536）。
+ * 読めない許可の行を、id を指して消す（`POST /permission-grants/unreadable/remove`）。
+ * id は `GET /permission-grants` の `rowsUnreadable.rows[].id`。
  * 読めない行に無い id を指すとデーモンが何も消さずに断る（`ApiError`）。
  */
 export function useRemoveUnreadablePermissionGrants() {
@@ -1384,8 +1371,8 @@ export function useRemoveUnreadablePermissionGrants() {
 }
 
 /**
- * 読めないアカウントの行を、id を指して消す（`POST /access/unreadable/remove`。issue #2440）。
- * id は `GET /access` の `rowsUnreadable.rows[].id`（issue #2536）。
+ * 読めないアカウントの行を、id を指して消す（`POST /access/unreadable/remove`）。
+ * id は `GET /access` の `rowsUnreadable.rows[].id`。
  * 読めない行に無い id を指すとデーモンが何も消さずに断る（`ApiError`）。
  */
 export function useRemoveUnreadableAccounts() {
