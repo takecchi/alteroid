@@ -732,77 +732,22 @@ class Clone implements CloneHost {
   readonly #onUsageObservation:
     ((observation: TokenRotatorObservation) => Promise<void>) | undefined;
   readonly #onTokenSessionRecycled: (() => void) | undefined;
-  /**
-   * 枠の事実を覚える（`ManagerPool#onEvent` と同じ形）。**鍵は「トークンの身元 ×
-   * 枠の種類」である**（`usage-limits.ts` の `rateLimitMemoryKey`）。
-   *
-   * **`rate_limit_event` はターンの頭ごとに来る。** 状態をそのまま回し手へ流すと
-   * 「同じ `rejected` で毎ターン回そうとする」になるので、`usageTransitionOf` が
-   * 遷移と認めた1回だけを渡す。
-   *
-   * ⚠️ **かつてここには「枠の種類ごとに覚える」と書いてあった。** 枠の事実は
-   * アカウントごとのもので、この repo のアカウントは1つではない（トークンの
-   * プール）ので、`kind` だけを鍵にすると別々のアカウントの事実が同じ欄を
-   * 踏み合う。両方向の壊れ方と実測は `rateLimitMemoryKey` の doc に在る。
-   */
+  // 鍵は枠の種類だけにしない: アカウントはトークンのプールで複数あり、`kind` だけだと別々のアカウントの事実が同じ欄を踏み合うため。状態をそのまま回し手へ流さない: `rate_limit_event` はターンの頭ごとに来て、同じ `rejected` で毎ターン回そうとするため
   readonly #rateLimits = new Map<string, RateLimitFacts>();
-  /**
-   * **いまの壁（枠の種類 × トークンの身元＝{@link rateLimitMemoryKey}）の
-   * 遷移を最後に記録した会話（`conversationId`）と、その後に跨いで畳まれた
-   * 会話の集合**（Issue #1425）。
-   *
-   * ## `manager.ts` 側との対応
-   *
-   * `ManagerPool` 側の同じ穴（{@link Pool.#rateLimitCrossFold}）は
-   * managerId で数える——複数のマネージャーが同じ枠を共有するからである。
-   * **クローンは1体しかいないので、managerId に当たる軸が無い。** ここで
-   * 代わりに使うのは `this.#turn?.conversationId` である——`#turn` は
-   * 1本しか無く（`this.#turn: Turn | null`）ターンは直列に進むが、
-   * `rate_limit_event` はターンの頭ごとに来るので、`transition` が
-   * `undefined` になる回は「別の会話のターンが、直前に同じ壁を報告済み
-   * だった」ことを表しうる。**この代替（managerId→conversationId）は
-   * この PR の判断であり、Issue の逐語が指定したものではない。**
-   *
-   * ## 「跨いだ」の定義 —— 同じ会話の連打は数えない
-   *
-   * `lastConversationId` は、この壁の遷移を最後に実際に `#journal` へ書いた
-   * 回の `conversationId`（無ければ `null`）である。`transition ===
-   * undefined` になった回の `conversationId` がこれと**同じ**なら、
-   * 「跨いだ」には数えない——`manager.ts` 側の `lastManagerId` と同じ判定
-   * である。
-   *
-   * ## 書き込む量
-   *
-   * `manager.ts` 側と同じ理由（#1311 と同じ形の肥大化を作り直さない）で、
-   * 畳むたびには書かない。`transition` が `undefined` になった回に
-   * `folded` へ `conversationId` を足すだけで、次に `transition` が定まった
-   * 回にまとめて `#journal` へ吐き出し、`lastConversationId` と `folded` を
-   * その回の状態へ更新する。
-   */
+  // 畳むたびには日誌へ書かない: `folded` へ足すだけにして、次に `transition` が定まった回にまとめて吐き出す（日誌の肥大化を作り直さないため）。同じ会話の連打は「跨いだ」に数えない
   readonly #rateLimitCrossFold = new Map<
     string,
     { lastConversationId: string | null; folded: Set<string | null> }
   >();
   readonly #profile: ProfileApplier | undefined;
   readonly #profileService: ProfileService | undefined;
-  /**
-   * マネージャーへ降ろす環境変数（名前→値）の1本道。**`#childEnv()` が正本を
-   * 同期で覗くための唯一の窓**（`CredentialService.vaultSnapshot()`）。
-   *
-   * このクローン自身が置いて配る操作（`apply` / `syncRunner`）に使うのでは
-   * ない——それは `createManagerPool` へ渡した同じインスタンスの役目である
-   * （`this.#managers` の構築を見ること）。ここに持つのは読み出し専用の窓
-   * だけである。
-   */
+  // 読み出し専用の窓だけを持つ: 置いて配る操作（`apply` / `syncRunner`）は `createManagerPool` へ渡した同じインスタンスの役目のため
   readonly #credentialService: CredentialService | undefined;
-  /** {@link CloneOptions.withheldEnvKeys}。`#childEnv()` が最後に落とす。 */
   readonly #withheldEnvKeys: readonly string[];
   readonly #accountUsage: (() => AccountUsageState) | undefined;
   readonly #scheduler: (() => ScheduleStatus[]) | undefined;
   readonly #onScheduledRunNotStarted: ((kind: string, delayMs?: number) => void) | undefined;
-  /** 失敗したターンの再試行を数える（kind → 元の回の時刻と回数）。プロセス内だけ。#2739 */
   readonly #timerTurnRetries = new Map<string, { at: string; attempts: number }>();
-  /** {@link CloneOptions.redeliveryGate}。必須（{@link CloneOptions.redeliveryGate} の doc）。 */
   readonly #redeliveryGate: RedeliveryGate;
 
   constructor(options: CloneOptions) {
@@ -846,8 +791,6 @@ class Clone implements CloneHost {
     this.#driver =
       driver ?? new ClaudeCloneDriver({ ...(queryFn === undefined ? {} : { queryFn }) });
     this.#cwd = cwd;
-    // **預け先を包んで `projectKey` を拾う**（#564 E1b。`withProjectKeyProbe`）。
-    // runner が `key.projectKey` を拾って上げているのと同じ形である。
     this.#sessionStore =
       sessionStore === undefined
         ? undefined
@@ -877,8 +820,7 @@ class Clone implements CloneHost {
     this.#self = self;
     this.#providerOf = providerOf ?? knownProviderOf;
     this.#mcpServerFactory = mcpServerFactory ?? createCloneMcpServer;
-    // **駆動役が経路を決めるなら、それが勝つ**（Codex は別プロセスで、インプロセスの MCP を持てない。
-    // `AgentCloneDriver.requiredToolsTransport`）。Claude の駆動役は定義しないので env に従う（変えない）。
+    // 駆動役が経路を決めるなら env より優先する: Codex は別プロセスで、インプロセスの MCP を持てないため
     this.#cloneToolsTransport = resolveCloneToolsTransportFor(
       this.#driver.requiredToolsTransport,
       envSource,
@@ -892,28 +834,16 @@ class Clone implements CloneHost {
         ...(profileService === undefined ? {} : { profile: profileService }),
         ...(credentialService === undefined ? {} : { credentials: credentialService }),
         ...(mcpServerService === undefined ? {} : { mcpServers: mcpServerService }),
-        // マネージャーからの報告・質問も、人間の発言と同じ受信箱を通る。
         post: (event) => this.post(event),
         runners: runners ?? createRunnerRegistry([]),
-        // 枠の観測は**マネージャー経由でも**回し手へ合流させる（Issue #393 PR3）。
-        // **クローンの側とプールの側で別々の回し手へ渡さないこと** — 同じ1本へ
-        // 集めるからこそ、世代の照合が「同じ当たりで1回だけ」を保証できる。
+        // クローンの側とプールの側で別々の回し手へ渡さない: 同じ1本へ集めるから、世代の照合が「同じ当たりで1回だけ」を保証できるため
         ...(tokenIdentity === undefined ? {} : { tokenIdentity }),
         ...(onUsageObservation === undefined ? {} : { onUsageObservation }),
         ...(onWorkerToolEvent === undefined ? {} : { onWorkerToolEvent }),
         ...(syncRunnerToken === undefined ? {} : { syncRunnerToken }),
       });
-    // **落ち方は変えない。「どこで」だけを足す（#438 案D）。**
-    //
-    // ここは daemon の生涯に1本だけ走る中枢ループで、投げれば `for await` ごと
-    // 抜けて受信箱のループが死ぬ（`#pump` の中のコメント）。**握り潰さない** ——
-    // 生き残ると HTTP は答え続け、受信箱は積まれ続けたまま誰も気づかない。
-    // 器が「壊れた」と判定できる材料はプロセスの終了しか無い（`uncaught-net.ts`）。
-    // いまは落ちて再起動し、`#restoreUnread` が未読を本文ごと配り直して戻る。
-    // **保持する。** `stop()` が待ち行列を読み切ってから畳むために `await`
-    // できる形にしておく（Issue #564 (a)。`#pumpLoop` の doc）。**`.catch(...)`
-    // まで含めた Promise を入れること** —— 素の `#pump()` を入れると、`stop()` が
-    // 待つより前に投げた分が unhandled rejection になる（すぐ上の理由）。
+    // 握り潰さない: 生き残ると HTTP は答え続け、受信箱は積まれ続けたまま誰も気づかない（落ちて再起動すれば `#restoreUnread` が配り直す）
+    // `.catch(...)` まで含めた Promise を保持する: 素の `#pump()` だと、`stop()` が待つより前に投げた分が unhandled rejection になるため
     this.#sdkSession.beginPumpLoop(
       this.#pump().catch((error: unknown) => {
         noteBackgroundFailure('クローンの受信箱のループ', '', error);
@@ -922,86 +852,24 @@ class Clone implements CloneHost {
     );
   }
 
-  /**
-   * 認証トークンを回したので、**次のターンの境界で**セッションを畳んで作り直す
-   * （Issue #393 PR4）。
-   *
-   * ## なぜ要るか
-   *
-   * SDK 子プロセスの env は**起動時に凍る**ので、回した鍵は走っているセッションに
-   * 届かない（`credentials.ts` / `profile.ts` の doc が同じ境界を何度も書いている）。
-   * ⟹ **畳んで作り直すまで、クローンは古いトークンのまま**である。
-   *
-   * 枠に当たったクローンは `#usageBlocked` が立ってターンを回さないが、再挑戦の
-   * 経路は在る（`grep -Fn -- '枠の解除を試す' packages/core/src/clone.ts`）。**作り直さ
-   * ないと、その再挑戦が古いトークンで走って同じところで止まる。**
-   *
-   * ## 会話は切れない
-   *
-   * 次の `#ensureQuery()` が `getCloneSessionId()` の `resume` で作り直すので、
-   * **セッション id は引き継がれる。** 畳むのは SDK の子プロセスであって、
-   * 会話でも記憶でもない。
-   *
-   * ## ここではセッションに触らない
-   *
-   * 立てるのは印だけである。**いま走っているターンは最後まで走って結果を返す**
-   * （受け入れ基準。理由は `#inputStream` の doc）。
-   *
-   * **セッションがまだ無ければ何もしない。** 印を立てると、次に作られる
-   * セッション（＝もう新しい鍵で起きたもの）がいきなり畳まれる。
-   *
-   * ## ⚠️ 返り値を捨てないこと —— 「いつ効くか」で呼ぶ側の段取りが変わる
-   *
-   * **これが `'deferred'` を返した回に「再開の合図」を先に入れると、その合図は
-   * 古い鍵のターンに消費される。** 実運用で観測した形がそれである（2026-09-07）:
-   *
-   * | 時刻 (UTC) | 何が起きたか |
-   * | --- | --- |
-   * | `07:33:12` | 回した（世代41 → 42）。合図もここで入れた |
-   * | `07:33:18`〜`50` | **ターンの最中だった**（`tool_use` が続く）ので畳まれない |
-   * | `07:33:51` | そのターンが**古い鍵**で 429。`#usageBlocked` が立ち直る |
-   * | 以降26分 | **沈黙。** 合図はもう使われてしまっている |
-   *
-   * ⟹ 呼ぶ側は `'deferred'` のとき**合図を入れず**、
-   * {@link CloneOptions.onTokenSessionRecycled} が鳴ってから入れる。
-   *
-   * @returns
-   *   - `'now'` — セッションが無い。**次に起こす分がもう新しい鍵である** ⟹
-   *     呼ぶ側はすぐ合図を入れてよい
-   *   - `'deferred'` — 印を立てた。**畳まれるのはターンの境界**
-   */
+  // セッションには触らず印だけ立てる: いま走っているターンは最後まで走らせるため。セッションがまだ無ければ印を立てない: 次に作られる新しい鍵のセッションがいきなり畳まれるため
+  // 返り値を捨てない: `'deferred'` の回に「再開の合図」を先に入れると、古い鍵のターンに消費されて沈黙する（`onTokenSessionRecycled` が鳴ってから入れる）
   recycleSessionForToken(): 'now' | 'deferred' {
     if (this.#sdkSession.query === null) return 'now';
     this.#sdkSession.requestTokenRecycle();
-    // 入力待ちで止まっているなら、そこから抜けさせる（ターンの境界に居る場合）。
     this.#sdkSession.wakeInput();
     return 'deferred';
   }
 
-  /** デーモンの HTTP 層から一覧・生ログへ降りるための口。 */
   get managers(): ManagerPool {
     return this.#managers;
   }
 
-  /**
-   * クローンがいま枠（利用上限）で止まっているか（`#usageBlocked`。Issue #783）。
-   *
-   * **`CloneHost.usageBlocked` の実装。** doc は `host.ts` 側に在る——ここは
-   * `this.#usageBlocked !== null` を読むだけの薄い窓で、判定を持たない。
-   *
-   * **`#usageBlocked !== null` は他にも読まれている**（`#deliver` の
-   * `heldForUsage`）。**別の判定を書かない** —— ずれると「保持しているのに
-   * 呼び出し側は保持していないと思っている」がありうる。
-   */
+  // 別の判定を書かない: `#deliver` の `heldForUsage` も同じ `#usageBlocked !== null` を読んでおり、ずれると「保持しているのに呼び出し側は保持していないと思っている」がありうるため
   get usageBlocked(): boolean {
     return this.#usageBlocked !== null;
   }
 
-  /**
-   * `CloneHost.activeTurn` の実装。doc は `host.ts` 側に在る——ここは
-   * `#sdkSession.turn` を読むだけの薄い窓で、判定を持たない
-   * （{@link Clone.usageBlocked} と同じ形）。**中身（本文・承認 id）は出さない。**
-   */
   activeTurn(): { conversationId?: string; kind: 'normal' | 'distill' } | null {
     const turn = this.#sdkSession.turn;
     if (turn === null) return null;
@@ -1011,113 +879,39 @@ class Clone implements CloneHost {
     };
   }
 
-  /**
-   * 枠（利用上限）の解除を試す印（`#releaseRequested`）が、**まだ使われずに
-   * 立っているか**（Issue #1051）。
-   *
-   * **`CloneHost.usageReleasePending` の実装。** doc は `host.ts` 側に在る
-   * ——ここは `#releaseRequested` を読むだけの薄い窓で、判定を持たない
-   * （{@link Clone.usageBlocked} と同じ形）。
-   */
   get usageReleasePending(): boolean {
     return this.#releaseRequested;
   }
 
-  /**
-   * `CloneHost.usageBlockedResetsAt` の実装（Issue #1223 再発）。doc は
-   * `host.ts` 側に在る——ここは `this.#usageBlocked?.resetsAt` を読むだけの
-   * 薄い窓で、判定を持たない（{@link Clone.usageBlocked} と同じ形）。
-   */
   get usageBlockedResetsAt(): number | undefined {
     return this.#usageBlocked?.resetsAt;
   }
 
-  /**
-   * `CloneHost.usageBlockedTokenId` の実装（Issue #1223 再発）。doc は
-   * `host.ts` 側に在る——ここは `this.#sessionTokenIdentity?.tokenId` を
-   * 読むだけの薄い窓で、判定を持たない。
-   *
-   * **`#usageBlocked` を経由しない。** 「止まったときの鍵」は「いまの
-   * セッションの鍵」と同じである——枠に当たっても回すまでは同じセッション
-   * のまま走り続ける（env は起動時に凍る。`recycleSessionForToken` の doc）
-   * ので、セッションの身元をそのまま返せば足りる。
-   */
+  // `#usageBlocked` を経由しない: 枠に当たっても回すまでは同じセッションのまま走り続けるので、セッションの身元をそのまま返せば足りるため
   get usageBlockedTokenId(): string | undefined {
     return this.#sdkSession.sessionTokenIdentity?.tokenId;
   }
 
-  // -------------------------------------------------------------------------
-  // CloneHost
-  // -------------------------------------------------------------------------
 
   post(event: InboxEvent): void {
     this.#admit(event, false);
   }
 
-  /**
-   * **受信箱へ書けたかを返す投函**（Issue #3679。`CloneHost.postPersisted`）。
-   *
-   * `post` と同じ入口（`#admit`）を通り、**違うのは「器への書き込みを待ってから積む」ことと、書けなかった
-   * ときの扱いだけ**である。書けなかったら受信箱のメモリにも積まず、日誌・台帳にも載せず、`'unavailable'`
-   * を返す。呼び手が 503 で断り、相手が送り直しても、同じ合図が2回届くことは無い。
-   *
-   * **書けなかった合図が配達されない理由は、二重配達の回避である。** `post` は書けなくてもメモリに積んで
-   * 配達する（このプロセスが生きているあいだ）。それを 503 と組み合わせると、断られた相手が送り直した
-   * 回で同じ出来事が2回届く。外部イベントの id はデーモンが採番する（呼び手は付けない）ので、id で
-   * 重複を弾くこともできない。
-   */
+  // 書けなかった合図は配達しない: メモリに積んで配達すると、503 で断られた相手が送り直した回に同じ出来事が2回届き、外部イベントの id はデーモンが採番するので id で弾けないため
   postPersisted(event: InboxEvent): Promise<PostPersistOutcome> {
     return Promise.resolve(this.#admit(event, true) ?? 'persisted');
   }
 
-  /**
-   * `post` の本体。**`durable: false` のときは従来と1行も変わらず同期で終わる**（戻り値は無い）。
-   * `durable: true` のときだけ、器への書き込みが要る分岐（片付けの窓・通常の積み込み）が Promise を返す。
-   * 畳み込みで済む分岐（書き込みが要らない）は `undefined` を返し、呼び手は `'persisted'` と読む
-   * （畳み先の代表は既に器に在る）。
-   */
   #admit(event: InboxEvent, durable: boolean): Promise<PostPersistOutcome> | undefined {
-    // 片付け中に届いたものは、**このプロセスでは**処理できない（`stop()` の直後に
-    // `storage.close()` → `process.exit(0)` が来る）。だが**次の起動でなら処理できる。**
-    //
-    // かつてここは何もせず捨てていて、その根拠は「処理しようとすると『未読の永続化』
-    // という別の設計になる」だった。**その設計はいま在る**（`#remember` と
-    // `#restoreUnread`）。根拠が消えた以上、捨てる側に留まる理由も無い — 器へ残せば
-    // 次の起動で配り直される。片付けの窓に人間の最後の一言が落ちるのは、いちばん
-    // 気づかれない失われ方である。
-    //
-    // **受信箱へは積まない。** ここから新しいターンを回す余地は無く、積めば
-    // `Inbox#push` が閉じた受信箱に対して投げる。
-    //
-    // **「残した」と言い切らない。** この窓の後半ではストアが既に閉じており、
-    // 書き込みは落ちうる（落ちれば `#remember` / `#commit` が stderr へ跡を残す）。
-    // 跡の文言はそのことを含む — ここで「次の起動へ回した」と断言すると、
-    // 書けなかった回だけ跡が静かに嘘をつく。
-    // **`#inbox.closed` も見る**（Issue #564 (a)）。`stop()` は受信箱を閉じてから
-    // 待ち行列を読み切り、そのあとで `#stopped` を立てる。⟹ **その間に届いたものを
-    // `#stopped` だけで判定すると、閉じた受信箱へ `push` して投げる**（`Inbox#push`）。
-    // ここが「読み切りが必ず終わる」根拠そのものでもある（`stop()` の doc）。
+    // 受信箱へは積まない: 閉じた受信箱へ `Inbox#push` すると投げるため
+    // 「次の起動へ回した」と言い切らない: この窓の後半ではストアが既に閉じており書き込みは落ちうるため
+    // `#inbox.closed` も見る: `stop()` は受信箱を閉じてから `#stopped` を立てるので、`#stopped` だけで判定するとその間に届いたものが閉じた受信箱へ `push` して投げるため
     if (this.#sdkSession.stopped || this.#delivery.inbox.closed) {
-      // **ここでも畳む。** この窓は `#remember` が実際にストアへ書く経路その
-      // ものなので、畳まなければ「片付け中に届いた同文の連投」がそのまま
-      // ディスクへ行の増殖として残る——これは通常経路（下の
-      // `#foldIntoPendingCollapse`）が塞ぐのとまったく同じ形の穴で、窓が
-      // 片付け中かどうかは理由にならない。**代表側（最初の1件）はこれまで
-      // どおり `#remember` / `#commit` / `noteDroppedInboxEvent` を通す** —
-      // 畳んだかどうかで代表の扱いを変えない。
-      //
-      // **ここは `canQueue: false` で呼ぶ。** この窓の合図は待ち行列へ入らず
-      // （`#inbox.push` はこの下に無い）、そのまま跡だけ残して落ちるので、
-      // `external` でも「行だけ畳んでターンは #841 へ任せる」が成り立たない
-      // ——任せる先のターンがそもそも起きない。⟹ 本文を日誌へ残す役目も
-      // `#foldIntoPendingCollapse` 側が引き受ける（`PendingCollapseVerdict`）。
+      // ここでも畳む: 畳まなければ片付け中に届いた同文の連投が行の増殖としてディスクに残るため
+      // `canQueue: false` で呼ぶ: この窓の合図は待ち行列へ入らず、`external` でも「行だけ畳んでターンは #841 へ任せる」が成り立たないため
       if (this.#foldIntoPendingCollapse(event, { canQueue: false }) !== 'pass') return;
-      // 書き込みの成否を返す呼びなら、書けなかったことを呼び手へ返す（`post` はここで失ったと跡を残すだけ）。
       if (durable) return this.#persistThenSettleClosed(event);
-      // **同じ `canQueue: false` を `#remember` へも流す（issue #1144）。**
-      // この窓は `#inbox.push` を一度も通らないので、`#remember` の拾い直しが
-      // 尽きたときの跡は「失った」と名乗るべきで、「メモリの待ち行列に残る」
-      // という通常経路の跡（`canQueue: true`）を使うと嘘になる。
+      // 同じ `canQueue: false` を `#remember` へも流す: この窓は `#inbox.push` を通らないので、拾い直しが尽きたときの跡に「メモリの待ち行列に残る」を使うと嘘になるため
       this.#remember(event, { canQueue: false });
       this.#commit(event);
       noteDroppedInboxEvent(event);
