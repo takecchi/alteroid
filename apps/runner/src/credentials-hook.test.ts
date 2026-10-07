@@ -8,21 +8,6 @@ import { makeTempDirSync } from '../../../vitest.tmpdir.js';
 
 import { createRunnerApp, Outbox } from './app.js';
 
-/**
- * `POST /credentials` の検査を、兄弟の経路（`POST /mcp-servers`）と揃える
- * （横断レビュー C の14回目、#1790）。
- *
- * 揃える前は、この経路だけ `zValidator` に `hook` を渡していなかった——形の
- * 不正で 400 になったとき、`@hono/zod-validator` の既定は `c.json(result, 400)`
- * （`result = { success: false, error: <ZodError> }`）を返す。ここは鍵の値
- * そのものを運ぶ唯一の口なので、**送られてきた本文が1文字も応答へ出ないこと**
- * をここで固定する。
- *
- * ⛔ 本物の資格情報を拾わないこと——`createCredentialStore` の `seed` は既定が
- * `process.env` なので、ここでは必ず `seed: {}` を明示する。値はすべて
- * `fake-` で始まる明らかな偽物だけを使う。
- */
-
 const TOKEN = 'the-daemon-only-token';
 const TOKEN_SHA256 = createHash('sha256').update(TOKEN, 'utf8').digest('hex');
 const AUTH = { authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json' };
@@ -51,7 +36,7 @@ afterEach(async () => {
   host = undefined;
 });
 
-/** 鍵の器つきの runner app を1つ作る。**`seed: {}` を明示し、本物の env を拾わせない。** */
+// `seed: {}` を明示する: 既定が `process.env` で、本物の資格情報を拾うため。
 function makeApp(dir: string) {
   const credentials = createCredentialStore({
     dir: `${dir}/creds`,
@@ -84,7 +69,6 @@ describe('POST /credentials の hook（#1790）', () => {
 
     expect(res.status).toBe(400);
     const body = (await res.json()) as unknown;
-    // 兄弟（/mcp-servers）と同じ形——`ok: false` と固定文言だけ。
     expect(body).toEqual({ ok: false, error: '鍵の入力の形が不正（置いていない）' });
     const raw = JSON.stringify(body);
     expect(raw).not.toContain('fake-secret-should-not-leak');
@@ -100,9 +84,7 @@ describe('POST /credentials の hook（#1790）', () => {
       headers: AUTH,
       body: JSON.stringify({
         credentials: [
-          // 形は正しいが、この回のバッチとしては無関係な1本。
           { name: 'FAKE_UNRELATED_TOKEN', value: 'fake-unrelated-secret-value' },
-          // これが形を崩す（小文字を含む）。
           { name: 'not-a-valid-name', value: 'fake-x' },
         ],
       }),

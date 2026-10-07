@@ -1,10 +1,4 @@
 // @vitest-environment jsdom
-/**
- * 画面の部品が、本文と error の文を描画の直前に伏せ字へ通す（issue #2600）。
- *
- * 偽のトークンが出力から消え、40桁の sha は残る。データ（props）は書き換えない。
- * 伏せる関数は `@alteroid/ui` の外（apps/web の `WebDisplayTextProvider`）から渡る。
- */
 import { cleanup, fireEvent, render as baseRender, screen } from '@testing-library/react';
 import type { ReactElement } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -19,7 +13,6 @@ import {
 
 import { WebDisplayTextProvider } from '~/lib/display-text';
 
-/** 本番の root と同じ provider で包んで描く。 */
 const render = (ui: ReactElement) => baseRender(ui, { wrapper: WebDisplayTextProvider });
 
 afterEach(() => {
@@ -27,7 +20,6 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-/** 偽のトークン（本物ではない）。 */
 const TOKEN = `ghp_${'A1b2C3d4E5'.repeat(4)}`;
 const SHA = '0123456789abcdef0123456789abcdef01234567';
 const BODY = `x ${TOKEN} y ${SHA}`;
@@ -78,7 +70,6 @@ describe('承認待ち', () => {
   });
 
   it('設問の prompt / label / description', () => {
-    // jsdom に無い（radix の選択肢が測る）。測った値は使わないので何もしない実装で足りる。
     vi.stubGlobal(
       'ResizeObserver',
       class {

@@ -1,10 +1,5 @@
-/**
- * 全画面のテストの足場。出所: takecchi/codiva（MIT）`tests/helpers.ts` の
- * `FakeStdout` / `FakeStdin` / `renderFullscreen` / `waitFor` / `stripAnsi`。
- *
- * ink-testing-library の fake stdout は rows を注入できない（実端末のサイズへフォール
- * バックして非決定的になる）ので、Ink 本体の `render` に寸法固定のストリームを渡す。
- */
+// 出所: takecchi/codiva（MIT）`tests/helpers.ts` の `FakeStdout` / `FakeStdin` / `renderFullscreen` / `waitFor` / `stripAnsi`
+// ink-testing-library を使わない: fake stdout は rows を注入できず、実端末のサイズへフォールバックして非決定的になるため
 import { EventEmitter } from 'node:events';
 
 import { render } from 'ink';
@@ -24,7 +19,6 @@ class FakeStdout extends EventEmitter {
   };
 }
 
-/** ink-testing-library の Stdin と同じ挙動（write → 'readable' / 'data' を emit）。 */
 export class FakeStdin extends EventEmitter {
   isTTY = true;
   private data: string | null = null;
@@ -54,7 +48,7 @@ export function renderFullscreen(element: ReactElement, rows = 24, columns = 80)
     stdin: stdin as unknown as NodeJS.ReadStream,
     exitOnCtrlC: false,
     patchConsole: false,
-    // 非 TTY では debug なしだと途中のフレームが書き出されない。
+    // debug を付ける: 非 TTY では debug なしだと途中のフレームが書き出されないため
     debug: true,
   });
   return { app, stdin, stdout, lastFrame: () => stripAnsi(stdout.frames.at(-1) ?? '') };
@@ -70,15 +64,8 @@ export function stripAnsi(frame: string): string {
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
-/**
- * 出るはずのものが出るまで待つ。固定の待ちは遅い環境で負けるので、条件が成り立ったら
- * すぐ返る。**時間切れになったら throw する**（成り立たないまま戻ると、後ろに `expect` を
- * 置かないテストが、条件が偽のまま通ってしまう。#3520）。`description` には何を待っていたかを
- * 書く（失敗メッセージに出る）。
- *
- * 既定のタイムアウトは vitest の testTimeout（5s）より短くする（成り立たないとき
- * 「テストがタイムアウト」ではなく、何を待ったかの付いたエラーが出る）。
- */
+// 時間切れで throw する: 成り立たないまま戻ると、後ろに `expect` を置かないテストが条件が偽のまま通るため
+// 既定のタイムアウトは vitest の testTimeout（5s）より短くする: 「テストがタイムアウト」ではなく、何を待ったかの付いたエラーを出すため
 export async function waitFor(
   predicate: () => boolean,
   { tickMs = 20, timeoutMs = 3_000, description }: WaitOptions = {},
@@ -97,11 +84,9 @@ export async function waitFor(
 export interface WaitOptions {
   tickMs?: number;
   timeoutMs?: number;
-  /** 何を待っているか。時間切れのエラー文言に出る。 */
   description?: string;
 }
 
-/** 1 文字ずつ打つ（IME の確定や貼り付けではなく、キー入力として届く形）。 */
 export async function type(stdin: FakeStdin, text: string): Promise<void> {
   for (const ch of text) {
     stdin.write(ch);
@@ -109,7 +94,7 @@ export async function type(stdin: FakeStdin, text: string): Promise<void> {
   }
 }
 
-/** 1 キー（エスケープ列も 1 キー）を打つ。続けて打つキーが前のキーの処理を追い越さないよう、少し譲る。 */
+// 少し譲る: 続けて打つキーが前のキーの処理を追い越さないように
 export async function press(stdin: FakeStdin, key: string): Promise<void> {
   stdin.write(key);
   await sleep(2);

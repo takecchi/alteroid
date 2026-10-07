@@ -194,7 +194,6 @@ describe('最下行と入力欄', () => {
   });
 
   it('操作の結果が残っていても、取り直しの失敗と窓の外の行数を隠さない（#3368）', () => {
-    // notice は詳細を閉じるまで消えない。後ろの状態を隠すと、取り直しが止まっていても健全に見える。
     expect(approvalStatusText(detailOf({ notice: '結果', error: '失敗' }), 0)).toEqual({
       text: '結果 · ⚠ 取り直せなかった: 失敗',
       tone: 'warn',
@@ -212,7 +211,6 @@ describe('最下行と入力欄', () => {
   it('入力欄のプレースホルダは、いま何を書く欄かを言う', () => {
     expect(composerPlaceholder(detailOf({ busy: true }))).toBe('送信中…');
     expect(composerPlaceholder(detailOf())).toContain('a で答える');
-    // 回答済み・取り下げ済みはもう答えられないので、a を案内しない。
     const settled = composerPlaceholder(
       detailOf({ approval: approvalRow('ap-1', { answeredAt: '2026-09-30T10:00:00.000Z' }) }),
     );
@@ -239,7 +237,6 @@ describe('一覧の見出し', () => {
     const api = fakeApi();
     const controller = new ApprovalsController(api);
     api.approvalRows = [approvalRow('a')];
-    // 最初の呼びで失敗させる。
     api.listApprovals = () => Promise.reject(new Error('繋がらない'));
     await controller.reload();
     const list = controller.store.getSnapshot().list;

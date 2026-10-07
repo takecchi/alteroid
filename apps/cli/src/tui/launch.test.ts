@@ -5,12 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { opensTuiByDefault } from './launch.js';
 
-/**
- * 起動シム（`launch.ts`）は「NODE_ENV を立ててから本体を動的 import する」だけのもの。
- * 守るのは 3 つ — (1) react が評価される時点で production になっている、(2) CLI 全体の
- * NODE_ENV は変えない（立てたのは評価の間だけ。子プロセスへ漏れない）、(3) static import を
- * 足して巻き上げさせない。出所の考え方: takecchi/codiva（MIT）`tests/entry-shim.test.ts`。
- */
+// 出所の考え方: takecchi/codiva（MIT）`tests/entry-shim.test.ts`
 const source = readFileSync(fileURLToPath(new URL('./launch.ts', import.meta.url)), 'utf8');
 const code = source
   .replace(/\/\*[\s\S]*?\*\//g, '')
@@ -42,7 +37,7 @@ describe('launchTui の NODE_ENV', () => {
     runTui.mockClear();
     seenAtEvaluation = 'unset-by-test';
     vi.doMock('./main.js', () => {
-      seenAtEvaluation = process.env.NODE_ENV; // react が評価される時点を代表する
+      seenAtEvaluation = process.env.NODE_ENV;
       return { runTui };
     });
   });
@@ -66,7 +61,7 @@ describe('launchTui の NODE_ENV', () => {
     delete process.env.NODE_ENV;
     let during: string | undefined = 'unset-by-test';
     runTui.mockImplementationOnce(() => {
-      during = process.env.NODE_ENV; // 本体が子プロセス（デーモンなど）を起こす時点
+      during = process.env.NODE_ENV;
       return Promise.resolve();
     });
     const { launchTui } = await import('./launch.js');
@@ -109,6 +104,6 @@ describe('opensTuiByDefault（引数なしで起動したとき）', () => {
   it('引数があれば（サブコマンドも --help も）開かない', () => {
     expect(opensTuiByDefault(['chat'], tty, tty)).toBe(false);
     expect(opensTuiByDefault(['--help'], tty, tty)).toBe(false);
-    expect(opensTuiByDefault(['tui'], tty, tty)).toBe(false); // 明示の tui は commander 経由
+    expect(opensTuiByDefault(['tui'], tty, tty)).toBe(false);
   });
 });

@@ -1,15 +1,3 @@
-/**
- * 一覧＋詳細の共通レイアウト。会話の画面（左に会話一覧、右に会話）と同じ作りを、
- * 他の「一覧から1件を選んで読む」画面でも使い回すための骨組み。
- *
- * - 広い画面（md 以上）: 左に一覧、右に詳細。どちらもペインの中で独立にスクロールする。
- * - 狭い画面: 未選択なら一覧を全幅で出す。選択があれば詳細を全幅で出し、上端の
- *   「〈一覧の名前〉を開く」ボタンで一覧をドロワーに出す（項目を押すと閉じる）。
- *
- * **高さは親から受ける（`h-full`）。** 親は余白もスクロールも持たない本文であること。
- * **ルーターを知らない層**なので、リンクは `ListDetailItems` の `renderLink` で受ける。
- * 画面の h1 は外側の `Page` が持つ。詳細側の見出しは呼ぶ側が h2 で渡す。
- */
 import { PanelLeft } from 'lucide-react';
 import {
   createContext,
@@ -29,20 +17,10 @@ import { Drawer } from '../drawer';
 
 const ListDetailContext = createContext<{ onNavigate: () => void }>({ onNavigate: () => {} });
 
-/** Page の本文と同じ余白（safe-area 込み）。 */
 const DETAIL_PADDING =
   'p-4 pb-[calc(1rem+var(--safe-bottom))] pl-[calc(1rem+var(--safe-left))] pr-[calc(1rem+var(--safe-right))] md:p-6 md:pb-[calc(1.5rem+var(--safe-bottom))] md:pl-[calc(1.5rem+var(--safe-left))] md:pr-[calc(1.5rem+var(--safe-right))]';
 
-/**
- * - `listLabel` —— 一覧の名前。一覧の見出し（h2）・`<nav>` の名前・スマホのボタンの文言に使う
- * - `list` —— 一覧の中身（`ListDetailItems` など）
- * - `detail` —— 詳細の中身
- * - `hasSelection` —— 詳細に何か選ばれているか
- * - `selectionKey` —— 選択の識別子。変わったら詳細のスクロールを先頭へ戻す（スマホではさらに詳細の先頭へ焦点を移す）
- * - `detailLabel` —— 詳細の領域の名前（既定は「〈一覧の名前〉の詳細」）
- * - `emptyDetail` —— 広い画面で未選択のときの案内
- * - `listFooter` —— 一覧の下端（「さらに読む」など。一覧のスクロールの外に固定される）
- */
+// リンクを `ListDetailItems` の `renderLink` で受ける: この層はルーターを知らないため
 export function ListDetail({
   listLabel,
   list,
@@ -70,22 +48,20 @@ export function ListDetail({
   const firstRender = useRef(true);
   const shownKey = useRef(selectionKey);
 
-  // 広い画面へ変わったらドロワーは要らない。
   const drawerShown = drawerOpen && isMobile && hasSelection;
 
-  // スマホで選択が変わったら詳細の先頭へ焦点を移す（広い画面では一覧の焦点を奪わない）。
+  // 焦点はスマホだけで移す: 広い画面では一覧の焦点を奪うため
   useEffect(() => {
     if (firstRender.current) {
       firstRender.current = false;
       return;
     }
     if (!isMobile || !hasSelection) return;
-    // ドロワーが閉じるときの焦点の戻しの後に勝つよう、1フレーム待つ。
+    // 1フレーム待つ: ドロワーが閉じるときの焦点の戻しに勝つため
     const id = requestAnimationFrame(() => detailRef.current?.focus());
     return () => cancelAnimationFrame(id);
   }, [selectionKey, isMobile, hasSelection]);
 
-  // 別の項目へ切り替えたら詳細を先頭から見せる（初回描画は触らない。焦点の処理とは独立）。
   useEffect(() => {
     if (shownKey.current === selectionKey) return;
     shownKey.current = selectionKey;
@@ -162,26 +138,14 @@ export function ListDetail({
 export interface ListDetailItem {
   key: string;
   href: string;
-  /** いま詳細に開いている項目か。 */
   current: boolean;
-  /** 行に足す className（後勝ち）。 */
   className?: string;
-  /**
-   * リンクの中身。`extra` / `lead` を渡さなければ**行全体がリンク**になり、これが行の中身になる。
-   * 渡したときは**リンクは`children`（題名など）だけ**になる。
-   */
   children: ReactNode;
-  /**
-   * リンクの**外**に出す、選択・コピーできる中身（名前・日時など）。渡すと「一部だけがリンク」の形になる
-   * （行全体がリンクだと、中の文字をドラッグで選べない。#2808）。強調と区切り線は行全体に、
-   * `aria-current` はリンクに付く。
-   */
+  // 行の一部だけをリンクにする: 行全体がリンクだと、中の文字をドラッグで選べないため
   extra?: ReactNode;
-  /** 「一部だけがリンク」の形で、リンクの前に同じ行で並べる中身（種別の札など）。 */
   lead?: ReactNode;
 }
 
-/** 1行ぶんのリンクを描く口。ルーターを知らない層なので、画面が `<Link>` を置く。 */
 export type ListDetailRenderLink = (props: {
   href: string;
   className: string;
@@ -190,12 +154,6 @@ export type ListDetailRenderLink = (props: {
   onClick: MouseEventHandler<HTMLAnchorElement>;
 }) => ReactNode;
 
-/**
- * 一覧の中身。既定は各行が丸ごとリンク。`extra` / `lead` を渡した項目は、題名だけがリンクで残りは
- * 選択できる文字になる（#2808）。どちらも選択中は `aria-current="page"`（リンクに）と強調（行に）。
- * 一覧の中で ↑/↓（前後）・Home/End（先頭/末尾）で焦点だけを移す（開くのは Enter）。
- * 選択中の項目が見えない位置にあるときは、初回の描画で見える位置へ寄せる（焦点は移さない）。
- */
 export function ListDetailItems({
   items,
   renderLink,
@@ -242,7 +200,6 @@ export function ListDetailItems({
           >
             <div className="flex items-baseline">
               {item.lead}
-              {/* 押せる範囲は題名の行いっぱい（縦は上下に 4px ずつ足して。-my で行の高さは変えない） */}
               {renderLink({
                 href: item.href,
                 className:

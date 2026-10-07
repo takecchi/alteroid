@@ -7,14 +7,6 @@ import {
   // @ts-expect-error -- 素の .mjs（型宣言を持たない build 用スクリプト）を読む
 } from './check-web-bundle-size-core.mjs';
 
-/**
- * `check-web-bundle-size` の判定ロジックの歯。
- *
- * **本物の `pnpm build` を走らせずに試す。** CLI 側（`check-web-bundle-size.mjs`）は
- * ファイル読み込みだけを持ち、判定は `check-web-bundle-size-core.mjs` に切り出して
- * あるので、ここでは合成した `{ path, bytes }` の配列で判定だけを確かめる
- * （`check-web-bundle-node-traces.test.ts` と同じ分け方・同じ理由）。
- */
 describe('check-web-bundle-size: judgeBundleSize', () => {
   it('どちらの予算も超えていなければ ok', () => {
     const result = judgeBundleSize([
@@ -41,7 +33,6 @@ describe('check-web-bundle-size: judgeBundleSize', () => {
   });
 
   it('単一チャンクが予算を超えると oversized に載り、超過分（B と %）を持つ', () => {
-    // 予算 + 26,214 B（予算のちょうど10%増し）にした合成入力。
     const overBy = Math.round(SINGLE_CHUNK_MAX_BYTES * 0.1);
     const bytes = SINGLE_CHUNK_MAX_BYTES + overBy;
     const result = judgeBundleSize([{ path: 'huge.js', bytes }]);
@@ -63,12 +54,7 @@ describe('check-web-bundle-size: judgeBundleSize', () => {
   });
 
   it('総量が予算を超えると totalOver が true になり、個々のチャンクは oversized に載らないことがある', () => {
-    // 1つ1つは単一チャンクの予算ちょうど（超過ではない）だが、数を集めると総量の予算を超える形。
-    //
-    // 以前は `TOTAL_MAX_BYTES / 4` を5本並べていたが、それは「総量の 1/4 が単一チャンクの
-    // 予算未満」に暗黙に依存していた。総量の予算を 1.125 MiB へ上げた（2026-10-06）とき
-    // 1/4（294,912 B）が単一チャンクの予算（262,144 B）を超え、前提が崩れた。本数を2つの
-    // 予算から導く形にして、どちらの予算が動いても同じことを測るようにした。
+    // 本数は2つの予算から導く: `TOTAL_MAX_BYTES / 4` のように固定すると、総量の予算が動いたとき単一チャンクの予算を超えて前提が崩れるため。
     const files = Array.from(
       { length: Math.floor(TOTAL_MAX_BYTES / SINGLE_CHUNK_MAX_BYTES) + 1 },
       (_, i) => ({ path: `chunk-${i}.js`, bytes: SINGLE_CHUNK_MAX_BYTES }),
@@ -80,10 +66,7 @@ describe('check-web-bundle-size: judgeBundleSize', () => {
   });
 
   it('#335 の実測（単一チャンク 1,198,608 B）を通すと、単一チャンク・総量の両方の予算を超える', () => {
-    // 実測: PR 本文・check-web-bundle-size.mjs の doc に同じ数字がある。
-    // 残り（726,545 B）は単一チャンクの予算未満の3ファイルに割って、
-    // 「単一チャンクの予算を超えたのは commitments.js だけ」を確かめられる形にする
-    // （1ファイルにまとめると、その1ファイル自体も単一チャンクの予算を超えてしまう）。
+    // 残りは単一チャンクの予算未満の3ファイルに割る: 1ファイルにまとめると、そのファイル自体も単一チャンクの予算を超えてしまうため。
     const result = judgeBundleSize([
       { path: 'commitments.js', bytes: 1_198_608 },
       { path: 'other-1.js', bytes: 242_000 },
@@ -105,20 +88,7 @@ describe('check-web-bundle-size: judgeBundleSize', () => {
     );
   });
 
-  /**
-   * **予算を上げるには2箇所を直す必要がある。**
-   *
-   * `SINGLE_CHUNK_MAX_BYTES` / `TOTAL_MAX_BYTES` は `check-web-bundle-size-core.mjs`
-   * に `export const` で置いてあるので、値を変えれば diff に出る。だがそれだけでは
-   * **黙って上げる**（レビューで見過ごされる・diff が大きい PR に紛れる）ことを
-   * 防げない。ここで現在の値そのものを固定しておけば、`-core.mjs` 側だけを直しても
-   * このテストが赤くなる ＝ 「なぜ上げたか」をこのテストのコメントと一緒に直さない
-   * 限り緑にならない。
-   *
-   * **値を上げる正当な理由ができたら、このテストの期待値も一緒に更新すること。**
-   * そのときは `check-web-bundle-size.mjs` の doc（閾値の根拠の節）も書き直すこと —
-   * 実測が変わったのに根拠の文章だけ古いままだと、次に読む人が嘘の実測を信じる。
-   */
+  // 現在の値そのものを固定する: `-core.mjs` 側だけを直して予算を黙って上げられないようにするため。
   it('⚠️ 閾値は固定してある（上げるにはここと -core.mjs の両方を直すこと）', () => {
     expect(SINGLE_CHUNK_MAX_BYTES).toBe(262_144);
     expect(TOTAL_MAX_BYTES).toBe(1_179_648);

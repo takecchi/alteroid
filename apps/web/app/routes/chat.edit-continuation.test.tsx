@@ -1,8 +1,4 @@
 // @vitest-environment jsdom
-/**
- * #3393。編集の確定が `open` の前に失敗して入力欄へ戻った文は、**編集の続き**のままである。
- * ⌘/Ctrl + Enter（いつもの送り方）でも `supersedes` 付きで送られ、その状態が見え、やめられる。
- */
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider, useParams } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -33,7 +29,6 @@ afterEach(() => {
   globalThis.fetch = originalFetch;
 });
 
-/** 最初の `POST /chat` は 500、以降は成功。 */
 async function failEditOnce() {
   let posts = 0;
   const stub = stubFetch((url, init) => {
@@ -102,7 +97,6 @@ describe('失敗して入力欄へ戻った編集は、編集の続きとして�
       expect(stub.entries.filter((e) => e.url.endsWith('/chat'))).toHaveLength(2),
     );
     expect(await posted(stub, 1)).toMatchObject({ text: '直した文', supersedes: 'm1' });
-    // 送れたら印は消える。
     await waitFor(() => expect(screen.queryByText(/発言の編集の続き/)).toBeNull());
   });
 

@@ -1,8 +1,4 @@
 // @vitest-environment jsdom
-/**
- * `useStatus`（`GET /status`。資格が要る記憶の置き場。#2869）。
- * 取れたときは `data.storage`、401 のときは例外にならず `error` に載ることを見る。
- */
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 

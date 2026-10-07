@@ -20,15 +20,7 @@ export interface StackedBarSegment {
   tone: keyof typeof TONES;
 }
 
-/**
- * 1本の帯を内訳で塗り分ける（評定の良い / 良くない / 判断できない など）。
- *
- * - 区切りは 2px の隙間（線で囲まない）
- * - **凡例は必ず出す**（色だけで内訳を言わない）。凡例に件数と割合を添える
- * - 合計が 0 なら帯を描かず「まだ無い」と言う（0 の帯は「全部 0」とも「取れない」
- *   とも読めてしまう）
- * - 帯は読み上げでは `aria-label` に内訳を文で持つ
- */
+// 合計が 0 なら帯を描かない: 0 の帯は「全部 0」とも「取れない」とも読めてしまうため
 export function StackedBar({
   segments,
   formatValue = (value) => String(value),

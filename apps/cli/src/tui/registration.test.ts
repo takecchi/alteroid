@@ -1,9 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
 
-/**
- * `alteroid tui` が登録されていること（`index.ts` の配線）。`index.ts` を import しても
- * `invokedDirectly()` の歯で `parseAsync` は走らない。
- */
 vi.mock('@alteroid/storage-fs', () => ({ initWorkspace: vi.fn() }));
 
 const { program } = await import('../index.js');

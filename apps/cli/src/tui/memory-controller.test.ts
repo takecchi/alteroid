@@ -27,7 +27,6 @@ describe('一覧', () => {
     const { api, controller, state, fire } = setup((a) => {
       a.memoryRows = [memoryRow('a'), memoryRow('b')];
     });
-    // 一度も開いていないあいだは、出来事が来ても読まない。
     fire('memory_update');
     expect(state().status).toBe('idle');
 
@@ -36,9 +35,9 @@ describe('一覧', () => {
     controller.enter();
     controller.moveSelection(1);
     api.memoryRows = [memoryRow('z'), ...api.memoryRows];
-    fire('exchange'); // 記憶に関係ない出来事では取り直さない
+    fire('exchange');
     fire('memory_update');
-    fire('memory_update'); // 続けて届いても 1 回にまとまる
+    fire('memory_update');
     await waitFor(() => state().rows.length === 3);
     expect(state().rows[state().selected]?.slug).toBe('b');
   });
@@ -131,7 +130,6 @@ describe('詳細（読むだけ）', () => {
     await controller.open('a');
     expect(state().detail?.doc?.content).toBe('一版');
 
-    // 1 本目（遅い・古い本文）と 2 本目（速い・新しい本文）。応答の順序はゲートで決める。
     const slow = gate();
     const original = api.readMemory.bind(api);
     let calls = 0;

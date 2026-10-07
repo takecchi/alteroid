@@ -1,4 +1,3 @@
-/** `list-detail.stories.tsx` の見本データ（stories から名前付き export しないための置き場）。 */
 export interface SampleEntry {
   id: string;
   title: string;

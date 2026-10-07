@@ -1,12 +1,4 @@
-/**
- * TUI が使うデーモンの口。**新しい経路は 1 つも足さない** — Web UI と既存 CLI が使っている
- * 経路を、既存の `resolveTarget()`（接続・認証）と `createClient()`（hono/client）の上から
- * 呼ぶだけである。SSE（`POST /chat` と `GET /journal/stream`）は hono/client では読めない
- * ので、既存 CLI の `chat.ts` と同じく生の fetch で受ける（認証ヘッダはそこにも要る）。
- *
- * 画面（`chat-controller.ts` / `app.tsx`）はこの `TuiApi` インターフェースだけを見る。
- * 試験では偽物を渡す。
- */
+// SSE は hono/client ではなく生の fetch で受ける: hono/client では読めないため
 import { randomUUID } from 'node:crypto';
 
 import type {
@@ -35,9 +27,7 @@ import { describeAuthFailure, type Target } from '../target.js';
 import { redactError } from '../redact.js';
 import { readSSE } from './sse.js';
 
-/** `POST /chat` の SSE イベント（`apps/daemon/src/app.ts` の `/chat`。Web と同じ語彙）。 */
 export type ChatEvent =
-  /** `inProgress` は `GET /chat/{id}/stream` だけが付ける（進行中のターンがあるか）。 */
   | { type: 'open'; conversationId: string; inProgress?: boolean }
   | { type: 'queued' }
   | { type: 'thinking' }
@@ -48,13 +38,11 @@ export type ChatEvent =
   | { type: 'error'; message: string }
   | { type: 'done' };
 
-/** `GET /conversations` の応答のうち、画面が使う欄（既存の CLI の `conversations` と同じ）。 */
 export interface ConversationList {
   conversations: ConversationSummary[];
   scanned: number;
   reachedStart: boolean;
   hiddenByLimit: number;
-  /** 続きの頁の継続点（#3550）。続きが無ければ、または古いデーモンなら鍵ごと無い。 */
   nextCursor?: string;
 }
 
@@ -69,40 +57,25 @@ export interface ConversationSummary {
 export interface ConversationMessage {
   id: string;
   at: string;
-  /** `inbound` = 人間の発言 / `outbound` = クローンの返答。 */
   role: 'inbound' | 'outbound';
   text: string;
-  /** 発言に添えた添付のメタデータ（中身は無い）。 */
   attachments?: { id: string; name: string; mediaType: string; size: number }[];
-  /** 別の編集に置き換えられた発言なら、その新しい版の id（もう編集できない）。 */
   supersededBy?: string;
-  /** 編集後の発言なら、置き換えた元の発言の id。 */
   supersedes?: string;
 }
 
 export interface HeaderCounts {
-  /** 未回答の承認待ち。読めない行（`unreadable`）は数えない。 */
   pendingApprovals: number;
-  /**
-   * 読めない承認待ちの行数（`unreadable`）。`pendingApprovals` には足さない（待っているとは限らない）
-   * が、0 件の顔にもしない — ヘッダとタブが警告で言う（#3090）。古いデーモンが返さなければ 0。
-   */
+  // `pendingApprovals` に足さない: 待っているとは限らないため
   unreadableApprovals: number;
-  /** 状態が `running` の委譲。 */
   runningManagers: number;
 }
 
-/** 委譲の状態（`jobStatusSchema` の 6 値）。 */
 export type ManagerStatus = 'running' | 'waiting_human' | 'done' | 'failed' | 'lost' | 'stopped';
 
-/**
- * 一覧・詳細が見るマネージャー 1 本の欄（`GET /managers` と `GET /managers/{id}` は同じ
- * `managerSummarySchema`）。TUI が使う欄だけに絞る — 使わない欄を型に持ち込まない。
- */
 export interface ManagerRow {
   managerId: string;
   status: ManagerStatus;
-  /** デーモンが今その runner と繋がっているか。 */
   live: boolean;
   awaitingBackground?: { tasks: number; since?: string };
   request: string;
@@ -116,44 +89,34 @@ export interface ManagerRow {
   runnerLostSince?: string;
   runnerVanished?: boolean;
   sessionMissingSince?: string;
-  /** 置き先の runner が名乗ったマネージャー層の provider。欄が無いのは「不明」（claude と推測しない。#486 S9）。 */
+  // 欄が無いのを claude と推測しない: 「不明」のため
   managerProvider?: string;
 }
 
-/** 読めない委譲の行（壊れた行。「居ない」でも「畳まれた」でもない）。 */
 export interface UnreadableManager {
   id?: string;
   reason: string;
 }
 
 export interface ManagerListQuery {
-  /** カンマ区切りにして渡す。空なら絞らない。 */
   status?: readonly ManagerStatus[];
   limit?: number;
-  /** 錨（`startedAt` 降順の「より古い側」を返す）。組で渡す。 */
   after?: { managerId: string; startedAt: string };
 }
 
-/** 委譲の操作（追加指示・停止）の結果。デーモンの `outcome` / `detail` をそのまま持つ。 */
 export interface ManagerActionResult {
   outcome: string;
   detail: string;
 }
 
-/**
- * 承認待ち 1 件（`GET /approvals` の `pendingApprovalSchema` のうち TUI が使う欄だけ）。
- * `request_permission` の承認待ちには `questions` が無く、`permissionRequest` が付く。
- */
 export interface ApprovalRow {
   id: string;
   createdAt: string;
   question: string;
   context?: string;
-  /** どのマネージャーの件か。無ければクローン自身の確認。 */
   jobId?: string;
   conversationId?: string;
   answeredAt?: string;
-  /** `selections` で答えたときは、デーモンが畳んだ文。 */
   answer?: string;
   questions?: ApprovalQuestion[];
   selections?: ApprovalSelection[];
@@ -162,28 +125,23 @@ export interface ApprovalRow {
   permissionRequest?: { rule: string; allows: string[]; denies: string[] };
 }
 
-/** 承認が決着した日と件数（`GET /approvals/answered-dates`。日はデーモンの `localDate()`）。 */
 export interface AnsweredDateRow {
   date: string;
   count: number;
 }
 
-/** 読めない承認待ちの行（壊れた行。「無い」でも「回答済み」でもない）。 */
 export interface UnreadableApproval {
   id?: string;
   reason: string;
 }
 
-/** `POST /approvals/{id}/answer` の本文。どちらか一方は要る（`selections` があれば `answer` は補足）。 */
 export interface ApprovalAnswerBody {
   answer?: string;
   selections?: ApprovalSelection[];
 }
 
-/** 記憶の一覧の 1 件。CLI `memory list` と同じ型に、Web の一覧が出す大きさ（`bytes`）を足したもの。 */
 export type MemoryRow = MemorySummary & { bytes?: number };
 
-/** `GET /memory/{slug}` の `document`（TUI が使う欄だけ）。 */
 export interface MemoryDoc {
   slug: string;
   content: string;
@@ -191,159 +149,88 @@ export interface MemoryDoc {
   updatedAt: string;
 }
 
-/** `GET /journal` の問い合わせ（Web の `useJournalWindow` と同じ欄）。 */
 export interface JournalListQuery {
   limit: number;
-  /** 種別（カンマ区切りにして渡す）。空なら絞らない。 */
   types?: readonly string[];
-  /** 本文を語で探す（空なら渡さない）。 */
   q?: string;
   since?: string;
   until?: string;
-  /** 頁の継続点（`GET /journal` の `next`）。組で渡す。 */
   afterId?: string;
   afterAt?: string;
-  /** 絞らずに日誌の地平（`oldestAt` / `crossesHorizon`）も欲しいとき。 */
   horizon?: boolean;
 }
 
 export interface JournalListResult {
-  /** 新しい順。 */
   entries: JournalEntry[];
-  /** 次の頁の継続点。`null` = 本当の終端。`undefined` = 欄が無い（古いデーモン）。 */
   next?: { id: string; at: string } | null;
   oldestAt?: string | null;
   crossesHorizon?: boolean;
 }
 
-/** `GET /journal/stream` で届いた 1 件。`open` と、本体が読めなかったものは `entry` が `null`。 */
 export interface JournalStreamItem {
   type: string;
   entry: JournalEntry | null;
 }
 
 export interface TuiApi {
-  /** 接続先（ヘッダに出す）。 */
   readonly baseUrl: string;
-  /** 失敗（HTTP エラー・接続断）は `ApiError` を投げる。 */
   chat(
     input: {
       text: string;
       conversationId?: string;
       attachments?: string[];
-      /** 編集の確定: 置き換える発言の id（`conversationId` が要る。#3681）。 */
       supersedes?: string;
-      /** 呼び手が名乗らせたいとき（`open` の前に終わった送信を、あとで引き直す。#3304）。無ければ api が採番する。 */
       clientMessageId?: string;
     },
     signal: AbortSignal,
   ): AsyncGenerator<ChatEvent>;
-  /**
-   * `GET /client-messages/{clientMessageId}`（#3304）。受け取り済みならその会話の id、**受け取っていなければ
-   * （404）`null`**。それ以外の失敗は `ApiError` を投げる（「受け取っていない」と「確かめられなかった」を取り違えない）。
-   */
+  // 404 以外の失敗を `null` にしない: 「受け取っていない」と「確かめられなかった」を取り違えるため
   findClientMessage(clientMessageId: string): Promise<string | null>;
-  /** `GET /attachments/limits`。古いデーモン（404）は既定値、一時的な失敗は `null`（失敗は投げない）。 */
   attachmentLimits(): Promise<AttachmentLimits | null>;
-  /** `POST /attachments`（生のバイト列）。失敗は `ApiError` ではなく普通の `Error`（理由つき）。 */
   uploadAttachment(file: {
     name: string;
     mediaType: string;
     bytes: Uint8Array;
   }): Promise<UploadedAttachment>;
-  /**
-   * 履歴の一覧。`reachedStart` が偽なら、窓（`scanned` 件の往復）の外に古い会話が残っているかもしれない
-   * （一覧が空でも「無い」とは言えない）。`hiddenByLimit` は窓の中で上限に収まらず省いた会話の数。
-   */
   listConversations(cursor?: string): Promise<ConversationList>;
-  /**
-   * `null` は 404（遡り切れた上で「無い」）。`reachedStart` が偽なら、窓の外に続き（古い発言）が
-   * 残っているかもしれない。`messages` が空でこれが偽のときは「無い」ではなく**判定できない**。
-   */
   readConversation(
     id: string,
   ): Promise<{ messages: ConversationMessage[]; reachedStart: boolean } | null>;
-  /**
-   * その会話のターンから積まれた承認待ち（`GET /approvals?conversationId=<id>&pending=false&order=asc`）。
-   * **投げない**——取れなかったことは `failure` に載る（会話の表示を落とさない。#3261）。
-   */
+  // 投げない: 会話の表示を落とさないため（取れなかったことは `failure` に載る）
   readConversationApprovals(id: string): Promise<ConversationApprovalsRead>;
-  /**
-   * `POST /conversations/{id}/read`。`through` は発言の id（時刻はサーバが引く）。失敗は `ApiError`。
-   * 返答を画面に表示したときに呼ぶ（`docs/architecture.md`「会話の既読」）。
-   */
   markConversationRead(id: string, through: string): Promise<void>;
   endConversation(id: string): Promise<void>;
-  /**
-   * `GET /chat/{id}/stream`。進行中のターンの途中経過に戻る（発言は投函しない）。最初に
-   * `open`（`inProgress` つき）が来る。進行中ならそれまでの出来事を順に流してから続きを流し、
-   * `done` / `error` で閉じる。進行中でなければ `open` だけで閉じる。
-   */
   chatStream(conversationId: string, signal: AbortSignal): AsyncGenerator<ChatEvent>;
-  /** 結果を人間の言葉にしたもの（`alteroid interrupt` と同じ文言）。 */
   interrupt(): Promise<string>;
-  /**
-   * ヘッダの件数。承認待ちと委譲は別々に取り、取れた側の欄だけを返す（片方の失敗で他方を捨てない）。
-   * 両方失敗したときだけ例外。
-   */
   headerCounts(): Promise<Partial<HeaderCounts>>;
   listManagers(query: ManagerListQuery): Promise<{
     managers: ManagerRow[];
     unreadable: UnreadableManager[];
   }>;
-  /** `null` は 404（居ない）。読めない行（409）は `ApiError`。 */
   readManager(id: string): Promise<ManagerRow | null>;
-  /** 生ログ（JSONL の生テキスト）。`null` は 404（まだ無い）。 */
   readManagerTranscript(id: string): Promise<string | null>;
-  /** 追加指示（`requestId` / `decision` は付けない — 回答として消費させない）。 */
+  // `requestId` / `decision` を付けない: 追加指示を回答として消費させないため
   sendManagerMessage(id: string, text: string): Promise<ManagerActionResult>;
   stopManager(id: string): Promise<ManagerActionResult>;
-  /** `GET /approvals?order=asc`。`pending: true` なら未回答かつ未取り下げのみ。 */
   listApprovals(query: { pending: boolean }): Promise<{
     approvals: ApprovalRow[];
     unreadable: UnreadableApproval[];
   }>;
-  /**
-   * `GET /approvals/{id}`。承認を id で1件（回答済み・取り下げ済みも）。`null` は 404（無い）。
-   * 読めない行（409）・5xx は `ApiError`（「無い」と言わない）。
-   */
   readApproval(id: string): Promise<ApprovalRow | null>;
-  /**
-   * `GET /approvals/answered-dates`。決着のあった日と件数を新しい日が上の順に。`beforeDate` はその日**より古い**日から
-   * （前の頁の最後の日。封筒は無く、続きが在るかは `limit` 件ちょうど返ったかで判る）。
-   */
   listAnsweredDates(query: { limit: number; beforeDate?: string }): Promise<AnsweredDateRow[]>;
-  /**
-   * `GET /approvals?answeredOn=<日付>`。その日に決着した承認（回答済み・取り下げ済み）を決着の新しい順に。
-   * 並びはデーモンが決める（画面で並べ直さない）。日付の形が不正なら 400（デーモンの理由が `ApiError` に入る）。
-   */
+  // 画面で並べ直さない: 並びはデーモンが決めるため
   listApprovalsAnsweredOn(date: string): Promise<ApprovalRow[]>;
-  /**
-   * `POST /approvals/{id}/answer`。失敗（400 の理由・404・409）は `ApiError`。メッセージにデーモンの
-   * 理由（本文の `error`）がそのまま入る。
-   */
   answerApproval(id: string, body: ApprovalAnswerBody): Promise<void>;
-  /**
-   * `GET /journal/stream`。接続できたとき `open`、以後は届いたエントリ（種別と本体）を流す。
-   * ヘッダの件数と日誌のタブが、この 1 本を共有する（2 本目は張らない）。
-   */
+  // 2 本目を張らない: ヘッダの件数と日誌のタブが、この 1 本を共有するため
   journalStream(signal: AbortSignal): AsyncGenerator<JournalStreamItem>;
-  /** `GET /journal`（新しい順）。 */
   listJournal(query: JournalListQuery): Promise<JournalListResult>;
-  /** `GET /memory`。一覧はタイトルと要旨だけ（本文は詳細で読む）。 */
   listMemory(): Promise<MemoryRow[]>;
-  /** `GET /memory/{slug}`。`null` は 404（無い）。 */
   readMemory(slug: string): Promise<MemoryDoc | null>;
 }
 
-/** 人間へそのまま見せてよい文言を持つ失敗。 */
 export class ApiError extends Error {}
 
-/**
- * 発言をサーバが受け取らなかった失敗（繋がらない・非 ok の応答）。`open` などのイベントが 1 つも来ないうちに
- * これで終わった送信は、受け取られていないと言えるので、呼び手は文を入力欄へ戻してよい。
- * 2xx のあとで切れた失敗（受け取られたか分からない）はこれにしない（#3304 の取り直しの対象）。
- */
+// 2xx のあとで切れた失敗はこれにしない: 受け取られたか分からないため
 export class NotDeliveredError extends ApiError {}
 
 const CHAT_EVENT_NAMES = new Set([
@@ -361,7 +248,6 @@ const CHAT_EVENT_NAMES = new Set([
 export function createTuiApi(target: Target): TuiApi {
   const client = createClient(target.baseUrl, target.headers);
 
-  /** 応答が失敗なら、認証の案内かデーモンの理由つきで `ApiError` にする。 */
   async function failure(
     what: string,
     response: Response | { status: number; json: () => Promise<unknown> },
@@ -394,7 +280,6 @@ export function createTuiApi(target: Target): TuiApi {
       );
     }
     if (!response.ok || !response.body) {
-      // 添付が無い・期限切れ（400 の `code`）は、呼び手が上げ直せるよう型で渡す（#3246）。
       if (response.status === 400) {
         const missing = attachmentMissingMessageOf(
           await response
@@ -421,7 +306,6 @@ export function createTuiApi(target: Target): TuiApi {
       const body = JSON.stringify({
         text: input.text,
         conversationId: input.conversationId ?? undefined,
-        // 発言ごとに名乗る（Issue #3203）。新しい会話で `open` の前に終わった送信は、呼び手がこの id で引き直す（#3304）。
         clientMessageId: input.clientMessageId ?? randomUUID(),
         ...(input.supersedes === undefined ? {} : { supersedes: input.supersedes }),
         ...(input.attachments === undefined || input.attachments.length === 0
@@ -522,8 +406,7 @@ export function createTuiApi(target: Target): TuiApi {
     },
 
     async headerCounts() {
-      // 片方の失敗で他方の件数を捨てない（`allSettled`）。取れた側だけを返し、取れなかった側の
-      // 欄は無い（呼ぶ側が前の件数を残す）。両方失敗したときだけ例外。
+      // `allSettled` を使う: 片方の失敗で他方の件数を捨てないため
       const [approvals, managers] = await Promise.allSettled([
         (async () => {
           const response = await client.approvals.$get({ query: {} });
@@ -535,8 +418,7 @@ export function createTuiApi(target: Target): TuiApi {
           };
         })(),
         (async () => {
-          // `status` だけを渡す。daemon は `status` を窓の opt-in に数えず（`limit` / 錨が無ければ
-          // 窓を当てない）、running の行を全部返す。窓（`limit`）を足すと件数が切られる。
+          // `limit` を足さない: 窓を当てると running の行が切られ、件数が欠けるため
           const response = await client.managers.$get({ query: { status: 'running' } });
           if (!response.ok) throw await failure('委譲を読めませんでした', response);
           return { runningManagers: (await response.json()).managers.length };

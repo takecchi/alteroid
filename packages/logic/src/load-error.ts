@@ -1,45 +1,18 @@
-/**
- * 読み込みの失敗を、利用者に見せる日本語の要約へ分類する。
- *
- * **応答の素の文（`boom`・`Failed to fetch`）を主文にしない。** 主文は「何が起きたか」
- * （つながらない／サーバーが失敗した 等）で、素の文は `detail` として別に持つ。
- * 画面は `detail` を「詳細」の中へ小さく添える。
- *
- * React も SWR も知らない純関数。`ApiError`（`@alteroid/swr`）は import できないので、
- * `status` を数で持つ `Error` として見分ける（`ApiError` はそれに当たる）。
- */
-
 export type LoadErrorKind =
-  /** 応答が無い（ネットワーク断・デーモンが落ちている・接続先違い）。 */
-  | 'network'
-  /** 5xx。デーモンの側で処理に失敗した。 */
-  | 'server'
-  /** 401。ログインが切れた／鍵が無効。 */
-  | 'unauthorized'
-  /** 403。許可が無い。 */
-  | 'forbidden'
-  /** 404。デーモンがその口を持たない（版のずれ）か、対象が無い。 */
-  | 'notFound'
-  /** 上以外の 4xx。 */
-  | 'rejected'
-  /** 分類できない。 */
-  | 'unknown';
+  'network' | 'server' | 'unauthorized' | 'forbidden' | 'notFound' | 'rejected' | 'unknown';
 
 export interface LoadErrorInfo {
   kind: LoadErrorKind;
-  /** 利用者向けの1文（原因の要約）。素の応答文を含まない。 */
   summary: string;
-  /** 次の一手の案内。無いことがある。 */
   hint: string | undefined;
-  /** 生の文。「詳細」の中へ出す。空なら `undefined`。 */
   detail: string | undefined;
-  /** 取り直せば直りうるか（再試行ボタンの意味があるか）。 */
   retryable: boolean;
 }
 
 const NETWORK_MESSAGE =
   /failed to fetch|networkerror|network request failed|load failed|fetch failed|aborted/i;
 
+// `ApiError` を import せず `status` で見分ける: `@alteroid/swr` は import できないため。
 function statusOf(error: unknown): number | undefined {
   if (typeof error !== 'object' || error === null) return undefined;
   const status = (error as { status?: unknown }).status;
@@ -52,6 +25,7 @@ function messageOf(error: unknown): string {
   return '';
 }
 
+// 素の応答文（`Failed to fetch` など）を主文にしない: 主文は何が起きたかで、素の文は `detail` へ回すため。
 export function classifyLoadError(error: unknown): LoadErrorInfo {
   const raw = messageOf(error).trim();
   const detail = raw === '' ? undefined : raw;
@@ -74,8 +48,6 @@ export function classifyLoadError(error: unknown): LoadErrorInfo {
       return {
         kind: 'forbidden',
         summary: 'この画面を見る許可がありません。',
-        // 日本語の理由（デーモンが返す「持ち主だけが操作できる」など）は利用者に要る情報なので、
-        // 案内として残す。英語の素の文は出さず「詳細」へ回す。
         hint: /[\u3040-\u30ff\u3400-\u9fff]/.test(raw) ? raw : undefined,
         retryable: false,
         ...base,

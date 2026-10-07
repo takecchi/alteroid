@@ -8,19 +8,6 @@ import {
   // @ts-expect-error -- 素の .mjs（型宣言を持たない build 用スクリプト）を読む
 } from './check-pr-closing-keywords-core.mjs';
 
-/**
- * `check-pr-closing-keywords` の歯（Issue #1109）。
- *
- * 本物の `gh pr view` は叩かない —— 合成したタイトル・本文・コミットメッセージで
- * 判定だけを確かめる（`check-no-attribution-trailers.test.ts` /
- * `check-pr-vanished-footprint.test.ts` と同じ理由）。
- *
- * **この歯は fixture として閉じるキーワードの逐語を持つ。** それ自体が対象に
- * なってはいけない——この門は repo のファイルも git の履歴も一切走査しない
- * （`check-pr-closing-keywords-core.mjs` の doc、#785 の族）ので、この歯の中身が
- * この門自身に引っかかることは無い。
- */
-
 describe('findClosingKeywordOccurrences — 通す形', () => {
   it('Closes #123 単独行は通る（findings 0件）', () => {
     expect(findClosingKeywordOccurrences('Closes #123')).toEqual([]);

@@ -14,13 +14,6 @@ import {
   createTokenSpread,
 } from './token-spread.js';
 
-/**
- * 現役を2か所へ撒く（Issue #393 PR3 の6段目）。
- *
- * **ここが固定するのは「撒いた」と「効いた」を混ぜないことである。** 撒く先が
- * 落ちても、片方だけ撒けても、プロファイルが影にしていても、**全部が出力に残る。**
- */
-
 const SECRET = 'sk-ant-oat-do-not-leak';
 
 function fakeClient(
@@ -67,9 +60,7 @@ describe('撒く先が両方とも出力に残る', () => {
       { target: 'runner-2', ok: true },
       { target: 'clone', ok: true },
     ]);
-    // runner へ渡した鍵の名前。
     expect(a.calls).toEqual([[{ name: 'CLAUDE_CODE_OAUTH_TOKEN', value: SECRET }]]);
-    // クローン側は箱に入って、次のセッションで読まれる。
     expect(clone.values()).toEqual({ CLAUDE_CODE_OAUTH_TOKEN: SECRET });
   });
 
@@ -91,14 +82,11 @@ describe('撒く先が両方とも出力に残る', () => {
 
     expect(results.find((r) => r.target === 'runner-primary')?.ok).toBe(true);
     expect(results.find((r) => r.target === 'runner-2')?.ok).toBe(false);
-    // **理由の1行目だけ採る**（2行目以降に値が混ざる形を減らす）。
     expect(results.find((r) => r.target === 'runner-2')?.error).toBe('runner が応答しない');
-    // #1383: 配布を試みて実際に落ちた失敗は、自己修復する（無害な）失敗ではない。
     expect(results.find((r) => r.target === 'runner-2')?.selfHealing).not.toBe(true);
   });
 
   it('繋がっている runner が0台なら、それを成功に畳まない', async () => {
-    // 畳むと、1台も繋がっていない状態で「回した」だけが日誌に残る。
     const spread = createTokenSpread({
       runners: registry([]),
       clone: createAgentTokenHolder(),
@@ -115,11 +103,7 @@ describe('撒く先が両方とも出力に残る', () => {
     const runner = results.find((r) => r.target === 'runner');
     expect(runner?.ok).toBe(false);
     expect(runner?.error).toContain('1台も無い');
-    // #1383: これは配布そのものの失敗ではなく、まだ相手（runner）が居ないだけ
-    // ——後から runner が繋がれば createRunnerTokenSync が追いつかせる（自己修復）。
-    // `describeSpread` はこの印を見て、配布失敗と同じ「置けなかった」で出さない。
     expect(runner?.selfHealing).toBe(true);
-    // クローンへは撒けている（同じプロセス内なので落ちない）。
     expect(results.find((r) => r.target === 'clone')?.ok).toBe(true);
   });
 
@@ -163,7 +147,6 @@ describe('値がどこにも出ない', () => {
 
 describe('プロファイルが鍵を影にしている形', () => {
   it('撒くのはやめないが、上書きされることを出力に残す', async () => {
-    // **追加制限にしない**（撒くのをやめない）。ただし黙って効かない形にはしない。
     const seen: string[][] = [];
     const spread = createTokenSpread({
       runners: registry([fakeClient('runner-primary')]),
@@ -179,9 +162,7 @@ describe('プロファイルが鍵を影にしている形', () => {
       value: SECRET,
     });
 
-    // 撒いてはいる。
     expect(results.find((r) => r.target === 'runner-primary')?.ok).toBe(true);
-    // **結果にも載る**（`onShadowed` を1つ忘れただけで見えなくならないように）。
     const shadow = results.find((r) => r.target === 'profile-shadow');
     expect(shadow?.ok).toBe(false);
     expect(shadow?.error).toContain('CLAUDE_CODE_OAUTH_TOKEN');
@@ -206,9 +187,6 @@ describe('プロファイルが鍵を影にしている形', () => {
   });
 
   it('プロファイルの名前が取れなくても落ちない（ただし影は検出できない）', async () => {
-    // **取れなかったことを「影が無い」と読ませない**——検出できたときだけ印を
-    // 出す形にしてあるので、ここでは印が出ないのが正しい。**それは「影が無い」
-    // という主張ではない。**
     const spread = createTokenSpread({
       runners: registry([fakeClient('runner-primary')]),
       clone: createAgentTokenHolder(),
@@ -229,7 +207,6 @@ describe('プロファイルが鍵を影にしている形', () => {
 
 describe('クローンへの箱', () => {
   it('何も置いていなければ空（既定の構成の挙動を1文字も変えない）', () => {
-    // 空を返すことで `#childEnv()` は器の環境変数だけの形と同じになる。
     expect(createAgentTokenHolder().values()).toEqual({});
   });
 
@@ -259,16 +236,6 @@ describe('createRunnerTokenSync（後から繋いだ runner を追いつかせ�
     };
   }
 
-  /**
-   * **⚠️ 2026-09-14 に、器の環境変数へのフォールバックを完全に廃止した。**
-   * 2026-09-12〜2026-09-14（#866）のあいだは、箱が空（＝一度も撒いていない）
-   * ときに器の環境変数（`CLAUDE_CODE_OAUTH_TOKEN`）の値をそのまま降ろす手当てが
-   * 入っていたが、その手当てごと撤去した——トークンプールは100% DB 駆動にする、
-   * という人間の決定による。⟹ **箱が空のときは何もしない**（`setCredentials`
-   * を1回も呼ばない）。プールから一度も撒いていない器では、後から繋ぎ直した
-   * runner も資格を持たずに走る——直すのは `alteroid token add` で通る鍵を
-   * 登録し、それが撒かれるのを待つことである。
-   */
   it('一度も撒いていなければ何もしない（setCredentials を呼ばない）', async () => {
     const holder = createAgentTokenHolder();
     const runner = fakeRunner();
@@ -285,10 +252,6 @@ describe('createRunnerTokenSync（後から繋いだ runner を追いつかせ�
   });
 
   it('holder が落とされていたら空文字（鍵を消す指示）を降ろす', async () => {
-    // **身元は在るが値が無い状態**（`clear()` は `current` だけを落とし
-    // `currentIdentity` は残す）。**「一度も撒いていない」（身元も無い）とは
-    // 区別する** ——こちらは「撒く値そのものが取れなかった」という別の状態
-    // なので、空文字（＝鍵を消す指示）を降ろす。
     const holder = createAgentTokenHolder();
     holder.set(SECRET, { tokenId: 'tok-a', generation: 1 });
     holder.clear({ tokenId: 'tok-a', generation: 2 });
@@ -298,22 +261,6 @@ describe('createRunnerTokenSync（後から繋いだ runner を追いつかせ�
   });
 });
 
-/**
- * **配達の端から端まで1本で測る。**
- *
- * ⭐ **ここが答えるのは「`reconsider()` の中で関数が呼ばれたか」ではない。**
- * 「**`reconsider()` が返った後、これから起こす子プロセスへ渡る資格の箱に、値が
- * 変わっていないか**」である —— `RunnerClient#setCredentials` が受け取ったものが、
- * runner の `CredentialStore` に入り、`Host#childEnv()` がそれを
- * **これから起こすマネージャー／作業者の env** へ重ねる。
- *
- * **⚠️ 2026-09-14 に、器の環境変数へのフォールバックを完全に廃止した。** かつて
- * （#869）はここで「現役が待っても戻らない状態になっても、器の環境変数の値が
- * 資格箱に届く」ことを固定していたが、その手当てごと撤去した——トークンプールは
- * 100% DB 駆動にする、という人間の決定による。⟹ いまは `exhausted` の道では
- * `spread()` が一度も呼ばれないので、**資格箱にはそれ以前の値がそのまま残る**
- * （新しい値でもフォールバック値でもない）。
- */
 describe('現役が戻らなくなっても、資格箱を勝手に書き換えない', () => {
   it('現役の行を人間が消した後の reconsider() は、runner の資格箱に触らない', async () => {
     const runner = fakeClient('runner-primary');
@@ -331,8 +278,6 @@ describe('現役が戻らなくなっても、資格箱を勝手に書き換え�
       now: () => new Date('2026-09-12T02:07:00.000Z'),
     });
 
-    // **起動後に現役の行が消えた**（人間が消した）。残りは人間が外してあるので、
-    // 回す先の候補は1本も立たない ＝ `exhausted` の道。
     await stores.tokens.replace([
       {
         id: 'tok-b',
@@ -350,16 +295,10 @@ describe('現役が戻らなくなっても、資格箱を勝手に書き換え�
 
     await rotator.reconsider({ reason: 'tick' });
 
-    // **`exhausted` は何も撒かないので、runner の資格箱は1回も呼ばれていない。**
     expect(runner.calls).toEqual([]);
   });
 });
 
-/**
- * **箱の `identity()` が現役の鍵の指紋を添える**（Issue #2877 PR2）。マネージャーの台帳が、
- * runner の旧セッションが起動時に掴んだ鍵（`RunnerManagerState.tokenFingerprint`）と比べる相手。
- * `token_list` と同じ `fingerprintOf`（sha256 の先頭12桁）で、値そのものは載せない。
- */
 describe('AgentTokenHolder#identity() は現役の鍵の指紋を添える（#2877 PR2）', () => {
   it('値を置いたら指紋が付き、値そのものは載らない。置き直せば指紋も変わる', () => {
     const holder = createAgentTokenHolder();

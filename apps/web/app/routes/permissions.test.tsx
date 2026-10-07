@@ -1,16 +1,4 @@
 // @vitest-environment jsdom
-/**
- * `/permissions` 画面（Issue #863）。ここで固定したいのは:
- *
- * - `GET /permission-grants` が返す許可のうち、**既定では有効なものだけ**出る
- *   （取り消し済みは隠れる。CLI の既定と同じ）
- * - 「取り消し済みも見る」を押すと、取り消し済みも出る
- * - 0件のとき、初期表示と「取り消し済みも見る」を押した後のどちらでも文言が出る
- * - 規則の広さの段階が出る（`describePermissionRuleBreadth` を通す）
- * - 取得に失敗したときエラーが出る
- * - **取り消し（`revoke`）は確認の一手を挟むまで叩かない**
- * - 取り消し済みの行には取り消しボタンが無い
- */
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -208,16 +196,13 @@ describe('/permissions 画面 — 取り消し', () => {
     await renderPermissions();
     fireEvent.click(screen.getByText('取り消す'));
 
-    // 1回目の押下では叩かない。確認の文言と「本当に取り消す」が出る。
     expect(stub.calls.some((url) => /\/permission-grants\/grant-a\/revoke$/.test(url))).toBe(false);
     expect(screen.getByText(/その場で効く/)).toBeTruthy();
 
-    // やめれば元に戻り、叩かない。
     fireEvent.click(screen.getByText('やめる'));
     expect(screen.getByText('取り消す')).toBeTruthy();
     expect(stub.calls.some((url) => /\/permission-grants\/grant-a\/revoke$/.test(url))).toBe(false);
 
-    // 確認してから叩く。
     fireEvent.click(screen.getByText('取り消す'));
     fireEvent.click(screen.getByText('本当に取り消す'));
     await waitForCall(stub.calls, /\/permission-grants\/grant-a\/revoke$/);
@@ -238,7 +223,6 @@ describe('/permissions 画面 — 取り消し', () => {
 });
 
 describe('/permissions 画面 — 長く使われていない許可（Issue #1804）', () => {
-  // 時計は Date だけ差し替える（タイマーは本物のまま。実時間の待ちは足さない）。
   beforeEach(() => {
     vi.useFakeTimers({ toFake: ['Date'], now: new Date('2026-09-30T00:00:00.000Z') });
   });
@@ -365,7 +349,6 @@ describe('/permissions 画面 — 読めない行（issue #2536）', () => {
 
     await renderPermissions();
     fireEvent.click(await screen.findByRole('button', { name: 'grant-bad の行を消す' }));
-    // 押しただけでは消さない（#3091。共有部品なので permissions / access で挙動が揃う）。
     const dialog = await screen.findByRole('alertdialog');
     expect(dialog.textContent).toContain('元に戻せません');
     expect(dialog.textContent).toContain('grant-bad');

@@ -4,11 +4,6 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createPgStoresFromDb, type PgStores } from './index.js';
 import { createMigratedTestDb, type TestDbHandle } from './test-db.test-support.js';
 
-/**
- * 同じ `at` の未了行（台帳は `at` の古い順に並べる）の並びは、行を直した後も変わらない。
- * in-memory / fs は安定整列（入れた順）。pg は `order by at` だけで同順位の決め手が無く、
- * jsonb_set で行を更新（物理的に別のタプルになる）すると並びが入れ替わりうる。
- */
 let client: TestDbHandle;
 let stores: PgStores;
 

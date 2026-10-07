@@ -1,16 +1,4 @@
 // @vitest-environment jsdom
-/**
- * 承認カードを `@alteroid/ui` の `ApprovalCard`（Twin Plate）へ移したときに、
- * **今の画面の表示・操作を変えていない**ことを押さえる。
- *
- * `approvals.test.tsx` が見ていない差だけをここに置く（そちらは変えていない）:
- *
- * 1. 時刻は `formatDateTime` と `formatRelative` の2つの span（部品の `Timestamp` = `<time>` ではない）
- * 2. 送るキーは `(metaKey || ctrlKey) && key === 'Enter'` で、IME の確定の Enter は送信に
- *    数えない（部品の既定 `isSubmitShortcut`。issue #2259 で会話と約束の入力欄に揃えた）
- * 3. エラーは「個別の失敗」→「まとめ送信の失敗」の順に別々に出し、どちらも無ければ出さない。
- *    その後ろに会話のパネルが来る
- */
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -32,7 +20,6 @@ function approval(over: Partial<PendingApproval> = {}): PendingApproval {
 }
 
 interface Stub {
-  /** 1件だけ答える経路（`POST /approvals/:id/answer`）に届いた id。 */
   singles: string[];
 }
 
@@ -95,11 +82,7 @@ function renderPage() {
   );
 }
 
-/**
- * カードの一覧の各 `<li>`。**上のタブの帯も `list` / `listitem` なので、素の
- * `getAllByRole('listitem')[0]` はタブ（#3237 以降）を掴む**——そこで「alert が無い」を測ると、
- * カードを見ていないのに通る。かならずカードの一覧（`aria-label`）へ絞る。
- */
+// listitem を素で引かない: 上のタブの帯も list / listitem で、カードを見ていないのに通ってしまうため
 async function cardItems(): Promise<HTMLElement[]> {
   return within(await screen.findByRole('list', { name: '承認待ちの一覧' })).getAllByRole(
     'listitem',
@@ -141,16 +124,10 @@ describe('送るキー', () => {
 
   it('修飾キーの無い Enter では送らない（改行のまま）', async () => {
     const singles = await press({ key: 'Enter' });
-    // 送るなら fetch はこの同期の直後に積まれる。積まれていないことを、
-    // 同じ経路で「送れる」ことが上で示されている前提で読む。
     await Promise.resolve();
     expect(singles).toEqual([]);
   });
 
-  // **IME の確定の Enter は送信に数えない（issue #2259）。** 会話（`chat.tsx`）・約束
-  // （`commitments.tsx`）の入力欄と、部品 `ApprovalCard` の既定（`isSubmitShortcut`）に揃えた。
-  // 変換を確定するつもりの ⌘/Ctrl + Enter で、書きかけの回答が送られてしまわないようにする。
-  // 以前はここで「IME の変換中の Ctrl + Enter も送る」を今の振る舞いとして固定していた。
   it('IME の変換中の Ctrl + Enter / Cmd + Enter では送らない（isComposing）', async () => {
     const viaCtrl = await press({ key: 'Enter', ctrlKey: true, isComposing: true });
     await Promise.resolve();
@@ -190,7 +167,6 @@ describe('エラーの位置と数', () => {
     fireEvent.click(screen.getByRole('button', { name: 'まとめて送る' }));
     await screen.findByText('まとめて送った回答は通らなかった: already answered');
 
-    // まとめ送信の失敗だけが出ている間は1つ。
     const item = (await cardItems())[0]!;
     expect(within(item).getAllByRole('alert')).toHaveLength(1);
 
