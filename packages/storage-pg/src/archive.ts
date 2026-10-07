@@ -20,7 +20,7 @@ import { byteOrder, stripNulls, toIso, toNumber } from './db.js';
 import { archive } from './schema.js';
 
 /**
- * 同じミリ秒に同じセッションへ積まれたときに、枝番を試す上限（#905）。
+ * 同じミリ秒に同じセッションへ積まれたときに、枝番を試す上限。
  *
  * **超えたら例外を投げる。⛔ 黙って上書きへ落ちない。** fs 側
  * （`packages/storage-fs/src/archive.ts` の `MAX_ARCHIVE_ID_ATTEMPTS`）と
@@ -29,18 +29,17 @@ import { archive } from './schema.js';
 const MAX_ARCHIVE_ID_ATTEMPTS = 1000;
 
 /**
- * `archive()` の advisory lock（#1732）の名前空間。
+ * `archive()` の advisory lock の名前空間。
  *
  * `pg_advisory_xact_lock(hashtext(namespace), hashtext(sessionId))` の
  * 1つ目の鍵——**この文字列を変えると、古いロックと新しいロックが別の鍵に
  * 分かれる**（デプロイをまたいで在庫が残っていても実害は無いが、意味は無い）。
- * `grep -rn advisory packages` した時点（#1732 時点）で pg 側に他の advisory
- * lock は無かった——将来 pg 側に別の advisory lock を足すなら、鍵空間の衝突を
- * 避けるためにこことは別の名前空間文字列を選ぶこと。
+ * pg 側に他の advisory lock は無い——別の advisory lock を足すなら、鍵空間の
+ * 衝突を避けるためにこことは別の名前空間文字列を選ぶこと。
  */
 const ARCHIVE_SESSION_LOCK_NAMESPACE = 'alteroid.archive.session';
 
-/** `n` 回目の候補 id（1回目は枝番無し＝従来と同じ形）。fs 側と同じ形を作る。 */
+/** `n` 回目の候補 id（1回目は枝番無し）。fs 側と同じ形を作る。 */
 function archiveIdCandidate(base: string, attempt: number): string {
   return attempt === 1 ? `${base}.jsonl` : `${base}-${attempt}.jsonl`;
 }
@@ -61,10 +60,10 @@ export class PgTranscriptArchive implements TranscriptArchive {
 
   /**
    * **指紋と連続性の判定は、`stripNulls` する前の生の `transcript` で取る。保存だけ
-   * NUL を除く**（#1709。オーナー判断 2026-09-26「安全側に倒す」）。
+   * NUL を除く**（安全側に倒す）。
    *
-   * 以前は NUL を除いた後の値で指紋を取っていた。すると NUL の位置だけが違う本文を、
-   * pg だけが「続いている」と判定し、fs / インメモリ（生の本文で判定する）と割れていた
+   * NUL を除いた後の値で指紋を取ると、NUL の位置だけが違う本文を、
+   * pg だけが「続いている」と判定し、fs / インメモリ（生の本文で判定する）と割れる
    * （同じ2回の `archive()` で pg は `continues`、インメモリは `diverged`）。連続性は
    * 自動の畳み・`archive_remove_many` が「消してよいか」を決める材料なので、**迷ったら
    * 消さない側**——NUL の位置だけが違う本文は「続いていない」と読む——に揃える。
@@ -77,13 +76,12 @@ export class PgTranscriptArchive implements TranscriptArchive {
    *
    * **直前の行を引くとき `body` 列に触れない**（`select` に含めない）。
    * 100MB 級の行がある `archive` で、判定のためだけに本文を読み直すと
-   * Issue #698 の動機そのものを壊す（`list()` の doc と同じ理由）。
+   * 本文を落とさずに大きさを知りたいという `list()` の動機そのものを壊す（`list()` の doc と同じ理由）。
    *
    * **「直前を引く → 判定する → insert する」を1トランザクションに閉じるだけでは
-   * 足りない（#1732）。** 以前のここの doc は「割ると、同じ `sessionId` への
-   * 並行 `archive()` が同じ「直前」を見て同じ判定を出す競合が起きる」と書いて
-   * いたが、それはトランザクションで閉じれば防げるという前提だった——**その
-   * 前提が誤りだった。** PostgreSQL の既定の分離レベル（READ COMMITTED）は
+   * 足りない。** 割ると、同じ `sessionId` への並行 `archive()` が同じ「直前」を
+   * 見て同じ判定を出す競合が起きるが、トランザクションで閉じれば防げる
+   * わけではない——PostgreSQL の既定の分離レベル（READ COMMITTED）は
    * 「同じトランザクションに閉じる」ことと「読んだ行をロックする」ことを
    * 保証しない。`FOR UPDATE` も advisory lock も無い1トランザクションでは、
    * 2つの `archive()` が同じ `sessionId` へ重なって走ったとき、片方の insert が
@@ -94,7 +92,7 @@ export class PgTranscriptArchive implements TranscriptArchive {
    * （`continuity === 'continues'` と配列上の隣接関係だけで含有を推定し、
    * 実際に何と比較したか＝`comparedTo` を見ない）を欺き、`requireContainment:
    * true`（`archive_remove_many` / 自動の畳みの既定・固定値）でも、他のどこにも
-   * 残っていない本文を持つ行を削除対象に選ばせる（Issue #1732 の再現）。
+   * 残っていない本文を持つ行を削除対象に選ばせる。
    *
    * **塞ぎ方: トランザクションの先頭で `sessionId` ごとの advisory lock
    * （`pg_advisory_xact_lock`）を取り、同じ `sessionId` への `archive()` を
@@ -107,67 +105,65 @@ export class PgTranscriptArchive implements TranscriptArchive {
    *
    * ## ⚠️ `at`（と `stamp` / `base`）は advisory lock を取った**後**に決める
    *
-   * 以前は `at = new Date()` をトランザクションの**外**（`db.transaction(...)`
-   * を呼ぶ前）で取っていた。ロックだけを足してここを直さないと、**「`at` が
+   * `at = new Date()` をトランザクションの**外**（`db.transaction(...)`
+   * を呼ぶ前）で取ってはいけない。そうすると、**「`at` が
    * 早いのに、ロックは後から取った側」が起こる**——先に `new Date()` を呼んだ
    * 側がロック待ちで足止めされているあいだに、後から `new Date()` を呼んだ側が
    * 先にロックを取って読み書きを終えてしまう。すると `list()` の並び
    * （`at` 昇順）と「実際にロックを取って `select` した順」がずれ、`at` が早い
    * 行のほうが後から insert されて `comparedTo` の鎖が `at` の並びと一致しない
    * ——`selectArchiveRemovalTargets` は `at` 昇順に並べた配列上の隣接関係で
-   * 含有を推定するので、鎖と並びがずれれば同じように欺かれる（この Issue が
-   * 直そうとしている脆弱性がそのまま残る）。**⟹ `at` はロックを取った後、
+   * 含有を推定するので、鎖と並びがずれれば同じように欺かれる（ロックで塞ぎたい
+   * 誤判定がそのまま残る）。**⟹ `at` はロックを取った後、
    * `select` の直前で決める。** これで「ロックを取れた順」＝「`at` の順」＝
    * 「`list()` の並び」＝「`comparedTo` の鎖」が揃う。
    *
    * `body` / `fingerprint`（指紋）は `transcript` だけから決まり、順序に
    * 関わらないので、ロックの前で計算したままでよい。
    *
-   * **id が衝突したら枝番を上げる（#905）。** `stamp` はミリ秒精度なので、
+   * **id が衝突したら枝番を上げる。** `stamp` はミリ秒精度なので、
    * 同じセッションへ同じミリ秒に2回積むと id が衝突する。**`onConflictDoUpdate`
-   * はそれを黙って上書きしていた**——退避の回数が過少に数えられ、生ログが1本
-   * 消えた。いまは `onConflictDoNothing` ＋ `returning()` で「入ったか」を見て、
+   * では黙って上書きになる**——退避の回数が過少に数えられ、生ログが1本
+   * 消える。だから `onConflictDoNothing` ＋ `returning()` で「入ったか」を見て、
    * 0行なら `${base}-2.jsonl` → `${base}-3.jsonl` … と枝番を上げて**同じ
    * トランザクションの中で**やり直す。
    *
-   * ⚠️ **`onConflictDoUpdate` → `onConflictDoNothing` は振る舞いの変更である。**
-   * 既存の id を狙って `archive()` を呼ぶと、以前は上書きになったが、いまは
-   * 別の id の行が増える。**上書きが期待されていた経路は無い**——`id` は
+   * 既存の id を狙って `archive()` を呼ぶと別の id の行が増える。
+   * **上書きが期待されている経路は無い**——`id` は
    * この関数が生成するだけで、呼び出し側から渡す口が無い。
    *
-   * **衝突していない id の形は1文字も変わらない**ので、既存の行に移行は
-   * 要らない。**先頭が `sanitize(sessionId)` である性質も保たれる**（`id` の
-   * 前方一致 LIKE が主キーの btree に落ちる。#698 §6-5）。
+   * **先頭が `sanitize(sessionId)` である性質は保たれる**（`id` の
+   * 前方一致 LIKE が主キーの btree に落ちる）。
    *
    * **「直前」の選び方は「`at` が最大の行」の絞り込みだけを SQL に任せ、同着（同じ `at`）の
-   * tie-break は JS 側で行う（#908）。** 元は `.orderBy(desc(archive.at),
-   * desc(archive.id))` だったが、`desc(archive.id)` は **PostgreSQL の
+   * tie-break は JS 側で行う。** `.orderBy(desc(archive.at),
+   * desc(archive.id))` にしてはいけない。`desc(archive.id)` は **PostgreSQL の
    * 照合順（collation）依存**——本番と PGlite で同じ順になる保証が無い
    * うえ、`id` の字面順は `base-2.jsonl < base-3.jsonl < base.jsonl` と
    * 並ぶため、同じミリ秒に3本以上積むと1本目を「直前」だと誤認する
-   * （#908 本体。fs 側 `#findPreviousArchiveForSession` の doc と同じ理由）。
+   * （fs 側 `#findPreviousArchiveForSession` の doc と同じ理由）。
    * ⟹ SQL では「同じ `sessionId` のうち `at` が最大の行」だけを引き（`id` の
    * 順序は一切見ない。同着は最大でも `MAX_ARCHIVE_ID_ATTEMPTS` 本——上の枝番の
    * ループと同じ上限）、その中から `archiveIdBranch`（＝積んだ順。
    * `archive-id.ts` の doc）が最大の行を JS 側で選ぶ。**引く行は同着の本数
-   * だけ**で、同着が無ければ従来どおり1行である。
+   * だけ**で、同着が無ければ1行である。
    */
   async archive(sessionId: string, transcript: string): Promise<ArchiveWrite> {
-    // **積めない sessionId は、DB に触る前に3実装と同じ例外で断る（issue #2233）。**
-    // 以前はここを素通りし、`pg_advisory_xact_lock(…, hashtext(sessionId))` の時点で
-    // PostgreSQL の例外（NUL は `text` に入らない）で落ちていた。本文の NUL を除く
+    // **積めない sessionId は、DB に触る前に3実装と同じ例外で断る。**
+    // 素通りさせると、`pg_advisory_xact_lock(…, hashtext(sessionId))` の時点で
+    // PostgreSQL の例外（NUL は `text` に入らない）で落ちる。本文の NUL を除く
     // `stripNulls` とは扱いが違う——本文は中身で、sessionId は行を指す鍵である。
     assertArchivableSessionId(sessionId);
     const body = stripNulls(transcript);
-    // 指紋は生の本文で取る（上の doc。#1709）。保存する `body` は NUL を除いた値。
+    // 指紋は生の本文で取る（上の doc）。保存する `body` は NUL を除いた値。
     const fingerprint = fingerprintArchiveBody(transcript);
     return this.#db.transaction(async (tx) => {
-      // **同じ sessionId への archive() を直列化する（#1732）。** トランザクション
+      // **同じ sessionId への archive() を直列化する。** トランザクション
       // 終了で自動解放されるので unlock は不要。上の doc「塞ぎ方」参照。
       await tx.execute(
         sql`select pg_advisory_xact_lock(hashtext(${ARCHIVE_SESSION_LOCK_NAMESPACE}), hashtext(${sessionId}))`,
       );
-      // **`at` はロックを取った後で決める（#1732）。** 上の doc「⚠️」参照——
+      // **`at` はロックを取った後で決める。** 上の doc「⚠️」参照——
       // ここより前で `new Date()` を呼ぶと、ロック待ちの順と `at` の順がずれる。
       const at = new Date();
       const stamp = at.toISOString().replace(/[:.]/g, '-');
@@ -218,18 +214,17 @@ export class PgTranscriptArchive implements TranscriptArchive {
   }
 
   /**
-   * 新しい順（#698）。
+   * 新しい順。
    *
    * **`storedBytes` は `pg_column_size(body)` で測る。`length(body)` /
    * `octet_length(body)` は使わない。** あの2つは TOAST を展開して本文を
    * 丸ごと読む——100MB 級の行がある `archive` で、一覧を取るためだけに毎行
-   * それをやると Issue #698 の動機（本文を落とさずに大きさを知りたい）を
-   * この関数自身が壊す。`pg_column_size` は行内に収まった TOAST ポインタの
-   * サイズだけを見て、外部チャンクを取りに行かない——`body` に触れない
-   * ぶん、この一覧は軽い。
+   * それをやると、本文を落とさずに大きさを知りたいという動機を
+   * この関数自身が壊す。`pg_column_size` は本文を展開せず圧縮後の格納
+   * バイト数を返す——`body` に触れないぶん、この一覧は軽い。
    *
    * **同着（同じ `at`）の tie-break は SQL の `desc(archive.id)` に任せず、
-   * JS 側の `compareArchiveEntriesNewestFirst`（#908）に委ねる。** SQL 側は
+   * JS 側の `compareArchiveEntriesNewestFirst` に委ねる。** SQL 側は
    * `at` の降順だけを担う——`desc(archive.id)` は PostgreSQL の照合順
    * （collation）に依存するうえ、`id` の字面順は積んだ順と一致しない
    * （`archive()` の doc、`archive-id.ts` の doc と同じ理由）。
@@ -261,19 +256,19 @@ export class PgTranscriptArchive implements TranscriptArchive {
   }
 
   /**
-   * `sessionId` ごとの集計（#698）。**1問い合わせ、`GROUP BY session_id`。**
+   * `sessionId` ごとの集計。**1問い合わせ、`GROUP BY session_id`。**
    *
    * `body` には触れない（`pg_column_size` の理由は `list()` の doc と同じ）ので、
    * `archive` の heap 側だけを見る seq scan でも軽い——索引はいまも主キー
    * （`id`）だけで足りる。`rows` は tombstone 済みの行も数える（`list()` と
    * 同じく、消えるのは本文だけで行は残るため）。
    *
-   * `continuity`（#698 続き）は `count(*) filter (where continuity = '…')`
+   * `continuity` は `count(*) filter (where continuity = '…')`
    * を5本並べて、同じ1問い合わせの中で内訳まで数える——`body` はおろか行
    * そのものを JS 側へ引き上げない（fs / インメモリの `tallyArchiveContinuity`
    * とは違い、pg はここだけ集計を SQL 側に閉じる。`archive-continuity.ts` の
    * `tallyArchiveContinuity` の doc）。`absent` は `continuity is null`——
-   * 門（#873）より前に積まれた行、あるいは判定自体に失敗した行がここに入る
+   * 連続性の判定（門）より前に積まれた行、あるいは判定自体に失敗した行がここに入る
    * （`ArchiveContinuityTally` の doc。`unknown` との違いはそちらを見よ）。
    */
   async sessions(): Promise<ArchiveSessionSummary[]> {
@@ -314,7 +309,7 @@ export class PgTranscriptArchive implements TranscriptArchive {
   }
 
   async read(id: string): Promise<ArchiveRead> {
-    // 読むだけの口の NUL（issue #3011）。NUL を含む鍵の行は存在しえない（書き込みが断る）ので「無い」。DB に投げると NUL を含む text を受け付けずエラーになる。
+    // 読むだけの口の NUL。NUL を含む鍵の行は存在しえない（書き込みが断る）ので「無い」。DB に投げると NUL を含む text を受け付けずエラーになる。
     if (hasNul(id)) return { kind: 'missing' };
     const rows = await this.#db
       .select({
@@ -341,7 +336,7 @@ export class PgTranscriptArchive implements TranscriptArchive {
   }
 
   /**
-   * 末尾だけを読む（#1283 の OOM、読み出し側。`TranscriptArchive.readTail`）。
+   * 末尾だけを読む（OOM 対策、読み出し側。`TranscriptArchive.readTail`）。
    *
    * **`right(body, maxChars + 1)` で PostgreSQL 側に切らせる。** `read()` の
    * ように `body` 列をそのまま `select` すると、100MB 級の行では切る前に
@@ -352,10 +347,10 @@ export class PgTranscriptArchive implements TranscriptArchive {
    *
    * **`right()` は第2引数をコードポイント数（PostgreSQL の文字集合における
    * 文字数）で数える。** これは `readTail` interface doc が要求する
-   * 「`maxChars` はコードポイント数」（issue #1829）とちょうど一致するので、
-   * この実装は元から単位が合っている——直したのは fs・インメモリ・呼び出し側
-   * の `tailOf`（`clone.ts`）側（それらは以前 JS の `.length`＝UTF-16 コード
-   * 単位で数えていた）。サロゲートペア（JS 側の話）という概念自体を
+   * 「`maxChars` はコードポイント数」とちょうど一致するので、
+   * この実装は単位が合っている（fs・インメモリ・呼び出し側の `tailOf`
+   * （`clone.ts`）は JS の `.length`＝UTF-16 コード単位ではなくコードポイントで
+   * 数える）。サロゲートペア（JS 側の話）という概念自体を
    * PostgreSQL 側は持たないので、この関数はそれを割りようがない。
    *
    * **`+ 1` は「ちょうど `maxChars`」を避けるためである**（`readTail`
@@ -364,7 +359,7 @@ export class PgTranscriptArchive implements TranscriptArchive {
    * そのまま返すので、本文が `maxChars` 以下のときの契約（全文を返す）は
    * この `+ 1` があっても崩れない。
    *
-   * **tombstone の判定は `read()` と1文字も変えない**——`removedAt` だけで
+   * **tombstone の判定は `read()` と同じである**——`removedAt` だけで
    * 見て、本文の中身（空かどうか）は見ない。`removed` のときは `right(...)` の
    * 結果を無視する（`body` は既に `''` へ切り詰められている行なので、読んでも
    * 意味が無い）。

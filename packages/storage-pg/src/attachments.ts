@@ -61,7 +61,7 @@ function toMeta(row: MetaRow): AttachmentMeta {
 }
 
 /**
- * 添付ファイルの置き場（pg。#3111 段1a）。契約は `packages/core/src/attachment-contract.ts`。
+ * 添付ファイルの置き場（pg）。契約は `packages/core/src/attachment-contract.ts`。
  *
  * **`getMeta` と `prune` は `bytes` 列を読まない**（`getMeta` は `META_COLUMNS` だけを SELECT、
  * `prune` は `DELETE ... RETURNING id`）。
@@ -75,7 +75,7 @@ export class PgAttachmentStore implements AttachmentStore {
     this.#options = options;
   }
 
-  /** 期限内（`expiresAt` が今より後）。prune の `lte(expiresAt, now)` の逆で、ちょうどは期限切れ（#3522）。 */
+  /** 期限内（`expiresAt` が今より後）。prune の `lte(expiresAt, now)` の逆で、ちょうどは期限切れ。 */
   #notExpired() {
     return gt(attachments.expiresAt, this.#options.now?.() ?? new Date());
   }
@@ -143,7 +143,7 @@ export class PgAttachmentStore implements AttachmentStore {
     const conflicts = new Set<string>();
     if (queryable.length > 0) {
       // 1本の UPDATE … RETURNING が、行ごとの原子的な判定になる: 「いま未結び付け」の行だけがここで変わって返る。
-      // 同時に別の呼び出しが先に結んだ行は WHERE に当たらない（#3282）。
+      // 同時に別の呼び出しが先に結んだ行は WHERE に当たらない。
       const notExpired = this.#notExpired();
       const updated = await this.#db
         .update(attachments)
@@ -165,7 +165,7 @@ export class PgAttachmentStore implements AttachmentStore {
       if (rest.length > 0) {
         // 残りは、すでに同じ宛先へ結ばれている（冪等。新しくはない）か、別の宛先（conflicts）か、無い。
         // UPDATE は上でもう確定している。この SELECT が落ちたら、呼び手には `newlyBound` が届かないので、
-        // この呼びで新しく結んだ分をここで戻してから元の例外を投げ直す（#3592。戻しも落ちたら stderr へ1行残す）。
+        // この呼びで新しく結んだ分をここで戻してから元の例外を投げ直す（戻しも落ちたら stderr へ1行残す）。
         const others = await this.#db
           .select({
             id: attachments.id,

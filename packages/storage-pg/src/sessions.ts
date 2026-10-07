@@ -12,7 +12,7 @@ import { daemonState } from './schema.js';
 
 /**
  * 保存された JSON 文字列を読む。**行が無いのと違い、ここへ来るのは
- * 「行は在るのに読めなかった」場合だけである**（issue #1147）。
+ * 「行は在るのに読めなかった」場合だけである**。
  *
  * `JSON.parse` が投げたときも、`parse` がスキーマ不一致で `null` を返した
  * ときも、`noteSessionMaterialUnreadable` で跡を残したうえで `null` を
@@ -98,7 +98,7 @@ export class PgSessionRegistry implements SessionRegistry {
     if (raw === null) return null;
     // **壊れた1行で起動を止めない。** ここは resume 素材と同じ族（消えても記憶から
     // 戻る）なので、読めなければ「無い」へ倒す。**ただし跡は残す**
-    // （`parseStoredJson` の doc、issue #1147）。
+    // （`parseStoredJson` の doc）。
     return parseStoredJson(raw, '生ログの墓標（clone_transcript_grave）', (parsed) => {
       if (typeof parsed !== 'object' || parsed === null) return null;
       const archiveId = (parsed as { archiveId?: unknown }).archiveId;
@@ -151,7 +151,7 @@ export class PgSessionRegistry implements SessionRegistry {
     const raw = rows[0]?.value ?? null;
     if (raw === null) return null;
     // **壊れた1行で起動を止めない**（`getTranscriptGrave` と同じ理由。
-    // 跡を残すのも同じ、issue #1147）。
+    // 跡を残すのも同じ）。
     return parseStoredJson(raw, '再開素材を捨てた回の墓標（clone_lost_session）', (parsed) => {
       if (typeof parsed !== 'object' || parsed === null) return null;
       const { projectKey, sessionId } = parsed as {

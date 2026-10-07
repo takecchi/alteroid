@@ -45,7 +45,7 @@ export class PgCredentialVaultStore implements CredentialVaultStore {
        * **落とした行を黙って消さない**わけではない——ここは読みの口なので、
        * 降ろす集合から外すだけである。手で入れた行が効かないことは、
        * `GET /credentials` に出ない（＝指紋が出ない）ことに加えて、stderr の
-       * 跡（`describeSkippedCredentialRow`。issue #1740。**値は出さない**）でも
+       * 跡（`describeSkippedCredentialRow`。**値は出さない**）でも
        * 見える——fs 版が行ごとに `#read()` で出す跡と、同じ形にそろえてある。
        * DB 側は行が表そのものに残る（fs 版のように書き戻す必要はない——
        * ここは読みの口で、書き込みは `put()` の upsert/delete が別に扱う）。

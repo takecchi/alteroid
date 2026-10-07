@@ -5,39 +5,23 @@ import { toNumber } from './db.js';
 import { archive, commitments, inboxEvents, jobs, journal } from './schema.js';
 
 /**
- * 起動時の器の実寸とヒープの検知（#1283 の続き。段2）。
+ * 起動時の器の実寸とヒープの検知。
  *
- * #1284（`main` の `0070f92`）が、起動時に上限なしで `jsonb` 本文を全行読む口を
- * 1つ（`session_entries`）塞いだ。**その調査で、同じ形の口が #1283 のリストの
- * 外にもう2つ見つかっている**——`jobs.listJobs()`（冷たい起動では全行 stale に
- * なり、段2が `LIMIT` 無しの `SELECT id, job FROM jobs` に落ちる）と
- * `commitments.list({ includeClosed: true })`（`commitments.ts` の `list()` の
- * doc「pg 版は片付いた行を物理削除する経路を1つも持たない」——片付いた行を
- * 本文ごと全件読み、単調に伸び続ける）。
+ * 起動時に `jsonb` 本文を全行読む表（`jobs`・`commitments` など、単調に伸びうる表）が
+ * あるので、「起動した瞬間、その表は実際に何バイトなのか」を毎回の起動で見えるように
+ * する。落ちた後には読めない値なので、**落ちる瞬間のログと、起動1回につき1行の日誌の
+ * 両方に残す**（呼び出し側は `apps/daemon/src/storage.ts` の `openStorage()`。ヒープの
+ * 実測とその2つの出し先は `apps/daemon/src/boot-footprint.ts` が持つ——ここは pg の表を
+ * 測るところまで）。この実装は測るだけで、表の伸びそのものは塞がない。
  *
- * ⟹ 問題は「上限なしの口が何個あるか」ではなく、**「単調に伸び続け・削除経路を
- * 持たず・全件を本文ごと読む表が複数ある」という構造**である。**この構造そのもの
- * を塞ぐ実装はここには無い**——⛔ この PR は何も直していない（既存の口を1つも
- * 塞いでいない）。塞ぐ前に、まず「起動した瞬間、その表は実際に何バイトなのか」を
- * 毎回の起動で見えるようにする。落ちた後には読めない値なので、**落ちる瞬間の
- * ログと、起動1回につき1行の日誌の両方に残す**（呼び出し側は
- * `apps/daemon/src/storage.ts` の `openStorage()`。ヒープの実測とその2つの出し先は
- * `apps/daemon/src/boot-footprint.ts` が持つ——ここは pg の表を測るところまで）。
+ * ## `pg_column_size` は「ポインタのサイズだけ」ではない
  *
- * ## ⚠️ 訂正の記録 — `pg_column_size` は「ポインタのサイズだけ」ではない
- *
- * この doc は当初「`pg_column_size` は行内に収まった TOAST ポインタのサイズ
- * だけを見て、外部チャンクを取りに行かない」と書いていた。**これは誤りである。**
- * レビューで本物の PostgreSQL 17（`.claude/skills/postgres-in-container/`）を
- * 立てて実測したところ、`pg_column_size` は**圧縮後の格納バイト数**を返しており
- * （TOAST されて外部へ出た値の生チャンクは確かに読みに行かないが、圧縮そのもの
- * は展開せずにサイズだけ見ている、という主張が誤りだった——実際には圧縮された
- * 状態のサイズをそのまま返す。「展開しない」は正しいが「ポインタのサイズだけ」
- * は正しくない）。**圧縮が効く本文（alteroid が実際に貯めている、日本語の定型文
- * が多い本文）では、実際のテキストサイズを大きく下回る値を返す**:
+ * `pg_column_size` は**圧縮後の格納バイト数**を返す（TOAST されて外部へ出た値の生チャンクは
+ * 読みに行かず、圧縮も展開しない）。**圧縮が効く本文（alteroid が実際に貯めている、
+ * 日本語の定型文が多い本文）では、実際のテキストサイズを大きく下回る値を返す**:
  *
  * ```
- * -- 本物の PostgreSQL 17（container 内。日本語の定型文の繰り返し、4000回）
+ * -- 本物の PostgreSQL 17（日本語の定型文の繰り返し、4000回）
  * pg_column_size(jsonb)        =     5,369 バイト（圧縮後・格納バイト）
  * octet_length(jsonb::text)    =   456,012 バイト（実テキスト。JSON.parse が見る量）
  * ⟹ 約85倍の過小申告
@@ -58,10 +42,6 @@ import { archive, commitments, inboxEvents, jobs, journal } from './schema.js';
  * （`textBytes`）の側で行う**（`apps/daemon/src/boot-footprint.ts` の
  * `tablesExceedingHeapShare`）——格納バイトを `heap_size_limit` と比べても
  * 意味が無い。
- *
- * ⚠️ **同じ穴が #1284 の `session-store.ts` の `measureSize`
- * （`sum(pg_column_size(entry))` を 512 MiB の予算と比べている）にも在る。**
- * ⛔ **この PR ではそちらを直さない**（範囲外。別 PR の領分）。
  *
  * ## 契約（`session-store.ts` の `measureSize` と同じ形。踏襲している）
  *
@@ -425,7 +405,7 @@ async function measureArchiveFootprint(
 }
 
 /**
- * 起動時の器の実寸を測る（#1283、段2）。**本文は Node のメモリへ載せない。**
+ * 起動時の器の実寸を測る。**本文は Node のメモリへ載せない。**
  *
  * 5つの表（区分）を独立に測る——1つが投げても（`statement_timeout` で
  * 打ち切られた場合を含め）他は測り続ける（上のファイル doc「測定は起動を

@@ -32,7 +32,7 @@ import { practices, practiceVersions } from './schema.js';
  * 不正な行を要約する。**`issue.message` は使わない**——zod の既定メッセージが
  * 将来 `received`（実際の値）を含む形に変わっても、ここを通す限り値は漏れない。
  * 出すのは「どの欄が」だけである（`PgScheduleStore` の `summarizeInvalidFields`
- * と同じ理由・同じ形。issue #1944 / #2011。パッケージを跨いだ共通化はしていない）。
+ * と同じ理由・同じ形。パッケージを跨いだ共通化はしていない）。
  */
 function summarizeInvalidFields(issues: readonly { path: readonly PropertyKey[] }[]): string {
   const fields = [
@@ -45,7 +45,7 @@ function summarizeInvalidFields(issues: readonly { path: readonly PropertyKey[] 
  * `list()` で飛ばした行を stderr へ1行で要約する。**slug 以外の値は絶対に
  * 載せない**——`title` / `content` には人間・クローンの自由文がそのまま
  * 入りうる（`FsPracticeStore.describeSkippedPracticeRow` /
- * `PgScheduleStore.describeSkippedScheduleRow` と同じ理由。issue #2011）。
+ * `PgScheduleStore.describeSkippedScheduleRow` と同じ理由）。
  */
 function describeSkippedPracticeRow(params: { slug: string; reason: string }): string {
   return `alteroid: practices の不正な行を読み飛ばしました（slug=${JSON.stringify(params.slug)}、${params.reason}）`;
@@ -67,11 +67,11 @@ function describeSkippedPracticeVersionRow(params: {
 }
 
 /**
- * `chars`（本文の文字数、コードポイント数）を導出する SQL 式（#1340）。
+ * `chars`（本文の文字数、コードポイント数）を導出する SQL 式。
  *
  * **列に保存しない。** `content` から一意に決まる値を別の列にも持つと、
  * 書き手が片方だけ更新したときに黙ってずれる形が構造として残る（改名前の
- * `bytes` 列がまさにそれだった経緯は Issue #1340 コメント参照）。
+ * `bytes` 列がまさにそれだった）。
  *
  * `char_length` は PostgreSQL では UTF8 データベースでコードポイント数を返す
  * ——JS の `[...content].length`（fs 版、`FsPracticeStore` の `countChars`）と
@@ -87,7 +87,7 @@ const charsExpr = sql<number>`char_length(${practices.content})`;
 const versionCharsExpr = sql<number>`char_length(${practiceVersions.content})`;
 
 /**
- * 仕事のやり方（#1055 段3）。fs 版と同じ IF を満たすための別の器であって、
+ * 仕事のやり方。fs 版と同じ IF を満たすための別の器であって、
  * 器の違いで能力差を作らない（クラウドでだけ人間がやり方を直せない、が起きない）。
  *
  * ## 列に切って入れている（jsonb 1列にしていない）
@@ -112,8 +112,8 @@ export class PgPracticeStore implements PracticeStore {
 
   /**
    * `entries` は slug の昇順。**不正な行は `entries` に入れず、`unreadable` に別欄で
-   * 返す**（issue #2346。以前は黙って飛ばしていた）。stderr の跡（issue #2011）は
-   * そのまま残し、`read(slug)` はこれまでどおり投げる。DB の行そのものには触れない。
+   * 返す**（黙って飛ばさない）。stderr の跡も
+   * 残し、`read(slug)` は投げる。DB の行そのものには触れない。
    * `unreadable` は slug（列から取れる）と不正な欄名だけを持ち、題・本文は載せない。
    */
   async list(): Promise<PracticeList> {
@@ -155,14 +155,14 @@ export class PgPracticeStore implements PracticeStore {
   /**
    * **`list()` とは違い、読めない行は投げる**（`PracticeStore.read` の doc
    * 「無ければ null。読めないは throw」。`FsPracticeStore.read` と同じ形・
-   * 同じ理由。issue #2011）。**投げる型は `UnreadablePracticeError`
+   * 同じ理由）。**投げる型は `UnreadablePracticeError`
    * （`@alteroid/core`）**——`PUT`/`DELETE /practices/:slug`
    * （`apps/daemon/src/app.ts`）と `practice_write`/`practice_remove`
    * （`packages/core/src/tools.ts`）が `instanceof` で見分け、「在ったが
    * 読めない」として書き直し・削除まで進むため。
    */
   async read(slug: string): Promise<Practice | null> {
-    // 読むだけの口の NUL（issue #3011）。NUL を含む slug のやり方は存在しえない（書き込みはスキーマが弾く）ので「無い」。
+    // 読むだけの口の NUL。NUL を含む slug のやり方は存在しえない（書き込みはスキーマが弾く）ので「無い」。
     if (hasNul(slug)) return null;
     const rows = await this.#db
       .select({
@@ -207,8 +207,8 @@ export class PgPracticeStore implements PracticeStore {
     options?: WritePracticeOptions,
   ): Promise<Practice> {
     // **正規化を自分で書かない。** 出所は `@alteroid/core` の
-    // `ensureTrailingNewline` 1箇所である（`PracticeStore.write` の doc と #370）。
-    // 本文（kind・title・content）の NUL は、検証の前に落として残す（issue #3011）。slug は下のスキーマが弾く。
+    // `ensureTrailingNewline` 1箇所である（`PracticeStore.write` の doc）。
+    // 本文（kind・title・content）の NUL は、検証の前に落として残す。slug は下のスキーマが弾く。
     const content = ensureTrailingNewline(stripNul(input.content));
     const now = new Date();
     // 本文も題も人間かクローンが書いた自由文なので NUL が混ざりうる。
@@ -225,15 +225,15 @@ export class PgPracticeStore implements PracticeStore {
         updatedAt: now.toISOString(),
       }),
     );
-    // ⭐ **本体の upsert と、版の追記を1つのトランザクションに畳む（#1309）。**
+    // ⭐ **本体の upsert と、版の追記を1つのトランザクションに畳む。**
     // 途中で落ちたときに「本体は書き変わったが版は増えていない」という食い違いを
     // 作らないため（`PracticeStore.write` の doc）。
     const ifMatch = options?.ifMatch;
     const written = await this.#db.transaction(async (tx) => {
-      // **前提の版つき（Issue #2853）。比較は書き込みと同じトランザクションの中で、
+      // **前提の版つき。比較は書き込みと同じトランザクションの中で、
       // 行をロックしてから行う**（読んでから書くと、その間の別の書き手を見逃す）。
       // 行が無い（`ifMatch: null` を含む）ときは、下の `onConflictDoNothing` が
-      // 「同時に作った別の書き手」を弾く。`ifMatch` を持たない書き手は従来どおり upsert。
+      // 「同時に作った別の書き手」を弾く。`ifMatch` を持たない書き手は無条件に upsert する。
       if (typeof ifMatch === 'string') {
         const locked = await tx
           .select({ kind: practices.kind, title: practices.title, content: practices.content })
@@ -290,7 +290,7 @@ export class PgPracticeStore implements PracticeStore {
         throw new Error(`やり方 ${value.slug} を書けなかった`);
       }
 
-      // ⭐ **書いた後の本文を版として追記する（#1309）。** 番号は
+      // ⭐ **書いた後の本文を版として追記する。** 番号は
       // 「この slug の既存の版の最大値 + 1」——`remove()` は版を消さないので
       // （`remove()` の doc）、消して作り直しても続きから振られる。
       const maxRows = await tx
@@ -338,13 +338,13 @@ export class PgPracticeStore implements PracticeStore {
     if (hasNul(slug)) return;
     const key = this.#slug(slug);
     const ifMatch = options?.ifMatch;
-    // **版は消さない**（`PracticeStore.remove` の doc、#1309）——`practices`
+    // **版は消さない**（`PracticeStore.remove` の doc）——`practices`
     // からだけ消し、`practiceVersions` には触れない。
     if (ifMatch === undefined) {
       await this.#db.delete(practices).where(eq(practices.slug, key));
       return;
     }
-    // 前提の版つき（Issue #2923）。`write` と同じく、行をロックして比べてから消すのを
+    // 前提の版つき。`write` と同じく、行をロックして比べてから消すのを
     // 1つのトランザクションに畳む（版は kind / title / content の JSON のハッシュで、
     // SQL の1文では書けないため。比較と DELETE の間に別の書き手は割り込めない）。
     const current = await this.#db.transaction(async (tx) => {
@@ -363,10 +363,10 @@ export class PgPracticeStore implements PracticeStore {
   }
 
   async clear(): Promise<number> {
-    // **版もここでは消す**（`PracticeStore.clear` の doc、#1309）——ワークスペース
+    // **版もここでは消す**（`PracticeStore.clear` の doc）——ワークスペース
     // リセット専用の操作で、人間が明示的に「全部忘れる」と決めたときにしか呼ばれない。
     //
-    // **1つのトランザクションで束ねる（issue #1955。#1929 と同じ形）。** 束ねないと
+    // **1つのトランザクションで束ねる。** 束ねないと
     // 2文目（`practiceVersions`）が落ちたときに1文目（`practices`）の DELETE だけが
     // 確定してしまい、呼び手は例外を受けて「何も消えていない」と読みうる。
     return this.#db.transaction(async (tx) => {
@@ -378,7 +378,7 @@ export class PgPracticeStore implements PracticeStore {
 
   /**
    * ある slug の版の一覧（メタだけ）。版番号の昇順。**不正な版の行は返さない**
-   * （issue #2011。`list()` と同じ「読めるものだけを返し、投げない」線——版の
+   * （`list()` と同じ「読めるものだけを返し、投げない」線——版の
    * 一覧は個々の版の存在を保証する契約ではないので、`readVersion()` のような
    * 「読めない」throw とは別に扱う。`FsPracticeStore.listVersions` と同じ形）。
    */
@@ -425,7 +425,7 @@ export class PgPracticeStore implements PracticeStore {
   /**
    * 版を1つ、本文まで読む。**`listVersions()` とは違い、読めない行は投げる**
    * （`PracticeStore.readVersion` の doc「無ければ null。読めないは throw」と
-   * 同じ線。issue #2011）。**投げる型は `read()` と同じ `UnreadablePracticeError`**
+   * 同じ線）。**投げる型は `read()` と同じ `UnreadablePracticeError`**
    * （`version` も持つ）。
    */
   async readVersion(slug: string, version: number): Promise<PracticeVersion | null> {

@@ -29,11 +29,11 @@ type AgentTokenRow = typeof agentTokens.$inferSelect;
 /**
  * 不正な値を要約する。**`issue.message` は使わない**——zod の既定メッセージが
  * 将来 `received`（実際の値）を含む形に変わっても、ここを通す限り値は漏れ
- * ない（実測 2026-09-29: この repo の zod 版では enum の既定メッセージは
- * 値そのものを含まない形だったが、それに依存しない）。出すのは「どの欄が」
+ * ない（この repo の zod 版では enum の既定メッセージは
+ * 値そのものを含まない形だが、それに依存しない）。出すのは「どの欄が」
  * だけである（fs 側 `packages/storage-fs/src/token-pool.ts` の
  * `summarizeInvalidFields` / `PgScheduleStore` の同名関数と同じ理由・同じ
- * 形。パッケージを跨いだ共通化はしていない。issue #2053）。
+ * 形。パッケージを跨いだ共通化はしていない）。
  */
 function summarizeInvalidFields(issues: readonly { path: readonly PropertyKey[] }[]): string {
   const fields = [
@@ -57,7 +57,7 @@ function toRow(token: AgentToken) {
     order: token.order,
     disabledAt: token.disabledAt === undefined ? null : new Date(token.disabledAt),
     cooldownUntil: token.cooldownUntil ?? null,
-    // **null は「出所を言えない」である**（#683。`default` で埋めない）。
+    // **null は「出所を言えない」である**（`default` で埋めない）。
     cooldownSource: token.cooldownSource ?? null,
     lastRejectedAt: token.lastRejectedAt === undefined ? null : new Date(token.lastRejectedAt),
     lastRejectedReason: token.lastRejectedReason ?? null,
@@ -99,7 +99,7 @@ function fromRow(row: AgentTokenRow): AgentToken {
 }
 
 /**
- * 認証トークンのプールの置き場（クラウド段。Issue #393「PR1 プールの器」）。
+ * 認証トークンのプールの置き場（クラウド段）。
  *
  * fs 版（`~/.alteroid/tokens.json`）と同じものの器違いである——**回さない**の
  * 約束も同じ。この表を runner から読ませない（`auth-and-access` / `env_profile`
@@ -122,7 +122,7 @@ export class PgTokenPoolStore implements TokenPoolStore {
   }
 
   /**
-   * **常に空**（issue #2346。`TokenPoolStore.listUnreadable` の doc）。pg は行を正規化した
+   * **常に空**（`TokenPoolStore.listUnreadable` の doc）。pg は行を正規化した
    * 列で持つので、fs のように「形が合わない行」を作れない——`fromRow` は知らない
    * `cooldownSource` の語を落とすだけで、その行は読めている（「出所を言えない」が
    * 正しい）。`source = 'env'` の行を読み捨てるのは廃止した概念の残骸であって、
@@ -134,7 +134,7 @@ export class PgTokenPoolStore implements TokenPoolStore {
   }
 
   /**
-   * **常に空を返す**（issue #2354。`TokenPoolStore.removeUnreadable` の doc）。
+   * **常に空を返す**（`TokenPoolStore.removeUnreadable` の doc）。
    * 読めない行を持てないので、消すものが無い。
    */
   async removeUnreadable(): Promise<string[]> {
@@ -146,7 +146,7 @@ export class PgTokenPoolStore implements TokenPoolStore {
    * 入る形を作らない（片方の行だけ古い・新しいが混ざると、`order` の一意性も
    * 「全部消えて全部戻る」という約束も崩れる）。
    *
-   * **fs 実装とは違い、持ち越す「読めない行」が無い**（issue #2354。fs は読めない行を
+   * **fs 実装とは違い、持ち越す「読めない行」が無い**（fs は読めない行を
    * 持ち越す——`FsTokenPoolStore.replace` の doc）。pg は正規化された列で持つので
    * 読めない行を作れず、`listUnreadable()` は常に空である。そのため全消去して積み直しても
    * 失う読めない行は無く、意味は実装間で食い違わない。
@@ -163,7 +163,7 @@ export class PgTokenPoolStore implements TokenPoolStore {
   }
 
   /**
-   * **「無い」（既定値）と「読めない」（throw）を区別する**（issue #2053）。
+   * **「無い」（既定値）と「読めない」（throw）を区別する**。
    * `rotateOn` が版ずれ・手編集で enum の外になっている等、行はあるが
    * `tokenRotationPolicySchema` を通らないときは `UnreadableTokenSettingsError`
    * を投げる——既定値へすり替えると、`off` にしてあった回転を実装が黙って
@@ -196,7 +196,7 @@ export class PgTokenPoolStore implements TokenPoolStore {
   }
 
   /**
-   * **「無い」（`null`）と「読めない」（throw）を区別する**（issue #2053）。
+   * **「無い」（`null`）と「読めない」（throw）を区別する**。
    * 列は `NOT NULL` だが、`tokenId`（空文字）・`generation`（負の数）は列の
    * 型では防げない——`activeAgentTokenSchema` を通らないときは
    * `UnreadableActiveTokenError` を投げる（`TokenPoolStore.readActive` の

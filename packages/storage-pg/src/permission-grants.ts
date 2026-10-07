@@ -35,16 +35,16 @@ function summarizeInvalidFields(issues: readonly { path: readonly PropertyKey[] 
 }
 
 /**
- * 読めなかった行を stderr へ1行で要約する（issue #2158。`list()` / `get()`
- * からも呼ぶようになったのは issue #2191）。**id 以外の値は絶対に載せない**
+ * 読めなかった行を stderr へ1行で要約する（`list()` / `get()` / `revoke()` /
+ * `markUsed()` から呼ぶ）。**id 以外の値は絶対に載せない**
  * ——`record` の欄には人間の依頼文・承認の回答の原文がそのまま入りうる
- * （`jobs.ts` の `describeUnreadableJobRow` の doc、#52 と同じ理由）。
+ * （`jobs.ts` の `describeUnreadableJobRow` の doc と同じ理由）。
  *
  * **呼び出し元によって「1回だけ」の扱いが違う。** `list()` / `get()` は
  * `#unreadableOnce`（`UnreadableRowOnce`）を通してから呼ぶので、同じ行には
  * インスタンスの生存中1回しか出ない。`revoke()` / `markUsed()` は素通しで
  * 毎回呼ぶ——名指しで触った操作の結果は、たとえ直前の `list()` で同じ行を
- * 知らせていても、その場で確実に知らせる（issue #2191 の要件）。
+ * 知らせていても、その場で確実に知らせる。
  */
 function describeUnreadableGrantRow(params: { id: string; reason: string }): string {
   return (
@@ -67,7 +67,7 @@ export class PgPermissionGrantStore implements PermissionGrantStore {
 
   /**
    * `list()` / `get()` が読めなかった行を、インスタンスの生存中「1回だけ」
-   * 知らせるための追跡器（issue #2191）。**`revoke()` / `markUsed()` の
+   * 知らせるための追跡器。**`revoke()` / `markUsed()` の
    * `describeUnreadableGrantRow` の呼び出しはこれを経由しない**——あちらは
    * 名指しで触った操作の結果を毎回知らせる、という別の約束のままにしてある
    * （このファイル冒頭の各メソッドの doc）。
@@ -103,7 +103,7 @@ export class PgPermissionGrantStore implements PermissionGrantStore {
 
   /**
    * `list()` が読み飛ばした行（`permissionGrantSchema` に合わない `record`）を、本文を含まない形
-   * （id と不正な欄名だけ）で返す（`PermissionGrantStore.listUnreadable` の doc。issue #2536）。
+   * （id と不正な欄名だけ）で返す（`PermissionGrantStore.listUnreadable` の doc）。
    * `record` の中身（`allows` / `answer` など）は取り出さない——id は列から取る。
    */
   async listUnreadable(): Promise<UnreadablePermissionGrant[]> {
@@ -121,7 +121,7 @@ export class PgPermissionGrantStore implements PermissionGrantStore {
   }
 
   async get(id: string): Promise<PermissionGrant | null> {
-    // 読むだけの口の NUL（issue #3005）。NUL を含む id の行は存在しえない（`put` が断る）ので「無い」。
+    // 読むだけの口の NUL。NUL を含む id の行は存在しえない（`put` が断る）ので「無い」。
     // DB に投げると NUL を含む text を受け付けずエラーになる。
     if (hasNul(id)) return null;
     const rows = await this.#db
@@ -159,24 +159,23 @@ export class PgPermissionGrantStore implements PermissionGrantStore {
   }
 
   /**
-   * `PermissionGrantStore.revoke` の doc（lost update・#1654 と同型）。
+   * `PermissionGrantStore.revoke` の doc（lost update と同型）。
    * **1つのトランザクションの中で `select … for update` により行を押さえて
-   * から読み直し、書く**（`PgJobStore.updateJob` と同じ形——issue #2051）。
+   * から読み直し、書く**（`PgJobStore.updateJob` と同じ形）。
    *
    * **読めない行（`permissionGrantSchema` に合わない。版ずれ・手編集）は
-   * 行に触れない**（issue #2158）。**戻りは `null`（無い）ではなく
-   * `UnreadablePermissionGrantError` を投げる**（issue #2425。fs 実装と同じ線。
+   * 行に触れない。** **戻りは `null`（無い）ではなく
+   * `UnreadablePermissionGrantError` を投げる**（fs 実装と同じ線。
    * 投げても許可が余計に通ることは無い——読めない行は `list()` / `get()` に
    * 現れない）。
-   * 以前は `record`（jsonb）の中身を一切見ずに `jsonb_set` ＋ `coalesce` の
-   * 条件無し `UPDATE` で `revoked_at` / `record.revokedAt` を書き換えていた
-   * ため、読めない行にも書いたうえで戻り値だけ `null` にしていた——`fs` 実装
+   * `record`（jsonb）の中身を見ずに条件無しの `UPDATE` で書き換えると、
+   * 読めない行にも書いたうえで戻り値だけ `null` になり、`fs` 実装
    * （`FsPermissionGrantStore.revoke`。読めない行は `grants` に現れないので
-   * 触らずに `null`）と食い違っていた。跡は `describeUnreadableGrantRow` で
+   * 触らずに `null`）と食い違う。跡は `describeUnreadableGrantRow` で
    * stderr へ1行だけ残す（id とどの欄が不正かのみ。本文は出さない）。
    */
   async revoke(id: string, at: string): Promise<PermissionGrant | null> {
-    // NUL を含む id は「無い」（`get` と同じ。issue #3005）。
+    // NUL を含む id は「無い」（`get` と同じ）。
     if (hasNul(id)) return null;
     return this.#db.transaction(async (tx) => {
       const rows = await tx
@@ -211,9 +210,9 @@ export class PgPermissionGrantStore implements PermissionGrantStore {
   }
 
   /**
-   * 読めない行を id で指して消す（`PermissionGrantStore.removeUnreadable` の doc。issue #2440）。
-   * **pg の許可の記録も同じ穴を持つ**——`record`（jsonb）が `permissionGrantSchema` に合わない行を
-   * 作れ、`revoke` は `UnreadablePermissionGrantError` を投げて触らない（#2425）。
+   * 読めない行を id で指して消す（`PermissionGrantStore.removeUnreadable` の doc）。
+   * **pg の許可の記録も読めない行を持ちうる**——`record`（jsonb）が `permissionGrantSchema` に合わない行を
+   * 作れ、`revoke` は `UnreadablePermissionGrantError` を投げて触らない。
    *
    * 1. 指された id がすべて読めない行か確かめる（1つでも違えば何も消さず `unknown`）。
    * 2. 日誌（`beforeRemove`）を呼ぶ。**投げたら何も消さずに投げ直す。** トランザクションの
@@ -231,7 +230,7 @@ export class PgPermissionGrantStore implements PermissionGrantStore {
   ): Promise<RemoveUnreadableRowsResult> {
     const wanted = [...new Set(ids)];
     if (wanted.length === 0) return { kind: 'unknown', count: 0 };
-    // NUL を含む id の行は存在しえない（issue #3005）ので、DB へは投げず、読めない行に「無い」ものとして数える。
+    // NUL を含む id の行は存在しえないので、DB へは投げず、読めない行に「無い」ものとして数える。
     const queryable = wanted.filter((id) => !hasNul(id));
     const unknownCount = async (executor: Pick<Db, 'select'>, lock: boolean): Promise<number> => {
       if (queryable.length === 0) return wanted.length;
@@ -266,10 +265,10 @@ export class PgPermissionGrantStore implements PermissionGrantStore {
    * 他の欄には一切触れない）。既存より古い時刻では戻さない。
    *
    * **読めない行は「無い」と同じ `false` を返す。行にも触れない**
-   * （issue #2158。`revoke` の doc と同じ理由）。
+   * （`revoke` の doc と同じ理由）。
    */
   async markUsed(id: string, at: string): Promise<boolean> {
-    // NUL を含む id は「無い」（`get` と同じ。issue #3005）。
+    // NUL を含む id は「無い」（`get` と同じ）。
     if (hasNul(id)) return false;
     return this.#db.transaction(async (tx) => {
       const rows = await tx
@@ -290,9 +289,9 @@ export class PgPermissionGrantStore implements PermissionGrantStore {
         return false;
       }
       const current = parsed.data;
-      // 取り消し済みなら記録しない（Issue #1687）。
+      // 取り消し済みなら記録しない。
       if (current.revokedAt !== undefined) return false;
-      // 既存より古い時刻では戻さない。実時刻で比べる（Issue #3095。文字列で比べると、
+      // 既存より古い時刻では戻さない。実時刻で比べる（文字列で比べると、
       // オフセット表記の `lastUsedAt` より実時刻で後の `Z` の時刻が「古い」と読まれる）。
       if (current.lastUsedAt !== undefined && compareIsoInstant(current.lastUsedAt, at) >= 0)
         return true;

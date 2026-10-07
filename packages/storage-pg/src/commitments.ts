@@ -15,7 +15,7 @@ import { stripNulls } from './db.js';
 import { commitments } from './schema.js';
 
 /**
- * 行が読めなければ落とさずに投げる。**`get(id)` 専用**（issue #296 以降。下記）。
+ * 行が読めなければ落とさずに投げる。**`get(id)` 専用**（下記）。
  *
  * **他のストア（jobs / journal）と作法が違うのは意図的である。** あちらは1行壊れても
  * 一覧が返るべき記録だが、こちらは「まだ片付いていない仕事」そのものなので、読めない
@@ -26,15 +26,11 @@ import { commitments } from './schema.js';
  * 開く**（しかも「忘れた」ことに誰も気づけない。fs 版なら例外で表に出る）。
  * fs 版（ファイル全体を `parse` する）と同じく、壊れた永続状態は表に出す。
  *
- * **⚠️ throw そのものは意図的である（理由は上の段落）。問題はそこではなく、
- * 未知の enum 値（例えば `origin`）でもここへ落ちること。** `list()`（下）は
- * try/catch なしで `map` しているため、未知の enum 値が1件でも入ると、
- * 1行ではなく一覧が丸ごと落ちる。→ issue #296
- *
- * **issue #296 で直したのは `list()` 側であって、この関数ではない。**
- * `get(id)` は単票であり、守るべき一覧が無い。「無い（`null`）」と「読めない
- * （throw）」の区別は `get` にとって依然として意味があるので、ここはそのまま
- * throw する。1行読めなくても一覧は返る、という直しは `list()` が
+ * **throw そのものは意図的である（理由は上の段落）。** 一覧（`list()`）には使わない。
+ * 未知の enum 値（例えば `origin`）が1件でも入ると、1行ではなく一覧が丸ごと
+ * 落ちてしまうからである。`get(id)` は単票であり、守るべき一覧が無い。「無い
+ * （`null`）」と「読めない（throw）」の区別は `get` にとって意味があるので、
+ * ここは throw する。1行読めなくても一覧は返る、という扱いは `list()` が
  * `commitmentSchema.safeParse` を行ごとに使う形で別に持つ（下の
  * `splitReadableRows`）。
  *
@@ -53,8 +49,7 @@ function parseCommitment(id: string, value: unknown): Commitment {
 
 /**
  * `list()` の行ごとの読み出し。**`parseCommitment` と違い、1行が読めなくても
- * 投げない** — 読めた行は `entries` へ、読めなかった行は `unreadable` へ回す
- * （issue #296）。
+ * 投げない** — 読めた行は `entries` へ、読めなかった行は `unreadable` へ回す。
  *
  * **id と at は列（`commitments.id` / `commitments.at`）から取る。** jsonb の
  * 中身（`value`）が読めなくても、この2列は別に読めるという pg 版の強みを使う
@@ -122,7 +117,7 @@ export class PgCommitmentStore implements CommitmentStore {
 
   async list(options?: { includeClosed?: boolean }): Promise<CommitmentList> {
     // 未了は古い順。齢が判断の材料なので、放置されているものから見せる
-    // 同じ at は入れた順（`seq`。issue #3285。fs / in-memory の安定整列と同じ）。
+    // 同じ at は入れた順（`seq`。fs / in-memory の安定整列と同じ）。
     const openRows = await this.#db
       .select({ id: commitments.id, at: commitments.at, commitment: commitments.commitment })
       .from(commitments)
@@ -135,14 +130,14 @@ export class PgCommitmentStore implements CommitmentStore {
     // 常に未了扱いで安全側へ倒すため `includeClosed` の真偽に関わらず出す
     // （`storage-fs/src/commitments.ts` の doc に差を明記してある）。
     //
-    // **`trimmedClosed` は常に `0`（issue #416）。** pg 版は片付いた行を
+    // **`trimmedClosed` は常に `0`。** pg 版は片付いた行を
     // 物理削除する経路を1つも持たない——`close()` の契約（「行は消さない」）
     // を破っていないので、0 は「削除を数えていない」ではなく「削除が
     // 起きていない」を正しく表す（`CommitmentList.trimmedClosed` の doc、
     // `packages/core/src/store.ts`）。
     if (options?.includeClosed !== true) return { ...open, trimmedClosed: 0 };
 
-    // 閉じた側も同じ closedAt は入れた順の昇順（fs / in-memory の安定整列と同じ。issue #3285）
+    // 閉じた側も同じ closedAt は入れた順の昇順（fs / in-memory の安定整列と同じ）
     const closedRows = await this.#db
       .select({ id: commitments.id, at: commitments.at, commitment: commitments.commitment })
       .from(commitments)
@@ -157,7 +152,7 @@ export class PgCommitmentStore implements CommitmentStore {
   }
 
   async get(id: string): Promise<Commitment | null> {
-    // 読むだけの口の NUL（issue #3011）。NUL を含む鍵の行は存在しえない（書き込みが断る）ので「無い」。DB に投げると NUL を含む text を受け付けずエラーになる。
+    // 読むだけの口の NUL。NUL を含む鍵の行は存在しえない（書き込みが断る）ので「無い」。DB に投げると NUL を含む text を受け付けずエラーになる。
     if (hasNul(id)) return null;
     const rows = await this.#db
       .select({ commitment: commitments.commitment })
@@ -179,7 +174,7 @@ export class PgCommitmentStore implements CommitmentStore {
    * 二度呼ばれるのが普通**であり、上書きすれば一度片付けた仕事が開き直る。
    * `on conflict do nothing` は判定と書き込みが1操作なので、割り込む隙間が無い。
    *
-   * ## ⭐ 同一マネージャー×同一本文×未了も開かない（issue #1041）
+   * ## ⭐ 同一マネージャー×同一本文×未了も開かない
    *
    * **ここだけがプロセスを跨いでも原子である。** fs と in-memory の排他はプロセスの
    * 中にしか無いが（`CommitmentStore.open` の doc）、本番の記憶ストアは PostgreSQL
@@ -192,7 +187,7 @@ export class PgCommitmentStore implements CommitmentStore {
    * ここは2段構えにしてある：
    *
    * 1. **`where not exists`（この文の中）** — 直列に来た同文を畳む。判定と挿入が
-   *    1文なので、呼び出し側が読んでから書く形（#1041 そのもの）にはならない。
+   *    1文なので、呼び出し側が読んでから書く形にはならない。
    *    **比較は `body` の全文**で、fs / in-memory（`findOpenManagerDuplicate`）と
    *    1文字も違わない
    * 2. **部分 unique 索引 `commitments_open_manager_body_idx`（`migrate.ts`）** —
@@ -211,7 +206,7 @@ export class PgCommitmentStore implements CommitmentStore {
    * **⚠️ 索引が無い DB でも、この文はそのまま正しく動く**（1 だけが効く＝直列の
    * 畳み込みは守られ、同時の2件目だけがすり抜ける）。`migrate` は既存の重複行が
    * 在ると索引を作らずに警告して進むので（`ensureOpenManagerBodyIndex`）、
-   * **その状態でも台帳は #1035 以前へは戻らない。**
+   * **その状態でも直列の重複は畳まれる。**
    *
    * 何が起きたかは `returning` と2つの補助列で見分ける：
    *
@@ -220,12 +215,12 @@ export class PgCommitmentStore implements CommitmentStore {
    * - どちらも null で `id_seen` が真 ⟹ 同じ id が既に在った
    * - どちらも null で `id_seen` が偽 ⟹ `on conflict` が同時の相手に弾かれた（主キーか
    *   索引かは、この文のスナップショットには相手の行が無いので分からない）。
-   *   **別の文で読み直して見分ける**（#2922）: 同じ id が在れば「既に在った」、
+   *   **別の文で読み直して見分ける**: 同じ id が在れば「既に在った」、
    *   同文の未了が在れば「畳んだ」（その id を `foldedInto` へ）。読み直しても
    *   居なければ `foldedInto` を空のまま返す——**嘘の id を埋めない**
    */
   async open(entry: Commitment): Promise<CommitmentOpenResult> {
-    // id（鍵）の NUL は断る（issue #3011）。落とすと別の行を指すので、`stripNulls` の前に見る。
+    // id（鍵）の NUL は断る。落とすと別の行を指すので、`stripNulls` の前に見る。
     assertNoNul('commitment.id', entry.id);
     // 依頼の本文は人間かクローンが書いた自由文なので NUL が混ざりうる
     const value = stripNulls(commitmentSchema.parse(entry));
@@ -277,8 +272,8 @@ export class PgCommitmentStore implements CommitmentStore {
     // スナップショットには相手の行が見えなかったときだけである。** 衝突したのは
     // 主キー（同じ id）か、部分 unique 索引（同一マネージャー×同一本文）のどちらかで、
     // `do nothing` は両方を区別せず吸う。**区別せずに「畳んだ」と返すと、同じ id の
-    // 並行 open が「畳んだ」と誤報される（#2922。PGlite は単一接続で並行が重ならず
-    // 出なかった）。**
+    // 並行 open が「畳んだ」と誤報される（PGlite は単一接続で並行が重ならず
+    // 出ない）。**
     //
     // `on conflict` は相手の取引が終わるまで待ってから弾くので、弾かれた時点で相手の行は
     // コミット済みである。**別の文で読み直せば（READ COMMITTED は文ごとに
@@ -313,7 +308,7 @@ export class PgCommitmentStore implements CommitmentStore {
    * **ここは `CommitmentStore.close` の契約をそのまま守っている。** 保持上限も
    * 削除経路も1つも持たないので、`list()` が返す `trimmedClosed` は常に `0`
    * である。**fs 版（`storage-fs/src/commitments.ts`）はこの契約を守れていない
-   * ——`CLOSED_HISTORY_LIMIT` を超えた古い片付き行を物理削除する**（issue #416）。
+   * ——`CLOSED_HISTORY_LIMIT` を超えた古い片付き行を物理削除する**。
    *
    * `where ... and closed_at is null` で「まだ閉じていない」の検査を更新そのものへ
    * 畳んである。読んでから書く形にすると、二重に届いた片付けが両方 `true` を返し、
@@ -324,7 +319,7 @@ export class PgCommitmentStore implements CommitmentStore {
    * クローンが見る値は未了のままになる。
    *
    * **⚠️ 読めない行（`commitment` が `commitmentSchema` に合わない行）に対する
-   * 挙動は、fs 版とここで割れる（issue #296。「言えないこと」として書く）。**
+   * 挙動は、fs 版とここで割れる（「言えないこと」として書く）。**
    * ここ（pg 版）は `closed_at` が **jsonb（`commitment`）とは独立した列**
    * なので、`commitment` が読めない形でも `jsonb_set` は素の JSON 操作として
    * 通り、`where ... and closed_at is null` も列だけを見て判定できる。
@@ -348,7 +343,7 @@ export class PgCommitmentStore implements CommitmentStore {
    * 作りになっている、その一点だけである。
    */
   async close(id: string, at: string, reason: string, by: CommitmentClosedBy): Promise<boolean> {
-    // 読むだけの口の NUL（issue #3011）。NUL を含む鍵の行は存在しえない（書き込みが断る）ので「無い」。DB に投げると NUL を含む text を受け付けずエラーになる。
+    // 読むだけの口の NUL。NUL を含む鍵の行は存在しえない（書き込みが断る）ので「無い」。DB に投げると NUL を含む text を受け付けずエラーになる。
     if (hasNul(id)) return false;
     const closedReason = stripNulls(reason);
     const closed = sql`jsonb_set(jsonb_set(jsonb_set(${commitments.commitment}, '{closedAt}', ${JSON.stringify(at)}::jsonb, true), '{closedReason}', ${JSON.stringify(closedReason)}::jsonb, true), '{closedBy}', ${JSON.stringify(by)}::jsonb, true)`;
@@ -362,8 +357,7 @@ export class PgCommitmentStore implements CommitmentStore {
   }
 
   /**
-   * 複数件を1回でまとめて片付いたことを記録する（issue #844。
-   * `CommitmentStore.closeMany` の doc）。
+   * 複数件を1回でまとめて片付いたことを記録する（`CommitmentStore.closeMany` の doc）。
    *
    * **`close()` と同じ筋——`where ... and closed_at is null` の条件付き
    * UPDATE、jsonb_set 3重——を `inArray` で複数 id へ広げただけの UPDATE 1本
@@ -395,7 +389,7 @@ export class PgCommitmentStore implements CommitmentStore {
     reason: string,
     by: CommitmentClosedBy,
   ): Promise<string[]> {
-    // NUL を含む id は「無い」ものとして数えない（issue #3011）。DB へは投げない。
+    // NUL を含む id は「無い」ものとして数えない。DB へは投げない。
     const queryable = ids.filter((id) => !hasNul(id));
     if (queryable.length === 0) return [];
     const closedReason = stripNulls(reason);
@@ -430,7 +424,7 @@ export class PgCommitmentStore implements CommitmentStore {
    * `stripNulls` を通す（NUL が混ざりうる）。
    */
   async editBody(id: string, body: string, at: string, by: CommitmentEditedBy): Promise<boolean> {
-    // 読むだけの口の NUL（issue #3011）。NUL を含む鍵の行は存在しえない（書き込みが断る）ので「無い」。DB に投げると NUL を含む text を受け付けずエラーになる。
+    // 読むだけの口の NUL。NUL を含む鍵の行は存在しえない（書き込みが断る）ので「無い」。DB に投げると NUL を含む text を受け付けずエラーになる。
     if (hasNul(id)) return false;
     const editedBody = stripNulls(body);
     const edited = sql`jsonb_set(jsonb_set(jsonb_set(${commitments.commitment}, '{body}', ${JSON.stringify(editedBody)}::jsonb, true), '{editedAt}', ${JSON.stringify(at)}::jsonb, true), '{editedBy}', ${JSON.stringify(by)}::jsonb, true)`;

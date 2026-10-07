@@ -9,11 +9,11 @@ import { mcpServers } from './schema.js';
 const MCP_SERVERS_ID = 'default';
 
 /**
- * 人間の MCP 連携の登録の置き場（クラウド段。#325 段1）。
+ * 人間の MCP 連携の登録の置き場（クラウド段）。
  *
  * fs 版（`~/.alteroid/mcp-servers.json`）と同じものの器違いである。**Railway では
  * これが唯一の置き場になる** —— volume が無いので、`.mcp.json` をファイルで
- * 置いても器と一緒に消える（#325 本文）。
+ * 置いても器と一緒に消える。
  *
  * **読むときにも検査する**（`FsMcpServerStore` と同じ理由）。jsonb は SQL から
  * 直接書き換えられるので、入口で見ただけでは足りない。
@@ -51,7 +51,7 @@ export class PgMcpServerStore implements McpServerStore {
       .insert(mcpServers)
       .values({ id: MCP_SERVERS_ID, servers, updatedAt: at })
       .onConflictDoUpdate({ target: mcpServers.id, set: { servers, updatedAt: at } });
-    // 保存する形は変えず、返すときだけ名前の順に並べる（issue #2927 項目6）。
+    // 保存する形は変えず、返すときだけ名前の順に並べる。
     return { mcpServers: sortMcpServers(servers), updatedAt: at.toISOString() };
   }
 }

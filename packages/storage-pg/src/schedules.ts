@@ -23,34 +23,29 @@ import { schedulePhases, schedules } from './schema.js';
 /**
  * 行が読めなければ、`get()` / `editRequest()` / `claimRun()` は落とさずに投げる。
  *
- * **`list()` だけは別**（issue #1944）——1行ずつ検査し、合わない行は一覧から
+ * **`list()` だけは別**——1行ずつ検査し、合わない行は一覧から
  * 外して stderr に跡を1行出す（`describeSkippedScheduleRow`。何 kind が・
  * どの欄が不正かだけを出し、`request` 等の本文は載せない）。DB の行そのもの
  * は消さない（`UPDATE` / `DELETE` をしない）——壊れた行は次の `list()` でも
  * 同じ跡を出し続ける。直すには `put()` で同じ kind を書き直すか、`remove()`
  * で消す。
  *
- * **他のストア（jobs / journal）と作法が違うのは、依然として意図的である。**
+ * **他のストア（jobs / journal）と作法が違うのは意図的である。**
  * あちらは1行壊れても一覧が返るべき記録だが、こちらは「いつ何を頼まれたか」
  * そのものなので、読めない行を**黙って**飛ばすと消された依頼と区別が付かなく
- * なる——というのが、fs 側で `jobs` / `approvals` を1行ずつ検査するように
- * そろえた #1928 の直しを、そのままここへは持ち込まなかった理由だった。
- *
- * **#1944 で `list()` を直した後も、この反論とは両立する。** 黙ってはいない
- * （跡が stderr に残る）し、行そのものも消えない——`get(kind)` は行が
- * `list()` から外れた後もまだ在るので、同じ理由でまだ投げる。区別が消えると
- * 具体的にこう壊れる: 発火した依頼の `get()` が `null` を返し、クローンは
- * 「人間が手で仕込んだ kind を起こした」と解釈して本文なしの曖昧なターンを
- * 走らせる（`clone.ts` が読取不能と `null` を分けている意味が無くなる）。この
- * 意味は `list()` を直した後も `get()` に残っている。fs 版（`FsScheduleStore`）
- * も #1944 で同じ形にそろえた——`list()` は行ごとに検査して壊れた行を跡付きで
- * 飛ばし、`get()` は壊れた行を kind で引かれたら投げる。
+ * なる。`list()` が黙っていない（跡が stderr に残る）し、行そのものも消えない
+ * ので両立するが、`get(kind)` は行が `list()` から外れた後もまだ在るので、
+ * 同じ理由で投げる。区別が消えると具体的にこう壊れる: 発火した依頼の `get()` が
+ * `null` を返し、クローンは「人間が手で仕込んだ kind を起こした」と解釈して
+ * 本文なしの曖昧なターンを走らせる（`clone.ts` が読取不能と `null` を分けている
+ * 意味が無くなる）。fs 版（`FsScheduleStore`）も同じ形にそろえてある——`list()` は
+ * 行ごとに検査して壊れた行を跡付きで飛ばし、`get()` は壊れた行を kind で引かれたら
+ * 投げる。
  */
 function parsePlan(kind: string, value: unknown): ScheduledRequest {
   const parsed = scheduledRequestSchema.safeParse(value);
   if (parsed.success) return parsed.data;
-  // issue #2177。文言はこの型を足す前と1文字も変えていない——`instanceof` で
-  // 見分けられるようにするだけである（`UnreadableScheduleError` の doc、
+  // `instanceof` で見分けられるよう専用の型で投げる（`UnreadableScheduleError` の doc、
   // `packages/core/src/store.ts`）。
   throw new UnreadableScheduleError(
     `継続中の依頼 ${kind} が読めない形で入っている（消されたのではない）: ${parsed.error.message}`,
@@ -73,7 +68,7 @@ function summarizeInvalidFields(issues: readonly { path: readonly PropertyKey[] 
 
 /**
  * `list()` で飛ばした行を stderr へ1行で要約する。**kind 以外の値は絶対に
- * 載せない**——`request` には人間の依頼文がそのまま入りうる（issue #1944）。
+ * 載せない**——`request` には人間の依頼文がそのまま入りうる。
  * `kind` は DB の列（`NOT NULL`）から来るので、常に文字列である
  * （fs 版のように「kind 自体が壊れている」ケースは無い）。
  */
@@ -96,8 +91,8 @@ export class PgScheduleStore implements ScheduleStore {
 
   /**
    * `entries` は kind の昇順。**不正な行は `entries` に入れず、`unreadable` に別欄で
-   * 返す**（issue #2343。以前は黙って飛ばしていた）。stderr の跡（issue #1944）は
-   * そのまま残し、`get(kind)` はこれまでどおり投げる（`parsePlan` の doc）。
+   * 返す**（黙って飛ばさない）。stderr の跡も
+   * 残し、`get(kind)` は投げる（`parsePlan` の doc）。
    * `unreadable` は kind（列から取れる）と不正な欄名だけを持ち、本文は載せない。
    */
   async list(): Promise<ScheduleList> {
@@ -121,7 +116,7 @@ export class PgScheduleStore implements ScheduleStore {
   }
 
   async get(kind: string): Promise<ScheduledRequest | null> {
-    // 読むだけの口の NUL（issue #3011）。NUL を含む鍵の行は存在しえない（書き込みが断る）ので「無い」。DB に投げると NUL を含む text を受け付けずエラーになる。
+    // 読むだけの口の NUL。NUL を含む鍵の行は存在しえない（書き込みが断る）ので「無い」。DB に投げると NUL を含む text を受け付けずエラーになる。
     if (hasNul(kind)) return null;
     const rows = await this.#db
       .select({ plan: schedules.plan })
@@ -136,7 +131,7 @@ export class PgScheduleStore implements ScheduleStore {
 
   async put(entry: ScheduledRequest): Promise<void> {
     // 依頼の本文は人間かクローンが書いた自由文なので NUL が混ざりうる
-    // kind の NUL は入口のスキーマが弾く。本文は、空になるものも含めて、落としてから検証する（issue #3011）。
+    // kind の NUL は入口のスキーマが弾く。本文は、空になるものも含めて、落としてから検証する。
     const value = stripNulls(
       scheduledRequestSchema.parse({ ...entry, request: stripNul(entry.request) }),
     );
@@ -160,13 +155,13 @@ export class PgScheduleStore implements ScheduleStore {
   }
 
   async remove(kind: string): Promise<void> {
-    // 読むだけの口の NUL（issue #3011）。NUL を含む鍵の行は存在しえない（書き込みが断る）ので「無い」。DB に投げると NUL を含む text を受け付けずエラーになる。
+    // 読むだけの口の NUL。NUL を含む鍵の行は存在しえない（書き込みが断る）ので「無い」。DB に投げると NUL を含む text を受け付けずエラーになる。
     if (hasNul(kind)) return;
     await this.#db.delete(schedules).where(eq(schedules.kind, kind));
   }
 
   /**
-   * `ScheduleStore.removeIfPresent` の doc（issue #1982）。pg の `remove()` は
+   * `ScheduleStore.removeIfPresent` の doc。pg の `remove()` は
    * もともと `DELETE … WHERE kind = …` で行の中身を見ないので、読めない行も
    * 元から消せていた（fs だけが壊れた行の穴を持っていた——`FsScheduleStore
    * .remove` の doc）。ここで新しく要るのは「消す前に在ったか・読めたか」を
@@ -175,7 +170,7 @@ export class PgScheduleStore implements ScheduleStore {
    * 隙間を作らないため）。
    */
   async removeIfPresent(kind: string): Promise<ScheduledRequest | 'unreadable' | null> {
-    // 読むだけの口の NUL（issue #3011）。NUL を含む鍵の行は存在しえない（書き込みが断る）ので「無い」。DB に投げると NUL を含む text を受け付けずエラーになる。
+    // 読むだけの口の NUL。NUL を含む鍵の行は存在しえない（書き込みが断る）ので「無い」。DB に投げると NUL を含む text を受け付けずエラーになる。
     if (hasNul(kind)) return null;
     const rows = await this.#db
       .delete(schedules)
@@ -188,7 +183,7 @@ export class PgScheduleStore implements ScheduleStore {
   }
 
   /**
-   * `request` / `spec` だけを差し替える（Issue #1654。`ScheduleStore.editRequest`
+   * `request` / `spec` だけを差し替える（`ScheduleStore.editRequest`
    * の doc）。**`claimRun` と同じ形——`for update` で押さえてから読み直した現在値
    * を引き継ぐ**ので、`pendingRun` / `lastRunAt` / `lastScheduledRunAt` は読んでから
    * 書くまでの間に割り込まれても消えない。`updatedAt` はここで進める（本文の編集
@@ -199,7 +194,7 @@ export class PgScheduleStore implements ScheduleStore {
     changes: { readonly request: string; readonly spec: ScheduleSpec },
     updatedAt: string,
   ): Promise<ScheduledRequest | null> {
-    // 読むだけの口の NUL（issue #3011）。NUL を含む鍵の行は存在しえない（書き込みが断る）ので「無い」。DB に投げると NUL を含む text を受け付けずエラーになる。
+    // 読むだけの口の NUL。NUL を含む鍵の行は存在しえない（書き込みが断る）ので「無い」。DB に投げると NUL を含む text を受け付けずエラーになる。
     if (hasNul(kind)) return null;
     return this.#db.transaction(async (tx) => {
       const rows = await tx
@@ -248,7 +243,7 @@ export class PgScheduleStore implements ScheduleStore {
     at: string,
     cause: 'schedule' | 'manual',
   ): Promise<ScheduledRequest | null> {
-    // 読むだけの口の NUL（issue #3011）。NUL を含む鍵の行は存在しえない（書き込みが断る）ので「無い」。DB に投げると NUL を含む text を受け付けずエラーになる。
+    // 読むだけの口の NUL。NUL を含む鍵の行は存在しえない（書き込みが断る）ので「無い」。DB に投げると NUL を含む text を受け付けずエラーになる。
     if (hasNul(kind)) return null;
     return this.#db.transaction(async (tx) => {
       const rows = await tx
@@ -280,7 +275,7 @@ export class PgScheduleStore implements ScheduleStore {
   }
 
   async completeRun(kind: string, at: string, cause: 'schedule' | 'manual'): Promise<void> {
-    // 読むだけの口の NUL（issue #3011）。NUL を含む鍵の行は存在しえない（書き込みが断る）ので「無い」。DB に投げると NUL を含む text を受け付けずエラーになる。
+    // 読むだけの口の NUL。NUL を含む鍵の行は存在しえない（書き込みが断る）ので「無い」。DB に投げると NUL を含む text を受け付けずエラーになる。
     if (hasNul(kind)) return;
     const cleared =
       cause === 'schedule'
@@ -301,7 +296,7 @@ export class PgScheduleStore implements ScheduleStore {
    * `null` を返すと「まだ一度も動いていない」と区別が付かず、位相が静かに捨てられる）。
    */
   async getPhase(kind: string): Promise<SchedulePhase | null> {
-    // 読むだけの口の NUL（issue #3011）。NUL を含む鍵の行は存在しえない（書き込みが断る）ので「無い」。DB に投げると NUL を含む text を受け付けずエラーになる。
+    // 読むだけの口の NUL。NUL を含む鍵の行は存在しえない（書き込みが断る）ので「無い」。DB に投げると NUL を含む text を受け付けずエラーになる。
     if (hasNul(kind)) return null;
     const rows = await this.#db
       .select({ phase: schedulePhases.phase })
@@ -318,7 +313,7 @@ export class PgScheduleStore implements ScheduleStore {
   }
 
   async putPhase(phase: SchedulePhase): Promise<void> {
-    // 位相の kind（鍵）の NUL は断る（issue #3011）。
+    // 位相の kind（鍵）の NUL は断る。
     assertNoNul('schedulePhase.kind', phase.kind);
     const value = schedulePhaseSchema.parse(phase);
     const updatedAt = new Date(value.lastRunAt ?? value.lastScheduledRunAt ?? Date.now());
@@ -334,7 +329,7 @@ export class PgScheduleStore implements ScheduleStore {
   /**
    * 継続中の依頼と既定の仕込みの位相を両方消す（`ScheduleStore.clear` の doc）。
    *
-   * **1つのトランザクションで束ねる（issue #1955。#1929 と同じ形）。** 束ねないと
+   * **1つのトランザクションで束ねる。** 束ねないと
    * 2文目（`schedulePhases`）が落ちたときに1文目（`schedules`）の DELETE だけが
    * 確定してしまい、呼び手は例外を受けて「何も消えていない」と読みうる。
    */
