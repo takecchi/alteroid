@@ -461,126 +461,13 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
     id: z.string(),
     at: isoDateTime,
     slug: memorySlugSchema,
-    /**
-     * 蒸留・人間の直接編集・クローンの書き込みのどれか。
-     *
-     * - **`'distill'`** — 蒸留のターンが書いた。**本セッションの蒸留ターン
-     *   （`conversation_end` / `shutdown`）と `pre_compact` のサイドクエリの
-     *   両方を含む**（`clone.ts` の `#toolContext` / `#distillFromTranscript`
-     *   の `memoryCause`）。
-     * - **`'clone'`** — **本セッションのクローンが書いた**（蒸留のターンでは
-     *   ない、人間の発言などに応じた通常のターン）。**この配線が入る前は
-     *   「クローン層が書いた」の意味で蒸留も含んでいた。** `optional` にした
-     *   `action` と同じ形の理由で、**既存のエントリは書き換えていない** —
-     *   だからこの配線より前の `cause: 'clone'` エントリは、蒸留か通常の
-     *   ターンかの区別を持たない。
-     * - **`'human'`** — 人間が API / CLI から直接書いた。書いているのは
-     *   `app.ts` の `PUT` / `DELETE /memory/:slug` の2箇所だけである。
-     *
-     * **この `cause: 'distill'` は台帳（`usage.ts`）の `site: 'distill'` と
-     * 同じ軸ではない。** `site` は `query()` 呼び出しごとの軸で、
-     * `usageSiteSchema` の doc が明言しているとおり `pre_compact` の
-     * サイドクエリだけを指す（本セッションの蒸留ターンの消費は `site:
-     * 'session'` に合算されて分離できない）。`cause` は本セッションの蒸留
-     * ターンも含むので、**この2つを突き合わせて数えても一致しない**
-     * （片方が壊れているわけではない）。
-     */
     cause: z.enum(['distill', 'clone', 'human']),
-    /**
-     * 「書いた」か「消した」かの機械可読な区別。
-     *
-     * **`optional` にしてあるのは、既存の日誌エントリを1件も壊さないため。**
-     * これが無いエントリは「この区別が導入される前の古いエントリ」を意味する
-     * （PR #144 と同じ形 — 機械可読な面が持たない区別を自由文の `summary` だけに
-     * 持たせると、日誌を辿って「消した記録」を数えたい側が文言に一致させる
-     * しかなくなる）。**`summary` の自由文は削らない**（人が読む説明を減らす
-     * ことと機械可読な区別を足すことは別である）。
-     *
-     * **`'describe'`** — `memory_frontmatter_set`（#318 案 (a)）が frontmatter
-     * のキー（`description` / `type` / `parent`）だけを差し替えたときに書く。
-     * **`'write'` に畳まない** — `write` に畳むと「本文を全文置換した」と
-     * 「frontmatter のキーだけ直した」の区別が `summary` の自由文だけに
-     * 落ち、ここまでの3値がそうしてきたのと同じ理由で数え上げにくくなる
-     * （このコメント自身がその理由を書いている）。この値を読むのは3箇所
-     * だけである——`deriveHumanTouchedAtFromJournal`（`memory.ts`。`remove`
-     * だけ除外するので `describe` は対象に含まれる。`memory_frontmatter_set`
-     * は `cause:'human'` を書ける経路ではないので実際には影響しない）、
-     * `deriveMemoryCreatedAtFromJournal`（`memory.ts`。`write` だけを対象に
-     * するので `describe` は自動で対象外——`memory_frontmatter_set` は
-     * 文書を作らない口なので、これは正しい）、`dropped-record.ts`（文字列に
-     * 混ぜるだけ）。網羅的に分岐する `switch` は無い。
-     *
-     * **`'move_in'` / `'move_out'`** — `memory_section_move`（#318 案 (b)）が
-     * 節を1つ、別の文書へ移したときに書く。**1回の移動で2件のエントリが
-     * 出る**（`memory_update` は slug ごとの記録なので、2文書が動けば2件で
-     * ある）。移し先が `move_in`、出どころが `move_out`。
-     *
-     * - **`'write'` / `'remove'` に畳まない。** 畳むと「全文置換した」と
-     *   「節を1つ移した」、「文書ごと消した」と「節を1つ出した」の区別が
-     *   `summary` の自由文だけに落ちる（上の `describe` と同じ理由）
-     * - **2つに分ける（`'move'` 1つにしない）。** 1つにすると、2件のうち
-     *   どちらが「増えた側」でどちらが「減った側」かを `bytesBefore` /
-     *   `bytesAfter` の大小から**推測する**ことになる。推測が要らない形に
-     *   しておく（節が空に近ければ大小はほとんど動かない）
-     * - **⚠️ `deriveMemoryCreatedAtFromJournal` は `write` だけを見るので、
-     *   `move_in` で新しく生まれた文書の `createdAt` の根拠は日誌に残らない。
-     *   それで足りる**——`createdAt` の**第一の出所は日誌ではなくストアの
-     *   書き込み経路そのもの**であり（`PersonaStore.markCreatedAt` の doc:
-     *   「`createdAt` の第一の出所はこのメソッドではない」）、3実装とも
-     *   `append` が文書を作った瞬間に値を立てる（実装を引いて確かめた:
-     *   `testing.ts` の `append` は `write` へ委譲し `before === undefined`
-     *   で set、`storage-fs` の `append` は `#writeNow` へ委譲し
-     *   `before === null` で set、`storage-pg` の `append` は
-     *   `ON CONFLICT` の `set` に `created_at` を含めないので新規挿入時
-     *   だけ入る）。`deriveMemoryCreatedAtFromJournal` が担うのは
-     *   **その配線より前に作られた昔の行の後始末だけ**である
-     * - `deriveHumanTouchedAtFromJournal` は `remove` 以外を含めるので
-     *   `move_in` / `move_out` は対象に入るが、`memory_section_move` は
-     *   `cause:'human'` を書ける経路ではないので実際には影響しない
-     *   （`describe` と同じ）
-     */
+    // `optional` にする: 既存の日誌エントリを1件も壊さないため（`summary` の自由文は削らない）
+    // `describe` を `write` に畳まず、`move_in` / `move_out` を `write` / `remove` にも `move` 1つにも畳まない: 区別が自由文だけに落ちる／増えた側と減った側をバイト数の大小から推測することになるため
     action: z.enum(['write', 'append', 'remove', 'describe', 'move_in', 'move_out']).optional(),
-    /**
-     * 「どれだけ失ったか」の機械可読な面。バイト数（`Buffer.byteLength` 相当）。
-     *
-     * **`optional` にしてあるのは、既存の日誌エントリを1件も壊さないため**
-     * （`action` と完全に同じ形・同じ理由）。これが無いエントリは「この区別が
-     * 導入される前の古いエントリ」を意味する。
-     *
-     * **`memory_delete`（`action: 'remove'`）は既に文字数を `summary` の自由文
-     * （「削除直前 N 文字」）へ埋め込んでいたが、機械可読な面には出ていなかった**
-     * — `action` の doc が警告している形そのもの（PR #144 と同じ形 — 機械可読な
-     * 面が持たない区別を自由文の `summary` だけに持たせると、日誌を辿って
-     * 「どれだけ失ったか」を数えたい側が文言に一致させるしかなくなる）。
-     * **`summary` の自由文からは既存の「（削除直前 N 文字）」を消さない** —
-     * 人が読む説明を減らすことと機械可読な区別を足すことは別である。
-     *
-     * - `write`: 置き換え前の文書のバイト数（無ければ新規作成なので `0`）
-     * - `append`: 追記前の文書のバイト数（無ければ `0`）
-     * - `remove`: 消す直前のバイト数
-     * - `describe`: frontmatter を差し替える前の文書のバイト数
-     *   （`memory_frontmatter_set` は既存文書にしか使えないので、新規作成は
-     *   起こらない）
-     * - `move_in`: 節を足す前の移し先の文書のバイト数（無ければ `0`）
-     * - `move_out`: 節を切り取る前の出どころの文書のバイト数
-     */
     bytesBefore: z.number().int().nonnegative().optional(),
-    /**
-     * 書き込み後のバイト数。
-     *
-     * - `write` / `append`: 書き込み後の文書のバイト数
-     * - `remove`: 常に `0`（実体が無くなるため）
-     * - `move_in`: 節を足した後の移し先の文書のバイト数
-     * - `move_out`: 節を切り取った後の出どころの文書のバイト数
-     * - `describe`: frontmatter を差し替えた後の文書のバイト数
-     */
     bytesAfter: z.number().int().nonnegative().optional(),
     summary: z.string(),
-    /**
-     * 承認への回答（`human_answer`）から起きたターンの中で書いた行なら、その
-     * 承認の id（issue #847 の案B）。意味と読み方は `exchange.answeredApprovalId`
-     * の doc に在る——ここに写さない。
-     */
     answeredApprovalId: z.string().optional(),
   }),
   z.object({
@@ -589,56 +476,19 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
     at: isoDateTime,
     date: z.string(),
     body: z.string(),
-    /**
-     * **この行は日報の代わりに置いた印であって、日報ではない。** 入っているのは
-     * 「なぜ書けなかったか」である。
-     *
-     * ## なぜ印が必要か（印が無いと再試行が死ぬ）
-     *
-     * 日報を作るターンが上限で死ぬと、`clone.ts` の `#dailyReport` は本文なしで
-     * 1件書いていた。その1件が**2か所で「日報がある日」として数えられる**:
-     *
-     * - `clone.ts` の `#dailyReport`（同じ日付の日報があれば早期 return）
-     * - `schedule.ts` の `missingDailyReportDates`（起動時の後追いの対象から外す）
-     *
-     * 上限に当たった合図は保持され、枠が開いたら配り直される（`clone.ts` の
-     * `#pump` の `finally`）。**つまり再試行は来る。** ところが来たときには
-     * 代替文の行が既にあるので、どちらの経路も「もう書いた」と判断して
-     * **本物の日報が永久に書かれない**。プレースホルダが再試行を殺していた。
-     *
-     * この印があると、人間には「その日に何かあった」ことが見えたまま、機構は
-     * 「まだ書けていない」と数えられる。**両方を同時に満たす唯一の形**である
-     * （書かなければ人間から消え、印なしで書けば再試行が死ぬ）。
-     *
-     * **`body` を空にして代用しないこと。** 空文字は「書けなかった」と
-     * 「クローンが空文字を書いた」を区別しない。
-     */
+    // `body` を空にして代用しない: 「書けなかった」と「クローンが空文字を書いた」を区別できず、日報がある日として数えられて再試行が「もう書いた」と判断し、本物の日報が永久に書かれないため
     unavailable: z.string().optional(),
   }),
   z.object({
     type: z.literal('external_event'),
     id: z.string(),
     at: isoDateTime,
-    /** どこから届いたか（webhook の呼び出し元が名乗る名前）。 */
     source: z.string(),
-    /** 連携の鍵経由で届いたとき、その鍵の id と名前（#3113）。鍵の値は書かない。 */
     via: z.object({ keyId: z.string(), name: z.string() }).optional(),
-    /** この出来事に添えた添付の参照（#3113 段3。**メタデータだけで、中身は日誌に書かない**）。 */
     attachments: z.array(attachmentRefSchema).optional(),
-    /**
-     * 届いた中身。長いものは切って入る。
-     *
-     * 要約ではなく中身を落とすのは、日誌が「何かあったときに掘る」層だからである
-     * （PRD「可観測性」）。何が届いたのか分からない記録は掘る役に立たない。
-     */
+    // 要約にしない: 日誌は「何かあったときに掘る」層で、何が届いたのか分からない記録は掘る役に立たないため
     summary: z.string(),
   }),
-  /**
-   * 委譲1区間ぶんの集計。**フィールドの意味と doc は `runner-protocol.ts` の
-   * `worker_wait` イベントに書いてある（二重管理を避けるためここには書き写さ
-   * ない）。** `id` / `at` はストア側が埋める（`at` は区間が閉じた時刻、
-   * `openedAt` が開いた時刻なので、区間の長さも後から出せる）。
-   */
   z.object({
     type: z.literal('worker_wait'),
     id: z.string(),
@@ -657,137 +507,22 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
     sources: z.record(z.string(), z.number().int().nonnegative()).optional(),
     settled: z.boolean(),
   }),
-  /**
-   * **ターン1回ぶんの消費の増分**（`usage.ts` の `UsageFold.delta`）。
-   *
-   * 台帳（`UsageStore`）は日 × actor × モデル × 層 × 場所の5軸に畳むので、
-   * 「今日いくら使ったか」は言えるが「**どのターンが高かったか**」は言えない
-   * （台帳の行は日単位でしか閉じない）。ここへ1ターン1行で残す。
-   *
-   * **なぜ台帳の軸を増やさずに日誌へ置いたかは PR 本文にある。** ここに書くのは
-   * この行1件が何を言えて何を言えないかだけである — 日誌を読む者はこの PR を
-   * 読んでいない。
-   *
-   * ## 「行が無い」理由は3つある。取り違えないこと
-   *
-   * 1. **増分が空**（`delta` が `{}`）。同じ累積の再送などで実際に増分が
-   *    無かった回（`clone.ts` の `#recordUsage` / `manager.ts` の
-   *    `case 'usage'` が書かない）。
-   * 2. **台帳へ積めなかった**（記録の失敗）。**両層とも日誌に跡が残る**
-   *    （非対称を事実として書いたのは #131、解消したのは #133。経緯は
-   *    #133 の PR 本文にある） —
-   *    マネージャー層は `case 'usage'` の `catch` が `exchange with=manager`
-   *    として日誌に残し、クローン層は `#recordUsage` の `catch` が
-   *    `exchange with=self` として日誌に残す（どちらも文言は
-   *    「消費を台帳へ記録できなかった（この分は集計に出ない）」で揃えてある）。
-   *    クローン層は stderr（`noteDroppedRecord`）も併せて残す — 台帳の
-   *    失敗そのものを名指しする跡は stderr 側にしか無い（日誌への追記も
-   *    失敗した場合、`exchange` の行自体も書かれず、`#journal` のフォール
-   *    バックが別の文言で stderr に残るため）。**つまりこの2番の回でも、
-   *    日誌への追記そのものがさらに失敗した稀な場合を除き、`turn_usage` は
-   *    無いが `exchange with=self`（クローン層）／`with=manager`
-   *    （マネージャー層）は残る。**
-   * 3. **ターンが失敗して終わった**（`isSuccessResult` が偽）。`models` の
-   *    doc を見よ — これが最も誤読を招きやすい形である。
-   *
-   * これで全て。`#recordUsage` の早期 return（1・3）と `case 'usage'` の
-   * `try`/`catch`（2）を読めば数え上げが閉じる。
-   *
-   * **これは「行が無い」理由であって、「行の中の欄が無い」理由ではない。**
-   * `contextUsage` / `compactions` / `mainLoopUsage` は行が在っても個別に
-   * 無いことがある —— それぞれの doc に理由がある（取り違えないこと）。
-   *
-   * - `id` / `at` はストアが埋める（他の型と同じ）。
-   */
   z.object({
     type: z.literal('turn_usage'),
     id: z.string(),
     at: isoDateTime,
-    /** どの層か。台帳と同じ語を使う（モデル id で代用しない。`usage.ts` の `usageLayerSchema`）。 */
     layer: usageLayerSchema,
-    /**
-     * どの `query()` 呼び出しか。**起点（`cause`）とは別の軸である。** 発意
-     * tick を契機に回ったターンも、人間との会話のターンも、同じ
-     * `site: 'session'` に入る。「どの起点が高かったか」を言うには別の軸が
-     * 要るが、この PR では足していない（測って要るかを判断する。PR 本文）。
-     */
     site: usageSiteSchema,
-    /** 誰の分か（マネージャーの id か `CLONE_ACTOR_ID`）。台帳の `managerId` と同じ値。 */
     managerId: z.string(),
-    /** SDK のセッション id（取れたときだけ）。生ログへ降りる鍵。 */
     sessionId: z.string().optional(),
-    /**
-     * モデル別の増分。**合計に潰さないこと。**
-     *
-     * **これはそのターンの「請求額」ではない。** `usage.ts` の
-     * `usageSiteSchema` の doc（「## どの層にも出てこない消費がある」）が言う
-     * とおり、`modelUsage` には compaction など内部の呼び出しが混ざっており
-     * 分離できない。逆に permission classifier / token-count probe のような、
-     * **台帳のどの層にも出てこない消費もある**（同 doc）。
-     *
-     * ## これは「このターンの消費」ではなく「前回成功した result からの増分」である
-     *
-     * `#recordUsage` と `case 'usage'` はどちらも `isSuccessResult(message)`
-     * が偽の result を無条件に捨てる（`runner.ts` の既存コメント —
-     * 「絞っても取りこぼさない。値は累積なので、失敗した回のぶんも次の成功が
-     * 運んでくる」）。**これは台帳（合計）については正しいが、1ターン1行の
-     * 増分にとっては意味が変わる** — 失敗して終わったターン（上限に当たって
-     * 落ちた回を含む）は行を1件も作らず、**その消費は次に成功したターンの
-     * `models` へ合算されて現れる。**
-     *
-     * つまり `turn_usage` の1行が高いのを見たとき、それは「そのターンだけが
-     * 高かった」ではなく「直前に失敗したターンが無かったか」を確かめないと
-     * 判断できない。突き合わせ先は日誌の `exchange`（クローン層は
-     * `with: 'self'` / `with: 'human'` で `#reportFailure` が書く。マネージャー
-     * 層は `with: 'manager'` に加え `ManagerSummary.lastFailure` — 報告の本文
-     * だけでは失敗と判定できない回があるため）。**この注意は下の `reset` の
-     * 注意と同じ種類である。** どちらも「この行の `models` を素朴に合計すると
-     * 間違える」という形をしている。
-     *
-     * `cacheReadInputTokens` と `cacheCreationInputTokens` を分けたまま持つ
-     * ことで、「キャッシュの書き直しに払っているのか」が推測ではなく事実として
-     * 分かる。ここを合計に潰すと、その区別が消える。
-     */
+    // 合計に潰さない: `cacheReadInputTokens` と `cacheCreationInputTokens` を分けないと、キャッシュの書き直しに払っているのかが推測になるため
     models: z.record(z.string(), usageTotalsSchema),
-    /**
-     * 数え直し（resume / `/clear` で SDK 側の累積が0から始まった）を挟んだ
-     * ターンの印。
-     *
-     * **これが付いた行の `models` は差分ではなく、新しい累積の先頭である**
-     * （`usage.ts` の `foldUsageSnapshot` — 「数え直しを検知したときの増分は
-     * スナップショットの全量」）。他の行と同じ扱いで合計へ足すと、記録済みの
-     * 分を二重に数える。**`models` の doc の「前回成功した result からの増分」
-     * の注意と同じ種類 — どちらも素朴に合計すると間違える。**
-     *
-     * **付いていないことは「数え直しが起きなかった」ではない。** 検知は
-     * `usage.ts` の `detectReset` の2条件（モデルの値が減った／基準にあった
-     * モデルが消えた）に基づく判定であって、この2条件に当たらない数え直しは
-     * 検出されない。「このターンでは検出されなかった」であって「起きなかった」
-     * ではない。
-     */
     reset: z
       .object({
         fromCostUsd: z.number().nonnegative(),
         toCostUsd: z.number().nonnegative(),
       })
       .optional(),
-    /**
-     * ターンの境界で聞いた文脈窓の占有。形と各欄の doc は
-     * {@link contextUsageObservationSchema}（このファイルの上のほう。
-     * `#967` でクローン層とマネージャー／ランナー層の共有スキーマへ
-     * 括り出した）を見よ——二重に書かない。
-     *
-     * **⚠️ Issue #976 以降、これはもう文脈占有の唯一の置き場ではない。**
-     * `turn_usage` の行は消費の増分がある回（＝ターンが成功し、`fold.delta`
-     * が非空の回）にしか書かれないため、ここへ相乗りさせている限り、
-     * 増分が無い回（失敗したターン・増分がゼロだった回）は文脈占有も
-     * ろとも落ちていた——それが #976 の欠陥である。**独立の
-     * `context_usage`（このファイルの下のほう）が、観測できた回すべてを
-     * 無条件に残す。** この欄は既存の読み手（`journal_read`・Web の日誌
-     * フィード）との互換のため、「成功して増分もあった回」に限り従来どおり
-     * 書き続ける——2つの型のうち `context_usage` のほうが完全な記録で、
-     * こちらはその部分集合（重複あり）だと考えてよい。
-     */
     contextUsage: contextUsageObservationSchema.optional(),
     /**
      * このターンの中で起きた compaction（SDK の
@@ -835,34 +570,9 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
         }),
       )
       .optional(),
+    // 台帳には `result.usage` を使わない: 「メインループだけ」で、per-turn が合計か直近1回ぶんかをこの文言が決めていないため（台帳は `modelUsage` を使う）
     /**
-     * `result.usage`（`NonNullableUsage`）の写し。**`modelUsage` とは別物で、
-     * 台帳には使わない**（`usage.ts` の `modelUsageOf` の doc「`result.usage`
-     * は使わない」）。
-     *
-     * ## これは何のために置いたか、いつ消してよいか
-     *
-     * SDK の型コメント（`@anthropic-ai/claude-agent-sdk@0.3.261` の
-     * `sdk.d.ts` の `SDKResultSuccess.usage`）はこう言う（逐語）——
-     *
      * **「MAIN AGENT LOOP ONLY — excludes Task subagent, sidechain, and auxiliary model calls, and is per-turn in streaming-input sessions. Prefer modelUsage for token/cost accounting」** [sdk-verbatim SDKResultSuccess.usage]
-     *
-     * **「メインループだけ」は分かるが、「streaming-input セッションで
-     * per-turn」が (i) そのターンの API 呼び出しを合計した値なのか (ii)
-     * 直近1回ぶんだけなのかを、この文言は決めていない。** `modelUsageOf`
-     * の doc が言うとおり、台帳には `modelUsage`（作業者・compaction を
-     * 含む「正しい」側）を使っており、`result.usage` は使っていない ——
-     * ここへ運ぶのは台帳の代わりではなく、**この問いに決着を付けるための
-     * 観測**である。
-     *
-     * **決着したら、この欄は落とす。** (i)（累積合計）だと分かった時点で、
-     * `models`（`modelUsage` の差分）と重複するだけの欄になる —— 消す判断は
-     * 実測を見た者に委ねる。この PR 自身はどちらであるかを実機で確かめて
-     * いない（型とコメントだけを根拠にした暫定の観測である）。
-     *
-     * **モデル別ではなく1本**（`result.usage` 自体がモデルを跨がない単一の
-     * 形のため）。`costUsd` を持たない —— `NonNullableUsage` はコストの欄を
-     * 持たない。
      */
     mainLoopUsage: z
       .object({
@@ -873,242 +583,35 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
       })
       .optional(),
   }),
-  /**
-   * ターンの境界で聞いた文脈窓の占有を、**消費（`turn_usage`）とは独立に**
-   * 必ず残す記録（Issue #976）。
-   *
-   * ## なぜ `turn_usage` に相乗りさせないか
-   *
-   * `turn_usage` の行は消費の増分が実際にある回にしか書かれない
-   * （上の `models` の doc「行が無い理由は3つある」）。文脈占有は消費とは
-   * 別の観測軸なので、消費の行に相乗りしている限り、消費が無い回
-   * （ターンが失敗して終わった回・増分がゼロだった回）で文脈占有もろとも
-   * 落ちる——それが #976 の欠陥そのものである。
-   *
-   * ## いつ書くか
-   *
-   * `#observeContextUsage()` が値を返した回（`error` 付きの「試して失敗
-   * した」を含む）は、**ターンの成否にも消費の増分の有無にも関係なく必ず
-   * 書く。** 書かないのは観測そのものが `undefined`（`Query` が既に無かった
-   * 等）の回だけである（`contextUsageObservationSchema` の doc の3値と
-   * 同じ区別）。
-   *
-   * ## 既存の `turn_usage.contextUsage` との関係
-   *
-   * **この型は `turn_usage.contextUsage` を置き換えない。追加である。**
-   * ターンが成功して増分もあった回（＝ `turn_usage` の行が書かれる回）は、
-   * 引き続き `turn_usage.contextUsage` にも同じ値が載る——既存の読み手
-   * （`journal_read`・Web の日誌フィード）を壊さないため。**この型が
-   * 実際に増やすのは、そこから漏れていた2つの回**（ターンが失敗した回・
-   * 増分がゼロだった回）だけである。1ターンで両方の行が書かれることは
-   * あるが（成功して増分もあった回）、それは意図した重複であって欠陥では
-   * ない——`turn_usage` 側は「消費と一緒に見たいとき」、この型は
-   * 「文脈占有だけを取りこぼしなく辿りたいとき」に使う。
-   */
+  // `turn_usage` に相乗りさせない: 消費の行は増分がある回にしか書かれず、失敗したターン・増分がゼロだった回の文脈占有が落ちるため
   z.object({
     type: z.literal('context_usage'),
     id: z.string(),
     at: isoDateTime,
-    /** どの層か。`turn_usage` と同じ語を使う（`usage.ts` の `usageLayerSchema`）。 */
     layer: usageLayerSchema,
-    /** どの `query()` 呼び出しか。`turn_usage.site` と同じ軸。 */
     site: usageSiteSchema,
-    /** 誰の分か（マネージャーの id か `CLONE_ACTOR_ID`）。台帳・`turn_usage` と同じ値。 */
     managerId: z.string(),
-    /** SDK のセッション id（取れたときだけ）。生ログへ降りる鍵。 */
     sessionId: z.string().optional(),
-    /**
-     * そのターンが成功したか（`usage.ts` の `isSuccessResult`）。
-     *
-     * **`false` の行こそがこの型の存在理由である。** #976 が直すまで、
-     * 失敗したターンの文脈占有はどこにも残らなかった——#931 が必要として
-     * いるのは、まさにこの `false` の行である。
-     */
     turnSucceeded: z.boolean(),
-    /** 形と各欄の doc は {@link contextUsageObservationSchema} を見よ。二重に書かない。 */
     contextUsage: contextUsageObservationSchema,
   }),
-  /**
-   * 受信箱（`InboxStore` / `Inbox`）の到着・配達・消し込み・滞留を、ターンの
-   * 境界で1行にして日誌へ残す（Issue #783 段0「測るだけ」）。
-   *
-   * ## なぜ在るか
-   *
-   * #783 が名指しした穴はこうである——**#703 が着地した後に受信箱の重複が
-   * 実際に減ったか**、推移を測る経路がどこにも無い。`describeInboxBacklog`
-   * （`inbox-backlog.ts`）が出す内訳は**その1ターンでクローンが見るだけの
-   * 一過性の文字列**で、どこにも残らない——日誌の `tool_use` 行は `input`
-   * しか持たず、道具の出力を1文字も書かない。⟹ いま在るのはスナップショット
-   * だけで、`journal_read` で辿れる**推移**がどこにも無かった。
-   *
-   * この型は1行が1つの窓（前回この型の行を書いてから今回まで）を語る。
-   * 複数行を時系列に辿れば、到着・配達・消し込みの推移になる。
-   *
-   * ## 4つの軸は、別のものを数えている——食い違いは欠陥ではない
-   *
-   * - **`arrived`** — この窓に `Clone#post` が**受理**した数
-   *   （`clone.ts` の `#remember` ＝ `InboxStore.put` を呼んだ回数）。
-   *   **「受理した瞬間」であって「書けた時刻」ではない**（`post()` の doc
-   *   「受理した時点で未読として書き出す」——書き込み自体は非同期で、失敗
-   *   しても post は落とさない。受理と永続化の成功の間には窓が残る）。
-   * - **`delivered`** — この窓に**メモリ上の待ち行列（`Inbox`）へ実際に
-   *   載った**数（`#inbox.push` の呼び出し回数）。クローンのターンを
-   *   起こしうる数、という意味で `arrived` とは別の軸である。
-   * - **`settled`** — この窓に `#forget`（＝ `InboxStore.remove` が成功した
-   *   回）を通った数。**「ターンが処理し終えて消した」だけを数えていない**
-   *   ——`#forget` は同じ tick の重複を畳んで吸収したとき・拾い直した合図が
-   *   もう意味を持たないと判定して捨てたとき（`inbox-staleness.ts` の
-   *   `restoredInboxEventVerdict`）にも呼ばれる。この欄が答えるのは
-   *   「ストアから消えた回数」であって「ターンで処理された回数」ではない。
-   * - **`pending`** — 窓の**終わりの1点**（`InboxStore.pending()` の戻り値
-   *   そのまま）。窓の中の最大でも平均でもない。
-   *
-   * ## `delivered` が `arrived` / `pending` と食い違う理由（Issue #1049）
-   *
-   * 3つは別のものを数えているので、一致しないことがある。既知の経路:
-   *
-   * - `#restoreUnread`（器の入れ替えを跨いだ拾い直し）が配る分は、**この窓に
-   *   `arrived` していない**のに `delivered` には入る——受理は前の器（か、
-   *   もっと前）の窓で既に数えられていて、いま数えられるのは配達だけである。
-   * - `redeliveryGate` が「いま配る意味が無い」と畳んだ分は `delivered` に
-   *   **入らない**（`#inbox.push` を呼ばない ＝ ターンを起こさない。
-   *   `#foldGatedRedelivery` が跡を残す側）。
-   * - `inbox_remove_many`（`POST /inbox/remove`。`InboxStore.removeMany` を
-   *   直接呼ぶ一括削除）で消えた行が、消えた後もメモリ上の待ち行列に残って
-   *   いれば、**ストアには無いのに `delivered` には数えられる**——Issue
-   *   #1049 はこの経路そのものを疑っている（実測: 02:54:59Z に27件を
-   *   `inbox_remove_many` で消した16分後、そのうち2件に対応する合図が
-   *   「配り直しである（1回目の配達）」として届いた。その間ずっと
-   *   `pending` は「未処理1件」のままだった）。
-   * - **受信箱の畳み込み（Issue #954 の受信箱側。`clone.ts` の
-   *   `#foldIntoPendingCollapse`）が畳んだ分は `arrived` に入らない**——
-   *   `#remember` を呼ばないからである（この欄の定義が「`#remember` を
-   *   通った回数」である以上、これは欠陥ではなく定義どおりの挙動である）。
-   *   **⚠️ そのうえで、畳み先が2つに分かれることを読む側は知っている必要が
-   *   ある**（`clone.ts` の `PendingCollapseVerdict`）:
-   *   - `manager_message`（429 の連投など）は**行もターンも畳む**ので、
-   *     `arrived` にも `delivered` にも入らない。⟹ **この族の連投は、この
-   *     行からは丸ごと見えない。**見えるのは畳んだ旨を1件ずつ残す日誌の
-   *     `exchange` 行のほうである。
-   *   - デーモン自身の `external`（`token-pool` の復帰通知など）は**行だけ
-   *     畳んで待ち行列へは入れる**（issue #841 の束ね読みを残すため）ので、
-   *     **`arrived` に入らないのに `delivered` には入る。**
-   *   **⛔ ⟹ 下の「読み方」を、この経路と取り違えないこと。** `delivered`
-   *   が `arrived` を上回る形は #1049（ストアと待ち行列の食い違い）でも
-   *   この畳み込みでも出るが、**意味は正反対である**——#1049 は「消したのに
-   *   配っている」（壊れている）、こちらは「器に積まずに配っている」
-   *   （意図どおり働いている）。**2つを見分ける材料はこの行の中には無い。**
-   *   見分けるなら日誌の `exchange` 行（畳んだ旨を1件ずつ残している）を
-   *   同じ窓で引くこと。
-   *
-   * ⟹ **読み方**: `delivered` が `arrived` を継続して上回り、かつ `pending`
-   * が小さいままなら、待ち行列（`Inbox`）とストア（`InboxStore`）が食い違って
-   * いる疑いがある（#1049）。**ただしこの行だけでは断定できない**——配達
-   * された行が本当にストアから消えていたか（＝#1049 の核心）は、この行は
-   * 見ていない。見ているのは「メモリ上の待ち行列へ何回載せたか」という数
-   * だけである。
-   *
-   * ## `settled` を数える場所は1箇所（`#forget` の内側）だが、呼び出し元は3箇所ある
-   *
-   * `clone.ts` の `#forget` はここでは唯一の消し込み経路で、そこで1回だけ
-   * 数える（呼び出し元ごとに数えると、1箇所でも足し忘れれば静かに過小評価
-   * になる）。呼び出し元は3つ——同じ tick の重複を畳んで吸収したとき／
-   * ターンが処理し終えたとき（`#settleInboxEvent`）／拾い直した合図が
-   * `stale` と判定されたとき（`#restoreUnread`）。**このうち実際に1ターン
-   * 分の処理をして消したと言えるのは2番目だけである**——それでも欄の名前を
-   * 割らずに1本の `settled` で持たせているのは、この型の目的が「受信箱
-   * ストアの滞留がどれだけ減ったか」であって「ターンが何を処理したか」では
-   * ないため。後者を測る型は別に要るなら、それはこの型の役目ではない。
-   *
-   * ## `delivered` を数える場所は `#inbox.push` の3箇所（`Inbox#unshift` は数えない）
-   *
-   * `post()`（通常の受理経路）／`#postAndWait`（蒸留の割り込み）／
-   * `#restoreUnread`（器を跨いだ拾い直し）。**`Inbox#unshift`（枠の解除で
-   * 保持分を待ち行列の先頭へ戻す経路）は数えに入れない**——戻される合図は
-   * 保持される前に既に一度 `push` で数えられているので、数え直すと枠で
-   * 保持されて後から解除された分だけ二重に計上される。
-   *
-   * ## 窓は永続化しない
-   *
-   * `arrived` / `delivered` / `settled` のカウンタはクローンのインメモリ
-   * 状態で、**器が入れ替わると0から始まる。** だから `windowStartedAt` を
-   * 必ず持たせる——無いと、写した先で「いつからの数か」が消え、器の入れ替え
-   * を跨いだ比較が壊れる。
-   *
-   * ## いつ書くか
-   *
-   * ターンの境界（`case 'turn_ended'`）で毎回1行書く——`context_usage` と
-   * 同じ境界を使う。別の境界を選ぶと、2つの型を突き合わせて読みたいときに
-   * 窓がずれる。**`InboxStore.pending()` が読めなければこの窓は書かない**
-   * （カウンタも戻さない——次のターンへ持ち越せば、この窓ぶんの到着・配達・
-   * 消し込みは失わずに済む。跡は `noteDroppedRecord` が残す）。
-   */
+  // `Inbox#unshift` は `delivered` に数えない: 戻される合図は保持される前に `push` で数えられていて、数え直すと二重に計上されるため
+  // `InboxStore.pending()` が読めなければこの窓は書かず、カウンタも戻さない: 次のターンへ持ち越せば、この窓ぶんの到着・配達・消し込みを失わずに済むため
   z.object({
     type: z.literal('inbox_flow'),
     id: z.string(),
     at: isoDateTime,
-    /** この行が数えた窓の始まり。前回この行を書いた時刻（器が入れ替わった
-     * 直後は器が立ち上がった時刻）。 */
+    // 必ず持たせる: カウンタは器が入れ替わると0から始まり、無いと「いつからの数か」が消えて器を跨いだ比較が壊れるため
     windowStartedAt: isoDateTime,
-    /** この窓に `Clone#post` が受理した数（`#remember`）。種類別。 */
     arrived: inboxFlowByTypeCountSchema,
-    /** この窓にメモリ上の待ち行列（`Inbox`）へ実際に載った数（`#inbox.push`）。種類別。 */
     delivered: inboxFlowByTypeCountSchema,
-    /** この窓に `#forget`（＝ `InboxStore.remove` の成功）を通った数。種類別。 */
     settled: inboxFlowByTypeCountSchema,
-    /** 窓の終わりの1点（`InboxStore.pending()` の戻り値そのまま）。 */
     pending: z.object({
       count: z.number().int().nonnegative(),
       oldestAt: isoDateTime.optional(),
     }),
-    /**
-     * 窓の終わりの1点——メモリ上の4つの索引（`Clone` の private field）の
-     * 残数（`Map.size`）。Issue #1264（案1a）。
-     *
-     * - `unread`: `#unread`（まだ `#forget` していない合図の集合）の残数
-     * - `redelivered`: `#redelivered`（起動時に拾い直した合図）の残数
-     * - `redeliveredClosed`: `#redeliveredClosed`（拾い直した合図のうち、
-     *   台帳が既に片付いていると言っているもの）の残数
-     * - `pendingCollapse`: `#pendingCollapse`（`manager_message` /
-     *   デーモン自身の `external` を畳むための代表の索引）の残数
-     *
-     * ## `pending` との違い —— あちらはストア側、こちらはメモリ側
-     *
-     * `pending`（直上）は `InboxStore.pending()` を経由して**ストア**（fs /
-     * pg）へ問い合わせた値で、器が入れ替わっても消えない。この欄はどれも
-     * `Clone` インスタンスが持つメモリ上の `Map` の残数で、**器が入れ替わると
-     * 0から始まる**（`#pendingCollapse` の doc「器の入れ替えを跨ぐと空に
-     * なる」と同じ性質）。2つは別の層を見ているので、片方だけで他方を
-     * 代替できない。
-     *
-     * ## `arrived` / `delivered` / `settled` と違って窓ごとに0へ戻さない
-     *
-     * 上の3つは**増分**（この窓で何回起きたか）で、`#writeInboxFlow` が
-     * 書いた直後に `.clear()` して次の窓へ持ち越さない。この欄は逆に
-     * **時点の値**（いまその `Map` に何件残っているか）であって、増分では
-     * ない——書いた直後にクリアすると「残っている件数」という意味そのもの
-     * が壊れる。`pending` と同じ「窓の終わりの1点」側に属する。
-     *
-     * ## なぜ在るか（Issue #1264）
-     *
-     * `#forget`（と、それを一括化した `#removeStaleRedeliveryChunk`）が行う
-     * 5つの後始末のうち、この4つの `Map` からの削除は**外から観測する出口が
-     * 無かった**——3つ（`#unread` / `#redelivered` / `#redeliveredClosed`）は
-     * 読み手が「配り直しの断り文を組む3箇所だけ」で、削除を止めても出力が
-     * 1文字も変わらないので歯が書けなかった（Issue #1264 の「なぜ測れない
-     * のか」）。この欄が、その出口になる。
-     *
-     * ## ⚠️ `.optional()` にする理由 —— 既存の行を壊さないため
-     *
-     * この欄が増える**前**に書かれた `inbox_flow` の行には無い。必須にすると、
-     * **読み出し時にも** `journalEntrySchema.safeParse` を通る既存の行が
-     * 丸ごと `unknown-shape` として扱われ、`list()` の結果から消える
-     * （`packages/storage-fs/src/journal.ts` の `parseLine` /
-     * `packages/storage-pg/src/journal.ts` の `list`。`journal_read`・日報・
-     * 蒸留の全経路がここを経由する）。**`default` で埋めない** ——
-     * `turn_usage.contextUsage.categories[].kind` の doc（#804）と同じ規律で、
-     * 無いことは「観測していない」であって「0件だった」ではない。
-     */
+    // 窓ごとに0へ戻さない: 増分ではなく時点の値で、書いた直後にクリアすると「残っている件数」という意味が壊れるため
+    // `.optional()` にして `default` で埋めない: この欄が増える前の行が読み出しで丸ごと落ちるため、無いことは「観測していない」であって「0件だった」ではない
     retained: z
       .object({
         unread: z.number().int().nonnegative(),
@@ -1118,23 +621,8 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
       })
       .optional(),
   }),
-  /**
-   * **誰かが GitHub を見て数えた結果の記録**（Issue #2245）。`GET /progress` の `github` が
-   * これを読んで返す。**デーモン自身は GitHub を見に行かない**（`JobStatus` の doc の
-   * 「デーモンは PR もブランチも見に行かない」）——この行は「観測した側が名乗った申告」を
-   * 日誌へ置くだけで、デーモンは値を確かめられない。だから `observedBy` を必須にし、
-   * 読み手へも「誰の観測か」を必ず出す。
-   *
-   * - `repo`: 観測した側が名乗る `owner/name`。デーモンは repo を決めない。
-   * - `query` / `limit`: 母集合をどう切ったか（`gh issue list --state open --limit N` の
-   *   引数など）。**数は母集合の切り方とセットでしか読めない。**
-   * - `result`: **`status` で判別する。** `ok` のときだけ数を持つ。`failed`（取れなかった回）は
-   *   数の欄そのものが無い——0 を作ると「0 件だった」と読める（取れないことが出力から消える）。
-   *   `truncated` が真なら `limit` に達しており、実数はもっと多い（数は下限）。
-   *
-   * **古さは判定しない。** `at`（デーモンが受けた時刻）をそのまま返し、新しさの判断は読み手に任せる。
-   * CI の状態は `ok` の枝の `ci`（取れなければ `ciUnavailable`。排他）が持つ（#2549）。
-   */
+  // `observedBy` を必須にする: 観測した側が名乗った申告で、デーモンは値を確かめられないため
+  // 古さを判定しない: `at` をそのまま返し、新しさの判断は読み手に任せるため
   z.object({
     type: z.literal('github_observation'),
     id: z.string(),
@@ -1150,19 +638,7 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
           openIssues: z.number().int().nonnegative(),
           openPulls: z.number().int().nonnegative(),
           truncated: z.boolean(),
-          /**
-           * **PR の CI の状態の軸**（Issue #2549。#2245 の後続）。**任意**——この欄が増える前に書かれた
-           * 行には無く、必須にすると既存の行が読み出し時に丸ごと落ちる（`inbox_flow.retained` と同じ
-           * 理由）。**無いことは「CI を観測していない」であって「0 件だった」ではない。`default` で
-           * 埋めない。**
-           *
-           * - `pulls`: CI を見た PR の数（open PR の総数 `openPulls` とは別。見ていない PR がありうる）
-           * - `success` / `failure` / `pending`: その PR を CI の状態で分けた数。**1つの PR は高々1つの
-           *   欄に数える**（チェックが1件も無い PR はどれにも数えない）ので、3つの和は `pulls` 以下
-           * - `checks`: **何を数えたか**（例「必須チェックだけ」・check の名前の列挙）。これが無いと
-           *   数は読めない（`query` が母集合の切り方を持つのと同じ）。上限付き
-           * - `truncated`: 真なら上限で打ち切っており、数は下限
-           */
+          // 任意にして `default` で埋めない: この欄が増える前の行が読み出しで丸ごと落ちるため、無いことは「CI を観測していない」であって「0 件だった」ではない
           ci: z
             .object({
               pulls: z.number().int().nonnegative(),
@@ -1176,10 +652,7 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
               message: 'success + failure + pending は pulls 以下でなければならない',
             })
             .optional(),
-          /**
-           * CI を取れなかった理由（観測した側の申告）。**`ci` と排他**——取れなかったのに数を置くと
-           * 0 を作ることになり、両方あれば読み手はどちらを信じるか決められない。
-           */
+          // `ci` と排他にする: 取れなかったのに数を置くと 0 を作ることになり、両方あれば読み手がどちらを信じるか決められないため
           ciUnavailable: z.string().min(1).max(1000).optional(),
         })
         .refine((result) => result.ci === undefined || result.ciUnavailable === undefined, {
@@ -1193,11 +666,7 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
 
 export type JournalEntry = z.infer<typeof journalEntrySchema>;
 
-/**
- * `github_observation` の入力（`type` / `id` / `at` を除いた形。Issue #2245）。**日誌の枝そのものから
- * 導く**——`POST /github-observations`（daemon）と道具 `github_observation_record` が同じ検証を
- * 通るように、手で書き直さない。
- */
+// 日誌の枝そのものから導く: `POST /github-observations` と道具 `github_observation_record` が同じ検証を通るように、手で書き直さないため
 export const githubObservationInputSchema = (
   journalEntrySchema.options.find(
     (option) => option.shape.type.value === 'github_observation',
@@ -1208,46 +677,12 @@ export const githubObservationInputSchema = (
 ).omit({ type: true, id: true, at: true });
 export type JournalEntryType = JournalEntry['type'];
 
-/**
- * `trace-action.ts` の {@link TraceActionLike}（手書き）が、この zod
- * スキーマから推論した {@link JournalEntry}（13種の判別可能ユニオン）を
- * 構造的に受け付けることの強制（issue #1528）。
- *
- * 軽い口（`trace-action.ts`）は zod を import できないので、
- * `describeTraceAction` が実際に読む4種（`decision` / `memory_update` /
- * `tool_use` / `exchange`）の欄だけを手で書き写し、残り9種は型の名前
- * だけで受けている（そちらの doc）。**ここが崩れると、`describeTraceAction`
- * へ実際の `JournalEntry` を渡す呼び出し（`approval-trace.ts` の
- * `renderApprovalTrace`）自体が `typecheck` で落ちるはずだが、その落ち方は
- * 「どの欄がずれたか」を言わない**——この宣言はずれを名指しで捕まえる場所
- * として置いてある。
- *
- * **`_AssertAnsweredViaMatchesLikeType` と違い、双方向の完全一致ではなく
- * 片方向**（`JournalEntry extends TraceActionLike`）。`TraceActionLike` は
- * 意図して「`describeTraceAction` が読む欄だけの最小の型」であって
- * `JournalEntry` の完全な写しではないので、双方向にすると
- * `TraceActionLike` が持たない欄（`id` / `at` / `actor` など）のぶんで
- * 必ず落ちる（`trace-action.ts` 冒頭の doc）。
- */
+// 双方向の完全一致にしない: `TraceActionLike` は `describeTraceAction` が読む欄だけの最小の型で、`id` / `at` / `actor` などのぶんで必ず落ちるため
 export type _AssertTraceActionMatchesLikeType = AssertTrue<
   JournalEntry extends TraceActionLike ? true : false
 >;
 
-/**
- * `journal-diagnostics-format.ts` の {@link JournalDiagnosticsEntryLike}
- * （手書き）が、この zod スキーマから推論した {@link JournalEntry} の4種
- * （`worker_wait` / `turn_usage` / `context_usage` / `inbox_flow`）を
- * 構造的に受け付けることの強制（issue #2016）。**`_AssertTraceActionMatchesLikeType`
- * と同じ形**——軽い口（`journal-diagnostics-format.ts`）は zod を import
- * できないので、`summarizeJournalDiagnosticsEntry` が実際に読む欄だけを
- * 手で書き写している。
- *
- * **双方向の完全一致ではなく片方向**（この4種 `extends`
- * `JournalDiagnosticsEntryLike`）。`JournalDiagnosticsEntryLike` は意図して
- * 「実際に読む欄だけの最小の型」であって4種の完全な写しではないので、
- * 双方向にすると `id` / `at` などのぶんで必ず落ちる
- * （`journal-diagnostics-format.ts` 冒頭の doc）。
- */
+// 双方向の完全一致にしない: `JournalDiagnosticsEntryLike` は実際に読む欄だけの最小の型で、`id` / `at` などのぶんで必ず落ちるため
 export type _AssertJournalDiagnosticsMatchesLikeType = AssertTrue<
   Extract<
     JournalEntry,
@@ -1259,33 +694,16 @@ export type _AssertJournalDiagnosticsMatchesLikeType = AssertTrue<
 
 export type DailyReport = Extract<JournalEntry, { type: 'daily_report' }>;
 
-/**
- * 日報の行か（**印の行も含む**）。人間へ出す一覧はこちらを使う — 書けなかった
- * ことも人間には見えていなければならない。
- */
 export function isDailyReport(entry: JournalEntry): entry is DailyReport {
   return entry.type === 'daily_report';
 }
 
-/**
- * **実際に書かれた**日報か（`unavailable` の印が付いた行を除く）。
- *
- * **「その日の日報はもうあるか」を数える側は必ずこちらを使うこと。** 印の行を
- * 数えてしまうと、後から本物を書き直す道が閉じる（`unavailable` の doc に経緯）。
- * 数える側は2か所ある — `clone.ts` の `#dailyReport` と `schedule.ts` の
- * `missingDailyReportDates` で、**片方だけ直すと片方の経路だけが死ぬ**。
- */
+// 「その日の日報はもうあるか」を数える側は `isDailyReport` ではなくこちらを使う: 印の行を数えると、後から本物を書き直す道が閉じるため
 export function isWrittenDailyReport(entry: JournalEntry): entry is DailyReport {
   return isDailyReport(entry) && entry.unavailable === undefined;
 }
 
-/**
- * 日誌の種別の一覧（絞り込みの選択肢として外へ出す口）。
- *
- * **`satisfies Record<JournalEntryType, true>` で縛ってある。** 種別を足して
- * ここを足し忘れると型で落ちる — 一覧が黙って古びると、増えた種別だけが
- * 絞り込みから漏れて「あるのに見えない」が静かに生まれる。
- */
+// `satisfies Record<JournalEntryType, true>` で縛る: 足し忘れると、増えた種別だけが絞り込みから漏れて「あるのに見えない」が静かに生まれるため
 const journalEntryTypeNames = {
   exchange: true,
   decision: true,
@@ -1307,59 +725,28 @@ export const JOURNAL_ENTRY_TYPES = Object.keys(journalEntryTypeNames) as [
   JournalEntryType,
   ...JournalEntryType[],
 ];
-/** 追記時に id / at はストアが埋める。 */
 export type JournalEntryInput = DistributiveOmit<JournalEntry, 'id' | 'at'>;
 
 type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
 
-// ---------------------------------------------------------------------------
-// 定期の依頼（時間起点の器）
-// ---------------------------------------------------------------------------
-
-/**
- * 定期の依頼の名前。`kind` は受信箱の `timer` イベントに載り、人間が
- * `/schedule` や HTTP から手で起こすときの識別子にもなる。
- */
 export const scheduleKindSchema = z
   .string()
   .min(1)
   .max(64)
   .regex(/^[a-z0-9][a-z0-9._-]*$/, 'kind は英小文字・数字・. _ - のみ');
 
-/**
- * `every` の分数の上限。1年 = 525600 分（365 日 × 24 時間 × 60 分）。
- *
- * **なぜ上限が要るか。** 上限が無いと `Date` の範囲（約 1.44e11 分）を超える値が保存でき、次の予定が
- * Invalid Date になる。スケジューラは 1ms 周期で `timer` を積み続け、`list()` は投げ、行は保存済みなので
- * 再起動しても直らない（#3533）。
- *
- * **なぜ1年か。** 1年より長い周期は、人間も `every` ではなく cron 式か単発の予定で書く。なので
- * 能力の欠落にならない（PRD「周期の書き方で人間に負けないこと」）。値は人間の決定（2026-10-06）。
- */
+// 上限を置く: 無いと `Date` の範囲を超える値が保存でき、次の予定が Invalid Date になって、行は保存済みなので再起動しても直らないため
 export const SCHEDULE_EVERY_MINUTES_MAX = 525_600;
 
-/** `every` が上限を超えたときの断りの文。HTTP の 400 は値を混ぜない決まりなので、この文を `where` の後ろへ足して返す（`POST /schedule`）。 */
 export const SCHEDULE_EVERY_MINUTES_MAX_MESSAGE = `every の分数は 1以上${SCHEDULE_EVERY_MINUTES_MAX}（1年）以下の整数のみ。それより長い周期は cron 式か単発の予定で書く`;
 
-/**
- * 周期。
- *
- * **これは方針であって抑止装置ではない**（north_star 禁止2）。「何回まで」を
- * 表す形をここへ足さないこと。表すのは「いつ起こすか」だけである。
- */
+// 「何回まで」を表す形を足さない: 周期は方針であって抑止装置ではないため
 export const scheduleSpecSchema = z.discriminatedUnion('type', [
-  /**
-   * 毎日この時刻（ローカル時刻）。
-   *
-   * **時刻の範囲までここで見る。** 形だけ見て通すと `25:99` が保存でき、一覧には
-   * 「毎日 25:99」と出るのに実際は 00:00 に発火する（人間が読んで矛盾する状態を
-   * 作れてしまう）。検査を経路ごとに置くと、どれか1本を通り忘れた時点で穴になる。
-   */
+  // 時刻の範囲までここで見る: 形だけ見て通すと `25:99` が保存でき、検査を経路ごとに置くとどれか1本を通り忘れた時点で穴になるため
   z.object({
     type: z.literal('daily'),
     at: z.string().regex(/^(?:[01]?\d|2[0-3]):[0-5]\d$/, 'HH:MM（00:00〜23:59）で書く'),
   }),
-  /** この分数ごと。 */
   z.object({
     type: z.literal('every'),
     minutes: z
@@ -1368,16 +755,7 @@ export const scheduleSpecSchema = z.discriminatedUnion('type', [
       .min(1)
       .max(SCHEDULE_EVERY_MINUTES_MAX, SCHEDULE_EVERY_MINUTES_MAX_MESSAGE),
   }),
-  /**
-   * cron 式（ローカル時刻）。
-   *
-   * **人間が cron で書けることは、この階層でも書けるべきである**（north_star 禁止1）。
-   * 「毎週月曜の朝」を `daily` で表そうとすると「毎日起きて曜日を見て何もしない」に
-   * なり、7回に6回は上位モデルのターンを空焼きする。
-   *
-   * 読める式かどうかまでここで見る。読めない式を保存できると、一覧には出るのに
-   * 発火しない仕込みが作れてしまう。
-   */
+  // 「毎週月曜」を `daily` で代用させない: 毎日起きて曜日を見る形になり、7回に6回は上位モデルのターンを空焼きするため
   z.object({
     type: z.literal('cron'),
     expression: z
@@ -1390,55 +768,16 @@ export const scheduleSpecSchema = z.discriminatedUnion('type', [
   }),
 ]);
 
-/**
- * 継続中の依頼1件（PRD「自律」の起点②を、記憶とは別に器として持つ）。
- *
- * **なぜ記憶だけでは足りないか。** 「毎朝 issue を見て進めておいて」は、記憶に
- * 書けば根拠として残るが、時刻が来たことを誰も教えてくれない。発意 tick で
- * 思い出せるかはそのときの判断に委ねられ、取りこぼしても誰も気づかない。
- * ここに置いた依頼は時刻が来れば必ずクローンの受信箱へ届く。
- *
- * 逆に、**判断の根拠は依然として記憶側にある**。ここに持つのは「いつ起こすか」と
- * 「何を頼まれたか」だけで、やるかやらないか・どうやるかはクローンが決める。
- */
 export const scheduledRequestSchema = z.object({
   kind: scheduleKindSchema,
   spec: scheduleSpecSchema,
-  /** 依頼の全文。時刻が来たらそのままクローンへ渡る。 */
   request: z.string().min(1),
   createdAt: isoDateTime,
   updatedAt: isoDateTime,
-  /**
-   * 前回この依頼で動いた時刻（定期の予定でも、人間が手で起こした分でも動く）。
-   *
-   * 「前にいつ見たか」が分からないと、同じ仕事を毎回まっさらから起こすことになる
-   * （＝同じ issue に何本もマネージャーが立つ）。重複を数の上限で止めるのは
-   * 禁止2に触るので、材料として渡して判断に使わせる。
-   *
-   * **これは観測用であって、次の予定を数える基準ではない**（下の
-   * `lastScheduledRunAt` がその役）。
-   */
   lastRunAt: isoDateTime.optional(),
-  /**
-   * 前回**定期の予定で**動いた時刻。次の予定を数える基準。
-   *
-   * `lastRunAt` と分けてあるのは、**手で起こした1回で位相を動かさない**ためである。
-   * 人間が `POST /schedule/:kind/run` で余分に1回起こすのは「予定に代えて割り込む」
-   * ことではない（`Scheduler.run` の契約）。ここを一緒にすると、手動実行の時刻が
-   * 基準になり、再起動した瞬間に定期の予定がその分ずれる。
-   */
+  // `lastRunAt` と分ける: 手で起こした1回で位相を動かさないため（一緒にすると、再起動した瞬間に定期の予定がその分ずれる）
   lastScheduledRunAt: isoDateTime.optional(),
-  /**
-   * 「この発火を引き受けたが、まだ終わっていない」印。
-   *
-   * **確定（claim）と完了を分けるためにある。** 引き受けた時点で印を付け、ターンが
-   * 終わってから消す。器を作り直したときにこの印が残っていれば、その回は
-   * **モデルに届かないまま失われた可能性がある**ので、依頼の本文つきで配り直す。
-   *
-   * 印が無く基準（`lastScheduledRunAt`）だけが進んでいると、claim の直後に落ちた
-   * 発火は「もう動いた」と見えて、日次なら翌日・週次なら翌週まで消える。逆に印だけで
-   * 基準を持たないと、動いた後に落ちたときの二重実行を止められない。**両方要る。**
-   */
+  // 印と基準（`lastScheduledRunAt`）の両方を持つ: 印が無いと claim の直後に落ちた発火が「もう動いた」と見えて消え、印だけだと動いた後に落ちたときの二重実行を止められないため
   pendingRun: z.object({ at: isoDateTime, cause: z.enum(['schedule', 'manual']) }).optional(),
 });
 
@@ -1446,21 +785,9 @@ export type ScheduleKind = z.infer<typeof scheduleKindSchema>;
 export type ScheduleSpec = z.infer<typeof scheduleSpecSchema>;
 export type ScheduledRequest = z.infer<typeof scheduledRequestSchema>;
 
-/**
- * 継続中の依頼の1行が `scheduledRequestSchema` として読めなかったときに、その行の
- * 代わりに一覧へ載せるもの（issue #2343。`unreadableApprovalSchema` と同じ形）。
- *
- * **「無い」でも「消された」でもない第3の状態。** 一覧が読めない行を黙って飛ばすと、
- * クローンも人間も、読めない依頼が在ること自体に気づけず「依頼は無い」と言い切る
- * （単票の `schedule_list kind=` は `UnreadableScheduleError` で言い分けている）。
- *
- * **⚠️ 本文（`request`）を載せないこと。** 依頼の欄には人間の依頼文がそのまま入りうる。
- * `reason` は「どの欄が不正か」だけにする。
- */
+// 本文（`request`）を載せない: 人間の依頼文がそのまま入りうるため
 export const unreadableScheduleSchema = z.object({
-  /** 行から取れた kind。取れないこともある（fs 版で行そのものが kind を持たない形のとき）。 */
   kind: z.string().optional(),
-  /** なぜ読めなかったか（不正な欄名だけ。値は載せない）。 */
   reason: z.string(),
 });
 export type UnreadableSchedule = z.infer<typeof unreadableScheduleSchema>;
