@@ -3798,17 +3798,7 @@ class Clone implements CloneHost {
     return this.#runTurn(null, text, kind, null, images);
   }
 
-  /**
-   * 発火した kind の依頼を読む。
-   *
-   * **「消された」と「読めなかった」を区別する。** 前者は人間が手で仕込んだ kind を
-   * 起こした場合も含むので、本文なしのターン（記憶に照らして判断する）が正しい。
-   * 後者は器の瞬断であって、本文なしで動かす理由にはならない。
-   *
-   * 一瞬の揺れで1周期ぶんの仕事を落とさないよう、この発火の中で読み直す。**回数を
-   * 絞るためではなく取りこぼしを拾うため**であり、諦めた場合も `lastRunAt` を
-   * 進めないので、次の発火で同じ依頼がそのまま来る。
-   */
+  // 「消された」と「読めなかった」を区別する: 前者は本文なしのターンが正しく、後者は器の瞬断で本文なしで動かす理由にならないため
   async #scheduledRequestFor(
     kind: string,
   ): Promise<
@@ -3828,15 +3818,7 @@ class Clone implements CloneHost {
     return { status: 'unreadable', error: last };
   }
 
-  /**
-   * 「この発火で起きた」をストア側で確定させる。書けたら確定した依頼、書けなければ
-   * 理由を返す（`null` は「同じ版がもう無い」＝消された・書き換わった）。
-   *
-   * 読み取りと同じ理由で、この発火の中で書き直す（器の一瞬の揺れで1周期ぶんの仕事を
-   * 落とさない）。**それでも書けなければ動かない** — 動いた事実が外の世界にだけ残り、
-   * `lastRunAt` が古いままだと、次の起動で「落ちている間に過ぎた予定」として同じ仕事を
-   * もう一度起こす（取り消せない操作の二重実行は、1周期遅れるよりずっと高い）。
-   */
+  // 書けなければ動かない: 動いた事実が外の世界にだけ残ると、次の起動で同じ仕事をもう一度起こし、二重実行は1周期遅れるよりずっと高いため
   async #claimRun(
     kind: string,
     expectedUpdatedAt: string,
@@ -3862,14 +3844,6 @@ class Clone implements CloneHost {
     return { status: 'failed', error: last };
   }
 
-  /**
-   * 引き受けた発火が終わったことを記録する。
-   *
-   * 書けなくても**ターンはもう走っている**ので、ここで止めるものは無い。印が残るぶん
-   * 次の起動で配り直されるが、それは「消えるより配り直す」を選んだ結果である
-   * （プロンプトには前の発火が終わっていないことを添えるので、二重に手を出す前に
-   * クローンが `manager_list` と日誌を見られる）。
-   */
   async #completeScheduledRun(
     kind: string,
     at: string,
@@ -3897,33 +3871,17 @@ class Clone implements CloneHost {
     });
   }
 
-  /**
-   * 発火した kind を「読んで、その版で確定させる」まで通す。
-   *
-   * **読んだ本文で走るなら、走ると決めた時点でその版が生きていることを確かめる。**
-   * 読みと記録が別操作だと、その隙間に人間が消した・直した依頼が古い本文で走る
-   * （消した依頼が外の世界へ手を出したら取り返せない）。確定はストア側の1操作
-   * （`claimRun`）に閉じてあり、ここはその周りの再試行と、版が入れ替わっていたときの
-   * 読み直しだけを持つ。
-   *
-   * 版が入れ替わっていたら**新しい版を読み直して**そちらで確定させる。人間が直した
-   * 直後なら、その新しい依頼で動くのが正しい（古い方で走らないことが最優先）。
-   */
+  // 読みと記録を別操作にしない: 隙間に人間が消した・直した依頼が古い本文で走るため（確定はストア側の `claimRun` に閉じる）。版が入れ替わっていたら読み直す: 古い方で走らないことが最優先のため
   async #claimScheduledRun(
     kind: string,
     at: string,
     cause: 'schedule' | 'manual',
   ): Promise<
     | { status: 'ok'; plan: ScheduledRequest }
-    /**
-     * そもそも仕込みが無い kind だった（人間が手で `POST /schedule/:kind/run` を
-     * 叩いた等）。本文が無いのは正常なので、記憶に照らして判断させる。
-     */
     | { status: 'missing' }
     | { status: 'unreadable' | 'unrecordable' | 'withdrawn' | 'churning'; reason: string }
   > {
-    // 一度でも依頼を読めていたなら、後から消えたのは「人間が消した」である。
-    // 最初から無いのとは意味が違うので分ける（片方は動かさない、片方は判断させる）。
+    // 最初から無いのと後から消えたのは分ける: 片方は判断させ、片方は動かさないため
     let sawPlan = false;
 
     for (let round = 0; round < SCHEDULE_CLAIM_ROUNDS; round += 1) {
@@ -3954,9 +3912,7 @@ class Clone implements CloneHost {
             `もう一度起こす）: ${claimed.error}`,
         };
       }
-      // 確定できた。返るのは更新前の姿なので「前回いつ動いたか」も分かる
       if (claimed.plan !== null) return { status: 'ok', plan: claimed.plan };
-      // 読んでから確定するまでに人間が消した・直した。新しい版で読み直す
     }
     return {
       status: 'churning',
