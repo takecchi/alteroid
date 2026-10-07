@@ -153,6 +153,11 @@ describe('plugin の保存の形', () => {
         '',
         'https://example.com/a\u0000',
         `https://example.com/${'a'.repeat(3000)}`,
+        // 資格がクエリやフラグメントに載っても、日誌・DB に残さない。
+        'https://example.com/a?token=fake-value-for-test',
+        'https://example.com/a?',
+        'https://example.com/a#fragment',
+        'https://example.com/a#',
       ]) {
         expect(() =>
           parsePluginInput(validInput({ source: { kind: 'url', url, sha: SHA } })),

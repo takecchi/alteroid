@@ -83,6 +83,29 @@ describe('PgPluginStore', () => {
     expect(await stores.plugins.get('my-plugin')).toEqual(before);
   });
 
+  it('get は plugins と files を1つのトランザクションで読む（置き換えの途中の版を混ぜない）', async () => {
+    await stores.plugins.put(input());
+    let transactions = 0;
+    let outerSelects = 0;
+    const spy = new Proxy(db, {
+      get(target, prop, receiver) {
+        if (prop === 'transaction') {
+          return (...args: unknown[]) => {
+            transactions += 1;
+            return (target.transaction as (...a: unknown[]) => unknown)(...args);
+          };
+        }
+        if (prop === 'select') outerSelects += 1;
+        const value = Reflect.get(target, prop, receiver) as unknown;
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+    const spied = createPgStoresFromDb(spy);
+    expect((await spied.plugins.get('my-plugin'))?.files).toHaveLength(2);
+    expect(transactions).toBe(1);
+    expect(outerSelects).toBe(0);
+  });
+
   it('SQL で files を書き換えられた行は、contentSha256 と合わなければ読むときに投げる', async () => {
     await stores.plugins.put(input());
     await db.execute(
