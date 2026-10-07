@@ -10,6 +10,7 @@ import type {
   ChatStreamEvent,
   CloneHost,
   CredentialService,
+  CodexChatgptAuthService,
   McpServerService,
   Exchange,
   GrantResult,
@@ -29,6 +30,7 @@ import type {
   TokenPoolService,
 } from '@alteroid/core';
 import {
+  CommitmentConflictError,
   MemoryConflictError,
   memoryVersion,
   PracticeConflictError,
@@ -105,6 +107,8 @@ import {
   fingerprintOf,
   noteDroppedRecord,
   reasonOf,
+  redactErrorText,
+  managerModelsOf,
   readConversationPage,
   readConversationWindow,
   decodeConversationCursor,
@@ -210,6 +214,7 @@ import {
   attachmentLimitsSchema,
   attachmentMetaSchema,
   authProvidersResponseSchema,
+  commitmentConflictResponseSchema,
   commitmentListResponseSchema,
   progressResponseSchema,
   commitmentOpenedResponseSchema,
@@ -219,6 +224,9 @@ import {
   conversationsResponseSchema,
   unreadConversationCountResponseSchema,
   credentialsResponseSchema,
+  codexAuthStatusResponseSchema,
+  codexLoginResponseSchema,
+  codexLogoutResponseSchema,
   credentialsUpdateRequestSchema,
   credentialsUpdateResponseSchema,
   droppedResponseSchema,
@@ -363,10 +371,9 @@ export interface AppDeps {
    */
   runners?: RunnerRegistry;
   /**
-   * クローン層の provider の id（#486 S9）。デーモンが起動時に解決した値で、デーモン全体で
-   * 1つ（`GET /runners` の `cloneProvider`）。無ければ応答に欄を載せない（＝不明。`claude` とは読まない）。
+   * クローン層のモデルの表記（`self.models.clone`）。無ければ地図に欄を載せない（＝不明）。
    */
-  cloneProvider?: string;
+  cloneModel?: string;
   /**
    * 日誌の追記を購読する口（`GET /journal/stream`）。
    *
@@ -441,6 +448,11 @@ export interface AppDeps {
    * runner へは配らない（`runners: []`）—— 配らなかったことは応答から分かる。
    */
   mcpServers?: McpServerService;
+  /**
+   * Codex の ChatGPT ログインの正本の持ち主（#3939）。**マネージャーのプールと同じインスタンスを
+   * 渡すこと**（`mcpServers` と同じ理由）。無ければ `/codex/*` は 503。
+   */
+  codexAuth?: CodexChatgptAuthService;
   /**
    * 認証トークンのプール（Issue #393「PR1 プールの器」）。**回さない**——ここが
    * 生やすのは器の読み書きの口だけで、検知・切替は無い。
@@ -1141,6 +1153,11 @@ const commitmentEditBody = z.object({
     .string()
     .min(1)
     .refine((value) => stripNul(value).length > 0),
+  /**
+   * 任意（Issue #3786）。読んだ時の版（`GET /commitments` の行の `editedAt ?? at`）。
+   * 書く瞬間の版と違えば書かずに 409。省略は従来どおり後勝ち。
+   */
+  ifMatch: z.string().optional(),
 });
 
 /**
@@ -1711,25 +1728,12 @@ function queryParams<Schema extends z.ZodTypeAny>(
  */
 function managerView(managers: ManagerPool, summary: ManagerSummary) {
   const denials = managers.denials(summary.managerId);
-  // **取れなければ載せない（＝不明）。** `claude` へ倒さない（`managerProviderOf`）。
-  const managerProvider = managerProviderOf(managers, summary);
   return {
     ...summary,
     ...(denials.length === 0 ? {} : { denials }),
-    ...(managerProvider === undefined ? {} : { managerProvider }),
+    // 取れなければ欄ごと載せない（クローンの道具と同じ読み方。既定の帯で埋めない）。
+    ...managerModelsOf(managers, summary),
   };
-}
-
-/**
- * 委譲のマネージャー層の provider（#486 S9）。宛先の runner が名乗った値だけを返し、
- * 置き先が無い・名乗りを受けていない・旧い runner の欄なしは `undefined`（不明）。
- * 経路判断用の `runnerManagerProvider()`（既定 `claude`）は使わない。
- */
-function managerProviderOf(managers: ManagerPool, summary: ManagerSummary): string | undefined {
-  // クローンが指名した委譲は、runner の既定ではなく**実際に動いている provider**（#486 S7）。
-  if (summary.managerProvider !== undefined) return summary.managerProvider;
-  if (summary.runnerId === undefined) return undefined;
-  return managers.runnerReportedManagerProvider?.(summary.runnerId);
 }
 
 /** 一覧・詳細で返すアカウント（identity を畳んで、秘密は載せない）。 */
@@ -2559,6 +2563,8 @@ export function createApp(deps: AppDeps) {
     unreadableJobs: () => stores.jobs.listUnreadableJobs(),
     activity: topologyActivity,
     storage: topologyStorage,
+    modelsOf: (summary) => managerModelsOf(clone.managers, summary),
+    ...(deps.cloneModel === undefined ? {} : { cloneModel: deps.cloneModel }),
   });
   const topologyTickMs = deps.topologyTickMs ?? 2000;
   const topologyDebounceMs = deps.topologyDebounceMs ?? 200;
@@ -3104,7 +3110,8 @@ export function createApp(deps: AppDeps) {
           '**`content-type` は `application/octet-stream` だけを受ける**（それ以外は 415）——' +
           'CORS の単純リクエストにさせず、ブラウザが必ず preflight を通すため（`deliberateClient` と同じ考え）。' +
           '認証は他の経路と同じ。本文の上限は添付1つぶんの最大値（超えたら 413）。画像（png / jpeg / webp / gif）は' +
-          '宣言と中身の先頭が一致しなければ 400。0バイトの本文も 400（`code`: `empty`。Web・CLI・TUI と揃えて断る）。返った `id` を `POST /chat` の `attachments` に渡すと発言へ結び付く。' +
+          '宣言と中身の先頭が一致しなければ 400。宣言が画像で、幅か高さが 8000 px を超えるものも 400（`code`: `image_dimension_too_large`。' +
+          '寸法が読めないものは通す。宣言が画像以外ならこの検査は掛からず、ターンでファイルとして渡る）。0バイトの本文も 400（`code`: `empty`。Web・CLI・TUI と揃えて断る）。返った `id` を `POST /chat` の `attachments` に渡すと発言へ結び付く。' +
           '結び付けないまま 1 時間たったものは掃除される。' +
           '**連携の鍵（`altk_`）もこの口だけは通れる**（自分の外部イベントに付ける添付を上げるため。#3113 段3）：' +
           '`uploadedBy` は `integration:<keyId>` になり、その鍵が `POST /events` で付けられるのは自分が上げた添付だけ。' +
@@ -3124,7 +3131,7 @@ export function createApp(deps: AppDeps) {
           },
           400: {
             description:
-              'クエリが不正、または受け付けない中身（`code`: `magic_mismatch` / `media_type_missing` / `empty`＝0バイト）。',
+              'クエリが不正、または受け付けない中身（`code`: `magic_mismatch` / `image_dimension_too_large` / `media_type_missing` / `empty`＝0バイト）。',
             content: { 'application/json': { schema: resolver(attachmentErrorResponseSchema) } },
           },
           413: {
@@ -3164,8 +3171,10 @@ export function createApp(deps: AppDeps) {
           return c.json(meta, 200);
         } catch (error) {
           if (error instanceof AttachmentRejectedError) {
+            // `reasonOf` ではなく `redactErrorText`: `reasonOf` は「AttachmentRejectedError: … code=…」と包むので、
+            // Web・CLI・TUI がそのまま出す理由に型名と code が混ざる（#3697）。伏せ字は外さない。
             return c.json(
-              { error: reasonOf(error), code: error.code },
+              { error: redactErrorText(error.message, process.env), code: error.code },
               error.code === 'too_large' ? 413 : 400,
             );
           }
@@ -7474,7 +7483,9 @@ export function createApp(deps: AppDeps) {
           '編集できるのは `origin` が `human` かつまだ片付いていない行の `body` だけ。' +
           'クローン（`self`）やマネージャー（`manager`）が立てた行は人間からは直せない。' +
           '`origin` / `source` / `at` / `closedAt` / `closedReason` / `closedBy` は変わらない。' +
-          '編集の前後の本文は日誌（`decision`）へ逐語で残る。',
+          '編集の前後の本文は日誌（`decision`）へ逐語で残る。' +
+          '任意の `ifMatch`（`GET /commitments` で読んだ行の `editedAt ?? at`）を付けると、' +
+          '版が違うときは書かずに 409。省略は従来どおり後勝ち。',
         responses: {
           200: {
             description: '直した。',
@@ -7495,9 +7506,16 @@ export function createApp(deps: AppDeps) {
           },
           409: {
             description:
-              '既に片付いている（いつ・どう片付いたかを本文に入れて返す）。または、台帳に在るが' +
-              '読めない形で入っている（close で閉じることはできるが、書き直せない）。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+              '次の3つ。(1) 既に片付いている（いつ・どう片付いたかを本文に入れて返す）。(2) 台帳に在るが' +
+              '読めない形で入っている（close で閉じることはできるが、書き直せない）。(3) `ifMatch` が' +
+              'いまの版（`editedAt ?? at`）と違う（読んでから書くまでの間に別の書き手が直した、または' +
+              '消えた）。**何も書いていない。** `current` にいまの行を返す（消えていれば null）。' +
+              '(3) だけが `current` の鍵を持つ。',
+            content: {
+              'application/json': {
+                schema: resolver(z.union([commitmentConflictResponseSchema, errorResponseSchema])),
+              },
+            },
           },
         },
       }),
@@ -7506,7 +7524,7 @@ export function createApp(deps: AppDeps) {
       })),
       async (c) => {
         const id = c.req.param('id');
-        const { body } = c.req.valid('json');
+        const { body, ifMatch } = c.req.valid('json');
 
         let existing;
         try {
@@ -7544,7 +7562,29 @@ export function createApp(deps: AppDeps) {
         }
 
         const before = existing.body;
-        if (!(await stores.commitments.editBody(id, body, new Date().toISOString(), 'human'))) {
+        let edited: boolean;
+        try {
+          edited = await stores.commitments.editBody(
+            id,
+            body,
+            new Date().toISOString(),
+            'human',
+            ifMatch === undefined ? undefined : { ifMatch },
+          );
+        } catch (error) {
+          // 書いていない。日誌は編集が効いた後にしか積まないので、打ち消すものも無い。
+          if (error instanceof CommitmentConflictError) {
+            return c.json(
+              {
+                error: '引き受けた仕事が読んだ後に変わっています（書き換えていません）' as const,
+                current: error.current,
+              },
+              409,
+            );
+          }
+          throw error;
+        }
+        if (!edited) {
           // 直せなかった理由は台帳に聞く（読んだ直後に閉じられた場合しかここへは来ない）
           const after = await stores.commitments.get(id);
           return c.json(
@@ -8022,16 +8062,9 @@ export function createApp(deps: AppDeps) {
         // runner の一覧が空でも、この値だけは常に出す——「自分がどの版で
         // 走っているか」は runner の登録有無と無関係な事実である。
         const daemonRevision = reportRunnerRevision(resolveBuildRevision());
-        // クローン層の provider（デーモン全体で1つ。起動時に解決済み）。runner の一覧が
-        // 空でも出す。配線されていない構成では欄ごと載せない（`claude` と推測しない）。
-        const cloneProvider =
-          deps.cloneProvider === undefined ? {} : { cloneProvider: deps.cloneProvider };
-
         const registry = deps.runners;
         if (registry === undefined) {
-          return c.json(
-            runnersListResponseSchema.parse({ runners: [], daemonRevision, ...cloneProvider }),
-          );
+          return c.json(runnersListResponseSchema.parse({ runners: [], daemonRevision }));
         }
         // **名簿に載っている全部を返す**（開けている分だけではない）。上がって
         // こない runner が一覧から消えるだけだと、人間には「設定し忘れた」のか
@@ -8081,11 +8114,15 @@ export function createApp(deps: AppDeps) {
                         const pushHealth = clone.managers.pushHealthOf(entry.runnerId);
                         return pushHealth === undefined ? {} : { pushHealth };
                       })()),
+                  // **peer の名乗り（#3940）。** `pushHealth` と同じく記憶を読むだけ。読み口を持たない
+                  // プールでは「不明」に倒す（「頼めない」と埋めない）。
+                  managerPeers: clone.managers.managerPeersOf?.(entry.runnerId) ?? {
+                    status: 'unknown',
+                  },
                 };
               }),
             ),
             daemonRevision,
-            ...cloneProvider,
           }),
         );
       },
@@ -9074,6 +9111,188 @@ export function createApp(deps: AppDeps) {
             runners: result.runners,
           }),
         );
+      },
+    )
+
+    // --- Codex の ChatGPT ログイン（/codex。#3939） ---------------------------
+    // 口は CLI（`alteroid codex`）・Web・この HTTP の3つで、どれもここを通る。
+    // **値（auth.json の中身）を返す口は作らない。** 状態とログインの進み具合だけを返す。
+
+    .get(
+      '/codex/auth',
+      describeRoute({
+        tags: ['codex'],
+        summary: 'Codex の ChatGPT ログインの状態を読む',
+        description:
+          'ログイン済みか・アカウント・プラン・最終更新・指紋・最後の失敗を返す。**値は返さない。**',
+        responses: {
+          200: {
+            description: 'いまの状態。',
+            content: { 'application/json': { schema: resolver(codexAuthStatusResponseSchema) } },
+          },
+          503: {
+            description: '正本の器が無い。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+        },
+      }),
+      async (c) => {
+        if (deps.codexAuth === undefined) {
+          return c.json({ error: 'Codex のログインの正本の器が無い' as const }, 503);
+        }
+        return c.json(codexAuthStatusResponseSchema.parse(await deps.codexAuth.status()));
+      },
+    )
+
+    /**
+     * ログアウト（正本から消し、全 runner から外す）。**狭める側**なので、日誌は状態を変えた後に
+     * 持ち主（`CodexChatgptAuthService`）が書く。資格は `requireOwner`（`PUT /credentials` と揃える。資格を書く口であるため。2026-10-07 オーナー確認済み）。
+     */
+    .delete(
+      '/codex/auth',
+      describeRoute({
+        tags: ['codex'],
+        summary: 'Codex の ChatGPT ログインを消す（ログアウト）',
+        description: '正本から消し、全 runner の CODEX_HOME から外す。',
+        responses: {
+          200: {
+            description: '消したか（無かったなら false）。',
+            content: { 'application/json': { schema: resolver(codexLogoutResponseSchema) } },
+          },
+          403: {
+            description: '許可（`access grant`）の無いアカウント。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+          503: {
+            description: '正本の器が無い。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+        },
+      }),
+      requireOwner,
+      async (c) => {
+        if (deps.codexAuth === undefined) {
+          return c.json({ error: 'Codex のログインの正本の器が無い' as const }, 503);
+        }
+        return c.json(codexLogoutResponseSchema.parse(await deps.codexAuth.logout()));
+      },
+    )
+
+    /**
+     * デバイスコードのログインを始める。確認用 URL とコードを返す。人間がブラウザで承認すると、
+     * 持ち主が正本へ置いて runner へ降ろす（`GET /codex/login/:id` で進み具合を見る）。
+     * 進行中のものがあればそれを返す（同時に1本）。
+     *
+     * **能力を広げる口**（peer の Codex が使う資格を置く）なので、`PUT /credentials` と同じく `requireOwner` を通し（2026-10-07 オーナー確認済み）、
+     * **日誌を先に書き、書けなければ始めずに 500。**
+     */
+    .post(
+      '/codex/login',
+      describeRoute({
+        tags: ['codex'],
+        summary: 'Codex の ChatGPT ログインをデバイスコードで始める',
+        description:
+          'デーモンの器で codex app-server を一時的な CODEX_HOME で起こし、デバイスコードを回す。' +
+          '返った verificationUrl を開いて userCode を入力すると完了する。',
+        responses: {
+          200: {
+            description: '始めたログイン（または進行中のログイン）。',
+            content: { 'application/json': { schema: resolver(codexLoginResponseSchema) } },
+          },
+          403: {
+            description: '許可（`access grant`）の無いアカウント。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+          502: {
+            description: 'codex app-server を起こせなかった・デバイスコードを取れなかった。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+          503: {
+            description: '正本の器が無い。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+        },
+      }),
+      requireOwner,
+      async (c) => {
+        if (deps.codexAuth === undefined) {
+          return c.json({ error: 'Codex のログインの正本の器が無い' as const }, 503);
+        }
+        await deps.stores.journal.append({
+          type: 'decision',
+          decision: 'Codex の ChatGPT ログインを始めようとしている（デバイスコード）',
+          grounds: `${describeActor(c.get('principal'))}（POST /codex/login）。値は書かない。`,
+        });
+        try {
+          return c.json(codexLoginResponseSchema.parse(await deps.codexAuth.startLogin()));
+        } catch (error) {
+          return c.json({ error: reasonOf(error) }, 502);
+        }
+      },
+    )
+
+    .get(
+      '/codex/login/:id',
+      describeRoute({
+        tags: ['codex'],
+        summary: 'Codex の ChatGPT ログインの進み具合を読む',
+        responses: {
+          200: {
+            description: 'ログイン1本の状態。',
+            content: { 'application/json': { schema: resolver(codexLoginResponseSchema) } },
+          },
+          404: {
+            description: '知らない id（デーモンが入れ替わった・古くて忘れた）。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+          503: {
+            description: '正本の器が無い。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+        },
+      }),
+      (c) => {
+        if (deps.codexAuth === undefined) {
+          return c.json({ error: 'Codex のログインの正本の器が無い' as const }, 503);
+        }
+        const view = deps.codexAuth.login(c.req.param('id'));
+        if (view === undefined) return c.json({ error: 'そのログインは無い' as const }, 404);
+        return c.json(codexLoginResponseSchema.parse(view));
+      },
+    )
+
+    .delete(
+      '/codex/login/:id',
+      describeRoute({
+        tags: ['codex'],
+        summary: 'Codex の ChatGPT ログインを取り消す',
+        responses: {
+          200: {
+            description: '取り消した後の状態（既に決着していればその状態）。',
+            content: { 'application/json': { schema: resolver(codexLoginResponseSchema) } },
+          },
+          403: {
+            description: '許可（`access grant`）の無いアカウント。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+          404: {
+            description: '知らない id。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+          503: {
+            description: '正本の器が無い。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+        },
+      }),
+      requireOwner,
+      async (c) => {
+        if (deps.codexAuth === undefined) {
+          return c.json({ error: 'Codex のログインの正本の器が無い' as const }, 503);
+        }
+        const view = await deps.codexAuth.cancelLogin(c.req.param('id'));
+        if (view === undefined) return c.json({ error: 'そのログインは無い' as const }, 404);
+        return c.json(codexLoginResponseSchema.parse(view));
       },
     )
 

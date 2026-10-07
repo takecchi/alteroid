@@ -1,0 +1,103 @@
+import { useCallback, useEffect, useRef, useState } from 'react';
+
+import {
+  claimUntilReady,
+  openAuthorization,
+  startLogin,
+  useApiContext,
+  useAuth,
+  type ClaimOutcome,
+} from '@alteroid/swr';
+import { readPendingLogin, storePendingLogin, type PendingLogin } from '@alteroid/logic';
+
+/**
+ * ポップアップで認証し、引き取って鍵を保存するまでの流れ（ログイン画面と、書きかけを残したまま
+ * ログインし直す帯が共有する）。画面遷移は持たない: 遷移の有無は呼び出し側が `onSignedIn` で決める。
+ */
+export function useSignIn(onSignedIn: () => void) {
+  const auth = useAuth();
+  const { client, setCredential } = useApiContext();
+
+  // 初期値として読む: effect の中で state に写すと、同期的な setState で描き直しが1往復無駄に増える
+  const [resumed] = useState(() => readPendingLogin());
+  const [busy, setBusy] = useState(() => resumed !== null);
+  const [failure, setFailure] = useState<unknown>(undefined);
+  const [manualUrl, setManualUrl] = useState<string | undefined>(undefined);
+  const abortRef = useRef<AbortController | undefined>(undefined);
+
+  useEffect(() => () => abortRef.current?.abort(), []);
+
+  const applyOutcome = useCallback(
+    async (outcome: ClaimOutcome) => {
+      if (outcome.status === 'ready') {
+        storePendingLogin(null);
+        setCredential(outcome.credential);
+        await auth.revalidate();
+        onSignedIn();
+      } else if (outcome.status === 'failed') {
+        storePendingLogin(null);
+        setFailure(new Error(outcome.message));
+      }
+      setBusy(false);
+      setManualUrl(undefined);
+      abortRef.current = undefined;
+    },
+    [auth, onSignedIn, setCredential],
+  );
+
+  const fail = useCallback((error: unknown) => {
+    setFailure(error);
+    setBusy(false);
+    abortRef.current = undefined;
+  }, []);
+
+  const settle = useCallback(
+    (pending: PendingLogin, controller: AbortController) =>
+      claimUntilReady(client, pending, { signal: controller.signal })
+        // やめた後に届いた結果は反映しない
+        .then((outcome) => (controller.signal.aborted ? undefined : applyOutcome(outcome)))
+        .catch((error: unknown) => {
+          if (!controller.signal.aborted) fail(error);
+        }),
+    [client, applyOutcome, fail],
+  );
+
+  useEffect(() => {
+    if (resumed === null) return;
+    const controller = new AbortController();
+    abortRef.current = controller;
+    void settle(resumed, controller);
+    return () => controller.abort();
+  }, [resumed, settle]);
+
+  function cancel() {
+    abortRef.current?.abort();
+    abortRef.current = undefined;
+    storePendingLogin(null);
+    setBusy(false);
+    setManualUrl(undefined);
+  }
+
+  async function begin(provider: string) {
+    setBusy(true);
+    setFailure(undefined);
+    setManualUrl(undefined);
+    const controller = new AbortController();
+    abortRef.current = controller;
+    try {
+      const started = await startLogin(client, provider);
+      if (controller.signal.aborted) {
+        storePendingLogin(null);
+        return;
+      }
+      const popup = openAuthorization(started.authorizationUrl);
+      if (popup === null) setManualUrl(started.authorizationUrl);
+
+      await settle({ ...started, provider }, controller);
+    } catch (error) {
+      if (!controller.signal.aborted) fail(error);
+    }
+  }
+
+  return { busy, failure, manualUrl, begin, cancel };
+}

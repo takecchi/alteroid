@@ -89,8 +89,6 @@ export interface ManagerRow {
   runnerLostSince?: string;
   runnerVanished?: boolean;
   sessionMissingSince?: string;
-  // 欄が無いのを claude と推測しない: 「不明」のため
-  managerProvider?: string;
 }
 
 export interface UnreadableManager {

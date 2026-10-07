@@ -1,6 +1,12 @@
 import { createHash } from 'node:crypto';
 
-import { createRunnerHost, readAttachmentLimits, runnerAttachmentBodyLimit } from '@alteroid/core';
+import {
+  createRunnerHost,
+  readAttachmentLimits,
+  RUNNER_CAPABILITY_MANAGER_PEERS,
+  runnerAttachmentBodyLimit,
+  type RunnerManagerPeer,
+} from '@alteroid/core';
 import { describe, expect, it } from 'vitest';
 
 import { createRunnerApp, Outbox } from './app.js';
@@ -8,8 +14,16 @@ import { createRunnerApp, Outbox } from './app.js';
 const TOKEN = 'daemon-only-token';
 const TOKEN_SHA256 = createHash('sha256').update(TOKEN, 'utf8').digest('hex');
 
-async function helloFrame(managerProvider?: string): Promise<Record<string, unknown>> {
+async function helloFrame(
+  options: {
+    managerModel?: string;
+    workerModel?: string;
+    managerPeers?: readonly RunnerManagerPeer[];
+  } = {},
+): Promise<Record<string, unknown>> {
+  const { managerPeers, ...models } = options;
   const app = createRunnerApp({
+    ...(managerPeers === undefined ? {} : { managerPeers }),
     host: createRunnerHost({
       runnerId: 'runner-hello-provider-test',
       workspacePath: '/workspace',
@@ -18,7 +32,7 @@ async function helloFrame(managerProvider?: string): Promise<Record<string, unkn
     outbox: new Outbox(),
     tokenSha256: TOKEN_SHA256,
     sseHeartbeatMs: 60_000,
-    ...(managerProvider === undefined ? {} : { managerProvider }),
+    ...models,
   });
   const response = await app.request('/events', {
     headers: { authorization: `Bearer ${TOKEN}`, accept: 'text/event-stream' },
@@ -38,26 +52,44 @@ async function helloFrame(managerProvider?: string): Promise<Record<string, unkn
   return JSON.parse(data) as Record<string, unknown>;
 }
 
-describe('runner の hello の managerProvider', () => {
-  it('渡した provider id を名乗る', async () => {
-    expect(await helloFrame('claude')).toMatchObject({
-      type: 'hello',
-      runnerId: 'runner-hello-provider-test',
-      managerProvider: 'claude',
-    });
+describe('runner の hello', () => {
+  it('マネージャー層の provider を名乗らない（managerProvider / managerProviders。2026-10-07 の決定）', async () => {
+    // 名乗ると、旧いデーモンが `provider` 付きの start / resume を送ってくる（名乗りを見て送る作りのため）。
+    const hello = await helloFrame();
+    expect(hello).toMatchObject({ type: 'hello', runnerId: 'runner-hello-provider-test' });
+    expect(hello).not.toHaveProperty('managerProvider');
+    expect(hello).not.toHaveProperty('managerProviders');
   });
 
-  it('渡さなければ欄を載せない（旧い runner と同じ形）', async () => {
-    expect(await helloFrame()).not.toHaveProperty('managerProvider');
+  it('モデルを渡せば managerModel / workerModel で名乗り、渡さなければ欄を載せない（旧い runner と同じ形。#3921）', async () => {
+    const named = await helloFrame({ managerModel: 'opus', workerModel: 'sonnet' });
+    expect(named).toMatchObject({ managerModel: 'opus', workerModel: 'sonnet' });
+    const none = await helloFrame();
+    expect(none).not.toHaveProperty('managerModel');
+    expect(none).not.toHaveProperty('workerModel');
+    expect(none).not.toHaveProperty('models');
   });
 
-  it('命令で名指しされて起こせる provider を managerProviders で名乗る（#486 S7。既定の provider とは別の軸）', async () => {
-    expect((await helloFrame()).managerProviders).toEqual(['claude', 'codex']);
+  it('片方だけ渡されたら、渡された側だけ名乗る（もう一方を既定で埋めない）', async () => {
+    const hello = await helloFrame({ workerModel: 'sonnet' });
+    expect(hello).toMatchObject({ workerModel: 'sonnet' });
+    expect(hello).not.toHaveProperty('managerModel');
   });
 
   it('添付を運ぶ口の本文の上限を attachmentBodyLimit で名乗る（#3111 段3。デーモンが送る前に検める）', async () => {
     expect((await helloFrame()).attachmentBodyLimit).toBe(
       runnerAttachmentBodyLimit(readAttachmentLimits().limits),
     );
+  });
+
+  it('peer を名乗る版であることを能力で名乗り、開いている peer とモデルを managerPeers に載せる（#3940）', async () => {
+    const hello = await helloFrame({ managerPeers: [{ provider: 'codex', models: ['gpt-5.5'] }] });
+    expect(hello.capabilities).toContain(RUNNER_CAPABILITY_MANAGER_PEERS);
+    expect(hello.managerPeers).toEqual([{ provider: 'codex', models: ['gpt-5.5'] }]);
+  });
+
+  it('開いている peer が無ければ managerPeers を送らない（ALTEROID_MANAGER_PEERS が空の器）', async () => {
+    expect(await helloFrame({ managerPeers: [] })).not.toHaveProperty('managerPeers');
+    expect(await helloFrame()).not.toHaveProperty('managerPeers');
   });
 });

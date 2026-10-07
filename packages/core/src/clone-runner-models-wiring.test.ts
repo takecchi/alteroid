@@ -1,24 +1,14 @@
 import { describe, it, expect } from 'vitest';
 import { ALWAYS_REDELIVER, createClone } from './clone.js';
 import type { ManagerPool } from './manager.js';
-import { CLAUDE_PROVIDER } from './claude-provider.js';
-import {
-  RUNNER_PROVIDER_UNVERIFIED,
-  describeProviderGaps,
-  type ProviderGapSubject,
-} from './provider-gaps.js';
+import { MODEL_UNKNOWN_LABEL, RUNNER_MODELS_UNVERIFIED } from './manager-models.js';
 import { createRunnerRegistry } from './runner-protocol.js';
 import { createLocalRunner } from './runner-local.js';
 import type { SelfFacts } from './self.js';
 import { createCloneMcpServer, createCloneTools } from './tools.js';
 import type { ToolContext } from './tools.js';
 import { createMemoryStores, humanMessage } from './testing.js';
-import { fakeSdk, waitFor, waitForDone, wireEvents } from './clone-test-harness.js';
-
-const FAKE: ProviderGapSubject = {
-  displayName: '偽',
-  capabilities: { ...CLAUDE_PROVIDER.capabilities, usage: false },
-};
+import { fakeSdk, waitForDone, wireEvents } from './clone-test-harness.js';
 
 const SELF: SelfFacts = {
   storage: 's',
@@ -28,14 +18,10 @@ const SELF: SelfFacts = {
   runner: 'r',
   entrypoint: 'e',
   auth: 'a',
-  models: { clone: 'opus', manager: 'opus', worker: 'sonnet' },
-  providerGaps: describeProviderGaps({ clone: CLAUDE_PROVIDER }),
-  cloneProvider: 'claude',
+  models: { clone: 'opus' },
 };
 
-const RUNNER_LINE = 'runner「edge-1」のマネージャー層（偽）は usage を持たない';
-
-function poolWith(provider: string, failRunners = false): ManagerPool {
+function poolWith(failRunners = false): ManagerPool {
   const base: ManagerPool = {
     start: () => {
       throw new Error('not implemented');
@@ -78,22 +64,23 @@ function poolWith(provider: string, failRunners = false): ManagerPool {
   };
   return {
     ...base,
-    list: () => Promise.resolve([]),
     runners: () =>
       failRunners
         ? Promise.reject(new Error('boom'))
         : (Promise.resolve({
             runners: [
               { label: 'edge-1', state: 'connected', since: 'x', runnerId: 'r1' },
-              { label: 'gone', state: 'lost', since: 'x', runnerId: 'r2' },
+              { label: 'edge-2', state: 'connected', since: 'x', runnerId: 'r2' },
+              { label: 'gone', state: 'lost', since: 'x', runnerId: 'r3' },
             ],
             unassigned: [],
           }) as unknown as ReturnType<ManagerPool['runners']>),
-    runnerManagerProvider: () => provider,
+    runnerReportedModels: (runnerId) =>
+      runnerId === 'r1' ? { manager: 'opus', worker: 'sonnet' } : undefined,
   };
 }
 
-function boot(provider: string, failRunners = false) {
+function boot(failRunners = false) {
   const { fn, calls } = fakeSdk();
   let captured: ToolContext | undefined;
   const clone = createClone({
@@ -101,9 +88,8 @@ function boot(provider: string, failRunners = false) {
     stores: createMemoryStores(),
     queryFn: fn,
     env: {},
-    managers: poolWith(provider, failRunners),
+    managers: poolWith(failRunners),
     self: SELF,
-    providerOf: (id) => (id === 'fake' ? FAKE : id === 'claude' ? CLAUDE_PROVIDER : undefined),
     runners: createRunnerRegistry([
       createLocalRunner({ workspacePath: '/work', queryFn: fakeSdk().fn, env: {} }),
     ]),
@@ -123,74 +109,40 @@ function boot(provider: string, failRunners = false) {
   return { clone, calls, events, selfStatus };
 }
 
-describe('クローン — provider の欠落の配線', () => {
-  it('SelfFacts の cloneProvider が self_status の「クローンの provider」に出る', async () => {
-    const s = boot('claude');
-    s.clone.post(humanMessage('やあ'));
-    await waitForDone(s.events);
-
-    expect(await s.selfStatus()).toContain('クローンの provider: claude');
-    await s.clone.stop();
-  });
-
-  it('偽 provider を名乗る runner のマネージャー層が self_status・digest に出て、システムプロンプトには出ない', async () => {
-    const s = boot('fake');
+describe('クローン — runner が名乗ったモデルの配線（#3947）', () => {
+  it('self_status は接続中の runner が名乗ったモデルを出し、名乗っていなければ不明と書く', async () => {
+    const s = boot();
     s.clone.post(humanMessage('やあ'));
     await waitForDone(s.events);
 
     const body = await s.selfStatus();
-    expect(body).toContain(RUNNER_LINE);
-    expect(body).toContain('runner「edge-1」の作業者層（偽）は usage を持たない');
-    expect(body).not.toContain('gone');
+    expect(body).toContain('runner edge-1: マネージャー opus / 作業者 sonnet');
+    expect(body).toContain(`runner edge-2: ${MODEL_UNKNOWN_LABEL}`);
+    expect(body).not.toContain('runner gone');
+    await s.clone.stop();
+  });
+
+  it('システムプロンプトには焼かない（実行時に引く）', async () => {
+    const s = boot();
+    s.clone.post(humanMessage('やあ'));
+    await waitForDone(s.events);
 
     const prompt = JSON.stringify(s.calls[0]?.options.systemPrompt);
     expect(prompt.length).toBeGreaterThan(200);
     expect(prompt).not.toContain('edge-1');
-
-    s.clone.post({
-      type: 'self_initiative',
-      id: 'evt-gap',
-      at: new Date().toISOString(),
-      reason: '定期 tick',
-    });
-    await waitFor(
-      () => s.calls.some((c) => c.inputs.join('\n').includes(RUNNER_LINE)),
-      'tick の digest に runner の欠落が届く',
-    );
+    expect(prompt).not.toContain('sonnet');
+    expect(prompt).toContain('self_status');
     await s.clone.stop();
   });
 
-  it('claude を名乗る runner なら self_status は欠落の節を持たない', async () => {
-    const s = boot('claude');
+  it('runners() が落ちたら「確かめられなかった」の1行を出す（取れた顔をしない）', async () => {
+    const s = boot(true);
     s.clone.post(humanMessage('やあ'));
     await waitForDone(s.events);
-    expect(await s.selfStatus()).not.toContain('provider が持たない能力');
-    await s.clone.stop();
-  });
 
-  it('未知の provider id は「確かめられない」と出る', async () => {
-    const s = boot('mystery');
-    s.clone.post(humanMessage('やあ'));
-    await waitForDone(s.events);
-    expect(await s.selfStatus()).toContain('未知の provider（mystery）');
-    await s.clone.stop();
-  });
-
-  it('runners() が落ちたら「確かめられなかった」の行が self_status と digest に出る（欠落なしに見せない）', async () => {
-    const s = boot('fake', true);
-    s.clone.post(humanMessage('やあ'));
-    await waitForDone(s.events);
-    expect(await s.selfStatus()).toContain(RUNNER_PROVIDER_UNVERIFIED);
-    s.clone.post({
-      type: 'self_initiative',
-      id: 'evt-unverified',
-      at: new Date().toISOString(),
-      reason: '定期 tick',
-    });
-    await waitFor(
-      () => s.calls.some((c) => c.inputs.join('\n').includes(RUNNER_PROVIDER_UNVERIFIED)),
-      'tick の digest に届く',
-    );
+    const body = await s.selfStatus();
+    expect(body).toContain(RUNNER_MODELS_UNVERIFIED);
+    expect(body).not.toContain('マネージャー opus');
     await s.clone.stop();
   });
 });

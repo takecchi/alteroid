@@ -263,7 +263,9 @@ const EXPECTED_SITE_COUNT: Record<string, number> = {
   // `[判断]` = `EXCHANGE_KIND_DECISION_PREFIX` で書く。Claude の駆動役は呼ばない）。
   // + 1（#3956。`#withdrawQueued` が、順番待ちの発言を取り下げたことを `[判断]` =
   // `EXCHANGE_KIND_DECISION_PREFIX` で書く）。
-  'clone.ts': 60,
+  // + 2（`#plugins`。展開できなかったことを `EXCHANGE_KIND_FAILURE_PREFIX` で、展開した一覧と
+  // 除いたものを `EXCHANGE_KIND_DECISION_PREFIX` で書く）。
+  'clone.ts': 62,
   // 40（issue #1332 起票時点） + 1（issue #1425 が `case 'rate_limit'` に
   // 足した、跨いで畳んだ本数の flush。同じく `EXCHANGE_KIND_GAUGE_PREFIX`）
   // + 1（issue #1388 が `#flushSynthesizedNoticeFor` に足した、合流窓へ
