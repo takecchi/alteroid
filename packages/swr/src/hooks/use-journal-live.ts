@@ -159,7 +159,7 @@ function refetchMounted(mutate: ReturnType<typeof useSWRConfig>['mutate']): void
  *
  * `commitment_list` は読むだけなので含めない（クローンが一覧を読むたびに画面が
  * 取り直すことになる）。数え上げの根拠は `@alteroid/core` の `CLONE_TOOL_NAMES` で、
- * `use-journal-live.test.tsx` がその配列の `commitment_` 始まりと突き合わせる
+ * `use-journal-live-commitments.test.tsx` がその配列の `commitment_` 始まりと突き合わせる
  * （道具が増えて名簿が古くなれば、そのテストが落ちる）。core の実行時コードは
  * 画面のバンドルへ持ち込まないので、ここは写しである。
  */
