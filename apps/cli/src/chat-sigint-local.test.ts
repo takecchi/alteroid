@@ -263,6 +263,52 @@ describe('chat: 応答中でない区間の Ctrl+C は手元のコマンドだ�
     await done;
   });
 
+  it('確認の入力欄（yes と入力）の Ctrl+C は、その確認だけを取り消し、REPL は続く（#3954）', async () => {
+    useStdin(true);
+    const calls = stubFetch(
+      () => false,
+      () => Response.json({}),
+    );
+    const out = captureStdout();
+    const { chatCommand } = await import('./chat.js');
+    const done = chatCommand();
+    await flush();
+    rl.emit('line', '/stop m1');
+    await flush();
+    expect(out()).toContain('取り消せません。');
+
+    rl.emit('SIGINT');
+    await flush();
+    expect(rl.closed).toBe(false);
+    expect(out()).toContain('取り消しました。何も変更していません。');
+    expect(calls.some((c) => c.method === 'DELETE')).toBe(false);
+
+    // 確認は片付き、通常の入力待ちに戻っている。そこでの Ctrl+C は今までどおり終了する。
+    rl.emit('SIGINT');
+    await done;
+    expect(rl.closed).toBe(true);
+    expect(calls.some((c) => c.method === 'DELETE')).toBe(false);
+  });
+
+  it('（陰性対照）確認の入力欄で yes と入力すれば、操作は進む', async () => {
+    useStdin(true);
+    const calls = stubFetch(
+      () => false,
+      () => Response.json({}),
+    );
+    captureStdout();
+    const { chatCommand } = await import('./chat.js');
+    const done = chatCommand();
+    await flush();
+    rl.emit('line', '/stop m1');
+    await flush();
+    rl.emit('line', 'yes');
+    await flush();
+    expect(calls.some((c) => c.method === 'DELETE')).toBe(true);
+    rl.close();
+    await done;
+  });
+
   it('（陰性対照）発言の応答の受信中の Ctrl+C は、今どおり /clone/interrupt を呼ぶ', async () => {
     useStdin(true);
     const encoder = new TextEncoder();

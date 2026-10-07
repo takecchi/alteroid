@@ -28,6 +28,32 @@ describe('classifyTurnFailure', () => {
   });
 });
 
+describe('classifyTurnFailure — 自由文の語だけでは決めない（#3953）', () => {
+  it('本文の中の 401 / quota では認証・上限と言わない', () => {
+    const head = '結果なしで終了: error_during_execution（result_subtype） / ';
+    expect(classifyTurnFailure(`${head}port 8401 ... 401 files`)).toBe('other');
+    expect(classifyTurnFailure(`${head}curl returned 401 from the tool`)).toBe('other');
+    expect(classifyTurnFailure(`${head}disk quota exceeded`)).toBe('other');
+    expect(classifyTurnFailure('EDQUOT: quota exceeded, write')).toBe('other');
+    expect(classifyTurnFailure('tool said: not logged in to the registry')).toBe('other');
+  });
+
+  it('SDK の印（assistant.error の語・api_error_status）があれば分ける', () => {
+    const via = (code: string, kind: string) => `結果なしで終了: ${code}（${kind}） / x`;
+    expect(classifyTurnFailure(via('billing_error', 'assistant_error'))).toBe('quota');
+    expect(classifyTurnFailure(via('error_during_execution/401', 'result_subtype'))).toBe('auth');
+    expect(classifyTurnFailure(via('error_during_execution/429', 'result_subtype'))).toBe('quota');
+  });
+
+  it('印の語が本文側に在るだけなら分けない', () => {
+    expect(
+      classifyTurnFailure(
+        '結果なしで終了: unknown（assistant_error） / authentication_failed in log',
+      ),
+    ).toBe('other');
+  });
+});
+
 describe('TurnFailureNote', () => {
   it('利用者向けの1文を出し、生の文は「詳細」の中に畳む', () => {
     render(<TurnFailureNote message={LOGIN_MESSAGE} />);

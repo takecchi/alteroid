@@ -296,6 +296,82 @@ describe('chat: 複数行の入力（#3412）', () => {
   });
 });
 
+describe('chat: 打った本文を書き換えずに送る（#3952）', () => {
+  async function sendLines(lines: string[]): Promise<(string | null)[]> {
+    useStdin(true);
+    const calls = recordFetch((path) => (path === '/chat' ? sse(OK_REPLY) : Response.json({})));
+    const out = captureStdout();
+    const { chatCommand } = await import('./chat.js');
+    const done = chatCommand();
+    await flush();
+    for (const line of lines) {
+      rl.emit('line', line);
+      await flush();
+    }
+    rl.close();
+    await done;
+    out();
+    return calls.filter((c) => c.path === '/chat').map((c) => c.text);
+  }
+
+  it('行末の \\\\ は1文字の \\ として送る', async () => {
+    expect(await sendLines(['path C:\\\\'])).toEqual(['path C:\\']);
+  });
+
+  it('奇数個なら、半分に畳んだうえで続ける', async () => {
+    expect(await sendLines(['a\\\\\\', 'b'])).toEqual(['a\\\nb']);
+  });
+
+  it('続きの行の末尾の \\\\ も畳む', async () => {
+    expect(await sendLines(['x\\', 'C:\\\\'])).toEqual(['x\nC:\\']);
+  });
+
+  it('/ で始まるコマンドの \\\\ は触らない', async () => {
+    useStdin(true);
+    const calls = recordFetch(() => Response.json({}));
+    const out = captureStdout();
+    const { chatCommand } = await import('./chat.js');
+    const done = chatCommand();
+    await flush();
+    rl.emit('line', '/attach C:\\\\');
+    await flush();
+    rl.close();
+    await done;
+    expect(out()).toContain('C:\\\\');
+    expect(calls.filter((c) => c.path === '/chat')).toHaveLength(0);
+  });
+
+  it('1行目の先頭の空白を保つ（末尾の空白・改行は落とす）', async () => {
+    expect(await sendLines(['  indented first  '])).toEqual(['  indented first']);
+  });
+
+  it('貼り付けでも1行目のインデントを保つ', async () => {
+    useStdin(true);
+    const calls = recordFetch((path) => (path === '/chat' ? sse(OK_REPLY) : Response.json({})));
+    const out = captureStdout();
+    const { chatCommand } = await import('./chat.js');
+    const done = chatCommand();
+    await flush();
+    input.emit('keypress', undefined, { name: 'paste-start' });
+    rl.emit('line', '    if (x) {');
+    rl.emit('line', '    }');
+    input.emit('keypress', undefined, { name: 'paste-end' });
+    await flush();
+    rl.emit('line', '');
+    await flush();
+    rl.close();
+    await done;
+    out();
+    expect(calls.filter((c) => c.path === '/chat').map((c) => c.text)).toEqual([
+      '    if (x) {\n    }',
+    ]);
+  });
+
+  it('空白だけの行は送らず、先頭に空白のある // も発言として送る', async () => {
+    expect(await sendLines(['   ', '  //tmp/a'])).toEqual(['  /tmp/a']);
+  });
+});
+
 describe('chat: 非対話の入力で送信が失敗したら止まる（#3413）', () => {
   it('失敗した行で止まり、会話を閉じて、投げる（残りの行は送らない）', async () => {
     useStdin(false);

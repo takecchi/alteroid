@@ -351,6 +351,33 @@ describe('#3686: 送れなかった本文を端末へ戻す', () => {
     expect(out()).toContain('送れなかった本文:\nhello\n');
   });
 
+  it('末尾の \\ は倍にして戻す。貼り直すと同じ本文（C:\\）が送られる（#3952）', async () => {
+    useStdin(true);
+    const bodies: string[] = [];
+    vi.stubGlobal('fetch', (_url: unknown, init?: RequestInit) => {
+      bodies.push((JSON.parse(String(init?.body)) as { text: string }).text);
+      if (bodies.length === 1) return Promise.reject(new Error('fetch failed'));
+      return Promise.resolve(
+        new Response(
+          'event: open\ndata: {"conversationId":"c1"}\n\nevent: done\ndata: {"type":"done"}\n\n',
+          { headers: { 'content-type': 'text/event-stream' } },
+        ),
+      );
+    });
+    const out = captureStdout();
+    await start();
+    rl.emit('line', 'path C:\\\\');
+    await flush();
+    const shown = out();
+    expect(shown).toContain('送れなかった本文:\npath C:\\\\\n');
+    expect(bodies).toEqual(['path C:\\']);
+    rl.emit('line', 'path C:\\\\');
+    await flush();
+    rl.close();
+    await flush();
+    expect(bodies).toEqual(['path C:\\', 'path C:\\']);
+  });
+
   it('// の脱出の本文は、打ったまま（/ を2つ）で戻す（#3862）', async () => {
     useStdin(true);
     vi.stubGlobal('fetch', () => Promise.reject(new Error('fetch failed')));
