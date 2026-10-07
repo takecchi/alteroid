@@ -9,9 +9,11 @@ import { isKeyOfType } from './queries';
 // 一覧とは別のキーにする: 一覧は日誌を遡るので重い
 export const UNREAD_COUNT_KEY = { type: 'conversationUnreadCount' } as const;
 
-export function useUnreadConversationCount() {
+export function useUnreadConversationCount(enabled = true) {
   const api = useApi();
-  return useSWR(UNREAD_COUNT_KEY, () => api.api.GET('/conversations/unread-count').then(unwrap));
+  return useSWR(enabled ? UNREAD_COUNT_KEY : null, () =>
+    api.api.GET('/conversations/unread-count').then(unwrap),
+  );
 }
 
 // 比較できない値は「後ではない」側へ倒す: 送らない側なら取り返しがつく

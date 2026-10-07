@@ -48,4 +48,16 @@ describe('ホームの承認待ちの相対の時刻（#3700）', () => {
     expect(screen.getByText('3分前')).toBeTruthy();
     expect(screen.queryByText('たった今')).toBeNull();
   });
+
+  it('分の時計より先に積まれた承認を「まもなく」「N分後」と言わない（#3966）', async () => {
+    const createdAt = new Date(START + 30_000).toISOString();
+    renderHome({
+      approvals: [{ id: 'a-1', question: '出してよいか', createdAt, options: [] }],
+      hold: ['progress'],
+    });
+    await flush();
+    expect(screen.getByText('出してよいか')).toBeTruthy();
+    expect(screen.getByText('たった今')).toBeTruthy();
+    expect(screen.queryByText('まもなく')).toBeNull();
+  });
 });
