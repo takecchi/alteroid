@@ -191,20 +191,49 @@ export function tokenSha256Of(env: NodeJS.ProcessEnv = process.env): string | un
   return folded;
 }
 
+/** UID / GID の環境変数の値を非負の整数（10進の数字だけ）として読む。違えば起動時に分かる文で落とす。 */
+function idOf(name: string, raw: string): number {
+  if (!/^\d+$/.test(raw) || !Number.isSafeInteger(Number(raw))) {
+    throw new Error(
+      `${name} は非負の整数でなければならない（受け取った値: ${JSON.stringify(raw)}）`,
+    );
+  }
+  return Number(raw);
+}
+
 /**
  * 子プロセスを降ろす UID。
  *
  * **設定されているのに降ろせないなら落とす。** 同じ UID のまま走り続けると、
  * 境界があるつもりで無い状態になる（いちばん危ない）。
+ *
+ * **値の形も確かめる**（#3807）。UID・GID は非負の整数でなければ落とす（`NaN` のまま
+ * 通ると、後の chown や spawn で分かりにくい形で壊れる）。UID が runner 自身の UID
+ * （root で動くので 0）と同じなら、降ろす先が自分と同じで境界にならないので落とす。
+ * そのまま通すと、孤児の回収の種の選び方（`ppid === 1 && ownerUid === childUid`）が
+ * 「root の `ppid == 1` のプロセスを種にしない」前提を失い、runner 自身まで候補に入る。
+ *
+ * `ownUid` は runner 自身の UID（`process.getuid` が無い環境では `undefined`＝比べない）。
  */
-export function childUserOf(env: NodeJS.ProcessEnv = process.env): RunnerChildUser | undefined {
+export function childUserOf(
+  env: NodeJS.ProcessEnv = process.env,
+  ownUid: number | undefined = process.getuid?.(),
+): RunnerChildUser | undefined {
   const uid = envValue(env, 'ALTEROID_RUNNER_CHILD_UID');
   if (uid === undefined) return undefined;
   const gid = envValue(env, 'ALTEROID_RUNNER_CHILD_GID') ?? uid;
+  const uidNumber = idOf('ALTEROID_RUNNER_CHILD_UID', uid);
+  const gidNumber = idOf('ALTEROID_RUNNER_CHILD_GID', gid);
+  if (ownUid !== undefined && uidNumber === ownUid) {
+    throw new Error(
+      `ALTEROID_RUNNER_CHILD_UID が runner 自身の UID（${String(ownUid)}）と同じ。` +
+        '降ろす先が自分と同じでは境界にならないので起動しない（root と別の UID を置くこと）。',
+    );
+  }
   const home = envValue(env, 'ALTEROID_RUNNER_CHILD_HOME');
   return {
-    uid: Number(uid),
-    gid: Number(gid),
+    uid: uidNumber,
+    gid: gidNumber,
     ...(home === undefined ? {} : { home }),
   };
 }

@@ -19,7 +19,11 @@ function attachmentOf(id: string, name: string, bytes: Uint8Array): RunnerAttach
   };
 }
 
-function fakeSdk(): { fn: typeof sdkQuery; received: { content: unknown }[] } {
+function fakeSdk(): {
+  fn: typeof sdkQuery;
+  received: { content: unknown }[];
+  opened: () => number;
+} {
   const received: { content: unknown }[] = [];
   let count = 0;
   const fn = ((params: { prompt: AsyncIterable<{ message: { content: unknown } }> }) => {
@@ -45,7 +49,7 @@ function fakeSdk(): { fn: typeof sdkQuery; received: { content: unknown }[] } {
       interrupt: async () => undefined,
     }) as unknown as Query;
   }) as unknown as typeof sdkQuery;
-  return { fn, received };
+  return { fn, received, opened: () => count };
 }
 
 let hosts: RunnerHost[] = [];
@@ -154,5 +158,29 @@ describe('resume が添付を置いている間に畳まれた回は、作り直
     const path = /path=(.+?)（Read/.exec(text)?.[1];
     expect(path).toBeDefined();
     await expect(readFile(path as string, 'utf8')).resolves.toBe('中身X');
+  });
+});
+
+describe('作り直しの resume が添付を置いている間に、別の resume が重なった回（Issue #3806）', () => {
+  it('セッションは1本だけ開き、2本目は reusedLiveSession: true で合流して追加の一言が届く', async () => {
+    const { host, fake } = await setup();
+    const command = {
+      managerId: 'mgr-abc123',
+      sessionId: 'sess-old',
+      cwd: '/workspace',
+      request: '元の依頼',
+      message: '続きです',
+      attachments: [attachmentOf('att-1', 'a.txt', Buffer.from('中身X'))],
+    };
+    const settled = await Promise.allSettled([host.resume(command), host.resume(command)]);
+    expect(settled.map((s) => s.status)).toEqual(['fulfilled', 'fulfilled']);
+    const results = settled.flatMap((s) => (s.status === 'fulfilled' ? [s.value] : []));
+    expect(results.map((r) => r.reusedLiveSession).sort()).toEqual([false, true]);
+    expect(results[0]?.sessionGeneration).toBe(results[1]?.sessionGeneration);
+    expect(fake.opened()).toBe(1);
+    expect(host.list().map((state) => state.managerId)).toEqual(['mgr-abc123']);
+    // 作り直した1本が起動時の一言、合流した1本が追加の一言を、同じセッションへ届ける。
+    await vi.waitFor(() => expect(fake.received).toHaveLength(2));
+    expect(fake.received.every((r) => JSON.stringify(r.content).includes('続きです'))).toBe(true);
   });
 });
