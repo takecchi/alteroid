@@ -4,6 +4,7 @@ import { join } from 'node:path';
 
 import type {
   AnswerApprovalVia,
+  PendingMessage,
   ApprovalSelection,
   ChatStreamEvent,
   CloneHost,
@@ -89,6 +90,8 @@ function fakeClone() {
   const inProgress = new Map<string, ChatStreamEvent[]>();
   /** `attach` が呼ばれた会話 id（別の会話の途中経過を引いていないことを見る）。 */
   const attachCalls: string[] = [];
+  /** 答えを待っている発言（会話ごと。`attach` が返す。#3990）。 */
+  const pending = new Map<string, PendingMessage[]>();
   /**
    * `CloneHost.dropQueuedInboxEvents` が受け取った id の塊（issue #1049）。
    * **塊ごとに1要素**（`POST /inbox/remove` は id を塊に分けて回す）。
@@ -276,6 +279,7 @@ function fakeClone() {
       listeners.set(conversationId, set);
       return {
         inProgress: snapshot === undefined ? null : [...snapshot],
+        pending: [...(pending.get(conversationId) ?? [])],
         unsubscribe: () => set.delete(listener),
       };
     },
@@ -305,6 +309,7 @@ function fakeClone() {
     emit,
     listeners,
     inProgress,
+    pending,
     attachCalls,
     ended,
     answered,
@@ -670,7 +675,7 @@ describe('HTTP API', () => {
       }
 
       expect(frames(seen)).toEqual([
-        { event: 'open', data: { conversationId: 'conv-a', inProgress: true } },
+        { event: 'open', data: { conversationId: 'conv-a', inProgress: true, pending: [] } },
         { event: 'queued', data: { type: 'queued' } },
         { event: 'thinking', data: { type: 'thinking' } },
         { event: 'text', data: { type: 'text', text: '途中まで' } },
@@ -698,21 +703,42 @@ describe('HTTP API', () => {
       expect(frames(seen).map((f) => f.event)).toEqual(['open', 'thinking', 'error']);
     });
 
-    it('進行中でなければ open(inProgress: false) だけで閉じ、購読を残さない', async () => {
+    it('進行中でなければ open(inProgress: false, pending: []) だけで閉じ、購読を残さない', async () => {
       const response = await app.request('/chat/conv-none/stream');
       expect(response.status).toBe(200);
       expect(frames(await readAll(response))).toEqual([
-        { event: 'open', data: { conversationId: 'conv-none', inProgress: false } },
+        { event: 'open', data: { conversationId: 'conv-none', inProgress: false, pending: [] } },
       ]);
       expect(fake.posted).toEqual([]);
       expect(fake.listeners.get('conv-none')?.size ?? 0).toBe(0);
+    });
+
+    it('open に pending（clientMessageId と state）が載り、進行中でなくても返る', async () => {
+      fake.pending.set('conv-b', [
+        { clientMessageId: 'cm-1', state: 'running' },
+        { clientMessageId: 'cm-2', state: 'queued' },
+      ]);
+      const response = await app.request('/chat/conv-b/stream');
+      expect(frames(await readAll(response))).toEqual([
+        {
+          event: 'open',
+          data: {
+            conversationId: 'conv-b',
+            inProgress: false,
+            pending: [
+              { clientMessageId: 'cm-1', state: 'running' },
+              { clientMessageId: 'cm-2', state: 'queued' },
+            ],
+          },
+        },
+      ]);
     });
 
     it('別の会話の途中経過は流れない', async () => {
       fake.inProgress.set('conv-a', [{ type: 'thinking' }]);
       const response = await app.request('/chat/conv-b/stream');
       expect(frames(await readAll(response))).toEqual([
-        { event: 'open', data: { conversationId: 'conv-b', inProgress: false } },
+        { event: 'open', data: { conversationId: 'conv-b', inProgress: false, pending: [] } },
       ]);
       expect(fake.attachCalls).toEqual(['conv-b']);
     });
