@@ -942,6 +942,29 @@ describe('承認カードに、確認が上がった会話を出す（issue #782
     ).toBe('/chat/conv-x');
   });
 
+  it('③ 窓が先頭に届いていない（reachedStart: false）: クローンの発言が0件でも「まだ無い」と言い切らず、確かめられなかったと出す（#3871）', async () => {
+    stubApprovals([approval({ id: 'a-1', question: '質問1', conversationId: 'conv-x' })], {
+      conversation: () =>
+        json({
+          conversationId: 'conv-x',
+          messages: [
+            { id: 'm1', at: '2026-08-19T09:00:00.000Z', role: 'inbound', text: '人間の発言だけ' },
+          ],
+          scanned: 1,
+          reachedStart: false,
+        }),
+    });
+    renderPage();
+
+    expect(
+      await screen.findByText(/取れた窓にはクローンの発言が無かった.*確かめられなかった/),
+    ).toBeTruthy();
+    expect(screen.queryByText('この会話にはまだクローンの発言が無い')).toBeNull();
+    expect(
+      screen.getByRole('link', { name: /この会話をチャットで開く/ }).getAttribute('href'),
+    ).toBe('/chat/conv-x');
+  });
+
   /**
    * ⚠️ **見出しは「この確認が上がった会話」であって「この確認への返答」では
    * ない**（不変条件D。ここは変えていない）。outbound の `exchange` には
