@@ -1188,12 +1188,9 @@ describe('クローンの道具', () => {
       const description = tools.find((entry) => entry.name === 'memory_list')?.description ?? '';
 
       const marker = 'MARKER-BODY-7f3a2c';
-      // frontmatter 無し（既定で premise に解決される経路）。
       const renderedByDefault = renderMemoryDocuments([
         { slug: 'probe-default', content: `# 見出し\n${marker}\n` },
       ]);
-      // `type: premise` を明示した経路（既定の解決ではなく、premise の描画
-      // そのものを通す）。両方が同じ答えであることも、ついでに確かめる。
       const renderedExplicit = renderMemoryDocuments([
         {
           slug: 'probe-explicit',
@@ -1205,28 +1202,12 @@ describe('クローンの道具', () => {
 
       const claimsBodyBaked = /premise[^。]*全文|全文[^。]*premise/.test(description);
 
-      // 実装側の釘: renderMemoryDocuments が本文を焼くように戻ったら、
-      // ここが単独で落ちる。
       expect(bodyIsBaked).toBe(false);
-      // 説明文側の釘: description が「全文」の文言へ戻ったら、ここが単独で
-      // 落ちる。
       expect(claimsBodyBaked).toBe(false);
-      // 参考（独立の検出力は持たない。doc 参照）: 上の2本が守る限り必ず一致する。
       expect(bodyIsBaked).toBe(claimsBodyBaked);
     });
   });
 
-  /**
-   * 実行環境プロファイル。
-   *
-   * **クローンにも人間と同じ手を持たせる。** 人間は自分の `~/.zshenv` を開いて
-   * 直せるのだから、その写像であるクローンにできないのは能力の削除である
-   * （north_star 禁止2 は層を問わず効く）。
-   *
-   * 固定するのは「人間が言ったことを永続化できる」ことと、「置いたものが
-   * ちゃんと配られる」ことの2つ。**人間の口（`PUT /profile`）と同じ経路を通る**
-   * ので、片方だけ検査が緩いという状態を作らない。
-   */
   it('profile_write は保存し、runner へも降ろす', async () => {
     const h = harness();
 
@@ -1237,18 +1218,10 @@ describe('クローンの道具', () => {
 
     expect(result).toContain('更新した');
     expect((await h.stores.profile.list())[0]?.script).toContain('SOME_API_TOKEN');
-    // **置くだけで終わらせない。** 配られていなければマネージャーには効かない。
     expect(h.distributed).toHaveLength(1);
     expect(h.distributed[0]).toContain('SOME_API_TOKEN');
   });
 
-  /**
-   * **配布先の一覧にも上限が要る（#409）。** `配った先` / `配れなかった先` は
-   * どちらも器の台数ぶん伸びる列挙で、`.join()` に上限も合図も無かった
-   * （`配れなかった先` は runnerId に加えてエラー本文も抱えるので、なおさら
-   * 長さの見込みが立たない）。器の台数が多い運用（M5 で runner が増える）を
-   * 想定して締めておく。
-   */
   it('配布先が大量でも、配った先／配れなかった先は抜粋の合図で締まる', async () => {
     const h = harness();
     const count = 200;
@@ -1257,7 +1230,6 @@ describe('クローンの道具', () => {
         return Array.from({ length: count }, (_, index) => ({
           runnerId: `runner-${index}`,
           async setProfile() {
-            // 半分は失敗させ、エラー本文つきの列挙も伸びることを確かめる。
             return index % 2 === 0
               ? { ok: true as const }
               : { ok: false as const, error: `runner-${index} は届かなかった（詳しい理由の本文）` };
@@ -1292,8 +1264,6 @@ describe('クローンの道具', () => {
     expect(failed).toMatch(/省略/);
   });
 
-  // 2026-10-03: プロファイルは名前付きの行になった。`profile_read` は名前を省くと一覧
-  // （本文なし）、名前を渡すとその行の本文。（以前は引数なしで本文を返していた。）
   it('profile_read name=<名前> で今の本文を取れる（足すだけの更新ができる）', async () => {
     const h = harness();
     await h.call('profile_write', { script: 'export A=1', summary: 'A' });
@@ -1317,9 +1287,7 @@ describe('クローンの道具', () => {
 
     expect(listing).toContain('- alpha / 撒く先 all /');
     expect(listing).toContain('- rust / 撒く先 runner /');
-    // 名前のコード単位順。
     expect(listing.indexOf('- alpha')).toBeLessThan(listing.indexOf('- rust'));
-    // **本文は一覧に載せない**（鍵が入っている）。
     expect(listing).not.toContain('SECRET_');
     expect(listing).toContain('profile_read name=<名前>');
   });
@@ -1347,10 +1315,6 @@ describe('クローンの道具', () => {
     expect(listing).toMatch(/ほか \d+ 件は省略/);
   });
 
-  /**
-   * 行ごとの撒く先（scope）と名前。`profile_write` は人間の口（`PUT /profile/:name`）と同じ
-   * `ProfileService.set` を通るので、同じ意味で通ること。
-   */
   it('profile_write の scope=runner: 正本は行を持ち、runner には合成が降り、profile_read に撒く先が出る', async () => {
     const h = harness();
 
@@ -1365,7 +1329,6 @@ describe('クローンの道具', () => {
     expect(await h.stores.profile.list()).toMatchObject([{ name: 'rust', scope: 'runner' }]);
     expect(h.distributed).toHaveLength(1);
     expect(h.distributed[0]).toContain('ONLY_RUNNER');
-    // クローンは読む口を失わない（scope が runner でも本文は読める）。
     const body = await h.call('profile_read', { name: 'rust' });
     expect(body).toContain('撒く先 runner');
     expect(body).toContain('export ONLY_RUNNER=1');
@@ -1423,11 +1386,6 @@ describe('クローンの道具', () => {
     expect((await h.stores.profile.list()).map((row) => row.name)).toEqual(['b']);
   });
 
-  /**
-   * issue #2429。`profile_write` の戻りはクローンの文脈に入る。評価の失敗の文は
-   * シェルの stderr（構文エラーは入力の行を引用し、`set -x` は値ごと吐く）を含むので、
-   * 伏せずに戻すと鍵の値がクローンの文脈へ入る。偽の値だけを使い、実物の /bin/sh に吐かせる。
-   */
   describe('評価の失敗の戻りに、シェルの stderr の鍵の値を載せない（issue #2429）', () => {
     const FAKE = 'FAKE_SECRET_VALUE_2429';
 
@@ -1518,33 +1476,8 @@ describe('クローンの道具', () => {
     });
   });
 
-  /**
-   * ⚠️ **2026-09-29 以前の形（issue #2145 で反転）。** 以前は「1文字も置いて
-   * いないので、日誌に残す事実も無い」——`profile_write` は評価→保存→配布の
-   * 順で、失敗（読めなかった）は保存の前に決まるので `appendJournalOrThrow`
-   * 自体を呼んでいなかった。
-   *
-   * **変更した事実**: 日誌を先に書く形へ動いたので、評価に断られた回でも
-   * 「差し替えようとしている」の1行目は既に書かれている。そこへ `PUT /profile`
-   * （#2134）と同じ判断で、打ち消しの1行（「差し替えられなかった（読めな
-   * かった）」）も足すことにした——期待は「日誌にも残らない」から「2行残る」
-   * へ反転する。
-   * **なぜ必要か**: `deps.profile.apply`（ここでは `context.profile.apply`）は
-   * 評価と実際の保存が同じ1呼びの中にあり、ここからは検証専用の分岐を安全に
-   * 切り出せない。日誌を先に書く以上、評価で断られた回も「打ち消し」の扱いに
-   * するしかない。
-   * **なぜ保証が弱くならないか**: 値（スクリプト本文）は依然として1文字も
-   * 日誌に書かれない（下のアサーションで確認）。増えたのは「試みたこと自体の
-   * 記録」で、記録が多すぎる側への変化——記録の無い差し替えより安全側という
-   * teto の判断をそのまま延長した（#2134 の `PUT /profile` と同じ理由）。
-   */
   it('読めなかった（評価で断った）ときも、差し替えようとした行と打ち消しの行が残る（値そのものは書かない）', async () => {
     const h = harness();
-    // （以下は 2026-09-29 以前の形。issue #2145 で反転）
-    // 器が「読めない」と答える状況。置けなかったのはシステムの結果であって、
-    // クローンの判断ではない（日誌の decision を汚さない）。
-    // ——日誌を先に書く形へ動いたので、いまは「試みたこと」自体は日誌に残す
-    // （issue #2145。値〈スクリプト本文〉は依然として書かない）。
     const tools = createCloneTools({
       memoryCause: () => 'clone',
       conversationId: () => undefined,
@@ -1581,7 +1514,6 @@ describe('クローンの道具', () => {
     expect(body).toContain('構文が壊れている');
     expect(await h.stores.profile.list()).toEqual([]);
 
-    // `list` の既定は新しい順（`desc`）なので `order: 'asc'` で古い順に取る。
     const decisions = (await h.stores.journal.list({ types: ['decision'], order: 'asc' })).flatMap(
       (entry) => (entry.type === 'decision' ? [entry.decision] : []),
     );
@@ -1592,7 +1524,6 @@ describe('クローンの道具', () => {
     expect(decisions[1]).toBe(
       '実行環境プロファイルを差し替えられなかった（読めなかった）: 構文が壊れたスクリプト',
     );
-    // 値そのもの（スクリプト本文）は1文字も日誌に書かれない。
     expect(JSON.stringify(decisions)).not.toContain('if [ ; then');
   });
 
@@ -1608,9 +1539,6 @@ describe('クローンの道具', () => {
     expect(JSON.stringify(entry)).not.toContain('super-secret');
     expect(JSON.stringify(entry)).toContain('Slack の鍵を置いた');
   });
-
-  // --- 継続中の依頼 --------------------------------------------------------
-  // 「定期的に〜しておいて」を、思い出せるかどうかの賭けにしないための器。
 
   it('schedule_create は継続中の依頼として残り、schedule_list で読める', async () => {
     const h = harness();
@@ -1630,7 +1558,6 @@ describe('クローンの道具', () => {
     });
     expect(await h.call('schedule_list', {})).toContain('open issue');
 
-    // 聞かずに仕込んだことは日誌に残る
     const [entry] = await h.stores.journal.list({ types: ['decision'] });
     expect(entry).toMatchObject({ type: 'decision' });
   });
@@ -1650,10 +1577,6 @@ describe('クローンの道具', () => {
     expect(reply).toContain('作成: 2026-01-02T03:04:05.000Z');
     expect(reply).toContain('更新: 2026-03-04T05:06:07.000Z');
   });
-
-  // --- 次に動く時刻（Issue #237） --------------------------------------
-  // nextAt を計算しているのは Scheduler（`ToolContext.scheduler`）であって
-  // `stores.schedules` ではない。schedule_list はその写しを引いて出す。
 
   it('schedule_list（一覧モード）は ToolContext.scheduler から次に動く時刻を出す', async () => {
     const h = harness(undefined, () => [
@@ -1707,8 +1630,6 @@ describe('クローンの道具', () => {
   });
 
   it('scheduler は渡っているが、この kind をまだ仕込みへ反映していないときは反映待ちと言う', async () => {
-    // 仕込み直後は Scheduler#reconcile() がまだ読み直していない、という状況を
-    // 模す（`scheduleNextAtOf` の doc）。scheduler 自体は空配列を返す。
     const h = harness(undefined, () => []);
     await h.call('schedule_create', { kind: 'watch', request: '最初の依頼', everyMinutes: 30 });
 
@@ -1717,21 +1638,6 @@ describe('クローンの道具', () => {
     expect(reply).toContain('次に動く時刻: （まだ計算されていない。少し待って呼び直すこと）');
   });
 
-  /**
-   * `schedule_list` の一覧モードに継続点（`cursor`）を足す（issue #662 段1）。
-   *
-   * **直した穴**: 一覧は `kind` の昇順で予算（`SCHEDULE_LIST_BUDGET`）に
-   * 入るところまでを出す。落ちるのは常に末尾（＝ `kind` の綴りが後ろの
-   * 依頼）で、旧い実装はそこへ到達する口を1つも持たなかった——
-   * `schedule_list kind=<kind>`（全文モード）も `schedule_remove` も
-   * `kind` の一致を要求するので、落ちた依頼は綴りを知らない限り
-   * 片付けることも読むこともできない。
-   *
-   * `resolveScheduleCursor`（`schedule-cursor.ts`）の分岐は、そちらの歯
-   * （`schedule-cursor.test.ts`）が I/O 無しで直接測っている。ここで測る
-   * のは、実際の道具（ストア・zod スキーマ・`renderListing` の予算切り）に
-   * 配線した結果である。
-   */
   describe('schedule_list の一覧モードに継続点（cursor）を足す（#662 段1）', () => {
     function extractCursor(reply: string): string {
       const match = /cursor=([A-Za-z0-9\-_]+)/.exec(reply);
@@ -1760,8 +1666,6 @@ describe('クローンの道具', () => {
 
       const reply = await h.call('schedule_list', {});
 
-      // 前提: 実際に予算で切れていること（そうでなければ下の assert は
-      // 何も測っていない）。
       expect(reply).toMatch(/…ほか \d+ 件は省略/);
       expect(reply).toContain('cursor=');
       expect(reply).toMatch(/続きは schedule_list cursor=[A-Za-z0-9\-_]+ で取れる/);
@@ -1778,7 +1682,6 @@ describe('クローンの道具', () => {
       const second = await h.call('schedule_list', { cursor });
 
       const firstPageKinds = kinds.filter((kind) => first.includes(kind));
-      // 前提: 1頁目で実際に複数件出ていたこと（0件なら重複しないのは当然になる）。
       expect(firstPageKinds.length).toBeGreaterThan(0);
       for (const kind of firstPageKinds) {
         expect(second, `${kind} が2頁目にも重複して出た`).not.toContain(kind);
@@ -1791,7 +1694,6 @@ describe('クローンの道具', () => {
 
       const seen = new Set<string>();
       let cursor: string | undefined;
-      // ガード: 頁数は高々件数を超えない（無限ループの保険）。
       for (let guard = 0; guard < kinds.length + 1; guard += 1) {
         const reply: string = await h.call('schedule_list', cursor === undefined ? {} : { cursor });
         for (const kind of kinds) {
@@ -1813,8 +1715,6 @@ describe('クローンの道具', () => {
       const reply = await h.call('schedule_list', { cursor: 'this-is-not-a-real-cursor' });
 
       expect(reply).toContain('cursor が壊れている');
-      // **黙って先頭から返していない証拠。** 先頭から返していれば一覧の
-      // 内容（'watch' を含む行）が出るはずだが、出ない。
       expect(reply).not.toContain('watch');
     });
 
@@ -1827,7 +1727,6 @@ describe('クローンの道具', () => {
       const second = await h.call('schedule_list', { cursor });
 
       expect(first).toContain('継続中の依頼は 25 件あり');
-      // 2頁目でもまだ予算で切れているなら、同じ母数を名乗る。
       if (second.includes('…ほか')) {
         expect(second).toContain('継続中の依頼は 25 件あり');
       }
@@ -1857,20 +1756,6 @@ describe('クローンの道具', () => {
     });
   });
 
-  /**
-   * Issue #1654（バグ探しで見つかった lost update）。
-   *
-   * 直上の「同じ kind で仕込み直すと置き換わる」は `completeRun` まで済ませて
-   * から編集しているので、この形は捕まえない——`pendingRun` が既に消えている
-   * 状態からの編集は、そもそも壊れようがない（引き継ぐものが無い）。
-   *
-   * ここは `claimRun` が成立した**直後**（`completeRun` の前）に
-   * `schedule_create` で本文だけを直す——`editRequest` を使わず `get()` →
-   * `put()` していた頃は、この `put()` が `pendingRun` / `lastRunAt` を
-   * 丸ごと消し、その後の `completeRun` も「別の発火の印」ガードに阻まれて
-   * 空振りしていた（`packages/storage-fs/src/schedule-edit-keeps-claim.test.ts`
-   * に同じ形の店（ストア直叩き）の歯がある）。
-   */
   it('claimRun が成立した直後に本文だけ直しても、pendingRun / lastRunAt は消えない（Issue #1654）', async () => {
     const h = harness();
     await h.call('schedule_create', { kind: 'watch', request: '最初の依頼', everyMinutes: 30 });
@@ -1893,7 +1778,6 @@ describe('クローンの道具', () => {
       pendingRun: { at: '2026-08-13T00:00:00.000Z', cause: 'schedule' },
     });
 
-    // `completeRun` も空振りしない——`lastScheduledRunAt` が実際に進む。
     await h.stores.schedules.completeRun('watch', '2026-08-13T00:00:00.000Z', 'schedule');
     const afterComplete = await h.stores.schedules.get('watch');
     expect(afterComplete?.pendingRun).toBeUndefined();
@@ -1979,20 +1863,6 @@ describe('クローンの道具', () => {
     expect((await h.stores.schedules.list()).entries).toEqual([]);
   });
 
-  /**
-   * issue #1982。#1944（PR #1964）の後、行の形が壊れている継続中の依頼は
-   * `list()` からは消える（跡は stderr）が、`get(kind)` は「消された」
-   * （`null`）と「読めない」（throw）を区別する契約のまま投げ続ける
-   * （`ScheduleStore.get` の doc）。かつての `schedule_remove` は先に
-   * `get(kind)` を呼んでいたので、壊れた依頼を外そうとすると例外がそのまま
-   * 上がっていた（`apps/daemon/src/app.test.ts` の同名 issue の歯と対）。
-   *
-   * インメモリ実装は常に検査を通った値しか持たない（`testing.ts` の
-   * `removeIfPresent` の doc）ので、`h.stores.schedules` を「`get('broken')`
-   * は読めない行として投げる／`removeIfPresent('broken')` は在ったが読めな
-   * かった行として消せる」二重store（他の kind は実物へ委譲）へ差し替えて
-   * 再現する。
-   */
   it('schedule_remove は読めない形で入っていた依頼も外せる（issue #1982）', async () => {
     const h = harness();
     const real = h.stores.schedules;
@@ -2020,26 +1890,12 @@ describe('クローンの道具', () => {
     const reply = await h.call('schedule_remove', { kind: 'broken' });
     expect(reply).toContain('外した');
 
-    // 外した後は「消された」——読んでから書くまでの隙間を挟まないので、
-    // 以後 get('broken') はもう投げない。
     await expect(h.stores.schedules.get('broken')).resolves.toBeNull();
 
-    // 日誌には本文（request）の代わりに「読めない形で入っていた」とだけ残る。
     const [entry] = await h.stores.journal.list({ types: ['decision'] });
     expect(entry).toMatchObject({ decision: expect.stringContaining('読めない形で入っていた') });
   });
 
-  /**
-   * issue #2177。`schedule_list kind=<kind>`（全文モード）は `stores.schedules
-   * .get(kind)` が読めない行で投げる `UnreadableScheduleError`（`ScheduleStore
-   * .get` の doc）を捕まえておらず、`isError` と生の Zod issue を返していた
-   * ——兄弟の口 `schedule_remove`（直上のテスト、issue #1982）とは違い、
-   * `get()` を全文モードの読み口として直接使うのはここだけである。
-   *
-   * インメモリ実装は壊れた行を持てない（`testing.ts` の `get` の doc）ので、
-   * 直上のテストと同じ形で `h.stores.schedules.get` を実物の
-   * `UnreadableScheduleError` を投げる形へ差し替えて再現する。
-   */
   it('schedule_list kind=<kind> は読めない形で入っていた依頼を isError にならず名乗る（issue #2177）', async () => {
     const h = harness();
     const real = h.stores.schedules;
@@ -2060,16 +1916,9 @@ describe('クローンの道具', () => {
     expect(reply).toContain('継続中の依頼 broken は読めない形で入っている（消されたのではない）');
     expect(reply).toContain('schedule_remove kind=broken');
 
-    // 本当に無い kind は、これまでどおり「無い」。
     expect(await h.call('schedule_list', { kind: 'しらない' })).toContain('無い');
   });
 
-  /**
-   * issue #2177（e）。`UnreadableScheduleError` 以外は投げ直す——握り潰さない
-   * ことの確認。`callExpectingError` 相当の直接ハンドラ呼び出しは他ファイル
-   * （`practice-version-unreadable-2177.test.ts`）に譲り、ここでは `h.call`
-   * が投げを飲み込まず伝播することだけを見る。
-   */
   it('schedule_list kind=<kind> は UnreadableScheduleError 以外の例外を投げ直す（issue #2177）', async () => {
     const h = harness();
     const real = h.stores.schedules;
@@ -2087,7 +1936,6 @@ describe('クローンの道具', () => {
   });
 
   describe('読めない継続中の依頼の行が在る一覧（#2343）: 一覧から消さず、件数と kind で言う', () => {
-    /** fs / pg が返す形（メモリ実装は壊れた行を持てないので差し替えで模す）。 */
     function listWithUnreadable(unreadable: { kind?: string; reason: string }[]) {
       const h = harness();
       const original = h.stores.schedules.list.bind(h.stores.schedules);
@@ -2156,20 +2004,9 @@ describe('クローンの道具', () => {
     await h.call('memory_append', { slug: 'values', content: '67890', summary: '追記' });
 
     const [entry] = await h.stores.journal.list({ types: ['memory_update'], limit: 1 });
-    // append は空行を挟んで足す。**数は末尾の改行を含む**（`PersonaStore` の
-    // 契約。`store.ts`）ので、前は `12345\n` の 6、後は
-    // `12345\n` + `\n` + `67890` + 末尾の改行 = 13 である。
-    // **以前ここは 5 / 11 で緑だった** —— インメモリ実装だけが正規化して
-    // いなかったからで、fs / pg では最初から 6 / 13 だった（#370）。
     expect(entry).toMatchObject({ action: 'append', bytesBefore: 6, bytesAfter: 13 });
   });
 
-  /**
-   * `memory_delete` — 記憶の文書ごと消す口。
-   *
-   * `schedule_remove` は在るのに削除だけが欠けていた非対称を塞ぐ
-   * （north_star 禁止1）。保証ごとに `it()` を割る。
-   */
   describe('memory_delete（記憶の文書を消す）', () => {
     it('文書ごと消える（memory_list から消える。本文が空になるだけではない）', async () => {
       const h = harness();
@@ -2188,15 +2025,11 @@ describe('クローンの道具', () => {
       const reply = await h.call('memory_delete', { slug: 'nope', summary: '消したつもり' });
 
       expect(reply).toContain('存在しない');
-      // 消したつもりで何も消えていない、を作らない — 何も変わっていないと言い切る。
       expect(reply).toMatch(/消えない|変わっていない/);
     });
 
     it('削除が日誌に残る（slug と消す直前の文字数）', async () => {
       const h = harness();
-      // 末尾の改行込みで書く（#370。`String(body.length)` と読み戻した本文の
-      // 文字数を一致させるため——書いた文字列が改行で終わっていないと、契約の
-      // 正規化のぶん 1 文字ずれる）。
       const body = '# メモ\n\n' + 'あ'.repeat(42) + '\n';
       await h.stores.persona.write('temp-note', body);
 
@@ -2214,7 +2047,6 @@ describe('クローンの道具', () => {
       await delBased(h, { slug: 'temp-note', summary: '片付け' });
 
       const [entry] = await h.stores.journal.list({ types: ['memory_update'] });
-      // `12345` は `12345\n`（6バイト）として保存される（#370）。
       expect(entry).toMatchObject({ bytesBefore: 6, bytesAfter: 0 });
     });
 
@@ -2240,26 +2072,12 @@ describe('クローンの道具', () => {
     });
   });
 
-  /**
-   * `memory_frontmatter_set` — #318 案 (a)。frontmatter（description / type /
-   * parent）のうち渡したキーだけを差し替える。**本文には一切触れない。**
-   *
-   * ここでの中心の保証は「本文がツール呼び出しの中に一度も現れないので、
-   * 本文が途中で切れることが構造的に起こりえない」こと（長い・見出しを
-   * 複数持つ本文で確かめる）と、「`guardFullReplace` を迂回していない」こと
-   * （human guard と同じ4条件で確かめる）である。
-   */
   describe('memory_frontmatter_set（frontmatter だけを直す。本文には触れない）', () => {
     async function markHuman(h: Harness, slug: string, content: string): Promise<void> {
       await h.stores.persona.write(slug, content);
       await h.stores.persona.markHumanTouched(slug, new Date().toISOString());
     }
 
-    // **末尾を改行で終える。** 記憶の文書は `PersonaStore.write` の契約
-    // （`packages/core/src/store.ts`）で末尾の改行が正規化されて保存されるので、
-    // 改行で終わらない文字列を「書いた本文」として持つと、読み戻した本文と
-    // 1文字ずれる。**以前ここは改行無しで、それでも緑だった** —— インメモリ実装
-    // だけが正規化していなかったからで、fs / pg では最初からずれていた（#370）。
     const longBody =
       [
         '# 価値観',
@@ -2331,18 +2149,10 @@ describe('クローンの道具', () => {
       });
 
       const content = (await h.stores.persona.read('values'))?.content ?? '';
-      const bodyAfter = content.split('\n').slice(4).join('\n'); // --- desc type --- の4行の次から
+      const bodyAfter = content.split('\n').slice(4).join('\n');
       expect(bodyAfter).toBe(longBody);
     });
 
-    /**
-     * 本文が空（frontmatter だけ）の文書（#354 のコメント）。
-     *
-     * **道具を通した側にも歯を1本置く。** 単体（`memory.test.ts` の
-     * `applyMemoryFrontmatterPatch`）は純粋関数の戻り値しか見ないので、
-     * **ストアに実際に残った文書**が測れていない。ここが見るのは
-     * `persona.read()` が返す `content` そのものである。
-     */
     it('本文が空（frontmatter だけ）の文書でも、閉じの --- の後ろの改行が落ちない', async () => {
       const h = harness();
       await h.stores.persona.write('values', '---\ndescription: 元の要旨\n---\n');
@@ -2376,18 +2186,11 @@ describe('クローンの道具', () => {
     });
 
     it('description を変えると memory_list の「要旨は本文より…古い」が消える（describedAt が進む）', async () => {
-      // **時刻を自分で固定する。** `updatedAt` / `describedAt` は実時計
-      // （`new Date().toISOString()`）から来るので、2回の write が同じ
-      // ミリ秒に収まると `describedAt >= updatedAt` が偶然 true になり
-      // stale を作れない（AGENTS.md「時刻を assert するテストは自分で
-      // TZ を固定する」と同じ理由——ここでは TZ ではなく時刻の進みそのもの
-      // を固定する）。
       vi.useFakeTimers();
       try {
         const h = harness();
         await h.stores.persona.write('values', `---\ndescription: 古い要旨\n---\n${longBody}`);
         vi.advanceTimersByTime(1000);
-        // 本文だけを更新 → description は据え置かれるので stale になる。
         await h.stores.persona.write(
           'values',
           `---\ndescription: 古い要旨\n---\n${longBody}\n\n追加の1文。`,
@@ -2395,8 +2198,6 @@ describe('クローンの道具', () => {
         vi.advanceTimersByTime(1000);
 
         const staleListing = await h.call('memory_list', {});
-        // 1回目の write から2回目の write まで1秒進めてある——
-        // formatMemoryStaleness の秒の桁で区別できる（語ではなく数で測る、#821）。
         expect(staleListing).toContain('要旨は本文より1秒古い');
 
         await fmBased(h, {
@@ -2442,18 +2243,6 @@ describe('クローンの道具', () => {
       expect(reply).not.toContain('区分が変わった');
     });
 
-    /**
-     * ⚠️ 差し戻しで見つかった欠陥の回帰確認。
-     *
-     * `type` を `z.string()` のまま自由文字列で受けていたとき、綴りを
-     * 間違えた値（`'Fact'` 等）がそのまま frontmatter へ書かれていた。
-     * `resolveMemoryDocKind`（読み出し側）は未知の値を `premise` へ倒すので
-     * 区分は実際には変わらないのに、`priorKind === nextKind` になって
-     * `kindChangeNote` が空文字のまま返り、**書き手は「変えたつもり」で
-     * 次のターンへ進んでいた。** ここでは (1) frontmatter が1文字も
-     * 変わっていないこと (2) 断り文に使える値（premise/fact）が出ることの
-     * 両方を確かめる。
-     */
     it('不正な type（綴り違い等）には断り、frontmatter が1文字も変わっていない', async () => {
       const h = harness();
       const original = `---\ndescription: 旧\ntype: premise\n---\n${longBody}`;
@@ -2461,30 +2250,16 @@ describe('クローンの道具', () => {
 
       const reply = await fmBased(h, {
         slug: 'values',
-        type: 'Fact', // 綴り違い（正しくは小文字の 'fact'）
+        type: 'Fact',
         summary: '区分を変えたつもり',
       });
 
       expect(reply).toContain('premise');
       expect(reply).toContain('fact');
       expect(reply).toMatch(/断|何も変わっていない/);
-      // 断り文が出たことだけでなく、frontmatter 込みで内容が1文字も
-      // 変わっていないことも確かめる（malformed の歯・human guard の歯と同じ形）。
       expect((await h.stores.persona.read('values'))?.content).toBe(original);
     });
 
-    /**
-     * ⚠️ 差し戻しで見つかった欠陥の回帰確認（injection）。
-     *
-     * `description` / `parent` に改行を含む値を渡すと、
-     * `serializeMemoryFrontmatter` が1キー1行で並べるため、値の続きが
-     * frontmatter の別のキー・閉じの `---`・本文の1行目として紛れ込んで
-     * いた。本文そのものは失われない（古い content から取るだけ）が、
-     * 値から本文へ文字列が「混ざる」——これは「切れない」とは別の性質
-     * である。ここでは (1) 断り文が出ること (2) frontmatter も本文も
-     * 1文字も変わっていないこと（malformed・不正な type と同じ形）を
-     * 両方測る——断ってから書いてしまう実装が生存しないように。
-     */
     describe('改行を含む値は断る（description / type / parent に文字列が混ざるのを防ぐ）', () => {
       it('description に \\n を含む値は断り、frontmatter も本文も1文字も変わっていない', async () => {
         const h = harness();
@@ -4256,7 +4031,6 @@ describe('クローンの道具', () => {
         expect(movePasses).toBe(true);
         // 説明文側の釘: description が反転前の文言へ戻ったら、ここが単独で落ちる。
         expect(claimsMoveDenied).toBe(false);
-        // 参考（独立の検出力は持たない。doc 参照）: 上の2本が守る限り必ず一致する。
         expect(movePasses).toBe(!claimsMoveDenied);
       });
     });
@@ -5346,7 +5120,6 @@ describe('クローンの道具', () => {
   });
 
   describe('読めない承認の行が在る一覧（#2298）: 一覧から消さず、件数と id で言う', () => {
-    /** fs / pg が返す形（メモリ実装は壊れた行を持てないので差し替えで模す）。 */
     function listWithUnreadable(unreadable: { id?: string; reason: string }[]) {
       const h = harness();
       const original = h.stores.jobs.listApprovals.bind(h.stores.jobs);
