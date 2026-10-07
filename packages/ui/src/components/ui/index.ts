@@ -1,11 +1,4 @@
-/**
- * shadcn（`components.json` の `"style": "radix-nova"）が吐いた素の部品。`@alteroid/ui/shadcn`。
- *
- * **ここにある部品は `shadcn add` が吐いたまま**で、手を入れない（入れると次の
- * `shadcn add --overwrite` で黙って消える）。画面の呼び方へ合わせるのは
- * `../common.tsx` の役目である。部品を足したら `pnpm --filter @alteroid/ui shadcn:add <名前>`
- * で足し、ここへ1行足す。
- */
+// ここの部品に手を入れない: 次の `shadcn add --overwrite` で黙って消えるため
 export * from './accordion';
 export * from './alert';
 export * from './alert-dialog';

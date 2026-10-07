@@ -1,15 +1,3 @@
-/**
- * 「承認待ち」タブの描画（見た目だけ。キー操作は `app.tsx` の 1 つの `useInput` が持つ）と、
- * 一覧の 1 行・詳細の本文（折り返し済みの物理行）を作る純粋関数。Ink の地雷への対処は
- * `components.tsx` の冒頭と同じ（空の `<Text>` は高さ 0・溢れた子は縮む・1 行は 1 つの `<Text>`・
- * セルは `truncate-end`）。
- *
- * **一覧はタイトルと要旨だけ**（`.claude/skills/listing-and-detail`）: 1 件 1 行（経過・出どころ・
- * 設問の要約か質問の抜粋）。質問の全文・文脈・設問の中身は詳細を明示的に開いて読む。
- *
- * 設問の表示は core の `describeQuestionLines` / `summarizeQuestions` と、畳んだ文の
- * `foldSelections`（`approvals-form.ts`）— CLI の `/approval` `/approvals` と同じ生成元。
- */
 import {
   describeQuestionLines,
   summarizeQuestions,
@@ -36,20 +24,16 @@ import { glyph, theme } from './theme.js';
 import { redactBody, sanitizeForTerminal } from '../redact.js';
 import { LINE_BREAK, wrapLogical } from './wrap.js';
 
-/** 一覧に出す識別子（長い id は先頭だけ。全文は詳細の頭に出す）。 */
 export function shortId(id: string): string {
   return id.length > 12 ? `${id.slice(0, 12)}…` : id;
 }
 
-/** 出どころ。マネージャー発か、クローン自身の確認か。 */
 export const originOf = (row: ApprovalRow): string =>
   row.jobId !== undefined ? `マネージャー ${shortId(row.jobId)}` : 'クローン';
 
-/** 一覧の 1 行に収まる出どころ（幅を食わないよう括弧で短く）。 */
 const originTag = (row: ApprovalRow): string =>
   row.jobId !== undefined ? `[${shortId(row.jobId)}]` : '[クローン]';
 
-/** 一覧の 1 行の要旨。設問が在れば設問の要約（先頭）に質問の抜粋を続ける。無ければ質問の抜粋。 */
 export function approvalSummary(row: ApprovalRow): string {
   const question = oneLine(redactBody(row.question), 120);
   return row.questions !== undefined && row.questions.length > 0
@@ -57,16 +41,14 @@ export function approvalSummary(row: ApprovalRow): string {
     : question;
 }
 
-/** 一覧の 1 行（選択の印は付けない）。 */
 export function approvalListLine(row: ApprovalRow, now: number): string {
-  // id・出どころ・時刻は redactBody を通らない欄。組み立てたあとで掃除する。
+  // 組み立てたあとで掃除する: id・出どころ・時刻は redactBody を通らない欄のため
   return sanitizeForTerminal(
     `${formatElapsedAgo(row.createdAt, now)} ${shortId(row.id)} ${originTag(row)}` +
       `${row.permissionRequest === undefined ? '' : ' [実行許可]'}  ${approvalSummary(row)}`,
   );
 }
 
-/** 一覧の見出し。初回の読み込みが失敗したときは件数を言わない（空ではない）。 */
 export function approvalListTitle(list: ListState): string {
   if (list.status === 'loading' || list.status === 'idle') return '承認待ちを読んでいる…';
   if (list.status === 'error' && list.items.length === 0) {
@@ -81,7 +63,6 @@ function listEmptyText(list: ListState): string {
     : '承認待ちは無い。';
 }
 
-/** 一覧。窓は選択行が見える範囲だけを描く。 */
 export const ApprovalList: FC<{ list: ListState; height: number }> = ({ list, height }) => {
   const { items, selected } = list;
   const ids = list.unreadable.map((u) => u.id).filter((id): id is string => id !== undefined);
@@ -132,17 +113,9 @@ export const ApprovalList: FC<{ list: ListState; height: number }> = ({ list, he
   );
 };
 
-// --- 回答済み（決着した日ごと。#3340） ---------------------------------------
-
-/** 決着した日の 1 行（選択の印は付けない）。 */
 export const answeredDateLine = (row: AnsweredDateRow): string =>
   sanitizeForTerminal(`${row.date}  ${String(row.count)} 件`);
 
-/**
- * その日の件の 1 行（選択の印は付けない）。**抜粋だけ**: 状態（回答済み／取り下げ済み）・決着からの経過・
- * id・問いの抜粋に、答え（回答済み）か取り下げた理由（取り下げ済み）の抜粋を続ける。全文は詳細。
- * 決着の日時は `answeredAt`、無ければ `withdrawnAt`（デーモンの日の区切りと同じ決め方）。
- */
 export function answeredDayLine(row: ApprovalRow, now: number): string {
   const withdrawn = row.withdrawnAt !== undefined && row.answeredAt === undefined;
   const settledAt = row.answeredAt ?? row.withdrawnAt ?? row.createdAt;
@@ -157,7 +130,6 @@ export function answeredDayLine(row: ApprovalRow, now: number): string {
   );
 }
 
-/** 決着した日の一覧の見出し。初回の読み込みが失敗したときは件数を言わない（空ではない）。 */
 export function answeredDatesTitle(dates: DatesState): string {
   if (dates.status === 'loading' || dates.status === 'idle') return '決着した日を読んでいる…';
   if (dates.status === 'error' && dates.items.length === 0) {
@@ -166,7 +138,6 @@ export function answeredDatesTitle(dates: DatesState): string {
   return `回答済み・取り下げ済み（決着した日 ${String(dates.items.length)} 日 · 新しい日が上）`;
 }
 
-/** 決着した日の一覧。窓は選択行が見える範囲だけを描く。 */
 export const AnsweredDatesList: FC<{ dates: DatesState; height: number }> = ({ dates, height }) => {
   const { items, selected } = dates;
   const errorLine = dates.error !== null ? `⚠ ${dates.error}` : null;
@@ -208,7 +179,6 @@ export const AnsweredDatesList: FC<{ dates: DatesState; height: number }> = ({ d
   );
 };
 
-/** その日の件の見出し。取れなかったのを 0 件と言わない。 */
 export function answeredDayTitle(day: DayState): string {
   const date = day.date ?? '';
   if (day.status === 'loading' || day.status === 'idle') return `${date} の承認を読んでいる…`;
@@ -218,7 +188,6 @@ export function answeredDayTitle(day: DayState): string {
   return `${date} に決着した承認（${String(day.items.length)} 件 · 決着の新しい順）`;
 }
 
-/** その日の件の一覧。窓は選択行が見える範囲だけを描く。 */
 export const AnsweredDayList: FC<{ day: DayState; height: number }> = ({ day, height }) => {
   const { items, selected } = day;
   const errorLine = day.error !== null ? `⚠ ${day.error}` : null;
@@ -254,11 +223,8 @@ export const AnsweredDayList: FC<{ day: DayState; height: number }> = ({ day, he
   );
 };
 
-// --- 詳細の本文 -------------------------------------------------------------
-
 export interface ApprovalDoc {
   readonly rows: DisplayLine[];
-  /** 答えるフォームのカーソル行（`rows` の index）。フォームが開いていなければ `null`。 */
   readonly focusRow: number | null;
 }
 
@@ -267,7 +233,6 @@ interface LineOptions {
   kind?: DisplayLine['kind'];
   bold?: boolean;
   dim?: boolean;
-  /** 折り返した 2 行目以降の字下げ（既定は `indent`）。 */
   hang?: number;
 }
 
@@ -275,14 +240,13 @@ class DocBuilder {
   readonly rows: DisplayLine[] = [];
   constructor(private readonly width: number) {}
 
-  /** 論理行（改行を含んでよい）を折り返して足す。最初の物理行の index を返す。 */
   push(text: string, options: LineOptions = {}): number {
     const first = this.rows.length;
     const indent = options.indent ?? 0;
     const hang = options.hang ?? indent;
     const kind = options.kind ?? 'assistant';
     let lead = true;
-    // 詳細の本文はどの欄も、ここを通って端末へ出る。外から来た文字列の制御文字をここで落とす。
+    // ここで制御文字を落とす: 詳細の本文はどの欄もここを通って端末へ出るため
     for (const logical of sanitizeForTerminal(text).split(LINE_BREAK)) {
       const content = Math.max(1, this.width - Math.max(indent, hang));
       for (const piece of wrapLogical(logical, content)) {
@@ -326,7 +290,6 @@ function permissionLines(b: DocBuilder, a: ApprovalRow): void {
   b.blank();
 }
 
-/** 答えるフォームの行（カーソル行の index を返す）。 */
 function formLines(b: DocBuilder, a: ApprovalRow, detail: DetailState): number | null {
   const form = detail.form;
   if (form === null) return null;
@@ -376,10 +339,6 @@ function formLines(b: DocBuilder, a: ApprovalRow, detail: DetailState): number |
   return focus;
 }
 
-/**
- * 詳細の本文。読む画面（質問の全文・文脈・出どころ・設問の表示）・答えるフォーム・送る前の確認の
- * どれかを、モードに合わせて組む。確認では、デーモンが回答として残す畳んだ文をそのまま見せる。
- */
 export function approvalDocument(detail: DetailState, width: number): ApprovalDoc {
   const b = new DocBuilder(width);
   const a = detail.approval;
@@ -464,7 +423,6 @@ export function approvalDocument(detail: DetailState, width: number): ApprovalDo
   return { rows: b.rows, focusRow };
 }
 
-/** 詳細の最下行（ログ直下の 1 行）。優先: 確認 > 送信中・操作の結果（あれば失敗・窓の外を並べる） > 取り直しの失敗 > 窓の外 > 操作の案内。 */
 export function approvalStatusText(
   detail: DetailState,
   hiddenBelow: number,
@@ -472,7 +430,7 @@ export function approvalStatusText(
   if (detail.mode === 'confirm') {
     return { text: 'y で送る / それ以外のキーで戻る（送ったあとは答え直せない）', tone: 'warn' };
   }
-  // 操作の結果（notice）はフォームへ入るまで残るので、後ろの状態（取り直しの失敗・窓の外の行数）を隠さず並べる（#3368）。
+  // 後ろの状態を隠さず並べる: 操作の結果（notice）はフォームへ入るまで残るため
   if (detail.notice !== null) {
     const parts = [detail.notice];
     if (detail.error !== null) parts.push(`⚠ 取り直せなかった: ${detail.error}`);
@@ -490,7 +448,6 @@ export function approvalStatusText(
   return { text: ' ', tone: 'dim' };
 }
 
-/** 入力欄のプレースホルダ（何を書く欄か）。 */
 export function composerPlaceholder(detail: DetailState): string {
   const cursorKind = slotsOf(detail.approval?.questions)[detail.form?.cursor ?? 0]?.kind ?? null;
   if (detail.busy) return '送信中…';

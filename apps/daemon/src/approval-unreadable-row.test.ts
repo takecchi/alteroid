@@ -18,19 +18,8 @@ import { makeTempDir } from '../../../vitest.tmpdir.js';
 import { createApp } from './app.js';
 import { createMigratedPglite, migratedTemplate } from './pglite-template.test-support.js';
 
-/**
- * `JobStore.getApproval()` / `updateApproval()` の、読めない（`pendingApprovalSchema` に
- * 合わない）行に対する扱い（#2279。#2262 の `UnreadableJobError` と同じ形）。
- *
- * 直す前は、行は在るのに「無い」と同じ `null` を返し、呼び出し元が「存在しない」
- * （HTTP は 404 `not found`）と言い切っていた。今は `UnreadableApprovalError` を投げて
- * 「無い」（`null`）と分け、HTTP は 409 で「在るが読めない」と言う。
- *
- * fs / pg の2実装を並べる（pg は PGlite）。**メモリ実装は並べない**——`putApproval` が
- * `pendingApprovalSchema.parse` を書き込み時に通すので、壊れた行を保持できない。
- */
+// メモリ実装は並べない: `putApproval` が書き込み時に `pendingApprovalSchema.parse` を通すので、壊れた行を保持できないため。
 
-// createdAt が日時の形でない——版ずれ・手編集を模す。
 const BAD_APPROVAL_RAW = {
   id: 'ap-bad',
   createdAt: 'not-a-date-from-a-newer-deploy',
@@ -49,7 +38,6 @@ const json = (body: unknown) => ({
   body: JSON.stringify(body),
 });
 
-/** 回答の呼びを数えるだけの偽のクローン。読めない行では呼ばれないはず。 */
 function fakeCloneHost(stores: Stores): CloneHost & { answered: string[] } {
   const answered: string[] = [];
   return {
@@ -80,7 +68,6 @@ function appOver(stores: Stores) {
   return { app, clone };
 }
 
-/** 3実装共通の「投げる型・文言・本文を含めない」の検査。 */
 function expectUnreadable(thrown: unknown): void {
   expect(thrown).toBeInstanceOf(UnreadableApprovalError);
   const error = thrown as UnreadableApprovalError;
@@ -98,7 +85,6 @@ async function catching(run: () => Promise<unknown>): Promise<unknown> {
   return undefined;
 }
 
-/** HTTP の3口（1件の回答・一括回答・トレース）を通して、409 と本文を測る。 */
 async function expectHttpSaysUnreadable(stores: Stores): Promise<void> {
   const { app, clone } = appOver(stores);
 
@@ -111,11 +97,9 @@ async function expectHttpSaysUnreadable(stores: Stores): Promise<void> {
   expect(singleBody.error).toContain(`承認待ち ${BAD_APPROVAL_RAW.id} は在るが読めない`);
   expect(singleBody.error).not.toContain(BAD_APPROVAL_RAW.question);
 
-  // 本当に無い id は従来どおり 404。
   const missing = await app.request('/approvals/ap-nowhere/answer', json({ answer: 'よい' }));
   expect(missing.status).toBe(404);
 
-  // 一括: 読めない1件だけが失敗し、読める件は進む。
   const bulk = await app.request(
     '/approvals/answer',
     json({
@@ -135,13 +119,11 @@ async function expectHttpSaysUnreadable(stores: Stores): Promise<void> {
   expect(results[0]?.error).not.toBe('not found');
   expect(results[1]).toEqual({ id: 'ap-nowhere', ok: false, error: 'not found' });
   expect(results[2]).toEqual({ id: GOOD_APPROVAL.id, ok: true });
-  // 読めない行の回答は、クローンへ渡っていない。
   expect(clone.answered).toEqual([GOOD_APPROVAL.id]);
 
   const trace = await app.request(`/approvals/${BAD_APPROVAL_RAW.id}/trace`);
   expect(trace.status).toBe(409);
 
-  // `GET /approvals/:id`（#3312）: 読めない行は「無い」（404）ではなく 409。本当に無い id は 404、読める行は 200。
   const byId = await app.request(`/approvals/${BAD_APPROVAL_RAW.id}`);
   expect(byId.status).toBe(409);
   const byIdBody = (await byId.json()) as { error: string };
@@ -152,8 +134,7 @@ async function expectHttpSaysUnreadable(stores: Stores): Promise<void> {
 }
 
 describe('JobStore.getApproval() / updateApproval() — 読めない承認の行の扱い', () => {
-  // PGlite の雛形（WASM の起動＋migrate）は、ワーカーで最初に呼んだ歯が払う。
-  // 歯の本体（既定 5000ms）でなく hook（明示 30_000ms）で払わせる（issue #2337）。
+  // 雛形の払いは歯の本体（既定 5000ms）でなく hook（明示 30_000ms）にさせる: WASM の起動＋migrate が歯の本体の時間に収まらないため。
   beforeAll(async () => {
     await migratedTemplate();
   }, 30_000);
@@ -219,7 +200,6 @@ describe('JobStore.getApproval() / updateApproval() — 読めない承認の行
       await captureStderr(async () => {
         await expectHttpSaysUnreadable(stores);
       });
-      // 読めない行は書き換えられていない（残っている）。
       const after = JSON.parse(await readFile(jobsPath, 'utf8')) as { approvals: unknown[] };
       expect(after.approvals).toContainEqual(BAD_APPROVAL_RAW);
       expect(before.approvals).toContainEqual(BAD_APPROVAL_RAW);
@@ -239,7 +219,7 @@ describe('JobStore.getApproval() / updateApproval() — 読めない承認の行
       ({ client, db } = await createMigratedPglite());
       stores = createPgStoresFromDb(db);
       await stores.jobs.putApproval(GOOD_APPROVAL);
-      // 行を直接 insert する——`putApproval()` は `pendingApprovalSchema.parse` を通す。
+      // 行を直接 insert する: `putApproval()` は `pendingApprovalSchema.parse` を通すため壊れた行を書けない。
       await db.insert(tables.approvals).values({
         id: BAD_APPROVAL_RAW.id,
         createdAt: new Date('2026-09-02T00:00:00.000Z'),

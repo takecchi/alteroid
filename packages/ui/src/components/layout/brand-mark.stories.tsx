@@ -2,7 +2,6 @@ import type { Meta, StoryObj } from '@storybook/react-vite';
 
 import { BrandMark } from './brand-mark';
 
-/** alteroid の印。実線の輪が人間、破線の輪がその写し（クローン）。 */
 const meta = {
   title: 'Layout/BrandMark',
   component: BrandMark,

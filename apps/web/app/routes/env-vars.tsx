@@ -3,6 +3,7 @@ import { LoadError } from '~/components/load-error';
 import { settingsDocumentTitle } from '~/lib/nav';
 import { EllipsisVertical } from 'lucide-react';
 import { useState } from 'react';
+import { unsentInput } from '~/lib/unsent-input';
 import { LeaveGuardScope, useReportDirty } from '~/lib/leave-guard';
 
 import {
@@ -343,13 +344,16 @@ function AddEnvVarForm() {
 
   async function submit() {
     if (!canSubmit) return;
+    const sentName = name;
+    const sentValue = value;
     setBusy(true);
     setFailure(undefined);
     setResult(undefined);
     try {
       setResult(await setEnvVar({ name: name.trim(), value, scope, secret }));
-      setName('');
-      setValue('');
+      // 空にしない: 応答を待つ間に打ち足した分を消さないため。
+      setName((current) => unsentInput(current, sentName));
+      setValue((current) => unsentInput(current, sentValue));
     } catch (caught) {
       setFailure(caught);
     } finally {

@@ -12,10 +12,8 @@ import { collectRepoFiles } from './repo-scan-files.js';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 
-/** 変異試験でだけ拾いたくないので、探索から外すもの。 */
 const EXCLUDE_DIRS = new Set(['node_modules', '.git', 'dist', 'build', '.react-router']);
 
-/** `scripts/*.test.ts` に置く8ワークスペースの入り口が揃っているか。 */
 function readWorkspaceGlobs(): string[] {
   const text = readFileSync(path.join(ROOT, 'pnpm-workspace.yaml'), 'utf8');
   const lines = text.split('\n');
@@ -25,12 +23,11 @@ function readWorkspaceGlobs(): string[] {
   }
   const globs: string[] = [];
   for (let i = start + 1; i < lines.length; i++) {
-    // `i < lines.length` を for で保証しているので範囲内。undefined にはならない。
     const line = lines[i] ?? '';
     const m = line.match(/^\s+-\s+(\S+)\s*$/);
-    if (!m) break; // インデントされた `- ` の並びが終わったら打ち切る
+    if (!m) break;
     const value = m[1];
-    if (value === undefined) break; // 正規表現上つねに一致する必須グループだが、念のため
+    if (value === undefined) break;
     globs.push(value);
   }
   if (globs.length === 0) {
@@ -39,7 +36,6 @@ function readWorkspaceGlobs(): string[] {
   return globs;
 }
 
-/** `<dir>/*` 形式の workspace glob を、実在する package.json を持つディレクトリへ展開する。 */
 function expandWorkspaceDirs(globs: string[]): string[] {
   const dirs: string[] = [];
   for (const glob of globs) {
@@ -49,7 +45,6 @@ function expandWorkspaceDirs(globs: string[]): string[] {
     }
     const prefix = m[1];
     if (prefix === undefined) {
-      // 正規表現上つねに一致する必須グループだが、念のため。
       throw new Error(`このテストが対応していない workspace glob 形式: ${glob}`);
     }
     const base = path.join(ROOT, prefix);
@@ -64,26 +59,6 @@ function expandWorkspaceDirs(globs: string[]): string[] {
   return dirs.sort();
 }
 
-/**
- * `node ../../scripts/test.mjs --root=<...> --scope=<path>` の形の script から
- * 絞り込み先のパスを取り出す。
- *
- * **#311 でこの形が変わった。** 以前は `vitest run --root=<...> <path>` だったが、
- * `describe.skip` / `it.skip` で全部飛ばしても exit 0 のまま緑になる欠陥を塞ぐため、
- * vitest を直呼びせずラッパ（`scripts/test.mjs`）を経由するようにした
- * （`scripts/test-guard-core.mjs` の doc）。
- *
- * **#1691 でさらに変わった。** 範囲を位置引数（`<path>`）ではなく named 引数
- * （`--scope=<path>`）で渡す形にした——位置引数だと vitest の OR semantics に
- * 乗ってしまい、利用者が `pnpm test -- <file>` で足した位置引数と範囲の位置
- * 引数が両方フィルタとして働き、範囲（＝パッケージ全体）のほうが常に一致して
- * 絞り込みが1つも効かなかった（`scripts/test-guard-core.mjs` の
- * `resolveScopedArgs` の doc）。
- *
- * **この歯が見ている3つの性質は変えていない** — script が在るか・自分自身の
- * パッケージを指しているか・絞り込み先にテストが実在するか。変わったのは、
- * それを読み取る正規表現の形だけである。
- */
 const TEST_SCRIPT_SHAPE = /^node \.\.\/\.\.\/scripts\/test\.mjs --root=\S+ --scope=(\S+)$/;
 
 const workspaceDirs = expandWorkspaceDirs(readWorkspaceGlobs());
@@ -92,30 +67,8 @@ const includeGlobs = (rootVitestConfig as { test: { include: string[] } }).test.
 
 const allFiles = collectRepoFiles(ROOT, EXCLUDE_DIRS);
 
-/** root の vitest.config.ts の include に実際に拾われるファイルだけ。 */
 const testFiles = allFiles.filter((f) => includeGlobs.some((g) => path.matchesGlob(f, g)));
 
-/**
- * #246: `apps/web` に `test` script が無く、`pnpm --filter @alteroid/web test` が
- * 出力0行・exit 0 で「通った」ように見えた（AGENTS.md「静かに失敗する道具」そのもの）。
- *
- * 直しは2つに分かれている。
- * 1. 8ワークスペース全部の `package.json` に `test` script を足した（この歯の外側）
- * 2. **その仕組みが次に足されるパッケージでも保たれることを、ここで機械的に確かめる**
- *
- * 見る性質は3つ、どれも「静かに壊れる」形である。
- * - workspace に `test` script が無い（→ `pnpm --filter <pkg> test` が出力0行・exit 0 に戻る）
- * - `test` script のフィルタが別のパッケージを指している（コピペ由来。そのパッケージの
- *   テストを1本も見ずに緑を返す）
- * - フィルタの先に、root の include と一致するファイルが1本も無い（「テストが在る」と
- *   思っている場所が空になっている。vitest 自身は0件で exit 1 になるが、それに気づく前に
- *   別の変更でここが壊れたことは検出できる）
- *
- * **この歯が保証するのは「テストが走ること」までで、「走ったテストが何か測っていること」
- * ではない。** `describe.skip` / `it.skip` で中身を全部飛ばしたファイルは、この歯が見る
- * 3条件をすべて満たしたまま（`test` script は在る・自分を指す・ファイルも実在する）
- * exit 0 で緑になる。これは別原因の別穴として #311 に切ってある。
- */
 describe('workspace の test script が同じ穴を開けていないか（#246）', () => {
   it('少なくとも1つの workspace package を見つけている（このテストの前提）', () => {
     expect(workspaceDirs.length).toBeGreaterThan(0);
@@ -142,7 +95,7 @@ describe('workspace の test script が同じ穴を開けていないか（#246�
       `${pkgDir} の test script の形が想定外: ${JSON.stringify(script)}`,
     ).not.toBeNull();
 
-    const filterPath = match![1]!; // 必須グループ（末尾 \S+）。match! と同じ理由で確定
+    const filterPath = match![1]!;
     const pointsToOwnPackage = filterPath === pkgDir || filterPath.startsWith(`${pkgDir}/`);
     expect(
       pointsToOwnPackage,
@@ -163,7 +116,7 @@ describe('workspace の test script が同じ穴を開けていないか（#246�
         `${pkgDir} の test script の形が想定外: ${JSON.stringify(script)}`,
       ).toBeTruthy();
 
-      const filterPath = match![1]!; // 必須グループ（末尾 \S+）。match! と同じ理由で確定
+      const filterPath = match![1]!;
       const matched = testFiles.filter((f) => f === filterPath || f.startsWith(`${filterPath}/`));
       expect(
         matched.length,

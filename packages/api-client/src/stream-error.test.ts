@@ -2,14 +2,6 @@ import { describe, expect, it } from 'vitest';
 
 import { createAlteroidClient } from './index.js';
 
-/**
- * SSE の口（`chat` / `journalStream`）が ok でない応答を受けたときの Error（issue #2418）。
- *
- * 応答の本文は中継（プロキシ）や古いデーモンが返す任意の文字列で、鍵や URL の資格を
- * 含みうる。Error の message は人の画面・stderr に出るので、**伏せてから切る**。
- * 値はすべて偽物。
- */
-
 const FAKE_GHP = `ghp_${'A1b2C3d4E5'.repeat(4)}`;
 
 function clientReturning(status: number, body: string) {
@@ -28,7 +20,6 @@ async function messageOf(run: () => Promise<unknown>): Promise<string> {
   throw new Error('ok でない応答で投げられるはずが、成功してしまった');
 }
 
-/** ok でない応答なので、最初の `next()` で投げる。 */
 const drain = async (client: ReturnType<typeof clientReturning>) => {
   await client.journalStream().next();
 };
@@ -64,7 +55,6 @@ describe('SSE の ok でない応答', () => {
   });
 
   it('伏せてから切る: 上限をまたぐトークンの断片が残らない', async () => {
-    // 512 字目付近でトークンが割れる位置に置く。
     const body = `${'x '.repeat(250)}${FAKE_GHP}`;
     const message = await messageOf(() => drain(clientReturning(500, body)));
     expect(message).not.toContain('ghp_A1b2');

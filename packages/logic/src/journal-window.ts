@@ -1,32 +1,13 @@
-/**
- * 日誌の双方向スクロールを支える純粋なロジック。**virtua にも DOM にも触れない。**
- *
- * ここを切り出したのは「テストが書けない構造は、テストが無いのと同じ」
- * （`AGENTS.md`「テストを弱めずに直す」）に当たると判断したため。`virtua` は
- * jsdom では要素の実寸を測れず（`ResizeObserver` を呼んでも `offsetParent` が
- * 常に `null` なので測定コールバックが一度も来ない）、日誌の行を1行も描画
- * しない。カーソル送り（次に投げるクエリの組み立て・`id` での重複除去・
- * 停止条件）を DOM 描画から切り離しておけば、**virtua が描けるかどうかと
- * 無関係に**このロジックの正しさを測れる。
- */
+// `@alteroid/core` 本体ではなく `journal-search` から取る: 本体は値を1つ import するだけでサーバ専用の層ごとバンドルへ入る。
 import { matchesJournalSearch } from '@alteroid/core/journal-search';
 
 import type { JournalEntry } from './types.js';
 
-/** ページ（1回の `GET /journal` 応答）を、既にある一覧の**先頭**へ差し込む。 */
 export interface MergeResult {
-  /** マージ後の一覧（新しい順を保つ）。 */
   entries: JournalEntry[];
-  /** 重複除去の後に残った、本当に新しい件数。 */
   freshCount: number;
 }
 
-/**
- * 先頭（新着側）へ差し込む。SSE の `recent` を重ねるときも、`since` で
- * 取りこぼしを埋めるときも、**この1つの関数を通る** — 「先頭に足す」という
- * 操作が1箇所にまとまっていることが、`shift` を立てる条件（先頭へ足すときだけ
- * true にする）を取り違えないための前提になる。
- */
 export function mergeFront(existing: JournalEntry[], incoming: JournalEntry[]): MergeResult {
   if (incoming.length === 0) return { entries: existing, freshCount: 0 };
   const known = new Set(existing.map((entry) => entry.id));
@@ -37,7 +18,6 @@ export function mergeFront(existing: JournalEntry[], incoming: JournalEntry[]): 
   };
 }
 
-/** 末尾（過去側）へ差し込む。`until` で遡ったページをここへ通す。 */
 export function mergeBack(existing: JournalEntry[], incoming: JournalEntry[]): MergeResult {
   if (incoming.length === 0) return { entries: existing, freshCount: 0 };
   const known = new Set(existing.map((entry) => entry.id));
@@ -48,78 +28,22 @@ export function mergeBack(existing: JournalEntry[], incoming: JournalEntry[]): M
   };
 }
 
-/**
- * サーバの `limit` の上限（`apps/daemon/src/app.ts` の `journalQuery`:
- * `z.coerce.number().int().min(1).max(1000)`）。**手で書き写した値**である
- * — `apps/web` は daemon の zod スキーマに依存しない設計（`AGENTS.md`
- * 「実装の前提」）なので、ここに定数として持つ。daemon 側が上限を変えたら
- * ここも直すこと。
- */
+// daemon の zod スキーマを import せず写す: `apps/web` は daemon のスキーマに依存しない設計のため。daemon の上限を変えたら直す。
 export const JOURNAL_MAX_LIMIT = 1000;
 
-/**
- * ページを撃った結果、次に何をすべきか。
- *
- * **`since`/`until` は inclusive**（`apps/daemon/src/app.ts` の `journalQuery`
- * doc、fs 実装は `packages/storage-fs/src/journal.ts` の `<`/`>` 比較）。境界の
- * 1件は毎回必ず再度返るので、「新規0件」だけでは撃ち続けてしまう
- * （`packages/storage-fs/src/journal.ts` の `#chain` が示すとおり、同一ミリ秒の
- * 複数追記が起こりうるため、境界と同じ `at` を持つエントリが1ページを埋め
- * 尽くすと `until`/`since` を動かしても1件も進まない）。
- *
- * - `freshCount > 0` → **`'progress'`**。前進できた。まだ続けてよい
- * - `freshCount === 0` かつ応答が `limit` に満たない → **`'end'`（本当の終端）**。
- *   サーバの `list()` は取れるだけ取ってから返すので、`limit` 未満で返った
- *   時点で「探しうる範囲を全部見た」ことが確定する
- * - `freshCount === 0` かつ応答が `limit` ちょうど かつ `limit < maxLimit` →
- *   **`'retryLarger'`（詰まっている疑い）**。ページが1件も進んでいないのに
- *   `limit` を使い切っているので、境界と同じ `at` を持つエントリが `limit`
- *   件を超えて並んでいて隠れている可能性がある。**ここで黙って終端扱いに
- *   しないこと** — `limit` を上げて同じ境界を撃ち直せば前進できるかもしれない
- *   （`GET /commitments` 等と違い `GET /journal` は `scanned` のような
- *   「遡り切れていない」印を返さないので、ここで判定を持つ）
- * - `freshCount === 0` かつ応答が `limit` ちょうど かつ `limit >= maxLimit` →
- *   **`'blocked'`**。サーバが許す上限まで上げても1件も進まない＝同一 `at` を
- *   持つエントリが `maxLimit` 件を超えて並んでいる。**これは「終端」でも
- *   「空」でもない、`GET /journal` の `scanned` を持たない設計から来る
- *   本物の限界**なので、`Empty` や「これより古い記録は無い」と同じ顔で
- *   出さない（`apps/daemon/src/app.ts` の `conversationsQuery` の doc
- *   「黙って打ち切らない」と同じ理由）
- */
 export type PageOutcome = 'progress' | 'end' | 'retryLarger' | 'blocked';
 
-/**
- * `GET /journal` が返す次の頁の継続点（`next`。`afterId` / `afterAt` へそのまま渡せる）。
- *
- * **`next` の三状態。**
- * - `null` = ストアが「この先に行は無い」と言った（本当の終端）
- * - `{ id, at }` = まだ先に行が在る。応答の `entries` が `limit` 未満でも空でも
- * - `undefined` = 応答に欄が無い（`next` を返さない古いデーモン）。件数での推定
- *   （下の `pageOutcome`）へ倒す——**この三つ目を `null` と同じ顔にしないこと**
- *
- * ストアは `LIMIT` を掛けた**後**で読めない行を捨てる（pg）ので、件数が少ない・
- * 空であることは終端の印にならない。件数から終端を推すのは `next` が無いときだけの
- * 後方互換である。
- */
 export interface PageCursor {
   id: string;
   at: string;
 }
 
-/** 継続点があれば、それが示す終端／継続。無ければ `undefined`（件数で推すしかない）。 */
+// `undefined`（古いデーモン）を `null`（終端）と同じに扱わない: 件数での推定へ倒すため。
 function outcomeFromNext(next: PageCursor | null | undefined): 'end' | 'progress' | undefined {
   if (next === undefined) return undefined;
   return next === null ? 'end' : 'progress';
 }
 
-/**
- * 頁が空で、かつ先に行が在る（`next` が非 `null`）間、継続点から読み継ぐ。
- *
- * **頁の行が全部読めずに捨てられると、応答は空なのに終端ではない。**
- * 空の応答をそのまま画面に載せると「何も無い」画面になり、読み継ぐ手がかりも
- * 失う——利用者の手を待たずにここで読み切る。継続点は毎回ストアの先へ進むので、
- * 有限回で止まる。`next` が無い（古いデーモン）頁・`null` の頁は、そのまま返す。
- */
 export async function readThroughUnreadable<
   P extends { entries: readonly unknown[]; next?: PageCursor | null },
 >(first: P, fetchAfter: (cursor: PageCursor) => Promise<P>): Promise<P> {
@@ -141,57 +65,24 @@ export function pageOutcome(
   return limit < maxLimit ? 'retryLarger' : 'blocked';
 }
 
-/** 次に `until` へ渡す値（一覧の末尾＝最古のエントリの `at`）。 */
 export function oldestAt(entries: JournalEntry[]): string | undefined {
   return entries.at(-1)?.at;
 }
 
-/** 次に `since` へ渡す値（一覧の先頭＝最新のエントリの `at`）。 */
 export function newestAt(entries: JournalEntry[]): string | undefined {
   return entries[0]?.at;
 }
 
-/**
- * 新着方向（先頭側）へ次に撃つときの、クエリの追加分。
- *
- * **「一覧のどちらの端を、どちらのクエリ引数へ載せるか」という決定をここに
- * 置く。** 呼び出し側（`use-journal-window.ts`）はこの戻り値をそのまま
- * `GET /journal` へ流すだけで、自分では端を選ばない。`shiftForPrepend` と
- * 同じ理由 — **測れる決定を、測れない場所に置かない**
- * （`AGENTS.md`「テストを弱めずに直す」）。
- *
- * この決定がフックの中に在ると、`since` へ `oldestAt` を渡すような取り違えは
- * 変異試験でも生き残る — `refreshNewer` は virtua の `onScroll` からしか呼ばれず、
- * jsdom は virtua を描画しないので、どんな取り違えも歯に当たらない。ここへ出すと、
- * 同じ取り違えが `journal-window.test.ts`（素の node 環境）から直接測れる。
- *
- * **測れるようになったのは「どちらの端をどちらの引数へ載せるか」までである。**
- * この関数を呼ぶ条件（virtua が上端付近に居ると判定したときにだけ撃つ）は
- * `journal.tsx` の `handleScroll` に残っていて、そちらは依然として jsdom
- * から届かない。
- *
- * `undefined` は「撃つ材料が無い（一覧が空）」＝撃たない、の意味である。
- */
 export function newerPageQuery(entries: JournalEntry[]): { since: string } | undefined {
   const since = newestAt(entries);
   return since === undefined ? undefined : { since };
 }
 
-/**
- * 過去方向（末尾側）へ次に撃つときの、クエリの追加分。`newerPageQuery` の対。
- *
- * **対で置く。** 片側だけを純粋関数へ出すと、「端と引数の対応はここが持つ」
- * という規則ではなく「この1箇所だけ例外的に外へ出してある」という但し書きになる。
- */
 export function olderPageQuery(
   entries: JournalEntry[],
   cursor?: PageCursor | null,
 ): { until: string } | { afterId: string; afterAt: string } | undefined {
-  // **継続点が在れば、それで読む。** 一覧の末尾の `at` は
-  // 読めずに捨てられた行を越えられない（その向こうの行を飛ばす）うえ、inclusive な
-  // `until` は境界の行を再送する。継続点は「ストアが実際に読んだ最後の行」を指し、
-  // 空の一覧からでも続けられる。`until` を使わないので、地平の材料
-  // （`oldestAt`/`crossesHorizon`）は呼び出し側が `horizon` で明示に求めること。
+  // 継続点が在れば `until` を使わない: 末尾の `at` は読めずに捨てられた行を越えられず、inclusive な `until` は境界の行を再送するため。
   if (cursor !== undefined) {
     return cursor === null ? undefined : { afterId: cursor.id, afterAt: cursor.at };
   }
@@ -205,32 +96,7 @@ export interface PageApplication {
   freshCount: number;
 }
 
-/**
- * 初期読み込み（`since`/`until` を送らない、窓を持たない1回目の呼び）の
- * 1ページを適用する。
- *
- * **`applyOlderPage`/`pageOutcome` の「同じ境界を再送したら freshCount で
- * 見分ける」という二段構えの確認は、ここには要らない。** あの二段構えが
- * 存在する理由は `since`/`until` が inclusive であることに由来する
- * 「境界の同じ行が撃ち直すたびに再度返ってきて `freshCount` を0に見せる」
- * という曖昧さで（`pageOutcome` の doc）、**窓を持たない初期読み込みには
- * そもそも境界が無いので、この曖昧さが最初から存在しない。** だから
- * `limit` 未満で返った時点で、`freshCount` を待たずに「日誌の全件を読み
- * 切った」と言い切れる（`JournalStore.list` は「取れるだけ取ってから返す」
- * という契約——`pageOutcome` の doc がすでに言っている前提そのもの）。
- *
- * **これが無いと何が起きるか。** 日誌の総数が `JOURNAL_PAGE` に収まる
- * ほど短いとき、`applyOlderPage([], page, JOURNAL_PAGE)` を使うと
- * `mergeBack([], page)` の `freshCount` は常に `page.length`（既存が空
- * なので届いた分が丸ごと「新規」になる）で、`page.length > 0` である限り
- * `pageOutcome` は無条件に `'progress'` を返す——**総数がどれだけ短くても、
- * 初期読み込みだけでは `'end'` にならない。** 利用者が「もっと遡る」を
- * 1回押して初めて `'end'` が確定し、地平の注記もそこで初めて出る
- * （`until` が付くので `GET /journal` は元々地平を返せる）。**「初期読み込み
- * だけで地平の注記が出ること」を成り立たせるには、`horizon=true`
- * （`use-journal-window.ts` の初期 `useEffect`）だけでは足りず、この関数で
- * 初期読み込み自身が `'end'` を言い切れるようにする必要がある。**
- */
+// `applyOlderPage` に通さない: 既存が空だと `freshCount` が常に `page.length` になり、短い日誌でも初期読み込みだけでは `'end'` にならないため。
 export function applyInitialPage(
   page: JournalEntry[],
   limit: number,
@@ -238,17 +104,11 @@ export function applyInitialPage(
 ): PageApplication {
   return {
     entries: page,
-    // **終端は `next` が言う**（無ければ従来どおり件数で推す。`PageCursor` の doc）。
-    // ストアが読めない行を捨てると、499 件で返っても先に行が在りうる。
     outcome: outcomeFromNext(next) ?? (page.length < limit ? 'end' : 'progress'),
     freshCount: page.length,
   };
 }
 
-/**
- * `until` で撃った1ページを末尾へ適用する（マージ＋判定を1回で行う）。
- * `use-journal-window.ts` が使う、フック側の複雑さを減らすための合成。
- */
 export function applyOlderPage(
   existing: JournalEntry[],
   page: JournalEntry[],
@@ -259,35 +119,13 @@ export function applyOlderPage(
   const merged = mergeBack(existing, page);
   return {
     entries: merged.entries,
-    // 継続点で読んだ頁には、inclusive な境界の再送も「同じ `at` の詰まり」も無い——
-    // 終端は `next` が言う。無いとき（古いデーモン）だけ件数で推す。
     outcome: outcomeFromNext(next) ?? pageOutcome(page.length, limit, merged.freshCount, maxLimit),
     freshCount: merged.freshCount,
   };
 }
 
-/**
- * 「もっと遡る」が終端（`'end'`）に達したとき、その終端が日誌の地平
- * （`JournalStore.oldestAt()`）より前にかかっていたかを言葉にする。
- *
- * **`journal_read`（クローンの道具。`packages/core/src/tools.ts` の
- * `describeJournalHorizonNote`）と同じ趣旨の文言にしてあるが、実装は共有
- * していない。** `@alteroid/core` 本体から値を import するとサーバ専用の
- * ドメイン層ごとブラウザバンドルへ入る（`filterRecent` の doc
- * と同じ理由）ので、判定条件（`crossesHorizon`）は `GET /journal` が
- * サーバ側（`journalWindowCrossesHorizon`）で計算済みの値をそのまま受け取り、
- * ここは文言へ変換するだけである。
- *
- * **`outcome !== 'end'` なら常に `undefined`。** 終端に達していない
- * （まだ続きがあるかもしれない）ときに出すと、常に見える注記になって
- * 本当に終端に達したときの目印にならない（`reachedStart`/`hiddenByLimit`
- * と同じ「常に出ているものは情報でなくなる」判断。`chat.tsx` の doc）。
- *
- * 初期読み込みは `since`/`until` を送らないが、**`horizon=true` を渡す**
- * （`use-journal-window.ts` の初期 `useEffect`）ので、この注記の材料
- * （`oldestAt`/`crossesHorizon`）は省略していても届く。「もっと遡る」以降は
- * `until` が付くので同じく届く。
- */
+// core の `describeJournalHorizonNote` を共有しない: 本体から値を import するとサーバ専用の層ごとバンドルへ入るため。
+// `end` 以外では出さない: 常に見える注記は、本当に終端に達したときの目印にならない。
 export function journalHorizonNote(
   outcome: PageOutcome,
   oldestAt: string | null | undefined,
@@ -302,11 +140,6 @@ export function journalHorizonNote(
   );
 }
 
-/**
- * {@link journalHorizonNote} の Web 版。出す条件は同じ。時刻は
- * 呼び出し側が渡す整形（`formatDateTime`＝閲覧者の端末の時間帯）で出し、UTC の ISO 文字列と
- * 内部の言葉（記憶ストア）は見せない。
- */
 export function journalHorizonNoteForHuman(
   outcome: PageOutcome,
   oldestAt: string | null | undefined,
@@ -320,7 +153,6 @@ export function journalHorizonNoteForHuman(
   );
 }
 
-/** `since` で撃った1ページ、または SSE の `recent` を先頭へ適用する。 */
 export function applyNewerPage(
   existing: JournalEntry[],
   page: JournalEntry[],
@@ -335,13 +167,6 @@ export function applyNewerPage(
   };
 }
 
-/**
- * 種別チップの選択を `recent`（SSE で届いた生の受信）へも掛け直す。
- *
- * `useJournal` はサーバへ絞り込みを投げるが、`recent` は絞られていない生の
- * 受信なので、ここで同じ条件を掛け直さないと絞り込んでいるはずの画面に
- * 無関係な種別が混ざる。
- */
 export function filterByType(
   entries: JournalEntry[],
   selected: readonly JournalEntry['type'][],
@@ -349,31 +174,7 @@ export function filterByType(
   return selected.length === 0 ? entries : entries.filter((entry) => selected.includes(entry.type));
 }
 
-/**
- * 画面にいま掛かっている絞りを、`recent`（SSE で届いた生の受信）へも掛け直す
- * （種別チップ + 語で探す）。
- *
- * **`filterByType` と同じ理由で在る。** サーバへ投げた絞りは履歴側にしか
- * 効かず、`recent` は絞られていない生の受信なので、掛け直さないと
- * **検索中の画面へ当たらない行が割り込む**（＝画面が「その語で探した結果」
- * でなくなる）。
- *
- * **DOM にも virtua にも触れない純粋な関数としてここに置く。** 呼び出し元
- * （`use-journal-window.ts`）の中にインラインで書くと、**jsdom が日誌の行を
- * 1行も描かない**ため画面越しには測れなくなる（`journal.test.tsx` 冒頭の
- * virtua の断り）——このファイルの他の規則をここへ切り出したのと同じ理由
- * である。
- *
- * **照合は `@alteroid/core/journal-search` の1つの実装を通す。** 欄の一覧を
- * 画面側へ書き写すと、サーバ側と「当たる」の意味が静かにずれる
- * （`packages/core/src/journal-search.ts` の doc）。**本体の
- * `@alteroid/core` からではなくこの軽い口から取る**のは、本体から値を
- * import するとサーバ専用のドメイン層ごとブラウザバンドルへ入るからである
- * （`/commitments` が 1.2MB になり本番で開けなくなったことがある。
- * `routes/commitments.tsx` の doc）。
- *
- * `q` が空文字列なら語では絞らない（`matchesJournalSearch` の doc）。
- */
+// 照合は `matchesJournalSearch` を通す: 欄の一覧を画面側へ写すと、サーバ側と「当たる」の意味が静かにずれるため。
 export function filterRecent(
   entries: JournalEntry[],
   selected: readonly JournalEntry['type'][],
@@ -383,31 +184,7 @@ export function filterRecent(
   return q === '' ? byType : byType.filter((entry) => matchesJournalSearch(entry, q));
 }
 
-/**
- * 先頭に何か足された（`wasPrepend`）とき、virtua の `shift` に何を渡すか。
- *
- * **新着は自動で先頭に積む形を保つ（人間の判断）。** 「貯めて
- * ボタンを押させたら流す」形（一部の SNS クライアントに見られる cuculus 式）
- * は採らない — 日誌は可観測性の画面で、押さないと最新が見えない形にすると
- * 画面の役目そのものが削れる（north_star 禁止1に触れる）。そのうえで:
- *
- * - 利用者が **上端に居る**（新着をそのまま見ている） → `shift: false`。
- *   新着がそのまま視界に増える。**これは仮想化する前の挙動と同じ**
- * - 利用者が **上端に居ても、行を展開している・文章を選択している（`reading`）** →
- *   `shift: true`。上端のすぐ下（スクロール量が数 px のうち）でも、読んでいる最中の行を
- *   新着で動かさない（選択して写そうとしている文章が動くと狙いを外す）
- * - 利用者が **下へ遡って読んでいる** → `shift: true`。読んでいる行が
- *   新着の追加でずれない（virtua の doc: 「useful for reverse infinite
- *   scrolling」）
- *
- * **`atTop` の判定そのもの（何 px 以内を「上端」と見るか）はここの責務では
- * ない**（呼び出し側の `journal.tsx` が持つ）。ここが持つのは
- * 「`wasPrepend`/`atTop` の組がどの `shift` に落ちるか」という決定表だけ
- * ——**この決定はここで測れる**（jsdom でも、DOM が無くても、純粋な値の
- * 対応として検証できる）。**測れないのはこの先** — `shift: true` を渡した
- * あと virtua が実際にスクロール位置を保つかどうかは、jsdom が layout を
- * 持たないため測れない（`journal.test.tsx` 冒頭のコメント）。
- */
+// 新着は自動で先頭に積む: 貯めてボタンで流す形は、押さないと最新が見えず日誌の役目が削れるため。
 export function shiftForPrepend(wasPrepend: boolean, atTop: boolean, reading = false): boolean {
   return wasPrepend && (!atTop || reading);
 }

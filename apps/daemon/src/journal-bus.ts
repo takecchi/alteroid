@@ -6,24 +6,9 @@ import type {
   JournalStore,
 } from '@alteroid/core';
 
-/**
- * 日誌の追記をそのまま購読できるようにする層。
- *
- * **なぜ要るのか。** 可観測性の3層は API から読めるが、読めるのは「聞きに行った
- * とき」だけである。だから画面は数秒ごとに聞き直すしかなく、承認待ちが出たことに
- * 気づけるのは次に人間が見たときになる。人間の不在で止まってよいのは承認待ちの
- * 仕事だけで（PRD「自律」）、**承認待ちが出たことに気づけない**のはそれとは別の
- * 話である。runner → デーモンには既に出来事の流れがあるのに、デーモン → 人間に
- * だけ無かった。
- *
- * ここに判断は無い。**日誌に載ったものがそのまま流れるだけ**である。何を流すかを
- * 選り分ける表を持たせないこと — 見えない層を作らないための層なのに、そこで
- * 選別を始めたら意味が消える。
- */
+// 何を流すかを選り分ける表を持たせない: 見えない層を作らないための層で、そこで選別を始めると意味が消えるため。
 export interface JournalBus {
-  /** クローンとデーモンが使う `JournalStore`。追記すると購読者へ流れる。 */
   readonly journal: JournalStore;
-  /** 追記の購読。戻り値を呼ぶと解除。 */
   subscribe(listener: (entry: JournalEntry) => void): () => void;
 }
 
@@ -33,7 +18,6 @@ export function createJournalBus(inner: JournalStore): JournalBus {
   const journal: JournalStore = {
     async append(entry: JournalEntryInput): Promise<JournalEntry> {
       const appended = await inner.append(entry);
-      // 購読者の失敗で追記そのものを失敗させない。**記録が先、通知は後**である。
       for (const listener of listeners) {
         try {
           listener(appended);
@@ -55,11 +39,7 @@ export function createJournalBus(inner: JournalStore): JournalBus {
     oldestAt(): Promise<string | null> {
       return inner.oldestAt();
     },
-    // **`clear()` は購読者へは流さない。** リセットは「日誌に載った出来事」
-    // ではなく日誌そのものを空にする操作であり、この層が中継しているのは
-    // 前者（`append` の通知）だけである。`resetWorkspaceState` が
-    // `clear()` の直後に `append` で1件残す（`POST /reset` の doc）ので、
-    // リセットが起きたこと自体は結局この層を通って購読者へ届く。
+    // `clear()` は購読者へ流さない: 日誌に載った出来事ではなく日誌そのものを空にする操作で、この層が中継するのは `append` の通知だけのため。
     clear(): Promise<number> {
       return inner.clear();
     },

@@ -31,93 +31,19 @@ import { streamSSE } from 'hono/streaming';
 
 import { TaskBreakdownReader } from './tasks.js';
 
-/**
- * manager-runner の HTTP API（roadmap M4）。
- *
- * **叩くのはデーモンだけである。** runner はデーモンの所在も鍵も知らない —
- * 出来事は「デーモンが開いたストリーム」を流れ落ちる（`GET /events`）。逆向きの
- * コールバックを足すと、runner の中の子プロセス（＝マネージャー）がその経路で
- * 記憶へ届けるようになる（docs/architecture.md「非対称な可視性」）。
- *
- * ここに判断は無い。許可してよい行為の一覧も、確認の要否の設定も持たない。
- * それらはクローンが記憶を根拠に決めるものである（PRD「権限境界」）。
- */
+// 逆向きのコールバックを足さない: runner の中の子プロセス（マネージャー）がその経路で記憶へ届くようになるため。
 export interface RunnerAppDeps {
   host: RunnerHost;
-  /** デーモンが繋いでいない間の出来事を溜める箱。 */
   outbox: Outbox;
-  /**
-   * 制御面の合鍵の **sha256（16進）**。デーモンだけが元の値を持つ。
-   *
-   * **なぜハッシュだけを持つのか。** マネージャーは runner の中で走る子プロセスで
-   * あり、素の鍵を runner の環境変数に置けば `/proc/1/environ` から読める。読めた
-   * 瞬間、マネージャーは `POST /managers/:id/answers` で**自分宛の許可確認に自分で
-   * allow を返せる** — クローンも人間も通らずに権限境界を迂回できる。
-   * ハッシュしか無ければ、読めても鍵は作れない。
-   *
-   * これは能力の制限ではなく、制御面の本人確認である（north_star 禁止2の「実行環境の
-   * 境界」）。マネージャーの道具は1つも減っていない。
-   */
+  // 鍵そのものではなくハッシュだけ持つ: 素の鍵を環境変数に置くとマネージャーが読めて、自分宛の許可確認に自分で allow を返せるため。
   tokenSha256: string;
-  /**
-   * 自分の版。**既定は `resolveBuildRevision()`（実際にビルドで焼かれた値）。**
-   *
-   * 渡すのはテストだけである——このプロセスが実際に何で焼かれたかは
-   * `CANON_REVISION`（ビルド時に固定）に支配されるので、「焼き込みが無かった
-   * ら `/health` が null をそのまま返すか」を確かめるには、実行中のプロセスの
-   * 焼き込み状態とは独立に差し替えられる口が要る。本番の起動経路
-   * （`apps/runner/src/index.ts`）はこの引数を渡さない。
-   *
-   * **この項目は焼き込みが無かった場合を再現するためだけに在る。本番の経路は
-   * どこからも渡さない。**（これは「渡してよい設定」ではない。渡す実装が現れたら、
-   * それは本番の形が変わったということである。）
-   *
-   * **内部に閉じていない。** `RunnerAppDeps` は `apps/runner/src/index.ts` から
-   * export されている（`@alteroid/runner` の公開面）ので、この項目もワークスペース
-   * 内の daemon 等から見える（`private: true` で npm へは publish されない）。
-   */
   revision?: BuildRevision;
-  /**
-   * `GET /events` の heartbeat の間隔（ms）。省略時は `DEFAULT_SSE_HEARTBEAT_MS`
-   * （`@alteroid/core` の `sse-heartbeat.ts`）。**環境変数は増やさない** ——
-   * デーモン側の `AppDeps.sseHeartbeatMs` と同じ理由で、テストで短くする以外に
-   * 差し替える理由が無い。
-   */
+  // 環境変数にしない: テストで短くする以外に差し替える理由が無いため。
   sseHeartbeatMs?: number;
-  /**
-   * `GET /events` の1回の `writeSSE` に許す最長時間（ms）。省略時は
-   * `DEFAULT_SSE_WRITE_DEADLINE_MS`（下で定義。既定 45,000ms）。
-   *
-   * **相手が読まなくなった接続では、`await stream.writeSSE(...)` は原理上
-   * いつまでも返らない**（`hono@4.13.1` の `StreamingApi#write` が
-   * `this.writer.write(input)` の失敗を `catch {}` で握り潰し、書き込みが
-   * 1本 pending のままだと WHATWG Streams の仕様上どちらへも解決しない
-   * ——`/events` ハンドラの doc に実測が在る）。**期限を切らないと、1件の
-   * 詰まりが後続の配送を全部止める**（head-of-line blocking）。
-   *
-   * **環境変数は増やさない** —— `sseHeartbeatMs` と同じ理由（テストで短くする
-   * 以外に差し替える理由が無い）。
-   */
+  // 書き込みに期限を切る: 読まなくなった接続の `writeSSE` は返らず、1件の詰まりが後続の配送を全部止めるため。
   sseWriteDeadlineMs?: number;
-  /**
-   * タスクの state 別内訳を測るリーダー（#315 の可視化）。**主にテスト用。**
-   *
-   * 既定は `new TaskBreakdownReader()`（実物の `/proc` を読む）。`revision` と
-   * 同じ DI の形——本番の起動経路（`apps/runner/src/index.ts`）はこの引数を
-   * 渡さない。テストは偽の `/proc`（一時ディレクトリ）を指すリーダーを注入して
-   * 固定値を確かめる。
-   */
   taskBreakdownReader?: TaskBreakdownReader;
-  /**
-   * 担い手へ渡す添付の上限（Issue #3111 段3）。`POST /managers` と `/managers/:id/messages` の本文の上限
-   * （`runnerAttachmentBodyLimit`）を決める。省略は `readAttachmentLimits()`（環境変数。デーモンと同じ値を置くこと）。
-   */
   attachmentLimits?: AttachmentLimits;
-  /**
-   * この runner のマネージャー層の provider id（`ALTEROID_MANAGER_PROVIDER` を解いたもの。
-   * #486 段 S1）。`hello` に載せてデーモンへ名乗る。省略（旧い呼び出し・テスト）は
-   * 欄を載せない ＝ 読み側が `claude` と読む。
-   */
   managerProvider?: string;
 }
 
@@ -127,7 +53,7 @@ function sha256(value: string): Buffer {
   return createHash('sha256').update(value, 'utf8').digest();
 }
 
-/** 一致の判定は長さを揃えて定数時間で（総当たりに時間の手がかりを与えない）。 */
+// 定数時間で比べる: 総当たりに時間の手がかりを与えないため。
 function matches(header: string | undefined, expectedHex: string): boolean {
   const token = AUTH_SCHEME.exec(header ?? '')?.[1];
   if (token === undefined) return false;
@@ -141,184 +67,58 @@ function matches(header: string | undefined, expectedHex: string): boolean {
   return timingSafeEqual(sha256(token), expected);
 }
 
-/**
- * 受け口が閉じている間の出来事を落とさないための箱。
- *
- * デーモンが再起動している最中にも、マネージャーは手を動かし、確認を投げてくる。
- * ここで捨てると**誰も答えられない待ちが runner に残る**（マネージャーは永久に
- * 止まる）。だから溜めて、繋がった順に流す。
- *
- * 溜める量に上限を置かないのは、上限＝取りこぼしだからである。器の資源が尽きる
- * ときは実行環境の限界として現れるべきで、記録を先に捨てる設計にしない。
- */
-/**
- * 「まだデーモンへ送り出せていない」量（#358）。**溜まり場は2つ在る**——
- * {@link Outbox} 自身の待ち行列と、購読側（`GET /events` のハンドラ）が
- * 抱えている分である。{@link Outbox.pending} はその合計を答える。
- */
 export interface OutboxPending {
-  /** 件数。 */
   count: number;
-  /** いちばん古いものが積まれた時刻（ISO 8601）。1件も無ければ `undefined`。 */
   oldestAt?: string;
 }
 
-/**
- * `outbox.push()` が返す連番（#275）。**プロセスの寿命の間だけ単調増加する**
- * ——runner が入れ替われば1から数え直す（`INSTANCE_ID` と同じ寿命）。
- *
- * **SSE のフレームの `id` フィールドにしか使わない。** `RunnerEvent`（`@alteroid/
- * core` の `runnerEventSchema`）には一切載せない——JSON の中身を変えずに
- * 「取りこぼしの手当て」を配送層だけで完結させるためである（`packages/core/src/
- * runner-protocol.ts` は人間が差分を読む線であり、触らずに済むならそのほうが
- * 望ましいという判断）。
- */
+// 連番を `RunnerEvent` に載せない: wire の形を変えずに、取りこぼしの手当てを配送層だけで済ませるため。
 export type OutboxSeq = number;
 
-/**
- * `#queue` に残っている分の、種別・managerId ごとの内訳1行（#634）。
- *
- * **`#queue` だけの内訳である。** 購読側（`GET /events` ハンドラのローカル
- * `queue` と書きかけの1件）が抱えている分はここには出ない——`#probe` が
- * 返すのは件数と最古時刻だけで、中身（`RunnerEvent` そのもの）を持たない
- * ためである（`Outbox.pending` の doc）。取れないものを取れた顔で出さない
- * （AGENTS.md の地雷表）。
- */
 export interface OutboxPendingGroup {
-  /** `RunnerEvent.type`。 */
   type: string;
-  /** `hello` 以外は必ず持つ。`hello` だけ managerId が無い。 */
   managerId?: string;
   count: number;
-  /** この組の中でいちばん古い `queuedAt`。 */
   oldestAt: string;
 }
 
-/**
- * 畳む直前に「何を失うのか」を名指しするための、`Outbox` の1回分のスナップ
- * ショット（#634）。`OutboxPending`（`/health` が返す合計だけの形）とは別に
- * 用意する——`/health` の応答は増やさない（wire は1バイトも増えない。
- * `describeForShutdown()` は runner プロセスの内側だけで完結する）。
- */
 export interface OutboxShutdownSnapshot {
-  /**
-   * `#queue`（まだ一度も listener へ渡していない分）。listener が付いて
-   * いる間は常に空——`push()` は listener が居ればそのまま渡すので、
-   * ここには積まれない（`Outbox.pending` の doc の表と同じ非対称）。
-   */
   queue: {
     count: number;
-    /** 1件も無ければ省く。 */
     oldestAt?: string;
     groups: OutboxPendingGroup[];
   };
-  /**
-   * 購読側（`GET /events` ハンドラ）の状態（#634）。**3つを言い分ける**——
-   * コーディネーターの指摘: 直す前は「一度も購読が無い」と「購読されていた
-   * が、いま切れている」が同じ `null` になり、後者にまで「該当なし」という
-   * 正しくない断定を書いていた。これは #628 が `never-connected` と `down`
-   * を分けたのと同じ軸で、しかも今回いちばん知りたいこと（脚が落ちたまま
-   * 畳んだのか、そもそも一度も繋がらなかったのか）そのものである。
-   *
-   * - `'never-subscribed'`: `attach()` が一度も呼ばれていない。そもそも
-   *   尋ねる相手が存在しない
-   * - `'subscribed'`: いま購読されている（`#listener` が付いている）。
-   *   `#probe` が渡されていれば件数・最古時刻を添える——渡されていなければ
-   *   （`attach()` の `pending` 引数を省いた呼び出し）添えない。**0件と
-   *   「取れない」を混同しない**
-   * - `'detached'`: 過去に購読されたことがあるが、いまは切れている。
-   *   **件数は取れない**（`detach()` の時点で `#probe` も外れるので、
-   *   推測で埋めない——0を書くと「何も失っていない」と読めてしまう。
-   *   `AGENTS.md`「取れない軸に0の行を作る」と同じ理由）
-   */
+  // 'detached' の件数は 0 と書かない: `#probe` が外れて取れず、「何も失っていない」と読めてしまうため。
   subscriber:
     | { status: 'never-subscribed' }
     | { status: 'subscribed'; count?: number; oldestAt?: string }
     | { status: 'detached' };
 }
 
+// 溜める量に上限を置かない: 上限は取りこぼしになるため。
 export class Outbox {
   readonly #queue: { event: RunnerEvent; queuedAt: string; seq: OutboxSeq }[] = [];
-  /**
-   * **`queuedAt` も渡す**（元の積まれた時刻。書き直し不可）。{@link requeue} が
-   * 直接配送するときに「いま」で打ち直さないための配線——`push`（新規）は
-   * `requeue(event, this.#now())` に委譲するので、この第3引数は「新規なら今」
-   * 「差し戻しなら元の時刻」のどちらであっても、呼び出し側（listener）が
-   * 自分で選ばずに済む。
-   */
   #listener: ((event: RunnerEvent, seq: OutboxSeq, queuedAt: string) => void) | null = null;
-  /**
-   * 購読側が抱えている分を数える口（#358）。**購読が始まったときだけ在る。**
-   *
-   * これが無いと {@link pending} は「要るときにだけ 0 を返す」計器になる
-   * （{@link pending} の doc）。
-   */
   #probe: (() => OutboxPending) | null = null;
-  /**
-   * `attach()` が一度でも呼ばれたか（#634）。**一度立てたら戻さない**——
-   * `#listener` / `#probe` は detach で `null` に戻るが、こちらは「過去に
-   * 購読されたことがあるか」という別の軸なので、detach では動かさない。
-   * `describeForShutdown()` が「一度も購読が無い」と「購読されていたが、
-   * いま切れている」を区別するための唯一の材料である。
-   */
+  // detach でも戻さない: `#listener` とは別の軸（過去に購読されたか）で、「一度も無い」と「切れた」を分けるため。
   #everSubscribed = false;
-  /**
-   * 購読側が抱えている分を同期的に引き渡す口（#新窓）。**購読が始まったときだけ
-   * 在る。** 次の {@link attach} 呼び出し（＝別の購読者が割り込む瞬間）でだけ
-   * 使われる——古い購読者は `writeSSE` の途中で止まっていて自分ではコードを
-   * 走らせられないので、`attach` の側からここを同期的に呼んで強制的に
-   * 引き出す（`/events` ハンドラの `drain` 引数の doc）。
-   *
-   * これが無いと、新しい購読者に黙って置き換わる瞬間に古い購読者の `queue` /
-   * 書きかけの1件が誰にも配られず {@link pending} からも消える（`attach` の doc）。
-   */
   #drain: (() => { event: RunnerEvent; queuedAt: string; seq: OutboxSeq }[]) | null = null;
   readonly #now: () => string;
   #nextSeq: OutboxSeq = 1;
 
-  /**
-   * 「`writeSSE` が例外を投げずに返った」出来事の控え（#275）。**上限あり**
-   * ——`#queue`（まだ一度も渡していない分）が上限を置かない理由（取りこぼし）
-   * とはここは違う。ここに積むのは**一度は渡した**分の予備で、上限に当たって
-   * 古い方から捨てても、直す前の挙動（無条件に消える）より悪くはならない。
-   *
-   * hono の `write()`（`hono/dist/utils/stream.js`）は死んだ接続へ書いても
-   * `catch {}` で例外を外へ出さない——runner 側からは「成功した」としか見えない
-   * （Issue #275 本文）。だから `writeSSE` が返った直後の1件は、本当に相手へ
-   * 届いたのか runner には確認できない。**確認できない代わりに、一定件数だけ
-   * 手元に残し**、次に張られた接続が `Last-Event-ID` を名乗ったら
-   * {@link sentSince} で読み返して配り直す。
-   */
   readonly #sent: { event: RunnerEvent; queuedAt: string; seq: OutboxSeq }[] = [];
 
-  /** 控え（{@link #sent}）に残す上限件数。 */
   static readonly SENT_HISTORY_LIMIT = 1000;
 
   constructor(now: () => string = () => new Date().toISOString()) {
     this.#now = now;
   }
 
-  /** 割り振った連番を返す（#275）。呼び出し側が `id`（SSE フレーム）へそのまま使う。 */
   push(event: RunnerEvent): OutboxSeq {
     return this.requeue(event, this.#now());
   }
 
-  /**
-   * **元の `queuedAt` を保ったまま**箱へ戻す。`push` はこれに
-   * `queuedAt: this.#now()` を渡すだけの薄い委譲——「新規に積む」と「差し戻す」の
-   * 違いは `queuedAt` をどこから取るかだけで、配送そのもの（listener が居れば
-   * 直接渡す・居なければ `#queue` へ積む）は同じである。
-   *
-   * **なぜ要るか。** `/events` ハンドラが確実に配送できなかった分（書きかけの
-   * 1件・締め切り超過で畳んだ接続が抱えていた分）を `push()` でそのまま戻すと、
-   * `queuedAt` が「いま」に打ち直され、`oldestPendingAt` が「戻すたびに新しく
-   * なる」という嘘をつく（7時間待っている報告が、毎回さっき積まれたように
-   * 見える）。差し戻しは連番だけ新しく振り直す——元の連番は既に SSE のフレーム
-   * として使用済み（あるいは未使用のまま失効）で、再送されるフレームは新しい
-   * `id` を持つべきだからである（`Last-Event-ID` の意味を壊さない——古い連番を
-   * 再利用すると、控え（{@link recordSent}/{@link sentSince}）の中の同じ連番と
-   * 衝突しうる）。
-   */
+  // 差し戻しは `queuedAt` を打ち直さない: `oldestPendingAt` が戻すたびに新しくなる嘘になるため。連番は新しく振る。
   requeue(event: RunnerEvent, queuedAt: string): OutboxSeq {
     const seq = this.#nextSeq++;
     if (this.#listener !== null) {
@@ -329,23 +129,7 @@ export class Outbox {
     return seq;
   }
 
-  /**
-   * 購読を開始する。溜まっていた分を先に流してから、以後は直接渡す。
-   *
-   * `pending` は**購読側が抱えている分を数える口**である（#358）。渡さなくても
-   * 動くが、**渡さなければ購読中の滞留が {@link pending} から消える。**
-   *
-   * `drain` は**購読側が抱えている分を同期的に引き渡す口**である。既に別の
-   * 購読者が居る状態でこれが呼ばれた場合（＝新しい接続が古い接続を黙って
-   * 置き換える瞬間）、**新しい listener へ渡す前に、古い購読者の `#drain` を
-   * 呼んで抱えている分を引き出し、古い順に新しい listener へ渡す。** 古い
-   * 購読者は `writeSSE` の途中で止まっていて自分の `finally` を実行できない
-   * ことがある——そのままだと、古い購読者が抱えていた `queue` と書きかけの
-   * 1件は誰にも配られず {@link pending} からも消える（`#probe` ごと差し替わる
-   * ため）。**呼ばれた側（古い購読者）は自分の状態を空にして返すことが期待
-   * されている**——そうしないと、後で古い購読者自身の `finally` が動いたときに
-   * 同じ分をもう一度差し戻し、二重になる。
-   */
+  // 古い購読者の分を `#drain` で引き出してから置き換える: 古い購読者は `writeSSE` で止まり自分の `finally` を走らせられず、抱えた分が誰にも配られず消えるため。
   attach(
     listener: (event: RunnerEvent, seq: OutboxSeq, queuedAt: string) => void,
     pending?: () => OutboxPending,
@@ -371,21 +155,8 @@ export class Outbox {
     };
   }
 
-  /**
-   * `writeSSE` が例外を投げずに返った直後に呼ぶ（#275）。**この呼び出しが、
-   * 無音切断の唯一の手当てである。**
-   *
-   * 呼ぶのは「相手に本当に届いたことが確認できた」からではない——確認できて
-   * いないからこそ、次の接続の申告（`Last-Event-ID`）に賭けて一定量を手元に
-   * 残す。上限は {@link SENT_HISTORY_LIMIT}。古い方から捨てる。
-   *
-   * **同じ連番が既に控えにあれば積まない**（#3808）。`/events` は
-   * {@link sentSince} で読み返した分も、初めての分と同じ経路で書いてここへ
-   * 来る。積み直すと控えに同じ連番が2つ入り、無音切断がもう1度続いたとき
-   * デーモンへ同じ出来事が2回届き、上限の枠も食う。控えは連番の昇順なので、
-   * 末尾から自分より小さい連番に当たるまで見れば足りる。
-   */
   recordSent(event: RunnerEvent, seq: OutboxSeq, queuedAt: string): void {
+    // 同じ連番が既に在れば積まない: 読み返して再送した分が控えに二重に入り、デーモンへ同じ出来事が2回届くため。
     for (let i = this.#sent.length - 1; i >= 0; i--) {
       const known = this.#sent[i];
       if (known === undefined || known.seq < seq) break;
@@ -395,88 +166,29 @@ export class Outbox {
     while (this.#sent.length > Outbox.SENT_HISTORY_LIMIT) this.#sent.shift();
   }
 
-  /**
-   * `lastEventId` より新しく「渡したはず」だった分を、古い順に返す（#275）。
-   *
-   * **`lastEventId` が控えの最古の連番より小さい場合、その間の分は復元でき
-   * ない**（{@link SENT_HISTORY_LIMIT} を超えて捨てられているため）。この
-   * 関数はその欠落を検知しない——黙って「残っている分だけ」を返す。呼び出し側
-   * （`/events`）もそれ以上のことはしない: 直す前の挙動（無条件に消える）より
-   * 悪くはならない、という上限の設計そのものである。
-   */
   sentSince(lastEventId: OutboxSeq): { event: RunnerEvent; queuedAt: string; seq: OutboxSeq }[] {
-    // **この箱が一度も振っていない連番を申告されたら、前の runner の連番である**（#3036）。
-    // 連番は runner が入れ替わると1から数え直すので、デーモンが握っていた古い高い値が
-    // 新しい箱の最大より大きいことがある。そのまま比べると控えは全部「古い」ことになり、
-    // 新しい runner が渡したはずの分が1件も返らない（無音切断の取りこぼし）。
-    // 申告が「この箱の外」なら、デーモンはこの箱の分を1件も受け取っていない（デーモンは
-    // 接続ごとの最初の `id:` で申告値を置き換える。`runner-client.ts` の `#lastEventId`）ので、
-    // 控えを全部返す。二重にはならない: 受け取っていない分だけを返している。
+    // 振っていない連番を申告されたら控えを全部返す: runner が入れ替わると連番は1から数え直され、前の runner の高い値で絞ると1件も返らないため。
     if (lastEventId >= this.#nextSeq) return [...this.#sent];
     return this.#sent.filter((item) => item.seq > lastEventId);
   }
 
-  /**
-   * まだデーモンへ送り出せていない件数。**購読側が抱えている分も含む**（#358）。
-   *
-   * ## なぜ合算なのか（ここを分けると計器が嘘をつく）
-   *
-   * {@link push} は listener が付いていれば `#queue` に積まず、**そのまま購読側へ
-   * 渡す。** だから `#queue` の長さだけを数えると:
-   *
-   * | 状況 | listener | 溜まる場所 | `#queue.length` |
-   * | --- | --- | --- | --- |
-   * | デーモンが繋いでいない | 付いていない | `#queue` | 正しく N |
-   * | **デーモンが繋がったまま読まなくなった** | **付いたまま** | **購読側** | **0** |
-   *
-   * **下の行が #323 である。** デーモンの `#pump` が固着しても runner から見た
-   * 接続は開いたままなので `detach()` は呼ばれず、listener は付いたままになる。
-   * **＝ あの4時間、この値はずっと 0 だった。** 「報告が出たのに配られていない」を
-   * 見えるようにするのがこの値の役目なのに、**いちばん要る場面でだけ 0 を返す**
-   * 計器だった（AGENTS.md「静かに失敗する道具」）。
-   */
+  // `#queue` の長さだけを数えない: listener が付いている間は購読側に溜まり、デーモンが読まなくなっても 0 のままになるため。
   get pending(): number {
     return this.#queue.length + (this.#probe?.().count ?? 0);
   }
 
-  /**
-   * まだ送り出せていないもののうち、いちばん古いものが積まれた時刻（#358）。
-   *
-   * **「マネージャーが報告を生成した時刻」ではない。** runner がこの箱へ積んだ
-   * 時刻である —— 取れないものを取れた顔で出さない（AGENTS.md の地雷表）。
-   */
   get oldestPendingAt(): string | undefined {
     const mine = this.#queue[0]?.queuedAt;
     const theirs = this.#probe?.().oldestAt;
-    // 片方しか埋まらないのが普通だが（listener が付いていれば `#queue` は空）、
-    // **どちらが古いかで決める。** 「片方は空のはず」を前提にしない。
     if (mine === undefined) return theirs;
     if (theirs === undefined) return mine;
     return theirs < mine ? theirs : mine;
   }
 
-  /**
-   * いま listener（`GET /events` の購読）が付いているか（#634）。
-   *
-   * **畳む経路が「待ってよいか」を決めるための材料。** 脚が繋がっていなければ
-   * 待っても誰も引き取らない——`#queue` に積まれたままの分は、次にデーモンが
-   * 繋ぎ直すまで動かない。無条件に待つと、器の焼き直しのたびに shutdown が
-   * 延びる（listener が一度も付かない = デーモン側が既に落ちている、という
-   * ありふれた場合を含む）。
-   */
   get subscribed(): boolean {
     return this.#listener !== null;
   }
 
-  /**
-   * 畳む直前に「何が残っているか」を名指しするための1回分のスナップショット
-   * （#634。`OutboxShutdownSnapshot` の doc）。
-   *
-   * **`#queue` は種別・managerId ごとに集計できる**（中身の `RunnerEvent` を
-   * 直接持っているため）。**購読側（`#probe`）は集計できない**（件数と最古
-   * 時刻しか返してこない——`Outbox.pending` の doc）。取れない内訳を推測で
-   * 埋めない。
-   */
   describeForShutdown(): OutboxShutdownSnapshot {
     const groups = new Map<string, OutboxPendingGroup>();
     for (const item of this.#queue) {
@@ -496,10 +208,6 @@ export class Outbox {
       }
     }
     const probed = this.#probe?.();
-    // **3状態を作る（#634）。** `#listener` の有無で「いま購読されている」を
-    // 先に見て、外れていれば `#everSubscribed` で「一度も無い」と「切れた」を
-    // 分ける——detach で戻るのは `#listener` / `#probe` だけで、
-    // `#everSubscribed` は戻らない（`#everSubscribed` の doc）。
     const subscriber: OutboxShutdownSnapshot['subscriber'] =
       this.#listener !== null
         ? {
@@ -525,40 +233,10 @@ export class Outbox {
   }
 }
 
-/**
- * {@link Outbox.describeForShutdown} の結果を、stderr へ書く1つの文字列へ
- * 畳む（#634）。**`shutdown()`（`apps/runner/src/index.ts`）から呼ぶ。** 呼ぶのは
- * `waitForOutboxDrain` で待てるだけ待った**後**——このプロセスは、これを
- * 書いた直後に `process.exit(0)` する（`drainAndReportOutbox` の呼び出し
- * 順）。それより後にこのイベントループが回ることは無い。
- *
- * **「残っている」ではなく「失われる」と書く。** `Outbox` はプロセス内
- * メモリだけで、ディスクにも DB にも無い（このファイルに実装がある——確かめ
- * るには `Outbox` クラスの永続化コードを探せばよい。無い）。**この関数が
- * 呼ばれる時点で残っているものは、この後どの道 process.exit(0) と一緒に
- * 消える**——「残っている」だけだと「後で届く」とも読めてしまう
- * （依頼者第一基準:「失われたなら、失われたことが分かること」）。
- *
- * **何も残っていない、かつ購読側の状態が完全に分かっているときだけ `null`。**
- * 呼び出し側はこのとき何も書かない——「残っていない」は書く価値の無い行
- * ではなく、書かないことそのものが答えである（毎回の shutdown で1行増える
- * と、それ自体がログを埋める）。**購読が過去にあって、いま切れている
- * （`subscriber.status === 'detached'`）ときは、`#queue` が0件でも黙らない**
- * ——切れた側で何件失っているかはここからは分からず、0件だったと決めつける
- * と静かに失敗する（依頼者第4基準）。
- *
- * **`archive` を含む種別・managerId を必ず名指しする。** #628 の調査が
- * 指した穴そのもの——`#shipArchive()` は `report` / `ask` と同じ1本の脚
- * （`emit`）を通るので、脚が落ちたまま畳むと生ログの退避（アーカイブ）も
- * 他の出来事と同じ箱の中で静かに消える。件数だけでは「何が」失われたのかが
- * 分からない。
- */
 export function formatOutboxShutdownReport(snapshot: OutboxShutdownSnapshot): string | null {
   const subscriberKnownCount =
     snapshot.subscriber.status === 'subscribed' ? (snapshot.subscriber.count ?? 0) : 0;
-  // **購読が切れた後は、そちら側の件数を0とみなさない。** `#probe` はもう
-  // 呼べないので、購読側に何も残っていなかったことを示す材料が無い
-  // （`OutboxShutdownSnapshot.subscriber` の doc）。
+  // 'detached' のとき `#queue` が0件でも黙らない: 切れた側の件数は取れず、0件と決めつけると静かに失敗するため。
   const subscriberUnknown = snapshot.subscriber.status === 'detached';
   const total = snapshot.queue.count + subscriberKnownCount;
   if (total === 0 && !subscriberUnknown) return null;
@@ -603,19 +281,6 @@ export function formatOutboxShutdownReport(snapshot: OutboxShutdownSnapshot): st
   return `${lines.join('\n')}\n`;
 }
 
-/**
- * 購読側（`GET /events` ハンドラのローカル `queue` と書きかけの1件）の行を
- * 組み立てる（#634。3状態——`OutboxShutdownSnapshot.subscriber` の doc）。
- *
- * **`'subscribed'` の内訳は取れないことを、取れないと読める字で出す**
- * ——`#probe` が返すのは件数と最古時刻までで、`Outbox.describeForShutdown`
- * の doc のとおり `#queue` のような種別・managerId ごとの集計は持たない。
- *
- * **`'detached'` は件数そのものが無い**（`#probe` はもう呼べない）——0を
- * 書くと「何も失っていない」と誤読される。**`'never-subscribed'` とは
- * 文面をはっきり分ける**（`never-connected` と `down` を分けた #628 と
- * 同じ理由）。
- */
 function describeSubscriberLine(subscriber: OutboxShutdownSnapshot['subscriber']): string {
   switch (subscriber.status) {
     case 'never-subscribed':
@@ -638,50 +303,13 @@ function describeSubscriberLine(subscriber: OutboxShutdownSnapshot['subscriber']
   }
 }
 
-/**
- * このプロセスの識別子。**モジュールの読み込みで1回だけ作る。**
- *
- * `createRunnerApp` の中で作らないのは、テストが同じプロセスで app を作り直す
- * ことがあり、そのたびに変わると「器が入れ替わった」と読めてしまうからである。
- * 表しているのは**プロセスの同一性**であって app の同一性ではない。
- */
+// createRunnerApp の中で作らない: テストが app を作り直すたびに変わり、器の入れ替わりに見えるため。
 const INSTANCE_ID = randomUUID();
 
-/**
- * `RunnerAppDeps.sseWriteDeadlineMs` の既定値（45,000ms）。
- *
- * **新しいマジックナンバーを置かない —— 既にシステムに在る量
- * （{@link DEFAULT_SSE_HEARTBEAT_MS}）の3倍として導く。** これは
- * `apps/daemon/src/runner-client.ts` の `RUNNER_STREAM_SILENCE_TIMEOUT_MS`
- * （デーモン自身の無音の見張り）と**同じ式**であり、値も一致する
- * （`DEFAULT_SSE_HEARTBEAT_MS * 3`）。
- *
- * **なぜ同じ式を選ぶか。** 「相手が無音を見限るのと同じ長さ以上、箱の中身を
- * 人質に取らない」という線を引くためである——runner がこれより長く1件を
- * 抱え込んでも、デーモンはどのみち `RUNNER_STREAM_SILENCE_TIMEOUT_MS` で
- * その接続を見限って繋ぎ直しに来る。runner 側の締め切りをそれより短くする
- * 意味は薄く（デーモンがまだ見限っていない接続を runner が先に畳むだけ）、
- * 長くする意味も無い（デーモンが既に見限った接続を runner がまだ書きかけの
- * まま抱え続けるだけ）。
- *
- * **`DEFAULT_SSE_HEARTBEAT_MS` という定数から導く**（`deps.sseHeartbeatMs` を
- * 経由しない）——`sseHeartbeatMs` がテストで短縮されていても、書き込みの
- * 締め切りまで一緒に縮む理由は無い。デーモン側の見張りも、実際の runner の
- * heartbeat 間隔を知らずに固定の式で見張っている（`RUNNER_STREAM_SILENCE_
- * TIMEOUT_MS` の doc）——両者が同じ前提（「知らない側の固定の式」）で揃っている
- * ことが、この線をそのまま導ける理由である。
- */
+// デーモンの無音の見張り（`RUNNER_STREAM_SILENCE_TIMEOUT_MS`）と同じ式にする。
+// `deps.sseHeartbeatMs` から導かない: テストで heartbeat を縮めても、書き込みの締め切りまで縮める理由は無いため。
 const DEFAULT_SSE_WRITE_DEADLINE_MS = DEFAULT_SSE_HEARTBEAT_MS * 3;
 
-/**
- * 与えられた非同期処理を期限つきで待つ。**タイマーは必ず片付ける**
- * （成功しても、期限が来ても——`finally` で `clearTimeout`）。
- *
- * `run()` が投げたら、そのまま外へ投げる（握り潰さない）——このプロセスは
- * 「返らないかもしれない書き込み」に期限を切ることだけが役目で、書き込みが
- * 例外で終わったときの扱い（#358 の `writing` 経由の差し戻し）は呼び出し側の
- * 既存の挙動のままにする。
- */
 async function withDeadline<T>(
   run: () => Promise<T>,
   deadlineMs: number,
@@ -705,17 +333,8 @@ export function createRunnerApp(deps: RunnerAppDeps) {
   const { host, outbox } = deps;
   const sseHeartbeatMs = deps.sseHeartbeatMs ?? DEFAULT_SSE_HEARTBEAT_MS;
   const sseWriteDeadlineMs = deps.sseWriteDeadlineMs ?? DEFAULT_SSE_WRITE_DEADLINE_MS;
-  // **プロセスの生存期間ぶん1回だけ解決する**（`INSTANCE_ID` と同じ理由——
-  // 焼き込み・実行時の環境変数はどちらもプロセスの寿命の間に変わらない）。
   const revision = deps.revision ?? resolveBuildRevision();
   const taskBreakdownReader = deps.taskBreakdownReader ?? new TaskBreakdownReader();
-  /**
-   * 添付を運ぶ3つの口の本文の上限。`POST /managers` / `POST /managers/:id/messages` は本文全体に
-   * `bodyLimit` で掛け、`POST /managers/:id/resume` は生ログ `entries` も運ぶので、添付の `data` の合計だけを
-   * handler の中で同じ値と比べる。添付の合計上限の
-   * base64 に余裕を足した値で、デーモンが先に検める上限を抜けた巨大な本文への最後の歯止めである。
-   * 制御面の合鍵（`control`）の内側にだけ置く——鍵の無い呼びは本文を読む前に 401 で終わる。
-   */
   const attachmentBodyMax = runnerAttachmentBodyLimit(
     deps.attachmentLimits ?? readAttachmentLimits().limits,
   );
@@ -725,43 +344,17 @@ export function createRunnerApp(deps: RunnerAppDeps) {
       413,
     );
 
-  /**
-   * 制御面の門番。**runner の中から叩けても、鍵が無ければ通らない。**
-   *
-   * ここを外すと、マネージャーが `curl` で自分の `requestId` を調べ、自分に
-   * `allow` を返せる（権限境界の完全な迂回）。
-   */
   const control = createMiddleware(async (c, next) => {
     if (!matches(c.req.header('authorization'), deps.tokenSha256)) {
       return c.json({ error: 'unauthorized' as const }, 401);
     }
-    /**
-     * **認証を通った呼びだけが貸し出し期限の時計を進める。**
-     *
-     * `/livez` はここを通らない（無認証）。認証前にここへ置くと、誰でも
-     * `GET /livez` を叩くだけで貸し出し期限を延ばせてしまい、自己失効
-     * （`RunnerHostOptions.enforceLease`）がまるごと機能しなくなる。
-     */
+    // 認証の前に時計を進めない: `/livez` を叩くだけで貸し出し期限が延び、自己失効が機能しなくなるため。
     host.noteDaemonContact();
     await next();
   });
 
   const app = new Hono()
-    /**
-     * Hono の既定のエラーハンドラを、本文を出さない規律に合わせて置き換える
-     * （Issue #249）。
-     *
-     * **応答（500 / `Internal Server Error`）と `HTTPException` の分岐
-     * （`getResponse()` を返す枝）は既定と同じに保つ。** 変えるのは
-     * `console.error(err)` の枝だけである。デーモン側（`apps/daemon/src/
-     * app.ts` の `createApp` 冒頭）と同じ判断で、実物（`hono@4.13.1`、
-     * `node_modules/.pnpm/hono@4.13.1/node_modules/hono/dist/hono-base.js`
-     * の `errorHandler`）の逐語も同じくそちらに引いてある。
-     *
-     * ここが踏む実例は `/managers/:id/resume` の `throw error`（`RunnerFenceError`
-     * 以外）である——世代の古い resume 以外の失敗は、これまで Hono の既定
-     * ハンドラを未捕捉のまま抜けていた。
-     */
+    // Hono の既定の `console.error(err)` を使わない: 例外の本文を出さないため。
     .onError((err, c) => {
       if ('getResponse' in err) {
         const res = err.getResponse();
@@ -772,7 +365,6 @@ export function createRunnerApp(deps: RunnerAppDeps) {
       );
       return c.text('Internal Server Error', 500);
     })
-    /** 器の生存確認だけ。制御面の情報は何も返さない（だから鍵を要求しない）。 */
     .get('/livez', (c) => c.json({ ok: true }))
 
     .use('/health', control)
@@ -785,12 +377,6 @@ export function createRunnerApp(deps: RunnerAppDeps) {
     .use('/rescue-refs/*', control)
 
     .get('/health', async (c) => {
-      /**
-       * タスクの state 別内訳（#315 の可視化）。**`readExecutionResources` 自体は
-       * 変えない** ——これは兄弟として `resources` へ合流させるだけの値で、
-       * `pids` の中へは入れない（`runnerExecutionResourcesSchema` の `tasks` の
-       * doc）。`undefined`（`/proc` が無い環境）なら欄ごと出さない。
-       */
       const tasks = await taskBreakdownReader.read();
       const resources = {
         ...(await readExecutionResources()),
@@ -799,98 +385,23 @@ export function createRunnerApp(deps: RunnerAppDeps) {
       return c.json({
         ok: true,
         runnerId: host.runnerId,
-        /**
-         * **いまこの名前に応えているプロセスがどれか**（roadmap M5 PR4 の判定材料）。
-         *
-         * `runnerId` は宛先の名前で、器を作り直しても同じである（台帳の鎖
-         * `manager_id → runner_id` がそれで繋がっている）。だからこの値だけでは
-         * 「新しいコンテナが応え始めた」ことを誰も観測できず、名簿は器の入れ替えと
-         * 単なる回復を区別できなかった（roadmap 受け入れ基準6）。
-         *
-         * **安定させないこと。** ここは起動ごとに変わることが唯一の役目である
-         * （`runnerId` の別名を作るのではない）。ファイルや環境変数から読んで
-         * 引き継ぐ形にした瞬間、入れ替えが見えなくなる。
-         *
-         * **秘密ではない。** 制御面の内側だけに出る値だが、伏せる理由も無い
-         * （持っていても何もできない乱数である）。
-         */
+        // 起動をまたいで引き継がない: 変わることが役目で、引き継ぐと器の入れ替えが見えなくなるため。
         instanceId: INSTANCE_ID,
         workspacePath: host.workspacePath,
         managers: host.list().length,
         pendingEvents: outbox.pending,
-        /**
-         * まだデーモンへ送り出せていない出来事のうち、いちばん古いものが積まれた
-         * 時刻（#358）。1件も無ければ出さない——**0 件のときに値を作らない**
-         * （AGENTS.md「取れない軸に 0 の行を作る」）。
-         */
         ...(outbox.oldestPendingAt === undefined
           ? {}
           : { oldestPendingAt: outbox.oldestPendingAt }),
-        /**
-         * 実行環境の資源（roadmap M5 PR3）。**「収容能力」ではない。**
-         *
-         * ここに出るのは観測値だけである。「あと何本置けるか」は runner も答えない
-         * — それは定員であって、配置の判断は名簿の側（`select`）にある
-         * （north_star 禁止2 / `runnerExecutionResourcesSchema`）。
-         *
-         * **`os` の値を出さない。** ホストの数を名乗ると、同じホストに並んだ runner が
-         * 全部同じ数を報告し、資源で選んでいるつもりで登録順に選ぶことになる
-         * （実測は `readExecutionResources`）。
-         */
         resources,
-        /**
-         * いま配っている鍵の**指紋だけ**。値は決して出さない。
-         *
-         * これが無いと、人間が置いた鍵とマネージャーが握っている鍵が同じかどうかを
-         * 誰も確かめられず、「鍵の権限が足りない」のか「鍵が届いていない」のかを
-         * 切り分けられない。実際にその切り分けができずに一晩溶けたことがある。
-         */
         credentials: host.credentials(),
-        /** 置いてある実行環境プロファイルの**指紋だけ**。本文は出さない。 */
         profile: host.profile(),
-        /**
-         * 置いてある MCP の登録の**指紋と名前だけ**（#325 段3）。値は出さない。
-         * 置いていなければ欄ごと出ない（JSON は `undefined` を落とす）—— 古い runner も
-         * この欄を持たないので、デーモン側は「無い」を「置いていない」と読まない
-         * （`RunnerClient.mcpServers` の doc）。
-         */
         mcpServers: host.mcpServers(),
-        /**
-         * 自分がどのコミットで走っているか。
-         *
-         * **デーモンと runner は別 Service で別々にビルド・デプロイされる**
-         * （`railway/daemon.json` / `railway/runner.json`）。同じ `main` から
-         * 起こしていても、デプロイのタイミングがずれれば別コミットで走る窓が
-         * できる——その窓でだけ壊れるものは、両者が自分の版を名乗れて初めて
-         * 見つかる。デーモンはこれを heartbeat（`identity()`）で拾い、名簿の
-         * `RunnerEntry.revision` へ運ぶ（`packages/core/src/runner-protocol.ts`）。
-         *
-         * **取れなければ全項目 `null`。** プレースホルダは作らない
-         * （`resolveBuildRevision` の doc）。
-         */
         revision,
       });
     })
 
-    /**
-     * 鍵の差し替え。**制御面なので、runner の中のマネージャーからは叩けない。**
-     *
-     * ここが叩けてしまうと、マネージャーは自分に配られる鍵を自分で書き換えられる。
-     * 門番（`control`）を外さないこと。
-     *
-     * **既定の 400 を使わない**（横断レビュー C の14回目、#1790）。`hook` を
-     * 渡さないと `@hono/zod-validator` は `c.json(result, 400)`
-     * （`result = { success: false, error: <ZodError> }`）を返す——ここは鍵の
-     * 値そのものを運ぶ唯一の口なので、既定の形をそのまま使う理由が無い。
-     * **兄弟の `/mcp-servers`（下）は最初からこの形の `hook` を持っていたが、
-     * ここには無かった**。いまの版で本文が値を漏らすことは無い（`ZodError` の
-     * issue は `path` と `message` だけで、規則違反の `name` そのものや配列の
-     * 他要素の `value` は載らない）が、それは「たまたま漏れていない」であって
-     * 「漏れない」と保証されているわけではない——`hook` を持たない経路は、
-     * 将来ここへ`data`や`input`を足す変更（zod の版が変わる／エラーの整形を
-     * 変える）が入った瞬間に、無条件で本文へ流れる構造になっている。**兄弟と
-     * 揃えて、送られてきた本文を1文字も返さない形に固定しておく。**
-     */
+    // zValidator の既定の 400 を使わない: ZodError の整形が変わった時点で、鍵の値が本文へ流れうるため。
     .post(
       '/credentials',
       zValidator('json', runnerSetCredentialsCommandSchema, (result, c) => {
@@ -905,35 +416,8 @@ export function createRunnerApp(deps: RunnerAppDeps) {
       },
     )
 
-    /**
-     * 実行環境プロファイル（`.zprofile` 相当）の差し替え。
-     *
-     * **鍵の差し替えと同じく制御面である。** マネージャーが叩けると、自分に効く
-     * 環境をも自分で書き換えられる（門番を外さないこと）。
-     *
-     * **置く前に評価する。** 構文を間違えたスクリプトを `BASH_ENV` に載せると、
-     * 以後すべてのコマンドが壊れた環境で走り、原因はどこにも出ない。壊れていれば
-     * 置かずに理由を返す（前のものが残る）。
-     *
-     * **既定の 400 を使わない**（#1790 の「確かめていないこと」で名指しされていた
-     * 同じ形の穴、#1806）。`hook` を渡さないと `@hono/zod-validator` は
-     * `c.json(result, 400)`（`result = { success: false, error: <ZodError> }`）を
-     * 返す——ここは `GH_TOKEN` のような鍵を丸ごと含みうるシェルスクリプトを運ぶ
-     * 唯一の口なので、既定の形をそのまま使う理由が無い。いまの版で本文が値を
-     * 漏らすことは無い（`ZodError` の issue は `path` と `message` だけ）が、
-     * それは「たまたま漏れていない」であって「漏れない」と保証されているわけ
-     * ではない——`/credentials` と `/mcp-servers` に揃えて、送られてきた本文を
-     * 1文字も返さない形に固定しておく。
-     *
-     * **大きさの上限は付けていない。** `runnerSetProfileCommandSchema` は
-     * `script` 1本だけを持ち、`/credentials` の `CREDENTIAL_NAME_MAX_LENGTH` の
-     * ような「共有すべき既存の上限」が daemon 側（`apps/daemon/src/openapi.ts` の
-     * `profileUpdateRequestSchema`）にも core 側（`profile-service.ts` /
-     * `profile.ts`）にも見つからない——どちらも `script: z.string()` で、大きさの
-     * 上限を持たない。既存の上限を1箇所へ共有するのではなく新しい上限をここで
-     * 発明することになるため、上限は付けない（north_star の禁止2「追加制限禁止」
-     * に当たりうる。#1806 に詳細）。
-     */
+    // zValidator の既定の 400 を使わない: ZodError の整形が変わった時点で、鍵を含みうるスクリプトが本文へ流れうるため。
+    // script に大きさの上限を付けない: 共有すべき既存の上限が daemon にも core にも無く、新しい制限を発明することになるため。
     .get('/profile', (c) => c.json({ ok: true, profile: host.profile() }))
     .post(
       '/profile',
@@ -949,19 +433,7 @@ export function createRunnerApp(deps: RunnerAppDeps) {
       },
     )
 
-    /**
-     * 人間の MCP 連携の登録の差し替え（#325 段3）。
-     *
-     * **鍵の差し替えと同じく制御面である**（門番を外さないこと）。登録の stdio は
-     * マネージャーの SDK 子プロセスが起こすコマンドなので、マネージャーがここを
-     * 叩けると、自分に効くコマンドを自分で差し替えられる。
-     *
-     * **形が不正なら 400 で理由を返し、前の登録が残る。** 理由の文言に値は載らない
-     * （`parseMcpServers` の doc）。`zValidator` の既定の 400 は本文をそのまま返す
-     * ので（デーモン側 `PUT /profile` の hook の doc）、ここでは形の袋だけを
-     * `runnerSetMcpServersCommandSchema`（`z.unknown()` の値）で受け、中身の検査は
-     * `host.setMcpServers` に任せる。袋の形すら崩れていたときも本文は返さない。
-     */
+    // zValidator の既定の 400 を使わない: 本文をそのまま返すため。袋の形だけをここで受け、中身の検査は `host.setMcpServers` に任せる。
     .get('/mcp-servers', (c) => c.json({ ok: true, mcpServers: host.mcpServers() }))
     .post(
       '/mcp-servers',
@@ -984,77 +456,19 @@ export function createRunnerApp(deps: RunnerAppDeps) {
       },
     )
 
-    /**
-     * 出来事のストリーム。**接続を張るのはデーモン側**である。
-     *
-     * 1本だけが購読する前提（デーモンは1つ）。繋ぎ直しのたびに、溜まっていた分から
-     * 流し直す。
-     *
-     * **heartbeat が要る。** この経路は `hello` を1回書いたあと、`outbox` に何か
-     * 積まれるまで文字通り1バイトも流れない —— マネージャーが黙っていれば無音は
-     * いくらでも続く。読む側（デーモン）は Node 内蔵の `fetch`（undici）で、
-     * その既定 `bodyTimeout` は 300000ms である。**無音が5分続くと必ず切れる**
-     * （実測: `TypeError: terminated` / `cause.code = UND_ERR_BODY_TIMEOUT` /
-     * `elapsed_ms = 300826`）。undici のタイマーは**1バイトでも届けば延長される**
-     * ので、コメント行の heartbeat で塞げる。
-     *
-     * 切れると runner は繋ぎ直しのたびに `hello` を書き、デーモンはそれを全部
-     * `#reattach` へ通す（`packages/core/src/manager.ts`）ので、**5分ごとの切断は
-     * そのまま5分ごとの `#reattach` になる。** 塞ぐのはその両方である。
-     *
-     * **`Last-Event-ID` を受け取る（#275）。** `writeSSE` が例外を投げずに正常
-     * 返却したのに相手には届いていなかった1件（無音切断）を、outbox の控え
-     * （`Outbox.sentSince`）から読み返して配り直す。詳細は `Outbox` の doc。
-     */
+    // heartbeat を流す: 無音が続くと読む側（undici）の `bodyTimeout`（300000ms）で必ず切れるため。
     .get('/events', (c) =>
       streamSSE(c, async (stream) => {
         const queue: { event: RunnerEvent; queuedAt: string; seq: OutboxSeq }[] = [];
         let wake: (() => void) | null = null;
         let closed = false;
 
-        /**
-         * **`writeSSE` の途中で止まっている1件**（#358）。
-         *
-         * 固着はまさにここで起きる —— 相手が読まなくなった接続では
-         * `await stream.writeSSE(...)` が返らない。**`queue` から出た後なので、
-         * ここで持たないとどこにも数えられない。**
-         */
         let writing: { event: RunnerEvent; queuedAt: string; seq: OutboxSeq } | null = null;
 
-        /**
-         * **自分（この接続）が新しい購読者に置き換えられた**（#新窓）。
-         *
-         * `writing` / `queue` を空にするだけでは足りない——自分がいままさに
-         * `withDeadline(...)` の中で待っている書き込みが、後になって（相手の
-         * 接続が実は生きていた・`stream.abort()` で解放された等）「成功」の形で
-         * 返ってくることがある。そのとき `item`（ループのローカル定数。`writing`
-         * とは別の変数）は差し戻し済みの出来事を指したままなので、ここを見ずに
-         * 処理を続けると `outbox.recordSent(...)` が同じ出来事を二重に記録する
-         * （新しい購読者側の正当な送信と合わせて2回——`Last-Event-ID` で読み直す
-         * 3本目の接続に、同じ出来事が2回届く経路になる）。**この旗は「もう
-         * 何もしない」を保証するためだけに在る。**
-         */
+        // 置き換えられた後は何もしない旗: 待っていた書き込みが後から成功で返り、差し戻し済みの出来事を二重に記録するため。
         let superseded = false;
 
-        /**
-         * **無音切断からの復元（#275）。** デーモンは繋ぎ直すとき、直前までに
-         * 受け取れた最後の連番を `Last-Event-ID` ヘッダへ乗せてくる
-         * （`apps/daemon/src/runner-client.ts`）。runner はそれより新しく
-         * 「渡したはず」だった分を outbox の控え（{@link Outbox.sentSince}）
-         * から読み返し、この接続の `queue` の先頭へ積む——`await
-         * stream.writeSSE()` が例外を投げずに正常返却したのに相手には届いて
-         * いなかった1件が、跡なく消える窓を塞ぐ（Issue #275 本文）。
-         *
-         * **申告が無い（初回接続）か、数値として読めないときは何もしない。**
-         * 壊れた申告を理由にストリームを開けないより、控えを読まずに普段
-         * どおり始めるほうを選ぶ——`sentSince` を呼ばなければ実害は無い
-         * （控えは outbox 側に残ったままで、次の正しい申告を待てる）。
-         *
-         * **`queue` へ積む段階では、まだ outbox の通常の待ち行列（まだ一度も
-         * 渡していない分）を読んでいない。** 下の `outbox.attach(...)` が
-         * それを同期的に流し込むのはこの後——だから並び順は「控え（古い）→
-         * 通常の待ち行列（新しい）」のまま保たれる。
-         */
+        // 控えは `outbox.attach(...)` より前に積む: 並び順を「控え（古い）→待ち行列（新しい）」に保つため。
         const lastEventIdHeader = c.req.header('Last-Event-ID');
         if (lastEventIdHeader !== undefined) {
           const lastEventId = Number(lastEventIdHeader);
@@ -1064,43 +478,24 @@ export function createRunnerApp(deps: RunnerAppDeps) {
         }
 
         const detach = outbox.attach(
-          // **`queuedAt` は listener の第3引数からもらう**（`new Date().
-          // toISOString()` で打ち直さない）。`Outbox` 側が「新規なら今・
-          // 差し戻しなら元の時刻」を決めて渡してくるので、ここは渡された
-          // ものをそのまま使うだけでよい——`push()` からの直接配送でも
-          // `requeue()` からの直接配送でも、この1本で正しい値が乗る。
+          // `queuedAt` を打ち直さない: 差し戻しの元の時刻が `oldestPendingAt` に残らなくなるため。
           (event, seq, queuedAt) => {
             queue.push({ event, queuedAt, seq });
             wake?.();
           },
-          // **この口を渡さないと、購読中の滞留が `outbox.pending` から消える**
-          // （`Outbox.pending` の doc）。
           () => {
-            // 書きかけの1件がいちばん古い（`queue` より先に出たものだから）。
             const oldest = writing ?? queue[0];
             return {
               count: queue.length + (writing === null ? 0 : 1),
               ...(oldest === undefined ? {} : { oldestAt: oldest.queuedAt }),
             };
           },
-          // **抱えている分を同期的に引き渡す口。** 自分（この接続）が新しい
-          // 購読者に黙って置き換えられる瞬間に `Outbox.attach` から呼ばれる。
-          // 呼ばれた時点で自分の `writing` / `queue` を空にしておく——
-          // そうしないと、後で自分の `finally` が動いたとき（`writeSSE` の
-          // 締め切り超過や、相手からの実際の切断で動く）に同じ分をもう一度
-          // 差し戻し、二重になる。書きかけの1件（`writing`）が居れば、それが
-          // いちばん古い——`queue` より先に出たものだから、先頭に置く。
+          // 呼ばれた時点で自分の `writing` / `queue` を空にする: 後で自分の `finally` が同じ分をもう一度差し戻し、二重になるため。
           () => {
             const drained = writing === null ? [...queue] : [writing, ...queue];
             queue.length = 0;
             writing = null;
             superseded = true;
-            // **自分の接続も終わらせる。** 抱えていた分は新しい購読者へ渡した
-            // ので、この接続をそのまま生かしておく理由が無い（heartbeat が
-            // 空撃ちを続けるだけの応答が残る）。(A) と同じ経路——`abort()` は
-            // pending だった `writeSSE` も解放する（`stream.abort()` の doc /
-            // `RunnerAppDeps.sseWriteDeadlineMs` の doc）ので、自分のループも
-            // ほどなく `superseded` を見て抜ける。
             stream.abort();
             return drained;
           },
@@ -1113,34 +508,16 @@ export function createRunnerApp(deps: RunnerAppDeps) {
         let stopHeartbeat: (() => void) | null = null;
 
         try {
-          /**
-           * **`hello` にも締め切りを掛ける**（入口の head-of-line blocking）。
-           * 相手が既に読まなくなった接続へ書けば、本ループの `withDeadline`
-           * （下）と同じ理由で `await stream.writeSSE(...)` は原理上いつまでも
-           * 返らない（`RunnerAppDeps.sseWriteDeadlineMs` の doc）——ただし
-           * ここは本ループへ入る*前*なので、heartbeat も本ループも一度も
-           * 始まらないまま固着する。#358 / #630 が本ループの1件で塞いだのと
-           * 同じ形の詰まりが、まだ入口に残っていた。
-           *
-           * **本ループの `deadline-exceeded` 枝の文言をそのまま流用しない。**
-           * ここでは `writing` は必ず `null`（本ループへまだ入っていないので、
-           * `writing` へ代入する機会が無い）——「書きかけの1件」は存在しない。
-           * 積んでいるとすれば、`Last-Event-ID` の控え流し込みと
-           * `outbox.attach(...)` が同期的に流し込んだ既存の滞留（`queue`）
-           * だけである。
-           */
+          // `hello` にも締め切りを掛ける: 読まなくなった接続だと本ループに入る前に固着し、heartbeat も始まらないため。
           const helloResult = await withDeadline(
             () =>
               stream.writeSSE({
                 event: 'hello',
-                // 能力を名乗る（#1394 段(C)）。デーモンは名乗られた分だけを信じる。
                 data: JSON.stringify({
                   type: 'hello',
                   runnerId: host.runnerId,
                   capabilities: RUNNER_CAPABILITIES,
-                  // 名指しの provider で起こせる印（#486 S7）。無い旧い runner には送っても無視される。
                   managerProviders: RUNNER_MANAGER_PROVIDERS,
-                  // 添付を運ぶ口の本文の上限（デーモンが送る前に検める。`runnerAttachmentBodyLimit`）。
                   attachmentBodyLimit: attachmentBodyMax,
                   ...(deps.managerProvider === undefined
                     ? {}
@@ -1150,15 +527,8 @@ export function createRunnerApp(deps: RunnerAppDeps) {
             sseWriteDeadlineMs,
           );
           if (superseded) {
-            // **本ループの `superseded` 分岐と同じ理由。** 待っているあいだに
-            // 新しい購読者へ置き換えられた——抱えていた分（あれば）は
-            // `attach` のドレインで既に渡っている。ここで何もしなければ
-            // `finally` の後始末（`stopHeartbeat` 未起動・`detach` は
-            // no-op・`queue` は既に空）がそのまま正しく効く。
+            // 何もしない: 抱えていた分は `attach` のドレインで既に渡っている。
           } else if (helloResult.outcome === 'deadline-exceeded') {
-            // **`hello` すら届かない接続と判断し、畳む。** heartbeat はまだ
-            // 起こしていないので、起こさないまま `finally` へ落として後始末
-            // する（`stopHeartbeat` は `null` のまま）。
             process.stderr.write(
               `alteroid-runner: /events への hello 書き込みが ${String(sseWriteDeadlineMs)}ms を超えたため接続を畳みます` +
                 `（この接続が抱えていた ${String(queue.length)} 件を箱へ戻します）\n`,
@@ -1167,9 +537,6 @@ export function createRunnerApp(deps: RunnerAppDeps) {
             return;
           }
 
-          // heartbeat は SSE のコメント行を流す（読む側は読み捨てる —— デーモンの
-          // `#read` は `data:` で始まる行だけを拾うので、跡にも数えられない）。
-          // 死んだ接続の掃除の契機でもある（詳細は `@alteroid/core` の `sse-heartbeat.ts`）。
           stopHeartbeat = startSseHeartbeat(stream, sseHeartbeatMs, () => wake?.());
 
           for (;;) {
@@ -1182,16 +549,8 @@ export function createRunnerApp(deps: RunnerAppDeps) {
               wake = null;
               continue;
             }
-            // **書き終わるまで手放さない**（#358）。`queue` から出た瞬間に忘れると、
-            // まさに固着している1件が数え上げから消える。
+            // 書き終わるまで `writing` に持つ: `queue` から出た瞬間に忘れると、固着した1件が数えられなくなるため。
             writing = item;
-            // **`id` に連番を乗せる**（#275）。JSON の中身（`RunnerEvent`）は
-            // 変えない——SSE のフレーム側だけで完結させる（`OutboxSeq` の doc）。
-            //
-            // **期限つきで待つ**（head-of-line blocking を塞ぐ）。相手が
-            // 読まなくなった接続では `writeSSE` が原理上いつまでも返らない
-            // （`RunnerAppDeps.sseWriteDeadlineMs` の doc）——期限を切らないと、
-            // この1件が後続を全部止める。
             const result = await withDeadline(
               () =>
                 stream.writeSSE({
@@ -1202,30 +561,12 @@ export function createRunnerApp(deps: RunnerAppDeps) {
               sseWriteDeadlineMs,
             );
             if (superseded) {
-              // **(C)** 待っているあいだに、自分は新しい購読者へ置き換え
-              // られた。抱えていた分（`item` を含む）は `attach` のドレインで
-              // 既に新しい購読者へ渡っている——ここで `result` を読んで
-              // `recordSent` / 差し戻しへ進むと、同じ出来事を二重に記録する
-              // （`superseded` の doc）。成功していても締め切り超過でも、
-              // 何もせず抜ける。
+              // `result` を読まずに抜ける: 抱えていた分は既に新しい購読者へ渡っており、進むと二重に記録するため。
               break;
             }
             if (result.outcome === 'deadline-exceeded') {
-              // **相手が読まなくなった接続と判断し、畳む。** `writing` は
-              // 意図的に `null` へ戻さない——下の `finally` が元の `queuedAt`
-              // を保ったまま箱へ戻す（`Outbox.requeue` の doc）。
-              //
-              // **`break` だけでは応答が終わらない。** hono の `streamSSE` の
-              // `run()` は `finally { stream.close(); }` を await していないが、
-              // `StreamingApi#close()` の中身（`await this.writer.close()`）は
-              // 書き込みが1本 pending のままだと WHATWG Streams の仕様上解決
-              // しない——デーモンは応答の終わりを一生見ない。`stream.abort()`
-              // を呼ぶと `abortSubscribers` が同期的に走り、内部の
-              // `reader.cancel()` が pending だった `writer.write()` を reject
-              // させる（hono の `write()` の `catch {}` が握り潰すので、いま
-              // 止まっている `writeSSE` はこの後に自然と解決する）。同時に
-              // 上で登録した `stream.onAbort(...)` も呼ばれ `closed = true` に
-              // なる。
+              // `writing` を `null` へ戻さない: `finally` が元の `queuedAt` のまま箱へ戻すため。
+              // `break` だけで済ませず `stream.abort()` を呼ぶ: pending の書き込みがある間は `close()` が解決せず、応答が終わらないため。
               const stuck = 1 + queue.length;
               process.stderr.write(
                 `alteroid-runner: /events への書き込みが ${String(sseWriteDeadlineMs)}ms を超えたため接続を畳みます` +
@@ -1234,34 +575,16 @@ export function createRunnerApp(deps: RunnerAppDeps) {
               stream.abort();
               break;
             }
-            // **投げずに返った直後、控えへ積む**（#275）。hono の `write()`
-            // （`hono/dist/utils/stream.js`）は死んだ接続へ書いても例外を出さ
-            // ない——ここに来たからといって相手に届いたとは限らない。届いた
-            // かどうかを runner 側では確認できないので、一定量だけ手元に
-            // 残し、次の接続の `Last-Event-ID` に賭ける（`Outbox.recordSent`
-            // の doc）。
+            // 届いたとは限らないので控えへ積む: hono の `write()` は死んだ接続へ書いても例外を出さないため。
             outbox.recordSent(item.event, item.seq, item.queuedAt);
-            // **`finally` で消さない。** 投げたときは `writing` に残したまま抜け、
-            // 下の `finally` が箱へ戻す —— そうしないと、書けなかった1件だけが
-            // 静かに失われる（この `finally` の意図は「流し切れなかった分は箱へ
-            // 戻す」であって、書けなかった分を捨てることではない）。
+            // 投げたときは `writing` を残したまま抜ける: `finally` が箱へ戻さないと、書けなかった1件だけが静かに失われるため。
             writing = null;
           }
         } finally {
-          // **タイマーを先に止める。** 止めないと、ストリームが終わった後も
-          // 15秒ごとに死んだ相手へ書き続ける（`write()` は例外を出さないので
-          // 残っていても壊れて見えない）。**`hello` 自体が締め切りを超えて
-          // 畳んだとき（または `hello` の途中で `superseded` になったとき）は、
-          // まだ起こしていないので `null` のまま——呼ばない。**
           stopHeartbeat?.();
           detach();
-          // 流し切れなかった分は箱へ戻す（次に繋がったときに届く）。
-          // **書きかけの1件も戻す**（#358）—— 書けたかどうかは分からないので、
-          // 落とすより二重に届くほうを選ぶ（#206 が指す冪等化は別の穴である）。
-          //
-          // **`push` ではなく `requeue` で、元の `queuedAt` を保ったまま戻す。**
-          // `push` だと「いま」で打ち直され、`oldestPendingAt` が戻すたびに
-          // 新しくなる（`Outbox.requeue` の doc）。
+          // 書きかけの1件も戻す: 書けたか分からず、落とすより二重に届くほうを選ぶため。
+          // `push` ではなく `requeue` で戻す: `queuedAt` が打ち直され、`oldestPendingAt` が戻すたびに新しくなるため。
           if (writing !== null) outbox.requeue(writing.event, writing.queuedAt);
           for (const item of queue) outbox.requeue(item.event, item.queuedAt);
         }
@@ -1270,18 +593,7 @@ export function createRunnerApp(deps: RunnerAppDeps) {
 
     .get('/managers', (c) => c.json({ managers: host.list() }))
 
-    /**
-     * セッションの起動。委譲の依頼文（`request`）を運ぶ口。
-     *
-     * **既定の 400 を使わない**（Issue #1852）。`hook` を渡さないと
-     * `@hono/zod-validator` は `c.json(result, 400)`
-     * （`result = { success: false, error: <ZodError> }`）を返す——ここは委譲の
-     * 依頼文そのものを運ぶ口なので、既定の形をそのまま使う理由が無い。いまの版
-     * （zod 4.6.5）で本文が値を漏らすことは無い（`ZodError` の issue は `path` と
-     * `message` だけ）が、それは「たまたま漏れていない」であって「漏れない」と
-     * 保証されているわけではない——`/credentials` / `/profile` / `/mcp-servers`
-     * に揃えて、送られてきた本文を1文字も返さない形に固定しておく。
-     */
+    // zValidator の既定の 400 を使わない: ZodError の整形が変わった時点で、依頼文が本文へ流れうるため。
     .post(
       '/managers',
       bodyLimit({ maxSize: attachmentBodyMax, onError: tooLarge }),
@@ -1292,14 +604,10 @@ export function createRunnerApp(deps: RunnerAppDeps) {
         return undefined;
       }),
       async (c) => {
-        // **`cwd` は実際に開いた値（Issue #1814）。** `command.cwd` の写しではない
-        // ——`Host#start` の doc を見よ。デーモンはこれと自分が送った値を比べて、
-        // 倒れたかどうかを知る。
         try {
           const { cwd, sessionGeneration } = await host.start(c.req.valid('json'));
           return c.json({ ok: true, cwd, sessionGeneration });
         } catch (error) {
-          // 添付を置けなかった（sha256 の不一致など）。セッションは作っていない。再送しても同じ結果なので 4xx。
           if (error instanceof RunnerAttachmentRejectedError) {
             return c.json({ ok: false, error: reasonOf(error) }, 422);
           }
@@ -1308,12 +616,7 @@ export function createRunnerApp(deps: RunnerAppDeps) {
       },
     )
 
-    /**
-     * 中断されたセッションの続きへ戻す（生ログはデーモンが持ってくる）。
-     *
-     * **既定の 400 を使わない**（Issue #1852。`/managers` と同じ理由——ここは
-     * `request` に加えて resume 直後に流す `message` も運ぶ口である）。
-     */
+    // zValidator の既定の 400 を使わない: 本文（依頼文・メッセージ）が返りうるため。
     .post(
       '/managers/:id/resume',
       zValidator('json', runnerResumeCommandSchema, (result, c) => {
@@ -1324,14 +627,7 @@ export function createRunnerApp(deps: RunnerAppDeps) {
       }),
       async (c) => {
         const command = c.req.valid('json');
-        /*
-         * **添付の `data` の合計だけを、他の2口の `bodyLimit` と同じ上限で検める**（Issue #3269）。
-         * `bodyLimit` は使えない——この口の本文は生ログ `entries`（デーモン側に上限が無く、正当な resume が
-         * 添付の上限を超えて大きい）も運ぶので、本文全体に掛けると正当な resume を壊す。**`entries` は
-         * 対象外**で、添付が運ぶ分（`data` の文字数＝本文に載るバイト数）だけを比べる。`data` の合計は本文の
-         * 一部なので、これが上限を超える本文は `/managers` と `/messages` でも 413 になる（ここが厳しくなる
-         * ことは無い）。超えたら何も置かずに断る（`host.resume` を呼ばない）。
-         */
+        // `bodyLimit` を掛けない: 本文の生ログ `entries` は上限が無く大きく、掛けると正当な resume を壊すため。添付の `data` の合計だけを比べる。
         const attachmentDataBytes = (command.attachments ?? []).reduce(
           (sum, item) => sum + item.data.length,
           0,
@@ -1347,14 +643,7 @@ export function createRunnerApp(deps: RunnerAppDeps) {
           if (error instanceof RunnerAttachmentRejectedError) {
             return c.json({ ok: false, error: reasonOf(error) }, 422);
           }
-          /*
-           * **世代が古い resume は 409、Hono の既定 500 に落とさない。**
-           *
-           * `isRetryableRunnerError`（`runner-protocol.ts`）は 5xx を「待てば直る」に
-           * 分類する。500 のままだと、遅れて届いた古い世代の命令が「一時的な失敗」と
-           * 誤解され、デーモン側の再試行が同じ古い命令を延々と投げ直す——本来は
-           * 「同じものを投げ直しても同じ答えが返る」側（4xx）である。
-           */
+          // 世代が古い resume を 500 に落とさない: 5xx は再試行されるため、古い命令を延々と投げ直される。
           if (error instanceof RunnerFenceError) {
             return c.json(
               { error: 'fenced' as const, expected: error.expected, given: error.given },
@@ -1363,8 +652,6 @@ export function createRunnerApp(deps: RunnerAppDeps) {
           }
           throw error;
         }
-        // **短絡したかを運ぶ**（#2877。`runnerSessionOpenResultSchema.reusedLiveSession` の doc）。
-        // **セッションの世代も運ぶ**（Issue #3170。`runnerSessionOpenResultSchema.sessionGeneration` の doc）。
         return c.json({
           ok: true,
           cwd: resumed.cwd,
@@ -1374,12 +661,7 @@ export function createRunnerApp(deps: RunnerAppDeps) {
       },
     )
 
-    /**
-     * マネージャーからの1通のメッセージ。
-     *
-     * **既定の 400 を使わない**（Issue #1852。`/managers` と同じ理由——ここは
-     * デーモンから中継されるメッセージ本文（`text`）を運ぶ口である）。
-     */
+    // zValidator の既定の 400 を使わない: 本文（メッセージ）が返りうるため。
     .post(
       '/managers/:id/messages',
       bodyLimit({ maxSize: attachmentBodyMax, onError: tooLarge }),
@@ -1405,18 +687,7 @@ export function createRunnerApp(deps: RunnerAppDeps) {
       },
     )
 
-    /**
-     * 止まっていた確認への回答。宛先は `requestId` で指す（推測しない）。
-     *
-     * **`decision` は 0 件のときキーごと省く（#322）。** `outcome.decision` が
-     * 無い（=届いていない）ときに `decision: undefined` を書くと、JSON では
-     * キー自体が消えるので実害は無いが、`runnerAnswerResultSchema` の doc が
-     * 言う「report する欄そのものを持たない」を意図どおりに保つため、明示的に
-     * 省く（`pendingEvents`/`oldestPendingAt` と同じ作法。#358）。
-     *
-     * **既定の 400 を使わない**（Issue #1852。`/managers` と同じ理由——ここは
-     * 委譲への回答（`message`）を運ぶ口である）。
-     */
+    // zValidator の既定の 400 を使わない: 本文（回答）が返りうるため。
     .post(
       '/managers/:id/answers',
       zValidator('json', runnerAnswerCommandSchema, (result, c) => {
@@ -1434,11 +705,6 @@ export function createRunnerApp(deps: RunnerAppDeps) {
       },
     )
 
-    /**
-     * 退避 ref の後始末（Issue #1266）。`:id` を持たない——委譲が終わるとセッションも
-     * 作業ツリーも無い。資格は runner の子の環境に在るので、消すのはここである。
-     * 応答は分類だけ（git の文面は運ばない）。`Host#deleteRescueRef` は投げない。
-     */
     .post(
       '/rescue-refs/delete',
       zValidator('json', runnerRescueRefDeleteRequestSchema, (result, c) => {
@@ -1463,23 +729,12 @@ export function createRunnerApp(deps: RunnerAppDeps) {
       return c.json({ ok: true });
     })
 
-    /** 走行中セッションの生ログ（可観測性の最下段へ降りる入口）。 */
     .get('/managers/:id/transcript', async (c) => {
       const body = await host.transcript(c.req.param('id'));
       if (body === null) return c.json({ error: 'not found' as const }, 404);
       return c.text(body);
     })
 
-    /**
-     * この managerId の作業ツリーが抱えている、未 push の実装と未コミットの
-     * 変更（Issue #1039）。`manager_stop` の running 断りだけが呼ぶ——
-     * `manager_list` からは呼ばれない（デーモン側の作法。`ManagerPool.
-     * unpushedWork` の doc）。
-     *
-     * `c.req.raw.signal` を下へ渡す。**接続が切れても走っている git は
-     * 止めない**——`computeUnpushedWork` の `signal` の doc と同じ「相手は
-     * 止めない」作法で、次の作業ツリーへ進む前にだけ見る。
-     */
     .get('/managers/:id/unpushed-work', async (c) => {
       const result = await host.unpushedWork(c.req.param('id'), { signal: c.req.raw.signal });
       if (result === undefined) return c.json({ error: 'not found' as const }, 404);

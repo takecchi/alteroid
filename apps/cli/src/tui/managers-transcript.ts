@@ -1,25 +1,14 @@
-/**
- * マネージャーの生ログ（`GET /managers/{id}/transcript` の JSONL）を、段階 1 のログビュー
- * （`log.ts` の `LogEntry`）で読める形にする。純粋（I/O 無し）。
- *
- * **要約ではなく整形である。** 発言（user / assistant）は全文を残し、道具の呼び出しと結果は
- * 1 行の抜粋にする（結果は数万字になりうる — 可視窓だけ描く設計でも、行数が桁違いになると
- * 折り返しの計算が重い）。抜粋にしたものは省いた字数を言う。読めない行・知らない種類の行は
- * 捨てずに `system` の行として残す（生ログは「日誌で足りないときの最後の拠り所」）。
- * `thinking` ブロックだけは出さない（後述の PR 本文の表に書く）。
- */
+// 道具の結果を全文で出さない: 数万字になりうり、行数が桁違いになると折り返しの計算が重いため
+// 読めない行・知らない種類の行を捨てない: 生ログは「日誌で足りないときの最後の拠り所」のため
 import { codePointBoundary } from '@alteroid/core/cli-light';
 
 import { redactBody, sanitizeForTerminal } from '../redact.js';
 import type { LogEntry, LogKind } from './log.js';
 
-/** 抜粋の長さ。道具の入力。 */
 export const TOOL_INPUT_EXCERPT = 200;
-/** 抜粋の長さ。道具の結果。 */
 export const TOOL_RESULT_EXCERPT = 300;
-/** 発言 1 件の上限（超えたら末尾を省いて字数を言う。巨大な貼り付けで画面が埋まらないように）。 */
+// 発言 1 件に上限を置く: 巨大な貼り付けで画面が埋まらないように
 export const TEXT_LIMIT = 6_000;
-/** 持つエントリの上限。超えた古い側は捨てて、その旨を先頭の 1 行で言う。 */
 export const MAX_TRANSCRIPT_ENTRIES = 1_500;
 
 function excerpt(text: string, limit: number): string {
@@ -85,14 +74,12 @@ function blocksToPieces(role: 'user' | 'assistant', content: unknown): Piece[] {
         break;
       }
       default:
-        // `thinking` など。出さない。
         break;
     }
   }
   return out;
 }
 
-/** 1 行 → ログの行（0 個以上）。 */
 export function transcriptLinePieces(line: string): Piece[] {
   let parsed: unknown;
   try {
@@ -118,7 +105,6 @@ export function transcriptLinePieces(line: string): Piece[] {
   if ((type === 'user' || type === 'assistant') && isRecord(message)) {
     return blocksToPieces(type, message['content']);
   }
-  // user / assistant 以外（result・system・summary など）。種類名と抜粋を残す。
   const rest = excerpt(redactBody(line), TOOL_INPUT_EXCERPT);
   return [
     {
@@ -128,11 +114,7 @@ export function transcriptLinePieces(line: string): Piece[] {
   ];
 }
 
-/**
- * JSONL 全体 → エントリ列。`previous` に同じ `seq` で中身が同じエントリがあれば、その
- * オブジェクトを使い回す（`log.ts` の展開キャッシュはエントリの参照で引くので、取り直しの
- * たびに全行を折り返し直さずに済む）。`seq` は行番号から作る（取り直しても安定）。
- */
+// 同じ `seq` で中身が同じエントリは使い回す: `log.ts` の展開キャッシュがエントリの参照で引くため、取り直しのたびに全行を折り返し直さずに済む
 export function parseTranscript(body: string, previous: readonly LogEntry[] = []): LogEntry[] {
   const known = new Map<number, LogEntry>();
   for (const entry of previous) known.set(entry.seq, entry);
@@ -141,7 +123,6 @@ export function parseTranscript(body: string, previous: readonly LogEntry[] = []
   lines.forEach((line, index) => {
     if (line.trim().length === 0) return;
     transcriptLinePieces(line).forEach((piece, n) => {
-      // 1 行から複数のエントリが出るので、seq は (行番号, 何番目) から一意に作る。
       const seq = (index + 1) * 1000 + n;
       const hit = known.get(seq);
       out.push(

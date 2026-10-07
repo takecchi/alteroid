@@ -1,6 +1,7 @@
 import { writeSync } from 'node:fs';
 
 import { collapseErrorCause } from './error-cause.js';
+import { codePointBoundary } from './excerpt.js';
 import type { RunnerEvent } from './runner-protocol.js';
 import type { InboxEvent, JournalEntryInput, PendingApproval } from './schema.js';
 
@@ -1404,7 +1405,7 @@ function size(text: string, name?: string): string {
 }
 
 function clip(text: string, limit: number): string {
-  return text.length > limit ? `${text.slice(0, limit)}…` : text;
+  return text.length > limit ? `${text.slice(0, codePointBoundary(text, limit))}…` : text;
 }
 
 /**

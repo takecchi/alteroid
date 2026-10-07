@@ -5,16 +5,6 @@ import { createPgStoresFromDb, type PgStores } from './index.js';
 import { sessionEntries } from './schema.js';
 import { createMigratedTestDb, type TestDbHandle } from './test-db.test-support.js';
 
-/**
- * issue #1961。`PgSessionStore.clearAll()` の契約は「session_entries と索引の
- * sessions を両方消す」（ワークスペースのリセット専用。`clearAll` の doc）。
- *
- * `sessions` への DELETE だけが失敗するよう BEFORE DELETE トリガを仕込み、
- * `clearAll()` が例外を投げた後に **session_entries の行が残っている**（＝
- * ロールバックされた）ことを見る。1つのトランザクションで束ねていない実装
- * （直す前の `PgSessionStore.clearAll()`）は、session_entries の DELETE を
- * 確定させたあとで sessions の DELETE に失敗するので、この歯は赤くなる。
- */
 let client: TestDbHandle;
 let db: Db;
 let stores: PgStores;
@@ -25,7 +15,6 @@ beforeEach(async () => {
   ({ client, db } = await createMigratedTestDb());
   stores = createPgStoresFromDb(db);
 
-  // sessions への DELETE だけを確実に失敗させる（BEFORE DELETE トリガ）。
   await client.exec(`
     CREATE OR REPLACE FUNCTION forbid_sessions_delete() RETURNS trigger AS $$
     BEGIN
@@ -45,15 +34,11 @@ describe('PgSessionStore.clearAll() — session_entries と sessions を1つの�
   it('sessions の DELETE が失敗したら、session_entries の DELETE もロールバックされる', async () => {
     await stores.sessionStore.append(KEY, [{ type: 'user', uuid: 'evt-1', text: 'hi' }]);
 
-    // sessions の DELETE で落ちたことまで見る。ほかの理由で session_entries の
-    // DELETE の前に落ちても session_entries は残るので、例外の中身を見ないと
-    // 緑になってしまう。drizzle は仕込んだ例外を `Failed query: <SQL>` で包む
-    // ので、SQL の側で見る。
+    // 例外の中身を見る: ほかの理由で先に落ちても行は残り、緑になってしまうため。drizzle は例外を `Failed query: <SQL>` で包むので SQL の側で見る。
     await expect(stores.sessionStore.clearAll()).rejects.toThrow(
       /Failed query: delete from "sessions"/,
     );
 
-    // ロールバックされていれば、session_entries の行は消えずに残っているはず。
     const remainingEntries = await db.select().from(sessionEntries);
     expect(remainingEntries.map((row) => row.uuid)).toEqual(['evt-1']);
   });

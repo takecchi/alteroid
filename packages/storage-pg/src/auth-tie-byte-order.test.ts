@@ -10,19 +10,6 @@ import {
   type TestDbHandle,
 } from './test-db.test-support.js';
 
-/**
- * **issue #2458。** 経緯とインメモリ側の対の歯は
- * `packages/core/src/auth-tie-byte-order.test.ts` の冒頭コメントを見よ。
- *
- * ここは pg 実装に対して同じ入力・同じ期待値を当てる（fs は
- * `packages/storage-fs/src/auth-tie-byte-order.test.ts`）。
- *
- * **PGlite の既定の照合順は C なので、そのままでは直す前から緑である。** 本番の pg
- * が `en_US.UTF-8` などで作られていた場合を写すために、2本目の `describe` では
- * 2次キーの列の照合順を ICU の `"unicode"` へ変えてから同じ入力を当てる。直す前の
- * pg 実装（`asc(authAccounts.id)` など、列の既定の照合順に任せる形）はそこで赤く
- * なる。
- */
 const TIE = '2026-01-05T00:00:00.000Z';
 const INSERT_ORDER = ['ab', 'a-x', '_z', 'B_x', 'Ab', '9'];
 const EXPECTED = ['9', 'Ab', 'B_x', '_z', 'a-x', 'ab'];
@@ -120,8 +107,7 @@ function defineTieCases(): void {
 }
 
 describe('AuthStore の同着の2次キーはバイト順（pg 実装・既定の照合順、issue #2458）', () => {
-  // #2937: 本物の PostgreSQL の照合順は接続先（CI は en_US.UTF-8 と C）で決まるので、
-  // 「既定が C」の前提は PGlite でだけ成り立つ。
+  // 「既定が C」を前提にしない: 本物の PostgreSQL の照合順は接続先で決まり、前提は PGlite でだけ成り立つため。
   it.skipIf(realPostgresUrl() !== undefined)('前提: この DB の既定の照合順は C', async () => {
     const result = await client.query<{ datcollate: string }>(
       'select datcollate from pg_database where datname = current_database()',
@@ -134,8 +120,6 @@ describe('AuthStore の同着の2次キーはバイト順（pg 実装・既定�
 
 describe('AuthStore の同着の2次キーはバイト順（pg 実装・列の照合順が C でない DB、issue #2458）', () => {
   beforeEach(async () => {
-    // 本番の pg が C 以外の照合順で作られていた場合を写す。列の型は変えず、
-    // 照合順だけを ICU の `"unicode"` にする（この照合順では `_z, 9, a-x, ab, Ab, B_x`）。
     await db.execute(sql`alter table auth_accounts alter column id type text collate "unicode"`);
     await db.execute(
       sql`alter table auth_access_tokens alter column id type text collate "unicode"`,

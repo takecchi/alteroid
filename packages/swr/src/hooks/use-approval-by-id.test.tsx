@@ -1,8 +1,4 @@
 // @vitest-environment jsdom
-/**
- * `useApprovalById`（`GET /approvals/{id}`）。**何を送ったかと、404 を「無い」（`null`）にして
- * 他の失敗を握り潰さないこと**を測る（`use-approvals-answered.test.tsx` と同じ形）。
- */
 import { cleanup, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 

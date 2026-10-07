@@ -1,91 +1,7 @@
 #!/usr/bin/env node
-/**
- * `release/prod` へ夜間反映した sha の CI を記録する（Issue #1207 の (3)）。
- *
- * **判定ロジックはここに置かない。** 組み立て（記録行・人が読む説明・赤の晩の
- * コメント本文）は `record-release-prod-ci-core.mjs` が正本で、なぜ止める門を
- * 作らずに記録だけにしたのか、`out-of-scope` がなぜ「異常なし」なのか、
- * 赤のときのコメントがなぜ警報 Issue の鍵を再利用するのかは、あちらの doc に
- * 書いてある。**CI が本当に緑かの判定ロジックも自分では持たない**——
- * `scripts/check-pr-green.mjs` の `judgeSha` を呼ぶ（**`events: ['push']` を
- * 渡す**——理由は下の「なぜ `events: ['push']` を渡すか」。判定そのものは
- * 一切書き換えない）。ここはネットワーク（`git` / `gh`）を持ち、結果を出力し、
- * 赤の晩だけ Issue へ書く、という薄い層である。
- *
- * ## なぜ `events: ['push']` を渡すか（自己参照バグの修正。Issue #1207 の (3)）
- *
- * 絞らずに `judgeSha({ sha: prodSha, repo })` を呼ぶと、**この記録 step
- * 自身が走っている `release-prod.yml` の run**（schedule/workflow_dispatch。
- * `head_sha` はそのとき指している `main` の先端を名乗る）が判定対象に
- * 混ざり、その run はまだ `in_progress`——`evaluatePrGreen` は未完了の run
- * が1本でもあれば `pending` を返すので、**毎晩100%、実行するたびに
- * 自分自身を理由に `pending` を返し続けていた。** `verdict !== 'red'` の
- * 分岐が一度も通らず、候補Bの2本の柱（毎晩の記録・赤の晩の警報）が両方とも
- * 機能していなかった。詳しい実測と、なぜ `GITHUB_RUN_ID` で自分1本だけを
- * 除く案では足りないかは `scripts/check-pr-green-core.mjs` の
- * `filterRunsByEvent` の doc を見よ。**この絞り込みは `judgeSha` の第3引数
- * `events` を渡した呼び出し元だけに効き、`scripts/check-pr-green.mjs` の
- * CLI 側の挙動は1ミリも変えていない。**
- *
- * ## ⛔ この道具は門ではない——`process.exitCode` をどの経路でも立てない
- *
- * **常に 0 で終わる。** 記録に失敗しても、赤いままでも、反映の成否に一切
- * 影響してはならない（`.github/workflows/release-prod.yml` の記録 step が
- * `continue-on-error: true` を付けているのも同じ理由の二重の保証）。
- * ただし**黙って成功したふりはしない**——失敗は必ず1行で名乗る
- * （`AGENTS.md`「静かに失敗する道具」）。
- *
- * ## 既定は dry-run。実際に Issue へ書くのは明示したときだけ
- *
- * 環境変数 `RECORD_RELEASE_PROD_CI_APPLY=1` が無い限り、`gh issue comment` は
- * 呼ばない——判定と記録行の出力、「書くならこの内容」というログだけを出す
- * （`main-ci-alarm.mjs` の `MAIN_CI_ALARM_APPLY` と同じ作法）。**新しい Issue は
- * どちらのモードでも絶対に立てない**——書く先は既存の警報 Issue だけである。
- *
- * ## 入力（環境変数）
- *
- * | 変数 | 既定 | 意味 |
- * |---|---|---|
- * | `GITHUB_REPOSITORY` | `takecchi/alteroid` | `owner/repo` |
- * | `RECORD_RELEASE_PROD_CI_APPLY` | 未設定（dry-run） | `1`/`true` で実際に Issue へ書く |
- * | `RECORD_REFLECT_OUTCOME` | `(unknown)` | 記録行の `reflect=` に入れる（`steps.reflect.outcome`） |
- * | `RECORD_RELEASE_PROD_CI_SHA` | 未設定（`git ls-remote` で取得） | 判定する sha を上書きする（確かめるための口） |
- * | `GITHUB_RUN_ID` | 空 | この反映 run の id。記録コメントの印と重複防止に使う |
- * | `GITHUB_SERVER_URL` | `https://github.com` | run URL の組み立てに使う |
- * | `GH_TOKEN` | — | `gh` が読む。workflow 側の `github.token` を渡す |
- *
- * ## 出力
- *
- * **必ず1行、機械可読な記録行を出す**（stdout と `$GITHUB_STEP_SUMMARY` の
- * 両方）。形は `record-release-prod-ci-core.mjs` の `buildRecordLine` を見よ。
- * `judgeSha` が判定できたときは `formatVerdict` の全文も stdout に出す。
- *
- * ## 後からどう数えるか
- *
- * ### 毎晩の記録（run のログ。90日で消える）
- *
- *     gh run list --repo takecchi/alteroid --workflow=release-prod.yml \
- *       --limit 100 --json databaseId,createdAt,event
- *     # 各 run について:
- *     gh run view <id> --repo takecchi/alteroid --log \
- *       | grep -F 'release-prod-ci-record:'
- *
- * ### 期限の無い記録（赤の晩だけ。警報 Issue のコメント）
- *
- * 警報 Issue のコメントに埋めた印 `alteroid:release-prod-ci-record` を検索する
- * 形になる。**⚠️ この検索が実際に当たるかは、本物の赤い晩を経ないと試せない
- * ——未確認。** `gh search issues` / `gh api search/issues` がコメント本文の
- * HTML コメントまで拾うかは、実際に赤い晩が来て記録コメントが付くまで確認
- * できない。確認できたら、ここに実測のコマンドを追記すること。
- *
- * ### なぜ run のログだけでなく Issue 側にも残すのか
- *
- * `gh run view --log` が読む記録は GitHub の既定の保持期間（90日）で消える。
- * **赤の晩だけ**、消えない場所（警報 Issue のコメント）にも同じ情報を残して
- * おけば、90日を過ぎても辿れる。緑の晩まで全部 Issue へ書かないのは、
- * 警報 Issue が無い（＝赤くない）ところに書く先が無い——新しい Issue を
- * 立てることは、この道具が明示的に禁じている。
- */
+// 常に 0 で終わり、`process.exitCode` をどの経路でも立てない: 記録の失敗や赤が反映の成否に影響してはならないため。ただし黙って成功したふりはせず、失敗は必ず1行で名乗る。
+// 既定は dry-run: 環境変数 `RECORD_RELEASE_PROD_CI_APPLY=1` のときだけ `gh issue comment` を呼ぶ。新しい Issue はどちらのモードでも立てない。
+// 判定には `events: ['push']` を渡す: 絞らないと、この記録 step 自身が走っている `release-prod.yml` の run が判定対象に混ざり、未完了の run があると `pending` を返す `evaluatePrGreen` が毎晩自分自身を理由に `pending` を返し続けるため。
 
 import { execFileSync } from 'node:child_process';
 import { appendFileSync } from 'node:fs';
@@ -112,7 +28,6 @@ function log(text) {
   process.stdout.write(text + '\n');
 }
 
-/** `$GITHUB_STEP_SUMMARY` が無い（手元で叩いた等）ときは黙って何もしない。 */
 function logStepSummary(text) {
   const path = process.env.GITHUB_STEP_SUMMARY;
   if (!path) return;
@@ -143,7 +58,6 @@ function lsRemoteProdSha() {
     const out = execFileSync('git', ['ls-remote', 'origin', 'refs/heads/release/prod'], {
       encoding: 'utf8',
     });
-    // タブ区切りの1列目が sha。ref がまだ無ければ出力自体が空文字。
     const sha = out.split('\t')[0]?.trim() ?? '';
     return sha;
   } catch (error) {
@@ -151,7 +65,6 @@ function lsRemoteProdSha() {
   }
 }
 
-/** `gh` を呼ぶ。失敗したら `{ error }` を返す（例外を投げない）。 */
 function gh(argv, { input } = {}) {
   try {
     const stdout = execFileSync('gh', argv, {
@@ -204,11 +117,6 @@ function isApplyRequested() {
   return v === '1' || v === 'true';
 }
 
-/**
- * 赤のときだけ呼ぶ。落ちていた workflow ごとに、対応する main-ci-alarm の
- * 警報 Issue を探し、open で在ればコメントを足す。**見つからなければ何も
- * 作らない**（新しい Issue は立てない）。
- */
 function recordRedToAlarmIssue({
   repo,
   prodSha,
@@ -347,13 +255,6 @@ function main() {
   }
   const prodSha = prodShaInput;
 
-  // `events: ['push']` — この呼び出し元（release-prod.yml の記録 step）自身が
-  // 走っている `release-prod.yml`（schedule/workflow_dispatch）の run が
-  // 同じ head_sha で判定対象に混ざり、構造的に pending を返し続ける自己参照
-  // バグの修正（Issue #1207 の (3)）。絞る理由と、なぜ GITHUB_RUN_ID で
-  // 自分1本だけを除く案では足りないかは `scripts/check-pr-green-core.mjs`
-  // の `filterRunsByEvent` の doc を見よ。**CLI 側の呼び出し（`events` を
-  // 渡さない）は1ミリも変えていない。**
   const judged = judgeSha({ sha: prodSha, repo, events: ['push'] });
   if (judged.result === null) {
     log(`record-release-prod-ci: 判定できなかった —— ${judged.error}`);
@@ -361,9 +262,6 @@ function main() {
     return;
   }
 
-  // `red` のうち、取り消された CI の run を見ていただけのものは `cancelled`
-  // （判定に至れなかった）へ倒す（Issue #3049）。`judgeSha` / `evaluatePrGreen` は
-  // 触らない——倒すのは記録の側だけで、PR の緑の判定は緩めていない。
   const verdict = refineVerdictForCancelledRuns({
     verdict: judged.result.verdict,
     latestRuns: judged.latestRuns,
@@ -381,7 +279,5 @@ function main() {
 try {
   main();
 } catch (error) {
-  // ⛔ ここでも exitCode は立てない——記録の失敗が反映を止めてはならない。
-  // ただし黙って終わらない（AGENTS.md「静かに失敗する道具」）。
   log(`record-release-prod-ci: 予期しない例外で終わった —— ${String(error)}`);
 }

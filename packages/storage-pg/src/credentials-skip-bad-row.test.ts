@@ -6,17 +6,6 @@ import { createPgStoresFromDb, type PgStores } from './index.js';
 import { createMigratedTestDb } from './test-db.test-support.js';
 import { managerCredentials } from './schema.js';
 
-/**
- * issue #1740。pg 実装は元から `list()` の中で `CREDENTIAL_NAME` に合わない行を
- * `filter` で1行ずつ飛ばしており（fs 版のように配列全体を1回で検査していない）、
- * ここは main でも赤くならない——**跡（stderr）が無かった**ことを直す歯である
- * （3実装の振る舞いをそろえる。詳しい経緯は fs 版
- * `packages/storage-fs/src/credentials-skip-bad-row.test.ts` の冒頭コメント）。
- *
- * DB は人間が直接 `insert` できる（`PgCredentialVaultStore.list()` の doc）ので、
- * ここでは表へ直接 `insert` して不正な行を作る。`put()` は入口で
- * `CREDENTIAL_NAME` に合わない名前を断る（issue #2927）ので、もう経由できない。
- */
 let db: Db;
 let stores: PgStores;
 

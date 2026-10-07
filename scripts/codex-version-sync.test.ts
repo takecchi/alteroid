@@ -6,16 +6,8 @@ import { describe, expect, it } from 'vitest';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 
-/**
- * Codex（Issue #486 M7）の版は3か所に現れる。器に入る版（`Dockerfile` の
- * `ARG CODEX_VERSION`）、alteroid が型を突き合わせる版（`pnpm-workspace.yaml` の catalog
- * の `@openai/codex`）、コミット済みの生成スキーマのディレクトリ（`packages/core/codex-schema/<版>/`）。
- * **器の版と型の版がずれると、app-server のプロトコルが黙って食い違う**ので、ここで揃える。
- * 上げるときは3か所を同じコミットで動かす（スキーマは `pnpm --filter @alteroid/core codex:schema`）。
- */
 function readDockerfileVersion(): string[] {
   const text = readFileSync(path.join(ROOT, 'Dockerfile'), 'utf8');
-  // CI の `image` job が `sed -n 's/^ARG CODEX_VERSION=\(.*\)$/\1/p'` で読むのと同じ形。
   return [...text.matchAll(/^ARG CODEX_VERSION=(.*)$/gm)].map((m) => m[1] ?? '');
 }
 
@@ -40,7 +32,7 @@ describe('Codex の版（Dockerfile / catalog / 生成スキーマ）', () => {
   it('catalog は @openai/codex を厳密な版で1か所だけ持つ', () => {
     const versions = readCatalogVersion();
     expect(versions).toHaveLength(1);
-    // `^` や `~` で幅を持たせると、器の版と型の版が黙ってずれうる。
+    // `^` や `~` で幅を持たせない: 器の版と型の版が黙ってずれうるため。
     expect(versions[0]).toMatch(/^\d+\.\d+\.\d+$/);
   });
 

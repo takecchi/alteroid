@@ -5,11 +5,6 @@ import type { Db } from './db.js';
 import { createPgStoresFromDb, type PgStores } from './index.js';
 import { createMigratedTestDb } from './test-db.test-support.js';
 
-/**
- * issue #2927 項目2。`inbox.put(event, at)` の外側の `at` は、pg が `timestamptz` 経由で
- * `Z` 付きの ISO 表記（`new Date(at).toISOString()`）に正規化して返す。fs も同じ表記で
- * 返す（対の歯は `packages/storage-fs/src/inbox-at-utc-2927.test.ts`）。
- */
 let db: Db;
 let stores: PgStores;
 
@@ -31,7 +26,6 @@ describe('InboxStore.put() — 外側の at の表記（pg 実装）', () => {
     await stores.inbox.put(event, '2026-08-12T09:00:00+09:00');
     const [entry] = (await stores.inbox.peekPending()).entries;
     expect(entry?.at).toBe('2026-08-12T00:00:00.000Z');
-    // event の中の at は触らない
     expect(entry?.event.at).toBe('2026-08-12T09:00:00+09:00');
     expect((await stores.inbox.pending()).oldestAt).toBe('2026-08-12T00:00:00.000Z');
   });

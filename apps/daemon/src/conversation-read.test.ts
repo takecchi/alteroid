@@ -3,13 +3,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createApp } from './app.js';
 
-/**
- * 会話の既読（`GET /conversations` の `unreadCount`・`GET /conversations/:id` の
- * `readThrough` / `unreadCount`・`POST /conversations/:id/read`）。
- *
- * 時刻は `Date` だけを偽の時計にして進める（実時間を待たない）。日誌の `at` もデーモンの
- * 「いま」（基準時刻）も同じ時計から出る。
- */
 const T0 = Date.parse('2026-10-01T00:00:00.000Z');
 const at = (seconds: number) => new Date(T0 + seconds * 1000).toISOString();
 const tick = (seconds: number) => vi.setSystemTime(T0 + seconds * 1000);
@@ -60,7 +53,6 @@ describe('会話の既読', () => {
     await say('old', 'inbound', '前の質問');
     await say('old', 'outbound', '前の返答');
     tick(10);
-    // 最初の読み出しで基準時刻が決まる（以後は変わらない）
     expect(unreadOf(await list(), 'old')).toBe(0);
 
     tick(20);
@@ -82,7 +74,7 @@ describe('会話の既読', () => {
     await say('c', 'inbound', '人間の発言');
     await say('c', 'outbound', '返答', 'manager');
     tick(3);
-    expect(unreadOf(await list(), 'c')).toBe(0); // 人間の発言もマネージャーとの往復も数えない
+    expect(unreadOf(await list(), 'c')).toBe(0);
     await say('c', 'outbound', '返答');
     expect(unreadOf(await list(), 'c')).toBe(1);
   });
@@ -117,7 +109,6 @@ describe('会話の既読', () => {
     const res2 = await app.request('/conversations/c/read', post({ through: second.id }));
     expect(await res2.json()).toEqual({ conversationId: 'c', readThrough: at(3), unreadCount: 0 });
 
-    // 古い発言を指しても戻らない（200 でいまの位置）
     const back = await app.request('/conversations/c/read', post({ through: first.id }));
     expect(back.status).toBe(200);
     expect(await back.json()).toEqual({ conversationId: 'c', readThrough: at(3), unreadCount: 0 });
@@ -157,13 +148,11 @@ describe('会話の既読', () => {
     expect((await app.request('/conversations/c/read', post({ through: manager.id }))).status).toBe(
       404,
     );
-    // 時刻を渡す形は受けない（発言の id として引けない）
     expect((await app.request('/conversations/c/read', post({ through: at(999) }))).status).toBe(
       404,
     );
     expect((await app.request('/conversations/c/read', post({}))).status).toBe(400);
 
-    // 拒んだ間、位置は動いていない
     expect(unreadOf(await list(), 'c')).toBe(1);
     expect(unreadOf(await list(), 'd')).toBe(1);
     expect((await app.request('/conversations/c/read', post({ through: mine.id }))).status).toBe(
@@ -182,14 +171,14 @@ describe('会話の既読', () => {
 
     it('全会話で数える（一覧の既定の件数を超えても）。:id に食われない', async () => {
       tick(1);
-      await count(); // 基準時刻が決まる
+      await count();
       tick(2);
       for (let i = 0; i < 35; i += 1) await say(`c${i}`, 'outbound', '返答');
       tick(3);
       const res = await app.request('/conversations/unread-count');
       expect(res.status).toBe(200);
       expect(await res.json()).toEqual({ count: 35, capped: false });
-      expect((await list()).conversations).toHaveLength(20); // 一覧は既定 20 件まで
+      expect((await list()).conversations).toHaveLength(20);
     });
 
     it('基準時刻以前は数えず、導入後の返答は数え、既読で減る', async () => {
@@ -229,7 +218,6 @@ describe('会話の既読', () => {
       tick(300);
       await count();
       expect(sinces).toHaveLength(1);
-      // 取り込み済みの印（約 200 秒時点）より前へは戻らない
       expect(Date.parse(sinces[0] ?? '')).toBeGreaterThanOrEqual(T0 + 100 * 1000);
     });
 

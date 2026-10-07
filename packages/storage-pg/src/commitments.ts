@@ -14,35 +14,8 @@ import type { Db } from './db.js';
 import { stripNulls } from './db.js';
 import { commitments } from './schema.js';
 
-/**
- * 行が読めなければ落とさずに投げる。**`get(id)` 専用**（issue #296 以降。下記）。
- *
- * **他のストア（jobs / journal）と作法が違うのは意図的である。** あちらは1行壊れても
- * 一覧が返るべき記録だが、こちらは「まだ片付いていない仕事」そのものなので、読めない
- * 行を黙って飛ばすと**片付いた仕事と区別が付かなくなる**。
- *
- * 区別が消えると具体的にこう壊れる: その依頼は未了の一覧からも digest からも消え、
- * クローンは引き受けたことを二度と思い出さない ＝ **この器が塞いでいる穴がそのまま
- * 開く**（しかも「忘れた」ことに誰も気づけない。fs 版なら例外で表に出る）。
- * fs 版（ファイル全体を `parse` する）と同じく、壊れた永続状態は表に出す。
- *
- * **⚠️ throw そのものは意図的である（理由は上の段落）。問題はそこではなく、
- * 未知の enum 値（例えば `origin`）でもここへ落ちること。** `list()`（下）は
- * try/catch なしで `map` しているため、未知の enum 値が1件でも入ると、
- * 1行ではなく一覧が丸ごと落ちる。→ issue #296
- *
- * **issue #296 で直したのは `list()` 側であって、この関数ではない。**
- * `get(id)` は単票であり、守るべき一覧が無い。「無い（`null`）」と「読めない
- * （throw）」の区別は `get` にとって依然として意味があるので、ここはそのまま
- * throw する。1行読めなくても一覧は返る、という直しは `list()` が
- * `commitmentSchema.safeParse` を行ごとに使う形で別に持つ（下の
- * `splitReadableRows`）。
- *
- * **投げる型は `Error` ではなく `UnreadableCommitmentError`（`@alteroid/core`）
- * である。** 呼び出し側（`commitment_list` ツールの全文モード、`tools.ts`）が
- * 「行が読めない」と「器そのものの障害（DB 接続断など）」を `instanceof` で
- * 見分けられるようにするため（`UnreadableCommitmentError` の doc）。
- */
+// 読めない行を黙って飛ばさず投げる: 片付いた仕事と区別が付かなくなり、クローンが引き受けたことを二度と思い出さないため。
+// `Error` ではなく `UnreadableCommitmentError` を投げる: 呼び出し側が器の障害と `instanceof` で見分けるため。
 function parseCommitment(id: string, value: unknown): Commitment {
   const parsed = commitmentSchema.safeParse(value);
   if (parsed.success) return parsed.data;
@@ -51,16 +24,7 @@ function parseCommitment(id: string, value: unknown): Commitment {
   );
 }
 
-/**
- * `list()` の行ごとの読み出し。**`parseCommitment` と違い、1行が読めなくても
- * 投げない** — 読めた行は `entries` へ、読めなかった行は `unreadable` へ回す
- * （issue #296）。
- *
- * **id と at は列（`commitments.id` / `commitments.at`）から取る。** jsonb の
- * 中身（`value`）が読めなくても、この2列は別に読めるという pg 版の強みを使う
- * — id が取れないことがある fs 版（本体が id を持たない生の値のとき）とは
- * ここが違う。
- */
+// 1行が読めなくても投げない: 一覧が丸ごと落ちるため。
 function splitReadableRows(rows: { id: string; at: Date; commitment: unknown }[]): {
   entries: Commitment[];
   unreadable: UnreadableCommitment[];
@@ -82,29 +46,13 @@ function splitReadableRows(rows: { id: string; at: Date; commitment: unknown }[]
   return { entries, unreadable };
 }
 
-/**
- * 引き受けたまま終わっていない仕事の台帳。
- *
- * fs 版と同じ IF を満たすための別の器であって、器の違いで能力差を作らない
- * （クラウドでだけ引き受けた仕事を忘れる、が起きない）。
- */
-/** `PgCommitmentStore.open` の1文が返す3列（その doc に読み方がある）。 */
 interface OpenProbeRow {
   inserted: string | null;
   folded_into: string | null;
   id_seen: boolean;
 }
 
-/**
- * `db.execute` の戻りは**ドライバによって形が違う**（node-postgres は `{ rows }`、
- * 他は配列そのもの）。`Db` はドライバを問わない型なので（`db.ts` の doc）、
- * ここで両方を受ける。
- *
- * **1行も返らないことは無い** —— `open` の `select` は3つの副問い合わせを並べた
- * 単独の行である。それでも黙って既定値へ倒さずに投げるのは、**「判定できない」を
- * 静かに「既に在った」へ倒さないため**である（倒すと、記帳に失敗した回が
- * `'existed'` として記録され、`#commitmentNoticeFor` の警告も出ない）。
- */
+// 既定値へ倒さず投げる: 「判定できない」を静かに「既に在った」へ倒すと、記帳に失敗した回の警告も出ないため。
 function readOpenProbeRow(result: unknown): OpenProbeRow {
   const rows = Array.isArray(result) ? result : ((result as { rows?: unknown[] }).rows ?? []);
   const row = rows[0];
@@ -121,28 +69,15 @@ export class PgCommitmentStore implements CommitmentStore {
   }
 
   async list(options?: { includeClosed?: boolean }): Promise<CommitmentList> {
-    // 未了は古い順。齢が判断の材料なので、放置されているものから見せる
-    // 同じ at は入れた順（`seq`。issue #3285。fs / in-memory の安定整列と同じ）。
     const openRows = await this.#db
       .select({ id: commitments.id, at: commitments.at, commitment: commitments.commitment })
       .from(commitments)
       .where(isNull(commitments.closedAt))
       .orderBy(asc(commitments.at), asc(commitments.seq), asc(commitments.id));
     const open = splitReadableRows(openRows);
-    // **`includeClosed` が偽なら未了の行しか読まないので、`unreadable` にも
-    // 未了の行しか入らない。これは意図どおりである** — 片付いた壊れ行まで
-    // 見せると「未了の一覧」という前提が崩れる。fs 版は逆に、読めない行を
-    // 常に未了扱いで安全側へ倒すため `includeClosed` の真偽に関わらず出す
-    // （`storage-fs/src/commitments.ts` の doc に差を明記してある）。
-    //
-    // **`trimmedClosed` は常に `0`（issue #416）。** pg 版は片付いた行を
-    // 物理削除する経路を1つも持たない——`close()` の契約（「行は消さない」）
-    // を破っていないので、0 は「削除を数えていない」ではなく「削除が
-    // 起きていない」を正しく表す（`CommitmentList.trimmedClosed` の doc、
-    // `packages/core/src/store.ts`）。
+    // `includeClosed` が偽なら片付いた壊れ行を `unreadable` に入れない: 「未了の一覧」という前提が崩れるため。
     if (options?.includeClosed !== true) return { ...open, trimmedClosed: 0 };
 
-    // 閉じた側も同じ closedAt は入れた順の昇順（fs / in-memory の安定整列と同じ。issue #3285）
     const closedRows = await this.#db
       .select({ id: commitments.id, at: commitments.at, commitment: commitments.commitment })
       .from(commitments)
@@ -157,7 +92,6 @@ export class PgCommitmentStore implements CommitmentStore {
   }
 
   async get(id: string): Promise<Commitment | null> {
-    // 読むだけの口の NUL（issue #3011）。NUL を含む鍵の行は存在しえない（書き込みが断る）ので「無い」。DB に投げると NUL を含む text を受け付けずエラーになる。
     if (hasNul(id)) return null;
     const rows = await this.#db
       .select({ commitment: commitments.commitment })
@@ -165,74 +99,17 @@ export class PgCommitmentStore implements CommitmentStore {
       .where(eq(commitments.id, id))
       .limit(1);
     const row = rows[0];
-    // **無いこと（そもそも引き受けていない）と、読めないことは別物である。** 前者だけが null。
     if (row === undefined) return null;
     return parseCommitment(id, row.commitment);
   }
 
-  /**
-   * 未了として開く。**冪等性も重複の畳み込みも SQL 側で強制する。**
-   *
-   * 「select して既に在るか見てから insert」に割ると、同じ id の並行 open が両方
-   * 「無い」を読んですり抜け、後の書き込みが先の行を上書きする。受信箱の合図は
-   * 配り直されうる（`InboxStore` の取引）ので、その id を使う自動 open は**同じ id で
-   * 二度呼ばれるのが普通**であり、上書きすれば一度片付けた仕事が開き直る。
-   * `on conflict do nothing` は判定と書き込みが1操作なので、割り込む隙間が無い。
-   *
-   * ## ⭐ 同一マネージャー×同一本文×未了も開かない（issue #1041）
-   *
-   * **ここだけがプロセスを跨いでも原子である。** fs と in-memory の排他はプロセスの
-   * 中にしか無いが（`CommitmentStore.open` の doc）、本番の記憶ストアは PostgreSQL
-   * であり、**デプロイが重なって2つのデーモンが同じ DB を指す窓は毎日開く。**
-   *
-   * **⛔ トランザクションを張っても直らない。** PostgreSQL の既定（READ COMMITTED）
-   * では `select`（重複が在るか）→ `insert` は、2つのセッションが同時にやれば
-   * **両方とも「無い」を読んで両方が insert する**——トランザクションが与えるのは
-   * 原子性と可視性であって、**まだ存在しない行に対する排他ではない。** だから
-   * ここは2段構えにしてある：
-   *
-   * 1. **`where not exists`（この文の中）** — 直列に来た同文を畳む。判定と挿入が
-   *    1文なので、呼び出し側が読んでから書く形（#1041 そのもの）にはならない。
-   *    **比較は `body` の全文**で、fs / in-memory（`findOpenManagerDuplicate`）と
-   *    1文字も違わない
-   * 2. **部分 unique 索引 `commitments_open_manager_body_idx`（`migrate.ts`）** —
-   *    1 をすり抜けた**同時**の2件目を DB が拒む。`on conflict do nothing` が
-   *    それを吸うので、呼び出し側から見れば「畳まれた」になる
-   *
-   * **⚠️ 索引の鍵は `md5(body)` である（全文ではない）。** btree の索引行には
-   * サイズ上限（約2.7KB）があり、生の `body` を鍵にすると**長い報告だけが
-   * 記帳できなくなる**（insert が落ちる）。代償は **md5 が衝突したら別々の本文が
-   * 1行に畳まれる ＝ 依頼を黙って1件落とす**ことで、**これは歯で測れない**
-   * （衝突する2つの本文を作れない）。⭐ ただし**衝突が実害になるのは 2 の経路だけ**
-   * である——1 は全文で比べているので、直列に来た別本文がここで畳まれることはない。
-   * ⟹ 「同時に来て、かつ md5 が衝突する」2件でしか起きない。**それでも0ではない。
-   * 鍵を変えるなら、この代償ごと読み直すこと。**
-   *
-   * **⚠️ 索引が無い DB でも、この文はそのまま正しく動く**（1 だけが効く＝直列の
-   * 畳み込みは守られ、同時の2件目だけがすり抜ける）。`migrate` は既存の重複行が
-   * 在ると索引を作らずに警告して進むので（`ensureOpenManagerBodyIndex`）、
-   * **その状態でも台帳は #1035 以前へは戻らない。**
-   *
-   * 何が起きたかは `returning` と2つの補助列で見分ける：
-   *
-   * - `inserted` が非 null ⟹ opened
-   * - `folded_into` が非 null ⟹ folded（1 が効いた。畳んだ先も分かる）
-   * - どちらも null で `id_seen` が真 ⟹ 同じ id が既に在った
-   * - どちらも null で `id_seen` が偽 ⟹ `on conflict` が同時の相手に弾かれた（主キーか
-   *   索引かは、この文のスナップショットには相手の行が無いので分からない）。
-   *   **別の文で読み直して見分ける**（#2922）: 同じ id が在れば「既に在った」、
-   *   同文の未了が在れば「畳んだ」（その id を `foldedInto` へ）。読み直しても
-   *   居なければ `foldedInto` を空のまま返す——**嘘の id を埋めない**
-   */
+  // select してから insert する形にしない: 並行 open が両方「無い」を読んですり抜け、後の書き込みが先の行を上書きして片付けた仕事が開き直るため。
+  // トランザクションで直そうとしない: READ COMMITTED では、まだ存在しない行に対する排他にならず両方が insert するため。
+  // 索引の鍵を全文にしない: btree の行サイズ上限（約2.7KB）で、長い報告だけが記帳できなくなるため。`md5(body)` の衝突は同時に来た2件でだけ依頼を1件落とす。鍵を変えるならこの代償ごと読み直すこと。
   async open(entry: Commitment): Promise<CommitmentOpenResult> {
-    // id（鍵）の NUL は断る（issue #3011）。落とすと別の行を指すので、`stripNulls` の前に見る。
+    // `stripNulls` の前に見る: id の NUL を落とすと別の行を指すため。
     assertNoNul('commitment.id', entry.id);
-    // 依頼の本文は人間かクローンが書いた自由文なので NUL が混ざりうる
     const value = stripNulls(commitmentSchema.parse(entry));
-    // 畳み込みの対象はマネージャー起因の行だけである（`findOpenManagerDuplicate`）。
-    // **同じ絞りをここで書き直しているのは、SQL でしか DB の制約にできないため**
-    // ——だから3実装が同じ答えを返すことを契約の歯で測る
-    // （`commitment-fold-contract.ts`）。
     const foldable = value.origin === 'manager' && value.source !== undefined;
     const closedAt = value.closedAt === undefined ? null : new Date(value.closedAt);
     const result = await this.#db.execute(sql`
@@ -266,23 +143,11 @@ export class PgCommitmentStore implements CommitmentStore {
     `);
     const row = readOpenProbeRow(result);
     if (row.inserted !== null) return { opened: true, folded: false };
-    // **`id_seen` を `folded_into` より先に見る。** 同じ id が既に在るなら、たまたま
-    // 同文の別の行が在っても答えは「既に在る」である —— in-memory / fs は id の
-    // 判定を先に置いているので、順序を揃えないとここだけ違う答えを返す
-    // （`commitment-fold-contract.ts` の 6 がこのずれを落とす）。
+    // `id_seen` を `folded_into` より先に見る: in-memory / fs は id の判定を先に置いており、順序が違うとここだけ答えが変わるため。
     if (row.id_seen) return { opened: false, folded: false };
     if (row.folded_into !== null)
       return { opened: false, folded: true, foldedInto: row.folded_into };
-    // **ここへ来たのは、`on conflict do nothing` が何かの衝突を吸ったのに、この文の
-    // スナップショットには相手の行が見えなかったときだけである。** 衝突したのは
-    // 主キー（同じ id）か、部分 unique 索引（同一マネージャー×同一本文）のどちらかで、
-    // `do nothing` は両方を区別せず吸う。**区別せずに「畳んだ」と返すと、同じ id の
-    // 並行 open が「畳んだ」と誤報される（#2922。PGlite は単一接続で並行が重ならず
-    // 出なかった）。**
-    //
-    // `on conflict` は相手の取引が終わるまで待ってから弾くので、弾かれた時点で相手の行は
-    // コミット済みである。**別の文で読み直せば（READ COMMITTED は文ごとに
-    // スナップショットを取り直す）見える。** 上の分岐と同じ順（id が先）で見分ける。
+    // 区別せずに「畳んだ」と返さない: 主キーの衝突か索引の衝突か分からず、同じ id の並行 open が「畳んだ」と誤報されるため。別の文で読み直す。
     const reread = readOpenProbeRow(
       await this.#db.execute(sql`
         select
@@ -303,52 +168,13 @@ export class PgCommitmentStore implements CommitmentStore {
     if (reread.id_seen) return { opened: false, folded: false };
     if (reread.folded_into !== null)
       return { opened: false, folded: true, foldedInto: reread.folded_into };
-    // 読み直しても相手が居ない（弾いた相手が直後に閉じた等）。畳んだことだけが分かる。
     return { opened: false, folded: true };
   }
 
-  /**
-   * 片付いたことを記録する。**行は消さない**（何を片付けたかが日報の材料から落ちる）。
-   *
-   * **ここは `CommitmentStore.close` の契約をそのまま守っている。** 保持上限も
-   * 削除経路も1つも持たないので、`list()` が返す `trimmedClosed` は常に `0`
-   * である。**fs 版（`storage-fs/src/commitments.ts`）はこの契約を守れていない
-   * ——`CLOSED_HISTORY_LIMIT` を超えた古い片付き行を物理削除する**（issue #416）。
-   *
-   * `where ... and closed_at is null` で「まだ閉じていない」の検査を更新そのものへ
-   * 畳んである。読んでから書く形にすると、二重に届いた片付けが両方 `true` を返し、
-   * 呼び出し側が「いま自分が閉じた」と誤って二重に報告する（AGENTS.md「不変条件は
-   * ストアの1操作に閉じること」）。
-   *
-   * jsonb の中も一緒に直す。読み出しは `commitment` からなので、列だけ直しても
-   * クローンが見る値は未了のままになる。
-   *
-   * **⚠️ 読めない行（`commitment` が `commitmentSchema` に合わない行）に対する
-   * 挙動は、fs 版とここで割れる（issue #296。「言えないこと」として書く）。**
-   * ここ（pg 版）は `closed_at` が **jsonb（`commitment`）とは独立した列**
-   * なので、`commitment` が読めない形でも `jsonb_set` は素の JSON 操作として
-   * 通り、`where ... and closed_at is null` も列だけを見て判定できる。
-   * **＝ 読めない行でも `close()` は `true` を返し、実際に `closed_at` が
-   * 進む。** fs 版は `closed_at` に当たる独立した列を持たず、「閉じている
-   * かどうか」の判定材料が読めなかった行の中身（`closedAt`）そのものしか
-   * 無いため、読めない行は `close()` の対象として見つけられず常に `false`
-   * を返す（`storage-fs/src/commitments.ts` の `close` の doc）。
-   *
-   * **これは north_star 禁止1（器の違いで能力差を作らない）への違反では
-   * ない。** fs 版に pg のこの列に当たるものが無い以上、同じ検査を書きようが
-   * ない — 揃えたふりをして無理に合わせるほうが、無いものをあるかのように
-   * 見せることになる。
-   *
-   * **実際にこの差を踏む経路は `POST /commitments/:id/close`（`apps/daemon/
-   * src/app.ts`）だけである。** MCP の `commitment_close` ツール（`tools.ts`）
-   * は `close()` の前に必ず `stores.commitments.get(id)` を呼ぶので、読めない
-   * 行では `get` が先に throw し、`close()` へは到達しない — **こちらは
-   * pg / fs のどちらでも同じ結末（throw）になる。** 割れるのは HTTP の口が
-   * `close()` を先に呼び、失敗したときだけ理由を求めて `get()` を呼ぶ
-   * 作りになっている、その一点だけである。
-   */
+  // 行を消さない: 何を片付けたかが日報の材料から落ちるため。
+  // 読んでから書く形にしない: 二重に届いた片付けが両方 `true` を返し、呼び出し側が二重に報告するため。
+  // jsonb の中も直す: 読み出しは `commitment` からなので、列だけ直してもクローンが見る値は未了のままになるため。
   async close(id: string, at: string, reason: string, by: CommitmentClosedBy): Promise<boolean> {
-    // 読むだけの口の NUL（issue #3011）。NUL を含む鍵の行は存在しえない（書き込みが断る）ので「無い」。DB に投げると NUL を含む text を受け付けずエラーになる。
     if (hasNul(id)) return false;
     const closedReason = stripNulls(reason);
     const closed = sql`jsonb_set(jsonb_set(jsonb_set(${commitments.commitment}, '{closedAt}', ${JSON.stringify(at)}::jsonb, true), '{closedReason}', ${JSON.stringify(closedReason)}::jsonb, true), '{closedBy}', ${JSON.stringify(by)}::jsonb, true)`;
@@ -361,41 +187,14 @@ export class PgCommitmentStore implements CommitmentStore {
     return updated.length > 0;
   }
 
-  /**
-   * 複数件を1回でまとめて片付いたことを記録する（issue #844。
-   * `CommitmentStore.closeMany` の doc）。
-   *
-   * **`close()` と同じ筋——`where ... and closed_at is null` の条件付き
-   * UPDATE、jsonb_set 3重——を `inArray` で複数 id へ広げただけの UPDATE 1本
-   * である。** `close()` を `ids.length` 回ループしないのは、呼び出し側
-   * （`tools.ts`）がそのループを持たないようにするためであり、pg 版はもとも
-   * と1回の UPDATE で複数行を更新できる器なので、ここでは1本の SQL に畳む
-   * こと自体に難しさは無い——ループを避ける必要が構造的にあるのは fs 版
-   * （`storage-fs/src/commitments.ts` の `closeMany` の doc）である。
-   *
-   * **`close()` はこの薄い包みにしていない。** 単票の `close()` は
-   * `eq(commitments.id, id)` の1件 UPDATE のまま独立に残してある——
-   * `closeMany([id], …)` を経由させて `boolean` へ畳み直すことも書けるが、
-   * 動いている `close()` を書き換える理由が無い分だけリスクを増やさない
-   * ほうを選んだ（既存の呼び出し元・歯は無傷のまま）。
-   *
-   * **戻り値は実際に更新された id の配列（`returning` が返した行）。**
-   * 存在しない id・既に `closed_at` が入っている id は `where` に一致せず
-   * `returning` にも現れない。**`ids` に重複があっても、対象は `commitments`
-   * テーブルの行（id ごとに高々1行）なので二重に更新されず、戻り値にも
-   * 同じ id が2回現れない。**
-   *
-   * **`ids` が空なら SQL を撃たずに `[]` を返す。** 空配列を `inArray` へ渡すと
-   * ドライバ・SQL 方言によって挙動が割れうる（例えば `WHERE id IN ()` は
-   * 構文として不正になりうる）ので、ここで先に弾く。
-   */
+  // `close()` をこの薄い包みにしない: 動いている単票の `close()` を書き換えるリスクを増やさないため。
+  // 空配列を `inArray` へ渡さない: 方言によって `WHERE id IN ()` が構文として不正になりうるため。
   async closeMany(
     ids: readonly string[],
     at: string,
     reason: string,
     by: CommitmentClosedBy,
   ): Promise<string[]> {
-    // NUL を含む id は「無い」ものとして数えない（issue #3011）。DB へは投げない。
     const queryable = ids.filter((id) => !hasNul(id));
     if (queryable.length === 0) return [];
     const closedReason = stripNulls(reason);
@@ -409,28 +208,9 @@ export class PgCommitmentStore implements CommitmentStore {
     return updated.map((row) => row.id);
   }
 
-  /**
-   * `body` を書き換える。**`close()` と同じく、条件付き UPDATE 1本へ畳む**
-   * （`where ... and closed_at is null`）——読んでから書く形にすると、並行
-   * 編集や「編集」と「片付け」の競合で後勝ちが黙って先の書き込みを踏み消す
-   * （AGENTS.md「不変条件はストアの1操作に閉じること」）。
-   *
-   * **`origin` が `'human'` かどうかの判定はここでは行わない**
-   * （`CommitmentStore.editBody` の doc）。`origin` は開いたときから決して
-   * 変わらない値なので並行 UPDATE と競合せず、SQL の `where` へ畳む必要が
-   * ない——判定は呼び出し側（`apps/daemon/src/app.ts` の
-   * `PATCH /commitments/:id`）が `get()` の結果を見て行う。
-   *
-   * jsonb の中も一緒に直す。読み出しは `commitment` からなので、`body` の
-   * 実体（jsonb 側）を直さないとクローンが見る値は古いままになる。列
-   * （`commitments.id` 等）には `body` に対応するものが無いので、`set()`
-   * では `commitment` だけを更新する（`closedAt` 列は触らない）。
-   *
-   * 依頼の本文は人間が書いた自由文なので、`open()` と同じ理由で
-   * `stripNulls` を通す（NUL が混ざりうる）。
-   */
+  // 読んでから書く形にしない: 「編集」と「片付け」の競合で後勝ちが黙って先の書き込みを踏み消すため。
+  // `origin` の判定を `where` へ畳まない: `origin` は開いたときから変わらず、並行 UPDATE と競合しないため。
   async editBody(id: string, body: string, at: string, by: CommitmentEditedBy): Promise<boolean> {
-    // 読むだけの口の NUL（issue #3011）。NUL を含む鍵の行は存在しえない（書き込みが断る）ので「無い」。DB に投げると NUL を含む text を受け付けずエラーになる。
     if (hasNul(id)) return false;
     const editedBody = stripNulls(body);
     const edited = sql`jsonb_set(jsonb_set(jsonb_set(${commitments.commitment}, '{body}', ${JSON.stringify(editedBody)}::jsonb, true), '{editedAt}', ${JSON.stringify(at)}::jsonb, true), '{editedBy}', ${JSON.stringify(by)}::jsonb, true)`;
@@ -443,7 +223,6 @@ export class PgCommitmentStore implements CommitmentStore {
     return updated.length > 0;
   }
 
-  /** 全件を消す（`CommitmentStore.clear` の doc）。未了・片付いた行を問わない。 */
   async clear(): Promise<number> {
     const removed = await this.#db.delete(commitments).returning({ id: commitments.id });
     return removed.length;

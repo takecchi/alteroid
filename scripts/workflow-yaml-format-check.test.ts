@@ -11,51 +11,7 @@ import { extractJobNames, extractJobsSection, listWorkflowFiles } from './workfl
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const WORKFLOWS_DIR = path.join(ROOT, '.github', 'workflows');
 
-/**
- * **配線の歯。workflow の YAML が構文として壊れていないことを測っている唯一の門
- * （`ci` の `pnpm format:check`）を、たまたまの配線から名指しの配線へ固定する。**
- *
- * ## 何のためにここが在るか
- *
- * workflow を読む他の歯（`ci-draft-gating.test.ts` / `check-scripts-wired.test.ts` /
- * `main-ci-alarm.test.ts` / `workflow-scan-core.mjs` を使う道具）は、どれも文字列と
- * 正規表現で必要な行だけを拾う。**YAML として壊れた行が在っても、拾う行と無関係なら
- * 緑のままである。**実測（2026-09-23）: `ci.yml` の step 名を `'omitted' の段が…`
- * （先頭の `'` が引用符として読まれ、閉じた後に文字が続く＝不正な YAML）に変えても、
- * それらの歯は全部緑だった。同じ形の破損は別リポジトリで実際に起きている。
- *
- * **捕まえたのは `pnpm format:check` だけだった**——prettier は YAML を本物の
- * パーサで読むので、`SyntaxError: Unexpected scalar at node end` で落ちる。
- * ⟹ **workflow の構文を守っているのは prettier であり、しかもそれはどこにも
- * 宣言されていなかった。**`.prettierignore` に `.github/` を足す、`format:check` の
- * 対象を絞る、`ci` から step を外す、のどれか1つで、この守りは黙って消える。
- *
- * ## 測っているもの
- *
- * 1. `.github/workflows/` の各ファイル（一覧は導出する。ベタ書きしない）が、
- *    CLI と同じ ignore ファイル（`.gitignore` / `.prettierignore`）で除外されて
- *    おらず、設定を解決したうえで parser が `yaml` と推定されること。
- * 2. 解決した設定が `requirePragma` / `checkIgnorePragma` を有効にしていないこと
- *    （どちらも、ファイルの中身次第で parse せずに素通りさせる設定である）。
- * 3. `package.json` の `format:check` が `.` を対象にした `prettier --check` で
- *    あり、`ci.yml` のどれかの job（`ci` ジョブの `needs` に載っているもの）が
- *    それを `run: pnpm format:check` で呼ぶこと。`ci` 自身は検査の job を束ねる門で、
- *    step を持たない（以前は `ci` 1本が全 step を回していた。#2707）。
- *
- * **無関係な ignore は禁じない。**`.prettierignore` に何を足しても、workflow
- * ファイルを外さない限りこの歯は緑のままである。
- *
- * ## この歯が測っていないこと
- *
- * - **その job のその step が実際に実行されることまでは見ない。**step に
- *   `if:` が付いたり、ジョブの `if:` が変わったりしても、「書いてある」を見て
- *   緑を返す（`check-scripts-wired.test.ts` の同種の断りと同じ形）。
- * - **`ci.yml` 自身が GitHub に読めないほど壊れた場合**、`ci` は起動しないので
- *   この歯も `format:check` も走らない。そのとき required の `ci` が来ない
- *   ことで止まる、という見立ては GitHub 上で確かめていない。
- * - **prettier の YAML パーサと GitHub Actions のパーサが同じものを拒む保証は
- *   無い。**測ったのは上の `'omitted' の…` の形で prettier が落ちることだけである。
- */
+// `ci` の `pnpm format:check` を名指しで固定する: workflow の YAML 構文を守っているのは prettier だけで、他の歯は文字列と正規表現で行を拾うだけのため、壊れた YAML に気づかないため。
 
 const IGNORE_PATHS = [path.join(ROOT, '.gitignore'), path.join(ROOT, '.prettierignore')];
 

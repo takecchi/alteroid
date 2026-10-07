@@ -1,13 +1,4 @@
 // @vitest-environment jsdom
-/**
- * `prepended`（virtua の `shift` に渡す材料）が、**コミットされる描画で** `true` になること
- * （issue #2774）。
- *
- * かつては「前回の描画と比べて、レンダー中に `setState` で調整する」形で、`setState` を
- * 呼んだ描画の結果は React に捨てられるため、**描かれる描画では常に `false`** だった。
- * virtua の `shift` が1度も効かず、読んでいる行が新着のたびに押し流されていた。
- * 画面の側（`journal.test.tsx`）は jsdom が virtua を描かないので `prepended` を測れない。
- */
 import type { JournalEntry } from '@alteroid/logic';
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import { useLayoutEffect } from 'react';
@@ -21,7 +12,6 @@ function decision(id: string, at: string): JournalEntry {
   return { type: 'decision', id, at, decision: id, grounds: 'g' };
 }
 
-/** コミットされた描画ごとの `prepended` と先頭の id。 */
 let committed: { prepended: boolean; front: string | undefined; length: number }[];
 let loadOlder: () => void;
 
@@ -60,7 +50,6 @@ describe('useJournalWindow: prepended', () => {
     const older = decision('d-0', '2026-10-05T00:00:00.000Z');
     stubFetch((url) => {
       if (!url.includes('/journal')) return undefined;
-      // 2回目の取得（もっと遡る）だけ古い行を返す。
       return url.includes('afterId')
         ? json({ entries: [older], scanned: 1 })
         : json({ entries: history, scanned: 2, next: { id: 'd-1', at: history[1]!.at } });
@@ -75,7 +64,6 @@ describe('useJournalWindow: prepended', () => {
     );
     const { rerender } = render(view([]));
     await waitFor(() => expect(screen.getByTestId('len').textContent).toBe('2'));
-    // 初回読み込み: 空 → 2件。足したのではない。
     expect(committed.every((c) => !c.prepended)).toBe(true);
 
     committed.length = 0;
@@ -83,7 +71,6 @@ describe('useJournalWindow: prepended', () => {
     await waitFor(() => expect(screen.getByTestId('len').textContent).toBe('3'));
     const withNewest = committed.filter((c) => c.front === 'd-3');
     expect(withNewest.length).toBeGreaterThan(0);
-    // 先頭が新着になった描画のすべてで true（捨てられる描画だけで立つ形ではない）。
     expect(withNewest.every((c) => c.prepended)).toBe(true);
 
     committed.length = 0;
@@ -91,7 +78,6 @@ describe('useJournalWindow: prepended', () => {
       loadOlder();
     });
     await waitFor(() => expect(screen.getByTestId('len').textContent).toBe('4'));
-    // 末尾に足した更新では、先頭は変わらず prepended は false に戻る。
     const afterOlder = committed.filter((c) => c.length === 4);
     expect(afterOlder.length).toBeGreaterThan(0);
     expect(afterOlder.every((c) => !c.prepended && c.front === 'd-3')).toBe(true);

@@ -1,12 +1,4 @@
 // @vitest-environment jsdom
-/**
- * 切り替えの履歴（`GET /journal?type=token_rotation`）の取得に失敗したとき、「切り替えの記録がまだ
- * 1件も無い」と Badge の `0` を並べない（issue #2324）。
- *
- * 読めていないのに回転が一度も起きていないように読める（AGENTS.md の地雷「取れない軸に 0 の行を
- * 作る」）。上のトークン一覧は既に `data === undefined ? null` で直っている。手本は
- * `approvals.fetch-error.test.tsx`（#2313）。
- */
 import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -28,10 +20,6 @@ afterEach(() => {
   globalThis.fetch = originalFetch;
 });
 
-/**
- * `GET /tokens` は空のプールで成功させ、`GET /journal` にだけ `respond()` の応答を返す。
- * 他の URL は「繋がらない」。
- */
 function stubJournal(respond: () => Response | Promise<Response>): void {
   globalThis.fetch = (async (input: RequestInfo | URL) => {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
@@ -55,7 +43,6 @@ function renderPage() {
   );
 }
 
-/** 「切り替えの履歴」のカード（上のトークン一覧の Badge・注記と混ざらないよう、ここだけを見る）。 */
 function historyCard(): HTMLElement {
   const card = screen
     .getByRole('heading', { name: '切り替えの履歴（エラー状況）' })

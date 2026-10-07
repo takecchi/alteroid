@@ -15,6 +15,9 @@ import type { Exchange } from './conversation.js';
 import type { JournalEntry } from './schema.js';
 import { createMemoryStores } from './testing.js';
 
+/** 孤立サロゲート（高だけ・低だけ）。`isWellFormed()` は tsconfig の lib に無いので直接探す。 */
+const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+
 /**
  * `conversation.ts` — 日誌の並びを会話へ畳み直す規則の純粋関数。
  *
@@ -150,6 +153,25 @@ describe('collectConversations', () => {
     // 移設で変わったことに気づけない）。ここは移設の等価性を担保する歯なので、
     // 「80 で切る」を字義どおり書く。
     expect(preview).toBe(`${'x'.repeat(80)}…`);
+  });
+
+  // #3804: 上限（80）の位置に補助面の文字がまたがっても、孤立サロゲートを残さない。
+  it('preview の切り口が絵文字をまたいでも、孤立サロゲートを残さない', () => {
+    const entries: JournalEntry[] = [
+      exchange({
+        id: 'e1',
+        at: '2026-08-20T00:01:00.000Z',
+        conversationId: 'c1',
+        text: `${'あ'.repeat(79)}😀😀`,
+      }),
+    ];
+
+    const preview = collectConversations(entries)
+      .map((c) => c.preview)
+      .join('');
+
+    expect(preview).toBe(`${'あ'.repeat(79)}…`);
+    expect(LONE_SURROGATE.test(preview)).toBe(false);
   });
 });
 

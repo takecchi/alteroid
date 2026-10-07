@@ -1,13 +1,4 @@
 // @vitest-environment jsdom
-/**
- * Issue #3258。新しい会話（`conversationId` 無し）で添付つきの送信が `open` の前に中断されたとき、
- * クライアントは会話 id を知らない。サーバが受け取っていた場合、次の送信を新しい会話として送ると、
- * 受け取り済みの添付が `attachment_conflict`（400）で弾かれる。
- *
- * 次の送信を組む前に `GET /client-messages/:clientMessageId` で受け取り済みかを引き、見つかったら
- * その会話へ送る。見つからなければ（404）今までどおり新しい会話。引けなければ黙って新しい会話として
- * 送らず、案内を出して送らない。
- */
 import { File as NodeFile } from 'node:buffer';
 
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
@@ -65,9 +56,7 @@ interface PostedBody {
 let originalFetch: typeof fetch;
 let stub: ReturnType<typeof stubFetch>;
 let posted: PostedBody[] = [];
-/** サーバが1回目を受け取っていたか（受け取っていれば、添付は会話 A に結び付いている）。 */
 let received = true;
-/** `GET /client-messages/:id` の応え。 */
 let lookup: () => Response = () => json({ conversationId: A });
 
 beforeEach(() => {
@@ -92,7 +81,6 @@ beforeEach(() => {
         const body = (await request?.clone().json()) as PostedBody;
         posted.push(body);
         if (posted.length === 1) {
-          // 受け取ってはいるが、`open` は返らない（中断されて初めて終わる）。
           return new Promise<Response>((_, reject) => {
             init?.signal?.addEventListener('abort', () =>
               reject(new DOMException('aborted', 'AbortError')),
@@ -102,7 +90,6 @@ beforeEach(() => {
             );
           });
         }
-        // 受け取り済みの添付を、別の会話（会話 id 無し＝新しい会話）へ結ぶのは断る。
         if (received && body.conversationId === undefined && (body.attachments?.length ?? 0) > 0) {
           return json(
             { error: '添付は別の発言に結び付いている', code: 'attachment_conflict' },
@@ -130,7 +117,6 @@ async function box() {
   return (await screen.findByPlaceholderText(/クローンに話しかける/)) as HTMLTextAreaElement;
 }
 
-/** 新しい会話で、添付つきで送り、`open` の前に「受信をやめる」で中断させる。 */
 async function sendWithAttachmentAndAbort() {
   const view = renderChat('/chat');
   fireEvent.change(await box(), { target: { value: '元の本文' } });
@@ -199,7 +185,6 @@ describe('#3258: 新しい会話で open の前に中断した送信の後は、
     expect(posted).toHaveLength(1);
     expect(await screen.findByText(/受け取られたか確かめられなかった/)).toBeTruthy();
     expect((await box()).value).toBe('直した本文');
-    // 直ったら、もう一度送って取り直せる。
     lookup = () => json({ conversationId: A });
     fireEvent.click(screen.getByRole('button', { name: 'メッセージを送信' }));
     await waitFor(() => expect(posted).toHaveLength(2));

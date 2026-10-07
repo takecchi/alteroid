@@ -307,3 +307,81 @@ describe('同じ会話へ繰り返し戻っても、届いたばかりの行は�
     expect(within(transcript()).getAllByText('2回目の発言（まだ履歴に無い）')).toHaveLength(1);
   });
 });
+
+/**
+ * **過去の発言と同じ本文を送っても、送った直後から自分の吹き出しが出る（#3826）。**
+ * 人間の行は `clientMessageId` で履歴と突き合わせる。履歴の過去の「はい」は別の id を持つので、
+ * いま送った「はい」を引き取らない。
+ */
+describe('過去と同じ本文を送っても、送った発言は消えない（#3826）', () => {
+  const 行 = (
+    text: string,
+    role: 'human' | 'clone',
+    extra: { clientMessageId?: string; key?: string } = {},
+  ) => ({
+    key: extra.key ?? `k-${role}-${text}-${extra.clientMessageId ?? ''}`,
+    role,
+    text,
+    of: 'conv-a',
+    ...(extra.clientMessageId === undefined ? {} : { clientMessageId: extra.clientMessageId }),
+  });
+
+  it('別の id を持つ履歴の同じ本文は、id を持つ手元の行を引き取らない。同じ id なら引き取る', () => {
+    const own = 行('はい', 'human', { clientMessageId: 'new' });
+    expect(
+      pendingOwnLines([own], 'conv-a', [行('はい', 'human', { clientMessageId: 'old' })]),
+    ).toHaveLength(1);
+    expect(
+      pendingOwnLines([own], 'conv-a', [
+        行('はい', 'human', { clientMessageId: 'old' }),
+        行('はい', 'human', { clientMessageId: 'new' }),
+      ]),
+    ).toHaveLength(0);
+    // id を持たない履歴の行（id 無しで届いた発言）とは、従来どおり本文で突き合わせる。
+    expect(pendingOwnLines([own], 'conv-a', [行('はい', 'human')])).toHaveLength(0);
+  });
+
+  it('画面: 履歴に同じ本文の過去の発言があっても、送った直後に自分の吹き出しが出る', async () => {
+    const route: Route = (url, init) => {
+      if (url.endsWith('/chat')) {
+        return sse(
+          [
+            { event: 'open', data: { conversationId: 'conv-1' } },
+            { event: 'text', data: { type: 'text', text: '承知しました' } },
+            { event: 'done', data: { type: 'done' } },
+          ],
+          { signal: init?.signal },
+        );
+      }
+      if (url.includes('/conversations/conv-1')) {
+        // 履歴は取り直されない体（日誌の受信が切れている）で、過去の「はい」だけを返す。
+        return json({
+          conversationId: 'conv-1',
+          messages: [
+            {
+              id: 'm0',
+              at: '2026-08-01T00:00:00Z',
+              role: 'inbound',
+              text: 'はい',
+              clientMessageId: 'old-id',
+            },
+            { id: 'm1', at: '2026-08-01T00:00:01Z', role: 'outbound', text: '了解です' },
+          ],
+        });
+      }
+      if (url.includes('/approvals')) return json({ approvals: [] });
+      if (url.includes('/conversations')) return json({ conversations: [], scanned: 0 });
+      return undefined;
+    };
+    stubFetch(route);
+
+    renderChat('/chat/conv-1');
+    await screen.findByText('了解です');
+    expect(within(transcript()).getAllByText('はい')).toHaveLength(1);
+
+    await send('はい');
+
+    await screen.findByText('承知しました');
+    expect(within(transcript()).getAllByText('はい')).toHaveLength(2);
+  });
+});

@@ -34,7 +34,7 @@ import {
   usageHref,
 } from '@alteroid/logic';
 import { terminalFailureNote as sharedTerminalFailureNote } from '~/lib/manager-failure-note';
-import { LeaveGuardScope, useReportDirty } from '~/lib/leave-guard';
+import { LeaveGuardScope, useIsMounted, useReportDirty } from '~/lib/leave-guard';
 import { unsentInput } from '~/lib/unsent-input';
 
 /**
@@ -133,6 +133,7 @@ export default function ManagerDetail({ loaderData }: Route.ComponentProps) {
   const { id } = loaderData;
   const { data, error, isLoading } = useManager(id);
   const navigate = useNavigate();
+  const mounted = useIsMounted();
   const { search } = useLocation();
   const abortManager = useAbortManager();
   const [busy, setBusy] = useState(false);
@@ -233,7 +234,10 @@ export default function ManagerDetail({ loaderData }: Route.ComponentProps) {
               setFailure(undefined);
               // 本文が要る（サーバ側に json バリデータが付いている）。
               abortManager(id, '人間が画面から停止した')
-                .then(() => navigate({ pathname: '/managers', search }))
+                .then(() => {
+                  // 応答待ちに別のマネージャーへ移っていたら、その画面を動かさない（#3802）。
+                  if (mounted.current) navigate({ pathname: '/managers', search });
+                })
                 .catch(setFailure)
                 .finally(() => setBusy(false));
             }}
