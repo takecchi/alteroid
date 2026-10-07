@@ -7165,34 +7165,17 @@ export function createCloneTools(context: ToolContext) {
       async ({ status, cursor }) => {
         if (!context.managers) return NO_POOL;
         const managers = await context.managers.list();
-        // **この一覧ぜんぶで同じ「いま」を使う（Issue #1036）。** 行ごとに
-        // `new Date()` を呼ぶと、同じ応答の中で判定の基準がずれる
-        // （`describeReportDrift` に渡す `now`）。
+        // この一覧ぜんぶで同じ「いま」を使う: 行ごとに `new Date()` を呼ぶと、同じ応答の中で判定の基準がずれるため
         const now = new Date();
-        // **デーモン→クローンの脚（受信箱）の滞留は、マネージャーの本数と無関係**
-        // （#358）。マネージャーが1本も居なくても、受信箱には既に合図が溜まって
-        // いることがあるので、早期リターンの前に確かめる。
+        // 受信箱の滞留は早期リターンの前に確かめる: マネージャーが1本も居なくても合図が溜まっていることがあるため
         const inboxBacklog = describeInboxBacklog(
           await context.stores.inbox.peekPending(),
           Date.now(),
-          // issue #1133: 器の行だけでなく、メモリの配達待ち行列も渡す
-          // （`ToolContext.queuedInMemory` の doc）。省略された呼び（テスト等）は
-          // `undefined` のまま——`describeInboxBacklog` 側で「読めなかった」
-          // ではなく「渡さないと決めた」として扱う。
           context.queuedInMemory?.(),
         );
-        // runner→デーモンの脚も同じ理由で本数と無関係（#358 案b）。
-        // `runnerBacklog()` はキャッシュを読むだけ——ここでも往復は増えない。
-        //
-        // **`?.() ?? []` で読まない。** その形は「この口を持たない実装」と
-        // 「持っているが1件も観測していない」を同じ `[]` へ畳む——**まさに
-        // この一覧が区別しようとしているもの**（#358 の主題）を、呼び出し口の
-        // 型で潰すことになる。だから `ManagerPool.runnerBacklog` は非 optional
-        // にしてある（その doc を参照）。
+        // `?.() ?? []` で読まない: 「この口を持たない実装」と「持っているが1件も観測していない」を同じ `[]` へ畳み、この一覧が区別しようとしているものを潰すため
         const runnerBacklog = describeRunnerBacklog(context.managers.runnerBacklog());
-        // **読めない委譲の行は、「居ない」と分けて名乗る（issue #2345）。** `list()` は
-        // 読めない行を飛ばすので、黙っていると壊れた行だけの台帳が「1本も居ない」に見える。
-        // 0件なら `null` で、出力は1文字も変わらない。
+        // 読めない委譲の行は「居ない」と分けて名乗る: `list()` は読めない行を飛ばすので、黙っていると壊れた行だけの台帳が「1本も居ない」に見えるため
         const unreadableJobNote = describeUnreadableJobs(
           await context.stores.jobs.listUnreadableJobs(),
         );
@@ -7211,94 +7194,19 @@ export function createCloneTools(context: ToolContext) {
           );
         }
 
-        // **走行中・返事待ち → lost → その他の3群で出す（#688）。**
-        // `ManagerPool.list()` の並びは
-        // `startedAt` の降順で、**稼働状態を1度も見ていない**（逐語:
-        // `grep -Fn -- 'return summaries.sort((a, b) => b.startedAt.localeCompare(a.startedAt));' packages/core/src/manager.ts`）。
-        // ⟹ 終端した委譲が溜まると、走行中・返事待ちが文字数の予算
-        // （`LIST_BUDGET`）の窓の外へ押し出され、**id が本文に出ないので
-        // `manager_report` で名指しもできなくなる**（実測 2026-09-07: 台帳
-        // 10,000 本・走行中3本を古い側に置くと、本文に出た12件は全部終端で、
-        // 走行中は0件だった）。
-        //
-        // **`ManagerPool.list()` は1行も変えない。** HTTP の錨
-        // （`apps/daemon/src/app.ts` の `compareManagerPagingKey`）と digest の
-        // 契約があの並びに依存している（`managersQuery` の doc の「`order` は
-        // 足さない」）。**並べ直すのはこの一覧の中だけである。**
-        //
-        // **#662 は2段で進めた。並びの向きを先に決め（#688）、その並びの上へ
-        // 継続点を足すのを後にした——「継続点を足す前に並びの向きを決めるのが
-        // 先だ」という順序そのものである。** #688 でこの並び（3群・
-        // `startedAt` 降順）を決め、**#662 段1でこの一覧（絞った先）に継続点
-        // （`cursor`）を足した。** 群の順序は #688 のまま1バイトも変えていない
-        // ——変えたのは、同値（`rank`/`startedAt` が同じ）だったときの順序
-        // （`managerId` 昇順。keyset で頁を繋ぐために要る）と、`status` で
-        // 絞った先を cursor で辿れるようにしたことだけである
-        // （`manager-cursor.ts` の doc を参照）。
-        //
-        // **`lost` は第2群として前へ出す（#688）。** かつてここには「`lost` は
-        // 終端なので、この並べ替えでは前へ出ない」と書いてあった——**それが穴の
-        // 本体だった。** `lost` は終端の値だが、成果の有無を1度も観測していない
-        // ので**確かめるまで終われない**（`digest.ts` の
-        // `isManagerAwaitingJudgement` の doc に出典）。⟹ 終端の袋に入れたまま
-        // だと、判断が要るものが古い側から窓の外へ落ちる。
-        //
-        // **#688 の1（知らせが1回しか出ない）は、ここでも直していない。**
-        // 再通知は作らない——`manager_message` は束ねられないので、`lost` の
-        // 本数がそのままクローンのターン数になる（`manager.ts` の
-        // 「きっかり7ターン」の実測）。代わりに**本数を必ず読める場所**
-        // （`describeManagerCounts` と `situation.ts` の節）へ置いた。
-        //
-        // **日報（#688 の2）は1バイトも変えていない。** `isManagerInFlight` へ
-        // `lost` を足すと `MAX_ITEMS` の枠を食う（同じ doc）。
+        // 走行中・返事待ち → lost → その他の3群で出す: `ManagerPool.list()` は稼働状態を見ない `startedAt` 降順で、終端した委譲が溜まると走行中が窓の外へ押し出され id が本文に出なくなるため
+        // `ManagerPool.list()` は変えない: HTTP の錨と digest の契約があの並びに依存しており、並べ直すのはこの一覧の中だけにする
+        // `lost` は第2群として前へ出す: 成果の有無を観測していないので確かめるまで終われず、終端の袋に入れると判断が要るものが窓の外へ落ちるため
+        // 再通知は作らない: `manager_message` は束ねられず、`lost` の本数がそのままクローンのターン数になるため
         const attention = [...managers].sort(compareManagerAttention);
-        // **絞りは文字数の予算より前に当てる。** 予算の後に当てると、絞りに
-        // 当たらない行が窓を食い尽くし、狙った行が窓の外へ落ちる——#418 の穴の
-        // 本体そのもので、`commitment_list` の `origin` が同じ順序で塞いである
-        // （そちらの逐語:
-        // `grep -Fn -- '`origin` は、`renderListing` が文字数の予算で切る前' packages/core/src/tools.ts`）。
-        // **未指定＝絞らない**（同じ契約）。
-        //
-        // ## `status: []`（空配列）は「絞らない」へ倒す。**この面の他の一覧とは逆である**
-        //
-        // **人間の入口（`GET /managers`）に揃えた。** あちらの逐語:
-        // `grep -Fn -- '**`status=`（空）は絞らない。**' apps/daemon/src/app.ts`
-        //
-        // > **`status=`（空）は絞らない。** 0件へ倒すと、絞りを解除した画面が
-        // > 「マネージャーが消えた」ように見える
-        //
-        // **⚠️ これは MCP 側の既存の契約とは逆の倒し方である。** `journal_read` の
-        // `types` / `with`、`limit: 0`、`commitment_list` の `origin` は
-        // **`[]` を「どれにも当たらない」＝0件**として扱い、3実装で測られた契約に
-        // なっている（逐語:
-        // `grep -Fn -- '**`[]`（空配列）= 0件。** 「どれにも当たらない」という指定として扱う。' packages/core/src/store.ts`）。
-        //
-        // **それでもこちらを採った理由は、この絞りの`双子`が誰かである。** あれらは
-        // **ストアの問い合わせ**の引数で、契約の持ち主は `JournalQuery` /
-        // `CommitmentStore` の側である。この `status` は**ストアを1文字も通らない**
-        // （`ManagerPool.list()` の結果をこの道具の中で絞るだけ）うえ、**足した理由
-        // そのものが `GET /managers?status=` との等価性**である（north_star 禁止1。
-        // 同じ資源・同じ引数名・同じ6値）。**同じ引数名が面によって逆の答えを返す
-        // ほうが、面の中で倒し方が揃わないことより重い。**
-        //
-        // **そして黙って無視しない。** `[]` を0件だと思って渡した呼び手には、
-        // 出力の側で「絞らずに全件を出した」と言う（下の `絞り込み:` の行）——
-        // ストア側の契約に慣れた読み手が、ここだけ違うことに出力から気づける形に
-        // しておく。**行が1本増えるのは `status` を渡した呼びだけで、渡さない呼びは
-        // 1文字も変わらない**（opt-in。歯が1バイト単位で突き合わせている）。
+        // 絞りは文字数の予算より前に当てる: 後だと絞りに当たらない行が窓を食い尽くし、狙った行が窓の外へ落ちるため
+        // `status: []`（空配列）は「絞らない」へ倒す。**この面の他の一覧とは逆である**: ストアを通らず、同じ引数名が面によって逆の答えを返すほうが、面の中で倒し方が揃わないことより重いため（`GET /managers?status=` に揃える）
+        // 黙って無視しない: `[]` を0件だと思って渡した呼び手には、出力で「絞らずに全件を出した」と言う
         const filtering = status !== undefined && status.length > 0;
         const view = filtering
           ? attention.filter((manager) => status.includes(manager.status))
           : attention;
-        // **#662 段1: cursor は `status` で絞った後（＝ここ）・文字数の予算で
-        // 切る前で解決する。** `origin`/`q` を予算の前で効かせる
-        // `commitment_list` と同じ順序——順序を変えると #418 と同じ形の穴
-        // （絞りに当たらない行が窓を食い尽くす）が開く。
-        //
-        // cursor の `status` は「刷られた一覧の status」を正規化した形
-        // （`normalizeManagerCursorStatus`）で持つ——`manager_list` は
-        // `status: []` を「絞らない」へ倒す契約（上の doc）なので、cursor
-        // 側もそれに揃える。
+        // cursor は `status` で絞った後・予算で切る前で解決する: 順序を変えると絞りに当たらない行が窓を食い尽くすため
         const cursorStatus = normalizeManagerCursorStatus(status);
         const cursorOutcome = resolveManagerCursor(view, managerPositionOf, cursorStatus, cursor);
         if (cursorOutcome.kind === 'malformed') {
@@ -7321,41 +7229,17 @@ export function createCloneTools(context: ToolContext) {
           );
         }
         const paged = cursorOutcome.view;
-        // **予算を先に決めて、入るところまで積む。** 件数から出力量を決めると、
-        // 何件で壊れるかが運任せになる。切ったなら必ずそう言う。
-        // 積む形そのものは `renderListing` が持つ（一覧ごとに手で書かない）。
+        // 予算を先に決めて入るところまで積む: 件数から出力量を決めると何件で壊れるかが運任せになるため
         const items = paged.map((manager) => {
-          // **焼いた status といまの status が食い違えば印を1つ足す（Issue
-          // #1036）。** 行を新しく増やさない——直下の「（… 受信）」という
-          // 既存の行へ添えるだけ（このすぐ下のコメントが書くとおり、行を
-          // 1本増やすと予算に張り付いている一覧では出る件数が減る）。
-          // 判定のコピーは作らない——生成元は `describeReportDrift` 1箇所で、
-          // `manager_report` と同じ字面の元から取る（真偽だけをここで使う）。
-          // 印の字面も同じ関数（`describeReportDriftMark`）から取る（CLI の `/managers` も呼ぶ。#2432）。
+          // 印は行を新しく増やさず既存の行へ添える: 行を1本増やすと予算に張り付いた一覧では出る件数が減るため
           const drift = describeReportDriftMark(manager, now);
           const driftMark = drift === null ? '' : `、${drift}`;
-          // **Issue #1394 段⑤: 「手が空いた委譲を畳む候補」を表示だけする。**
-          // 畳む操作そのものは作らない——判定は `manager-fold-candidate.ts` の
-          // `describeManagerFoldCandidate` 1箇所（このファイルでは判定を
-          // 作り直さない）。
-          //
-          // **条件3（その器が背景処理待ちの印を送る版であると確かめられる）は、
-          // 器の機能申告で確かめる**（#1394 段(C) / PR #1461）。器が `hello` で
-          // `RUNNER_CAPABILITY_AWAITING_BACKGROUND_SIGNAL` を名乗った分だけ
-          // `true` になる——名乗りを受けていない・旧い器・runnerId が無い委譲は
-          // `false`（「送っているはず」と仮定しない）。自動で畳む側
-          // （`manager.ts` の `#autoFoldIdleOnRunnerIfUnderPressure`）も同じ
-          // `runnerHasCapability` を読む。
-          //
-          // 条件5の材料は `turnEndedAt` ではなく `updatedAt` を渡す——
-          // `turnEndedAt` は `status: 'running'` の委譲でしか計算されない
-          // （`manager-fold-candidate.ts` の doc に理由がある）。
+          // 条件3は器の機能申告で確かめる: 名乗りを受けていない・旧い器・runnerId が無い委譲は「送っているはず」と仮定しない
+          // 条件5の材料は `turnEndedAt` ではなく `updatedAt`: `turnEndedAt` は `status: 'running'` の委譲でしか計算されないため
           const foldCandidateLine = describeManagerFoldCandidate(
             {
               status: manager.status,
               hasAwaitingBackgroundSignal: manager.awaitingBackground !== undefined,
-              // 器が「背景処理待ちの印を送る版」だと名乗ったか（#1394 段(C)）。
-              // 名乗りを受けていない・旧い器・runnerId が無い委譲は `false`。
               awaitingBackgroundSignalVersionConfirmed:
                 manager.runnerId !== undefined &&
                 (context.managers?.runnerHasCapability?.(
@@ -7370,84 +7254,27 @@ export function createCloneTools(context: ToolContext) {
           );
           return renderListingEntry({
             id: manager.managerId,
-            // **第3引数まで通す（#621 / #643）。** `status: 'done'` は
-            // 「手が空いた」と「背景処理の完了を待って畳んだ」を潰している——
-            // 潰れたぶんを戻すのは `describeManagerState` 1箇所である。
             title: `[${describeManagerState(manager.status, manager.live, manager.awaitingBackground)}]`,
             createdAt: manager.startedAt,
             updatedAt: manager.updatedAt,
             summary: `依頼: ${excerptLine(manager.request, LIST_REQUEST_EXCERPT)}`,
             extra: [
-              // **runnerId は空欄にしない。** 取れていないことを「未記録」という
-              // 文字列で読める形にする（AGENTS.md「取れない軸に0の行を作らない」と
-              // 同じ理由——空欄だと「取れていない」のか「読み忘れ」なのか区別できない）。
-              // **`live: false` の理由を、分かる分だけ名指しする。** 状態名だけだと
-              // 「セッションが終わった」のか「宛先の器が消えた」のかが読めず、
-              // 打つ手（起こし直すのか、器の側を見るのか）が決まらない。
-              // **断定は「器が黙っている」までである** — その中で走っていたか
-              // どうかは、この観測からは言えない（`ManagerSummary.runnerLostSince`）。
-              //
-              // **⚠️ 「いま話しかけられない」と書かないこと。実測して嘘だと
-              // 分かっている。**
-              //
-              // 2026-08-28 まで、ここは「新しい委譲の宛先からも外れている ⟹ いま
-              // 話しかけられない」と書いていた。**`packages/core` の足場で実測したら
-              // 偽だった** —— 名簿が `state: 'lost'` と判定した器に載っている委譲へ
-              // `ManagerPool.send()` を撃つと
-              // `{ outcome: 'delivered', detail: '追加指示として届けた。' }` が返り、
-              // runner の resume の口が実際に叩かれる。構造の理由: `#markSilent` は
-              // `entry.state` を `'lost'` にするだけで **`entry.client` を落とさず**、
-              // `Registry#get()` は `entry.state` を見ない（`list()` は `lost` を
-              // 除くが `get()` は除かない）。`send()` は `job.runnerId` が在れば
-              // `#runnerOf` → `get()` を通り、**`runnerLostSince` が立つのは
-              // `runnerId` が在るときだけ**なので必ずこちら側である。
-              //
-              // **これは一度閉じた欠陥と同じ形である。** `ba4053d`（#67「「いま
-              // 送っても届かず」の真下に、届く送信ボタンが並んでいた」）は、届く
-              // 相手に「届かない」と書いた**注記のほうを**直した（送信は塞がなかった
-              // —— 塞ぐと「人間が自分の言葉で繋ぎ直す唯一の手」が消える。
-              // north_star 禁止1）。
-              //
-              // **⚠️ #67 の commit 本文が持つ実測表（`delivered` / `unknown` の
-              // 2値）をそのまま当てないこと。あれは古い。** `0fb068f`（PR #571
-              // 「manager_send が [running] の相手へ 404 を貫通させる」#563）で
-              // `ManagerSendResult.outcome` は**4値**（`answered` / `delivered` /
-              // `session_missing` / `unknown`）になった。**commit 本文は書き換わら
-              // ないので、いつ偽になったかが本文からは読めない。**
-              //
-              // ⟹ **残してよいのは「新しい委譲の宛先からは外れている」まで**
-              // （`list()` が `lost` を除くので実測で真）。落とすのは送信可否の
-              // 推論だけである。生の値は PR #586 のコメント
-              // （`pull/586#issuecomment-5450674492`）に在る。
-              //
-              // **次の一手の語はこの面のものを使う** —— ここはクローンが読む面
-              // なので `manager_send` / `manager_start` / `runner_list` を名指し
-              // する（CLI は `/msg`、Web UI は画面の語）。
+              // runnerId は空欄にしない: 空欄だと「取れていない」のか「読み忘れ」なのか区別できないため「未記録」と書く
+              // 断定は「器が黙っている」までにする: その中で走っていたかはこの観測から言えない
+              // 「いま話しかけられない」と書かない: 名簿が `lost` と判定した器の委譲へも `send()` は実際に届くため
               `  runner: ${manager.runnerId ?? '未記録'}${
                 manager.runnerLostSince === undefined
                   ? ''
                   : `（この器は ${manager.runnerLostSince} 以降 名乗っていない。新しい委譲の宛先からは外れている（置き先として数えない）。**この委譲が失われたという意味ではない** — 黙っているのが器なのか経路なのかは、ここからは言えない（器の中でまだ走っていることもある）。話しかけることは塞いでいない — 戻る先（session_id）が在れば manager_send が resume を試みる（届くとは限らない）。${RESTART_BEFORE_CHECK_ADVICE}器そのものは runner_list で見る）`
               }`,
-              // 置き先の runner が名乗ったモデルだけを出す。取れない側は「不明」と書き、既定の帯（opus / sonnet）とは推測しない。
+              // 取れない側は「不明」と書き、既定の帯（opus / sonnet）と推測しない
               `  モデル: ${describeManagerModels(managerModelsOf(context.managers, manager))}`,
-              // **`runnerLostSince` と同じ作法で、別の行として出す（#563）。**
-              // `describeManagerState` は動かさない——`manager_list` と要約
-              // （`digest.ts`）で字面が割れると、そこで潰れることを防ぐために
-              // 作られた関数の意味が無くなる（あの doc を参照）。
-              //
-              // **`[running]` のままなのは正しい。** `status` は動かさないし、
-              // `live` も落ちない（`sessionId` が在れば resume から入り直せる）。
-              // ⟹ **`live: true` とこの行の組が5つ目の形を名指しする。**
-              // 件数のほうは `describeManagerCounts` が先頭で（予算に切られない
-              // 場所で）名乗る。
+              // 別の行として出し `describeManagerState` は動かさない: `manager_list` と要約で字面が割れるのを防ぐための関数のため
               manager.sessionMissingSince === undefined
                 ? null
                 : `  ⚠ 宛先の runner は ${manager.sessionMissingSince} の時点で、この委譲のセッションを持っていなかった` +
                   '（runner がそう答えた。聞けなかったのではない）。' +
-                  // **由来を畳まない（#579）。** 「resume でも入り直せなかった」と
-                  // 「名簿に載っていなかっただけ」では、読み手の次の一手が違う
-                  // （前者は始末をつける側、後者は manager_send で入り直せる）。
-                  // 字面の生成元は `describeSessionMissingKind` 1箇所である。
+                  // 由来を畳まない: 「resume でも入り直せなかった」と「名簿に載っていなかっただけ」では読み手の次の一手が違うため
                   describeSessionMissingKind(manager.sessionMissingKind) +
                   '**この委譲が失われたという意味ではない** — ' +
                   '完遂した後にセッションが畳まれ、終端イベントだけが届かなかった回も同じ形に見える' +
@@ -7456,64 +7283,22 @@ export function createCloneTools(context: ToolContext) {
                   'session_id が残っていれば manager_send が resume から入り直す。' +
                   RESTART_BEFORE_CHECK_ADVICE,
               `  cwd: ${manager.cwd}`,
-              // **`lost` を状態名だけで済ませない。** 「終わった」と読まれると、
-              // 完了していない仕事がそのまま片付く。何が起きたかと、次に何をすれば
-              // よいかを、この一覧の中で言い切る。
-              //
-              // **ただし、言い切れるのは観測した分までである。** `lost` が表して
-              // いるのは「前のセッションへ戻れなかった」という**一つの**観測で
-              // あって、成果の有無ではない。デーモンは PR もブランチも見ていない
-              // （リポジトリの事情はマネージャーの領域である）。実際に、落ちる
-              // 直前に PR を出して CI を通しマージまで済ませていた仕事が、その
+              // `lost` を状態名だけで済ませない: 「終わった」と読まれると完了していない仕事がそのまま片付くため
+              // 言い切るのは観測した分までにする: 落ちる直前にマージまで済ませていた仕事が、その
               // 1分半後の器の作り直しで `lost` になり、この行が「途中で失われて
-              // いる（完了ではない）」と嘘をついた。
-              //
-              // 断定を外しても `done` とは混ざらない。「戻れなかった」は
-              // 「終えて待っている」ではないからである（PR #42 の分け方は保つ）。
+              // いる（完了ではない）」と嘘をついた実害があるため
               manager.status === 'lost'
                 ? '  ⚠ 前のセッションへ戻れなかった。**戻れたかどうかしか見ていない** — ' +
                   'この仕事が終わっていたかは分からない（成果がリモートの PR・ブランチ・' +
                   'コミットまで届いていることがある）。まずそこを確かめ、続きが要ると' +
                   '判断したときだけ manager_start で起こし直すこと。'
                 : null,
-              // **既存の `lost` の注記（すぐ上）とは軸が違う（Issue #857）。**
-              // あちらは「戻れなかった」という**一つの観測**の名乗りと、次の一手
-              // （確かめてから `manager_start`）である。こちらは**依頼者が何を
-              // 観測していないか**——本文が届いているか——で、`failed` にも出る。
-              // **両方出しても同じことを2回は言っていない**ので、どちらも削っていない。
-              //
-              // **`lost` の行すべてに同じ注記が出て順位が付かない**、というのが
-              // #857 が直した穴そのものである（依頼者は1本ずつ `gh` を叩いて
-              // 成果の所在を測るしかなかった）。⟹ この行は委譲ごとに違う文になり、
-              // **並び（`judgementRank`）と同じ分類から作られる。**
-              //
-              // **対象外（`running` / `waiting_human` / `done` / `stopped`）
-              // では1文字も足さない。**
               unobservedOutcomeLine(manager),
-              // **拒否は `status` に映らない。** 分類器か deny 規則がその場で止めた
-              // 仕事は `running` のまま手が動かない。日誌と（繰り返したときだけ）
-              // 受信箱にしか出ないので、一覧を見ているクローンには「走っている」と
-              // しか読めなかった。状態の値は増やさず、状態に添える。
+              // 拒否は `status` に映らないので、状態の値は増やさず状態に添える
               denialLine(context.managers?.denials(manager.managerId) ?? [], manager.lastReportAt),
-              // **待ちの要約も抜粋を通す。** runner 側の `brief(input, 200)` が実質の
-              // キャップになっていたが、`AskUserQuestion` の経路（`describeQuestions`）は
-              // 質問文を `join(' / ')` で連ねてそのキャップを通らない。ここを通して
-              // おけば、上流のどの経路から来ても一覧は伸びない。
-              // **種別（質問 / 実行許可）と、待ち始めた時刻も出す（#334 / #323）。**
-              // クローンは `requestId` と要約だけでは、答えるべきなのが自由な
-              // 言葉での回答なのか許可の可否なのかを読めなかった——画面側と
-              // 同じ穴がここにもあった。時刻は runner が確認を受け取った瞬間
-              // （`askedAt`）で、答えが来た時刻ではない。5分前と4時間前とで
-              // 次にすべきことが変わる（#323: 報告が何時間も遅れる欠陥）。
-              // **どちらも省略されうる**（版のずれの窓。`describeWaitingKind` /
-              // `describeAskedAt` の doc）——欠けていても「実行許可」「undefined
-              // から」と嘘をつかず、`種別不明` にして時刻の断片を落とす。
-              // **件数そのものにも上限を置く（#409）。** 1件ごとの厚みは
-              // `LIST_WAITING_EXCERPT` が締めていたが、`manager.waiting` は
-              // `push` のみで増える配列で件数には上限が無かった——外側の
-              // `renderListing` は「マネージャー1本ぶん」を1件として文字数の
-              // 予算を見るので、この配列だけが伸びると1本のマネージャーだけで
-              // 予算を占有し、他のマネージャーが黙って押し出される。
+              // 待ちの要約も抜粋を通す: `AskUserQuestion` の経路は質問文を連ねて runner 側のキャップを通らないため
+              // 欠けていても「実行許可」「undefined から」と嘘をつかず、`種別不明` にして時刻の断片を落とす
+              // 件数にも上限を置く: `manager.waiting` は増える一方で、伸びると1本のマネージャーが予算を占有し他が押し出されるため
               ...manager.waiting.slice(0, MANAGER_WAITING_LIST_LIMIT).map((item) => {
                 const askedAtNote = describeAskedAt(item.askedAt);
                 return (
@@ -7526,135 +7311,34 @@ export function createCloneTools(context: ToolContext) {
                 ? `  …ほか ${manager.waiting.length - MANAGER_WAITING_LIST_LIMIT} 件の返事待ちは省略` +
                   `（全 ${manager.waiting.length} 件。manager_send に requestId を渡せば個別に答えられる）。`
                 : null,
-              // **失敗は報告の`上`に置く（Issue #714）。** 下に置くと、包まれた
-              // エラー文（`lastReport`）を先に読んでから「実は報告ではない」と
-              // 分かる順になる。人間の CLI が同じ順で置いてある
-              // （`apps/cli/src/chat.ts` の「**失敗は報告の**上**に置く。**」）。
+              // 失敗は報告の上に置く: 下だと包まれたエラー文を先に読んでから「実は報告ではない」と分かる順になるため
               failureLine(manager),
-              // **枠(利用上限)で止まっている委譲も、同じ「失敗は報告の上」の
-              // 順で置く（#1212 残件2の続き）。** `lastFailure` の行（すぐ上）
-              // とは別の軸なので別行——**両方が同時に出ることがある**
-              // （`usageStoppedLine` の doc。排他にしない決定は `situation.ts`
-              // 側で確定している）。**健全なマネージャーでは `null` を返し、
-              // 1文字も増えない。**
               usageStoppedLine(manager),
-              // **`running` のまま宛先の runner が名簿から消えている委譲も、
-              // 同じ「失敗は報告の上」の順で置く（Issue #1212 running 側。
-              // 段1）。** `lastFailure` / `usageStoppedAt` とは別の軸なので
-              // 別行——**この行は `lost` の本数に関係なく出す**（`lost` の
-              // 絞りでは拾えない集合そのものを名指しするため）。
-              // **健全なマネージャーでは `null` を返し、1文字も増えない。**
               runnerVanishedLine(manager),
-              // **セッションそのものが `failed` として畳まれた落ち方も、同じ
-              // 「失敗は報告の上」の順で置く（Issue #713 段3）。** `lastFailure`
-              // の行（すぐ上）とは別の軸なので別行——**両方が同時に出ることは
-              // ある**（`lastFailure` を残したまま `case 'report'` を一度も
-              // 経ずにセッションごと `closed`/`failed` で落ちた回。`lastFailure`
-              // は `case 'closed'` では消えない）。その場合は「直近のターンが
-              // 失敗で終わり、その後セッション自体も落ちた」という順の2つの
-              // 事実として両方読める——どちらかを隠さない。
-              // **健全なマネージャーでは `null` を返し、1文字も増えない。**
               systemErrorLine(manager),
-              // **同じ「失敗は報告の上」の順で置く（Issue #1517「最小の形」
-              // 2）。** `systemErrorLine`（すぐ上）とは別の軸なので別行——
-              // 両方が同時に出ることがある（`code` を持つ例外かつ cgroup も
-              // 読めた回）。**健全なマネージャーでは `null` を返し、1文字も
-              // 増えない。**
               cgroupEventsLine(manager),
               manager.lastReport === undefined
                 ? null
-                : // **時刻は既存の行に添えるだけ**（#358）。行を1本増やすと、
-                  // 予算に張り付いている一覧では出る件数が減る（この道具の doc
-                  // の実測を参照）。`lastReportAt` が無い行（古いデータ・版の
-                  // ずれ）には何も足さない——「未受信」のような行は作らない。
-                  //
-                  // **失敗した回・畳まれた回は「報告」と呼ばない（Issue #714 /
-                  // #917）。** 本文は runner 側で「（このターンは応答を返さずに
-                  // 終わった: …）」/「（このターンは結果を受け取らないまま
-                  // 畳まれた: …）」と包まれているが、見出しが「直近の報告」の
-                  // ままだと、包みの内側だけを読んで報告として扱うことになる
-                  // ——**クローンが2026-09-08に実際にそう読んでいる**（#714）。
-                  // 字面は人間の CLI と揃えてある（`apps/cli/src/chat.ts` の
-                  // `直近のターンの中身`）——同じ台帳の欄を2つの面が別の語で
-                  // 呼ぶと、面をまたいで読む人間がそこで詰まる。判定は
-                  // `isFoldedTurnReport` に寄せてある（その doc を参照）。
+                : // 時刻は既存の行に添えるだけ: 行を1本増やすと予算に張り付いた一覧では出る件数が減るため、`lastReportAt` が無い行には「未受信」のような行を作らない
+                  // 失敗した回・畳まれた回は「報告」と呼ばない: 見出しが「直近の報告」のままだと包みの内側だけを読んで報告として扱うため
                   `  ${isFoldedTurnReport(manager) ? '直近のターンの中身' : '直近の報告'}${manager.lastReportAt === undefined ? '' : `（${manager.lastReportAt} 受信${driftMark}）`}: ${excerptLine(manager.lastReport, LIST_REPORT_EXCERPT)}`,
-              // **Issue #567**: ターンが終わっているらしいのに報告が届いて
-              // いない可能性を、条件つきで添える（`describeTurnEnd` の doc）。
-              // **健全なマネージャーでは `null` を返し、1文字も増えない**——
-              // 予算に張り付いている一覧で行を1本増やすと出る件数が減るため
-              // （すぐ上の `lastReport` 行の doc と同じ理由）。
               describeTurnEnd(manager),
-              // **Issue #572**: 「道具の応答待ちのまま、誰も待っていない」という
-              // 矛盾を、条件つきで添える（`describeToolUseStall` の doc）。
-              // **`describeTurnEnd` とは同時に出ない**——あちらは末尾の
-              // `stop_reason` が `tool_use` **以外**のとき、こちらは `tool_use`
-              // のときにだけ材料が立つ（`ManagerPool#probeTurnEndOf` の doc）。
-              // **健全なマネージャーでは `null` を返し、1文字も増えない。**
-              // **返事待ち（`waiting`）が在るものにも出さない**——それは届いて
-              // いて、クローンがまだ答えていないだけの正常な状態である。
               describeToolUseStall(manager),
-              // **Issue #914 提案1**: この委譲が抱えている認証トークンの
-              // 世代と、現役の世代が食い違っていないかを添える
-              // （`describeTokenGeneration` の doc）。**⚠️ Issue #988で変わった
-              // — 世代が測れていないときも `null` にはならず、なぜ測れて
-              // いないか（プール未配線／未観測／再起動をまたいだ引き取り）
-              // を名乗る行が出る**（`TokenGenerationUnknownReason` の doc）。
               describeTokenGeneration(manager),
-              // **Issue #914 オーナー提案(2)**: 429の文言のresets時刻を、
-              // プールのcooldownUntilと突き合わせた結果を添える
-              // （`describeResetTimeSkew` の doc）。**提案1が既に同じ結論を
-              // 出しているときは二重に鳴らさない**——同じ関数がその判定も
-              // 兼ねる。
               describeResetTimeSkew(manager),
-              // **Issue #1394 段⑤。** 健全な（候補ではない）委譲では `null` を
-              // 返し、1文字も増えない——他の `describe*` と同じ約束。
               foldCandidateLine,
-              // **Issue #1266**: `manager_stop`（running・非 force）の断りが
-              // 最後に取った、未 push の作業ツリーの観測を添える
-              // （`describeUnpushedWorkObservation` の doc）。**観測が無い
-              // 委譲では `null` を返し、1文字も増えない**——予算に張り付いて
-              // いる一覧で行を1本増やすと出せる件数が減るため（他の条件付き
-              // 行と同じ理由）。
               describeUnpushedWorkObservation(manager),
-              // **Issue #2183: ここには足さないと決めた。** `manager_report`
-              // には `describeWithheldReports` を足した（すぐ下の説明文が
-              // 案内する先）が、この一覧の行には足していない——理由は2つ。
-              // (1) この一覧は既に「背景処理待ち×N」で `tasks`（在り高）を
-              // 名乗っており、`withheldReports`（本数）まで並べると読み手は
-              // 2つの数を1本の行で見比べることになる——`ManagerAwaitingBackground`
-              // の doc が名指しで禁じているのは「1つに畳む」ことで、**別行でも
-              // 隣に置けば同じ混同が起きる**。(2) この一覧は文字数の予算
-              // （`LIST_BUDGET`）に張り付いていて、行を1本増やすと出せる件数が
-              // 減る（すぐ上の他の条件付き行と同じ制約）——`awaitingBackground`
-              // は多くの委譲で立たない軸なので費用は小さいが、詳細を持たない
-              // 数だけを並べても読み手の次の一手は変わらない（「配っていない
-              // 報告が N 本ある」と分かっても、この一覧からできることは
-              // 変わらず、結局 manager_report / journal_read へ掘りに行く）。
-              // ⟹ この一覧はいまのまま「案内する側」に留め、実際の本数と
-              // 内容は掘った先（`manager_report`）に置く。
+              // `describeWithheldReports` はここには足さない: 「背景処理待ち×N」の `tasks` と並べると別行でも混同が起き、行を増やしても読み手の次の一手は変わらないため
             ],
           });
         });
         return text(
           [
-            // **本数は一覧の外に出す。** 一覧は予算で打ち切られる（すぐ下の
-            // `omitted`）ので、**出ている行を数えても全体の本数にはならない。**
-            // クローンは実際にこれで誤り、「いま走っている」を数え上げて
-            // 終わった仕事へ委譲を重ねかけた。切られない場所に置くこと。
-            // **件数は絞る前の全件で出す（`status` を渡した呼びでも動かさない）。**
-            // ここは予算に切られない場所で、絞りのせいで全体の実像が見えなくなる
-            // 形にしてはいけない——この行が在る理由そのものが「一覧を数えて
-            // 本数を答えさせない」ことだからである（`describeManagerCounts` の doc）。
+            // 本数は一覧の外に出す: 一覧は予算で打ち切られ、出ている行を数えても全体の本数にならないため。件数は絞る前の全件で出す: 絞りのせいで全体の実像が見えなくなる形にしないため
             describeManagerCounts(managers),
-            // 件数の行と同じく予算に切られない場所に置く（issue #2345）。
             unreadableJobNote,
-            // **絞ったことは、件数の行とは別の行で言う。** 件数の行に混ぜると
-            // 「絞る前の全体」と「絞った後」が1行の中で並び、どちらの数なのかを
-            // 読み分ける負担が読み手に移る。
-            // **⚠️ `status: []` は「絞らなかった」と言う。黙って無視しない**
-            // （上の `view` の doc — この面の他の一覧は `[]` を0件として扱うので、
-            // ここだけ倒し方が違うことを出力から気づける形にしておく）。
+            // 絞ったことは件数の行とは別の行で言う: 混ぜると「絞る前の全体」と「絞った後」がどちらの数なのかを読み分ける負担が読み手に移るため
+            // `status: []` は「絞らなかった」と言う: 黙って無視しないため
             status === undefined
               ? null
               : filtering
@@ -7665,48 +7349,16 @@ export function createCloneTools(context: ToolContext) {
                   '0件へ倒すと絞りを解除した呼びが「マネージャーが消えた」ように見えるため）。' +
                   '**journal_read の types / commitment_list の origin は [] を0件として扱うので、' +
                   'この道具だけ倒し方が違う**（理由は tools.ts の doc に在る）。',
-            // **絞った結果が0件なのと、委譲が1本も無いのを分ける。** 「無い」と
-            // 読めると、絞りが厳しかっただけなのに台帳の側を疑うことになる
-            // （`commitment_list` の `origin` が同じ分け方をしている）。
+            // 絞った結果が0件なのと委譲が1本も無いのを分ける: 「無い」と読めると、絞りが厳しかっただけなのに台帳の側を疑うことになるため
             view.length === 0
               ? '（この status の絞り込みに当たる委譲は無い。絞る前の件数は上の行に在る）'
-              : // **#662 段1: cursor で辿り切った（最後の頁）を、絞り込みの0件とは
-                // 別の文にする。** `commitment_list` の `view.length === 0` の
-                // 分岐と同じ区別——`view`（絞り込み後・cursor 適用前）は0件では
-                // なかったので、ここに来た0件は「もう続きが無い」ことを意味する。
+              : // cursor で辿り切った最後の頁を、絞り込みの0件とは別の文にする
                 paged.length === 0
                 ? '（cursor より後ろの、この絞り込みに当たる委譲は無い。これが最後の頁）'
                 : renderListing(items, {
                     budget: LIST_BUDGET,
-                    // **並びを実装と一致させる（#688 の3）。** ここは「走っているものから
-                    // 順に出している」と書いてあったが、実装は稼働状態を1度も見て
-                    // いなかった（`ManagerPool.list()` は `startedAt` 降順）。
-                    // **絞ったときは「絞った後の件数」だと分かる形で言う**——
-                    // `total` を絞る前の全体と読まれると、絞りの効き目が嘘になる
-                    // （`commitment_list` の `origin` の断り書きと同じ約束）。
-                    // **`filtering` で分ける（`status === undefined` ではない）。**
-                    // `status: []` は絞っていないので、母数は全体である——ここを
-                    // `status` の有無で分けると `status:  に絞った` という空の
-                    // 絞りを名乗る（渡した文字が1つも無いのに絞ったと言う嘘）。
-                    //
-                    // **母数（`total`）は `view.length`（cursor を当てる前・
-                    // status で絞った後）を使う。** `renderListing` が渡す
-                    // `total`（＝ `items.length` ＝ `paged.length`——cursor
-                    // 以降の残り）は使わない。頁が進んでもこの数は変わらない
-                    // （`commitment_list` が同じ理由で同じことをしている。
-                    // 逐語で当たる:
-                    // `grep -Fn -- 'ここではあえて \`renderListing\` が渡す値' packages/core/src/tools.ts`）。
-                    //
-                    // **数字の帰属**: `total`＝絞った後の全体（変わらない母数）、
-                    // `shown`＝この頁で出した分、`rest`＝この頁より後ろで
-                    // まだ出していない分（全体のうち出ていない分ではない——
-                    // 頁が進むたびに減っていく数）。
-                    //
-                    // **⚠️ `renderListing` は `items.length > 0`（＝ここに来る
-                    // 時点で `rest > 0` ゆえに `omitted` が呼ばれる分岐）のとき
-                    // 必ず最低1件を先頭に出す。** `paged.length === 0` は上で
-                    // 早期に別文へ分けてあるので、`shown >= 1` は保証される
-                    // （`lastShown` は必ず定義される）。
+                    // `status` の有無ではなく `filtering` で分ける: `status: []` は絞っていないので、有無で分けると渡した文字が無いのに絞ったと言う嘘になるため
+                    // 母数は `renderListing` が渡す `total` ではなく `view.length` を使う: 頁が進んでも変わらない数にするため
                     omitted: ({ rest, shown }) => {
                       const total = view.length;
                       const lastShown = paged[shown - 1]!;
@@ -7724,11 +7376,6 @@ export function createCloneTools(context: ToolContext) {
                         '各群の中は startedAt の新しい順である。' +
                         '**省略されたのは終端したもの（またはより古いもの）の側である。**' +
                         `続きは manager_list cursor=${nextCursor}${statusArg} で取れる（status は同じまま呼ぶこと）。` +
-                        // **③（届かない範囲を名乗る）の実践。** cursor で辿れる
-                        // ようになった後もなお残る性質を約束にせず添える——
-                        // 台帳に保持期間も掃除の機構も無いことは事実だが、
-                        // それをどうするかは書かない（north_star 禁止2、
-                        // AGENTS.md「数を書かない」と同じ理由で言い切らない）。
                         '委譲の台帳には保持期間も掃除の機構も無いので、辿る頁数は台帳の本数に比例して増える。' +
                         'status で絞れば頁数を減らせる。'
                       );
@@ -7744,13 +7391,6 @@ export function createCloneTools(context: ToolContext) {
       },
     ),
 
-    /**
-     * 一覧を抜粋にした以上、**全文への行き先が要る。**
-     *
-     * 人間は Web UI と `GET /managers/:id/transcript` で全文を読める。クローンに
-     * 同じ手が無いまま抜粋だけにすると、削っただけになる（north_star 禁止1）。
-     * 長ければ切って捨てるのではなく、`offset` で続きを取れる形にする。
-     */
     tool(
       'manager_report',
       [
@@ -7781,10 +7421,7 @@ export function createCloneTools(context: ToolContext) {
         const managers = await context.managers.list();
         const found = managers.find((manager) => manager.managerId === managerId);
         if (!found) {
-          // **読めない委譲の行は、「居ない」と分けて言う（issue #2359 の1）。** `list()` は
-          // 読めない行を飛ばすので、壊れた行の id を引いても見つからない。見つからなかった
-          // ときだけ台帳を読み直して確かめる（単票の取得のたびに一覧を読まない）。
-          // `schedule_list kind=` の `UnreadableScheduleError` の言い分けと同じ線。
+          // 読めない委譲の行は「居ない」と分けて言う: 見つからなかったときだけ台帳を読み直す（単票の取得のたびに一覧を読まない）
           const unreadableRow = (await context.stores.jobs.listUnreadableJobs()).find(
             (row) => row.id === managerId,
           );
@@ -7797,70 +7434,26 @@ export function createCloneTools(context: ToolContext) {
           );
         }
 
-        // `manager_list` と同じ字面（取れなければ「不明」）。
         const modelLine = `モデル: ${describeManagerModels(managerModelsOf(context.managers, found))}`;
-        // **停止後に届いた、畳まれたターンの本文（Issue #1038）。**
-        // `part === 'request'` では扱わない——依頼文の話ではない。**在れば
-        // `lastReport`（完遂した報告）より優先して見せる**——`lastFoldedTurn`
-        // は `lastReport` より後に届いた内容だからである（`case 'report'` は
-        // `record.job.status === 'stopped'` の間だけここへ書き、`lastReport`
-        // は触らない）。これが無いと、「停止後に届いた本文に到達できること」
-        // （#1038 の要件）が満たせない——`lastReport` の陰に隠れたまま
-        // `manager_report` からは一生読めなくなる。
+        // 在れば `lastReport` より優先して見せる: `lastFoldedTurn` は `lastReport` より後に届いた内容で、陰に隠れたままだと `manager_report` から一生読めなくなるため
         const foldedTurn = part === 'request' ? undefined : found.lastFoldedTurn;
         const body = part === 'request' ? found.request : (foldedTurn?.text ?? found.lastReport);
         if (body === undefined || body.length === 0) {
           if (part === 'request') {
             return text(`マネージャー ${managerId} の依頼文が記録に無い。`);
           }
-          // #323: 依頼文（part === 'request'）では見に行かない——往復を無条件に
-          // 増やさない。「報告はまだ無い」を返す直前、report のときだけ生ログを
-          // 見て「まだ書いていない」と「書いたのに届いていない」を分ける。
+          // 依頼文では見に行かない: 往復を無条件に増やさないため、report のときだけ生ログを見る
           const missing = await describeMissingReport(context.managers, managerId, found.status);
-          // **manager_list 専用の3軸を継承する（Issue #1847）。** `manager_list`
-          // は `usageStoppedLine` / `runnerVanishedLine` / `describeUnpushedWorkObservation`
-          // の3行を `failureLine` 等と同じ場所に出しているが、`manager_report`
-          // は1つも継承していなかった——「manager_list は抜粋なので、欠落に
-          // 気づいたらここで全部読むこと」という案内自体がここで嘘になっていた。
-          // 材料の生成元は変えず（`describeUsageStopped` / `describeRunnerVanished`
-          // 1箇所ずつ、`manager_list` と割れない）、報告の有無とは別の軸なので
-          // 「報告が空の回だからこちらも出さない」にはしない——直上の
-          // `describeManagerSystemError` の doc と同じ理由。
+          // 報告の有無とは別の軸なので、報告が空の回だからこちらも出さない、にはしない
           const usageStopped = describeUsageStopped(found);
           const runnerVanished = describeRunnerVanished(found);
-          // **#713 段3: 報告が一度も届いていない回でも、セッションが `failed`
-          // として畳まれた落ち方は分かることがある。** `describeManagerSystemError`
-          // は `lastReport` の有無を見ていない——`lastSystemError` は `case
-          // 'closed'` が立てる欄で `lastReport` とは別の書き込み元なので、
-          // 「報告が無い」を理由にこちらまで黙らせない（片方が空だからもう
-          // 片方も出さない、にはしない）。
           const systemError = describeManagerSystemError(found);
-          // **同じ理由で、cgroup の分類も報告が空の回で拾う（Issue #1517
-          // 「最小の形」2）。** 軸は `systemError` と別だが、材料の在り無しの
-          // 形は同じ——片方が空だからもう片方も出さない、にはしない。
           const cgroupEvents = describeManagerCgroupEvents(found);
-          // **報告が空の回こそ、拒否がいちばん効く（Issue #830）。** 分類器か
-          // deny 規則で手が止まった委譲は `running` のまま報告を書かないので、
-          // **この枝に落ちる**。ここで黙ると、クローンは「まだ書いていない」と
-          // 「番人に止められて書けない」を区別できない——直上の #713 段3 の
-          // コメントと同じ理由で、片方が空だからもう片方も出さない、にはしない。
+          // 報告が空の回でも拒否は出す: 黙ると「まだ書いていない」と「番人に止められて書けない」を区別できないため
           const denied = describeDenials(context.managers.denials(managerId), found.lastReportAt);
-          // **この枝こそが軸1の `none`（本文が1文字も届いていない）である**
-          // （Issue #857）。`manager_list` で「何も届いていない」と読んだ
-          // クローンが掘りに来る先がここなので、**ここで黙ると、順位を付けた
-          // 意味が掘った先で消える**——`describeManagerSystemError` /
-          // `describeDenials` を同じ枝に置いてあるのと同じ理由で、片方が空だから
-          // もう片方も出さない、にはしない。字面の生成元は
-          // `describeUnobservedOutcome` 1箇所で、`manager_list` と割れない。
+          // この枝でも出す: `manager_list` で「何も届いていない」と読んだクローンが掘りに来る先で、黙ると順位を付けた意味が掘った先で消えるため
           const unobserved = describeUnobservedOutcome(found);
-          // **3軸のうち3つ目（Issue #1847）。** `describeUnpushedWorkObservation`
-          // は `manager_list` の一覧表示用に先頭2字下げを埋め込んで返す——
-          // `manager_report` はインデントの無い地の文なので、`unpushedWorkReportNote`
-          // でその飾りだけを落とす（判定・文言そのものは1文字も変えない）。
           const unpushedWork = unpushedWorkReportNote(found);
-          // **Issue #2183: 配っていない報告の本数も同じ理由でここに出す。**
-          // 字面の生成元は `describeWithheldReports` 1箇所で、`manager_list`
-          // の「背景処理待ち×N」（`tasks`）とは割れない。
           const withheldReportsNote = describeWithheldReports(found);
           return text(
             [
@@ -7880,33 +7473,8 @@ export function createCloneTools(context: ToolContext) {
           );
         }
 
-        // **失敗した回は「報告」と呼ばない（Issue #714）。** `manager_list` で
-        // 「失敗で終わった」と読んだクローンが全文を掘りに来る先がここである
-        // ——ここの見出しが「直近の報告」のままだと、**⚠ を見た直後に、包みの
-        // 内側だけを読んで報告として扱うことになる**（それが実際に起きた読み
-        // 違えである）。字面の生成元は `describeManagerFailure` 1箇所で、
-        // `manager_list` と割れない。
-        //
-        // **`result` を受け取らないまま畳まれた回も同じ扱い（Issue #917）。**
-        // 見出し自体の判定は下の `label`（`isFoldedTurnReport`）へ寄せてある
-        // ——`describeManagerFailure` はあくまで ⚠ の注記文を作る関数で、
-        // `lastUnreported` には対応する注記が無い（この回は SDK が失敗を
-        // 名乗っていないので、失敗の注記を出すと取れない事実を取れた顔で
-        // 出すことになる）。
-        //
-        // **`part === 'request'` では何もしない。** 依頼文はそもそも報告では
-        // ないので、失敗の有無で呼び方が変わる欄ではない。
-        //
-        // **`foldedTurn !== undefined` の回も出さない（Issue #1798）。**
-        // `found.lastFailure` は `manager.ts` の `case 'report'` が
-        // `record.job.status === 'stopped'` の間は一切触らない欄なので
-        // （`lastFoldedTurn` だけを書いて早期 return する分岐）、foldedTurn が
-        // 在る回の `lastFailure` は必ず畳まれる**前**の、無関係な古いターンを
-        // 指す。`describeManagerFailure` の注記は「この行の下に出る本文は
-        // runner が包んだエラー文…であって報告ではない」と言い切るが、実際に
-        // 下へ出るのは `foldedTurn.text`（普通の発話でありうる）——注記が予告
-        // する本文の種類と実際の本文が食い違う（#1798 の実測）。当てはまらない
-        // 注記は出さない。
+        // 失敗した回は「報告」と呼ばない（Issue #714）: 見出しが「直近の報告」のままだと、⚠ を見た直後に包みの内側だけを読んで報告として扱うため
+        // `foldedTurn` が在る回は注記を出さない: `lastFailure` は畳まれる前の無関係な古いターンを指し、注記が予告する本文の種類と実際の本文が食い違うため
         const managerFailure =
           part === 'request' || foldedTurn !== undefined
             ? null
@@ -7916,58 +7484,12 @@ export function createCloneTools(context: ToolContext) {
                 found.status,
                 tokenGenerationMismatched(found),
               );
-        // **manager_list 専用の3軸のうち2つ（Issue #1847）。** `manager_list`
-        // の `usageStoppedLine` / `runnerVanishedLine` と同じ材料を、同じ
-        // 生成元（`describeUsageStopped` / `describeRunnerVanished` それぞれ
-        // 1箇所）でそのまま出す——`failure` とは別の軸なので、両方が同時に
-        // 出ることがある（`usageStoppedLine` の doc）。`part === 'request'`
-        // では出さない（`failure` と同じ線）。
         const usageStopped = part === 'request' ? null : describeUsageStopped(found);
         const runnerVanished = part === 'request' ? null : describeRunnerVanished(found);
-        // **セッションそのものが `failed` として畳まれた落ち方も同じ場所で
-        // 掘れる（Issue #713 段3）。** `manager_list` の `systemErrorLine` と
-        // 同じ材料——`part === 'request'` では出さない（依頼文はそもそも
-        // このセッションの落ち方の話ではない）。
-        //
-        // **確かめた: foldedTurn の回との食い違いは無い（#1797/#1798 の監査）。**
-        // `describeManagerSystemError` は `found.status !== 'failed'` で
-        // `null` を返す。`foldedTurn` が在る回は `manager.ts` の `case
-        // 'report'` が `record.job.status === 'stopped'` の間だけ書く欄で、
-        // その分岐も `case 'closed'` の対応する早期 return も `status` を
-        // 動かさない——`status` が `'stopped'` から離れるのは `send()` が
-        // 直接 `'running'` へ書く経路だけで、`'failed'` へは行かない。
-        // ⟹ 通常の到達経路では foldedTurn と `status === 'failed'` は同時に
-        // 立たないので、このまま出しても本文の種類を誤って予告しない
-        // （systemError の文言自体も「本文はこれです」という予告はしていない）。
         const systemError = part === 'request' ? null : describeManagerSystemError(found);
-        // **同じ場所で掘れる（Issue #1517「最小の形」2）。** `manager_list`
-        // の `cgroupEventsLine` と同じ材料——`systemError` と同じ軸ではない
-        // ので、両方が同時に出ることがある。`part === 'request'` では出さない
-        // （`failure` / `systemError` と同じ線）。**確かめた: 同じ理由
-        // （`status === 'failed'` ガード）で foldedTurn の回とは食い違わない
-        // （すぐ上の `systemError` の注記と同じ監査）。**
         const cgroupEvents = part === 'request' ? null : describeManagerCgroupEvents(found);
-        // **拒否も同じ場所で掘れる（Issue #830）。** `manager_list` の `denialLine`
-        // と同じ材料を、同じ字面（`describeDenials`）で出す。**報告が在る回でも
-        // 出す** —— 報告を書いた後で別の道具を止められている形が在り、そのとき
-        // 本文だけ読むと「報告どおり進んでいる」と読めてしまう。
-        //
-        // **`part === 'request'` では出さない。** 依頼文はこのセッションで何が
-        // 止められたかの話ではない（`failure` / `systemError` と同じ線）。
-        //
-        // **foldedTurn の回は `found.lastReportAt` の代わりに `foldedTurn.at`
-        // を渡す（#1797/#1798 の監査で見つけた、同根の食い違い）。**
-        // `describeDenials` → `describeDenialFollowUp` は「拒否の後に委譲が
-        // 進んだか」を `lastReportAt` と拒否の時刻の前後で判定する。だが
-        // `found.lastReportAt` は `case 'report'` の `status === 'stopped'`
-        // 分岐では更新されない（`lastFoldedTurn` だけを書く）ので、foldedTurn
-        // が在る回の `lastReportAt` は畳まれる前の古い値のままになりうる——
-        // 拒否がその後（停止後）に記録され、さらにその後に畳まれたターンが
-        // 届いた場合、古い `lastReportAt` だけを見ると「拒否の後の報告はまだ
-        // 届いていない」と誤って判定する（実際には foldedTurn が拒否の後に
-        // 届いている）。`foldedTurn.at` は `lastReportAt` より必ず新しい
-        // （foldedTurn は `lastReportAt` を書いた後にしか書かれない分岐でしか
-        // 生まれない）ので、在ればそちらを使う。
+        // 報告が在る回でも拒否は出す: 報告を書いた後で別の道具を止められていると、本文だけ読むと「報告どおり進んでいる」と読めるため
+        // foldedTurn の回は `lastReportAt` の代わりに `foldedTurn.at` を渡す: `lastReportAt` は畳まれる前の古い値のままで、「拒否の後の報告はまだ届いていない」と誤判定するため
         const denied =
           part === 'request'
             ? null
