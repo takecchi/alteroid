@@ -16,22 +16,6 @@ import {
   // @ts-expect-error -- 素の .mjs（型宣言を持たない build 用スクリプト）を読む
 } from '../../scripts/main-ci-alarm-core.mjs';
 
-/**
- * `record-release-prod-ci` の歯（Issue #1207 の (3)）。
- *
- * **ここは core（`record-release-prod-ci-core.mjs`）の純粋な部分だけを測る。**
- * ネットワーク（`git` / `gh`）は一切叩かない —— `check-pr-green.test.ts` /
- * `main-ci-alarm.test.ts` と同じ理由（手元は offline でありうるし、本物の
- * Issue へ書く実験はできない）。ネットワーク層（`record-release-prod-ci.mjs`
- * 自体）の検証は、この PR の報告に載せた dry-run の生出力（apply なし）で
- * 行っている。
- *
- * **下の固定値は実測を写したものである**——健全な main HEAD
- * `ecd1674e09c72b245db21b225f56ac590fd336af`（`out-of-scope`）と、本物の赤
- * `3ca63973b7dae66b48b033a962a92e19c7e73e63` / run `34709221407`
- * （`main-ci-alarm.test.ts` が使っているのと同じ実測固定値。#1207 本文の表に
- * 在る、28日で6回落ちたうち赤い区間が最長だった回）。
- */
 
 const REAL_RED_SHA = '3ca63973b7dae66b48b033a962a92e19c7e73e63';
 const REAL_RED_RUN_ID = 34709221407;
@@ -106,7 +90,7 @@ describe('redWorkflowNames', () => {
     const latestRuns = [
       { name: 'CI', conclusion: 'failure' },
       { name: 'release/prod へ反映', conclusion: 'success' },
-      { name: 'CI', conclusion: 'failure' }, // 同名重複
+      { name: 'CI', conclusion: 'failure' },
     ];
     expect(redWorkflowNames(latestRuns)).toEqual(['CI']);
   });
@@ -143,9 +127,6 @@ describe('buildRecordComment × runAlreadyMentioned（赤で同じ run が既出
 
   it('同じ run の記録が既に本文/コメントに在れば、runAlreadyMentioned が true を返す', () => {
     const firstComment = buildRecordComment(commonInput);
-    // main-ci-alarm-core.mjs の runAlreadyMentioned は「本文＋既存コメント全部」を
-    // 1つの配列として受け取る想定（decideAlarmAction と同じ形）。1回目に書いた
-    // コメント自身がその texts に含まれる状況を模す。
     expect(runAlreadyMentioned([firstComment], REAL_RED_RUN_ID)).toBe(true);
   });
 
@@ -163,13 +144,6 @@ describe('buildRecordComment × runAlreadyMentioned（赤で同じ run が既出
   });
 });
 
-/**
- * `health=` 欄（実測された誤読2段への対処）。
- *
- * ⭐ **いちばん重要なのは「健全な夜が健全と読めること」である。**
- * `out-of-scope` は異常なしだが、記録行には `verdict=out-of-scope` としか
- * 出ていなかったため、実際に「判定できなかった」と読まれた（2026-09-20）。
- */
 describe('healthOf（verdict を健全さの3値へ畳む）', () => {
   it('⭐ 健全な夜の2つ（green / out-of-scope）はどちらも ok', () => {
     expect(healthOf('green')).toBe('ok');
@@ -224,7 +198,6 @@ describe('記録行の health= 欄', () => {
 describe('refineVerdictForCancelledRuns（取り消された CI の red を cancelled へ倒す。Issue #3049）', () => {
   const run = (id: number, name = 'CI') => ({ id, name });
   const job = (name: string, conclusion: string) => ({ name, conclusion });
-  // 実測（run 37372223779）: checks / test が cancelled、image が success、ci だけが failure
   const CANCELLED_CI = [
     job('checks', 'cancelled'),
     job('test (1/2)', 'cancelled'),

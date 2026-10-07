@@ -17,10 +17,6 @@ import {
 } from './vitest.tmpdir-sweep.js';
 import { makeTempDirSync } from './vitest.tmpdir.js';
 
-/**
- * #3039 の歯。(a) 判定の純粋関数、(b) 実際に vitest を 1 回起こして
- * 21 文字ディレクトリが残らないこと（vitest の版上げで内部 API が変わったら赤になる）。
- */
 
 const NOW = 1_000_000_000_000;
 const HOUR = 60 * 60 * 1000;

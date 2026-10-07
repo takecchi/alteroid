@@ -1,13 +1,4 @@
-/**
- * `docker/runner-extra`（runner の器へのビルド時の追加層）を固定する。
- *
- * **本物の apt には一切触れない。** `ALTEROID_EXTRA_APT_GET` で偽の apt-get に
- * 差し替え、呼ばれた引数を1呼び出し1行でファイルへ記録して確かめる。
- * 環境は `process.env` を継がず、呼び出しごとに丸ごと組み立てて渡す
- * （`docker/gh.test.ts` と同じ型）。
- *
- * 「弾くべきもの」と「通すべきもの」を対で置く。
- */
+// 環境は `process.env` を継がず、呼び出しごとに丸ごと組み立てて渡す: 本物の apt に触れないよう、`ALTEROID_EXTRA_APT_GET` で偽の apt-get に差し替えるため。
 import { spawnSync } from 'node:child_process';
 import {
   chmodSync,
@@ -48,7 +39,6 @@ function run(extra: Record<string, string>): Result {
     env: {
       PATH: '/usr/bin:/bin',
       ALTEROID_EXTRA_APT_GET: fakeApt,
-      // 本物の /var/lib/apt/lists に触らない。
       ALTEROID_EXTRA_APT_LISTS: lists,
       ...extra,
     },
@@ -77,7 +67,6 @@ describe('両方が空', () => {
     const r = run(env);
     expect(r.exitCode).toBe(0);
     expect(r.aptCalls).toEqual([]);
-    // 何もしない: リストにも触れない。
     expect(r.listsLeft).toEqual(['stale']);
   });
 });
@@ -90,7 +79,6 @@ describe('正しいパッケージ名（通す）', () => {
       'update',
       'install -y --no-install-recommends hello libwebkit2gtk-4.1-dev g++',
     ]);
-    // 基底の流儀どおり、apt のリストは層に残さない。
     expect(r.listsLeft).toEqual([]);
   });
 
