@@ -44,12 +44,9 @@ import {
   MANAGER_PROVIDER_ENV_KEY,
   DEFAULT_AGENT_PROVIDER_ID,
   CLONE_PROVIDER_RECOMMENDATION,
-  CODEX_NO_WORKER_LABEL,
-  MANAGER_MODEL_ENV_KEY,
   agentProviderOf,
   layerModelLabel,
   placedCloneModel,
-  placedModelTier,
   cloneDriverFor,
   cloneLayerProviderOf,
   placedAgentProvider,
@@ -59,8 +56,6 @@ import {
   reasonOf,
   redactErrorText,
   resolveCloneModel,
-  resolveManagerModel,
-  resolveWorkerModel,
   staleObservedRecoveryForBlockedKey,
   staleObservedRecoveryNoticeEvent,
   WITHHELD_ENV_KEYS,
@@ -692,18 +687,10 @@ export async function main(): Promise<void> {
     // 待ち受けアドレスではなく人間が叩く先を渡す: `ALTEROID_BIND=0.0.0.0` は入口ではなく、TLS を手前で終端すれば scheme も違うため。
     entrypoint: authPlan.publicBaseUrl,
     auth: authPlan.description,
+    // マネージャー層・作業者層は載せない: runner の器で決まるので、デーモンの環境変数から作ると取れていない値を取れた顔で出すため（#3947）。
     // 固定値を載せない: 人間が帯を動かしたのに、クローンは既定を自分の帯だと思ったまま判断するため。
     models: {
       clone: layerModelLabel(cloneProvider.id, cloneModel, placedCloneModel()),
-      manager: layerModelLabel(
-        resolveManagerProviderId(process.env),
-        resolveManagerModel(),
-        placedModelTier(process.env, MANAGER_MODEL_ENV_KEY),
-      ),
-      worker:
-        resolveManagerProviderId(process.env) === 'codex'
-          ? CODEX_NO_WORKER_LABEL
-          : resolveWorkerModel(),
     },
     // マネージャー層は載せない: runner ごとに `hello` で名乗りが変わるので、起動時に焼くと古くなるため。
     providerGaps: describeProviderGaps({ clone: cloneProvider }),

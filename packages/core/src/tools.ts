@@ -305,7 +305,7 @@ import {
 } from './usage.js';
 import { JOURNAL_SEARCH_UNCOVERED_LIST } from './journal-search.js';
 import { describeManagerFoldCandidate } from './manager-fold-candidate.js';
-import { describeManagerProvider } from './manager-provider-format.js';
+import { describeManagerAgent, managerAgentOf } from './manager-provider-format.js';
 import {
   describeUnpushedWorkObservationIncompleteness,
   describeUnpushedWorkObservationProvenance,
@@ -618,6 +618,11 @@ export interface ToolContext {
    * `self_status` が実行時に引く。省略（テスト）時は `runtime()` が持つ静的な行のまま。
    */
   providerGaps?: () => Promise<readonly string[]>;
+  /**
+   * 接続中の runner が名乗ったマネージャー層・作業者層のモデルの行。`self_status` が実行時に引く。
+   * 省略（テスト）時は何も足さない（既定のモデルで埋めない）。
+   */
+  runnerModels?: () => Promise<readonly string[]>;
   /**
    * 人間が `ALTEROID_CLONE_PEERS` で開けた、もう一方の provider（#486 S7）。**空・省略なら
    * `manager_start` に `provider` 引数を出さない**（スキーマも説明文も従来と同一）。
@@ -10705,6 +10710,7 @@ export function createCloneTools(context: ToolContext) {
         }
 
         const providerGaps = await context.providerGaps?.();
+        const runnerModels = await context.runnerModels?.();
         const [documents, memoryDocuments, aggregate] = await Promise.all([
           stores.persona.list(),
           stores.persona.documents(),
@@ -10714,9 +10720,11 @@ export function createCloneTools(context: ToolContext) {
 
         return text(
           [
-            describeCloneRuntime(
-              providerGaps === undefined ? runtime : { ...runtime, providerGaps },
-            ),
+            describeCloneRuntime({
+              ...runtime,
+              ...(providerGaps === undefined ? {} : { providerGaps }),
+              ...(runnerModels === undefined ? {} : { runnerModels }),
+            }),
             '',
             // **クローンの文脈へ実際に載る形で数える。** 本文だけを足すと、見出しの
             // ぶんだけ本当より少ない数を「いまの総文字数」として名乗ることになる。
@@ -11884,9 +11892,9 @@ export function createCloneTools(context: ToolContext) {
                   : `（この器は ${manager.runnerLostSince} 以降 名乗っていない。新しい委譲の宛先からは外れている（置き先として数えない）。**この委譲が失われたという意味ではない** — 黙っているのが器なのか経路なのかは、ここからは言えない（器の中でまだ走っていることもある）。話しかけることは塞いでいない — 戻る先（session_id）が在れば manager_send が resume を試みる（届くとは限らない）。${RESTART_BEFORE_CHECK_ADVICE}器そのものは runner_list で見る）`
               }`,
               // **マネージャー層の provider（#486 S9）。** 置き先の runner が名乗った値だけを出す。
-              // 取れなければ「不明」と書き、`claude` とは推測しない（`describeManagerProvider`。
+              // 取れなければ「不明」と書き、`claude` とは推測しない。モデルも同じ（`describeManagerAgent`。
               // CLI・Web UI と同じ字面）。
-              `  provider: ${describeManagerProvider(managerProviderOf(context.managers, manager))}`,
+              `  provider: ${describeManagerAgent(managerAgentOf(context.managers, manager))}`,
               // **`runnerLostSince` と同じ作法で、別の行として出す（#563）。**
               // `describeManagerState` は動かさない——`manager_list` と要約
               // （`digest.ts`）で字面が割れると、そこで潰れることを防ぐために
@@ -12257,9 +12265,9 @@ export function createCloneTools(context: ToolContext) {
           );
         }
 
-        // **マネージャー層の provider（#486 S9）。** `manager_list` と同じ字面（`describeManagerProvider`）。
+        // **マネージャー層の provider（#486 S9）。** `manager_list` と同じ字面（`describeManagerAgent`）。
         // 取れなければ「不明」で、`claude` とは推測しない。
-        const providerLine = `provider: ${describeManagerProvider(managerProviderOf(context.managers, found))}`;
+        const providerLine = `provider: ${describeManagerAgent(managerAgentOf(context.managers, found))}`;
         // **停止後に届いた、畳まれたターンの本文（Issue #1038）。**
         // `part === 'request'` では扱わない——依頼文の話ではない。**在れば
         // `lastReport`（完遂した報告）より優先して見せる**——`lastFoldedTurn`
@@ -16100,22 +16108,6 @@ export function createCloneMcpServer(context: ToolContext) {
       'マネージャーへの委譲。',
     tools: createCloneTools(context),
   });
-}
-
-/**
- * 委譲のマネージャー層の provider（#486 S9）。宛先の runner が名乗った値だけを返し、
- * 置き先が無い・名乗りを受けていない・旧い runner（欄なし）・この口を持たない
- * プールは `undefined`（不明）。経路判断用の `runnerManagerProvider()`（既定 `claude`）は
- * 使わない。デーモンの `managerProviderOf`（`apps/daemon/src/app.ts`）と同じ読み方。
- */
-function managerProviderOf(
-  managers: ManagerPool | undefined,
-  summary: { runnerId?: string | undefined; managerProvider?: string | undefined },
-): string | undefined {
-  // クローンが指名した委譲は、runner の既定ではなく**実際に動いている provider** を言う（#486 S7）。
-  if (summary.managerProvider !== undefined) return summary.managerProvider;
-  if (summary.runnerId === undefined) return undefined;
-  return managers?.runnerReportedManagerProvider?.(summary.runnerId);
 }
 
 /**

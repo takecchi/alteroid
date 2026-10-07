@@ -28,7 +28,7 @@ const SELF: SelfFacts = {
   runner: 'r',
   entrypoint: 'e',
   auth: 'a',
-  models: { clone: 'opus', manager: 'opus', worker: 'sonnet' },
+  models: { clone: 'opus' },
   providerGaps: describeProviderGaps({ clone: CLAUDE_PROVIDER }),
   cloneProvider: 'claude',
 };
@@ -90,6 +90,8 @@ function poolWith(provider: string, failRunners = false): ManagerPool {
             unassigned: [],
           }) as unknown as ReturnType<ManagerPool['runners']>),
     runnerManagerProvider: () => provider,
+    runnerReportedModels: (runnerId, p) =>
+      runnerId === 'r1' && p === 'claude' ? { manager: 'opus', worker: 'sonnet' } : undefined,
   };
 }
 
@@ -157,6 +159,20 @@ describe('クローン — provider の欠落の配線', () => {
       () => s.calls.some((c) => c.inputs.join('\n').includes(RUNNER_LINE)),
       'tick の digest に runner の欠落が届く',
     );
+    await s.clone.stop();
+  });
+
+  it('self_status は接続中の runner が名乗ったモデルを出し、システムプロンプトには焼かない（#3947）', async () => {
+    const s = boot('claude');
+    s.clone.post(humanMessage('やあ'));
+    await waitForDone(s.events);
+
+    const body = await s.selfStatus();
+    expect(body).toContain('runner edge-1: claude → マネージャー opus / 作業者 sonnet');
+    expect(body).not.toContain('runner gone');
+    const prompt = JSON.stringify(s.calls[0]?.options.systemPrompt);
+    expect(prompt).not.toContain('edge-1');
+    expect(prompt).not.toContain('sonnet');
     await s.clone.stop();
   });
 
