@@ -5690,6 +5690,50 @@ export function createApp(deps: AppDeps) {
       },
     )
 
+    /**
+     * 日誌を id で1件、全文で返す。一覧（`GET /journal`）は窓で切れるので、窓の外の行はここで引く。
+     *
+     * **`GET /journal/stream` より後ろに登録している**（先だと `stream` が id として読まれる）。
+     * 在るが読めない行は 409（「無い」と言わない。`GET /approvals/:id` と同じ線）。
+     */
+    .get(
+      '/journal/:id',
+      describeRoute({
+        tags: ['journal'],
+        summary: '日誌を id で1件読む',
+        description:
+          '日誌の1件を全文で返す（`GET /journal` の `entries` の1行と同じ形。封筒は持たない）。' +
+          '一覧の窓の外の記録もここで引ける。',
+        responses: {
+          200: {
+            description: '日誌エントリ1件。',
+            content: { 'application/json': { schema: resolver(journalEntrySchema) } },
+          },
+          404: {
+            description: '該当する日誌が無い。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+          409: {
+            description:
+              '日誌の行は在るが読めない形で入っている（版ずれ・手編集）。消されたのではない。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+        },
+      }),
+      async (c) => {
+        let entry: Awaited<ReturnType<typeof stores.journal.get>>;
+        try {
+          entry = await stores.journal.get(c.req.param('id'));
+        } catch (error) {
+          if (error instanceof UnreadableJournalEntryError)
+            return c.json({ error: error.message }, 409);
+          throw error;
+        }
+        if (entry === null) return c.json({ error: 'not found' as const }, 404);
+        return c.json(journalEntrySchema.parse(entry));
+      },
+    )
+
     // --- 利用状況（いくら使ったか） --------------------------------------------
     /**
      * **経路は1本だけにする。** 画面のために別の口を足すと、その瞬間に
