@@ -25,15 +25,8 @@ export function clientLoader({ params }: Route.ClientLoaderArgs) {
   return { date: params.date, approvalId: params.approvalId };
 }
 
-/**
- * 左の目次に1回で読む日数（最初の頁も「もっと古い日を読む」の1頁も同じ）。
- * `GET /approvals/answered-dates` は総数を返さない（`GET /reports` と同じ。続きが在るかは
- * `limit` 件ちょうど返ったかで判る）ので、ちょうど一致したときだけ「もっと古い日を読む」を出す。
- * 読み足しは `useAnsweredDatesWindow`（`beforeDate` で続きを読み、いまの一覧の後ろへ足す）。
- */
 const DATES_LIMIT = 60;
 
-/** 決着の日時。デーモンの日の区切り（`answeredAt`、無ければ `withdrawnAt`）と同じ決め方。 */
 function settledAt(approval: PendingApproval): string | undefined {
   return approval.answeredAt ?? approval.withdrawnAt ?? undefined;
 }
@@ -41,25 +34,8 @@ function settledAt(approval: PendingApproval): string | undefined {
 const dayHref = (date: string) => `/approvals/answered/${date}`;
 const approvalHref = (date: string, id: string) => `${dayHref(date)}/${encodeURIComponent(id)}`;
 
-/**
- * 回答済みの承認（回答済み・取り下げ済み）を日ごとに読むページ。日報（`reports.tsx`）と同じ形——
- * 左に「決着した日と件数」、右にその日の件、1件を選ぶと詳細。
- *
- * - **日はデーモンの `localDate()`（日報と同じ区切り）で決まる。** 行の時刻だけは閲覧者の端末の
- *   時間帯で出す（`formatDateTime`）ので、端末とデーモンの時間帯が違うと、日の境目の件は
- *   「日付」と「時刻」の日が食い違って見えうる（日報の `date` と `at` と同じ）
- * - 日付の指定が無ければ最新の日を開く（日報と同じ。空の画面から始めない）
- * - 並びはデーモンが決める（目次は新しい日が上・件は決着の新しい順）。**ここで並べ直さない**
- * - 取れなかったのを0件と描かない（#2324 と同じ。目次・その日の件の両方）
- */
-/**
- * 読めない承認待ちの案内（#3297）。**回答済みの指定では、デーモンは `unreadable` を載せない**
- * （決着の日時も分からず、どの日にも置けない）ので、未回答の側の一覧から件数を取って1行だけ言う。
- * 件数は `/approvals` の警告・ナビの札と同じ `useApprovals(true)` の `unreadable`。
- *
- * **取れなかったのを0件と描かない。** 読み込み中・失敗・形違いのときは何も出さない
- * （「読めない承認は無い」とも言わない。SWR は失敗しても古い `data` を残すので、失敗を先に見る）。
- */
+// ここで並べ直さない: 並びはデーモンが決めるため
+// 失敗を先に見る: SWR は失敗しても古い data を残すため
 function UnreadableApprovalsPointer() {
   const { data, error } = useApprovals(true);
   if (error !== undefined || !Array.isArray(data?.unreadable) || data.unreadable.length === 0) {
@@ -93,19 +69,10 @@ export default function ApprovalsAnswered({ loaderData }: Route.ComponentProps) 
     loadOlder,
   } = useAnsweredDatesWindow(DATES_LIMIT);
 
-  /**
-   * 形の違う応答（`dates` が配列でない）は「0件」ではなく「読めていない」へ倒す（#2308 と同じ。
-   * デーモンと画面は別デプロイで版がずれうる）。
-   */
+  // 形の違う応答を「0件」にしない: デーモンと画面は別デプロイで版がずれうるため
   const datesMalformed = list.data !== undefined && !Array.isArray(list.data.dates);
   const selectedDate = date ?? dates[0]?.date;
-  /** 一覧をまだ一度も読めていないまま失敗した。失敗は上の `LoadError` が言う。 */
   const listUnavailable = (list.data === undefined && list.error !== undefined) || datesMalformed;
-  /**
-   * URL で開いた日が、読み込んだ範囲に載っていない（もっと古い日か、その日に決着した承認が無い）。
-   * その日の件は右に出る（`DayBody` は目次と独立に取る）。左で「今ここ」を示せないので、そう言う。
-   * 日報（`reports.tsx`）は黙って選択無しにしている。
-   */
   const selectedOutsideList =
     date !== undefined &&
     !listUnavailable &&
@@ -113,7 +80,7 @@ export default function ApprovalsAnswered({ loaderData }: Route.ComponentProps) 
     !dates.some((entry) => entry.date === date);
 
   return (
-    // 余白とスクロールは外す（`ListDetail` が左右のペインをそれぞれスクロールさせる。`reports.tsx` と同じ）。
+    // 余白とスクロールを付けない: ListDetail が左右のペインをそれぞれスクロールさせるため
     <Page
       tabs={<ApprovalsTabs />}
       title="回答済みの承認"
@@ -196,7 +163,6 @@ export default function ApprovalsAnswered({ loaderData }: Route.ComponentProps) 
           }
           emptyDetail={
             listUnavailable ? null : list.isLoading ? (
-              // 読み込み中に「1件も無い」と言わない（日報と同じ）。
               <Spinner />
             ) : (
               <Empty>回答済みの承認はまだ無い。</Empty>
@@ -213,17 +179,14 @@ export default function ApprovalsAnswered({ loaderData }: Route.ComponentProps) 
   );
 }
 
-/** 右のペイン。`approvalId` が無ければその日の件の一覧、在ればその1件の詳細。 */
 function DayBody({ date, approvalId }: { date: string; approvalId: string | undefined }) {
   const { data, error, isLoading, isValidating, mutate } = useApprovalsAnsweredOn(date);
-  // 「決着したのは …（N分前）」を古いまま残さない（#3700。#3596 と同じ形）。
   const now = useMinuteNow();
 
   const approvals: PendingApproval[] | undefined = Array.isArray(data?.approvals)
     ? data.approvals
     : undefined;
   const malformed = data !== undefined && approvals === undefined;
-  /** 本文をまだ一度も読めていないまま失敗した（再検証の失敗で `data` が残っているときは当たらない）。 */
   const unavailable = data === undefined && error !== undefined;
 
   const selected =
@@ -289,7 +252,6 @@ function DayBody({ date, approvalId }: { date: string; approvalId: string | unde
             ← {date} の一覧へ
           </Link>
           {selected === undefined ? (
-            // 古い URL・別の日の id。「無い」と言い切らず、見た日を名指しして一覧へ戻す。
             <Empty>{date} に決着した承認の中に、この件は見つからない。</Empty>
           ) : (
             <>

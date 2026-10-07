@@ -1,10 +1,4 @@
 // @vitest-environment jsdom
-/**
- * 承認待ちの下書きは、タブを移っても消えない（issue #3295）。
- *
- * 「回答済み」タブへ移るとこのページは unmount される。書きかけの回答欄と設問の選択が
- * state だけにあると、戻ったときに黙って消える。`sessionStorage` に承認の id ごとに残す。
- */
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -38,7 +32,6 @@ const questions: NonNullable<PendingApproval['questions']> = [
 const free = approval({ id: 'a-free', question: '自由記述の件' });
 const asked = approval({ id: 'a-ask', question: '設問の件', questions });
 
-/** `GET /approvals` は `respond()`、回答は成功で返す。 */
 function stub(respond: () => Response | Promise<Response>) {
   globalThis.fetch = (async (input: RequestInfo | URL) => {
     const url = new URL(
@@ -97,9 +90,7 @@ describe('承認待ちの下書き（issue #3295）', () => {
     expect(((await screen.findByPlaceholderText(/答える/)) as HTMLTextAreaElement).value).toBe(
       '書きかけの答え',
     );
-    // 件数も保存した下書きから戻る。
     expect(screen.getByText('1 件に答えを書いた（送るとまとめて1回で届く）')).toBeTruthy();
-    // 書きかけのあるカードは、開いた状態で戻ってくる（`ApprovalCard` の `questionsOpen`）。
     expect(screen.getByRole('radio', { name: /Fly\.io/ }).getAttribute('aria-checked')).toBe(
       'true',
     );
@@ -159,7 +150,6 @@ describe('承認待ちの下書き（issue #3295）', () => {
     stub(() => json({ approvals: [free] }));
     const original = Storage.prototype.setItem;
     Storage.prototype.setItem = function (this: Storage, ...args: [string, string]) {
-      // 接続先の保存（localStorage）は通し、下書きの置き場（sessionStorage）だけ落とす。
       if (this === sessionStorage) throw new DOMException('quota', 'QuotaExceededError');
       return original.apply(this, args);
     };

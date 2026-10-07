@@ -1,16 +1,4 @@
 // @vitest-environment jsdom
-/**
- * `/access` 画面。ここで固定したいのは:
- *
- * - `GET /access` が返すアカウントが、許可済み・未許可の両方とも一覧に出る
- * - 0件のとき「まだ誰もログインしていません。」の文言が出る（CLI と同じ文言）
- * - 取得に失敗したとき（403 = 許可されていない等）エラーが出る
- * - **`grant` / `revoke`（許可の付与・取り消し）を画面から起こせる。取り消しは確認の
- *   一手を挟むまで叩かない**（Issue #213。2026-09-24 に「出さない」から反転した。
- *   `apps/web/app/routes/access.tsx` の doc）
- * - **持ち主の宣言のバッジ・ボタンは出さない**（#2862 / #2947。ログインできる許可済みの
- *   アカウントは全員が持ち主として扱われるので、宣言の有無は通す・通さないに効かない）
- */
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -183,18 +171,11 @@ describe('/access 画面 — 一覧', () => {
 
     await renderAccess();
 
-    // `grantedAt` の `dd` が持つ「（実行環境の持ち主）」という括弧付きの形を見る。
     expect(screen.getByText(/（実行環境の持ち主）/)).toBeTruthy();
-    // 伝播した許可（誰かのアカウントが grant した）は、id をそのまま出す
-    // （`describeGrantedBy` の doc — 名前へ解決しない）。
     expect(screen.getAllByText(/acct-a/).length).toBeGreaterThan(0);
   });
 });
 
-/**
- * **持ち主の宣言の表示は出さない（#2947）。** 宣言の有無によらず、どのアカウントにも
- * バッジも宣言の行も出ない。説明文は、許可したアカウントがすべての設定を変えられると言う。
- */
 describe('/access 画面 — 持ち主の宣言は画面に出さない', () => {
   it('宣言済み・未宣言のどちらのアカウントにも、宣言のバッジ・行が出ない', async () => {
     stubAccess({
@@ -237,16 +218,6 @@ describe('/access 画面 — 持ち主の宣言は画面に出さない', () => 
   });
 });
 
-/**
- * **`grant` / `revoke`（許可の付与・取り消し）を画面から起こせる**（Issue #213）。
- *
- * ⚠️ **2026-09-24 に反転した歯である。** それまでここは「grant / revoke は出さない」
- * （ボタンもフォームも無く、`/grant` `/revoke` へ一度も fetch しない）を固定していた。
- * #213 を「欠落」と判定して画面に足したので、期待を反転した（理由は
- * `routes/access.tsx` の「grant / revoke を足した経緯」）。**弱めてはいない** —— 旧い歯が
- * 測っていた「初期表示だけでは grant / revoke を叩かない」はそのまま残し、そこに
- * 「押せば叩く」「取り消しは確認を挟むまで叩かない」を足している。
- */
 describe('/access 画面 — grant / revoke', () => {
   function stubAccessAndGrant(accounts: unknown[]) {
     return stubFetch((url) => {
@@ -261,7 +232,7 @@ describe('/access 画面 — grant / revoke', () => {
 
     await renderAccess();
 
-    // **`/access/:id/owner/revoke` は `/revoke` を部分文字列に含む**ので、owner 系を除く。
+    // owner 系を除く: `/access/:id/owner/revoke` は `/revoke` を部分文字列に含むため
     const nonOwnerUrls = stub.calls.filter((url) => !url.includes('/owner'));
     expect(nonOwnerUrls.some((url) => /\/access\/[^/]+\/grant$/.test(url))).toBe(false);
     expect(nonOwnerUrls.some((url) => /\/access\/[^/]+\/revoke$/.test(url))).toBe(false);
@@ -288,21 +259,16 @@ describe('/access 画面 — grant / revoke', () => {
     ).toBeTruthy();
     fireEvent.click(screen.getByText('許可を取り消す'));
 
-    // 1回目の押下では叩かない。確認の文言と「本当に取り消す」が出る。
     expect(stub.calls.some((url) => /\/access\/acct-a\/revoke$/.test(url))).toBe(false);
-    // 誤読されない言い方（issue #3072）。直す前は主語が「このアカウントは」で、何が戻せないのかが
-    // 曖昧だった。戻せないのは取り消された本人で、押す側は「許可する」で戻せる。
     const warning = screen.getByText(/取り消された本人は、自分では許可を戻せない/);
     expect(warning.textContent).toMatch(/許可を持つ別のアカウントか実行環境の持ち主/);
     expect(warning.textContent).toMatch(/「許可する」で戻せる/);
     expect(screen.queryByText(/その場では戻せない/)).toBeNull();
 
-    // やめれば元に戻り、叩かない。
     fireEvent.click(screen.getByText('やめる'));
     expect(screen.getByText('許可を取り消す')).toBeTruthy();
     expect(stub.calls.some((url) => /\/access\/acct-a\/revoke$/.test(url))).toBe(false);
 
-    // 確認してから叩く。
     fireEvent.click(screen.getByText('許可を取り消す'));
     expect(
       screen.getByRole('button', { name: 'granted@example.com の許可を本当に取り消す' }),
@@ -400,7 +366,6 @@ describe('/access 画面 — 読めない行（issue #2536）', () => {
 
     await renderAccess();
     fireEvent.click(await screen.findByRole('button', { name: 'acct-bad の行を消す' }));
-    // 押しただけでは消さない（#3091。共有部品なので permissions / access で挙動が揃う）。
     const dialog = await screen.findByRole('alertdialog');
     expect(dialog.textContent).toContain('元に戻せません');
     expect(dialog.textContent).toContain('acct-bad');
