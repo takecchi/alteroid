@@ -557,7 +557,8 @@ describe('createPluginFetcher: 器の内側へ取りに行かない', () => {
     })
       .fetch({ kind: 'url', url: 'https://private.example.test/x.git', sha: SHA })
       .catch((e: unknown) => e as Error);
-    expect(error.message).not.toContain('10.0.0.9');
+    expect(error).toBeInstanceOf(PluginFetchError);
+    expect((error as Error).message).not.toContain('10.0.0.9');
   });
 
   it('公開から内部へのリダイレクト・https から http へのリダイレクトを拒む', async () => {
