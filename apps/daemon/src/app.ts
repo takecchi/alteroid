@@ -191,6 +191,7 @@ import { describeRoute, openAPIRouteHandler, resolver, validator } from 'hono-op
 import { z } from 'zod';
 
 import {
+  cloneInterruptRequestSchema,
   cloneInterruptResponseSchema,
   accessAccountResponseSchema,
   accessListResponseSchema,
@@ -3723,25 +3724,65 @@ export function createApp(deps: AppDeps) {
         description:
           'セッションと受信箱はそのまま残る（次の合図で次のターンが始まる）。' +
           '走っているターンが無ければ outcome: idle。止めたことは日誌に [判断] の1行で残る。' +
-          '運ぶ情報は無い（`{}` を送る）。',
-        requestBody: noBodyPostRequestBody(
-          '**中身は読まないので `{}` を送ればよい。** `content-type: application/json` が要る' +
-            '（ブラウザの単純リクエストでターンを止められないため）。',
-        ),
+          '**対象（`conversationId` と `clientMessageId`）を渡すと、その発言のターンしか止めない（#3956）。** ' +
+          'その発言のターンが走っていれば `interrupted`。まだ順番待ちなら受信箱の行ごと取り下げて配らず ' +
+          '`withdrawn`（発言の日誌の行は残り、取り下げたことが [判断] の1行で足される）。' +
+          '走っているのが別の起点のターンなら止めず `not_target`。発言は取り出し済みでターンがまだ始まって' +
+          'いなければ `starting`（もう一度呼べば止まる）。答え終わっていれば `idle`。' +
+          '対象を省く（`{}`）と、種類を問わず走っているターンを止める（従来どおり）。',
+        requestBody: {
+          required: true,
+          description:
+            '`{}` または `{ conversationId, clientMessageId }`（片方だけは 400）。' +
+            '`content-type: application/json` が要る（ブラウザの単純リクエストでターンを止められないため）。',
+          content: { 'application/json': { schema: resolver(cloneInterruptRequestSchema) } },
+        },
         responses: {
           200: {
-            description: '止めた・止めるものが無かった・この器では止められない、のどれか。',
+            description:
+              '止めた・取り下げた・別のターンなので止めなかった・止めるものが無かった・この器では止められない、のどれか。',
             content: { 'application/json': { schema: resolver(cloneInterruptResponseSchema) } },
+          },
+          400: {
+            description: '本文が JSON として不正。または対象が片方しか無い・形が不正。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
           ...noBodyPostResponses(),
         },
       }),
       deliberateClient,
       async (c) => {
+        // 本文なし・`{}` は従来どおり「対象なし」。壊れた JSON を対象なしとは読まない（別の仕事を止めるため）。
+        const rawText = await c.req.text();
+        let raw: unknown = {};
+        if (rawText.trim() !== '') {
+          try {
+            raw = JSON.parse(rawText);
+          } catch {
+            return c.json({ error: '本文が JSON として不正' as const }, 400);
+          }
+        }
+        const parsed = cloneInterruptRequestSchema.safeParse(raw);
+        if (!parsed.success) {
+          return c.json(
+            { error: `入力の形が不正: ${whereValidationFailed(parsed.error.issues)}` },
+            400,
+          );
+        }
+        const { conversationId, clientMessageId } = parsed.data;
+        if ((conversationId === undefined) !== (clientMessageId === undefined)) {
+          return c.json(
+            { error: 'conversationId と clientMessageId は2つとも渡すか、2つとも省く' as const },
+            400,
+          );
+        }
         if (clone.interruptTurn === undefined) {
           return c.json(cloneInterruptResponseSchema.parse({ outcome: 'unsupported' }));
         }
-        const outcome = await clone.interruptTurn();
+        const outcome =
+          conversationId === undefined || clientMessageId === undefined
+            ? await clone.interruptTurn()
+            : await clone.interruptTurn({ conversationId, clientMessageId });
         return c.json(cloneInterruptResponseSchema.parse({ outcome }));
       },
     )
