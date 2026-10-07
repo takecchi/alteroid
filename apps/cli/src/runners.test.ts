@@ -97,6 +97,34 @@ describe('renderRunners', () => {
     expect(renderRunners({ runners: [], daemonRevision: KNOWN_DAEMON })).not.toContain('provider');
   });
 
+  it('peer を名乗った器は「Codex に作業を頼める」、旧い runner は「不明」、開いていない器は行を出さない（#3940）', () => {
+    const text = renderRunners({
+      runners: [
+        {
+          ...RUNNER,
+          revision: { status: 'unheard' },
+          managerPeers: { status: 'named', peers: [{ provider: 'codex', models: ['gpt-5.5'] }] },
+        },
+        {
+          ...RUNNER,
+          runnerId: 'runner-old',
+          revision: { status: 'unheard' },
+          managerPeers: { status: 'unknown' },
+        },
+        {
+          ...RUNNER,
+          runnerId: 'runner-none',
+          revision: { status: 'unheard' },
+          managerPeers: { status: 'named', peers: [] },
+        },
+      ],
+      daemonRevision: KNOWN_DAEMON,
+    });
+    expect(text).toContain('  peer: Codex に作業を頼める（peer: codex。名指しできるモデル: gpt-5.5）');
+    expect(text).toContain('  peer: 不明');
+    expect(text.split('\n').filter((line) => line.startsWith('  peer:'))).toHaveLength(2);
+  });
+
   it('runner が0台でも、デーモンの版は出す', () => {
     const text = renderRunners({ runners: [], daemonRevision: KNOWN_DAEMON });
 

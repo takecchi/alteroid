@@ -289,6 +289,11 @@ export async function main(): Promise<void> {
     outbox,
     tokenSha256,
     taskBreakdownReader,
+    // クローンに「この器のマネージャーは Codex に頼める」を見せる名乗り（#3940）。
+    managerPeers: peerOpening.peers.map((provider) => {
+      const models = peerOpening.models[provider];
+      return models === undefined ? { provider } : { provider, models: [...models] };
+    }),
   });
   const server = createAdaptorServer({ fetch: app.fetch });
 

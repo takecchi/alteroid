@@ -1,6 +1,12 @@
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 
-import type { AttachmentLimits, BuildRevision, RunnerEvent, RunnerHost } from '@alteroid/core';
+import type {
+  AttachmentLimits,
+  BuildRevision,
+  RunnerEvent,
+  RunnerHost,
+  RunnerManagerPeer,
+} from '@alteroid/core';
 import {
   DEFAULT_SSE_HEARTBEAT_MS,
   readAttachmentLimits,
@@ -43,6 +49,8 @@ export interface RunnerAppDeps {
   sseWriteDeadlineMs?: number;
   taskBreakdownReader?: TaskBreakdownReader;
   attachmentLimits?: AttachmentLimits;
+  /** `hello.managerPeers` に載せる peer（#3940）。空・省略なら欄ごと送らない。 */
+  managerPeers?: readonly RunnerManagerPeer[];
 }
 
 const AUTH_SCHEME = /^Bearer\s+(.+)$/i;
@@ -518,6 +526,9 @@ export function createRunnerApp(deps: RunnerAppDeps) {
                   // `managerProvider` / `managerProviders` は名乗らない（2026-10-07 の決定。マネージャー層は常に
                   // Claude）。名乗ると旧いデーモンが `provider` 付きの命令を送ってくるため。
                   attachmentBodyLimit: attachmentBodyMax,
+                  ...(deps.managerPeers === undefined || deps.managerPeers.length === 0
+                    ? {}
+                    : { managerPeers: deps.managerPeers }),
                 }),
               }),
             sseWriteDeadlineMs,

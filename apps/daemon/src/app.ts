@@ -8006,6 +8006,11 @@ export function createApp(deps: AppDeps) {
                         const pushHealth = clone.managers.pushHealthOf(entry.runnerId);
                         return pushHealth === undefined ? {} : { pushHealth };
                       })()),
+                  // **peer の名乗り（#3940）。** `pushHealth` と同じく記憶を読むだけ。読み口を持たない
+                  // プールでは「不明」に倒す（「頼めない」と埋めない）。
+                  managerPeers: clone.managers.managerPeersOf?.(entry.runnerId) ?? {
+                    status: 'unknown',
+                  },
                 };
               }),
             ),

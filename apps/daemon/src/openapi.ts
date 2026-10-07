@@ -1790,6 +1790,25 @@ const runnerPushHealthSchema = z.object({
   mcpServers: runnerPushOutcomeSchema.optional(),
 });
 
+/**
+ * マネージャーが MCP `peer` で作業を頼める provider（`@alteroid/core` の `RunnerOverview.managerPeers`。#3940）。
+ * `named` は名乗る版の runner（`peers` が空なら開いている peer は無い）、`unknown` は名乗らない旧い runner・
+ * 名乗りをまだ受けていない器である。**`unknown` を「頼めない」と読まないこと。**
+ */
+const runnerManagerPeersSchema = z.discriminatedUnion('status', [
+  z.object({
+    status: z.literal('named'),
+    peers: z.array(
+      z.object({
+        provider: z.string(),
+        /** 人間が開けた、名指しできるモデル名。無ければ provider の既定だけ。 */
+        models: z.array(z.string()).optional(),
+      }),
+    ),
+  }),
+  z.object({ status: z.literal('unknown') }),
+]);
+
 const runnerSummarySchema = z.object({
   /**
    * 人間が見る宛先（URL か「同一プロセス」）。
@@ -1869,6 +1888,11 @@ const runnerSummarySchema = z.object({
    * 読むだけである（`@alteroid/core` の `RunnerOverview.pushHealth` の doc）。
    */
   pushHealth: runnerPushHealthSchema.optional(),
+  /**
+   * この器のマネージャーが Codex などの peer に作業を頼めるか（`hello.managerPeers` の記憶。#3940）。
+   * 新しい往復は払わない。旧いデーモンの応答には無い。
+   */
+  managerPeers: runnerManagerPeersSchema.optional(),
 });
 
 export const runnersListResponseSchema = z.object({
@@ -3234,6 +3258,9 @@ export async function buildOpenApiDocument(): Promise<unknown> {
     },
     pushHealthOf() {
       throw new Error('spec 生成専用のスタブ: 押し込み結果は持たない');
+    },
+    managerPeersOf() {
+      throw new Error('spec 生成専用のスタブ: peer の名乗りは持たない');
     },
     runnerBacklog() {
       throw new Error('spec 生成専用のスタブ: 器の滞留は観測していない');

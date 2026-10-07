@@ -54,6 +54,7 @@ import {
   listRunnerManagers,
   RUNNER_CAPABILITY_AWAITING_BACKGROUND_SIGNAL,
   RUNNER_CAPABILITY_MANAGER_ATTACHMENTS,
+  RUNNER_CAPABILITY_MANAGER_PEERS,
   RunnerHttpError,
   RunnerMcpServersUnsupportedError,
 } from './runner-protocol.js';
@@ -80,6 +81,7 @@ import type {
   RunnerExecutionResources,
   RunnerLegState,
   RunnerManagerListing,
+  RunnerManagerPeer,
   PidsSaturation,
   RunnerLiveness,
   RunnerMcpServersFingerprint,
@@ -1654,7 +1656,19 @@ export interface RunnerOverview {
    * 払わない——デーモンのプロセス内に既にある記憶を読むだけである。
    */
   pushHealth?: RunnerPushHealth;
+  /**
+   * この器のマネージャーが MCP `peer` で作業を頼める provider（`hello.managerPeers`。#3940）。
+   * **2状態を混ぜない**: `named`（名乗る版の runner。`peers` が空なら開いている peer は無い）／
+   * `unknown`（名乗らない旧い runner・名乗りをまだ受けていない・runnerId が無い）。
+   * `unknown` を「頼めない」と既定値で埋めない。デーモンの新しい往復は払わない（`hello` の記憶を読むだけ）。
+   */
+  managerPeers?: RunnerManagerPeers;
 }
+
+/** {@link RunnerOverview.managerPeers}。 */
+export type RunnerManagerPeers =
+  | { status: 'named'; peers: RunnerManagerPeer[] }
+  | { status: 'unknown' };
 
 /** `runner_list` が返す全体像。 */
 export interface RunnerFleetOverview {
@@ -2062,6 +2076,12 @@ export interface ManagerPool {
    * `runners()` が読むのと同じ `#pushHealth` を返すだけの薄い口である。
    */
   pushHealthOf(runnerId: string): RunnerPushHealth | undefined;
+  /**
+   * 1台ぶんの peer の名乗り（`RunnerOverview.managerPeers` と同じもの。#3940）。`GET /runners` が
+   * `pushHealthOf` と同じ理由でここを経由する。**省略可能**: 実装しない（テスト用の）プールでは
+   * 呼び出し側が `unknown` に倒す。
+   */
+  managerPeersOf?(runnerId: string | undefined): RunnerManagerPeers;
   /**
    * runner→デーモンの脚（`Outbox` の滞留）について、最後に観測できた値
    * （#358 案b・案b の第2段）。**ネットワークを一切叩かない**——直近の
@@ -5243,6 +5263,8 @@ class Pool implements ManagerPool {
   readonly #runnerCapabilities = new Map<string, ReadonlySet<string>>();
   /** runner が名乗った、添付を運ぶ口の本文の上限（`hello.attachmentBodyLimit`）。名乗らない器は持たない。 */
   readonly #runnerAttachmentBodyLimits = new Map<string, number>();
+  /** runner が名乗った peer（`hello.managerPeers`。#3940）。名乗らない器は持たない。 */
+  readonly #runnerManagerPeers = new Map<string, readonly RunnerManagerPeer[]>();
   /**
    * **枠で止まった委譲**の managerId（`case 'usage_notice'` の `reached` で立ち、
    * {@link Pool.resumeStoppedByUsage} が下ろす）。
@@ -7267,6 +7289,7 @@ class Pool implements ManagerPool {
           // runner への新しい往復を払わない（プロセス内の記憶を読むだけ）ので、
           // opt-in にする理由が無い。
           ...(pushHealth === undefined ? {} : { pushHealth }),
+          managerPeers: this.managerPeersOf(entry.runnerId),
         };
 
         // **Issue #1394 段④ — 契機の1つ目はここ。** `resources()` の結果として
@@ -7650,6 +7673,22 @@ class Pool implements ManagerPool {
       `runner（runnerId=${runner.runnerId}）は担い手への添付の受け渡しを名乗っていない` +
       '（旧い版か、名乗りをまだ受けていない）。添付は黙って捨てられるので送らない'
     );
+  }
+
+  /** {@link RunnerOverview.managerPeers}。`hello` の記憶を読むだけで、runner へは訊きに行かない。 */
+  managerPeersOf(runnerId: string | undefined): RunnerManagerPeers {
+    if (runnerId === undefined) return { status: 'unknown' };
+    if (!this.runnerHasCapability(runnerId, RUNNER_CAPABILITY_MANAGER_PEERS)) {
+      return { status: 'unknown' };
+    }
+    const peers = this.#runnerManagerPeers.get(runnerId) ?? [];
+    return {
+      status: 'named',
+      peers: peers.map((peer) => ({
+        provider: peer.provider,
+        ...(peer.models === undefined ? {} : { models: [...peer.models] }),
+      })),
+    };
   }
 
   runnerHasCapability(runnerId: string, capability: string): boolean {
@@ -12073,6 +12112,12 @@ class Pool implements ManagerPool {
         this.#runnerAttachmentBodyLimits.delete(event.runnerId);
       } else {
         this.#runnerAttachmentBodyLimits.set(event.runnerId, event.attachmentBodyLimit);
+      }
+      // 前の名乗りを持ち越さない（器が入れ替わって peer が閉じうる）。
+      if (event.managerPeers === undefined) {
+        this.#runnerManagerPeers.delete(event.runnerId);
+      } else {
+        this.#runnerManagerPeers.set(event.runnerId, event.managerPeers);
       }
       // **名乗りは全部 `#reattach` に通す。** 「初回だけ素通り」にすると、起動時に
       // 掴んだ器と、SSE が繋がった先の器が違う場合（畳まれつつある旧 runner が

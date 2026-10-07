@@ -20248,6 +20248,48 @@
                                 "required": ["status", "at"]
                               }
                             }
+                          },
+                          "managerPeers": {
+                            "oneOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "status": {
+                                    "type": "string",
+                                    "const": "named"
+                                  },
+                                  "peers": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "object",
+                                      "properties": {
+                                        "provider": {
+                                          "type": "string"
+                                        },
+                                        "models": {
+                                          "type": "array",
+                                          "items": {
+                                            "type": "string"
+                                          }
+                                        }
+                                      },
+                                      "required": ["provider"]
+                                    }
+                                  }
+                                },
+                                "required": ["status", "peers"]
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "status": {
+                                    "type": "string",
+                                    "const": "unknown"
+                                  }
+                                },
+                                "required": ["status"]
+                              }
+                            ]
                           }
                         },
                         "required": [

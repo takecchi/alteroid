@@ -336,8 +336,9 @@ railway add --database postgres
 
 - **`runner` の Service Variables に置く**（読むのは runner のプロセス自身。`app` には要らない。正本の環境変数（袋）に置いても runner の `process.env` へは重ならないので効かない）。
 - 値はカンマ区切りの provider 名（例: `codex`）。**空・未設定は閉じている**（既定）。未知の値は起動を止める。`claude` を書いても「もう一方」ではないので外される（起動ログに出る）。
-- 開けると、マネージャーに MCP `peer`（`peer_run` / `peer_reply`）が出る。**呼ぶかどうかはマネージャーの判断**である。
-- Codex のセッションからの承認は、呼び出し元のマネージャーの承認として（出所の印つきで）**クローンへ上がる**。
+- 開けると、マネージャーに MCP `peer`（`peer_run` / `peer_reply` / `peer_approve`）が出て、Codex に**作業を頼める**（ファイルの作成・編集・コマンドの実行を含む）。**呼ぶかどうかはマネージャーの判断**である。クローンからは `runner_list` の `peer:` の行（Web の設定画面・`alteroid runners` も同じ）で、どの器が Codex に頼めるかが見える。
+- Codex の構えは呼び出し元のマネージャーと同じ（`ALTEROID_MANAGER_PERMISSION_MODE`。`bypassPermissions` なら確認なし、それ以外は on-request）。それでも出た確認は `peer_run` の応答としてまずマネージャーへ返り、マネージャーが `peer_approve` で許可・拒否するか、判断できないときだけ `escalate` で（出所の印つきで）**クローンへ上がる**。答えないまま次の `peer_run` を呼ぶと、古い確認は拒否として閉じる。
+- **モデル（`ALTEROID_MANAGER_PEER_CODEX_MODELS`）**: `runner` の Service Variables に、名指しを許すモデル名をカンマ区切りで置く（例: `gpt-5.5,gpt-5.5-codex`）。置くと `peer_run` に `model` 引数が出て、その一覧の中からだけ選べる（一覧に無い値は断る）。省けば Codex の既定。空・未設定なら `model` 引数そのものが出ない。空の要素は起動を止める。開いた一覧は起動ログに1行出る。実際に動いたモデル名は `peer_run` の結果と台帳に出る。
 - **鍵**: `alteroid credential set CODEX_API_KEY --scope runner`（API キー）。置くと app-server を `cli_auth_credentials_store="ephemeral"` で起こし、鍵は `CODEX_HOME/auth.json` に書かれない（子の環境変数にも置かない）。置かなければ、器の `CODEX_HOME` に ChatGPT ログインがあればそれで動く。どちらも無ければ peer のセッションは開かず失敗する。
 - **消費**: トークン数と、単価表にあるモデルの USD が台帳の `site: peer` に積まれる。消費を報告しない provider のターンは「取れなかった」として数える（0 は積まない）。
 

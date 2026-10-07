@@ -804,6 +804,7 @@ export {
   type RunnerManagerEntry,
   type RunnerOverview,
   type RunnerPushHealth,
+  type RunnerManagerPeers,
   type RunnerPushOutcome,
   resolveWorkspacePolicy,
   type WorkerToolEvent,
@@ -1122,6 +1123,9 @@ export {
   runnerProfileResultSchema,
   runnerAttachmentSchema,
   RUNNER_CAPABILITY_MANAGER_ATTACHMENTS,
+  RUNNER_CAPABILITY_MANAGER_PEERS,
+  runnerManagerPeerSchema,
+  type RunnerManagerPeer,
   runnerResumeCommandSchema,
   runnerSessionOpenResultSchema,
   runnerSetCredentialsCommandSchema,
@@ -1629,3 +1633,8 @@ export {
   ManagerAttachmentsRefusedError,
   type LoadedManagerAttachments,
 } from './manager-attachments.js';
+export {
+  describeManagerPeers,
+  peerProviderLabel,
+  type ManagerPeersView,
+} from './manager-peers-format.js';

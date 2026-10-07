@@ -853,11 +853,29 @@ export const RUNNER_CAPABILITY_AWAITING_BACKGROUND_SIGNAL = 'awaiting-background
 
 export const RUNNER_CAPABILITY_MANAGER_ATTACHMENTS = 'manager-attachments';
 
+/**
+ * `hello.managerPeers`（マネージャーが MCP `peer` で作業を頼める provider。#3940）を名乗る版である。
+ * **これを名乗る器が `managerPeers` を送らなければ「開いている peer は無い」**、名乗らない器（旧い runner）は
+ * 「不明」——無いことを「頼めない」と既定値で埋めない。PEERS が空の器が `managerPeers: []` を
+ * 送らずに済むよう、能力の名前で「名乗る版か」を分ける。
+ */
+export const RUNNER_CAPABILITY_MANAGER_PEERS = 'manager-peers';
+
 /** この版の runner が名乗る能力の一覧（`hello.capabilities` にそのまま載せる）。 */
 export const RUNNER_CAPABILITIES: readonly string[] = [
   RUNNER_CAPABILITY_AWAITING_BACKGROUND_SIGNAL,
   RUNNER_CAPABILITY_MANAGER_ATTACHMENTS,
+  RUNNER_CAPABILITY_MANAGER_PEERS,
 ];
+
+/** `hello.managerPeers` の1件（マネージャーが作業を頼める peer の provider と、名指しできるモデル）。 */
+export const runnerManagerPeerSchema = z.object({
+  provider: z.string().min(1),
+  /** 人間が開けたモデル名（`ALTEROID_MANAGER_PEER_<PROVIDER>_MODELS`）。無ければ provider の既定だけ。 */
+  models: z.array(z.string().min(1)).optional(),
+});
+
+export type RunnerManagerPeer = z.infer<typeof runnerManagerPeerSchema>;
 
 /**
  * `RunnerClient.unpushedWork()` が1本の作業ツリーについて返す値（Issue #1039）。
@@ -1106,6 +1124,12 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
      * （`capabilities` は名前の集合で、値を持てない）。
      */
     attachmentBodyLimit: z.number().int().positive().optional(),
+    /**
+     * マネージャーが MCP `peer` で作業を頼める provider（`ALTEROID_MANAGER_PEERS` から解いた集合。#3940）。
+     * **開いている peer が無い器は送らない**（`RUNNER_CAPABILITY_MANAGER_PEERS` を名乗っていれば
+     * 「無い」と読める）。旧いデーモンは未知の欄を読み捨てる。
+     */
+    managerPeers: z.array(runnerManagerPeerSchema).optional(),
   }),
   z.object({
     type: z.literal('session'),
