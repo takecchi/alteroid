@@ -244,7 +244,6 @@ export {
 // row-folded は待ち行列から抜かない: 抜くと `#mergedExternalBatch` の束ね読み（件数と全件の届いた時刻）が消えるため
 type PendingCollapseVerdict = 'pass' | 'folded' | 'row-folded';
 
-
 export const CLONE_MODEL = 'opus';
 
 // 途中で読み直さない: 走行中の SDK セッションのモデルは差し替えられず、読み直すと蒸留のサイドクエリだけがずれるため
@@ -892,7 +891,6 @@ class Clone implements CloneHost {
     return this.#sdkSession.sessionTokenIdentity?.tokenId;
   }
 
-
   post(event: InboxEvent): void {
     this.#admit(event, false);
   }
@@ -1018,6 +1016,7 @@ class Clone implements CloneHost {
     try {
       await this.#stores.inbox.remove(event.id);
     } catch {
+      // 投げない: 書けない器に消しも通らないのは想定内で、跡は `noteInboxEventRefused` が残す
     }
   }
 
@@ -1650,6 +1649,7 @@ class Clone implements CloneHost {
           priorTexts.set(event.id, entry.text);
         }
       } catch {
+        // ターンを止めない: 引けなかったことは `humanTurnText` が「引けなかった」として扱う
       }
     }
     return priorTexts;
@@ -2777,7 +2777,6 @@ class Clone implements CloneHost {
       // この起動で既に生で投函した合図は配り直さず、未読の控えにも触らない: `post` の書き込みの後に `claimPending()` が返ると同じ合図が乗るが、前の器の未読ではなく生の配達の側が持っているため
       if (this.#postedBeforeRestored.has(record.event.id)) continue;
 
-
       if (verdict === 'stale') {
         // 跡は残す: 落ちた分が読めないと、「無い」の種類（届かなかった／畳まれた／そもそも起きなかった）が区別できなくなるため
         await this.#dropStaleRedelivery(record, {
@@ -3580,7 +3579,6 @@ class Clone implements CloneHost {
         await this.#runInternal(managerPrompt(event, liveness, settlement, new Date()));
         return;
       }
-
 
       case 'timer': {
         if (event.kind === DAILY_REPORT_KIND) {
