@@ -409,6 +409,36 @@ function planExtraction(plugin: ExtractablePlugin): {
   return { outputs, removed };
 }
 
+/**
+ * 展開しないもの（fs に触れない）。入れる前の確認で「何が落ちるか」を見せるのに使う
+ * （展開の本体と同じ計画を通すので、見せたものと実際に落ちるものがずれない）。
+ */
+export function planPluginExtractionRemovals(
+  plugin: Pick<StoredPlugin, 'name' | 'files'>,
+  flags: { enableHooks: boolean; enableMcp: boolean },
+): readonly RemovedItem[] {
+  return planPluginExtraction(plugin, flags).removed;
+}
+
+/**
+ * 展開するもの（書かれるバイト）と展開しないもの。fs に触れない。プレビューが実行ファイルの分類や
+ * 本文の検査をするときも、実際に書かれる内容（許可したキーだけで作り直した frontmatter）を見る。
+ */
+export function planPluginExtraction(
+  plugin: Pick<StoredPlugin, 'name' | 'files'>,
+  flags: { enableHooks: boolean; enableMcp: boolean },
+): {
+  readonly outputs: readonly { path: string; bytes: Uint8Array; executable: boolean }[];
+  readonly removed: readonly RemovedItem[];
+} {
+  return planExtraction({
+    ...plugin,
+    ...flags,
+    contentSha256: '',
+    source: { sha: '' },
+  });
+}
+
 /** 書込み可へ戻してから消す。0o555 のままでは中身を消せず、symlink は辿らない。 */
 async function removeTree(path: string): Promise<void> {
   await makeWritable(path);
