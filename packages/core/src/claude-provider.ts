@@ -550,6 +550,12 @@ export interface ManagerSessionOptionsRequest {
   // クローン側に同じ引数を持たせない: auto-memory が「書いた本人の次のセッション」に届く前提は、使い捨てのマネージャーと違い、長寿命1本のクローンでは崩れていないため
   managerAutoMemoryEnabled: boolean;
   mcpServers?: Readonly<Record<string, McpServerConfig>>;
+  /**
+   * runner が展開した plugin（`Options.plugins` の `type: 'local'` へ写す）。省略・空なら欄ごと省く。
+   * **`agents`（作業者）には何も足さない** — 作業者は親のセッションから受け継ぐ見込みで、
+   * `AgentDefinition.skills` は名前の配列しか取れず、列挙すると増えた分に追いつかない。
+   */
+  plugins?: readonly ClonePluginRequest[];
 }
 
 export function buildManagerSessionOptions(request: ManagerSessionOptionsRequest): Options {
@@ -576,6 +582,7 @@ export function buildManagerSessionOptions(request: ManagerSessionOptionsRequest
     onPermissionDenied,
     managerAutoMemoryEnabled,
     mcpServers,
+    plugins,
   } = request;
 
   return {
@@ -608,6 +615,7 @@ export function buildManagerSessionOptions(request: ManagerSessionOptionsRequest
     ...(mcpServers === undefined || Object.keys(mcpServers).length === 0
       ? {}
       : { mcpServers: { ...mcpServers } }),
+    ...clonePluginOptions(plugins),
     // `skills: 'all'` を明示し、名前を列挙しない: 省くと CLI の既定に委ねて器によって引けるものが変わり、列挙するとスキルが増えたときに追いつかないため
     // 上の `agents`（作業者）側には `skills` を書かない: `AgentDefinition.skills` は `'all'` を受けず、名前の配列は明示リストで絞ることになり、preload で作業者の文脈へ先に載って畳んだ意味も消えるため
     skills: 'all',

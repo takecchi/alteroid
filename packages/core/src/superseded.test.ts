@@ -5,14 +5,8 @@ import type { Commitment, InboxEvent } from './schema.js';
 import type { CommitmentList } from './store.js';
 import { countSupersedingReports, describeSuperseded } from './superseded.js';
 
-/**
- * `superseded.ts` の歯。**純粋関数なので I/O のモック無しで全分岐に通せる**
- * （`runner-swap-notice.ts` の `decideRunnerSwapNotice` の歯と同じ作法）。
- */
-
 const MANAGER = 'mgr-1';
 
-/** `commitmentFor`（`clone.ts`）が `manager_message` から作る行と同じ形。 */
 function report(
   id: string,
   at: string,
@@ -37,7 +31,6 @@ function list(
   return { entries, unreadable: [], trimmedClosed: 0, ...extra };
 }
 
-/** 基準時刻。**畳む前の形で渡す**（`countSupersedingReports` が `at` の読めなさを判定するため）。 */
 const AFTER_ATS = ['2026-09-09T11:00:00Z'];
 
 describe('countSupersedingReports', () => {
@@ -45,7 +38,7 @@ describe('countSupersedingReports', () => {
     const decision = countSupersedingReports({
       list: list([
         report('r1', '2026-09-09T11:00:01Z'),
-        report('r2', '2026-09-09T12:00:00Z'), // 最新
+        report('r2', '2026-09-09T12:00:00Z'),
         report('r3', '2026-09-09T11:30:00Z'),
       ]),
       managerId: MANAGER,
@@ -60,14 +53,6 @@ describe('countSupersedingReports', () => {
     });
   });
 
-  /**
-   * **オフセット付きの時刻でも順序を間違えない。** `2026-09-09T19:00:00+09:00`
-   * は `2026-09-09T11:00:00Z`（＝ `AFTER`）とちょうど同じ瞬間である——
-   * 文字列の辞書順で比べると `+09:00` の側（時の桁が `19`）が `Z` 表記
-   * （時の桁が `11`）より大きく見えるので、辞書順比較なら「後続」と誤判定する。
-   * 実際には同じ瞬間（＝ `afterMs` より後ではない）なので、正しい実装は
-   * `none` を返す。
-   */
   it('オフセット付きの時刻（+09:00）でも辞書順に惑わされない（同じ瞬間は「後続」に数えない）', () => {
     const decision = countSupersedingReports({
       list: list([report('same-instant', '2026-09-09T19:00:00+09:00')]),
@@ -79,8 +64,6 @@ describe('countSupersedingReports', () => {
   });
 
   it('batch 自身の行は「後続」に数えない（excludeIds と基準時刻の両方が効く）', () => {
-    // このエントリは afterMs より後の時刻を持つが、id が excludeIds に
-    // 入っている——batch 自身の行なので除外されるべきである。
     const decision = countSupersedingReports({
       list: list([report('batch-own', '2026-09-09T12:00:00Z')]),
       managerId: MANAGER,
@@ -203,21 +186,12 @@ describe('countSupersedingReports', () => {
 
     const text = describeSuperseded(decision, MANAGER);
     expect(text).toContain('これより多い可能性がある');
-    // 件数の情報を捨てていないこと。
     expect(text).toContain('報告が 1 件届いている');
   });
   it('基準時刻（いま配っている合図の at）が読めなければ uncountable（全部を「後続」に数えない）', () => {
     const decision = countSupersedingReports({
-      // **この行は「後続」に見えてはいけない。** 基準が読めないのに数えると、
-      // 基準は -Infinity へ倒れて**この委譲の報告が全部「後続」に見える** ⟹
-      // 「あなたが読んでいるものは古い」を、いちばん強い向きで嘘として出す。
       list: list([report('c-1', '2026-09-09T12:00:00Z')]),
       managerId: MANAGER,
-      // **読める `at` を1つ混ぜてある。** 壊れた1件だけを渡すと `afterMs` は
-      // `-Infinity` のままで、`at` が1つも無いときの門のほうで `uncountable`
-      // になる ⟹ **測りたい門（壊れた `at` を見つける側）を通らずに緑になる。**
-      // 変異試験で実際にこの形の偽陽性を踏んだので、読める1件を足して
-      // 「`-Infinity` では説明できない」形にしてある。
       afterAts: ['2026-09-09T11:00:00Z', 'まったく時刻ではない'],
       excludeIds: new Set(),
     });
@@ -254,14 +228,6 @@ describe('countSupersedingReports', () => {
   });
 });
 
-/**
- * `commitmentFor`（`clone.ts`、`manager_message` 分岐）から `report` 種別の
- * イベントを1つ作るための最小のヘルパ。**このファイルの `report()` / `question()`
- * / `permission()` とは役割が違う** —— あちらは `Commitment` を直接（接頭辞を
- * 手で書いて）組むフィクスチャで、こちらは `commitmentFor` の入力
- * （`InboxEvent`）を組む。`Commitment` を作るのは呼び出し側で `commitmentFor`
- * 自身にやらせる。
- */
 function managerReportEvent(
   id: string,
   at: string,
@@ -271,25 +237,6 @@ function managerReportEvent(
   return { type: 'manager_message', id, at, managerId, kind: 'report', text };
 }
 
-/**
- * issue #872: `commitmentFor` が組む `body` の接頭辞（`clone.ts` の
- * `` body: `[${event.kind}] ${event.text}` `` ）と、`countSupersedingReports`
- * が読む接頭辞（`entry.body.startsWith('[report] ')`）が一致していることを
- * 確かめる歯。
- *
- * **なぜこの歯が要るか。** このファイルの `report()` / `question()` /
- * `permission()` を含め、`superseded.test.ts` / `clone-superseded-notice.test.ts`
- * / `commitment.test.ts` / `tools.test.ts` /
- * `clone-*.test.ts`（旧 `clone.test.ts`。#1744 で分割済み）/
- * `commitments.test.tsx` の全フィクスチャは `commitmentFor` を経由せず、
- * `'[report] '` 等の接頭辞を**手で書き写している**（issue #872 の実測）。
- * ⟹ `commitmentFor` の接頭辞の組み立てが将来変わっても、それらのテストは
- * 1本も赤くならない —— 書く側と読む側が同じ文字列をそれぞれ独立に持っている
- * だけで、両者を突き合わせていないため。**この歯だけが、`commitmentFor` の
- * 実際の出力を `countSupersedingReports` へ通す。** 次にこの歯を「他と重複
- * している」と思って消さないこと —— 他のテストを何本読んでも、この確認の
- * 代わりにはならない（接頭辞がずれても、それらは緑のままである）。
- */
 describe('commitmentFor と countSupersedingReports の接頭辞の一致（issue #872）', () => {
   it('commitmentFor が組んだ report 行を countSupersedingReports が superseded として数える', () => {
     const commitment = commitmentFor(managerReportEvent('r1', '2026-09-09T12:00:00Z'));

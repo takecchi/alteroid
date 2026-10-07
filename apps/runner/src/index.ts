@@ -8,6 +8,9 @@ import {
   createCredentialStore,
   createProfileVessel,
   createRunnerHost,
+  defaultRunnerPluginsRoot,
+  pruneRunnerPluginsOnBoot,
+  runnerPluginsDirOptions,
   DEFAULT_PROFILE_PATH,
   installUncaughtNet,
   agentProviderOf,
@@ -244,6 +247,20 @@ export async function main(): Promise<void> {
     withheldEnvKeys: WITHHELD_ENV_KEYS,
   });
 
+  // 展開先を `/workspace` に置かない: 子の持ち物のため。置き場が volume の構成では前の器の展開物が残るので、起動時にまとめて消す
+  const pluginsRoot = envValue(process.env, 'ALTEROID_PLUGINS_DIR') ?? defaultRunnerPluginsRoot();
+  // 置き場が信頼できなければ片づけない: root 権限で他人が差し替えられるディレクトリの中を chmod・削除しないため
+  const prunedPlugins = await pruneRunnerPluginsOnBoot(
+    pluginsRoot,
+    runnerPluginsDirOptions(),
+    (line) => process.stderr.write(line),
+  );
+  if (prunedPlugins !== undefined && prunedPlugins.removed.length > 0) {
+    process.stdout.write(
+      `alteroid-runner: 前の器の plugin の展開物 ${prunedPlugins.removed.length} 件を消しました\n`,
+    );
+  }
+
   const peerOpening = await openPeerSocket(process.env, childUser);
   const outbox = new Outbox();
   const host = createRunnerHost({
@@ -251,6 +268,7 @@ export async function main(): Promise<void> {
     workspacePath,
     emit: (event) => outbox.push(event),
     credentials,
+    pluginsRoot,
     ...(peerOpening.host === undefined
       ? {}
       : {

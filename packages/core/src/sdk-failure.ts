@@ -1,266 +1,40 @@
 import type { SDKMessage } from '@anthropic-ai/claude-agent-sdk';
 
-/**
- * 「SDK が『これは応答ではない』と言っている」印を読む。
- *
- * ## なぜこれが要るのか
- *
- * 実際に起きた壊れ方は、日報の本文が丸ごと
- * `You've hit your org's monthly spend limit · ask your admin to raise it at …`
- * になっていた、というものである。**エラーが返答として扱われた。**
- *
- * 経路はこうだった — 上限の文言は `assistant` メッセージの text ブロックとして
- * 届き、`clone.ts` はそれを無条件に `turn.text`（＝応答の本文）へ足していた。
- * ターンの戻り値は `string` 一本で成否を運ばないので、日報を作る側はそれが
- * 応答なのか失敗なのかを判別できず、そのまま日報の本文として書いた。
- *
- * ## 検知は構造化された印だけで行う（文言で検知しない）
- *
- * **ここに文言の判定を置かないこと。** 分類は `usage-limits.ts` が SDK の定数で
- * 行うが、あれを「応答かどうか」の判定に使ってはならない — `classifyUsageNotice`
- * は部分一致（`includes`）なので、**クローンが「上限に当たった」と日報に書いた
- * 瞬間に上限と誤判定する**（自家中毒）。
- *
- * 順序はこう固定する。
- *
- * 1. **構造化された印**（このファイル）で「応答ではない」を確定させる
- * 2. 確定した後にだけ、その文言を `classifyUsageNotice` へ通して
- *    「待つ（`reached`）」か「待たない」かを決める
- *
- * こうすると、分類にかける文字列は必ず「SDK 自身が失敗として出したもの」に
- * 限られるので、クローンの書いた本文が分類器に触れることが構造上なくなる。
- */
+import type { TurnFailureKind } from './schema.js';
 
-/** 応答ではないと分かった印の出どころ。 */
-export type SdkFailureVia =
-  /** `assistant.error`（SDK が assistant メッセージ自身に付ける印）。 */
-  | 'assistant_error'
-  /** `result.subtype` が `success` 以外（`error_during_execution` など）。 */
-  | 'result_subtype'
-  /** `result.subtype` は `success` だが `is_error` が真。 */
-  | 'result_is_error';
+// 応答かどうかを文言で判定しない: `classifyUsageNotice` は部分一致なので、クローンが日報に「上限に当たった」と書いた瞬間に上限と誤判定するため
+export type SdkFailureVia = 'assistant_error' | 'result_subtype' | 'result_is_error';
 
 export interface SdkFailure {
   via: SdkFailureVia;
-  /**
-   * 印そのもの（`billing_error` / `error_during_execution` / `api_error_status`）。
-   * **言い換えない** — 人間が SDK の型定義で引ける語のまま残す。
-   */
+  // 言い換えない: 人間が SDK の型定義で引ける語のまま残すため
   code: string;
-  /**
-   * SDK が出した文言そのまま。無ければ空文字。
-   *
-   * これが `classifyUsageNotice` へ渡る唯一の材料である（上の doc の順序2）。
-   */
   text: string;
+  /**
+   * `result.api_error_status`（HTTP の状態番号）。読めたときだけ付く。
+   * `code` の末尾の `/429` と同じ値を、文字列を割らずに読めるよう構造で持つ。
+   */
+  status?: number;
 }
 
-/** 空でない文字列だけを通す。 */
 function nonEmpty(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim().length > 0 ? value : undefined;
 }
 
-/**
- * `assistant` メッセージに付いた失敗の印。無ければ `undefined`。
- *
- * SDK の `SDKAssistantMessage.error` は
- * `'authentication_failed' | 'oauth_org_not_allowed' | 'account_on_hold' |
- * 'verification_required' | 'billing_error' | 'rate_limit' | 'overloaded' |
- * 'invalid_request' | 'model_not_found' | 'server_error' | 'unknown' |
- * 'max_output_tokens' | 'cloud_credential_error'` である。**支出上限は
- * このうち `billing_error` として来る側**で、つまり SDK は「これはモデルの発言では
- * ない」と最初から言っている。
- *
- * ## `cloud_credential_error`（0.3.267 で増えた）を分類していない理由
- *
- * **この語は「Anthropic の API が断った」ではなく「API へ届く前に、AWS / Google
- * Cloud のローカルな資格情報の解決に失敗した」を指す。** 立つ条件は次のどちらか
- * だけである（実測 2026-09-10、`@anthropic-ai/claude-agent-sdk-linux-x64@0.3.267`
- * の `claude` を `grep -a` して読んだ逐語。**npm パッケージ側にはこの語の doc も
- * 組み立ても無い** — `sdk.d.ts` の union に現れるだけで `.mjs` には0件だった）:
- *
- * > `function eJ(e){if(e instanceof Ht&&e.status!==void 0)return null;if(zxt(e))return"AWS";if(ZOn()&&JOn(e,QOn))return"Google Cloud";return null}`
- *
- * 先頭の1行が効いている——**HTTP の状態番号を持つ応答はここで先に外れる。**
- * ⟹ 資格情報は取れたが API が 401/403 を返した回は `authentication_failed` の側
- * であって、この語には来ない。**`authentication_failed` / `billing_error` /
- * `account_on_hold` / `rate_limit` はどれも「向こうが断った」側で、この語だけが
- * 「こちらが名乗れなかった」側である。⟹ 同じ箱に入れない。**
- *
- * **⚠️ そのうえで「待てば開くか」は SDK からは決まらない。SDK 自身の印が割れて
- * いる**（同じ実測から、いずれも逐語）:
- *
- * - 立てる側は**一時的だと言っている**:
- *   `error:"cloud_credential_error",apiErrorIsTransient:!0`
- * - 人へ見せる側は**人が動けと言っている**:
- *   `case"cloud_credential_error":return{state:"blocked",needs:"cloud credentials unavailable — check or refresh them"}`
- * - 詰まりを上げるかの分岐では、**`authentication_failed` の側ではなく
- *   `overloaded` / `rate_limit` / `unknown` と同じ「上げない」側に置かれている**:
- *   `case"cloud_credential_error":case"unknown":case void 0:return null`
- *
- * ⟹ **どちらとも名乗らせない。** 実際いまそうなっている——この語に付く文言
- * （`API Error: Could not load AWS credentials · … Check or refresh your AWS
- * credentials and try again.`）は `USAGE_LIMIT_ERROR_PREFIXES` のどれにも当たらず、
- * `limitRecoveryOf` は `'unknown'` を返し、`withRecoveryNote` は行を足さない。
- * **ただしそれは「当たらなかった」から出ている値であって、誰かが決めた値ではない。**
- * 接頭辞が1本増えるだけで黙って `time` を名乗りうるので、**名乗らないことのほうを
- * 歯で留めてある**（`sdk-failure.test.ts` の describe
- * 「`cloud_credential_error` — 回復の見込みを名乗らない」）。
- *
- * **追記（#809）。** `usage-limits.ts` の `limitRecoveryOfAssistantError`
- * （語 → 回復の見込みの軸）は、この語を明示的に `unknown` と判断している
- * ——直上の測定（SDK 自身の印が割れている）が理由で、`action` にも `time`
- * にも倒せないという**決めた `unknown`**である。文言側（`limitRecoveryOf`）の
- * 「当たらなかったからの `unknown`」とは出どころが違うが、`tools.ts` の
- * `describeManagerFailure` はどちらの経路でも最終的に `unknown` を返す
- * ——結論（何も足さない）は変わらない。
- *
-
- * ## `verification_required`（0.3.268 で増えた）は `cloud_credential_error` と逆で、印が揃っている
- *
- * **こちらは「Anthropic の API が断った」側そのものである。** HTTP 403 で、
- * ボディの形は `{error:{type:"permission_error",message,details:{error_code:"verification_required"}}}`
- * （実測 2026-09-11、`@anthropic-ai/claude-agent-sdk-linux-x64@0.3.268` の
- * `claude` を `grep -a` して読んだ逐語。この語も npm パッケージ側（`.mjs`）には
- * 0件で、組み立てはコンパイル済み CLI 本体にしか無い——`cloud_credential_error`
- * と同じ形）:
- *
- * > `function xHt(e,n){if(e!==403)return;let r=vhe().safeParse(n);if(!r.success)return;return cLn(r.data.error.message)}`
- * > `class kPe extends Error{constructor(e,n){super(e,n);this.name="VerificationRequiredError"}}`
- *
- * **`cloud_credential_error` は SDK 自身の印が割れていた**（直上——立てる側は
- * `apiErrorIsTransient:!0` で一時的だと言い、人へ見せる側は「人が動け」と言い、
- * 詰まりを上げる分岐では `overloaded` / `rate_limit` と同じ「上げない」側に
- * 置かれていた。だから「どちらとも名乗らせない」という判断だった）。
- * **`verification_required` はここが揃っている**（同じ実測から、いずれも逐語）:
- *
- * - 人へ見せる側:
- *   `case"verification_required":return{state:"blocked",needs:fxn}`
- *   （`fxn="organization verification required — see detail"`）——
- *   `authentication_failed` / `account_on_hold` / `billing_error` と同じ
- *   `"blocked"` である。
- * - 詰まりを上げるかの分岐（`/goal` の自動継続を止めるかどうか）では、
- *   `account_on_hold` / `authentication_failed` / `billing_error` /
- *   `model_not_found` と同じ「回復不能・上げる」側に置かれている
- *   （`overloaded` / `rate_limit` / `invalid_request` / `cloud_credential_error` /
- *   `unknown` / `max_output_tokens` は「上げない」側のまま）:
- *   `case"verification_required":return"verification_required"`
- *   （`authentication_failed` / `account_on_hold` の `"auth"` へは畳まれず、
- *   専用の箱を持つ。ラベルは
- *   `{label:"organization verification required",errorCode:"cleared_verification_required"}`）
- * - この語を立てる箇所（`Ro({error:"verification_required",content:...})`）は
- *   `apiErrorIsTransient` を**そもそも渡していない**（`cloud_credential_error`
- *   は明示的に `apiErrorIsTransient:!0` を渡していたのと対照的）。渡されない
- *   欄は `undefined` になり、CLI 側の判定
- *   `function VRt(e){return e.apiErrorIsTransient===!0||e.error==="overloaded"||e.error==="server_error"}`
- *   は `false` を返す——**一時的だと言っている箇所は無い。**
- *
- * ⟹ **測った印（403/permission_error・専用クラス名・"blocked"+固定文言・
- * `/goal` の回復不能群・専用の箱・`apiErrorIsTransient` 不在）が全部同じ向きを
- * 指している。「人間（または組織の管理者）が動くまで開かない」側だと、ここでは
- * `cloud_credential_error` と違って判定できる。**
- *
- * **それでも `limitRecoveryOf` は `'unknown'` を返す。** ただし理由は
- * `cloud_credential_error` とは違う。あちらは「SDK の印が割れているので `time`
- * にも `action` にも倒せない」から `unknown` だった。**こちらは印が揃っていて
- * 判定できているのに、`limitRecoveryOf` にその判定を運ぶ軸がそもそも無い**——
- * この関数が見ているのは `SDKAssistantMessageError` の語ではなく
- * `USAGE_LIMIT_ERROR_PREFIXES` の**文言の接頭辞**であって（`usage-limits.ts`
- * の doc）、`verification_required` の実際の本文（サーバの `error.message` を
- * `cLn` で空白正規化・truncate しただけの値——`content:` は `${Ka}: ${o}`、
- * `Ka="API Error"`。**`cloud_credential_error` の
- * `Could not load ${p} credentials …` のような CLI 側の固定テンプレートは
- * この語には存在しない**）は、この12接頭辞のどれとも一致しない形をしている。
- * **⟹ 「無い」には2種類あり、これを潰さないこと。** ここの `unknown` は
- * 「とりあえず `unknown`」（＝まだ測っていない・分からない）ではない。
- * **測れば人間側だと分かっているが、それを名乗る口が無い**——だから
- * `unknown` になる。**これは分類の放棄ではなく、構造の欠落である。**
- * `usage-limits.ts` に「`error` の語 → 回復の見込み」の軸を新設するかどうかは
- * この変更の範囲外だった（`usage-limits.ts` には触れていない）。
- *
- * **追記（#809 で解消）。** `usage-limits.ts` に
- * `limitRecoveryOfAssistantError`（`SDKAssistantMessageError` の語 →
- * `LimitRecovery` の軸）を新設し、`tools.ts` の `describeManagerFailure` が
- * 「`limitRecoveryOf`（文言）が `unknown` を返したときだけ、この軸へ落ちる」
- * 形で組み合わせるようにした。**この関数（`limitRecoveryOf`）自体は1文字も
- * 変えていない**——直上の「`verification_required` の実際の本文は12接頭辞の
- * どれとも一致しない」は今も真であり、`limitRecoveryOf` は今も `'unknown'`
- * を返す。変わったのは、その `'unknown'` を受け取った**呼び出し側**が、
- * 語ベースの軸（`verification_required` → `action`。根拠は
- * `usage-limits.ts` の `limitRecoveryOfAssistantError` の doc）へ
- * フォールバックするようになったことである。
- *
-
- * **歯は2段構えにしてある**（`sdk-failure.test.ts` の describe
- * 「`verification_required` — 回復の見込みを名乗らない」）——「`time` を
- * 名乗らないこと」（`limitRecoveryOf(...) === 'unknown'`）と「**`unknown` に
- * なった理由**（どの接頭辞にも当たっていないこと、
- * `matchedUsageLimitPrefix(...) === undefined`）」は別の固定点である。
- * **前者だけでは足りない** — SDK が `USAGE_LIMIT_ERROR_PREFIXES` に接頭辞を
- * 1本増やし、この語の本文がその接頭辞へ当たるようになっても、当たった先
- * （`LIMIT_RECOVERY_BY_PREFIX`）の値がたまたま `'unknown'` の行なら、
- * `limitRecoveryOf` の返り値は `'unknown'` のまま変わらず、前者の歯は
- * 緑のままになる（`usage-limits.ts` の `matchedUsageLimitPrefix` の doc が
- * 同じ区別を持っている——「`limitRecoveryOf` の返り値だけを見ても現れない」）。
- * **後者はこの「値は変わらないが、当たり方は変わった」を捕まえる**——
- * 赤くなったら、それは SDK の `USAGE_LIMIT_ERROR_PREFIXES` に接頭辞が増え、
- * この語の本文がそこへ落ちるようになったという合図である（失敗メッセージに
- * 次に確かめる手順を書いてある。この語の扱いを `LIMIT_RECOVERY_BY_PREFIX` へ
- * 足すのと同時に決めること。（`error` の語 → 回復の見込みという軸そのものが
- * この実装に無いこと自体は #809 に落とし、`usage-limits.ts` の
- * `limitRecoveryOfAssistantError` として解消した。この語は同表で `action`
- * と判断してある）。
- *
- * **この写しは数え上げなので腐る。** 腐ったことを `tsc` に言わせる歯は
- * `sdk-failure.test.ts` の `SDK_ASSISTANT_ERROR_CODES` にあり、SDK が語を増やすと
- * そこが落ちる。**落ちたら、増えた語をあちらの表とこの写しの両方へ足すこと**
- * （片方だけ直すと、次に読む人には写しのほうが正しく見える）。
- *
- * **⚠️ ここを読み落としても、`assistantFailureOf` は語を取りこぼさない。** 下の実装は
- * 語を列挙せず「空でない文字列」を印として通すので、**知らない語も印になる。**
- * 数え上げているのはこの写しと歯だけである。
- *
- * **印も本文も呼び出し側が渡す。** メッセージそのものを受け取らないのは、
- * SDK の綴り（`error` という欄に印が載ること）を読むのが
- * `claude-provider.ts` の `foldClaudeMessage` の仕事だからである（#486
- * 「読み側の中立化」）。本文のほうは層によって取り出し方が違う
- * （`clone.ts` はブロックをそのまま繋ぎ、`runner.ts` は改行で繋いで trim する）
- * ので、ここで3つ目の写しを作ると綴りの取り違えが片方だけで起きる。
- */
+// `cloud_credential_error` を「待てば開く」とも「人が動く」とも分類しない: SDK 自身の印が割れているため
+// メッセージそのものを受け取らない: SDK の綴りを読むのは `claude-provider.ts` の `foldClaudeMessage` の仕事で、ここに3つ目の写しを作ると取り違えが片方だけで起きるため
 export function assistantFailureOf(error: unknown, text: string): SdkFailure | undefined {
   const code = nonEmpty(error);
   return code === undefined ? undefined : { via: 'assistant_error', code, text };
 }
 
-/**
- * `result` を「応答として扱ってよい」か。
- *
- * **`usage.ts` の `isSuccessResult` とは問いが違うので、別の関数にしてある。**
- *
- * | 関数 | 問い | 判定 |
- * | --- | --- | --- |
- * | `isSuccessResult` | この累積を**台帳へ通してよいか** | `subtype === 'success'` |
- * | `isAnsweredResult` | このターンを**応答として扱ってよいか** | 上記 ＋ `is_error !== true` |
- *
- * **一方に寄せないこと。** 台帳側を厳しくすると、`is_error` が立った回の累積が
- * 台帳に載らなくなる（値は累積なので次の成功が運んでくるが、そこで打ち切られた
- * セッションの分は落ちる）。応答側を緩くすると、**まさにこの穴に戻る** —
- * `subtype: 'success'` かつ `is_error: true` の result が「答えが返った」ことに
- * なる。`is_error` は `SDKResultSuccess` が持つフィールドであって、
- * `SDKResultError` 専用の印ではない。
- */
+// `usage.ts` の `isSuccessResult` に寄せない: 台帳側を厳しくすると `is_error` の回の累積が載らず、応答側を緩くすると `subtype: 'success'` かつ `is_error: true` が「答えが返った」ことになるため
 export function isAnsweredResult(message: unknown): boolean {
   const candidate = message as { subtype?: unknown; is_error?: unknown };
   return candidate.subtype === 'success' && candidate.is_error !== true;
 }
 
-/**
- * `result` に付いた失敗の印。応答として扱える result なら `undefined`。
- *
- * `code` は `subtype`（`success` なら `is_error` 側であることを示す語）に
- * `api_error_status` が読めれば添える。**HTTP の状態番号を落とさない** —
- * 429 と 402 と 500 は待ち方が違う。
- */
+// HTTP の状態番号を落とさない: 429 と 402 と 500 は待ち方が違うため
 export function resultFailureOf(message: SDKMessage): SdkFailure | undefined {
   if (isAnsweredResult(message)) return undefined;
   const candidate = message as {
@@ -271,22 +45,37 @@ export function resultFailureOf(message: SDKMessage): SdkFailure | undefined {
   const subtype = nonEmpty(candidate.subtype);
   const status =
     typeof candidate.api_error_status === 'number' && Number.isFinite(candidate.api_error_status)
-      ? `/${String(candidate.api_error_status)}`
-      : '';
+      ? candidate.api_error_status
+      : undefined;
   return {
     via: subtype === 'success' ? 'result_is_error' : 'result_subtype',
-    code: `${subtype ?? '(不明)'}${status}`,
+    code: `${subtype ?? '(不明)'}${status === undefined ? '' : `/${String(status)}`}`,
     text: nonEmpty(candidate.result) ?? '',
+    ...(status === undefined ? {} : { status }),
   };
 }
 
-/**
- * `result.errors[]`（構造を持たない失敗の行）。無ければ空。
- *
- * **クローンとマネージャーが同じこれを呼ぶ。** 直す前は `runner.ts` にだけあり、
- * `clone.ts` は読んでいなかった（0件）ので、上限の文言が `errors[]` にだけ乗った
- * 場合はクローン側だけが検知できないという非対称になっていた。
- */
+// ここに無い語は `other` に倒す: `cloud_credential_error` や `account_on_hold` は認証とも利用上限とも言い切れないため
+const TURN_FAILURE_KIND_BY_ASSISTANT_ERROR: Readonly<Record<string, TurnFailureKind>> = {
+  authentication_failed: 'auth',
+  oauth_org_not_allowed: 'auth',
+  billing_error: 'quota',
+  rate_limit: 'quota',
+};
+
+// メッセージ本文は見ない: 本文の正規表現で決めるのをやめるための関数のため
+export function turnFailureKindOf(failure: SdkFailure | undefined): TurnFailureKind {
+  if (failure === undefined) return 'other';
+  if (failure.via === 'assistant_error') {
+    return Object.prototype.hasOwnProperty.call(TURN_FAILURE_KIND_BY_ASSISTANT_ERROR, failure.code)
+      ? TURN_FAILURE_KIND_BY_ASSISTANT_ERROR[failure.code]!
+      : 'other';
+  }
+  if (failure.status === 401) return 'auth';
+  if (failure.status === 429) return 'quota';
+  return 'other';
+}
+
 export function resultErrorLines(message: SDKMessage): string[] {
   const errors = (message as { errors?: unknown }).errors;
   return Array.isArray(errors)
