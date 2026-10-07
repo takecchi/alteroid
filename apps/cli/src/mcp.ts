@@ -53,6 +53,10 @@ const MASK = '***';
 
 export async function mcpListCommand(): Promise<void> {
   const target = await resolveTarget();
+  if (target.note !== null) {
+    stdout.write(`${target.note}\n`);
+    return;
+  }
   const view = await read(target);
   stdout.write(renderMcpList(view));
 }
@@ -85,6 +89,8 @@ export function renderMcpList(view: McpServersView): string {
 
 export async function mcpShowCommand(options: { reveal?: boolean } = {}): Promise<void> {
   const target = await resolveTarget();
+  // 例外にする: note を標準出力へ書くと、`show > f; set f` で note が登録として撒かれるため
+  if (target.note !== null) throw new Error(target.note);
   const view = await read(target);
   if (options.reveal === true) {
     stdout.writeRaw(`${JSON.stringify({ mcpServers: view.mcpServers }, null, 2)}\n`);
@@ -98,12 +104,14 @@ export async function mcpShowCommand(options: { reveal?: boolean } = {}): Promis
 }
 
 export async function mcpSetCommand(file: string, options: { yes?: boolean } = {}): Promise<void> {
+  // 標準入力を読む前に断る: 読み切ってから落ちると、渡した本文が無駄になり理由も遅れるため
+  const target = await resolveTarget();
+  if (target.note !== null) throw new Error(target.note);
   const text =
     file === '-'
       ? await readAll()
       : await readInputFile(file, '引数 <file>', '<file>（.mcp.json）、または標準入力（-）');
   const servers = parseMcpJson(text);
-  const target = await resolveTarget();
   const before = await read(target);
   const beforeNames = Object.keys(before.mcpServers);
   if (beforeNames.length > 0 && stableJson(before.mcpServers) !== stableJson(servers)) {
@@ -126,6 +134,8 @@ function stableJson(value: unknown): string {
 
 export async function mcpEditCommand(): Promise<void> {
   const target = await resolveTarget();
+  // エディタを開く前に断る: 書き終えてから落ちると、書いた本文が無駄になるため
+  if (target.note !== null) throw new Error(target.note);
   const current = await read(target);
   const original = `${JSON.stringify({ mcpServers: current.mcpServers }, null, 2)}\n`;
 
@@ -153,6 +163,8 @@ export async function mcpEditCommand(): Promise<void> {
 
 export async function mcpClearCommand(options: { yes?: boolean } = {}): Promise<void> {
   const target = await resolveTarget();
+  // 確認を出す前に断る: 未ログインのまま「外してよいか」を聞くのは無意味なため
+  if (target.note !== null) throw new Error(target.note);
   const before = await read(target);
   const beforeNames = Object.keys(before.mcpServers);
   if (beforeNames.length > 0) {
