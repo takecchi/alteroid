@@ -6,6 +6,7 @@ import {
   isAnsweredResult,
   resultErrorLines,
   resultFailureOf,
+  turnFailureKindOf,
 } from './sdk-failure.js';
 import {
   classifyUsageNotice,
@@ -136,6 +137,83 @@ describe('resultFailureOf — result の失敗の印', () => {
 
   it('本文が無ければ空文字（`undefined` を文字列化しない）', () => {
     expect(resultFailureOf(result({ is_error: true, result: undefined }))?.text).toBe('');
+  });
+});
+
+describe('resultFailureOf — status（構造で持つ）', () => {
+  it('api_error_status が読めれば status に数で載り、読めなければ欄ごと無い', () => {
+    expect(resultFailureOf(result({ is_error: true, api_error_status: 401 }))?.status).toBe(401);
+    expect(
+      'status' in (resultFailureOf(result({ is_error: true, api_error_status: 'x' })) ?? {}),
+    ).toBe(false);
+  });
+});
+
+describe('turnFailureKindOf — ターン失敗の種別（本文は見ない）', () => {
+  const expectedByAssistantError: Record<SDKAssistantMessageError, 'auth' | 'quota' | 'other'> = {
+    authentication_failed: 'auth',
+    oauth_org_not_allowed: 'auth',
+    account_on_hold: 'other',
+    verification_required: 'other',
+    billing_error: 'quota',
+    rate_limit: 'quota',
+    overloaded: 'other',
+    invalid_request: 'other',
+    model_not_found: 'other',
+    server_error: 'other',
+    unknown: 'other',
+    max_output_tokens: 'other',
+    cloud_credential_error: 'other',
+  };
+
+  it('assistant.error の全13語（SDK の型と突き合わせ済み）が表どおりに決まる', () => {
+    expect(Object.keys(expectedByAssistantError).sort()).toEqual(
+      Object.keys(SDK_ASSISTANT_ERROR_CODES).sort(),
+    );
+    for (const [code, kind] of Object.entries(expectedByAssistantError)) {
+      expect([code, turnFailureKindOf(assistantFailureOf(code, '中立'))]).toEqual([code, kind]);
+    }
+  });
+
+  it('知らない語は other（言い切れない）', () => {
+    expect(turnFailureKindOf(assistantFailureOf('new_future_word', ''))).toBe('other');
+    expect(turnFailureKindOf(assistantFailureOf('toString', ''))).toBe('other');
+  });
+
+  it('result の HTTP 状態: 401 は auth、429 は quota、他は other', () => {
+    const kindOf = (status: number | undefined) =>
+      turnFailureKindOf(
+        resultFailureOf(
+          result({
+            subtype: 'error_during_execution',
+            ...(status === undefined ? {} : { api_error_status: status }),
+          }),
+        ),
+      );
+    expect(kindOf(401)).toBe('auth');
+    expect(kindOf(429)).toBe('quota');
+    expect(kindOf(500)).toBe('other');
+    expect(kindOf(undefined)).toBe('other');
+  });
+
+  it('本文に 401 / quota / 上限の文言が在っても、構造が無ければ other', () => {
+    const failure = resultFailureOf(
+      result({ subtype: 'error_during_execution', result: `401 quota ${ORG_SPEND_LIMIT}` }),
+    );
+    expect(turnFailureKindOf(failure)).toBe('other');
+    expect(turnFailureKindOf(assistantFailureOf('unknown', ORG_SPEND_LIMIT))).toBe('other');
+  });
+
+  it('Codex のターン失敗（code は状態の語、状態番号なし）は other', () => {
+    for (const code of ['failed', 'interrupted', 'rpc_error']) {
+      expect(
+        turnFailureKindOf({ via: 'result_subtype', code, text: '401 Unauthorized / quota' }),
+      ).toBe('other');
+    }
+  });
+
+  it('失敗の印が無ければ other', () => {
+    expect(turnFailureKindOf(undefined)).toBe('other');
   });
 });
 

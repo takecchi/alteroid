@@ -1878,6 +1878,11 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
           '`failed` / `held` の2語の列挙。`role` と同じく自由文を運べないが、' +
           '落ちた行の形を追うのに要らない（文面側は `text` が桁だけ持つ）。',
       },
+      // `turnFailure` と同じ判断（`auth` / `quota` / `other` の3語の列挙で、自由文を運べない）。
+      turnFailureKind: {
+        emit: 'never',
+        why: '`auth` / `quota` / `other` の3語の列挙。`turnFailure` と同じく落ちた行の形を追うのに要らない。',
+      },
       // issue #782 の1。`escalation.approvalId`（直下）・`inboxEventShape` の
       // `human_answer.approvalId` と同じ判断——承認待ちキューの項目 id で、
       // 自由文ではない（呼び出し側が組み立てる文章の一部にはならない）ので
@@ -2313,6 +2318,7 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
       clientMessageId: SECRET,
       attachments: [{ id: SECRET, name: SECRET, mediaType: 'image/png', size: 1, sha256: SECRET }],
       turnFailure: 'failed',
+      turnFailureKind: 'other',
       approvalId: 'ap-1',
       managerId: 'mgr-1',
       answeredApprovalId: 'ap-2',

@@ -18,6 +18,10 @@ import type {
 import { MEMORY_SLUG_RULE, PRACTICE_SLUG_RULE } from './slug-rule.js';
 import { usageLayerSchema, usageSiteSchema, usageTotalsSchema } from './usage.js';
 
+export const turnFailureKindSchema = z.enum(['auth', 'quota', 'other']);
+
+export type TurnFailureKind = z.infer<typeof turnFailureKindSchema>;
+
 const isoDateTime = z.string().datetime({ offset: true });
 
 export const memorySlugSchema = z
@@ -342,6 +346,8 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
     clientMessageId: z.string().optional(),
     // 文面で照合しない: 文面を直した瞬間に黙って外れるため、印を付ける
     turnFailure: z.enum(['failed', 'held']).optional(),
+    // 無い行を文面から推し量って `auth` / `quota` へ読み替えない: この欄を足す前の行は種別を決めていない＝不明のため
+    turnFailureKind: turnFailureKindSchema.optional(),
     // `conversationId` では結ばない: 同じ会話で近接した時刻に複数の承認へ回答すると、どの outbound がどの承認への返答か見分けられないため
     approvalId: z.string().optional(),
     answeredApprovalId: z.string().optional(),
@@ -1268,7 +1274,11 @@ export const chatStreamEventSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('tool'), tool: z.string() }),
   z.object({ type: z.literal('ask_human'), approvalId: z.string(), question: z.string() }),
   z.object({ type: z.literal('done') }),
-  z.object({ type: z.literal('error'), message: z.string() }),
+  /**
+   * ターンの終端（失敗）。`kind` は失敗の種別で、**文面から推し量らずこの欄を読む**（`turnFailureKindSchema`）。
+   * 言い切れない失敗は `other`。
+   */
+  z.object({ type: z.literal('error'), message: z.string(), kind: turnFailureKindSchema }),
 ]);
 
 export type ChatStreamEvent = z.infer<typeof chatStreamEventSchema>;
