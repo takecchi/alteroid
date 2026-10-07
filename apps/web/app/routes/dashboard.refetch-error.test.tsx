@@ -5,7 +5,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vites
 
 import { storeTestBaseUrl } from '~/test-support';
 
-import { homeRoute, renderHome, type HomeOptions } from './dashboard-test-helpers';
+import { homeRoute, pinHomeClock, renderHome, type HomeOptions } from './dashboard-test-helpers';
 
 // vi.hoisted にする: import の評価より後だと TZ の固定が静かに効かないため
 const tzBeforeThisFile = vi.hoisted(() => {
@@ -25,9 +25,11 @@ beforeEach(() => {
   originalFetch = globalThis.fetch;
   localStorage.clear();
   storeTestBaseUrl();
+  pinHomeClock();
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   cleanup();
   globalThis.fetch = originalFetch;
 });

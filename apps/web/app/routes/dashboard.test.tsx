@@ -5,7 +5,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vites
 
 import { renderedMoneyTexts, storeTestBaseUrl } from '~/test-support';
 
-import { homeRoute, PROGRESS_BODY, renderHome } from './dashboard-test-helpers';
+import { homeRoute, PROGRESS_BODY, pinHomeClock, renderHome } from './dashboard-test-helpers';
 
 // vi.hoisted にする: import の評価より後だと TZ の固定が静かに効かないため（usageDate(new Date()) はローカル時刻を読む）
 const tzBeforeThisFile = vi.hoisted(() => {
@@ -25,9 +25,11 @@ beforeEach(() => {
   originalFetch = globalThis.fetch;
   localStorage.clear();
   storeTestBaseUrl();
+  pinHomeClock();
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   cleanup();
   globalThis.fetch = originalFetch;
 });
@@ -171,6 +173,27 @@ describe('「今日の利用」の今日はデーモンの応答の today で決
           since: '2026-08-01T00:00:00.000Z',
           beforeLedger: false,
           today: null,
+        },
+      });
+
+      expect(await screen.findByText(/サーバの今日が分からない/)).toBeTruthy();
+      expect(renderedMoneyTexts()).toEqual(new Set());
+      expect(linkTo('/usage')).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('応答の today が取得した窓の外（端末の時計がずれている）とき、0 と出さず、分からないと出す（#3967）', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(browserNow);
+    try {
+      renderHome({
+        usage: {
+          rows: [],
+          since: '2026-08-01T00:00:00.000Z',
+          beforeLedger: false,
+          today: '2026-08-14',
         },
       });
 

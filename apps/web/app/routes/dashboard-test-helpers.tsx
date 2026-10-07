@@ -5,7 +5,15 @@ import { createMemoryRouter, RouterProvider } from 'react-router';
 
 import { json, Providers, sse, stubFetch, type FetchStub, type Route } from '~/test-support';
 
+import { vi } from 'vitest';
+
 import Dashboard from './dashboard';
+
+// 応答の today の既定（2026-08-14）を取得の窓に入れておく: 窓は端末の時計で決まり、窓の外の today は「分からない」へ倒れるため
+export function pinHomeClock(): void {
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(new Date('2026-08-14T05:00:00.000Z'));
+}
 
 export interface HomeOptions {
   usage?:
