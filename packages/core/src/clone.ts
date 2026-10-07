@@ -13955,7 +13955,7 @@ function payloadText(payload: unknown, attachments?: readonly { name: string }[]
   if (payload === undefined || payload === null || payload === '') {
     return attachments === undefined || attachments.length === 0
       ? '（中身のない通知。source だけが届いた。）'
-      : `（本文なし。添付だけが届いた）${attachmentNote(attachments)}`;
+      : '（本文なし。添付だけが届いた）';
   }
   return typeof payload === 'string' ? payload : safeJson(payload);
 }
