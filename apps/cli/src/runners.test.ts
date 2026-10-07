@@ -120,7 +120,9 @@ describe('renderRunners', () => {
       ],
       daemonRevision: KNOWN_DAEMON,
     });
-    expect(text).toContain('  peer: Codex に作業を頼める（peer: codex。名指しできるモデル: gpt-5.5）');
+    expect(text).toContain(
+      '  peer: Codex に作業を頼める（peer: codex。名指しできるモデル: gpt-5.5）',
+    );
     expect(text).toContain('  peer: 不明');
     expect(text.split('\n').filter((line) => line.startsWith('  peer:'))).toHaveLength(2);
   });

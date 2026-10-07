@@ -611,8 +611,7 @@ function uniqueList(by: readonly PeerApprovalRecord[]): string {
 export function createPeerBroker(deps: PeerBrokerDeps): PeerBroker {
   const sessions = new Map<string, PeerSession>();
   const allowed = new Set<string>(deps.allowed);
-  const modelsOf = (provider: AgentProviderId): readonly string[] =>
-    deps.models?.[provider] ?? [];
+  const modelsOf = (provider: AgentProviderId): readonly string[] => deps.models?.[provider] ?? [];
   const allModels = [...new Set(deps.allowed.flatMap((provider) => [...modelsOf(provider)]))];
 
   const run: PeerBroker['run'] = async (provider, prompt, options = {}) => {
@@ -682,7 +681,8 @@ export function createPeerBroker(deps: PeerBrokerDeps): PeerBroker {
       `session_id: ${result.sessionId}（続けるなら peer_reply に渡す）`,
       `provider: ${result.provider}`,
     ];
-    if (result.model !== undefined) lines.push(`model: ${result.model}（相手が名乗った実際のモデル）`);
+    if (result.model !== undefined)
+      lines.push(`model: ${result.model}（相手が名乗った実際のモデル）`);
     if (result.denied.length > 0) {
       lines.push(
         `承認が要る操作を ${result.denied.length} 件拒否した（${uniqueList(result.denied)}）。` +
@@ -760,7 +760,9 @@ export function createPeerBroker(deps: PeerBrokerDeps): PeerBroker {
               '相手は別の担い手で、あなたの文脈を持たない——必要な前提（作業ディレクトリ・完了の条件）は prompt に書くこと。' +
               approvalNote +
               '続きは返ってきた session_id を peer_reply へ渡す。' +
-              (allModels.length === 0 ? '' : `model で開いているモデル（${allModels.join(' / ')}）を名指しできる。`),
+              (allModels.length === 0
+                ? ''
+                : `model で開いているモデル（${allModels.join(' / ')}）を名指しできる。`),
             // `model` は在るときだけの欄なので、型は runShape に寄せて、値はハンドラで読む。
             { ...runShape, ...modelShape } as typeof runShape,
             async (args, extra) => {
@@ -776,7 +778,8 @@ export function createPeerBroker(deps: PeerBrokerDeps): PeerBroker {
           ),
           tool(
             'peer_reply',
-            'peer_run で立てた相手のセッションへ、続きの指示を送って結果を受け取る。' + approvalNote,
+            'peer_run で立てた相手のセッションへ、続きの指示を送って結果を受け取る。' +
+              approvalNote,
             {
               session_id: z.string().min(1).describe('peer_run が返した session_id'),
               message: z.string().min(1).describe('相手への続きの指示'),

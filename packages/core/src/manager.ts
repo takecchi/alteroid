@@ -1667,8 +1667,7 @@ export interface RunnerOverview {
 
 /** {@link RunnerOverview.managerPeers}。 */
 export type RunnerManagerPeers =
-  | { status: 'named'; peers: RunnerManagerPeer[] }
-  | { status: 'unknown' };
+  { status: 'named'; peers: RunnerManagerPeer[] } | { status: 'unknown' };
 
 /** `runner_list` が返す全体像。 */
 export interface RunnerFleetOverview {

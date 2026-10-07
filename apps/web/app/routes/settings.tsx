@@ -207,7 +207,8 @@ function ManagerPeers({ runner }: { runner: RunnerSummary }) {
   if (view.status === 'unknown') {
     return (
       <p className={`mt-0.5 ${SMALL_NOTE}`}>
-        Codex などに作業を頼めるか: 不明（この実行環境は名乗らない旧い版か、名乗りをまだ受けていない）
+        Codex などに作業を頼めるか:
+        不明（この実行環境は名乗らない旧い版か、名乗りをまだ受けていない）
       </p>
     );
   }

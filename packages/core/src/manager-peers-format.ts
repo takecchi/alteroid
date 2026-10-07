@@ -4,8 +4,7 @@
  * `runner_list` / `self_status`（クローン）と CLI の `alteroid runners` が同じ字面を使う。
  */
 export type ManagerPeersView =
-  | { status: 'named'; peers: { provider: string; models?: string[] }[] }
-  | { status: 'unknown' };
+  { status: 'named'; peers: { provider: string; models?: string[] }[] } | { status: 'unknown' };
 
 /** provider の名前を人の読む名前へ（知らない名前はそのまま）。 */
 export function peerProviderLabel(provider: string): string {

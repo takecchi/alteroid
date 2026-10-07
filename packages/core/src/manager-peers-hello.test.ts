@@ -95,7 +95,9 @@ describe('runner が名乗った peer の見え方（#3940）', () => {
       peers: [{ provider: 'codex', models: ['gpt-5.5'] }],
     });
     const listed = await call('runner_list', {});
-    expect(listed).toContain('peer: Codex に作業を頼める（peer: codex。名指しできるモデル: gpt-5.5）');
+    expect(listed).toContain(
+      'peer: Codex に作業を頼める（peer: codex。名指しできるモデル: gpt-5.5）',
+    );
     await stop();
   });
 

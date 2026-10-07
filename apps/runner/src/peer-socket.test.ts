@@ -40,13 +40,18 @@ describe('openPeerSocket（マネージャーの peer 専用ソケット）', ()
   it('開けたモデルの一覧を解いて渡し、起動時に1行で言う（#3934）', async () => {
     const dir = join(makeTempDirSync('peer-sock-'), 'peer');
     opened = await openPeerSocket(
-      { ALTEROID_MANAGER_PEERS: 'codex', ALTEROID_MANAGER_PEER_CODEX_MODELS: 'gpt-5.5,gpt-5.5-codex' },
+      {
+        ALTEROID_MANAGER_PEERS: 'codex',
+        ALTEROID_MANAGER_PEER_CODEX_MODELS: 'gpt-5.5,gpt-5.5-codex',
+      },
       undefined,
       dir,
     );
     expect(opened.models).toEqual({ codex: ['gpt-5.5', 'gpt-5.5-codex'] });
     expect(
-      opened.notices.filter((notice) => notice.includes('名指しできるモデル: gpt-5.5, gpt-5.5-codex')),
+      opened.notices.filter((notice) =>
+        notice.includes('名指しできるモデル: gpt-5.5, gpt-5.5-codex'),
+      ),
     ).toHaveLength(1);
   });
 

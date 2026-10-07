@@ -368,9 +368,7 @@ describe('peer-broker（マネージャーの MCP peer）', () => {
     expect(refused).toContain('選べない');
     expect(opened.seen.specs).toHaveLength(0);
     const closed = makeBroker(() => [turnEnded('ok')]);
-    expect(await closed.broker.run('codex', 'x', { model: 'gpt-5.5' })).toContain(
-      '名指しできない',
-    );
+    expect(await closed.broker.run('codex', 'x', { model: 'gpt-5.5' })).toContain('名指しできない');
     expect(closed.seen.specs).toHaveLength(0);
   });
 
