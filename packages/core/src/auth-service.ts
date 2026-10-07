@@ -17,6 +17,7 @@ import {
   type OwnerOutcome,
 } from './auth.js';
 import type { AuthProviderRegistry } from './auth-providers.js';
+import { reasonOf } from './dropped-record.js';
 import { hasNul } from './nul-guard.js';
 import type { RemoveUnreadableRowsOptions, RemoveUnreadableRowsResult } from './store.js';
 
@@ -377,18 +378,16 @@ export function createAuthService(options: AuthServiceOptions): AuthService {
         return { status: 'ok', accountId: account.id, granted: account.grantedAt !== null };
       } catch (error) {
         // 後始末（`failed` への書き込み）自体も同じ器に頼るので、失敗しうる。握りつぶさず
-        // stderr に1行出す（NUL のメールを断ったときと同じ流儀。固定の文と例外の名前だけで、
-        // 値は載せない）。どちらでも呼び出し側へは `exchange_failed` を返す。
-        const cause = error instanceof Error ? error.name : 'unknown';
+        // stderr に1行出す（例外の文は `reasonOf` を通す。#2565）。どちらでも呼び出し側へは
+        // `exchange_failed` を返す。
         process.stderr.write(
-          `alteroid: ログインの交換の後の器の操作が失敗した（${cause}）。要求を failed に落とす\n`,
+          `alteroid: ログインの交換の後の器の操作が失敗した。要求を failed に落とす: ${reasonOf(error)}\n`,
         );
         try {
           await fail(claimedForExchange, 'exchange_failed');
         } catch (failError) {
-          const failCause = failError instanceof Error ? failError.name : 'unknown';
           process.stderr.write(
-            `alteroid: ログイン要求を failed に落とせなかった（${failCause}）。要求は processing のまま残る\n`,
+            `alteroid: ログイン要求を failed に落とせなかった。要求は processing のまま残る: ${reasonOf(failError)}\n`,
           );
         }
         return { status: 'error', reason: 'exchange_failed' };
