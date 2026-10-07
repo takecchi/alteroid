@@ -68,12 +68,13 @@ async function harness(runner: RunnerClient & { helloed: () => boolean }) {
   };
   // hello を渡し終えるまで待つ（`connect` は名簿を開いたときに走る）。旧い runner の「不明」を、
   // 「まだ名乗りを受けていない」の不明と取り違えないため。
-  for (let i = 0; i < 400 && !runner.helloed(); i += 1) {
+  // 実時間では待たない（#2146）: 名簿を開かせてから、マイクロタスクと setImmediate の段だけ回す。
+  for (let i = 0; i < 2000 && !runner.helloed(); i += 1) {
     await pool.runners();
-    await new Promise((resolve) => setTimeout(resolve, 5));
+    await new Promise((resolve) => setImmediate(resolve));
   }
   if (!runner.helloed()) throw new Error('hello を渡せなかった');
-  await new Promise((resolve) => setTimeout(resolve, 10));
+  for (let i = 0; i < 10; i += 1) await new Promise((resolve) => setImmediate(resolve));
   return {
     pool,
     call,
