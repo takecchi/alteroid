@@ -20,6 +20,7 @@ export * from './components/page';
 export * from './components/document-title';
 export * from './components/drawer';
 export * from './components/markdown';
+export * from './components/zoomable-image';
 export * from './components/layout';
 export * from './components/features';
 export * from './hooks/use-is-mobile';

@@ -17,17 +17,6 @@ import { makeTempDir } from '../../../vitest.tmpdir.js';
 
 import { createApp } from './app.js';
 
-/**
- * issue #2440。読めない許可の行（`permission-grants.json` の `invalidGrantsRaw`）と読めない
- * アカウントの行（`auth.json` の `invalidAccountsRaw`）を、id を指して消す口
- * （`POST /permission-grants/unreadable/remove` / `POST /access/unreadable/remove`）。
- * トークンの `POST /tokens/unreadable/remove`（#2354）と同じ約束を、偽の値で測る。
- *
- * - 消える（指した読めない行だけ。読める行は残る）。
- * - 日誌が先（消す前の時点で日誌が書かれている）。日誌が書けなければ 500 で、ファイルは不変。
- * - 読めない行に無い id が1つでもあれば 404 で何も消さず、日誌も書かない。応答に入力を映さない。
- * - 日誌に行の中身を書かない（id と件数だけ）。
- */
 const FAKE = 'FAKE_SECRET_VALUE_2440';
 
 const PROVIDER: OAuthProvider = {
@@ -59,7 +48,6 @@ const GOOD_GRANT: PermissionGrant = {
   grantedAt: '2026-01-01T00:00:00.000Z',
   route: { principalKind: 'account', accountId: 'acc-1' },
 };
-// route（必須欄）が無い。本文には偽の値を入れる。
 const BAD_GRANT_RAW = {
   id: 'grant-bad',
   rule: `Bash(echo ${FAKE}:*)`,
@@ -70,7 +58,6 @@ const BAD_GRANT_RAW = {
   grantedAt: '2026-01-02T00:00:00.000Z',
 };
 const BAD_GRANT_RAW_2 = { ...BAD_GRANT_RAW, id: 'grant-bad-2' };
-// id が取れない読めない行。
 const IDLESS_GRANT_RAW = { rule: FAKE, answer: FAKE };
 
 const GOOD_ACCOUNT: AuthAccount = {
@@ -83,7 +70,6 @@ const GOOD_ACCOUNT: AuthAccount = {
   grantedBy: 'operator',
   ownerDeclaredAt: null,
 };
-// displayName（必須欄）が無い。email に偽の値を入れる。
 const BAD_ACCOUNT_RAW = {
   id: 'acct-bad',
   email: `${FAKE}@example.test`,
@@ -101,7 +87,6 @@ type Stores = ReturnType<typeof createFsStores>;
 interface Target {
   name: string;
   path: string;
-  /** ファイルの配列のキー。 */
   key: 'grants' | 'accounts';
   file: () => string;
   good: unknown;
@@ -111,7 +96,6 @@ interface Target {
   goodId: string;
   badId: string;
   bad2Id: string;
-  /** 読める行がまだ読めるか。 */
   stillReadable: (stores: Stores) => Promise<boolean>;
 }
 
@@ -327,8 +311,6 @@ describe('読めない行を id で消す口（fs。issue #2440）', () => {
     });
 
     it('日誌を書いた後でストアが「読めない行に無い」に倒れたら、打ち消しの日誌を足して 404', async () => {
-      // pg は日誌をトランザクションの外で書くので、日誌と `for update` の再確認のあいだに行が
-      // 変わりうる。その回に「消そうとしている」の行だけが日誌に残らないこと。
       const racing = {
         removeUnreadable: async (
           _ids: readonly string[],
