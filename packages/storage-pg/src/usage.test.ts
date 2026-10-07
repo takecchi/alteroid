@@ -1260,7 +1260,7 @@ describe('既にある DB への移行（層の列は在るがトークンの列
   });
 });
 
-// 2周目を通すだけにしない: 行が1つなら5列でも一意で create が通ってしまうため、新しい鍵が許して古い鍵が拒む行を挟む。
+// 2周目を通すだけにしない: 2周目が古い鍵を作りに行くのを捕まえるには、新しい鍵が許して古い鍵が拒む行を挟む必要がある（行が1つなら5列でも一意で create が通ってしまう）。
 describe('起動を2回通す（`migrate` の周回が、古い鍵を作りに戻らない）', () => {
   async function putTwoTokens(target: PgUsageStore): Promise<void> {
     for (const tokenId of ['', 'tok-a']) {
