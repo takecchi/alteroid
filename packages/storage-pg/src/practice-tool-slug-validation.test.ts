@@ -5,26 +5,6 @@ import type { Db } from './db.js';
 import { createPgStoresFromDb, type PgStores } from './index.js';
 import { createMigratedTestDb } from './test-db.test-support.js';
 
-/**
- * Issue #1651（pg 実装に対する確認）。
- *
- * `packages/core/src/practice-tools.test.ts`（「形式不正な slug は保存層を
- * 呼ぶ前に断る」の節）と同じ入力を、**pg 実装（PGlite = インプロセスの実
- * PostgreSQL）**に対して当てる。
- *
- * 直す前は、`PgPracticeStore#slug()`（`packages/storage-pg/src/practices.ts`）が
- * `practiceSlugSchema` の検査に落ちた slug に対して
- * `Error: やり方のスラッグが不正: …` を素で投げていた——道具
- * （`tools.ts` の `practice_read` / `practice_history` / `practice_remove` /
- * `practice_write`）はそれを一切捕まえず、クローンには読めない生の例外が
- * 返っていた（`packages/storage-pg/src/practices-invalid-slug.test.ts` が
- * 保存層そのものに対してこれを固定している。**あちらは直さない**——
- * マネージャーの判断で `#slug()` の throw はそのまま残す）。
- *
- * ここでは「道具として呼んだときに、その生の例外が外へ漏れないこと」を
- * 確かめる——直した後は道具の側で先に断るので、`PgPracticeStore#slug()`
- * まで呼び出しが届かない。
- */
 let db: Db;
 let stores: PgStores;
 

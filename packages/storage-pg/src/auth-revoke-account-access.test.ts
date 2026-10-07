@@ -5,14 +5,6 @@ import type { Db } from './db.js';
 import { createPgStoresFromDb, type PgStores } from './index.js';
 import { createMigratedTestDb, type TestDbHandle } from './test-db.test-support.js';
 
-/**
- * `AuthStore.revokeAccountAccess`（issue #1915）単体の歯（pg 実装、PGlite）。
- *
- * `PgAuthStore.revokeAccountAccess` は条件無しの UPDATE 1文で `granted_at` /
- * `granted_by` / `owner_declared_at` の3列だけを書く。ここでは単体で、
- * 他の列（`last_login_at` / `email` / `display_name`）に触れないことを見る。
- */
-
 let client: TestDbHandle;
 let db: Db;
 let stores: PgStores;
@@ -50,7 +42,6 @@ describe('AuthStore.revokeAccountAccess（pg 実装、issue #1915）', () => {
     expect(updated?.email).toBe('alice@example.test');
     expect(updated?.displayName).toBe('Alice');
 
-    // 無い id では何も起きない（投げない）。
     await expect(store.revokeAccountAccess('no-such-account')).resolves.toBeUndefined();
   });
 });
