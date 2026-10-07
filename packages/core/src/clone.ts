@@ -1406,7 +1406,7 @@ class Clone implements CloneHost {
         }
       }
 
-      // 枠が閉じている間はターンを回さない（金を払わない）。`#usageBlocked` は既に立っている場合はここで短絡し、今回の `#handle` で立つ場合は下の `finally` で拾う
+      // 枠（利用上限）が閉じている間はターンを回さない（金を払わない）。`#usageBlocked` は既に立っている場合はここで短絡し、今回の `#handle` で立つ場合は下の `finally` で拾う
       if (this.#usageBlocked !== null) {
         const notice = this.#usageBlocked;
         // `error` は終端なので、枠が閉じていること自体（消えない情報）を必ず先に届ける
@@ -1514,135 +1514,37 @@ class Clone implements CloneHost {
     return [event, ...rest.filter(isHumanMessage)];
   }
 
-  /**
-   * 取り出した合図と一緒に1ターンで読む、**同じマネージャーから連続して届いた
-   * 報告**（`kind === 'report'`）を決める。まとめないなら `null`。
-   *
-   * **`#mergedHumanBatch` の姉妹版である。** 動機は同じ — 先客が居るあいだに
-   * 積み上がった合図を1件ずつ別のターンで読むと、件数がそのままターン数になる
-   * （1ターンは20〜120秒、`inbox.ts` の `drainWhile` の doc）。実測が
-   * `manager.ts` に逐語で残っている（`grep -Fn -- 'きっかり7ターン'
-   * packages/core/src/manager.ts`）: 終了済みマネージャー7本を `manager_stop`
-   * で畳んだところ、7件の停止の知らせがそれぞれ独立したターンとして届き、
-   * きっかり7ターン消費した。あの実測が名指ししているとおり、`manager_message`
-   * は「`#mergedHumanBatch` が常に `null` を返すぶん束ねられない」——**それを
-   * 埋めるのがこの関数である。**
-   *
-   * **`report` だけが対象で、`question` / `permission` は対象外。** `managerPrompt`
-   * は `report` と `question`/`permission` でまったく別の本文を組み立てる
-   * （`report` は「続きが要るなら指示を出せ」、`question`/`permission` は
-   * 「`manager_send` で `requestId` へ返せ」）。**混ぜると宛先が決まらない** ——
-   * 質問・許可確認は返事を待っている相手（`requestId`）が1件ごとに違いうるが、
-   * 報告に相当する応答の型は「続きの指示」の1つしか無く、束ねても意味が保てる。
-   *
-   * **同じ `managerId` に限る。** `#mergedHumanBatch` が会話 id を見るのと同じ
-   * 理由 —— 束ねた本文が言うのは「マネージャー ${managerId} から届いた」の1行
-   * であり、複数のマネージャーを混ぜると「誰からの何件か」が1つの文で言えなく
-   * なる。
-   *
-   * **枠での保持（`#heldForUsage`）を外すのは `#mergedHumanBatch` と同じ理由**
-   * （`#mergeable` の doc）。**配り直し（`#redelivered`）は、かつては同じ理由で
-   * 外していたが issue #783 でやめた** —— `#mergedHumanBatch` の doc の追記と
-   * 同じ経緯で、詳細は `#mergeable` の doc にある。
-   *
-   * **これも畳み込みではない。** `post` の `isTick` 畳み込みとの違いは
-   * `#mergedHumanBatch` と同じ —— 1文字も捨てず、合図そのものも件数ぶん残る
-   * （`managerReportBatchPrompt` が全文を届いた順に並べる）。
-   */
+  // `question` / `permission` はまとめない: 返事を待つ相手（`requestId`）が1件ごとに違いうるため。同じ `managerId` に限る: 複数のマネージャーを混ぜると「誰からの何件か」が言えなくなるため
   #mergedManagerReportBatch(event: InboxEvent): ManagerReportMessage[] | null {
     if (!isManagerReport(event)) return null;
     if (!this.#mergeable(event)) return null;
 
-    // **先頭から連続している分だけ**（`Inbox#drainWhile`）。飛び越えて集めない
-    // 理由は `#mergedHumanBatch` と同じ —— 間に別の起点（別のマネージャーの
-    // 報告・`question`/`permission`・人間の発言・タイマー等）が挟まったら
-    // そこで止まる。
     const rest = this.#drainMergeableWithinLimit(
       (queued) => isManagerReport(queued) && queued.managerId === event.managerId,
     );
-    // **1件だけなら `null`**（`#mergedHumanBatch` と同じ理由 —— まとめる側へ
-    // 寄せると、いちばん多い「1件だけ」の本文にまとめ読みの前置きが載る形が
-    // 作れてしまう）。
     if (rest.length === 0) return null;
     return [event, ...rest.filter(isManagerReport)];
   }
 
-  /**
-   * 取り出した合図と一緒に1ターンで読む、**中身が同じ `external` の連続**を
-   * 決める（issue #841）。まとめないなら `null`。
-   *
-   * **`#mergedManagerReportBatch` と同型だが、束ねる条件が違う。** あちらは
-   * 同じ `managerId` でありさえすれば中身が違う報告でも束ねる —— 報告への
-   * 応答は「続きの指示」の1種類しか無く、混ぜても意味が保てるからである
-   * （`#mergedManagerReportBatch` の doc）。**`external` は違う。** 「外の
-   * 世界で何かが起きた」という、1件ごとに別の意味を持ちうる合図であり、
-   * 同じ出所（`source`）から来た中身の違う合図まで混ぜると、重要な1件が
-   * 同じ出所の重複の中に埋もれる（issue #841 が名指しした危険）。**⟹
-   * `source` だけでなく中身（`payload`）まで一致することを条件にする。**
-   *
-   * **「中身が同じか」の判定は {@link inboxBacklogDedupeKey} を再利用する
-   * だけで、独自の比較は書かない。** そこがこのリポジトリで「同じ本文か」を
-   * 判定する唯一の場所である（`inbox-backlog.ts` の doc「SQL 側に同じ判定を
-   * 書かないこと」）。ここで別の比較を書くと、畳み込みの鍵が2つに割れる ——
-   * それ自体が issue #783 が名指しした欠陥の形そのものである。
-   *
-   * **`external` に限り、鍵の衝突（`inboxBacklogDedupeKey` の doc が挙げる
-   * 限界の1つ目）で別の本文が同じ鍵へ潰れる経路は塞がっている。** 鍵は
-   * `['external', source, JSON.stringify(payload ?? null)]` を NUL 区切りで
-   * 繋いだものである。**第3フィールド（`JSON.stringify` の出力）は生の NUL を
-   * 1つも含まない** —— `JSON.stringify` は文字列の中の制御文字としての NUL を
-   * `\u0000` という6文字（バックスラッシュ・u・0・0・0・0）へエスケープして
-   * 出力する（実測は `inbox-backlog.test.ts` に置く）。⟹ 鍵の文字列に現れる
-   * **最後の NUL は、常に「`source` と `payload` の境界」を指す** ——
-   * その NUL より後ろ（`payload` 側）にはもう NUL が現れないため、2つの鍵が
-   * 文字列として一致するなら、その最後の NUL の位置は両方の鍵で同じでしか
-   * ありえず、そこで区切った前後（`source` と `JSON.stringify(payload)`）も
-   * 両方で文字どおり一致する。**`source` 自身に NUL が混ざっていても、この
-   * 論法は崩れない** —— 崩れるとしたら `payload` 側に追加の NUL が要るが、
-   * それは無い。
-   *
-   * **鍵が作れない場合は「束ねない」へ倒す。** {@link inboxBacklogDedupeKey}
-   * は `JSON.stringify` が投げる入力（循環参照・BigInt を含む payload）で
-   * 例外を投げうる。**この関数は `#pump` の `try` の外で呼ばれる** ので、
-   * ここで投げれば受信箱のループそのものが死ぬ（`#pump` の「ここは `try` の
-   * 外である」のコメントと同じ理由・同じ被害）。鍵の計算に失敗したら
-   * `noteDroppedRecord` で跡を残し、この合図は束ねずに1件1ターンの経路
-   * （既存のふるまい）へ落とす —— 能力の削除にはならない。
-   */
+  // `source` だけでなく `payload` まで一致を条件にする: 中身の違う合図まで混ぜると、重要な1件が同じ出所の重複の中に埋もれるため
+  // 「中身が同じか」は `inboxBacklogDedupeKey` を再利用して独自の比較を書かない: 畳み込みの鍵が2つに割れるため
+  // 鍵が作れない場合は束ねない: `JSON.stringify` が投げうり、この関数は `#pump` の `try` の外で呼ばれるので、投げると受信箱のループが死ぬため
   #mergedExternalBatch(event: InboxEvent): ExternalEvent[] | null {
     if (event.type !== 'external') return null;
     if (!this.#mergeable(event)) return null;
 
     const key = this.#externalMergeKey(event);
-    // 鍵が作れない（`JSON.stringify` が投げた）なら束ねない。既存の1件1ターン
-    // の経路へ落ちるだけで、能力は削れていない。
     if (key === null) return null;
 
-    // **`queued.type === 'external'` は鍵の第1フィールドと重複する**（鍵が
-    // 一致する時点で `queued.type` は必ず `'external'` である —— 型ごとに
-    // 鍵の先頭が固定の別々の文字列で、そこが一致しない限り鍵全体も一致しない）。
-    // それでも型を絞り込むためにここへ残す —— TypeScript は文字列の一致から
-    // 型を絞れないので、下の `isExternalEvent` フィルタと合わせて明示する。
+    // `queued.type === 'external'` は鍵と重複するが残す: TypeScript は文字列の一致から型を絞れないため
     const rest = this.#drainMergeableWithinLimit(
       (queued) => queued.type === 'external' && this.#externalMergeKey(queued) === key,
     );
-    // **1件だけなら `null`**（`#mergedManagerReportBatch` と同じ理由 ——
-    // まとめる側へ寄せると、いちばん多い「1件だけ」の本文にまとめ読みの
-    // 前置きが載る形が作れてしまう）。
     if (rest.length === 0) return null;
     return [event, ...rest.filter(isExternalEvent)];
   }
 
-  /**
-   * `#mergedExternalBatch` が束ねる鍵を計算する。**{@link inboxBacklogDedupeKey}
-   * を呼ぶだけで、独自の比較は書かない**（`#mergedExternalBatch` の doc）。
-   *
-   * 計算に失敗したら（`JSON.stringify` が投げる payload）跡を
-   * `noteDroppedRecord` に残して `null` を返す。**本文は残さない** ——
-   * `inboxEventShape` が返すのは `source` の長さと payload の有無だけで、
-   * `noteDroppedRecord` 自身の「本文を出さない」という約束（`dropped-record.ts`
-   * の doc）をここでも守る。
-   */
+  // 跡に本文は残さない: `noteDroppedRecord` の「本文を出さない」約束を守るため
   #externalMergeKey(event: InboxEvent): string | null {
     try {
       return inboxBacklogDedupeKey(event);
@@ -1652,43 +1554,8 @@ class Clone implements CloneHost {
     }
   }
 
-  /**
-   * `#mergedHumanBatch` / `#mergedManagerReportBatch` が共有する、上限つきの
-   * `Inbox#drainWhile` 呼び出し（issue #783）。
-   *
-   * **`Inbox#drainWhile` そのものには上限が無い**（`inbox.ts` の doc）。
-   * `#mergeable` が配り直し（`#redelivered`）を外さなくなったので、上限を
-   * ここに入れないと拾い直した在庫が全部1ターンへ入る（`MERGED_BATCH_SIZE_LIMIT`
-   * の doc）。
-   *
-   * **数えるのは「今回のターンへ入る件数」（＝ここで取り出した `event` 自身
-   * を含めた件数）。** 呼び出し元は必ず `event` 自身を1件として先頭に足すので、
-   * ここでは `1` から数え始める——`taken` の初期値を `0` にすると、
-   * `MERGED_BATCH_SIZE_LIMIT` 件のつもりで実際は `+1` 件束ねてしまう。
-   *
-   * **上限に当たったら、その時点で `false` を返して止める。** `drainWhile` は
-   * 述語が最初に偽を返した地点でそのまま止まり、それ以降（上限に当たった候補
-   * 自身も含む）は`#queue` の先頭に残ったまま返る——**1件も消えない。** 次に
-   * `#pump` がループを回したとき、残った分から同じ形でまた束ねが始まる。
-   *
-   * **`this.#mergeable` は呼び出し元ではなくここで見る。** 対象の判定（人間の
-   * 発言か・同じマネージャーの報告か）は呼び出し元の `predicate` に持たせ、
-   * 「まとめる側へ戻さない」という共通の判断はここへ集める——`#mergeable` の
-   * doc が言う「対象が違っても外す理由は共通」を、上限の数え方でも1本にする。
-   *
-   * **切ったという事実を、ここで `#notices` の `mergedBatchTruncation` へ残す。**
-   * かつては上限で切っても、その事実がクローンから1文字も見えなかった
-   * （issue #783 の続き）。`drainWhile` が止まった直後、`Inbox#countWhile` で
-   * **同じ述語に当たる件数を、取り出さずに**数え直す —— この件数が1件でも
-   * あれば、それは「上限に当たっていなければ続けて束ねられたはずの分」であり、
-   * 0件なら「たまたま上限のところで自然に尽きただけ」（切ってはいない）。
-   *
-   * **数を捏造しない。** ここで言えるのは「いまこの瞬間、待ち行列の先頭に
-   * 連続して並んでいる、同じ述語に当たる件数」だけである——`#pump` に取り
-   * 出された `event` 自身より前に本当は何件届いていたかは、既に処理済みの
-   * 分が `#queue` に残っていない以上、測りようがない。だから「本当に届いた
-   * 件数」とは名乗らず、「いま待ち行列の先頭に残っている件数」とだけ言う。
-   */
+  // `1` から数え始める: 呼び出し元が `event` 自身を先頭に足すので、`taken` を `0` から始めると上限より1件多く束ねるため
+  // 「本当に届いた件数」とは名乗らない: 処理済みの分は待ち行列に残っておらず測りようがなく、言えるのは待ち行列の先頭に残っている件数だけのため
   #drainMergeableWithinLimit(predicate: (queued: InboxEvent) => boolean): InboxEvent[] {
     const limit = this.#mergedBatchLimit;
     let taken = 1;
@@ -1700,11 +1567,7 @@ class Clone implements CloneHost {
       if (matches) taken += 1;
       return matches;
     });
-    // **`rest.length === 0` でも計算する。** `limit === 1` なら1件目の判定
-    // そのものが `taken >= limit` で即座に打ち切られ、`rest` は必ず空になる
-    // （呼び出し元はこのとき `null` を返して単発経路へ落ちる）が、それでも
-    // 待ち行列の先頭に「同じ束に入るはずだった」合図は残りうる——その場合も
-    // 切った事実は本物なので、ここで見落とさない。
+    // `rest.length === 0` でも計算する: `limit === 1` だと `rest` は必ず空になるが、待ち行列の先頭に同じ束に入るはずだった合図は残りうるため
     const remainingHead = this.#delivery.inbox.countWhile(matchesRule);
     if (remainingHead > 0) {
       this.#notices.set(
@@ -1719,23 +1582,7 @@ class Clone implements CloneHost {
     return rest;
   }
 
-  /**
-   * `#drainMergeableWithinLimit` が上限で切ったときの断り書きの文面
-   * （`#notices` の `mergedBatchTruncation`。doc は `clone-notices.ts` の
-   * `TurnNoticeKey`）。
-   *
-   * 3つを必ず言う —— **上限の値**・**この束の件数**・**同じ束に入るはずの
-   * 分が待ち行列の先頭にあと何件残っているか**。そして**1件も失われておらず、
-   * 次のターンで同じ形で束ね直される**ことも言う（`#drainMergeableWithinLimit`
-   * の doc の「1件も消えない」がここでも成り立つ）。
-   *
-   * **`いつ数えた値かを名乗る（#960、`situation.ts` の `readAtLabel`）。**
-   * `remainingHead` は呼び出した瞬間の待ち行列の先頭の件数であって、この節も
-   * 他の毎ターン注入節と同じく `#pushInput` で会話履歴に溜まる。時刻を
-   * 名乗らなければ、後から読み返す側は「あと何件残っている」をどのターンの
-   * ものとして読むべきか判定できない（`#commitmentNoticeFor` の doc、
-   * `readAtLabel` の doc「言い回しだけでは直らない」と同じ理由）。
-   */
+  // いつ数えた値かを名乗る: この節は `#pushInput` で会話履歴に溜まり、時刻が無いと後から読み返す側が「あと何件残っている」をどのターンのものか判定できないため
   #mergedBatchTruncationNoticeFor(truncation: {
     readonly limit: number;
     readonly batchSize: number;
@@ -1753,69 +1600,21 @@ class Clone implements CloneHost {
     ].join('\n');
   }
 
-  /**
-   * その合図を他の発言と1ターンにまとめてよいか。
-   *
-   * **`#mergedHumanBatch` と `#mergedManagerReportBatch` の両方が使う。** 対象
-   * （人間の発言／マネージャーの報告）が違っても、外す理由は共通なので1本に
-   * している。
-   *
-   * **一度でも「1件として扱う」と決めた合図は、まとめる側へ戻さない。** 配り直し
-   * （`#redelivered`）も枠での保持（`#heldForUsage`）も、合図1件ごとの断り書きと
-   * 1件ごとの試行回数に意味があり、束ねるとその意味が言えなくなる。
-   *
-   * **⟹ 上の段落は経緯として残す。配り直し（`#redelivered`）は、いまはここで
-   * 外していない**（issue #783）。**外していた理由（「合図1件ごとの断り書きと
-   * 束ねるとその意味が言えなくなる」）は、断り書き（`#redeliveryNoticeFor`）を
-   * 1件ごとから束ごとへ変えたことで成立しなくなった** —— 束の行は「件数・
-   * 配達回数の最大値・いちばん古いものの時刻」を束として言うので、1件ごとに
-   * 言えていた情報を1つも失わない。**そして1件ずつに意味がある局面は一度も
-   * 無かった** —— `#redeliveryNoticeFor` が実際に使っていたのは常に「これは
-   * 古い合図の反復である」という束としての判定だけで、個々の合図を分けて扱う
-   * 理由には使われていなかった（クローン自身の判断。issue #783）。
-   *
-   * **`#heldForUsage` は外したままにする。** 再試行の回数制限（「新しい合図
-   * 1件につき高々1回」）は試行回数そのものの話であり、断り書きの書式を変えても
-   * 解けない（`#heldForUsage` フィールドの doc「費用の設計に触るので、ここは
-   * 分けたままにする」）。
-   *
-   * ⟹ 起動直後に拾い直した在庫が大量にある状況（issue #783: 同じマネージャー
-   * から369件の報告が配り直され、1件ずつ処理すると369ターンを消費した）で、
-   * まとめ読みが効くようになる。**束の大きさの上限は別に持つ**
-   * （`#drainMergeableWithinLimit` / `MERGED_BATCH_SIZE_LIMIT`）—— ここで
-   * 際限なく束ねると、`Inbox#drainWhile` に上限が無い分だけ1ターンの本文が
-   * 際限なく育つ。
-   */
+  // `#heldForUsage` は外したままにする: 再試行は「新しい合図1件につき高々1回」で、束ねるとその1回が何件ぶんの仕事かが変わるため
   #mergeable(event: InboxEvent): boolean {
     return !this.#heldForUsage.has(event.id);
   }
 
-  /**
-   * 人間の発言を1ターンとして通す。**1件でも複数件でも同じ道を通す。**
-   *
-   * 分けて書くと、片方にだけ `#recorded` の待ちが入る・片方だけ会話 id の取り方が
-   * 違う、といった食い違いが静かに入る（どちらも人間からは見えない形で壊れる）。
-   *
-   * **片付け済みの配り直しはここへ来ない。** かつては断り書きを引数で受け取って、
-   * 組み立てた本文（`humanTurnText`）の代わりに渡していた（issue #217）が、いまは
-   * `#pump` がターンを起こす前に畳む（`#foldClosedRedelivery`）。
-   */
+  // 1件でも複数件でも同じ道を通す: 分けて書くと、片方にだけ `#recorded` の待ちが入る・会話 id の取り方が違うといった食い違いが静かに入るため
   async #runHumanTurn(events: HumanMessage[]): Promise<void> {
-    // **ここでは書かない。** 発言は受理した瞬間に `#record` が書いている。
-    // 両方で書くと同じ発言が日誌に二度載る（会話の再構成が二重になる）。
-    //
-    // 待つのは順序のためだけである（`#recorded` の理由）。**まとめた分は全部待つ** —
-    // 1件でも飛ばすと、その発言だけが日誌で自分への応答より後ろに回りうる。
-    // **書けたかどうかを条件にしない** — `#journal` は失敗を自分で握って stderr へ
-    // 落とすので、ここへ来る約束は必ず解決する。書けなかったからターンを止める、には
-    // しない（記録できないことより、応答が返らないことの方が高くつく）。
+    // ここでは書かない: 発言は受理した瞬間に `#record` が書いており、両方で書くと同じ発言が日誌に二度載るため
+    // まとめた分は全部待つ: 1件でも飛ばすと、その発言だけが日誌で自分への応答より後ろに回りうるため。書けたかどうかを条件にしない: 記録できないことより応答が返らないことの方が高くつくため
     for (const event of events) await this.#delivery.getRecorded(event.id);
 
     const head = events[0];
     if (head === undefined) return;
     const priorTexts = await this.#resolvePriorTexts(events);
-    // 添付（Issue #3111 段1b）。中身はここで読むだけで、受信箱・日誌・記憶へは写さない。
-    // ターンの画像の枚数・合計の予算は**新しい発言から**使う（#3696。`events` は到着順）。
+    // 添付の中身は受信箱・日誌・記憶へ写さない。画像の予算は新しい発言から使う
     const images: AgentInputImage[] = [];
     const notices = new Map<string, string>();
     const withAttachments = events.filter(
@@ -1840,22 +1639,7 @@ class Clone implements CloneHost {
     );
   }
 
-  /**
-   * 編集ターン（`supersedes` を持つ発言）のために、置き換えられた側の本文を引く。
-   *
-   * **`humanTurnText` は pure/sync な関数なのでストアへは触れない。** ここ
-   * （`async` でストアへ届く唯一の呼び出し元）が先に引き、解決済みの文字列
-   * として渡す。
-   *
-   * **引けなくても落ちない。** 旧エントリが無い・型が `exchange`/`with: 'human'`
-   * ではない・取得そのものが失敗した——いずれの場合もその発言の id をマップへ
-   * 入れない。`humanTurnText` 側は「引けなかった」として扱い、編集である事実
-   * 自体はそれでも伝える（`editedTurnBody` の doc）。
-   *
-   * **⚠️ ここは本文を読むだけである。** 編集前のターンが開いた承認待ち・
-   * 起こしたマネージャー・書いた記憶・開閉した台帳の行には一切触れない——
-   * 「編集されたから取り消す」ロジックはここにも他のどこにも無い（制約(B)）。
-   */
+  // 本文を読むだけにする: 編集前のターンが開いた承認待ち・起こしたマネージャー・書いた記憶・台帳の行には触れず、「編集されたから取り消す」ロジックは作らないため。引けなくても落ちない
   async #resolvePriorTexts(events: HumanMessage[]): Promise<Map<string, string>> {
     const priorTexts = new Map<string, string>();
     for (const event of events) {
@@ -1866,77 +1650,33 @@ class Clone implements CloneHost {
           priorTexts.set(event.id, entry.text);
         }
       } catch {
-        // 引けなかったこと自体は致命ではない——`humanTurnText` が「引けなかった」
-        // として扱う（doc 参照）。ここでターンを止めない。
       }
     }
     return priorTexts;
   }
 
-  /**
-   * マネージャーからの報告を1ターンとして通す。**`#mergedManagerReportBatch` が
-   * `null` を返したときは呼ばれない**（1件だけの経路は今までどおり `#handle` の
-   * `manager_message` 分岐を通す）ので、ここへ来る `events` は常に2件以上である。
-   *
-   * **`#handle` の `manager_message`/`report` 分岐がしていることを、件数ぶん
-   * 繰り返す。** 落とすと、まとめた側だけ日誌への追記や台帳の判定（#391）が
-   * 抜ける形になり、能力の削除になる（AGENTS.md の指示）。
-   *
-   * **片付け済みの配り直しはここへ来ない。理由は2重にある。** 1つは
-   * `#mergeable`（`#mergedManagerReportBatch` が先頭にも `drainWhile` の述語にも
-   * 使っている）が `#redelivered` に載っている合図を弾いていること —— この経路に
-   * 来る事象は構造上すべて初回配達である（`#redeliveredClosed` へ載る条件は
-   * 「`#restoreUnread` が拾い直した」ことで、拾い直した合図は必ず `#redelivered`
-   * にも載る。`#restoreUnread` の doc）。もう1つは `#pump` が**まとめ読みの判定
-   * より前**で畳んでいること（`#foldClosedRedelivery`）である。
-   */
+  // `#handle` の `manager_message`/`report` 分岐がしていることを件数ぶん繰り返す: 落とすと、まとめた側だけ日誌への追記や台帳の判定（#391）が抜けて能力の削除になるため
   async #runManagerReportBatch(events: ManagerReportMessage[]): Promise<void> {
     const settlements: ReportSettlement[] = [];
     for (const event of events) {
-      // **日誌の書き込みは `#handle` の `manager_message` 分岐と同じものを呼ぶ**
-      // （`#journalIncomingBody`）。件数ぶん個別に書く —— 1回にまとめると「まとめ
-      // 読みは全文が届いた順に渡り、合図は件数ぶん器に残り、後始末も件数ぶん通る」
-      // （`#mergedHumanBatch` の doc）が日誌の側で破れる。
+      // 日誌への追記は件数ぶん個別に書く: 1回にまとめると、合図は件数ぶん器に残るという前提が日誌の側で破れるため
       await this.#journalIncomingBody(event);
-      // **台帳の判定（#391）も件数ぶん引く。** まとめても「どの報告が片付け済み
-      // か」は1件ごとに違いうるので、1つの判定へ潰さない（落とすと #391 が入れた
-      // 能力の削除になる —— AGENTS.md の指示）。
+      // 台帳の判定（#391）も件数ぶん引く: 「どの報告が片付け済みか」は1件ごとに違いうるので、1つの判定へ潰さない
       const settlement = await reportSettlement(this.#stores.commitments, event.id);
       settlements.push(settlement);
-      // **(A) の件数を数える跡（issue #1374）。** ここへ来る事象は構造上すべて
-      // 配られる（直上の doc「片付け済みの配り直しはここへ来ない」）ので、
-      // `closedReportNotice` が非 null な行は必ず配った回である。
       if (closedReportNotice(settlement) !== null) {
         await this.#noteRedeliveryPredicateHitA(event.managerId);
       }
     }
 
-    // **`now` はここで1度だけ取る**（`#handle` の単発経路が `managerPrompt` へ
-    // 渡すのと同じ形。#562 PR-1）。`managerReportBatchPrompt` を純関数のまま保つ。
+    // `now` はここで1度だけ取る: `managerReportBatchPrompt` を純関数のまま保つため
     await this.#runInternal(managerReportBatchPrompt(events, settlements, new Date()));
   }
 
-  /**
-   * 中身の同じ `external` を1ターンとして通す（issue #841）。
-   * **`#mergedExternalBatch` が `null` を返したときは呼ばれない**（1件だけの
-   * 経路は今までどおり `#handle` の `'external'` 分岐を通す）ので、ここへ来る
-   * `events` は常に2件以上である。
-   *
-   * **`#handle` の `'external'` 分岐がしていることを、件数ぶん繰り返す。**
-   * 落とすと、まとめた側だけ日誌への追記が抜ける形になり、能力の削除になる
-   * （AGENTS.md の指示。`#runManagerReportBatch` と同じ理由）。
-   *
-   * **片付け済みの配り直しはここへ来ない。理由は `#runManagerReportBatch` と
-   * 同じ2重の理由である** —— `#mergeable` が `#redelivered` に載っている
-   * 合図を弾かなくなった一方（issue #783）、`#pump` がまとめ読みの判定より
-   * **前**で畳んでいる（`#foldClosedRedelivery`）。
-   */
+  // `#handle` の `'external'` 分岐がしていることを件数ぶん繰り返す: 落とすと、まとめた側だけ日誌への追記が抜けて能力の削除になるため
   async #runExternalBatch(events: ExternalEvent[]): Promise<void> {
     for (const event of events) {
-      // **日誌の書き込みは `#handle` の `'external'` 分岐と同じものを呼ぶ**
-      // （`#journalIncomingBody`）。件数ぶん個別に書く —— 1回にまとめると
-      // 「まとめ読みは全文が届いた順に渡り、合図は件数ぶん器に残り、後始末も
-      // 件数ぶん通る」（`#mergedHumanBatch` の doc）が日誌の側で破れる。
+      // 日誌への追記は件数ぶん個別に書く: 1回にまとめると、合図は件数ぶん器に残るという前提が日誌の側で破れるため
       await this.#journalIncomingBody(event);
     }
 
@@ -1948,62 +1688,24 @@ class Clone implements CloneHost {
     );
   }
 
-  /**
-   * 合図1件の後始末。**`#pump` の2箇所（枠で最初から回さなかった場合／`#handle`
-   * を通した場合）から呼ぶので1本にまとめてある** — 別々に書くと、台帳の控えを
-   * 外し忘れる・待っている相手を起こし忘れるといった漏れが片方にだけ起きる。
-   *
-   * `defer` が真なら **`#forget` を呼ばない**＝器（`stores.inbox`）にも未読の
-   * まま残す。理由は `#forget` の doc・`#pump` 旧 finally のコメント
-   * （「決定的に失敗する合図を残すと起動のたびに配り直されてクローンのターンを
-   * 焼く」）に対する例外である — **枠は決定的な失敗ではなく、時間で解決する
-   * 失敗である。** 消してしまえば、枠が開いたときにはもう合図そのものが無く、
-   * 仕事が失われる。`#forget` を呼ばない＝未読のままにしておけば、途中で
-   * プロセスが死んでも `#restoreUnread` が次の起動で拾い直す（この機構の
-   * 「保持」がプロセスの生死をまたいで壊れない理由でもある）。
-   */
+  // 2箇所の呼び出しを1本にまとめる: 別々に書くと、台帳の控えを外し忘れる・待っている相手を起こし忘れるといった漏れが片方にだけ起きるため
+  // `defer` が真なら `#forget` を呼ばず器にも未読のまま残す: 枠は時間で解決する失敗で、消すと開いたときに合図が無く仕事が失われるため
   async #settleInboxEvent(event: InboxEvent, defer: boolean): Promise<void> {
-    // 記帳の控えも同じ場所で捨てる。**台帳の行は消さない** — 消すのは「もう
-    // 順序を待つ相手が居ない」という印だけで、閉じられていない未了はそのまま残る
-    // （それがこの器の目的である）。
+    // 台帳の行は消さない: 消すのは「もう順序を待つ相手が居ない」という印だけで、閉じられていない未了は残すため
     this.#delivery.deleteCommitted(event.id);
-    // 受理の瞬間に書いた追記の控えは、待つ相手が居なくなった時点で捨てる。
-    // **例外で終わった経路も通る**ので、ここに置く（`#handle` の中で消すと、
-    // 途中で投げたぶんが残り続ける）。追記そのものは取り消さない — 消すのは
-    // 「もう誰も待たない」という印だけである。
+    // 追記の控えはここで捨てる: `#handle` の中で消すと、例外で終わった経路のぶんが残り続けるため
     this.#delivery.deleteRecorded(event.id);
 
     if (defer && this.#foldsIntoHeldTick(event)) {
-      // **中身を持たない合図で在庫を作らない。** `post` の畳み込みと同じ規則
-      // （`isTick` の doc「読まれる前の重複には情報が無い」）を、保持した側にも
-      // 適用する地点である。規則は「読まれる前」で書かれているのに、`post` は
-      // `Inbox#hasPending`（＝待ち行列）しか見ない。枠で保持した分は `#deferred`
-      // に居て待ち行列には無いので、**合図が溜まる唯一の状況＝枠が閉じている間
-      // だけ、規則が静かに効かなくなっていた**（実測: 枠を閉じたまま発意 tick を
-      // 5回送ると5件とも別々に保持される）。
-      //
-      // **`post` 側では畳めない。ここでなければならない。** `post` で return すると
-      // 受信箱へ何も積まれないので、`#releaseRequested` を立てても `#pump` がその印を
-      // 見に来ない（解除ブロックの doc の「どちらの道でも待ち行列は空でない」が
-      // 成り立たなくなる）。tick は**枠が開いたかを試す唯一の定期的な契機**なので、
-      // そこで畳むと再試行そのものが静かに止まる。ここまで通っていれば、その合図は
-      // 既に解除を1回試させた後である ＝ **試行の回数は1回も減らない。**
-      //
-      // 畳むのは**いま届いた新しい方だけ**で、先に保持している同じ tick は1件も
-      // 動かない（FIFO も断り書きも `#heldForUsage` も触らない）。
+      // 中身を持たない合図で在庫を作らない: `post` は待ち行列しか見ず、枠で保持した分（`#deferred`）は見ないので、合図が溜まる枠が閉じている間だけ畳み込みの規則が効かなくなるため
+      // `post` 側では畳まない: `post` で return すると受信箱へ何も積まれず `#pump` が印を見に来ないので、枠が開いたかを試す唯一の定期的な契機である tick の再試行が静かに止まるため
+      // 畳むのはいま届いた新しい方だけ: 先に保持している同じ tick は動かさない
       await this.#noteFoldedTick(event);
-      // 器の未読からも外す。**残すと、この1件だけが起動のたびに配り直されて
-      // クローンのターンを焼く**（`#forget` の doc）。吸収した側は未読のまま残るので、
-      // 「見に行け」という仕事そのものは失われない。
+      // 器の未読からも外す: 残すとこの1件だけが起動のたびに配り直されてクローンのターンを焼くため
       this.#heldForUsage.delete(event.id);
       await this.#forget(event);
     } else if (defer && this.#isSupersededTokenPoolNotice(event)) {
-      // **代表でなくなった token-pool 通知は、延期の列へ積まずに畳む**（Issue #2495）。
-      // 代表がターンの処理中だと、新しい通知が届いても `#evictPendingTokenPoolRepresentative`
-      // は古い方を外せず（`null`）、代表だけが新しい方へ差し替わる。その古い方が枠で
-      // 失敗して戻ってくると、積めば新旧2件が並び、解除で古い方が先に配られる
-      // （#1368 が塞いだ症状の再発）。外すときと同じ作法 —— 本文を先に日誌へ書き、
-      // `folded` を数え、`#forget` で器から消す。
+      // 代表でなくなった token-pool 通知は延期の列へ積まずに畳む: 積むと新旧2件が並び、解除で古い方が先に配られるため
       const current = this.#delivery.pendingTokenPoolNotice;
       if (current !== null) {
         const folded = current.folded + 1;
@@ -2014,48 +1716,23 @@ class Clone implements CloneHost {
       await this.#forget(event);
     } else if (defer) {
       this.#delivery.pushDeferred(event);
-      // 保持したことを覚えておく（`#heldForUsage` の doc）。**印を消すのは
-      // `#forget` と同じ側である** — 保持している間に消すと、解除で戻ってきた
-      // 合図が「初めて届いたもの」に見えてまとめ読みの対象へ戻る。
+      // 保持したことを覚えておく: 保持している間に印を消すと、解除で戻ってきた合図が「初めて届いたもの」に見えてまとめ読みの対象へ戻るため
       this.#heldForUsage.add(event.id);
     } else {
-      // **終えた時点で消す。取り出した時点ではない。** 取り出した時点で消すと、
-      // 処理の途中でプロセスが死んだものが失われる＝いま塞いでいる穴がそのまま残る。
-      //
-      // **例外で終わったものも消す。** ここへ来ているということは失敗が
-      // `#reportFailure`（＝人間へ流すか日誌へ落とす）に記録されたということで、
-      // 消えたわけではない。残す側を選ぶと、決定的に失敗する合図（形が不正・
-      // 参照先が消えている）が起動のたびに配り直され、そのたびに同じ失敗を
-      // 繰り返してクローンのターンを1本ずつ焼く。**残るのはプロセスが死んだ
-      // ときと、枠で保持したとき（上の `defer` 側）だけ**、が守るべき線である。
+      // 取り出した時点でなく終えた時点で消す: 取り出した時点だと、処理の途中でプロセスが死んだものが失われるため
+      // 例外で終わったものも消す: 失敗は `#reportFailure` に記録済みで、残すと決定的に失敗する合図が起動のたびに配り直されてターンを1本ずつ焼くため（残るのはプロセスが死んだときと枠で保持したときだけ）
       this.#heldForUsage.delete(event.id);
       await this.#forget(event);
     }
     this.#delivery.takeCompletion(event.id)?.();
   }
 
-  /**
-   * いま保持しようとしている合図を、既に保持している同じ tick へ畳んでよいか。
-   *
-   * **畳めるのは「中身を持たない合図」だけである**（`isTick`）。人間の発言・
-   * マネージャーからの一件・外部イベント・蒸留・承認の回答は、`isTick` が偽を
-   * 返すので構造上ここを通らない。`timer` は `kind` / `target` / `cause` が
-   * 揃ったときだけ同じ tick である（別の日の日報は別の仕事 — `isSameTick`）。
-   *
-   * **文言では判定しない。** 判定は `isSameTick`（型と構造化フィールドだけを見る）
-   * に委ねてあり、本文の一致は1文字も見ていない。
-   */
+  // 文言では判定しない: `isSameTick`（型と構造化フィールドだけ）に委ね、本文の一致は見ない
   #foldsIntoHeldTick(event: InboxEvent): boolean {
     return isTick(event) && this.#delivery.someDeferred((held) => isSameTick(held, event));
   }
 
-  /**
-   * 枠で延期しようとしている合図が、もう代表ではない token-pool 通知か
-   * （`#pendingTokenPoolNotice` が別の通知を指している。Issue #2495）。
-   *
-   * 代表が `null`（既に片付いた・器の入れ替えで空になった）のときは偽 —— 比較する
-   * 相手が居ないので、これまでどおり延期の列へ積む（何も失わない側へ倒す）。
-   */
+  // 代表が `null` のときは偽: 比較する相手が居ないので延期の列へ積み、何も失わない側へ倒すため
   #isSupersededTokenPoolNotice(event: InboxEvent): boolean {
     if (event.type !== 'external' || event.source !== DAEMON_TOKEN_POOL_REOPENED_SOURCE) {
       return false;
@@ -2064,17 +1741,7 @@ class Clone implements CloneHost {
     return current !== null && current.id !== event.id;
   }
 
-  /**
-   * 畳んだことを日誌へ残す。
-   *
-   * **畳む仕組みを入れるなら、畳んだ跡が残らなければならない。** この畳み込みは
-   * 器にも台帳にも何も残さない（`#forget` で未読から外す）ので、**ここで書かな
-   * ければ「静かに消えた」と区別が付かない。** 判定が間違っていたとき、記録が
-   * 在れば後から気づけるが、無ければ永久に見えない。
-   *
-   * 件数を添えるのは、後から数え直せるようにするためである（枠が閉じている間に
-   * 何件ぶん畳んだのかは、この行を数えれば出る）。
-   */
+  // 畳んだ跡を日誌に残す: 畳み込みは器にも台帳にも何も残さず、書かないと「静かに消えた」と区別が付かず、判定が間違っていても永久に見えないため
   async #noteFoldedTick(event: InboxEvent): Promise<void> {
     await this.#journal({
       type: 'exchange',
@@ -2087,29 +1754,7 @@ class Clone implements CloneHost {
     });
   }
 
-  /**
-   * 片付け済みの配り直しを、ターンを起こさずに畳む（issue #217 の続き）。
-   *
-   * **消えてよいのは「クローンを起こすこと」だけで、記録ではない。** ここで書くのは
-   * 2本ある。
-   *
-   * 1. **型ごとの本文追記**（`#journalIncomingBody`）。かつてはこれが `#handle` の
-   *    型ごとの分岐に在り、ターンの実行と同じスコープに置かれていた —— `#pump` で
-   *    素朴に `continue` すると `manager_message` / `external` の全文が日誌から
-   *    落ち、`retrievalHintFor` が案内している取り方が空を指す。
-   * 2. **畳んだこと自体。** 理由は `#noteFoldedTick` と同じである（あちらの doc:
-   *    「畳む仕組みを入れるなら、畳んだ跡が残らなければならない」「無ければ永久に
-   *    見えない」）。**配り直したこと自体は `#restoreUnread` が別の1行で既に
-   *    書いている**ので、日誌には「配り直した」と「畳んだ」が対で残る —— 次に読む人
-   *    が「畳んだ」と「そもそも配られなかった」を区別できるのは、この対のためである。
-   *
-   * **断り書き（`closedRedeliveryNotice`）は捨てずに、この行へ全文で写す。** あの
-   * 文字列はここで組み立てただけでどこにも保存されないので、写さなければ「何を根拠に
-   * 畳んだのか」——どの合図か・いつ受け取ったか・いつ何と言って閉じたか・全文の取り方
-   * ——が永久に取れない（#243 が `turn-input.ts` で採ったのと同じ判断）。**モデルへは
-   * 渡さないが、日誌には残す。** それがこの直しで払わないものと、払い続けるものの
-   * 境目である。
-   */
+  // 消えてよいのはクローンを起こすことだけで、記録は消さない: 型ごとの本文追記と「畳んだ」の1行を書く（配り直した行と対で残り、「畳んだ」と「そもそも配られなかった」を区別できる）。断り書きは全文で写す: どこにも保存されず、写さないと畳んだ根拠が永久に取れないため
   async #foldClosedRedelivery(event: InboxEvent, notice: string): Promise<void> {
     await this.#journalIncomingBody(event);
     await this.#journal({
