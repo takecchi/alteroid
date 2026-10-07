@@ -7952,7 +7952,6 @@ export function createCloneTools(context: ToolContext) {
               `  ${excerptLine(message.text, CONVERSATION_EXCHANGE_EXCERPT)}` +
               attachmentLines(message.attachments, '  '),
           );
-          // 積む形そのものは `renderListing` が持つ（一覧ごとに手で書かない）。
           return text(
             [
               renderListing(lines, {
@@ -7969,25 +7968,14 @@ export function createCloneTools(context: ToolContext) {
           );
         }
 
-        //
-        // **`speaker` はここでは効かない。効かないことを黙らない。** 会話が在るか
-        // どうかは誰が喋ったかで変わらない（片方だけで数えると、あるはずの会話が
-        // 一覧から消える）ので無視するのが正しいが、**渡した側から見ると絞れた一覧に
-        // 見える。** 渡されたのに使わなかったなら、そう言う。
-        // **`limit` で落ちた分も数に入れる。** 削るのは2段（`limit` と予算）で、
-        // 効く手が違う — `limit` は増やせば出るが、予算で切れているなら増やした分は
-        // そのまま省略へ回る。**`slice` の後の件数だけを見ると、`limit` で消えた分が
-        // 出力のどこにも現れない**（`omitted` は予算の切り口しか数えない）ので、
-        // 「20 件出して、日誌の先頭に届いている」と読める応答のまま 80 件が消える。
-        // 一覧モードでここへ来たとき `listPage` は必ず在る（上で組んでいる）。
+        // `speaker` が効かないことを黙らない: 無視するのが正しいが、渡した側から見ると絞れた一覧に見えるため、使わなかったならそう言う
+        // `limit` で落ちた分も数に入れる: `slice` の後の件数だけだと、`limit` で消えた分が出力のどこにも現れず、日誌の先頭に届いていると読める応答のまま消えるため
         const listing = listPage as ConversationPage;
         const listLimit = limit ?? 20;
         const conversations = listing.conversations;
         const hiddenByLimit = listing.hiddenByLimit;
         const windowTotal = conversations.length + hiddenByLimit;
-        // **続きの取り方（#3644）。** 出せた最後の会話の位置（予算で切れたときは出せた所まで、
-        // `limit` で切れたときや窓の外が残るときは頁の継続点）。`GET /conversations` の `nextCursor` と同じ cursor。
-        // 渡した絞り（since / until / scan / limit）は続きの呼びにも付ける（付け忘れると窓が変わる）。
+        // 渡した絞りは続きの呼びにも付ける: 付け忘れると窓が変わるため
         const continuation = (resume: ConversationCursor | null): string[] => {
           if (resume === null) return [];
           const args = [
@@ -8015,17 +8003,12 @@ export function createCloneTools(context: ToolContext) {
             `${conversation.conversationId} ${conversation.startedAt}〜${conversation.updatedAt}` +
             `（${conversation.messages} 件）\n  ${conversation.preview}`,
         );
-        // **どちらの段で切れたかで、勧める手を変える。** 混ぜると効かない手を
-        // 案内することになる（予算で切れているのに「limit を増やせ」と言う、など）。
-        // 予算の側で切れたかどうかは `renderListing` しか知らないので、
-        // 断り書きが出たことをここで受け取る。
+        // どちらの段で切れたかで勧める手を変える: 混ぜると効かない手（予算で切れているのに「limit を増やせ」など）を案内することになるため
         let cutByBudget = false;
         let shownByBudget = conversations.length;
-        // 積む形そのものは `renderListing` が持つ（一覧ごとに手で書かない）。
         const body = renderListing(lines, {
           budget: CONVERSATION_LIST_BUDGET,
-          // 予算が縛っている。ここまで来ると `limit` を増やしても省略へ回るだけなので、
-          // `limit` で落ちた分も合わせて「古い側」として1つの数で言う。
+          // 予算が縛っているときは `limit` で落ちた分も合わせて「古い側」として1つの数で言う: `limit` を増やしても省略へ回るだけのため
           omitted: ({ rest, shown }) => {
             cutByBudget = true;
             shownByBudget = shown;
@@ -8039,11 +8022,7 @@ export function createCloneTools(context: ToolContext) {
         });
         const notes: string[] = [];
         if (!cutByBudget && hiddenByLimit > 0) {
-          // 予算にはまだ余りがあり、縛っているのは `limit` である。こちらは増やせば出る。
-          // **言い方は既存の一覧に寄せる（`…ほか N 件は省略`）。** 総当たりの歯が
-          // 「切った」と読む語彙はそこに揃えてあり、ここへ新しい言い方を足すのは
-          // 「その言い方も契約に入れる」という判断であって、通し方の調整ではない。
-          // 予算の側と区別が要るのは**語ではなく勧める手**なので、そちらで分ける。
+          // 言い方は既存の一覧に寄せる（`…ほか N 件は省略`）: 新しい言い方を足すとその言い方も契約に入るため、予算の側との区別は語ではなく勧める手で分ける
           notes.push(
             `…ほか ${hiddenByLimit} 件は省略（この窓に ${windowTotal} 件あり、` +
               `新しい順に ${conversations.length} 件だけ出した）。` +
@@ -8051,7 +8030,6 @@ export function createCloneTools(context: ToolContext) {
               `${listLimit} である。予算にはまだ余りがあるので、limit を増やせば出る。`,
           );
         }
-        // 予算で切れたなら、出せた最後の会話の位置から。そうでなければ頁の継続点。
         const lastShown = conversations[shownByBudget - 1];
         const resume = cutByBudget
           ? ((lastShown === undefined
@@ -8072,26 +8050,7 @@ export function createCloneTools(context: ToolContext) {
       },
     ),
 
-    /**
-     * 可観測性の最下段 — マネージャーのセッションそのものの生ログ。
-     *
-     * **`manager_report` に `part: 'transcript'` を足す形にはしていない。**
-     * 理由は3つ:
-     * (a) `null` の意味が違う — `manager_report` の「無い」は「報告がまだ無い」
-     *     だが、生ログの「無い」は `ManagerPool.transcript()` の3段
-     *     （走行中の runner のディスク／退避済みアーカイブ／預かった生セッション）
-     *     すべてに無かったことである。
-     * (b) 大きさの桁が違う — 報告は KB オーダーだが、生ログは MB になりうる
-     *     （`TRANSCRIPT_PAGE` の doc）。
-     * (c) 1つの道具の説明文に2つの契約を載せることになり、読む側が
-     *     どちらの「無い」を見ているか分からなくなる。
-     *
-     * 人間の口（`GET /managers/:id/transcript`）はここでは変えない。**そちらは
-     * 無加工の全文を返す**（切り詰め・ページングなし）——人間はブラウザ・
-     * curl・エディタでいくらでも大きい応答を扱えるので、そこは人間側の等価性の
-     * 基準のまま保つ。クローンの文脈には MCP の出力上限があるので、こちらだけ
-     * ページングする（`manager_report` と同じ形）。
-     */
+    // `manager_report` に `part: 'transcript'` を足さない: 「無い」の意味が違い、大きさの桁も違い、1つの説明文に2つの契約を載せると読む側がどちらの「無い」を見ているか分からなくなるため
     tool(
       'manager_transcript',
       [
@@ -8119,9 +8078,6 @@ export function createCloneTools(context: ToolContext) {
           .describe(
             `何文字目から読むか（${formatIntRangeJa({ min: 0 })}）。前回の応答が示した続きの位置を渡す`,
           ),
-        // **issue #2188。** 絞りは4つとも省略できる——全部省略したときの
-        // 出力が1文字も変わらないことは `tools.test.ts` の
-        // 「manager_transcript（生ログを絞る。#2188）」が保証する。
         since: z
           .string()
           .optional()
@@ -8150,10 +8106,7 @@ export function createCloneTools(context: ToolContext) {
       async ({ managerId, offset = 0, since, until, type, contains }) => {
         const offsetError = describeIntRangeViolation('offset', offset, { min: 0 });
         if (offsetError !== null) return text(offsetError);
-        // **issue #2188。** since/until が ISO 8601 として読めるかは、絞りの
-        // 計算そのもの（`filterTranscriptLines`）ではなくここで見る——
-        // `journal_read`/`conversation_read` と同じ分担（`journal-time.ts`
-        // の doc）。読めない値を渡したときは生ログを読みに行く前に断る。
+        // since/until が読めるかはここで見る: 読めない値は生ログを読みに行く前に断るため
         if (since !== undefined && !isReadableJournalTimeBoundary(since)) {
           return text(describeUnreadableJournalTimeBoundary('since', since) + '生ログは絞れない。');
         }
@@ -8163,20 +8116,11 @@ export function createCloneTools(context: ToolContext) {
         if (!context.managers) return NO_POOL;
         const result = await context.managers.transcript(managerId);
         if (result.kind === 'unreadable') {
-          // **読めない行を「生ログは無い」と言わない（issue #2359）。** 台帳に行は
-          // 在るが読めない形で入っている。生ログには降りていない。
+          // 読めない行を「生ログは無い」と言わない
           return text(`${result.detail}生ログには降りていない。`);
         }
         if (result.kind === 'missing') {
-          // **`missing` は2つの意味を畳んでいる** — 「そのマネージャー自体が
-          // 台帳に居ない」か、「居るが3段のどこにも生ログが無い」か。
-          // `ManagerPool.transcript()` はこの2つを区別する値を返してこないので、
-          // ここでも区別できない。**畳んでいることを隠さず、そう書く。**
-          //
-          // **その先で、「まだ引き渡していない」と「引き渡せずに消えた」は
-          // 言い分ける（#634）。** 上の断り（id 自体が無い場合との区別が
-          // 付かない）は消さない——3つ目の「判定できない」はここでも生きて
-          // いる（`describeTranscriptMissingLeg` が言えないときはそう返す）。
+          // `missing` が2つの意味を畳んでいることを隠さずそう書く: `ManagerPool.transcript()` が区別する値を返さないため
           return text(
             `マネージャー ${managerId} の生ログは無い。走行中の runner のディスク・` +
               '退避済みアーカイブ・預かったセッションの生ログ、3段のどこにも見当たらなかった。' +
@@ -8187,9 +8131,7 @@ export function createCloneTools(context: ToolContext) {
           );
         }
         if (result.kind === 'removed') {
-          // **`missing` と同じ文面へ畳まない**（#698）——退避そのものは在った
-          // （id は実在した）が、本文は `archive_remove` / `DELETE /archive/:id`
-          // で落とされている。「どこにも無かった」ではなく「消された」である。
+          // `missing` と同じ文面へ畳まない: 退避そのものは在ったが本文が落とされており、「どこにも無かった」ではなく「消された」ため
           return text(
             `マネージャー ${managerId} の生ログは退避されていたが、本文は消されている` +
               `（${result.removedAt} に ${result.bytes.toLocaleString('ja-JP')} バイトを落とした${describeArchiveRemovedBytesUnit()}。` +
@@ -8200,10 +8142,6 @@ export function createCloneTools(context: ToolContext) {
 
         const { body: rawBody, archiveId } = result;
 
-        // **issue #2188。** 4つとも渡さなければ `hasFilter` は false になり、
-        // 下の分岐は一切通らない——`body` は `rawBody` のまま、`filterNote` は
-        // 空文字列のままなので、この関数の出力は絞り機能を足す前と1文字も
-        // 変わらない（歯: 「絞りを何も渡さないと出力は1文字も変わらない」）。
         const hasFilter =
           since !== undefined ||
           until !== undefined ||
@@ -8222,24 +8160,15 @@ export function createCloneTools(context: ToolContext) {
           const filtered = filterTranscriptLines(rawBody, { since, until, types, contains });
           body = filtered.body;
           const { totalLines, matchedLines, noTimestampLines, unparsableLines } = filtered.counts;
-          // **「全X行のうちY行が当たった」は0件でも出す**——絞った結果が
-          // 空のとき、黙って空の本文を返すと「絞りが効いていない」のか
-          // 「本当に0件だった」のか読み手には区別できない。
+          // 「全X行のうちY行が当たった」は0件でも出す: 黙って空の本文を返すと「絞りが効いていない」のか「本当に0件だった」のか区別できないため
           const noteLines = [`絞り込み: 全 ${totalLines} 行のうち ${matchedLines} 行が当たった。`];
           if (since !== undefined || until !== undefined) {
-            // **窓を渡したときは、除いた行数を必ず出す（0件でも）。** 黙って
-            // 捨てると「窓の判定ができない行があった」という事実そのものが
-            // 出力から消える（`AGENTS.md` の「取れない軸に0の行を作る」の逆
-            // ——ここは値を作るのではなく、取れなかった理由を出す側である）。
+            // 窓を渡したときは除いた行数を0件でも出す: 黙って捨てると「窓の判定ができない行があった」という事実そのものが出力から消えるため
             noteLines.push(
               `（時刻の無い行 ${noTimestampLines} 行・読めない行 ${unparsableLines} 行は` +
                 '窓の判定ができないので除いた）',
             );
           } else if (unparsableLines > 0) {
-            // 窓を渡さず type だけのとき——JSON として読めない行は type も
-            // 読めないので除かれる。0件のときまでは出さない（`memory_read`
-            // 方式。`listing-and-detail` の「切れていないときに注記を出さない
-            // 側へ倒せる」と同じ判断）。
             noteLines.push(
               `（JSON として読めない行 ${unparsableLines} 行は type の判定ができないので除いた）`,
             );
@@ -8248,20 +8177,12 @@ export function createCloneTools(context: ToolContext) {
         }
 
         const part1 = page(body, offset, TRANSCRIPT_PAGE);
-        // **この本文がどの archive id から読めたかを添える**（#698）——
-        // クローンが読んだ直後に `archive_remove archiveId=<id>` で消せるように
-        // するため。走行中の runner のディスク・預かったセッションの生ログから
-        // 読めたときは archive id が無い（`archiveId` が `undefined`）ので出さない。
         const archiveNote =
           archiveId === undefined
             ? ''
             : `（archive id: ${archiveId}。archive_remove archiveId=${archiveId} で消せる）`;
         const head = `マネージャー ${managerId} の生ログ（${describePage(part1)}）${archiveNote}`;
-        // **issue #2188。** 続きの取り方（`offset=`）に、今回渡した絞りの
-        // 引数をそのまま付ける——付けないと、続きを読んだ瞬間に絞りが外れて
-        // 「窓の外の行」まで読めてしまい、絞りが効いていない体験になる。
-        // `hasFilter` が false のときは何も付かない（既存の文言と1文字も
-        // 変わらない）。
+        // 続きの取り方に今回渡した絞りの引数をそのまま付ける: 付けないと、続きを読んだ瞬間に絞りが外れて窓の外の行まで読めてしまうため
         const resumeFilterArgs = hasFilter
           ? [
               since !== undefined ? ` since=${since}` : '',
@@ -8277,30 +8198,8 @@ export function createCloneTools(context: ToolContext) {
       },
     ),
 
-    /**
-     * アーカイブ済みセッション生ログの本文を1件消す（#698）。
-     *
-     * **人間には `DELETE /archive/:id` が既に在る。** 人間にできることが
-     * クローンにできないのは north_star 禁止1 に反するので、こちらにも
-     * 同じ口を渡す。
-     *
-     * **雛形は `memory_delete` である。** 同じ作法を踏襲する——存在しない id
-     * を黙って成功にしない（`ArchiveRemoval` の `kind: 'missing'`）／`summary`
-     * を必須引数にして消す理由を残す／本文は日誌へ写さない。
-     *
-     * **id を手に入れる経路は `manager_transcript` である。** その応答に
-     * 「この本文を読んだ archive id」が載る（`manager_transcript` tool の
-     * `archiveNote`）ので、読んだ直後にここへ渡せる。
-     *
-     * **走行中のマネージャーの退避は、既定では消せない。** 判定は
-     * `guardArchiveRemoval()` 1箇所だけを通す——`app.ts` の
-     * `DELETE /archive/:id` ハンドラと同じ関数である（`manager.ts` の doc。
-     * 2箇所に書くと片方だけ直る形になる）。**`overrideReason` を渡せば通せる**
-     * ——既定拒否は north_star 禁止2（追加制限禁止）の「方針は設定で開けられ
-     * なければならない」の実装であって、能力の一律な削除ではない
-     * （`guardArchiveRemoval` の doc）。override したときは、その理由と
-     * 走行中だったマネージャーの id を日誌へ残す（黙って通さない）。
-     */
+    // 存在しない id を黙って成功にしない・本文は日誌へ写さない
+    // 判定は `guardArchiveRemoval()` 1箇所だけを通す: 2箇所に書くと片方だけ直る形になるため。override したときは理由と走行中だったマネージャーの id を日誌へ残す（黙って通さない）
     tool(
       'archive_remove',
       [
@@ -8376,70 +8275,9 @@ export function createCloneTools(context: ToolContext) {
       },
     ),
 
-    /**
-     * アーカイブ済みセッション生ログの本文を、絞り込んでまとめて tombstone
-     * する（issue #698 の残タスク）。
-     *
-     * **経緯:** `POST /archive/remove` は PR #1078 で人間の入口として置かれ、
-     * 等価性（north_star 禁止1）のためにクローンにも同じ口（この道具）を渡した。
-     * #3135 の決定で、HTTP の口は人間の入口（CLI・Web UI）には出さず
-     * クローン専用とした。
-     *
-     * **雛形は `inbox_remove_many` / `commitment_close_many` である。** 既定
-     * （`dryRun` を省略すると true）・絞り込みの無い呼びを断る・塊ごとに
-     * 「消す → その塊の id を日誌へ書く」を交互に回す形は、どちらも同じ
-     * 設計を踏襲している。
-     *
-     * **対象の選定は `selectArchiveRemovalTargets`（純関数、`archive-prune.ts`）
-     * に閉じる。** ロジックを書き写さない——`ARCHIVE_REMOVE_MANY_LIMIT_DEFAULT` /
-     * `ARCHIVE_REMOVE_MANY_JOURNAL_ID_CHARS` もそこから import する
-     * （`archive-prune.ts` の `ARCHIVE_REMOVE_MANY_LIMIT_DEFAULT` の doc
-     * 「値を書き写すと、片方だけ変えたときに黙って食い違う」）。ここは絞り込み
-     * の拒否判定・墓標の保護・走行中の委譲の扱い・実際の `stores.archive.remove()`
-     * 呼び出しと日誌だけを持つ——`POST /archive/remove`（`app.ts`）と同じ
-     * 役割分担である。
-     *
-     * **墓標（`TranscriptGrave`）を守る**（issue #698 追補3。`app.ts` の
-     * `POST /archive/remove` の doc「なぜ冗長に見えるか」と同じ理由）。
-     * `stores.sessions.getTranscriptGrave()` はツール層からも読める
-     * （`Stores.sessions: SessionRegistry`）ので、`app.ts` と同じ材料を
-     * そのまま渡せる。
-     *
-     * **`overrideReason` を持たない——`POST /archive/remove` と同じ判断。**
-     * `app.ts` の doc が言う通り「一括で複数件を無条件に開ける形は事故の芽が
-     * 大きい」。**これは north_star 禁止2（追加制限禁止）には反しない**——
-     * 禁止2が求めるのは「方針は設定で開けられること」であって「すべての口が
-     * 同じ強さで開くこと」ではなく、**開ける口そのものは既に在る**（単発
-     * `archive_remove` が `overrideReason` を持つ）。⟹ 走行中の委譲が使って
-     * いる行は一括の対象から外す。開放が要るなら、その id を
-     * `manager_transcript` の応答か下見（`dryRun`）の対象一覧から拾い、
-     * `archive_remove`（単発）に `overrideReason` を渡して1件ずつ名指しで
-     * 消すこと。
-     *
-     * ⚠️ **一度はこの道具にも `overrideReason` を持たせた形で書いたが、
-     * 取り下げた。**「単発が持つのに一括が持たないのは追加制限ではないか」
-     * という見立てが誤りだったため——禁止2が求めるのは開く口が在ることで、
-     * 単発の口が既に開いている以上、一括に同じ強さの開放を重ねる必要が無い。
-     * ⟹ **この形を「まだ実装していないだけ」と読んで足さないこと。**
-     *
-     * **走行中のマネージャーが使っている行、および `managers` が配線されて
-     * いない内部ターン（`guard.kind === 'unknown'`）は、どちらも
-     * `skipped.inUse` へ数えて一括の対象から外す。** 判定所は
-     * `guardArchiveRemoval` 1箇所——`archive_remove`（単発）・
-     * `POST /archive/remove` と同じ関数を通す（`manager.ts` の doc
-     * 「2箇所に書くと片方だけ直る形になる」）。この道具は常に
-     * `overrideReason: undefined` を渡す。
-     *
-     * **`limit` / `requireContainment` は引数に持たない**（`POST /archive/remove`
-     * との差分）。`selectArchiveRemovalTargets` の既定（`limit`:
-     * `ARCHIVE_REMOVE_MANY_LIMIT_DEFAULT`、`requireContainment: true`）を
-     * そのまま使う——依頼元の要件が引数として挙げていないので、まずは既定の
-     * 安全側のまま実装する。溢れた分は `remaining` として名乗るので、
-     * `sessionIds` / `before` を絞ってもう一度呼べば続きに届く。
-     *
-     * **実行は `stores.archive.remove(id)` を1件ずつ**（`POST /archive/remove`
-     * と同じ理由——一括 UPDATE にしない）。
-     */
+    // `overrideReason` を持たない: 一括で複数件を無条件に開ける形は事故の芽が大きく、開ける口は単発の `archive_remove` に既に在るため（走行中の委譲が使っている行は一括の対象から外す）
+    // `limit` / `requireContainment` は引数に持たない: 既定の安全側のまま使い、溢れた分は `remaining` として名乗る
+    // 実行は `stores.archive.remove(id)` を1件ずつ: 一括 UPDATE にしない
     tool(
       'archive_remove_many',
       [
@@ -8505,7 +8343,6 @@ export function createCloneTools(context: ToolContext) {
           describeStringLengthViolation('summary', summary, { min: 1 }) ??
           describeBlankViolation('summary', summary);
         if (summaryError !== null) return text(summaryError);
-        // 🔴 絞り込みの無い呼びを断る（`POST /archive/remove` と同じ判定・同じ理由）。
         if (sessionIds === undefined && before === undefined && minStoredBytes === undefined) {
           return text(
             'sessionIds / before / minStoredBytes のどれも渡さない呼びは断る' +
@@ -8513,10 +8350,7 @@ export function createCloneTools(context: ToolContext) {
               '**1件も消していない。**',
           );
         }
-        // 存在しない日付（`2026-02-31` は V8 が 3/3 へずらす）や日付でない文字列（`foo 1`）を
-        // 別の時刻として読んで**消す**ので、#3287 の3段で検める（#3358）。
-        // 元に戻せない一括削除なので時差も必須にする（#3482。`inbox_remove_many` の before・
-        // HTTP の `POST /archive/remove` と同じ門。#2462・#3390）。この門は内側で上の3段も通す。
+        // 3段で検める: 存在しない日付や日付でない文字列を別の時刻として読んで消すため。元に戻せない一括削除なので時差も必須にする
         if (before !== undefined && !isOffsetQualifiedTimeBoundary(before)) {
           return text(
             describeOffsetRequiredTimeBoundary('before', before, '2026-09-15T00:00:00.000Z') +
@@ -8528,8 +8362,7 @@ export function createCloneTools(context: ToolContext) {
         });
         if (minStoredBytesError !== null) return text(minStoredBytesError);
 
-        // **墓標を守る**（issue #698 追補3。`app.ts` の `POST /archive/remove` の
-        // doc「なぜ冗長に見えるか」と同じ理由）。
+        // 墓標を守る
         const grave = await stores.sessions.getTranscriptGrave();
         const protectedIds: string[] = grave === null ? [] : [grave.archiveId];
 
@@ -8544,8 +8377,7 @@ export function createCloneTools(context: ToolContext) {
           ...(minStoredBytes === undefined ? [] : [`minStoredBytes=${minStoredBytes}`]),
         ].join(' / ');
 
-        // **絞りと選定は `selectArchiveRemovalTargets` に閉じる**——ロジックを
-        // ここで書き写さない（`archive-prune.ts` の doc）。
+        // 絞りと選定は `selectArchiveRemovalTargets` に閉じる: ロジックを書き写すと片方だけ変えたとき黙って食い違うため
         const allRows = await stores.archive.list();
         const selection = selectArchiveRemovalTargets(allRows, filter, { protectedIds });
         const funnel = `アーカイブ全 ${selection.totalRows} 行 → 絞り込みで ${selection.matched} 件`;
@@ -8560,26 +8392,8 @@ export function createCloneTools(context: ToolContext) {
           );
         }
 
-        // **走行中の委譲が抱えている行は `guardArchiveRemoval` で判定する**
-        // （`archive_remove`（単発）・`POST /archive/remove` と同じ関数を
-        // 1箇所だけ通す。`manager.ts` の doc「2箇所に書くと片方だけ直る形
-        // になる」）。**この道具は `overrideReason` を持たない**（この道具
-        // 本体の doc「`overrideReason` を持たない」）ので、常に `undefined`
-        // を渡す——`guard.kind` は `'allowed'` か `'denied'` か `'unknown'`
-        // のどれかにしかならない。
-        //
-        // **第4引数 `requireContainment` には常に `true` を渡す（#698）。**
-        // この道具は `limit` / `requireContainment` を引数に持たず
-        // （上の doc）、`selectArchiveRemovalTargets` の既定
-        // （`requireContainment: true`）をそのまま使っている——つまり対象は
-        // すべて「含有が証明済み」の行なので、走行中の委譲の保護を
-        // `archiveIds` の末尾1本へ狭めてよい（`guardArchiveRemoval` の doc
-        // 「なぜ安全か」）。狭めなければ、走行中の委譲が過去に積んだ写しが
-        // 1本残らず保護され、この一括処理が1件も消せない（#698 の症状）。
-        //
-        // **この guard は `dryRun` の分岐より前で回す**（`POST /archive/remove`
-        // と同じ理由——下見でも走行中の判定を評価しないと、下見が返す
-        // `targeted` / `skipped.inUse` が実行時と食い違う）。
+        // `requireContainment` には常に `true` を渡す: 走行中の委譲の保護を `archiveIds` の末尾1本へ狭めないと、過去に積んだ写しが1本残らず保護され一括処理が1件も消せないため
+        // この guard は `dryRun` の分岐より前で回す: 下見が返す `targeted` / `skipped.inUse` が実行時と食い違うため
         const removableTargets: ArchiveEntry[] = [];
         let skippedInUse = 0;
         for (const target of selection.targets) {
@@ -8590,10 +8404,7 @@ export function createCloneTools(context: ToolContext) {
           }
           removableTargets.push(target);
         }
-        // **`targeted` は guard を通った後の件数**（＝実際に消しにいく件数）
-        // にする——`POST /archive/remove` の doc「guard で飛ばした行を
-        // `targeted` にも `skipped.inUse` にも数えると2回数えることになる」
-        // と同じ理由。
+        // `targeted` は guard を通った後の件数にする: 飛ばした行を `skipped.inUse` と2回数えないため
         const targeted = removableTargets.length;
 
         const skippedLine =
@@ -8603,9 +8414,7 @@ export function createCloneTools(context: ToolContext) {
         const remainingLine = `remaining（limit に溢れて対象にすらならなかった件数）: ${selection.remaining}`;
 
         if (dryRun !== false) {
-          // **省略された `dryRun` は試算。** `archive_remove_many` / `archive_remove`
-          // ともに消した本文を戻す道具はこの器に無いので、既定は「何も起きない側」
-          // に倒す。
+          // 省略された `dryRun` は試算にする: 消した本文を戻す道具が無いため
           const shown = removableTargets
             .slice(0, ARCHIVE_REMOVE_MANY_IDS_SHOWN)
             .map((row) => row.id);
@@ -8632,10 +8441,7 @@ export function createCloneTools(context: ToolContext) {
           );
         }
 
-        // 塊ごとに「消す → その塊の id を日誌へ書く」を交互に回す
-        // （`POST /archive/remove` と同じ理由——まとめて消してから日誌を書くと、
-        // その間にデーモンが落ちたとき「消えたのに記録が無い行」ができる）。
-        // 実行は `stores.archive.remove(id)` を1件ずつ（一括 UPDATE にしない）。
+        // 塊ごとに「消す → その塊の id を日誌へ書く」を交互に回す: まとめて消してから日誌を書くと、デーモンが落ちたとき消えたのに記録が無い行ができるため
         const chunks = chunkIdsByChars(
           removableTargets.map((row) => row.id),
           ARCHIVE_REMOVE_MANY_JOURNAL_ID_CHARS,
@@ -8652,14 +8458,7 @@ export function createCloneTools(context: ToolContext) {
           for (const target of chunkTargets) {
             const result = await stores.archive.remove(target.id);
             if (result.kind === 'missing' || result.kind === 'already') {
-              // list() で見つかり guard も通ったのに、実際に remove() する
-              // までの間に他経路が先に消していた——`raced` へ数える（`POST
-              // /archive/remove` と同じ理由。隠さない）。
-              // **`already` も同じ競合である。** `remove()` は行を消さずに本文だけを墓標にするので、
-              // 他経路が先に消していた回は `missing` ではなく `already` を返すのが普通である。
-              // 選定の時点で既に消えていた行は選定から外してある（`skipped.alreadyRemoved`）ので、
-              // ここで `already` が返るのは、選んだ後に他経路が消した回だけ——この呼びが消した
-              // ことにしない（応答・日誌に、触っていない id を載せない）。
+              // 他経路が先に消していた回は `raced` へ数える（`already` も同じ競合）: この呼びが消したことにしない（触っていない id を応答・日誌に載せない）
               raced += 1;
               continue;
             }
@@ -8667,8 +8466,6 @@ export function createCloneTools(context: ToolContext) {
             removedBytes += result.bytes;
           }
           removedIds.push(...removedThisChunk);
-          // **1件も消せなかった塊では日誌へ書かない**（`inbox_remove_many` /
-          // `commitment_close_many` と同じ理由）。
           if (removedThisChunk.length === 0) continue;
 
           journaledChunks += 1;
