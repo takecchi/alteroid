@@ -9379,41 +9379,15 @@ function safeJson(value: unknown): string {
   }
 }
 
-/**
- * 台帳の集計をクローンが読める形へ。
- *
- * **落としたら落としたと言う。** 日数やマネージャーの本数に比例して伸ばすと MCP の
- * 出力上限を超え、そのときクローンには1文字も届かない（実測 52,997 文字で溢れた）。
- * だから軸ごとに上限を置くが、**打ち切ったことを必ず書く** — 「全部でこれだけ」と
- * 読める出力を黙って作ると、それは嘘になる。
- */
+// 軸ごとに上限を置き、打ち切ったことを必ず書く: 「全部でこれだけ」と読める出力を黙って作ると嘘になるため
 const USAGE_AXIS_LIMIT = 14;
 
-/**
- * 軸の名前。**打ち切りから続きへ辿るための識別子でもある**（`axis` 引数）。
- *
- * 「全部出す」は採らない — 出力が伸びるとクローンの入力を毎ターン食う。代わりに
- * **打ち切りの行がそのまま次に打つ手を書く。**
- */
 export const USAGE_AXES = ['date', 'manager', 'model', 'layer', 'site', 'token'] as const;
 type UsageAxis = (typeof USAGE_AXES)[number];
 
-/** `axis` を指定したときに1回で出す件数。 */
 const USAGE_AXIS_PAGE = 100;
 
-/**
- * 軸ごとの短い注記。**説明文（`usage_read` の description）はここから導出する。**
- *
- * #756 以前、説明文は「軸は6つ — 日・マネージャー（誰の分か）・モデル・…」と
- * **件数も6語も直書き**していた。⟹ `USAGE_AXES` に軸を1本足しても、説明文は
- * 6つのまま緑で通る。**いまは件数も名前もここと `USAGE_AXES` から出る。**
- *
- * **`USAGE_AXIS_TITLES`（すぐ下）とは用途が違うので分けてある。** あちらは
- * 出力の見出し（「日別」）で、こちらは**その軸が何で切っているかの注記**である
- * （「誰が: clone / manager」のように、見出しには置けない補足を持つ）。
- * どちらも `Record<UsageAxis, string>` なので、軸を足せば両方とも
- * `typecheck` が落ちる。
- */
+// `USAGE_AXIS_TITLES` と分ける: 見出しと、その軸が何で切っているかの注記は用途が違うため
 const USAGE_AXIS_NOTES: Record<UsageAxis, string> = {
   date: '日',
   manager: '誰の分か',
@@ -9550,33 +9524,12 @@ function formatUsageAxisLine(entry: UsageAxisEntry): string {
   return `  ${entry.label}: ${cost} / ${entry.turns}回 / 1回 ${formatUsd(entry.totals.costUsd / entry.turns)}`;
 }
 
-/**
- * アカウント全体の残り（クローンが読む形）。
- *
- * **文言は `usage-format.ts` の `describeAccountUsage` が持つ。** ここに書き写すと、
- * 同じ値を見る4つの口（クローンの道具・CLI 2つ・Web）で言い方が分かれ、いつか
- * 片方だけが「取れなかった」を 0 と描く。ここがやるのは見出しを付けることだけで、
- * クローンの文脈は Markdown なので強調はそのまま残す。
- */
+// 文言を書き写さない: 同じ値を見る口の間で言い方が分かれ、いつか片方だけが「取れなかった」を 0 と描くため
 function renderAccountUsage(state: AccountUsageState): string {
   return [`## ${ACCOUNT_USAGE_TITLE}`, ...describeAccountUsage(state)].join('\n');
 }
 
-/**
- * 台帳に1行も無い委譲（Issue #98）を、`usage_read` が読む行へ。
- *
- * **`context.managers` が `undefined` のとき、0 と出さない。** これは蒸留の
- * サイドクエリ（`clone.ts` の `#distillFromTranscript`）でだけ起こる —
- * `ToolContext.managers` はそこでは委譲そのものを起こさせないために省略されて
- * いる（`ToolContext.managers` の doc）。**「確かめられなかった」と明示する**
- * ——空配列（取りこぼしが無い）と同じ形にすると、蒸留の場では常に「取りこぼしは
- * 無い」と嘘をつくことになる。
- *
- * **⚠️ `apps/daemon/src/app.ts` の `GET /usage` とは前提が違う。** そちらの
- * `clone.managers` は non-optional（`CloneHost.managers: ManagerPool`）なので、
- * この分岐に対応する枝を持たない——**app.ts 側では「確かめられなかった」は
- * 起こらない。この doc の断りは `usage_read` だけの事情である。**
- */
+// `context.managers` が `undefined` のとき 0 と出さず「確かめられなかった」と明示する: 空配列と同じ形にすると蒸留の場では常に「取りこぼしは無い」と嘘をつくため
 async function unrecordedManagersLines(
   context: ToolContext,
   stores: Stores,
@@ -9595,11 +9548,6 @@ async function unrecordedManagersLines(
   return describeUnrecordedManagers(findUnrecordedManagers(managers, recordedManagerIds, since));
 }
 
-/**
- * 対象の行（issue #1673 の `rows`）の `updatedAt` の最大値。**カーソルの
- * `asOf` に積む値そのもの。** 行が0件なら `undefined`（＝台帳のその範囲には
- * 何も無いので、比べる基準そのものが作れない）。
- */
 function maxUpdatedAt(rows: readonly UsageRow[]): string | undefined {
   let max: string | undefined;
   for (const row of rows) {
@@ -9608,13 +9556,7 @@ function maxUpdatedAt(rows: readonly UsageRow[]): string | undefined {
   return max;
 }
 
-/**
- * 「順位が上がった、または既に見せた行が伸びた可能性がある」節（issue #1673）。
- *
- * **`usage_read` の軸モードと `self_status` の台帳突き合わせが両方使う**——
- * 文言を1か所に寄せないと、片方だけ直したときに読み手が「同じことを別の
- * 言葉で言っている」と誤読する。
- */
+// 文言を1か所に寄せる: 片方だけ直すと読み手が「同じことを別の言葉で言っている」と誤読するため
 function renderRisenSection<T>(risen: readonly T[], formatEntry: (entry: T) => string): string[] {
   if (risen.length === 0) return [];
   const lines = [
@@ -9634,15 +9576,7 @@ function renderUsage(
   view: {
     axis?: UsageAxis;
     cursor?: string;
-    /**
-     * 台帳に1行も無い委譲（Issue #98）を、すでに整形した行として渡す。
-     *
-     * **`undefined` は「軸モードなので出さない」であって「取りこぼしが無い」
-     * ではない。** 軸モードは「打ち切りの続き」だけを返す設計（下のコメント）
-     * なので、まとめ表示・アカウント全体の残りと同じくここも出さない。
-     * まとめ表示のときは、呼び出し側（`usage_read` ハンドラ）が必ず
-     * {@link describeUnrecordedManagers} の結果（0件でも1行以上ある配列）を渡す。
-     */
+    // `undefined` は「軸モードなので出さない」であって「取りこぼしが無い」ではない
     unrecordedManagers?: readonly string[];
   } = {},
 ): string {
@@ -9659,11 +9593,7 @@ function renderUsage(
     beforeTurns,
     notice,
   } = aggregate;
-  // **集計で読めずに外した行が在れば、どの分岐でも「合計に入っていない」と言う**
-  // （Issue #2427）。無ければ空配列なので、既存の出力は1文字も変わらない。
   const unreadableRowsLines = describeUnreadableUsageRows(aggregate.unreadableRows);
-  // **消費を報告しない provider のターンが在れば、0 ではなく取れなかったと言う**
-  // （Issue #486 M7）。欄が無ければ空配列で、既存の出力は1文字も変わらない。
   const unmeteredLines = describeUnmeteredUsage(aggregate.unmeteredRows);
 
   if (since === null) {
@@ -9680,9 +9610,7 @@ function renderUsage(
   const lines: string[] = [];
 
   if (view.axis !== undefined) {
-    // **軸モードは「打ち切りの続き」を取りに来た呼び出しである。** まとめ表示も
-    // 他の軸も出さない — 続きを取るたびに同じ全体が返ってくると、続きを辿るほど
-    // 入力を食うことになる。
+    // 軸モードではまとめ表示も他の軸も出さない: 続きを取るたびに同じ全体が返ると、辿るほど入力を食うため
     const axis = view.axis;
     const entries = usageAxisEntries(summary, axis, rows);
     const cursorOutcome = resolveUsageCursor(entries, axis, view.cursor);
@@ -9706,8 +9634,7 @@ function renderUsage(
     lines.push(`${USAGE_AXIS_TITLES[axis]}（全 ${entries.length} 件）`);
     const page = afterAnchor.slice(0, USAGE_AXIS_PAGE);
     if (page.length === 0) {
-      // **黙って空を返さない。** 空の一覧だけでは「この軸には記録が無い」と
-      // 「cursor がもう続きを持たない（最後の頁）」を区別できない。
+      // 黙って空を返さない: 空の一覧だけでは「この軸には記録が無い」と「最後の頁」を区別できないため
       lines.push(
         view.cursor === undefined
           ? `  （その軸には記録が無い）`
@@ -9741,8 +9668,7 @@ function renderUsage(
     lines.push('その範囲には記録が無い。');
     lines.push(...unreadableRowsLines);
     lines.push(...unmeteredLines);
-    // **取りこぼしは照会範囲と無関係に全期間で判定する**（`findUnrecordedManagers`
-    // の doc）ので、この範囲に台帳の行が無くても出す。
+    // 取りこぼしは照会範囲と無関係に全期間で判定するので、この範囲に台帳の行が無くても出す
     if (view.unrecordedManagers !== undefined) lines.push('', ...view.unrecordedManagers);
   } else {
     lines.push(
@@ -9758,12 +9684,9 @@ function renderUsage(
         `キャッシュ書き ${summary.total.cacheCreationInputTokens.toLocaleString('en-US')}` +
         describeWebSearchRequests(summary.total),
     );
-    // **取れなかった区切りが在れば、その旨を1行**（Issue #2086）。無ければ
-    // 空配列なので、この行を足しても既存の出力は1文字も変わらない。
     lines.push(...describeUnreadableUsage(summary.total));
     lines.push(...unreadableRowsLines);
     lines.push(...unmeteredLines);
-    // **合計値の隣に必ず出す（Issue #98）。**
     if (view.unrecordedManagers !== undefined) lines.push(...view.unrecordedManagers);
 
     for (const axis of USAGE_AXES) {
@@ -9773,8 +9696,6 @@ function renderUsage(
         lines.push(formatUsageAxisLine(entry));
       }
       if (entries.length > USAGE_AXIS_LIMIT) {
-        // **打ち切りの行がそのまま次に打つ手を書く。** 「残り N 件」だけでは、
-        // 続きを見る方法が無いのと同じである。
         const lastShown = entries[USAGE_AXIS_LIMIT - 1]!;
         const nextAsOf = maxUpdatedAt(rows);
         const nextCursor = encodeUsageCursor({
@@ -9790,8 +9711,7 @@ function renderUsage(
         );
       }
     }
-    // **回数が1つでも出ているときだけ、モデル別に出ない理由を書く。** 出さないと
-    // 「モデル別だけ0回」に読める（`usage.ts` の `usageTurnRowSchema` の doc）。
+    // 回数が1つでも出ているときだけ、モデル別に出ない理由を書く: 出さないと「モデル別だけ0回」に読めるため
     if (summary.turns !== undefined) {
       lines.push(
         '',
@@ -9802,13 +9722,12 @@ function renderUsage(
 
   lines.push('', `台帳の始点: ${since}`);
   if (beforeLedger) {
-    // **0 と言わない。** 台帳が無かった期間を「使っていない期間」と読ませない。
+    // 0 と言わない: 台帳が無かった期間を「使っていない期間」と読ませないため
     lines.push(
       '照会した範囲は台帳の始点より前にかかっている。その分は **0 ではなく「記録が無い」**。',
     );
   }
-  // **層の始点を台帳の始点と混ぜない。** 層の軸は台帳より後から入ったので、それより
-  // 前の行の層と場所は既定値であって観測ではない。
+  // 層の始点を台帳の始点と混ぜない: 層の軸は台帳より後から入ったので、それより前の行の層と場所は既定値で観測ではないため
   lines.push(
     layersSince === null
       ? '層と場所の軸はまだ1件も記録していない。'
@@ -9821,10 +9740,7 @@ function renderUsage(
         '蒸留が起きていなかった、とは読まないこと）。',
     );
   }
-  // **トークンの軸の始点を、上の2つと混ぜない。** ここが null なのは「まだ1件も
-  // 記録していない」だけではなく、**プールを使っていないので取れない**ことがある
-  // （`usage.ts` の `usageAggregateSchema` の `tokensSince`）。**「トークンを回して
-  // いない」と読ませないこと** — 回していないのではなく、記録が無いのである。
+  // トークンの軸の始点を上の2つと混ぜない: null はプールを使っていないので取れないこともあり、「トークンを回していない」と読ませないため
   lines.push(
     tokensSince === null
       ? '認証トークンの軸はまだ1件も記録していない' +
@@ -9837,9 +9753,7 @@ function renderUsage(
         'その分に **トークンの帰属は無い**（0 でも既定値でもなく、取れていない）。',
     );
   }
-  // **回数の軸の始点を、上の3つと混ぜない。** null は「まだ1件も**数えられる形で**
-  // 起きていない」であって「0回だった」ではない（`usage.ts` の
-  // `usageAggregateSchema` の `turnsSince`）。
+  // 回数の軸の始点を上の3つと混ぜない: null は「まだ1件も数えられる形で起きていない」であって「0回だった」ではないため
   lines.push(
     turnsSince === null ? '回数の軸はまだ1件も記録していない。' : `回数の軸の始点: ${turnsSince}`,
   );
@@ -9853,97 +9767,14 @@ function renderUsage(
   return lines.join('\n');
 }
 
-/**
- * self_status の記憶内訳に出す要旨（description）の抜粋上限（文字数、1行分）。
- *
- * **`memory.ts` の `MEMORY_TOC_LINE_LIMIT` を使い回さない。** 値が同じでも
- * 用途ごとに別の定数として置く（AGENTS.md「値が同じでも使い回さない。片方
- * だけ直したくなったときに一緒に動いてしまう」）。あちらはプロンプトへ焼く
- * 目次の1行、こちらは self_status という実行時ステータスの1行で、由来（誰が
- * 読むか・どの出力上限に収めるか）が違う。
- */
+// `memory.ts` の `MEMORY_TOC_LINE_LIMIT` を使い回さない: 値が同じでも、片方だけ直したくなったときに一緒に動くため
 const SELF_STATUS_MEMORY_DESCRIPTION_LIMIT = 120;
 
-/**
- * 記憶の文書ごとの内訳の予算（文字数）。
- *
- * **旧版は件数（`SELF_STATUS_MEMORY_DOC_LIMIT = 30`）で切っていた。** 当時の
- * 1行は `slug + bytes + 更新時刻` だけで、文書によらずほぼ一定の長さだった
- * ので件数の上限で事実上足りていた。人間の依頼（一覧系ツールは最低でも
- * id + 名前 + 概要 + updated_at + created_at）に応じて `title` と要旨
- * （description）を足すと、1行の長さが文書ごとに変わる——件数のまま
- * 30 × (可変長) にすると、何件で壊れるかが運任せになる。これは
- * `.claude/skills/listing-and-detail/SKILL.md`「予算は件数ではなく文字数で
- * 持つ」が指す形そのもの（この repo が3回踏んだバグと同じ）なので、件数の
- * 上限をやめて `renderListing` の文字数予算へ替えた。
- *
- * `MEMORY_LISTING_BUDGET`（`memory.ts`、8,000）より小さく取ってある——
- * `self_status` はこの節の前後に「実行時の事実」（`describeCloneRuntime`）と
- * 「台帳との突き合わせ」（`renderLedgerCrossReference`）の節が同居し、3節
- * 合計を `tools.test.ts` の一覧総当たり試験が定める `OUTPUT_CAP`（12,000）に
- * 収める必要があるため。値は `tools.test.ts` の `flooded(60)`（一覧が実際に
- * 溢れる量まで積んだ器）で実測して決めた——3,500 なら60文書中の一部だけが
- * 収まり、必ず省略の合図が出て、なお3節合計が `OUTPUT_CAP` に収まる。
- */
+// `MEMORY_LISTING_BUDGET` より小さく取る: `self_status` は3節同居で、合計を一覧総当たり試験の `OUTPUT_CAP`（12,000）に収める必要があるため
 const SELF_STATUS_MEMORY_LISTING_BUDGET = 3_500;
 
-/**
- * 記憶の大きさ。
- *
- * **「いまの総文字数」と「システムプロンプトへ焼き込んだ時点の文字数」は
- * ここでは出さない**（後者は `describeCloneRuntime` 側 — `CloneRuntimeFacts` の
- * 材料であって、記憶ストアを読み直しても変わらない値だからである）。ここが
- * 出すのは、いま `stores.persona` を読み直した時点の値だけで、会話の途中で
- * 記憶が書き換わっていれば、その場で変わる。
- *
- * **内訳の1行は人間の依頼（id + 名前 + 概要 + updated_at + created_at）の
- * 5項目を満たす。** `memory_list`（`renderMemoryListing`）と同じ語彙・同じ
- * 並び（`作成: … / 更新: …` の1文、`— 要旨` の区切り）に寄せてある——同じ
- * 依頼に対する別の一覧なので、ここだけ違う言い方を発明しない。`bytes` は
- * この節の主題（「記憶の大きさ」）なので残す。`createdAt` の整形は
- * `memory.ts` の `formatMemoryCreatedAt` をそのまま import して使う——同じ
- * 結果を返す関数を2つ書かない。
- *
- * **既存の `- 総文字数: N 文字（M 文書）` の行の文言は変えない**（歯が固定）。
- * 下で足すのは、その下に続く新しい行だけである。
- *
- * ## ⭐ 区分ごとの小計（記憶の肥大への恒久対策）
- *
- * premise 合計 / fact 目次合計は `measureMemoryFloor`（`memory.ts`）をそのまま
- * 使う——同じ計算を2本書かない。文書ごとの行にも `[premise]` / `[fact]` と
- * 文字数を足す。**`bytes` は消さない**——この節の主題は「記憶の大きさ」で、
- * bytes は実際のディスク上のサイズを言う値として引き続き意味がある。
- * **単位のラベル（文字 / bytes）を両方に必ず付ける**——旧版は総＝文字・
- * 文書ごと＝bytes で単位が混ざっており、依頼者は実際に bytes から文字数を
- * 割り戻して読んでいた。ここで bytes を隠すと、次の人がまた割り戻す。
- *
- * 文書ごとの「文字数」は `measureMemoryFloor([その1文書])` で測る——premise
- * ならその文書が単独でも実際に焼かれるカード（要旨＋節の目次。本文は含まない）
- * の長さ、fact ならその1行が乗る目次（見出し込み）の長さになる。**⚠️ fact 側は目次の見出し2行ぶん
- * （`<!-- memory: index -->` と `## 記憶の目次…`）が数値に乗る**——実際の
- * 焼き込みではこの2行は全 fact で共有されるので、複数の fact を合計すると
- * `measureMemoryFloor(memoryDocuments).tocChars` より大きくなる（二重に
- * 数えているわけではなく、「この1文書だけを載せるとしたら」という単独測定
- * だからである）。**premise 同士・fact 同士の相対順序は壊れない**（全件に
- * 同じ定数が乗るだけ）ので、この節の目的（寄与の大きい順に並べ、予算で
- * 切られても最大の寄与を残す）には支障が無い。
- *
- * ## ⭐ 並びは「毎ターンの寄与が大きい順」（欠陥の修正。案の一部ではない）
- *
- * **旧版は `stores.persona.list()` が返す順（両ドライバとも slug 昇順——
- * `packages/storage-fs/src/persona.ts` の `names.sort()` /
- * `packages/storage-pg/src/persona.ts` の `orderBy(asc(memory.slug))`）の
- * まま `renderListing` へ渡していた。** 予算（`SELF_STATUS_MEMORY_LISTING_BUDGET`
- * = 3,500）に達すると、slug が後ろの文書が黙って省略される——**それがどれだけ
- * 大きい premise であっても関係なく落ちる。** 呼び手は落ちた分に気づけない
- * ＝「測れた0」ではなく「測れていない0」を、測ったつもりで読むことになる。
- *
- * **ここで寄与の大きい順に並べ替えることで直す。** `renderListing` は先頭から
- * 予算に収まるだけ積む口なので、並べ替えるだけで「省略されるのは常に寄与の
- * 小さい方から」になる。**`stores.persona.list()` 自体の並びは変えない**——
- * 他の面（`memory_list` 等）がその順に依存しているため、並べ替えは
- * ここ（`renderMemorySize` の中）だけで行う。
- */
+// 単位のラベル（文字 / bytes）を両方に必ず付ける: 単位が混ざると、読み手が bytes から文字数を割り戻すことになるため
+// 並びは毎ターンの寄与が大きい順にする: slug 順のままだと予算に達したとき大きい premise でも黙って落ち、測れていない0を測ったつもりで読むため。`stores.persona.list()` 自体の並びは変えない: 他の面がその順に依存するため
 function renderMemorySize(
   documents: MemoryDocumentMeta[],
   memoryDocuments: readonly MemoryPart[],
