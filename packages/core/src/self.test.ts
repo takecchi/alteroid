@@ -22,7 +22,7 @@ const FACTS: SelfFacts = {
   runner: '別プロセスの manager-runner（http://runner:4518）',
   entrypoint: 'https://alteroid.example',
   auth: '認証は有効。ログイン手段: google',
-  models: { clone: 'fable', manager: 'opus', worker: 'sonnet' },
+  models: { clone: 'fable' },
 };
 
 describe('自己認識 — 焼き込んだ正典', () => {
@@ -66,8 +66,12 @@ describe('自己認識 — システムプロンプトに載る節', () => {
 
     expect(section).toContain(REPOSITORY_URL);
     expect(section).toContain('fable');
-    expect(section).toContain('opus');
-    expect(section).toContain('sonnet');
+    // マネージャー・作業者のモデルは runner ごとに決まるので、焼かずに実行時の道具へ案内する（#3947）
+    expect(section).toContain('マネージャー → 作業者');
+    expect(section).not.toContain('opus');
+    expect(section).not.toContain('sonnet');
+    expect(section).toContain('self_status');
+    expect(section).toContain('manager_list');
     // 正典の目次（何を self_read で読めるか）
     for (const name of canonNames()) expect(section).toContain(`\`${name}\``);
   });
@@ -289,22 +293,8 @@ describe('CloneRuntimeFacts の整形 — 観測した値と、取れていな�
     expect(notOverridden).not.toContain('に置いた値');
   });
 
-  /**
-   * クローン層の provider（#486 S9）。渡された id をそのまま出し、渡っていなければ
-   * `claude` と推測せず「まだ分からない」と言う。
-   */
-  it('クローンの provider は、渡された値をそのまま出し、無ければ claude と推測しない', () => {
-    expect(describeCloneRuntime({ ...RUNTIME, cloneProvider: 'claude' })).toContain(
-      'クローンの provider: claude',
-    );
-    expect(describeCloneRuntime({ ...RUNTIME, cloneProvider: 'other' })).toContain(
-      'クローンの provider: other',
-    );
-    const unknown = describeCloneRuntime(RUNTIME)
-      .split('\n')
-      .find((line) => line.startsWith('- クローンの provider'));
-    expect(unknown).toContain('まだ分からない');
-    expect(unknown).not.toContain('claude');
+  it('クローンの provider の行を持たない（層は常に Claude で動く。2026-10-07 の決定）', () => {
+    expect(describeCloneRuntime(RUNTIME)).not.toContain('クローンの provider');
   });
 
   /**

@@ -785,3 +785,49 @@ describe('外部サービス（連携の鍵）の札と線（Issue #3676）', ()
     expect(scene.externals).toHaveLength(1);
   });
 });
+
+describe('担当のモデル（#3921）', () => {
+  it('クローン・マネージャーに載り、作業者は親の workerModel を持つ', () => {
+    const scene = topologySceneFromSnapshot(
+      snapshot({
+        clone: { state: 'idle', model: 'opus' },
+        managers: [
+          {
+            ...MANAGER,
+            managerModel: 'opus',
+            workerModel: 'sonnet',
+            workers: [{ agentType: 'implementer' }],
+          },
+        ],
+      }),
+      NOW,
+    );
+    expect(scene.clone.agent).toEqual({ model: 'opus' });
+    expect(scene.managers[0]?.agent).toEqual({ model: 'opus' });
+    expect(scene.managers[0]?.workers[0]?.agent).toEqual({ model: 'sonnet' });
+  });
+
+  it('取れない値は欄ごと載せない（既定の値で埋めない）', () => {
+    const scene = topologySceneFromSnapshot(
+      snapshot({
+        managers: [{ ...MANAGER, managerModel: 'opus', workers: [{ agentType: 'w' }] }],
+      }),
+      NOW,
+    );
+    expect(scene.clone.agent).toEqual({});
+    expect(scene.managers[0]?.agent).toEqual({ model: 'opus' });
+    expect(scene.managers[0]?.workers[0]?.agent).toEqual({});
+  });
+
+  it('仕事なしをまとめた札は group で、担当の札を付けない目印になる', () => {
+    const ids = Array.from({ length: IDLE_COLLAPSE_THRESHOLD + 1 }, (_, i) => `idle000${i}`);
+    const scene = topologySceneFromSnapshot(
+      snapshot({
+        managers: ids.map((managerId) => ({ ...MANAGER, managerId, status: 'done' as const })),
+      }),
+      NOW,
+    );
+    expect(scene.managers.at(-1)?.group).toBe(true);
+    expect(scene.managers.at(-1)).not.toHaveProperty('agent');
+  });
+});

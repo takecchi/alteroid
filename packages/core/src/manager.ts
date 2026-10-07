@@ -1,10 +1,5 @@
 import { randomUUID } from 'node:crypto';
 
-import {
-  AGENT_PROVIDER_IDS,
-  DEFAULT_AGENT_PROVIDER_ID,
-  type AgentProviderId,
-} from './agent-ports.js';
 import { describeArchiveContinuityForJournal } from './archive-continuity.js';
 import { DAEMON_RUNNER_REGISTRY_SOURCE } from './daemon-self-notice.js';
 import { redactSecretsInText } from './denial-input-head.js';
@@ -59,6 +54,7 @@ import {
   listRunnerManagers,
   RUNNER_CAPABILITY_AWAITING_BACKGROUND_SIGNAL,
   RUNNER_CAPABILITY_MANAGER_ATTACHMENTS,
+  RUNNER_CAPABILITY_MANAGER_PEERS,
   RunnerHttpError,
   RunnerMcpServersUnsupportedError,
 } from './runner-protocol.js';
@@ -85,6 +81,7 @@ import type {
   RunnerExecutionResources,
   RunnerLegState,
   RunnerManagerListing,
+  RunnerManagerPeer,
   PidsSaturation,
   RunnerLiveness,
   RunnerMcpServersFingerprint,
@@ -166,16 +163,6 @@ export interface ManagerStartInput {
    * 重複のいずれでも**自動配置へは落とさない**（`RunnerRegistry#select` の doc）。
    */
   runnerId?: string;
-  /**
-   * このマネージャーを動かす provider の指名（#486 S7。クローンの `manager_start` の
-   * `provider` 引数）。**省略すれば runner の既定で動く＝従来どおり**で、台帳にも書かない。
-   *
-   * 指名は、宛先の runner が `hello.managerProviders` で名乗っているときだけ runner へ送る。
-   * 名乗っていない旧い runner へは**送らずに断る**（送っても `provider` 欄は黙って捨てられ、
-   * 別の provider で動いてしまう）。ただし指名が runner の既定と同じなら、送らずに起こす
-   * （どちらでも同じ provider で動く）。
-   */
-  provider?: string;
   /**
    * 呼び出し元のいまのターンの会話 id（issue #1003 段2・#781）。
    *
@@ -287,11 +274,6 @@ export type TokenGenerationUnknownReason =
 export interface ManagerSummary {
   managerId: string;
   status: JobStatus;
-  /**
-   * このマネージャーが実際に動いている provider（#486 S7）。**クローンが `provider` を指名した
-   * 委譲にだけある**。無いときの表示は宛先の runner が名乗った既定（`runnerReportedManagerProvider`）。
-   */
-  managerProvider?: string;
   /**
    * このデーモンから話しかけられるか。
    *
@@ -1674,7 +1656,18 @@ export interface RunnerOverview {
    * 払わない——デーモンのプロセス内に既にある記憶を読むだけである。
    */
   pushHealth?: RunnerPushHealth;
+  /**
+   * この器のマネージャーが MCP `peer` で作業を頼める provider（`hello.managerPeers`。#3940）。
+   * **2状態を混ぜない**: `named`（名乗る版の runner。`peers` が空なら開いている peer は無い）／
+   * `unknown`（名乗らない旧い runner・名乗りをまだ受けていない・runnerId が無い）。
+   * `unknown` を「頼めない」と既定値で埋めない。デーモンの新しい往復は払わない（`hello` の記憶を読むだけ）。
+   */
+  managerPeers?: RunnerManagerPeers;
 }
+
+/** {@link RunnerOverview.managerPeers}。 */
+export type RunnerManagerPeers =
+  { status: 'named'; peers: RunnerManagerPeer[] } | { status: 'unknown' };
 
 /** `runner_list` が返す全体像。 */
 export interface RunnerFleetOverview {
@@ -2083,6 +2076,12 @@ export interface ManagerPool {
    */
   pushHealthOf(runnerId: string): RunnerPushHealth | undefined;
   /**
+   * 1台ぶんの peer の名乗り（`RunnerOverview.managerPeers` と同じもの。#3940）。`GET /runners` が
+   * `pushHealthOf` と同じ理由でここを経由する。**省略可能**: 実装しない（テスト用の）プールでは
+   * 呼び出し側が `unknown` に倒す。
+   */
+  managerPeersOf?(runnerId: string | undefined): RunnerManagerPeers;
+  /**
    * runner→デーモンの脚（`Outbox` の滞留）について、最後に観測できた値
    * （#358 案b・案b の第2段）。**ネットワークを一切叩かない**——直近の
    * `runners({ resources: true })` と、10秒ごとの heartbeat（`#probe`）が
@@ -2162,17 +2161,12 @@ export interface ManagerPool {
    */
   runnerHasCapability?(runnerId: string, capability: string): boolean;
   /**
-   * その runner が直近の `hello` で名乗ったマネージャー層の provider id（#486 段 S1）。
-   * 欄を送らない旧い runner・名乗りを受けていない器は `claude`。**省略可能**なのは
-   * `runnerHasCapability?` と同じ理由（テストの偽のプールのため）。
+   * **表示用。** その runner が `hello` で名乗った、マネージャー・作業者のセッションに効くモデルの表記。
+   * 名乗りを受けていない・欄を送らない旧い runner は `undefined`（不明。既定の帯で埋めない）。
+   * 片方だけ名乗られたら、名乗られた側だけ持つ。**省略可能**なのは `runnerHasCapability?` と同じ理由
+   * （テストの偽のプールのため）。
    */
-  runnerManagerProvider?(runnerId: string): string;
-  /**
-   * **表示用**（#486 S9）。名乗りを受けていない・欄を送らない旧い runner は
-   * `undefined`（不明。`claude` とは推測しない）。経路判断に使わない。
-   * **省略可能**なのは `runnerManagerProvider?` と同じ理由。
-   */
-  runnerReportedManagerProvider?(runnerId: string): string | undefined;
+  runnerReportedModels?(runnerId: string): { manager?: string; worker?: string } | undefined;
   /**
    * Issue #1394 の2つ目の契機 — `manager_start` の自動配置
    * （`RunnerRegistry#place`）が全台へ既に払った `resources()` の応答を使って、
@@ -2992,6 +2986,21 @@ export function resolveWorkspacePolicy(env: NodeJS.ProcessEnv = process.env): Wo
  */
 export type WorkerToolEvent = Extract<RunnerEvent, { type: 'tool_running' | 'tool_end' }>;
 
+/**
+ * Codex の ChatGPT ログインの正本の持ち主（#3939）のうち、`ManagerPool` が使う部分。
+ * **どちらも投げない**（失敗は持ち主の側が日誌に残す）。
+ */
+export interface CodexAuthRunnerSync {
+  /** 1台の runner へ、いま正本に在るログインを降ろし直す（無ければ外す）。 */
+  syncRunner(runner: RunnerClient): Promise<void>;
+  /** runner の `codex_auth`（書き戻し・失効）を受ける。`runner` は繋がっていなければ `null`。 */
+  onRunnerNotice(
+    event: Extract<RunnerEvent, { type: 'codex_auth' }>,
+    runnerId: string,
+    runner: RunnerClient | null,
+  ): Promise<void>;
+}
+
 export interface ManagerPoolOptions {
   /**
    * いま撒かれている認証トークンの身元（Issue #393 PR3）。**マネージャーの
@@ -3056,6 +3065,13 @@ export interface ManagerPoolOptions {
    * **降ろし直しも更新（`apply`）と同じ列を通す。**
    */
   mcpServers?: McpServerService;
+  /**
+   * Codex の ChatGPT ログインの正本の持ち主（#3939。`codex-chatgpt-auth-service.ts`）。
+   *
+   * **MCP の登録と同じ理由でここに要る** — runner は記憶ストアを読めないので、器が作り直された
+   * ときに降ろすのはデーモンの責任である。runner からの書き戻し・失効の知らせもここへ渡す。
+   */
+  codexAuth?: CodexAuthRunnerSync;
   /**
    * いまの時刻（既定は `Date.now`）。**貸し出し期限の判定のために口を開けてある。**
    *
@@ -4215,9 +4231,9 @@ const DENIAL_REPLY_ROUTE =
  */
 const MAX_MANAGER_ID_ATTEMPTS = 5;
 
-/** `hello` を待つ上限と間隔（#486 S7。指名の provider があるときだけ使う）。 */
-const PROVIDER_HELLO_WAIT_MS = 5_000;
-const PROVIDER_HELLO_POLL_MS = 50;
+/** `hello` を待つ上限と間隔（名乗りを見てから決める関門だけが使う。添付の関門など）。 */
+const HELLO_WAIT_MS = 5_000;
+const HELLO_POLL_MS = 50;
 
 /**
  * 上限の文言を、種類ごとに何通り覚えておくか。
@@ -5122,6 +5138,7 @@ class Pool implements ManagerPool {
   readonly #profile: ProfileService | undefined;
   readonly #credentials: CredentialService | undefined;
   readonly #mcpServers: McpServerService | undefined;
+  readonly #codexAuth: CodexAuthRunnerSync | undefined;
   /**
    * MCP の登録を受け取る口を持たないと分かった runner（#325 段3）。**挑み直しの
    * 予約から外すためだけに持つ**（`#settlePushRetry`）。名乗り直しのたびに
@@ -5273,22 +5290,12 @@ class Pool implements ManagerPool {
    * たびに来るので、デーモンを作り直しても次の `hello` で埋まる）。
    */
   readonly #runnerCapabilities = new Map<string, ReadonlySet<string>>();
-  /**
-   * runner ごとに、直近の `hello` で名乗られたマネージャー層の provider id（#486 段 S1）。
-   * 読み口は2つ。経路判断は {@link runnerManagerProvider}（取れなければ `claude`）、
-   * 表示は {@link runnerReportedManagerProvider}（取れなければ `undefined`＝不明。
-   * claude と推測しない。#486 S9）。**欄を送らない旧い runner の hello では鍵を消す**
-   * （前の名乗りは持ち越さない。`#runnerCapabilities` と同じ）。
-   */
-  readonly #runnerManagerProviders = new Map<string, string>();
-  /**
-   * runner ごとに、直近の `hello` で名乗られた「命令で名指しされて起こせる provider」
-   * （#486 S7。`hello.managerProviders`）。欄を送らない旧い runner の hello では鍵を消す。
-   * 「名乗りを受けたか」は `#runnerCapabilities` の鍵で見る（`hello` ごとに必ず書かれる）。
-   */
-  readonly #runnerStartableProviders = new Map<string, ReadonlySet<string>>();
+  /** runner ごとに、直近の `hello` のモデル名乗り。どちらも送らない旧い runner の hello では鍵を消す（持ち越さない）。 */
+  readonly #runnerModels = new Map<string, { manager?: string; worker?: string }>();
   /** runner が名乗った、添付を運ぶ口の本文の上限（`hello.attachmentBodyLimit`）。名乗らない器は持たない。 */
   readonly #runnerAttachmentBodyLimits = new Map<string, number>();
+  /** runner が名乗った peer（`hello.managerPeers`。#3940）。名乗らない器は持たない。 */
+  readonly #runnerManagerPeers = new Map<string, readonly RunnerManagerPeer[]>();
   /**
    * **枠で止まった委譲**の managerId（`case 'usage_notice'` の `reached` で立ち、
    * {@link Pool.resumeStoppedByUsage} が下ろす）。
@@ -5823,6 +5830,7 @@ class Pool implements ManagerPool {
     profile,
     credentials,
     mcpServers,
+    codexAuth,
     now,
     leaseTtlMs,
     withheldReportFlushMs,
@@ -5841,6 +5849,7 @@ class Pool implements ManagerPool {
     this.#profile = profile;
     this.#credentials = credentials;
     this.#mcpServers = mcpServers;
+    this.#codexAuth = codexAuth;
     // **即時の配布の結果も、名乗りのときの配布と同じ帳面に積む（Issue #1699 / #1717）。**
     for (const unsubscribe of [
       profile?.onPushed?.((results) => this.#recordDirectPushResults('profile', results)),
@@ -5912,15 +5921,10 @@ class Pool implements ManagerPool {
     if (this.#stopped) throw new Error('デーモンが停止中のためマネージャーを起こせない');
     await this.#ensureConnected();
 
-    let runner = await this.#runners.select({
+    const runner = await this.#runners.select({
       ...(input.cwd === undefined ? {} : { cwd: input.cwd }),
       ...(input.runnerId === undefined ? {} : { runnerId: input.runnerId }),
     });
-    // **provider を指名して置き先を指名しなかったとき**だけ、自動配置の選び先がその provider を
-    // 受けられなければ、受けられる別の器を探す（#486 S7）。runnerId の指名は覆さない。
-    if (input.provider !== undefined && input.runnerId === undefined) {
-      runner = await this.#preferRunnerFor(runner, input.provider);
-    }
     // **選んだ相手に繋がっていることを確かめてから起こす。** ここを best-effort に
     // すると、受け口の開いていない runner でマネージャーが走り出し、報告も許可確認も
     // 誰にも届かない（黙って止まっているように見える）。
@@ -5959,11 +5963,6 @@ class Pool implements ManagerPool {
           'cwd を明示して起こすか、runner が /health で workspacePath を名乗ってから起こすこと（#402）。',
       );
     }
-    // **指名があるときだけ、この門を通る**（省略なら何も変わらない）。
-    const providerToSend =
-      input.provider === undefined
-        ? undefined
-        : await this.#providerForCommand(runner, input.provider);
     const managerId = this.#claimManagerId();
     const cwd = input.cwd ?? runner.workspacePath;
     const now = this.#now();
@@ -6005,7 +6004,6 @@ class Pool implements ManagerPool {
         request: input.request,
         cwd,
         runnerId: runner.runnerId,
-        ...(input.provider === undefined ? {} : { managerProvider: input.provider }),
         // **確かめずに `runner-volume` と書かない。** デーモンからは、この器の
         // `/workspace` がボリュームなのか毎デプロイで消えるのかを知る手段が無い
         // （名乗りはパスしか運ばない）。断定すると台帳が**存在しない永続性**を
@@ -6032,7 +6030,6 @@ class Pool implements ManagerPool {
         request: input.request,
         cwd,
         lease: { fence: lease.fence, ttlMs: lease.ttlMs },
-        ...(providerToSend === undefined ? {} : { provider: providerToSend }),
         ...(startAttachments.length === 0 ? {} : { attachments: startAttachments }),
       });
     } catch (error) {
@@ -7325,6 +7322,7 @@ class Pool implements ManagerPool {
           // runner への新しい往復を払わない（プロセス内の記憶を読むだけ）ので、
           // opt-in にする理由が無い。
           ...(pushHealth === undefined ? {} : { pushHealth }),
+          managerPeers: this.managerPeersOf(entry.runnerId),
         };
 
         // **Issue #1394 段④ — 契機の1つ目はここ。** `resources()` の結果として
@@ -7710,105 +7708,40 @@ class Pool implements ManagerPool {
     );
   }
 
+  /** {@link RunnerOverview.managerPeers}。`hello` の記憶を読むだけで、runner へは訊きに行かない。 */
+  managerPeersOf(runnerId: string | undefined): RunnerManagerPeers {
+    if (runnerId === undefined) return { status: 'unknown' };
+    if (!this.runnerHasCapability(runnerId, RUNNER_CAPABILITY_MANAGER_PEERS)) {
+      return { status: 'unknown' };
+    }
+    const peers = this.#runnerManagerPeers.get(runnerId) ?? [];
+    return {
+      status: 'named',
+      peers: peers.map((peer) => ({
+        provider: peer.provider,
+        ...(peer.models === undefined ? {} : { models: [...peer.models] }),
+      })),
+    };
+  }
+
   runnerHasCapability(runnerId: string, capability: string): boolean {
     return this.#runnerCapabilities.get(runnerId)?.has(capability) ?? false;
   }
 
-  /**
-   * その runner が名乗ったマネージャー層の provider id（#486 段 S1）。名乗りを
-   * まだ受けていない器・欄を送らない旧い runner は `claude`。
-   */
-  runnerManagerProvider(runnerId: string): string {
-    return this.#runnerManagerProviders.get(runnerId) ?? DEFAULT_AGENT_PROVIDER_ID;
-  }
-
-  /**
-   * 命令（`start` / `resume`）へ載せる provider を決める（#486 S7）。**送れないなら投げる。**
-   *
-   * - runner が `hello.managerProviders` で名乗っている → その provider なら載せる
-   * - 名乗っていない（旧い版）→ **載せない。** `provider` 欄は黙って捨てられ、別の provider で
-   *   動いてしまうため。指名が runner の既定と**同じ**ときだけ、載せずに通す（どちらでも同じ）
-   * - まだ `hello` を受けていない → 少し待つ（`connect` は `hello` を待たずに返る）。
-   *   来なければ「分からない」として断る（既定へ倒さない）
-   */
-  /** `hello` を受けるまで少し待つ。受けていれば true。 */
+  /** `hello` を受けるまで少し待つ（`connect` は `hello` を待たずに返る）。受けていれば true。 */
   async #awaitHello(runnerId: string): Promise<boolean> {
     for (
       let waited = 0;
-      !this.#runnerCapabilities.has(runnerId) && waited < PROVIDER_HELLO_WAIT_MS;
-      waited += PROVIDER_HELLO_POLL_MS
+      !this.#runnerCapabilities.has(runnerId) && waited < HELLO_WAIT_MS;
+      waited += HELLO_POLL_MS
     ) {
-      await new Promise((resolve) => setTimeout(resolve, PROVIDER_HELLO_POLL_MS));
+      await new Promise((resolve) => setTimeout(resolve, HELLO_POLL_MS));
     }
     return this.#runnerCapabilities.has(runnerId);
   }
 
-  /** その runner が `provider` で起こせる（名乗っている、または既定が同じ）か。名乗り済みの前提。 */
-  #canRun(runnerId: string, provider: string): boolean {
-    return (
-      this.#runnerStartableProviders.get(runnerId)?.has(provider) === true ||
-      (this.#runnerManagerProviders.get(runnerId) ?? DEFAULT_AGENT_PROVIDER_ID) === provider
-    );
-  }
-
-  /**
-   * 自動配置が選んだ `chosen` が `provider` を受けられなければ、開いている他の器から受けられる
-   * ものを探す。無ければ `chosen` のまま返す（その先の `#providerForCommand` が明確に断る）。
-   */
-  async #preferRunnerFor(chosen: RunnerClient, provider: string): Promise<RunnerClient> {
-    await this.#connectTo(chosen);
-    if ((await this.#awaitHello(chosen.runnerId)) && this.#canRun(chosen.runnerId, provider)) {
-      return chosen;
-    }
-    for (const other of await this.#runners.list()) {
-      if (other.runnerId === chosen.runnerId) continue;
-      try {
-        await this.#connectTo(other);
-      } catch {
-        continue;
-      }
-      if ((await this.#awaitHello(other.runnerId)) && this.#canRun(other.runnerId, provider)) {
-        return other;
-      }
-    }
-    return chosen;
-  }
-
-  async #providerForCommand(
-    runner: RunnerClient,
-    requested: string,
-  ): Promise<AgentProviderId | undefined> {
-    const known = AGENT_PROVIDER_IDS.find((candidate) => candidate === requested);
-    if (known === undefined) {
-      throw new Error(
-        `provider=${requested} は知らない provider（使えるのは ${AGENT_PROVIDER_IDS.join(' / ')}）`,
-      );
-    }
-    const runnerId = runner.runnerId;
-    if (!(await this.#awaitHello(runnerId))) {
-      throw new Error(
-        `runner（runnerId=${runnerId}）からまだ名乗り（hello）を受けていないので、provider=${known} ` +
-          'を受けられるか分からない。少し置いてからやり直すこと（既定の provider へは倒さない）。',
-      );
-    }
-    if (this.#runnerStartableProviders.get(runnerId)?.has(known) === true) return known;
-    const fallback = this.#runnerManagerProviders.get(runnerId) ?? DEFAULT_AGENT_PROVIDER_ID;
-    if (known === fallback) return undefined;
-    throw new Error(
-      `runner（runnerId=${runnerId}）は provider=${known} の指名起動を受けられない` +
-        `（この版の runner は名指しの provider を解さない。既定の provider は ${fallback}）。` +
-        'provider を省くか、runner を更新してからやり直すこと。',
-    );
-  }
-
-  /**
-   * **表示用**の読み口（#486 S9）。その runner が実際に名乗ったマネージャー層の
-   * provider id。**名乗りをまだ受けていない・欄を送らない旧い runner は `undefined`
-   * （＝不明）。`claude` とは推測しない。** 経路判断には使わないこと
-   * （そちらは {@link runnerManagerProvider}。既定 `claude` の意味は変えていない）。
-   */
-  runnerReportedManagerProvider(runnerId: string): string | undefined {
-    return this.#runnerManagerProviders.get(runnerId);
+  runnerReportedModels(runnerId: string): { manager?: string; worker?: string } | undefined {
+    return this.#runnerModels.get(runnerId);
   }
 
   /**
@@ -10479,6 +10412,9 @@ class Pool implements ManagerPool {
       // runner のメモリに置いた登録は消えているので、ここで降ろさないと最初の
       // マネージャーが連携0本で走り出す。
       await this.#pushMcpServers(runner);
+      // **Codex の ChatGPT ログインも同じ位置で降ろす（#3939）。** runner はメモリと CODEX_HOME に
+      // しか持たないので、器ごと入れ替わった runner では消えている。失敗は相手の側が日誌に残す。
+      await this.#codexAuth?.syncRunner(runner).catch(() => undefined);
       // **認証トークンも同じ位置で降ろす。** プロファイルと同じ理由——名乗り
       // 任せにすると、最初のマネージャーが古いトークンで走り出しうる。
       await this.#pushAgentToken(runner);
@@ -10653,6 +10589,8 @@ class Pool implements ManagerPool {
         // 登録をメモリにしか持たないので、器ごと入れ替わった runner では消えている。
         // 降ろし直さないと、再デプロイのたびにマネージャー・作業者の連携が0本へ戻る。
         await this.#pushMcpServers(runner);
+        // **Codex の ChatGPT ログインも同じ位置で降ろす（#3939。#connectTo と同じ）。**
+        await this.#codexAuth?.syncRunner(runner).catch(() => undefined);
         // **認証トークンも同じ位置で降ろす（Issue #393）。** 直上の理由がそのまま
         // 効く —— **器が入れ替わっていれば置いた鍵も消えている。** この経路にだけ
         // 無かったので、繋ぎ直してきた runner は`#connectTo`と違って鍵が降りず、
@@ -11922,13 +11860,6 @@ class Pool implements ManagerPool {
     const { sessionId, cwd, request, projectKey } = record.job;
     if (sessionId === undefined) return 'no-session';
 
-    // **指名されていた委譲だけ、同じ provider で開き直す**（#486 S7）。送れない器なら、
-    // 貸し出しにも runner にも触れずに断る。指名の無い委譲は何も変わらない。
-    const providerToSend =
-      record.job.managerProvider === undefined
-        ? undefined
-        : await this.#providerForCommand(runner, record.job.managerProvider);
-
     /*
      * **`cwd` を記録しておらず、runner からも `workspacePath` を一度も聞けて
      * いないなら、ここで断る（#402）。** `#claimForResume` / `#loadSession`
@@ -11985,7 +11916,6 @@ class Pool implements ManagerPool {
         ? {}
         : { attachments }),
       ...(material.kind === 'loaded' ? { entries: material.entries } : {}),
-      ...(providerToSend === undefined ? {} : { provider: providerToSend }),
       // **世代と猶予を渡す。** これで runner は古い世代の命令を拒み、連絡が
       // 取れなくなったら自分でこのセッションを畳める（`lease.ts` の doc）。
       ...(record.job.lease === undefined
@@ -12225,15 +12155,19 @@ class Pool implements ManagerPool {
       } else {
         this.#runnerAttachmentBodyLimits.set(event.runnerId, event.attachmentBodyLimit);
       }
-      if (event.managerProviders === undefined) {
-        this.#runnerStartableProviders.delete(event.runnerId);
+      if (event.managerModel === undefined && event.workerModel === undefined) {
+        this.#runnerModels.delete(event.runnerId);
       } else {
-        this.#runnerStartableProviders.set(event.runnerId, new Set(event.managerProviders));
+        this.#runnerModels.set(event.runnerId, {
+          ...(event.managerModel === undefined ? {} : { manager: event.managerModel }),
+          ...(event.workerModel === undefined ? {} : { worker: event.workerModel }),
+        });
       }
-      if (event.managerProvider === undefined) {
-        this.#runnerManagerProviders.delete(event.runnerId);
+      // 前の名乗りを持ち越さない（器が入れ替わって peer が閉じうる）。
+      if (event.managerPeers === undefined) {
+        this.#runnerManagerPeers.delete(event.runnerId);
       } else {
-        this.#runnerManagerProviders.set(event.runnerId, event.managerProvider);
+        this.#runnerManagerPeers.set(event.runnerId, event.managerPeers);
       }
       // **名乗りは全部 `#reattach` に通す。** 「初回だけ素通り」にすると、起動時に
       // 掴んだ器と、SSE が繋がった先の器が違う場合（畳まれつつある旧 runner が
@@ -12247,6 +12181,15 @@ class Pool implements ManagerPool {
       // **runner の /tmp の片付け**（Issue #3039）。委譲に結びつかない（runner 単位）ので、
       // `shutting_down` と同じく record を引く前に処理する。
       await this.#onScratchSweep(event, fromRunnerId);
+      return;
+    }
+
+    if (event.type === 'codex_auth') {
+      // **Codex の ChatGPT ログインの書き戻し・失効**（#3939）。runner 単位。正本の持ち主
+      // （`CodexChatgptAuthService`）へ渡すだけで、委譲の台帳には触れない。
+      if (this.#codexAuth === undefined) return;
+      const runner = await this.#runners.get(fromRunnerId).catch(() => null);
+      await this.#codexAuth.onRunnerNotice(event, fromRunnerId, runner);
       return;
     }
 
@@ -17261,7 +17204,6 @@ function summaryOf(
     // 通した値だけをここへ渡している。
     ...(usageStoppedAt === undefined ? {} : { usageStoppedAt }),
     ...(job.runnerId === undefined ? {} : { runnerId: job.runnerId }),
-    ...(job.managerProvider === undefined ? {} : { managerProvider: job.managerProvider }),
     /*
      * **`unknown` を黙って落とさない。** 台帳が「永続性を確かめられなかった」と
      * 言っているとき、欄ごと消すと外からは**何も書かれていない**のと同じに見え、

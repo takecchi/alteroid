@@ -1,6 +1,7 @@
 import { stdout } from './terminal-out.js';
 
-import { describeRevisionStatus } from '@alteroid/core/cli-light';
+import { describeManagerPeers, describeRevisionStatus } from '@alteroid/core/cli-light';
+import type { ManagerPeersView } from '@alteroid/core/cli-light';
 import type {
   RunnerCredentialFingerprint,
   RunnerProfileFingerprint,
@@ -9,8 +10,6 @@ import type {
   RunnerRevisionReport,
   RunnerRevisionStatus,
 } from '@alteroid/core';
-
-import { describeCloneProvider } from '@alteroid/logic';
 
 import { createClient } from './client.js';
 import { formatElapsedAgo, withErrorReason } from './format.js';
@@ -116,18 +115,15 @@ interface RunnersView {
     profileProbe: RunnerProbe;
     revision: RunnerRevisionStatus;
     pushHealth?: RunnerPushHealth;
+    // 無いのは旧いデーモンの応答。`unknown` は名乗らない旧い runner（「頼めない」とは読まない）
+    managerPeers?: ManagerPeersView;
   }[];
   daemonRevision: RunnerRevisionReport;
-  cloneProvider?: string;
 }
 
 // デーモン自身の版は runner が0台でも出す: 0台は版を確かめたい状態そのもので、そこで答えが消えるため
 export function renderRunners(view: RunnersView, now: number = Date.now()): string {
-  const lines = [
-    `デーモンの版: ${describeRevisionStatus(view.daemonRevision)}`,
-    `クローンの provider: ${describeCloneProvider(view.cloneProvider)}`,
-    '',
-  ];
+  const lines = [`デーモンの版: ${describeRevisionStatus(view.daemonRevision)}`, ''];
 
   if (view.runners.length === 0) {
     lines.push(
@@ -159,6 +155,9 @@ export function renderRunners(view: RunnersView, now: number = Date.now()): stri
             (runner.instanceSince === undefined ? '' : `（${runner.instanceSince} から）`),
     );
     lines.push(`  版: ${describeRevisionStatus(runner.revision)}`);
+    // 開いている peer が無い器は行を出さない: PEERS が空の構成の見え方を変えないため
+    const peers = describeManagerPeers(runner.managerPeers);
+    if (peers !== undefined) lines.push(`  peer: ${peers}`);
     if (runner.error !== undefined) lines.push(`  直近の失敗: ${redactError(runner.error)}`);
     lines.push(`  ${renderCredentialsFingerprint(runner)}`);
     lines.push(`  ${renderProfileFingerprint(runner)}`);
