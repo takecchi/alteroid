@@ -152,6 +152,21 @@ const LAYER_PARAM = 'layer';
 const SITE_PARAM = 'site';
 const TOKEN_ID_PARAM = 'tokenId';
 
+/** `searchParams.get` は先頭の値しか返さない。重複を黙って採ると、人が書いた2つ目の指定が無視されたことに気付けない。 */
+function duplicateParamNotices(searchParams: URLSearchParams): string[] {
+  const labels: Array<[string, string]> = [
+    [FROM_PARAM, '開始日'],
+    [TO_PARAM, '終了日'],
+    [MANAGER_ID_PARAM, 'マネージャー'],
+    [LAYER_PARAM, '「誰が」'],
+    [SITE_PARAM, '「どこで」'],
+    [TOKEN_ID_PARAM, '認証トークン'],
+  ];
+  return labels
+    .filter(([param]) => searchParams.getAll(param).length > 1)
+    .map(([, label]) => `${label}の指定が複数あるので、先頭の値を使っています`);
+}
+
 /**
  * `LAYER_PARAM` / `SITE_PARAM` の生の値から、既知のものだけを取り出す。
  *
@@ -419,7 +434,7 @@ export default function Usage() {
    * リンクを踏む、のどれでも起こりうるので、読めなかった生の値をそのまま
    * 画面に出す（人間が書いた URL の値であって秘密ではない）。
    */
-  const filterNotices: string[] = [];
+  const filterNotices: string[] = duplicateParamNotices(searchParams);
   if (invalidFrom !== null) {
     filterNotices.push(
       `開始日に指定された値（${invalidFrom}）は日付として読めないので、絞り込みに使っていません`,
