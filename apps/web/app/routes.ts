@@ -19,6 +19,7 @@ export default [
     route('access', 'routes/access.tsx'),
     route('permissions', 'routes/permissions.tsx'),
     route('env-vars', 'routes/env-vars.tsx'),
+    route('codex', 'routes/codex.tsx'),
     route('profile', 'routes/profile.tsx'),
     route('mcp-servers', 'routes/mcp-servers.tsx'),
     route('integrations', 'routes/integrations.tsx'),

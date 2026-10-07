@@ -2,6 +2,8 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { statSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join as joinPath } from 'node:path';
 
 import type {
   AgentContentBlock,
@@ -32,7 +34,13 @@ import { inspectReleaseProdDispatch } from './bash-release-prod-guard.js';
 import { inspectBashCommand } from './bash-wait-guard.js';
 import { cgroupEventsDeltaOf } from './cgroup-events.js';
 import { ClaudeManagerDriver, type ClaudeQueryFn } from './claude-manager-driver.js';
-import { CodexManagerDriver } from './codex-manager-driver.js';
+import { CodexManagerDriver, type CodexChatgptAuthHandle } from './codex-manager-driver.js';
+import {
+  CodexAuthMirror,
+  type CodexAuthMirrorStatus,
+  type CodexAuthPush,
+  type CodexAuthWriteBack,
+} from './codex-auth-mirror.js';
 import {
   CLONE_TOOL_RELAY_SOCKET_ENV,
   CLONE_TOOL_RELAY_TOKEN_ENV,
@@ -377,6 +385,11 @@ export interface RunnerPeerOptions {
    * 起動時に provider の表が未初期化になる（起動不能になった実例。#2732）。
    */
   readonly reportsUsage: (provider: AgentProviderId) => boolean;
+  /**
+   * provider ごとに人間が開けたモデル名（`ALTEROID_MANAGER_PEER_CODEX_MODELS`。#3934）。
+   * 空・省略なら `peer_run` に `model` 引数を出さない。
+   */
+  readonly models?: Partial<Record<AgentProviderId, readonly string[]>>;
   /** 中継の子（`clone-tool-relay-child`）の絶対パス。省略はビルド成果物から探す（テスト用の差し替え口）。 */
   readonly childEntry?: string;
 }
@@ -403,6 +416,15 @@ export interface RunnerHostOptions {
   withheldEnvKeys?: readonly string[];
   /** SDK 子プロセスを別 UID で走らせる（コンテナ構成の既定）。 */
   childUser?: RunnerChildUser;
+  /**
+   * peer の Codex の `CODEX_HOME`（#3939。ChatGPT ログインを書き出す先。runner ごとに1か所）。
+   * 省略は、子の UID の home があれば `<home>/.codex`（Codex の既定と同じ場所）、無ければ
+   * `os.tmpdir()` 配下（手元の構成で人間自身の `~/.codex` を上書きしない）。
+   * **ログインが降りていなければ一切触らない。**
+   */
+  codexHome?: string;
+  /** `auth.json` の書き換えの見回りの周期（既定 60 秒。#3939）。主にテスト用。 */
+  codexAuthCheckIntervalMs?: number;
   /**
    * 担い手へ渡す添付を置く場所（Issue #3111 段3。`runner-attachments.ts`）。省略は
    * `os.tmpdir()` 配下の `alteroid-attachments`。主にテスト用の口。
@@ -547,6 +569,15 @@ export interface RunnerHost {
   setPlugin(name: string, input: unknown): RunnerPluginFingerprintEntry;
   /** 残す名前を渡し、一覧に無いものをメモリから外す。残った後の指紋（空なら `undefined`）。 */
   retainPlugins(names: readonly string[]): RunnerPluginsFingerprint | undefined;
+  /** 降りている Codex の ChatGPT ログインの状態（#3939）。**値は出さない。** */
+  codexAuth(): CodexAuthMirrorStatus;
+  /**
+   * Codex の ChatGPT ログインを差し替える（#3939。`null` は外す）。peer の Codex を次に起こすときから
+   * 効く（走っている Codex は自分の `CODEX_HOME/auth.json` を読み直す）。**メモリと `CODEX_HOME` にだけ持つ。**
+   */
+  setCodexAuth(push: CodexAuthPush): Promise<CodexAuthMirrorStatus>;
+  /** Codex が書き換えた `auth.json` の中身を、知らせた指紋と一致するときだけ渡す（#3939）。 */
+  takeCodexAuthWriteBack(fingerprint: string): CodexAuthWriteBack | null;
   /**
    * 戻り値の `cwd` は、実際にセッションが開いた作業ディレクトリ（Issue #1814）。
    * `command.cwd` の写しではない——`Host#resolveCwd` の doc を見よ。
@@ -748,6 +779,10 @@ export function createRunnerHost(options: RunnerHostOptions): RunnerHost {
 class Host implements RunnerHost {
   readonly runnerId: string;
   readonly workspacePath: string;
+  /** Codex の ChatGPT ログインの写し（#3939）。降りていなければ何もしない。 */
+  readonly #codexAuth: CodexAuthMirror;
+  /** `auth.json` の書き換えの見回りの1本。**`shutdown()` で必ず畳む。** */
+  #codexAuthTimer: ReturnType<typeof setInterval> | null = null;
   readonly #emit: (event: RunnerEvent) => void;
   readonly #queryFn: ClaudeQueryFn | undefined;
   readonly #env: NodeJS.ProcessEnv;
@@ -850,6 +885,22 @@ class Host implements RunnerHost {
     this.#readCgroupEventCountersFn = options.readCgroupEventCountersFn;
     this.#finishUnpushedWorkFn = options.finishUnpushedWorkFn;
     this.#cwdExistsFn = options.cwdExistsFn ?? directoryExists;
+    this.#codexAuth = new CodexAuthMirror({
+      codexHome: options.codexHome ?? defaultCodexHome(options.childUser),
+      ...(options.childUser === undefined
+        ? {}
+        : { owner: { uid: options.childUser.uid, gid: options.childUser.gid } }),
+      onNotice: (notice) => this.#emit({ type: 'codex_auth', runnerId: this.runnerId, ...notice }),
+    });
+    // Codex がトークンを更新して書き換えた auth.json を見回る（セッションの終わり・
+    // `account/updated` でも見るが、長く走るセッションの途中の更新を取りこぼさないため）。
+    // ログインが降りていなければ `check` は何もしない。見張りでプロセスの終了を引き延ばさない。
+    const codexAuthTimer = setInterval(
+      () => void this.#codexAuth.check().catch(() => undefined),
+      options.codexAuthCheckIntervalMs ?? 60_000,
+    );
+    codexAuthTimer.unref?.();
+    this.#codexAuthTimer = codexAuthTimer;
     // **走行中の各セッションを、一定の周期で退避する**（Issue #1266。`rescue-ref.ts`）。
     // セッション内で同時に走るのは1本まで（`RunnerSession#rescueRef`）。重ねて撃たず、
     // 前の回が遅れていれば今回は見送る。見張りでプロセスの終了を引き延ばさない。
@@ -1160,6 +1211,19 @@ class Host implements RunnerHost {
     return this.plugins();
   }
 
+  codexAuth(): CodexAuthMirrorStatus {
+    return this.#codexAuth.status();
+  }
+
+  async setCodexAuth(push: CodexAuthPush): Promise<CodexAuthMirrorStatus> {
+    await this.#codexAuth.set(push);
+    return this.#codexAuth.status();
+  }
+
+  takeCodexAuthWriteBack(fingerprint: string): CodexAuthWriteBack | null {
+    return this.#codexAuth.takeWriteBack(fingerprint);
+  }
+
   /**
    * プロファイルを重ねる前の env。鍵まで載せた状態で評価する。
    *
@@ -1241,6 +1305,7 @@ class Host implements RunnerHost {
       permissionMode: this.#permissionMode,
       bashGuard: this.#bashGuard,
       ...(this.#peer === undefined ? {} : { peer: this.#peer }),
+      codexAuth: this.#codexAuth,
       profileEnv: () => this.#profile?.env() ?? {},
       mcpServers: () => this.#mcpServers?.servers,
       onClosed: () => {
@@ -1588,6 +1653,8 @@ class Host implements RunnerHost {
     this.#rescueTimer = null;
     if (this.#scratchTimer !== null) clearInterval(this.#scratchTimer);
     this.#scratchTimer = null;
+    if (this.#codexAuthTimer !== null) clearInterval(this.#codexAuthTimer);
+    this.#codexAuthTimer = null;
     // 走行中の片付けは止める（候補の境目で止まる。途中で止まっても、消すのは「消してよい」と
     // 決まった候補だけなので壊れない）。
     this.#scratchAbort.abort();
@@ -1950,6 +2017,8 @@ interface RunnerSessionOptions {
   permissionMode: ManagerPermissionMode;
   /** `RunnerHost` が起動時に読んだ Bash の門の扱い。 */
   bashGuard: BashGuardMode;
+  /** runner に降りた Codex の ChatGPT ログイン（#3939）。peer の Codex の駆動役へ渡す。 */
+  codexAuth?: CodexChatgptAuthHandle;
   /**
    * プロファイル由来の env（評価済みの差分＋`BASH_ENV` などの所在）。
    *
@@ -2088,6 +2157,7 @@ class RunnerSession {
   readonly #permissionMode: ManagerPermissionMode;
   readonly #bashGuard: BashGuardMode;
   readonly #peer: RunnerPeerOptions | undefined;
+  readonly #codexAuth: CodexChatgptAuthHandle | undefined;
   readonly #queryFn: ClaudeQueryFn | undefined;
   /** MCP `peer` の仲買（最初に要ったときに1度だけ作る）。 */
   #peerBroker: PeerBroker | undefined;
@@ -2365,6 +2435,7 @@ class RunnerSession {
     this.#withheldEnvKeys = options.withheldEnvKeys;
     this.#childUser = options.childUser;
     this.#peer = options.peer;
+    this.#codexAuth = options.codexAuth;
     this.#queryFn = options.queryFn;
     this.#credentials = options.credentials;
     this.#permissionMode = options.permissionMode;
@@ -2986,10 +3057,13 @@ class RunnerSession {
   #createPeerBroker(allowed: readonly AgentProviderId[]): PeerBroker {
     return createPeerBroker({
       allowed,
+      ...(this.#peer?.models === undefined ? {} : { models: this.#peer.models }),
       askApproval: (source, request) => this.#onPermission(request, source),
       driverOf: (provider) =>
         provider === 'codex'
-          ? new CodexManagerDriver()
+          ? new CodexManagerDriver(
+              this.#codexAuth === undefined ? {} : { chatgptAuth: this.#codexAuth },
+            )
           : new ClaudeManagerDriver(this.#queryFn === undefined ? {} : { queryFn: this.#queryFn }),
       reportsUsage: (provider) => this.#peer?.reportsUsage(provider) ?? true,
       onNote: (text) => this.#emit({ type: 'note', managerId: this.#id, text }),
@@ -3006,14 +3080,17 @@ class RunnerSession {
         // cwd・env・子プロセスの起こし方・人間の MCP 連携（peer 自身は除く）はマネージャーと同じ。
         ...this.#buildSpec(undefined, true),
         input: parts.input,
-        // **alteroid はモデルを選ばない**: Claude は既定の帯、Codex は Codex の既定（置かれたモデルは
-        // ホストの provider のものなので、peer には効かせない）。
-        model: resolveManagerModel({}),
-        modelPlaced: false,
+        // **alteroid はモデルを選ばない**: 名指しが無ければ Claude は既定の帯、Codex は Codex の既定
+        // （置かれたモデルはホストの provider のものなので、peer には効かせない）。名指しは人間が開けた
+        // 一覧の中からだけ届く（`peer-broker.ts` が一覧外を断ってから渡す。#3934）。
+        model: parts.model ?? resolveManagerModel({}),
+        modelPlaced: parts.model !== undefined,
         workerModel: resolveWorkerModel({}),
-        // **承認は呼び出し元のマネージャーの承認としてクローンへ上げる（出所の印つき）**（`peer-broker.ts` の doc）。
-        permissionMode: 'default',
-        strictApprovals: true,
+        // **構えは呼び出し元のマネージャーと同じ**（2026-10-07 のオーナー決定。#3940）。Codex なら
+        // `codexApprovalPolicyFor` で写る（bypassPermissions → never、それ以外 → on-request）。
+        // それでも出た確認は、まずマネージャーへ返り、判断できないときだけクローンへ上がる（`peer-broker.ts` の doc）。
+        // `strictApprovals` は載せない（載せると構えが `default` / `untrusted` に締まる）。
+        permissionMode: this.#permissionMode,
         systemPromptAppend: PEER_SYSTEM_PROMPT_APPEND,
         // peer の生ログは預けない（マネージャーの生ログと混ぜない）。
         sessionLog: { append: async () => undefined, load: async () => null },
@@ -7914,6 +7991,17 @@ export function brief(value: unknown, limit = 200): string {
  * SDK の子プロセスとプロファイルの評価で共有している。評価だけ root で走らせると、
  * **降りた先では読めないプロファイルを「置けた」と報告する**ことになる。
  */
+/**
+ * peer の Codex の `CODEX_HOME` の既定（#3939）。子の UID の home があれば Codex の既定と同じ
+ * `<home>/.codex`。無ければ（手元の構成）`os.tmpdir()` 配下 —— 人間自身の `~/.codex` を
+ * 正本のログインで上書きしない。
+ */
+function defaultCodexHome(childUser: RunnerChildUser | undefined): string {
+  if (childUser?.home !== undefined) return joinPath(childUser.home, '.codex');
+  const uid = typeof process.getuid === 'function' ? String(process.getuid()) : 'user';
+  return joinPath(tmpdir(), `alteroid-runner-codex-home-${uid}`);
+}
+
 function spawnAsUser(
   user: RunnerChildUser,
   options: {
