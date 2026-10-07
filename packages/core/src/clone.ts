@@ -5140,7 +5140,7 @@ class Clone implements CloneHost {
         source: event.source,
         // **切らずに書く**（issue #1535。`EXTERNAL_JOURNAL_LIMIT` の doc）。
         // プロンプトと台帳が「全文は日誌に在る」と名乗る、その在り処である。
-        summary: journalPayload(event.payload),
+        summary: journalPayload(event.payload, event.attachments),
         // **どの連携の鍵（id と名前）経由か**（#3113）。鍵の値は書かない。
         ...(event.via === undefined ? {} : { via: event.via }),
         // **添付の参照だけ**（#3113 段3。中身は書かない）。
@@ -9018,7 +9018,7 @@ class Clone implements CloneHost {
       }
 
       case 'external': {
-        const body = renderPayload(event.payload, event.at);
+        const body = renderPayload(event.payload, event.at, event.attachments);
         // 添付（#3113 段3）。中身はここで読むだけで、受信箱・日誌・記憶へは写さない。
         const attached = await this.#resolveExternalAttachments([event]);
         // **日誌の書き込みは配達のたびに**（`manager_message` と同じ理由。畳む回でも
@@ -13422,7 +13422,7 @@ function externalBatchPrompt(
   const head = events[0];
   if (head === undefined) return '';
 
-  const body = renderPayload(head.payload, head.at);
+  const body = renderPayload(head.payload, head.at, head.attachments);
   const timestamps = events.map((event) => event.at).join(' / ');
 
   const viaNames = events.flatMap((event) => (event.via === undefined ? [] : [event.via.name]));
@@ -13687,7 +13687,12 @@ export function commitmentFor(event: InboxEvent): Commitment | null {
   const base = { id: event.id, at: event.at };
   switch (event.type) {
     case 'human_message':
-      return { ...base, origin: 'human', source: event.conversationId, body: event.text };
+      return {
+        ...base,
+        origin: 'human',
+        source: event.conversationId,
+        body: `${event.text}${attachmentNote(event.attachments)}`,
+      };
     // 人間が承認待ちへ答えた一件。**これも未了である** — 答えを受け取っただけでは
     // 何も進んでおらず、止まっているマネージャーへ `manager_send` で返して初めて
     // 仕事が再開する。宛先を添え損ねて再開しなかった前例があり（AGENTS.md「委譲」）、
@@ -13724,7 +13729,7 @@ export function commitmentFor(event: InboxEvent): Commitment | null {
         ...base,
         origin: 'external',
         source: event.source,
-        body: renderPayload(event.payload, event.at),
+        body: renderPayload(event.payload, event.at, event.attachments),
       };
     case 'timer':
     case 'self_initiative':
@@ -13787,12 +13792,19 @@ function isSameTick(a: InboxEvent, b: InboxEvent): boolean {
 }
 
 /** 外部から届いた中身を、切る前の1本の文字列にする。 */
-function payloadText(payload: unknown): string {
+function payloadText(payload: unknown, attachments?: readonly { name: string }[]): string {
   // 中身なしの通知（source だけ）もある。`undefined` という文字列を読ませない。
   if (payload === undefined || payload === null || payload === '') {
-    return '（中身のない通知。source だけが届いた。）';
+    return attachments === undefined || attachments.length === 0
+      ? '（中身のない通知。source だけが届いた。）'
+      : `（本文なし。添付だけが届いた）${attachmentNote(attachments)}`;
   }
   return typeof payload === 'string' ? payload : safeJson(payload);
+}
+
+function attachmentNote(attachments: readonly { name: string }[] | undefined): string {
+  if (attachments === undefined || attachments.length === 0) return '';
+  return `［添付 ${attachments.length}件: ${attachments.map((a) => a.name).join('、')}］`;
 }
 
 /**
@@ -13804,8 +13816,12 @@ function payloadText(payload: unknown): string {
  * 取り方の先は、同じ合図を受けた回に `#journalIncomingBody` が日誌へ
  * 切らずに書いた `external_event` の行である（`at` はその合図が届いた時刻）。
  */
-function renderPayload(payload: unknown, at: string): string {
-  const body = payloadText(payload);
+function renderPayload(
+  payload: unknown,
+  at: string,
+  attachments?: readonly { name: string }[],
+): string {
+  const body = payloadText(payload, attachments);
   if (body.length <= EXTERNAL_PAYLOAD_LIMIT) return body;
   const journalNote =
     body.length > EXTERNAL_JOURNAL_LIMIT
@@ -13819,8 +13835,8 @@ function renderPayload(payload: unknown, at: string): string {
 }
 
 /** 日誌へ書く中身（issue #1535。{@link EXTERNAL_JOURNAL_LIMIT} の doc）。 */
-function journalPayload(payload: unknown): string {
-  return excerpt(payloadText(payload), EXTERNAL_JOURNAL_LIMIT);
+function journalPayload(payload: unknown, attachments?: readonly { name: string }[]): string {
+  return excerpt(payloadText(payload, attachments), EXTERNAL_JOURNAL_LIMIT);
 }
 
 function safeJson(value: unknown): string {
