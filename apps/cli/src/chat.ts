@@ -346,7 +346,8 @@ export async function chatCommand(): Promise<void> {
     if (body === null || body.length === 0) return;
     const out = interactive ? stdout : stderr;
     out.write('送れなかった本文:\n');
-    out.writeRaw(`${body}\n`);
+    // 行末の `\` は倍にして戻す。そのまま貼り直すと、末尾の `\` 1つが続きの印になり別の本文になる。
+    out.writeRaw(`${body.replace(/\\+(?=\n|$)/g, (run) => run + run)}\n`);
   };
   // 次に送る発言へ添えかけのファイル（`/attach`）。
   const draft = createAttachmentDraft(target);
