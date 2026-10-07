@@ -147,7 +147,7 @@ export async function chatCommand(): Promise<void> {
   let activity: Activity | null = null;
   // 手元のコマンドの通信は、いまの `local` の signal で abort できるようにする。取り消した通信は「失敗」に数えない。
   const localFetch =
-    (countFailure: boolean): typeof fetch =>
+    (countFailure: boolean, absentIsResult = false): typeof fetch =>
     async (input, init) => {
       const current = activity?.kind === 'local' ? activity : null;
       const signal =
@@ -158,7 +158,12 @@ export async function chatCommand(): Promise<void> {
             : AbortSignal.any([init.signal, current.abort.signal]);
       try {
         const response = await fetch(input, signal == null ? init : { ...init, signal });
-        if (countFailure && !response.ok && !interactive) {
+        if (
+          countFailure &&
+          !response.ok &&
+          !interactive &&
+          !(absentIsResult && response.status === 404)
+        ) {
           slashFailure ??= `HTTP ${String(response.status)}`;
         }
         return response;
@@ -173,6 +178,9 @@ export async function chatCommand(): Promise<void> {
   // 付随の取得（未読の総数・会話の承認）用。失敗は取得する側が1行で言い、本体は出ているので、通信の口では止める判断に数えない（#3994）。
   // HTTP の失敗を「コマンドの失敗」の代わりに使うと、本体が成功したコマンドまで止まる。
   const auxClient = createClient(base, target.headers, localFetch(false));
+  // 「無い」を正常な結果として文にしている取得（日報・記憶・マネージャーの生ログ）用。404 だけ数えず、ほかの失敗は止める（#4002）。
+  // 指した会話・承認・マネージャーが見つからない 404 は使い手の指定の誤りなので、これでなく `slashClient` のまま数える。
+  const absentOkClient = createClient(base, target.headers, localFetch(true, true));
 
   const rl = createInterface({ input: stdin, output: process.stdout });
   // 入力の行は `line` イベントで受けて積み、`ask` が順に取り出す（#3262）。`question()` は、待って
@@ -564,6 +572,7 @@ export async function chatCommand(): Promise<void> {
                 },
                 hooks,
                 auxClient,
+                absentOkClient,
               ),
           );
           if (handled === CANCELLED) {
@@ -1376,6 +1385,8 @@ export async function runSlashCommand(
   hooks?: ReplHooks,
   /** 付随の取得（未読の総数・会話の承認）の口。失敗しても本体の成否に数えない（#3994）。省略したら `client`。 */
   auxClient: ReturnType<typeof createClient> = client,
+  /** 「無い」を正常な結果として文にする取得の口。404 だけ失敗に数えない（#4002）。省略したら `client`。 */
+  absentOkClient: ReturnType<typeof createClient> = client,
 ): Promise<'ok' | 'quit'> {
   const [command, ...rest] = line.split(/\s+/);
   // 使い方の誤り: 案内を出し、非対話の入力で止める判断のために失敗として知らせる（#3768）。
@@ -1394,7 +1405,7 @@ export async function runSlashCommand(
     case '/report': {
       const date = rest[0];
       if (date) {
-        const response = await client.reports[':date'].$get({ param: { date } });
+        const response = await absentOkClient.reports[':date'].$get({ param: { date } });
         if (!response.ok) {
           // 「無い」は 404 だけ。400（日付の形）・5xx を「ありません」と言わない。
           stdout.write(
@@ -1603,7 +1614,7 @@ export async function runSlashCommand(
         }
         return 'ok';
       }
-      const response = await client.memory[':slug'].$get({ param: { slug } });
+      const response = await absentOkClient.memory[':slug'].$get({ param: { slug } });
       if (!response.ok) {
         // 「無い」は 404 だけ。400（スラッグの形）・5xx を「ありません」と言わない。
         stdout.write(
@@ -2146,7 +2157,7 @@ export async function runSlashCommand(
         stdout.write(`[${reference}] は /managers の一覧にありません\n`);
         return 'ok';
       }
-      const response = await client.managers[':id'].transcript.$get({ param: { id } });
+      const response = await absentOkClient.managers[':id'].transcript.$get({ param: { id } });
       if (!response.ok) {
         // 「まだ無い」は 404 だけ。5xx 等を「まだありません」と言わない。
         stdout.write(
