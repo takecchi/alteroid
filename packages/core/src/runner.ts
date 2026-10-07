@@ -1235,6 +1235,8 @@ class Host implements RunnerHost {
       managerId,
       attachments,
       ...(this.#childUser === undefined ? {} : { childGid: this.#childUser.gid }),
+      // 担い手の子プロセスの env と同じ出所（器の env・鍵・プロファイル）で経路を決める（#3743）。
+      routeEnv: { ...this.#baseChildEnv(), ...(this.#profile?.env() ?? {}) },
     });
     return composeAttachmentInput(text, placed);
   }

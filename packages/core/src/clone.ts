@@ -4499,6 +4499,8 @@ class Clone implements CloneHost {
     const resolvedGroups = await resolveTurnAttachmentGroups(
       this.#stores,
       withAttachments.map((event) => event.attachments ?? []),
+      undefined,
+      this.#layeredChildEnv(),
     );
     withAttachments.forEach((event, index) => {
       const resolved = resolvedGroups[index];
@@ -5232,7 +5234,12 @@ class Clone implements CloneHost {
       if (refs.length > 0) groups.push(refs);
     }
     if (groups.length === 0) return { images: [], noticeLines: [] };
-    const resolved = await resolveTurnAttachmentGroups(this.#stores, groups);
+    const resolved = await resolveTurnAttachmentGroups(
+      this.#stores,
+      groups,
+      undefined,
+      this.#layeredChildEnv(),
+    );
     return {
       images: resolved.flatMap((group) => group.images),
       noticeLines: resolved.flatMap((group) => group.noticeLines),
@@ -11488,12 +11495,7 @@ class Clone implements CloneHost {
     // **セッションが起きるこの瞬間の身元を捕まえる**（`#sessionTokenIdentity` の doc）。
     // ここ以外で読み直すと、世代の照合が素通しになる。
     this.#sdkSession.captureSessionTokenIdentity(this.#tokenIdentity?.());
-    const env: NodeJS.ProcessEnv = {
-      ...this.#childEnvBase,
-      ...this.#vaultCredentialOverlay(),
-      ...(this.#credentials?.() ?? {}),
-      ...(this.#profile?.env() ?? {}),
-    };
+    const env = this.#layeredChildEnv();
     // **伏せるのは最後**（`runner.ts` の `#childEnv()` と同じ順序）。正本や
     // プロファイルがログイン基盤の鍵と同じ名前を重ねてきても、最後にもう一度
     // 落とすことで生き残らせない——`credentialNamesShadowedByProfile` が
@@ -11504,6 +11506,20 @@ class Clone implements CloneHost {
     // このメソッドの後もこの鍵を使って OAuth の交換を続ける。
     for (const key of this.#withheldEnvKeys) delete env[key];
     return env;
+  }
+
+  /**
+   * `#childEnv()` の重ね（土台 → 正本 → 鍵 → プロファイル。伏せる前）。身元の捕捉を伴わない。
+   * 添付の画像の経路（Bedrock / Vertex）をターンの環境から読むために切り出した（#3743）。
+   * **セッションを起こさない読みでは `#childEnv()` を呼ばないこと**（世代の照合に使う身元を捕まえてしまう）。
+   */
+  #layeredChildEnv(): NodeJS.ProcessEnv {
+    return {
+      ...this.#childEnvBase,
+      ...this.#vaultCredentialOverlay(),
+      ...(this.#credentials?.() ?? {}),
+      ...(this.#profile?.env() ?? {}),
+    };
   }
 
   /**
