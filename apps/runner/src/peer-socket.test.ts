@@ -18,9 +18,10 @@ describe('openPeerSocket（マネージャーの peer 専用ソケット）', ()
   it('PEERS が未設定・空なら、ソケットを作らず何も言わない', async () => {
     for (const env of [{}, { ALTEROID_MANAGER_PEERS: '' }, { ALTEROID_MANAGER_PEERS: '  ' }]) {
       const dir = join(makeTempDirSync('peer-sock-'), 'peer');
-      const result = await openPeerSocket(env, 'claude', undefined, dir);
+      const result = await openPeerSocket(env, undefined, dir);
       expect(result.host).toBeUndefined();
       expect(result.peers).toEqual([]);
+      expect(result.models).toEqual({});
       expect(result.notices).toEqual([]);
       expect(existsSync(dir)).toBe(false);
     }
@@ -28,7 +29,7 @@ describe('openPeerSocket（マネージャーの peer 専用ソケット）', ()
 
   it('PEERS が開いていれば、0711 のディレクトリに 0600 のソケットを作る', async () => {
     const dir = join(makeTempDirSync('peer-sock-'), 'peer');
-    opened = await openPeerSocket({ ALTEROID_MANAGER_PEERS: 'codex' }, 'claude', undefined, dir);
+    opened = await openPeerSocket({ ALTEROID_MANAGER_PEERS: 'codex' }, undefined, dir);
     expect(opened.peers).toEqual(['codex']);
     const path = join(dir, PEER_SOCKET_FILENAME);
     expect(opened.host?.socketPath).toBe(path);
@@ -36,14 +37,39 @@ describe('openPeerSocket（マネージャーの peer 専用ソケット）', ()
     expect(statSync(path).mode & 0o777).toBe(0o600);
   });
 
-  it('自分の層の provider だけが書かれていたら、閉じたまま理由を言う', async () => {
+  it('開けたモデルの一覧を解いて渡し、起動時に1行で言う（#3934）', async () => {
     const dir = join(makeTempDirSync('peer-sock-'), 'peer');
-    const result = await openPeerSocket(
-      { ALTEROID_MANAGER_PEERS: 'claude' },
-      'claude',
+    opened = await openPeerSocket(
+      {
+        ALTEROID_MANAGER_PEERS: 'codex',
+        ALTEROID_MANAGER_PEER_CODEX_MODELS: 'gpt-5.5,gpt-5.5-codex',
+      },
       undefined,
       dir,
     );
+    expect(opened.models).toEqual({ codex: ['gpt-5.5', 'gpt-5.5-codex'] });
+    expect(
+      opened.notices.filter((notice) =>
+        notice.includes('名指しできるモデル: gpt-5.5, gpt-5.5-codex'),
+      ),
+    ).toHaveLength(1);
+  });
+
+  it('モデルの一覧の綴りが不正なら、ソケットを作る前に例外で止める', async () => {
+    const dir = join(makeTempDirSync('peer-sock-'), 'peer');
+    await expect(
+      openPeerSocket(
+        { ALTEROID_MANAGER_PEERS: 'codex', ALTEROID_MANAGER_PEER_CODEX_MODELS: 'gpt-5.5,,' },
+        undefined,
+        dir,
+      ),
+    ).rejects.toThrow(/空の要素/);
+    expect(existsSync(dir)).toBe(false);
+  });
+
+  it('自分の層の provider だけが書かれていたら、閉じたまま理由を言う', async () => {
+    const dir = join(makeTempDirSync('peer-sock-'), 'peer');
+    const result = await openPeerSocket({ ALTEROID_MANAGER_PEERS: 'claude' }, undefined, dir);
     expect(result.host).toBeUndefined();
     expect(result.notices).toHaveLength(1);
     expect(result.notices[0]).toContain('自分の層');
@@ -51,13 +77,13 @@ describe('openPeerSocket（マネージャーの peer 専用ソケット）', ()
 
   it('不正な値は例外で止める', async () => {
     await expect(
-      openPeerSocket({ ALTEROID_MANAGER_PEERS: 'gemini' }, 'claude', undefined, '/nonexistent'),
+      openPeerSocket({ ALTEROID_MANAGER_PEERS: 'gemini' }, undefined, '/nonexistent'),
     ).rejects.toThrow(/不正/);
   });
 
   it('token が一致しない接続は即切断する（使い捨て token だけが通る）', async () => {
     const dir = join(makeTempDirSync('peer-sock-'), 'peer');
-    opened = await openPeerSocket({ ALTEROID_MANAGER_PEERS: 'codex' }, 'claude', undefined, dir);
+    opened = await openPeerSocket({ ALTEROID_MANAGER_PEERS: 'codex' }, undefined, dir);
     const socket = createConnection({ path: join(dir, PEER_SOCKET_FILENAME) });
     await new Promise<void>((resolve) => socket.once('connect', resolve));
     socket.write('wrong-token\n');

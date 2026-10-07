@@ -17,16 +17,6 @@ import {
   type CloneToolRelayHost,
 } from './clone-tool-relay-host.js';
 
-/**
- * ここで固定するのは、**中継の子プロセスを経由せずに**「host が本物の
- * `createCloneMcpServer` を接げること」——`clone-tool-relay-child.test.ts` が
- * 子プロセスの中継そのものを、`clone-tool-relay-integration.test.ts` が
- * 「子プロセスを実際に spawn した、頭からしっぽまでの経路」を別に固定する。
- * この3本で `net.Socket` 越しの各区間を分担して線を割っている。
- *
- * **一時ディレクトリは `vitest.tmpdir.ts` の `makeTempDirSync` を使う**
- * （`mkdtempSync` を直接呼ばない。`scripts/no-direct-mkdtemp.test.ts` の歯）。
- */
 describe('clone-tool-relay-host（クローンの道具の中継・デーモン側）', () => {
   let host: CloneToolRelayHost | undefined;
 
@@ -50,7 +40,6 @@ describe('clone-tool-relay-host（クローンの道具の中継・デーモン�
     };
   }
 
-  /** `token\n` を送ってから、そのまま `net.Socket` を返す（生の接続）。 */
   async function connectRaw(socketPath: string, token: string): Promise<Socket> {
     const socket = createConnection({ path: socketPath });
     await new Promise<void>((resolve, reject) => {
@@ -61,7 +50,6 @@ describe('clone-tool-relay-host（クローンの道具の中継・デーモン�
     return socket;
   }
 
-  /** `token\n` を送った後、本物の MCP `Client` として繋ぎ直す。 */
   async function connectClient(socketPath: string, token: string): Promise<Client> {
     const socket = await connectRaw(socketPath, token);
     const client = new Client({ name: 'clone-tool-relay-host.test', version: '0' });
@@ -75,14 +63,8 @@ describe('clone-tool-relay-host（クローンの道具の中継・デーモン�
     expect(mode).toBe(0o600);
   });
 
-  // Issue #486 48(a) PR2: 「listen〜chmod の窓」（PR1 の留保）を、ソケット単体
-  // ではなくディレクトリ側で塞ぐ——同一 UID 以外はそもそも `traverse` できない
-  // ので、ソケット自身の mode がまだ緩い一瞬があっても辿り着けない。
   it('ソケットを収めるディレクトリは 0700 である（新規に作る場合）', async () => {
     const dir = makeTempDirSync('clone-tool-relay-host-newdir-');
-    // `makeTempDirSync` 自身が作るのは `dir` であって、その1段下の
-    // ディレクトリはまだ存在しない——`createCloneToolRelayHost` が
-    // `mkdirSync(..., { recursive: true })` で新規に作る場合を確かめる。
     const socketDir = join(dir, 'relay');
     host = await createCloneToolRelayHost({ socketPath: join(socketDir, 's.sock') });
 
@@ -93,9 +75,6 @@ describe('clone-tool-relay-host（クローンの道具の中継・デーモン�
   it('ソケットを収めるディレクトリが既存で緩い mode だった場合も 0700 へ締め直す', async () => {
     const dir = makeTempDirSync('clone-tool-relay-host-existingdir-');
     const socketDir = join(dir, 'relay');
-    // 先に緩い mode で作っておく——`mkdirSync` の `mode` は新規作成時にしか
-    // 効かないので、`createCloneToolRelayHost` 側が明示的に締め直さない限り
-    // ここが 0755 のまま残る。
     mkdirSync(socketDir, { recursive: true, mode: 0o755 });
 
     host = await createCloneToolRelayHost({ socketPath: join(socketDir, 's.sock') });
@@ -121,7 +100,6 @@ describe('clone-tool-relay-host（クローンの道具の中継・デーモン�
 
     const socket = await connectRaw(h.socketPath, 'this-token-was-never-registered');
     await new Promise<void>((resolve) => socket.once('close', resolve));
-    // ここへ到達すること自体が固定である（タイムアウトすれば歯が落ちる）。
     expect(socket.destroyed).toBe(true);
   });
 
@@ -157,7 +135,6 @@ describe('clone-tool-relay-host（クローンの道具の中継・デーモン�
   });
 });
 
-/** テスト専用: 生の `net.Socket` を MCP の `Transport` として使う薄いラッパ。 */
 class SocketTransport implements Transport {
   onmessage?: (message: JSONRPCMessage) => void;
   onerror?: (error: Error) => void;

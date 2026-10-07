@@ -4,6 +4,7 @@ import { join } from 'node:path';
 
 import type {
   AnswerApprovalVia,
+  PendingMessage,
   ApprovalSelection,
   ChatStreamEvent,
   CloneHost,
@@ -41,6 +42,7 @@ import {
   droppedTraceLedgerSince,
   fingerprintOf,
   mcpServersFingerprintOf,
+  mcpServersVersionOf,
   memoryVersion,
   noteDroppedRecord,
   parseMcpServers,
@@ -89,6 +91,8 @@ function fakeClone() {
   const inProgress = new Map<string, ChatStreamEvent[]>();
   /** `attach` が呼ばれた会話 id（別の会話の途中経過を引いていないことを見る）。 */
   const attachCalls: string[] = [];
+  /** 答えを待っている発言（会話ごと。`attach` が返す。#3990）。 */
+  const pending = new Map<string, PendingMessage[]>();
   /**
    * `CloneHost.dropQueuedInboxEvents` が受け取った id の塊（issue #1049）。
    * **塊ごとに1要素**（`POST /inbox/remove` は id を塊に分けて回す）。
@@ -102,8 +106,8 @@ function fakeClone() {
 
   const managerList: ManagerSummary[] = [];
   const managerDenials = new Map<string, ManagerDenial[]>();
-  /** `ManagerPool.runnerReportedManagerProvider()` の返り値（#486 S9）。無ければ不明。 */
-  const runnerManagerProviders = new Map<string, string>();
+  /** `ManagerPool.runnerReportedModels()` の返り値。無ければ不明。 */
+  const runnerModels = new Map<string, { manager?: string; worker?: string }>();
   const transcripts = new Map<string, string>();
   /** `transcript()` を `kind: 'removed'` にする（#698）。 */
   const removedTranscripts = new Map<
@@ -178,8 +182,8 @@ function fakeClone() {
     runnerBacklog() {
       return [];
     },
-    runnerReportedManagerProvider(runnerId) {
-      return runnerManagerProviders.get(runnerId);
+    runnerReportedModels(runnerId) {
+      return runnerModels.get(runnerId);
     },
     async runnerIdOf(managerId) {
       return managerList.find((manager) => manager.managerId === managerId)?.runnerId;
@@ -276,6 +280,7 @@ function fakeClone() {
       listeners.set(conversationId, set);
       return {
         inProgress: snapshot === undefined ? null : [...snapshot],
+        pending: [...(pending.get(conversationId) ?? [])],
         unsubscribe: () => set.delete(listener),
       };
     },
@@ -305,13 +310,14 @@ function fakeClone() {
     emit,
     listeners,
     inProgress,
+    pending,
     attachCalls,
     ended,
     answered,
     posted,
     droppedFromDelivery,
     managerList,
-    runnerManagerProviders,
+    runnerModels,
     managerDenials,
     transcripts,
     removedTranscripts,
@@ -455,7 +461,6 @@ describe('managerSummarySchema と ManagerSummary のキーの一致（再発防
   it('ManagerSummary の全キーが managerSummarySchema に宣言されている', () => {
     const coverage: Record<keyof ManagerSummary, true> = {
       managerId: true,
-      managerProvider: true,
       status: true,
       live: true,
       runnerLostSince: true,
@@ -671,7 +676,7 @@ describe('HTTP API', () => {
       }
 
       expect(frames(seen)).toEqual([
-        { event: 'open', data: { conversationId: 'conv-a', inProgress: true } },
+        { event: 'open', data: { conversationId: 'conv-a', inProgress: true, pending: [] } },
         { event: 'queued', data: { type: 'queued' } },
         { event: 'thinking', data: { type: 'thinking' } },
         { event: 'text', data: { type: 'text', text: '途中まで' } },
@@ -689,7 +694,7 @@ describe('HTTP API', () => {
       const response = await app.request('/chat/conv-a/stream');
       const reader = (response.body as ReadableStream<Uint8Array>).getReader();
       let seen = await readUntil(reader, 'event: thinking');
-      fake.emit('conv-a', { type: 'error', message: '壊れた' });
+      fake.emit('conv-a', { type: 'error', message: '壊れた', kind: 'auth' });
       const decoder = new TextDecoder();
       for (;;) {
         const { value, done } = await reader.read();
@@ -697,23 +702,50 @@ describe('HTTP API', () => {
         seen += decoder.decode(value, { stream: true });
       }
       expect(frames(seen).map((f) => f.event)).toEqual(['open', 'thinking', 'error']);
+      // 種別は SSE の本文にそのまま載る（Web が文面から推し量らずに済む）。
+      expect(frames(seen).find((f) => f.event === 'error')?.data).toEqual({
+        type: 'error',
+        message: '壊れた',
+        kind: 'auth',
+      });
     });
 
-    it('進行中でなければ open(inProgress: false) だけで閉じ、購読を残さない', async () => {
+    it('進行中でなければ open(inProgress: false, pending: []) だけで閉じ、購読を残さない', async () => {
       const response = await app.request('/chat/conv-none/stream');
       expect(response.status).toBe(200);
       expect(frames(await readAll(response))).toEqual([
-        { event: 'open', data: { conversationId: 'conv-none', inProgress: false } },
+        { event: 'open', data: { conversationId: 'conv-none', inProgress: false, pending: [] } },
       ]);
       expect(fake.posted).toEqual([]);
       expect(fake.listeners.get('conv-none')?.size ?? 0).toBe(0);
+    });
+
+    it('open に pending（clientMessageId と state）が載り、進行中でなくても返る', async () => {
+      fake.pending.set('conv-b', [
+        { clientMessageId: 'cm-1', state: 'running' },
+        { clientMessageId: 'cm-2', state: 'queued' },
+      ]);
+      const response = await app.request('/chat/conv-b/stream');
+      expect(frames(await readAll(response))).toEqual([
+        {
+          event: 'open',
+          data: {
+            conversationId: 'conv-b',
+            inProgress: false,
+            pending: [
+              { clientMessageId: 'cm-1', state: 'running' },
+              { clientMessageId: 'cm-2', state: 'queued' },
+            ],
+          },
+        },
+      ]);
     });
 
     it('別の会話の途中経過は流れない', async () => {
       fake.inProgress.set('conv-a', [{ type: 'thinking' }]);
       const response = await app.request('/chat/conv-b/stream');
       expect(frames(await readAll(response))).toEqual([
-        { event: 'open', data: { conversationId: 'conv-b', inProgress: false } },
+        { event: 'open', data: { conversationId: 'conv-b', inProgress: false, pending: [] } },
       ]);
       expect(fake.attachCalls).toEqual(['conv-b']);
     });
@@ -900,6 +932,54 @@ describe('HTTP API', () => {
     const second = await app.request('/clone/interrupt', post);
     expect(await second.json()).toEqual({ outcome: 'idle' });
     expect(calls).toBe(2);
+  });
+
+  it('走っているターンを止める口（#3956）: 対象を渡すとクローンへそのまま通し、取り下げ等の答えも返す', async () => {
+    const targets: unknown[] = [];
+    const outcomes = ['withdrawn', 'not_target', 'starting', 'interrupted'] as const;
+    fake.clone.interruptTurn = async (target) => {
+      targets.push(target);
+      return outcomes[targets.length - 1] ?? 'idle';
+    };
+    const body = { conversationId: 'conv-x', clientMessageId: 'cm-1' };
+
+    for (const expected of outcomes) {
+      const response = await app.request('/clone/interrupt', json(body));
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ outcome: expected });
+    }
+    expect(targets).toEqual([body, body, body, body]);
+  });
+
+  it('走っているターンを止める口（#3956）: 対象を省く（本文なし・{}）と、対象なしで呼ぶ', async () => {
+    const targets: unknown[] = [];
+    fake.clone.interruptTurn = async (...args) => {
+      targets.push(args.length === 0 ? 'none' : args[0]);
+      return 'interrupted';
+    };
+
+    expect((await app.request('/clone/interrupt', post)).status).toBe(200);
+    expect((await app.request('/clone/interrupt', json({}))).status).toBe(200);
+    expect(targets).toEqual(['none', 'none']);
+  });
+
+  it('走っているターンを止める口（#3956）: 対象が片方だけ・形が不正・JSON が壊れていれば 400 で、何も止めない', async () => {
+    let calls = 0;
+    fake.clone.interruptTurn = async () => {
+      calls += 1;
+      return 'interrupted';
+    };
+
+    for (const body of [
+      json({ conversationId: 'conv-x' }),
+      json({ clientMessageId: 'cm-1' }),
+      json({ conversationId: 'conv-x', clientMessageId: 'bad id!' }),
+      { ...post, body: '{not json' },
+    ]) {
+      const response = await app.request('/clone/interrupt', body);
+      expect(response.status).toBe(400);
+    }
+    expect(calls).toBe(0);
   });
 
   it('記憶を API から読んで書き換えられる（人間の制御手段1）', async () => {
@@ -3920,7 +4000,7 @@ describe('HTTP API', () => {
    * **状態は置き換えない。** 拒否は `running` に映らない（拒否があったことしか
    * 観測していない）ので、`status` はそのままにして添える。
    */
-  it('マネージャー層の provider が、名乗りのある runner の委譲にだけ一覧と詳細へ載る（不明は欄なし。#486 S9）', async () => {
+  it('モデルの表記は、名乗りのある runner の委譲にだけ一覧と詳細へ載る（取れなければ欄ごと無い。#3921）', async () => {
     const base = {
       status: 'running' as const,
       live: true,
@@ -3931,34 +4011,89 @@ describe('HTTP API', () => {
       waiting: [],
     };
     fake.managerList.push(
-      { ...base, managerId: 'mgr-codex', runnerId: 'r-codex' },
-      { ...base, managerId: 'mgr-silent', runnerId: 'r-silent' },
+      { ...base, managerId: 'mgr-named', runnerId: 'r1' },
+      { ...base, managerId: 'mgr-half', runnerId: 'r2' },
+      { ...base, managerId: 'mgr-old', runnerId: 'r3' },
       { ...base, managerId: 'mgr-unplaced' },
     );
-    fake.runnerManagerProviders.set('r-codex', 'codex');
+    fake.runnerModels.set('r1', { manager: 'opus', worker: 'sonnet' });
+    fake.runnerModels.set('r2', { worker: 'haiku' });
 
-    const list = (await (await app.request('/managers')).json()) as {
-      managers: { managerId: string; managerProvider?: string }[];
-    };
+    type Row = { managerId: string; managerModel?: string; workerModel?: string };
+    const list = (await (await app.request('/managers')).json()) as { managers: Row[] };
     const byId = new Map(list.managers.map((m) => [m.managerId, m]));
-    expect(byId.get('mgr-codex')?.managerProvider).toBe('codex');
-    // **不明は claude にしない。** 欄ごと無い。
-    expect(byId.get('mgr-silent')).not.toHaveProperty('managerProvider');
-    expect(byId.get('mgr-unplaced')).not.toHaveProperty('managerProvider');
+    expect(byId.get('mgr-named')).toMatchObject({ managerModel: 'opus', workerModel: 'sonnet' });
+    // 片方だけ名乗られたら名乗られた側だけ。もう一方を既定の帯で埋めない。
+    expect(byId.get('mgr-half')).toMatchObject({ workerModel: 'haiku' });
+    expect(byId.get('mgr-half')).not.toHaveProperty('managerModel');
+    // 名乗りを受けていない旧い runner・置き先の無い委譲は、欄ごと無い。
+    for (const id of ['mgr-old', 'mgr-unplaced']) {
+      expect(byId.get(id)).not.toHaveProperty('managerModel');
+      expect(byId.get(id)).not.toHaveProperty('workerModel');
+    }
 
-    const detail = (await (await app.request('/managers/mgr-codex')).json()) as {
-      manager: { managerProvider?: string };
-    };
-    expect(detail.manager.managerProvider).toBe('codex');
-    const silent = (await (await app.request('/managers/mgr-silent')).json()) as {
-      manager: object;
-    };
-    expect(silent.manager).not.toHaveProperty('managerProvider');
+    const detail = (await (await app.request('/managers/mgr-named')).json()) as { manager: Row };
+    expect(detail.manager).toMatchObject({ managerModel: 'opus', workerModel: 'sonnet' });
+    const silent = (await (await app.request('/managers/mgr-old')).json()) as { manager: Row };
+    expect(silent.manager).not.toHaveProperty('managerModel');
+    expect(silent.manager).not.toHaveProperty('workerModel');
   });
 
-  it('指名された provider は、runner の既定ではなく委譲ごとの値が一覧と詳細へ載る（#486 S7）', async () => {
+  it('地図に、委譲ごとのモデルとクローンのモデルが載る（配線が無ければ欄なし。#3921）', async () => {
+    fake.managerList.push(
+      {
+        managerId: 'mgr-a',
+        status: 'running',
+        live: true,
+        cwd: '/work',
+        request: '仕事',
+        startedAt: '2026-01-01T00:00:00.000Z',
+        updatedAt: '2026-01-01T00:01:00.000Z',
+        waiting: [],
+        runnerId: 'r1',
+      },
+      {
+        managerId: 'mgr-b',
+        status: 'running',
+        live: true,
+        cwd: '/work',
+        request: '仕事',
+        startedAt: '2026-01-01T00:00:00.000Z',
+        updatedAt: '2026-01-01T00:01:00.000Z',
+        waiting: [],
+      },
+    );
+    fake.runnerModels.set('r1', { manager: 'opus', worker: 'sonnet' });
+    type Topology = {
+      clone: { model?: string };
+      managers: { managerId: string; managerModel?: string; workerModel?: string }[];
+    };
+
+    const bare = (await (await app.request('/topology')).json()) as Topology;
+    expect(bare.clone).not.toHaveProperty('model');
+    expect(bare.clone).not.toHaveProperty('provider');
+    const a = bare.managers.find((m) => m.managerId === 'mgr-a');
+    expect(a).toMatchObject({ managerModel: 'opus', workerModel: 'sonnet' });
+    expect(a).not.toHaveProperty('managerProvider');
+    const b = bare.managers.find((m) => m.managerId === 'mgr-b');
+    expect(b).not.toHaveProperty('managerModel');
+    expect(b).not.toHaveProperty('workerModel');
+
+    const wired = createApp({
+      clone: fake.clone,
+      stores,
+      token: 'test-token',
+      shutdown: () => undefined,
+      cloneModel: 'opus',
+    });
+    const body = (await (await wired.request('/topology')).json()) as Topology;
+    expect(body.clone).toMatchObject({ model: 'opus' });
+    expect(body.clone).not.toHaveProperty('provider');
+  });
+
+  it('一覧と詳細に managerProvider を載せない（層は常に Claude。2026-10-07 の決定）', async () => {
     fake.managerList.push({
-      managerId: 'mgr-named',
+      managerId: 'mgr-plain',
       status: 'running',
       live: true,
       cwd: '/work/project',
@@ -3966,19 +4101,18 @@ describe('HTTP API', () => {
       startedAt: '2026-01-01T00:00:00.000Z',
       updatedAt: '2026-01-01T00:01:00.000Z',
       waiting: [],
-      runnerId: 'r-claude',
-      managerProvider: 'codex',
+      runnerId: 'r-a',
     });
-    fake.runnerManagerProviders.set('r-claude', 'claude');
-
     const list = (await (await app.request('/managers')).json()) as {
-      managers: { managerId: string; managerProvider?: string }[];
+      managers: { managerId: string }[];
     };
-    expect(list.managers.find((m) => m.managerId === 'mgr-named')?.managerProvider).toBe('codex');
-    const detail = (await (await app.request('/managers/mgr-named')).json()) as {
-      manager: { managerProvider?: string };
+    expect(list.managers.find((m) => m.managerId === 'mgr-plain')).not.toHaveProperty(
+      'managerProvider',
+    );
+    const detail = (await (await app.request('/managers/mgr-plain')).json()) as {
+      manager: object;
     };
-    expect(detail.manager.managerProvider).toBe('codex');
+    expect(detail.manager).not.toHaveProperty('managerProvider');
   });
 
   it('拒否件数が、状態を置き換えずに一覧と詳細へ載る', async () => {
@@ -8950,6 +9084,39 @@ describe('会話・出来事・マネージャーへの手出し', () => {
     expect(Object.keys(body.messages[0]!).sort()).toEqual(['at', 'id', 'role', 'text']);
   });
 
+  it('失敗ターンは turnFailureKind を運ぶ。種別を持たない古い行は other（文面からは読み替えない）', async () => {
+    await stores.journal.append({
+      type: 'exchange',
+      with: 'human',
+      role: 'outbound',
+      text: '認証 401 quota',
+      conversationId: 'conv-k',
+      turnFailure: 'failed',
+    });
+    await stores.journal.append({
+      type: 'exchange',
+      with: 'human',
+      role: 'outbound',
+      text: '返せなかった',
+      conversationId: 'conv-k',
+      turnFailure: 'held',
+      turnFailureKind: 'quota',
+    });
+    await exchange('conv-k', 'inbound', '失敗でない発言');
+
+    const body = (await (await app.request('/conversations/conv-k')).json()) as {
+      messages: { text: string; turnFailure?: string; turnFailureKind?: string }[];
+    };
+
+    const byText = (text: string) => body.messages.find((message) => message.text === text);
+    expect(byText('認証 401 quota')).toMatchObject({
+      turnFailure: 'failed',
+      turnFailureKind: 'other',
+    });
+    expect(byText('返せなかった')).toMatchObject({ turnFailure: 'held', turnFailureKind: 'quota' });
+    expect('turnFailureKind' in (byText('失敗でない発言') ?? {})).toBe(false);
+  });
+
   /**
    * **「無い」と「遡り切れていない」を同じ応答にしない。**
    *
@@ -12608,24 +12775,7 @@ describe('runner の生死', () => {
     await registry.stop();
   });
 
-  it('GET /runners は、デーモン全体で1つのクローン層の provider を載せる（runner が0台でも）', async () => {
-    const fake = fakeClone();
-    const stores = createMemoryStores();
-    const withProvider = createApp({
-      clone: fake.clone,
-      stores,
-      token: 'test-token',
-      shutdown: () => undefined,
-      runners: createRunnerRegistry([]),
-      cloneProvider: 'claude',
-    });
-    const body = (await (await withProvider.request('/runners')).json()) as {
-      cloneProvider?: string;
-    };
-    expect(body.cloneProvider).toBe('claude');
-  });
-
-  it('GET /runners は、provider が配線されていなければ欄を載せない（claude と推測しない）', async () => {
+  it('GET /runners はクローン層の provider を載せない（層は常に Claude。2026-10-07 の決定）', async () => {
     const fake = fakeClone();
     const without = createApp({
       clone: fake.clone,
@@ -13199,6 +13349,53 @@ describe('runner の版（GET /runners revision）', () => {
 });
 
 /**
+ * **`GET /runners` の `managerPeers`（#3940）。** `pushHealth` と同じく `clone.managers.managerPeersOf` を
+ * 直接呼ぶ。読み口を持たないプール（旧い実装・テスト用）では「不明」に倒し、「頼めない」と埋めない。
+ */
+describe('runner の peer の名乗り（GET /runners managerPeers）', () => {
+  async function runnersBody(managers: typeof fake.clone.managers) {
+    const registry = createRunnerRegistry();
+    await registry.register({
+      label: 'http://runner-peer:4518',
+      open: async () => fakeRunner('runner-peer') as never,
+    });
+    const withRunners = createApp({
+      clone: { ...fake.clone, managers },
+      stores,
+      token: 'test-token',
+      shutdown: () => undefined,
+      runners: registry,
+    });
+    const body = (await (await withRunners.request('/runners')).json()) as {
+      runners: { runnerId?: string; managerPeers?: unknown }[];
+    };
+    await registry.stop();
+    return body.runners.find((r) => r.runnerId === 'runner-peer');
+  }
+
+  it('managerPeersOf() が返した名乗りが、そのまま該当 runner の行に出る', async () => {
+    const entry = await runnersBody({
+      ...fake.clone.managers,
+      managerPeersOf: () => ({
+        status: 'named',
+        peers: [{ provider: 'codex', models: ['gpt-5.5'] }],
+      }),
+    });
+    expect(entry?.managerPeers).toEqual({
+      status: 'named',
+      peers: [{ provider: 'codex', models: ['gpt-5.5'] }],
+    });
+  });
+
+  it('読み口を持たないプールでは「不明」に倒す', async () => {
+    const { managerPeersOf: _omitted, ...withoutReader } = fake.clone.managers;
+    void _omitted;
+    const entry = await runnersBody(withoutReader);
+    expect(entry?.managerPeers).toEqual({ status: 'unknown' });
+  });
+});
+
+/**
  * **`GET /runners` の `pushHealth`。** `app.ts` のハンドラは `entry`/`registry`
  * からは取れず、`clone.managers.pushHealthOf(runnerId)` を直接呼んで結果を
  * 差し込む——`runners()`（クローンの道具専用の経路）は経由しない。ここでは
@@ -13389,7 +13586,76 @@ describe('MCP サーバの登録（/mcp-servers）', () => {
   it('置いていなければ空の mcpServers を返す', async () => {
     const response = await app.request('/mcp-servers');
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ mcpServers: {} });
+    expect(await response.json()).toEqual({
+      mcpServers: {},
+      version: mcpServersVersionOf(null),
+    });
+  });
+
+  /**
+   * **Issue #3984。** 読んだ版（`GET` の `version`）を `ifMatch` で送る。合えば書け、
+   * 省略は後勝ち、古ければ 409 で書かれず `current` が最新。
+   */
+  describe('ifMatch（Issue #3984）', () => {
+    const readBody = async () =>
+      (await (await app.request('/mcp-servers')).json()) as { version: string };
+
+    it('いまの版なら書け、応答の version で続けて書ける', async () => {
+      const first = await put({ mcpServers: { one: { command: 'dummy-one' } } });
+      expect(first.status).toBe(200);
+      const { version } = await readBody();
+      const second = await put({
+        mcpServers: { one: { command: 'dummy-one' }, two: { command: 'dummy-two' } },
+        ifMatch: version,
+      });
+      expect(second.status).toBe(200);
+      const next = ((await second.json()) as { version: string }).version;
+      expect(next).toBe((await readBody()).version);
+      expect((await put({ mcpServers: {}, ifMatch: next })).status).toBe(200);
+      expect(await stores.mcpServers.read()).toBeNull();
+    });
+
+    it('省略は従来どおり後勝ち', async () => {
+      await put({ mcpServers: { one: { command: 'dummy-one' } } });
+      const response = await put({ mcpServers: { two: { command: 'dummy-two' } } });
+      expect(response.status).toBe(200);
+      expect(Object.keys((await stores.mcpServers.read())?.mcpServers ?? {})).toEqual(['two']);
+    });
+
+    it('古ければ 409 で書かれず、current が最新（error と current の鍵で他の 409 と見分けられる）', async () => {
+      await put({ mcpServers: { one: { command: 'dummy-one' } } });
+      const { version } = await readBody();
+      // 別の経路が足した
+      await stores.mcpServers.write({
+        one: { command: 'dummy-one' },
+        added: { command: 'dummy-added' },
+      });
+      const response = await put({
+        mcpServers: { mine: { command: 'dummy-mine' } },
+        ifMatch: version,
+      });
+      expect(response.status).toBe(409);
+      const body = (await response.json()) as {
+        error: string;
+        current: { mcpServers: Record<string, unknown>; version: string };
+      };
+      expect(typeof body.error).toBe('string');
+      expect(Object.keys(body.current.mcpServers)).toEqual(['added', 'one']);
+      expect(body.current.version).toBe((await readBody()).version);
+      expect(Object.keys((await stores.mcpServers.read())?.mcpServers ?? {})).toEqual([
+        'added',
+        'one',
+      ]);
+    });
+
+    it('同時の2書き込みは、同じ版を前提にして1件だけ通る', async () => {
+      const { version } = await readBody();
+      const [a, b] = await Promise.all([
+        put({ mcpServers: { a: { command: 'dummy-a' } }, ifMatch: version }),
+        put({ mcpServers: { b: { command: 'dummy-b' } }, ifMatch: version }),
+      ]);
+      expect([a.status, b.status].sort()).toEqual([200, 409]);
+    });
   });
 
   it('.mcp.json の形で置いて読み直せる。PUT の応答と日誌には名前だけが載る', async () => {

@@ -36,7 +36,7 @@ describe('CloneProgress — 進行中のターンの途中経過の記録（#265
     expect(progress.snapshot('a')).toBeNull();
     expect(progress.snapshot('b')).toEqual([{ type: 'thinking' }]);
 
-    progress.record('b', { type: 'error', message: '失敗' });
+    progress.record('b', { type: 'error', message: '失敗', kind: 'other' });
     expect(progress.snapshot('b')).toBeNull();
     expect(progress.size).toBe(0);
   });
@@ -71,11 +71,6 @@ describe('CloneProgress — 進行中のターンの途中経過の記録（#265
 });
 
 describe('Clone#attach — いままでの分を渡し、続きを購読する（#2652）', () => {
-  /**
-   * 1本目のターンの途中（最初の text の後）で、テストが `release()` するまで止まる偽 SDK。
-   * 実時間は待たない — 止める・進めるはすべてテストが握る約束で行う。
-   * 2本目以降（`stop()` の蒸留など）は素直に答える。
-   */
   function gatedSdk(options: { finish: 'success' | 'error' | 'no-result' }) {
     const calls: FakeCall[] = [];
     let release: () => void = () => undefined;
@@ -155,7 +150,6 @@ describe('Clone#attach — いままでの分を渡し、続きを購読する�
         createLocalRunner({ workspacePath: '/work', queryFn: fakeSdk().fn, env: {} }),
       ]),
     });
-    // 最初から繋いでいる購読者（POST /chat 相当）。これの観測が「本来の全部」の基準になる。
     const live = wireEvents(clone, 'conv-1');
     return { clone, release: sdk.release, live };
   }
@@ -180,15 +174,12 @@ describe('Clone#attach — いままでの分を渡し、続きを購読する�
       { type: 'thinking' },
       { type: 'text', text: '前半' },
     ]);
-    // 写しの分は listener へ渡し直さない（二重渡しにならない）
     expect(late.received).toEqual([]);
 
     s.release();
     await waitForDone(s.live.events);
     expect(late.received.map((e) => e.type)).toEqual(['text', 'done']);
 
-    // 継ぎ目の検算: 「いままでの分 + 続き」は、最初から繋いでいた購読者が見た全体と同じ
-    // （text は結合の前後で同じ文字列になる）。
     const joined = [...late.inProgress!, ...late.received];
     const text = (events: ChatStreamEvent[]) =>
       events.map((e) => (e.type === 'text' ? e.text : '')).join('');

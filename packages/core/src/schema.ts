@@ -22,6 +22,19 @@ import { MEMORY_SLUG_RULE, PRACTICE_SLUG_RULE } from './slug-rule.js';
 import { usageLayerSchema, usageSiteSchema, usageTotalsSchema } from './usage.js';
 
 /**
+ * ターン失敗の種別。`/chat` の `error` イベントと、履歴の失敗ターン（`exchange.turnFailureKind`）が同じ語を運ぶ。
+ *
+ * - `auth` —— 認証が通らなかった（SDK の `assistant.error` が認証系の語、または HTTP 401）
+ * - `quota` —— 利用上限（SDK の `assistant.error` が課金・枠の語、HTTP 429、または枠で発言を保持している）
+ * - `other` —— 上のどちらとも言い切れない。**「不明」を含む**（種別を持たない古い記録もここへ来る）
+ *
+ * 決め方は `sdk-failure.ts` の `turnFailureKindOf`。メッセージ本文は見ない。
+ */
+export const turnFailureKindSchema = z.enum(['auth', 'quota', 'other']);
+
+export type TurnFailureKind = z.infer<typeof turnFailureKindSchema>;
+
+/**
  * 型付きメッセージのスキーマ（docs/architecture.md「配線」）。
  *
  * ここに定義されるのは層をまたぐメッセージだけである。M1 で実際に流れるのは
@@ -1225,6 +1238,13 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
      * 無い古い行は、同じ固定文でも印を持たない。
      */
     turnFailure: z.enum(['failed', 'held']).optional(),
+    /**
+     * `turnFailure` の行が書かれたときに決めた失敗の種別（`turnFailureKindSchema`）。
+     *
+     * **無い行は `other` として読む**（`conversation.ts` の `toMessage`）。この欄を足す前に書かれた行は
+     * 種別を決めていない＝不明であり、文面から推し量って `auth` / `quota` へ読み替えない。
+     */
+    turnFailureKind: turnFailureKindSchema.optional(),
     /**
      * このターンが、承認待ち（`ask_human`）への回答（`human_answer`）から
      * 起きたものであれば、その承認の id（issue #782 の1）。
@@ -4046,16 +4066,12 @@ export const jobSchema = z.object({
    *    ——**限界も含めてあちらの doc に書いてある**
    */
   sessionInstanceId: z.string().optional(),
-  /**
-   * このマネージャーが実際に動いている provider（#486 S7。クローンが `manager_start` の
-   * `provider` 引数で指名した値）。
-   *
-   * **指名したときだけ書く。** 無いことは「runner の既定で動いている」であって、`claude` ではない
-   * （表示は runner が `hello` で名乗った値へ落ちる）。resume はこの値を runner へ送り直す——
-   * 器が入れ替わっても、Codex のセッションを Claude で開き直さないため。保存は Job 丸ごとの
-   * JSON なので移行は要らず、古い行に欄は無い。
+  /*
+   * **`managerProvider` は撤去した**（2026-10-07 のオーナー決定。マネージャー層は常に Claude で動く）。
+   * かつて（#486 S7）クローンが `provider` を指名した委譲にだけ書いていた。保存は Job 丸ごとの JSON
+   * なので、旧い行には欄が残りうる。`z.object` は未知の欄を黙って捨てるので、読み込みは落ちない
+   * （`.strict()` にしないこと。歯は `packages/storage-fs/src/job-legacy-manager-provider.test.ts`）。
    */
-  managerProvider: z.string().optional(),
   /**
    * 退避済みトランスクリプト以外の生ログへの入口は**ここに持たない**。
    *
@@ -4711,7 +4727,11 @@ export const chatStreamEventSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('tool'), tool: z.string() }),
   z.object({ type: z.literal('ask_human'), approvalId: z.string(), question: z.string() }),
   z.object({ type: z.literal('done') }),
-  z.object({ type: z.literal('error'), message: z.string() }),
+  /**
+   * ターンの終端（失敗）。`kind` は失敗の種別で、**文面から推し量らずこの欄を読む**（`turnFailureKindSchema`）。
+   * 言い切れない失敗は `other`。
+   */
+  z.object({ type: z.literal('error'), message: z.string(), kind: turnFailureKindSchema }),
 ]);
 
 export type ChatStreamEvent = z.infer<typeof chatStreamEventSchema>;

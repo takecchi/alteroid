@@ -8,26 +8,6 @@ import { createMemoryStores, humanMessage } from './testing.js';
 import { createCloneMcpServer, createCloneTools } from './tools.js';
 import type { ToolContext } from './tools.js';
 
-/**
- * 答えのターンの中でクローンが書いた行に、その承認の印（`answeredApprovalId`）が
- * 立つこと（issue #847 の案B の書く側）。
- *
- * ## なぜ専用の偽 SDK を持つのか
- *
- * 印は「いま走っているターン」（`Clone` の `#turn`）から読むので、**道具の実行と
- * フックはターンが開いている間に起きなければ測れない。** `clone-test-harness.ts`
- * （旧 `clone.test.ts`。#1744 で分割済み）の `fakeSdk` は入力を受けると同期に返答を作って即座にターンを閉じるので、その間に
- * 非同期の道具（`journal_write` のハンドラ）を走らせる口が無い。ここの偽 SDK は
- * 入力を受けたあと `onTurn` を **await してから** 返答を流す——実物の SDK が道具を
- * 呼び終えてから返答を返す順序と同じである。
- *
- * 道具のハンドラは `mcpServerFactory` で控えた本物の `ToolContext` から
- * `createCloneTools` で取り出す（`clone-self-status-and-memory-cause.test.ts` の `self_status` の節と同じ形。
- * 旧 `clone.test.ts`、#1744 で分割済み）。
- * ⟹ クローンが道具へ渡す日誌の包み（`#toolContext` の `stampingJournal`）を
- * 本物のまま通る。
- */
-
 const ANSWER_MARKER = '承認待ちにしていた質問に人間が答えた';
 
 function gatedSdk(onTurn: (input: string, options: Options) => Promise<string>) {
@@ -46,7 +26,6 @@ function gatedSdk(onTurn: (input: string, options: Options) => Promise<string>) 
         mcp_servers: [{ name: 'alteroid', status: 'connected' }],
       } as unknown as SDKMessage;
       const prompt = params.prompt;
-      // 蒸留のサイドクエリ（1本の文字列）は道具を呼ばずに返す。
       const inputs: AsyncIterable<{ message: { content: unknown } }> =
         typeof prompt === 'string'
           ? (async function* () {
@@ -81,7 +60,6 @@ function gatedSdk(onTurn: (input: string, options: Options) => Promise<string>) 
   return fn;
 }
 
-/** 壁時計で打ち切らない（打ち切りは vitest のテスト単位の timeout に任せる）。 */
 async function waitFor(check: () => Promise<boolean>): Promise<void> {
   while (!(await check())) await new Promise((resolve) => setTimeout(resolve, 5));
 }
@@ -95,7 +73,6 @@ describe('クローン — 答えのターンの行へ承認の印を立てる�
     const stores = createMemoryStores();
     let captured: ToolContext | undefined;
 
-    /** ターンの中で、道具（journal_write）とフック（PostToolUse の Bash）を実際に通す。 */
     async function act(label: string, options: Options): Promise<void> {
       if (captured === undefined) throw new Error('ToolContext がまだ捕まっていない');
       const journalWrite = createCloneTools(captured).find(
@@ -137,11 +114,9 @@ describe('クローン — 答えのターンの行へ承認の印を立てる�
           entry.type === 'exchange' && entry.role === 'outbound' && entry.text.includes(text),
       );
 
-    // 1. 承認に由来しないターン（契約の反対側）。
     clone.post(humanMessage('やあ'));
     await waitFor(() => outbound('人間への返事'));
 
-    // 2. 答えのターン。
     await stores.jobs.putApproval({
       id: 'ap-1',
       createdAt: new Date().toISOString(),
@@ -170,7 +145,6 @@ describe('クローン — 答えのターンの行へ承認の印を立てる�
     const replyOf = (text: string) =>
       find((e) => e.type === 'exchange' && e.role === 'outbound' && e.text.includes(text), text);
 
-    // 答えのターン: 行動の3種と入口に印が立つ。
     expect(stampOf(decisionOf('答え'))).toBe('ap-1');
     expect(stampOf(toolUseOf('答え'))).toBe('ap-1');
     expect(stampOf(replyOf('答えを受けて進めた'))).toBe('ap-1');
@@ -186,12 +160,10 @@ describe('クローン — 答えのターンの行へ承認の印を立てる�
       ),
     ).toBe('ap-1');
 
-    // 人間の発言のターン: 1つも立たない（片側だけの歯だと「全部に立てる」実装も緑になる）。
     expect(stampOf(decisionOf('人間'))).toBeUndefined();
     expect(stampOf(toolUseOf('人間'))).toBeUndefined();
     expect(stampOf(replyOf('人間への返事'))).toBeUndefined();
 
-    // 読む側と繋がっている: 同じ日誌から対が引ける。
     const trace = await traceApproval(stores, 'ap-1');
     expect(trace?.state).toBe('paired');
     expect(trace?.actions.map((entry) => entry.type).sort()).toEqual(

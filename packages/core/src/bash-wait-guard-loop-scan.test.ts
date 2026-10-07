@@ -8,14 +8,6 @@ import {
 } from './bash-wait-guard.js';
 import { expectNotSuperlinear } from './time-growth.test-support.js';
 
-/**
- * #2181 —— `until` / `while` の判定を、正規表現（`LOOP_RE`）から `findUntilWhileLoops`
- * （`do` / `done` の語の位置を索引して二分探索する形）に替えた。**一致を1文字も変えていない
- * こと**を、元の正規表現を託宣として突き合わせて確かめる（PR #2121 のヒアドキュメントと同じ形）。
- *
- * このファイルはヒアドキュメントで書けない（本文のループの字面が本番の版のガードに弾かれる。
- * #2130）。
- */
 function loopsByRegex(command: string) {
   const re = new RegExp(LOOP_RE.source, 'g');
   const out: { keyword: string; cond: string; body: string; index: number }[] = [];
@@ -26,7 +18,6 @@ function loopsByRegex(command: string) {
   return out;
 }
 
-/** 再現できる乱数（xorshift32）。種を固定して、落ちたら同じ入力を作り直せるようにする。 */
 function prng(seed: number): () => number {
   let x = seed >>> 0 || 1;
   return () => {
@@ -125,7 +116,6 @@ describe('条件の無い C 形式の for を弾く（teto の判断、#2179 の
     });
   }
 
-  // 誤検知の対照（teto の指定で、必ず残す）
   const passing: ReadonlyArray<[string, string]> = [
     ['条件の有る C 形式の for', 'for ((i=0;i<5;i++)); do sleep 1; done'],
     ['条件が 0 の定数', 'for ((;0;)); do sleep 1; done'],
@@ -149,15 +139,6 @@ describe('条件の無い C 形式の for を弾く（teto の判断、#2179 の
   });
 });
 
-/**
- * 時間の歯。直す前は、閉じていない `while x; do` の繰り返しで3乗に近く遅くなった（200回で
- * 44.6ms、400回で 344.3ms、4000回で 120 秒を超えた。mgr-712ad619 の実測 2026-09-29T12:1xZ）。
- * 直した後は4000回で 7.4ms。
- *
- * issue #2187 —— 壁時計の絶対値（`TIME_BUDGET_MS = 200`）から伸びの比へ
- * 替えた。`n * factor`（#3017 前の既定は factor=4、いまは 8）を、直す前にテストしていた繰り返し
- * 回数（400 / 4000）に揃えてある。
- */
 describe('待つループの判定が、閉じていない繰り返しで後戻りで爆発しない（#2181）', () => {
   const cases: ReadonlyArray<[string, (n: number) => string, number]> = [
     [

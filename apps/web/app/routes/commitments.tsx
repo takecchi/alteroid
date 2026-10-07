@@ -2,7 +2,7 @@ import { WorkTabs } from '~/components/group-tabs';
 import { LoadError } from '~/components/load-error';
 import { useReportDirty, LeaveGuardScope } from '~/lib/leave-guard';
 import { useLatest } from '~/lib/use-latest';
-import { useMinuteNow } from '~/lib/use-now';
+import { formatRelativeAtMinute, useMinuteNow } from '~/lib/use-now';
 import { unsentInput } from '~/lib/unsent-input';
 import { AlertTriangle } from 'lucide-react';
 import { Fragment, useCallback, useEffect, useId, useState } from 'react';
@@ -38,7 +38,7 @@ import {
   useConversation,
   useConversations,
 } from '@alteroid/swr';
-import { formatDateTime, formatRelative, redactBody } from '@alteroid/logic';
+import { formatDateTime, redactBody } from '@alteroid/logic';
 import type { CommitmentClosedBy, CommitmentOrigin, TextMarkup } from '@alteroid/core';
 import type { Commitment, UnreadableCommitment, UnreadableJob } from '@alteroid/logic';
 
@@ -1524,7 +1524,7 @@ function OpenRow({
         <InProgressBadge commitment={commitment} />
         <span>{formatDateTime(commitment.at)}</span>
         {/* 齢。器は優先度も締切も持たないので、急ぎ方を決める材料はこれだけである。 */}
-        <span>({formatRelative(commitment.at, now)})</span>
+        <span>({formatRelativeAtMinute(commitment.at, now)})</span>
         <button
           type="button"
           className="ml-auto text-[11px] text-muted-foreground underline hover:text-foreground pointer-coarse:-my-3.5 pointer-coarse:-mr-3 pointer-coarse:px-3 pointer-coarse:py-3.5"
@@ -1723,21 +1723,47 @@ function PushForm() {
   const [body, setBody] = useState('');
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<unknown>(undefined);
+  const [notice, setNotice] = useState<string | undefined>(undefined);
+  const { data, mutate } = useCommitments(false);
+  const dataRef = useLatest(data);
 
   // 書きかけ（空でない）かどうかをスコープへ知らせる（離れる前の確認はページに1つ。#2764）。
   useReportDirty(PUSH_FORM_DIRTY_ID, body !== '');
 
   async function submit() {
-    if (body.trim() === '') return;
+    const text = body.trim();
+    if (text === '') return;
     const sent = body;
+    // 積む前の一覧。読めていないときは undefined（「無かった行」を決められない）。
+    const before = dataRef.current && new Set(dataRef.current.entries.map((entry) => entry.id));
     setBusy(true);
     setFailure(undefined);
+    setNotice(undefined);
     try {
-      await pushCommitment(body.trim());
+      await pushCommitment(text);
       // 応答を待つ間に打ち足した分は残す（issue #3515）。
       setBody((current) => unsentInput(current, sent));
     } catch (caught) {
-      setFailure(caught);
+      // サーバは冪等の鍵を持たず、送り直すと同じ本文が二重に載る。届いたか分からない失敗（接続断・タイムアウト・5xx）
+      // のときだけ、取り直した一覧に積む前に無かった同じ本文の行が在るかで、届いたかを確かめる。
+      const unknown =
+        !(caught instanceof ApiError) || caught.status >= 500 || caught.status === 408;
+      const landed =
+        unknown &&
+        before !== undefined &&
+        ((await mutate())?.entries ?? []).some(
+          (entry) => !before.has(entry.id) && entry.body.trim() === text,
+        );
+      if (landed) {
+        setBody((current) => unsentInput(current, sent));
+        setNotice('応答は届かなかったが、台帳には載っている。送り直さなくてよい。');
+      } else {
+        setFailure(caught);
+        if (unknown)
+          setNotice(
+            '届いたか分からない。台帳の一覧を確かめてから送り直すこと（二重に載ることがある）。',
+          );
+      }
     } finally {
       setBusy(false);
     }
@@ -1781,6 +1807,11 @@ function PushForm() {
           <SubmitHint action="登録" />
         </div>
         <ErrorNote error={failure} />
+        {notice !== undefined && (
+          <p role="status" className="text-xs text-muted-foreground">
+            {notice}
+          </p>
+        )}
       </div>
     </Card>
   );

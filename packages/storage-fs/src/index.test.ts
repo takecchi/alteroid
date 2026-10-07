@@ -14,6 +14,7 @@ import {
   verifyCommitmentTieOrderContract,
   verifyConversationReadStoreContract,
   verifyMcpServerStoreContract,
+  verifyMcpServersIfMatchContract,
   verifyCredentialSeedOnceContract,
   verifyCredentialVaultContract,
   verifyTokenPoolContract,
@@ -21,6 +22,7 @@ import {
   verifyJobNulContract,
   verifyScheduleNulContract,
   verifyScheduleIfMatchContract,
+  verifyScheduleUnreadableContract,
   verifySessionRegistryNulContract,
   verifyProfileStoreContract,
   verifyPermissionGrantStoreContract,
@@ -1944,6 +1946,27 @@ describe('FsScheduleStore', () => {
     await verifyScheduleIfMatchContract(stores.schedules);
   });
 
+  it('読めない行の契約（Issue #3859。fs と pg で同じことを測る。インメモリは読めない行を持てない）', async () => {
+    const path = join(root, 'jobs', 'schedules.json');
+    await captureStderr(async () => {
+      await verifyScheduleUnreadableContract(stores.schedules, async (kind) => {
+        // `put` は形を断るので、版ずれ・手編集を模して `schedules.json` へ直に足す。
+        const file = JSON.parse(await readFile(path, 'utf8')) as {
+          schedules: { kind?: string }[];
+        };
+        file.schedules = file.schedules.filter((row) => row.kind !== kind);
+        file.schedules.push({
+          kind,
+          spec: { type: 'not-a-real-spec-type-from-a-newer-deploy' },
+          request: '壊れた行',
+          createdAt: '2026-01-01T00:00:00.000Z',
+          updatedAt: '2026-01-01T00:00:00.000Z',
+        } as never);
+        await writeFile(path, JSON.stringify(file), 'utf8');
+      });
+    });
+  });
+
   const plan = {
     kind: 'issue-round',
     spec: { type: 'daily' as const, at: '09:00' },
@@ -3556,6 +3579,10 @@ describe('FsProfileStore', () => {
 describe('FsMcpServerStore', () => {
   it('器の契約（#325 段1。3実装で同じことを測る）', async () => {
     await verifyMcpServerStoreContract(stores.mcpServers);
+  });
+
+  it('ifMatch の契約（Issue #3984。3実装で同じことを測る）', async () => {
+    await verifyMcpServersIfMatchContract(stores.mcpServers);
   });
 
   it('.mcp.json と同じ形で 0600 のファイルに置く', async () => {

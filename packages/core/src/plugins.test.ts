@@ -6,13 +6,27 @@ import {
   parseStoredPlugin,
   pluginDirName,
   pluginSummaryOf,
+  pluginsFingerprintOf,
   validatePluginFilePath,
+  OFFICIAL_MARKETPLACE_URL,
+  resolveMarketplaceUrl,
   type PluginInput,
 } from './plugins.js';
 import { verifyPluginStoreContract } from './plugin-store-contract.js';
 import { createMemoryStores } from './testing.js';
 
 const SHA = '0123456789abcdef0123456789abcdef01234567';
+
+describe('resolveMarketplaceUrl', () => {
+  it('未設定・空白だけは公式の既定、設定があればそれを使う', () => {
+    expect(OFFICIAL_MARKETPLACE_URL).toBe('https://github.com/anthropics/claude-plugins-official');
+    expect(resolveMarketplaceUrl(undefined)).toBe(OFFICIAL_MARKETPLACE_URL);
+    expect(resolveMarketplaceUrl('  ')).toBe(OFFICIAL_MARKETPLACE_URL);
+    expect(resolveMarketplaceUrl(' https://example.invalid/m.git ')).toBe(
+      'https://example.invalid/m.git',
+    );
+  });
+});
 
 const bytes = (...values: number[]) => new Uint8Array(values);
 
@@ -380,6 +394,23 @@ describe('plugin の保存の形', () => {
       expect(pluginDirName('frontend-design', SHA)).toBe(`frontend-design@${SHA}`);
       expect(() => pluginDirName('../x', SHA)).toThrow();
       expect(() => pluginDirName('a', 'main')).toThrow();
+    });
+  });
+
+  describe('pluginsFingerprintOf', () => {
+    const base = {
+      name: 'a',
+      sha: SHA,
+      contentSha256: 'c'.repeat(64),
+      enableHooks: false,
+      enableMcp: false,
+    };
+
+    it('同じ sha・同じ中身でも、フラグが違えば指紋が変わる', () => {
+      const plain = pluginsFingerprintOf([base]);
+      expect(pluginsFingerprintOf([{ ...base, enableMcp: true }])).not.toBe(plain);
+      expect(pluginsFingerprintOf([{ ...base, enableHooks: true }])).not.toBe(plain);
+      expect(pluginsFingerprintOf([{ ...base }])).toBe(plain);
     });
   });
 });

@@ -14,6 +14,7 @@ import { listPageByOverfetch } from './journal-page.js';
 import { matchesJournalSearch } from './journal-search.js';
 import { compareIsoInstant, earliestIsoInstant } from './iso-instant.js';
 import type { ConversationReadPosition } from './conversation-read.js';
+import type { CodexChatgptAuthRecord, CodexChatgptAuthStore } from './codex-chatgpt-auth.js';
 import type {
   Commitment,
   CommitmentClosedBy,
@@ -34,6 +35,8 @@ import type {
   ScheduledRequest,
 } from './schema.js';
 import {
+  McpServersConflictError,
+  mcpServersVersionOf,
   parseMcpServers,
   prepareMcpServersForWrite,
   sortMcpServers,
@@ -1594,6 +1597,26 @@ export function createMemoryStores(): Stores {
       return count;
     },
   };
+  /** Codex の ChatGPT ログインの正本（インメモリ。契約は `codex-chatgpt-auth.ts`）。 */
+  let codexAuthRecord: CodexChatgptAuthRecord | null = null;
+  const codexAuth: CodexChatgptAuthStore = {
+    async get() {
+      return codexAuthRecord === null ? null : structuredClone(codexAuthRecord);
+    },
+    async replace(record) {
+      codexAuthRecord = structuredClone(record);
+    },
+    async compareAndSwap(expectedRevision, next) {
+      if (codexAuthRecord === null || codexAuthRecord.revision !== expectedRevision) return false;
+      codexAuthRecord = structuredClone(next);
+      return true;
+    },
+    async remove() {
+      const had = codexAuthRecord !== null;
+      codexAuthRecord = null;
+      return had;
+    },
+  };
   /** 会話の既読の位置と基準時刻（インメモリ。契約は `conversation-read.ts`）。 */
   let conversationReadBaseline: string | null = null;
   const conversationReadPositions = new Map<string, ConversationReadPosition>();
@@ -1659,9 +1682,23 @@ export function createMemoryStores(): Stores {
             mcpServers: sortMcpServers(structuredClone(storedMcpServers.mcpServers)),
           };
     },
-    async write(input) {
+    async write(input, options) {
       // **書く前に検査する**（3実装が同じ関数を通す。`McpServerStore.write` の doc）。
       const servers = parseMcpServers(prepareMcpServersForWrite(input));
+      // 比較から代入までに await が無い（同期の区間）ので、同時の書き込みは割り込めない。
+      if (
+        options?.ifMatch !== undefined &&
+        options.ifMatch !== mcpServersVersionOf(storedMcpServers)
+      ) {
+        throw new McpServersConflictError(
+          storedMcpServers === null
+            ? null
+            : {
+                ...storedMcpServers,
+                mcpServers: sortMcpServers(structuredClone(storedMcpServers.mcpServers)),
+              },
+        );
+      }
       const updatedAt = new Date().toISOString();
       storedMcpServers =
         Object.keys(servers).length === 0 ? null : { mcpServers: servers, updatedAt };
@@ -2193,6 +2230,7 @@ export function createMemoryStores(): Stores {
     mcpServers,
     plugins,
     conversationReads,
+    codexAuth,
     tokens,
     usage,
     attachments: new MemoryAttachmentStore(),
