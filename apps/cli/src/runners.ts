@@ -1,6 +1,7 @@
 import { stdout } from './terminal-out.js';
 
-import { describeRevisionStatus } from '@alteroid/core/cli-light';
+import { describeManagerPeers, describeRevisionStatus } from '@alteroid/core/cli-light';
+import type { ManagerPeersView } from '@alteroid/core/cli-light';
 import type {
   RunnerCredentialFingerprint,
   RunnerProfileFingerprint,
@@ -114,6 +115,8 @@ interface RunnersView {
     profileProbe: RunnerProbe;
     revision: RunnerRevisionStatus;
     pushHealth?: RunnerPushHealth;
+    // 無いのは旧いデーモンの応答。`unknown` は名乗らない旧い runner（「頼めない」とは読まない）
+    managerPeers?: ManagerPeersView;
   }[];
   daemonRevision: RunnerRevisionReport;
 }
@@ -152,6 +155,9 @@ export function renderRunners(view: RunnersView, now: number = Date.now()): stri
             (runner.instanceSince === undefined ? '' : `（${runner.instanceSince} から）`),
     );
     lines.push(`  版: ${describeRevisionStatus(runner.revision)}`);
+    // 開いている peer が無い器は行を出さない: PEERS が空の構成の見え方を変えないため
+    const peers = describeManagerPeers(runner.managerPeers);
+    if (peers !== undefined) lines.push(`  peer: ${peers}`);
     if (runner.error !== undefined) lines.push(`  直近の失敗: ${redactError(runner.error)}`);
     lines.push(`  ${renderCredentialsFingerprint(runner)}`);
     lines.push(`  ${renderProfileFingerprint(runner)}`);
@@ -186,6 +192,7 @@ function renderPushHealth(pushHealth: RunnerPushHealth): string | undefined {
     outcomeText('環境変数', pushHealth.credentials),
     outcomeText('認証トークン', pushHealth.agentToken),
     outcomeText('MCP の登録', pushHealth.mcpServers),
+    outcomeText('plugin', pushHealth.plugins),
   ].filter((part): part is string => part !== undefined);
   return parts.length === 0 ? undefined : parts.join(' / ');
 }

@@ -4,6 +4,7 @@ import { createSdkMcpServer, tool as sdkTool } from '@anthropic-ai/claude-agent-
 import { z } from 'zod';
 
 import { describeArchiveRemovedBytesUnit } from './archive-removed-bytes.js';
+import { codexChatgptAuthStatusOf, describeCodexChatgptAuth } from './codex-chatgpt-auth.js';
 import { fallbackAttachmentCopiesDir, fetchAttachmentCopy } from './attachment-fetch.js';
 import { readAttachmentLimits, type AttachmentLimits } from './attachment.js';
 import {
@@ -138,6 +139,7 @@ import type {
   ManagerTranscript,
   ManagerUnpushedWork,
   RunnerBacklogSnapshot,
+  RunnerFleetOverview,
   RunnerManagerEntry,
   RunnerPushOutcome,
   TokenGenerationUnknownReason,
@@ -228,6 +230,7 @@ import {
   summarizeQuestions,
 } from './approval-choices.js';
 import { describeRevisionStatus } from './revision.js';
+import { describeManagerPeers } from './manager-peers-format.js';
 import {
   CANON_REVISION,
   CLONE_RUNTIME_ITEM_LABELS,
@@ -306,6 +309,7 @@ import {
 } from './usage.js';
 import { JOURNAL_SEARCH_UNCOVERED_LIST } from './journal-search.js';
 import { describeManagerFoldCandidate } from './manager-fold-candidate.js';
+import { describeManagerModels, managerModelsOf } from './manager-models.js';
 import {
   describeUnpushedWorkObservationIncompleteness,
   describeUnpushedWorkObservationProvenance,
@@ -613,6 +617,11 @@ export interface ToolContext {
    * 「この場面では取れない」を返す（例: 蒸留のサイドクエリだけ自分のことが分からない）。
    */
   runtime?: () => CloneRuntimeFacts;
+  /**
+   * 接続中の runner が名乗ったマネージャー・作業者のモデルの行。`self_status` が実行時に引く。
+   * 省略（テスト）時は何も足さない（既定のモデルで埋めない）。
+   */
+  runnerModels?: () => Promise<readonly string[]>;
   /**
    * この道具を通した記憶の書き換えが、日誌の `memory_update.cause` でどう名乗るか。
    *
@@ -2163,6 +2172,46 @@ const PRACTICE_LIST_BUDGET = 8_000;
  * 小さいと見立てているが、それは実測ではないので上限を置く。
  */
 const RUNNER_CREDENTIAL_FINGERPRINT_EXCERPT = 400;
+
+/**
+ * `self_status` の末尾に足す「Codex などに作業を頼める器」（#3940）。器の名前と peer の説明だけ
+ * （1行ずつ、全体を予算で締める）。**頼める器が無く「不明」の器も無ければ何も足さない**
+ * （`ALTEROID_MANAGER_PEERS` が空の構成では1文字も増えない）。名簿を読めなければ黙って省く
+ * ——`self_status` の本題（自分の実行時の事実）を、器の名簿の失敗で落とさない。
+ */
+export async function renderPeerReach(managers: ManagerPool | undefined): Promise<string[]> {
+  if (managers === undefined) return [];
+  let overview: RunnerFleetOverview;
+  try {
+    overview = await managers.runners();
+  } catch {
+    return [];
+  }
+  const rows: { label: string; line: string }[] = [];
+  for (const runner of overview.runners) {
+    const line = describeManagerPeers(runner.managerPeers);
+    if (line === undefined) continue;
+    rows.push({ label: runner.runnerId ?? runner.label, line });
+  }
+  if (rows.length === 0) return [];
+  return [
+    '',
+    'マネージャーが peer で作業を頼める器（manager_start の runnerId で名指しできる。詳細は runner_list）:',
+    renderListing(
+      rows.map((row) => `- ${row.label}: ${excerptLine(row.line, RUNNER_MANAGER_PEERS_EXCERPT)}`),
+      {
+        budget: SELF_STATUS_PEER_REACH_BUDGET,
+        omitted: ({ rest, shown, total }) =>
+          `…ほか ${rest} 台は省略（全 ${total} 台のうち ${shown} 台だけ出した。runner_list で全部見える）。`,
+      },
+    ),
+  ];
+}
+
+const SELF_STATUS_PEER_REACH_BUDGET = 1600;
+
+/** `runner_list` の peer の行（#3940）の抜粋の上限。モデルの一覧は人間が開けた数だけ伸びるので締める。 */
+const RUNNER_MANAGER_PEERS_EXCERPT = 400;
 
 /**
  * ゾンビの年齢（秒）を「H時間M分前」のような字面にする（#315 の可視化、
@@ -10685,22 +10734,35 @@ export function createCloneTools(context: ToolContext) {
           return text(renderLedgerCrossReference(runtime.sdkModel, aggregate, ledgerCursor));
         }
 
-        const [documents, memoryDocuments, aggregate] = await Promise.all([
+        const runnerModels = await context.runnerModels?.();
+        const [documents, memoryDocuments, aggregate, codexAuth] = await Promise.all([
           stores.persona.list(),
           stores.persona.documents(),
           // モデル id が分かっていなければ、突き合わせる軸そのものが無い。
           runtime.sdkModel === null ? Promise.resolve(null) : stores.usage.aggregate({}),
+          // Codex の ChatGPT ログイン（#3939）。**ログインしていなければ1行も足さない**（今までの
+          // 出力のまま）。切れた・失効したなら再ログインを促す行が出る。読めなければ黙らずに言う。
+          stores.codexAuth.get().then(
+            (record) =>
+              record === null ? null : describeCodexChatgptAuth(codexChatgptAuthStatusOf(record)),
+            (error: unknown) =>
+              `Codex の ChatGPT ログイン: 正本を読めなかった（${reasonOf(error)}）`,
+          ),
         ]);
 
         return text(
           [
-            describeCloneRuntime(runtime),
+            describeCloneRuntime(
+              runnerModels === undefined ? runtime : { ...runtime, runnerModels },
+            ),
+            ...(codexAuth === null ? [] : [codexAuth]),
             '',
             // **クローンの文脈へ実際に載る形で数える。** 本文だけを足すと、見出しの
             // ぶんだけ本当より少ない数を「いまの総文字数」として名乗ることになる。
             renderMemorySize(documents, memoryDocuments, renderMemoryDocuments(memoryDocuments)),
             '',
             renderLedgerCrossReference(runtime.sdkModel, aggregate),
+            ...(await renderPeerReach(context.managers)),
           ].join('\n'),
         );
       },
@@ -10843,6 +10905,9 @@ export function createCloneTools(context: ToolContext) {
         'マネージャー（あなたが起こす Claude Code）に仕事を任せる。',
         '起動して即返るので、完了を待たずに次の判断へ移ってよい。同時に何本走らせてもよい。',
         '依頼できるのは実装だけではない。調査・設計の相談・外部サービスの確認・レビューも同じように頼める。',
+        // **#3940。** Codex に頼める器があることをクローンに見せる（どの器かは runner_list の peer の行）。
+        'Codex に作業を頼めるマネージャーの器があれば（runner_list の peer の行）、依頼文に「Codex にやらせて」と' +
+          '書けば、マネージャーが peer で Codex に頼む。その器を runnerId で名指しできる。',
         // **#2626 期待2。**
         '置き先は資源で自動配置される（runner_list の説明を参照）。新しいプロセスを起こせない' +
           '（pids 飽和）と判定された器は、飽和していない器が居れば自動配置から外れる。' +
@@ -11849,6 +11914,8 @@ export function createCloneTools(context: ToolContext) {
                   ? ''
                   : `（この器は ${manager.runnerLostSince} 以降 名乗っていない。新しい委譲の宛先からは外れている（置き先として数えない）。**この委譲が失われたという意味ではない** — 黙っているのが器なのか経路なのかは、ここからは言えない（器の中でまだ走っていることもある）。話しかけることは塞いでいない — 戻る先（session_id）が在れば manager_send が resume を試みる（届くとは限らない）。${RESTART_BEFORE_CHECK_ADVICE}器そのものは runner_list で見る）`
               }`,
+              // 置き先の runner が名乗ったモデルだけを出す。取れない側は「不明」と書き、既定の帯（opus / sonnet）とは推測しない。
+              `  モデル: ${describeManagerModels(managerModelsOf(context.managers, manager))}`,
               // **`runnerLostSince` と同じ作法で、別の行として出す（#563）。**
               // `describeManagerState` は動かさない——`manager_list` と要約
               // （`digest.ts`）で字面が割れると、そこで潰れることを防ぐために
@@ -12219,6 +12286,8 @@ export function createCloneTools(context: ToolContext) {
           );
         }
 
+        // `manager_list` と同じ字面（取れなければ「不明」）。
+        const modelLine = `モデル: ${describeManagerModels(managerModelsOf(context.managers, found))}`;
         // **停止後に届いた、畳まれたターンの本文（Issue #1038）。**
         // `part === 'request'` では扱わない——依頼文の話ではない。**在れば
         // `lastReport`（完遂した報告）より優先して見せる**——`lastFoldedTurn`
@@ -12284,6 +12353,7 @@ export function createCloneTools(context: ToolContext) {
           const withheldReportsNote = describeWithheldReports(found);
           return text(
             [
+              modelLine,
               missing,
               usageStopped,
               runnerVanished,
@@ -12533,7 +12603,7 @@ export function createCloneTools(context: ToolContext) {
         const footer =
           '\n\n（さらに掘るなら manager_transcript managerId=' + managerId + ' で生ログへ）';
         return text(
-          `${head}\n\n${driftNote}${failureNote}${usageStoppedNote}${runnerVanishedNote}${systemErrorNote}${cgroupEventsNote}${denialNote}${unobservedNote}${unpushedWorkNote}${withheldReportsFooterNote}${part1.body}${tail}${footer}`,
+          `${head}\n\n${modelLine}\n\n${driftNote}${failureNote}${usageStoppedNote}${runnerVanishedNote}${systemErrorNote}${cgroupEventsNote}${denialNote}${unobservedNote}${unpushedWorkNote}${withheldReportsFooterNote}${part1.body}${tail}${footer}`,
         );
       },
     ),
@@ -13829,6 +13899,10 @@ export function createCloneTools(context: ToolContext) {
       [
         '委譲先の器（runner のコンテナ）がいくつあり、それぞれで何本のマネージャーが' +
           '走っているかを見る。manager_start の runnerId に渡す名前もここで分かる。',
+        // **#3940。** クローンが「Codex に頼める器」を選べるようにする（manager_start の runnerId）。
+        'peer の行は、その器のマネージャーが Codex などのもう一方の provider に作業を頼めること' +
+          '（と名指しできるモデル）を示す。開いている peer が無い器には行が出ない。' +
+          '「不明」は名乗らない旧い runner で、頼めないとは限らない。',
         'ここで数えている本数はデーモンの台帳から見た数である。新しいマネージャーを' +
           'どこへ置くか（資源による自動配置）の判断が使う本数は runner 自身が /health で' +
           '名乗る別の値で、この一覧とはずれうる——混ぜて配置の判断を予測しないこと。',
@@ -14090,6 +14164,12 @@ export function createCloneTools(context: ToolContext) {
            * `lost` の器の古い値が現役の版として読まれる。
            */
           lines.push(`  版: ${describeRevisionStatus(runner.revision)}`);
+          // **peer（#3940）。** この器のマネージャーが Codex などに作業を頼めるか。開いている peer が
+          // 無い器は行を出さず、名乗らない旧い runner は「不明」と言う（`describeManagerPeers` の doc）。
+          const peersLine = describeManagerPeers(runner.managerPeers);
+          if (peersLine !== undefined) {
+            lines.push(`  peer: ${excerptLine(peersLine, RUNNER_MANAGER_PEERS_EXCERPT)}`);
+          }
           if (runner.error !== undefined) lines.push(`  直近の失敗: ${runner.error}`);
           // **pids 飽和（#2626 期待2）。`state` が connected でも出す。** 材料が無い器には
           // 行を出さない（「飽和ではない」と言わない）。
@@ -14196,6 +14276,7 @@ export function createCloneTools(context: ToolContext) {
               outcomeText('環境変数', runner.pushHealth.credentials),
               outcomeText('認証トークン', runner.pushHealth.agentToken),
               outcomeText('MCP の登録', runner.pushHealth.mcpServers),
+              outcomeText('plugin', runner.pushHealth.plugins),
             ].filter((line): line is string => line !== undefined);
             if (pushLines.length > 0) {
               lines.push(`  直近の押し込み: ${pushLines.join(' / ')}`);

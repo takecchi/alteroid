@@ -158,6 +158,9 @@ x-shared-env: &shared-env
   # MCP `peer` を開ける `ALTEROID_MANAGER_PEERS`（カンマ区切り。空 = 閉じている。読むのは
   # runner の `process.env`。未知の値は起動を止める。`packages/core/src/agent-provider-peers.ts`）。
   ALTEROID_MANAGER_PEERS: ${ALTEROID_MANAGER_PEERS:-}
+  # peer_run で名指しできる Codex のモデル（カンマ区切り。空 = 名指しの口を出さない。#3934）。
+  # 読むのは runner の `process.env`（`agent-provider-peers.ts` の `resolvePeerModels`）。
+  ALTEROID_MANAGER_PEER_CODEX_MODELS: ${ALTEROID_MANAGER_PEER_CODEX_MODELS:-}
   # マネージャーの auto-memory（SDK が自動で読み書きする記憶ディレクトリ）を開ける
   # 口。**既定は閉じる**（#1189 —— ここへ書いた記憶はクローンにも次の器にも届かない
   # のに、書いている側に気づく材料が1つも無い）。これは方針であって能力の削減ではなく、

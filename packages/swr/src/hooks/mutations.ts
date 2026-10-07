@@ -255,15 +255,15 @@ export function useAnswerApprovals() {
   const { mutate } = useSWRConfig();
   return useCallback(
     async (answers: { id: string; answer?: string; selections?: ApprovalSelection[] }[]) => {
-      const { results } = await api.api
-        .POST('/approvals/answer', { body: { answers } })
-        .then(unwrap);
-      // 取り直しの失敗で throw しない: 答えは通っており、投げると画面が通信失敗と読んで下書きを残し、送り直しが 409 になるため
-      try {
-        await Promise.all([mutate(KEY.approvals(true)), mutate(KEY.approvals(false))]);
-      } catch {
-        // 取り直しの失敗は無視する
-      }
+      // 失敗しても取り直す: 届いて応答だけ失われた書き込みは、取り直さないとカードが未回答のまま残り、送り直しが 409 になるため
+      const post = () => api.api.POST('/approvals/answer', { body: { answers } }).then(unwrap);
+      let results: Awaited<ReturnType<typeof post>>['results'] = [];
+      await writeThenRefresh(
+        async () => {
+          ({ results } = await post());
+        },
+        () => Promise.all([mutate(KEY.approvals(true)), mutate(KEY.approvals(false))]),
+      );
       return results;
     },
     [api, mutate],
@@ -516,6 +516,39 @@ export function useRevokeOwnerDeclaration() {
     },
     [api, mutate],
   );
+}
+
+/** Codex の ChatGPT ログインを始める（#3939）。確認用 URL とコードが返る。 */
+export function useStartCodexLogin() {
+  const api = useApi();
+  return useCallback(async () => api.api.POST('/codex/login').then(unwrap), [api]);
+}
+
+/** 進行中のログインを取り消す（#3939）。 */
+export function useCancelCodexLogin() {
+  const api = useApi();
+  const { mutate } = useSWRConfig();
+  return useCallback(
+    async (id: string) => {
+      const result = await api.api
+        .DELETE('/codex/login/{id}', { params: { path: { id } } })
+        .then(unwrap);
+      await mutate(KEY.codexLogin(id), result, { revalidate: false });
+      return result;
+    },
+    [api, mutate],
+  );
+}
+
+/** ログアウト（正本から消し、全 runner から外す。#3939）。 */
+export function useCodexLogout() {
+  const api = useApi();
+  const { mutate } = useSWRConfig();
+  return useCallback(async () => {
+    const result = await api.api.DELETE('/codex/auth').then(unwrap);
+    await mutate(KEY.codexAuth);
+    return result;
+  }, [api, mutate]);
 }
 
 export function useSetEnvVar() {
