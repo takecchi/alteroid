@@ -36,6 +36,7 @@ import {
   useApi,
   useAttachmentLimits,
   type ChatStreamEvent,
+  type ChatStreamPending,
 } from '@alteroid/swr';
 import {
   attachmentMediaType,
@@ -119,6 +120,11 @@ class StreamClosedEarlyError extends Error {
     );
   }
 }
+
+/** 追送が次のターンに回ったとき、再生を張り直す回数の上限（#4085）。 */
+const REPLAY_MAX_ROUNDS = 40;
+/** 進行中のターンが無いまま追送が待っているとき、待って張り直す回数の上限（間隔は 0.5 秒から倍々、5 秒まで）。 */
+const REPLAY_MAX_WAITS = 10;
 
 /** ストリームの終端（これらのどれかを見たら、閉じてよい）。 */
 function isStreamTerminal(event: ChatStreamEvent): boolean {
@@ -2443,6 +2449,9 @@ export function ChatPane({
           controller.abort();
         }
         recordOwnMessage(conversationId, text);
+        // 次のターンに回ったかは、最初のターンが終わってから再生の `open` で確かめる（`followUpIdsRef`）。
+        const waiting = followUpIdsRef.current.get(conversationId) ?? new Set<string>();
+        followUpIdsRef.current.set(conversationId, waiting.add(clientMessageId));
       } catch (caught) {
         /*
          * **投函先の会話 id をキーに積む（#1576 / #1585）。** ここは投函先を
@@ -2735,6 +2744,163 @@ export function ChatPane({
     };
     return { setTransient, apply };
   }, []);
+
+  /**
+   * 追送（`followUp`）の投函が済んだ（`open` を見た）発言の `clientMessageId`（会話 id ごと。#4085）。
+   * 追送は走っているターンへ流れる前提で購読を捨てるが、サーバのまとめ読みは**ターンが始まる時に受信箱に
+   * あった分**だけなので、あとから来た追送は次のターンになり、その出来事を受ける購読者がいない。
+   * 最初のターンが終わったあと、これがまだ待っているかを再生の `open` の `pending` で確かめる。
+   */
+  const followUpIdsRef = useRef(new Map<string, Set<string>>());
+  /** いまの取り直し（`replayLoop`）の中断口。会話を離れたとき・次の取り直しを始めるときに畳む。 */
+  const replayControllerRef = useRef<AbortController | undefined>(undefined);
+
+  /**
+   * 再生の口（`GET /chat/:id/stream`）を1回張って、進行中なら最後まで画面へ流す。
+   * `pending` は `open` が運んだ、答えを待っている発言（古いデーモンは無い）。
+   * 画面へ流す規則は `useEffect`（下）の doc。
+   */
+  const replayOnce = useCallback(
+    async (id: string, controller: AbortController) => {
+      let stream: Stream | undefined;
+      let writer: ReturnType<typeof createStreamWriter> | undefined;
+      let sawTerminal = false;
+      let pending: ChatStreamPending[] | undefined;
+      let busy = false;
+      let aborted: boolean | undefined;
+      try {
+        for await (const message of getChatStream(api, id, { signal: controller.signal })) {
+          if (message.event === 'open') {
+            pending = message.data.pending;
+            // 進行中でなくても捨てる。離れている間にターンが終わっていれば、確定した
+            // 本文は履歴が出す（途中の行は本文が違うので `pendingOwnLines` に引き取られない）。
+            if (!message.data.inProgress) {
+              discardUnfinishedReply(id);
+              break;
+            }
+            const current = streamRef.current;
+            if (current !== undefined && !current.controller.signal.aborted) {
+              busy = true;
+              break;
+            }
+            discardUnfinishedReply(id);
+            stream = createStream(controller, id);
+            streamRef.current = stream;
+            pendingResumeRef.current = undefined;
+            setSending(true);
+            writer = createStreamWriter(stream, controller);
+            writer.setTransient('考えている…');
+            continue;
+          }
+          if (isStreamTerminal(message.data)) sawTerminal = true;
+          writer?.apply(message.data);
+        }
+        aborted = controller.signal.aborted;
+        // 再生が終端を見ないまま閉じた（#3564）。始める前（`stream` 無し）は何も見せていないので黙る。
+        if (stream !== undefined && !sawTerminal && !aborted) {
+          const closedId = stream.id;
+          setFailures((prev) => new Map(prev).set(closedId, new StreamClosedEarlyError()));
+        }
+      } catch (caught) {
+        aborted = controller.signal.aborted;
+        if (!aborted && stream !== undefined) {
+          const failedId = stream.id;
+          setFailures((prev) => new Map(prev).set(failedId, caught));
+        }
+      } finally {
+        // 途中で抜けた場合（進行中でなかった等）も、接続は閉じておく。
+        controller.abort();
+        if (pendingResumeRef.current === controller) pendingResumeRef.current = undefined;
+        if (stream !== undefined) {
+          const ended = stream;
+          setLines((previous) =>
+            previous.filter((line) => !(line.transient === true && line.of === ended.id)),
+          );
+          if (streamRef.current === ended) {
+            setSending(false);
+            streamRef.current = undefined;
+            setActiveReplyKeys(NO_REPLY_KEYS);
+          }
+        }
+      }
+      return {
+        streamed: stream !== undefined,
+        terminal: sawTerminal,
+        pending,
+        busy,
+        aborted: aborted === true,
+      };
+    },
+    [api, createStreamWriter, discardUnfinishedReply],
+  );
+
+  /**
+   * 再生を張り、追送が次のターンに回っているあいだは張り直す（#4085）。画面を開いたときは
+   * `followUpIdsRef` が空なので1回で終わる。
+   *
+   * - 進行中のターンを流し終えたら、追送がまだ残っていれば張り直す（その追送が次のターンのものかは、
+   *   新しい `open` の `pending` でしか分からない）。
+   * - 進行中でなく、追送が `pending` に居る（`starting`・`queued`・`held`）間は、少し待って張り直す。
+   *   再生の口は進行中でなければ `open` だけで閉じるので、ターンが始まるのを購読では待てない。
+   *   待つのは上限まで。尽きたら諦める（返信は日誌の更新で履歴に載る）。
+   * - `pending` が無い（古いデーモン）なら、確かめる手段が無いので止める。
+   */
+  const replayLoop = useCallback(
+    async (id: string, outer: AbortController) => {
+      let waits = 0;
+      for (let round = 0; round < REPLAY_MAX_ROUNDS && !outer.signal.aborted; round += 1) {
+        const pass = new AbortController();
+        const link = () => pass.abort();
+        outer.signal.addEventListener('abort', link, { once: true });
+        pendingResumeRef.current = pass;
+        const result = await replayOnce(id, pass);
+        outer.signal.removeEventListener('abort', link);
+        if (result.aborted || result.busy || outer.signal.aborted) return;
+        const ids = followUpIdsRef.current.get(id);
+        if (ids === undefined || ids.size === 0) return;
+        if (result.streamed) {
+          if (!result.terminal) return;
+          waits = 0;
+          continue;
+        }
+        if (result.pending === undefined) {
+          ids.clear();
+          return;
+        }
+        const stillWaiting = new Set(result.pending.map((entry) => entry.clientMessageId));
+        for (const key of [...ids]) if (!stillWaiting.has(key)) ids.delete(key);
+        if (ids.size === 0) return;
+        waits += 1;
+        if (waits > REPLAY_MAX_WAITS) return;
+        const pause = new AbortController();
+        pendingResumeRef.current = pause;
+        await new Promise<void>((resolve) => {
+          const timer = setTimeout(resolve, Math.min(500 * 2 ** (waits - 1), 5000));
+          const stop = () => {
+            clearTimeout(timer);
+            resolve();
+          };
+          pause.signal.addEventListener('abort', stop, { once: true });
+          outer.signal.addEventListener('abort', stop, { once: true });
+        });
+        if (pendingResumeRef.current === pause) pendingResumeRef.current = undefined;
+        if (pause.signal.aborted || outer.signal.aborted) return;
+      }
+    },
+    [replayOnce],
+  );
+
+  /** 送信（または再生）が終端で終わったあと、追送が残っていれば取り直しを始める。 */
+  const startFollow = useCallback(
+    (id: string) => {
+      if ((followUpIdsRef.current.get(id)?.size ?? 0) === 0) return;
+      replayControllerRef.current?.abort();
+      const outer = new AbortController();
+      replayControllerRef.current = outer;
+      void replayLoop(id, outer);
+    },
+    [replayLoop],
+  );
 
   /** 入力欄のチップへ渡す形。画像だけ縮小表示の中身を持たせる。 */
   const composerAttachments = useMemo(
@@ -3203,11 +3369,16 @@ export function ChatPane({
           // （このストリームのやりとりが終わったので）——刈り込みから守る
           // 理由が消えたので、`pendingOwnLines` の対象に戻す。
           setActiveReplyKeys(NO_REPLY_KEYS);
+          // 追送が次のターンに回っていれば、その返信を再生の口から取る（#4085）。
+          if (sawTerminal && !controller.signal.aborted && stream.id !== undefined) {
+            startFollow(stream.id);
+          }
         }
       }
     },
     [
       api,
+      startFollow,
       adjustUploading,
       shownId,
       retries,
@@ -3309,70 +3480,21 @@ export function ChatPane({
    * - 失敗は、再生を始めた（`inProgress: true` を見た）後のものだけ出す。始める前
    *   （古いデーモンの 503・繋がらない）は何も見せていないので、履歴側のエラーに任せる。
    */
+  useEffect(
+    // 送信の後に起こした取り直し（`startFollow`）も、会話を離れたら止める。
+    () => () => replayControllerRef.current?.abort(),
+    [shownId],
+  );
   useEffect(() => {
     if (shownId === undefined) return;
     const existing = streamRef.current;
     if (existing !== undefined && !existing.controller.signal.aborted) return;
 
-    const id = shownId;
-    const controller = new AbortController();
-    pendingResumeRef.current = controller;
-    void (async () => {
-      let stream: Stream | undefined;
-      let writer: ReturnType<typeof createStreamWriter> | undefined;
-      let sawTerminal = false;
-      try {
-        for await (const message of getChatStream(api, id, { signal: controller.signal })) {
-          if (message.event === 'open') {
-            // 進行中でなくても捨てる。離れている間にターンが終わっていれば、確定した
-            // 本文は履歴が出す（途中の行は本文が違うので `pendingOwnLines` に引き取られない）。
-            if (!message.data.inProgress) {
-              discardUnfinishedReply(id);
-              return;
-            }
-            const current = streamRef.current;
-            if (current !== undefined && !current.controller.signal.aborted) return;
-            discardUnfinishedReply(id);
-            stream = createStream(controller, id);
-            streamRef.current = stream;
-            pendingResumeRef.current = undefined;
-            setSending(true);
-            writer = createStreamWriter(stream, controller);
-            writer.setTransient('考えている…');
-            continue;
-          }
-          if (isStreamTerminal(message.data)) sawTerminal = true;
-          writer?.apply(message.data);
-        }
-        // 再生が終端を見ないまま閉じた（#3564）。始める前（`stream` 無し）は何も見せていないので黙る。
-        if (stream !== undefined && !sawTerminal && !controller.signal.aborted) {
-          const closedId = stream.id;
-          setFailures((prev) => new Map(prev).set(closedId, new StreamClosedEarlyError()));
-        }
-      } catch (caught) {
-        if (!controller.signal.aborted && stream !== undefined) {
-          const failedId = stream.id;
-          setFailures((prev) => new Map(prev).set(failedId, caught));
-        }
-      } finally {
-        // 途中で抜けた場合（進行中でなかった等）も、接続は閉じておく。
-        controller.abort();
-        if (pendingResumeRef.current === controller) pendingResumeRef.current = undefined;
-        if (stream !== undefined) {
-          const ended = stream;
-          setLines((previous) =>
-            previous.filter((line) => !(line.transient === true && line.of === ended.id)),
-          );
-          if (streamRef.current === ended) {
-            setSending(false);
-            streamRef.current = undefined;
-            setActiveReplyKeys(NO_REPLY_KEYS);
-          }
-        }
-      }
-    })();
-    return () => controller.abort();
-  }, [api, shownId, createStreamWriter, discardUnfinishedReply]);
+    const outer = new AbortController();
+    replayControllerRef.current = outer;
+    void replayLoop(shownId, outer);
+    return () => outer.abort();
+  }, [shownId, replayLoop]);
 
   /**
    * 編集を確定する（チャットのメッセージ編集、#1010）。
