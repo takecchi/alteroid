@@ -9052,12 +9052,23 @@ export function createApp(deps: AppDeps) {
       requireOwner,
       async (c) => {
         const name = c.req.param('name');
-        const found = isValidPluginName(name)
-          ? (await deps.stores.plugins.list()).find((p) => p.name === name)
-          : undefined;
-        if (found === undefined) return c.json({ error: `plugin ${name} は入っていない` }, 404);
+        if (!isValidPluginName(name))
+          return c.json({ error: `plugin ${name} は入っていない` }, 404);
+        // list() は壊れた行が1つあると全体が投げるので、外す口には使わない。get の失敗は
+        // 「取り元不明」として外せるようにする（外せない壊れた行が残り続けないため）。
+        // 在るかどうかは remove() の戻り値で決める。
+        let found: Awaited<ReturnType<typeof deps.stores.plugins.get>> | 'unreadable';
+        try {
+          found = await deps.stores.plugins.get(name);
+        } catch {
+          found = 'unreadable';
+        }
+        if (found === null) return c.json({ error: `plugin ${name} は入っていない` }, 404);
         const actor = describeActor(c.get('principal'));
-        const flags = `scope: ${found.scope}、取り元: ${describePluginSource(found.source)}`;
+        const flags =
+          found === 'unreadable'
+            ? '取り元不明（行を読めなかった）'
+            : `scope: ${found.scope}、取り元: ${describePluginSource(found.source)}`;
 
         try {
           await deps.stores.journal.append({

@@ -417,12 +417,26 @@ export function planPluginExtractionRemovals(
   plugin: Pick<StoredPlugin, 'name' | 'files'>,
   flags: { enableHooks: boolean; enableMcp: boolean },
 ): readonly RemovedItem[] {
+  return planPluginExtraction(plugin, flags).removed;
+}
+
+/**
+ * 展開するもの（書かれるバイト）と展開しないもの。fs に触れない。プレビューが実行ファイルの分類や
+ * 本文の検査をするときも、実際に書かれる内容（許可したキーだけで作り直した frontmatter）を見る。
+ */
+export function planPluginExtraction(
+  plugin: Pick<StoredPlugin, 'name' | 'files'>,
+  flags: { enableHooks: boolean; enableMcp: boolean },
+): {
+  readonly outputs: readonly { path: string; bytes: Uint8Array; executable: boolean }[];
+  readonly removed: readonly RemovedItem[];
+} {
   return planExtraction({
     ...plugin,
     ...flags,
     contentSha256: '',
     source: { sha: '' },
-  }).removed;
+  });
 }
 
 /** 書込み可へ戻してから消す。0o555 のままでは中身を消せず、symlink は辿らない。 */

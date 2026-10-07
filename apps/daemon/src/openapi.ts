@@ -2379,7 +2379,13 @@ export const pluginPreviewSummarySchema = z.object({
   modules: pluginPresenceSchema,
   lspServers: pluginPresenceSchema,
   mcp: pluginPresenceSchema,
-  executables: z.array(z.string()),
+  /** 実行ファイル。`extracted` は展開される（skills/agents/commands 配下）、`notExtracted` は展開されない。 */
+  executables: z.object({
+    extracted: z.array(z.string()),
+    notExtracted: z.array(z.string()),
+  }),
+  /** skills / commands の本文にシェルを実行する記法（`` !` ``・`` ```! ``）があるファイル。本文は落とさない。 */
+  shellExecution: pluginPresenceSchema,
   /** 辿らず・含めなかったもの（symlink・submodule・`.git`）。 */
   skipped: z.array(pluginPathReasonSchema),
   /** hooks と `.mcp.json` を有効にしても、展開器が落とすもの。 */
