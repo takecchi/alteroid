@@ -16,17 +16,6 @@ import { createRunnerHost, type RunnerHost } from './runner.js';
 import { createMemoryStores } from './testing.js';
 import { summarizeUsage } from './usage.js';
 
-/**
- * **`result` を出さずに終わった委譲の消費が、台帳から丸ごと落ちないこと。**
- *
- * 台帳へ入るのは `result.modelUsage` だけなので、器の入れ替え・`manager_stop`・
- * クラッシュで畳まれたセッションは1行も残さない。実測では30分走って PR をマージ
- * まで運んだ委譲が消えており、しかも一覧にも現れないので**欠けていること自体が
- * 見えなかった**。ここで固定するのは「畳む直前に累積を1回読む」ことと、その
- * 読み取りが**失敗しても畳む経路を縛らない**ことである。
- */
-
-/** SDK の `ModelUsage`（`costUSD` の綴りが他と違うので、テスト側でも本物の型で書く）。 */
 function modelUsage(costUsd: number, tokens = 100): ModelUsage {
   return {
     inputTokens: tokens,
@@ -40,7 +29,6 @@ function modelUsage(costUsd: number, tokens = 100): ModelUsage {
   };
 }
 
-/** control channel の `get_usage` の応答（`SDKControlGetUsageResponse` の要る所だけ）。 */
 function getUsageResponse(models: Record<string, ModelUsage>): unknown {
   return {
     session: {
@@ -58,21 +46,12 @@ function getUsageResponse(models: Record<string, ModelUsage>): unknown {
 }
 
 interface FakeSession {
-  /** 1ターンを成功で終える（`result.modelUsage` に累積を載せる）。 */
   report(text: string, models?: Record<string, ModelUsage>, extra?: Record<string, unknown>): void;
-  /** ストリームが終わる（`result` は出ないまま閉じる）。 */
   end(): void;
-  /** ストリームが落ちる（`result` は出ない）。 */
   crash(reason: string): void;
 }
 
 interface FakeSdkOptions {
-  /**
-   * control channel の `get_usage`。
-   *
-   * **省略すると口そのものが無いセッションになる。** SDK が改名・削除した世界を
-   * そのまま再現するためで、既存のテストの偽 `query` も同じ状態である。
-   */
   usage?: () => Promise<unknown>;
 }
 
@@ -80,12 +59,6 @@ function fakeSdk(options: FakeSdkOptions = {}): {
   fn: typeof sdkQuery;
   sessions: FakeSession[];
   usageCalls: () => number;
-  /**
-   * 起きた順（`'usage'` = 累積を読みに来た / `'close'` = セッションを閉じた）。
-   *
-   * **順序そのものが保証である。** 閉じた後の control channel からは何も取れない
-   * ので、「読んだ」だけでは足りず「閉じるより先に読んだ」でなければならない。
-   */
   order: string[];
 } {
   const sessions: FakeSession[] = [];
@@ -114,8 +87,6 @@ function fakeSdk(options: FakeSdkOptions = {}): {
         uuid: 'uuid-init',
       } as unknown as SDKMessage;
 
-      // クローンからの入力は読み捨てる（ここで見たいのは畳むときの挙動だけ）。
-      // **読み手は要る** — 誰も読まないと runner 側の `#inputStream` が起きない。
       void (async () => {
         const reader = params.prompt[Symbol.asyncIterator]();
         for (;;) {
@@ -210,20 +181,14 @@ describe('畳む直前に累積を1回読む', () => {
     const { host, events } = hostWith(fake);
     await host.start({ managerId: 'mgr-1', request: '30分走ってマージまで運ぶ', cwd: dir });
 
-    // **`result` を1つも出さないまま器が畳む**（実測で消えた形そのもの）。
     await host.shutdown();
 
     const usage = usageEvents(events);
     expect(usage).toHaveLength(1);
     expect(usage[0]?.managerId).toBe('mgr-1');
     expect(usage[0]?.models['claude-opus-4-8']?.costUsd).toBe(0.93);
-    // **ターンの境界ではないので、応答が返ったとは言わない**（欄を付けない。
-    // `runner-protocol.ts` の `answered` の doc）。
     expect(usage[0] !== undefined && 'answered' in usage[0]).toBe(false);
-    // **閉じるより先に読んでいること。** 閉じた後の control channel からは何も
-    // 取れないので、順序が逆なら実機ではいつも空振りする（テストの偽物は答える）。
     expect(fake.order).toEqual(['usage', 'close']);
-    // セッションは畳まれている（読み取りを挟んでも畳む経路は完走する）。
     expect(host.list()).toHaveLength(0);
   });
 
@@ -254,7 +219,6 @@ describe('畳む直前に累積を1回読む', () => {
 
     await host.shutdown();
 
-    // 呼びには行っている（＝読めなかったのではなく、読めた値がゼロだった）。
     expect(fake.usageCalls()).toBe(1);
     expect(usageEvents(events)).toHaveLength(0);
     expect(host.list()).toHaveLength(0);
@@ -296,7 +260,6 @@ describe('畳む直前に累積を1回読む', () => {
       await host.start({ managerId: 'mgr-6', request: '返事が返らない', cwd: dir });
 
       const shutdown = host.shutdown();
-      // 締め切り（5秒）まで進めないと畳み終わらない＝待ちは本当に効いている。
       let settled = false;
       void shutdown.then(() => {
         settled = true;
@@ -359,13 +322,11 @@ describe('台帳まで届く', () => {
     const { pool, stores } = poolWith(fake);
     const started = await pool.start({ request: '1ターン終えてから止められる', cwd: dir });
 
-    // ターン終わりの `result` で同じ累積が台帳へ入る。
     fake.sessions[0]?.report('終わった', cumulative);
     await vi.waitFor(async () => {
       expect((await stores.usage.aggregate({})).rows).toHaveLength(1);
     });
 
-    // そのうえで畳む。**累積なので増分は 0** — 行も合計も動かない。
     await pool.abort(started.managerId, '人間が止めた');
     await vi.waitFor(async () => {
       const jobs = await stores.jobs.listJobs();
@@ -379,14 +340,6 @@ describe('台帳まで届く', () => {
   });
 });
 
-/**
- * **`usage` の到着は「応答が返った」ではない（2026-09-24 の無限の往復）。**
- *
- * 枠に当たったターンは `subtype: 'success'` / `is_error: true` で返るので、
- * 台帳の問い（`isSuccessResult`）は通り、`usage` は降りる。受け手（`manager.ts`
- * の `case 'usage'`）がこれを成功と読むと、回し手が `recovered` →委譲を起こす→
- * また枠、を無限に往復する。**応答として返ったかは `answered` で別に運ぶ。**
- */
 describe('usage は応答として返ったかを別の欄で運ぶ', () => {
   it('ふつうに答えたターンは answered: true', async () => {
     const fake = fakeSdk();
@@ -413,11 +366,8 @@ describe('usage は応答として返ったかを別の欄で運ぶ', () => {
     await vi.waitFor(() => expect(usageEvents(events)).toHaveLength(1));
 
     const [event] = usageEvents(events);
-    // **消費は本物なので台帳へは降ろす**（従来どおり）。
     expect(event?.models['claude-opus-4-8']?.costUsd).toBe(0.5);
-    // **ただし応答ではない。** これが真だと回し手が「通る鍵に戻った」と読む。
     expect(event?.answered).toBe(false);
-    // 枠の知らせは従来どおり出ている（こちらが exhausted を作る側）。
     expect(events.some((e) => e.type === 'usage_notice')).toBe(true);
     await host.shutdown();
   });

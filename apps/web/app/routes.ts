@@ -22,6 +22,7 @@ export default [
     route('codex', 'routes/codex.tsx'),
     route('profile', 'routes/profile.tsx'),
     route('mcp-servers', 'routes/mcp-servers.tsx'),
+    route('plugins', 'routes/plugins.tsx'),
     route('integrations', 'routes/integrations.tsx'),
     route('dropped', 'routes/dropped.tsx'),
     route('archive', 'routes/archive.tsx'),

@@ -236,7 +236,7 @@ describe('やりとり欄のライブ領域（#3568）', () => {
         ? sse(
             [
               { event: 'open', data: { conversationId: A } },
-              { event: 'error', data: { type: 'error', message: 'だめだった' } },
+              { event: 'error', data: { type: 'error', message: 'だめだった', kind: 'other' } },
             ],
             { signal: init?.signal },
           )

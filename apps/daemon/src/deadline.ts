@@ -3,6 +3,18 @@
 // 値を短く詰めない: 詰めると、長くかかるが正当な操作が「不明」に見えるため。
 export const RUNNER_CALL_DEADLINE_MS = 60_000;
 
+// plugin の送りの期限に上限を置く: 本文は最大で約 90MB あり基準の期限では転送と展開の途中で「不明」になりうるが、無期限に待つと黙った runner の「不明」が長く掴めないため
+export const RUNNER_PLUGIN_PUSH_MAX_DEADLINE_MS = 5 * 60_000;
+
+// これより遅い回線は「返っていない」側に倒す: 90MB ÷ 0.5MB/s = 180s に基準の 60s を足して上限の内に収まる値
+const RUNNER_PLUGIN_PUSH_MIN_BYTES_PER_SECOND = 512 * 1024;
+
+// 基準がすでに上限より長ければ縮めない: テスト用に `deadlineMs` を伸ばした構成を壊さないため
+export function pluginPushDeadlineMs(baseMs: number, bodyBytes: number): number {
+  const transferMs = Math.ceil((bodyBytes * 1000) / RUNNER_PLUGIN_PUSH_MIN_BYTES_PER_SECOND);
+  return Math.max(baseMs, Math.min(RUNNER_PLUGIN_PUSH_MAX_DEADLINE_MS, baseMs + transferMs));
+}
+
 // `RunnerHttpError` の系列には乗せない: あちらは runner が返した status を持つ＝「相手が答えた」の証拠で、ここはその反対のため。
 export class RunnerUnknownError extends Error {
   readonly waitedMs: number;
