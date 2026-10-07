@@ -1,4 +1,5 @@
-import { X } from 'lucide-react';
+import { Plus, X } from 'lucide-react';
+import { useRef } from 'react';
 
 import { Button, SubmitHint, Textarea } from '../../common';
 
@@ -12,6 +13,9 @@ import { isImeComposing } from './ime';
  * - 空白だけの下書きでは確定できない（添付が残っていれば、本文が空でも確定できる）
  * - `attachments` — この発言の添付。**編集では引き継ぐ**ので、外さない限り新しい版にも付く。
  *   外す口は `onRemoveAttachment`（#3399）
+ * - `onAttach`（渡したときだけ有効）— [+]・貼り付け（ファイルだけのとき）・ドロップのどれからも呼ばれる
+ *   （入力欄 `ChatComposer` と同じ。個数や大きさの検査は呼ぶ側）。`uploading` のあいだは確定できない
+ * - `notice` — 足せなかった理由など、枠の中に出す案内
  */
 export function ChatMessageEditor({
   value,
@@ -20,6 +24,9 @@ export function ChatMessageEditor({
   onCancel,
   attachments = [],
   onRemoveAttachment,
+  onAttach,
+  uploading = false,
+  notice,
 }: {
   value: string;
   onChange: (value: string) => void;
@@ -27,8 +34,15 @@ export function ChatMessageEditor({
   onCancel: () => void;
   attachments?: readonly { id: string; name: string; sizeLabel: string }[];
   onRemoveAttachment?: (id: string) => void;
+  onAttach?: (files: File[]) => void;
+  /** 添付を上げている最中か。真のあいだは確定できない（二重に上げない）。 */
+  uploading?: boolean;
+  notice?: string;
 }) {
+  const fileInput = useRef<HTMLInputElement>(null);
   const empty = value.trim() === '' && attachments.length === 0;
+  const cannotConfirm = empty || uploading;
+  const hasFiles = (types: readonly string[] | undefined) => types?.includes('Files') === true;
   /*
    * **クリックで textarea になり、送信で確定する**
    * （チャットのメッセージ編集、#1010）。キー操作は
@@ -40,7 +54,17 @@ export function ChatMessageEditor({
    * ので、いつでも同じ下書きから開き直せる。
    */
   return (
-    <div className="flex w-full min-w-64 flex-col gap-2">
+    <div
+      className="flex w-full min-w-64 flex-col gap-2"
+      onDragOver={(event) => {
+        if (onAttach !== undefined && hasFiles(event.dataTransfer?.types)) event.preventDefault();
+      }}
+      onDrop={(event) => {
+        if (onAttach === undefined || !hasFiles(event.dataTransfer?.types)) return;
+        event.preventDefault();
+        onAttach([...event.dataTransfer.files]);
+      }}
+    >
       <Textarea
         autoFocus
         // 元の吹き出しの高さを下回らない: 行数ぶん（最低2行）で開き、
@@ -60,9 +84,22 @@ export function ChatMessageEditor({
             return;
           }
         }}
+        onPaste={(event) => {
+          // ファイルだけが入っているときだけ引き取る（`ChatComposer` と同じ）。
+          const files = [...event.clipboardData.files];
+          if (onAttach === undefined || files.length === 0) return;
+          if (event.clipboardData.getData('text/plain') !== '') return;
+          event.preventDefault();
+          onAttach(files);
+        }}
         onSubmitShortcut={onConfirm}
-        submitDisabled={empty}
+        submitDisabled={cannotConfirm}
       />
+      {notice !== undefined && (
+        <p role="status" className="text-xs whitespace-pre-line text-warn">
+          {notice}
+        </p>
+      )}
       {attachments.length > 0 && (
         <ul aria-label="この発言の添付" className="flex flex-wrap gap-2">
           {attachments.map((item) => (
@@ -80,6 +117,7 @@ export function ChatMessageEditor({
                 <Button
                   size="sm"
                   variant="ghost"
+                  disabled={uploading}
                   aria-label={`${item.name} を外す`}
                   onClick={() => onRemoveAttachment(item.id)}
                 >
@@ -91,7 +129,32 @@ export function ChatMessageEditor({
         </ul>
       )}
       <div className="flex items-center gap-2">
-        <Button size="sm" variant="primary" disabled={empty} onClick={onConfirm}>
+        {onAttach !== undefined && (
+          <>
+            <input
+              ref={fileInput}
+              type="file"
+              multiple
+              hidden
+              aria-label="添えるファイルを選ぶ"
+              onChange={(event) => {
+                const files = [...(event.target.files ?? [])];
+                event.target.value = '';
+                if (files.length > 0) onAttach(files);
+              }}
+            />
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={uploading}
+              aria-label="ファイルを添付"
+              onClick={() => fileInput.current?.click()}
+            >
+              <Plus className="size-3.5" aria-hidden />
+            </Button>
+          </>
+        )}
+        <Button size="sm" variant="primary" disabled={cannotConfirm} onClick={onConfirm}>
           確定
         </Button>
         <Button size="sm" variant="ghost" onClick={onCancel}>

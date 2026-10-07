@@ -1,5 +1,5 @@
 /**
- * チャットの入力欄に書きかけの本文を、会話ごとに `sessionStorage` へ残す（#3400）。
+ * チャットの入力欄に書きかけの本文を、会話ごとに `sessionStorage` へ残す。
  *
  * **残すのは本文だけである**（ほかに、入力欄へ戻した文の印と、発言ごとの編集の書きかけを別の鍵で残す。
  * 下の `ChatDraftMark`・`StoredEditDraft`。承認カードの書きかけもログアウトで一緒に消す）。添付（`File` は保存できない）・承認カードの回答・編集の続きの状態は
@@ -140,6 +140,11 @@ export function saveChatDraftMark(
 export interface StoredEditDraft {
   text: string;
   attachments: MessageAttachment[];
+  /**
+   * 編集で足したファイル（`File`。保存できない）の名前（#3779）。再読み込みで実体は戻せないので、
+   * 名前だけ残し、開き直したときに「外れた」と案内する。
+   */
+  lostNames?: string[];
 }
 
 function isAttachmentMeta(value: unknown): value is MessageAttachment {
@@ -152,11 +157,12 @@ function parseEditDraft(raw: string): StoredEditDraft | undefined {
   try {
     const value: unknown = JSON.parse(raw);
     if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
-    const { text, attachments } = value as Record<string, unknown>;
+    const { text, attachments, lostNames } = value as Record<string, unknown>;
     if (typeof text !== 'string') return undefined;
     const list = Array.isArray(attachments) ? attachments : [];
     if (!list.every(isAttachmentMeta)) return undefined;
-    return { text, attachments: list };
+    const lost = Array.isArray(lostNames) ? lostNames.filter((n) => typeof n === 'string') : [];
+    return { text, attachments: list, ...(lost.length > 0 ? { lostNames: lost } : {}) };
   } catch {
     return undefined;
   }
@@ -215,6 +221,6 @@ export function clearChatDrafts(): void {
     }
     for (const key of keys) target.removeItem(key);
   } catch {
-    // 同上。
+    // 保存先が使えない。何もしない。
   }
 }

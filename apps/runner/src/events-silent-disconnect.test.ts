@@ -296,6 +296,88 @@ describe('Outbox.recordSent / sentSince（#275）', () => {
     expect(outbox.sentSince(0).map((i) => i.seq)).toEqual([s1, s2, s3]);
   });
 
+  it('同じ連番を2度記録しても控えには1件しか入らない。間に新しい連番があっても同じ（#3808）', () => {
+    const outbox = new Outbox();
+    const e1: RunnerEvent = { type: 'session', managerId: 'a', sessionId: '1' };
+    const e2: RunnerEvent = { type: 'session', managerId: 'a', sessionId: '2' };
+    const at = '2026-01-01T00:00:00.000Z';
+    outbox.recordSent(e1, 1, at);
+    outbox.recordSent(e2, 2, at);
+    outbox.recordSent(e1, 1, at);
+    outbox.recordSent(e2, 2, at);
+    expect(outbox.sentSince(0).map((i) => i.seq)).toEqual([1, 2]);
+  });
+
+  /**
+   * **#3808: 読み返して書いた出来事を、控えへ積み直さない。** 1本目で書いたが届かず、
+   * 2本目（読み返し）も届かずに切れ、3本目が同じ `Last-Event-ID` で繋ぐ。積み直すと
+   * 控えに同じ連番が2つ入り、3本目で同じ出来事が2回流れる。
+   */
+  it('読み返しの書き込みも無音で切れ続けても、3本目で同じ連番は1回だけ流れ、控えは増えない（#3808）', async () => {
+    const host = newHost();
+    const outbox = new Outbox();
+    const event: RunnerEvent = { type: 'session', managerId: 'mgr-dup', sessionId: 'sess-dup' };
+    const seq = outbox.push(event);
+
+    const realWriteSSE = SSEStreamingApi.prototype.writeSSE;
+    let eventWrites = 0;
+    // 3本目からは切らない。それまでは、イベントを書く瞬間に相手の reader を切る。
+    let cancelCurrent: (() => Promise<void>) | null = null;
+    const spy = vi.spyOn(SSEStreamingApi.prototype, 'writeSSE').mockImplementation(async function (
+      this: SSEStreamingApi,
+      message: SSEMessage,
+    ) {
+      if (message.event !== 'hello' && cancelCurrent !== null) {
+        const cancel = cancelCurrent;
+        cancelCurrent = null;
+        await cancel();
+      }
+      const result = await realWriteSSE.call(this, message);
+      if (message.event !== 'hello') eventWrites++;
+      return result;
+    });
+
+    try {
+      const app = createRunnerApp({
+        host,
+        outbox,
+        tokenSha256: TOKEN_SHA256,
+        sseHeartbeatMs: 60_000,
+      });
+
+      const open = async (headers: Record<string, string>) => {
+        const res = await app.request('/events', { headers });
+        if (res.body === null) throw new Error('SSE の応答に本文が無い');
+        return res.body.getReader();
+      };
+
+      // 1本目: 書いたが届かない。
+      const first = await open(bearer());
+      cancelCurrent = () => first.cancel();
+      await expect.poll(() => eventWrites, { timeout: 1000 }).toBe(1);
+      await expect.poll(() => outbox.pending, { timeout: 1000 }).toBe(0);
+
+      // 2本目: 読み返して書くが、これも届かない。
+      const second = await open(bearer({ 'Last-Event-ID': String(seq - 1) }));
+      cancelCurrent = () => second.cancel();
+      await expect.poll(() => eventWrites, { timeout: 1000 }).toBe(2);
+      // 書き込みの直後の `recordSent` まで進ませる（実時間の待ちではない）。
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(outbox.sentSince(seq - 1).map((i) => i.seq)).toEqual([seq]);
+
+      // 3本目: 同じ申告。同じ出来事が1回だけ流れる。
+      const third = await open(bearer({ 'Last-Event-ID': String(seq - 1) }));
+      const seen = await readUntil(third, JSON.stringify(event), 1000);
+      expect(seen.split(JSON.stringify(event)).length - 1).toBe(1);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(outbox.sentSince(seq - 1).map((i) => i.seq)).toEqual([seq]);
+      await third.cancel();
+    } finally {
+      spy.mockRestore();
+      await host.shutdown();
+    }
+  });
+
   /**
    * **#3036: 箱が一度も振っていない連番（前の runner の高い値）を申告されたら、控えを
    * 全部返す。** 返さないと、runner が入れ替わって連番が1から数え直しになったあと、
