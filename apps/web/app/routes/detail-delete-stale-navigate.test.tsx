@@ -1,0 +1,292 @@
+// @vitest-environment jsdom
+/**
+ * 記憶・やり方・マネージャーの詳細で、削除（停止）の応答を待つあいだに別の項目へ移ったとき、
+ * 成功のあとに一覧へ飛ばさない（#3802）。
+ *
+ * 一覧と詳細が並ぶ本番と同じ入れ子（親の経路 + 子の `:slug` / `:id`）で、DELETE をゲートで
+ * 止めたまま別の項目を開き、表示を待ってから通す。**移っていなければ従来どおり一覧へ移る**
+ * 歯も同じ形で置く（直し方が「常に移らない」へ倒れないように）。
+ */
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { createMemoryRouter, RouterProvider, useParams } from 'react-router';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+
+import type { ManagerSummary, MemoryDocument, Practice } from '@alteroid/logic';
+import { gate, json, Providers, storeTestBaseUrl } from '~/test-support';
+
+import type { Route as ManagerRoute } from './+types/manager-detail';
+import type { Route as MemoryRoute } from './+types/memory-detail';
+import type { Route as PracticeRoute } from './+types/practice-detail';
+import ManagerDetail, { clientLoader as managerLoader } from './manager-detail';
+import Managers from './managers';
+import MemoryDetail, { clientLoader as memoryLoader } from './memory-detail';
+import Memory from './memory';
+import PracticeDetail, { clientLoader as practiceLoader } from './practice-detail';
+import Practices from './practices';
+
+let originalFetch: typeof fetch;
+
+beforeEach(() => {
+  originalFetch = globalThis.fetch;
+  localStorage.clear();
+  storeTestBaseUrl();
+});
+
+afterEach(() => {
+  cleanup();
+  globalThis.fetch = originalFetch;
+});
+
+/** DELETE だけ `release` まで止める。それ以外は `handle` に任せ、知らない URL は繋がらない。 */
+function stubWithGatedDelete(handle: (url: string) => Response | undefined) {
+  const delete_ = gate();
+  let deleteSeen = false;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const request = input instanceof Request ? input : new Request(input, init);
+    if (request.method === 'DELETE') {
+      deleteSeen = true;
+      await delete_.promise;
+      return json({ outcome: 'stopped', detail: '止めた。' });
+    }
+    const response = handle(request.url);
+    if (response !== undefined) return response;
+    throw new TypeError(`Failed to fetch: ${request.url}`);
+  }) as typeof fetch;
+  return { release: delete_.open, deleteSeen: () => deleteSeen };
+}
+
+function mount(router: ReturnType<typeof createMemoryRouter>) {
+  render(
+    <Providers>
+      <RouterProvider router={router} />
+    </Providers>,
+  );
+  return router;
+}
+
+async function settle(router: { state: { location: { pathname: string } } }, pathname: string) {
+  // 一覧へ移る経路は非同期（navigate 後の描画）。移らないことを見るので、少し待って確かめ直す。
+  await waitFor(() => expect(router.state.location.pathname).toBe(pathname));
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  expect(router.state.location.pathname).toBe(pathname);
+}
+
+function memoryDoc(slug: string): MemoryDocument {
+  return {
+    slug,
+    title: slug,
+    updatedAt: '2026-08-22T00:00:00.000Z',
+    createdAt: { kind: 'unknown' },
+    bytes: 42,
+    frontmatter: { kind: 'none' },
+    kind: 'fact',
+    descriptionFreshness: { kind: 'absent' },
+    content: `# ${slug}の本文`,
+  };
+}
+
+describe('記憶の削除', () => {
+  function setup() {
+    const docs = [memoryDoc('aaa'), memoryDoc('bbb')];
+    const gated = stubWithGatedDelete((url) => {
+      const one = /\/memory\/(aaa|bbb)(\?|$)/.exec(url);
+      if (one !== null) return json({ document: docs.find((d) => d.slug === one[1]) });
+      if (url.includes('/memory')) {
+        return json({ documents: docs.map((d) => ({ ...d, content: undefined })) });
+      }
+      return undefined;
+    });
+    function DetailRoute() {
+      const { slug } = useParams();
+      const loaderData = memoryLoader({ params: { slug } } as MemoryRoute.ClientLoaderArgs);
+      return <MemoryDetail {...({ loaderData } as MemoryRoute.ComponentProps)} />;
+    }
+    const router = mount(
+      createMemoryRouter(
+        [
+          {
+            path: '/memory',
+            Component: Memory,
+            children: [{ path: ':slug', Component: DetailRoute }],
+          },
+        ],
+        { initialEntries: ['/memory/aaa'] },
+      ),
+    );
+    return { router, ...gated };
+  }
+
+  async function askDelete() {
+    const detail = await screen.findByRole('region', { name: '記憶の中身' });
+    fireEvent.click(await within(detail).findByRole('button', { name: '削除' }));
+    fireEvent.click(await screen.findByRole('button', { name: '削除する' }));
+  }
+
+  it('応答待ちに別の記憶へ移ったら、成功しても移った先のまま', async () => {
+    const { router, release, deleteSeen } = setup();
+    await askDelete();
+    await waitFor(() => expect(deleteSeen()).toBe(true));
+
+    await router.navigate('/memory/bbb');
+    expect(await screen.findByRole('heading', { level: 1, name: 'bbbの本文' })).toBeTruthy();
+    release();
+
+    await settle(router, '/memory/bbb');
+  });
+
+  it('移っていなければ、成功のあと一覧へ移る', async () => {
+    const { router, release, deleteSeen } = setup();
+    await askDelete();
+    await waitFor(() => expect(deleteSeen()).toBe(true));
+    release();
+
+    await settle(router, '/memory');
+  });
+});
+
+describe('やり方の削除', () => {
+  function practice(slug: string): Practice {
+    return {
+      slug,
+      kind: 'procedure',
+      title: `${slug}の手順`,
+      createdAt: '2026-08-01T00:00:00.000Z',
+      updatedAt: '2026-08-22T00:00:00.000Z',
+      chars: 10,
+      content: `# ${slug}の本文`,
+    };
+  }
+
+  function setup() {
+    const all = [practice('aaa'), practice('bbb')];
+    const gated = stubWithGatedDelete((url) => {
+      if (/\/practices\/[^/?]+\/versions/.test(url)) return json({ versions: [] });
+      const one = /\/practices\/(aaa|bbb)(\?|$)/.exec(url);
+      if (one !== null) return json({ practice: all.find((d) => d.slug === one[1]) });
+      if (url.includes('/practices')) {
+        return json({ practices: all.map((d) => ({ ...d, content: undefined })) });
+      }
+      return undefined;
+    });
+    function DetailRoute() {
+      const { slug } = useParams();
+      const loaderData = practiceLoader({ params: { slug } } as PracticeRoute.ClientLoaderArgs);
+      return <PracticeDetail {...({ loaderData } as PracticeRoute.ComponentProps)} />;
+    }
+    const router = mount(
+      createMemoryRouter(
+        [
+          {
+            path: '/practices',
+            Component: Practices,
+            children: [{ path: ':slug', Component: DetailRoute }],
+          },
+        ],
+        { initialEntries: ['/practices/aaa'] },
+      ),
+    );
+    return { router, ...gated };
+  }
+
+  async function askDelete() {
+    const detail = await screen.findByRole('region', { name: 'やり方の中身' });
+    fireEvent.click(await within(detail).findByRole('button', { name: '削除' }));
+    fireEvent.click(await screen.findByRole('button', { name: '削除する' }));
+  }
+
+  it('応答待ちに別のやり方へ移ったら、成功しても移った先のまま', async () => {
+    const { router, release, deleteSeen } = setup();
+    await askDelete();
+    await waitFor(() => expect(deleteSeen()).toBe(true));
+
+    await router.navigate('/practices/bbb');
+    expect(await screen.findByRole('heading', { level: 1, name: 'bbbの本文' })).toBeTruthy();
+    release();
+
+    await settle(router, '/practices/bbb');
+  });
+
+  it('移っていなければ、成功のあと一覧へ移る', async () => {
+    const { router, release, deleteSeen } = setup();
+    await askDelete();
+    await waitFor(() => expect(deleteSeen()).toBe(true));
+    release();
+
+    await settle(router, '/practices');
+  });
+});
+
+describe('マネージャーの停止', () => {
+  const A: ManagerSummary = {
+    managerId: 'mgr-a',
+    status: 'done',
+    live: true,
+    cwd: '/work/a',
+    request: '一つ目の依頼の要旨',
+    startedAt: '2026-08-16T03:00:00.000Z',
+    updatedAt: '2026-08-16T03:15:00.000Z',
+    waiting: [],
+  };
+  const B: ManagerSummary = {
+    ...A,
+    managerId: 'mgr-b',
+    cwd: '/work/b',
+    request: '二つ目の依頼の要旨',
+  };
+
+  function setup() {
+    const gated = stubWithGatedDelete((url) => {
+      const one = /\/managers\/(mgr-[ab])(\?|$)/.exec(url);
+      if (one !== null) return json({ manager: [A, B].find((m) => m.managerId === one[1]) });
+      if (url.includes('/managers')) return json({ managers: [A, B] });
+      return undefined;
+    });
+    function DetailRoute() {
+      const { id } = useParams();
+      const loaderData = managerLoader({ params: { id } } as ManagerRoute.ClientLoaderArgs);
+      return <ManagerDetail {...({ loaderData } as ManagerRoute.ComponentProps)} />;
+    }
+    const router = mount(
+      createMemoryRouter(
+        [
+          {
+            path: '/managers',
+            Component: Managers,
+            children: [{ path: ':id', Component: DetailRoute }],
+          },
+        ],
+        { initialEntries: ['/managers/mgr-a'] },
+      ),
+    );
+    return { router, ...gated };
+  }
+
+  async function askStop() {
+    const detail = await screen.findByRole('region', { name: 'マネージャーの詳細' });
+    fireEvent.click(await within(detail).findByRole('button', { name: '停止する' }));
+    const dialog = await screen.findByRole('alertdialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: '停止する' }));
+  }
+
+  it('応答待ちに別のマネージャーへ移ったら、成功しても移った先のまま', async () => {
+    const { router, release, deleteSeen } = setup();
+    await askStop();
+    await waitFor(() => expect(deleteSeen()).toBe(true));
+
+    await router.navigate('/managers/mgr-b');
+    const detail = screen.getByRole('region', { name: 'マネージャーの詳細' });
+    expect(await within(detail).findByRole('button', { name: '停止する' })).toBeTruthy();
+    release();
+
+    await settle(router, '/managers/mgr-b');
+  });
+
+  it('移っていなければ、成功のあと一覧へ移る', async () => {
+    const { router, release, deleteSeen } = setup();
+    await askStop();
+    await waitFor(() => expect(deleteSeen()).toBe(true));
+    release();
+
+    await settle(router, '/managers');
+  });
+});
