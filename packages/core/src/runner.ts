@@ -1306,65 +1306,85 @@ class Host implements RunnerHost {
     reusedLiveSession: boolean;
     sessionGeneration: string;
   }> {
-    const alive = this.#sessions.get(command.managerId);
-    if (alive) {
-      alive.checkFence(command.lease);
-      // 生きている（畳み中でない）セッションへは、一言を流して短絡する。畳み中なら畳み終わるのを待ち、
-      // 名簿に居るものを取り直す。居なくなるまで繰り返してから、下の「作り直し」へ落ちる。
-      let current: RunnerSession | undefined = alive;
-      while (current !== undefined) {
-        if (!current.stopping) {
-          if (command.message === undefined) {
-            return { cwd: current.cwd, reusedLiveSession: true, ...this.#generationOf(current) };
+    let alive = this.#sessions.get(command.managerId);
+    // 外側のループは、作り直しの枝で添付を置く間に別の resume が先にセッションを作っていたとき、
+    // 最初の分岐（短絡・畳み待ち）へ戻って合流するためのもの（Issue #3806）。
+    for (;;) {
+      if (alive) {
+        alive.checkFence(command.lease);
+        // 生きている（畳み中でない）セッションへは、一言を流して短絡する。畳み中なら畳み終わるのを待ち、
+        // 名簿に居るものを取り直す。居なくなるまで繰り返してから、下の「作り直し」へ落ちる。
+        let current: RunnerSession | undefined = alive;
+        while (current !== undefined) {
+          if (!current.stopping) {
+            if (command.message === undefined) {
+              return { cwd: current.cwd, reusedLiveSession: true, ...this.#generationOf(current) };
+            }
+            const placing = this.#attachmentInput(
+              command.managerId,
+              command.message,
+              command.attachments,
+            );
+            const input = placing instanceof Promise ? await placing : placing;
+            // **置いている間に畳まれたら、積まずに畳み待ちへ落ちる**（Issue #3235。`send` の同じ見直しと揃える）。
+            // `push()` は畳み済みなら黙って捨てるので、見直さずに `reusedLiveSession: true` を返すと、
+            // 追加の一言が誰にも届かないのに成功と答えることになる。置いたものは畳みの `onClosed` が消すので、
+            // 作り直しの経路が置き直す（`resumePlacing`）。
+            if (!current.stopping && this.#sessions.get(command.managerId) === current) {
+              current.push(input.text, input.images);
+              return { cwd: current.cwd, reusedLiveSession: true, ...this.#generationOf(current) };
+            }
           }
-          const placing = this.#attachmentInput(
-            command.managerId,
-            command.message,
-            command.attachments,
-          );
-          const input = placing instanceof Promise ? await placing : placing;
-          // **置いている間に畳まれたら、積まずに畳み待ちへ落ちる**（Issue #3235。`send` の同じ見直しと揃える）。
-          // `push()` は畳み済みなら黙って捨てるので、見直さずに `reusedLiveSession: true` を返すと、
-          // 追加の一言が誰にも届かないのに成功と答えることになる。置いたものは畳みの `onClosed` が消すので、
-          // 作り直しの経路が置き直す（`resumePlacing`）。
-          if (!current.stopping && this.#sessions.get(command.managerId) === current) {
-            current.push(input.text, input.images);
-            return { cwd: current.cwd, reusedLiveSession: true, ...this.#generationOf(current) };
+          try {
+            await current.stop('resume 待ちのため、畳み中のセッションの完了を待った。');
+          } catch {
+            // 待ちたいのは畳みの完了であって成否ではない。ここで投げ直すと
+            // resume 自体が失敗したように見えてしまう。
           }
-        }
-        try {
-          await current.stop('resume 待ちのため、畳み中のセッションの完了を待った。');
-        } catch {
-          // 待ちたいのは畳みの完了であって成否ではない。ここで投げ直すと
-          // resume 自体が失敗したように見えてしまう。
-        }
-        const next = this.#sessions.get(command.managerId);
-        if (next === current) {
-          // 畳みが途中の例外で `#onClosed()` まで届かず、畳み済みの古い
-          // セッションが名簿に残ったままだった。手で取り除いて作り直す。
-          this.#sessions.delete(command.managerId);
-          current = undefined;
-        } else {
-          // 別のセッションが居れば、並行した resume が先に作り直していた。そちらへ合流する
-          // （ここで作り直すと同じ managerId のセッションが2本開く）。居なければ作り直しへ。
-          current = next;
+          const next = this.#sessions.get(command.managerId);
+          if (next === current) {
+            // 畳みが途中の例外で `#onClosed()` まで届かず、畳み済みの古い
+            // セッションが名簿に残ったままだった。手で取り除いて作り直す。
+            this.#sessions.delete(command.managerId);
+            current = undefined;
+          } else {
+            // 別のセッションが居れば、並行した resume が先に作り直していた。そちらへ合流する
+            // （ここで作り直すと同じ managerId のセッションが2本開く）。居なければ作り直しへ。
+            current = next;
+          }
         }
       }
+      // 添付は、セッションを作る前に置く（`start` と同じ理由）。`message` が無ければ使わない。
+      const resumePlacing =
+        command.message === undefined
+          ? undefined
+          : this.#attachmentInput(command.managerId, command.message, command.attachments);
+      const resumeInput = resumePlacing instanceof Promise ? await resumePlacing : resumePlacing;
+      // **置いている間に、並行した resume が先に作り直していたら、作らずに合流する**（Issue #3806）。
+      // 見直さずに作ると、同じ managerId のセッションが2本開き、先の1本は名簿から外れて孤児になる。
+      // 合流は最初の分岐へ戻って評価し直す（短絡・畳み待ち。添付はそこで置き直す）。
+      // **置いた添付は消さない**: 置き場は managerId 単位で、合流先のセッションの添付と同じ場所なので
+      // `#removeAttachments` を呼ぶと合流先の分まで消える。合流先の置き直しは同じ id・名前で上書きし、
+      // 残りは合流先セッションの `onClosed` が置き場ごと消す。
+      const raced = this.#sessions.get(command.managerId);
+      if (raced !== undefined) {
+        alive = raced;
+        continue;
+      }
+      const session = this.#create(
+        command.managerId,
+        command.request,
+        command.cwd,
+        command.provider,
+      );
+      // **この Host インスタンスにとっては初めて見るセッション**（器の入れ替え・
+      // デーモンの再起動後の resume、または上の待ちを経て名簿から消えた直後）
+      // なので、比べる前の世代が無い。拒む判定は起きず、覚えるだけになる
+      // （`start` と同じ形）。
+      session.checkFence(command.lease);
+      session.resume(command.sessionId, command.entries, resumeInput?.text, resumeInput?.images);
+      return { cwd: session.cwd, reusedLiveSession: false, ...this.#generationOf(session) };
     }
-    // 添付は、セッションを作る前に置く（`start` と同じ理由）。`message` が無ければ使わない。
-    const resumePlacing =
-      command.message === undefined
-        ? undefined
-        : this.#attachmentInput(command.managerId, command.message, command.attachments);
-    const resumeInput = resumePlacing instanceof Promise ? await resumePlacing : resumePlacing;
-    const session = this.#create(command.managerId, command.request, command.cwd, command.provider);
-    // **この Host インスタンスにとっては初めて見るセッション**（器の入れ替え・
-    // デーモンの再起動後の resume、または上の待ちを経て名簿から消えた直後）
-    // なので、比べる前の世代が無い。拒む判定は起きず、覚えるだけになる
-    // （`start` と同じ形）。
-    session.checkFence(command.lease);
-    session.resume(command.sessionId, command.entries, resumeInput?.text, resumeInput?.images);
-    return { cwd: session.cwd, reusedLiveSession: false, ...this.#generationOf(session) };
   }
 
   /** `start` / `resume` の応答へ載せるセッションの世代（Issue #3170）。`#create` を通ったセッションには必ず在る。 */
