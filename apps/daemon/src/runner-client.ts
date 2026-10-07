@@ -26,7 +26,12 @@ import type {
 import { request as httpRequest } from 'node:http';
 import { Readable } from 'node:stream';
 
-import { RUNNER_CALL_DEADLINE_MS, RunnerUnknownError, settleWithinDeadline } from './deadline.js';
+import {
+  pluginPushDeadlineMs,
+  RUNNER_CALL_DEADLINE_MS,
+  RunnerUnknownError,
+  settleWithinDeadline,
+} from './deadline.js';
 
 import {
   DEFAULT_SSE_HEARTBEAT_MS,
@@ -1910,10 +1915,16 @@ class HttpRunner implements RunnerClient {
   async setPlugin(plugin: RunnerPlugin): Promise<RunnerPluginFingerprintEntry> {
     let response: Response;
     try {
+      // 本文は base64 で約 4/3 倍になる。期限は本文の大きさに見合うぶんだけ延ばす（他の口は基準のまま）。
+      const bodyBytes = Math.ceil(
+        (plugin.files.reduce((sum, file) => sum + file.content.byteLength, 0) * 4) / 3,
+      );
       response = await this.#call(
         'POST',
         `/plugins/${encodeURIComponent(plugin.name)}`,
         encodeRunnerPlugin(plugin),
+        undefined,
+        pluginPushDeadlineMs(this.#deadlineMs, bodyBytes),
       );
     } catch (error) {
       if (error instanceof RunnerHttpError && error.status === 404) {
@@ -2062,8 +2073,9 @@ class HttpRunner implements RunnerClient {
     path: string,
     body?: unknown,
     signal?: AbortSignal,
+    deadlineMs?: number,
   ): Promise<Response> {
-    const waitedMs = this.#deadlineMs;
+    const waitedMs = deadlineMs ?? this.#deadlineMs;
     const settled = await settleWithinDeadline(
       this.#callWithoutDeadline(method, path, body, signal),
       waitedMs,

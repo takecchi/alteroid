@@ -1030,6 +1030,12 @@ export interface ManagerSessionOptionsRequest {
    * （次に開くセッション —— 新しい委譲と、resume・開き直し —— から効く）。
    */
   mcpServers?: Readonly<Record<string, McpServerConfig>>;
+  /**
+   * runner が展開した plugin（`Options.plugins` の `type: 'local'` へ写す）。省略・空なら欄ごと省く。
+   * **`agents`（作業者）には何も足さない** — 作業者は親のセッションから受け継ぐ見込みで、
+   * `AgentDefinition.skills` は名前の配列しか取れず、列挙すると増えた分に追いつかない。
+   */
+  plugins?: readonly ClonePluginRequest[];
 }
 
 /** マネージャーへ渡す `Options`。組み立ての知識は `runner.ts` の旧 `#buildOptions` から移した。 */
@@ -1057,6 +1063,7 @@ export function buildManagerSessionOptions(request: ManagerSessionOptionsRequest
     onPermissionDenied,
     managerAutoMemoryEnabled,
     mcpServers,
+    plugins,
   } = request;
 
   return {
@@ -1121,6 +1128,7 @@ export function buildManagerSessionOptions(request: ManagerSessionOptionsRequest
     ...(mcpServers === undefined || Object.keys(mcpServers).length === 0
       ? {}
       : { mcpServers: { ...mcpServers } }),
+    ...clonePluginOptions(plugins),
     // 参照系は `.claude/skills/` に置いてある（AGENTS.md「書く先を決める」）。
     // **`'all'` を明示する。** 省くと SDK 側は何も設定せず CLI の既定に委ねる
     // ことになり、器によって引けるものが変わる。名前の列挙で絞らないのは

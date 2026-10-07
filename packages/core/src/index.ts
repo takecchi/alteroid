@@ -839,6 +839,7 @@ export {
   WORKER_MODEL_ENV_KEY,
   createRunnerHost,
   placedManagerModels,
+  RunnerPluginExtractError,
   resolveManagerModel,
   resolveWorkerModel,
   type RunnerChildUser,
@@ -990,8 +991,10 @@ export {
   type PluginsRunnerResult,
 } from './plugin-distribution-service.js';
 export {
+  defaultRunnerPluginsRoot,
   extractPluginsForScopes,
   PLUGIN_SCOPES_FOR_CLONE,
+  pruneExtractedPluginDirs,
   pruneExtractedPluginsAgainstStore,
   type ExtractForScopesResult,
   type PluginExtractFailure,

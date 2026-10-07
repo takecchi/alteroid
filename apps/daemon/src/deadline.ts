@@ -37,6 +37,31 @@
 export const RUNNER_CALL_DEADLINE_MS = 60_000;
 
 /**
+ * plugin の送り（`POST /plugins/:name`）の期限の上限。本文は最大で約 90MB になるので、
+ * {@link RUNNER_CALL_DEADLINE_MS} のままでは転送と展開の途中で「不明」になりうる。
+ *
+ * **上限を決めているのは、返らない runner を無期限に待たないためである。** 5 分を超えて返らないなら
+ * 「遅い」ではなく「返っていない」とみなす（名簿が30秒で落ちたと見なすのの10倍）。値を過大にすると
+ * 黙った runner の「不明」が長く掴めない。
+ */
+export const RUNNER_PLUGIN_PUSH_MAX_DEADLINE_MS = 5 * 60_000;
+
+/**
+ * 転送の下限の速さ（バイト/秒）。**これより遅い回線は「返っていない」側に倒す。** 約 90MB が
+ * 基準の期限（60s）と足して上限の内に収まる値（90MB ÷ 0.5MB/s = 180s、足して 240s）。
+ */
+const RUNNER_PLUGIN_PUSH_MIN_BYTES_PER_SECOND = 512 * 1024;
+
+/**
+ * plugin の送りの期限。基準の期限へ、本文の大きさに見合う転送の余裕を足し、上限で頭打ちにする。
+ * 基準がすでに上限より長ければ縮めない（テスト用に `deadlineMs` を伸ばした構成を壊さない）。
+ */
+export function pluginPushDeadlineMs(baseMs: number, bodyBytes: number): number {
+  const transferMs = Math.ceil((bodyBytes * 1000) / RUNNER_PLUGIN_PUSH_MIN_BYTES_PER_SECOND);
+  return Math.max(baseMs, Math.min(RUNNER_PLUGIN_PUSH_MAX_DEADLINE_MS, baseMs + transferMs));
+}
+
+/**
  * 期限内に応答が返らなかった。**言えるのはそれだけである。**
  *
  * **「失敗した」でも「届かなかった」でも「runner が死んだ」でもない。** 制御面の

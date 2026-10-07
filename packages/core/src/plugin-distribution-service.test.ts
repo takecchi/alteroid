@@ -1,5 +1,10 @@
 import type { Options, Query, SDKMessage, query as sdkQuery } from '@anthropic-ai/claude-agent-sdk';
+import { chmodSync, lstatSync, readdirSync } from 'node:fs';
+import { join } from 'node:path';
+
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { makeTempDirSync } from '../../../vitest.tmpdir.js';
 
 import { createManagerPool, type ManagerPool } from './manager.js';
 import { createPluginDistributionService } from './plugin-distribution-service.js';
@@ -73,10 +78,27 @@ interface Setup {
   service: ReturnType<typeof createPluginDistributionService>;
 }
 
+const pluginBases: string[] = [];
+
+/** 展開先は読み取り専用（0o555）なので、掃除が消せるように書込み可へ戻す。 */
+function makeWritableSync(dir: string): void {
+  const info = lstatSync(dir, { throwIfNoEntry: false });
+  if (info === undefined || !info.isDirectory()) return;
+  chmodSync(dir, 0o700);
+  for (const name of readdirSync(dir)) makeWritableSync(join(dir, name));
+}
+
+afterEach(() => {
+  for (const base of pluginBases.splice(0)) makeWritableSync(base);
+});
+
 function setup(): Setup {
   const stores = createMemoryStores();
+  const pluginsBase = makeTempDirSync('alteroid-plugin-distribution-');
+  pluginBases.push(pluginsBase);
   const runner = createLocalRunner({
     runnerId: 'runner-test',
+    pluginsRoot: join(pluginsBase, 'alteroid-plugins'),
     workspacePath: '/work/project',
     queryFn: fakeSdk(),
     env: { PATH: '/usr/bin' },
@@ -381,7 +403,8 @@ describe('plugin の降ろし直しと挑み直し（名乗り）', () => {
 
     broken = false;
     await vi.advanceTimersByTimeAsync(10_000);
-    expect(s.pool.pushHealthOf('runner-test')?.plugins?.status).toBe('ok');
+    // 展開は実際のファイル I/O なので、偽の時計を進めただけでは終わらない。
+    await vi.waitFor(() => expect(s.pool.pushHealthOf('runner-test')?.plugins?.status).toBe('ok'));
     expect((await s.runner.plugins?.())?.plugins.map((p) => p.name)).toEqual(['p-all']);
     await s.pool.stop();
   });
@@ -434,7 +457,7 @@ describe('plugin の降ろし直しと挑み直し（名乗り）', () => {
 
     broken = false;
     await vi.advanceTimersByTimeAsync(10 * 60_000);
-    expect(s.pool.pushHealthOf('runner-test')?.plugins?.status).toBe('ok');
+    await vi.waitFor(() => expect(s.pool.pushHealthOf('runner-test')?.plugins?.status).toBe('ok'));
     await s.pool.stop();
   });
 });

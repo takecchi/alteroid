@@ -8,6 +8,8 @@ import {
   createCredentialStore,
   createProfileVessel,
   createRunnerHost,
+  defaultRunnerPluginsRoot,
+  pruneExtractedPluginDirs,
   DEFAULT_PROFILE_PATH,
   installUncaughtNet,
   MANAGER_PROVIDER_ENV_KEY,
@@ -429,6 +431,25 @@ export async function main(): Promise<void> {
     withheldEnvKeys: WITHHELD_ENV_KEYS,
   });
 
+  /**
+   * 受けた plugin の展開先。`/workspace` は子の持ち物なので置かない。置き場が volume の構成では
+   * 前の器の展開物が残るので、起動時にまとめて消す（この時点では読むセッションも、書く途中の展開も無い）。
+   */
+  const pluginsRoot = envValue(process.env, 'ALTEROID_PLUGINS_DIR') ?? defaultRunnerPluginsRoot();
+  const prunedPlugins = await pruneExtractedPluginDirs(pluginsRoot, new Set()).catch(
+    (error: unknown) => {
+      process.stdout.write(
+        `alteroid-runner: 前の器の plugin の展開物を消せませんでした: ${reasonOf(error)}\n`,
+      );
+      return undefined;
+    },
+  );
+  if (prunedPlugins !== undefined && prunedPlugins.removed.length > 0) {
+    process.stdout.write(
+      `alteroid-runner: 前の器の plugin の展開物 ${prunedPlugins.removed.length} 件を消しました\n`,
+    );
+  }
+
   // **知らない値なら、ここで落とす**（`resolveManagerProviderId` の doc）。
   const managerProvider = agentProviderOf(resolveManagerProviderId(process.env));
 
@@ -441,6 +462,7 @@ export async function main(): Promise<void> {
     emit: (event) => outbox.push(event),
     managerProvider: managerProvider.id,
     credentials,
+    pluginsRoot,
     ...(peerOpening.host === undefined
       ? {}
       : {

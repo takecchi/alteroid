@@ -70,6 +70,8 @@ export interface LocalRunnerOptions {
   profile?: ProfileVessel;
   /** 担い手へ渡す添付の置き場（`RunnerHostOptions.attachmentsRoot`）。主にテスト用。 */
   attachmentsRoot?: string;
+  /** 受けた plugin の展開先（`RunnerHostOptions.pluginsRoot`）。主にテスト用。 */
+  pluginsRoot?: string;
 }
 
 export function createLocalRunner(options: LocalRunnerOptions): RunnerClient {
@@ -118,6 +120,7 @@ class LocalRunner implements RunnerClient {
       ...(options.attachmentsRoot === undefined
         ? {}
         : { attachmentsRoot: options.attachmentsRoot }),
+      ...(options.pluginsRoot === undefined ? {} : { pluginsRoot: options.pluginsRoot }),
     });
   }
 

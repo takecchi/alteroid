@@ -22,6 +22,7 @@ import {
   runnerSetPluginCommandSchema,
   runnerRetainPluginsCommandSchema,
   decodeRunnerPlugin,
+  RunnerPluginExtractError,
   RUNNER_PLUGIN_BODY_LIMIT_BYTES,
   RUNNER_PLUGIN_RETAIN_BODY_LIMIT_BYTES,
   runnerSetProfileCommandSchema,
@@ -1000,9 +1001,9 @@ export function createRunnerApp(deps: RunnerAppDeps) {
      * plugin を1本置く。**制御面である**（門番を外さないこと）。plugin の hooks とコードは
      * マネージャーの SDK 子プロセスが読むので、マネージャーが叩けると自分に効くものを自分で差し替えられる。
      *
-     * **受けて検査してメモリに持つだけ**（展開はしない）。不正（base64・path・`contentSha256` の
-     * 不一致・scope が `app`・名前が URL と違う）なら 400 で、前の状態が残る。**本文を返さない**
-     * （`/mcp-servers` と同じ）。`bodyLimit` は本文を読む前に掛かる（鍵の無い呼びは更にその前に 401）。
+     * **受けて検査し、置き場へ展開する**（メモリに残すのは指紋と展開先だけ）。不正（base64・path・
+     * `contentSha256` の不一致・scope が `app`・名前が URL と違う）なら 400、展開の失敗は 500 で、
+     * どちらも前の状態が残る。**本文を返さない**（`/mcp-servers` と同じ）。`bodyLimit` は本文を読む前に掛かる（鍵の無い呼びは更にその前に 401）。
      */
     .post(
       '/plugins/:name',
@@ -1023,15 +1024,18 @@ export function createRunnerApp(deps: RunnerAppDeps) {
         }
         return undefined;
       }),
-      (c) => {
+      async (c) => {
         try {
-          const placed = host.setPlugin(
+          const placed = await host.setPlugin(
             c.req.param('name'),
             decodeRunnerPlugin(c.req.valid('json')),
           );
           return c.json({ ok: true, plugin: placed });
         } catch (error) {
-          return c.json({ ok: false, error: reasonOf(error) }, 400);
+          // 検査で落ちたのは送り手の不正（400）。展開で落ちたのは runner 側の事情（500）で、
+          // 送り直せば通りうるので、400 と区別して返す。どちらも前の状態が残る。
+          const status = error instanceof RunnerPluginExtractError ? 500 : 400;
+          return c.json({ ok: false, error: reasonOf(error) }, status);
         }
       },
     )

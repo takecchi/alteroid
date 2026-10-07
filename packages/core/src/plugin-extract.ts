@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { constants } from 'node:fs';
 import { chmod, lstat, mkdir, open, readFile, readdir, rename, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
 
 import { pluginDirName, validatePluginFilePath, type StoredPlugin } from './plugins.js';
@@ -48,6 +49,31 @@ const TMP_NAME_RULE = /^\.tmp-[A-Za-z0-9_-]{1,64}@[0-9a-f]{40}-[0-9a-f]{16}(?:-o
 
 export type PluginScope = StoredPlugin['scope'];
 
+/**
+ * runner が受けた plugin を展開する置き場の既定（`os.tmpdir()` 配下）。`/workspace` に置かないのは、
+ * そこが子（マネージャー・作業者）の持ち物で、展開した plugin（skills など）を子が書き換えられてしまうため。
+ */
+export function defaultRunnerPluginsRoot(): string {
+  return join(tmpdir(), 'alteroid-plugins');
+}
+
+/** 展開に要るものだけ（runner は取り元の URL・入れた人・日時を受けないので、`StoredPlugin` では持てない）。 */
+export type ExtractablePlugin = Pick<
+  StoredPlugin,
+  'name' | 'files' | 'enableHooks' | 'enableMcp' | 'contentSha256'
+> & { source: { sha: string; [other: string]: unknown } };
+
+/**
+ * 展開先のディレクトリの作り方。省略は今までどおり（root は既定のモード、`plugins/` は 0o700 で、
+ * 所有者は確かめない）。
+ */
+export interface ExtractPluginOptions {
+  /** root と `plugins/` のモード。子 uid に読ませる runner だけが 0o755 を渡す。 */
+  readonly dirMode?: number;
+  /** root と `plugins/` の所有者がこの uid であること。違えば展開せずに拒む。 */
+  readonly expectedUid?: number;
+}
+
 /** クローン（daemon）へ撒く scope。`runner` はマネージャー側が持つので含めない。 */
 export const PLUGIN_SCOPES_FOR_CLONE: readonly PluginScope[] = ['all', 'app'];
 
@@ -88,7 +114,7 @@ interface Marker {
   readonly enableMcp: boolean;
 }
 
-function markerOf(plugin: StoredPlugin): Marker {
+function markerOf(plugin: ExtractablePlugin): Marker {
   return {
     allowlistVersion: PLUGIN_ALLOWLIST_VERSION,
     contentSha256: plugin.contentSha256,
@@ -193,12 +219,15 @@ function stripFrontmatterHooks(text: string): { text: string; droppedHooks: bool
   return { text: rebuilt, droppedHooks };
 }
 
-function hooksReason(plugin: StoredPlugin): RemovedReason {
+function hooksReason(plugin: ExtractablePlugin): RemovedReason {
   return plugin.enableHooks ? 'hooks-not-extracted' : 'hooks-disabled';
 }
 
 /** 何を書くか（fs に触れない）。 */
-function planExtraction(plugin: StoredPlugin): { outputs: OutputFile[]; removed: RemovedItem[] } {
+function planExtraction(plugin: ExtractablePlugin): {
+  outputs: OutputFile[];
+  removed: RemovedItem[];
+} {
   const outputs: OutputFile[] = [];
   const removed: RemovedItem[] = [];
   const drop = (path: string, reason: RemovedReason) =>
@@ -300,13 +329,38 @@ function assertInside(base: string, target: string): void {
   }
 }
 
-async function ensurePluginsDir(root: string): Promise<string> {
-  const dir = resolve(root, 'plugins');
-  await mkdir(dir, { recursive: true, mode: 0o700 });
+/**
+ * 置き場を、自分の持ち物として確かめてモードを揃える。`/tmp` 配下は誰でも書けるので、
+ * 先に同名の symlink や他人のディレクトリを置かれても使わない（他人の持ち物は差し替えられる）。
+ */
+async function ensureTrustedDirectory(
+  dir: string,
+  mode: number,
+  expectedUid: number | undefined,
+): Promise<void> {
+  await mkdir(dir, { recursive: true, mode });
   const info = await lstat(dir);
   if (info.isSymbolicLink() || !info.isDirectory()) {
     throw new Error('plugins の置き場が実在のディレクトリでない（symlink か dir 以外）');
   }
+  if (expectedUid !== undefined && info.uid !== expectedUid) {
+    throw new Error('plugins の置き場の所有者が期待と違う。展開しない');
+  }
+  if ((info.mode & 0o777) !== mode) await chmod(dir, mode);
+}
+
+async function ensurePluginsDir(root: string, options: ExtractPluginOptions): Promise<string> {
+  const dir = resolve(root, 'plugins');
+  if (options.dirMode === undefined) {
+    await mkdir(dir, { recursive: true, mode: 0o700 });
+    const info = await lstat(dir);
+    if (info.isSymbolicLink() || !info.isDirectory()) {
+      throw new Error('plugins の置き場が実在のディレクトリでない（symlink か dir 以外）');
+    }
+    return dir;
+  }
+  await ensureTrustedDirectory(resolve(root), options.dirMode, options.expectedUid);
+  await ensureTrustedDirectory(dir, options.dirMode, options.expectedUid);
   return dir;
 }
 
@@ -373,8 +427,12 @@ async function writeStage(stage: string, outputs: OutputFile[], marker: Marker):
  * 展開した形が既にあっても、symlink や dir 以外が先に置かれていれば辿らずに作り直す。
  * 走行中のセッションが読んでいる版を壊さないため、書くのは同じ親の `.tmp-*` で、置くのは rename。
  */
-export async function extractPlugin(root: string, plugin: StoredPlugin): Promise<ExtractedPlugin> {
-  const pluginsDir = await ensurePluginsDir(root);
+export async function extractPlugin(
+  root: string,
+  plugin: ExtractablePlugin,
+  options: ExtractPluginOptions = {},
+): Promise<ExtractedPlugin> {
+  const pluginsDir = await ensurePluginsDir(root, options);
   const dirName = pluginDirName(plugin.name, plugin.source.sha);
   const finalPath = resolve(pluginsDir, dirName);
   assertInside(pluginsDir, finalPath);
@@ -437,8 +495,9 @@ function messageOf(error: unknown): string {
 }
 
 /**
- * `keep`（`<name>@<sha>` の集合）に無い展開済みの版と、`.tmp-*` を消す。**daemon の起動時にだけ呼ぶこと**
- * （走行中のセッションが読んでいる版や、別のプロセスが書いている途中の `.tmp-*` を消さないため）。
+ * `keep`（`<name>@<sha>` の集合）に無い展開済みの版と、`.tmp-*` を消す。**読んでいるセッションが1つも無く、
+ * 書いている途中の展開も無いときにだけ呼ぶこと**（daemon の起動時、runner の起動時と、runner では走行中の
+ * セッションが無く展開が終わっているとき。走行中のセッションが読んでいる版や、書いている途中の `.tmp-*` を消さないため）。
  *
  * 名前が `<plugin 名の規則>@<40桁16進>`（`.tmp-` は `.tmp-<同>-<16桁16進>[-old]`）に合わないものは
  * 人間が置いたものかもしれないので触らない。
