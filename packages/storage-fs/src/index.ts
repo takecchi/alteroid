@@ -6,6 +6,7 @@ import type { AttachmentStoreOptions, Stores } from '@alteroid/core';
 import { FsTranscriptArchive } from './archive.js';
 import { FsAttachmentStore } from './attachments.js';
 import { FsAuthStore } from './auth.js';
+import { FsCodexChatgptAuthStore } from './codex-auth.js';
 import { FsCommitmentStore } from './commitments.js';
 import { FsCredentialVaultStore } from './credentials.js';
 import { FsInboxStore } from './inbox.js';
@@ -77,6 +78,7 @@ export function createFsStores(
     mcpServers: new FsMcpServerStore(paths.mcpServers),
     plugins: new FsPluginStore(paths.plugins),
     conversationReads: new FsConversationReadStore(paths.jobs),
+    codexAuth: new FsCodexChatgptAuthStore(paths.codexAuth),
     tokens: new FsTokenPoolStore(paths.tokens),
     usage: new FsUsageStore(paths.usage),
     attachments: new FsAttachmentStore(paths.attachments, attachmentOptions),

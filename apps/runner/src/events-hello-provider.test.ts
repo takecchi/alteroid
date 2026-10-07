@@ -1,6 +1,12 @@
 import { createHash } from 'node:crypto';
 
-import { createRunnerHost, readAttachmentLimits, runnerAttachmentBodyLimit } from '@alteroid/core';
+import {
+  createRunnerHost,
+  readAttachmentLimits,
+  RUNNER_CAPABILITY_MANAGER_PEERS,
+  runnerAttachmentBodyLimit,
+  type RunnerManagerPeer,
+} from '@alteroid/core';
 import { describe, expect, it } from 'vitest';
 
 import { createRunnerApp, Outbox } from './app.js';
@@ -8,8 +14,11 @@ import { createRunnerApp, Outbox } from './app.js';
 const TOKEN = 'daemon-only-token';
 const TOKEN_SHA256 = createHash('sha256').update(TOKEN, 'utf8').digest('hex');
 
-async function helloFrame(): Promise<Record<string, unknown>> {
+async function helloFrame(
+  managerPeers?: readonly RunnerManagerPeer[],
+): Promise<Record<string, unknown>> {
   const app = createRunnerApp({
+    ...(managerPeers === undefined ? {} : { managerPeers }),
     host: createRunnerHost({
       runnerId: 'runner-hello-provider-test',
       workspacePath: '/workspace',
@@ -50,5 +59,16 @@ describe('runner の hello', () => {
     expect((await helloFrame()).attachmentBodyLimit).toBe(
       runnerAttachmentBodyLimit(readAttachmentLimits().limits),
     );
+  });
+
+  it('peer を名乗る版であることを能力で名乗り、開いている peer とモデルを managerPeers に載せる（#3940）', async () => {
+    const hello = await helloFrame([{ provider: 'codex', models: ['gpt-5.5'] }]);
+    expect(hello.capabilities).toContain(RUNNER_CAPABILITY_MANAGER_PEERS);
+    expect(hello.managerPeers).toEqual([{ provider: 'codex', models: ['gpt-5.5'] }]);
+  });
+
+  it('開いている peer が無ければ managerPeers を送らない（ALTEROID_MANAGER_PEERS が空の器）', async () => {
+    expect(await helloFrame([])).not.toHaveProperty('managerPeers');
+    expect(await helloFrame()).not.toHaveProperty('managerPeers');
   });
 });

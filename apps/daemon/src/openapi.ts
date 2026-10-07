@@ -1793,6 +1793,25 @@ const runnerPushHealthSchema = z.object({
   plugins: runnerPushOutcomeSchema.optional(),
 });
 
+/**
+ * マネージャーが MCP `peer` で作業を頼める provider（`@alteroid/core` の `RunnerOverview.managerPeers`。#3940）。
+ * `named` は名乗る版の runner（`peers` が空なら開いている peer は無い）、`unknown` は名乗らない旧い runner・
+ * 名乗りをまだ受けていない器である。**`unknown` を「頼めない」と読まないこと。**
+ */
+const runnerManagerPeersSchema = z.discriminatedUnion('status', [
+  z.object({
+    status: z.literal('named'),
+    peers: z.array(
+      z.object({
+        provider: z.string(),
+        /** 人間が開けた、名指しできるモデル名。無ければ provider の既定だけ。 */
+        models: z.array(z.string()).optional(),
+      }),
+    ),
+  }),
+  z.object({ status: z.literal('unknown') }),
+]);
+
 const runnerSummarySchema = z.object({
   /**
    * 人間が見る宛先（URL か「同一プロセス」）。
@@ -1872,6 +1891,11 @@ const runnerSummarySchema = z.object({
    * 読むだけである（`@alteroid/core` の `RunnerOverview.pushHealth` の doc）。
    */
   pushHealth: runnerPushHealthSchema.optional(),
+  /**
+   * この器のマネージャーが Codex などの peer に作業を頼めるか（`hello.managerPeers` の記憶。#3940）。
+   * 新しい往復は払わない。旧いデーモンの応答には無い。
+   */
+  managerPeers: runnerManagerPeersSchema.optional(),
 });
 
 export const runnersListResponseSchema = z.object({
@@ -2329,6 +2353,36 @@ const credentialFingerprintWithMetaSchema = runnerCredentialFingerprintSchema.ex
   /** secret === false の行だけ載る。シークレットの行では欄自体が無い。 */
   value: z.string().optional(),
 });
+
+/**
+ * Codex の ChatGPT ログインの状態（#3939）。**値（`auth.json` の中身）は返さない。**
+ * 返すのはログイン済みか・アカウント・プラン・最終更新・指紋・最後の失敗だけ。
+ */
+export const codexAuthStatusResponseSchema = z.object({
+  loggedIn: z.boolean(),
+  email: z.string().nullable(),
+  planType: z.string().nullable(),
+  updatedAt: z.string().nullable(),
+  /** 値の sha256 の先頭12桁。 */
+  fingerprint: z.string().nullable(),
+  /** 切れた・失効した・更新に失敗した事実（再ログインで消える）。 */
+  failure: z.object({ at: z.string(), reason: z.string() }).nullable(),
+});
+
+/** デバイスコードのログイン1本の状態（#3939）。 */
+export const codexLoginResponseSchema = z.object({
+  id: z.string(),
+  state: z.enum(['pending', 'succeeded', 'failed', 'canceled', 'expired']),
+  /** 人間がブラウザで開く確認用 URL。 */
+  verificationUrl: z.string(),
+  /** 人間が入力する1回限りのコード。 */
+  userCode: z.string(),
+  startedAt: z.string(),
+  finishedAt: z.string().nullable(),
+  error: z.string().nullable(),
+});
+
+export const codexLogoutResponseSchema = z.object({ removed: z.boolean() });
 
 export const credentialsResponseSchema = z.object({
   credentials: z.array(credentialFingerprintWithMetaSchema),
@@ -3237,6 +3291,9 @@ export async function buildOpenApiDocument(): Promise<unknown> {
     },
     pushHealthOf() {
       throw new Error('spec 生成専用のスタブ: 押し込み結果は持たない');
+    },
+    managerPeersOf() {
+      throw new Error('spec 生成専用のスタブ: peer の名乗りは持たない');
     },
     runnerBacklog() {
       throw new Error('spec 生成専用のスタブ: 器の滞留は観測していない');

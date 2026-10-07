@@ -804,6 +804,7 @@ export {
   type RunnerManagerEntry,
   type RunnerOverview,
   type RunnerPushHealth,
+  type RunnerManagerPeers,
   type RunnerPushOutcome,
   resolveWorkspacePolicy,
   type WorkerToolEvent,
@@ -1165,10 +1166,16 @@ export {
   runnerProfileResultSchema,
   runnerAttachmentSchema,
   RUNNER_CAPABILITY_MANAGER_ATTACHMENTS,
+  RUNNER_CAPABILITY_MANAGER_PEERS,
+  runnerManagerPeerSchema,
+  type RunnerManagerPeer,
   runnerResumeCommandSchema,
   runnerSessionOpenResultSchema,
   runnerSetCredentialsCommandSchema,
   runnerSetMcpServersCommandSchema,
+  runnerSetCodexAuthCommandSchema,
+  runnerTakeCodexAuthWriteBackCommandSchema,
+  runnerCodexAuthWriteBackSchema,
   runnerSetProfileCommandSchema,
   runnerStartCommandSchema,
   runnerWaitingSchema,
@@ -1353,9 +1360,14 @@ export {
 } from './retired-provider-env.js';
 export {
   MANAGER_PEERS_ENV_KEY,
+  MANAGER_PEER_CODEX_MODELS_ENV_KEY,
   isPeerAllowed,
+  managerPeerModelsEnvKey,
+  parsePeerModels,
   parsePeers,
+  resolvePeerModels,
   resolvePeers,
+  type PeerModelsResolution,
   type PeersResolution,
 } from './agent-provider-peers.js';
 /** `type: 'exchange'` の本文が持つ種類の接頭辞（issue #1332）。本文の先頭に固定の印を置き、前方一致で復元する（`exchange-kind.ts` の doc）。 */
@@ -1505,6 +1517,10 @@ export {
   PEER_MCP_SERVER_NAME,
   PEER_SYSTEM_PROMPT_APPEND,
   PEER_TOOL_NAMES,
+  PEER_APPROVAL_DECISIONS,
+  type PeerApprovalDecision,
+  type PeerApprovalRecord,
+  type PeerPendingApproval,
   type PeerBroker,
   type PeerBrokerDeps,
   type PeerTurnResult,
@@ -1529,6 +1545,25 @@ export {
   verifyCredentialVaultContract,
 } from './credential-contract.js';
 export { verifyTokenPoolContract } from './token-pool-contract.js';
+/** Codex の ChatGPT ログインの正本の約束（#3939）。3実装が呼ぶ。 */
+export { verifyCodexChatgptAuthContract } from './codex-chatgpt-auth-contract.js';
+/** Codex の ChatGPT ログイン（#3939）。正本の形・状態・デバイスコードのログイン。 */
+export * from './codex-chatgpt-auth.js';
+export {
+  createCodexChatgptAuthService,
+  type CodexChatgptAuthService,
+  type CodexChatgptAuthServiceOptions,
+  type CodexLoginView,
+} from './codex-chatgpt-auth-service.js';
+export { RunnerCodexAuthUnsupportedError } from './runner-protocol.js';
+export {
+  CODEX_DEVICE_LOGIN_TIMEOUT_MS,
+  startCodexDeviceLogin,
+  type CodexDeviceLogin,
+  type CodexDeviceLoginOptions,
+  type CodexDeviceLoginOutcome,
+  type CodexDeviceLoginStarted,
+} from './codex-device-login.js';
 /** 消費の台帳の入口の NUL の扱い（issue #2927。鍵列も断らず落として残す。teto の判断、2026-10-05）。 */
 export {
   USAGE_NUL_ONLY_TOKEN_ID,
@@ -1667,3 +1702,8 @@ export {
   ManagerAttachmentsRefusedError,
   type LoadedManagerAttachments,
 } from './manager-attachments.js';
+export {
+  describeManagerPeers,
+  peerProviderLabel,
+  type ManagerPeersView,
+} from './manager-peers-format.js';
