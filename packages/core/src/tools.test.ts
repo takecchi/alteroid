@@ -13120,28 +13120,6 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
     expect(SWEPT).toContain('manager_list');
   });
 
-  /**
-   * `flooded()` が作る `harness()` へ渡す runtime。
-   *
-   * **`self_status` をこの掃き出しの対象に足すために要る。** runtime を
-   * 渡さない既定の `harness()` では `self_status` は「いまは自分の実行時の
-   * 事実を読めない場面である」という定型文だけを返し、記憶の内訳を含む
-   * 本体を一切組み立てない——それでは OUTPUT_CAP も TRUNCATION_MARK も
-   * 何も測れない。値そのものは `describe('self_status…')` の `RUNTIME` と
-   * 同じ形（このテストが見るのは `stores` との噛み合わせであって
-   * `CloneRuntimeFacts` の整形自体ではないので、値の中身に意味は無い）。
-   *
-   * **他の道具は `context.runtime` を読まないので、この定数を足しても他の
-   * ケースの挙動は変わらない**（`tools.ts` を `grep -Fn -- 'context.runtime'` で
-   * 確認済み——参照は `self_status` のハンドラ1箇所だけ）。
-   *
-   * **`sdkModel` を `null` のままにしない（#406）。** `null` だと
-   * `renderLedgerCrossReference`（「台帳との突き合わせ」節）は早期 return の
-   * 定型文しか返さず、この掃き出しでは同節の打ち切りを一度も踏めない。
-   * `LEDGER_SDK_MODEL` を与え、`flooded()` 側で同じモデル id の使用量行を
-   * `managerId` 違いで積むことで、`USAGE_AXIS_LIMIT` を超える打ち切りを
-   * 実際に起こす。
-   */
   const LEDGER_SDK_MODEL = 'claude-listing-sweep-model';
 
   const LISTING_SWEEP_RUNTIME: CloneRuntimeFacts = {
@@ -13165,25 +13143,15 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
     lastContextUsage: null,
   };
 
-  /**
-   * どの一覧も「溢れる手前」まで積んだ器を作る。
-   *
-   * **1つの器で全部の一覧を撃つ。** 一覧ごとに別の器を作ると、積み忘れた
-   * ストアの一覧が「0件だから短い」で通ってしまう（それは上限の保証ではない）。
-   */
   async function flooded(count: number): Promise<Harness> {
-    // **`self_dropped` の帳面はプロセス（＝このテストファイル）の生存中ずっと
-    // 1つを共有する。** 前回の `flooded()` や他のテストが積んだ分と混ざらない
-    // よう、ここで空にしてから積む。
+    // 積む前に空にする: `self_dropped` の帳面はこのテストファイルの生存中ずっと1つを共有するため
     clearRecentTracesForTesting();
     const h = harness(() => LISTING_SWEEP_RUNTIME);
     const long = 'あ'.repeat(1_500);
 
     for (let index = 0; index < count; index += 1) {
       const pad = String(index).padStart(4, '0');
-      // マネージャー（manager_list / runner_list の内訳）
       await h.call('manager_start', { request: `依頼${pad}: ${long}` });
-      // 承認待ち（approvals_list）
       await h.stores.jobs.putApproval({
         id: `ap-${pad}`,
         createdAt: `2026-01-01T00:00:${String(index % 60).padStart(2, '0')}.000Z`,
@@ -13191,25 +13159,17 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
         jobId: `mgr-${pad}`,
         requestId: `req-${pad}`,
       });
-      // 継続中の依頼（schedule_list）
       await h.call('schedule_create', {
         kind: `watch-${pad}`,
         request: `仕込み${pad}: ${long}`,
         everyMinutes: 60,
       });
-      // 引き受けた仕事（commitment_list）
       await h.call('commitment_open', { body: `約束${pad}: ${long}` });
-      // 記憶（memory_list）
       await h.stores.persona.write(
         `doc-${pad}`,
         `---\ndescription: 要旨${pad} ${long}\ntype: fact\n---\n# 題${pad}\n\n${long}`,
       );
-      // 日誌（journal_read）
       await h.call('journal_write', { type: 'decision', decision: `決めた${pad}: ${long}` });
-      // 人間との会話（conversation_read の3モード）。
-      // **ここを積み忘れると、`conversation_read` は「会話はまだ無い」で短く返り、
-      // 上限の試験を「そもそも短かった」で通ってしまう**（この器を1つにしてある
-      // 理由そのもの）。会話ごとに2発言積んで、一覧・中身・語検索の全部を太らせる。
       await h.stores.journal.append({
         type: 'exchange',
         with: 'human',
@@ -13224,10 +13184,6 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
         text: `クローンの返答${pad}: ${long}`,
         conversationId: `conv-${pad}`,
       });
-      // **1本だけ、長く続いた会話を作る。** 会話ごとに2発言では「中身」モードの
-      // 予算が一度も拘束条件にならず、`renderListingFromEnd` については何も
-      // 測れていない状態で歯が通る（`runner_list` を 12 台から 120 台へ増やした
-      // のと同じ形。変異を当てて確かめた — 2発言のままだと予算を外す変異が生き残る）。
       await h.stores.journal.append({
         type: 'exchange',
         with: 'human',
@@ -13235,17 +13191,6 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
         text: `長い会話の発言${pad}: ${long}`,
         conversationId: 'conv-long',
       });
-      // 使用量の台帳（usage_read）— 委譲別の軸が件数で伸びる。
-      // **`LEDGER_SDK_MODEL` を同じ record 呼び出しへ同居させてある（#406）。**
-      // モデル id ごとに別の行になる（`testing.ts` の `usage.record` は
-      // `date × managerId × model × layer × site` を鍵にする）ので、
-      // `claude-model-${pad}`（周回ごとに違う——`usage_read` 側の軸試験用）とは
-      // 別に、`LEDGER_SDK_MODEL`（固定）の行を `managerId` 違いで積み重ねる。
-      // `self_status` の「台帳との突き合わせ」節は `sdkModel` と一致する行だけを
-      // 拾って `managerId × layer × site` で畳むので、これで
-      // `USAGE_AXIS_LIMIT`（14）を超えるバケット数（60）を作れる——`sdkModel`
-      // が `null` のままだと、この節は早期 return して一度も打ち切りを踏まない
-      // （`LISTING_SWEEP_RUNTIME` の doc を見ること）。
       await h.stores.usage.record({
         layer: 'manager',
         site: 'session',
@@ -13274,9 +13219,7 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
           },
         },
       });
-      // やり方（practice_list）。**list はメタしか出さないので、本文ではなく
-      // title を長くして嵩上げする**（practice_list の omitted の doc、
-      // `practice-tools.test.ts` の予算の歯と同じ判断）。
+      // 本文ではなく title を長くして嵩上げする: practice_list はメタしか出さないため
       await h.call('practice_write', {
         slug: `practice-${pad}`,
         kind: `種類${pad}`,
@@ -13284,27 +13227,9 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
         content: `本文${pad}`,
       });
     }
-    // **節の多い記憶の文書**（`memory_outline` の目次と、`memory_write` が
-    // 返す「消えた見出し」の列挙）。
-    //
-    // **ループの中で作らない。** ここで要るのは「文書が何件あるか」ではなく
-    // 「1つの文書が何節持つか」であって、軸が違う——`flooded()` が積む
-    // `doc-<pad>` は1文書1節なので、何件積んでも
-    // `MEMORY_OUTLINE_BUDGET`（8,000字）は一度も拘束条件にならない。
-    // **足場が薄いと歯は生き残る**（`runner_list` を 12 台から 120 台へ
-    // 増やしたのと同じ形。`.claude/skills/listing-and-detail/SKILL.md`）。
-    //
-    // 節数は変異で確かめて決めた。1行はおよそ `[<id 8字>] 節<4字>: <40字> —
-    // <N> 文字` ≒ 70 字なので、240 節 ≒ 16,800 字で予算の 2 倍を超える。
-    //
-    // `type: fact` にしてあるのは、この文書が**プロンプトへ焼かれる量を
-    // 増やさない**ようにするためである（`fact` は目次の1行だけが焼かれる）。
-    // ここを `premise` にすると `self_status` の「記憶の大きさ」が測って
-    // いるものが、この足場の都合で動く。
-    //
-    // **節ごとに本文を変えてある。** 中身まで同一の節は節id が衝突し、
-    // `renderMemoryOutline` がその行へ ⚠ を付ける（＝測りたい形ではない
-    // 行が混じる）。
+    // ループの中で作らない: 要るのは文書の件数ではなく1つの文書の節数で、1文書1節のままでは `MEMORY_OUTLINE_BUDGET` が拘束条件にならないため
+    // type: fact にする: プロンプトへ焼かれる量を増やさないため
+    // 節ごとに本文を変える: 中身まで同一の節は節id が衝突し、`renderMemoryOutline` が ⚠ を付けるため
     await h.stores.persona.write(
       OUTLINE_FLOOD_SLUG,
       `---\ndescription: 節の多い文書（目次と見出しの列挙の足場）\ntype: fact\n---\n` +
@@ -13313,30 +13238,16 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
           return `# 節${pad}: ${'み'.repeat(40)}\n\n本文${pad}\n`;
         }).join('\n'),
     );
-    // 握り潰しの跡（`self_dropped`、#242）— 帳面（`recentDroppedTraces`）を
-    // 溢れさせるため `count` 件積む。**実物の stderr は汚さない**——
-    // `noteDroppedRecord` 自体が帳面へも積むので（`notePrefixed` の
-    // `prefix === 'alteroid'` 判定）、書き込み先を黙らせても `self_dropped` が
-    // 読む内容は1文字も変わらない。
     setStderrSinkForTesting(() => {});
     try {
       for (let index = 0; index < count; index += 1) {
         const pad = String(index).padStart(4, '0');
-        // **250文字は REASON_LIMIT（200、`dropped-record.ts`）を確実に超える。**
-        // `reasonOf` が200文字ちょうどへ切るので、pad の桁数によらず1件の長さが
-        // 揃う——予算（`SELF_DROPPED_BUDGET`）を外す変異を確実に殺せる大きさに
-        // 総量を届かせるため、揃えておく。
         noteDroppedRecord('probe', `flood-${pad}`, new Error(`理由${pad}: ${'x'.repeat(250)}`));
       }
     } finally {
       setStderrSinkForTesting(null);
     }
-    // 認証トークンのプール（token_list）。**`replace` は全文置換なので、ループの
-    // 中で1本ずつ足すと毎回上書きになる** — 件数を作れないまま「1件だから短い」で
-    // 歯が通る（この器を1つにしてある理由そのもの）。だからループの外で一度に積む。
-    //
-    // **止まった理由に長い原文を入れておく。** ここが短いと、抜粋
-    // （`TOKEN_REASON_EXCERPT`）を外す変異が生き残る＝その部分は何も測れていない。
+    // ループの外で一度に積む: `replace` は全文置換で、1本ずつ足すと毎回上書きになるため
     await h.stores.tokens.replace(
       Array.from({ length: count }, (_, index) => {
         const pad = String(index).padStart(4, '0');
@@ -13352,8 +13263,6 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
         };
       }),
     );
-    // 許可の記録（permission_grant_list）。**規則・回答・allows に長い本文を入れる**
-    // （ここが短いと、抜粋を外す変異が生き残る）。
     for (let index = 0; index < count; index += 1) {
       const pad = String(index).padStart(4, '0');
       await h.stores.permissionGrants.put({
@@ -13367,7 +13276,6 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
         route: { principalKind: 'account', accountId: 'acct-fake' },
       });
     }
-    // アカウント（account_list）。件数で溢れないことを見る。
     for (let index = 0; index < count; index += 1) {
       const pad = String(index).padStart(4, '0');
       await h.stores.auth.putAccount({
@@ -13392,11 +13300,6 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
         },
       ];
     }
-    // 器の一覧（runner_list）— 内訳に全マネージャーを載せる。
-    // **台数は「予算が拘束条件になる」ところまで積む。** 12台で試したときは
-    // `RUNNER_MANAGER_LIST_LIMIT`（内訳の件数）だけで上限内に収まってしまい、
-    // ブロックの予算を外す変異が生き残った（＝この一覧については何も測れて
-    // いなかった）。変異で確かめて決めた台数である。
     h.setRunnersOverview({
       runners: Array.from({ length: 120 }, (_, index) => ({
         label: `runner-${index}`,
@@ -13405,9 +13308,6 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
         runnerId: `runner-${index}`,
         workspacePath: '/workspace',
         revision: { status: 'unknown' as const },
-        // `live` も一緒に運ぶ（`RunnerManagerEntry`）。**予算の歯としては
-        // `live: false` のほうが厳しい** — 字面が「/セッション切断」の分だけ
-        // 長くなるので、上限を外す変異がここで生き残りにくくなる。
         managers: h.running.map((m) => ({ managerId: m.managerId, status: m.status, live: false })),
       })),
       unassigned: h.running.map((m) => ({
@@ -13440,9 +13340,6 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
 
   it.each(CASES)('$label — 件数が増えても出力は上限内に収まる', async ({ name, args, argsOf }) => {
     const h = await flooded(60);
-    // **`argsOf` が在るときはそちらを使う。** `sections`（節id）のような
-    // 動的な値は、足場を積んでから（`flooded()` の後で）計算しないと
-    // 作れない（`NAMED` の `argsOf` の doc を参照）。
     const effectiveArgs = argsOf === undefined ? args : await argsOf(h);
 
     const reply = await h.call(name, effectiveArgs);
@@ -13458,42 +13355,6 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
 
       const reply = await h.call(name, effectiveArgs);
 
-      // **「切った」と読める合図が出ていること。** 何も出ていなければ、
-      // 受け取った側は「これで全部だ」と読んで全体像を組み立てる。
-      //
-      // **`section` が指定されているケース（#406）は、応答全体でも節全体でも
-      // なく、その節の**一覧レベルの断り書きだけが持つ語彙**（`mark`）だけを
-      // 見る。** `self_status` の「記憶の大きさ」節は、1件ごとの
-      // `excerptLine` 抜粋にも `TRUNCATION_MARK` と同じ語彙（「省略」）が
-      // 出るので、節全体を素の `TRUNCATION_MARK` で検査すると、その entries
-      // の省略が、節そのものの断り書きが丸ごと消えたときの代わりに合格を
-      // 出してしまう——断り書きがどの一覧に属するかを測れていない。**行の
-      // 位置（最後の行かどうか）にも依存させない**——依存させると、断り書きの
-      // 後ろへ無関係な行が増えただけで壊れる（NAMED の `mark` の doc に実測を
-      // 書いた）。`mark` は節の中のどこにあっても見つかれば合格とすることで、
-      // entries の省略とも、無関係な行の増減とも、位置に依存せず区別する。
-      //
-      // **`mark` は `section` と独立に指定できる（#212）。** `section` は
-      // 「応答のどこを見るか」、`mark` は「何を探すか」で、軸が違う。
-      // 道具全体が一覧である（節へ分かれていない）のに、断り書きだけは
-      // その一覧の言葉で名指ししたい場合——`memory_outline` /
-      // `memory_write` がそれである——`section` を持たないまま `mark` だけ
-      // が要る。**`mark` を添えるのは常に締める方向であって、緩める方向へは
-      // 働かない**（`TRUNCATION_MARK` は `/省略|残り \d|文字目/` という
-      // 総称で、`mark` はその一覧に固有の逐語だから、`mark` を満たす出力は
-      // 必ず `TRUNCATION_MARK` も満たす）。
-      // ## ⛔ 門は「式」ではなく「性質」を弾く（#935）
-      //
-      // **前はこう書いてあった**: `section !== undefined && mark === undefined` を
-      // 弾く。⟹ 「`section` が在るのに `mark` が無い」という**実例の1つ**しか
-      // 見ておらず、**「どちらも無い」は素通りしていた。** 素通りしたケースは素の
-      // `TRUNCATION_MARK` へ落ち、1件ごとの抜粋の「省略」で合格する ——
-      // **実測で `SWEPT` の 7本すべてが、断り書きから「省略」を消しても緑のままだった。**
-      //
-      // **守りたい性質は「表明が素の `TRUNCATION_MARK` へ落ちないこと」である。**
-      // ⟹ 門もそう書く: **どのケースも `mark`（出ていることを名指しで測る）か
-      // `absent`（そもそも切れないので、出ていないことを名指しで測る）の
-      // どちらか一方を必ず持つ。**
       if ((mark === undefined) === (absent === undefined)) {
         throw new Error(
           `CASES: mark と absent は、どちらか一方だけを指定すること（label="${label}"）。` +
@@ -13505,108 +13366,23 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
       const scope = section === undefined ? reply : extractSection(reply, section);
 
       if (absent !== undefined) {
-        // **この呼び方では一覧レベルで切れない**（実測）。⟹ 断り書きが出ていないこと
-        // そのものを測る。**切れるようになったらここが赤くなる** —— そのときは
-        // `absent` を `mark` へ置き換える番である（黙って緑のままにはならない）。
         expect(scope).not.toMatch(absent);
         return;
       }
       expect(scope).toMatch(mark!);
 
-      // ⭐ **`mark` が「締める方向」にしか働かないことを、ここで測る**（#935）。
-      //
-      // この doc は前から「`mark` を満たす出力は必ず `TRUNCATION_MARK` も満たす」と
-      // 書いていたが、**それを測る行は1つも無かった。** `mark` はその一覧に固有の
-      // 逐語であって、**その逐語が「切った」の合図であることまでは名前からは決まらない**
-      // —— たとえば `続きは <道具> cursor=` を `mark` にすると、断り書きから
-      // 「省略」の語が消えても当たり続け、この PR が塞いだ欠陥と同じ形へ戻る。
-      //
-      // ⟹ **`mark` が実際に当てた文字列そのもの**が、総称の `TRUNCATION_MARK` を
-      // 満たすことを測る（応答のどこかが満たすこと、ではない —— それだと1件ごとの
-      // 抜粋の「省略」で合格してしまい、いま直した穴に戻る）。
       expect(mark!.exec(scope)?.[0] ?? '').toMatch(TRUNCATION_MARK);
     },
   );
 
-  /**
-   * **P1 と P2 は別の性質であって、1つに畳まない。**
-   *
-   * 人間の依頼の逐語:「一覧系ツールは最低でも id + 名前 + 概要 + updated_at +
-   * created_at が欲しい」。**これが P1 である。** #208 / #215 で手で揃えたが、
-   * **手で書いている限り、次に一覧を足す人が落としても何も落ちない。**
-   *
-   * | | 中身 | 出所 |
-   * | --- | --- | --- |
-   * | **P1** | 5つの値（id / 名前 / 概要 / 作成 / 更新）が出ているか | 人間の依頼そのもの |
-   * | **P2** | 4つの一覧（`renderListingEntry` を通るもの）と同じ3行ブロックの並びか | #231 が別に足した目標 |
-   *
-   * **旧版はこの2つを1つの `it.each` に畳んでいた**（`作成/更新は2行目・
-   * 概要は3行目` という**位置固定**の正規表現で P1 を測っていた）。
-   * `memory_list` は #220 で P1 の5項目を全部出すようになったが、
-   * **P2 の形（階層をインデントで表す1行1件の木）ではない**ため、旧版の
-   * 位置固定の歯では「5項目は出ているのに落ちる」という誤検出になっていた
-   * （実測: `AssertionError: expected '- [fact] doc-0001: 題0001 (作成:
-   * 2026-08…' to match /^ {2}…/ 更新: \d{4}-…/`）。**満たしているものを
-   * 未達に見せる歯は、それ自体が欠陥である。**
-   *
-   * **この歯は「どの口を通ったか」を見ない。出力に5項目が在るかを見る。**
-   * `renderListingEntry`（型で5つを必須にした口）は `renderListing` を塞がないので、
-   * 低レベルの口を直接呼んで手で組めば型は素通りできる——**それでもこの歯は捕まる。**
-   * 機構ではなく性質を測っているからである。
-   *
-   * 集合は `SWEPT`（`CLONE_TOOL_NAMES` から `_list` を機械的に集めたもの）を使う。
-   * **表を手で書かない** — 名前の表を持つと、次の人がそこへ足し忘れる。
-   */
-
-  /**
-   * **軸そのものが未決で、P1 を測ること自体ができないもの。**
-   *
-   * 散文の理由を書くのはここまでにする——下の自己測定の歯が、この除外が
-   * まだ正しいこと（＝いまも P1 を満たしていないこと）を毎回測り直す。
-   *
-   * **「軸が未決」は、いまも経過ではなく結論であるものがある。** `runner_list`
-   * はかつて「#211 待ち」（判断待ち）だったが、**人間が「出さない」と決めた**
-   * （2026-08-23。理由は下のコメント）。それでも軸の意味そのもの（(a)/(b) の
-   * どちらを作成時刻と呼ぶか）はいまも未定義のままである——決まったのは
-   * 「未定義のまま出さない」が**最終形である**ことで、「いずれ決めて出す」の
-   * 途中ではない。**だから変数名・doc の主張（軸が未決で P1 を測れない）は
-   * そのまま正しく、変える必要が無い。**
-   */
   const AXIS_UNDECIDED = new Map<string, string>([
     [
       'runner_list',
-      // 器は永続化層を持たず（名簿は `runner-protocol.ts` の `Registry` が
-      // 持つインメモリの Map で、デーモンを再起動すれば全部消える）、`since` は
-      // 「この状態になった時刻」で**状態が変わるたびに更新される**（=
-      // created_at ではない）。そして「作成時刻」が (a) 器の定義が置かれた時刻
-      // (b) いまの接続が確立した時刻 のどちらを指すのかが**決まっていなかった。**
-      //
-      // **`unknown` で埋めないこと。** `unknown` は「在るはずだが根拠が無い」を
-      // 表す値である。ここは**そもそも何を作成時刻と呼ぶかが未決**で、前者は
-      // 決めれば答えが出るが後者は決めても出ない。**混ぜると、未決が不明に化ける。**
-      //
-      // **人間が決めた（2026-08-23）。** (a)/(b) のどちらかに決める／(c)
-      // そもそも `runner_list` には作成時刻を出さない、の3案を諮ったところ、
-      // 人間の回答は逐語で:「まぁ、無理に置く必要はありません。runner_list は
-      // なくても良いこととします」——(c) を選んだ。他の一覧と揃わないことを
-      // 人間が明示的に受け入れている。**実装しなかったのではなく、出さないと
-      // 決まった。**
+      // `unknown` で埋めない: 作成時刻の軸そのものが未定義で、`unknown` は「在るはずだが根拠が無い」を表す値のため
       '人間が出さないと決めた（2026-08-23。runner_list には作成時刻を置かない。unknown で埋めない）',
     ],
   ]);
 
-  /**
-   * **P1（5項目）は満たすが、P2（4一覧と同じ3行ブロック）の形は違うことが
-   * 設計であるもの。**
-   *
-   * `memory_list` がこれである。5項目は出ている（#220 で着地済み。実測:
-   * `- [fact] doc-a: 題A (作成: 2026-08-01T09:00:00.000Z / 更新:
-   * 2026-08-20T10:00:00.000Z) — これは要旨である`）。**揃っていないのは
-   * P2 の位置だけ**——`memory_list` は階層をインデントで表す1行1件の木で、
-   * 共通の口（`renderListingEntry` の3行ブロック）へ寄せると親子関係を
-   * 表す手段（インデント）が無くなる。揃えるのではなく能力を削ることに
-   * なるので、寄せない。
-   */
   const SHAPE_DIFFERENT = new Map<string, string>([
     [
       'memory_list',
@@ -13617,22 +13393,17 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
     ],
   ]);
 
-  /** P1（5項目）を測る対象。軸が未決のものだけを外す——`memory_list` は含む。 */
   const FIVE_FIELD_SWEPT = SWEPT.filter((name) => !AXIS_UNDECIDED.has(name));
-  /** P2（4一覧と同じ3行ブロック）を測る対象。形が違うことが設計のものも外す。 */
   const STRICT_SHAPE_SWEPT = FIVE_FIELD_SWEPT.filter((name) => !SHAPE_DIFFERENT.has(name));
 
   it('P1/P2 それぞれの網が空にならず、除外は実在する道具を指している', () => {
-    // **除外の綴りが違えば、除外は効かないまま「除外したつもり」になる。**
     for (const name of AXIS_UNDECIDED.keys()) expect(SWEPT).toContain(name);
     for (const name of SHAPE_DIFFERENT.keys()) expect(SWEPT).toContain(name);
-    // 掃き出しが空だと `it.each` は0件で「通った」ように見える。
     expect(FIVE_FIELD_SWEPT.length).toBeGreaterThanOrEqual(5);
     expect(FIVE_FIELD_SWEPT).toContain('approvals_list');
     expect(FIVE_FIELD_SWEPT).toContain('schedule_list');
     expect(FIVE_FIELD_SWEPT).toContain('commitment_list');
     expect(FIVE_FIELD_SWEPT).toContain('manager_list');
-    // **`memory_list` は P1 の網に入る——除外していない。**
     expect(FIVE_FIELD_SWEPT).toContain('memory_list');
     expect(STRICT_SHAPE_SWEPT.length).toBeGreaterThanOrEqual(4);
     expect(STRICT_SHAPE_SWEPT).toContain('approvals_list');
@@ -13643,13 +13414,6 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
     expect(STRICT_SHAPE_SWEPT).not.toContain('runner_list');
   });
 
-  /**
-   * **1件（entry）の切り出し方。** `- ` で始まる行（先頭の空白は許す——
-   * `memory_list` の子は `  - ` とインデントされる）から、次の entry の
-   * 直前までを1件とする。省略の断り書き（`…ほか N 件は省略`）は `- ` で
-   * 始まらないので、entry には数えない（直前の最後の entry の末尾に付くだけ
-   * で、判定には影響しない）。
-   */
   function splitListingEntries(reply: string): string[] {
     const lines = reply.split('\n');
     const starts: number[] = [];
