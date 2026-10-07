@@ -274,17 +274,129 @@ describe('TUI /edit: 確定', () => {
     });
   });
 
-  it('会話を移ると編集は落ちる（元の添付が別の会話へ付かない）', async () => {
+  it('会話を移ると編集は終わるが、書きかけはしまう（元の添付が別の会話へ付かない）', async () => {
     const { api, controller, texts } = await setup();
     await controller.edit('');
     await controller.edit('1');
     expect(controller.newConversation()).toBe(true);
     expect(controller.isEditing()).toBe(false);
     expect(controller.hasAttachments()).toBe(false);
-    expect(texts('system').at(-1)).toContain('編集をやめた');
+    expect(texts('system').at(-1)).toContain('書きかけをしまった');
+    expect(texts('system').at(-1)).toContain('/edit すれば続けられる');
     api.scripts.push([open('c9'), { type: 'done' }]);
     await controller.send('べつの会話');
     expect(api.chatCalls).toEqual([{ text: 'べつの会話' }]);
+  });
+});
+
+describe('TUI /edit: 会話を移っても書きかけを残す', () => {
+  // 入力欄の変化はアプリが noteInput で渡す。ここでは、その渡し方を打つ側として真似る
+  async function startEdit(controller: ChatController, ref = '1') {
+    await controller.edit('');
+    const text = await controller.edit(ref);
+    if (text !== null) controller.noteInput(text);
+    return text;
+  }
+
+  it('移って戻り、同じ発言を /edit すると、本文と添えかけ（外した・足した）が戻る。移るあいだに何も送らない', async () => {
+    const { api, controller, texts } = await setup();
+    await startEdit(controller);
+    controller.noteInput('もとの本文を直しかけ');
+    controller.detach('all');
+    await controller.attach(await tempFile('new.log'));
+    controller.noteInput('');
+    controller.noteInput('/new');
+    expect(controller.newConversation()).toBe(true);
+    expect(controller.hasAttachments()).toBe(false);
+    expect(api.chatCalls).toEqual([]);
+    expect(await controller.openConversation('c1')).toBe(true);
+    expect(await startEdit(controller)).toBe('もとの本文を直しかけ');
+    expect(texts('system').some((t) => t.includes('書きかけ（本文と添えかけ）を戻した'))).toBe(
+      true,
+    );
+    expect(controller.isEditing()).toBe(true);
+    api.scripts.push([open('c1'), { type: 'done' }]);
+    await controller.send('もとの本文を直した');
+    expect(api.uploads.map((u) => u.name)).toEqual(['new.log']);
+    expect(api.chatCalls).toEqual([
+      {
+        text: 'もとの本文を直した',
+        conversationId: 'c1',
+        attachments: ['att-1'],
+        supersedes: 'm1',
+      },
+    ]);
+  });
+
+  it('本文を Backspace で1文字ずつ消してから移っても、消す前の全文をしまう', async () => {
+    const { controller } = await setup();
+    await startEdit(controller);
+    controller.noteInput('もとの本文を直しかけ');
+    for (const partial of ['もとの本文を直しか', 'もとの本文', 'も', ''])
+      controller.noteInput(partial);
+    controller.noteInput('/new');
+    expect(controller.newConversation()).toBe(true);
+    expect(await controller.openConversation('c1')).toBe(true);
+    expect(await startEdit(controller)).toBe('もとの本文を直しかけ');
+  });
+
+  it('消した後に打ち直した本文は、打ち直した方をしまう', async () => {
+    const { controller } = await setup();
+    await startEdit(controller);
+    for (const partial of ['も', '', '新', '新しい本文']) controller.noteInput(partial);
+    controller.noteInput('/new');
+    expect(controller.newConversation()).toBe(true);
+    expect(await controller.openConversation('c1')).toBe(true);
+    expect(await startEdit(controller)).toBe('新しい本文');
+  });
+
+  it('会話を開き直す・終えるでもしまい、戻って /edit すれば続けられる', async () => {
+    const { api, controller } = await setup();
+    await startEdit(controller);
+    controller.noteInput('書きかけ');
+    expect(await controller.openConversation('c1')).toBe(true);
+    expect(await startEdit(controller)).toBe('書きかけ');
+    expect(controller.hasAttachments()).toBe(true);
+    controller.noteInput('終える前');
+    await controller.endConversation();
+    expect(api.chatCalls).toEqual([]);
+    expect(await controller.openConversation('c1')).toBe(true);
+    expect(await startEdit(controller)).toBe('終える前');
+  });
+
+  it('別の発言を /edit しても、ほかの発言の書きかけは混ざらない', async () => {
+    const { controller } = await setup();
+    await startEdit(controller);
+    controller.noteInput('1番の書きかけ');
+    controller.newConversation();
+    await controller.openConversation('c1');
+    expect(await startEdit(controller, '2')).toBe('あたらしい版');
+    expect(controller.hasAttachments()).toBe(false);
+  });
+
+  it('送信が成功した後は、戻って /edit しても書きかけは戻らない', async () => {
+    const { api, controller } = await setup();
+    await startEdit(controller);
+    controller.noteInput('書きかけ');
+    controller.newConversation();
+    await controller.openConversation('c1');
+    await startEdit(controller);
+    api.scripts.push([open('c1'), { type: 'done' }]);
+    await controller.send('確定');
+    await controller.openConversation('c1');
+    expect(await startEdit(controller)).toBe('もとの本文');
+  });
+
+  it('/edit-cancel の後は、戻って /edit しても書きかけは戻らない', async () => {
+    const { controller } = await setup();
+    await startEdit(controller);
+    controller.noteInput('書きかけ');
+    controller.newConversation();
+    await controller.openConversation('c1');
+    await startEdit(controller);
+    controller.cancelEdit();
+    await controller.openConversation('c1');
+    expect(await startEdit(controller)).toBe('もとの本文');
   });
 });
 

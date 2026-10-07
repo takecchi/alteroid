@@ -228,7 +228,6 @@ describe('番人: codex の語彙は codex-*.ts の中に閉じる', () => {
   // 広いパターンで緩めない: import してよい組をファイル単位で名指しするため
   const ALLOWED: Readonly<Record<string, readonly string[]>> = {
     'runner.ts': ['./codex-manager-driver.js'],
-    'clone-driver-for.ts': ['./codex-clone-driver.js'],
     'agent-provider-selection.ts': ['./codex-provider.js'],
     'agent-provider-selection.test.ts': ['./codex-provider.js'],
   };

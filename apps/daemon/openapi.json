@@ -17274,7 +17274,7 @@
             }
           },
           "409": {
-            "description": "次の2つ。(1) 既定の定期ジョブの名前（`{ error }` だけ）。(2) `ifMatch`（読んだ時の版 = `updatedAt`）が、いまの版と違う（読んでから書くまでの間に別の書き手が書いた、または消した。`null` を送ったのに既に在る場合も）。**何も書いていない。** `current` にいまの依頼を返す（消えていれば null）。見分けは `current` の鍵の有無。",
+            "description": "次の3つ。(1) 既定の定期ジョブの名前（`{ error }` だけ）。(2) `ifMatch`（読んだ時の版 = `updatedAt`）が、いまの版と違う（読んでから書くまでの間に別の書き手が書いた、または消した。`null` を送ったのに既に在る場合も）。**何も書いていない。** `current` にいまの依頼を返す（消えていれば null）。見分けは `current` の鍵の有無。(3) その kind の行が読めない形で入っている（版ずれ・手編集。`{ error }` だけ。`ifMatch` の有無を問わない）。**何も書いていない。** `DELETE /schedule/{kind}` で外してから作り直す。",
             "content": {
               "application/json": {
                 "schema": {
@@ -18817,9 +18817,6 @@
                               },
                               "required": ["tool", "count"]
                             }
-                          },
-                          "managerProvider": {
-                            "type": "string"
                           }
                         },
                         "required": [
@@ -19595,9 +19592,6 @@
                             },
                             "required": ["tool", "count"]
                           }
-                        },
-                        "managerProvider": {
-                          "type": "string"
                         }
                       },
                       "required": [
@@ -20300,9 +20294,6 @@
                           "required": ["status"]
                         }
                       ]
-                    },
-                    "cloneProvider": {
-                      "type": "string"
                     }
                   },
                   "required": ["runners", "daemonRevision"]

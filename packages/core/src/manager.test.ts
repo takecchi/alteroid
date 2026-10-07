@@ -2692,12 +2692,18 @@ function swappableRunner(runnerId = 'runner-primary') {
      * `reconnect()` は capabilities を持たない旧い runner の形を保つため
      * 触っていない——これは能力を名乗る版を模す別口。
      */
-    helloWithManagerProvider(managerProvider: string | undefined) {
+    /**
+     * provider を名乗る旧い runner（2026-10-07 の撤去より前の版）の `hello`。新しいデーモンの
+     * `RunnerEvent` には欄が無いので型の外から渡す（`runner-client.ts` の zod は未知の欄を捨てる）。
+     */
+    helloFromLegacyProviderRunner(capabilities: string[]) {
       emit?.({
         type: 'hello',
         runnerId,
-        ...(managerProvider === undefined ? {} : { managerProvider }),
-      });
+        capabilities,
+        managerProvider: 'codex',
+        managerProviders: ['claude', 'codex'],
+      } as unknown as RunnerEvent);
     },
     helloWithCapabilities(capabilities: string[]) {
       emit?.({ type: 'hello', runnerId, capabilities });
@@ -3529,33 +3535,17 @@ describe('runner だけが入れ替わったとき（デプロイ）', () => {
     expect(fake.state.held.get('GH_TOKEN')).toBe('ghp_from_env');
   });
 
-  it('hello で名乗られたマネージャーの provider を保持する（欄なしの旧い runner は claude、再名乗りで持ち越さない）', async () => {
+  it('provider を名乗る旧い runner の hello でも、能力の名乗りはそのまま受ける（provider の名乗りは読まない）', async () => {
     const fake = swappableRunner();
     const s = setup(undefined, { runner: fake.runner });
     await s.pool.restore();
 
-    expect(s.pool.runnerManagerProvider?.('runner-primary')).toBe('claude');
-    fake.helloWithManagerProvider('other');
-    await expect.poll(() => s.pool.runnerManagerProvider?.('runner-primary')).toBe('other');
-    fake.helloWithManagerProvider(undefined);
-    await expect.poll(() => s.pool.runnerManagerProvider?.('runner-primary')).toBe('claude');
-  });
-
-  it('表示用の読み口は、名乗りが無いとき claude と推測せず undefined（不明）を返す（#486 S9）', async () => {
-    const fake = swappableRunner();
-    const s = setup(undefined, { runner: fake.runner });
-    await s.pool.restore();
-
-    fake.helloWithManagerProvider('codex');
-    await expect.poll(() => s.pool.runnerReportedManagerProvider?.('runner-primary')).toBe('codex');
-    fake.helloWithManagerProvider(undefined);
+    fake.helloFromLegacyProviderRunner(['awaiting-background-signal']);
     await expect
-      .poll(() => s.pool.runnerReportedManagerProvider?.('runner-primary'))
-      .toBeUndefined();
-    // 経路判断の読み口は既定 claude のまま
-    expect(s.pool.runnerManagerProvider?.('runner-primary')).toBe('claude');
-    // 一度も名乗っていない runner も不明
-    expect(s.pool.runnerReportedManagerProvider?.('runner-never')).toBeUndefined();
+      .poll(() => s.pool.runnerHasCapability?.('runner-primary', 'awaiting-background-signal'))
+      .toBe(true);
+    expect(s.pool).not.toHaveProperty('runnerManagerProvider');
+    expect(s.pool).not.toHaveProperty('runnerReportedManagerProvider');
   });
 
   it('取り直しの最中に起こされた委譲を、死んだものとして起こし直さない', async () => {

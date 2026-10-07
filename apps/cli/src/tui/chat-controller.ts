@@ -26,6 +26,7 @@ import {
   type ConversationApprovalsRead,
 } from '../conversation-approvals.js';
 import { redactBody, redactedErrorMessage, redactError } from '../redact.js';
+import { resolveCommand } from './commands.js';
 import { Store } from './store.js';
 
 export interface ChatState {
@@ -68,6 +69,13 @@ interface EditInProgress {
   readonly id: string;
   readonly conversationId: string;
 }
+
+interface EditStash {
+  readonly text: string;
+  readonly files: readonly DraftFile[];
+}
+
+const editKey = (edit: EditInProgress): string => `${edit.conversationId}\n${edit.id}`;
 
 const EDIT_LIST_PREVIEW = 40;
 
@@ -148,6 +156,9 @@ export class ChatController {
   private askIds: string[] = [];
   private readonly markedThrough = new Map<string, string>();
   private editing: EditInProgress | null = null;
+  // 会話を移った編集の書きかけ（編集の対象ごと）: 戻って同じ発言を /edit したときに続けられるように
+  private readonly editStash = new Map<string, EditStash>();
+  private lastBody = '';
   private editList: { conversationId: string; ids: string[] } | null = null;
 
   constructor(private readonly api: TuiApi) {}
@@ -156,13 +167,30 @@ export class ChatController {
     return this.editing !== null;
   }
 
-  // 始めた編集を持ち越さない: 元の添付が別の会話へ付くため
+  // 入力欄の本文は、変わるたびに覚える: 会話を移るコマンドは入力欄へ打って Enter で出すので、
+  // 動かす時点では入力欄が空（本文を消してコマンドを打ち、送信で空になる）で、そのとき読んでも本文は残っていないため。
+  // コマンドとして読まれる文と空は覚えない（本文を消してコマンドを打つ途中で、本文を上書きしないため）。
+  // 末尾を削っただけの変化も覚え直さない: Backspace で1文字ずつ消してからコマンドを打つと、最後に残った1文字だけをしまうことになるため
+  noteInput(value: string): void {
+    if (this.editing === null || value === '' || resolveCommand(value).kind !== 'text') return;
+    if (this.lastBody.startsWith(value)) return;
+    this.lastBody = value;
+  }
+
+  // 編集は持ち越さずしまう: 元の添付が別の会話へ付き、入力欄の本文が別の会話へ送られるため。捨てない: 書いたものを黙って失わないため
   private dropEdit(): void {
     this.editList = null;
     if (this.editing === null) return;
+    this.editStash.set(editKey(this.editing), {
+      text: this.lastBody,
+      files: [...this.draft.list()],
+    });
+    this.lastBody = '';
     this.editing = null;
     this.draft.clear();
-    this.addSystem('編集をやめた（会話を移ったので何も送っていない。添えかけも空にした）');
+    this.addSystem(
+      '編集の書きかけをしまった（会話を移ったので何も送っていない）。元の会話へ戻って同じ発言を /edit すれば続けられる',
+    );
   }
 
   async edit(args: string): Promise<string | null> {
@@ -263,17 +291,27 @@ export class ChatController {
     }
     this.editing = { id: target.id, conversationId };
     this.editList = null;
+    this.lastBody = '';
+    const stashed = this.editStash.get(editKey(this.editing));
     const original = target.attachments ?? [];
-    for (const attachment of original) this.draft.addUploaded(attachment);
+    if (stashed === undefined) {
+      for (const attachment of original) this.draft.addUploaded(attachment);
+    } else {
+      this.draft.restore(stashed.files);
+    }
     this.addSystem(
       [
         `編集を始める（${ref}）`,
+        ...(stashed === undefined
+          ? []
+          : ['会話を移る前の書きかけ（本文と添えかけ）を戻した。続きから直せる']),
         `  元の本文: ${redactBody(target.text)}`,
         ...attachmentLinesOf(original).map((l) => `  ${redactBody(l)}`),
         '元の本文は入力欄に入れた。直して Enter で、置き換えた新しい版を送る（添付が残っていれば、本文を空にして Enter でもよい）。',
         '/detach <番号|all> で添付を外す・/attach <path> で足す（足した分は新しく上げる）・/edit-cancel でやめる',
       ].join('\n'),
     );
+    if (stashed !== undefined) return stashed.text;
     // `/` で始まる本文はそのまま入れない: Enter でコマンドとして読まれるため（`//` で始めて、送るとき 1 つ外れるようにする）
     const head = target.text.trimStart();
     return head.startsWith('/') ? `/${head}` : target.text;
@@ -289,6 +327,8 @@ export class ChatController {
       this.addSystem('やめられない: 添付を上げている最中（上がってから）');
       return;
     }
+    this.editStash.delete(editKey(this.editing));
+    this.lastBody = '';
     this.editing = null;
     this.draft.clear();
     this.addSystem('編集をやめた（何も送っていない。添えかけも空にした）');
@@ -555,6 +595,7 @@ export class ChatController {
       }
     } finally {
       if (!reply.sawEvent) this.draft.restore(attached.files);
+      if (edit !== null && reply.sawEvent) this.editStash.delete(editKey(edit));
       if (edit !== null && reply.sawEvent && this.editing === edit) this.editing = null;
       this.flushStreaming();
       opened.reject(new Error('会話が始まらないまま接続が終わったので、続きを送れなかった'));
@@ -714,6 +755,7 @@ export class ChatController {
       );
     }
     if (!sawEvent) this.draft.restore(attached.files);
+    if (edit !== null && sawEvent) this.editStash.delete(editKey(edit));
     if (edit !== null && sawEvent && this.editing === edit) this.editing = null;
     if (rejected) this.markUnsent(userSeq);
     return !rejected;

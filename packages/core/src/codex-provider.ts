@@ -17,13 +17,3 @@ export const CODEX_PROVIDER: AgentProvider = {
     partialMessages: true,
   },
 };
-
-// permissions を false にする: クローンの Codex は approvalPolicy=never で走り、確認の代用を出さないため
-export const CODEX_CLONE_PROVIDER: AgentProvider = {
-  ...CODEX_PROVIDER,
-  capabilities: {
-    ...CODEX_PROVIDER.capabilities,
-    permissions: false,
-    compactionHook: false,
-  },
-};

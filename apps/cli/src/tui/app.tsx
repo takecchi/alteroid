@@ -219,6 +219,9 @@ export const App: FC<AppProps> = ({
   const memWin = logWindow(memRows, memLogHeight, memAnchor);
 
   const logRows = useMemo(() => logLines(chat.entries, columns), [chat.entries, columns]);
+  useEffect(() => {
+    controller.noteInput(buffer.value);
+  }, [controller, buffer.value]);
   const logShape = useRef({ columns, total: logRows.length });
   useEffect(() => {
     const prev = logShape.current;

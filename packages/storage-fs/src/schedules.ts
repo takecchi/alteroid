@@ -102,6 +102,24 @@ function extractKind(raw: unknown): string | undefined {
   return typeof kind === 'string' ? kind : undefined;
 }
 
+function unreadableError(kind: string, reason: string): UnreadableScheduleError {
+  return new UnreadableScheduleError(
+    `継続中の依頼 ${kind} が読めない形で入っている（消されたのではない）: ${reason}`,
+    { kind },
+  );
+}
+
+/**
+ * 読めない行が kind で見つかれば `UnreadableScheduleError` を投げる。
+ * 読めた行が無いときにだけ呼ぶこと（`get()` と同じく、読めた行が先）。
+ */
+function throwIfUnreadable(file: ScheduleFile, kind: string): void {
+  const invalidRaw = file.invalidSchedulesRaw.find((raw) => extractKind(raw) === kind);
+  if (invalidRaw === undefined) return;
+  const result = scheduledRequestSchema.safeParse(invalidRaw);
+  throw unreadableError(kind, result.success ? '不正な行' : result.error.message);
+}
+
 /**
  * 飛ばした依頼の行を stderr へ1行で要約する。**kind 以外の値は絶対に載せない**
  * ——`request` には人間の依頼文がそのまま入りうる（`FsJobStore.describeSkippedJobRow`
@@ -196,12 +214,7 @@ export class FsScheduleStore implements ScheduleStore {
     // `result.success` を保証できないので、成功していたら（起こり得ない）
     // その値を返す——念のための保険であって、通常はここへ来ない。
     if (result.success) return result.data;
-    // issue #2177。文言はこの型を足す前と1文字も変えていない——`instanceof` で
-    // 見分けられるようにするだけである（`UnreadableScheduleError` の doc）。
-    throw new UnreadableScheduleError(
-      `継続中の依頼 ${kind} が読めない形で入っている（消されたのではない）: ${result.error.message}`,
-      { kind },
-    );
+    throw unreadableError(kind, result.error.message);
   }
 
   async put(entry: ScheduledRequest, options?: WriteScheduleOptions): Promise<void> {
@@ -209,9 +222,10 @@ export class FsScheduleStore implements ScheduleStore {
     // 書き換える列だけを差し替える（`{ schedules: ... }` だけを返すと位相が消える）。
     await this.#update((file) => {
       // 前提の版（Issue #3821）。`#update`（`withPathLock` の内側）で書く直前に比べる。
-      // 読めない形の行は「無い」側に数える（`editRequest` と同じ）。
+      // 省略（無条件の上書き）は壊れた行を置き換える。直す口を塞がないため。
       if (options?.ifMatch !== undefined) {
         const current = file.schedules.find((existing) => existing.kind === entry.kind);
+        if (current === undefined) throwIfUnreadable(file, entry.kind);
         if (!scheduleVersionMatches(current ?? null, options.ifMatch)) {
           throw new ScheduleConflictError(entry.kind, current ?? null);
         }
@@ -300,10 +314,8 @@ export class FsScheduleStore implements ScheduleStore {
    * `pendingRun` / `lastRunAt` / `lastScheduledRunAt` / `createdAt` は、呼び出し側
    * が読んだかもしれない古い値ではなく、ここで読み直した現在値をそのまま引き継ぐ。
    *
-   * **壊れた行には効かない**（`found` は検査を通った `schedules` からしか
-   * 探さない）——`get(kind)` と同じく「読めない」を扱う契約ではなく、
-   * `editRequest` の doc が言う「無ければ何もせず `null`」に落ちる。呼び出し
-   * 側は `put()` で新規に作る（＝壊れた行を捨てて上書きする）経路を通る。
+   * **壊れた行は `UnreadableScheduleError`**。「無い」（`null`）に落とすと、呼び出し側が
+   * 続けて `put()` で壊れた行を黙って置き換える。
    */
   async editRequest(
     kind: string,
@@ -313,6 +325,7 @@ export class FsScheduleStore implements ScheduleStore {
   ): Promise<ScheduledRequest | null> {
     return this.#update((file) => {
       const found = file.schedules.find((entry) => entry.kind === kind);
+      if (found === undefined) throwIfUnreadable(file, kind);
       // 前提の版（Issue #3821）。同じ排他区間の中で比べるので、照合と書き込みの間に割り込めない。
       if (!scheduleVersionMatches(found ?? null, options?.ifMatch)) {
         throw new ScheduleConflictError(kind, found ?? null);
@@ -373,8 +386,8 @@ export class FsScheduleStore implements ScheduleStore {
    * 発火で上書きすると人間が「この依頼いつ直したか」を追えなくなる。同時に、これが
    * 版の識別子でもある（動かすと版の比較そのものが壊れる）。
    *
-   * **壊れた行には効かない**（`editRequest` と同じ理由——検査を通った
-   * `schedules` からしか探さない。`found === undefined` の分岐へ落ちて `null`）。
+   * **壊れた行は `UnreadableScheduleError`**（版を問わない）。`null` は「消された・書き換わった」
+   * だけの意味に保つ。
    */
   async claimRun(
     kind: string,
@@ -384,6 +397,7 @@ export class FsScheduleStore implements ScheduleStore {
   ): Promise<ScheduledRequest | null> {
     return this.#update((file) => {
       const found = file.schedules.find((entry) => entry.kind === kind);
+      if (found === undefined) throwIfUnreadable(file, kind);
       // 消された・書き換わった。**古い本文で動かさないために null を返す。**
       if (found === undefined || found.updatedAt !== expectedUpdatedAt) {
         return { next: file, result: null };
