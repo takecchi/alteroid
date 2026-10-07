@@ -5,7 +5,7 @@ import { unwrap, useApi } from '../api';
 import type { AnsweredApprovalDate } from '@alteroid/logic';
 
 /**
- * 回答済みの承認の「決着した日」の窓（いま画面に持っている分）。Issue #3297。
+ * 回答済みの承認の「決着した日」の窓（いま画面に持っている分）。
  *
  * 先頭の頁は SWR（`useAnsweredApprovalDates`）、「もっと古い日を読む」で足した頁は `useState`。
  * **`useSWRInfinite` を使わない理由は `use-managers-window.ts` 冒頭と同じ**（`mutate((key) => …)` の

@@ -139,7 +139,7 @@ export function ApiProvider({ children }: { children: ReactNode }) {
   /**
    * 世代の紐を打ち切る。
    *
-   * **cleanup で即座に abort しない**（#2768）。StrictMode（dev）は mount → cleanup →
+   * **cleanup で即座に abort しない。**StrictMode（dev）は mount → cleanup →
    * mount を同じ世代のまま続けて行うので、cleanup で abort すると、最初の mount で
    * 始めた通信が中断され、同じ紐が abort 済みのまま次の mount 以降の全通信に残る
    * （全リクエストが「signal is aborted without reason」で落ちる）。
@@ -348,7 +348,7 @@ export class ApiError extends Error {
   readonly code: string | undefined;
 
   constructor(status: number, message: string, code?: string) {
-    // 画面へ出る前に伏せる（issue #2600。`ErrorNote` ほか `error.message` を出す口すべてに効く）。
+    // 画面へ出る前に伏せる（`ErrorNote` ほか `error.message` を出す口すべてに効く）。
     super(redactError(message));
     this.name = 'ApiError';
     this.status = status;
@@ -376,17 +376,12 @@ export function unwrap<T>(result: { data?: T; error?: unknown; response: Respons
 }
 
 /**
- * クローンに話しかけ、応答を SSE で受け取る（チャットのメッセージ編集、#1010）。
+ * クローンに話しかけ、応答を SSE で受け取る（チャットのメッセージ編集を含む）。
  *
- * **`client.chat()`（`@alteroid/api-client`）を使わない。** あちらの `ChatInput`
- * はまだ `supersedes`（送信済みの人間の発言を編集する口）を知らない——サーバの
- * 契約（生成 spec、`apps/daemon/openapi.json`）はもう持っているが、`api-client`
- * の手書きの薄いラッパー（`packages/api-client/src/index.ts`）を直すのはこの
- * 作業の担当外（`apps/web` だけを触る、他のワークスペースパッケージは変更しない
- * という割り当てのもとで進めている）。
- *
- * 型付きの `client.api.POST('/chat', { parseAs: 'stream' })` を使えば、
- * `supersedes` は生成 spec がそのまま運ぶので、手書きの型を1つも足さずに済む
+ * **`client.chat()`（`@alteroid/api-client`）を使わない。** 型付きの
+ * `client.api.POST('/chat', { parseAs: 'stream' })` を使えば、
+ * `supersedes`（送信済みの人間の発言を編集する口）は生成 spec がそのまま運ぶので、
+ * 手書きの型を1つも足さずに済む
  * （AGENTS.md「型は OpenAPI 生成 spec から導出する」）。`parseAs: 'stream'` で
  * `openapi-fetch` は応答本文を JSON へ変換せず `Response.body` をそのまま
  * 返す（`openapi-fetch@0.17.0` の `getResponseData`）ので、そこから先の
@@ -543,7 +538,7 @@ function describeError(error: unknown, response: Response): string {
 }
 
 /**
- * **`clientMessageId` から、受け取り済みの発言の会話を引く**（`GET /client-messages/:clientMessageId`。#3258）。
+ * **`clientMessageId` から、受け取り済みの発言の会話を引く**（`GET /client-messages/:clientMessageId`）。
  * 新しい会話の送信が `open` の前に中断され、会話 id を知らないときに使う。受け取っていれば会話の id、
  * **受け取っていなければ（404）`undefined`**。それ以外の失敗（5xx・繋がらない・401）は `ApiError` などを
  * 投げる——「受け取っていない」と「確かめられなかった」を取り違えない。
