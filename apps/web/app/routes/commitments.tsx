@@ -26,6 +26,7 @@ import {
   SubmitHint,
   Textarea,
   cn,
+  useKeyboardHintsVisible,
 } from '@alteroid/ui';
 import {
   useCloseCommitment,
@@ -1068,13 +1069,17 @@ function CommitmentBodyEditor({
   onDirtyChange: (dirty: boolean) => void;
 }) {
   const editCommitment = useEditCommitment();
+  const keyboardHints = useKeyboardHintsVisible();
   const [draft, setDraft] = useState<string | undefined>(undefined);
   const [tab, setTab] = useState<string>('preview');
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<unknown>(undefined);
 
   const value = draft ?? commitment.body;
-  const dirty = draft !== undefined && draft !== commitment.body;
+  // 送るのは trim した本文（積むのと揃える。#3788）。だから「変更あり」も trim した値どうしで比べる。
+  // 末尾の空白・改行だけを足した下書きは、送れば元と同じ本文になる。それを「変更あり」にすると、
+  // 保存が押せるのに何も送らない（または同じ本文を送り直す）形になるので、変更なしとして扱う。
+  const dirty = draft !== undefined && draft.trim() !== commitment.body.trim();
   /** 応答が返った時点の「いまの下書き」（送った時点と比べる。issue #3515）。 */
   const latestDraft = useLatest(draft);
 
@@ -1101,14 +1106,15 @@ function CommitmentBodyEditor({
     onTrack({ editFailure: undefined });
     onSettling(true);
     // 送った値を控える。成功のあと、いまの下書きがこれと同じときだけ畳む（issue #3515）。
-    const sent = draft;
+    const sent = draft.trim();
     editCommitment(commitment.id, sent)
       // 成功したら編集モードを畳む。一覧は `useEditCommitment` の中で
       // 取り直されるので、この行の `commitment` はすぐ新しい本文へ差し替わる。
       // 応答を待つ間に打ち足した分があるときは畳まず、下書きを残す。
       .then(
         () => {
-          if (latestDraft.current === sent) onCancel();
+          // 送った値は trim 済みなので、いまの下書きも trim して比べる（末尾の空白だけの打ち足しは本文が変わらない）。
+          if (latestDraft.current?.trim() === sent) onCancel();
           setBusy(false);
           onSettling(false);
         },
@@ -1159,7 +1165,7 @@ function CommitmentBodyEditor({
 
         <Tabs.Content value="edit" className="px-2 py-2">
           <Textarea
-            aria-label="仕事の本文"
+            aria-label={`「${snippet(commitment.body)}」の本文`}
             className="min-h-32 font-mono text-xs leading-relaxed"
             maxHeight="60vh"
             onSubmitShortcut={save}
@@ -1171,7 +1177,8 @@ function CommitmentBodyEditor({
             // 送信にしていない——だからここには IME の門（`isComposing` /
             // `keyCode === 229`）を付けていない。送信は保存ボタン・Cmd/Ctrl+Enter（共有の
             // `Textarea` の `onSubmitShortcut`。#3242）・Cmd/Ctrl+S で、どれも Enter 単体の確定と衝突しない
-            // （`memory-detail.tsx` と同じ設計）。
+            // （`memory-detail.tsx` と同じ設計）。Cmd/Ctrl+S は下の案内にも出す（#3788。
+            // 共有の `MarkdownEditor` の既定の案内「⌘/Ctrl + S で保存」と同じ文言）。
             onChange={(event) => setDraft(event.target.value)}
             onKeyDown={(event) => {
               if ((event.metaKey || event.ctrlKey) && event.key === 's') {
@@ -1193,6 +1200,9 @@ function CommitmentBodyEditor({
         >
           保存
         </Button>
+        {tab === 'edit' && keyboardHints && (
+          <span className="text-[11px] text-muted-foreground select-none">⌘/Ctrl + S で保存</span>
+        )}
         {tab === 'edit' && <SubmitHint action="保存" />}
         <Button size="sm" onClick={onRequestCancel}>
           やめる
@@ -1670,7 +1680,7 @@ function PushForm() {
           submitDisabled={body.trim() === '' || busy}
         />
         <FieldHint id={bodyHintId} className="-mt-1">
-          何を引き受けたかを全文で書く。切って短く見せるのは一覧側の仕事。
+          何を引き受けたかを全文で書く。クローンへ渡す一覧（commitment_list）は長い本文を先頭だけに切るが、台帳には全文が残る。
         </FieldHint>
         <div className="flex items-center gap-2">
           <Button
