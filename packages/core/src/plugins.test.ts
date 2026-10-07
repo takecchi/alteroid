@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   computePluginContentSha256,
+  normalizePluginDescription,
   parsePluginInput,
   parseStoredPlugin,
   pluginDirName,
@@ -376,6 +377,71 @@ describe('plugin の保存の形', () => {
       expect(() => parsePluginInput(validInput({ installedBy: '' }))).toThrow();
       expect(() => parsePluginInput(validInput({ installedBy: 'a\u0000b' }))).toThrow();
       expect(() => parsePluginInput(validInput({ installedBy: 7 }))).toThrow();
+    });
+  });
+
+  describe('description', () => {
+    it('任意。無ければ欄ごと無い（undefined の欄も作らない）', () => {
+      const stored = parsePluginInput(validInput());
+      expect('description' in stored).toBe(false);
+      expect('description' in pluginSummaryOf(stored)).toBe(false);
+    });
+
+    it('あれば保存と要約に載る。上限は1024文字', () => {
+      const stored = parsePluginInput(validInput({ description: 'a'.repeat(1024) }));
+      expect(pluginSummaryOf(stored).description).toBe('a'.repeat(1024));
+      expect(() => parsePluginInput(validInput({ description: 'a'.repeat(1025) }))).toThrow();
+    });
+
+    it('空・制御文字（改行・タブ・NUL・DEL）・文字列でないものは拒む', () => {
+      for (const bad of ['', 'a\nb', 'a\tb', 'a\u0000b', 'a\u007fb', 7, null]) {
+        expect(() => parsePluginInput(validInput({ description: bad as string }))).toThrow(
+          /description/,
+        );
+      }
+    });
+
+    it('拒む文言に値を載せない', () => {
+      let message = '';
+      try {
+        parsePluginInput(validInput({ description: 'NOTAKEY-VALUE\n' }));
+      } catch (error) {
+        message = (error as Error).message;
+      }
+      expect(message).toMatch(/description/);
+      expect(message).not.toContain('NOTAKEY-VALUE');
+    });
+
+    it('読み出しでも同じ検査（SQL や手で書き換えられても長すぎる説明は通さない）', () => {
+      const stored = parsePluginInput(validInput({ description: 'ok' }));
+      expect(parseStoredPlugin(stored).description).toBe('ok');
+      expect(() => parseStoredPlugin({ ...stored, description: 'a'.repeat(1025) })).toThrow();
+    });
+  });
+
+  describe('normalizePluginDescription（外の文字列を保存できる形にする）', () => {
+    it('制御文字の並びを空白1つにし、前後を削る', () => {
+      expect(normalizePluginDescription('  a\r\n\tb\u0000c  ')).toBe('a b c');
+    });
+
+    it('空・空白だけ・文字列でないものは undefined', () => {
+      expect(normalizePluginDescription('')).toBeUndefined();
+      expect(normalizePluginDescription(' \n\t ')).toBeUndefined();
+      expect(normalizePluginDescription(undefined)).toBeUndefined();
+      expect(normalizePluginDescription(5)).toBeUndefined();
+    });
+
+    it('1024文字を超えたら切る。サロゲートペアを割らない。結果は保存の検査を通る', () => {
+      const out = normalizePluginDescription(`${'a'.repeat(1023)}😀tail`);
+      expect(out).toBe('a'.repeat(1023));
+      expect(normalizePluginDescription('b'.repeat(5000))?.length).toBe(1024);
+      expect(() => parsePluginInput(validInput({ description: out }))).not.toThrow();
+    });
+
+    it('HTML らしい文字列はそのまま（エスケープは描く側の仕事）', () => {
+      expect(normalizePluginDescription('<img src=x onerror=alert(1)>')).toBe(
+        '<img src=x onerror=alert(1)>',
+      );
     });
   });
 

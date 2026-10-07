@@ -171,6 +171,46 @@ describe('/plugins 画面 — 一覧', () => {
     expect(screen.getByText(/次に開くまで残る/)).toBeTruthy();
   });
 
+  it('一覧の行に説明を出す。説明の無い行は説明の欄を出さず、崩れない', async () => {
+    const base = INSTALLED.plugins[0]!;
+    stubPlugins({
+      list: {
+        status: 200,
+        body: {
+          plugins: [
+            { ...base, name: 'with-desc', description: '画面に出る説明' },
+            { ...base, name: 'without-desc' },
+          ],
+        },
+      },
+    });
+    renderScreen();
+
+    expect(await screen.findByText('with-desc')).toBeTruthy();
+    expect(screen.getByText('without-desc')).toBeTruthy();
+    expect(screen.getAllByText('画面に出る説明')).toHaveLength(1);
+    expect(document.body.textContent).not.toContain('undefined');
+  });
+
+  it('一覧の説明は HTML として解釈せず、Markdown としても描かない', async () => {
+    const hostile = '<img src=x onerror=alert(1)><script>boom()</script> **強調** # 見出し';
+    stubPlugins({
+      list: {
+        status: 200,
+        body: { plugins: [{ ...INSTALLED.plugins[0], description: hostile }] },
+      },
+    });
+    renderScreen();
+    await screen.findByText('demo');
+
+    expect(document.querySelector('img')).toBeNull();
+    expect(document.querySelector('script')).toBeNull();
+    expect(document.querySelector('strong')).toBeNull();
+    expect(document.querySelector('em')).toBeNull();
+    expect(screen.getByText(hostile)).toBeTruthy();
+    expect(screen.getAllByRole('heading', { level: 1 }).length).toBe(1);
+  });
+
   it('入っていなければ「入っていない」と出す', async () => {
     stubPlugins({ list: { status: 200, body: { plugins: [] } } });
     renderScreen();
