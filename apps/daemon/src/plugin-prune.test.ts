@@ -44,7 +44,11 @@ describe('daemon 起動時の展開済み plugin の片づけ', () => {
     }
     const written: string[] = [];
 
-    await pruneExtractedPluginsOnBoot({ root, store: stores.plugins, write: (t) => written.push(t) });
+    await pruneExtractedPluginsOnBoot({
+      root,
+      store: stores.plugins,
+      write: (t) => written.push(t),
+    });
 
     expect((await readdir(join(root, 'plugins'))).sort()).toEqual([`keep@${SHA_A}`]);
     expect(written).toEqual([]);

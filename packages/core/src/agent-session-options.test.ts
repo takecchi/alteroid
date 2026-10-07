@@ -1,4 +1,4 @@
-import { writeFile } from 'node:fs/promises';
+import { chmod, lstat, readdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import type { Options, Query, SDKMessage, query as sdkQuery } from '@anthropic-ai/claude-agent-sdk';
@@ -909,6 +909,23 @@ describe('記憶ストアの plugin をクローンへ渡す', () => {
     };
   }
 
+  /** 展開先は読み取り専用（0o555）なので、掃除が消せるように書込み可へ戻す。 */
+  async function makeWritable(dir: string): Promise<void> {
+    const info = await lstat(dir).catch(() => null);
+    if (info === null || !info.isDirectory()) return;
+    await chmod(dir, 0o700);
+    for (const name of await readdir(dir)) await makeWritable(join(dir, name));
+  }
+  const roots: string[] = [];
+  async function newRoot(prefix: string): Promise<string> {
+    const root = await makeTempDir(prefix);
+    roots.push(root);
+    return root;
+  }
+  afterEach(async () => {
+    for (const root of roots.splice(0)) await makeWritable(root);
+  });
+
   async function firePreCompact(main: { options: Options }, root: string): Promise<void> {
     const transcriptPath = join(root, 'transcript.jsonl');
     await writeFile(transcriptPath, '要約に潰される直前の生ログ', 'utf8');
@@ -925,7 +942,7 @@ describe('記憶ストアの plugin をクローンへ渡す', () => {
   }
 
   it('本セッションと蒸留の options.plugins に展開先と skipMcpDiscovery が載り、scope runner は載らない', async () => {
-    const root = await makeTempDir('alteroid-agent-session-options-plugins-');
+    const root = await newRoot('alteroid-agent-session-options-plugins-');
     const { fn, calls } = fakeCloneSdk();
     const stores = createMemoryStores();
     await stores.plugins.put(pluginInput('all-one'));
@@ -958,7 +975,7 @@ describe('記憶ストアの plugin をクローンへ渡す', () => {
   });
 
   it('plugin が無ければ options.plugins の欄ごと無い', async () => {
-    const root = await makeTempDir('alteroid-agent-session-options-plugins-none-');
+    const root = await newRoot('alteroid-agent-session-options-plugins-none-');
     const { fn, calls } = fakeCloneSdk();
     const clone = createClone({
       stores: createMemoryStores(),
@@ -974,7 +991,7 @@ describe('記憶ストアの plugin をクローンへ渡す', () => {
   });
 
   it('ストアが読めなくてもセッションは起き、段だけを日誌に残す（内容は書かない）', async () => {
-    const root = await makeTempDir('alteroid-agent-session-options-plugins-fail-');
+    const root = await newRoot('alteroid-agent-session-options-plugins-fail-');
     const { fn, calls } = fakeCloneSdk();
     const base = createMemoryStores();
     const stores = {
@@ -1005,7 +1022,7 @@ describe('記憶ストアの plugin をクローンへ渡す', () => {
   });
 
   it('展開しなかったものを plugin 名・相対 path・理由だけで日誌に残す', async () => {
-    const root = await makeTempDir('alteroid-agent-session-options-plugins-removed-');
+    const root = await newRoot('alteroid-agent-session-options-plugins-removed-');
     const { fn, calls } = fakeCloneSdk();
     const stores = createMemoryStores();
     await stores.plugins.put(pluginInput('with-hooks', {}, true));
@@ -1031,7 +1048,7 @@ describe('記憶ストアの plugin をクローンへ渡す', () => {
   });
 
   it('同じ一覧は毎セッション書かず、変わったときだけ書く', async () => {
-    const root = await makeTempDir('alteroid-agent-session-options-plugins-digest-');
+    const root = await newRoot('alteroid-agent-session-options-plugins-digest-');
     const { fn, calls } = fakeCloneSdk();
     const stores = createMemoryStores();
     await stores.plugins.put(pluginInput('with-hooks', {}, true));
@@ -1055,7 +1072,9 @@ describe('記憶ストアの plugin をクローンへ渡す', () => {
     await stores.plugins.put(pluginInput('another'));
     await firePreCompact(calls[0] as { options: Options }, root);
     await expect.poll(() => calls.length > 2, { timeout: 3000 }).toBe(true);
-    expect((await exchangeTexts(stores)).filter((text) => text.includes('another@')).length).toBe(1);
+    expect((await exchangeTexts(stores)).filter((text) => text.includes('another@')).length).toBe(
+      1,
+    );
 
     await clone.stop();
   });
