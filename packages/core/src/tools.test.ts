@@ -14496,26 +14496,9 @@ describe('commitment_list / approvals_list に札と作成・更新を足す（#
   });
 });
 
-/**
- * #218（`commitment_list` に詳細の口が無い）。
- *
- * **一覧を抜粋にしたなら、同じ PR で全文の口を用意すること**が
- * `.claude/skills/listing-and-detail/SKILL.md`「3. 詳細の口」の要求である。
- * 人間は Web UI（`apps/web/app/routes/commitments.tsx`）で `closedReason` を
- * 全文で読めるのに、クローンは一覧の120字抜粋で止まっていた——**同じものを
- * 人間だけが全部読める形は能力の削除である**（north_star 禁止1）。
- *
- * 形は「1つの道具＋引数でモード切替」（`approvals_list id=<id>` と同型）。
- * 道具を1本増やさないので `CLONE_TOOL_NAMES` と外向きの面は変わらない。
- */
 describe('commitment_list id=<id> で1件の全文が取れる（#218）', () => {
   it('片付いた1件を id で読むと closedReason が全文で出る（一覧は120字で止まる）', async () => {
-    // **これがこの PR の本体である。** `closedReason` の doc は逐語で
-    // 「『閉じた』だけを残さない。人間が後から否定できることが最終承認の実体で
-    // あり、何をもって終わりとしたのかが無いと否定のしようがない」と言う。
-    // 抜粋しか読めないなら、その設計は抜粋の分しか生きていない。
     const h = harness();
-    // 一覧側の抜粋（120字）より確実に長く、末尾に目印を置く。
     const reason = `頭${'り'.repeat(300)}尻`;
     await h.stores.commitments.open({
       id: 'c-closed',
@@ -14529,9 +14512,7 @@ describe('commitment_list id=<id> で1件の全文が取れる（#218）', () =>
     const listing = await h.call('commitment_list', { includeClosed: true });
     const detail = await h.call('commitment_list', { id: 'c-closed' });
 
-    // 一覧は抜粋（末尾まで出ない）。
     expect(listing).not.toContain('尻');
-    // 詳細は末尾まで出る。
     expect(detail).toContain('尻');
     expect(detail).toContain(reason);
     expect(detail).toContain('2026-05-02T00:00:00.000Z');
@@ -14556,9 +14537,6 @@ describe('commitment_list id=<id> で1件の全文が取れる（#218）', () =>
   });
 
   it('id で名指しすれば includeClosed 無しでも片付いた件が読める', async () => {
-    // **追加の引数を要求しない。** id で名指ししている以上、その1件を見たい
-    // ことは明らかである。`includeClosed` を要ると、いちばん読みたい側
-    // （片付いた件の理由）が二段構えになる。
     const h = harness();
     await h.stores.commitments.open({
       id: 'c-done',
@@ -14573,9 +14551,7 @@ describe('commitment_list id=<id> で1件の全文が取れる（#218）', () =>
       'clone',
     );
 
-    // 一覧の既定（未了だけ）からは消えている。
     expect(await h.call('commitment_list', {})).not.toContain('c-done');
-    // それでも id では読める。
     const detail = await h.call('commitment_list', { id: 'c-done' });
     expect(detail).toContain('差し戻して直した');
   });
@@ -14593,14 +14569,10 @@ describe('commitment_list id=<id> で1件の全文が取れる（#218）', () =>
 
     expect(reply).toContain('c-typo');
     expect(reply).toContain('無い');
-    // 実在する件の本文を混ぜて返さない（一覧へフォールバックしていない）。
     expect(reply).not.toContain('実在する件');
   });
 
   it('片付けた理由は、本文が1ページを超えても最初の呼びで出る', async () => {
-    // **`body` は要約を禁じられた欄なので構造的に長くなりうる。** 理由を本文の
-    // 後ろに置くと `page()` の2ページ目へ落ちて、いちばん要る1行が最初の呼びで
-    // 出てこない。**この歯は「読み順どおりに並べ替える」変更を落とす。**
     const h = harness();
     await h.stores.commitments.open({
       id: 'c-huge',
@@ -14617,9 +14589,7 @@ describe('commitment_list id=<id> で1件の全文が取れる（#218）', () =>
 
     const first = await h.call('commitment_list', { id: 'c-huge' });
 
-    // 1ページ目に理由が在る（offset を送らずに読める）。
     expect(first).toContain('外部側で解決した');
-    // そして本文は切れていて、続きの取り方が出ている。
     expect(first).toContain('ここで切れている');
     expect(first).toContain('offset');
   });
@@ -14637,7 +14607,6 @@ describe('commitment_list id=<id> で1件の全文が取れる（#218）', () =>
     const offset = Number(/offset=(\d+)/.exec(first)?.[1]);
     expect(Number.isFinite(offset)).toBe(true);
 
-    // **末尾へ到達できること。** 1回で届かないだけで、全部は届く。
     let reply = first;
     let cursor = offset;
     for (let guard = 0; guard < 10 && !reply.includes('尻'); guard += 1) {
@@ -14648,10 +14617,6 @@ describe('commitment_list id=<id> で1件の全文が取れる（#218）', () =>
   });
 
   it('一覧が案内する導線は空振りしない（案内どおり呼ぶと全文が返る）', async () => {
-    // **無い口を案内するのと、案内した口が空振りするのは、同じだけ嘘である。**
-    // 一覧に出ている id をそのまま案内どおりの形で渡して、実際に全文が返ること
-    // を見る（別の PR で「日誌に残らない型に journal_read を案内する」形が
-    // 入りかけた——案内の文字列だけを見る歯では捕まらない）。
     const h = harness();
     await h.stores.commitments.open({
       id: 'c-guided',
@@ -14663,9 +14628,7 @@ describe('commitment_list id=<id> で1件の全文が取れる（#218）', () =>
 
     const listing = await h.call('commitment_list', {});
 
-    // 一覧が「commitment_list id=<id> で取れる」と案内していること。
     expect(listing).toContain('commitment_list id=<id>');
-    // 一覧に出ている id を拾い、案内どおりに呼ぶ。
     const id = /^- (\S+) /m.exec(listing)?.[1];
     expect(id).toBe('c-guided');
     const detail = await h.call('commitment_list', { id: id as string });
@@ -14673,7 +14636,6 @@ describe('commitment_list id=<id> で1件の全文が取れる（#218）', () =>
   });
 
   it('詳細の口ができても、一覧の既定は未了だけのまま', async () => {
-    // 回帰の歯。モード切替を足したときに `list()` の既定を触っていないこと。
     const h = harness();
     await h.stores.commitments.open({
       id: 'c-still-open',
@@ -14701,15 +14663,7 @@ describe('commitment_list id=<id> で1件の全文が取れる（#218）', () =>
   });
 });
 
-/**
- * 認証トークンのプールを**読む**道具（Issue #393。人間の決定 2026-08-25）。
- *
- * **書き込みは渡さない。** 回すのは実装であってクローンの判断ではない
- * （PRD「provider」が逐語でそう書いている）。ここが固定するのは
- * **「読めること」と「値が1文字も出ないこと」の2つ**である。
- */
 describe('token_list（読むだけ。値は返らない）', () => {
-  /** プールに1本置く。**値は本物の形に似せた偽物である**（本物は使わない）。 */
   async function put(
     h: Harness,
     over: Partial<Parameters<Stores['tokens']['replace']>[0][number]> = {},
@@ -14730,8 +14684,6 @@ describe('token_list（読むだけ。値は返らない）', () => {
   });
 
   it('**書き込みの道具は配られていない**（回すのは実装であってクローンではない）', () => {
-    // **これが「読み取りだけ」の実質である。** 一覧に無いことを直接見る —
-    // 実装の側で足しても、ここが落ちれば人間の決定と食い違ったことが分かる。
     for (const name of ['token_add', 'token_remove', 'token_disable', 'token_enable']) {
       expect(CLONE_TOOL_NAMES as readonly string[]).not.toContain(name);
     }
@@ -14743,11 +14695,9 @@ describe('token_list（読むだけ。値は返らない）', () => {
 
     const reply = await h.call('token_list', {});
 
-    // **正本には値が在る**（`list()` は値を含む口である）。それでも出ない。
     expect((await h.stores.tokens.list())[0]?.value).toBe('sk-ant-oat01-FAKE-NOT-A-REAL-TOKEN');
     expect(reply).not.toContain('sk-ant');
     expect(reply).not.toContain('FAKE-NOT-A-REAL-TOKEN');
-    // 出るのは id・ラベル・指紋である（1件の形は `renderListingEntry` が持つ）。
     expect(reply).toContain('- tok-a ');
     expect(reply).toContain('予備1');
     expect(reply).toContain('指紋 ');
@@ -14768,7 +14718,6 @@ describe('token_list（読むだけ。値は返らない）', () => {
 
     const reply = await h.call('token_list', {});
 
-    // **器の環境変数のまま走っている状態と、1本目を撒いた後は別である。**
     expect(reply).toContain('まだ一度も無い');
     expect(reply).not.toContain('← 現役');
   });
@@ -14811,24 +14760,14 @@ describe('token_list（読むだけ。値は返らない）', () => {
 
     const reply = await h.call('token_list', {});
 
-    // 状態は1件の `title` に出る（`renderListingEntry` の1行目）。
     expect(reply).toContain('- tok-cool cooling');
     expect(reply).toContain('- tok-off disabled');
     expect(reply).toContain('- tok-ok ready');
-    // **止まった文言は言い換えずそのまま出す**（受け入れ基準8）。
     expect(reply).toContain("You've hit your usage limit");
-    // 回復の見込みは**分類**であって実測ではない、と断ってある。
     expect(reply).toContain('回復の見込み（分類）');
   });
 
   it('止まった理由の原文が長くても、1件が一覧を食い潰さない', async () => {
-    // **`renderListing` の予算だけでは足りない。** あちらは全体を締めるので、
-    // 1件が長いままでも上限は守られる——**代わりにその1件だけが出て、他の候補が
-    // 全部消える。** 「候補が残っているのか全部冷却中なのか」を見に来た側には、
-    // それは一覧が壊れたのと同じである（skill: 上流のキャップを根拠にしない）。
-    //
-    // **この歯は変異で確かめて足した** —— `excerptLine` を外す変異が、これを
-    // 書く前は生き残った（＝抜粋については何も測れていなかった）。
     const h = harness();
     const long = 'り'.repeat(3_000);
     await h.stores.tokens.replace([
@@ -14839,11 +14778,9 @@ describe('token_list（読むだけ。値は返らない）', () => {
 
     const reply = await h.call('token_list', {});
 
-    // 3件とも出る（1件目が予算を食い潰していない）。
     for (const id of ['tok-a', 'tok-b', 'tok-c']) {
       expect(reply, `${id} が出ていない（1件目が一覧を食い潰した）`).toContain(`- ${id} `);
     }
-    // 原文はそのまま出さず、切ったことが出力に出る。
     expect(reply).not.toContain(long);
     expect(reply).toMatch(/…|文字/);
   });
@@ -14858,16 +14795,6 @@ describe('token_list（読むだけ。値は返らない）', () => {
     expect(reply).toContain('冷却 ');
   });
 
-  /**
-   * issue #2095。回す契機・冷却の設定（`stores.tokens.readSettings()`）が
-   * `UnreadableTokenSettingsError`（issue #2053）で壊れていても、
-   * `token_list` は一覧まで道連れにしない——一覧を返した上で、設定が読めない
-   * ことと直し方を1行で言う。
-   *
-   * **`Promise.all` に3つとも入れていた直す前の形では、ここが reject して
-   * 道具全体が「壊れた」としか見えなくなっていた**（`tools.ts` の
-   * `readSettings()` を切り出した doc）。
-   */
   it('回す契機・冷却の設定が読めなくても一覧は返り、理由と直し方が1行出る（issue #2095）', async () => {
     const h = harness();
     await put(h);
@@ -14878,11 +14805,8 @@ describe('token_list（読むだけ。値は返らない）', () => {
 
     const reply = await h.call('token_list', {});
 
-    // 一覧そのものは道連れになっていない。
     expect(reply).toContain('- tok-a ');
     expect(reply).toContain('予備1');
-    // 既定値へすり替わっていない——「回す契機:」の行が既定の文言に変わり、
-    // 理由と直し方を言う。
     expect(reply).not.toContain('回す契機:');
     expect(reply).toContain('回転の設定は読めない');
     expect(reply).toContain(REASON);
@@ -14901,15 +14825,6 @@ describe('token_list（読むだけ。値は返らない）', () => {
     );
   });
 
-  /**
-   * issue #2125（#2095 の対の穴）。現役の指名（`stores.tokens.readActive()`）が
-   * `UnreadableActiveTokenError`（issue #2053）で壊れていても、`token_list` は
-   * 一覧まで道連れにしない——一覧を返した上で、指名が読めないことを1行で言う。
-   * **現役の印（`← 現役`）は付けない**（読めないものを推測で埋めない）。
-   *
-   * **`readActive()` を素の `Promise.all` に入れていた直す前の形では、ここが
-   * reject して道具全体が「壊れた」としか見えなくなっていた。**
-   */
   it('現役の指名が読めなくても一覧は返り、理由が1行出て現役の印は付かない（issue #2125）', async () => {
     const h = harness();
     await put(h);
@@ -14920,14 +14835,11 @@ describe('token_list（読むだけ。値は返らない）', () => {
 
     const reply = await h.call('token_list', {});
 
-    // 一覧そのものは道連れになっていない。
     expect(reply).toContain('- tok-a ');
     expect(reply).toContain('予備1');
-    // 既定値（「まだ一度も無い」）へすり替わっていない——理由を言う。
     expect(reply).not.toContain('現役の指名: **まだ一度も無い**');
     expect(reply).toContain('現役の指名は読めない');
     expect(reply).toContain(REASON);
-    // 読めないものを推測で埋めない——どの行にも現役の印を付けない。
     expect(reply).not.toContain('← 現役');
   });
 
@@ -14944,11 +14856,6 @@ describe('token_list（読むだけ。値は返らない）', () => {
   });
 });
 
-/**
- * issue #426。`journal_read` は `stores.journal.list` が既に持つ `with`
- * （issue #418）への口を開けていなかった——クローンが `types` だけで
- * `exchange` の相手を回避するしかなかった実害を塞ぐ。
- */
 describe('journal_read に with の絞りを足す（issue #426）', () => {
   it('with で exchange の相手を絞れる（human 以外は出ない）', async () => {
     const h = harness();
@@ -14970,8 +14877,6 @@ describe('journal_read に with の絞りを足す（issue #426）', () => {
       role: 'outbound',
       text: '内部ターン',
     });
-    // `with` を持たない種別（`decision` 等）も、絞りを指定した時点で
-    // 1件も返らないはず（store.ts の `JournalQuery.with` の doc）。
     await h.stores.journal.append({ type: 'decision', decision: '無関係な判断', grounds: '記憶' });
 
     const reply = await h.call('journal_read', { with: ['human'] });
@@ -14993,20 +14898,9 @@ describe('journal_read に with の絞りを足す（issue #426）', () => {
 
     const reply = await h.call('journal_read', { with: [] });
 
-    // **「日誌はまだ空」ではない。** 日誌には行があるが、この絞りが0件を
-    // 指定したという別の意味である——空の日誌と混同すると、絞りの意味が
-    // 「無視される」に化ける。
     expect(reply).toBe('（その条件に当たる日誌は無い）');
   });
 
-  /**
-   * **`types: []` も同じ0件である（issue #426）。**
-   *
-   * ⚠️ **この歯は、契約の歯では代われない。** `verifyJournalStoreQueryEdgeContract`
-   * は3実装に「`types: []` = 0件」を当てているが、道具の層が `length === 0` を
-   * `{}` へ落としていた間は**値がストアへ届かず、契約の歯は緑のまま素通りしていた。**
-   * ⟹ **歯が在ることと、値がそこへ届くことは別である。**測る場所がここに要る。
-   */
   it('types: [] も「絞らない」ではなく0件として扱う（with: [] と同じ渡し方であること）', async () => {
     const h = harness();
     await h.stores.journal.append({
@@ -15023,13 +14917,6 @@ describe('journal_read に with の絞りを足す（issue #426）', () => {
   });
 
   it('with は limit（既定20件）より前に効く——#418 と同じ形の穴を作らない', async () => {
-    // **回帰の歯。** `with` を店（store）ではなく道具の層で `limit` の後に
-    // 掛けると、限られた枠を関係ない `with` の行が食い尽くし、狙った行が
-    // 窓の外へ落ちる（#418 の穴の本体）。ここでは新しい順に25件の
-    // manager exchange を積んだ後、より古い5件の human exchange を積む——
-    // `with` がここで正しく効いていれば、limit 20 の既定でも5件とも
-    // 返ってくるはずである（店側の `with` 実装は #418 で既に入っている。
-    // ここで測るのは道具の層がそれを正しく呼んでいるかである）。
     const h = harness();
     for (let index = 0; index < 5; index += 1) {
       await h.stores.journal.append({
@@ -15057,19 +14944,6 @@ describe('journal_read に with の絞りを足す（issue #426）', () => {
   });
 });
 
-/**
- * `journal_read` が日誌の地平（最古の行の `at`）を伝えるか（issue #1510）。
- *
- * **発端**: `since`/`until` で過去を掘って0件が返ったとき、「その窓に該当が
- * 無かった」のか「日誌がその窓まで遡れない（分母が0）」のかが、それまでは
- * 返り値から区別できなかった（#1092 はこれを判定できないまま閉じている）。
- *
- * **付ける条件は「窓の始点（`since` ?? -∞）が地平より前にかかるか」だけ**
- * （`describeJournalHorizonNote` の doc）。0件かどうかでは決めない——窓が
- * まるごと地平より後ろなら、0件でも「本当に無かった」と言い切れるので
- * 付けない。逆に、地平にかかっているのに非空だからと付けないと、#1092 と
- * 同じ誤読（一覧に見えている分が全部だと誤解する）を生む。
- */
 describe('journal_read が日誌の地平を伝える（issue #1510）', () => {
   it('窓がまるごと地平より後ろで0件なら、地平は付けない（本当に無かったと言い切れる）', async () => {
     const h = harness();
@@ -15079,7 +14953,6 @@ describe('journal_read が日誌の地平を伝える（issue #1510）', () => {
       grounds: '記憶',
     });
 
-    // since が地平（entry.at）より後ろ ⟹ 窓はまるごと地平より後ろ。
     const since = new Date(Date.parse(entry.at) + 60 * 60 * 1000).toISOString();
     const reply = await h.call('journal_read', { since });
 
@@ -15095,7 +14968,6 @@ describe('journal_read が日誌の地平を伝える（issue #1510）', () => {
       grounds: '記憶',
     });
 
-    // since も until も地平（entry.at）より前 ⟹ 窓が地平より前にかかる。
     const since = new Date(Date.parse(entry.at) - 60 * 60 * 1000).toISOString();
     const until = new Date(Date.parse(entry.at) - 1000).toISOString();
     const reply = await h.call('journal_read', { since, until });
@@ -15114,9 +14986,6 @@ describe('journal_read が日誌の地平を伝える（issue #1510）', () => {
       grounds: '記憶',
     });
 
-    // since は地平（entry.at）より前 ⟹ 窓が地平より前にかかる。返るのは
-    // entry の1件だけだが、「since からそこまでの区間に本当に何も無かった
-    // のか」は分からないはずである。
     const since = new Date(Date.parse(entry.at) - 60 * 60 * 1000).toISOString();
     const reply = await h.call('journal_read', { since });
 
@@ -15135,20 +15004,16 @@ describe('journal_read が日誌の地平を伝える（issue #1510）', () => {
     });
     const at = Date.parse(entry.at);
 
-    // 地平の1分前の分の頭を、秒を省いた形で書く。辞書順だと
-    // `'…:MMZ' > '…:MM:SS.sssZ'` になり、地平より後ろと取り違える。
     const minuteStart = new Date(Math.floor(at / 60_000) * 60_000 - 60_000);
     const sinceWithoutSeconds = `${minuteStart.toISOString().slice(0, 16)}Z`;
     const reply1 = await h.call('journal_read', { since: sinceWithoutSeconds });
     expect(reply1).toContain(`この記憶ストアの日誌の最古は ${entry.at}`);
 
-    // 地平の1時間前を +09:00 で書く（辞書順では時が大きく見える）。
     const beforeInJst = new Date(at - 60 * 60 * 1000 + 9 * 60 * 60 * 1000);
     const sinceWithOffset = `${beforeInJst.toISOString().slice(0, 19)}+09:00`;
     const reply2 = await h.call('journal_read', { since: sinceWithOffset });
     expect(reply2).toContain(`この記憶ストアの日誌の最古は ${entry.at}`);
 
-    // 地平の1時間後を +09:00 で書いたら付かない。
     const afterInJst = new Date(at + 60 * 60 * 1000 + 9 * 60 * 60 * 1000);
     const lateWithOffset = `${afterInJst.toISOString().slice(0, 19)}+09:00`;
     const reply3 = await h.call('journal_read', { since: lateWithOffset });
@@ -15212,12 +15077,6 @@ describe('journal_read が日誌の地平を伝える（issue #1510）', () => {
   });
 });
 
-/**
- * Issue #357。`subagent_stall`（委譲の空転）を `exchange` から切り出した
- * 目的そのもの——`journal_read` の `types` で絞れることを確かめる。
- * 絞る前は `{ type: 'exchange', with: 'manager' }` の雑多入れに埋もれて
- * いたので、`types: ['exchange']` では当たらないことも対で固定する。
- */
 describe('journal_read で subagent_stall を絞れる（Issue #357）', () => {
   it('types: ["subagent_stall"] で当たり、見出しに outcome と各カウントが載る', async () => {
     const h = harness();
@@ -15231,8 +15090,6 @@ describe('journal_read で subagent_stall を絞れる（Issue #357）', () => {
       outcome: 'woken',
       text: '[mgr-1] 起こし直した（1回目 / 上限 2）。',
     });
-    // 混ぜても取りこぼさない・誤って混ざらないことを見るため、無関係な
-    // exchange も1件積む。
     await h.stores.journal.append({
       type: 'exchange',
       with: 'manager',
@@ -15290,27 +15147,11 @@ describe('journal_read で subagent_stall を絞れる（Issue #357）', () => {
 
     const reply = await h.call('journal_read', { types: ['subagent_stall'] });
 
-    // **取れなかった回に既定値の行を作らない**（AGENTS.md 地雷「取れない軸に
-    // 0の行を作る」）。`/` 区切りの agentType が付かないことで確かめる。
     expect(reply).toContain('agent=agent-1 owned=1');
     expect(reply).not.toContain('agent=agent-1/');
   });
 });
 
-/**
- * PR #730 で「読む」道具19本の実行が `tool_use` として日誌に残るように
- * なった分、既定の眺め（`limit` 既定20・`types` 省略で全種別）で `tool_use`
- * が `decision` / `exchange` を新しい順20件の枠から押し出す速さが上がった。
- * ここで測るのは、その混み具合を `journal_read` 自身に名乗らせる断り書き
- * （`（tool_use が今回の N 件中 M 件。判断の記録だけを見るなら types で
- * 外せる）`）が、決められた3分類どおりに出る／出ないことである。
- *
- * 出す条件は「M > 0 かつ tool_use だけを名指しした呼びではない」。
- * 判定の根拠は呼び（`types` に何を渡したか）であって `M === N` ではない
- * （後者で判定すると、`types` 省略で偶然全件 tool_use だった回に黙って
- * しまう——そのときも外せばその先の判断の記録が出てくるので、出すのが
- * 正しい）。
- */
 describe('journal_read の tool_use 断り書き（M > 0 かつ tool_use だけを名指しした呼びではないとき）', () => {
   async function appendToolUse(h: ReturnType<typeof harness>, count: number) {
     for (let index = 0; index < count; index += 1) {
@@ -15375,8 +15216,6 @@ describe('journal_read の tool_use 断り書き（M > 0 かつ tool_use だけ�
 
     expect(reply).not.toContain('判断の記録だけを見るなら types で外せる');
 
-    // **重複して名指ししても「だけを名指しした呼び」である。** 外す先が
-    // 無いことは変わらないので、ここでも黙る。
     const repeated = await h.call('journal_read', { types: ['tool_use', 'tool_use'] });
 
     expect(repeated).not.toContain('判断の記録だけを見るなら types で外せる');
@@ -15417,11 +15256,6 @@ describe('journal_read の tool_use 断り書き（M > 0 かつ tool_use だけ�
   });
 });
 
-/**
- * issue #426。`commitment_list` には出所（`origin`）で絞る手段が無く、
- * マネージャーからの一件（`origin: 'manager'`）と人間の依頼が同じ窓へ
- * 混ざって流れ込んでいた実害を塞ぐ。
- */
 describe('commitment_list に origin の絞りを足す（issue #426）', () => {
   it('origin で出所を絞れる（manager 以外は出ない）', async () => {
     const h = harness();
@@ -15469,15 +15303,11 @@ describe('commitment_list に origin の絞りを足す（issue #426）', () => 
 
     const reply = await h.call('commitment_list', { origin: [] });
 
-    // **台帳は空ではない。** 「引き受けたまま終わっていない仕事は無い」と
-    // 混同すると、絞りの意味が消える。
     expect(reply).not.toBe('（引き受けたまま終わっていない仕事は無い）');
     expect(reply).toContain('絞り込みに当たる行は無い');
   });
 
   it('台帳自体に読める行が無いときは「読める行は無い」のまま——origin の絞りのせいだと誤読させない', async () => {
-    // `unreadable` を模して「台帳に読める行が0件」の状態を作る
-    // （`commitment_list は読めない行を隠さない` 節と同じ作法）。
     const stores = createMemoryStores();
     const withUnreadable: Stores = {
       ...stores,
@@ -15505,17 +15335,10 @@ describe('commitment_list に origin の絞りを足す（issue #426）', () => 
     const reply = (result?.content ?? []).map((b) => (b.type === 'text' ? b.text : '')).join('');
 
     expect(reply).toContain('読めない行が 1 件ある');
-    // **「origin の絞り込みに当たる行は無い」ではない。** 絞りのせいではなく、
-    // そもそも読める行が0件だったからである。
     expect(reply).not.toContain('絞り込みに当たる行は無い');
   });
 
   it('origin の絞りは文字数の予算（COMMITMENT_LIST_BUDGET）より前に効く——#418 と同じ形の穴を作らない', async () => {
-    // **回帊の歯。** origin を renderListing の後（予算で切った後）に掛けると、
-    // 絞りに当たらない行が予算を食い尽くし、狙った行が窓の外へ落ちる。
-    // ここでは manager origin を多数（予算を超える量）積み、その後に少数の
-    // human origin を積む——`origin: ['human']` を渡したとき、manager の
-    // 行がいくら多くても human の全件が返るはずである。
     const h = harness();
     const long = 'あ'.repeat(500);
     for (let index = 0; index < 25; index += 1) {
@@ -15542,8 +15365,6 @@ describe('commitment_list に origin の絞りを足す（issue #426）', () => 
       expect(reply, `human-${index} が窓の外へ落ちた`).toContain(`human-${index}`);
     }
     expect(reply).not.toContain('manager-');
-    // 予算そのものは origin を絞った後の3件だけなので切れないはず
-    // （切れていたら「省略」の断りが出る——出ないことも見る）。
     expect(reply).not.toMatch(/…ほか \d+ 件は省略/);
   });
 
@@ -15571,44 +15392,13 @@ describe('commitment_list に origin の絞りを足す（issue #426）', () => 
 
     const reply = await h.call('commitment_list', { origin: ['manager'] });
 
-    // 予算で実際に切れたこと（そうでなければ omitted は呼ばれておらず、
-    // 下の assert は何も測っていない）。
     expect(reply).toMatch(/…ほか \d+ 件は省略/);
-    // **`total` は origin で絞った後の母数（manager の25件）でなければ
-    // ならない。** 絞る前の全体（50件）だと、絞りの効き目が嘘になる。
     expect(reply).toContain(`origin: manager に絞った、未了は ${managerCount} 件あり`);
     expect(reply).not.toContain(`${managerCount + selfCount} 件あり`);
     expect(reply).not.toContain('self-');
   });
 });
 
-/**
- * `commitment_list` の一覧モードに継続点（`cursor`）を足す。
- *
- * **直した穴**: 一覧モードは未了の台帳を古い順に並べ、予算
- * （`COMMITMENT_LIST_BUDGET`）に入るところまでを出す。落ちるのは常に末尾
- * （＝より新しい依頼）で、旧い実装はそこへ到達する口を1つも持たなかった
- * （断り書きが案内する `commitment_list id=<id>` は1件の全文を読む口で、
- * 予算からあふれた側の id そのものを教えない）。
- *
- * **`resolveCommitmentCursor`（`commitment-cursor.ts`）の分岐（B1〜B10）は
- * そちらの歯（`commitment-cursor.test.ts`）が I/O 無しで直接測っている。**
- * ここで測るのは、その純関数を実際の道具（ストア・zod スキーマ・
- * `renderListing` の予算切り・既存の `origin`/`includeClosed` との組み合わせ）
- * に配線した結果——`commitment_list` ツールとしての分岐対応表（T1〜T9）。
- *
- * | 分岐 | 内容 | 歯 |
- * | --- | --- | --- |
- * | T1 | cursor 無し・予算内 → 従来どおり（cursor 案内は出ない） | `T1: 予算内なら cursor の案内は出ない（回帰）` |
- * | T2 | 予算で切れたら、断り書きが cursor=<値> を案内する | `T2: 予算で切れたら次に打つ cursor がそのまま案内される` |
- * | T3 | 案内された cursor で呼ぶと、あふれていた「新しい側」に届く（実際の事故の再現） | `T3（事故の再現）: 25件の未了行の後に届いた新しい依頼が、cursor で読める` |
- * | T4 | cursor が壊れている → 明示のエラー（黙って先頭へ倒さない） | `T4: 壊れた cursor は明示のエラーで、黙って先頭からへ倒さない` |
- * | T5 | cursor の includeClosed が今回の呼びと食い違う → 明示のエラー | `T5: includeClosed が食い違う cursor は明示のエラー` |
- * | T6 | cursor が末尾を指す（最後の頁） → 空一覧とは違う文言 | `T6: 最後の頁は「もう続きは無い」であって「絞り込みに0件」ではない` |
- * | T7 | id（全文モード）と cursor が同時に来たら cursor は無視される | `T7: id が在るとき cursor は無視される（他の条件と同じ規約）` |
- * | T8 | origin の絞りと cursor を併用しても、絞った後の並びで正しく続く | `T8: origin と cursor を併用しても絞った後の並びで正しく続く` |
- * | T9 | includeClosed の cursor が open→closed の段を跨いでも正しく続く | `T9: includeClosed の cursor は open→closed の段を跨いでも正しく続く` |
- */
 describe('commitment_list の一覧モードに継続点（cursor）を足す', () => {
   function extractCursor(reply: string): string {
     const match = /cursor=([A-Za-z0-9\-_]+)/.exec(reply);
@@ -15647,25 +15437,12 @@ describe('commitment_list の一覧モードに継続点（cursor）を足す', 
 
     expect(reply).toMatch(/…ほか \d+ 件は省略/);
     expect(reply).toContain('cursor=');
-    // **「落ちているのは新しい側」であることを明示する。**
     expect(reply).toContain('省いたのは、これより新しい依頼である。');
-    // 次に打てる形そのものが書いてあること（そのまま呼べる）。
     expect(reply).toMatch(/続きは commitment_list cursor=[A-Za-z0-9\-_]+ で取れる/);
   });
 
   it('T3（事故の再現）: 25件の未了行の後に届いた新しい依頼が、cursor で読める', async () => {
-    // **2026-09-04T22:33 の実害の再現。** 1本のマネージャーから25件が
-    // 連続して台帳へ積まれ（同一 origin: manager）、閉じられないまま先頭を
-    // 占め続けた。その後にオーナーの依頼（origin: human）が届く——旧い
-    // 実装ではこれが予算からあふれ、かつ到達する口が無かった。
-    //
-    // **⚠️ 本文に連番を入れてあるのは #1041 のためである。** 実害のときは
-    // 25件がバイト単位で同一だったが、**その状態はもう `open()` から作れない**
-    // ——同一マネージャー×同一本文×未了は1行に畳まれる（`findOpenManagerDuplicate`）。
-    // ⟹ 本文を同一にすると台帳が1行になり、この歯は cursor の頁送りを1つも
-    // 踏まなくなる。**測りたいのは「25件の未了が先頭を占めたときに、後から来た
-    // 人間の依頼へ cursor で到達できるか」**であって、その25件が同文かどうか
-    // ではないので、畳まれない形（連番）で25件積む。
+    // 本文に連番を入れる: 同一マネージャー×同一本文×未了は1行に畳まれ（`findOpenManagerDuplicate`）、同文だと cursor の頁送りを踏まなくなるため
     const h = harness();
     const long = 'あ'.repeat(500);
     for (let index = 0; index < 25; index += 1) {
@@ -15685,7 +15462,6 @@ describe('commitment_list の一覧モードに継続点（cursor）を足す', 
     });
 
     const first = await h.call('commitment_list', {});
-    // 前提: 実際に予算で切れていること（そうでなければ何も測っていない）。
     expect(first).toMatch(/…ほか \d+ 件は省略/);
     expect(first).not.toContain('human-request');
 
@@ -15708,8 +15484,6 @@ describe('commitment_list の一覧モードに継続点（cursor）を足す', 
     const reply = await h.call('commitment_list', { cursor: 'this-is-not-a-real-cursor' });
 
     expect(reply).toContain('cursor が壊れている');
-    // **黙って先頭から返していない証拠。** 先頭から返していれば一覧の
-    // 内容（'c-1' を含む renderListingEntry の行）が出るはずだが、出ない。
     expect(reply).not.toContain('c-1');
   });
 
@@ -15729,11 +15503,6 @@ describe('commitment_list の一覧モードに継続点（cursor）を足す', 
     });
     await h.stores.commitments.close('c-closed', '2026-01-03T00:00:00.000Z', '済み', 'clone');
 
-    // **`includeClosed: true` の呼びから発行された cursor を模す。** 台帳の
-    // 中身は `commitment_list` を経由して作らせず、`encodeCommitmentCursor`
-    // を直接呼んで組み立てる——ここで測りたいのは「食い違う cursor を渡した
-    // ときの道具側の反応」であって、cursor の発行そのものは
-    // `commitment-cursor.test.ts`（B4）が別に測っている。
     const { encodeCommitmentCursor } = await import('./commitment-cursor.js');
     const cursor = encodeCommitmentCursor({
       segment: 'open',
@@ -15743,7 +15512,6 @@ describe('commitment_list の一覧モードに継続点（cursor）を足す', 
       order: 'oldest',
     });
 
-    // includeClosed を渡さない（＝ false 相当）呼びへ、true で発行された cursor を渡す。
     const reply = await h.call('commitment_list', { cursor });
 
     expect(reply).toContain('cursor は includeClosed=true');
