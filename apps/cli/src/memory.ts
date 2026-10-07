@@ -460,6 +460,7 @@ export async function memorySetCommand(
 export async function memoryRemoveCommand(
   slug: string,
   options: { ifMatch?: string; yes?: boolean } = {},
+  io?: ConfirmIo,
 ): Promise<void> {
   const conn = await connect('write');
   if (conn === null) return;
@@ -467,6 +468,7 @@ export async function memoryRemoveCommand(
   await confirmIrreversible(
     `記憶 ${slug} を消します。本文は戻りません（日誌には消した事実と大きさだけが残ります）。`,
     options,
+    io,
   );
   // **`--if-match` があれば、それだけで照合する**（Issue #2919）。人間が判断の根拠にしたのは
   // `memory show` で読んだ内容なので、消す直前に読み直した版へ差し替えない。
