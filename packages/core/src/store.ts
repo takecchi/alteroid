@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto';
 import type { ArchiveContinuity } from './archive-continuity.js';
 import type { AttachmentStore } from './attachment.js';
 import type { AuthStore } from './auth.js';
+import type { CodexChatgptAuthStore } from './codex-chatgpt-auth.js';
 import type { IntegrationKeyStore } from './integration-key.js';
 import type {
   ConversationBaselineResult,
@@ -1641,6 +1642,45 @@ export function findOpenManagerDuplicate(
   );
 }
 
+/**
+ * 台帳の行の本文の「版」（Issue #3786）。`editedAt ?? at` で、`GET /commitments` の
+ * 行の `editedAt` と `at` からクライアントが同じ式で出せる（欄は足さない）。
+ * `commitmentUpdatedAt`（`closedAt ?? at`）とは別物で、本文の編集では動かない。
+ * 時刻なので、同じミリ秒に2回書かれると区別できない。
+ */
+export function commitmentBodyVersion(entry: Pick<Commitment, 'at' | 'editedAt'>): string {
+  return entry.editedAt ?? entry.at;
+}
+
+/** `CommitmentStore.editBody` の任意の引数。 */
+export interface EditCommitmentBodyOptions {
+  /**
+   * 前提の版（読んだ時の `commitmentBodyVersion`）。書く瞬間の版と違えば書かず
+   * `CommitmentConflictError`（照合と書き込みは1つの排他の中）。省略は従来どおり後勝ち。
+   * 無い行は `current: null` の衝突。片付いている行は版を見ず `false`。
+   */
+  ifMatch?: string;
+}
+
+/** 前提の版が合わず、書かなかった。`current` はいまの行（消えていれば `null`）。 */
+export class CommitmentConflictError extends Error {
+  readonly current: Commitment | null;
+  constructor(id: string, current: Commitment | null) {
+    super(`引き受けた仕事が読んだ後に変わっています: ${id}`);
+    this.name = 'CommitmentConflictError';
+    this.current = current;
+  }
+}
+
+/** 前提の版 `ifMatch` が、いまの行と合うか（`undefined` は前提なし＝常に合う）。 */
+export function commitmentVersionMatches(
+  current: Pick<Commitment, 'at' | 'editedAt'> | null,
+  ifMatch: string | undefined,
+): boolean {
+  if (ifMatch === undefined) return true;
+  return current !== null && commitmentBodyVersion(current) === ifMatch;
+}
+
 export interface CommitmentStore {
   /**
    * 台帳を返す。**未了は古い順**（齢が判断の材料なので、古いものから見せる）、
@@ -1814,7 +1854,13 @@ export interface CommitmentStore {
    * 日誌は別のストアであり、この署名からは見えない。新しい呼び出し元を足す
    * なら、`journal.append` を必ず対にすること。
    */
-  editBody(id: string, body: string, at: string, by: CommitmentEditedBy): Promise<boolean>;
+  editBody(
+    id: string,
+    body: string,
+    at: string,
+    by: CommitmentEditedBy,
+    options?: EditCommitmentBodyOptions,
+  ): Promise<boolean>;
 
   /**
    * 全件を消す（ワークスペースのリセット専用。#workspace-reset）。**未了・
@@ -3571,6 +3617,13 @@ export interface Stores {
    * 生まれる（north_star 禁止1）。
    */
   tokens: TokenPoolStore;
+  /**
+   * Codex の ChatGPT ログイン（`auth.json` の中身）の正本（#3939。`codex-chatgpt-auth.ts`）。
+   *
+   * **省略可能にしないこと**（`tokens` と同じ理由）。ここを任意にすると、片方の器でだけ
+   * 「ログインが器を作り直しても残る」が成り立たないという能力差が生まれる（north_star 禁止1）。
+   */
+  codexAuth: CodexChatgptAuthStore;
   /**
    * 利用状況の台帳。
    *

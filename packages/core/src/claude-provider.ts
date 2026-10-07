@@ -359,11 +359,32 @@ export function cloneMcpServers(
   return { ...(external ?? {}), [MCP_SERVER_NAME]: own };
 }
 
+export interface ClonePluginRequest {
+  path: string;
+  skipMcpDiscovery: boolean;
+}
+
+/** 空なら欄ごと省く（空配列を渡すと SDK へ「plugin 0本」と明示することになり、既定との差が出る）。 */
+function clonePluginOptions(
+  plugins: readonly ClonePluginRequest[] | undefined,
+): Pick<Options, 'plugins'> {
+  if (plugins === undefined || plugins.length === 0) return {};
+  return {
+    plugins: plugins.map((plugin) => ({
+      type: 'local' as const,
+      path: plugin.path,
+      skipMcpDiscovery: plugin.skipMcpDiscovery,
+    })),
+  };
+}
+
 export interface CloneSessionOptionsRequest {
   model: string;
   permissionMode: PermissionModeName;
   mcpServer: McpServerConfig;
   externalMcpServers?: Readonly<Record<string, McpServerConfig>>;
+  /** 展開済みの plugin（`Options.plugins` の `type: 'local'` へ写す）。省略・空なら欄ごと省く。 */
+  plugins?: readonly ClonePluginRequest[];
   systemPrompt: string;
   env: NodeJS.ProcessEnv;
   cwd?: string;
@@ -383,6 +404,7 @@ export function buildCloneSessionOptions(request: CloneSessionOptionsRequest): O
     permissionMode,
     mcpServer,
     externalMcpServers,
+    plugins,
     systemPrompt,
     env,
     cwd,
@@ -405,6 +427,7 @@ export function buildCloneSessionOptions(request: CloneSessionOptionsRequest): O
     // `canUseTool` を繋がない: クローンは長寿命セッション1本で全ターンが直列に通るので、人間の回答を待って止めると止まるのが全部になるため
     permissionMode,
     mcpServers: cloneMcpServers(mcpServer, externalMcpServers),
+    ...clonePluginOptions(plugins),
     systemPrompt,
     // `settingSources` を `[]` にしない: 人間が Claude Code で使っている MCP 連携がクローンから1つも見えなくなる（能力の削除）ため
     settingSources: ['user', 'project', 'local'],
@@ -453,6 +476,8 @@ export interface CloneDistillOptionsRequest {
   permissionMode: PermissionModeName;
   mcpServer: McpServerConfig;
   externalMcpServers?: Readonly<Record<string, McpServerConfig>>;
+  /** 本セッションと同じもの（`CloneSessionOptionsRequest.plugins`）。 */
+  plugins?: readonly ClonePluginRequest[];
   systemPrompt: string;
   env: NodeJS.ProcessEnv;
   cwd?: string;
@@ -466,6 +491,7 @@ export function buildCloneDistillOptions(request: CloneDistillOptionsRequest): O
     permissionMode,
     mcpServer,
     externalMcpServers,
+    plugins,
     systemPrompt,
     env,
     cwd,
@@ -479,6 +505,7 @@ export function buildCloneDistillOptions(request: CloneDistillOptionsRequest): O
     allowedTools: CLONE_ALLOWED_TOOLS,
     permissionMode,
     mcpServers: cloneMcpServers(mcpServer, externalMcpServers),
+    ...clonePluginOptions(plugins),
     systemPrompt,
     settingSources: ['user', 'project', 'local'],
     skills: 'all',

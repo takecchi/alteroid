@@ -1,6 +1,12 @@
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 
-import type { AttachmentLimits, BuildRevision, RunnerEvent, RunnerHost } from '@alteroid/core';
+import type {
+  AttachmentLimits,
+  BuildRevision,
+  RunnerEvent,
+  RunnerHost,
+  RunnerManagerPeer,
+} from '@alteroid/core';
 import {
   DEFAULT_SSE_HEARTBEAT_MS,
   readAttachmentLimits,
@@ -18,6 +24,8 @@ import {
   runnerResumeCommandSchema,
   runnerSetCredentialsCommandSchema,
   runnerSetMcpServersCommandSchema,
+  runnerSetCodexAuthCommandSchema,
+  runnerTakeCodexAuthWriteBackCommandSchema,
   runnerSetProfileCommandSchema,
   runnerStartCommandSchema,
 } from '@alteroid/core';
@@ -43,6 +51,11 @@ export interface RunnerAppDeps {
   sseWriteDeadlineMs?: number;
   taskBreakdownReader?: TaskBreakdownReader;
   attachmentLimits?: AttachmentLimits;
+  // hello で名乗るモデル。渡さなければ欄ごと載せない（既定の帯で埋めない）。
+  managerModel?: string;
+  workerModel?: string;
+  /** `hello.managerPeers` に載せる peer（#3940）。空・省略なら欄ごと送らない。 */
+  managerPeers?: readonly RunnerManagerPeer[];
 }
 
 const AUTH_SCHEME = /^Bearer\s+(.+)$/i;
@@ -372,6 +385,8 @@ export function createRunnerApp(deps: RunnerAppDeps) {
     .use('/credentials', control)
     .use('/profile', control)
     .use('/mcp-servers', control)
+    .use('/codex-auth', control)
+    .use('/codex-auth/*', control)
     .use('/rescue-refs/*', control)
 
     .get('/health', async (c) => {
@@ -454,6 +469,43 @@ export function createRunnerApp(deps: RunnerAppDeps) {
       },
     )
 
+    // Codex の ChatGPT ログイン（#3939）。値は受け取るだけで、状態（GET）には指紋しか載せない。
+    .get('/codex-auth', (c) => c.json({ ok: true, codexAuth: host.codexAuth() }))
+    .post(
+      '/codex-auth',
+      zValidator('json', runnerSetCodexAuthCommandSchema, (result, c) => {
+        if (!result.success) {
+          return c.json(
+            { ok: false, error: 'Codex の ChatGPT ログインの袋の形が不正（置いていない）' },
+            400,
+          );
+        }
+        return undefined;
+      }),
+      async (c) => {
+        try {
+          const codexAuth = await host.setCodexAuth(c.req.valid('json').codexAuth);
+          return c.json({ ok: true, codexAuth });
+        } catch (error) {
+          return c.json({ ok: false, error: reasonOf(error) }, 500);
+        }
+      },
+    )
+    // Codex が書き換えた auth.json を、知らせた指紋と一致するときだけ渡す（#3939）。値を返すのは
+    // この制御面の口だけ（デーモンだけが叩ける。合鍵のハッシュで守る）。
+    .post(
+      '/codex-auth/write-back',
+      zValidator('json', runnerTakeCodexAuthWriteBackCommandSchema, (result, c) => {
+        if (!result.success) return c.json({ ok: false, error: '指紋が無い' }, 400);
+        return undefined;
+      }),
+      (c) =>
+        c.json({
+          ok: true,
+          writeBack: host.takeCodexAuthWriteBack(c.req.valid('json').fingerprint),
+        }),
+    )
+
     // heartbeat を流す: 無音が続くと読む側（undici）の `bodyTimeout`（300000ms）で必ず切れるため。
     .get('/events', (c) =>
       streamSSE(c, async (stream) => {
@@ -517,7 +569,12 @@ export function createRunnerApp(deps: RunnerAppDeps) {
                   capabilities: RUNNER_CAPABILITIES,
                   // `managerProvider` / `managerProviders` は名乗らない（2026-10-07 の決定。マネージャー層は常に
                   // Claude）。名乗ると旧いデーモンが `provider` 付きの命令を送ってくるため。
+                  ...(deps.managerModel === undefined ? {} : { managerModel: deps.managerModel }),
+                  ...(deps.workerModel === undefined ? {} : { workerModel: deps.workerModel }),
                   attachmentBodyLimit: attachmentBodyMax,
+                  ...(deps.managerPeers === undefined || deps.managerPeers.length === 0
+                    ? {}
+                    : { managerPeers: deps.managerPeers }),
                 }),
               }),
             sseWriteDeadlineMs,

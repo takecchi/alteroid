@@ -66,6 +66,9 @@ const TMP_NAME_RULE =
 
 export type PluginScope = StoredPlugin['scope'];
 
+/** クローン（daemon）へ撒く scope。`runner` はマネージャー側が持つので含めない。 */
+export const PLUGIN_SCOPES_FOR_CLONE: readonly PluginScope[] = ['all', 'app'];
+
 export type RemovedReason =
   | 'not-allowlisted'
   | 'hooks-disabled'

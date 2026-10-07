@@ -253,6 +253,17 @@ class LocalRunner implements RunnerClient {
     return this.#host.setMcpServers(servers);
   }
 
+  /** Codex の ChatGPT ログイン（#3939）。**同一プロセスでも同じ口を通す**（MCP の登録と同じ理由）。 */
+  async setCodexAuth(push: { value: string; revision: string } | null): Promise<void> {
+    await this.#host.setCodexAuth(push);
+  }
+
+  async takeCodexAuthWriteBack(
+    fingerprint: string,
+  ): Promise<{ value: string; baseRevision: string; fingerprint: string } | null> {
+    return this.#host.takeCodexAuthWriteBack(fingerprint);
+  }
+
   /** 同じプロセスが消えるので、セッションごと畳む（HTTP 実装とはここが違う）。 */
   async close(): Promise<void> {
     this.#onEvent = null;

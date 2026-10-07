@@ -2,9 +2,13 @@ import { describe, expect, it } from 'vitest';
 
 import type { AgentProviderId } from './agent-ports.js';
 import {
+  MANAGER_PEER_CODEX_MODELS_ENV_KEY,
   MANAGER_PEERS_ENV_KEY,
   isPeerAllowed,
+  managerPeerModelsEnvKey,
+  parsePeerModels,
   parsePeers,
+  resolvePeerModels,
   resolvePeers,
 } from './agent-provider-peers.js';
 
@@ -84,5 +88,43 @@ describe('ALTEROID_MANAGER_PEERS の解釈', () => {
   it('isPeerAllowed は自分自身を許さない（集合に紛れても false）', () => {
     expect(isPeerAllowed(CLAUDE, new Set([CLAUDE, CODEX]), CLAUDE)).toBe(false);
     expect(isPeerAllowed(CLAUDE, new Set([CLAUDE, CODEX]), CODEX)).toBe(true);
+  });
+});
+
+describe('ALTEROID_MANAGER_PEER_<PROVIDER>_MODELS の解釈（#3934）', () => {
+  it('Codex の名前は固定である', () => {
+    expect(managerPeerModelsEnvKey(CODEX)).toBe('ALTEROID_MANAGER_PEER_CODEX_MODELS');
+    expect(MANAGER_PEER_CODEX_MODELS_ENV_KEY).toBe(managerPeerModelsEnvKey(CODEX));
+  });
+
+  it('未設定・空・空白だけは空（model 引数を出さない）', () => {
+    for (const raw of [undefined, '', '   ']) {
+      expect(parsePeerModels(raw, 'K')).toEqual([]);
+    }
+  });
+
+  it('カンマ区切りで並べ、前後の空白を落とし、重複は1つに畳む', () => {
+    expect(parsePeerModels(' gpt-5.5 , gpt-5.5-codex,gpt-5.5 ', 'K')).toEqual([
+      'gpt-5.5',
+      'gpt-5.5-codex',
+    ]);
+  });
+
+  it('空の要素・空白を含む名前は起動時に止める', () => {
+    expect(() => parsePeerModels('gpt-5.5,,x', 'K')).toThrow(/空の要素/);
+    expect(() => parsePeerModels('gpt-5.5,', 'K')).toThrow(/空の要素/);
+    expect(() => parsePeerModels('gpt 5', 'K')).toThrow(/空白/);
+  });
+
+  it('開いている peer の一覧だけを採り、開いていない provider の一覧は使わずに名前を返す', () => {
+    const env = { [MANAGER_PEER_CODEX_MODELS_ENV_KEY]: 'gpt-5.5' };
+    expect(resolvePeerModels(env, new Set([CODEX]), KNOWN)).toEqual({
+      models: { codex: ['gpt-5.5'] },
+      unusedKeys: [],
+    });
+    expect(resolvePeerModels(env, new Set(), KNOWN)).toEqual({
+      models: {},
+      unusedKeys: [MANAGER_PEER_CODEX_MODELS_ENV_KEY],
+    });
   });
 });
