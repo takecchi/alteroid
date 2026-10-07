@@ -516,3 +516,122 @@ describe('alteroid mcp set / clear の確認（#3141）', () => {
     expect(sent.some((entry) => entry.method === 'PUT')).toBe(true);
   });
 });
+
+describe('読んだ版を照合して置き換える（#3984）', () => {
+  const OK = {
+    status: 200,
+    body: { names: ['only'], updatedAt: 'x', version: 'v2', appliesFrom: 'y', runners: [] },
+  };
+  const ELSEWHERE = {
+    mcpServers: {
+      github: { command: 'npx', env: { GITHUB_TOKEN: SECRET } },
+      zeta: { type: 'http', url: `https://example.com/mcp?api_key=${SECRET}` },
+    },
+    version: 'v9',
+  };
+
+  async function oneServerFile(): Promise<string> {
+    const dir = await makeTempDir('alteroid-cli-mcp-if-match-');
+    const path = join(dir, '.mcp.json');
+    await writeFile(path, JSON.stringify({ mcpServers: { only: { command: 'x' } } }), 'utf8');
+    return path;
+  }
+
+  it('edit: エディタを開く前に読んだ version を ifMatch に載せる（開いている間に変わっても読み直さない）', async () => {
+    setReply('GET', '/mcp-servers', { status: 200, body: { ...STORED, version: 'v1' } });
+    setReply('PUT', '/mcp-servers', OK);
+    editWith = async (path) => {
+      // エディタを開いている間に別の書き手が書いた状態
+      setReply('GET', '/mcp-servers', { status: 200, body: ELSEWHERE });
+      await writeFile(path, JSON.stringify({ mcpServers: { only: { command: 'x' } } }));
+    };
+    captureStdout();
+
+    await mcpEditCommand();
+
+    expect(sent.find((s) => s.method === 'PUT')?.body).toEqual({
+      mcpServers: { only: { command: 'x' } },
+      ifMatch: 'v1',
+    });
+  });
+
+  it('set: 確認のために読んだ version を ifMatch に載せる', async () => {
+    setReply('GET', '/mcp-servers', { status: 200, body: { ...STORED, version: 'v1' } });
+    setReply('PUT', '/mcp-servers', OK);
+    const path = await oneServerFile();
+    captureStdout();
+
+    await mcpSetCommand(path, { yes: true });
+
+    expect(sent.find((s) => s.method === 'PUT')?.body).toEqual({
+      mcpServers: { only: { command: 'x' } },
+      ifMatch: 'v1',
+    });
+  });
+
+  it('clear: 読んだ version を ifMatch に載せる', async () => {
+    setReply('GET', '/mcp-servers', { status: 200, body: { ...STORED, version: 'v1' } });
+    setReply('PUT', '/mcp-servers', OK);
+    captureStdout();
+
+    await mcpClearCommand({ yes: true });
+
+    expect(sent.find((s) => s.method === 'PUT')?.body).toEqual({ mcpServers: {}, ifMatch: 'v1' });
+  });
+
+  it('古いデーモン（version を返さない）には ifMatch を送らず、従来どおり置き換える', async () => {
+    setReply('GET', '/mcp-servers', { status: 200, body: STORED });
+    setReply('PUT', '/mcp-servers', OK);
+    const path = await oneServerFile();
+    captureStdout();
+
+    await mcpSetCommand(path, { yes: true });
+
+    expect(sent.find((s) => s.method === 'PUT')?.body).toEqual({
+      mcpServers: { only: { command: 'x' } },
+    });
+  });
+
+  it('set の 409: 置き換えていないと言い、いまの登録の名前だけを出し（値は出さない）、やり直し方を案内して失敗する', async () => {
+    setReply('GET', '/mcp-servers', { status: 200, body: { ...STORED, version: 'v1' } });
+    setReply('PUT', '/mcp-servers', {
+      status: 409,
+      body: { error: '読んだ後に変わっています', current: ELSEWHERE },
+    });
+    const path = await oneServerFile();
+    const out = captureStdout();
+    const err = captureStderr();
+
+    await expect(mcpSetCommand(path, { yes: true })).rejects.toThrow(
+      'MCP の登録が読んだ後に変わっていたので置き換えませんでした',
+    );
+
+    const text = out() + err();
+    expect(text).toContain('置き換えていません');
+    expect(text).toContain('いまの登録: github・zeta');
+    expect(text).toContain('alteroid mcp show');
+    expect(text).not.toContain(SECRET);
+    expect(text).not.toContain('GITHUB_TOKEN');
+  });
+
+  it('edit の 409: 書いた内容を残して、名前だけを出して失敗する', async () => {
+    setReply('GET', '/mcp-servers', { status: 200, body: { ...STORED, version: 'v1' } });
+    setReply('PUT', '/mcp-servers', {
+      status: 409,
+      body: { error: '読んだ後に変わっています', current: ELSEWHERE },
+    });
+    const edited = JSON.stringify({ mcpServers: { github: STORED.mcpServers.github } });
+    editWith = (path) => writeFile(path, edited);
+    const out = captureStdout();
+    const err = captureStderr();
+
+    await expect(mcpEditCommand()).rejects.toThrow();
+
+    expect(out()).toContain('いまの登録: github・zeta');
+    expect(out()).not.toContain(SECRET);
+    const mine = /残してあります: (\S+)/.exec(err())?.[1];
+    expect(mine).toBeDefined();
+    expect(await readFile(mine ?? '', 'utf8')).toBe(edited);
+    await rm(dirname(mine ?? ''), { recursive: true, force: true });
+  });
+});

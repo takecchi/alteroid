@@ -17,6 +17,7 @@ import {
   ErrorNote,
   Spinner,
   TurnFailureNote,
+  type TurnFailureKind,
   useIsMobile,
   EMPTY_QUESTIONS_DRAFT,
 } from '@alteroid/ui';
@@ -107,7 +108,22 @@ const NO_REPLY_KEYS: ReadonlySet<string> = new Set();
  * ストリームの `error` イベント（ターンが失敗した）由来の失敗。入力欄の上の帯が、ネットワーク断・
  * 403 のような「呼べなかった」失敗（ただの `Error`）と見分けて、利用者向けの文で描くための型。
  */
-class TurnFailedError extends Error {}
+class TurnFailedError extends Error {
+  constructor(
+    message: string,
+    readonly failureKind: TurnFailureKind,
+  ) {
+    super(message);
+  }
+}
+
+/** 失敗の案内の導線。受信中の帯と読み直した失敗の行で同じものを出す。 */
+const turnFailureAction = (kind: TurnFailureKind) =>
+  kind === 'auth' ? (
+    <Link to="/tokens" className="text-xs underline underline-offset-2">
+      認証トークンの画面を開く
+    </Link>
+  ) : undefined;
 
 /**
  * `done` / `error` / `usage_limited` のどれも来ないまま、接続が正常に閉じた（プロキシ・再起動など、#3564）。
@@ -353,6 +369,8 @@ interface Line {
    * `failed` はもう一度送れば試し直せる、`held` は枠が開けばクローンが自分で試し直す。
    */
   turnFailure?: 'failed' | 'held';
+  /** サーバの `turnFailureKind` をそのまま写す（`turnFailure` と同時に付く）。 */
+  turnFailureKind?: TurnFailureKind;
   /**
    * 同じストリーム（＝1ターン）の返信行をまとめる印（#3593）。`ask_human`・道具を挟んで返信が
    * 複数の行に分かれても、日誌には**ターン末に1つの発言**（本文を連結したもの）として載る
@@ -1954,7 +1972,12 @@ export function ChatPane({
           // ——編集の入口を出すかは呼び出し側が `role === 'human'` も併せて
           // 見るので、ここでは単に「サーバ確定済みの発言である」ことを表す。
           journalId: message.id,
-          ...(message.turnFailure === undefined ? {} : { turnFailure: message.turnFailure }),
+          ...(message.turnFailure === undefined
+            ? {}
+            : {
+                turnFailure: message.turnFailure,
+                turnFailureKind: message.turnFailureKind ?? 'other',
+              }),
           ...(message.attachments === undefined || message.attachments.length === 0
             ? {}
             : { attachments: message.attachments }),
@@ -2796,7 +2819,9 @@ export function ChatPane({
         case 'error':
           settleReply();
           markFailedTurn('failed');
-          setFailures((prev) => new Map(prev).set(stream.id, new TurnFailedError(event.message)));
+          setFailures((prev) =>
+            new Map(prev).set(stream.id, new TurnFailedError(event.message, event.kind)),
+          );
           if (owns()) refetchApprovalsRef.current();
           break;
         case 'done':
@@ -4104,6 +4129,8 @@ export function ChatPane({
                       <ChatTurnFailure
                         key={line.key}
                         kind={line.turnFailure}
+                        failureKind={line.turnFailureKind ?? 'other'}
+                        action={turnFailureAction}
                         text={line.text}
                         onRetry={
                           retryLine === undefined
@@ -4380,14 +4407,9 @@ export function ChatPane({
               {shownFailure === undefined ||
               shownFailure === null ? undefined : shownFailure instanceof TurnFailedError ? (
                 <TurnFailureNote
+                  kind={shownFailure.failureKind}
                   message={shownFailure.message}
-                  action={(kind) =>
-                    kind === 'auth' ? (
-                      <Link to="/tokens" className="text-xs underline underline-offset-2">
-                        認証トークンの画面を開く
-                      </Link>
-                    ) : undefined
-                  }
+                  action={turnFailureAction}
                 />
               ) : (
                 <div>

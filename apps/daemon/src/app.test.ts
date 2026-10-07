@@ -694,7 +694,7 @@ describe('HTTP API', () => {
       const response = await app.request('/chat/conv-a/stream');
       const reader = (response.body as ReadableStream<Uint8Array>).getReader();
       let seen = await readUntil(reader, 'event: thinking');
-      fake.emit('conv-a', { type: 'error', message: '壊れた' });
+      fake.emit('conv-a', { type: 'error', message: '壊れた', kind: 'auth' });
       const decoder = new TextDecoder();
       for (;;) {
         const { value, done } = await reader.read();
@@ -702,6 +702,12 @@ describe('HTTP API', () => {
         seen += decoder.decode(value, { stream: true });
       }
       expect(frames(seen).map((f) => f.event)).toEqual(['open', 'thinking', 'error']);
+      // 種別は SSE の本文にそのまま載る（Web が文面から推し量らずに済む）。
+      expect(frames(seen).find((f) => f.event === 'error')?.data).toEqual({
+        type: 'error',
+        message: '壊れた',
+        kind: 'auth',
+      });
     });
 
     it('進行中でなければ open(inProgress: false, pending: []) だけで閉じ、購読を残さない', async () => {
@@ -9076,6 +9082,39 @@ describe('会話・出来事・マネージャーへの手出し', () => {
     // 共有した組み立て（`conversation.ts` は `conversationId` も持つ）から
     // 1項目余って出ても、上のアサーションは通ってしまう。
     expect(Object.keys(body.messages[0]!).sort()).toEqual(['at', 'id', 'role', 'text']);
+  });
+
+  it('失敗ターンは turnFailureKind を運ぶ。種別を持たない古い行は other（文面からは読み替えない）', async () => {
+    await stores.journal.append({
+      type: 'exchange',
+      with: 'human',
+      role: 'outbound',
+      text: '認証 401 quota',
+      conversationId: 'conv-k',
+      turnFailure: 'failed',
+    });
+    await stores.journal.append({
+      type: 'exchange',
+      with: 'human',
+      role: 'outbound',
+      text: '返せなかった',
+      conversationId: 'conv-k',
+      turnFailure: 'held',
+      turnFailureKind: 'quota',
+    });
+    await exchange('conv-k', 'inbound', '失敗でない発言');
+
+    const body = (await (await app.request('/conversations/conv-k')).json()) as {
+      messages: { text: string; turnFailure?: string; turnFailureKind?: string }[];
+    };
+
+    const byText = (text: string) => body.messages.find((message) => message.text === text);
+    expect(byText('認証 401 quota')).toMatchObject({
+      turnFailure: 'failed',
+      turnFailureKind: 'other',
+    });
+    expect(byText('返せなかった')).toMatchObject({ turnFailure: 'held', turnFailureKind: 'quota' });
+    expect('turnFailureKind' in (byText('失敗でない発言') ?? {})).toBe(false);
   });
 
   /**

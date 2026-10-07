@@ -33,7 +33,7 @@
 import type { ConversationReadView } from './conversation-read.js';
 import { codePointBoundary } from './excerpt.js';
 import { compareIsoInstant } from './iso-instant.js';
-import type { AttachmentRef, JournalEntry } from './schema.js';
+import type { AttachmentRef, JournalEntry, TurnFailureKind } from './schema.js';
 import { UnreadableJournalEntryError, type JournalCursor, type JournalStore } from './store.js';
 
 /** 日誌の `exchange` 1件。 */
@@ -139,6 +139,11 @@ export interface ConversationMessage {
    * そのまま写す）。付いていなければ通常の発言（または印を持たない古い行）。
    */
   turnFailure?: 'failed' | 'held';
+  /**
+   * `turnFailure` が付いた発言の失敗の種別（`exchange.turnFailureKind`）。`turnFailure` と同時に付く。
+   * 種別を持たない古い行は `other`（不明）として運ぶ。文面から `auth` / `quota` へ読み替えない。
+   */
+  turnFailureKind?: TurnFailureKind;
   /**
    * 発言に添えた添付の参照（`schema.ts` の `exchange.attachments` をそのまま写す。メタデータだけで中身は無い）。
    * 添付の無い発言には付けない。
@@ -398,7 +403,9 @@ export function toMessage(entry: Exchange): ConversationMessage {
     text: entry.text,
     conversationId: entry.conversationId,
     ...(entry.supersedes === undefined ? {} : { supersedes: entry.supersedes }),
-    ...(entry.turnFailure === undefined ? {} : { turnFailure: entry.turnFailure }),
+    ...(entry.turnFailure === undefined
+      ? {}
+      : { turnFailure: entry.turnFailure, turnFailureKind: entry.turnFailureKind ?? 'other' }),
     ...(entry.attachments === undefined || entry.attachments.length === 0
       ? {}
       : { attachments: entry.attachments }),
