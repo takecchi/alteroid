@@ -13110,7 +13110,6 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
   }
 
   it('掃き出しが空にならない（検出器そのものが効いていることの確認）', () => {
-    // 0件でも `it.each` は「通った」ように見える。数え上げが壊れたら落ちる。
     expect(SWEPT.length).toBeGreaterThanOrEqual(6);
     expect(SWEPT).toContain('approvals_list');
     expect(SWEPT).toContain('schedule_list');
