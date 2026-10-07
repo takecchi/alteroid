@@ -2,224 +2,8 @@ import { selectArchiveRemovalTargets } from './archive-prune.js';
 import { InvalidArchiveSessionIdError } from './archive-session-id.js';
 import type { TranscriptArchive } from './store.js';
 
-/**
- * `TranscriptArchive`（#698）の契約を、実装1つに対して測る。
- *
- * **なぜ vitest に依存しない素の非同期関数にしてあるか**は
- * `journal-search-contract.ts` の doc と同じ（`packages/storage-fs` /
- * `packages/storage-pg` へ vitest を持ち込まないため）。食い違ったら `throw`
- * する。
- *
- * **測る性質。3実装（`packages/core/src/testing.ts` のインメモリ /
- * `packages/storage-fs/src/archive.ts` / `packages/storage-pg/src/archive.ts`）
- * すべてがこれを呼ぶこと**（`journal-search-contract.ts` と同じ作法。1つで
- * 測って3つとも測ったことにしない）:
- *
- * 1. **`remove()` の後も行は在る**（`list()` に出続ける）。本文だけが落ちる
- * 2. **`read()` が3つの顔を返し分ける**（`body` / `removed` / `missing`）。
- *    `missing` と `removed` は別物である
- * 3. **id A を消しても id B は読める**（巻き添えが無い）
- * 4. **存在しない id への `remove()` は黙って成功しない**（`missing`）
- * 5. **空の生ログを退避した行は、消していないのに `removed` にならない**
- *    （判定は印だけで行う。本文が空かどうかを見ない）
- * 6. **二重の `remove()` は `removed` → `already` になり、バイト数と
- *    `removedAt` は最初の `remove()` のまま変わらない**（冪等）
- * 7. **`list()` の各行が `id` / `sessionId` / `at` / `storedBytes` を持つ**
- *    （#698 で `string[]` から拡張。`sessionId` は `archive()` に渡した値と
- *    一致し、`at` はパースできる ISO 8601 である）
- * 8. **tombstone 済みの行だけが `removedAt` / `removedBytes` を伴って
- *    `list()` に出る**（消していない行にはこの2キーが無い）
- * 9. ⭐ **同一 `sessionId` を複数回 `archive()` すると、`sessions()` の
- *    `rows` がその回数を正しく数える**（tombstone 済みの行も含む）。
- *    Issue #698 でいちばん効いたのはこの `rows` である——「同じセッションの
- *    生ログが68回積まれている」という重複が、個々の大きさより先に問題の
- *    所在を特定した
- * 10. **`sessions()` の `storedBytes` / `maxStoredBytes` / `firstAt` /
- *     `lastAt` は、`list()` の該当 `sessionId` の行から集計した値と一致する**
- *     （実装ごとの単位の違いを比べるのではなく、同じ実装の中で一覧と集計が
- *     整合しているかを測る——`ArchiveEntry.storedBytes` の doc「置き場を
- *     またいで比較しない」と同じ理由で、絶対値は検査しない）
- * 11. **`sessions()` の並びが決まっている**（`storedBytes` の降順、同値なら
- *     `sessionId` の昇順）
- * 12. **`storedBytes` が本当にその行の量を測っている**（常に0を返す実装を落とす）
- *
- * **13〜19 は #698 の「畳んでよいかどうかを積む瞬間に判定して記録する門」
- * （`archive-continuity.ts`）の検査である:**
- *
- * 13. 同じ `sessionId` の1本目は `'first'`
- * 14. 前方一致する2本目は `'continues'`、`comparedTo` が1本目の id
- * 15. 🔴 **本文が短くなった3本目は `'diverged'`**（本番の「6,900万文字
- *     *縮んだ*」行に相当）
- * 16. 🔴 **伸びているのに前方一致しない本文は `'diverged'`**（本番の
- *     「1%伸びたのに偽」に相当。⭐ 長さ比較へ退化したら赤くなる歯）
- * 17. 別の `sessionId` は互いに影響しない（それぞれ `'first'` から始まり、
- *     元の `sessionId` の連続性も乱さない）
- * 18. `'continues'` の後にさらに前方一致する本文を積むと、また `'continues'`
- *     （鎖が続く）
- * 19. 🔴🔴 **指紋を持たない行の直後は `'unknown'`**（`'continues'` ではない）
- *
- * **20〜22 は #905（同じミリ秒の id 衝突）の検査である:**
- *
- * 20. 🔴 **同じミリ秒に2回積んでも両方が残る**——id が別々になり、`list()` に
- *     2行出て、⭐ **`read()` が2本ともそれぞれの本文を返す**（生ログが消えて
- *     いない。ここが「黙って捨てない」の本体）。`sessions().rows` は 2 で、
- *     2行の `at` は固定した瞬間と一致する
- * 21. **違うミリ秒に2回積んでも、従来どおり2本とも出る**（陰性対照）。⚠ これが
- *     無いと 20 は「件数を決め打ちした歯」になる——**正しい振る舞いを壊して
- *     いないことを別に測る**
- * 22. **`id` は `sessionId` で始まる**（衝突した2本目＝枝番付きも含む）。
- *     この契約が使う `sessionId` は `[a-z0-9-]` だけなので `sanitize()` は
- *     恒等写像になり、3実装とも `id.startsWith(sessionId)` が成り立つはず——
- *     **`id` の前方一致 LIKE が主キーの btree に落ちる性質の歯である**
- *     （#698 §6-5。id の形を変えるときに、この性質を落としたら赤くなる）
- *
- * **23〜25 は `ArchiveSessionSummary.continuity`（#698 続き。「畳んでよい行が
- * 何割か」を数える口）の検査である:**
- *
- * 23. 🔴 **不変条件**: `sessions()` が返す全 `sessionId` について
- *     `first + continues + diverged + unknown + absent === rows` が成り立つ
- *     （`ArchiveContinuityTally` の doc）
- * 24. `archive-contract-continuity` セッション（検査13〜18 で使ったシナリオ）
- *     について、**その6回の `archive()` が返した `write.continuity` を
- *     足し上げた期待 tally と、`sessions()` が返す `continuity` が一致する**
- *     ——期待値は手で数えた定数ではなく、この契約が実際に受け取った戻り値
- *     から組み立てる（シナリオが変わっても歯が自動で追随する）
- * 25. 🔴 **`absent` が実際に立つ経路**（検査19 で `seedFingerprintlessRow`
- *     が作った、指紋も `continuity` も持たない行）を数える——その行自体は
- *     `absent` に、直後の `archive()`（検査19 で `'unknown'` と確かめた
- *     呼び出し）は `unknown` に、別々に積まれることを見る。**`absent` と
- *     `unknown` が同じカウンタに混ざったら、この歯が落ちる**
- *
- * **26〜29 は `readTail()`（#1283 の OOM、読み出し側）の検査である:**
- *
- * 26. 🔴 **本文が `maxChars` より長いとき、返るものは本文の末尾に一致し、
- *     長さは `maxChars` を厳密に上回る**（頭ではなく尾を返しており、かつ
- *     「ちょうど `maxChars`」ではない）。「ちょうど」を許さない理由は
- *     `readTail` interface doc に逐語で在る——呼び出し側（`tailOf`）が
- *     「切り詰め済みの窓」と「本文がもとから短かった」を区別できなくなる。
- *     **ASCII のみを使う**——UTF-8 の窓は文字の途中から始まりうる
- *     （`readTail` interface doc）ため、非 ASCII だと窓の先頭が実装ごとに
- *     壊れ方が違い、この契約を実装に依らず測れなくなる。ASCII なら 1 文字
- *     1 バイトなので、どの実装でも窓の境界が文字境界と一致する
- * 27. **本文が `maxChars` 以下のとき、全文が返る**
- * 28. **`removed` / `missing` の3状態が `read()` と一致する**（`readTail` も
- *     `read()` と同じ3状態を返す契約——ここが割れると
- *     `#pickUpTranscriptGrave` の分岐が実装によって変わる）
- * 29. 🔴 **`maxChars` が正の整数でなければ fail-closed で拒む**（`0` /
- *     負数 / 非整数 / `NaN` のどれでも投げる。黙って全文へ倒さない）
- *
- * **30〜33 は #908（同じミリ秒に3本以上積んだときの「直前」が2本目ではなく
- * 1本目になる）の検査である。** #905 が入れた枝番付き id（`archiveIdCandidate`）
- * は `id` の字面順（`base-2.jsonl` < `base-3.jsonl` < `base.jsonl`）が積んだ順と
- * 一致しないため、`id` の大小で tie-break すると3本目以降が1本目を「直前」だと
- * 誤認する。塞ぎ方は「枝番（積んだ順）で tie-break する」——`archiveIdBranch`
- * （`archive-id.ts`）で3実装が同じパーサを使う。
- *
- * 30. 🔴 **同じミリ秒に3本積むと、3本目の `comparedTo` は2本目の id になる
- *     （1本目ではない）。** 4本目も同様に3本目を指す
- * 31. **`list()` の同着（同じ `at`）の並びは積んだ逆順**（新しいものが先。
- *     インメモリの `seq` 降順と揃える）
- * 32. **陰性対照A**: 違うミリ秒に3本積むと、`comparedTo` は常に直前の1本
- *     （`at` が最大の行）を指す鎖になる（同着が一切絡まない基本形）
- * 33. **陰性対照B**: 同着の枝番グループ（高い枝番を含む）の後に、違う
- *     ミリ秒で2本積むと、2本目の `comparedTo` は1本目（枝番1、`at` は
- *     同着グループより新しい）を指す——**同着グループの枝番の大小に
- *     引きずられない**（`at` を見ずに枝番の大小だけで選ぶ変異はここで
- *     赤くなる）
- *
- * **34〜35 は #1732（並行 `archive()` で `continuity`/`comparedTo` が壊れる窓）の
- * 検査である:**
- *
- * 34. 🔴 **並行に `archive()` を呼んでも、`comparedTo` の鎖は `list()` の並び
- *     （`at` 昇順）と必ず一致する。** 同じ `sessionId` へ真に前方一致する本文を
- *     `Promise.all` で並行に積み、`at` 昇順に並べたとき、各行の `comparedTo`
- *     （`first` なら `undefined`）が「1つ前の行の id」と一致するかを検査する。
- *     一致しなければ、窓（同じ「直前」を複数の呼び出しが同時に読んで同じ判定を
- *     出す競合）が塞がっていない。
- *
- *     ⚠️ **この検査は3実装に同じ入力を通すが、実効性は実装ごとに違う。**
- *     インメモリ（`packages/core/src/testing.ts`）は判定から書き込みまでに
- *     `await` が無く、そもそも窓を持たない——常に緑。fs 実装は同一プロセス内の
- *     `Promise.all` だけで真の並行が起きる（`node:fs/promises` の readdir /
- *     readFile / writeFile は実際に interleave する）ので、ロックを外す変異で
- *     実際に赤くなる。**pg 実装をテストする driver（PGlite）は単一接続で全
- *     クエリを直列化するため、この検査は pg 実装に対しては窓が塞がっているかを
- *     判定できない**——ロックがあってもなくても PGlite 上では真の並行が起きず、
- *     常に緑になる。pg 実装の窓が実在すること、および直したことの実測は実
- *     PostgreSQL でしか取れない（Issue #1732 の再現手順、および同 Issue を
- *     直した PR の報告を見よ。この点は本関数の限界として正直に書き残す）。
- *
- * 35. 🔴 **並行に分岐した2本を積んでも、`selectArchiveRemovalTargets`
- *     （`archive-prune.ts`、`requireContainment: true` の既定）が非包含行を
- *     削除対象に選ばない。** 検査34と同じ窓が実害化する経路——`continuity` の
- *     誤判定は「配列上の隣接関係と `continuity === 'continues'` だけで含有を
- *     推定し、実際に何と比較したか（`comparedTo`）を見ない」
- *     `selectArchiveRemovalTargets` を欺きうる（Issue #1732 の本体）。1本目
- *     `AAAA\n` の後に、互いに無関係な2本（`AAAA\n` を継続するが内容は別）を
- *     並行に積み、`requireContainment: true` の選定結果にどちらの id も
- *     含まれないことを検査する。**この検査も PGlite に対しては実効性が無い**
- *     ——理由は検査34と同じ。
- *
- * **36〜37 は #1829（`readTail` の `maxChars` が、pg はコードポイント数、
- * fs・インメモリは JS の UTF-16 コード単位という別々の単位で数えられていた
- * 食い違い）の検査である。** 補助面の文字（絵文字の多く。1コードポイントが
- * 2 UTF-16 コード単位になる）を含む本文で、3実装が同じ単位（コードポイント数）
- * で判定することを測る——ここを通さずに手元だけで見つけた実装（例えば新しい
- * 4本目）が UTF-16 コード単位のまま `maxChars` を解釈しても、この2つの検査が
- * 赤くなる。
- *
- * 36. 🔴 **コードポイント数では `maxChars` 以下（＝短い。切り詰め不要）だが
- *     UTF-16 コード単位では `maxChars` を超える本文は、全文がそのまま返る。**
- *     `readTail` interface doc「本文が `maxChars` 以下なら全文を返す」の
- *     判定基準がコードポイント数であることを直接測る——UTF-16 コード単位で
- *     判定する実装は、ここで本文の先頭を静かに失う（Issue #1829 の再現1。
- *     「3個の絵文字 + 改行 + `KEEP`」相当）。
- * 37. 🔴 **本文が真に長い（コードポイント数が `maxChars` を超える）ときの
- *     切り詰めは、サロゲートペアの途中で割らない。** 改行を含まない補助面の
- *     文字だけの本文で切り詰めても、孤立サロゲート（不正な UTF-16。UTF-8 へ
- *     変換する経路で黙って `U+FFFD` に化ける）を残さないことを、返る文字列が
- *     正確に「末尾から `maxChars + 1` 個ぶんの完全なコードポイント」と一致する
- *     形で測る（Issue #1829 の再現2）。
- *
- * **38 は #2454（fs の境界判定が「直下」ではなく「配下」を見ていた）の検査
- * である:**
- *
- * 38. 🔴 **在る行の id の下を指す id（`'<在る id>/x'`）は、`read()` /
- *     `readTail()` / `remove()` のどれでも `missing` になる。** fs 実装は
- *     `'<在る id>/x'` を境界の内側と判定し、印ファイル
- *     `'<在る id>/x.removed'` を読みに行って `ENOTDIR` を投げていた（404 の
- *     はずが 500）。`remove()` は missing で断るなら何も変えないこと——
- *     元の行はそのまま本文を返す。
- *
- * 呼び出し側は使い捨ての archive を渡すこと（後始末はしない）。
- *
- * @param deps.seedFingerprintlessRow 指紋（`bodyChars`/`bodyMd5`）を持たない
- *   行を作る（この機能より前に積まれた行の再現）。積んだ id を返す——検査19
- *   のためだけに要る、実装ごとの裏口（pg は生 SQL で null のまま insert、fs は
- *   これらのフィールドを持たない `.meta.json` を書く、インメモリは
- *   `seedFingerprintlessArchiveRow` を経由する）。
- */
-/**
- * 検査20 / 21 専用: `Date` を指定の瞬間へ固定して `run()` を通す（#905）。
- *
- * **実時計では「同じミリ秒に2回積む」を確実に再現できない**——pg の往復は
- * 普通1ミリ秒を超えるので、素直に2回呼ぶと違うミリ秒に落ちて検査20 が測りたい
- * ものを測らない。⟹ 時計を1点に固定する。
- *
- * **vitest の `vi.useFakeTimers()` を使わない。** この契約関数は vitest 非依存
- * という約束（`packages/storage-fs` / `packages/storage-pg` へ vitest を持ち
- * 込まないため。本ファイル冒頭の doc）があり、`journal-order-with-contract.ts`
- * の `appendPairAtSameMillisecond` が同じ理由で同じ形を採っている——プレーンな
- * JS で `globalThis.Date` を差し替え、`finally` で必ず戻す。
- *
- * ⭐ **差し替えるのは `Date` だけで、`setTimeout` は本物のままである。**
- * `tick()`（この契約の中で使う待ち）と PGlite の内部が止まらないために、
- * ここが効いている。
- *
- * **`class extends Date` ではなく `Proxy` にしてある理由**も
- * `appendPairAtSameMillisecond` と同じ（可変長引数を `super(...)` へ渡す形が
- * tsup の dts ビルドの TS2556 で拒まれる）。
- */
+// vi.useFakeTimers() を使わず Date だけ差し替える: vitest を持ち込まないため、また setTimeout まで止めると PGlite の内部が止まるため
+// class extends Date にしない: 可変長引数を super へ渡す形が tsup の dts ビルドの TS2556 で拒まれるため
 async function withFrozenNow<T>(frozenMs: number, run: () => Promise<T>): Promise<T> {
   const RealDate = Date;
   const FrozenDate = new Proxy(RealDate, {
@@ -251,17 +35,12 @@ export async function verifyTranscriptArchiveContract(
 
   const missingId = 'archive-contract-never-archived-id';
 
-  // 4. 存在しない id への remove() は missing（成功にならない）。
   const removeMissing = await archive.remove(missingId);
   if (removeMissing.kind !== 'missing') fail('remove(存在しないid)', removeMissing);
 
-  // 2前提. 存在しない id の read() も missing。
   const readMissing = await archive.read(missingId);
   if (readMissing.kind !== 'missing') fail('read(存在しないid)', readMissing);
 
-  // issue #2233. NUL を含む sessionId は、3実装とも同じ例外（型と文言）で断り、
-  // 何も積まない。以前は pg だけが PostgreSQL の例外で落ち、fs / インメモリは
-  // そのまま積んでいた（同じ入力で3実装の結果が割れていた）。
   {
     const countBefore = (await archive.list()).length;
     let thrown: unknown;
@@ -284,7 +63,6 @@ export async function verifyTranscriptArchiveContract(
     }
   }
 
-  // 積んで読める（2つ。巻き添えの検査に使う）。
   const idA = (await archive.archive('archive-contract-session-a', 'BODY-A\n')).id;
   const idB = (await archive.archive('archive-contract-session-b', 'BODY-B\n')).id;
   const bodyA = await archive.read(idA);
@@ -292,7 +70,6 @@ export async function verifyTranscriptArchiveContract(
   const bodyB = await archive.read(idB);
   if (bodyB.kind !== 'body' || bodyB.body !== 'BODY-B\n') fail('積んで読める(B)', bodyB);
 
-  // 38. 在る行の id の下を指す id は missing（issue #2454）。
   {
     const underB = `${idB}/x`;
     const readUnder = await archive.read(underB);
@@ -307,7 +84,6 @@ export async function verifyTranscriptArchiveContract(
     }
   }
 
-  // 5. 空の生ログを退避しても removed にならない（判定に本文の中身を使わない）。
   const idEmpty = (await archive.archive('archive-contract-session-empty', '')).id;
   const bodyEmpty = await archive.read(idEmpty);
   if (bodyEmpty.kind !== 'body' || bodyEmpty.body !== '')
@@ -318,7 +94,6 @@ export async function verifyTranscriptArchiveContract(
     fail('list()に3件とも出る', listBefore);
   }
 
-  // 7. list() の各行が id / sessionId / at / storedBytes を持つ。
   const entryA = listBefore.find((entry) => entry.id === idA);
   if (entryA === undefined) fail('list()にAの行がある', listBefore);
   if (entryA.sessionId !== 'archive-contract-session-a') {
@@ -330,23 +105,19 @@ export async function verifyTranscriptArchiveContract(
   if (typeof entryA.storedBytes !== 'number' || entryA.storedBytes < 0) {
     fail('list()のstoredBytesが非負の数値', entryA);
   }
-  // 8前提. 消す前は removedAt / removedBytes を持たない。
   if ('removedAt' in entryA || 'removedBytes' in entryA) {
     fail('消す前のlist()行はremovedAt/removedBytesを持たない', entryA);
   }
 
-  // A を消す。
   const expectedBytesA = Buffer.byteLength('BODY-A\n', 'utf8');
   const removedA = await archive.remove(idA);
   if (removedA.kind !== 'removed') fail('remove(A)', removedA);
   if (removedA.bytes !== expectedBytesA) fail('remove(A)のバイト数', removedA);
 
-  // 1. remove() の後も行は在る（list() に出続ける）。
   const listAfterRemove = await archive.list();
   const entryAAfterRemove = listAfterRemove.find((entry) => entry.id === idA);
   if (entryAAfterRemove === undefined) fail('remove後も行は残る', listAfterRemove);
 
-  // 8. tombstone 済みの行は removedAt / removedBytes を伴って list() に出る。
   if (
     entryAAfterRemove.removedAt === undefined ||
     Number.isNaN(Date.parse(entryAAfterRemove.removedAt)) ||
@@ -354,7 +125,6 @@ export async function verifyTranscriptArchiveContract(
   ) {
     fail('remove後のlist()行はremovedAt/removedBytesを伴う', entryAAfterRemove);
   }
-  // 消していない行（B）は引き続き removedAt / removedBytes を持たない。
   const entryBAfterRemove = listAfterRemove.find((entry) => entry.id === idB);
   if (
     entryBAfterRemove === undefined ||
@@ -364,7 +134,6 @@ export async function verifyTranscriptArchiveContract(
     fail('消していない行(B)はremovedAt/removedBytesを持たない', entryBAfterRemove);
   }
 
-  // 2. read() が removed を返す（missing とは別物）。
   const readA = await archive.read(idA);
   if (readA.kind !== 'removed') fail('read(消したid)はremoved', readA);
   if (readA.bytes !== expectedBytesA) fail('removedのバイト数', readA);
@@ -372,19 +141,16 @@ export async function verifyTranscriptArchiveContract(
     fail('removedAtがISO8601文字列', readA);
   }
 
-  // 3. 巻き添えなし: id B はまだ読める（body のまま）。
   const readBAfter = await archive.read(idB);
   if (readBAfter.kind !== 'body' || readBAfter.body !== 'BODY-B\n') {
     fail('巻き添えなし(Bはbodyのまま)', readBAfter);
   }
 
-  // 5(再確認). 空の生ログ（未 remove）は依然として body（removed ではない）。
   const readEmptyAfter = await archive.read(idEmpty);
   if (readEmptyAfter.kind !== 'body' || readEmptyAfter.body !== '') {
     fail('空の生ログは他のidのremoveに巻き込まれてremovedにならない', readEmptyAfter);
   }
 
-  // 6. 二重の remove() は冪等（already。バイト数・removedAt は変わらない）。
   const removedAgain = await archive.remove(idA);
   if (removedAgain.kind !== 'already') fail('二重remove()はalready', removedAgain);
   if (removedAgain.bytes !== expectedBytesA) fail('二重removeのバイト数', removedAgain);
@@ -395,27 +161,6 @@ export async function verifyTranscriptArchiveContract(
     });
   }
 
-  // 9. ⭐ 同一 sessionId を複数回 archive() すると、sessions() の rows が
-  // その回数を正しく数える（tombstone 済みの行を1本混ぜて、8 と同じ扱いに
-  // なることも確かめる——「行は残る」を rows の数え上げの側でも測る）。
-  // ⚠ **1ミリ秒ずつ空ける。** `archive()` の id は
-  // `${sanitize(sessionId)}-${stamp}.jsonl` で `stamp` はミリ秒精度なので、
-  // **同じミリ秒に2回積むと id が衝突し、pg 側は `onConflictDoUpdate` で
-  // 黙って上書きする**（fs 側も `writeFile` で上書きになる）。これは
-  // `list()`/`sessions()` とは別に元から在る欠陥で、ここで測りたいのは
-  // 「同一 sessionId の複数行を `rows` が数えられること」のほうである。
-  // ⟹ 衝突を踏まないように間隔を空けて、測りたいものだけを測る。
-  // **衝突そのものを塞ぐのはこの契約の仕事ではない**（id の形を変えると
-  // fs 側の `STAMP_SUFFIX_RE` による id からの復元も一緒に変わるため）。
-  //
-  // ⭐ **追記（#905。上の段落は当時の判断として残す）: その「衝突そのもの」は
-  // #905 で塞いだ。** fs は排他作成（`flag: 'wx'`）、pg は
-  // `onConflictDoNothing` ＋ `returning()` で、衝突したときだけ id へ枝番を
-  // 足す。**そして `STAMP_SUFFIX_RE` からの復元も一緒に直してある**——上の
-  // 括弧が手を出さない理由に挙げた結合が、まさに #905 の担当範囲だった。
-  // ⟹ **この 1ミリ秒ずつ空ける形は、それでも残す。** ここで測りたいのは
-  // 「同一 sessionId の複数行を `rows` が数えられること」であって、衝突では
-  // ない（衝突は検査20 が測る）——測る対象を1つに保つ。
   const tick = () => new Promise((resolve) => setTimeout(resolve, 2));
   const multiSessionId = 'archive-contract-session-multi';
   const idM1 = (await archive.archive(multiSessionId, 'M1\n')).id;
@@ -430,7 +175,7 @@ export async function verifyTranscriptArchiveContract(
       idM3,
     ]);
   }
-  await archive.remove(idM2); // 積んだうちの1本を消す。rows は減らないはず。
+  await archive.remove(idM2);
 
   const listAfterMulti = await archive.list();
   const multiEntries = listAfterMulti.filter((entry) => entry.sessionId === multiSessionId);
@@ -448,8 +193,6 @@ export async function verifyTranscriptArchiveContract(
     fail('sessions().rowsは同一sessionIdの行数(tombstone済み込み)を正しく数える', multiSummary);
   }
 
-  // 10. sessions() の集計は list() の該当行から求めた値と一致する
-  // （絶対値は実装ごとに単位が違うので検査しない——内部の整合性だけを測る）。
   const expectedStoredBytes = multiEntries.reduce((sum, e) => sum + e.storedBytes, 0);
   const expectedMaxStoredBytes = Math.max(...multiEntries.map((e) => e.storedBytes));
   const expectedFirstAt = multiEntries.map((e) => e.at).sort()[0];
@@ -477,9 +220,6 @@ export async function verifyTranscriptArchiveContract(
     });
   }
 
-  // 11. sessions() の並びが決まっている（storedBytes の降順、同値なら
-  // sessionId の昇順）。⚠ 並びを決めないと、同じ問い合わせが呼ぶたびに違う順で
-  // 返りうる——容量を追う面（大きいセッションから見たい）で黙った揺れになる。
   const ordered = await archive.sessions();
   const expectedOrder = [...ordered].sort(
     (a, b) =>
@@ -490,17 +230,6 @@ export async function verifyTranscriptArchiveContract(
     fail('sessions()はstoredBytesの降順・同値ならsessionIdの昇順で返る', ordered);
   }
 
-  // 12. `storedBytes` が本当にその行の量を測っていること。
-  //
-  // 🔴 **これが無いと `storedBytes` が常に 0 でも上の検査は全部緑になる。**
-  // 9〜11 は「`sessions()` の集計が `list()` と整合するか」しか見ておらず、
-  // 全部 0 なら合計 0・最大 0 で整合してしまう——変異試験（storedBytes を
-  // 常に 0 にする）で実際に素通りした。⟹ **定数を返す実装を落とす。**
-  //
-  // ⚠ 絶対値は実装ごとに単位が違う（pg は圧縮後、fs はファイル長、
-  // インメモリは文字列長）ので**値そのものは検査しない**。検査するのは
-  // 「正であること」と「同じ実装の中で大きい本文のほうが大きいこと」だけ——
-  // この2つなら単位に依らない。
   const bytesSessionId = 'archive-contract-bytes';
   const smallId = (await archive.archive(bytesSessionId, 'x\n')).id;
   await tick();
@@ -518,34 +247,24 @@ export async function verifyTranscriptArchiveContract(
     fail('storedBytesは本文の大きい行のほうが大きい（定数を落とす）', { smallEntry, bigEntry });
   }
 
-  // --- ここから #698 の連続性判定（archive-continuity.ts）--------------------
-
-  // 13. 同じ sessionId の1本目は 'first'（comparedTo 無し）。
   const continuitySessionId = 'archive-contract-continuity';
   const write1 = await archive.archive(continuitySessionId, 'AAAA\n');
   if (write1.continuity !== 'first' || write1.comparedTo !== undefined) {
     fail('同一sessionIdの1本目はfirst（comparedTo無し）', write1);
   }
 
-  // 14. 前方一致する2本目は continues、comparedTo が1本目の id。
   await tick();
   const write2 = await archive.archive(continuitySessionId, 'AAAA\nBBBB\n');
   if (write2.continuity !== 'continues' || write2.comparedTo !== write1.id) {
     fail('前方一致する2本目はcontinues（comparedToは1本目のid）', { write1, write2 });
   }
 
-  // 15. 🔴 本文が短くなった3本目は diverged
-  // （本番の「6,900万文字*縮んだ*」行に相当。長さの大小では判定しない —
-  // slice が短い文字列を返して md5 が外れ、自然に diverged になる）。
   await tick();
   const write3 = await archive.archive(continuitySessionId, 'AAAA\n');
   if (write3.continuity !== 'diverged' || write3.comparedTo !== write2.id) {
     fail('縮んだ3本目はdiverged（長さの大小では判定しない）', { write2, write3 });
   }
 
-  // 16. 🔴 伸びているのに前方一致しない本文は diverged
-  // （本番の「1%伸びたのに偽」に相当）。⭐ ここが長さ比較へ退化すると
-  // 緑になってしまう歯——write4 は write3 より長いが、先頭が違う。
   await tick();
   const write4 = await archive.archive(continuitySessionId, 'ZZZZ\nBBBB\nCCCC\n');
   if (write4.continuity !== 'diverged') {
@@ -555,8 +274,6 @@ export async function verifyTranscriptArchiveContract(
     });
   }
 
-  // 17. 別の sessionId は互いに影響しない（それぞれ first から始まり、
-  // 元の sessionId の連続性も乱さない）。
   const otherSessionId = 'archive-contract-continuity-other';
   const otherWrite1 = await archive.archive(otherSessionId, 'OTHER-A\n');
   if (otherWrite1.continuity !== 'first') {
@@ -578,8 +295,6 @@ export async function verifyTranscriptArchiveContract(
     });
   }
 
-  // 18. 'continues' の後にさらに前方一致する本文を積むと、また 'continues'
-  // （鎖が続く）。
   await tick();
   const continuityChain = await archive.archive(
     continuitySessionId,
@@ -595,8 +310,6 @@ export async function verifyTranscriptArchiveContract(
     });
   }
 
-  // 19. 🔴🔴 指紋を持たない行の直後は unknown（continues ではない）。
-  // この機能より前に積まれた行（本番の5.4GBの既存行）の再現。
   const fingerprintlessSessionId = 'archive-contract-fingerprintless';
   const fingerprintlessId = await deps.seedFingerprintlessRow(fingerprintlessSessionId, 'LEGACY\n');
   await tick();
@@ -611,14 +324,6 @@ export async function verifyTranscriptArchiveContract(
     });
   }
 
-  // --- ここから #905（同じミリ秒に積んだ2本が両方残る）----------------------
-
-  // 20. 🔴 同じミリ秒に2回積んでも両方が残る。
-  //
-  // ⚠ **実時計では再現できない**ので、時計を1点へ固定して積む（`withFrozenNow`
-  // の doc）。⭐ **いちばん重いのは `read()` の2本である**——`list()` と
-  // `sessions()` だけだと「行は増えたが本文は片方に潰れている」形を見逃す。
-  // 生ログが黙って消えていないことを、本文そのもので測る。
   const sameMsSessionId = 'archive-contract-same-millisecond';
   const frozenMs = Date.now();
   const frozenIso = new Date(frozenMs).toISOString();
@@ -649,7 +354,6 @@ export async function verifyTranscriptArchiveContract(
     });
   }
 
-  // ⭐ 本体: 2本ともそれぞれの本文が読める（生ログが黙って消えていない）。
   const readSameMs1 = await archive.read(sameMs1.id);
   if (readSameMs1.kind !== 'body' || readSameMs1.body !== 'SAME-MS-1\n') {
     fail('同じミリ秒に積んだ1本目の本文が残っている（#905。⭐ 上書きされていない）', {
@@ -669,8 +373,6 @@ export async function verifyTranscriptArchiveContract(
     });
   }
 
-  // 固定した瞬間がそのまま `at` になっている（時計の固定が効いていることの
-  // 確認でもある——効いていなければ 2行の `at` は別々の実時刻になる）。
   if (sameMsEntries.some((entry) => entry.at !== frozenIso)) {
     fail('同じミリ秒に積んだ2行のatは固定した瞬間と一致する（#905）', {
       frozenIso,
@@ -678,11 +380,6 @@ export async function verifyTranscriptArchiveContract(
     });
   }
 
-  // 21. 違うミリ秒に2回積んでも、従来どおり2本とも出る（陰性対照）。
-  //
-  // ⚠⚠ **この2本目が無いと、検査20は「件数を決め打ちした歯」になる。**
-  // 20 が測るのは「衝突しても消えない」、21 が測るのは「衝突しない普通の道を
-  // 壊していない」——**別のことを測っている。**
   const diffMsSessionId = 'archive-contract-different-millisecond';
   const diffBaseMs = Date.now();
   const diffMs1 = await withFrozenNow(diffBaseMs, () =>
@@ -733,8 +430,6 @@ export async function verifyTranscriptArchiveContract(
     fail('違うミリ秒に2回積むとsessions().rowsが2になる（#905の陰性対照）', { diffMsSummary });
   }
 
-  // 2行が本当に別のミリ秒に落ちていること（陰性対照が「同じミリ秒」を測って
-  // しまっていないことの確認）。
   const diffMsAts = new Set(diffMsEntries.map((entry) => entry.at));
   if (diffMsAts.size !== 2) {
     fail('陰性対照の2行は別々のatを持つ（同じミリ秒を測ってしまっていない）', {
@@ -742,11 +437,6 @@ export async function verifyTranscriptArchiveContract(
     });
   }
 
-  // 22. `id` は `sessionId` で始まる（衝突した2本目＝枝番付きも含む）。
-  //
-  // この契約の `sessionId` は `[a-z0-9-]` だけなので、fs / pg の `sanitize()`
-  // は恒等写像になる。⟹ 3実装とも `id.startsWith(sessionId)` が成り立つ。
-  // **`id` の前方一致 LIKE が主キーの btree に落ちる性質の歯である**（#698 §6-5）。
   const prefixPairs: ReadonlyArray<readonly [string, string]> = [
     [sameMsSessionId, sameMs1.id],
     [sameMsSessionId, sameMs2.id],
@@ -762,11 +452,8 @@ export async function verifyTranscriptArchiveContract(
     }
   }
 
-  // --- ここから #698 続き（sessions() の continuity 内訳）------------------
-
   const allSessionSummaries = await archive.sessions();
 
-  // 23. 🔴 不変条件: 全 sessionId で5値の和が rows と一致する。
   for (const summary of allSessionSummaries) {
     const total =
       summary.continuity.first +
@@ -779,11 +466,6 @@ export async function verifyTranscriptArchiveContract(
     }
   }
 
-  // 24. continuitySessionId の continuity 内訳は、その6回の archive() が
-  // 返した write.continuity を足し上げた期待値と一致する。
-  // **手で数えた定数を書かない**——期待値はこの契約が実際に受け取った
-  // 戻り値（write1〜write4 / continuityAfterOther / continuityChain）から
-  // 組み立てる。シナリオが後で変わっても、この歯は自動で追随する。
   const continuityWrites = [write1, write2, write3, write4, continuityAfterOther, continuityChain];
   const expectedContinuityTally = { first: 0, continues: 0, diverged: 0, unknown: 0, absent: 0 };
   for (const write of continuityWrites) {
@@ -806,11 +488,6 @@ export async function verifyTranscriptArchiveContract(
     });
   }
 
-  // 25. 🔴 absent が実際に立つ経路（seedFingerprintlessRow が作った行）を
-  // 数える。fingerprintlessSessionId は2行——(1) 指紋も continuity も
-  // 持たない seed 行そのもの（absent）、(2) その直後の archive()（検査19で
-  // 'unknown' と確かめた呼び出し）。**absent と unknown が同じカウンタに
-  // 混ざったら、ここが落ちる。**
   const fingerprintlessSummary = allSessionSummaries.find(
     (s) => s.sessionId === fingerprintlessSessionId,
   );
@@ -827,25 +504,12 @@ export async function verifyTranscriptArchiveContract(
     });
   }
 
-  // --- ここから #1283（readTail。読み出し側の OOM）-------------------------
-
-  // 26. 🔴 本文が maxChars より長いとき、返るものは本文の末尾に一致する
-  // （頭ではなく尾を返している）。**ASCII のみ**——非 ASCII だと fs 実装の
-  // 窓（バイト境界）が文字境界とずれうるので、実装差を測る契約にならない
-  // （`readTail` interface doc「行の途中・文字の途中から始まりうる」）。
   const tailSessionId = 'archive-contract-read-tail';
   const tailFullBody = `PREFIX-${'A'.repeat(4000)}-TAIL-MARKER-END`;
   const tailId = (await archive.archive(tailSessionId, tailFullBody)).id;
   const tailMaxChars = 100;
   const tailResult = await archive.readTail(tailId, tailMaxChars);
   if (tailResult.kind !== 'body') fail('readTail(本文が長い)はbody', tailResult);
-  // 🔴 **`<=` ではなく `<=` を落とす側（＝厳密に上回ること）を測る。** 本文が
-  // maxChars より長いのに、返す量がちょうど maxChars だと、呼び出し側の
-  // `tailOf`（`clone.ts`）が「切り詰め済みの窓」を「本文がもとから短かった」
-  // と取り違える（`readTail` interface doc の逐語で同じ注意。
-  // `clone-grave-pickup-startup.test.ts`（旧 `clone.test.ts`。#1744 で分割済み）の
-  // 「歯2」で実測）。⟹ ここは `< tailMaxChars` ではなく
-  // `<= tailMaxChars` を落とす——「ちょうど」を許さない。
   if (tailResult.body.length <= tailMaxChars) {
     fail('readTailは本文がmaxCharsより長いとき、maxCharsを厳密に上回る量を返す', {
       returnedChars: tailResult.body.length,
@@ -862,7 +526,6 @@ export async function verifyTranscriptArchiveContract(
     });
   }
 
-  // 27. 本文が maxChars 以下のとき、全文が返る。
   const shortBody = 'SHORT-BODY-1234567890\n';
   const shortId = (await archive.archive('archive-contract-read-tail-short', shortBody)).id;
   const shortResult = await archive.readTail(shortId, shortBody.length + 1000);
@@ -870,7 +533,6 @@ export async function verifyTranscriptArchiveContract(
     fail('readTailは本文がmaxChars以下なら全文を返す', shortResult);
   }
 
-  // 28. removed / missing の3状態が read() と一致する。
   const tailMissing = await archive.readTail(missingId, 10);
   if (tailMissing.kind !== 'missing')
     fail('readTail(存在しないid)はmissing（read()と一致）', tailMissing);
@@ -894,9 +556,6 @@ export async function verifyTranscriptArchiveContract(
     });
   }
 
-  // 29. 🔴 maxChars が正の整数でなければ fail-closed で拒む（黙って全文へ
-  // 倒さない）。`0` は「境界値」として特に効く——`maxChars <= 0` を
-  // `maxChars < 0` と書き間違える変異（歯3系の族）はここで拾う。
   for (const bad of [0, -1, 1.5, Number.NaN]) {
     let threw = false;
     try {
@@ -907,17 +566,7 @@ export async function verifyTranscriptArchiveContract(
     if (!threw) fail('readTail(不正なmaxChars)はfail-closedで拒む（例外を投げる）', { bad });
   }
 
-  // --- ここから #908（同じミリ秒に3本以上積んだときの「直前」）--------------
-  //
-  // #905 が入れた枝番付き id は `id` の字面順（`base-2.jsonl` < `base-3.jsonl`
-  // < `base.jsonl`）が積んだ順と一致しない。`id` の大小で tie-break すると、
-  // 3本目以降が「1本目」を直前だと誤認する。**時計を固定しないと実時計では
-  // 再現できない**——`withFrozenNow` は上の検査20/21と同じ理由でここでも使う。
-
-  // 30. 🔴 同じミリ秒に3本積むと、3本目の comparedTo は2本目の id
-  // （1本目ではない）。4本目も同様に3本目を指す。
   const branchTieSessionId = 'archive-contract-same-ms-branch-tiebreak';
-  // 検査20/21が使った瞬間と衝突しないよう、少しずらす。
   const branchTieMs = Date.now() + 1;
   const [branchWrite1, branchWrite2, branchWrite3, branchWrite4] = await withFrozenNow(
     branchTieMs,
@@ -951,8 +600,6 @@ export async function verifyTranscriptArchiveContract(
     fail('#908: 4本目のcomparedToは3本目のid', { branchWrite3, branchWrite4 });
   }
 
-  // 31. list() の同着（同じ at）の並びは積んだ逆順（新しいものが先。
-  // インメモリの seq 降順と揃える）。
   const branchTieEntries = (await archive.list()).filter(
     (entry) => entry.sessionId === branchTieSessionId,
   );
@@ -973,8 +620,6 @@ export async function verifyTranscriptArchiveContract(
     });
   }
 
-  // 32. 陰性対照A: 違うミリ秒に3本積むと、comparedToは常に直前の1本
-  // （atが最大の行）を指す鎖になる（同着が一切絡まない基本形）。
   const chainedDiffMsSessionId = 'archive-contract-different-millisecond-chain';
   const chainedBaseMs = branchTieMs + 1000;
   const chained1 = await withFrozenNow(chainedBaseMs, () =>
@@ -994,10 +639,6 @@ export async function verifyTranscriptArchiveContract(
     });
   }
 
-  // 33. 陰性対照B: 同着の枝番グループ（高い枝番=branchWrite4を含む）の後に、
-  // 違うミリ秒で2本積むと、2本目のcomparedToは1本目（枝番1、atは同着
-  // グループより新しい）を指す——**atを見ずに枝番の大小だけで選ぶ変異は
-  // ここで赤くなる**（枝番だけならbranchWrite4(枝番4)が誤って選ばれる）。
   const afterTieMs = branchTieMs + 50;
   const afterTie1 = await withFrozenNow(afterTieMs, () =>
     archive.archive(branchTieSessionId, 'AFTER-TIE-1\n'),
@@ -1022,19 +663,12 @@ export async function verifyTranscriptArchiveContract(
     );
   }
 
-  // --- ここから #1732（並行 archive() で continuity/comparedTo が壊れる窓） -----
-
-  // 34. 🔴 並行に archive() を呼んでも、comparedTo の鎖は list() の並び
-  // （at 昇順）と必ず一致する。上のdoc「⚠️」参照——PGliteに対しては窓の
-  // 有無を判定できない（常に緑）。fs / 実 PostgreSQL に対しては実効性のある歯。
   const concurrentSessionId = 'archive-contract-concurrent-lock-window';
   const concurrentBase = 'CONCURRENT-CHAIN-LINE\n';
   const concurrentBodies = Array.from({ length: 8 }, (_, i) => concurrentBase.repeat((i + 1) * 20));
   const concurrentWrites = await Promise.all(
     concurrentBodies.map((b) => archive.archive(concurrentSessionId, b)),
   );
-  // list() は新しい順（#698）なので、反転して「積んだ順（at昇順、同着は
-  // 枝番昇順——list() 自身が #908 で tie-break 済み）」にする。
   const concurrentOldestFirst = (await archive.list())
     .filter((entry) => entry.sessionId === concurrentSessionId)
     .slice()
@@ -1057,9 +691,6 @@ export async function verifyTranscriptArchiveContract(
     }
   }
 
-  // 35. 🔴 並行に分岐した2本を積んでも、selectArchiveRemovalTargets
-  // （requireContainment: true の既定）が非包含行を削除対象に選ばない。
-  // 上のdoc参照——PGliteに対しては実効性が無い（理由は検査34と同じ）。
   const pruneDangerSessionId = 'archive-contract-concurrent-prune-danger';
   const pruneRow1 = await archive.archive(pruneDangerSessionId, 'AAAA\n');
   if (pruneRow1.continuity !== 'first') {
@@ -1087,17 +718,6 @@ export async function verifyTranscriptArchiveContract(
     );
   }
 
-  // --- ここから #1829（readTail の maxChars の単位——コードポイント数か
-  // UTF-16 コード単位か——が pg とそれ以外で食い違っていた）-------------------
-
-  // 36. 🔴 コードポイント数では maxChars 以下だが UTF-16 コード単位では
-  // maxChars を超える本文は、全文がそのまま返る（先頭を静かに失わない）。
-  //
-  // 5個の絵文字（5 コードポイント / 10 UTF-16 コード単位）+ 改行 + "KEEP"
-  // （4文字）＝ コードポイント数 10、UTF-16 長 15。maxChars=10 で読むと：
-  // コードポイント数(10) <= maxChars(10) ⟹ 切り詰め不要・全文を返すはず。
-  // UTF-16 長(15) は maxChars(10) を超えるので、UTF-16 コード単位で判定する
-  // 実装はここで（誤って）切り詰め、絵文字が失われる。
   const astralShortSessionId = 'archive-contract-astral-short-body';
   const astralShortBody = `${'\u{1F600}'.repeat(5)}\nKEEP`;
   const astralShortCodePoints = [...astralShortBody].length;
@@ -1121,15 +741,6 @@ export async function verifyTranscriptArchiveContract(
     );
   }
 
-  // 37. 🔴 本文が真にコードポイント数で maxChars を超えるときの切り詰めは、
-  // サロゲートペアの途中で割らない——返る文字列は「末尾から maxChars + 1 個
-  // ぶんの完全なコードポイント」と厳密に一致する。
-  //
-  // 改行を含まない10個の絵文字（10 コードポイント）。maxChars=6 で読むと
-  // コードポイント数(10) > maxChars+1(7) なので真に切り詰めが起き、末尾7個
-  // （= 7絵文字ぶん、14 UTF-16 コード単位）が返るはず。UTF-16 コード単位で
-  // 数える・素朴にスライスする実装は、ここでサロゲートペアを割って孤立
-  // サロゲート（不正な UTF-16）を残しうる。
   const astralTruncateSessionId = 'archive-contract-astral-truncate';
   const astralTruncateBody = '\u{1F600}'.repeat(10);
   const astralTruncateId = (await archive.archive(astralTruncateSessionId, astralTruncateBody)).id;
@@ -1147,8 +758,6 @@ export async function verifyTranscriptArchiveContract(
       { expected: expectedAstralTruncateTail, actual: astralTruncateTail.body },
     );
   }
-  // ⚠️ 上の厳密な文字列一致は孤立サロゲートの不在も含意するが、意図を直接
-  // 示すため、孤立サロゲートの不在をここでも明示的に検査する。
   const loneSurrogatePattern =
     /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/u;
   if (loneSurrogatePattern.test(astralTruncateTail.body)) {
@@ -1157,9 +766,6 @@ export async function verifyTranscriptArchiveContract(
     });
   }
 
-  // issue #3011（teto の判断、2026-10-06）。
-  // 読むだけの口（read・readTail・remove）: NUL を含む id は、断らず「無い」（missing）と同じ結果を返す。投げない。
-  // 書き込み: sessionId（鍵）の NUL は上の #2233 のとおり断る。本文の NUL は落として残す（fs・インメモリも pg に揃える）。
   {
     const nulId = 'archive-contract-n\u0000ul-id.jsonl';
     const outcomes: Array<[string, () => Promise<{ kind: string }>]> = [

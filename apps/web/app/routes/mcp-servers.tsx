@@ -1,5 +1,4 @@
-// URL の伏せ字は CLI と同じ1つの実装（`@alteroid/core/mask-url`。issue #1622 ——
-// 2つが別々に同じ判定を持ち、どちらも password だけの userinfo を素通ししていた）。
+// URL の伏せ字を自前で書かない: CLI と別々に同じ判定を持つと、どちらも password だけの userinfo を素通ししていたため
 import { SettingsTabs } from '~/components/group-tabs';
 import { LoadError } from '~/components/load-error';
 import { settingsDocumentTitle } from '~/lib/nav';
@@ -30,32 +29,8 @@ import type {
   McpServersUpdateResult,
 } from '@alteroid/logic';
 
-/**
- * `/mcp-servers` — 人間の MCP 連携の登録（`.mcp.json` 相当）を読む・差し替える画面
- * （#325 段4）。
- *
- * **`alteroid mcp list|show|edit|set|clear` / `GET`・`PUT /mcp-servers` と同じもの
- * を読み書きする。** 経路は新しく足していない——段1〜3 で在る2本を、この画面からも
- * 呼べるようにしただけである（AGENTS.md「画面の都合で API に経路を足さないこと」）。
- * 「外す」も新しい口ではなく、CLI と同じく空の `mcpServers` の `PUT` である。
- *
- * 形は `routes/profile.tsx`（#1122）の写しで、理由も同じ:
- *
- * - **値は押すまで隠す。** `GET /mcp-servers` は `env` / `headers` / `args` を丸ごと返し、
- *   そこには鍵が入りうる。一覧に出すのは名前・種類・宛先（URL はクエリと認証情報を
- *   伏せる）・鍵の名前だけで、「値を表示する」を押したときだけ JSON を出す。編集欄も
- *   「編集する」を押すまで値を流し込まない
- * - **保存は2段で確かめる。** stdio の登録は、次のセッションでクローンの SDK が
- *   起こすコマンドである（`apps/daemon/src/app.ts` の `GET /mcp-servers` の doc）。
- *   サーバ側に確認の印は無いので、押す前の確認だけが網になる
- * - **資格は `requireOwner`**（`/profile` と同じ。中身は素通しで、許可済みでログインできる
- *   アカウントは全員持ち主。#2862）。ボタンは隠さない。403 は `authenticate` の「許可が無い」
- *   ものだけで、持ち主の宣言の案内は出さない
- *
- * **形の検査はデーモンに任せる**（`parseMcpServers` が正本）。この画面が手元で
- * 止めるのは「JSON として読めない」と「`mcpServers` の欄が無い」だけで、これは
- * 送る前に止める（CLI の `parseMcpJson` と同じ線）。
- */
+// 値は押すまで描かない: GET /mcp-servers は env / headers / args を丸ごと返し、鍵が入りうるため
+// 保存の確認を省かない: サーバ側に確認の印は無く、押す前の確認だけが網になるため
 export default function McpServersPage() {
   const { data, error, isLoading, isValidating, mutate } = useMcpServers();
 
@@ -150,10 +125,6 @@ function McpServersView({ state }: { state: McpServersState }) {
   );
 }
 
-/**
- * 1件ぶんの要約。**値は1文字も描かない**（鍵の名前と `args` の個数だけ。CLI の
- * `renderMcpList` と同じ線）。
- */
 function EntrySummary({ name, entry }: { name: string; entry: McpServerEntry | undefined }) {
   if (entry === undefined) return null;
   const transport = entry.type ?? 'stdio';
@@ -183,17 +154,9 @@ function EntrySummary({ name, entry }: { name: string; entry: McpServerEntry | u
   );
 }
 
-/**
- * 差し替え・外す。
- *
- * **編集欄は「編集する」を押すまで出さない**（値を押すまで隠すのと同じ理由。押すと、
- * いま置かれている登録を `.mcp.json` の形で流し込む＝ `alteroid mcp edit` が
- * `$EDITOR` に現在の登録を開くのと同じ）。
- */
 function McpServersEditor({ current }: { current: McpServersState }) {
   const setMcpServers = useSetMcpServers();
   const [draft, setDraft] = useState<string | null>(null);
-  /** 応答が返った時点の「いまの下書き」（送った時点と比べる。issue #3515）。 */
   const latestDraft = useLatest(draft);
   const [confirming, setConfirming] = useState<'save' | 'clear' | null>(null);
   const [busy, setBusy] = useState(false);
@@ -209,18 +172,12 @@ function McpServersEditor({ current }: { current: McpServersState }) {
   const original = toMcpJson(current.mcpServers);
   const unchanged = editing && draft === original;
   const parsed = editing ? parseMcpJson(draft) : null;
-  // 編集欄が開いていて、元の登録から変わっていれば書きかけ（#3370）。
   const dirty = editing && !unchanged;
   const [confirmingClose, setConfirmingClose] = useState(false);
-  /**
-   * **書きかけがあるまま離れない。** `memory-detail.tsx` と同じ形: アプリ内の移動は確認を挟み、
-   * タブを閉じる・再読み込みはブラウザの警告に任せる。
-   */
   useReportDirty('editor', dirty);
   const draftClears = parsed !== null && parsed.ok && Object.keys(parsed.servers).length === 0;
 
   async function submit(servers: McpServers) {
-    // 送ったときの下書きを控える。成功のあと、いまの下書きがこれと同じときだけ閉じる（issue #3515）。
     const sent = draft;
     setBusy(true);
     setFailure(undefined);
@@ -229,11 +186,10 @@ function McpServersEditor({ current }: { current: McpServersState }) {
       const update = await setMcpServers(servers);
       setResult({ before, update });
       setConfirming(null);
-      // 応答を待つ間に打ち足した分は残す（元の登録は、保存できた登録へ追従して再取得される）。
       if (latestDraft.current === sent) setDraft(null);
     } catch (caught) {
       setFailure(caught);
-      // **確認は畳む**（`profile.tsx` と同じ —— 直したつもりで1回で送る形にしない）。
+      // 確認は畳む: 直したつもりで1回で送る形にしないため
       setConfirming(null);
     } finally {
       setBusy(false);
@@ -248,7 +204,6 @@ function McpServersEditor({ current }: { current: McpServersState }) {
     setResult(null);
   }
 
-  /** 送る前に JSON として読めるかだけを見る。読めなければ確認へ進まない。 */
   function askSave() {
     if (parsed === null) return;
     if (!parsed.ok) {
@@ -289,7 +244,6 @@ function McpServersEditor({ current }: { current: McpServersState }) {
                 aria-label="MCP サーバの新しい登録"
                 className="min-h-64 font-mono text-xs"
                 maxHeight="60vh"
-                // 保存ボタンと同じ（確認の段へ進むだけ。確認は飛ばさない）。
                 onSubmitShortcut={askSave}
                 submitDisabled={unchanged || busy || confirming === 'save'}
                 spellCheck={false}
@@ -395,19 +349,13 @@ function McpServersEditor({ current }: { current: McpServersState }) {
   );
 }
 
-/**
- * 差し替えの結果。**足した・外した名前、指紋、runner ごとの成否を全部出す**
- * （CLI の `renderMcpUpdate` と同じ —— 配り損ねた runner を小さく出すと、マネージャーが
- * 古い登録のまま走り続けることに誰も気づけない）。runner が返した指紋が保存した
- * 指紋と違えば、それも言う。
- */
+// runner ごとの成否を小さく出さない: 配り損ねた runner を小さく出すと、マネージャーが古い登録のまま走り続けることに誰も気づけないため
 function UpdateReport({ before, update }: { before: string[]; update: McpServersUpdateResult }) {
   const beforeSet = new Set(before);
   const afterSet = new Set(update.names);
   const added = update.names.filter((name) => !beforeSet.has(name));
   const removed = before.filter((name) => !afterSet.has(name)).sort();
   const cleared = update.names.length === 0;
-  // 失敗・または届いた指紋が保存と違う実行環境が1台でも在れば、成功の見出しにしない。
   const partial = hasMcpPushProblem(update);
 
   return (
@@ -467,16 +415,11 @@ function toJson(servers: McpServers): string {
   return JSON.stringify(servers, null, 2);
 }
 
-/** 編集欄に流し込む形（`.mcp.json` そのもの。CLI の `mcpEditCommand` が開く形と同じ）。 */
 function toMcpJson(servers: McpServers): string {
   return `${JSON.stringify({ mcpServers: servers }, null, 2)}\n`;
 }
 
-/**
- * 編集欄の本文を読む。**止めるのは JSON として読めないものと `mcpServers` の欄が
- * 無いものだけ**で、中身の検査はデーモンの正本に任せる（CLI の `parseMcpJson` と
- * 同じ線）。
- */
+// 中身の検査をここでしない: 形の検査はデーモンの parseMcpServers が正本のため
 function parseMcpJson(
   text: string,
 ): { ok: true; servers: McpServers } | { ok: false; error: string } {

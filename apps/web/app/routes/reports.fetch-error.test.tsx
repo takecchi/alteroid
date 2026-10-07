@@ -1,12 +1,4 @@
 // @vitest-environment jsdom
-/**
- * 日報の一覧と本文の取得に失敗したとき、「まだ無い」「日報が1件も無い」「この日の日報は無い」を
- * 並べない（issue #2324）。
- *
- * 読めていないのに日報が無いように読める（AGENTS.md の地雷「取れない軸に 0 の行を作る」）。
- * 一覧（`GET /reports`）と本文（`GET /reports/{date}`）は別の取得なので、両方を見る。
- * 手本は `approvals.fetch-error.test.tsx`（#2313）。
- */
 import { cleanup, render, screen } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -30,7 +22,6 @@ afterEach(() => {
 
 type Respond = () => Response | Promise<Response>;
 
-/** 一覧（`GET /reports`）と本文（`GET /reports/{date}`）に別々の応答を返す。他の URL は「繋がらない」。 */
 function stubReports(list: Respond, body: Respond): void {
   globalThis.fetch = (async (input: RequestInfo | URL) => {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
@@ -41,7 +32,6 @@ function stubReports(list: Respond, body: Respond): void {
   }) as typeof fetch;
 }
 
-// framework mode の `loaderData` を手で与える（`reports.test.tsx` と同じやり方）。
 const ReportsRoute = Reports as unknown as (props: {
   loaderData: { date: string | undefined; reportId: string | undefined };
 }) => React.ReactElement;

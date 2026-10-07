@@ -24,16 +24,10 @@ describe('fingerprintArchiveBody', () => {
     expect(fp).toEqual({ bodyChars: 0, bodyMd5: md5('') });
   });
 
-  /**
-   * サロゲートペア（絵文字）を跨ぐ境界。**JS の `length` は UTF-16 コード単位
-   * を数える**——コードポイント単位ではない。'😀' は1コードポイントだが
-   * `length` は2である。`classifyArchiveContinuity` の `body.slice(0, n)` も
-   * 同じ数え方なので、この関数が返す `bodyChars` とずれない。
-   */
   it('サロゲートペアはコードポイント1でもbodyCharsは2を数える', () => {
     expect('😀'.length).toBe(2);
     const fp = fingerprintArchiveBody('A😀B');
-    expect(fp.bodyChars).toBe(4); // 'A' + high + low + 'B'
+    expect(fp.bodyChars).toBe(4);
   });
 });
 
@@ -102,10 +96,6 @@ describe('classifyArchiveContinuity', () => {
     });
   });
 
-  /**
-   * 🔴 `previous.bodyChars` が新しい本文より長い（＝縮んだ）⟹ diverged。
-   * 本番の「6,900万文字*縮んだ*」行に相当（`archive-contract.ts` 検査15）。
-   */
   it('previous.bodyChars が新しい本文より長い（縮んだ）ときは diverged', () => {
     const previous = { id: 'p1', ...fingerprintArchiveBody('0123456789') };
     expect(classifyArchiveContinuity(previous, '01234')).toEqual({
@@ -114,10 +104,6 @@ describe('classifyArchiveContinuity', () => {
     });
   });
 
-  /**
-   * 🔴 長さは伸びているのに先頭が違う ⟹ diverged。**長さ比較へ退化すると
-   * 緑になってしまう歯**（`archive-contract.ts` 検査16 と同じ意図）。
-   */
   it('長さは伸びているのに先頭が違う本文は diverged（長さ比較への退化を検出する）', () => {
     const previous = { id: 'p1', ...fingerprintArchiveBody('AAAA') };
     expect(classifyArchiveContinuity(previous, 'ZZZZZZZZZZ')).toEqual({
@@ -126,10 +112,6 @@ describe('classifyArchiveContinuity', () => {
     });
   });
 
-  /**
-   * 🔴 `bodyChars` だけ在って `bodyMd5` が無い／その逆／両方 null ⟹
-   * すべて unknown。
-   */
   it('bodyChars だけ在って bodyMd5 が無いときは unknown', () => {
     const previous = { id: 'p1', bodyChars: 4 };
     expect(classifyArchiveContinuity(previous, 'ABCD')).toEqual({
@@ -162,18 +144,10 @@ describe('classifyArchiveContinuity', () => {
     });
   });
 
-  /**
-   * サロゲートペア（絵文字）を跨ぐ境界で、`fingerprintArchiveBody` と
-   * `classifyArchiveContinuity` が同じ数え方をしていること。
-   *
-   * `previous` の本文がサロゲートペアで終わっており、新しい本文がその続きに
-   * さらに別の絵文字を足す——両者とも同じ UTF-16 コード単位で `slice` /
-   * `length` を扱っていなければ、境界がずれて誤って diverged になる。
-   */
   it('previous の末尾が絵文字（サロゲートペア）でも continues が正しく判定される', () => {
     const previousBody = 'AB😀';
     const previous = { id: 'p1', ...fingerprintArchiveBody(previousBody) };
-    expect(previous.bodyChars).toBe(4); // 'A' 'B' + high + low
+    expect(previous.bodyChars).toBe(4);
 
     const nextBody = previousBody + '😀EFG';
     expect(classifyArchiveContinuity(previous, nextBody)).toEqual({
@@ -193,16 +167,9 @@ describe('classifyArchiveContinuity', () => {
     });
   });
 
-  /**
-   * `previous.bodyChars` がサロゲートペアの真ん中を指す、あり得ない/壊れた
-   * 状態でも例外を投げず、`diverged` へ落ちる（`slice` は境界をコード単位で
-   * 機械的に切るだけなので、壊れた不変条件を検出はしないが、少なくとも
-   * クラッシュせず、`md5` が一致しないぶん自然に `diverged` になる）。
-   */
   it('previous.bodyChars がサロゲートペアの内側を指しても例外を投げずdivergedになる', () => {
-    const previousBody = 'AB😀CD'; // length=6 (A,B,high,low,C,D)
+    const previousBody = 'AB😀CD';
     const fullFingerprint = fingerprintArchiveBody(previousBody);
-    // わざと1文字少ない bodyChars（サロゲートペアの前半だけを含む位置）を渡す。
     const corruptedPrevious = { id: 'p1', bodyChars: 3, bodyMd5: fullFingerprint.bodyMd5 };
     expect(() => classifyArchiveContinuity(corruptedPrevious, previousBody + 'MORE')).not.toThrow();
     expect(classifyArchiveContinuity(corruptedPrevious, previousBody + 'MORE')).toEqual({

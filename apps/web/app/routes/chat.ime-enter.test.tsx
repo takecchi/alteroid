@@ -1,15 +1,4 @@
 // @vitest-environment jsdom
-/**
- * **IME で変換している最中の送信ショートカットを、送信として拾わないこと。**
- *
- * 送るのは ⌘ + Enter / Ctrl + Enter（OS を問わずどちらも）だけで、Enter 単体・Shift + Enter では
- * 送らない（textarea の既定の改行）。変換中でも `input` は飛ぶので、`draft` に入っているのは
- * 確定前の途中の文字列であり、門が無いとそれが投函される。
- *
- * **測り方**: 同じ入力・同じキーで `isComposing` だけを反転させ、`POST /chat` が立つか立たないかを見る。
- * 片側だけでは「そもそも送れていない」と区別が付かないので、**必ず両側を1本の中で通す**
- * （変換中→0本、確定後→1本）。案内の文だけが OS に合わせて変わる（`navigator.platform` を差し替えて確かめる）。
- */
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider, useParams } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -44,12 +33,6 @@ function renderChat(initial: string) {
   );
 }
 
-/**
- * 会話一覧と履歴。**この試験の対象ではない**ので、どちらも空で返す。
- * `/approvals` も同じ扱い——issue #2210 以降 `conversationApprovals.error` が
- * `ErrorNote` を出すので、未ハンドルのまま（`Failed to fetch`）にせず0件で
- * 成功させる。
- */
 function background(url: string): Response | undefined {
   if (url.includes(`/conversations/${CONVERSATION_ID}`)) {
     return json({ conversationId: CONVERSATION_ID, messages: [] });
@@ -59,13 +42,6 @@ function background(url: string): Response | undefined {
   return undefined;
 }
 
-/**
- * `POST /chat` を数え、届いた本文を控える。
- *
- * 本文は `stubFetch` の `init` には来ない（画面は `fetch(new Request(...), {signal})`
- * の形で呼ぶ）ので、据えられた `fetch` をもう一枚包んで通り道で読む
- * （`chat.follow-up.test.tsx` の `captureChatBodies` と同じ理由）。
- */
 function setUpChat(): { bodies: string[] } {
   const bodies: string[] = [];
   stubFetch((url, init) => {
@@ -90,15 +66,7 @@ function setUpChat(): { bodies: string[] } {
   return { bodies };
 }
 
-/**
- * 「送られていない」を測るための待ち。
- *
- * ⚠️ **`expect(bodies.length).toBe(0)` をキー押下の直後に置くだけでは足りない** —
- * 送信は非同期なので、まだ立っていないだけの状態と区別が付かない。React の更新と
- * マイクロタスクを一巡させてから測る。**すぐ下で `isComposing: false` の側が
- * 同じ待ちの後に1本立つ**ので、この待ちが短すぎれば2本目も 0 本になり、
- * 「常に緑」にはならない。
- */
+// キー押下の直後に 0 本を測らず待ちを挟む: 送信は非同期で、まだ立っていないだけの状態と区別が付かないため
 async function settle(): Promise<void> {
   for (let i = 0; i < 30; i += 1) await Promise.resolve();
 }
@@ -122,7 +90,6 @@ afterEach(() => {
   globalThis.fetch = originalFetch;
 });
 
-/** `navigator.platform` を差し替える（jsdom は空で、Ctrl 側になる）。 */
 function pretendPlatform(platform: string) {
   vi.spyOn(navigator, 'platform', 'get').mockReturnValue(platform);
 }
@@ -182,10 +149,6 @@ describe('IME 変換中の送信ショートカット', () => {
     expect(JSON.parse(bodies[0] ?? '{}')).toEqual(BODY('へんかんちゅう'));
   });
 
-  /**
-   * `isComposing` が false のまま変換確定の Enter を配る実装への備え（`keyCode === 229`）。
-   * ⚠️ 測れているのは分岐の存在だけで、実機（Android の IME・古い WebKit）では確かめていない。
-   */
   it('keyCode 229（isComposing は false）の Ctrl + Enter でも送らない', async () => {
     const { bodies } = setUpChat();
     renderChat(`/chat/${CONVERSATION_ID}`);
@@ -206,7 +169,6 @@ describe('IME 変換中の送信ショートカット', () => {
     renderChat(`/chat/${CONVERSATION_ID}`);
     const box = await typeInto('修飾キー無し');
 
-    // fireEvent の戻り値は「既定動作が止められなかったか」。止めていない = 改行の既定が生きている。
     expect(fireEvent.keyDown(box, { key: 'Enter', isComposing: false })).toBe(true);
     expect(fireEvent.keyDown(box, { key: 'Enter', shiftKey: true, isComposing: false })).toBe(true);
     await settle();

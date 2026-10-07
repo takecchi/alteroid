@@ -1,10 +1,4 @@
 // @vitest-environment jsdom
-/**
- * #3709。添付を上げている最中の印は会話ごとに持つ。別の会話の上げ終わりが、今の会話の印を消さない
- * （消えると、上げている最中に送信の口が開き、同じ添付を二重に上げうる）。
- *
- * アップロードは `fetch` の通り道で止め、1件ずつテストが放す。実時間の待ちは使わない。
- */
 import { File as NodeFile } from 'node:buffer';
 
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
@@ -85,7 +79,6 @@ describe('添付を上げている最中の印は会話ごと（#3709）', () =>
       if (url.includes('/conversations')) return json({ conversations: [], scanned: 0 });
       return undefined;
     });
-    // 上げは届いた順に止め、テストが1件ずつ放す。
     const inner = globalThis.fetch;
     globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       if (input instanceof Request && input.url.includes('/attachments?')) {
@@ -104,30 +97,25 @@ describe('添付を上げている最中の印は会話ごと（#3709）', () =>
     );
     await screen.findByPlaceholderText(/クローンに話しかける/);
 
-    // 会話 A で上げ始める。
     choose([nodeFile('a.txt')]);
     fireEvent.click(await screen.findByRole('button', { name: 'メッセージを送信' }));
     await screen.findByRole('button', { name: '添付を上げている' });
     await waitFor(() => expect(uploads).toHaveLength(1));
 
-    // 上げている最中に B へ移る。A の印は B には出ない。
     await router.navigate(`/chat/${B}`);
     expect(await findShownConversation(B)).toBeTruthy();
     expect(screen.queryByRole('button', { name: '添付を上げている' })).toBeNull();
 
-    // B でも添付つきで送る。
     choose([nodeFile('b.txt')]);
     fireEvent.click(await screen.findByRole('button', { name: 'メッセージを送信' }));
     await screen.findByRole('button', { name: '添付を上げている' });
     await waitFor(() => expect(uploads).toHaveLength(2));
 
-    // A の上げ終わり。B の印は残る。
     uploads[0]?.();
     await waitFor(() => expect(uploads).toHaveLength(2));
     await act(async () => {});
     expect(screen.getByRole('button', { name: '添付を上げている' })).toBeTruthy();
 
-    // B の上げ終わりで、印は下りる。
     uploads[1]?.();
     await waitFor(() =>
       expect(screen.queryByRole('button', { name: '添付を上げている' })).toBeNull(),

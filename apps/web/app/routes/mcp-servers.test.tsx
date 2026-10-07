@@ -1,18 +1,4 @@
 // @vitest-environment jsdom
-/**
- * `/mcp-servers` — 人間の MCP 連携の登録を読む・差し替える画面（#325 段4）。
- *
- * ここで固定したいのは次の各点（`profile.test.tsx` と対になる）:
- *
- * 1. **値は押すまで出さない。** 一覧は名前・種類・宛先・鍵の名前だけで、`env` /
- *    `headers` / `args` の値と URL のクエリは「値を表示する」を押すまで1文字も描かない
- * 2. **保存は2段。**「保存する」だけでは `PUT /mcp-servers` を叩かず、「本当に保存する」
- *    で初めて、編集した登録をそのまま送る。JSON として読めないものは送らない
- * 3. **400 のときは不正な欄の位置（`error`）を出し、前のものが残ると言う**
- * 4. **外すのは空の `mcpServers` の `PUT`**（`alteroid mcp clear` と同じ）
- * 5. **403 に宣言の案内を出さない。** 本文が何であれ（かつての `requireOwner` の本文でも）、持ち主として宣言する手は案内しない（#2862）
- * 6. **保存したら 実行環境ごとの反映結果を出す**（配り損ねを小さく出さない）
- */
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { createMemoryRouter, Link, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -69,11 +55,7 @@ const UPDATED = {
 
 type Reply = { status: number; body: unknown };
 
-/**
- * `/mcp-servers` の stub。**共有の `stubFetch` は使えない**（`openapi-fetch` は
- * `fetch(new Request(...))` の形で呼ぶので、method も本文も落ちる。
- * `profile.test.tsx` の同じ断り書きと同じ理由）。
- */
+// 共有の stubFetch を使わない: openapi-fetch は fetch(new Request(...)) の形で呼ぶので method も本文も落ちるため
 function stubMcp(options: { get?: Reply; put?: Reply } = {}) {
   let stored: unknown = STORED;
   const puts: unknown[] = [];
@@ -103,7 +85,6 @@ function stubMcp(options: { get?: Reply; put?: Reply } = {}) {
 }
 
 function renderScreen() {
-  // `useBlocker` はデータルーターの中でしか動かない。離れる先のリンクも置く。
   const router = createMemoryRouter(
     [
       {
@@ -149,11 +130,6 @@ describe('/mcp-servers 画面 — 読む', () => {
     expect(document.body.textContent).not.toContain(SECRET);
   });
 
-  /**
-   * 🔴 **password だけの userinfo（`https://:秘密@host`）も、押す前の一覧に出さない**
-   * （issue #1622）。`username` だけを見る判定では、`username` が空文字のこの形が
-   * 素通りし、秘密が一覧にそのまま出ていた。
-   */
   it('password だけの userinfo の宛先も伏せ、押す前の一覧に秘密を出さない', async () => {
     stubMcp({
       get: {
@@ -218,7 +194,6 @@ describe('/mcp-servers 画面 — 差し替える', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: '編集する' }));
     const editor = screen.getByLabelText<HTMLTextAreaElement>('MCP サーバの新しい登録');
-    // 「編集する」を押すと、いまの登録（値を含む本物）が .mcp.json の形で流し込まれる。
     expect(JSON.parse(editor.value)).toEqual({ mcpServers: STORED.mcpServers });
 
     const next = {
@@ -232,7 +207,6 @@ describe('/mcp-servers 画面 — 差し替える', () => {
     expect(puts).toEqual([]);
 
     fireEvent.click(screen.getByRole('button', { name: '本当に保存する' }));
-    // runner-2 が届いていないので、成功の見出しではなく警告（warn 色）になる（#3157）。
     const heading = await screen.findByText(
       /MCP 連携の登録は保存したが、一部の実行環境へ反映できていない（確認用の値 b{12}）/,
     );
@@ -243,7 +217,6 @@ describe('/mcp-servers 画面 — 差し替える', () => {
     expect(screen.getByText('外した: linear')).toBeTruthy();
     const report = screen.getByLabelText('実行環境ごとの反映結果');
     expect(report.textContent).toContain(`runner-1: 届いた（確認用の値 ${'b'.repeat(12)}）`);
-    // 届かなかった runner を小さく出さない。
     expect(report.textContent).toContain('runner-2: 届かなかった — runner に届かなかった');
     expect(screen.getByText('いつから効くか: クローンの次のセッションから')).toBeTruthy();
   });
@@ -254,7 +227,6 @@ describe('/mcp-servers 画面 — 差し替える', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: '編集する' }));
     const editor = screen.getByLabelText<HTMLTextAreaElement>('MCP サーバの新しい登録');
-    // 変更が無いあいだは何も起きない（保存ボタンも disabled）。
     fireEvent.keyDown(editor, { key: 'Enter', ctrlKey: true });
     expect(screen.queryByRole('button', { name: '本当に保存する' })).toBeNull();
 
@@ -266,7 +238,6 @@ describe('/mcp-servers 画面 — 差し替える', () => {
     expect(screen.getByRole('button', { name: '本当に保存する' })).toBeTruthy();
     expect(puts).toEqual([]);
 
-    // 確認の段でもう一度押しても、送らない（確認は「本当に保存する」でだけ越える）。
     fireEvent.keyDown(editor, { key: 'Enter', metaKey: true });
     expect(puts).toEqual([]);
   });
@@ -364,7 +335,6 @@ describe('/mcp-servers 画面 — 差し替える', () => {
   });
 });
 
-/** 書きかけがあるときだけ、閉じる・離れる前に確認する（#3370）。 */
 describe('/mcp-servers 画面 — 書きかけを確認なしで捨てない', () => {
   const EDITOR = 'MCP サーバの新しい登録';
 

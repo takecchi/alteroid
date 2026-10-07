@@ -1,26 +1,7 @@
 #!/usr/bin/env node
-/**
- * 正典（`docs/*.md`）を core のビルド成果物へ焼き込む。
- *
- * **なぜ焼き込むのか。** クローンが自分自身を把握するための出所は正典だけである
- * （AGENTS.md「まず読む」）。ここで要約を手書きすると docs と二重管理になり、
- * 必ずずれる — ずれた瞬間、クローンは「自分について間違ったことを確信している」
- * 状態になる。だから写すのは要約ではなく**全文**であり、写す作業は人間ではなく
- * ビルドがやる。
- *
- * **なぜ実行時に `docs/` を読まないのか。** runtime イメージには `dist/` しか
- * 入らない（Dockerfile）。実行時読みにすると「コンテナだと自分のことが分からない」
- * が生まれる＝実質のデグレードである（north_star 禁止1）。
- *
- * 生成物は `src/generated/canon.ts`。**コミットしない** — 正典から機械的に落ちる
- * だけのものなので、ずれを検出できる場所は docs 側にしか無い
- * （`packages/api-client/src/generated/` と同じ扱い）。
- */
 import { execFileSync } from 'node:child_process';
 import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
-// グローバルの `process` に頼らない（apps/daemon/scripts/write-openapi.mjs と同じ理由 —
-// この形の素の Node スクリプトは lint の環境定義から外れている）。
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
@@ -30,11 +11,7 @@ const docsDir = join(repoRoot, 'docs');
 const outDir = resolve(here, '../src/generated');
 const outFile = join(outDir, 'canon.ts');
 
-/**
- * 正典の順序。**上が勝つ**（AGENTS.md「これらの文書とコードが矛盾したら、
- * バグなのはコードである（優先順位は番号順）」）。並び順そのものが情報なので、
- * ディレクトリの列挙順に任せない。
- */
+// ディレクトリの列挙順に任せない: 並び順が優先順位（上が勝つ）という情報だから
 const CANON = [
   {
     name: 'north_star',
@@ -45,7 +22,6 @@ const CANON = [
   { name: 'architecture', file: 'architecture.md', summary: '設計。プロセスモデルと境界' },
 ];
 
-/** 先頭の `# ` 見出し。無ければファイル名で代用する。 */
 function titleOf(markdown, fallback) {
   for (const line of markdown.split('\n')) {
     const match = /^#\s+(.+?)\s*$/.exec(line);
@@ -54,34 +30,6 @@ function titleOf(markdown, fallback) {
   return fallback;
 }
 
-/**
- * 焼き込んだ時点のリビジョンと、その出所。
- *
- * **分からないことを隠さない。** イメージのビルドでは `.git` が無いので
- * （`.dockerignore`）、`ALTEROID_BUILD_REV` を渡さない限り両方とも空になる。
- * 空のときクローンには「リビジョンは不明」と伝わり、コードの最新が要る場面で
- * リポジトリを見に行く判断ができる。ここで嘘の値を埋めると、その判断が狂う。
- *
- * **フル sha を返す。** 短縮 sha だけだと、依頼者が `gh api .../compare` で
- * 「main から何コミット遅れているか」を突き合わせる材料にならない。表示用の
- * 短縮は読む側（`packages/core/src/revision.ts` の `describeBuildRevision`）が
- * 別に作る。
- *
- * **出所も一緒に運ぶ。** `'build'` は `ALTEROID_BUILD_REV`（人間 / CI が明示的に
- * 渡した値）、`'workspace'` はビルド時の git 作業ツリーから拾った値、`''` は
- * どちらも取れなかったことを意味する。値だけでは「本当にこのイメージの中身の
- * sha か、単にビルド環境に置いてあった値か」が読む側から区別できない。
- *
- * **`'workspace'` が指すのは `repoRoot` 自身の作業ツリーであって、その祖先の
- * どこかにある無関係な repo ではない。** `git rev-parse` は既定で `.git` が
- * 見つかるまで親ディレクトリを遡る——`repoRoot`（このスクリプト自身の位置から
- * 3階層上に固定で決まる）に `.git` が無いと、遡った先で拾った**別の repo**の
- * HEAD を「このビルドの workspace revision」と偽って返してしまう（#1843）。
- * `GIT_CEILING_DIRECTORIES` で `repoRoot` の親を天井にし、`repoRoot` 自身に
- * `.git` が無ければ即座に「取れなかった」へ倒す——遡って拾った値を workspace
- * のふりで返さない、という上の「分からないことを隠さない」と同じ約束を
- * 探索範囲にも適用する。
- */
 function revision() {
   const fromEnv = (process.env.ALTEROID_BUILD_REV ?? '').trim();
   if (fromEnv.length > 0) return { value: fromEnv, source: 'build' };
@@ -90,6 +38,7 @@ function revision() {
       cwd: repoRoot,
       stdio: ['ignore', 'pipe', 'ignore'],
       encoding: 'utf8',
+      // 親を天井にする: `.git` が無いとき祖先の別 repo の HEAD を拾ってしまうため
       env: { ...process.env, GIT_CEILING_DIRECTORIES: dirname(repoRoot) },
     }).trim();
     return { value, source: 'workspace' };
@@ -98,37 +47,10 @@ function revision() {
   }
 }
 
-/**
- * このイメージが**焼かれた時刻**（ISO8601 UTC）。
- *
- * **名前が事実より強くならないように。** これは「コミットの時刻」でも
- * 「本番に出た時刻」でもない——`main` へのマージから `release/prod` への反映
- * （夜1回）、反映からこのビルドが走るまでの間隔は、どちらもここには入っていない。
- * 言えるのは「このプロセスのコードは、少なくともこの時刻には存在していた」
- * までである（#1226。逐語は `packages/core/src/self.ts` の `describeCloneRuntime`
- * が焼かれた時刻の隣に置く）。
- *
- * **分からないことを隠さない、の裏側。** `new Date().toISOString()` はビルドを
- * 実行できている時点で必ず成功するので、**この値そのものが空になることは無い**
- * ——`revision()` の `''`（プレースホルダを作らない）とは事情が違う。だが
- * **この変更より前に焼かれたイメージ（古い `write-canon.mjs` が焼いたもの）では
- * `CANON_BUILT_AT` という定数自体が生成物に存在しない。** 読む側
- * （`packages/core/src/revision.ts` の `resolveBuildTime`）は、定数が無い・空・
- * 壊れた値のどれであっても同じ「不明」へ倒すこと——「取れなかった」を
- * 「取れた」に見せない、という `revision()` と同じ約束をここでも守る。
- */
 function builtAt() {
   return new Date().toISOString();
 }
 
-/**
- * **`docs/` に増えた正典を黙って落とさない。**
- *
- * 上の一覧は手書きである（順序と一行説明はファイルシステムに無い情報なので、
- * 自動では起こせない）。放っておくと5本目の正典を足した人は何の合図も受け取れず、
- * クローンだけがそれを知らないまま走る — 気づける場所がどこにも無いので、
- * ここで落とす。足す作業は1行で済む。
- */
 const onDisk = (await readdir(docsDir)).filter((name) => name.endsWith('.md')).sort();
 const listed = new Set(CANON.map((entry) => entry.file));
 const missing = onDisk.filter((name) => !listed.has(name));
@@ -143,8 +65,6 @@ if (missing.length > 0) {
 const documents = [];
 for (const entry of CANON) {
   const path = `docs/${entry.file}`;
-  // 読めなければ**落とす**。黙って欠けた正典を配ると、クローンは「自分について
-  // 知るべきことは全部知っている」つもりのまま一部を失う。
   const content = await readFile(join(docsDir, entry.file), 'utf8');
   documents.push({
     name: entry.name,

@@ -2,13 +2,6 @@ import { describe, expect, it } from 'vitest';
 
 import { errorReason, formatElapsedAgo, withErrorReason } from './format.js';
 
-/**
- * `formatElapsedAgo` の単体（issue #2141 段1）。
- *
- * **境目を1つずつ跨ぐ。** 分・時間・日の切り替えは `< 3600` / `< 86_400` の
- * 2つの条件で決まるので、境目のすぐ手前とちょうどの値を両方測る——どちらか
- * 片方だけでは、条件を `<=` に変異させても赤くならない。
- */
 describe('formatElapsedAgo', () => {
   const NOW = new Date('2026-01-10T00:00:00.000Z').getTime();
 
@@ -37,20 +30,11 @@ describe('formatElapsedAgo', () => {
     expect(formatElapsedAgo(at, NOW)).toBe('0分前');
   });
 
-  // 経緯（期待値の反転）: 旧 `formatElapsed` は単位だけ（`59分` / `不明`）を返し、呼び出し
-  // 側が `前` を付けていたので、読めない時刻で `（不明前）` と出た（PR #2151）。「前」を
-  // 返り値へ移し、読めない時刻は「前」の付かない `経過不明` にした。読める時刻の
-  // 期待値は「前」が付いただけで、呼び出し側の見え方（N分前）は変わらない。
   it('読めない ISO は「経過不明」——「不明前」にも0分前のようにも読めない', () => {
     expect(formatElapsedAgo('not-a-real-timestamp', NOW)).toBe('経過不明');
     expect(formatElapsedAgo('', NOW)).not.toContain('不明前');
   });
 
-  /**
-   * 丸め（`Math.round`）が単位の上限を越えていた（PR #2151 の欠陥）。
-   * 3570〜3599秒は `60分`、84,600〜86,399秒は `24時間`（`round(23.5)` から
-   * 繰り上がる）と出ていた。上限の手前で止め、次の単位へ上がるのは境目ちょうど。
-   */
   describe.each([
     [3569, '59分'],
     [3570, '59分'],

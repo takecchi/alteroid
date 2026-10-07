@@ -4,16 +4,6 @@ import { makeTempDir } from '../../../vitest.tmpdir.js';
 
 import { createFsStores } from './index.js';
 
-/**
- * issue #1652。詳しい経緯とインメモリ側の対の歯は
- * `packages/core/src/token-pool-replace-validation.test.ts` の冒頭コメントを
- * 見よ。
- *
- * ここは fs 実装に対して同じ入力を当てる——`replace()` が
- * `agentTokenRowSchema.parse(token)`（`order: z.number().int()`。いまは
- * `@alteroid/core` の `agentTokenSchema` を `.extend()` したもの）を通すので、
- * この歯は緑になる。
- */
 describe('TokenPoolStore.replace() — order が非整数の AgentToken の扱い（fs 実装）', () => {
   let stores: ReturnType<typeof createFsStores>;
 

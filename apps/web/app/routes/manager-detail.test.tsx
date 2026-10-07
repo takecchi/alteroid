@@ -1,15 +1,4 @@
 // @vitest-environment jsdom
-/**
- * マネージャー詳細が、**確認へ上がらず止められた件数**を出すこと。
- *
- * 一覧（`managers.test.tsx`）と対になっている。あちらは新しい側から3種で畳むが、
- * ここは畳まない — 詳細まで降りてきた人間が見に来たのは「何で止まっているのか」
- * そのものだからである。
- *
- * クローンは同じ状態を `manager_list` で読み、そこには件数が出ている（PR #60）。
- * この画面が「実行中」としか言わないと、同じ仕事を見て人間とクローンで見えている
- * ものが食い違う（北極星 禁止1 を逆向きに踏む）。
- */
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -35,13 +24,7 @@ import {
 import type { Route } from './+types/manager-detail';
 import ManagerDetail, { clientLoader } from './manager-detail';
 
-/**
- * `askedAt` の絶対時刻表示（`packages/logic/src/format.ts` の `formatDateTime`）を確かめる
- * 歯があるので、この画面と同じ理由で TZ を固定する。**理由（`vi.hoisted` で
- * なければ静かに効かない事情、CI が UTC で手元が JST であること）は
- * `apps/web/app/routes/reports.test.tsx` の冒頭に逐語で在るので、ここには
- * 写さない。**
- */
+// vi.hoisted にする: import の評価より後だと TZ の固定が静かに効かないため
 const tzBeforeThisFile = vi.hoisted(() => {
   const before = process.env.TZ;
   process.env.TZ = 'Asia/Tokyo';
@@ -77,14 +60,7 @@ afterEach(() => {
   globalThis.fetch = originalFetch;
 });
 
-/**
- * ルートモジュールの props（`loaderData`）が渡るのは framework mode だけで、
- * `createMemoryRouter`（library mode）では渡らない。
- *
- * **形を手で書き写さない。** 本物の `clientLoader` を通した戻り値をそのまま
- * 渡す — 手書きの `{ id }` を置くと、`clientLoader` が返すものが変わった日に
- * この試験だけが古い形のまま通り続ける。
- */
+// loaderData の形を手で書き写さない: 手書きの { id } だと clientLoader の戻り値が変わった日にこの試験だけが古い形のまま通り続けるため
 function Harness({ id }: { id: string }) {
   const loaderData = clientLoader({ params: { id } } as Route.ClientLoaderArgs);
   return <ManagerDetail {...({ loaderData } as Route.ComponentProps)} />;
@@ -97,7 +73,6 @@ function renderDetail(manager: ManagerSummary) {
   const router = createMemoryRouter(
     [
       { path: '/managers/:id', Component: () => <Harness id={manager.managerId} /> },
-      // `Link to="/journal"` の行き先（描くだけで踏まない）。
       { path: '/journal', Component: () => null },
     ],
     { initialEntries: [`/managers/${manager.managerId}`] },
@@ -109,44 +84,23 @@ function renderDetail(manager: ManagerSummary) {
   );
 }
 
-/**
- * `renderDetail` に加えて `POST /managers/:id/messages` も受ける版。
- *
- * **共通の `stubFetch` は使わない。** `packages/api-client`（openapi-fetch）は
- * `fetch(request, requestInitExt)` という形で呼ぶ — 第1引数が `method` 込みの
- * `Request` 本体で、第2引数（`requestInitExt`）は素通しの拡張オプションであり
- * 通常 `undefined` になる。`stubFetch`（`~/test-support`）の `Route` はこの
- * **第2引数だけ**を見て `route(url, init)` を呼ぶため、`init?.method` は常に
- * `undefined` になってしまい、「POST が実際に飛んだか」を method では見分け
- * られない（最初それで書いて実際に踏んだ）。ここでは `Request` 本体から
- * `method` を読み直して `sent` に控える。
- *
- * **`url.includes(...)` の1本勝負にもしない。** 素朴に書くと `/managers/mgr-1`
- * という部分一致が `/managers/mgr-1/messages` にも当たってしまい、POST が
- * `GET /managers/:id` 用の応答（`{ manager }`）を受け取って壊れる。`/messages`
- * で終わる URL を先に見て POST 専用の応答へ振り分け、それ以外を詳細の GET
- * として扱う。
- */
+// 共通の stubFetch を使わない: openapi-fetch は fetch(request, requestInitExt) の形で呼び、stubFetch は第2引数だけを見るので init?.method が常に undefined になるため
+// url.includes の1本勝負にしない: /managers/mgr-1 の部分一致が /managers/mgr-1/messages にも当たり、POST が GET 用の応答を受け取って壊れるため
 function renderDetailWithMessages(
   manager: ManagerSummary,
   sendResult: { outcome: string; detail: string } = {
     outcome: 'delivered',
     detail: '追加指示として届けた。',
   },
-  // 渡すと、解けるまで POST の応答を返さない（送信中の見た目を測る歯が使う）。
   gate?: Promise<void>,
 ) {
   const sent: { url: string; method: string; body?: unknown }[] = [];
-  // 次の送信への応答。途中で差し替えられる（「次の送信が失敗する」歯が使う）。
   const reply = { status: 200, body: sendResult as unknown };
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const request = input instanceof Request ? input : new Request(input, init);
     const { url, method } = request;
     if (url.endsWith(`/managers/${manager.managerId}/messages`)) {
-      // **本文も控える（`body`）。** 種別（`kind`）ごとに送る JSON の形
-      // （`decision` を付けるか）を確かめる歯（#334）が要る。`.clone()` で
-      // 読むのは、これより後で本物の fetch 実装が同じ `request` を読む
-      // 経路が万一あっても壊れないため。
+      // .clone() で読む: 後で本物の fetch 実装が同じ request を読む経路が万一あっても壊れないため
       const body: unknown = await request
         .clone()
         .json()
@@ -156,7 +110,6 @@ function renderDetailWithMessages(
       return json(reply.body, reply.status);
     }
     if (url.includes(`/managers/${manager.managerId}`)) return json({ manager });
-    // 知らない URL は「繋がらない」（`stubFetch` と同じ扱い）。
     throw new TypeError(`Failed to fetch: ${url}`);
   }) as typeof fetch;
   const router = createMemoryRouter(
@@ -174,19 +127,6 @@ function renderDetailWithMessages(
   return { sent, reply };
 }
 
-/**
- * **依頼の全文は header ではなく本文に出る。**
- *
- * かつてこの画面は `manager.request` を `Page` の `description`（header）へ
- * そのまま渡していた。header は `shrink-0`（`components/page.tsx`）なので、依頼が
- * 長いぶんだけ header が縦に伸び、スクロールできる本文の領域が潰れる — 長い依頼
- * では状態カードすら画面に入らず、人間から「header が大きくて content が見え
- * ない」という報告が出た。
- *
- * **jsdom にはレイアウトが無いので「高さ」は測れない。** だから測るのは高さでは
- * なく**どちらの側に置かれているか**である。header に入っていない・本文に全文が
- * ある、の2つで、`description` へ戻す変異と本文で切り詰める変異の両方が落ちる。
- */
 describe('依頼の全文は header ではなく本文に置く', () => {
   const LONG = [
     '依頼の1行目',
@@ -196,66 +136,35 @@ describe('依頼の全文は header ではなく本文に置く', () => {
   it('本文に全文があり、header には依頼が入っていない', async () => {
     renderDetail({ ...BASE, request: LONG });
 
-    // 本文側に全文がある。**既定の normalizer は改行を潰すので通さない** —
-    // 潰すと「改行を捨てる変異」が見えなくなる。
+    // 既定の normalizer を通さない: 改行を潰すと「改行を捨てる変異」が見えなくなるため
     const body = await screen.findByText(LONG, { normalizer: (text) => text });
-    // 1文字も捨てていない（`slice` で切り詰める変異はここで落ちる）。
     expect(body.textContent).toBe(LONG);
-    // 置かれているのは本文側である。
     expect(body.closest('header')).toBeNull();
-    // カードの見出しも出ている（何のカードなのかが分かる）。
     expect(screen.getByText('依頼')).toBeTruthy();
 
     const header = document.querySelector('header');
     expect(header).not.toBeNull();
-    // `description={manager.request}` へ戻す変異は、ここで落ちる。
     expect(header?.textContent ?? '').not.toContain('手順 40:');
-    // header 側の一文は残っている（依頼がどこにあるかを人間に渡す）。
     expect(header?.textContent ?? '').toContain('依頼の全文は下');
   });
 });
 
-/**
- * **委譲の詳細から、その委譲の使用量へ飛べる（issue #2077）。**
- *
- * 逆向き（`/usage` の「マネージャー別」→ `/managers/<id>`）は #2046 / PR #2047 で
- * 在るが、この向きが無かった——人間は `/usage` を開いて id を手で写す
- * しかなかった。ここで保証するのは href だけ（詳細画面で使用量を集計し
- * 直さないのは方針であって、この歯の対象ではない）。
- */
 describe('詳細から、その委譲の使用量へ飛べる（issue #2077）', () => {
   it('「状態」カードに /usage?managerId=<id> へのリンクがある', async () => {
     renderDetail({ ...BASE, managerId: 'mgr-77' });
 
     const link = await screen.findByRole('link', { name: '使用量を見る' });
-    // **`managerId=mgr-1`（`BASE` の既定値）ではなく `mgr-77` であること** —
-    // renderDetail に渡した `manager.managerId` をそのまま使っているかを見る
-    // （固定文字列を書く変異はここで落ちる）。
     expect(link.getAttribute('href')).toBe('/usage?managerId=mgr-77');
   });
 });
 
-/**
- * **一覧で `lost` を見た人間が、次に開くのがこの画面である。**
- *
- * 起こし直すかどうかを決めるのはここなのに、詳細だけが札しか出していなかった
- * （一覧 `managers.test.tsx`・CLI `chat.test.ts`・クローンの `tools.test.ts` には
- * 但し書きの網が張ってある）。
- *
- * 削ってはいけないのは2つ — **観測しているのは「戻れたか」だけだという限界**と、
- * **成果がリモートに残っていることがあるという次の一手**である（PR #42 で `lost` を
- * 分け、PR #60 で断定を外した経緯そのもの）。
- */
 describe('詳細でも、lost には次の一手を添える', () => {
   it('「復旧不能」と書かず、観測の限界と確かめる先を出す', async () => {
     renderDetail({ ...BASE, status: 'lost', live: false });
 
     expect(await screen.findByText('セッションへ戻れず')).toBeTruthy();
-    // 成果の有無は見ていないのだから、失われたと断定しない。
     expect(screen.queryByText('復旧不能')).toBeNull();
-    // 観測の限界（これが無いと「終わった」とも「失われた」とも読まれる）。
     expect(screen.getByText(/戻れたかどうかしか見ていない/)).toBeTruthy();
-    // 次の一手。起こし直す前に見に行く先を名指しする。
     expect(
       screen.getByText(
         /外へ出た成果（PR・コミット・送信済みのメール・登録済みの予定・投稿先など）を確かめる/,
@@ -284,39 +193,16 @@ describe('詳細でも、拒否は状態を置き換えずに状態へ添える'
       ],
     });
 
-    // **札は差し替えない。** 観測しているのは `running` のままである。
     expect(await screen.findByText('実行中')).toBeTruthy();
-    // 一覧の 3 種の上限に引っ張られない（詳細は畳まない）。
-    // **層の印（`denialActorTag`）が同じ要素へ付くので、完全一致ではなく
-    // 部分一致で見る**（`actor` が無いのでどれも `[層不明]` が付く）。
+    // 完全一致でなく部分一致で見る: 層の印（denialActorTag）が同じ要素へ付くため
     expect(screen.getByText(/^Bash/)).toBeTruthy();
     expect(screen.getByText(/^Write/)).toBeTruthy();
     expect(screen.getByText(/^WebFetch/)).toBeTruthy();
-    // 状態の隣に総数を並べる。
     expect(screen.getByText(/確認へ上がらず止められた 7 件/)).toBeTruthy();
-    // 観測していないことを断定しない。
     expect(screen.getByText(/この仕事が止まったかどうかは見ていない/)).toBeTruthy();
-    // 「0 件」を「止められていない」と読ませない材料を渡す。
     expect(screen.getByText(/実行環境を作り直すと数え直しになる/)).toBeTruthy();
   });
 
-  /**
-   * **Issue #1289 — `DenialsCard` の subtitle が、いちばん強く断定していた面。**
-   *
-   * かつては「分類器か deny 規則がその場で拒否した。この確認は人間にもクローンにも
-   * 回ってきていない」と事実として言い切っていた。**下部の段落（「それでこの仕事が
-   * 止まったかどうかは見ていない」）とは矛盾していた** — こちらは正しいので消さず、
-   * subtitle 側だけを直す。
-   *
-   * **Issue #1844 — #1289 の直しは (a)/(b) の場合分けにしたが、この画面だけ
-   * 「人間にもクローンにも」という対象範囲の広い字面をそのまま(a)節の中へ
-   * 残していた。** 一覧（`managers.tsx` の `ManagerDenialNote`）・クローン向け
-   * 正本（`packages/core/src/tools.ts` の `describeDenials`）・実際に escalation
-   * を判定している箇所（`packages/core/src/manager.ts` の
-   * `case 'permission_denied'`）はいずれも「この確認は**クローンには**
-   * 回ってきていない」とだけ言っており、対象を人間にまで広げていない。
-   * ここも同じ範囲（クローンには、まで）へ揃える——下の期待値を反転させた。
-   */
   it('subtitle が拒否の出所を断定せず、2つの場合分けと「まず担い手の拒否文を読ませる」案内が載る（#1289 / #1844）', async () => {
     renderDetail({
       ...BASE,
@@ -328,7 +214,6 @@ describe('詳細でも、拒否は状態を置き換えずに状態へ添える'
     const subtitle = screen.getByText(/出所はこの数からは取れない/);
     const text = subtitle.textContent ?? '';
 
-    // **断定した旧文言が戻っていないこと。**
     expect(text).not.toBe(
       '分類器か deny 規則がその場で拒否した。この確認は人間にもクローンにも回ってきていない',
     );
@@ -336,13 +221,8 @@ describe('詳細でも、拒否は状態を置き換えずに状態へ添える'
       '分類器か deny 規則がその場で拒否した。この確認は人間にもクローンにも回ってきていない',
     );
 
-    // **#1844: 対象範囲を人間にまで広げた字面が戻っていないこと。**
-    // 一覧・クローン向け正本（`tools.ts`）・escalation の判定箇所（`manager.ts`）
-    // と同じ「クローンには」までに揃える。
     expect(text).not.toContain('この確認は人間にもクローンにも回ってきていない');
 
-    // 2つの場合分け——器側（分類器・deny 規則）と alteroid 自身の
-    // `PreToolUse` フックの両方が、条件付きの文として載る。
     expect(text).toContain(
       '実行環境の分類器か deny 規則なら、この確認はクローンには回ってきていない',
     );
@@ -350,13 +230,11 @@ describe('詳細でも、拒否は状態を置き換えずに状態へ添える'
     expect(text).toContain('bash-wait-guard.ts');
     expect(text).toContain('自力で抜けられることがある');
 
-    // 「まず担い手自身の拒否文を読ませる」案内が、場合分けより前に来る。
     const guidanceAt = text.indexOf('まず担い手自身の拒否文を読ませること');
     const branchAAt = text.indexOf('実行環境の分類器か deny 規則なら');
     expect(guidanceAt).toBeGreaterThan(-1);
     expect(guidanceAt).toBeLessThan(branchAAt);
 
-    // **下部の段落（既に正しい）は消していないこと。**
     expect(screen.getByText(/この仕事が止まったかどうかは見ていない/)).toBeTruthy();
   });
 
@@ -367,12 +245,6 @@ describe('詳細でも、拒否は状態を置き換えずに状態へ添える'
     expect(screen.queryByText(/確認へ上がらず止められた/)).toBeNull();
   });
 
-  /**
-   * Issue #373 — PR #549 で `ManagerDenial.actor` が API まで届いたのに、詳細
-   * 画面（`manager-detail.tsx` の `DenialsCard`）だけが `tool`/`count` の2値の
-   * ままだった。一覧（`managers.tsx`）と同じ `denialActorTag` を使い、3値の
-   * まま出す。
-   */
   it('拒否の層（マネージャー／作業者／層不明）が3値のまま出る', async () => {
     renderDetail({
       ...BASE,
@@ -380,7 +252,6 @@ describe('詳細でも、拒否は状態を置き換えずに状態へ添える'
       denials: [
         { tool: 'Bash', count: 2, actor: 'manager' },
         { tool: 'Edit', count: 1, actor: 'worker' },
-        // `via: 'result'` は SDK 側に判定材料が無いので `actor` キーが無い。
         { tool: 'Write', count: 3 },
       ],
     });
@@ -390,12 +261,6 @@ describe('詳細でも、拒否は状態を置き換えずに状態へ添える'
     expect(screen.getByText(/Write ?\[層不明\]/)).toBeTruthy();
   });
 
-  /**
-   * **`actor` が無い回を `[マネージャー]` へ化けさせない。** `undefined`
-   * （層が取れなかった）を「マネージャーだった」と決めつけると、Issue #373 が
-   * 守ろうとしている「層が取れていないことが分かる」が壊れる
-   * （`apps/daemon/src/app.test.ts`「拒否の層（actor）が…」と対になる）。
-   */
   it('actor が無い回は [層不明] になり、[マネージャー] へは化けない', async () => {
     renderDetail({
       ...BASE,
@@ -407,13 +272,6 @@ describe('詳細でも、拒否は状態を置き換えずに状態へ添える'
     expect(screen.queryByText(/\[マネージャー\]/)).toBeNull();
   });
 
-  /**
-   * **同じ道具が層違いで2件並んでも、React の重複キーで片方が消えたり
-   * 警告が出たりしない（回帰止め）。** `manager.ts` の `denials()` は帳面の
-   * キーを `道具::層`（`denialKey`）で作るので、`Bash`(worker) と
-   * `Bash`(manager) が同時に返ることがある——`key={entry.tool}` のままだと
-   * 直す前はここが重複キーだった。
-   */
   it('同じ道具が層違いで2件返っても、両方とも表示される', async () => {
     renderDetail({
       ...BASE,
@@ -426,29 +284,13 @@ describe('詳細でも、拒否は状態を置き換えずに状態へ添える'
 
     expect(await screen.findByText(/Bash ?\[作業者\]/)).toBeTruthy();
     expect(screen.getByText(/Bash ?\[マネージャー\]/)).toBeTruthy();
-    // 総数は2件分（3+1）が合算されていること。
     expect(screen.getByText(/確認へ上がらず止められた 4 件/)).toBeTruthy();
   });
 });
 
-/**
- * **待ちは `kind` で質問と実行許可を出し分ける（Issue #334）。**
- *
- * 直す前は `waiting` の要素が `{ requestId, summary }` しか持たず、画面は
- * 両者を区別できなかった——質問に拒否ボタンを押すと、文字列「許可しない」が
- * そのまま回答として注入されていた（`runner.ts` の `kind === 'question'`
- * 分岐は本文をそのまま答えに使うため）。
- *
- * **`askedAt` の絶対時刻表示は歯で確かめるが、相対表記（「〜分前」）の文言は
- * 確かめない。** `formatRelative` は壁時計（`Date.now()`）に依存するため、
- * 固定の期待値を書くとテスト実行時刻によっては別の帯（分／時間／日）に
- * 化ける——`vi.useFakeTimers` を導入すれば固定できるが、この画面のテストは
- * RTL の非同期待ち（`findByText` / `waitFor`）に real timers を前提にした
- * ものが多く、混ぜるとハングの危険がある（このリポジトリに fake timers を
- * 使う `apps/web` テストの先例が無いことも踏まえ、今回は避けた）。
- */
+// 相対表記（「〜分前」）の文言を確かめない: formatRelative は壁時計に依存し、固定の期待値は実行時刻によって別の帯に化けるため（fake timers は real timers 前提の非同期待ちと混ぜるとハングの危険がある）
 describe('待ちは kind で質問と実行許可を出し分ける（#334）', () => {
-  const askedAt = '2026-08-23T01:00:00.000Z'; // TZ=Asia/Tokyo で 08/23 10:00
+  const askedAt = '2026-08-23T01:00:00.000Z';
 
   it('kind: question には本文の入力欄が出て、送るのは人間が書いた文と requestId だけ（decision を送らない）', async () => {
     const { sent } = renderDetailWithMessages(
@@ -463,11 +305,8 @@ describe('待ちは kind で質問と実行許可を出し分ける（#334）', 
     );
 
     expect(await screen.findByText('DB はどちらにする？')).toBeTruthy();
-    // allow/deny の概念が無いので、許可・拒否ボタンは出ない。
     expect(screen.queryByRole('button', { name: /を許可$/ })).toBeNull();
     expect(screen.queryByRole('button', { name: /を拒否$/ })).toBeNull();
-    // 待ち始めた時刻（絶対表記）。書式は既存の startedAt/updatedAt と同じ道具
-    // （`formatDateTime`）で出ている。
     expect(screen.getByText(/08\/23 10:00/)).toBeTruthy();
 
     const textarea = screen.getByPlaceholderText('この質問への答えを、自分の言葉で書く');
@@ -478,8 +317,6 @@ describe('待ちは kind で質問と実行許可を出し分ける（#334）', 
 
     await waitFor(() => expect(sent).toHaveLength(1));
     expect(sent[0]).toMatchObject({ method: 'POST' });
-    // **`decision` を送らない。** 本文と requestId だけが乗る
-    // （余計なキーが無いことまで見るため `toEqual` で完全一致にする）。
     expect(sent[0]?.body).toEqual({ text: 'PostgreSQL で', requestId: 'req-q' });
   });
 
@@ -513,13 +350,10 @@ describe('待ちは kind で質問と実行許可を出し分ける（#334）', 
     const textarea = screen.getByPlaceholderText('この質問への答えを、自分の言葉で書く');
     const button = screen.getByRole('button', { name: '「DB はどちらにする？」へ答えを送信' });
 
-    // 空欄のまま押しても disabled なので飛ばない。
     expect(button.hasAttribute('disabled')).toBe(true);
     fireEvent.click(button);
     expect(sent).toHaveLength(0);
 
-    // 空白だけを入れて Cmd/Ctrl+Enter で送っても、`disabled` を経由しない
-    // `submit()` 側の歯（`text.trim() === ''`）が弾く。
     fireEvent.change(textarea, { target: { value: '   ' } });
     fireEvent.keyDown(textarea, { key: 'Enter', ctrlKey: true });
     expect(sent).toHaveLength(0);
@@ -535,7 +369,6 @@ describe('待ちは kind で質問と実行許可を出し分ける（#334）', 
     });
 
     expect(await screen.findByText('Bash の実行許可: ls')).toBeTruthy();
-    // 質問用の入力欄は出ない。
     expect(screen.queryByPlaceholderText('この質問への答えを、自分の言葉で書く')).toBeNull();
     expect(screen.getByText(/08\/23 10:00/)).toBeTruthy();
 
@@ -543,16 +376,9 @@ describe('待ちは kind で質問と実行許可を出し分ける（#334）', 
     fireEvent.click(allow);
 
     await waitFor(() => expect(sent).toHaveLength(1));
-    // **今までどおり `decision` を送る。** ここは1文字も変えていない。
     expect(sent[0]?.body).toEqual({ text: '許可する', requestId: 'req-p', decision: 'allow' });
   });
 
-  /**
-   * **押したほうのボタンだけが回る（#3068）。** かつては `busy` が真偽値1本で、
-   * 「許可」だけが `loading={busy}`、「拒否」は `disabled={busy}` だった。
-   * 「拒否」を押すと、押していない「許可」が回り、押した「拒否」は灰色になるだけだった。
-   * 回る輪は `Button` の `loading` が描く `animate-spin` の svg で測る。
-   */
   it('「拒否」を押すと回るのは「拒否」で、「許可」は回らず塞がる。「許可」でも逆になる', async () => {
     for (const [pressed, other] of [
       ['拒否', '許可'],
@@ -598,14 +424,6 @@ describe('待ちは kind で質問と実行許可を出し分ける（#334）', 
     }
   });
 
-  /**
-   * **版のずれの倒れ先。** `packages/api-client` は型だけで実行時検証を
-   * 持たない（`packages/api-client/src/index.ts`）ので、古いデーモン＋新しい
-   * 画面という組み合わせでは実際に `kind` というキー自体が届かないことが
-   * ある。そのときは現状の2ボタン（許可確認）へ倒す——何も消さない、
-   * 安全側の既定（AGENTS.md「型で塞いだ分岐にも、実行時の倒れ先の歯を
-   * 足す」）。
-   */
   it('kind が届かない（版のずれ）ときは許可確認と同じ2ボタンへ倒れる', async () => {
     renderDetail({
       ...BASE,
@@ -614,9 +432,7 @@ describe('待ちは kind で質問と実行許可を出し分ける（#334）', 
         {
           requestId: 'req-unknown',
           summary: '種別が来なかった確認',
-          // `kind` を欠いたオブジェクト。型は `ManagerSummary['waiting'][number]`
-          // が `kind` を必須で持つので、実機の版ずれを模すために `as` で
-          // 割り込む——ここが今回のテストの前提そのものである。
+          // as で割り込む: 型は kind を必須で持つので、古いデーモンの版ずれを模すにはこうするしかないため
         } as ManagerSummary['waiting'][number],
       ],
     });
@@ -624,7 +440,6 @@ describe('待ちは kind で質問と実行許可を出し分ける（#334）', 
     expect(await screen.findByText('種別が来なかった確認')).toBeTruthy();
     expect(screen.getByRole('button', { name: '「種別が来なかった確認」を許可' })).toBeTruthy();
     expect(screen.getByRole('button', { name: '「種別が来なかった確認」を拒否' })).toBeTruthy();
-    // 「拒否」は取り返しのつく操作なので danger（赤）にしない（#3091）。
     expect(
       screen.getByRole('button', { name: '「種別が来なかった確認」を拒否' }).className,
     ).not.toContain('border-destructive/40');
@@ -632,41 +447,20 @@ describe('待ちは kind で質問と実行許可を出し分ける（#334）', 
   });
 });
 
-/**
- * **直近の1ターンが「報告」ではなく失敗で終わったことも、状態に映らない。**
- *
- * 上限に当たった回もセッションは生きているので、台帳の `status` は `done`
- * （画面では「待機中」）のままである（`schema.ts` の `lastFailure` の doc）。
- * 一覧（`managers.test.tsx`）と対になっているが、ここには一覧に無いものが2つ
- * ある — 但し書き（次に何をすればよいか）と、**「最後の報告」カードの見出し**で
- * ある。後者は、直す前に
- * `You've hit your org's monthly spend limit …` が「最後の報告」として出ていた
- * まさにその場所である（`sdk-failure.ts` の doc）。
- */
 describe('詳細でも、失敗は状態を置き換えずに状態へ添える', () => {
   const FAILURE = { code: 'billing_error', via: 'assistant_error', at: '2026-08-20T10:00:00.000Z' };
 
   it('「待機中」の札を残したまま、SDK の語・時刻・次の一手を出す', async () => {
     renderDetail({ ...BASE, status: 'done', lastFailure: FAILURE });
 
-    // **札は差し替えない。** 観測しているのは `done`（終えて待機中）である。
     expect(await screen.findByText('待機中')).toBeTruthy();
-    // 状態の隣に、失敗であることを添える。
     expect(screen.getByText('⚠ 直近のターンは失敗で終わった')).toBeTruthy();
-    // SDK の語をそのまま（言い換えると人間が引ける手がかりが消える）。
     expect(screen.getByText('billing_error')).toBeTruthy();
     expect(screen.getByText('assistant_error')).toBeTruthy();
-    // `status` を `failed` へ倒さなかった理由そのもの。
     expect(screen.getByText('この仕事は死んでいない')).toBeTruthy();
-    // 観測していないことは言い切らない（`code` の意味の解釈はしていない）。
     expect(screen.getByText('何が起きたかの解釈まではしていない')).toBeTruthy();
   });
 
-  /**
-   * **ここが発端の穴そのものである。** 本文（`lastReport`）は runner 側で
-   * 「（このターンは応答を返さずに終わった: …）」と包まれているが、見出しが
-   * 「最後の報告」のままだと、人間は包みの内側だけを読んで報告として扱う。
-   */
   it('失敗で終わった回の本文を「最後の報告」と呼ばない', async () => {
     renderDetail({
       ...BASE,
@@ -690,34 +484,6 @@ describe('詳細でも、失敗は状態を置き換えずに状態へ添える'
   });
 });
 
-/**
- * **Issue #1882: 終端した委譲（failed / lost / stopped）でも「セッションは
- * 生きている」と言い続けていた、その2つの根。**
- *
- * 1. `FailureNote` は `manager.lastFailure` だけを見て `status` を見ない
- *    ——`stopped` のように既に終端している回でも「この仕事は死んでいない。
- *    セッションは生きているので……（だから状態は失敗ではなく待機中の
- *    ままである）」を言っていた。バッジは「停止済み」なのに、同じ画面の
- *    中で言い切りが事実と矛盾する。
- * 2. `reportStatusDriftText` は `lastFoldedTurn` の有無にかかわらず、古い
- *    `lastReportAt` / `lastReportStatus` で `describeReportDrift` を呼ぶ
- *    ——畳まれたターンの回の `lastReportAt` / `lastReportStatus` は、畳まれる
- *    **前**の無関係な古いターンの値である（`case 'report'` の `stopped`
- *    早期 return がこの2欄を更新しない。`packages/core/src/manager.ts`）。
- *
- * 使い捨ての入力は Issue の実測入力そのもの（`status: 'stopped'`、古い
- * `lastFailure`（`rate_limit`）、`lastReportStatus: 'running'`、
- * `lastFoldedTurn`）。**直す前はこの入力で赤くなる**——`FailureNote` が
- * 「セッションは生きている」を出し、`reportStatusDriftText` が古い材料で
- * 「いま走っているターンの中身ではない」を出す。
- *
- * 揃える先は core の #1796（PR #1857）の `describeUsageStopped` と #1798
- * （`packages/core/src/tools.ts` の `foldedTurn !== undefined` 分岐）——
- * 終端した回では「生きている」を言わず、畳まれたターンの回では畳まれる前の
- * 古い `lastFailure` / `lastReportAt` / `lastReportStatus` を「直近のターン」
- * として出さない。文言は Web の既存の語調で別に書く（core の値は import
- * できない。`eslint.config.js`）。
- */
 describe('Issue #1882: 終端した委譲・畳まれたターンの回で「生きている」を言わない', () => {
   it('status: stopped + 古い lastFailure + lastFoldedTurn の回は、古い材料で「生きている」を言わない', async () => {
     renderDetail({
@@ -729,14 +495,9 @@ describe('Issue #1882: 終端した委譲・畳まれたターンの回で「生
       lastFoldedTurn: { text: '畳まれた本文', at: '2026-08-16T03:25:00.000Z' },
     });
 
-    // バッジは「停止済み」——同じ画面の中で言い切りが矛盾してはいけない。
     expect(await screen.findByText('停止済み')).toBeTruthy();
-    // 終端した回に「セッションは生きている」「この仕事は死んでいない」を言わない。
     expect(screen.queryByText(/セッションは生きているので/)).toBeNull();
     expect(screen.queryByText('この仕事は死んでいない')).toBeNull();
-    // 畳まれたターンの回に、畳まれる前の古い lastReportAt / lastReportStatus で
-    // drift を語らない（status は 'stopped' のまま動いていないので、揃えれば
-    // drift 自体が無い ⟹ この行は出ない）。
     expect(screen.queryByText(/いま走っているターンの中身ではない/)).toBeNull();
   });
 
@@ -751,9 +512,6 @@ describe('Issue #1882: 終端した委譲・畳まれたターンの回で「生
     expect(screen.queryByText(/セッションは生きているので/)).toBeNull();
     expect(screen.queryByText('この仕事は死んでいない')).toBeNull();
     expect(screen.getByText(/依頼者が望まない終わり方で既に終端している/)).toBeTruthy();
-    // レビュー指摘（もう続かない、は send()/#resume() の現物より強かった）で
-    // 揃え直した文言。「続く手段は在るが保証は無い」まで——「もう続かない」
-    // という言い切りには戻さない。
     expect(
       screen.getByText(/続けたいなら話しかけて resume を試みるしかなく、届く保証は無い/),
     ).toBeTruthy();
@@ -788,11 +546,6 @@ describe('Issue #1882: 終端した委譲・畳まれたターンの回で「生
     expect(
       screen.getByText(/人間・クローンが明示的に停止させ、確かめたうえで既に終端している/),
     ).toBeTruthy();
-    // **`send()` は実際に stopped の委譲へ resume を試みうる**（`stopConfirmedAt`
-    // は `#retire()` が消す in-memory の印でしかなく、`status` そのものは
-    // `#resume()` を止めない。`~/lib/manager-failure-note` の doc）。
-    // 「原因の有無にかかわらず、このセッションはもう続かない」という直す前の
-    // 言い切りには戻さない。
     expect(
       screen.getByText(/続けたいなら話しかけて resume を試みるしかなく、届く保証は無い/),
     ).toBeTruthy();
@@ -813,10 +566,6 @@ describe('Issue #1882: 終端した委譲・畳まれたターンの回で「生
     expect(await screen.findByText('待機中')).toBeTruthy();
     expect(screen.getByText('この仕事は死んでいない')).toBeTruthy();
     expect(screen.getByText(/セッションは生きているので/)).toBeTruthy();
-    // **生きている3値の文言は1文字も変えていないことを固定する。** JSX の
-    // 1行ぶん（テキストの断片単位）を丸ごと正規表現の部分一致で見る——
-    // 途中の1文字でも変われば、この部分文字列がどこにも現れなくなり赤くなる
-    // （句読点の全角括弧は正規表現の特殊文字ではないのでエスケープ不要）。
     expect(
       screen.getByText(
         /。セッションは生きているので、原因が解ければ下の「話しかける」から続けられる（だから状態は/,
@@ -826,17 +575,6 @@ describe('Issue #1882: 終端した委譲・畳まれたターンの回で「生
   });
 });
 
-/**
- * **`lastReport` の描き方は `lastFailure` の有無で分岐する（issue #293）。**
- * 直す前は、失敗回でも `<Markdown>` として無条件に描いていたので、SDK の生の
- * 失敗文言（例: `You've hit your org's monthly spend limit …`）に Markdown の
- * 記法が混ざっていた場合、体裁まで正常な報告と同じ顔になっていた。
- *
- * ここで確かめるのは `markup`（issue #287 の軸）ではなく `lastFailure`（この
- * Issue の軸）で分岐していること — 失敗回の本文に Markdown の記法（`*` /
- * `#` / `**`）を混ぜても化けないこと、成功回は今日どおり化けること、
- * 失敗回は改行を潰さず長い行が横に溢れないことを別々の歯にする。
- */
 describe('詳細でも、`lastReport` は `lastFailure` の有無で描き方を分ける', () => {
   const FAILURE = { code: 'billing_error', via: 'assistant_error', at: '2026-08-20T10:00:00.000Z' };
 
@@ -854,26 +592,19 @@ describe('詳細でも、`lastReport` は `lastFailure` の有無で描き方を
     });
 
     expect(await screen.findByText('最後のターンの中身（報告ではない）')).toBeTruthy();
-    // `<pre>` は1本のテキストノードとして描かれるので、部分一致の
-    // マッチャー関数で取る（`findByText` の完全一致では見えない）。
+    // マッチャー関数で取る: <pre> は1本のテキストノードで、findByText の完全一致では見えないため
     const pre = await screen.findByText((_content, node) => node?.tagName === 'PRE');
-    // 記法の文字を含む見出し・強調が、化けずにそのまま画面に在ること。
     expect(pre.textContent).toContain('# 見出しではない');
     expect(pre.textContent).toContain('*強調ではない* 文字');
     expect(pre.textContent).toContain('**途中まで進めた**');
-    // Markdown を通っていれば em / strong / heading になる。通っていないことを確かめる。
     expect(screen.queryByRole('heading', { name: '見出しではない' })).toBeNull();
     expect(pre.querySelector('em, strong, h1, h2, h3')).toBeNull();
-    // 改行を潰さない（`whitespace-pre-wrap`）。
     const tokens = pre.className.split(/\s+/);
     expect(tokens).toContain('whitespace-pre-wrap');
-    // 長い1行が横に溢れて画面を壊さないための作法（既存の `reports.tsx` の
-    // `UnavailableNote` と同じ）。
     expect(tokens).toContain('overflow-x-auto');
     expect(tokens).toContain('break-words');
   });
 
-  /** 実際の事故の形（`failedReportText` 相当）。次に読む人へ意図を伝える1本。 */
   it('実際の事故の形（monthly spend limit の生文言）が化けずそのまま出る', async () => {
     renderDetail({
       ...BASE,
@@ -902,38 +633,7 @@ describe('詳細でも、`lastReport` は `lastFailure` の有無で描き方を
   });
 });
 
-/**
- * **`live` は status と別の軸である。** `live && <札>` の形は `live === false` を
- * 「札が無い」でしか表さず、読む側は「切断されている」と「この画面が接続状態を
- * 報告していない」を区別できない。だから両側を描く。
- *
- * クローンの道具（`packages/core/src/tools.ts`）と CLI（`apps/cli/src/chat.ts`）は
- * どちらも `[running/セッション切断]` と明示している — Web だけが肯定側しか
- * 描いていなかった（北極星 禁止1 を逆向きに踏む）。詳細はさらに、札だけでは
- * 「で、どうなるのか」が伝わらないので文で言う。
- *
- * **経緯（PR #66 の嘘 → 774b316 の是正 → 7df9365 で送信不可の線を引き直した）。**
- * かつてこの注記は「いま送っても届かず」と書いていたが、実測すると
- * `ManagerPool.send`（`packages/core/src/manager.ts`）は `attached === false` でも
- * `session_id` を持つ相手（`lost` を含む）なら resume を試み、resume の `message`
- * に送った文字列がそのまま載って届く — 黙って消える経路は無かった。直したのは
- * 文言であって、送信ボタンを無効化する判断はしていない。塞ぐと、人間が自分の
- * 言葉で繋ぎ直す唯一の手が消える。
- *
- * **ただし、戻る先（`session_id`）を持っていないと分かっている相手だけは押しても
- * 何も起きない**（`#resume` が `sessionId === undefined` で即 `false` を返す）。
- * そこだけは無効化し、`aria-describedby` で理由の段落と結びつけてある
- * （`SendMessage` の `noWayBack`）。
- *
- * ここでは4つを別々の歯にする。
- * A. `live: true` では1バイトも変わらず、送信は普通に通る。
- * B. `live: false` だが `session_id` はある相手には、注記が「届かない」と
- *    嘘をつかず、実際に送れる（ここが線の本体）。
- * C. B と同じ相手でも、送信欄の側に「送ると何が起きるか」の一行が独立して出て
- *    いる（理由の表示だけを消す変異を殺すための、独立した `it`）。
- * D. `session_id` が無い相手だけはボタンが `disabled` になり、その理由が
- *    `aria-describedby` で結び付き、Enter でも POST が飛ばない。
- */
+// 送信ボタンを live だけを理由に塞がない: session_id を持つ相手には resume で届き、塞ぐと人間が自分の言葉で繋ぎ直す唯一の手が消えるため
 describe('詳細でも、`live` は繋がっていないことを文で言うが、送信は塞がない', () => {
   it('A: live: true では注記も送信欄の一行も出ず、送信は普通に通る', async () => {
     const { sent } = renderDetailWithMessages({ ...BASE, status: 'running', live: true });
@@ -951,12 +651,7 @@ describe('詳細でも、`live` は繋がっていないことを文で言うが
     expect(button.hasAttribute('disabled')).toBe(false);
     fireEvent.click(button);
 
-    expect(
-      await screen.findByText(
-        // 表示は使い手向けの言い方に変えた（#3066）。識別子（`delivered`）はもう出さない。
-        '追加指示を届けた: 追加指示として届けた。',
-      ),
-    ).toBeTruthy();
+    expect(await screen.findByText('追加指示を届けた: 追加指示として届けた。')).toBeTruthy();
     expect(
       sent.some(
         (entry) => entry.url.endsWith('/managers/mgr-1/messages') && entry.method === 'POST',
@@ -974,29 +669,19 @@ describe('詳細でも、`live` は繋がっていないことを文で言うが
 
     expect(await screen.findByText('実行中')).toBeTruthy();
     expect(screen.getByText('セッション切断')).toBeTruthy();
-    // #66 の嘘が戻ってきたら、これが最初に落ちる。
     expect(screen.queryByText(/届かず/)).toBeNull();
-    // 観測（繋がっていない）自体は残す。
     expect(screen.getByText('繋がっていない')).toBeTruthy();
-    // 送信そのものが引き取りの契機になることを言う。
     expect(screen.getByText('引き取り（resume）の契機')).toBeTruthy();
-    // 成否は断定しない（観測していないことを言い切らない）。
     expect(screen.getByText('戻れるとは限らない')).toBeTruthy();
 
     fireEvent.change(screen.getByPlaceholderText('追加の指示'), {
       target: { value: '続けて' },
     });
     const button = screen.getByRole('button', { name: '送る' });
-    // ここが線の本体 — `live` だけを理由にボタンを塞いでいないこと。
     expect(button.hasAttribute('disabled')).toBe(false);
     fireEvent.click(button);
 
-    expect(
-      await screen.findByText(
-        // 表示は使い手向けの言い方に変えた（#3066）。識別子（`delivered`）はもう出さない。
-        '追加指示を届けた: 追加指示として届けた。',
-      ),
-    ).toBeTruthy();
+    expect(await screen.findByText('追加指示を届けた: 追加指示として届けた。')).toBeTruthy();
     expect(
       sent.some(
         (entry) => entry.url.endsWith('/managers/mgr-1/messages') && entry.method === 'POST',
@@ -1005,9 +690,7 @@ describe('詳細でも、`live` は繋がっていないことを文で言うが
   });
 
   it('C: session_id がある相手には、送信欄の側にも「送ると何が起きるか」の理由が出ている', async () => {
-    // これが「理由の表示だけを消す」変異を殺すテストである。無効化はしていない
-    // ので、B（押せることを試すテスト）だけでは理由の一行を消す変異は検知
-    // できない — 独立した `it` にする。
+    // 独立した it にする: 無効化はしていないので、押せることを試す B だけでは理由の一行を消す変異を検知できないため
     renderDetail({ ...BASE, status: 'running', live: false, sessionId: 'sess-1' });
 
     expect(await screen.findByText('実行中')).toBeTruthy();
@@ -1026,18 +709,12 @@ describe('詳細でも、`live` は繋がっていないことを文で言うが
     expect(await screen.findByText('実行中')).toBeTruthy();
 
     const input = screen.getByPlaceholderText('追加の指示');
-    // **空欄のまま `disabled` を見ない。** `text.trim() === ''` でも
-    // `disabled` になるので、入力せずに見ると `noWayBack` を消す変異
-    // （M5）を捕まえられない。必ず先に文字を入れる（入力欄は無効にして
-    // いないので入る）。
+    // 必ず先に文字を入れる: 空欄のままでも text.trim() === '' で disabled になり、入力せずに見ると noWayBack を消す変異を捕まえられないため
     fireEvent.change(input, { target: { value: '続けて' } });
 
     const button = screen.getByRole('button', { name: '送る' });
-    // 1. 文字を入れてもなお `disabled` である。
     expect(button.hasAttribute('disabled')).toBe(true);
 
-    // 2. `aria-describedby` が理由の段落の id を指し、その id の要素に理由が
-    //    入っている（「押せない」と「なぜ押せないか」が結び付いている）。
     const describedBy = button.getAttribute('aria-describedby');
     expect(describedBy).toBeTruthy();
     const reason = document.getElementById(describedBy as string);
@@ -1045,27 +722,14 @@ describe('詳細でも、`live` は繋がっていないことを文で言うが
     expect(reason?.textContent).toContain('送れない');
     expect(reason?.textContent).toContain('新しく起こし直すこと');
 
-    // 3. ⌘/Ctrl+Enter でも POST が飛ばない（`submit()` はボタンの `disabled` を
-    //    経由しない独立した入口なので、ここも別に確かめる）。
     fireEvent.keyDown(input, { key: 'Enter', ctrlKey: true });
     expect(sent.length).toBe(0);
 
-    // 4. クリックしても飛ばない（ネイティブの `disabled` 経由で `onClick` は
-    //    そもそも呼ばれないはずだが、飛んでいないことを直接確かめる）。
     fireEvent.click(button);
     expect(sent.length).toBe(0);
   });
 });
 
-/**
- * **「話しかける」は共有の `Textarea` で、Enter は改行・⌘/Ctrl+Enter で送る**（質問への答えと同じ。#3557）。
- * だから Enter 単体では送らず、IME の変換中の ⌘/Ctrl+Enter でも送らず、送っている最中の連打でも
- * 1本しか飛ばない（門の形は `packages/ui/src/components/features/chat/ime.ts` の `isSubmitShortcut`、
- * `Textarea` の `submitDisabled`）。
- *
- * **同じ入力・同じキーで `isComposing` だけを反転させて両側を1本で通す**（変換中→0本、
- * 確定後→1本）。片側だけでは「そもそも送れていない」と区別が付かない。
- */
 describe('「話しかける」は Enter では送らず、⌘/Ctrl+Enter で1本だけ送る', () => {
   it('Enter 単体（Shift 付きも）では送らず、欄は textarea のまま', async () => {
     const { sent } = renderDetailWithMessages({ ...BASE, status: 'running', live: true });
@@ -1093,12 +757,7 @@ describe('「話しかける」は Enter では送らず、⌘/Ctrl+Enter で1�
     expect(sent.length).toBe(0);
 
     fireEvent.keyDown(input, { key: 'Enter', ctrlKey: true });
-    expect(
-      await screen.findByText(
-        // 表示は使い手向けの言い方に変えた（#3066）。識別子（`delivered`）はもう出さない。
-        '追加指示を届けた: 追加指示として届けた。',
-      ),
-    ).toBeTruthy();
+    expect(await screen.findByText('追加指示を届けた: 追加指示として届けた。')).toBeTruthy();
     expect(sent.length).toBe(1);
   });
 
@@ -1112,60 +771,20 @@ describe('「話しかける」は Enter では送らず、⌘/Ctrl+Enter で1�
     fireEvent.keyDown(input, { key: 'Enter', ctrlKey: true });
     fireEvent.keyDown(input, { key: 'Enter', metaKey: true });
 
-    expect(
-      await screen.findByText(
-        // 表示は使い手向けの言い方に変えた（#3066）。識別子（`delivered`）はもう出さない。
-        '追加指示を届けた: 追加指示として届けた。',
-      ),
-    ).toBeTruthy();
+    expect(await screen.findByText('追加指示を届けた: 追加指示として届けた。')).toBeTruthy();
     expect(sent.length).toBe(1);
   });
 });
 
-/**
- * **停止は status で出し分けない。**
- *
- * かつてこの画面は「停止する」を `running` / `waiting_human` のときだけ描いて
- * いた。**絞っていたのは画面だけだった** — CLI の `/stop`（`apps/cli/src/chat.ts`）
- * は id をそのまま `DELETE` へ渡すだけで status を見ず、デーモン
- * （`apps/daemon/src/app.ts` の `.delete('/managers/:id')`）も `ManagerPool.abort`
- * （`packages/core/src/manager.ts`）も、台帳に居ない（`absent`）以外では弾かない。
- * **同じ行為が入口によってできたりできなかったりしていた**（`docs/PRD.md`
- * 「入口の等価性」は「委譲の停止」を名指しで挙げている。北極星の禁止1）。
- *
- * とくに `done` である。**`done` は死ではなく待機で**（`schema.ts` の
- * `jobStatusSchema` の doc、この画面の札も「待機中」）、セッションは生きている。
- * 待機したまま残っているものを畳む手が、Web にだけ無かった。
- *
- * **測るのは「ボタンが出ること」ではなく「停止の行為が届くこと」である。**
- * 描画だけを見ると、ボタンを描いたまま `onClick` を殺す変異が生き残る。だから
- * `DELETE` が実際に飛んだことを **method 込みで**確かめ、さらに完了後の遷移
- * （`/managers` へ戻る）まで見る。
- */
+// ボタンが出ることだけを測らず DELETE が実際に飛んだことを method 込みで見る: 描画だけではボタンを描いたまま onClick を殺す変異が生き残るため
 describe('停止は status で出し分けない', () => {
-  /**
-   * 「停止する」は押した瞬間には実行せず、確認（`alertdialog`）を挟む（#3067。
-   * #2781 の `memory-detail.test.tsx` と同じ作り）。**確認のボタンも名前が「停止する」**
-   * （操作の名前と同じにする約束）なので、ダイアログの中から取る。
-   * 既存の歯は、確認を経ても停止が届く形に直した（期待値は弱めていない）。
-   */
   async function stopWithConfirm() {
     fireEvent.click(await screen.findByRole('button', { name: '停止する' }));
     const dialog = await screen.findByRole('alertdialog');
     fireEvent.click(within(dialog).getByRole('button', { name: '停止する' }));
   }
 
-  /**
-   * **この `Record` が数え上げの持ち主である。**
-   *
-   * 画面の側は状態を1つも数え上げない（数え上げると、状態が増えた日に黙って
-   * 新しい状態を締め出す）。**代わりに数え上げをここへ置く** — `ManagerStatus`
-   * に値が増えたら、この定義が**コンパイルで落ちる**。落ちた人は「増えた状態を
-   * 停止できるか」を一度は考えることになる。
-   *
-   * だから `as const` の配列や `string[]` へ緩めないこと。緩めた瞬間、増えた
-   * 状態は誰にも気づかれずに試験の外へ出る。
-   */
+  // as const の配列や string[] へ緩めない: ManagerStatus に値が増えたらコンパイルで落とすためで、緩めると増えた状態が気づかれずに試験の外へ出る
   const EVERY_STATUS: Record<ManagerStatus, true> = {
     running: true,
     waiting_human: true,
@@ -1176,15 +795,7 @@ describe('停止は status で出し分けない', () => {
   };
   const ALL_STATUSES = Object.keys(EVERY_STATUS) as ManagerStatus[];
 
-  /**
-   * `renderDetail` の停止版。
-   *
-   * **`stubFetch` は使えない。** 停止の `DELETE` と詳細の `GET` は**同じ URL**
-   * （`/managers/:id`）なので、URL だけでは見分けられない。`stubFetch` の
-   * `Route` が受け取る第2引数は openapi-fetch の呼び方（`fetch(request, ext)`）
-   * では常に `undefined` になり `method` が読めない — `renderDetailWithMessages`
-   * の doc に同じ罠が書いてある。ここでは `Request` 本体から `method` を読む。
-   */
+  // stubFetch を使わない: DELETE と GET が同じ URL で、第2引数が常に undefined になり method が読めないため
   function renderDetailWithAbort(manager: ManagerSummary) {
     const sent: { url: string; method: string; body: string }[] = [];
     globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -1200,8 +811,6 @@ describe('停止は status で出し分けない', () => {
     const router = createMemoryRouter(
       [
         { path: '/managers/:id', Component: () => <Harness id={manager.managerId} /> },
-        // 停止が通ると一覧へ戻る。**行き先に印を置く** — ここまで来たことが
-        // 「停止の行為が最後まで届いた」ことの証拠になる。
         { path: '/managers', Component: () => <p>マネージャー一覧</p> },
         { path: '/journal', Component: () => null },
       ],
@@ -1215,37 +824,23 @@ describe('停止は status で出し分けない', () => {
     return { sent };
   }
 
-  /**
-   * **`done` だけを別の `it` にしてある。**
-   *
-   * 下の全状態版と重なるが、重ねる価値がある — 塞がれていたのはここで、
-   * `done` だけを条件へ書き戻す変異は「全状態版が落ちたから」では原因が
-   * 分からない。落ちるテストの名前がそのまま欠陥の名前になる形にする。
-   */
+  // done だけを別の it にする: 落ちるテストの名前がそのまま欠陥の名前になるようにするため
   it('done（待機中）のマネージャーへ、停止の行為が届く', async () => {
     const { sent } = renderDetailWithAbort({ ...BASE, status: 'done' });
 
     expect(await screen.findByText('待機中')).toBeTruthy();
 
     const button = screen.getByRole('button', { name: '停止する' });
-    // 描いたうえで、押せる（`disabled` で塞ぐ形へ逃げていない）。
     expect(button.hasAttribute('disabled')).toBe(false);
     await stopWithConfirm();
 
-    // 行為が最後まで届いた（一覧へ戻っている）。
     expect(await screen.findByText('マネージャー一覧')).toBeTruthy();
-    // API に実際に届いた。**method まで見る** — URL は GET と同じである。
     expect(sent.length).toBe(1);
     expect(sent[0]?.method).toBe('DELETE');
     expect(sent[0]?.url.endsWith('/managers/mgr-1')).toBe(true);
-    // 本文が要る（サーバ側に json バリデータが付いており、空だと 400 になる）。
     expect(sent[0]?.body).toContain('人間が画面から停止した');
   });
 
-  /**
-   * **どの状態でも届く。** 上の `Record` が数え上げの持ち主なので、状態が増えれば
-   * ここは自動で増える（増やせなければコンパイルが落ちる）。
-   */
   it.each(ALL_STATUSES)('%s のマネージャーへも、停止の行為が届く', async (status) => {
     const { sent } = renderDetailWithAbort({ ...BASE, status });
 
@@ -1257,12 +852,6 @@ describe('停止は status で出し分けない', () => {
     expect(sent.map((entry) => entry.method)).toEqual(['DELETE']);
   });
 
-  /**
-   * **確認を出すだけでは停止しない（#3067）。** 押した瞬間に `DELETE` が飛ぶ形へ戻すと、
-   * 「確認が出る」だけの歯は通ってしまうので、**確認の前後で `DELETE` の数を数える**。
-   * 確認の文は、コードで確かめた範囲（待機中のセッションも畳まれる・進行中の作業は失われる・
-   * 待っている確認は畳まれる）だけを言う。
-   */
   it('押しただけでは止まらず、確認で「やめる」なら止めずに閉じ、「停止する」で初めて DELETE が飛ぶ', async () => {
     const { sent } = renderDetailWithAbort({ ...BASE, status: 'done' });
     fireEvent.click(await screen.findByRole('button', { name: '停止する' }));
@@ -1282,12 +871,7 @@ describe('停止は status で出し分けない', () => {
     expect(sent.map((entry) => entry.method)).toEqual(['DELETE']);
   });
 
-  /**
-   * **止まらなかったことは、ボタンを消さずに理由で出す。**
-   *
-   * 「押せないなら隠す」へ倒すと、**できないことと「この画面が扱っていないこと」を
-   * 人間が区別できない。** 非表示は非対称を隠すだけで、直したことにならない。
-   */
+  // ボタンを消さず理由で出す: 押せないなら隠すと、できないことと「この画面が扱っていないこと」を人間が区別できないため
   it('停止が失敗しても、ボタンは残り、理由が出る', async () => {
     globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const request = input instanceof Request ? input : new Request(input, init);
@@ -1314,25 +898,12 @@ describe('停止は status で出し分けない', () => {
 
     await stopWithConfirm();
 
-    // 理由が画面に出る。
     expect(await screen.findByText(/マネージャーは居ない/)).toBeTruthy();
-    // 一覧へは飛ばない（止まっていないのだから、止まったように見せない）。
     expect(screen.queryByText('マネージャー一覧')).toBeNull();
-    // **ボタンは消えない。** もう一度押せる。
     expect(screen.getByRole('button', { name: '停止する' })).toBeTruthy();
   });
 });
 
-/**
- * 折り返しの付け忘れ（本2）。
- *
- * `runnerId` は空白を含まない識別子で、兄弟の `cwd` / `sessionId` / `lease`
- * にはすでに `break-all` が付いていたのに、ここだけ無かった。
- *
- * **⚠️ これは「はみ出しが直った」ことの試験ではない。** jsdom はレイアウトを
- * 持たないので、固定できるのは「そのクラス名が書かれていること」までである。
- * それでも置くのは、戻す変更（`break-all` を消す）を黙って通さないため。
- */
 describe('折り返しの付け忘れ（本2）', () => {
   it('runnerId に break-all が付いている（cwd/sessionId/lease と同じ扱い）', async () => {
     renderDetail({ ...BASE, runnerId: 'runner-abcdefghijklmnop' });
@@ -1342,45 +913,7 @@ describe('折り返しの付け忘れ（本2）', () => {
   });
 });
 
-/**
- * 横並びの積み替え（本4-A）。
- *
- * `dl`（`grid-cols-[8rem_1fr]`）は breakpoint 無しで固定されていたので、
- * 375px 幅でもラベル列（8rem）が値の取り分を持っていっていた。`sm:` 未満は
- * 1列、`sm:` 以上で固定幅ラベル列に切り替える。積んだときに `dt`/`dd` の
- * 対応が読めるよう、`dt` に `mt-3 first:mt-0 sm:mt-0` を足して組の境目を
- * 間隔の差で表す。
- *
- * **⚠️ これは「積み替わった」ことの試験ではない。** jsdom はレイアウトを
- * 持たない（`offsetWidth` / `scrollWidth` / `getBoundingClientRect()` は
- * すべて 0）ので、`sm:grid-cols-[8rem_1fr]` が実際に効いていることは
- * ここでは1つも観測できない。固定できるのは「そのクラス名が書かれていること」
- * までである。本2・本3 のテストより歯が弱い — breakpoint は CSS の話なので、
- * jsdom では「効いている」ことそのものが原理的に見えない。
- *
- * **追記: この一覧は `KeyValueList`（`packages/ui`）へ移した。** 以前は `dl` に
- * 固定幅の列指定と、`dt` に「上の余白・先頭だけ余白なし・`sm:` で余白なし」の
- * class を手書きしていた。`KeyValueList` は同じ意図を別の形で書く — ラベル列の幅は
- * CSS 変数 `--kv-label`（この画面は 8rem）で渡し、`sm:` の grid がその変数を使い、
- * 組の境目は先頭以外の `dt` に上の余白と `sm:mt-0` を付けて作る（先頭かどうかは添字で
- * 決める。各項目が `contents` の包みに入り、`dt` が常に包みの最初の子になるため）。
- * class の文字が変わったので、下の assert は文字ではなく意図を測る形へ書き換えた。
- * 意図は3つ: (a) 狭い画面は1列（基底の grid が1列で、`sm:` で2列に切り替わる）、
- * (b) 広い画面はラベル列が固定幅（`--kv-label` に 8rem が入り、`sm:` の grid がそれを使う）、
- * (c) 積んだときの組の境目（先頭以外の `dt` に上の余白と `sm:mt-0`、先頭には無い）。
- * jsdom はレイアウトを持たないので、測れるのは class と style の有無までである
- * （上の警告のとおり。`KeyValueList` 自身の class の試験は
- * `packages/ui/src/components/features/key-value-list.test.tsx`）。
- */
 describe('横並びの積み替え（本4-A）: 状態カードの dl', () => {
-  /*
-   * **`状態` という文字列は画面に2箇所在る**（`CardHeader title="状態"` の
-   * `<h2>状態</h2>` と、この `dl` の `<dt>状態</dt>`）。`findByText('状態')`
-   * は複数一致で例外になるので、まず衝突しないラベル（`作業ディレクトリ`）で
-   * `dl` を掴み、そこから先は `within(dl)` で範囲を絞る。
-   * （追記: 書き換え後は `within` を使わず、`dl.querySelectorAll('dt')` で全部の `dt` を
-   * 辿るので、「状態」の `dt` も含めて先頭・先頭以外を測れる。）
-   */
   it('狭い画面では1列、sm: 以上で固定幅ラベル列になる', async () => {
     renderDetail(BASE);
 
@@ -1388,14 +921,11 @@ describe('横並びの積み替え（本4-A）: 状態カードの dl', () => {
     const dl = anchor.closest('dl');
     expect(dl).not.toBeNull();
     const dlTokens = dl!.className.split(/\s+/);
-    // (a) 基底は1列。
     expect(dlTokens).toContain('grid-cols-1');
-    // (b) sm: 以上はラベル列が変数の幅（固定幅）で、値の列が残りを取る。
     expect(dl!.style.getPropertyValue('--kv-label')).toBe('8rem');
     const smCols = dlTokens.filter((token) => token.startsWith('sm:grid-cols-'));
     expect(smCols).toHaveLength(1);
     expect(smCols[0]).toContain('var(--kv-label)');
-    // sm: 無しの列指定は 1 列のものだけ（残っていれば狭い画面でも2列のままになる）。
     expect(dlTokens.filter((token) => /^grid-cols-/.test(token))).toEqual(['grid-cols-1']);
   });
 
@@ -1407,11 +937,9 @@ describe('横並びの積み替え（本4-A）: 状態カードの dl', () => {
     expect(dl).not.toBeNull();
     const dts = Array.from(dl!.querySelectorAll('dt'));
     expect(dts.length).toBeGreaterThan(1);
-    // (c) 先頭には上の余白も sm:mt-0 も無い。
     const first = dts[0]!.className.split(/\s+/);
     expect(first).not.toContain('mt-3');
     expect(first).not.toContain('sm:mt-0');
-    // 先頭以外は、狭い画面で上の余白、sm: 以上で打ち消し。
     for (const dt of dts.slice(1)) {
       const tokens = dt.className.split(/\s+/);
       expect(tokens).toContain('mt-3');
@@ -1420,45 +948,19 @@ describe('横並びの積み替え（本4-A）: 状態カードの dl', () => {
   });
 });
 
-/**
- * **詳細でも、`sessionMissingSince` / `runnerLostSince` は状態も `live` も
- * 置き換えずに添える。**
- *
- * 一覧（`managers.test.tsx`）と対になっている。直す前、この2欄は
- * `apps/web/` に**1件も出てこなかった**（`/usr/bin/grep -rn` がどちらも 0 件）。
- * デーモンは `GET /managers/:id` で返していて、クローンは `manager_list` で、
- * 人間は CLI の `/manager` で読めていた —— 値は届いていて、Web UI だけが描いて
- * いなかった。
- *
- * **部品は一覧（`managers.tsx`）から import している。書き写していない。** ここで
- * 測っているのは「詳細の側にも出ること」であって、文言そのものは1箇所にしか無い。
- */
 describe('詳細でも、セッション不在と器の沈黙は状態を置き換えずに添える', () => {
   const MISSING = '2026-08-16T03:10:00.000Z';
   const LOST_SINCE = '2026-08-16T03:05:00.000Z';
 
-  /**
-   * **ここが本体。** `sessionMissingSince` の欄の主眼は「`live` を落とさない」こと
-   * である（`sessionId` が残っていれば `manager_send` が resume から入り直せる）。
-   * ⟹ **「接続あり」の札と同時に出るのが正しい形**で、片方が他方を消したら
-   * それはこの欄が名指ししている5つ目の形を壊している。
-   */
   it('「接続あり」の札を残したまま、セッションが無いことを言う', async () => {
     renderDetail({ ...BASE, status: 'running', live: true, sessionMissingSince: MISSING });
 
     expect(await screen.findByText('実行中')).toBeTruthy();
-    // 札は1つも差し替えない。
     expect(screen.getByText('接続あり')).toBeTruthy();
     expect(screen.queryByText('セッション切断')).toBeNull();
     expect(screen.getByText(/runner がそう答えた。聞けなかったのではない/)).toBeTruthy();
   });
 
-  /**
-   * **文言の核が消えたら赤くなる歯。** 由来が2つあり（途中で失われた／完遂した後に
-   * セッションが畳まれて終端の合図だけが届かなかった）、デーモンは台帳から区別
-   * できない（`packages/core/src/manager.ts` の `sendFailureDetail` の doc）。
-   * 「失われた」と描くと、読み手は**完遂済みの仕事を委譲し直す**。
-   */
   it('「失われた」と言い切らない（完遂後に畳まれた回も同じ形に見える）', async () => {
     renderDetail({ ...BASE, status: 'running', live: true, sessionMissingSince: MISSING });
 
@@ -1479,12 +981,6 @@ describe('詳細でも、セッション不在と器の沈黙は状態を置き�
     expect(screen.queryByText(/名乗っていない/)).toBeNull();
   });
 
-  /**
-   * **由来（`sessionMissingKind`）も詳細側へ渡っていること。** 文言そのものの
-   * 網羅（`'resume-failed'` / `'unlisted'` の2値、未知の値への倒れ先）は一覧
-   * （`managers.test.tsx`）が測っている——ここで測るのは「一覧と同じ部品を
-   * 使っているので、詳細側にも同じ由来が出ること」だけである（真上の doc）。
-   */
   it('由来（sessionMissingKind）も詳細側に出る', async () => {
     renderDetail({
       ...BASE,
@@ -1497,15 +993,6 @@ describe('詳細でも、セッション不在と器の沈黙は状態を置き�
     expect(await screen.findByText(/resume でも入り直せなかった/)).toBeTruthy();
   });
 
-  /**
-   * `runnerLostSince` は `live: false` を**引き起こす側**である（`isLive()` が
-   * `silentRunners.has(runnerId)` で false を返す）。`DisconnectedNote` は
-   * 「繋がっていない」としか言わないので、この注記がその理由を1つ名指しする。
-   *
-   * **2つは矛盾していない。** `DisconnectedNote` が言うのは「送信ボタンは塞いで
-   * いない」で、こちらが言うのは「この器は名簿から外れている」である。並んで出る
-   * のが正しい。
-   */
   it('器が黙ったときは、切断の注記と並べてその理由を名指しする', async () => {
     renderDetail({
       ...BASE,
@@ -1517,26 +1004,12 @@ describe('詳細でも、セッション不在と器の沈黙は状態を置き�
 
     expect(await screen.findByText('実行中')).toBeTruthy();
     expect(screen.getByText('セッション切断')).toBeTruthy();
-    // `DisconnectedNote` は消えない。
     expect(screen.getByText('繋がっていない')).toBeTruthy();
     expect(screen.getByText(/宛先の器は.*から名乗っていない/)).toBeTruthy();
-    // `status: lost` の言葉には寄せない（まだ何も確かめていない）。
     expect(screen.getByText(/黙っているのが器なのか経路なのかは、ここからは言えない/)).toBeTruthy();
     expect(screen.queryByText('セッションへ戻れず')).toBeNull();
   });
 
-  /**
-   * **`ba4053d`（#67）の再発を止める歯 —— 詳細側。ここが本当の現場である。**
-   *
-   * #67 が閉じた欠陥は「「いま送っても届かず」の真下に、届く送信ボタンが並んでいた」で、
-   * その送信欄はこの画面に在る。CLI の `runnerLostSince` の文言には「いま話しかけ
-   * られない」が入っているが、**実測ではデーモンは拒まない** —— 名簿が `lost` と
-   * 判定した runner でも `RunnerRegistry#get()` は client を返し、`send()` は
-   * `outcome: 'delivered'` を返した。
-   *
-   * ⟹ 注記が「話しかけられない」と言い、その下の送信ボタンが有効なまま、という
-   * 組を作らない。**この歯は、注記と送信ボタンの両方を同時に見る。**
-   */
   it('注記が送信を否定せず、その下の送信ボタンも実際に有効なまま', async () => {
     renderDetail({
       ...BASE,
@@ -1547,31 +1020,16 @@ describe('詳細でも、セッション不在と器の沈黙は状態を置き�
     });
 
     expect(await screen.findByText(/宛先の器は.*から名乗っていない/)).toBeTruthy();
-    // #67 が閉じた欠陥そのもの。
     expect(screen.queryByText(/いま話しかけられない/)).toBeNull();
     expect(screen.queryByText(/届かず/)).toBeNull();
     expect(screen.getByText(/話しかけることは塞いでいない/)).toBeTruthy();
-    // **注記の下のボタンが本当に押せること**まで見る（文言だけ直してボタンを
-    // 塞ぐ、の逆向きの取り違えも止める）。**先に入力を埋める** —— 空欄のときは
-    // `noWayBack` とは無関係に `disabled` なので、埋めずに測ると
-    // 「戻る先が無いから塞がれている」と取り違える（実際に一度踏んだ）。
+    // 先に入力を埋める: 空欄のときは noWayBack と無関係に disabled で、埋めずに測ると戻る先が無いから塞がれていると取り違えるため
     fireEvent.change(screen.getByPlaceholderText('追加の指示'), {
       target: { value: '続けて' },
     });
     expect(screen.getByRole('button', { name: '送る' }).hasAttribute('disabled')).toBe(false);
   });
 
-  /**
-   * **2つは排他ではない。同時に立つ**（`packages/core/src/manager.ts` を
-   * `ff24ded9` で引いて確かめた）。`summaryOf()` は2つを独立した spread で
-   * 組み立てており、排他を課している行は1行も無い。`record.sessionMissingSince`
-   * を消すのは「resume で戻れた」＝ runner が実際に答えた回の2箇所だけなので、
-   * **runner が黙っても消えない。**
-   *
-   * この画面では `ManagerDenialNote` / `ManagerFailureNote` 相当の注記も同時に
-   * 出うるので、**4本並ぶ形が理論上ある。** ここでは2本が両方出ることだけを固定
-   * する（詰まって読めないかは jsdom では測れない —— PR 本文で人間へ回してある）。
-   */
   it('2つの欄が同時に立ったら、注記は2本とも出る（片方が他方を消さない）', async () => {
     renderDetail({
       ...BASE,
@@ -1587,10 +1045,6 @@ describe('詳細でも、セッション不在と器の沈黙は状態を置き�
     expect(screen.getByText(/この委譲のセッションを持っていなかった/)).toBeTruthy();
   });
 
-  /**
-   * **時刻はこの画面の作法（`packages/logic/src/format.ts` の `formatRelative`）。** CLI と
-   * `manager_list` は ISO をそのまま出しており、**書式が違うのは意図である。**
-   */
   it('時刻は相対表示で、ISO をそのまま出さない', async () => {
     renderDetail({
       ...BASE,
@@ -1607,7 +1061,6 @@ describe('詳細でも、セッション不在と器の沈黙は状態を置き�
   });
 });
 
-/** **詳細も、知らない `status` で落ちない**（issue #1623。一覧と同じ部品を使う）。 */
 describe('詳細でも、知らない status に倒れ先がある（#1623）', () => {
   it('知らない status でも詳細を描き、生の値を出す', async () => {
     renderDetail({ ...BASE, status: 'archived' as ManagerSummary['status'] });
@@ -1616,32 +1069,14 @@ describe('詳細でも、知らない status に倒れ先がある（#1623）', 
   });
 });
 
-/**
- * **診断**——クローンの `manager_list` / `manager_report`
- * （`packages/core/src/tools.ts`）が読んでいるのと同じ材料
- * （`ManagerSummary` の各欄）を、この画面（詳細）にも出す。
- *
- * オーナーの決定「人間が後から読んで確かめられることが alteroid の芯」に沿って、
- * Issue #1628 が `managerSummarySchema` へ足した8欄
- * （`lastReportStatus` / `lastUnreported` / `lastFoldedTurn` /
- * `lastCgroupEvents` / `lastUnpushedWorkObservation` / `toolUseStallAt` /
- * `toolUseStallPending` / `resetTimeSkewMatch`）と `lastSystemError` を対象に
- * する。各欄について、(1) 値があるときに出る (2) 無いときに出ない
- * （行ごと消える。0 や空の行を作らない） (3) 知らない値でも落ちない、の3つを
- * 固定する。狭い画面でも崩れないかも1本。
- */
 describe('診断（クローンの manager_list / manager_report と同じ材料。#1628 / #713）', () => {
   afterEach(() => {
-    // 狭い画面のテストが変えた幅を、他のテストへ持ち越さない
-    // （`test-support.tsx` の `setViewportWidth` の doc の約束）。
     setViewportWidth(DEFAULT_VIEWPORT_WIDTH);
   });
 
   it('材料が1つも無ければ「診断」カードごと出ない（0や空の行を作らない）', async () => {
     renderDetail({ ...BASE, status: 'running' });
 
-    // 読み込みが終わったことを、他の欄で確かめてから「無い」を見に行く
-    // （読み込み中に無いのは自明で、確かめたいのはそこではない）。
     expect(await screen.findByText('PR を出して')).toBeTruthy();
     expect(screen.queryByText('診断')).toBeNull();
   });
@@ -1770,29 +1205,7 @@ describe('診断（クローンの manager_list / manager_report と同じ材料
     });
   });
 
-  /**
-   * **この画面の診断欄の文言が、クローン側（`packages/core/src/tools.ts` の
-   * `manager_list` / `manager_report`）と単一の定義元を共有していることを
-   * 固定する歯（issue: PR #1645 の Web 側の文言複製を解消するリファクタ）。**
-   *
-   * PR #1645 の時点では、この画面は `lastCgroupEvents` / `lastSystemError` の
-   * 文言を core（`cgroup-events.ts` / `system-error.ts`）から手で複製していた
-   * ——**複製した理由は、隣に zod のスキーマが同居していて軽い口にできな
-   * かったから**（当時の doc コメント）。複製である以上、クローン側の文言が
-   * 変わっても Web はそれに気づけない——**変わったことを検出する歯が無い
-   * まま、2箇所が独立に文言を持っていた。**
-   *
-   * ここでは文言を組む純粋な関数を、import を1つも持たない新しいファイル
-   * （`@alteroid/core/cgroup-events-format` / `@alteroid/core/system-error-format`）
-   * へ切り出し、core・Web の両方がそこから引く形にした。**この画面が実際に
-   * その軽い口を使っていること**（手元でハードコードした文字列と偶然一致
-   * しているだけではないこと）を、インポートした関数・定数の戻り値と画面の
-   * 表示を突き合わせて確かめる——文字列リテラルを手で書き写さない。
-   *
-   * この歯は変更前（PR #1645 時点の複製したまま）だと **`@alteroid/core/
-   * cgroup-events-format` / `@alteroid/core/system-error-format` が存在せず
-   * import が解決できないため、このファイル全体が読み込めずに落ちる**（赤）。
-   */
+  // 文字列リテラルを手で書き写さない: インポートした関数・定数の戻り値と画面の表示を突き合わせないと、手元でハードコードした文字列と偶然一致しているだけかが分からないため
   describe('診断欄の文言は core の軽い口と単一の定義元を共有する（PR #1645 の複製を解消）', () => {
     it('lastCgroupEvents: 値なしの注記が @alteroid/core/cgroup-events-format の定数そのものを含む', async () => {
       renderDetail({ ...BASE, status: 'failed' });
@@ -1838,42 +1251,21 @@ describe('診断（クローンの manager_list / manager_report と同じ材料
       renderDetail({ ...BASE, status: 'running', resetTimeSkewMatch: 'stale' });
 
       expect(await screen.findByText(/認証トークンの世代ずれの疑い/)).toBeTruthy();
-      // クローン向けの文言（`**強調**`）をそのまま写した名残りが画面に
-      // literal `**` として出ないこと（下の「画面の本文に `**` が出ない」歯の
-      // 個別ケース。強調が要るなら `<strong>` を使う）。
       expect(screen.getByText(/この印は枠\(利用上限\)で止まっている間だけ意味を持つ/)).toBeTruthy();
       expect(document.body.textContent).not.toContain('**');
     });
 
-    /**
-     * core が1本化した安全弁（`STALE_TOKEN_RESTART_ADVICE`）の骨を、この画面の
-     * 語で運べているかを見る（Issue #1845 / そのレビュー指摘）。**削っては
-     * いけないのは3つ**——
-     * (1) 止める前に確かめること・確かめ先の主（リモート）を名指しすること、
-     * (2) 失われるのは会話だけではないこと、
-     * (3) `lastUnpushedWorkObservation` が無い委譲では、存在しない
-     *     「未push観測」を指さないこと——最初のレビューでは確かめ先の主を
-     *     「未push観測」に置いたが、観測が一度も無い委譲では
-     *     `UnpushedWorkObservationNote` 自身が `null` を返して何も描かない
-     *     （指した先が画面に無い）うえ、在っても「最後の1回であって、いまの
-     *     状態ではない」（`describeUnpushedWorkObservation` の断り）ので、
-     *     主役には据えられない。だから主は `LostNote` と同じ「リモート」に
-     *     揃え、「未push観測」は在るときだけ足す補助にした。
-     */
     it('stale の「起こし直すこと」に、止める前に確かめる案内と「会話だけではない」を添える（#1845）', async () => {
       renderDetail({ ...BASE, status: 'running', resetTimeSkewMatch: 'stale' });
 
       expect(await screen.findByText(/認証トークンの世代ずれの疑い/)).toBeTruthy();
-      // (1) 確かめろ、確かめ先の主（リモート）を名指しする。`LostNote` と同じ語。
       expect(
         screen.getByText(
           /止める前に、まず外へ出た成果（PR・コミット・送信済みのメール・登録済みの予定・投稿先など）を確かめること/,
         ),
       ).toBeTruthy();
-      // (2) #914 が名指しした過小な言い方（「会話は失われる」）へ戻っていない。
       expect(screen.getByText(/失われるのは会話だけではない/)).toBeTruthy();
       expect(document.body.textContent ?? '').not.toContain('会話は失われる');
-      // (3) 未push観測が無いのだから、それを指す一文も出ない。
       expect(screen.queryByText(/下の「未push観測」/)).toBeNull();
     });
 
@@ -1891,17 +1283,14 @@ describe('診断（クローンの manager_list / manager_report と同じ材料
       });
 
       expect(await screen.findByText(/認証トークンの世代ずれの疑い/)).toBeTruthy();
-      // 主（リモート）は観測の有無に関わらず出る。
       expect(
         screen.getByText(
           /止める前に、まず外へ出た成果（PR・コミット・送信済みのメール・登録済みの予定・投稿先など）を確かめること/,
         ),
       ).toBeTruthy();
-      // 補助（未push観測）は在るときだけ、かつ「いまの状態ではない」の断りごと出る。
       expect(
         screen.getByText(/下の「未push観測」にも最後の観測が出ている（いまの状態ではない）/),
       ).toBeTruthy();
-      // 実際の「未push観測」欄自体も出ている（指した先が画面に実在する）。
       expect(screen.getByText(/branch=feat\/x/)).toBeTruthy();
     });
 
@@ -1923,17 +1312,6 @@ describe('診断（クローンの manager_list / manager_report と同じ材料
   });
 
   describe('toolUseStallAt / toolUseStallPending（Issue #572 / #2173）', () => {
-    /**
-     * （以下は 2026-09-29 以前の形。issue #2173 で反転）直す前はここが
-     * `Bash`（応答をデーモンではなく SDK 自身が待つ、ふつうの道具）でも
-     * 注記が出ることを固定していたが、それは #2173 が見つけた誤検知
-     * そのものだった——既定の `permissionMode: 'auto'` では `Bash` の確認は
-     * `canUseTool` を一度も通らないので、`waiting` が空なのは矛盾ではなく
-     * 実行中なだけである。**この注記の対象は、応答をデーモンだけが返す
-     * 道具（`AskUserQuestion`）に絞った**——`classifyManagerActivity`
-     * （`@alteroid/core/manager-activity`）が `'stalled-tool-use'` を返す
-     * ときだけ描く。
-     */
     it('未応答の道具（AskUserQuestion）があり、返事待ちが空なら注記を出す', async () => {
       renderDetail({
         ...BASE,
@@ -1949,12 +1327,6 @@ describe('診断（クローンの manager_list / manager_report と同じ材料
       expect(screen.getByText(/未応答の道具: AskUserQuestion\(tu-1\)/)).toBeTruthy();
     });
 
-    /**
-     * Issue #2173 の直し——未応答の道具が `Bash` のような**ふつうの道具**
-     * だけなら、`waiting` が空でも矛盾ではない（実行中なだけ）。誤って
-     * 「誰も待っていない」の注記を出さないことを確かめる（直す前はここが
-     * 赤くなった）。
-     */
     it('未応答の道具が Bash（ふつうの道具）だけなら、返事待ちが空でも注記を出さない（Issue #2173）', async () => {
       renderDetail({
         ...BASE,
@@ -1964,7 +1336,6 @@ describe('診断（クローンの manager_list / manager_report と同じ材料
         waiting: [],
       });
 
-      // 読み込みが終わったことを、他の欄で確かめてから「無い」を見に行く。
       expect(await screen.findByText('PR を出して')).toBeTruthy();
       expect(screen.queryByText(/道具の応答待ちのまま、誰もその応答を待っていない/)).toBeNull();
     });
@@ -1978,7 +1349,6 @@ describe('診断（クローンの manager_list / manager_report と同じ材料
         waiting: [{ requestId: 'req-1', summary: '許可しますか', kind: 'permission' }],
       });
 
-      // 待ちの一覧自体は出るが、矛盾の注記は出ない。
       expect(await screen.findByText('許可しますか')).toBeTruthy();
       expect(screen.queryByText(/道具の応答待ちのまま、誰もその応答を待っていない/)).toBeNull();
     });
@@ -2046,10 +1416,6 @@ describe('診断（クローンの manager_list / manager_report と同じ材料
             {
               relativePath: '.',
               branch: 'feat/x',
-              // schema はここへ userinfo・クエリを作らないが（`schema.ts` の
-              // `observedWorktreeBranchSchema.remoteOrigin` の doc）、この画面は
-              // 二重の備えとして maskUrl を必ず通す——path に紛れ込んだ `?` も
-              // 隠れることを、ここで確かめる。
               remoteOrigin: { host: 'github.com', path: '/o/r.git?token=SECRET' },
             },
           ],
@@ -2061,12 +1427,6 @@ describe('診断（クローンの manager_list / manager_report と同じ材料
       expect(screen.getByText(/origin=https:\/\/github\.com\/o\/r\.git\?\*\*\*/)).toBeTruthy();
     });
 
-    /**
-     * **Issue #1885** — 観測が「確かめきれなかった」ことの4欄を持つとき、
-     * この画面も「探しきっていない」旨を出す（クローンの `manager_list` /
-     * `manager_report` と同じ判定・同じ生成元）。直す前はこの文言が1文字も
-     * 出ないので、この歯は赤くなる。
-     */
     it('observed かつ確かめきれなかった申告があるとき「探しきっていない」を出す（Issue #1885）', async () => {
       renderDetail({
         ...BASE,
@@ -2102,12 +1462,6 @@ describe('診断（クローンの manager_list / manager_report と同じ材料
       expect(screen.queryByText(/探しきっていない/)).toBeNull();
     });
 
-    /**
-     * **Issue #2457** — 器の入れ替えで応答不能（`sessionMissingSince`）の委譲は、
-     * 止まる直前の観測が届いたかを `shutdownObservationArrivedAfterSwap` で
-     * 言い分ける（クローンの `manager_list` の `describeUnpushedWorkObservation`
-     * と同じ3通り）。直す前は、届かなかったときも古い観測が ⚠ なしに出る。
-     */
     describe('器の入れ替えで応答不能（Issue #2457）', () => {
       const SWAPPED = '2026-08-16T04:00:00.000Z';
       const STALE_OBSERVED: NonNullable<ManagerSummary['lastUnpushedWorkObservation']> = {
@@ -2131,11 +1485,9 @@ describe('診断（クローンの manager_list / manager_report と同じ材料
           await screen.findByText(/⚠ 未push観測: 器が止まる直前の観測は届いていない/),
         ).toBeTruthy();
         expect(screen.getByText(/未pushが無かったことを意味しない/)).toBeTruthy();
-        // 表示中の観測は、時刻と経路つきの「古いもの」として出る。
         expect(
           screen.getByText(/表示中の観測は .* 時点・ターンが report で終わったとき のもの/),
         ).toBeTruthy();
-        // 「止まる直前の観測」とは名乗らない。
         expect(screen.queryByText(/器が止まる直前（/)).toBeNull();
       });
 
@@ -2227,7 +1579,6 @@ describe('診断（クローンの manager_list / manager_report と同じ材料
         renderDetail({
           ...BASE,
           status: 'done',
-          // 作業ツリー0本の観測は行ごと省かれる（Issue #2970）ので、1本以上のものにする。
           lastUnpushedWorkObservation: {
             ...STALE_OBSERVED,
             worktrees: [{ relativePath: '.', branch: 'feat/x' }],
@@ -2269,14 +1620,6 @@ describe('診断（クローンの manager_list / manager_report と同じ材料
     expect(screen.getByText(/器の入れ替えで畳まれた/)).toBeTruthy();
   });
 
-  /**
-   * **画面の本文に、クローン向けの Markdown（`**強調**`）の写し残しが literal な
-   * `**` として出ないこと。** `resetTimeSkewMatch: 'stale'` の文言に
-   * `**この印は枠(利用上限)で止まっている間だけ意味を持つ**` があり、この画面は
-   * プレーンテキストとして描くので `**` が文字としてそのまま出ていた（レビュー
-   * 指摘で発覚）。診断カードが出しうる文言をできるだけ多く同時に描いて、
-   * どの行にも同じ写し残しが無いことをまとめて確かめる。
-   */
   it('画面の本文に `**` がそのまま出ない（クローン向け Markdown の写し残し無し）', async () => {
     renderDetail({
       ...BASE,
@@ -2294,10 +1637,6 @@ describe('診断（クローンの manager_list / manager_report と同じ材料
       },
       resetTimeSkewMatch: 'stale',
       toolUseStallAt: '2026-08-16T03:40:00.000Z',
-      // **Issue #2173 で `Bash` → `AskUserQuestion` に変えた。** この歯の狙いは
-      // 「注記が描かれたときに `**` の写し残しが無いか」であって道具の識別では
-      // ないので、注記が実際に描かれる（`classifyManagerActivity` が
-      // `'stalled-tool-use'` を返す）道具名に変えて狙いを保った。
       toolUseStallPending: [{ id: 'tu-1', name: 'AskUserQuestion' }],
       waiting: [],
       lastUnpushedWorkObservation: {
@@ -2309,8 +1648,6 @@ describe('診断（クローンの manager_list / manager_report と同じ材料
     });
 
     expect(await screen.findByText('診断')).toBeTruthy();
-    // 8欄+lastSystemError のうち文言を持つものが全部出ていることを、
-    // 「無かった」を後から疑わずに済むように先に確かめる。
     expect(screen.getByText(/いま走っているターンの中身ではない/)).toBeTruthy();
     expect(screen.getByText(/器の入れ替えで畳まれた/)).toBeTruthy();
     expect(screen.getByText(/畳まれた本文/)).toBeTruthy();
@@ -2351,13 +1688,6 @@ describe('詳細のマネージャー層の provider（#486 S9）', () => {
   });
 });
 
-/**
- * **`send` の戻り値の見せ方（#3066）。**
- *
- * かつては `${outcome}: ${detail}` を灰色でそのまま出し、未達（HTTP 200 の
- * `session_missing` / `declined`）も届いた回と同じ見た目で、入力欄も空にした。
- * 次の送信が失敗しても前回の結果が残った。許可待ち・質問の行は戻り値を見なかった。
- */
 describe('「話しかける」と待ちの行は、send の戻り値を使い手向けの言葉で出す（#3066）', () => {
   const askedAt = '2026-08-23T01:00:00.000Z';
   const RAW = ['answered', 'delivered', 'session_missing', 'unknown', 'unreadable', 'declined'];
@@ -2448,7 +1778,6 @@ describe('「話しかける」と待ちの行は、send の戻り値を使い�
     expect(note.className.includes('text-warn')).toBe(true);
     expect(note.textContent).not.toContain('session_missing');
 
-    // 押し直すと前回の結果は消え、届いた回は何も足さない。
     reply.body = { outcome: 'answered', detail: '解いた。' };
     fireEvent.click(screen.getByRole('button', { name: '「Bash の実行許可: ls」を許可' }));
     await waitFor(() => expect(screen.queryByText(/入り直せなかった。/)).toBeNull());
@@ -2501,7 +1830,7 @@ describe('「話しかける」と待ちの行は、send の戻り値を使い�
     textarea.focus();
     fireEvent.keyDown(textarea, { key: 'Enter', ctrlKey: true });
     expect(textarea.disabled).toBe(true);
-    // jsdom は disabled にしてもフォーカスを外さない（blur() も効かない）。ブラウザは外すので真似る。
+    // フォーカスを自分で外す: jsdom は disabled にしてもフォーカスを外さないが、ブラウザは外すため
     act(() => {
       textarea.disabled = false;
       textarea.blur();

@@ -8,13 +8,6 @@ import { makeTempDir } from '../../../vitest.tmpdir.js';
 
 import { createFsStores, initWorkspace } from './index.js';
 
-/**
- * issue #2927 項目5。新しい作業場（`initWorkspace` の直後）や `persona.clear()` の後の
- * 最初の `persona.write` / `protectionStatus` で、fs だけが保護状態の索引を「失われた」と
- * 見て組み直し、「索引の組み直し」の decision を日誌へ1件書いていた（pg は新しい DB では
- * 書かない）。`initWorkspace` が seed と一緒に索引も置き、`clear` が空の索引を置く。
- * 索引が本当に失われたときは、従来どおり組み直して decision を1件書く。
- */
 describe('fs の索引の初期状態と組み直しの decision（#2927 項目5）', () => {
   let root: string;
   let stores: ReturnType<typeof createFsStores>;

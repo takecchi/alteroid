@@ -3,10 +3,6 @@ import { describe, expect, it } from 'vitest';
 import { inspectBashCommand } from './bash-wait-guard.js';
 import { expectNotSuperlinear } from './time-growth.test-support.js';
 
-/**
- * Issue #2399 —— `isTimeoutWrapped` が、先頭が `timeout` なら全体を有界と読み、区切りの後ろの
- * 待つ形を見なかった。全体が1つの単純コマンドのときだけ有界と読む。
- */
 describe('先頭の timeout は、区切りの後ろのコマンドを有界にしない（#2399）', () => {
   const blocked: ReadonlyArray<[string, string, string]> = [
     ['; の後ろの tail -f', 'timeout 60 make build; tail -f x.log', 'tail-f'],

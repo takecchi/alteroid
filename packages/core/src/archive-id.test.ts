@@ -21,8 +21,6 @@ describe('archiveIdBranch（#908）', () => {
     expect(branch9).toBe(9);
     expect(branch10).toBe(10);
     expect(branch10).toBeGreaterThan(branch9);
-    // 字面（文字列）比較だと '-10.jsonl' < '-9.jsonl' になる（'1' < '9'）。
-    // 数値として比較しなければこの逆転が起きることを、ここでも確認しておく。
     expect(
       'session-a-2026-09-23T13-27-27-123Z-10.jsonl' < 'session-a-2026-09-23T13-27-27-123Z-9.jsonl',
     ).toBe(true);
@@ -82,12 +80,10 @@ describe('compareArchiveEntriesNewestFirst（#908）', () => {
   });
 
   it('at はオフセット表記でも実時刻で比べる（文字列では +09:00 が後ろに来る。#3360）', () => {
-    // 実時刻は jst が 00:00Z、utc が 01:00Z。文字列では '2026-09-27T09:...' < '2026-09-27T01:...' が逆になる。
     const jst = entry('s', '2026-09-27T09:00:00+09:00', 's-a.jsonl');
     const utc = entry('s', '2026-09-27T01:00:00Z', 's-b.jsonl');
     expect(compareArchiveEntriesNewestFirst(utc, jst)).toBeLessThan(0);
     expect(compareArchiveEntriesNewestFirst(jst, utc)).toBeGreaterThan(0);
-    // 同じ瞬間の別表記は at の差では決まらず、2次キー（枝番）へ進む。
     const sameInstant = entry(
       's',
       '2026-09-27T10:00:00+09:00',

@@ -7,22 +7,6 @@ import {
   // @ts-expect-error -- 素の .mjs（型宣言を持たない build 用スクリプト）を読む
 } from './check-web-bundle-node-traces-core.mjs';
 
-/**
- * `check-web-bundle-node-traces` の判定ロジックの歯。
- *
- * **本物の `pnpm build` を走らせずに試す。** CLI 側（`check-web-bundle-node-traces.mjs`）は
- * ファイル読み込みだけを持ち、判定は `check-web-bundle-node-traces-core.mjs` に切り出して
- * あるので、ここでは合成した文字列で当たり判定だけを確かめる（`scripts/verify-core.test.ts`
- * と同じ分け方・同じ理由）。
- *
- * **狙いは2つ。**
- * 1. 4つの検査語それぞれが、実際に混入した形（#294 / #306 の事故で実際に本番へ出た
- *    バンドルから取った断片）を捕まえること
- * 2. **一度踏んだ誤検知（`node:` の部分一致が `{node:n,...}` という無関係な
- *    オブジェクトリテラルに当たった）を再び埋め込まないこと** — 検査語を選ぶ理由の
- *    半分はこの誤検知を避けるためだったので、ここで固定しておかないと次に検査語を
- *    足す人が同じ誤検知へ戻しかねない
- */
 describe('check-web-bundle-node-traces: findNodeTraceHits', () => {
   it('4つの検査語とも該当なしなら0件を返す', () => {
     const hits = findNodeTraceHits([{ path: 'clean.js', content: 'const a = 1; export { a };' }]);
@@ -30,7 +14,6 @@ describe('check-web-bundle-node-traces: findNodeTraceHits', () => {
   });
 
   it('createRequire（#294/#306 の実際の混入と同じ形）を捕まえる', () => {
-    // 実測（2026-08-23、直す前の commitments チャンク）から取った断片。
     const content = 'qa=(0,E.createRequire)(import.meta.url),Tte=Symbol.dispose';
     const hits = findNodeTraceHits([{ path: 'x.js', content }]);
     expect(hits.map((h: { pattern: string }) => h.pattern)).toContain('createRequire');
@@ -55,9 +38,6 @@ describe('check-web-bundle-node-traces: findNodeTraceHits', () => {
   });
 
   it('⚠️ 回帰: node: の素の部分一致には反応しない（一度踏んだ誤検知）', () => {
-    // 実測（2026-08-23、直した後の entry.client チャンク）: DOM 操作の
-    // オブジェクトリテラルのプロパティ名が `node:` に部分一致していた。
-    // これは import 指定子ではないので、当たってはいけない。
     const content = 'if(r=e+n.textContent.length,e<=t&&r>=t)return{node:n,offset:t-e};';
     expect(NODE_SPECIFIER.test(content)).toBe(false);
     const hits = findNodeTraceHits([{ path: 'entry.client.js', content }]);

@@ -5,13 +5,6 @@ import { makeTempDir } from '../../../vitest.tmpdir.js';
 
 import { createFsStores } from './index.js';
 
-/**
- * issue #1715。詳しい経緯とインメモリ側の対の歯は
- * `packages/core/src/auth-write-validation.test.ts` の冒頭コメントを見よ。
- *
- * ここは fs 実装に対して同じ入力を当てる——各書き込みが対応する zod スキーマを
- * 通すので、この歯は緑になる（直す前から緑——fs は最初から検査を持っていた）。
- */
 describe('AuthStore の書き込み — 形式不正な入力の扱い（fs 実装）', () => {
   let stores: ReturnType<typeof createFsStores>;
 

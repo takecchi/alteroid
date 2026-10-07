@@ -1,12 +1,4 @@
 // @vitest-environment jsdom
-/**
- * 「受信をやめる」のあと、履歴が完全な返信を出したら途中の返信行は畳まれる（Issue #3761、Web）。
- *
- * 受信を止めても、クローンのターンはサーバ側で続く。終わると履歴に完全な発言が載るが、
- * 止めた時点で手元に残した途中の返信行は本文が違うので履歴と突き合わず、二重に並んでいた。
- *
- * **実時間を待たない。** 順序は `finished` の旗と、フォーカスによる履歴の再取得で作る。
- */
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider, useParams } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -127,10 +119,8 @@ describe('受信をやめたあと、履歴が完全な返信を出したら途�
     renderApp(`/chat/${ID}`);
     await sendAndStop();
 
-    // 止めた直後: これまでの本文は残る（今の挙動を変えない）。
     expect(within(transcript()).getAllByText('こんにち')).toHaveLength(1);
 
-    // ターンが終わり、履歴が完全な発言を出す。
     state.finished = true;
     window.dispatchEvent(new Event('focus'));
 

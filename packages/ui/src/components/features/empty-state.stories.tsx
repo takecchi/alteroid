@@ -5,7 +5,6 @@ import { Button, Card } from '../common';
 
 import { EmptyState } from './empty-state';
 
-/** 空は「次に何をすればよいか」を言う場所。 */
 const meta = {
   title: 'Features/EmptyState',
   component: EmptyState,

@@ -7,16 +7,7 @@ import {
   // @ts-expect-error -- 素の .mjs（型宣言を持たない変異試験ハーネス）を読む
 } from '../.claude/skills/mutation-testing/mutate-core.mjs';
 
-/**
- * #331: 変異ハーネスの `runTests` が `pnpm test` へ渡す args 配列を組み立てる
- * `buildTestSpawnArgs`（`mutate-core.mjs`）の歯。
- *
- * **いちばん大事な保証はここ**: `baseline` / `run --plan` から並列度を外から
- * 渡せるようにする依頼だったが、既定を変える話ではない。呼び出し側が何も
- * 渡さなければ、これまでどおり `--maxWorkers=4` で走ることを固定する。
- * 既定を消すと、渡し忘れた回だけ vitest の既定（`nproc` 相当）へ跳ね上がる
- * （`.claude/skills/mutation-testing/SKILL.md` / Issue #331）。
- */
+// 既定の `--maxWorkers=4` を固定する: 既定を消すと、渡し忘れた回だけ vitest の既定（`nproc` 相当）へ跳ね上がるため。
 describe('mutate-core: buildTestSpawnArgs (#331)', () => {
   it('DEFAULT_MAX_WORKERS は 4 である', () => {
     expect(DEFAULT_MAX_WORKERS).toBe(4);
@@ -47,15 +38,6 @@ describe('mutate-core: buildTestSpawnArgs (#331)', () => {
   });
 });
 
-/**
- * `readMaxWorkers`（`mutate-core.mjs`）の歯。
- *
- * **マネージャーの差し戻し（2026-08-23）が起点**: `--max-workers=2` という
- * `=` の形が静かに無視され、既定の `4` へ落ちていた欠陥の回帰確認。
- * vitest 本体のフラグが `--maxWorkers=4` という `=` の形そのものなので、
- * その形を知っている人ほどこの形で打つ。空白区切りの形（`--max-workers 2`）
- * との両方を受けることを固定する。
- */
 describe('mutate-core: readMaxWorkers (#331 差し戻し)', () => {
   it('引数に無ければ undefined を返す（呼び出し側の既定に委ねる）', () => {
     expect(readMaxWorkers([])).toBeUndefined();

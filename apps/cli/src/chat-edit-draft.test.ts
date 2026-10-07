@@ -6,10 +6,6 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import { makeTempDir } from '../../../vitest.tmpdir.js';
 import { captureStdout, pretendStdinTty } from './test-support.js';
 
-/**
- * `/edit <番号|id>`（添えかけの流れ。#3642）。readline の `chatCommand` に行を流して確かめる
- * （`chat-attach-only.test.ts` と同じ形）。**待ちは書かない**（入力が尽きたら閉じる）。
- */
 let lines: string[] = [];
 
 vi.mock('node:readline/promises', () => ({
@@ -88,7 +84,6 @@ const CONVERSATION = {
 
 async function run(
   input: string[],
-  /** n 回目（0 始まり）の /chat への応答を差し替える。 */
   chatReply: (n: number) => Response | undefined = () => undefined,
 ): Promise<{ chatBodies: Record<string, unknown>[]; uploads: number; output: string }> {
   lines = [...input];
@@ -217,7 +212,6 @@ describe('chat: /edit <番号|id>（添えかけの流れ。#3642）', () => {
     expect(output).toContain('元の添付が期限切れだったので送っていない（a.csv）');
     expect(chatBodies).toHaveLength(2);
     expect(chatBodies[0]?.attachments).toEqual(['att-1', 'att-2']);
-    // 外した att-1 は付かず、まだ編集中なので supersedes のまま
     expect(chatBodies[1]).toMatchObject({ supersedes: 'm1', attachments: ['att-2'] });
   });
 

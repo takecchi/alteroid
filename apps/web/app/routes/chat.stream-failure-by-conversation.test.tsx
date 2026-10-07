@@ -1,36 +1,4 @@
 // @vitest-environment jsdom
-/**
- * Issue #1576（#1570 / PR #1572 と同じ窓）。
- *
- * `ChatPane`（`chat.tsx`）は会話を切り替えても作り直されない。`failure`
- * （画面下の `ErrorNote`）が会話を見ずに立つ経路が2つある:
- *
- * 1. **送信のストリームの `error` イベント**: `send` のイベントループの
- *    `case 'error': setFailure(new Error(event.message))` は、同じループの
- *    `append`/`setTransient` が締めている `writable()`（`owns() && !stopped()`）
- *    を見ない。会話を切り替えたときにストリームを止める効果
- *    （`useEffect(() => { shownIdRef.current = shownId; ...abort()... },
- *    [shownId])`）が走るより前——B の画面が commit された直後の窓——で A の
- *    ストリームに `error` が届くと、B の画面に A のエラーが出る。**この窓の
- *    外（効果が先に走って `abort()` 済み）では、`abort()` がストリームの
- *    読み取りそのものを打ち切るので `error` イベントは届かず、代わりに
- *    outer の `catch` が `controller.signal.aborted` で締めて表示しない
- *    ——つまりこの経路は #1570 と同じく本当に「窓の中だけ」で起きる。**
- * 2. **追送（`followUp`）の `catch (caught) { setFailure(caught); }`**:
- *    投函先の会話を見ていない。`followUp` は自分専用の `AbortController` を
- *    持ち、会話切り替えの効果（上）はそれを一切触らない——つまりこちらは
- *    窓に依らず、**切り替えた後ならいつ投函が失敗しても**常に別の会話の
- *    画面に出る。
- *
- * **窓の突き方（1）**: #1572 と同じく、MutationObserver のコールバック
- * （マイクロタスク）の中で応答を流す。**ただし共有の `sse()`（`test-support.tsx`）
- * はフレームごとに実タイマー（`delayMs`、既定5ms）を挟む**——`after` の解決から
- * enqueue までの間にその実タイマーが挟まると、受動効果（別マクロタスク）との
- * 先着順が実行環境の速さに賭けになってしまう（`chat.test.tsx`「会話の切り替え」の
- * 節が同じ理由で赤くなった実例を記録している）。そこでこの窓を突く1本だけは
- * `sse()` を使わず、実タイマーを挟まない自前の `ReadableStream` で `error` を
- * 流す。`findBy`/`act()` で待つと効果まで流れてしまい窓を越えるので、それらも使わない。
- */
 import {
   act,
   cleanup,
@@ -56,25 +24,7 @@ import {
 
 import Chat from './chat';
 
-/*
- * Issue #2650: 並列で回すと1本だけ落ちた（996 本中1本、単独では通る）。
- *
- * 再現（2026-10-03、他の作業者が同じ計算機で試験を回していて load average 約 90 の
- * ときに `pnpm --filter @alteroid/web test -- app/routes/chat.stream-failure-by-conversation.test.tsx`
- * を単独で逐次に 6 回）: 1 回、先頭の `it` が `Test timed out in 5000ms.` で落ちた
- * （そのときの `Duration` は 24.6s。空いているときは 4s 前後）。`waitFor` / `findBy` の
- * 1000ms の失敗ではなく **`it` 全体の 5000ms（vitest の既定 `testTimeout`）が先に切れた**。
- * 空いているときこの `it` は 0.5s 前後、混んでいると 1.1〜1.6s（先頭の `it` は
- * `Chat` の初回描画と import の温めを払う）。待っている相手は実時間ではなく
- * React の描画・マイクロタスクの連鎖だけなので、**遅くなるのは計算機が混んだぶんだけ**である。
- *
- * 実時間の待ちは1つも足していない（`setTimeout` を足していない）。変えたのは待つ予算だけで、
- * アサーションは1つも変えていない。**ここで予算を広げる根拠は「このテストが遅い」ではなく
- * 「計算機の混み方に依存する」であって、決定的な原因を直したわけではない**
- * （`chat.test.tsx` の「会話の切り替え」と同じ形）。どれだけ混むと足りなくなるかは測っていない。
- * 特に `asyncUtilTimeout` の拡大は、この失敗では実測していない（先に切れたのは `it` の予算）が、
- * 同じ混み方で 1000ms の予算も縮むので同時に広げた。
- */
+// 待つ予算を広げる: 計算機が混むと it 全体の既定 5000ms が先に切れるため
 vi.setConfig({ testTimeout: 30_000 });
 configure({ asyncUtilTimeout: 5000 });
 
@@ -110,13 +60,6 @@ function renderChat(initial: string) {
   };
 }
 
-/**
- * `/approvals` はこの試験の対象ではない——だが issue #2210 以降、`chat.tsx` が
- * `conversationApprovals.error` を見て `ErrorNote` を出すようになったので、
- * 未ハンドルのまま（＝`Failed to fetch` で失敗）にすると、この試験が見ている
- * 「B に出ない」（`role="alert"` が無いこと）の判定に、無関係な `ErrorNote`
- * が紛れ込む。ここでは素直に0件で成功させ、その干渉を避ける。
- */
 function conversationRoutes(url: string) {
   if (url.includes(`/conversations/${CONVERSATION_ID}`)) {
     return json({ conversationId: CONVERSATION_ID, messages: [] });
@@ -152,16 +95,7 @@ async function typeAndSend(text: string) {
   fireEvent.click(screen.getByRole('button', { name: 'メッセージを送信' }));
 }
 
-/**
- * `open` をすぐに流し、`gate` が解決したら `error` を流して閉じる SSE 応答。
- *
- * **`test-support.tsx` の `sse()` を使わない。** あちらはフレームごとに実
- * タイマー（`delayMs`）を挟むため、`gate` の解決から `error` の enqueue までの
- * 間に実タイマーが挟まり、受動効果（別マクロタスク）との先着順が環境の速さに
- * 賭けになる。ここは `gate` の解決から enqueue までを純粋なマイクロタスクの
- * 連鎖だけにして、MutationObserver のコールバック（マイクロタスク）で解決すれば
- * 受動効果より確実に先着するようにしてある。
- */
+// test-support の sse() を使わない: フレームごとに実タイマーを挟み、受動効果との先着順が実行環境の速さへの賭けになるため
 function chatStreamWithGatedError(
   gate: Promise<unknown>,
   signal: AbortSignal | null | undefined,
@@ -222,7 +156,6 @@ describe('送信ストリームの error イベント（会話を見ずに立つ
     const { router } = renderChat(`/chat/${CONVERSATION_ID}`);
     await typeAndSend('やあ');
 
-    // ストリームが実際に開いた（まだ error は届いていない）ことを確かめてから切り替える。
     await waitFor(() => {
       expect(stub.entries.some((entry) => entry.url.endsWith('/chat'))).toBe(true);
     });
@@ -243,19 +176,13 @@ describe('送信ストリームの error イベント（会話を見ずに立つ
     expect(await findShownConversation(OTHER_CONVERSATION_ID)).toBeTruthy();
     expect(releasedInWindow).toBe(true);
 
-    /*
-     * 『出ない』は `findBy`/`waitFor` では直接待てない（出る方向にしか待てない）
-     * ので、必ず起きるはずの別の事実――A のストリームが終わって `finally` の
-     * `setSending(false)` が「受信をやめる」ボタンを畳むこと――を待つ
-     * （`chat.interrupt.test.tsx` の `disabled` の扱いと同じ理由）。
-     */
+    // 「出ない」は findBy/waitFor で直接待てないため、必ず起きる別の事実（「受信をやめる」ボタンが畳まれること）を待つ
     await waitFor(() => {
       expect(
         screen.queryByRole('button', { name: '受信をやめる（クローンのターンは止まらない）' }),
       ).toBeNull();
     });
 
-    // B の画面に A の error が出ていない。
     expect(screen.queryByText(ERROR_MESSAGE)).toBeNull();
     expect(screen.queryByRole('alert')).toBeNull();
   });
@@ -284,13 +211,6 @@ describe('送信ストリームの error イベント（会話を見ずに立つ
 });
 
 describe('追送（followUp）の失敗（投函先を見ずに立つ、#1576-2）', () => {
-  /**
-   * `followUp` は自分専用の `AbortController` を持ち、会話切り替えの効果
-   * （`streamRef.current` だけを見て `abort()` する）に一切触れられない。
-   * つまりこちらの経路は #1570 のような「窓」を必要としない——B へ切り替えを
-   * 完全に終わらせた後（受動効果も含めてすべて流れた後）に投函を失敗させても、
-   * 直っていなければ別の会話（B）の画面に出る。
-   */
   it('A で受信中に追送し、B へ切り替えが完全に終わった後に投函が失敗しても、B に出ない', async () => {
     let releaseFollowUpFailure: () => void = () => {};
     const followUpReleased = new Promise<void>((resolve) => {
@@ -303,14 +223,11 @@ describe('追送（followUp）の失敗（投函先を見ずに立つ、#1576-2�
       if (url.endsWith('/chat')) {
         chatCalls += 1;
         if (chatCalls === 1) {
-          // 最初の送信: 開いたまま受信を続ける。追送はこのストリームへは相乗り
-          // しない——`followUp` は自分で新しい `POST /chat` を叩く（`followUp` の doc）。
           return sse([{ event: 'open', data: { conversationId: CONVERSATION_ID } }], {
             signal: init?.signal,
             keepOpen: true,
           });
         }
-        // 追送そのもの: 投函が失敗する（ネットワーク断を模す）。
         return followUpReleased.then((): Response => {
           throw new TypeError(FOLLOW_UP_ERROR_MESSAGE);
         });
@@ -333,26 +250,13 @@ describe('追送（followUp）の失敗（投函先を見ずに立つ、#1576-2�
       expect(stub.entries.filter((entry) => entry.url.endsWith('/chat')).length).toBe(2);
     });
 
-    // B への切り替えを完全に終わらせる（受動効果も含めて流す）。
     await router.navigate(`/chat/${OTHER_CONVERSATION_ID}`);
     expect(await findShownConversation(OTHER_CONVERSATION_ID)).toBeTruthy();
     await act(async () => {});
 
-    // ここで、追送の失敗を遅れて起こす。
     releaseFollowUpFailure();
 
-    /*
-     * ここはメインのストリームのような `sending`/「受信をやめる」に相当する
-     * 目印を `followUp` 自身が持たない。だが `followUp` の失敗はタイマーを
-     * 一切挟まないマイクロタスクの連鎖だけで `setFailure` まで届く
-     * （モックの `fetch` の reject → `openapi-fetch` → `postChat` →
-     * `followUp` の `catch` はどれも `await`/`Promise` チェーンで、実タイマーを
-     * 挟む箇所が無い）。**マクロタスクの境界を1つ越えれば、その前に積まれた
-     * マイクロタスクは必ず処理し切られている**（仕様上の保証。`delayMs` の
-     * ような「速さへの賭け」ではない——ここでは何かと競走しているのではなく、
-     * 既に確定した順序（B への切り替えは終わっている）の後に、単に十分な数の
-     * tick を空けて確実に読み切るだけである）。
-     */
+    // マクロタスクの境界を1つ越えて待つ: followUp 自身は待てる目印を持たず、失敗は実タイマーを挟まないマイクロタスクの連鎖で届くため
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
       await new Promise((resolve) => setTimeout(resolve, 0));

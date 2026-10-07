@@ -2,15 +2,6 @@ import { describe, expect, it } from 'vitest';
 
 import { gitChildEnv } from './git-child-env.js';
 
-/**
- * `gitChildEnv()`（#1854）の単体の歯。
- *
- * **測るのは「親の `process.env` を丸ごと継承しない」ことそのもの。**
- * `execFileSync('git', …)` を実際に起こして確かめる歯は
- * `reflect-release-prod.test.ts` / `verify-for-sdk-pr.test.ts` の側が持つ
- * （本物の git を通す）ので、ここでは軽い口——組み立てた env オブジェクトを
- * 直接検査する。
- */
 describe('gitChildEnv', () => {
   it('親の process.env に置いた偽の値を継承しない', () => {
     process.env.ALTEROID_TEST_FAKE_1854_GIT = 'not-a-real-value';

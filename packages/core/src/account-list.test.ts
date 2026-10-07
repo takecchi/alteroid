@@ -3,11 +3,9 @@ import { describe, expect, it } from 'vitest';
 
 describe('account-list.ts は読むだけで、個人の情報を持ち出さない（#2546。#2645 の判断待ち）', () => {
   const source = readFileSync(new URL('./account-list.ts', import.meta.url), 'utf8');
-  // コメントの中の字面（「email は載せない」等の説明）は検査の対象にしない。
   const code = source
     .replace(/\/\*[\s\S]*?\*\//g, '')
     .replace(/^\s*\/\/.*$/gm, '')
-    // 文字列リテラルの中身（断り書きの文言）も外す。
     .replace(/'[^'\n]*'|`[^`]*`/g, '""');
 
   it('書き手の口（付与・取り消し・owner の宣言・消す口・put 系）に触れない', () => {

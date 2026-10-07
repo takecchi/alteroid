@@ -1,23 +1,4 @@
 // @vitest-environment jsdom
-/**
- * `ask_human` の質問・回答をチャットの履歴へ織り込む（issue #782 の2）。
- *
- * **直す前の穴**: `ask_human` は SSE の `case 'ask_human'` が `lines`（画面だけの
- * state）へ積むだけで、`escalation`（`packages/core/src/schema.ts`）は
- * `readConversationWindow`（`with: ['human']`）の窓に入らないので、リロードで
- * `lines` が消えると質問ごと消えていた。直したのは読み側の結合だけである
- * （journal / 台帳へは何も書いていない）。
- *
- * ここで固定するのは:
- *
- * 1. 承認の台帳（`GET /approvals?conversationId=...`）から読んだ質問が、リロード後
- *    （＝手元の `lines` を経由しない、`historyLines` だけの状態）でも出る
- * 2. 回答済みの確認は、質問だけでなく回答も出る（不変条件A——回答済みが
- *    「まだ返答が無い」に見えない）
- * 3. 生配信（SSE）で先に出た質問行が、台帳から読んだ分と合流しても二重に
- *    ならない（`pendingOwnLines` の役割＋本文の照合に、質問の文言を
- *    1文字も違えず載せてあることの歯）
- */
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider, useParams } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -77,10 +58,6 @@ async function send(text: string) {
 }
 
 const CONVERSATION_ID = 'conv-ask-human';
-/**
- * 承認のカード（`ApprovalAnswerCard`）に出る問いの文。カードは承認 1 件を 1 枚で出し
- * （#3259）、回答・取り下げも同じカードの状態として出す。
- */
 const QUESTION_LINE = '本番に出してよいか';
 
 describe('リロード後（＝手元の lines を経由しない状態）でも ask_human の質問・回答が消えない', () => {
@@ -120,7 +97,6 @@ describe('リロード後（＝手元の lines を経由しない状態）でも
 
     renderChat(`/chat/${CONVERSATION_ID}`);
 
-    // 質問（会話の発言より後ろに出る——`at` の時刻順）。
     await screen.findByText(QUESTION_LINE);
     const items = within(transcript()).getAllByRole('listitem');
     const texts = items.map((item) => item.textContent);
@@ -130,10 +106,6 @@ describe('リロード後（＝手元の lines を経由しない状態）でも
     expect(questionIndex).toBeGreaterThan(humanIndex);
   });
 
-  /**
-   * **不変条件A: 質問だけ復元すると、回答済みの確認が永久に未回答に見える。**
-   * だから回答も出す。
-   */
   it('回答済みの確認は、1枚のカードに問い・回答済みの状態・回答が出る', async () => {
     const route: Route = (url) => {
       if (url.includes(`/conversations/${CONVERSATION_ID}`)) {
@@ -167,7 +139,6 @@ describe('リロード後（＝手元の lines を経由しない状態）でも
     await screen.findByText(QUESTION_LINE);
     expect(await screen.findByText('はい、進めてよい')).toBeTruthy();
 
-    // 問いと回答は同じ1枚のカードの中にあり、状態は「回答済」で、回答の時刻もカードの中にある。
     const items = within(transcript()).getAllByRole('listitem');
     expect(items).toHaveLength(1);
     expect(items[0]?.textContent).toContain(QUESTION_LINE);
@@ -177,15 +148,6 @@ describe('リロード後（＝手元の lines を経由しない状態）でも
   });
 });
 
-/**
- * **二重表示（リロード前後で同じ行が2つ出る）を1本の歯で押さえる。**
- *
- * 生配信（SSE の `case 'ask_human'`）でまず質問行が出て、その後に承認の台帳
- * （`escalation` の journal 事象で無効化された `GET /approvals`）が同じ確認を
- * 返す——このとき手元の行（`lines`）と履歴由来の行（`historyLines`）の
- * 役割＋本文が一致して初めて `pendingOwnLines` が重複を刈れる。文言を
- * 1文字でも違えると、この歯が赤くなる。
- */
 describe('二重表示を防ぐ（生配信 → 承認の台帳、の順で同じ確認が2回現れても1つのまま）', () => {
   it('SSE の ask_human で出た質問行は、台帳から読んだ分と合流しても1つのまま残る', async () => {
     let approvalRecorded = false;
@@ -258,12 +220,10 @@ describe('二重表示を防ぐ（生配信 → 承認の台帳、の順で同�
 
     await send('進めてよいか確認して');
 
-    // 生配信でまず1つだけ出る（人間の発言＋質問の2行）。
     await screen.findByText(QUESTION_LINE);
     expect(within(transcript()).getAllByText(QUESTION_LINE)).toHaveLength(1);
     expect(within(transcript()).getAllByRole('listitem')).toHaveLength(2);
 
-    // 承認の台帳が同じ確認を持つようになり、journal の無効化が届く。
     approvalRecorded = true;
     const approvalsFetchesBefore = approvalsFetchCount();
     releaseEscalation();
@@ -271,11 +231,6 @@ describe('二重表示を防ぐ（生配信 → 承認の台帳、の順で同�
       expect(approvalsFetchCount()).toBeGreaterThan(approvalsFetchesBefore);
     });
 
-    // **合流しても1つのまま。** 台帳由来の行と生配信の行が両方出れば行数が
-    // 3つに増える——`getAllByText(QUESTION_LINE)` は完全一致なので、文言が
-    // 1文字でもずれた行が紛れ込むと（別の文字列として）カウントに出ないが、
-    // `getAllByRole('listitem')` の総数はそれも数えるので、文言のずれによる
-    // 二重表示もここで捕まる。
     await waitFor(() => {
       expect(within(transcript()).getAllByText(QUESTION_LINE)).toHaveLength(1);
       expect(within(transcript()).getAllByRole('listitem')).toHaveLength(2);

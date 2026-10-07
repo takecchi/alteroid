@@ -3,25 +3,6 @@ import { describe, expect, it } from 'vitest';
 import { CloneDistillMemoryState } from './clone-distill-memory-state.js';
 import type { MemoryDocument } from './schema.js';
 
-/**
- * `clone-distill-memory-state.ts` の歯。**純粋なクラスなので I/O のモック無しで
- * 全分岐に通せる**（`clone-redelivery-state.test.ts` / `runner-sdk-session.test.ts`
- * と同じ作法。前例は PR #1532 / #1611）。
- *
- * ここが固定するのは、切り出した12フィールドの**状態の器としての性質**
- * ——サイズの記録・tick の差分・消費する読み4本（文脈窓の断り・索引の載せ
- * 直し・resume の断り・蒸留の区間の断り）・記憶の写しの差分と差し替えである。
- * `Clone` が「いつ呼ぶか・断り書きの文面・蒸留を投げるかどうか」を決める
- * 判断は `clone-*.test.ts`（旧 `clone.test.ts`。#1744 で分割済み。ブラックボックス）が引き続き持つ——ここでは扱わない。
- */
-
-/**
- * テスト用の最小の `MemoryDocument`。このクラスが実際に読むのは `slug` /
- * `content` の2本だけ（`diffAgainstRecorded` / `commitMemory` の実装を見よ）
- * なので、他の必須フィールド（`title` / `updatedAt` 等）はここでは要らない
- * ——`unknown` 経由でキャストする（`runner-resume-state.test.ts` の
- * `beginResume` のフィクスチャと同じ作法）。
- */
 function doc(slug: string, content: string): MemoryDocument {
   return { slug, content } as unknown as MemoryDocument;
 }
@@ -119,7 +100,6 @@ describe('CloneDistillMemoryState — 文脈窓で畳んだ断り（arm / take�
     const s = new CloneDistillMemoryState();
     s.armContextWindowFoldNotice();
     expect(s.takeContextWindowFoldNoticePending()).toBe(true);
-    // 消費した後は false のまま。
     expect(s.takeContextWindowFoldNoticePending()).toBe(false);
   });
 
@@ -148,7 +128,6 @@ describe('CloneDistillMemoryState — 記憶の索引の載せ直し（arm / tak
   it('#buildOptions は戻り値を使わず、無条件に下ろすためだけに呼べる', () => {
     const s = new CloneDistillMemoryState();
     s.armMemoryIndexRefresh();
-    // 戻り値を捨てても、状態としては下りている。
     s.takeMemoryIndexRefreshPending();
     expect(s.takeMemoryIndexRefreshPending()).toBe(false);
   });
@@ -232,10 +211,7 @@ describe('CloneDistillMemoryState — diffAgainstRecorded（読むだけ。#memo
     const s = new CloneDistillMemoryState();
     const first = [doc('a', 'A')];
     s.commitMemory(first);
-    // 変わった内容で diff だけを呼ぶ。
     s.diffAgainstRecorded([doc('a', 'CHANGED')]);
-    // まだ commitMemory していないので、記録は "A" のままのはず——
-    // 次の diff で再び "CHANGED" が changed に出ることで確かめる。
     const { changed } = s.diffAgainstRecorded([doc('a', 'CHANGED')]);
     expect(changed).toEqual([doc('a', 'CHANGED')]);
   });
@@ -246,7 +222,6 @@ describe('CloneDistillMemoryState — commitMemory（退避してから差し替
     const s = new CloneDistillMemoryState();
     const seenBefore = s.commitMemory([doc('a', 'A')]);
     expect(seenBefore.size).toBe(0);
-    // 埋まったことは diffAgainstRecorded で確認する。
     const { changed } = s.diffAgainstRecorded([doc('a', 'A')]);
     expect(changed).toEqual([]);
   });
@@ -263,7 +238,6 @@ describe('CloneDistillMemoryState — commitMemory（退避してから差し替
     s.commitMemory([doc('a', 'A'), doc('b', 'B')]);
     s.commitMemory([doc('a', 'A')]);
     const { removed } = s.diffAgainstRecorded([doc('a', 'A')]);
-    // 既に b は無いので、これ以上 removed には出ない（前回の commitMemory で消えている）。
     expect(removed).toEqual([]);
   });
 });

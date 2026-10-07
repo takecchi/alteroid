@@ -20,24 +20,6 @@ import {
   // @ts-expect-error -- 素の .mjs（型宣言を持たない検査スクリプト）を読む
 } from './check-sdk-quotes-core.mjs';
 
-/**
- * `check-sdk-quotes` の歯。
- *
- * **2段構えである**（`check-web-css-comment-classnames.test.ts` と同じ形）。
- *
- * 1. **判定ロジックの単体テスト** — 合成した文字列で当たり判定だけを確かめる
- * 2. **実物に対する検査そのもの**（下の `describe('実物の検査')`）—
- *    **この歯はワークフローを変更せずに CI へ足す**ため、`pnpm test`（vitest）が
- *    実行するこの test ファイル自身の中で、インストール済みの `sdk.d.ts` を読んで
- *    repo 全体の印を当てる。**`sdk.d.ts` が見つからないときは黙ってスキップせず
- *    投げる** — スキップすると「引用が0件だった」と「検査が走らなかった」が
- *    区別できなくなる（`AGENTS.md`「静かに失敗する道具」）。
- *
- * **この test ファイルと `check-sdk-quotes*.mjs` は走査対象から外してある**
- * （`EXCLUDED_PREFIXES`）。外さないと、下の合成フィクスチャに書いた印を
- * 実物の引用として当てにいって落ちる。
- */
-
 type Quote = { path: string; line: number; symbol: string | null; quote: string | null };
 type Defect = Quote & { reason: string };
 
@@ -99,8 +81,7 @@ describe('check-sdk-quotes: collectMarkedQuotes', () => {
   });
 
   it('⚠️ 引用を書き忘れて次がコードなら、その行を引用として取る（＝ 当たらないので落ちる）', () => {
-    // **「引用らしさ」で選り分けない。** 選り分けると、選り分けの網から漏れた印が
-    // 静かに検査されなくなる。**取ったうえで当たらないほうが、赤くなるだけ良い。**
+    // 「引用らしさ」で選り分けない: 網から漏れた印が静かに検査されなくなるため。
     const quotes = collectMarkedQuotes([
       { path: 'a.ts', content: `// [sdk-verbatim Options.env]\nconst a = 1;` },
     ]) as Quote[];
@@ -124,7 +105,6 @@ describe('check-sdk-quotes: findQuoteDefects', () => {
   });
 
   it('⚠️ これが本題: 版が上がって文言が変わった引用を落とす（#639 で実際に起きた形）', () => {
-    // 0.3.259 の文言。0.3.261 では消えている。
     const quotes = quoteOf(
       [
         `// [sdk-verbatim SDKBackgroundTasksChangedMessage.ambient]`,
@@ -179,41 +159,15 @@ describe('check-sdk-quotes: findQuoteDefects', () => {
     );
   });
 
-  /**
-   * Issue #793: 素の部分文字列一致（`sdkTypesText.includes(q.quote)`）は、
-   * union の末尾に値が足された変更を検出できない —— 古い引用（末尾の値まで）は、
-   * 値が増えた新しい宣言行の**接頭辞**としてそのまま当たり続ける。
-   *
-   * 実測（Issue 本文、2026-09-10、SDK 0.3.267）: `SDKAssistantMessageError` が
-   * 11値 → 12値（`cloud_credential_error` が末尾に追加）になったとき、
-   * `context-window-failure.ts` の `[sdk-verbatim SDKAssistantMessageError]` の
-   * 引用は11値のまま（末尾に `;` を持たない形）だったが、`check:sdk-quotes` は
-   * 緑のままだった。**この盲点は「ドリフトが実際に起きる形」（union は値が
-   * ほぼ必ず末尾に追記される）とちょうど重なっている。**
-   *
-   * ⚠️ **このテストは当初、現行の欠陥を仕様として固定したものだった**
-   * （`defects` が空になることをそのまま通す形）。**その後 `findQuoteDefects` に
-   * 「当たった箇所の隣が `|` に接続していないか」を見る境界チェック
-   * （`isUnionTailDrift`）を足したので、ここで期待値を反転する**
-   * （AGENTS.md「テストを弱めずに直す」―「現行の欠陥を仕様として固定している
-   * テストは反転させてよい」）。**このテストは消さず、経緯だけをこのコメントへ
-   * 追記した** —— 盲点の実測（Issue 本文の11→12値の話）は直した後も読む価値が
-   * 変わらないため。
-   */
   it('union 末尾に値が足されたら検出する（#793: 直す前は見逃していた欠陥）', () => {
     const quotes = quoteOf([`// [sdk-verbatim FakeUnion]`, `// > 'a' | 'b' | 'c'`].join('\n'));
-    // 実際の宣言は 'd' が末尾に足されて古くなっている（`FakeUnion` は
-    // `SDKAssistantMessageError` が11→12値になった実例を最小化した形）。
     const newDeclaration = "export declare type FakeUnion = 'a' | 'b' | 'c' | 'd';";
-    // 直した後: 1件（＝古い引用が union の一部にしか当たっていないと検出される）。
     const defects = findQuoteDefects(quotes, newDeclaration) as Defect[];
     expect(defects).toHaveLength(1);
     expect(defects[0]!.reason).toContain('#793');
   });
 
   it('union 先頭が削られても検出する（#793 の対称形: 隣接する `|` は前後どちらも見る）', () => {
-    // 引用は末尾3値のまま、実際の宣言は先頭に 'z' が増えている
-    // （＝引用の直前が `|` に接続しており、union の一部にしか当たっていない）。
     const quotes = quoteOf([`// [sdk-verbatim FakeUnion]`, `// > 'a' | 'b' | 'c'`].join('\n'));
     const newDeclaration = "export declare type FakeUnion = 'z' | 'a' | 'b' | 'c';";
     const defects = findQuoteDefects(quotes, newDeclaration) as Defect[];
@@ -229,7 +183,6 @@ describe('check-sdk-quotes: findQuoteDefects', () => {
 
   it('同じ文字列が複数箇所に出ても、1箇所でも `|` に接続しなければ欠陥にならない（誤検出を避ける）', () => {
     const quotes = quoteOf([`// [sdk-verbatim FakeUnion]`, `// > 'a' | 'b' | 'c'`].join('\n'));
-    // 1箇所目は末尾に 'd' が足された古い形、2箇所目は閉じた正しい形。
     const sdkTypesText = [
       "export declare type StaleCopy = 'a' | 'b' | 'c' | 'd';",
       "export declare type FakeUnion = 'a' | 'b' | 'c';",
@@ -237,29 +190,6 @@ describe('check-sdk-quotes: findQuoteDefects', () => {
     expect(findQuoteDefects(quotes, sdkTypesText)).toEqual([]);
   });
 
-  /**
-   * #995（#793 の残り）: `UNION_ENUMERATION_PATTERN` は「引用そのものが2値以上を
-   * 自己完結で列挙している」形だけを境界チェック（`isUnionTailDrift`）に回し、
-   * **単一値だけを引く引用**（`overageDisabledReason` の実例）は対象外にする。
-   *
-   * PR #990 の時点で確かめていたのは「union の**先頭**の値1つだけを引く」実例
-   * （`overageDisabledReason` 自身）だけで、「先頭以外（中間・末尾）の値を単独で
-   * 引く形が同じように安全か」は自動テストとして固定されていなかった
-   * （申告どおり「実物での確認はこの1件のみ」）。
-   *
-   * **単一値の引用は、union のどこにあっても安全である。** 理由は主張の種類が
-   * 違うことにある——単一値の引用は「この値が union の中に存在する」という
-   * 主張（要素の存在）であって、境界チェックが守る「これが union の全部だ」
-   * という主張（集合の完結性）ではない。要素の存在は union が伸びても揺るがない
-   * ので、境界チェックを掛けなくても正しい。**その値自体が消える・改名される
-   * 場合は、単純な部分文字列一致（`findQuoteDefects` の基礎チェック）がそのまま
-   * 検出する**——ここは `isUnionTailDrift` を経由していない。
-   *
-   * 全77件を実測した結果、`overageDisabledReason` 以外に「単一値だけを引く」形の
-   * 引用は repo 内に存在しなかった（#995 の調査）。このテストは、その形が
-   * 将来もう1つ増えても安全であり続けることを、位置（先頭・中間・末尾）を
-   * 変えて固定する。
-   */
   it.each([
     ['先頭', "'a'"],
     ['中間', "'c'"],
@@ -270,11 +200,8 @@ describe('check-sdk-quotes: findQuoteDefects', () => {
       const quotes = quoteOf([`// [sdk-verbatim FakeUnion5]`, `// > ${quote}`].join('\n'));
       const base = "export declare type FakeUnion5 = 'a' | 'b' | 'c' | 'd' | 'e';";
 
-      // 伸びる前の宣言そのもの。
       expect(findQuoteDefects(quotes, base)).toEqual([]);
-      // 末尾に新しい値が足されても（引用した値の位置に関わらず）安全。
       expect(findQuoteDefects(quotes, base.replace(';', " | 'f';"))).toEqual([]);
-      // 先頭に新しい値が足されても（引用した値の位置に関わらず）安全。
       expect(findQuoteDefects(quotes, base.replace("'a'", "'z' | 'a'"))).toEqual([]);
     },
   );
@@ -317,14 +244,6 @@ describe('check-sdk-quotes: 引用行の探し方（空行を跨ぐ）', () => {
 });
 
 describe('check-sdk-quotes: listScannableFiles（Issue #1817: 未追跡ファイルも見る）', () => {
-  /**
-   * **一時の git リポジトリを実際に作る**（本物の repo の根は汚さない。
-   * `makeTempDir` — `vitest.tmpdir.ts`）。symlink の重複除去がいまは
-   * `fs.lstatSync` に依存しているので、モードを文字列で模した `git ls-files -sz`
-   * の出力では測れない——実物のファイルシステムに対して測る必要がある
-   * （`scripts/git-scannable-files.test.ts` / `check-tracked-nul-bytes.test.ts`
-   * と同じ形）。
-   */
   async function initRepo(): Promise<string> {
     const dir = await makeTempDir('check-sdk-quotes-1817-');
     git(dir, 'init', '-q');
@@ -344,8 +263,6 @@ describe('check-sdk-quotes: listScannableFiles（Issue #1817: 未追跡ファイ
     await writeFile(join(dir, 'scripts', 'check-sdk-quotes-core.mjs'), 'ignored\n');
     await writeFile(join(dir, 'scripts', 'check-sdk-quotes.test.ts'), 'ignored\n');
     await writeFile(join(dir, 'scripts', 'verify-core.mjs'), 'kept\n');
-    // まだ `git add` していない（未追跡）。旧い実装（追跡済みだけ）ならここで
-    // 全部見えないが、直した実装は未追跡でも同じ絞り込みを掛けたうえで拾う。
     const files = listScannableFiles(dir) as { path: string }[];
     expect(files.map((f) => f.path)).toEqual(['scripts/verify-core.mjs']);
   });
@@ -355,7 +272,6 @@ describe('check-sdk-quotes: listScannableFiles（Issue #1817: 未追跡ファイ
     await writeFile(join(dir, 'tracked.ts'), '// [sdk-verbatim Foo]\n// > old quote\n');
     git(dir, 'add', '-A');
     git(dir, 'commit', '-qm', 'init');
-    // 新しい違反を、まだ `git add` していない新規ファイルへ仕込む（#1817 の再現）。
     await writeFile(join(dir, 'new-untracked.ts'), '// [sdk-verbatim Foo]\n// > this is wrong\n');
 
     const oldForm = execFileSync('git', ['ls-files', '-z'], {
@@ -367,8 +283,6 @@ describe('check-sdk-quotes: listScannableFiles（Issue #1817: 未追跡ファイ
       .filter((p) => p.length > 0);
     expect(oldForm).not.toContain('new-untracked.ts');
 
-    // 旧い実装が読んでいたのはこの集合だけなので、新規ファイルの違反は
-    // `collectMarkedQuotes` にすら渡らない ⟹ 検査は緑のまま（見落とし）。
     const oldFiles = oldForm
       .filter((p) => p.endsWith('.ts'))
       .map((p) => ({ path: p, content: readFileSync(join(dir, p), 'utf8') }));
@@ -391,8 +305,6 @@ describe('check-sdk-quotes: listScannableFiles（Issue #1817: 未追跡ファイ
     expect(files.map((f) => f.path)).toContain('new-untracked.ts');
 
     const quotes = collectMarkedQuotes(files);
-    // SDK 側には `old quote` はあるが `this is wrong` は無い ⟹ 新規ファイルの
-    // 引用だけが当たらない。
     const defects = findQuoteDefects(quotes, 'export declare type Foo = string; // old quote') as {
       path: string;
     }[];
@@ -402,16 +314,12 @@ describe('check-sdk-quotes: listScannableFiles（Issue #1817: 未追跡ファイ
   it('⚠️ symlink を外す（未追跡の symlink + 実体の両方があっても1回だけ数える）', async () => {
     const dir = await initRepo();
     await writeFile(join(dir, 'real.ts'), 'export const a = 1;\n');
-    // まだ `git add` していない symlink（未追跡）。以前の実装は git のモード
-    // 情報（`-s` の `120000`）に頼っていたため、未追跡のエントリにはモードが
-    // 無く、この形では重複を判定できなかった。
     symlinkSync('real.ts', join(dir, 'link.ts'));
 
     const files = listScannableFiles(dir) as { path: string }[];
     const paths = files.map((f) => f.path);
     expect(paths).toContain('real.ts');
     expect(paths).not.toContain('link.ts');
-    // 実体は1回だけ数える。
     expect(paths.filter((p) => p === 'real.ts')).toHaveLength(1);
   });
 
@@ -434,7 +342,6 @@ describe('check-sdk-quotes: listScannableFiles（Issue #1817: 未追跡ファイ
     await writeFile(join(dir, 'stays.ts'), 'export const a = 1;\n');
     git(dir, 'add', '-A');
     git(dir, 'commit', '-qm', 'init');
-    // `git rm` していない削除（index にはまだ在るが、作業ツリーには無い）。
     await rm(join(dir, 'gone.ts'));
 
     let files: { path: string }[] = [];
@@ -459,20 +366,7 @@ describe('check-sdk-quotes: 走査範囲', () => {
 });
 
 describe('check-sdk-quotes: resolveSdkTypes — 「見つからない」を緑にしない', () => {
-  /**
-   * **⚠️ ここを実物（本物の `createRequire`）で測ってはいけない。**
-   *
-   * 変異試験で分かったこと（2026-09-05 実測）: `anchors` を存在しないパスへ差し替える
-   * 変異を当てても、**vitest の中では `createRequire(...).resolve()` が成功してしまう**
-   * （vitest は自前のモジュール解決を差し込むので、素の node で
-   * `MODULE_NOT_FOUND` になる引き方でも解決が通る）。素の node で走る CLI
-   * （`pnpm check:sdk-quotes`）では同じ変異が exit 1 になるのに、**vitest 側では
-   * 緑のまま通る** — つまり「実物で当てる」だけでは、この分岐は測れない。
-   *
-   * **だから依存を注入して測る。** `resolveSdkTypes` が `createRequire` /
-   * `existsSync` / `readFileSync` を引数で受けているのは、この分岐を器に
-   * 依存せず固定するためである。**引数を減らして `import` に戻さないこと。**
-   */
+  // 実物（本物の `createRequire`）で測らず依存を注入する: vitest は自前のモジュール解決を差し込み、素の node なら `MODULE_NOT_FOUND` になる引き方でも解決が通ってしまうため。
   const throwingRequire = () => ({
     resolve() {
       const error = new Error("Cannot find module '@anthropic-ai/claude-agent-sdk'") as Error & {
@@ -543,7 +437,7 @@ describe('実物の検査（インストール済みの sdk.d.ts に当てる）
   const REPO_ROOT = join(import.meta.dirname, '..');
 
   it('印の付いた逐語がすべて、いまの SDK の sdk.d.ts に当たる', () => {
-    // **見つからなければ投げる。**スキップすると「0件」と「走らなかった」が混ざる。
+    // 見つからなければ投げる: スキップすると「0件」と「走らなかった」が混ざるため。
     const sdk = resolveSdkTypes(REPO_ROOT, createRequire, existsSync, readFileSync) as {
       typesPath: string;
       version: string;
@@ -552,12 +446,9 @@ describe('実物の検査（インストール済みの sdk.d.ts に当てる）
     expect(sdk.text.length).toBeGreaterThan(1000);
 
     const files = listScannableFiles(REPO_ROOT) as { path: string }[];
-    // **走査そのものが空振りしていないことを先に確かめる**（glob を壊した回に緑で通らない）。
     expect(files.length).toBeGreaterThan(100);
 
     const quotes = collectMarkedQuotes(files) as Quote[];
-    // **印が1つも無ければ、それは「腐らない」ではなく「見ていない」である。**
-    // 引用を本当に全部消したのなら、この行を意図して直すこと。
     expect(quotes.length).toBeGreaterThan(0);
 
     const defects = findQuoteDefects(quotes, sdk.text) as Defect[];

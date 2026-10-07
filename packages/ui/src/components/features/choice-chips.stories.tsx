@@ -3,7 +3,6 @@ import { useState } from 'react';
 
 import { ChoiceChips } from './choice-chips';
 
-/** 単一選択のチップ。常にちょうど1つが選ばれていて、解除は無い。 */
 const meta = {
   title: 'Features/ChoiceChips',
   component: ChoiceChips,
@@ -35,7 +34,6 @@ export const Default: Story = {
   render: () => <Demo />,
 };
 
-/** `value` が選択肢に無いとき（版のずれ）。落ちず、どれも選ばれていない見た目になる。 */
 export const UnknownValue: Story = {
   args: { label: '集計の窓', options: WINDOWS, value: '90d', onChange: () => undefined },
 };

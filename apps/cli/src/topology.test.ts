@@ -2,12 +2,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { captureStdout } from './test-support.js';
 
-/**
- * `alteroid topology` の文言と経路。
- *
- * 純粋関数（`renderTopology`）だけでなく、実際に端末へ書く `topologyCommand` も測る
- * （#361。`runners.test.ts` と同じ理由）。`fetch` を差し替えて本物の型付きクライアントを通す。
- */
 vi.mock('./target.js', () => ({
   resolveTarget: vi.fn(() =>
     Promise.resolve({ baseUrl: 'http://127.0.0.1:4517', headers: {}, note: null, remote: false }),
@@ -59,7 +53,6 @@ describe('formatAge', () => {
     expect(formatAge(ago(7200), NOW)).toBe('2時間前');
     expect(formatAge(ago(3 * 86_400), NOW)).toBe('3日前');
     expect(formatAge('not-a-date', NOW)).toBe('経過不明');
-    // 時計のずれで未来になっても負の値を出さない
     expect(formatAge(ago(-5), NOW)).toBe('0秒前');
   });
 });
@@ -102,7 +95,6 @@ describe('renderTopology', () => {
     });
     const out = renderTopology(withRunning as never, NOW);
     expect(out).toContain('実行中の道具 Bash（開始 3分前）');
-    // 既存の行はそのまま。
     expect(out).toContain('作業者 worker（種類ごとに束ねた1行）: 最後の道具 Edit（4秒前）');
     expect(out.replace(/ *実行中の道具 Bash（開始 3分前）\n/, '')).toBe(without);
   });
@@ -123,7 +115,6 @@ describe('renderTopology', () => {
     expect(out).not.toContain('idle');
     expect(out).toContain('runner: 名簿に載っていない');
     expect(out).toContain('マネージャー: 走行中・返事待ち・直近10分に終わった委譲は無い');
-    // 線の無い向きは「未観測」であって、経過0ではない
     expect(out).toContain('↓ 発言 —（未観測）   ↑ 応答 —（未観測）');
   });
 
@@ -161,7 +152,6 @@ describe('renderTopology', () => {
   it('読めない行が0件（欄が無い）なら、出力は変わらない（#2705）', () => {
     const base = renderTopology(view() as never, NOW);
     expect(base).not.toContain('読めなかった');
-    // 空配列が来ても（来ない契約だが）警告は出さない
     expect(renderTopology(view({ unreadable: [] }) as never, NOW)).toBe(base);
   });
 
@@ -245,7 +235,6 @@ describe('renderTopology', () => {
     expect(out).toContain('⚠ 枠(利用上限)で止まっている（');
     expect(out).toContain('2分前');
     expect(out).toContain('セッションは生きているので、鍵が回ればこの委譲は続く');
-    // 注記は止まった委譲の直下の行で、仕事なしの委譲の行には現れない。
     expect(block('mgr-blocked')).toBeGreaterThanOrEqual(0);
     const quietStart = lines.findIndex((l) => l.includes('mgr-quiet'));
     const quietEnd = lines.findIndex((l, i) => i > quietStart && l.includes('mgr-failed'));
@@ -300,7 +289,6 @@ describe('renderTopology', () => {
     const none = 'マネージャー: 走っているマネージャーはいません';
     const lines = (out: string) => out.split('\n');
 
-    // runner-a は空、runner-b は居る
     const some = renderTopology(view({ runners, managers: [m('m-b', 'runner-b')] }) as never, NOW);
     const a = lines(some).findIndex((l) => l.includes('runner runner-a'));
     expect(lines(some)[a + 1]).toContain(none);
@@ -308,13 +296,11 @@ describe('renderTopology', () => {
     expect(lines(some)[a + 3]).not.toContain(none);
     expect(some.match(/走っているマネージャーはいません/g)).toHaveLength(1);
 
-    // 全部空なら、それぞれに出る
     const all = renderTopology(view({ runners, managers: [] }) as never, NOW);
     expect(
       all.match(/runner-[ab] \[connected\][^\n]*\n[^\n]*走っているマネージャーはいません/g),
     ).toHaveLength(2);
 
-    // 枠で止まっている委譲だけの runner は、居ない側に数えない
     const stopped = renderTopology(
       view({ runners, managers: [m('m-a', 'runner-a', { usageStoppedAt: ago(120) })] }) as never,
       NOW,
@@ -447,7 +433,6 @@ describe('topologyCommand', () => {
       ],
     };
     const read = captureStdout();
-    // 本文が閉じると「デーモンが接続を閉じました」で落ちる（黙って止まらない）
     await expect(topologyCommand({ watch: true, json: true })).rejects.toThrow(
       'デーモンが接続を閉じました',
     );
