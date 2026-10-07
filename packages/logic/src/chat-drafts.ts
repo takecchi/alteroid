@@ -101,6 +101,66 @@ export function saveChatDraftMark(
   }
 }
 
+/**
+ * 入力欄に添えかけたファイルの件数と名前（#4019）。ファイルの実体は `sessionStorage` に置けないので、
+ * 再読み込みで失ったときに「何件失ったか」を言うためだけに控える。**送信の印（`ChatDraftMark`）とは別の鍵にする**:
+ * 印は本文の書きかけが在るときだけ戻す決まりで、添えかけは本文が空でも在る。
+ */
+export interface PendingAttachmentsNote {
+  count: number;
+  names: string[];
+}
+
+const PENDING_ATTACHMENTS_PREFIX = 'alteroid.chatPendingAttachments:';
+const PENDING_ATTACHMENT_NAMES_SHOWN = 5;
+
+export function loadPendingAttachmentsNote(
+  conversationId: string | undefined,
+): PendingAttachmentsNote | undefined {
+  try {
+    const raw = storage()?.getItem(`${PENDING_ATTACHMENTS_PREFIX}${conversationId ?? 'new'}`);
+    if (raw === null || raw === undefined) return undefined;
+    const value: unknown = JSON.parse(raw);
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
+    const { count, names } = value as Record<string, unknown>;
+    if (typeof count !== 'number' || !Number.isInteger(count) || count <= 0) return undefined;
+    return {
+      count,
+      names: Array.isArray(names)
+        ? names
+            .filter((name): name is string => typeof name === 'string')
+            .slice(0, PENDING_ATTACHMENT_NAMES_SHOWN)
+        : [],
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+export function savePendingAttachmentsNote(
+  conversationId: string | undefined,
+  note: PendingAttachmentsNote | undefined,
+): void {
+  const target = storage();
+  if (target === null) return;
+  const key = `${PENDING_ATTACHMENTS_PREFIX}${conversationId ?? 'new'}`;
+  try {
+    if (note === undefined || note.count <= 0) target.removeItem(key);
+    else {
+      target.setItem(
+        key,
+        JSON.stringify({
+          v: 1,
+          count: note.count,
+          names: note.names.slice(0, PENDING_ATTACHMENT_NAMES_SHOWN),
+        }),
+      );
+    }
+  } catch {
+    // 投げない: 残せなくても入力欄は動く。
+  }
+}
+
 export interface StoredEditDraft {
   text: string;
   attachments: MessageAttachment[];
@@ -169,6 +229,7 @@ export function clearChatDrafts(): void {
         key !== null &&
         (key.startsWith(PREFIX) ||
           key.startsWith(MARK_PREFIX) ||
+          key.startsWith(PENDING_ATTACHMENTS_PREFIX) ||
           key.startsWith(EDIT_PREFIX) ||
           key === APPROVAL_DRAFTS_KEY ||
           key === APPROVAL_LEFTOVERS_KEY)

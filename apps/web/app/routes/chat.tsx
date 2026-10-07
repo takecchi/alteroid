@@ -51,6 +51,7 @@ import {
   loadChatDraft,
   loadChatDraftMark,
   loadEditDrafts,
+  loadPendingAttachmentsNote,
   newClientMessageId,
   saveApprovalDrafts,
   saveApprovalLeftoverSources,
@@ -58,6 +59,7 @@ import {
   saveChatDraftMark,
   settleApprovalDraft,
   saveEditDraft,
+  savePendingAttachmentsNote,
   redactError,
 } from '@alteroid/logic';
 import type {
@@ -67,6 +69,7 @@ import type {
   ConversationMessage,
   MessageAttachment,
   PendingApproval,
+  PendingAttachmentsNote,
 } from '@alteroid/logic';
 
 import {
@@ -76,6 +79,7 @@ import {
   isApprovalWithdrawn,
 } from '~/components/approval-answer-card';
 import { LeftoverDrafts } from '~/components/approval-leftover-drafts';
+import { LeaveGuardScope, useReportDirty, type LeaveNotice } from '~/lib/leave-guard';
 import { formatRelativeAtMinute, useMinuteNow } from '~/lib/use-now';
 import { usePageVisible } from '~/lib/use-page-visible';
 
@@ -817,7 +821,28 @@ export function describeCloneInterruptOutcome(
   }
 }
 
-export default function Chat({ loaderData }: Route.ComponentProps) {
+/**
+ * 会話の切り替えは `/chat/:id` どうしの移動で、添えかけは画面がしまって戻す（`attachmentDrafts`）。
+ * 離れる確認の対象にするのは、チャットの外へ出る移動だけ。
+ */
+const staysInChat = (pathname: string) => pathname === '/chat' || pathname.startsWith('/chat/');
+
+const PENDING_ATTACHMENTS_LEAVE_NOTICE: LeaveNotice = {
+  title: '添えかけのファイルがあります',
+  description:
+    'このまま離れると、入力欄に添えたファイルは失われます（本文の書きかけと違い、ファイルは戻せません）。',
+  confirmLabel: '破棄して離れる',
+};
+
+export default function Chat(props: Route.ComponentProps) {
+  return (
+    <LeaveGuardScope staysOn={staysInChat}>
+      <ChatScreen {...props} />
+    </LeaveGuardScope>
+  );
+}
+
+function ChatScreen({ loaderData }: Route.ComponentProps) {
   const { conversationId } = loaderData;
 
   /*
@@ -1236,6 +1261,60 @@ export function ChatPane({
   const [attachmentDrafts, setAttachmentDrafts] = useState<
     Map<string | undefined, PendingAttachment[]>
   >(new Map());
+  /*
+   * 添えかけのファイルは、画面が外れると失われる（メモリだけ。`File` は残せない）。**会話にしまってあるぶんも含めて**
+   * 数え、在るあいだは離れる前の確認を挟む（#4019）。再読み込みで失ったときのために、件数と名前だけを会話ごとに
+   * `sessionStorage` へ控え（`chat-drafts`）、戻ったときに言う。
+   * 控えは、この画面が書いた鍵のうち空になったものだけ消す——読む前に空の状態で消すと、案内が出せない。
+   */
+  const heldAttachments = useMemo(() => {
+    const held = new Map<string | undefined, PendingAttachment[]>();
+    for (const [key, items] of attachmentDrafts) if (items.length > 0) held.set(key, items);
+    if (pending.length > 0) held.set(shownId, pending);
+    else held.delete(shownId);
+    return held;
+  }, [attachmentDrafts, pending, shownId]);
+  useReportDirty(
+    'chat-pending-attachments',
+    heldAttachments.size > 0,
+    PENDING_ATTACHMENTS_LEAVE_NOTICE,
+  );
+  const writtenNoteKeys = useRef(new Set<string | undefined>());
+  useEffect(() => {
+    for (const [key, items] of heldAttachments) {
+      writtenNoteKeys.current.add(key);
+      savePendingAttachmentsNote(key, {
+        count: items.length,
+        names: items.map((item) => sizedOf(item).name),
+      });
+    }
+    for (const key of writtenNoteKeys.current) {
+      if (heldAttachments.has(key)) continue;
+      writtenNoteKeys.current.delete(key);
+      savePendingAttachmentsNote(key, undefined);
+    }
+  }, [heldAttachments]);
+  const [lostPending, setLostPending] = useState<
+    ReadonlyMap<string | undefined, PendingAttachmentsNote>
+  >(new Map());
+  const lostPendingChecked = useRef(new Set<string | undefined>());
+  useEffect(() => {
+    if (lostPendingChecked.current.has(shownId)) return;
+    lostPendingChecked.current.add(shownId);
+    const note = loadPendingAttachmentsNote(shownId);
+    if (note === undefined || writtenNoteKeys.current.has(shownId)) return;
+    setLostPending((previous) => new Map(previous).set(shownId, note));
+  }, [shownId]);
+  const shownLostPending = pending.length === 0 ? lostPending.get(shownId) : undefined;
+  /** 添え直し始めたら控えは新しいもので置き換わる。言い終えた案内は、閉じる（または添え直す）まで出す。 */
+  const dismissLostPending = () => {
+    savePendingAttachmentsNote(shownId, undefined);
+    setLostPending((previous) => {
+      const next = new Map(previous);
+      next.delete(shownId);
+      return next;
+    });
+  };
   /** 添えようとして断った理由（個数・大きさ。クライアントの先行検査）。 */
   const [attachNotice, setAttachNotice] = useState<string>();
   const attachSeqRef = useRef(0);
@@ -4085,6 +4164,7 @@ export function ChatPane({
            * 理由なく落ちたり、再送／破棄の操作が見えなくなったりする。**並べて出す。**
            */
           attachNotice === undefined &&
+          shownLostPending === undefined &&
           unconfirmedText === undefined &&
           !hasShownFailure ? undefined : (
             <div className="flex flex-col gap-2">
@@ -4092,6 +4172,24 @@ export function ChatPane({
                 <p role="alert" className="text-xs break-words whitespace-pre-line text-warn">
                   {attachNotice}
                 </p>
+              )}
+              {shownLostPending !== undefined && (
+                <div
+                  role="status"
+                  data-lost-pending-attachments
+                  className="flex flex-wrap items-center gap-2 text-xs text-warn"
+                >
+                  <span>
+                    添えていたファイル {shownLostPending.count} 件
+                    {shownLostPending.names.length === 0
+                      ? ''
+                      : `（${shownLostPending.names.join('、')}）`}
+                    は戻せませんでした。必要なら添え直す
+                  </span>
+                  <Button size="sm" variant="ghost" onClick={dismissLostPending}>
+                    閉じる
+                  </Button>
+                </div>
               )}
               {unconfirmedText !== undefined && (
                 <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
