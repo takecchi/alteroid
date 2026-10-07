@@ -9,43 +9,14 @@ import { makeTempDir } from '../../../vitest.tmpdir.js';
 
 import { gitChildEnv } from './git-child-env.test-support.js';
 
-/**
- * `packages/core/scripts/write-canon.mjs` の版の出所判定
- * （`ALTEROID_BUILD_REV` 有り → `'build'` / 無し・git 作業ツリー有り →
- * `'workspace'` / どちらも無し → `''`）を、**実際に走るスクリプトそのもの**
- * を子プロセスで動かして固定する。
- *
- * **ロジックを切り出さない理由。** `revision()` はスクリプト内部の関数で、
- * `.mjs` は素の Node スクリプトなので TS の import を素通りできない
- * （`write-canon.mjs` は `pnpm build` の最初の一歩として tsup より前に走る —
- * `packages/core/package.json` の `build` スクリプト参照）。切り出して import
- * 可能な形にすると、「実際にビルドで走る経路」と「テストが読む経路」が
- * 分かれてしまい、切り出したコードが本物とずれても気づけなくなる
- * （AGENTS.md「テストが書けない構造」の条件——出力・挙動を変えずに切り出す、が
- * ここでは満たせない）。だから**子プロセスとして実際に起動し、生成された
- * `canon.ts` を読む**形にする。
- *
- * **本物の `packages/core/src/generated/canon.ts` には触らない。** スクリプトを
- * 隔離した一時ディレクトリへコピーし、そこで走らせる——`repoRoot` はスクリプト
- * 自身のファイル位置から算出される（`import.meta.url` 基準）ので、コピー先でも
- * 独立して動く。本物のツリーへ書けば、並行して走る他のテスト（`self.test.ts` 等、
- * `generated/canon.ts` を import するもの）と competing writes になる。
- */
-
 const here = dirname(fileURLToPath(import.meta.url));
 const realScriptPath = join(here, '..', 'scripts', 'write-canon.mjs');
 const realDocsDir = join(here, '..', '..', '..', 'docs');
 const CANON_FILES = ['north_star.md', 'PRD.md', 'architecture.md'];
 
-/** 隔離された1本の checkout を用意し、write-canon.mjs を走らせて生成物を読む。 */
 async function runIsolated(options: {
   env?: NodeJS.ProcessEnv;
   git?: boolean;
-  /**
-   * 指定があれば、新しく `makeTempDir` で作らずこのパスを隔離ルートとして使う
-   * （#1843: 呼び出し元が用意した「外側に git 作業ツリーを持つ祖先」の下へ
-   * ネストしたルートを渡すためのテスト用の口。`mkdir` 済みであること）。
-   */
   root?: string;
 }): Promise<{ revision: string; source: string; builtAt: string }> {
   const root = options.root ?? (await makeTempDir('write-canon-'));
@@ -71,11 +42,6 @@ async function runIsolated(options: {
     run(['commit', '-q', '-m', 'seed']);
   }
 
-  // **`ALTEROID_BUILD_REV` を積まない状態から積み直す。** 呼び出し元プロセス
-  // （vitest 自身）の環境にたまたま乗っていたら、`git` 経路を試すテストが静かに
-  // `build` へ倒れてしまう——`gitChildEnv()`（`PATH` + 偽 `HOME` だけ）は
-  // そもそもそれを持っていないので、消す手当てが要らない。器の本物の秘密も
-  // 継承しない（#1854。直上の `git()` 呼び出しと同じ allowlist）。
   const env: NodeJS.ProcessEnv = { ...gitChildEnv() };
   if (options.env) Object.assign(env, options.env);
 
@@ -117,9 +83,6 @@ describe('write-canon.mjs の版の出所判定', () => {
   });
 
   it('ALTEROID_BUILD_REV 無し・git 作業ツリー有り → source は workspace、値は実際の HEAD のフル sha', async () => {
-    // 「フル40桁・source が workspace」だけを見る——固定の期待 sha は無い
-    // （`runIsolated` が毎回新しい隔離リポジトリへ commit するので、値は
-    // 実行のたびに違う。それでよい：見たいのは形であって特定の値ではない）。
     const { revision, source } = await runIsolated({ git: true });
 
     expect(source).toBe('workspace');
@@ -129,24 +92,11 @@ describe('write-canon.mjs の版の出所判定', () => {
   it('ALTEROID_BUILD_REV 無し・git 作業ツリーでもない → 両方とも空文字（プレースホルダにしない）', async () => {
     const { revision, source } = await runIsolated({ git: false });
 
-    // **本体はここ。** 「取れなかった」ときに空文字以外の何か（'unknown' 等）へ
-    // 化けていないことを明示する。
     expect(revision).toBe('');
     expect(source).toBe('');
   });
 
-  // #1843: `TMPDIR` を作業ツリーの中（例: `.scratch/tmp`）に向けると、直上のテストが
-  // 偽の赤になっていた——`makeTempDir` が作る隔離ルート自身には `.git` が無くても、
-  // `git rev-parse` は既定で親ディレクトリを遡るため、`TMPDIR` の祖先に在る**外側の
-  // repo**（この alteroid 自身の作業ツリー）の HEAD を拾ってしまっていた。
-  //
-  // **`TMPDIR` を直接いじらない。** 環境変数に依存すると、この歯自体が「たまたま
-  // 走らせた器の `TMPDIR` の位置」次第で赤にも緑にもなり、CI で毎回同じ土俵に
-  // 立てない。代わりに「隔離ルートの祖先に git 作業ツリーが在る」状況そのものを
-  // 直接組み立てる——`TMPDIR` がどこを指していても、この状況は必ず再現できる。
   it('⭐ 隔離した作業ツリーの祖先ディレクトリが git 作業ツリーでも、隔離した作業ツリー自身に .git が無ければ空文字のまま（#1843: TMPDIR が作業ツリーの中にあると起きていた ascension を、TMPDIR に依らず固定する）', async () => {
-    // 「外側の repo」——TMPDIR が作業ツリーの中を指すときの alteroid 自身の
-    // 作業ツリーに相当する役。
     const outer = await makeTempDir('write-canon-outer-');
     const runOuterGit = (args: string[]): void => {
       execFileSync('git', args, { cwd: outer, stdio: 'ignore', env: gitChildEnv() });
@@ -158,7 +108,6 @@ describe('write-canon.mjs の版の出所判定', () => {
     runOuterGit(['add', '.']);
     runOuterGit(['commit', '-q', '-m', 'outer seed']);
 
-    // 隔離ルートは、その外側の repo の**中に**ネストする（`git init` はしない）。
     const nestedRoot = join(outer, 'nested', 'isolated-root');
     await mkdir(nestedRoot, { recursive: true });
 
@@ -169,17 +118,6 @@ describe('write-canon.mjs の版の出所判定', () => {
   });
 });
 
-/**
- * `CANON_BUILT_AT` — このイメージが**焼かれた時刻**（#1226）。
- *
- * **`revision()` とは事情が違う。** リビジョンは `.git` が無い・
- * `ALTEROID_BUILD_REV` も無ければ空文字に倒れるが、ビルド時刻
- * （`new Date().toISOString()`）はビルドを実行できている時点で必ず成功する
- * ——`git` の有無にも `ALTEROID_BUILD_REV` の有無にも依存しない。**だから
- * ここで測る本体は「常に非空の妥当な ISO8601 文字列が焼かれる」側である**
- * （`resolveBuildTime` 側が「定数が無い・空・壊れている」の3つを同じ `null` に
- * 倒すことは `revision.test.ts` が測る——ここは焼く側だけを見る）。
- */
 describe('write-canon.mjs が焼く CANON_BUILT_AT', () => {
   it('git 作業ツリーの有無や ALTEROID_BUILD_REV の有無に関わらず、常に妥当な ISO8601 (UTC) が焼かれる', async () => {
     const before = Date.now();
@@ -190,8 +128,6 @@ describe('write-canon.mjs が焼く CANON_BUILT_AT', () => {
     expect(builtAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
     const parsed = Date.parse(builtAt);
     expect(Number.isNaN(parsed)).toBe(false);
-    // **焼いた瞬間の実時刻であること。** 固定のプレースホルダ（epoch 0 等）へ
-    // 化けていないことを、テスト実行を挟んだ現実の時刻範囲で確かめる。
     expect(parsed).toBeGreaterThanOrEqual(before);
     expect(parsed).toBeLessThanOrEqual(after);
   });

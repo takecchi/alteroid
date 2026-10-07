@@ -6,16 +6,6 @@ import {
 } from './manager.js';
 import { captureStderr } from './testing.js';
 
-/**
- * `resolveSynthesizedNoticeWindowMs`（`ALTEROID_SYNTHESIZED_NOTICE_WINDOW_MS`）を
- * 固定する。`resolveWithheldReportFlushMs`（`withheld-report-flush-ms.test.ts`）と
- * 同じ作法——env は必ず引数で渡し、`process.env` を書き換えない。
- *
- * **既定は動かさない。** `manager.ts` の `SYNTHESIZED_NOTICE_WINDOW_MS`（3000ms）
- * と同じ値をここでも直書きしている——エクスポートされていない内部定数なので、
- * 試験側で独立して値を持つ（`withheld-report-flush-ms.test.ts` の `DEFAULT_MS`
- * と同じ理由）。
- */
 const DEFAULT_MS = 3_000;
 
 describe('resolveSynthesizedNoticeWindowMs', () => {
@@ -51,10 +41,6 @@ describe('resolveSynthesizedNoticeWindowMs', () => {
   });
 });
 
-/**
- * **「置かなかった」と「置いたのに読めなかった」を同じ沈黙に潰さない**
- * （`resolveWithheldReportFlushMs` の跡の describe と同じ理由・同じ形）。
- */
 describe('resolveSynthesizedNoticeWindowMs の跡（置いたのに読めなかったときだけ鳴る）', () => {
   it('非空だが数値として読めないときは跡を残す（値そのものは載せない）', async () => {
     const lines = await captureStderr(() => {
