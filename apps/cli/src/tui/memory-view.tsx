@@ -1,10 +1,3 @@
-/**
- * 「記憶」タブの描画（見た目だけ。キー操作は `app.tsx` の 1 つの `useInput` が持つ）。Ink の地雷への
- * 対処は `components.tsx` の冒頭と同じ。
- *
- * **一覧はタイトルと要旨だけ**（1 件 2 行: 種別・タイトル・slug・大きさ・更新 / 要旨）。本文は Enter で
- * 開く詳細で読む（`.claude/skills/listing-and-detail`）。可視窓の行だけを描く。
- */
 import { formatBytes } from '@alteroid/logic';
 import { Box, Text } from 'ink';
 import type { FC } from 'react';
@@ -17,23 +10,18 @@ import { oneLine } from './journal-format.js';
 import { sanitizeForTerminal } from '../redact.js';
 import { glyph, theme } from './theme.js';
 
-/** 一覧 1 件の行数。 */
 export const MEMORY_ITEM_ROWS = 2;
-/** 詳細の頭の行数（種別と slug・作成と更新・タイトル）。 */
 export const MEMORY_DETAIL_HEAD_ROWS = 3;
-/** 要旨の字数の上限（端末の幅でさらに切られる）。 */
 const DESCRIPTION_LIMIT = 200;
 
-/** 1 行目: 種別・タイトル・slug・大きさ・更新。 */
 export function memoryTitleLine(row: MemoryRow, now: number): string {
   const size = row.bytes === undefined ? '' : ` · ${formatBytes(row.bytes)}`;
-  // 外から来た文字列（title・slug・kind）の制御文字を端末へ出さない。組み立てたあとで掃除する。
+  // 組み立てたあとで掃除する: 外から来た文字列（title・slug・kind）の制御文字を端末へ出さないため
   return sanitizeForTerminal(
     `[${row.kind}] ${row.title}  ${row.slug}${size} · 更新 ${formatElapsedAgo(row.updatedAt, now)}`,
   );
 }
 
-/** 2 行目: 要旨（印は要旨の前。`alteroid memory list` と同じ `freshnessMarker`）。 */
 export function memoryDescriptionLine(row: MemoryRow): string {
   if (row.description === undefined) return ' ';
   return sanitizeForTerminal(
@@ -41,7 +29,6 @@ export function memoryDescriptionLine(row: MemoryRow): string {
   );
 }
 
-/** 一覧。窓は選択が見える範囲だけを描く。 */
 export const MemoryList: FC<{ state: MemoryState; height: number }> = ({ state, height }) => {
   const { rows, selected } = state;
   const errorLine = state.error !== null ? `⚠ ${state.error}` : null;
@@ -89,7 +76,6 @@ export const MemoryList: FC<{ state: MemoryState; height: number }> = ({ state, 
   );
 };
 
-/** 詳細の頭（常に `MEMORY_DETAIL_HEAD_ROWS` 行）。 */
 export const MemoryDetailHead: FC<{ detail: MemoryDetailState }> = ({ detail }) => {
   const doc = detail.doc;
   const row = detail.row;
@@ -111,7 +97,6 @@ export const MemoryDetailHead: FC<{ detail: MemoryDetailState }> = ({ detail }) 
   );
 };
 
-/** ログ直下の 1 行（常に 1 行）。 */
 export function memoryDetailStatus(
   detail: MemoryDetailState,
   hiddenBelow: number,

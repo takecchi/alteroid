@@ -10,18 +10,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { startTokenRotationWatch } from './token-watch.js';
 
-/**
- * 実時間を待たない（issue #2146）。
- *
- * ここより下のテストは、実時間の `setTimeout` で 30〜40ms 待ち、その間に
- * `tickMs: 5` の実時間の見張りが「十分な回数走った」ことを前提にして
- * `expect(...)` していた（`token-trial-watch.test.ts` と同じ族）。器が
- * 混んでイベントループが遅れると、待ちの間に見張りが走りきらず、早すぎる
- * `expect` が落ちうる。`vi.useFakeTimers()` を敷き、`settle()` を
- * `vi.advanceTimersByTimeAsync(ms)` に置き換える —— 見張りの内部の
- * `setTimeout` も同じ偽の時計に乗るので、指定した ms ぶんの目盛りが
- * 「実際に走ったこと」を保って進む（器の速さに依存しない）。
- */
 beforeEach(() => {
   vi.useFakeTimers();
 });
@@ -30,14 +18,6 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-/**
- * 認証トークンの見張り（`token-watch.ts`）。
- *
- * **測るのは「いつ聞くか」だけである。** 回すかどうか・どれへ回すかは回し手が
- * 持つので、ここでは偽の回し手が「何を何回聞かれたか」を記録する
- * （判定を2箇所へ置かないことがこの分担の目的なので、**判定を測る歯をここへ
- * 置かないこと自体が設計の表明である**）。
- */
 interface Fake {
   rotator: TokenRotator;
   calls: {
@@ -45,7 +25,6 @@ interface Fake {
     current?: { verdict: TokenCandidateVerdict; origin: TokenVerdictOrigin };
   }[];
   outcomes: TokenRotationOutcome[];
-  /** `reconsider` を待たせる（重なりの検査で使う）。 */
   hold: (gate: Promise<void>) => void;
 }
 
@@ -69,7 +48,6 @@ function fake(): Fake {
       return ignored;
     },
     restore: () => Promise.resolve({ kind: 'none' as const, why: '' }),
-    // この見張りは呼ばない（ダメ元の試しは token-trial-watch.ts の側）。
     recordTrialVerdict: () => Promise.resolve('unchanged' as const),
   } satisfies TokenRotator;
   return {
@@ -82,7 +60,6 @@ function fake(): Fake {
   };
 }
 
-/** 偽の時計を5ms進める（`run` は同期では終わらない。マイクロタスクも一緒に流れる）。 */
 async function settle(): Promise<void> {
   await vi.advanceTimersByTimeAsync(5);
 }
@@ -96,7 +73,6 @@ const OK: AccountUsageState = {
   },
 };
 
-/** 取れた枠が全部使い切られていて、課金枠も使えない ⟹ `judgeTokenCandidate` は `unusable`。 */
 const EXHAUSTED: AccountUsageState = {
   state: 'ok',
   usage: {
@@ -145,13 +121,10 @@ describe('見張り: 契機を回し手へ渡す', () => {
     await settle();
     watch.stop();
 
-    // **1回だけ。** 落ちた分は目盛りが拾う（`MIN_RECONSIDER_GAP_MS` の doc）。
     expect(f.calls).toHaveLength(1);
   });
 
   it('走っている最中の突つきは溜めて、終わってから1回だけ拾う', async () => {
-    // **畳むのは probe を焼かないためであって、契機を無かったことにするためでは
-    // ない。** `PUT /tokens` の直後に見直しが1回走る、がここで保証される。
     const f = fake();
     let open: () => void = () => undefined;
     f.hold(
@@ -170,7 +143,6 @@ describe('見張り: 契機を回し手へ渡す', () => {
     await settle();
     expect(f.calls).toHaveLength(1);
 
-    // 走っている最中に3回突つく。
     watch.poke('pool_changed');
     watch.poke('runner_connected');
     watch.poke('pool_changed');
@@ -179,7 +151,6 @@ describe('見張り: 契機を回し手へ渡す', () => {
     await settle();
     watch.stop();
 
-    // **溜めた分は1回に畳む**（同じ結論を何周も出さない）。最初に溜まった契機が残る。
     expect(f.calls.map((call) => call.reason)).toEqual(['startup', 'pool_changed']);
   });
 
@@ -216,8 +187,6 @@ describe('見張り: 契機を回し手へ渡す', () => {
   });
 
   it('reconsider が落ちてもタイマーを止めない', async () => {
-    // **落ちたことは見張りが跡を残す。** `onOutcome` へ届かない回なので、
-    // あちらに任せると「見直しが一度も走っていない」が誰からも見えない。
     const calls: TokenReconsiderReason[] = [];
     const rotator = {
       observe: () =>
@@ -260,7 +229,6 @@ describe('見張り: 枠の観測を judgeTokenCandidate へ通す', () => {
     expect(f.calls).toHaveLength(1);
     expect(f.calls[0]?.reason).toBe('account_probe');
     expect(f.calls[0]?.current?.verdict.verdict).toBe('unusable');
-    // **身元を運ばない観測**（測った鍵の身元が無ければ世代を照合しない）。
     expect(f.calls[0]?.current?.origin).toEqual({ source: 'account_probe' });
   });
 
@@ -301,9 +269,6 @@ describe('見張り: 枠の観測を judgeTokenCandidate へ通す', () => {
   });
 
   it('probe が失敗した観測は undecidable として渡る（unusable へ丸めない）', async () => {
-    // **器が混んでいる回に現役を冷却へ入れてしまわない**ことが、この経路で
-    // いちばん重要な性質である（`judgeTokenCandidate` の「迷ったら unusable に
-    // しない」）。
     const f = fake();
     const watch = startTokenRotationWatch({
       rotator: f.rotator,
@@ -344,7 +309,6 @@ describe('見張り: 枠の観測を judgeTokenCandidate へ通す', () => {
 
     expect(f.calls).toHaveLength(2);
     expect(f.calls[1]).toEqual({ reason: 'account_probe' });
-    // **判定は付いていない**（記録だけで判定し直す）。
     expect(f.calls[1]?.current).toBeUndefined();
   });
 });
@@ -442,10 +406,6 @@ describe('見張り: ターンの成功を2本目の生産者へ渡す（#681 (1
     await settle();
     watch.stop();
 
-    // **2本目は無い。** `pending` は `TokenReconsiderReason` しか運べないので、
-    // ここで溜めると `current`（＝世代）の落ちた `'turn_succeeded'` が後から
-    // 走る。その形は `reconsider` の世代の門も「成功では回さない」分岐も
-    // 素通りして**通常の回転判定へ落ちる** —— 成功が回す契機に化ける。
     expect(f.calls).toHaveLength(1);
     expect(f.calls.map((call) => call.reason)).toEqual(['startup']);
   });

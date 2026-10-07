@@ -24,37 +24,13 @@ import type { Db } from './db.js';
 import { stripNulls, toNumber } from './db.js';
 import { journal } from './schema.js';
 
-/**
- * 日誌 = 追記専用のテーブル。
- *
- * 書き換えの口を用意しないのは fs 版と同じ理由である。「聞かずに実行した判断は
- * 必ず日誌に残る」ことが人間の事後否定＝最終承認の実体なので、後から消せる形に
- * しない（PRD「権限境界」）。
- */
-/**
- * **`entry`（jsonb）には、列として持っている `id` / `at` / `type` を書かない**
- * （issue #1311 §1-d）。
- *
- * 3つとも列（`journal.id` / `journal.at` / `journal.type`）から完全に復元できるので、
- * `entry` にも持つのは同じ値の二重持ちである。器の中の PostgreSQL 17.11 で測った
- * 値で、1行あたり heap を約 119 バイト食っていた（#1311 §1-d。日誌は1日に約200万行
- * 積まれる）。**情報は1ビットも失われない** —— 読むときに列から組み立て直す
- * （`restoreEntry`）。
- *
- * ⚠️ **既に在る行は書き換えない**（追記専用の契約）。古い行は `entry` に3つを
- * 持ったままで、`restoreEntry` はそちらを優先する（書いた時点の値をそのまま返す）。
- * ⟹ 新旧どちらの行も同じ形で読める。
- *
- * ⚠️ **本番 DB へ直に SQL を打つ人へ**: この変更より後の行は `entry->>'id'` /
- * `entry->>'at'` / `entry->>'type'` が空である。列（`id` / `at` / `type`）を使うこと。
- */
+// `entry` に `id` / `at` / `type` を書かない: 列から復元できる二重持ちで、日誌は行数が多く heap を食うため。
 function withoutRowColumns(entry: JournalEntry): Omit<JournalEntry, 'id' | 'at' | 'type'> {
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const { id, at, type, ...rest } = entry;
   return rest;
 }
 
-/** 読むときの選択。`restoreEntry` が列から `id` / `at` / `type` を組み立て直す。 */
 const ROW_SELECTION = {
   id: journal.id,
   at: journal.at,
@@ -62,11 +38,7 @@ const ROW_SELECTION = {
   entry: journal.entry,
 };
 
-/**
- * 列と `entry` から、書いたときの `JournalEntry` の形を組み立て直す。
- * **`entry` が3つを持っていればそちらを優先する**（`withoutRowColumns` より前に
- * 書かれた行。書いた時点の値を1文字も変えずに返すため）。
- */
+// `entry` が3つを持っていればそちらを優先する: 古い行は書いた時点の値をそのまま返すため。
 function restoreEntry(row: { id: string; at: Date; type: string; entry: unknown }): unknown {
   const stored =
     typeof row.entry === 'object' && row.entry !== null && !Array.isArray(row.entry)
@@ -83,15 +55,13 @@ export class PgJournalStore implements JournalStore {
   }
 
   async append(input: JournalEntryInput): Promise<JournalEntry> {
-    // 本文の NUL は落として残す（issue #3011）。返り値も fs・インメモリと同じく落とした後の形にする。
     const entry = journalEntrySchema.parse({
       ...stripNulDeep(input),
       id: randomUUID(),
       at: new Date().toISOString(),
     });
 
-    // PostgreSQL は NUL を含む文字列を受け付けない。落とさずに投げると挿入ごと
-    // 失敗し、呼び出し側（`#journal`）が握り潰すので**記録が静かに消える**。
+    // NUL を落とす: 投げると挿入ごと失敗し、呼び出し側が握り潰して記録が静かに消えるため。
     await this.#db.insert(journal).values({
       id: entry.id,
       at: new Date(entry.at),
@@ -102,41 +72,18 @@ export class PgJournalStore implements JournalStore {
     return entry;
   }
 
-  /**
-   * `order` に応じた順（既定 `desc` ＝新しい順＝追記の逆順）。同じ時刻に
-   * 並んだ分も `seq`（bigserial）が追記順を保つ。
-   *
-   * **`after`（issue #432 の2本目）は `where` 節の一部として、`types` /
-   * `with` / `since` / `until` と同じ `and(...)` へ足す。** SQL の
-   * `WHERE` は宣言した条件をまとめて1つの述語として評価してから
-   * `ORDER BY` / `LIMIT` を掛けるので、この形にするだけで「錨の位置は
-   * 絞り込みより前・`limit` より前で決まる」という契約が自然に満たされる
-   * ——`limit` の後で錨を探す・絞り込んだ後の集合の中だけで錨を探す、
-   * という壊れ方をする余地が構造的に無い。
-   */
   async list(query: JournalQuery = {}): Promise<JournalEntry[]> {
     return (await this.listPage(query)).entries;
   }
 
-  /**
-   * `list()` の本体。**続きの有無と次の頁の継続点**も返す（Issue #2604 / #2605）。
-   *
-   * SQL は `limit + 1` 行を取る。余った1行があれば先に行が在る——**形が合わず
-   * 捨てる行も数える**ので、読めた件数が `limit` に満たなくても、頁が空でも、
-   * 続きを正しく言える。継続点は返す `limit` 行（捨てた行を含む）の最後の行で、
-   * 捨てた行も `id` と `at` が一致する行としては在るので `after` の錨になる。
-   */
   async listPage(query: JournalQuery = {}): Promise<JournalPage> {
     const order = query.order ?? 'desc';
 
-    // **錨の `seq` は絞り込み（types/with/since/until）を一切通さずに引く。**
-    // `id` と `at` の両方が一致する行が無ければ `JournalAnchorNotFoundError`
-    // を投げる——`id` だけの一致では fs（`at` からファイルを決める）と答えが
-    // 揃わない（`JournalQuery.after` の doc）。
+    // 錨の `seq` を絞り込みに通さない。`id` だけの一致にしない: fs（`at` からファイルを決める）と答えが揃わないため。
     let afterSeq: number | undefined;
     if (query.after !== undefined) {
       const after = query.after;
-      // 読むだけの口の NUL（issue #3011）。NUL を含む鍵の行は存在しえない（書き込みが断る）ので「無い」。DB に投げると NUL を含む text を受け付けずエラーになる。
+      // NUL を含む id を DB に投げない: text が NUL を受け付けずエラーになるため。
       if (hasNul(after.id)) {
         throw new JournalAnchorNotFoundError(
           `after で指定された行（id=${after.id}, at=${after.at}）が見つからない`,
@@ -159,34 +106,13 @@ export class PgJournalStore implements JournalStore {
     const filters = [
       ...(query.since === undefined ? [] : [gte(journal.at, new Date(query.since))]),
       ...(query.until === undefined ? [] : [lte(journal.at, new Date(query.until))]),
-      // **`types: []`（空配列）も「絞らない」ではなく「どれにも当たらない」
-      // へ倒す（issue #425）。すぐ下の `with` と同じ形——`length === 0` を
-      // 特別扱いする条件を持っていたのは `types` だけだった。空配列が
-      // そのまま `inArray` へ渡り、drizzle-orm の `inArray` が空配列に対して
-      // `sql\`false\`` を返す（下の `with` のコメント参照）ので、0件という
-      // 契約が構造的に満たされる。
+      // 空配列を「絞らない」へ倒さない: `inArray` が空配列に `false` を返すので、どれにも当たらない（0件）にする。
       ...(query.types === undefined ? [] : [inArray(journal.type, query.types)]),
-      // **`with` は `.limit()` より前（この `where` 節）で効かせる**
-      // （issue #418 の穴の本体）。`entry` は jsonb なので `->>'with'` で
-      // 引く — `exchange` を持たない種別ではこの式が `null` を返すので、
-      // `inArray` の `IN (...)` には（NULL は何とも一致しない SQL の規則により）
-      // 自動で当たらない。`types` を明示しなくても非 exchange が落ちる理由は
-      // ここにある。
-      //
-      // `query.with` が `[]`（空配列）のとき、drizzle-orm の `inArray` は
-      // `sql\`false\`` を返す（`drizzle-orm@0.45.2` の
-      // `sql/expressions/conditions.js` の `inArray` 実装。空配列を
-      // `in ()` という不正な SQL へ落とさないための特別扱い）ので、
-      // 0件という契約がそのまま満たされる。
+      // `.limit()` の後で絞らない: `where` 節で効かせる。
       ...(query.with === undefined ? [] : [inArray(sql`(${journal.entry}->>'with')`, query.with)]),
-      // **`q` も `where` 節（＝ `limit` より前）で効かせる**（issue #250。`with` と
-      // 同じ段）。組み立ては `journalSearchFieldMatchesSql` / `likePattern`。
-      // NUL を含む q に一致する行は存在しえない（書き込みが落とす。issue #3011）ので0件。
       ...(query.q === undefined
         ? []
         : [hasNul(query.q) ? sql`false` : journalSearchMatches(query.q)]),
-      // **`order` の向きに応じて `gt` / `lt` を切り替える。** `desc` は錨より
-      // 古い側（`seq` が小さい側）、`asc` は錨より新しい側（`seq` が大きい側）。
       ...(afterSeq === undefined
         ? []
         : [order === 'desc' ? lt(journal.seq, afterSeq) : gt(journal.seq, afterSeq)]),
@@ -197,8 +123,6 @@ export class PgJournalStore implements JournalStore {
       .from(journal)
       .where(filters.length === 0 ? undefined : and(...filters))
       .orderBy(order === 'desc' ? desc(journal.seq) : asc(journal.seq))
-      // 余りの1行は「続きが在る」を知るためだけに取る（返さない）。
-      // `limit: 0` は従来どおり 0 のまま渡す（0件の契約。#425）。
       .limit(
         query.limit === undefined
           ? Number.MAX_SAFE_INTEGER
@@ -207,20 +131,15 @@ export class PgJournalStore implements JournalStore {
             : query.limit,
       );
 
-    // `limit` が未指定・0 以下の呼びに「続き」は無い（全件／0件を求めている）。
     const pageLimit = query.limit !== undefined && query.limit > 0 ? query.limit : undefined;
     const hasMore = pageLimit !== undefined && rows.length > pageLimit;
     const pageRows = pageLimit === undefined ? rows : rows.slice(0, pageLimit);
     const lastRow = pageRows[pageRows.length - 1];
 
     const found: JournalEntry[] = [];
-    // **この呼び出し1回ぶんのローカルな器。** `PgJournalStore` のインスタンスへ
-    // 状態を持たせない（この `for` でループが完結するので、これで足りる。
-    // Issue #224）。
+    // インスタンスに状態を持たせない: 呼び出し1回ぶんのローカルな器で足りるため。
     const dropped = new Map<string, number>();
     for (const row of pageRows) {
-      // 壊れた行があっても日誌全体を読めなくしない（fs 版と同じ扱い）。
-      // ただし飛ばしたことは跡に残す——`get` と扱いを変えない。
       const restored = restoreEntry(row);
       const parsed = journalEntrySchema.safeParse(restored);
       if (parsed.success) {
@@ -242,9 +161,7 @@ export class PgJournalStore implements JournalStore {
     };
   }
 
-  /** id で1件引く（`id` は一意索引なので1行で当たる）。 */
   async get(id: string): Promise<JournalEntry | null> {
-    // 読むだけの口の NUL（issue #3011）。NUL を含む鍵の行は存在しえない（書き込みが断る）ので「無い」。DB に投げると NUL を含む text を受け付けずエラーになる。
     if (hasNul(id)) return null;
     const rows = await this.#db
       .select(ROW_SELECTION)
@@ -256,8 +173,6 @@ export class PgJournalStore implements JournalStore {
     const restored = restoreEntry(row);
     const parsed = journalEntrySchema.safeParse(restored);
     if (parsed.success) return parsed.data;
-    // `list()` と同じ道具・同じ扱い（Issue #224）——1件だけでも「飛ばすが
-    // 跡は残す」を崩さない。
     const dropped = new Map<string, number>();
     noteDroppedJournalRow(
       dropped,
@@ -266,16 +181,10 @@ export class PgJournalStore implements JournalStore {
       byteLength(row.entry),
     );
     noteDroppedJournalRowsSummary(dropped);
-    // 行は在る。「無い」（`null`）と言わない（issue #3288。fs と揃える）。
+    // `null` を返さない: 行は在るため。
     throw new UnreadableJournalEntryError({ id });
   }
 
-  /**
-   * 日誌の地平（`JournalStore.oldestAt` の doc、issue #1510）。
-   *
-   * `journal_at_idx`（`schema.ts`）に乗る `ORDER BY at ASC LIMIT 1` — 索引
-   * スキャンで先頭の1行だけを取るので、テーブル全体の行数に依存しない。
-   */
   async oldestAt(): Promise<string | null> {
     const rows = await this.#db
       .select({ at: journal.at })
@@ -285,86 +194,28 @@ export class PgJournalStore implements JournalStore {
     return rows[0]?.at.toISOString() ?? null;
   }
 
-  /** 全件を消す（`JournalStore.clear` の doc）。 */
   async clear(): Promise<number> {
     const removed = await this.#db.delete(journal).returning({ seq: journal.seq });
     return removed.length;
   }
 }
 
-/**
- * jsonb から読み出した（既に解かれた）値のバイト数を測る。**pg の駆動子は
- * `entry` を渡す時点で JSON を JS の値へ解いてしまっているので、fs 版
- * （生の行文字列の長さ）とは測り方が違う** —— 一度 `JSON.stringify` へ
- * 戻して、その UTF-8 バイト数を数える。**本文は載せない**という契約は保つ
- * （ここで作るのは数値だけで、跡へ渡す文字列そのものはここで作らない）。
- */
+// `JSON.stringify` へ戻して数える: pg の駆動子は渡す時点で JSON を解いてしまい、生の行文字列の長さが取れないため。
 function byteLength(value: unknown): number {
   return Buffer.byteLength(JSON.stringify(value) ?? 'null', 'utf8');
 }
 
-/**
- * `q`（本文を語で探す。issue #250）を SQL の述語へ落とす。
- *
- * ## 意味論の決め方 —— `ILIKE`。全文検索は採らない
- *
- * **先例（`conversation_read` の `q`）が「大文字小文字を区別しない単純な部分
- * 一致」だと決めており、それをそのまま踏襲する**（`packages/core/src/store.ts`
- * の `JournalQuery.q`、`packages/core/src/conversation.ts` の
- * `searchExchanges`）。**PostgreSQL の全文検索（`tsvector` / `to_tsquery`）は
- * 部分一致ではない** —— 語に分けて正規化して照合するので、
- *
- * - 語の途中には当たらない（`"コミット"` で `"コミットメッセージ"` に当たらない）
- * - 既定の parser は日本語を語に割れない（割るには `pg_bigm` / `pgroonga` 等の
- *   拡張が要る。この repo の日誌はほぼ日本語である）
- * - **fs / インメモリの実装と答えが揃わない**（3実装で揃える契約が成り立たない）
- *
- * ⟹ **「pg だけ検索の意味論が違う」ことになるので採らない。** 探し方を増やす
- * より、3口で同じ答えが返るほうが効く（`searchExchanges` の doc と同じ判断）。
- *
- * ## 索引は張っていない（**「忘れた」ではなく、そう決めた**）
- *
- * `ILIKE '%…%'` は前方一致ではないので B-tree では効かない。効かせるなら
- * `pg_trgm` の GIN 索引（拡張の作成 + `migrate.ts` への追記）が要るが、
- * **今回は張っていない。** 理由:
- *
- * - **`q` は常に他の絞り（`types` / `since` / `until` / `after`）と同じ
- *   `where` 節に並ぶ。** 既存の `journal_at_idx` / `journal_type_at_idx` が
- *   先に効いた後の行にだけこの述語が当たる
- * - **`pg_trgm` は拡張である。** `create extension` が要るので、権限の要求が
- *   `migrate.ts` の現在の前提（`if not exists` の DDL だけ）より1段強くなる
- * - **測っていない値のために構造を足さない。** 実データでの遅さはまだ観測して
- *   いない（AGENTS.md「取れない軸に 0 の行を作らない」の裏面 —— 要ると分かって
- *   から張る）
- *
- * ⚠️ **遅いと分かったらここへ戻ること。** 張るなら `pg_trgm` + GIN を
- * `migrate.ts` の配列末尾へ足す（`migrate.ts` 冒頭の「⚠️ 古い鍵の `create` は
- * 配列から消す」に当たらない、純粋な追加である）。
- */
+// 全文検索（`tsvector`）にしない: 部分一致にならず、日本語を語に割れず、fs / インメモリと答えが揃わないため。
+// 索引を張らない: `pg_trgm` は拡張で権限の要求が強くなり、実データでの遅さを測っていないため。
 function journalSearchMatches(q: string): SQL {
-  // 空の語は「絞らない」。欄ごとの `OR` に任せると、欄を持たない種別だけが落ちる（JS 側の `matchesJournalSearch` と同じ）。
+  // 空の語を欄ごとの `OR` に任せない: 欄を持たない種別だけが落ちるため。
   if (q === '') return sql`true`;
   const pattern = likePattern(q);
   return sql`(${journalSearchFieldMatchesSql(pattern)})`;
 }
 
-/**
- * 照合を SQL の式として組み立てる。**欄ごとに別々に `ILIKE` を当て、`OR` で繋ぐ**
- * （どれか1つの欄に含まれれば当たり。欄をまたいで当てない。issue #3289）。
- *
- * **`JOURNAL_SEARCH_FIELDS` から組み立てる。欄名をここへ書き写さない** ——
- * JS 側（`journalSearchValues` / `matchesJournalSearch`）と同じ定数から作るので、
- * 見る欄がずれない（`packages/core/src/journal-search.ts` の doc）。**書き写すと、
- * 片方だけ直して他方を忘れる形ができ、食い違いは特定の種別 × 特定の語のときだけ出る。**
- *
- * `coalesce(…, '')` は欄が無い（`->>` が NULL）ときに `false` へ倒すためである
- * （NULL のままだと `OR` の結果が NULL になりうる）。
- *
- * **欄名は SQL リテラルとして直に埋める**（`sql.raw`）。`->>` の右辺を
- * バインド変数にすると `jsonb ->> unknown` が `->>(jsonb,int)` と
- * `->>(jsonb,text)` のどちらか決まらず落ちる。埋める値は**このモジュールの
- * 定数だけ**で外から来ないが、それに依存しないよう下で形を検算している。
- */
+// 欄名をバインド変数にしない: `jsonb ->> unknown` が `->>(jsonb,int)` と `->>(jsonb,text)` のどちらか決まらず落ちるため、`sql.raw` で埋める。
+// 欄名を書き写さない: JS 側と同じ `JOURNAL_SEARCH_FIELDS` から作らないと、片方だけ直して見る欄がずれるため。
 function journalSearchFieldMatchesSql(pattern: string): SQL {
   return sql.join(
     JOURNAL_SEARCH_FIELDS.map(
@@ -375,16 +226,7 @@ function journalSearchFieldMatchesSql(pattern: string): SQL {
   );
 }
 
-/**
- * 欄名が「英字だけ」であることを、SQL へ埋める直前に確かめる。
- *
- * **いま埋めている値はすべて `JOURNAL_SEARCH_FIELDS`（このリポジトリの定数）
- * から来ていて外から来ない。** それでも検算するのは、`sql.raw` が「安全な値
- * だけが来る」という**呼び出し側の性質**に頼っているからである —— 定数の
- * 出所が将来変わったとき、頼っている性質が消えたことは呼び出し側からは
- * 見えない。**判定できないという第3の状態を持たず、形が違ったら投げる**
- * （AGENTS.md「静かに失敗する道具」）。
- */
+// 検算を外さない: `sql.raw` は呼び出し側が安全な値だけを渡す性質に頼っており、定数の出所が変わってもそれが消えたことが見えないため。
 function assertPlainFieldName(field: string): string {
   if (!/^[A-Za-z]+$/.test(field)) {
     throw new Error(`日誌の検索対象の欄名が英字だけではない: ${JSON.stringify(field)}`);
@@ -392,21 +234,7 @@ function assertPlainFieldName(field: string): string {
   return field;
 }
 
-/**
- * `q` を `ILIKE` のパターンへ包む。
- *
- * **`%` と `_` をワイルドカードとして通さない。** 塞がないと **pg だけ**が
- * `q: '50%'` で全件を返す（fs / インメモリは素の部分一致なので当たらない）
- * —— 3実装で揃える契約の一部そのものである（`JournalQuery.q` の doc、
- * `journal-search-contract.ts` が測る）。`\` 自身も先に倍にする（順序が逆だと、
- * 自分で足した `\` をもう一度倍にしてしまう）。
- *
- * **`ILIKE` の大文字小文字の畳み方は `lower()` と同じでロケールに依存し、
- * JS の `toLowerCase()` と完全には同じではない**（例: トルコ語ロケールの
- * `I`/`İ`）。日誌の本文（日本語・ASCII）では一致する。**ここは確認していない
- * 差である** —— 揃わない例が出たら、揃えるのは pg 側ではなく「照合を SQL から
- * 引き上げる」判断になる。
- */
+// `%` と `_` をワイルドカードとして通さない: pg だけが `q: '50%'` で全件を返すため。`\` を先に倍にする: 順序が逆だと足した `\` をまた倍にするため。
 function likePattern(q: string): string {
   return `%${q.replaceAll('\\', '\\\\').replaceAll('%', '\\%').replaceAll('_', '\\_')}%`;
 }

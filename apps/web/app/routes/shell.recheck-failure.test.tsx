@@ -1,11 +1,4 @@
 // @vitest-environment jsdom
-/**
- * ログイン済みで使っている最中の接続確認（`/health`）の再取得が失敗しても、画面を奪わない（issue #3063）。
- *
- * 初回（まだ一度も確認が取れていない）の失敗は従来どおり全体表示（shell.test.tsx が見ている）。
- * ここは「確認済みの後の再検証の失敗」——書きかけの入力欄が unmount で消えないこと、
- * 自動で再試行すること、失敗が続いたときだけ全体表示へ切り替わること。
- */
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -31,13 +24,8 @@ const CREDENTIAL: Credential = {
   createdAt: '2026-08-13T00:00:00.000Z',
 };
 
-const FULL_SCREEN = '接続先のサーバに繋がらない'; // 全体表示の見出し（フッターの同文の1行とは別）
-
-/**
- * 配下の画面。**`useAuth` を Shell とは別のインスタンスで使う**（設定・ログイン画面と同じ）。
- * 再検証をどのインスタンスが始めるかは購読順で決まる（子の effect が先）ので、判断を
- * インスタンスごとの state に置くと、実アプリでだけ破れる。
- */
+const FULL_SCREEN = '接続先のサーバに繋がらない';
+// useAuth を Shell とは別のインスタンスで使う: 再検証をどのインスタンスが始めるかは購読順で決まり、判断をインスタンスごとの state に置くと実アプリでだけ破れるため
 function Draft() {
   useAuth();
   return <input aria-label="下書き" />;
@@ -71,10 +59,7 @@ function routes(url: string): Response | undefined {
   }
   return undefined;
 }
-/**
- * 偽の時計を `ms` 進める。**fetch の失敗は実の非同期で返る**ので、小刻みに進めては
- * 実時計側（`setImmediate`。偽にしていない）で結果を取り込ませる。
- */
+// 小刻みに進めて実時計側で結果を取り込ませる: fetch の失敗は実の非同期で返るため
 async function advance(ms: number): Promise<void> {
   for (let left = ms, first = true; first || left > 0; left -= 2_500, first = false) {
     await act(async () => {
@@ -84,10 +69,7 @@ async function advance(ms: number): Promise<void> {
   }
 }
 
-/**
- * 入力欄に書きかけを打ち、`/health` を落としてフォーカスで再取得を起こす。
- * `fakeTimers`: RTL の待ちは実時計を要るので、時計を止めるのは入力を済ませた後にする。
- */
+// 時計を止めるのは入力を済ませた後にする: RTL の待ちは実時計を要するため
 async function typeDraftThenFailRecheck(fakeTimers = false): Promise<HTMLInputElement> {
   const input = await screen.findByLabelText<HTMLInputElement>('下書き');
   fireEvent.change(input, { target: { value: '書きかけ' } });
@@ -97,7 +79,6 @@ async function typeDraftThenFailRecheck(fakeTimers = false): Promise<HTMLInputEl
     window.dispatchEvent(new Event('focus'));
   });
   if (fakeTimers) {
-    // 最初の失敗が取り込まれる（帯が出る）まで、時計を進めずに実の非同期だけを回す。
     for (let i = 0; i < 200 && screen.queryByRole('status') === null; i++) await advance(0);
   }
   return input;
@@ -126,7 +107,6 @@ describe('確認済みの後の再検証の失敗（issue #3063）', () => {
 
     expect(await screen.findByRole('status')).toBeTruthy();
     expect(screen.queryByRole('heading', { name: FULL_SCREEN })).toBeNull();
-    // 同じ要素のまま（unmount されていない）で、値も残っている。
     expect(screen.getByLabelText<HTMLInputElement>('下書き')).toBe(input);
     expect(input.value).toBe('書きかけ');
   }, 30_000);

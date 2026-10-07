@@ -1,11 +1,4 @@
 // @vitest-environment jsdom
-/**
- * 「繋がらない」から自力で復帰できること。
- *
- * 配る成果物の既定の接続先は同一オリジンの `/api` である。デーモンを別のホストに
- * 置いている人は**初回に必ずここで詰まる**ので、詰まった画面から接続先を直せないと
- * 設定画面へ永久に到達できない（設定画面は門の内側にいる）。
- */
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -15,13 +8,6 @@ import { json, Providers, stubFetch, storeTestBaseUrl, TEST_BASE_URL } from '~/t
 
 import Shell from './shell';
 
-/**
- * **接続先を直す操作が「入力欄へ打って［適用］」から「追加欄へ打って［追加して接続］」に
- * 変わった**（接続先が一覧から選ぶ形になり、打つのは新しい先を足すときだけになったため）。
- *
- * このファイルが測っている保証は1文字も変えていない —— 「繋がらない画面から、
- * `localStorage` を手で触らずに復帰できること」である。押す物の名前だけが変わった。
- */
 function fixEndpointFromScreen(url: string): void {
   fireEvent.change(screen.getByLabelText('追加する接続先の URL'), { target: { value: url } });
   fireEvent.click(screen.getByRole('button', { name: '追加して接続' }));
@@ -69,32 +55,24 @@ afterEach(() => {
 
 describe('接続できないとき', () => {
   it('その画面で接続先を直して復帰できる（設定画面へ行けないため）', async () => {
-    // 既定の接続先（同一オリジンの `/api`）には誰も居ない。リモートだけが応答する。
-    // ※ この実行環境では相対 URL の組み立て自体が失敗するが、人間から見えるものは
-    //    同じ（繋がらない → 直す口が出る）なので、経路の分岐としてはこれで足りる。
     const stub = stubFetch((url) => (url.startsWith(REMOTE) ? json(HEALTH) : undefined));
 
     renderShell();
 
-    // まず「繋がらない」と、直す口が同じ画面に出ている
     expect(await screen.findByText('接続先のサーバに繋がらない')).toBeTruthy();
     const input = await screen.findByLabelText<HTMLInputElement>('接続先');
     expect(input).toBeTruthy();
 
-    // 中身はまだ出ていない
     expect(screen.queryByText('ダッシュボードの中身')).toBeNull();
 
-    // 別オリジンを保存する
     fixEndpointFromScreen(REMOTE);
 
-    // 保存されたら自動で進む（人間が読み込み直さなくてよい）
     expect(await screen.findByText('ダッシュボードの中身')).toBeTruthy();
     expect(localStorage.getItem('alteroid.apiBaseUrl')).toBe(REMOTE);
     expect(stub.calls.some((url) => url === `${REMOTE}/health`)).toBe(true);
   });
 
   it('誤った接続先を保存してしまっても、そこから直せる', async () => {
-    // 画面から復旧できないと、localStorage を手で消すしかなくなる。
     localStorage.setItem('alteroid.apiBaseUrl', 'http://typo.example');
     stubFetch((url) => (url.startsWith(REMOTE) ? json(HEALTH) : undefined));
 
@@ -137,10 +115,6 @@ const CREDENTIAL: Credential = {
   createdAt: '2026-08-13T00:00:00.000Z',
 };
 
-/**
- * フッターのログアウト（issue #1757）——`auth.logout()` の実体。
- * `use-auth.test.tsx` がフック本体を、ここは画面（ボタン・エラー表示）を見る。
- */
 describe('フッターのログアウト（issue #1757）', () => {
   beforeEach(() => {
     storeTestBaseUrl();
@@ -162,7 +136,6 @@ describe('フッターのログアウト（issue #1757）', () => {
     const button = await screen.findByRole('button', { name: 'ログアウト' });
     fireEvent.click(button);
 
-    // 鍵が消えている（`anonymous` へ落ちる）。
     await waitFor(() => {
       expect(localStorage.getItem(`alteroid.credential:${TEST_BASE_URL}`)).toBeNull();
     });
@@ -209,7 +182,6 @@ describe('フッターのログアウト（issue #1757）', () => {
     fireEvent.click(button);
 
     await screen.findByText(/サーバ側を失効させられなかった/);
-    // 鍵はまだ残っている（自動では捨てない）。
     expect(localStorage.getItem(`alteroid.credential:${TEST_BASE_URL}`)).not.toBeNull();
 
     fireEvent.click(screen.getByRole('button', { name: 'この画面から鍵だけを捨てる' }));

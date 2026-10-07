@@ -284,6 +284,31 @@ describe('/usage 画面', () => {
     expect(within(card).getByText('…残り 5 件は出していない')).toBeTruthy();
   });
 
+  it('日別は 21 日以上あっても、金額ではなく最近の 20 日を新しい順に出す', async () => {
+    // 古い日ほど高い（金額順なら古い 20 日が出る）。2026-08-01 .. 2026-08-25 の 25 日。
+    const rows = Array.from({ length: 25 }, (_, i) =>
+      row(100 - i, { date: `2026-08-${String(i + 1).padStart(2, '0')}` }),
+    );
+    stubUsage({ rows, since: '2026-08-01T00:00:00.000Z', beforeLedger: false });
+
+    renderUsage();
+
+    await screen.findByRole('heading', { name: '日別' });
+    const card = axisCard('日別');
+    const shown = within(card)
+      .getAllByText(/^2026-08-\d\d$/)
+      .map((el) => el.textContent);
+    expect(shown).toEqual(
+      Array.from({ length: 20 }, (_, i) => `2026-08-${String(25 - i).padStart(2, '0')}`),
+    );
+    expect(within(card).getByText('…残り 5 件は出していない')).toBeTruthy();
+
+    fireEvent.click(within(card).getByRole('button', { name: 'すべて表示する' }));
+    expect(within(card).getByText('2026-08-01')).toBeTruthy();
+    fireEvent.click(within(card).getByRole('button', { name: '最近の 20 日に戻す' }));
+    expect(within(card).queryByText('2026-08-01')).toBeNull();
+  });
+
   it('層別（誰が）と場所別（どこで）の内訳も出す', async () => {
     // **モデル名では層を見分けられない。** 2行とも同じモデル帯にしてあるのは、
     // `ALTEROID_CLONE_MODEL` を置いたときに実際に起きる並びだからである。
@@ -586,6 +611,8 @@ describe('/usage 画面の絞り込みが URL に載る（issue #2050）', () =>
     expect((screen.getByLabelText('認証トークン') as HTMLInputElement).value).toBe('tok-1');
     // 読める日付なので、読めなかった旨の注記は出ない（issue #2133）。
     expect(screen.queryByText(/読めないので、絞り込みに使っていません/)).toBeNull();
+    // 知っている layer / site にも注記は出ない（#3872）。
+    expect(screen.queryByText(/に指定された値/)).toBeNull();
 
     // `GET /usage` への問い合わせにも同じ値が載る。
     await waitFor(() => {
@@ -648,7 +675,7 @@ describe('/usage 画面の絞り込みが URL に載る（issue #2050）', () =>
     expect(router.state.historyAction).toBe('REPLACE');
   });
 
-  it('URL に知らない layer / site が書かれていても落ちず、「すべて」として扱う', async () => {
+  it('URL に知らない layer / site が書かれていても落ちず、「すべて」で出し、絞り込みに使っていないと注記する（#3872）', async () => {
     const stub = stubUsage({
       rows: [],
       since: '2026-08-01T00:00:00.000Z',
@@ -662,6 +689,17 @@ describe('/usage 画面の絞り込みが URL に載る（issue #2050）', () =>
     // 選択肢は既知のものしか無いので、不正な値は「すべて」（空文字）に落ちる。
     expect((screen.getByLabelText('誰が') as HTMLSelectElement).value).toBe('');
     expect((screen.getByLabelText('どこで') as HTMLSelectElement).value).toBe('');
+    // 黙って「すべて」の数字を出さない。どちらの欄の値かも分かる。
+    expect(
+      screen.getByText(
+        '「誰が」に指定された値（no-such-layer）は選べないので、絞り込みに使っていません',
+      ),
+    ).toBeTruthy();
+    expect(
+      screen.getByText(
+        '「どこで」に指定された値（no-such-site）は選べないので、絞り込みに使っていません',
+      ),
+    ).toBeTruthy();
 
     // 不正な値のまま `GET /usage` へ渡さない（API へ変な問い合わせを投げない）。
     await waitFor(() => {
@@ -671,6 +709,43 @@ describe('/usage 画面の絞り込みが URL に載る（issue #2050）', () =>
       expect(params.has('layer')).toBe(false);
       expect(params.has('site')).toBe(false);
     });
+  });
+
+  it('知らない layer だけのとき、layer の注記だけが出る。長い値は切る（#3872）', async () => {
+    stubUsage({ rows: [], since: '2026-08-01T00:00:00.000Z', beforeLedger: false });
+
+    renderUsage([`/?layer=${'x'.repeat(50)}&site=session`]);
+
+    await screen.findByText(/この期間の使用量の記録はありません/);
+    expect(
+      screen.getByText(
+        `「誰が」に指定された値（${'x'.repeat(40)}…）は選べないので、絞り込みに使っていません`,
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByText(/「どこで」に指定された値/)).toBeNull();
+    expect((screen.getByLabelText('どこで') as HTMLSelectElement).value).toBe('session');
+  });
+
+  it('layer / site が空文字・無し・既知の値のときは、注記を出さない（#3872）', async () => {
+    stubUsage({ rows: [], since: '2026-08-01T00:00:00.000Z', beforeLedger: false });
+
+    renderUsage(['/?layer=&site=']);
+    await screen.findByText(/この期間の使用量の記録はありません/);
+    expect(screen.queryByText(/に指定された値/)).toBeNull();
+  });
+
+  it('知らない layer のあとに選び直すと、URL が置き換わり注記が消える（#3872）', async () => {
+    stubUsage({ rows: [], since: '2026-08-01T00:00:00.000Z', beforeLedger: false });
+
+    const { router } = renderUsage(['/?layer=no-such-layer']);
+    await screen.findByText(/この期間の使用量の記録はありません/);
+    expect(screen.getByText(/「誰が」に指定された値/)).toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText('誰が'), { target: { value: 'manager' } });
+    await waitFor(() => {
+      expect(new URLSearchParams(router.state.location.search).get('layer')).toBe('manager');
+    });
+    expect(screen.queryByText(/に指定された値/)).toBeNull();
   });
 
   /**
@@ -841,7 +916,7 @@ describe('/usage 画面の絞り込みが URL に載る（issue #2050）', () =>
  *
  * デーモンの `usageQuery` は前後を検査せず単に0件になるので、画面が何も
  * 足さなければ「期間の指定が逆」と「その期間に本当に記録が無い」が同じ
- * 「その範囲には記録が無い。」に潰れる。`dateNotices` と同じ置き場・同じ
+ * 「その範囲には記録が無い。」に潰れる。`filterNotices` と同じ置き場・同じ
  * 見た目で1行足す——「記録が無い」自体は削らない（0件は事実として正しい）。
  */
 describe('/usage 画面の絞り込み欄（issue #2795）', () => {

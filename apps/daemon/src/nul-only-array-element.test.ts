@@ -4,12 +4,6 @@ import { beforeEach, describe, expect, it } from 'vitest';
 
 import { createApp } from './app.js';
 
-/**
- * 絞り込みの配列の要素（`POST /inbox/remove` の `sources`・`POST /archive/remove` の
- * `sessionIds`）が「NUL だけ」のとき、空文字の要素と同じく 400 で断るか（issue #3460）。
- * 入口の空の検査（`z.string().min(1)`）は NUL を落とす前の値で行われる。
- */
-
 const post = (body: unknown) => ({
   method: 'POST',
   headers: { 'content-type': 'application/json' },

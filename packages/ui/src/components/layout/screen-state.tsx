@@ -6,12 +6,6 @@ import { cn } from '@/lib/utils';
 import { DocumentTitle } from '../document-title';
 import { BrandMark } from './brand-mark';
 
-/**
- * 画面全体を1つの用件で占めるときの枠（繋がらない・確認中・ログイン）。
- *
- * 中身は真ん中の1列に置く。上に印を小さく出す——**どの道具の画面なのか**が、
- * 壊れているときほど要る（接続先を間違えて別のデーモンを見ている、など）。
- */
 export function ScreenState({
   title,
   children,
@@ -38,10 +32,6 @@ export function ScreenState({
   );
 }
 
-/**
- * 画面全体の「確認中」。文言が読み上げの本体で、輪は飾り（`common.tsx` の
- * `Spinner` と同じ扱い）。
- */
 export function ScreenLoading({ label = '読み込み中' }: { label?: string }) {
   return (
     <div className="flex min-h-dvh flex-col items-center justify-center gap-4">

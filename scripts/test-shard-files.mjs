@@ -1,12 +1,6 @@
 #!/usr/bin/env node
-/**
- * `pnpm test:shard-files <scope> <i>/<n>` —— vitest の `--shard` がどのテストファイルを
- * 割り当てるかを、テストを走らせずに1行1ファイルで出す。理由と仕組みは
- * `test-shard-files-core.mjs` の冒頭の doc に在る。
- *
- * JSON レポートは一時ディレクトリへ書かせて読み、読み終えたら消す（既定の
- * `.vitest/json/output.json` は `.gitignore` に入っていないので、repo の中に書かせない）。
- */
+// `pnpm test:shard-files <scope> <i>/<n>`: vitest の `--shard` が割り当てるテストファイルを、走らせずに1行1ファイルで出す。
+// JSON レポートは一時ディレクトリへ書かせる: 既定の `.vitest/json/output.json` は `.gitignore` に入っていないため。
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';

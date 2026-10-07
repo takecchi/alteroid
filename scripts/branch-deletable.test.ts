@@ -14,17 +14,6 @@ import {
   // @ts-expect-error -- 素の .mjs（型宣言を持たない build 用スクリプト）を読む
 } from './branch-deletable-core.mjs';
 
-/**
- * `branch-deletable` の歯。本物の `git grep` / `gh` は叩かない——合成した
- * テキスト・生出力の形で判定だけを確かめる（`check-no-attribution-trailers.test.ts`
- * と同じ理由）。
- *
- * ⭐ **とくに「枝（`名前`）は残る」の形が当たることを固定する**——これは
- * 2026-09-20 に削除された26本を、狭い定型句（「枝は残る」の完全一致）で
- * 測ったときに実際に取りこぼした形である（`fix/1130-pr-body-diff-claim-measurement`
- * と `ci/1171-railway-typecheck` が窓から落ち、8本→6本になった）。
- */
-
 describe('hasBranchWord / findRetentionWordHits', () => {
   it('「枝」「ブランチ」のどちらかで枝の話だと判定する', () => {
     expect(hasBranchWord('この枝は残す')).toBe(true);
@@ -110,7 +99,6 @@ describe('evaluateRetentionPromise', () => {
   });
 
   it('⚠️ 誤検出は仕様どおり当たる（文意が逆でも「枝」＋保持語の同居で当たる）', () => {
-    // 実測: chore/dependabot-config の本文は「この枝は残す理由が無い。削除してよい」
     const text = 'この枝は残す理由が無い。削除してよい。';
     const result = evaluateRetentionPromise(text);
     expect(result.promising).toBe(true);

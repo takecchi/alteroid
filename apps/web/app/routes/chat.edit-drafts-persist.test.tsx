@@ -1,10 +1,4 @@
 // @vitest-environment jsdom
-/**
- * #3707。発言ごとの編集の書きかけ（本文と、引き継ぐ添付の控え）を、本文の書きかけと同じ作法で
- * `sessionStorage` に残す。鍵は発言の id。間引く・元のままなら残さない・確定が通ったら消す・
- * ログアウトで消す。再読み込みの後は、その発言の鉛筆から書きかけを再開でき、書きかけの印も出る。
- * 待ちは偽のタイマーで進める。
- */
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider, useParams } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -107,7 +101,6 @@ describe('編集の書きかけを sessionStorage へ残す（#3707）', () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     fireEvent.click(pencil('一つ目'));
     write('一つ目を直している');
-    // 入力のたびには書かない。
     expect(sessionStorage.getItem(KEY('m1'))).toBeNull();
     settle();
     expect(JSON.parse(sessionStorage.getItem(KEY('m1')) ?? 'null')).toEqual({

@@ -33,6 +33,7 @@ import {
   memoryVersion,
   PracticeConflictError,
   practiceVersion,
+  ScheduleConflictError,
   ARCHIVE_REMOVED_BYTES_UNIT_NOTE,
   JOURNAL_SEARCH_UNCOVERED_LIST_MD,
   MCP_SERVER_NAME,
@@ -271,6 +272,7 @@ import {
   runnersListResponseSchema,
   runnersVacateCommandSchema,
   runnersVacateResponseSchema,
+  scheduleConflictResponseSchema,
   scheduleListResponseSchema,
   tokensPolicyUpdateRequestSchema,
   tokensReplaceResponseSchema,
@@ -1087,6 +1089,13 @@ const scheduleBody = z.object({
     .min(1)
     .refine((value) => stripNul(value).length > 0),
   spec: scheduleSpecSchema,
+  /**
+   * 任意（Issue #3821）。書き換える側が**読んだ時の版**（`GET /schedule` の `updatedAt`）。
+   * 書く瞬間の版と違えば書かずに 409。`null` は「読んだ時には無かった」（いまも無いときだけ
+   * 作れる）。**省略は従来どおり後勝ち**（クローンの道具・CLI を壊さない）。
+   * `memoryBody.ifMatch` / `practiceBody.ifMatch` と同じ形。
+   */
+  ifMatch: z.string().nullable().optional(),
 });
 
 /**
@@ -2489,6 +2498,34 @@ export function createApp(deps: AppDeps) {
       onlyUploadedBy: principal.kind === 'integration' ? uploaderOf(principal) : undefined,
       serializeKey: `externalEvent:${eventId}`,
     });
+  }
+
+  /**
+   * `bindEventAttachments` で結んだ後の `clone.postPersisted`。**受信箱へ書けなかった（`'unavailable'`）ときも、
+   * 投げたときも、結んだ添付を戻す。** 戻さないと、送り直し（新しい id）が `attachment_conflict` で断られ、
+   * 死んだ id に結ばれた添付は未結び付けの掃除の対象からも外れて期限まで残る（503 は「送り直してよい」の約束）。
+   * 戻すのはこの id に結んだ分だけ（`externalEventId` 指定）なので、ほかの宛先の結び付きには触れない。
+   */
+  async function postExternalPersisted(
+    event: Parameters<CloneHost['postPersisted']>[0],
+    refs: readonly { id: string }[],
+  ): Promise<Awaited<ReturnType<CloneHost['postPersisted']>>> {
+    const release = () =>
+      refs.length === 0
+        ? Promise.resolve()
+        : stores.attachments.unbind(
+            refs.map((ref) => ref.id),
+            { externalEventId: event.id },
+          );
+    let outcome;
+    try {
+      outcome = await clone.postPersisted(event);
+    } catch (error) {
+      await release();
+      throw error;
+    }
+    if (outcome === 'unavailable') await release();
+    return outcome;
   }
 
   // --- 稼働の地図 ---------------------------------------------------------
@@ -6557,17 +6594,20 @@ export function createApp(deps: AppDeps) {
         if (!attached.ok) return c.json(attached.body, attached.status);
         const at = new Date().toISOString();
         // **受信箱へ永続化できたときだけ 200 を返す**（#3679）。書けなかったら 503 で、受信箱のメモリにも積まない。
-        const outcome = await clone.postPersisted({
-          type: 'external',
-          id,
-          at,
-          source,
-          payload,
-          ...(principal.kind === 'integration'
-            ? { via: { keyId: principal.keyId, name: principal.name } }
-            : {}),
-          ...(attached.refs.length === 0 ? {} : { attachments: attached.refs }),
-        });
+        const outcome = await postExternalPersisted(
+          {
+            type: 'external',
+            id,
+            at,
+            source,
+            payload,
+            ...(principal.kind === 'integration'
+              ? { via: { keyId: principal.keyId, name: principal.name } }
+              : {}),
+            ...(attached.refs.length === 0 ? {} : { attachments: attached.refs }),
+          },
+          attached.refs,
+        );
         if (outcome === 'unavailable') return c.json(eventNotPersistedBody(), 503);
         // 稼働の地図の「外部サービス → クローン」を、受け付けた時刻で光らせる（#3676。
         // 日誌の external_event はクローンが取り出した時刻なので使わない。`topology-activity.ts` の冒頭）。
@@ -6657,17 +6697,20 @@ export function createApp(deps: AppDeps) {
         if (!attached.ok) return c.json(attached.body, attached.status);
         const at = new Date().toISOString();
         // **受信箱へ永続化できたときだけ 200 を返す**（#3679）。書けなかったら 503 で、受信箱のメモリにも積まない。
-        const outcome = await clone.postPersisted({
-          type: 'external',
-          id,
-          at,
-          source,
-          payload,
-          ...(principal.kind === 'integration'
-            ? { via: { keyId: principal.keyId, name: principal.name } }
-            : {}),
-          ...(attached.refs.length === 0 ? {} : { attachments: attached.refs }),
-        });
+        const outcome = await postExternalPersisted(
+          {
+            type: 'external',
+            id,
+            at,
+            source,
+            payload,
+            ...(principal.kind === 'integration'
+              ? { via: { keyId: principal.keyId, name: principal.name } }
+              : {}),
+            ...(attached.refs.length === 0 ? {} : { attachments: attached.refs }),
+          },
+          attached.refs,
+        );
         if (outcome === 'unavailable') return c.json(eventNotPersistedBody(), 503);
         // `POST /events` と同じ（#3676）。
         if (principal.kind === 'integration') {
@@ -6725,7 +6768,11 @@ export function createApp(deps: AppDeps) {
         summary: '継続中の依頼を仕込む・直す',
         description:
           '「定期的に〜しておいて」をクローンの記憶任せにせず、時刻が来れば必ず届く形で置く。' +
-          '同じ kind なら置き換わる（前回動いた時刻は保つ）。真実はストア側にあり、' +
+          '同じ kind なら置き換わる（前回動いた時刻は保つ）。' +
+          // **版（Issue #3821）。** 発火（claimRun）では `updatedAt` は動かない。
+          '任意の `ifMatch`（`GET /schedule` で読んだ時の `updatedAt`。無かったなら null）を付けると、' +
+          '版が違うときは書かずに 409。省略は従来どおり後勝ち。' +
+          '真実はストア側にあり、' +
           'スケジューラはそれを読み直すだけなので、デーモンを作り直しても残る。' +
           // **一覧を数え直さない（#701 / #756）。** ここは `RESERVED_SCHEDULE_KINDS` から
           // 導出する —— `memory_tidy` が足された後も2つのまま取り残されていた
@@ -6742,8 +6789,16 @@ export function createApp(deps: AppDeps) {
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
           409: {
-            description: '既定の定期ジョブの名前。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+            description:
+              '次の2つ。(1) 既定の定期ジョブの名前（`{ error }` だけ）。(2) `ifMatch`（読んだ時の版 =' +
+              ' `updatedAt`）が、いまの版と違う（読んでから書くまでの間に別の書き手が書いた、または' +
+              '消した。`null` を送ったのに既に在る場合も）。**何も書いていない。** `current` にいまの' +
+              '依頼を返す（消えていれば null）。見分けは `current` の鍵の有無。',
+            content: {
+              'application/json': {
+                schema: resolver(z.union([scheduleConflictResponseSchema, errorResponseSchema])),
+              },
+            },
           },
         },
       }),
@@ -6757,7 +6812,7 @@ export function createApp(deps: AppDeps) {
             : ''),
       })),
       async (c) => {
-        const { kind, request, spec } = c.req.valid('json');
+        const { kind, request, spec, ifMatch } = c.req.valid('json');
         if (RESERVED_SCHEDULE_KINDS.includes(kind)) {
           return c.json({ error: 'reserved kind' as const }, 409);
         }
@@ -6784,11 +6839,37 @@ export function createApp(deps: AppDeps) {
         // この隙間が無い。無ければ `null` — その場合だけ新規に作る。
         let edited: Awaited<ReturnType<Stores['schedules']['editRequest']>>;
         try {
-          edited = await stores.schedules.editRequest(kind, { request, spec }, now);
+          edited = await stores.schedules.editRequest(kind, { request, spec }, now, { ifMatch });
           if (edited === null) {
-            await stores.schedules.put({ kind, spec, request, createdAt: now, updatedAt: now });
+            // 版つき（`ifMatch: null`）なら「無いときだけ作る」を、ストアの排他の中で行う。
+            // （文字列の版で無い kind は、`editRequest` が衝突で投げているのでここへ来ない。）
+            await stores.schedules.put(
+              { kind, spec, request, createdAt: now, updatedAt: now },
+              ifMatch === undefined ? undefined : { ifMatch: null },
+            );
           }
         } catch (error) {
+          // **黙って上書きしない（Issue #3821）。** 書いていないので、先に積んだ
+          // 「設定しようとしている」を打ち消す（下の失敗と同じ形）。
+          if (error instanceof ScheduleConflictError) {
+            await appendJournalOrDrop(
+              stores,
+              {
+                type: 'decision',
+                decision: `人間が定期の依頼を設定できなかった（読んだ後に変わっていた）: ${kind}: ${request}`,
+                grounds: '人間が直接 API から仕込もうとしたが、読んだ版と違うので書いていない',
+              },
+              '定期の依頼の打ち消しの日誌',
+              `kind=${kind}`,
+            );
+            return c.json(
+              {
+                error: '継続中の依頼が読んだ後に変わっています（書き換えていません）' as const,
+                current: error.current,
+              },
+              409,
+            );
+          }
           // 日誌には「設定しようとしている」が残っているので、打ち消す
           // （grant の「アクセス許可付与の打ち消しの日誌」と同じ形）。
           await appendJournalOrDrop(

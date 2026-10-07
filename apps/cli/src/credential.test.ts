@@ -8,22 +8,6 @@ import { makeTempDir } from '../../../vitest.tmpdir.js';
 import { type ConfirmIo } from './confirm.js';
 import { captureStdout, pretendTty } from './test-support.js';
 
-/**
- * `alteroid credential` — マネージャーへ降ろす環境変数（名前→値の袋）。
- *
- * ここで固定するのは3つである:
- *
- * 1. **値をコマンドライン引数で受けない**（`argv` は他のプロセスから見える）
- * 2. **出力に値が1文字も出ない**（返るのは指紋だけ）
- * 3. **配布の結果を台ごとに出す**（畳んで1つの成否にしない）
- *
- * `token.test.ts` と同じ作法——`fetch` を `method + path` の応答表で差し替える。
- */
-/**
- * **`./target.js` は `resolveTarget` だけ差し替える。** `forbiddenKindOf` と
- * `describeAuthFailure` は**本物を使う**——403 の案内を分けているのはこの2つ
- * なので、ここを偽物にすると、この歯が測るのは偽物の分岐になる。
- */
 vi.mock('./target.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./target.js')>()),
   resolveTarget: () =>
@@ -73,7 +57,6 @@ beforeEach(async () => {
   replies = new Map();
   sent = [];
   stubFetch();
-  // 既定は「正本が空」。set は在るかを見るために先に GET /credentials を打つ（#3201）。
   setReply('GET', '/credentials', { status: 200, body: { credentials: [] } });
   dir = await makeTempDir('alteroid-cli-credential-');
 });
@@ -86,14 +69,6 @@ afterEach(async () => {
 const DUMMY = 'CRED-CLI-DUMMY';
 
 describe('alteroid credential list', () => {
-  /**
-   * **⚠️ このテストは 2026-10-06 に期待値を反転した。** 元の題: 「空なら、無いことと
-   * 「器の環境変数だけで走る」ことと置き方を言う」（元の期待: 「デーモン（クローン）の環境変数に
-   * 在るものだけで走ります」）。**器の環境変数を最後の土台にする経路を撤去した**ので
-   * （オーナー決定 2026-10-06）、空の正本のとき、マネージャーへ配られるものは**無い**。
-   * 元の文言を出し続けるのは嘘になる。**保証は弱くなっていない**——「空のときの状態を、実際の
-   * 挙動のとおりに言う」は同じで、実際の挙動が変わった。
-   */
   it('空なら、無いことと「配られるものは無い」ことと置き方を言う', async () => {
     setReply('GET', '/credentials', { status: 200, body: { credentials: [] } });
     const read = captureStdout();
@@ -107,15 +82,6 @@ describe('alteroid credential list', () => {
     expect(text).toContain('alteroid credential set <名前> --file <path>');
   });
 
-  /**
-   * **「器の環境変数が正本に勝つ」ことの名指し（#865・#1894。旗 `shadowsCloneEnv`）は撤去した
-   * （2026-10-06）。** この節にあった5本（食い違いの名指し・無ければ出ない・scope: app の2本・
-   * 混在）は、起こり得ない状態を測っていたので消した（勝つ側を撤去した。3点セットは PR 本文）。
-   *
-   * **代わりの歯: 古いデーモン（旗を返す版）につないでも、警告を出さない。** CLI とデーモンは
-   * 別々に更新されうるので、旗が応答に載ってくる版ずれが実在する。載っていても表示は変えない
-   * （消した警告が、古いデーモン相手に蘇らない）。
-   */
   it('古いデーモンが shadowsCloneEnv を返しても、警告は出ない（旗は撤去済み）', async () => {
     setReply('GET', '/credentials', {
       status: 200,
@@ -172,8 +138,6 @@ describe('alteroid credential list', () => {
     expect(text).toContain('GH_TOKEN');
     expect(text).toContain('sha256=aaaaaaaaaaaa');
     expect(text).toContain('GIT_AUTHOR_NAME');
-    // **「置いた」と「届いた」は別である。** 突き合わせ先を言わないと、人間は
-    // 正本に在ることを届いた証拠として読む。
     expect(text).toContain('alteroid runners');
   });
 
@@ -210,8 +174,6 @@ describe('alteroid credential list', () => {
     expect(text).toContain('撒く先=app（clone だけ）');
     expect(text).toContain('非シークレット');
     expect(text).toContain('値=Asia/Tokyo');
-    // シークレットな行は値を出さない（指紋だけ）——`値=` が非シークレットの
-    // 1行分しか現れないことで確かめる。
     expect(text.match(/ {2}値=/g)).toHaveLength(1);
   });
 });
@@ -259,7 +221,6 @@ describe('alteroid credential set', () => {
 
     await credentialSetCommand('NPM_TOKEN', { file: path });
 
-    // **改行は落ちている。** 落とさないと「見た目は同じなのに指紋が違う」鍵ができる。
     expect(sent).toEqual([
       expect.objectContaining({ method: 'GET' }),
       expect.objectContaining({
@@ -270,7 +231,6 @@ describe('alteroid credential set', () => {
     const text = read();
     expect(text).toContain('NPM_TOKEN を置きました');
     expect(text).toContain('runner-1: 降ろしました');
-    // **値は出さない。**
     expect(text).not.toContain(DUMMY);
   });
 
@@ -373,19 +333,11 @@ describe('alteroid credential set', () => {
     );
   });
 
-  /**
-   * **issue #1198 でこの経路の門が `requireOperator` から `requireOwner` へ
-   * 変わった。** 未宣言（`access grant` は済んでいるが `access owner` をまだ
-   * 打っていない）で拒まれたときの案内は、`alteroid access owner <id>` を
-   * 打つ形にする——`alteroid access list` で id を見る導線とセットである。
-   */
   it('403（未宣言 owner）なら、access owner を打てと言う', async () => {
     const path = join(dir, 'value.txt');
     await writeFile(path, DUMMY, 'utf8');
     setReply('PUT', '/credentials', {
       status: 403,
-      // **デーモンが実際に返す文言そのもの**（`forbiddenKindOf` はこの文字列で
-      // 分岐する。逐語は `grep -Fn -- '実行環境の持ち主として宣言されたアカウントだけが操作できる' apps/cli/src/target.ts`）。
       body: { error: '実行環境の持ち主として宣言されたアカウントだけが操作できる' },
     });
 
@@ -395,8 +347,6 @@ describe('alteroid credential set', () => {
 
     expect(message).toContain('alteroid access list');
     expect(message).toContain('alteroid access owner <アカウント id>');
-    // **`access grant` は勧めない。** 既に許可されている前提での 403 なので、
-    // grant を勧めると人間が同じ操作を打ち直して「また 403」を踏む。
     expect(message).not.toContain('access grant <アカウント id>');
   });
 
@@ -415,13 +365,6 @@ describe('alteroid credential set', () => {
     expect(message).toContain('alteroid access grant <アカウント id>');
   });
 
-  /**
-   * **`requireOwner` はこの経路の門であって `requireOperator` ではない。**
-   * ⟹ `not_operator` の本文はこの経路からは実際には来ない（`credential.ts` の
-   * doc）。それでも `ForbiddenKind` はこの値を持てる型なので、来た場合に
-   * 当てずっぽうの案内（旧 `docker compose exec …`）を出さないことを固定する
-   * ——「型で塞いだ分岐にも実行時の倒れ先の歯を足す」（AGENTS.md）。
-   */
   it('403（not_operator の本文。この経路では実際には来ないはず）は、案内を出さない', async () => {
     const path = join(dir, 'value.txt');
     await writeFile(path, DUMMY, 'utf8');
@@ -446,7 +389,6 @@ describe('alteroid credential remove', () => {
     setReply('GET', '/credentials', { status: 200, body: { credentials: [] } });
     const read = captureStdout();
 
-    // 無い名前は例外にする（#3449。`token remove` と同じ。打ち間違いを成功と同じ終わり方にしない）。
     const error = await credentialRemoveCommand('NPM_TOKEN', { yes: true }).then(
       () => null,
       (e: unknown) => e as Error,
@@ -599,7 +541,6 @@ describe('alteroid credential set の上書き確認（#3201）', () => {
     captureStdout();
     const { io } = fakeIo({ isTTY: true, answer: 'no' });
 
-    // やめたことは例外で伝わる（入口が非 0 にする。#3450）。
     await expect(credentialSetCommand('NPM_TOKEN', { file }, io)).rejects.toThrow(
       '取り消しました。何も変更していません。',
     );

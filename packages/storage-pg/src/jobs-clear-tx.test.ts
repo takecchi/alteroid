@@ -6,16 +6,6 @@ import { createPgStoresFromDb, type PgStores } from './index.js';
 import { jobs } from './schema.js';
 import { createMigratedTestDb, type TestDbHandle } from './test-db.test-support.js';
 
-/**
- * issue #1929。`JobStore.clear()` の契約は「jobs と approvals を一緒に1操作で
- * 消す」（`packages/core/src/store.ts` の `JobStore.clear` の doc）。
- *
- * `approvals` への DELETE だけが失敗するよう BEFORE DELETE トリガを仕込み、
- * `clear()` が例外を投げた後に **jobs の行が残っている**（＝ロールバック
- * された）ことを見る。1つのトランザクションで束ねていない実装
- * （直す前の `PgJobStore.clear()`）は、jobs の DELETE を確定させたあとで
- * approvals の DELETE に失敗するので、この歯は赤くなる。
- */
 let client: TestDbHandle;
 let db: Db;
 let stores: PgStores;
@@ -32,10 +22,7 @@ beforeEach(async () => {
   ({ client, db } = await createMigratedTestDb());
   stores = createPgStoresFromDb(db);
 
-  // approvals への DELETE だけを確実に失敗させる（BEFORE DELETE トリガ）。
-  // `client.exec`（複数文を1回で流せる）を使う——`db.execute` / `client.query`
-  // は "cannot insert multiple commands into a prepared statement" で落ちる
-  // （実測。prepared statement 経路は単一コマンドしか受けない）。
+  // `db.execute` / `client.query` を使わない: "cannot insert multiple commands into a prepared statement" で落ちるため、`client.exec` を使う。
   await client.exec(`
     CREATE OR REPLACE FUNCTION forbid_approvals_delete() RETURNS trigger AS $$
     BEGIN
@@ -60,12 +47,9 @@ describe('JobStore.clear() — jobs と approvals を1つのトランザクシ�
       question: '確認してほしい',
     });
 
-    // approvals の DELETE で落ちたことまで見る。ほかの理由で jobs の DELETE の
-    // 前に落ちても jobs は残るので、例外の中身を見ないと緑になってしまう。
-    // drizzle は仕込んだ例外を `Failed query: <SQL>` で包むので、SQL の側で見る。
+    // 例外の中身を見る: ほかの理由で先に落ちても行は残り、緑になってしまうため。drizzle は例外を `Failed query: <SQL>` で包むので SQL の側で見る。
     await expect(stores.jobs.clear()).rejects.toThrow(/Failed query: delete from "approvals"/);
 
-    // ロールバックされていれば、jobs の行は消えずに残っているはず。
     const remainingJobs = await db.select().from(jobs);
     expect(remainingJobs.map((row) => row.id)).toEqual(['mgr-tx-good']);
   });

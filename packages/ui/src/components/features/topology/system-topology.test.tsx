@@ -1,9 +1,4 @@
 // @vitest-environment jsdom
-/**
- * 稼働状況の図の大きさ。図は viewBox を枠へ伸ばして描くので、**広い枠で図も文字も大きくならない**こと
- * （描画幅の上限）と、**狭い枠では縮みすぎず木へ倒れる**ことを確かめる。jsdom は幅を測れないので
- * `ResizeObserver` を偽の幅で差し替える。
- */
 import { cleanup, render } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -25,7 +20,6 @@ function stubFrameWidth(width: number) {
     disconnect() {}
   }
   vi.stubGlobal('ResizeObserver', FakeObserver);
-  // `useIsMobile` の入口。枠の幅が測れる間は配置の決定には使われない（札の押し方だけ）。
   vi.stubGlobal('matchMedia', () => ({
     matches: false,
     addEventListener() {},
@@ -162,7 +156,6 @@ describe('読めない委譲の行（#2705）', () => {
     });
     const frame = (c: HTMLElement, key: string) =>
       c.querySelector(`[data-container="runner:${key}"]`)!;
-    // 枠の中の案内かどうかは、案内の箱が枠の矩形に収まるかで測る
     const noteInside = (c: HTMLElement, key: string) => {
       const rect = frame(c, key).querySelector('rect')!;
       const [x, y, w, h] = ['x', 'y', 'width', 'height'].map((a) => Number(rect.getAttribute(a)));
@@ -226,7 +219,6 @@ describe('読めない委譲の行（#2705）', () => {
 });
 
 describe('器と札の名前（#2772）', () => {
-  /** 図が見せる文字（枠の名前の <text> と札のボタン）。ツールチップ（<title>）と読み上げは含めない。 */
   const visibleText = (container: HTMLElement) =>
     [
       ...container.querySelectorAll('[data-container] text'),
@@ -278,11 +270,9 @@ describe('外部サービスの札（Issue #3676）', () => {
       const names = Array.from(container.querySelectorAll('button')).map((b) =>
         b.getAttribute('aria-label'),
       );
-      // 状態（正常・仕事なし等）を付けない。外部サービスの状態は観測していない。
       expect(names).toContain('外部サービス GitHub 連携');
       expect(names).toContain('外部サービス CI');
       expect(names).toContain('外部サービス ほか 2 件');
-      // 光（Pulse）はアクティブな線だけ。down の `GitHub 連携` の線に、下りの色の光が流れる
       const lit = container.querySelector('[data-edge="x-external:k1"]')!;
       expect(lit.querySelector('animateMotion')).not.toBeNull();
       expect(lit.querySelector('.fill-primary')).not.toBeNull();

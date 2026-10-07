@@ -31,10 +31,8 @@ describe('describeAccountUsageView', () => {
     expect(view.tone).toBe('info');
     expect(view.action).toBe('Claude にログインすると、残りが見えます。');
     expect(view.lines).toEqual([]);
-    // 利用者向けの本文に内部の語・生の ISO 時刻が出ない。
     const visible = [view.headline, view.action].join('\n');
     expect(visible).not.toMatch(/apiKeySource|accountInfo|T\d\d:\d\d/);
-    // 診断の行は折りたたみの側に残り、生の ISO 時刻は載らない。
     expect(view.details.join('\n')).toContain('apiKeySource');
     expect(view.details.join('\n')).not.toContain(at);
   });

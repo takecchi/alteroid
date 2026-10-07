@@ -2,10 +2,6 @@ import type { Meta, StoryObj } from '@storybook/react-vite';
 
 import { AnsweredApprovalRow } from './answered-approval-row';
 
-/**
- * 回答済みの画面の、日ごとの一覧の1行。行全体が1つのリンク（見本ではただの `<a>`）。
- * 回答済と取り下げ済で札の色が違う。本文は各 2 行で切る。
- */
 const meta = {
   title: 'Features/Approvals/AnsweredApprovalRow',
   component: AnsweredApprovalRow,
@@ -40,7 +36,6 @@ export const Withdrawn: Story = {
   args: { state: 'withdrawn', withdrawnReason: '自分で答えを見つけた' },
 };
 
-/** 長い問いと答えは各 2 行で切る。全文は詳細で読む。 */
 export const LongText: Story = {
   args: {
     state: 'answered',
@@ -51,7 +46,6 @@ export const LongText: Story = {
   },
 };
 
-/** 答えも理由も無い行（古い記録・理由を書かずに取り下げた件）。 */
 export const Minimal: Story = {
   args: { state: 'withdrawn' },
 };

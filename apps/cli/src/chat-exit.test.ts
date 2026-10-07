@@ -6,7 +6,6 @@ import type { Target } from './target.js';
 
 const target: Target = { baseUrl: 'http://127.0.0.1:1', headers: {}, remote: false, note: null };
 
-/** `POST /chat/:id/end` だけを差し替えたクライアント。呼ばれた id を `calls` に積む。 */
 function endClient(reply: () => Promise<Response>) {
   const calls: string[] = [];
   const client = {

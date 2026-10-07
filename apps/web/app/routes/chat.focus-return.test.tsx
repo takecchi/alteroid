@@ -1,13 +1,4 @@
 // @vitest-environment jsdom
-/**
- * #3595。発言の編集・承認カードへの回答・「会話を終える」の確認を閉じたあと、フォーカスが
- * `document.body` へ落ちない（キーボードで続けるのに、先頭から Tab し直さなくてよい）。
- *
- * - 編集を閉じたら（Escape・確定・キャンセル）、その発言の鉛筆へ。鉛筆が無ければ入力欄へ。
- * - 承認カードに答えたら、次の未回答のカードへ。無ければ入力欄へ。
- * - 「会話を終える」の確認を閉じたら（やめる・終える）、迷子にならない。
- * - 使い手が自分でフォーカスを動かしたら、取り戻さない。
- */
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider, useParams } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -29,7 +20,7 @@ function Harness() {
 
 function renderChat(initial: string) {
   const router = createMemoryRouter(
-    // 本物の経路（`routes.ts`）と同じ、省略可能な引数の1本。2本に分けると遷移で作り直される。
+    // 経路を1本にする: 2本に分けると遷移で作り直されるため
     [{ path: '/chat/:conversationId?', Component: Harness }],
     { initialEntries: [initial] },
   );
@@ -152,7 +143,6 @@ describe('発言の編集を閉じたら、その発言の鉛筆へ戻る', () =
     const editor = await startEditing();
     fireEvent.keyDown(editor, { key: 'Escape' });
     await waitFor(() => expect(document.activeElement).toBe(pencil()));
-    // 入力欄へ移る（Tab の keydown で、戻す約束は取り下げられている）。
     fireEvent.keyDown(pencil(), { key: 'Tab' });
     COMPOSER().focus();
     fireEvent.change(COMPOSER(), { target: { value: 'あ' } });

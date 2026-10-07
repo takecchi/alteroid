@@ -4,12 +4,6 @@ import { describe, expect, it } from 'vitest';
 
 import { createApp } from './app.js';
 
-/**
- * 承認待ちへの回答（`POST /approvals/:id/answer`・`POST /approvals/answer`）は、
- * 空白だけの `answer` や、NUL だけの `answer`（NUL は日誌・承認の入口で落ちて空になる）を
- * 受け付けて、空の回答として記録してしまわないこと。
- * 入口の検査は `answerFields.answer = z.string().min(1)`（空白も NUL も長さ1以上と数える）。
- */
 function setup() {
   const stores = createMemoryStores();
   const answered: string[] = [];

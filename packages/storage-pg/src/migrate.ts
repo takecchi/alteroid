@@ -737,6 +737,30 @@ export const STATEMENTS = [
      updated_at timestamptz not null default now()
    )`,
 
+  // --- 人間が入れた plugin -------------------------------------
+  // 新しい表を足すだけなので、既存行の意味は1ビットも変わらない。同名の `drop` を
+  // どこにも置いていないので、`create table if not exists` は2周目以降も本当の no-op。
+  // 本体のファイルは `plugin_files`（bytea）に分け、plugin を外すと cascade で消える。
+  `create table if not exists plugins (
+     name text primary key,
+     source jsonb not null,
+     scope text not null default 'all',
+     enable_hooks boolean not null default false,
+     enable_mcp boolean not null default false,
+     content_sha256 text not null,
+     file_count integer not null,
+     total_bytes bigint not null,
+     installed_at timestamptz not null,
+     installed_by text not null
+   )`,
+  `create table if not exists plugin_files (
+     plugin_name text not null references plugins (name) on delete cascade,
+     path text not null,
+     executable boolean not null,
+     content bytea not null,
+     primary key (plugin_name, path)
+   )`,
+
   // --- 人間が承認した Bash 許可の記録（Issue #863）---------------------------
   // 新しい表を足すだけなので、既存行の意味は1ビットも変わらない（このファイル
   // 冒頭の「既存行の意味を変える変更を黙って混ぜない」に当たらない）。

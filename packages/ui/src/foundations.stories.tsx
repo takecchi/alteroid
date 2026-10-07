@@ -6,20 +6,6 @@ import { BrandMark } from '@/components/layout/brand-mark';
 import { LiveIndicator } from '@/components/layout/live-indicator';
 import { cn } from '@/lib/utils';
 
-/**
- * **Twin Plate** —— alteroid のデザインの基礎。
- *
- * クローンは人間の写しで、画面はその写しが働く様子を見守る計器盤である。
- * 未来感は発光の量ではなく**規律**で出す:
- *
- * 1. **光の縁**（`lumen-edge`）—— 光ってよいのは「いまここ」を示す1本の線と焦点の輪だけ
- * 2. **心拍**（`LiveIndicator`）—— 画面の中で自分から動くのは受信の印だけ
- *
- * 面取り（`corner-shape: bevel`）は試して外した（`styles.css` の注記）。角は角丸のまま。
- *
- * 値の正本は `styles.css`。ここはそれを並べて見るための場所で、値を持たない。
- * 上の帯の Theme で明るい側・暗い側を切り替えて見比べる。
- */
 const meta = {
   title: 'Foundations',
   parameters: { layout: 'fullscreen' },
@@ -28,7 +14,6 @@ const meta = {
 export default meta;
 type Story = StoryObj<typeof meta>;
 
-/** 名前は見本の中だけの呼び名。class は shadcn の既定の名前のまま（`styles.css` の冒頭）。 */
 const SWATCHES = [
   { name: 'Abyss', token: 'background', className: 'bg-background', role: '画面の地' },
   { name: 'Hull', token: 'card', className: 'bg-card', role: '枠の面' },
@@ -274,7 +259,6 @@ export const Type: Story = {
   ),
 };
 
-/** 何も置かない地。地の色と、そこに1枚だけ置いた面の段差を見る。 */
 export const Ground: Story = {
   render: () => (
     <div className="flex h-[600px] items-center justify-center bg-background">
@@ -283,7 +267,6 @@ export const Ground: Story = {
   ),
 };
 
-/** 現在地が移る瞬間。押すと光の縁が移る（キーボードでも動く）。 */
 export const Interactive: Story = {
   render: function Render() {
     const items = ['ダッシュボード', '承認待ち', 'マネージャー', '日誌'];

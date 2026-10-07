@@ -4,7 +4,6 @@ import { Stat } from '../stat';
 
 import { Sparkline } from './sparkline';
 
-/** 量の横に添える推移の線。値は隣の数字が持つ。 */
 const meta = {
   title: 'Features/Charts/Sparkline',
   component: Sparkline,

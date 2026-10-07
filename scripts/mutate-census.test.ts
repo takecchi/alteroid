@@ -20,16 +20,6 @@ import {
   // @ts-expect-error -- 素の .mjs（型宣言を持たない変異試験ハーネス）を読む
 } from '../.claude/skills/mutation-testing/mutate-core.mjs';
 
-/**
- * #993 段2: JSON レポータを副回線として足した census まわりの歯。
- *
- * **ここで測るのは「census が在ればどう使うか」——`runTests` が実際に本物の
- * vitest を起こして census を作る側は、`scripts/mutate-scaffold-control.test.ts`
- * の CLI 統合（偽 `pnpm` が census を書く）と、`.claude/skills/mutation-testing/
- * mutate-selftest.mjs` の `judgement-id-integrity` / `judgement-forbidden-word-
- * boundary`（本物の vitest・本物の repo テストに対して実行）が見る。**
- */
-
 function writeCensusFile(content: string): string {
   const p = path.join(makeTempDirSync('census-test-'), 'census.json');
   fs.writeFileSync(p, content);
@@ -41,9 +31,7 @@ describe('mutate-core: buildCensusOutputPath / buildCensusReporterArgs（#993 �
     const a = buildCensusOutputPath();
     const b = buildCensusOutputPath();
     expect(a).not.toBe(b);
-    // os.tmpdir() の下に置く——ROOT の直下には置かない（変異試験が触る
-    // ツリーの外に置くことで、census の一時ファイル自体が git status に
-    // 紛れ込まない）。
+    // os.tmpdir() の下に置き ROOT の直下には置かない: census の一時ファイルが git status に紛れ込まないため。
     expect(a.startsWith(os.tmpdir())).toBe(true);
   });
 
@@ -65,7 +53,7 @@ describe('mutate-core: isCensusAvailable', () => {
   it('undefined / null / 形が違うオブジェクトも false（判定できないという3つ目の状態を緑にしない）', () => {
     expect(isCensusAvailable(undefined)).toBe(false);
     expect(isCensusAvailable(null)).toBe(false);
-    expect(isCensusAvailable({ available: true, byName: {} })).toBe(false); // byName が Map でない
+    expect(isCensusAvailable({ available: true, byName: {} })).toBe(false);
     expect(isCensusAvailable('census')).toBe(false);
   });
 });
@@ -102,7 +90,6 @@ describe('mutate-core: loadCensus（census が「取れない」を緑にしな�
   });
 
   it('本物の vitest JSON レポータの形（assertionResults 有り）から、FAIL 行と同じ形の名前を作る', () => {
-    // 実測（2026-09-17、vitest 4.1.11）した実物の形をそのまま使う。
     const file = path.join(ROOT, 'packages/core/src/__census-demo.test.ts');
     const p = writeCensusFile(
       JSON.stringify({
@@ -113,7 +100,7 @@ describe('mutate-core: loadCensus（census が「取れない」を緑にしな�
               {
                 ancestorTitles: ['外', '内'],
                 title: '赤の歯',
-                fullName: '外 内 赤の歯', // ⚠️ 空白区切り・ファイル名なし。使わない。
+                fullName: '外 内 赤の歯',
                 status: 'failed',
               },
               {
@@ -129,8 +116,6 @@ describe('mutate-core: loadCensus（census が「取れない」を緑にしな�
     );
     const census = loadCensus(p);
     expect(census.available).toBe(true);
-    // ⭐ FAIL 行と同じ形（`<相対パス> > <describe> > <it>`）で拾えている
-    // ——`fullName`（空白区切り）ではない。
     expect(census.byName.get('packages/core/src/__census-demo.test.ts > 外 > 内 > 赤の歯')).toBe(
       'failed',
     );
@@ -140,11 +125,6 @@ describe('mutate-core: loadCensus（census が「取れない」を緑にしな�
   });
 
   it('⭐ スイートの読み込み自体が失敗したファイル（assertionResults が空）は `<file> [ <file> ]` の形で載せる', () => {
-    // 実測（2026-09-17、`packages/core/src` を未 build のツリーで走らせた）した
-    // 実物の形——`generated/canon.ts` が無いために読み込みが失敗したファイルは
-    // `assertionResults: []` かつ `status: 'failed'`、`message` にロードエラーが
-    // 入る。この形を「個々のテストが0本失敗した」と取り違えると、テキスト側の
-    // `FAIL  <file> [ <file> ]` という行と食い違う（交差検算が誤爆する）。
     const file = path.join(ROOT, 'packages/core/src/__census-load-failure.test.ts');
     const p = writeCensusFile(
       JSON.stringify({
@@ -280,7 +260,6 @@ describe('mutate-core: decideJudgementCategory に census を通した端から�
   ].join('\n');
 
   it('⭐⭐ 門6: census がまったく無い testResult では、赤い歯 + mustFail でも判定を出さない', () => {
-    // census フィールドそのものが無い testResult（古い形の合成テスト等を模す）。
     const testResult = {
       exitCode: 1,
       raw: RAW_ONE_FAILURE,
@@ -311,7 +290,7 @@ describe('mutate-core: decideJudgementCategory に census を通した端から�
       message = (err as Error).message;
     }
     expect(message).toContain('実在しない名前が1本ある');
-    expect(message).not.toContain('身代わり —'); // 判定行そのものは出ていない
+    expect(message).not.toContain('身代わり —');
   });
 
   it('正しい名前を宣言し、census 上でも failed なら「検出」', () => {

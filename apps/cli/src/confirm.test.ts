@@ -49,7 +49,6 @@ describe('confirmIrreversible（#3141。形は alteroid reset の確認に揃え
     expect(message).toContain('記憶 values を消します。');
     expect(message).toContain('--yes');
     expect(message).toContain('何も変更していません');
-    // 標準入力に `yes` が流れていても通さない（スクリプトの黙った実行を作らない）。
     expect(asked).toEqual([]);
   });
 
@@ -70,7 +69,6 @@ describe('confirmIrreversible（#3141。形は alteroid reset の確認に揃え
 
       const error = await confirmIrreversible('消します。', {}, io).catch((e: unknown) => e);
 
-      // 終了コードを決める最上位がこの例外を非 0 にする。文言は例外が持つ（stdout には書かない）。
       expect(error).toBeInstanceOf(ConfirmDeclinedError);
       expect((error as Error).message).toBe('取り消しました。何も変更していません。');
       expect(written.join('')).not.toContain('取り消しました');

@@ -5,17 +5,7 @@ import { SystemTopology, type SystemTopologyProps } from '../topology/system-top
 
 export type LiveMapConnection = 'connecting' | 'live' | 'offline';
 
-/**
- * 「稼働状況」—— 稼働状況の図のカード。**接続の状態を正直に言う。**
- *
- * - まだ何も届いていない: 接続中は読み込み、切れていれば失敗として言う（空の地図を出さない）
- * - 地図が在るが**切れている / デーモンが組めていない**: 最後の地図は出すが、
- *   **古いと断る**（光は時刻の窓で決まるので、古い地図は動いていないように見えるだけで、
- *   状態の札は「いまの状態」に読めてしまう）
- * - 切った件数（`omittedNote`）は地図の下で言う（隠さない）
- *
- * 地図の場面（`scene`）を作るのは上の層（`@alteroid/logic` の `topologySceneFromSnapshot`）。
- */
+// 切れている・組めていないときは最後の地図に古いと断る: 状態の札が「いまの状態」に読めてしまうため
 export function LiveMapCard({
   scene,
   connection,
@@ -27,13 +17,10 @@ export function LiveMapCard({
 }: {
   scene?: SystemTopologyProps;
   connection: LiveMapConnection;
-  /** デーモンが地図を組めなかった理由（種別だけ）。 */
   unavailable?: string;
-  /** 最後に地図を受け取った時刻の表示（古いと断るときに添える）。 */
   staleAt?: string;
   omittedNote?: ReactNode;
   action?: ReactNode;
-  /** 見本帳で配置を固定したいとき。 */
   layout?: SystemTopologyProps['layout'];
 }) {
   const stale = connection === 'offline' || unavailable !== undefined;

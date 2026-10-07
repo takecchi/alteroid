@@ -1,8 +1,4 @@
 // @vitest-environment jsdom
-/**
- * 未読のある会話の数（`useUnreadConversationCount`、左ナビの札の元）。
- * 取得後の値・`capped`・読めないときの形を、そのまま画面へ渡す。
- */
 import { cleanup, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 

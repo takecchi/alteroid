@@ -6,17 +6,6 @@ import { createPgStoresFromDb, type PgStores } from './index.js';
 import { agentTokenActive, agentTokenSettings } from './schema.js';
 import { createMigratedTestDb } from './test-db.test-support.js';
 
-/**
- * issue #2053。`readSettings()` / `readActive()` が読めないときに投げる型を
- * `UnreadableTokenSettingsError` / `UnreadableActiveTokenError`
- * （`@alteroid/core`）へ、fs 実装とそろえて固定する。
- *
- * **この歯には「直す前」に対応する赤が無い**（この2つの型はこの PR で新しく
- * 足したもので、直す前の版にはこの import が解決できる状態が存在しない）。
- * 「投げるか」「値を漏らさないか」の赤/緑は
- * `token-pool-settings-active-unreadable-repro.test.ts`（型を import しない
- * 形）で別に取ってある。
- */
 let db: Db;
 let stores: PgStores;
 

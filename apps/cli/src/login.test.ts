@@ -2,33 +2,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { captureStdout } from './test-support.js';
 
-/**
- * `alteroid login` / `logout` / `whoami` — #333。この3つはこれまでテストが
- * 1本も無かった（`apps/cli/src` で `.test.ts` を持たない3モジュールの1つ）。
- *
- * **`fetch` を差し替える。** `login.ts` は `hono/client` を使わず素の `fetch` を
- * 叩くので、`access.test.ts` / `conversations.test.ts` と同じ形にする。
- *
- * **`node:timers/promises` の `setTimeout`（`sleep` として import されている）と
- * `node:child_process` の `spawn`（`openBrowser` が使う）も差し替える。** どちらも
- * 差し替えないと、テストが `POLL_INTERVAL_MS`（1.5秒）だけ実際に待つか、この器に
- * 無い `xdg-open` を本当に起動しようとする。
- */
 vi.mock('./target.js', () => ({
-  // `vi.fn()` にしてあるのは、whoami の note 分岐だけ1件 `mockResolvedValueOnce`
-  // で上書きしたいため（他の access/conversations/memory のテストは素の
-  // arrow function で足りているが、こちらは呼び出しごとに違う応答が要る）。
   resolveTarget: vi.fn(() =>
     Promise.resolve({ baseUrl: 'http://127.0.0.1:4517', headers: {}, note: null, remote: false }),
   ),
   describeAuthFailure: () => null,
-  // #2093 — whoami の「runner の中の手元のデーモン」の1行の歯のために
-  // 差し替え口にする。既定は false（従来どおり、この行は出ない）。
   isRunnerContainer: vi.fn(() => false),
 }));
 
 vi.mock('./credentials.js', async () => ({
-  // 本物のエラークラス（`logout` が `instanceof` で見分ける）。
   CredentialsUnreadableError: (
     await vi.importActual<typeof import('./credentials.js')>('./credentials.js')
   ).CredentialsUnreadableError,
@@ -95,7 +77,6 @@ describe('alteroid login', () => {
 
     const text = read();
     expect(text).toContain('は認証を要求していません（ログインは不要です）');
-    // /health 以外は1件も打っていない（ここで止まった証拠）。
     expect(sent).toHaveLength(1);
   });
 
@@ -198,7 +179,6 @@ describe('alteroid login — 認可待ち中の一時的な失敗（#3727）', (
   };
   type Step = { status: number; body: unknown } | { reject: Error };
 
-  /** health・start の後ろへ、claim の応答列を順に返す fetch。 */
   function stubSequence(claims: Step[], expiresAt?: string): void {
     const steps: Step[] = [
       { status: 200, body: HEALTH },
@@ -293,7 +273,6 @@ describe('alteroid login — 認可待ち中の一時的な失敗（#3727）', (
     vi.useFakeTimers({ toFake: ['Date'] });
     try {
       vi.setSystemTime(new Date('2030-01-01T00:00:00.000Z'));
-      // 偽の sleep が偽の時計を 1.5 秒ずつ進める（実時間は待たない）。
       const timers = await import('node:timers/promises');
       vi.mocked(timers.setTimeout).mockImplementation(() => {
         vi.setSystemTime(Date.now() + 1500);
@@ -445,8 +424,6 @@ describe('alteroid whoami', () => {
     expect(sent).toHaveLength(0);
   });
 
-  // #2093 — runner の器の中で手元のデーモンに繋いでいるときだけ、
-  // 「本番ではない」旨の1行が足される。
   it('runner の器の中で手元のデーモンに繋いでいれば、本番ではない旨を1行足す', async () => {
     vi.mocked(target.isRunnerContainer).mockReturnValueOnce(true);
     replies.push({ status: 200, body: { kind: 'operator' } });

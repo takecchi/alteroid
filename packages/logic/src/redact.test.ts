@@ -1,7 +1,3 @@
-/**
- * 日誌の要旨の伏せ字（issue #2600）。`summarizeJournalEntry` は Web の一覧・ダッシュボードと
- * TUI が共有する出口なので、ここで掛けて確かめる。
- */
 import { describe, expect, it } from 'vitest';
 
 import type { JournalEntry } from './types.js';
@@ -9,7 +5,6 @@ import type { JournalEntry } from './types.js';
 import { summarizeJournalEntry } from './journal-summary.js';
 import { redactBody, redactError } from './redact.js';
 
-/** 偽のトークン（本物ではない）。 */
 const TOKEN = `ghp_${'A1b2C3d4E5'.repeat(4)}`;
 const SHA = '0123456789abcdef0123456789abcdef01234567';
 

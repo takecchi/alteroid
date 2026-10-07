@@ -41,6 +41,9 @@ import type {
 } from './schema.js';
 import { captureStderr } from './testing.js';
 
+/** 孤立サロゲート（高だけ・低だけ）。`isWellFormed()` は tsconfig の lib に無いので直接探す。 */
+const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+
 /**
  * 記録を落としたときの跡は stderr にしか出ない。ここで固定するのは2つ —
  * **跡が出ること**と、**その跡に本文が乗らないこと**である。
@@ -616,6 +619,18 @@ describe('落とした記録の跡', () => {
     });
 
     expect((lines[0] as string).length).toBeLessThan(400);
+  });
+
+  // #3804: 跡のタグの上限（64）の位置に補助面の文字がまたがっても、孤立サロゲートを残さない。
+  it('跡のタグの切り口が絵文字をまたいでも、孤立サロゲートを残さない', async () => {
+    for (let lead = 63; lead <= 65; lead += 1) {
+      const lines = await captureStderr(() => {
+        noteManagerIdCollision(`${'a'.repeat(lead)}😀😀`, 1);
+      });
+      const line = lines[0] as string;
+      expect(line, `lead=${lead}`).toContain('…');
+      expect(LONE_SURROGATE.test(line), `lead=${lead}`).toBe(false);
+    }
   });
 });
 
