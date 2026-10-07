@@ -1,4 +1,3 @@
-import { describeManagerProvider } from '@alteroid/core/manager-provider-format';
 import {
   describeReportDriftMark,
   describeToolUseStall,
@@ -81,14 +80,8 @@ function legacyWaiting(over: Partial<ManagerWaitingItem> = {}): ManagerWaitingIt
 }
 
 describe('renderManagerList', () => {
-  it('provider を出し、欄が無いときは「不明」と書く（claude とは推測しない。#486 S9）', () => {
-    expect(renderManagerList([manager({ managerProvider: 'codex' })])).toContain(
-      '      provider: codex',
-    );
-    const unknown = renderManagerList([manager()]);
-    expect(unknown).toContain(`      provider: ${describeManagerProvider(undefined)}`);
-    expect(unknown).toContain('provider: 不明');
-    expect(unknown).not.toContain('claude');
+  it('provider の行を出さない（層は常に Claude。2026-10-07 の決定）', () => {
+    expect(renderManagerList([manager()])).not.toContain('provider:');
   });
 
   /**

@@ -15,37 +15,6 @@ import { clearRecentTracesForTesting, noteDroppedRecord } from './dropped-record
 import { createMemoryStores } from './testing.js';
 import { CLONE_TOOL_NAMES, createCloneMcpServer, type ToolContext } from './tools.js';
 
-/**
- * 頭からしっぽまでの経路を1本、実プロセスで固定する（Issue #486 48(a) 案D、
- * PR1 の (a)(b)）。
- *
- * ```
- * MCP Client（本テスト） --stdio--> 中継の子プロセス（実際に spawn）
- *   --Unixソケット--> clone-tool-relay-host（本テストのプロセス内）
- *   --McpServer.connect--> createCloneMcpServer(minimalToolContext)
- * ```
- *
- * **Issue #1917 でビルド済み成果物の出所を変えた。** 以前はここで
- * `packages/core/dist/clone-tool-relay-child.js`（本物のチェックアウトの
- * 成果物）を直接 spawn していたが、それには2つの弱さがあった——(1) 同じ
- * ツリーで並行して走る `pnpm build` の tsup clean が `dist/*.js` を一瞬消す窓
- * と競合する（#204 / #234）、(2) `src` だけを直して build せずにこの歯だけ
- * 回すと、古い `dist` に対して緑が出る。**#1908 と同じ弱さだが、同じ直し方
- * （`src` を型剥がしで直接読む。`child-src.test-support.ts`）は使えない**——
- * この歯が実際に測りたいのは束ね方そのもの（`clone-tool-relay-protocol.ts`
- * の doc: tsup が共有チャンクへ括り出すと `invokedDirectly()` が永久に偽に
- * なり、中継が起動しなくなる回帰）で、型剥がしは束ねる工程を経由しない
- * ため、この回帰を再現できない。
- *
- * **いまはテスト専用の一時ディレクトリへ、`tsup.config.ts` と同じ entry
- * 一式・同じ設定で build し、そこの成果物を spawn する**
- * （`clone-tool-relay-child-build.test-support.ts`。詳しい理由はそちらの
- * doc）。`beforeAll` で1回だけ build する——`pnpm build` を挟む必要は無い
- * （このテスト自身が build を内包している）。
- *
- * **一時ディレクトリは `vitest.tmpdir.ts` の `makeTempDirSync` を使う**
- * （`mkdtempSync` を直接呼ばない。`scripts/no-direct-mkdtemp.test.ts` の歯）。
- */
 describe('clone-tool-relay 統合（子プロセスを実際に spawn する）', () => {
   let childEntry: string;
 
@@ -97,11 +66,7 @@ describe('clone-tool-relay 統合（子プロセスを実際に spawn する）'
     expect(tools.map((tool) => tool.name).sort()).toEqual([...CLONE_TOOL_NAMES].sort());
   }, 20_000);
 
-  it(// #486 の終了条件案3（過去の測定コメント）: self_dropped は
-  // 「デーモンのプロセスの跡」を返し続ける——案Dでは道具の実体が
-  // デーモンのプロセスに残るので、子プロセスを経由しても跡の出所は
-  // 変わらないことを、ここで実際に確かめる。
-  'self_dropped は道具の実体が居るプロセス（このテストプロセス）の跡を返す', async () => {
+  it('self_dropped は道具の実体が居るプロセス（このテストプロセス）の跡を返す', async () => {
     const marker = 'clone-tool-relay-integration-test-marker';
     noteDroppedRecord('中継の統合試験', marker, new Error('boom'));
 

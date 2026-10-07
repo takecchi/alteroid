@@ -20,7 +20,7 @@ export interface JournalLive {
   receivedCount?: number;
 }
 
-export function useJournalLive(): JournalLive {
+export function useJournalLive(enabled = true): JournalLive {
   const { client, baseUrl } = useApiContext();
   const { mutate } = useSWRConfig();
   const [status, setStatus] = useState<LiveStatus>('connecting');
@@ -35,6 +35,7 @@ export function useJournalLive(): JournalLive {
   }, [mutate]);
 
   useEffect(() => {
+    if (!enabled) return;
     const controller = new AbortController();
     let attempt = 0;
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -78,9 +79,10 @@ export function useJournalLive(): JournalLive {
       controller.abort();
       if (timer !== undefined) clearTimeout(timer);
     };
-  }, [client, baseUrl]);
+  }, [client, baseUrl, enabled]);
 
-  return { status, recent, receivedCount };
+  // 止めている間は前の `live` を出さない: 届いていないのに受信中に見えるため
+  return { status: enabled ? status : 'offline', recent, receivedCount };
 }
 
 // 除く理由: profile / mcpServers は値に鍵が入りうるので勝手に運ばない。

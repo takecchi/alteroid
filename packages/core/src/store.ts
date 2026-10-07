@@ -1219,6 +1219,17 @@ export function describeUnreadableSchedules(
 }
 
 /**
+ * 読めない行への編集（`POST /schedule`・`schedule_create`）を断る文。
+ * 本文は載せない（kind だけ）。
+ */
+export function describeUnreadableScheduleEdit(error: UnreadableScheduleError): string {
+  return (
+    `継続中の依頼 ${error.kind} は読めない形で入っているので編集できない（書き換えていない）。` +
+    `消してから作り直すこと（DELETE /schedule/${error.kind}、道具なら schedule_remove kind=${error.kind}）。`
+  );
+}
+
+/**
  * 予定の「版」は `ScheduledRequest.updatedAt` である（Issue #3821）。本文の編集
  * （`editRequest` / `put`）では進み、**発火（`claimRun` / `completeRun`）では動かない**
  * （`claimRun` が `expectedUpdatedAt` の照合に使っている値と同じ）。記憶・やり方の版
@@ -1300,6 +1311,9 @@ export interface ScheduleStore {
    * **`options.ifMatch`（Issue #3821）で前提の版を持てる。** 合わなければ何も書かず
    * `ScheduleConflictError`。比較は書き込みと同じ排他の中で行う。`null` なら
    * 「無いときだけ作る」。省略は従来どおり無条件。
+   *
+   * 版つきの `put` は、読めない行に `UnreadableScheduleError`。省略（無条件）は読めない行を
+   * 置き換える。壊れた行を直す口を塞がないため。
    */
   put(entry: ScheduledRequest, options?: WriteScheduleOptions): Promise<void>;
   remove(kind: string): Promise<void>;
@@ -1362,6 +1376,9 @@ export interface ScheduleStore {
    * （文字列）で呼ぶのも「読んだ後に消された」衝突**（`current: null`）。`ifMatch: null`
    * で無いときは、従来どおり `null` を返す（呼び出し側が `put(…, { ifMatch: null })`
    * で、無いときだけ作る）。省略は従来どおり無条件。
+   *
+   * 在るが読めない行は `UnreadableScheduleError`（`ifMatch` を問わない）。「無い」（`null`）に
+   * すると、呼び出し側が続く `put()` で壊れた行を黙って置き換えてしまう。
    */
   editRequest(
     kind: string,
@@ -1375,6 +1392,8 @@ export interface ScheduleStore {
    *
    * `expectedUpdatedAt` と同じ版がまだ在るときだけ記録し、**確定した依頼（記録を
    * 進める前の姿）** を返す。消えていた・書き換わっていたら null。
+   * 在るが読めない行は `UnreadableScheduleError`（版を問わない）。`null` は「消された・
+   * 書き換わった」だけの意味に保つ。
    *
    * **これが2操作に分かれていると、読んでから記録するまでの隙間で人間が消した・
    * 直した依頼が古い本文で走る。** 「本文は処理する瞬間にストアから読む」という
