@@ -7497,86 +7497,31 @@ export function createCloneTools(context: ToolContext) {
                 context.managers.denials(managerId),
                 foldedTurn !== undefined ? foldedTurn.at : found.lastReportAt,
               );
-        // **一覧と同じ分類を、掘った先でも同じ字面で出す（Issue #857）。**
-        // `manager_list` で順位が付いた理由（本文が届いているか）が、
-        // 掘った先で消えないようにする。
-        //
-        // **`part === 'request'` では出さない。** 依頼文は「何が観測されて
-        // いないか」の話ではない（`failure` / `systemError` / `denied` と
-        // 同じ線）。
-        //
-        // **確かめた: foldedTurn の回との食い違いは無い（#1797/#1798 の監査）。**
-        // `classifyUnobservedOutcome` は `isManagerOutcomeUnobserved(found.status)`
-        // （`status === 'lost' || status === 'failed'`）で弾く。`systemError`
-        // の注記と同じ理由で、通常の到達経路では foldedTurn と `status ===
-        // 'failed'`（`'lost'` も同様、`case 'report'` の `stopped` 早期
-        // return は `status` を動かさない）は同時に立たない。
+        // 依頼文（`part === 'request'`）では注記を出さない: 依頼文は報告・失敗・拒否の話ではないため
         const unobserved = part === 'request' ? null : describeUnobservedOutcome(found);
-        // **3軸のうち3つ目（Issue #1847）。** `manager_list` の
-        // `describeUnpushedWorkObservation` と同じ材料——`unpushedWorkReportNote`
-        // はその2字下げ（`manager_list` の一覧表示専用の飾り）だけを落とす
-        // ラッパーで、判定・文言は変えていない（doc を参照）。`part === 'request'`
-        // では出さない（`failure` / `systemError` / `denied` / `unobserved` と
-        // 同じ線）。
         const unpushedWork = part === 'request' ? null : unpushedWorkReportNote(found);
-        // **Issue #2183: 配っていない報告の本数を、報告が在る回でも同じ場所で
-        // 掘れるようにする。** 字面の生成元は `describeWithheldReports` 1箇所
-        // ——`tasks`（`manager_list` の「背景処理待ち×N」）とは別の軸なので
-        // 混ぜない。`part === 'request'` では出さない（同上）。
         const withheldReportsNote = part === 'request' ? null : describeWithheldReports(found);
         const label =
           part === 'request'
             ? '依頼文'
-            : // **Issue #1038: 停止後に届いた本文は別の見出しで言い分ける。**
-              // `isFoldedTurnReport`（`lastFailure` / `lastUnreported`）とは
-              // 別の畳まれ方——「これは停止後に届いた、畳まれたターンの中身
-              // である」とその場で名乗る。受信時刻もここへ添える（`manager_list`
-              // の「（… 受信）」と同じ形）。
+            : // 停止後に届いた本文は別の見出しで言い分ける: `isFoldedTurnReport` とは別の畳まれ方のため
               foldedTurn !== undefined
               ? `停止後に届いた、畳まれたターンの中身（${foldedTurn.at} 受信）`
               : isFoldedTurnReport(found)
                 ? '直近のターンの中身'
                 : '直近の報告';
         const part1 = page(body, offset, REPORT_PAGE);
-        // **齢といまの status を見出しに添える（Issue #1036）。** これが本題
-        // ——`manager_report` は以前 `lastReportAt` も `status` も1文字も
-        // 出していなかった（読み手は直近に完了したターンの中身を、いまの
-        // 状態として読むしかなかった）。**`part === 'request'` では出さない**
-        // ——依頼文はそもそも報告ではない（`failure` / `systemError` /
-        // `denied` / `unobserved` と同じ線）。
+        // 齢といまの status を見出しに添える: 読み手が直近に完了したターンの中身をいまの状態として読まないため
         const reportAgeStatus =
           part === 'request'
             ? ''
             : foldedTurn !== undefined
-              ? // **Issue #1797: foldedTurn の回は `lastReportAt` の欄ごと
-                // 出さない。** `found.lastReportAt` は畳まれる前の、無関係な
-                // 別のターンの受信時刻である（`case 'report'` の `stopped`
-                // 早期 return は `lastReportAt` を更新しない）。ここへ出すと、
-                // いま読んでいる畳まれた本文の齢であるかのように見える——
-                // その受信時刻は既に `label`（`(${foldedTurn.at} 受信)`）が
-                // 言っているので、ここでは繰り返さず、いまの status だけ添える。
+              ? // foldedTurn の回は `lastReportAt` の欄ごと出さない: 畳まれる前の別のターンの受信時刻で、いま読んでいる本文の齢に見えるため
                 ` — いまの status: \`${found.status}\``
-              : // **文言に「直近の報告」を含めない。** `label` が「直近のターンの
-                // 中身」へ切り替わった回（`isFoldedTurnReport` / `foldedTurn`）で
-                // ここに「直近の報告」という字面が混ざると、見出しを切り替えた
-                // 意味（Issue #714 / #917 / #1038）が薄れる——読む側が「結局
-                // 直近の報告ではないか」と読める。
+              : // 文言に「直近の報告」を含めない: 見出しを「直近のターンの中身」へ切り替えた回で混ざると、切り替えた意味が薄れるため
                 ` — lastReportAt: ${found.lastReportAt ?? '一度も届いていない'} / いまの status: \`${found.status}\``;
         const head = `マネージャー ${managerId} の${label}（${describePage(part1)}）${reportAgeStatus}`;
-        // **焼いた status といまの status が食い違えば ⚠ を出す（Issue
-        // #1036）。** 生成元は `describeReportDrift` 1箇所——`manager_list`
-        // と割れない。一致している回・比較できない回（この欄を持たない古い
-        // 行・報告が一度も無い回）は1文字も増えない。`part === 'request'`
-        // では出さない（同上）。
-        //
-        // **foldedTurn の回は、その材料で組む（Issue #1797）。**
-        // `found.lastReportAt` / `found.lastReportStatus` は畳まれる前の
-        // 別のターンの値なので、そのまま渡すと「いま読んでいる畳まれた本文」
-        // とは無関係な drift を語ることになる（#1797 の実測）。`foldedTurn` は
-        // `manager.ts` の `case 'report'` が `record.job.status === 'stopped'`
-        // の間だけ書く欄なので、書かれた瞬間の status は構造的に `'stopped'`
-        // だったと分かる——専用の記録欄が無くても合成できる。`lastReportAt` も
-        // `foldedTurn.at`（この本文が実際に届いた時刻）を使う。
+        // foldedTurn の回はその材料で組む: `lastReportAt` / `lastReportStatus` は畳まれる前の別のターンの値で、そのまま渡すと無関係な drift を語るため
         const drift =
           part === 'request'
             ? ''
@@ -7588,51 +7533,22 @@ export function createCloneTools(context: ToolContext) {
                 now: new Date(),
               });
         const driftNote = drift === '' ? '' : `${drift}\n\n`;
-        // **失敗は本文の`上`に置く**（`manager_list` と同じ順。人間の CLI も
-        // 同じ順である）。下に置くと、包まれたエラー文を先に読んでから「実は
-        // 報告ではない」と分かる順になる。**失敗していない回は1文字も増えない。**
+        // 失敗は本文の上に置く: 下だと包まれたエラー文を先に読んでから「実は報告ではない」と分かる順になるため。以下の注記も同じ順
         const failureNote = managerFailure === null ? '' : `${managerFailure}\n\n`;
-        // **`failureNote` と同じ順・同じ理由で本文の上に置く（Issue #1847）。**
-        // `usageStoppedLine`（すぐ上）とは軸が違うので別行——両方が同時に
-        // 出ることがある。**対象外の委譲では1文字も増えない。**
         const usageStoppedNote = usageStopped === null ? '' : `${usageStopped}\n\n`;
-        // **同じ順・同じ理由（Issue #1847）。** `runnerVanishedLine` と同じ材料。
-        // **対象外の委譲では1文字も増えない。**
         const runnerVanishedNote = runnerVanished === null ? '' : `${runnerVanished}\n\n`;
-        // **`failureNote` と同じ順・同じ理由で本文の上に置く。** 両方が同時に
-        // 出ることもある（`lastFailure` は `case 'closed'` では消えない——
-        // `tools.ts` の `describeManagerSystemError` の doc）。**出ていない
-        // 回は1文字も増えない。**
         const systemErrorNote = systemError === null ? '' : `${systemError}\n\n`;
-        // **同じ順・同じ理由で本文の上に置く（Issue #1517「最小の形」2）。**
-        // `systemErrorNote` とは別の軸なので、両方が同時に出ることがある。
-        // **対象外の委譲では1文字も増えない。**
         const cgroupEventsNote = cgroupEvents === null ? '' : `${cgroupEvents}\n\n`;
-        // **同じ順・同じ理由で本文の上に置く（Issue #830）。** 本文の下だと、
-        // 報告を読み終えてから「実は途中で止められていた」と分かる順になる。
-        // **止められていない回は1文字も増えない。**
         const denialNote = denied === null ? '' : `${denied}\n\n`;
-        // **同じ順・同じ理由で本文の上に置く（Issue #857）。** 本文の下だと、
-        // 「完遂した報告とは限らない」を読み終えてから知ることになる。
-        // **対象外の委譲では1文字も増えない。**
         const unobservedNote = unobserved === null ? '' : `${unobserved}\n\n`;
-        // **同じ順・同じ理由で本文の上に置く（Issue #1847）。** `manager_list`
-        // では `describeUnpushedWorkObservation` を一覧の末尾（他の軸より後）
-        // に置いているのと同じ相対位置——ここでも他の注記より後、本文より前。
-        // **対象外の委譲では1文字も増えない。**
         const unpushedWorkNote = unpushedWork === null ? '' : `${unpushedWork}\n\n`;
-        // **同じ順・同じ理由で本文の上に置く（Issue #2183）。**
-        // `awaitingBackground` が無い回は1文字も増えない。
         const withheldReportsFooterNote =
           withheldReportsNote === null ? '' : `${withheldReportsNote}\n\n`;
         const tail = part1.more
           ? `\n\n…（ここで切れている。続きは manager_report managerId=${managerId}` +
             `${part === 'request' ? ' part=request' : ''} offset=${part1.to}）`
           : '';
-        // **一本道であることを、道具の出力自身が案内する**（docs/PRD.md「セッション
-        // ログの層」— 日報だけで暮らせるが、掘れば生ログまで一本道で降りられること）。
-        // ここに載る `lastReport` は報告の全文であって、セッションの生ログではない。
-        // それでも足りないときの次の一手を、切れていない場合にも常に添える。
+        // 切れていない場合にも次の一手を常に添える: ここに載る `lastReport` は報告の全文で、セッションの生ログではないため
         const footer =
           '\n\n（さらに掘るなら manager_transcript managerId=' + managerId + ' で生ログへ）';
         return text(
@@ -7641,36 +7557,8 @@ export function createCloneTools(context: ToolContext) {
       },
     ),
 
-    /**
-     * 人間との会話を、日誌から読み返す道具。
-     *
-     * **逐語はもう日誌に残っている。読む口が無かっただけである**（`conversation.ts`
-     * の冒頭）。`journal_read` は `types` でしか絞れないので `exchange` に絞っても
-     * manager / self との往復に埋もれ、人間の発言は窓の外へ押し出されて見えなく
-     * なる。ここでは `with: 'human'` の exchange だけを会話へ畳み直し、
-     * `speaker: 'human'` で人間自身の発言だけに絞れるようにする——要約に潰された
-     * 後でも、逐語はここから読み返せる。
-     *
-     * **形は `journal_read` をそのまま踏襲する。新しい契約を作らない。** `id` で
-     * 1件の全文、それ以外は予算を先に決めて入るところまで積む一覧。切ったら
-     * 必ず言い、遡った件数と先頭に届いたかを必ず出す（`app.ts` の `/conversations`
-     * と同じ判断——遡り切れていない窓で「無い」と言い切らない）。
-     */
-    /**
-     * **人間の会話へ、いまのターンの外から1通書く道具**（issue #1393）。
-     *
-     * 返答はターンの結果として書かれるので、**人間の発言で起きたターン以外
-     * （timer・外部イベント・マネージャーの報告・自発）からは、人間の会話へ
-     * 1文字も届けられなかった**（そのターンは宛先の会話を持たない）。ここは
-     * その宛先を呼び手が名指しする口である。
-     *
-     * - 書く先は日誌の `exchange`（`with: 'human'` / `role: 'outbound'`）で、
-     *   ターンの返答が書くものと同じ形である。⟹ 会話の画面・`conversation_read`
-     *   ・`GET /conversations/:id` のどれからも、クローンの発言として読める
-     * - `conversationId` を省けば**新しい会話を始める**（id はここで振り、応答で返す）
-     * - **いまのターンの会話そのものへは書かない。** そこへはターンの返答が
-     *   届くので、道具で書くと同じ画面に返答が2通並ぶ（逐次配信の途中に割り込む）
-     */
+    // 遡り切れていない窓で「無い」と言い切らない: 遡った件数と先頭に届いたかを必ず出す
+    // いまのターンの会話そのものへは書かない: ターンの返答が届くので、道具で書くと同じ画面に返答が2通並ぶため
     tool(
       'conversation_post',
       [
@@ -7786,11 +7674,6 @@ export function createCloneTools(context: ToolContext) {
         '**ここに出ないもの**（知らずに引くと「無かった」と読むので、先に言う）:',
         '① **ask_human への人間の回答は、この道具では出ない。**',
         '回答の本文は日誌の escalation にしか無いので journal_read types=["escalation"] で読むこと',
-        // **#756 で反転。** ここは「approvals_list は答えの本文を持たない」と
-        // 言っていたが、それが真なのは**一覧モードだけ**である —— `id` を渡す
-        // 全文モードは `getApproval(id)` を呼び（`pendingOnly` を通さない）、
-        // `回答: <本文>` を返す。実装の隣のコメント自身が「**答えが付いた件も
-        // 読める。**」と書いていた。
         '（approvals_list の一覧モードは**まだ答えが来ていない件**だけを出すが、id を渡す全文モードは答えが付いた件も開けて、回答の本文もそこに出る）。',
         '② 人間がマネージャーへ直接話しかけた発言も出ない',
         '（日誌には with:"manager" として載り、あなた自身の指示と見分けが付かない）。',
@@ -7819,8 +7702,6 @@ export function createCloneTools(context: ToolContext) {
           .string()
           .optional()
           .describe('ISO 8601。この時刻以前だけ返す。過去を掘るときはこれを指定する'),
-        // **issue #1720。** `.int().min(1).max(10_000)` は入力スキーマ側では
-        // なくハンドラの先頭で見る。
         scan: z
           .number()
           .optional()
@@ -7828,15 +7709,12 @@ export function createCloneTools(context: ToolContext) {
             `人間との往復を何件遡るか（${formatIntRangeJa({ min: 1, max: 10_000 })}。既定 2000。マネージャーとの往復・内部ターンは` +
               '数えない。issue #418）。遡り切れたかは応答の注記で分かる',
           ),
-        // **issue #1720。** 同上（`.int().min(1).max(200)`）。
         limit: z
           .number()
           .optional()
           .describe(
             `一覧モードで返す会話の本数（${formatIntRangeJa({ min: 1, max: 200 })}。既定 20）。conversationId / q のときは効かない`,
           ),
-        // **#3644。** `GET /conversations` の `cursor` と同じ継続点（符号化は core の
-        // `encodeConversationCursor` / `decodeConversationCursor` 1か所）。
         cursor: z
           .string()
           .optional()
@@ -7849,7 +7727,6 @@ export function createCloneTools(context: ToolContext) {
           .string()
           .optional()
           .describe('この発言1件を全文で読む（一覧に出ている id）。他の条件は無視される'),
-        // **issue #1720。** 同上（`.int().min(0)`）。
         offset: z
           .number()
           .optional()
@@ -7907,9 +7784,7 @@ export function createCloneTools(context: ToolContext) {
           );
         }
 
-        // **since/until を正規化する（issue #1515）。** `journal_read` と同じ
-        // 理由——`readConversationWindow` を経由して同じ `JournalQuery` へ渡る
-        // ので、同じ穴を持つ（`journal-time.ts` の doc）。
+        // since/until を正規化する: `journal_read` と同じ穴を持つため
         if (sinceInput !== undefined && normalizeJournalTimeBoundary(sinceInput) === null) {
           return text(
             describeUnreadableJournalTimeBoundary('since', sinceInput) + '**会話は読んでいない。**',
@@ -7930,7 +7805,6 @@ export function createCloneTools(context: ToolContext) {
             : (normalizeJournalTimeBoundary(untilInput) ?? undefined);
 
         const scanLimit = scan ?? 2000;
-        // **会話の一覧（`conversationId` も `q` も無い呼び）だけが cursor で頁を送る（#3644）。**
         const listMode = conversationId === undefined && q === undefined;
         let cursor: ConversationCursor | undefined;
         if (listMode && cursorInput !== undefined) {
@@ -7946,14 +7820,8 @@ export function createCloneTools(context: ToolContext) {
         }
         let listPage: ConversationPage | undefined;
         let entries: Awaited<ReturnType<typeof readConversationWindow>> = [];
-        /**
-         * 窓の組み立ては `readConversationWindow` 1か所に閉じる（issue #418）。
-         * `types: ['exchange']` と `with: ['human']` をここで手組みし直さない
-         * — 手組みし直した場所ができるたびに `with` を絞り忘れる余地が生まれる
-         * （`GET /conversations` / `GET /conversations/:id` と同じ理由）。
-         */
+        // 窓の組み立ては `readConversationWindow` 1か所に閉じる: 手組みし直すたびに `with` を絞り忘れる余地が生まれるため
         if (listMode) {
-          // 一覧は頁（`readConversationPage`。`GET /conversations` と同じ関数・同じ規則）で読む。
           try {
             listPage = await readConversationPage(stores.journal, {
               limit: limit ?? 20,
@@ -7963,7 +7831,7 @@ export function createCloneTools(context: ToolContext) {
               ...(until === undefined ? {} : { until }),
             });
           } catch (error) {
-            // 継続点が指す発言が見当たらないのは「判定できない」である。黙って先頭から返さない。
+            // 継続点が指す発言が見当たらないのは「判定できない」: 黙って先頭から返さない
             if (error instanceof InvalidConversationCursorError) {
               return text(
                 `cursor が使えない（${error.message}。別の日誌のものか、書き換えられている）。` +
@@ -7980,24 +7848,9 @@ export function createCloneTools(context: ToolContext) {
           });
         }
         const scannedCount = listPage === undefined ? entries.length : listPage.scanned;
-        // **`since` を渡されたら「先頭に届いた」とは言えない。**
-        //
-        // `reachedStart` が答えるのは「ストアが行を出し切ったか」だけである。
-        // ところが `since`（と #418 で足した `with`）は LIMIT より先に効く
-        // （fs / pg / memory とも WHERE → LIMIT の順。`storage-pg/src/journal.ts`
-        // は `where()` の後に `.limit()` を呼ぶ）ので、件数が `scan` に届かないのは
-        // 「日誌の先頭まで見た」ではなく「`since` より新しい範囲を出し切った」
-        // でしかない。**ここを混ぜると「無い」と言い切ってしまう** —
-        // 実際には `since` より古い側に在りうるのに、下の分岐が
-        // 「当たる発言は無い」を選ぶ。これはこの道具が塞いでいる欠陥
-        // （観測の欠落を「無い」と報告する形）そのものである。
+        // `since` を渡されたら「先頭に届いた」と言わない: `reachedStart` は行を出し切ったかだけで、`since` は LIMIT より先に効くため、混ぜると `since` より古い側に在りうるものを「無い」と言い切る
         const exhausted = reachedStart(scannedCount, scanLimit);
         const reached = exhausted && since === undefined;
-        // **「日誌を」ではなく「人間との往復を」。** #418 より前は `entries` に
-        // マネージャー / 内部ターンとの往復も混ざっていたので「日誌を N 件」が
-        // そのまま `scan` の意味と一致していた。いまは `readConversationWindow`
-        // が `with: ['human']` を先に効かせるので、`entries.length` は人間との
-        // 往復の件数である——文言もそれに合わせる。
         const scanNote =
           `（人間との往復を ${scannedCount} 件遡った。` +
           (reached
@@ -8008,7 +7861,6 @@ export function createCloneTools(context: ToolContext) {
               : listMode
                 ? 'この窓より古いものは見ていない。続きは「続きを読むには」の cursor で読める）'
                 : 'この窓より古いものは見ていない。scan を増やすか until で窓をずらすこと）');
-        // cursor は一覧のときだけ効く。渡されたのに使わなかったなら、そう言う。
         const cursorIgnoredNote =
           !listMode && cursorInput !== undefined
             ? [
@@ -8017,18 +7869,8 @@ export function createCloneTools(context: ToolContext) {
               ]
             : [];
 
-        //
-        // **畳み込み込みの正本（`conversationMessages`）を経由する。** かつてはここで
-        // `humanExchanges` → `bySpeaker` → `toMessage`/`searchExchanges` を手で
-        // 組んでおり、編集で畳まれた旧発言・その応答が既定ビューにも素通しで
-        // 出ていた。畳み込み規則（`supersedes` を持つ発言による既定ビューからの
-        // 除外）を持つのは `conversation.ts` の1か所だけにする（モジュール冒頭の
-        // doc「畳み込み規則を持つのも、ここ1か所である」）。
-        //
-        // **常に `includeSuperseded: true` で1回だけ呼ぶ。** 既定ビュー（`false`）
-        // でも「畳まれた版が何件あるか」を数える必要があるため（下の `supersededCount`。
-        // ⚠️ 制約(A) — ここが出ないとクローンは畳まれた版の存在に気づけない）、
-        // まず畳まれた分も含めて取り、既定ビューに戻すかどうかはここで自分でふるう。
+        // 畳み込みの正本（`conversationMessages`）を経由する: 畳み込み規則を持つのを `conversation.ts` の1か所だけにするため
+        // 常に `includeSuperseded: true` で1回だけ呼ぶ: 既定ビューでも畳まれた版の件数を数える必要があり、出ないとクローンは畳まれた版の存在に気づけないため
         if (conversationId !== undefined) {
           const allMessages = conversationMessages(entries, conversationId, {
             includeSuperseded: true,
@@ -8050,8 +7892,6 @@ export function createCloneTools(context: ToolContext) {
             needle === undefined
               ? speakerFiltered
               : speakerFiltered.filter((message) => message.text.toLowerCase().includes(needle));
-          // `conversationMessages` は既に古い順（chronological）で返すので、ここでの
-          // reverse は要らない。
           if (matched.length === 0) {
             return text(
               (reached
@@ -8068,14 +7908,8 @@ export function createCloneTools(context: ToolContext) {
               `\n  ${excerptLine(message.text, CONVERSATION_EXCHANGE_EXCERPT)}` +
               attachmentLines(message.attachments, '  '),
           );
-          // **会話は新しい側から積む。** 表示は古い順のままだが、予算で切れるときに
-          // 落とすのは古い側である（会話を開く動機はたいてい直近の続きを思い出すこと
-          // で、人が chat の履歴を開くと末尾が見えているのと同じ形にしてある）。
-          // 積む形そのものは `renderListingFromEnd` が持つ（一覧ごとに手で書かない）。
-          //
-          // **予算の断り書き（`omitted`）とは別の行として畳み込みの注記を出す。**
-          // 前者は「予算で切った」、後者は「畳み込みで意図的に隠した」で、別の事実
-          // である（AGENTS.md 地雷表と同じ理由——取れない事実を1つの行に混ぜない）。
+          // 会話は新しい側から積む: 予算で切るとき落とすのは古い側にし、会話を開く動機である直近の続きを残すため
+          // 畳み込みの注記は予算の断り書きとは別の行にする: 「予算で切った」と「畳み込みで意図的に隠した」は別の事実のため
           const supersededNote =
             supersededCount === 0
               ? undefined
@@ -8088,8 +7922,7 @@ export function createCloneTools(context: ToolContext) {
             [
               renderListingFromEnd(lines, {
                 budget: CONVERSATION_LIST_BUDGET,
-                // **どちら側を落としたかを言う。** 「N 件省略」だけだと、続きの取り方を
-                // 間違える（ここで `scan` を増やしても、落ちているのは古い側なので出てこない）。
+                // どちら側を落としたかを言う: 「N 件省略」だけだと続きの取り方を間違えるため
                 omitted: ({ rest, shown, total }) =>
                   `…この会話の**古い側** ${rest} 件は省略（この窓に ${total} 件あり、` +
                   `新しい側から ${shown} 件だけ出した）。古い側を見るには until で窓を古い方へずらすこと。`,
