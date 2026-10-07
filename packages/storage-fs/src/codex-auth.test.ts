@@ -1,20 +1,17 @@
-import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { readFile, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { verifyCodexChatgptAuthContract } from '@alteroid/core';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
+
+import { makeTempDir } from '../../../vitest.tmpdir.js';
 
 import { FsCodexChatgptAuthStore } from './codex-auth.js';
 
 let dir: string;
 
 beforeEach(async () => {
-  dir = await mkdtemp(join(tmpdir(), 'alteroid-codex-auth-'));
-});
-
-afterEach(async () => {
-  await rm(dir, { recursive: true, force: true });
+  dir = await makeTempDir('alteroid-codex-auth-');
 });
 
 describe('FsCodexChatgptAuthStore（#3939）', () => {

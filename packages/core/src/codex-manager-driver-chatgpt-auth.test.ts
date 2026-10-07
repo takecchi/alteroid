@@ -198,11 +198,12 @@ function open(options: { env?: Record<string, string>; handle?: CodexChatgptAuth
 }
 
 async function until(condition: () => boolean, what: string): Promise<void> {
-  for (let i = 0; i < 400; i += 1) {
-    if (condition()) return;
-    await new Promise((resolve) => setTimeout(resolve, 5));
-  }
-  throw new Error(`待ちきれなかった: ${what}`);
+  await vi.waitFor(
+    () => {
+      if (!condition()) throw new Error(`まだ: ${what}`);
+    },
+    { timeout: 2000, interval: 5 },
+  );
 }
 
 describe('peer の Codex を ChatGPT ログインで起こす（#3939）', () => {

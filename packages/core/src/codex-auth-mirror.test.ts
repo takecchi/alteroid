@@ -1,8 +1,9 @@
-import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
+
+import { makeTempDir } from '../../../vitest.tmpdir.js';
 
 import {
   CodexAuthMirror,
@@ -18,12 +19,8 @@ let dir: string;
 let notices: CodexAuthNotice[];
 
 beforeEach(async () => {
-  dir = await mkdtemp(join(tmpdir(), 'alteroid-codex-mirror-'));
+  dir = await makeTempDir('alteroid-codex-mirror-');
   notices = [];
-});
-
-afterEach(async () => {
-  await rm(dir, { recursive: true, force: true });
 });
 
 function mirror(): CodexAuthMirror {

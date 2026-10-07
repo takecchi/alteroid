@@ -9,13 +9,14 @@ import {
   createMemoryStores,
   createRunnerHost,
   createRunnerRegistry,
+  fingerprintOf,
   type CodexChatgptAuthService,
   type ManagerPool,
   type RunnerHost,
   type Stores,
 } from '@alteroid/core';
 import { createRunnerApp, Outbox } from '@alteroid/runner';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { makeTempDir } from '../../../vitest.tmpdir.js';
 
@@ -136,12 +137,14 @@ async function loggedInStores(): Promise<Stores> {
   return stores;
 }
 
+// 実時間で待つ（本物の SSE と runner の見回りの周期を通すため）。待ちは vi.waitFor の見回りに任せる。
 async function until(condition: () => Promise<boolean>, what: string): Promise<void> {
-  for (let i = 0; i < 300; i += 1) {
-    if (await condition()) return;
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
-  throw new Error(`待ちきれなかった: ${what}`);
+  await vi.waitFor(
+    async () => {
+      if (!(await condition())) throw new Error(`まだ: ${what}`);
+    },
+    { timeout: 3000, interval: 10 },
+  );
 }
 
 describe('Codex の ChatGPT ログインを runner へ降ろし、書き戻す（#3939）', () => {
@@ -187,7 +190,11 @@ describe('Codex の ChatGPT ログインを runner へ降ろし、書き戻す�
     expect(r.host.codexAuth().placed).toBe(false);
     await r.host.setCodexAuth({ value: LOGIN_VALUE, revision: 'r' });
     await writeFile(join(r.codexHome, 'auth.json'), REFRESHED);
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    // runner の見回りが書き換えを見つけた（知らせを出した）ところまで待つ。旧いデーモンは取りに来ない。
+    await until(
+      async () => r.host.takeCodexAuthWriteBack(fingerprintOf(REFRESHED)) !== null,
+      'runner が書き換えを見つける',
+    );
     await r.pool.start({ request: 'もう1本' });
     expect((await r.stores.codexAuth.get())?.value).toBe(LOGIN_VALUE);
   });

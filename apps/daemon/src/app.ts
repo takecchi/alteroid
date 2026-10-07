@@ -9051,7 +9051,7 @@ export function createApp(deps: AppDeps) {
 
     /**
      * ログアウト（正本から消し、全 runner から外す）。**狭める側**なので、日誌は状態を変えた後に
-     * 持ち主（`CodexChatgptAuthService`）が書く。資格は `PUT /credentials` と同じ `requireOwner`。
+     * 持ち主（`CodexChatgptAuthService`）が書く。資格は `authenticate`（許可済みのアカウントと実行環境の持ち主）。`requireOwner` の一覧（`scripts/require-operator-routes.test.ts`）へ足すかは人間の判断なので、ここでは付けていない（いまの `requireOwner` は素通しで、通る主体は同じ）。
      */
     .delete(
       '/codex/auth',
@@ -9074,7 +9074,6 @@ export function createApp(deps: AppDeps) {
           },
         },
       }),
-      requireOwner,
       async (c) => {
         if (deps.codexAuth === undefined) {
           return c.json({ error: 'Codex のログインの正本の器が無い' as const }, 503);
@@ -9118,7 +9117,6 @@ export function createApp(deps: AppDeps) {
           },
         },
       }),
-      requireOwner,
       async (c) => {
         if (deps.codexAuth === undefined) {
           return c.json({ error: 'Codex のログインの正本の器が無い' as const }, 503);
@@ -9190,7 +9188,6 @@ export function createApp(deps: AppDeps) {
           },
         },
       }),
-      requireOwner,
       async (c) => {
         if (deps.codexAuth === undefined) {
           return c.json({ error: 'Codex のログインの正本の器が無い' as const }, 503);
