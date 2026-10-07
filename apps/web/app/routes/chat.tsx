@@ -76,6 +76,7 @@ import {
   isApprovalWithdrawn,
 } from '~/components/approval-answer-card';
 import { LeftoverDrafts } from '~/components/approval-leftover-drafts';
+import { UnreadableApprovalNote } from '~/components/unreadable-approval-note';
 import { formatRelativeAtMinute, useMinuteNow } from '~/lib/use-now';
 import { usePageVisible } from '~/lib/use-page-visible';
 
@@ -3745,6 +3746,17 @@ export function ChatPane({
               // いるので、下の Spinner/Empty/ul とは排他にしない。
               <ErrorNote error={conversationApprovals.error} className="mb-3" />
             )}
+            {/* 読めない行は `approvals` に入らないので、断らないと確認が無いように見える（#4018）。
+                形の違う応答は無いものとして扱い、読めた本文まで巻き込んで落とさない。 */}
+            <UnreadableApprovalNote
+              unreadable={
+                Array.isArray(conversationApprovals.data?.unreadable)
+                  ? conversationApprovals.data.unreadable
+                  : []
+              }
+              className="mb-3"
+              hint="クローンはこの会話の確認の答えを待っているかもしれない。承認の画面で確かめられる。"
+            />
             {/*
               **読み込み中の表示は、見せるものが何も無いときだけ。** この画面で始めた
               会話でも履歴を読むようになったので（上の `useConversation` のコメント）、
