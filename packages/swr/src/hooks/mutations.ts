@@ -18,6 +18,11 @@ import type {
   MemoryDocument,
   McpServersState,
   McpServersUpdateResult,
+  PluginInstallResult,
+  PluginPreview,
+  PluginPreviewRequest,
+  PluginRemoveResult,
+  PluginScope,
   Practice,
   ProfileScope,
   ProfileUpdateResult,
@@ -965,6 +970,50 @@ export function useSetMcpServers() {
       const update = unwrap(result);
       await mutate(KEY.mcpServers);
       return { update };
+    },
+    [api, mutate],
+  );
+}
+
+// 取り元の検査をここでしない: 画面の parsePluginSource とデーモンの schema が持ち、400 の文言は共有の `unwrap` がそのまま見せるため
+export function usePreviewPlugin() {
+  const api = useApi();
+  return useCallback(
+    async (body: PluginPreviewRequest): Promise<PluginPreview> =>
+      unwrap(await api.api.POST('/plugins/preview', { body })),
+    [api],
+  );
+}
+
+// 404（預かりの期限切れ）・409（名前の衝突）は ApiError の status で画面が分ける
+export function useInstallPlugin() {
+  const api = useApi();
+  const { mutate } = useSWRConfig();
+  return useCallback(
+    async (body: {
+      previewId: string;
+      scope: PluginScope;
+      enableHooks: boolean;
+      enableMcp: boolean;
+    }): Promise<PluginInstallResult> => {
+      const result = unwrap(await api.api.POST('/plugins', { body }));
+      await mutate(KEY.plugins);
+      return result;
+    },
+    [api, mutate],
+  );
+}
+
+export function useRemovePlugin() {
+  const api = useApi();
+  const { mutate } = useSWRConfig();
+  return useCallback(
+    async (name: string): Promise<PluginRemoveResult> => {
+      const result = unwrap(
+        await api.api.DELETE('/plugins/{name}', { params: { path: { name } } }),
+      );
+      await mutate(KEY.plugins);
+      return result;
     },
     [api, mutate],
   );
