@@ -18,66 +18,24 @@ import {
   type AlteroidPaths,
 } from '@alteroid/storage-fs';
 
-/**
- * 記憶の置き場を決める（roadmap M4）。
- *
- * ローカル（fs）とクラウド（PostgreSQL）は**同じものの器違い**である。切り替えで
- * 能力が変わってはいけない — 受け入れ基準は「M1〜M3 の受け入れ基準が同じように
- * 通る」であって、クラウドだから何かができない、は認められない。
- */
 export const DATABASE_URL_ENV = 'ALTEROID_DATABASE_URL';
 
 export interface Storage {
   stores: Stores;
-  /** state（daemon.json / ログ）の置き場。pg 構成でもここはローカルに要る。 */
   paths: AlteroidPaths;
-  /** SDK のセッション永続化先。pg 構成でだけ付く。 */
   sessionStore?: SessionStore;
-  /**
-   * マネージャー子プロセスの環境変数から伏せる鍵。
-   *
-   * **記憶ストアへ到達するのに自分が使った鍵を、そのまま子へ配らない。**
-   * これが非対称な可視性の本命であり、pg 構成では「渡さなければ到達経路が
-   * 存在しない」という構造的な強制になる（architecture.md「非対称な可視性」）。
-   */
+  // 記憶ストアへ到達するのに自分が使った鍵を子へ配らない: 渡さなければ到達経路が存在しない、という構造的な強制のため。
   withheldEnvKeys: string[];
-  /**
-   * 記憶の器。**`paths.root` の意味がこれで変わる** — fs 構成ではそこに記憶が
-   * あるが、pg 構成ではローカルに残るのは state だけで記憶ではない。取り違えた
-   * まま表示すると、読んだ側が矛盾する2つの事実を同時に信じることになる。
-   */
+  // `paths.root` の意味が変わる: fs 構成ではそこに記憶があるが、pg 構成でローカルに残るのは state だけで、取り違えると矛盾する2つの事実を信じることになる。
   kind: 'fs' | 'pg';
-  /**
-   * 記憶がどこにあるかの1行（起動ログと、認証の要る `GET /status`）。**接続情報そのものは出さない。**
-   * 人間が「いまどっちの器で動いているか」を取り違えないための表示であり、
-   * 認証情報の配布経路にはしない。
-   */
+  // 接続情報そのものは出さない: 認証情報の配布経路にしないため。
   description: string;
   close(): Promise<void>;
-  /**
-   * SDK のセッション生ログ（`sessionStore` の預け先）を空にする
-   * （ワークスペースのリセット専用。#workspace-reset）。
-   *
-   * **pg 構成でだけ付く。** fs 構成では SDK 自身がローカルディスクへ直接
-   * 生ログを書いており（`sessionStore` の doc「pg 構成でだけ付く」と同じ
-   * 非対称）、`Storage` から触れる預け先そのものが無い。
-   *
-   * `resetWorkspaceState`（`@alteroid/core`）の `clear()` 一式には含めない
-   * ——あちらは `Stores` のフィールドだけを知っていればよい設計にしてあり、
-   * `sessionStore` は `Storage` 側にしか無いフィールドである（`Stores.
-   * sessionStore` は同じ実体だが、`Stores` を渡す先はこの生ログの預け先の
-   * 存在を知らなくてよい層まで含む）。呼び出し側（`POST /reset`）が
-   * `resetWorkspaceState(stores, { clearSessionLog })` の形でここへ橋渡しする。
-   */
+  // `resetWorkspaceState` の `clear()` 一式には含めない: `sessionStore` は `Storage` 側にしか無いフィールドのため。
   clearSessionLog?: () => Promise<number>;
-  /**
-   * 記憶の器が応えるかを確かめる（稼働の地図の `storage.state`）。応えなければ reject。
-   * pg は既存の接続で `SELECT 1`、fs は置き場のディレクトリへ触れるか。**値は返さない。**
-   */
   probe: () => Promise<void>;
 }
 
-/** 空文字の環境変数は「未指定」として扱う。 */
 function envValue(env: NodeJS.ProcessEnv, key: string): string | undefined {
   const value = env[key];
   return value !== undefined && value.length > 0 ? value : undefined;
@@ -91,12 +49,7 @@ export interface StoragePlan {
   description: string;
 }
 
-/**
- * 環境変数から構成を決める（接続はしない）。
- *
- * 接続と分けてあるのは、**どの鍵を子プロセスから伏せるかが接続の成否と無関係に
- * 決まっている**ことを、DB 無しで確かめられるようにするためである。
- */
+// 接続と分ける: どの鍵を子プロセスから伏せるかが接続の成否と無関係に決まることを、DB 無しで確かめられるようにするため。
 export function planStorage(env: NodeJS.ProcessEnv = process.env): StoragePlan {
   const root = envValue(env, 'ALTEROID_HOME');
   const databaseUrl = envValue(env, DATABASE_URL_ENV);
@@ -115,35 +68,12 @@ export function planStorage(env: NodeJS.ProcessEnv = process.env): StoragePlan {
     kind: 'pg',
     root,
     databaseUrl,
-    // 記憶へ到達するのに自分が使った鍵。これを配れば境界が消える。
     withheldEnvKeys: [DATABASE_URL_ENV, ...AUTH_WITHHELD_ENV_KEYS],
     description: `PostgreSQL（${safeTarget(databaseUrl)}）`,
   };
 }
 
-/**
- * 記憶の保護状態（human guard）の backfill。
- *
- * デーモン起動時に、日誌の全 `memory_update` を舐めて各 slug の
- * `human_touched_at` を確定させる（`PersonaStore.markHumanTouched` の doc）。
- * **`clone.ts` は触らない・呼ばない** — ここは記憶ストアを開いた直後、
- * クローンのセッションが立ち上がる前の起動処理である。
- *
- * 判定基準（`cause:'human'` かつ `action !== 'remove'`）は `deriveHumanTouchedAtFromJournal`
- * （`@alteroid/core`）に1本化してある。**各 `PersonaStore`（fs / pg）が保護状態の
- * 索引を読み出し時に失っていたと分かったとき、同じ関数でその場でも組み直す**
- * （`storage-fs` の `FsPersonaStore#rebuildIndex` / `storage-pg` の
- * `PgPersonaStore#healRow`）。**ここ（起動時 backfill）はその「その場の組み直し」
- * だけに頼らないための保険である** — 走行中に索引を失った場合、次にその slug が
- * 読まれるまでは `unknown`（守る側）のまま動く。基準がここ以外にも散ると、
- * 片方だけ直して残りが古い基準のまま、という穴ができるので、実装は持たず呼ぶだけ。
- *
- * **既に立っている `human_touched_at` を降ろすことはない** —
- * `markHumanTouched` 自体が単調非減少なので、ここは呼ぶだけでよい。
- *
- * **失敗しても起動は続ける。** 失敗した slug は `unknown` のまま
- * （守る側へ自然に倒れる）。
- */
+// 判定基準の実装を持たず `deriveHumanTouchedAtFromJournal` を呼ぶだけにする: 基準が散ると、片方だけ直して残りが古い基準のままになるため。
 async function backfillMemoryHumanTouch(stores: Stores): Promise<void> {
   try {
     const humanTouchedAt = await deriveHumanTouchedAtFromJournal(stores.journal);
@@ -157,49 +87,8 @@ async function backfillMemoryHumanTouch(stores: Stores): Promise<void> {
   }
 }
 
-/**
- * 記憶の `createdAt` の backfill。**`backfillMemoryHumanTouch` がそのまま
- * 手本である**——同じ場所（記憶ストアを開いた直後、クローンのセッションが
- * 立ち上がる前）で、同じ形（日誌を舐めて derive → 器へ反映）で走る。
- *
- * **これは `createdAt` の第一の出所ではない。** 第一の出所は書き込み経路
- * そのもの（`packages/storage-fs/src/persona.ts` の `#writeNow` /
- * `packages/storage-pg/src/persona.ts` の `write` と `append`）——記憶を
- * 作る瞬間、作成時刻はストア自身が直接知っているので、そこで確定させる。
- * **ここが担うのは、その配線より前に作られた行（書き込み経路がまだ見て
- * いない昔の記憶）を日誌から埋める後始末だけである。** この配線が入って
- * 以降に新しく作られる記憶にとって、`markCreatedAt` は通常何もしない
- * （書き込み経路で既に値が入っているため、絶対条件2「値が無いときだけ」に
- * 当たらない）。
- *
- * **バックフィルは `created_at` を埋める以外のことを一切しない**（記憶の
- * 絶対条件1）。触るのは `PersonaStore.markCreatedAt` を通した `created_at`
- * 列 / `.index.json` の `createdAt` フィールドだけで、本文・`updatedAt`・
- * `humanTouchedAt`・`description`・`kind`・`parent` のどれにも触れない
- * （呼んでいる `markCreatedAt` 自身がそれ以外の列 / フィールドを更新対象に
- * 含めない実装になっている——`storage-fs` / `storage-pg` の `markCreatedAt`
- * の doc）。
- *
- * **埋めるのは値が無いときだけ（絶対条件2。冪等）。** `markCreatedAt` が
- * 「既に値が入っていれば何もしない」を保証するので、ここは日誌から導出した
- * 候補をただ渡すだけでよい——2回目以降の起動でも同じ結果になる。
- *
- * **削除しない（絶対条件3）。** ここが呼ぶのは `markCreatedAt` だけで、
- * 記憶の削除・本文の書き換えに繋がる経路を一切持たない。
- *
- * **根拠が無い文書は `unknown` のまま（絶対条件4）。** 日誌に
- * `action:'write'` の `memory_update` が無い slug には `markCreatedAt` を
- * 呼ばない——呼ばないこと自体が「根拠が無い」を表す
- * （`memoryCreatedAtSchema` の doc）。`mtime` にも `birthtime` にも一切触れない。
- *
- * **何を埋めたかが後から分かる（絶対条件5）。** 起動ログに
- * 「何件埋めたか / 対象は何件で unknown は何件か」を1行出す
- * （`backfillMemoryHumanTouch` は件数を出していないが、この器からは
- * 実データの件数を確かめられないと分かっているため、ここでは明示的に出す）。
- *
- * **失敗しても起動は続ける。** 失敗した slug は `unknown` のまま
- * （守る側へ自然に倒れる。`backfillMemoryHumanTouch` と同じ判断）。
- */
+// `created_at` を埋める以外のことをしない・削除しない: 記憶の絶対条件のため。
+// 根拠が無い文書には `markCreatedAt` を呼ばず `unknown` のままにする: `mtime` にも `birthtime` にも触れない。
 async function backfillMemoryCreatedAt(stores: Stores): Promise<void> {
   try {
     const createdAt = await deriveMemoryCreatedAtFromJournal(stores.journal);
@@ -220,16 +109,7 @@ async function backfillMemoryCreatedAt(stores: Stores): Promise<void> {
   }
 }
 
-/**
- * 会話の既読の基準時刻を、起動時に確実に決める（無ければ「いま」、在れば変えない）。
- *
- * 位置の記録が無い会話は「基準時刻以前の発言は既読、以後は未読」と判定する
- * （`ConversationReadStore`）。導入した瞬間に過去の会話が未読だらけにならず、導入後に
- * クローンが新しく始めた会話は未読になる。**読み出しでも無ければ決める**（どの経路でも
- * 決まる）が、起動時に決めておけば「最初に読まれた時刻」へ基準時刻が遅れない。
- *
- * **失敗しても起動は続ける**（読めない記録は書き換えない。読み出し側が理由を載せる）。
- */
+// 起動時に決める: 読み出しでも決まるが、起動時に決めないと基準時刻が「最初に読まれた時刻」へ遅れるため。
 async function ensureConversationReadBaseline(stores: Stores): Promise<void> {
   try {
     const result = await stores.conversationReads.ensureBaseline(new Date().toISOString());
@@ -251,10 +131,7 @@ export async function openStorage(env: NodeJS.ProcessEnv = process.env): Promise
   if (plan.kind === 'fs' || plan.databaseUrl === undefined) {
     const { paths } = await initWorkspace(plan.root);
     const stores = createFsStores(plan.root);
-    // 起動時の器の実寸とヒープの検知（#1283、段2）。重い読み（backfill の
-    // journal 走査を含む）より前に置く。fs 構成では pg 専用の SQL を持つ
-    // 表の実寸は測れない——`null` を渡し、「測れなかった」として続ける
-    // （`boot-footprint.ts` の `describeBootFootprint` の doc）。
+    // 重い読み（backfill の journal 走査）より前に置く。fs 構成では表の実寸を測れないので `null` を渡す。
     await reportBootFootprint(stores, null);
     await backfillMemoryHumanTouch(stores);
     await backfillMemoryCreatedAt(stores);
@@ -270,20 +147,15 @@ export async function openStorage(env: NodeJS.ProcessEnv = process.env): Promise
     };
   }
 
-  // pg 構成でも state（接続先とプロセス id）はローカルに要る。CLI がデーモンを
-  // 見つける手段であり、記憶ではない。
   const paths = resolvePaths(plan.root);
   await mkdir(paths.state, { recursive: true });
 
-  // fs 構成のときに pg ドライバを読み込まない（ローカルは pg 無しで完結する）
+  // 動的 import にする: fs 構成のときに pg ドライバを読み込まないため。
   const { createPgStores, seedPgWorkspace, measureStorageFootprint } =
     await import('@alteroid/storage-pg');
   const pg = await createPgStores(plan.databaseUrl);
   await seedPgWorkspace(pg);
-  // 起動時の器の実寸とヒープの検知（#1283、段2）。backfill（journal を走査
-  // する）より前に置く——重い読みの全部より前、が要件である
-  // （`boot-footprint.ts` の doc）。本文（jsonb / text 列）は1バイトも
-  // SELECT しない（`footprint.ts` の doc）ので、ここ自体は軽い。
+  // backfill（journal を走査する）より前に置く: 重い読みの全部より前が要件のため。
   const footprint = await measureStorageFootprint(pg.db);
   await reportBootFootprint(pg, footprint);
   await backfillMemoryHumanTouch(pg);
@@ -299,17 +171,13 @@ export async function openStorage(env: NodeJS.ProcessEnv = process.env): Promise
     description: plan.description,
     close: () => pg.close(),
     clearSessionLog: () => pg.sessionStore.clearAll(),
-    // 既存の接続（プール）に1往復だけ。接続を新しく作らない。
     probe: async () => {
       await pg.db.execute(sql`select 1`);
     },
   };
 }
 
-/**
- * 接続先をログに出せる形にする。**パスワードは出さない。**
- * 起動ログは人間が読むもので、認証情報の配布経路にしない。
- */
+// パスワードは出さない: 起動ログを認証情報の配布経路にしないため。
 function safeTarget(url: string): string {
   try {
     const parsed = new URL(url);

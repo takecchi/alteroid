@@ -163,7 +163,7 @@ export class PgScheduleStore implements ScheduleStore {
         .onConflictDoUpdate({ target: schedules.kind, set });
       return;
     }
-    // **前提の版つき（Issue #3821）。** 読めない行は `UnreadableScheduleError`（Issue #3859）。 比較は書き込みと同じトランザクションの中で、
+    // **前提の版つき（Issue #3821）。** 比較は書き込みと同じトランザクションの中で、
     // 行をロックしてから行う。行が無いときは、ロックする行が無いので
     // `onConflictDoNothing` が「同時に作った別の書き手」を弾く。
     await this.#db.transaction(async (tx) => {
@@ -188,7 +188,6 @@ export class PgScheduleStore implements ScheduleStore {
             .from(schedules)
             .where(eq(schedules.kind, value.kind))
             .limit(1);
-          // 読めない行なら `parsePlan` が投げる（Issue #3859）。読み直しの間に消えていれば null。
           const raced = again[0];
           throw new ScheduleConflictError(
             value.kind,
@@ -197,7 +196,7 @@ export class PgScheduleStore implements ScheduleStore {
         }
         return;
       }
-      // 読めない形の行は「無い」側に数えず `UnreadableScheduleError`（Issue #3859。fs と同じ）。
+      // 読めない行は `parsePlan` が投げる。「無い」側には数えない。
       const current = parsePlan(value.kind, row.plan);
       if (!scheduleVersionMatches(current, ifMatch)) {
         throw new ScheduleConflictError(value.kind, current);

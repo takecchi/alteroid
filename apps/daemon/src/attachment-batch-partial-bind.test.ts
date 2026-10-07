@@ -9,7 +9,6 @@ import { checkAndBindAttachments } from './attachment-batch.js';
 
 const PNG = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4]);
 
-/** `POST /chat` と同じ束ね方（`apps/daemon/src/app.ts` の `checkAndBindAttachments` 呼び出し）。 */
 function chatBatch(store: AttachmentStore, ids: string[], conversationId: string) {
   return checkAndBindAttachments(ids, {
     store,
@@ -29,7 +28,6 @@ describe('checkAndBindAttachments は、400 で断った回に添付を結び付
     const a = await store.put({ name: 'a.png', mediaType: 'image/png', bytes: PNG });
     const b = await store.put({ name: 'b.png', mediaType: 'image/png', bytes: PNG });
 
-    // conv-2 が B を取る発言と、conv-1 が [A, B] を取る発言が、同時に届く（どちらも検査を抜けてから結び付ける）。
     const [first, second] = await Promise.all([
       chatBatch(store, [b.id], 'conv-2'),
       chatBatch(store, [a.id, b.id], 'conv-1'),
@@ -38,7 +36,6 @@ describe('checkAndBindAttachments は、400 で断った回に添付を結び付
     expect(second.ok).toBe(false);
     if (!second.ok) expect(second.body.code).toBe('attachment_conflict');
 
-    // 断った（発言は投函されない）のに、A が conv-1 へ結び付いたままだと、A は他の会話へ使えなくなる。
     expect((await store.getMeta(a.id))?.conversationId).toBeUndefined();
     const reuse = await chatBatch(store, [a.id], 'conv-3');
     expect(reuse.ok).toBe(true);
@@ -51,7 +48,6 @@ describe('checkAndBindAttachments は、400 で断った回に添付を結び付
     const c = await store.put({ name: 'c.png', mediaType: 'image/png', bytes: PNG });
     expect((await chatBatch(store, [a.id], 'conv-1')).ok).toBe(true);
 
-    // conv-1 の次の発言が [A, C, B] を取る間に、conv-2 が B を取る。B で断られる。
     const [first, second] = await Promise.all([
       chatBatch(store, [b.id], 'conv-2'),
       chatBatch(store, [a.id, c.id, b.id], 'conv-1'),
@@ -92,7 +88,6 @@ describe('checkAndBindAttachments は、400 で断った回に添付を結び付
     const store = createMemoryStores().attachments;
     const a = await store.put({ name: 'a.png', mediaType: 'image/png', bytes: PNG });
     const b = await store.put({ name: 'b.png', mediaType: 'image/png', bytes: PNG });
-    // bind の直前（getMeta で A が未結び付けと見たあと）に割り込む: 別の発言が A を conv-1 へ結び、別の会話が B を取る。
     const racing = new Proxy(store, {
       get(target, key) {
         if (key !== 'bind') {
@@ -109,7 +104,6 @@ describe('checkAndBindAttachments は、400 で断った回に添付を結び付
     const result = await chatBatch(racing, [a.id, b.id], 'conv-1');
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.body.code).toBe('attachment_conflict');
-    // 先に通った発言が結んだ A は、結ばれたまま残る。
     expect((await store.getMeta(a.id))?.conversationId).toBe('conv-1');
     expect((await store.getMeta(b.id))?.conversationId).toBe('conv-2');
   });
@@ -121,9 +115,6 @@ describe('checkAndBindAttachments は、同じ宛先への呼びを直列に通�
     const x = await real.put({ name: 'x.png', mediaType: 'image/png', bytes: PNG });
     const y = await real.put({ name: 'y.png', mediaType: 'image/png', bytes: PNG });
 
-    // 呼び A: [x, y] を conv-1 へ。検査の後、bind の前に y が conv-2 に取られ、bind は x を結んで y で conflict。
-    // 戻し（unbind）の直前に、呼び B: [x] を conv-1 へ（x は A が結んだ分なので、B にとっては「結び済み」）が届く。
-    // 実時間は待たない。並行の順序はゲートの Promise で決める。
     let releaseBind!: () => void;
     let releaseUnbind!: () => void;
     let unbindReached!: () => void;
@@ -147,16 +138,14 @@ describe('checkAndBindAttachments は、同じ宛先への呼びを直列に通�
     await Promise.resolve();
     expect((await real.bind([y.id], 'conv-2')).bound).toEqual([y.id]);
     releaseBind();
-    await reachedUnbind; // A は x を結んで y の conflict で断る途中（戻す直前）
+    await reachedUnbind;
     const b = chatBatch(real, [x.id], 'conv-1');
-    // B が（直列化されずに）通れる状態なら、ここまでに終わっている。マクロタスク1つ分だけ譲って流し切る（時間は待たない）。
     await new Promise<void>((resolve) => setImmediate(resolve));
     releaseUnbind();
     const [resultA, resultB] = await Promise.all([a, b]);
     expect(resultA.ok).toBe(false);
     expect(resultB.ok).toBe(true);
 
-    // B は通って発言になる。その添付 x は conv-1 に結んだままのはず（外れると、1 時間後の prune で消える）。
     expect((await real.getMeta(x.id))?.conversationId).toBe('conv-1');
   });
 

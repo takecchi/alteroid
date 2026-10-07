@@ -1,88 +1,9 @@
-/**
- * `check-no-attribution-trailers.mjs` の判定だけを切り出したもの（Issue #1020）。
- *
- * ## 何を塞ぐために在るか
- *
- * `AGENTS.md`「リポジトリの約束」は `Co-Authored-By:` トレーラを（コミット
- * メッセージにも PR 本文にも）付けない、そして `🤖 Generated with [Claude Code]`
- * も同じ決定の射程内であると定めている（人間の決定、2026-08-21 / 2026-09-15）。
- * だがこれまでは**規約が書いてあるだけ**で、それを機械で塞ぐ門が無かった。
- * 実測（Issue #1020 本文、2026-09-15T12:14Z 観測）: `main` 740本中 84本が
- * `🤖 Generated with` を、8本が `Co-Authored-By` を持つ。
- *
- * **今日の実害（1件、機序つき）**: PR #1018 の本文に `🤖 Generated with` が
- * 残ったまま squash マージされ、`main` の `63a33dd` のコミット本文に焼かれた。
- * 機序は2つ重なっている——(1) **squash マージは PR 本文をコミットメッセージへ
- * 写す**ので、本文に残っていれば履歴に入る、(2) マージ前の検査が fail-open
- * だった（`grep -c` は1件見つけても exit 0 を返すので、`;` で繋いだ後続が
- * 普通に走った。`AGENTS.md`「静かに失敗する道具」の1番目）。
- *
- * ⟹ この門は **fail-closed** で書く。本文かコミットメッセージが読めなかったら
- * 「見つからなかった」ではなく赤くする（下の `evaluateNoAttributionTrailers` の
- * `unreadable` verdict）。
- *
- * ## なぜ repo のファイルを走査しないか（#785 と同じ族）
- *
- * この門自身のテスト（`check-no-attribution-trailers.test.ts`）は、fixture として
- * `Co-Authored-By:` / `🤖 Generated with` の逐語を持つ。**repo 全体を走査する形で
- * 書くと、その fixture 自身を「見つかった」と誤検出する自己参照になる**
- * （Issue #785 と同じ形）。だからこの門が読むのは**この PR の本文と、この PR の
- * コミットメッセージだけ**であり、リポジトリのファイルは一切読まない。
- * `AGENTS.md` の該当節（「なぜ付けないか」の理由・「既に付いている分は履歴として
- * 残す」の決定）や、この門自身の doc・テストの fixture に逐語が在っても、
- * それらは対象外である。
- *
- * ## 既存の84本は対象外
- *
- * **この門は「これから」しか塞がない。** 既に main に入っている84本（+ 8本）を
- * 検出・修正する仕組みではない——`AGENTS.md`「これは受け入れた負債である」の
- * 決定どおり、履歴は書き換えない。
- *
- * ## 判定できない、という3つ目の状態を持つ
- *
- * `AGENTS.md`「静かに失敗する道具」: 2値にすると、判定できない場合がどちらかへ
- * 黙って倒れる。だからここも3値で答える——`clean`（見つからなかった。読めた
- * 上での不在）／ `found`（見つかった）／ `unreadable`（読めなかった）。
- * **倒す先は赤である**（`found` と `unreadable` はどちらも終了コード1）。
- */
+// repo のファイルを走査しない: この門自身のテストの fixture が逐語を持つため、走査すると自己参照で誤検出する。
+// 読めなかったら「見つからなかった」ではなく赤くする（`unreadable`）: 2値にすると判定できない場合が黙ってどちらかへ倒れるため。
 
-/**
- * 検査する印。**マッチは大小文字を区別しない。**
- *
- * 実測（2026-09-15、`main` の実コミット。`6a74c9d`）で、同じ意味のトレーラが
- * 2つの表記で共存していることを確認した——`Co-Authored-By: Claude Opus 5
- * <noreply@anthropic.com>` と `Co-authored-by: Claude Opus 5
- * <noreply@anthropic.com>`（1文字違い、`a` の大小）が同じコミットメッセージの
- * 中に並んでいた。`AGENTS.md` の規約の逐語は `Co-Authored-By:`（大文字）だが、
- * **表記ゆれを見逃さないために大小文字を無視する**（fail-closed の向き——
- * 見逃しは「該当なし」を作る側なので、厳密な逐語一致より広く取る）。
- *
- * `🤖 Generated with` は実測（同日、84本全件のうち抜き取り確認）で表記ゆれが
- * 無かったが、同じ理由で大小文字は無視する。
- *
- * ## なぜ行頭（`^\s*`）に絞るか（#1349）
- *
- * **以前はマッチが行内のどこに在っても当たっていた。** それだと「トレーラ
- * そのもの」と「トレーラについて書いた文」を区別できず、#1341 のようにこの
- * 門自身の挙動を PR 本文で説明しようとすると、その説明文自体が赤になった
- * （Issue #1349 が起票の経緯を持つ）。
- *
- * **塞ぐのは「印の文字列が履歴に残ること」であって、git が解釈するトレーラに
- * 狭めない。** だから `git interpret-trailers` に判定を委ねる案は採らない——
- * `🤖 Generated with [Claude Code](...)` は `Key: value` の形をしていないので、
- * git のトレーラ解釈に賭けると main の実測85本（Issue #1020 / #1349）を丸ごと
- * 取りこぼす。**見るのは「行頭に置かれているか」であって「git がトレーラと
- * 認めるか」ではない。**
- *
- * **行頭に置かれた印は、コードブロックや引用の中でも赤のままにする。**
- * squash マージは PR 本文を丸ごとコミットメッセージへ写すので、フェンスや
- * `>` で囲んであっても、写った履歴の中では行頭の印として他と区別が付かない
- * （区別できない以上、除外するとその囲みがそのまま素通りの経路になる）。
- *
- * **行頭でない——文中で印に触れているだけの文は通す。** 「本文で
- * `Co-Authored-By:` トレーラは付けていない、と書く」のような言及は行頭に
- * 印が来ないので、squash で写っても履歴に行頭の印として残らない。
- */
+// 大小文字を区別しない: `Co-Authored-By` と `Co-authored-by` が実際に共存していたため。
+// `git interpret-trailers` に判定を委ねない: `🤖 Generated with [Claude Code](...)` は `Key: value` の形ではなく、取りこぼすため。
+// 行頭の印はコードブロックや引用の中でも赤にする: squash マージは本文を丸ごと写し、囲みが素通りの経路になるため。
 export const ATTRIBUTION_MARKERS = [
   {
     id: 'co-authored-by',
@@ -96,14 +17,6 @@ export const ATTRIBUTION_MARKERS = [
   },
 ];
 
-/**
- * `text` の中に印が在るかを見て、当たった印の `label` を返す（無ければ空配列）。
- *
- * `text` が文字列でない・空文字なら何も当たらない（PR 本文が無いことは
- * ありうるし、それ自体は「見つからなかった」であって `unreadable` ではない
- * ——`unreadable` は「取得そのものに失敗した」ときにだけ使う。呼び分けは
- * `check-no-attribution-trailers.mjs` 側が担う）。
- */
 export function findAttributionMarkers(text) {
   if (typeof text !== 'string' || text.length === 0) return [];
   return ATTRIBUTION_MARKERS.filter((marker) => marker.pattern.test(text)).map(
@@ -111,29 +24,12 @@ export function findAttributionMarkers(text) {
   );
 }
 
-/**
- * コミットの見出し（`messageHeadline`）と本文（`messageBody`）を、素の
- * コミットメッセージの形（1行目・空行・以降）へ組み立てる。
- *
- * `gh pr view --json commits` はこの2つに分けて返す
- * （`git log --format=%B` のような1本の文字列では返さない）ので、判定の前に
- * ここで合成する。**本文が空なら見出しだけを返す**（末尾に無駄な空行を作らない）。
- */
 export function commitFullMessage(headline, messageBody) {
   const h = typeof headline === 'string' ? headline : '';
   const b = typeof messageBody === 'string' ? messageBody : '';
   return b.length > 0 ? `${h}\n\n${b}` : h;
 }
 
-/**
- * PR 本文とコミットメッセージ群から、印が残っていないかを判定する。
- *
- * @param {{ body: string|null, commits: { oid: string|null, headline: string, message: string }[]|null }} input
- *   `body` / `commits` が `null` なら「取得できなかった」を意味する
- *   （**空文字・空配列とは区別する**——PR 本文が空であることも、コミットが
- *   0件であることも、それ自体は正常な「読めた」結果でありうる）。
- * @returns {{ verdict: 'clean'|'found'|'unreadable', findings: { source: string, markers: string[] }[] }}
- */
 export function evaluateNoAttributionTrailers({ body, commits }) {
   if (body === null || commits === null) {
     return { verdict: 'unreadable', findings: [] };
@@ -163,11 +59,6 @@ export function evaluateNoAttributionTrailers({ body, commits }) {
   return { verdict: findings.length > 0 ? 'found' : 'clean', findings };
 }
 
-/**
- * 判定を、人が読んで次の一手が決まる文へ畳む（`check-pr-green-core.mjs` の
- * `formatVerdict` と同じ方針——ヘッダに何を判定したかを名乗り、`unreadable`
- * では読めなかったこと自体を明言する）。
- */
 export function formatVerdict(prNumber, result) {
   const header = `check-no-attribution-trailers(#${prNumber}):`;
   switch (result.verdict) {

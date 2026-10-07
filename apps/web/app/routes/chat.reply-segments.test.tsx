@@ -1,15 +1,4 @@
 // @vitest-environment jsdom
-/**
- * #3593。ストリームの途中で `ask_human`・道具を挟んだあとの text は、新しい返信行から始める。
- *
- * - 続きの text を前の行へ継ぎ足さない（本文が区切りなしで連結されない・カードより前へ出ない）。
- * - 続きの text が来たら、その会話の「〜を実行中…」の行を消す。
- * - 日誌はターンの本文を1つの発言に連結して載せる（`clone.ts` の `exchange`）ので、分かれた行は
- *   連結した本文で履歴の1発言と突き合わせる（二重に出さない）。
- * - 再生（`GET /chat/:id/stream`）の頭出しは、分かれた行を全部捨ててから積み直す。
- *
- * **実時間を待たない。** 順序は `sse()` の `after`（テスト側が解決するゲート）で作る。
- */
 import { useApiContext, useJournalLive } from '@alteroid/swr';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider, useParams } from 'react-router';
@@ -102,7 +91,6 @@ function renderApp(initial: string) {
   );
 }
 
-/** 送って、`frames` を流す。台帳の承認は `ask_human` の前に載せる。 */
 async function sendAndStream(
   frames: { event: string; data: unknown; after?: Promise<void> }[],
   { last }: { last: Promise<void> | undefined },

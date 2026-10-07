@@ -1,19 +1,3 @@
-/**
- * `summarizeJournalEntry` の直接テスト（#2558 で `packages/swr` から移した。再 export 側は
- * `packages/swr/src/hooks/queries.test.ts` が同一性を見る）。**DOM にも jsdom にも触れない**
- * （素の node 環境で測る。vitest の既定環境）。
- *
- * 2026-08-23 追記の経緯: `virtua`（`routes/journal.tsx` の双方向無限
- * スクロール）を入れる前は、この関数の `daily_report`（`unavailable` の
- * 印つき）・`worker_wait`・`turn_usage` の文言は `journal.test.tsx` が
- * 「画面にその文言が出るか」という DOM 経由の黒箱テストでだけ検証していた。
- * jsdom は virtua の行を1行も描画しないため（`journal.test.tsx` 冒頭の
- * コメント）、それらの DOM テストは期待値を反転せざるを得ず、**この関数
- * 自体の文言の正しさを測る手段が無くなった。** ここへ、関数を直接呼ぶ形で
- * 同じ保証を移設する（`dashboard.tsx` も `summarizeJournalEntry` を DOM で
- * 描いているが、そちらのテストは `decision` しか使っていないので
- * `daily_report`/`worker_wait`/`turn_usage` の文言は元々ここにしか無かった）。
- */
 import { describeGithubCi } from '@alteroid/core';
 import { describe, expect, it } from 'vitest';
 
@@ -127,9 +111,6 @@ describe('summarizeJournalEntry — memory_update', () => {
   });
 
   it('バイト数（機械可読）と summary に埋め込まれた文字数（自由文）が同じ節に混在しない', () => {
-    // memory_delete の summary は「（削除直前 N 文字）」を埋め込む
-    // （tools.ts の memory_delete）。この関数が新しく足すバイトの注記は
-    // 構造化された括弧の中に置き、自由文の summary はコロンの後ろへ分ける。
     const entry: JournalEntry = {
       type: 'memory_update',
       id: 'mu-delete',
@@ -144,7 +125,6 @@ describe('summarizeJournalEntry — memory_update', () => {
     const summary = summarizeJournalEntry(entry);
     const beforeColon = summary.slice(0, summary.indexOf(': '));
     const afterColon = summary.slice(summary.indexOf(': ') + 2);
-    // バイトの注記（構造化）はコロンより前、文字数を含む自由文はコロンより後。
     expect(beforeColon).toContain('42→0 バイト');
     expect(beforeColon).not.toContain('文字');
     expect(afterColon).toContain('40 文字');
@@ -237,10 +217,6 @@ describe('summarizeJournalEntry — turn_usage', () => {
 
 describe('summarizeJournalEntry — escalation（取り下げ #963）', () => {
   it('withdrawnAt が付いた行は「確認:」ではなく「取り下げ済み:」と言う', () => {
-    // **`answeredAt` 未設定のまま「確認:」に落ちないことを確かめる。**
-    // `approval_withdraw` が積む行は回答していないので、この分岐が無いと
-    // 「まだ誰も答えていない新しい質問」に見える（journal.tsx / dashboard.tsx
-    // どちらもこの関数の文言をそのまま出す）。
     const entry: JournalEntry = {
       type: 'escalation',
       id: 'esc-withdrawn',
@@ -300,9 +276,6 @@ describe('summarizeJournalEntry — github_observation の CI（#2608）', () =>
     ['ci も ciUnavailable も無い古い行', {}],
   ];
 
-  // **core の `describeGithubCi` が文言の持ち主である。** logic の写し（`describeGithubCiText`）と
-  // 要約の1行が、それと1文字も違わないことを固定する。Web の `ciText` は
-  // `apps/web/app/routes/progress.test.tsx` が同じ原本と突き合わせる。
   it.each(cases)('%s: 要約は core の describeGithubCi と同じ文言を含む', (_label, extra) => {
     const ok = { status: 'ok', openIssues: 3, openPulls: 2, truncated: false, ...extra } as const;
     expect(describeGithubCiText(ok)).toBe(describeGithubCi(ok));
@@ -379,7 +352,6 @@ describe('summarizeJournalEntry — localized（Web の表示。core の字面�
     expect(summarizeJournalEntry(entry)).toContain('success 1 / failure 0 / pending 0');
   });
 
-  // #2608 と同じ歯: 原本（core）を、表が持つ写しだけで置換したものと一致すること。
   it.each(cases)('%s: localized は core の原本から表の3語を写しただけ', (_label, extra) => {
     const ok = { status: 'ok', openIssues: 3, openPulls: 2, truncated: false, ...extra } as const;
     let expected = describeGithubCi(ok);
@@ -392,7 +364,6 @@ describe('summarizeJournalEntry — localized（Web の表示。core の字面�
       `a/b: ${GITHUB_OPEN_LABEL.issue.localized} 3 件 / ${GITHUB_OPEN_LABEL.pull.localized} 2 件（記録したのは: クローン） / ${expected}`,
     );
     expect(line).not.toMatch(/clone|success|failure|pending|open|limit/);
-    // 件数の行も core 側の言い回し（raw）から表の写しだけで導ける
     const rawLine = summarizeJournalEntry(observed(extra), 'raw');
     expect(
       rawLine

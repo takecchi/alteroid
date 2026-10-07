@@ -1,19 +1,6 @@
-/**
- * 承認待ちの回答の下書き（自由記述と設問の選択）を、承認の id ごとに `sessionStorage` へ置く。
- *
- * ページの state だけに持つと、「回答済み」タブへ移った時点で画面ごと unmount されて、
- * 書きかけが黙って消える。**使い手の書いたものを黙って失わせない**ための置き場である。
- * 再読み込みでは残り、タブを閉じれば消える（`sessionStorage` に留める理由は `auth.ts` と同じ）。
- *
- * **保存できない環境（`sessionStorage` が無い・例外を投げる・容量超過）でも投げない。**
- * 読めなければ空、書けなければ黙って諦める（呼ぶ側は今までどおり state だけで動く）。
- *
- * 設問の書きかけの型は `@alteroid/ui` のもの（`ApprovalQuestionsDraft`）と同じ形だが、
- * logic は ui を import できないので、形だけをここに写している（構造的に代入できる）。
- */
-
 import { APPROVAL_DRAFTS_KEY, chatDraftEpoch } from './chat-drafts.js';
 
+// `@alteroid/ui` の `ApprovalQuestionsDraft` と同じ形を写す: logic は ui を import できないため。
 export interface StoredQuestionDraft {
   chosen: string[];
   other: string;
@@ -26,9 +13,7 @@ export interface StoredQuestionsDraft {
 }
 
 export interface ApprovalDrafts {
-  /** 自由記述の回答。id → 本文（空文字は持たない）。 */
   texts: Record<string, string>;
-  /** 設問の選択。id → 書きかけ（何も書いていないものは持たない）。 */
   questions: Record<string, StoredQuestionsDraft>;
 }
 
@@ -42,7 +27,7 @@ function storage(): Storage | null {
   try {
     return typeof sessionStorage === 'undefined' ? null : sessionStorage;
   } catch {
-    // アクセスしただけで投げる環境（クッキー無効など）。
+    // アクセスしただけで投げる環境（クッキー無効など）がある。
     return null;
   }
 }
@@ -72,12 +57,10 @@ function parseQuestionsDraft(value: unknown): StoredQuestionsDraft | null {
   return { drafts, supplement: value.supplement };
 }
 
-/** 何も書いていない設問の書きかけか。 */
 export function isEmptyQuestionsDraft(draft: StoredQuestionsDraft): boolean {
   return draft.supplement === '' && Object.keys(draft.drafts).length === 0;
 }
 
-/** 保存した下書きを読む。無い・壊れている・読めないときは空（投げない）。壊れた1件で他を巻き込まない。 */
 export function loadApprovalDrafts(): ApprovalDrafts {
   const result = emptyApprovalDrafts();
   try {
@@ -97,17 +80,12 @@ export function loadApprovalDrafts(): ApprovalDrafts {
       }
     }
   } catch {
-    // 壊れた JSON・読み出しの例外。空として扱う。
+    // 投げない: 壊れていても呼ぶ側は空の下書きで動く。
   }
   return result;
 }
 
-/**
- * 下書きを保存する。空なら項目ごと消す。保存できなくても投げない。
- *
- * `epoch` — この書き込みを決めた時点の `chatDraftEpoch()`。ログアウト（`clearChatDrafts`）を
- * 挟んだなら、消したはずの書きかけが書き戻らないよう、何もしない（#3706）。
- */
+// `epoch` がログアウトを挟んで古ければ何もしない: 消したはずの書きかけが書き戻らないようにするため。
 export function saveApprovalDrafts(drafts: ApprovalDrafts, epoch?: number): void {
   if (epoch !== undefined && epoch !== chatDraftEpoch()) return;
   try {
@@ -119,6 +97,6 @@ export function saveApprovalDrafts(drafts: ApprovalDrafts, epoch?: number): void
       store.setItem(KEY, JSON.stringify(drafts));
     }
   } catch {
-    // 容量超過・書き込み禁止。state だけで動く。
+    // 投げない: 保存できなくても呼ぶ側は state だけで動く。
   }
 }

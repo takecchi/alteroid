@@ -102,10 +102,6 @@ function extractKind(raw: unknown): string | undefined {
   return typeof kind === 'string' ? kind : undefined;
 }
 
-/**
- * issue #2177。文言は `UnreadableScheduleError` を足す前と1文字も変えていない（pg の
- * `parsePlan` と同じ）——`instanceof` で見分けられるようにするだけである。
- */
 function unreadableError(kind: string, reason: string): UnreadableScheduleError {
   return new UnreadableScheduleError(
     `継続中の依頼 ${kind} が読めない形で入っている（消されたのではない）: ${reason}`,
@@ -114,7 +110,7 @@ function unreadableError(kind: string, reason: string): UnreadableScheduleError 
 }
 
 /**
- * 読めない行が kind で見つかれば `UnreadableScheduleError` を投げる（Issue #3859）。
+ * 読めない行が kind で見つかれば `UnreadableScheduleError` を投げる。
  * 読めた行が無いときにだけ呼ぶこと（`get()` と同じく、読めた行が先）。
  */
 function throwIfUnreadable(file: ScheduleFile, kind: string): void {
@@ -226,8 +222,7 @@ export class FsScheduleStore implements ScheduleStore {
     // 書き換える列だけを差し替える（`{ schedules: ... }` だけを返すと位相が消える）。
     await this.#update((file) => {
       // 前提の版（Issue #3821）。`#update`（`withPathLock` の内側）で書く直前に比べる。
-      // 読めない形の行は「無い」側に数えず、`UnreadableScheduleError`（Issue #3859。
-      // `editRequest` と同じ）。省略（無条件の上書き）は壊れた行を置き換える。
+      // 省略（無条件の上書き）は壊れた行を置き換える。直す口を塞がないため。
       if (options?.ifMatch !== undefined) {
         const current = file.schedules.find((existing) => existing.kind === entry.kind);
         if (current === undefined) throwIfUnreadable(file, entry.kind);
@@ -319,9 +314,8 @@ export class FsScheduleStore implements ScheduleStore {
    * `pendingRun` / `lastRunAt` / `lastScheduledRunAt` / `createdAt` は、呼び出し側
    * が読んだかもしれない古い値ではなく、ここで読み直した現在値をそのまま引き継ぐ。
    *
-   * **壊れた行は `UnreadableScheduleError`**（Issue #3859。`get(kind)` と同じ線で、
-   * pg と同じ）。「無い」（`null`）に落とすと、呼び出し側が続けて `put()` で壊れた行を
-   * 黙って置き換える。直すには `remove` / `removeIfPresent` で外してから作り直す。
+   * **壊れた行は `UnreadableScheduleError`**。「無い」（`null`）に落とすと、呼び出し側が
+   * 続けて `put()` で壊れた行を黙って置き換える。
    */
   async editRequest(
     kind: string,
@@ -392,8 +386,8 @@ export class FsScheduleStore implements ScheduleStore {
    * 発火で上書きすると人間が「この依頼いつ直したか」を追えなくなる。同時に、これが
    * 版の識別子でもある（動かすと版の比較そのものが壊れる）。
    *
-   * **壊れた行は `UnreadableScheduleError`**（Issue #3859。`editRequest` と同じ。版が
-   * 何であれ投げる）。`null` は「消された・書き換わった」だけの意味に保つ。
+   * **壊れた行は `UnreadableScheduleError`**（版を問わない）。`null` は「消された・書き換わった」
+   * だけの意味に保つ。
    */
   async claimRun(
     kind: string,

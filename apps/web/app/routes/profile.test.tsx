@@ -1,21 +1,4 @@
 // @vitest-environment jsdom
-/**
- * `/profile` — 実行環境プロファイル（名前付きの行の集まり）を読む・差し替える画面
- * （issue #1122。行ごとの形は 2026-10-03）。
- *
- * ここで固定したいのは次の各点:
- *
- * 1. **本文は既定で出さない。**「本文を表示する」を押すまで、鍵が入りうる本文を
- *    1文字も描かない（`GET /profile` は本文を丸ごと返すため）
- * 2. **保存は2段。**「保存する」だけでは `PUT /profile/:name` を叩かず、「本当に保存する」
- *    で初めて、編集した本文・渡す先をそのまま送る
- * 3. **400 のときは `detail` まで見せる。** 直すのに要るのは行番号込みの `detail` で、
- *    共有の `unwrap` が拾う `error` だけでは直せない
- * 4. **外すのは行ごとの `DELETE /profile/:name`**（確認を挟む）
- * 5. **403 に宣言の案内を出さない。** 本文が何であれ（かつての `requireOwner` の本文でも）、
- *    持ち主として宣言する手は案内しない（#2862: ログインできる許可済みの人は全員持ち主）
- * 6. **渡す先は環境変数の画面と同じ3値・同じ言い方。** 既定は共通（all）
- */
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { createMemoryRouter, Link, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -92,11 +75,7 @@ const UPDATED = {
 
 type Reply = { status: number; body: unknown };
 
-/**
- * `/profile` の stub。**共有の `stubFetch` は使えない**（`openapi-fetch` は
- * `fetch(new Request(...))` の形で呼ぶので、method も本文も落ちる。
- * `env-vars.test.tsx` の同じ断り書きと同じ理由）。
- */
+// 共有の stubFetch を使わない: openapi-fetch は fetch(new Request(...)) の形で呼ぶので method も本文も落ちるため
 function stubProfile(
   options: { rows?: Row[]; get?: Reply; put?: Reply; del?: Reply; putGate?: Promise<void> } = {},
 ) {
@@ -120,7 +99,6 @@ function stubProfile(
         scope?: string;
       };
       puts.push({ name, body });
-      // 保存の完了を、テストが好きな時点まで止める（実時間の待ちは使わない）。
       await options.putGate;
       const reply = options.put ?? { status: 200, body: UPDATED };
       if (reply.status === 200) {
@@ -145,7 +123,6 @@ function stubProfile(
 }
 
 function renderScreen() {
-  // `useBlocker` はデータルーターの中でしか動かない。離れる先のリンクも置く。
   const router = createMemoryRouter(
     [
       {
@@ -175,14 +152,12 @@ describe('/profile 画面 — 読む', () => {
 
     expect(await screen.findByText('base')).toBeTruthy();
     expect(screen.getByText('rust')).toBeTruthy();
-    // 渡す先は環境変数の画面と同じ言い方。
     expect(screen.getByText('共通')).toBeTruthy();
     expect(screen.getByText('マネージャーだけ')).toBeTruthy();
     expect(screen.getByText('41 バイト')).toBeTruthy();
     expect(screen.getByText(/a{12}/)).toBeTruthy();
     expect(screen.getByText('c'.repeat(12))).toBeTruthy();
     expect(screen.getByText('d'.repeat(12))).toBeTruthy();
-    // 名前の辞書順につなげて効くことを画面に書く。
     expect(screen.getByText(/名前の辞書順/)).toBeTruthy();
     expect(document.body.textContent).not.toContain('very-secret-value');
 
@@ -228,7 +203,6 @@ describe('/profile 画面 — 読む', () => {
     ).toBeTruthy();
     expect(screen.queryByText('alteroid access owner <アカウント id>')).toBeNull();
     expect(screen.queryByText(/持ち主として宣言してください/)).toBeNull();
-    // 読めていないので、編集の欄も出さない。
     expect(screen.queryByRole('button', { name: '行を追加する' })).toBeNull();
   });
 
@@ -282,7 +256,6 @@ describe('/profile 画面 — 行を置く', () => {
 
     expect(await screen.findByText(/プロファイルの行 rust を更新した。/)).toBeTruthy();
     expect(puts).toEqual([{ name: 'rust', body: { script: next, scope: 'runner' } }]);
-    // 合成後の識別用の値と、runner ごとの結果を出す。全部届いたので成功の見出し（警告ではない）。
     expect(screen.getByText(/クローン用 e{12} \/ マネージャー用 f{12}/)).toBeTruthy();
     expect(screen.getAllByText(/反映した（PATH）/)).toHaveLength(2);
     expect(screen.queryByRole('alert')).toBeNull();
@@ -294,7 +267,6 @@ describe('/profile 画面 — 行を置く', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: '行を追加する' }));
     const body = screen.getByLabelText('プロファイルの新しい本文');
-    // 名前が空・本文が空のあいだは進まない（保存ボタンも disabled）。
     fireEvent.keyDown(body, { key: 'Enter', ctrlKey: true });
     expect(screen.queryByRole('button', { name: '本当に保存する' })).toBeNull();
 
@@ -453,7 +425,6 @@ describe('/profile 画面 — 行を置く', () => {
     );
     expect(screen.getByText('前のプロファイルがそのまま残っている。')).toBeTruthy();
     expect(puts.map((entry) => entry.body.script)).toEqual(['export (\n']);
-    // 編集中の本文は消さない（直してもう一度送るため）。確認は畳む。
     expect(screen.getByLabelText<HTMLTextAreaElement>('プロファイルの新しい本文').value).toBe(
       'export (\n',
     );
@@ -485,10 +456,6 @@ describe('/profile 画面 — 行を置く', () => {
   });
 });
 
-/**
- * 別の行の「編集する」へ切り替えたとき、前の行の確認の枠と失敗の表示を残さない（issue #3073）。
- * 確認・失敗は `ProfileEditor` の中の state なので、親の `setEditor` だけでは畳まれなかった。
- */
 describe('/profile 画面 — 編集する行を切り替える', () => {
   it('確認の枠が出たまま別の行の「編集する」を押すと、確認は畳まれ、PUT は走らない', async () => {
     const { puts } = stubProfile();
@@ -559,7 +526,6 @@ describe('/profile 画面 — 保存中に別の行へ切り替える', () => {
     });
     release();
 
-    // 前の行の保存の結果は、行の名前つきで出る（書き込み自体は起きたので隠さない）。
     expect(await screen.findByText('プロファイルの行 base を更新した。')).toBeTruthy();
     expect(screen.getByLabelText<HTMLTextAreaElement>('プロファイルの新しい本文').value).toBe(
       'export DRAFT=2\n',
@@ -635,12 +601,6 @@ describe('/profile 画面 — 行を外す', () => {
   });
 });
 
-/**
- * **古いデーモン（`entries` 無しの応答）に新しい画面が繋がった窓。** Web は Vercel でマージ直後に
- * 入り、デーモンは `release/prod` 経由で1日1回夜に入るので、この窓は必ず生じる。型は新しい形を
- * 約束するので、**ここが測るのは実行時の倒れ先だけ**（型の側は `typecheck` が守る）。
- * 古いデーモンは `{ script, updatedAt?, sha256?, bytes? }` だけを返し、行ごとの口は持たない。
- */
 describe('/profile 画面 — 古いデーモン（旧形式の応答）', () => {
   const OLD = {
     script: `${SECRET_LINE}\n`,
@@ -649,7 +609,6 @@ describe('/profile 画面 — 古いデーモン（旧形式の応答）', () =>
     bytes: 41,
   };
 
-  /** 旧形式だけを返すデーモンの stub。`PUT /profile` は旧来の応答（`entries` / `composed` 無し）。 */
   function stubOldDaemon(initial: unknown = OLD) {
     const calls: { method: string; path: string; body?: unknown }[] = [];
     let current = initial;
@@ -671,7 +630,6 @@ describe('/profile 画面 — 古いデーモン（旧形式の応答）', () =>
       }
       calls.push({ method, path });
       if (method === 'GET' && path === '/profile') return json(current, 200);
-      // 古いデーモンには行ごとの口が無い。
       return json({ error: 'Not Found' }, 404);
     }) as typeof fetch;
     return { calls };
@@ -686,7 +644,6 @@ describe('/profile 画面 — 古いデーモン（旧形式の応答）', () =>
     expect(screen.getByText('共通')).toBeTruthy();
     expect(screen.getByText('41 バイト')).toBeTruthy();
     expect(screen.getByText(/o{12}/)).toBeTruthy();
-    // 本文は今までどおり、押すまで出さない。押せば1文字も欠けずに見える。
     expect(document.body.textContent).not.toContain('very-secret-value');
     fireEvent.click(screen.getByRole('button', { name: / の本文を表示する$/ }));
     expect(screen.getByLabelText('プロファイルの行 default の本文').textContent).toContain(
@@ -700,7 +657,6 @@ describe('/profile 画面 — 古いデーモン（旧形式の応答）', () =>
 
     await screen.findByText('default');
     expect(screen.queryByRole('button', { name: / の行を外す$/ })).toBeNull();
-    // default が既に在るので、行の追加ボタンも出ない。
     expect(screen.queryByRole('button', { name: '行を追加する' })).toBeNull();
   });
 
@@ -718,7 +674,6 @@ describe('/profile 画面 — 古いデーモン（旧形式の応答）', () =>
     fireEvent.click(screen.getByRole('button', { name: '保存する' }));
     fireEvent.click(screen.getByRole('button', { name: '本当に保存する' }));
 
-    // 古いデーモンの応答（`composed` 無し）でも落ちない。
     expect(await screen.findByText(/プロファイルの行 default を更新した。/)).toBeTruthy();
     expect(calls.filter((call) => call.method === 'PUT')).toEqual([
       { method: 'PUT', path: '/profile', body: { script: next } },
@@ -746,10 +701,6 @@ describe('/profile 画面 — 古いデーモン（旧形式の応答）', () =>
   });
 });
 
-/**
- * 書きかけ（元の行から変わっている）があるときだけ、切り替える・閉じる・離れる前に確認する
- * （#3349 / #3370）。書きかけが無ければ今までどおり確認なしで動く。
- */
 describe('/profile 画面 — 書きかけを確認なしで捨てない', () => {
   async function startDirty() {
     stubProfile();
@@ -877,7 +828,6 @@ describe('/profile 画面 — 保存中に打ち足した文字（issue #3515）
     fireEvent.click(screen.getByRole('button', { name: '本当に保存する' }));
     await vi.waitFor(() => expect(puts).toHaveLength(1));
 
-    // 応答を待つ間に打ち足す。
     fireEvent.change(screen.getByLabelText('プロファイルの新しい本文'), {
       target: { value: 'export A=1\nexport B=2\n' },
     });
@@ -886,8 +836,6 @@ describe('/profile 画面 — 保存中に打ち足した文字（issue #3515）
     expect(await screen.findByText('プロファイルの行 base を更新した。')).toBeTruthy();
     const body = screen.getByLabelText<HTMLTextAreaElement>('プロファイルの新しい本文');
     expect(body.value).toBe('export A=1\nexport B=2\n');
-    // 保存できた本文が基準になっている: 打ち足した分は変更として保存でき、
-    // 保存できた本文へ戻せば「変更なし」になる（古い元の行と比べない）。
     expect(screen.getByRole<HTMLButtonElement>('button', { name: '保存する' }).disabled).toBe(
       false,
     );

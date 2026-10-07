@@ -10,28 +10,7 @@ import {
   // @ts-expect-error -- 素の .mjs（型宣言を持たない build 用スクリプト）を読む
 } from './check-web-css-comment-classnames-core.mjs';
 
-/**
- * `check-web-css-comment-classnames` の歯（#317）。
- *
- * **2段構えである。**
- *
- * 1. **判定ロジックの単体テスト**（`check-web-bundle-node-traces.test.ts` と同じ形）—
- *    合成した文字列で当たり判定だけを確かめる。本物の `pnpm build` を要らない
- * 2. **実際のビルド生成物に対する検査そのもの**（下の `describe('実ビルドの検査')`）—
- *    `check-web-bundle-node-traces` は同じ検査を `.github/workflows/ci.yml` の
- *    別ステップ（`pnpm check:web-bundle-node-traces`）として CI に足しているが、
- *    **この歯はワークフローを変更せずに CI へ足す**ため、`pnpm test`
- *    （vitest。`.github/workflows/ci.yml` の既存の `pnpm test` ステップが
- *    `scripts/**\/*.test.ts` を拾う。`vitest.config.ts` の `include` 参照）
- *    が実行する **この test ファイル自身の中で** 実ビルドの CSS を読んで検査する。
- *    CI は `pnpm build` の後に `pnpm test` を走らせる（`ci.yml`）ので、この
- *    テストが走る時点で `apps/web/build/client/assets/*.css` は必ず存在する。
- *    手元で `pnpm build` を走らせずに `pnpm test` だけを打つと、下のテストは
- *    「先に `pnpm build` を走らせたか」というメッセージ付きで落ちる
- *    （`.claude/skills/dev-setup/SKILL.md` の `build が先` の項と同じ前提
- *    ——この項は #1753 で `AGENTS.md`「開発手順」から移った。黙ってスキップしない —
- *    スキップすると「検査していない」が「検査して0件だった」と区別できなくなる）。
- */
+// ビルドが無いときは黙ってスキップせず落とす: スキップすると「検査していない」が「検査して0件だった」と区別できなくなるため。
 describe('check-web-css-comment-classnames: findInvalidCssHits', () => {
   it('プレースホルダ無しなら0件を返す', () => {
     const hits = findInvalidCssHits([
@@ -41,7 +20,6 @@ describe('check-web-css-comment-classnames: findInvalidCssHits', () => {
   });
 
   it('#317 で実際に生成された不正な calc() を捕まえる（半角ピリオド3つ）', () => {
-    // 実測（#317 本文・PR #304 の作業者の報告）から取った断片。
     const content =
       '.pr-\\[calc\\(\\.\\.\\.\\+var\\(--safe-right\\)\\)\\]{padding-right:calc(...+var(--safe-right))}';
     const hits = findInvalidCssHits([{ path: 'root.css', content }]);

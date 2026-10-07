@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import type { ConfirmIo } from './confirm.js';
 import { captureStdout, pretendTty } from './test-support.js';
 
 /**
@@ -306,6 +307,8 @@ describe('alteroid access owner', () => {
     expect(sent).toEqual([{ url: 'http://127.0.0.1:4517/access/acc-1/owner', method: 'POST' }]);
     const text = read();
     expect(text).toContain('実行環境の持ち主として宣言しました: owner@example.com');
+    expect(text).toContain('宣言を記録しただけです。資格の判断には使っていません');
+    expect(text).not.toContain('通ります');
   });
 
   it('--revoke: POST /access/:id/owner/revoke を叩く', async () => {
@@ -335,6 +338,8 @@ describe('alteroid access owner', () => {
     ]);
     const text = read();
     expect(text).toContain('実行環境の持ち主としての宣言を取り消しました: owner@example.com');
+    expect(text).toContain('宣言の記録を取り消しただけです。資格の判断には使っていません');
+    expect(text).not.toContain('通らなくなります');
   });
 
   it('accountId は URL エンコードする', async () => {
@@ -563,26 +568,115 @@ describe('alteroid access list — 読めない行（issue #2536）', () => {
 });
 
 describe('alteroid access revoke（#3141）', () => {
-  it('--yes なら POST /access/:id/revoke を叩く。トークンが通らなくなると言う', async () => {
+  it('--yes なら先に GET /access で在るかを読み、POST /access/:id/revoke を叩く。トークンが通らなくなると言う', async () => {
+    replies.push({ status: 200, body: { accounts: [{ id: 'acc-1' }] } });
     replies.push({ status: 200, body: { account: { id: 'acc-1', email: 'a@example.com' } } });
     const read = captureStdout();
 
     await accessRevokeCommand('acc-1', { yes: true });
 
     expect(sent.map((entry) => `${entry.method} ${new URL(entry.url).pathname}`)).toEqual([
+      'GET /access',
       'POST /access/acc-1/revoke',
     ]);
     expect(read()).toContain('許可を取り消しました: a@example.com');
   });
 
-  it('端末でなく --yes も無ければ、HTTP に出ずに断る（許可は残る）', async () => {
+  it('端末でなく --yes も無ければ、取り消さずに断る（許可は残る。要求は一覧の GET だけ）', async () => {
+    replies.push({ status: 200, body: { accounts: [{ id: 'acc-1' }] } });
     const restore = pretendTty(false);
     try {
       await expect(accessRevokeCommand('acc-1')).rejects.toThrow('--yes');
     } finally {
       restore();
     }
-    expect(sent).toEqual([]);
+    expect(sent.map((entry) => `${entry.method} ${new URL(entry.url).pathname}`)).toEqual([
+      'GET /access',
+    ]);
+  });
+});
+
+describe('alteroid access revoke は、確認の前に在るかを確かめる（#3838）', () => {
+  function fakeIo(over: { isTTY: boolean; answer?: string }) {
+    const asked: string[] = [];
+    const written: string[] = [];
+    const io: ConfirmIo = {
+      isTTY: over.isTTY,
+      write: (text) => {
+        written.push(text);
+      },
+      ask: (question) => {
+        asked.push(question);
+        return Promise.resolve(over.answer ?? '');
+      },
+    };
+    return { io, asked, written };
+  }
+  const requests = () => sent.map((entry) => `${entry.method} ${new URL(entry.url).pathname}`);
+
+  it('無いアカウントは、確認を出さずに失敗する。要求は一覧の GET だけ（再現）', async () => {
+    replies.push({ status: 200, body: { accounts: [{ id: 'acc-1' }] } });
+    const { io, asked, written } = fakeIo({ isTTY: true, answer: 'yes' });
+
+    await expect(accessRevokeCommand('no-such-acc', {}, io)).rejects.toThrow(
+      '該当するアカウントがありません',
+    );
+
+    expect(asked).toEqual([]);
+    expect(written).toEqual([]);
+    expect(requests()).toEqual(['GET /access']);
+  });
+
+  it('無いアカウントは、端末でなく --yes も無くても「該当するアカウントがありません」で失敗する（--yes の案内に化けない）', async () => {
+    replies.push({ status: 200, body: { accounts: [] } });
+    const { io } = fakeIo({ isTTY: false });
+
+    const error = await accessRevokeCommand('no-such-acc', {}, io).catch((e: unknown) => e);
+
+    expect(String(error)).toContain('該当するアカウントがありません');
+    expect(String(error)).not.toContain('--yes');
+    expect(requests()).toEqual(['GET /access']);
+  });
+
+  it('在るアカウントは、従来どおり 確認 → POST', async () => {
+    captureStdout();
+    replies.push({ status: 200, body: { accounts: [{ id: 'acc-1' }] } });
+    replies.push({ status: 200, body: { account: { id: 'acc-1', email: 'a@example.com' } } });
+    const { io, asked, written } = fakeIo({ isTTY: true, answer: 'yes' });
+
+    await accessRevokeCommand('acc-1', {}, io);
+
+    expect(written.join('')).toContain('アカウント acc-1 の許可を取り消します');
+    expect(asked).toHaveLength(1);
+    expect(requests()).toEqual(['GET /access', 'POST /access/acc-1/revoke']);
+  });
+
+  it('在るアカウントでも、確認に yes と答えなければ POST は打たない', async () => {
+    replies.push({ status: 200, body: { accounts: [{ id: 'acc-1' }] } });
+    const { io } = fakeIo({ isTTY: true, answer: 'no' });
+
+    await expect(accessRevokeCommand('acc-1', {}, io)).rejects.toThrow();
+
+    expect(requests()).toEqual(['GET /access']);
+  });
+
+  it('読めない行にある id は「無い」と言わず、確認へ進み、POST の 409 の案内を伝える', async () => {
+    replies.push({
+      status: 200,
+      body: {
+        accounts: [],
+        rowsUnreadable: { count: 1, rows: [{ id: 'row-bad', reason: 'email' }] },
+      },
+    });
+    replies.push({ status: 409, body: { error: 'アカウント row-bad は読めない形で入っている' } });
+    const { io, asked } = fakeIo({ isTTY: true, answer: 'yes' });
+
+    const error = await accessRevokeCommand('row-bad', {}, io).catch((e: unknown) => e);
+
+    expect(asked).toHaveLength(1);
+    expect(String(error)).toContain('読めない形で入っている');
+    expect(String(error)).not.toContain('該当するアカウントがありません');
+    expect(requests()).toEqual(['GET /access', 'POST /access/row-bad/revoke']);
   });
 });
 

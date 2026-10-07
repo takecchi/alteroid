@@ -10,15 +10,6 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { createApp } from './app.js';
 import type { AuthPlan } from './auth.js';
 
-/**
- * **daemon が自分の名として使う予約語の source を、`POST /events` / `POST /events/:source` の入口で断る。**
- *
- * `isDaemonSelfNotice`（core）は `external` の `source` だけを見て「daemon 自身の知らせ」とみなし、台帳に載せず
- * 受信箱で畳む。外から同じ名を名乗れると、本物の外部イベント（添付つきを含む）が畳まれて届かない。
- * 名前空間の約束だけに頼らず、入口で 400 にする。**断ったら受信箱へ何も積まない・添付も結ばない。**
- * **時計は偽物で、実時間は待たない。**
- */
-
 const OPERATOR = { authorization: 'Bearer test-token' };
 const JSON_HEADERS = { 'content-type': 'application/json' };
 const T0 = Date.parse('2026-06-01T00:00:00.000Z');
@@ -32,7 +23,6 @@ function fakeClone(): CloneHost {
       posted.push(event);
       return 'conversation-1';
     },
-    // `/events` は受信箱へ書けてから 200 を返す（Issue #3679）。
     postPersisted: (event: InboxEvent) => {
       posted.push(event);
       return Promise.resolve('persisted');
@@ -70,7 +60,6 @@ beforeEach(() => {
   posted = [];
 });
 
-// 予約語そのもの、大文字小文字・前後の空白・全角（NFKC で同じになる）・パーセントエンコードのすり抜け。
 const RESERVED_SPELLINGS = [
   'token-pool',
   'runner-registry',
@@ -98,7 +87,6 @@ describe('予約語の source は POST /events の入口で 400', () => {
     expect(response.status).toBe(400);
     const body = (await response.json()) as { error: string; code?: string };
     expect(body.code).toBe('reserved_source');
-    // 値は混ぜない（固定の文だけ）。
     expect(body.error).not.toContain('token-pool');
     expect(body.error).not.toContain('runner-registry');
     expect(posted).toEqual([]);

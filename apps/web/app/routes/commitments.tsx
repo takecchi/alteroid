@@ -26,6 +26,7 @@ import {
   SubmitHint,
   Textarea,
   cn,
+  useKeyboardHintsVisible,
 } from '@alteroid/ui';
 import {
   useCloseCommitment,
@@ -1068,13 +1069,17 @@ function CommitmentBodyEditor({
   onDirtyChange: (dirty: boolean) => void;
 }) {
   const editCommitment = useEditCommitment();
+  const keyboardHints = useKeyboardHintsVisible();
   const [draft, setDraft] = useState<string | undefined>(undefined);
   const [tab, setTab] = useState<string>('preview');
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<unknown>(undefined);
 
   const value = draft ?? commitment.body;
-  const dirty = draft !== undefined && draft !== commitment.body;
+  // 送るのは trim した本文（積むのと揃える。#3788）。だから「変更あり」も trim した値どうしで比べる。
+  // 末尾の空白・改行だけを足した下書きは、送れば元と同じ本文になる。それを「変更あり」にすると、
+  // 保存が押せるのに何も送らない（または同じ本文を送り直す）形になるので、変更なしとして扱う。
+  const dirty = draft !== undefined && draft.trim() !== commitment.body.trim();
   /** 応答が返った時点の「いまの下書き」（送った時点と比べる。issue #3515）。 */
   const latestDraft = useLatest(draft);
 
@@ -1101,14 +1106,15 @@ function CommitmentBodyEditor({
     onTrack({ editFailure: undefined });
     onSettling(true);
     // 送った値を控える。成功のあと、いまの下書きがこれと同じときだけ畳む（issue #3515）。
-    const sent = draft;
+    const sent = draft.trim();
     editCommitment(commitment.id, sent)
       // 成功したら編集モードを畳む。一覧は `useEditCommitment` の中で
       // 取り直されるので、この行の `commitment` はすぐ新しい本文へ差し替わる。
       // 応答を待つ間に打ち足した分があるときは畳まず、下書きを残す。
       .then(
         () => {
-          if (latestDraft.current === sent) onCancel();
+          // 送った値は trim 済みなので、いまの下書きも trim して比べる（末尾の空白だけの打ち足しは本文が変わらない）。
+          if (latestDraft.current?.trim() === sent) onCancel();
           setBusy(false);
           onSettling(false);
         },
@@ -1159,7 +1165,7 @@ function CommitmentBodyEditor({
 
         <Tabs.Content value="edit" className="px-2 py-2">
           <Textarea
-            aria-label="仕事の本文"
+            aria-label={`「${snippet(commitment.body)}」の本文`}
             className="min-h-32 font-mono text-xs leading-relaxed"
             maxHeight="60vh"
             onSubmitShortcut={save}
@@ -1171,7 +1177,8 @@ function CommitmentBodyEditor({
             // 送信にしていない——だからここには IME の門（`isComposing` /
             // `keyCode === 229`）を付けていない。送信は保存ボタン・Cmd/Ctrl+Enter（共有の
             // `Textarea` の `onSubmitShortcut`。#3242）・Cmd/Ctrl+S で、どれも Enter 単体の確定と衝突しない
-            // （`memory-detail.tsx` と同じ設計）。
+            // （`memory-detail.tsx` と同じ設計）。Cmd/Ctrl+S は下の案内にも出す（#3788。
+            // 共有の `MarkdownEditor` の既定の案内「⌘/Ctrl + S で保存」と同じ文言）。
             onChange={(event) => setDraft(event.target.value)}
             onKeyDown={(event) => {
               if ((event.metaKey || event.ctrlKey) && event.key === 's') {
@@ -1193,6 +1200,9 @@ function CommitmentBodyEditor({
         >
           保存
         </Button>
+        {tab === 'edit' && keyboardHints && (
+          <span className="text-[11px] text-muted-foreground select-none">⌘/Ctrl + S で保存</span>
+        )}
         {tab === 'edit' && <SubmitHint action="保存" />}
         <Button size="sm" onClick={onRequestCancel}>
           やめる
@@ -1219,6 +1229,8 @@ interface RowNote {
   editFailure?: unknown;
   /** 片付けるの失敗（409 など）。 */
   closeFailure?: unknown;
+  /** 自分の「片付いた」が通った印（断りが「既に片付いた」と他人事に言わないため。#3842）。 */
+  closedHere?: true;
 }
 type RowNotePatch = Partial<Omit<RowNote, 'commitment'>>;
 
@@ -1237,7 +1249,8 @@ function sameNote(a: RowNote, b: RowNote): boolean {
     a.draft === b.draft &&
     a.reason === b.reason &&
     a.editFailure === b.editFailure &&
-    a.closeFailure === b.closeFailure
+    a.closeFailure === b.closeFailure &&
+    a.closedHere === b.closedHere
   );
 }
 
@@ -1287,14 +1300,21 @@ function OrphanNote({
   return (
     <li className="rounded-md border border-warn/40 bg-warn/10 px-3 py-2 text-sm">
       <p className="mb-2 break-words">
-        <strong>この仕事は既に片付いた（または未了の一覧から外れた）。</strong>
-        書きかけは残してある。ここから保存や片付けはできないので、必要なら写してから閉じる。
+        {note.closedHere === true ? (
+          <strong>この仕事は片付けた。編集中だった本文の書きかけは残してある。</strong>
+        ) : (
+          <>
+            <strong>この仕事は既に片付いた（または未了の一覧から外れた）。</strong>
+            書きかけは残してある。
+          </>
+        )}
+        ここから保存や片付けはできないので、必要なら写してから閉じる。
         <span className="mt-1 block text-xs text-muted-foreground">
           対象: 「{snippet(commitment.body)}」
         </span>
         {current?.closedReason !== undefined && (
           <span className="mt-1 block text-xs text-muted-foreground">
-            片付けた理由: {current.closedReason}
+            片付けた理由: {redactBody(current.closedReason ?? '')}
           </span>
         )}
       </p>
@@ -1408,7 +1428,7 @@ function OpenRow({
     try {
       await closeCommitment(commitment.id, reason.trim());
       // 成功したら一覧から消える（部品ごと消える）ので、入力を戻す必要はない。ページの写しだけ消す。
-      track({ reason: undefined, closeFailure: undefined });
+      track({ reason: undefined, closeFailure: undefined, closedHere: true });
     } catch (caught) {
       setFailure(caught);
       // 一覧の取り直しが先に行を消すことがある（409）。ページにも渡し、行が消えても失敗の本文を見せる。
@@ -1577,7 +1597,8 @@ function PlainClosedReason({ reason }: { reason: string }) {
  */
 function ClosedReasonBody({ commitment }: { commitment: Commitment }) {
   if (commitment.closedReason === undefined || commitment.closedReason === null) return null;
-  const reason = commitment.closedReason;
+  // 4経路すべてが通る入口で伏せる（経路ごとに足すと、足し忘れた経路から素のまま出る）。
+  const reason = redactBody(commitment.closedReason);
 
   // **「そもそも無い」。** 既定へ倒さない（`'clone'` にも `'human'` にもしない）。
   if (commitment.closedBy === undefined) return <PlainClosedReason reason={reason} />;
@@ -1670,7 +1691,7 @@ function PushForm() {
           submitDisabled={body.trim() === '' || busy}
         />
         <FieldHint id={bodyHintId} className="-mt-1">
-          何を引き受けたかを全文で書く。切って短く見せるのは一覧側の仕事。
+          何を引き受けたかを全文で書く。クローンへ渡す一覧（commitment_list）は長い本文を先頭だけに切るが、台帳には全文が残る。
         </FieldHint>
         <div className="flex items-center gap-2">
           <Button

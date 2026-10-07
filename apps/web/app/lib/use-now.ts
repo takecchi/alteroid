@@ -1,3 +1,4 @@
+import { formatRelative } from '@alteroid/logic';
 import { useEffect, useState, useSyncExternalStore } from 'react';
 
 /**
@@ -107,4 +108,15 @@ export function useMinuteNow(enabled = true): number {
     enabled ? getMinuteSnapshot : getMinuteSnapshotPassive,
     () => minuteServerSnapshot,
   );
+}
+
+/**
+ * 分の時計（`useMinuteNow`）の値で相対の時刻を出す（#3828）。**分の時計の値は最大 1 分古い**ので、更新した
+ * 直後の時刻（端末の `Date.now()`・取り直したサーバの `updatedAt`）はその値より少し後になり、
+ * `formatRelative` は「まもなく」「1分後」と出してしまう。**1分未満だけ先の時刻は、いまと見て「たった今」と出す。**
+ * それより先の本当に未来の時刻は、`formatRelative` のまま。
+ */
+export function formatRelativeAtMinute(iso: string, now: number): string {
+  const ahead = new Date(iso).getTime() - now;
+  return formatRelative(iso, ahead > 0 && ahead < 60_000 ? now + ahead : now);
 }

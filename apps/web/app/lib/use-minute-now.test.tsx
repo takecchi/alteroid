@@ -1,8 +1,4 @@
 // @vitest-environment jsdom
-/**
- * #3596。相対の時刻（「たった今」「N分前」）を分単位で更新する共通の now。
- * **実時間を待たない**（偽のタイマーで時計を進める）。
- */
 import { act, cleanup, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -75,7 +71,6 @@ describe('useMinuteNow', () => {
     act(() => {
       vi.advanceTimersByTime(10 * 60_000);
     });
-    // 隠れているあいだは再描画しない。
     expect(label()).toBe('たった今');
     act(() => setVisibility('visible'));
     expect(label()).toBe('10分前');
@@ -98,7 +93,6 @@ describe('useMinuteNow', () => {
       return null;
     }
     render(<Probe />);
-    // 最初の描画（購読の前）から新しい時刻で計算されている。
     expect(seen[0]).toBe('7分前');
     expect(new Set(seen)).toEqual(new Set(['7分前']));
   });

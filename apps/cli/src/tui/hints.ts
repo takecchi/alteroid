@@ -1,4 +1,3 @@
-/** フッタ 1 行のキーヒント。80 桁の端末に収まる長さにする（`hints.test.ts` が見ている）。 */
 export const HINT_INPUT =
   'Enter 送信 · \\+Enter 改行 · Esc 移動 · PgUp/Dn 遡る · /help · ^C 中断 · ^D 終了';
 export const HINT_NAV =
@@ -26,17 +25,12 @@ export const HINT_AP_DATES =
 export const HINT_AP_DAY = '↑↓ 選ぶ · Enter 詳細 · Esc 日付へ · r 更新 · 1-5 画面 · ^C 中断';
 export const HINT_AP_DETAIL =
   'Esc 一覧へ · a 答える · ↑↓ PgUp/PgDn 読み進める · r 更新 · 1-5 画面 · ^C 中断';
-/** その日の件（回答済み）から開いた詳細。Esc は未回答の一覧ではなくその日へ戻る。 */
 export const HINT_AP_DETAIL_FROM_DAY =
   'Esc その日へ · a 答える · ↑↓ PgUp/PgDn 読み進める · r 更新 · 1-5 画面 · ^C 中断';
-/** もう答えられない（回答済み・取り下げ済み）詳細の読む画面。a は何もしないので案内しない。 */
 export const HINT_AP_DETAIL_SETTLED =
   'Esc 一覧へ · ↑↓ PgUp/PgDn 読み進める · r 更新 · 1-5 画面 · ^C 中断';
 export const HINT_AP_DETAIL_SETTLED_FROM_DAY =
   'Esc その日へ · ↑↓ PgUp/PgDn 読み進める · r 更新 · 1-5 画面 · ^C 中断';
-/**
- * 詳細の読む画面の案内（開いた元で Esc の戻り先が違う。`answerable` が偽なら a 答える を出さない）。
- */
 export const approvalDetailHint = (from: 'list' | 'day', answerable = true): string =>
   from === 'day'
     ? answerable

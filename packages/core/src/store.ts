@@ -14,6 +14,7 @@ import type {
 } from './conversation-read.js';
 import type { CredentialEntry } from './credentials.js';
 import type { McpServers, StoredMcpServers } from './mcp-servers.js';
+import type { PluginInput, PluginSummary, StoredPlugin } from './plugins.js';
 import type { ActiveAgentToken, AgentToken, TokenRotationSettings } from './token-pool.js';
 import type {
   Commitment,
@@ -1218,8 +1219,8 @@ export function describeUnreadableSchedules(
 }
 
 /**
- * 読めない行への編集（`POST /schedule`・`schedule_create`）を断る文（Issue #3859）。
- * 断る口（HTTP は 409）と道具が同じ文面を使う。本文は載せない（kind だけ）。
+ * 読めない行への編集（`POST /schedule`・`schedule_create`）を断る文。
+ * 本文は載せない（kind だけ）。
  */
 export function describeUnreadableScheduleEdit(error: UnreadableScheduleError): string {
   return (
@@ -1311,9 +1312,8 @@ export interface ScheduleStore {
    * `ScheduleConflictError`。比較は書き込みと同じ排他の中で行う。`null` なら
    * 「無いときだけ作る」。省略は従来どおり無条件。
    *
-   * **読めない行（Issue #3859）。** 版つきの `put` は、その kind の行が在るが読めないとき
-   * `UnreadableScheduleError`（「無い」にも衝突にも数えない）。省略（無条件）は読めない行を
-   * 置き換える——壊れた行を直す口を塞がない（`remove` / `removeIfPresent` も同じ）。
+   * 版つきの `put` は、読めない行に `UnreadableScheduleError`。省略（無条件）は読めない行を
+   * 置き換える。壊れた行を直す口を塞がないため。
    */
   put(entry: ScheduledRequest, options?: WriteScheduleOptions): Promise<void>;
   remove(kind: string): Promise<void>;
@@ -1377,9 +1377,8 @@ export interface ScheduleStore {
    * で無いときは、従来どおり `null` を返す（呼び出し側が `put(…, { ifMatch: null })`
    * で、無いときだけ作る）。省略は従来どおり無条件。
    *
-   * **在るが読めない行は `UnreadableScheduleError`**（Issue #3859。`ifMatch` の有無・値を問わず。
-   * fs・pg とも）。「無い」（`null`）にすると、呼び出し側が続けて `put()` で壊れた行を黙って
-   * 置き換えてしまう。直すには `removeIfPresent` で外してから作り直す。
+   * 在るが読めない行は `UnreadableScheduleError`（`ifMatch` を問わない）。「無い」（`null`）に
+   * すると、呼び出し側が続く `put()` で壊れた行を黙って置き換えてしまう。
    */
   editRequest(
     kind: string,
@@ -1393,8 +1392,8 @@ export interface ScheduleStore {
    *
    * `expectedUpdatedAt` と同じ版がまだ在るときだけ記録し、**確定した依頼（記録を
    * 進める前の姿）** を返す。消えていた・書き換わっていたら null。
-   * **在るが読めない行は `UnreadableScheduleError`**（Issue #3859。版が何であれ。fs・pg とも。
-   * `null` は「消された・書き換わった」だけの意味に保つ）。
+   * 在るが読めない行は `UnreadableScheduleError`（版を問わない）。`null` は「消された・
+   * 書き換わった」だけの意味に保つ。
    *
    * **これが2操作に分かれていると、読んでから記録するまでの隙間で人間が消した・
    * 直した依頼が古い本文で走る。** 「本文は処理する瞬間にストアから読む」という
@@ -2374,8 +2373,14 @@ export interface EnvProfileEntry {
   updatedAt: string;
 }
 
+/**
+ * {@link EnvProfileEntry.scope} の3値（実行時の一覧）。環境変数（{@link StoredCredential.scope}）と同じ。
+ * **型はここから導く**。plugin の撒く先（`plugins.ts`）も同じ値を使う（重複して書くと片方だけ増える）。
+ */
+export const ENV_PROFILE_SCOPES = ['all', 'app', 'runner'] as const;
+
 /** {@link EnvProfileEntry.scope}。環境変数（{@link StoredCredential.scope}）と同じ3値。 */
-export type EnvProfileScope = 'all' | 'app' | 'runner';
+export type EnvProfileScope = (typeof ENV_PROFILE_SCOPES)[number];
 
 /**
  * 行の名前の形。**器の中のファイル名になる**（fs 版は `profile.d/<name>.sh`）ので、
@@ -2456,6 +2461,40 @@ export interface McpServerStore {
    * サーバー名と `env` の名前・値の NUL は `NulNotAllowedError` で断る。`command`・`args`・`url`・`headers` などの本文の NUL は落として残す（issue #2927。teto の判断、2026-10-05）。
    */
   write(servers: McpServers): Promise<StoredMcpServers>;
+}
+
+/**
+ * 人間が入れた plugin（skill を含む）の置き場。**1 plugin = 1 行（名前が鍵）。**
+ *
+ * `McpServerStore` と同じ理由で `Stores` の一員にしてある —— Railway には volume が無く、
+ * 器のファイル（`~/.claude`・`/home/worker`）に置いても器と一緒に消える。本体（files）を
+ * 取り込んだ時点の中身のまま持つので、取り元が消えても書き換えられても、動くものは変わらない。
+ *
+ * **記憶ではない**（`memory/` には置かない）。形と検査の正本は `plugins.ts`。
+ * **この段は保存だけ**で、展開・配布・API・CLI は後の PR。
+ */
+export interface PluginStore {
+  /**
+   * 置かれている全 plugin の要約（**files を含まない**）。名前の `compareCodeUnits` 順。
+   * 読めない行があれば投げる（黙って飛ばすと「入れたのに無い」が原因の出ない形で起きる）。
+   */
+  list(): Promise<PluginSummary[]>;
+  /**
+   * 1つを files ごと返す。無ければ null。**名前が形に合わない・NUL を含むときも投げず null**
+   * （書き込みで断るので、そのような行はどの器にも存在しえない）。
+   * 読むときに形と `contentSha256` を検査し、合わなければ投げる（SQL や手での書き換え）。
+   */
+  get(name: string): Promise<StoredPlugin | null>;
+  /**
+   * 置く。**同名は置き換え**（files も新しいものだけが残る）。
+   *
+   * **書く前に `parsePluginInput` を通すこと**（3実装とも。`contentSha256` はそこで計算する）。
+   * 不正なら投げ、前のものが残る。大文字小文字だけが違う名前が既にあれば
+   * `PluginNameConflictError`（大文字小文字を区別しないファイルシステムで衝突するため）。
+   */
+  put(input: PluginInput): Promise<PluginSummary>;
+  /** 外す。在れば `true`、無ければ `false`（形に合わない名前も `false`）。 */
+  remove(name: string): Promise<boolean>;
 }
 
 /**
@@ -3509,6 +3548,13 @@ export interface Stores {
    * という能力差が生まれる（north_star 禁止1）。
    */
   mcpServers: McpServerStore;
+  /**
+   * 人間が入れた plugin。
+   *
+   * **省略可能にしないこと**（`mcpServers` と同じ理由。ここを任意にすると、片方の器でだけ
+   * 「入れた plugin が器を作り直しても残る」が成り立たないという能力差が生まれる）。
+   */
+  plugins: PluginStore;
   /**
    * 会話の既読の位置と基準時刻（全員で1組）。
    *

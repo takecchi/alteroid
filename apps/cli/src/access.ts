@@ -2,7 +2,7 @@ import { stdout } from './terminal-out.js';
 
 import { describeUnreadableRowsList, formatElapsedAgo, withErrorReason } from './format.js';
 import { describeAuthFailure, forbiddenKindOf, resolveTarget, type Target } from './target.js';
-import { confirmIrreversible } from './confirm.js';
+import { confirmIrreversible, type ConfirmIo } from './confirm.js';
 import { redactError } from './redact.js';
 
 /**
@@ -163,14 +163,28 @@ export async function accessGrantCommand(accountId: string): Promise<void> {
 export async function accessRevokeCommand(
   accountId: string,
   options: { yes?: boolean } = {},
+  io?: ConfirmIo,
 ): Promise<void> {
   const target = await resolveTarget();
   // 未ログインなら確認を出す前に断る（Issue #3214）。
   if (target.note !== null) throw new Error(target.note);
+  // **確認の前に、在るかを一覧で読む**（Issue #3838。`memory remove` の #3820 と同じ形）。単体の GET は
+  // 無いので `GET /access` を使う。無いアカウントに確認を出さず、確認も POST も出さずに、POST の 404 と
+  // 同じ文言で失敗する。**読めない行（`rowsUnreadable`）に在る id は「無い」と言わない** — 確認へ進み、
+  // POST の 409（「読めない形で在る」の案内）に任せる。未許可のアカウントは、この PR では変えない。
+  const { accounts, rowsUnreadable } = (await request(target, '/access')) as {
+    accounts: AccountView[];
+    rowsUnreadable?: { count: number; rows: { id: string; reason: string }[] };
+  };
+  const exists =
+    accounts.some((account) => account.id === accountId) ||
+    (rowsUnreadable?.rows.some((row) => row.id === accountId) ?? false);
+  if (!exists) throw new Error('該当するアカウントがありません');
   await confirmIrreversible(
     `アカウント ${accountId} の許可を取り消します。発行済みのトークンはその場から通らなくなり、` +
       '許可に乗っていた「実行環境の持ち主」の宣言も落ちます（許可し直しても宣言は戻りません）。',
     options,
+    io,
   );
   const { account } = (await request(target, `/access/${encodeURIComponent(accountId)}/revoke`, {
     method: 'POST',
@@ -240,11 +254,11 @@ export async function accessOwnerCommand(
   const name = account.email ?? account.displayName ?? account.id;
   if (options.revoke === true) {
     stdout.write(`実行環境の持ち主としての宣言を取り消しました: ${name}\n`);
-    stdout.write('（これで alteroid credential set / alteroid reset は通らなくなります）\n');
+    stdout.write('（宣言の記録を取り消しただけです。資格の判断には使っていません）\n');
     return;
   }
   stdout.write(`実行環境の持ち主として宣言しました: ${name}\n`);
-  stdout.write('（これで alteroid credential set / alteroid reset が通ります）\n');
+  stdout.write('（宣言を記録しただけです。資格の判断には使っていません）\n');
 }
 
 async function request(

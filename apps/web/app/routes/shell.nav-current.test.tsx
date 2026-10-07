@@ -1,22 +1,4 @@
 // @vitest-environment jsdom
-/**
- * 行き先の「いま居る画面」の印（`aria-current`）。
- *
- * サイドバーの1行はまとまり（仕事なら未了の仕事・作業の進捗）を代表する。
- * 「いま居る画面」は `NavLink` の前方一致ではなく `~/lib/nav` の `isNavItemActive` で決め、
- * `shell.tsx` の `NavItemLink` が `aria-current` を付ける。**まとまりのどのページに居ても、
- * 詳細の経路（`/managers/:id` など）に居ても、代表の1行がちょうど1つ選ばれる**ことを、
- * 結果（`aria-current`）の側で測る。
- *
- * 保証すること:
- * 1. `/chat` に居るとき、ホームのリンクに `aria-current` が付かない。会話のリンクには付く（印そのものが出ている）
- * 2. `/` に居るときは、ホームに `aria-current="page"` が付く
- *    （1 が「何も付けない」ことで緑になっていないこと）
- * 3. 下の表の全経路で、**選ばれる行がちょうど1つで、期待の行である**（まとまりの中の全ページと、
- *    詳細の経路を含む）。タブの定義から作った全経路も同じ行に落ちる（タブだけ増えてサイドバーで
- *    選ばれないページを作らない）
- * 4. 前方一致が単語の途中で当たらない（`/memoryfoo` は記憶とやり方ではない）
- */
 import { cleanup, render, screen, within } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -113,7 +95,6 @@ describe('行き先の選択中の印', () => {
   });
 });
 
-/** 選ばれている行（サイドバーの `aria-current="page"`）。 */
 function currentItems(): string[] {
   return screen
     .getAllByRole('link')
@@ -126,7 +107,6 @@ const CASES: [string, string][] = [
   ['/chat', '会話'],
   ['/chat/conv-1', '会話'],
   ['/approvals', '承認待ち'],
-  // 回答済みのページ（日付・1件）でも「承認待ち」の行が選ばれる（#3237）。
   ['/approvals/answered', '承認待ち'],
   ['/approvals/answered/2026-09-30', '承認待ち'],
   ['/approvals/answered/2026-09-30/ap-1', '承認待ち'],
@@ -197,7 +177,6 @@ describe('サイドバーのまとまり', () => {
 
     await screen.findByText('ダッシュボードの中身');
     const nav = screen.getByRole('navigation');
-    // 見出しは「そのまとまりの最初の行の直前」に1つずつ。「仕事」は行の名前と同じなので2つ。
     expect(within(nav).getAllByText('記録')).toHaveLength(1);
     expect(within(nav).getAllByText('クローンの中身')).toHaveLength(1);
     expect(within(nav).getAllByText('仕事')).toHaveLength(2);

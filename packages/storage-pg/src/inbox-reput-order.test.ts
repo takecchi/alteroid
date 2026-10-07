@@ -5,15 +5,6 @@ import type { Db } from './db.js';
 import { createPgStoresFromDb, type PgStores } from './index.js';
 import { createMigratedTestDb } from './test-db.test-support.js';
 
-/**
- * issue #1652。詳しい経緯とインメモリ側の対の歯は
- * `packages/core/src/inbox-reput-order.test.ts` の冒頭コメントを見よ。
- *
- * ここは pg 実装（PGlite）に対して同じ入力を当てる——pg は `ORDER BY` の
- * 無い `SELECT` / `UPDATE ... RETURNING` の行の並びをそのまま JS 側の
- * 安定ソートへ渡すので、`onConflictDoUpdate` で行の物理位置が動いた
- * 再配達行は末尾寄りになる。この歯は緑になる。
- */
 let db: Db;
 let stores: PgStores;
 
@@ -42,7 +33,7 @@ describe('InboxStore — 同着の2次キー（再配達された行は末尾へ
   it('put(A) → put(B) → put(A) 再配達（同じ at）の後、peekPending() は (B, A) になる', async () => {
     await stores.inbox.put(evA, at);
     await stores.inbox.put(evB, at);
-    await stores.inbox.put(evA, at); // 再配達（同じ id・同じ at）
+    await stores.inbox.put(evA, at);
 
     const order = (await stores.inbox.peekPending()).entries.map((entry) => entry.event.id);
     expect(order).toEqual(['evt-b', 'evt-a']);

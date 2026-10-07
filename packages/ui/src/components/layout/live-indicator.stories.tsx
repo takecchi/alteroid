@@ -2,7 +2,6 @@ import type { Meta, StoryObj } from '@storybook/react-vite';
 
 import { LiveIndicator } from './live-indicator';
 
-/** 日誌 SSE の状態。画面の中で自分から動くのはこれだけ。 */
 const meta = {
   title: 'Layout/LiveIndicator',
   component: LiveIndicator,

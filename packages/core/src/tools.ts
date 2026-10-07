@@ -8012,8 +8012,7 @@ export function createCloneTools(context: ToolContext) {
         } catch (error) {
           // 日誌には「設定しようとしている」が残っているので、打ち消す
           // （best-effort。落ちても noteDroppedRecord で跡を残すだけ）。
-          // **読めない行は例外のまま落とさず、理由の分かる文で返す（Issue #3859）。**
-          // 書いていない。外してから作り直す道は `schedule_remove`。
+          // 読めない行は例外のまま落とさず、理由の分かる文で返す。
           const unreadable = error instanceof UnreadableScheduleError;
           await appendJournalOrDrop('schedule_create', stores.journal, {
             type: 'decision',

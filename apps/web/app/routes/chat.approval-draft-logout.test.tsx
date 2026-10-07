@@ -1,9 +1,4 @@
 // @vitest-environment jsdom
-/**
- * #3706。ログアウトで、承認カードの書きかけ（`alteroid.approvalDrafts`）も消す。メモリに残った書きかけを、
- * ログアウトの後にチャットの画面が書き戻さない（待っている書き込みにも epoch を掛ける）。
- * 承認の画面（`routes/approvals.tsx`）の書き込みも同じ。
- */
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -46,7 +41,6 @@ beforeEach(() => {
       );
     }
     if (url.includes('/approvals')) {
-      // 取り直すたびに別の応答（一覧の形が変わる）にして、保存の effect をもう一度走らせる。
       return json({ approvals: [{ ...BASE, question: `本番に出してよいか ${approvalsVersion}` }] });
     }
     if (url.includes(`/conversations/${CONV}`)) {
@@ -88,8 +82,6 @@ describe('承認カードの書きかけはログアウトで消える（#3706�
 
     storeCredential('http://daemon.test', null);
     expect(sessionStorage.getItem('alteroid.approvalDrafts')).toBeNull();
-    // 画面の state には書きかけが残っている。承認を取り直す（送信が終わると取り直す）と保存の effect が
-    // 走り直すが、ログアウトの後なので書き戻さない。
     approvalsVersion = 1;
     fireEvent.change(screen.getByPlaceholderText(/クローンに話しかける/), {
       target: { value: 'x' },

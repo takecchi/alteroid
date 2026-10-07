@@ -1,8 +1,4 @@
 // @vitest-environment jsdom
-/**
- * 会話の一覧（`GET /conversations`）の `unreadCount` が、一覧の項目の未読の印と
- * 読み上げの名前（「未読 N 件」）になる。0 件なら印を出さない。
- */
 import { cleanup, render, screen } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider, useParams } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';

@@ -39,53 +39,25 @@ import {
 
 interface ApiContextValue {
   client: AlteroidClient;
-  /** いま繋ぎに行っている先。設定画面と診断表示が読む。 */
   baseUrl: string;
-  /** 接続先を差し替える（`null` で既定に戻す）。保存して即座に反映する。 */
   setBaseUrl(value: string | null): void;
-  /**
-   * 繋げる先の一覧（ビルド時の既定 ＋ 同一オリジン ＋ このブラウザに保存したもの）。
-   *
-   * **`baseUrl` と同じ state から作る。** 別々に持つと、選んだ直後の1描画だけ
-   * 「一覧に無い先へ繋いでいる」状態が見える。
-   */
   endpoints: Endpoint[];
-  /** このブラウザの一覧へ足す / 名前を差し替える（**選び直しはしない**）。 */
   saveEndpoint(entry: StoredEndpoint): void;
-  /**
-   * このブラウザの一覧から落とす。
-   *
-   * **落とした先を選んだままにしない。** 選択だけ残すと、一覧に無い接続先へ
-   * 繋ぎ続けたうえで「消した」と表示されることになる。
-   */
   removeEndpoint(url: string): void;
-  /** いまの資格情報（未ログインなら `null`）。 */
   credential: Credential | null;
-  /** ログイン結果を保存する（`null` でログアウト）。 */
   setCredential(value: Credential | null): void;
-  /**
-   * 失効が分かった鍵を捨てる。**その鍵が今も使われているときだけ**画面に効く。
-   * 遅れて届いた応答が、別の接続先の有効な鍵を巻き添えにしないための口。
-   */
   clearCredentialIfCurrent(baseUrl: string, token: string): void;
 }
 
 const ApiContext = createContext<ApiContextValue | null>(null);
 
-/**
- * 「どのデーモンへ、どの鍵で繋いでいるか」。
- *
- * **1つの state にまとめてある。** 別々に持つと、片方だけ新しい状態を見て判断
- * してしまう瞬間ができる（接続先は B なのに鍵は A のつもり、など）。まとめて
- * おけば、更新関数の中で*その時点の*組を丸ごと見て比べられる。
- */
+// 接続先と鍵を1つの state にまとめる: 別々に持つと、片方だけ新しい状態を見て判断する瞬間ができる
 interface Session {
   baseUrl: string;
   credential: Credential | null;
 }
 
 export function ApiProvider({ children }: { children: ReactNode }) {
-  // 資格情報は**接続先ごと**に持つ（`auth.ts` の冒頭）。
   const [session, setSession] = useState<Session>(() => {
     const baseUrl = resolveApiBaseUrl();
     return { baseUrl, credential: readCredential(baseUrl) };
@@ -93,41 +65,18 @@ export function ApiProvider({ children }: { children: ReactNode }) {
   const { baseUrl, credential } = session;
   const token = credential?.token ?? null;
 
-  /**
-   * このブラウザに保存した接続先の一覧。
-   *
-   * **初期化のときに1度だけ、古い形を写す**（`migrateSelectionIntoStoredEndpoints`）。
-   * 一覧が無かった頃に選択だけを設定した人の接続先を、切り替えただけで失わせない。
-   * 冪等なので、StrictMode が初期化子を2度呼んでも同じ結果になる。
-   */
   const [saved, setSaved] = useState<StoredEndpoint[]>(() => {
     migrateSelectionIntoStoredEndpoints();
     return readStoredEndpoints();
   });
 
-  /**
-   * クライアントと、その世代の通信をまとめて打ち切るための紐。
-   *
-   * 接続先や鍵が変わったら**前の世代の通信は打ち切る**。放っておくと、切り替えた
-   * 後に古い相手からの応答が届き、いまの状態に対して判断を下してしまう
-   * （典型は、A への 401 が B へ切り替えた後に届いて B の鍵を捨てる、というもの）。
-   */
   const generation = useMemo(() => {
     const controller = new AbortController();
     const client = createAlteroidClient({
       baseUrl,
-      /**
-       * 資格情報を足すのはここ1か所である。
-       *
-       * `credentials: 'include'`（Cookie）ではなくヘッダで運ぶ形にしてあるのは、
-       * 画面と API のオリジンが違う配置を前提にしているからである（理由は
-       * `config.ts` の冒頭）。`createAlteroidClient` は同じ `headers` を SSE 側の
-       * `fetch` にも渡すので、これだけで chat と日誌のストリームにも乗る
-       * （`EventSource` はヘッダを付けられないが、api-client は使っていない）。
-       */
+      // Cookie（`credentials: 'include'`）ではなくヘッダで運ぶ: 画面と API のオリジンが違う配置を前提にしているため
       headers: token === null ? {} : { authorization: `Bearer ${token}` },
-      // **呼び出し側の中断を潰さない。** chat の「受信をやめる」は各リクエストの
-      // signal で効いているので、世代の紐と束ねて両方を活かす。
+      // 呼び出し側の signal を潰さず世代の signal と束ねる: chat の「受信をやめる」が各リクエストの signal で効いているため
       fetch: (request) =>
         globalThis.fetch(request, {
           signal: AbortSignal.any([request.signal, controller.signal]),
@@ -136,19 +85,8 @@ export function ApiProvider({ children }: { children: ReactNode }) {
     return { client, controller, baseUrl, token };
   }, [baseUrl, token]);
 
-  /**
-   * 世代の紐を打ち切る。
-   *
-   * **cleanup で即座に abort しない**（#2768）。StrictMode（dev）は mount → cleanup →
-   * mount を同じ世代のまま続けて行うので、cleanup で abort すると、最初の mount で
-   * 始めた通信が中断され、同じ紐が abort 済みのまま次の mount 以降の全通信に残る
-   * （全リクエストが「signal is aborted without reason」で落ちる）。
-   *
-   * だから cleanup では打ち切りを1拍遅らせて予約し、同じ世代の effect がすぐ
-   * 張り直されたら取り消す。**世代が代わったとき（別の世代の effect が張られたとき）
-   * は前の世代をその場で打ち切る**ので、「切り替えた後に古い相手の応答が届く」
-   * 余地は増えない。本当に外れた（unmount）ときは予約が実行される。
-   */
+  // cleanup で即座に abort しない: StrictMode は同じ世代のまま mount → cleanup → mount を行うので、
+  // abort 済みの signal が以後の全リクエストに残って落ちる。1拍遅らせて予約し、張り直されたら取り消す
   const pendingAbort = useRef<{
     generation: typeof generation;
     timer: ReturnType<typeof setTimeout> | null;
@@ -164,47 +102,23 @@ export function ApiProvider({ children }: { children: ReactNode }) {
     };
   }, [generation]);
 
-  /**
-   * 接続先を切り替えたら、画面に残っているキャッシュを引き直す。
-   *
-   * **`hooks/queries.ts` の SWR キーは接続先を含まない**（`useAuth` の
-   * `authState` キーだけが例外で `baseUrl` を持つ）。だから接続先を切り替えた
-   * だけでは、`useHealth` や `useRunners` などは**前の接続先で取れた応答を
-   * 表示し続ける** — 次にキーが変わる・フォーカスが戻る・30秒間隔の再検証が
-   * 来るまで、画面は「切り替わった」ふりだけをする。SSE（`use-journal-live.ts`）
-   * は `[client, baseUrl]` を依存に持つ effect で自分から張り直すが、SWR の
-   * 取得はそのしくみに乗らないので、ここで明示的に引き直す。
-   *
-   * **`useSWRConfig()` はここ（`ApiProvider` 自身の本体）で呼ぶ。** `ApiProvider`
-   * が返す `<SWRConfig value={{onError}}>` は `provider` を指定していないので
-   * 親のキャッシュをそのまま使う — つまりここで見えるキャッシュと、配下の
-   * `useSWR` が使うキャッシュは同じものである。
-   */
   const { mutate } = useSWRConfig();
   const previousBaseUrl = useRef(baseUrl);
   useEffect(() => {
     if (previousBaseUrl.current === baseUrl) return;
     previousBaseUrl.current = baseUrl;
-    // 全キーを対象にする（`(key) => true`）。接続先を含まないキーが大半なので、
-    // 種別を選んで落とす形（`use-journal-live.ts` の `invalidate` と同じ形）は
-    // 取れない——選ぶ以上、選び漏れがそのまま「切り替わったふり」に戻る。
+    // 全キーを引き直す: SWR キーの大半は接続先を含まず、種別を選ぶと選び漏れが前の接続先の表示として残る
     void mutate(() => true);
   }, [baseUrl, mutate]);
 
   const setBaseUrl = useCallback((value: string | null) => {
     storeApiBaseUrl(value);
     const next = resolveApiBaseUrl();
-    // 接続先を変えたら、そのデーモン用の資格情報に持ち替える。
-    // **前のデーモンの鍵を新しい相手へ提示しない。**
+    // 前のデーモンの鍵を新しい相手へ提示しない
     setSession({ baseUrl: next, credential: readCredential(next) });
   }, []);
 
-  /**
-   * 一覧は **`localStorage` を正とする**（`setSaved` の前の値からは作らない）。
-   *
-   * 同じ鍵を別のタブが書き換えていることがあるので、前の render で読んだ配列を
-   * 起点にすると、そのタブの追加を黙って踏み潰す。
-   */
+  // `saved` ではなく localStorage を起点にする: 別タブの追加を踏み潰さないため
   const saveEndpoint = useCallback((entry: StoredEndpoint) => {
     const next = upsertEndpoint(readStoredEndpoints(), entry);
     storeEndpoints(next);
@@ -216,24 +130,19 @@ export function ApiProvider({ children }: { children: ReactNode }) {
       const next = withoutEndpoint(readStoredEndpoints(), url);
       storeEndpoints(next);
       setSaved(next);
-      // 消したのが「いま選んでいる先」なら、選択も外して既定へ落とす。
+      // 選択を残さない: 一覧に無い接続先へ繋ぎ続けたまま「消した」と表示されるため
       const target = normalizeEndpointUrl(url);
       if (target !== undefined && resolveApiBaseUrl() === target) setBaseUrl(null);
     },
     [setBaseUrl],
   );
 
-  /**
-   * 一覧の組み立て。**いま選んでいる先を `baseUrl` として渡す** —
-   * `listEndpoints` の既定引数（`localStorage` を読む）に任せると、切り替えた
-   * 直後の render でまだ古い値が混じりうる。
-   */
+  // `baseUrl` を渡す: `listEndpoints` の既定引数（localStorage）だと、切り替え直後の render に古い値が混じる
   const endpoints = useMemo(() => listEndpoints(saved, undefined, baseUrl), [saved, baseUrl]);
 
   const setCredential = useCallback(
     (value: Credential | null) => {
       storeCredential(baseUrl, value);
-      // 書いている間に接続先が変わっていたら、いまの画面には触らない。
       setSession((current) =>
         current.baseUrl === baseUrl ? { ...current, credential: value } : current,
       );
@@ -241,16 +150,7 @@ export function ApiProvider({ children }: { children: ReactNode }) {
     [baseUrl],
   );
 
-  /**
-   * **その鍵が今も使われているときだけ**捨てる。
-   *
-   * 401 は「この接続先の、この鍵は通らない」という事実であって、「いま画面が
-   * 持っている鍵が通らない」ではない。遅れて届いた応答をそのまま今の状態へ
-   * 当てはめると、既に別の接続先へ切り替えて有効な鍵を読み込んでいるのに、
-   * それを消してしまう。
-   *
-   * 保存先からは（その接続先のその鍵に限って）消してよい。実際に無効なので。
-   */
+  // その鍵が今も使われているときだけ画面の状態を捨てる: 遅れて届いた 401 が、切り替え後の別の接続先の有効な鍵を消さないため
   const clearCredentialIfCurrent = useCallback((expectedBaseUrl: string, expectedToken: string) => {
     if (readCredential(expectedBaseUrl)?.token === expectedToken) {
       storeCredential(expectedBaseUrl, null);
@@ -287,23 +187,8 @@ export function ApiProvider({ children }: { children: ReactNode }) {
     ],
   );
 
-  /**
-   * 期限切れ・失効した鍵を握ったままにしない。
-   *
-   * トークンには寿命があり（既定 30 日）、更新の仕組みは無い。どこか1つの取得が
-   * 401 を返した時点でその鍵はもう通らないので、**捨てて入り口へ戻す**。
-   * 捨てると `useAuth` のキーが変わり、shell が `/login` へ送る。
-   *
-   * **403 では捨てない。** あちらは鍵が有効なまま「許可が無い」なので、捨てると
-   * ログインし直す導線に落ちて、何度やっても解決しない画面になる。
-   *
-   * ここは**失敗として投げられたものだけ**を見る。401 を正常な戻り値として
-   * 扱う経路（`use-auth.ts` は「未ログイン」という状態に翻訳する）は素通りするので、
-   * そちらは自分で捨てる。捨て方は同じ `clearCredentialIfCurrent` を共有している。
-   *
-   * 見るのは**この世代が使っていた鍵**である（いま画面が持っている鍵ではない）。
-   * そうしないと、遅れて届いた 401 が別の接続先の鍵を巻き添えにする。
-   */
+  // 403 では捨てない: 鍵は有効で許可が無いだけなので、捨てると何度やっても解決しないログイン導線に落ちる。
+  // 見る鍵は画面の現在値ではなくこの世代のもの: 遅れて届いた 401 が別の接続先の鍵を巻き添えにするため
   const onError = useCallback(
     (error: unknown) => {
       if (error instanceof ApiError && error.status === 401 && generation.token !== null) {
@@ -331,24 +216,12 @@ export function useApi(): AlteroidClient {
   return useApiContext().client;
 }
 
-/**
- * 応答が失敗だったときに投げる。
- *
- * デーモンの 400 は2種類ある（手書きの `{error}` と、バリデータ既定の
- * `{success:false, error:[...]}`）。**どちらも人間が読める1行に潰す** —
- * 画面が形の違いを気にする必要はないが、握り潰すと「読み込み中のまま止まる」に
- * なるので、必ず投げて `error` として出す。
- */
 export class ApiError extends Error {
   readonly status: number;
-  /**
-   * サーバが本文に載せた機械向けの印（`{ error, code }` の `code`）。無い応答では `undefined`。
-   * 画面は文言（`message`）ではなくこの印で場合分けする（例: `journal_write_failed`）。
-   */
+  /** サーバが本文に載せた機械向けの印。画面は `message` の文言ではなくこれで場合分けする。 */
   readonly code: string | undefined;
 
   constructor(status: number, message: string, code?: string) {
-    // 画面へ出る前に伏せる（issue #2600。`ErrorNote` ほか `error.message` を出す口すべてに効く）。
     super(redactError(message));
     this.name = 'ApiError';
     this.status = status;
@@ -356,14 +229,12 @@ export class ApiError extends Error {
   }
 }
 
-/** 応答本文の `code`（文字列のときだけ）。 */
 function errorCode(error: unknown): string | undefined {
   if (typeof error !== 'object' || error === null) return undefined;
   const { code } = error as { code?: unknown };
   return typeof code === 'string' ? code : undefined;
 }
 
-/** `openapi-fetch` の `{data, error, response}` を SWR が扱える形に均す。 */
 export function unwrap<T>(result: { data?: T; error?: unknown; response: Response }): T {
   if (result.error !== undefined || result.data === undefined) {
     throw new ApiError(
@@ -375,34 +246,15 @@ export function unwrap<T>(result: { data?: T; error?: unknown; response: Respons
   return result.data;
 }
 
-/**
- * クローンに話しかけ、応答を SSE で受け取る（チャットのメッセージ編集、#1010）。
- *
- * **`client.chat()`（`@alteroid/api-client`）を使わない。** あちらの `ChatInput`
- * はまだ `supersedes`（送信済みの人間の発言を編集する口）を知らない——サーバの
- * 契約（生成 spec、`apps/daemon/openapi.json`）はもう持っているが、`api-client`
- * の手書きの薄いラッパー（`packages/api-client/src/index.ts`）を直すのはこの
- * 作業の担当外（`apps/web` だけを触る、他のワークスペースパッケージは変更しない
- * という割り当てのもとで進めている）。
- *
- * 型付きの `client.api.POST('/chat', { parseAs: 'stream' })` を使えば、
- * `supersedes` は生成 spec がそのまま運ぶので、手書きの型を1つも足さずに済む
- * （AGENTS.md「型は OpenAPI 生成 spec から導出する」）。`parseAs: 'stream'` で
- * `openapi-fetch` は応答本文を JSON へ変換せず `Response.body` をそのまま
- * 返す（`openapi-fetch@0.17.0` の `getResponseData`）ので、そこから先の
- * SSE の読み取りは `@alteroid/api-client` の `readSse` をそのまま使う
- * （自前で書き直さない——`packages/api-client/src/sse.ts` の実装を二重管理
- * しないため）。
- */
+// `client.chat()` ではなく `client.api.POST('/chat')` を使う: 手書きの型を足さず、生成 spec のまま `supersedes` を運ぶため。
+// SSE の読み取りは自前で書き直さず `readSse` を使う: `api-client` の実装を二重管理しないため
 export async function* postChat(
   client: AlteroidClient,
   input: {
     text: string;
     conversationId?: string;
     supersedes?: string;
-    /** `uploadAttachment` が返した添付の id（発言へ結び付ける）。 */
     attachments?: readonly string[];
-    /** 発言ごとに作る一意な id（再送では同じ値）。同じ会話に再び届いても、デーモンは二重に受けない。 */
     clientMessageId?: string;
   },
   options?: { signal?: AbortSignal },
@@ -430,13 +282,6 @@ export async function* postChat(
   }
 }
 
-/**
- * 添付を1つ預ける（`POST /attachments`）。本文は**生のバイト列**で、名前と MIME はクエリで運ぶ。
- *
- * `content-type` は `application/octet-stream` だけを受ける（それ以外は 415）。`openapi-fetch` の
- * 既定の直列化（JSON）を通さないよう、`bodySerializer` で `Blob` をそのまま渡す。
- * 失敗（415 / 413 / 400）は `{error, code}` を `ApiError` にして投げる。
- */
 export async function uploadAttachment(
   client: AlteroidClient,
   file: Blob,
@@ -445,8 +290,8 @@ export async function uploadAttachment(
 ) {
   const result = await client.api.POST('/attachments', {
     params: { query: { name: meta.name, type: meta.type } },
-    // 生成型は本文を `string` と書く（バイナリの表現）。実体は Blob のまま送る。
     body: file as unknown as string,
+    // `openapi-fetch` 既定の JSON 直列化を通さず Blob をそのまま送る: 本文は生のバイト列で、デーモンは octet-stream 以外を 415 で拒むため
     bodySerializer: (body: unknown) => body as BodyInit,
     headers: { 'content-type': 'application/octet-stream' },
     ...(options?.signal === undefined ? {} : { signal: options.signal }),
@@ -454,7 +299,6 @@ export async function uploadAttachment(
   return unwrap(result);
 }
 
-/** 添付が取り出せない（消えた・期限切れ。404）。 */
 export class AttachmentGoneError extends Error {
   constructor() {
     super('添付を取り出せない（期限切れの可能性）');
@@ -462,11 +306,6 @@ export class AttachmentGoneError extends Error {
   }
 }
 
-/**
- * 添付の中身を取る（`GET /attachments/:id`）。Bearer は `client` が運ぶので、`<img src>` に
- * URL を直接入れる代わりに、ここで `Blob` にして `blob:` URL へ変える。
- * 404 は `AttachmentGoneError`、それ以外の失敗は `ApiError`。
- */
 export async function fetchAttachment(
   client: AlteroidClient,
   id: string,
@@ -481,14 +320,7 @@ export async function fetchAttachment(
   return unwrap(result) as unknown as Blob;
 }
 
-/**
- * 進行中のターンの途中経過に戻り、続きを SSE で受け取る（発言は投函しない）。
- *
- * `postChat` の隣に同じ形で置く（`client.chatStream()` を使わない理由も同じで、Web は
- * 型付きの `client.api` を通す）。最初の `open` は `{conversationId, inProgress}`。
- * `inProgress` が false なら進行中のターンは無く、そこで終わる。true なら、いままでの
- * 分に続けて続きが流れ、`done` / `error` で終わる。
- */
+// `client.chatStream()` ではなく型付きの `client.api` を通す: `postChat` と同じ理由
 export async function* getChatStream(
   client: AlteroidClient,
   conversationId: string,
@@ -509,14 +341,7 @@ export async function* getChatStream(
   }
 }
 
-/**
- * **成否だけを見る。本文は読まない。**
- *
- * `unwrap` は「値が要る」呼び出し用で、本文が空の 200 を失敗として投げてしまう。
- * 書き込んだ結果を画面が使わない経路（積む・閉じる、のように直後に一覧を取り直す
- * もの）では、返る形にこちらが縛られる理由が無い。**握り潰さずに投げる**のは
- * `unwrap` と同じ — 失敗が「静かなだけ」に見えるのが一番まずい。
- */
+// `unwrap` ではなく成否だけを見る: `unwrap` は本文が空の 200 を失敗として投げるため、結果を使わない書き込みには合わない
 export function expectOk(result: { error?: unknown; response: Response }): void {
   if (result.error === undefined && result.response.ok) return;
   throw new ApiError(result.response.status, describeError(result.error, result.response));
@@ -526,7 +351,6 @@ function describeError(error: unknown, response: Response): string {
   if (typeof error === 'object' && error !== null) {
     const record = error as Record<string, unknown>;
     if (typeof record.error === 'string') return record.error;
-    // zod のバリデーション失敗（`{success:false, error:[...]}`）。
     if (Array.isArray(record.error)) {
       const issues = record.error
         .map((issue) => {
@@ -542,12 +366,7 @@ function describeError(error: unknown, response: Response): string {
   return `${response.status} ${response.statusText}`.trim();
 }
 
-/**
- * **`clientMessageId` から、受け取り済みの発言の会話を引く**（`GET /client-messages/:clientMessageId`。#3258）。
- * 新しい会話の送信が `open` の前に中断され、会話 id を知らないときに使う。受け取っていれば会話の id、
- * **受け取っていなければ（404）`undefined`**。それ以外の失敗（5xx・繋がらない・401）は `ApiError` などを
- * 投げる——「受け取っていない」と「確かめられなかった」を取り違えない。
- */
+/** 受け取っていなければ（404）`undefined`。それ以外の失敗は投げる（「受け取っていない」と「確かめられなかった」を取り違えない）。 */
 export async function findConversationByClientMessageId(
   client: AlteroidClient,
   clientMessageId: string,

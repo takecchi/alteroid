@@ -1,12 +1,3 @@
-/**
- * 生成クライアントが**実際にデーモンへ繋がること**を見る。
- *
- * `app.request()` ではなく本物の TCP を開けて叩くのは、ここで確かめたいのが
- * 「外部アプリから HTTP API 経由でクローンに指示を送り、進捗・日誌・保留を
- * 取得できる」（PRD 利用シナリオ8）という**外からの経路**だからである。
- * 同一プロセスで呼べても、それは spec が正しいことの証拠にならない。
- */
-
 import type { AddressInfo } from 'node:net';
 
 import { serve, type ServerType } from '@hono/node-server';
@@ -18,14 +9,9 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
 import { createAlteroidClient, type AlteroidClient, type paths } from './index.js';
 
-/**
- * クローンの代わり。話しかけられたら承認待ちを1件立てて `ask_human` を流す
- * （＝外から「保留を取得して答える」までを通せる状態を作る）。
- */
 function fakeClone(stores: Stores) {
   const listeners = new Map<string, Set<(event: ChatStreamEvent) => void>>();
   const answered: { id: string; answer: string }[] = [];
-  /** 進行中のターンの途中経過（会話ごと。`attach` が写しを返す）。 */
   const inProgress = new Map<string, ChatStreamEvent[]>();
   const emit = (conversationId: string, event: ChatStreamEvent) => {
     for (const listener of listeners.get(conversationId) ?? []) listener(event);
@@ -53,21 +39,15 @@ function fakeClone(stores: Stores) {
     async runnerIdOf() {
       return undefined;
     },
-    // 外部クライアントの経路（本ファイルの検証対象）に `runner_list` 相当の
-    // HTTP は無い（クローンの道具専用）。型を満たすだけの空スタブで足りる。
     async runners() {
       return { runners: [], unassigned: [], daemonRevision: { status: 'unknown' } };
     },
-    // 外部クライアントの経路（本ファイルの検証対象）は `GET /runners` の
-    // push health を検証しない。型を満たすだけの空スタブで足りる。
     pushHealthOf() {
       return undefined;
     },
     async transcript() {
       return { kind: 'missing' as const };
     },
-    // この検証の主題ではない（#1039 は manager_stop の道具からしか呼ばれない）。
-    // 型を満たすだけの空スタブで足りる。
     async unpushedWork() {
       return { kind: 'unavailable' as const, reason: '(この検証では未使用)' };
     },
@@ -77,15 +57,11 @@ function fakeClone(stores: Stores) {
     async restore() {
       return [];
     },
-    // 枠で止まった委譲の起こし直しも同じ理由で触らない。
     async resumeStoppedByUsage() {
       return [];
     },
-    // この試験は HTTP の口の形だけを見る（引き取りの契機は触らない）。
     async reattachRunner() {},
-    // 移送の契機も同じ理由で触らない。
     relocateFrom() {},
-    // drain の契機（`POST /runners/vacate`）も同じ理由で触らない。
     async vacate() {
       return {};
     },
@@ -99,21 +75,15 @@ function fakeClone(stores: Stores) {
   };
 
   const clone: CloneHost = {
-    // 永続化を待ってから受け取ったと返す口（Issue #3679）。この歯では触らない。
     async postPersisted() {
       return 'persisted';
     },
     managers,
-    // 認証トークンの切替（#393 PR4）。この歯では触らない。
     recycleSessionForToken() {},
-    // クローンへ配るか畳むか（Issue #783）。この歯では触らない。
     usageBlocked: false,
-    // 再開の印がまだ使われずに立っているか（Issue #1051）。この歯では触らない。
     usageReleasePending: false,
-    // 止まりの resetsAt / いまの鍵の id（Issue #1223 再発）。この歯では触らない。
     usageBlockedResetsAt: undefined,
     usageBlockedTokenId: undefined,
-    // 消した合図の配達停止（issue #1049）。この歯では触らない。
     async dropQueuedInboxEvents() {
       return 0;
     },
@@ -183,7 +153,6 @@ let fake: ReturnType<typeof fakeClone>;
 
 beforeEach(async () => {
   const base = createMemoryStores();
-  // 日誌の SSE はバスが配線されていないと 503 を返す（黙って隠さない作りになっている）
   const journalBus = createJournalBus(base.journal);
   stores = { ...base, journal: journalBus.journal };
   fake = fakeClone(stores);
@@ -209,7 +178,6 @@ afterEach(async () => {
 });
 
 it('外部アプリが chat → 保留の取得 → 回答 → 日誌の取得まで通せる', async () => {
-  // 1. 指示を送る（SSE で返答が流れてくる）
   const events: string[] = [];
   let conversationId: string | undefined;
   let approvalId: string | undefined;
@@ -227,13 +195,11 @@ it('外部アプリが chat → 保留の取得 → 回答 → 日誌の取得�
   expect(conversationId).toBeTypeOf('string');
   expect(approvalId).toBe('approval-1');
 
-  // 2. 承認待ちを取得する
   const pending = await client.api.GET('/approvals', { params: { query: { pending: 'true' } } });
   expect(pending.response.status).toBe(200);
   expect(pending.data?.approvals.map((entry) => entry.id)).toEqual(['approval-1']);
   expect(pending.data?.approvals[0]?.question).toBe('本番に出してよいか');
 
-  // 3. 答える（人間の不在で止まっていた仕事がここで再開する）
   const answer = await client.api.POST('/approvals/{id}/answer', {
     params: { path: { id: 'approval-1' } },
     body: { answer: '出してよい' },
@@ -241,19 +207,16 @@ it('外部アプリが chat → 保留の取得 → 回答 → 日誌の取得�
   expect(answer.response.status).toBe(200);
   expect(fake.answered).toEqual([{ id: 'approval-1', answer: '出してよい' }]);
 
-  // 二度答えれば 409（spec に載っているエラーが実際に返ること）
   const again = await client.api.POST('/approvals/{id}/answer', {
     params: { path: { id: 'approval-1' } },
     body: { answer: 'もう一度' },
   });
   expect(again.response.status).toBe(409);
 
-  // 4. 日誌を読む
   const journal = await client.api.GET('/journal', { params: { query: { limit: 50 } } });
   expect(journal.response.status).toBe(200);
   expect(journal.data?.entries.some((entry) => entry.type === 'exchange')).toBe(true);
 
-  // 5. 会話も外から読み直せる（器を替えても続きから話せること自体が要件）
   const conversation = await client.api.GET('/conversations/{id}', {
     params: { path: { id: conversationId as string }, query: {} },
   });
@@ -268,7 +231,6 @@ it('chatStream — 進行中のターンの途中経過に戻り、続きを受�
   const reading = (async () => {
     for await (const message of client.chatStream('conv-a')) {
       seen.push({ event: message.event, data: message.data });
-      // 購読が張られたあとに続きを流す
       if (message.event === 'open') {
         fake.emit('conv-a', { type: 'text', text: '続き' });
         fake.emit('conv-a', { type: 'done' });
@@ -284,10 +246,8 @@ it('chatStream — 進行中のターンの途中経過に戻り、続きを受�
     { event: 'text', data: { type: 'text', text: '続き' } },
     { event: 'done', data: { type: 'done' } },
   ]);
-  // 購読だけで、発言は日誌に積まれていない
   const journal = await client.api.GET('/journal', { params: { query: { limit: 50 } } });
   expect(journal.data?.entries.some((entry) => entry.type === 'exchange')).toBe(false);
-  // 解除済み（購読が漏れていない）
   expect(fake.listeners.get('conv-a')?.size ?? 0).toBe(0);
 });
 
@@ -313,7 +273,6 @@ it('日誌の SSE を外から購読できる（承認待ちが出たことに�
     }
   })();
 
-  // 購読が張られてから追記する（open を受け取るまで待つ）
   await vi.waitFor(() => expect(seen).toContain('open'));
   await stores.journal.append({
     type: 'memory_update',
@@ -335,31 +294,13 @@ it('本文の無い POST にも content-type が付く（deliberateClient を素
   expect(ended.response.status).toBe(200);
 });
 
-/**
- * **spec が本文を「省略できないもの」として出していることを、型の側で固定する。**
- *
- * 門番（`deliberateClient`）が要求するのは `content-type: application/json` だが、
- * OpenAPI にヘッダ必須を直接書く手段は無い（`Content-Type` を header parameter に
- * 書いても仕様上*無視される*）。**唯一の機械可読な表現が「requestBody を `required`
- * にする」ことである** — 生成クライアントは本文を必ず持つので、そのついでに
- * content-type が必ず付く（openapi-fetch は body がある時だけ付ける実装）。
- *
- * **だからこの契約は実行時ではなく型に宿る。** 下の実行時 test に `body: {}` を書けば
- * `required: false` でも 415 にはならないので、実行時だけを見る test は素通りする
- * （実際に一度素通りした）。守りたいのは「本文を**省略した**呼び出しが型で書けない」
- * ことなので、そこを直接見る。
- *
- * `required: false` に戻すと `requestBody` が `?:` になり、`undefined` が入って
- * `never` へ落ち、この代入が `tsc` で落ちる（`pnpm typecheck` と CI が拾う）。
- */
+// 型で固定する: 実行時の test は `body: {}` を書けば `required: false` でも 415 にならず素通りするため。
 type BodyIsRequired<T> = undefined extends T ? never : true;
 
-/** `true` を受け取れるのは本文が必須のときだけ（省略可なら引数の型が `never` になる）。 */
 function assertBodyRequired<T>(bodyIsRequired: BodyIsRequired<T>): BodyIsRequired<T> {
   return bodyIsRequired;
 }
 
-// `deliberateClient` を通る経路の**全部**（`app.ts` で門番を足したら、ここにも足す）。
 assertBodyRequired<paths['/chat/{conversationId}/end']['post']['requestBody']>(true);
 assertBodyRequired<paths['/events/{source}']['post']['requestBody']>(true);
 assertBodyRequired<paths['/schedule/{kind}']['delete']['requestBody']>(true);
@@ -369,17 +310,7 @@ assertBodyRequired<paths['/access/{accountId}/revoke']['post']['requestBody']>(t
 assertBodyRequired<paths['/shutdown']['post']['requestBody']>(true);
 assertBodyRequired<paths['/auth/logout']['post']['requestBody']>(true);
 
-/**
- * **既定ヘッダを注入しない素の生成クライアントで、実際に門番を越えられることを見る。**
- *
- * 上の `it` が通るのは `createAlteroidClient` が全リクエストへ `content-type` を手で
- * 足しているからで、spec が正しいことの証拠にはならない。他言語の素の生成クライアントは
- * 既定ヘッダなど注入しないので、そちらでも通らなければ「spec から起こしたクライアントは
- * 415 に当たる」が残る。だからここは `createClient<paths>` を**既定ヘッダ無しで**直に組む。
- *
- * 見るのは「415 でないこと」だけである。200 / 403 / 404 のどれになるかは deps と資格で決まるが、どれも
- * 門番を**通り抜けた**ことを意味する（415 は通れなかったことしか意味しない）。
- */
+// `createClient<paths>` を既定ヘッダ無しで直に組む: `createAlteroidClient` が手で足す `content-type` は、spec が正しいことの証拠にならないため。
 it('既定ヘッダを注入しない素の生成クライアントでも 415 にならない', async () => {
   const address = server.address() as AddressInfo;
   const bare = createClient<paths>({ baseUrl: `http://127.0.0.1:${address.port}` });

@@ -13,7 +13,6 @@ describe('cursor（keyset paging の共通符号化。issue #432）', () => {
   });
 
   it('base64 として読めない文字列は InvalidCursorError', () => {
-    // base64url の許容文字集合の外（`!` はどの表でも使わない）を混ぜる。
     expect(() => decodeCursor('!!!not-base64!!!', shape)).toThrow(InvalidCursorError);
   });
 
@@ -23,7 +22,6 @@ describe('cursor（keyset paging の共通符号化。issue #432）', () => {
   });
 
   it('JSON としては読めても schema に合わない中身は InvalidCursorError', () => {
-    // `order` が enum の外、`id` が欠けている。
     const wrongShape = Buffer.from(JSON.stringify({ order: 'sideways' }), 'utf8').toString(
       'base64url',
     );
@@ -31,30 +29,12 @@ describe('cursor（keyset paging の共通符号化。issue #432）', () => {
   });
 
   it('encode した文字列は base64url なので +, /, = を含まない', () => {
-    // 素の base64 では出やすい記号が多く混ざるよう、あえて偏った内容を積む。
-    // 注記(#260): 直下の id の中の 6 文字の並びは、もとはこの位置に生の
-    // NUL バイト(1個)がそのまま埋め込まれていた（表記を読める形へ書き換えた
-    // だけで、文字列としての値は変えていない——decode した runtime の値は
-    // 書き換え前後で一致することを確認済み）。生の NUL のままだと、この
-    // repo の grep シムがこのファイルを丸ごとバイナリ扱いして中身を読み
-    // 飛ばす副作用もあった。なぜそこに生の NUL が在ったかは判定できて
-    // いない。2つの読みがどちらも成り立つ:
-    //   (a) 意図 — 直上の注釈どおり「あえて偏った内容」を積む一環で、隣の
-    //       非文字コードポイントと並べた境界値の1つとして NUL 自体も
-    //       意図的に混ぜた
-    //   (b) 事故 — 日本語の前後の空白の数は前3・後2＋NULで非対称。対称なら
-    //       後ろも空白3つのはずで、3つ目が NUL に化けた（#260 本文が言う
-    //       「編集したファイルのスペース1文字が NUL バイトに化けた」事故と
-    //       同じ見た目）
-    // どちらかには決めていない。
     const payload = {
       id: '>>>???///+++===   日本語  \u0000￿'.repeat(20),
       order: 'desc' as const,
     };
     const encoded = encodeCursor(payload);
     expect(encoded).not.toMatch(/[+/=]/);
-    // 中身が本当に往復することも併せて確かめる（記号を含まないことだけが
-    // 目的化して、符号化そのものが壊れていても気づかない、を避ける）。
     expect(decodeCursor(encoded, shape)).toEqual(payload);
   });
 });

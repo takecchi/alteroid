@@ -1,59 +1,6 @@
 #!/usr/bin/env node
-/**
- * この PR の本文と、この PR のコミットメッセージのどちらにも、AI 生成の
- * 帰属を示すトレーラ（`Co-Authored-By:` / `🤖 Generated with`）が残っていない
- * ことを確かめる（`pnpm check:no-attribution-trailers`。Issue #1020）。
- *
- * **判定ロジックはここに置かない。** `check-no-attribution-trailers-core.mjs`
- * が正本で、なぜ fail-closed にするのか・なぜ repo のファイルを走査しないのか
- * （#785 と同じ自己参照の族）・なぜ大小文字を無視するのかはあちらの doc に
- * 書いてある。ここはネットワーク（`gh pr view`）を持ち、結果を出力し、
- * 終了コードを決めるだけの薄い層（`check-pr-green.mjs` / `check-base-overlap.mjs`
- * と同じ分け方）。
- *
- * ## この道具が言えること・言えないこと
- *
- * - **言えること**: 呼ばれた時点の PR 本文と全コミットメッセージのどちらにも
- *   印が無いか。
- * - **言えないこと**: **この判定の後に本文やコミットが変わらないという保証。**
- *   #1108 より前は「PR 本文の編集だけでは新しい workflow run が起きない」
- *   という穴そのものがあった（呼び出し元が `ci.yml` の1ジョブで、
- *   `pull_request.types` に `edited` を含んでいなかったため）。#1108 で
- *   呼び出し元を独立した `no-attribution-trailers.yml` へ出し、`pull_request.types`
- *   に `edited` を足したので（逐語は
- *   `grep -Fn -- '`edited` がこの門の要である' .github/workflows/no-attribution-trailers.yml`）、
- *   本文を編集すれば push を挟まなくても再判定が走る。
- *   **ただし塞いだのはそこまでである。** 判定が走った後（この道具が `clean`
- *   を返した後）から実際にマージされるまでのあいだに本文やコミットが
- *   書き換えられれば、その書き換えは新しい run を1本経ていないので、同じ
- *   穴が別の場所で開く——「編集で再判定が起きない」ことと「判定と merge の
- *   あいだで本文が変わらないこと」は別の保証であり、直したのは前者だけ。
- * - **書き換えない。** 読むだけである。
- *
- * ## 入力（環境変数。手元で叩くための `--pr` / `--repo` 引数でも上書きできる）
- *
- * | 引数 | 既定の環境変数 | 意味 |
- * |---|---|---|
- * | `--pr` | `NO_ATTRIBUTION_TRAILERS_PR_NUMBER` | 検査する PR 番号 |
- * | `--repo` | `GITHUB_REPOSITORY` | `owner/repo` |
- *
- * どちらか1つでも欠けたら、**黙って緑にしない**（`unreadable` ではなく
- * 「呼び方の誤り」として終了コード1。`check-base-overlap.mjs` と同じ理由——
- * `unreadable` は「読もうとしたが読めなかった」用の値であって、読みに行く
- * ための情報が最初から無いのとは別の失敗である）。
- *
- * ## 終了コード
- *
- * | verdict | コード |
- * |---|---|
- * | `clean` | 0 |
- * | `found` | 1 |
- * | `unreadable` | 1 |
- * | （引数不足） | 1 |
- *
- * `found` / `unreadable` は同じ1だが、出力の文言は別である
- * （`check-pr-green.mjs` と同じ方針）。
- */
+// 使い方: pnpm check:no-attribution-trailers [--pr N] [--repo owner/repo]（環境変数 NO_ATTRIBUTION_TRAILERS_PR_NUMBER / GITHUB_REPOSITORY。clean は 0、それ以外は 1）
+// 引数が欠けたら `unreadable` ではなく呼び方の誤りとして 1 を返す: 緑にしないため。
 
 import { execFileSync } from 'node:child_process';
 import process from 'node:process';
@@ -72,7 +19,6 @@ function logError(text) {
   process.stderr.write(text + '\n');
 }
 
-/** `--flag value` と `--flag=value` の両方を受ける（`check-base-overlap.mjs` と同じ）。 */
 function parseArgs(argv) {
   const result = {};
   for (let i = 0; i < argv.length; i++) {
@@ -95,15 +41,7 @@ function parseArgs(argv) {
   return result;
 }
 
-/**
- * `gh pr view <N> --json body,commits` を叩く。**1回で両方取る**
- * （`.claude/skills/tool-quirks/SKILL.md` の `gh issue view <N> --comments` の項
- * ——本文を落とす罠と同じ形を、2回に分けないことで避ける。この項は #1753 で
- * AGENTS.md「静かに失敗する道具」から移った）。
- *
- * 例外は握り潰すが、中身（stderr）は捨てない（`check-pr-green.mjs` /
- * `check-base-overlap.mjs` の `fetch*` と同じ形）。
- */
+// 本文とコミットを1回で取る: 2回に分けると本文を落とす罠を踏むため。
 function fetchPr(prNumber, repo) {
   try {
     const stdout = execFileSync(
@@ -146,8 +84,6 @@ function main() {
   if (data === null) {
     fetchErrors.push(`gh pr view が失敗した: ${error}`);
   } else {
-    // `body` が無い（空の PR 本文）ことと「取得に失敗した」ことは区別する——
-    // 前者は空文字として扱い、正常に「読めた」結果にする。
     body = typeof data.body === 'string' ? data.body : '';
 
     if (Array.isArray(data.commits)) {

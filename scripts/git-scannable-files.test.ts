@@ -12,15 +12,6 @@ import {
   // @ts-expect-error -- 素の .mjs
 } from './git-scannable-files-core.mjs';
 
-/**
- * `listGitScannableFiles`（Issue #1817）の歯。
- *
- * **一時の git リポジトリを実際に作って**（本物の repo の根は汚さない）、
- * `git ls-files -co --exclude-standard` が本当に「追跡済み + 未追跡だが
- * ignore されていない」を返すこと、そして直す前の形（`git ls-files -z` だけ、
- * cached のみ）だと未追跡ファイルを取りこぼすことの両方を、同じ一時
- * リポジトリに対して測る。
- */
 describe('listGitScannableFiles（Issue #1817）', () => {
   async function makeRepoWithUntrackedFile(): Promise<string> {
     const dir = await makeTempDir('git-scannable-files-');
@@ -32,7 +23,6 @@ describe('listGitScannableFiles（Issue #1817）', () => {
     await writeFile(join(dir, 'tracked.txt'), 'tracked content\n');
     git('add', '-A');
     git('commit', '-qm', 'init: one tracked file');
-    // まだ `git add` していない新規ファイル（#1808 の再現と同じ形）。
     await writeFile(join(dir, 'new-untracked.txt'), 'new untracked content\n');
     return dir;
   }
@@ -65,7 +55,6 @@ describe('listGitScannableFiles（Issue #1817）', () => {
 
     const files = listGitScannableFiles({ cwd: dir }) as string[];
     expect(files).not.toContain('ignored-dir/scratch.txt');
-    // .gitignore 自身は未追跡だが無視対象ではないので、対象に入る。
     expect(files).toContain('.gitignore');
   });
 

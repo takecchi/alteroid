@@ -1,9 +1,4 @@
 // @vitest-environment jsdom
-/**
- * 承認待ちの設問のフォーム（issue #2525）。部品は `@alteroid/ui` に在るが、Radix のラジオ・チェックが
- * `ResizeObserver` を要るので、jsdom の足場（`~/test-support`）を持つここに置く。単一はラジオ・複数はチェック、推奨の印と説明、
- * 「その他」（単一では選択肢と排他）、補足、何も無ければ送れない・未回答の設問があっても送れる。
- */
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -74,7 +69,6 @@ describe('ApprovalQuestionsForm', () => {
     expect((send() as HTMLButtonElement).disabled).toBe(true);
     fireEvent.click(send());
     expect(onSubmit).not.toHaveBeenCalled();
-    // 空白だけでも同じ。
     fireEvent.change(screen.getByLabelText('設問 1 のその他'), { target: { value: '  ' } });
     expect((send() as HTMLButtonElement).disabled).toBe(true);
   });
@@ -126,7 +120,6 @@ describe('ApprovalQuestionsForm', () => {
 
     fireEvent.click(screen.getByRole('radio', { name: /Fly\.io/ }));
     fireEvent.click(send());
-    // 書いたその他は、選択肢を選び直したら送らない。
     expect(onSubmit).toHaveBeenLastCalledWith({
       selections: [{ questionId: 'deploy', optionIds: ['fly'] }],
     });
@@ -190,14 +183,11 @@ describe('ApprovalCard と設問', () => {
         questionsSummary={summarizeQuestions(questions)}
       />,
     );
-    // **文言を直に書く。** 旧い写し（ui の `summarizeApprovalQuestions`、#2558 で消した）が返していた文字列と
-    // 同じであること（3 設問・うち複数選択 1）。要約は ui ではなく呼ぶ側が作って渡す。
     expect(screen.getByText('設問 3 件（うち複数選択 1）（選択肢つき）')).toBeTruthy();
     expect(screen.queryByRole('radio')).toBeNull();
     const open = screen.getByRole('button', { name: '選択肢を開いて答える' });
     fireEvent.click(open);
     expect(screen.getAllByRole('radio').length).toBeGreaterThan(0);
-    // 普通の回答欄と許可・却下は出ない。
     expect(screen.queryByRole('button', { name: '許可' })).toBeNull();
     expect(screen.queryByPlaceholderText(/答える/)).toBeNull();
   });
