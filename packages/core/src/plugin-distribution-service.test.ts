@@ -71,11 +71,18 @@ function fakeSdk(): typeof sdkQuery {
   }) as unknown as typeof sdkQuery;
 }
 
+/** promise だけで進む連鎖を使い切る。実時間の待ちは混むと賭けになるので使わない。 */
+async function flushMicrotasks(): Promise<void> {
+  for (let i = 0; i < 50; i += 1) await Promise.resolve();
+}
+
 interface Setup {
   stores: Stores;
   runner: RunnerClient;
   pool: ManagerPool;
   service: ReturnType<typeof createPluginDistributionService>;
+  /** 走っている展開の完了と、その後の promise の連鎖を待つ。 */
+  settle: () => Promise<void>;
 }
 
 const pluginBases: string[] = [];
@@ -103,6 +110,24 @@ function setup(): Setup {
     queryFn: fakeSdk(),
     env: { PATH: '/usr/bin' },
   });
+  // 展開は実ファイル I/O で、偽の時計では進まない。完了の promise を握って、時間ではなく完了を待つ。
+  const pending = new Set<Promise<unknown>>();
+  const realSetPlugin = runner.setPlugin?.bind(runner);
+  if (realSetPlugin !== undefined) {
+    runner.setPlugin = (plugin) => {
+      const p = realSetPlugin(plugin);
+      pending.add(p);
+      return p;
+    };
+  }
+  const settle = async (): Promise<void> => {
+    await flushMicrotasks();
+    while (pending.size > 0) {
+      await Promise.allSettled([...pending]);
+      pending.clear();
+      await flushMicrotasks();
+    }
+  };
   const registry = createRunnerRegistry([runner]);
   const service = createPluginDistributionService({ stores, runners: registry });
   const pool = createManagerPool({
@@ -111,7 +136,7 @@ function setup(): Setup {
     runners: registry,
     plugins: service,
   });
-  return { stores, runner, pool, service };
+  return { stores, runner, pool, service, settle };
 }
 
 describe('plugin を配る（apply / syncRunner）', () => {
@@ -343,9 +368,9 @@ describe('plugin を配る（apply / syncRunner）', () => {
     };
     const a = s.service.syncRunner(s.runner);
     const b = s.service.apply();
-    await vi.waitFor(() => expect(order).toEqual(['set:start']));
-    // a が止まっている間、b は始まらない。
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    // a が止まっている間、b は始まらない。順番待ちは promise だけで進むので、
+    // 時間ではなくマイクロタスクを使い切って確かめる。
+    await flushMicrotasks();
     expect(order).toEqual(['set:start']);
     release?.();
     await Promise.all([a, b]);
@@ -403,8 +428,8 @@ describe('plugin の降ろし直しと挑み直し（名乗り）', () => {
 
     broken = false;
     await vi.advanceTimersByTimeAsync(10_000);
-    // 展開は実際のファイル I/O なので、偽の時計を進めただけでは終わらない。
-    await vi.waitFor(() => expect(s.pool.pushHealthOf('runner-test')?.plugins?.status).toBe('ok'));
+    await s.settle();
+    expect(s.pool.pushHealthOf('runner-test')?.plugins?.status).toBe('ok');
     expect((await s.runner.plugins?.())?.plugins.map((p) => p.name)).toEqual(['p-all']);
     await s.pool.stop();
   });
@@ -457,7 +482,8 @@ describe('plugin の降ろし直しと挑み直し（名乗り）', () => {
 
     broken = false;
     await vi.advanceTimersByTimeAsync(10 * 60_000);
-    await vi.waitFor(() => expect(s.pool.pushHealthOf('runner-test')?.plugins?.status).toBe('ok'));
+    await s.settle();
+    expect(s.pool.pushHealthOf('runner-test')?.plugins?.status).toBe('ok');
     await s.pool.stop();
   });
 });
