@@ -117,10 +117,11 @@ export interface SelfFacts {
   /** 入口の認証の状態（`planAuth` の一行説明）。 */
   auth: string;
   /**
-   * 実際に走っているモデル。既定から差し替えられていればその値。**層の provider が Codex なら Claude の帯
-   * ではなく、置かれたモデル（無ければ「Codex の既定のモデル」）** — `layerModelLabel`（#486）。
+   * クローンが実際に走っているモデル。既定から差し替えられていればその値。**層の provider が Codex なら
+   * Claude の帯ではなく、置かれたモデル（無ければ「Codex の既定のモデル」）** — `layerModelLabel`（#486）。
+   * マネージャー層・作業者層は持たない: runner の器で決まり、デーモンの環境変数からは取れないため（#3947）。
    */
-  models: { clone: string; manager: string; worker: string };
+  models: { clone: string };
   /**
    * クローン層の provider の id（`claude` …。#486 S9）。デーモンが起動時に解決した値
    * （`resolveCloneProviderId`）。デーモン全体で1つ。省略（テスト）時は `self_status` が
@@ -285,7 +286,16 @@ export interface CloneRuntimeFacts {
    * 欠落も含む）。空・未指定なら `describeCloneRuntime` の出力は1バイトも変わらない。
    */
   providerGaps?: readonly string[];
+  /**
+   * 接続中の runner が名乗ったマネージャー層・作業者層のモデルの行（`collectRunnerModelLines`）。
+   * 実行時に引く値なので、システムプロンプトには載せない。空・未指定なら何も足さない。
+   */
+  runnerModels?: readonly string[];
 }
+
+/** 接続中の runner が名乗ったモデルの節の見出し。 */
+export const RUNNER_MODELS_HEADING =
+  '## 接続中の runner が名乗ったモデル（マネージャー層・作業者層）';
 
 function withLeadingBlank(section: string[]): string[] {
   return section.length === 0 ? [] : ['', ...section];
@@ -512,6 +522,11 @@ export function describeCloneRuntime(facts: CloneRuntimeFacts): string {
     `- ${CLONE_RUNTIME_ITEMS.lastTurnUnusedTokens}: ${lastTurnContextUsage.unused}`,
     // **項目ではない**（行頭を `- ` にしない。`tools.test.ts` の項目名の歯が拾わない形）。
     ...withLeadingBlank(providerGapsSection(facts.providerGaps)),
+    ...withLeadingBlank(
+      facts.runnerModels === undefined || facts.runnerModels.length === 0
+        ? []
+        : [RUNNER_MODELS_HEADING, '', ...facts.runnerModels.map((line) => `  ${line}`)],
+    ),
   ].join('\n');
 }
 
@@ -539,7 +554,7 @@ export function buildSelfKnowledge(facts?: SelfFacts): string {
     );
   } else {
     lines.push(
-      `- 層の対応: あなた（クローン / ${facts.models.clone}）→ マネージャー（${facts.models.manager}）→ 作業者（${facts.models.worker}）。あなたが \`manager_start\` で起こすのがマネージャーで、その下に作業者が居る`,
+      `- 層の対応: あなた（クローン / ${facts.models.clone}）→ マネージャー → 作業者。あなたが \`manager_start\` で起こすのがマネージャーで、その下に作業者が居る。マネージャーと作業者のモデルは runner ごとに決まるので、ここには書かない — \`self_status\`（接続中の runner が名乗った分）と \`manager_list\`（委譲ごと）で確かめること`,
       '',
       '## いまのあなたが走っている環境',
       '',

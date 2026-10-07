@@ -29,7 +29,7 @@ const SELF: SelfFacts = {
   runner: 'r',
   entrypoint: 'e',
   auth: 'a',
-  models: { clone: 'opus', manager: 'opus', worker: 'sonnet' },
+  models: { clone: 'opus' },
 };
 
 function runtimeFacts(): CloneRuntimeFacts {

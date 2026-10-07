@@ -62,6 +62,7 @@ import {
 } from './digest.js';
 import { knownProviderOf } from './agent-provider-selection.js';
 import { collectRunnerProviderGaps, type ProviderGapSubject } from './provider-gaps.js';
+import { collectRunnerModelLines } from './runner-models-lines.js';
 import {
   DISTILL_GAP_ACTIVITY_SCAN_LIMIT,
   deriveDistillGapFromJournal,
@@ -10332,6 +10333,7 @@ class Clone implements CloneHost {
       ...(this.#scheduler === undefined ? {} : { scheduler: this.#scheduler }),
       runtime: () => this.#runtimeFacts(),
       providerGaps: () => this.#providerGapLines(),
+      runnerModels: () => collectRunnerModelLines(this.#managers),
       ...(this.#self?.cloneProviderPeers === undefined
         ? {}
         : { cloneProviderPeers: this.#self.cloneProviderPeers }),
