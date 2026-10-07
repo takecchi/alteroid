@@ -48,9 +48,12 @@ afterEach(() => {
   globalThis.fetch = originalFetch;
 });
 
-function setup(options: { uploadFails?: boolean } = {}) {
+function setup(options: { uploadFails?: boolean; failSecondUpload?: boolean } = {}) {
+  let uploads = 0;
   const stub = stubFetch((url, init) => {
     if (url.includes('/attachments') && !url.includes('/attachments/') && !url.includes('limits')) {
+      uploads += 1;
+      if (options.failSecondUpload === true && uploads === 2) return json({ error: 'boom' }, 500);
       return options.uploadFails === true ? json({ error: 'boom' }, 500) : json(NEW_META);
     }
     if (url.endsWith('/chat')) {
@@ -112,6 +115,9 @@ function choose(files: File[]) {
   Object.defineProperty(input, 'files', { value: files, configurable: true });
   fireEvent.change(input);
 }
+
+const uploadCount = (stub: ReturnType<typeof setup>) =>
+  stub.entries.filter((e) => e.url.includes('/attachments?')).length;
 
 async function postedBody(stub: ReturnType<typeof setup>) {
   await waitFor(() => expect(stub.entries.some((e) => e.url.endsWith('/chat'))).toBe(true));
@@ -210,6 +216,21 @@ describe('発言の編集でファイルを足す（#3779）', () => {
     await waitFor(() => expect((again as HTMLTextAreaElement).value).toBe('直した本文'));
     expect(screen.getByText('extra.txt')).toBeTruthy();
     expect(stub.entries.some((e) => e.url.endsWith('/chat'))).toBe(false);
+  });
+
+  it('2つ足して2つ目の上げが失敗したら、1つ目の印を書きかけへ戻し、確定し直しで上げ直すのは2つ目だけ（#4071）', async () => {
+    const stub = setup({ failSecondUpload: true });
+    const textarea = await startEditing();
+    choose([nodeFile('one.txt'), nodeFile('two.txt')]);
+    await screen.findByText('two.txt');
+    fireEvent.change(textarea, { target: { value: '直した本文' } });
+    fireEvent.click(screen.getByRole('button', { name: '確定' }));
+
+    await screen.findByRole('textbox', { name: '発言を編集する下書き' });
+    await waitFor(() => expect(uploadCount(stub)).toBe(2));
+    fireEvent.click(await screen.findByRole('button', { name: '確定' }));
+    await waitFor(() => expect(stub.entries.some((e) => e.url.endsWith('/chat'))).toBe(true));
+    expect(uploadCount(stub)).toBe(3);
   });
 
   it('再読み込みをまたぐと、足したファイルは外れる。名前を残し、開いたとき案内する（黙って落とさない）', async () => {

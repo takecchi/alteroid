@@ -3151,6 +3151,11 @@ export function ChatPane({
         draft?: DraftHandling;
         /** 添付を上げるのに失敗して、何も送らずに戻るとき。編集の確定が書きかけを元へ戻す（#3779）。 */
         onUploadFailed?: () => void;
+        /**
+         * 添付を1つ上げ終えるたびに呼ぶ。入力欄（`pending`）に居ない添付（入力欄へ戻していない再送の控え、
+         * 編集の書きかけ）は `setPending` では印が付かないので、持ち主がここで控えへ書く（#4071）。
+         */
+        onUploaded?: (key: string, meta: MessageAttachment) => void;
       },
     ) => {
       // 本文が空でも添付があれば送る（サーバも添付のある空本文を受ける）。
@@ -3235,6 +3240,7 @@ export function ChatPane({
                 type: attachmentMediaType(file),
               });
               uploaded.push({ ...item, meta });
+              options?.onUploaded?.(item.key, meta);
               setPending((current) =>
                 current.map((entry) => (entry.key === item.key ? { ...entry, meta } : entry)),
               );
@@ -3635,7 +3641,23 @@ export function ChatPane({
       // 入力欄へ戻していない（使い手が先に別の発言を打ち始めていた）なら、入力欄は別物。
       // 積んだ中身をそのまま送り、入力欄には触らない（`send` の `retry`）。
       if (stashed.inComposer !== true || (draft.trim() === '' && pending.length === 0)) {
-        void send(stashed.text, { ...stashed, retry: true });
+        const owner = shownId;
+        void send(stashed.text, {
+          ...stashed,
+          retry: true,
+          // 控えの添付は `pending` に居ないので、上げ終えた分の印を控えへ書く。書かないと、途中で失敗した再送が上げ直す（#4071）。
+          onUploaded: (key, meta) =>
+            setRetries((previous) => {
+              const entry = previous.get(owner);
+              if (entry?.attachments?.some((item) => item.key === key) !== true) return previous;
+              return new Map(previous).set(owner, {
+                ...entry,
+                attachments: entry.attachments.map((item) =>
+                  item.key === key ? { ...item, meta } : item,
+                ),
+              });
+            }),
+        });
         return;
       }
       if (sameAsStashed(stashed, draft, pending)) {
@@ -3647,7 +3669,7 @@ export function ChatPane({
         ...(stashed.supersedes === undefined ? {} : { supersedes: stashed.supersedes }),
       });
     },
-    [draft, pending, send],
+    [draft, pending, send, shownId],
   );
 
   /**
@@ -3750,15 +3772,26 @@ export function ChatPane({
       dropEditDraft(line.key);
       // 引き継ぐ添付は、すでに上げてある（`meta`）ので上げ直さない。足した分は `send` が上げてから送る（#3779）。
       const attachments = [...carriedAttachments(editAttachments), ...added];
+      // 上げ終えた分の印。書きかけを戻すとき載せる（載せないと、確定し直すたびに上げ直す。#4071）。
+      const uploadedMetas = new Map<string, MessageAttachment>();
       // 入力欄の文を送るのではないので、入力欄の書きかけには触らない（#3391）。
       await send(text, {
         supersedes: line.journalId,
         draft: 'keep',
         attachments,
+        onUploaded: (key, meta) => uploadedMetas.set(key, meta),
         // 上げるのに失敗したら何も送られない。書きかけを消したままにせず、編集を開き直して戻す。
         onUploadFailed: () => {
-          if (draft !== undefined)
-            setEditDrafts((previous) => new Map(previous).set(line.key, draft));
+          if (draft !== undefined) {
+            const restored: EditDraft = {
+              ...draft,
+              added: draft.added.map((item) => {
+                const meta = uploadedMetas.get(item.key);
+                return meta === undefined ? item : { ...item, meta };
+              }),
+            };
+            setEditDrafts((previous) => new Map(previous).set(line.key, restored));
+          }
           setEditingKey(line.key);
         },
       });
