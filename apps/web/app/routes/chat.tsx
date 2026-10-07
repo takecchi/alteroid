@@ -1443,6 +1443,9 @@ export function ChatPane({
   const attachSeqRef = useRef(0);
   /** 中断した新しい会話の送信の会話を、`clientMessageId` で引いている最中か（#3258。二重に引かない）。 */
   const lookingUpRef = useRef(false);
+  /** 先回りの確認（#3303）の最中か・確認済みの id。送信側の `lookingUpRef` と共有しない（送信が黙って戻るのを避ける）。 */
+  const probingRef = useRef(false);
+  const probedRef = useRef(new Set<string>());
   const ownLineSeqRef = useRef(0);
   /**
    * `POST /clone/interrupt` を呼んでいる最中かどうか（#1398 c23-1/c30-2）。
@@ -2592,6 +2595,79 @@ export function ChatPane({
     });
     setDraft((current) => (current === unconfirmedText ? '' : current));
   }, [unconfirmedSeen, unconfirmedText, shownId]);
+
+  /**
+   * **新しい会話で中断した送信は、次の送信を待たずに、受け取り済みかを先回りして引く（#3303）。**
+   * 見つかったら、取り直した会話の id を積んだ文に持たせる（次の送信の行き先。#3258）。
+   * 見つからなかった・確かめられなかったときは何も変えず、案内（再送・破棄）は今のまま。
+   * 実時間の待ちで引き直さない。もう一度引くのは、ページが見えるようになったときと、次の送信の冒頭だけ。
+   */
+  const newEntry = retries.get(undefined);
+  const probeId =
+    newEntry?.unconfirmed !== undefined && newEntry.conversationId === undefined
+      ? newEntry.clientMessageId
+      : undefined;
+  const probeInterrupted = useCallback(
+    async (clientMessageId: string) => {
+      if (probingRef.current) return;
+      probingRef.current = true;
+      try {
+        const found = await findConversationByClientMessageId(api, clientMessageId);
+        if (found === undefined) return;
+        setRetries((prev) => {
+          const entry = prev.get(undefined);
+          if (entry?.clientMessageId !== clientMessageId || entry.conversationId !== undefined) {
+            return prev;
+          }
+          return new Map(prev).set(undefined, { ...entry, conversationId: found });
+        });
+      } catch {
+        // 失敗を案内に足さない。使い手はまだ何も操作しておらず、次の送信が確かめ直して、そこで失敗を出す。
+      } finally {
+        probingRef.current = false;
+      }
+    },
+    [api],
+  );
+  useEffect(() => {
+    if (probeId === undefined || probedRef.current.has(probeId)) return;
+    probedRef.current.add(probeId);
+    void probeInterrupted(probeId);
+  }, [probeId, probeInterrupted]);
+  useEffect(() => {
+    if (probeId === undefined) return;
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') void probeInterrupted(probeId);
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
+  }, [probeId, probeInterrupted]);
+
+  /**
+   * 先回りして見つけた会話へ移る。**入力欄が戻した文のままのときだけ**——使い手が書き足した・消した・
+   * 添付を変えたなら動かさない（書きかけを会話の切り替えで失わせない）。動かさなくても、積んだ文が
+   * 会話の id を持っているので、次の送信は正しい会話へ向かう。別の会話を見ているあいだは何もしない
+   * （戻ってきたときに、この効果がもう一度判定する）。移すときは積んだ文も移し先の鍵へ付け替え、
+   * 履歴に自分の id の発言が現れたら下りる（#3121 / #3203）既存の判定に乗せる。
+   */
+  useEffect(() => {
+    if (shownId !== undefined) return;
+    const entry = newEntry;
+    const target = entry?.conversationId;
+    if (entry === undefined || target === undefined || entry.unconfirmed === undefined) return;
+    if (entry.inComposer !== true || draft !== entry.text) return;
+    const carried = entry.attachments ?? [];
+    if (pending.length !== carried.length || pending.some((item, i) => item !== carried[i])) return;
+    setRetries((prev) => {
+      const next = new Map(prev);
+      next.delete(undefined);
+      next.set(target, { ...entry, inComposer: false });
+      return next;
+    });
+    setDraft('');
+    setPending([]);
+    void navigate(`/chat/${target}`, { replace: true });
+  }, [newEntry, shownId, draft, pending, navigate]);
 
   /**
    * **受信中に続けて打った発言を、購読を張らずに投函だけする。**
