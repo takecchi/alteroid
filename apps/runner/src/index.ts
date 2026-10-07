@@ -9,7 +9,8 @@ import {
   createProfileVessel,
   createRunnerHost,
   defaultRunnerPluginsRoot,
-  pruneExtractedPluginDirs,
+  pruneRunnerPluginsOnBoot,
+  runnerPluginsDirOptions,
   DEFAULT_PROFILE_PATH,
   installUncaughtNet,
   MANAGER_PROVIDER_ENV_KEY,
@@ -436,13 +437,12 @@ export async function main(): Promise<void> {
    * 前の器の展開物が残るので、起動時にまとめて消す（この時点では読むセッションも、書く途中の展開も無い）。
    */
   const pluginsRoot = envValue(process.env, 'ALTEROID_PLUGINS_DIR') ?? defaultRunnerPluginsRoot();
-  const prunedPlugins = await pruneExtractedPluginDirs(pluginsRoot, new Set()).catch(
-    (error: unknown) => {
-      process.stdout.write(
-        `alteroid-runner: 前の器の plugin の展開物を消せませんでした: ${reasonOf(error)}\n`,
-      );
-      return undefined;
-    },
+  // 置き場が信頼できなければ（所有者・モード・symlink）片づけない。root 権限で他人が差し替えられる
+  // ディレクトリの中を chmod・削除しないため。
+  const prunedPlugins = await pruneRunnerPluginsOnBoot(
+    pluginsRoot,
+    runnerPluginsDirOptions(),
+    (line) => process.stderr.write(line),
   );
   if (prunedPlugins !== undefined && prunedPlugins.removed.length > 0) {
     process.stdout.write(

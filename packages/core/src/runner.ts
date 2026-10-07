@@ -84,6 +84,7 @@ import {
   defaultRunnerPluginsRoot,
   extractPlugin,
   pruneExtractedPluginDirs,
+  runnerPluginsDirOptions,
 } from './plugin-extract.js';
 import { parseRunnerPlugin, pluginsFingerprintOf } from './plugins.js';
 import {
@@ -1209,7 +1210,7 @@ class Host implements RunnerHost {
           this.#pluginsRoot,
           { ...plugin, source: { sha: plugin.sourceSha } },
           // 子 uid は読めて書けず、差し替えられない（root 所有の 0o755）。
-          { dirMode: 0o755, expectedUid: process.getuid?.() },
+          runnerPluginsDirOptions(),
         );
         path = extracted.path;
       } catch (error) {

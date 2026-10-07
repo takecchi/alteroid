@@ -415,11 +415,29 @@ async function removeTree(path: string): Promise<void> {
   await rm(path, { recursive: true, force: true });
 }
 
+/**
+ * ディレクトリを `O_NOFOLLOW | O_DIRECTORY` で開いた fd に `fchmod` し、中を再帰する。
+ * lstat → chmod（パスで引く）の形にしないのは、その間に symlink へ差し替えられると、
+ * 差し替え先（展開物の外）の権限を変えてしまうため。symlink・dir 以外・消えたものは何もしない。
+ * 子は Linux では `/proc/self/fd/<fd>` 越しに開く（親のパスが途中で差し替わっても、開いた親の中を読む）。
+ */
 async function makeWritable(path: string): Promise<void> {
-  const info = await lstat(path).catch(() => null);
-  if (info === null || !info.isDirectory()) return;
-  await chmod(path, 0o700);
-  for (const name of await readdir(path)) await makeWritable(join(path, name));
+  const flags = constants.O_RDONLY | (constants.O_DIRECTORY ?? 0) | (constants.O_NOFOLLOW ?? 0);
+  let handle;
+  try {
+    handle = await open(path, flags);
+  } catch {
+    return;
+  }
+  try {
+    const info = await handle.stat();
+    if (!info.isDirectory()) return;
+    await handle.chmod(0o700);
+    const via = process.platform === 'linux' ? `/proc/self/fd/${handle.fd}` : path;
+    for (const name of await readdir(via)) await makeWritable(join(via, name));
+  } finally {
+    await handle.close();
+  }
 }
 
 function assertInside(base: string, target: string): void {
@@ -611,6 +629,35 @@ async function findCurrentExtraction(
   if (!markerMatches(found, markerOf(identity))) return null;
   const removed = removedFromMarker(found, identity.name);
   return removed === null ? null : { path, removed };
+}
+
+/** runner が置き場を確かめるときの作り方（子 uid は読めて書けず、差し替えられない root 所有の 0o755）。 */
+export function runnerPluginsDirOptions(): ExtractPluginOptions {
+  return { dirMode: 0o755, expectedUid: process.getuid?.() };
+}
+
+/**
+ * runner の起動時の片づけ。置き場（root と `plugins/`）を展開時と同じ検査（所有者・モード・symlink でない）
+ * に通してから {@link pruneExtractedPluginDirs} を呼ぶ。通らなければ何も消さず、理由を `write` へ出す
+ * （他人が差し替えられる置き場の中を、root 権限で chmod・削除しないため）。
+ */
+export async function pruneRunnerPluginsOnBoot(
+  root: string,
+  options: ExtractPluginOptions,
+  write: (line: string) => void,
+): Promise<PrunePluginsResult | undefined> {
+  try {
+    await ensurePluginsDir(root, options);
+  } catch (error) {
+    write(`alteroid-runner: plugin の置き場を信頼できないので、片づけない: ${messageOf(error)}\n`);
+    return undefined;
+  }
+  try {
+    return await pruneExtractedPluginDirs(root, new Set());
+  } catch (error) {
+    write(`alteroid-runner: 前の器の plugin の展開物を消せませんでした: ${messageOf(error)}\n`);
+    return undefined;
+  }
 }
 
 export interface PrunePluginsResult {
