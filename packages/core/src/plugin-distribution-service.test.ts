@@ -66,6 +66,11 @@ function fakeSdk(): typeof sdkQuery {
   }) as unknown as typeof sdkQuery;
 }
 
+/** promise だけで進む連鎖を使い切る。実時間の待ちは混むと賭けになるので使わない。 */
+async function flushMicrotasks(): Promise<void> {
+  for (let i = 0; i < 50; i += 1) await Promise.resolve();
+}
+
 interface Setup {
   stores: Stores;
   runner: RunnerClient;
@@ -321,9 +326,9 @@ describe('plugin を配る（apply / syncRunner）', () => {
     };
     const a = s.service.syncRunner(s.runner);
     const b = s.service.apply();
-    await vi.waitFor(() => expect(order).toEqual(['set:start']));
-    // a が止まっている間、b は始まらない。
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    // a が止まっている間、b は始まらない。順番待ちは promise だけで進むので、
+    // 時間ではなくマイクロタスクを使い切って確かめる。
+    await flushMicrotasks();
     expect(order).toEqual(['set:start']);
     release?.();
     await Promise.all([a, b]);
