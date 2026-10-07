@@ -4,6 +4,7 @@ import { createSdkMcpServer, tool as sdkTool } from '@anthropic-ai/claude-agent-
 import { z } from 'zod';
 
 import { describeArchiveRemovedBytesUnit } from './archive-removed-bytes.js';
+import { codexChatgptAuthStatusOf, describeCodexChatgptAuth } from './codex-chatgpt-auth.js';
 import { fallbackAttachmentCopiesDir, fetchAttachmentCopy } from './attachment-fetch.js';
 import { readAttachmentLimits, type AttachmentLimits } from './attachment.js';
 import {
@@ -10727,16 +10728,27 @@ export function createCloneTools(context: ToolContext) {
           return text(renderLedgerCrossReference(runtime.sdkModel, aggregate, ledgerCursor));
         }
 
-        const [documents, memoryDocuments, aggregate] = await Promise.all([
+        const [documents, memoryDocuments, aggregate, codexAuth] = await Promise.all([
           stores.persona.list(),
           stores.persona.documents(),
           // モデル id が分かっていなければ、突き合わせる軸そのものが無い。
           runtime.sdkModel === null ? Promise.resolve(null) : stores.usage.aggregate({}),
+          // Codex の ChatGPT ログイン（#3939）。**ログインしていなければ1行も足さない**（今までの
+          // 出力のまま）。切れた・失効したなら再ログインを促す行が出る。読めなければ黙らずに言う。
+          stores.codexAuth.get().then(
+            (record) =>
+              record === null
+                ? null
+                : describeCodexChatgptAuth(codexChatgptAuthStatusOf(record)),
+            (error: unknown) =>
+              `Codex の ChatGPT ログイン: 正本を読めなかった（${reasonOf(error)}）`,
+          ),
         ]);
 
         return text(
           [
             describeCloneRuntime(runtime),
+            ...(codexAuth === null ? [] : [codexAuth]),
             '',
             // **クローンの文脈へ実際に載る形で数える。** 本文だけを足すと、見出しの
             // ぶんだけ本当より少ない数を「いまの総文字数」として名乗ることになる。
