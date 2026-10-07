@@ -99,6 +99,12 @@ export default defineConfig({
     ],
   },
   build: {
+    rolldownOptions: {
+      output: {
+        chunkFileNames: 'assets/[name]-[hash:6].js',
+        entryFileNames: 'assets/[name]-[hash:6].js',
+      },
+    },
     /**
      * フォントのファイルだけは CSS へ base64 で埋め込まない（`/assets/…` の URL 参照にする）。
      *
