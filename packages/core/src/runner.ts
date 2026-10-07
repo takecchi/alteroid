@@ -73,10 +73,12 @@ import {
 } from './dropped-record.js';
 import { fingerprintOf, ROTATABLE_CREDENTIAL_KEYS } from './credentials.js';
 import type { CredentialEntry, CredentialFingerprint, CredentialStore } from './credentials.js';
+import { compareCodeUnits } from './code-unit-order.js';
 import { codePointBoundary, excerptLine } from './excerpt.js';
 import { mcpServerNames, mcpServersFingerprintOf, parseMcpServers } from './mcp-servers.js';
 import type { McpServers } from './mcp-servers.js';
 import { placedModelTier, resolveModelTier } from './model-tier.js';
+import { parseRunnerPlugin, pluginsFingerprintOf, type RunnerPlugin } from './plugins.js';
 import {
   DEFAULT_PERMISSION_MODE,
   PERMISSION_MODES,
@@ -121,6 +123,8 @@ import type {
   RunnerLease,
   RunnerManagerState,
   RunnerMcpServersFingerprint,
+  RunnerPluginFingerprintEntry,
+  RunnerPluginsFingerprint,
   RunnerProfileFingerprint,
   RunnerProfileResult,
   RunnerResumeCommand,
@@ -538,6 +542,16 @@ export interface RunnerHost {
    * から効く。
    */
   setMcpServers(input: unknown): RunnerMcpServersFingerprint | undefined;
+  /** いま持っている plugin の指紋（**files の中身は出さない**）。持っていなければ `undefined`。 */
+  plugins(): RunnerPluginsFingerprint | undefined;
+  /**
+   * plugin を1本置く（同名は置き換え）。**置く前に `parseRunnerPlugin` を通す** —— 不正（path・
+   * `contentSha256` の不一致・scope が `app`）なら投げ、前の状態が残る。メモリに持つだけで、
+   * 展開もセッションへの接続もしない。
+   */
+  setPlugin(name: string, input: unknown): RunnerPluginFingerprintEntry;
+  /** 残す名前を渡し、一覧に無いものをメモリから外す。残った後の指紋（空なら `undefined`）。 */
+  retainPlugins(names: readonly string[]): RunnerPluginsFingerprint | undefined;
   /**
    * 戻り値の `cwd` は、実際にセッションが開いた作業ディレクトリ（Issue #1814）。
    * `command.cwd` の写しではない——`Host#resolveCwd` の doc を見よ。
@@ -779,6 +793,9 @@ class Host implements RunnerHost {
    * `undefined`。** 値は `#buildOptions` へ渡す以外に外へ出さない。
    */
   #mcpServers: { servers: McpServers; fingerprint: RunnerMcpServersFingerprint } | undefined;
+  /** daemon から降りてきた plugin（名前 → 本体）。メモリにだけ持つ。外へ出すのは指紋だけ。 */
+  readonly #plugins = new Map<string, RunnerPlugin>();
+  #pluginsUpdatedAt = '';
   readonly #enforceLease: boolean;
   /**
    * 制御面（認証済みの呼び）から最後に接触があった時刻。
@@ -1103,6 +1120,39 @@ class Host implements RunnerHost {
       },
     };
     return this.#mcpServers.fingerprint;
+  }
+
+  plugins(): RunnerPluginsFingerprint | undefined {
+    if (this.#plugins.size === 0) return undefined;
+    const plugins = [...this.#plugins.values()]
+      .map((p) => ({ name: p.name, sha: p.sourceSha, contentSha256: p.contentSha256 }))
+      .sort((a, b) => compareCodeUnits(a.name, b.name));
+    return {
+      sha256: pluginsFingerprintOf(plugins),
+      plugins,
+      updatedAt: this.#pluginsUpdatedAt,
+    };
+  }
+
+  setPlugin(name: string, input: unknown): RunnerPluginFingerprintEntry {
+    // 検査の正本は daemon の器と同じ `parseRunnerPlugin`。届いたものを信じずにもう一度通す。
+    const plugin = parseRunnerPlugin(input);
+    if (plugin.name !== name) throw new Error('plugin の名前が URL の名前と合わない');
+    this.#plugins.set(plugin.name, plugin);
+    this.#pluginsUpdatedAt = new Date().toISOString();
+    return { name: plugin.name, sha: plugin.sourceSha, contentSha256: plugin.contentSha256 };
+  }
+
+  retainPlugins(names: readonly string[]): RunnerPluginsFingerprint | undefined {
+    const keep = new Set(names);
+    let removed = false;
+    for (const name of [...this.#plugins.keys()]) {
+      if (keep.has(name)) continue;
+      this.#plugins.delete(name);
+      removed = true;
+    }
+    if (removed) this.#pluginsUpdatedAt = new Date().toISOString();
+    return this.plugins();
   }
 
   /**

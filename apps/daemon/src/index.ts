@@ -23,6 +23,7 @@ import {
   createProfileApplier,
   createCredentialService,
   createMcpServerService,
+  createPluginDistributionService,
   createProfileService,
   createProfileVessel,
   createRunnerRegistry,
@@ -1514,6 +1515,13 @@ export async function main(): Promise<void> {
   const mcpServerService = createMcpServerService({ stores, runners });
 
   /**
+   * 記憶ストアの plugin（scope が all / runner）を runner へ配る1本道。**インスタンスは1つだけ。**
+   * runner の名乗り直しの降ろし直し（`ManagerPool` の `#pushPlugins`）と、後の入れ口の配布は
+   * 同じ列を通す（`mcpServerService` と同じ理由）。
+   */
+  const pluginDistributionService = createPluginDistributionService({ stores, runners });
+
+  /**
    * マネージャーへ降ろす環境変数（名前→値）の1本道。**インスタンスは1つだけ。**
    *
    * 人間の口（`PUT /credentials`）と、runner が名乗り直したときの降ろし直し
@@ -1867,6 +1875,7 @@ export async function main(): Promise<void> {
     // （`CloneOptions.withheldEnvKeys` の doc）。
     withheldEnvKeys: [...AUTH_WITHHELD_ENV_KEYS],
     mcpServerService,
+    pluginDistributionService,
     self,
     // 現役のトークン。**値ではなく関数**——構築時に凍らせない（`CloneOptions` の doc）。
     credentials: () => agentTokenHolder.values(),

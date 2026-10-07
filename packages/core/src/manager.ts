@@ -47,6 +47,7 @@ import { codeSpan } from './markdown-span.js';
 import { JournalFoldWindow, foldedRunText } from './journal-fold.js';
 import type { CredentialService } from './credential-service.js';
 import type { McpServerService } from './mcp-server-service.js';
+import type { PluginDistributionService } from './plugin-distribution-service.js';
 import type { ProfileService } from './profile-service.js';
 import { createRecentMap, type RecentMap } from './recent.js';
 import { reportRunnerRevision, resolveBuildRevision } from './revision.js';
@@ -61,6 +62,7 @@ import {
   RUNNER_CAPABILITY_MANAGER_ATTACHMENTS,
   RunnerHttpError,
   RunnerMcpServersUnsupportedError,
+  RunnerPluginsUnsupportedError,
 } from './runner-protocol.js';
 import {
   classifyAutoFoldUnpushedWorkProbe,
@@ -1485,6 +1487,13 @@ export interface RunnerPushHealth {
    * 理由の文言（`error`）がその旨を名乗る。
    */
   mcpServers?: RunnerPushOutcome;
+  /**
+   * 人間が入れた plugin の runner への送り（`#pushPlugins`）。
+   *
+   * **口を持たない古い runner へは `status: 'failed'` で記録するが、挑み直しには数えない**
+   * （`RunnerPluginsUnsupportedError` の doc。`#settlePushRetry`）。
+   */
+  plugins?: RunnerPushOutcome;
 }
 
 /**
@@ -3056,6 +3065,11 @@ export interface ManagerPoolOptions {
    * **降ろし直しも更新（`apply`）と同じ列を通す。**
    */
   mcpServers?: McpServerService;
+  /**
+   * plugin を runner へ配る1本道。**MCP の登録と同じ理由でここに要る** — runner は記憶ストアを
+   * 読めず、受けた plugin をメモリにしか持たないので、名乗りのたびに降ろし直すのはデーモンの責任である。
+   */
+  plugins?: PluginDistributionService;
   /**
    * いまの時刻（既定は `Date.now`）。**貸し出し期限の判定のために口を開けてある。**
    *
@@ -5128,6 +5142,9 @@ class Pool implements ManagerPool {
    * `#pushMcpServers` がもう一度試すので、runner を上げれば自然に外れる。
    */
   readonly #mcpServersUnsupported = new Set<string>();
+  readonly #plugins: PluginDistributionService | undefined;
+  /** plugin を受け取る口を持たないと分かった runner。`#mcpServersUnsupported` と同じ理由で持つ。 */
+  readonly #pluginsUnsupported = new Set<string>();
   readonly #records = new Map<string, ManagerRecord>();
   /**
    * いまの時刻。**器の時計を直に読まない**（テストが判定の時刻を持てるようにする）。
@@ -5823,6 +5840,7 @@ class Pool implements ManagerPool {
     profile,
     credentials,
     mcpServers,
+    plugins,
     now,
     leaseTtlMs,
     withheldReportFlushMs,
@@ -5841,11 +5859,13 @@ class Pool implements ManagerPool {
     this.#profile = profile;
     this.#credentials = credentials;
     this.#mcpServers = mcpServers;
+    this.#plugins = plugins;
     // **即時の配布の結果も、名乗りのときの配布と同じ帳面に積む（Issue #1699 / #1717）。**
     for (const unsubscribe of [
       profile?.onPushed?.((results) => this.#recordDirectPushResults('profile', results)),
       mcpServers?.onPushed?.((results) => this.#recordDirectPushResults('mcpServers', results)),
       credentials?.onPushed?.((results) => this.#recordDirectPushResults('credentials', results)),
+      plugins?.onPushed?.((results) => this.#recordDirectPushResults('plugins', results)),
     ]) {
       if (unsubscribe !== undefined) this.#unsubscribeDirectPushes.push(unsubscribe);
     }
@@ -10399,6 +10419,40 @@ class Pool implements ManagerPool {
   }
 
   /**
+   * 名乗ってきた runner へ、正本に在る plugin（scope が all / runner）を降ろす。
+   *
+   * **`#pushMcpServers` と同じ位置・同じ理由・同じ倒れ方である。** runner は plugin をメモリにしか
+   * 持たないので降ろすのはデーモンの責任で、失敗しても委譲は止めず、日誌に残して挑み直す。
+   * **日誌には files の中身を書かない**（名前と runner の失敗理由だけ）。
+   *
+   * **古い runner（口を持たない）は挑み直しに数えない**（`#pluginsUnsupported`）。
+   */
+  async #pushPlugins(runner: RunnerClient): Promise<void> {
+    if (this.#stopped || this.#plugins === undefined) return;
+    const runnerId = runner.runnerId;
+    try {
+      // **更新と同じ列に入れる**（`#pushMcpServers` と同じ）。
+      await this.#plugins.syncRunner(runner);
+      this.#pluginsUnsupported.delete(runnerId);
+      this.#notePushOutcome(runnerId, 'plugins', { status: 'ok', at: this.#nowIso() });
+    } catch (error) {
+      const unsupported = error instanceof RunnerPluginsUnsupportedError;
+      if (unsupported) this.#pluginsUnsupported.add(runnerId);
+      else this.#pluginsUnsupported.delete(runnerId);
+      this.#notePushOutcome(runnerId, 'plugins', {
+        status: 'failed',
+        at: this.#nowIso(),
+        error: reasonOf(error),
+      });
+      await this.#journalPushFailure(
+        runnerId,
+        'plugins',
+        `${runnerId} へ plugin を降ろせなかった（この runner で起こすマネージャー・作業者は、記憶ストアの plugin を持たずに走る）: ${reasonOf(error)}`,
+      );
+    }
+  }
+
+  /**
    * イベントの受け口を開く。**繋ぎに行くのはデーモン側**である。
    *
    * **一度きりにしない。** 名簿は動的で、runner は後から載る（roadmap M5）。
@@ -10479,6 +10533,8 @@ class Pool implements ManagerPool {
       // runner のメモリに置いた登録は消えているので、ここで降ろさないと最初の
       // マネージャーが連携0本で走り出す。
       await this.#pushMcpServers(runner);
+      // **plugin も同じ位置で降ろす。** runner はメモリにしか持たないので、器が作り直されていれば消えている。
+      await this.#pushPlugins(runner);
       // **認証トークンも同じ位置で降ろす。** プロファイルと同じ理由——名乗り
       // 任せにすると、最初のマネージャーが古いトークンで走り出しうる。
       await this.#pushAgentToken(runner);
@@ -10653,6 +10709,8 @@ class Pool implements ManagerPool {
         // 登録をメモリにしか持たないので、器ごと入れ替わった runner では消えている。
         // 降ろし直さないと、再デプロイのたびにマネージャー・作業者の連携が0本へ戻る。
         await this.#pushMcpServers(runner);
+        // **plugin も同じ位置で降ろす（#connectTo と同じ）。** 器ごと入れ替わった runner では消えている。
+        await this.#pushPlugins(runner);
         // **認証トークンも同じ位置で降ろす（Issue #393）。** 直上の理由がそのまま
         // 効く —— **器が入れ替わっていれば置いた鍵も消えている。** この経路にだけ
         // 無かったので、繋ぎ直してきた runner は`#connectTo`と違って鍵が降りず、
@@ -15050,7 +15108,7 @@ class Pool implements ManagerPool {
    * 二重になる。
    */
   #recordDirectPushResults(
-    kind: 'profile' | 'mcpServers' | 'credentials',
+    kind: 'profile' | 'mcpServers' | 'credentials' | 'plugins',
     results: readonly { runnerId: string; ok: boolean; error?: string; unsupported?: true }[],
   ): void {
     if (this.#stopped) return;
@@ -15059,6 +15117,10 @@ class Pool implements ManagerPool {
       if (kind === 'mcpServers') {
         if (result.unsupported === true) this.#mcpServersUnsupported.add(result.runnerId);
         else this.#mcpServersUnsupported.delete(result.runnerId);
+      }
+      if (kind === 'plugins') {
+        if (result.unsupported === true) this.#pluginsUnsupported.add(result.runnerId);
+        else this.#pluginsUnsupported.delete(result.runnerId);
       }
       this.#notePushOutcome(
         result.runnerId,
@@ -15081,7 +15143,8 @@ class Pool implements ManagerPool {
       Object.entries(health).some(
         ([kind, outcome]) =>
           outcome?.status === 'failed' &&
-          !(kind === 'mcpServers' && this.#mcpServersUnsupported.has(runnerId)),
+          !(kind === 'mcpServers' && this.#mcpServersUnsupported.has(runnerId)) &&
+          !(kind === 'plugins' && this.#pluginsUnsupported.has(runnerId)),
       );
     if (!stillFailing) {
       // 直った。次に失敗したときは最初の間隔からやり直す（`#reattach` が
@@ -15144,6 +15207,9 @@ class Pool implements ManagerPool {
     if (health.agentToken?.status === 'failed') await this.#pushAgentToken(runner);
     if (health.mcpServers?.status === 'failed' && !this.#mcpServersUnsupported.has(runnerId)) {
       await this.#pushMcpServers(runner);
+    }
+    if (health.plugins?.status === 'failed' && !this.#pluginsUnsupported.has(runnerId)) {
+      await this.#pushPlugins(runner);
     }
     this.#settlePushRetry(runnerId);
   }

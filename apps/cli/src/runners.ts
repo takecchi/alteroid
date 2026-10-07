@@ -341,6 +341,7 @@ function renderPushHealth(pushHealth: RunnerPushHealth): string | undefined {
     outcomeText('認証トークン', pushHealth.agentToken),
     // #325 段4。ラベルはクローンの `runner_list`（`packages/core/src/tools.ts`）と揃える。
     outcomeText('MCP の登録', pushHealth.mcpServers),
+    outcomeText('plugin', pushHealth.plugins),
   ].filter((part): part is string => part !== undefined);
   return parts.length === 0 ? undefined : parts.join(' / ');
 }

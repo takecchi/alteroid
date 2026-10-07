@@ -1791,6 +1791,8 @@ const runnerPushHealthSchema = z.object({
   agentToken: runnerPushOutcomeSchema.optional(),
   /** 人間の MCP 連携の登録（#325 段3）。口を持たない古い runner へは `failed` で残る。 */
   mcpServers: runnerPushOutcomeSchema.optional(),
+  /** plugin の runner への送り。口を持たない古い runner へは `failed` で残る。 */
+  plugins: runnerPushOutcomeSchema.optional(),
 });
 
 const runnerSummarySchema = z.object({

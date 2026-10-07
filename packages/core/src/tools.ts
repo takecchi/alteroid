@@ -14238,6 +14238,7 @@ export function createCloneTools(context: ToolContext) {
               outcomeText('環境変数', runner.pushHealth.credentials),
               outcomeText('認証トークン', runner.pushHealth.agentToken),
               outcomeText('MCP の登録', runner.pushHealth.mcpServers),
+              outcomeText('plugin', runner.pushHealth.plugins),
             ].filter((line): line is string => line !== undefined);
             if (pushLines.length > 0) {
               lines.push(`  直近の押し込み: ${pushLines.join(' / ')}`);

@@ -19,6 +19,11 @@ import {
   runnerResumeCommandSchema,
   runnerSetCredentialsCommandSchema,
   runnerSetMcpServersCommandSchema,
+  runnerSetPluginCommandSchema,
+  runnerRetainPluginsCommandSchema,
+  decodeRunnerPlugin,
+  RUNNER_PLUGIN_BODY_LIMIT_BYTES,
+  RUNNER_PLUGIN_RETAIN_BODY_LIMIT_BYTES,
   runnerSetProfileCommandSchema,
   runnerStartCommandSchema,
 } from '@alteroid/core';
@@ -782,6 +787,8 @@ export function createRunnerApp(deps: RunnerAppDeps) {
     .use('/credentials', control)
     .use('/profile', control)
     .use('/mcp-servers', control)
+    .use('/plugins', control)
+    .use('/plugins/*', control)
     .use('/rescue-refs/*', control)
 
     .get('/health', async (c) => {
@@ -855,6 +862,11 @@ export function createRunnerApp(deps: RunnerAppDeps) {
          * （`RunnerClient.mcpServers` の doc）。
          */
         mcpServers: host.mcpServers(),
+        /**
+         * 持っている plugin の**名前・取り元の sha・中身の指紋だけ**。files の中身は出さない。
+         * 持っていなければ欄ごと出ない。古い runner もこの欄を持たない。
+         */
+        plugins: host.plugins(),
         /**
          * 自分がどのコミットで走っているか。
          *
@@ -981,6 +993,67 @@ export function createRunnerApp(deps: RunnerAppDeps) {
         } catch (error) {
           return c.json({ ok: false, error: reasonOf(error) }, 400);
         }
+      },
+    )
+
+    /**
+     * plugin を1本置く。**制御面である**（門番を外さないこと）。plugin の hooks とコードは
+     * マネージャーの SDK 子プロセスが読むので、マネージャーが叩けると自分に効くものを自分で差し替えられる。
+     *
+     * **受けて検査してメモリに持つだけ**（展開はしない）。不正（base64・path・`contentSha256` の
+     * 不一致・scope が `app`・名前が URL と違う）なら 400 で、前の状態が残る。**本文を返さない**
+     * （`/mcp-servers` と同じ）。`bodyLimit` は本文を読む前に掛かる（鍵の無い呼びは更にその前に 401）。
+     */
+    .post(
+      '/plugins/:name',
+      bodyLimit({
+        maxSize: RUNNER_PLUGIN_BODY_LIMIT_BYTES,
+        onError: (c) =>
+          c.json(
+            {
+              ok: false,
+              error: `本文が大きすぎる（${RUNNER_PLUGIN_BODY_LIMIT_BYTES} バイトまで。置いていない）`,
+            },
+            413,
+          ),
+      }),
+      zValidator('json', runnerSetPluginCommandSchema, (result, c) => {
+        if (!result.success) {
+          return c.json({ ok: false, error: 'plugin の入力の形が不正（置いていない）' }, 400);
+        }
+        return undefined;
+      }),
+      (c) => {
+        try {
+          const placed = host.setPlugin(
+            c.req.param('name'),
+            decodeRunnerPlugin(c.req.valid('json')),
+          );
+          return c.json({ ok: true, plugin: placed });
+        } catch (error) {
+          return c.json({ ok: false, error: reasonOf(error) }, 400);
+        }
+      },
+    )
+    /**
+     * 残す plugin の名前の一覧。一覧に無いものを runner はメモリから外す（外すのは新しい
+     * 名乗りの一覧が正本だから）。形が不正なら 400 で、何も外さない。
+     */
+    .put(
+      '/plugins',
+      bodyLimit({
+        maxSize: RUNNER_PLUGIN_RETAIN_BODY_LIMIT_BYTES,
+        onError: (c) => c.json({ ok: false, error: '本文が大きすぎる（外していない）' }, 413),
+      }),
+      zValidator('json', runnerRetainPluginsCommandSchema, (result, c) => {
+        if (!result.success) {
+          return c.json({ ok: false, error: 'plugin の一覧の形が不正（外していない）' }, 400);
+        }
+        return undefined;
+      }),
+      (c) => {
+        const placed = host.retainPlugins(c.req.valid('json').names);
+        return c.json({ ok: true, ...(placed === undefined ? {} : { plugins: placed }) });
       },
     )
 
