@@ -9,12 +9,10 @@
  * 再接続を自分で持っているのは、間にプロキシが挟まると無通信で黙って切られる
  * ことがあり、放っておくと画面は「静かなだけ」に見えるため（実際には死んでいる）。
  *
- * **デーモンは heartbeat を送る**（`packages/core/src/sse-heartbeat.ts`。かつて
- * ここには「送らないため」と書いてあった）。**それでも再接続は要る。** heartbeat が
- * 塞ぐのは*サーバ側*が死んだ接続に気づけない穴で、切られた側がブラウザなら
- * `EventSource` 相当の読みが終わるだけである —— 誰かが張り直さなければ画面は
- * 生きたまま古くなる。heartbeat が変えたのは「気づくまでの時間」であって、
- * 「気づいた後に誰が張り直すか」ではない。
+ * **デーモンは heartbeat を送る**（`packages/core/src/sse-heartbeat.ts`）。
+ * **それでも再接続は要る。** heartbeat が塞ぐのは*サーバ側*が死んだ接続に
+ * 気づけない穴で、切られた側がブラウザなら `EventSource` 相当の読みが終わるだけである
+ * —— 誰かが張り直さなければ画面は生きたまま古くなる。
  */
 import { useEffect, useRef, useState } from 'react';
 import { useSWRConfig } from 'swr';
@@ -46,11 +44,8 @@ export interface JournalLive {
    * ここは上限を掛けずに1件ごと積むので、呼び出し側（`dashboard.tsx`）は
    * `receivedCount - (自分が画面に出した件数)` で本当の省略数を出せる。
    *
-   * **optional にしてあるのは互換のためだけである。** `useJournalLive()` は
-   * 必ずこれを返す（下の実装）。optional なのは、この型を直に組み立てている
-   * 既存のテスト（`journal.test.tsx` 等、この Issue の触ってよい範囲の外）が
-   * この欄を持たないままでも壊れないようにするため——`journal.tsx` 自身は
-   * この値を使わないので、そちらのテストにとっては要らない欄である。
+   * **optional にしてあるのは、この型を直に組み立てるテストがこの欄を持たなくても
+   * 壊れないようにするためだけである。** `useJournalLive()` は必ずこれを返す。
    */
   receivedCount?: number;
 }
@@ -141,7 +136,7 @@ export function useJournalLive(): JournalLive {
  *
  * **除くもの。** `profile` / `mcpServers` は値に鍵が入りうるので、画面が開いている
  * あいだ勝手に運ばないと決めてある（`revalidateOnFocus: false`）。`authState`
- * （`useAuth`）は、取り直しが失敗すると画面全体が置き換わる（#3063）うえ、
+ * （`useAuth`）は、取り直しが失敗すると画面全体が置き換わるうえ、
  * 認証の状態は SSE の再接続では変わらない。
  */
 const REFETCH_EXCLUDED_TYPES = new Set(['profile', 'mcpServers', 'authState']);
@@ -155,7 +150,7 @@ function refetchMounted(mutate: ReturnType<typeof useSWRConfig>['mutate']): void
 }
 
 /**
- * 台帳（`stores.commitments`）を書く道具の名前（#3784）。
+ * 台帳（`stores.commitments`）を書く道具の名前。
  *
  * `commitment_list` は読むだけなので含めない（クローンが一覧を読むたびに画面が
  * 取り直すことになる）。数え上げの根拠は `@alteroid/core` の `CLONE_TOOL_NAMES` で、
@@ -178,16 +173,10 @@ const LEDGER_WRITE_TOOLS: ReadonlySet<string> = new Set([
  * 同じ発想 — 種別を足してここへ分岐を足し忘れると、`default` の
  * `const exhaustive: never = entry;` が型エラーになる。
  *
- * **なぜ縛りが要ったか。** この関数は戻り値を返さない（`void`）。
- * `tools.ts` の `renderJournalEntry` や `queries.ts` の
- * `summarizeJournalEntry`、`dropped-record.ts` の `journalEntryShape` は
- * いずれも戻り値を持つ関数で、case を1つ落とすと「関数の終わりに
- * return が無い（戻り値型に `undefined` を含まない）」で型検査が自然に
- * 落ちる。**しかし TypeScript は switch 文そのものの網羅性を検査しない**
- * ので、`void` を返すここではその安全網が働かず、種別を足して分岐を
- * 忘れても型では気づけなかった（実際、`worker_wait` を足したときは
- * 明示的に `case 'worker_wait': break;` を書いて対応していたが、この
- * switch 自体は次に種別が増えても黙って通っていた）。
+ * **なぜ縛りが要るか。** この関数は戻り値を返さない（`void`）。
+ * 戻り値を持つ関数（`tools.ts` の `renderJournalEntry` など）は case を1つ落とすと
+ * 「関数の終わりに return が無い」で型検査が落ちるが、**TypeScript は switch 文
+ * そのものの網羅性を検査しない**ので、`void` を返すここではその安全網が働かない。
  */
 function invalidate(entry: JournalEntry, mutate: ReturnType<typeof useSWRConfig>['mutate']): void {
   // 日誌一覧は limit / type ごとにキーが違うので、type で束ねて全部落とす。
@@ -209,14 +198,14 @@ function invalidate(entry: JournalEntry, mutate: ReturnType<typeof useSWRConfig>
       void mutate(KEY.report(entry.date));
       break;
     case 'tool_use':
-      // **台帳を書く道具は、actor を問わず `commitments` を落とす（#3784）。**
+      // **台帳を書く道具は、actor を問わず `commitments` を落とす。**
       // 台帳を動かすのは主にクローン自身で、その手の分は下の `isCloneActor` の関門で
       // `managers` を落とさないので、この分岐は関門より前に置く。
       if (LEDGER_WRITE_TOOLS.has(entry.tool)) {
         void mutate((key) => isKeyOfType(key, 'commitments'));
       }
-      // **クローン自身の手の分では `managers` を落とさない。** 道具はクローンにも全部あり
-      // （#32）、その実行も同じ `tool_use` として届く。マネージャーが1つも
+      // **クローン自身の手の分では `managers` を落とさない。** 道具はクローンにも全部あり、
+      // その実行も同じ `tool_use` として届く。マネージャーが1つも
       // 動いていないのに `/managers` と開いている詳細・生ログを取り直すと、
       // クローンが自分で作業しているあいだ画面が再取得を続けることになる。
       if (!isCloneActor(entry.actor)) {
@@ -229,12 +218,12 @@ function invalidate(entry: JournalEntry, mutate: ReturnType<typeof useSWRConfig>
         void mutate((key) => isKeyOfType(key, 'managers'));
         invalidateManagerDetail(mutate);
         // 委譲の開始・再開・終わりの報告。台帳の「進行中」（`activeManagerIds`）は
-        // `GET /commitments` のたびに job 一覧から導かれるので、取り直さないと残る（#3784）。
+        // `GET /commitments` のたびに job 一覧から導かれるので、取り直さないと残る。
         void mutate((key) => isKeyOfType(key, 'commitments'));
       }
       if (entry.with === 'human') {
         // 返事（outbound）で「未着手」（`respondedAt`）が変わる。`buildCommitmentDerivations` が
-        // 人間との `exchange` の履歴から導く（#3784）。
+        // 人間との `exchange` の履歴から導く。
         void mutate((key) => isKeyOfType(key, 'commitments'));
         void mutate((key) => isKeyOfType(key, 'conversations'));
         void mutate((key) => isKeyOfType(key, 'conversationUnreadCount'));
@@ -257,7 +246,7 @@ function invalidate(entry: JournalEntry, mutate: ReturnType<typeof useSWRConfig>
     // 取り直す必要はない。
     case 'turn_usage':
       break;
-    // **`turn_usage` と同じ理由で落とす先が無い（Issue #976）。** 文脈占有は
+    // **`turn_usage` と同じ理由で落とす先が無い。** 文脈占有は
     // 消費の増分（`turn_usage`）とは独立の観測なので別の型として届くが、
     // 落とすべき画面・SWR キーが無いのは `turn_usage` と同じである。
     case 'context_usage':
@@ -279,12 +268,12 @@ function invalidate(entry: JournalEntry, mutate: ReturnType<typeof useSWRConfig>
     // `subagent_stall` はマネージャーの詳細や生ログの中身を変える出来事ではない。
     case 'subagent_stall':
       break;
-    // **落とす先が無い（Issue #783 段0）。** `turn_usage` / `context_usage` と
+    // **落とす先が無い。**`turn_usage` / `context_usage` と
     // 同じ理由 —— 受信箱の流量は器の記帳で、この種別専用の画面・SWR キーは
     // 無い。冒頭で束にした日誌一覧の無効化だけで足りる。
     case 'inbox_flow':
       break;
-    // **落とす先が無い（Issue #2245）。** 進捗の頁（`/progress`）は 30 秒ごとに取り直す
+    // **落とす先が無い。**進捗の頁（`/progress`）は 30 秒ごとに取り直す
     // ので、この種別専用の無効化は要らない。冒頭で束にした日誌一覧の無効化だけで足りる。
     case 'github_observation':
       break;
@@ -313,16 +302,6 @@ function invalidate(entry: JournalEntry, mutate: ReturnType<typeof useSWRConfig>
 }
 
 /**
- * マネージャー詳細（`KEY.manager(id)`）と生ログ（`KEY.transcript(id)`）を
- * **id を指定せず束で**落とす。
- *
- * `tool_use.actor` は `manager:<id>` / `worker:<id>:<agent>` で id を取り出せるが、
- * `exchange(with:'manager')` には manager id を持つフィールドが無い。種別によって
- * 精度が変わる（tool_use だけ id 指定、他は束）形にすると考えることが増えて
- * 漏れやすい。キャッシュに載っているのは開いている詳細画面の分だけなので、
- * 束で落としても安い — だから常に束で統一する。
- */
-/**
  * その `tool_use` がクローン自身の手か（`clone` / `clone:sub:<agent>` /
  * `clone:distill`）。
  *
@@ -335,6 +314,16 @@ function isCloneActor(actor: string): boolean {
   return actor === 'clone' || actor.startsWith('clone:');
 }
 
+/**
+ * マネージャー詳細（`KEY.manager(id)`）と生ログ（`KEY.transcript(id)`）を
+ * **id を指定せず束で**落とす。
+ *
+ * `tool_use.actor` は `manager:<id>` / `worker:<id>:<agent>` で id を取り出せるが、
+ * `exchange(with:'manager')` には manager id を持つフィールドが無い。種別によって
+ * 精度が変わる（tool_use だけ id 指定、他は束）形にすると考えることが増えて
+ * 漏れやすい。キャッシュに載っているのは開いている詳細画面の分だけなので、
+ * 束で落としても安い — だから常に束で統一する。
+ */
 function invalidateManagerDetail(mutate: ReturnType<typeof useSWRConfig>['mutate']): void {
   void mutate((key) => isKeyOfType(key, 'manager'));
   void mutate((key) => isKeyOfType(key, 'transcript'));

@@ -20,6 +20,9 @@ import {
 } from './rescue-ref.js';
 import type { ProcessSpawnFn } from './unpushed-work.js';
 
+/** 孤立サロゲート（高だけ・低だけ）。`isWellFormed()` は tsconfig の lib に無いので直接探す。 */
+const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+
 // 実 git とローカルの bare リポジトリで見る（実リポジトリへは一切送らない）。
 const GIT_ENV: Record<string, string> = {
   PATH: process.env.PATH ?? '',
@@ -77,6 +80,20 @@ describe('退避 ref（#1266）', () => {
 
   afterEach(async () => {
     await rm(root, { recursive: true, force: true });
+  });
+
+  // #3804: 上限（200）の位置に補助面の文字がまたがっても、孤立サロゲートを残さない。
+  it('退避しなかった未追跡のパス名が上限で切られるとき、絵文字の途中で切らない', async () => {
+    await writeFile(path.join(repo, `${'a'.repeat(199)}😀.txt`), 'x');
+    await writeFile(path.join(repo, 'a.txt'), 'one\nedited\n');
+
+    const [report] = await run();
+
+    const paths = report?.untracked?.paths ?? [];
+    expect(paths).toHaveLength(1);
+    const clipped = paths[0] as string;
+    expect(clipped.endsWith('…')).toBe(true);
+    expect(LONE_SURROGATE.test(clipped)).toBe(false);
   });
 
   it('追跡済みの未コミットの変更と未 push のコミットを送り、作業ツリーを動かさない', async () => {

@@ -51,6 +51,15 @@ describe('マネージャーのシステムプロンプト — 委譲の指針',
     expect(prompt).toContain('1体も立たないのは正しい動作');
   });
 
+  it('品質の判定が仕事の中身であるものは自分で持つ — 線を「重さ」だけで引いていない', () => {
+    // PRD「層ごとの能力」の「何を作業者へ出すか」: 出力の良し悪しを後から安く
+    // 確かめられない仕事はマネージャーがやる。かつての「成果は変わらない」は、
+    // デザインのような質の要る仕事まで下へ倒していた。
+    expect(prompt).toContain('出力の良し悪しをあなたが後から安く確かめられる仕事');
+    expect(prompt).toContain('判定と仕上げはあなたが持つ');
+    expect(prompt).not.toContain('成果は変わらない');
+  });
+
   it('作業者の名前と このセッションの識別子 が差し込まれる', () => {
     const other = buildManagerSystemPrompt({ managerId: 'mgr-abc', workerName: 'w2' });
     expect(other).toContain('mgr-abc');

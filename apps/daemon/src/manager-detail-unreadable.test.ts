@@ -18,16 +18,6 @@ import { makeTempDir } from '../../../vitest.tmpdir.js';
 import { createApp } from './app.js';
 import { createMigratedPglite, migratedTemplate } from './pglite-template.test-support.js';
 
-/**
- * issue #2359 の1。`GET /managers/:id` と道具 `manager_report` は、委譲の行が在るのに壊れて
- * 読めない id を「居ない」（404 `not found` / 「マネージャー X は居ない」）と言っていた。
- * 読めない行として在る id なら「読めない形で入っている」と言い分ける（`GET /practices/:slug` の
- * 409 と同じ線。#2011）。本文は載せず、理由は不正な欄名だけ。
- *
- * fs / pg の2実装で、**実物のストアに不正な行を1行だけ置いた状態から**測る。
- * 対照: 本当に無い id は今までどおり 404 と「居ない」。読める id は 200。
- */
-
 const BAD_SUMMARY = '壊れた委譲の本文（この文字列はどの出力にも出てはいけない）';
 
 const GOOD: Job = {
@@ -147,8 +137,7 @@ function managerReportTool(stores: Stores): (managerId: string) => Promise<strin
   };
 }
 
-// PGlite の雛形（WASM の起動＋migrate）は、ワーカーで最初に呼んだ歯が払う。
-// 歯の本体（既定 5000ms）でなく hook（明示 30_000ms）で払わせる（issue #2378、#2360 / #2364 と同じ形）。
+// 雛形の払いは歯の本体（既定 5000ms）でなく hook（30_000ms）に持たせる: WASM の起動＋migrate がワーカーで最初に呼んだ歯に乗るため。
 beforeAll(async () => {
   await migratedTemplate();
 }, 30_000);
@@ -172,7 +161,6 @@ describe.each([
     expect(error).toContain('読めない形で入っている');
     expect(error).toContain('不正な欄: status');
     expect(error).not.toContain('居ない');
-    // 文は共通の関数（`describeUnreadableManagerRow`）の1文そのものである（直書きにしない。#2359）。
     expect(error).toBe(describeUnreadableManagerRow('mgr-bad', '不正な欄: status'));
     expect(result?.raw).not.toContain(BAD_SUMMARY);
   });
@@ -191,7 +179,6 @@ describe.each([
     expect(reply).toContain('マネージャー mgr-bad は読めない形で入っている');
     expect(reply).toContain('不正な欄: status');
     expect(reply).not.toContain(BAD_SUMMARY);
-    // HTTP の口（409）と同じ、共通の関数の1文である（#2359）。
     expect(reply).toBe(describeUnreadableManagerRow('mgr-bad', '不正な欄: status'));
   });
 
