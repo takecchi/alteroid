@@ -990,6 +990,7 @@ export {
   type PluginsRunnerResult,
 } from './plugin-distribution-service.js';
 export {
+  extractedPluginDirName,
   extractPluginsForScopes,
   PLUGIN_SCOPES_FOR_CLONE,
   pruneExtractedPluginsAgainstStore,
