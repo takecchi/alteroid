@@ -7,6 +7,7 @@ import { ApiError, expectOk, unwrap, useApi } from '../api';
 import type {
   AgentTokenView,
   ApprovalSelection,
+  Commitment,
   ConversationSummary,
   EnvVarScope,
   InboxEventType,
@@ -15,6 +16,7 @@ import type {
   IntegrationKeyIssued,
   McpServers,
   MemoryDocument,
+  McpServersState,
   McpServersUpdateResult,
   Practice,
   ProfileScope,
@@ -315,18 +317,39 @@ export function useCloseCommitment() {
 }
 
 // 可否をここで先回りして弾かない: サーバの規則を写すと、サーバ側の線が変わった日に画面だけがずれるため
+/** 読んだ版（`editedAt ?? at`）と違うと断られた。`current` が null なら、読んだあとに行が消えている。 */
+export class CommitmentConflictError extends ApiError {
+  readonly current: Commitment | null;
+
+  constructor(message: string, current: Commitment | null) {
+    super(409, message);
+    this.name = 'CommitmentConflictError';
+    this.current = current;
+  }
+}
+
+// 版の衝突は本文に `current` の鍵があるかで見分ける: 片付き済み・読めない行の 409 は `{ error }` だけで、
+// 混ぜると「下書きを新しい版に載せ直す」を勧めてしまう。`ifMatch` を送らない呼び出しは従来どおり後勝ち
 export function useEditCommitment() {
   const api = useApi();
   const refresh = useRefreshCommitments();
   return useCallback(
-    async (id: string, body: string) => {
+    async (id: string, body: string, ifMatch?: string) => {
       await writeThenRefresh(async () => {
-        expectOk(
-          await api.api.PATCH('/commitments/{id}', {
-            params: { path: { id } },
-            body: { body },
-          }),
-        );
+        const result = await api.api.PATCH('/commitments/{id}', {
+          params: { path: { id } },
+          body: ifMatch === undefined ? { body } : { body, ifMatch },
+        });
+        if (result.response.status === 409 && typeof result.error === 'object') {
+          const conflict = result.error as { error?: string; current?: Commitment | null } | null;
+          if (conflict !== null && 'current' in conflict) {
+            throw new CommitmentConflictError(
+              conflict.error ?? '本文が読んだ後に変わっている',
+              conflict.current ?? null,
+            );
+          }
+        }
+        expectOk(result);
       }, refresh);
     },
     [api, refresh],
@@ -790,12 +813,16 @@ export function useEndConversation() {
 }
 
 // キャッシュは引き直さない: 止めてもセッションと受信箱は残り、どの一覧の中身も変わらないため
+// 対象（会話 id と `POST /chat` の clientMessageId）は2つとも渡すか2つとも省く。省くと種類を問わず走っているターンを止める
 export function useInterruptClone() {
   const api = useApi();
-  return useCallback(async () => {
-    const result = await api.api.POST('/clone/interrupt', { body: {} }).then(unwrap);
-    return result.outcome;
-  }, [api]);
+  return useCallback(
+    async (target?: { conversationId: string; clientMessageId: string }) => {
+      const result = await api.api.POST('/clone/interrupt', { body: target ?? {} }).then(unwrap);
+      return result.outcome;
+    },
+    [api],
+  );
 }
 
 // 409 をここで握り潰さない: 呼び出し側が理由の入力欄を出し、`overrideReason` 付きでもう一度呼ぶため
@@ -921,10 +948,23 @@ export function useSetMcpServers() {
   const api = useApi();
   const { mutate } = useSWRConfig();
   return useCallback(
-    async (mcpServers: McpServers): Promise<McpServersUpdateResult> => {
-      const updated = await api.api.PUT('/mcp-servers', { body: { mcpServers } }).then(unwrap);
+    async (
+      mcpServers: McpServers,
+      ifMatch?: string,
+    ): Promise<
+      | { update: McpServersUpdateResult; conflict?: undefined }
+      | { conflict: McpServersState; update?: undefined }
+    > => {
+      const result = await api.api.PUT('/mcp-servers', { body: { mcpServers, ifMatch } });
+      // 409 を版の衝突だけとして読む: この口に他の 409 は無いため
+      if (result.response.status === 409 && result.error !== undefined) {
+        await mutate(KEY.mcpServers);
+        // 例外にせず値で返す: 下書きを残して続きの操作を促す通常の分岐で、失敗の表示に流れないようにするため
+        return { conflict: (result.error as { current: McpServersState }).current };
+      }
+      const update = unwrap(result);
       await mutate(KEY.mcpServers);
-      return updated;
+      return { update };
     },
     [api, mutate],
   );
