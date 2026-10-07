@@ -1,17 +1,10 @@
 // @vitest-environment jsdom
-/**
- * `MarkdownEditor` の省略可能な口（`modes` / `saveHint` / `emptyPreview` / `placeholder`）。
- *
- * 画面が今の表示をそのまま出せるように足した口で、**渡さなければ既定の振る舞いは
- * 変わらない**。だから各口について「渡さないとき」と「渡したとき」を両方置く。
- */
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { MarkdownEditor } from './markdown-editor';
 
-// 幅は `matchMedia` ではなくフックごと差し替える（jsdom に `matchMedia` が無いため。
-// 画面側のテストは `apps/web/app/test-support.tsx` の足場を使う）。
+// 幅は `matchMedia` ではなくフックごと差し替える: jsdom に `matchMedia` が無いため
 const viewport = vi.hoisted(() => ({ mobile: false }));
 vi.mock('@/hooks/use-is-mobile', () => ({ useIsMobile: () => viewport.mobile }));
 
