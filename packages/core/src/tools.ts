@@ -305,7 +305,6 @@ import {
 } from './usage.js';
 import { JOURNAL_SEARCH_UNCOVERED_LIST } from './journal-search.js';
 import { describeManagerFoldCandidate } from './manager-fold-candidate.js';
-import { describeManagerProvider } from './manager-provider-format.js';
 import {
   describeUnpushedWorkObservationIncompleteness,
   describeUnpushedWorkObservationProvenance,
@@ -613,17 +612,6 @@ export interface ToolContext {
    * 「この場面では取れない」を返す（例: 蒸留のサイドクエリだけ自分のことが分からない）。
    */
   runtime?: () => CloneRuntimeFacts;
-  /**
-   * 層を動かす provider が持たない能力の行（クローン層＋接続中 runner のマネージャー層）。
-   * `self_status` が実行時に引く。省略（テスト）時は `runtime()` が持つ静的な行のまま。
-   */
-  providerGaps?: () => Promise<readonly string[]>;
-  /**
-   * 人間が `ALTEROID_CLONE_PEERS` で開けた、もう一方の provider（#486 S7）。**空・省略なら
-   * `manager_start` に `provider` 引数を出さない**（スキーマも説明文も従来と同一）。
-   * 自分の層の provider は含まれない（`resolvePeers` が除く）。
-   */
-  cloneProviderPeers?: readonly string[];
   /**
    * この道具を通した記憶の書き換えが、日誌の `memory_update.cause` でどう名乗るか。
    *
@@ -4887,21 +4875,6 @@ export function describePermissionEvidence(
 
 export function createCloneTools(context: ToolContext) {
   const { stores } = context;
-  // 開いた provider があるときだけ `manager_start` へ `provider` を足す（空なら何も変わらない）。
-  const peerProviders = [...new Set(context.cloneProviderPeers ?? [])];
-  const providerShape: Record<string, z.ZodType> =
-    peerProviders.length === 0
-      ? {}
-      : {
-          provider: z
-            .enum(peerProviders as [string, ...string[]])
-            .optional()
-            .describe(
-              'もう一方の provider（人間が開けたもの。選べるのは列挙された値だけ）でマネージャーを動かす。' +
-                '省略すれば runner の既定の provider で動く。呼ぶかどうかはあなたの判断。' +
-                '指名した provider を受けられない runner は、断って返す（別の provider では起こさない）。',
-            ),
-        };
   // **ここで1回だけ解決しない。** `memoryCause` はターンごとに変わりうる値
   // なので、この関数の実行時（＝ MCP サーバを組む時）に確定させると、
   // セッション中ずっと最初のターンの種類に固定されてしまう
@@ -10704,7 +10677,6 @@ export function createCloneTools(context: ToolContext) {
           return text(renderLedgerCrossReference(runtime.sdkModel, aggregate, ledgerCursor));
         }
 
-        const providerGaps = await context.providerGaps?.();
         const [documents, memoryDocuments, aggregate] = await Promise.all([
           stores.persona.list(),
           stores.persona.documents(),
@@ -10714,9 +10686,7 @@ export function createCloneTools(context: ToolContext) {
 
         return text(
           [
-            describeCloneRuntime(
-              providerGaps === undefined ? runtime : { ...runtime, providerGaps },
-            ),
+            describeCloneRuntime(runtime),
             '',
             // **クローンの文脈へ実際に載る形で数える。** 本文だけを足すと、見出しの
             // ぶんだけ本当より少ない数を「いまの総文字数」として名乗ることになる。
@@ -10890,21 +10860,14 @@ export function createCloneTools(context: ToolContext) {
               '指名した器が名簿に無い・使えない・名前が重複のときは失敗し、他の器へは' +
               '自動で落とさない（返ってきた文言をそのまま読むこと）。',
           ),
-        ...providerShape,
       },
       async (rawArgs) => {
-        const { request, cwd, runnerId, provider, attachments } = rawArgs as unknown as {
+        const { request, cwd, runnerId, attachments } = rawArgs as unknown as {
           request: string;
           cwd?: string | undefined;
           attachments?: string[] | undefined;
           runnerId?: string | undefined;
-          provider?: string | undefined;
         };
-        // 開けていない provider は schema が弾くが、型の抜け道でも通さない。
-        if (provider !== undefined && !peerProviders.includes(provider)) {
-          throw new Error(`provider=${provider} は人間が開けていない（ALTEROID_CLONE_PEERS）`);
-        }
-        const providerNote = provider === undefined ? '' : `（provider=${provider}）`;
         if (!context.managers) return NO_POOL;
         // **クローンには渡させない。呼び出し文脈から自動で読む**（issue #1003
         // 段2・#781）。この道具の引数に conversationId は無い——手で維持する
@@ -10940,7 +10903,7 @@ export function createCloneTools(context: ToolContext) {
             type: 'decision',
             decision: `マネージャーを起こそうとしている${
               runnerId === undefined ? '' : `（指名: runnerId=${runnerId}）`
-            }${providerNote}${handedNote}: ${request}`,
+            }${handedNote}: ${request}`,
             grounds: '委譲の判断',
           },
           'act-not-performed',
@@ -10952,7 +10915,6 @@ export function createCloneTools(context: ToolContext) {
             request,
             ...(cwd === undefined ? {} : { cwd }),
             ...(runnerId === undefined ? {} : { runnerId }),
-            ...(provider === undefined ? {} : { provider }),
             ...(conversationId === undefined ? {} : { conversationId }),
             ...(handover.attachments.length === 0 ? {} : { attachments: handover.attachments }),
           });
@@ -10963,7 +10925,7 @@ export function createCloneTools(context: ToolContext) {
             type: 'decision',
             decision: `マネージャーを起こせなかった${
               runnerId === undefined ? '' : `（指名: runnerId=${runnerId}）`
-            }${providerNote}${handedNote}: ${request}`,
+            }${handedNote}: ${request}`,
             grounds: `委譲しようとしたが、状態の変更が失敗した: ${reasonOf(error)}`,
           });
           // 送る前の検めで断った（上限超過・名乗らない runner）。道具のエラー文として返す。
@@ -10979,9 +10941,7 @@ export function createCloneTools(context: ToolContext) {
           type: 'decision',
           decision:
             `マネージャー ${started.managerId} を起こした（${describeStartedCwd(started)}` +
-            `${runnerId === undefined ? '' : `, 指名: runnerId=${runnerId}`}${
-              provider === undefined ? '' : `, provider=${provider}`
-            }）${handedNote}: ${request}`,
+            `${runnerId === undefined ? '' : `, 指名: runnerId=${runnerId}`}）${handedNote}: ${request}`,
           grounds: '委譲の判断',
         });
         // **置き先が pids 飽和と判定されていれば言う（#2626 期待2）。** 明示指名でも
@@ -10992,9 +10952,7 @@ export function createCloneTools(context: ToolContext) {
             : context.managers.runnerPidsSaturation?.(started.runnerId);
         return text(
           `マネージャー ${started.managerId} を起こした（${describeStartedCwd(started)}、` +
-            `runner: ${started.runnerId ?? '未記録'}${
-              provider === undefined ? '' : `、provider: ${provider}`
-            }）。` +
+            `runner: ${started.runnerId ?? '未記録'}）。` +
             '報告・質問は後から受信箱に届く。' +
             (saturation === undefined
               ? ''
@@ -11883,10 +11841,6 @@ export function createCloneTools(context: ToolContext) {
                   ? ''
                   : `（この器は ${manager.runnerLostSince} 以降 名乗っていない。新しい委譲の宛先からは外れている（置き先として数えない）。**この委譲が失われたという意味ではない** — 黙っているのが器なのか経路なのかは、ここからは言えない（器の中でまだ走っていることもある）。話しかけることは塞いでいない — 戻る先（session_id）が在れば manager_send が resume を試みる（届くとは限らない）。${RESTART_BEFORE_CHECK_ADVICE}器そのものは runner_list で見る）`
               }`,
-              // **マネージャー層の provider（#486 S9）。** 置き先の runner が名乗った値だけを出す。
-              // 取れなければ「不明」と書き、`claude` とは推測しない（`describeManagerProvider`。
-              // CLI・Web UI と同じ字面）。
-              `  provider: ${describeManagerProvider(managerProviderOf(context.managers, manager))}`,
               // **`runnerLostSince` と同じ作法で、別の行として出す（#563）。**
               // `describeManagerState` は動かさない——`manager_list` と要約
               // （`digest.ts`）で字面が割れると、そこで潰れることを防ぐために
@@ -12257,9 +12211,6 @@ export function createCloneTools(context: ToolContext) {
           );
         }
 
-        // **マネージャー層の provider（#486 S9）。** `manager_list` と同じ字面（`describeManagerProvider`）。
-        // 取れなければ「不明」で、`claude` とは推測しない。
-        const providerLine = `provider: ${describeManagerProvider(managerProviderOf(context.managers, found))}`;
         // **停止後に届いた、畳まれたターンの本文（Issue #1038）。**
         // `part === 'request'` では扱わない——依頼文の話ではない。**在れば
         // `lastReport`（完遂した報告）より優先して見せる**——`lastFoldedTurn`
@@ -12325,7 +12276,6 @@ export function createCloneTools(context: ToolContext) {
           const withheldReportsNote = describeWithheldReports(found);
           return text(
             [
-              providerLine,
               missing,
               usageStopped,
               runnerVanished,
@@ -12575,7 +12525,7 @@ export function createCloneTools(context: ToolContext) {
         const footer =
           '\n\n（さらに掘るなら manager_transcript managerId=' + managerId + ' で生ログへ）';
         return text(
-          `${head}\n\n${providerLine}\n\n${driftNote}${failureNote}${usageStoppedNote}${runnerVanishedNote}${systemErrorNote}${cgroupEventsNote}${denialNote}${unobservedNote}${unpushedWorkNote}${withheldReportsFooterNote}${part1.body}${tail}${footer}`,
+          `${head}\n\n${driftNote}${failureNote}${usageStoppedNote}${runnerVanishedNote}${systemErrorNote}${cgroupEventsNote}${denialNote}${unobservedNote}${unpushedWorkNote}${withheldReportsFooterNote}${part1.body}${tail}${footer}`,
         );
       },
     ),
@@ -16100,22 +16050,6 @@ export function createCloneMcpServer(context: ToolContext) {
       'マネージャーへの委譲。',
     tools: createCloneTools(context),
   });
-}
-
-/**
- * 委譲のマネージャー層の provider（#486 S9）。宛先の runner が名乗った値だけを返し、
- * 置き先が無い・名乗りを受けていない・旧い runner（欄なし）・この口を持たない
- * プールは `undefined`（不明）。経路判断用の `runnerManagerProvider()`（既定 `claude`）は
- * 使わない。デーモンの `managerProviderOf`（`apps/daemon/src/app.ts`）と同じ読み方。
- */
-function managerProviderOf(
-  managers: ManagerPool | undefined,
-  summary: { runnerId?: string | undefined; managerProvider?: string | undefined },
-): string | undefined {
-  // クローンが指名した委譲は、runner の既定ではなく**実際に動いている provider** を言う（#486 S7）。
-  if (summary.managerProvider !== undefined) return summary.managerProvider;
-  if (summary.runnerId === undefined) return undefined;
-  return managers?.runnerReportedManagerProvider?.(summary.runnerId);
 }
 
 /**

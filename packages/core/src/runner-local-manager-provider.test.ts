@@ -9,9 +9,10 @@ import { createLocalRunner } from './runner-local.js';
 import type { RunnerEvent } from './runner-protocol.js';
 
 /**
- * 同一プロセスの runner（`createLocalRunner`）にもマネージャー層の provider が届くこと
- * （#486 S6）。`childUser` が無い構成なので Codex は素の `spawn` で起きる——ここでは
- * `node:child_process` の `spawn` だけ偽物にして、実プロセスも実 Codex も起こさない。
+ * 同一プロセスの runner（`createLocalRunner`）も、マネージャー層を常に Claude で起こすこと
+ * （2026-10-07 のオーナー決定。#486 S6 の `managerProvider` は撤去した）。`childUser` が無い構成
+ * なので、もし Codex を起こせば素の `spawn` で起きる——`node:child_process` の `spawn` だけ偽物に
+ * して、起こされないことを見る（実プロセスも実 Codex も起こさない）。
  */
 
 const spawned: { command: string; args: readonly string[] }[] = [];
@@ -91,17 +92,9 @@ function fakeAppServer(): AgentChildProcess & { received: string[] } {
   }) as unknown as AgentChildProcess & { received: string[] };
 }
 
-async function until(condition: () => boolean, what: string): Promise<void> {
-  // 実時間では待たず、イベントループを回して条件を見る（I/O の通知も進む）。
-  for (let i = 0; i < 20_000; i += 1) {
-    if (condition()) return;
-    await new Promise((resolve) => setImmediate(resolve));
-  }
-  throw new Error(`待ちが終わらない: ${what}`);
-}
 
 describe('local runner: マネージャー層の provider', () => {
-  it('省略（既定）は Claude の駆動役。hello に名乗りを載せず、codex は起こさない', async () => {
+  it('Claude の駆動役で起こし、hello に provider の名乗り（managerProvider / managerProviders）を載せない', async () => {
     spawned.length = 0;
     const sdk = untouchedQuery();
     const events: RunnerEvent[] = [];
@@ -114,51 +107,11 @@ describe('local runner: マネージャー層の provider', () => {
     const hello = events.find((e) => e.type === 'hello');
     expect(hello).toBeDefined();
     expect(hello && 'managerProvider' in hello).toBe(false);
+    expect(hello && 'managerProviders' in hello).toBe(false);
     await runner.start({ managerId: 'mgr-1', request: 'やって', cwd: '/work' });
     expect(sdk.calls()).toBe(1);
     expect(spawned).toEqual([]);
-    await runner.close();
-  });
-
-  it('managerProvider: claude も Claude の駆動役で、hello にその名乗りを載せる', async () => {
-    const sdk = untouchedQuery();
-    const events: RunnerEvent[] = [];
-    const runner = createLocalRunner({
-      workspacePath: '/work',
-      queryFn: sdk.fn,
-      managerProvider: 'claude',
-      env: {},
-    });
-    await runner.connect((event) => events.push(event));
-    expect(events.find((e) => e.type === 'hello')).toMatchObject({ managerProvider: 'claude' });
-    await runner.start({ managerId: 'mgr-1', request: 'やって', cwd: '/work' });
-    expect(sdk.calls()).toBe(1);
-    await runner.close();
-  });
-
-  it('managerProvider: codex は CodexManagerDriver。hello に codex と名乗り、queryFn は呼ばれない', async () => {
-    spawned.length = 0;
-    fakeChildren.length = 0;
-    const sdk = untouchedQuery();
-    const events: RunnerEvent[] = [];
-    const runner = createLocalRunner({
-      workspacePath: '/work',
-      queryFn: sdk.fn,
-      managerProvider: 'codex',
-      env: {},
-    });
-    await runner.connect((event) => events.push(event));
-    expect(events.find((e) => e.type === 'hello')).toMatchObject({ managerProvider: 'codex' });
-    await runner.start({ managerId: 'mgr-1', request: 'やって', cwd: '/work' });
-    await until(
-      () => events.some((e) => e.type === 'session' && e.sessionId === 'thr-codex'),
-      'session イベント',
-    );
-    expect(sdk.calls()).toBe(0);
-    expect(spawned).toEqual([{ command: 'codex', args: ['app-server', '--listen', 'stdio://'] }]);
-    expect(fakeChildren[0]!.received).toEqual(
-      expect.arrayContaining(['initialize', 'initialized', 'account/read', 'thread/start']),
-    );
+    expect(fakeChildren).toEqual([]);
     await runner.close();
   });
 });

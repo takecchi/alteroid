@@ -658,9 +658,7 @@ export {
   type SelfFacts,
 } from './self.js';
 export {
-  collectRunnerProviderGaps,
   describeProviderGaps,
-  describeRunnerProviderGaps,
   type LayerProviders,
   type ProviderGapSubject,
 } from './provider-gaps.js';
@@ -1111,8 +1109,6 @@ export {
   runnerCredentialSchema,
   runnerEventSchema,
   RUNNER_CAPABILITIES,
-  RUNNER_MANAGER_PROVIDERS,
-  runnerProviderSchema,
   RUNNER_CAPABILITY_AWAITING_BACKGROUND_SIGNAL,
   runnerExecutionResourcesSchema,
   runnerLeaseSchema,
@@ -1300,27 +1296,19 @@ export {
 export { placedModelTier, resolveModelTier } from './model-tier.js';
 export type { AgentProviderId } from './agent-ports.js';
 export {
-  CLONE_PROVIDER_ENV_KEY,
   DEFAULT_AGENT_PROVIDER_ID,
-  MANAGER_PROVIDER_ENV_KEY,
-  CLONE_PROVIDER_RECOMMENDATION,
-  CODEX_NO_WORKER_LABEL,
   agentProviderOf,
-  layerModelLabel,
-  cloneLayerProviderOf,
   placedAgentProvider,
-  resolveCloneProviderId,
-  resolveManagerProviderId,
 } from './agent-provider-selection.js';
-export { cloneDriverFor } from './clone-driver-for.js';
 export {
-  CLONE_PEERS_ENV_KEY,
+  RETIRED_LAYER_PROVIDER_ENV_KEYS,
+  retiredLayerProviderNotices,
+} from './retired-provider-env.js';
+export {
   MANAGER_PEERS_ENV_KEY,
   isPeerAllowed,
   parsePeers,
-  peersEnvKeyOf,
   resolvePeers,
-  type PeersLayer,
   type PeersResolution,
 } from './agent-provider-peers.js';
 /** `type: 'exchange'` の本文が持つ種類の接頭辞（issue #1332）。本文の先頭に固定の印を置き、前方一致で復元する（`exchange-kind.ts` の doc）。 */

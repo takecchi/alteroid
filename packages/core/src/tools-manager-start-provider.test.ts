@@ -8,11 +8,12 @@ import type { ManagerStartInput, ManagerSummary } from './manager.js';
 import { createMemoryStores } from './testing.js';
 
 /**
- * `manager_start` の `provider` 引数（#486 S7）。見えるのは人間が `ALTEROID_CLONE_PEERS` で
- * 開けた provider だけで、空なら**スキーマも説明文も従来と1バイトも変わらない**。
+ * `manager_start` に `provider` 引数は無い（2026-10-07 のオーナー決定。マネージャー層は常に Claude で動く）。
+ * かつて（#486 S7）は人間が `ALTEROID_CLONE_PEERS` で開けたときだけ出ていた。撤去した後も、
+ * **スキーマと説明文は、その口が閉じていたときと1バイトも変わらない**ことを指紋で測る。
  */
 
-function build(peers?: readonly string[]) {
+function build() {
   const stores = createMemoryStores();
   const started: ManagerStartInput[] = [];
   const managers = {
@@ -37,7 +38,6 @@ function build(peers?: readonly string[]) {
     memoryCause: () => 'clone',
     conversationId: () => undefined,
     managers,
-    ...(peers === undefined ? {} : { cloneProviderPeers: peers }),
   });
   const tool = tools.find((entry) => entry.name === 'manager_start');
   if (tool === undefined) throw new Error('manager_start が無い');
@@ -51,63 +51,31 @@ function fingerprint(tool: { description: string; inputSchema: unknown }): strin
     .digest('hex');
 }
 
-// origin/main（PEERS の配線前）の manager_start の指紋。空のときはこれと一致し続けなければならない。
+// origin/main（PEERS の配線前）の manager_start の指紋。撤去した後もこれと一致し続けなければならない。
 // `cwd` の説明文を「作業ディレクトリ。…」へ直したとき（#2970）に取り直した。
 // 担い手へ渡す添付の任意引数 `attachments` を足したとき（#3111 段3）に取り直した（道具の説明文は不変）。
 const BASELINE = '92468963a71427a678185900742ab8479a1ea9b24a00316ff924b7dd0805a912';
 
-describe('manager_start の provider 引数', () => {
-  it('PEERS が未設定・空なら、スキーマと説明文は配線前と同一（provider は見えない）', () => {
-    for (const peers of [undefined, []] as const) {
-      const { tool } = build(peers);
-      expect(Object.keys(tool.inputSchema as object)).toEqual([
-        'request',
-        'cwd',
-        'attachments',
-        'runnerId',
-      ]);
-      expect(fingerprint(tool as never)).toBe(BASELINE);
-    }
+describe('manager_start の provider 引数（撤去済み）', () => {
+  it('provider 引数を持たず、スキーマと説明文は PEERS が閉じていたときと同一', () => {
+    const { tool } = build();
+    expect(Object.keys(tool.inputSchema as object)).toEqual([
+      'request',
+      'cwd',
+      'attachments',
+      'runnerId',
+    ]);
+    expect(fingerprint(tool as never)).toBe(BASELINE);
   });
 
-  it('開けた provider だけを enum に持つ optional の引数が出る', () => {
-    const { tool } = build(['codex']);
-    const shape = tool.inputSchema as z.ZodRawShape;
-    expect(Object.keys(shape)).toEqual(['request', 'cwd', 'attachments', 'runnerId', 'provider']);
-    const schema = z.object(shape);
-    expect(schema.safeParse({ request: 'a' }).success).toBe(true);
-    expect(schema.safeParse({ request: 'a', provider: 'codex' }).success).toBe(true);
-    expect(schema.safeParse({ request: 'a', provider: 'claude' }).success).toBe(false);
-    expect(schema.safeParse({ request: 'a', provider: 'gemini' }).success).toBe(false);
-    // 開けたときも、既存の説明文は変わらない（引数が増えるだけ）
-    expect(tool.description).toBe(build().tool.description);
-  });
-
-  it('指名すると ManagerPool.start へ届き、日誌と返り値に残る。指名しなければ欄ごと渡さない', async () => {
-    const withProvider = build(['codex']);
-    const reply = await withProvider.tool.handler(
-      { request: 'レビューして', provider: 'codex' } as never,
-      {},
-    );
-    expect(withProvider.started).toEqual([{ request: 'レビューして', provider: 'codex' }]);
-    expect(JSON.stringify(reply)).toContain('provider: codex');
-    const journal = (await withProvider.stores.journal.list({ types: ['decision'] })).map((e) =>
+  it('型の抜け道で provider を渡されても、ManagerPool.start へは届けない（Claude で起こす）', async () => {
+    const { tool, started, stores } = build();
+    await tool.handler({ request: 'レビューして', provider: 'codex' } as never, {});
+    expect(started).toEqual([{ request: 'レビューして' }]);
+    expect(started[0]).not.toHaveProperty('provider');
+    const journal = (await stores.journal.list({ types: ['decision'] })).map((e) =>
       e.type === 'decision' ? e.decision : '',
     );
-    expect(journal.length).toBe(2);
-    expect(journal.every((line) => line.includes('codex'))).toBe(true);
-
-    const plain = build(['codex']);
-    await plain.tool.handler({ request: '普通に' } as never, {});
-    expect(plain.started).toEqual([{ request: '普通に' }]);
-    expect(plain.started[0]).not.toHaveProperty('provider');
-  });
-
-  it('開けていない provider は、型の抜け道で渡されても断る', async () => {
-    const { tool, started } = build(['codex']);
-    await expect(tool.handler({ request: 'x', provider: 'claude' } as never, {})).rejects.toThrow(
-      /ALTEROID_CLONE_PEERS/,
-    );
-    expect(started).toEqual([]);
+    expect(journal.some((line) => line.includes('codex'))).toBe(false);
   });
 });

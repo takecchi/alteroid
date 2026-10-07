@@ -289,22 +289,8 @@ describe('CloneRuntimeFacts の整形 — 観測した値と、取れていな�
     expect(notOverridden).not.toContain('に置いた値');
   });
 
-  /**
-   * クローン層の provider（#486 S9）。渡された id をそのまま出し、渡っていなければ
-   * `claude` と推測せず「まだ分からない」と言う。
-   */
-  it('クローンの provider は、渡された値をそのまま出し、無ければ claude と推測しない', () => {
-    expect(describeCloneRuntime({ ...RUNTIME, cloneProvider: 'claude' })).toContain(
-      'クローンの provider: claude',
-    );
-    expect(describeCloneRuntime({ ...RUNTIME, cloneProvider: 'other' })).toContain(
-      'クローンの provider: other',
-    );
-    const unknown = describeCloneRuntime(RUNTIME)
-      .split('\n')
-      .find((line) => line.startsWith('- クローンの provider'));
-    expect(unknown).toContain('まだ分からない');
-    expect(unknown).not.toContain('claude');
+  it('クローンの provider の行を持たない（層は常に Claude で動く。2026-10-07 の決定）', () => {
+    expect(describeCloneRuntime(RUNTIME)).not.toContain('クローンの provider');
   });
 
   /**

@@ -18,7 +18,7 @@ describe('openPeerSocket（マネージャーの peer 専用ソケット）', ()
   it('PEERS が未設定・空なら、ソケットを作らず何も言わない', async () => {
     for (const env of [{}, { ALTEROID_MANAGER_PEERS: '' }, { ALTEROID_MANAGER_PEERS: '  ' }]) {
       const dir = join(makeTempDirSync('peer-sock-'), 'peer');
-      const result = await openPeerSocket(env, 'claude', undefined, dir);
+      const result = await openPeerSocket(env, undefined, dir);
       expect(result.host).toBeUndefined();
       expect(result.peers).toEqual([]);
       expect(result.notices).toEqual([]);
@@ -28,7 +28,7 @@ describe('openPeerSocket（マネージャーの peer 専用ソケット）', ()
 
   it('PEERS が開いていれば、0711 のディレクトリに 0600 のソケットを作る', async () => {
     const dir = join(makeTempDirSync('peer-sock-'), 'peer');
-    opened = await openPeerSocket({ ALTEROID_MANAGER_PEERS: 'codex' }, 'claude', undefined, dir);
+    opened = await openPeerSocket({ ALTEROID_MANAGER_PEERS: 'codex' }, undefined, dir);
     expect(opened.peers).toEqual(['codex']);
     const path = join(dir, PEER_SOCKET_FILENAME);
     expect(opened.host?.socketPath).toBe(path);
@@ -40,7 +40,6 @@ describe('openPeerSocket（マネージャーの peer 専用ソケット）', ()
     const dir = join(makeTempDirSync('peer-sock-'), 'peer');
     const result = await openPeerSocket(
       { ALTEROID_MANAGER_PEERS: 'claude' },
-      'claude',
       undefined,
       dir,
     );
@@ -51,13 +50,13 @@ describe('openPeerSocket（マネージャーの peer 専用ソケット）', ()
 
   it('不正な値は例外で止める', async () => {
     await expect(
-      openPeerSocket({ ALTEROID_MANAGER_PEERS: 'gemini' }, 'claude', undefined, '/nonexistent'),
+      openPeerSocket({ ALTEROID_MANAGER_PEERS: 'gemini' }, undefined, '/nonexistent'),
     ).rejects.toThrow(/不正/);
   });
 
   it('token が一致しない接続は即切断する（使い捨て token だけが通る）', async () => {
     const dir = join(makeTempDirSync('peer-sock-'), 'peer');
-    opened = await openPeerSocket({ ALTEROID_MANAGER_PEERS: 'codex' }, 'claude', undefined, dir);
+    opened = await openPeerSocket({ ALTEROID_MANAGER_PEERS: 'codex' }, undefined, dir);
     const socket = createConnection({ path: join(dir, PEER_SOCKET_FILENAME) });
     await new Promise<void>((resolve) => socket.once('connect', resolve));
     socket.write('wrong-token\n');
