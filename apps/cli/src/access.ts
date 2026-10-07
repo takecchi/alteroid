@@ -240,11 +240,11 @@ export async function accessOwnerCommand(
   const name = account.email ?? account.displayName ?? account.id;
   if (options.revoke === true) {
     stdout.write(`実行環境の持ち主としての宣言を取り消しました: ${name}\n`);
-    stdout.write('（これで alteroid credential set / alteroid reset は通らなくなります）\n');
+    stdout.write('（宣言の記録を取り消しただけです。資格の判断には使っていません）\n');
     return;
   }
   stdout.write(`実行環境の持ち主として宣言しました: ${name}\n`);
-  stdout.write('（これで alteroid credential set / alteroid reset が通ります）\n');
+  stdout.write('（宣言を記録しただけです。資格の判断には使っていません）\n');
 }
 
 async function request(
