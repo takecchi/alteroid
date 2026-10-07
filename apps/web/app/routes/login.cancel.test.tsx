@@ -1,10 +1,4 @@
 // @vitest-environment jsdom
-/**
- * ログインの待ちをやめられる（#3736）。
- *
- * 認可を待つ間（`busy`）は「やめる」が出る。押すと中断し、待ちの記録
- * （`storePendingLogin`）も消して、ボタンを押せる状態へ戻す。読み直しで再開した待ちも同じ。
- */
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -81,7 +75,6 @@ describe('ログインの待ちをやめる（#3736）', () => {
     const again = screen.getByRole('button', { name: /Google で続ける/ });
     expect(again.hasAttribute('disabled')).toBe(false);
     expect(screen.queryByText('待機中')).toBeNull();
-    // やめた後に引き取りを続けない（1回目の応答が戻っても反映しない）。
     expect(stub.calls.filter((url) => url.endsWith('/claim')).length).toBe(claimsBefore);
   });
 

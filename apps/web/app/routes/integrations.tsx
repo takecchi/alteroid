@@ -36,37 +36,17 @@ import type {
   IntegrationKeyView,
 } from '@alteroid/logic';
 
-/**
- * `/integrations` — 連携の鍵（外のサービスへ渡す、固定の1つの `source` で外部イベントを送る鍵。
- * #3113 段2）の一覧・発行・失効。`alteroid integration list|create|revoke` と同じ3本の口
- * （`GET`・`POST /integration-keys`、`POST /integration-keys/:id/revoke`）に加え、読めない行を消す
- * `POST /integration-keys/unreadable/remove`（#3216。`alteroid integration remove-unreadable` と同じ）を打つ。
- *
- * 特定のサービスの名前・分岐は持たない（`source` は人間が決める文字列）。
- *
- * ## 守っている線
- *
- * - **値は1回だけ見せ、どこにも保存しない。** 発行の応答の `value` はこのコンポーネントの state にだけ
- *   置く（localStorage・SWR のキャッシュ・URL へは入れない）。画面を離れる（unmount）か「閉じる」で消える。
- *   デーモンも sha256 しか持たないので、消えたら取り出せない（作り直す）
- * - **使い手の入力を黙って失わせない。** 発行が失敗しても書きかけのフォームは残し、失敗を出す。
- *   入力の誤りは送る前に欄の下で言う（何も作らない）
- * - **一覧の再取得の失敗で画面を置き換えない。** SWR は失敗しても `data` を残すので、一覧は古いまま出し、
- *   失敗は一覧の上の帯（`LoadError`）で言う。初回の失敗でも発行の欄は出す（発行は一覧に依らない）。
- *   一覧の取り直しの失敗は、発行・失効の失敗にしない（`useIssueIntegrationKey` の doc）
- * - **失効は確認つき。** 即座に効き、元に戻せない（外のサービスは 401 になる）
- */
+// 値を localStorage・SWR のキャッシュ・URL に入れない: 値は1回だけ見せ、デーモンも sha256 しか持たず、消えたら取り出せないため
+// 特定のサービスの名前・分岐を持たない: source は人間が決める文字列のため
 
 const SOURCE_PATTERN = /^[a-z0-9._-]{1,64}$/;
 const DEFAULT_MAX_BODY_BYTES = 1024 * 1024;
 const DEFAULT_RATE_PER_MINUTE = 60;
 const MAX_INT = 2_147_483_647;
-/** 名前の上限（CLI の `integration create` と同じ。デーモンの上限でもある）。 */
 const NAME_MAX_LENGTH = 200;
 
 type KeyStatus = 'active' | 'revoked' | 'expired';
 
-/** 失効が先、次に期限切れ。判定できない期限は「使えない」側へ倒す（デーモンの `isIntegrationKeyUsable` と同じ向き）。 */
 function statusOf(key: IntegrationKeyView, now: number): KeyStatus {
   if (key.revokedAt !== null) return 'revoked';
   if (key.expiresAt === null) return 'active';
@@ -79,7 +59,6 @@ const STATUS_VIEW: Record<KeyStatus, { label: string; tone: 'ok' | 'neutral' | '
   expired: { label: '期限切れ', tone: 'warn' },
 };
 
-/** 写していない鍵の値が消える、という確認（値は文に出さない）。 */
 const ISSUED_VALUE_NOTICE: LeaveNotice = {
   title: '写していない鍵の値があります',
   description:
@@ -90,9 +69,8 @@ const ISSUED_VALUE_NOTICE: LeaveNotice = {
 export default function Integrations() {
   const { data, error, isLoading, isValidating, mutate } = useIntegrationKeys();
   const removeUnreadable = useRemoveUnreadableIntegrationKeys();
-  // 値は state にだけ置く（新しいものが上。発行のたびに前の値を消さない——まだ控えていないかもしれない）。
+  // 発行のたびに前の値を消さない: まだ控えていないかもしれないため
   const [issued, setIssued] = useState<IntegrationKeyIssued[]>([]);
-  // 期限切れの判定に使う（刻んで、期限が過ぎたら画面を開いたままでも「期限切れ」へ変える）。
   const now = useNowMs(30_000);
 
   return (
@@ -131,7 +109,6 @@ export default function Integrations() {
               action={data === undefined ? undefined : <Badge>{data.keys.length}</Badge>}
             />
             <div className="flex flex-col gap-3 px-4 py-3">
-              {/* 再取得の失敗でも data は残る。帯で言うだけで、下の一覧は消さない。 */}
               <LoadError
                 what="連携の鍵の一覧"
                 error={error}
@@ -139,7 +116,6 @@ export default function Integrations() {
                 retrying={isValidating}
               />
             </div>
-            {/* 読めない行は一覧の前に言う（#3216。0件なら鍵ごと無いので何も出ない）。 */}
             {data?.rowsUnreadable !== undefined && (
               <UnreadableRowsNote
                 noun="連携の鍵"
@@ -152,7 +128,6 @@ export default function Integrations() {
               <Spinner />
             ) : data === undefined ? null : data.keys.length === 0 ? (
               data.rowsUnreadable !== undefined ? (
-                // 読めない行が在るので「鍵がまだ無い」とは言えない（CLI の `integration list` と同じ文言）。
                 <Empty>読めた連携の鍵は無い（連携の鍵がまだ無い、とは言えない）。</Empty>
               ) : (
                 <Empty>連携の鍵はまだ無い。</Empty>
@@ -171,7 +146,6 @@ export default function Integrations() {
   );
 }
 
-/** 発行の欄。**失敗しても入力は消さない。** 成功したときだけ空に戻す。 */
 function IssueForm({ onIssued }: { onIssued: (issued: IntegrationKeyIssued) => void }) {
   const issueKey = useIssueIntegrationKey();
   const [name, setName] = useState('');
@@ -182,20 +156,17 @@ function IssueForm({ onIssued }: { onIssued: (issued: IntegrationKeyIssued) => v
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<unknown>(undefined);
   const [problems, setProblems] = useState<string[]>([]);
-  // 書きかけ = どれかの欄に入力がある（発行できたら空に戻るので、そのあとは確認しない）。
   useReportDirty(
     'issue-form',
     [name, source, expires, maxBodyBytes, ratePerMinute].some((field) => field !== ''),
   );
 
-  // CLI（`integration create`）と同じ上限・同じ数え方（trim 後の `.length`）。黙って切らない。
   const nameTooLong = name.trim().length > NAME_MAX_LENGTH;
 
   async function submit() {
-    if (nameTooLong) return; // 送らない。入力もそのまま残す（言うのは欄の下）。
+    if (nameTooLong) return;
     const checked = buildInput({ name, source, expires, maxBodyBytes, ratePerMinute });
     if (!checked.ok) {
-      // 送らない。入力もそのまま残す。
       setProblems(checked.problems);
       setFailure(undefined);
       return;
@@ -330,7 +301,6 @@ function IssueForm({ onIssued }: { onIssued: (issued: IntegrationKeyIssued) => v
   );
 }
 
-/** 画面の入力を発行の入力にする。誤りは送る前に言う（何も作らない）。 */
 function buildInput(fields: {
   name: string;
   source: string;
@@ -367,14 +337,10 @@ function buildInput(fields: {
   return problems.length > 0 ? { ok: false, problems } : { ok: true, input };
 }
 
-/**
- * 発行した直後の値。**この画面を離れる・閉じると消え、二度と見られない。**
- * 送り方の例には値を書かない（`<上の値>`。値が画面に2回出ない）。
- */
+// 送り方の例に値を書かない: 値が画面に2回出てしまうため
 function IssuedValue({ issued, onClose }: { issued: IntegrationKeyIssued; onClose: () => void }) {
   const { baseUrl } = useApiContext();
   const { key, value } = issued;
-  // 表示している間は、移動・タブを閉じる前に確認する（閉じれば確認しない）。
   useReportDirty(`issued-value:${key.id}`, true, ISSUED_VALUE_NOTICE);
   const example =
     `curl -X POST ${exampleBaseUrl(baseUrl, window.location.origin)}/events/${key.source} \\\n` +
@@ -409,7 +375,6 @@ function IssuedValue({ issued, onClose }: { issued: IntegrationKeyIssued; onClos
   );
 }
 
-/** 一覧の1行。失効は2段（押す → 本当に失効する）。 */
 function KeyRow({ view, now }: { view: IntegrationKeyView; now: number }) {
   const revokeKey = useRevokeIntegrationKey();
   const [confirming, setConfirming] = useState(false);

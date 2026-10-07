@@ -1,9 +1,4 @@
 // @vitest-environment jsdom
-/**
- * マネージャーの一覧と詳細は1画面（`ListDetail`）。親の経路（`managers.tsx`）が左に一覧を持ち、
- * 子の経路（`manager-detail.tsx`）が右に出る。**jsdom はレイアウトを持たないので、押さえられるのは
- * 構造・リンク・属性まで**（寸法とスクロールは実ブラウザで見た）。
- */
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider, useParams } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -60,7 +55,6 @@ function DetailRoute() {
   return <ManagerDetail {...({ loaderData } as Route.ComponentProps)} />;
 }
 
-/** 本番と同じ入れ子（`routes.ts`）。 */
 function renderAt(url: string) {
   stubFetch((u) => {
     const detail = /\/managers\/(mgr-[ab])(\?|$)/.exec(u);
@@ -107,11 +101,8 @@ describe('マネージャーの一覧＋詳細', () => {
     expect(
       within(detail).getByRole('heading', { level: 2, name: 'マネージャーの詳細' }),
     ).toBeTruthy();
-    // 式の断片が文字として出ていない（コメントの閉じ違いで起きた）。
     expect(detail.textContent).not.toContain('undefined');
-    // 画面の h1 は親の1つだけ。
     expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1);
-    // 広い画面ではスマホ用のボタンは出ない。
     expect(screen.queryByRole('button', { name: 'マネージャーの一覧を開く' })).toBeNull();
   });
 

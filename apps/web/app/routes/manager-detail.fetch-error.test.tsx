@@ -1,11 +1,4 @@
 // @vitest-environment jsdom
-/**
- * マネージャー詳細の取得に失敗したとき、「見つからない」「(空)」を出さない（issue #2321）。
- *
- * 読めていないのに委譲が存在しないように、セッションログが空だったように読める。
- * 「見つからない」は 404 のときだけの言葉で、それ以外の失敗は `ErrorNote` が言う
- * （AGENTS.md の地雷「取れない軸に 0 の行を作る」）。
- */
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -40,7 +33,6 @@ afterEach(() => {
   globalThis.fetch = originalFetch;
 });
 
-/** `GET /managers/mgr-1` と `GET /managers/mgr-1/transcript` に、それぞれの応答を返す。他は「繋がらない」。 */
 function stubManager(routes: {
   detail?: () => Response | Promise<Response>;
   transcript?: () => Response | Promise<Response>;
@@ -115,11 +107,9 @@ describe('詳細の取得に失敗したとき（issue #2321）', () => {
     renderPage();
 
     expect(await screen.findByText(/このマネージャーは見つかりません/)).toBeTruthy();
-    // 応答の素の英語（not found）は出さない。同じことを二重に言わない（#2791）。
     expect(screen.queryByText(/not found/i)).toBeNull();
     expect(screen.queryByRole('alert')).toBeNull();
     expect(screen.queryByText(/依頼の全文は下/)).toBeNull();
-    // 一覧へ戻る導線。
     const back = screen.getByRole('link', { name: 'マネージャー一覧へ戻る' });
     expect(back.getAttribute('href')).toBe('/managers');
   });
@@ -137,7 +127,6 @@ describe('詳細の取得に失敗したとき（issue #2321）', () => {
     expect(await screen.findByText('PR を出して')).toBeTruthy();
     expect(screen.queryByRole('alert')).toBeNull();
 
-    // 再検証を起こす（SWR は focus で再検証する。足場は throttle 0。approvals.fetch-error.test.tsx と同じ）。
     act(() => {
       window.dispatchEvent(new Event('focus'));
     });
@@ -152,7 +141,6 @@ describe('セッションログの取得に失敗したとき（issue #2321）',
   async function openTranscript() {
     renderPage();
     await screen.findByText('セッションログ（生）');
-    // 詳細が読めたあと、ログの「開く」を押す（ほかに「開く」は無い前提で、ログの札の隣のものを選ぶ）。
     const title = screen.getByText('セッションログ（生）');
     const button = title.closest('div')?.parentElement?.querySelector('button');
     if (!button) throw new Error('開くボタンが見つからない');

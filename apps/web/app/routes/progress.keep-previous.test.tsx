@@ -1,12 +1,4 @@
 // @vitest-environment jsdom
-/**
- * `/progress` 画面で期間を替えても、読めていた中身を消さない（issue #3419）。
- *
- * 期間を替えると SWR のキーが変わり、新しいキーの `data` が無い間、中身が全部
- * スピナーに入れ替わっていた。`useCommitments`（#3074）と同じく前の中身を残し、
- * 前の期間の数字を見せている間は、数字のそばで「読み込み中」と言う。
- * 初回（まだ何も読めていない）はこれまでどおりスピナーである。
- */
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -61,7 +53,6 @@ function body(total: number, hours: number) {
   };
 }
 
-/** 24時間の要求だけ、`release()` まで応答を止める。 */
 function stubHeld24h() {
   let release: () => void = () => {};
   const gate = new Promise<void>((resolve) => {
@@ -149,7 +140,6 @@ describe('/progress 画面 — 新しい期間の取得が失敗したとき（#
       await screen.findByText(/新しい期間では読み込めなかった。下は前の期間の数字/),
     ).toBeTruthy();
     expect(screen.getByText('12')).toBeTruthy();
-    // 同じ期間の取り直しの失敗の文言ではない。
     expect(screen.queryByText(/下の数は前に読めたときのもの/)).toBeNull();
     expect(screen.getByRole('button', { name: /再試行|もう一度/ })).toBeTruthy();
   });
