@@ -1,12 +1,12 @@
 import { EventEmitter } from 'node:events';
-import { mkdtemp, writeFile } from 'node:fs/promises';
+import { writeFile } from 'node:fs/promises';
 import { syncBuiltinESMExports } from 'node:module';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { makeTempDir } from '../../../vitest.tmpdir.js';
 import { captureStdout } from './test-support.js';
 
 /**
@@ -128,7 +128,7 @@ describe('chat: 応答中でない区間の Ctrl+C は手元のコマンドだ�
 
   it('添付のアップロード中の Ctrl+C は、/chat を呼ばず、送っていないと言う', async () => {
     useStdin(true);
-    const dir = await mkdtemp(join(tmpdir(), 'alteroid-sigint-'));
+    const dir = await makeTempDir('alteroid-sigint-');
     const file = join(dir, 'a.log');
     await writeFile(file, 'x');
     const calls = stubFetch(
