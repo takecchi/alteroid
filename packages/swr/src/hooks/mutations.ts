@@ -15,6 +15,7 @@ import type {
   IntegrationKeyIssued,
   McpServers,
   MemoryDocument,
+  McpServersState,
   McpServersUpdateResult,
   Practice,
   ProfileScope,
@@ -888,10 +889,23 @@ export function useSetMcpServers() {
   const api = useApi();
   const { mutate } = useSWRConfig();
   return useCallback(
-    async (mcpServers: McpServers): Promise<McpServersUpdateResult> => {
-      const updated = await api.api.PUT('/mcp-servers', { body: { mcpServers } }).then(unwrap);
+    async (
+      mcpServers: McpServers,
+      ifMatch?: string,
+    ): Promise<
+      | { update: McpServersUpdateResult; conflict?: undefined }
+      | { conflict: McpServersState; update?: undefined }
+    > => {
+      const result = await api.api.PUT('/mcp-servers', { body: { mcpServers, ifMatch } });
+      // 409 を版の衝突だけとして読む: この口に他の 409 は無いため
+      if (result.response.status === 409 && result.error !== undefined) {
+        await mutate(KEY.mcpServers);
+        // 例外にせず値で返す: 下書きを残して続きの操作を促す通常の分岐で、失敗の表示に流れないようにするため
+        return { conflict: (result.error as { current: McpServersState }).current };
+      }
+      const update = unwrap(result);
       await mutate(KEY.mcpServers);
-      return updated;
+      return { update };
     },
     [api, mutate],
   );
