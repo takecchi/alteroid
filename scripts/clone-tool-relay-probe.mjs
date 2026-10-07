@@ -40,8 +40,7 @@ const config = {
   },
 };
 const env = { ...process.env, HOME: home, CLAUDE_CONFIG_DIR: join(home, '.claude') };
-// **同期の spawn を使わない。** 中継の待ち受け（host）はこのプロセスの中に在るので、
-// イベントループを塞ぐと CLI が起こした子の接続を受けられず、必ず時間切れになる。
+// 同期の spawn を使わない: 中継の待ち受けはこのプロセスの中に在り、イベントループを塞ぐと子の接続を受けられず必ず時間切れになるため。
 const execFileAsync = promisify(execFile);
 const run = async (args) => {
   try {

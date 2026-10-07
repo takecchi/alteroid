@@ -14,7 +14,6 @@ import {
   readInputFile,
 } from './input-errors.js';
 
-/** 無いエディタを起こさないことを見るために、`spawn` だけ差し替える。 */
 vi.mock('node:child_process', () => ({
   spawn: vi.fn(() => ({
     on(event: string, cb: (code: number) => void) {
@@ -100,7 +99,6 @@ describe('editorCommandExists（#2867）', () => {
     await expect(editorCommandExists(plain, { PATH: '' }, 'linux')).resolves.toBe(false);
     await chmod(plain, 0o755);
     await expect(editorCommandExists(plain, { PATH: '' }, 'linux')).resolves.toBe(true);
-    // ディレクトリは実行ビットが立っていてもエディタではない
     await expect(editorCommandExists(dir, { PATH: '' }, 'linux')).resolves.toBe(false);
   });
 

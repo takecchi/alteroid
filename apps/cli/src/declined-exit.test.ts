@@ -2,16 +2,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { captureStdout, pretendTty } from './test-support.js';
 
-/**
- * 戻せない操作の確認でやめたら、終了コードが非 0 になる（#3450）。
- *
- * **commander を通して argv から走らせる。** コマンド関数を直接呼ぶと、入口の最上位
- * （`index.ts` の catch。stderr へ1行言って終了コードを決める）を通らず、「やめたのに 0」を
- * 測れない。ここでは `program.parseAsync(argv)` の失敗を `reportCliFailure`（最上位の catch が
- * 呼ぶもの）へ渡し、返った終了コードと stderr・stdout を見る。
- *
- * 端末で `no` と答えた形を作る（TTY を装い、`readline` の質問に `no` を返す）。
- */
 vi.mock('node:readline/promises', () => ({
   createInterface: () => ({
     question: () => Promise.resolve('no'),
@@ -84,9 +74,7 @@ describe('戻せない操作の確認でやめたときの終了コード（#345
 
       expect(code).not.toBe(0);
       expect(stderr.join('')).toBe('alteroid: 取り消しました。何も変更していません。\n');
-      // 成功の文を stdout に出さない（確認の質問は出る）。
       expect(stdoutText()).not.toMatch(/消しました|削除しました|リセットしました/);
-      // 何も変えていない（書き換え系の HTTP に出ていない）。
       expect(sent.filter((entry) => entry.method !== 'GET')).toEqual([]);
     },
   );

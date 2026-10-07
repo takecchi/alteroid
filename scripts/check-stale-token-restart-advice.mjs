@@ -1,24 +1,5 @@
 #!/usr/bin/env node
-/**
- * 「世代ずれなら起こし直せ」の助言が、生成元1箇所の外で書かれていないかを見る
- * （Issue #1175）。**なぜ要るか・何を免除しているかは
- * `check-stale-token-restart-advice-core.mjs` の doc に書いてある。**
- *
- * ここは「対象を列挙して、読んで、渡して、終了コードを決める」だけ
- * （`check-tracked-nul-bytes.mjs` と同じ分け方）。
- *
- * **対象を `git`（追跡済み + 未追跡だが ignore されていないファイル）に限る**
- * のは、`node_modules` や生成物を歩かないため。拡張子は `.ts` / `.mjs` / `.js` /
- * `.tsx` / `.jsx`（`apps/web` の React コンポーネントを含む。Issue #1873）
- * に絞る——助言はソースの中の文字列として配られるものであり、`docs/` の散文
- * （正典）はここでは扱わない（あちらは人が読む記録で、クローンの道具の説明文
- * ではない）。
- *
- * **以前は `git ls-files -z`（追跡済みだけ）だった。** まだ `git add` していない
- * 新規ファイルに生成元の外の字面を書いても、手元の `pnpm verify` は緑のまま、
- * push 後の CI で初めて赤くなる穴があった（Issue #1817。`listScannableSources`
- * の歯は `scripts/check-stale-token-restart-advice.test.ts` に在る）。
- */
+// 対象を `git` が扱うファイルに限る: `node_modules` や生成物を歩かないため。`docs/` の散文は人が読む記録で、クローンの道具の説明文ではないので扱わない。
 
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -60,7 +41,7 @@ function main() {
     try {
       files.push({ path, content: readFileSync(join(ROOT, path), 'utf8') });
     } catch (error) {
-      // 読めないものは判定できない。**黙って飛ばさない**（AGENTS.md「静かに失敗する道具」）。
+      // 読めないものは黙って飛ばさない: 判定できないため。
       logError(`check-stale-token-restart-advice: ${path} を読めないため検査から外す: ${error}`);
     }
   }
@@ -80,7 +61,6 @@ function main() {
     return;
   }
 
-  // **必ず1行出す**（出ていなければ走っていないと読める）。
   log(`check-stale-token-restart-advice: OK — ${files.length}ファイルとも生成元の外に字面なし`);
 }
 

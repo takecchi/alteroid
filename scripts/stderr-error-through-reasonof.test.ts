@@ -7,123 +7,34 @@ import { describe, expect, it } from 'vitest';
 
 import { collectRepoFiles } from './repo-scan-files.js';
 
-/**
- * **外へ出る口へ置く例外の文は、`reasonOf(error)` か `redactErrorText(…)` を通す、を固定する歯**
- * （#2512 / #2538 / #2565）。
- *
- * `packages/core/src/dropped-record.ts` の `reasonOf` の doc が決めている:
- * 「記録の失敗をログへ出すところは、すべてここを通すこと」。drizzle の
- * `DrizzleQueryError` は `message` の2行目に `params: <束縛パラメータ>` を置き、
- * 書こうとした値がそのまま並ぶ。stderr は器のログ（Railway 等）に残り、クローンへ届く口
- * （`announce` / 道具の応答）と CLI・モデル側へ出る口（Bash のガードの deny の理由）は
- * 文脈に残る。素の `String(error)` / `error.message` を1か所でも置くと、そこだけが無防備になる。
- * 使い分け（`reasonOf` と `redactErrorText`）は両方の doc に書いてある。
- *
- * ## 何を見るか
- * `apps/daemon/src` と `apps/runner/src` と `packages/core/src` の（テストでない）ソースで、
- * 次の口の**引数の中**に、素のエラーの文字列化が在れば落とす。
- * - `stderr.write(...)` / `writeStderrSync(...)`
- * - 呼び先の名前が `announce` / `postToClone` の呼び出し（`apps/daemon/src/index.ts` の
- *   `announce` はクローンへ届く）
- * - `packages/core/src/tools.ts` の中の `text(...)`（クローンの道具の応答）
- * - `kind: 'deny'` を持つオブジェクトリテラルの `reason` の値（`runner.ts` の Bash のガード）
- * - **HTTP の応答（#2570）。`apps/daemon/src/app.ts` と `apps/runner/src/app.ts` の2ファイルに限る**
- *   （`rel` で判定する）。この2ファイルでは、次の2つも口とみなす。
- *   - `c.json(...)` の引数
- *   - オブジェクトリテラルの `error` プロパティの値（`results.push({ id, ok: false, error: … })` の
- *     ように配列へ積んでから `c.json({ results })` で返す口を取りこぼさないため）。
- *     省略形の `{ error }` は、`error` が `catch (error)` の変数そのものなら数える。
- *
- * 素のエラーの文字列化とは、次のどれか（#2606 で広げた）。`<id>` はエラーを指す識別子で、
- * **`catch (<任意の名前>)` / `.catch((<任意の名前>) => …)` の束縛**（名前を問わない）か、
- * 束縛の無い断片のための補助の名前（`ERROR_NAMES`）:
- * `String(<id>)` / `<id>.message` / `<id>.stack` / `<id>.cause`（`<id>["message"]` も）/
- * テンプレートの `${<id>}` / `<id>.toString()` / `JSON.stringify(<id>)` / `<id> + …`・`… + <id>`。
- *
- * **一度別の変数へ入れてから書く形も見る**（#2538）。同じ関数（`this.#x` の形は同じクラス）の中で、
- * 素のエラーの文字列化を含む式を `const message = …` / `this.#last = …` へ入れ、その
- * `message` / `this.#last` を上の口の引数へ置いたら落とす。
- *
- * **別名・分割代入・配列を通す形も見る**（#2621）。
- * - 別名: `const e2 = error`（`e2 = error`、`(error as Error)`、連鎖 `const e3 = e2` も）の `e2` は、同じ関数の
- *   中でエラーを指す識別子として扱う（`String(e2)` / `e2.message` / `${e2}` を検出する）。
- * - 分割代入: `const { message, stack: s } = error`（`({ message } = error)`・`catch ({ message })`・
- *   `.catch(({ message }) => …)` も）で `message` / `stack` / `cause` を受けた名前は、「素のエラーの文字列化を
- *   入れた変数」とみなす。
- * - 配列: `lines = [String(error)]` / `lines.push(String(error))` の `lines` を口の引数で読んだら
- *   （`lines.join()` のようにプロパティアクセスの左辺でも）落とす。
- *
- * ## 数えない形
- * - **伏せ字を通したもの。** `reasonOf` / `redactErrorText` / `redactSecretsInText` /
- *   `collapseErrorCause` の呼び出しの引数の中に在る文字列化。
- * - **型で絞った自前の例外。** 同じ識別子について `<id> instanceof <Class>`（`Class` は
- *   `ALLOWED_CUSTOM_CLASSES` の許可リストに在るものだけ。#2606）が
- *   真のときだけ通る枝の中（`if` の then 側・三項演算子の真の側）。返してよい例外かどうかは
- *   型で分ける、という `reasonOf` の doc の線（例: `TokenPoolInputError`）。
- *   `instanceof Error` は絞りにならない（検出する）。
- * - **`.name` で絞った枝（#2570）。** `<id>.name === '<文字列リテラル>'`（`==` も。リテラルが
- *   `ALLOWED_NAME_LITERALS` の許可リストに在るリテラルだけ。#2606）が真のときだけ通る枝。`instanceof` と同じ扱い。`&&` の連なりに1つでも在れば絞りとみなす
- *   （例: `error instanceof Error && error.name === 'InvalidApprovalSelectionsError' ? error.message : …`）。
- * - **早期に抜ける形の絞り込み（#2570）。** 同じブロックの前の文に
- *   `if (!(<id> instanceof X)) throw …;`（または `return …;`）が在れば、後続の文は絞られたとみなす。
- *   `.name` の比較を否定した形（`if (!(<id>.name === '…')) throw …`）も同じ。`X` が許可リストに無ければ絞りにならない。
- *
- * ## 何を見ないか（取りこぼす形）
- * - zod の `parsed.error.message` のように、`error` 名の識別子ではないもの
- * - 上の2ファイル以外の HTTP の応答（`c.json`）。他のファイルは走査しない
- * - 関数をまたぐ受け渡し（引数・戻り値・別の関数が読むフィールド）。同じ関数内の代入だけを追う
- * - 別名・分割代入のうち、上に書いた形以外（入れ子の分割 `const { a: { message } } = error`、`...rest`、
- *   関数・オブジェクトのフィールドをまたぐ別名、`.map` / `concat` / `splice` などで配列へ入れる形）
- * - `apps/cli`（利用者自身の端末へ出す文）
- */
+// `instanceof Error` は絞りに数えない: 値を含まないと確かめた自前の例外クラス（`ALLOWED_CUSTOM_CLASSES`）だけを許可するため。
+// `apps/cli` は走査しない: 利用者自身の端末へ出す文で、器のログやクローンの文脈へ届かないため。
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const EXCLUDE_DIRS = new Set(['node_modules', '.git', 'dist', 'build', '.react-router', '.vite']);
 const SCAN_ROOTS = ['apps/daemon/src/', 'apps/runner/src/', 'packages/core/src/'];
-/**
- * エラーを指す識別子とみなす名前。**catch の束縛・`.catch((x) => …)` の引数は、名前を問わず
- * 束縛で判定する**（`isErrorRef`、#2606）。この一覧は、束縛が無い断片（純粋関数のフィクスチャ、
- * 関数の引数で受けたエラー）を拾う補助で、一覧に無い名前の catch も検出する。
- */
 const ERROR_NAMES = new Set(['e', 'err', 'error', 'cause', 'failure']);
-/**
- * **絞りとして認める自前の例外クラスの許可リスト**（#2606）。`message` が値を含まないと
- * 確かめたクラスだけをここへ足す。`<id> instanceof X` の `X` がここに無ければ絞りとみなさない
- * （`instanceof Error` と同じに検出する）。
- */
 const ALLOWED_CUSTOM_CLASSES = new Set<string>([
   'JournalAnchorNotFoundError',
   'InvalidCursorError',
-  // #3550。文は固定のリテラル2つだけ（継続点・id・時刻の値を載せない。`conversation.ts` の `readConversationPage`）。
   'InvalidConversationCursorError',
   'UnreadableApprovalError',
   'CredentialEntryRejectedError',
   'TokenPoolInputError',
-  // #2927。文は欄名（呼び手が書く固定のリテラル）と定型の説明だけで、名前・値を載せない。
   'NulNotAllowedError',
   'InvalidCredentialNameError',
-  // #3288。文は「日誌 <id> は在るが読めない…」の定型と、呼び手が渡した id だけ（行の本文は持たない）。
-  // 任意の `reason` は文の末尾に付くが、投げる側（storage-fs / storage-pg の `get`）は渡していない。
-  // 値の載る `reason` を渡すようにするなら、ここから外すこと。
+  // 値の載る `reason` を渡すようにするなら、ここから外す: 任意の `reason` は文の末尾に付くため。
   'UnreadableJournalEntryError',
 ]);
-/**
- * **絞りとして認める `<id>.name === '<リテラル>'` のリテラルの許可リスト**（#2606）。
- * ここに無いリテラルの比較は絞りとみなさない。
- */
 const ALLOWED_NAME_LITERALS = new Set<string>(['InvalidApprovalSelectionsError']);
-/** 引数の中の文字列化を伏せ字に通す関数。 */
 const REDACTORS = new Set([
   'reasonOf',
   'redactErrorText',
   'redactSecretsInText',
   'collapseErrorCause',
 ]);
-/** 呼び先の名前でクローンへ届く口とみなす関数。 */
 const CLONE_SINK_NAMES = new Set(['announce', 'postToClone']);
-/** `text(...)` を道具の応答の口とみなすファイル。 */
 const TOOLS_FILE = 'packages/core/src/tools.ts';
-/** `c.json(...)` の引数と `error` プロパティの値を口とみなすファイル（HTTP の応答、#2570）。 */
 const HTTP_FILES = new Set(['apps/daemon/src/app.ts', 'apps/runner/src/app.ts']);
 
 interface BareErrorHit {
@@ -141,7 +52,6 @@ function isStderrWrite(callee: ts.Expression): boolean {
   );
 }
 
-/** 呼び先の名前（`f(...)` の `f`、`a.b(...)` / `this.#b(...)` の `b`）。 */
 function calleeName(callee: ts.Expression): string | undefined {
   if (ts.isIdentifier(callee)) return callee.text;
   if (ts.isPropertyAccessExpression(callee)) return callee.name.text.replace(/^#/, '');
@@ -154,7 +64,6 @@ function isRedactorCall(node: ts.Node): boolean {
   return name !== undefined && REDACTORS.has(name);
 }
 
-/** `<id>.name === '<'Error' 以外の文字列リテラル>'`（`==` も）か。 */
 function isNameLiteralCheck(cond: ts.BinaryExpression, id: string): boolean {
   const op = cond.operatorToken.kind;
   if (op !== ts.SyntaxKind.EqualsEqualsEqualsToken && op !== ts.SyntaxKind.EqualsEqualsToken) {
@@ -173,10 +82,6 @@ function isNameLiteralCheck(cond: ts.BinaryExpression, id: string): boolean {
   );
 }
 
-/**
- * `cond` が真のとき、`<id>` が自前の例外に絞られるか
- * （`<id> instanceof <Error 以外>`、または `<id>.name === '<Error 以外のリテラル>'`）。
- */
 function impliesCustomInstanceof(cond: ts.Expression, id: string): boolean {
   if (ts.isParenthesizedExpression(cond)) return impliesCustomInstanceof(cond.expression, id);
   if (ts.isBinaryExpression(cond)) {
@@ -197,7 +102,6 @@ function impliesCustomInstanceof(cond: ts.Expression, id: string): boolean {
   return false;
 }
 
-/** `cond` が偽のとき（`if (cond) <抜ける>` を通り抜けたとき）、`<id>` が絞られるか。 */
 function impliesNarrowedWhenFalse(cond: ts.Expression, id: string): boolean {
   if (ts.isParenthesizedExpression(cond)) return impliesNarrowedWhenFalse(cond.expression, id);
   if (ts.isPrefixUnaryExpression(cond) && cond.operator === ts.SyntaxKind.ExclamationToken) {
@@ -209,13 +113,11 @@ function impliesNarrowedWhenFalse(cond: ts.Expression, id: string): boolean {
   return false;
 }
 
-/** 文が、必ず抜ける（`throw` / `return`、またはそれを直下に持つブロック）か。 */
 function alwaysExits(stmt: ts.Statement): boolean {
   const exits = (st: ts.Statement): boolean => ts.isThrowStatement(st) || ts.isReturnStatement(st);
   return exits(stmt) || (ts.isBlock(stmt) && stmt.statements.some(exits));
 }
 
-/** `stmt` が `if (!<絞り>) throw/return …;`（else 無し）で、通り抜けると `id` が絞られるか。 */
 function isNarrowingEarlyExit(stmt: ts.Statement, id: string): boolean {
   return (
     ts.isIfStatement(stmt) &&
@@ -225,7 +127,6 @@ function isNarrowingEarlyExit(stmt: ts.Statement, id: string): boolean {
   );
 }
 
-/** `node` が、`<id>` を自前の例外に絞る枝（then 側・真の側・早期に抜けた後）の中に在るか。 */
 function narrowedToCustomClass(node: ts.Node, id: string): boolean {
   for (
     let child: ts.Node = node, cur = node.parent;
@@ -237,7 +138,6 @@ function narrowedToCustomClass(node: ts.Node, id: string): boolean {
     } else if (ts.isConditionalExpression(cur) && cur.whenTrue === child) {
       if (impliesCustomInstanceof(cur.condition, id)) return true;
     } else if (ts.isBlock(cur) || ts.isSourceFile(cur) || ts.isCaseClause(cur)) {
-      // 早期に抜ける形: 前の文の `if (!(id instanceof X)) throw …;`
       const stmts = cur.statements;
       const at = stmts.findIndex((st) => st === child);
       if (at > 0 && stmts.slice(0, at).some((st) => isNarrowingEarlyExit(st, id))) return true;
@@ -246,7 +146,6 @@ function narrowedToCustomClass(node: ts.Node, id: string): boolean {
   return false;
 }
 
-/** `node` が、`.catch((<id>) => …)` / `.catch(function (<id>) {…})` の引数 `<id>` を読める所に在るか。 */
 function isCatchCallbackParam(node: ts.Node, id: string): boolean {
   for (let cur: ts.Node | undefined = node.parent; cur !== undefined; cur = cur.parent) {
     if (
@@ -263,11 +162,7 @@ function isCatchCallbackParam(node: ts.Node, id: string): boolean {
   return false;
 }
 
-/**
- * `node` が、エラーを指す識別子か（#2606）。名前の一覧ではなく**束縛**で決める:
- * `catch (<任意の名前>)` の中、または `.catch((<任意の名前>) => …)` の中でその名前を読む識別子。
- * 束縛が無い断片のために `ERROR_NAMES` も補助として数える。
- */
+// 名前の一覧ではなく束縛で決める: 一覧に無い名前の catch を取りこぼさないため。`ERROR_NAMES` は束縛が無い断片のための補助。
 function isErrorRef(node: ts.Node): node is ts.Identifier {
   if (!ts.isIdentifier(node)) return false;
   return (
@@ -278,12 +173,10 @@ function isErrorRef(node: ts.Node): node is ts.Identifier {
   );
 }
 
-/** `node` が `scope` の範囲の中に在るか。 */
 function isInside(node: ts.Node, scope: ts.Node): boolean {
   return node.pos >= scope.pos && node.end <= scope.end;
 }
 
-/** 括弧・型表明・非 null 表明を外す（`(error as Error)` / `error!` を `error` と同じに見る）。 */
 function unwrapExpr(expr: ts.Expression): ts.Expression {
   let cur = expr;
   while (
@@ -298,11 +191,6 @@ function unwrapExpr(expr: ts.Expression): ts.Expression {
   return cur;
 }
 
-/**
- * **エラーの別名**（#2621）: `const e2 = error` / `e2 = error`（`error` はエラーを指す識別子。
- * 連鎖 `const e3 = e2` も）で束縛した名前を、同じ関数の中で `isErrorRef` が真にする。
- * ファイルごとに `collectErrorAliases` が集める。
- */
 const aliasesByFile = new WeakMap<ts.SourceFile, Map<string, ts.Node[]>>();
 
 function isErrorAlias(node: ts.Identifier): boolean {
@@ -331,7 +219,6 @@ function collectErrorAliases(file: ts.SourceFile): void {
     ts.forEachChild(node, visit);
   };
   visit(file);
-  // 連鎖（e3 = e2 = error）のため、増えなくなるまで回す
   for (let changed = true; changed;) {
     changed = false;
     for (const { name, init, at } of pairs) {
@@ -346,15 +233,8 @@ function collectErrorAliases(file: ts.SourceFile): void {
   }
 }
 
-/** エラーの文字列化に使われるプロパティ（`error.message` / `.stack` / `.cause`）。 */
 const LEAKY_PROPS = new Set(['message', 'stack', 'cause']);
 
-/**
- * 式の部分木に在る、素のエラーの文字列化。伏せ字の関数の呼び出しの中と、許可リストの
- * 自前の例外の型で絞った枝の中は数えない。拾う形（`<err>` はエラーを指す識別子）:
- * `String(<err>)` / `<err>.message|stack|cause`（`<err>['message']` も）/ `${<err>}` /
- * `<err>.toString()` / `JSON.stringify(<err>)` / `<err> + …`・`… + <err>`（`+=` の右辺も）。
- */
 function bareErrorNodes(root: ts.Node): ts.Node[] {
   const found: ts.Node[] = [];
   const add = (node: ts.Node, id: ts.Identifier): void => {
@@ -420,7 +300,6 @@ function bareErrorNodes(root: ts.Node): ts.Node[] {
   return found;
 }
 
-/** 変数・`this.` のフィールドへ入れた値の持ち主（その名前が有効な範囲）。 */
 function scopeOf(node: ts.Node, wantClass: boolean): ts.Node | undefined {
   for (let cur: ts.Node | undefined = node.parent; cur !== undefined; cur = cur.parent) {
     if (wantClass ? ts.isClassLike(cur) : ts.isFunctionLike(cur)) return cur;
@@ -428,14 +307,12 @@ function scopeOf(node: ts.Node, wantClass: boolean): ts.Node | undefined {
   return undefined;
 }
 
-/** 素のエラーの文字列化を含む式を入れた名前（`message` / `this.#last`）を、範囲つきで集める。 */
 function collectTaintedNames(file: ts.SourceFile): Map<string, ts.Node[]> {
   const tainted = new Map<string, ts.Node[]>();
   const add = (name: string, scope: ts.Node | undefined): void => {
     if (scope === undefined) return;
     tainted.set(name, [...(tainted.get(name) ?? []), scope]);
   };
-  /** 分割代入 `{ message, stack: s }` の、`message` / `stack` / `cause` を受ける名前（#2621）。 */
   const addFromPattern = (
     pattern: ts.ObjectBindingPattern,
     source: ts.Expression | undefined,
@@ -485,7 +362,6 @@ function collectTaintedNames(file: ts.SourceFile): Map<string, ts.Node[]> {
       node.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
       ts.isObjectLiteralExpression(node.left)
     ) {
-      // ({ message } = error)
       const src = unwrapExpr(node.right);
       if (isErrorRef(src) && !narrowedToCustomClass(src, src.text)) {
         for (const p of node.left.properties) {
@@ -513,7 +389,6 @@ function collectTaintedNames(file: ts.SourceFile): Map<string, ts.Node[]> {
       (node.expression.name.text === 'push' || node.expression.name.text === 'unshift') &&
       node.arguments.some((a) => bareErrorNodes(a).length > 0)
     ) {
-      // lines.push(String(error)) — 配列へ積む形
       const target = node.expression.expression;
       if (ts.isIdentifier(target)) add(target.text, scopeOf(node, false));
       else if (
@@ -549,7 +424,6 @@ function collectTaintedNames(file: ts.SourceFile): Map<string, ts.Node[]> {
   return tainted;
 }
 
-/** `node` が、`catch (<id>)` の中に在るか。 */
 function isCatchVariable(node: ts.Node, id: string): boolean {
   for (let cur: ts.Node | undefined = node.parent; cur !== undefined; cur = cur.parent) {
     if (
@@ -564,7 +438,6 @@ function isCatchVariable(node: ts.Node, id: string): boolean {
   return false;
 }
 
-/** 口の引数に当たる式を集める。 */
 function sinkArguments(node: ts.Node, rel: string): readonly ts.Node[] {
   if (ts.isCallExpression(node)) {
     if (isStderrWrite(node.expression)) return node.arguments;
@@ -614,14 +487,7 @@ function sinkArguments(node: ts.Node, rel: string): readonly ts.Node[] {
   return [];
 }
 
-/**
- * 口が1つも在り得ないソースを、AST を作る前に弾く（#3006）。リポジトリ全体（約240ファイル・約6MB）の
- * パースと走査が、混んだ器で vitest の既定の 5 秒を超えていた。口の判定（`isStderrWrite` /
- * `CLONE_SINK_NAMES` / `TOOLS_FILE` / `kind: 'deny'` / `HTTP_FILES`）はどれも、ソースに特定の語が
- * 字面で在ることを要する。その語が1つも無いファイルは、必ず 0 件になる。
- * **HTTP の 2 ファイルと tools.ts は語に依らず常に走査する**（口の条件が語でなくファイルで決まるため）。
- * 口を足したら、ここの語も足すこと（口ごとの検出テストが足し忘れを拾う）。
- */
+// AST を作る前に口の語が無いソースを弾く: 全ファイルのパースと走査が、混んだ器で vitest の既定の 5 秒を超えたため。
 const SINK_NEEDLES = ['stderr', 'writeStderrSync', ...CLONE_SINK_NAMES, 'deny'];
 
 function mayContainSink(source: string, rel: string): boolean {
@@ -629,11 +495,6 @@ function mayContainSink(source: string, rel: string): boolean {
   return SINK_NEEDLES.some((needle) => source.includes(needle));
 }
 
-/**
- * 外へ出る口（stderr・クローンへ届く知らせ・道具の応答・deny の理由）の引数の中にある、
- * 素のエラーの文字列化（直接と、変数へ入れてから）を返す。
- * `rel` は、そのソースの repo 相対パス（`text(...)` を口とみなすのは `tools.ts` だけ）。
- */
 function findBareErrorSinkWrites(source: string, rel = ''): BareErrorHit[] {
   if (!mayContainSink(source, rel)) return [];
   const file = ts.createSourceFile('scan.ts', source, ts.ScriptTarget.Latest, true);
@@ -642,18 +503,15 @@ function findBareErrorSinkWrites(source: string, rel = ''): BareErrorHit[] {
   const hits: BareErrorHit[] = [];
   const seen = new Set<string>();
   const report = (node: ts.Node, text: string): void => {
-    // c.json({ error: … }) は c.json の引数と error プロパティの両方から見えるので、重複を畳む
+    // 重複を畳む: `c.json({ error: … })` は `c.json` の引数と `error` プロパティの両方から見えるため。
     const key = `${String(node.getStart(file))}:${text}`;
     if (seen.has(key)) return;
     seen.add(key);
     const { line } = file.getLineAndCharacterOfPosition(node.getStart(file));
     hits.push({ line: line + 1, text });
   };
-  /** 引数の中で、素のエラーを入れた名前を読んでいる所。 */
   const inspectIndirect = (node: ts.Node): void => {
     if (isRedactorCall(node)) return;
-    // 読む所だけを数える。`x.name` の `name` と `{ name: … }` のキーは読みではない。
-    // `lines.join()` の `lines` のようにプロパティアクセスの左辺は読み（#2621）
     const isLabel =
       (ts.isPropertyAccessExpression(node.parent) && node.parent.name === node) ||
       (ts.isPropertyAssignment(node.parent) && node.parent.name === node);
@@ -673,7 +531,6 @@ function findBareErrorSinkWrites(source: string, rel = ''): BareErrorHit[] {
   };
   const visit = (node: ts.Node): void => {
     if (HTTP_FILES.has(rel) && ts.isObjectLiteralExpression(node)) {
-      // 省略形の `{ error }`: `error` が `catch (error)` の変数そのものなら素のエラーを返している
       for (const p of node.properties) {
         if (
           ts.isShorthandPropertyAssignment(p) &&
@@ -1140,7 +997,6 @@ describe('findBareErrorSinkWrites（純粋関数）: 別名・分割代入・配
         ),
       ),
     ).toBe(0);
-    // { message: 'x' } のキーは読みではない
     expect(
       count(inCatch(`const { message } = error; ${write}(JSON.stringify({ message: 'x' }));`)),
     ).toBe(0);
@@ -1197,7 +1053,6 @@ describe('findBareErrorSinkWrites: 語の事前判定（#3006）', () => {
 describe('外へ出る口へ置く例外の文は reasonOf / redactErrorText を通す（#2512 / #2538 / #2565）', () => {
   it('stderr・announce・postToClone・tools.ts の text・deny の理由に、素の String(error) / error.message が無い（HTTP の応答は daemon / runner の app.ts、#2570）', () => {
     const files = collectRepoFiles(ROOT, EXCLUDE_DIRS).filter(isScannedSource);
-    // 走査が空振りして「0件で緑」にならないようにする
     expect(files.length).toBeGreaterThan(100);
     const offenders = files.flatMap((rel) =>
       findBareErrorSinkWrites(readFileSync(path.join(ROOT, rel), 'utf8'), rel).map(
@@ -1208,7 +1063,6 @@ describe('外へ出る口へ置く例外の文は reasonOf / redactErrorText を
       offenders,
       '素のエラーの文字列化が外へ出ている。reasonOf(error)（packages/core/src/dropped-record.ts）か redactErrorText を通すこと（使い分けは両方の doc）',
     ).toEqual([]);
-    // 口の語が在る約55ファイルのパースと走査は正当な仕事で、直した後も2.4秒前後かかる。混んだ器で既定の5秒に
-    // 迫らないよう、この1本だけ上限を15秒にする（#3006）。
+    // この1本だけ上限を15秒にする: 全ファイルのパースと走査は、混んだ器で既定の5秒に迫るため。
   }, 15_000);
 });

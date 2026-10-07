@@ -1,22 +1,4 @@
 // @vitest-environment jsdom
-/**
- * `/progress` 画面（Issue #2241 の 4）。
- *
- * ここで固定したいのは:
- *
- * - 4枚（積み上がり・実施中・片付いた速度・見込み）の見出しと、それぞれの数
- * - 見込みの3状態: `estimated` は時間と notice、`not_converging` / `unavailable` は
- *   時間を作らず理由を出す。知らない state / reason でも落ちない（版のずれ）
- * - 取れない値（`null`）は「—」で、0 とは書かない
- * - `completeness` が 0 でないとき、数が欠けうる但し書きを出す
- * - GitHub は記録が1件も無い間は欄ごと出さない（#2970）。1件以上あれば従来どおり
- * - 期間の切替が URL（`?windowHours=`）と要求の `windowHours` の両方を変える
- * - 404（この版のデーモンにこの口が無い）と一般のエラーが分かれる
- * - **描いた文字に `%` が1つも無い**（分母が定まらないので割合は出さない）
- *
- * 時刻は相対（「3日前」）でしか assert しないので、時間帯には依らない。
- * 待ちは `findBy*` だけで、実時間の `setTimeout` は使わない。
- */
 import { describeGithubCi } from '@alteroid/core';
 import { GITHUB_CI_COUNT_LABEL, GITHUB_CI_COUNT_ORDER } from '@alteroid/logic';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
@@ -124,7 +106,6 @@ function renderPage(initialEntry = '/progress') {
   return router;
 }
 
-/** カード（見出しの祖先の枠）の中だけを見る。 */
 async function card(name: string): Promise<HTMLElement> {
   const heading = await screen.findByRole('heading', { name });
   const el = heading.closest('[data-slot="card"]');
@@ -162,7 +143,6 @@ describe('/progress 画面 — 4枚', () => {
         /未着手 6 \/ 返答済み（まだ閉じていない） 3 \/ マネージャーに任せた 2（他の項目と重なることがあります） \/ 人間からの依頼ではない 4/,
       ),
     ).toBeTruthy();
-    // 欠けが無いときは但し書きを出さない。
     expect(backlog.queryByText(/数が実際より少ない可能性/)).toBeNull();
   });
 
@@ -204,7 +184,6 @@ describe('/progress 画面 — 見込みの3状態と版のずれ', () => {
       forecast.getByText(/目安です。期間内に新しく引き受けた分は計算に入れていません/),
     ).toBeTruthy();
     expect(forecast.getByText('未完了').nextElementSibling?.textContent).toBe('12 件');
-    // 式・フィールド名は、折りたたみ（閉じている）の先にだけ在る。
     const details = forecast.getByText('計算の詳細（開発者向け）').closest('details');
     expect(details?.open).toBe(false);
     const formula = forecast.getByText('open / (closedInWindow / windowHours)');
@@ -263,7 +242,6 @@ describe('/progress 画面 — 見込みの3状態と版のずれ', () => {
     expect(forecast.getByText(new RegExp(text))).toBeTruthy();
     expect(forecast.getByText('—')).toBeTruthy();
     expect(forecast.queryByText(/あと約/)).toBeNull();
-    // 計算の元になった数は並べる。
     expect(forecast.getByText('期間内に完了にした').nextElementSibling?.textContent).toBe('1 件');
   });
 
@@ -410,7 +388,6 @@ describe('/progress 画面 — 取れない値と但し書き', () => {
       throughput.getByText(/この期間の件数は、古い記録が整理されたため実際より少ない可能性/),
     ).toBeTruthy();
     expect(throughput.getByText(/「少なくともこれだけ」と読んでください/)).toBeTruthy();
-    // 未完了の数の注記は、これでは出ない。
     expect(within(await card('未完了の仕事')).queryByText(/数が実際より少ない可能性/)).toBeNull();
   });
 
@@ -443,7 +420,6 @@ describe('/progress 画面 — 取れない値と但し書き', () => {
     const inProgress = within(await card('実行中の依頼'));
     expect(inProgress.getByText(/読み取れなかった依頼の記録が 2 件あります/)).toBeTruthy();
     expect(inProgress.getByText(/依頼が無いわけではありません/)).toBeTruthy();
-    // 台帳の欠けの但し書きは、委譲の欠けだけでは出ない。
     const backlog = within(await card('未完了の仕事'));
     expect(backlog.queryByText(/数が実際より少ない可能性/)).toBeNull();
   });
@@ -616,16 +592,13 @@ describe('/progress 画面 — 取れない値と但し書き', () => {
       ).toContain('0');
       expect(backlog.getByText(/記録したのは: クローン/)).toBeTruthy();
       expect(backlog.getByText('上限 100 件')).toBeTruthy();
-      // 数えた条件の原文（CLI の文字列）は、閉じた折りたたみの外に出さない
       const clone = document.body.cloneNode(true) as HTMLElement;
       clone.querySelectorAll('details').forEach((el) => el.remove());
       const outside = clone.textContent ?? '';
       expect(outside).not.toContain('gh ');
       expect(outside).not.toContain('--state');
-      // 折りたたみの中には残る（開発者が確かめられる）
       const details = backlog.getByText('数えた条件の詳細（開発者向け）').closest('details');
       expect(details?.textContent).toContain('gh issue list --state open');
-      // GitHub 全体が未観測のときの文言（句点で終わる）。CI の軸の「観測していない（0 件ではない）」とは別
       expect(backlog.queryByText(/観測していない（0 件ではない）。/)).toBeNull();
     });
 
@@ -677,8 +650,6 @@ describe('/progress 画面 — 取れない値と但し書き', () => {
         const view = within(await card('未完了の仕事'));
         const original = describeGithubCi(extra as Parameters<typeof describeGithubCi>[0]);
         expect(original.startsWith('CI: ')).toBe(true);
-        // 原本の値（success / failure / pending）を、表（GITHUB_CI_COUNT_LABEL）が持つ写しだけで置き換える。
-        // 表に無い差があれば（並び・数・断り書き）、ここで落ちる。
         let expected = original.slice('CI: '.length);
         for (const key of GITHUB_CI_COUNT_ORDER) {
           expected = expected.replace(`${key} `, `${GITHUB_CI_COUNT_LABEL[key]} `);
@@ -748,10 +719,8 @@ describe('/progress 画面 — 取れない値と但し書き', () => {
       const stat = backlog.getByText('takecchi/other の開いている Issue / PR').parentElement;
       expect(stat?.textContent).toContain('—');
       expect(stat?.textContent).toContain('0 件という意味ではありません');
-      // 上限に当たったので「記録が無い」とは言わず、読んだ範囲に無いと言う
       expect(stat?.textContent).toContain('読み取った範囲（新しい順 500 件）に成功した記録が無い');
       expect(backlog.getByText(/取得に失敗した回/).textContent).toContain('gh: HTTP 502');
-      // 名乗られた識別子（mgr-1）は出さず、一般的な言い方にする
       expect(backlog.getByText(/取得に失敗した回/).textContent).toContain(
         '記録したのは: クローン以外からの申告',
       );
@@ -811,7 +780,6 @@ describe('/progress 画面 — 期間の切替', () => {
     ).toBeTruthy();
     expect(stub.calls.some((url) => url.includes('windowHours=168'))).toBe(true);
     expect(stub.calls.every((url) => !url.includes('windowHours=48'))).toBe(true);
-    // どのチップも選ばれていない形（7日を押せば選び直せる。下のテスト）。
     expect(screen.getByRole('radio', { name: '7日' }).getAttribute('aria-checked')).toBe('false');
   });
 
@@ -876,8 +844,6 @@ describe('/progress 画面 — 期間の切替', () => {
     expect(screen.getByRole('radio', { name: '24時間' }).getAttribute('aria-checked')).toBe('true');
     expect(screen.getByRole('radio', { name: '7日' }).getAttribute('aria-checked')).toBe('false');
 
-    // Issue #2275: 単一選択の部品（ChoiceChips）へ替えたので、「既定（7日）に戻す」の
-    // 読み替えは無い（以前はここでそのボタンを押して URL が空に戻ることを固定していた）。
     expect(screen.queryByRole('button', { name: '既定（7日）に戻す' })).toBeNull();
   });
 
@@ -904,7 +870,7 @@ describe('/progress 画面 — 期間の切替', () => {
         .map((r) => r.getAttribute('aria-checked')),
     ).toEqual(['false', 'true', 'false']);
 
-    // Radix の roving focus は次のチップへの focus を setTimeout(0) で行う。偽の時計で進める。
+    // 偽の時計で進める: Radix の roving focus は次のチップへの focus を setTimeout(0) で行うため
     vi.useFakeTimers();
     screen.getByRole('radio', { name: '7日' }).focus();
     fireEvent.keyDown(document.activeElement!, { key: 'ArrowRight' });
@@ -938,11 +904,6 @@ describe('/progress 画面 — 取得の失敗', () => {
     expect(screen.getByRole('alert').textContent).not.toMatch(/窓口を持っていません/);
   });
 
-  /**
-   * 一度取れたあとの取り直しの失敗（issue #3069）。SWR は `data` を残して `error` を立てるので、
-   * 直す前は帯が無く、止まった数が今の値に見えた。方針は「画面を奪わず、その場で言う」——
-   * 4枚は残したまま、上に失敗の帯を出す。取り直しが通れば帯は消える。
-   */
   it('取れたあとの取り直しが失敗しても、4枚は残したまま、上に失敗の帯を出す', async () => {
     let failing = false;
     stubFetch((url) => {
@@ -992,7 +953,6 @@ describe('/progress 画面 — 割合（%）を出さない', () => {
     await card('見込み');
     expect(document.body.textContent).not.toContain('%');
     expect(document.body.textContent).not.toContain('％');
-    // Meter / shadcn Progress の role も使っていない。
     expect(screen.queryByRole('progressbar')).toBeNull();
     expect(screen.queryByRole('meter')).toBeNull();
   });
@@ -1047,7 +1007,6 @@ describe('/progress 画面 — 内部の語と式を見せない（#2785）', ()
     renderPage();
     await card('見込み');
 
-    // 折りたたみ（開発者向けの詳細）を取り除いた本文だけを見る。
     const clone = document.body.cloneNode(true) as HTMLElement;
     clone.querySelectorAll('details').forEach((el) => el.remove());
     const text = clone.textContent ?? '';

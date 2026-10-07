@@ -25,42 +25,20 @@ import {
 } from '@alteroid/logic';
 import type { Progress, ProgressForecast, ProgressForecastBasis } from '@alteroid/logic';
 
-/**
- * `/progress` — 作業の進捗（積み上がり・実施中・片付いた速度・見込み）を読む
- * （Issue #2241 の 4。画面の設計は同 Issue の最後のコメント）。
- *
- * 経路は `GET /progress` の1本だけ。**読んで並べるだけで、数え直さない・作らない。**
- * CLI（`alteroid progress`）とクローンの道具（`progress_read`）が同じ集計を見る。
- *
- * ## 割合（%）を1つも出さない
- *
- * 台帳には締切も総量も無く、分母（「全部」）が定まらない。だから `Meter` / `StackedBar` /
- * shadcn の `Progress`（どれも割合か、分母を前提にした帯）は使わず、件数と時間だけを
- * `Stat` / `KeyValueList` で並べる。**取れない値（`null`）は `—` と理由で出し、0 とは書かない。**
- *
- * ## 版のずれ
- *
- * Web とデーモンは別々にデプロイされるので、デーモンが知らない `forecast.state` /
- * `reason` を返す時間が在る。型は網羅してあるが、実行時の倒れ先の文言も持つ。
- */
-
+// 割合（%）を出さない: 台帳には締切も総量も無く、分母が定まらないため
 const NONE = '—';
 
-/** 窓の選択肢（時間）。24時間 / 7日 / 30日。 */
 const WINDOWS = [24, 168, 720] as const;
 type WindowHours = (typeof WINDOWS)[number];
-/** デーモンの既定（`GET /progress` の `windowHours` の既定）と揃える。 */
 const DEFAULT_WINDOW: WindowHours = 168;
 const WINDOW_PARAM = 'windowHours';
 const WINDOW_LABEL: Record<WindowHours, string> = { 24: '24時間', 168: '7日', 720: '30日' };
 
-/** URL の `?windowHours=` を窓へ。知らない値・欠けは既定へ倒す（URL は人間が書き換えうる）。 */
 function parseWindow(raw: string | null): WindowHours {
   const found = WINDOWS.find((hours) => String(hours) === raw);
   return found ?? DEFAULT_WINDOW;
 }
 
-/** URL の値は使い手が書いたものなのでそのまま出すが、長すぎるときは切る。 */
 const RAW_VALUE_MAX = 40;
 function clipRawValue(raw: string): string {
   const chars = Array.from(raw);
@@ -71,17 +49,11 @@ export default function ProgressPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const rawWindow = searchParams.get(WINDOW_PARAM);
   const windowHours = useMemo(() => parseWindow(rawWindow), [rawWindow]);
-  /**
-   * **知らない値は黙って読み替えない（issue #3741。`usage.tsx` の `invalidFrom` と同じ線）。**
-   * 既定の窓で表示したまま、読めなかった生の値を注記で言う。パラメタが無いときと空文字のときは
-   * 「指定なし」なので言わない。選び直せば URL が正しい値になり、注記は消える。
-   */
   const invalidWindow =
     rawWindow !== null && rawWindow !== '' && !WINDOWS.some((hours) => String(hours) === rawWindow)
       ? rawWindow
       : null;
   const { data, error, isLoading, isValidating, mutate } = useProgress(windowHours);
-  // 表示中の data を最後に読めた窓。失敗したとき、いまの窓と違えば「前の期間の数字」と言う（#3419）。
   const [okWindow, setOkWindow] = useState<number>();
   if (data !== undefined && error === undefined && !isLoading && okWindow !== windowHours) {
     setOkWindow(windowHours);
@@ -110,7 +82,7 @@ export default function ProgressPage() {
         <ChoiceChips
           label="期間の長さ"
           options={WINDOWS.map((hours) => ({ value: String(hours), label: WINDOW_LABEL[hours] }))}
-          // 知らない値のときは、どのチップも選ばれていない形にする。7日を押せば選び直せて、注記が消える（#3741）。
+          // 知らない値のときはどのチップも選ばれていない形にする: 7日を押せば選び直せて注記が消えるため
           value={invalidWindow ?? String(windowHours)}
           onChange={(value) => selectWindow(parseWindow(value))}
         />
@@ -140,13 +112,11 @@ export default function ProgressPage() {
         </Card>
       ) : (
         <div className="flex flex-col gap-4" aria-busy={isLoading}>
-          {/* 前の期間の数字を見せている間は、数字のそばでそう言う（#3419）。 */}
           {isLoading && (
             <p role="status" className="text-xs text-muted-foreground">
               前の期間の数字を表示しています。新しい期間で読み込み中です。
             </p>
           )}
-          {/* 取り直しの失敗は、古い数を残したまま帯で言う（issue #3069。画面を奪わない）。 */}
           {error !== undefined && (
             <Card>
               <LoadError
@@ -173,7 +143,7 @@ export default function ProgressPage() {
   );
 }
 
-/** 件数。`null` になりうる量にはこれを使わない（0 と区別できなくなる）。 */
+// null になりうる量には使わない: 0 と区別できなくなるため
 function count(value: number): string {
   return String(value);
 }
@@ -183,7 +153,6 @@ function hoursText(value: number | null): string {
   return `${String(Math.round(value * 10) / 10)} 時間`;
 }
 
-/** 時刻と、観測時刻から見た経過。`null` は `—`。 */
 function atText(iso: string | null, observedAt: string): string {
   if (iso === null) return NONE;
   return `${formatDateTime(iso)}（${formatRelative(iso, new Date(observedAt).getTime())}）`;
@@ -197,14 +166,8 @@ function StatRow({ children }: { children: ReactNode }) {
   return <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">{children}</div>;
 }
 
-/**
- * open の Issue / PR。**デーモンは GitHub を見に行かず、観測した側が記録した数を返すだけ**
- * （Issue #2245）。だから「誰の観測か」「いつか」「母集合の切り方」を必ず並べ、古さは判定しない。
- * 取れなかった回は数を作らず `—` と理由を出し、0 とは書かない。
- */
 function GithubBlock({ github, observedAt }: { github: Progress['github']; observedAt: string }) {
-  // 記録が1件も無い間は欄ごと載せない（#2970）。alteroid の作業は GitHub に限らないので、
-  // 観測していない欄を毎回出さない。呼び出し側（`BacklogCard`）が区切り線ごと外す。
+  // 記録が1件も無い間は欄ごと載せない: alteroid の作業は GitHub に限らないため
   if (github.state === 'not_observed') return null;
   if ((github.state as string) !== 'observed') {
     return (
@@ -257,9 +220,7 @@ function GithubBlock({ github, observedAt }: { github: Progress['github']; obser
                     label: '記録した時刻',
                     value: `${atText(row.latestOk.observedAt, observedAt)} / 記録したのは: ${githubObservedByLabel(row.latestOk.observedBy)}`,
                   },
-                  // **観測側が名乗った `query`（`gh issue list --state open` など）は自由文で、
-                  // 画面の言葉へ解釈できない。** 本文には出さず、下の折りたたみへ置く。
-                  // 件数の上限と「実際はこれ以上」だけは利用者の言葉で言える。
+                  // query を本文に出さない: 観測側が名乗った自由文で、画面の言葉へ解釈できないため
                   ...(row.latestOk.limit === undefined && !row.latestOk.truncated
                     ? []
                     : [
@@ -276,7 +237,6 @@ function GithubBlock({ github, observedAt }: { github: Progress['github']; obser
                 ]}
                 labelWidth="8rem"
               />
-              {/* 数えた条件の原文は開発者向けなので、折りたたみの先に置く。 */}
               <details className="text-xs text-muted-foreground">
                 <summary className="cursor-pointer">数えた条件の詳細（開発者向け）</summary>
                 <code className="mt-1 block font-mono break-words">{row.latestOk.query}</code>
@@ -306,7 +266,7 @@ function GithubBlock({ github, observedAt }: { github: Progress['github']; obser
 function BacklogCard({ progress }: { progress: Progress }) {
   const { backlog, github, observedAt } = progress;
   const { byOrigin, age, byState, completeness } = backlog;
-  // 刈られた完了済みの記録（`trimmedClosed`）は未完了の数に影響しないので、判定に入れない。
+  // trimmedClosed を判定に入れない: 刈られた完了済みの記録は未完了の数に影響しないため
   const partial = completeness.unreadable !== 0;
   // 読めない行があるのに「無いため」と言うと、読めなかった未了の存在を打ち消してしまう。
   const noneReason = partial
@@ -361,12 +321,8 @@ function BacklogCard({ progress }: { progress: Progress }) {
   );
 }
 
-/**
- * 読めない委譲の行（issue #2345）の断り。委譲の数（任せた・実行中・終わった依頼）を出す
- * カードの全部に置く。デーモンが古いと欄が無いので、型は number でも無いことを許す
- * （無いときは「0 件」ではなく、何も言わない）。
- */
 function UnreadableJobsNote({ progress }: { progress: Progress }) {
+  // 欄が無いことを許す: デーモンが古いと欄が無く、無いときは「0 件」ではなく何も言わないため
   const unreadableJobs =
     (progress.backlog.completeness as { unreadableJobs?: number }).unreadableJobs ?? 0;
   if (unreadableJobs === 0) return null;
@@ -448,7 +404,7 @@ function ThroughputCard({ progress }: { progress: Progress }) {
   );
 }
 
-/** 古いデーモン（欄が無い応答）では、型は boolean でも無いことを許す。無いときは注記を出さない。 */
+// 欄が無いことを許す: 古いデーモンの応答には欄が無く、無いときは注記を出さないため
 function mayBeUndercounted(throughput: Progress['throughput']): boolean {
   return (throughput as { mayBeUndercounted?: boolean }).mayBeUndercounted === true;
 }
@@ -467,7 +423,6 @@ function reasonText(reason: string): string {
     : '目安を出せない理由が、この画面では分かりません。画面かサーバを更新してください';
 }
 
-/** 日にちを添えるのは長いときだけ（48時間以上）。 */
 function drainText(hours: number): string {
   const base = hoursText(hours);
   return hours >= 48 ? `${base}（約 ${String(Math.round((hours / 24) * 10) / 10)} 日）` : base;
@@ -483,7 +438,6 @@ function ForecastCard({ progress }: { progress: Progress }) {
       />
       <Section>
         <ForecastBody forecast={forecast} />
-        {/* 版のずれで basis が欠けても落ちない。 */}
         {(forecast.basis as ProgressForecastBasis | undefined) !== undefined && (
           <BasisList
             basis={forecast.basis}
@@ -528,7 +482,7 @@ function ForecastBody({ forecast }: { forecast: ProgressForecast }) {
         </>
       );
     default: {
-      // 型は網羅済み。ここに来るのは、デーモンが先に新しい状態を返したとき。
+      // 型は網羅済みでも倒れ先を置く: デーモンが先に新しい状態を返すことがあるため
       const unknown: never = forecast;
       void unknown;
       return (
@@ -558,7 +512,6 @@ function BasisList({ basis, notice }: { basis: ProgressForecastBasis; notice?: s
           件あるため、未完了の数は実際より少ない可能性があります。
         </p>
       )}
-      {/* 計算式は開発者向けなので、折りたたみの先に置く。 */}
       <details className="mt-2 text-xs text-muted-foreground">
         <summary className="cursor-pointer">計算の詳細（開発者向け）</summary>
         <code className="mt-1 block font-mono break-words">{basis.method}</code>
@@ -568,10 +521,7 @@ function BasisList({ basis, notice }: { basis: ProgressForecastBasis; notice?: s
   );
 }
 
-/**
- * 成功した観測の CI の軸（#2549）。**`ci` が無いことは「観測していない」と出す**——`success 0` とは書かない。
- * `describeGithubCi`（core）と同じ並び・同じ数。件数の軸の名前だけ、表示の直前に `GITHUB_CI_COUNT_LABEL` で日本語へ写す。
- */
+// ci が無いことを success 0 と書かない: 「観測していない」と出すため
 function ciText(ok: {
   ci?: {
     pulls: number;

@@ -1,107 +1,21 @@
-/**
- * `main-ci-alarm.mjs` の判定だけを切り出したもの（Issue #1207）。
- *
- * ## 何を塞ぐために在るか
- *
- * **`main` の post-merge CI が落ちても、それを知らせる経路が repo の中に1本も
- * 無かった。** #1207 の実測（2026-08-18〜09-17 の28日）:
- *
- * - `workflow=CI` かつ `event=push`（＝ post-merge）の失敗が **6回**
- * - `.github/workflows/` の8本のどこにも `if: failure()` の step も、失敗に
- *   反応する workflow も無い
- * - ⚠️ **repo の外は見えていない。** GitHub は既定で、失敗した run を**起こした
- *   人**へメールを送る設定を持つ。有効かどうかはアカウント側の設定なので、
- *   **「誰も気づかない」とまでは言えない。** 言えるのは **「repo の中に自動の
- *   経路は1本も無い」** までである ⟹ **ここが足すのはその1本目である。**
- *
- * ## ⛔ この道具が「知らせる」だけで、何も止めないこと
- *
- * **これは警報であって門ではない。** ⛔ **止める門は存在しない** —— 赤い `main`
- * はそのまま `release/prod` へ流れる。「赤なら止める」門は Issue #1207 の (3) で
- * 検討し、実測（28日で門の発動0回／発動していたとしても6件中5件は flaky による
- * 誤停止／唯一の本物の障害 #734 はこの手の門では拾えない／止まると反映は夜1回
- * しか無いので空白は最長で丸1日）を根拠に**作らないと決めている**（出典は
- * Issue #1207 のコメント群、および `.github/scripts/record-release-prod-ci-core.mjs`
- * の doc）。**この理由を再検討せずに「やっぱり門を足す」へ戻さないこと。**
- *
- * 対になるのは門ではなく**記録**である（`release-prod.yml` の記録 step。
- * `.github/scripts/record-release-prod-ci.mjs`）——反映した sha が実際に赤かった
- * 晩は、その記録がここの立てた警報 Issue へ「この赤は本番へ出た」と足す。
- * **片方（知らせるだけ、記録するだけ）で「塞いだ」と言わないこと**（詳しくは
- * `.github/workflows/main-ci-alarm.yml` の doc）。
- *
- * ## 宛先を1つに絞ってある（この repo の既存の方針に合わせる）
- *
- * この repo は「**新しい自動投稿の宛先を無断で作らない**」という方針を明文で
- * 持っている（逐語は
- * `grep -Fn -- '新しい自動投稿の宛先を無断で作らない' scripts/check-scripts-wired.test.ts`）。
- * ⟹ **宛先は「この repo の Issue」1つだけにする。** Slack も、外部の
- * `POST /events` も叩かない（#896 の受け口は source の検証が無いと自認されて
- * いるので、警報の経路には選ばない）。
- *
- * ## 同じ赤で Issue を増やさない鍵は「workflow 名 ＋ head_sha」である
- *
- * ⛔ **「open な警報 Issue が1つでも在れば黙る」形にしないこと。** それだと、
- * 誰も閉じないまま残った1本が**以後すべての警報を飲み込む**（＝
- * `AGENTS.md`「静かに失敗する道具」そのもの）。
- *
- * ⛔ **run ごとに1本立てる形にもしないこと。** `main` が赤いまま何晩か続くと、
- * 夜の反映が止まるたびに新しい Issue が生える。
- *
- * ⟹ **鍵は「どの workflow が、どの sha で落ちたか」にする。**
- *
- * - 同じ sha で同じ workflow がまた落ちた（再実行・翌晩の反映）⟹ 既存の Issue へ
- *   **コメントを足す**
- * - `main` が進んで sha が変わった ⟹ **別の Issue を立てる**（別の赤である）
- * - **同じ run を二度書かない**（警報 workflow 自体が再実行されても増えない）
- *
- * ## 閉じるのは人である（自動で閉じない）
- *
- * `main` が緑へ戻ったら自動で閉じる形も考えたが、**採らなかった。** 理由は2つ:
- *
- * 1. `workflow_run` の `success` にも反応することになり、**マージのたびに job が
- *    1本起きる**（実測 2026-09-17 の `main` への push は16時間で30回）。警報1回の
- *    ために毎回の成功で器を立てるのは釣り合わない
- * 2. 「反映した sha が実際に赤かったか」を毎晩判定して記録するのは記録 step
- *    （`.github/scripts/record-release-prod-ci.mjs`）の役目であって、警報 Issue
- *    の役目ではない。⟹ 警報 Issue が現在地の正本である必要が無い
- *
- * ⟹ **Issue の本文に「直したら閉じてよい」と書いておく**（`buildIssueBody`）。
- */
+// 「赤なら止める」門を足さない: 28日で発動0回・6件中5件は flaky による誤停止で、反映が夜1回のため空白が最長で丸1日になる（Issue #1207 の (3)）。
+// 宛先は Issue 1つに絞る: 新しい自動投稿の宛先を無断で作らない方針のため。Slack や外部の `POST /events`（source の検証が無い）は叩かない。
+// 「open な警報 Issue が1つでも在れば黙る」形にしない: 誰も閉じない1本が以後すべての警報を飲み込むため。run ごとに1本立てる形にもしない: 赤が続くと夜の反映のたびに Issue が生えるため。
+// 自動で閉じない: `workflow_run` の `success` にも反応してマージのたびに job が起き、警報1回のために釣り合わないため。
 
-/**
- * Issue 本文へ埋める印の接頭辞。**この文字列で探す**ので、変えると過去の警報
- * Issue が見つからなくなり、同じ赤で2本目が立つ（壊れはしないが増える）。
- */
+// 印の接頭辞を変えない: 過去の警報 Issue が見つからなくなり、同じ赤で2本目が立つため。
 export const ALARM_MARKER_PREFIX = 'alteroid:main-ci-alarm';
 
-/**
- * 「どの workflow が、どの sha で落ちたか」を1つの文字列にする。
- *
- * workflow 名はそのまま入れる（`release/prod へ反映` のように空白も日本語も
- * 含むが、埋める先が HTML コメントなので害は無い）。**slug へ潰さない** ——
- * 潰すと `CI` と `C-I` のような別物が同じ鍵になりうるし、人が Issue の本文を
- * 読んだときにどの workflow の話か分からなくなる。
- */
+// workflow 名を slug へ潰さない: `CI` と `C-I` のような別物が同じ鍵になりうるため。
 export function alarmKey(workflowName, headSha) {
   return `${workflowName}@${headSha}`;
 }
 
-/** Issue 本文へ埋める印。`findOpenAlarmIssue` はこの文字列の完全一致で探す。 */
 export function alarmMarker(key) {
   return `<!-- ${ALARM_MARKER_PREFIX} key=${key} -->`;
 }
 
-/**
- * open な Issue 群から、この鍵の警報 Issue を1本選ぶ。
- *
- * ⚠️ **`gh api repos/{repo}/issues` は Pull Request も混ぜて返す。** PR には
- * `pull_request` プロパティが付くので、それで落とす —— 落とさないと、たまたま
- * 本文に印を含む PR（この PR 自身がそうなりうる）を警報 Issue と取り違える。
- *
- * @param {{number:number, body?:string|null, pull_request?:unknown}[]} issues
- * @param {string} marker `alarmMarker()` の戻り値
- */
+// `pull_request` プロパティを持つものを落とす: `repos/{repo}/issues` は PR も混ぜて返し、本文に印を含む PR を警報 Issue と取り違えるため。
 export function findOpenAlarmIssue(issues, marker) {
   return (
     issues.find(
@@ -113,58 +27,22 @@ export function findOpenAlarmIssue(issues, marker) {
   );
 }
 
-/**
- * この run の話が既に書かれているか。
- *
- * **警報 workflow 自身が再実行されても増やさない**ために要る。`texts` には
- * Issue 本文と既存コメントの本文を全部渡す。
- */
 export function runAlreadyMentioned(texts, runId) {
   const needle = runMention(runId);
   return texts.some((text) => typeof text === 'string' && text.includes(needle));
 }
 
-/**
- * run を指す文字列。**本文にもコメントにも同じ形で埋める**ので、ここを変える
- * ときは両方が変わる（`runAlreadyMentioned` が探すのもこれである）。
- */
 export function runMention(runId) {
   return `run ${runId}`;
 }
 
-/**
- * 取り消された run を見分けるときの対象 workflow と、集約ゲートの job 名。
- *
- * `ci.yml` の `ci` ジョブは `needs` の job が cancelled でも `exit 1` する
- * （`if: always()`。skipped にすると必須チェックが「通った」と読まれうるため、
- * 判定は変えない —— 逐語は `ci.yml` の `ci` ジョブの直上の doc）。そのため、
- * 後続の push で `cancel-in-progress` に取り消された `main` の run も、
- * workflow の conclusion は `failure` になる（Issue #3044。#3040 が偽の警報）。
- * **`workflow_run` の conclusion だけでは本物の失敗と見分けられない**ので、
- * jobs を見る。名前は `ci.yml` と一致していなければならない（歯:
- * `main-ci-alarm.test.ts` の「取り消し判定の名前が ci.yml と一致する」）。
- */
+// `workflow_run` の conclusion だけで判定せず jobs を見る: `ci` ジョブは cancelled でも `exit 1` するため、取り消された run も `failure` になり本物の失敗と見分けられない。
 export const CANCEL_AWARE_WORKFLOW_NAME = 'CI';
 export const GATE_JOB_NAME = 'ci';
 
-/** 「失敗」と数えない job の conclusion。**これ以外はすべて失敗側に数える**（安全側）。 */
 const NOT_FAILED_CONCLUSIONS = new Set(['success', 'skipped', 'cancelled', 'neutral']);
 
-/**
- * 取り消された run（＝本物の失敗ではない）か。
- *
- * ⟹ **次の2つが両方成り立つときだけ** true:
- *
- * 1. 失敗した job が1つ以上在り、**そのすべてが集約ゲート（`ci`）である**
- * 2. `cancelled` の job が1つ以上在る
- *
- * ⛔ **本物の失敗が cancelled と混ざっているときは false**（今までどおり鳴らす）。
- * ⛔ **jobs が取れなかった（`null` / 配列でない）ときも false** —— 取れないことを
- * 「取り消された」へ倒すと、警報が黙って消える。
- * 失敗の job が1つも見えない（ゲートも含めて）ときも false（説明のつかない赤は鳴らす）。
- *
- * @param {{name:string, conclusion:string|null}[]|null|undefined} jobs
- */
+// jobs が取れなかったときや本物の失敗が cancelled と混ざっているときは取り消しとみなさない: 警報が黙って消えるため。
 export function isCancelledRun(jobs) {
   if (!Array.isArray(jobs)) return false;
   const failed = jobs.filter((j) => !NOT_FAILED_CONCLUSIONS.has(j.conclusion ?? ''));
@@ -173,33 +51,19 @@ export function isCancelledRun(jobs) {
   return jobs.some((j) => j.conclusion === 'cancelled');
 }
 
-/**
- * 警報を出す状況かどうか。
- *
- * **workflow 側の `if:` と二重になっているのは承知のうえである。** `if:` は
- * YAML 式で、外した／書き間違えたときに**静かに全部通す**側へ倒れる。ここで
- * もう一度見ておけば、少なくとも「関係ない run で Issue を立てた」は起きない。
- *
- * `jobs` は **`CANCEL_AWARE_WORKFLOW_NAME` の run にだけ**効く。省略（`undefined`）・
- * `null`（取得に失敗）のときは取り消しとみなさず、今までどおり鳴らす。
- *
- * @param {{conclusion:string|null, headBranch:string|null, defaultBranch:string, workflowName?:string, jobs?:{name:string, conclusion:string|null}[]|null}} input
- */
+// workflow 側の `if:` と二重に見る: `if:` は外した・書き間違えたときに静かに全部通す側へ倒れるため。
 export function shouldAlarm({ conclusion, headBranch, defaultBranch, workflowName, jobs }) {
   if (conclusion !== 'failure') {
     return { alarm: false, reason: `conclusion=${conclusion} は failure ではない` };
   }
   if (headBranch !== defaultBranch) {
-    // PR の run はここで落ちる。**PR の赤は PR の画面に出ているので、警報の
-    // 対象ではない** —— 知らせる経路が無いのは main のほうである。
+    // PR の run は警報の対象にしない: PR の赤は PR の画面に出ており、知らせる経路が無いのは main のほうのため。
     return {
       alarm: false,
       reason: `head_branch=${headBranch} は default branch（${defaultBranch}）ではない`,
     };
   }
   if (workflowName === CANCEL_AWARE_WORKFLOW_NAME && isCancelledRun(jobs)) {
-    // 後続の push に取り消された run。集約ゲート `ci` が cancelled を見て
-    // 落ちているだけで、本物の失敗は無い（Issue #3044）。
     return {
       alarm: false,
       reason: `失敗したのは集約ゲート（${GATE_JOB_NAME}）だけで、ほかの job が cancelled —— 取り消された run であって本物の失敗ではない`,
@@ -208,12 +72,6 @@ export function shouldAlarm({ conclusion, headBranch, defaultBranch, workflowNam
   return { alarm: true, reason: `${defaultBranch} の run が failure で終わった` };
 }
 
-/**
- * 既存の Issue とそのコメントを見て、次の一手を決める。
- *
- * @param {{issue: {number:number, body?:string|null}|null, commentBodies: string[], runId: number|string}} input
- * @returns {{kind:'create'|'comment'|'skip', issueNumber?:number, reason:string}}
- */
 export function decideAlarmAction({ issue, commentBodies, runId }) {
   if (issue === null) {
     return { kind: 'create', reason: 'この鍵の open な警報 Issue が無い' };
@@ -233,21 +91,12 @@ export function decideAlarmAction({ issue, commentBodies, runId }) {
   };
 }
 
-/**
- * Issue のタイトル。**sha を12桁入れる** —— 一覧で見たときに、同じ赤の続きか
- * 別の赤かがタイトルだけで分かるようにするため。
- */
+// タイトルに sha を12桁入れる: 一覧で同じ赤の続きか別の赤かがタイトルだけで分かるようにするため。
 export function buildIssueTitle({ workflowName, headSha }) {
   return `${workflowName} が main で落ちた（${headSha.slice(0, 12)}）`;
 }
 
-/**
- * Issue の本文。
- *
- * **「次の一手」を必ず書く。** 警報が「赤いですよ」だけを言って消えると、読んだ
- * 側は結局 Actions を開いて自分で辿り直すことになる ⟹ run の URL、落ちた
- * workflow、sha、そして**この Issue を閉じてよい条件**まで書く。
- */
+// 本文に「次の一手」（run の URL・落ちた workflow・sha・この Issue を閉じてよい条件）を書く: 「赤いですよ」だけだと読んだ側が Actions を開いて辿り直すことになるため。
 export function buildIssueBody({ workflowName, headSha, runId, runUrl, key, extraLines = [] }) {
   return [
     `**\`main\` で \`${workflowName}\` が失敗した。**`,
@@ -274,7 +123,6 @@ export function buildIssueBody({ workflowName, headSha, runId, runUrl, key, extr
   ].join('\n');
 }
 
-/** 同じ鍵の赤がまた出たときに足すコメント。 */
 export function buildCommentBody({ workflowName, headSha, runId, runUrl, extraLines = [] }) {
   return [
     `**同じ sha でまた失敗した。** \`${workflowName}\` / \`${headSha.slice(0, 12)}\``,
