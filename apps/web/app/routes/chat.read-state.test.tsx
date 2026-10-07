@@ -321,7 +321,7 @@ describe('送信して、返答の完了まで居たとき', () => {
               [
                 { event: 'open', data: { conversationId: ID } },
                 { event: 'text', data: { type: 'text', text: '考え中の途中の文字' } },
-                { event: 'error', data: { type: 'error', message: '接続が切れた' } },
+                { event: 'error', data: { type: 'error', message: '接続が切れた', kind: 'other' } },
               ],
               { signal: init?.signal },
             )

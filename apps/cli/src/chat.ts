@@ -913,6 +913,11 @@ export async function findClientMessage(
   return id;
 }
 
+const TURN_FAILURE_HINT: Readonly<Record<'auth' | 'quota', string>> = {
+  auth: 'クローンの認証が通りません。認証トークンが登録されているか確かめてください。',
+  quota: '利用上限に当たっています。上限が開いたあとに、もう一度送ってください。',
+};
+
 /** 描いている応答が、改行前のまま溜めている本文の断片を書き切る口（描いていなければ `null`）。 */
 let flushRenderedText: (() => void) | null = null;
 
@@ -1036,8 +1041,14 @@ async function renderChatEvents(
         case 'error': {
           ended = true;
           failedOrLimited = true;
-          const data = event.json<{ message: string }>();
+          const data = event.json<{ message: string; kind?: string }>();
           stdout.write(`\nエラー: ${data ? redactError(data.message) : '不明'}\n`);
+          // 文面からは推し量らない: 種別はデーモンが `kind` で運ぶ。
+          const hint =
+            data?.kind === 'auth' || data?.kind === 'quota'
+              ? TURN_FAILURE_HINT[data.kind]
+              : undefined;
+          if (hint !== undefined) stdout.write(`${hint}\n`);
           onFailed?.(`応答がエラーで終わった（${data ? redactError(data.message) : '不明'}）`);
           break;
         }
