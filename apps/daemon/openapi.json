@@ -17998,7 +17998,7 @@
         "operationId": "patchCommitmentsById",
         "tags": ["commitments"],
         "summary": "引き受けた仕事の本文を後から直す",
-        "description": "編集できるのは `origin` が `human` かつまだ片付いていない行の `body` だけ。クローン（`self`）やマネージャー（`manager`）が立てた行は人間からは直せない。`origin` / `source` / `at` / `closedAt` / `closedReason` / `closedBy` は変わらない。編集の前後の本文は日誌（`decision`）へ逐語で残る。",
+        "description": "編集できるのは `origin` が `human` かつまだ片付いていない行の `body` だけ。クローン（`self`）やマネージャー（`manager`）が立てた行は人間からは直せない。`origin` / `source` / `at` / `closedAt` / `closedReason` / `closedBy` は変わらない。編集の前後の本文は日誌（`decision`）へ逐語で残る。任意の `ifMatch`（`GET /commitments` で読んだ行の `editedAt ?? at`）を付けると、版が違うときは書かずに 409。省略は従来どおり後勝ち。",
         "responses": {
           "200": {
             "description": "直した。",
@@ -18066,17 +18066,85 @@
             }
           },
           "409": {
-            "description": "既に片付いている（いつ・どう片付いたかを本文に入れて返す）。または、台帳に在るが読めない形で入っている（close で閉じることはできるが、書き直せない）。",
+            "description": "次の3つ。(1) 既に片付いている（いつ・どう片付いたかを本文に入れて返す）。(2) 台帳に在るが読めない形で入っている（close で閉じることはできるが、書き直せない）。(3) `ifMatch` がいまの版（`editedAt ?? at`）と違う（読んでから書くまでの間に別の書き手が直した、または消えた）。**何も書いていない。** `current` にいまの行を返す（消えていれば null）。(3) だけが `current` の鍵を持つ。",
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        },
+                        "current": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "id": {
+                                  "type": "string"
+                                },
+                                "at": {
+                                  "type": "string",
+                                  "format": "date-time",
+                                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                                },
+                                "origin": {
+                                  "type": "string",
+                                  "enum": ["human", "manager", "external", "self"]
+                                },
+                                "source": {
+                                  "type": "string"
+                                },
+                                "body": {
+                                  "type": "string"
+                                },
+                                "closedAt": {
+                                  "type": "string",
+                                  "format": "date-time",
+                                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                                },
+                                "closedReason": {
+                                  "type": "string"
+                                },
+                                "closedBy": {
+                                  "description": "既知の値は 'clone' | 'human'（commitmentClosedBySchema）。無いこともある（この欄が入る前の行）。台帳の完全性より由来の注記の厳密さを優先しないため、型としては任意の文字列を許す。",
+                                  "type": "string"
+                                },
+                                "bodyMarkup": {
+                                  "type": "string"
+                                },
+                                "editedAt": {
+                                  "type": "string",
+                                  "format": "date-time",
+                                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                                },
+                                "editedBy": {
+                                  "description": "既知の値は 'clone' / 'human'（commitmentEditedBySchema）。無ければ一度も編集されていない。台帳の完全性より由来の注記の厳密さを優先しないため、型としては任意の文字列を許す。",
+                                  "type": "string"
+                                }
+                              },
+                              "required": ["id", "at", "origin", "body"]
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      },
+                      "required": ["error", "current"]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["error"]
                     }
-                  },
-                  "required": ["error"]
+                  ]
                 }
               }
             }
@@ -18092,6 +18160,9 @@
                   "body": {
                     "type": "string",
                     "minLength": 1
+                  },
+                  "ifMatch": {
+                    "type": "string"
                   }
                 },
                 "required": ["body"]
