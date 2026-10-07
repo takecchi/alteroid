@@ -515,221 +515,48 @@ export interface CloneOptions {
 export type Listener = (event: ChatStreamEvent) => void;
 
 export interface Turn {
-  /** 出力を届ける会話。null なら人間に見せない内部ターン（蒸留など）。 */
   conversationId: string | null;
-  /**
-   * このターンが承認待ち（`ask_human`）への回答（`human_answer`）から
-   * 起きたものであれば、その承認の id（issue #782 の1）。それ以外の
-   * 起点（人間の発言・蒸留・自律・マネージャー発の確認）では null のまま。
-   *
-   * **`#runTurn` の `approvalId` 引数をそのまま載せる。** `case
-   * 'human_answer'` だけがこれを渡す——`#runInternal` / `#runHumanTurn`
-   * 経由のターンには渡す口が無いので、常に null になる。
-   */
   approvalId: string | null;
   text: string;
-  /**
-   * **人間（SSE）へ流した本文のうち、まだ日誌へ書いていない分を含む、返答の本文の全部**（#3605）。
-   * 日誌へ書く本文の元はこちらである（`text` は `TurnOutcome.text` 用で、assistant メッセージが
-   * 処理し終えた時点でしか伸びない）。
-   *
-   * **なぜ `text` でなくこちらか。** 道具の実行は、クローンが直前の assistant メッセージを処理し終える
-   * 前に始まりうる（`text_delta` はすでに流れ、`text` はまだ伸びていない）。承認カードを出す道具が
-   * 本文を日誌へ書くとき `text` を元にすると、**受信中に見えていた前半が欠ける**。区切りは「その時点まで
-   * に SSE へ流した本文」で決める——受信中に見せた順番と同じ順番で日誌に残すため。
-   *
-   * 伸ばす所: `text_delta`（流した片）・逐次配信が来ていない回の完成品（流した本文）・逐次配信の回で
-   * 片が1つも無かった assistant メッセージの本文（人間には出ないが、日誌には従来どおり残す）。
-   * 縮める所: SDK が「応答ではない」と印を付けたメッセージの分（`turn.rejected`。従来どおり返答に
-   * しない）。
-   */
+  // 日誌へ書く本文の元は `text` にしない: 道具の実行は直前の assistant メッセージの処理完了前に始まりうり、受信中に見えていた前半が欠けるため
   reply: string;
-  /** `reply` のうち、ここまでを日誌へ書いた（文字数）。 */
   replyWritten: number;
-  /** 直前の assistant メッセージを処理し終えた時点の `reply.length`（そのメッセージの片の範囲を知る）。 */
   replyMessageStart: number;
-  /** 逐次配信（stream_event）で本文を流したか。流していなければ完成品を流す。 */
   streamed: boolean;
-  /**
-   * SDK が「これは応答ではない」と印を付けたメッセージ（`assistant.error`）。
-   *
-   * **本文は `text` へ入れず、ここへ置く。** 直す前は `assistant` の text ブロックを
-   * 無条件に `text` へ足していたので、支出上限の文言がそのまま「クローンの応答」に
-   * なり、日報の本文にまでなった（`sdk-failure.ts` の doc）。
-   */
+  // 本文は `text` へ入れずここへ置く: 支出上限の文言がそのまま「クローンの応答」になり、日報の本文にまでなるため
   rejected: SdkFailure | null;
-  /**
-   * 失敗として畳んだ理由（`#reportFailure` が立てる）。
-   *
-   * **`#runTurn` の戻り値をこれで分岐させる。** 直す前の戻り値は `string` 一本で、
-   * 失敗しても `text`（部分出力か空文字）を返していた ＝ 呼び出し側は成否を
-   * 知る手段が無かった。
-   */
   failure: string | null;
-  /**
-   * このターンの中で観測した compaction（`AgentCompactionEvent` の写し。
-   * `type` は畳んで捨てる）。**`case 'compaction'` が push し、同じ
-   * `case 'turn_ended'` が読んで `turn_usage` へ載せる**（`schema.ts` の
-   * `turn_usage.compactions` の doc）。
-   *
-   * **配列にしてあるのは「1ターンに複数回」を否定できないからである**
-   * （`schema.ts` の同じ doc と揃える）。
-   */
+  // 配列にする: 「1ターンに複数回」の compaction を否定できないため
   compactions: CompactionObservation[];
   resolve: () => void;
-  /**
-   * このターンが蒸留のターンか、通常のターンか。`#runTurn` の `kind` 引数を
-   * そのまま載せる。
-   *
-   * **`#toolContext()` の `memoryCause` がこれを読む。** 道具（`memory_write` /
-   * `memory_append` / `memory_delete`）が書く日誌の `cause` を、いま走っている
-   * ターンの種類から導くためのもの — 呼び手（モデル）に申告させない
-   * （書き忘れ・書き間違いがそのまま計器の値になるのを避ける）。
-   */
+  // `cause` は呼び手（モデル）に申告させない: 書き忘れ・書き間違いがそのまま計器の値になるため
   kind: 'normal' | 'distill';
 }
 
-/**
- * `turn_usage.contextUsage` / `turn_usage.compactions`（`schema.ts`）の形を
- * ここで書き直さず、スキーマ側から引く。**二重に定義すると、どちらかを
- * 直し忘れたときに型は緑のまま日誌の形だけがずれる。**
- */
+// スキーマ側から引く: 二重に定義すると、どちらかを直し忘れたときに型は緑のまま日誌の形だけがずれるため
 type TurnUsageEntry = Extract<JournalEntry, { type: 'turn_usage' }>;
 type ContextUsageObservation = NonNullable<TurnUsageEntry['contextUsage']>;
 
 type CompactionObservation = NonNullable<TurnUsageEntry['compactions']>[number];
 
-/**
- * ターン1本の結果。**「文字列」ではなく「状態」で返す。**
- *
- * 直す前は `Promise<string>` で、失敗したターンでも本文（部分出力か空文字）が
- * 返っていた。呼び出し側（日報）は成否を判別できないので、**エラーの文言を
- * 応答として保存してしまう**。型で分けておけば、次に戻り値を使う者も同じ穴を
- * 踏めない。
- */
+// 文字列で返さない: 呼び出し側（日報）が成否を判別できず、エラーの文言を応答として保存してしまうため
 type TurnOutcome =
   | { status: 'answered'; text: string }
   | {
       status: 'failed';
       reason: string;
-      /**
-       * 枠（利用上限）で保持しているか。真なら**この合図は捨てられておらず、
-       * 枠が開いたら配り直される**（`#pump` の `finally` が `defer` する）ので、
-       * 呼び出し側は「もう書いた」という痕跡を残してはいけない。
-       *
-       * **同名の `Clone#heldForUsage`（`Set<string>`）とは別物である。**
-       * あちらは「どの合図を保持したか」を id で覚えて断り書きを1回に絞る器で、
-       * ここは「いま返しているこの1ターンが保持されたか」の真偽値。どちらも
-       * 同じ事実（枠で保持した）を指すので名前は揃えてあるが、**取り違えると
-       * 意味が反転する** — あちらは配り直しの後も id が残る（消すのは成功した
-       * とき）ので、`has()` を真偽値として使うと「もう保持は解けているのに
-       * 保持中」と読める。
-       */
+      // 真なら合図は捨てられず配り直されるので、呼び出し側は「もう書いた」痕跡を残さない。`Clone#heldForUsage`（Set）とは別物
       heldForUsage: boolean;
     };
 
-/**
- * `Clone#commit`（1件の合図を台帳へ開こうとする内部処理）が実際に何をしたか。
- *
- * **Issue #856 で足した。** 台帳を読み直しても id が見当たらないとき、
- * `'folded'`（Issue #954 提案3・`hasOpenManagerDuplicate` の重複判定で、開く前に
- * 既存行へ任せた——正常系）と、`'failed'`（`open()` 自体が例外を投げた）を
- * 区別できないと、`#commitmentNoticeFor` は前者まで「載せ損なった」として
- * 断ることになり、畳んだだけのターンにも毎回嘘の警告が出る。逆に区別を
- * 持たなければ後者を`'folded'`と取り違えて黙って見逃す——どちらの取り違えも
- * 許さないために、値として持たせてある。
- *
- * **`'existed'` は Issue #856 のレビューで追加した4つ目の値である。**
- * `CommitmentStore.open` は `boolean` を返す（`store.ts` の doc「同じ id が
- * 既に在れば何もしない（開いたら `true`）」）——**この戻り値を捨てて例外の
- * 有無だけで `'opened'` / `'failed'` に振り分けると、`open()` が `false`
- * （＝既に在ったので何もしなかった）を返した回まで `'opened'` と記録される。**
- * `open()` の doc が名指しで警告している事故そのもの（受信箱の合図は配り
- * 直されうるので、その id をそのまま使う自動 open は同じ id で二度呼ばれる）
- * が起きたとき——**二度目の呼びは `false` を返す**——それを `'opened'` と
- * 記録すると、`#commitmentNoticeFor` は再読した一覧（未了だけ）にその id が
- * 無いことを「載せ損なった」と誤って断り、「`commitment_open` で載せ直せ」と
- * 促す。**促した先の `commitment_open` はまた `open()` を呼ぶだけなので、
- * 一度片付けた仕事が配り直しのたびに開き直る**——`open()` の doc が警告する
- * まさにその事故がここから起きる。
- *
- * **`'folded'` と `'existed'` は意味が違う。** `'folded'` は `open()` が
- * **同一マネージャー×同一本文の未了を見つけて、その行へ任せた**
- * （{@link findOpenManagerDuplicate}）。`'existed'` は**同じ id の行が既に在った**
- * ——行が開いているか閉じているかは問わない。**どちらも「載せ損なった」ではない
- * ので `#commitmentNoticeFor` の `missing` からは同じく除くが、除く理由は
- * 別である。**
- *
- * **⚠️ Issue #1041 で、`'folded'` の意味が少しずれた。** かつては「`open()` を
- * **呼ぶ前に**呼ばないと決めた＝台帳には手を触れていない」だったが、判定が
- * `open()` の中へ移ったので、**いまは `open()` を呼んだうえで、その中で畳まれた**
- * である（`CommitmentOpenResult.folded`）。`#commitmentNoticeFor` から見た扱いは
- * 変わらない（どちらも `missing` から除く）。
- *
- * **⚠️ Issue #1088 / #1110 —— この値は「`#commit` が呼ばれた瞬間」の
- * スナップショットであって、その後の台帳の変化を映さない。** `'opened'` と
- * 記録された後、`#commit` を呼び直さないまま（＝この合図がまだ一度も
- * 配達されていないうちに、他のターンで `commitment_close` /
- * `commitment_close_many` が直接ストアを操作して）行が閉じられることが
- * ある。この場合も値はいつまでも `'opened'` のままで古びる——`'existed'`
- * とは違い、`open()` を呼び直していないので`open()` 自身の冪等性の恩恵を
- * 受けない。**だから `#commitmentNoticeFor` は、この値だけで「載せ損なった」
- * と断定しない** —— 台帳に行が実在するかどうか（開いているか閉じているかを
- * 問わず）を別に読み直して確かめる（`#commitmentNoticeFor` の `ledgerIds` の
- * doc）。値そのものは直さない——`#commit` を呼び直すたびに正しい値へ更新される
- * 性質は変えたくない（`#restoreUnreadPass` の再 `#commit` がまさにそれで
- * 直る経路であり、そちらは今回も直している）。直すのは「この値だけを見て
- * 断定する」側である。
- *
- * **`'unrecorded'` は Issue #1060 で足した5つ目の値である。** 台帳には
- * 実際に新しい行を開けた（`open()` が `opened: true` を返した）のに、
- * その id を機械自身が名乗った記録を日誌へ残せなかった、という状態を指す
- * （`#commit` の doc「Issue #1060 (段2)」）。**`'failed'` とは別の失敗である**
- * ——`'failed'` は台帳への書き込みそのものが失敗した（開けていない）のに対し、
- * `'unrecorded'` は台帳への書き込みは成功した後、その事実を日誌へ書き写す
- * 追記だけが失敗している。台帳の状態としては `'opened'` と同じである。
- *
- * **`#commitmentNoticeFor` の `missing` の絞りは、`'unrecorded'` を素通り
- * させる（`'folded'` / `'existed'` だけを除く現行の条件をそのまま使う）。**
- * これは意図的である——台帳には実際に開いているので、読み直した台帳
- * （`ledgerIds`。すぐ上の Issue #1088 / #1110 の段落）にこの id が見当たら
- * なければ、それは #856 本体の症状（載った後に行が消えた）であって、この段が
- * 新しく作った異常ではない。**そのうえで `'unrecorded'` はもう1つ別のことも
- * 言っている**——たとえ読み直しで見つかったとしても（＝ `missing` には
- * 現れなくても）、機械が名乗った記録そのものは日誌に無い。この2つ目の事実は
- * `missing` の集合とは独立に断る必要があるので、`#commitmentNoticeFor` は
- * `missing` とは別に `'unrecorded'` の id を集めて名指しする（下）。
- * **同じ id が両方の断り書きに重複して出ることは許容する**——「載った後に
- * 消えたかもしれない」（`missing`）と「名乗った記録を残せなかった」
- * （`unrecorded` の断り）は別のことを言っているので、片方が出たから
- * もう片方を隠す理由が無い。
- */
+// `open()` の戻り値（boolean）を捨てて例外の有無だけで振り分けない: 既に在って何もしなかった回まで 'opened' と記録され、配り直しのたびに仕事が開き直るため
+// この値だけで「載せ損なった」と断定しない: `#commit` 時点のスナップショットで、その後に台帳の行が閉じられても古びるため
 export type CommitOutcome = 'opened' | 'existed' | 'folded' | 'failed' | 'unrecorded';
 
 export function createClone(options: CloneOptions): CloneHost {
   return new Clone(options);
 }
 
-/**
- * `human_answer` 合図の id を、承認の行そのものから決まる形にする（issue #1977）。
- *
- * **ランダムな id（`randomUUID()`）だった頃は、`answerApproval` が2回目の
- * `#stores.jobs.putApproval`（配達済みの印）より前に落ちると、受信箱に積んだ
- * 合図と「回答済みで未配達」の行を、後から同じ回答だと突き合わせる手段が
- * 無かった。** ここを `approvalId` と `answeredAt` から決まる形にすることで、
- * `#reconcileUndeliveredAnswers`（`Clone` 本体）が同じ入力から同じ id を
- * 再現でき、`InboxStore#put` の「同じ id なら上書きする」性質にそのまま乗せて
- * 二重配達を避けられる。
- *
- * **同じ承認への2回目の回答は別の id になる。** `answeredAt` は
- * `answerApproval` が呼ばれるたびに `new Date().toISOString()` で新しく取るので、
- * 同じ `approvalId` でも回答のたびに違う id が出る——「1回目の回答の合図を
- * 2回目の回答で上書きしてしまう」事故を防ぐ。
- */
-/**
- * 既に終わった（回答済み・取り下げ済みの）承認への回答を断った（issue #2007。
- * `Clone#answerApproval` が投げる）。`apps/daemon` はこれを 409 に写す。
- */
 export class ApprovalAlreadySettledError extends Error {
   constructor(
     readonly approvalId: string,
@@ -742,11 +569,6 @@ export class ApprovalAlreadySettledError extends Error {
   }
 }
 
-/**
- * `selections` が承認待ちの `questions` と突き合わず、回答を断った（issue #2525。
- * `Clone#answerApproval` が投げる）。`apps/daemon` はこれを 400 に写す。
- * 何も書いていない（回答は立てていない）。
- */
 export class InvalidApprovalSelectionsError extends Error {
   constructor(
     readonly approvalId: string,
@@ -757,24 +579,11 @@ export class InvalidApprovalSelectionsError extends Error {
   }
 }
 
+// id はランダムにしない: `#reconcileUndeliveredAnswers` が同じ入力から同じ id を再現し、`InboxStore#put` の上書きで二重配達を避けるため
 export function humanAnswerEventId(approvalId: string, answeredAt: string): string {
   return `human-answer-${approvalId}-${answeredAt}`;
 }
 
-/**
- * `answerApproval` と `#reconcileUndeliveredAnswers` が、同じ承認から同じ形の
- * `human_answer` 合図を組み立てるための共有部品（issue #1977）。
- *
- * **`conversationId` / `answeredVia` の扱いを含め、直す前の `answerApproval` が
- * `this.post(...)` へ渡していた引数と1文字も変えていない。** 変わったのは
- * `id` を `randomUUID()` ではなく {@link humanAnswerEventId} で決めることだけ
- * である。
- *
- * `answer` / `answeredAt` を呼び出し側からの引数として受け取るのは、
- * `#reconcileUndeliveredAnswers` が読む承認の行の欄名（`PendingApproval.answer`
- * / `PendingApproval.answeredAt`）と、`answerApproval` がまだ書いていない
- * その場の値の、どちらからでも同じ形で呼べるようにするためである。
- */
 function buildHumanAnswerEvent(
   approval: Pick<PendingApproval, 'id' | 'conversationId'>,
   answer: string,
@@ -797,113 +606,41 @@ function buildHumanAnswerEvent(
 class Clone implements CloneHost {
   readonly #stores: Stores;
   readonly #driver: AgentCloneDriver;
-  /** 文脈の使用状況を出せない駆動役で、「取れない」を既に1回残したか（`#observeContextUsage`）。 */
   #contextUsageUnavailableNoted = false;
   readonly #cwd: string | undefined;
   readonly #sessionStore: SessionStore | undefined;
-  /**
-   * SDK が生ログを預けるときの scope（`SessionKey.projectKey`）。
-   *
-   * **`append` が渡してくる値をそのまま控える**（`withProjectKeyProbe`）。**`cwd` から
-   * 計算し直さないこと** —— SDK の型定義が「sanitized cwd。200 文字を超えたら切って
-   * djb2 のハッシュを足す」と書いており、再実装は静かにずれる。
-   *
-   * ⚠️ **このプロセスで `append` が1度も来ていなければ `null` である。** 器を跨いだ値は
-   * `SessionRegistry.getProjectKey()` が持つ（そちらの doc に、なぜ跨ぐ必要があるかを書いた）。
-   */
+  // `cwd` から計算し直さない: SDK の sanitize（200 文字超は切って djb2 のハッシュを足す）の再実装は静かにずれるため
   #projectKey: string | null = null;
   readonly #managers: ManagerPool;
-  /**
-   * このクローンのモデル帯。本セッションと蒸留のサイドクエリで必ず同じものを
-   * 使う（片方だけ帯が違うと、蒸留＝人格の書き手だけが別の頭になる）。
-   */
+  // 本セッションと蒸留のサイドクエリで同じものを使う: 片方だけ帯が違うと、蒸留＝人格の書き手だけが別の頭になるため
   readonly #model: string;
-  /** 自己認識の材料。デーモンが組み立てて渡す（テストでは省略される）。 */
   readonly #self: SelfFacts | undefined;
-  /** runner が名乗った provider id から欠落の判定に要る事実を引く（偽 provider のテスト用に差せる）。 */
   readonly #providerOf: (id: string) => ProviderGapSubject | undefined;
-  /** `#model` が既定（`CLONE_MODEL`）から差し替えられているか（`self_status` の材料）。 */
   readonly #modelOverridden: boolean;
-  /**
-   * SDK へ渡す権限モード。**下の `#observedPermissionMode` とは別物である** —
-   * こちらは「alteroid が何を頼んだか」、あちらは「SDK が init で何を報告したか」。
-   * 片方だけを持つと、頼んだ値が通っていないことに気づけない。
-   */
+  // `#observedPermissionMode` と1本にしない: 頼んだ値と SDK が init で報告した値の片方だけだと、頼んだ値が通っていないことに気づけないため
   readonly #permissionMode: PermissionModeName;
-  /** 人間の合図を割り込ませるか（`CLONE_HUMAN_PRIORITY_ENV_KEY`）。 */
   readonly #humanPriority: boolean;
-  /** 1ターンへ束ねる合図の最大件数（`MERGED_BATCH_SIZE_LIMIT_ENV_KEY`）。 */
   readonly #mergedBatchLimit: number;
-  /** 日報の作り直しの間隔（#2745）。 */
   readonly #dailyReportRetryDelays: readonly number[];
-  /** 日付ごとの作り直しの回数。プロセス内だけで数える（再起動は後追いが拾う）。 */
   readonly #dailyReportRetries = new Map<string, number>();
   readonly #dailyReportRetryTimers = new Set<ReturnType<typeof setTimeout>>();
-  /** 道具の MCP サーバを組み立てる関数。既定は本物、テストでは差し替えられる。 */
   readonly #mcpServerFactory: typeof createCloneMcpServer;
-  /**
-   * クローンの道具を、今日どおりインプロセスで渡すか、中継越し（stdio）で
-   * 渡すか（`ALTEROID_CLONE_TOOLS_TRANSPORT`。Issue #486 48(a) PR2）。
-   * 構築時に1度だけ解決する——`#permissionMode` 等と同じで、走行中には
-   * 変わらない。
-   */
   readonly #cloneToolsTransport: CloneToolsTransport;
-  /** `#cloneToolsTransport === 'stdio'` のときの、ソケットの置き場。 */
   readonly #cloneToolRelaySocketDir: string;
-  /**
-   * クローンの道具の中継のホスト（`clone-tool-relay-host.ts`）。**デーモンの
-   * 寿命で高々1つ**——`#cloneToolsFor` の doc に理由を書いた。`stdio` の
-   * セッションが1度も組まれなければ、この Promise 自体が生まれない
-   * （ホストは lazy に起こす。`sdk` のままなら listen すら起きない）。
-   */
   #cloneToolRelayHostPromise: Promise<CloneToolRelayHost> | undefined;
-  /** `clone-tool-relay-child.ts` の成果物の絶対パス。初めて要ったときに1度だけ解決する。 */
   #cloneToolRelayChildEntry: string | undefined;
 
-  // --- `self_status` の材料（SDK が実際に報告してきた値） ---------------------
-  //
-  // **本セッション（`#read`/`#apply` を通す方）だけが更新する。** 蒸留の
-  // サイドクエリ（`#distillFromTranscript`）は別の SDK セッションで、その init は
-  // ここへは反映しない（`CloneRuntimeFacts.sessionId` のコメントと同じ理由）。
+  // 蒸留のサイドクエリの init はここへ反映しない: 別の SDK セッションのため
   #sdkModel: string | null = null;
   #effort: string | null = null;
   #claudeCodeVersion: string | null = null;
   #apiKeySource: string | null = null;
   #observedPermissionMode: string | null = null;
-  /**
-   * **`null` は「init 未観測」、`[]` は「init を観測して、SDK が0本と報告した」——
-   * 別の状態として持つ（#324）。** 隣の `#observedPermissionMode` 等と同じ形。
-   * どちらも `[]` に畳むと、`self.ts` 側でこの2つを区別する手段が無くなる。
-   */
+  // `null`（init 未観測）と `[]`（SDK が0本と報告）を畳まない: `self.ts` 側で区別する手段が無くなるため
   #mcpServersInfo: Array<{ name: string; status: string }> | null = null;
-  /**
-   * 直近のターンの境界で `#observeContextUsage` が返した観測を、そのまま控える
-   * （#804）。
-   *
-   * **新しく `getContextUsage()` を呼ぶための欄ではない。** `case 'turn_ended'` が
-   * 既に1回呼んでいる戻り値を代入するだけで、呼び出しの回数を1つも増やさない
-   * ——Issue が「`detail: 'full'` は token-count API を呼ぶので、毎ターン呼ぶ
-   * 費用を測ってから決めること」と釘を刺しているのはこの回数についてであり、
-   * ここはその費用を新たに払わない。
-   *
-   * **`null` は「まだ観測していない」。** ターンの境界を1度も越えていないセッ
-   * ションはこのまま——`#observeContextUsage` が失敗した回（`error` 付き）や
-   * `categories` を返さなかった回はここに値が入る（`null` ではない）。3つの
-   * 状態を混ぜないのは `self.ts` の `describeCloneRuntime` 側の仕事。
-   */
+  // ここで `getContextUsage()` を呼ばない: `detail: 'full'` は token-count API を呼ぶので、`turn_ended` が既に呼んだ戻り値を代入するだけにするため
   #lastContextUsage: ContextUsageObservation | null = null;
-  /**
-   * 既に日誌へ残した拒否の `tool_use_id`。
-   *
-   * 生の合図と `result` の記録は同じ1件を2回運んでくるので、ここで畳む。
-   * **器を作り直せば消える**（＝件数の集計には使えない。集計は日誌が持つ）。
-   *
-   * 無制限には覚えない（長く走る1本のセッションでメモリが伸び続ける）。
-   * `runner.ts` の `#denied`（同じ役目 — 二重書き込み防止の id 帳面）と同じく
-   * `createRecentMap` に揃える。**上限に達したら黙って忘れない** — 忘れた id が
-   * `result.permission_denials` にもう一度載れば、同じ拒否がもう一度日誌へ載る
-   * （`runner.ts` の `#denied` の `onForget` が明示している代償と同じ形）。
-   */
+  // 無制限には覚えない: 長く走る1本のセッションでメモリが伸び続けるため。忘れたら `onForget` で日誌へ残す（忘れた id が `permission_denials` に再び載ると同じ拒否が二重に載る）
   readonly #deniedToolUses = createRecentMap<DeniedRecord>({
     limit: DENIED_TOOL_USE_MEMORY_LIMIT,
     onForget: (ids) => {
@@ -919,59 +656,8 @@ class Clone implements CloneHost {
       });
     },
   });
-  /**
-   * `#onPreToolUse` が許可 DB の規則に一致して `allow` を返した呼び出しの
-   * `tool_use_id` を、決着するまで控える帳面（Issue #863 残項目「hook の
-   * allow を SDK が追い越したことの検出」）。
-   *
-   * ## なぜ要るか
-   *
-   * バイナリを静的に読んだ観測（Issue #863 のコメント、2026-09-26）による
-   * と、hook が返した `permissionDecision: 'allow'` は普通は分類器を通らず
-   * 確定するが、リモートの機能フラグ（`tengu_virtual_knuth`）が立つと分類器
-   * へ回されうる。**これが起きているかどうかを、alteroid 自身のコードから
-   * 判定する手段は無い**——観測できるのは「hook が allow を返した直後の
-   * 呼び出しが、それでも拒否された」という結果だけである。この帳面はその
-   * 結果を見分けるための唯一の材料（`grantId` / `rule`）を持つ。
-   *
-   * ## 決着で消す（`#onPostToolUse` / `#onPostToolUseFailure`）
-   *
-   * 呼び出しが成功・失敗のどちらかで終わったら、もう拒否は来ない
-   * （`PreToolUse` は道具の実行より前にしか発火しない）ので、その
-   * `tool_use_id` はここから消す——`runner.ts` の `#preToolInputHeads` と
-   * 同じ理由・同じ形。
-   *
-   * ## 拒否が来たら `#noteDenial` が読む
-   *
-   * 一致すれば「hook の allow を追い越した」と判定し、消費してから日誌へ
-   * 残す（`#noteGrantFunneled` の doc）。
-   *
-   * ## 決着も拒否も無いまま作業者が終わったら `#onSubagentStop` が読む
-   * （Issue #1803）
-   *
-   * 作業者（サブエージェント）の呼び出しでは、deny 規則が hook の allow を
-   * 上書きした回が `permission_denials` にも走行中の合図にも載らない経路が
-   * ある（静的な読み。確かめていない——`AllowedByGrantRecord.agentId` の
-   * doc）。上の2つの消し口（決着・拒否）のどちらにも掛からないまま、その
-   * 作業者が `SubagentStop` を迎えたら、`#onSubagentStop` が `agentId` で
-   * 絞って控えを日誌へ残し、消費する——`#noteGrantFunneled` と同じ「原因は
-   * 断定しない」流儀（`#onSubagentStop` の doc）。
-   *
-   * ## 無制限には覚えない
-   *
-   * `#deniedToolUses` と同じ理由・同じ値（`ALLOWED_BY_GRANT_MEMORY_LIMIT`）
-   * で `createRecentMap` に揃える。上限に達して忘れた id へ後から拒否が届いて
-   * も、もう検出できない——`onForget` がその代償を日誌へ残す。
-   */
-  /**
-   * 直近の拒否の控え（Issue #1802）。`#noteDenial` が日誌に書くのと同じ契機で
-   * 1件足し、`request_permission` が `ToolContext.recentDenials` 経由で読む。
-   * **コマンドの値は持たない**（{@link RecentDenial} の doc）。`toolUseId` は、
-   * 後から入力付きの記録（合図の出所: result）が届いたときに先頭の語を埋める
-   * ためだけに持ち、道具へは渡さない。古い順に並べ、上限（{@link RECENT_DENIAL_LIMIT}）
-   * を越えたら先頭から落とす。
-   */
   readonly #recentDenials = new RecentDenialLog(RECENT_DENIAL_LIMIT);
+  // 決着（`#onPostToolUse` / `#onPostToolUseFailure`）で消す: その後は拒否が来ないため。上限で忘れた id への拒否は検出できず、`onForget` がその代償を日誌へ残す
   readonly #allowedByGrantToolUses = createRecentMap<AllowedByGrantRecord>({
     limit: ALLOWED_BY_GRANT_MEMORY_LIMIT,
     onForget: (ids) => {
