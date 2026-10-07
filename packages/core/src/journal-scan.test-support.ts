@@ -2,71 +2,18 @@ import { JournalAnchorNotFoundError } from './store.js';
 import type { JournalEntry } from './schema.js';
 import type { JournalPage, JournalQuery, JournalStore } from './store.js';
 
-/**
- * OOM の本体（issue #1283）を歯にするための、日誌ストアの偽物。
- *
- * **`createMemoryStores`（`testing.ts`）を使わない理由。** あちらは実装として
- * 正しい `JournalStore` だが、`list()` が中身を素朴な配列（`entries`）として
- * 丸ごと保持している——「窓に大量の行が在るときにヒープへ載る量が抑えられて
- * いるか」を測る歯を書くには、こちらが million 行を実際に `push` することに
- * なり、**歯を書くための準備そのものが同じ穴を掘る**（テストプロセスの
- * ヒープを食う）。この偽物は行を**位置（`index`）から都度組み立てる**——
- * どれだけ `total` が大きくても、実際に `JournalEntry` オブジェクトとして
- * 生きるのは、いま検査している1件（と、呼び出し側が保持を選んだ範囲）だけ
- * である。
- *
- * **`index` の意味。** `0` がいちばん新しい行、`total - 1` がいちばん古い行。
- * `at` は `baseTimeMs - index`（ミリ秒）——`index` が増えるほど過去へ進む。
- * `id` は `index` を逆算できる形（`synthetic-<0埋め12桁>`）にしてあり、
- * `after` の錨をこの偽物自身が `id` から `index` へ戻して検算できるように
- * してある（本物の3実装が `id` と `at` の両方が一致する行を探す契約
- * ——`store.ts` の `JournalQuery.after` の doc——を、この偽物でも同じ強さで
- * 再現するため）。
- *
- * **共有の置き場。** `packages/core/src/index.ts` の末尾から再エクスポートしてある
- * （`createMemoryStores` と同じ `@alteroid/core` の口）。`apps/web` の実デーモンの
- * テスト（`journal-real-daemon.test.tsx`）も同じ実装を引く——pg の `listPage` の形
- * （`next` の決め方・錨の扱い）の写しをここ1か所にするため（Issue #2640）。
- * `oldestAt` は `horizon=true` の経路のために本物を返す。
- *
- * **`limit` が有限でなければ例外を投げる。** 本番の穴（pg 実装が `limit`
- * 省略時に `Number.MAX_SAFE_INTEGER` を渡す。
- * `grep -Fn -- '? Number.MAX_SAFE_INTEGER' packages/storage-pg/src/journal.ts`）
- * と同じ形を呼び出し側が再現したら、この偽物はそれを**歯を書く前に検算
- * ミスとして落とす**——「歯が赤くなったのは実装のバグのためか、歯自体の
- * 書き間違いか」を混同しないため。この偽物を呼ぶ全ての口が有限の `limit` を
- * 渡す設計（`scanJournalPages`）になっていることの検算そのものでもある。
- */
+// createMemoryStores を使わない: million 行を実際に push することになり、歯の準備そのものがテストプロセスのヒープを食うため
 export interface SyntheticJournalStoreOptions {
-  /** 行の総数。 */
   total: number;
-  /** `index`（`0` が最新）から、その行の `id` / `at` 以外の中身を作る。 */
   entryAt: (index: number) => Omit<JournalEntry, 'id' | 'at'>;
-  /** `index === 0` の `at`（既定は固定の時刻——実時間に依存させない）。 */
   baseTimeMs?: number;
-  /**
-   * 読めない行（`index` で指す）。**pg の `list()` と同じ形で捨てる** —— `limit`
-   * を数えた**後**で `list()` の結果から落とす（ページは短く、全部読めなければ空で
-   * 返る）。`listPage()` の `next` は捨てた行を含む、ページの最後の生の行を指す。
-   */
   unreadable?: (index: number) => boolean;
 }
 
 export interface SyntheticJournalStore {
-  /**
-   * **`JournalStore` の全メンバを持つ。** `list` だけが本物で、
-   * `append` / `get` / `clear` は呼ばれたら例外を投げるスタブである——
-   * `buildActivityDigest` / `deriveDistillGapFromJournal` はどちらも
-   * `list` しか呼ばないので、この2つの歯にとっては「呼ばれないこと」自体が
-   * 暗黙の検算になる（呼ばれれば歯がその場で落ちる）。`Stores` の型へ
-   * そのまま渡せるよう、`Pick` ではなくフル実装の形にしてある。
-   */
   store: JournalStore;
-  /** `list()` に渡ってきたクエリを呼び出し順に記録したもの。 */
   calls: JournalQuery[];
-  /** 全呼び出しを通じて実際に返した行の総数（ヒープへ載った量の代理指標）。 */
   totalReturned: number;
-  /** `index` から実際の `JournalEntry` を組み立てる（歯の期待値の計算用）。 */
   entryOf: (index: number) => JournalEntry;
 }
 
@@ -94,7 +41,6 @@ export function createSyntheticJournalStore(
       at: new Date(baseTimeMs - index).toISOString(),
     }) as JournalEntry;
 
-  /** `desc`: index 昇順（＝新しい順）。`asc`: index 降順（＝古い順）。 */
   function* indices(order: 'asc' | 'desc', anchorIndex: number | undefined): Generator<number> {
     if (order === 'desc') {
       const start = anchorIndex === undefined ? 0 : anchorIndex + 1;
@@ -107,9 +53,7 @@ export function createSyntheticJournalStore(
 
   const readPage = (query: JournalQuery): JournalPage => {
     if (query.limit === undefined || !Number.isFinite(query.limit) || query.limit <= 0) {
-      // **本番の穴（`limit ?? Number.MAX_SAFE_INTEGER`）をこの偽物で再現
-      // させない。** ここへ来た時点で、呼び出し側の設計が壊れている
-      // （`journal-scan.test-support.ts` の doc）。
+      // 本番の穴（`limit ?? Number.MAX_SAFE_INTEGER`）をこの偽物で再現させない: ここへ来た時点で呼び出し側の設計が壊れているため
       throw new Error(
         `この偽ストアは有限の正の limit を要求する（渡ってきた値: ${String(query.limit)}）`,
       );
@@ -135,7 +79,6 @@ export function createSyntheticJournalStore(
     }
 
     const order = query.order ?? 'desc';
-    // 生の頁（読めない行を含む）を `limit + 1` 件まで集める。余りの1件が「続き」。
     const raw: number[] = [];
     for (const index of indices(order, anchorIndex)) {
       const entry = entryOf(index);
@@ -171,8 +114,7 @@ export function createSyntheticJournalStore(
     return readPage(query);
   };
 
-  // 地平（`JournalStore.oldestAt`）。pg は `ORDER BY at ASC LIMIT 1` で、読めない行も
-  // 数える（捨てるのは `listPage` が頁を切った後だけ）ので、`unreadable` を見ない。
+  // `unreadable` を見ない: pg の地平は読めない行も数えるため
   const oldestAt = async (): Promise<string | null> => (total > 0 ? entryOf(total - 1).at : null);
 
   const notImplemented = (name: string) => (): never => {
