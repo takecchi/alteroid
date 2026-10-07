@@ -133,3 +133,43 @@ describe('ConversationList: もっと見る（#3404）', () => {
     expect(screen.getByRole('link', { name: /a/ })).toBeTruthy();
   });
 });
+
+describe('ConversationList: 一覧の取得に失敗したとき', () => {
+  const link = (_target: unknown, slot: { className: string; children: React.ReactNode }) => (
+    <a href="#x" className={slot.className}>
+      {slot.children}
+    </a>
+  );
+
+  it('onRetry があれば「もう一度試す」を出し、押すと呼ぶ', () => {
+    const onRetry = vi.fn();
+    render(
+      <ConversationList
+        items={undefined}
+        activeId={undefined}
+        renderLink={link}
+        error={new Error('繋がらない')}
+        unavailable
+        onRetry={onRetry}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'もう一度試す' }));
+    expect(onRetry).toHaveBeenCalledTimes(1);
+  });
+
+  it('失敗が無いとき・onRetry が無いときは出さない', () => {
+    const { rerender } = render(
+      <ConversationList items={[]} activeId={undefined} renderLink={link} onRetry={() => {}} />,
+    );
+    expect(screen.queryByRole('button', { name: 'もう一度試す' })).toBeNull();
+    rerender(
+      <ConversationList
+        items={undefined}
+        activeId={undefined}
+        renderLink={link}
+        error={new Error('x')}
+      />,
+    );
+    expect(screen.queryByRole('button', { name: 'もう一度試す' })).toBeNull();
+  });
+});
