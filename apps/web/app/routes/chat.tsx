@@ -3774,6 +3774,13 @@ export function ChatPane({
                             }));
                             void conversationApprovals.mutate();
                           }}
+                          hideFailureWhenSettled
+                          onFailed={(caught) => {
+                            // 409 は回答済み・取り下げ済み。実際の状態へカードを変える（#3827）。
+                            if (caught instanceof ApiError && caught.status === 409) {
+                              void conversationApprovals.mutate();
+                            }
+                          }}
                           trailing={
                             <Link
                               to={approvalDetailPath(line.approval.id)}
