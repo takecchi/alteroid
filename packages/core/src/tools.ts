@@ -5161,9 +5161,6 @@ export function createCloneTools(context: ToolContext) {
         '行は消えない（`closedAt` / `closedReason` が付くだけ）。**閉じた id は全部日誌に残る。**',
       ].join(''),
       {
-        // **issue #1752。** 配列の `.min(1)` は入力スキーマ側ではなくハンドラの
-        // 先頭（下の `describeArrayLengthViolation` 呼び出し）で見る。ここは型
-        // （enum の配列）だけを固定する。
         origin: z
           .array(z.enum(commitmentOriginSchema.options))
           .describe(
@@ -5183,7 +5180,6 @@ export function createCloneTools(context: ToolContext) {
           .describe(
             `本文か出所への部分一致（大文字小文字を区別しない。${formatStringLengthJa({ min: 1 })}）。commitment_list の q と同じ当て方`,
           ),
-        // **issue #1752。** 同上。
         until: z
           .string()
           .optional()
@@ -5192,7 +5188,6 @@ export function createCloneTools(context: ToolContext) {
               '元に戻せない操作なので時差が必須（Z か +09:00。例 2026-09-11T19:00:00Z。時差の無い形は断る）。' +
               '閉じている最中に届いた新しい行を巻き込まないために使う',
           ),
-        // **issue #1752。** 同上。
         reason: z
           .string()
           .describe(
@@ -5204,8 +5199,6 @@ export function createCloneTools(context: ToolContext) {
           .describe(
             '省略すると true（何件当たるかを数えるだけで1件も閉じない）。実際に閉じるときだけ false を明示する',
           ),
-        // **issue #1720。** `.int().min(1).max(CLOSE_MANY_LIMIT_MAX)` は入力
-        // スキーマ側ではなくハンドラの先頭で見る。
         limit: z
           .number()
           .optional()
@@ -5230,19 +5223,11 @@ export function createCloneTools(context: ToolContext) {
         if (qError !== null) return text(qError);
         const untilLengthError = describeStringLengthViolation('until', until, { min: 1 });
         if (untilLengthError !== null) return text(untilLengthError);
-        // **空白だけも断る**（#3580。`commitment_close`（#3544）・HTTP の `nonBlankString`（#3142）と揃える）。
         const reasonError =
           describeStringLengthViolation('reason', reason, { min: 1 }) ??
           describeBlankViolation('reason', reason);
         if (reasonError !== null) return text(reasonError);
-        // 🔴 **絞り込みの無い呼びを断る（issue #844 の受け入れ基準）。**
-        // `origin` が4値全部を含む呼びは「絞り込みが無い」のと同じであり、
-        // **「全部閉じる」が事故で撃てる形を作らない。** そしてこの1つの規則が、
-        // 同じ Issue のもう1本の基準（「`origin` を絞らない一括は拒否するか、
-        // 明示の確認を要求する」）も同時に満たす —— `manager` 由来の本物の宿題を
-        // 巻き込むには、呼ぶ側が `manager` と自分で打つ必要がある。**確認用の
-        // 追加の引数は作らない**（`dryRun` の既定と合わせて2重に問うことになり、
-        // どちらが効いたのか読めなくなる）。
+        // 絞り込みの無い呼びを断る: 「全部閉じる」が事故で撃てる形を作らないため。確認用の追加の引数は作らない: `dryRun` の既定と2重に問うことになり、どちらが効いたのか読めなくなるため
         if (commitmentOriginSchema.options.every((known) => origin.includes(known))) {
           return text(
             'origin に在る起点を全部（human / manager / external / self）並べた呼びは断る——' +
@@ -5250,19 +5235,8 @@ export function createCloneTools(context: ToolContext) {
               '閉じたい起点だけを名指しすること（例 origin: ["external"]）。**1件も閉じていない。**',
           );
         }
-        // **読めない `until` を「絞り込みが当たらなかった」に混ぜない。** 混ぜると
-        // 打ち間違いが「0件だった」に化けて静かに通る。
-        //
-        // **読めるかは `Date.parse` で見る**（日誌の `since` / `until` と同じ。
-        // `journal-time.ts` の `isReadableJournalTimeBoundary`）。以前は
-        // `z.string().datetime({ offset: true })` で見ていたが、zod 4.6 から秒を省いた
-        // 形（`2026-09-25T10:00Z`）を落とすようになり（PR #1561）、書き方の揺れだけで
-        // 断るようになった。絞り込みはもともと `Date.parse` で比べている（下の
-        // `untilMs`）ので、判定と比較の読み方がこれで1つに揃う。
-        //
-        // **ただしこの口は元に戻せない一括操作なので、時差（`Z` / `±hh:mm`）を必須にする**
-        // （#2462）。時差の無い形は `Date.parse` がサーバーの地方時刻として読み、
-        // 境界が黙ってずれる。読むだけの `journal_read` の `since` / `until` は緩いまま。
+        // 読めない `until` を「絞り込みが当たらなかった」に混ぜない: 打ち間違いが「0件だった」に化けて静かに通るため
+        // 時差（`Z` / `±hh:mm`）を必須にする: 元に戻せない一括操作で、時差の無い形は `Date.parse` が地方時刻として読み境界が黙ってずれるため
         if (until !== undefined && !isOffsetQualifiedTimeBoundary(until)) {
           return text(
             describeOffsetRequiredTimeBoundary('until', until, '2026-09-11T19:00:00.000Z') +
@@ -5271,10 +5245,7 @@ export function createCloneTools(context: ToolContext) {
         }
 
         const { entries: openEntries, unreadable } = await stores.commitments.list();
-        // **絞りはツール層で当てる**（`commitment_list` と同じ側・同じ当て方）。
-        // 揃えるのは趣味ではない —— **`commitment_list` で下見した結果と、この
-        // 道具が閉じる集合が食い違わないこと**が、一括で閉じてよいと判断できる
-        // 唯一の根拠だからである。順序も `origin` → `q` の並びをそのまま踏襲する。
+        // 絞りは `commitment_list` と同じ側・同じ当て方で当てる: 下見した結果とこの道具が閉じる集合が食い違わないことが、一括で閉じてよいと判断できる唯一の根拠のため
         const afterOrigin = openEntries.filter((entry) => origin.includes(entry.origin));
         const afterSource =
           source === undefined
@@ -5303,10 +5274,7 @@ export function createCloneTools(context: ToolContext) {
           ...(q === undefined ? [] : [`q="${q}"`]),
           ...(until === undefined ? [] : [`until=${until}`]),
         ].join(' / ');
-        // **漏斗（段ごとの残数）を必ず出す。** 「0件だった」と「絞り込みが
-        // 間違っていて当たらなかった」は、**どの段で0になったか**でしか
-        // 区別できない（issue #844 の受け入れ基準）。当たった場合にも出すのは、
-        // 次にどの軸を緩める／締めるべきかがここにしか無いからである。
+        // 漏斗（段ごとの残数）を必ず出す: 「0件だった」と「絞り込みが間違っていた」はどの段で0になったかでしか区別できないため
         const funnel = [
           `未了 ${openEntries.length} 件`,
           `origin=[${origin.join(', ')}] で ${afterOrigin.length} 件`,
@@ -5314,8 +5282,7 @@ export function createCloneTools(context: ToolContext) {
           ...(q === undefined ? [] : [`q で ${afterQ.length} 件`]),
           ...(until === undefined ? [] : [`until で ${matched.length} 件`]),
         ].join(' → ');
-        // **読めない行はこの道具では閉じられない**（id すら取れない行が在る。
-        // issue #296）。件数を黙って落とすと「これで全部だ」と読まれる。
+        // 読めない行は件数を黙って落とさない: 「これで全部だ」と読まれるため
         const unreadableNote =
           unreadable.length === 0
             ? []
@@ -5325,8 +5292,7 @@ export function createCloneTools(context: ToolContext) {
               ];
 
         if (matched.length === 0) {
-          // 0件の理由を**段で名指しする**。ここを1つの文言で済ませると、
-          // 「当たるものが無かった」と「絞り込みを間違えた」が同じ顔になる。
+          // 0件の理由を段で名指しする: 1つの文言で済ませると「当たるものが無かった」と「絞り込みを間違えた」が同じ顔になるため
           let why: string;
           if (openEntries.length === 0) {
             why =
@@ -5382,9 +5348,6 @@ export function createCloneTools(context: ToolContext) {
         }
 
         const effectiveLimit = limit ?? CLOSE_MANY_LIMIT_DEFAULT;
-        // **古い側から閉じる。** `CommitmentStore.list` の契約が「未了は古い順」
-        // なので、先頭から取ればそうなる（並べ替えない）。Issue #844 が困って
-        // いるのは「古い側が読めない」ことなので、減らす向きもそちらから。
         const targets = matched.slice(0, effectiveLimit);
         const rest = matched.length - targets.length;
         const restNote =
@@ -5396,10 +5359,7 @@ export function createCloneTools(context: ToolContext) {
               ];
 
         if (dryRun !== false) {
-          // **省略された `dryRun` は試算。** 既定を「何も起きない側」に倒すのは、
-          // 閉じた行を開き直す道具がこの器に無い（`commitment_open` /
-          // `commitment_close` / `commitment_edit` の3本だけで、reopen が無い）
-          // からである。⟹ 撃ち間違えた一括 close は道具では戻せない。
+          // 省略された `dryRun` は試算にする: 閉じた行を開き直す道具が無く、撃ち間違えた一括 close は戻せないため
           const shown = targets.slice(0, CLOSE_MANY_IDS_SHOWN).map((entry) => entry.id);
           const hidden = targets.length - shown.length;
           return text(
@@ -5420,29 +5380,19 @@ export function createCloneTools(context: ToolContext) {
           );
         }
 
-        // **塊ごとに「閉じる → その塊の id を日誌へ書く」を交互に回す。**
-        // まとめて閉じてから日誌を書くと、その間に器が落ちたとき**閉じたのに
-        // 記録が無い行**が最大 `CLOSE_MANY_LIMIT_DEFAULT` 件できる。交互なら
-        // 失われうる最大が1塊に収まる。**`appendJournalOrThrow` は握り潰さない**
-        // ので、途中で日誌が落ちればここで throw して止まる —— それまでの塊は
-        // 「閉じてあり、かつ日誌にも在る」状態で残る。
+        // 塊ごとに「閉じる → その塊の id を日誌へ書く」を交互に回す: まとめて閉じてから日誌を書くと、器が落ちたとき閉じたのに記録が無い行が最大 `CLOSE_MANY_LIMIT_DEFAULT` 件できるため
         const chunks = chunkIdsByChars(
           targets.map((entry) => entry.id),
           CLOSE_MANY_JOURNAL_ID_CHARS,
         );
         const now = new Date().toISOString();
         const closedIds: string[] = [];
-        // **応答が言う「日誌に N 件」は、実際に書いた件数で数える。** 1件も処理できな
-        // かった塊は日誌に書かない（下の `continue`）ので、塊の数（`chunks.length`）で
-        // 言うと、塊が丸ごと競合になった回に、無い日誌の行を名乗ることになる。
+        // 「日誌に N 件」は実際に書いた件数で数える: `chunks.length` で言うと、塊が丸ごと競合になった回に無い日誌の行を名乗るため
         let journaledChunks = 0;
         for (const [index, chunk] of chunks.entries()) {
           const closed = await stores.commitments.closeMany(chunk, now, reason, 'clone');
           closedIds.push(...closed);
-          // **1件も閉じられなかった塊では日誌へ書かない**（`commitment_close` が
-          // 成功したときにだけ書くのと揃える）。他の経路が先に閉じていた場合に
-          // 起きる。番号は割った時点の塊番号なので、**抜けている番号そのものが
-          // 「その塊は1件も閉じなかった」を意味する。**
+          // 1件も閉じられなかった塊では日誌へ書かない: 抜けている塊番号そのものが「その塊は1件も閉じなかった」を意味するため
           if (closed.length === 0) continue;
           journaledChunks += 1;
           await appendJournalOrThrow(
@@ -5455,10 +5405,7 @@ export function createCloneTools(context: ToolContext) {
                 `（${index + 1}/${chunks.length} 塊目、この塊は ${closed.length} 件）: ${reason}\n` +
                 `絞り込み: ${filterText}\n` +
                 `閉じた id: ${closed.join(' ')}`,
-              // **`grounds` には id を置かない。** この欄は「操作の由来そのものを
-              // 名乗る文」であって、載せたものの控えを置く場所ではない
-              // （`journalEntrySchema` の `decision.grounds` の doc）。id は
-              // `commitment_close` が `decision` 側へ書いているのと同じ側に揃える。
+              // `grounds` には id を置かない: この欄は操作の由来を名乗る文で、控えを置く場所ではないため
               grounds:
                 'クローン自身が commitment_close_many で絞り込んで閉じた（人間はこれを読んで後から否定する）',
             },
@@ -5466,10 +5413,7 @@ export function createCloneTools(context: ToolContext) {
           );
         }
 
-        // **当たったのに閉じられなかった分を黙らせない。** 他の経路
-        // （`POST /commitments/:id/close` や別セッション）が先に閉じていれば
-        // `closeMany` はその id を返さない。件数が食い違ったことは事実であり、
-        // 「全部閉じた」と読まれると次の呼びの判断が狂う。
+        // 当たったのに閉じられなかった分を黙らせない: 「全部閉じた」と読まれると次の呼びの判断が狂うため
         const raced = targets.length - closedIds.length;
         const shownClosed = closedIds.slice(0, CLOSE_MANY_IDS_SHOWN);
         const hiddenClosed = closedIds.length - shownClosed.length;
@@ -5496,25 +5440,8 @@ export function createCloneTools(context: ToolContext) {
       },
     ),
 
-    //
-    // issue #972 本文は「クローン自身の道具にするかは別途の判断（自分の受信箱を
-    // 自分で捨てられることの是非があるため、まずは人間の手で足りる）」と保留して
-    // いた。依頼のブリーフがこれを見落として必須スコープに書いたため一度実装され
-    // （#1007）、オーナー（クローン）が差し戻して取り下げさせた経緯がある——詳細は
-    // #972 のコメントと #1007 を見よ。オーナーが示した線引き（「クローンは、自分の
-    // 側の都合で溜まった合図だけを畳める。人間から届いた合図は畳めない」）を
-    // takecchi が採用した（2026-09-15。出所で線を引く——人間起点の合図
-    // `human_message` / `human_answer` を選べない形）。
-    //
-    // 同じ失敗の写しが数千件積もると、1ターン1件でしか排出できない
-    // `InboxStore.remove()` では排出そのものが文脈窓を食い潰す。設計は
-    // `commitment_close_many`（#844）を参照モデルにするが、**絞り込みの判定は
-    // ここ（`inbox-backlog.ts` の `matchesInboxRemoveManyFilter`）に閉じ、
-    // ストア（`storage-pg` / `storage-fs`）には複製しない**——`peekPending()`
-    // が既に全件を返す口を持っており、`summarizeInboxBacklog`（`manager_list`
-    // の内訳）も同じ全件走査の上に立っているので、SQL 側へ同じ判定を書くと
-    // 「一覧に見えている件数」と「実際に消える件数」が別の実装を持つことになる
-    // （`inboxBacklogDedupeKey` の doc「なぜ1箇所に閉じるか」と同じ理由）。
+    // 人間起点の合図（`human_message` / `human_answer`）を選べない形にする: クローンは自分の側の都合で溜まった合図だけを畳める
+    // 絞り込みの判定をストアへ複製しない: SQL 側へ同じ判定を書くと「一覧に見えている件数」と「実際に消える件数」が別の実装を持つことになるため
 
     tool(
       'inbox_remove_many',
@@ -5535,10 +5462,6 @@ export function createCloneTools(context: ToolContext) {
         '（`InboxStore` の doc）。**消した id は全部日誌に残る。**',
       ].join(''),
       {
-        // **issue #1752。** `inboxRemoveManyTypesSchema` の `.min(1)` は入力
-        // スキーマ側ではなくハンドラの先頭（下の `inboxRemoveManyTypesSchema.
-        // safeParse` 呼び出し）で見る（`inboxRemoveManyTypesToolInputSchema`
-        // の doc）。ここは型（許される5種類の enum の配列）だけを固定する。
         types: inboxRemoveManyTypesToolInputSchema.describe(
           `消す対象の種類（必須。${formatArrayLengthJa({ min: 1 })}）。選べる5種類 ` +
             `(${CLONE_REMOVABLE_INBOX_EVENT_TYPES.join(' / ')}) を全部並べると断られる。` +
@@ -5563,7 +5486,6 @@ export function createCloneTools(context: ToolContext) {
               '元に戻せない操作なので時差が必須（Z か +09:00。例 2026-09-15T00:00:00Z。時差の無い形は断る）。' +
               '消している最中に届いた新しい行を巻き込まないために使う',
           ),
-        // **issue #1752。** 同上。
         reason: z
           .string()
           .describe(
@@ -5575,8 +5497,6 @@ export function createCloneTools(context: ToolContext) {
           .describe(
             '省略すると true（何件当たるかを数えるだけで1件も消さない）。実際に消すときだけ false を明示する',
           ),
-        // **issue #1720。** `.int().min(1).max(REMOVE_MANY_LIMIT_MAX)` は入力
-        // スキーマ側ではなくハンドラの先頭で見る。
         limit: z
           .number()
           .optional()
@@ -5591,11 +5511,6 @@ export function createCloneTools(context: ToolContext) {
           max: REMOVE_MANY_LIMIT_MAX,
         });
         if (limitError !== null) return text(limitError);
-        // **issue #1752（#1651/#1689/#1720 の揃え漏れ。非数値の欄。issue 本文の
-        // 再現テスト対象）。** `types` は要素側が入力スキーマの enum で保証
-        // 済みなので、`inboxRemoveManyTypesSchema.safeParse` が失敗しうる理由は
-        // 配列の件数（0件）だけである（`inboxRemoveManyTypesToolInputSchema` の
-        // doc）。
         if (!inboxRemoveManyTypesSchema.safeParse(types).success) {
           return text(`types は使えない（${formatArrayLengthJa({ min: 1 })}）。`);
         }
@@ -5609,11 +5524,7 @@ export function createCloneTools(context: ToolContext) {
           describeStringLengthViolation('reason', reason, { min: 1 }) ??
           describeBlankViolation('reason', reason);
         if (reasonError !== null) return text(reasonError);
-        // 🔴 **絞り込みの無い呼びを断る（#972。commitment_close_many の origin と同じ形）。**
-        // ⚠️ **ここでの「全部」は選べる5種類（human_message / human_answer を
-        // 除いた集合）を指す**——その2種はそもそも `types` の値になりえない
-        // （zod の enum が型で塞いでいる。CLONE_REMOVABLE_INBOX_EVENT_TYPES の doc）ので、
-        // 実行時の分岐で弾く必要があるのは「選べる5種類を全部選んだか」だけである。
+        // 絞り込みの無い呼びを断る: 「全部」は選べる5種類を指し、その2種は zod の enum が型で塞いでいるため実行時に弾くのは5種類を全部選んだ場合だけ
         if (CLONE_REMOVABLE_INBOX_EVENT_TYPES.every((known) => types.includes(known))) {
           return text(
             `types に選べる5種類（${CLONE_REMOVABLE_INBOX_EVENT_TYPES.join(', ')}）を全部並べた` +
@@ -5622,10 +5533,7 @@ export function createCloneTools(context: ToolContext) {
               '**1件も消していない。**',
           );
         }
-        // **読めない `before` を「絞り込みが当たらなかった」に混ぜない**
-        // （`commitment_close_many` の `until` と同じ理由・同じ読み方。比較は
-        // `matchesInboxRemoveManyFilter` が `Date.parse` で行う）。
-        // 元に戻せない一括操作なので時差を必須にする（#2462。`until` と同じ）。
+        // 読めない `before` を「絞り込みが当たらなかった」に混ぜない・時差を必須にする: `until` と同じ理由
         if (before !== undefined && !isOffsetQualifiedTimeBoundary(before)) {
           return text(
             describeOffsetRequiredTimeBoundary('before', before, '2026-09-15T00:00:00.000Z') +
@@ -5638,13 +5546,9 @@ export function createCloneTools(context: ToolContext) {
           ...(sources === undefined ? {} : { sources }),
           ...(before === undefined ? {} : { before }),
         };
-        // **絞りはツール層で当てる**（`matchesInboxRemoveManyFilter` の doc——
-        // SQL 側に同じ判定を複製しない）。`peekPending()` は古い順で返すので、
-        // filter は順序を変えず、matched もそのまま古い順になる。
         const peek = await stores.inbox.peekPending();
         const allPending = peek.entries;
-        // issue #2344: 読めない行は絞り込みの材料（種類・送信元）が取れないので対象にできない。
-        // **だから「未読が1件も無い」とは言わない**——消していないだけで、受信箱に在る。
+        // 読めない行は絞り込みの材料が取れず対象にできないので、「未読が1件も無い」とは言わない: 消していないだけで受信箱に在るため
         const unreadableNote = describeUnreadableInboxEvents(peek.unreadable);
         const matched = allPending.filter((row) => matchesInboxRemoveManyFilter(row, filter));
 
@@ -5653,8 +5557,6 @@ export function createCloneTools(context: ToolContext) {
           ...(sources === undefined ? [] : [`sources=[${sources.join(', ')}]（完全一致）`]),
           ...(before === undefined ? [] : [`before=${before}`]),
         ].join(' / ');
-        // **漏斗を必ず出す。** 「0件だった」と「絞り込みが間違っていて当たらなかった」は
-        // 区別できないと次の判断ができない（`commitment_close_many` と同じ理由）。
         const funnel = `未読 ${allPending.length} 件 → 絞り込みで ${matched.length} 件`;
 
         if (matched.length === 0) {
@@ -5682,9 +5584,6 @@ export function createCloneTools(context: ToolContext) {
         }
 
         const effectiveLimit = limit ?? REMOVE_MANY_LIMIT_DEFAULT;
-        // **古い側から消す。** `peekPending()` の契約が「古い順」なので、先頭から
-        // 取ればそうなる（並べ替えない）。#972 が困っているのは古い側が文脈窓を
-        // 埋めることなので、減らす向きもそちらから。
         const targets = matched.slice(0, effectiveLimit);
         const rest = matched.length - targets.length;
         const restNote =
@@ -5696,9 +5595,7 @@ export function createCloneTools(context: ToolContext) {
               ];
 
         if (dryRun !== false) {
-          // **省略された `dryRun` は試算。** 消した合図を戻す道具がこの器に無い
-          // （`InboxStore` に `put` の再送以外の復元手段は無い）ので、既定は
-          // 「何も起きない側」に倒す。
+          // 省略された `dryRun` は試算にする: 消した合図を戻す道具が無いため
           const shown = targets.slice(0, REMOVE_MANY_IDS_SHOWN).map((row) => row.event.id);
           const hidden = targets.length - shown.length;
           return text(
@@ -5718,13 +5615,7 @@ export function createCloneTools(context: ToolContext) {
           );
         }
 
-        // **配達を止める口が無ければ1件も消さない**（issue #1049）。
-        //
-        // 消せてもメモリ上の待ち行列へ届かないなら、この道具は「消した」と
-        // 名乗りながら配達を続ける——それがまさに #1049 の事故である。**行を
-        // 消した状態で配達だけが続くほうが、1件も消さないより悪い**（クローンは
-        // 掃除できたと誤解し、カウンタもそう言うのに、ターンは起き続ける）。
-        // ⟹ 消す前に断る。
+        // 配達を止める口が無ければ1件も消さない: 行を消した状態で配達だけが続くほうが、1件も消さないより悪い（掃除できたと誤解するのにターンは起き続ける）ため
         const stopDelivery = context.dropQueuedInboxEvents;
         if (stopDelivery === undefined) {
           return text(
@@ -5740,24 +5631,17 @@ export function createCloneTools(context: ToolContext) {
           );
         }
 
-        // **塊ごとに「消す → その塊の id を日誌へ書く」を交互に回す**
-        // （`commitment_close_many` と同じ理由——まとめて消してから日誌を書くと、
-        // その間に器が落ちたとき「消えたのに記録が無い行」が最大
-        // `REMOVE_MANY_LIMIT_DEFAULT` 件できる）。
+        // 塊ごとに「消す → その塊の id を日誌へ書く」を交互に回す: まとめて消してから日誌を書くと、器が落ちたとき消えたのに記録が無い行が最大 `REMOVE_MANY_LIMIT_DEFAULT` 件できるため
         const chunks = chunkIdsByChars(
           targets.map((row) => row.event.id),
           REMOVE_MANY_JOURNAL_ID_CHARS,
         );
         const removedIds: string[] = [];
         let droppedFromDelivery = 0;
-        // **応答が言う「日誌に N 件」は、実際に書いた件数で数える。** 1件も処理できな
-        // かった塊は日誌に書かない（下の `continue`）ので、塊の数（`chunks.length`）で
-        // 言うと、塊が丸ごと競合になった回に、無い日誌の行を名乗ることになる。
+        // 「日誌に N 件」は実際に書いた件数で数える: `chunks.length` で言うと、塊が丸ごと競合になった回に無い日誌の行を名乗るため
         let journaledChunks = 0;
         for (const [index, chunk] of chunks.entries()) {
-          // **器から消すのと配達を止めるのを、1つの呼びで行う**（issue #1049）。
-          // `stores.inbox.removeMany` を直に呼ばないこと——`POST /inbox/remove`
-          // と同じ関数を通す（`removeInboxEventsAndStopDelivery` の doc）。
+          // `stores.inbox.removeMany` を直に呼ばない: 器から消すのと配達を止めるのを1つの呼びで行う関数を通すため
           const outcome = await removeInboxEventsAndStopDelivery(
             stores.inbox,
             { dropQueuedInboxEvents: stopDelivery },
@@ -5766,8 +5650,6 @@ export function createCloneTools(context: ToolContext) {
           const removed = outcome.removedIds;
           droppedFromDelivery += outcome.droppedFromDelivery;
           removedIds.push(...removed);
-          // **1件も消せなかった塊では日誌へ書かない**（他の経路——別セッションの
-          // `remove()` や再起動をまたいだ処理——が先に消していた場合に起きる）。
           if (removed.length === 0) continue;
           journaledChunks += 1;
           await appendJournalOrThrow(
@@ -5787,7 +5669,6 @@ export function createCloneTools(context: ToolContext) {
           );
         }
 
-        // **当たったのに消せなかった分を黙らせない**（`commitment_close_many` と同じ理由）。
         const raced = targets.length - removedIds.length;
         const shownRemoved = removedIds.slice(0, REMOVE_MANY_IDS_SHOWN);
         const hiddenRemoved = removedIds.length - shownRemoved.length;
@@ -5801,9 +5682,7 @@ export function createCloneTools(context: ToolContext) {
                 ? ` …ほか ${hiddenRemoved} 件は省略（**全 id は日誌に ${journaledChunks} 件に分けて残してある**）`
                 : ''
             }`,
-            // **配達の側にも届いたことを名乗る**（issue #1049）。この道具は
-            // かつて器の行しか消さず、それでも「消した」と名乗っていた。⟹
-            // **消えた件数だけを出すと、同じ名乗りに戻る。**
+            // 配達の側にも届いたことを名乗る: 消えた件数だけを出すと器の行しか消さずに「消した」と名乗る形に戻るため
             `配達の待ち行列からも外したのは ${droppedFromDelivery} 件` +
               `（残りは器に在っただけで、まだ配達待ちには載っていなかった分である。` +
               `**既に取り出して処理中のものは取り消せない。**）`,
@@ -5819,10 +5698,6 @@ export function createCloneTools(context: ToolContext) {
       },
     ),
 
-    //
-    // **人間の `~/.zshenv` に当たるもの。** 人間が自分で開いて直せる以上、
-    // その写像であるクローンにできないのは能力の削除である（north_star 禁止2）。
-    // 鍵が文脈に載ることは方針（システムプロンプト）で扱う。
     tool(
       'profile_read',
       [
@@ -9715,7 +9590,6 @@ export function createCloneTools(context: ToolContext) {
           .describe(
             `storedBytes がこれ以上の行だけを対象にする（${formatIntRangeJa({ min: 0 })}）`,
           ),
-        // **issue #1752。** 同上。
         summary: z
           .string()
           .describe(
@@ -9882,9 +9756,7 @@ export function createCloneTools(context: ToolContext) {
         const removedIds: string[] = [];
         let removedBytes = 0;
         let raced = 0;
-        // **応答が言う「日誌に N 件」は、実際に書いた件数で数える。** 1件も処理できな
-        // かった塊は日誌に書かない（下の `continue`）ので、塊の数（`chunks.length`）で
-        // 言うと、塊が丸ごと競合になった回に、無い日誌の行を名乗ることになる。
+        // 「日誌に N 件」は実際に書いた件数で数える: `chunks.length` で言うと、塊が丸ごと競合になった回に無い日誌の行を名乗るため
         let journaledChunks = 0;
         for (const [index, chunk] of chunks.entries()) {
           const chunkIds = new Set(chunk);
