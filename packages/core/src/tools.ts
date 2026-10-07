@@ -3423,62 +3423,8 @@ export function createCloneTools(context: ToolContext) {
       },
     ),
 
-    // --- 日誌 -----------------------------------------------------------
-    /**
-     * 判断を日誌へ残す唯一の口（issue #1338）。
-     *
-     * ## なぜ `grounds` が必須ではなくなったか
-     *
-     * **`grounds` を必須にしていると、この道具だけが選択的に落ちる。** 2026-09-23
-     * にクローンが 20回呼んで通ったのは2回で、落ちた側の断り方はすべて
-     * 「引数が届いていない（received undefined）」だった——同じターンで他の道具は
-     * 20回以上通っている。原因は呼び出しの生成（本文の末尾に余分な閉じタグが
-     * 混じり、そこで呼び出しが終わったことにされて後続の引数が丸ごと消える）で、
-     * 道具の側の不具合ではない。**それでも直す場所はここである** ——
-     * `tools.ts` の48個の道具のうち、**必須の引数が2つとも自由文（短い識別子を
-     * 1つも持たない）なのはこの道具だけ**である（`practice_write` /
-     * `memory_write` / `memory_append` / `memory_section_move` / `memory_delete`
-     * はどれも `slug` / `kind` / `fromSlug` のような短い識別子を含む）。
-     * ⟹ **「長い本文の後ろに、まだ必須の引数が残っている」という形を持つのが
-     * この道具だけ**で、壊れる後続が存在することが故障の条件そのものだった。
-     *
-     * ## なぜ「呼ぶ側が気をつける」で閉じないか
-     *
-     * 断り方は #1141 で既に「呼び出しの生の形を疑え」と正しく案内している。
-     * **それを読んだ上で10回以上落ちている。** そして落ち続けたのがこの道具だけ
-     * であることには意味がある——`journal_write` は**クローンが人間に聞かずに
-     * 実行した判断を残す唯一の経路**であり、「人間が後から読んで否定できる」と
-     * いう最終承認の実体そのものである。⟹ 作業（委譲の再開・台帳の開閉・記憶の
-     * 更新）は全部通っているのに、**監査の経路だけが選択的に失われた。**
-     *
-     * ## ⛔ 届かなかった `grounds` を「根拠なし」に化けさせない
-     *
-     * `grounds` の doc は「無ければ人間に聞いたはず」と読める値なので、
-     * **クローンが自分で「根拠なし」と書いた**のと、**呼び出しに届かなかった**のを
-     * 同じ文字列にすると、「無い」の種類が1つ潰れる（AGENTS.md）。⟹ 届かなかった
-     * 回だけ {@link GROUNDS_NOT_DELIVERED} を入れ、`self_dropped` にも跡を残す。
-     *
-     * ## ⚠ これで直らない残り
-     *
-     * 呼び出しが `grounds` を先に書いて `decision` を落とした回は、`decision` が
-     * 必須である以上いまも落ちる（観測された断り方には `path: ["decision"]` も
-     * 在った）。**`decision` は記録の中身そのものなので任意にはできない。**
-     * ⟹ 残りは「頻度の高い側だけを塞いだ」のであって、全部ではない。
-     *
-     * ⚠️ **訂正（2026-09-23、issue #1338 残件1）**: 「全部ではない」という
-     * 結論そのものは変わらない——`decision` はいまも必須で、欠ければ検証は
-     * いまも落ちる。**変わったのは、落ちたことがどこにも残らなかった点で
-     * ある。** かつてこの回は、`cloneToolJournalsItself('journal_write')` の
-     * 除外（「このハンドラが自分で記録する」という前提）に乗って
-     * `clone.ts` の `#journalToolUse` が早期 return し、日誌にも
-     * `self_dropped` にも何も残らなかった——ハンドラが一度も走っていない
-     * ので、その前提自体が崩れているのに除外だけが効いていた。**いまは
-     * `#journalToolUse` が MCP の入力検証エラーの印
-     * （{@link MCP_INPUT_VALIDATION_ERROR_MARKER}）を見て、この道具でも
-     * ハンドラが走っていない回を `tool_use`（`outcome: 'failed'`）として
-     * 残し、`journal_write` の場合は `self_dropped` にも跡を残す**
-     * （`clone.ts` の `#onPostToolUse` の doc「除外の前提が崩れる回」）。
-     */
+    // `grounds` を必須にしない: 長い本文の後ろに必須の引数が残る形を持つのはこの道具だけで、呼び出しの組み立て破損で選択的に落ちるため
+    // 届かなかった `grounds` を「根拠なし」と同じ文字列にしない: 「無い」の種類が潰れるため
     tool(
       'journal_write',
       [
@@ -3497,22 +3443,7 @@ export function createCloneTools(context: ToolContext) {
           ),
       },
       async ({ decision, grounds }) => {
-        // **届かなかったことを、書かれた「根拠なし」と混ぜない。** 省いた回は
-        // 日誌の本文でそう名乗り、`self_dropped` にも跡を残す——道具は成功して
-        // いるので、ここで残さないと「根拠が届かなかった」がどこにも出ない
-        // （`#journalToolUseFailure` はこの道具を除外しており、除外の理由は
-        // 「自作ツール自身が失敗を記録するのがその道具のハンドラの責務」だから
-        // である。⟹ その責務をここで果たす）。
-        // ⚠️ 訂正（2026-09-23、issue #1338 残件1）: この呼び出し（grounds
-        // だけが欠けた回）はハンドラが最後まで走っている＝ isError なしの
-        // 成功応答なので、発火するのは `PostToolUse` 側（`#journalToolUse`）
-        // であって `#journalToolUseFailure` ではない。除外しているのは
-        // 前者である——MCP SDK は入力検証の失敗を自分で try/catch し、
-        // `isError: true` の普通の `CallToolResult` へ変換するため、ハンドラ
-        // が一度も呼ばれない回（`decision` 自体が欠けた回）を含め、この道具の
-        // `PostToolUseFailure` はそもそも発火しない。その回の救済は
-        // `clone.ts` の `#journalToolUse` に足した（上の「これで直らない残り」
-        // の訂正を参照）。
+        // 省いた回は日誌の本文で名乗り `self_dropped` にも跡を残す: 道具は成功しているので、ここで残さないと「根拠が届かなかった」がどこにも出ないため
         if (grounds === undefined) {
           noteDroppedRecord(
             '判断の根拠（journal_write の grounds）',
@@ -3537,22 +3468,7 @@ export function createCloneTools(context: ToolContext) {
       },
     ),
 
-    /**
-     * 日誌を掘る道具。
-     *
-     * **これは「探す」ための口である。** 全文を素で並べていたときは、200 件を
-     * 頼むと 178,524 文字になって MCP の出力上限で丸ごと落ち、クローンには
-     * 1 文字も届かなかった（SDK はファイルへ落とすが、クローンにファイルを
-     * 読む道具は無い）。人間は Web UI と `GET /journal` で日誌を読めるので、
-     * これは能力の削除そのものである（north_star 禁止1）。
-     *
-     * 直し方は `manager_list` ↔ `manager_report` と同じ形にした。
-     * 一覧は**予算を先に決めて入るところまで**積み、本文は抜粋にして
-     * *いつ・誰が・どの型か*と `id` を必ず残す。全文が要る1件は `id` で取る。
-     *
-     * **`until` が無いと過去は掘れない。** 返るのは新しい順なので、`since` だけ
-     * では手前の最新分が `limit` を食い尽くし、狙った時刻には決して届かない。
-     */
+    // 全文を素で並べない: 出力上限で丸ごと落ちてクローンに1文字も届かないため、予算で抜粋にする
     tool(
       'journal_read',
       [
@@ -3570,9 +3486,6 @@ export function createCloneTools(context: ToolContext) {
         '頁の行が全部読めない形だったときも、これで読めない区間の向こうへ進める。',
       ].join(' '),
       {
-        // **issue #1720。** `.int().min(1).max(200)` は入力スキーマ側ではなく
-        // ハンドラの先頭（下の `describeIntRangeViolation` 呼び出し）で見る。
-        // ここは型（数値）だけを固定する。
         limit: z
           .number()
           .optional()
@@ -3589,16 +3502,12 @@ export function createCloneTools(context: ToolContext) {
           .array(z.enum(JOURNAL_ENTRY_TYPES))
           .optional()
           .describe('種別で絞る。省略すると全種別'),
-        // **説明文は `conversation_read` の `q` と1文字も変えない。**
-        // 同じ語で探す口が2つ在るのに言い方が違うと、読む側は違う意味論を
-        // 疑うことになる（`journal-search.ts` の doc）。
+        // 説明文は `conversation_read` の `q` と変えない: 同じ語で探す口の言い方が違うと違う意味論を疑われるため
         q: z
           .string()
           .optional()
           .describe('語で探す（大文字小文字を区別しない部分一致）。他の絞りと併用できる'),
-        // **`with` は JS の予約語なので、ハンドラの側では `withFilter` へ
-        // 詰め替える（キー名そのものは `JournalQuery.with` に合わせて `with`
-        // のまま——新しい呼び方を作らない）。**
+        // キー名は `JournalQuery.with` に合わせて `with` のまま: 新しい呼び方を作らないため
         with: z
           .array(z.enum(EXCHANGE_WITH_VALUES))
           .optional()
@@ -3607,14 +3516,10 @@ export function createCloneTools(context: ToolContext) {
           .string()
           .optional()
           .describe('この1件を全文で読む（一覧に出ている id）。他の条件は無視される'),
-        // **issue #1720。** 同上。
         offset: z
           .number()
           .optional()
           .describe(`id で全文を読むとき、何文字目から読むか（${formatIntRangeJa({ min: 0 })}）`),
-        // **`GET /journal` の `afterId` / `afterAt` と同じ名前・同じ意味**
-        // （`store.ts` の `JournalQuery.after`）。応答の「続きは …」の行の値を
-        // そのまま渡す。
         afterId: z
           .string()
           .optional()
@@ -3645,13 +3550,12 @@ export function createCloneTools(context: ToolContext) {
         if (limitError !== null) return text(limitError);
         const offsetError = describeIntRangeViolation('offset', offset, { min: 0 });
         if (offsetError !== null) return text(offsetError);
-        // --- 全文モード（1件だけ） ---
         if (id !== undefined) {
           let entry: JournalEntry | null;
           try {
             entry = await stores.journal.get(id);
           } catch (error) {
-            // 在るが読めない行を「無い」と言わない（issue #3288）。
+            // 在るが読めない行を「無い」と言わない
             if (error instanceof UnreadableJournalEntryError)
               return text(describeUnreadableJournalEntry('日誌', id));
             throw error;
@@ -3666,11 +3570,7 @@ export function createCloneTools(context: ToolContext) {
           return text(`${entry.at} ${head}（${describePage(part)}）\n\n${part.body}${tail}`);
         }
 
-        // **since/until を正規化する（issue #1515）。** 読めなければ拒否し、
-        // 読めれば `toISOString()` へ正規化してからストアへ渡す——pg は時刻で
-        // 比べるが fs・インメモリは文字列比較なので、正規化しないと秒の省略
-        // （`…T20:21Z`）やオフセット（`+09:00`）で3実装の答えが割れる
-        // （`journal-time.ts` の doc）。
+        // since/until を `toISOString()` へ正規化してからストアへ渡す: pg は時刻で比べるが fs・インメモリは文字列比較で、秒の省略やオフセットで3実装の答えが割れるため
         if (since !== undefined && normalizeJournalTimeBoundary(since) === null) {
           return text(
             describeUnreadableJournalTimeBoundary('since', since) + '**日誌は読んでいない。**',
@@ -3681,10 +3581,7 @@ export function createCloneTools(context: ToolContext) {
             describeUnreadableJournalTimeBoundary('until', until) + '**日誌は読んでいない。**',
           );
         }
-        // **続きの位置（`afterId` / `afterAt`）の検査。** `GET /journal` と同じ
-        // 2つの断り（片方だけ・`afterAt` が ISO として読めない）を、日誌を
-        // 読まずに平文で言う。`afterAt` は錨の `at` と文字列で一致させる値なので、
-        // 正規化はせず応答の値をそのまま渡させる（ルートも同じ）。
+        // `afterAt` は正規化しない: 錨の `at` と文字列で一致させる値のため、応答の値をそのまま渡させる
         if ((afterId === undefined) !== (afterAt === undefined)) {
           return text(
             'afterId と afterAt は両方一緒に渡す（片方だけでは続きの位置が決まらない。' +
@@ -3702,7 +3599,6 @@ export function createCloneTools(context: ToolContext) {
         const normalizedUntil =
           until === undefined ? undefined : (normalizeJournalTimeBoundary(until) ?? undefined);
 
-        // --- 一覧モード ---
         const requested = limit ?? 20;
         let journalPage: Awaited<ReturnType<JournalStore['listPage']>>;
         try {
@@ -3710,32 +3606,16 @@ export function createCloneTools(context: ToolContext) {
             limit: requested,
             ...(normalizedSince === undefined ? {} : { since: normalizedSince }),
             ...(normalizedUntil === undefined ? {} : { until: normalizedUntil }),
-            // **`[]`（空配列）もそのまま転送する。** `types: []` は
-            // `store.ts` の `JournalQuery.types` の doc で「0件」に決まっている
-            // 契約である（#425）。`length === 0` を `{}` へ落とすと、その契約を
-            // **道具の層で覆して「絞らない」に化けさせる。**
-            //
-            // ⚠️ **そして化けたことは、契約の歯からは見えない。**
-            // `verifyJournalStoreQueryEdgeContract` は3実装に「`types: []` = 0件」を
-            // 当てているが、ここで `{}` へ落とすと**値がストアへ届かない**ので、
-            // その歯は緑のまま素通りする（issue #426）。
+            // `[]`（空配列）もそのまま転送する: `{}` へ落とすと「0件」の契約が「絞らない」に化け、契約の歯からも見えないため
             ...(types === undefined ? {} : { types }),
             ...(q === undefined ? {} : { q }),
-            // **`[]`（空配列）もそのまま転送する。** 理由はすぐ上の `types` と
-            // 同じで、`with: []` も `store.ts` の doc で「0件」に決まっている
-            // （#418）。**この2つは同じ渡し方である**——かつて `types` だけが
-            // `length === 0` を `{}` へ落としており、同じ道具の隣り合う2行で
-            // 同じ表記が違う意味を持っていた（issue #426 で揃えた）。
             ...(withFilter === undefined ? {} : { with: withFilter }),
             ...(afterId === undefined || afterAt === undefined
               ? {}
               : { after: { id: afterId, at: afterAt } }),
           });
         } catch (error) {
-          // **錨が見つからないのは「判定できない」であって「先頭から」ではない**
-          // （`store.ts` の `JournalAnchorNotFoundError` / `JournalQuery.after`）。
-          // 黙って先頭から読み直すと、続きを読んでいるつもりのクローンが同じ行を
-          // 読み返す。
+          // 錨が見つからないのは「判定できない」で「先頭から」ではない: 黙って先頭から読み直すと、続きを読んでいるつもりのクローンが同じ行を読み返すため
           if (error instanceof JournalAnchorNotFoundError) {
             return text(
               `afterId=${afterId ?? ''} afterAt=${afterAt ?? ''} が指す日誌の行が見つからない` +
@@ -3747,12 +3627,7 @@ export function createCloneTools(context: ToolContext) {
           throw error;
         }
         const { entries, next: moreBeyond } = journalPage;
-        // **日誌の地平（issue #1510）。** `oldestAt()` は since/until の
-        // どちらかを指定したときだけ引く（索引1行なので、0件でも非空でも
-        // 安く引ける）。実際に注記へ載せるかどうかの判断は
-        // `describeJournalHorizonNote` が持つ——0件かどうかでは決めない
-        // （窓がまるごと地平より後ろなら、0件でも「本当に無かった」と
-        // 言い切れるため）。
+        // 0件かどうかで注記を決めない: 窓がまるごと地平より後ろなら、0件でも「本当に無かった」と言い切れるため
         const oldestAt =
           normalizedSince !== undefined || normalizedUntil !== undefined
             ? await stores.journal.oldestAt()
@@ -3765,10 +3640,7 @@ export function createCloneTools(context: ToolContext) {
         const horizonNoteLines = horizonNote === undefined ? [] : [horizonNote];
 
         if (entries.length === 0 && moreBeyond !== null) {
-          // **頁の行が全部読めずに捨てられた（Issue #2604 / #2605）。** ストアは
-          // 形の合わない行を `limit` の後で捨てるので、空は「無かった」ではない。
-          // 「その条件に当たる日誌は無い」と言うと、読めない行の向こうの行を
-          // 無かったことにする。
+          // 空を「無かった」と言わない: ストアは形の合わない行を `limit` の後で捨てるため、読めない行の向こうの行を無かったことにする
           return text(
             [
               `この頁の ${requested} 行は読めない形の行だけだった（日誌が無いのではない）。` +
@@ -3781,13 +3653,7 @@ export function createCloneTools(context: ToolContext) {
         }
 
         if (entries.length === 0) {
-          // **`q` で0件だったとき、探す対象に入っていない欄が在ることまで言う。**
-          // 黙ると「日誌にその語は無い」と読めるが、実際には tool_use の input に
-          // 書かれているかもしれない（`journal-search.ts`「対象にしていない欄」）。
-          // **判定できないという第3の状態を「無かった」へ潰さない**
-          // （AGENTS.md「静かに失敗する道具」。`conversation_read` が窓を遡り
-          // 切れていないときに「この窓には無い（判定できない）」と言うのと同じ形で、
-          // こちらの取りこぼしの出所は窓ではなく欄である）。
+          // `q` で0件でも、探す対象に入っていない欄が在ることまで言う: 黙ると「日誌にその語は無い」と読めるが tool_use の input に書かれているかもしれないため
           if (q !== undefined) {
             return text(
               [
@@ -3798,9 +3664,7 @@ export function createCloneTools(context: ToolContext) {
               ].join('\n'),
             );
           }
-          // **afterId があるときは「まだ空」と言わない（issue #3286）。** 続きの位置は
-          // 実在の行を指している（指す行が無ければ上で JournalAnchorNotFoundError）ので、
-          // 日誌は空ではない。0件は「この位置より先（古い側）に行が無い」だけである。
+          // afterId があるときは「まだ空」と言わない: 続きの位置は実在の行を指しており、日誌は空ではないため
           const emptyNote =
             afterId !== undefined &&
             since === undefined &&
@@ -3817,9 +3681,7 @@ export function createCloneTools(context: ToolContext) {
           return text([emptyNote, ...horizonNoteLines].join('\n'));
         }
 
-        // **予算を先に決めて、入るところまで積む。** 件数から出力量を決めると、
-        // 何件で壊れるかが運任せになる（それで丸ごと落ちた）。切ったなら必ずそう言う。
-        // 積む形そのものは `renderListing` が持つ（一覧ごとに手で書かない）。
+        // 予算を先に決めて入るところまで積む: 件数から出力量を決めると何件で壊れるかが運任せになるため
         const items = entries.map((entry) => {
           const { head, body } = renderJournalEntry(entry);
           return (
@@ -3828,29 +3690,12 @@ export function createCloneTools(context: ToolContext) {
           );
         });
 
-        // **`tool_use` の混み具合を、この道具自身に名乗らせる（#730 の続き）。**
-        // PR #730 で「読む」道具19本の実行が `tool_use` として日誌に残るように
-        // なった分、既定の眺め（`limit` 既定20・`types` 省略で全種別）で
-        // `tool_use` が `decision` / `exchange` を新しい順20件の枠から
-        // 押し出す速さが上がった。習慣（「types で絞るのを忘れない」）に
-        // 預けず、この呼びで実際に数えた件数だけを言う。
-        //
-        // N = この呼びで日誌から取れた件数（entries.length。上の omitted が
-        // `total` として使っているのと同じ数——`limit` の要求値ではない）。
-        // M = そのうち type === 'tool_use' の件数。
+        // `tool_use` の混み具合は習慣（types で絞るのを忘れない）に預けず、この呼びで数えた件数だけを言う: `tool_use` が decision / exchange を押し出す速さが上がったため
         const toolUseCount = entries.filter((entry) => entry.type === 'tool_use').length;
-        // **`types` が `tool_use` だけを名指しした呼びか。** 出す条件の
-        // 判定はここ（呼びが何を渡したか）に置く。`M === N`（たまたま
-        // 取れた分が全部 tool_use だった）には置かない——`types` を省略した
-        // 呼びでそれが起きたときは、外せばその先にある判断の記録が出てくる
-        // ので、出すのが正しい。
-        // **「だけを名指しした」は every で見る。** `length === 1` で見ると
-        // `types: ['tool_use', 'tool_use']` が「名指しではない」に化けて、
-        // 外す先が無い呼びで断り書きが出る（規則の言葉と食い違う）。
-        // `types: []` はここへ到達しない（0件の契約で上の早期 return に落ちる）。
+        // 出す条件は取れた分が全部 tool_use だったか（`M === N`）ではなく呼びが渡した `types` で判定する: `types` を省略した呼びでは外せば判断の記録が出てくるため
+        // 「だけを名指しした」は every で見る: `length === 1` だと重複指定が名指しでないことになり、外す先が無い呼びで断り書きが出るため
         const typesIsToolUseOnly =
           types !== undefined && types.length > 0 && types.every((type) => type === 'tool_use');
-        // ⭐ 出す条件: M > 0 かつ「tool_use だけを名指しした呼びではない」とき。
         const toolUseNotice =
           toolUseCount > 0 && !typesIsToolUseOnly
             ? [
@@ -3859,14 +3704,7 @@ export function createCloneTools(context: ToolContext) {
               ]
             : [];
 
-        // **続きの位置。予算で省略したときは `next` を案内してはならない。**
-        // `next` は「頁の最後の生の行」を指すので、省略した行（表示していない
-        // `rest` 件）を飛び越えてしまう。省略したなら、**表示した最後の行**を
-        // 続きの位置にする——それは実在する行（id と at が一致する）なので錨に
-        // なれ、`after` は「錨 → 絞り込み → limit」の順で効く（`store.ts` の
-        // `JournalQuery.after`）から、錨のすぐ次の行（省略した先頭の行）から
-        // 読み継げる。省略しなかったときだけ、ストアの `next`（捨てた行まで含めた
-        // 頁の終端）を使う。
+        // 予算で省略したときは `next` を案内しない: `next` は省略した行を飛び越えるため、表示した最後の行を続きの位置にする
         let shownCount = items.length;
         const listing = renderListing(items, {
           budget: JOURNAL_BUDGET,
@@ -3896,21 +3734,7 @@ export function createCloneTools(context: ToolContext) {
       },
     ),
 
-    // --- 人間への確認 ----------------------------------------------------
-    /**
-     * 人間に確認を積む。`managerId`/`requestId` 付きなら、マネージャーからの
-     * 許可確認・質問を人間へ回している（宛先を持つ確認）。
-     *
-     * **不要になったら `approval_withdraw` で取り下げられる（issue #963）。
-     * ただし、取り下げても `deny` は自動では飛ばない。** `deny` は受け取る
-     * マネージャーにとって「人間が拒否した」を意味する信号であって、
-     * 取り下げの場面で人間は何も言っていない——ここで自動 `deny` を選択肢に
-     * 持てば、機械が人間の承認を偽造することになる（同じ言葉を
-     * `approval_withdraw` と `manager_send` の doc にも置いてある。issue
-     * #963 §4）。**⟹ `jobId`/`requestId` 付きの確認が取り下げられても、
-     * 積んだマネージャー（`record.waiting`）は解放されない。** 待ったままなら
-     * クローン自身が `manager_send`（`decision` 付き）で答えて始末をつける。
-     */
+    // 取り下げても `deny` は自動で飛ばさない: 取り下げの場面で人間は何も言っておらず、機械が人間の承認を偽造することになるため
     tool(
       'ask_human',
       [
@@ -3941,13 +3765,7 @@ export function createCloneTools(context: ToolContext) {
           .string()
           .optional()
           .describe('マネージャーからの確認を人間に回す場合、その manager_id'),
-        // **生ログの id を渡しても通らない（#572）。** ここが受け取るのは runner が
-        // `#onPermission` で SDK から受け取った control_request の `request_id` で、
-        // 生ログ（CLI の transcript）に出る `toolu_…`（`tool_use_id`）とも
-        // `req_…`（API の request id）とも**名前空間が違う**。実測では、生ログに
-        // control_request の `request_id` は1件も現れない ⟹ **受信箱に届かなかった
-        // 確認へ、生ログを読んで答える手段は無い。** 別物だと書いていなかったので、
-        // 読み手はまず生ログの id を試し、「待っていない」で弾かれていた。
+        // 生ログの id では通らない: `request_id` は生ログの `tool_use_id` や API の request id とは名前空間が違うため
         requestId: z
           .string()
           .optional()
@@ -3960,23 +3778,15 @@ export function createCloneTools(context: ToolContext) {
           ),
       },
       async ({ question, context: background, questions, managerId, requestId }) => {
-        // **設問の id の重複は道具の側で弾く（issue #2525）。** 何も積まない。
         if (questions !== undefined) {
           const violation = describeQuestionsViolation(questions);
           if (violation !== null) return text(`承認待ちには積まなかった: ${violation}`);
         }
-        // **空白だけも断る**（#3600。`commitment_close`（#3544）・HTTP の `nonBlankString`（#3142）と揃える）。
         const questionError =
           describeStringLengthViolation('question', question, { min: 1 }) ??
           describeBlankViolation('question', question);
         if (questionError !== null) return text(`承認待ちには積まなかった: ${questionError}`);
-        // **いまのターンの会話 id を積む（#768）。** マネージャー発の確認・蒸留・
-        // timer など内部ターンでは呼んだ結果が `undefined` になるので、その場合は
-        // ここも undefined のままになる（= 今までどおり `self` へ積まれる。
-        // 挙動を変えない）。`conversationId` 自体の省略は上の関数冒頭の
-        // 歯（`typeof context.conversationId !== 'function'`）が落とす。
         const conversationId = getConversationId();
-        // **カードの時刻を決める前に、ここまでに見せた本文を日誌へ書く**（#3605。`ToolContext.flushReply`）。
         await context.flushReply?.();
         const approval: PendingApproval = {
           id: randomUUID(),
@@ -3991,11 +3801,6 @@ export function createCloneTools(context: ToolContext) {
         try {
           await stores.jobs.putApproval(approval);
         } catch (error) {
-          // **`journal.append` と同じ形（`appendJournalOrThrow` の doc）
-          // ——ガードで飲むのではなく、跡を残してから投げ直す。** ここが
-          // 埋めるのは「承認待ちキューへの記録が落ちたのに、stderr にも
-          // クローンへの応答にも SQLSTATE 等の理由が1つも残らない」という
-          // 穴（Issue #1229 受け入れ基準2）。
           noteDroppedRecord('承認待ち', approvalShape(approval), error);
           throw new ApprovalNotRecordedError(approval, error);
         }
@@ -4014,25 +3819,8 @@ export function createCloneTools(context: ToolContext) {
       },
     ),
 
-    /**
-     * **許可をコードではなくデータにする**（Issue #863）。人間に「この Bash
-     * の規則を、以降は聞かずに通してよいか」を確認する——`ask_human` の特殊形
-     * で、承認待ちキューに積むところまでは同じだが、`permissionRequest`
-     * （`rule` / `allows` / `denies`）を一緒に運ぶ。
-     *
-     * **要求そのものが自己矛盾していたら、キューに積む前に拒否する。**
-     * `validatePermissionRequest`（`permission-rule.ts`）が (1) `rule` の
-     * 書式 (2) `allows` が1件以上あり全部その規則に一致する (3) `denies` が
-     * 1件以上あり1件も一致しない、を検査する。ここを通らないものは
-     * `PendingApproval` を1行も作らない——人間の確認画面に「allows の例が
-     * 実は通らない規則」のような壊れた要求を出さないためである。
-     *
-     * **承認したかどうかの判定・許可の記録は、ここではなく人間の回答を受ける
-     * 側（`clone.ts` の `answerApproval` /
-     * `#recordPermissionGrantIfConsented`）が持つ。** ここは「通ってよい
-     * 要求の形を作る」ところまでで、「誰が」「どう答えたら」記録するかは
-     * 関知しない（層を分ける——道具から許可を書く経路は作らない）。
-     */
+    // 自己矛盾した要求はキューに積む前に拒否する: 人間の確認画面に壊れた要求を出さないため
+    // 許可の記録はここで持たない: 道具から許可を書く経路は作らないため
     tool(
       'request_permission',
       [
@@ -4055,10 +3843,7 @@ export function createCloneTools(context: ToolContext) {
         reason: z.string().describe('なぜこの許可が要るか。人間が承認画面で読む理由文'),
       },
       async (args) => {
-        // **検算は、承認の行に残る値と同じもので行う（#3386）。** 承認の行は `putApproval` の入口で
-        // NUL を落として残す（`stripNulDeep`）ので、落とす前の値で検算すると、通ったはずの要求が
-        // 残った値では自己矛盾する（denies の例が規則に一致する・規則が `Bash()` になる）。
-        // 質問文・`permissionRequest`・検算の3つが同じ値を見るよう、入口で1度だけ落とす。
+        // 検算は承認の行に残る値と同じもので行う: 入口で NUL が落ちるので、落とす前の値で検算すると通ったはずの要求が自己矛盾するため
         const { rule, allows, denies, reason } = stripNulDeep(args);
         const validation = validatePermissionRequest({ rule, allows, denies });
         if (!validation.ok) {
@@ -4066,7 +3851,6 @@ export function createCloneTools(context: ToolContext) {
             `request_permission を拒否した（キューに積んでいない）: ${validation.reason}`,
           );
         }
-        // **空白だけも断る**（#3600。`commitment_close`（#3544）・HTTP の `nonBlankString`（#3142）と揃える）。
         const reasonError =
           describeStringLengthViolation('reason', reason, { min: 1 }) ??
           describeBlankViolation('reason', reason);
@@ -4080,7 +3864,6 @@ export function createCloneTools(context: ToolContext) {
           `通る例: ${allows.join(' / ')}\n通らない例: ${denies.join(' / ')}\n` +
           `${describePermissionEvidence(rule, context.recentDenials)}\n` +
           `許可するなら「${PERMISSION_GRANT_CONSENT_PHRASE}」とだけ答える（句点や言い換えがあると記録しない）。`;
-        // **`ask_human` と同じ**（カードの時刻を決める前に、ここまでに見せた本文を日誌へ書く。#3605）。
         await context.flushReply?.();
         const approval: PendingApproval = {
           id: randomUUID(),
@@ -4093,9 +3876,6 @@ export function createCloneTools(context: ToolContext) {
         try {
           await stores.jobs.putApproval(approval);
         } catch (error) {
-          // **`ask_human` と同じ形**（`ApprovalNotRecordedError` の doc）——
-          // ここが扱うのも `putApproval` 自体が落ちた場合だけで、副作用ゼロ
-          // なので「やり直してよい」の1本にまとまる。
           noteDroppedRecord('承認待ち', approvalShape(approval), error);
           throw new ApprovalNotRecordedError(approval, error);
         }
@@ -4109,9 +3889,6 @@ export function createCloneTools(context: ToolContext) {
           },
           'act-completed',
         );
-        // **`ask_human` と同じ合図を使う**（chat ストリームの `type: 'ask_human'`）
-        // ——人間から見れば「承認待ちキューに何か積まれた」という点で同じ事実
-        // であり、専用の chat イベント型を新設する理由が無い。
         context.emit({ type: 'ask_human', approvalId: approval.id, question });
         return text(
           `承認待ちキューに積んだ（${approval.id}）。人間が「${PERMISSION_GRANT_CONSENT_PHRASE}」とちょうど答え、` +
@@ -4142,7 +3919,6 @@ export function createCloneTools(context: ToolContext) {
       async ({ id, offset = 0 }) => {
         const offsetError = describeIntRangeViolation('offset', offset, { min: 0 });
         if (offsetError !== null) return text(offsetError);
-        // --- 全文モード（1件だけ） ---
         if (id !== undefined) {
           let approval: PendingApproval | null;
           try {
@@ -4153,9 +3929,7 @@ export function createCloneTools(context: ToolContext) {
             throw error;
           }
           if (!approval) return text(`承認待ち ${id} は無い（id が違う）。`);
-          // **答えが付いた件も、取り下げた件も読める。** 「もう答えが来た/
-          // 取り下げた」ことと「その質問が何だったか」は別の問いで、後者は
-          // 終端が付いた後にこそ要る（#963）。
+          // 答えが付いた件も取り下げた件も読める: 「その質問が何だったか」は終端が付いた後にこそ要るため
           const status =
             approval.withdrawnAt !== undefined
               ? `${approval.withdrawnAt} に取り下げ`
@@ -4187,27 +3961,13 @@ export function createCloneTools(context: ToolContext) {
           return text(`${head}（${describePage(part)}）\n\n${part.body}${tail}`);
         }
 
-        // --- 一覧モード ---
-        //
-        // ⚠️ **#757 で直した。** 以前はここに `sort` が1行も無く、並びをストアの
-        // 実装へ丸投げしていた——「古い順」を作っているのがストアの実装で、
-        // 実装ごとに違っていた（pg は `orderBy(asc(approvals.createdAt))`、fs と
-        // インメモリは挿入順）。**この一覧は予算で切って一部しか出さない**ので、
-        // 並びが変わると「切り落とされる側」が構成によって変わる、という欠陥
-        // だった（#757 の「起きたときどう壊れるか」）。
-        // **ここで全順序にする** — `createdAt` 昇順、同着（同じ createdAt）は
-        // `id` 昇順。`usageAxisEntries`（下）の「費用降順 → ラベル昇順」と同じ
-        // 作法（全順序にして、ページングの前提を壊さない）。
-        // ⚠️ **ストア側の `orderBy`（`storage-pg/src/jobs.ts`）は消さないこと** —
-        // 消すと pg が大きな表を未整列のまま全件返してから、ここで並べることに
-        // なる（#757 の注記）。
+        // ここで全順序にする（`createdAt` 昇順、同着は `id` 昇順）: この一覧は予算で切るので、並びがストア実装依存だと切り落とされる側が構成によって変わるため
+        // ストア側の `orderBy` は消さない: 消すと pg が大きな表を未整列のまま全件返してからここで並べることになるため
         const approvalList = await stores.jobs.listApprovals({ pendingOnly: true });
         const pending = [...approvalList.entries].sort(
           (a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
         );
-        // **読めない行は一覧から消さず、件数と id で言う**（issue #2298。0件のときは
-        // `null` で、何も出さない）。予算（`APPROVAL_LIST_BUDGET`）の外に置く——
-        // `describeUnreadableApprovals` が id の数を締めているので、伸びない。
+        // 読めない行は一覧から消さず、件数と id で言う
         const unreadableNote = describeUnreadableApprovals(approvalList.unreadable);
         if (pending.length === 0) {
           return text(
@@ -4220,12 +3980,7 @@ export function createCloneTools(context: ToolContext) {
           renderListingEntry({
             id: approval.id,
             title: approvalTitle(approval.question),
-            // **この一覧は回答待ちだけを出すので `answeredAt` は常に無く、更新は
-            // 作成と一致する。** それは軸が無いのではなく「まだ一度も変わって
-            // いない」という観測そのものなので、値を作らずに `createdAt` を出す
-            // （下の断り書きの行で、読み手にもそう読める形にしてある）。
-            // なぜ `??` の左枝がここから到達しないか、それでも消してはいけない
-            // 理由は `approvalUpdatedAt`（`schema.ts`）の doc を見ること。
+            // 更新は `createdAt` をそのまま出す: 回答待ちだけの一覧では「まだ一度も変わっていない」という観測で、値を作らないため
             createdAt: approval.createdAt,
             updatedAt: approvalUpdatedAt(approval),
             summary: excerptLine(approval.question, APPROVAL_QUESTION_EXCERPT),
@@ -4245,16 +4000,10 @@ export function createCloneTools(context: ToolContext) {
             renderListing(items, {
               budget: APPROVAL_LIST_BUDGET,
               omitted: ({ rest, shown, total }) =>
-                // **#756 で「並べ直していない」と精密化した文言を、#757 で
-                // 「並べ直す」実装に合わせてもう一段進めた。** 並びはもう
-                // ストアの実装依存ではなく、ここが作成が古い順（同着は id 昇順）
-                // に並べ直したものなので、断言してよい。
                 `…ほか ${rest} 件は省略（回答待ちは ${total} 件あり、作成が古い順に先頭から ${shown} 件だけ出した）。`,
             }),
             '（質問は抜粋。全文は approvals_list id=<id> で取れる。答えが付いた件・取り下げた件も id で開けて、回答/取り下げ理由もそこに出る）',
             '（更新＝この1件が最後に変わった時刻。回答待ちだけを出す一覧なので、常に作成と同じになる）',
-            // **#757 で並びをこの口が保証する形にした。** 以前はここで
-            // 「並べ直しは1行も持たない」と申告していたが、いまは持つ。
             '（並び順: 作成時刻の昇順。同じ作成時刻なら id の昇順で全順序にしてある。保存先の実装には依存しない）',
             ...(unreadableNote === null ? [] : [unreadableNote]),
           ].join('\n'),
@@ -4262,18 +4011,7 @@ export function createCloneTools(context: ToolContext) {
       },
     ),
 
-    /**
-     * 承認の答えと、その後に自分が取った行動を対で読む（issue #847 の案B）。
-     *
-     * **読むだけの道具である**（`TRACELESS_CLONE_TOOLS`）。材料と状態の分け方は
-     * `approval-trace.ts` の doc に在る——ここは出し方（予算と抜粋）だけを持つ。
-     * `GET /approvals/:id/trace` と CLI の `/approval-trace` が同じ
-     * `traceApproval` / `renderApprovalTrace` を通る。
-     *
-     * **`approvals_list` の `id` モードへ相乗りさせない。** issue #847 が
-     * 「承認の口（`ask_human` / `approvals_list`）の形を変えない」と決めている
-     * ——足すのは記録と読み口の側だけ。
-     */
+    // `approvals_list` の `id` モードへ相乗りさせない: 承認の口（`ask_human` / `approvals_list`）の形を変えないと決めているため
     tool(
       'approval_trace',
       [
@@ -4304,42 +4042,8 @@ export function createCloneTools(context: ToolContext) {
       },
     ),
 
-    /**
-     * 承認待ちを取り下げる（issue #963）。
-     *
-     * **`commitment_close` と同じ思想。** 行を消さず、`withdrawnAt` /
-     * `withdrawnReason` で終端させる——`answeredAt` / `answer` が回答という
-     * 終端を表すのと対称に、こちらは取り下げという終端を表す
-     * （`schema.ts` の `pendingApprovalSchema.withdrawnAt` の doc）。
-     *
-     * **回答済みは取り下げられない。** 「答えたのに取り下げられた」という
-     * 状態を作らない（issue #963 の受け入れ基準）。
-     *
-     * **⚠️ `jobId`/`requestId` を持つ件（マネージャーからの許可確認を人間へ
-     * 回した件）は、取り下げても自動では何もしない（issue #963 §4、案(b)）。**
-     * `ask_human` を経由してこの確認を人間へ回したマネージャーは、
-     * `record.waiting` に積んだままなので `manager_send` で `decision` を
-     * 返すまで待ち続ける（`manager.ts` の `#choosePending` / `record.waiting`）。
-     *
-     * **自動 `deny` は「既定にしない」のではなく、選択肢として持たない
-     * （確定。issue #963 §4）。** `deny` は受け取るマネージャーにとって
-     * 「人間が拒否した」を意味する信号である。しかし取り下げの場面で
-     * 人間は何も言っていない——クローンがここで `deny` を発することは、
-     * 機械が人間の承認を偽造することにあたる。だから既定にしないだけでは
-     * 足りず、選択肢としても持たない（人間の承認の迂回に近い——
-     * `AGENTS.md` 地雷表「枠に当たったら自動で別 provider へ切り替える」と
-     * 同種の判断）。**この判断はこの1箇所だけでなく `ask_human` と
-     * `manager_send`（`decision` の口）の doc にも同じ言葉で置いてある——
-     * 次に同じ提案をする人が、どこから読んでも同じ答えに着くように。**
-     *
-     * **案(a)（`jobId`/`requestId` を持つ件は取り下げ不可にする）を採らない
-     * 理由は、マネージャー自体が既に停止している場合に詰むため**
-     * （issue #963 の言う通り）——`ask_human` の `human_answer` 経路
-     * （このファイルすぐ上、`clone.ts` の `case 'human_answer'`）が
-     * 「答えは人間から届き、宛先への配達はクローン自身が `manager_send` で
-     * 行う」という設計を既に採用しているので、取り下げも同じ形
-     * （クローンへ委ねる）に揃える。
-     */
+    // 自動 `deny` は選択肢として持たない: 取り下げの場面で人間は何も言っておらず、機械が人間の承認を偽造することになるため
+    // `jobId`/`requestId` を持つ件を取り下げ不可にしない: マネージャー自体が既に停止している場合に詰むため
     tool(
       'approval_withdraw',
       [
@@ -4359,7 +4063,6 @@ export function createCloneTools(context: ToolContext) {
           ),
       },
       async ({ id, reason }) => {
-        // **空白だけも断る**（#3600。`commitment_close`（#3544）・HTTP の `nonBlankString`（#3142）と揃える）。
         const reasonError =
           describeStringLengthViolation('reason', reason, { min: 1 }) ??
           describeBlankViolation('reason', reason);
@@ -4384,10 +4087,7 @@ export function createCloneTools(context: ToolContext) {
           );
         }
         const withdrawnAt = new Date().toISOString();
-        // **読み直す1操作で書き、その間に回答・取り下げが入っていれば書かない（issue #2007）。**
-        // 上の判定は早道として残す。以前はここで上の写しを `putApproval` で丸ごと書き
-        // 戻していたので、読んでから書くまでの間に人間の回答が入ると、その回答を消して
-        // 取り下げを立てていた。
+        // 読み直す1操作で書く: 写しを丸ごと書き戻すと、読んでから書くまでの間に入った人間の回答を消してしまうため
         let settledNow: PendingApproval | undefined;
         let written: PendingApproval | null;
         try {
@@ -4399,7 +4099,6 @@ export function createCloneTools(context: ToolContext) {
             return { ...current, withdrawnAt, withdrawnReason: reason };
           });
         } catch (error) {
-          // 上の `getApproval` の後に行が読めなくなった窓。取り下げは書いていない。
           if (error instanceof UnreadableApprovalError) return text(describeUnreadableApproval(id));
           throw error;
         }
@@ -4445,7 +4144,6 @@ export function createCloneTools(context: ToolContext) {
       },
     ),
 
-    // --- 日報 --------------------------------------------------------------
     tool(
       'daily_report_write',
       [
@@ -4474,7 +4172,6 @@ export function createCloneTools(context: ToolContext) {
       },
     ),
 
-    // --- 利用状況（いくら使ったか） --------------------------------------------
     /**
      * **人間が見られるものは、クローンからも見られること。**
      *
@@ -4594,7 +4291,6 @@ export function createCloneTools(context: ToolContext) {
       },
     ),
 
-    // --- 継続中の依頼（時間起点の仕込み） --------------------------------------
     tool(
       'schedule_list',
       [
@@ -4636,7 +4332,6 @@ export function createCloneTools(context: ToolContext) {
       async ({ kind, offset = 0, cursor }) => {
         const offsetError = describeIntRangeViolation('offset', offset, { min: 0 });
         if (offsetError !== null) return text(offsetError);
-        // --- 全文モード（1件だけ） ---
         if (kind !== undefined) {
           // **issue #2177。** `get()` は読めない行で `UnreadableScheduleError`
           // を投げる（`ScheduleStore.get` の doc）。この口に書き直しの手段は
@@ -4665,7 +4360,6 @@ export function createCloneTools(context: ToolContext) {
           return text(`${head}（依頼本文: ${describePage(part)}）\n\n${part.body}${tail}`);
         }
 
-        // --- 一覧モード ---
         const scheduleList = await stores.schedules.list();
         const plans = scheduleList.entries;
         // **読めない行は一覧から消さず、件数と kind で言う**（issue #2343。単票の
@@ -5001,7 +4695,6 @@ export function createCloneTools(context: ToolContext) {
       },
     ),
 
-    // --- 引き受けたまま終わっていない仕事（未了の台帳） ------------------------
     //
     // **これは「やることの一覧」ではない。** 器が持つのは「何を頼まれたか」と
     // 「まだ片付いていない」の2値だけで、順序も優先度も締切も持たない（PRD「自律」）。
@@ -5119,7 +4812,6 @@ export function createCloneTools(context: ToolContext) {
         const effectiveOrder = order ?? 'oldest';
         const offsetError = describeIntRangeViolation('offset', offset, { min: 0 });
         if (offsetError !== null) return text(offsetError);
-        // --- 全文モード（1件だけ） ---
         if (id !== undefined) {
           // **片付いた件も読める。`includeClosed` は要求しない。** id で名指し
           // している以上、その1件を見たいことは明らかである。そして読みたいのは
@@ -5180,7 +4872,6 @@ export function createCloneTools(context: ToolContext) {
           return text(`${head}（${describePage(part)}）\n\n${part.body}${tail}`);
         }
 
-        // --- 一覧モード ---
         // **`list()` は `{ entries, unreadable, trimmedClosed }` を返す
         // （issue #296 / #416）。** 読める行（`entries`）が0件でも、読めない行
         // （`unreadable`）だけは在りうるので、「無い」と返してよいのは3つとも
@@ -6230,7 +5921,6 @@ export function createCloneTools(context: ToolContext) {
       },
     ),
 
-    // --- 受信箱（未処理の合図） ----------------------------------------------
     //
     // issue #972 本文は「クローン自身の道具にするかは別途の判断（自分の受信箱を
     // 自分で捨てられることの是非があるため、まずは人間の手で足りる）」と保留して
@@ -6340,7 +6030,6 @@ export function createCloneTools(context: ToolContext) {
         if (sourcesElementError !== null) return text(sourcesElementError);
         const beforeLengthError = describeStringLengthViolation('before', before, { min: 1 });
         if (beforeLengthError !== null) return text(beforeLengthError);
-        // **空白だけも断る**（#3600。`commitment_close`（#3544）・HTTP の `nonBlankString`（#3142）と揃える）。
         const reasonError =
           describeStringLengthViolation('reason', reason, { min: 1 }) ??
           describeBlankViolation('reason', reason);
@@ -6555,7 +6244,6 @@ export function createCloneTools(context: ToolContext) {
       },
     ),
 
-    // --- 実行環境プロファイル --------------------------------------------
     //
     // **人間の `~/.zshenv` に当たるもの。** 人間が自分で開いて直せる以上、
     // その写像であるクローンにできないのは能力の削除である（north_star 禁止2）。
@@ -6633,7 +6321,6 @@ export function createCloneTools(context: ToolContext) {
       },
     ),
 
-    // --- 認証トークンのプール（読むだけ） --------------------------------
     //
     // **書き込みは渡さない**（人間の決定 2026-08-25）。回すのは実装（回し手）で
     // あって、クローンの判断を待たない —— PRD「provider」が逐語でそう書いている
@@ -6827,7 +6514,6 @@ export function createCloneTools(context: ToolContext) {
       },
     ),
 
-    // --- 許可の記録（読むだけ） -------------------------------------------
     //
     // **書き込みは渡さない。** 取り消し（`POST /permission-grants/:id/revoke`）も、
     // 読めない行を消す口（`remove-unreadable`）も人間の手に限る（#2522）。
@@ -6867,7 +6553,6 @@ export function createCloneTools(context: ToolContext) {
       },
     ),
 
-    // --- アカウント（読むだけ。個人の情報は出さない） ----------------------
     //
     // 人間の入口（`GET /access` / `alteroid access list`）と同じ
     // `AuthStore.listAccounts()` / `listUnreadableAccounts()` に乗せる。
@@ -7052,7 +6737,6 @@ export function createCloneTools(context: ToolContext) {
       },
     ),
 
-    // --- 仕事のやり方（PracticeStore、#1055 段3②） -------------------------
     //
     // **ここに `practice_apply` / `practice_enforce` を足さないこと。** 読み書き
     // 一覧の4本しか無く、「このやり方に従え」に当たる操作は1つも無い——それは
@@ -7490,7 +7174,6 @@ export function createCloneTools(context: ToolContext) {
       },
     ),
 
-    // --- 自分自身 -----------------------------------------------------------
     tool(
       'self_read',
       [
@@ -7752,7 +7435,6 @@ export function createCloneTools(context: ToolContext) {
       },
     ),
 
-    // --- 委譲 --------------------------------------------------------------
     tool(
       'manager_start',
       [
@@ -9702,7 +9384,6 @@ export function createCloneTools(context: ToolContext) {
         if (limitError !== null) return text(limitError);
         const offsetError = describeIntRangeViolation('offset', offset, { min: 0 });
         if (offsetError !== null) return text(offsetError);
-        // --- 全文モード（発言1件） ---
         if (id !== undefined) {
           let entry: JournalEntry | null;
           try {
@@ -9750,7 +9431,6 @@ export function createCloneTools(context: ToolContext) {
             ? undefined
             : (normalizeJournalTimeBoundary(untilInput) ?? undefined);
 
-        // --- ここから一覧系。まず窓を取り、遡った件数と先頭到達を毎回言う ---
         const scanLimit = scan ?? 2000;
         // **会話の一覧（`conversationId` も `q` も無い呼び）だけが cursor で頁を送る（#3644）。**
         const listMode = conversationId === undefined && q === undefined;
@@ -9839,7 +9519,6 @@ export function createCloneTools(context: ToolContext) {
               ]
             : [];
 
-        // --- 会話の中身（conversationId 指定、古い順） ---
         //
         // **畳み込み込みの正本（`conversationMessages`）を経由する。** かつてはここで
         // `humanExchanges` → `bySpeaker` → `toMessage`/`searchExchanges` を手で
@@ -9925,7 +9604,6 @@ export function createCloneTools(context: ToolContext) {
           );
         }
 
-        // --- 語で探す（q だけ、新しい順） ---
         if (q !== undefined) {
           const exchanges = bySpeaker(humanExchanges(entries), speaker);
           const matched = searchExchanges(exchanges, q);
@@ -9960,7 +9638,6 @@ export function createCloneTools(context: ToolContext) {
           );
         }
 
-        // --- 会話の一覧（新しい順） ---
         //
         // **`speaker` はここでは効かない。効かないことを黙らない。** 会話が在るか
         // どうかは誰が喋ったかで変わらない（片方だけで数えると、あるはずの会話が
@@ -10498,7 +10175,6 @@ export function createCloneTools(context: ToolContext) {
         if (sessionIdsElementError !== null) return text(sessionIdsElementError);
         const beforeLengthError = describeStringLengthViolation('before', before, { min: 1 });
         if (beforeLengthError !== null) return text(beforeLengthError);
-        // **空白だけも断る**（#3600。`commitment_close`（#3544）・HTTP の `nonBlankString`（#3142）と揃える）。
         const summaryError =
           describeStringLengthViolation('summary', summary, { min: 1 }) ??
           describeBlankViolation('summary', summary);
