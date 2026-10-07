@@ -111,7 +111,13 @@ function report(result: InboxRemoveManyResult, dryRun: boolean, options: InboxRe
   );
 
   if (dryRun) {
-    stdout.write('1件も消していません（試算）。実行するには --execute を付けてもう一度:\n');
+    stdout.write('1件も消していません（試算）。\n');
+    // 試算でも id を並べる: 取り消せない一括削除の前に、絞り込みが意図どおりかを確かめられないため
+    if (result.removedIds.length > 0) {
+      stdout.write(`消すことになる id（${result.removedIds.length}件、古い順）:\n`);
+      for (const id of result.removedIds) stdout.write(`  ${id}\n`);
+    }
+    stdout.write('実行するには --execute を付けてもう一度:\n');
     stdout.write(`  ${describeExecuteCommand(options)}\n`);
     return;
   }
