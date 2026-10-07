@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { renderMarkdown } from './markdown.js';
+import { wrapRichLine } from './wrap.js';
 
 const flat = (text: string): string[] =>
   renderMarkdown(text).map((line) => line.map((s) => s.text).join(''));
@@ -28,6 +29,26 @@ describe('renderMarkdown（marked の lexer → 意味ロール付き span）', 
   it('リンクは見えている文言のまま下線・色付き（HTML は作らない）', () => {
     const [line] = renderMarkdown('[文言](https://example.com)');
     expect(line).toEqual([{ text: '文言', underline: true, tone: 'link' }]);
+  });
+
+  it('画像は alt のあとに URL を添える（alt 無しは URL だけ、URL 無しは alt だけ）', () => {
+    expect(flat('![図](https://example.com/a.png)')).toEqual(['図（https://example.com/a.png）']);
+    expect(flat('![](https://example.com/a.png)')).toEqual(['https://example.com/a.png']);
+    expect(flat('![図]()')).toEqual(['図']);
+    const [line] = renderMarkdown('![図](https://example.com/a.png)');
+    expect(line).toEqual([
+      { text: '図', underline: true, tone: 'link' },
+      { text: '（', tone: 'marker' },
+      { text: 'https://example.com/a.png', underline: true, tone: 'link' },
+      { text: '）', tone: 'marker' },
+    ]);
+  });
+
+  it('画像の長い URL は折り返しても 1 文字も欠けない', () => {
+    const url = `https://example.com/${'a'.repeat(50)}.png`;
+    const [line] = renderMarkdown(`![図](${url})`);
+    const rows = wrapRichLine(line ?? [], 20).map((r) => r.map((s) => s.text).join(''));
+    expect(rows.join('')).toBe(`図（${url}）`);
   });
 
   it('先頭・末尾の空行を落とし、連続する空行を 1 本へ畳む', () => {

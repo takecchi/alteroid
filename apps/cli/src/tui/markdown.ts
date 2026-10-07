@@ -49,7 +49,16 @@ function inlineSpans(tokens: readonly Token[] | undefined, base: RichSpan): Rich
       }
       case 'image': {
         const im = token as Tokens.Image;
-        out.push({ ...base, underline: true, tone: 'link', text: im.text || im.href });
+        const style: RichSpan = { ...base, underline: true, tone: 'link' };
+        // alt だけにしない: 端末は画像を出せず、URL を捨てると在り処を辿れない
+        if (!im.href) out.push({ ...style, text: im.text });
+        else if (!im.text) out.push({ ...style, text: im.href });
+        else {
+          out.push({ ...style, text: im.text });
+          out.push({ ...base, tone: 'marker', text: '（' });
+          out.push({ ...style, text: im.href });
+          out.push({ ...base, tone: 'marker', text: '）' });
+        }
         break;
       }
       case 'br':
