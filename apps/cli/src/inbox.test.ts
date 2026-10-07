@@ -1,3 +1,5 @@
+import { spawnSync } from 'node:child_process';
+
 import type { InboxBacklogBreakdown } from '@alteroid/core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -229,7 +231,7 @@ describe('alteroid inbox remove — 応答の表示', () => {
     // そのまま打てる次の一手（--execute 付き）を案内する
     expect(text).toContain('--execute');
     expect(text).toContain(
-      'alteroid inbox remove --types manager_message --reason "r" --limit 10 --execute',
+      "alteroid inbox remove --types 'manager_message' --reason 'r' --limit '10' --execute",
     );
   });
 
@@ -478,5 +480,48 @@ describe('alteroid inbox show', () => {
     globalThis.fetch = (() => Promise.reject(new Error('fetch failed'))) as unknown as typeof fetch;
 
     await expect(inboxShowCommand()).rejects.toThrow('fetch failed');
+  });
+});
+
+/**
+ * 試算が案内する「実行するコマンド」を**本物の POSIX シェルへ貼ったとき**、試算と同じ入力
+ * （理由・絞り込み）で実行されること（#3729）。`alteroid` を引数をそのまま返す関数に
+ * 差し替えて貼る——引用が壊れていれば、展開・分割された別の引数が返る。
+ */
+describe('alteroid inbox remove — 試算が案内するコマンド', () => {
+  function argsWhenPasted(output: string): string[] {
+    const line = output.split('\n').find((l) => l.trimStart().startsWith('alteroid inbox remove'));
+    if (line === undefined) throw new Error(`案内の行が無い: ${output}`);
+    const script = `alteroid() { for a in "$@"; do printf '%s\\0' "$a"; done; }\n${line}`;
+    const run = spawnSync('sh', ['-c', script], { encoding: 'utf8', env: { HOME: '/home/x' } });
+    return run.stdout.split('\0').slice(0, -1);
+  }
+
+  it('--reason の " $ ` \\ \' と、--sources / --types の空白は、貼っても元の値のまま', async () => {
+    const out = captureStdout();
+    const reason = 'cleanup "old" $HOME `id` back\\slash it\'s';
+    await inboxRemoveCommand({
+      types: 'manager_message, timer',
+      sources: 'a, b',
+      before: '2026-09-15T00:00:00.000Z',
+      reason,
+      limit: '5',
+    });
+
+    expect(argsWhenPasted(out())).toEqual([
+      'inbox',
+      'remove',
+      '--types',
+      'manager_message, timer',
+      '--sources',
+      'a, b',
+      '--before',
+      '2026-09-15T00:00:00.000Z',
+      '--reason',
+      reason,
+      '--limit',
+      '5',
+      '--execute',
+    ]);
   });
 });

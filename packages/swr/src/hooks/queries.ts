@@ -29,15 +29,13 @@ export interface UsageQuery {
   layer?: UsageLayer;
   site?: UsageSite;
   /**
-   * どの認証トークンで（issue #2059）。画面の token 欄はここに積んでいたのに、
-   * この型に欄が無く、下の `useUsage` も取り出していなかったので、`GET /usage`
-   * へ届いていなかった（欄に入れても絞り込まれなかった）。
+   * どの認証トークンで。下の `useUsage` が取り出して `GET /usage` へ渡す。
    */
   tokenId?: string;
 }
 
 /**
- * `GET /managers` の絞り込みと窓（issue #670）。
+ * `GET /managers` の絞り込みと窓。
  *
  * **全部 optional で、1つも渡さない呼びはクエリ文字列を1文字も付けない。**
  * デーモン側が opt-in（渡さなければ応答が1バイトも変わらない）なので、
@@ -77,10 +75,9 @@ export const KEY = {
   status: { type: 'status' } as const,
   attachmentLimits: { type: 'attachmentLimits' } as const,
   /**
-   * **窓ごとに別のキーになる**（issue #670）。かつてここは
-   * `{ type: 'managers' }` の1つだけで、`mutate(KEY.managers)` が呼べていた。
+   * **窓ごとに別のキーになる。**
    *
-   * **⚠️ その形はもう使えない。** 関数になった `KEY.managers` を
+   * **⚠️ `mutate(KEY.managers)` と書かない。** 関数である `KEY.managers` を
    * `mutate(KEY.managers)` へ渡すと、SWR は**キーではなく絞り込みの述語**
    * として受け取る（`mutate(fn)` の形）。述語は毎回真値のオブジェクトを
    * 返すので、**キャッシュの全キーが落ちる**——型検査は通り、画面は
@@ -102,7 +99,7 @@ export const KEY = {
   transcript: (id: string) => ({ type: 'transcript', id }) as const,
   approvals: (pending: boolean) => ({ type: 'approvals', pending }) as const,
   /**
-   * ある会話に上がった確認だけの束（issue #782 の2・3）。
+   * ある会話に上がった確認だけの束。
    *
    * **`type` は `approvals` のまま揃えてある。** `use-journal-live.ts` の
    * `invalidate()` は `escalation` が届くと `isKeyOfType(key, 'approvals')`
@@ -137,12 +134,12 @@ export const KEY = {
   practiceVersion: (slug: string, version: number) =>
     ({ type: 'practiceVersion', slug, version }) as const,
   /**
-   * `pages` は「もっと見る」で何頁ぶん読むか（#3550）。頁数が違えば別の取得なので、キーに含める。
+   * `pages` は「もっと見る」で何頁ぶん読むか。頁数が違えば別の取得なので、キーに含める。
    * `isKeyOfType(key, 'conversations')` は `type` だけを見るので、楽観更新・既読・SSE の無効化の束ねは変わらない。
    */
   conversations: (limit: number, pages = 1) => ({ type: 'conversations', limit, pages }) as const,
   /**
-   * **`includeSuperseded` をキーに含める（チャットのメッセージ編集、#1010）。**
+   * **`includeSuperseded` をキーに含める。**
    *
    * `chat.tsx`（版の切り替えを組み立てるため `includeSuperseded: true` で読む）と
    * `approvals.tsx`（既定ビューだけでよい）が同じ会話 id を別の形で読むので、
@@ -179,7 +176,7 @@ export function useHealth() {
 }
 
 /**
- * デーモン自身の説明（いまは記憶の置き場）。**資格が要る**（`GET /status`。#2869）。
+ * デーモン自身の説明（いまは記憶の置き場）。**資格が要る**（`GET /status`）。
  * 無認証の `/health` は置き場を返さないので、置き場はここから取る。
  * 資格が通らない（401）ときは `error` になる——呼び出し側は例外にせず表示で受ける。
  */
@@ -191,7 +188,7 @@ export function useStatus() {
 }
 
 /**
- * デーモンの添付の上限（`GET /attachments/limits`。#3204）。先行検査に使う。
+ * デーモンの添付の上限（`GET /attachments/limits`）。先行検査に使う。
  * - 取れた値は SWR のキャッシュに覚える（再検証しない）。
  * - 古いデーモンの 404 は `null` を値として覚える（取り直さない。呼び手は既定値で検査する）。
  * - 接続失敗など一時的な失敗は `data` が無いまま `error` になり、次にこの hook が使われたとき
@@ -215,10 +212,10 @@ export function useAttachmentLimits() {
 }
 
 /**
- * 委譲先マネージャーの一覧（issue #670 で絞り込みと窓が付いた）。
+ * 委譲先マネージャーの一覧（絞り込みと窓つき）。
  *
  * **引数なしの呼びは、クエリ文字列を1文字も付けない。** デーモン側が opt-in
- * なので、`dashboard.tsx` の `useManagers()` はこの変更の前と1バイトも同じ
+ * なので、`dashboard.tsx` の `useManagers()` は窓の掛からない
  * 応答を受ける（`managersToQuery` がそれを支えている——空の欄を落とすのは
  * 見た目の整えではなく、この保証そのものである）。
  *
@@ -295,11 +292,11 @@ export function useManagerTranscript(id: string | null) {
  *
  * **`order` を明示して呼ぶ。窓（`limit` / `cursor`）は作らない。**
  *
- * 直しているのは**並びの不安定さ**であって、件数の可視化ではない。ここは全件を
+ * 扱うのは**並びの安定**であって、件数の可視化ではない。ここは全件を
  * 受け取っているので、応答へ載る `total` は受け取った配列の長さと必ず一致する
  * 冗長な値である（**だから画面には出さない** — 出すと「意味の在る数」に見える）。
  *
- * **何が不安定だったか。** `order` / `limit` / `cursor` のどれも渡さない呼びは、
+ * **何が不安定になりうるか。** `order` / `limit` / `cursor` のどれも渡さない呼びは、
  * デーモンがストアの生の並びをそのまま返す（`apps/daemon/src/app.ts` の
  * `/approvals`）。そしてその生の並びは**実装ごとに違う**:
  *
@@ -307,7 +304,7 @@ export function useManagerTranscript(id: string | null) {
  *   `putApproval` が既存の id を**末尾へ動かす**ので、回答するたびに並びが変わる
  * - `packages/storage-pg` — `orderBy(asc(approvals.createdAt))` で既に作成順
  *
- * ⟹ **同じ画面が、どの永続化層で動いているかによって違う順で出ていた。**
+ * ⟹ **明示しないと、同じ画面が、どの永続化層で動いているかによって違う順で出る。**
  * `order` を明示すると、デーモンが `(createdAt, id)` の昇順へ揃えるので
  * （`compareApprovalPagingKey`）、**実装によらず同じ順になる。**
  *
@@ -350,7 +347,7 @@ export function useApprovalsAnsweredOn(date: string | null) {
 }
 
 /**
- * ある会話に上がった確認（`ask_human`）だけの一覧（issue #782 の2）。
+ * ある会話に上がった確認（`ask_human`）だけの一覧。
  *
  * **`chat.tsx` がチャットの履歴へ質問・回答を織り込むために読む。** 質問は
  * `createdAt` の位置へ、回答は `answeredAt` の位置へ——両方とも `chat.tsx`
@@ -397,7 +394,7 @@ export function useCommitments(includeClosed = false) {
           params: { query: { includeClosed: includeClosed ? 'true' : 'false' } },
         })
         .then(unwrap),
-    // **`includeClosed` を切り替えて別キーになっても、前の一覧を出したままにする（#3074）。**
+    // **`includeClosed` を切り替えて別キーになっても、前の一覧を出したままにする。**
     // 初回は `data` が無く `isLoading` が真になり、画面が一覧をスピナーに置き換えると、
     // 未了の行の書きかけ（本文の下書き・片付ける理由）が unmount で黙って消える。
     // 前のキーのデータは読み込み中だけ `data` に載る（`isValidating` は真のまま）。
@@ -452,7 +449,7 @@ export function useProgress(windowHours?: number) {
           params: { query: windowHours === undefined ? {} : { windowHours: String(windowHours) } },
         })
         .then(unwrap),
-    // **窓を替えて別キーになっても、前の数を出したままにする（#3419。`useCommitments` の #3074 と同じ）。**
+    // **窓を替えて別キーになっても、前の数を出したままにする（`useCommitments` と同じ）。**
     // 前のキーのデータは読み込み中だけ `data` に載り、`isLoading` は真になる。
     // 画面は、その間「前の期間の数」と数のそばで言うこと。
     { refreshInterval: 30_000, keepPreviousData: true },
@@ -461,7 +458,7 @@ export function useProgress(windowHours?: number) {
 
 /** `useUsage` の取り直しの設定。省略すると定期更新はしない（使用量の画面はそのまま）。 */
 export interface UsageOptions {
-  /** 取り直す間隔（ミリ秒）。ホームの「今日の利用」だけが渡す（#3699）。 */
+  /** 取り直す間隔（ミリ秒）。ホームの「今日の利用」だけが渡す。 */
   refreshInterval?: number;
 }
 
@@ -489,10 +486,10 @@ export function useUsage(query: UsageQuery = {}, options: UsageOptions = {}) {
           },
         })
         .then(unwrap),
-    // **絞り込みや期間を替えて別キーになっても、前の中身を出したままにする（#3419。`useCommitments` の #3074 と同じ）。**
+    // **絞り込みや期間を替えて別キーになっても、前の中身を出したままにする（`useCommitments` と同じ）。**
     // 前のキーのデータは読み込み中だけ `data` に載り、`isLoading` は真になる。
     // 画面は、その間「前の条件の数字」と数のそばで言うこと。
-    // `refreshInterval` は呼び手が渡したときだけ効く（既定は定期更新なし。#3699）。
+    // `refreshInterval` は呼び手が渡したときだけ効く（既定は定期更新なし）。
     { keepPreviousData: true, ...options },
   );
 }
@@ -510,7 +507,7 @@ export function useMemoryDocument(slug: string) {
 }
 
 /**
- * 仕事のやり方（#1055 段3③）。`useMemoryDocuments` / `useMemoryDocument` と
+ * 仕事のやり方。`useMemoryDocuments` / `useMemoryDocument` と
  * 同じ形——一覧はメタ情報だけ、詳細は本文まで。
  */
 export function usePractices() {
@@ -526,7 +523,7 @@ export function usePractice(slug: string) {
 }
 
 /**
- * やり方の追記専用の版の履歴（メタだけ。#1309）。`usePractices` と同じ形——
+ * やり方の追記専用の版の履歴（メタだけ）。`usePractices` と同じ形——
  * 本文は含まない。個別の本文は `usePracticeVersion` で読む。
  */
 export function usePracticeVersions(slug: string) {
@@ -536,7 +533,7 @@ export function usePracticeVersions(slug: string) {
   );
 }
 
-/** やり方の版を1つ、本文まで読む（#1309）。`version` が無ければ問い合わせない。 */
+/** やり方の版を1つ、本文まで読む。`version` が無ければ問い合わせない。 */
 export function usePracticeVersion(slug: string, version: number | undefined) {
   const api = useApi();
   return useSWR(
@@ -551,10 +548,10 @@ export function usePracticeVersion(slug: string, version: number | undefined) {
 }
 
 /**
- * 会話の一覧。**`pages` 頁ぶんを、継続点（`nextCursor`）で順に辿って1つの一覧にする**（「もっと見る」、
- * #3404 → #3550。`limit` を増やして取り直す形では 201 件目以降と `scan` の窓の外へ辿り着けなかった）。
+ * 会話の一覧。**`pages` 頁ぶんを、継続点（`nextCursor`）で順に辿って1つの一覧にする**（「もっと見る」。
+ * `limit` を増やして取り直す形では 201 件目以降と `scan` の窓の外へ辿り着けない）。
  *
- * - **1 頁目は `cursor` 無し**（従来と同じ呼び）。2 頁目以降は**直前の頁の応答の `nextCursor`** を渡す。
+ * - **1 頁目は `cursor` 無し。** 2 頁目以降は**直前の頁の応答の `nextCursor`** を渡す。
  *   取り直すたびに先頭から辿り直すので、新しい発言で並びが動いても、頁の継ぎ目で会話を落とさない
  *   （保存した継続点を使い回すと、先頭に新しい会話が入った分だけ押し出された会話が、どの頁にも出なくなる）。
  * - **同じ会話が頁をまたいで現れたら、先の（新しい側の）頁の1件だけを残す。**
@@ -564,7 +561,7 @@ export function usePracticeVersion(slug: string, version: number | undefined) {
  * - どの頁かの取得に失敗したら、一覧全体を失敗にする（SWR の `error`）。**頁の欠けた一覧を成功のように
  *   返さない**。`keepPreviousData` なら直前の一覧は残る。
  *
- * **`keepPreviousData`（一覧の「もっと見る」、#3404）。** `pages` を増やすと鍵が変わるので、
+ * **`keepPreviousData`（一覧の「もっと見る」）。** `pages` を増やすと鍵が変わるので、
  * 既定のままだと取り直しの間（と失敗したとき）に一覧が消える。真なら直前の一覧を残す。
  */
 export function useConversations(
@@ -617,7 +614,7 @@ export function useConversations(
 /**
  * `null` なら取りに行かない（まだ会話 id が無い＝新しい会話）。
  *
- * **`includeSuperseded`（チャットのメッセージ編集、#1010）。** 既定は `false`
+ * **`includeSuperseded`（チャットのメッセージ編集）。** 既定は `false`
  * （編集で畳まれた旧発言とその応答を含めない、サーバの既定と同じ）。`chat.tsx`
  * は版の切り替え（`< 2/2 >`）を組み立てるために `true` で読む——**畳み込み
  * 規則そのものは画面側で再実装しない**（サーバの `supersedes` / `supersededBy`
@@ -673,8 +670,7 @@ export function useApprovalById(id: string | null) {
 }
 
 /**
- * 承認の答えと、その後にクローンが取った行動の対（`GET /approvals/:id/trace`。
- * issue #847 の案B）。**`id` が null なら取りに行かない**——画面は人間が開いた
+ * 承認の答えと、その後にクローンが取った行動の対（`GET /approvals/:id/trace`）。**`id` が null なら取りに行かない**——画面は人間が開いた
  * ときだけ読む（答え済みのカードを並べただけで全件ぶん日誌を走査しないため）。
  */
 export function useApprovalTrace(id: string | null) {
@@ -692,14 +688,13 @@ export function useRunners() {
 /**
  * 認証トークンのプールと、回す契機・冷却の設定（`GET /tokens`）。
  *
- * **alteroid を使う許可があれば読める**（2026-09-06 の同格化で `requireOperator` が
- * 外れた。それ以前は実行環境の持ち主だけだった）。**2026-09-14 以降、この hook を
- * 呼ぶ画面（`routes/tokens.tsx`）は `PUT /tokens` も呼ぶ**（追加・削除・
+ * **alteroid を使う許可があれば読める。** **この hook を呼ぶ画面
+ * （`routes/tokens.tsx`）は `PUT /tokens` も呼ぶ**（追加・削除・
  * 無効化/有効化——`mutations.ts` の `useAddToken` / `useRemoveToken` /
- * `useSetTokenDisabled`）。**もう読み取り専用ではない。** **2026-09-20 以降、
- * 回す契機・冷却の設定（`policy`）も同じ画面から変えられる**（`mutations.ts` の
- * `useSetTokenPolicy`、`PUT /tokens/policy`。Issue #1123）——CLI
- * （`alteroid token policy`）だけの仕事ではなくなった。
+ * `useSetTokenDisabled`）。**読み取り専用ではない。** 回す契機・冷却の設定
+ * （`policy`）も同じ画面から変えられる（`mutations.ts` の
+ * `useSetTokenPolicy`、`PUT /tokens/policy`）——CLI
+ * （`alteroid token policy`）だけの仕事ではない。
  */
 export function useTokens() {
   const api = useApi();
@@ -710,11 +705,10 @@ export function useTokens() {
  * ログインしたアカウントと許可の一覧（`GET /access`）。CLI の
  * `alteroid access list` と同じもの。
  *
- * **alteroid を使う許可があれば読める**（2026-09-06 の同格化で `requireOperator`
- * が外れた。それ以前は実行環境の持ち主だけだった——`/tokens` と同格。
+ * **alteroid を使う許可があれば読める**（`/tokens` と同格。
  * `.claude/skills/auth-and-access/SKILL.md`）。**読み取り専用**——`grant` /
  * `revoke` はこの hook を呼ぶ画面（`routes/access.tsx`）からは呼ばない
- * （Issue #213。理由はその画面の doc）。
+ * （理由はその画面の doc）。
  */
 export function useAccess() {
   const api = useApi();
@@ -722,7 +716,7 @@ export function useAccess() {
 }
 
 /**
- * 人間が承認した Bash 許可の一覧（`GET /permission-grants`。Issue #863）。
+ * 人間が承認した Bash 許可の一覧（`GET /permission-grants`）。
  * CLI の `alteroid permission list` と同じもの。
  *
  * **資格は認証のみ**（`/access` と同じ強さ。`apps/daemon/src/app.ts` の
@@ -736,7 +730,7 @@ export function usePermissionGrants() {
 }
 
 /**
- * 環境変数の袋（`GET /credentials`。旧「マネージャーへ降ろす環境変数」）。
+ * 環境変数の袋（`GET /credentials`）。
  *
  * **資格は `authenticate` だけ**（`PUT /credentials` は実行環境の持ち主だけ
  * だが、読み出しは指紋のみを返すので `/tokens` / `/credentials` GET と同じ
@@ -748,11 +742,11 @@ export function useCredentials() {
 }
 
 /**
- * 実行環境プロファイル（`GET /profile`。issue #1122）。
+ * 実行環境プロファイル（`GET /profile`）。
  *
  * **資格は `requireOwner`**（`/credentials` の GET と違い、本文を丸ごと返す口
  * だからである）。ただし中身は素通しで、許可済みでログインできるアカウントは全員
- * 通る（2026-10-05 オーナー決定、#2862 / PR #2945）。403 が返るのは許可の無い
+ * 通る。403 が返るのは許可の無い
  * アカウント（`authenticate`）だけ——判定はサーバに任せ、呼び出し側（`routes/profile.tsx`）
  * は返ってきた失敗をそのまま見せる。
  *
@@ -771,7 +765,7 @@ export function useProfile() {
 }
 
 /**
- * 連携の鍵の一覧（`GET /integration-keys`。#3113 段2）。値は返らない。
+ * 連携の鍵の一覧（`GET /integration-keys`）。値は返らない。
  *
  * **フォーカス・再接続での再取得は既定のまま**（他の一覧と同じ。`lastUsedAt` が動くので取り直す価値がある）。
  * 再取得が失敗しても SWR は `data` を残す——画面は `error` を帯で言うだけで、一覧も発行の欄も消さない。
@@ -782,10 +776,10 @@ export function useIntegrationKeys() {
 }
 
 /**
- * 人間の MCP 連携の登録（`GET /mcp-servers`。#325 段4）。
+ * 人間の MCP 連携の登録（`GET /mcp-servers`）。
  *
  * **資格は `requireOwner`**（`/profile` と同じ）。ただし中身は素通しで、許可済みで
- * ログインできるアカウントは全員持ち主として通る（2026-10-05 オーナー決定、#2862 / PR #2945）。
+ * ログインできるアカウントは全員持ち主として通る。
  * 403 が返るのは許可の無いアカウント（`authenticate`）だけで、その失敗を
  * 呼び出し側（`routes/mcp-servers.tsx`）がそのまま見せる。
  *
@@ -811,14 +805,13 @@ export function useDropped() {
 }
 
 /**
- * 受信箱の滞留の内訳（`GET /inbox`。issue #783 段0の最後の欠落）。**資格は
+ * 受信箱の滞留の内訳（`GET /inbox`）。**資格は
  * 認証のみ**（`POST /inbox/remove` と同じ強さ）。読み取り専用——
  * `claimPending()` ではなく `peekPending()` を使うので、呼んでも
  * `deliveries`（器の入れ替え回数）は1つも進まない（`apps/daemon/src/app.ts`
  * の `GET /inbox` の doc）。
  *
- * クローンの道具 `manager_list` の中にしか出ていなかった内訳が、これで
- * 3つの入口（HTTP・CLI の `alteroid inbox show`・この Web UI）すべてから
+ * 内訳は3つの入口（HTTP・CLI の `alteroid inbox show`・この Web UI）すべてから
  * 読める——集計は `@alteroid/core` の `summarizeInboxBacklog` 1箇所でしか
  * 行われないので、3つが違う数を返すことは無い。
  */
@@ -829,7 +822,7 @@ export function useInboxBacklog() {
 
 /**
  * アーカイブ済みセッション生ログの一覧（`GET /archive`）。CLI の `/archive`
- * と同じ口（#698）。**HTTP の口は上限を持たない**（意図——人間はブラウザで
+ * と同じ口。**HTTP の口は上限を持たない**（意図——人間はブラウザで
  * 扱えるので、ここを締めると人間側の能力が落ちる。
  * `.claude/skills/listing-and-detail/SKILL.md`「HTTP の口は上限を持たない」）。
  */
@@ -839,7 +832,7 @@ export function useArchive() {
 }
 
 /**
- * `sessionId` ごとの行数・使用量の集計（`GET /archive/sessions`、#698）。
+ * `sessionId` ごとの行数・使用量の集計（`GET /archive/sessions`）。
  * 「1本が何度積まれているか」を個々の大きさより先に見せる——調査の動機
  * そのもの（`apps/cli/src/chat.ts` の `/archive sessions` と同じ口）。
  */
@@ -893,8 +886,8 @@ export function useArchiveBody(id: string | null) {
 }
 
 /**
- * 日誌エントリを人間が読む1行に潰す。**実体は `@alteroid/logic` へ移した**（#2558）。
+ * 日誌エントリを人間が読む1行に潰す。**実体は `@alteroid/logic` に在る。**
  * React にも SWR にも依存しない純関数で、CLI（`apps/cli`）も読めるようにするため。
- * 既存の import 元（`@alteroid/swr`）を壊さないよう、ここから再 export する。
+ * import 元（`@alteroid/swr`）を変えないよう、ここから再 export する。
  */
 export { summarizeJournalEntry } from '@alteroid/logic';

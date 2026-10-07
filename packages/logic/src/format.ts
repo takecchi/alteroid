@@ -9,7 +9,7 @@ const dateTime = new Intl.DateTimeFormat('ja-JP', {
   minute: '2-digit',
 });
 
-/** `dateTime` に年を足しただけの書式（#2140）。今年でない時刻にだけ使う。 */
+/** `dateTime` に年を足しただけの書式。今年でない時刻にだけ使う。 */
 const dateTimeWithYear = new Intl.DateTimeFormat('ja-JP', {
   year: 'numeric',
   month: '2-digit',
@@ -19,7 +19,7 @@ const dateTimeWithYear = new Intl.DateTimeFormat('ja-JP', {
 });
 
 /**
- * 「今年か」を判定するためだけの書式（#2140）。`dateTime` / `dateTimeWithYear`
+ * 「今年か」を判定するためだけの書式。`dateTime` / `dateTimeWithYear`
  * と同じく、既定のタイムゾーン（閲覧者の端末）を構築時に捕まえる——
  * `Date.getFullYear()` は使わない。理由はこのファイルの他の Intl インスタンスと
  * 同じで、`process.env.TZ` を実行時に変えても効くかどうかが実装依存になる。
@@ -31,13 +31,12 @@ const yearOnly = new Intl.DateTimeFormat('ja-JP', { year: 'numeric' });
 const timeOnly = new Intl.DateTimeFormat('ja-JP', { hour: '2-digit', minute: '2-digit' });
 
 /**
- * 日時を絶対時刻で出す。**今年ではない時刻にだけ年を足す**（#2140）——
- * ちょうど1年違う時刻が同じ文字列になっていた（`09/29 16:00` が2025年も
+ * 日時を絶対時刻で出す。**今年ではない時刻にだけ年を足す**——足さないと、
+ * ちょうど1年違う時刻が同じ文字列になる（`09/29 16:00` が2025年も
  * 2026年も同じ）。今年かどうかは**閲覧者の端末の時刻**で決める（`now`、
- * 既定は `Date.now()`）。今年の時刻は、直すまでの見た目と1文字も変わらない。
+ * 既定は `Date.now()`）。
  *
- * `now` を引数にできるのはテストで固定するためで、呼び出し側は増やさなくてよい
- * （既定値がある限り、既存の呼び出しは1つも変えなくてよい）。
+ * `now` を引数にできるのはテストで固定するため。
  */
 export function formatDateTime(iso: string, now: number = Date.now()): string {
   const date = new Date(iso);
@@ -66,7 +65,7 @@ export function formatRelative(iso: string, now: number = Date.now()): string {
 
   const suffix = future ? '後' : '前';
   if (abs < 45) return future ? 'まもなく' : 'たった今';
-  // 丸めた後の値で単位を上げるかを決める（#3609）。生の秒で境目を切ると、
+  // 丸めた後の値で単位を上げるかを決める。生の秒で境目を切ると、
   // 3570〜3599 秒が「60分前」、84600 秒以降が「24時間前」になる。
   const minutes = Math.round(abs / 60);
   if (minutes < 60) return `${minutes}分${suffix}`;
@@ -82,12 +81,10 @@ export function formatRelative(iso: string, now: number = Date.now()): string {
  * 同じ形を私物として持つ。** `@alteroid/core` はランタイム値を1つでも
  * import すると（`sideEffects` を宣言していないため）バンドラが安全側に
  * 倒れ、パッケージ全体を tree-shake できずに client バンドルへ丸ごと
- * 混入する——実測（2026-08-22 観測、`pnpm build` の出力）: この関数だけを
- * core から import した状態で `apps/web` の生成物に `format-*.js`
- * （1,193.04 kB）という、他のどの route チャンクよりも桁違いに大きい
- * チャンクが生まれた。`MemoryCreatedAt` は型だけなので消えるが、値は
- * 消えない。**型の網羅性チェックのためだけに約1.2MBを配る家庭用の道具に
- * しないため**、ロジックは同じでも実体はここに置く（`memory.ts` の
+ * 混入する（この関数だけを import した状態で約1.2MBのチャンクができた）。
+ * `MemoryCreatedAt` は型だけなので消えるが、値は消えない。
+ * **型の網羅性チェックのためだけに約1.2MBを配らないため**、
+ * ロジックは同じでも実体はここに置く（`memory.ts` の
  * `formatMemoryCreatedAt` とコードは重複するが、2箇所とも数行の
  * `switch` なので、二重管理のリスクより client バンドルの肥大のほうが
  * 重いと判断した）。
@@ -130,7 +127,7 @@ export function formatCreatedAtRelative(createdAt: MemoryCreatedAt): string {
 }
 
 /**
- * ミリ秒差を「1時間」「30日」のような字面にする（記憶一覧の鮮度の印専用、#821）。
+ * ミリ秒差を「1時間」「30日」のような字面にする（記憶一覧の鮮度の印専用）。
  *
  * **`packages/core/src/memory.ts` の `formatMemoryStaleness` と考え方は同じだが、
  * 実体は分けて持つ。** `@alteroid/core` から値を1つでも import すると client
@@ -156,7 +153,7 @@ export function formatMemoryStaleness(ms: number): string {
 
 export function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
-  // 丸めた後の値で単位を上げるかを決める（#3609）。1,048,524 バイト以上が
+  // 丸めた後の値で単位を上げるかを決める。1,048,524 バイト以上が
   // 「1024.0 KB」にならないようにする。
   const kb = (bytes / 1024).toFixed(1);
   if (Number(kb) < 1024) return `${kb} KB`;
@@ -164,7 +161,7 @@ export function formatBytes(bytes: number): string {
 }
 
 /**
- * 本文の変化量（#913 / #821 残課題）。`packages/core/src/schema.ts` の
+ * 本文の変化量。`packages/core/src/schema.ts` の
  * `MemoryDescriptionDrift` と同じ形——`@alteroid/core` の値を import すると
  * client バンドルへ丸ごと混入する（このファイル冒頭の `assertNeverCreatedAt`
  * の doc と同じ理由）ので、ここでも私物として持つ。
@@ -180,7 +177,7 @@ type MemoryDescriptionDrift =
     }
   | { kind: 'unrecorded' };
 
-/** `MemoryDescriptionDrift` の網羅性を型で強制する（#913 / #821 残課題）。 */
+/** `MemoryDescriptionDrift` の網羅性を型で強制する。 */
 function assertNeverMemoryDescriptionDrift(drift: never): never {
   throw new Error(`未知の要旨の変化量の状態: ${JSON.stringify(drift)}`);
 }
@@ -207,7 +204,7 @@ export function formatMemoryDescriptionDrift(drift: {
 }
 
 /**
- * 変化量（バイト）を人間可読な文字列にする（`at-least` 専用、#821 残課題。
+ * 変化量（バイト）を人間可読な文字列にする（`at-least` 専用。
  * `packages/core/src/memory.ts` の `formatMemoryDescriptionDriftAtLeast` と
  * 同じ考え方だが実体は分けて持つ）。
  *
@@ -228,9 +225,7 @@ export function formatMemoryDescriptionDriftAtLeast(drift: {
 }
 
 /**
- * `MemoryDescriptionDrift`（3状態）を人間可読な文字列にする（#913 /
- * #821 残課題）。**`switch` で網羅し、`default` で
- * `assertNeverMemoryDescriptionDrift` へ落とす。**
+ * `MemoryDescriptionDrift`（3状態）を人間可読な文字列にする。
  */
 export function describeMemoryDescriptionDrift(drift: MemoryDescriptionDrift): string {
   switch (drift.kind) {

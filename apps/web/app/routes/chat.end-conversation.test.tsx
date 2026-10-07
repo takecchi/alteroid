@@ -209,6 +209,41 @@ describe('「会話を終える」ボタン', () => {
     ).toContain('一覧に残って');
   });
 
+  /**
+   * Issue #3762。応答を待つ間に別の会話 B へ移ったら、成功しても B にとどまる
+   * （直す前は説明なしに `/chat` へ飛ばされた）。
+   */
+  it('(h) 応答待ちに別の会話へ移ると、成功しても移った先にとどまる', async () => {
+    const OTHER_ID = 'conv-end-2';
+    let releaseEnd: () => void = () => {};
+    const endReleased = new Promise<void>((resolve) => {
+      releaseEnd = resolve;
+    });
+    const stub = stubFetch((url) => {
+      if (url.endsWith('/end')) return endReleased.then(() => json({}));
+      if (url.includes(`/conversations/${OTHER_ID}`)) {
+        return json({ conversationId: OTHER_ID, messages: [] });
+      }
+      return conversationRoutes(url);
+    });
+
+    const { router } = renderChat(`/chat/${CONVERSATION_ID}`);
+    await pressEnd();
+    await waitFor(() => {
+      expect(stub.entries.filter((entry) => entry.url.endsWith('/end'))).toHaveLength(1);
+    });
+
+    await act(async () => {
+      await router.navigate(`/chat/${OTHER_ID}`);
+    });
+    releaseEnd();
+    await act(async () => {});
+    await act(async () => {});
+
+    expect(router.state.location.pathname).toBe(`/chat/${OTHER_ID}`);
+    expect(screen.queryByText(/会話を終えました/)).toBeNull();
+  });
+
   it('(e) 確認で「やめる」を押すと、終えない（/end は飛ばない）', async () => {
     const stub = stubFetch((url) => {
       const conversation = conversationRoutes(url);

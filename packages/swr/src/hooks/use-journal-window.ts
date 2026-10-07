@@ -44,7 +44,7 @@ import {
 } from '@alteroid/logic';
 import type { JournalEntry, JournalEntryType } from '@alteroid/logic';
 
-/** 初期表示・1回の「もっと遡る」で読む件数。定義は `@alteroid/logic`（既存の import 元を壊さないため再 export）。 */
+/** 初期表示・1回の「もっと遡る」で読む件数。定義は `@alteroid/logic`（import 元を変えないための再 export）。 */
 export { JOURNAL_PAGE };
 
 interface JournalQueryParams {
@@ -83,7 +83,7 @@ export interface JournalWindow {
 
   /**
    * `olderStatus === 'end'` のとき、その終端が日誌の地平（`GET /journal` の
-   * `oldestAt`/`crossesHorizon`。issue #1510 の積み残し）より前にかかって
+   * `oldestAt`/`crossesHorizon`）より前にかかって
    * いたら、その趣旨の注記。かかっていなければ（本当に終端だと言い切れる
    * なら）`undefined`。**`packages/logic/src/journal-window.ts` の `journalHorizonNote` が
    * 決定を持つ**（このフックは直近の応答を渡すだけ）。
@@ -100,13 +100,13 @@ export interface JournalWindow {
    * 直近の `entries` の更新が、先頭に何か足された（新着）ものだったとき `true`。次の更新まで残る。
    *
    * 更新と同じ state に載せてある（`setEntries`）。レンダー中に前回と比べて `setState` で調整する形は、
-   * その描画の結果を捨てて描き直すので、コミットされる描画では常に `false` になる（issue #2774）。
+   * その描画の結果を捨てて描き直すので、コミットされる描画では常に `false` になる。
    * 「先頭の1件目の id が変わり、かつ件数が増えた」で判定する — 末尾へ足す（`mergeBack`）操作は
    * 先頭の id を絶対に変えない。
    *
    * **`shift` そのものではない。** `shift` に何を渡すかは
    * `packages/logic/src/journal-window.ts` の `shiftForPrepend(prepended, atTop)` が
-   * 決める（人間の判断、2026-08-23: 上端に居るときは `shift` を立てない
+   * 決める（上端に居るときは `shift` を立てない
    * ＝新着がそのまま見える。遡って読んでいるときだけ立てる）。「いま
    * 上端に居るか」は scroll 位置の話でこのフックの関心の外なので、
    * 呼び出し側（`journal.tsx`）が持つ。
@@ -115,7 +115,7 @@ export interface JournalWindow {
 }
 
 /**
- * @param q 本文を語で探す（issue #250）。**空文字列は「絞らない」**
+ * @param q 本文を語で探す。**空文字列は「絞らない」**
  *   （`matchesJournalSearch` の doc）。**サーバへ投げる** —— 画面側で捨てると
  *   「出していないだけ」の層ができる（このファイルの `buildQuery`、および
  *   `journal.tsx` の「絞り込みはサーバに投げる」の逐語）。**呼び出し側で
@@ -137,21 +137,18 @@ export function useJournalWindow(selected: readonly JournalEntryType[], q = ''):
   const [isLoadingOlder, setLoadingOlder] = useState(false);
   const [isLoadingNewer, setLoadingNewer] = useState(false);
   const [newerBlocked, setNewerBlocked] = useState(false);
-  // 日誌の地平の注記（issue #1510 の積み残し）。直近の過去方向の応答が
-  // 持っていた `oldestAt`/`crossesHorizon` から `journalHorizonNote` が
-  // 決める——`olderStatus` が `'end'` でなければ中身は使われない
-  // （`journalHorizonNote` の doc）が、値そのものは常に最新の応答で
-  // 上書きしておく（次に `'end'` になったとき古い応答の値を見せない）。
+  // 日誌の地平の注記。直近の過去方向の応答が持っていた
+  // `oldestAt`/`crossesHorizon` から `journalHorizonNote` が決める。
+  // `olderStatus` が `'end'` でなければ中身は使われない（`journalHorizonNote` の doc）が、
+  // 値そのものは常に最新の応答で上書きしておく（次に `'end'` になったとき古い応答の値を見せない）。
   const [horizonNote, setHorizonNote] = useState<string | undefined>(undefined);
 
   // --- prepended（直近の `entries` の更新が「先頭に足された」ものだったか）---
-  // **更新と同じ state に載せる**（`setEntries` の中で決める）。かつては「前回の描画と
-  // 比べて、レンダー中に `setState` で調整する」形だった（React 公式の
-  // 「prop が変わったら state を調整する」）が、その形は `setState` を呼んだ描画の結果を
-  // **捨てて**描き直す——先頭に足された描画では `true` が立ち、捨てられた描画の側にしか
-  // 無かった。コミットされる描画では常に `false` になり、virtua の `shift` が1度も効かず、
-  // 読んでいる行が新着のたびに押し流されていた（issue #2774。実機で行の位置が新着1件ごとに
-  // 約39px 下がるのを測った）。
+  // **更新と同じ state に載せる**（`setEntries` の中で決める）。レンダー中に前回の描画と
+  // 比べて `setState` で調整する形にしない。その形は `setState` を呼んだ描画の結果を
+  // **捨てて**描き直すので、先頭に足された描画で立った `true` は捨てられた描画の側にしか
+  // 無く、コミットされる描画では常に `false` になる。すると virtua の `shift` が1度も効かず、
+  // 読んでいる行が新着のたびに押し流される（実機で新着1件ごとに約39px 下がった）。
   // **次の更新が来るまで `true` のまま残る**（更新が末尾への足し・初回読み込みなら `false`
   // に戻る）。`shift` は virtua が「件数が変わった描画」でだけ見るので、残っていても
   // 再描画（scroll・状態の更新）では何も起きない。
@@ -172,16 +169,16 @@ export function useJournalWindow(selected: readonly JournalEntryType[], q = ''):
     }));
   }
 
+  // **過去方向の継続点**（`GET /journal` の `next`）。
+  // `undefined` = まだ持っていない／応答に欄が無い（古いデーモン。`until` で遡る）、
+  // `null` = 終端。ストアが読めない行を捨てても、ここが先の行へ運ぶ。
+  const olderCursorRef = useRef<PageCursor | null | undefined>(undefined);
   // `entries` の最新値を非同期コールバックから読むための ref。
   // `applyOlderPage`/`applyNewerPage` はマージ結果と判定（outcome）を1回で
   // 返すので、`setEntries(prev => ...)` の更新式の中で判定を取り出す
   // （＝更新式に副作用を詰め込む）よりも、ref を素直に読むほうが単純になる。
   // **これは render 中には読まない** — 読むのは `.then()`/effect の中だけ
   // なので `react-hooks/refs` には当たらない。
-  // **過去方向の継続点**（`GET /journal` の `next`。Issue #2604 / #2605）。
-  // `undefined` = まだ持っていない／応答に欄が無い（古いデーモン。`until` で遡る）、
-  // `null` = 終端。ストアが読めない行を捨てても、ここが先の行へ運ぶ。
-  const olderCursorRef = useRef<PageCursor | null | undefined>(undefined);
   const entriesRef = useRef<JournalEntry[]>(entries);
   useEffect(() => {
     entriesRef.current = entries;
@@ -235,8 +232,8 @@ export function useJournalWindow(selected: readonly JournalEntryType[], q = ''):
       )
       .then((data) => {
         if (cancelled) return;
-        // **`applyOlderPage` ではなく `applyInitialPage` を使う**（issue
-        // #1530）。初期読み込みは窓（`since`/`until`）を持たないので
+        // **`applyOlderPage` ではなく `applyInitialPage` を使う。**
+        // 初期読み込みは窓（`since`/`until`）を持たないので
         // `applyOlderPage`/`pageOutcome` の境界の曖昧さ（同じ行の再送）が
         // 最初から起こらない——`limit` 未満で返った時点で `'end'` と
         // 言い切れる（`applyInitialPage` の doc）。これが無いと、日誌が
@@ -248,13 +245,12 @@ export function useJournalWindow(selected: readonly JournalEntryType[], q = ''):
         entriesRef.current = applied.entries;
         setOlderStatus(applied.outcome);
         // **初期読み込みは since/until を送らないが、`horizon: 'true'` を
-        // 渡すので `data.oldestAt`/`data.crossesHorizon` は付く**（issue
-        // #1530。`apps/daemon/src/app.ts` の `GET /journal` の `horizon`
+        // 渡すので `data.oldestAt`/`data.crossesHorizon` は付く**
+        // （`apps/daemon/src/app.ts` の `GET /journal` の `horizon`
         // クエリの doc）。日誌が `JOURNAL_PAGE` に収まるほど短いと、
         // 「もっと遡る」を一度も撃たないまま最初の1回で終端に達する——
         // その場合でも地平の注記の材料が届くのは、この `horizon: 'true'`
-        // のおかげである（以前はここを送らず、その形だけ注記が出ない
-        // 非対称があった）。常に上書きしておく——`journalHorizonNote` は
+        // のおかげである。常に上書きしておく——`journalHorizonNote` は
         // `undefined` を「地平にかかっていない」と同じ扱いで注記を出さない。
         setHorizonNote(
           journalHorizonNoteForHuman(applied.outcome, data.oldestAt, data.crossesHorizon, (iso) =>
@@ -357,8 +353,8 @@ export function useJournalWindow(selected: readonly JournalEntryType[], q = ''):
     //
     // **`@alteroid/core` 本体からではなく `/journal-search` から取ること。**
     // 本体から**値**を import すると、サーバ専用のドメイン層ごとブラウザ
-    // バンドルへ入る（#294 / #306 で `/commitments` が 1.2MB になり本番で
-    // 開けなくなった。`routes/commitments.tsx` の doc）。この口は実行時の
+    // バンドルへ入る（`/commitments` が 1.2MB になり本番で開けなくなった。
+    // `routes/commitments.tsx` の doc）。この口は実行時の
     // 依存を1つも持たない（`packages/core/tsup.config.ts`）。
     const filtered = filterRecent(recent, selected, q);
     if (filtered.length === 0) return;
@@ -370,12 +366,10 @@ export function useJournalWindow(selected: readonly JournalEntryType[], q = ''):
     // 直前に `blocked` を出していても、ここで下ろす。
     setNewerBlocked(false);
     // `selected` は依存に入れてよい（`joined` と二重には持たない）。
-    // **前提（issue #2055 で書き直し）**: `selected` は呼び出し側
-    // （`journal.tsx`）が URL の生の文字列を `useMemo` で包んで作る配列で、
-    // その生の文字列が変わらない限り同じ参照を返す。以前は毎描画で
-    // `parseSelectedTypes(...)` を呼び直すだけだったため、チップを押して
-    // いなくても（例: 検索欄の打鍵で `Journal` が再描画されるたびに）
-    // `selected` の参照が変わり、この effect が無関係に走り直していた。
+    // **前提**: `selected` は呼び出し側（`journal.tsx`）が URL の生の文字列を
+    // `useMemo` で包んで作る配列で、その生の文字列が変わらない限り同じ参照を返す。
+    // 毎描画で参照が変わると、チップを押していなくても（例: 検索欄の打鍵で
+    // `Journal` が再描画されるたびに）この effect が無関係に走り直す。
   }, [recent, selected, q]);
 
   function refreshNewerAt(limit: number): void {

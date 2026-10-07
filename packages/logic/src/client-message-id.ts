@@ -1,5 +1,5 @@
 /**
- * 発言ごとに作る一意な id（`POST /chat` の `clientMessageId`。Issue #3203）。
+ * 発言ごとに作る一意な id（`POST /chat` の `clientMessageId`）。
  *
  * 形はデーモンの `clientMessageIdSchema`（英数字・`_` `-` の1〜128字）に収まる。**`crypto.randomUUID()` を
  * 使わない**のは、それが「安全な文脈」（https か localhost）でしか生えないため——LAN の http で開いた画面では

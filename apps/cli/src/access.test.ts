@@ -377,6 +377,18 @@ describe('alteroid access owner', () => {
     );
   });
 
+  /**
+   * 本文が `error` の文字列を持たない 409 は、どの経路でも嘘にならない中立な文に落ちる（#3735）。
+   * 以前の「既に別のアカウントが許可されています」は、読めない行・未許可の経路では意味が逆になる。
+   */
+  it('本文に理由の無い 409 は、競合したことと理由が返らなかったことだけを言う', async () => {
+    replies.push({ status: 409, body: {} });
+
+    await expect(accessOwnerCommand('acc-1')).rejects.toThrow(
+      '/access/acc-1/owner が競合しました (409)。デーモンから理由が返りませんでした',
+    );
+  });
+
   it('404・409・認証以外の失敗は、状態コードだけでなくデーモンの理由も出す', async () => {
     replies.push({
       status: 500,

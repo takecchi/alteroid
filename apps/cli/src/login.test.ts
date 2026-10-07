@@ -27,7 +27,11 @@ vi.mock('./target.js', () => ({
   isRunnerContainer: vi.fn(() => false),
 }));
 
-vi.mock('./credentials.js', () => ({
+vi.mock('./credentials.js', async () => ({
+  // 本物のエラークラス（`logout` が `instanceof` で見分ける）。
+  CredentialsUnreadableError: (
+    await vi.importActual<typeof import('./credentials.js')>('./credentials.js')
+  ).CredentialsUnreadableError,
   writeCredential: vi.fn(),
   readCredential: vi.fn(),
   clearCredential: vi.fn(),
@@ -377,7 +381,11 @@ describe('alteroid logout', () => {
     await logoutCommand({ localOnly: true });
 
     expect(sent).toHaveLength(0);
-    expect(credentials.clearCredential).toHaveBeenCalledWith('http://127.0.0.1:4517');
+    expect(credentials.readCredential).not.toHaveBeenCalled();
+    expect(credentials.clearCredential).toHaveBeenCalledWith(
+      'http://127.0.0.1:4517',
+      expect.any(Function),
+    );
     const text = read();
     expect(text).toContain('--local-only');
     expect(text).toContain('手元のログイン情報だけを消しました');
