@@ -31,44 +31,7 @@ import {
 import { CLONE_ALLOWED_TOOLS, CLONE_TOOL_NAMES, MCP_SERVER_NAME } from './tools.js';
 import { createMemoryStores, humanMessage } from './testing.js';
 
-/**
- * これは特性試験（characterization test）である。
- *
- * ここで固定したいのは「SDK の `query()` へ実際に渡している `Options` の中身」
- * そのもの。この後のリファクタが `options` の組み立て方を変えても、SDK へ渡る
- * 値そのものが変わっていないことを、このファイルが1文字も変わらずに保証する
- * （リファクタ側の作業者はこのファイルを書き換えずに green で通すことが目標）。
- *
- * **「無いこと」の固定が本題である**（AGENTS.md 地雷1・2・7 / `tools` を絞らない・
- * `maxTurns` で止めない・クローンには `canUseTool` を繋がない）。既存の実装が
- * これらを守っていることは複数のコメントで説明されているが、その説明はコードから
- * 読み手が離れれば追従しない。ここでは「無い」ことそのものを assertion にする。
- */
-
-/**
- * Issue #1917: 下の stdio e2e 歯（「子プロセスを実際に spawn する」）が本物の
- * `packages/core/dist/clone-tool-relay-child.js` を読んでいた。`clone.ts` は
- * `resolveCloneToolRelayChildEntry(import.meta.url)`（`clone-tools-transport.ts`）
- * で `../dist/clone-tool-relay-child.js` を解決するので、テスト側から差し込む
- * 既存の口が無い（`createClone` のオプションは `cloneToolRelaySocketDir` だけを
- * 持ち、子プロセスの実体そのものは差し替えられない）。
- *
- * **製品コードに新しい注入口は足していない。** `clone.ts` は
- * `resolveCloneToolRelayChildEntry` を `./clone-tools-transport.js` から
- * 名前 import しているだけなので、この1本の named export だけを vitest の
- * モジュールモックで差し替える——他の export（`resolveCloneToolsTransport` /
- * `CLONE_TOOLS_TRANSPORT_ENV_KEY` など）は `importOriginal` で本物のまま
- * 素通しする。返す値は `clone-tool-relay-integration.test.ts` と同じ
- * `clone-tool-relay-child-build.test-support.ts` が一時ディレクトリへ build
- * した成果物——束ね方の回帰（共有チャンクへの括り出し）を捕まえる力は、
- * 本物の tsup で束ねること自体から来るので、ここでも落ちない。
- *
- * `vi.hoisted` が要る理由: `vi.mock` はファイル先頭へ引き上げられる（hoist
- * される）ので、下の `const relayChildEntryDist = { path: undefined }` を
- * 素の `const` で書くと、引き上げられた `vi.mock` のファクトリが実行される
- * 時点でまだ束縛されておらず（TDZ）例外になる——`AGENTS.md`「時刻の扱い」の
- * `reports.test.tsx` と同じ注意。
- */
+// vi.hoisted にする: vi.mock が hoist されるので、素の const だとファクトリ実行時に TDZ で例外になるため
 const relayChildEntryDist = vi.hoisted(() => ({ path: undefined as string | undefined }));
 
 vi.mock('./clone-tools-transport.js', async (importOriginal) => {
@@ -87,25 +50,6 @@ vi.mock('./clone-tools-transport.js', async (importOriginal) => {
   };
 });
 
-// ---------------------------------------------------------------------------
-// A. クローン本セッション
-// ---------------------------------------------------------------------------
-
-/**
- * クローンの `queryFn` を差し替えて `options` を捕まえる偽 SDK。
- *
- * `runner-registry.test.ts` の `fakeSdk(sessions)` と同じ形（`params.options`
- * を配列へ積むだけ）だが、クローンは本セッション（入力は非同期イテラブル）と
- * 蒸留のサイドクエリ（入力は文字列）の両方で `queryFn` を呼ぶので、両方が
- * 完了できるようにしてある。
- *
- * - 非同期イテラブルのとき（本セッション）: 入力を受け取るたびに1往復
- *   （assistant + result）を返す。`clone.stop()` が入力ストリームを終わらせると
- *   自然にこの `for await` も終わる。
- * - 文字列のとき（蒸留のサイドクエリ）: 即座に1往復を返して終わる
- *   （`#distillFromTranscript` の `for await` が `result` を受け取れないと
- *   永久に終わらない）。
- */
 function fakeCloneSdk(): { fn: typeof sdkQuery; calls: { options: Options }[] } {
   const calls: { options: Options }[] = [];
 
@@ -144,7 +88,7 @@ function fakeCloneSdk(): { fn: typeof sdkQuery; calls: { options: Options }[] } 
       }
 
       for await (const message of prompt as AsyncIterable<unknown>) {
-        void message; // ここで見たいのは options の中身だけなので読み捨てる
+        void message;
         yield* turn();
       }
     }
@@ -159,9 +103,6 @@ function fakeCloneSdk(): { fn: typeof sdkQuery; calls: { options: Options }[] } 
 }
 
 describe('クローン本セッションへ渡す Options', () => {
-  // Issue #1917: このファイルの stdio 関連の歯（下の3本）が
-  // `resolveCloneToolRelayChildEntry` を経由して読む成果物を、ここで1回だけ
-  // 一時ディレクトリへ build しておく（ファイル冒頭の doc）。
   beforeAll(async () => {
     relayChildEntryDist.path = await buildCloneToolRelayChildDistForTesting(
       'agent-session-options-relay-child-dist-',
@@ -178,11 +119,7 @@ describe('クローン本セッションへ渡す Options', () => {
 
     const { options } = calls[0] as { options: Options };
 
-    // 既定はクローン = Opus（2026-09-30 の人間の決定で Fable から変更）。差し替えられるのは
-    // 人間の承認だけである（AGENTS.md 地雷5）。
     expect(options.model).toBe('opus');
-    // preset 一式（明示リストで絞らない = 地雷1）。CLONE_ALLOWED_TOOLS は
-    // 「確認なしで通す一覧」であって「使える道具の一覧」ではない。
     expect(options.allowedTools).toEqual(CLONE_ALLOWED_TOOLS);
     expect(options.permissionMode).toBe(DEFAULT_PERMISSION_MODE);
     expect(Object.keys(options.mcpServers ?? {})).toEqual([MCP_SERVER_NAME]);
@@ -190,33 +127,15 @@ describe('クローン本セッションへ渡す Options', () => {
     expect(options.settingSources).toEqual(['user', 'project', 'local']);
     expect(options.includePartialMessages).toBe(true);
 
-    // PreCompact は1件、PostToolUse も1件。
     expect(options.hooks?.PreCompact).toHaveLength(1);
-    // **`PRE_COMPACT_HOOK_TIMEOUT_SECONDS` は clone.ts の非 export な定数である
-    // （`export` が付いていない）。本番コードを変えずに import できないので、
-    // ここはリテラル 120 で固定する。リファクタでこの値が変わればここが落ちて
-    // 気づける（characterization test として意味は保たれる）。
     expect(options.hooks?.PreCompact?.[0]?.timeout).toBe(120);
     expect(options.hooks?.PostToolUse).toHaveLength(1);
-    // 失敗・中断した道具呼び出しも観測する（Issue #924）。`PostToolUse` と
-    // 排他で発火するので、両方に登録しても二重記録にはならない。
     expect(options.hooks?.PostToolUseFailure).toHaveLength(1);
 
-    // --- ⭐ 「無いこと」の固定 ---
-    // `tools` は渡さない（地雷1: 明示リストで絞らない = preset 一式）。
     expect(options.tools).toBeUndefined();
-    // `maxTurns` は渡さない（地雷2: 回数上限で暴走を止めない）。
     expect(options.maxTurns).toBeUndefined();
-    // `canUseTool` は繋がない。クローンは長寿命セッション1本で受信箱の全ターンが
-    // そこを直列に通るので、ここで人間の回答を待って止めると全部が止まる
-    // （clone.ts の `#buildOptions` 内コメント。マネージャーとは事情が違う）。
     expect(options.canUseTool).toBeUndefined();
-    // 初回なので resume 素材が無い（resume は null のときキーごと渡されない）。
     expect(options.resume).toBeUndefined();
-    // `settings`（auto-memory を塞ぐ口）はクローン側には無い（#1189）。
-    // `buildManagerSessionOptions` だけが持つ引数で、`buildCloneSessionOptions`
-    // は `managerAutoMemoryEnabled` を受け取らない — auto-memory が「書いた本人の
-    // 次のセッション」に届くという前提は、長寿命1本のクローンでは崩れていない。
     expect(options.settings).toBeUndefined();
 
     await clone.stop();
@@ -240,10 +159,6 @@ describe('クローン本セッションへ渡す Options', () => {
     await clone.stop();
   });
 
-  // -------------------------------------------------------------------------
-  // クローンの道具の中継（Issue #486 48(a) PR2）: ALTEROID_CLONE_TOOLS_TRANSPORT
-  // -------------------------------------------------------------------------
-
   it('ALTEROID_CLONE_TOOLS_TRANSPORT 未設定・空・空白は、今日どおり type: sdk のまま（既定固定）', async () => {
     for (const value of [undefined, '', '   ']) {
       const { fn, calls } = fakeCloneSdk();
@@ -262,9 +177,6 @@ describe('クローン本セッションへ渡す Options', () => {
       expect(Object.keys(mcpServers)).toEqual([MCP_SERVER_NAME]);
       const own = mcpServers[MCP_SERVER_NAME] as { type?: string; alwaysLoad?: boolean };
       expect(own.type).toBe('sdk');
-      // **`alwaysLoad` はここでは「渡していない」欄そのものが無い**
-      // （`McpSdkServerConfig` は `timeout` しか持たない）。stdio 側と
-      // 同じ「揃っている」を、後続の stdio テストと対で固定する。
       expect(own.alwaysLoad).toBeUndefined();
 
       await clone.stop();
@@ -287,7 +199,6 @@ describe('クローン本セッションへ渡す Options', () => {
     await expect.poll(() => calls.length > 0, { timeout: 3000 }).toBe(true);
 
     const mcpServers = (calls[0] as { options: Options }).options.mcpServers ?? {};
-    // **鍵は `sdk` のときと同じ1本のまま**（`MCP_SERVER_NAME`）。
     expect(Object.keys(mcpServers)).toEqual([MCP_SERVER_NAME]);
     const own = mcpServers[MCP_SERVER_NAME] as {
       type?: string;
@@ -303,9 +214,6 @@ describe('クローン本セッションへ渡す Options', () => {
     expect(Object.keys(own.env ?? {}).sort()).toEqual(
       [CLONE_TOOL_RELAY_SOCKET_ENV, CLONE_TOOL_RELAY_TOKEN_ENV].sort(),
     );
-    // **in-process（sdk）と同じ扱い。** 今日は渡していない——stdio 側にだけ
-    // `alwaysLoad` を足すと、transport を切り替えただけで道具の読み込みの
-    // タイミングが変わってしまう（`#mcpServerConfigFor` の doc）。
     expect(own.alwaysLoad).toBeUndefined();
 
     await clone.stop();
@@ -318,7 +226,7 @@ describe('クローン本セッションへ渡す Options', () => {
       createClone({
         stores,
         queryFn: fn,
-        env: { [CLONE_TOOLS_TRANSPORT_ENV_KEY]: 'stido' }, // 綴りの間違いを模す
+        env: { [CLONE_TOOLS_TRANSPORT_ENV_KEY]: 'stido' },
         redeliveryGate: ALWAYS_REDELIVER,
       }),
     ).toThrow(/ALTEROID_CLONE_TOOLS_TRANSPORT/);
@@ -328,12 +236,6 @@ describe('クローン本セッションへ渡す Options', () => {
     'stdio モードでも clone.ts の配線を通して本物の createCloneMcpServer へ ' +
       'tools/list が CLONE_TOOL_NAMES の全本数（52本）届く（実際に子プロセスを spawn する）',
     async () => {
-      // **Issue #1917 でビルド済み成果物の出所を変えた。** 本物の
-      // `packages/core/dist/clone-tool-relay-child.js` ではなく、ファイル
-      // 冒頭の `vi.mock('./clone-tools-transport.js', ...)` が差し込む
-      // テスト専用の一時ビルド（`clone-tool-relay-child-build.test-support.ts`）
-      // を読む。`pnpm build` を先に走らせる必要はない——`beforeAll` が
-      // このテストファイル自身の中で build を済ませている。
       const { fn, calls } = fakeCloneSdk();
       const stores = createMemoryStores();
       const socketDir = makeTempDirSync('clone-tool-relay-wire-e2e-');
@@ -348,10 +250,6 @@ describe('クローン本セッションへ渡す Options', () => {
       clone.post(humanMessage('やあ'));
       await expect.poll(() => calls.length > 0, { timeout: 3000 }).toBe(true);
 
-      // clone.ts が実際に組み立てた設定（本物の token・socketPath・子プロセスの
-      // 絶対パス）をそのまま使って、本物の MCP クライアントで繋ぎに行く——
-      // `queryFn` を差し替えてあるので SDK 自身はこの設定を一度も使わないが、
-      // ここではその設定を横取りして自分で使う。
       const own = ((calls[0] as { options: Options }).options.mcpServers ?? {})[
         MCP_SERVER_NAME
       ] as { command: string; args: string[]; env: Record<string, string> };
@@ -376,20 +274,10 @@ describe('クローン本セッションへ渡す Options', () => {
   );
 });
 
-// ---------------------------------------------------------------------------
-// B. マネージャー（runner 側）
-// ---------------------------------------------------------------------------
-
 interface Started {
   options: Options;
 }
 
-/**
- * `runner-credentials.test.ts` / `runner-profile.test.ts` と同じ形の偽 SDK。
- * `host.start(...)` は `RunnerSession#begin` → `#open` を同期に辿って
- * `queryFn` を呼ぶので、`await host.start(...)` の直後に `started[n].options`
- * が読める。
- */
 function fakeRunnerSdk(): { fn: typeof sdkQuery; started: Started[] } {
   const started: Started[] = [];
   const fn = ((input: { options: Options }) => {
@@ -442,48 +330,31 @@ describe('マネージャー（runner）へ渡す Options', () => {
     await host.start({ managerId: 'mgr-1', request: '走る', cwd: dir });
     const { options } = started[0] as Started;
 
-    // 既定はマネージャー = Opus。
     expect(options.model).toBe('opus');
     expect(MANAGER_MODEL).toBe('opus');
-    // preset 一式（append だけを足す形。type/preset はリテラルで固定する）。
     expect(options.systemPrompt).toMatchObject({ type: 'preset', preset: 'claude_code' });
     expect(typeof (options.systemPrompt as { append?: unknown }).append).toBe('string');
 
-    // 作業者層の本体は1個だけ、既定は Sonnet。
     const agentKeys = Object.keys(options.agents ?? {});
     expect(agentKeys).toEqual([WORKER_AGENT_NAME]);
     const worker = (options.agents ?? {})[WORKER_AGENT_NAME] as { model?: unknown };
     expect(worker.model).toBe('sonnet');
     expect(WORKER_MODEL).toBe('sonnet');
-    // `tools` を持たない（省略 = 親の全ツールを継承。runner.ts のコメント）。
     expect(Object.hasOwn(worker, 'tools')).toBe(false);
 
     expect(options.settingSources).toEqual(['user', 'project', 'local']);
-    // マネージャーには繋ぐ（クローンとは逆）。
     expect(typeof options.canUseTool).toBe('function');
     expect(options.hooks?.PostToolUse).toHaveLength(1);
     expect(options.hooks?.PreCompact).toHaveLength(1);
-    // `UserPromptSubmit` は観測専用（`worker_wait`。#129 で入った）。**ここで
-    // 固定するのは、これが「渡さなくても動く」種類のフックだからである** —
-    // 落ちても機能は壊れず、消えるのは観測だけなので、気づく契機がここにしか
-    // 無い（PRD「可観測性」）。
     expect(options.hooks?.UserPromptSubmit).toHaveLength(1);
-    // `SubagentStop` も同じ理由の観測専用フック（#357。`runner.ts` の
-    // `#onSubagentStop` の doc）。渡した callback がそのまま `Options` へ
-    // 載っていること自体が「provider を足す側が黙って落とせない」の保証である。
     expect(options.hooks?.SubagentStop).toHaveLength(1);
     expect(typeof options.hooks?.SubagentStop?.[0]?.hooks?.[0]).toBe('function');
     expect(options.sessionStore).toBeDefined();
-    // childUser を渡していないので spawnClaudeCodeProcess は渡らない。
     expect(options.spawnClaudeCodeProcess).toBeUndefined();
 
-    // --- ⭐ 「無いこと」の固定 ---
     expect(options.tools).toBeUndefined();
     expect(options.maxTurns).toBeUndefined();
 
-    // auto-memory は既定で塞ぐ（#1189）。`autoMemoryDirectory` と違い
-    // 「Ignored if set in projectSettings」が付いていない `autoMemoryEnabled` を
-    // 「flag settings」層（`sdk.d.ts` の `Options.settings`）へ渡す。
     expect(options.settings).toEqual({ autoMemoryEnabled: false });
   });
 
@@ -500,8 +371,6 @@ describe('マネージャー（runner）へ渡す Options', () => {
     await host.start({ managerId: 'mgr-1', request: '走る', cwd: dir });
     const { options } = started[0] as Started;
 
-    // 塞ぐキー自体を省く（`autoMemoryEnabled: true` を明示するのではない —
-    // SDK が既定で開くのに委ねる。claude-provider.ts のコメントに理由がある）。
     expect(options.settings).toBeUndefined();
   });
 
@@ -521,11 +390,6 @@ describe('マネージャー（runner）へ渡す Options', () => {
   });
 
   it('systemPrompt.append と agents[WORKER_AGENT_NAME].prompt は、ビルダー関数の戻り値そのものである（#357 の残り1点）', async () => {
-    // `prompt.test.ts` の「バックグラウンドの完了を待つときの事実の告知（#357）」は
-    // `buildManagerSystemPrompt()` / `buildWorkerPrompt()` の戻り値までしか見ていない
-    // ——「その戻り値が SDK へ渡る Options に実際に載るか」という継ぎ目は誰も見ていな
-    // かった。ここではその継ぎ目だけを固定する。文言そのものは持たない（コピーすると
-    // 片方だけ直したときに腐る）— ビルダーを直接呼んで突き合わせる。
     const { fn, started } = fakeRunnerSdk();
     host = createRunnerHost({
       runnerId: 'runner-primary',
@@ -538,8 +402,6 @@ describe('マネージャー（runner）へ渡す Options', () => {
     await host.start({ managerId: 'mgr-1', request: '走る', cwd: dir });
     const { options } = started[0] as Started;
 
-    // runner.ts の #buildOptions が渡す引数と同じ形で呼ぶ（managerId は
-    // host.start() に渡した値、workerName は WORKER_AGENT_NAME）。
     const expectedManagerAppend = buildManagerSystemPrompt({
       managerId: 'mgr-1',
       workerName: WORKER_AGENT_NAME,
@@ -579,8 +441,6 @@ describe('マネージャー（runner）へ渡す Options', () => {
       emit: () => undefined,
       queryFn: fn,
       env: {},
-      // uid/gid は実際に spawn するわけではないので実在の値である必要はない
-      // （spawnClaudeCodeProcess 自体を呼び出さない。渡る「形」だけを見る）。
       childUser: { uid: 12345, gid: 12345 },
     });
 
@@ -591,18 +451,7 @@ describe('マネージャー（runner）へ渡す Options', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// C. クローンの蒸留サイドクエリ
-// ---------------------------------------------------------------------------
-
 describe('クローンの蒸留サイドクエリへ渡す Options', () => {
-  /**
-   * `clone-precompact-and-distill-tail.test.ts`（旧 `clone.test.ts`。#1744 で
-   * 分割済み）の `firePreCompact` と同じ形。`PreCompact` フックを直接
-   * 叩いて `#distillFromTranscript`（別の短命セッション）を実際に走らせる。
-   * これが `queryFn` を2回目に呼ぶ呼び出しになり、`calls[1]` に蒸留側の
-   * `options` が積まれる。
-   */
   async function firePreCompact(main: { options: Options }): Promise<void> {
     const dir = await makeTempDir('alteroid-agent-session-options-distill-');
     const transcriptPath = join(dir, 'transcript.jsonl');
@@ -627,39 +476,17 @@ describe('クローンの蒸留サイドクエリへ渡す Options', () => {
 
     const { options } = calls[1] as { options: Options };
 
-    // 走行中のセッションは compaction 中なので、蒸留は別の短命セッションで行う
-    // （clone.ts の `#distillFromTranscript` のコメント）。永続化しない。
     expect(options.persistSession).toBe(false);
-    // 監査は必要（道具と許可モードを本セッションと揃えた以上、記録も要る）。
     expect(options.hooks?.PostToolUse).toHaveLength(1);
-    // 失敗・中断した道具呼び出しも同じ理由で要る（Issue #924）— 蒸留は
-    // memory_write を叩く経路なので、そこの失敗が消えると「記憶が書かれ
-    // なかった」が静かに落ちる。
     expect(options.hooks?.PostToolUseFailure).toHaveLength(1);
-    // PreCompact フックは無い（これは既に PreCompact の中で走っている別セッション
-    // なので、自分自身をもう一段 compaction する入口を持たせない）。
     expect(options.hooks?.PreCompact).toBeUndefined();
-    // 人間の設定と MCP 連携は本セッションと同じ形で渡す。
     expect(options.settingSources).toEqual(['user', 'project', 'local']);
-    // `buildCloneDistillOptions` も `managerAutoMemoryEnabled` を受け取らない
-    // ので `settings` は載らない（#1189。上の本セッション側と同じ理由）。
     expect(options.settings).toBeUndefined();
 
     await clone.stop();
   });
 });
 
-// ---------------------------------------------------------------------------
-// 人間の MCP 連携の登録（#325 段2）
-// ---------------------------------------------------------------------------
-
-/**
- * 記憶ストアに置いた登録（`McpServerStore`）が、クローンの本セッションと蒸留の
- * `mcpServers` に自作のインプロセス MCP と並んで渡ること。
- *
- * **自作が必ず勝つ**ことも固定する —— 入口（`parseMcpServers`）は同じ名前を
- * 拒むが、合成の側でも守りを持つ（`cloneMcpServers` の doc）。
- */
 describe('人間の MCP 連携の登録をクローンへ渡す（#325 段2）', () => {
   async function firePreCompact(main: { options: Options }): Promise<void> {
     const dir = await makeTempDir('alteroid-agent-session-options-mcp-');
@@ -688,11 +515,8 @@ describe('人間の MCP 連携の登録をクローンへ渡す（#325 段2）',
       ['github', MCP_SERVER_NAME].sort(),
     );
     expect(main.options.mcpServers?.github).toEqual({ command: 'gh-mcp', env: { TOKEN: 'dummy' } });
-    // 自作はインプロセス（`sdk`）のまま。
     expect(main.options.mcpServers?.[MCP_SERVER_NAME]?.type).toBe('sdk');
 
-    // 走行中に差し替えた登録は、次に起こす蒸留から効く（本セッションには届かない —
-    // SDK は `mcpServers` を `query()` の起動時に1度だけ受け取る）。
     await stores.mcpServers.write({
       github: { command: 'gh-mcp', env: { TOKEN: 'dummy' } },
       remote: { type: 'http', url: 'https://example.invalid/mcp' },
@@ -719,10 +543,6 @@ describe('人間の MCP 連携の登録をクローンへ渡す（#325 段2）',
     expect(cloneMcpServers(own, undefined)).toEqual({ [MCP_SERVER_NAME]: own });
   });
 
-  /**
-   * 壊れた登録1つでクローンが丸ごと起きなくなる形にしない。**そして黙って空で
-   * 起きない** —— 日誌に「読めなかった」を残す（`#externalMcpServers` の doc）。
-   */
   it('登録が読めなくてもセッションは起き、そのことを日誌に残す', async () => {
     const { fn, calls } = fakeCloneSdk();
     const base = createMemoryStores();
@@ -754,17 +574,6 @@ describe('人間の MCP 連携の登録をクローンへ渡す（#325 段2）',
   });
 });
 
-// ---------------------------------------------------------------------------
-// 人間の MCP 連携の登録（#325 段3。マネージャー・作業者）
-// ---------------------------------------------------------------------------
-
-/**
- * デーモンが runner へ降ろした登録（`Host#setMcpServers`）が、マネージャーの
- * `Options.mcpServers` に載ること。作業者（`agents`）には書かないこと。
- *
- * **効く時機も固定する** —— 走っているセッションには届かず、次に開くセッション
- * から効く（SDK の `mcpServers` は `query()` の起動時に1度だけ渡る）。
- */
 describe('人間の MCP 連携の登録をマネージャーへ渡す（#325 段3）', () => {
   let dir: string;
   let host: RunnerHost | undefined;
@@ -804,10 +613,8 @@ describe('人間の MCP 連携の登録をマネージャーへ渡す（#325 段
 
     expect(options.mcpServers).toEqual(REGISTRATION);
     const worker = (options.agents ?? {})[WORKER_AGENT_NAME] as Record<string, unknown>;
-    // **作業者は親の接続を継承する**（`claude-provider.ts` の `agents` の doc）。
     expect(Object.hasOwn(worker, 'mcpServers')).toBe(false);
     expect(Object.hasOwn(worker, 'tools')).toBe(false);
-    // `.mcp.json` を読む経路（settingSources）は消していない。
     expect(options.settingSources).toEqual(['user', 'project', 'local']);
   });
 
@@ -816,7 +623,6 @@ describe('人間の MCP 連携の登録をマネージャーへ渡す（#325 段
     await host.start({ managerId: 'mgr-1', request: '走る', cwd: dir });
     expect(Object.hasOwn((started[0] as Started).options, 'mcpServers')).toBe(false);
 
-    // 空の登録（外した）も同じ。
     host.setMcpServers(REGISTRATION);
     host.setMcpServers({});
     expect(host.mcpServers()).toBeUndefined();
@@ -849,7 +655,6 @@ describe('人間の MCP 連携の登録をマネージャーへ渡す（#325 段
     expect(message).not.toContain('SECRET');
     expect(host.mcpServers()).toEqual(before);
 
-    // alteroid 自身の名前も runner の入口で拒む（デーモンの器と同じ検査を通す）。
     expect(() => host.setMcpServers({ [MCP_SERVER_NAME]: { command: 'x' } })).toThrow();
   });
 
@@ -864,13 +669,11 @@ describe('人間の MCP 連携の登録をマネージャーへ渡す（#325 段
       github: { env: { A: '1', B: '2' }, command: 'gh-mcp' },
     });
     expect(a?.sha256).toBe(b?.sha256);
-    // 値が変われば指紋も変わる（同じに潰していない）。
     const c = host.setMcpServers({
       github: { command: 'gh-mcp', env: { A: '1', B: '3' } },
       remote: { type: 'http', url: 'https://example.invalid/mcp' },
     });
     expect(c?.sha256).not.toBe(a?.sha256);
-    // 指紋に値は載っていない。
     expect(JSON.stringify(c)).not.toContain('gh-mcp');
   });
 });

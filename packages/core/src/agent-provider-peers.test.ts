@@ -71,7 +71,6 @@ describe('ALTEROID_<層>_PEERS の解釈', () => {
         const mixed = parsePeers(layer, 'codex,claude', CLAUDE, KNOWN);
         expect([...mixed.peers]).toEqual(['codex']);
         expect(mixed.selfListed).toBe(true);
-        // 両方の層に同じ値を書く運用: codex 層から見ると codex が自分で、claude だけが残る
         const fromCodex = parsePeers(layer, 'codex,claude', CODEX, KNOWN);
         expect([...fromCodex.peers]).toEqual(['claude']);
         expect(fromCodex.selfListed).toBe(true);
