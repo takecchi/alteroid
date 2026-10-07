@@ -450,89 +450,14 @@ export type RedeliveryGate = (
 
 export const ALWAYS_REDELIVER: RedeliveryGate = () => true;
 
-/**
- * 枠（利用上限）が閉じている間に届いた合図が、`#usageBlocked.resetsAt`
- * （回復予定時刻）より前でも常に再武装（`#releaseRequested = true`）してよいか
- * （Issue #1240 続き）。
- *
- * ## なぜ「常に」の例外が要るのか
- *
- * `post()` はかつて、枠が閉じている間に届いた**どんな**合図でも無条件に
- * 再武装していた。回復予定時刻を知らなかったので「試すしかない」が唯一の
- * 選択肢だったが、いまは {@link UsageLimitNotice.resetsAt} が分かる回がある
- * （`rejectedRateLimitNotice` の doc）。**まだそれより前だと分かっているなら、
- * 新しい情報を運ばない合図で試す理由が無い** —— 枠は Anthropic 側の時計で
- * 開くのであって、alteroid 側に合図が届くことでは開かない。保持している
- * 合図が N 件、その間に新しい合図が M 件届けば、無条件の再武装は
- * `#pump` 側で N×M 件ぶんの「内部ターンが失敗した」を日誌へ書く一因になって
- * いた（`#pump` の枠ブロックの doc）。
- *
- * ## それでも無条件に再武装してよい3種類
- *
- * どれも「試す価値がある新しい事実」を運ぶので、`resetsAt` を見ずに従来どおり
- * 再武装する。
- *
- * 1. **`human_message` / `human_answer`**（{@link isHumanOriginated}）——
- *    人間起点。**最も価値の高い試行**であり、待たせる代償がいちばん大きい
- * 2. **`manager_message`** —— マネージャーからの一件。外の世界の新しい事実
- *    （マネージャー自身が見ている枠の状態、人間が委譲へ返した答え等）を運ぶ
- *
- *    **⚠️ ただし機構が合成した失敗の知らせ（`synthesized: true`）は除く**
- *    （2026-09-24 の実運用）。「応答を返さずに終わった」「利用上限に当たった」
- *    は、同じ枠でマネージャーが落ちたことを告げているだけで、**枠が開いた
- *    証拠にならない。** 直す前はこれでも無条件に解除を試したので、枠で
- *    落ちたマネージャーの報告のたびにクローンも1ターン回して 429 を踏み、
- *    「内部の失敗記録を畳んだ: 867 件」まで積もった。除いた分は他の合図と
- *    同じく `resetsAt` を見る側へ落ちる —— **回復予定時刻が分からなければ
- *    従来どおり試す**（地雷2）。保持した合図は消えず、解除のときに配られる。
- * 3. **`external` かつ `source === {@link DAEMON_TOKEN_POOL_REOPENED_SOURCE}`**
- *    —— トークンの構成・冷却の変化を運ぶデーモン自身の通知
- *    （`daemon-self-notice.ts`）。**`resetsAt` はいま撒かれている1本の
- *    トークンについての予定でしかない** —— プールへ新しいトークンを足す・
- *    削る・有効化すると、その予定は無意味になる。だからここだけは
- *    `resetsAt` を無視して常に試す（オーナーが挙げた「追加・削除など変更が
- *    あった際には再チェック」を満たすのはここである）
- *
- *    **⚠️ この関数自身はいまも3を無条件に真として返す（1文字も変えて
- *    いない）。** 「プールが変わっていない」を見分ける判定は、この関数の
- *    外——呼び出し側（`post()`）が {@link staleObservedRecoveryNoticeEvent}
- *    （`daemon-self-notice.ts`。Issue #1223 再発）で別に持つ。理由は
- *    `post()` の呼び出し箇所のコメントに書いた——同じ判定をこの関数の中へ
- *    畳み込むと、`event` だけでなく `#usageBlocked.resetsAt` /
- *    `#sessionTokenIdentity` という2つのインスタンス状態が要り、この関数の
- *    「`event` だけを見る純関数」という形が壊れる。
- *
- * ## それ以外は `resetsAt` を見る（呼び出し側 `post()`）
- *
- * `self_initiative` / `timer` / `distill` / 上記以外の `external` は、この
- * 関数が偽を返す。**呼び出し側（`post()`）がそこで初めて `resetsAt` を見る** ——
- * 分かっていてまだ先なら抑止し、**分からなければ今までどおり再武装する**
- * （判定できないときは能力を削らない側へ倒す。AGENTS.md 地雷2）。
- */
-/**
- * **文言に書かれた回復時刻を、枠の保持（`#usageBlocked`）へ写す**
- * （2026-09-24 の実運用）。構造化された `resetsAt` が在れば何もしない。
- *
- * ## なぜ要るか —— 文言だけの枠では回復予定時刻が常に「不明」だった
- *
- * `#usageBlocked.resetsAt` を持たせる経路は `rate_limit_event` だけだった
- * （`rejectedRateLimitNotice`）。**本番の枠は文言でしか届かない回がある**
- * （`You've hit your org's monthly spend limit … your session limit resets
- * 5:10pm (Asia/Tokyo)`）。そのとき `post()` の「回復予定時刻より前なら再武装
- * しない」（Issue #1240 続き）は「不明なら試す」側へ倒れ、**どの合図でも
- * 1ターン回して 429 を踏んだ**（「内部の失敗記録を畳んだ: 867 件」）。
- *
- * **回し手（`token-rotator.ts` の #682）と同じ関数で読む。** 窓はトークンの
- * 冷却の既定（{@link DEFAULT_TOKEN_COOLDOWN_MS}）で、窓の外・読めない形は
- * `undefined` のまま（＝従来どおり試す）——`usage-reset-text.ts` の
- * 「誤りは必ず今日より短い側にしか出ない」がそのまま効く。
- */
 function withNoticeTextResetsAt(notice: UsageLimitNotice, at: number): UsageLimitNotice {
   if (notice.resetsAt !== undefined) return notice;
   const resetsAt = parseNoticeResetAt(notice.text, { at, withinMs: DEFAULT_TOKEN_COOLDOWN_MS });
   return resetsAt === undefined ? notice : { ...notice, resetsAt };
 }
 
+// synthesized な manager_message は無条件に再武装しない: 機構が合成した失敗の知らせは枠が開いた証拠にならず、1ターン回して 429 を踏むだけのため
+// この判定へ `resetsAt` の比較を畳み込まない: `event` だけを見る純関数でなくなり、インスタンス状態が要るため
 function usageBlockAlwaysRearms(event: InboxEvent): boolean {
   return (
     isHumanOriginated(event) ||
@@ -543,287 +468,47 @@ function usageBlockAlwaysRearms(event: InboxEvent): boolean {
 
 export interface CloneOptions {
   stores: Stores;
-  /**
-   * このクローンが走らせる provider（Issue #486 M7）。**省略は Claude**（いまのクローンの
-   * provider は Claude 固定）。台帳の「取れなかった」の起こし口が見るのは
-   * `capabilities.usage === false` だけである。
-   */
   provider?: Pick<AgentProvider, 'id' | 'capabilities'>;
-  /**
-   * 主にテスト用。既定は SDK の `query`。**既定の駆動役（`ClaudeCloneDriver`）へ渡る**
-   * ——`driver` を渡したときは使われない。
-   */
   queryFn?: typeof query;
-  /**
-   * クローンの harness セッションを動かす駆動役（Issue #486 M7 の前段。`agent-clone-session.ts`）。
-   * **省略は `ClaudeCloneDriver`**（`queryFn` を渡して組む）。いまは Claude の駆動役しか
-   * 無い——クローンが `query()` を直接呼ばなくなっただけで、挙動は変わっていない。
-   */
   driver?: AgentCloneDriver;
-  /**
-   * クローンのセッションを置くディレクトリ。SDK はここを基準に
-   * トランスクリプトを保存するので、**呼び出し元のカレントディレクトリに
-   * 依存させてはいけない**（依存させると別の場所から起動した途端に resume が
-   * 迷子になる）。デーモンは `~/.alteroid` を渡す。
-   */
+  // カレントディレクトリに依存させない: 別の場所から起動した途端に resume が迷子になるため
   cwd?: string;
-  /**
-   * 委譲先（manager-runner）の名簿。
-   *
-   * **クローンは SDK を直接起こさない。** マネージャーは別プロセス（既定では
-   * 別コンテナ）の runner で走り、ここはその宛先を決める間接層だけを見る
-   * （docs/architecture.md「プロセス境界」）。
-   */
   runners?: RunnerRegistry;
-  /**
-   * SDK のセッション永続化先（M4）。クローンとマネージャーの生ログを同じ
-   * PostgreSQL へ載せる。渡さなければローカルディスクのまま（M1〜M3 と同じ）。
-   */
   sessionStore?: SessionStore;
-  /** 主にテスト用。差し替えると委譲先ごと入れ替えられる。 */
   managers?: ManagerPool;
-  /**
-   * モデル帯の差し替え（`ALTEROID_CLONE_MODEL`）と権限モードの差し替え
-   * （`ALTEROID_CLONE_PERMISSION_MODE`）を読む先。主にテスト用で、
-   * 既定は `process.env`。
-   */
   env?: NodeJS.ProcessEnv;
-  /**
-   * **SDK 子プロセスの env の土台**（`#childEnv()` の最初の重ね）。省略は `env`
-   * （＝従来どおり `process.env`）。
-   *
-   * ## なぜ `env` と別に持つのか（2026-10-06）
-   *
-   * デーモンは起動時に `applyAppScopedEnvVars` で正本（袋）の `scope: all | app` の行を
-   * `process.env` へ書き写す。**それを「器の env」と取り違えて子へ渡すと、正本から外した
-   * 名前の古い値が起動時の写しとして子に残り続ける**（どの名前でも。正本を更新しても
-   * 古い値が勝つ）。⟹ 子へ渡す土台には、**書き写す前の `process.env` のスナップショット**を
-   * 渡す。`env`（モデル帯・権限モードなどデーモン自身の設定の読み出し）は従来どおり
-   * 書き写し後の `process.env` のままでよい。
-   */
+  // `env` と別に持つ: 書き写し後の `process.env` を子へ渡すと、正本から外した名前の古い値が子に残り続けるため
   childEnvBase?: NodeJS.ProcessEnv;
-  /**
-   * SDK 子プロセスへ重ねる鍵の現在値を返す関数（Issue #393 PR3）。
-   *
-   * **クローンにも認証トークンのプールの現在値を届けるための口である。** 渡さなければ
-   * 今までどおり `env` とプロファイルだけになる（既定の構成の挙動を変えない）。
-   *
-   * **呼ばれるのは SDK セッションを起こす直前だけである** ⟹ **走っている
-   * セッションには届かない。** 畳んで作り直す経路は PR4 で足す（Issue #393
-   * 追記5「ターンの途中では畳まない」）。
-   */
   credentials?: () => Record<string, string>;
-  /**
-   * いま撒かれているトークンの身元（Issue #393 PR3）。**セッションを起こす瞬間に
-   * 1度だけ読み、そのセッションの観測すべてに添える。**
-   *
-   * これが無いと、回し手は「もう回した後の通知」を見分けられない
-   * （`observationFreshness` が `unknown` へ落ちる）。
-   */
   tokenIdentity?: () => { tokenId: string; generation: number; fingerprint?: string } | undefined;
-  /**
-   * 枠の観測を回し手へ渡す口（Issue #393 PR3）。
-   *
-   * **クローンは回すかどうかを判断しない。** 枠に当たった瞬間このループはターンを
-   * 回さない（`#usageBlocked`）ので、**判断をここへ置くといちばん要るときに
-   * いちばん動かない。** ここは観測を渡すだけで、判定も選択も撒きも回し手が持つ。
-   *
-   * **投げてもターンを壊さない**（呼ぶ側で握って報告する）。回せなかったことは
-   * 枠に当たったこととは別の失敗であり、後者の報告を前者で置き換えない。
-   */
+  // クローンは回すかどうかを判断しない: 枠に当たるとこのループはターンを回さないので、判断をここへ置くと一番要るときに動かないため
   onUsageObservation?: (observation: TokenRotatorObservation) => Promise<void>;
-  /**
-   * 作業者の道具の実行中の合図（Issue #2725）を、マネージャーのプールから受ける口。
-   * `ManagerPoolOptions.onWorkerToolEvent` へそのまま渡す。未指定なら何もしない。
-   */
   onWorkerToolEvent?: (event: WorkerToolEvent) => void;
-  /**
-   * **認証トークンのために畳んだセッションが、実際に畳まれた瞬間**に呼ばれる
-   * （人間の決定 2026-09-07）。
-   *
-   * ## なぜ要るか —— 「撒いた」と「再開できる」のあいだに窓が在る
-   *
-   * {@link Clone.recycleSessionForToken} が `'deferred'` を返した回は、畳まれるのが
-   * **ターンの境界**である（走っているターンは最後まで走る）。⟹ その手前で
-   * 「再開の合図」を入れると、**合図は古い鍵のターンに消費されて、そのターンは
-   * 死ぬ。** 実運用で26分の沈黙になった（あちらの doc に実測の表が在る）。
-   *
-   * ここが鳴るのは**畳んだ後**なので、呼ぶ側が入れる合図は必ず**新しい鍵の
-   * セッション**で受け取られる。
-   *
-   * ## ⚠️ ここで状態を動かさないこと
-   *
-   * 呼ぶ側にできるのは `post()`（印を立てて受信箱へ積むだけ）である。
-   * `#usageBlocked` を降ろす・保持分を取り出すのは `#pump` の先頭だけという
-   * 規律を崩さない —— 崩すと、隙間に居た合図が1件必ず取り残される
-   * （`post()` の doc に実測の壊れ方が2つ在る）。
-   *
-   * **同期で呼ばれる。投げないこと**（呼ぶ側の失敗でセッションの作り直しを
-   * 巻き添えにしない）。
-   */
+  // ここで状態を動かさない: `#usageBlocked` を降ろす・保持分を取り出すのは `#pump` の先頭だけで、崩すと隙間に居た合図が1件取り残されるため
   onTokenSessionRecycled?: () => void;
-  /**
-   * 名乗ってきた runner へ、いま撒いてある認証トークンを降ろす口（Issue #393 PR3）。
-   * **このクローンは使わない** — 作った `ManagerPool` へそのまま渡すだけである。
-   */
   syncRunnerToken?: (runner: RunnerClient) => Promise<void>;
-  /**
-   * 権限モード。省略すると `env` の `ALTEROID_CLONE_PERMISSION_MODE`、
-   * それも無ければ `auto`（`permission-mode.ts`）。主にテスト用の直渡しで、
-   * runner の `RunnerHostOptions.permissionMode` と同じ形である。
-   */
   permissionMode?: PermissionModeName;
-  /**
-   * 人間の合図を待ち行列の先頭側へ入れるか。省略すると `env` の
-   * `ALTEROID_CLONE_HUMAN_PRIORITY`、それも無ければ**有効**
-   * （`resolveCloneHumanPriority`）。主にテスト用の直渡しである。
-   */
   humanPriority?: boolean;
-  /**
-   * `#mergedHumanBatch` / `#mergedManagerReportBatch` / `#mergedExternalBatch`
-   * が1ターンへ束ねる合図の最大件数。省略すると `env` の
-   * `ALTEROID_MERGED_BATCH_SIZE_LIMIT`、それも無ければ既定50件
-   * （`resolveMergedBatchSizeLimit`）。主にテスト用の直渡しで、`humanPriority`
-   * と同じ形である。
-   */
   mergedBatchLimit?: number;
-  /**
-   * 日報のターンが枠切れ以外で失敗したあと、作り直すまでの間隔の列（ms。#2745）。
-   * 要素数が作り直しの上限回数。省略時は {@link DAILY_REPORT_RETRY_DELAYS_MS}。主にテスト用。
-   */
   dailyReportRetryDelaysMs?: readonly number[];
-  /**
-   * 実行環境プロファイル（`.zprofile` 相当）。
-   *
-   * **クローンにも効かせる。** 人間の `.zshenv` は、その人が Claude Code に頼む
-   * ときにも、自分で端末を叩くときにも同じように効く。クローンは人間の写像で
-   * あって「道具を持たない存在」ではない（north_star「適用範囲」）ので、
-   * 「マネージャーには効くがクローンには効かない」を作らない。
-   */
   profile?: ProfileApplier;
-  /**
-   * 実行環境プロファイルを置いて配る1本道（`profile_read` / `profile_write` と
-   * 再接続時の降ろし直しが通る）。
-   *
-   * **デーモンが作った同じインスタンスを渡すこと。** 人間の口とクローンの道具が
-   * 別のインスタンスを持つと直列化の意味が消える（層ごとに違う本文が残る）。
-   */
+  // デーモンが作った同じインスタンスを渡す: 別のインスタンスを持つと直列化の意味が消え、層ごとに違う本文が残るため
   profileService?: ProfileService;
-  /**
-   * マネージャーへ降ろす環境変数（名前→値）を置いて配る1本道。
-   *
-   * **デーモンが作った同じインスタンスを渡すこと**（`profileService` と同じ
-   * 理由）。ここに渡すのは、再接続時の降ろし直しがマネージャーのプールを通る
-   * ためである——runner は記憶ストアを読めないので、降ろすのはデーモンの責任
-   * である。
-   *
-   * **クローン自身も読む**（2026-09-12。`#childEnv()` の `#vaultCredentialOverlay`）
-   * ——`vaultSnapshot()` 経由で正本の同期の写しを覗き、マネージャー側の
-   * `effective()` と同じ解決（`resolveCredentialRows`）に通す。渡さなければ
-   * 正本を素通りし、変更前の `#childEnv()` と同じ挙動になる。
-   */
   credentialService?: CredentialService;
-  /**
-   * SDK 子プロセス（`Bash` / MCP / 作業者を含む）へ渡さない鍵（Issue #1495 ①）。
-   *
-   * **`#childEnv()` の「記憶ストアの鍵は落とさない」の例外である。** あちらは
-   * クローンが記憶の持ち主であることから来る規則で、ここに挙げるのは記憶へ
-   * 届く鍵ではなく**ログイン基盤そのものの鍵**（Google OAuth のクライアント
-   * ID / シークレット）——握られると `alteroid login` を介さずアクセストークン
-   * を発行でき、API 経由で記憶へ到達できてしまう（daemon 側 `auth.ts` の
-   * `AUTH_WITHHELD_ENV_KEYS`）。クローンの子プロセスが記憶を読み書きするのに
-   * この鍵を使うことは無いので、記憶の持ち主だからという理由では守れない。
-   *
-   * **core は daemon の定数を import できない**（依存の向きが逆——daemon が
-   * core を使う側である）ので、ここは名前の一覧を受け取るだけの口にしてある。
-   * 実際に渡すのは daemon 側（`apps/daemon/src/index.ts` の
-   * `createClone(...)`）。渡さなければ何も伏せない（既定の構成の挙動を
-   * 変えない）。
-   *
-   * **落とすのは `#childEnv()` の最後**（`runner.ts` の `#childEnv()` と同じ
-   * 順序）——正本やプロファイルが同じ名前を重ねてきても、伏せた後にもう一度
-   * 伏せることで生き残らせない。
-   */
+  // 鍵の名前は daemon から受け取る: core は daemon の定数を import できない（依存の向きが逆）ため
+  // 伏せるのは `#childEnv()` の最後にする: 正本やプロファイルが同じ名前を重ねてきても生き残らせないため
   withheldEnvKeys?: readonly string[];
-  /**
-   * 人間の MCP 連携の登録を置いて runner へ配る1本道（#325 段3）。
-   *
-   * **デーモンが作った同じインスタンスを渡すこと**（`profileService` と同じ理由）。
-   * ここに渡すのは、runner が名乗るたびの降ろし直しがマネージャーのプールを通る
-   * ためである。**クローン自身はこれを読まない** —— クローンは記憶ストアの登録を
-   * セッションを組むたびに直に読む（段2。`#buildSessionSpec`）。
-   */
   mcpServerService?: McpServerService;
-  /**
-   * アカウント全体の利用状況（claude.ai 側の値）を読む口。
-   *
-   * **人間が `claude.ai/settings/usage` で見られるものを、クローンにも渡す。**
-   * 見られないのは能力の削除（north_star 禁止1）であり、しかもこれは飾りではなく
-   * 判断の材料である（重い委譲を続けてよいかは、残りを見ずには決められない）。
-   */
   accountUsage?: () => AccountUsageState;
-  /**
-   * `Scheduler.list()` の写し。`ToolContext.scheduler`（`tools.ts`）へそのまま
-   * 渡す — `schedule_list` が「次: <nextAt>」を出す材料（Issue #237）。
-   *
-   * **省略できるのはテストのためだけである。** `Scheduler` はデーモン側（
-   * `apps/daemon/src/index.ts`）が組み立てるので、ここで作り直さない。
-   */
+  // ここで `Scheduler` を作り直さない: デーモン側が組み立てるため
   scheduler?: () => ScheduleStatus[];
-  /**
-   * 定期の依頼の発火が、引き受け（`claimRun`）の読み書きの失敗で**動かなかった**ときに呼ぶ
-   * （#2741）。デーモンは `scheduler.retrySoon(kind)` を渡す。スケジューラは発火の時点で
-   * 次回を1周期先へ進めてあるので、これが無いと再起動まで取り戻されない。
-   * 定刻の発火（`schedule`）だけが呼ぶ。手で起こした1回（`manual`）は再試行しない。
-   */
   onScheduledRunNotStarted?: (kind: string, delayMs?: number) => void;
-  /**
-   * いま自分がどう走っているかの事実（記憶の器・作業ディレクトリ・委譲先・
-   * 入口・モデル帯）。システムプロンプトの自己認識の節に載る。
-   *
-   * **省略できるのはテストのためだけである。** 本番の配線で落とすと、
-   * クローンは自分がどこで走っているかを知らないまま判断することになる。
-   * 組み立てるのはデーモン側 — 事実を知っているのはあちらだからで、
-   * ここで環境変数を読み直すと出所が2つになる。
-   */
+  // ここで環境変数を読み直さない: 事実はデーモン側が組み立て、読み直すと出所が2つになるため
   self?: SelfFacts;
-  /**
-   * runner が名乗ったマネージャー層の provider id を、欠落の判定に要る事実へ引く。
-   * 省略時は受け付ける id だけ引く。**テストが偽の provider を差すためだけの口**
-   * （本番の `AgentProviderId` を広げずに済む）。
-   */
   providerOf?: (id: string) => ProviderGapSubject | undefined;
-  /**
-   * 道具の MCP サーバを組み立てる関数。**主にテスト用。既定は `createCloneMcpServer`。**
-   *
-   * `createSdkMcpServer`（SDK）は道具を MCP の transport の裏へ隠すので、テストから
-   * ハンドラを直接呼べない。ここを差し替えると、渡ってくる `context`（クローンが
-   * 実際に組み立てたものと同一 — `runtime` 含む）を控えたうえで本物の
-   * `createCloneMcpServer(context)` を呼べる。道具の実装もクローンが渡す
-   * `context` も本物のまま、呼び出しの境界だけを覗ける
-   * （`queryFn` と同じ「差し替え可能だが既定は本物」という形）。
-   */
   mcpServerFactory?: typeof createCloneMcpServer;
-  /**
-   * クローンの道具の中継（Issue #486 48(a) PR2）が listen するソケットを収める
-   * ディレクトリ。省略すると `DEFAULT_CLONE_TOOL_RELAY_SOCKET_DIR`
-   * （`/run/alteroid/clone-tool-relay`）。
-   *
-   * **省略できるのはテストのためだけである。** 本番の `/run/alteroid` は
-   * `compose.yaml` の名前付き volume（`control`）の下にしか無いので、テストは
-   * ここへ一時ディレクトリを渡す。**`ALTEROID_CLONE_TOOLS_TRANSPORT` が
-   * `stdio` でなければ、この値は一切読まれない**（ホストそのものを起こさない
-   * ので、ディレクトリも作らない）。
-   */
   cloneToolRelaySocketDir?: string;
-  /**
-   * `#restoreUnread` が配り直す1件ごとに、実際に配るか畳むかを決める述語
-   * （Issue #783 続き）。doc は {@link RedeliveryGate} に在る。
-   *
-   * **必須である（2026-09-12 以降。省略できない）。** 全件配りたいだけなら
-   * {@link ALWAYS_REDELIVER} を渡す——書き手ごとに同じ意図の無名関数を
-   * 書き散らさないための、共有の1つの実体である。
-   */
+  // 省略可能にしない: 書き手ごとに同じ意図の無名関数が散らばるため（全件配るなら `ALWAYS_REDELIVER`）
   redeliveryGate: RedeliveryGate;
 }
 
