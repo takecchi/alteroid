@@ -6763,13 +6763,6 @@ describe('クローンの道具', () => {
       expect(reply).toContain('[done/背景処理待ち×3（2026-09-05T00:00:00.000Z から）]');
     });
 
-    /**
-     * **Issue #1104。`since` は manager_list へも通す（一覧のこの行が、
-     * `候補1`が推す「経過時間は manager_list の pull 側で名乗る」の実体である）。**
-     * ここで測るのはこの一覧の生成元が `describeManagerState` の第3引数まで
-     * `since` を落とさず渡していること——字面そのものの固定は
-     * `digest.test.ts` の歯が持つ。
-     */
     it('since が在れば、いつから待っているかの時刻を一覧の行に添える', async () => {
       const h = harness();
       await h.call('manager_start', { request: 'A' });
@@ -6786,16 +6779,9 @@ describe('クローンの道具', () => {
       const reply = await h.call('manager_list', {});
 
       expect(reply).toContain('（2026-09-16T11:00:00.000Z から）');
-      // **経過時間そのもの（「4時間半」等）は作らない。** 出すのは時刻のみで、
-      // 経過は読む側（クローン）が計算する（`describeManagerState` の doc）。
       expect(reply).not.toMatch(/\d+時間|\d+分/);
     });
 
-    /**
-     * **陰性対照。** 握り潰しが無ければ1文字も足さない——`undefined` は
-     * 「背景処理は無い」ではなく「そう名乗られていない」なので、ここで
-     * 何かを書くとそれが主張になる。
-     */
     it('握り潰しが無ければ done のままで、背景処理の語を1つも足さない', async () => {
       const h = harness();
       await h.call('manager_start', { request: 'A' });
@@ -6809,11 +6795,6 @@ describe('クローンの道具', () => {
       expect(reply).not.toContain('背景処理待ち×');
     });
 
-    /**
-     * **内訳（`breakdown`）は一覧の1行へ載せない**（`listing-and-detail` の
-     * 性質1——件数に比例して伸びるものを毎行に積まない）。全文は
-     * `manager_report` と日誌に在る。
-     */
     it('内訳（breakdown）は一覧の行へ載せない', async () => {
       const h = harness();
       await h.call('manager_start', { request: 'A' });
@@ -6833,10 +6814,6 @@ describe('クローンの道具', () => {
       expect(reply).not.toContain('BREAKDOWN-MARKER-a91f');
     });
 
-    /**
-     * **道具の説明文にも書く。** 字面を足しただけではクローンには届かない
-     * （JSDoc は読まれない。`resources: true` / #572 の行と同じ理由）。
-     */
     it('道具の説明文が「印が無い＝手が空いている」ではないと断る', () => {
       const stores = createMemoryStores();
       const tools = createCloneTools({
@@ -6848,43 +6825,22 @@ describe('クローンの道具', () => {
       const description = tools.find((entry) => entry.name === 'manager_list')?.description;
 
       expect(description).toContain('done/背景処理待ち×N');
-      // **Issue #1104。** `since` の意味（時刻であって経過時間の計算結果ではない）を
-      // 道具の説明文にも書いてあることを固定する。
       expect(description).toContain('経過時間そのもの');
       expect(description).toContain('印が無いことを「手が空いている」と読まないこと');
     });
   });
 
-  /**
-   * Issue #1394 段⑤ — 「手が空いた委譲を畳む候補」を ⚠ で表示するだけの機能
-   * （畳む操作そのものは作っていない）。判定の中身は
-   * `manager-fold-candidate.test.ts` が純関数の単体で測る——ここで測るのは
-   * `manager_list` への結線と、道具の説明文である。
-   *
-   * **条件3（その器が背景処理待ちの印を送る版であると確かめられる）の材料は
-   * いま存在しない**（`manager-fold-candidate.ts` の doc）ので、`tools.ts` の
-   * 呼び出し側はこの条件を常に `false` で渡す配線にしてある。**⟹ この統合
-   * レベルでは「候補として出る」歯は書けない**——他の条件（1・2・4・5）を
-   * すべて満たすように仕立てても、条件3だけは `ToolContext` から差し替える
-   * 経路が無いので、常に `false` のまま。その「出ない」こと自体が、いまの
-   * 正しい配線の姿である（陽性側の判定は純関数の単体で測ってある）。
-   */
   describe('manager_list は「畳む候補」を ⚠ で表示する（#1394 段⑤。畳む操作はしない）', () => {
     it('条件1・2・4・5をすべて満たすよう仕立てても、条件3の材料が無いので ⚠ は出ない', async () => {
       const h = harness();
       await h.call('manager_start', { request: 'A' });
       const target = h.running[0];
       if (!target) throw new Error('準備に失敗');
-      // 条件1: done
       target.status = 'done';
-      // 条件2: 背景処理待ちの印を立てない（既定で undefined のままだが明示する）
       delete target.awaitingBackground;
-      // 条件4: classifyManagerActivity が 'active' になるよう仕立てる
-      // （turnEndReason が在り、turnEndedAt <= lastReportAt、toolUseStallPending 無し）
       target.turnEndReason = 'end_turn';
       target.turnEndedAt = '2000-01-01T00:00:00.000Z';
       target.lastReportAt = '2000-01-01T00:00:01.000Z';
-      // 条件5: 最後のターン終了（ここでは updatedAt）から十分に経っている
       target.updatedAt = '2000-01-01T00:00:01.000Z';
 
       const reply = await h.call('manager_list', {});
@@ -6893,11 +6849,6 @@ describe('クローンの道具', () => {
       expect(reply).not.toContain('畳む候補');
     });
 
-    /**
-     * **#1394 段(C): 器が能力を名乗れば、条件3が満たされて ⚠ が出る。** 上の歯と同じ
-     * 仕立てに、プールの `runnerHasCapability` だけを足す（名乗りの受け取りそのものは
-     * `manager.ts` 側の歯が測る）。
-     */
     it('器が awaiting-background-signal を名乗っていれば、同じ仕立てで ⚠ が出る（#1394 段(C)）', async () => {
       const h = harness();
       await h.call('manager_start', { request: 'A' });
@@ -6915,7 +6866,6 @@ describe('クローンの道具', () => {
 
       expect(await h.call('manager_list', {})).toContain('畳む候補');
 
-      // 別の器（名乗っていない）なら出ない。
       target.runnerId = 'runner-old';
       expect(await h.call('manager_list', {})).not.toContain('畳む候補');
     });
@@ -6931,12 +6881,8 @@ describe('クローンの道具', () => {
       const description = tools.find((entry) => entry.name === 'manager_list')?.description;
 
       expect(description).toContain('「畳む候補」の ⚠');
-      // **#1394 段④⑥⑦。** manager_list 自身は畳まないが、runner_list の
-      // pids 逼迫契機では自動で畳む——「どの道具からも行われない」という
-      // 段⑤当時の文言のままではないことを確かめる。
       expect(description).toContain('この道具（manager_list）自身は畳まない');
       expect(description).toContain('runner_list を resources: true で呼んだとき');
-      // 条件3は器の名乗り次第——名乗らない器の委譲には出ないことを説明文が名乗る（黙ると「候補が無い」と読まれる）。
       expect(description).toContain('名乗らない古い器');
     });
   });
@@ -6958,7 +6904,6 @@ describe('クローンの道具', () => {
       if (!target) throw new Error('準備に失敗');
       target.toolUseStallAt = '2026-08-28T09:10:00.000Z';
       target.toolUseStallPending = [{ id: 'toolu_ask', name: 'AskUserQuestion' }];
-      // waiting は空のまま（＝誰もその応答を待っていない）。
 
       const reply = await h.call('manager_list', {});
 
@@ -6968,15 +6913,6 @@ describe('クローンの道具', () => {
       expect(reply).toContain('2026-08-28T09:10:00.000Z');
     });
 
-    /**
-     * ⚠️⚠️ 誤検知の歯（これが本命）。
-     *
-     * `waiting` が非空なら、それは「確認は届いていて、クローンがまだ答えて
-     * いないだけ」という**正常な状態**である。一覧には既に「返事待ち
-     * (requestId: …)」の行が出ているので、そこへ ⚠ を重ねると、答えれば済む
-     * ものが異常に見える。**#572 の症状は「クローンの受信箱に一度も現れない」
-     * ことのほうである。**
-     */
     it('waiting が非空なら ⚠ を出さない（届いていて、まだ答えていないだけの正常な状態）', async () => {
       const h = harness();
       await h.call('manager_start', { request: 'A' });
@@ -6999,18 +6935,12 @@ describe('クローンの道具', () => {
       expect(reply).not.toContain('道具の応答待ち');
     });
 
-    /**
-     * 行に `timestamp` が無かっただけで、矛盾そのものは成立している
-     * （`describeTurnEnd` の (A) と同じ原則——「分からない」を「症状では
-     * ない」へ倒さない）。
-     */
     it('toolUseStallAt が無くても ⚠ を出し、「いつからかは分からない」と読める文言にする', async () => {
       const h = harness();
       await h.call('manager_start', { request: 'A' });
       const target = h.running[0];
       if (!target) throw new Error('準備に失敗');
       target.toolUseStallPending = [{ id: 'toolu_ask', name: 'AskUserQuestion' }];
-      // toolUseStallAt はセットしない（行に timestamp が無かった形）。
 
       const reply = await h.call('manager_list', {});
 
@@ -7030,10 +6960,6 @@ describe('クローンの道具', () => {
 
       expect(reply).toContain('toolu_noname');
       expect(reply).not.toContain('undefined');
-      // **名乗りの第1の主張（「不明」と分かる形で出す）を、実際に測る。**
-      // ⚠️ 直す前はこの表明が無く、`undefined` を出さずに **代わりの語も出さない**
-      // 欠陥（差し替え先を空文字にする）が 624/624 緑で通った（#935）。
-      // ⟹ `undefined` を出さないことと、分かる形で名乗ることは別の主張である。
       expect(
         reply,
         'name の無い tool_use が、undefined でもないが「不明」とも名乗らない形で出ている。' +
@@ -7041,17 +6967,6 @@ describe('クローンの道具', () => {
       ).toContain('不明');
     });
 
-    /**
-     * **切ったことは必ず言う**（`MANAGER_WAITING_LIST_LIMIT` と同じ作法）。
-     * 黙って落とすと「3件しか止まっていない」に見える。
-     *
-     * **この歯の狙い（件数の切り方）は ⚠ かどうかとは無関係。** `Bash` は
-     * Issue #2173 で `'tool-running'`（実行中。⚠ ではない）に分類されるように
-     * なったが、「ほか N 件、全 N 件」という切り方の文言は `describeToolUseStall`
-     * の中で ⚠ 行と実行中行の両方が共有している（`countNote`）ので、この歯は
-     * 道具の名前も期待値も変えずに緑のまま通る——狙いが ⚠ の有無ではなく件数の
-     * 切り方だったことが、このテストが無改造で生き残ったことそのものから分かる。
-     */
     it('未応答の道具が上限を超えたら、切ったことと全件数を言う', async () => {
       const h = harness();
       await h.call('manager_start', { request: 'A' });
@@ -7067,11 +6982,6 @@ describe('クローンの道具', () => {
       expect(reply).toContain('ほか 2 件、全 5 件');
     });
 
-    /**
-     * **時刻の閾値を1つも置いていないことの歯。** `manager_list` の出力に
-     * 「何分」「N分以上」のような経過の判定を焼かない——経過を読むのは
-     * 人間であって、この行ではない（`describeToolUseStall` の doc）。
-     */
     it('⚠ の行は経過時間を判定せず、閾値を置いていないことを明示する', async () => {
       const h = harness();
       await h.call('manager_start', { request: 'A' });
@@ -7088,13 +6998,6 @@ describe('クローンの道具', () => {
   });
 
   describe('manager_list は「道具を実行中なだけ（矛盾ではない）」を出す（Issue #2173）', () => {
-    /**
-     * ⚠️⚠️ 本命の直し。**直す前はここが ⚠ を出していた**（#572 の3条件だけで
-     * 判定していたため）。`Bash` は応答をデーモンではなく SDK 自身が待つ、
-     * ふつうの道具（`isDaemonAnsweredTool('Bash') === false`）——既定の
-     * `permissionMode: 'auto'` ではその確認は `canUseTool` を一度も通らない
-     * ので、`waiting` が空なのは矛盾ではなく実行中なだけである。
-     */
     it('未応答の道具がふつうの道具（Bash）だけなら、⚠ を出さず「実行中」の行を出す', async () => {
       const h = harness();
       await h.call('manager_start', { request: 'A' });
@@ -7102,7 +7005,6 @@ describe('クローンの道具', () => {
       if (!target) throw new Error('準備に失敗');
       target.toolUseStallAt = '2026-08-28T09:10:00.000Z';
       target.toolUseStallPending = [{ id: 'toolu_bash', name: 'Bash' }];
-      // waiting は空のまま（＝実行中のふつうの道具には元々 waiting が立たない）。
 
       const reply = await h.call('manager_list', {});
 
@@ -7111,13 +7013,6 @@ describe('クローンの道具', () => {
       expect(reply).toContain('未応答の道具: Bash(toolu_bash)');
     });
 
-    /**
-     * 未応答の道具に確認系（`AskUserQuestion`）が1件でも混ざっていれば、
-     * ふつうの道具（`Bash`）が同居していても #572 の症状のほうを優先する
-     * ——`Bash` の存在で `AskUserQuestion` の矛盾を覆い隠さない
-     * （`classifyManagerActivity` の doc「1件でも満たせば `stalled-tool-use`
-     * 側に倒す」）。
-     */
     it('AskUserQuestion と Bash が混ざっていれば、⚠ のほうを出す', async () => {
       const h = harness();
       await h.call('manager_start', { request: 'A' });
@@ -7141,7 +7036,6 @@ describe('クローンの道具', () => {
       const target = h.running[0];
       if (!target) throw new Error('準備に失敗');
       target.toolUseStallPending = [{ id: 'toolu_bash', name: 'Bash' }];
-      // toolUseStallAt はセットしない（行に timestamp が無かった形）。
 
       const reply = await h.call('manager_list', {});
 
@@ -7151,13 +7045,6 @@ describe('クローンの道具', () => {
     });
   });
 
-  /**
-   * **この委譲が抱えている認証トークンの世代**（Issue #914 提案1）。
-   *
-   * `ManagerPool.list()` 側の生成（`#tokenIdentities` / `#tokenIdentity?.()`）は
-   * `manager-token-generation.test.ts` が持つ——ここで固定するのは
-   * `describeTokenGeneration`（`tools.ts`）の言い方だけである。
-   */
   describe('manager_list は認証トークンの世代の食い違いを出す（Issue #914 提案1）', () => {
     it('材料が無ければ1文字も足さない（プールを使っていない構成）', async () => {
       const h = harness();
@@ -7168,12 +7055,6 @@ describe('クローンの道具', () => {
       expect(reply).not.toContain('認証トークンの世代');
     });
 
-    /**
-     * **Issue #988。** `tokenGeneration === undefined` は3つの別々の理由から
-     * 出ていて、以前はどれも「欄ごと消える」という同じ見た目だった。
-     * `tokenGenerationUnknownReason` が理由を名乗れば、行が出て理由が読める
-     * ——直上のテスト（理由も名乗っていない場合）とは別の経路である。
-     */
     it('プール未配線が理由なら、その理由を名乗り、起こし直しても変わらないと言う', async () => {
       const h = harness();
       await h.call('manager_start', { request: 'A' });
@@ -7205,10 +7086,6 @@ describe('クローンの道具', () => {
       expect(reply).not.toContain('⚠ 認証トークンの世代');
     });
 
-    /**
-     * **これが対処のある唯一の理由である**（#978／#987 で新設。Issue #988 の
-     * 本題）。他の2つと違い、`manager_stop` → `manager_start` を案内する。
-     */
     it('デーモン再起動をまたいだ引き取りが理由なら、その理由と対処を言う', async () => {
       const h = harness();
       await h.call('manager_start', { request: 'A' });
@@ -7254,11 +7131,6 @@ describe('クローンの道具', () => {
       expect(reply).toContain('manager_stop → manager_start');
     });
 
-    /**
-     * **Issue #2851。** 食い違いの ⚠ に、runner が最後に見た背景処理の本数を添える。
-     * 背景処理が残っていると runner は境界に達せず自動では畳み直さないので、
-     * 「なぜ ⚠ が消えないか」の材料になる。**聞けていないときは 0 と言わず「分からない」**。
-     */
     it('世代が食い違う ⚠ に、runner が見た背景処理の本数（1本以上・0本・分からない）を添える', async () => {
       const h = harness();
       await h.call('manager_start', { request: 'A' });
@@ -7279,19 +7151,12 @@ describe('クローンの道具', () => {
       expect(unknown).not.toContain('背景処理は 0 本');
     });
 
-    /**
-     * **比べる相手が取れないときは、一致とも不一致とも言わない。**
-     * `activeTokenGeneration` が無い（現役の身元をまだ確認できていない）のに
-     * 「一致」と偽らない——`ManagerSummary.activeTokenGeneration` の doc と
-     * 同じ理由。
-     */
     it('現役が取れなければ「比べられない」と言い、一致とも不一致とも言わない', async () => {
       const h = harness();
       await h.call('manager_start', { request: 'A' });
       const target = h.running[0];
       if (!target) throw new Error('準備に失敗');
       target.tokenGeneration = 3;
-      // activeTokenGeneration は設定しない。
 
       const reply = await h.call('manager_list', {});
 
@@ -7300,7 +7165,6 @@ describe('クローンの道具', () => {
       expect(reply).not.toContain('⚠ 認証トークンの世代');
     });
 
-    /** 道具の説明文にも書く（JSDoc はクローンに届かない）。 */
     it('道具の説明文が世代の食い違いの意味と次の一手を説明する', () => {
       const stores = createMemoryStores();
       const tools = createCloneTools({
@@ -7316,23 +7180,6 @@ describe('クローンの道具', () => {
     });
   });
 
-  /**
-   * クローンの受信箱（`InboxStore`）の滞留は、`renderListing` の外——一覧
-   * 全体に1行だけ添える（#358「答えない問い」のうち、デーモン→クローンの脚）。
-   *
-   * **かつては0件のとき1文字も出さなかった**（AGENTS.md「取れない軸に0の
-   * 行を作る」の逆方向のつもりで——「詰まっていない」という健全な行を毎回
-   * 積み重ねない、という理由だった）。
-   *
-   * **#562 でこの期待値を反転した。** `context.stores.inbox.pending()` は
-   * 呼ぶたびにストアを実際に読む生の値で、キャッシュでも「観測できたか」の
-   * 付帯情報も持たない——**0はここでは本物の測定値であり、「取れない軸」
-   * には当たらない**（`describeInboxBacklog` の doc）。0のとき行を消して
-   * いた結果、「滞留0」と「この道具はその行を出さない」が出力上で同じ顔に
-   * なっていた——それこそが #562 の症状そのものである。**runner 側
-   * （`describeRunnerBacklog`）はキャッシュで「0件か未観測か」を区別できない
-   * ので、あちらは直していない**（非対称性は意図的。同 doc 参照）。
-   */
   it('manager_list は受信箱に未処理が無くても、0件であることを1行で出す（#562）', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
@@ -7341,17 +7188,9 @@ describe('クローンの道具', () => {
 
     expect(reply).toContain('受信箱');
     expect(reply).toContain('無い');
-    // 滞留0は警告ではない——⚠ は「未処理がある」ときだけの印にする。
     expect(reply).not.toContain('⚠ クローンの受信箱');
   });
 
-  /**
-   * issue #1133: 器の行は0件でも、メモリの配達待ち行列に残りがあれば
-   * 「クローンの受信箱に未処理の合図は無い。」と**言い切らない**。
-   *
-   * `context.queuedInMemory` を渡さない（省略。上のテストと同じ状態）ときは
-   * 引き続き旧来の文言のままであることも、対の陰性側として確かめる。
-   */
   it('manager_list は、器の行が0件でもメモリの配達待ち行列に残りがあれば「無い」と言い切らない（issue #1133）', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
@@ -7359,7 +7198,6 @@ describe('クローンの道具', () => {
 
     const reply = await h.call('manager_list', {});
 
-    // ⛔ 「両方空」を騙る旧来の0件文言は出ない。
     expect(reply).not.toContain('クローンの受信箱に未処理の合図は無い。');
     expect(reply).toContain('器の行に未処理の合図は無い');
     expect(reply).toContain('メモリの配達待ち行列 3326 件');
@@ -7368,7 +7206,6 @@ describe('クローンの道具', () => {
   it('manager_list は、queuedInMemory を渡さない（省略）呼びでは旧来の0件文言のまま（回帰対策）', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
-    // `setQueuedInMemory` を呼ばない——既定は `undefined`。
 
     const reply = await h.call('manager_list', {});
 
@@ -7395,8 +7232,6 @@ describe('クローンの道具', () => {
 
     expect(reply).toContain('⚠ クローンの受信箱に未処理の合図が 1 件ある');
     expect(reply).toContain('メモリの配達待ち行列 7 件');
-    // **足しても引いても意味が無い、の断り書きごと出る**
-    // （`describeInboxBacklogQueuedInMemory` の doc）。
     expect(reply).toContain('足しても引いても意味が無い');
   });
 
@@ -7429,26 +7264,13 @@ describe('クローンの道具', () => {
     expect(reply).toContain('受信箱');
     expect(reply).toContain('2 件');
     expect(reply).toContain('2026-08-24T00:00:00.000Z');
-    // 未処理があるときは、引き続き ⚠ 付きの文言のまま（0件のときとの対比）。
     expect(reply).toContain('⚠ クローンの受信箱');
-    // put しか呼んでいない——claimPending の副作用（配達回数を進める）を
-    // 経由していないことの裏取り。
     expect(await h.stores.inbox.pending()).toEqual({
       count: 2,
       oldestAt: '2026-08-24T00:00:00.000Z',
     });
   });
 
-  /**
-   * #783 段0: `manager_list` の受信箱の行に内訳（種類・同一本文・器の入れ替え
-   * 回数・齢）が付く。**集計値だけで、合図の本文は1文字も載らない**
-   * （`AGENTS.md` の地雷「エージェントへ返す一覧に本文を全文で載せる」）。
-   *
-   * **#910 で軸名を `配達回数` から `器の入れ替え回数` へ改名した。** 期待値の
-   * 更新であって、保証は弱めていない —— 同じ3本を軸名の新旧で測り直したうえに、
-   * **古い名前が戻らないこと**（`not.toContain('配達回数')`）を1本足してある。
-   * 改名の理由は `inbox-backlog.ts` の `describeInboxBacklogBreakdown` の doc。
-   */
   it('manager_list の受信箱の行に内訳（種類・同一本文・器の入れ替え回数）が付き、本文は載らない', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
@@ -7476,7 +7298,6 @@ describe('クローンの道具', () => {
 
     const reply = await h.call('manager_list', {});
 
-    // 内訳: 種類・計・同一本文・器の入れ替え回数・齢の見出しが出る。
     expect(reply).toContain('内訳（計 2 件）');
     expect(reply).toContain('種類:');
     expect(reply).toContain('human_message 1');
@@ -7484,27 +7305,16 @@ describe('クローンの道具', () => {
     expect(reply).toContain('同一本文');
     expect(reply).toContain('器の入れ替え回数:');
     expect(reply).toContain('0回＝いまの器になってから積まれた 2');
-    // **#910: 古い軸名がこの面へ戻らないこと。** `manager_list` の応答は
-    // クローンがこの数字を読む唯一の面である（doc は届かない）。
     expect(reply).not.toContain('配達回数');
-    // **#910 追補: `未配達` も戻らないこと。** 0 は「届いていない」ではなく
-    // 「いまの器になってから積まれ、まだ片付いていない」である（実測 2026-09-12）。
     expect(reply).not.toContain('未配達');
-    // **本文は1文字も載らない**（地雷「一覧に本文を全文で載せる」）。
     expect(reply).not.toContain('絶対に外へ出てはいけない本文XYZ');
     expect(reply).not.toContain('これも外へ出てはいけない');
-    // put しか呼んでいない——peekPending も claimPending の副作用（配達回数を
-    // 進める）を経由していないことの裏取り。
     expect(await h.stores.inbox.pending()).toEqual({
       count: 2,
       oldestAt: '2026-08-24T00:00:00.000Z',
     });
   });
 
-  /**
-   * マネージャーが1本も居なくても、受信箱の滞留は別の軸なので出る
-   * （#358「答えない問い」の3行目——マネージャーの本数と無関係）。
-   */
   it('manager_list はマネージャーが1本も居なくても、受信箱の滞留があれば出す', async () => {
     const h = harness();
     await h.stores.inbox.put(
@@ -7525,16 +7335,6 @@ describe('クローンの道具', () => {
     expect(reply).toContain('1 件');
   });
 
-  /**
-   * Issue #917 (B): 大きい数字（`⚠ クローンの受信箱に未処理の合図が N 件ある`）と
-   * 行動を要する数字（人間起点の滞留）が同じ字の大きさで並び、大きいほうが
-   * 先に来て目立つせいで、クローンが人間起点の行を2回とも読み飛ばした
-   * （47分間の未達、同じ日の午後の再発——issue 本文）。
-   *
-   * ⟹ 人間起点（`human_message` / `human_answer`）の滞留が1件でもあれば、
-   * その行を**大きい数字の行より前**に単独で出す。**並び順そのもの**を
-   * 固定する（`toContain` だけでは「後ろに付いた」形の巻き戻しを見逃す）。
-   */
   it('manager_list は人間起点の滞留を、大きい数字（⚠ クローンの受信箱…）より前に単独の行で出す（#917 (B)）', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
@@ -7565,28 +7365,18 @@ describe('クローンの道具', () => {
     const humanLineIndex = lines.findIndex((line) => line.startsWith('⚠ 人間起点'));
     const bigNumberLineIndex = lines.findIndex((line) => line.startsWith('⚠ クローンの受信箱'));
 
-    // 両方とも出ていること（見つからなければ -1 のまま比較が壊れるので、
-    // 先に「見つかったこと」自体を固定する）。
     expect(humanLineIndex).toBeGreaterThanOrEqual(0);
     expect(bigNumberLineIndex).toBeGreaterThanOrEqual(0);
-    // ⭐ #917 (B) の核心: 人間起点の行が、大きい数字の行より**前**に来る。
     expect(humanLineIndex).toBeLessThan(bigNumberLineIndex);
 
     const humanLine = lines[humanLineIndex]!;
     expect(humanLine).toContain('human_message 1');
     expect(humanLine).toContain('2026-08-24T00:00:00.000Z');
     expect(humanLine).toContain('片付いていない分が 1 件');
-    // manager_message（人間起点でない）はこの行の件数に混ざらない。
     expect(humanLine).not.toContain('manager_message');
-    // 本文は載らない。
     expect(reply).not.toContain('未処理の発言');
   });
 
-  /**
-   * 陰性対照。人間起点の合図が1件も無ければ、#917 (B) の行を1文字も足さない
-   * ——`manager_message` だけが積んでも大きい数字（受信箱の件数）は出るが、
-   * 人間起点の行は出ない。
-   */
   it('manager_list は人間起点の滞留が無ければ、#917 (B) の行を追加しない', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
@@ -7605,24 +7395,12 @@ describe('クローンの道具', () => {
     const reply = await h.call('manager_list', {});
 
     expect(reply).not.toContain('⚠ 人間起点');
-    // 大きい数字の行そのものは変わらず出る（対策は打っていない——読む順だけ）。
     expect(reply).toContain('⚠ クローンの受信箱');
   });
 
-  /**
-   * runner→デーモンの脚（`Outbox` の滞留）は `ManagerPool.runnerBacklog()`
-   * （キャッシュ）が読む（#358 案b。デーモン→クローンの脚は上の受信箱の3本）。
-   * **`manager_list` は `resources()` を自動で呼ばない**——`runnerBacklog()`
-   * は往復無しで読める値しか返さないので、この一覧の中では`context.managers.
-   * runners()` を叩いていないことがそのまま裏取りになる（下の最後のテストで
-   * `runnersCalls` を直接見る）。
-   */
   it('manager_list は runner の滞留キャッシュが cold なら、その注記を1文字も出さない（0件と嘘をつかない）', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
-    // **既定で空配列**（cold）。0件を記録した snapshot とは別の状態。
-    // **`runner-test` 自体はマネージャーの内訳行（`runner: runner-test`）に
-    // 常に出るので、ここでは滞留の断り（`未送出`）だけを見る。**
 
     const reply = await h.call('manager_list', {});
 
@@ -7659,8 +7437,6 @@ describe('クローンの道具', () => {
     expect(reply).toContain('runner-test');
     expect(reply).toContain('9 件');
     expect(reply).toContain('2026-08-20T00:00:00.000Z');
-    // **観測時刻（キャッシュを取った時刻）が字面に含まれる** — キャッシュを
-    // 現在値のふりをさせないため（`RunnerBacklogSnapshot` の doc）。
     expect(reply).toContain('2026-08-27T00:30:00.000Z');
   });
 
@@ -7681,12 +7457,6 @@ describe('クローンの道具', () => {
     expect(reply).toContain('4 件');
   });
 
-  /**
-   * runner→デーモンの脚（このデーモン自身の側の端。`legState`）——状態ごとに
-   * クローンの次の一手が変わることを、`manager_list` の出力そのもので固定する。
-   * `describeRunnerLegState`（`tools.ts`）が4状態＋器の入れ替えを言い分ける、
-   * その割り当ての歯である。
-   */
   describe('runner の滞留の行に、脚（デーモン自身の側の端）の状態を添える', () => {
     it('繋がっている: 「まだ届いていない。届く見込みがある」（待ってよい）。バイトが1つも来ていなければその旨を出す', async () => {
       const h = harness();
@@ -7696,10 +7466,6 @@ describe('クローンの道具', () => {
           runnerId: 'runner-test',
           pendingEvents: 3,
           observedAt: '2026-08-27T00:30:00.000Z',
-          // **`lastByteAt` を意図的に付けない**——「開いてはいるが、まだ
-          // 1バイトも来ていない」（`legState` の doc）を模す。依頼者の
-          // 指摘: 繋がっているのと繋がったまま死んでいるのが同じ文面に
-          // ならないよう、取れた材料（`since` / `lastByteAt`）は必ず出す。
           legState: { status: 'connected', since: '2026-08-27T00:00:00.000Z' },
         },
       ]);
@@ -7708,12 +7474,8 @@ describe('クローンの道具', () => {
 
       expect(reply).toContain('まだ届いていない');
       expect(reply).toContain('待ってよい');
-      // **`since` を出す。**
       expect(reply).toContain('2026-08-27T00:00:00.000Z');
-      // **`lastByteAt` が無いことがそのまま読める字が出る**（0や偽の時刻を
-      // 作らない——AGENTS.md 地雷表）。
       expect(reply).toContain('開いてから1バイトも受け取っていない');
-      // **落ちている側の文言（「再接続するまで」）と混ざっていないこと。**
       expect(reply).not.toContain('再接続するまで');
       expect(reply).not.toContain('もう来ない');
     });
@@ -7738,8 +7500,6 @@ describe('クローンの道具', () => {
 
       expect(reply).toContain('まだ届いていない');
       expect(reply).toContain('2026-08-27T00:00:00.000Z');
-      // **`lastByteAt` が読める。** 「1バイトも受け取っていない」とは
-      // 出ない（材料が在るのに無いことにしない）。
       expect(reply).toContain('2026-08-27T00:29:55.000Z');
       expect(reply).not.toContain('開いてから1バイトも受け取っていない');
     });
@@ -7788,11 +7548,6 @@ describe('クローンの道具', () => {
       expect(reply).toContain('一度も繋がっていない');
     });
 
-    /**
-     * **「観測していない」を「繋がっている」にも「落ちている」にも倒さない。**
-     * `legState` を snapshot に一切載せない（`LocalRunner`・古い記録を模す）
-     * ——「判定できない」とだけ言い、どちらとも言えないことが分かる形にする。
-     */
     it('観測していない（legState を持たない）: 「判定できない」——connected/down のどちらにも倒さない', async () => {
       const h = harness();
       await h.call('manager_start', { request: 'A' });
@@ -7801,7 +7556,6 @@ describe('クローンの道具', () => {
           runnerId: 'runner-test',
           pendingEvents: 3,
           observedAt: '2026-08-27T00:30:00.000Z',
-          // legState を意図的に持たせない。
         },
       ]);
 
@@ -7813,12 +7567,6 @@ describe('クローンの道具', () => {
       expect(reply).not.toContain('もう来ない');
     });
 
-    /**
-     * **器が入れ替わった: 脚がいま何であれ「もう来ない」を優先する。**
-     * ここでは `legState.status` を意図的に `'connected'`（新しい器への
-     * 接続）にして、`instanceSwapped` を見ずに `legState` だけを読むと
-     * 「待ってよい」という誤った案内になることを固定する。
-     */
     it('器が入れ替わった: legState が connected でも「もう来ない」を優先する', async () => {
       const h = harness();
       await h.call('manager_start', { request: 'A' });
@@ -7860,14 +7608,6 @@ describe('クローンの道具', () => {
     });
   });
 
-  /**
-   * **この Issue の設計判断そのものの歯。** `manager_list` から `resources()`
-   * を自動で呼ぶ形は採らない（north_star 禁止2「opt-in の判断をクローンから
-   * 奪わない」）——`runner_list` の `resources: true` はクローンが明示的に
-   * 選ぶときだけ通る経路である。ここでは `runners()` に渡った引数の記録
-   * （`runnersCalls`）を直接見て、`manager_list` がそれを1回も呼んでいない
-   * ことを固定する。
-   */
   it('manager_list は runners()（resources() を含む）を一度も呼ばない（往復を増やさない）', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
@@ -7884,13 +7624,6 @@ describe('クローンの道具', () => {
     expect(h.runnersCalls).toEqual([]);
   });
 
-  /**
-   * **道具の説明文（doc ではなく、クローンが毎回読む値そのもの）に、warm の
-   * 契機と cold が既定であることが読めること。** JSDoc に書いただけでは
-   * クローンには届かない——マネージャーからのコメント（2026-08-27）で、
-   * 「行が出ない＝滞留0を意味しない」までは指示済みだったが、「誰がいつ
-   * warm するのか」が説明文からは読めていなかった、という指摘を受けて足した。
-   */
   it('manager_list の説明文に、warm の契機（runner_list resources: true）と cold が既定であることが読める', () => {
     const stores = createMemoryStores();
     const tools = createCloneTools({
@@ -7905,15 +7638,6 @@ describe('クローンの道具', () => {
     expect(found?.description).toContain('まだ観測していない');
   });
 
-  /**
-   * **#358 案b の第2段。** cold が既定という(b-1)の弱点を埋めた——10秒ごとの
-   * 生存確認からも自動で warm するようになった。**この事実が説明文からも
-   * 読めること**を、上のテストとは別に固定する（(b-1) の文言はまだ「warm の
-   * 契機は resources: true だけ」と読める形だったので、そのままでは(b-2)の
-   * 後で嘘になる——直したことの歯）。**ただし「常に新しい」とまでは書いて
-   * いないこと**も一緒に見る——identity() を持たない runner は依然 cold に
-   * なりうる（`RunnerBacklogSnapshot` の doc）。
-   */
   it('manager_list の説明文に、10秒ごとの生存確認からも自動で warm することが読める（(b-1) の cold 前提を上書きした証拠）', () => {
     const stores = createMemoryStores();
     const tools = createCloneTools({
@@ -7926,21 +7650,9 @@ describe('クローンの道具', () => {
 
     expect(found?.description).toContain('生存確認');
     expect(found?.description).toContain('自動');
-    // **「常に新しい」とは書いていない**——古い runner は依然 cold になりうる
-    // ことも同じ説明文に残っている。
     expect(found?.description).toContain('呼ばない限り一度も warm しない');
   });
 
-  /**
-   * **道具の説明文（doc ではなく、クローンが毎回読む値そのもの）に、#572 の
-   * ⚠ が何を意味するかが読めること。** JSDoc に書いただけではクローンには
-   * 届かない——上の2本（`resources: true` / 生存確認）と同じ理由の歯である。
-   *
-   * 3つを別々に留める:
-   * - 何を見て出しているのか（`tool_result` が無い）
-   * - **時刻の閾値を置いていない**こと（何分経ったかは判定していない）
-   * - **返事待ちが在るものには出さない**こと（正常な待機を症状と混同させない）
-   */
   it('manager_list の説明文に、#572 の ⚠（tool_result 未着 / 閾値なし / 返事待ちには出さない）が読める', () => {
     const stores = createMemoryStores();
     const tools = createCloneTools({
@@ -7956,19 +7668,6 @@ describe('クローンの道具', () => {
     expect(found?.description).toContain('返事待ちが在るものにはこの行を出さない');
   });
 
-  /**
-   * **道具の説明文に、#579 の断りが読めること。** JSDoc に書いただけでは
-   * クローンには届かない——上の3本（`resources: true` / 生存確認による warm /
-   * #572 の ⚠）と同じ理由の歯である。
-   *
-   * #579 で「runner にセッションが無い」（⚠ の行）が、誰かが `manager_send` を
-   * 打つのを待たずに、10秒ごとの生存確認だけで立つようになった。**これは
-   * `manager_list` 自身が往復を払うようになったという意味ではない**（それは
-   * 上の「runners() を一度も呼ばない」歯が別に守っている）——heartbeat が
-   * 拾った観測を、この道具が読むだけである。ここで固定するのは字面2つ:
-   * - 誰かが送るのを待たずに立つこと（「manager_send を打つのを待たない」）
-   * - 待機中（done）は対象外であること（「done」に触れている）
-   */
   it('manager_list の説明文に、#579（10秒ごとの生存確認から「セッションが無い」が立つ）が読める', () => {
     const stores = createMemoryStores();
     const tools = createCloneTools({
@@ -8000,20 +7699,7 @@ describe('クローンの道具', () => {
   });
 });
 
-/**
- * Issue #2145: 能力を広げる3つの道具（`schedule_create`・`profile_write`・
- * `manager_start`）を、issue #2123/#2134（HTTP の能力を広げる4口）と同じ
- * 設計へ動かした——**日誌を先に書き、書けなければ状態を変えずに道具の
- * エラーで返す。状態変更そのものが投げたら、打ち消しの行を足してから同じ
- * 形でエラーにする。**
- *
- * 道具ごとに3本を固定する:
- * (a) 日誌の先書きが落ちると道具はエラーで、状態が変わっていない。
- * (b) 状態の変更が投げたときは、先の行と打ち消しの行の両方が日誌に残る。
- * (c) 正常系で、行数と文言が合っている。
- */
 describe('issue #2145: 能力を広げる3つの道具は日誌を先に書く', () => {
-  /** 上の describe の `callExpectingError` と同じもの（複製）。既存側は1文字も変えない。 */
   async function callExpectingError(
     tools: ReturnType<typeof createCloneTools>,
     name: string,
@@ -8033,12 +7719,6 @@ describe('issue #2145: 能力を広げる3つの道具は日誌を先に書く',
     }
   }
 
-  /**
-   * journal の `decision` エントリだけを、古い順の文字列配列で取り出す。
-   * **`JournalStore.list` の既定は新しい順（`desc`）なので、`order: 'asc'`
-   * を明示しないと1行目・2行目の順が逆になる**（`testing.ts` の
-   * `journal.list` の doc）。
-   */
   async function decisionsOf(stores: Stores): Promise<string[]> {
     return (await stores.journal.list({ types: ['decision'], order: 'asc' })).flatMap((entry) =>
       entry.type === 'decision' ? [entry.decision] : [],
@@ -8197,11 +7877,6 @@ describe('issue #2145: 能力を広げる3つの道具は日誌を先に書く',
       expect(decisions[1]).toBe('実行環境プロファイルを差し替えられなかった: (b) の検証');
     });
 
-    /**
-     * **#2483。** 打ち消しの行の `grounds` は、`PUT /profile` 側（`kindOfError`）と同じく
-     * 例外の種類（クラス名）だけを書く。drizzle の形（`Failed query: …` の次の行に
-     * `params:`）の例外は、プロファイルのスクリプト全文を運びうる。
-     */
     it('(b2) 打ち消しの行の grounds に、例外の message（params の値）は出ず、名前だけが残る', async () => {
       const stores = createMemoryStores();
       const throwingStores: Stores = {
@@ -8241,15 +7916,6 @@ describe('issue #2145: 能力を広げる3つの道具は日誌を先に書く',
       expect(JSON.stringify(entries)).not.toContain('FAKE_SECRET_VALUE_2483');
     });
 
-    /**
-     * **issue #2163。** 反映（`prepared.commit()`）が落ち、正本への書き戻し
-     * （`stores.profile.revert(previous)`）まで落ちたときは、正本だけが新しい
-     * 版のまま残る（クローンは前の版）——(b) と違い、この状態で「差し替え
-     * られなかった」と書くと事実と逆になる。決定の行は状態どおり（正本は
-     * 新しい版のまま・クローンは前の版）にし、`: ${summary}` を付ける。
-     * **文言（例外の message）ではなく `ProfileRollbackFailedError` という型で
-     * 見分ける**（issue の「例外の文言で見分けない」という指定どおり）。
-     */
     it('(d) 反映も書き戻しも落ちたときは、決定の行が状態どおりになり、「差し替えられなかった」は出ない', async () => {
       const stores = createMemoryStores();
       const throwingStores: Stores = {
@@ -8407,8 +8073,6 @@ describe('issue #2145: 能力を広げる3つの道具は日誌を先に書く',
       const decisions = await decisionsOf(stores);
       expect(decisions).toHaveLength(2);
       expect(decisions[0]).toBe('マネージャーを起こそうとしている: 調査C');
-      // `cwdConfirmed` を持たないフィクスチャなので `describeStartedCwd` は
-      // 「実際の cwd は未確認」の形で返す（`describeStartedCwd` の doc）。
       expect(decisions[1]).toBe(
         'マネージャー mgr-2145-c を起こした（実際の cwd は未確認（頼んだ値: /work-2145））: 調査C',
       );
@@ -10052,7 +9716,6 @@ describe('runner_list（器の一覧）', () => {
       expect(reply).not.toContain('世代');
     });
 
-    /** 道具の説明文にも書く（JSDoc はクローンに届かない）。 */
     it('道具の説明文が ⚠世代N≠現役M の意味を説明する', () => {
       const stores = createMemoryStores();
       const tools = createCloneTools({
@@ -20195,7 +19858,6 @@ describe('説明文が実装のふるまいを数え直している箇所（#701
  * 散文の数字ではない。**
  */
 describe('journal.append 失敗時の応答本文: 呼び出し箇所すべてで道具名と先頭行 outcome を測る', () => {
-  /** 上の describe の `callExpectingError` と同じもの（複製）。既存側は1文字も変えない。 */
   async function callExpectingError(
     tools: ReturnType<typeof createCloneTools>,
     name: string,
