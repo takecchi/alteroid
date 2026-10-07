@@ -4071,34 +4071,13 @@ export function decideAnswer(
     : { decision: inferred, unreadable: false };
 }
 
-/**
- * 文字列を短い16進へ畳む。**中身を復元できない形にするためだけに使う。**
- *
- * 暗号としての強度が要る場所ではない（署名でも認証でもない）。要るのは
- * 「同じ文字列は同じ鍵になる」ことと、「鍵を見ても元の文字列が読めない」ことの
- * 2つだけである。前者が重複排除を保ち、後者が `onForget` の日誌行から本文を
- * 締め出す（`#noteDenial` の `toolUseId` の doc）。
- */
+// 暗号としての強度は要らない: 要るのは「同じ文字列は同じ鍵になる」ことと「鍵を見ても元の文字列が読めない」ことだけのため
 function digestOf(value: string): string {
   return createHash('sha256').update(value).digest('hex').slice(0, 16);
 }
 
-/**
- * 1回だけの許可（issue #1105 P1）の帳面（`#oneShotAllows`）の鍵を組む。
- *
- * **3つ揃って初めて一致する。** `actor` が違えば別の担い手、`tool` が違えば
- * 別の道具、`digest` が違えば1文字でも違う入力——issue #1105 本文の要求
- * 「同じ入力で撃ち直したら…」「別の担い手なら返さない」をこの鍵の作りその
- * ものが担保する。区切りに `\u0000` を使うのは、`actor` / `tool` の値には
- * 現れない制御文字であることが分かっているため（`actor` は
- * `manager:<id>`/`worker:<id>:<type>` の固定書式、`tool` は SDK の道具名）。
- */
-/**
- * 1回だけの許可（issue #1105 P1）の鍵に入れる担い手。**表示用の `actor`
- * （`worker:<マネージャー>:<agentType>`）を使わない**——あれは型までしか
- * 区別しないので、同じ型の作業者が並行に2体いると、片方への許可をもう片方が
- * 使えてしまう。作業者は `agentId`（SDK が作業者ごとに振る id）で区別する。
- */
+// 区切りに `\u0000` を使う: `actor` / `tool` の値には現れない制御文字のため
+// 表示用の `actor` を鍵に使わない: 型までしか区別せず、同じ型の作業者が並行に2体いると片方への許可をもう片方が使えてしまうため（`agentId` で区別する）
 function oneShotActorOf(
   managerId: string,
   record: { readonly agentId?: string | undefined },
@@ -4112,40 +4091,15 @@ function oneShotAllowKey(actor: string, tool: string, digest: string): string {
   return `${actor}\u0000${tool}\u0000${digest}`;
 }
 
-/**
- * 値を `limit` コード単位（UTF-16）までに縮めた1行の要約。文字列はそのまま、
- * それ以外は `JSON.stringify` で文字列にしてから切る。
- *
- * **切り口は補助面の文字（絵文字の多く）の途中に置かない（issue #2449）。**
- * `limit` コード単位目を2コード単位の文字がまたぐときは、`codePointBoundary`
- * で1つ手前へ寄せる——素の `slice` のままだと高サロゲートだけが残り、許可確認の
- * 要約（`#onPermission`）がクローンの受信箱・`manager_list` へ UTF-8 で届いた
- * ところで U+FFFD に化ける（#1606 と同じ症状）。長さの数え方と、割らないときの
- * 切り口は変えていない。
- *
- * `#noteDenial` の代用鍵（`digestOf(brief(input, 120))`）もこの関数を通る。
- * そちらの切り口も同じく寄せる判断をした理由は、その呼び出し箇所の注釈に在る。
- */
+// 切り口を補助面の文字（絵文字の多く）の途中に置かない: 素の `slice` だと高サロゲートだけが残り、UTF-8 で届いたところで U+FFFD に化けるため
 export function brief(value: unknown, limit = 200): string {
   const text = typeof value === 'string' ? value : JSON.stringify(value);
   if (text === undefined) return '';
   return text.length > limit ? `${text.slice(0, codePointBoundary(text, limit))}…` : text;
 }
 
-/**
- * 子プロセスを別 UID で起こす。
- *
- * `HOME` を差し替えるのは、root の home のまま降ろすと設定を書けずに落ちるから
- * である。**能力を削るのではなく、走らせる主体を変えているだけ**であることに注意。
- *
- * SDK の子プロセスとプロファイルの評価で共有している。評価だけ root で走らせると、
- * **降りた先では読めないプロファイルを「置けた」と報告する**ことになる。
- */
-/**
- * peer の Codex の `CODEX_HOME` の既定（#3939）。子の UID の home があれば Codex の既定と同じ
- * `<home>/.codex`。無ければ（手元の構成）`os.tmpdir()` 配下 —— 人間自身の `~/.codex` を
- * 正本のログインで上書きしない。
- */
+// プロファイル評価と共有する: 評価だけ root で走らせると、降りた先では読めないプロファイルを「置けた」と報告するため
+// 人間自身の `~/.codex` を正本のログインで上書きしない
 function defaultCodexHome(childUser: RunnerChildUser | undefined): string {
   if (childUser?.home !== undefined) return joinPath(childUser.home, '.codex');
   const uid = typeof process.getuid === 'function' ? String(process.getuid()) : 'user';
@@ -4160,22 +4114,7 @@ function spawnAsUser(
     cwd?: string;
     env: Record<string, string | undefined>;
     signal: AbortSignal;
-    /**
-     * **新しいセッション（と process group）の長にして起こす（`setsid` 相当。
-     * #1334）。既定は `false`（従来どおり）。**
-     *
-     * 立てると、この子プロセス自身の pid がそのままセッション ID になる。
-     * 子孫が自分から `setsid` しない限り、`ppid` が `1`（tini）へ付け替わっても
-     * セッション ID はこの起源プロセスの pid のまま残る——孤児の回収（段1）が
-     * 「どの委譲の残骸か」を、名前やパスを読まずに突き合わせられるのはこれが
-     * 理由である（`apps/runner/src/tasks.ts` の `ReclaimReapOptions` の doc）。
-     *
-     * **既定を `false` にしたまま呼び出し側で選べるようにしてあるのは、
-     * 影響を委譲プロセスの起動経路だけに絞るため**——`Host#spawnAsChildUser`
-     * （実行環境プロファイルの評価）や `RunnerSession#unpushedWork`（`git` の
-     * 起動）は、この器の同じ低レベル関数を共有しているが、どちらも「委譲の
-     * セッション」ではないので、対象を広げない。
-     */
+    // 既定を `false` にして呼び出し側で選ばせる: 影響を委譲プロセスの起動経路だけに絞るため（プロファイル評価や `git` 起動は委譲のセッションではない）
     detached?: boolean;
   },
 ) {
