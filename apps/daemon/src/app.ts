@@ -12,6 +12,8 @@ import type {
   CredentialService,
   CodexChatgptAuthService,
   McpServerService,
+  McpServers,
+  StoredMcpServers,
   Exchange,
   GrantResult,
   JobStatus,
@@ -44,6 +46,8 @@ import {
   mcpServerNames,
   PROFILE_ENTRY_NAME,
   mcpServersFingerprintOf,
+  McpServersConflictError,
+  mcpServersVersionOf,
   RESERVED_SCHEDULE_KINDS,
   isReservedEventSource,
   ARCHIVE_REMOVE_MANY_JOURNAL_ID_CHARS,
@@ -268,6 +272,7 @@ import {
   practiceReadResponseSchema,
   practiceVersionListResponseSchema,
   practiceVersionReadResponseSchema,
+  mcpServersConflictResponseSchema,
   mcpServersResponseSchema,
   mcpServersUpdateRequestSchema,
   mcpServersUpdateResponseSchema,
@@ -1758,6 +1763,19 @@ function actorOf(principal: Principal): string {
   if (principal.kind === 'operator') return 'operator';
   if (principal.kind === 'integration') return `integration:${principal.keyId}`;
   return principal.account.id;
+}
+
+/** `GET /mcp-servers` の本文（409 の `current` も同じ形）。置かれていなくても版は付く。 */
+function mcpServersReadBody(stored: StoredMcpServers | null): {
+  mcpServers: McpServers;
+  updatedAt?: string;
+  version: string;
+} {
+  return {
+    mcpServers: stored?.mcpServers ?? {},
+    ...(stored === null ? {} : { updatedAt: stored.updatedAt }),
+    version: mcpServersVersionOf(stored),
+  };
 }
 
 /** 日誌の `grounds` に載せる、人間が読む形の「誰が」。 */
@@ -8650,7 +8668,9 @@ export function createApp(deps: AppDeps) {
           'セッションから）効く。',
         responses: {
           200: {
-            description: '登録そのもの（値を含む）。置かれていなければ空の `mcpServers`。',
+            description:
+              '登録そのもの（値を含む）と、その版（`version`。`PUT` の `ifMatch` へ渡す）。' +
+              '置かれていなければ空の `mcpServers`。',
             content: { 'application/json': { schema: resolver(mcpServersResponseSchema) } },
           },
           403: {
@@ -8662,8 +8682,7 @@ export function createApp(deps: AppDeps) {
       requireOwner,
       async (c) => {
         const stored = await deps.stores.mcpServers.read();
-        if (stored === null) return c.json(mcpServersResponseSchema.parse({ mcpServers: {} }));
-        return c.json(mcpServersResponseSchema.parse(stored));
+        return c.json(mcpServersResponseSchema.parse(mcpServersReadBody(stored)));
       },
     )
 
@@ -8711,7 +8730,8 @@ export function createApp(deps: AppDeps) {
         description:
           '`.mcp.json` をそのまま貼れる形（`{ "mcpServers": { … } }`）。置く前に形を' +
           '検査し、通らなければ保存しない（前のものが残る）。保存したら繋がっている runner へ' +
-          '降ろし、runner ごとの結果（名前と指紋だけ）を返す。' +
+          '降ろし、runner ごとの結果（名前と指紋だけ）を返す。本文の `ifMatch`（`GET` の ' +
+          '`version`）が省略でなく、いまの版と違えば何も書かず 409（`current` がいまの登録）。' +
           `「${MCP_SERVER_NAME}」は alteroid 自身の MCP サーバの名前なので使えない。`,
         responses: {
           200: {
@@ -8729,6 +8749,14 @@ export function createApp(deps: AppDeps) {
           403: {
             description: '許可（`access grant`）の無いアカウント。',
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+          409: {
+            description:
+              '`ifMatch` が読んだ後に変わっていた（書いていない）。`current` がいまの登録' +
+              '（`GET` と同じ形。値を含むので `GET` と同じ門の内側にだけ返す）。',
+            content: {
+              'application/json': { schema: resolver(mcpServersConflictResponseSchema) },
+            },
           },
         },
       }),
@@ -8756,7 +8784,8 @@ export function createApp(deps: AppDeps) {
         } catch (error) {
           previousText = `読めなかった（${reasonOf(error)}）`;
         }
-        const servers = c.req.valid('json').mcpServers;
+        const { mcpServers: servers, ifMatch } = c.req.valid('json');
+        const writeOptions = ifMatch === undefined ? undefined : { ifMatch };
         const names = mcpServerNames(servers);
 
         // **日誌を先に書く（issue #2123）。書けなければ差し替えずに 500。**
@@ -8781,10 +8810,11 @@ export function createApp(deps: AppDeps) {
           applied =
             deps.mcpServers === undefined
               ? await (async () => {
-                  const stored = await deps.stores.mcpServers.write(servers);
+                  const stored = await deps.stores.mcpServers.write(servers, writeOptions);
                   const storedNames = mcpServerNames(stored.mcpServers);
                   return {
                     updatedAt: stored.updatedAt,
+                    version: mcpServersVersionOf(stored),
                     names: storedNames,
                     ...(storedNames.length === 0
                       ? {}
@@ -8792,7 +8822,7 @@ export function createApp(deps: AppDeps) {
                     runners: [],
                   };
                 })()
-              : await deps.mcpServers.apply(servers);
+              : await deps.mcpServers.apply(servers, writeOptions);
         } catch (error) {
           // 日誌には「差し替えようとしている」が残っているので、打ち消す
           // （grant の「アクセス許可付与の打ち消しの日誌」と同じ形）。
@@ -8815,6 +8845,16 @@ export function createApp(deps: AppDeps) {
             return c.json(
               { error: `MCP サーバの登録が不正（保存していない）: ${error.message}` },
               400,
+            );
+          }
+          // 版が合わず書いていない（`current` の鍵の有無で他の 409 と見分けられる）。
+          if (error instanceof McpServersConflictError) {
+            return c.json(
+              {
+                error: 'MCP サーバの登録が読んだ後に変わっています（書き換えていません）',
+                current: mcpServersReadBody(error.current),
+              },
+              409,
             );
           }
           throw error;
@@ -8850,6 +8890,7 @@ export function createApp(deps: AppDeps) {
           mcpServersUpdateResponseSchema.parse({
             names,
             updatedAt: applied.updatedAt,
+            version: applied.version,
             ...(applied.sha256 === undefined ? {} : { sha256: applied.sha256 }),
             appliesFrom:
               'クローンの次のセッションから。マネージャー・作業者は、配布できた runner で次に開くセッションから',

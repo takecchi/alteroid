@@ -42,6 +42,7 @@ import {
   droppedTraceLedgerSince,
   fingerprintOf,
   mcpServersFingerprintOf,
+  mcpServersVersionOf,
   memoryVersion,
   noteDroppedRecord,
   parseMcpServers,
@@ -13546,7 +13547,76 @@ describe('MCP サーバの登録（/mcp-servers）', () => {
   it('置いていなければ空の mcpServers を返す', async () => {
     const response = await app.request('/mcp-servers');
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ mcpServers: {} });
+    expect(await response.json()).toEqual({
+      mcpServers: {},
+      version: mcpServersVersionOf(null),
+    });
+  });
+
+  /**
+   * **Issue #3984。** 読んだ版（`GET` の `version`）を `ifMatch` で送る。合えば書け、
+   * 省略は後勝ち、古ければ 409 で書かれず `current` が最新。
+   */
+  describe('ifMatch（Issue #3984）', () => {
+    const readBody = async () =>
+      (await (await app.request('/mcp-servers')).json()) as { version: string };
+
+    it('いまの版なら書け、応答の version で続けて書ける', async () => {
+      const first = await put({ mcpServers: { one: { command: 'dummy-one' } } });
+      expect(first.status).toBe(200);
+      const { version } = await readBody();
+      const second = await put({
+        mcpServers: { one: { command: 'dummy-one' }, two: { command: 'dummy-two' } },
+        ifMatch: version,
+      });
+      expect(second.status).toBe(200);
+      const next = ((await second.json()) as { version: string }).version;
+      expect(next).toBe((await readBody()).version);
+      expect((await put({ mcpServers: {}, ifMatch: next })).status).toBe(200);
+      expect(await stores.mcpServers.read()).toBeNull();
+    });
+
+    it('省略は従来どおり後勝ち', async () => {
+      await put({ mcpServers: { one: { command: 'dummy-one' } } });
+      const response = await put({ mcpServers: { two: { command: 'dummy-two' } } });
+      expect(response.status).toBe(200);
+      expect(Object.keys((await stores.mcpServers.read())?.mcpServers ?? {})).toEqual(['two']);
+    });
+
+    it('古ければ 409 で書かれず、current が最新（error と current の鍵で他の 409 と見分けられる）', async () => {
+      await put({ mcpServers: { one: { command: 'dummy-one' } } });
+      const { version } = await readBody();
+      // 別の経路が足した
+      await stores.mcpServers.write({
+        one: { command: 'dummy-one' },
+        added: { command: 'dummy-added' },
+      });
+      const response = await put({
+        mcpServers: { mine: { command: 'dummy-mine' } },
+        ifMatch: version,
+      });
+      expect(response.status).toBe(409);
+      const body = (await response.json()) as {
+        error: string;
+        current: { mcpServers: Record<string, unknown>; version: string };
+      };
+      expect(typeof body.error).toBe('string');
+      expect(Object.keys(body.current.mcpServers)).toEqual(['added', 'one']);
+      expect(body.current.version).toBe((await readBody()).version);
+      expect(Object.keys((await stores.mcpServers.read())?.mcpServers ?? {})).toEqual([
+        'added',
+        'one',
+      ]);
+    });
+
+    it('同時の2書き込みは、同じ版を前提にして1件だけ通る', async () => {
+      const { version } = await readBody();
+      const [a, b] = await Promise.all([
+        put({ mcpServers: { a: { command: 'dummy-a' } }, ifMatch: version }),
+        put({ mcpServers: { b: { command: 'dummy-b' } }, ifMatch: version }),
+      ]);
+      expect([a.status, b.status].sort()).toEqual([200, 409]);
+    });
   });
 
   it('.mcp.json の形で置いて読み直せる。PUT の応答と日誌には名前だけが載る', async () => {

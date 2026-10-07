@@ -2315,6 +2315,11 @@ export const mcpServersResponseSchema = z.object({
   mcpServers: mcpServersSchema,
   /** 置かれていなければ欠ける。 */
   updatedAt: z.string().optional(),
+  /**
+   * 登録の版（内容の sha256。`mcpServersVersionOf`）。`PUT /mcp-servers` の `ifMatch` へ
+   * そのまま渡す。置かれていないときも（空の登録の版として）返る。
+   */
+  version: z.string(),
 });
 
 /**
@@ -2324,6 +2329,17 @@ export const mcpServersResponseSchema = z.object({
  */
 export const mcpServersUpdateRequestSchema = z.strictObject({
   mcpServers: mcpServersSchema,
+  /**
+   * 読んだ時の `GET /mcp-servers` の `version`。**いまの版と違えば何も書かず 409**
+   * （`current` がいまの登録）。省略は従来どおり無条件の全文置換。
+   */
+  ifMatch: z.string().optional(),
+});
+
+/** `ifMatch` が合わなかった 409。`current` は `GET /mcp-servers` と同じ形（鍵の有無で他の 409 と見分ける）。 */
+export const mcpServersConflictResponseSchema = z.object({
+  error: z.string(),
+  current: mcpServersResponseSchema,
 });
 
 /**
@@ -2333,6 +2349,8 @@ export const mcpServersUpdateRequestSchema = z.strictObject({
 export const mcpServersUpdateResponseSchema = z.object({
   names: z.array(z.string()),
   updatedAt: z.string(),
+  /** 保存した登録の版（`GET /mcp-servers` の `version` と同じ）。続けて編集するときの `ifMatch`。 */
+  version: z.string(),
   /**
    * 保存した登録の指紋（#325 段3。`mcpServersFingerprintOf`）。各 runner の
    * `mcpServers.sha256` と突き合わせれば、届いた版が同じかが値を見ずに言える。
