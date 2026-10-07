@@ -155,6 +155,7 @@ export {
   isAnsweredResult,
   resultErrorLines,
   resultFailureOf,
+  turnFailureKindOf,
   type SdkFailure,
   type SdkFailureVia,
 } from './sdk-failure.js';

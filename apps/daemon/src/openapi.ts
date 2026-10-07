@@ -12,6 +12,7 @@ import {
   jobStatusSchema,
   nonBlankString,
   stripNul,
+  turnFailureKindSchema,
   githubObservationInputSchema,
   journalEntrySchema,
   memoryDocumentMetaSchema,
@@ -488,6 +489,11 @@ const conversationMessageSchema = z.object({
    * 付いていない発言は通常の発言（または印を持たない古い行）。
    */
   turnFailure: z.enum(['failed', 'held']).optional(),
+  /**
+   * `turnFailure` が付いた発言の失敗の種別（`auth` 認証 / `quota` 利用上限 / `other` それ以外・不明）。
+   * `turnFailure` と同時に付く。種別を持たない古い行は `other`（文面から読み替えない）。
+   */
+  turnFailureKind: turnFailureKindSchema.optional(),
   /** 発言に添えた添付のメタデータ（中身は `GET /attachments/:id`）。無い発言には付かない。 */
   attachments: z.array(attachmentRefSchema).optional(),
   /**

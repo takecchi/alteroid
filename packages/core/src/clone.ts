@@ -145,7 +145,7 @@ import { createRecentMap } from './recent.js';
 import { describeSituation, describeSituationUnavailable, readAtLabel } from './situation.js';
 import { countSupersedingReports, describeSuperseded } from './superseded.js';
 import { describeValidity, inboxEventValidity } from './inbox-validity.js';
-import type { AttachmentRef, JobStatus } from './schema.js';
+import type { AttachmentRef, JobStatus, TurnFailureKind } from './schema.js';
 import { DEFAULT_TOKEN_COOLDOWN_MS, toAgentTokenView } from './token-pool.js';
 import { parseNoticeResetAt } from './usage-reset-text.js';
 import type { RunnerRegistry } from './runner-protocol.js';
@@ -224,7 +224,7 @@ import {
   type UsageLimitNotice,
 } from './usage-limits.js';
 import type { TokenRotatorObservation } from './token-rotator.js';
-import { assistantFailureOf, type SdkFailure } from './sdk-failure.js';
+import { assistantFailureOf, turnFailureKindOf, type SdkFailure } from './sdk-failure.js';
 import { describeProbeError } from './usage-probe.js';
 import {
   classifyContextWindowFailure,
@@ -7706,6 +7706,7 @@ class Clone implements CloneHost {
   async #reportFailure(
     conversationId: string | null,
     cause: string | { readonly error: unknown },
+    sdkFailure?: SdkFailure,
   ): Promise<void> {
     // **例外で来た失敗は、分類を生の文字列で先に行い、外へ出す文だけを `reasonOf`
     // （伏せ字 → 1行目 → 200字）にする（#2483）。** `classifyContextWindowFailure` は
@@ -7729,7 +7730,12 @@ class Clone implements CloneHost {
 
     // 繋がっている人間には即座に見せる。日誌より先なのは、書き込みを待たせて
     // 「反応が無い」時間を伸ばさないため。届かなくても下の記録が残る。
-    this.#emit(conversationId, { type: 'error', message });
+    // 種別は構造から決める（`turnFailureKindOf`。本文は見ない）。枠で保持している間は、保持という
+    // 既存の構造（`#usageBlocked`）が「利用上限」を言っているので `quota` にそろえる（`turnFailure: 'held'` と同じ根拠）。
+    // 例外で来た失敗は構造を持たないので `other`。
+    const kind: TurnFailureKind =
+      this.#usageBlocked === null ? turnFailureKindOf(sdkFailure) : 'quota';
+    this.#emit(conversationId, { type: 'error', message, kind });
 
     // `conversationId` は呼び出し側が構造化フィールドとして持っている値なので
     // 載せる（#56 の線）。落とすと、失敗がどの会話のものだったかを時刻でしか
@@ -7892,6 +7898,7 @@ class Clone implements CloneHost {
       text: humanText,
       conversationId,
       turnFailure,
+      turnFailureKind: kind,
     });
   }
 
@@ -12270,7 +12277,16 @@ class Clone implements CloneHost {
           }
           // 失敗した result では `done` を出さない。`#reportFailure` が出す
           // `{ type: 'error' }` を終端にする（成功したことにしない）。
-          await this.#reportFailure(turn?.conversationId ?? null, failureReason(failure, event));
+          await this.#reportFailure(
+            turn?.conversationId ?? null,
+            failureReason(failure, event),
+            // 失敗の印は2つ届きうる（`result` 側と `assistant.error` 側）。理由の文面は先に決めた1本のままで、
+            // 種別だけは、言い切れるほうの印を採る（`result` が状態番号を持たず `assistant.error` だけが
+            // `rate_limit` と言う回を `other` に落とさない）。
+            [event.failure, turn?.rejected].find(
+              (candidate) => turnFailureKindOf(candidate ?? undefined) !== 'other',
+            ) ?? failure,
+          );
           // 失敗側でも必ず畳む。`#runTurn` は `#finishTurn()` が呼ぶ `turn.resolve()`
           // だけを待っており（`await done`）、`#handle`（`human_message` の分岐）は
           // その `#runTurn` を待つ。呼ばなければ `#runTurn` が永久に返らず、それを
