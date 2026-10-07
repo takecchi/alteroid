@@ -1,12 +1,4 @@
 // @vitest-environment jsdom
-/**
- * issue #3092: 「もっと見る」で読み足した頁（2頁目以降）の取り直しが失敗しても、失敗が
- * 画面のどこにも出なかった。
- *
- * 取り直しは先頭の頁の再検証（focus・再接続・ライブ接続の無効化）が終わるたびに走る。
- * 失敗した頁は前回の行を残す（画面を空にしない）が、先頭の頁は新しいので、一覧全体が
- * 最新に見えた。方針は #3069 と同じ「古い値を残したまま、失敗を注記する」。
- */
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -95,7 +87,6 @@ describe('読み足した頁の取り直しの失敗（issue #3092）', () => {
       window.dispatchEvent(new Event('focus'));
     });
     await waitFor(() => expect(pageText()).toContain('取り直せなかった'));
-    // 古い行は消さない。
     expect(pageText()).toContain(`req-mgr-${MANAGERS_PAGE}`);
 
     olderFailing = false;

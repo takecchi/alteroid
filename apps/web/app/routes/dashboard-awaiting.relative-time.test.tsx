@@ -1,10 +1,5 @@
 // @vitest-environment jsdom
-/**
- * #3700。ホームの承認待ちの「N分前」は、再描画のきっかけが無くても分単位で更新される。
- * **実時間を待たない**（偽のタイマー。`waitFor` は偽のタイマーと噛み合わないので、約束の解決は
- * `advanceTimersByTimeAsync(0)` で流す）。進捗の30秒の取り直しが再描画の代わりをしないよう、
- * 進捗は読み込み中のまま止める（`hold`）。
- */
+// waitFor を使わず advanceTimersByTimeAsync(0) で流す: waitFor は偽のタイマーと噛み合わないため
 import { act, cleanup, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -52,5 +47,17 @@ describe('ホームの承認待ちの相対の時刻（#3700）', () => {
     });
     expect(screen.getByText('3分前')).toBeTruthy();
     expect(screen.queryByText('たった今')).toBeNull();
+  });
+
+  it('分の時計より先に積まれた承認を「まもなく」「N分後」と言わない（#3966）', async () => {
+    const createdAt = new Date(START + 30_000).toISOString();
+    renderHome({
+      approvals: [{ id: 'a-1', question: '出してよいか', createdAt, options: [] }],
+      hold: ['progress'],
+    });
+    await flush();
+    expect(screen.getByText('出してよいか')).toBeTruthy();
+    expect(screen.getByText('たった今')).toBeTruthy();
+    expect(screen.queryByText('まもなく')).toBeNull();
   });
 });

@@ -17,27 +17,6 @@ import { makeTempDir } from '../../../vitest.tmpdir.js';
 import { createApp } from './app.js';
 import { createMigratedPglite, migratedTemplate } from './pglite-template.test-support.js';
 
-/**
- * issue #2343。`ScheduleStore.list()` は、読めない（`scheduledRequestSchema` に合わない）
- * 行を stderr に1行書くだけで黙って飛ばしていたので、上の層はどれも「依頼は無い」と言い
- * 切れた。今は `{ entries, unreadable }` で返し、各層がそれを「読めない N 件」として出す
- * （承認待ちの `approval-unreadable-list.test.ts` と同じ形。#2298）。
- *
- * fs / pg の2実装を並べ、**実物のストアに不正な行を1行だけ置いた状態から**、次の層を通す。
- *
- * - `ScheduleStore.list()` — `unreadable` に kind と不正な欄名だけ（本文は載せない）
- * - 道具 `schedule_list`（一覧）— 「読めない継続中の依頼が 1 件ある」。読めた行が0件でも
- *   「（継続中の依頼は無い）」と言わない
- * - 発意 tick の digest — 件数の行と節
- * - `GET /schedule`（本物のスケジューラ越し）— `unreadable` を載せる
- *
- * 対照: 本当に0件なら「無い」と言い、`unreadable` の鍵も出さない。
- *
- * **メモリ実装は並べない**——`put()` がスキーマを通すので、壊れた行を持てない。
- * CLI と Web は HTTP の応答を描くだけなので、それぞれ `chat.test.ts` /
- * `schedule.test.tsx` / `dashboard.test.tsx` が応答の形を差して測る。
- */
-
 const BAD_REQUEST_TEXT = '壊れた継続中の依頼の本文（この文字列はどの出力にも出てはいけない）';
 
 const GOOD: ScheduledRequest = {
@@ -48,7 +27,6 @@ const GOOD: ScheduledRequest = {
   updatedAt: '2026-09-01T00:00:00.000Z',
 };
 
-// `spec.type` が既知の値でない——版ずれ・手編集を模す。
 const BAD_PLAN_RAW = {
   kind: 'bad-kind',
   spec: { type: 'not-a-real-spec-type-from-a-newer-deploy' },
@@ -59,7 +37,6 @@ const BAD_PLAN_RAW = {
 
 interface Seeded {
   stores: Stores;
-  /** 不正な行を1行だけ足す（呼ぶ前は読める行だけ）。 */
   addBadRow(): Promise<void>;
 }
 
@@ -89,7 +66,7 @@ async function seedPg(): Promise<Seeded> {
   return {
     stores,
     async addBadRow() {
-      // 行を直接 insert する——`put()` は `scheduledRequestSchema.parse` を通す。
+      // 行を直接 insert する: `put()` は `scheduledRequestSchema.parse` を通すため。
       await db.insert(tables.schedules).values({
         kind: BAD_PLAN_RAW.kind,
         createdAt: new Date(BAD_PLAN_RAW.createdAt),
@@ -118,7 +95,6 @@ function stubCloneHost(): CloneHost {
   };
 }
 
-/** 本物のスケジューラ（ストアを読み直す）越しに `GET /schedule` を引く。 */
 async function getSchedule(stores: Stores): Promise<Record<string, unknown>> {
   const scheduler: Scheduler = createScheduler({
     entries: [],
@@ -159,8 +135,7 @@ function scheduleListTool(stores: Stores): () => Promise<string> {
 
 const since = () => new Date(Date.now() - 60_000);
 
-// PGlite の雛形（WASM の起動＋migrate）は、ワーカーで最初に呼んだ歯が払う。
-// 歯の本体（既定 5000ms）でなく hook（明示 30_000ms）で払わせる（issue #2360、#2337 と同じ形）。
+// 雛形の払いは歯の本体（既定 5000ms）でなく hook（30_000ms）に持たせる: WASM の起動＋migrate がワーカーで最初に呼んだ歯に乗るため。
 beforeAll(async () => {
   await migratedTemplate();
 }, 30_000);

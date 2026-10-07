@@ -1,25 +1,4 @@
-/**
- * `.github/scripts/update-claude-sdk.sh` と `.github/scripts/open-claude-sdk-pr.sh` を固定する。
- *
- * **本物の git を使う。偽物は pnpm と gh の2つだけ**（`reflect-release-prod.test.ts` と
- * 同じ方針）。git 自体が対象ではないので偽物にしない。
- *
- * **偽の pnpm / gh は「呼ばれた引数を記録するだけ」の記録係にしてある。**
- * pnpm 自身が持つ版比較・レジストリ照会のロジックは一切持たない。ファイルを
- * どう書き換えるか（catalog を書き換える／catalog と minimumReleaseAgeExclude を
- * 両方書き換える／lockfile だけ書き換える／何もしない）は `FAKE_PNPM_ACTION` で
- * テスト側が明示的に指定する。`pnpm view` に対して返す版は `FAKE_PNPM_VIEW_VERSION`
- * （未設定なら空＝レジストリを引けなかった扱い）。gh 側も同様に、`pr list` に対して
- * 返す番号は `FAKE_GH_PR_NUMBER`、`pr create` をわざと失敗させるかは
- * `FAKE_GH_FAIL_CREATE` でテストが指定するだけで、pnpm・gh の実際の判断ロジックは
- * 一切持たない。
- *
- * push が実際に起きたかどうかの観測は `reflect-release-prod.test.ts` と同じ手法
- * （ローカルの bare リポジトリの `hooks/pre-receive` に1行記録させる）を使う。
- *
- * git の呼び出しには毎回 `-c user.email` / `-c user.name` を渡す
- * （この環境にグローバル設定が無いため）。
- */
+// 偽物は pnpm と gh だけにし、git は本物を使う: 偽の pnpm / gh は呼ばれた引数を記録するだけで、版比較・レジストリ照会などの実際の判断ロジックは持たない。
 import { execFileSync, spawnSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -32,27 +11,10 @@ const SCRIPTS_DIR = dirname(fileURLToPath(import.meta.url));
 const UPDATE_SCRIPT = join(SCRIPTS_DIR, 'update-claude-sdk.sh');
 const PR_SCRIPT = join(SCRIPTS_DIR, 'open-claude-sdk-pr.sh');
 
-/** この環境にグローバル設定（`~/.gitconfig`）が無い前提で、テスト側の git 操作には
- * `-c user.email=...` / `-c user.name=...` を明示で渡している。
- * スクリプト自身（open-claude-sdk-pr.sh）は commit 前に自分で
- * `git config user.name/email` を設定するので、スクリプト実行そのものには不要。 */
+// git 操作に `-c user.*` を明示で渡す: この環境にグローバル設定（`~/.gitconfig`）が無いため。
 const GIT_IDENTITY = ['-c', 'user.email=sdk-test@example.com', '-c', 'user.name=SDK Test'];
 
-/** git の author/committer identity を決める環境変数。**`-c user.email=...` /
- * `-c user.name=...` より優先順位が高い**（git のドキュメント通り、
- * `GIT_AUTHOR_*` / `GIT_COMMITTER_*` env は `-c` 経由の `user.*` config を上書きする）。
- *
- * この器では `GIT_AUTHOR_EMAIL` などが既に設定されており（人間のコミッター用途）、
- * `execFileSync` へ `env` を明示しないと Node が親（このテストプロセス）の
- * `process.env` をそのまま子へ継承する。その結果、`-c user.email=...` で
- * 意図した identity が握りつぶされ、`pushExistingBranch` が「bot」「human」を
- * 指定したつもりの commit がどちらも別の1つの identity になってしまい、
- * force push 前の「bot 以外のコミットが無いか」チェックのテストが環境依存で
- * 壊れていた（`GIT_AUTHOR_EMAIL` 未設定の器だけで通っていた）。
- *
- * 対策はテスト側で明示的に隔離すること。器の環境変数そのものは変えない
- * （それは実行環境の持ち主が置いたものである）。ここで4つの env を落として、
- * どの器で走っても `-c user.email=...` が唯一の情報源になる形にする。 */
+// `GIT_AUTHOR_*` / `GIT_COMMITTER_*` の env を子へ渡さない: `-c user.*` より優先され、器で設定済みだと意図した identity が握りつぶされて、「bot 以外のコミットが無いか」のテストが環境依存で壊れるため。器の環境変数そのものは変えない。
 const GIT_IDENTITY_ENV_KEYS = [
   'GIT_AUTHOR_NAME',
   'GIT_AUTHOR_EMAIL',
@@ -60,9 +22,6 @@ const GIT_IDENTITY_ENV_KEYS = [
   'GIT_COMMITTER_EMAIL',
 ] as const;
 
-/** `process.env` から git identity 系の env を落としたコピーを返す。
- * `-c user.email=...` / `-c user.name=...` による明示指定だけが effective に
- * なるようにするための隔離で、この4つ以外の env（PATH など）はそのまま通す。 */
 function gitIsolatedEnv(): NodeJS.ProcessEnv {
   const env = { ...process.env };
   for (const key of GIT_IDENTITY_ENV_KEYS) delete env[key];
@@ -79,14 +38,7 @@ function git(cwd: string, args: string[]): string {
 
 type Result = { exitCode: number; stdout: string; stderr: string };
 
-/** 対象スクリプトを走らせ、終了状態と出力を返す。失敗を握り潰さない
- * （`allowFailure` を渡さない限り、非0終了は原因の stderr ごと投げる）。
- *
- * **`spawnSync` を使う（`execFileSync` ではなく）。** `execFileSync` は成功したとき
- * 戻り値が stdout の文字列そのものになり、stderr を読む手段が無い。exit 0 でも
- * stderr に意味のある出力があるケース（後述の「必須の環境変数が無いとき」の
- * バグ）を確かめるには、成功・失敗どちらでも stdout/stderr の両方を均等に
- * 取れる `spawnSync` が要る。 */
+// `spawnSync` を使う（`execFileSync` ではなく）: `execFileSync` は成功時に stderr を読む手段が無く、exit 0 でも stderr に意味のある出力があるケースを確かめられないため。
 function runScript(
   script: string,
   cwd: string,
@@ -111,8 +63,6 @@ function runScript(
   return { exitCode, stdout, stderr };
 }
 
-/** `$GITHUB_OUTPUT` に書かれた `key=value` 行を Record にする。ファイルが無ければ
- * 空オブジェクト（＝1行も書かれなかったことを呼び出し側が区別できる）。 */
 function parseGithubOutput(path: string): Record<string, string> {
   if (!existsSync(path)) return {};
   const out: Record<string, string> = {};
@@ -125,31 +75,14 @@ function parseGithubOutput(path: string): Record<string, string> {
   return out;
 }
 
-// ============================================================================
-// update-claude-sdk.sh
-// ============================================================================
-
 describe('update-claude-sdk.sh', () => {
   const WORKSPACE_YAML_WITH_SDK = "catalog:\n  '@anthropic-ai/claude-agent-sdk': ^0.3.237\n";
   const WORKSPACE_YAML_WITHOUT_SDK = 'catalog:\n  other-package: ^1.0.0\n';
-  // `minimumReleaseAgeExclude` の監視テスト用。既存の SDK 行に加えて
-  // その除外リストも持たせる（本物の pnpm-workspace.yaml の形を模す）。
   const WORKSPACE_YAML_WITH_EXCLUDE =
     "catalog:\n  '@anthropic-ai/claude-agent-sdk': ^0.3.237\n" +
     "\nminimumReleaseAgeExclude:\n  - '@anthropic-ai/claude-agent-sdk*'\n";
   const LOCKFILE_INITIAL = "lockfileVersion: '9.0'\n";
 
-  /**
-   * 偽の pnpm。呼ばれた引数を `FAKE_PNPM_LOG` へ記録するだけ。ファイルの書き換えは
-   * `FAKE_PNPM_ACTION`（`catalog` / `catalog-and-exclude` / `lockfile` /
-   * 未指定＝何もしない）でテストが明示した1アクションだけを行う。pnpm 自体が持つ
-   * 版比較・レジストリ照会のロジックは一切持たない。
-   *
-   * **`view` サブコマンドだけは別扱い。** `$PNPM view <pkg> version` が呼ばれたときは
-   * `FAKE_PNPM_ACTION` を無視し、`FAKE_PNPM_VIEW_VERSION` が設定されていればその
-   * 文字列を、未設定なら何も出力しない（＝レジストリを引けなかった場合を模す。
-   * 実際のテストの大半はこれを設定しないので、この既定の「空」が前提のまま通る）。
-   */
   function writeFakePnpm(path: string): void {
     writeFileSync(
       path,
@@ -240,7 +173,6 @@ esac
     const result = run(s, {}, { allowFailure: true });
 
     expect(result.exitCode).not.toBe(0);
-    // 呼ばれていればこのログファイルができるはずだが、そもそも存在しない
     expect(existsSync(s.pnpmLog)).toBe(false);
   });
 
@@ -280,10 +212,7 @@ esac
     const result = run(s, {}, { allowFailure: true });
 
     expect(result.exitCode).not.toBe(0);
-    // read_version が最初の呼び出し（before側）で落ちるので、pnpm にはまだ到達しない
     expect(existsSync(s.pnpmLog)).toBe(false);
-    // 出力ファイルへは1行も書かれない
-    // （"changed=" を伴わない・空の before/after を出す中途半端な成功に見せない）
     expect(existsSync(s.outputFile)).toBe(false);
   });
 
@@ -299,11 +228,6 @@ esac
   });
 
   describe('minimumReleaseAgeExclude の監視', () => {
-    // pnpm 11 の loose mode は、公開24時間以内の依存を引くと自分で
-    // `minimumReleaseAgeExclude` へその名前を書き足す。SDK を上げる PR にこれが
-    // 黙って混ざると、「除外リストは SDK のためのもの」という
-    // pnpm-workspace.yaml 自身の方針が機械の手で崩れる。update 前後でこのリストを
-    // 比べ、動いていたら changed を出力せず非0で止まることを確かめる。
     it('update の前後で minimumReleaseAgeExclude が変わったとき、非0で止まり changed が出力されない', () => {
       const s = setup(WORKSPACE_YAML_WITH_EXCLUDE);
 
@@ -319,8 +243,6 @@ esac
 
       expect(result.exitCode).not.toBe(0);
       const out = parseGithubOutput(s.outputFile);
-      // catalog/lockfile の diff を見るより前に止まっているので、
-      // changed はもちろん before/after も出力されていない
       expect(out.changed).toBeUndefined();
       expect(result.stderr).toContain('minimumReleaseAgeExclude');
     });
@@ -341,11 +263,6 @@ esac
   });
 
   describe('レジストリ最新版との突き合わせ', () => {
-    // 既存の5テストは `FAKE_PNPM_VIEW_VERSION` を設定していないので、
-    // `pnpm view` は空を返す＝「レジストリを引けなかった」経路を通っている。
-    // ここではそれ以外の3分岐（一致／不一致+changed=true／不一致+changed=false）
-    // を明示的に確かめる。
-
     it('レジストリ最新と after が一致するとき、成功する', () => {
       const s = setup();
 
@@ -379,21 +296,15 @@ esac
     it('レジストリ最新と after が食い違い、かつ changed=false のとき非0で止まる（update が効いていない証拠）', () => {
       const s = setup();
 
-      // FAKE_PNPM_ACTION を指定しない＝何も変えない（changed=false, after=before）
       const result = run(s, { FAKE_PNPM_VIEW_VERSION: '0.3.999' }, { allowFailure: true });
 
       expect(result.exitCode).not.toBe(0);
       const out = parseGithubOutput(s.outputFile);
-      // changed=false 自体は既に書き出されている（この判定は view の後に来るため）
       expect(out.changed).toBe('false');
       expect(result.stderr).toContain('効いていない');
     });
   });
 });
-
-// ============================================================================
-// open-claude-sdk-pr.sh
-// ============================================================================
 
 describe('open-claude-sdk-pr.sh', () => {
   const WORKSPACE_INITIAL = "catalog:\n  '@anthropic-ai/claude-agent-sdk': ^0.3.237\n";
@@ -402,16 +313,10 @@ describe('open-claude-sdk-pr.sh', () => {
   const BRANCH = 'automation/claude-agent-sdk-test';
   const SDK_VERSION = '0.3.238';
   const TITLE = `chore: @anthropic-ai/claude-agent-sdk を ${SDK_VERSION} へ上げる`;
-  // スクリプトの既定 bot（`GIT_AUTHOR_EMAIL` 未設定時の既定値）と同じ文字列。
-  // force push 前の「bot 以外のコミットが無いか」チェックのテストで使う。
   const BOT_EMAIL = '41898282+github-actions[bot]@users.noreply.github.com';
   const BOT_NAME = 'github-actions[bot]';
-  // #867 の CI未起動警告の describe から使うので、ここへ持つ（元は
-  // 「SDK_CI_TRIGGERED による CI未起動の通知」の中だけにあった）。
   const WARNING_MARK = '> [!WARNING]';
 
-  /** `reflect-release-prod.test.ts` と同じ手法：push が来たら1行記録するだけの
-   * bare origin。ネットワークには一切触らない。 */
   function initOrigin(root: string): string {
     const originPath = join(root, 'origin.git');
     git(root, ['init', '--bare', '-q', originPath]);
@@ -440,21 +345,11 @@ describe('open-claude-sdk-pr.sh', () => {
 
   function cloneRepo(originPath: string, root: string): string {
     const workdir = join(root, 'work');
-    // **`--branch main` を明示する。** bare origin の HEAD は `init.defaultBranch`
-    // 次第で `master` を指すことがあり、そちらは存在しないため
-    // 「remote HEAD refers to nonexistent ref, unable to checkout」で作業ツリーが
-    // 空のまま clone が終わる（`reflect-release-prod.test.ts` の `cloneShallow` と
-    // 同じ理由でここも明示する）。
+    // `--branch main` を明示する: bare origin の HEAD は `init.defaultBranch` 次第で存在しない `master` を指し、作業ツリーが空のまま clone が終わるため。
     git(root, ['clone', '-q', '--branch', 'main', originPath, workdir]);
     return workdir;
   }
 
-  /** 偽の gh。呼ばれた引数を `FAKE_GH_LOG` へ、1呼び出し1ブロック（引数1行ずつ、
-   * `---CALL---` 区切り）で記録するだけ。`pr list` に対してだけ、テストが指定した
-   * 番号（`FAKE_GH_PR_NUMBER`。無ければ空文字）を返す。`FAKE_GH_FAIL_CREATE=true`
-   * のときだけ `pr create` を exit 1 で失敗させる（`gh pr create` が
-   * `GITHUB_TOKEN` の権限不足などで落ちるケースを模す）。どちらも記録は必ず先に
-   * 行う。gh 自体の検索・作成ロジックは持たない。 */
   function writeFakeGh(path: string): void {
     writeFileSync(
       path,
@@ -480,7 +375,6 @@ fi
     chmodSync(path, 0o755);
   }
 
-  /** ログを呼び出し単位（引数配列の配列）へ分ける。 */
   function parseGhCalls(logPath: string): string[][] {
     if (!existsSync(logPath)) return [];
     const content = readFileSync(logPath, 'utf8');
@@ -490,11 +384,6 @@ fi
       .filter((call) => call.length > 0);
   }
 
-  /**
-   * `arr[index]` の境界検査。テストが期待する呼び出し・引数がそこに実在する
-   * ことを前提にしている箇所向けで、無ければ「無かった」ことを明示して投げる
-   * （noUncheckedIndexedAccess の下で `string | undefined` のまま扱わない）。
-   */
   function at<T>(arr: readonly T[], index: number): T {
     const value = arr[index];
     if (value === undefined) {
@@ -503,7 +392,6 @@ fi
     return value;
   }
 
-  /** 呼び出しの引数配列から `--title` の直後の値を取り出す。 */
   function titleArgOf(call: readonly string[]): string {
     return at(call, call.indexOf('--title') + 1);
   }
@@ -512,12 +400,7 @@ fi
     try {
       return execFileSync('git', ['--git-dir', originPath, 'rev-parse', ref], {
         encoding: 'utf8',
-        // **`env: gitIsolatedEnv()` が要る。** 他の `git()` 呼び出しと同じで、
-        // これも `env` が無ければ親の `process.env` を丸ごと継承する。
-        // identity は問わない読み出し（`rev-parse`）なので、既存の
-        // `gitIsolatedEnv()`（本物の `HOME` は残しつつ、`GIT_AUTHOR_*` 等の
-        // identity 系だけ落とす）をそのまま使い、ファイル内で env の作り方を
-        // 2通りに増やさない。
+        // `env: gitIsolatedEnv()` を渡す: 無いと親の `process.env` を丸ごと継承し、ファイル内で env の作り方が2通りになるため。
         env: gitIsolatedEnv(),
       }).trim();
     } catch {
@@ -525,9 +408,6 @@ fi
     }
   }
 
-  /** push.log に記録された「pushed」行の数。フックが実際に何回起きたかを比較で
-   * 見るための素朴なカウンタ（存在チェックだけだと、テスト側の準備で既に
-   * push している場合と区別が付かない）。 */
   function pushCount(pushLog: string): number {
     if (!existsSync(pushLog)) return 0;
     return readFileSync(pushLog, 'utf8')
@@ -535,13 +415,6 @@ fi
       .filter((l) => l.length > 0).length;
   }
 
-  /**
-   * `seedPath`（main が既にある作業ツリー）から `BRANCH` を切って1コミット積み、
-   * 指定した作者で origin へ push する。「PR ブランチに既にコミットが載っている」
-   * 状態を作るためのテスト専用ヘルパーで、force push 前の「bot 以外の作者が
-   * いないか」チェック（人間の作業を消さないための歯）を確かめるのに使う。
-   * 共有の `git()`（固定の GIT_IDENTITY）は使わず、作者を都度指定する。
-   */
   function pushExistingBranch(seedPath: string, authorEmail: string, authorName: string): void {
     git(seedPath, ['checkout', '-q', '-B', BRANCH]);
     writeFileSync(
@@ -549,9 +422,7 @@ fi
       "catalog:\n  '@anthropic-ai/claude-agent-sdk': ^0.3.238\n",
     );
     const identity = ['-c', `user.email=${authorEmail}`, '-c', `user.name=${authorName}`];
-    // **`env: gitIsolatedEnv()` が要る。** `GIT_AUTHOR_EMAIL` 等が既に環境にあると
-    // 上の `-c user.email=...` より優先されてしまい、"bot" のつもりで積んだ
-    // コミットが実際には環境変数の author になる（`gitIsolatedEnv` のコメント参照）。
+    // `env: gitIsolatedEnv()` を渡す: `GIT_AUTHOR_EMAIL` 等が環境にあると上の `-c user.email=...` より優先され、積んだコミットの author が環境変数のものになるため。
     execFileSync('git', [...identity, 'add', '.'], { cwd: seedPath, env: gitIsolatedEnv() });
     execFileSync('git', [...identity, 'commit', '-q', '-m', 'existing branch commit'], {
       cwd: seedPath,
@@ -574,11 +445,7 @@ fi
     const bodyFile = join(root, 'body.md');
     writeFileSync(bodyFile, '本文\n');
     const pushLog = join(root, 'push.log');
-    // **HOME を隔離する。** 本物の HOME をそのまま渡すと、手元の `~/.gitconfig` の
-    // 設定（例: commit の署名）を script-under-test の `git commit` が引き継いでしまい、
-    // この環境に無い ssh-agent ソケットを探しに行って落ちる。`.gitconfig` の無い
-    // 空のディレクトリを HOME にして、スクリプトが自分で設定する
-    // `user.name` / `user.email`（リポジトリローカル）だけで完結させる。
+    // HOME を隔離する: 本物の HOME だと手元の `~/.gitconfig`（commit の署名など）を `git commit` が引き継ぎ、この環境に無い ssh-agent ソケットを探しに行って落ちるため。
     const fakeHome = join(root, 'home');
     mkdirSync(fakeHome);
     return { root, originPath, seedPath, workdir, fakeGh, ghLog, bodyFile, pushLog, fakeHome };
@@ -601,12 +468,6 @@ fi
         SDK_VERSION,
         SDK_PR_BODY: s.bodyFile,
         PUSH_LOG: s.pushLog,
-        // **既定は「CI が起きる」側。** #867 より前からある既存のテスト群は
-        // CI 未起動の通知（タイトル接頭・本文の警告）を主題にしていないので、
-        // 既定をここで 'true' にしておくことで、それらのテストが期待する
-        // タイトル・本文の形をそのまま保つ。CI未起動の挙動だけを見たいテストは
-        // 個別に `SDK_CI_TRIGGERED` を上書きする（下の
-        // 「SDK_CI_TRIGGERED による CI未起動の通知」参照）。
         SDK_CI_TRIGGERED: 'true',
         ...extraEnv,
       },
@@ -626,20 +487,16 @@ fi
     const result = run(s, { FAKE_GH_PR_NUMBER: '', SDK_VERIFY_OK: 'true' });
 
     expect(result.exitCode).toBe(0);
-    // push が実際に起きたことを、pre-receive フックの記録で確かめる
-    // （フックの実行そのものは前段の reflect-release-prod.test.ts が対照実験済み）
     expect(existsSync(s.pushLog)).toBe(true);
     expect(remoteRef(s.originPath, `refs/heads/${BRANCH}`)).not.toBe('');
   });
 
   it('3ファイル以外の追跡下ファイルにも差分があるとき、commit も push も PR もせず非0で落ちる', () => {
     const s = setup();
-    // 想定内の1ファイルも直しておく（想定外だけが原因で止まることを確かめるため）
     writeFileSync(
       join(s.workdir, 'pnpm-workspace.yaml'),
       "catalog:\n  '@anthropic-ai/claude-agent-sdk': ^0.3.238\n",
     );
-    // 想定外: 3ファイルに含まれない追跡下ファイルを直す
     writeFileSync(join(s.workdir, 'other.txt'), 'unexpected change\n');
 
     const result = run(s, { FAKE_GH_PR_NUMBER: '', SDK_VERIFY_OK: 'true' }, { allowFailure: true });
@@ -656,7 +513,6 @@ fi
       join(s.workdir, 'pnpm-workspace.yaml'),
       "catalog:\n  '@anthropic-ai/claude-agent-sdk': ^0.3.238\n",
     );
-    // packages/core/src/generated/x.ts のような、build が作る未追跡ファイル
     mkdirSync(join(s.workdir, 'packages', 'core', 'src', 'generated'), { recursive: true });
     writeFileSync(join(s.workdir, 'packages', 'core', 'src', 'generated', 'x.ts'), 'export {};\n');
 
@@ -664,7 +520,6 @@ fi
 
     expect(result.exitCode).toBe(0);
     expect(existsSync(s.pushLog)).toBe(true);
-    // 未追跡ファイルは add されず、そのまま未追跡のまま残る
     const status = git(s.workdir, [
       'status',
       '--porcelain',
@@ -783,7 +638,6 @@ fi
       const calls = parseGhCalls(s.ghLog);
       expect(calls[1]).toContain('--title');
       expect(titleArgOf(at(calls, 1))).toBe(lockfileOnlyTitle);
-      // commit message にも同じタイトルが載る
       const subject = git(s.workdir, ['log', '-1', '--format=%s']).trim();
       expect(subject).toBe(lockfileOnlyTitle);
     });
@@ -839,7 +693,6 @@ fi
       const result = run(s, { FAKE_GH_PR_NUMBER: '', SDK_VERIFY_OK: 'true' });
 
       expect(result.exitCode).toBe(0);
-      // 直前の bot コミットを force で上書きした新しいコミットへ進んでいる
       expect(remoteRef(s.originPath, `refs/heads/${BRANCH}`)).not.toBe(beforeSha);
       expect(pushCount(s.pushLog)).toBeGreaterThan(beforeCount);
     });
@@ -862,23 +715,8 @@ fi
       );
 
       expect(result.exitCode).not.toBe(0);
-      // リモートは一切書き換わっておらず、push 回数も増えていない
-      // （増えていない、で見る —— セットアップ自体が1回 push しているので、
-      // 存在チェックだけでは script 側の push と区別できない）
       expect(remoteRef(s.originPath, `refs/heads/${BRANCH}`)).toBe(beforeSha);
       expect(pushCount(s.pushLog)).toBe(beforeCount);
-      // **反転（#991 対応で追記）。** この行はかつて
-      // `expect(existsSync(s.ghLog)).toBe(false)` だった——「gh を一切呼ばない」
-      // という保証だった。#991（この停止が赤い定時 run 以外のどこにも出ない）
-      // への対応で、停止時に「開いている PR があるか」を見るため `gh pr list`
-      // を呼ぶようになった（下の「#991」describe 参照）。何を変えたか:
-      // 「gh を一切呼ばない」から「PR を作成・書き換え・ready 化しない」へ
-      // 保証を移した。なぜ必要になったか: 停止の事実を読まれる場所へ出すには、
-      // 停止した経路自身が `gh pr list` を呼ばざるを得ない。なぜ保証が弱く
-      // なっていないか: この経路が「force push しない」「PR の中身を書き換え
-      // ない」という本来の安全性は変わらず保っており、新たに増えたのは
-      // 「（開いている PR があれば）通知のコメントを足す」という読み取り専用に
-      // 近い副作用だけである。
       expect(existsSync(s.ghLog)).toBe(true);
       const calls = parseGhCalls(s.ghLog);
       expect(calls.some((c) => c[0] === 'pr' && c[1] === 'create')).toBe(false);
@@ -888,17 +726,6 @@ fi
     });
   });
 
-  // ==========================================================================
-  // 人間の直接コミットで止まったとき、既存の PR へコメントする（#991）
-  // ==========================================================================
-  //
-  // 直上の「force push 前の『bot 以外のコミットが無いか』チェック」自体は
-  // 正しく動いていた（#991 はバグ報告ではない）。問題は、この停止が
-  // 赤い定時 run（`gh run list` の `conclusion=failure`）以外のどこにも
-  // 出なかったことだった。#867 の CI未起動警告は「PR の本文を書く/書き換える」
-  // 経路の中に実装されているが、この停止はその経路そのものに入る前に起きるので
-  // 通らない。ここでは「開いている PR があれば、そこへ通知コメントを足す」と
-  // いう独立した経路を確かめる。
   describe('リモートに人間のコミットがあって止まったとき、開いている PR へ通知する（#991）', () => {
     it('開いている PR が在るとき、その PR 番号へ gh pr comment が呼ばれ、本文に作者と #991 が含まれる', () => {
       const s = setup();
@@ -916,7 +743,6 @@ fi
 
       expect(result.exitCode).not.toBe(0);
       const calls = parseGhCalls(s.ghLog);
-      // 1回目は在るかどうかを見るための pr list、2回目がそのコメント。
       expect(calls[0]).toEqual([
         'pr',
         'list',
@@ -937,7 +763,6 @@ fi
       const commentBody = readFileSync(commentBodyPath, 'utf8');
       expect(commentBody).toContain('human@example.com');
       expect(commentBody).toContain('#991');
-      // PR の中身そのもの（create/edit/ready）は一切呼ばれていない。
       expect(calls.some((c) => c[0] === 'pr' && c[1] === 'create')).toBe(false);
       expect(calls.some((c) => c[0] === 'pr' && c[1] === 'edit')).toBe(false);
       expect(calls.some((c) => c[0] === 'pr' && c[1] === 'ready')).toBe(false);
@@ -982,48 +807,12 @@ fi
 
       expect(result.exitCode).not.toBe(0);
       expect(result.stderr).toContain('Allow GitHub Actions to create and approve pull requests');
-      // commit・push 自体は create の手前まで進んでいる
       expect(existsSync(s.pushLog)).toBe(true);
     });
   });
 
   describe('必須の環境変数が無いとき', () => {
-    // **依頼は「非0で落ちる」だったが、現物はそうならない（バグ報告。直していない）。**
-    //
-    // `${SDK_BRANCH:?...}` のような bash の `:?` 展開は、変数が無ければその場で
-    // シェルを異常終了させる。ところがこのスクリプトは `trap '...' EXIT` を張っており
-    // （`reflect-release-prod.sh` と同じ「必ず1行出す」ための仕掛け）、実測すると
-    // **この trap の中の `printf` が成功で終わるせいで、スクリプト全体の終了コードが
-    // 0 へ上書きされる**（`git commit` 失敗など、`:?` を経由しない通常のエラーでは
-    // この上書きは起きない。`:?` によるシェルの異常終了だけがこの経路を通る）。
-    //
-    // 手元での再現（`set -euo pipefail` + 同じ trap パターンの最小再現）:
-    //   bash -c 'set -euo pipefail; trap "printf x" EXIT; : "${MISSING:?required}"'
-    //   → 標準エラーに "MISSING: required" と出るが、echo $? は 0
-    // 実機（このリポジトリの `open-claude-sdk-pr.sh`）でも同様に、
-    // SDK_BRANCH / SDK_VERSION / SDK_PR_BODY のどれを欠かしても exit 0 だった
-    // （2026-08-20T09:40Z 手元で確認。3つとも同じ結果）。
-    //
-    // したがってここでは「落ちるべき」という期待値ではなく、**実際に起きること**
-    // （exit 0 だが、何も commit / push / gh 呼び出しをしていないこと）を固定する。
-    // 「落ちること」を主張する意味のテストが書けない状態そのものが、この発見の証拠である。
-    //
-    // ---
-    // **反転（2026-08-20 追記）。** スクリプト側が `${VAR:?...}` をやめ、
-    // `require_env()`（`if [ -z "$2" ]; then ...; exit 1; fi` という明示検査）に
-    // 置き換えたと連絡を受けた。この形は EXIT trap と衝突しない
-    // （`update-claude-sdk.sh` の `minimumReleaseAgeExclude` チェックと同じ
-    // `if [ -z … ]; then … exit 1; fi` の素朴な形で、`:?` の異常終了を経由しない
-    // ため、上の「trap の printf が終了コードを 0 へ上書きする」経路そのものを
-    // 通らない）。実測（下の変更後のテスト）で、3変数ともいまは非0終了する。
-    //
-    // 何を変えたか: 期待値を「exit 0（バグ）」から「非0で落ちる（依頼どおり）」へ
-    // 反転した。何が必要になったか: スクリプト側の修正を受けて、テストが現物と
-    // 食い違ったままでは「テストを弱めずに直す」の逆（実際より弱い保証を書いたまま
-    // 放置する）になるため。保証が弱くなっていない根拠: 反転後も
-    // 「commit・push・gh 呼び出しが一切起きていないこと」は変わらず確認しており、
-    // かつ「非0で終わる」がその上に乗るので、保証は反転前より広がっている
-    // （バグ時代は「副作用が無いこと」しか言えなかった）。
+    // 必須の環境変数は `${VAR:?...}` ではなく明示検査（`require_env()`）で見る: `:?` の異常終了は EXIT trap の `printf` が成功で終わるせいで終了コードが 0 へ上書きされるため。
     it.each(['SDK_BRANCH', 'SDK_VERSION', 'SDK_PR_BODY'] as const)(
       '%s が無いとき、非0で終了し、commit・push・gh 呼び出しのいずれも起きない',
       (missingKey) => {
@@ -1048,9 +837,7 @@ fi
 
         const result = runScript(PR_SCRIPT, s.workdir, env, { allowFailure: true });
 
-        // 反転後の実際の挙動: 非0終了
         expect(result.exitCode).not.toBe(0);
-        // 副作用は無い —— commit も push も gh 呼び出しも起きていない
         expect(existsSync(s.pushLog)).toBe(false);
         expect(existsSync(s.ghLog)).toBe(false);
         expect(result.stderr).toContain(`${missingKey}`);
@@ -1058,16 +845,6 @@ fi
     );
   });
 
-  // ==========================================================================
-  // SDK_CI_TRIGGERED による CI未起動の通知（#867）
-  // ==========================================================================
-  //
-  // Issue #867 の誤り訂正: 「理由は Job Summary に書いているが誰も読まない」は
-  // 事実ではない（GITHUB_STEP_SUMMARY への書き込みはどこにも無かった）。実際には
-  // PR 本文の末尾に無条件で3行あり、それを4晩マージまで運用しても直らなかった。
-  // だから今回の実装は条件付き・本文の先頭という形を取る。**検出する側
-  // （陽性）だけでなく検出しないこと（陰性対照）も対で測る** — 依頼者の言葉:
-  // 「検出する歯だけを置くと、決定の巻き戻しが静かに通る」。
   describe('SDK_CI_TRIGGERED による CI未起動の通知（#867）', () => {
     const PREFIXED_TITLE = `[CI未起動] ${TITLE}`;
 
@@ -1091,10 +868,8 @@ fi
 
         expect(result.exitCode).toBe(0);
         const body = readFileSync(s.bodyFile, 'utf8');
-        // **先頭であることを位置で検査する**（末尾ではなく）。
         expect(body.startsWith(WARNING_MARK)).toBe(true);
         expect(body).toContain('#867');
-        // 元の本文は消さず、警告の下に残す
         expect(body).toContain('本文');
         expect(body.indexOf(WARNING_MARK)).toBeLessThan(body.indexOf('本文'));
         const calls = parseGhCalls(s.ghLog);
@@ -1117,7 +892,6 @@ fi
         expect(body).not.toContain('WARNING');
         expect(body).not.toContain('CI が付かない');
         expect(body).not.toContain('#867');
-        // 本文は元のまま。警告ブロックの追記は一切無い。
         expect(body).toBe('本文\n');
         const calls = parseGhCalls(s.ghLog);
         expect(titleArgOf(at(calls, 1))).toBe(TITLE);
@@ -1143,9 +917,7 @@ fi
       });
 
       it('未設定（キー自体が無い）も「起きない」側へ倒れる（陽性側と同じ扱い）', () => {
-        // `run()` の既定は SDK_CI_TRIGGERED='true' を足すので、ここでは
-        // 「キーが無い」を作るために env を自前で組み、run() を経由しない
-        // （「必須の環境変数が無いとき」テストと同じ手法）。
+        // `run()` を経由せず env を自前で組む: `run()` の既定は SDK_CI_TRIGGERED='true' を足すので、「キーが無い」を作れないため。
         const s = setup();
         writeCatalogDiff(s);
         const env: NodeJS.ProcessEnv = {
@@ -1220,7 +992,6 @@ fi
         const s = setup();
         writeCatalogDiff(s);
 
-        // 前夜: CI未起動でこの PR を書き換えた（タイトル・本文に印が付く）
         const first = run(s, {
           FAKE_GH_PR_NUMBER: '42',
           SDK_VERIFY_OK: 'true',
@@ -1229,15 +1000,8 @@ fi
         expect(first.exitCode).toBe(0);
         expect(readFileSync(s.bodyFile, 'utf8').startsWith(WARNING_MARK)).toBe(true);
 
-        // 今夜: ワークフローは毎回 SDK_PR_BODY を新しく作り直す
-        // （update-claude-sdk.yml の `{ ... } >"$SDK_PR_BODY"`）ので、
-        // テストでも同じ前提で本文ファイルを元の内容へ作り直してから2回目を走らせる。
         writeFileSync(s.bodyFile, '本文\n');
-        // 2回目にも実際に commit する差分が要る（1回目と同じ内容のままだと
-        // 「commit するものが無い」で落ちる＝これは本物の update-claude-sdk.sh が
-        // changed=true のときだけこのスクリプトを呼ぶのと同じ前提）。
-        // タイトルの版表示（SDK_VERSION/SDK_VERSION_BEFORE）には影響させたくないので
-        // pnpm-lock.yaml 側に差分を作る。
+        // 2回目にも commit する差分を `pnpm-lock.yaml` 側に作る: 1回目と同じ内容だと「commit するものが無い」で落ち、タイトルの版表示（SDK_VERSION）には影響させたくないため。
         writeFileSync(join(s.workdir, 'pnpm-lock.yaml'), "lockfileVersion: '9.0'\n# night 2\n");
         const second = run(s, {
           FAKE_GH_PR_NUMBER: '42',
@@ -1250,7 +1014,6 @@ fi
         const editCalls = calls.filter((c) => c[0] === 'pr' && c[1] === 'edit');
         expect(editCalls).toHaveLength(2);
         const lastEdit = at(editCalls, 1);
-        // タイトルは毎回ゼロから組み立てられるので、前夜の接頭は残らない
         expect(titleArgOf(lastEdit)).toBe(TITLE);
         const bodyAfterSecond = readFileSync(s.bodyFile, 'utf8');
         expect(bodyAfterSecond).not.toContain('WARNING');

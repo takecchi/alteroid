@@ -1,7 +1,3 @@
-/**
- * `clientMessageFingerprint` の正規化（#3634）。本文・添付の id・`supersedes` に、pg の日誌が残す形
- * （NUL を落とし、孤立サロゲートを U+FFFD に置き換える）と同じ規則が掛かる。
- */
 import { describe, expect, it } from 'vitest';
 
 import { clientMessageFingerprint } from './client-message-fingerprint.js';

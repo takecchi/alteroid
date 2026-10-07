@@ -1,28 +1,4 @@
 // @vitest-environment jsdom
-/**
- * Issue #1585（PR #1579 / #1572 のレビューで見つかった穴）。
- *
- * PR #1579（#1576）は `failure` を `{ conversationId, error }` にして、描画の
- * 時点の `shownId` と一致するときだけ出すようにした——「別の会話（B）の画面に
- * 出る」（#1576 の穴）はそれで直った。**だが `ChatPane` は会話を切り替える
- * たびに、どの会話へ向かうかを見ずにその1つだけの `failure` を
- * `setFailure(undefined)` で消していた。** A で追送が B を見ている間に
- * 失敗すると、その失敗は B にも、A へ戻ったときにも出なかった——「間違った
- * 会話に出る」バグが「どこにも出ない」バグに変わっていた。
- *
- * この試験は、直した後の性質を確かめる:
- * 1. A で追送が失敗 → B では出ない → A へ戻ると出る
- * 2. メインの `send`（ストリームの `error` イベント）でも同じ
- * 3. A の失敗は、A で次の送信を始めると消える
- * 4. B の失敗と A の失敗は混ざらない（B で失敗させて A へ移っても、A には
- *    B の失敗が出ない）
- *
- * #1576 の回帰試験（`chat.stream-failure-by-conversation.test.tsx`）と違い、
- * ここは「効果が走る前の窓」を突く必要が無い——切り替えを完全に終わらせた後の
- * 性質（「消えない」「次の送信で消える」「混ざらない」）を確かめるだけなので、
- * 実タイマーを避けた自前の ReadableStream は使わず、共有の `sse()` と
- * `findBy`/`waitFor` で待つ。
- */
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider, useParams } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -71,12 +47,6 @@ function renderChat(initial: string) {
   };
 }
 
-/**
- * `/approvals` はこの試験の対象ではない——だが issue #2210 以降、`chat.tsx` が
- * `conversationApprovals.error` を見て `ErrorNote` を出すようになったので、
- * 未ハンドルのまま（＝`Failed to fetch` で失敗）にすると、この試験が見ている
- * `ErrorNote`（送信/追送の失敗）と紛れうる。ここでは素直に0件で成功させる。
- */
 function conversationRoutes(url: string) {
   if (url.includes(`/conversations/${CONVERSATION_A}`)) {
     return json({ conversationId: CONVERSATION_A, messages: [] });
@@ -121,13 +91,11 @@ describe('#1585: 送信/追送の失敗は会話ごとに持ち、切り替え�
       if (url.endsWith('/chat')) {
         chatCalls += 1;
         if (chatCalls === 1) {
-          // 最初の送信: 開いたまま受信を続ける。追送はこのストリームへ相乗りしない。
           return sse([{ event: 'open', data: { conversationId: CONVERSATION_A } }], {
             signal: init?.signal,
             keepOpen: true,
           });
         }
-        // 追送そのもの: 投函が失敗する（ネットワーク断を模す）。
         return Promise.reject(new TypeError(FOLLOW_UP_ERROR_MESSAGE));
       }
       return undefined;
@@ -142,28 +110,17 @@ describe('#1585: 送信/追送の失敗は会話ごとに持ち、切り替え�
 
     await typeAndSend('二つ目');
 
-    // A に居るあいだ、追送の失敗が出る（ベースライン）。
     expect(await screen.findByText(FOLLOW_UP_ERROR_MESSAGE)).toBeTruthy();
-    /*
-     * Issue #1585 の「確かめていないこと」の1つだった、失敗した発言の行き先。
-     * #3064 以降、吹き出しは外れ、文は入力欄へ戻る。戻すのは失敗表示より後の
-     * effect なので、値として待って測る（詳細は
-     * `chat.send-failure-restore-draft.test.tsx`）。
-     */
     await waitFor(() => {
       const input = screen.getByPlaceholderText(/クローンに話しかける/) as HTMLTextAreaElement;
       expect(input.value).toBe('二つ目');
     });
 
-    // B へ切り替える。
     await router.navigate(`/chat/${CONVERSATION_B}`);
     expect(await findShownConversation(CONVERSATION_B)).toBeTruthy();
-    // B には A の追送失敗が出ない（#1576 で直った性質。ここでは前提として確かめる）。
     expect(screen.queryByText(FOLLOW_UP_ERROR_MESSAGE)).toBeNull();
 
-    // A へ戻る。
     await router.navigate(`/chat/${CONVERSATION_A}`);
-    // #1585 の本体: 戻った A に、消えずに出る。
     expect(await screen.findByText(FOLLOW_UP_ERROR_MESSAGE)).toBeTruthy();
   });
 
@@ -186,15 +143,12 @@ describe('#1585: 送信/追送の失敗は会話ごとに持ち、切り替え�
     const { router } = renderChat(`/chat/${CONVERSATION_A}`);
     await typeAndSend('やあ');
 
-    // A に居るあいだ、error イベントの失敗が出る（ベースライン）。
     expect(await screen.findByText(ERROR_MESSAGE)).toBeTruthy();
 
-    // B へ切り替える。
     await router.navigate(`/chat/${CONVERSATION_B}`);
     expect(await findShownConversation(CONVERSATION_B)).toBeTruthy();
     expect(screen.queryByText(ERROR_MESSAGE)).toBeNull();
 
-    // A へ戻る。
     await router.navigate(`/chat/${CONVERSATION_A}`);
     expect(await screen.findByText(ERROR_MESSAGE)).toBeTruthy();
   });
@@ -215,7 +169,6 @@ describe('#1585: 送信/追送の失敗は会話ごとに持ち、切り替え�
             { signal: init?.signal },
           );
         }
-        // 2回目（立て直しの送信）は成功して終わる。
         return sse(
           [
             { event: 'open', data: { conversationId: CONVERSATION_A } },
@@ -230,15 +183,13 @@ describe('#1585: 送信/追送の失敗は会話ごとに持ち、切り替え�
     renderChat(`/chat/${CONVERSATION_A}`);
     await typeAndSend('一つ目');
     expect(await screen.findByText(ERROR_MESSAGE)).toBeTruthy();
-    // 1回目のストリームが完全に畳まれ、`streamRef.current` が空になるのを待つ
-    // （でないと2回目が `followUp` に回り、`send` の冒頭のクリアを通らない）。
+    // 1回目のストリームが完全に畳まれるのを待つ: でないと2回目が followUp に回り、send の冒頭のクリアを通らないため
     await waitFor(() => {
       expect(
         screen.queryByRole('button', { name: '受信をやめる（クローンのターンは止まらない）' }),
       ).toBeNull();
     });
 
-    // 同じ A で次の送信をやり直す。
     await typeAndSend('二つ目');
 
     await waitFor(() => {
@@ -276,7 +227,6 @@ describe('#2460: 新しい会話（鍵 undefined）の失敗は、別の白紙�
   const NEW_CONVERSATION_ERROR = '新しい会話の投函に失敗した（テスト用の文言、#2460）';
   const CONVERSATION_C = 'conv-2460-c';
 
-  /** 新しい会話の送信は、`open` の前に投函そのものが失敗する（鍵 undefined に積まれる形）。 */
   function stubNewConversationFailure() {
     stubFetch((url) => {
       if (url.includes(`/conversations/${CONVERSATION_C}`)) {
@@ -302,8 +252,7 @@ describe('#2460: 新しい会話（鍵 undefined）の失敗は、別の白紙�
 
     await router.navigate('/chat');
     expect(await screen.findByPlaceholderText(/クローンに話しかける/)).toBeTruthy();
-    // 入力欄は前の画面にも在るので、見つかっても切り替えの描画が済んだとは限らない。
-    // 「出ていない状態になる」のを待つ（直す前の実装なら出続けるので、ここで落ちる）。
+    // 「出ていない状態になる」のを待つ: 入力欄は前の画面にも在り、見つかっても切り替えの描画が済んだとは限らないため
     await waitFor(() => {
       expect(screen.queryByText(NEW_CONVERSATION_ERROR)).toBeNull();
     });
@@ -315,9 +264,7 @@ describe('#2460: 新しい会話（鍵 undefined）の失敗は、別の白紙�
     await typeAndSend('送れない発言');
     expect(await screen.findByText(NEW_CONVERSATION_ERROR)).toBeTruthy();
 
-    // たまっている再描画と効果を流し切っても消えない。実時間は待たない（#2146 の
-    // 見張り。器が混むと実時間の待ちは足りなくなる）——0ms のタスクを2回挟んで、
-    // その間に積まれた描画と効果を一巡させる。
+    // 実時間で待たない: 器が混むと実時間の待ちは足りなくなるため
     for (let i = 0; i < 2; i += 1) {
       await new Promise((resolve) => setTimeout(resolve, 0));
     }
@@ -346,8 +293,6 @@ describe('#2460: 新しい会話（鍵 undefined）の失敗は、別の白紙�
 
     await router.navigate('/chat');
     expect(await screen.findByPlaceholderText(/クローンに話しかける/)).toBeTruthy();
-    // 入力欄は会話 A の画面にも在るので、見つかっても切り替えの描画が済んだとは限らない
-    // （CI の混んだ器で、A の失敗がまだ残って見えて落ちた）。消えるのを待つ。
     await waitFor(() => {
       expect(screen.queryByText(ERROR_MESSAGE)).toBeNull();
     });

@@ -7,12 +7,12 @@ import {
   isApprovalWithdrawn,
   type SentApprovalDraft,
 } from '~/components/approval-answer-card';
+import { LeftoverDrafts } from '~/components/approval-leftover-drafts';
 import { ApprovalsTabs } from '~/components/group-tabs';
 import {
   Page,
   Button,
   Card,
-  CodeBlock,
   EMPTY_QUESTIONS_DRAFT,
   Empty,
   ErrorNote,
@@ -71,43 +71,6 @@ function UnreadableApprovalNote({ unreadable }: { unreadable: UnreadableApproval
         未回答の一覧にも、回答済みの一覧にも載っていない。
       </span>
     </div>
-  );
-}
-
-/**
- * 答えは通ったが、送らなかった下書きが残っている承認（issue #3515・#3625）。**黙って消さない。**
- * 承認はもう決着していて回答欄が無いので、残った文をここへ出す。写してから閉じられる。
- */
-function LeftoverDrafts({
-  leftovers,
-  onDiscard,
-}: {
-  leftovers: { id: string; source: { question: string }; text: string }[];
-  onDiscard: (id: string) => void;
-}) {
-  if (leftovers.length === 0) return null;
-  return (
-    <ul className="mb-4 flex flex-col gap-3" aria-label="送らなかった下書きが残っている承認">
-      {leftovers.map(({ id, source, text }) => (
-        <li key={id} className="rounded-md border border-warn/40 bg-warn/10 px-3 py-2 text-sm">
-          <p className="mb-2 break-words">
-            <strong>答えは通ったが、送らなかった下書きが残っている。</strong>
-            承認はもう決着しているので、ここから送り直すことはできない。必要なら写してから閉じる。
-            <span className="mt-1 block text-xs text-muted-foreground">
-              対象: {source.question}
-            </span>
-          </p>
-          <CodeBlock label="残った文" maxHeight="12rem">
-            {text}
-          </CodeBlock>
-          <div className="mt-2">
-            <Button size="sm" onClick={() => onDiscard(id)}>
-              閉じる（捨てる）
-            </Button>
-          </div>
-        </li>
-      ))}
-    </ul>
   );
 }
 
@@ -319,7 +282,7 @@ export default function Approvals() {
         setBulkErrors((current) => ({ ...current, ...nextErrors }));
       }
     } catch (caught) {
-      // 通信そのものが失敗した場合（サーバへ届いていない）。個々の id の成否は
+      // 通信そのものが失敗した場合（届いたか分からない）。個々の id の成否は
       // まだ分からないので、下書きは消さずに残す。
       setBulkFailure(caught);
     } finally {

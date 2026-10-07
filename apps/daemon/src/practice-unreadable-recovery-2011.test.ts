@@ -12,36 +12,10 @@ import { makeTempDir } from '../../../vitest.tmpdir.js';
 import { createApp } from './app.js';
 import { createMigratedPglite, migratedTemplate } from './pglite-template.test-support.js';
 
-// 雛形の前払い（#3034）。最初の `beforeEach`（hookTimeout 10s）で WASM の起動 + migrate を
-// 払わせない。
+// 雛形は前払いする: 最初の `beforeEach`（hookTimeout 10s）で WASM の起動 + migrate を払わせないため。
 beforeAll(async () => {
   await migratedTemplate();
 }, 60_000);
-
-/**
- * issue #2011（マネージャー指摘によるフォローアップ）。
- *
- * `PgPracticeStore.read()` / `FsPracticeStore.read()` が読めない行で
- * `UnreadablePracticeError` を投げるようになったこと自体は issue #2011 の
- * 直しだが、**`PUT`/`DELETE /practices/:slug`（`apps/daemon/src/app.ts`）と
- * `practice_write`/`practice_remove`（`packages/core/src/tools.ts`）は
- * `read()` を「無いかどうか」の判定にしか使っておらず、投げっぱなしにすると
- * `write()` / `remove()` まで届かなくなる**——壊れた行を直す・消すための
- * 唯一の入口（CLI・Web UI は HTTP、クローンは MCP 道具。3入口とも束ねると
- * この4つの口に収束する）が塞がる退行だった（fs は issue #1975 の時点から、
- * pg は issue #2011 のこの PR 自身の直しの時点から）。
- *
- * ここでは fs / pg の両方で、`kind` が空文字列（`practiceKindSchema.min(1)`
- * 違反）の壊れた行を直接書き（版ずれ・手編集を模す）、次を確かめる:
- *
- * - `PUT`/`DELETE /practices/:slug`（HTTP。CLI と Web UI が実際に叩く口——
- *   `apps/cli/src/practice.ts` の `write`/`remove`、
- *   `packages/swr/src/hooks/mutations.ts` の `usePracticeWrite`/`usePracticeRemove`
- *   はどちらもこの2つの HTTP 経路に収束する）は、壊れた行に対しても
- *   例外を投げずに書き直し・削除まで進む。
- * - `practice_write`/`practice_remove`（MCP。クローンの道具）も同様。
- * - 本当に無い slug は、これまでどおり 404 /「無かった」のままである。
- */
 
 function stubCloneHost(): CloneHost {
   return {
@@ -71,16 +45,7 @@ const BAD_SLUG = 'bad-practice';
 const BAD_TITLE = '壊れたやり方（跡に出てはいけない）';
 const BAD_CONTENT = '壊れた本文（跡に出てはいけない）';
 
-/**
- * `kind` を空文字列にした壊れた行を fs の practices.json へ直接書く。
- *
- * **`kind = 'bogus'` ではなく空文字列にする理由**は `practiceKindSchema`
- * （`practiceKindSchema` = `z.string().min(1).max(128)`）が意図して enum に
- * していない自由文字列だから——「決められた一覧に無い値」はそもそも検査を
- * 通る。空文字列は `min(1)` に違反する、実際に検査へ落ちる形
- * （`packages/storage-pg/src/practices-malformed-row-repro.test.ts` と
- * 同じ判断）。
- */
+// `kind = 'bogus'` ではなく空文字列にする: `practiceKindSchema` は enum ではない自由文字列で、「決められた一覧に無い値」は検査を通ってしまうため。
 async function fsStoresWithBadRow(): Promise<Stores> {
   const root = await makeTempDir('alteroid-test-');
   const stores = createFsStores(root);
@@ -90,8 +55,6 @@ async function fsStoresWithBadRow(): Promise<Stores> {
     title: '正常なやり方',
     content: '正常な本文',
   });
-  // `FsPracticeStore` は `paths.jobs` に practices.json を置く
-  // （`packages/storage-fs/src/index.ts` の `createFsStores`）。
   const practicesPath = join(root, 'jobs', 'practices.json');
   const raw = JSON.parse(await readFile(practicesPath, 'utf8')) as { practices: unknown[] };
   raw.practices.push({
@@ -106,7 +69,6 @@ async function fsStoresWithBadRow(): Promise<Stores> {
   return stores;
 }
 
-/** `kind` を空文字列にした壊れた行を pg の `practices` 表へ直接 insert する。 */
 async function pgStoresWithBadRow(): Promise<Stores> {
   const { db } = await createMigratedPglite();
   const stores = createPgStoresFromDb(db);
@@ -127,7 +89,6 @@ async function pgStoresWithBadRow(): Promise<Stores> {
   return stores;
 }
 
-/** `createCloneTools` から `practice_write` / `practice_remove` を直接呼ぶ最小の器。 */
 function toolCaller(stores: Stores) {
   const tools = createCloneTools({
     stores,
@@ -181,7 +142,6 @@ describe.each([
       expect(entries[0]).toMatchObject({
         decision: expect.stringContaining('読めない形で入っていた') as unknown as string,
       });
-      // 壊れていた行の本文・題は日誌に出ない。
       const joined = entries.map((entry) => JSON.stringify(entry)).join('');
       expect(joined).not.toContain(BAD_TITLE);
       expect(joined).not.toContain(BAD_CONTENT);
@@ -192,7 +152,6 @@ describe.each([
       const body = (await del.json().catch(() => undefined)) as unknown;
       expect(del.status, `本文: ${JSON.stringify(body)}`).toBe(200);
 
-      // 読めない行には版が無い（#2959）。付けようのない前提を促す警告は出さない。
       expect(body).toEqual({ ok: true, slug: BAD_SLUG });
 
       const read = await app.request(`/practices/${BAD_SLUG}`);
@@ -212,13 +171,6 @@ describe.each([
       expect(del.status).toBe(404);
     });
 
-    /**
-     * マネージャー指摘（フォローアップの2回目）。`GET /practices/:slug` は
-     * `PUT`/`DELETE` と違い読めない行で投げるままにしたが（`practice_read`
-     * と同じ理由）、素の 500（`onError` 任せ）の代わりに 409 を返すように
-     * 変えた——これは API の応答の形そのものを新しく変えた変更（`openapi.json`
-     * にも載った）なので、専用の歯を持つ。
-     */
     it('GET /practices/:slug は壊れた行があると 409 を返し、本文（title/content）は応答に載らない', async () => {
       const get = await app.request(`/practices/${BAD_SLUG}`);
       const body = (await get.json().catch(() => undefined)) as unknown;

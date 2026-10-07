@@ -3,17 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { inspectBashCommand } from './bash-wait-guard.js';
 import { expectNotSuperlinear } from './time-growth.test-support.js';
 
-/**
- * #2129（待つ形のすり抜け）と #2130（ファイルに書くだけのヒアドキュメントの誤検知）。
- *
- * 直す前（main 7dd2878）の写しに直接当てた実測では、`setsid` の3形と `tail -F` の3形が
- * すり抜け、`cat` / `tee` で書くだけのヒアドキュメントの5形が弾かれていた
- * （2026-09-29T07:1xZ、mgr-712ad619）。
- *
- * `run watch` の字面は、`['gh', 'run', 'watch'].join(' ')` で組み立てる。この
- * ファイルをヒアドキュメントで書こうとすると、本番の版のガードに #2130 の誤検知で弾かれるため
- * （この Issue の実例そのもの）。
- */
+// run watch の字面を直書きしない: このファイルをヒアドキュメントで書くと、本番の版のガードに誤検知で弾かれるため
 const W = ['gh', 'run', 'watch'].join(' ');
 
 describe('待つ形のすり抜けを弾く（#2129）', () => {
@@ -34,8 +24,6 @@ describe('待つ形のすり抜けを弾く（#2129）', () => {
     });
   }
 
-  // 通すのが正しい形（直しても変えない）。`timeout` で包んだ背景の run watch は、
-  // `GH_RUN_WATCH_RE` の doc に「意図して開けてある逃げ道」と書かれている（#2129 の訂正）。
   const passing: ReadonlyArray<[string, string]> = [
     ['setsid -w（子の終わりを待つ）', `setsid -w ${W} 1`],
     ['setsid --wait', `setsid --wait ${W} 1`],
@@ -61,7 +49,6 @@ describe('ファイルに書くだけのヒアドキュメントの本文では�
       "cat <<'EOF' > f\nuntil false; do sleep 1; done\nEOF",
     ],
     ['tee の本文', "tee f <<'EOF'\ntail -F x\nEOF"],
-    // 2026-09-29T06:3xZ に本番で踏んだ形そのもの（確かめ用のスクリプトを書いて node で走らせる）
     ['書いた JS を node で走らせる', `cat > a.mjs <<'EOF'\nconst x = '${W} 1 &';\nEOF\nnode a.mjs`],
   ];
   for (const [label, command] of passing) {
@@ -70,7 +57,6 @@ describe('ファイルに書くだけのヒアドキュメントの本文では�
     });
   }
 
-  // すり抜けを作らないための線（`stripDataHeredocsForWaitForms` の doc）。
   const blocked: ReadonlyArray<[string, string, string]> = [
     [
       'シェルに食わせるヒアドキュメント',
@@ -108,8 +94,6 @@ describe('ファイルに書くだけのヒアドキュメントの本文では�
       `cat > f <<'EOF'\nx\nEOF\n${W} 1 &`,
       'gh-run-watch-background',
     ],
-    // 線の 4（`STRING_EXEC_RE`）。書いた本文を、文字列にして走らせる形。最初の版は
-    // この4形をすり抜けていた（mgr-712ad619 のレビュー、2026-09-29T07:2xZ）。
     [
       '書いたスクリプトを bash -c "$(cat …)" で走らせる',
       'cat > run.sh <<\'EOF\'\nwhile true; do sleep 1; done\nEOF\nbash -c "$(cat run.sh)"',
@@ -147,17 +131,12 @@ describe('ファイルに書くだけのヒアドキュメントの本文では�
 });
 
 describe('#2129 / #2130 の新しい判定が、長い入力で後戻りで爆発しない', () => {
-  // issue #2187 —— 壁時計の絶対値（`TIME_BUDGET_MS = 200`）から伸びの比へ
-  // 替えた。`n * factor`（#3017 前の既定は factor=4、いまは 8）を、直す前にテストしていた
-  // 繰り返し回数（8000 / 4000 / 8000 / 2000+8000）に揃えてある。
   const cases: ReadonlyArray<[string, (n: number) => string, number]> = [
     ['setsid のオプションの繰り返し', (n) => `setsid ${'-f '.repeat(n)}${W} 1 --x`, 2000],
     ['書くだけのヒアドキュメントの繰り返し', (n) => `${"cat > f <<'E'\nx\nE\n".repeat(n)}x`, 1000],
     ['終端の無い cat のヒアドキュメントの繰り返し', (n) => `${'cat > f <<E\n'.repeat(n)}x`, 2000],
     [
       'スクリプトを走らせる形の候補の繰り返し',
-      // 直す前は「ヒアドキュメント2000回 + ./ 8000回」（比 1:4）。ヒアドキュメント側を
-      // n とし、./ 側は常にその4倍にして、同じ比を保ったまま n を伸び縮みさせる。
       (n) => `${"cat > f <<'E'\nx\nE\n".repeat(n)}${'./'.repeat(n * 4)}`,
       500,
     ],

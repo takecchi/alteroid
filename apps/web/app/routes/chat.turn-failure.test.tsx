@@ -1,13 +1,4 @@
 // @vitest-environment jsdom
-/**
- * 失敗したターンの見せ方（送信失敗）。
- *
- * - サーバが付けた `turnFailure` の印で、返信とは別の部品（エラーの見た目）で描く
- *   （文面は見ない）
- * - 「もう一度送る」は、いちばん後ろの失敗で、すぐ前が自分の発言のときだけ出し、
- *   押すと同じ発言を既存の送信経路（`POST /chat`）で送り直す
- * - 入力欄の上の帯は、ストリームの失敗を利用者向けの文で言い、生の文は「詳細」に畳む
- */
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider, useParams } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -195,5 +186,31 @@ describe('入力欄の上の帯', () => {
     const details = screen.getByText('詳細').closest('details');
     expect(details?.open).toBe(false);
     expect(details?.textContent).toContain('result_is_error');
+  });
+
+  it('本文に 401 があるだけの失敗は一般の案内にし、認証トークンへの導線を出さない（#3953）', async () => {
+    stubFetch(
+      routes([], () =>
+        sse([
+          { event: 'open', data: { conversationId: CONVERSATION } },
+          {
+            event: 'error',
+            data: {
+              type: 'error',
+              message:
+                '結果なしで終了: error_during_execution（result_subtype） / 401 件のファイルを処理中に失敗',
+            },
+          },
+        ]),
+      ),
+    );
+    renderChat(`/chat/${CONVERSATION}`);
+    const box = await screen.findByPlaceholderText(/クローンに話しかける/);
+    fireEvent.change(box, { target: { value: 'こんにちは' } });
+    fireEvent.click(screen.getByRole('button', { name: 'メッセージを送信' }));
+
+    expect(await screen.findByText(/^返事を作れませんでした。/)).toBeTruthy();
+    expect(screen.queryByText(/クローンの認証が通らず/)).toBeNull();
+    expect(screen.queryByRole('link', { name: '認証トークンの画面を開く' })).toBeNull();
   });
 });

@@ -1,34 +1,4 @@
 // @vitest-environment jsdom
-/**
- * 設定画面の runner の札。**3つの主題が同居している。**
- *
- * 1. **「いま応えているプロセス」を人間にも見せる**（`instanceId`）。`runnerId` は
- *    宛先の名前で、器を作り直しても同じである。だから名前だけでは「さっき仕事を
- *    渡した相手と同じプロセスか」が分からない。**同じ状態をクローンは
- *    `runner_list` で読み、人間はこの画面で読む**ので、片方だけに出す形を作らない
- *    （PRD「インターフェース」— 片方でしかできないことを作らない）。
- *    そして**名乗らない器についてそう言う**ことがもう一方の歯である。黙ると、人間からは
- *    「入れ替わっていない」と「判定できない」が同じに見える（`packages/core/src/lease.ts`
- *    の `undecidable` を出力から消さない、と同じ判断）。
- *
- * 2. **「渡している鍵」欄が、`credentialsProbe` の3状態を混ぜずに出す。**
- *    `GET /runners` は「繋がっていないので叩いていない」（`unheard`）／「叩いたが
- *    失敗した」（`failed`）／「叩いて0件だった」（`asked` かつ `credentials: []`）を
- *    別の値として返す（`apps/daemon/src/openapi.ts` の `runnerProbeSchema`）。
- *    この画面（`settings.tsx` の `Credentials`）がそれを読み分けずに
- *    `credentials.length === 0` だけで「渡している鍵は無い」と断定すると、
- *    確かめられなかったことが確かめた結果として人間に届く。
- *
- * 3. **「版」欄（コミット sha）が、デーモンと runner の両方について出る。**
- *    `instanceId` が答えるのは「同じプロセスか」、版が答えるのは「そのプロセスが
- *    どのコミットのコードで走っているか」で、別の問いである
- *    （`packages/core/src/tools.test.ts` の「デーモンの版と runner の版を、同じ出力に
- *    並べて出す」と対になっている）。要点は「不明」（器が自分の版を知らない）と
- *    「未確認」（名乗りをまだ聞けていない）を畳まないことで、畳んだ画面でも
- *    「版が出ている」ようには見える。
- *
- * **3つとも「判定できないことを、判定した結果として出さない」という同じ形である。**
- */
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -46,23 +16,13 @@ const BASE: RunnerSummary = {
   runnerId: 'runner-primary',
   workspacePath: '/workspace',
   credentials: [],
-  // 指紋を聞きに行けたか。**省略できない欄なので、既定は「聞けた」に置く** —
-  // `instanceId` 側の試験はここを対象にしていないので、そちらの結果を
-  // 鍵欄の状態が動かさないようにする。
+  // 既定は「聞けた」に置く: instanceId 側の試験の結果を鍵欄の状態が動かさないため
   credentialsProbe: { status: 'asked' },
   profileProbe: { status: 'asked' },
-  // 版の名乗りはこの試験の対象ではない（`instanceId` の見え方だけを見る）。
-  // **省略できない欄なので、聞けていない状態を明示して置く。**
   revision: { status: 'unheard' },
 };
 
-/**
- * デーモン自身の版の既定。
- *
- * **`instanceId` の試験でも省略しない。** `GET /runners` の応答に必ず入る欄なので、
- * ここを省ける形にすると「画面が読んでいない」と「デーモンが返していない」が
- * 試料の側で混ざる。
- */
+// instanceId の試験でも省略しない: 省ける形にすると「画面が読んでいない」と「デーモンが返していない」が試料の側で混ざるため
 const DAEMON_UNKNOWN: DaemonRevision = { status: 'unknown' };
 
 let originalFetch: typeof fetch;
@@ -78,21 +38,15 @@ afterEach(() => {
   globalThis.fetch = originalFetch;
 });
 
-/**
- * `GET /runners` の応答の形。**生成 spec から導出する**（`lib/types.ts` の約束）。
- * 手で書いた形にすると、経路が変わってもこのテストだけが古いまま通る。
- */
+// 応答の形は生成 spec から導出する: 手で書いた形にすると、経路が変わってもこのテストだけが古いまま通るため
 interface RunnersResponse {
   runners: RunnerSummary[];
   daemonRevision: DaemonRevision;
-  cloneProvider?: string;
 }
 
 function renderSettings(response: RunnersResponse) {
   stubFetch((url) => {
     if (url.includes('/runners')) return json(response);
-    // 他の口（認証・接続の札）はこの試験の対象ではない。**握り潰さず**、
-    // 空の応答を返して runner の札だけを見る。
     if (url.includes('/auth/providers')) return json({ providers: [] });
     if (url.includes('/me')) return json({ status: 'open' });
     if (url.includes('/health')) return json({ ok: true });
@@ -116,21 +70,10 @@ describe('runner の札は、いま応えているプロセスを出す', () => 
     });
 
     const line = await screen.findByText(/プロセス: boot-2/);
-    /*
-     * **時刻が整形されて出ていることまで見る。** `toContain('から')` だけだと、
-     * 整形が壊れても（空文字・`Invalid Date`）緑になる。
-     *
-     * 見るのは日付だけである — **時分は器の時間帯で変わる**（手元は JST、CI の
-     * runner は UTC で9時間ずれる。AGENTS.md「時刻の扱い」）。この試料
-     * （03:04Z ＝ JST 12:04）はどちらでも同じ日に落ちるので、日付なら固定できる。
-     */
+    // 日付だけを見る: 時分は器の時間帯で変わり（手元は JST、CI は UTC）、この試料は JST でも UTC でも同じ日に落ちるため
     expect(line.textContent).toMatch(/08\/22.*から/);
   });
 
-  /**
-   * **名乗らない器について黙らない。** ここが空欄になると、人間は「入れ替わって
-   * いない」と読むしかなくなる（実際には判定材料が無いだけである）。
-   */
   it('名乗らない器では「判定できない」と書く', async () => {
     renderSettings({ runners: [BASE], daemonRevision: DAEMON_UNKNOWN });
 
@@ -140,18 +83,8 @@ describe('runner の札は、いま応えているプロセスを出す', () => 
   });
 });
 
-/**
- * #1948: runner の `since`（この状態になった時刻）。
- *
- * **「作成」「更新」とは書かない**（#211 の決定）。名簿（Registry）はインメモリ
- * なので、デーモンを再起動すると作り直される——これを言わないと、`since` を
- * 「ずっと保持されている記録」と誤読しうる。
- */
 describe('runner の since（この状態になった時刻）', () => {
-  // **`runner` ごとの行は「この状態になった: 」（コロン付き）で名乗る。**
-  // ヘッダの注記（下のテスト）は同じ語を「「この状態になった」は」（コロン無し）
-  // という別の文で使っているので、コロン込みで探して両者を混同しない
-  // （そうしないと `findByText` が2件ヒットして曖昧になる）。
+  // 「この状態になった: 」とコロン込みで探す: ヘッダの注記が同じ語をコロン無しで使っており、findByText が2件ヒットして曖昧になるため
   it('since を出す', async () => {
     renderSettings({
       runners: [{ ...BASE, since: '2026-09-01T00:00:00.000Z' }],
@@ -159,7 +92,6 @@ describe('runner の since（この状態になった時刻）', () => {
     });
 
     const line = await screen.findByText(/この状態になった: /);
-    // 時分は器の時間帯で変わるので、日付だけ固定して見る（直上のブロックと同じ理由）。
     expect(line.textContent).toMatch(/09\/01/);
   });
 
@@ -171,12 +103,7 @@ describe('runner の since（この状態になった時刻）', () => {
     expect(screen.queryByText(/更新/)).toBeNull();
   });
 
-  /**
-   * **`getByText('再起動')` は使わない。** この画面には無関係な「再起動」が
-   * 他にも在る（`ShutdownDaemon` の「Railway では…再起動として働く」）ので、
-   * 曖昧になる。この一覧のヘッダに添えた注記の文そのもの（一意な言い回し）で
-   * 探す。
-   */
+  // getByText('再起動') を使わない: この画面には無関係な「再起動」が他にも在り、曖昧になるため
   it('名簿は保存されず、再起動で作り直されることを添える', async () => {
     renderSettings({ runners: [BASE], daemonRevision: DAEMON_UNKNOWN });
 
@@ -196,11 +123,6 @@ const KNOWN_DAEMON: DaemonRevision = {
 };
 
 describe('版の表示 — 人間もクローンと同じ材料を読める', () => {
-  /**
-   * **デーモンと runner の版が同じカードに並ぶ。** 別の場所に出すと人間が手で
-   * 突き合わせることになり、突き合わせ忘れがそのまま見逃しになる。2つの Service は
-   * 別々にデプロイされるので、ずれている窓が実際に在る。
-   */
   it('デーモンの版と runner の版を、同じ画面に並べて出す', async () => {
     renderSettings({
       runners: [
@@ -217,23 +139,14 @@ describe('版の表示 — 人間もクローンと同じ材料を読める', ()
       daemonRevision: KNOWN_DAEMON,
     });
 
-    // フル sha を出す（短縮だけだと `gh api .../compare` へ貼れない）。
     expect(await screen.findByText(new RegExp('a'.repeat(40)))).toBeTruthy();
     expect(screen.getByText(new RegExp('b'.repeat(40)))).toBeTruthy();
   });
 
-  /**
-   * **0台のときこそ版が要る。** 0台は「まだ配線されていない」状態、つまり版を
-   * 確かめたい状態そのものである。ここで落とすと、その状態でだけ答えが消える。
-   */
-  it('クローンの provider を出す。欄が無ければ claude と推測せず「不明」と書く', async () => {
-    renderSettings({ runners: [], daemonRevision: KNOWN_DAEMON, cloneProvider: 'claude' });
-    expect(await screen.findByText(/クローンが使うモデル提供元: claude/)).toBeTruthy();
-    cleanup();
-
+  it('クローンの provider を出さない（層は常に Claude。2026-10-07 の決定）', async () => {
     renderSettings({ runners: [], daemonRevision: KNOWN_DAEMON });
-    const unknown = await screen.findByText(/クローンが使うモデル提供元: 不明/);
-    expect(unknown.textContent).not.toContain('claude');
+    expect(await screen.findByText(new RegExp('b'.repeat(40)))).toBeTruthy();
+    expect(screen.queryByText(/クローンが使うモデル提供元/)).toBeNull();
   });
 
   it('runner が0台でも、デーモンの版は出す', async () => {
@@ -242,11 +155,6 @@ describe('版の表示 — 人間もクローンと同じ材料を読める', ()
     expect(await screen.findByText(new RegExp('b'.repeat(40)))).toBeTruthy();
   });
 
-  /**
-   * **`unknown` と `unheard` を同じ言葉に畳まない。** 前者は器の設定を疑う側、
-   * 後者は登録とネットワークを疑う側で、次の手が違う。畳んだ画面でも「版が出て
-   * いる」ようには見えるので、区別が消えたことは眺めていても分からない。
-   */
   it('版の「不明」と「未確認」を、別の言葉で出す', async () => {
     renderSettings({
       runners: [
@@ -260,10 +168,6 @@ describe('版の表示 — 人間もクローンと同じ材料を読める', ()
     expect(screen.getAllByText(/不明/).length).toBeGreaterThan(0);
   });
 
-  /**
-   * **取れていない版を、それらしい sha で埋めない。** ハイフンやゼロ埋めを出すと、
-   * 人間は「版が取れている」と読む。
-   */
   it('版が取れていないとき、sha らしきものを作らない', async () => {
     renderSettings({ runners: [], daemonRevision: DAEMON_UNKNOWN });
 
@@ -273,14 +177,6 @@ describe('版の表示 — 人間もクローンと同じ材料を読める', ()
 });
 
 describe('runner の鍵欄は、聞けた分しか言わない', () => {
-  /**
-   * 【B-1】聞いていないときは「無い」と言わない。
-   *
-   * `credentialsProbe.status === 'unheard'` は「繋がっていないので聞いていない」で
-   * あって「鍵が配られていない」ではない。`credentials` はどちらの場合も `[]` に
-   * なるので、この行を見ずに `credentials.length === 0` だけで判定する実装は
-   * ここで「渡している鍵は無い」と誤って言う。
-   */
   it('聞いていないときは『無い』と言わない', async () => {
     renderSettings({
       runners: [{ ...BASE, credentials: [], credentialsProbe: { status: 'unheard' } }],
@@ -291,7 +187,6 @@ describe('runner の鍵欄は、聞けた分しか言わない', () => {
     expect(screen.queryByText('渡している鍵は無い')).toBeNull();
   });
 
-  /** 【B-2】失敗したときは理由が出る。 */
   it('失敗したときは理由が出る', async () => {
     renderSettings({
       runners: [
@@ -308,12 +203,6 @@ describe('runner の鍵欄は、聞けた分しか言わない', () => {
     expect(screen.queryByText('渡している鍵は無い')).toBeNull();
   });
 
-  /**
-   * 【B-3】要である。聞いて0件なら「無い」と言う。
-   *
-   * これが無いと、画面が常に「確かめていない」と言う方向へ倒れても緑のまま
-   * になる。`asked` かつ空配列という「聞けたうえで0件だった」場合を単独で見る。
-   */
   it('聞いて0件なら『無い』と言う', async () => {
     renderSettings({
       runners: [{ ...BASE, credentials: [], credentialsProbe: { status: 'asked' } }],
@@ -324,10 +213,6 @@ describe('runner の鍵欄は、聞けた分しか言わない', () => {
   });
 });
 
-/**
- * #1947: プロファイルの指紋（`profile`/`profileProbe`）。鍵欄
- * （`credentialsProbe`）と同じ3状態を、同じ理由で潰さない。
- */
 describe('runner のプロファイル欄は、聞けた分しか言わない', () => {
   it('聞いていないときは「置いていない」と言わない', async () => {
     renderSettings({
@@ -358,10 +243,6 @@ describe('runner のプロファイル欄は、聞けた分しか言わない', 
     expect(await screen.findByText('プロファイルは置いていない')).toBeTruthy();
   });
 
-  /**
-   * **指紋（先頭12桁。既に切り詰め済み）に加えて `updatedAt` も出す**
-   * （CLI の `renderProfileFingerprint` と同じ形に揃える）。
-   */
   it('聞けて profile があれば指紋と更新時刻を出す', async () => {
     renderSettings({
       runners: [
@@ -376,17 +257,10 @@ describe('runner のプロファイル欄は、聞けた分しか言わない', 
 
     const line = await screen.findByText(/abc123456789/);
     expect(line.textContent).toContain('プロファイル: 置いてある');
-    // 時分は器の時間帯で変わるので、日付だけ固定して見る（他のブロックと同じ理由）。
     expect(line.textContent).toMatch(/09\/01/);
   });
 });
 
-/**
- * `pushHealth`（押し込みの直近結果）は `credentialsProbe`/`profileProbe`（指紋・
- * 聞き直し）とは別物。**「一度も試みていない」ときは行そのものを出さない**
- * （AGENTS.md「取れない軸に0の行を作らない」）。3種類は独立の軸なので、1つが
- * 失敗していても他は畳まずに出す。
- */
 describe('runner の押し込み結果（pushHealth）', () => {
   it('pushHealth 自体が無ければ、押し込みの行を出さない', async () => {
     renderSettings({
@@ -420,29 +294,12 @@ describe('runner の押し込み結果（pushHealth）', () => {
     expect(await screen.findByText(/プロファイル: 反映済み/)).toBeTruthy();
     expect(await screen.findByText(/環境変数: 反映に失敗/)).toBeTruthy();
     expect(await screen.findByText(/ECONNRESET: 途中で切れた/)).toBeTruthy();
-    // #325 段4: MCP の登録も独立の軸として出る。
     expect(await screen.findByText(/MCP の登録: 反映済み/)).toBeTruthy();
-    // **3つ目（認証トークン）は一度も試みていない——出ないことを確かめる。**
-    // （`認証トークン` 単独は他の静的文言にも現れるので、押し込みバッジの
-    // 文言そのもの——コロン区切り——で絞る）
+    // 押し込みバッジの文言そのもの（コロン区切り）で絞る: 認証トークン単独は他の静的文言にも現れるため
     expect(screen.queryByText(/認証トークン: 押し込み/)).toBeNull();
   });
 });
 
-/**
- * 折り返しの付け忘れ（本2）。
- *
- * `runnerId` / `label` / `workspacePath` は空白を含まない識別子・パスなので
- * `break-all`、`instanceId` 混じり文・`error` 系は自然文に識別子が混じる形
- * なので `break-words` を、値の性質で選んでいる。`credential.name` は
- * `CREDENTIAL_NAME`（`/^[A-Z][A-Z0-9_]*$/`）に長さの上限が無く空白も持たない
- * ので、slug と同じ形として `break-all` を当てた（`Badge` は `className` を
- * 受け取れる）。
- *
- * **⚠️ これは「はみ出しが直った」ことの試験ではない。** jsdom はレイアウトを
- * 持たないので、固定できるのは「そのクラス名が書かれていること」までである。
- * それでも置くのは、戻す変更（クラスを消す）を黙って通さないため。
- */
 describe('折り返しの付け忘れ（本2）', () => {
   it('runnerId（宛先の1行目）に break-all が付いている', async () => {
     renderSettings({
@@ -506,7 +363,6 @@ describe('折り返しの付け忘れ（本2）', () => {
       daemonRevision: DAEMON_UNKNOWN,
     });
 
-    // ラベル文とエラー文は同じ `<span>` の中に同居しているので、その要素を見る。
     const el = await screen.findByText(/ECONNRESET: 途中で切れた/);
     expect(el.className.split(/\s+/)).toContain('break-words');
   });
@@ -528,40 +384,6 @@ describe('折り返しの付け忘れ（本2）', () => {
   });
 });
 
-/**
- * 横並びの積み替え（本4-A）。
- *
- * `Account` の `dl`（`grid-cols-[6rem_1fr]`）は breakpoint 無しで固定されて
- * いたので、375px 幅でもラベル列（6rem）が値の取り分を持っていっていた。
- * `sm:` 未満は1列、`sm:` 以上で固定幅ラベル列に切り替える。積んだときに
- * `dt`/`dd` の対応が読めるよう、`dt` に `mt-3 first:mt-0 sm:mt-0` を足して
- * 組の境目を間隔の差で表す。
- *
- * この `dl` は `auth.status !== 'open'` なら常に描かれる（この harness の
- * `/health` は `auth` を持たない応答なので `useAuth` は `checking` のまま
- * 落ち着き、「open」にはならない — 上のテスト群と同じ前提）。
- *
- * **⚠️ これは「積み替わった」ことの試験ではない。** jsdom はレイアウトを
- * 持たない（`offsetWidth` / `scrollWidth` / `getBoundingClientRect()` は
- * すべて 0）ので、`sm:grid-cols-[6rem_1fr]` が実際に効いていることは
- * ここでは1つも観測できない。固定できるのは「そのクラス名が書かれていること」
- * までである。本2・本3 のテストより歯が弱い — breakpoint は CSS の話なので、
- * jsdom では「効いている」ことそのものが原理的に見えない。
- *
- * **追記: この一覧は `KeyValueList`（`packages/ui`）へ移した。** 以前は `dl` に
- * 固定幅の列指定と、`dt` に「上の余白・先頭だけ余白なし・`sm:` で余白なし」の
- * class を手書きしていた。`KeyValueList` は同じ意図を別の形で書く — ラベル列の幅は
- * CSS 変数 `--kv-label`（この画面は 6rem）で渡し、`sm:` の grid がその変数を使い、
- * 組の境目は先頭以外の `dt` に上の余白と `sm:mt-0` を付けて作る（先頭かどうかは添字で
- * 決める。各項目が `contents` の包みに入り、`dt` が常に包みの最初の子になるため）。
- * class の文字が変わったので、下の assert は文字ではなく意図を測る形へ書き換えた。
- * 意図は3つ: (a) 狭い画面は1列（基底の grid が1列で、`sm:` で2列に切り替わる）、
- * (b) 広い画面はラベル列が固定幅（`--kv-label` に 6rem が入り、`sm:` の grid がそれを使う）、
- * (c) 積んだときの組の境目（先頭以外の `dt` に上の余白と `sm:mt-0`、先頭には無い）。
- * jsdom はレイアウトを持たないので、測れるのは class と style の有無までである
- * （上の警告のとおり。`KeyValueList` 自身の class の試験は
- * `packages/ui/src/components/features/key-value-list.test.tsx`）。
- */
 describe('横並びの積み替え（本4-A）: アカウントの dl', () => {
   it('狭い画面では1列、sm: 以上で固定幅ラベル列になる', async () => {
     renderSettings({ runners: [], daemonRevision: DAEMON_UNKNOWN });
@@ -570,21 +392,16 @@ describe('横並びの積み替え（本4-A）: アカウントの dl', () => {
     const dl = anchor.closest('dl');
     expect(dl).not.toBeNull();
     const dlTokens = dl!.className.split(/\s+/);
-    // (a) 基底は1列。
     expect(dlTokens).toContain('grid-cols-1');
-    // (b) sm: 以上はラベル列が変数の幅（固定幅）で、値の列が残りを取る。
     expect(dl!.style.getPropertyValue('--kv-label')).toBe('6rem');
     const smCols = dlTokens.filter((token) => token.startsWith('sm:grid-cols-'));
     expect(smCols).toHaveLength(1);
     expect(smCols[0]).toContain('var(--kv-label)');
-    // sm: 無しの列指定は 1 列のものだけ（残っていれば狭い画面でも2列のままになる）。
     expect(dlTokens.filter((token) => /^grid-cols-/.test(token))).toEqual(['grid-cols-1']);
   });
 
   it('先頭以外の dt に上の余白と sm:mt-0 が付いている（積んだときの組の境目）', async () => {
-    // 組の境目は2組以上ないと測れない。`renderSettings` の応答にはアカウントの
-    // メールが無く `dt` が1つだけになるので、メールまで描く `renderAuthedAccount`
-    // （下の定義。呼び出しは実行時なので前方参照で足りる）を使う。
+    // renderAuthedAccount を使う: renderSettings の応答にはアカウントのメールが無く dt が1つだけになり、組の境目は2組以上ないと測れないため
     renderAuthedAccount(() => undefined);
 
     const anchor = await screen.findByText('アカウント');
@@ -592,11 +409,9 @@ describe('横並びの積み替え（本4-A）: アカウントの dl', () => {
     expect(dl).not.toBeNull();
     const dts = Array.from(dl!.querySelectorAll('dt'));
     expect(dts.length).toBeGreaterThan(1);
-    // (c) 先頭には上の余白も sm:mt-0 も無い。
     const first = dts[0]!.className.split(/\s+/);
     expect(first).not.toContain('mt-3');
     expect(first).not.toContain('sm:mt-0');
-    // 先頭以外は、狭い画面で上の余白、sm: 以上で打ち消し。
     for (const dt of dts.slice(1)) {
       const tokens = dt.className.split(/\s+/);
       expect(tokens).toContain('mt-3');
@@ -620,7 +435,6 @@ const CREDENTIAL: Credential = {
   createdAt: '2026-08-13T00:00:00.000Z',
 };
 
-/** ログインしてある `Account` を描く（`renderSettings` は認証を対象外にしているため別立て）。 */
 function renderAuthedAccount(
   logoutRoute: (url: string) => Response | Promise<Response> | undefined,
 ) {
@@ -645,10 +459,6 @@ function renderAuthedAccount(
   );
 }
 
-/**
- * `Account` のログアウトボタン（issue #1757）——`auth.logout()` の実体は
- * `use-auth.test.tsx` が見る。ここは画面（ボタン・エラー表示）を見る。
- */
 describe('Account のログアウト（issue #1757）', () => {
   it('成功 → サーバ側のトークンを失効させ、鍵を捨てる', async () => {
     renderAuthedAccount((url) => (url.endsWith('/auth/logout') ? json({ ok: true }) : undefined));
@@ -697,22 +507,6 @@ describe('Account のログアウト（issue #1757）', () => {
   });
 });
 
-/**
- * デーモンを止める（`ShutdownDaemon`。issue #1124 の (A)）。
- *
- * **CLI（`alteroid daemon stop`）にしか無かった口を Web UI からも押せるように
- * したもの。** 確認は `ResetWorkspace` と同じ「文字を打って確認」形だが、
- * 打つ語は別にする（`stop`）——`reset`（ワークスペース全消去の確認語）と
- * 混ざると、押し間違いの結果が逆方向に重くなる。
- *
- * ここで固定したいのは4点:
- * 1. 打つ文字が一致しないとボタンが押せない（`disabled`）。押そうとしても
- *    `/shutdown` を呼ばない
- * 2. 一致すると押せて、押すと `POST /shutdown` を1回呼ぶ
- * 3.（陽性対照）`ResetWorkspace` の確認語（`reset`）を打っても、止めるボタンは
- *    押せない——2つの確認が混ざらない
- * 4. 文言に「記憶も各種の記録も消さない」と「Railway では再起動として働く」が載る
- */
 describe('デーモンを止める（ShutdownDaemon）', () => {
   function renderWithShutdownStub(options: { shutdownStatus?: number } = {}) {
     const { shutdownStatus = 200 } = options;
@@ -792,14 +586,6 @@ describe('デーモンを止める（ShutdownDaemon）', () => {
   });
 });
 
-/**
- * ワークスペースのリセット（`ResetWorkspace`。issue #2196）。
- *
- * **消す前の確認の文が、消した後の報告の見出し（`RESET_SUMMARY_LABELS`）と
- * 食い違わないことを固定する。** 実装は `practices`（仕事のやり方）を消して
- * いるのに、確認の文には元々載っていなかった——やり方を育てていた人間が
- * 「これは残る」と思ったまま `reset` と打ちうる、という欠落だった。
- */
 describe('ワークスペースのリセット（ResetWorkspace） — issue #2196', () => {
   function renderWithReset() {
     stubFetch((url) => {
@@ -822,8 +608,7 @@ describe('ワークスペースのリセット（ResetWorkspace） — issue #21
   it('カード本体の文に「仕事のやり方」が出る（ダイアログを開く前）', async () => {
     renderWithReset();
 
-    // ダイアログ（未オープン）とカード本体、両方の <p> がこの文言を持つので
-    // 単数の `findByText` だと「複数一致」になる。「1件以上出るか」を見る。
+    // 「1件以上出るか」を見る: ダイアログ（未オープン）とカード本体の両方の <p> がこの文言を持ち、単数の findByText だと複数一致になるため
     const matches = await screen.findAllByText(/仕事のやり方/);
     expect(matches.length).toBeGreaterThan(0);
   });
@@ -849,11 +634,6 @@ describe('ワークスペースのリセット（ResetWorkspace） — issue #21
   });
 });
 
-/**
- * **器を空ける（drain）を画面から起こせる。** 経路は `POST /runners/vacate` の1本だけで、
- * CLI の `alteroid runners vacate` と同じ口である（片方でしかできないことを作らない）。
- * 走っているマネージャーを他の器へ動かす操作なので、確認の一手を挟むまで叩かない。
- */
 describe('runner を空ける（vacate）', () => {
   function renderWithVacate(runners: RunnerSummary[], vacateBody: object = { ok: true }) {
     const stub = stubFetch((url) => {
@@ -881,7 +661,6 @@ describe('runner を空ける（vacate）', () => {
     fireEvent.click(await screen.findByText('この実行環境から仕事を移す'));
     expect(stub.calls.some((url) => url.includes('/runners/vacate'))).toBe(false);
 
-    // やめれば戻り、叩かない。
     fireEvent.click(screen.getByText('移すのをやめる'));
     expect(stub.calls.some((url) => url.includes('/runners/vacate'))).toBe(false);
 
@@ -945,13 +724,6 @@ describe('runner を空ける（vacate）', () => {
   });
 });
 
-/**
- * **知らない `state` でも `/settings` 画面ごと落ちない**（issue #2010。#1623 で
- * `managers.tsx` の `ManagerStatusBadge` に入れた形の横展開）。Web とデーモンは
- * 別々にデプロイされるので、デーモンが先に新しい状態値を返す時間が在る。型は
- * `as RunnerSummary['state']` で迂回する——実機でも型はコンパイル時の飾りで、
- * JSON はそのまま届く。
- */
 describe('知らない runner の state に倒れ先がある（#2010）', () => {
   it('知らない state が混ざっても、他の runner の行は見え、その行は生の値を出す', async () => {
     renderSettings({
@@ -972,7 +744,6 @@ describe('知らない runner の state に倒れ先がある（#2010）', () =>
     expect(screen.getByText('知らない状態（draining）')).toBeTruthy();
   });
 
-  /** 継承したキー（`constructor`）は `RUNNER_STATES[...]` が `undefined` にならないので別に測る。 */
   it('Object の継承したキーと同じ名前の state でも落ちない', async () => {
     renderSettings({
       runners: [
@@ -1000,11 +771,6 @@ describe('知らない runner の state に倒れ先がある（#2010）', () =>
   });
 });
 
-/**
- * 「リセット」「サーバを止める」の窓は、実行中に Esc（`<dialog>` の `cancel`）で閉じない（#3349）。
- * 「やめる」ボタンが実行中は押せないのに Esc だけ素通しで、結果を見ないまま窓が閉じていた。
- * 実行中でないときは今までどおり Esc で閉じられる。
- */
 describe('実行中は窓の Esc（cancel）を止める — #3349', () => {
   function renderPending() {
     stubFetch((url) => {
@@ -1051,17 +817,14 @@ describe('実行中は窓の Esc（cancel）を止める — #3349', () => {
       const input = await screen.findByPlaceholderText(c.word);
       const dialog = input.closest('dialog')!;
 
-      // 実行前は Esc で閉じられる。
       expect(fireEvent(dialog, new Event('cancel', { cancelable: true }))).toBe(true);
 
       fireEvent.change(input, { target: { value: c.word } });
       fireEvent.click(screen.getByRole('button', { name: c.run }));
       await waitFor(() => expect(wasCalled()).toBe(true));
 
-      // 実行中は Esc を止める。
       expect(fireEvent(dialog, new Event('cancel', { cancelable: true }))).toBe(false);
 
-      // 失敗で終わらせる（成功の報告の形に依らず、「終わったら cancel は通る」だけを見る）。
       release(json({ error: '失敗' }, 500));
       await waitFor(() =>
         expect(fireEvent(dialog, new Event('cancel', { cancelable: true }))).toBe(true),

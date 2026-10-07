@@ -1,13 +1,4 @@
-/**
- * 「委譲」タブの描画（見た目だけ。キー操作は `app.tsx` の 1 つの `useInput` が持つ）と、
- * 一覧の 1 行・詳細の頭の文言を作る純粋関数。Ink の地雷への対処は `components.tsx` の冒頭と同じ
- * （空の `<Text>` は高さ 0・溢れた子は縮む・1 行は 1 つの `<Text>`・セルは `truncate-end`）。
- *
- * **一覧はタイトルと要旨だけ**（`.claude/skills/listing-and-detail`）: 1 件 1 行（識別子・状態・
- * 経過・依頼の抜粋）。cwd・報告・失敗などの中身は詳細を明示的に開いて読む。
- */
 import { describeManagerState } from '@alteroid/core';
-import { describeManagerProvider } from '@alteroid/core/manager-provider-format';
 import { Box, Text } from 'ink';
 import type { FC } from 'react';
 
@@ -18,7 +9,6 @@ import { redactBody, sanitizeForTerminal } from '../redact.js';
 import type { DetailState, ListState } from './managers-controller.js';
 import { glyph, theme } from './theme.js';
 
-/** 詳細の頭の行数（状態・場所と時刻・依頼・注記）。ログの高さからこの分を引く。 */
 export const DETAIL_HEAD_ROWS = 4;
 
 const STATUS_LABEL: Record<ManagerStatus, string> = {
@@ -31,38 +21,30 @@ const STATUS_LABEL: Record<ManagerStatus, string> = {
   stopped: '停止済み',
 };
 
-/** 絞りの表示名（Web のチップと同じ言葉）。 */
 export function filterLabel(filter: ManagerStatus | null): string {
   return filter === null ? 'すべて' : (STATUS_LABEL[filter] ?? filter);
 }
 
-/** 一覧に出す識別子（先頭の `mgr-` + 8 文字。全文は詳細の頭に出す）。 */
 export function shortId(id: string): string {
   return id.length > 12 ? `${id.slice(0, 12)}…` : id;
 }
 
-/**
- * 状態の字面。**クローンの `manager_list` と CLI の `/managers` と同じ生成元**
- * （`describeManagerState`）から取る — 面によって字面が割れないように。
- */
 export function stateText(row: ManagerRow): string {
   return describeManagerState(row.status, row.live, row.awaitingBackground);
 }
 
-/** 一覧の 1 行（選択の印は付けない）。 */
 export function managerListLine(row: ManagerRow, now: number): string {
   const wait = row.waiting.length > 0 ? ` ⏸確認待ち${String(row.waiting.length)}` : '';
-  // 状態の字面・id・経過など、redactBody を通らない欄も含めて、組み立てたあとで掃除する。
+  // 組み立てたあとで掃除する: 状態の字面・id・経過など、redactBody を通らない欄も含むため
   return sanitizeForTerminal(
     `[${stateText(row)}] ${shortId(row.managerId)} ${formatElapsedAgo(row.updatedAt, now)}` +
       `${wait}  ${oneLine(redactBody(row.request), 120)}`,
   );
 }
 
-/** 詳細の注記（観測した分だけ言う。断定しない）。先頭ほど優先。 */
 export function managerNotes(row: ManagerRow): string[] {
   const notes: string[] = [];
-  // 確かめる前に起こし直すと取り返しがつかないので、1 行に連結して末尾が切れる狭い端末でも見えるよう先頭に置く（#2590）。
+  // 先頭に置く: 確かめる前に起こし直すと取り返しがつかず、末尾が切れる狭い端末でも見えるようにするため
   if (row.runnerVanished === true) {
     notes.push('宛先の器が名簿から消えている（状態は走行中のまま。確かめる前に起こし直さない）');
   }
@@ -96,7 +78,6 @@ export function managerNotes(row: ManagerRow): string[] {
   return notes.map(sanitizeForTerminal);
 }
 
-/** 詳細の最下行（ログ直下の 1 行）に出す文言。優先: 確認 > 操作結果（あれば失敗・窓の外を並べる） > 失敗 > 窓の外 > 状態。 */
 export function detailStatusText(
   detail: DetailState,
   hiddenBelow: number,
@@ -107,7 +88,7 @@ export function detailStatusText(
       tone: 'warn',
     };
   }
-  // 操作結果（notice）は消える経路が無いので、後ろの状態（取り直しの失敗・窓の外の行数）を隠さず並べる（#3368）。
+  // 後ろの状態を隠さず並べる: 操作結果（notice）は消える経路が無いため
   const parts: string[] = [];
   if (detail.notice !== null) parts.push(detail.notice);
   if (detail.error !== null) parts.push(`⚠ 取り直せなかった: ${detail.error}`);
@@ -131,7 +112,6 @@ export function detailStatusText(
   return { text: ' ', tone: 'dim' };
 }
 
-/** 一覧の見出し。初回の読み込みが失敗したときは件数を言わない（空ではない）。 */
 export function managerListTitle(list: ListState): string {
   if (list.status === 'loading' || list.status === 'idle') return '委譲を読んでいる…';
   if (list.status === 'error' && list.items.length === 0) {
@@ -152,7 +132,6 @@ function listEmptyText(list: ListState): string {
     : 'この状態のマネージャーは無い（f で絞りを変えれば他の状態も出る）。';
 }
 
-/** 一覧。窓は選択行が見える範囲だけを描く。 */
 export const ManagerList: FC<{ list: ListState; height: number }> = ({ list, height }) => {
   const { items, selected } = list;
   const unreadableLine =
@@ -212,7 +191,6 @@ export const ManagerList: FC<{ list: ListState; height: number }> = ({ list, hei
   );
 };
 
-/** 詳細の頭（常に `DETAIL_HEAD_ROWS` 行）。 */
 export const ManagerDetailHead: FC<{ detail: DetailState }> = ({ detail }) => {
   const m = detail.manager;
   if (m === null) {
@@ -236,7 +214,7 @@ export const ManagerDetailHead: FC<{ detail: DetailState }> = ({ detail }) => {
       </Text>
       <Text wrap="truncate-end" dimColor>
         {sanitizeForTerminal(
-          `${m.cwd}  provider: ${describeManagerProvider(m.managerProvider)}  作成 ${m.startedAt}  更新 ${formatElapsedAgo(m.updatedAt, detail.loadedAt)}`,
+          `${m.cwd}  作成 ${m.startedAt}  更新 ${formatElapsedAgo(m.updatedAt, detail.loadedAt)}`,
         )}
       </Text>
       <Text wrap="truncate-end">{`依頼: ${oneLine(redactBody(m.request), 300)}`}</Text>
@@ -247,7 +225,6 @@ export const ManagerDetailHead: FC<{ detail: DetailState }> = ({ detail }) => {
   );
 };
 
-/** ログ直下の 1 行（常に 1 行）。 */
 export const DetailStatusRow: FC<{ text: string; tone: 'dim' | 'warn' }> = ({ text, tone }) => (
   <Box flexShrink={0}>
     <Text wrap="truncate-end" {...(tone === 'warn' ? { color: theme.warn } : { dimColor: true })}>

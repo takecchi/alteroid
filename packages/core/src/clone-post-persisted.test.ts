@@ -10,13 +10,6 @@ import type { InboxEvent } from './schema.js';
 import type { Stores } from './store.js';
 import { captureStderr, createMemoryStores } from './testing.js';
 
-/**
- * Issue #3679。`postPersisted` は、受信箱（`stores.inbox`）へ書けたときだけ `'persisted'` を返す。
- * 書けなかったときは `'unavailable'` を返し、**受信箱のメモリにも積まない**（`post` はメモリに積んで
- * 配達する。それを 503 と組み合わせると、断られた相手の送り直しと二重に届く）。
- * 拾い直しの待ち（`REMEMBER_RETRY_MS`）は偽の `setTimeout` で進め、実時間は待たない。
- */
-
 afterEach(() => vi.useRealTimers());
 
 function fakeSdk(): { fn: typeof sdkQuery; inputs: string[] } {
@@ -86,7 +79,6 @@ interface Flaky {
   control: { failing: boolean; writtenButReportedFailed: boolean; removed: string[] };
 }
 
-/** 受信箱の `put` を切り替えで失敗させる器。`writtenButReportedFailed` なら、書いてから失敗を返す。 */
 function flakyInbox(): Flaky {
   const base = createMemoryStores();
   const control = { failing: false, writtenButReportedFailed: false, removed: [] as string[] };
@@ -108,7 +100,6 @@ function flakyInbox(): Flaky {
   return { stores, control };
 }
 
-/** 偽の `setTimeout` を進めて、拾い直しの待ちを実時間なしで終わらせる。 */
 async function settle<T>(work: Promise<T>): Promise<T> {
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
   await vi.advanceTimersByTimeAsync(10_000);
@@ -143,7 +134,6 @@ describe('Clone#postPersisted（Issue #3679）', () => {
     expect(trace[0]).toContain('器が閉じている');
     expect(lines.join('')).not.toContain('ghp_');
 
-    // 器が直り、相手が送り直す（デーモンは新しい id を採番する）。届くのは送り直した1回だけ。
     control.failing = false;
     expect(await clone.postPersisted(external('evt-retry', 'retry-1'))).toBe('persisted');
     await waitFor(() => inputs.length > 0, '送り直しが処理に入る');

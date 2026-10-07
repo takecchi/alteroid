@@ -19,6 +19,8 @@ import {
   verifyPersonaNulContract,
   verifyJobNulContract,
   verifyScheduleNulContract,
+  verifyScheduleIfMatchContract,
+  verifyScheduleUnreadableContract,
   verifySessionRegistryNulContract,
   verifyProfileStoreContract,
   verifyPermissionGrantStoreContract,
@@ -1932,6 +1934,31 @@ describe('FsPermissionGrantStore（issue #863）', () => {
 describe('FsScheduleStore', () => {
   it('NUL の契約（issue #3011。3実装で同じことを測る）', async () => {
     await verifyScheduleNulContract(stores.schedules);
+  });
+
+  it('ifMatch の契約（Issue #3821。3実装で同じことを測る）', async () => {
+    await verifyScheduleIfMatchContract(stores.schedules);
+  });
+
+  it('読めない行の契約（Issue #3859。fs と pg で同じことを測る。インメモリは読めない行を持てない）', async () => {
+    const path = join(root, 'jobs', 'schedules.json');
+    await captureStderr(async () => {
+      await verifyScheduleUnreadableContract(stores.schedules, async (kind) => {
+        // `put` は形を断るので、版ずれ・手編集を模して `schedules.json` へ直に足す。
+        const file = JSON.parse(await readFile(path, 'utf8')) as {
+          schedules: { kind?: string }[];
+        };
+        file.schedules = file.schedules.filter((row) => row.kind !== kind);
+        file.schedules.push({
+          kind,
+          spec: { type: 'not-a-real-spec-type-from-a-newer-deploy' },
+          request: '壊れた行',
+          createdAt: '2026-01-01T00:00:00.000Z',
+          updatedAt: '2026-01-01T00:00:00.000Z',
+        } as never);
+        await writeFile(path, JSON.stringify(file), 'utf8');
+      });
+    });
   });
 
   const plan = {

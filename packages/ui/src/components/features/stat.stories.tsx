@@ -4,7 +4,6 @@ import { Card, CardHeader } from '../common';
 
 import { Stat } from './stat';
 
-/** 1つの量。数字は本文の書体（IBM Plex Sans JP）の等幅数字（tabular-nums）で出す。0 と O を見分けられる。 */
 const meta = {
   title: 'Features/Stat',
   component: Stat,
@@ -29,7 +28,6 @@ export const Warn: Story = {
   },
 };
 
-/** 取れない量に 0 を出さない。値を作らず、取れない理由を書く。 */
 export const Unavailable: Story = {
   args: { label: '作業者の費用', value: '—', hint: '台帳に site が無いので取れない' },
 };

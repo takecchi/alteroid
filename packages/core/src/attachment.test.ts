@@ -59,6 +59,59 @@ describe('添付: マジックバイト', () => {
   });
 });
 
+function messageOf(run: () => unknown): string | undefined {
+  try {
+    run();
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
+  return undefined;
+}
+
+/** IHDR だけの小さな png。寸法の検査には大きなバッファは要らない。 */
+const be32 = (n: number) => [(n >>> 24) & 0xff, (n >>> 16) & 0xff, (n >>> 8) & 0xff, n & 0xff];
+const pngOf = (width: number, height: number) =>
+  bytes(PNG, be32(13), [0x49, 0x48, 0x44, 0x52], be32(width), be32(height), [8, 6, 0, 0, 0]);
+
+describe('添付: 画像の寸法（#3697）', () => {
+  const put = (mediaType: string, b: Uint8Array) =>
+    validateAttachmentInput({ name: 'x', mediaType, bytes: b });
+
+  it('幅・高さとも 8000px ちょうどは通る', () => {
+    expect(codeOf(() => put('image/png', pngOf(8000, 8000)))).toBeUndefined();
+  });
+
+  it('幅だけ・高さだけ 8001px でも断り、何が超えたか実際の値で言う', () => {
+    expect(codeOf(() => put('image/png', pngOf(8001, 10)))).toBe('image_dimension_too_large');
+    expect(codeOf(() => put('image/png', pngOf(10, 8001)))).toBe('image_dimension_too_large');
+    expect(messageOf(() => put('image/png', pngOf(8001, 10)))).toBe(
+      '画像の寸法は幅・高さとも 8000 px まで（8001 × 10 px ある）',
+    );
+    expect(messageOf(() => put('image/png', pngOf(10, 9000)))).toBe(
+      '画像の寸法は幅・高さとも 8000 px まで（10 × 9000 px ある）',
+    );
+  });
+
+  it('寸法が読めない画像（ヘッダが切れている）は今までどおり通る', () => {
+    expect(codeOf(() => put('image/png', pngOf(8001, 10).subarray(0, 20)))).toBeUndefined();
+    expect(codeOf(() => put('image/png', bytes(PNG)))).toBeUndefined();
+  });
+
+  it('宣言が画像以外なら、中身が 8001px の png でも通る（ターンでファイルとして渡る）', () => {
+    expect(codeOf(() => put('application/octet-stream', pngOf(8001, 8001)))).toBeUndefined();
+  });
+
+  it('大きさの上限が先（両方に当たる画像は too_large）', () => {
+    const limits = { ...DEFAULT_ATTACHMENT_LIMITS, maxImageBytes: 30 };
+    const big = Uint8Array.from([...pngOf(8001, 1), ...new Array<number>(20).fill(0)]);
+    expect(
+      codeOf(() =>
+        validateAttachmentInput({ name: 'x', mediaType: 'image/png', bytes: big }, limits),
+      ),
+    ).toBe('too_large');
+  });
+});
+
 describe('添付: 上限', () => {
   it('画像は 5 MiB、その他は 25 MiB まで', () => {
     const png = (n: number) => {
@@ -72,6 +125,17 @@ describe('添付: 上限', () => {
     expect(run('image/png', png(5 * 1024 * 1024 + 1))).toBe('too_large');
     expect(run('video/mp4', new Uint8Array(25 * 1024 * 1024))).toBeUndefined();
     expect(run('video/mp4', new Uint8Array(25 * 1024 * 1024 + 1))).toBe('too_large');
+  });
+
+  it('1つの大きさを断る文は、上限を人が読める単位で言い、実際の大きさをバイトで言う', () => {
+    const over = Uint8Array.from([...PNG, ...new Array<number>(5 * 1024 * 1024).fill(0)]);
+    expect(
+      messageOf(() => validateAttachmentInput({ name: 'x', mediaType: 'image/png', bytes: over })),
+    ).toBe(`画像は 1 つ 5 MiB まで（${over.length} バイトある）`);
+    const file = new Uint8Array(25 * 1024 * 1024 + 1);
+    expect(
+      messageOf(() => validateAttachmentInput({ name: 'x', mediaType: 'video/mp4', bytes: file })),
+    ).toBe(`ファイルは 1 つ 25 MiB まで（${file.length} バイトある）`);
   });
 
   it('1発言は 10 個・合計 50 MiB まで', () => {
@@ -158,6 +222,65 @@ describe('添付: ファイル名', () => {
     expect(normalizeAttachmentName('a\u0080b\u009Fc')).toBe('a_b_c');
     // 通常の非 ASCII 文字は残す。
     expect(normalizeAttachmentName('日本語\u00e9.pdf')).toBe('日本語\u00e9.pdf');
+  });
+
+  it('文脈上正当な ZWJ・ZWNJ は残す（IDNA ContextJ と絵文字の連結。#3882）', () => {
+    const kept = [
+      // 絵文字の ZWJ 連結（家族・肌色の修飾子つき・異体字セレクタつき）
+      '\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}.png',
+      '\u{1F469}\u{1F3FD}\u{200D}\u{1F4BB}.png',
+      '\u{2764}\u{FE0F}\u{200D}\u{1F525}.png',
+      // ペルシア語: アラビア文字（D）と D のあいだの ZWNJ（RFC 5892 A.1 の結合型の規則）
+      '\u{0645}\u{06CC}\u{200C}\u{062E}\u{0648}\u{0627}\u{0647}\u{0645}.pdf',
+      // 結合型 T（Mn）を挟んでも残す
+      '\u{0628}\u{064E}\u{200C}\u{0628}.pdf',
+      // デーヴァナーガリー: Virama の後の ZWJ・ZWNJ（RFC 5892 A.1・A.2）
+      '\u{0915}\u{094D}\u{200D}\u{0937}.txt',
+      '\u{0915}\u{094D}\u{200C}\u{0937}.txt',
+    ];
+    for (const name of kept) {
+      expect(normalizeAttachmentName(name)).toBe(name);
+    }
+  });
+
+  it('文脈の無い ZWJ・ZWNJ は今までどおり _ にする（見えない文字による偽装を防ぐ。#3882）', () => {
+    // 同じに見えて違う名前を作れる位置
+    expect(normalizeAttachmentName('report\u{200D}.pdf')).toBe('report_.pdf');
+    expect(normalizeAttachmentName('a\u{200C}b')).toBe('a_b');
+    expect(normalizeAttachmentName('a\u{200D}b')).toBe('a_b');
+    // 先頭・末尾・連続
+    expect(normalizeAttachmentName('\u{200D}\u{1F468}.png')).toBe('_\u{1F468}.png');
+    expect(normalizeAttachmentName('\u{1F468}\u{200D}')).toBe('\u{1F468}_');
+    expect(normalizeAttachmentName('\u{1F468}\u{200D}\u{200D}\u{1F469}')).toBe(
+      '\u{1F468}__\u{1F469}',
+    );
+    // 絵文字と文字のあいだの ZWJ、アラビア文字の R（右にだけつながる）の後の ZWNJ
+    expect(normalizeAttachmentName('\u{1F468}\u{200D}a')).toBe('\u{1F468}_a');
+    expect(normalizeAttachmentName('\u{062F}\u{200C}\u{0628}')).toBe('\u{062F}_\u{0628}');
+    // ZWNJ は Virama が無いとラテン文字のあいだでは残さない。ZWJ はアラビア文字のあいだでも残さない
+    expect(normalizeAttachmentName('\u{0628}\u{200D}\u{0628}')).toBe('\u{0628}_\u{0628}');
+    // ほかの書式制御文字は、文脈があっても _ にする
+    expect(normalizeAttachmentName('\u{0915}\u{094D}\u{200B}\u{0937}')).toBe(
+      '\u{0915}\u{094D}_\u{0937}',
+    );
+    expect(normalizeAttachmentName('\u{1F468}\u{202E}\u{1F469}')).toBe('\u{1F468}_\u{1F469}');
+  });
+
+  it('ZWJ・ZWNJ を残しても冪等である。255 単位の切り口に残った ZWJ も、もう一度通して変わらない（#3882・#3524）', () => {
+    const names = [
+      '\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}.png',
+      '\u{0645}\u{06CC}\u{200C}\u{062E}.pdf',
+      'report\u{200D}.pdf',
+      `${'a'.repeat(253)}\u{1F468}\u{200D}\u{1F469}`,
+    ];
+    for (const name of names) {
+      const once = normalizeAttachmentName(name);
+      expect(normalizeAttachmentName(once)).toBe(once);
+    }
+    // 切り口の直前に ZWJ が来る（後ろの絵文字が切り落とされる）ときは _ にする
+    expect(normalizeAttachmentName(`${'a'.repeat(252)}\u{1F468}\u{200D}\u{1F469}`)).toBe(
+      `${'a'.repeat(252)}\u{1F468}_`,
+    );
   });
 
   it('normalizeAttachmentName は冪等である: 255 単位で切った結果が空白で終わっても、もう一度通すと名前が変わらない（#3524）', () => {

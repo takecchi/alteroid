@@ -1,11 +1,3 @@
-/**
- * `--help` の末尾に足す「例:」（#2857）。引数の形が分かりにくいコマンドだけに足す。
- *
- * **コマンドの木から引ける形にしてある**（`index.ts` が `addHelpText('after', ...)` へ渡す）。
- * 例の中のコマンド・オプション名が登録と食い違っていないかは `help-examples.test.ts` が
- * 実際に解析して確かめる。
- */
-
 function examples(...lines: string[]): string {
   return `\n例:\n${lines.map((line) => `  ${line}`).join('\n')}\n`;
 }

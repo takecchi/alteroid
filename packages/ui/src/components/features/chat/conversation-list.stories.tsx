@@ -4,7 +4,6 @@ import { useState } from 'react';
 import { ConversationList } from './conversation-list';
 import { SAMPLE_CONVERSATIONS } from './samples';
 
-/** 会話の一覧。切ったことは但し書き（`notes`）で言う。 */
 const meta = {
   title: 'Features/Chat/ConversationList',
   component: ConversationList,
@@ -50,7 +49,6 @@ function Demo({
 const args = { items: [], activeId: undefined, renderLink: () => null };
 
 export const Default: Story = { args, render: () => <Demo /> };
-/** 未読のある会話。通知の記号と件数、行の文字を少し強くする（色だけに頼らない）。 */
 export const Unread: Story = {
   args,
   render: () => (
@@ -61,7 +59,6 @@ export const Unread: Story = {
     />
   ),
 };
-/** 窓が先頭まで届いていない一覧。件数は下限なので「発言 N 件以上」と出す。 */
 export const WindowNotReachedStart: Story = {
   args,
   render: () => (
@@ -69,7 +66,6 @@ export const WindowNotReachedStart: Story = {
   ),
 };
 export const Empty: Story = { args, render: () => <Demo empty /> };
-/** 取得に失敗して1件も読めていない。「まだ会話がない。」は出さず、失敗だけを言う（#2323）。 */
 export const Unavailable: Story = {
   args: {
     ...args,

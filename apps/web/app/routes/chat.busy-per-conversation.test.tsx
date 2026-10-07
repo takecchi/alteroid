@@ -1,9 +1,4 @@
 // @vitest-environment jsdom
-/**
- * Issue #3567。「添付を上げている」「ターンを止めている」「会話を終えている」は、押した会話の
- * 画面だけに出す。別の会話へ移った先の入力欄・ボタンを塞がない（`interruptNotice` と同じ形）。
- * 待ちは `fetch` の通り道で止めた門（gate）で作る。実時間の待ちは使わない。
- */
 import { File as NodeFile } from 'node:buffer';
 
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';

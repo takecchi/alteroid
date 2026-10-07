@@ -190,8 +190,7 @@ export class CodexManagerDriver implements AgentManagerDriver {
 }
 
 /**
- * app-server のセッション1本の実体。**クローンの駆動役（`codex-clone-driver.ts`）が同じ実体を
- * 使う**（子の起こし方・認証・通知の畳み・伏せ字・止め方を二重に持たない）。マネージャー側の
+ * app-server のセッション1本の実体（MCP `peer` の駆動役が開く）。マネージャー側の
  * 口（{@link AgentManagerSession}）に、走っているターンだけを止める `interrupt()` を足した形。
  */
 export interface CodexSession extends AgentManagerSession {

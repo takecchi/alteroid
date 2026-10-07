@@ -22,27 +22,6 @@ interface AllowlistEntry {
   reason: string;
 }
 
-/**
- * `check-no-env-passthrough`（Issue #1935）の歯。
- *
- * ## 何のためにここが在るか
- *
- * #1854 系の直し（子プロセスへ親の env を丸ごと渡さない）は正しく入ったが、
- * **直しを直す前の形へ戻しても赤くなる歯が無かった**（#1935 本文の実測1・
- * 実測2）。この歯は、その形（`...process.env` / `env: process.env` /
- * `Object.assign(…, process.env)`）がテストのコードと変異試験ハーネスへ
- * 書き戻されたことを静的に検出する。
- *
- * ## 構成（4段）
- *
- * 1. **マスクの単体テスト**（コメント・文字列・テンプレートリテラルの中を
- *    拾わないこと。行番号がずれないこと）
- * 2. **検出ロジックの単体テスト**（3形それぞれを合成した文字列で当てる）
- * 3. **許可の一覧（ALLOWLIST）の単体テスト**（許可済みは violations に
- *    出ない。古い許可は stale に出る）
- * 4. **実際の対象ファイル全体に対する検査そのもの**（`check-tracked-nul-bytes`
- *    と同じ理由でここへ足す——`pnpm test` だけで走り、`pnpm build` は要らない）
- */
 describe('check-no-env-passthrough: maskCommentsAndStrings', () => {
   it('行コメントの中身を拾わない（同じ長さの空白へ置き換える）', () => {
     const src = '// { ...process.env }\nconst x = 1;';
@@ -68,10 +47,6 @@ describe('check-no-env-passthrough: maskCommentsAndStrings', () => {
   it('テンプレートリテラルの中身を拾わない。`${…}` の中はコードとして残す', () => {
     const src = 'const t = `env=${JSON.stringify(process.env)}`;\nconst y = 1;';
     const masked = maskCommentsAndStrings(src) as string;
-    // テンプレートの地の文（`env=`）は消えるが、`${...}` の中の
-    // `process.env` はコードとして残る——このテストは `Object.assign` や
-    // スプレッドの形ではないので検出対象ではないが、`${…}` の中を
-    // ちゃんとコードとして再走査していることの確認。
     expect(masked).toContain('process.env');
     expect(masked.split('\n').length).toBe(src.split('\n').length);
   });
@@ -533,20 +508,7 @@ describe('check-no-env-passthrough: findMissingEnvChildProcessCalls（Issue #204
   });
 
   it('⚠️ 回帰: 別名 import 経由でも args 配列だけの2引数呼び出しは missing-env として分類される（元の名前で ARGS_ARRAY_FAMILY を照らす）', () => {
-    // `spawn` は ARGS_ARRAY_FAMILY に属する（args 配列を第2引数に取れる）。
-    // 別名 `sp` をそのまま ARGS_ARRAY_FAMILY.has('sp') で照らすと常に false
-    // になり、options 候補の判定そのものが狂う——`spawn(cmd, args)` の2引数形
-    // （args 配列のみ、options 無し）は、家族なら「候補が `[` で始まる配列 →
-    // options 無し（missing-env）」と即断できるが、家族でなければ候補を
-    // `{` かどうかでしか判定できず undeterminable へ落ちてしまう。
-    //
-    // ⚠️ command（第1引数）は**文字列リテラルにしない**こと——
-    // `maskCommentsAndStrings` は文字列リテラルの中身を空白へ潰し、
-    // `splitTopLevelByComma` は潰れて空になった要素（trim 後に長さ0）を捨てる。
-    // 文字列の command だとその要素が丸ごと捨てられて args 列の位置がずれ、
-    // `rest` が短くなって family の分岐に関係なく `missing-env` になり、
-    // この歯が測ろうとしている違いそのものが消えてしまう。ここでは識別子
-    // （`cmdVar`）を使い、位置がずれないようにしてある。
+    // command（第1引数）を文字列リテラルにしない: マスクで潰れた要素が捨てられて args 列の位置がずれ、family の分岐に関係なく `missing-env` になるため。
     const hits = findMissingEnvChildProcessCalls([
       {
         path: 'a.test.ts',
@@ -584,8 +546,6 @@ describe('check-no-env-passthrough: findMissingEnvChildProcessCalls（Issue #204
     expect(hits).toEqual([]);
   });
 
-  // 既定の import と named / 名前空間の併記。3つを別々の正規表現で見ていた版では
-  // どれにも当たらなかった（`import\s*\{` も `import\s+cp\s+from` も成り立たない）。
   it('既定の import と named の併記（`import cp, { spawn }`）の `spawn(...)` を検出する', () => {
     const hits = findMissingEnvChildProcessCalls([
       {
@@ -638,8 +598,6 @@ describe('check-no-env-passthrough: findMissingEnvChildProcessCalls（Issue #204
 });
 
 describe('check-no-env-passthrough: findMissingEnvChildProcessCalls（promisify を名前空間経由で包む形。PR #2062 の隣に在った見逃し）', () => {
-  // 名前空間の取り込み方 × promisify の書き方。どの形でも env 無しの呼び出しは検出し、
-  // env を渡していれば検出しない（対）。
   const withoutEnv = "run('node', ['-e', 'x']);";
   const withEnv = "run('node', ['-e', 'x'], { env: { PATH: '/usr/bin' } });";
   const cases: Array<{ name: string; head: string }> = [
@@ -930,8 +888,6 @@ describe('実リポジトリの検査（main が緑であることの確認、#1
       .map((path) => maskCommentsAndStrings(readFileSync(join(ROOT, path), 'utf8')) as string)
       .join('\n');
     expect(combined.length).toBeGreaterThan(10000);
-    // マスクした後も `describe(` / `it(` のようなテストの骨格そのものは残る
-    // （コメント・文字列だけを消していて、コードを消していないことの確認）。
     expect(combined).toContain('describe(');
   });
 });

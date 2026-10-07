@@ -2,7 +2,7 @@ import { WorkTabs } from '~/components/group-tabs';
 import { LoadError } from '~/components/load-error';
 import { useReportDirty, LeaveGuardScope } from '~/lib/leave-guard';
 import { useLatest } from '~/lib/use-latest';
-import { useMinuteNow } from '~/lib/use-now';
+import { formatRelativeAtMinute, useMinuteNow } from '~/lib/use-now';
 import { unsentInput } from '~/lib/unsent-input';
 import { AlertTriangle } from 'lucide-react';
 import { Fragment, useCallback, useEffect, useId, useState } from 'react';
@@ -37,7 +37,7 @@ import {
   useConversation,
   useConversations,
 } from '@alteroid/swr';
-import { formatDateTime, formatRelative, redactBody } from '@alteroid/logic';
+import { formatDateTime, redactBody } from '@alteroid/logic';
 import type { CommitmentClosedBy, CommitmentOrigin, TextMarkup } from '@alteroid/core';
 import type { Commitment, UnreadableCommitment, UnreadableJob } from '@alteroid/logic';
 
@@ -171,7 +171,11 @@ function CommitmentsPage() {
               subtitle="古い順。齢がそのまま「どれだけ放置されているか」である"
             />
             {open.length === 0 ? (
-              <Empty>未了の仕事はない。</Empty>
+              <Empty>
+                {unreadable.length > 0 || (data?.unreadableJobs ?? []).length > 0
+                  ? '読めた範囲では、未了の仕事はない。'
+                  : '未了の仕事はない。'}
+              </Empty>
             ) : (
               <ul>
                 {open.map((commitment) => (
@@ -203,7 +207,14 @@ function CommitmentsPage() {
                 // （#3074）。ここで「記録はまだない」と言うと、読めていないのに無いと読める。
                 <Spinner />
               ) : closed.length === 0 && error !== undefined ? null : closed.length === 0 ? (
-                <Empty>完了した仕事の記録はまだない。</Empty>
+                <Empty>
+                  {trimmedClosed > 0
+                    ? '残っている範囲に、完了した仕事の記録はない。'
+                    : unreadable.length > 0
+                      ? // 読めない行は片付いた行かもしれないので、完了の側も言い切れない。
+                        '読めた範囲では、完了した仕事の記録はない。'
+                      : '完了した仕事の記録はまだない。'}
+                </Empty>
               ) : (
                 <ul>
                   {closed.map((commitment) => (
@@ -1229,6 +1240,8 @@ interface RowNote {
   editFailure?: unknown;
   /** 片付けるの失敗（409 など）。 */
   closeFailure?: unknown;
+  /** 自分の「片付いた」が通った印（断りが「既に片付いた」と他人事に言わないため。#3842）。 */
+  closedHere?: true;
 }
 type RowNotePatch = Partial<Omit<RowNote, 'commitment'>>;
 
@@ -1247,7 +1260,8 @@ function sameNote(a: RowNote, b: RowNote): boolean {
     a.draft === b.draft &&
     a.reason === b.reason &&
     a.editFailure === b.editFailure &&
-    a.closeFailure === b.closeFailure
+    a.closeFailure === b.closeFailure &&
+    a.closedHere === b.closedHere
   );
 }
 
@@ -1297,14 +1311,21 @@ function OrphanNote({
   return (
     <li className="rounded-md border border-warn/40 bg-warn/10 px-3 py-2 text-sm">
       <p className="mb-2 break-words">
-        <strong>この仕事は既に片付いた（または未了の一覧から外れた）。</strong>
-        書きかけは残してある。ここから保存や片付けはできないので、必要なら写してから閉じる。
+        {note.closedHere === true ? (
+          <strong>この仕事は片付けた。編集中だった本文の書きかけは残してある。</strong>
+        ) : (
+          <>
+            <strong>この仕事は既に片付いた（または未了の一覧から外れた）。</strong>
+            書きかけは残してある。
+          </>
+        )}
+        ここから保存や片付けはできないので、必要なら写してから閉じる。
         <span className="mt-1 block text-xs text-muted-foreground">
           対象: 「{snippet(commitment.body)}」
         </span>
         {current?.closedReason !== undefined && (
           <span className="mt-1 block text-xs text-muted-foreground">
-            片付けた理由: {current.closedReason}
+            片付けた理由: {redactBody(current.closedReason ?? '')}
           </span>
         )}
       </p>
@@ -1418,7 +1439,7 @@ function OpenRow({
     try {
       await closeCommitment(commitment.id, reason.trim());
       // 成功したら一覧から消える（部品ごと消える）ので、入力を戻す必要はない。ページの写しだけ消す。
-      track({ reason: undefined, closeFailure: undefined });
+      track({ reason: undefined, closeFailure: undefined, closedHere: true });
     } catch (caught) {
       setFailure(caught);
       // 一覧の取り直しが先に行を消すことがある（409）。ページにも渡し、行が消えても失敗の本文を見せる。
@@ -1438,7 +1459,7 @@ function OpenRow({
         <InProgressBadge commitment={commitment} />
         <span>{formatDateTime(commitment.at)}</span>
         {/* 齢。器は優先度も締切も持たないので、急ぎ方を決める材料はこれだけである。 */}
-        <span>({formatRelative(commitment.at, now)})</span>
+        <span>({formatRelativeAtMinute(commitment.at, now)})</span>
         <button
           type="button"
           className="ml-auto text-[11px] text-muted-foreground underline hover:text-foreground pointer-coarse:-my-3.5 pointer-coarse:-mr-3 pointer-coarse:px-3 pointer-coarse:py-3.5"
@@ -1587,7 +1608,8 @@ function PlainClosedReason({ reason }: { reason: string }) {
  */
 function ClosedReasonBody({ commitment }: { commitment: Commitment }) {
   if (commitment.closedReason === undefined || commitment.closedReason === null) return null;
-  const reason = commitment.closedReason;
+  // 4経路すべてが通る入口で伏せる（経路ごとに足すと、足し忘れた経路から素のまま出る）。
+  const reason = redactBody(commitment.closedReason);
 
   // **「そもそも無い」。** 既定へ倒さない（`'clone'` にも `'human'` にもしない）。
   if (commitment.closedBy === undefined) return <PlainClosedReason reason={reason} />;
@@ -1636,21 +1658,47 @@ function PushForm() {
   const [body, setBody] = useState('');
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<unknown>(undefined);
+  const [notice, setNotice] = useState<string | undefined>(undefined);
+  const { data, mutate } = useCommitments(false);
+  const dataRef = useLatest(data);
 
   // 書きかけ（空でない）かどうかをスコープへ知らせる（離れる前の確認はページに1つ。#2764）。
   useReportDirty(PUSH_FORM_DIRTY_ID, body !== '');
 
   async function submit() {
-    if (body.trim() === '') return;
+    const text = body.trim();
+    if (text === '') return;
     const sent = body;
+    // 積む前の一覧。読めていないときは undefined（「無かった行」を決められない）。
+    const before = dataRef.current && new Set(dataRef.current.entries.map((entry) => entry.id));
     setBusy(true);
     setFailure(undefined);
+    setNotice(undefined);
     try {
-      await pushCommitment(body.trim());
+      await pushCommitment(text);
       // 応答を待つ間に打ち足した分は残す（issue #3515）。
       setBody((current) => unsentInput(current, sent));
     } catch (caught) {
-      setFailure(caught);
+      // サーバは冪等の鍵を持たず、送り直すと同じ本文が二重に載る。届いたか分からない失敗（接続断・タイムアウト・5xx）
+      // のときだけ、取り直した一覧に積む前に無かった同じ本文の行が在るかで、届いたかを確かめる。
+      const unknown =
+        !(caught instanceof ApiError) || caught.status >= 500 || caught.status === 408;
+      const landed =
+        unknown &&
+        before !== undefined &&
+        ((await mutate())?.entries ?? []).some(
+          (entry) => !before.has(entry.id) && entry.body.trim() === text,
+        );
+      if (landed) {
+        setBody((current) => unsentInput(current, sent));
+        setNotice('応答は届かなかったが、台帳には載っている。送り直さなくてよい。');
+      } else {
+        setFailure(caught);
+        if (unknown)
+          setNotice(
+            '届いたか分からない。台帳の一覧を確かめてから送り直すこと（二重に載ることがある）。',
+          );
+      }
     } finally {
       setBusy(false);
     }
@@ -1694,6 +1742,11 @@ function PushForm() {
           <SubmitHint action="登録" />
         </div>
         <ErrorNote error={failure} />
+        {notice !== undefined && (
+          <p role="status" className="text-xs text-muted-foreground">
+            {notice}
+          </p>
+        )}
       </div>
     </Card>
   );

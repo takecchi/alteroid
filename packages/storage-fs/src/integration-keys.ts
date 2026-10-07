@@ -20,19 +20,15 @@ import { z } from 'zod';
 import { writeFileAtomic } from './atomic.js';
 import { withPathLock } from './file-lock.js';
 
-/** トップレベルの形だけを見る（行ごとの検査は `#read` が行う。`FsAuthStore` と同じ理由）。 */
 const fileSchema = z.object({ keys: z.array(z.unknown()).default([]) });
 
 interface KeyFile {
   keys: IntegrationKeyRecord[];
-  /** 形が不正で読めなかった生の行。**消さずに持ち回る**（次の書き込みで黙って消えないように）。 */
+  // 消さずに持ち回る: 次の書き込みで黙って消えないように
   invalidRaw: unknown[];
 }
 
-/**
- * 不正な行を要約する。**`issue.message` は使わない**（zod の既定メッセージが将来 `received` を含む形に変わっても
- * 値が漏れない）。出すのは「どの欄が」だけ（`permission-grants.ts` の `summarizeInvalidFields` と同じ形）。
- */
+// `issue.message` は使わない: zod の既定メッセージが将来 `received` を含む形に変わると値が漏れるため
 function summarizeInvalidFields(issues: readonly { path: readonly PropertyKey[] }[]): string {
   const fields = [
     ...new Set(issues.map((issue) => (issue.path.length > 0 ? String(issue.path[0]) : '(root)'))),
@@ -46,11 +42,6 @@ function rowIdOf(raw: unknown): string | undefined {
   return typeof id === 'string' ? id : undefined;
 }
 
-/**
- * 連携の鍵（fs）。`auth/integration-keys.json`（0600）。**素の値は1文字も入らない**（sha256 だけ）。
- *
- * 書き込みはすべて `withPathLock` の排他区間の中で、tmp へ書いて rename する（`FsAuthStore` と同じ形）。
- */
 export class FsIntegrationKeyStore implements IntegrationKeyStore {
   readonly #dir: string;
   readonly #path: string;
@@ -90,7 +81,6 @@ export class FsIntegrationKeyStore implements IntegrationKeyStore {
     return [...keys].sort(compareIntegrationKeyOrder);
   }
 
-  /** `#read` が飛ばした行を、中身を含まない形（id と不正な欄名だけ）で返す（issue #3216）。 */
   async listUnreadableIntegrationKeys(): Promise<UnreadableIntegrationKey[]> {
     const { invalidRaw } = await this.#read();
     return invalidRaw.map((raw): UnreadableIntegrationKey => {
@@ -103,11 +93,6 @@ export class FsIntegrationKeyStore implements IntegrationKeyStore {
     });
   }
 
-  /**
-   * 読めない行を id で指して消す（`IntegrationKeyStore.removeUnreadableIntegrationKeys` の doc。issue #3216）。
-   * 読んで・突き合わせて・日誌（`beforeRemove`）を呼んで・書くまでを1つの排他区間に入れる。知らない id が
-   * あれば書かない（ファイルを1バイトも変えない）。id が取れない行は指せないので残る。読めた行には触れない。
-   */
   async removeUnreadableIntegrationKeys(
     ids: readonly string[],
     options: RemoveUnreadableRowsOptions = {},
@@ -120,7 +105,7 @@ export class FsIntegrationKeyStore implements IntegrationKeyStore {
       if (unknown.length > 0 || wanted.length === 0) {
         return { kind: 'unknown' as const, count: unknown.length };
       }
-      // **日誌などを先に。投げたら、ここで止まり、何も書かない。**
+      // 日誌などを先に呼ぶ: 投げたらここで止まり、何も書かないため
       await options.beforeRemove?.(wanted);
       const drop = new Set(wanted);
       await mkdir(this.#dir, { recursive: true });
@@ -185,7 +170,6 @@ export class FsIntegrationKeyStore implements IntegrationKeyStore {
         return;
       }
       invalidRaw.push(raw);
-      // 欄名だけを出し、値は出さない。
       const fields = [...new Set(result.error.issues.map((it) => String(it.path[0] ?? '(root)')))];
       const id = rowIdOf(raw);
       process.stderr.write(

@@ -3,10 +3,12 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useId,
   useMemo,
   useRef,
   useState,
   type ReactNode,
+  type RefObject,
 } from 'react';
 import { useBlocker } from 'react-router';
 
@@ -54,6 +56,30 @@ interface LeaveGuardApi {
 
 const LeaveGuardContext = createContext<LeaveGuardApi | undefined>(undefined);
 
+type ReportScopeDirty = (scopeId: string, dirty: boolean) => void;
+
+/**
+ * 画面の外（認証の門）が「どこかの画面が書きかけか」を知るための口。
+ * `useBlocker` は移動しか止められず、門が画面ごと差し替える unmount には効かないので、
+ * 差し替えを控えるかどうかの判断材料だけをここで渡す。
+ */
+const ScopeDirtyContext = createContext<ReportScopeDirty | undefined>(undefined);
+export const ScopeDirtyProvider = ScopeDirtyContext.Provider;
+
+export function useScopeDirtyRegistry(): { hasDirty: boolean; report: ReportScopeDirty } {
+  const [dirtyScopes, setDirtyScopes] = useState<ReadonlySet<string>>(new Set());
+  const report = useCallback<ReportScopeDirty>((scopeId, dirty) => {
+    setDirtyScopes((current) => {
+      if (current.has(scopeId) === dirty) return current;
+      const next = new Set(current);
+      if (dirty) next.add(scopeId);
+      else next.delete(scopeId);
+      return next;
+    });
+  }, []);
+  return { hasDirty: dirtyScopes.size > 0, report };
+}
+
 /**
  * 画面ごとに1つだけ置く。中の欄が `useReportDirty` で知らせた書きかけのどれか1つでもあれば、
  * アプリ内の移動（`useBlocker`）と `beforeunload` の前に確認を挟む（`schedule.tsx` の形を共通にしたもの）。
@@ -82,6 +108,13 @@ export function LeaveGuardScope({ children }: { children: ReactNode }) {
   const notice = [...dirtyIds.values()].find((n) => n !== undefined) ?? DRAFT_NOTICE;
   const blocker = useBlocker(() => anyDirty && !released.current);
   useBeforeUnloadGuard(anyDirty);
+
+  const scopeId = useId();
+  const reportScope = useContext(ScopeDirtyContext);
+  useEffect(() => {
+    reportScope?.(scopeId, anyDirty);
+  }, [reportScope, scopeId, anyDirty]);
+  useEffect(() => () => reportScope?.(scopeId, false), [reportScope, scopeId]);
 
   return (
     <LeaveGuardContext.Provider value={api}>
@@ -125,3 +158,22 @@ export function useReleaseLeaveGuard(): () => void {
 }
 
 function noop() {}
+
+/**
+ * この詳細がいまも mount されているか（issue #3802）。詳細は項目ごとに作り直される（`key`）ので、
+ * 削除・停止の応答待ちに別の項目へ移ると古い詳細は消える。それでも古い詳細が起こした Promise の
+ * `.then` は残るため、成功の `.then` ではこれを読み、mount されているときだけ `navigate` する
+ * （いま見ている別の項目を閉じない）。StrictMode の二重実行でも、setup で true・cleanup で false。
+ * `LeaveGuardScope` と同じ「項目ごとの作り直し」の部品なので、ここに置く（3画面が既に読み込む塊に
+ * 同居させ、共有の塊を増やさない）。
+ */
+export function useIsMounted(): RefObject<boolean> {
+  const ref = useRef(false);
+  useEffect(() => {
+    ref.current = true;
+    return () => {
+      ref.current = false;
+    };
+  }, []);
+  return ref;
+}

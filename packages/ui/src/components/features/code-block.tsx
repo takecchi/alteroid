@@ -3,16 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 
 import { cn } from '@/lib/utils';
 
-/**
- * 生の文字列（ログ・スタック・コマンドの出力・設定ファイル）。
- *
- * **写しを取る口を付ける**（`copyable`）。ここに出るものは、人間が端末や Issue へ
- * そのまま貼りたいものが多い。写せなかった（クリップボードが使えない）ときは
- * 「写せなかった」と言う——黙って何もしないと、写したつもりのまま貼って初めて気づく。
- *
- * 長い行は折り返す（`styles.css` の `pre` の既定）。高さは `maxHeight` で抑え、
- * 中でスクロールさせる——**文字は1つも捨てない**。
- */
+// 写せなかったときは「写せなかった」と言う: 黙って何もしないと、写したつもりのまま貼って初めて気づくため
 export function CodeBlock({
   children,
   label,
@@ -21,16 +12,14 @@ export function CodeBlock({
   className,
 }: {
   children: string;
-  /** 上の帯に出す名前（ファイル名・コマンド）。 */
   label?: string;
   copyable?: boolean;
-  /** CSS の長さ。既定は抑えない。 */
   maxHeight?: string;
   className?: string;
 }) {
   const [copied, setCopied] = useState<'idle' | 'done' | 'failed'>('idle');
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  // unmount の後に写しの Promise が解決しても、`done()` はタイマーも状態も触らない（#3579）。
+  // unmount の後に写しの Promise が解決しても、`done()` はタイマーも状態も触らない
   const mounted = useRef(true);
   useEffect(() => {
     mounted.current = true;

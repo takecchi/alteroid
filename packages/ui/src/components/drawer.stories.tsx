@@ -4,7 +4,6 @@ import { useState } from 'react';
 import { Button } from './common';
 import { Drawer } from './drawer';
 
-/** 狭い画面で脇の面を覆いかぶせて出す（`drawer.tsx`）。 */
 const meta = {
   title: 'Layout/Drawer',
   component: Drawer,

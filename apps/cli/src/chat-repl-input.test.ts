@@ -6,12 +6,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { captureStdout } from './test-support.js';
 
-/**
- * `chat`（REPL）の入力まわり。偽の readline（`EventEmitter`）と偽の標準入力を使うので、実時間の待ちは無い。
- * - #3411: 応答中の Ctrl+C は `POST /clone/interrupt` を呼んで REPL を続ける。入力待ちの Ctrl+C は終了。
- * - #3412: 貼り付け（bracketed paste）の複数行は1発言。行末の `\` で続ける。
- * - #3413: 標準入力が端末でないとき、送信が失敗したらそこで止まり、非 0 で終える（投げる）。
- */
 class FakeRl extends EventEmitter {
   closed = false;
   setPrompt(): void {}
@@ -63,7 +57,6 @@ const sse = (body: string): Response =>
 const OK_REPLY =
   'event: open\ndata: {"conversationId":"c1"}\n\nevent: done\ndata: {"type":"done"}\n\n';
 
-/** マイクロタスクとタイマー前の処理を流す（待たない。`setImmediate` は次の周回で即時に走る）。 */
 const flush = async (): Promise<void> => {
   for (let i = 0; i < 5; i += 1) await new Promise<void>((resolve) => setImmediate(resolve));
 };
@@ -111,7 +104,6 @@ describe('chat: 応答中の Ctrl+C（#3411）', () => {
     expect(calls.map((c) => c.path)).toContain('/clone/interrupt');
     expect(rl.closed).toBe(false);
 
-    // 応答が終わったら、次の入力を待つ（REPL は続いている）。
     release!();
     await flush();
     expect(rl.closed).toBe(false);
@@ -122,7 +114,6 @@ describe('chat: 応答中の Ctrl+C（#3411）', () => {
     const text = out();
     expect(text).toContain('いま走っていたクローンのターンを止めた');
     expect(calls.filter((c) => c.path === '/chat').map((c) => c.text)).toEqual(['hello', 'again']);
-    // 会話は終えない間は /end を呼ばない。閉じたあとに1回だけ。
     expect(calls.filter((c) => c.path === '/chat/c1/end')).toHaveLength(1);
   });
 
@@ -162,7 +153,6 @@ describe('chat: 応答中の Ctrl+C（#3411）', () => {
         ),
       );
       await flush();
-      // 改行が来ていないので、断片はまだ書かれていない。
       expect(out()).not.toContain('こんにちは、今日は');
 
       rl.emit('SIGINT');
@@ -171,7 +161,6 @@ describe('chat: 応答中の Ctrl+C（#3411）', () => {
       expect(text).toContain('こんにちは、今日は');
       expect(text).toContain(notice);
       expect(text.indexOf('こんにちは、今日は')).toBeLessThan(text.indexOf(notice));
-      // 止めた文は、閉じた行の次の行から始まる。
       expect(text).toMatch(new RegExp(`こんにちは、今日は\\n+[^\\n]*${notice}`));
 
       stream.enqueue(encoder.encode('event: done\ndata: {"type":"done"}\n\n'));
@@ -289,7 +278,6 @@ describe('chat: 複数行の入力（#3412）', () => {
     await done;
     const text = out();
     expect(calls.filter((c) => c.path === '/chat').map((c) => c.text)).toEqual(['一行目\n二行目']);
-    // `/attach` は続きにされず、そのまま解釈された（`\` で終わる行を次の行と繋げていない）。
     expect(text).not.toContain('エラー: input closed');
   });
 
@@ -305,6 +293,82 @@ describe('chat: 複数行の入力（#3412）', () => {
     await done;
     out();
     expect(calls.filter((c) => c.path === '/chat').map((c) => c.text)).toEqual(['途中']);
+  });
+});
+
+describe('chat: 打った本文を書き換えずに送る（#3952）', () => {
+  async function sendLines(lines: string[]): Promise<(string | null)[]> {
+    useStdin(true);
+    const calls = recordFetch((path) => (path === '/chat' ? sse(OK_REPLY) : Response.json({})));
+    const out = captureStdout();
+    const { chatCommand } = await import('./chat.js');
+    const done = chatCommand();
+    await flush();
+    for (const line of lines) {
+      rl.emit('line', line);
+      await flush();
+    }
+    rl.close();
+    await done;
+    out();
+    return calls.filter((c) => c.path === '/chat').map((c) => c.text);
+  }
+
+  it('行末の \\\\ は1文字の \\ として送る', async () => {
+    expect(await sendLines(['path C:\\\\'])).toEqual(['path C:\\']);
+  });
+
+  it('奇数個なら、半分に畳んだうえで続ける', async () => {
+    expect(await sendLines(['a\\\\\\', 'b'])).toEqual(['a\\\nb']);
+  });
+
+  it('続きの行の末尾の \\\\ も畳む', async () => {
+    expect(await sendLines(['x\\', 'C:\\\\'])).toEqual(['x\nC:\\']);
+  });
+
+  it('/ で始まるコマンドの \\\\ は触らない', async () => {
+    useStdin(true);
+    const calls = recordFetch(() => Response.json({}));
+    const out = captureStdout();
+    const { chatCommand } = await import('./chat.js');
+    const done = chatCommand();
+    await flush();
+    rl.emit('line', '/attach C:\\\\');
+    await flush();
+    rl.close();
+    await done;
+    expect(out()).toContain('C:\\\\');
+    expect(calls.filter((c) => c.path === '/chat')).toHaveLength(0);
+  });
+
+  it('1行目の先頭の空白を保つ（末尾の空白・改行は落とす）', async () => {
+    expect(await sendLines(['  indented first  '])).toEqual(['  indented first']);
+  });
+
+  it('貼り付けでも1行目のインデントを保つ', async () => {
+    useStdin(true);
+    const calls = recordFetch((path) => (path === '/chat' ? sse(OK_REPLY) : Response.json({})));
+    const out = captureStdout();
+    const { chatCommand } = await import('./chat.js');
+    const done = chatCommand();
+    await flush();
+    input.emit('keypress', undefined, { name: 'paste-start' });
+    rl.emit('line', '    if (x) {');
+    rl.emit('line', '    }');
+    input.emit('keypress', undefined, { name: 'paste-end' });
+    await flush();
+    rl.emit('line', '');
+    await flush();
+    rl.close();
+    await done;
+    out();
+    expect(calls.filter((c) => c.path === '/chat').map((c) => c.text)).toEqual([
+      '    if (x) {\n    }',
+    ]);
+  });
+
+  it('空白だけの行は送らず、先頭に空白のある // も発言として送る', async () => {
+    expect(await sendLines(['   ', '  //tmp/a'])).toEqual(['  /tmp/a']);
   });
 });
 

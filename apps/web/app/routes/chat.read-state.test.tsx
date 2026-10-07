@@ -1,15 +1,4 @@
 // @vitest-environment jsdom
-/**
- * 会話の既読（PR2、Web UI）。**1つの規則**: 会話の画面が表示されていて、タブが見えているとき、
- * 画面に出ている日誌由来の発言の最後のものまで既読にする（`docs/architecture.md`「会話の既読」）。
- *
- * - 開いて中身が出たら既読。裏のタブでは送らず、見えるようになったら送る
- * - 送信して完了まで居て、返答が日誌の発言として出た時点で既読。完了前に離れた・タブを
- *   裏にした・接続が切れて返答が出なかったときは送らない
- * - 受信の途中の一時的な文字（transient）では既読にしない
- *
- * 時計に賭けない: 順序は `after` に渡す約束（テストが解決する）で作り、待つのは `vi.waitFor`。
- */
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider, useParams } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -67,7 +56,6 @@ const M_LATE: Message = {
   text: '続きの返答',
 };
 
-/** サーバ側の状態（テストが書き換える）。 */
 interface Server {
   messages: Message[];
   readThrough: string;
@@ -85,7 +73,6 @@ function conversationRoute(server: Server, extra?: Route): Route {
     if (custom !== undefined) return custom;
     if (url.endsWith('/journal/stream')) return sse([], { keepOpen: true, signal: init?.signal });
     if (url.includes(`/conversations/${ID}/read`)) {
-      // 位置は後戻りしない（サーバの規則）。読んだ記録はヘルパーが `request` から取る。
       server.unreadCount = 0;
       return json({ conversationId: ID, readThrough: server.readThrough, unreadCount: 0 });
     }
@@ -123,7 +110,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   globalThis.fetch = originalFetch;
-  // `visibilityState` は document 自身の持ち物として差し替える。消せば prototype の既定（visible）へ戻る。
+  // visibilityState は document 自身の持ち物として差し替える: 消せば prototype の既定（visible）へ戻るため
   Reflect.deleteProperty(document, 'visibilityState');
 });
 
@@ -136,7 +123,6 @@ function becomeVisible() {
   document.dispatchEvent(new Event('visibilitychange'));
 }
 
-/** `POST /conversations/:id/read` の記録。送った `through` を順に返す。 */
 async function readThroughs(): Promise<string[]> {
   const posts = stub.entries.filter(
     (entry) => entry.url.includes('/read') && entry.request?.method === 'POST',
@@ -172,7 +158,6 @@ describe('開いたとき・タブが見えるようになったとき', () => {
 
     await screen.findByText(M_REPLY.text);
     await vi.waitFor(async () => expect(await readThroughs()).toEqual(['m2']));
-    // 取り直されても（位置は進んだ）同じ id を送り直さない。
     fireEvent.focus(window);
     await screen.findByText(M_REPLY.text);
     expect(await readThroughs()).toEqual(['m2']);
@@ -219,7 +204,6 @@ describe('開いたとき・タブが見えるようになったとき', () => {
     expect(screen.queryByRole('alert')).toBeNull();
 
     failing = false;
-    // 次の機会: 裏へ回って戻る。
     act(() => {
       setVisibility('hidden');
       document.dispatchEvent(new Event('visibilitychange'));
@@ -230,7 +214,6 @@ describe('開いたとき・タブが見えるようになったとき', () => {
 });
 
 describe('送信して、返答の完了まで居たとき', () => {
-  /** 送信 → open / text（途中）→ done、返答は日誌の exchange で届く。 */
   function sendScenario() {
     const server = makeServer([M_HUMAN], M_HUMAN.at, 0);
     const chatDone = deferred();
@@ -269,7 +252,6 @@ describe('送信して、返答の完了まで居たとき', () => {
       return undefined;
     });
     stub = stubFetch(route);
-    /** サーバが返答を日誌へ載せ、画面が追いつく。 */
     const replyLands = () => {
       server.messages = [M_HUMAN, M_LATE];
       server.readThrough = M_HUMAN.at;
@@ -286,7 +268,6 @@ describe('送信して、返答の完了まで居たとき', () => {
 
     await send('続きもお願い');
     await screen.findByText('考え中の途中の文字');
-    // 途中の文字は日誌の発言ではない: これで既読にしない。
     expect(await readThroughs()).toEqual([]);
 
     replyLands();
@@ -306,7 +287,6 @@ describe('送信して、返答の完了まで居たとき', () => {
     view.unmount();
     replyLands();
     chatDone.resolve();
-    // 画面が無いので何も走らない。取り込み待ちの発火を流してから確かめる。
     await Promise.resolve();
     await Promise.resolve();
 
@@ -328,7 +308,6 @@ describe('送信して、返答の完了まで居たとき', () => {
     await screen.findByText(M_LATE.text);
     expect(await readThroughs()).toEqual([]);
 
-    // 表に戻って見えた時点で既読にする（1つの規則: 見えているタブで、画面に出ている発言まで）。
     act(becomeVisible);
     await vi.waitFor(async () => expect(await readThroughs()).toEqual(['m3']));
   });

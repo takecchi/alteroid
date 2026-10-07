@@ -2,13 +2,6 @@ import type { Meta, StoryObj } from '@storybook/react-vite';
 
 import { Markdown } from './markdown';
 
-/**
- * クローンの応答・日報・マネージャーの報告を描く Markdown（`markdown.tsx`）。
- *
- * 置き場は `components/ui/` ではなく `components/markdown.tsx` のまま——`ui/` は
- * shadcn が生成した部品だけを置く約束（`shadcn-setup.test.ts` が見ている）なので、
- * 見本帳の見出しだけ `UI/` に並べてある。
- */
 const meta = {
   title: 'UI/Markdown',
   component: Markdown,

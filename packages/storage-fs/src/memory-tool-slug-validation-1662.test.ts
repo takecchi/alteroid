@@ -5,34 +5,6 @@ import { createCloneTools } from '@alteroid/core';
 import { makeTempDir } from '../../../vitest.tmpdir.js';
 import { createFsStores } from './index.js';
 
-/**
- * Issue #1662（fs 実装で赤を取る）。
- *
- * #1651 で直した `schedule_create` / `practice_*` と**同じ形の穴**が
- * `memory_*`（スラッグを受ける道具全部）にも見つかった——このコミットで
- * 直す前は、`packages/core/src/tools.ts` は `memorySlugSchema` を
- * 1箇所も import/使用していなかった。
- *
- * `FsPersonaStore#path()`（`packages/storage-fs/src/persona.ts` の
- * `#path`）は `memorySlugSchema.safeParse` に落ちる slug に対して
- * `throw new Error('記憶のスラッグが不正: …')` する——**これは `read()` /
- * `write()`（内部で `#writeNow` 経由）/ `append()`（内部で `read()` 経由）/
- * `remove()` のすべてで、`await` の手前・同期的に投げる。** クローンの道具
- * （`memory_read` / `memory_write` / `memory_append` / `memory_delete` /
- * `memory_frontmatter_set` / `memory_outline` / `memory_section_read` /
- * `memory_section_move`）はどれも `practiceSlugSchema` 相当の事前検査を
- * 持たないので、形式不正な slug を渡すと**この生の例外がハンドラの外へ
- * そのまま抜ける**——`MCP_INPUT_VALIDATION_ERROR_MARKER` を含まない、
- * クローンには読めない例外である。
- *
- * ここでは `entry.handler(args)` を直接叩く（#1651 の `practice-tools.test.ts`
- * と同じ最小の足場）。**スキーマレベルの検査ではなくハンドラ内で先に断る
- * 設計にする予定なので、直接呼びで測って構わない**（`schedule_create` の
- * `.min(1)` のようにスキーマ側で断る設計にするなら、この歯は本物の MCP
- * 往復に差し替える必要があるが、practice_* の前例（ハンドラ先頭で
- * `safeParse`）に揃えるならこのままで測れる）。
- */
-
 function toolHandler(tools: ReturnType<typeof createCloneTools>, name: string) {
   const found = tools.find((entry) => entry.name === name);
   if (!found) throw new Error(`ツール ${name} が無い`);
@@ -140,7 +112,6 @@ describe('memory_* — 形式不正な slug の扱い（fs 実装。issue #1662�
   });
 
   it('memory_section_move: toSlug が形式不正でも生の例外を投げず、読める文で断る', async () => {
-    // fromSlug 側を実在させ、本物の節id を用意してから toSlug だけ不正にする。
     await toolHandler(tools, 'memory_write')(
       { slug: 'valid-source', content: '# 節1\n\n本文\n', summary: '準備' } as never,
       {} as never,

@@ -23,7 +23,6 @@ describe('LoadFailure', () => {
     expect(details).not.toBeNull();
     expect(details?.open).toBe(false);
     expect(details?.textContent).toContain('HTTP 500: boom');
-    // 主文（details の外）に生の文は出ない
     const outside = alert.cloneNode(true) as HTMLElement;
     outside.querySelector('details')?.remove();
     expect(outside.textContent).not.toContain('boom');

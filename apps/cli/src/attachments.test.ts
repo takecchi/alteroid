@@ -124,6 +124,47 @@ describe('/attach から送るまで', () => {
     expect(retry.ok && retry.uploaded.map((u) => u.id)).toEqual(['att-a', 'att-b']);
   });
 
+  it('画像の寸法が 8000px を超えるものは、上げる前の検査で断り、何が超えたかを言う。上げない（#3697）', async () => {
+    const dir = await makeTempDir('alteroid-cli-attach-');
+    const path = join(dir, 'wide.png');
+    const be32 = (n: number) => [(n >>> 24) & 0xff, (n >>> 16) & 0xff, (n >>> 8) & 0xff, n & 0xff];
+    await writeFile(
+      path,
+      Uint8Array.from([
+        0x89,
+        0x50,
+        0x4e,
+        0x47,
+        0x0d,
+        0x0a,
+        0x1a,
+        0x0a,
+        ...be32(13),
+        0x49,
+        0x48,
+        0x44,
+        0x52,
+        ...be32(8001),
+        ...be32(10),
+        8,
+        6,
+        0,
+        0,
+        0,
+      ]),
+    );
+    const draft = new AttachmentDraft();
+    expect((await draft.add(path)).ok).toBe(true);
+    const upload = vi.fn();
+    const result = await uploadDraft(draft, upload);
+    expect(result).toEqual({
+      ok: false,
+      reason: 'wide.png: 画像の寸法は幅・高さとも 8000 px まで（8001 × 10 px ある）',
+    });
+    expect(upload).not.toHaveBeenCalled();
+    expect(draft.count).toBe(1);
+  });
+
   it('上限は先に検査する（大きすぎる・個数超過・無いファイル）。/detach で外せる', async () => {
     const dir = await makeTempDir('alteroid-cli-attach-');
     const big = join(dir, 'big.bin');
@@ -248,8 +289,6 @@ describe('alteroid attachments get / 表示', () => {
     expect([...(await readFile(join(dir, '-')))]).toEqual([7, 8, 9]);
   });
 
-  // `-o` 省略時の保存名の検査。meta と本体を fetch で差し替え、カレントを一時ディレクトリへ移して
-  // get を呼び、できたファイル名を返す。
   async function getIntoCwd(name: string): Promise<{ dir: string; names: string[] }> {
     const dir = await makeTempDir('alteroid-cli-attach-');
     vi.stubGlobal('fetch', (input: unknown) => {
@@ -272,7 +311,6 @@ describe('alteroid attachments get / 表示', () => {
   }
 
   it('-o を省くと、UTF-8 で 255 バイトを超える長い名前も、拡張子を残して NAME_MAX 以内に丸めて書く（#3521）', async () => {
-    // 正規化（UTF-16 で 255 単位まで）は通るが、UTF-8 では 304 バイトで NAME_MAX（255）を超える。
     const name = `${'あ'.repeat(100)}.txt`;
     const { dir, names } = await getIntoCwd(name);
     expect(names).toHaveLength(1);
@@ -332,7 +370,6 @@ describe('添付の上限はデーモンの値で先に検査する（#3204）',
     retentionDays: 1,
   };
 
-  /** `GET /attachments/limits` に `reply` を返す偽の fetch。呼ばれた URL を控える。 */
   function stubLimits(reply: () => Response | Promise<Response>): string[] {
     const urls: string[] = [];
     vi.stubGlobal('fetch', (input: unknown) => {
@@ -357,7 +394,6 @@ describe('添付の上限はデーモンの値で先に検査する（#3204）',
     expect(await fetchAttachmentLimits(target)).toBeNull();
   });
 
-  /** 先頭 `replies` を順に返し、尽きたら最後を返す。 */
   function stubSequence(replies: (() => Response | Promise<Response>)[]): string[] {
     let i = 0;
     return stubLimits(() => replies[Math.min(i++, replies.length - 1)]!());

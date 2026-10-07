@@ -1,108 +1,21 @@
-/**
- * **同梱の SDK から逐語で引いたコメントが、いまの版でも逐語であることを機械で当てる。**
- *
- * ## 何を直そうとしているか
- *
- * この repo は `@anthropic-ai/claude-agent-sdk` 同梱の `sdk.d.ts` の JSDoc を、
- * 判断の根拠としてコメントへ逐語で引き写している。**引き写した先はソースなので、
- * SDK の版を上げても差分には出ない。** 実際 #639（0.3.259 → 0.3.261）は
- * 「lock と catalog の2ファイルだけ。ソースに触れていない」ことを確かめて
- * マージされたが、`agent-events.ts` の `ambient` の逐語は同じ更新で嘘になった。
- *
- * **ソースに触れていないことは、ソース中の記述が真であり続けることを意味しない。**
- * 引用は外の版に依存しており、依存はコンパイラにもレビューにも見えない。
- *
- * ## だから印を付けて、毎回当て直す
- *
- * 逐語を引いた行に `[sdk-verbatim <シンボル>]` の印を付ける。この検査は印の付いた
- * 引用を全部集め、**インストール済みの `sdk.d.ts` に対して素の部分文字列一致
- * （`grep -F` と同じ意味）が通ることを確かめる。** 通らなくなった瞬間に赤くなる。
- *
- * **版番号は印に書かない。** 書くと版を上げるたびに全部の印を書き直す必要が生まれ、
- * しかもその書き直しは「本当に文言が同じか」を確かめずに機械的にできてしまう
- * （＝門が形骸化する）。**当てるのは文言そのもの**であり、周りの日本語に書いてある
- * 「version 0.3.261 同梱」は人間向けの但し書きである。**この但し書きが腐っても
- * 害が無いのは、文言のほうを毎回機械が当て直しているからである。**
- *
- * ## 印の書き方（2つの形を受ける）
- *
- * 既存のコメントは2つの形で引用を持っており、どちらも壊さずに印を付けられる:
- *
- * 1. **同じ行に鉤括弧**（日本語の文中に埋め込んである形）
- *    `... の欄も逐語で引く: 「True for tasks that are not activity ...」 [sdk-verbatim ambient]`
- *    → 印の在る行に `「` と `」` が在れば、**最初の `「` から最後の `」` まで**を引用とする
- *
- * 2. **次の行にブロック引用**（JSDoc の `> ` の形）
- *    ```
- *    * [sdk-verbatim SDKBackgroundTasksChangedMessage]
- *    * > consumers that only need 'is background work running' should replace ...
- *    ```
- *    → 印の行に鉤括弧が無ければ、**次の1行**からコメント記号と `> ` を剥いだものを引用とする
- *
- * **⚠️ 引用は1行に収めること。** JSDoc の折り返しに跨った引用は `grep -F` で当たらない
- * （`sdk.d.ts` 側は JSDoc 1つが1行なので、こちら側で改行を入れた時点で一致しない）。
- * **当たらない引用は、無い引用より悪い** — 根拠が在るように見えるからである。
- * `printWidth: 100` を超えるが、prettier はコメントを折り返さないので問題にならない。
- *
- * ## シンボルも当てる
- *
- * 印は `[sdk-verbatim <シンボル>]` の形で、**どの型／欄から引いたか**を必ず名乗らせる。
- * シンボルは `.` で分けた各要素が `sdk.d.ts` に部分文字列として在ることを確かめる。
- * 文言が変わらないまま型が消えた・改名された場合はこちらが先に落ちる。
- *
- * ## この検査が言えないこと（範囲を広げて読まないこと）
- *
- * - **印の付いていない引用は見ていない。** 網羅は人の側の作法に残っている。
- *   この検査は「印を付けた引用が腐らない」ことしか保証しない
- * - **意図して古い版を引いている引用（新旧の対比）には印を付けない。**
- *   あれは「いまの版と違う」ことに意味が在る記述で、当たらないのが正しい
- * - **日本語の説明が引用と整合しているかは見ていない。** 文言が同じでも意味の取り違えは残る
- * - **⚠️ 「その欄が無い」という否定の主張は、原理的にこの門では書けない。**
- *   当て方は `sdkTypesText.includes(quote)` の**部分文字列一致**なので、言えるのは
- *   「この文言が在る」だけである。**「`SDKPermissionDeniedMessage` に `agent_type`
- *   は無い」のような不在の主張は、印を付けようにも当てる文言が存在しない。**
- *   紛らわしいのは、この門が「シンボルが**消えた**」は落とせることである
- *   （上の `missingSegment`）——**あれは「印を付けた引用の裏が取れなくなった」で
- *   あって、「ある欄が SDK に存在しない」の証明ではない。**
- *
- *   **⟹ 不在を守りたいなら、門を足すのではなく型の歯を置くこと。**
- *   `permission-denied.test.ts` の `HasKey<T, K>` が既にその形で、
- *   欄が生えた瞬間に `pnpm typecheck` が落ちる（`describe('SDK の型の前提
- *   （腐ったら typecheck が落ちる）')`）。**この門を「不在も見ている」と読んで、
- *   型の歯を省かないこと。**
- */
+// 版番号を印に書かない: 版を上げるたびに全部の印を書き直すことになり、文言を確かめない機械的な書き直しで門が形骸化するため。
+// 引用は1行に収める: `sdk.d.ts` は JSDoc 1つが1行なので、こちらで改行を入れると `grep -F` で当たらなくなるため。
+// 不在の主張（「その欄が無い」）はこの門では書けない: 部分文字列一致は「この文言が在る」しか言えないため、不在は型の歯で守る。
 
 import { lstatSync, readFileSync } from 'node:fs';
 
 import { listGitScannableFiles } from './git-scannable-files-core.mjs';
 
-/**
- * 印の語。`grep -rn "[sdk-verbatim"` で全部引ける。
- *
- * **`@` で始めない。** JSDoc の中で `@foo` を書くとそこからがタグの本文になり、
- * **その後ろに続く日本語の説明が本文（description）から外れる。** この repo は
- * doc コメントそのものが資産なので、印を足すために doc の見え方を壊さない形を選んだ。
- * 角括弧で開くのは、印そのものについて書いた散文（`` `sdk-verbatim` `` のような
- * 言及）を引用として拾わないためである。
- */
+// 印を `@` で始めない: JSDoc の `@foo` はそこからがタグの本文になり、後ろの日本語の説明が description から外れるため。
 export const MARKER = '[sdk-verbatim';
 
-/**
- * 印とシンボルを取る。シンボルは `Foo` / `Foo.bar` / `Foo.bar.baz` の形だけ受ける。
- * 印だけ書いてシンボルを省いた場合も**当てて落とす**ために、印そのものは別に探す。
- */
 const MARKER_WITH_SYMBOL = /\[sdk-verbatim[ \t]+([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*)[ \t]*\]/;
 
-/** 走査するファイルの拡張子。 */
 export const SCANNED_EXTENSIONS = ['.ts', '.tsx', '.mts', '.mjs', '.js', '.jsx', '.md'];
 
-/**
- * 走査から外すパス（前方一致）。**この検査自身**は、doc と試験の中に印の文字列を
- * 素で持っているので外す（外さないと自分の説明文を引用として当てにいく）。
- */
+// この検査自身は走査から外す: 印の文字列を素で持ち、自分の説明文を引用として当てにいくため。
 export const EXCLUDED_PREFIXES = ['scripts/check-sdk-quotes'];
 
-/** 行頭のコメント記号と、行末の閉じ記号を剥ぐ。 */
 function stripCommentLeader(line) {
   return line
     .replace(/^[ \t]*(?:\/\/+|\/\*+|\*+|#+|<!--)[ \t]?/, '')
@@ -110,7 +23,6 @@ function stripCommentLeader(line) {
     .trim();
 }
 
-/** ブロック引用の `> ` と、外側の鉤括弧を剥ぐ。 */
 function stripQuoteDecoration(text) {
   let out = text.replace(/^>[ \t]?/, '').trim();
   if (out.startsWith('「') && out.endsWith('」')) {
@@ -119,15 +31,7 @@ function stripQuoteDecoration(text) {
   return out;
 }
 
-/**
- * 印の行より後ろから、最初の「中身の在る行」を引用として取る。
- *
- * **空行を飛ばすのは Markdown のためである。** `.md` ではブロック引用の前に
- * 空行が要る（空けないと直前の段落に吸われる）ので、印と引用を隣接させられない。
- * JSDoc 側でも ` * ` だけの行を挟むほうが読みやすい。**飛ばす幅は狭く取る**
- * （`LOOKAHEAD` 行まで）— 広く取ると、引用を書き忘れた印が「たまたま後ろに在った
- * 英文」を拾って**当たってしまう**（＝ 印が守っていないのに緑になる）。
- */
+// 空行を飛ばす幅（`LOOKAHEAD` 行）は狭く取る: 広いと引用を書き忘れた印が後ろにたまたま在った英文を拾って当たってしまうため。
 const LOOKAHEAD = 3;
 
 function nextQuoteLine(lines, markerIndex) {
@@ -138,7 +42,6 @@ function nextQuoteLine(lines, markerIndex) {
   return '';
 }
 
-/** 行の中の `「…」`（最初の `「` から最後の `」` まで）を取る。無ければ null。 */
 function bracketedSpan(line) {
   const start = line.indexOf('「');
   const end = line.lastIndexOf('」');
@@ -146,14 +49,7 @@ function bracketedSpan(line) {
   return line.slice(start + 1, end).trim();
 }
 
-/**
- * 印の付いた引用を集める。
- *
- * `files` は `{ path, content }` の配列。返すのは `{ path, line, symbol, quote, defect }`
- * の配列で、`defect` は集める段階で分かる欠陥（`'missing-symbol'` / `'empty-quote'`）。
- * **欠陥の在る印も落とさずに返す** — 黙って読み飛ばすと「印を書いたのに検査されない」が
- * 静かに起きるためである。
- */
+// 欠陥の在る印も落とさずに返す: 黙って読み飛ばすと「印を書いたのに検査されない」が静かに起きるため。
 export function collectMarkedQuotes(files) {
   const found = [];
   for (const file of files) {
@@ -170,7 +66,6 @@ export function collectMarkedQuotes(files) {
       }
       const symbol = symbolMatch[1];
 
-      // 形1: 同じ行の鉤括弧。形2: 印より後ろの、最初の中身の在る行。
       const sameLine = bracketedSpan(raw);
       const quote = sameLine !== null ? sameLine : nextQuoteLine(lines, i);
 
@@ -184,14 +79,7 @@ export function collectMarkedQuotes(files) {
   return found;
 }
 
-/**
- * `haystack` の中で `needle` が現れる**すべての**開始位置を返す（重なりなし）。
- *
- * union 末尾ドリフト（#793）の判定に使う。1箇所だけを見て「隣が `|` だから古い」と
- * 決めると、たまたま同じ文字列が別の場所（正しく閉じている宣言）にも出現する場合に
- * 誤って赤くする。**だから全出現を見て、1つでも「隣が `|` でない」当たりが在れば
- * 欠陥にしない。**
- */
+// 全出現を見る: 1箇所だけで「隣が `|` だから古い」と決めると、同じ文字列が正しく閉じた別の宣言にも在る場合に誤って赤くするため。
 function allIndicesOf(haystack, needle) {
   const indices = [];
   let from = 0;
@@ -204,40 +92,9 @@ function allIndicesOf(haystack, needle) {
   return indices;
 }
 
-/**
- * 引用そのものが「2値以上の pipe 区切り union を、まるごと自己完結で列挙している」
- * 形かを見る。先頭に `field?: ` / `field: ` を許し、末尾に `;` を許す。
- *
- * **この形のときだけ境界チェック（`isUnionTailDrift`）を掛ける。** 理由は実測で
- * 見つかった反例（`packages/core/src/usage-limits.ts` の
- * `[sdk-verbatim SDKRateLimitInfo.overageDisabledReason]`）——この引用は
- * `overageDisabledReason?: 'overage_not_provisioned'` と**値を1つだけ**引いており、
- * すぐ隣のコメントが「…で始まる行」と明言するとおり、**意図して union の先頭だけを
- * 証拠として引用している**（全部を書き写すと SDK が値を増やすたびに追随が要る
- * ため）。この引用は「隣に `|` が続く」のが正しい姿であり、境界チェックを
- * 一律に掛けると誤って赤くする。
- *
- * **区別する軸は「引用そのものが独立した pipe 列挙か」である。** 独立した
- * pipe 列挙（2値以上を `|` で並べている）は「これが union の全部だ」という
- * 主張を運んでいるので、境界がその主張どおり閉じているかを確かめる意味がある。
- * 値を1つだけ引く形は「union の中にこの値がある」という主張しか運んでおらず、
- * 隣に何が続いていても主張は揺るがない。
- */
+// 境界チェック（`isUnionTailDrift`）は引用が2値以上の pipe 列挙のときだけ掛ける: 値を1つだけ引く意図的な部分引用は「隣に `|` が続く」のが正しい姿で、一律に掛けると誤って赤くするため。
 const UNION_ENUMERATION_PATTERN = /^(?:[\w$]+\??:\s*)?'[^']*'(?:\s*\|\s*'[^']*')+;?$/;
 
-/**
- * 一致箇所の直前・直後（空白は読み飛ばす）が `|` に接続しているかを見る。
- *
- * #793: union の末尾に値が足されても、古い引用（末尾の値まで）は新しい宣言行の
- * **接頭辞**として素の部分文字列一致には当たり続ける——`'a' | 'b' | 'c'` は
- * `'a' | 'b' | 'c' | 'd'` の中にそのまま存在する。**当たった箇所の外側が
- * `|` へ続いているなら、それは「union の全部」ではなく「union の一部」に
- * 当たっただけである。** 同じ理屈で先頭が削られた形（`|` の直後に当たる）も拾う。
- *
- * **呼ぶのは `UNION_ENUMERATION_PATTERN` に当たる引用だけに限ること**
- * （`findQuoteDefects` 側の呼び出し条件）。値を1つだけ引く意図的な部分引用まで
- * 対象にすると誤検出になる（上のコメント参照）。
- */
 function isUnionTailDrift(sdkTypesText, index, quoteLength) {
   let before = index - 1;
   while (before >= 0 && /\s/.test(sdkTypesText[before])) before -= 1;
@@ -250,22 +107,7 @@ function isUnionTailDrift(sdkTypesText, index, quoteLength) {
   return beforeChar === '|' || afterChar === '|';
 }
 
-/**
- * 集めた引用を `sdk.d.ts` の本文へ当てる。返すのは**落ちた分だけ**の配列。
- *
- * 当て方は素の `String.includes`（＝ `grep -F`）である。正規化しない。
- * **正規化を入れると「当たったことにする」余地が生まれ、`grep -Fn` で確かめられる
- * という repo の作法（引用の検算方法そのもの）と食い違う。**
- *
- * **ただし「当たる」だけでは union 末尾ドリフト（#793）を見逃す。** 部分文字列一致は
- * 「引用の文字列が sdk.d.ts のどこかに存在するか」しか見ておらず、その両隣が
- * `|` で union の続きに繋がっていても「当たった」と判定してしまう。**だから
- * 引用そのものが「2値以上の union をまるごと列挙している」形（`UNION_ENUMERATION_PATTERN`）
- * のときだけ、当たった箇所ごとに両隣が `|` に接続していないかを別途確かめる。**
- * 全出現箇所が「`|` に接続している」ときだけ欠陥にする（`isUnionTailDrift`）。
- * **1値だけを引く意図的な部分引用（`overageDisabledReason` の実例）はこの追加
- * チェックの対象外**——`UNION_ENUMERATION_PATTERN` に当たらないため。
- */
+// 正規化せず素の `String.includes` で当てる: 正規化すると「当たったことにする」余地が生まれ、`grep -Fn` で検算する作法と食い違うため。
 export function findQuoteDefects(quotes, sdkTypesText) {
   const defects = [];
   for (const q of quotes) {
@@ -300,8 +142,6 @@ export function findQuoteDefects(quotes, sdkTypesText) {
       continue;
     }
     if (!UNION_ENUMERATION_PATTERN.test(q.quote)) {
-      // 1値だけを引く意図的な部分引用など、union をまるごと列挙していない引用は
-      // 部分文字列一致だけで判定する（#793 の追加チェックはここでは掛けない）。
       continue;
     }
     const hasCleanOccurrence = occurrences.some(
@@ -318,49 +158,7 @@ export function findQuoteDefects(quotes, sdkTypesText) {
   return defects;
 }
 
-/**
- * 走査対象のファイルを集める（追跡済み + 未追跡だが ignore されていないファイル。
- * `scripts/git-scannable-files-core.mjs` の `listGitScannableFiles`、Issue #1817）。
- *
- * ## 以前は「追跡ファイルに限る」が意図だった。その意図はいまも半分生きている
- *
- * 旧い doc はこう書いていた——「未追跡のファイルは PR に載らないので、そこで
- * 印が腐っても誰も踏まない。逆に `node_modules` を除く仕掛けが要らなくなる」。
- * **後半（`node_modules` 等を歩かない）はいまも正しい**——`listGitScannableFiles`
- * は `--exclude-standard` で `.gitignore` 済みを外すので、`node_modules` は
- * 依然として対象に入らない。
- *
- * **前半（未追跡は誰も踏まない）は誤りだった。** #1817 が指すのは「これから
- * commit される新しいファイル」であり、そのファイルはまだ追跡されていない
- * だけで、じきに誰かが踏む——手元の `pnpm verify`（実体は `pnpm test`）が緑の
- * まま `git add && git commit && git push` すると、追跡済みになった瞬間に
- * CI で初めて赤くなる（他の7箇所の検査と同じ穴。`git-scannable-files-core.mjs`
- * の doc を見よ）。**この検査だけ広げずに残す理由には、もうならない。**
- *
- * ## 見送っていた理由（symlink の重複除去）は、モードを別の場所から取れば済んだ
- *
- * PR #1859 はこの検査を見送った——理由は「symlink の重複を除く仕組みが
- * `git ls-files -s` のモード（`120000`）に依存しており、`-co --exclude-standard`
- * は未追跡のエントリにモードを返さない」。**この事実は正しいが、結論
- * （「広げられない」）は誤りだった。** モードを git 由来にこだわる理由は無い——
- * `fs.lstatSync(path).isSymbolicLink()` で同じ判定を、追跡・未追跡の別なく
- * 一様に取れる（`scripts/verify-core.mjs` の `fingerprint` が同じ形で
- * symlink を見分けている。あちらも `listGitScannableFiles` と同じ集合に対して
- * `lstatSync` を掛けている）。
- *
- * ## 作業ツリーに無い、追跡済みのファイル（`git rm` していない削除）
- *
- * 追跡済みだが作業ツリーから物理的に消えているファイルは、`git ls-files`
- * （`-c` 側）には残り続ける。**以前はここで `readFileSync` が素で例外を投げ、
- * 検査全体が未処理の例外で落ちていた**（`main()` 側は `resolveSdkTypes` しか
- * try/catch していない）。**いまは `lstatSync` が失敗した時点で、その1件だけを
- * 静かに読み飛ばす**——中身が無いファイルには当てる引用も無いので、検査の
- * 完全性は損なわれない。読めない1件のために検査全体を丸ごと止めるより安全側
- * である（この判断はここだけの話で、AGENTS.md の「静かに失敗する道具」— 検査
- * そのものが1件も走らず緑になる — とは別の話であることに注意。1件を飛ばして
- * も残りは検査されるし、`resolveSdkTypes` の「見つからなければ投げる」は
- * そのままである）。
- */
+// symlink の判定は git のモードではなく `lstatSync` で取る: 追跡・未追跡の別なく一様に判定できるため。
 export function listScannableFiles(repoRoot) {
   const listed = listGitScannableFiles({ cwd: repoRoot });
 
@@ -377,19 +175,15 @@ export function listScannableFiles(repoRoot) {
     try {
       stat = lstatSync(fullPath);
     } catch {
-      // 追跡済みだが作業ツリーに実体が無い（`git rm` していない削除など）。
-      // 読みようが無いので、この1件だけ飛ばす（上の doc）。
+      // 作業ツリーに実体が無い追跡済みファイルは1件だけ飛ばす: 読めない1件のために検査全体を止めない。
       continue;
     }
-    // **symlink は畳まない**（`CLAUDE.md` → `AGENTS.md` を2度数えないため。
-    // 追跡・未追跡のどちらでも同じ判定になる——モードを git ではなく
-    // ファイルシステムから取っているため）。
+    // symlink は読まない: `CLAUDE.md` → `AGENTS.md` を2度数えないため。
     if (stat.isSymbolicLink()) continue;
     let content;
     try {
       content = readFileSync(fullPath, 'utf8');
     } catch {
-      // lstat は通ったが読めない（権限・競合など）。同じ理由で1件だけ飛ばす。
       continue;
     }
     files.push({ path: p, content });
@@ -397,33 +191,10 @@ export function listScannableFiles(repoRoot) {
   return files;
 }
 
-/**
- * インストール済みの `sdk.d.ts` を見つける。
- *
- * **⚠️ 見つからなければ投げる。黙って緑にしない。**「引用を数えて0件だった」と
- * 「そもそも検査が走らなかった」は別物であり、後者を緑で通すとこの門は
- * 「在るのに効いていない」状態で何ヶ月でも生き延びる（`AGENTS.md`「静かに失敗する道具」）。
- *
- * **⚠️ 依存（`createRequire` / `existsSync` / `readFileSync`）を引数で受けているのは
- * 意図である。`import` に戻さないこと。** 「見つからない」の分岐は、**実物では
- * vitest の中から測れない** — vitest は自前のモジュール解決を差し込むので、素の node
- * なら `MODULE_NOT_FOUND` になる引き方でも `createRequire(...).resolve()` が通ってしまう
- * （2026-09-05 の変異試験で実測。`anchors` を存在しないパスへ差し替える変異が、
- * CLI では exit 1 になるのに vitest では緑のまま生存した）。**引数で受けていれば、
- * 器に依存せず「投げること」そのものを固定できる**（`check-sdk-quotes.test.ts` の
- * `resolveSdkTypes — 「見つからない」を緑にしない`）。
- *
- * 解決は `@anthropic-ai/claude-agent-sdk` を直接依存に持つワークスペースから
- * `createRequire` で引く。pnpm の実体は `node_modules/.pnpm/` の下に在り、
- * パスに版番号とハッシュが入るので、**パスを文字列で組み立てない。**
- *
- * **読むのは `sdk.d.ts` だけではない。** 同梱の型定義は `sdk.d.ts` と
- * `sdk-tools.d.ts` の2枚に分かれており（道具の入出力の型は後者に在る）、
- * この repo は**両方から逐語を引いている**（`AGENTS.md` が `FileReadOutput` を
- * 引いている先は `sdk-tools.d.ts` のほうである）。**片方だけ読むと、もう片方から
- * 引いた引用が「当たらない」と誤判定される。** 2枚とも必須にしてあるのは、
- * 片方が消えたときに「引用が腐った」ではなく「読む先が変わった」と読ませるためである。
- */
+// 見つからなければ投げる: 「引用が0件だった」と「検査が走らなかった」は別物で、後者を緑で通すと門が効かないまま生き延びるため。
+// 依存（`createRequire` / `existsSync` / `readFileSync`）を引数で受ける。`import` に戻さない: vitest の自前のモジュール解決だと「見つからない」の分岐を測れないため。
+// パスを文字列で組み立てない: pnpm の実体のパスに版番号とハッシュが入るため。
+// `sdk.d.ts` と `sdk-tools.d.ts` の2枚を必須にする: 片方だけ読むと、もう片方から引いた引用が当たらないと誤判定されるため。
 export function resolveSdkTypes(repoRoot, createRequire, existsSync, readFileSync) {
   const anchors = ['packages/core', 'apps/daemon', 'apps/runner'];
   const tried = [];
@@ -447,7 +218,7 @@ export function resolveSdkTypes(repoRoot, createRequire, existsSync, readFileSyn
     try {
       version = JSON.parse(readFileSync(`${dir}/package.json`, 'utf8')).version ?? '不明';
     } catch {
-      // 版が読めなくても検査自体は成り立つ（当てる先は型定義の本文である）
+      // 版が読めなくても検査は成り立つ: 当てる先は型定義の本文だから。
     }
     return {
       typesPath: typesPaths.join(' + '),

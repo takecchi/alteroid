@@ -1,9 +1,4 @@
 // @vitest-environment jsdom
-/**
- * Issue #3566。失敗したターンの「もう一度送る」は、元の発言の添付も付けて送る
- * （付けないと、返信は添付を読まないまま返る）。上げ直さず、元の添付の id を渡す
- * （編集の添付の引き継ぎ #3399 と同じ道具）。
- */
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';

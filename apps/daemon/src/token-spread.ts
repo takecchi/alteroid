@@ -8,62 +8,11 @@ import {
   type TokenSpreadResult,
 } from '@alteroid/core';
 
-/**
- * 認証トークンのプールの現役を、**2か所へ撒く**（Issue #393 PR3 の6段目）。
- *
- * | 撒く先 | 経路 | いつ効くか |
- * | --- | --- | --- |
- * | runner（マネージャー・作業者） | `RunnerClient#setCredentials`（既存 RPC） | **これから起こす**マネージャーに即座 |
- * | クローン | {@link AgentTokenHolder} → `Clone` の `credentials` | **次に SDK セッションを起こすとき** |
- *
- * **⚠️ どちらも走行中のセッションには届かない。** env はプロセス起動時に凍る
- * （`credentials.ts` / `profile.ts` の doc が同じ境界を何度も書いている）。
- * ⟹ ここが `ok` を返すのは「置いた」までであって、「回った」ではない。
- *
- * **この段落は 2026-08-25（本 doc を書いた日）時点では、「決して届かない」という
- * 意味で正しかった。** ⚠️ **クローン側は #454（同日マージ）、マネージャー側は
- * `fa304a4` / #665（2026-09-07）で、それぞれ一部が偽になっている。** 直したのは
- * 「撒く」側（この関数）ではなく「撒かれた側」——生きているセッションでも、
- * ターンの境界（確認待ち・背景処理が無い状態）に達すれば、その場でセッションを
- * 畳んで同じ会話を resume で開き直し、新しい鍵で続ける（`clone.ts` の
- * `recycleSessionForToken()` / `runner.ts` の `#reopenForTokenRotation`。詳しくは
- * `.claude/skills/token-pool/SKILL.md` の「走行中には届かない」）。**⟹ 「決して
- * 届かない」ではなく「次のターンの境界まで届かない」が、いまの正しい読み方で
- * ある。** 境界に一度も達しなければ、いまも「決して届かない」のと同じ結果になる
- * （2026-09-15 の実測、#914：マネージャー4本が境界に達しないまま古い鍵で 429 を
- * 返し続けた）——⟹ 直上の「`ok` は『置いた』までであって『回った』ではない」は、
- * いまも同じ強さで成り立つ。
- */
-
-/** クローンへ届ける現役の置き場。**値ではなく箱を渡す。** */
 export interface AgentTokenHolder {
-  /**
-   * いまの値（`CloneOptions.credentials` へそのまま渡せる形）。
-   *
-   * **まだ何も置いていなければ空を返す。** 空を返すことで、`#childEnv()` は
-   * 器の環境変数だけの既定の構成と1文字も変わらない（受け入れ基準7）。
-   */
   values(): Record<string, string>;
-  /**
-   * いま撒いてあるものの身元。**まだ撒いていなければ `undefined`。**
-   *
-   * クローンがセッションを起こす瞬間にこれを捕まえ、そのセッションの観測へ添える
-   * （世代の照合。`observationFreshness`）。
-   */
   identity(): { tokenId: string; generation: number; fingerprint?: string } | undefined;
   set(value: string, identity?: { tokenId: string; generation: number }): void;
-  /**
-   * 値を落とす（撒く値そのものが取れなかったときの手当て）。
-   *
-   * **空文字を `set` しない。** 空文字は `#childEnv()` へ空の `CLAUDE_CODE_OAUTH_TOKEN`
-   * を重ね、**資格が「空文字」という値で上書きされてしまう。** 落とすのはキー
-   * ごとである。
-   *
-   * **⚠️ いまはどこからも呼ばれていない。** 器の環境変数を指す行（`source: 'env'`）
-   * という概念を廃止したことで、このメソッドを使っていた唯一の呼び出し元
-   * （`createTokenSpread` の空文字フォールバック）が無くなった。プリミティブ
-   * としては引き続き意味があるので、インターフェースには残してある。
-   */
+  // 空文字を `set` しない: 空文字は `#childEnv()` へ空の `CLAUDE_CODE_OAUTH_TOKEN` を重ね、資格が空文字で上書きされるため。
   clear(identity?: { tokenId: string; generation: number }): void;
 }
 
@@ -73,7 +22,6 @@ export function createAgentTokenHolder(): AgentTokenHolder {
   return {
     values: (): Record<string, string> =>
       current === undefined ? {} : { CLAUDE_CODE_OAUTH_TOKEN: current },
-    // **指紋を添える**（#2877 PR2。`token_list` と同じ `fingerprintOf`。値は載せない）。
     identity: () =>
       currentIdentity === undefined || current === undefined
         ? currentIdentity
@@ -84,8 +32,7 @@ export function createAgentTokenHolder(): AgentTokenHolder {
     },
     set: (value: string, identity?: { tokenId: string; generation: number }) => {
       current = value;
-      // **身元は渡されたときだけ更新する。** 渡されなかったからといって消すと、
-      // 「値は新しいのに身元は無い」という、照合できない状態が作れてしまう。
+      // 身元は渡されたときだけ更新する: 消すと、値は新しいのに身元が無い、照合できない状態が作れてしまうため。
       if (identity !== undefined) currentIdentity = identity;
     },
   };
@@ -94,28 +41,12 @@ export function createAgentTokenHolder(): AgentTokenHolder {
 export interface TokenSpreadOptions {
   runners: RunnerRegistry;
   clone: AgentTokenHolder;
-  /**
-   * 実行環境プロファイルが宣言している env の名前。**影の検出に使う。**
-   *
-   * 取れなければ空を返してよい——**その場合は検出できないので、影が在っても
-   * 気づけない。** 取れなかったことを「影が無い」と読ませないため、下では
-   * 検出できたときだけ印を出す。
-   */
   profileEnvNames: () => Promise<readonly string[]>;
-  /** 影を見つけたときに出す先（日誌・stderr）。 */
   onShadowed?: (names: readonly string[]) => void;
 }
 
-/**
- * **撒くのは runner が先、クローンが後。** 順序に意味がある——runner は
- * ネットワーク越し（落ちうる）で、クローンは同じプロセス内（落ちない）である。
- * 逆順にすると、runner が落ちたときに**クローンだけが新しいトークンを持つ**という
- * 層のずれが残る。先に落ちうる側をやれば、失敗したことが `ok: false` として出る。
- *
- * **⚠️ それでも「片方だけ撒けた」は起きる。** runner が2台あって1台だけ落ちた
- * 場合である。**畳んで1つの成否にしないこと** — 台ごとに返して、呼ぶ側（回し手）が
- * 日誌へ全部載せる。
- */
+// 撒くのは runner が先、クローンが後: 逆順だと runner が落ちたときにクローンだけが新しいトークンを持つ層のずれが残るため。
+// 畳んで1つの成否にしない: runner が2台で1台だけ落ちる場合があり、台ごとに返して呼ぶ側が日誌へ全部載せる。
 export function createTokenSpread(options: TokenSpreadOptions): TokenSpreadPort {
   const { runners, clone, profileEnvNames, onShadowed } = options;
 
@@ -125,9 +56,7 @@ export function createTokenSpread(options: TokenSpreadOptions): TokenSpreadPort 
     ): Promise<TokenSpreadResult[]> {
       const results: TokenSpreadResult[] = [];
 
-      // **プロファイルが同じ名前を宣言していたら、撒く前に出す。**
-      // 撒くのをやめはしない（追加制限にしない）が、黙って効かない形にはしない
-      // （`credentialNamesShadowedByProfile` の doc）。
+      // 影があっても撒くのはやめない（追加制限にしない）が、黙って効かない形にはしない。
       const shadowed = await profileEnvNames()
         .then((names) => credentialNamesShadowedByProfile(ROTATABLE_CREDENTIAL_KEYS, names))
         .catch(() => [] as string[]);
@@ -135,17 +64,11 @@ export function createTokenSpread(options: TokenSpreadOptions): TokenSpreadPort 
 
       const clients = await runners.list().catch(() => []);
       for (const client of clients) {
-        // **`runnerId` をそのまま名札にしている。** 既定値（`'runner-primary'`）が
-        // 入っていることがあるので「聞けた id」ではないが、ここが要るのは
-        // **どの宛先の話かを人間が見分けられること**までで、識別子としての
-        // 権威は要らない（`RunnerClient.runnerId` の注意書き）。
         try {
           await client.setCredentials([{ name: 'CLAUDE_CODE_OAUTH_TOKEN', value: token.value }]);
           results.push({ target: client.runnerId, ok: true });
         } catch (error) {
-          // **理由は1行目だけ採る。** ドライバやネットワークの例外は本文へ
-          // 余計なものを添えてくることがあり、**そこに値が混ざる形が実在する**
-          // （`token-pool.ts` の `TokenPoolInputError` の doc）。
+          // 理由は1行目だけ採る: ドライバやネットワークの例外の本文に値が混ざる形が実在するため。
           results.push({
             target: client.runnerId,
             ok: false,
@@ -155,13 +78,8 @@ export function createTokenSpread(options: TokenSpreadOptions): TokenSpreadPort 
       }
 
       if (clients.length === 0) {
-        // **「撒く先が無い」を成功に畳まない。** 畳むと、runner が1台も繋がって
-        // いない状態で「回した」だけが日誌に残る。
-        //
-        // **`selfHealing: true` を添える**（#1383）——後から runner が繋がれば
-        // `createRunnerTokenSync` が追いつかせるので、この失敗は無害である。
-        // 添えないと、配布を試みて実際に落ちた失敗（上の catch）と日誌上で
-        // 同じ「置けなかった」を名乗ってしまう。
+        // 「撒く先が無い」を成功に畳まない: 畳むと、runner が1台も繋がっていない状態で「回した」だけが日誌に残るため。
+        // `selfHealing: true` を添える: 添えないと、配布を試みて実際に落ちた失敗と日誌上で同じ「置けなかった」を名乗るため。
         results.push({
           target: 'runner',
           ok: false,
@@ -170,15 +88,13 @@ export function createTokenSpread(options: TokenSpreadOptions): TokenSpreadPort 
         });
       }
 
-      // クローン側は同じプロセス内なので落ちない。**身元も一緒に置く** —
-      // 置かないと、クローンの観測が身元を名乗れず世代の照合が素通しになる。
+      // 身元も一緒に置く: 置かないと、クローンの観測が身元を名乗れず世代の照合が素通しになるため。
       const identity = { tokenId: token.id, generation: token.generation };
       clone.set(token.value, identity);
       results.push({ target: 'clone', ok: true });
 
       if (shadowed.length > 0) {
-        // **影を結果にも載せる。** 呼び出し側の `onShadowed` だけに任せると、
-        // 日誌へ落とす経路を1つ忘れた瞬間に見えなくなる。
+        // 影を結果にも載せる: `onShadowed` だけに任せると、日誌へ落とす経路を1つ忘れた瞬間に見えなくなるため。
         results.push({
           target: 'profile-shadow',
           ok: false,
@@ -191,34 +107,12 @@ export function createTokenSpread(options: TokenSpreadOptions): TokenSpreadPort 
   };
 }
 
-/**
- * 例外から1行目だけを採る。**トークンの値が本文へ混ざる形を減らすためである。**
- *
- * **⚠️ これは保証ではない。** ドライバがメッセージのどこで改行するかはこちらが
- * 制御していない（`token-pool.ts` の doc が同じ危うさを名指ししている）。値を
- * 出さない本体の保証は、**`setCredentials` が値を投げ返さないこと**の側にある。
- */
 function firstLine(error: unknown): string {
   const text = error instanceof Error ? error.message : String(error);
   return text.split('\n')[0] ?? '理由不明';
 }
 
-/**
- * 名乗ってきた runner 1台へ、いま撒いてある認証トークンを降ろす（Issue #393 PR3）。
- *
- * **`createTokenSpread` の1台版ではない。** あちらは「回した / 引き取った」ときに
- * 全台と クローンへ撒くもので、こちらは**後から上がってきた1台に追いつかせる**
- * ものである。`ManagerPool` の `#connectTo` から呼ばれる（プロファイルの
- * `syncRunner` と同じ位置）。
- *
- * **⚠️ 箱（{@link AgentTokenHolder}）がまだ何も撒いていなければ何もしない。**
- * かつて（2026-09-12〜2026-09-14、#866）はここで器の環境変数
- * （`CLAUDE_CODE_OAUTH_TOKEN`）の値をそのまま降ろしていたが、その手当ては
- * 廃止した——トークンプールは100% DB 駆動にする、器の環境変数へのフォール
- * バックはどの経路にも残さない、という人間の決定による。⟹ **プールから一度も
- * 撒いていない器では、後から上がってきた runner も資格を持たずに走る。** 直す
- * のは `alteroid token add` で通る鍵を登録し、それが撒かれるのを待つことである。
- */
+// 箱がまだ何も撒いていなければ何もしない: 器の環境変数へのフォールバックはどの経路にも残さないため。
 export function createRunnerTokenSync(
   holder: AgentTokenHolder,
 ): (runner: { setCredentials: RunnerLike['setCredentials'] }) => Promise<void> {
@@ -229,7 +123,6 @@ export function createRunnerTokenSync(
   };
 }
 
-/** `setCredentials` だけを要求する最小の形（テストで偽物を渡せるようにするため）。 */
 interface RunnerLike {
   setCredentials(
     credentials: { name: string; value: string }[],

@@ -7,17 +7,6 @@ import { makeTempDir } from '../../../vitest.tmpdir.js';
 
 import { createApp } from './app.js';
 
-/**
- * issue #2742。`PUT /tokens` と `PUT /tokens/policy` は、誰がいつ追加・削除・無効化・
- * 切替・回す設定の変更をしたかを日誌に残す。
- *
- * 決定（2026-10-05、teto＝takecchi の代理）:
- * - 広げる側（追加・有効化・切替・回す契機を有効にする/変える）は日誌が先。書けなければ
- *   状態を変えずに 500。
- * - 狭める側（削除・無効化・`rotateOn: off`）は保存が先。日誌が書けなくても止めない。
- * - 日誌にトークンの値は書かない（id・ラベル・操作の種類だけ）。
- */
-
 const AUTH = { authorization: 'Bearer test-token' };
 const V_A = 'dummy-token-value-A-never-journal';
 const V_B = 'dummy-token-value-B-never-journal';
@@ -46,7 +35,6 @@ function stubCloneHost(): CloneHost {
 async function seed(options: { journalDown?: boolean } = {}) {
   const root = await makeTempDir('alteroid-test-');
   const stores = createFsStores(root);
-  // a が現役（order 0）。b・c は現役でない行。
   await stores.tokens.replace([
     { id: 'tok-a', label: 'a', value: V_A, source: 'stored', order: 0 },
     { id: 'tok-b', label: 'b', value: V_B, source: 'stored', order: 1 },
@@ -261,11 +249,6 @@ describe('PUT /tokens/policy の日誌（#2742）', () => {
   });
 });
 
-/**
- * 日誌が書けなくて保存しなかった 500 は、素の `Internal Server Error` ではなく、
- * 「記録（日誌）が書けなかったので、変更していません」と機械が読める印（`code`）を返す
- * （CLI と Web が利用者に言える形にするため）。例外の本文（値が載りうる）は返さない。
- */
 describe('日誌が書けなかった 500 の本文（#2742 の続き）', () => {
   const MESSAGE = '記録（日誌）が書けなかったので、変更していません';
 

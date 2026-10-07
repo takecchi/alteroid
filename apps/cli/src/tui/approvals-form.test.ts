@@ -83,7 +83,6 @@ describe('選ぶ', () => {
     expect(form.others['q1']).toBe('別の所');
     form = toggleOption(form, single, 'b');
     expect(form.others['q1']).toBeUndefined();
-    // 空白だけの「その他」は選択肢を外さない。
     form = setOther(form, single, '  ');
     expect(form.picks['q1']).toEqual(['b']);
   });
@@ -122,7 +121,7 @@ describe('buildAnswer', () => {
 
   it('allowOther が false の設問に other を載せない', () => {
     const picked = toggleOption(emptyForm(), closed, 'ok');
-    const form = { ...picked, others: { q3: '不要な文' } }; // UI は作れないが、作れてしまっても送らない
+    const form = { ...picked, others: { q3: '不要な文' } };
     const built = buildAnswer([closed], form);
     expect(built.ok && built.body).toEqual({
       selections: [{ questionId: 'q3', optionIds: ['ok'] }],

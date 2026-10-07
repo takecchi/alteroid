@@ -17,18 +17,6 @@ import { makeTempDir } from '../../../vitest.tmpdir.js';
 import { createApp } from './app.js';
 import { createMigratedPglite, migratedTemplate } from './pglite-template.test-support.js';
 
-/**
- * issue #2359 の1の続き。委譲を**止める**（`manager_stop` / `DELETE /managers/:id`）・
- * **送る**（`manager_send` / `POST /managers/:id/messages`）・**生ログを読む**
- * （`manager_transcript` / `GET /managers/:id/transcript`）口は、委譲の行が在るのに
- * 壊れて読めない id を「居ない」（404）と言っていた。読めない行として在る id なら
- * 「読めない形で入っている」と言い分け、HTTP は 409 にする。本文は載せず、理由は不正な
- * 欄名だけ。**止めも送りも読みもしない**（言い分けるだけ）。
- *
- * fs / pg の2実装で、**実物のストアに不正な行を1行だけ置いた状態から**測る。
- * 対照: 本当に無い id は今までどおり 404 と「居ない」。
- */
-
 const BAD_SUMMARY = '壊れた委譲の本文（この文字列はどの出力にも出てはいけない）';
 
 const GOOD: Job = {
@@ -52,7 +40,6 @@ const BAD_JOB_RAW = {
 interface Seeded {
   stores: Stores;
   addBadRow(): Promise<void>;
-  /** 壊れた行が、呼び出しの前後で1バイトも変わっていないことを見るための生の読み出し。 */
   readBadRow(): Promise<string>;
 }
 
@@ -184,8 +171,7 @@ function expectUnreadableWording(text: string): void {
   expect(text).not.toContain(BAD_SUMMARY);
 }
 
-// PGlite の雛形（WASM の起動＋migrate）は、ワーカーで最初に呼んだ歯が払う。
-// 歯の本体（既定 5000ms）でなく hook（明示 30_000ms）で払わせる（issue #2378、#2360 / #2364 と同じ形）。
+// 雛形の払いは歯の本体（既定 5000ms）でなく hook（30_000ms）に持たせる: WASM の起動＋migrate がワーカーで最初に呼んだ歯に乗るため。
 beforeAll(async () => {
   await migratedTemplate();
 }, 30_000);

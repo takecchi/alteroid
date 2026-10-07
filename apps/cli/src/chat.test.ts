@@ -1,4 +1,3 @@
-import { describeManagerProvider } from '@alteroid/core/manager-provider-format';
 import {
   describeReportDriftMark,
   describeToolUseStall,
@@ -81,14 +80,8 @@ function legacyWaiting(over: Partial<ManagerWaitingItem> = {}): ManagerWaitingIt
 }
 
 describe('renderManagerList', () => {
-  it('provider を出し、欄が無いときは「不明」と書く（claude とは推測しない。#486 S9）', () => {
-    expect(renderManagerList([manager({ managerProvider: 'codex' })])).toContain(
-      '      provider: codex',
-    );
-    const unknown = renderManagerList([manager()]);
-    expect(unknown).toContain(`      provider: ${describeManagerProvider(undefined)}`);
-    expect(unknown).toContain('provider: 不明');
-    expect(unknown).not.toContain('claude');
+  it('provider の行を出さない（層は常に Claude。2026-10-07 の決定）', () => {
+    expect(renderManagerList([manager()])).not.toContain('provider:');
   });
 
   /**
@@ -1766,6 +1759,8 @@ function stubClient(
     conversationsReachedStart?: boolean;
     /** 既定 `0`（＝ limit で落ちた会話は無い＝断り書きを出さない）。 */
     conversationsHiddenByLimit?: number;
+    /** 既定は無し（＝続きは無い。応答に鍵ごと無い）。 */
+    conversationsNextCursor?: string;
     conversationsStatus?: number;
     /** `GET /conversations/unread-count` の応答（既定は 200 `{ count: 0, capped: false }`）。 */
     unreadCountStatus?: number;
@@ -1966,6 +1961,9 @@ function stubClient(
             scanned: options.conversationsScanned ?? 0,
             reachedStart: options.conversationsReachedStart ?? true,
             hiddenByLimit: options.conversationsHiddenByLimit ?? 0,
+            ...(options.conversationsNextCursor === undefined
+              ? {}
+              : { nextCursor: options.conversationsNextCursor }),
           }),
         );
       },
@@ -4638,9 +4636,55 @@ describe('chat の /conversations と /conversation', () => {
 
     const text = read();
     expect(text).toContain('…ほか 3 件は省略');
-    expect(text).toContain('limit=<N> を増やせば');
+    // 上限（200）を超える分は limit を増やしても出ない。誤った案内は出さない。
+    expect(text).not.toContain('limit=<N> を増やせば');
     // reachedStart は既定の真なので、こちらは出ない（2つは別の条件）。
     expect(text).not.toContain('先頭には届いていない');
+  });
+
+  // #3830: 201 件目以降・走査の窓の外へは cursor でしか辿り着けない。
+  it('/conversations は cursor=<…> をそのまま渡す', async () => {
+    captureStdout();
+    const { calls, client } = stubClient({ conversations: [] });
+
+    await runSlashCommand('/conversations cursor=abc.DEF_-1=', client, emptyListed());
+
+    expect(calls).toEqual([
+      { route: 'GET /conversations', args: { query: { cursor: 'abc.DEF_-1=' } } },
+    ]);
+  });
+
+  it('/conversations は nextCursor が在れば、続きの打ち方を出す', async () => {
+    const read = captureStdout();
+    const { client } = stubClient({
+      conversations: [
+        {
+          conversationId: 'conv-1',
+          startedAt: '2026-08-16T10:00:00.000Z',
+          updatedAt: '2026-08-16T10:05:00.000Z',
+          messages: 4,
+          preview: '設計の相談',
+        },
+      ],
+      conversationsScanned: 137,
+      conversationsHiddenByLimit: 3,
+      conversationsNextCursor: 'next-token',
+    });
+
+    await runSlashCommand('/conversations', client, emptyListed());
+
+    const text = read();
+    expect(text).toContain('続きを読むには: /conversations cursor=next-token');
+    expect(text).not.toContain('limit=<N> を増やせば');
+  });
+
+  it('/conversations は nextCursor が無ければ、続きの案内を出さない', async () => {
+    const read = captureStdout();
+    const { client } = stubClient({ conversations: [], conversationsScanned: 5 });
+
+    await runSlashCommand('/conversations', client, emptyListed());
+
+    expect(read()).not.toContain('続きを読むには');
   });
 
   it('/conversations は空でも、そう言う（黙って何も出さない形にしない）', async () => {

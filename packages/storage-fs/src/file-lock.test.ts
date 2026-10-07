@@ -22,12 +22,6 @@ beforeEach(async () => {
 });
 
 describe('writeFileAtomic', () => {
-  /**
-   * #1050 の再現そのもの。かつては tmp 名が `${path}.tmp` で固定されており、
-   * 2つの書き手が同時に書くと片方の rename が相手の tmp を踏んで ENOENT で
-   * 落ちた。いまは呼び出しごとに一意な tmp 名（pid + uuid8）を持つので、
-   * 同じ宛先へ同時に書いても両方が成功する。
-   */
   it('同じ宛先へ2つの書き手が同時に書いても ENOENT で落ちない（#1050 の再現）', async () => {
     const target = join(root, 'shared.json');
     const contentA = 'A'.repeat(2000);
@@ -45,18 +39,13 @@ describe('writeFileAtomic', () => {
     }
     const finalContent = await readFile(target, 'utf8');
     expect([contentA, contentB]).toContain(finalContent);
-    // どちらの tmp も rename 後には残っていない。
     const leftoverTmp = (await readdir(root)).filter((name) => name.includes('.tmp.'));
     expect(leftoverTmp).toEqual([]);
   });
 
-  /**
-   * rename が失敗する形（宛先を既存のディレクトリにする＝ Linux では EISDIR）を
-   * 作り、tmp が消し損ねられずに片付くことを見る。
-   */
   it('rename が失敗したとき、tmp を残さず投げる', async () => {
     const target = join(root, 'blocked');
-    await mkdir(target); // 宛先をディレクトリにして rename を必ず失敗させる。
+    await mkdir(target);
 
     await expect(writeFileAtomic(target, 'x')).rejects.toThrow();
 
@@ -102,8 +91,6 @@ describe('withPathLock', () => {
       }),
     ).rejects.toThrow('boom');
 
-    // 解放されていなければ、次の取得は既定の 10 秒待ってから LockTimeoutError
-    // になる。ここでは短い timeoutMs ですぐ成功することを見る。
     let ran = false;
     await withPathLock(
       target,
@@ -128,7 +115,6 @@ describe('withPathLock', () => {
         token: 'stale-token',
       }),
     );
-    // mtime を staleMs（1000ms）より過去へ倒す。
     const past = new Date(Date.now() - 60_000);
     await utimes(lockPath, past, past);
 
@@ -158,7 +144,6 @@ describe('withPathLock', () => {
         token: 'fresh-token',
       }),
     );
-    // mtime は既定（いま）のまま——staleMs を超えていないので回収されない。
 
     let caught: unknown;
     try {
@@ -182,13 +167,9 @@ describe('withPathLock', () => {
     };
 
     await withPathLock(target, async () => {
-      // 区間の途中で、別の主体がこのロックを（staleMs を過ぎて）回収し、
-      // 自分のものとして上書きした、を模す。
       await writeFile(lockPath, JSON.stringify(reclaimerPayload));
     });
 
-    // 自分の release は自分の token でしか unlink しない——reclaimer の
-    // ロックファイルがそのまま残っている。
     const remaining = JSON.parse(await readFile(lockPath, 'utf8'));
     expect(remaining).toEqual(reclaimerPayload);
   });
@@ -201,15 +182,10 @@ describe('withPathLock', () => {
       releaseA = resolve;
     });
 
-    // A はロックを持ったまま、明示的に解放するまで区間を閉じない。
     const taskA = withPathLock(targetA, async () => {
       await gate;
     });
 
-    // ロックが対象パスごとに分かれていれば、B は A の区間中でも即座に
-    // 完了できる。もしロックがパスをまたいで広すぎれば、この await は
-    // releaseA() を呼ぶまで永遠に返らず、このテスト自体がタイムアウトで
-    // 落ちる——それ自体が失敗として観測される。
     await withPathLock(targetB, async () => undefined);
 
     releaseA();
@@ -217,7 +193,6 @@ describe('withPathLock', () => {
   }, 5000);
 });
 
-/** `jobSchema` を満たす最小限のジョブを組み立てる。 */
 function makeJob(id: string): Job {
   const now = new Date().toISOString();
   return {
@@ -267,17 +242,6 @@ describe('ストア越し（#1113 / #1050 が言っている形）', () => {
     expect(jobs.map((job) => job.id).sort()).toEqual(['job-a', 'job-b']);
   });
 
-  /**
-   * persona.ts の #serialize が #chain（プロセス内直列化のみ）のままだった
-   * 漏れへの応答（#1113 / #1050。他8ストアは既に withPathLock へ移行済み）。
-   *
-   * **`append` を選ぶ理由**: 「読んで、足して、全置換」という read-modify-write
-   * の中でいちばん壊れやすい形である。2インスタンスが同じディレクトリへ
-   * 向いていて、かつ真に排他されていなければ——両方が同じ「元の本文」を
-   * 読んでから書くので、後勝ちの書き込みが先の追記を踏み消す（取りこぼれる）。
-   * 排他が効いていれば、片方が読む時点でもう片方の追記が既に反映されている
-   * ので、最終本文に両方が残る。
-   */
   it('同じディレクトリを向いた FsPersonaStore を2つ作り、並行に append しても取りこぼれない（両方の追記が最終本文に載る）', async () => {
     const journal = new FsJournalStore(join(root, 'journal'));
     const storeA = new FsPersonaStore(join(root, 'memory'), journal);
@@ -293,17 +257,7 @@ describe('ストア越し（#1113 / #1050 が言っている形）', () => {
   });
 });
 
-/**
- * 本物の2プロセスでの排他（#1113 が「同一プロセス内の2インスタンスであって
- * 本物の2プロセスではない」と自己申告していた欠落への応答）。
- *
- * node 22 の `--experimental-strip-types` で `.ts` を直接起こす。
- * `file-lock.ts` の import は `node:*` だけなので、追加の依存無しで子プロセス
- * から直接読み込める（`import { withPathLock } from '<絶対パス>/file-lock.ts'`）。
- *
- * **子は2つまで、余裕のあるタイムアウト、判定は決定的なもの（区間の重なりの
- * 有無）だけにする**——負荷で揺れる形にしないため。
- */
+// 判定は区間の重なりの有無だけにする: 負荷で揺れる形にしないため
 describe('本物の2プロセスでの排他（#1113 の自己申告への応答）', () => {
   it('2つの子プロセスが同じロック対象を取り合い、区間（enter〜exit）が重ならない', async () => {
     const fileLockPath = join(dirname(fileURLToPath(import.meta.url)), 'file-lock.ts');
@@ -344,12 +298,7 @@ main().catch((error) => {
           ['--experimental-strip-types', childPath, target, logPath, String(holdMs)],
           {
             stdio: 'inherit',
-            // 起こす node は `process.execPath`（絶対パス）で直接指すので `PATH`
-            // すら不要だが、器の本物の秘密（`GH_TOKEN` 等）を継承しない形に揃える
-            // （#1854。`file-lock.ts` はこのファイル自身が `grep -Fn -- 'process.env'
-            // packages/storage-fs/src/file-lock.ts` で確かめたとおり `process.env` を
-            // 一切読まないので、空でも動作は変わらない——`PATH` を残すのは他の
-            // allowlist と形を揃えるためだけである）。
+            // 環境を継承しない: 器の本物の秘密（`GH_TOKEN` 等）を子へ渡さないため
             env: { PATH: process.env.PATH ?? '' },
           },
         );
@@ -361,7 +310,7 @@ main().catch((error) => {
       });
     }
 
-    // 2本だけ、十分に長く区間を持たせる（負荷で揺れないよう余裕を持たせる）。
+    // 区間を十分に長く持たせる: 負荷で揺れないようにするため
     await Promise.all([runChild(200), runChild(200)]);
 
     const lines = (await readFile(logPath, 'utf8')).trim().split('\n');
@@ -380,8 +329,6 @@ main().catch((error) => {
     const [first, second] = intervals;
     if (first === undefined || second === undefined) throw new Error('unreachable');
 
-    // 区間が重ならない（真の相互排他）: 片方の enter が、もう片方の exit
-    // より前ならば、もう片方の enter はその exit 以降でなければならない。
     const overlap = first.enter < second.exit && second.enter < first.exit;
     expect(overlap).toBe(false);
   }, 30_000);

@@ -5,13 +5,6 @@ import type { Db } from './db.js';
 import { createPgStoresFromDb, type PgStores } from './index.js';
 import { createMigratedTestDb } from './test-db.test-support.js';
 
-/**
- * issue #1715。詳しい経緯とインメモリ側の対の歯は
- * `packages/core/src/auth-write-validation.test.ts` の冒頭コメントを見よ。
- *
- * ここは pg 実装（PGlite）に対して同じ入力を当てる——各書き込みが対応する zod
- * スキーマを通すので、この歯は緑になる（直す前から緑）。
- */
 let db: Db;
 let stores: PgStores;
 

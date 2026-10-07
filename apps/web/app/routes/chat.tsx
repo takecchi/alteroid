@@ -42,23 +42,27 @@ import {
   checkAttachments,
   formatBytes,
   formatDateTime,
-  formatRelative,
   isPreviewableImage,
   chatDraftEpoch,
+  describeApprovalLeftover,
   isEmptyQuestionsDraft,
   loadApprovalDrafts,
+  loadApprovalLeftoverSources,
   loadChatDraft,
   loadChatDraftMark,
   loadEditDrafts,
   newClientMessageId,
   saveApprovalDrafts,
+  saveApprovalLeftoverSources,
   saveChatDraft,
   saveChatDraftMark,
+  settleApprovalDraft,
   saveEditDraft,
   redactError,
 } from '@alteroid/logic';
 import type {
   ApprovalDrafts,
+  ApprovalLeftoverSources,
   ChatDraftMark,
   ConversationMessage,
   MessageAttachment,
@@ -71,7 +75,8 @@ import {
   isApprovalAnswered,
   isApprovalWithdrawn,
 } from '~/components/approval-answer-card';
-import { useMinuteNow } from '~/lib/use-now';
+import { LeftoverDrafts } from '~/components/approval-leftover-drafts';
+import { formatRelativeAtMinute, useMinuteNow } from '~/lib/use-now';
 import { usePageVisible } from '~/lib/use-page-visible';
 
 import type { Route } from './+types/chat';
@@ -571,6 +576,18 @@ export function pendingOwnLines(
     const key = lineMatchKey(line);
     remaining.set(key, (remaining.get(key) ?? 0) + 1);
   }
+  /*
+   * **id を持つ手元の人間の行（送った発言。#3826）は、履歴の同じ id の行だけが引き取る。** 本文だけで
+   * 見ると、過去の同じ本文（「はい」）が、いま送った行を引き取って消してしまう。id を持たない履歴の
+   * 行（id 無しで届いた発言）とは、従来どおり本文で突き合わせる。
+   */
+  const historyIds = new Set<string>();
+  const historyUnlabeled = new Map<string, number>();
+  for (const line of historyLines) {
+    if (line.role !== 'human') continue;
+    if (line.clientMessageId !== undefined) historyIds.add(line.clientMessageId);
+    else historyUnlabeled.set(line.text, (historyUnlabeled.get(line.text) ?? 0) + 1);
+  }
   const historyApprovals = new Map<string, PendingApproval>();
   for (const line of historyLines) {
     if (line.approval !== undefined) historyApprovals.set(line.approval.id, line.approval);
@@ -598,9 +615,21 @@ export function pendingOwnLines(
   for (const line of owned) {
     if (line.replyGroup !== undefined && absorbedGroups.has(line.replyGroup)) continue;
     const key = lineMatchKey(line);
-    const count = remaining.get(key) ?? 0;
-    if (count > 0) {
-      remaining.set(key, count - 1);
+    const labeled = line.role === 'human' && line.clientMessageId !== undefined;
+    let taken: boolean;
+    if (labeled && historyIds.has(line.clientMessageId ?? '')) {
+      historyIds.delete(line.clientMessageId ?? '');
+      taken = true;
+    } else if (labeled) {
+      const unlabeled = historyUnlabeled.get(line.text) ?? 0;
+      taken = unlabeled > 0;
+      if (taken) historyUnlabeled.set(line.text, unlabeled - 1);
+    } else {
+      const count = remaining.get(key) ?? 0;
+      taken = count > 0;
+      if (taken) remaining.set(key, count - 1);
+    }
+    if (taken) {
       /*
        * **承認のカードは、手元の行より前にいる行がまだ引き取られていないあいだ、手元の位置に残す
        * （#3396）。** 手元の行（送った発言・受信中の本文）は履歴の後ろに置くので、カードを履歴の側へ
@@ -908,7 +937,7 @@ function ConversationList({
       items={data?.conversations.map((conversation) => ({
         id: conversation.conversationId,
         preview: conversation.preview,
-        updatedLabel: formatRelative(conversation.updatedAt, now),
+        updatedLabel: formatRelativeAtMinute(conversation.updatedAt, now),
         messages: conversation.messages,
         messagesAtLeast: data.windowsComplete === false,
         unread: conversation.unreadCount,
@@ -1060,6 +1089,10 @@ export function ChatPane({
     approvalDraftsEpoch.current = chatDraftEpoch();
     setApprovalDraftsState(update);
   }, []);
+  /** 答えが通ったが送らなかった下書きが残った承認の、本文と設問の控え。承認の画面と同じ保存先（#3861）。 */
+  const [leftoverSources, setLeftoverSources] = useState<ApprovalLeftoverSources>(
+    loadApprovalLeftoverSources,
+  );
   /**
    * 送信経路（`send`/`followUp`、ストリームの `error` イベント）の失敗。**会話 id ごとに持つ（#1585）。**
    *
@@ -1730,18 +1763,50 @@ export function ChatPane({
     [conversationApprovals.data],
   );
   useEffect(() => {
+    // 残した下書き（`leftoverSources` に在る id）は、決着済みでも保つ。
+    const keep = (id: string) => !settledApprovalIds.has(id) || id in leftoverSources;
     saveApprovalDrafts(
       {
-        texts: Object.fromEntries(
-          Object.entries(approvalDrafts.texts).filter(([id]) => !settledApprovalIds.has(id)),
-        ),
+        texts: Object.fromEntries(Object.entries(approvalDrafts.texts).filter(([id]) => keep(id))),
         questions: Object.fromEntries(
-          Object.entries(approvalDrafts.questions).filter(([id]) => !settledApprovalIds.has(id)),
+          Object.entries(approvalDrafts.questions).filter(([id]) => keep(id)),
         ),
       },
       approvalDraftsEpoch.current,
     );
-  }, [approvalDrafts, settledApprovalIds]);
+  }, [approvalDrafts, settledApprovalIds, leftoverSources]);
+  useEffect(() => {
+    saveApprovalLeftoverSources(
+      Object.fromEntries(
+        Object.entries(leftoverSources).filter(
+          ([id]) => id in approvalDrafts.texts || id in approvalDrafts.questions,
+        ),
+      ),
+    );
+  }, [leftoverSources, approvalDrafts]);
+  /** この会話の決着済みの承認のうち、送らなかった下書きが残っているもの。未回答のうちはカードの欄に見えている。 */
+  const leftovers = useMemo(
+    () =>
+      Object.entries(leftoverSources)
+        .filter(([id]) => settledApprovalIds.has(id))
+        .map(([id, source]) => ({
+          id,
+          source,
+          text: describeApprovalLeftover(source, approvalDrafts, id),
+        }))
+        .filter((entry) => entry.text !== ''),
+    [leftoverSources, settledApprovalIds, approvalDrafts],
+  );
+  const discardLeftover = useCallback(
+    (id: string) => {
+      setApprovalDrafts((previous) => ({
+        texts: omitKey(previous.texts, id),
+        questions: omitKey(previous.questions, id),
+      }));
+      setLeftoverSources((previous) => omitKey(previous, id));
+    },
+    [setApprovalDrafts],
+  );
   // 生配信の分岐（`useMemo` の中）から、いまの会話の承認を取り直す口（#3299）。
   const refetchApprovalsRef = useRef<() => void>(() => {});
   const mountedRef = useRef(false);
@@ -2186,6 +2251,8 @@ export function ChatPane({
       attachments: readonly MessageAttachment[] | undefined,
       /** 行の持ち主＝**送った先の会話**。いま見ている会話ではない（別の会話へ移ったあとに送ることがある。#3395）。 */
       owner: string | undefined,
+      /** この送信に付けた `clientMessageId`。履歴が引き取るかを、本文ではなくこれで見る（#3826）。 */
+      clientMessageId: string,
     ) => {
       const key = `h-${ownLineSeqRef.current++}-${text.slice(0, 8)}`;
       // 最下部にいなくても、送った直後だけは追従してよい（上の
@@ -2198,6 +2265,7 @@ export function ChatPane({
           role: 'human',
           text,
           of: owner,
+          clientMessageId,
           ...(attachments === undefined || attachments.length === 0 ? {} : { attachments }),
         },
       ]);
@@ -2340,6 +2408,7 @@ export function ChatPane({
         text,
         attachments.flatMap((item) => (item.meta === undefined ? [] : [item.meta])),
         running.id,
+        clientMessageId,
       );
 
       try {
@@ -2944,6 +3013,7 @@ export function ChatPane({
         text,
         attachments.flatMap((item) => (item.meta === undefined ? [] : [item.meta])),
         shownId,
+        clientMessageId,
       );
       let opened = false;
       // 終端（`done` / `error` / `usage_limited`）を見たか。見ないまま閉じたら失敗として出す（#3564）。
@@ -3630,6 +3700,7 @@ export function ChatPane({
         onScroll={handleScroll}
         className="min-h-0 flex-1 overflow-y-auto py-4 pl-[calc(1rem+var(--safe-left))] pr-[calc(1rem+var(--safe-right))] md:pl-[calc(1.5rem+var(--safe-left))] md:pr-[calc(1.5rem+var(--safe-right))]"
       >
+        <LeftoverDrafts leftovers={leftovers} onDiscard={discardLeftover} />
         {/*
           **遡り切れていないことを言う。** サーバは人間との往復の新しい方から
           `scan` 件しか見ない（マネージャーとの往復・内部ターンは数えない。
@@ -3699,6 +3770,7 @@ export function ChatPane({
                    */
                   if (line.approval !== undefined) {
                     const approvalId = line.approval.id;
+                    const { question, questions } = line.approval;
                     return (
                       <li
                         key={line.key}
@@ -3735,15 +3807,28 @@ export function ChatPane({
                                 : { ...previous.questions, [approvalId]: next },
                             }))
                           }
-                          onAnswered={() => {
+                          onAnswered={(sent) => {
                             // 押した要素は答えの表示に変わって消える。次の未回答のカードへ戻す（#3595）。
                             focusIntentRef.current = { kind: 'approval', approvalId };
-                            // 答えが通ったので、書きかけは要らない（通らなかったときは呼ばれない）。
-                            setApprovalDrafts((previous) => ({
-                              texts: omitKey(previous.texts, approvalId),
-                              questions: omitKey(previous.questions, approvalId),
+                            // 送った分だけ畳む。送信中に打ち足した分・送らなかった本文は残す（承認の画面と同じ規則）。
+                            setApprovalDrafts((previous) =>
+                              settleApprovalDraft(previous, approvalId, sent),
+                            );
+                            setLeftoverSources((previous) => ({
+                              ...previous,
+                              [approvalId]: {
+                                question,
+                                questions: questions ?? undefined,
+                              },
                             }));
                             void conversationApprovals.mutate();
+                          }}
+                          hideFailureWhenSettled
+                          onFailed={(caught) => {
+                            // 409 は回答済み・取り下げ済み。実際の状態へカードを変える（#3827）。
+                            if (caught instanceof ApiError && caught.status === 409) {
+                              void conversationApprovals.mutate();
+                            }
                           }}
                           trailing={
                             <Link

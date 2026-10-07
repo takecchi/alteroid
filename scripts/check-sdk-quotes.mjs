@@ -1,18 +1,6 @@
 #!/usr/bin/env node
-/**
- * 印（`[sdk-verbatim …]`）の付いた逐語引用が、**インストール済みの `sdk.d.ts` に
- * いまも当たること**を確かめる（`pnpm check:sdk-quotes`）。
- *
- * **判定は `check-sdk-quotes-core.mjs` の doc が正本。** このファイルには置かない。
- *
- * ## CI では別ステップにしていない
- *
- * この検査は `scripts/check-sdk-quotes.test.ts` の中から**同じ core を呼んで
- * 実物に当てている**ので、`pnpm test`（＝ `pnpm verify` の `test` 手順・
- * `.github/workflows/ci.yml` の `pnpm test`）に既に載っている。
- * ワークフローを変えずに CI へ足す形は `check-web-css-comment-classnames` と同じである。
- * **この CLI は手元で1本だけ回して読むための口**であり、CI の手順を増やさない。
- */
+// 使い方: pnpm check:sdk-quotes
+// CI の別ステップにしない: `check-sdk-quotes.test.ts` が同じ core を実物に当てており、`pnpm test` に既に載っているため。
 
 import { existsSync, readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -28,7 +16,6 @@ import {
 
 const REPO_ROOT = `${import.meta.dirname}/..`;
 
-// `console` に頼らない理由は `check-web-css-comment-classnames.mjs` と同じ。
 function log(text) {
   process.stdout.write(text + '\n');
 }
@@ -42,7 +29,6 @@ function main() {
   try {
     sdk = resolveSdkTypes(REPO_ROOT, createRequire, existsSync, readFileSync);
   } catch (error) {
-    // **黙って緑にしない。**「0件だった」と「走らなかった」を混ぜない。
     logError(`${error.message}`);
     process.exitCode = 1;
     return;
@@ -73,7 +59,6 @@ function main() {
     return;
   }
 
-  // **必ず1行出す**（出ていなければ走っていないと読める）。
   log(
     `check-sdk-quotes: OK — ${files.length}ファイル中 ${quotes.length}件の ${MARKER} がすべて SDK ${sdk.version} の型定義（sdk.d.ts / sdk-tools.d.ts）に当たった`,
   );

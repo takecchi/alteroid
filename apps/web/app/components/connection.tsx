@@ -1,25 +1,4 @@
-/**
- * 接続先を決める部品。
- *
- * **設定画面の外でも使う。** 繋がらないときに出す画面にもこれを置く — 接続先が
- * 間違っていると設定画面そのものへ到達できないからである（設定画面は「通ってから
- * 出す」側にいる）。直す手段を、詰まっている場所と同じところに置く。
- *
- * ## なぜ「入力欄1つ」ではなく「選ぶ ＋ 足す」なのか
- *
- * 接続先は**複数あるのが普通**である（本番と手元、本番と検証）。入力欄1つだと、
- * 切り替えるたびに URL を打ち直すことになり、**打ち間違いが「繋がらない」として
- * 返ってくる** — しかも間違えた側の値は既に上書きされているので、元へ戻るにも
- * もう一度打ち直すしかない。
- *
- * だから一覧から選ぶ形にし、打つのは**新しい先を足すときだけ**にした。
- * 一覧は3段をそのまま並べる（`lib/config.ts` の `listEndpoints`）。
- *
- * ## ⚠️ 接続先は人間がここで打った値と選んだ値だけから来る
- *
- * クエリ文字列・ハッシュのような外から渡せる経路から受け取らない（理由と歯は
- * `lib/config.ts` の冒頭）。この部品にその種の読み取りを足さないこと。
- */
+// 接続先をクエリ文字列・ハッシュのような外から渡せる経路から受け取らない: 人間がここで打った値と選んだ値だけから来るため
 import { useState } from 'react';
 
 import { useHealth, useStatus, useApiContext } from '@alteroid/swr';
@@ -44,32 +23,19 @@ import {
   Select,
 } from '@alteroid/ui';
 
-/**
- * 3段のどれから来たかを、人間が読む言葉にする。
- *
- * **「段」「解決」のような開発側の語を画面に出さない。** ここを読むのはオーナー
- * であって実装者ではない。
- */
 const ORIGIN_LABEL: Record<EndpointOrigin, string> = {
   stored: 'このブラウザに保存した接続先',
   buildTime: 'このアプリに組み込まれた既定の接続先',
   sameOrigin: 'この画面と同じ場所（既定）',
 };
 
-/**
- * 一覧の見出し。`ORIGIN_LABEL` とは別に持つ。
- *
- * あちらは「いま選んでいる1つが**どこから来たか**」を1行で言うもので、こちらは
- * 「一覧の**この区画に並んでいるのは何か**」を言うもの。同じ語にすると、選んで
- * いる行の真下に同じ文字列が2回出る。
- */
+// ORIGIN_LABEL と同じ語にしない: 選んでいる行の真下に同じ文字列が2回出るため
 const GROUPS: Array<{ origin: EndpointOrigin; label: string }> = [
   { origin: 'buildTime', label: '既定（このアプリに組み込み）' },
   { origin: 'sameOrigin', label: 'この画面と同じ場所' },
   { origin: 'stored', label: 'このブラウザに保存' },
 ];
 
-/** 一覧に出す1行の見え方。**名前を付けていても URL を隠さない**（繋ぐ先は URL である）。 */
 function describeEndpoint(endpoint: Endpoint): string {
   return endpoint.label === undefined ? endpoint.url : `${endpoint.label} — ${endpoint.url}`;
 }
@@ -80,9 +46,7 @@ export function ConnectionCard({ compact = false }: { compact?: boolean }) {
   const status = useStatus();
   const canResetToDefault = hasStoredApiBaseUrl();
 
-  // **必ず見つかる。** `listEndpoints` が「選んでいる先は一覧に必ず入れる」ことを
-  // 保証している（`lib/config.ts`）。それでも `?` で受けるのは、保証が壊れたときに
-  // 画面が落ちるのではなく黙って既定の見え方へ倒れるようにするため。
+  // `?.` で受ける: 保証が壊れたときに画面が落ちず、黙って既定の見え方へ倒れるようにするため
   const selected = endpoints.find((endpoint) => endpoint.url === baseUrl);
   const origin = selected?.origin ?? 'sameOrigin';
 
@@ -103,17 +67,7 @@ export function ConnectionCard({ compact = false }: { compact?: boolean }) {
       />
 
       <div className="flex flex-col gap-3 px-4 py-3">
-        {/*
-          **`Select` を `min-w-0 flex-1` で包む**（`ChatComposer`（`packages/ui/src/components/features/chat/chat-composer.tsx`）の
-          `<div className="min-w-0 flex-1"><Textarea .../></div>` と同じ形。
-          #53 由来）。フォームコントロールは既定の最小幅を持つので、この div が
-          無いと本3で `h-11`（44px、md: 以上は既定のまま）になったボタンとの
-          取り合いで潰れる（ボタン側は短い日本語ラベルなので `flex-shrink` の床が
-          高く、先に犠牲になるのはコントロール側である）。
-
-          **`flex-wrap` は付けていない。** `min-w-0 flex-1` だけで縮む側へ吸収
-          するので、ボタンを画面外へ押し出す形の破綻は起きない。
-        */}
+        {/* min-w-0 flex-1 の div を外さない: フォームコントロールの既定の最小幅のせいで、ボタンとの取り合いで潰れるため */}
         <div className="flex gap-2">
           <div className="min-w-0 flex-1">
             <Select
@@ -139,10 +93,7 @@ export function ConnectionCard({ compact = false }: { compact?: boolean }) {
           <Button
             disabled={!canResetToDefault}
             onClick={() => {
-              // 選択を消すだけ。**次に効く値はここで決め打たない** —
-              // `VITE_ALTEROID_API_URL` が在ればそちらへ、無ければ同一オリジンへ
-              // 落ちる。どちらになるかは `resolveApiBaseUrl` が決める
-              // （`setBaseUrl(null)` がその結果を session に載せ直す）。
+              // 次に効く値を決め打たない: VITE_ALTEROID_API_URL の有無で resolveApiBaseUrl が決めるため
               setBaseUrl(null);
             }}
           >
@@ -150,8 +101,6 @@ export function ConnectionCard({ compact = false }: { compact?: boolean }) {
           </Button>
         </div>
 
-        {/* 3つの出どころを区別する（PR 1 の歯3）。値だけでは「既定に戻った」のか
-            「消し損ねた」のかが分からない。 */}
         <p className="text-xs text-muted-foreground">{ORIGIN_LABEL[origin]}</p>
 
         {selected !== undefined && selected.origin === 'stored' && (
@@ -165,8 +114,6 @@ export function ConnectionCard({ compact = false }: { compact?: boolean }) {
         <AddEndpoint
           onAdd={(entry) => {
             saveEndpoint(entry);
-            // 足したら、そのまま繋ぎに行く。足しただけで切り替わらないと、
-            // 人間は「足せていない」と読む。
             setBaseUrl(entry.url);
           }}
         />
@@ -174,16 +121,9 @@ export function ConnectionCard({ compact = false }: { compact?: boolean }) {
         <ErrorNote error={health.error} />
 
         {health.data !== undefined && (
-          /*
-            **`sm:`（640px）未満は1列に積む。** 理由と組の境目の意味は
-            `KeyValueList` の doc と `manager-detail.tsx` の同型の一覧に書いた
-            コメントと同じ（ここも6remなのでなお余裕がある）。
-          */
           <KeyValueList
             labelWidth="6rem"
             items={[
-              // 置き場は無認証の `/health` では返らない（#2869）。ログインの後ろの
-              // `GET /status` から取る。取れないときは例外にせず、値が無いと分かる文にする。
               status.data !== undefined
                 ? { label: '記憶', value: status.data.storage, mono: true }
                 : {
@@ -195,34 +135,19 @@ export function ConnectionCard({ compact = false }: { compact?: boolean }) {
                   },
               {
                 label: 'pid',
-                // pid は `z.number().int()`（apps/daemon/src/openapi.ts）＝ process.pid。
-                // 有界の小さい整数（Linux の pid_max は既定で7桁までしか無い）なので、
-                // このセクションの幅で折り返しが要る長さにはならない。break-all は
-                // 意図して付けていない。`KeyValueList` の `mono` は `break-all` を当てるので、
-                // ここは `mono` を使わず、旧と同じ `font-mono text-xs` の `span` で包む。
+                // break-all を付けない: pid は有界の小さい整数で、このセクションの幅で折り返しが要る長さにならないため
                 value: <span className="font-mono text-xs">{health.data.pid}</span>,
               },
             ]}
           />
         )}
 
-        {/*
-          **取り直しの失敗は、古い置き場を残したまま言う**（issue #3092）。SWR は再取得が失敗しても
-          直前の `data` を残して `error` を立てるので、`data` だけ見ると前に読めた置き場が今の値に
-          見える。`status.error` は `data` が無い枝（上の「取得できません」）でしか見ていなかった。
-        */}
         {health.data !== undefined && status.data !== undefined && status.error !== undefined && (
           <p className="text-xs text-warn">
             記憶の置き場を取り直せなかった。上の置き場は前に読めたときのもの。
           </p>
         )}
 
-        {/*
-          ここは「ドメインが違うときどうするか」の答えを画面の中に置いている。
-          設定を触るのは大抵それで詰まったときなので、別の文書へ飛ばさない。
-          本文は平易な言い方にし、環境変数名は括弧の補足で残す。CORS・ヘッダ名など
-          開発者向けの語は「開発者向けの詳細」の先に置く（#2782）。
-        */}
         {!compact && (
           <div className="rounded-md border border-border bg-background p-3 text-xs leading-relaxed text-muted-foreground">
             <p className="mb-1.5 font-medium text-foreground">別の場所の alteroid に繋ぐとき</p>
@@ -274,12 +199,7 @@ export function ConnectionCard({ compact = false }: { compact?: boolean }) {
   );
 }
 
-/**
- * いま選んでいるのが「このブラウザに保存した接続先」のときだけ出す操作。
- *
- * **ビルド時の既定と同一オリジンには出さない。** 消してもビルドし直すまで戻って
- * くるので、押せる削除は嘘になる（押した瞬間は消え、読み込み直すと戻る）。
- */
+// ビルド時の既定と同一オリジンには出さない: 消してもビルドし直すまで戻ってくるため
 function SelectedActions({
   endpoint,
   onRename,
@@ -298,8 +218,7 @@ function SelectedActions({
         <Button
           size="sm"
           onClick={() => {
-            // **開くたびに現物から読み直す。** 前に開いたときの書きかけを
-            // 残すと、別の接続先を選んだ後に開いたとき前の名前が出る。
+            // 書きかけを残さない: 別の接続先を選んだ後に開いたとき前の名前が出るため
             setDraft(endpoint.label ?? '');
             setEditing(true);
           }}
@@ -330,7 +249,6 @@ function SelectedActions({
           placeholder={endpoint.url}
           onChange={(event) => setDraft(event.target.value)}
           onKeyDown={(event) => {
-            // IME の変換を確定する Enter では保存しない（`isImeConfirmEnter` の注釈）。
             if (isImeConfirmEnter(event)) return;
             if (event.key === 'Enter') commit();
           }}
@@ -344,14 +262,7 @@ function SelectedActions({
   );
 }
 
-/**
- * 一覧に無い接続先を足す。
- *
- * **打った値をそのまま保存しない。** `normalizeEndpointUrl` で末尾のスラッシュを
- * 落とし、`looksLikeUrl` で形を見る。弾くのはこの2つだけで、届くかどうかは試さない
- * — 届かないことは「繋がらない」として上のバッジが言う（ここで先回りして弾くと、
- * まだ起動していないデーモンを登録できなくなる）。
- */
+// 届くかどうかは試さない: 先回りして弾くと、まだ起動していないデーモンを登録できなくなるため
 function AddEndpoint({ onAdd }: { onAdd(entry: { url: string; label?: string }): void }) {
   const [url, setUrl] = useState('');
   const [label, setLabel] = useState('');
@@ -379,10 +290,6 @@ function AddEndpoint({ onAdd }: { onAdd(entry: { url: string; label?: string }):
   return (
     <div className="flex flex-col gap-1.5 border-t border-border pt-3">
       <p className="text-xs font-medium text-foreground">接続先を追加</p>
-      {/*
-        **狭い画面では積む。** 3つ（名前・URL・ボタン）を1行に詰めると、375px では
-        どれも読めない幅になる。`sm:` 以上で横に並べ、URL の欄だけが伸びる。
-      */}
       <div className="flex flex-col gap-2 sm:flex-row">
         <Input
           value={label}
@@ -392,7 +299,7 @@ function AddEndpoint({ onAdd }: { onAdd(entry: { url: string; label?: string }):
           className="sm:w-32 sm:shrink-0"
           onChange={(event) => setLabel(event.target.value)}
           onKeyDown={(event) => {
-            // 名前は日本語で打つ欄なので、変換の確定の Enter で足して繋ぎ替えない。
+            // 変換の確定の Enter で足さない: 名前は日本語で打つ欄のため
             if (isImeConfirmEnter(event)) return;
             if (event.key === 'Enter') submit();
           }}

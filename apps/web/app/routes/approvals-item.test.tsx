@@ -1,8 +1,4 @@
 // @vitest-environment jsdom
-/**
- * 日付なしの入口（`/approvals/item/:approvalId`）。回答済みの詳細の日付はデーモンの `localDate()` で
- * 決まるので、ブラウザは `GET /approvals/{id}` の1回で `settledOn` を受け取り、その日へ移る。
- */
 import { cleanup, render, screen } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider, useLocation, useParams } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -26,10 +22,6 @@ function approval(over: Partial<PendingApproval> = {}): PendingApproval {
   };
 }
 
-/**
- * `GET /approvals/{id}` だけを答える。`found` が無ければ 404、`status` を渡せばその失敗。
- * 返した呼び出し（メソッドとパス＋クエリ）を `calls` に残す。
- */
 function stub(options: {
   found?: { approval: PendingApproval; settledOn: string | null };
   status?: number;
@@ -96,9 +88,7 @@ describe('日付なしの入口', () => {
     expect((await screen.findByTestId('where')).textContent).toBe(
       '/approvals/answered/2026-09-30/a-1',
     );
-    // replace: 入口を履歴に残さない（戻るで入口に戻って、また移るのを繰り返さない）
     expect(router.state.historyAction).toBe('REPLACE');
-    // 日を探して何度も引かない（1回の移動で `GET /approvals/{id}` の1回だけ）
     expect(calls).toEqual(['/approvals/a-1']);
   });
 

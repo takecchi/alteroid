@@ -1,9 +1,4 @@
 // @vitest-environment jsdom
-/**
- * 記憶の一覧と中身は1画面（`ListDetail`）。親の経路（`memory.tsx`）が左に一覧を持ち、
- * 子の経路（`memory-detail.tsx`）が右に出る。**jsdom はレイアウトを持たないので、押さえられるのは
- * 構造・リンク・属性・未保存の確認まで**（寸法とスクロールは実ブラウザで見た）。
- */
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider, useParams } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -59,7 +54,6 @@ function DetailRoute() {
   return <MemoryDetail {...({ loaderData } as Route.ComponentProps)} />;
 }
 
-/** 本番と同じ入れ子（`routes.ts`）。 */
 function renderAt(url: string) {
   stubFetch((u) => {
     const one = /\/memory\/(alpha|beta)(\?|$)/.exec(u);
@@ -115,7 +109,6 @@ describe('記憶の一覧＋詳細', () => {
     expect(within(detail).getByRole('button', { name: '削除' })).toBeTruthy();
     expect(detail.textContent).not.toContain('undefined');
     expect(screen.queryByRole('button', { name: '記憶の一覧を開く' })).toBeNull();
-    // 名前を入れて開く欄は一覧の上に残る。
     expect(screen.getByLabelText(/^名前/)).toBeTruthy();
   });
 

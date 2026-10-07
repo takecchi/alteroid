@@ -1,18 +1,4 @@
 // @vitest-environment jsdom
-/**
- * 回答済みの承認のページ（`/approvals/answered/:date?/:approvalId?`。#3237）。
- *
- * ここで固定するのは:
- *
- * 1. 左の目次は「決着した日と件数」を、デーモンが返した順（新しい日が上）のまま出す
- * 2. 日付を開くと、その日の件を、デーモンが返した順（決着の新しい順）のまま出す（画面で並べ直さない）
- * 3. 行は行全体が1つのリンクで、どこを押しても詳細へ行ける。詳細から、その日の一覧へ戻れる
- * 4. 取り下げ済みも見える（札・時刻は withdrawnAt・理由）
- * 5. 取れなかったのを0件と描かない（目次・その日の件の両方）
- * 6. 日付の指定が無ければ最新の日を開く（日報と同じ）
- *
- * 時刻は閲覧者の端末の時間帯（`formatDateTime`）で出す。日付の区切りだけがデーモンの `localDate`。
- */
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider, useParams } from 'react-router';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -23,8 +9,7 @@ import { json, Providers, storeTestBaseUrl } from '~/test-support';
 
 import ApprovalsAnswered from './approvals-answered';
 
-// 時刻の表示は端末の時間帯なので、期待値が器に依らないようにここで固定する（`reports.test.tsx` の
-// 同じ節を見ること。`vi.hoisted` でなければ import の評価より後になって効かない）。
+// vi.hoisted にする: import の評価より後だと TZ の固定が効かないため
 const tzBeforeThisFile = vi.hoisted(() => {
   const before = process.env.TZ;
   process.env.TZ = 'Asia/Tokyo';
@@ -67,22 +52,15 @@ const WITHDRAWN = approval({
 });
 
 interface Stub {
-  /** 叩かれた URL（順番どおり）。 */
   calls: string[];
 }
 
 type Respond = () => Response | Promise<Response>;
 
-/**
- * 目次（`/approvals/answered-dates`）とその日の件（`/approvals?answeredOn=`）を返す。
- * **日ごとの件は、渡した順のまま返す**（並べるのはデーモンの仕事。画面が並べ直さないことを測る）。
- */
 function stubApi(options: {
   dates?: { date: string; count: number }[] | Respond;
   days?: Record<string, PendingApproval[] | Respond>;
-  /** `beforeDate` 付き（読み足し）の目次。渡さなければ `dates` をそのまま返す（従来どおり）。 */
   olderDates?: (beforeDate: string) => Response | Promise<Response>;
-  /** 未回答の側の一覧（`GET /approvals?pending=true`。読めない行の案内の元）。既定は空の一覧。 */
   pending?: object | Respond;
   conversation?: (id: string) => Response | Promise<Response>;
 }): Stub {
@@ -128,7 +106,6 @@ afterEach(() => {
   globalThis.fetch = originalFetch;
 });
 
-// framework mode の `loaderData` を URL から作る（`reports.test.tsx` の `renderReportsAtUrl` と同じやり方）。
 const Page = ApprovalsAnswered as unknown as (props: {
   loaderData: { date: string | undefined; approvalId: string | undefined };
 }) => React.ReactElement;
@@ -141,7 +118,6 @@ function renderAt(url: string) {
   const router = createMemoryRouter(
     [
       { path: '/approvals/answered/:date?/:approvalId?', Component: Routed },
-      // 会話・委譲へのリンクの行き先。描くだけで踏まない。
       { path: '/chat/:id', Component: () => null },
       { path: '/managers/:id', Component: () => null },
     ],
@@ -155,7 +131,6 @@ function renderAt(url: string) {
   return router;
 }
 
-/** 左の目次の行（日付と件数）。 */
 function dateRows(): HTMLElement[] {
   const list = screen.getByRole('list', { name: '決着した日' });
   return within(list).getAllByRole('listitem');
@@ -173,7 +148,6 @@ describe('左の目次（決着した日と件数）', () => {
 
     await screen.findByText('2026-09-29');
     const rows = dateRows();
-    // 日付と件数が、返ってきた順（新しい日が上）に並ぶ。
     expect(rows.map((row) => row.querySelector('span')?.textContent)).toEqual([
       '2026-09-30',
       '2026-09-29',
@@ -206,7 +180,6 @@ describe('左の目次（決着した日と件数）', () => {
     expect(
       (await screen.findByRole('link', { name: /2026-09-30/ })).getAttribute('aria-current'),
     ).toBe('page');
-    // 未回答の側の取得（`pending=true`。読めない行の案内の元）は別なので、その日の件だけを数える。
     const dayCalls = stub.calls.filter(
       (href) =>
         new URL(href).pathname === '/approvals' && new URL(href).searchParams.has('answeredOn'),
@@ -241,7 +214,6 @@ describe('左の目次（決着した日と件数）', () => {
   });
 });
 
-/** 新しい日が上の `count` 日ぶん（`from` の日から1日ずつ遡る）。 */
 function daysBack(from: string, count: number): { date: string; count: number }[] {
   const start = Date.parse(`${from}T00:00:00Z`);
   return Array.from({ length: count }, (_, index) => ({
@@ -251,7 +223,7 @@ function daysBack(from: string, count: number): { date: string; count: number }[
 }
 
 describe('もっと古い日を読む（#3297）', () => {
-  const FULL = daysBack('2026-09-30', 60); // 窓の大きさ（60）ちょうど → 続きがあるかもしれない
+  const FULL = daysBack('2026-09-30', 60);
   const lastOfFull = FULL[59]!.date;
 
   it('窓ちょうどなら「もっと古い日を読む」を出し、押すと beforeDate で続きを読んで後ろへ足す', async () => {
@@ -275,7 +247,6 @@ describe('もっと古い日を読む（#3297）', () => {
     await screen.findByText('2026-05-31');
     const rows = dateRows();
     expect(rows).toHaveLength(62);
-    // 今の一覧の後ろに足す（並べ直さない）
     expect(rows.slice(-2).map((row) => row.querySelector('span')?.textContent)).toEqual([
       '2026-06-01',
       '2026-05-31',
@@ -283,7 +254,6 @@ describe('もっと古い日を読む（#3297）', () => {
     const call = stub.calls.find((href) => href.includes('beforeDate'))!;
     expect(new URL(call).searchParams.get('beforeDate')).toBe(lastOfFull);
     expect(new URL(call).searchParams.get('limit')).toBe('60');
-    // limit 未満しか返らなかったので、続きは無いとみなす
     expect(screen.queryByRole('button', { name: 'もっと古い日を読む' })).toBeNull();
   });
 
@@ -325,7 +295,6 @@ describe('もっと古い日を読む（#3297）', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'もっと古い日を読む' }));
 
     expect(await screen.findByText(/もっと古い日を読み込めませんでした/)).toBeTruthy();
-    // 画面全体は奪われない: 一覧もその日の件も残る
     expect(dateRows()).toHaveLength(60);
     expect(screen.getByRole('heading', { name: '2026-09-30 に決着した承認' })).toBeTruthy();
 
@@ -346,7 +315,6 @@ describe('もっと古い日を読む（#3297）', () => {
     expect(
       screen.getByText(/開いている 2026-01-05 は、この目次に読み込んだ日の中に無い/),
     ).toBeTruthy();
-    // 目次のどの行も選択中ではない
     for (const row of dateRows()) {
       expect(within(row).getByRole('link').getAttribute('aria-current')).toBeNull();
     }
@@ -417,7 +385,6 @@ describe('読めない承認待ちの案内（#3297）', () => {
 
 describe('その日の件', () => {
   it('デーモンが返した順のまま並べる（画面で並べ直さない）', async () => {
-    // 古い方を先に返す。画面が決着日時で並べ直せば、順が入れ替わってここが落ちる。
     stubApi({ dates: DATES, days: { '2026-09-30': [OLDER, NEWER, WITHDRAWN] } });
     renderAt('/approvals/answered/2026-09-30');
 
@@ -441,7 +408,6 @@ describe('その日の件', () => {
     expect(row.textContent).toContain('回答済');
     expect(row.textContent).toContain(formatDateTime('2026-09-30T10:00:00.000Z'));
     expect(row.textContent).toContain('待たない');
-    // 行の中に、さらに別のリンク・ボタンを入れない（入れ子の操作を作らない）。
     expect(within(row).queryAllByRole('link')).toHaveLength(0);
     expect(within(row).queryAllByRole('button')).toHaveLength(0);
   });
@@ -479,11 +445,8 @@ describe('詳細', () => {
     const router = renderAt('/approvals/answered/2026-09-30/a-new');
 
     expect(await screen.findByText('待たない')).toBeTruthy();
-    // 回答経路（`describeAnsweredVia`）
     expect(screen.getByText(/回答経路/)).toBeTruthy();
-    // 別の件は出さない（その日の全部を縦に並べない）
     expect(screen.queryByText('朝の migrate を当てるか')).toBeNull();
-    // 入力欄は出ない（回答済みは終端）
     expect(screen.queryByPlaceholderText(/答える/)).toBeNull();
     expect(screen.getByText(/決着したのは/)).toBeTruthy();
 
@@ -581,7 +544,6 @@ describe('取れなかったのを0件と描かない', () => {
       expect((await screen.findAllByRole('alert')).length).toBeGreaterThan(0);
       expect(screen.queryByText('この日に決着した承認は無い。')).toBeNull();
       expect(screen.queryByText(/0 件/)).toBeNull();
-      // 目次は読めているので出ている
       expect(screen.getByRole('link', { name: /2026-09-30/ })).toBeTruthy();
     },
   );
@@ -620,10 +582,6 @@ describe('枠', () => {
   });
 });
 
-/**
- * #3700。「決着したのは …（N分前）」は、再描画のきっかけが無くても分単位で更新される。
- * 偽のタイマーで時計を進める（実時間は待たない）。約束の解決は `advanceTimersByTimeAsync(0)` で流す。
- */
 describe('「決着したのは …（N分前）」は分の時計で更新される（#3700）', () => {
   it('分が進むと「たった今」が「N分前」に変わる', async () => {
     const start = new Date('2026-10-07T12:00:00.000Z').getTime();
@@ -650,6 +608,30 @@ describe('「決着したのは …（N分前）」は分の時計で更新さ�
         await vi.advanceTimersByTimeAsync(3 * 60_000);
       });
       expect(line()).toContain('（3分前）');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('分の時計より30秒先に決着した承認を「まもなく」と言わない（#3966）', async () => {
+    const start = new Date('2026-10-07T12:00:00.000Z').getTime();
+    vi.useFakeTimers({ now: start, toFake: ['setInterval', 'clearInterval', 'Date'] });
+    Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
+    try {
+      const settled = approval({
+        id: 'a-ahead',
+        answeredAt: new Date(start + 30_000).toISOString(),
+        answer: 'はい',
+        answeredVia: { kind: 'operator', auth: 'operator-token' },
+      });
+      stubApi({ dates: [{ date: '2026-10-07', count: 1 }], days: { '2026-10-07': [settled] } });
+      renderAt('/approvals/answered/2026-10-07/a-ahead');
+      for (let i = 0; i < 20; i += 1) {
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(0);
+        });
+      }
+      expect(screen.getByText(/決着したのは/).textContent).toContain('（たった今）');
     } finally {
       vi.useRealTimers();
     }
