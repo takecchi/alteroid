@@ -1,64 +1,7 @@
 #!/usr/bin/env node
-/**
- * `main` で失敗した workflow run を、この repo の Issue として知らせる（Issue #1207）。
- *
- * **判定ロジックはここに置かない。** `main-ci-alarm-core.mjs` が正本で、なぜ鍵が
- * 「workflow 名 ＋ head_sha」なのか、なぜ自動で閉じないのか、なぜ宛先を Issue 1つに
- * 絞ったのかは、あちらの doc に書いてある。ここはネットワーク（`gh`）を持ち、結果を
- * 出力し、終了コードを決めるだけの薄い層（`issue-done-trailer.mjs` と同じ分け方）。
- *
- * ## 既定は dry-run。実際に書くのは明示したときだけ
- *
- * 環境変数 `MAIN_CI_ALARM_APPLY=1`（または `--apply`）が無い限り、`gh issue create` も
- * `gh issue comment` も呼ばない —— 判定と「書くならこうする」というログだけを出す。
- * **手元で `pnpm main-ci-alarm` を誤って叩いても Issue は1本も生えない。** 実際に書く
- * のは `.github/workflows/main-ci-alarm.yml` が `MAIN_CI_ALARM_APPLY=1` を渡す run
- * だけである（`issue-done-trailer.mjs` と同じ形）。
- *
- * ## 入力
- *
- * | 引数 | 既定の環境変数 | 意味 |
- * |---|---|---|
- * | `--repo` | `GITHUB_REPOSITORY` | `owner/repo` |
- * | `--workflow` | `MAIN_CI_ALARM_WORKFLOW_NAME` | 落ちた workflow の名前 |
- * | `--sha` | `MAIN_CI_ALARM_HEAD_SHA` | その run の head_sha |
- * | `--run-id` | `MAIN_CI_ALARM_RUN_ID` | その run の id |
- * | `--run-url` | `MAIN_CI_ALARM_RUN_URL` | その run の URL |
- * | `--conclusion` | `MAIN_CI_ALARM_CONCLUSION` | その run の conclusion |
- * | `--head-branch` | `MAIN_CI_ALARM_HEAD_BRANCH` | その run の head_branch |
- * | `--default-branch` | `MAIN_CI_ALARM_DEFAULT_BRANCH` | repo の default branch |
- * | `--run-attempt` | `MAIN_CI_ALARM_RUN_ATTEMPT`（任意） | その run の run_attempt（jobs をその試行から読む。無ければ最新） |
- * | `--apply` | `MAIN_CI_ALARM_APPLY`（`1`/`true`） | 実際に書くなら指定 |
- *
- * ## 取り消された run は鳴らさない（Issue #3044）
- *
- * `CI` の run は、後続の push に `cancel-in-progress` で取り消されても、集約ゲート
- * `ci` が落ちるので conclusion が `failure` になる。**判定は core の `isCancelledRun`**
- * （失敗が `ci` だけで cancelled が在るときだけ「取り消し」）。ここは jobs を取りに行く
- * だけで、**取れなかったときは今までどおり鳴らす**（黙って消さない）。
- *
- * 欠けている入力が在れば「呼び方の誤り」として終了コード1で終わる
- * （`issue-done-trailer.mjs` と同じ理由 —— 読みに行くための情報が最初から無いのは
- * 判定の失敗とは別である）。
- *
- * ## ⚠️ この道具が言えること・言えないこと
- *
- * - **言えること**: 渡された run について、警報 Issue を立てた／既存へ足した／
- *   既に書かれていたので何もしなかった、のどれをしたか
- * - ⛔ **言えないこと: `main` がいま赤いかどうか。** これは1つの run の事後報告
- *   であって、現在地を測っていない。反映した sha が実際に赤かったかを毎晩
- *   判定して記録するのは記録 step（`.github/scripts/record-release-prod-ci.mjs`）
- *   の役目であり、そちらが毎晩読み直す
- * - ⛔ **言えないこと: 誰かがこの Issue を読んだか。** 警報は「人が見ていれば効く」
- *   歯である。**誰も見ていなくても止まる歯は無い** —— 「赤なら止める」門は
- *   Issue #1207 の (3) で作らないと決定済み（`main-ci-alarm-core.mjs` の doc）
- *
- * ## 失敗の扱い
- *
- * **黙って緑にしない。** Issue 一覧が読めない・`gh issue create` が失敗した等は
- * 出力に残して終了コード1で終わる。⚠️ ただし**この workflow が赤くなっても、それを
- * 知らせる経路は無い**（警報の警報は置いていない）—— ここは意図的に1段で止めてある。
- */
+// 使い方: pnpm main-ci-alarm [--repo ... --workflow ... --sha ... --run-id ... --run-url ... --conclusion ... --head-branch ... --default-branch ... --run-attempt N] [--apply]（各引数は `MAIN_CI_ALARM_*` 環境変数でも渡せる。欠けていれば終了コード 1）
+// 既定は dry-run: `--apply`（または `MAIN_CI_ALARM_APPLY=1`）が無い限り `gh issue create` / `gh issue comment` を呼ばず、手元で誤って叩いても Issue が生えないため。
+// 警報の警報は置かない: ここは意図的に1段で止める。
 
 import { execFileSync } from 'node:child_process';
 import process from 'node:process';
@@ -107,7 +50,6 @@ function isApplyRequested(args) {
   return envValue === '1' || envValue === 'true';
 }
 
-/** `gh` を呼ぶ。失敗したら `{ error }` を返す（例外を投げない）。 */
 function gh(argv, { input } = {}) {
   try {
     const stdout = execFileSync('gh', argv, {
@@ -125,15 +67,7 @@ function gh(argv, { input } = {}) {
   }
 }
 
-/**
- * open な Issue を全部読む。
- *
- * **`gh search` を使わない。** 検索インデックスは反映が遅れることが在り、立てた直後の
- * Issue が見つからないと**同じ鍵で2本目が生える**。一覧は遅れない。
- *
- * ⚠️ `repos/{repo}/issues` は **Pull Request も混ぜて返す**（落とすのは core の
- * `findOpenAlarmIssue`）。`--paginate` を付けてあるので open が100本を超えても拾える。
- */
+// `gh search` を使わない: 検索インデックスの反映が遅れ、立てた直後の Issue が見つからないと同じ鍵で2本目が生えるため。
 function fetchOpenIssues(repo) {
   const { stdout, error } = gh([
     'api',
@@ -142,7 +76,6 @@ function fetchOpenIssues(repo) {
   ]);
   if (stdout === null) return { issues: null, error };
   try {
-    // `--paginate` は JSON 配列を連結して1つの配列として返す（gh が畳んでくれる）。
     const parsed = JSON.parse(stdout);
     return { issues: Array.isArray(parsed) ? parsed : [], error: null };
   } catch (e) {
@@ -165,10 +98,7 @@ function fetchIssueComments(repo, issueNumber) {
   }
 }
 
-/**
- * run の jobs を `{name, conclusion}` の配列で返す。失敗したら `{ jobs: null, error }`。
- * `--paginate` は `.jobs` を持つ応答を1つの JSON へ連結できないので、`--jq` で1件1行にして読む。
- */
+// `--jq` で1件1行にして読む: `--paginate` は `.jobs` を持つ応答を1つの JSON へ連結できないため。
 function fetchRunJobs(repo, runId, runAttempt) {
   const base =
     runAttempt === ''
@@ -233,7 +163,7 @@ function main() {
   if (verdict.alarm && workflowName === CANCEL_AWARE_WORKFLOW_NAME) {
     const { jobs, error: jobsError } = fetchRunJobs(repo, runId, runAttempt);
     if (jobs === null) {
-      // 安全側: jobs が読めないときは取り消しとみなさず、今までどおり鳴らす。
+      // jobs が読めないときは取り消しとみなさず鳴らす: 黙って消さないため。
       logError(
         'main-ci-alarm: run の jobs を読めなかった —— 取り消しかどうか判定できないので鳴らす',
       );

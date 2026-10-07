@@ -7,11 +7,6 @@ import {
   // @ts-expect-error -- 素の .mjs（型宣言を持たない build 用スクリプト）を読む
 } from './check-web-css-no-inline-fonts-core.mjs';
 
-/**
- * `check-web-css-no-inline-fonts` の判定ロジックの歯（`check-web-css-comment-classnames.test.ts`
- * の1段目と同じ形）。本物の `pnpm build` を要らない。実ビルドへの検査は CI / `pnpm verify` が
- * `pnpm check:web-css-no-inline-fonts` として直接走らせる。
- */
 describe('check-web-css-no-inline-fonts', () => {
   it('data:font がある CSS を落とす（個数も数える）', () => {
     const content =
