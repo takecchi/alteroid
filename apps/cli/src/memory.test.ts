@@ -323,17 +323,16 @@ describe('alteroid memory remove', () => {
    * 消さず、見る先を「書いた文字列」から「投げた例外の文言」へ反転した。
    */
   it('「無い」と「名前として不正」を混ぜない（どちらも例外を投げる。#1641）', async () => {
-    // 先に読む（GET。無ければ null）。無いものは版なしで DELETE を打ち、サーバの 404 / 400 をそのまま伝える。
-    replies.push({ status: 404, body: { error: 'not found' } });
+    // 先に読む（GET。無ければ null）。読んだ 404 / 400 をその場で伝える（#3820。DELETE は打たない）。
     replies.push({ status: 404, body: { error: 'not found' } });
     const missing = await memoryRemoveCommand('missing', { yes: true }).catch((e: unknown) => e);
     expect(String(missing)).toContain('そんな記憶はありません');
 
     replies.push({ status: 400, body: { error: '記憶のスラッグが不正' } });
-    replies.push({ status: 400, body: { error: '記憶のスラッグが不正' } });
     const invalid = await memoryRemoveCommand('..', { yes: true }).catch((e: unknown) => e);
     expect(String(invalid)).toContain('名前として成立しません');
     expect(String(invalid)).not.toContain('そんな記憶はありません');
+    expect(sent.map((entry) => entry.method)).toEqual(['GET', 'GET']);
   });
 });
 
@@ -837,6 +836,93 @@ describe('alteroid memory remove の確認（#3141）', () => {
       restore();
     }
     expect(sent.some((entry) => entry.method === 'DELETE')).toBe(false);
+  });
+});
+
+describe('alteroid memory remove は、確認の前に在るかを確かめる（#3820）', () => {
+  function fakeIo(over: { isTTY: boolean; answer?: string }) {
+    const asked: string[] = [];
+    const written: string[] = [];
+    const io: ConfirmIo = {
+      isTTY: over.isTTY,
+      write: (text) => {
+        written.push(text);
+      },
+      ask: (question) => {
+        asked.push(question);
+        return Promise.resolve(over.answer ?? '');
+      },
+    };
+    return { io, asked, written };
+  }
+
+  it('無い slug は、確認を出さずにすぐ失敗する。要求は GET だけ（再現）', async () => {
+    captureStdout();
+    replies.push({ status: 404, body: { error: 'not found' } });
+    const { io, asked, written } = fakeIo({ isTTY: true, answer: 'yes' });
+
+    await expect(memoryRemoveCommand('no-such-slug', {}, io)).rejects.toThrow(
+      'そんな記憶はありません: no-such-slug',
+    );
+
+    expect(asked).toEqual([]);
+    expect(written).toEqual([]);
+    expect(sent.map((entry) => `${entry.method} ${new URL(entry.url).pathname}`)).toEqual([
+      'GET /memory/no-such-slug',
+    ]);
+  });
+
+  it('無い slug は、端末でなく --yes も無くても「そんな記憶はありません」で失敗する（--yes の案内に化けない）', async () => {
+    replies.push({ status: 404, body: { error: 'not found' } });
+    const { io } = fakeIo({ isTTY: false });
+
+    await expect(memoryRemoveCommand('no-such-slug', {}, io)).rejects.toThrow(
+      'そんな記憶はありません',
+    );
+    expect(sent).toHaveLength(1);
+  });
+
+  it('在る slug は、従来どおり 確認 → DELETE。確認の前に読んだ版が ifMatch になる', async () => {
+    const read = captureStdout();
+    replies.push({
+      status: 200,
+      body: { document: { slug: 'values', content: '# 価値観\n' }, version: 'v-read' },
+    });
+    replies.push({ status: 200, body: { ok: true, slug: 'values' } });
+    const { io, asked, written } = fakeIo({ isTTY: true, answer: 'yes' });
+
+    await memoryRemoveCommand('values', {}, io);
+
+    expect(written.join('')).toContain('記憶 values を消します');
+    expect(asked).toHaveLength(1);
+    expect(sent.map((entry) => entry.method)).toEqual(['GET', 'DELETE']);
+    expect(sent[1]?.url).toBe('http://127.0.0.1:4517/memory/values?ifMatch=v-read');
+    expect(read()).toContain('消しました: values');
+  });
+
+  it('在る slug でも、確認に yes と答えなければ DELETE は打たない', async () => {
+    captureStdout();
+    replies.push({
+      status: 200,
+      body: { document: { slug: 'values', content: 'x' }, version: 'v-read' },
+    });
+    const { io } = fakeIo({ isTTY: true, answer: 'no' });
+
+    await expect(memoryRemoveCommand('values', {}, io)).rejects.toThrow();
+
+    expect(sent.map((entry) => entry.method)).toEqual(['GET']);
+  });
+
+  it('--if-match を明示したときは、事前の GET をせず、確認 → その版で DELETE（既存の挙動）', async () => {
+    captureStdout();
+    replies.push({ status: 200, body: { ok: true, slug: 'values' } });
+    const { io, asked } = fakeIo({ isTTY: true, answer: 'yes' });
+
+    await memoryRemoveCommand('values', { ifMatch: 'v-shown' }, io);
+
+    expect(asked).toHaveLength(1);
+    expect(sent.map((entry) => entry.method)).toEqual(['DELETE']);
+    expect(sent[0]?.url).toBe('http://127.0.0.1:4517/memory/values?ifMatch=v-shown');
   });
 });
 
