@@ -47,7 +47,6 @@ import {
   summarizeJournalDiagnosticsEntry,
   type JournalDiagnosticsEntryLike,
 } from '@alteroid/core/journal-diagnostics-format';
-import { describeManagerProvider } from '@alteroid/core/manager-provider-format';
 import {
   formatSystemErrorFacts,
   formatSystemErrorUnknownNote,
@@ -172,7 +171,11 @@ export async function chatCommand(): Promise<void> {
   // いない間に届いた行（応答待ちの間にパイプで流れ込んだ2行目以降）をどこにも渡さず捨てる。
   // REPL の問い（`confirmInRepl`）も同じ `ask` なので、次に積まれた行がその答えになる。
   const pendingLines: string[] = [];
-  let waiter: { resolve: (line: string) => void; reject: (error: Error) => void } | null = null;
+  let waiter: {
+    resolve: (line: string) => void;
+    reject: (error: Error) => void;
+    cancelOnSigint: boolean;
+  } | null = null;
   let inputClosed = false;
   const deliver = (text: string): void => {
     if (waiter === null) {
@@ -209,14 +212,20 @@ export async function chatCommand(): Promise<void> {
       return;
     }
     const segment = [...pasteLines.splice(0), text].join('\n');
-    const head = continued[0] ?? segment;
+    const head = (continued[0] ?? segment).trimStart();
     // `//` で始まる行はコマンドではなく発言（下の脱出）なので、ほかの文と同じく `\` で続けられる。
-    if (continuesLine(segment) && (!head.startsWith('/') || head.startsWith('//'))) {
-      continued.push(segment.slice(0, -1));
-      if (waiter !== null && stdin.isTTY === true) {
-        rl.setPrompt('… ');
-        rl.prompt();
+    // コマンドの行は `\` を畳まない（パスの `\` がそのまま要る）。
+    if (!head.startsWith('/') || head.startsWith('//')) {
+      const folded = foldTrailingBackslashes(segment);
+      if (folded.continues) {
+        continued.push(folded.text);
+        if (waiter !== null && stdin.isTTY === true) {
+          rl.setPrompt('… ');
+          rl.prompt();
+        }
+        return;
       }
+      deliver([...continued.splice(0), folded.text].join('\n'));
       return;
     }
     deliver([...continued.splice(0), segment].join('\n'));
@@ -239,6 +248,20 @@ export async function chatCommand(): Promise<void> {
   // 閉じなくなるので、閉じる側はここで担う。
   let interrupting = false;
   rl.on('SIGINT', () => {
+    // 確認の入力欄（`confirmInRepl`）の Ctrl+C は、その確認だけの取り消し。ここで入力ごと閉じると、
+    // 「やめる」つもりの1回で chat が終わり、終了時の送信と蒸留まで走る（#3954）。
+    if (waiter?.cancelOnSigint === true) {
+      const { reject } = waiter;
+      waiter = null;
+      // 打ちかけの答えを次の入力へ持ち越さない。
+      (rl as { write?: (data: null, key: { ctrl: boolean; name: string }) => void }).write?.(null, {
+        ctrl: true,
+        name: 'u',
+      });
+      stdout.write('\n');
+      reject(new Error('confirm cancelled'));
+      return;
+    }
     if (waiter !== null || inputClosed) {
       // Ctrl+C は取り消し。書きかけ（`\` の続き・貼り付け）は送らず捨てる（#3682）。close の後始末が渡してしまうので先に空にする。
       const discarded = continued.length + pasteLines.length;
@@ -283,7 +306,7 @@ export async function chatCommand(): Promise<void> {
   if (bracketedPaste) process.stdout.write('\x1b[?2004h');
   // 非対話（パイプ）の入力では、送信が失敗したらそこで止まり、非 0 で終える（#3413）。
   let abortReason: string | null = null;
-  const ask = (question: string): Promise<string> => {
+  const ask = (question: string, options?: { cancelOnSigint?: boolean }): Promise<string> => {
     const queued = pendingLines.shift();
     if (queued !== undefined) {
       stdout.write(question);
@@ -294,7 +317,7 @@ export async function chatCommand(): Promise<void> {
     rl.setPrompt(continued.length > 0 ? '… ' : question);
     rl.prompt();
     return new Promise((resolve, reject) => {
-      waiter = { resolve, reject };
+      waiter = { resolve, reject, cancelOnSigint: options?.cancelOnSigint === true };
     });
   };
   // 手元のコマンドの区間に入る。`toLocal` は呼ばれたあとの通信の signal を返す。
@@ -340,7 +363,8 @@ export async function chatCommand(): Promise<void> {
     if (body === null || body.length === 0) return;
     const out = interactive ? stdout : stderr;
     out.write('送れなかった本文:\n');
-    out.writeRaw(`${body}\n`);
+    // 行末の `\` は倍にして戻す。そのまま貼り直すと、末尾の `\` 1つが続きの印になり別の本文になる。
+    out.writeRaw(`${body.replace(/\\+(?=\n|$)/g, (run) => run + run)}\n`);
   };
   // 次に送る発言へ添えかけのファイル（`/attach`）。
   const draft = createAttachmentDraft(target);
@@ -373,9 +397,14 @@ export async function chatCommand(): Promise<void> {
       unsent = null;
       let line: string;
       let typed: string;
+      // 送る本文。先頭の空白（コードのインデント）は打ったままにし、末尾の空白・改行だけ落とす。
+      // 空判定とコマンドの見分けは trim した `line` で行う。
+      let body: string;
       try {
-        line = (await ask('> ')).trim();
-        typed = line;
+        const raw = await ask('> ');
+        line = raw.trim();
+        typed = raw.trimEnd();
+        body = typed;
       } catch {
         break; // Ctrl-C・入力の終わり（EOF）
       }
@@ -444,7 +473,7 @@ export async function chatCommand(): Promise<void> {
         // `//` で始めると、先頭の `/` を 1 つ外した発言として送る（`/` で始まる文を送るための抜け道。
         // TUI の `resolveCommand` と同じ規則。#3768）。以降は発言として扱う。
         if (line.startsWith('//')) {
-          line = line.slice(1);
+          body = body.replace('/', '');
         } else if (line.startsWith('/')) {
           slashFailure = null;
           const handled = await runLocal(
@@ -457,7 +486,8 @@ export async function chatCommand(): Promise<void> {
                 conversationId,
                 target,
                 // 戻せない操作の確認は、この REPL の readline で聞く（`confirm.ts`）。
-                (summary) => confirmInRepl(summary, ask),
+                (summary) =>
+                  confirmInRepl(summary, (question) => ask(question, { cancelOnSigint: true })),
                 (reason) => {
                   slashFailure ??= reason;
                 },
@@ -540,7 +570,7 @@ export async function chatCommand(): Promise<void> {
         const edit = editing;
         const sentTo = await sendMessage(
           target,
-          line,
+          body,
           edit === null ? conversationId : edit.conversationId,
           edit?.id,
           {
@@ -599,6 +629,20 @@ export async function chatCommand(): Promise<void> {
       `${abortReason}。入力が端末でないので、ここで止めました（残りの入力は読んでいません）`,
     );
   }
+}
+
+/**
+ * 行末の `\` を、案内どおりに読む。`\\` は1文字の `\`、奇数個なら最後の1つが続きの印（外す）。
+ * 畳まずに送ると `\` で終わる本文を送る方法が無くなる（#3952）。
+ */
+export function foldTrailingBackslashes(line: string): { text: string; continues: boolean } {
+  const trailing = /\\+$/.exec(line);
+  if (trailing === null) return { text: line, continues: false };
+  const count = trailing[0].length;
+  return {
+    text: line.slice(0, line.length - count) + '\\'.repeat(Math.floor(count / 2)),
+    continues: count % 2 === 1,
+  };
 }
 
 /** 行末が、奇数個の `\` で終わるか（続きの行がある印。`\\` は1文字の `\` の書き方として続けない）。 */
@@ -3577,9 +3621,6 @@ export function renderManagerList(
         `${summarizeText(manager.request)}`,
     );
     lines.push(`      cwd: ${manager.cwd}`);
-    // **マネージャー層の provider（#486 S9）。** 欄が無いのは「不明」で、`claude` とは描かない
-    // （クローンの道具・Web UI と同じ `describeManagerProvider`）。
-    lines.push(`      provider: ${describeManagerProvider(manager.managerProvider)}`);
     // **作成と更新。** 値は `GET /managers` が既に返していて、ここが出して
     // いなかっただけである（クローンの `manager_list` には #208 から出ている）。
     lines.push(`      作成: ${manager.startedAt}  更新: ${manager.updatedAt}`);

@@ -27,7 +27,7 @@ describe('CODEX_PROVIDER（正直な申告）', () => {
     });
   });
 
-  it('欠けた要件は provider-gaps が日報・自己認識へ出す（持たないふりをしない）', () => {
+  it('欠けた要件は provider-gaps が文言で数えられる（持たないふりをしない）', () => {
     expect(missingRequirementCapabilities(CODEX_PROVIDER.capabilities)).toEqual([
       'compactionHook',
       'sessionLog',

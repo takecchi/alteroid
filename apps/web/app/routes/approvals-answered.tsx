@@ -4,7 +4,7 @@ import { Link } from 'react-router';
 import { ApprovalEntry } from '~/components/approval-entry';
 import { ApprovalsTabs } from '~/components/group-tabs';
 import { LoadError } from '~/components/load-error';
-import { useMinuteNow } from '~/lib/use-now';
+import { formatRelativeAtMinute, useMinuteNow } from '~/lib/use-now';
 import {
   Button,
   Page,
@@ -16,7 +16,7 @@ import {
   cn,
 } from '@alteroid/ui';
 import { useAnsweredDatesWindow, useApprovals, useApprovalsAnsweredOn } from '@alteroid/swr';
-import { formatDateTime, formatRelative, redactBody } from '@alteroid/logic';
+import { formatDateTime, redactBody } from '@alteroid/logic';
 import type { PendingApproval } from '@alteroid/logic';
 
 import type { Route } from './+types/approvals-answered';
@@ -258,7 +258,7 @@ function DayBody({ date, approvalId }: { date: string; approvalId: string | unde
               {settledAt(selected) !== undefined && (
                 <p className="mb-2 text-[11px] text-muted-foreground">
                   決着したのは {formatDateTime(settledAt(selected)!)}（
-                  {formatRelative(settledAt(selected)!, now)}）
+                  {formatRelativeAtMinute(settledAt(selected)!, now)}）
                 </p>
               )}
               <ApprovalEntry approval={selected} />
