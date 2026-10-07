@@ -187,4 +187,30 @@ describe('入力欄の上の帯', () => {
     expect(details?.open).toBe(false);
     expect(details?.textContent).toContain('result_is_error');
   });
+
+  it('本文に 401 があるだけの失敗は一般の案内にし、認証トークンへの導線を出さない（#3953）', async () => {
+    stubFetch(
+      routes([], () =>
+        sse([
+          { event: 'open', data: { conversationId: CONVERSATION } },
+          {
+            event: 'error',
+            data: {
+              type: 'error',
+              message:
+                '結果なしで終了: error_during_execution（result_subtype） / 401 件のファイルを処理中に失敗',
+            },
+          },
+        ]),
+      ),
+    );
+    renderChat(`/chat/${CONVERSATION}`);
+    const box = await screen.findByPlaceholderText(/クローンに話しかける/);
+    fireEvent.change(box, { target: { value: 'こんにちは' } });
+    fireEvent.click(screen.getByRole('button', { name: 'メッセージを送信' }));
+
+    expect(await screen.findByText(/^返事を作れませんでした。/)).toBeTruthy();
+    expect(screen.queryByText(/クローンの認証が通らず/)).toBeNull();
+    expect(screen.queryByRole('link', { name: '認証トークンの画面を開く' })).toBeNull();
+  });
 });

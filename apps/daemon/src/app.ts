@@ -105,6 +105,7 @@ import {
   fingerprintOf,
   noteDroppedRecord,
   reasonOf,
+  redactErrorText,
   readConversationPage,
   readConversationWindow,
   decodeConversationCursor,
@@ -362,11 +363,6 @@ export interface AppDeps {
    * GitHub の書き込み権が並ぶ（railway/README.md「daemon 側には置かない」）。
    */
   runners?: RunnerRegistry;
-  /**
-   * クローン層の provider の id（#486 S9）。デーモンが起動時に解決した値で、デーモン全体で
-   * 1つ（`GET /runners` の `cloneProvider`）。無ければ応答に欄を載せない（＝不明。`claude` とは読まない）。
-   */
-  cloneProvider?: string;
   /**
    * 日誌の追記を購読する口（`GET /journal/stream`）。
    *
@@ -1711,25 +1707,10 @@ function queryParams<Schema extends z.ZodTypeAny>(
  */
 function managerView(managers: ManagerPool, summary: ManagerSummary) {
   const denials = managers.denials(summary.managerId);
-  // **取れなければ載せない（＝不明）。** `claude` へ倒さない（`managerProviderOf`）。
-  const managerProvider = managerProviderOf(managers, summary);
   return {
     ...summary,
     ...(denials.length === 0 ? {} : { denials }),
-    ...(managerProvider === undefined ? {} : { managerProvider }),
   };
-}
-
-/**
- * 委譲のマネージャー層の provider（#486 S9）。宛先の runner が名乗った値だけを返し、
- * 置き先が無い・名乗りを受けていない・旧い runner の欄なしは `undefined`（不明）。
- * 経路判断用の `runnerManagerProvider()`（既定 `claude`）は使わない。
- */
-function managerProviderOf(managers: ManagerPool, summary: ManagerSummary): string | undefined {
-  // クローンが指名した委譲は、runner の既定ではなく**実際に動いている provider**（#486 S7）。
-  if (summary.managerProvider !== undefined) return summary.managerProvider;
-  if (summary.runnerId === undefined) return undefined;
-  return managers.runnerReportedManagerProvider?.(summary.runnerId);
 }
 
 /** 一覧・詳細で返すアカウント（identity を畳んで、秘密は載せない）。 */
@@ -3104,7 +3085,8 @@ export function createApp(deps: AppDeps) {
           '**`content-type` は `application/octet-stream` だけを受ける**（それ以外は 415）——' +
           'CORS の単純リクエストにさせず、ブラウザが必ず preflight を通すため（`deliberateClient` と同じ考え）。' +
           '認証は他の経路と同じ。本文の上限は添付1つぶんの最大値（超えたら 413）。画像（png / jpeg / webp / gif）は' +
-          '宣言と中身の先頭が一致しなければ 400。0バイトの本文も 400（`code`: `empty`。Web・CLI・TUI と揃えて断る）。返った `id` を `POST /chat` の `attachments` に渡すと発言へ結び付く。' +
+          '宣言と中身の先頭が一致しなければ 400。宣言が画像で、幅か高さが 8000 px を超えるものも 400（`code`: `image_dimension_too_large`。' +
+          '寸法が読めないものは通す。宣言が画像以外ならこの検査は掛からず、ターンでファイルとして渡る）。0バイトの本文も 400（`code`: `empty`。Web・CLI・TUI と揃えて断る）。返った `id` を `POST /chat` の `attachments` に渡すと発言へ結び付く。' +
           '結び付けないまま 1 時間たったものは掃除される。' +
           '**連携の鍵（`altk_`）もこの口だけは通れる**（自分の外部イベントに付ける添付を上げるため。#3113 段3）：' +
           '`uploadedBy` は `integration:<keyId>` になり、その鍵が `POST /events` で付けられるのは自分が上げた添付だけ。' +
@@ -3124,7 +3106,7 @@ export function createApp(deps: AppDeps) {
           },
           400: {
             description:
-              'クエリが不正、または受け付けない中身（`code`: `magic_mismatch` / `media_type_missing` / `empty`＝0バイト）。',
+              'クエリが不正、または受け付けない中身（`code`: `magic_mismatch` / `image_dimension_too_large` / `media_type_missing` / `empty`＝0バイト）。',
             content: { 'application/json': { schema: resolver(attachmentErrorResponseSchema) } },
           },
           413: {
@@ -3164,8 +3146,10 @@ export function createApp(deps: AppDeps) {
           return c.json(meta, 200);
         } catch (error) {
           if (error instanceof AttachmentRejectedError) {
+            // `reasonOf` ではなく `redactErrorText`: `reasonOf` は「AttachmentRejectedError: … code=…」と包むので、
+            // Web・CLI・TUI がそのまま出す理由に型名と code が混ざる（#3697）。伏せ字は外さない。
             return c.json(
-              { error: reasonOf(error), code: error.code },
+              { error: redactErrorText(error.message, process.env), code: error.code },
               error.code === 'too_large' ? 413 : 400,
             );
           }
@@ -8015,16 +7999,9 @@ export function createApp(deps: AppDeps) {
         // runner の一覧が空でも、この値だけは常に出す——「自分がどの版で
         // 走っているか」は runner の登録有無と無関係な事実である。
         const daemonRevision = reportRunnerRevision(resolveBuildRevision());
-        // クローン層の provider（デーモン全体で1つ。起動時に解決済み）。runner の一覧が
-        // 空でも出す。配線されていない構成では欄ごと載せない（`claude` と推測しない）。
-        const cloneProvider =
-          deps.cloneProvider === undefined ? {} : { cloneProvider: deps.cloneProvider };
-
         const registry = deps.runners;
         if (registry === undefined) {
-          return c.json(
-            runnersListResponseSchema.parse({ runners: [], daemonRevision, ...cloneProvider }),
-          );
+          return c.json(runnersListResponseSchema.parse({ runners: [], daemonRevision }));
         }
         // **名簿に載っている全部を返す**（開けている分だけではない）。上がって
         // こない runner が一覧から消えるだけだと、人間には「設定し忘れた」のか
@@ -8078,7 +8055,6 @@ export function createApp(deps: AppDeps) {
               }),
             ),
             daemonRevision,
-            ...cloneProvider,
           }),
         );
       },

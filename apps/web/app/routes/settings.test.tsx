@@ -42,7 +42,6 @@ afterEach(() => {
 interface RunnersResponse {
   runners: RunnerSummary[];
   daemonRevision: DaemonRevision;
-  cloneProvider?: string;
 }
 
 function renderSettings(response: RunnersResponse) {
@@ -144,14 +143,10 @@ describe('版の表示 — 人間もクローンと同じ材料を読める', ()
     expect(screen.getByText(new RegExp('b'.repeat(40)))).toBeTruthy();
   });
 
-  it('クローンの provider を出す。欄が無ければ claude と推測せず「不明」と書く', async () => {
-    renderSettings({ runners: [], daemonRevision: KNOWN_DAEMON, cloneProvider: 'claude' });
-    expect(await screen.findByText(/クローンが使うモデル提供元: claude/)).toBeTruthy();
-    cleanup();
-
+  it('クローンの provider を出さない（層は常に Claude。2026-10-07 の決定）', async () => {
     renderSettings({ runners: [], daemonRevision: KNOWN_DAEMON });
-    const unknown = await screen.findByText(/クローンが使うモデル提供元: 不明/);
-    expect(unknown.textContent).not.toContain('claude');
+    expect(await screen.findByText(new RegExp('b'.repeat(40)))).toBeTruthy();
+    expect(screen.queryByText(/クローンが使うモデル提供元/)).toBeNull();
   });
 
   it('runner が0台でも、デーモンの版は出す', async () => {

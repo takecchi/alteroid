@@ -4,7 +4,6 @@ import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 
 import { makeTempDirSync } from '../../../vitest.tmpdir.js';
-import { describeManagerProvider } from './manager-provider-format.js';
 
 import {
   clearRecentTracesForTesting,
@@ -6892,50 +6891,19 @@ describe('クローンの道具', () => {
     expect(reply).toContain('走行中 1 本（うち話しかけられる 1 本）');
   });
 
-  it('manager_list / manager_report は、委譲が指名された provider を runner の既定より優先して出す（#486 S7）', async () => {
-    const h = harness();
-    await h.call('manager_start', { request: 'A' });
-    const target = h.running[0];
-    if (!target) throw new Error('準備に失敗');
-    target.runnerId = 'runner-a';
-    target.managerProvider = 'codex';
-    // runner の既定は claude。それでも実際に動いている codex を言う。
-    h.managers.runnerReportedManagerProvider = () => 'claude';
-    const list = await h.call('manager_list', {});
-    expect(list).toContain('provider: codex');
-    expect(list).not.toContain('provider: claude');
-    expect(await h.call('manager_report', { managerId: target.managerId })).toContain(
-      'provider: codex',
-    );
-  });
-
   /**
-   * **マネージャー層の provider（#486 S9）。** 置き先の runner が名乗った値だけを出し、
-   * 取れないときは「不明」と書く。`claude` とは推測しない。
+   * **マネージャー層は常に Claude で動く**（2026-10-07 のオーナー決定）。委譲ごとの provider の行
+   * （#486 S9 で足した `provider: …`）は撤去した。
    */
-  it('manager_list は名乗られた provider を出し、取れないときは「不明」と書く（#486 S9）', async () => {
+  it('manager_list / manager_report は provider の行を出さない（層は常に Claude）', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
     const target = h.running[0];
     if (!target) throw new Error('準備に失敗');
     target.runnerId = 'runner-a';
-    h.managers.runnerReportedManagerProvider = (runnerId) =>
-      runnerId === 'runner-a' ? 'codex' : undefined;
-    expect(await h.call('manager_list', {})).toContain('provider: codex');
-    expect(await h.call('manager_report', { managerId: target.managerId })).toContain(
-      'provider: codex',
-    );
-
-    // 名乗りを受けていない器・置き先が無い委譲は「不明」。claude とは書かない。
-    target.runnerId = 'runner-silent';
-    const silent = await h.call('manager_list', {});
-    expect(silent).toContain(`provider: ${describeManagerProvider(undefined)}`);
-    expect(silent).toContain('provider: 不明');
-    expect(silent).not.toContain('provider: claude');
-    delete target.runnerId;
-    expect(await h.call('manager_list', {})).toContain('provider: 不明');
-    expect(await h.call('manager_report', { managerId: target.managerId })).toContain(
-      'provider: 不明',
+    expect(await h.call('manager_list', {})).not.toMatch(/^\s*provider: /m);
+    expect(await h.call('manager_report', { managerId: target.managerId })).not.toMatch(
+      /^\s*provider: /m,
     );
   });
 

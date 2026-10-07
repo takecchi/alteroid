@@ -1,20 +1,7 @@
 import { AGENT_PROVIDER_IDS, type AgentProviderId } from './agent-ports.js';
 import { placedAgentProvider } from './agent-provider-selection.js';
-import type { ProviderGapLayer } from './provider-gaps.js';
 
-export const CLONE_PEERS_ENV_KEY = 'ALTEROID_CLONE_PEERS';
 export const MANAGER_PEERS_ENV_KEY = 'ALTEROID_MANAGER_PEERS';
-
-export type PeersLayer = Exclude<ProviderGapLayer, 'worker'>;
-
-const PEERS_ENV_KEY: Record<PeersLayer, string> = {
-  clone: CLONE_PEERS_ENV_KEY,
-  manager: MANAGER_PEERS_ENV_KEY,
-};
-
-export function peersEnvKeyOf(layer: PeersLayer): string {
-  return PEERS_ENV_KEY[layer];
-}
 
 export interface PeersResolution {
   readonly peers: ReadonlySet<AgentProviderId>;
@@ -22,12 +9,11 @@ export interface PeersResolution {
 }
 
 export function parsePeers(
-  layer: PeersLayer,
   raw: string | undefined,
   selfProvider: AgentProviderId,
   known: readonly AgentProviderId[] = AGENT_PROVIDER_IDS,
 ): PeersResolution {
-  const key = PEERS_ENV_KEY[layer];
+  const key = MANAGER_PEERS_ENV_KEY;
   const given = placedAgentProvider({ [key]: raw }, key);
   const peers = new Set<AgentProviderId>();
   let selfListed = false;
@@ -43,7 +29,7 @@ export function parsePeers(
     if (id === undefined) {
       throw new Error(`${key} の値が不正: ${name}（使えるのは ${known.join(' / ')}）`);
     }
-    // 自分の層の provider を例外にしない: 両方の層に同じ値を書く運用や provider の入れ替えで、無害な値のために起動が止まるため
+    // 自分の層の provider を例外にしない: 無害な値のために起動が止まるため
     if (id === selfProvider) {
       selfListed = true;
       continue;
@@ -54,12 +40,11 @@ export function parsePeers(
 }
 
 export function resolvePeers(
-  layer: PeersLayer,
   env: NodeJS.ProcessEnv,
   selfProvider: AgentProviderId,
   known: readonly AgentProviderId[] = AGENT_PROVIDER_IDS,
 ): PeersResolution {
-  return parsePeers(layer, env[PEERS_ENV_KEY[layer]], selfProvider, known);
+  return parsePeers(env[MANAGER_PEERS_ENV_KEY], selfProvider, known);
 }
 
 export function isPeerAllowed(

@@ -492,7 +492,6 @@ describe('セッションが無いことは、`live` も状態も置き換えず
         status: 'running',
         live: true,
         sessionMissingSince: MISSING,
-        managerProvider: 'claude',
       },
     ]);
 
@@ -1003,15 +1002,11 @@ describe('知らない status に倒れ先がある（#1623）', () => {
   });
 });
 
-describe('マネージャー層の provider（#486 S9）', () => {
-  it('名乗られた provider を行に出し、欄が無い行は claude と推測せず「不明」と出す', async () => {
-    renderManagers([
-      { ...BASE, managerId: 'mgr-codex', managerProvider: 'codex' },
-      { ...BASE, managerId: 'mgr-silent', request: '名乗り無し' },
-    ]);
+describe('マネージャー層の provider（撤去済み。2026-10-07 の決定）', () => {
+  it('行に provider を出さない（層は常に Claude）', async () => {
+    renderManagers([{ ...BASE, managerId: 'mgr-plain', request: '普通の委譲' }]);
 
-    expect(await screen.findByText(/provider: codex/)).toBeTruthy();
-    expect(screen.getByText(/provider: 不明/)).toBeTruthy();
-    expect(screen.queryByText(/provider: claude/)).toBeNull();
+    expect(await screen.findByText(/普通の委譲/)).toBeTruthy();
+    expect(screen.queryByText(/provider:/)).toBeNull();
   });
 });
