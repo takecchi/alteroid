@@ -308,6 +308,10 @@ function BacklogCard({ progress }: { progress: Progress }) {
   const { byOrigin, age, byState, completeness } = backlog;
   // 刈られた完了済みの記録（`trimmedClosed`）は未完了の数に影響しないので、判定に入れない。
   const partial = completeness.unreadable !== 0;
+  // 読めない行があるのに「無いため」と言うと、読めなかった未了の存在を打ち消してしまう。
+  const noneReason = partial
+    ? `${NONE}（読めた範囲に未完了の仕事が無いため）`
+    : `${NONE}（未完了の仕事が無いため）`;
 
   const items: KeyValueItem[] = [
     {
@@ -316,15 +320,11 @@ function BacklogCard({ progress }: { progress: Progress }) {
     },
     {
       label: 'いちばん古いもの',
-      value:
-        age.oldestAt === null
-          ? `${NONE}（未完了の仕事が無いため）`
-          : atText(age.oldestAt, observedAt),
+      value: age.oldestAt === null ? noneReason : atText(age.oldestAt, observedAt),
     },
     {
       label: '経過時間の中央値',
-      value:
-        age.medianHours === null ? `${NONE}（未完了の仕事が無いため）` : hoursText(age.medianHours),
+      value: age.medianHours === null ? noneReason : hoursText(age.medianHours),
     },
     {
       label: '経過時間の内訳',
@@ -350,6 +350,7 @@ function BacklogCard({ progress }: { progress: Progress }) {
             {count(completeness.unreadable)} 件）。上の数は「少なくともこれだけ」と読んでください。
           </p>
         )}
+        <UnreadableJobsNote progress={progress} />
         {github.state !== 'not_observed' && (
           <div className="border-t border-border pt-3">
             <GithubBlock github={github} observedAt={observedAt} />
@@ -360,13 +361,26 @@ function BacklogCard({ progress }: { progress: Progress }) {
   );
 }
 
+/**
+ * 読めない委譲の行（issue #2345）の断り。委譲の数（任せた・実行中・終わった依頼）を出す
+ * カードの全部に置く。デーモンが古いと欄が無いので、型は number でも無いことを許す
+ * （無いときは「0 件」ではなく、何も言わない）。
+ */
+function UnreadableJobsNote({ progress }: { progress: Progress }) {
+  const unreadableJobs =
+    (progress.backlog.completeness as { unreadableJobs?: number }).unreadableJobs ?? 0;
+  if (unreadableJobs === 0) return null;
+  return (
+    <p className="text-xs text-warn">
+      読み取れなかった依頼の記録が {count(unreadableJobs)} 件あります。上の数は読み取れた分だけで、
+      実際はこれ以上です（記録が壊れているだけで、依頼が無いわけではありません）。
+    </p>
+  );
+}
+
 function InProgressCard({ progress }: { progress: Progress }) {
   const { inProgress, observedAt } = progress;
   const { lastReport } = inProgress;
-  // **読めない委譲の行（issue #2345）。** デーモンが古いと欄が無いので、型は number でも
-  // 無いことを許す（無いときは「0 件」ではなく、何も言わない）。
-  const unreadableJobs =
-    (progress.backlog.completeness as { unreadableJobs?: number }).unreadableJobs ?? 0;
   const items: KeyValueItem[] = [
     {
       label: '最後の報告（いちばん古い）',
@@ -394,13 +408,7 @@ function InProgressCard({ progress }: { progress: Progress }) {
           <Stat label="連絡が取れない" value={count(inProgress.lost)} unit="件" />
         </StatRow>
         <KeyValueList items={items} labelWidth="8rem" />
-        {unreadableJobs !== 0 && (
-          <p className="text-xs text-warn">
-            読み取れなかった依頼の記録が {count(unreadableJobs)}{' '}
-            件あります。上の数は読み取れた分だけで、
-            実際はこれ以上です（記録が壊れているだけで、依頼が無いわけではありません）。
-          </p>
-        )}
+        <UnreadableJobsNote progress={progress} />
         <p className="text-xs text-muted-foreground">
           「実行中」は動かし始めたという意味で、進んでいるとは限りません。最後の報告が古い依頼は、
           マネージャーの一覧で確かめてください。
@@ -434,6 +442,7 @@ function ThroughputCard({ progress }: { progress: Progress }) {
             この期間の件数は、古い記録が整理されたため実際より少ない可能性があります。「引き受けた」「完了にした」は「少なくともこれだけ」と読んでください。
           </p>
         )}
+        <UnreadableJobsNote progress={progress} />
       </Section>
     </Card>
   );
