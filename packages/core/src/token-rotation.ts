@@ -90,7 +90,8 @@ export function decideTokenRotation(
         why:
           transition === 'rejected'
             ? '枠が尽きたうえに課金枠も閉じている（overage_exhausted）'
-            : '枠が尽きたうえに課金枠も閉じている状態がいまの現役について届いた（overage_exhausted。遷移は取れていないが、観測がいまの世代を名乗っている）',
+            : // 遷移ではなく状態で回した回は同じ文言にしない: 日誌から「遷移の門を通れなかった観測が効いた」が消えるため
+              '枠が尽きたうえに課金枠も閉じている状態がいまの現役について届いた（overage_exhausted。遷移は取れていないが、観測がいまの世代を名乗っている）',
       };
     }
     return {
