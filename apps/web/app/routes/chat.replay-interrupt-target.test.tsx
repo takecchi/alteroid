@@ -108,10 +108,10 @@ describe('再読み込み後・戻ってきた会話の再生中に「ターン�
   it('running が無ければ、starting の先頭を対象にする', async () => {
     const stub = setup([
       { clientMessageId: 'held-1', state: 'held' },
-      { clientMessageId: 'start-1', state: 'starting' },
+      { clientMessageId: 'msg-starting', state: 'starting' },
     ]);
     await press();
-    expect(await bodyOf(stub)).toEqual({ conversationId: ID, clientMessageId: 'start-1' });
+    expect(await bodyOf(stub)).toEqual({ conversationId: ID, clientMessageId: 'msg-starting' });
   });
 
   it('held・queued だけなら対象にせず、呼ばずに「止める対象が分からない」と言う', async () => {
