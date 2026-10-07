@@ -29,7 +29,8 @@ export interface AttachmentStoreContractOptions {
  * 測る性質:
  * 1. `put` が sha256・size・名前の正規化・期限を持つ控えを返す
  * 2. `get` が中身をそのまま返し、`getMeta` が同じ控えを返す。無い id・NUL を含む id は `undefined`
- * 3. 宣言 MIME が画像なのに中身が一致しなければ `magic_mismatch` で断る。上限超過は `too_large`
+ * 3. 宣言 MIME が画像なのに中身が一致しなければ `magic_mismatch` で断る。上限超過は `too_large`。
+ *    画像の宣言で幅か高さが 8000px 超なら `image_dimension_too_large`（読めない寸法と、画像以外の宣言は通す。#3697）
  * 4. `bind` は未結び付けを結び付け（冪等）、別の会話へ結び付いたものは `conflicts`、無いものは `missing`
  * 5. `prune` は①未結び付けのまま1時間たったもの②期限を過ぎたものだけを消し、消した件数を返す。
  *    結び付いた期限内のものは残す
@@ -362,6 +363,52 @@ async function verifyWithSmallLimits(
     () => limited.put({ name: 'over.png', mediaType: 'image/png', bytes: image(IMAGE_MAX + 1) }),
     'too_large',
   );
+  // 画像の寸法（#3697）。IHDR だけの小さな png で測る。`limited` を使うのは、本線のストアの
+  // 「未結び付けの掃除」の件数（上の 5）を、ここで預けるものが動かさないため
+  const be32 = (n: number) => [(n >>> 24) & 0xff, (n >>> 16) & 0xff, (n >>> 8) & 0xff, n & 0xff];
+  const pngOf = (width: number, height: number) =>
+    Uint8Array.from([
+      ...PNG.subarray(0, 8),
+      ...be32(13),
+      0x49,
+      0x48,
+      0x44,
+      0x52,
+      ...be32(width),
+      ...be32(height),
+      8,
+      6,
+      0,
+      0,
+      0,
+    ]);
+  const atDimension = await limited.put({
+    name: 'edge.png',
+    mediaType: 'image/png',
+    bytes: pngOf(8000, 8000),
+  });
+  if (!same((await limited.get(atDimension.id))?.bytes ?? new Uint8Array(), pngOf(8000, 8000)))
+    fail('寸法 8000px ちょうどが往復しない');
+  await rejected(
+    () => limited.put({ name: 'wide.png', mediaType: 'image/png', bytes: pngOf(8001, 10) }),
+    'image_dimension_too_large',
+  );
+  await rejected(
+    () => limited.put({ name: 'tall.png', mediaType: 'image/png', bytes: pngOf(10, 8001) }),
+    'image_dimension_too_large',
+  );
+  const unreadable = await limited.put({
+    name: 'cut.png',
+    mediaType: 'image/png',
+    bytes: pngOf(8001, 10).subarray(0, 20),
+  });
+  if (unreadable.size !== 20) fail('寸法が読めない画像が通らない');
+  const asFile = await limited.put({
+    name: 'huge.bin',
+    mediaType: 'application/octet-stream',
+    bytes: pngOf(8001, 8001),
+  });
+  if (asFile.size !== pngOf(8001, 8001).length) fail('宣言が画像以外の 8001px の png が通らない');
   // 画像でないものは、画像の上限を超えても通り、その他の上限ちょうどまで通る
   const fileBytes = (size: number) => new Uint8Array(size).fill(9);
   const atFile = await limited.put({

@@ -130,6 +130,7 @@ export const attachmentErrorResponseSchema = z.object({
   code: z
     .enum([
       'too_large',
+      'image_dimension_too_large',
       'magic_mismatch',
       'too_many',
       'total_too_large',

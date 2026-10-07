@@ -124,6 +124,47 @@ describe('/attach から送るまで', () => {
     expect(retry.ok && retry.uploaded.map((u) => u.id)).toEqual(['att-a', 'att-b']);
   });
 
+  it('画像の寸法が 8000px を超えるものは、上げる前の検査で断り、何が超えたかを言う。上げない（#3697）', async () => {
+    const dir = await makeTempDir('alteroid-cli-attach-');
+    const path = join(dir, 'wide.png');
+    const be32 = (n: number) => [(n >>> 24) & 0xff, (n >>> 16) & 0xff, (n >>> 8) & 0xff, n & 0xff];
+    await writeFile(
+      path,
+      Uint8Array.from([
+        0x89,
+        0x50,
+        0x4e,
+        0x47,
+        0x0d,
+        0x0a,
+        0x1a,
+        0x0a,
+        ...be32(13),
+        0x49,
+        0x48,
+        0x44,
+        0x52,
+        ...be32(8001),
+        ...be32(10),
+        8,
+        6,
+        0,
+        0,
+        0,
+      ]),
+    );
+    const draft = new AttachmentDraft();
+    expect((await draft.add(path)).ok).toBe(true);
+    const upload = vi.fn();
+    const result = await uploadDraft(draft, upload);
+    expect(result).toEqual({
+      ok: false,
+      reason: 'wide.png: 画像の寸法は幅・高さとも 8000 px まで（8001 × 10 px ある）',
+    });
+    expect(upload).not.toHaveBeenCalled();
+    expect(draft.count).toBe(1);
+  });
+
   it('上限は先に検査する（大きすぎる・個数超過・無いファイル）。/detach で外せる', async () => {
     const dir = await makeTempDir('alteroid-cli-attach-');
     const big = join(dir, 'big.bin');
