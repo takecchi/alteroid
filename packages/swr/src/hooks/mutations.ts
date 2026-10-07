@@ -192,7 +192,11 @@ export function useSavePractice() {
         );
       }
       const saved = unwrap(result);
-      await Promise.all([mutate(KEY.practices), mutate(KEY.practice(slug))]);
+      await Promise.all([
+        mutate(KEY.practices),
+        mutate(KEY.practice(slug)),
+        mutate(KEY.practiceVersions(slug)),
+      ]);
       return { practice: saved.practice, version: saved.version };
     },
     [api, mutate],
@@ -219,7 +223,7 @@ export function useDeletePractice() {
         );
       }
       unwrap(result);
-      await mutate(KEY.practices);
+      await Promise.all([mutate(KEY.practices), mutate(KEY.practiceVersions(slug))]);
     },
     [api, mutate],
   );
