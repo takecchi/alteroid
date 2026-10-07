@@ -57,6 +57,24 @@ export default defineConfig({
     // フォントのファイルだけは CSS へ base64 で埋め込まない: unicode-range に関係なく、埋め込まれた断片の本体が CSS と一緒に最初に落ちてくるため
     assetsInlineLimit: (filePath) =>
       /\.(woff2?|ttf|otf|eot)$/i.test(filePath) ? false : undefined,
+    rolldownOptions: {
+      output: {
+        chunkFileNames: (chunk) =>
+          chunk.name.startsWith('shared') ? 'assets/shared-[hash].js' : 'assets/[name]-[hash].js',
+        codeSplitting: {
+          groups: [
+            {
+              name: 'shared',
+              test: /^(?!.*[\\/]node_modules[\\/])/,
+              minShareCount: 2,
+              maxModuleSize: 4096,
+              entriesAware: true,
+              entriesAwareMergeThreshold: 8192,
+            },
+          ],
+        },
+      },
+    },
   },
   server: {
     port: 5173,
