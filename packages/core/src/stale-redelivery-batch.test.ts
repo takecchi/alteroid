@@ -11,33 +11,11 @@ import type { InboxEvent, JournalEntryInput } from './schema.js';
 import type { Stores } from './store.js';
 import { captureStderr, createMemoryStores } from './testing.js';
 
-/**
- * Issue #903 の実装（`clone.ts` の `#restoreUnreadPass` / `#dropStaleRedelivery` /
- * `#removeStaleRedeliveryChunk`）が守るべき性質を測る。
- *
- * **この対象はもともと `inbox-persistence.test.ts` の
- * 「拾い直した token-pool の合図の消し込み（Issue #783 段1）」が持っていた。**
- * あちらは「stale が消える」「本文が残る」「モデルへ渡らない」という**1件の
- * 挙動**を固定しており、#903 の後もそのまま緑であること自体が「stale の判定
- * そのものは動かしていない」ことの証拠になっている（既存の歯は1文字も
- * 変えていない）。ここで新しく測るのは**複数件を一括で扱ったときの性質**
- * ——ストアへの書き込み回数・日誌の行数・失った情報が無いこと・live 側が
- * 無傷であること・後始末の網羅性・途中で止まったときの一貫性である。
- *
- * `Clone` の private field（`#unread` / `#redelivered` / `#pendingCollapse`）は
- * 直接覗かない（`clone-quota-hold.test.ts`——旧 `clone.test.ts`。#1744 で
- * 分割済み——の「`#redelivered` の Map を直接覗かない ──
- * private field を覗く形は…」と同じ理由。JS の `#` は本物の private で、
- * クラス定義の外からは構文上アクセスできない）。**すべて観測できる外部
- * 挙動を通して確かめる。**
- */
-
 interface Fake {
   fn: typeof sdkQuery;
   inputs: string[];
 }
 
-/** SDK の代わり。届いた入力をすべて記録し、`ok` とだけ返す。 */
 function fakeSdk(): Fake {
   const inputs: string[] = [];
   const fn = ((params: { prompt: unknown; options?: Options }) => {
@@ -94,22 +72,14 @@ function bootClone(stores: Stores): Fake & { clone: CloneHost } {
   return { ...fake, clone };
 }
 
-/** stale（token-pool）の `external` 合図。`at` は個別に指定できる（受け取り時刻）。 */
 function staleTokenPoolEvent(id: string, at: string, payload: unknown): InboxEvent {
   return { type: 'external', id, at, source: DAEMON_TOKEN_POOL_REOPENED_SOURCE, payload };
 }
 
-/** live な `manager_message`（配り直しの既存の歯と同じ形）。 */
 function managerReport(text: string, id: string, at: string): InboxEvent {
   return { type: 'manager_message', id, at, managerId: 'mgr-1', kind: 'report', text };
 }
 
-/**
- * `stores.inbox.removeMany` と `stores.journal.append` の呼び出しを実際に
- * 数える偽実装で包む（AGENTS.md「報告の形」— 判定ではなく実測を返す）。
- * 中身は本物の `MemoryInboxStore` / `MemoryJournalStore` へそのまま委ねる
- * ——数えるだけで挙動は変えない。
- */
 function instrument(base: Stores): {
   stores: Stores;
   removeManyCalls: string[][];
@@ -137,7 +107,6 @@ function instrument(base: Stores): {
   return { stores, removeManyCalls, appendCalls };
 }
 
-/** `removeMany` を最初の `failCount` 回だけ失敗させる（`flakyInboxRemove` の複数件版）。 */
 function flakyRemoveMany(
   base: Stores,
   failCount: number,
@@ -181,10 +150,8 @@ describe('stale な配り直しの一括消し込み（issue #903）', () => {
       '全件が受信箱から消える',
     );
 
-    // **実測**: N=5 件に対して呼び出しは1回。
     expect(removeManyCalls.length).toBeLessThan(N);
     expect(removeManyCalls.length).toBe(1);
-    // **失っていない**: 渡した id は1つも欠けず、余計な id も無い。
     expect(removeManyCalls.flat().sort()).toEqual([...ids].sort());
 
     await clone.stop();
@@ -207,12 +174,9 @@ describe('stale な配り直しの一括消し込み（issue #903）', () => {
       '全件（65,536件）が受信箱から消える',
     );
 
-    // **実測**: 上限を1件超えただけで、呼び出しが2回に割れる。
     expect(removeManyCalls.length).toBeGreaterThanOrEqual(2);
-    // **失っていない**: 塊を全部つなげると渡した件数に戻る。
     const totalRemoved = removeManyCalls.reduce((sum, chunk) => sum + chunk.length, 0);
     expect(totalRemoved).toBe(N);
-    // **上限を守っている**: どの塊も上限を超えない。
     for (const chunk of removeManyCalls) {
       expect(chunk.length).toBeLessThanOrEqual(CHUNK_MAX);
     }
@@ -221,14 +185,9 @@ describe('stale な配り直しの一括消し込み（issue #903）', () => {
   }, 90_000);
 
   it('stale 1件あたりの journal.append 回数が3回から2回に減った（同じく数える）', async () => {
-    // **基準（0件）を先に測る**——起動そのものが書く journal（もしあれば）を
-    // 「stale の処理が足した分」から除くため。実測どうしを比べる形にし、
-    // 決め打ちの定数（0 など）を仮定しない。
     const baseline = createMemoryStores();
     const { stores: baselineStores, appendCalls: baselineAppends } = instrument(baseline);
     const { clone: baselineClone } = bootClone(baselineStores);
-    // 待つ材料が無いので一呼吸だけ置く——0件の起動はすぐに `#restoreUnreadPass`
-    // を通り終える。
     await new Promise((resolve) => setTimeout(resolve, 50));
     await baselineClone.stop();
     const baselineCount = baselineAppends.length;
@@ -248,12 +207,6 @@ describe('stale な配り直しの一括消し込み（issue #903）', () => {
       '全件が受信箱から消える',
     );
 
-    // stale 1件につき (本文 + 畳んだ見出し1行) = 2回。3回目（旧「配り直した」の
-    // 単独行）は書かれない。**+2 はこのパス全体で1回ずつ書く計器の始まり・
-    // 終わりの行**（issue #903 続き。`#journalRestoreUnreadPassStart` /
-    // `#journalRestoreUnreadPassEnd`。件数の内訳は
-    // 「計器: #restoreUnreadPass の始まりと終わりに1行だけ書く」の describe
-    // で個別に測る——ここでは合計の呼び出し回数だけを見る）。
     expect(appendCalls.length - baselineCount).toBe(2 * N + 2);
 
     await clone.stop();
@@ -280,10 +233,7 @@ describe('stale な配り直しの一括消し込み（issue #903）', () => {
     );
     const text = folded && folded.type === 'exchange' ? folded.text : '';
 
-    // **`deliveries`（今回は1回目）が文中にそのまま残っている。**
     expect(text).toContain('1回目の配達');
-    // **「配り直した」と「消した」が1行に畳まれている**（両方の語がこの1行に
-    // 同居している——2行が1行になったことの直接の証拠）。
     expect(text).toContain('未読のまま残っていた合図を配り直した');
     expect(text).toContain('ターンを起こさずに消した');
 
@@ -292,7 +242,6 @@ describe('stale な配り直しの一括消し込み（issue #903）', () => {
 
   it('拾い直しても消せなければ跡を残して次の起動へ委ねる——一括経路でも FORGET_RETRY_ATTEMPTS の再試行を落とさない', async () => {
     const base = createMemoryStores();
-    // `FORGET_RETRY_ATTEMPTS`（3）を超えて恒久的に失敗させる。
     const { stores, calls } = flakyRemoveMany(base, 10, '恒久的な障害（テスト用）');
     const event = staleTokenPoolEvent(
       'evt-stale-retry-exhausted',
@@ -303,22 +252,16 @@ describe('stale な配り直しの一括消し込み（issue #903）', () => {
 
     const lines = await captureStderr(async () => {
       const { clone } = bootClone(stores);
-      // 見出しの行（journal）は removeMany の成否に関わらず先に書かれる
-      // ——それを待ってから、拾い直しの間隔（`FORGET_RETRY_MS` × (1+2) ≒
-      // 600ms）ぶんさらに待って諦めきるのを待つ。
       await waitFor(async () => {
         const exchanges = (await stores.inbox.peekPending()).entries;
-        return exchanges.length === 1; // まだ消えていないことを繰り返し確認
+        return exchanges.length === 1;
       }, '（消えていないことの確認のための一呼吸）');
       await new Promise((resolve) => setTimeout(resolve, 1200));
       await clone.stop();
     });
 
-    // 3回試行して諦めている（1件の塊なので、塊ごとに3回）。
     expect(calls.length).toBe(3);
-    // 消せなかったことが跡として残る。
     expect(lines.some((line) => line.includes('未読の消し込み'))).toBe(true);
-    // **消していない**——次の起動（`#restoreUnread`）に委ねられる。
     const pending = await base.inbox.claimPending();
     expect(pending.some((p) => p.event.id === event.id)).toBe(true);
   }, 10_000);
@@ -345,8 +288,6 @@ describe('stale な配り直しの一括消し込み（issue #903）', () => {
       );
       expect(found).toBe(true);
     }
-    // **畳まれていない**: N件それぞれの本文が個別に、合計 N 件出ている
-    // （どれか1件へ集約されていない）。
     const matching = externalEvents.filter(
       (entry) => entry.type === 'external_event' && entry.summary.includes('BODY-PAYLOAD-'),
     );
@@ -377,7 +318,6 @@ describe('stale な配り直しの一括消し込み（issue #903）', () => {
         entry.type === 'exchange' && entry.text.includes('未読のまま残っていた合図を配り直した'),
     );
     const text = redelivered && redelivered.type === 'exchange' ? redelivered.text : '';
-    // **live は「消した」を伴わない単独の行のまま。**
     expect(text).toContain('未読のまま残っていた合図を配り直した');
     expect(text).not.toContain('ターンを起こさずに消した');
 
@@ -386,8 +326,6 @@ describe('stale な配り直しの一括消し込み（issue #903）', () => {
 
   it('後始末（settled と pendingCollapse）が一括経路でも起きている', async () => {
     const stores = createMemoryStores();
-    // **同じ内容（同じ collapse key）を持つ2件の stale**——`#pendingCollapse`
-    // の代表（先に見つかった行）がこの一括経路で正しく片付くかを見る。
     const sharedPayload = 'SHARED-COLLAPSE-PAYLOAD';
     const first = staleTokenPoolEvent('evt-collapse-a', '2026-08-06T00:00:00.000Z', sharedPayload);
     const second = staleTokenPoolEvent('evt-collapse-b', '2026-08-06T00:00:01.000Z', sharedPayload);
@@ -400,8 +338,6 @@ describe('stale な配り直しの一括消し込み（issue #903）', () => {
       '両方消える',
     );
 
-    // **settled（inbox_flow）**: stale の消し込みはターンを起こさないので、
-    // 別のターンを1本起こしてから inbox_flow の書き込みを待つ。
     clone.post({
       type: 'human_message',
       id: 'evt-trigger-turn',
@@ -418,32 +354,12 @@ describe('stale な配り直しの一括消し込み（issue #903）', () => {
       );
     }, 'inbox_flow が settled=2件以上の external を報告する');
 
-    // **pendingCollapse**: 代表（先に拾われた行）が消えた後、同じ内容の
-    // 「新しい」token-pool 合図を post しても、消えた行の幻へ畳まれない。
-    //
-    // ⚠️ **「新しい external_event が増えるか」では判定できない**（実測で
-    // 見つけた自分の設計ミス）。`#foldIntoPendingCollapse` の `row-folded`
-    // 判定（畳まれた場合）は `post()` を early return させず、その場では
-    // 「畳んだ」の1行を書くだけでそのまま待ち行列へ積む——結局そのターンが
-    // 処理されるときに束ね読み（`#mergedExternalBatch`）が本文を書くので、
-    // 畳まれていても畳まれていなくても、いずれ `external_event` は増える。
-    // **畳まれたかどうかを直接分けるのは「畳んだ」の1行が post() の時点で
-    // 即座に出るかどうかである**（`#foldIntoPendingCollapse` の
-    // `row-folded` 分岐、逐語は
-    // `grep -Fn -- 'alteroid 自身が合成した同一本文の未読が既に受信箱にあるので' packages/core/src/clone.ts`）
-    // ——`#pendingCollapse` の鍵が消えた行を指したまま残っていれば、post()
-    // が同期的にこの行を書く。消えていれば、post() はこの行を一切書かず、
-    // 新しい代表として索引に登録するだけで通過する。
     const before = await stores.journal.list({ types: ['exchange'] });
     const beforeFoldedCount = before.filter(
       (entry) => entry.type === 'exchange' && entry.text.includes('受信箱の行は増やさずに畳んだ'),
     ).length;
 
     clone.post(staleTokenPoolEvent('evt-collapse-fresh', new Date().toISOString(), sharedPayload));
-    // **`post()` は同期関数** なので、畳まれるなら `journal` への `void` 呼び出し
-    // 自体はこの行の直後に発行済みである（書き込みの完了までは待たない—
-    // `#journal` は best-effort）。ここでは十分な猶予（`waitFor` の既定
-    // タイムアウト）だけ置いて、増えていないことを確認する。
     await new Promise((resolve) => setTimeout(resolve, 100));
     const afterFolded = await stores.journal.list({ types: ['exchange'] });
     const afterFoldedCount = afterFolded.filter(
@@ -457,13 +373,7 @@ describe('stale な配り直しの一括消し込み（issue #903）', () => {
   it('拾い直しの途中で器が畳まれても、消えた分だけが消えた一貫した状態で止まる（#stopped / #inbox.closed を毎周見る性質を壊していない）', async () => {
     const base = createMemoryStores();
     const N = 3000;
-    // **`Date` のミリ秒フィールドは999を超えると繰り上がる**（`new Date(y, m,
-    // d, h, min, s, ms)` の `ms` は0-999想定）——最初の版はここで
-    // `i`（0..2999）をそのまま `ms` に渡し、1000件ごとに秒が繰り上がって
-    // 同じ `at` を持つ行が複数できていた（`at` は日誌の逐語照合に使うので、
-    // 衝突すると別の record の行を自分の行と誤認する）。**epoch ミリ秒へ
-    // `i` をそのまま足す形にすれば、フィールドの繰り上がりを起こさずに
-    // 3000件すべてが一意の `at` を持つ。**
+    // epoch ミリ秒へ i を足す: Date の ms フィールドは999を超えると繰り上がり、同じ at の行ができるため
     const baseEpochMs = Date.UTC(2026, 0, 1, 0, 0, 0, 0);
     const atForIndex = (i: number): string => new Date(baseEpochMs + i).toISOString();
     const ids = Array.from({ length: N }, (_, i) => `evt-crash-${i}`);
@@ -472,18 +382,6 @@ describe('stale な配り直しの一括消し込み（issue #903）', () => {
       await base.inbox.put(staleTokenPoolEvent(id, at, i), at);
     }
 
-    // **`removeMany` は N=3000 では上限（65,535）に届かないので、
-    // ストアへの一括消し込みはループの末尾で1回だけ起きる。** それより前
-    // ——ループが1件ずつ日誌を書いている最中——に `stop()` を割り込ませない
-    // と、常に「全部消えた後」しか観測できない（`waitFor` によるポーリングは
-    // 粒度が粗く、その一瞬を狙って止めるには使えなかった。実測: 最初の版は
-    // ここが `expect(remainingIds.size).toBeGreaterThan(0)` で落ち、
-    // `removedIds.length === N` だった）。
-    //
-    // ⟹ **日誌への書き込みそのものに割り込んで、ちょうど良いタイミングで
-    // 同期的に `stop()` を起こす。** ポーリングの粒度に頼らない。
-    // `clone` は `stores` を組み立てた後にしか作れないので、割り込み側からは
-    // 箱越しに触る（`let` で受けると代入が1回きりで `prefer-const` に当たる）。
     const cloneRef: { current: CloneHost | undefined } = { current: undefined };
     let stopPromise: Promise<void> | undefined;
     let droppedSoFar = 0;
@@ -519,7 +417,6 @@ describe('stale な配り直しの一括消し込み（issue #903）', () => {
     const remainingIds = new Set(remaining.map((r) => r.event.id));
     const removedIds = ids.filter((id) => !remainingIds.has(id));
 
-    // 本当に「途中」だったことの確認（全部消えても、1件も消えなくてもいけない）。
     expect(removedIds.length).toBeGreaterThan(0);
     expect(remainingIds.size).toBeGreaterThan(0);
 
@@ -532,16 +429,10 @@ describe('stale な配り直しの一括消し込み（issue #903）', () => {
 
     const atOf = (id: string): string => atForIndex(ids.indexOf(id));
 
-    // **一貫性(正方向)**: 消えた id は、必ず「消した」の日誌を伴っている
-    // ——ストアから消えたのに日誌に跡が無い、という食い違いが無い。
     for (const id of removedIds) {
       const at = atOf(id);
       expect(droppedTexts.some((text) => text.includes(at))).toBe(true);
     }
-    // **一貫性(逆方向)**: 残っている id については「消した」の日誌が絶対に
-    // 無い——日誌が「消した」と言っているのにストアにまだ在る、という
-    // 食い違いが無い（`flushStaleRemovalBuffer` を早期 return の手前に
-    // 必ず挟んでいることの直接の証拠）。
     for (const id of remainingIds) {
       const at = atOf(id);
       expect(droppedTexts.some((text) => text.includes(at))).toBe(false);
@@ -549,16 +440,6 @@ describe('stale な配り直しの一括消し込み（issue #903）', () => {
   }, 30_000);
 });
 
-/**
- * `#restoreUnreadPass` の1回の処理（1パス）につき、始まりに1行・終わりに
- * 1行だけ書く計器（issue #903 続き。`#journalRestoreUnreadPassStart` /
- * `#journalRestoreUnreadPassEnd`）が守るべき性質を測る。
- *
- * **これは性能の改修ではなく、見える化の手当てである。** issue #903 が
- * 指摘した「上限も刻みも無く全件処理する」という性質そのものは、この
- * 便では直していない——測るのは「その処理が何件を動かしたかが、日誌を
- * 読むだけで数えられるようになったか」だけである。
- */
 describe('計器: #restoreUnreadPass の始まりと終わりに1行だけ書く（issue #903 続き）', () => {
   it('総数と処理した数が正しい。始まり・終わりの行がちょうど1本ずつ出る', async () => {
     const stores = createMemoryStores();
@@ -586,7 +467,6 @@ describe('計器: #restoreUnreadPass の始まりと終わりに1行だけ書く
       (entry) => entry.type === 'exchange' && entry.text.includes('未読の拾い直しが終わった'),
     );
 
-    // **ちょうど1本ずつ**（1件ごとに出していないことの対照は下の別テスト）。
     expect(starts.length).toBe(1);
     expect(ends.length).toBe(1);
 
@@ -594,7 +474,6 @@ describe('計器: #restoreUnreadPass の始まりと終わりに1行だけ書く
     const endText = ends[0]?.type === 'exchange' ? ends[0].text : '';
     expect(startText).toContain(`総数 ${N} 件`);
     expect(endText).toContain(`総数 ${N} 件のうち ${N} 件を処理した`);
-    // 完走した回なので「中断」の語は出ない。
     expect(endText).not.toContain('中断した');
 
     await clone.stop();
@@ -619,8 +498,6 @@ describe('計器: #restoreUnreadPass の始まりと終わりに1行だけ書く
     const gaugeLines = exchanges.filter(
       (entry) => entry.type === 'exchange' && entry.text.startsWith(EXCHANGE_KIND_GAUGE_PREFIX),
     );
-    // **1件ごとに書いていれば7本を超える。書いているのは始まり・終わりの
-    // 2本だけである。**
     expect(gaugeLines.length).toBe(2);
 
     await clone.stop();
@@ -637,10 +514,6 @@ describe('計器: #restoreUnreadPass の始まりと終わりに1行だけ書く
       await base.inbox.put(staleTokenPoolEvent(id, at, i), at);
     }
 
-    // **同じ割り込み方**（上の describe「拾い直しの途中で器が畳まれても…」の
-    // 歯と同じ形）。journal.append をフックして、「消した」の行が
-    // STOP_AFTER 件出た時点で同期的に stop() を起こす——ポーリングでは
-    // 狙えない「ループの途中」を取る。
     const cloneRef: { current: CloneHost | undefined } = { current: undefined };
     let stopPromise: Promise<void> | undefined;
     let droppedSoFar = 0;
@@ -679,7 +552,6 @@ describe('計器: #restoreUnreadPass の始まりと終わりに1行だけ書く
         entry.text.startsWith(EXCHANGE_KIND_GAUGE_PREFIX) &&
         entry.text.includes('未読の拾い直しを中断した'),
     );
-    // **中断したときも、終わりの行はちょうど1本。**
     expect(ends.length).toBe(1);
     const endText = ends[0]?.type === 'exchange' ? ends[0].text : '';
 
@@ -688,21 +560,14 @@ describe('計器: #restoreUnreadPass の始まりと終わりに1行だけ書く
     const total = Number(totalProcessedMatch?.[1]);
     const processed = Number(totalProcessedMatch?.[2]);
     expect(total).toBe(N);
-    // **本当に「途中」だったことの確認**（全部処理していても0件でもいけない）。
     expect(processed).toBeGreaterThan(0);
     expect(processed).toBeLessThan(N);
 
     const remainingMatch = endText.match(/残り (\d+) 件は次の起動で拾い直す/);
     expect(remainingMatch).not.toBeNull();
     const reportedRemaining = Number(remainingMatch?.[1]);
-    // 行が名乗る算術（総数 − 処理した = 残り）がそのまま整合している。
     expect(reportedRemaining).toBe(total - processed);
 
-    // **ストアの実際の残りと突き合わせる。** `processed` は「ストアから
-    // 消えた件数」で数えている（`#journalRestoreUnreadPassEnd` の doc
-    // 「『処理した』の定義を1つに統一する」）ので、行が名乗る残りは
-    // ストアの実際の残りと1件もずれない。この回は stale の消し込みの直後に
-    // 止めている（後段の早期 return を通る）ので、ずれるならここで出る。
     const actualRemaining = (await base.inbox.peekPending()).entries.length;
     expect(actualRemaining).toBe(reportedRemaining);
   }, 30_000);

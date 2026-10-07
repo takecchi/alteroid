@@ -1007,7 +1007,7 @@ describe('本文の編集（未了の行すべて。origin では隠さない）
     fireEvent.click(screen.getByRole('button', { name: '保存' }));
 
     await waitFor(() => expect(patchCalled).toBe(true));
-    expect(patchBody).toEqual({ body: '直した依頼' });
+    expect(patchBody).toEqual({ body: '直した依頼', ifMatch: expect.any(String) });
   });
 
   it('保存が 409（その間に片付けられた）で返ると、人間に見える形でエラーが出る', async () => {
@@ -1661,7 +1661,9 @@ describe('本文の編集: 保存は trim して送る（#3788）', () => {
     fireEvent.change(textarea, { target: { value: '  直した依頼\n\n' } });
     fireEvent.click(screen.getByRole('button', { name: '保存' }));
 
-    await waitFor(() => expect(sent).toEqual([{ body: '直した依頼' }]));
+    await waitFor(() =>
+      expect(sent).toEqual([{ body: '直した依頼', ifMatch: expect.any(String) }]),
+    );
     release();
     await waitFor(() => expect(screen.queryByRole('tablist')).toBeNull());
   });
@@ -1689,7 +1691,9 @@ describe('本文の編集: 保存は trim して送る（#3788）', () => {
 
     fireEvent.change(textarea, { target: { value: '直した依頼' } });
     fireEvent.click(screen.getByRole('button', { name: '保存' }));
-    await waitFor(() => expect(sent).toEqual([{ body: '直した依頼' }]));
+    await waitFor(() =>
+      expect(sent).toEqual([{ body: '直した依頼', ifMatch: expect.any(String) }]),
+    );
     fireEvent.change(textarea, { target: { value: '直した依頼\n' } });
     release();
 
@@ -1703,7 +1707,9 @@ describe('本文の編集: 保存は trim して送る（#3788）', () => {
 
     fireEvent.change(textarea, { target: { value: '直した依頼' } });
     fireEvent.click(screen.getByRole('button', { name: '保存' }));
-    await waitFor(() => expect(sent).toEqual([{ body: '直した依頼' }]));
+    await waitFor(() =>
+      expect(sent).toEqual([{ body: '直した依頼', ifMatch: expect.any(String) }]),
+    );
     fireEvent.change(textarea, { target: { value: '直した依頼 さらに' } });
     release();
 

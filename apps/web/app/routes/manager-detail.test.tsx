@@ -631,6 +631,18 @@ describe('詳細でも、`lastReport` は `lastFailure` の有無で描き方を
     const em = await screen.findByText('強調される');
     expect(em.tagName).toBe('EM');
   });
+
+  it('成功回の本文にある外部の画像は <img> にならず、リンクに落ちる（#4062）', async () => {
+    renderDetail({
+      ...BASE,
+      status: 'done',
+      lastReport: '![図](https://example.invalid/p.png)',
+    });
+
+    const link = await screen.findByRole('link', { name: '画像: 図' });
+    expect(link.getAttribute('href')).toBe('https://example.invalid/p.png');
+    expect(document.querySelector('img')).toBeNull();
+  });
 });
 
 // 送信ボタンを live だけを理由に塞がない: session_id を持つ相手には resume で届き、塞ぐと人間が自分の言葉で繋ぎ直す唯一の手が消えるため

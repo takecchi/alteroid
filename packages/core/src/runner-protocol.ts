@@ -5,6 +5,7 @@ import { cgroupEventsDeltaSchema } from './cgroup-events.js';
 import { CREDENTIAL_NAME_MAX_LENGTH } from './credentials.js';
 import { excerptLine } from './excerpt.js';
 import type { McpServers } from './mcp-servers.js';
+import type { RunnerPlugin as RunnerPluginPush } from './plugins.js';
 import { type RunnerRevisionReport } from './revision.js';
 import { contextUsageObservationSchema, jobStatusSchema, rescueWorktreeSchema } from './schema.js';
 import { systemErrorFactsSchema } from './system-error.js';
@@ -504,6 +505,75 @@ export const runnerMcpServersFingerprintSchema = z.object({
 });
 
 export type RunnerMcpServersFingerprint = z.infer<typeof runnerMcpServersFingerprintSchema>;
+
+/**
+ * 人間が入れた plugin 1本の runner への送り（`POST /plugins/:name`）。files の `content` は base64。
+ *
+ * **この層では形を緩く運ぶ**（`runnerSetMcpServersCommandSchema` と同じ理由）。検査の正本は
+ * `plugins.ts` の `parseRunnerPlugin` で、受けた runner（`Host#setPlugin`）が path・`contentSha256`・
+ * scope を検める。不正なら runner が 400 を返し、前の状態が残る。
+ *
+ * **古い runner（口が無い）は 404 を返す。** daemon は `RunnerPluginsUnsupportedError` に変えて
+ * 挑み直しに数えない。新しい欄はすべて任意の口の追加なので、古い daemon・古い runner のどちらと
+ * 組んでも壊れない（叩かれなければ runner は plugin を持たないだけである）。
+ */
+export const runnerPluginFileWireSchema = z.object({
+  path: z.string(),
+  executable: z.boolean(),
+  /** base64（RFC 4648 の標準の綴り・padding あり）。 */
+  content: z.string(),
+});
+
+export const runnerSetPluginCommandSchema = z.object({
+  name: z.string(),
+  /** 取り元の commit SHA（固定の根拠）。 */
+  sourceSha: z.string(),
+  scope: z.string(),
+  enableHooks: z.boolean(),
+  enableMcp: z.boolean(),
+  contentSha256: z.string(),
+  files: z.array(runnerPluginFileWireSchema),
+});
+
+export type RunnerSetPluginCommand = z.infer<typeof runnerSetPluginCommandSchema>;
+
+/** `PUT /plugins` の本文の名前の個数の上限（本文の大きさの上限もここから導く）。 */
+export const RUNNER_PLUGIN_RETAIN_MAX_NAMES = 1024;
+
+/** 残す plugin の名前の一覧（`PUT /plugins`）。一覧に無いものを runner はメモリから外す。 */
+export const runnerRetainPluginsCommandSchema = z.object({
+  names: z.array(z.string()).max(RUNNER_PLUGIN_RETAIN_MAX_NAMES),
+});
+
+export type RunnerRetainPluginsCommand = z.infer<typeof runnerRetainPluginsCommandSchema>;
+
+/**
+ * runner が持っている plugin の同一性。**files の中身は返さない**（名前・取り元の sha・中身の
+ * 指紋だけ。どれも秘密ではない）。`/health` の `plugins` 欄にも載る。
+ */
+export const runnerPluginFingerprintEntrySchema = z.object({
+  name: z.string(),
+  /** 取り元の commit SHA。 */
+  sha: z.string(),
+  contentSha256: z.string(),
+  /**
+   * 欄が無い古い runner の応答も読めるよう optional にする。欄が無ければ daemon 側の比較で
+   * 「差あり」になり、送り直される。
+   */
+  enableHooks: z.boolean().optional(),
+  enableMcp: z.boolean().optional(),
+});
+
+export const runnerPluginsFingerprintSchema = z.object({
+  /** 一覧全体の同一性（`pluginsFingerprintOf`）。 */
+  sha256: z.string(),
+  plugins: z.array(runnerPluginFingerprintEntrySchema),
+  /** runner が最後に置いた時刻。 */
+  updatedAt: z.string(),
+});
+
+export type RunnerPluginFingerprintEntry = z.infer<typeof runnerPluginFingerprintEntrySchema>;
+export type RunnerPluginsFingerprint = z.infer<typeof runnerPluginsFingerprintSchema>;
 
 /**
  * 実行環境の資源。**フィールド名を `capacity` にしないのは意図である。**
@@ -2485,9 +2555,20 @@ export class RunnerMcpServersUnsupportedError extends Error {
 }
 
 /**
- * 相手の runner が Codex の ChatGPT ログインを受け取る口（`POST /codex-auth`）を持たない（#3939）。
- * 古い版の runner である（404）。`RunnerMcpServersUnsupportedError` と同じく、挑み直しに数えない。
+ * 相手の runner が plugin を受け取る口（`POST /plugins/:name` / `PUT /plugins`）を持たない。
+ *
+ * **古い版の runner である。** 挑み直しても同じ答えしか返らないので、daemon（`manager.ts` の
+ * `#pushPlugins`）は記録だけして挑み直しの予約に数えない（`RunnerMcpServersUnsupportedError` と同じ）。
  */
+export class RunnerPluginsUnsupportedError extends Error {
+  constructor(runnerId: string) {
+    super(
+      `${runnerId} は plugin を受け取る口を持たない（古い版の runner。runner を上げれば次の名乗りで降りる）`,
+    );
+    this.name = 'RunnerPluginsUnsupportedError';
+  }
+}
+
 /** `POST /codex-auth` の本文（#3939）。`null` は外す。 */
 export const runnerSetCodexAuthCommandSchema = z.object({
   codexAuth: z.object({ value: z.string(), revision: z.string().min(1) }).nullable(),
@@ -2505,6 +2586,10 @@ export const runnerCodexAuthWriteBackSchema = z.object({
   fingerprint: z.string(),
 });
 
+/**
+ * 相手の runner が Codex の ChatGPT ログインを受け取る口（`POST /codex-auth`）を持たない（#3939）。
+ * 古い版の runner である（404）。`RunnerMcpServersUnsupportedError` と同じく、挑み直しに数えない。
+ */
 export class RunnerCodexAuthUnsupportedError extends Error {
   constructor(runnerId: string) {
     super(
@@ -3094,6 +3179,24 @@ export interface RunnerClient {
    * 降ろさない（押し込みを試みたことにもしない）。
    */
   setMcpServers?(servers: McpServers): Promise<RunnerMcpServersFingerprint | undefined>;
+  /**
+   * いま runner が持っている plugin の指紋。**files の中身は返らない。** 持っていなければ
+   * `undefined`。口を持たない古い runner も `undefined` になる（区別は `setPlugin` の 404）。
+   * 欄が在るのに読めなかったときは投げる（「持っていない」へ倒さない）。
+   *
+   * **省略できる**（`mcpServers` と同じ理由）。
+   */
+  plugins?(): Promise<RunnerPluginsFingerprint | undefined>;
+  /**
+   * plugin を1本置く（同名は置き換え）。runner はメモリに持つだけで、展開はしない。戻り値は置いた
+   * 1本の指紋。口を持たない相手には `RunnerPluginsUnsupportedError` を投げる。
+   */
+  setPlugin?(plugin: RunnerPluginPush): Promise<RunnerPluginFingerprintEntry>;
+  /**
+   * 残す plugin の名前の一覧を送る。**一覧に無いものを runner はメモリから外す。** 戻り値は残った
+   * 後の指紋（空なら `undefined`）。口を持たない相手には `RunnerPluginsUnsupportedError`。
+   */
+  retainPlugins?(names: readonly string[]): Promise<RunnerPluginsFingerprint | undefined>;
   /**
    * Codex の ChatGPT ログイン（#3939）を降ろす。`null` は外す（ログアウト）。
    * **runner が繋ぎ直すたびに降ろし直すこと**（`setMcpServers` と同じ。runner はメモリと

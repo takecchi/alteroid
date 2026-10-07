@@ -29,6 +29,7 @@ import {
   useKeyboardHintsVisible,
 } from '@alteroid/ui';
 import {
+  CommitmentConflictError,
   useCloseCommitment,
   useEditCommitment,
   usePushCommitment,
@@ -734,7 +735,7 @@ function isKnownTextMarkup(value: string): value is TextMarkup {
  * `isKnownTextMarkup` の doc）。
  */
 function ManagerRestBody({ rest, bodyMarkup }: { rest: string; bodyMarkup: string | undefined }) {
-  if (bodyMarkup === undefined) return <Markdown>{rest}</Markdown>;
+  if (bodyMarkup === undefined) return <Markdown remoteImages={false}>{rest}</Markdown>;
 
   if (!isKnownTextMarkup(bodyMarkup)) {
     // **`undefined` とは別扱い。** ここでだけ warn する（`undefined` は warn しない）。
@@ -747,7 +748,7 @@ function ManagerRestBody({ rest, bodyMarkup }: { rest: string; bodyMarkup: strin
   const markup = bodyMarkup;
   switch (markup) {
     case 'markdown':
-      return <Markdown>{rest}</Markdown>;
+      return <Markdown remoteImages={false}>{rest}</Markdown>;
 
     case 'none':
       return <PlainBody body={rest} />;
@@ -872,7 +873,7 @@ function CommitmentBody({ commitment }: { commitment: Commitment }) {
   const body = redactBody(commitment.body);
   switch (commitment.origin) {
     case 'self':
-      return <Markdown>{body}</Markdown>;
+      return <Markdown remoteImages={false}>{body}</Markdown>;
 
     case 'manager': {
       const { prefix, rest } = splitManagerPrefix(body);
@@ -1085,6 +1086,17 @@ function CommitmentBodyEditor({
   const [tab, setTab] = useState<string>('preview');
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<unknown>(undefined);
+  // 編集を開いた時点の版。一覧の取り直しで `commitment` が変わっても追従しない（追従すると、裏の編集を見ずに上書きできる）。
+  const [baseVersion, setBaseVersion] = useState(() => commitment.editedAt ?? commitment.at);
+  // 保存の応答は新しい版を返さない（`{ ok: true }` だけ）ので、打ち足しを残した保存の版は、取り直した一覧の本文が
+  // 送った本文と一致したときだけ自分の書き込みとして取り込む。版だけを見て追うと、自分の保存のあとに裏で入った編集の版まで拾って上書きする。
+  const [ownSent, setOwnSent] = useState<string | undefined>(undefined);
+  if (ownSent !== undefined && commitment.body.trim() === ownSent) {
+    setBaseVersion(commitment.editedAt ?? commitment.at);
+    setOwnSent(undefined);
+  }
+  /** 開いたあとに裏で変わった行（409 の `current`）。下書きは別に残る。 */
+  const [conflict, setConflict] = useState<Commitment | undefined>(undefined);
 
   const value = draft ?? commitment.body;
   // 送るのは trim した本文（積むのと揃える。#3788）。だから「変更あり」も trim した値どうしで比べる。
@@ -1106,7 +1118,7 @@ function CommitmentBodyEditor({
     onTrack({ draft: dirty ? draft : undefined });
   }, [dirty, draft, onTrack]);
 
-  function save() {
+  function save(ifMatch: string = baseVersion) {
     // 保存中は何もしない。ボタン・⌘/Ctrl+Enter・⌘/Ctrl+S のどの経路もここを通る（#3300）。
     if (busy) return;
     // 変更が無ければ送らない。ボタンと ⌘/Ctrl+Enter は `dirty` で止まるが、⌘/Ctrl+S はここへ直接来る（#3749）。
@@ -1118,18 +1130,29 @@ function CommitmentBodyEditor({
     onSettling(true);
     // 送った値を控える。成功のあと、いまの下書きがこれと同じときだけ畳む（issue #3515）。
     const sent = draft.trim();
-    editCommitment(commitment.id, sent)
+    editCommitment(commitment.id, sent, ifMatch)
       // 成功したら編集モードを畳む。一覧は `useEditCommitment` の中で
       // 取り直されるので、この行の `commitment` はすぐ新しい本文へ差し替わる。
       // 応答を待つ間に打ち足した分があるときは畳まず、下書きを残す。
       .then(
         () => {
+          setConflict(undefined);
           // 送った値は trim 済みなので、いまの下書きも trim して比べる（末尾の空白だけの打ち足しは本文が変わらない）。
           if (latestDraft.current?.trim() === sent) onCancel();
+          // 打ち足しを残すときは、自分の書き込みで進んだ版を前提にする（次の保存が自分の保存と衝突しない）。
+          else setOwnSent(sent);
           setBusy(false);
           onSettling(false);
         },
         (caught: unknown) => {
+          // 行が残っている版の衝突は、下書きを残したまま選ばせる。行が消えていれば（`current: null`）
+          // 一覧から外れて `OrphanNote` が失敗ごと受けるので、他の失敗と同じ道を通す。
+          if (caught instanceof CommitmentConflictError && caught.current !== null) {
+            setConflict(caught.current);
+            setBusy(false);
+            onSettling(false);
+            return;
+          }
           // 一覧の取り直しが先に行を消すことがある（409）。行の state は届かないので、ページにも渡す。
           // 失敗の記録と「待ちが終わった」は同じ処理の中で行う（別の描画だと、行が消えた断りが失敗の無い形で一瞬出る）。
           setFailure(caught);
@@ -1138,6 +1161,14 @@ function CommitmentBodyEditor({
           onSettling(false);
         },
       );
+  }
+
+  function adoptConflictVersion(next: Commitment): string {
+    const version = next.editedAt ?? next.at;
+    setBaseVersion(version);
+    setOwnSent(undefined);
+    setConflict(undefined);
+    return version;
   }
 
   return (
@@ -1179,7 +1210,7 @@ function CommitmentBodyEditor({
             aria-label={`「${snippet(commitment.body)}」の本文`}
             className="min-h-32 font-mono text-xs leading-relaxed"
             maxHeight="60vh"
-            onSubmitShortcut={save}
+            onSubmitShortcut={() => save()}
             submitDisabled={!dirty || value.trim() === '' || busy}
             value={value}
             spellCheck={false}
@@ -1207,7 +1238,7 @@ function CommitmentBodyEditor({
           size="sm"
           loading={busy}
           disabled={!dirty || value.trim() === ''}
-          onClick={save}
+          onClick={() => save()}
         >
           保存
         </Button>
@@ -1220,6 +1251,40 @@ function CommitmentBodyEditor({
         </Button>
       </div>
 
+      {conflict !== undefined && (
+        <div
+          role="alert"
+          className="mx-2 mb-2 rounded-md border border-warn/40 bg-warn/10 px-3 py-2 text-sm"
+        >
+          <p className="mb-2 break-words">
+            <strong>開いたあとに、裏でこの本文が変わった。</strong>
+            保存していない。下書きはそのまま残してある。
+          </p>
+          <CodeBlock label="いまの本文" maxHeight="12rem">
+            {redactBody(conflict.body)}
+          </CodeBlock>
+          <div className="mt-2 flex flex-wrap gap-2">
+            <Button
+              size="sm"
+              variant="primary"
+              disabled={busy}
+              onClick={() => save(adoptConflictVersion(conflict))}
+            >
+              いまの本文の上で、下書きを保存し直す
+            </Button>
+            <Button
+              size="sm"
+              disabled={busy}
+              onClick={() => {
+                adoptConflictVersion(conflict);
+                setDraft(undefined);
+              }}
+            >
+              下書きを捨てて、いまの本文にする
+            </Button>
+          </div>
+        </div>
+      )}
       <ErrorNote error={failure} className="mx-2 mb-2" />
     </div>
   );
@@ -1628,7 +1693,7 @@ function ClosedReasonBody({ commitment }: { commitment: Commitment }) {
       return (
         <div className="mt-1 text-xs">
           <span className="mr-2 text-[11px]">どう片付いたか</span>
-          <Markdown>{reason}</Markdown>
+          <Markdown remoteImages={false}>{reason}</Markdown>
         </div>
       );
 

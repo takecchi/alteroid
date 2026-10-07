@@ -10,10 +10,6 @@ import {
   resolveRescueIntervalMs,
 } from './rescue-ref.js';
 
-/**
- * `setTimeout` は 2^31-1 ms を超える値を 1ms に倒す（Node の TimeoutOverflowWarning）。
- * 兄弟の `resolveRescueIntervalMs` は MAX_RESCUE_INTERVAL_MS で挟む。合流窓の読み取りには上限が無い。
- */
 const MAX_TIMER_MS = 2_147_483_647;
 
 describe('環境変数から読むタイマー長は setTimeout の上限（2^31-1 ms）を超えない', () => {
