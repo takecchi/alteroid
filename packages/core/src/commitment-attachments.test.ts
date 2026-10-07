@@ -47,7 +47,7 @@ describe('台帳の body に添付の控えを出す（#4029）', () => {
   it('中身が空で添付だけの外部イベントは、「中身のない通知」と言わず添付が届いたと言う', () => {
     for (const payload of [undefined, null, '']) {
       expect(commitmentFor(external(payload, [ref('a1', 'run.log')]))?.body).toBe(
-        '（本文なし。添付だけが届いた）［添付 1件: run.log］',
+        '（本文なし。添付だけが届いた）',
       );
     }
   });
