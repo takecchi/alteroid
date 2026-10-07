@@ -28,6 +28,8 @@ type McpServers = Record<string, McpServerEntry>;
 interface McpServersView {
   mcpServers: McpServers;
   updatedAt?: string;
+  // 古いデーモンは返さない: その間は ifMatch を送らず、従来どおり無条件で置き換える
+  version?: string;
 }
 
 interface McpServersRunnerResult {
@@ -111,7 +113,7 @@ export async function mcpSetCommand(file: string, options: { yes?: boolean } = {
       options,
     );
   }
-  await put(target, servers, beforeNames);
+  await put(target, servers, beforeNames, before.version);
 }
 
 function stableJson(value: unknown): string {
@@ -144,7 +146,8 @@ export async function mcpEditCommand(): Promise<void> {
       stdout.write('変更はありません。\n');
       return;
     }
-    await put(target, parseMcpJson(edited), Object.keys(current.mcpServers));
+    // エディタを開く前に読んだ版を送る: 開いている間にクローンや Web が書いた登録を、黙って消さないため
+    await put(target, parseMcpJson(edited), Object.keys(current.mcpServers), current.version);
   });
 }
 
@@ -159,7 +162,7 @@ export async function mcpClearCommand(options: { yes?: boolean } = {}): Promise<
       options,
     );
   }
-  await put(target, {}, beforeNames);
+  await put(target, {}, beforeNames, before.version);
 }
 
 // 形の検査を写さない: `parseMcpServers` が正本で二重管理になるため（`mcpServers` の欄の有無だけ見る）
@@ -204,11 +207,32 @@ function maskValues(values: Record<string, string>): Record<string, string> {
 
 export { maskUrl };
 
-async function put(target: Target, servers: McpServers, beforeNames: string[]): Promise<void> {
+async function put(
+  target: Target,
+  servers: McpServers,
+  beforeNames: string[],
+  ifMatch?: string,
+): Promise<void> {
   const client = createClient(target.baseUrl, target.headers);
   const response = await client['mcp-servers'].$put({
-    json: { mcpServers: servers } as never,
+    json: (ifMatch === undefined
+      ? { mcpServers: servers }
+      : { mcpServers: servers, ifMatch }) as never,
   });
+  // 409 は版の衝突だけ: この口に他の 409 は無いため。current は値を含むので、名前だけを出す
+  if (response.status === 409) {
+    const body = (await response.json().catch(() => ({}))) as { current?: McpServersView };
+    const names = Object.keys(body.current?.mcpServers ?? {}).sort();
+    stdout.write(
+      [
+        '置き換えていません: あなたが読んだ後に、ほかで MCP の登録が変わっています（クローンや Web などの別の書き手）。',
+        `  いまの登録: ${names.length === 0 ? '（無し）' : names.join('・')}`,
+        '  続けるには: `alteroid mcp show` でいまの登録を確かめてから、もう一度 `alteroid mcp set <file>` / `alteroid mcp edit` をやり直してください。',
+        '',
+      ].join('\n'),
+    );
+    throw new Error('MCP の登録が読んだ後に変わっていたので置き換えませんでした');
+  }
   if (!response.ok) await fail(response, target);
   const result = (await response.json()) as McpServersUpdateView;
   stdout.write(renderMcpUpdate(result, beforeNames));
