@@ -146,25 +146,33 @@ export async function chatCommand(): Promise<void> {
   // `local` は手元のコマンドの通信など（Ctrl+C はその通信だけを abort する）。入力待ちの間は `null`（`waiter` で見る）。
   let activity: Activity | null = null;
   // 手元のコマンドの通信は、いまの `local` の signal で abort できるようにする。取り消した通信は「失敗」に数えない。
-  const slashClient = createClient(base, target.headers, async (input, init) => {
-    const current = activity?.kind === 'local' ? activity : null;
-    const signal =
-      current === null
-        ? init?.signal
-        : init?.signal == null
-          ? current.abort.signal
-          : AbortSignal.any([init.signal, current.abort.signal]);
-    try {
-      const response = await fetch(input, signal == null ? init : { ...init, signal });
-      if (!response.ok && !interactive) slashFailure ??= `HTTP ${String(response.status)}`;
-      return response;
-    } catch (error) {
-      if (!interactive && current?.abort.signal.aborted !== true) {
-        slashFailure ??= error instanceof Error ? error.message : String(error);
+  const localFetch =
+    (countFailure: boolean): typeof fetch =>
+    async (input, init) => {
+      const current = activity?.kind === 'local' ? activity : null;
+      const signal =
+        current === null
+          ? init?.signal
+          : init?.signal == null
+            ? current.abort.signal
+            : AbortSignal.any([init.signal, current.abort.signal]);
+      try {
+        const response = await fetch(input, signal == null ? init : { ...init, signal });
+        if (countFailure && !response.ok && !interactive) {
+          slashFailure ??= `HTTP ${String(response.status)}`;
+        }
+        return response;
+      } catch (error) {
+        if (countFailure && !interactive && current?.abort.signal.aborted !== true) {
+          slashFailure ??= error instanceof Error ? error.message : String(error);
+        }
+        throw error;
       }
-      throw error;
-    }
-  });
+    };
+  const slashClient = createClient(base, target.headers, localFetch(true));
+  // 付随の取得（未読の総数・会話の承認）用。失敗は取得する側が1行で言い、本体は出ているので、通信の口では止める判断に数えない（#3994）。
+  // HTTP の失敗を「コマンドの失敗」の代わりに使うと、本体が成功したコマンドまで止まる。
+  const auxClient = createClient(base, target.headers, localFetch(false));
 
   const rl = createInterface({ input: stdin, output: process.stdout });
   // 入力の行は `line` イベントで受けて積み、`ask` が順に取り出す（#3262）。`question()` は、待って
@@ -555,6 +563,7 @@ export async function chatCommand(): Promise<void> {
                   slashFailure ??= reason;
                 },
                 hooks,
+                auxClient,
               ),
           );
           if (handled === CANCELLED) {
@@ -1365,6 +1374,8 @@ export async function runSlashCommand(
   onFailed?: (reason: string) => void,
   /** `/edit` の送信が応答を描く間は、Ctrl+C がクローンのターンを止める側へ切り替わる（#3818）。 */
   hooks?: ReplHooks,
+  /** 付随の取得（未読の総数・会話の承認）の口。失敗しても本体の成否に数えない（#3994）。省略したら `client`。 */
+  auxClient: ReturnType<typeof createClient> = client,
 ): Promise<'ok' | 'quit'> {
   const [command, ...rest] = line.split(/\s+/);
   // 使い方の誤り: 案内を出し、非対話の入力で止める判断のために失敗として知らせる（#3768）。
@@ -1705,7 +1716,7 @@ export async function runSlashCommand(
       const { conversations, scanned, reachedStart, hiddenByLimit, nextCursor } =
         await response.json();
       // 未読の総数の1行は `alteroid conversations list` と同じ関数（取れなくても一覧は出す）。
-      stdout.write(`${await fetchUnreadTotalLine(client)}\n`);
+      stdout.write(`${await fetchUnreadTotalLine(auxClient)}\n`);
       listed.conversations.length = 0;
       if (conversations.length === 0) {
         stdout.write('（会話はまだありません）\n');
@@ -1820,7 +1831,7 @@ export async function runSlashCommand(
       listed.messageTexts = {};
       listed.messagesConversationId = id;
       // その会話のターンから積まれた承認を時刻順の位置に1行で出す（#3261）。取れなくても会話は出す。
-      const approvalsRead = await fetchConversationApprovals(client, id);
+      const approvalsRead = await fetchConversationApprovals(auxClient, id);
       const timeline = interleaveApprovals(messages, approvalsRead.approvals);
       if (timeline.length === 0) {
         stdout.write(
