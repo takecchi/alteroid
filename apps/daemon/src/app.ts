@@ -102,6 +102,7 @@ import {
   fingerprintOf,
   noteDroppedRecord,
   reasonOf,
+  redactErrorText,
   readConversationPage,
   readConversationWindow,
   decodeConversationCursor,
@@ -3153,10 +3154,10 @@ export function createApp(deps: AppDeps) {
           return c.json(meta, 200);
         } catch (error) {
           if (error instanceof AttachmentRejectedError) {
-            // `reasonOf` は通さない: 「AttachmentRejectedError: … code=…」と包んで返すと、Web・CLI・TUI が
-            // そのまま出す理由に型名と code が混ざる（#3697）。この文は人に向けて書いた文である。
+            // `reasonOf` ではなく `redactErrorText`: `reasonOf` は「AttachmentRejectedError: … code=…」と包むので、
+            // Web・CLI・TUI がそのまま出す理由に型名と code が混ざる（#3697）。伏せ字は外さない。
             return c.json(
-              { error: error.message, code: error.code },
+              { error: redactErrorText(error.message, process.env), code: error.code },
               error.code === 'too_large' ? 413 : 400,
             );
           }
