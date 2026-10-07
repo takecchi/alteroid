@@ -9,18 +9,6 @@ import { makeTempDir } from '../../../vitest.tmpdir.js';
 
 import { createApp } from './app.js';
 
-/**
- * `JournalStore.get` が「在るが読めない」を `UnreadableJournalEntryError` で言うようになった（issue #3288）のを、
- * デーモンで `journal.get` を引く2つの口が「無い」と言い分ける。
- *
- * - `POST /conversations/:id/read` の `through`: 無ければ 404、**在るが読めなければ 409**
- * - `POST /chat` の `supersedes`: 無ければ 400、**在るが読めなければ 409**
- *
- * 409 + `error.message` は、他の `Unreadable*Error`（承認・やり方・許可）の口と同じ流儀。
- * なお `GET /journal/:id` という口はデーモンに無い（`GET /journal` は一覧で、読めない行は従来どおり飛ばす）。
- *
- * fs ストアの実物に読めない行を書く（インメモリは読めない行を持てない）。
- */
 const BAD_ID = 'bad-1';
 const json = (body: unknown) => ({
   method: 'POST',

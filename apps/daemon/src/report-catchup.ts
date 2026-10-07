@@ -6,21 +6,11 @@ import {
 } from '@alteroid/core';
 import type { InboxEvent, JournalEntry, JournalStore, TimeOfDay } from '@alteroid/core';
 
-/**
- * 起動時の日報の後追い（取りこぼした日の拾い直し）。
- *
- * 日誌を読めずに調べられなかったとき、(1) stderr だけでなく日誌にも `[失敗]` の跡を
- * 残し（日誌へ書けないときは stderr に落ちる。二重に失敗しても投げない）、(2) 間隔を
- * 空けて有限回、調べ直す（#2908）。間隔は #2783 の日報の作り直し
- * （`DAILY_REPORT_RETRY_DELAYS_MS`）と揃える。使い切ったら諦める（跡は残っている）。
- * 調べ直しで見つかった日は、起動時と同じ `schedule_catchup` で積む。
- */
 export interface DailyReportCatchupOptions {
   journal: Pick<JournalStore, 'listPage' | 'append'>;
   at: TimeOfDay;
   lookbackDays: number;
   post: (event: InboxEvent) => void;
-  /** 調べ直しの間隔。要素数が回数の上限。 */
   retryDelaysMs: readonly number[];
   now?: () => Date;
   stdout?: (line: string) => void;
@@ -28,7 +18,6 @@ export interface DailyReportCatchupOptions {
 }
 
 export interface DailyReportCatchup {
-  /** 待機中の調べ直しを破棄する。 */
   stop(): void;
 }
 
@@ -79,7 +68,6 @@ export function startDailyReportCatchup(options: DailyReportCatchupOptions): Dai
       timer.unref();
       return;
     }
-    // 調べ直しで見つかった分も、起動時と同じ印（`schedule_catchup`）で積む。
     for (const date of missed) options.post(dailyReportEvent(date, now(), 'schedule_catchup'));
     if (missed.length > 0) {
       stdout(`alteroidd: 取りこぼした日報を作ります: ${missed.join(', ')}\n`);
