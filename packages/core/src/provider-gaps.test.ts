@@ -7,12 +7,8 @@ import {
   type AgentCapabilities,
 } from './agent-ports.js';
 import { CLAUDE_PROVIDER } from './claude-provider.js';
-import { buildActivityDigest } from './digest.js';
 import { DEFAULT_LAYER_PROVIDERS } from './layer-providers.js';
 import { describeProviderGaps } from './provider-gaps.js';
-import { buildSelfKnowledge, describeCloneRuntime } from './self.js';
-import type { CloneRuntimeFacts, SelfFacts } from './self.js';
-import { createMemoryStores } from './testing.js';
 
 const ALL_CLAUDE = {
   clone: CLAUDE_PROVIDER,
@@ -20,42 +16,6 @@ const ALL_CLAUDE = {
   worker: CLAUDE_PROVIDER,
 };
 const FAKE = { displayName: '偽', capabilities: { ...CLAUDE_PROVIDER.capabilities, usage: false } };
-
-const SELF: SelfFacts = {
-  storage: 's',
-  local: 'l',
-  workspace: 'w',
-  cwd: 'c',
-  runner: 'r',
-  entrypoint: 'e',
-  auth: 'a',
-  models: { clone: 'opus', manager: 'opus', worker: 'sonnet' },
-};
-
-function runtimeFacts(): CloneRuntimeFacts {
-  return {
-    revision: { commit: null, source: null },
-    buildTime: { builtAt: null },
-    declaredModel: 'opus',
-    modelOverridden: false,
-    modelEnvKey: 'K',
-    sdkModel: null,
-    effort: null,
-    requestedEffort: null,
-    claudeCodeVersion: null,
-    apiKeySource: null,
-    permissionMode: null,
-    requestedPermissionMode: 'default',
-    mcpServers: null,
-    sessionId: null,
-    resumedFrom: null,
-    injectedMemoryChars: 0,
-    systemPromptChars: 0,
-    lastContextUsage: null,
-  } as unknown as CloneRuntimeFacts;
-}
-
-const WINDOW = { since: new Date('2026-01-01T00:00:00Z'), until: new Date('2026-01-02T00:00:00Z') };
 
 describe('describeProviderGaps', () => {
   it('Claude は全層で欠落なし', () => {
@@ -101,45 +61,5 @@ describe('describeProviderGaps', () => {
       expect(missingRequirementCapabilities(provider.capabilities)).toEqual([]);
     }
     expect(describeProviderGaps(DEFAULT_LAYER_PROVIDERS)).toEqual([]);
-  });
-});
-
-describe('欠落を載せる3面', () => {
-  it('[] と欄なしで、3面とも1バイトも変わらない', async () => {
-    expect(buildSelfKnowledge({ ...SELF, providerGaps: [] })).toBe(buildSelfKnowledge(SELF));
-    expect(describeCloneRuntime({ ...runtimeFacts(), providerGaps: [] })).toBe(
-      describeCloneRuntime(runtimeFacts()),
-    );
-    const stores = createMemoryStores();
-    const bare = await buildActivityDigest(stores, WINDOW);
-    const empty = await buildActivityDigest(stores, WINDOW, undefined, undefined, []);
-    expect(empty).toBe(bare);
-  });
-
-  it('偽 provider の欠落が3面に同じ文言で出る', async () => {
-    const gaps = describeProviderGaps({ ...ALL_CLAUDE, clone: FAKE });
-    expect(gaps).toHaveLength(1);
-    const line = gaps[0] as string;
-    expect(buildSelfKnowledge({ ...SELF, providerGaps: gaps })).toContain(line);
-    expect(describeCloneRuntime({ ...runtimeFacts(), providerGaps: gaps })).toContain(line);
-    const digest = await buildActivityDigest(
-      createMemoryStores(),
-      WINDOW,
-      undefined,
-      undefined,
-      gaps,
-    );
-    expect(digest).toContain(line);
-  });
-
-  it('self_status の項目行（"- " 始まり）は欠落の行で増えない', () => {
-    const gaps = describeProviderGaps({
-      ...ALL_CLAUDE,
-      clone: { displayName: '無', capabilities: NO_CAPABILITIES },
-    });
-    const items = (s: string) => s.split('\n').filter((l) => l.startsWith('- '));
-    expect(items(describeCloneRuntime({ ...runtimeFacts(), providerGaps: gaps }))).toEqual(
-      items(describeCloneRuntime(runtimeFacts())),
-    );
   });
 });

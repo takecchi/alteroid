@@ -15,10 +15,13 @@ import type {
   IntegrationKeyIssued,
   McpServers,
   MemoryDocument,
+  McpServersState,
   McpServersUpdateResult,
   Practice,
   ProfileScope,
   ProfileUpdateResult,
+  ScheduleEntry,
+  ScheduleSpec,
   TokenRotationSettings,
 } from '@alteroid/logic';
 
@@ -252,15 +255,15 @@ export function useAnswerApprovals() {
   const { mutate } = useSWRConfig();
   return useCallback(
     async (answers: { id: string; answer?: string; selections?: ApprovalSelection[] }[]) => {
-      const { results } = await api.api
-        .POST('/approvals/answer', { body: { answers } })
-        .then(unwrap);
-      // 取り直しの失敗で throw しない: 答えは通っており、投げると画面が通信失敗と読んで下書きを残し、送り直しが 409 になるため
-      try {
-        await Promise.all([mutate(KEY.approvals(true)), mutate(KEY.approvals(false))]);
-      } catch {
-        // 取り直しの失敗は無視する
-      }
+      // 失敗しても取り直す: 届いて応答だけ失われた書き込みは、取り直さないとカードが未回答のまま残り、送り直しが 409 になるため
+      const post = () => api.api.POST('/approvals/answer', { body: { answers } }).then(unwrap);
+      let results: Awaited<ReturnType<typeof post>>['results'] = [];
+      await writeThenRefresh(
+        async () => {
+          ({ results } = await post());
+        },
+        () => Promise.all([mutate(KEY.approvals(true)), mutate(KEY.approvals(false))]),
+      );
       return results;
     },
     [api, mutate],
@@ -380,22 +383,41 @@ export function useRunSchedule() {
   );
 }
 
+export interface ScheduleCurrent {
+  request: string;
+  spec: ScheduleSpec;
+  updatedAt: string;
+}
+
 // 周期の形は API の型のまま受ける: 画面で daily / every / cron を組み直すと、値が増えたときにここだけ古くなる
 export function useCreateSchedule() {
   const api = useApi();
   const { mutate } = useSWRConfig();
   return useCallback(
-    async (body: {
-      kind: string;
-      request: string;
-      spec:
-        | { type: 'daily'; at: string }
-        | { type: 'every'; minutes: number }
-        | { type: 'cron'; expression: string };
-    }) => {
-      const created = await api.api.POST('/schedule', { body }).then(unwrap);
-      await mutate(KEY.schedule);
-      return created;
+    async (
+      body: {
+        kind: string;
+        request: string;
+        spec:
+          | { type: 'daily'; at: string }
+          | { type: 'every'; minutes: number }
+          | { type: 'cron'; expression: string };
+      },
+      ifMatch?: string | null,
+    ) => {
+      // ifMatch を分岐せず常に渡す: undefined は JSON に載らず、省略（後勝ち）のままになるため
+      const result = await api.api.POST('/schedule', { body: { ...body, ifMatch } });
+      const failed = result.error as { current?: ScheduleCurrent | null } | undefined;
+      // `current` の鍵が在るものだけを版の衝突にする: 予約名・読めない形の予定の 409 は `{ error }` だけで、同じ扱いにすると別の失敗を「読んだ後に変わった」と案内するため
+      if (result.response.status === 409 && failed !== undefined && 'current' in failed) {
+        await mutate(KEY.schedule);
+        // 例外にせず値で返す: 衝突は下書きを残して続きの操作を促す通常の分岐で、失敗の表示に流れないようにするため
+        return { conflict: { current: failed.current ?? null } };
+      }
+      unwrap(result);
+      // 応答には版が無いので読み直した一覧から取る: 保存後に打ち足した分の次の保存が、自分の保存と衝突しないようにするため
+      const fresh = await mutate<{ entries: ScheduleEntry[] }>(KEY.schedule);
+      return { updatedAt: fresh?.entries.find((entry) => entry.kind === body.kind)?.updatedAt };
     },
     [api, mutate],
   );
@@ -494,6 +516,39 @@ export function useRevokeOwnerDeclaration() {
     },
     [api, mutate],
   );
+}
+
+/** Codex の ChatGPT ログインを始める（#3939）。確認用 URL とコードが返る。 */
+export function useStartCodexLogin() {
+  const api = useApi();
+  return useCallback(async () => api.api.POST('/codex/login').then(unwrap), [api]);
+}
+
+/** 進行中のログインを取り消す（#3939）。 */
+export function useCancelCodexLogin() {
+  const api = useApi();
+  const { mutate } = useSWRConfig();
+  return useCallback(
+    async (id: string) => {
+      const result = await api.api
+        .DELETE('/codex/login/{id}', { params: { path: { id } } })
+        .then(unwrap);
+      await mutate(KEY.codexLogin(id), result, { revalidate: false });
+      return result;
+    },
+    [api, mutate],
+  );
+}
+
+/** ログアウト（正本から消し、全 runner から外す。#3939）。 */
+export function useCodexLogout() {
+  const api = useApi();
+  const { mutate } = useSWRConfig();
+  return useCallback(async () => {
+    const result = await api.api.DELETE('/codex/auth').then(unwrap);
+    await mutate(KEY.codexAuth);
+    return result;
+  }, [api, mutate]);
 }
 
 export function useSetEnvVar() {
@@ -867,10 +922,23 @@ export function useSetMcpServers() {
   const api = useApi();
   const { mutate } = useSWRConfig();
   return useCallback(
-    async (mcpServers: McpServers): Promise<McpServersUpdateResult> => {
-      const updated = await api.api.PUT('/mcp-servers', { body: { mcpServers } }).then(unwrap);
+    async (
+      mcpServers: McpServers,
+      ifMatch?: string,
+    ): Promise<
+      | { update: McpServersUpdateResult; conflict?: undefined }
+      | { conflict: McpServersState; update?: undefined }
+    > => {
+      const result = await api.api.PUT('/mcp-servers', { body: { mcpServers, ifMatch } });
+      // 409 を版の衝突だけとして読む: この口に他の 409 は無いため
+      if (result.response.status === 409 && result.error !== undefined) {
+        await mutate(KEY.mcpServers);
+        // 例外にせず値で返す: 下書きを残して続きの操作を促す通常の分岐で、失敗の表示に流れないようにするため
+        return { conflict: (result.error as { current: McpServersState }).current };
+      }
+      const update = unwrap(result);
       await mutate(KEY.mcpServers);
-      return updated;
+      return { update };
     },
     [api, mutate],
   );

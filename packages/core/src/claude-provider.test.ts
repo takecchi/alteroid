@@ -1051,6 +1051,52 @@ describe('観測専用フックの包み直し（#486 中立の口2本目）', (
     expect(timeoutSeconds * 1000 - SUBAGENT_BACKGROUND_WAIT_MS).toBeGreaterThanOrEqual(60_000);
   });
 
+  describe('buildManagerSessionOptions: plugins', () => {
+    const request = () => ({
+      model: 'opus',
+      permissionMode: DEFAULT_PERMISSION_MODE,
+      systemPromptAppend: '追記',
+      workerAgentName: WORKER_AGENT_NAME,
+      workerPrompt: '作業者のプロンプト',
+      workerModel: 'sonnet',
+      cwd: '/work',
+      env: {},
+      sessionStore,
+      canUseTool,
+      onPostToolUse: () => ({ kind: 'continue' as const }),
+      onPostToolUseFailure: () => {},
+      onPreCompact: () => {},
+      onUserPromptSubmit: () => {},
+      onSubagentStop: () => ({ kind: 'continue' as const }),
+      onStop: () => {},
+      onPreToolUse: () => ({ kind: 'continue' as const }),
+      onPermissionDenied: async () => ({ kind: 'no-retry' as const }),
+      managerAutoMemoryEnabled: false,
+    });
+
+    it('省略・空なら欄ごと無い', () => {
+      expect('plugins' in buildManagerSessionOptions(request())).toBe(false);
+      expect('plugins' in buildManagerSessionOptions({ ...request(), plugins: [] })).toBe(false);
+    });
+
+    it('載るときは type: local と path と skipMcpDiscovery に写り、agents（作業者）へは混ざらない', () => {
+      const options = buildManagerSessionOptions({
+        ...request(),
+        plugins: [
+          { path: '/p/one@aaaa', skipMcpDiscovery: true },
+          { path: '/p/two@bbbb', skipMcpDiscovery: false },
+        ],
+      });
+      expect(options.plugins).toEqual([
+        { type: 'local', path: '/p/one@aaaa', skipMcpDiscovery: true },
+        { type: 'local', path: '/p/two@bbbb', skipMcpDiscovery: false },
+      ]);
+      expect(JSON.stringify(options.agents)).not.toContain('/p/');
+      const worker = (options.agents ?? {})[WORKER_AGENT_NAME] as Record<string, unknown>;
+      expect(Object.hasOwn(worker, 'skills')).toBe(false);
+    });
+  });
+
   it('buildManagerSessionOptions: PreCompact も同じ中立の記録として渡り、{ continue: true } を返す', async () => {
     let captured: AgentPreCompactRecord | undefined;
     const options = buildManagerSessionOptions({
@@ -1719,5 +1765,54 @@ describe('文脈を返すフックの中立の包み直し（#486 中立の口�
 
     expect(result).toEqual({ continue: true });
     expect(lines.some((line) => line.includes('未知の AgentContextOutcome.kind'))).toBe(true);
+  });
+});
+
+describe('plugins を Options.plugins へ写す', () => {
+  const sessionBase = {
+    model: 'fable',
+    permissionMode: DEFAULT_PERMISSION_MODE,
+    mcpServer,
+    systemPrompt: 'システムプロンプト',
+    env: {},
+    resume: null,
+    onPreCompact: () => {},
+    onPostToolUse: () => {},
+    onPostToolUseFailure: () => {},
+    onPreToolUse: () => ({ kind: 'continue' as const }),
+    onSubagentStop: () => {},
+  };
+  const distillBase = {
+    model: 'fable',
+    permissionMode: DEFAULT_PERMISSION_MODE,
+    mcpServer,
+    systemPrompt: 'システムプロンプト',
+    env: {},
+    onPostToolUse: () => {},
+    onPostToolUseFailure: () => {},
+  };
+  const plugins = [
+    { path: '/data/plugins/one@' + 'a'.repeat(40), skipMcpDiscovery: true },
+    { path: '/data/plugins/two@' + 'b'.repeat(40), skipMcpDiscovery: false },
+  ];
+  const expected = [
+    { type: 'local', path: plugins[0]?.path, skipMcpDiscovery: true },
+    { type: 'local', path: plugins[1]?.path, skipMcpDiscovery: false },
+  ];
+
+  it('両 builder が type: local と skipMcpDiscovery を付けて通す', () => {
+    expect(buildCloneSessionOptions({ ...sessionBase, plugins }).plugins).toEqual(expected);
+    expect(buildCloneDistillOptions({ ...distillBase, plugins }).plugins).toEqual(expected);
+  });
+
+  it('省略・空なら欄ごと無い', () => {
+    for (const options of [
+      buildCloneSessionOptions(sessionBase),
+      buildCloneSessionOptions({ ...sessionBase, plugins: [] }),
+      buildCloneDistillOptions(distillBase),
+      buildCloneDistillOptions({ ...distillBase, plugins: [] }),
+    ]) {
+      expect('plugins' in options).toBe(false);
+    }
   });
 });

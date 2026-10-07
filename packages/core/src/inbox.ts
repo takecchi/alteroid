@@ -31,6 +31,11 @@ export class Inbox {
     return this.#queue.some(predicate);
   }
 
+  /** まだ取り出されていないもののうち、条件を満たすものを並び順のまま返す（取り出さない）。 */
+  findPending(predicate: (event: InboxEvent) => boolean): InboxEvent[] {
+    return this.#queue.filter(predicate);
+  }
+
   /**
    * まだ取り出されていないものを、**先頭から連続して条件を満たす分だけ**取り出す。
    *

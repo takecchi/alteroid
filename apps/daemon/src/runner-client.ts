@@ -12,6 +12,9 @@ import type {
   RunnerManagerState,
   RunnerMcpServersFingerprint,
   RunnerPlacementResources,
+  RunnerPlugin,
+  RunnerPluginFingerprintEntry,
+  RunnerPluginsFingerprint,
   RunnerResumeCommand,
   RunnerProfileFingerprint,
   RunnerProfileResult,
@@ -23,12 +26,22 @@ import type {
 import { request as httpRequest } from 'node:http';
 import { Readable } from 'node:stream';
 
-import { RUNNER_CALL_DEADLINE_MS, RunnerUnknownError, settleWithinDeadline } from './deadline.js';
+import {
+  pluginPushDeadlineMs,
+  RUNNER_CALL_DEADLINE_MS,
+  RunnerUnknownError,
+  settleWithinDeadline,
+} from './deadline.js';
 
 import {
   DEFAULT_SSE_HEARTBEAT_MS,
   RunnerHttpError,
   RunnerMcpServersUnsupportedError,
+  RunnerPluginsUnsupportedError,
+  encodeRunnerPlugin,
+  runnerPluginFingerprintEntrySchema,
+  runnerPluginsFingerprintSchema,
+  RunnerCodexAuthUnsupportedError,
   buildRevisionSchema,
   codePointBoundary,
   reasonOf,
@@ -36,6 +49,7 @@ import {
   reportRunnerRevision,
   runnerCredentialFingerprintSchema,
   runnerMcpServersFingerprintSchema,
+  runnerCodexAuthWriteBackSchema,
   runnerProfileFingerprintSchema,
   runnerProfileResultSchema,
   runnerAnswerResultSchema,
@@ -460,6 +474,8 @@ interface HealthBody {
   profile?: unknown;
   /** MCP の登録の指紋（#325 段3）。古い runner は持たない。 */
   mcpServers?: unknown;
+  /** plugin の指紋。古い runner は持たない。 */
+  plugins?: unknown;
   managers?: unknown;
   resources?: unknown;
   revision?: unknown;
@@ -1886,6 +1902,108 @@ class HttpRunner implements RunnerClient {
   }
 
   /**
+   * いま runner が持っている plugin の指紋（files の中身は返らない）。`mcpServers()` と同じく
+   * `/health` から拾う。欄が在るのに形が読めなかったときは投げる（「持っていない」へ倒すと、
+   * 外したはずの plugin が runner に残り続ける）。
+   */
+  async plugins(): Promise<RunnerPluginsFingerprint | undefined> {
+    const response = await this.#call('GET', '/health');
+    const body = (await response.json()) as HealthBody;
+    if (body.plugins === undefined || body.plugins === null) return undefined;
+    const parsed = runnerPluginsFingerprintSchema.safeParse(body.plugins);
+    if (!parsed.success) throw new Error('runner の /health の plugins の欄を読めなかった');
+    return parsed.data;
+  }
+
+  /** plugin を1本送る。content は base64 にして運ぶ。404 は「口を持たない古い runner」に変える。 */
+  async setPlugin(plugin: RunnerPlugin): Promise<RunnerPluginFingerprintEntry> {
+    let response: Response;
+    try {
+      // 本文は base64 で約 4/3 倍になる。期限は本文の大きさに見合うぶんだけ延ばす（他の口は基準のまま）。
+      const bodyBytes = Math.ceil(
+        (plugin.files.reduce((sum, file) => sum + file.content.byteLength, 0) * 4) / 3,
+      );
+      response = await this.#call(
+        'POST',
+        `/plugins/${encodeURIComponent(plugin.name)}`,
+        encodeRunnerPlugin(plugin),
+        undefined,
+        pluginPushDeadlineMs(this.#deadlineMs, bodyBytes),
+      );
+    } catch (error) {
+      if (error instanceof RunnerHttpError && error.status === 404) {
+        throw new RunnerPluginsUnsupportedError(this.runnerId);
+      }
+      throw error;
+    }
+    const body = (await response.json()) as { ok?: unknown; plugin?: unknown };
+    if (body.ok !== true) throw new Error('runner の応答を読めなかった（plugin）');
+    const parsed = runnerPluginFingerprintEntrySchema.safeParse(body.plugin);
+    if (!parsed.success) throw new Error('runner の応答を読めなかった（plugin の指紋）');
+    return parsed.data;
+  }
+
+  /** 残す名前の一覧を送る。runner は一覧に無いものを外す。404 は「口を持たない古い runner」。 */
+  async retainPlugins(names: readonly string[]): Promise<RunnerPluginsFingerprint | undefined> {
+    let response: Response;
+    try {
+      response = await this.#call('PUT', '/plugins', { names });
+    } catch (error) {
+      if (error instanceof RunnerHttpError && error.status === 404) {
+        throw new RunnerPluginsUnsupportedError(this.runnerId);
+      }
+      throw error;
+    }
+    const body = (await response.json()) as { ok?: unknown; plugins?: unknown };
+    if (body.ok !== true) throw new Error('runner の応答を読めなかった（plugin の一覧）');
+    if (body.plugins === undefined) return undefined;
+    const parsed = runnerPluginsFingerprintSchema.safeParse(body.plugins);
+    if (!parsed.success) throw new Error('runner の応答を読めなかった（plugin の一覧の指紋）');
+    return parsed.data;
+  }
+
+  /**
+   * Codex の ChatGPT ログインを降ろす（#3939。`null` は外す）。**404 は「口を持たない（古い版）」に
+   * 変える**（`setMcpServers` と同じ理由）。値は本文で送るだけで、例外の文にも載せない。
+   */
+  async setCodexAuth(push: { value: string; revision: string } | null): Promise<void> {
+    let response: Response;
+    try {
+      response = await this.#call('POST', '/codex-auth', { codexAuth: push });
+    } catch (error) {
+      if (error instanceof RunnerHttpError && error.status === 404) {
+        throw new RunnerCodexAuthUnsupportedError(this.runnerId);
+      }
+      throw error;
+    }
+    const body = (await response.json()) as { ok?: unknown };
+    if (body.ok !== true)
+      throw new Error('runner の応答を読めなかった（Codex の ChatGPT ログイン）');
+  }
+
+  /**
+   * runner が知らせた `auth.json` の書き換えの値を取りに行く（#3939）。無ければ `null`。
+   * 口を持たない古い runner（404）も `null`（そもそも `codex_auth` を出さない版である）。
+   */
+  async takeCodexAuthWriteBack(
+    fingerprint: string,
+  ): Promise<{ value: string; baseRevision: string; fingerprint: string } | null> {
+    let response: Response;
+    try {
+      response = await this.#call('POST', '/codex-auth/write-back', { fingerprint });
+    } catch (error) {
+      if (error instanceof RunnerHttpError && error.status === 404) return null;
+      throw error;
+    }
+    const body = (await response.json()) as { ok?: unknown; writeBack?: unknown };
+    if (body.ok !== true) throw new Error('runner の応答を読めなかった（Codex の書き戻し）');
+    if (body.writeBack === null || body.writeBack === undefined) return null;
+    const parsed = runnerCodexAuthWriteBackSchema.safeParse(body.writeBack);
+    if (!parsed.success) throw new Error('runner の応答を読めなかった（Codex の書き戻しの形）');
+    return parsed.data;
+  }
+
+  /**
    * 走行中セッションの生ログ。**取れなければ `null`**（呼ぶ側は退避済みへ降りる）。
    *
    * 期限切れもここでは `null` になる。**`null` は「無い」ではなく「取れなかった」**で、
@@ -2000,8 +2118,9 @@ class HttpRunner implements RunnerClient {
     path: string,
     body?: unknown,
     signal?: AbortSignal,
+    deadlineMs?: number,
   ): Promise<Response> {
-    const waitedMs = this.#deadlineMs;
+    const waitedMs = deadlineMs ?? this.#deadlineMs;
     const settled = await settleWithinDeadline(
       this.#callWithoutDeadline(method, path, body, signal),
       waitedMs,

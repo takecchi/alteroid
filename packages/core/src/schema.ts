@@ -4066,16 +4066,12 @@ export const jobSchema = z.object({
    *    ——**限界も含めてあちらの doc に書いてある**
    */
   sessionInstanceId: z.string().optional(),
-  /**
-   * このマネージャーが実際に動いている provider（#486 S7。クローンが `manager_start` の
-   * `provider` 引数で指名した値）。
-   *
-   * **指名したときだけ書く。** 無いことは「runner の既定で動いている」であって、`claude` ではない
-   * （表示は runner が `hello` で名乗った値へ落ちる）。resume はこの値を runner へ送り直す——
-   * 器が入れ替わっても、Codex のセッションを Claude で開き直さないため。保存は Job 丸ごとの
-   * JSON なので移行は要らず、古い行に欄は無い。
+  /*
+   * **`managerProvider` は撤去した**（2026-10-07 のオーナー決定。マネージャー層は常に Claude で動く）。
+   * かつて（#486 S7）クローンが `provider` を指名した委譲にだけ書いていた。保存は Job 丸ごとの JSON
+   * なので、旧い行には欄が残りうる。`z.object` は未知の欄を黙って捨てるので、読み込みは落ちない
+   * （`.strict()` にしないこと。歯は `packages/storage-fs/src/job-legacy-manager-provider.test.ts`）。
    */
-  managerProvider: z.string().optional(),
   /**
    * 退避済みトランスクリプト以外の生ログへの入口は**ここに持たない**。
    *
