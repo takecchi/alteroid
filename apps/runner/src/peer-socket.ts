@@ -6,6 +6,7 @@ import {
   DEFAULT_PEER_SOCKET_DIR,
   MANAGER_PEERS_ENV_KEY,
   PEER_SOCKET_FILENAME,
+  resolvePeerModels,
   resolvePeers,
   type AgentProviderId,
   type PeerSocketHost,
@@ -15,6 +16,8 @@ import {
 export interface PeerSocketOpening {
   readonly host: PeerSocketHost | undefined;
   readonly peers: readonly AgentProviderId[];
+  /** provider ごとに人間が開けたモデル名（#3934。`ALTEROID_MANAGER_PEER_<PROVIDER>_MODELS`）。 */
+  readonly models: Partial<Record<AgentProviderId, readonly string[]>>;
   readonly notices: readonly string[];
 }
 
@@ -33,7 +36,14 @@ export async function openPeerSocket(
         `書かれています。「もう一方」ではないので呼ぶ対象から外しました`,
     );
   }
-  if (peers.size === 0) return { host: undefined, peers: [], notices };
+  // 綴りの不正はソケットを開く前に止める（起動時に止める。`parsePeers` と同じ作法）。
+  const { models, unusedKeys } = resolvePeerModels(env, peers);
+  for (const key of unusedKeys) {
+    notices.push(
+      `alteroid-runner: ${key} が置かれていますが、その provider は ${MANAGER_PEERS_ENV_KEY} で開いていないので使いません`,
+    );
+  }
+  if (peers.size === 0) return { host: undefined, peers: [], models: {}, notices };
   const host = await createPeerSocketHost({
     socketPath: join(dir, PEER_SOCKET_FILENAME),
     ...(childUser === undefined ? {} : { childUser: { uid: childUser.uid, gid: childUser.gid } }),
@@ -43,5 +53,13 @@ export async function openPeerSocket(
     `alteroid-runner: マネージャーが呼べる provider: ${list.join(', ')}` +
       `（peer 用ソケット ${host.socketPath}）`,
   );
-  return { host, peers: list, notices };
+  for (const provider of list) {
+    const open = models[provider];
+    notices.push(
+      open === undefined
+        ? `alteroid-runner: peer（${provider}）で名指しできるモデル: 無し（${provider} の既定で動く）`
+        : `alteroid-runner: peer（${provider}）で名指しできるモデル: ${open.join(', ')}`,
+    );
+  }
+  return { host, peers: list, models, notices };
 }

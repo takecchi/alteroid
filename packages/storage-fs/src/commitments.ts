@@ -3,8 +3,10 @@ import { join } from 'node:path';
 
 import {
   assertNoNul,
+  CommitmentConflictError,
   commitmentClosedBySchema,
   commitmentSchema,
+  commitmentVersionMatches,
   compareIsoInstant,
   findOpenManagerDuplicate,
   stripNul,
@@ -16,6 +18,7 @@ import type {
   CommitmentClosedBy,
   CommitmentEditedBy,
   CommitmentList,
+  EditCommitmentBodyOptions,
   CommitmentOpenResult,
   CommitmentStore,
   UnreadableCommitment,
@@ -273,13 +276,20 @@ export class FsCommitmentStore implements CommitmentStore {
     rawBody: string,
     at: string,
     by: CommitmentEditedBy,
+    options?: EditCommitmentBodyOptions,
   ): Promise<boolean> {
     const body = stripNul(rawBody);
     // `#update` の排他区間で行う: 読んでから書く形にすると、並行編集や片付けとの競合で後勝ちが先の書き込みを黙って踏み消すため
     return this.#update((file) => {
       const found = file.entries.find((entry) => entry.id === id);
+      if (found === undefined && options?.ifMatch !== undefined) {
+        throw new CommitmentConflictError(id, null);
+      }
       if (found === undefined || found.closedAt !== undefined) {
         return { next: file, result: false };
+      }
+      if (!commitmentVersionMatches(found, options?.ifMatch)) {
+        throw new CommitmentConflictError(id, found);
       }
       return {
         next: {

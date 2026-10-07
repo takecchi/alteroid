@@ -257,6 +257,7 @@ export async function main(): Promise<void> {
           peer: {
             host: peerOpening.host,
             peers: peerOpening.peers,
+            models: peerOpening.models,
             reportsUsage: (provider) => agentProviderOf(provider).capabilities.usage,
           },
         }),
@@ -288,6 +289,14 @@ export async function main(): Promise<void> {
     outbox,
     tokenSha256,
     taskBreakdownReader,
+    // セッションへ渡すのと同じ解決（`resolveManagerModel` / `resolveWorkerModel`）から名乗る
+    managerModel: resolveManagerModel(process.env),
+    workerModel: resolveWorkerModel(process.env),
+    // クローンに「この器のマネージャーは Codex に頼める」を見せる名乗り（#3940）。
+    managerPeers: peerOpening.peers.map((provider) => {
+      const models = peerOpening.models[provider];
+      return models === undefined ? { provider } : { provider, models: [...models] };
+    }),
   });
   const server = createAdaptorServer({ fetch: app.fetch });
 

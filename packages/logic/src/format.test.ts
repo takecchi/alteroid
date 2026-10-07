@@ -32,6 +32,10 @@ describe('formatRelative', () => {
     expect(formatRelative('2026-08-11T12:00:00Z', NOW)).toBe('2日前');
   });
 
+  it('now が読めないときは「NaN日前」にせず iso をそのまま返す（#3966）', () => {
+    expect(formatRelative('2026-08-13T11:59:40Z', Number.NaN)).toBe('2026-08-13T11:59:40Z');
+  });
+
   it('丸めた後の値で単位を上げる（#3609）', () => {
     const ago = (s: number) => formatRelative(new Date(NOW - s * 1000).toISOString(), NOW);
     expect(ago(3569)).toBe('59分前');

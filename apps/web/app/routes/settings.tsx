@@ -199,6 +199,34 @@ function PushHealth({ runner }: { runner: RunnerSummary }) {
   );
 }
 
+// 開いている peer が無い器は何も描かない: ALTEROID_MANAGER_PEERS が空の構成の見え方を変えないため
+// unknown を「頼めない」と描かない: 名乗らない旧い runner は頼めるかどうか判定できないため
+function ManagerPeers({ runner }: { runner: RunnerSummary }) {
+  const view = runner.managerPeers;
+  if (view === undefined) return null;
+  if (view.status === 'unknown') {
+    return (
+      <p className={`mt-0.5 ${SMALL_NOTE}`}>
+        Codex などに作業を頼めるか:
+        不明（この実行環境は名乗らない旧い版か、名乗りをまだ受けていない）
+      </p>
+    );
+  }
+  if (view.peers.length === 0) return null;
+  return (
+    <div className="mt-1 flex flex-wrap items-center gap-1.5">
+      {view.peers.map((peer) => (
+        <Badge key={peer.provider} tone="accent" className="break-all">
+          {peer.provider === 'codex' ? 'Codex' : peer.provider} に作業を頼める
+          {peer.models === undefined || peer.models.length === 0
+            ? ''
+            : `（モデル: ${peer.models.join(', ')}）`}
+        </Badge>
+      ))}
+    </div>
+  );
+}
+
 // Credentials と同じ3状態を潰さない: 出さないとこの画面でだけ「プロファイルが置かれているか」が判定できない非対称が残るため
 function Profile({ runner }: { runner: RunnerSummary }) {
   if (runner.profileProbe.status === 'unheard') {
@@ -292,6 +320,7 @@ function Runners() {
               <p className="mt-0.5 font-mono text-[11px] break-all text-muted-foreground">
                 版: {describeRevisionStatus(runner.revision)}
               </p>
+              <ManagerPeers runner={runner} />
               {runner.error === undefined ? null : (
                 <p className="mt-1 text-[11px] break-words text-destructive">{runner.error}</p>
               )}

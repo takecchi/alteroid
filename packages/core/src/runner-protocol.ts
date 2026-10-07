@@ -853,11 +853,29 @@ export const RUNNER_CAPABILITY_AWAITING_BACKGROUND_SIGNAL = 'awaiting-background
 
 export const RUNNER_CAPABILITY_MANAGER_ATTACHMENTS = 'manager-attachments';
 
+/**
+ * `hello.managerPeers`（マネージャーが MCP `peer` で作業を頼める provider。#3940）を名乗る版である。
+ * **これを名乗る器が `managerPeers` を送らなければ「開いている peer は無い」**、名乗らない器（旧い runner）は
+ * 「不明」——無いことを「頼めない」と既定値で埋めない。PEERS が空の器が `managerPeers: []` を
+ * 送らずに済むよう、能力の名前で「名乗る版か」を分ける。
+ */
+export const RUNNER_CAPABILITY_MANAGER_PEERS = 'manager-peers';
+
 /** この版の runner が名乗る能力の一覧（`hello.capabilities` にそのまま載せる）。 */
 export const RUNNER_CAPABILITIES: readonly string[] = [
   RUNNER_CAPABILITY_AWAITING_BACKGROUND_SIGNAL,
   RUNNER_CAPABILITY_MANAGER_ATTACHMENTS,
+  RUNNER_CAPABILITY_MANAGER_PEERS,
 ];
+
+/** `hello.managerPeers` の1件（マネージャーが作業を頼める peer の provider と、名指しできるモデル）。 */
+export const runnerManagerPeerSchema = z.object({
+  provider: z.string().min(1),
+  /** 人間が開けたモデル名（`ALTEROID_MANAGER_PEER_<PROVIDER>_MODELS`）。無ければ provider の既定だけ。 */
+  models: z.array(z.string().min(1)).optional(),
+});
+
+export type RunnerManagerPeer = z.infer<typeof runnerManagerPeerSchema>;
 
 /**
  * `RunnerClient.unpushedWork()` が1本の作業ツリーについて返す値（Issue #1039）。
@@ -1098,6 +1116,14 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
     runnerId: z.string(),
     capabilities: z.array(z.string()).optional(),
     /**
+     * マネージャー・作業者のセッションに実際に効くモデルの表記（runner が `resolveManagerModel` /
+     * `resolveWorkerModel` で解いた、SDK へ渡すのと同じ値）。どちらも `.optional()`——旧い runner は
+     * 送らず、**無ければ「不明」と読む**（既定の帯で埋めない）。値域を縛らないのは、帯の名前を
+     * 足した新しい runner の名乗りを旧いデーモンが parse 失敗で捨てないため。
+     */
+    managerModel: z.string().optional(),
+    workerModel: z.string().optional(),
+    /**
      * この runner が `POST /managers` / `/managers/:id/messages` で受ける本文の上限（バイト。Issue #3111 段3。
      * `runnerAttachmentBodyLimit` が runner 自身の `readAttachmentLimits` から計算した値）。
      * **器ごとの事実を名乗らせる**（デーモンの設定と二重管理にしない）。デーモンは添付を送る前にこの値で
@@ -1106,6 +1132,12 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
      * （`capabilities` は名前の集合で、値を持てない）。
      */
     attachmentBodyLimit: z.number().int().positive().optional(),
+    /**
+     * マネージャーが MCP `peer` で作業を頼める provider（`ALTEROID_MANAGER_PEERS` から解いた集合。#3940）。
+     * **開いている peer が無い器は送らない**（`RUNNER_CAPABILITY_MANAGER_PEERS` を名乗っていれば
+     * 「無い」と読める）。旧いデーモンは未知の欄を読み捨てる。
+     */
+    managerPeers: z.array(runnerManagerPeerSchema).optional(),
   }),
   z.object({
     type: z.literal('session'),
@@ -2371,6 +2403,28 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
    * 出来事は全体が `safeParse` で落ちる**（接続は切れず、その1件が届かないだけ）。
    */
   scratchSweepEventSchema,
+  /**
+   * Codex の ChatGPT ログインについての runner の知らせ（#3939。`codex-auth-mirror.ts`）。
+   *
+   * - `changed`: Codex がトークンを更新して `CODEX_HOME/auth.json` を書き換えた。**値は載せない**
+   *   （指紋と、書き換えの元になった版だけ）。デーモンは制御面
+   *   （`POST /codex-auth/write-back`）で値を取りに行き、版の compare-and-swap で正本へ書き戻す。
+   * - `failed`: 認証が切れた・失効した・更新に失敗した。理由は伏せ字を通した文。
+   *
+   * **委譲に結びつかない**（runner 単位）。日誌に書くのはデーモンで、値は書かない。
+   *
+   * **旧 daemon との組み合わせ**: 未知の type は daemon の `safeParse` で落ち、
+   * `RunnerDroppedEventReport` に残るだけで接続は切れない（`scratch_sweep` と同じ扱い）。
+   * 書き戻しは起きず、runner の手元の `auth.json` は Codex が更新したまま残る。
+   */
+  z.object({
+    type: z.literal('codex_auth'),
+    runnerId: z.string(),
+    kind: z.enum(['changed', 'failed']),
+    baseRevision: z.string(),
+    fingerprint: z.string().optional(),
+    reason: z.string().optional(),
+  }),
 ]);
 
 export type RunnerEvent = z.infer<typeof runnerEventSchema>;
@@ -2427,6 +2481,37 @@ export class RunnerMcpServersUnsupportedError extends Error {
         'この runner で起こすマネージャー・作業者は記憶ストアの登録を持たずに走る。runner を上げれば次の名乗りで降りる）',
     );
     this.name = 'RunnerMcpServersUnsupportedError';
+  }
+}
+
+/**
+ * 相手の runner が Codex の ChatGPT ログインを受け取る口（`POST /codex-auth`）を持たない（#3939）。
+ * 古い版の runner である（404）。`RunnerMcpServersUnsupportedError` と同じく、挑み直しに数えない。
+ */
+/** `POST /codex-auth` の本文（#3939）。`null` は外す。 */
+export const runnerSetCodexAuthCommandSchema = z.object({
+  codexAuth: z.object({ value: z.string(), revision: z.string().min(1) }).nullable(),
+});
+
+/** `POST /codex-auth/write-back` の本文（#3939）。 */
+export const runnerTakeCodexAuthWriteBackCommandSchema = z.object({
+  fingerprint: z.string().min(1),
+});
+
+/** `POST /codex-auth/write-back` の応答の `writeBack`（#3939）。 */
+export const runnerCodexAuthWriteBackSchema = z.object({
+  value: z.string(),
+  baseRevision: z.string(),
+  fingerprint: z.string(),
+});
+
+export class RunnerCodexAuthUnsupportedError extends Error {
+  constructor(runnerId: string) {
+    super(
+      `${runnerId} は Codex の ChatGPT ログインを受け取る口を持たない（古い版の runner。` +
+        'この runner の peer の Codex は CODEX_API_KEY が無ければ認証を持たずに走る。runner を上げれば次の名乗りで降りる）',
+    );
+    this.name = 'RunnerCodexAuthUnsupportedError';
   }
 }
 
@@ -3009,6 +3094,20 @@ export interface RunnerClient {
    * 降ろさない（押し込みを試みたことにもしない）。
    */
   setMcpServers?(servers: McpServers): Promise<RunnerMcpServersFingerprint | undefined>;
+  /**
+   * Codex の ChatGPT ログイン（#3939）を降ろす。`null` は外す（ログアウト）。
+   * **runner が繋ぎ直すたびに降ろし直すこと**（`setMcpServers` と同じ。runner はメモリと
+   * `CODEX_HOME` にしか持たない）。口を持たない相手（古い runner）には
+   * `RunnerCodexAuthUnsupportedError` を投げる。**省略できる**（持たない実装へは降ろさない）。
+   */
+  setCodexAuth?(push: { value: string; revision: string } | null): Promise<void>;
+  /**
+   * runner が `codex_auth`（`changed`）で知らせた書き換えの値を取りに行く（#3939）。指紋が一致する
+   * ものが無ければ `null`。**省略できる。**
+   */
+  takeCodexAuthWriteBack?(
+    fingerprint: string,
+  ): Promise<{ value: string; baseRevision: string; fingerprint: string } | null>;
   /**
    * 口を閉じる。
    *
