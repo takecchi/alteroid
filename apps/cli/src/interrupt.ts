@@ -26,12 +26,20 @@ export async function requestInterrupt(client: DaemonClient, target: Target): Pr
   return describeInterruptOutcome((await response.json()).outcome);
 }
 
-export function describeInterruptOutcome(outcome: 'interrupted' | 'idle' | 'unsupported'): string {
+export function describeInterruptOutcome(
+  outcome: 'interrupted' | 'idle' | 'unsupported' | 'withdrawn' | 'not_target' | 'starting',
+): string {
   switch (outcome) {
     case 'interrupted':
       return 'いま走っていたクローンのターンを止めた。会話の続きと受信箱はそのまま残る（次の合図で次のターンが始まる）。';
     case 'idle':
       return '走っているターンは無かった（止めるものが無い）。';
+    case 'withdrawn':
+      return '順番待ちだった発言を取り下げた（クローンには配らない）。';
+    case 'not_target':
+      return '走っているのは別の仕事のターンなので、止めなかった。';
+    case 'starting':
+      return 'ターンがまだ始まる前だったので、止められなかった。もう一度止めると止まる。';
     case 'unsupported':
       return 'このデーモンのクローンは、ターンを止める口を持っていない。';
   }
