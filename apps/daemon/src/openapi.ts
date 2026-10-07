@@ -61,48 +61,11 @@ import { z } from 'zod';
 
 import { createApp } from './app.js';
 
-/**
- * `GET /openapi.json` `GET /docs` が読む応答スキーマと documentation。
- *
- * `app.ts` を可読に保つため、ここへ分離してある（app.ts が全経路の
- * `describeRoute` で埋まると、肝心の配線が読めなくなる）。
- *
- * **core が既に zod スキーマを持っているもの（記憶・日誌・承認待ち・
- * chat イベントなど）はここで再定義しない。** 再定義すると実装のスキーマと
- * ドキュメントのスキーマが2つに分かれ、いつか必ずずれる（**spec が嘘になる**）。
- * core に無いもの（health の応答・会話一覧・マネージャー要約など）だけを
- * ここで新たに zod で書く。
- *
- * **禁じているのはずれることではなく、ずれが spec の嘘になることである。**
- * その嘘は、**成功応答を返す前に宣言スキーマの `.parse()` へ通す**ことで引き受けて
- * ある（規則は `app.ts`）。通した面では、宣言と実物がずれても spec は嘘にならず、
- * **宣言していないものが載らないだけ**になる — 倒れる向きが安全側に固定される。
- * だから parse を通す面では、外向きの view をここに別に宣言してよい
- * （`accountViewSchema`）。禁止の理由が別の手段で満たされているのであって、
- * 禁止を破って代償を払っているのではない。
- *
- * **parse を外すなら、この根拠はその場で消える。** 宣言だけが core から独立して
- * 残ると、ずれを誰も落とさないまま spec だけが古い、という最も悪い形になる。
- * 外すときは view も同時に捨てて core のスキーマへ戻すこと。
- *
- * view を書くかどうかは、core 側が*永続化*のスキーマかどうかで決まる。
- * `accountViewSchema` の元である `authAccountSchema` は、fs / pg ドライバが同じ行を
- * 保証するための*保存*の形であって、*外へ出す*形とは役割が違う。同じものとして扱うと、
- * 保存側にフィールドが1つ増えた日に**宣言ごと一緒に広がる** — parse を通していても
- * 落とすものが無い（`managerSummarySchema` が `ManagerSummary` を再利用しないのと
- * 同じ理由）。逆に、core 側が最初から外向きに書かれているもの
- * （`runnerCredentialFingerprintSchema` のように値を持たない指紋の形）は、
- * そのまま使ってよい。
- */
+// core が既に持つ zod スキーマはここで再定義しない: 実装と spec の2つに分かれてずれ、spec が嘘になるため
 
-// ---------------------------------------------------------------------------
-// 汎用のエラー形
-// ---------------------------------------------------------------------------
 
-/** ハンドラが手で返す `{ error: '...' }`（404 / 400 / 409 / 415 / 503）。 */
 export const errorResponseSchema = z.object({ error: z.string() });
 
-/** 添付の控え（`AttachmentMeta`。中身を含まない。Issue #3111）。 */
 export const attachmentMetaSchema = z.object({
   id: z.string(),
   name: z.string(),
@@ -110,29 +73,20 @@ export const attachmentMetaSchema = z.object({
   size: z.number().int(),
   sha256: z.string(),
   conversationId: z.string().optional(),
-  /** 結び付けた外部イベントの id。外部イベントへ結び付いたときだけ在る（結び付け先は会話か外部イベントのどちらか1つ）。 */
   externalEventId: z.string().optional(),
-  /** 上げた主体の識別子（`operator` / `account:<id>`。連携の鍵が上げたものは `integration:<keyId>`）。 */
   uploadedBy: z.string().optional(),
   createdAt: z.string(),
   expiresAt: z.string(),
 });
 
-/** 添付の上限（`AttachmentLimits`。`createApp` が実際に使っている値。Issue #3204）。 */
 export const attachmentLimitsSchema = z.object({
-  /** 画像（png / jpeg / webp / gif）1つの上限（バイト）。 */
   maxImageBytes: z.number().int(),
-  /** 画像以外1つの上限（バイト）。 */
   maxFileBytes: z.number().int(),
-  /** 1発言に添えられる個数。 */
   maxPerMessage: z.number().int(),
-  /** 1発言の合計（バイト）。 */
   maxTotalBytes: z.number().int(),
-  /** 保持日数。 */
   retentionDays: z.number().int(),
 });
 
-/** 添付を断るときの応答。`code` は `AttachmentRejection` かこの口の `attachment_missing` / `attachment_conflict` / `attachment_forbidden`（連携の鍵が、自分で上げていない添付を付けようとした）、外部イベントの入口が予約語の source を断る `reserved_source`、NUL・孤立サロゲートを含む source を断る `invalid_source`。 */
 export const attachmentErrorResponseSchema = z.object({
   error: z.string(),
   code: z
@@ -153,19 +107,11 @@ export const attachmentErrorResponseSchema = z.object({
     .optional(),
 });
 
-/** 連携の鍵の発行の 400。`code: 'reserved_source'` は、daemon 自身が使う予約語の source を名乗ろうとしたとき。 */
 export const integrationKeyCreateErrorResponseSchema = z.object({
   error: z.string(),
   code: z.literal('reserved_source').optional(),
 });
 
-/**
- * **日誌が書けなかったので、状態を変えずに断った** 500 の本文（issue #2742 の続き。
- * `PUT /tokens`・`PUT /tokens/policy` の「広げる側」）。
- *
- * `error` は人間が読む文、`code` は機械が見分ける印（文言では見分けない）。
- * 例外の本文は載せない（トークンの値が載りうる）。
- */
 export const JOURNAL_WRITE_FAILED_CODE = 'journal_write_failed';
 export const JOURNAL_WRITE_FAILED_MESSAGE = '記録（日誌）が書けなかったので、変更していません';
 export const journalWriteFailedResponseSchema = z.object({
@@ -173,99 +119,36 @@ export const journalWriteFailedResponseSchema = z.object({
   code: z.literal(JOURNAL_WRITE_FAILED_CODE),
 });
 
-/**
- * **`validationErrorResponseSchema`（`{ data, error: <issue配列>, success: false }`）は
- * ここに在ったが、いまは無い。** `hook` を渡さない `validator(...)` が検査に
- * 落ちたときの、`@hono/standard-validator` の既定 400 の形——`json` の経路は
- * issue #424（`jsonBody` が全経路に `hook` を配った）で先に卒業していたが、
- * **`query` の経路（10箇所）は当時 `hook` を渡していないまま残っており、
- * この形をいまも宣言していた。** HTTP 側の数値クエリ引数の検査を揃える PR
- * （`app.ts` の `queryParams`——`jsonBody` と対になるラッパー）で `query` も
- * 卒業させたので、この形を返す経路は1つも無くなった。**削除した。**
- * 経緯そのものは `git log -p --follow -- apps/daemon/src/openapi.ts` で
- * `validationErrorResponseSchema` を辿れば読める。
- */
 
-// ---------------------------------------------------------------------------
-// /health
-// ---------------------------------------------------------------------------
 
 export const healthResponseSchema = z.object({
   ok: z.literal(true),
   pid: z.number().int(),
-  /**
-   * 実行環境の持ち主として認識されたか（`Authorization: Bearer <state/daemon.json
-   * の token>` を提示したとき true）。
-   *
-   * **トークンそのものは返さない。** かつてはここに載せていたが、この値は
-   * `access grant` を実行できる資格そのものになったので、無認証で読める応答に
-   * 置けない。CLI は「自分の持っているトークンで operator になれるか」を見て
-   * 本人確認する（PID の再利用検知としても同じ強さがある）。
-   */
+  // トークンそのものは返さない: `access grant` を実行できる資格で、無認証で読める応答に置けないため
   operator: z.boolean(),
-  /** 認証の状態。CLI がログインの要否と手段を知るために読む。 */
   auth: z.object({
     enabled: z.boolean(),
     providers: z.array(z.object({ id: z.string(), label: z.string(), kind: z.string() })),
   }),
 });
 
-// ---------------------------------------------------------------------------
-// /status（認証の後ろの、デーモン自身の説明）
-// ---------------------------------------------------------------------------
 
-/**
- * `GET /status` の応答。**`/health` から外した、外へ見せたくない項目の置き場**（#2869）。
- *
- * `storage` は記憶の置き場の1行説明で、PostgreSQL なら `host:port/db`、ファイルなら
- * 記憶ディレクトリの絶対パスになる。接続情報（パスワード等）は含めない。
- * 無認証の `/health` に置くと、公開の構成で内部のホスト名・DB 名・ホームのパスが
- * ログインしていない相手に読める。
- */
 export const statusResponseSchema = z.object({
-  /** 記憶の置き場（ローカルのパス / PostgreSQL）。接続情報は含めない。 */
   storage: z.string(),
 });
 
-// ---------------------------------------------------------------------------
-// /auth・/access（ログインとアクセス許可）
-// ---------------------------------------------------------------------------
 
 const isoDateTimeSchema = z.string().datetime({ offset: true });
 
-/**
- * `/auth/*` `/access/*` が外へ返すアカウントの形。
- *
- * **core の永続化スキーマ（`authAccountSchema`）をそのまま使わない。** あちらは
- * fs / pg のどちらのドライバでも同じ行を保証するための「保存の形」であって、
- * 「外へ出す形」とは別物である。account の行にフィールドが1つ増えた日に、それが
- * 宣言も無いまま自動でここへも乗ってしまうと、`/managers` で塞いだのと同じ穴が
- * auth 側にだけ残ることになる（`managerSummarySchema` が `ManagerSummary`
- * 〈core の interface〉から独立して手書きされているのと同じ形にここも揃える）。
- *
- * フィールドと制約は現状の `authAccountSchema`（`packages/core/src/auth.ts`）と
- * 1対1に写してある。**ここがずれると `openapi.json` が動き、`packages/api-client`
- * 経由で `apps/web` の生成型まで動く** — 増やすときは意図して増やすこと。
- */
+// core の `authAccountSchema` をそのまま使わない: あちらは保存の形で、行にフィールドが増えると宣言なしで外へ出てしまうため
 const accountViewSchema = z.object({
   id: z.string().min(1),
-  /** 表示用の名前。初回のログイン時にプロバイダから貰ったものを入れる。 */
   displayName: z.string().nullable(),
-  /** 本人が選んだ連絡先（検証済み）。プロバイダ側の変更で勝手に上書きしない。 */
   email: z.string().nullable(),
   createdAt: isoDateTimeSchema,
   lastLoginAt: isoDateTimeSchema.nullable(),
-  /** 許可の2値。`null` なら未許可＝ログインはできるが alteroid は使えない。 */
   grantedAt: isoDateTimeSchema.nullable(),
-  /**
-   * 誰が許可したか。`operator` = 状態ファイルを読める実行環境の持ち主。**それ以外は
-   * 許可を与えたアカウントの id**（2026-09-06 の同格化以降）。
-   */
   grantedBy: z.string().nullable(),
-  /**
-   * 実行環境の持ち主として宣言された日時（issue #1198）。`null` なら誰も owner
-   * ではない。立てられるのは operator トークンだけ（`POST /access/:accountId/owner`）。
-   */
   ownerDeclaredAt: isoDateTimeSchema.nullable(),
 });
 
@@ -276,27 +159,21 @@ export const authProvidersResponseSchema = z.object({
 
 export const loginStartResponseSchema = z.object({
   requestId: z.string(),
-  /** 人間のブラウザで開く先。 */
   authorizationUrl: z.string(),
-  /** 引き取り時に提示する秘密。**これを持つ端末だけがトークンを受け取れる。** */
   claimSecret: z.string(),
   expiresAt: z.string(),
 });
 
-/** ログイン結果の引き取り。まだ終わっていなければ 202 で `pending` が返る。 */
 export const loginClaimResponseSchema = z.union([
   z.object({ status: z.literal('pending') }),
   z.object({
     status: z.literal('ready'),
-    /** **この1回しか返らない。** ストアには sha256 しか残らない。 */
     token: z.string(),
     account: accountViewSchema,
-    /** 許可されていなければ false。ログインできても使えるとは限らない。 */
     granted: z.boolean(),
   }),
 ]);
 
-/** いま自分が誰として認識されているか。 */
 export const meResponseSchema = z.union([
   z.object({ kind: z.literal('operator') }),
   z.object({ kind: z.literal('account'), account: accountViewSchema, granted: z.boolean() }),
@@ -315,18 +192,7 @@ export const accountWithIdentitiesSchema = accountViewSchema.extend({
   ),
 });
 
-/**
- * **読めない行を id で指す一覧**（`GET /permission-grants` と `GET /access` と `GET /integration-keys` の `rowsUnreadable`。
- * issue #2536。トークンの `rowsUnreadable`〈#2346〉と同じ線）。
- *
- * **1件でも在るときだけ鍵ごと載る**（0件なら鍵が無い。`{ count: 0 }` は作らない——既存の呼び手の
- * 応答を変えないため）。`count` は読めない行の全件、`rows` は **id が取れた行だけ**（id の無い行は
- * 指せないので載せない。件数には数える。だから `rows.length <= count`）。`rows[].id` は
- * `POST /permission-grants/unreadable/remove` / `POST /access/unreadable/remove` / `POST /integration-keys/unreadable/remove` の `ids` に渡せる。
- *
- * **⚠️ 行の中身（許可の本文・アカウントの email・連携の鍵の名前など）は載せない。** id と、不正な欄名だけの
- * `reason`。
- */
+// 行の中身（許可の本文・email・鍵の名前など）は載せない: id と不正な欄名だけを返す
 export const rowsUnreadableSchema = z.object({
   count: z.number().int().positive(),
   rows: z.array(z.object({ id: z.string(), reason: z.string() })),
@@ -334,30 +200,18 @@ export const rowsUnreadableSchema = z.object({
 
 export const accessListResponseSchema = z.object({
   accounts: z.array(accountWithIdentitiesSchema),
-  /** 読めないアカウントの行（1件でも在るときだけ。{@link rowsUnreadableSchema}）。 */
   rowsUnreadable: rowsUnreadableSchema.optional(),
 });
 
 export const accessAccountResponseSchema = z.object({ account: accountWithIdentitiesSchema });
 
-// ---------------------------------------------------------------------------
-// 連携の鍵（/integration-keys）
-// ---------------------------------------------------------------------------
 
-/**
- * 連携の鍵の1行。**値（`altk_...`）も sha256 の全体も返さない**——見分けるための先頭12桁
- * （`fingerprint`。`GET /credentials` の指紋と同じ考え方）だけ。`limits` は上書きが無ければ既定の値
- * （本文 1 MiB・60回/分）が入った、**実際に掛かっている上限**である。
- */
 export const integrationKeyViewSchema = z.object({
   id: z.string(),
   name: z.string(),
-  /** この鍵が送れる唯一の source。 */
   source: z.string(),
-  /** sha256 の先頭12桁。 */
   fingerprint: z.string(),
   createdAt: isoDateTimeSchema,
-  /** 発行した資格（誰が発行したか）。 */
   createdBy: z.string(),
   expiresAt: isoDateTimeSchema.nullable(),
   revokedAt: isoDateTimeSchema.nullable(),
@@ -370,103 +224,42 @@ export const integrationKeyViewSchema = z.object({
 
 export const integrationKeysListResponseSchema = z.object({
   keys: z.array(integrationKeyViewSchema),
-  /** 読めない連携の鍵の行（1件でも在るときだけ。{@link rowsUnreadableSchema}。issue #3216）。 */
   rowsUnreadable: rowsUnreadableSchema.optional(),
 });
 
-/**
- * 連携の鍵の発行。**`scopes` のような選べる許可の一覧は無い**——鍵の種類そのものが「固定の1 source で
- * 外部イベントを送る」という1つの能力だけを表す。
- */
 export const integrationKeyCreateRequestSchema = z.object({
-  /** 人間が見分けるためのラベル。 */
   name: z.string().trim().min(1).max(200),
-  /** この鍵が送れる唯一の source（英小文字・数字・`.` `_` `-` の64字以内）。 */
   source: integrationSourceSchema,
-  /** 省略すれば無期限。 */
   expiresAt: isoDateTimeSchema.optional(),
-  /** 本文の上限（バイト）。省略すれば 1 MiB。 */
   maxBodyBytes: z.number().int().positive().max(2_147_483_647).optional(),
-  /** 1分あたりの回数の上限。省略すれば 60。 */
   ratePerMinute: z.number().int().positive().max(2_147_483_647).optional(),
 });
 
 export const integrationKeyCreateResponseSchema = z.object({
   key: integrationKeyViewSchema,
-  /** 鍵の値。**この応答でだけ返す**（保存は sha256 だけ。後からは取り出せない）。 */
   value: z.string(),
 });
 
 export const integrationKeyResponseSchema = z.object({ key: integrationKeyViewSchema });
 
-// ---------------------------------------------------------------------------
-// 会話（/conversations）
-// ---------------------------------------------------------------------------
 
 const conversationSchema = z.object({
   conversationId: z.string(),
   startedAt: z.string(),
   updatedAt: z.string(),
   messages: z.number().int(),
-  /** 一覧に出す短い抜粋。全文は `GET /conversations/:id` にある。 */
   preview: z.string(),
-  /**
-   * 未読の数（既読は全員で1組）。**クローン側の発言（返答・ターンの外からの発言）だけを
-   * 数える**——人間自身の発言は未読にしない。編集で既定ビューから隠れた発言も数えない。
-   * **窓（`scan`）の中で数えた値**で、窓の外は数えていない。
-   */
   unreadCount: z.number().int(),
-  /**
-   * 実効の既読の位置（この時刻以前の発言は既読）。会話に記録された位置があればそれ、
-   * 無ければ基準時刻。既読の記録が読めないときだけ `null`（全件を未読として数える）。
-   */
   readThrough: isoDateTimeSchema.nullable(),
 });
 
-/**
- * 既読の記録が読めなかったときだけ載る理由。**このとき全件を未読として数える**（知らせ
- * すぎる側へ倒す。知らせ損ねるほうが取り返しがつかない）。
- */
 const readStateUnreadableSchema = z.string().optional();
 
 export const conversationsResponseSchema = z.object({
   conversations: z.array(conversationSchema),
-  /**
-   * 遡った範囲。**人間との往復を何件遡ったか**（マネージャーとの往復・内部
-   * ターンは数えない。issue #418）。ここより古い**人間との**会話は出てこない
-   * （`scan` を増やせば見える）。
-   */
   scanned: z.number().int(),
-  /**
-   * 窓（`scan`）が日誌の先頭に届いたか。**`GET /conversations/:id` と同じ
-   * 意味・同じ名前で揃えてある**（`@alteroid/core` の `reachedStart`）。
-   * `false` なら、`scanned` より古い人間との会話が残っている可能性がある。
-   */
   reachedStart: z.boolean(),
-  /**
-   * **この窓の中で** `limit` に収まらず落とした会話の数（窓の外は数えて
-   * いない）。
-   *
-   * この一覧は `scan` で窓を切ったあと `limit` で更に会話数を切って
-   * いたが、それを黙ってやっていた（#418 の裏返し ——
-   * #418 は「他の種別に食われる」窓、こちらは「自分の種別で溢れる」窓。
-   * 人間との会話は増え続けるので、時間が経てば必ず踏む）。
-   *
-   * `collectConversations(entries)` は窓の全件を既に数え上げているので、
-   * この数を出すのに追加の走査は要らない（`slice` の前後の差）。
-   *
-   * **いつページングを足すか**: この値が実際に断り書きとして出るように
-   * なったら、ページング（あるいは `limit` を画面から動かせる形）を検討
-   * する時期である。出ていないなら要らない —— 判断の材料は断り書きの
-   * 有無であって、会話の本数ではない（依頼者の観測、2026-08-24: `scan=10000`
-   * で会話15件・先頭到達。`limit` の上限 200 にも画面の既定 30 にも遠い）。
-   */
   hiddenByLimit: z.number().int(),
-  /**
-   * 続きが在るときだけ載る継続点（次の呼びの `cursor` へそのまま渡す）。**`/approvals` / `/commitments` の
-   * `nextCursor` と同じ名前・同じ形**（不透明な文字列。無ければ鍵ごと無い）。`hiddenByLimit > 0`
-   * か `reachedStart === false` のどちらかなら載る。窓（`scan`）の外の会話も、これを辿れば読める。
-   */
   nextCursor: z.string().optional(),
   readStateUnreadable: readStateUnreadableSchema,
 });
@@ -474,101 +267,37 @@ export const conversationsResponseSchema = z.object({
 const conversationMessageSchema = z.object({
   id: z.string(),
   at: z.string(),
-  /** `inbound` = 人間の発言 / `outbound` = クローンの返答。 */
   role: z.enum(['inbound', 'outbound']),
   text: z.string(),
-  /**
-   * この発言が置き換える、過去の人間の発言の id（編集後の発言が持つ。
-   * `includeSuperseded` の値によらず、編集後の発言自身がこの欄を持てば付く）。
-   * チャットの「メッセージを編集する」機能（issue #edit-message）。
-   */
   supersedes: z.string().optional(),
-  /**
-   * この発言を隠している編集の id（畳み込みで既定ビューから隠された側だけが
-   * 持つ）。**既定（`includeSuperseded=false`）の応答には現れない**——隠された
-   * 発言そのものが `messages` から除かれるため。`includeSuperseded=true` の
-   * ときにだけ、どの編集がこれを隠したかを示す。
-   */
   supersededBy: z.string().optional(),
-  /**
-   * 返信ではなく「返せなかった」知らせである印。`failed` はターンの失敗（もう一度送れば
-   * 試し直せる）、`held` は利用上限での保持（枠が開けばクローンが自分で試し直す）。
-   * 付いていない発言は通常の発言（または印を持たない古い行）。
-   */
   turnFailure: z.enum(['failed', 'held']).optional(),
-  /**
-   * `turnFailure` が付いた発言の失敗の種別（`auth` 認証 / `quota` 利用上限 / `other` それ以外・不明）。
-   * `turnFailure` と同時に付く。種別を持たない古い行は `other`（文面から読み替えない）。
-   */
   turnFailureKind: turnFailureKindSchema.optional(),
-  /** 発言に添えた添付のメタデータ（中身は `GET /attachments/:id`）。無い発言には付かない。 */
   attachments: z.array(attachmentRefSchema).optional(),
-  /**
-   * 送った側が付けた発言の id（`POST /chat` の `clientMessageId`。Issue #3203）。人間の発言（`inbound`）で、
-   * 送った側が名乗ったものだけに付く。**送った側が「自分の発言が履歴に現れたか」を本文でなく id で確かめる**ための欄。
-   */
   clientMessageId: z.string().optional(),
 });
 
 export const conversationDetailResponseSchema = z.object({
   conversationId: z.string(),
   messages: z.array(conversationMessageSchema),
-  /**
-   * 人間との往復を何件遡ったか。**一覧（`scanned`）と同じ意味で、詳細にも要る**
-   * — この口も新しい方から `scan` 件（人間との往復だけを数えて。issue #418）
-   * しか見ないので、ここが無いと「この会話はこれで全部」と読める応答になる。
-   */
   scanned: z.number().int(),
-  /**
-   * 遡った窓が日誌の先頭に届いたか。**`messages` が空のときの意味がこれで変わる。**
-   *
-   * - `true` — ここに無いものは無い（`404` を返してよい状態）
-   * - `false` — **無いとは言えていない。** 窓の外に続きが残っている可能性がある
-   *
-   * 「無い」と「判定できない」を2値へ潰さないために持っている（潰すと、判定できない
-   * 場合が黙ってどちらかへ倒れる）。`scan` を増やせば窓は広がる。
-   */
   reachedStart: z.boolean(),
-  /**
-   * この会話で、編集によって既定ビューから畳まれた発言の件数
-   * （チャットの「メッセージを編集する」機能）。**`includeSuperseded` の値に
-   * よらず常に含める**（0件でも含める）——出ないと、この会話に編集で隠された
-   * 版が在ることに気づく手段が無くなる。畳まれた版を読むには
-   * `includeSuperseded=true` を指定する。
-   */
   supersededCount: z.number().int(),
-  /**
-   * 実効の既読の位置（この時刻以前の発言は既読）。`messages` の各発言の `at` と比べれば
-   * 「どこから未読か」が引ける。記録が読めないときだけ `null`。
-   */
   readThrough: isoDateTimeSchema.nullable(),
-  /**
-   * 未読の数。`includeSuperseded` の値によらず**既定ビューで見えている**クローン側の発言で
-   * 数える（一覧の `unreadCount` と同じ数え方）。窓（`scan`）の中の値。
-   */
   unreadCount: z.number().int(),
   readStateUnreadable: readStateUnreadableSchema,
 });
 
-/**
- * `POST /conversations/:id/read` の入力。**`through` は発言の id**（`GET /conversations/:id`
- * の `messages[].id`）で、時刻ではない。時刻はサーバが日誌から引く——クライアントが時刻を
- * 渡せると、「いま」で既読にして、まだ見ていない分まで既読にする誤りを作れてしまう。
- */
 export const conversationReadRequestSchema = z.object({
   through: z.string().min(1),
 });
 
-/** `GET /conversations/unread-count` の応答（左ナビの札用）。 */
 export const unreadConversationCountResponseSchema = z.object({
-  /** 未読のある会話の数（全会話で数える）。`capped` のときは下限。 */
   count: z.number().int(),
-  /** 数え切れていない（上限を超えた、または日誌からの取り込みが1回に収まらなかった）。UI は「N+」と出す。 */
   capped: z.boolean(),
   readStateUnreadable: readStateUnreadableSchema,
 });
 
-/** `POST /conversations/:id/read` の応答。進めた後の実効の位置と未読数（一覧・詳細と同じ数え方）。 */
 export const conversationReadResponseSchema = z.object({
   conversationId: z.string(),
   readThrough: isoDateTimeSchema.nullable(),
@@ -576,20 +305,12 @@ export const conversationReadResponseSchema = z.object({
   readStateUnreadable: readStateUnreadableSchema,
 });
 
-// ---------------------------------------------------------------------------
-// 記憶（/memory）— core の memoryDocument(Meta)Schema をそのまま使う
-// ---------------------------------------------------------------------------
 
 export const memoryListResponseSchema = z.object({ documents: z.array(memoryDocumentMetaSchema) });
-/**
- * `version` は本文（保存された形）の sha256 hex（`memoryVersion`、Issue #2743）。
- * 書き換える側が持ち回り、`PUT /memory/{slug}` の `ifMatch` へ渡す。
- */
 export const memoryReadResponseSchema = z.object({
   document: memoryDocumentSchema,
   version: z.string(),
 });
-/** `PUT` / `DELETE /memory/{slug}` の 409、`DELETE` の 428（版なし。Issue #2881）。`current` は**いまの版**（読んだ後に消されていれば null）。 */
 export const memoryConflictResponseSchema = z.object({
   error: z.string(),
   current: memoryReadResponseSchema.nullable(),
@@ -599,34 +320,16 @@ export const memoryDeleteResponseSchema = z.object({
   slug: z.string(),
 });
 
-// ---------------------------------------------------------------------------
-// 仕事のやり方（/practices）— core の practice(Meta)Schema をそのまま使う
-// （#1055 段3③。PracticeStore の doc「器が持つのは『こう書いてある』までで、
-// 『こう実行せよ』ではない」——ここに `apply` / `enforce` に当たる口を作らない）
-// ---------------------------------------------------------------------------
+// `apply` / `enforce` に当たる口をここに作らない: 器が持つのは「こう書いてある」までで、「こう実行せよ」ではないため
 
 export const practiceListResponseSchema = z.object({
   practices: z.array(practiceMetaSchema),
-  /**
-   * 読めなかったやり方の行（issue #2346）。**「無い」でも「消された」でもない第3の
-   * 状態。** `PracticeStore.list` の `PracticeList.unreadable`（`packages/core/src/store.ts`）
-   * をそのまま外へ出す。クローンの `practice_list` が末尾に足す断りと同じ材料を、
-   * 人間の側にも渡す。**1件でも在るときだけ載る**（0件なら鍵が無い。空配列を作ると
-   * 「読めない行は無い」と読めてしまう）。slug（取れれば）と不正な欄名だけで、
-   * 題・本文は含まない。
-   */
   unreadable: z.array(unreadablePracticeSchema).optional(),
 });
-/**
- * `version` は `kind` / `title` / 本文（保存された形）の sha256 hex（`practiceVersion`、Issue #2853）。
- * 書き換える側が持ち回り、`PUT /practices/{slug}` の `ifMatch` へ渡す。
- * **版の履歴（`/versions`）の番号ではない。**
- */
 export const practiceReadResponseSchema = z.object({
   practice: practiceSchema,
   version: z.string(),
 });
-/** `PUT /practices/{slug}` の 409。`current` は**いまの版**（読んだ後に消されていれば null）。 */
 export const practiceConflictResponseSchema = z.object({
   error: z.string(),
   current: practiceReadResponseSchema.nullable(),
@@ -636,40 +339,12 @@ export const practiceDeleteResponseSchema = z.object({
   slug: z.string(),
 });
 
-/**
- * やり方の版の履歴（#1309）。**一覧はメタだけ**——`practiceListResponseSchema` と
- * 同じ理由で、本文を含まない（`PracticeStore.listVersions` の doc）。
- */
 export const practiceVersionListResponseSchema = z.object({
   versions: z.array(practiceVersionMetaSchema),
 });
 export const practiceVersionReadResponseSchema = z.object({ version: practiceVersionSchema });
 
-// ---------------------------------------------------------------------------
-// 日誌（/journal, /journal/stream）— core の journalEntrySchema をそのまま使う
-// ---------------------------------------------------------------------------
 
-/**
- * `oldestAt` / `crossesHorizon`（issue #1510 の積み残し）。
- *
- * **`since`/`until` のどちらかを指定した呼び、または `horizon=true` を渡した
- * 呼びにだけ現れる**（`journal_read` の `describeJournalHorizonNote` と同じ
- * gate に `horizon` を足したもの。issue #1530。`apps/daemon/src/app.ts` の
- * `GET /journal` ハンドラの doc）。どれも渡さない既存の呼びの応答は1バイトも
- * 変わらない——足すだけである。
- *
- * - `oldestAt`: 日誌の地平（`JournalStore.oldestAt()`）。日誌が空なら `null`
- * - `crossesHorizon`: 窓の始点（`since`。無指定なら `-∞`）が `oldestAt` より
- *   前にかかるか（`journalWindowCrossesHorizon`、`@alteroid/core`）。真なら
- *   「その窓には無かった」と「日誌がそこまで遡れないだけ」を区別できない
- */
-/**
- * 日誌の頁の継続点（Issue #2604 / #2605）。`GET /journal` の `afterId` / `afterAt` へ
- * そのまま渡せる。`null` = この問い合わせの本当の終端。非 `null` なら、`entries` が
- * `limit` 未満でも空でも先に行が在る（ストアは読めない行を `limit` の後で捨てる）。
- * 旧デーモンはこの欄を返さない——読む側は `undefined` を「終端かどうか不明」とし、
- * 従来の件数による推定へ倒すこと。
- */
 export const journalNextSchema = z.object({ id: z.string(), at: isoDateTimeSchema }).nullable();
 
 export const journalListResponseSchema = z.object({
@@ -679,11 +354,6 @@ export const journalListResponseSchema = z.object({
   crossesHorizon: z.boolean().optional(),
 });
 
-/**
- * `journalEntrySchema` は discriminatedUnion。`/reports` が実際に返すのは
- * `daily_report` の枝だけなので、**再定義せず union から取り出す** — 手で
- * 書き直すと、schema.ts 側に日報の項目が増えたときにここだけ古いままになる。
- */
 function journalVariant(type: JournalEntry['type']) {
   const found = journalEntrySchema.options.find((option) => option.shape.type.value === type);
   if (found === undefined) {
@@ -696,65 +366,19 @@ const dailyReportEntrySchema = journalVariant('daily_report');
 
 export const reportsResponseSchema = z.object({ reports: z.array(dailyReportEntrySchema) });
 
-// ---------------------------------------------------------------------------
-// 承認待ち（/approvals）— core の pendingApprovalSchema をそのまま使う
-// ---------------------------------------------------------------------------
 
-/**
- * 一覧の1件は core の `pendingApprovalSchema` に `updatedAt` を足しただけの形
- * （`.extend()`）。
- *
- * **新しい情報ではない。** `createdAt` と `answeredAt`（付いていれば）は
- * `pendingApprovalSchema` に既に載っており、受け手は `answeredAt ?? createdAt`
- * を自分で導けた。この欄はその導出をサーバ側で一度だけ行い、受け手に
- * やらせるのをやめるだけの変更である。導出は `packages/core/src/schema.ts` の
- * `approvalUpdatedAt` を呼ぶ（#269）。**ここで `??` を書き直さない。**
- *
- * **`.extend()` を土台にする理由。** ファイル冒頭の約束（core が既に zod
- * スキーマを持つものはここで再定義しない）に当たらない — `pendingApprovalSchema`
- * を再定義するのではなく、その上に派生欄を1つ足すだけで、元の全欄はそのまま
- * 通る。`updatedAt` は永続化の欄ではなく応答専用の派生値なので、`commitments`
- * と同じく「外向きの view を別に書く」問題（保存側にフィールドが増えた日に
- * 宣言ごと広がる）にも当たらない——土台が `pendingApprovalSchema` 自身なので、
- * 広がるとしてもそれは core 側の欄が増えたときだけである。
- *
- * **`total` / `nextCursor` は頁の封筒（issue #432）。** `order` / `limit` /
- * `cursor` のいずれかを明示的に渡したときだけ載る——何も渡さない既定の呼びでは、
- * この2欄は応答に**鍵として現れない**（`undefined` ではなく無い。
- * `apps/daemon/src/app.ts` の `/approvals` ハンドラが `optedIn` のときだけ
- * object へ足す）。opt-in の理由は `.claude/skills/listing-and-detail/SKILL.md`
- * ——既存の呼び手（画面・CLI）の応答をこの変更で変えないため。
- */
+// `updatedAt` の導出（`??`）をここで書き直さない: core の `approvalUpdatedAt` を呼ぶ
 export const approvalsResponseSchema = z.object({
   approvals: z.array(pendingApprovalSchema.extend({ updatedAt: isoDateTimeSchema })),
-  /**
-   * 読めなかった承認待ちの行（issue #2298）。**「無い」でも「回答済み」でもない第3の状態。**
-   *
-   * `JobStore.listApprovals`（`packages/core/src/store.ts`）が返す
-   * `ApprovalList.unreadable` をそのまま外へ出す。クローンの `approvals_list` が末尾に
-   * 足す断りと同じ材料を、人間の側にも渡す。**1件でも在るときだけ載る**（0件なら鍵が
-   * 無い。空配列を作ると「読めない行は無い」と読めてしまう）。窓（`limit`/`cursor`）でも
-   * `conversationId` の絞りでも切らない。`pending` の絞りは、回答済み・取り下げ済みと
-   * 分かる行だけを除く（`ApprovalList.unreadable` の doc）。
-   */
   unreadable: z.array(unreadableApprovalSchema).optional(),
   total: z.number().int().optional(),
   nextCursor: z.string().optional(),
 });
 
-/**
- * `GET /approvals/answered-dates` の応答。決着のあった日（デーモンの `localDate()`）と、その日に
- * 決着した件数（回答済み＋取り下げ済み）。新しい日が上。**封筒は持たない**（`/reports` と同じ）。
- */
 export const approvalsAnsweredDatesResponseSchema = z.object({
   dates: z.array(z.object({ date: z.string(), count: z.number().int().positive() })),
 });
 
-/**
- * `GET /approvals/:id` の応答。承認1件（`GET /approvals` の1行と同じ形。`updatedAt` つき）と、
- * 決着した日（デーモンの `localDate()`。`GET /approvals?answeredOn=` と同じ関数で決める。
- * 未決着なら `null`）。
- */
 export const approvalByIdResponseSchema = z.object({
   approval: pendingApprovalSchema.extend({ updatedAt: isoDateTimeSchema }),
   settledOn: z.string().nullable(),
@@ -764,15 +388,6 @@ export const approvalsAnswerResponseSchema = z.object({
   results: z.array(z.object({ id: z.string(), ok: z.boolean(), error: z.string().optional() })),
 });
 
-/**
- * `GET /approvals/:id/trace` の応答（issue #847 の案B）。**形は core の
- * `ApprovalTrace`（`packages/core/src/approval-trace.ts`）そのもの**で、承認と
- * 日誌の行は core の schema をそのまま使う（このファイル冒頭の約束）。
- *
- * `actions` は抜粋ではなく日誌の行の全文である（人間へ返す口なので切らない）。
- * 件数は core の `APPROVAL_TRACE_ACTION_LIMIT` で締め、超えた分は
- * `actionsOmitted` に数だけ載る。
- */
 export const approvalTraceResponseSchema = z.object({
   approval: pendingApprovalSchema,
   state: z.enum(APPROVAL_TRACE_STATES),
@@ -788,118 +403,47 @@ export const approvalTraceResponseSchema = z.object({
 
 export const okResponseSchema = z.object({ ok: z.literal(true) });
 
-/** `GET /client-messages/:clientMessageId` の応え（Issue #3258）。受け取った会話の id だけを返す。 */
 export const clientMessageLookupResponseSchema = z.object({ conversationId: z.string() });
 
-/**
- * `POST /clone/interrupt` の本文（#3956）。**2つとも省くか、2つとも渡す**（片方だけは 400）。
- * 渡すと、その発言（`POST /chat` の `clientMessageId`）のためのターンしか止めない。
- */
 export const cloneInterruptRequestSchema = z.object({
   conversationId: z.string().min(1).optional(),
   clientMessageId: clientMessageIdSchema.optional(),
 });
 
-/**
- * `POST /clone/interrupt` の応答（#1398 c23-1、#3956）。`interrupted` は止めた、`withdrawn` は順番待ちの
- * 発言を取り下げた（配らない）、`not_target` は走っているのが別の起点のターンで止めていない、`starting` は
- * 発言は取り出し済みでターンがまだ始まっておらず止めるものが無かった（もう一度呼べば止まる）、
- * `idle` は止めるものが無かった（答え終わっている）、`unsupported` はこの器のクローンが止める口を持たない。
- * `withdrawn` / `not_target` / `starting` は対象を渡したときだけ返る。
- */
 export const cloneInterruptResponseSchema = z.object({
   outcome: z.enum(['interrupted', 'withdrawn', 'not_target', 'starting', 'idle', 'unsupported']),
 });
 
-// ---------------------------------------------------------------------------
-// 許可の記録（/permission-grants。Issue #863）
-// ---------------------------------------------------------------------------
 
 export const permissionGrantsResponseSchema = z.object({
   grants: z.array(permissionGrantSchema),
-  /** 読めない許可の行（1件でも在るときだけ。{@link rowsUnreadableSchema}）。 */
   rowsUnreadable: rowsUnreadableSchema.optional(),
 });
 
-/**
- * 読めない行を id で指して消す口（`POST /permission-grants/unreadable/remove`・
- * `POST /access/unreadable/remove`。issue #2440）の body。トークンの
- * {@link tokensUnreadableRemoveRequestSchema}（#2354）と同じ形。
- * `id` は読めない行の id（デーモンの stderr の「読み飛ばしました（… id=…）」の跡に出る）。
- * id が取れない行は指せない。
- */
 export const unreadableRowsRemoveRequestSchema = z.object({
   ids: z.array(z.string().min(1)).min(1),
 });
 
-/** 上の応答。**消した id と件数だけで、行の中身は含まない。** */
 export const unreadableRowsRemoveResponseSchema = z.object({
   removedIds: z.array(z.string()),
   count: z.number().int().positive(),
 });
 
-// ---------------------------------------------------------------------------
-// 外部イベントの入口（/events）
-// ---------------------------------------------------------------------------
 
 export const eventAcceptedResponseSchema = z.object({ ok: z.literal(true), id: z.string() });
 
-// ---------------------------------------------------------------------------
-// 時間起点のジョブ（/schedule）
-// ---------------------------------------------------------------------------
 
 export const scheduleStatusSchema = z.object({
   kind: z.string(),
   description: z.string(),
-  /** 次の発火時刻（ISO 8601）。 */
   nextAt: z.string(),
-  /**
-   * 継続中の依頼として仕込まれたものだけが持つ。
-   *
-   * 既定の日報・発意 tick には無い（あれは設定で回っているもので、依頼ではない）。
-   * ここが出ているものは `DELETE /schedule/:kind` で外せる。
-   */
   request: z.string().optional(),
-  /**
-   * 依頼を仕込んだときの周期そのもの。**`request` と同じく、仕込まれたものだけが持つ。**
-   *
-   * `description` は散文（「毎日 09:00（ローカル時刻）: …」）で、機械が読み戻せる形では
-   * ない。編集画面が周期を prefill するにはこの値が要る — `POST /schedule` は
-   * upsert なので（同じ kind なら置き換わる）、これが無いと編集フォームは周期を
-   * 既定値から始めるしかなく、**本文だけ直したつもりの保存が周期を黙って書き換える。**
-   *
-   * **既定の日報・発意 tick には無い。それは「分からない」ではなく「無い」である**
-   * — あれはコードに書かれた既定で、`spec` という値そのものが存在しない
-   * （下の `createdAt` の doc と同じ理由）。
-   *
-   * **加算のみの変更である**（#235 の `createdAt` / `updatedAt` と同じ形）。既存の欄は
-   * 1つも変えていないので、いまの消費側は壊れない。
-   */
   spec: scheduleSpecSchema.optional(),
-  /**
-   * 仕込まれた時刻 / 最後に仕込み直された時刻（ISO 8601）。
-   *
-   * **`request` と同じく、仕込まれたものだけが持つ。** 既定の日報・発意には
-   * 無い——「分からない」のではなく、**コードに書かれた既定なので作成という
-   * 出来事が存在しない。** `unknown` を入れないこと（あれは「在るはずだが
-   * 根拠が無い」を表す値である）。
-   *
-   * **加算のみの変更である**（#235）。既存の欄は1つも変えていないので、
-   * いまの消費側は壊れない。CLI がこれを出せなかったのは、**API が返して
-   * いなかったから**である（`docs/PRD.md`「片方でしかできないことを作らない」）。
-   */
   createdAt: z.string().optional(),
   updatedAt: z.string().optional(),
-  /** 前回この kind で発火した時刻（ISO 8601）。一度も動いていなければ無い。 */
   lastRunAt: z.string().optional(),
 });
 
-/**
- * `POST /schedule` の、`ifMatch`（読んだ時の版）が合わなかったときの 409（Issue #3821）。
- * `memoryConflictResponseSchema` / `practiceConflictResponseSchema` と同じ形: `current` は
- * **いまの依頼**（読んだ後に消されていれば null）で、その `updatedAt` が次に送る版になる。
- * 既定の定期ジョブの名前での 409（`{ error }` だけ）とは、`current` の鍵の有無で見分ける。
- */
 export const scheduleConflictResponseSchema = z.object({
   error: z.string(),
   current: scheduledRequestSchema.nullable(),
@@ -907,73 +451,16 @@ export const scheduleConflictResponseSchema = z.object({
 
 export const scheduleListResponseSchema = z.object({
   entries: z.array(scheduleStatusSchema),
-  /**
-   * 読めなかった継続中の依頼の行（issue #2343）。**「無い」でも「消された」でもない第3の状態。**
-   *
-   * スケジューラが直近の読み直しで `ScheduleStore.list` の `ScheduleList.unreadable`
-   * （`packages/core/src/store.ts`）から持っているものをそのまま外へ出す。クローンの
-   * `schedule_list` が末尾に足す断りと同じ材料を、人間の側にも渡す。**1件でも在るときだけ
-   * 載る**（0件なら鍵が無い。空配列を作ると「読めない行は無い」と読めてしまう）。
-   * 直近の読み直しの時点のもので、`POST /schedule` / `DELETE /schedule/:kind` の直後に
-   * 読み直される。
-   */
   unreadable: z.array(unreadableScheduleSchema).optional(),
 });
 
-// ---------------------------------------------------------------------------
-// 引き受けたまま終わっていない仕事の台帳（/commitments）
-// ---------------------------------------------------------------------------
 
-/**
- * `PATCH /commitments/:id` の、`ifMatch`（読んだ時の版 = `editedAt ?? at`）が合わなかったときの
- * 409（Issue #3786）。`current` はいまの行（消えていれば null）。片付き済み・読めない行の
- * 409（`{ error }` だけ）とは、`current` の鍵の有無で見分ける。
- */
 export const commitmentConflictResponseSchema = z.object({
   error: z.string(),
   current: commitmentSchema.nullable(),
 });
 
-/**
- * 台帳の1件は core の `commitmentSchema` をそのまま外へ出す（`/approvals` と同じ扱い）。
- *
- * **外向きの view を別に書かない理由は「伏せるものが1つも無い」ことである。** この器が
- * 持つのは「何を頼まれたか」と「まだ片付いていない」の2値だけで、鍵も内部の識別子も
- * 入っていない（`packages/core/src/schema.ts` の `commitmentSchema`）。したがって
- * core 側にフィールドが増えたときに宣言ごと広がっても、それは**外へ出してよいものが
- * 増えた**というだけで、伏せていたものが漏れる形にはならない。
- *
- * 逆に view を別に書くと、器に持たせた内容と外から読める内容がずれ、**人間が API で
- * 見た台帳とクローンが `commitment_list` で見る台帳が違う**という形になる。それは
- * PRD「可観測性」が塞ごうとしているものそのものである。
- *
- * **`updatedAt` はその2つの懸念のどちらにも当たらない形で足してある。**
- * `commitmentSchema.extend({ updatedAt: ... })` は再定義ではなく（元のスキーマを
- * 土台にして派生欄を1つ足すだけ）、かつ別 view でもない（`commitmentSchema` の
- * 全欄はそのまま通る）。`closedAt` と `at` は既に応答に載っており、受け手は
- * `closedAt ?? at` を自分で導けた——この欄は新しい情報ではなく、その導出を
- * サーバ側で一度だけ行うことで受け手にやらせるのをやめる変更である。導出は
- * `packages/core/src/schema.ts` の `commitmentUpdatedAt` を呼ぶ（#269）。
- * **ここで `??` を書き直さない。**
- *
- * **`respondedAt` は issue #1003（「放置」と「進行中」の見分け）のために足した
- * 導出値である。** `updatedAt` と同じ形の**加算のみの変更**——クローンから
- * 人間への返答が日誌の `exchange` に見つかった最初の時刻で、見つからなければ
- * 欄自体が応答に現れない（`undefined` であって `null` ではない。`??` の対象に
- * しないこと——「無い」と「見つからなかった」を区別しない値である）。導出は
- * `packages/core/src/schema.ts` の `commitmentRespondedAt` を呼ぶ
- * （`apps/daemon/src/app.ts` の `GET /commitments` ハンドラ）。
- *
- * **`activeManagerIds` は issue #1003 段2（「進行中（委譲あり）」）のために
- * 足した導出値である。** `respondedAt` と同じ形の**加算のみの変更**——同じ
- * 会話の中で、この行より後に始まって、いまも走っている（`running` /
- * `waiting_human`）マネージャーの `managerId` を並べたもので、無ければ
- * 欄自体が応答に現れない。**正確な1対1の紐付けではない**（同じ会話に複数の
- * 未了行や複数の委譲が並行していれば、無関係な行にも付きうる——
- * `packages/core/src/schema.ts` の `Job.conversationId` / `commitmentActiveDelegationIds`
- * の doc に限界を書いた）。導出は `commitmentActiveDelegationIds` を呼ぶ
- * （`apps/daemon/src/app.ts` の `GET /commitments` ハンドラ）。
- */
+// `closedAt ?? at` の導出をここで書き直さない: core の `commitmentUpdatedAt` を呼ぶ
 export const commitmentListResponseSchema = z.object({
   entries: z.array(
     commitmentSchema.extend({
@@ -982,349 +469,62 @@ export const commitmentListResponseSchema = z.object({
       activeManagerIds: z.array(z.string()).optional(),
     }),
   ),
-  /**
-   * 読めなかった行（issue #296）。**「無い」でも「片付いた」でもない第3の状態。**
-   *
-   * `CommitmentStore.list`（`packages/core/src/store.ts`）が返す
-   * `CommitmentList.unreadable` をそのまま外へ出す。クローンの `commitment_list`
-   * が末尾に足す断りと同じ材料を、人間の側（Web UI・API を直接叩く側）にも
-   * 渡す——片方にしか無いと、人間が API で見た台帳とクローンが見る台帳が
-   * 違う、という上の doc が塞ごうとしている形そのものになる。
-   *
-   * **窓（`limit`/`cursor`）では絶対に切らない。** `entries` とは違い、opt-in
-   * していても `unreadable` は常に全件を返す（`apps/daemon/src/app.ts` の
-   * `GET /commitments` ハンドラの doc）。
-   */
+  // 窓（`limit`/`cursor`）では切らない: opt-in していても `unreadable` は常に全件を返す
   unreadable: z.array(unreadableCommitmentSchema),
-  /**
-   * 保持上限を超えて物理削除された、片付いた行の累計件数（issue #416）。
-   *
-   * `CommitmentStore.list` が返す `CommitmentList.trimmedClosed`
-   * （`packages/core/src/store.ts`）をそのまま外へ出す——クローンの
-   * `commitment_list` が末尾に足す断りと同じ材料を、人間の側（Web UI・API を
-   * 直接叩く側）にも渡す。**理由は `unreadable` の直上の doc と同じ**（片方に
-   * しか無いと、人間が API で見た台帳とクローンが見る台帳が違うことになる）。
-   *
-   * **`unreadable` と同じく窓（`limit`/`cursor`）では切らない。** 頁ではなく
-   * 累計件数そのものなので、そもそも「切る」対象ではない。
-   *
-   * **契約を守れている実装（`storage-pg` / 現行の `storage-fs` 以外）は常に
-   * `0` を返す。** いまのところ `storage-fs` だけがこの値を増やしうる
-   * （`packages/core/src/store.ts` の `CommitmentList` の doc）。
-   */
   trimmedClosed: z.number().int().nonnegative(),
-  /**
-   * 読めなかった委譲の行（issue #2359）。**`entries` の `activeManagerIds` が少なく出ていることの断り。**
-   *
-   * `activeManagerIds` は `JobStore.listJobs()` から組むので、読めない委譲（`jobSchema` に
-   * 合わない行）に紐づく台帳の行は「委譲なし」に見える。`JobStore.listUnreadableJobs()`
-   * （`packages/core/src/store.ts`）をそのまま外へ出す（`GET /managers` の `unreadable` と
-   * 同じ材料・同じ形。本文は載せない）。
-   *
-   * **読めない委譲がどの台帳の行に紐づくかは、行が壊れているので言えない。** だから行へは
-   * 紐づけない——「委譲なし」に見える行のうち、どれが本当は委譲ありかは分からない。
-   *
-   * **1件でも在るときだけ載る**（0件なら鍵が無い。`GET /managers` と同じ。空配列を作ると
-   * 「読めない行は無い」と読めてしまうが、`unreadable`（台帳）と違い、この欄は後から足した
-   * ので、古い呼び手の応答を1バイトも変えないために鍵ごと省く）。窓では切らない。
-   * `activeManagerIds` の導出の対象になる行（`origin` が `human` で `source` を持つ）が
-   * 1件も無いときは、誰にも「委譲なし」と言っていないので載らない。
-   */
   unreadableJobs: z.array(unreadableJobSchema).optional(),
-  /**
-   * **`total` / `nextCursor` は頁の封筒（2026-08-25、人間の明示の「はい」を受けて
-   * `limit`/`cursor` の opt-in で足した）。** `/approvals` の `total` / `nextCursor`
-   * と同じ形——`limit` / `cursor` のいずれかを明示的に渡したときだけ載る。何も
-   * 渡さない既定の呼びでは、この2欄は応答に**鍵として現れない**（`undefined`
-   * ではなく無い。`apps/daemon/src/app.ts` の `GET /commitments` ハンドラが
-   * `optedIn` のときだけ object へ足す）。opt-in の理由は `approvalsResponseSchema`
-   * の doc と同じ——既存の呼び手（画面・CLI・クローンの `commitment_list`）の
-   * 応答をこの変更で変えないため。
-   */
   total: z.number().int().optional(),
   nextCursor: z.string().optional(),
 });
 
-/**
- * 積んだ1件の id。
- *
- * **返さないと閉じられない。** 閉じる口は id を取るので、積んだ側に id を渡さないと
- * 「人間は積めるが自分で閉じられない」という片道の口になる（一覧を引き直して本文で
- * 探すしかなくなり、同じ本文が2件あれば当てられない）。
- */
 export const commitmentOpenedResponseSchema = z.object({ ok: z.literal(true), id: z.string() });
 
-// ---------------------------------------------------------------------------
-// マネージャー（/managers）
-// ---------------------------------------------------------------------------
 
-/**
- * 返事待ちで止まっている1件。
- *
- * **`kind`（`'question'` / `'permission'`）を宣言する（#334）。** これが無いと
- * 画面は質問（自由文で答える）と実行許可（許可／拒否）を区別できず、質問に
- * 拒否ボタンを押すと文字列「許可しない」が回答として注入されていた。種別は
- * `@alteroid/core` の `waitingKindSchema`（`packages/core/src/runner-protocol.ts`）
- * と同じ2値で、二重管理を避けるためにそこから引く。
- *
- * **`kind`・`askedAt` とも `.optional()`。** これは外向きの API の形なので、
- * `@alteroid/core` の `runnerWaitingSchema` と同じ理由（版のずれで旧 runner の
- * `/managers` 応答にこの2つが乗らない窓がある）がそのまま当てはまる。デーモン
- * がここへ既定値を作ってはいけない——`RunnerWaiting` が `undefined` のまま
- * 運んできたものを、ここで埋めると経路によって値の意味が変わる。
- */
+// `kind`・`askedAt` に既定値を作らない: 旧 runner の応答には乗らない窓があり、埋めると経路で値の意味が変わるため
 const managerWaitingSchema = z.object({
   requestId: z.string(),
   summary: z.string(),
   kind: waitingKindSchema.optional(),
-  /**
-   * runner がこの確認を受け取った時刻（ISO8601, UTC）。**「回答が来た時刻」
-   * ではない。** `packages/core/src/runner-protocol.ts` の
-   * `runnerWaitingSchema.askedAt` と同じ意味・同じ値（#334、#323 対応）。
-   */
   askedAt: isoDateTimeSchema.optional(),
 });
 
-/**
- * 確認へ上がらずに止められた道具と、その件数（`ManagerDenial`）。
- *
- * `count` は 0 を下回らない（帳面は `0 + 1` から積む）。**宣言できることは宣言する**
- * — この PR で `.parse()` を通した以上、ここに書いた範囲がそのまま外向きの面の
- * 定義になる。既定の `z.number().int()` は `minimum: -9007199254740991` を吐くので、
- * 書かなければ「負でもありうる」と宣言したことになってしまう。
- *
- * **`actor` を宣言しないと、値が在っても `.parse()` で黙って落ちる**
- * （`runnerLostSince` の doc、55行下と同じ断り）。**落ちると CLI と Web の
- * 両方が同時に盲目になる**——クローンの `manager_list` にだけ層が見え、
- * 人間の入口には出ない形になる（Issue #373）。
- */
+// 宣言しないと値が在っても `.parse()` が黙って落とす: `actor` などを落とすと CLI と Web が同時に盲目になる
 const managerDenialSchema = z.object({
   tool: z.string(),
   count: z.number().int().nonnegative(),
-  /**
-   * どちらの手が止まったか。**`undefined` は「マネージャーだった」ではなく
-   * 「層が取れなかった」という第3の状態である**
-   * （`packages/core/src/manager.ts` の `ManagerDenial.actor` の doc と同じ
-   * 規則。`via: 'result'` の拒否は SDK 側に判定材料が無いので、常にこの
-   * 状態になる）。**`.optional()` をこの第3の状態のために使う**——
-   * 「宣言していないから落ちた」と「観測できなかったので無い」を混同しない
-   * ため、`z.enum(['manager', 'worker']).optional()` のまま書き、既定値
-   * （例: `'manager'`）を持たせない。
-   */
+  // `actor` に既定値を持たせない: `undefined` は「層が取れなかった」第3の状態のため
   actor: z.enum(['manager', 'worker']).optional(),
-  /**
-   * この道具×層が最後に止められた時刻（ISO 8601。issue #1455）。止められた後に
-   * 委譲が報告を返したかを `lastReportAt` と突き合わせる材料。**無いことは
-   * 「取れていない」であって「古い」ではない。** 宣言しないと `.parse()` が黙って落とす。
-   */
   lastAt: z.string().optional(),
-  /**
-   * ⛔ **`reasonType` / `reason` / `message`（issue #1105）は、意図してここに
-   * 宣言していない。** `packages/core/src/manager.ts` の `ManagerDenial` には
-   * この3欄が増えているが、`.parse()` が宣言していないキーを黙って落とす
-   * ——`/managers` と `/managers/:id` はこの PR の前と応答が1バイトも変わらない。
-   * クローン向けの `manager_list` / `manager_report`（`CLONE_TOOL_NAMES`）にだけ
-   * 出す設計で、人間向けの HTTP／CLI／Web へ露出面を広げるかどうかは別の判断
-   * として残してある（値そのものは既に `GET /journal` で読める。
-   * `ManagerDenial.reasonType` の doc）。
-   *
-   * ⛔ **`inputHead`（issue #1105、拒否より前に見た入力の先頭）も同じ理由で
-   * 意図して宣言していない。** こちらは journal にすら同じ字面が無い
-   * （`ManagerDenial.inputHead` の doc）——`reasonType` 等より露出をさらに
-   * 絞る側の判断であって、緩める理由には使わない。
-   */
+  // `reasonType` / `reason` / `message` / `inputHead` を宣言しない: 人間向けの面へ露出を広げないため（`.parse()` が落とす）
 });
 
-/**
- * `ManagerSummary`（`packages/core/src/manager.ts`）は zod スキーマを持たない
- * プレーンな TS interface なので、ここでだけ zod として書く。
- *
- * **書いただけでは効かない。** `describeRoute` の `resolver()` は spec を作るだけで、
- * ハンドラの `c.json(...)` を検査しない。ここの宣言が実際に外向きの面と一致して
- * いるのは、`app.ts` の `/managers` と `/managers/:id` が返す前にこのスキーマを
- * 通している（`.parse()`）からである。通していない経路では、interface に足した
- * フィールドが spec に無いまま黙って外へ出る。
- */
 export const managerSummarySchema = z.object({
   managerId: z.string(),
   status: jobStatusSchema,
-  /**
-   * このデーモンから話しかけられるか（宛先を失った分だけ `false`）。
-   *
-   * **⚠️ `live: false` を「送っても届かない」と読み替えないこと（指差しだけを
-   * 置く。この欄の契約は動かしていない）。** この `false` を作っている
-   * `isLive()` の枝のうち、**器が黙ったことによる `false`（真下の
-   * `runnerLostSince` が立つ側）では、`ManagerPool.send()`（`POST
-   * /managers/:id/messages` が呼ぶ先）が届いた実測がある**（2026-08-28。
-   * `outcome: 'delivered'`）。⟹ **「送っても届かない」ことの証明ではない。**
-   * **逆に「送れば届く」でもない** —— 相手の状態によって `delivered` /
-   * `session_missing` / `unknown` のどれにもなる。実測と構造の根拠は
-   * `packages/core/src/manager.ts` の `isLive()` の doc。
-   */
+  // `live: false` を「送っても届かない」と読み替えない: 器が黙った false でも `send()` が届いた実測があるため
   live: z.boolean(),
-  /**
-   * 宛先の器を、名簿が「名乗らなくなった」と判定した時刻。`live: false` の理由を
-   * 1つだけ名指しする欄である（`packages/core/src/manager.ts` の
-   * `ManagerSummary.runnerLostSince`）。
-   *
-   * **ここに宣言しないと、値が在っても黙って落ちる。** このスキーマは
-   * `.parse()` として外向きの面を通っており、宣言していない欄は落ちる
-   * （真上の `lastFailure` / `lastReportAt` と同じ断り）。**落ちると CLI と
-   * Web の両方が同時に盲目になる** —— クローンの `manager_list` にだけ出て、
-   * 人間の入口には出ない形になる。
-   */
   runnerLostSince: z.string().optional(),
-  /**
-   * **宛先の runner が応答したうえで、この委譲のセッションを一覧に載せなかった**と
-   * 観測した時刻（`packages/core/src/manager.ts` の
-   * `ManagerSummary.sessionMissingSince`）。
-   *
-   * **`runnerLostSince` とは別の欄である。** あちらは「器が黙った」（`live` が
-   * 落ちる）。こちらは**器は答えている**が、この委譲のセッションだけが無い——
-   * `sessionId` が残っていれば resume から入り直せるので `live` は落ちない。
-   * ⟹ **`live: true` とこの欄の組が、5つ目の形を名指しする。**
-   *
-   * **「聞けなかった」ではない。** runner に訊けなかった回はここに出さない。
-   *
-   * **ここに宣言しないと、値が在っても黙って落ちる**（真上の `runnerLostSince`
-   * と同じ断り。落ちると CLI と Web の両方が同時に盲目になる）。
-   */
   sessionMissingSince: z.string().optional(),
-  /**
-   * **真上の印が何を確かめたものか**（#579。`packages/core/src/manager.ts` の
-   * `ManagerSummary.sessionMissingKind`）。
-   *
-   * - `resume-failed` — 送った／引き取ろうとした結果、**resume でも入り直せなかった**
-   * - `unlisted` — 10秒ごとの生存確認で、**器が抱えている一覧に載っていなかった**
-   *   （resume はまだ試していない）
-   *
-   * **読み手の次の一手が違うので、1つに畳まない。** 前者はもう話しかけられない
-   * ので、拾えるものを拾って始末をつける側へ回る。後者は `manager_send` で
-   * 入り直せることがある。
-   *
-   * **`sessionMissingSince` が在るときだけ載る**（単独では出ない）。
-   *
-   * **ここに宣言しないと、値が在っても黙って落ちる**（真上と同じ断り。落ちると
-   * CLI と Web の両方が同時に、この2つを区別できなくなる）。
-   */
+  // `resume-failed` と `unlisted` を1つに畳まない: 読み手の次の一手が違うため
   sessionMissingKind: z.enum(['resume-failed', 'unlisted']).optional(),
-  /**
-   * **器が止まる直前の未 push 観測が、台帳に届いているか**（#1266 候補C。
-   * `packages/core/src/manager.ts` の `ManagerSummary.shutdownObservationArrivedAfterSwap`）。
-   *
-   * `true` のときだけ、`lastUnpushedWorkObservation` を「止まる直前の観測」と
-   * 読んでよい。`false` は「届いていない、または判定できない」であって、
-   * **未 push の作業が無かったことを意味しない**（送信は best-effort）。
-   *
-   * **`sessionMissingSince` が在るときだけ載る**（単独では出ない）。
-   *
-   * **ここに宣言しないと、値が在っても黙って落ちる**（真上と同じ断り）。
-   */
   shutdownObservationArrivedAfterSwap: z.boolean().optional(),
-  /**
-   * **デーモンが生ログの末尾を読んで計算した、直近のターンが終わっているらしい
-   * という助言**（Issue #567。`packages/core/src/manager.ts` の
-   * `ManagerSummary.turnEndedAt`）。
-   *
-   * **判定ではない。** runner が名乗る値ではなく、デーモンが計算した値——
-   * `sessionMissingSince` と同じ扱いである。`status` を書き換える・委譲を
-   * abort する・貸し出し期限を縮める、のどれもしない。読む側が
-   * `lastReportAt` と突き合わせて判定する。
-   *
-   * **⚠️ `turnEndReason` は在るのにこの欄が無い状態を「症状ではない」と
-   * 読まないこと。** 比較（`turnEndedAt > lastReportAt`）自体が行えないので
-   * 既定は「分からない」——`ManagerSummary.turnEndedAt` の doc を参照。
-   *
-   * **ここに宣言しないと、値が在っても黙って落ちる**（真上の
-   * `sessionMissingSince` と同じ断り）。
-   */
   turnEndedAt: z.string().optional(),
-  /**
-   * `turnEndedAt` と対で運ぶ（`packages/core/src/manager.ts` の
-   * `ManagerSummary.turnEndReason`）。`end_turn` / `stop_sequence` などの
-   * `stop_reason` をそのまま写す——枠の壁（`stop_sequence`）と #567 の症状
-   * （ターンが終わったのに報告が届かない）を混同しないための欄。
-   */
   turnEndReason: z.string().optional(),
-  /**
-   * `turnEndedAt` と対で運ぶ（`packages/core/src/manager.ts` の
-   * `ManagerSummary.turnEndTail`）。その行の本文の末尾の抜粋（全文ではない）。
-   */
   turnEndTail: z.string().optional(),
-  /**
-   * **デーモンが生ログの末尾を読んで計算した、「SDK は道具の応答を待っている」
-   * という事実**（Issue #572。`packages/core/src/manager.ts` の
-   * `ManagerSummary.toolUseStallAt`）。`toolUseStallPending`（真下）と対で
-   * 運ぶ——旗はあちらである。
-   *
-   * **判定ではない。時刻の閾値でもない。** `turnEndedAt` と同じ位置づけで、
-   * `status` を動かさない・委譲を abort しない・貸し出し期限も縮めない。
-   *
-   * **ここに宣言しないと、値が在っても黙って落ちる**（真上の `turnEndTail`
-   * と同じ断り。落ちると CLI と Web の両方が同時に盲目になり、クローンの
-   * `manager_list` にだけ出る形になる）。
-   */
   toolUseStallAt: z.string().optional(),
-  /**
-   * `toolUseStallAt` と対で運ぶ（Issue #572。`packages/core/src/manager.ts` の
-   * `ManagerSummary.toolUseStallPending` / `PendingToolUse`）。対応する
-   * `tool_result` が生ログに見つからなかった `tool_use` の一覧。
-   *
-   * **この欄が立っていることが観測が在る印。** 本当に止まっているかの判定は
-   * 読み手が `waiting` と突き合わせて行う（`packages/core/src/tools.ts` の
-   * `describeToolUseStall`）——この宣言は材料を運ぶだけで判定しない。
-   *
-   * **ここに宣言しないと、値が在っても黙って落ちる**（真上の `toolUseStallAt`
-   * と同じ断り）。
-   */
   toolUseStallPending: z
     .array(z.object({ id: z.string(), name: z.string().optional() }))
     .optional(),
   cwd: z.string(),
-  /**
-   * **`manager_start` が返す `ManagerSummary` にだけ載る**（Issue #1814。
-   * `packages/core/src/manager.ts` の `ManagerSummary.cwdConfirmed`）。`cwd` が
-   * runner の応答から実際に確認できたか——`GET /managers` / `GET /managers/:id`
-   * が返す一覧・詳細はこの欄を持たない値のまま返る（`ManagerPool.list()` /
-   * `.get()` はこの欄を一切書かない）ので、常に省略された形で出る。
-   *
-   * **ここに宣言しないと、値が在っても黙って落ちる**（他の任意欄と同じ断り）。
-   */
   cwdConfirmed: z.literal(true).optional(),
-  /**
-   * `cwdConfirmed` と対で運ぶ（Issue #1814。`ManagerSummary.requestedCwd`）。
-   * `cwdConfirmed` と同じ理由で、`GET /managers` / `GET /managers/:id` からは
-   * 常に省略された形で出る。
-   */
   requestedCwd: z.string().optional(),
   request: z.string(),
   startedAt: z.string(),
   updatedAt: z.string(),
   sessionId: z.string().optional(),
   lastReport: z.string().optional(),
-  /**
-   * `lastReport` を**デーモンが受け取った時刻**（#358）。
-   *
-   * 「マネージャーが報告を生成した時刻」でも「クローンのターンへ配られた
-   * 時刻」でもない——`packages/core/src/manager.ts` の `ManagerSummary.
-   * lastReportAt` の doc と同じ断り。宣言しなければ `.parse()` がここで
-   * 黙って落とす（同じ穴を openapi 側にも作らない）。
-   */
   lastReportAt: z.string().optional(),
-  /**
-   * `lastReport` を台帳へ書いた瞬間の status（Issue #917。
-   * `packages/core/src/manager.ts` の `ManagerSummary.lastReportStatus`。
-   * `packages/core/src/schema.ts` の `jobSchema.lastReportStatus`）。
-   *
-   * **`jobSchema` の枝をそのまま借りる（ここで書き直さない）。** `lastFailure`
-   * と同じ理由——`jobStatusSchema` の選択肢が増えた日に spec が黙って古びる。
-   *
-   * **この欄は補正しない**——`event.status` をそのまま写す（`schema.ts` の
-   * doc と同じ断り）。
-   *
-   * **ここに宣言しないと、値が在っても黙って落ちる**（真上の `lastReportAt`
-   * と同じ断り。落ちると CLI と Web の両方が同時に盲目になる）。
-   */
+  // `jobSchema` の枝をそのまま借りる: 書き直すと選択肢が増えた日に spec が黙って古びるため
   lastReportStatus: jobSchema.shape.lastReportStatus,
   /**
    * 直近の1ターンが**報告ではなく失敗**で終わったこと。
