@@ -2033,12 +2033,7 @@ class RunnerSession {
               break;
             }
           }
-          // **1件も分類できなかった回に跡を残す（Issue #393）。** ここを黙って
-          // 抜けると、**回し手が原理的に聞けない失敗**が何回起きているかがどこにも
-          // 残らない —— 資格が1つも無い器で起こしたときがその形で、マネージャーが
-          // 落ち続けてもプールは何も検知しない。**出す判断は変えていない**
-          // （分類できたら従来どおり `usage_notice` を出し、できなければ従来どおり
-          // 何も出さない）。足したのは数えることだけである。
+          // 1件も分類できなかった回に跡を残す: 黙って抜けると、回し手が原理的に聞けない失敗（資格が1つも無い器）が何回起きているかがどこにも残らないため
           if (!classified) {
             noteUnclassifiedFailure(
               this.#sdkSession.unclassifiedFailures,
@@ -2054,38 +2049,10 @@ class RunnerSession {
             `結果なしで終了: ${resultTextOf(event).text}`,
           );
           if (outcome === 'recovered') return;
-          // **戻れなかった resume を「1ターン終わった」として報告しない。** ここを
-          // 素通りさせると `report` が上がり、台帳には `done`（＝終えて待機中。
-          // 話しかければ続く）が書かれる。実際には腐った session_id しか無いので、
-          // クローンは「まだ続けられるもの」を見せられ、話しかけるたびに失敗する。
-          // 手が動いていないのだから、ここは畳むのが正しい。
+          // 戻れなかった resume を「1ターン終わった」として報告しない: `done` が書かれ、腐った session_id しか無いのにクローンが「まだ続けられるもの」を見せられ、話しかけるたびに失敗するため
           if (outcome === 'unresumable') {
-            // **落ち方は変えない。「どこで」だけを足す（#438 案D）。**
-            //
-            // **他5箇所（1122 / 1297 / 1300 / 1313 / 1319）のように `await` へ
-            // 揃えることはしていない。** ここを囲む `#dispatch` は同期メソッドで、
-            // 呼び出し元（`#read` の `for await`）も `await` せずに呼んでいる。
-            // 揃えるには両方を非同期へ変えることになり、**メッセージ処理に直列化点が
-            // 1つ増える** —— その影響は測っていないので、この変更には含めない。
-            // **（追記 #2056）この前提はもう無い。** `#dispatch` は #602 で
-            // `async #apply(event)` に置き換わり、`#read` も `await this.#apply(event)`
-            // で呼んでいる。それでもここは `void` のまま残してある —— `await` へ
-            // 揃えるかは、`stop()` との競合（下の #1597）を含めて別の変更で測ること。
-            //
-            // **`#stopped` なら、ここで `#finish` を呼ばない（#1597）。** 待たずに
-            // 発火する `void this.#finish('lost', …)` は、resume 直後（まだ一度も
-            // 手が動いていない）に結果なしの result が来て `unresumable` と判定
-            // されたとき、await を挟まず `stop()` が重なると `stop()` と競合する。
-            // `stop()` は `#stopped = true` を立ててから自分で畳み一式
-            // （`#closeWorkerWaitWindow` / `#settleAll` / `#shipArchive` /
-            // `#flushUnreported` / `#onClosed()`）を行い、`closed` を出さないと
-            // 決めている（doc「あちらは closed すら出さない」）。ここで無条件に
-            // `#finish('lost', …)` を発火すると、`stop()` が `host.list()` から
-            // 消した**後**に `closed(status=lost)` が遅れて出てしまう
-            // （Issue #1589 / PR #1590 が `#read` の catch 節に足した門と同じ形の
-            // 穴——あちらは塞いだが、この枝は #1590 の本文が「確かめていない」
-            // として残していた場所そのものである）。**畳むのは `stop()` の仕事
-            // なので、ここは何もしない。**
+            // `await` へ揃えない: 揃えると直列化点が増え、`stop()` との競合を含めて影響を測っていないため
+            // `#stopped` ならここで `#finish` を呼ばない: `stop()` が `host.list()` から消した後に `closed(status=lost)` が遅れて出るため
             if (!this.#sdkSession.stopped) {
               void this.#finish('lost', `結果なしで終了: ${resultTextOf(event).text}`).catch(
                 (error: unknown) => {
@@ -2102,20 +2069,9 @@ class RunnerSession {
           }
         }
 
-        // **失敗した回の報告に、失敗であることを載せる。** 直す前は成否によらず
-        // `reportText(said, resultText(message))` を上げていたので、上限の英語文言が
-        // そのまま「マネージャーの報告」として台帳（`lastReport`）・日誌・クローンの
-        // 受信箱へ流れていた。クローンから見て「報告が来た」と「エラーで死んだ」が
-        // 区別できない ＝ クローン側で塞いだのと同じ穴がここに残っていた。
-        //
-        // **本文（`text`）の側でも包む。** 構造化した `failure` だけに頼ると、それを
-        // 見ていない読み手（台帳の `lastReport` を出す画面・日誌を読む人間）には
-        // 依然としてエラー文が報告として見える。
-        //
-        // **失敗で終わった回は `contentless` に含めない。** `failedReportText` は
-        // 必ず本文を作るし、上限に当たった事実はクローンが知る必要がある
-        // （このターン限りは待つ／挑み直すの判断材料）ので、`failure !== undefined`
-        // の枝では `reportText` そのものを呼ばない。
+        // 失敗した回の報告に失敗であることを載せる: 上限の英語文言が「マネージャーの報告」として流れ、「報告が来た」と「エラーで死んだ」が区別できなくなるため
+        // 本文（`text`）の側でも包む: 構造化した `failure` を見ていない読み手にはエラー文が報告として見えるため
+        // 失敗で終わった回は `contentless` に含めない: 上限に当たった事実をクローンが知る必要があるため
         const outcome =
           failure === undefined
             ? reportText(said, resultTextOf(event))
@@ -2132,80 +2088,34 @@ class RunnerSession {
                 contentless: false,
               };
         this.#sdkSession.setStatus(this.#pending.length > 0 ? 'waiting_human' : 'done');
-        // **ここがターンの境界になった。** 認証トークンの畳み直しの印が立って
-        // いれば、入力待ちで止まっている `#inputStream` を起こす
-        // （`clone.ts` の `#finishTurn` と同じ理由 —— 起こさないと、次に
-        // 入力が届くまで古いトークンのまま走り続ける）。
-        //
-        // **無条件に起こしてよい。** 境界条件（`#atTokenRecycleBoundary()`）の
-        // 判定は `#inputStream` 側が持つので、ここで起こしても条件が揃って
-        // いなければ（確認待ちが残っている・背景処理が生きている等）そのまま
-        // 待ちへ戻るだけである。
         if (this.#sdkSession.wantsTokenRecycle) this.#sdkSession.wakeInput();
-        // **マネージャーがバックグラウンド実行の完了を待つためだけに畳んだ
-        // ターンの報告に、その旨を載せる（`runner-protocol.ts` の
-        // `report.awaitingBackground` の doc）。**
-        //
-        // 実測の経緯: `Bash` を `run_in_background: true` で起こした直後、
-        // マネージャーが「完了を待つ」とだけ言って `end_turn` で畳むと、その
-        // 最後の発話がそのまま「報告」としてクローンへ配られ、クローンの
-        // ターンを1本無駄に起こしていた（依頼者が生ログで実測、同日に11本）。
-        //
-        // **3条件すべてを満たすときだけ載せる**（1つでも欠けたら必ず配る側
-        // へ倒す）:
-        // 1. `failure === undefined` —— 失敗で終わった回は必ず配る
-        //    （上限・拒否は握り潰さない）
-        // 2. `this.#status === 'done'` —— `waiting_human`（確認待ちが在る）
-        //    回は必ず配る。確認待ちを黙って畳むと人間の判断が止まる
-        // 3. `this.#liveBackgroundTasks.length > 0` —— 起こしっぱなしの
-        //    背景処理が実際に在るときだけ
+        // 3条件（失敗でない・`done`・背景処理が在る）が揃うときだけ載せる、欠けたら配る側へ倒す: 上限・拒否や確認待ちを黙って畳むと人間の判断が止まるため
         const awaitingBackground =
           failure === undefined &&
           this.#sdkSession.status === 'done' &&
           this.#sdkSession.liveBackgroundTasks.length > 0
             ? {
                 count: this.#sdkSession.liveBackgroundTasks.length,
-                // **診断用の写しであって判定には使わない**（doc のとおり）。
                 breakdown: summarizeBackgroundTasks(this.#sdkSession.liveBackgroundTasks),
               }
             : undefined;
         this.#emit({
           type: 'report',
           managerId: this.#id,
-          // **#206: provider がこの結果に払った id を運ぶ。** SDK の `result.uuid` で、
-          // `#onPermission` が `extra.requestId` / `extra.toolUseID` をそのまま
-          // 使うのと同じ作法——runner が新しい値を振るのではなく、SDK 側の
-          // 識別子をそのまま `reportId` として運ぶ（`runnerEventSchema` の
-          // `report.reportId` の doc）。
           reportId: event.id,
           text: outcome.text,
           status: this.#sdkSession.status,
           ...(failure === undefined ? {} : { failure: { code: failure.code, via: failure.via } }),
           ...(outcome.contentless ? { contentless: true } : {}),
           ...(awaitingBackground === undefined ? {} : { awaitingBackground }),
-          // **`failedReportText` を使った経路だけが立てる**
-          // （`runnerEventSchema` の `report.synthesized` の doc）。この本文は
-          // runner 自身の定型文＋SDK の失敗文言の連結であり、マネージャー本人が
-          // 書いた・喋った断片を含まない——`failure !== undefined` の枝でしか
-          // `failedReportText` を呼んでいない（このすぐ上の `outcome` の分岐）
-          // ので、判定はそこにそのまま乗せる。**値は族の名前**（`'turn_failed'`
-          // ＝「ターンが失敗して終わった」。`manager.ts` 側の
-          // `SynthesizedNoticeLabel` と同じ語彙を使う）。
           ...(failure === undefined ? {} : { synthesized: 'turn_failed' }),
         });
-        // **#1554: このターンの間に積まれたが、道具呼び出しが無いまま畳まれて
-        // 配達されなかった分を拾う。** `report` を出した後に呼ぶ（`push()` が
-        // 状態を `running` へ戻すので、先に呼ぶと上の `report.status` /
-        // `awaitingBackground` が嘘になる）。`wantsTokenRecycle` の
-        // `wakeInput()` とは独立——`push()` は入力を積んでから起こすので、
-        // 畳み直しの境界条件は積まれた入力を見て待つ側へ倒れる。
+        // `report` を出した後に呼ぶ: `push()` が状態を `running` へ戻すので、先に呼ぶと `report.status` / `awaitingBackground` が嘘になるため
         this.#wakeForFinishedBackgroundTaskOutputs();
         return;
       }
 
-      // **枝が増えたらここが型で落ちる（#285 と同じ形）。** 落ちたら「この層は
-      // その事実にどう反応するか」を決めてから通すこと —— 既定で無視へ倒すと、
-      // provider が名乗り始めた事実が黙って網の外へ出る。
+      // 既定で無視へ倒さない（枝が増えたら型で落とす）: provider が名乗り始めた事実が黙って網の外へ出るため
       default: {
         const unread: never = event;
         void unread;
@@ -2214,107 +2124,31 @@ class RunnerSession {
     }
   }
 
-  // -------------------------------------------------------------------------
-  // 委譲の契機を数える（`worker_wait`）
-  // -------------------------------------------------------------------------
-
-  /**
-   * `task_started`。`#openTasks` が 0→1 になった瞬間に区間を開く（Issue #1190
-   * 案X で `RunnerWorkerWaitWindow`（`runner-worker-wait-window.ts`）へ切り出した）。
-   *
-   * **Issue #2113: 作業者（`local_agent`）のタスクだけを数える。** SDK は
-   * `task_started` を作業者以外のタスク（`local_bash` 等）でも出す
-   * （`isWorkerTaskType` の doc）。直す前はここで `task_type` を見ずに一律
-   * 「作業者が開いた」として数えていたため、マネージャー自身が委譲していない
-   * ターンでも `openedWorkers` が増え、`worker_wait` の区間まで開いていた
-   * （実測: 枠の失敗で「作業者が35体開いていた」と報告した回に、実際に
-   * マネージャーが開いた作業者は1体だった）。
-   */
+  // 作業者（`local_agent`）のタスクだけを数える: SDK は作業者以外のタスクでも `task_started` を出し、一律に数えると委譲していないターンでも `openedWorkers` が増え `worker_wait` の区間まで開くため
   #onTaskStarted(event: AgentDelegationStarted): void {
-    // provider が id を名乗らなければ、取りこぼすより偽の id で数える方を選ぶ
-    // （他の道具の `brief`/`randomUUID` 系の判断と同じ）。**代用値をここで作るのは、
-    // 何で埋めるかが層の判断だからである**（`agent-events.ts` の doc）。
+    // id を名乗らなければ偽の id で数える: 取りこぼすより多く数える方を選ぶため
     const taskId = event.taskId ?? randomUUID();
-    // **作業者ではないタスク（`local_bash` 等）は、ここで両方とも数えない**
-    // ——`#turnTally`（このターンの状況証拠）にも `#workerWaitWindow`
-    // （委譲を待つ区間）にも足さない。対応する `task_notification` が後で
-    // 来ても、`#openTasks` に入っていないので `RunnerWorkerWaitWindow.notified`
-    // は「対応の無い通知」として無害に無視する（あちらの doc を見よ）。
     if (!isWorkerTaskType(event.taskType)) {
-      // 通知側で弾くために控える（`task_notification` は `task_type` を運ばない）。
-      // 代用の id（`randomUUID()`）は通知と突き合わないので控えない。
       if (event.taskId !== undefined) this.#nonWorkerTaskIds.add(event.taskId);
       return;
     }
-    // **#1373: `RunnerWorkerWaitWindow` の `#openTasks` の開閉とは無関係に、
-    // このターンで開いた作業者を別勘定で数える。** `RunnerTurnTally` の
-    // `#openedWorkersThisTurn` の doc を参照。
     this.#turnTally.addOpenedWorker(taskId);
     this.#workerWaitWindow.taskStarted(taskId);
   }
 
-  /**
-   * `task_notification`。開いている委譲から1件外し、全部片付いたら閉じ待ちにする。
-   *
-   * **併せて #901 を見る。** `task_id` が「打ち切った」と控えられていれば
-   * （＝背景処理の待ちの上限（30分）で打ち切られていて、まだ同期の `Task` 結果として
-   * 消費されていない）、`RunnerCutOffWorkers#consumeCutOff` で消して
-   * `recordPendingNotification` で付け替える——`task_notification` 自体には
-   * `additionalContext` を注げないので（`RunnerCutOffWorkers` の
-   * `#pendingCutOffNotifications` の doc）、次にマネージャー自身の道具が動いた
-   * ときに配達する。
-   *
-   * **#1373 続き: `status: 'failed'` を状況証拠として数える。** `claude-provider.ts`
-   * が運んでくる `status` は絞らず string のまま（`AgentDelegationNotified.status`
-   * の doc）なので、ここで見るのは `=== 'failed'` の一致だけである——SDK が
-   * 版で値を増やしても、知らない値は自然に「失敗ではない」側へ落ちる（数えない
-   * だけで、握り潰しはしない）。**枠(429)を名乗っているかは、手で書いた文言
-   * 一致ではなく `classifyUsageNotice`（SDK の定数を使う既存の分類器。
-   * `usage-limits.ts`）に `summary` を通した結果で決める** —— この関数は
-   * このメソッドの少し下（`turn_ended` の枝）で `usage_notice` の判定にも
-   * 使われているのと同じ関数である。
-   *
-   * **併せて #1554 も見る（上とは別の id 空間の相関）。** 上の分岐が見る
-   * `task_id` は「作業者（subagent）自身の完了」（`task_id === agentId`）
-   * だが、この `task_notification` は**背景の Bash 処理そのものの完了**
-   * （`task_id === background_tasks[].id`）でも同じ形で届く——`BackgroundTaskSummary.type`
-   * の doc が挙げる `'shell'` 等がそれである。この2つの id 空間は別物
-   * なので、上の分岐と独立に、`RunnerSubagentStopState#backgroundTaskOwner`
-   * で「この背景処理の所有者」を引く。所有者が在り（マネージャー自身の
-   * 分＝空文字は除く）、かつその所有者が {@link RunnerCutOffWorkers.isCutOff}
-   * なら、「打ち切った作業者が残した背景処理が終わった」という配達待ちを
-   * 積む（`#annotateCutOffWorkers` が次のマネージャー自身の道具呼び出しで
-   * 配達する）。**`output_file` が読めなければ `null` を渡す**（作り物の
-   * パスを主張しない——配達側が「取れなかった」と書く）。**積んだ直後に、
-   * マネージャーが止まっていれば起こす**（`#wakeForFinishedBackgroundTaskOutputs`。
-   * 走っていれば次の道具呼び出しか、ターンの `result` がそれを拾う）。
-   */
+  // `status` を `=== 'failed'` の一致だけで見る: SDK が値を増やしても知らない値は「失敗ではない」側へ落ちるため。枠(429)は手書きの文言一致にせず `classifyUsageNotice` を通す
+  // `output_file` が読めなければ `null` を渡す: 作り物のパスを主張しないため
   #onTaskNotification(event: AgentDelegationNotified): void {
     const taskId = event.taskId;
-    // **開閉（1→0 の遷移で閉じ待ちを立てる）は `RunnerWorkerWaitWindow` へ
-    // 切り出した**（Issue #1190 案X）。対応の無い通知（本来起きない想定だが
-    // 防御的に見る）で誤って閉じ待ちを立てないのは、あちら側の doc を見よ。
     this.#workerWaitWindow.notified(taskId);
-    // **Issue #3008: `SubagentStop` のフックの中で完了を待っている者の補助の合図。**
-    // 主は `background_tasks`（`liveBackgroundTasks`）だが、あちらは id 空間が同じかを
-    // 誰も実測していない（`RunnerBackgroundWaiters` の doc）ので、背景処理自身の完了
-    // 通知（`task_id` ＝ `background_tasks[].id`。#1554 の節）も「終わった」として控える。
     if (taskId !== undefined) {
       this.#sdkSession.backgroundWaiters.noteFinished(
         taskId,
         typeof event.outputFile === 'string' ? event.outputFile : null,
       );
     }
-    // **作業者ではないタスク（`local_bash` 等）の通知は、下の2つの数え上げ
-    // （`notifications`・failed 通知）に入れない**（Issue #2113 の続き。
-    // `task_started` 側だけを直すと、Bash の失敗が「作業者の failed 通知」に
-    // 積まれ、要旨が枠を名乗れば枠の件数まで立つ）。**#901 / #1554 の付け替えは
-    // 下でこれまでどおり通す**——背景の Bash 処理の完了は #1554 の材料そのもの
-    // である。対応する `task_started` を見ていない通知は、この控えに無いので
-    // 従来どおり数える。
+    // 作業者ではないタスクの通知を `notifications`・failed 通知に入れない: `task_started` 側だけを直すと Bash の失敗が「作業者の failed 通知」に積まれ、枠を名乗れば枠の件数まで立つため
     const nonWorker = taskId !== undefined && this.#nonWorkerTaskIds.delete(taskId);
-    // **`worker_wait.notifications` の材料。** 対応する `task_started` を見て
-    // いなくても数える — 通知そのものは事実である。
     if (!nonWorker) this.#turnTally.incrementNotificationsSinceResult();
 
     if (!nonWorker && event.status === 'failed') {
@@ -2323,17 +2157,10 @@ class RunnerSession {
       this.#turnTally.recordFailedWorkerNotification(taskId, limitNamed);
     }
 
-    // #901: 同期経路（`#annotateCutOffWorker`）でまだ消費されていなければ、
-    // ここで「未配達の打ち切り注記」として控える。
     if (taskId !== undefined && this.#cutOffWorkers.consumeCutOff(taskId)) {
       this.#cutOffWorkers.recordPendingNotification(taskId);
     }
 
-    // #1554: 背景処理そのものの完了。所有者が打ち切られたことのある
-    // 作業者なら、出力の在り処を配達待ちへ積む（「打ち切られていない
-    // 作業者の処理には載らない」「持ち主が分からない処理には載らない」の
-    // 2つの歯はここで成立する——`owner` が undefined／`''`（マネージャー
-    // 自身）なら早期 return し、`isCutOff` が false でも積まない）。
     if (taskId !== undefined) {
       const owner = this.#stopState.backgroundTaskOwner(taskId);
       if (owner !== undefined && owner !== '' && this.#cutOffWorkers.isCutOff(owner)) {
@@ -2348,19 +2175,7 @@ class RunnerSession {
     }
   }
 
-  /**
-   * 積まれた「打ち切った作業者の背景処理の完了」（#1554）を、マネージャーが
-   * 止まっているときだけ `push()` で届けて起こす。
-   *
-   * 打ち切った作業者は自分では再開しないので、マネージャーがターンを閉じて
-   * 待っていると次の道具呼び出しが来ず、配達待ちが積まれたまま誰も起こさない。
-   * **`stopped` は何もしない（配達待ちも消さない）。`running` も何もしない**
-   * ——次の道具呼び出し（`#annotateCutOffWorkers`）か `#read` の `result` の枝が
-   * 拾う。**`waiting_human` も起こさない（`done` のときだけ）**: `push()` は
-   * 状態を `running` へ戻すので、確認待ちが残ったまま「確認待ちではない」と
-   * 名乗ることになり、`answer()` の宛先（`#pending`）との対応が崩れる。確認待ちが
-   * 解けて走り出せば `running` の経路が拾う。
-   */
+  // `waiting_human` では起こさない（`done` のときだけ）: `push()` が状態を `running` へ戻し、確認待ちが残ったまま「確認待ちではない」と名乗って `answer()` の宛先との対応が崩れるため
   #wakeForFinishedBackgroundTaskOutputs(): void {
     if (this.#sdkSession.stopped || this.#sdkSession.status !== 'done') return;
     const body = this.#drainFinishedBackgroundTaskOutputs();
@@ -2376,25 +2191,7 @@ class RunnerSession {
     );
   }
 
-  /**
-   * 開いている委譲区間を1件の `worker_wait` として降ろし、閉じる。**中身の
-   * 組み立てと `settled` の算出は `RunnerWorkerWaitWindow.close()`（Issue #1190
-   * 案X）へ切り出した——ここに残るのは「非 `null` なら emit する」という
-   * 判断だけである。**
-   *
-   * **窓が閉じていれば何もしない。** `#finish` / `stop` / 引き継ぎのどこから
-   * 呼んでも安全に重ねられるようにするための無害化である
-   * （`RunnerWorkerWaitWindow.close` の doc）。
-   *
-   * **`settled` は引数で受け取らず、`RunnerWorkerWaitWindow` の中で `#openTasks`
-   * の状態から導く。** 呼び出し側に真偽値を持たせると、`#finish` / `stop` /
-   * 引き継ぎの3経路が固定で `false` を渡すことになり、**「委譲した作業者全員
-   * から完了通知を受け切った直後に、次の `result` が来ないままセッションが
-   * 畳まれた」場合まで `false`（＝受け切れなかった）と偽って報告する。** これは
-   * この PR が答えたい問い（最後の完了通知の後、SDK はマネージャーを起こすのか）
-   * のど真ん中で起きる — 「起こさない」という当たりの仮説が成り立つ場合に
-   * 限って、**全区間に偽の印が付く**ことになる。
-   */
+  // `settled` を引数で受けない: 呼び出し側に持たせると3経路が固定で `false` を渡し、受け切った直後に畳まれた場合まで偽の印が付くため
   #closeWorkerWaitWindow(): void {
     const closedWindow = this.#workerWaitWindow.close();
     if (closedWindow === null) return;
