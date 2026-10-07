@@ -11,11 +11,6 @@ import {
 } from './usage-probe.js';
 import { redactEnvSecrets } from './redact-env-secrets.js';
 
-/**
- * `queryFn` に渡された `options`（SDK の `Options`）を横から覗くための偽物。
- * probe は `read` の返り値だけを見るので、`capture` へ実際に渡された `Options`
- * を積んでおいて、呼び出し後にテストがそれを検分する。
- */
 function capturingProbe(): { queryFn: UsageProbeQuery; captured: unknown[] } {
   const captured: unknown[] = [];
   const queryFn: UsageProbeQuery = ({ options }) => {
@@ -42,7 +37,6 @@ describe('runUsageProbe — env を渡す口', () => {
 
   it('env を渡すと { ...process.env, ...渡した値 } になる（丸ごと置き換わらない）', async () => {
     const { queryFn, captured } = capturingProbe();
-    // process.env に既に在る変数（PATH）が残っていることまで見る。
     expect(process.env.PATH).toBeDefined();
 
     await runUsageProbe(
@@ -54,9 +48,7 @@ describe('runUsageProbe — env を渡す口', () => {
     expect(captured).toHaveLength(1);
     const options = captured[0] as { env?: Record<string, string | undefined> };
     expect(options.env).toBeDefined();
-    // 既存の環境変数が残っている（丸ごと置き換わっていない）。
     expect(options.env?.PATH).toBe(process.env.PATH);
-    // 渡した値が上書きとして載っている。
     expect(options.env?.CLAUDE_CODE_OAUTH_TOKEN).toBe('DUMMY-NOT-A-REAL-TOKEN');
   });
 
@@ -90,9 +82,7 @@ describe('runUsageProbe — withheldEnvKeys（#431）', () => {
 
     const options = captured[0] as { env?: Record<string, string | undefined> };
     expect(options.env).toBeDefined();
-    // 落としたキーは消えている。
     expect('ALTEROID_DATABASE_URL' in (options.env ?? {})).toBe(false);
-    // ほかの環境変数（PATH）は残っている（丸ごと落ちてはいない）。
     expect(options.env?.PATH).toBe(process.env.PATH);
   });
 
@@ -120,25 +110,6 @@ describe('runUsageProbe — withheldEnvKeys（#431）', () => {
   });
 });
 
-/**
- * ここから下は #431 の「実測」——`queryFn` を偽物ではなく**実物の SDK の `query`**
- * にして、`Options.spawnClaudeCodeProcess`（`sdk.d.ts` が公開しているフック。
- * VM/コンテナ実行向けに、SDK が本来 `child_process` へ渡すはずの `{ command, args,
- * cwd, env, signal }` をそのまま横取りできる）で、**SDK が実際に子プロセスへ渡す
- * つもりだった生の `env` オブジェクト**を取り出す。
- *
- * 実際に読んだ `node_modules/@anthropic-ai/claude-agent-sdk/sdk.mjs` の該当行
- * （`ProcessTransport#initialize`）は次を destructure している:
- *
- * ```
- * let{...,env:c={...process.env},...}=this.options
- * ```
- *
- * ⟹ `Options.env` を省略すると `c` の既定値は **`{ ...process.env }` そのもの**
- * になり、それが1行も変換されずに `child_process.spawn` 相当（`spawnLocalProcess`）
- * へ渡る。ここではその既定値の組み立てをドキュメントからの推論としてではなく、
- * 実際に `query()` を呼んで確かめる。
- */
 function realSdkCapturingProbe(): {
   queryFn: UsageProbeQuery;
   capturedEnv: () => NodeJS.ProcessEnv | undefined;
@@ -149,13 +120,10 @@ function realSdkCapturingProbe(): {
       prompt,
       options: {
         ...options,
-        // **実際の CLI は起こさない。** `env` を受け取った時点で捕まえ、
-        // SDK には「起動した体」で握りつぶした stdin/stdout を渡すだけ。
         spawnClaudeCodeProcess: (spawnOptions) => {
           capturedEnv = spawnOptions.env;
           const stdin = new PassThrough();
           const stdout = new PassThrough();
-          // すぐ EOF にして、SDK 側の待受けを長引かせない。
           queueMicrotask(() => stdout.end());
           let killed = false;
           return {
@@ -190,8 +158,6 @@ describe('runUsageProbe — 実測: 子プロセスへ渡る env（#431、実物
     try {
       const { queryFn, capturedEnv } = realSdkCapturingProbe();
       await runUsageProbe(queryFn, { cwd: process.cwd() }, async () => 'ignored');
-      // ⟹ 実測: usage-poller のように env も withheldEnvKeys も渡さない呼び出しは、
-      // SDK の既定 { ...process.env } を丸ごと子へ渡す。
       expect(capturedEnv()?.[SECRET_KEY]).toBe(SECRET_VALUE);
     } finally {
       if (original === undefined) delete process.env[SECRET_KEY];
@@ -211,7 +177,6 @@ describe('runUsageProbe — 実測: 子プロセスへ渡る env（#431、実物
       );
       expect(capturedEnv()).toBeDefined();
       expect(SECRET_KEY in (capturedEnv() ?? {})).toBe(false);
-      // 巻き添えで PATH まで消していないことも確かめる。
       expect(capturedEnv()?.PATH).toBe(process.env.PATH);
     } finally {
       if (original === undefined) delete process.env[SECRET_KEY];
