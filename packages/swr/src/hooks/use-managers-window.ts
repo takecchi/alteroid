@@ -1,10 +1,10 @@
 /**
- * マネージャー一覧の窓（いま画面に持っている分）。issue #670。
+ * マネージャー一覧の窓（いま画面に持っている分）。
  *
  * **なぜ要るか。** 台帳（`jobs`）に行を消す口が無く、終端した委譲もそのまま
  * 残る（`ManagerPool#retire` の doc が、上限で刈る形を north_star 禁止2 として
  * 逐語で禁じている）。⟹ **一覧の件数は、その環境で今までに起こした委譲の総数
- * と等しい。** 直し方は「消す」ではなく絞り込みと窓である。
+ * と等しい。** だから「消す」ではなく絞り込みと窓で扱う。
  *
  * **`useJournalWindow` ほどのことはしない。** あちらは SSE で先頭に割り込む
  * ぶんの取り合い（`prepended` / `shift`）と、同一 `at` の詰まり（`blocked`）を
@@ -18,14 +18,14 @@
  * eslint（`react-hooks/set-state-in-effect`）がその形を落とすので、
  * `useJournalWindow` と同じく「`key` で作り直す」側を採る。
  *
- * ## 読み足した頁（`older`）も生きた更新に追随する（issue #1624）
+ * ## 読み足した頁（`older`）も生きた更新に追随する
  *
- * **直す前の形。** 頁1（`first`、SWR）は `use-journal-live.ts` の
+ * 頁1（`first`、SWR）は `use-journal-live.ts` の
  * `invalidate()` が `mutate((key) => isKeyOfType(key, 'managers'))` で束ねて
  * 取り直すが、「もっと見る」で読み足した頁（`older`）は SWR の外に置いた
  * ただの `useState` で、`loadOlder()` を手で呼んだとき以外に書き換わる経路が
- * 無かった。⟹ 読み足した行の札・注記は「もっと見る」を押した瞬間の値に
- * 凍りつき、SSE がどれだけ届いても動かなかった。
+ * 無い。放っておくと、読み足した行の札・注記は「もっと見る」を押した瞬間の値に
+ * 凍りつき、SSE がどれだけ届いても動かない。
  *
  * **選ばなかった案 —— `older` を `useSWRInfinite` へ移す。** SWR
  * (`swr@2.5.1`、`node_modules/swr/dist/config-context-*.mjs` の
@@ -74,7 +74,7 @@
  * で頁ごとに結果を見て、失敗した頁は前回の値のまま `setOlderPages` に渡す
  * （画面を空にしない）。
  *
- * **失敗は state に残して画面へ渡す（issue #3092）。** 失敗した頁が古い行のまま残るだけだと、
+ * **失敗は state に残して画面へ渡す。** 失敗した頁が古い行のまま残るだけだと、
  * 先頭の頁は新しいので一覧全体が最新に見え、止まった行が今の値に見える（`error` は先頭の頁、
  * `olderError` は「もっと見る」の失敗だけ）。そこで取り直しの失敗を `olderRefreshError` に載せる
  * （古い行は残したまま。`olderError` / `blocked` とは別物で、押し直す口を塞がない）。次の取り直しが
@@ -96,8 +96,7 @@
  * いた場合）、`R1` が返ってきても中身は古いままで、かつ「次の頁1の再検証が
  * 来ればそこで追いつく」が成り立つのは*次の SSE が実際に来たとき*だけ
  * ——それ以降 SSE が来なければ、読み足した行はその古い値のまま残り続ける
- * （issue #1624 のレビューで指摘された取りこぼし。`managers-older-refresh
- * -in-flight.test.tsx` がこの筋書きを歯にしている）。
+ * （`managers-older-refresh-in-flight.test.tsx` がこの筋書きを歯にしている）。
  *
  * **重ねて2本を並行に撃たない理由。** 同じ錨へ2本の要求を並行に飛ばすと、
  * 応答が届く順序がネットワークの都合で入れ替わりうる——先に撃った方が
@@ -106,26 +105,19 @@
  * 同じキーへの要求を1本に併合しているからで、ここでも同じ理由で「常に
  * 1本ずつ、順に撃つ」側を採っている）。
  *
- * ## `lastOlderCount` / `olderStatus`（進捗・終端の判定）—— #1629 は動かさなかった。#1998 で最後の頁に限り動かす
+ * ## `lastOlderCount` / `olderStatus`（進捗・終端の判定）
  *
- * **#1629 の時点の判断（経緯として残す）。** `lastOlderCount` を動かすのは
- * 常に `loadOlder()` が明示的に読んだときだけとし、この背景の取り直しは
- * 「もう表示している頁の中身を新しくする」ことに閉じていた——「もっと
- * 見る」を押せるかどうかの判定に、背景の取り直しの結果を混ぜない
- * （`loadOlder` が同時に走っているときの競合を増やさないため）。
- *
- * **その判断が残した穴（issue #1998）。** `olderStatus` の材料は
- * `lastOlderCount` だけで、`lastOlderCount` を書くのは `loadOlder()` だけ
- * だったので、背景の取り直しで最後の頁の件数が変わっても「もっと見る」の
- * 有無は前回の判定のまま残った。特に「最後の頁が `MANAGERS_PAGE` 未満
+ * `olderStatus` の材料は `lastOlderCount` だけである。これを `loadOlder()` だけが
+ * 書くと、背景の取り直しで最後の頁の件数が変わっても「もっと見る」の
+ * 有無は前回の判定のまま残る。特に「最後の頁が `MANAGERS_PAGE` 未満
  * （end）→ 取り直しで `MANAGERS_PAGE` 件」の向きでは、続きがあるのに
  * ボタンが消えたままになる（重い向き——逆向き「`progress` のまま留まる」
  * は、押せば0件が返って1回で `end` に直るので実害が小さい）。
  *
- * **#1998 での直し方。** `runOlderRefresh` が**最後の頁**（`pages` 配列の
+ * そこで `runOlderRefresh` が**最後の頁**（`pages` 配列の
  * 末尾）を取り直せたときだけ、その頁の件数で `lastOlderCount` を更新する。
- * ただし次のどちらかに当たる回は更新しない——#1629 が避けたかった
- * `loadOlder()` との競合をここで持ち込まないため:
+ * ただし次のどちらかに当たる回は更新しない——
+ * `loadOlder()` との競合を持ち込まないため:
  *
  * - **`loadOlder()` が走っている間**（`isLoadingOlderRef` で見る。
  *   `isLoadingOlder` state を直接使わない理由は、`runOlderRefresh` が
@@ -188,7 +180,7 @@ export interface ManagersWindow {
   /** 先頭の頁（SWR）の失敗。 */
   error: unknown;
   /**
-   * 読めなかった委譲の行（issue #2345）。**「居ない」でも「畳まれた」でもない第3の状態。**
+   * 読めなかった委譲の行。**「居ない」でも「畳まれた」でもない第3の状態。**
    * 先頭の頁の応答から取る——`GET /managers` は窓（`status` / `limit` / 錨）では切らず、
    * どの頁にも全件を載せる（0件なら鍵が無いので、ここは空配列）。
    */
@@ -210,13 +202,13 @@ export interface ManagersWindow {
    */
   olderError: unknown;
   /**
-   * 読み足した頁（2頁目以降）の**背景の取り直し**が失敗した理由（issue #3092）。`undefined` は
+   * 読み足した頁（2頁目以降）の**背景の取り直し**が失敗した理由。`undefined` は
    * 直近の取り直しが全頁通った（または、まだ1回も走っていない）。立っているとき、`managers` の
    * うち先頭の頁より後ろの行は**前に読めたときのもの**である（行は消さずに残してある）。
    */
   olderRefreshError: unknown;
   loadOlder: () => void;
-  /** 先頭の頁を取り直す（読み込みの失敗からの「もう一度試す」。issue #2799）。 */
+  /** 先頭の頁を取り直す（読み込みの失敗からの「もう一度試す」）。 */
   reload: () => void;
   /** 取り直しの最中。 */
   isReloading: boolean;
@@ -240,7 +232,7 @@ export function useManagersWindow(status: readonly ManagerStatus[]): ManagersWin
   const [olderPages, setOlderPages] = useState<OlderPage[]>([]);
   const [isLoadingOlder, setLoadingOlder] = useState(false);
   const [olderError, setOlderError] = useState<unknown>(undefined);
-  /** 背景の取り直しの失敗（issue #3092）。`olderError`（「もっと見る」の失敗）とは別に持つ。 */
+  /** 背景の取り直しの失敗。`olderError`（「もっと見る」の失敗）とは別に持つ。 */
   const [olderRefreshError, setOlderRefreshError] = useState<unknown>(undefined);
   /**
    * 最後に読んだ「もっと見る」の頁の件数。`undefined` は「まだ1回も押して
@@ -297,7 +289,7 @@ export function useManagersWindow(status: readonly ManagerStatus[]): ManagersWin
       });
   }, [api, anchorId, anchorStartedAt, status]);
 
-  // --- 読み足した頁を、頁1の再検証に便乗して取り直す（issue #1624）---------
+  // --- 読み足した頁を、頁1の再検証に便乗して取り直す ---------
   // 理由と選ばなかった案は、このファイル冒頭の doc「読み足した頁
   // （`older`）も生きた更新に追随する」を参照。
   const olderPagesRef = useRef(olderPages);
@@ -306,7 +298,7 @@ export function useManagersWindow(status: readonly ManagerStatus[]): ManagersWin
   }, [olderPages]);
 
   // `loadOlder()` が「いま走っているか」を素の関数（`runOlderRefresh`）から
-  // 読むための ref（issue #1998）。理由はこのファイル冒頭の doc
+  // 読むための ref。理由はこのファイル冒頭の doc
   // 「`lastOlderCount` / `olderStatus`」を参照。
   const isLoadingOlderRef = useRef(isLoadingOlder);
   useEffect(() => {
@@ -333,7 +325,7 @@ export function useManagersWindow(status: readonly ManagerStatus[]): ManagersWin
       isRefreshingOlderRef.current = false;
       return;
     }
-    // **開始時点の「最後の頁」の錨を覚えておく**（issue #1998）。取り直しの
+    // **開始時点の「最後の頁」の錨を覚えておく。** 取り直しの
     // 応答が届くまでに `loadOlder()` が新しい頁を足すと、いまの「最後の頁」
     // はこれとは別物になる——そのときは古い最後の頁の結果で判定を
     // 上書きしない（このファイル冒頭の doc を参照）。
@@ -356,7 +348,7 @@ export function useManagersWindow(status: readonly ManagerStatus[]): ManagersWin
             refreshed.set(anchorKey(result.value.after), result.value.managers);
           }
         }
-        // **失敗は言う**（issue #3092）。1頁でも落ちたら理由を立て、全頁通れば消す。
+        // **失敗は言う。** 1頁でも落ちたら理由を立て、全頁通れば消す。
         const rejected = results.find(
           (result): result is PromiseRejectedResult => result.status === 'rejected',
         );
@@ -370,8 +362,8 @@ export function useManagersWindow(status: readonly ManagerStatus[]): ManagersWin
           );
         }
 
-        // **最後の頁を取り直せたら `lastOlderCount` も更新する**
-        // （issue #1998）。`results` は `pages` と同じ並びなので、末尾が
+        // **最後の頁を取り直せたら `lastOlderCount` も更新する。**
+        // `results` は `pages` と同じ並びなので、末尾が
         // 「最後の頁」の結果である。
         const lastResult = results.at(-1);
         const currentLastPage = olderPagesRef.current.at(-1);

@@ -8,11 +8,6 @@
  * しない。カーソル送り（次に投げるクエリの組み立て・`id` での重複除去・
  * 停止条件）を DOM 描画から切り離しておけば、**virtua が描けるかどうかと
  * 無関係に**このロジックの正しさを測れる。
- *
- * **出力・挙動は元の `journal.tsx`（`useMemo` で `recent` を履歴へ重ねていた
- * 部分）と1文字も変えていない** — `id` で重複を除く／新しい順を保つ、という
- * 規則をそのまま関数に切り出しただけである。変わったのは「誰が呼ぶか」で
- * あって「何をするか」ではない。
  */
 import { matchesJournalSearch } from '@alteroid/core/journal-search';
 
@@ -96,7 +91,7 @@ export type PageOutcome = 'progress' | 'end' | 'retryLarger' | 'blocked';
 /**
  * `GET /journal` が返す次の頁の継続点（`next`。`afterId` / `afterAt` へそのまま渡せる）。
  *
- * **`next` の三状態（Issue #2604 / #2605）。**
+ * **`next` の三状態。**
  * - `null` = ストアが「この先に行は無い」と言った（本当の終端）
  * - `{ id, at }` = まだ先に行が在る。応答の `entries` が `limit` 未満でも空でも
  * - `undefined` = 応答に欄が無い（`next` を返さない古いデーモン）。件数での推定
@@ -120,8 +115,8 @@ function outcomeFromNext(next: PageCursor | null | undefined): 'end' | 'progress
 /**
  * 頁が空で、かつ先に行が在る（`next` が非 `null`）間、継続点から読み継ぐ。
  *
- * **頁の行が全部読めずに捨てられると、応答は空なのに終端ではない**（Issue #2604 /
- * #2605）。空の応答をそのまま画面に載せると「何も無い」画面になり、読み継ぐ手がかりも
+ * **頁の行が全部読めずに捨てられると、応答は空なのに終端ではない。**
+ * 空の応答をそのまま画面に載せると「何も無い」画面になり、読み継ぐ手がかりも
  * 失う——利用者の手を待たずにここで読み切る。継続点は毎回ストアの先へ進むので、
  * 有限回で止まる。`next` が無い（古いデーモン）頁・`null` の頁は、そのまま返す。
  */
@@ -161,17 +156,14 @@ export function newestAt(entries: JournalEntry[]): string | undefined {
  *
  * **「一覧のどちらの端を、どちらのクエリ引数へ載せるか」という決定をここに
  * 置く。** 呼び出し側（`use-journal-window.ts`）はこの戻り値をそのまま
- * `GET /journal` へ流すだけで、自分では端を選ばない。`shiftForPrepend` を
- * ここへ置いたのと同じ形であり、理由も同じ — **測れる決定を、測れない場所に
- * 置かない**（`AGENTS.md`「テストを弱めずに直す」）。
+ * `GET /journal` へ流すだけで、自分では端を選ばない。`shiftForPrepend` と
+ * 同じ理由 — **測れる決定を、測れない場所に置かない**
+ * （`AGENTS.md`「テストを弱めずに直す」）。
  *
- * ⚠️ **この関数が在る直接の理由は #262 である。** この決定が
- * `use-journal-window.ts` の `refreshNewerAt` の中に在った間、`since` へ
- * `oldestAt` を渡す変異（B4）は**変異試験で生存した** — `refreshNewer` は
- * virtua の `onScroll` からしか呼ばれず、jsdom は virtua を描画しないので、
- * フックの中に在る限りどんな取り違えも歯に当たらなかった。ここへ出すと、
- * 同じ取り違えが `journal-window.test.ts`（jsdom すら要らない素の node
- * 環境）から直接測れる。
+ * この決定がフックの中に在ると、`since` へ `oldestAt` を渡すような取り違えは
+ * 変異試験でも生き残る — `refreshNewer` は virtua の `onScroll` からしか呼ばれず、
+ * jsdom は virtua を描画しないので、どんな取り違えも歯に当たらない。ここへ出すと、
+ * 同じ取り違えが `journal-window.test.ts`（素の node 環境）から直接測れる。
  *
  * **測れるようになったのは「どちらの端をどちらの引数へ載せるか」までである。**
  * この関数を呼ぶ条件（virtua が上端付近に居ると判定したときにだけ撃つ）は
@@ -188,17 +180,14 @@ export function newerPageQuery(entries: JournalEntry[]): { since: string } | und
 /**
  * 過去方向（末尾側）へ次に撃つときの、クエリの追加分。`newerPageQuery` の対。
  *
- * **#262 が名指ししたのは新着方向（B4）だけだが、対で置く。** 片側だけを
- * 純粋関数へ出すと、「端と引数の対応はここが持つ」という規則ではなく
- * 「この1箇所だけ例外的に外へ出してある」という但し書きになる。過去方向の
- * 取り違え（B1）は「もっと遡る」ボタン経由で既に jsdom から届いているので、
- * **ここへ出したことで新しく測れるようになったものは無い** — 揃えただけである。
+ * **対で置く。** 片側だけを純粋関数へ出すと、「端と引数の対応はここが持つ」
+ * という規則ではなく「この1箇所だけ例外的に外へ出してある」という但し書きになる。
  */
 export function olderPageQuery(
   entries: JournalEntry[],
   cursor?: PageCursor | null,
 ): { until: string } | { afterId: string; afterAt: string } | undefined {
-  // **継続点が在れば、それで読む（Issue #2604 / #2605）。** 一覧の末尾の `at` は
+  // **継続点が在れば、それで読む。** 一覧の末尾の `at` は
   // 読めずに捨てられた行を越えられない（その向こうの行を飛ばす）うえ、inclusive な
   // `until` は境界の行を再送する。継続点は「ストアが実際に読んだ最後の行」を指し、
   // 空の一覧からでも続けられる。`until` を使わないので、地平の材料
@@ -218,7 +207,7 @@ export interface PageApplication {
 
 /**
  * 初期読み込み（`since`/`until` を送らない、窓を持たない1回目の呼び）の
- * 1ページを適用する（issue #1530）。
+ * 1ページを適用する。
  *
  * **`applyOlderPage`/`pageOutcome` の「同じ境界を再送したら freshCount で
  * 見分ける」という二段構えの確認は、ここには要らない。** あの二段構えが
@@ -279,13 +268,12 @@ export function applyOlderPage(
 
 /**
  * 「もっと遡る」が終端（`'end'`）に達したとき、その終端が日誌の地平
- * （`JournalStore.oldestAt()`）より前にかかっていたかを言葉にする
- * （issue #1510 の積み残し）。
+ * （`JournalStore.oldestAt()`）より前にかかっていたかを言葉にする。
  *
  * **`journal_read`（クローンの道具。`packages/core/src/tools.ts` の
  * `describeJournalHorizonNote`）と同じ趣旨の文言にしてあるが、実装は共有
  * していない。** `@alteroid/core` 本体から値を import するとサーバ専用の
- * ドメイン層ごとブラウザバンドルへ入る（#294 / #306。`filterRecent` の doc
+ * ドメイン層ごとブラウザバンドルへ入る（`filterRecent` の doc
  * と同じ理由）ので、判定条件（`crossesHorizon`）は `GET /journal` が
  * サーバ側（`journalWindowCrossesHorizon`）で計算済みの値をそのまま受け取り、
  * ここは文言へ変換するだけである。
@@ -295,15 +283,10 @@ export function applyOlderPage(
  * 本当に終端に達したときの目印にならない（`reachedStart`/`hiddenByLimit`
  * と同じ「常に出ているものは情報でなくなる」判断。`chat.tsx` の doc）。
  *
- * **⚠️ 直っていた非対称（issue #1530）。** 初期読み込みは `since`/`until` を
- * 送らないので、最初の1ページだけで日誌全体が尽きる
- * （`entries.length < JOURNAL_PAGE`）ほど小さいストアでは、`GET /journal` が
- * 素通しの gate（`since`/`until` のどちらかを指定した呼びにだけ材料を足す）
- * のままだと、この注記の材料（`oldestAt`/`crossesHorizon`）が応答に載らない
- * ——過去に一度、これが実際に起きていた。**いまは初期読み込みが
- * `horizon=true` を渡す**（`use-journal-window.ts` の初期 `useEffect`）ので、
- * `since`/`until` を省略していても材料は届く。「もっと遡る」を1回でも撃てば
- * （`until` が付くので）以降も同じく材料が届く。
+ * 初期読み込みは `since`/`until` を送らないが、**`horizon=true` を渡す**
+ * （`use-journal-window.ts` の初期 `useEffect`）ので、この注記の材料
+ * （`oldestAt`/`crossesHorizon`）は省略していても届く。「もっと遡る」以降は
+ * `until` が付くので同じく届く。
  */
 export function journalHorizonNote(
   outcome: PageOutcome,
@@ -320,7 +303,7 @@ export function journalHorizonNote(
 }
 
 /**
- * {@link journalHorizonNote} の Web 版（issue #2806）。出す条件は同じ。時刻は
+ * {@link journalHorizonNote} の Web 版。出す条件は同じ。時刻は
  * 呼び出し側が渡す整形（`formatDateTime`＝閲覧者の端末の時間帯）で出し、UTC の ISO 文字列と
  * 内部の言葉（記憶ストア）は見せない。
  */
@@ -357,8 +340,7 @@ export function applyNewerPage(
  *
  * `useJournal` はサーバへ絞り込みを投げるが、`recent` は絞られていない生の
  * 受信なので、ここで同じ条件を掛け直さないと絞り込んでいるはずの画面に
- * 無関係な種別が混ざる（元の `journal.tsx` の `useMemo` の doc をそのまま
- * 移設）。
+ * 無関係な種別が混ざる。
  */
 export function filterByType(
   entries: JournalEntry[],
@@ -369,7 +351,7 @@ export function filterByType(
 
 /**
  * 画面にいま掛かっている絞りを、`recent`（SSE で届いた生の受信）へも掛け直す
- * （種別チップ + 語で探す。issue #250）。
+ * （種別チップ + 語で探す）。
  *
  * **`filterByType` と同じ理由で在る。** サーバへ投げた絞りは履歴側にしか
  * 効かず、`recent` は絞られていない生の受信なので、掛け直さないと
@@ -387,7 +369,7 @@ export function filterByType(
  * （`packages/core/src/journal-search.ts` の doc）。**本体の
  * `@alteroid/core` からではなくこの軽い口から取る**のは、本体から値を
  * import するとサーバ専用のドメイン層ごとブラウザバンドルへ入るからである
- * （#294 / #306 で `/commitments` が 1.2MB になり本番で開けなくなった。
+ * （`/commitments` が 1.2MB になり本番で開けなくなったことがある。
  * `routes/commitments.tsx` の doc）。
  *
  * `q` が空文字列なら語では絞らない（`matchesJournalSearch` の doc）。
@@ -404,7 +386,7 @@ export function filterRecent(
 /**
  * 先頭に何か足された（`wasPrepend`）とき、virtua の `shift` に何を渡すか。
  *
- * **人間の判断（2026-08-23）: 新着は自動で先頭に積む形を保つ。** 「貯めて
+ * **新着は自動で先頭に積む形を保つ（人間の判断）。** 「貯めて
  * ボタンを押させたら流す」形（一部の SNS クライアントに見られる cuculus 式）
  * は採らない — 日誌は可観測性の画面で、押さないと最新が見えない形にすると
  * 画面の役目そのものが削れる（north_star 禁止1に触れる）。そのうえで:
@@ -413,7 +395,7 @@ export function filterRecent(
  *   新着がそのまま視界に増える。**これは仮想化する前の挙動と同じ**
  * - 利用者が **上端に居ても、行を展開している・文章を選択している（`reading`）** →
  *   `shift: true`。上端のすぐ下（スクロール量が数 px のうち）でも、読んでいる最中の行を
- *   新着で動かさない（issue #2774。選択して写そうとしている文章が動くと狙いを外す）
+ *   新着で動かさない（選択して写そうとしている文章が動くと狙いを外す）
  * - 利用者が **下へ遡って読んでいる** → `shift: true`。読んでいる行が
  *   新着の追加でずれない（virtua の doc: 「useful for reverse infinite
  *   scrolling」）

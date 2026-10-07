@@ -296,16 +296,15 @@ async function request(
     if (described !== null) throw new Error(described);
     if (response.status === 404) throw new Error(notFoundMessage);
     if (response.status === 409) {
-      // ⚠️ **いまのデーモンはここを返さない**（2026-09-09 のオーナー決定で、許可
-      // できるアカウントの上限が消えた）。**それでも残す** — `ALTEROID_URL` で
-      // 繋ぐ先が古いデーモンなら、2人目の grant はいまも 409 で返る。消すと
-      // その状況で「`/access/…/grant` が失敗しました (409)」という、原因も次の手も
-      // 言わない文言に落ちる。本文はサーバが書いたものをそのまま見せる。
+      // 409 の意味は経路ごとに違う（revoke は読めない行を触らない、owner / owner revoke は
+      // 未許可のアカウント。grant はいまのデーモンでは 409 を返さない）。どれも本文に `error` の
+      // 文字列を持つので、サーバが書いたものをそのまま見せる。文字列が無いときの代替は、
+      // どの経路でも嘘にならないよう、競合したことと理由が返らなかったことだけを言う。
       const body = (await response.json().catch(() => ({}))) as { error?: unknown };
       throw new Error(
         typeof body.error === 'string'
           ? redactError(body.error)
-          : '既に別のアカウントが許可されています',
+          : `${path} が競合しました (409)。デーモンから理由が返りませんでした`,
       );
     }
     throw new Error(await withErrorReason(`${path} が失敗しました (${response.status})`, response));
