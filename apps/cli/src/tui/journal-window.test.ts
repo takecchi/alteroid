@@ -3,11 +3,6 @@ import { describe, expect, it } from 'vitest';
 import { journalEntry, minute, said } from './fake-api.js';
 import { entryChars, listWindow, trimToBudget } from './journal-window.js';
 
-// ページの送り方（マージ・pageOutcome・apply*Page・*PageQuery・journalHorizonNote）は
-// `@alteroid/logic` の規則をそのまま import している（#2558）。その表は
-// `packages/logic/src/journal-window.test.ts` が見る。TUI の振る舞いとしての確認は
-// `journal-controller.test.ts` にある。ここは TUI にだけ在る予算と可視窓を見る。
-
 describe('文字数の予算', () => {
   it('大きさは JSON にした長さ。超えたら古い側（末尾）から手放し、最低 1 件は残す', () => {
     const entries = [
@@ -43,12 +38,10 @@ describe('可視窓', () => {
   });
 
   it('遡っている間は選択を窓の中ほどに置き、新着が末尾に足されても窓は動かない', () => {
-    // 100 件のうち、最新から 30 番目を選択（表示位置 69）。
     const before = listWindow(100, 30, false, 10);
     expect(before.start).toBeLessThanOrEqual(69);
     expect(before.end).toBeGreaterThan(69);
     expect(before.end - before.start).toBe(10);
-    // 新着 5 件が末尾に足された: 選択は新しい順で 35 番目になるが、表示位置は同じ 69。
     expect(listWindow(105, 35, false, 10)).toEqual(before);
   });
 

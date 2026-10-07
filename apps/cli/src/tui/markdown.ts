@@ -1,16 +1,9 @@
-/**
- * クローンの応答（Markdown）を、意味ロール付きの装飾 span の行へ落とす。
- * 出所: takecchi/codiva（MIT）`src/core/markdown.ts`（リンクの飛び先の扱いは借りていない）。
- *
- * 純粋・I/O 無し。依存は `marked` の lexer（字句解析だけ。HTML は作らない）。折り返しは
- * ここではしない（`wrap.ts`）。色は span の `tone` を theme が具体色へ当てる。
- */
+// 出所: takecchi/codiva（MIT）`src/core/markdown.ts`
 import { marked, type Token, type Tokens } from 'marked';
 
 export type MarkdownTone = 'heading' | 'code' | 'link' | 'quote' | 'marker';
 
 export interface RichSpan {
-  /** 改行を含まない。 */
   text: string;
   bold?: boolean;
   italic?: boolean;
@@ -20,7 +13,6 @@ export interface RichSpan {
   tone?: MarkdownTone;
 }
 
-/** 折り返し前の 1 論理行。空配列は空行。 */
 export type RichLine = RichSpan[];
 
 const BULLET = '• ';
@@ -79,7 +71,6 @@ function inlineSpans(tokens: readonly Token[] | undefined, base: RichSpan): Rich
   return out;
 }
 
-/** 埋め込みの改行（hard break）を含む span 列を論理行へ割る。 */
 function spansToLines(spans: readonly RichSpan[]): RichLine[] {
   const lines: RichLine[] = [];
   let current: RichLine = [];
@@ -96,7 +87,6 @@ function spansToLines(spans: readonly RichSpan[]): RichLine[] {
   return lines;
 }
 
-/** 先頭・末尾の空行を落とし、連続する空行を 1 本へ畳む。 */
 function tidy(lines: RichLine[]): RichLine[] {
   const out: RichLine[] = [];
   for (const line of lines) {
@@ -210,10 +200,6 @@ function blockLines(tokens: readonly Token[]): RichLine[] {
   return out;
 }
 
-/**
- * Markdown を装飾付きの論理行へ。lexer は寛容で壊れた入力でも投げない想定だが、
- * 呼び出し側（`log.ts`）は念のため例外を握って素の折り返しへ落とす。
- */
 export function renderMarkdown(text: string): RichLine[] {
   return tidy(blockLines(marked.lexer(text)));
 }

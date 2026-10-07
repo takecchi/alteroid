@@ -72,9 +72,9 @@ describe('折り返しの幾何（composerLayout）', () => {
   });
 
   it('↑↓ は見えている表示行で動く（桁はセルで保つ）', () => {
-    const b = bufferOf('あいうえお', 5); // 2 行目の末尾
+    const b = bufferOf('あいうえお', 5);
     const up = moveRowUp(b, 6);
-    expect(up.cursor).toBe(2); // 1 行目で、直前と同じセル位置（2 字 = 4 セル）
+    expect(up.cursor).toBe(2);
     expect(moveRowDown(up, 6).cursor).toBe(5);
     expect(moveRowUp(bufferOf('abc', 0), 6)).toEqual(bufferOf('abc', 0));
   });
@@ -96,7 +96,7 @@ describe('visibleLineRange', () => {
 
 describe('書記素の単位（#3649）', () => {
   const FAMILY = '👨‍👩‍👧';
-  const DAKU = 'が'; // 結合文字の濁点（が）
+  const DAKU = 'が';
 
   it('⚠️（VS16）を並べても、ログと同じ幾何で折り返す', () => {
     const rows = wrapComposerRows('⚠️⚠️⚠️⚠️⚠️', 6).map((r) => r.text);

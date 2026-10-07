@@ -1,8 +1,3 @@
-/**
- * 添付の HTTP 口（`POST /attachments` / `GET /attachments/:id` / `POST /chat` の `attachments`。
- * Issue #3111 段1b）。**本物の `createClone`（偽 SDK のみ差し替え）と本物の `createApp`** を組み、
- * 「上げる → 送る → クローンのターンに image ブロックが届く」を端から端まで確かめる。
- */
 import type { Options, Query, SDKMessage } from '@anthropic-ai/claude-agent-sdk';
 import {
   ALWAYS_REDELIVER,
@@ -21,11 +16,9 @@ import { describe, expect, it } from 'vitest';
 
 import { createApp } from './app.js';
 
-/** 本物の PNG のマジックバイト + 余り。 */
 const PNG = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 9, 8, 7, 6, 5]);
 const PNG_BASE64 = Buffer.from(PNG).toString('base64');
 
-/** 入力ごとの生の content を `blocks` に控える偽 SDK（`clone-test-harness.ts` の `inputBlocks` と同じ観測）。 */
 function recordingSdk(blocks: unknown[]): typeof import('@anthropic-ai/claude-agent-sdk').query {
   return ((params: { prompt: unknown; options?: Options }) => {
     async function* generate(): AsyncGenerator<SDKMessage, void> {
@@ -139,7 +132,7 @@ describe('添付: アップロードから クローンのターンまで', () =
       attachments: [meta.id],
     });
     expect(res.status).toBe(200);
-    await res.text(); // `done` で閉じるまで読む
+    await res.text();
 
     expect(blocks).toHaveLength(1);
     const content = blocks[0] as { type: string; text?: string; source?: unknown }[];
@@ -149,7 +142,6 @@ describe('添付: アップロードから クローンのターンまで', () =
     const textBlock = content.find((b) => b.type === 'text');
     expect(textBlock?.text).toContain(`[添付] id=${meta.id} name=shot.png type=image/png`);
 
-    // 日誌: メタデータは在り、bytes は無い。
     const journal = await stores.journal.list({});
     const inbound = journal.find(
       (e) => e.type === 'exchange' && e.role === 'inbound' && e.with === 'human',
@@ -165,7 +157,6 @@ describe('添付: アップロードから クローンのターンまで', () =
     ]);
     expect(JSON.stringify(journal)).not.toContain(PNG_BASE64);
 
-    // GET /conversations/:id にもメタデータが載る。
     const detail = (await (await app.request('/conversations/conv-a')).json()) as {
       messages: { attachments?: Meta[] }[];
     };
@@ -255,7 +246,6 @@ describe('添付: アップロードから クローンのターンまで', () =
     const { app, stores } = setupApp({ attachmentsNow: () => now });
     const meta = (await (await upload(app, PNG)).json()) as Meta & { expiresAt: string };
     expect((await app.request(`/attachments/${meta.id}`)).status).toBe(200);
-    // 期限ちょうど（prune と同じ向き）。時計を進めるだけで、prune は走らせない。
     now = new Date(meta.expiresAt);
     expect((await app.request(`/attachments/${meta.id}`)).status).toBe(404);
     expect((await app.request(`/attachments/${meta.id}/meta`)).status).toBe(404);
@@ -270,7 +260,6 @@ describe('添付: アップロードから クローンのターンまで', () =
     expect(body.code).toBe('attachment_missing');
     expect(body.error).toContain('添付が見つからない（期限切れの可能性）');
     expect(body.error).toContain(meta.id);
-    // 結ばれず、発言も残らない。
     const journal = await stores.journal.list({ types: ['exchange'], with: ['human'] });
     expect(journal.some((e) => e.type === 'exchange' && e.text === '期限切れ')).toBe(false);
   });
@@ -371,7 +360,6 @@ describe('添付: 認証', () => {
     });
     expect((await app.request(`/attachments/${meta.id}`)).status).toBe(401);
     expect((await app.request(`/attachments/${meta.id}/meta`)).status).toBe(401);
-    // 持ち主の資格なら通る（陽性対照）。
     const ok = await app.request('/attachments?name=a.png&type=image%2Fpng', {
       method: 'POST',
       headers: { 'content-type': 'application/octet-stream', authorization: 'Bearer test-token' },
@@ -392,7 +380,6 @@ describe('添付だけの発言（本文が空）', () => {
     expect(blocks).toHaveLength(1);
     const content = blocks[0] as { type: string; text?: string }[];
     expect(content.filter((b) => b.type === 'image')).toHaveLength(1);
-    // 本文が空でも、通知行が本文として渡る（人間の発言の部分に空行を前置きしない）。
     const text = content.find((b) => b.type === 'text')?.text ?? '';
     expect(text).toContain(
       `[添付] id=${meta.id} name=shot.png type=image/png size=${PNG.length} sha256=${meta.sha256}（画像として渡した）`,
@@ -408,8 +395,6 @@ describe('添付だけの発言（本文が空）', () => {
 });
 
 describe('孤立サロゲートを含む会話 id は入口で断る（#3560）', () => {
-  // `POST /chat` の `conversationId` は JSON の `"\ud83d"` も通り、pg の添付は U+FFFD へ書き換えて残す
-  // （同じ添付の再 bind が conflict になる・別々の id が同じ値に潰れる）。黙って正規化せず 400 で断る。
   it.each([
     ['上位だけ', 'conv-\ud83d'],
     ['下位だけ', 'conv-\ude00-x'],
@@ -445,8 +430,6 @@ describe('孤立サロゲートを含む会話 id は入口で断る（#3560）'
 });
 
 describe('NUL を含む会話 id は入口で断る（#3631）', () => {
-  // 添付つきは bind の NulNotAllowedError が 400 に変換されず 500 になっていた。添付なしは pg の日誌が
-  // NUL を落として残し、別々の id が 1 つに潰れうる。どちらも入口で 400 にする。エラーには値を混ぜない。
   it('添付つき: 500 にせず 400 で断り、何も積まず、添付も結ばない', async () => {
     const { app, stores } = setupApp();
     const meta = (await (await upload(app, PNG)).json()) as Meta;

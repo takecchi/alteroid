@@ -4,15 +4,6 @@ import { describe, expect, it } from 'vitest';
 
 import { createApp } from './app.js';
 
-/**
- * `POST /schedule` は `every` の分数に上限を課さず、`minutes: 1e15` を 200 で保存した（#3533）。保存された行は
- * スケジューラの次の予定を Invalid Date にし、`GET /schedule`（`scheduler.list()`）が 500 になる
- * （`toISOString()` が `RangeError: Invalid time value`）。同時に、スケジューラは1ms 周期で `timer` を
- * 積み続ける（core の `schedule-huge-every.test.ts`）。
- *
- * 人間の決定（2026-10-06）で、上限（1年 = 525600 分）を超える値は入口（`scheduleBody` の `scheduleSpecSchema`）で
- * 400 にする。
- */
 function stubCloneHost(): CloneHost {
   return {
     postPersisted: async () => 'persisted',

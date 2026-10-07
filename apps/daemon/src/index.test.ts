@@ -15,20 +15,6 @@ import {
 } from './index.js';
 import type { CloneWakeGate } from './index.js';
 
-/**
- * 認証トークン回りの日誌1行を stdout/stderr のどちらへ出すかの分類
- * （Issue #420 の残件）。
- *
- * **全値を当てる。数はここに書かない**（数のほうが先に腐る。5 → 6 → 8 と実際に
- * 増えている）。1つでも欠けると、次に分類を変える人（あるいは
- * `packages/core/src/schema.ts` の `token_rotation.event` へ新しい値を足す人）が
- * ここで気づけない。`tokenRotationStream` 自身は型で網羅性を守っている
- * （新しい event を足すと `pnpm typecheck` が落ちる）ので、この歯が測るのは
- * **いまの割り当てが正しいか**である。
- *
- * `.write()` は呼ばない——同一性（`toBe`）だけを見る。本物の stdout/stderr へ
- * 書くと `vitest.setup.ts` の歯（#314）に掛かるので、それを避ける形にしてある。
- */
 describe('tokenRotationStream', () => {
   it.each([
     ['rotated', 'stdout'],
@@ -47,44 +33,12 @@ describe('tokenRotationStream', () => {
   });
 });
 
-/**
- * 器の入れ替え（`onSwap`）を引き取りの契機へ繋ぐ配線を固定する（Issue #203 の項目2）。
- *
- * ## 何を固定したいのか
- *
- * **「器が入れ替わった」という知らせが、引き取りの口へ実際に繋がっていること。**
- * そして繋がる先が**2つとも**であること — 走行中だった委譲（`reattachRunner`）と、
- * 台帳にしか無い委譲（`takeOver` → `restore`）。`index.ts` の逐語がその理由を持つ:
- * `grep -Fn -- '`restore()` だけに繋いだ版は1本も拾えなかった' apps/daemon/src/index.ts`
- *
- * ## なぜ原文を読むのか
- *
- * この配線は `main()` の中の局所変数（`let takeOverOnSwap`）に載っていて、
- * **型でも実行時でも表せない** — `main()` を呼ばずに触れる口が無く、`main()` は
- * 台帳・HTTP の口・runner の名簿を丸ごと立ち上げる。同じ理由で原文を読む歯が
- * 既に隣に在る: `grep -Fn -- '原文を読むのは、型でも実行時でもこの不変条件を' apps/daemon/src/app.test.ts`
- *
- * ## 本文の一致では固定しない
- *
- * 守りたいのは**呼びが在るか無いか**であって、知らせの文言でも並び順でもない。
- * 文言で固定すると、無関係な言い回しの手直しで赤くなり、**守りたかったものと
- * 関係の無い理由で緩められる**。だから注釈行を落として、呼びの有無だけを見る。
- *
- * **この歯が測らないもの**: 実際に引き取りが成功すること（`ManagerPool` の関門が
- * 持つ判断で、`packages/core` 側の歯が見ている）。ここが約束するのは配線だけである。
- */
 describe('index.ts の原文で測る配線（onSwap の引き取り / 枠の観測の振り分け）', () => {
   const source = readFileSync(new URL('./index.ts', import.meta.url), 'utf8');
 
-  /**
-   * 字下げで閉じる1ブロックを取り出す。**Prettier が整形した形に乗っている**
-   * （閉じ括弧は開いた行と同じ深さへ戻る）。`pnpm format:check` が同じ形を
-   * 守っているので、この前提が崩れるときは先にそちらが赤くなる。
-   */
   const blockOf = (opener: RegExp): string[] => {
     const lines = source.split('\n');
     const heads = lines.filter((line) => opener.test(line));
-    // **1つに定まらないなら、以下の判定は別の場所を見ている。**
     expect(heads).toHaveLength(1);
     const start = lines.findIndex((line) => opener.test(line));
     const indent = (/^\s*/.exec(lines[start] ?? '')?.[0] ?? '').length;
@@ -96,7 +50,6 @@ describe('index.ts の原文で測る配線（onSwap の引き取り / 枠の観
     throw new Error('ブロックの終わりが見つからない（字下げの前提が崩れている）');
   };
 
-  /** 注釈の行は経路ではない。 */
   const code = (lines: string[]): string[] =>
     lines.filter((line) => !/^\s*(\*|\/\/|\/\*)/.test(line));
 
@@ -105,18 +58,11 @@ describe('index.ts の原文で測る配線（onSwap の引き取り / 枠の観
       line.includes('takeOverOnSwap('),
     );
 
-    // 知らせるだけに戻すと、受け入れ基準6 が誰にも起こされなくなる。
     expect(calls).not.toEqual([]);
-    // **宛先を落とさない。** 引数無しで呼ぶと、走行中だった委譲を拾う側
-    // （`reattachRunner`）が下の `runnerId !== undefined` で素通りする。
     expect(calls.filter((line) => /takeOverOnSwap\(\s*\)/.test(line))).toEqual([]);
   });
 
   it('⚠️ 成功の観測は observe へ落ちない（#681 (1)。2本目の生産者へ振る）', () => {
-    // **`observe` は枠の観測しか扱わない。** 成功がそこへ落ちると、記録を
-    // `usable` へ戻す経路（`reconsider` の `turn_success`）が呼ばれないまま
-    // 「何も起きない」——#681 が直そうとしている症状そのものへ戻る。
-    // **見えない側の壊れ方なので、配線そのものを測る**（この describe の趣旨）。
     const body = code(blockOf(/^\s*onUsageObservation:\s*async\s*\(/));
 
     const branch = body.findIndex((line) => line.includes('observation.succeeded === true'));
@@ -124,10 +70,7 @@ describe('index.ts の原文で測る配線（onSwap の引き取り / 枠の観
     const escape = body.findIndex((line) => /^\s*return;\s*$/.test(line));
     const observe = body.findIndex((line) => line.includes('tokenRotator.observe('));
 
-    // 4つとも在ること。どれか1つでも消えると、成功が `observe` へ落ちる。
     expect([branch, handoff, escape, observe].filter((i) => i < 0)).toEqual([]);
-    // **順番が意味を持つ。** 振り分け → 2本目の生産者 → 抜ける → その後で
-    // `observe`。`return` が `observe` より後ろへ回ると、成功が両方を通る。
     expect(branch).toBeLessThan(handoff);
     expect(handoff).toBeLessThan(escape);
     expect(escape).toBeLessThan(observe);
@@ -136,43 +79,17 @@ describe('index.ts の原文で測る配線（onSwap の引き取り / 枠の観
   it('その口は、走行中の委譲と台帳だけの委譲を両方とも起こす', () => {
     const body = code(blockOf(/^\s*takeOverOnSwap\s*=\s*\(/));
 
-    // 走行中だった委譲（デーモンの像に載っている分）。
     expect(body.filter((line) => line.includes('reattachRunner('))).not.toEqual([]);
-    // 台帳にしか無い委譲。片方だけにすると、片側が丸ごと落ちる。
     expect(body.filter((line) => line.includes('takeOver('))).not.toEqual([]);
   });
 });
 
-/**
- * 器を1つ失った（onLost）ことが、日誌へ構造化して残ることを固定する
- * （#916 c2-4 から切り出した #1381）。
- *
- * ## なぜ原文を読むのか
- *
- * `onLost` も隣の `onSwap` と同じ理由で原文でしか測れない——`main()` の中の
- * `createRunnerRegistry` へ渡すオプションの1つで、`main()` を呼ばずに触れる
- * 口が無い（隣の describe の doc と同じ事情）。
- *
- * ## 何を固定するか
- *
- * 以前は `announce()` で知らせるだけで、日誌には残らなかった——頻度を後から
- * 数える手段が無かった（Issue 本文の「今日の当て直し」）。ここでは
- * (1) `onLost` のブロックが記録用の関数を呼んでいること
- * (2) その関数が実際に `stores.journal.append` を `type: 'external_event'` /
- * `source: 'runner'` で呼んでいること
- * (3) 記録用の呼び出しが `onLost` の1箇所だけであること（onLost 以外の出来事
- * まで記録してしまう変異を捕まえるため）
- * の3つを固定する。文言までは固定しない（隣の describe と同じ方針——無関係な
- * 言い回しの手直しで赤くならないように）。
- */
 describe('index.ts の原文で測る配線（onLost が日誌へ残るか。#1381）', () => {
   const source = readFileSync(new URL('./index.ts', import.meta.url), 'utf8');
 
-  /** 隣の describe の `blockOf` と同じ実装（自己完結のためここでも定義する）。 */
   const blockOf = (opener: RegExp): string[] => {
     const lines = source.split('\n');
     const heads = lines.filter((line) => opener.test(line));
-    // **1つに定まらないなら、以下の判定は別の場所を見ている。**
     expect(heads).toHaveLength(1);
     const start = lines.findIndex((line) => opener.test(line));
     const indent = (/^\s*/.exec(lines[start] ?? '')?.[0] ?? '').length;
@@ -184,7 +101,6 @@ describe('index.ts の原文で測る配線（onLost が日誌へ残るか。#13
     throw new Error('ブロックの終わりが見つからない（字下げの前提が崩れている）');
   };
 
-  /** 注釈の行は経路ではない。 */
   const code = (lines: string[]): string[] =>
     lines.filter((line) => !/^\s*(\*|\/\/|\/\*)/.test(line));
 
@@ -193,15 +109,12 @@ describe('index.ts の原文で測る配線（onLost が日誌へ残るか。#13
       line.includes('reportRunnerLost('),
     );
 
-    // 知らせるだけに戻すと、頻度を数える手段が無くなる（#1381 の症状そのもの）。
     expect(calls).not.toEqual([]);
-    // 宛先・原因を落とさない。引数無しで呼ぶと、要約が「何を失ったか」を言えない。
     expect(calls.filter((line) => /reportRunnerLost\(\s*\)/.test(line))).toEqual([]);
   });
 
   it('記録用の関数は、日誌へ external_event として書く', () => {
-    // Prettier がメソッドチェーンを `stores.journal` / `.append(...)` の2行に
-    // 割るので、1行の部分一致では見えない——ブロックを1つの文字列にしてから見る。
+    // ブロックを1つの文字列にしてから見る: Prettier がメソッドチェーンを2行に割るので、1行の部分一致では見えないため。
     const bodyText = code(blockOf(/^\s*const reportRunnerLost\s*=\s*\(/)).join('\n');
 
     expect(/stores\.journal[\s\S]*?\.append\(/.test(bodyText)).toBe(true);
@@ -212,45 +125,16 @@ describe('index.ts の原文で測る配線（onLost が日誌へ残るか。#13
   it('記録用の関数を呼ぶのは onLost の1箇所だけ（onLost 以外まで記録しない）', () => {
     const calls = code(source.split('\n')).filter((line) => line.includes('reportRunnerLost('));
 
-    // 定義行（`const reportRunnerLost = (report: {`）は `reportRunnerLost(`
-    // という並びを含まないので、ここに現れるのは実際の呼び出しだけ。
     expect(calls).toHaveLength(1);
   });
 });
 
-/**
- * Issue #1394 の「残り」——自動畳みの契機が `runner_list resources:true` の
- * 1つだけだったところに、2つ目（`manager_start` の自動配置）を足した配線。
- *
- * ## なぜ原文を読むのか
- *
- * 隣の `onSwap` / `onLost` と同じ事情——`onPlacementResources` も
- * `createRunnerRegistry` へ渡すオプションの1つで、`autoFoldOnPlacementResources`
- * も局所変数（`let`）に載っている。`main()` を呼ばずに触れる口が無い。
- *
- * ## 何を固定するか
- *
- * (1) `onPlacementResources` のブロックが `autoFoldOnPlacementResources(` を
- * 呼んでいること（配線が外れて「何も起きない」に戻る変異を捕まえる）
- * (2) `autoFoldOnPlacementResources` の再代入が、`resources?.pids` が
- * `undefined` の報告を弾いてから `clone.managers.autoFoldOnPlacementPressure`
- * を呼んでいること（「取れない」を「逼迫していない」へ倒さず、かつ
- * `pids: undefined` をそのまま渡さないことの両方を1本で見る）
- * (3) `clone.managers.autoFoldOnPlacementPressure` を呼ぶのはこの1箇所だけ
- * であること
- *
- * **この歯が測らないもの**: 実際に畳まれること（`packages/core` 側の歯
- * — `manager.test.ts` の「もう1つの契機」— が持つ）。ここが約束するのは
- * 配線だけである。
- */
 describe('index.ts の原文で測る配線（onPlacementResources → 自動畳みの2つ目の契機、#1394）', () => {
   const source = readFileSync(new URL('./index.ts', import.meta.url), 'utf8');
 
-  /** 隣の describe の `blockOf` と同じ実装（自己完結のためここでも定義する）。 */
   const blockOf = (opener: RegExp): string[] => {
     const lines = source.split('\n');
     const heads = lines.filter((line) => opener.test(line));
-    // **1つに定まらないなら、以下の判定は別の場所を見ている。**
     expect(heads).toHaveLength(1);
     const start = lines.findIndex((line) => opener.test(line));
     const indent = (/^\s*/.exec(lines[start] ?? '')?.[0] ?? '').length;
@@ -262,7 +146,6 @@ describe('index.ts の原文で測る配線（onPlacementResources → 自動畳
     throw new Error('ブロックの終わりが見つからない（字下げの前提が崩れている）');
   };
 
-  /** 注釈の行は経路ではない。 */
   const code = (lines: string[]): string[] =>
     lines.filter((line) => !/^\s*(\*|\/\/|\/\*)/.test(line));
 
@@ -271,21 +154,13 @@ describe('index.ts の原文で測る配線（onPlacementResources → 自動畳
       line.includes('autoFoldOnPlacementResources('),
     );
 
-    // 受け取るだけで渡さない配線に戻すと、この契機はまるごと死ぬ
-    // （`#place` は横流ししているのに、誰も畳みへ繋がない）。
     expect(calls).not.toEqual([]);
   });
 
   it('pids が取れなかった報告は弾き、取れたものだけ ManagerPool へ渡す', () => {
     const body = code(blockOf(/^\s*autoFoldOnPlacementResources\s*=\s*\(/)).join('\n');
 
-    // **弾く門がある。** 「取れない」を「逼迫していない」へ倒さない
-    // （AGENTS.md「取れない軸に0の行を作る」）——`pids === undefined` の報告を
-    // そのまま `autoFoldOnPlacementPressure` へ渡すと、呼び出し先の型
-    // （`pids: { current; max }`、optional ではない）を満たせなくなる。
     expect(body.includes('resources?.pids === undefined')).toBe(true);
-    // **本体へ渡すのは runnerId と pids の組。** 引数を落とすと、渡した先の
-    // 契機の門（`isPidsUnderPressure`）が呼べない。
     expect(body.includes('autoFoldOnPlacementPressure')).toBe(true);
     expect(body.includes('report.runnerId')).toBe(true);
     expect(body.includes('report.resources.pids')).toBe(true);
@@ -301,23 +176,6 @@ describe('index.ts の原文で測る配線（onPlacementResources → 自動畳
   });
 });
 
-/**
- * **「認証トークンが通る状態に戻った」の判定**（人間の決定 2026-09-07）。
- *
- * 人間の逐語: 「limitが来て止まってトークン回して復活したら復活させたことを
- * cloneやmanagerに通知する必要があるのでは？なぜならlimit来て止まっているので
- * セッションを再開する必要があるでしょ」
- *
- * ## なぜここを測るのか —— 間違え方が非対称である
- *
- * | 間違え方 | 何が起きるか | 見えるか |
- * | --- | --- | --- |
- * | 起こすべき回に起こさない | **止まったまま。**「復活したのに何もしない」 | **見えない**（何も起きないので） |
- * | 起こすべきでない回に起こす | 保持していた合図を1件無駄に焼く | 見える（日誌に失敗が並ぶ） |
- *
- * **見えない側の壊れ方が、この改修そのものの症状と同じ**なので、判定は測れる
- * 形にしてある（`reopenedTokenOf` の doc）。
- */
 describe('reopenedTokenOf', () => {
   it('回した回は戻ったと数える（いま通る鍵に移った）', () => {
     expect(
@@ -346,9 +204,6 @@ describe('reopenedTokenOf', () => {
   });
 
   it('現役の冷却が明けた回も戻ったと数える（#833）', () => {
-    // **これが無かったせいで、鍵が通るのに誰も動かない時間ができた**（実測
-    // 2026-09-11 の本番で約38分）。**`recovered` とは `how` で言い分ける** ——
-    // あちらは観測、こちらは時計である。
     expect(
       reopenedTokenOf({
         kind: 'ignored',
@@ -365,9 +220,6 @@ describe('reopenedTokenOf', () => {
   });
 
   it('parked は戻っていない（撒いた鍵はまだ通らない）', () => {
-    // **ここを `rotated` と同じに扱うと、保持していた合図を1件焼いて同じ
-    // ところで止まる。** 冷却が明ければ枠の probe が `usable` を観測し、
-    // `recovered` として戻ってくる。
     expect(
       reopenedTokenOf({
         kind: 'parked',
@@ -404,13 +256,6 @@ describe('reopenedTokenOf', () => {
   });
 });
 
-/**
- * **通る鍵に戻ったら、止まっていた層を起こす配線**（人間の決定 2026-09-07）。
- *
- * `settleTokenOutcome` は `main()` の中に在り、型でも実行時でも触れない
- * （隣の `takeOverOnSwap` の歯と同じ理由）⟹ **原文を読んで、呼びが在ることだけを
- * 固定する。** 判定そのものは上の `reopenedTokenOf` の歯が測る。
- */
 describe('通る鍵に戻ったときに起こす配線', () => {
   const source = readFileSync(new URL('./index.ts', import.meta.url), 'utf8');
 
@@ -418,31 +263,15 @@ describe('通る鍵に戻ったときに起こす配線', () => {
     const body = source.slice(source.indexOf('const reopened = reopenedTokenOf(outcome);'));
     const block = body.slice(0, body.indexOf('\n    if (entry === null) return;'));
 
-    // クローン: 受信箱へ合図。これが `#usageBlocked` の解除の契機になる
-    // （`clone.ts` の `#releaseRequested`）。
     expect(block).toContain('clone.post(');
-    // マネージャー: 台帳に残っている委譲を resume する。**片方だけにすると、
-    // 片側の層が丸ごと止まったまま残る。**
-    //
-    // **1行では見ない**（`clone.managers.restore(` の literal で見ていたが、
-    // 2本を繋いだ時点で prettier が `clone.managers` と `.restore()` を別の行へ
-    // 割った）。守りたいのは「どの口を呼ぶか」であって、書き方ではない
-    // ——すぐ下の `recycled` の歯が同じ理由で同じ形にしてある。
+    // 1行では見ない: prettier が `clone.managers` と `.restore()` を別の行へ割るため。
     expect(block).toContain('clone.managers');
     expect(block).toContain('.restore(');
-    // **枠で止まった委譲も起こす。** `restore()` はプロセス内の像に無い委譲しか
-    // 拾わず（`#restoreJobs` の先頭の `#records.has`）、resume するのも台帳が
-    // `running` / `waiting_human` の分だけである ⟹ 枠で終わったターン
-    // （`done` / `failed` / `lost`）は**どちらの条件からも外れる**。ここを外すと、
-    // 鍵が戻っても走っていた委譲が止まったまま残る。
     expect(block).toContain('.resumeStoppedByUsage(');
   });
 
   it('指名が変わったらクローンのセッションを作り直す（parked も含む）', () => {
-    // env は起動時に凍るので、作り直さないと古い鍵のまま再挑戦して同じところで
-    // 止まる。**`parked` を外すと、冷却が明けた後に古い鍵のまま挑む形が残る。**
-    // **1行では見ない**（2026-09-07 に複数行の三項へ変わった）。守りたいのは
-    // 「どちらの `kind` でも作り直す」ことであって、書き方ではない。
+    // 1行では見ない: 複数行の三項になっているため。
     const at = source.indexOf('const recycled =');
     expect(at).toBeGreaterThan(-1);
     const decl = source.slice(
@@ -456,34 +285,12 @@ describe('通る鍵に戻ったときに起こす配線', () => {
   });
 });
 
-/**
- * **再開の合図を入れる時機**（人間の決定 2026-09-07）。
- *
- * ## この歯が固定している事故
- *
- * 実運用（2026-09-07、Railway の本番。デプロイは `2fb8177a`）で観測した形:
- *
- * | 時刻 (UTC) | 何が起きたか |
- * | --- | --- |
- * | `07:33:12` | 回した（世代41 `production` → 世代42 `staging`）。**合図もここで入れた** |
- * | `07:33:18`〜`50` | クローンはターンの最中（`tool_use` が続く）⟹ セッションは畳まれない |
- * | `07:33:51` | そのターンが**古い鍵**で `success/429`（`You've hit your session limit`） |
- * | `07:33:51.697`〜`.759` | 保持していた合図21件が**また保持へ戻った** |
- * | 以降26分 | **沈黙。** 合図はもう使われていて、再投函する者が居ない |
- *
- * ⟹ **合図は「セッションが実際に畳まれた後」に入れなければならない。**
- *
- * `settleTokenOutcome` は `main()` の中に在って型でも実行時でも触れないので、
- * **原文を読んで配線だけを固定する**（隣の `takeOverOnSwap` の歯と同じ理由）。
- */
 describe('再開の合図は、セッションが畳まれた後に入れる', () => {
   const source = readFileSync(new URL('./index.ts', import.meta.url), 'utf8');
   const body = source.slice(source.indexOf('const reopened = reopenedTokenOf(outcome);'));
   const block = body.slice(0, body.indexOf('\n    if (entry === null) return;'));
 
   it('recycleSessionForToken の返り値を捨てていない', () => {
-    // **捨てると時機を決められない。** `'deferred'` の回に先に入れると、合図は
-    // 古い鍵のターンに消費される（上の実測）。
     expect(source).toContain('clone.recycleSessionForToken()');
     expect(source).toMatch(/const recycled =[\s\S]*clone\.recycleSessionForToken\(\)/);
   });
@@ -494,34 +301,22 @@ describe('再開の合図は、セッションが畳まれた後に入れる', (
   });
 
   it('保留した合図は onTokenSessionRecycled で入る（取り出してから呼ぶ）', () => {
-    // **取り出してから呼ぶ。** 呼んだ後に消すと、合図の中で例外が出た回だけ
-    // 残り続け、次に畳まれたときにもう一度入る。
     const hook = source.slice(source.indexOf('onTokenSessionRecycled: () => {'));
     const hookBody = hook.slice(0, hook.indexOf('\n    },'));
     expect(hookBody).toContain('const wake = pendingTokenWake;');
     expect(hookBody).toContain('pendingTokenWake = undefined;');
     expect(hookBody).toContain('wake?.();');
-    // 消す前に呼ぶ形になっていない。
     expect(hookBody.indexOf('pendingTokenWake = undefined;')).toBeLessThan(
       hookBody.indexOf('wake?.();'),
     );
   });
 
   it('保留は高々1つしか持たない（後の1回だけが要る）', () => {
-    // 配列で溜めると、畳むより先に2回回った回に「もう古い鍵の話」の合図まで入る。
     expect(source).toContain('let pendingTokenWake: (() => void) | undefined = undefined;');
   });
 });
 
-/**
- * `CloneWakeGate.decide` の第1引数を作る（Issue #1223 で `tokenId` の生文字列
- * から `{ tokenId, label, how }` へ変わった）。
- *
- * **`ReopenedHow` を import しない。** `index.ts` 側でこの型を export していない
- * ため（`ReopenedToken` / `ReopenedHow` はファイル内部だけの型）、ここでは
- * 同じ3値を持つローカルの型を宣言する——リテラル文字列の集合が一致していれば、
- * 構造的部分型で `decide` の引数として渡せる（名前ではなく値の集合で見る）。
- */
+// `ReopenedHow` を import せずローカルに宣言する: `index.ts` が `ReopenedToken` / `ReopenedHow` を export していないため。
 type ReopenedHowFixture = 'また通るようになった' | '回した' | '冷却が明けた';
 
 function reopened(
@@ -531,18 +326,6 @@ function reopened(
   return { tokenId, label: tokenId, how };
 }
 
-/**
- * **クローンへ配るか畳むかの判定**（Issue #783 / #1223。`CloneWakeGate` の doc）。
- *
- * ## なぜここを測るのか
- *
- * クローンが枠で止まっていなければ、「認証トークンが通る状態に戻った」の合図は
- * `clone.ts` の `post()` の `if (this.#usageBlocked !== null) this.#releaseRequested
- * = true;` を1文字も動かさない——ターンを1本焼くだけで何もしない。だから止まって
- * いないときは配らず畳む。**⛔ 譲れない不変条件はこの逆**: クローンが止まって
- * いて、かつ**前と違う知らせ**（別トークン／別の `how`／`observeUnusable` の
- * あとの同じ知らせ）なら、畳んだ回数によらず必ず配る（`kind: 'wake'`）。
- */
 describe('createCloneWakeGate', () => {
   it('クローンが枠で止まっているなら配る（畳んでいなければ folded は0）', () => {
     const gate = createCloneWakeGate();
@@ -562,7 +345,6 @@ describe('createCloneWakeGate', () => {
     expect(gate.decide(reopened('tok-a'), false, false)).toEqual({ kind: 'fold' });
     expect(gate.decide(reopened('tok-a'), false, false)).toEqual({ kind: 'fold' });
     expect(gate.decide(reopened('tok-a'), false, false)).toEqual({ kind: 'fold' });
-    // 3回畳んだ後に配ると、畳んだ数（3）を持って `wake` が返る。
     expect(gate.decide(reopened('tok-a'), true, false)).toEqual({ kind: 'wake', folded: 3 });
   });
 
@@ -573,29 +355,14 @@ describe('createCloneWakeGate', () => {
     gate.decide(reopened('tok-a'), false, false);
     expect(gate.decide(reopened('tok-a'), true, false)).toEqual({ kind: 'wake', folded: 2 });
 
-    // **Issue #1223 の歯**: 配った直後、何も変わっていなければ同じ身元
-    // （同じトークン・同じ `how`）を続けて呼んでも配らない——ここが実運用の
-    // 「2分半に60回」を止めている本体である。
     expect(gate.decide(reopened('tok-a'), true, false)).toEqual({ kind: 'fold' });
 
-    // 鍵が通らなくなったことを観測すれば（`parked` / `exhausted`）、同じ身元でも
-    // 次は「新しい知らせ」として配り直せる。
     gate.observeUnusable();
-    // 折り返して配れば、直前の1回ぶんの畳み込み（folded: 1）を持って配られる。
     expect(gate.decide(reopened('tok-a'), true, false)).toEqual({ kind: 'wake', folded: 1 });
 
-    // **Issue #1223 再発の歯**: `cloneBlocked=false` の回を1回挟んでも
-    // （`observeUnusable()` を呼ばない限り）配達済みの印は消えない——同じ身元
-    // はそのまま畳み続ける。以前はここで `!cloneBlocked` が印を全部消しており、
-    // それ自体が #1223 の輪を戻していた（`told` の doc「全消去は
-    // `observeUnusable()` のときだけ」）。
     gate.decide(reopened('tok-a'), false, false);
     expect(gate.decide(reopened('tok-a'), true, false)).toEqual({ kind: 'fold' });
 
-    // 改めて `observeUnusable()` を呼べば、次は「新しい知らせ」として配れる
-    // （直前の `false` の回・`fold` の回で積んだ畳み込み2件ぶんを持って配られる。
-    // `told` を消さない限りカウンタは積み上がり続けることも、この2件で
-    // 固定している）。
     gate.observeUnusable();
     expect(gate.decide(reopened('tok-a'), true, false)).toEqual({ kind: 'wake', folded: 2 });
   });
@@ -605,70 +372,26 @@ describe('createCloneWakeGate', () => {
 
     gate.decide(reopened('tok-a'), false, false);
     gate.decide(reopened('tok-a'), false, false);
-    // tok-b は tok-a の畳み込みに影響されない。
     expect(gate.decide(reopened('tok-b'), true, false)).toEqual({ kind: 'wake', folded: 0 });
-    // tok-a のカウントはそのまま残っている。
     expect(gate.decide(reopened('tok-a'), true, false)).toEqual({ kind: 'wake', folded: 2 });
   });
 
-  /**
-   * **🔴 不変条件3（最重要）**: 「落ちる→戻る→また落ちる→また戻る」で、
-   * **2本目の「戻った」も必ず届く**。
-   *
-   * 畳み込みは「本当に新しい回復」を消してはいけない。1回目の `wake` で配った
-   * 直後にクローンがまた枠で止まり、再び通るようになった2回目の観測が届いた
-   * ときも、`cloneBlocked` がそのつど `true` である限り `decide` は必ず
-   * `kind: 'wake'` を返す——`folded` の値（内部状態）に依存して `wake` が
-   * `fold` に化けることは無い。
-   *
-   * **「また落ちる」を表すのは `observeUnusable()` である**（Issue #1223
-   * 再発の手当て後）。`cloneBlocked=false` の回を挟むだけでは、このトークンに
-   * ついて何も観測していない——それは「クローンはいま動けている」という事実
-   * でしかなく、鍵が通らなくなったことを1文字も意味しない（`told` の doc
-   * 「全消去は `observeUnusable()` のときだけ」）。**本物の `clone.ts` は
-   * 止まる前に `#observeForTokenRotation` を待つが、`observeUnusable()` が
-   * 呼ばれるのはその outcome が `parked` / `exhausted` のときだけである**
-   * （`rotated` では呼ばれない。#2511。`rotated` の側は `decide` が `回した` の
-   * 印を捨てる）——ここでは `parked` / `exhausted` 経由の「また枠に当たって
-   * 落ちた」を `observeUnusable()` で表す。**`observeUnusable()` を呼ばずに `true` を
-   * 2回連続で呼ぶ形は、この不変条件が指す状況ではない**——それは「まだ
-   * 何も変わっていないのに同じ知らせが2回来た」という #1223 の症状そのもの
-   * で、直上のテストが指すとおり2回目は畳む。
-   */
   it('🔴 不変条件3: 落ちる→戻る→また落ちる→また戻る で2本目の「戻った」も必ず届く', () => {
     const gate = createCloneWakeGate();
 
-    // 1回目: クローンは枠で止まっている（落ちている）→ 戻ったら配る。
     expect(gate.decide(reopened('tok-a'), true, false)).toEqual({ kind: 'wake', folded: 0 });
 
-    // 配った直後、クローンはまだ枠で止まっていない状態が続く（この間に届いた
-    // 「戻った」はすべて畳む——まだ本物の再起動が要る状態ではない）。
     expect(gate.decide(reopened('tok-a'), false, false)).toEqual({ kind: 'fold' });
 
-    // また枠に当たって落ちた——本物ではここで必ず `observeUnusable()` が先に
-    // 走る（`fakeClone` の doc）。その後もう一度「戻った」が観測された
-    // ——ここが2本目の「戻った」である。畳み込みの結果として消えてはいけない。
     gate.observeUnusable();
     expect(gate.decide(reopened('tok-a'), true, false)).toEqual({ kind: 'wake', folded: 1 });
 
-    // 3本目も同様に届く（何回繰り返しても、`observeUnusable()` を挟めば必ず配る）。
     expect(gate.decide(reopened('tok-a'), false, false)).toEqual({ kind: 'fold' });
     expect(gate.decide(reopened('tok-a'), false, false)).toEqual({ kind: 'fold' });
     gate.observeUnusable();
     expect(gate.decide(reopened('tok-a'), true, false)).toEqual({ kind: 'wake', folded: 2 });
   });
 
-  /**
-   * **🔴 Issue #1223 の本体**: 何も変わっていない（`cloneBlocked` も
-   * `releasePending` も動かず、`observeUnusable` も呼ばれない）まま同じ身元が
-   * 何十回来ても、配るのは最初の1回だけ。
-   *
-   * 実運用（2026-09-18〜19）の実測は「2分半に60回以上」——ここでは同じ形を
-   * 60回で固定する。**この歯は、この branch のコミット
-   * （`f6665a0664060435c7d38e19c8af48c883265f2f`）より前の `main`
-   * （引数が `tokenId: string` だけで `told` を持たない版）に当てると
-   * 全件 `wake` を返して赤くなる**（このコミットで初めて `told` の判定が入った）。
-   */
   it('🔴 #1223: 同じ身元が60回続けて来ても、配るのは最初の1回だけ', () => {
     const gate = createCloneWakeGate();
 
@@ -681,84 +404,30 @@ describe('createCloneWakeGate', () => {
     expect(kinds.slice(1)).toEqual(Array.from({ length: 59 }, () => 'fold'));
   });
 
-  /**
-   * **🔴 Issue #1223 再発（本丸）**: 「止まっている ⇄ 止まっていない」を何度
-   * 行き来しても（`observeUnusable()` を一度も呼ばずに）、同じ身元は最初の
-   * 1回しか配らない。
-   *
-   * 実運用の再発（2026-09-18〜19）は 04:05 / 04:07 / 04:09 / 04:11 に同じ鍵・
-   * 同じ根拠の起床が繰り返され、その間鍵は `usable` のまま一度も遷移していな
-   * かった——上位層が本番 DB を直接観測した値である。ここではその形を
-   * `cloneBlocked` を `true`/`false` で往復させて再現する。**この歯は、
-   * `if (!cloneBlocked) told.clear();` を持つ版（この修正より前）に当てると
-   * 2本目以降も `wake` を返して赤くなる**——`false` の回が毎回 `told` を
-   * 全消去し、次の `true` の回を「新しい知らせ」に見せかけるためである。
-   */
   it('🔴 #1223 再発: cloneBlocked が true/false を往復しても、observeUnusable() 無しでは同じ身元を配り直さない', () => {
     const gate = createCloneWakeGate();
 
     expect(gate.decide(reopened('tok-a'), true, false)).toEqual({ kind: 'wake', folded: 0 });
 
-    // 04:07 / 04:09 / 04:11 に相当する3往復。`cloneBlocked` は動くが、鍵は
-    // 一度も `observeUnusable()` されていない——実運用の「usable のまま一度も
-    // 遷移していない」状態そのものである。
     for (let i = 0; i < 3; i++) {
       expect(gate.decide(reopened('tok-a'), false, false)).toEqual({ kind: 'fold' });
       expect(gate.decide(reopened('tok-a'), true, false)).toEqual({ kind: 'fold' });
     }
   });
 
-  /**
-   * **複数トークンが混在しても、他のトークンの配達に巻き込まれて畳み損ねない**
-   * （Issue #1223 の3つ目の歯の実装 — `told` を単一の値ではなくトークンごとの
-   * `Map` にした理由そのもの）。
-   *
-   * 単一の変数（最初の実装）だと、A を配って `told=A`、次に B を配って
-   * `told=B`（A の記録を上書き）、その直後に A の**同じ**身元が
-   * （新しい観測なしに）もう一度来ると `told !== A の身元` になり、
-   * 畳むべきものが配られてしまう。ここではその順で並べ、A の2回目が
-   * `fold` のままであることを固定する。
-   */
   it('別のトークンの配達に挟まれても、先のトークンの重複は畳まれ続ける', () => {
     const gate = createCloneWakeGate();
 
     expect(gate.decide(reopened('tok-a'), true, false)).toEqual({ kind: 'wake', folded: 0 });
-    // tok-b は別の身元なので、`releasePending` を経由せずここへ来ても配られる
-    // （枠がトークンごとではなくクローン全体のものだとしても、`told` の識別は
-    // トークンごとに独立している）。
     expect(gate.decide(reopened('tok-b'), true, false)).toEqual({ kind: 'wake', folded: 0 });
-    // tok-a の同じ身元がもう一度来ても、tok-b の配達には巻き込まれず畳む。
     expect(gate.decide(reopened('tok-a'), true, false)).toEqual({ kind: 'fold' });
   });
 
-  /**
-   * **🔴 Issue #1223 再発2（本丸）: `observeUnusable()` を挟んでも、4つ目の
-   * 条件（`staleSameKeyRecovery`）が真なら配らない。**
-   *
-   * 3つ目の条件だけを見た `describe('🔴 不変条件3...')` は「`observeUnusable()`
-   * を挟めば必ず配る」ことを固定しているが、**あれは `staleSameKeyRecovery`
-   * を渡さない（既定で偽）場合の話である。** ここでは4つ目の条件が真の
-   * ケース——「観測に基づく回復だが、いま止まっている同じ鍵の同じ resetsAt
-   * を指しているだけ」——を、`observeUnusable()` の直後に置いて確かめる。
-   *
-   * **本番の再現**（2026-09-23 観測。journal_read、06:11:17〜06:11:56Z）:
-   * `recovered`（同じ鍵・`turn_success`）→ `exhausted`（別セッションが同じ
-   * 現役へ当たる）が4〜6秒周期で繰り返され、クローンは resetsAt が未来のまま
-   * 止まり続けていた。ここでは `observeUnusable()`（`exhausted` 相当）→
-   * `decide(reopened('tok-a'), true, false, true)`（`recovered` 相当。
-   * `staleSameKeyRecovery=true` は「同じ鍵・resetsAt 未来」を表す）を20周
-   * させ、**配達が0回・畳みが20回**であることを見る。
-   */
   it('🔴 #1223 再発2: 観測ベースの回復が同じ鍵・resetsAt 未来のままなら、observeUnusable() を挟んでも配らない（20周・配達0・畳み20）', () => {
     const gate = createCloneWakeGate();
 
     const kinds = Array.from({ length: 20 }, () => {
-      // 本番の `exhausted` に相当——`settleTokenOutcome` は `reopenedTokenOf`
-      // が `undefined` を返すこの回で必ず `observeUnusable()` を先に呼ぶ
-      // （`index.ts` の `settleTokenOutcome` の該当コメント）。
       gate.observeUnusable();
-      // 本番の `recovered`（`turn_success`）に相当。`staleSameKeyRecovery=true`
-      // は「同じ鍵・resetsAt 未来」を `wake()` が計算した結果である。
       return gate.decide(reopened('tok-a'), true, false, true).kind;
     });
 
@@ -771,8 +440,6 @@ describe('createCloneWakeGate', () => {
 
     gate.decide(reopened('tok-a'), true, false, false);
     gate.observeUnusable();
-    // `staleSameKeyRecovery=false`（省略時と同じ）なら、3つ目の条件どおり
-    // 「observeUnusable() を挟んだ後は必ず配る」。
     expect(gate.decide(reopened('tok-a'), true, false, false)).toEqual({
       kind: 'wake',
       folded: 0,
@@ -782,7 +449,6 @@ describe('createCloneWakeGate', () => {
   it('4つ目の条件は3つ目の条件より前に見る（told に一致しない新しい身元でも、stale なら畳む）', () => {
     const gate = createCloneWakeGate();
 
-    // `told` は空——3つ目の条件だけなら `wake` になるはずの回。
     expect(gate.decide(reopened('tok-a'), true, false, true)).toEqual({ kind: 'fold' });
   });
 
@@ -791,8 +457,6 @@ describe('createCloneWakeGate', () => {
 
     gate.decide(reopened('tok-a'), true, false, true);
     gate.decide(reopened('tok-a'), true, false, true);
-    // 3回目は stale が解けた（resetsAt を過ぎた等）ので配る——畳んだ2件を
-    // 持って配られる。
     expect(gate.decide(reopened('tok-a'), true, false, false)).toEqual({
       kind: 'wake',
       folded: 2,
@@ -800,15 +464,7 @@ describe('createCloneWakeGate', () => {
   });
 });
 
-/**
- * 判定の的になる `external` の合図を1件作る。
- *
- * **`source` を引数で受けるのは、呼び出し側でスプレッドさせないためである。**
- * `{ ...tokenPoolEvent(), source: '別の値' }` と書くと `InboxEvent` は union
- * なので、スプレッドの結果も union になり、`source` を持たない枝
- * （`human_message` など）に対して余剰プロパティとみなされて `TS2322` で落ちる。
- * **引数で差し替えればスプレッドが要らず、型の細工も要らない。**
- */
+// `source` を引数で受ける: 呼び出し側で `{ ...tokenPoolEvent(), source }` とスプレッドすると、union の `source` を持たない枝に対して `TS2322` で落ちるため。
 function tokenPoolEvent(source: string = TOKEN_POOL_REOPENED_SOURCE): InboxEvent {
   return {
     type: 'external',
@@ -819,11 +475,6 @@ function tokenPoolEvent(source: string = TOKEN_POOL_REOPENED_SOURCE): InboxEvent
   };
 }
 
-/**
- * **`isTokenPoolReopenedNotice`**（Issue #783 続き）。
- *
- * 型と `source` だけを見る——他の欄（`payload` の中身）は判定に関わらない。
- */
 describe('isTokenPoolReopenedNotice', () => {
   it('external かつ source が token-pool なら真', () => {
     expect(isTokenPoolReopenedNotice(tokenPoolEvent())).toBe(true);
@@ -846,34 +497,7 @@ describe('isTokenPoolReopenedNotice', () => {
   });
 });
 
-/**
- * **⭐⭐ 歯1（最重要）: `CloneWakeGate.decide` と `#restoreUnread` の門
- * （`redeliveryGate`）が同じ答えを返す**（Issue #783 続き）。
- *
- * ## なぜこの歯が要るか
- *
- * `wake()`（`clone.post(...)` 越しの経路）と `createClone(...)` の
- * `redeliveryGate`（`#restoreUnread` の経路）は、判定の実体を**同じ
- * `worthDeliveringNow` から呼ぶ**ことで揃えてある（`RedeliveryGate` の doc、
- * `worthDeliveringNow` の doc「呼び手は2つある」）。**コピーがあれば片方だけを
- * 直したときに黙ってずれる。** この歯は、その一致を関数として固定する——
- * どちらか片方だけを直した人は、ここで必ず赤にぶつかる。
- *
- * ## 何を測るか
- *
- * `blocked` × `releasePending` の**4通り全部**で、
- * `cloneWakeGate.decide(tokenId, blocked, releasePending).kind === 'wake'` と
- * `redeliveryGate(tokenPoolEvent, { usageBlocked, releasePending }) === true` が
- * 一致すること（**組を1つでも落とすと、片側だけが Issue #1051 の畳み込みを
- * 持っている状態が緑のまま通る**）。`redeliveryGate` は本番の配線（`index.ts` の `createClone(...)`）と
- * **同じ2つの部品**（`isTokenPoolReopenedNotice` / `worthDeliveringNow`）から
- * 組み立てる——配線そのものが同じ部品を呼んでいることは、直後の「本番の配線」
- * describe が原文で固定する。
- */
 describe('歯1: CloneWakeGate.decide と redeliveryGate は同じ答えを返す', () => {
-  // **本番の `createClone(...)` に渡す `redeliveryGate` と同じ形。** 部品
-  // （`isTokenPoolReopenedNotice` / `worthDeliveringNow`）が本番と同一の実体で
-  // あることは import 経由で保証されている——コピーはしていない。
   const redeliveryGate = (
     event: InboxEvent,
     context: { usageBlocked: boolean; releasePending: boolean },
@@ -911,14 +535,6 @@ describe('歯1: CloneWakeGate.decide と redeliveryGate は同じ答えを返す
   });
 });
 
-/**
- * **本番の配線が実際に `isTokenPoolReopenedNotice` / `worthDeliveringNow` を
- * 呼んでいること**（Issue #783 続き）。
- *
- * `createClone(...)` は `main()` の中に在り、型でも実行時でも触れない
- * （隣の `takeOverOnSwap` の歯と同じ理由）。**原文を読んで、配線が上の歯1と
- * 同じ部品を呼んでいることだけを固定する。**
- */
 describe('本番の配線: redeliveryGate は wake() と同じ部品を呼ぶ', () => {
   const source = readFileSync(new URL('./index.ts', import.meta.url), 'utf8');
 
@@ -928,19 +544,9 @@ describe('本番の配線: redeliveryGate は wake() と同じ部品を呼ぶ', 
     const block = source.slice(at, source.indexOf('\n  });', at));
 
     expect(block).toContain('isTokenPoolReopenedNotice(event)');
-    // **引数2つとも原文で見る（Issue #1051）。** `releasePending` を渡し忘れた
-    // 配線は型では落ちない——落ちないまま、配り直しの側だけが往復を通し続ける。
     expect(block).toContain('worthDeliveringNow(usageBlocked, releasePending)');
   });
 
-  /**
-   * **redeliveryGate が `staleObservedRecoveryNoticeEvent` も呼ぶこと**
-   * （Issue #1223 再発）。`#restoreUnread` は `post()` を一度も通らないので
-   * （`RedeliveryGate` の doc）、`usageBlockAlwaysRearms` の4つ目の例外
-   * （同じ鍵・同じ resetsAt の使い回しは再武装しない）もここで自分で当てないと
-   * 掛からない。**`wake()`（`CloneWakeGate.decide` 越し）と同じ関数を呼んで
-   * いることを原文で固定する**——コピーすると片方だけ直したときに黙ってずれる。
-   */
   it('redeliveryGate が staleObservedRecoveryNoticeEvent を呼び、必要な4つの材料を渡す', () => {
     const at = source.indexOf('redeliveryGate: (');
     expect(at).toBeGreaterThan(-1);
@@ -949,8 +555,6 @@ describe('本番の配線: redeliveryGate は wake() と同じ部品を呼ぶ', 
     expect(block).toContain('staleObservedRecoveryNoticeEvent(');
     expect(block).toContain('usageBlockedResetsAt');
     expect(block).toContain('usageBlockedTokenId');
-    // **`worthDeliveringNow` が真でも `staleObservedRecoveryNoticeEvent` が
-    // 真なら畳む方向であること**——`&&` で結び、`!` を掛けている形を原文で見る。
     expect(block).toContain(
       'worthDeliveringNow(usageBlocked, releasePending) &&\n' +
         '          !staleObservedRecoveryNoticeEvent(event, usageBlockedResetsAt, usageBlockedTokenId)',
@@ -958,25 +562,6 @@ describe('本番の配線: redeliveryGate は wake() と同じ部品を呼ぶ', 
   });
 });
 
-/**
- * **本番の配線: クローンの SDK 子プロセスにもログイン基盤の鍵を伏せる**
- * （Issue #1495 ①）。
- *
- * `createClone(...)` は `main()` の中に在り、型でも実行時でも触れない
- * （隣の歯と同じ理由）。**原文を読んで、`AUTH_WITHHELD_ENV_KEYS` が実際に
- * `withheldEnvKeys` として渡っていることだけを固定する。** `withheldEnvKeys`
- * を受け取った後の挙動（伏せた鍵が子へ渡る env から実際に落ちること・記憶
- * ストアの鍵は残ること・正本やプロファイルより後で落ちて生き残らせない
- * こと）は `packages/core/src/clone-credentials.test.ts`（旧 `clone.test.ts`。
- * #1744 で分割済み）の
- * `withheldEnvKeys（SDK 子プロセスへ渡さない鍵。Issue #1495 ①）` が固定する
- * ——ここは「配ってあるか」だけを見る。
- *
- * `storage.withheldEnvKeys` を渡さないことも合わせて固定する——pg 構成では
- * それが `ALTEROID_DATABASE_URL` を含んでおり、クローンは記憶ストアの持ち主
- * としてその鍵を使い続ける必要があるので、渡すと退行になる
- * （`CloneOptions.withheldEnvKeys` の doc）。
- */
 describe('本番の配線: createClone に AUTH_WITHHELD_ENV_KEYS が渡る（Issue #1495 ①）', () => {
   const source = readFileSync(new URL('./index.ts', import.meta.url), 'utf8');
 
@@ -986,30 +571,15 @@ describe('本番の配線: createClone に AUTH_WITHHELD_ENV_KEYS が渡る（Is
     const block = source.slice(at, source.indexOf('\n  });', at));
 
     expect(block).toContain('withheldEnvKeys: [...AUTH_WITHHELD_ENV_KEYS]');
-    // **`storage.withheldEnvKeys` は渡さない。** pg 構成では
-    // `ALTEROID_DATABASE_URL` を含むので、そのまま渡すとクローンから記憶
-    // ストアの鍵が落ち、記憶へ到達できなくなる。
     expect(block).not.toContain('withheldEnvKeys: storage.withheldEnvKeys');
     expect(block).not.toContain('...storage.withheldEnvKeys');
   });
 });
 
-/**
- * **配る合図の本文に、畳んだ件数が出ること**（Issue #783）。
- *
- * 不変条件2（母数を落とさない）の裏付け——受信箱には1件しか入らなくても、
- * 本文を読めば何件を1件にまとめたかが分かる。
- */
 describe('describeReopenedTokenNotice', () => {
   const reopened = { tokenId: 'tok-a', label: '本命', how: 'また通るようになった' as const };
   const observedAt = '2026-09-13T12:50:03.000Z';
 
-  /**
-   * **陽性対照（Issue #1375）: 畳まない単発の合図の本文は、`observedAt` を
-   * 渡しても1文字も変わらない。** 全文一致で固定する——`toContain` だけだと
-   * 「余計な一文が増えていないか」を見落とす（`describeReopenedTokenNotice`
-   * の doc「畳んでいない回の本文は1文字も変えない」の直接の裏付け）。
-   */
   it('畳んでいなければ断り書きを付けない（陽性対照: 本文は従来と1文字も変わらない）', () => {
     const text = describeReopenedTokenNotice(reopened, 0, observedAt);
 
@@ -1018,23 +588,15 @@ describe('describeReopenedTokenNotice', () => {
         '「本命」（id tok-a）。枠で止まっていた仕事は、ここから再開できる。',
     );
     expect(text).not.toContain('まとめた');
-    // ⚠️ やりすぎの変異: 単発の本文にも observedAt を焼くと、ここが赤くなる。
     expect(text).not.toContain(observedAt);
   });
 
   it('畳んだ件数が本文に出る（届いた総数 ＝ 畳んだ数 + 配った1件）', () => {
     const text = describeReopenedTokenNotice(reopened, 3, observedAt);
 
-    // 3件畳んで1件配った ＝ この間に届いたのは4件。
     expect(text).toContain('4 件届き、1件にまとめた');
   });
 
-  /**
-   * **畳んだ回は観測時刻を名乗る（Issue #1375）。** 現在形の文言
-   * （「通る状態に戻った」）はそのままに、`observedAt` をそのまま本文へ
-   * 焼くことを固定する——読み手が「この本文はいつの観測か」を自分で
-   * 判断できるようにするための変更であって、言い方を変える変更ではない。
-   */
   it('畳んだ回は本文に観測時刻（observedAt）をそのまま名乗る', () => {
     const text = describeReopenedTokenNotice(reopened, 3, observedAt);
 
@@ -1050,22 +612,6 @@ describe('describeReopenedTokenNotice', () => {
   });
 });
 
-/**
- * **`describeCloneEnvShadowedNotice`（issue #1894）の歯9本は、関数ごと撤去した
- * 2026-10-06 に消した。** 「GitHub の名前で、正本の行より器の環境変数の値が優先して配られている」
- * ことを stderr へ言う関数で、勝つ側（`GITHUB_CREDENTIAL_NAMES`）を撤去したので言う相手が
- * 無い。3点セットは PR 本文にある。
- */
-
-/**
- * **環境変数の「器の env」の取り違えを塞ぐ配線**（2026-10-06）。`main()` の中の配線は
- * 実行時に触れないので、原文で固定する（隣の describe と同じ理由）。
- *
- * 守るのは4つ: (1) 子プロセスへ渡す土台のスナップショットは、**正本を `process.env` へ書き写す前に**
- * 取る (2) 器の env の鍵の1度だけの移行も、書き写す前のスナップショットから行う (3) クローンと
- * 同一プロセスの runner の子の env は、書き写し後の `process.env` ではなくスナップショット由来を渡す
- * (4) 正本の更新（`onApplied`）でクローンのセッションを畳む。
- */
 describe('子プロセスの env の土台は、書き写す前のスナップショットである（2026-10-06）', () => {
   const source = readFileSync(new URL('./index.ts', import.meta.url), 'utf8');
 
@@ -1101,25 +647,6 @@ describe('子プロセスの env の土台は、書き写す前のスナップ�
   });
 });
 
-/**
- * **クローンの門は `wake()` の中の `clone.post(...)` だけを絞る**（Issue #783）。
- *
- * `restore()` / `resumeStoppedByUsage()` はこの門と無関係に呼ぶ——マネージャーは
- * クローンと独立に枠で止まりうるので、一緒に絞ると「起こすべき委譲が起きない」
- * 壊し方になる。`wake()` は `main()` の中の閉包で型でも実行時でも触れないので、
- * 原文を読んで配線を固定する（隣の describe と同じ理由）。
- */
-/**
- * 字面を見る歯（`wake()` が `main()` の中の閉包で実行時に触れないため）の
- * **失敗を読める形にするための小道具**（Issue #783）。
- *
- * `indexOf` の生の値を `toBeGreaterThan(-1)` で見ると、失敗が
- * `expected -1 to be greater than -1` になり、**どの目印が消えたのかが
- * 出力から読めない。** いちばん起きやすい壊れ方が「目印の字面を変えた／
- * 整形が入った」なので、そこを名指しできないと歯の値が半分になる。
- *
- * @returns `body` に見つからなかった目印だけを並べた配列（全部在れば空）。
- */
 function missingAnchors(body: string, anchors: readonly string[]): string[] {
   return anchors.filter((anchor) => !body.includes(anchor));
 }
@@ -1135,7 +662,6 @@ describe('クローンの門は clone.post だけを絞る（restore / resumeSto
     const postAt = wakeBody.indexOf('clone.post(');
     const ifFoldAt = wakeBody.indexOf("decision.kind === 'fold'");
 
-    // 目印が消えていたら、消えた目印そのものを出す（`missingAnchors` の doc）。
     expect(
       missingAnchors(wakeBody, [
         'cloneWakeGate.decide(',
@@ -1143,15 +669,11 @@ describe('クローンの門は clone.post だけを絞る（restore / resumeSto
         "decision.kind === 'fold'",
       ]),
     ).toEqual([]);
-    // 判定 → 畳む/配るの分岐 → clone.post の順で並んでいる
-    // ⟹ clone.post は判定より後ろの、分岐の中にある。
     expect(decideAt).toBeLessThan(ifFoldAt);
     expect(ifFoldAt).toBeLessThan(postAt);
   });
 
   it('restore() / resumeStoppedByUsage() は判定の分岐（if/else）の外にある', () => {
-    // 分岐（`if (decision.kind === 'fold') { ... } else { ... }`）の閉じを
-    // 探し、その後ろで呼ばれていることを確かめる。
     const restoreAt = wakeBody.indexOf('clone.managers');
     const resumeAt = wakeBody.indexOf('.resumeStoppedByUsage(');
     const postAt = wakeBody.indexOf('clone.post(');
@@ -1159,22 +681,10 @@ describe('クローンの門は clone.post だけを絞る（restore / resumeSto
     expect(
       missingAnchors(wakeBody, ['clone.managers', '.resumeStoppedByUsage(', 'clone.post(']),
     ).toEqual([]);
-    // clone.post（分岐の中）より後ろに在る ＝ 分岐を抜けてから呼んでいる。
     expect(postAt).toBeLessThan(restoreAt);
     expect(restoreAt).toBeLessThan(resumeAt);
   });
 
-  /**
-   * **`clone.post(...)` が `identity` を渡すこと**（Issue #1298）。
-   *
-   * `payload.text` は畳んだ件数（`decision.folded`）を含むので、それを
-   * 受信箱側の畳み込み（`inboxCollapseKey`）の鍵に使うと同じ出来事でも
-   * 件数が違うだけで別の鍵になる（#1298 本体）。`event.identity` という
-   * opt-in の欄（`schema.ts` の `external` 分岐）を鍵の優先入力にしたので、
-   * `wake()` 側がこれを実際に渡していることを原文で固定する——渡し忘れは
-   * 型では落ちない（`identity` は optional なので、無くても `InboxEvent`
-   * として妥当）。
-   */
   it('clone.post は identity に deliveredIdentity(reopened) を渡す', () => {
     const postAt = wakeBody.indexOf('clone.post({');
     const postEnd = wakeBody.indexOf('\n          });', postAt);
@@ -1183,7 +693,6 @@ describe('クローンの門は clone.post だけを絞る（restore / resumeSto
     expect(
       missingAnchors(postBlock, [
         'text: describeReopenedTokenNotice(reopened, decision.folded, observedAt),',
-        // 4つ目の条件（#1223 再発）が文言を読まずに判定するための構造化した2欄。
         'tokenId: reopened.tokenId,',
         'observedRecovery,',
         'identity: deliveredIdentity(reopened),',
@@ -1191,12 +700,6 @@ describe('クローンの門は clone.post だけを絞る（restore / resumeSto
     ).toEqual([]);
   });
 
-  /**
-   * **本文へ焼く観測時刻と、合図自身の `at` は同じ変数から来ること**
-   * （Issue #1375）。別々に `new Date()` を呼ぶと、本文の内側（観測時刻）と
-   * 外側（合図の `at`）でズレた時刻を名乗りうる——`describeReopenedTokenNotice`
-   * の doc「同じ UTC ISO 8601 文字列」の裏付けを原文で固定する。
-   */
   it('本文へ渡す observedAt と、合図の at は同じ変数（観測時刻のズレを防ぐ）', () => {
     const elseAt = wakeBody.indexOf('} else {', wakeBody.indexOf("decision.kind === 'fold'"));
     const postAt = wakeBody.indexOf('clone.post({', elseAt);
@@ -1213,26 +716,9 @@ describe('クローンの門は clone.post だけを絞る（restore / resumeSto
   });
 });
 
-/**
- * **`recovered` の日誌行は、受信箱へ配ったかどうかと無関係に必ず出る**
- * （依頼者の明示的な決定）。
- *
- * `journal_read types=["token_rotation"]` で全数を読み戻す運用がこれに
- * 依存している——⛔ 日誌への記録を、配達（クローンの門）の条件の内側へ
- * 移してはいけない。
- *
- * `tokenRotationEntry`（`token-rotator.ts`）自体はクローンの状態を1つも
- * 受け取らない純関数なので、この性質は型のレベルで保たれている。ここで
- * 固定するのは呼び出し側（`settleTokenOutcome`）の配線——`entry` の計算と
- * `stores.journal.append` が、クローンの門（`reopened` ブロックの中の
- * `wake()`）より前後の別の場所にあり、分岐に巻き込まれていないこと。
- */
 describe('recovered の日誌行は、受信箱へ配ったかどうかと無関係に必ず出る', () => {
   const source = readFileSync(new URL('./index.ts', import.meta.url), 'utf8');
-  // **`settleTokenOutcome` の本体だけに絞る。** `stores.journal.append(` はこの
-  // 関数の外にも在る（起動時の撒き直し・その他の配線）——そこまで数えると
-  // 「1箇所だけ」が測れない。関数の始まりから、次の宣言（見張りを起こす配線）の
-  // 手前までを本体とみなす。
+  // `settleTokenOutcome` の本体だけに絞る: `stores.journal.append(` は関数の外にも在り、そこまで数えると「1箇所だけ」が測れないため。
   const fnStart = source.indexOf('async function settleTokenOutcome(');
   const fnEnd = source.indexOf('tokenWatch = startTokenRotationWatch({', fnStart);
   const fnBody = source.slice(fnStart, fnEnd);
@@ -1251,15 +737,11 @@ describe('recovered の日誌行は、受信箱へ配ったかどうかと無関
   });
 
   it('journal への追記は settleTokenOutcome の中に1箇所だけで、クローンの門の分岐に複製されていない', () => {
-    // **件数そのものではなく「何を数えたか」を出す。** `expected 2 to be 1` では
-    // 「門の分岐へ複製された」のか「別の追記が増えた」のかが読めない。
     const occurrences = fnBody.split('stores.journal.append(entry)').length - 1;
     expect({ 'settleTokenOutcome の中の stores.journal.append(entry) の数': occurrences }).toEqual({
       'settleTokenOutcome の中の stores.journal.append(entry) の数': 1,
     });
 
-    // その1箇所は `reopened` のブロック（`if (reopened !== undefined) { ... }`）
-    // を閉じた後に在る ⟹ 畳んだ（配らなかった）回でも実行される。
     const reopenedBlockStart = fnBody.indexOf('if (reopened !== undefined) {');
     const appendAt = fnBody.indexOf('stores.journal.append(entry)');
     const closeAt = fnBody.indexOf('\n    }\n\n    if (entry === null) return;');
@@ -1275,15 +757,6 @@ describe('recovered の日誌行は、受信箱へ配ったかどうかと無関
   });
 });
 
-/**
- * **`token_rotation` の日誌の畳み（issue #1311 段B）は、副作用を1文字も
- * 動かさない。** `TokenRotationJournalFold` 自体の振る舞い（1件目は書く・
- * 同一本文の反復を畳む・本文が変われば書く・idleGap で途切れる）は
- * `token-rotation-journal-fold.test.ts` が実物のクラスで固定している——
- * ここでは、その判定が `settleTokenOutcome` のどこに挿し込まれているかだけを
- * 原文で固定する（`wake()` と同じ理由で `main()` の中の閉包は実行時に触れ
- * ない）。
- */
 describe('settleTokenOutcome への畳みの配線（issue #1311 段B）', () => {
   const source = readFileSync(new URL('./index.ts', import.meta.url), 'utf8');
   const fnStart = source.indexOf('async function settleTokenOutcome(');
@@ -1365,51 +838,8 @@ describe('デーモンが止まるとき、token_rotation の畳み残しを吐�
   });
 });
 
-/**
- * **🔴 Issue #1051: 1回の再開の機会につき、配る合図は1件**
- *
- * ## なぜ真偽表では足りないか
- *
- * 上の `createCloneWakeGate` の describe が測っているのは `decide` の**引数**で
- * ある。**引数が現実のどの状態に対応するかは、そこからは分からない** ——
- * 「常に `fold` を返す」実装も、引数の並べ方を間違えた歯なら通ってしまう。
- *
- * ⟹ **ここでは、クローンの状態のほうを本物と同じ順序で動かす。** 動かし方が
- * 本物と一致していることは `packages/core/src/clone-usage-window.test.ts`
- * （旧 `clone.test.ts`。#1744 で分割済み）の
- * 「usageReleasePending（…Issue #1051）」が実物の `Clone` で固定している
- * （1件目の `post` で印が立ち、2件目は何も動かさず、印は `#pump` が消費する）。
- *
- * | このファイルの歯 | 測るもの |
- * | --- | --- |
- * | `createCloneWakeGate` | `decide` の引数と返り値の対応 |
- * | **ここ** | **本物と同じ順序で状態を動かしたとき、配る件数がいくつになるか** |
- * | `clone-usage-window.test.ts` の `usageReleasePending` | その順序が実物の `Clone` と一致すること |
- */
 describe('🔴 #1051: 1回の再開の機会につき、配る合図は1件', () => {
-  /**
-   * クローンの2つの窓（`usageBlocked` / `usageReleasePending`）を、本物と同じ
-   * 遷移だけで動かす最小の模型。
-   *
-   * **勝手な遷移を足さないこと。** ここに無い動き方をさせると、測っているのは
-   * 本物ではなくこの模型になる。
-   *
-   * ## `gate` を受け取り、`hitUsageLimit()` で `observeUnusable()` も呼ぶ理由（Issue #1223）
-   *
-   * **本物の `clone.ts` では、この2つは `parked` / `exhausted` の outcome のときだけ
-   * 対になる**（#2511 で訂正。以前の doc は「止まる遷移のたびに必ず」と書いて
-   * いたが誤り）。`#reportUsageNotice` は `await this.#observeForTokenRotation({ notice })`
-   * （→ `apps/daemon/src/index.ts` の `onUsageObservation` → `tokenRotator.observe`
-   * → `settleTokenOutcome`。`outcome.kind` が `parked` / `exhausted` なら
-   * `cloneWakeGate.observeUnusable()` を呼ぶ）を**待ってから**
-   * `this.#usageBlocked = withNoticeTextResetsAt(notice, Date.now());` を代入する（`grep -Fn -- 'this.#usageBlocked = withNoticeTextResetsAt(notice' packages/core/src/clone.ts`
-   * の直前の行）。`rotated` の outcome ではその呼び出しが無い——その側は
-   * `decide` が `回した` の印を捨てて塞ぐ。
-   *
-   * この模型の `hitUsageLimit()` は `parked` / `exhausted` 経由の落ち方を表す。
-   * これを省くと、この模型だけが本物より「told を持ち越しやすい」形になり、
-   * #1223 の歯が #1051 の不変条件3を壊しているように**見えてしまう**。
-   */
+  // `hitUsageLimit()` で `observeUnusable()` も呼ぶ: 省くと模型だけが `told` を持ち越しやすい形になり、#1223 の歯が #1051 の不変条件を壊しているように見えるため。
   function fakeClone(gate: CloneWakeGate) {
     let blocked = false;
     let pending = false;
@@ -1420,21 +850,13 @@ describe('🔴 #1051: 1回の再開の機会につき、配る合図は1件', ()
       get usageReleasePending() {
         return pending;
       },
-      /**
-       * 枠で落ちた（`#usageBlocked` が立つ）。**止まっていない状態から止まる
-       * ときだけ `observeUnusable()` を呼ぶ**（`fakeClone` の doc、上）。
-       * 既に止まっている状態でもう一度呼んでも（このテストでは使わない形だが）、
-       * 二重に「鍵が通らなくなった」を観測したことにはしない。
-       */
       hitUsageLimit() {
         if (!blocked) gate.observeUnusable();
         blocked = true;
       },
-      /** 合図が届いた（`post()` の中の1文。止まっているときだけ印が立つ）。 */
       receiveNotice() {
         if (blocked) pending = true;
       },
-      /** `#pump` の先頭 —— 印を消費して枠を降ろし、再試行へ入る。 */
       consumeRelease() {
         pending = false;
         blocked = false;
@@ -1442,7 +864,6 @@ describe('🔴 #1051: 1回の再開の機会につき、配る合図は1件', ()
     };
   }
 
-  /** 門を通して、配ったなら合図をクローンへ渡す（`wake()` と同じ並び）。 */
   function emit(gate: CloneWakeGate, clone: ReturnType<typeof fakeClone>, tokenId: string) {
     const decision = gate.decide(reopened(tokenId), clone.usageBlocked, clone.usageReleasePending);
     if (decision.kind === 'wake') clone.receiveNotice();
@@ -1454,8 +875,6 @@ describe('🔴 #1051: 1回の再開の機会につき、配る合図は1件', ()
     const clone = fakeClone(gate);
     clone.hitUsageLimit();
 
-    // 429 → 成功 → 429 → 成功 …の往復で、回し手は「戻った」を何度でも立てる
-    // （`packages/core/src/token-rotator.test.ts` の #1051 の describe が実測）。
     const kinds = [emit(gate, clone, 'tok-a'), emit(gate, clone, 'tok-a')];
 
     expect(kinds).toEqual(['wake', 'fold']);
@@ -1476,16 +895,12 @@ describe('🔴 #1051: 1回の再開の機会につき、配る合図は1件', ()
     const gate = createCloneWakeGate();
     const clone = fakeClone(gate);
 
-    // 1回目: 枠で止まって、戻った。
     clone.hitUsageLimit();
     const first = emit(gate, clone, 'tok-a');
 
-    // クローンが印を使って再試行に入り、また枠で落ちた
-    // （本物では、ここで `observeUnusable()` が対になって走る——`fakeClone` の doc）。
     clone.consumeRelease();
     clone.hitUsageLimit();
 
-    // 2回目の「戻った」。**畳んではいけない** —— 前の印はもう使われている。
     const second = emit(gate, clone, 'tok-a');
 
     expect([first, second]).toEqual(['wake', 'wake']);
@@ -1497,13 +912,8 @@ describe('🔴 #1051: 1回の再開の機会につき、配る合図は1件', ()
     clone.hitUsageLimit();
 
     expect(emit(gate, clone, 'tok-a')).toBe('wake');
-    // **同じクローンの印（`releasePending`）が立っているので、これは畳む。**
-    // トークンが違っても `releasePending` はクローン1体につき1つで、既に
-    // 立っている ⟹ 2件目が動かすものは無い（#1223 の `told` の話ではなく、
-    // #1051 の `releasePending` がここでは効いている）。
     expect(emit(gate, clone, 'tok-b')).toBe('fold');
 
-    // 再試行が入って、また枠で落ちたなら配る。
     clone.consumeRelease();
     clone.hitUsageLimit();
     expect(emit(gate, clone, 'tok-b')).toBe('wake');

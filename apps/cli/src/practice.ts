@@ -221,21 +221,25 @@ export async function practiceEditCommand(
   const conn = await connect('write');
   if (conn === null) return;
   const { client, target } = conn;
-  const current = await read(client, target, slug);
+  const found = await read(client, target, slug, { acceptUnreadable: true });
+  const unreadable = found === 'unreadable';
+  const current = unreadable ? null : found;
 
   const kind = options.kind ?? current?.kind;
   const title = options.title ?? current?.title;
   if (kind === undefined || title === undefined) {
-    throw new Error(
-      '新しいやり方には --kind と --title が両方必要です: ' +
-        'alteroid practice edit <slug> --kind <種類> --title <題>',
-    );
+    throw new Error(missingKindTitleMessage('edit', slug, unreadable));
   }
 
   // **読んだ時の版を持ち回る（Issue #2853。`memory edit` と同じ）。** エディタを開いている間に
   // クローンが同じやり方へ書くと、版が変わっていて 409 になる（黙って上書きしない）。無い slug は
   // `null`（「読んだ時には無かった」）。古いデーモンが `version` を返さなければ前提なしで書く。
-  const ifMatch = current === null ? null : current.version;
+  const ifMatch = expectedVersion(found);
+  if (unreadable) {
+    stdout.write(
+      `${slug} は読めない形で入っているので、いまの本文は開けません。雛形から書き直します（保存すると読めない前の内容は置き換わります）。\n`,
+    );
+  }
   const initial = template(slug);
   const dir = await mkdtemp(join(tmpdir(), 'alteroid-practice-'));
   const path = join(dir, `${slug}.md`);
@@ -323,15 +327,14 @@ export async function practiceSetCommand(
   const conn = await connect('write');
   if (conn === null) return;
   const { client, target } = conn;
-  const current = await read(client, target, slug);
+  const found = await read(client, target, slug, { acceptUnreadable: true });
+  const unreadable = found === 'unreadable';
+  const current = unreadable ? null : found;
 
   const kind = options.kind ?? current?.kind;
   const title = options.title ?? current?.title;
   if (kind === undefined || title === undefined) {
-    throw new Error(
-      '新しいやり方には --kind と --title が両方必要です: ' +
-        'alteroid practice set <slug> --kind <種類> --title <題>',
-    );
+    throw new Error(missingKindTitleMessage('set', slug, unreadable));
   }
 
   const content =
@@ -507,9 +510,23 @@ async function read(
   client: DaemonClient,
   target: Target,
   slug: string,
-): Promise<{ kind: string; title: string; content: string; version?: string } | null> {
+): Promise<PracticeRead | null>;
+// `show` は本文を出せないので 409 を失敗のままにする。書き直す口だけが受け入れる。
+async function read(
+  client: DaemonClient,
+  target: Target,
+  slug: string,
+  options: { acceptUnreadable: true },
+): Promise<PracticeRead | null | 'unreadable'>;
+async function read(
+  client: DaemonClient,
+  target: Target,
+  slug: string,
+  options?: { acceptUnreadable: true },
+): Promise<PracticeRead | null | 'unreadable'> {
   const response = await client.practices[':slug'].$get({ param: { slug } });
   if (response.status === 404 || response.status === 400) return null;
+  if (response.status === 409 && options?.acceptUnreadable === true) return 'unreadable';
   if (!response.ok) {
     const described = describeAuthFailure(response.status, target);
     if (described !== null) throw new Error(described);
@@ -529,6 +546,27 @@ async function read(
     // 古いデーモンは `version` を返さない（その場合は前提なし＝従来どおり後勝ちで書く）。
     ...('version' in body && typeof body.version === 'string' ? { version: body.version } : {}),
   };
+}
+
+type PracticeRead = { kind: string; title: string; content: string; version?: string };
+
+function missingKindTitleMessage(
+  command: 'edit' | 'set',
+  slug: string,
+  unreadable: boolean,
+): string {
+  const usage = `alteroid practice ${command} <slug> --kind <種類> --title <題>`;
+  return unreadable
+    ? `やり方 ${slug} は読めない形で入っていて、いまの種類と題を引き継げません。` +
+        `書き直すには --kind と --title を両方指定してください（読めない前の内容は残りません）: ${usage}`
+    : `新しいやり方には --kind と --title が両方必要です: ${usage}`;
+}
+
+// 読めない形の行へ `null`（「無かった」）を送らない: pg の実装は行の存在を衝突として 409 にする
+// （fs は通す）。デーモンの `PUT` は版が無くても 428 を返さないので、前提なしで書ける。
+function expectedVersion(current: PracticeRead | null | 'unreadable'): string | null | undefined {
+  if (current === 'unreadable') return undefined;
+  return current === null ? null : current.version;
 }
 
 /** `PUT` が 409（読んだ後に変わっていた。Issue #2853）を返した。`current` はいまの本文（消えていれば null）。 */

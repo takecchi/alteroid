@@ -4,11 +4,6 @@ import { describe, expect, it } from 'vitest';
 
 import { createApp } from './app.js';
 
-/**
- * HTTP の commitments の口（`POST /commitments`・`PATCH /commitments/:id`）も、NUL だけの本文を
- * 断る（Issue #3388。道具 `commitment_open` / `commitment_edit` と同じ）。台帳の入口は本文から NUL を
- * 落として残すので、検査が生の値の長さ（`z.string().min(1)`）だと、NUL だけの本文が空の本文になる。
- */
 function setup() {
   const stores = createMemoryStores();
   const clone: CloneHost = {

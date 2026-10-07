@@ -15,30 +15,8 @@ import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { makeTempDir } from '../../../vitest.tmpdir.js';
 import { createMigratedPglite, migratedTemplate } from './pglite-template.test-support.js';
 
-/**
- * pg の `PermissionGrantStore.revoke()` / `markUsed()` が読めない行
- * （`permissionGrantSchema` に合わない。版ずれ・手編集を模す）でも
- * 書き換えたうえで「無い」を返していた食い違い（issue #2158）。fs は元から
- * 読めない行に触れずに「無い」を返す（`packages/storage-fs/src/permission-
- * grants-malformed-row-repro.test.ts` の「revoke() / markUsed() は、無い id
- * と同じく壊れた行の id にも『無い』として振る舞う」で既に固定済み）。
- *
- * `apps/daemon/src/permission-grant-put-validation.test.ts`（issue #2065。
- * `put()` の3実装横断）と同じ置き場・同じ理由——`apps/daemon` だけが
- * `@alteroid/core` / `@alteroid/storage-fs` / `@alteroid/storage-pg` の
- * 3つすべてに依存できるため、fs / pg を横並びにした歯はここへ置く。
- *
- * **インメモリ実装（`createMemoryStores`）は対象外。** `PermissionGrantStore`
- * の唯一の書き手（`put` / `revoke` / `markUsed`）が常に
- * `permissionGrantSchema.parse` を通してから `Map` へ入れる
- * （`packages/core/src/testing.ts`）——`Map` はモジュール private で外から
- * 直接書き込む口も無いので、壊れた行をそもそも作れない。fs はファイルを、
- * pg はテーブルを迂回して直接書けるが、memory には「直接書く」に相当する
- * 対象が無い。
- */
 describe('PermissionGrantStore.revoke() / markUsed() — 読めない行は書き換えない（fs / pg。issue #2158）', () => {
-  // PGlite の雛形（WASM の起動＋migrate）は、ワーカーで最初に呼んだ歯が払う。
-  // 歯の本体（既定 5000ms）でなく hook（明示 30_000ms）で払わせる（issue #2337）。
+  // 雛形の払いは歯の本体（既定 5000ms）でなく hook（30_000ms）に持たせる: WASM の起動＋migrate がワーカーで最初に呼んだ歯に乗るため。
   beforeAll(async () => {
     await migratedTemplate();
   }, 30_000);
@@ -54,9 +32,6 @@ describe('PermissionGrantStore.revoke() / markUsed() — 読めない行は書�
     route: { principalKind: 'account', accountId: 'acc-1' },
   };
 
-  // `route`（必須欄）が欠けている——版ずれ・手編集を模す
-  // （fs 側の既存の歯 `permission-grants-malformed-row-repro.test.ts` と
-  // 同じ壊し方で揃える）。
   const BROKEN_RAW = {
     id: 'grant-broken',
     rule: 'Bash(rm -rf /some/path:*)',
@@ -65,16 +40,12 @@ describe('PermissionGrantStore.revoke() / markUsed() — 読めない行は書�
     approvalId: 'ap-broken',
     answer: '許可します',
     grantedAt: '2026-01-02T00:00:00.000Z',
-    // route が無い。
   };
 
   interface Harness {
     stores: { permissionGrants: PermissionGrantStore };
-    /** 読めない行を、ストアを経由せず直接書く。 */
     insertBrokenRow(): Promise<void>;
-    /** 読める行を、ストアを経由せず直接書く（対照用）。 */
     insertGoodRow(): Promise<void>;
-    /** 永続化された生の行を、ストアを経由せず直接読む。 */
     readRawRow(id: string): Promise<unknown>;
   }
 
@@ -178,7 +149,6 @@ describe('PermissionGrantStore.revoke() / markUsed() — 読めない行は書�
       });
 
       expect(error).toBeInstanceOf(UnreadablePermissionGrantError);
-      // 読めない行の許可は「許可が無い」ものとして扱われる（fail-closed のまま）。
       expect(await harness.stores.permissionGrants.get(BROKEN_RAW.id)).toBeNull();
       expect(await harness.stores.permissionGrants.list()).toEqual([]);
       const after = await harness.readRawRow(BROKEN_RAW.id);
