@@ -17,6 +17,7 @@ import {
   ErrorNote,
   Spinner,
   TurnFailureNote,
+  type TurnFailureKind,
   useIsMobile,
   EMPTY_QUESTIONS_DRAFT,
 } from '@alteroid/ui';
@@ -107,7 +108,22 @@ const NO_REPLY_KEYS: ReadonlySet<string> = new Set();
  * ストリームの `error` イベント（ターンが失敗した）由来の失敗。入力欄の上の帯が、ネットワーク断・
  * 403 のような「呼べなかった」失敗（ただの `Error`）と見分けて、利用者向けの文で描くための型。
  */
-class TurnFailedError extends Error {}
+class TurnFailedError extends Error {
+  constructor(
+    message: string,
+    readonly failureKind: TurnFailureKind,
+  ) {
+    super(message);
+  }
+}
+
+/** 失敗の案内の導線。受信中の帯と読み直した失敗の行で同じものを出す。 */
+const turnFailureAction = (kind: TurnFailureKind) =>
+  kind === 'auth' ? (
+    <Link to="/tokens" className="text-xs underline underline-offset-2">
+      認証トークンの画面を開く
+    </Link>
+  ) : undefined;
 
 /**
  * `done` / `error` / `usage_limited` のどれも来ないまま、接続が正常に閉じた（プロキシ・再起動など、#3564）。
@@ -353,6 +369,8 @@ interface Line {
    * `failed` はもう一度送れば試し直せる、`held` は枠が開けばクローンが自分で試し直す。
    */
   turnFailure?: 'failed' | 'held';
+  /** サーバの `turnFailureKind` をそのまま写す（`turnFailure` と同時に付く）。 */
+  turnFailureKind?: TurnFailureKind;
   /**
    * 同じストリーム（＝1ターン）の返信行をまとめる印（#3593）。`ask_human`・道具を挟んで返信が
    * 複数の行に分かれても、日誌には**ターン末に1つの発言**（本文を連結したもの）として載る
@@ -823,19 +841,19 @@ export function buildEditVersions(
  * ここも直すこと。
  */
 export function describeCloneInterruptOutcome(
-  outcome: 'interrupted' | 'idle' | 'unsupported' | 'withdrawn' | 'not_target' | 'starting',
+  outcome: 'interrupted' | 'withdrawn' | 'not_target' | 'starting' | 'idle' | 'unsupported',
 ): string {
   switch (outcome) {
+    case 'withdrawn':
+      return '順番待ちだった発言を取り下げました（送っていません）。書いた文は入力欄へ戻しました。先客のターンには触れていません。';
+    case 'not_target':
+      return 'いま走っているのは、この発言のターンではない（別の起点の）ターンです。先客のターンは止めていません。';
+    case 'starting':
+      return 'この発言のターンが始まる直前でした（まだ止めていません）。もう一度押してください。';
     case 'interrupted':
       return 'いま走っていたクローンのターンを止めた。会話の続きと受信箱はそのまま残る（次の合図で次のターンが始まる）。';
     case 'idle':
       return '走っているターンは無かった（止めるものが無い）。';
-    case 'withdrawn':
-      return '順番待ちだった発言を取り下げた（クローンには配らない）。';
-    case 'not_target':
-      return '走っているのは別の仕事のターンなので、止めなかった。';
-    case 'starting':
-      return 'ターンがまだ始まる前だったので、止められなかった。もう一度止めると止まる。';
     case 'unsupported':
       return 'このサーバのクローンは、ターンを止められない。';
   }
@@ -1018,6 +1036,17 @@ interface Stream {
   opened: Promise<string>;
   settleOpen: (conversationId: string) => void;
   failOpen: (reason: unknown) => void;
+  /**
+   * このストリームを立てた送信（#3956）。止めるボタンはこの発言だけを対象に渡す。追送は載せない
+   * （走っているのは先に送った発言のターンで、追送を指すと止めるべきターンを外す）。
+   */
+  turn?: {
+    clientMessageId: string;
+    text: string;
+    lineKey: string;
+    supersedes: string | undefined;
+    attachments: PendingAttachment[];
+  };
 }
 
 function createStream(controller: AbortController, id: string | undefined): Stream {
@@ -1921,7 +1950,12 @@ export function ChatPane({
           // ——編集の入口を出すかは呼び出し側が `role === 'human'` も併せて
           // 見るので、ここでは単に「サーバ確定済みの発言である」ことを表す。
           journalId: message.id,
-          ...(message.turnFailure === undefined ? {} : { turnFailure: message.turnFailure }),
+          ...(message.turnFailure === undefined
+            ? {}
+            : {
+                turnFailure: message.turnFailure,
+                turnFailureKind: message.turnFailureKind ?? 'other',
+              }),
           ...(message.attachments === undefined || message.attachments.length === 0
             ? {}
             : { attachments: message.attachments }),
@@ -2763,7 +2797,9 @@ export function ChatPane({
         case 'error':
           settleReply();
           markFailedTurn('failed');
-          setFailures((prev) => new Map(prev).set(stream.id, new TurnFailedError(event.message)));
+          setFailures((prev) =>
+            new Map(prev).set(stream.id, new TurnFailedError(event.message, event.kind)),
+          );
           if (owns()) refetchApprovalsRef.current();
           break;
         case 'done':
@@ -3222,6 +3258,7 @@ export function ChatPane({
         shownId,
         clientMessageId,
       );
+      stream.turn = { clientMessageId, text, lineKey, supersedes, attachments };
       let opened = false;
       // 終端（`done` / `error` / `usage_limited`）を見たか。見ないまま閉じたら失敗として出す（#3564）。
       let sawTerminal = false;
@@ -3672,8 +3709,33 @@ export function ChatPane({
        */
       setInterruptNotice(undefined);
       setInterruptFailure(undefined);
+      /*
+       * **いま送った発言があれば、それだけを止める対象に渡す（#3956）。** 渡さないと、順番待ちの間に
+       * 押しても先客のターン（蒸留・マネージャーとの往復など）を止めてしまう。受信を張っていない会話
+       * （再読み込み・戻ってきた再生）には自分の発言が手元に無いので、対象を省いて従来どおり止める。
+       */
+      const running = streamRef.current;
+      const turn =
+        running !== undefined && running.id === pressedConversationId ? running.turn : undefined;
       try {
-        const outcome = await interruptClone();
+        const outcome = await interruptClone(
+          turn === undefined
+            ? undefined
+            : { conversationId: pressedConversationId, clientMessageId: turn.clientMessageId },
+        );
+        if (outcome === 'withdrawn' && turn !== undefined && running !== undefined) {
+          // 取り下げた発言の SSE には終端が流れない。閉じないと「順番を待っている…」のまま残る。
+          // 文は新しい id で積み直す（同じ id で送ると重複扱いで配られない）。
+          running.controller.abort();
+          giveBack(
+            pressedConversationId,
+            turn.text,
+            turn.lineKey,
+            turn.supersedes,
+            turn.attachments,
+            newClientMessageId(),
+          );
+        }
         setInterruptNotice({
           conversationId: pressedConversationId,
           text: describeCloneInterruptOutcome(outcome),
@@ -3684,7 +3746,7 @@ export function ChatPane({
         setInterrupting(undefined);
       }
     },
-    [interruptClone],
+    [interruptClone, giveBack],
   );
 
   /**
@@ -4024,6 +4086,8 @@ export function ChatPane({
                       <ChatTurnFailure
                         key={line.key}
                         kind={line.turnFailure}
+                        failureKind={line.turnFailureKind ?? 'other'}
+                        action={turnFailureAction}
                         text={line.text}
                         onRetry={
                           retryLine === undefined
@@ -4300,14 +4364,9 @@ export function ChatPane({
               {shownFailure === undefined ||
               shownFailure === null ? undefined : shownFailure instanceof TurnFailedError ? (
                 <TurnFailureNote
+                  kind={shownFailure.failureKind}
                   message={shownFailure.message}
-                  action={(kind) =>
-                    kind === 'auth' ? (
-                      <Link to="/tokens" className="text-xs underline underline-offset-2">
-                        認証トークンの画面を開く
-                      </Link>
-                    ) : undefined
-                  }
+                  action={turnFailureAction}
                 />
               ) : (
                 <div>

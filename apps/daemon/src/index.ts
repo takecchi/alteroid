@@ -23,6 +23,8 @@ import {
   createCredentialService,
   createMcpServerService,
   createPluginDistributionService,
+  createPluginFetcher,
+  resolveMarketplaceUrl,
   createCodexChatgptAuthService,
   startCodexDeviceLogin,
   createProfileService,
@@ -606,6 +608,11 @@ export async function main(): Promise<void> {
 
   const pluginDistributionService = createPluginDistributionService({ stores, runners });
 
+  // 取り元の URL を書き写し前の環境（`bootEnvSnapshot`）から読む: 正本の環境変数はクローンが書けるので、そこから取り元を差し替えられないようにするため
+  const pluginFetcher = createPluginFetcher({
+    marketplaceUrl: resolveMarketplaceUrl(bootEnvSnapshot.ALTEROID_PLUGIN_MARKETPLACE_URL),
+  });
+
   // Codex の ChatGPT ログインの正本（#3939）。インスタンスは1つだけ作り、HTTP の口とマネージャーの
   // プール（runner の名乗りのたびの降ろし直し・書き戻し）の両方へ渡す。
   const codexAuthService = createCodexChatgptAuthService({
@@ -1069,6 +1076,8 @@ export async function main(): Promise<void> {
     profile: profileService,
     credentials: credentialService,
     mcpServers: mcpServerService,
+    pluginFetcher,
+    pluginDistribution: pluginDistributionService,
     codexAuth: codexAuthService,
     tokens: tokenPoolService,
     clearSessionLog: storage.clearSessionLog,

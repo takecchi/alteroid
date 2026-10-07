@@ -681,9 +681,13 @@
                         },
                         "message": {
                           "type": "string"
+                        },
+                        "kind": {
+                          "type": "string",
+                          "enum": ["auth", "quota", "other"]
                         }
                       },
-                      "required": ["type", "message"]
+                      "required": ["type", "message", "kind"]
                     }
                   ]
                 }
@@ -935,9 +939,13 @@
                         },
                         "message": {
                           "type": "string"
+                        },
+                        "kind": {
+                          "type": "string",
+                          "enum": ["auth", "quota", "other"]
                         }
                       },
-                      "required": ["type", "message"]
+                      "required": ["type", "message", "kind"]
                     }
                   ]
                 }
@@ -1339,6 +1347,10 @@
                             "type": "string",
                             "enum": ["failed", "held"]
                           },
+                          "turnFailureKind": {
+                            "type": "string",
+                            "enum": ["auth", "quota", "other"]
+                          },
                           "attachments": {
                             "type": "array",
                             "items": {
@@ -1686,6 +1698,10 @@
                         "turnFailure": {
                           "type": "string",
                           "enum": ["failed", "held"]
+                        },
+                        "turnFailureKind": {
+                          "type": "string",
+                          "enum": ["auth", "quota", "other"]
                         },
                         "approvalId": {
                           "type": "string"
@@ -6415,6 +6431,10 @@
                                 "type": "string",
                                 "enum": ["failed", "held"]
                               },
+                              "turnFailureKind": {
+                                "type": "string",
+                                "enum": ["auth", "quota", "other"]
+                              },
                               "approvalId": {
                                 "type": "string"
                               },
@@ -10196,6 +10216,10 @@
                                   "type": "string",
                                   "enum": ["failed", "held"]
                                 },
+                                "turnFailureKind": {
+                                  "type": "string",
+                                  "enum": ["auth", "quota", "other"]
+                                },
                                 "approvalId": {
                                   "type": "string"
                                 },
@@ -11549,6 +11573,10 @@
                                 "turnFailure": {
                                   "type": "string",
                                   "enum": ["failed", "held"]
+                                },
+                                "turnFailureKind": {
+                                  "type": "string",
+                                  "enum": ["auth", "quota", "other"]
                                 },
                                 "approvalId": {
                                   "type": "string"
@@ -12904,6 +12932,10 @@
                                 "type": "string",
                                 "enum": ["failed", "held"]
                               },
+                              "turnFailureKind": {
+                                "type": "string",
+                                "enum": ["auth", "quota", "other"]
+                              },
                               "approvalId": {
                                 "type": "string"
                               },
@@ -14245,6 +14277,10 @@
                               "turnFailure": {
                                 "type": "string",
                                 "enum": ["failed", "held"]
+                              },
+                              "turnFailureKind": {
+                                "type": "string",
+                                "enum": ["auth", "quota", "other"]
                               },
                               "approvalId": {
                                 "type": "string"
@@ -21960,6 +21996,930 @@
             }
           }
         }
+      }
+    },
+    "/plugins": {
+      "get": {
+        "operationId": "getPlugins",
+        "tags": ["plugins"],
+        "summary": "入れてある plugin の一覧（files は含まない）",
+        "responses": {
+          "200": {
+            "description": "入れてある plugin の要約。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "plugins": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "name": {
+                            "type": "string"
+                          },
+                          "source": {
+                            "type": "object",
+                            "properties": {
+                              "kind": {
+                                "type": "string",
+                                "enum": ["url", "marketplace"]
+                              },
+                              "url": {
+                                "type": "string"
+                              },
+                              "path": {
+                                "type": "string"
+                              },
+                              "sha": {
+                                "type": "string"
+                              },
+                              "version": {
+                                "type": "string"
+                              },
+                              "marketplace": {
+                                "type": "string"
+                              },
+                              "plugin": {
+                                "type": "string"
+                              }
+                            },
+                            "required": ["kind", "url", "sha"]
+                          },
+                          "scope": {
+                            "type": "string",
+                            "enum": ["all", "app", "runner"]
+                          },
+                          "enableHooks": {
+                            "type": "boolean"
+                          },
+                          "enableMcp": {
+                            "type": "boolean"
+                          },
+                          "contentSha256": {
+                            "type": "string"
+                          },
+                          "installedAt": {
+                            "type": "string"
+                          },
+                          "installedBy": {
+                            "type": "string"
+                          },
+                          "fileCount": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          },
+                          "totalBytes": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          }
+                        },
+                        "required": [
+                          "name",
+                          "source",
+                          "scope",
+                          "enableHooks",
+                          "enableMcp",
+                          "contentSha256",
+                          "installedAt",
+                          "installedBy",
+                          "fileCount",
+                          "totalBytes"
+                        ]
+                      }
+                    }
+                  },
+                  "required": ["plugins"]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "許可（`access grant`）の無いアカウント。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "postPlugins",
+        "tags": ["plugins"],
+        "summary": "プレビューした plugin を入れる（確定）",
+        "responses": {
+          "200": {
+            "description": "入れた plugin と、runner ごとの配布結果。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "plugin": {
+                      "type": "object",
+                      "properties": {
+                        "name": {
+                          "type": "string"
+                        },
+                        "source": {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "enum": ["url", "marketplace"]
+                            },
+                            "url": {
+                              "type": "string"
+                            },
+                            "path": {
+                              "type": "string"
+                            },
+                            "sha": {
+                              "type": "string"
+                            },
+                            "version": {
+                              "type": "string"
+                            },
+                            "marketplace": {
+                              "type": "string"
+                            },
+                            "plugin": {
+                              "type": "string"
+                            }
+                          },
+                          "required": ["kind", "url", "sha"]
+                        },
+                        "scope": {
+                          "type": "string",
+                          "enum": ["all", "app", "runner"]
+                        },
+                        "enableHooks": {
+                          "type": "boolean"
+                        },
+                        "enableMcp": {
+                          "type": "boolean"
+                        },
+                        "contentSha256": {
+                          "type": "string"
+                        },
+                        "installedAt": {
+                          "type": "string"
+                        },
+                        "installedBy": {
+                          "type": "string"
+                        },
+                        "fileCount": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "totalBytes": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        }
+                      },
+                      "required": [
+                        "name",
+                        "source",
+                        "scope",
+                        "enableHooks",
+                        "enableMcp",
+                        "contentSha256",
+                        "installedAt",
+                        "installedBy",
+                        "fileCount",
+                        "totalBytes"
+                      ]
+                    },
+                    "appliesFrom": {
+                      "type": "string"
+                    },
+                    "runners": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "runnerId": {
+                            "type": "string"
+                          },
+                          "ok": {
+                            "type": "boolean"
+                          },
+                          "plugins": {
+                            "type": "object",
+                            "properties": {
+                              "sha256": {
+                                "type": "string"
+                              },
+                              "plugins": {
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "properties": {
+                                    "name": {
+                                      "type": "string"
+                                    },
+                                    "sha": {
+                                      "type": "string"
+                                    },
+                                    "contentSha256": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": ["name", "sha", "contentSha256"]
+                                }
+                              },
+                              "updatedAt": {
+                                "type": "string"
+                              }
+                            },
+                            "required": ["sha256", "plugins", "updatedAt"]
+                          },
+                          "unsupported": {
+                            "type": "boolean",
+                            "const": true
+                          },
+                          "error": {
+                            "type": "string"
+                          }
+                        },
+                        "required": ["runnerId", "ok"]
+                      }
+                    }
+                  },
+                  "required": ["plugin", "appliesFrom", "runners"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "入力が不正、または保存できない形（何も保存していない）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "許可（`access grant`）の無いアカウント。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "previewId が無い（期限切れ・確定済み・別のデーモン）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "名前が既存の名前と大文字小文字だけ違う。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "日誌が書けなかったので入れていない。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string",
+                      "const": "journal_write_failed"
+                    }
+                  },
+                  "required": ["error", "code"]
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "previewId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 256
+                  },
+                  "scope": {
+                    "default": "all",
+                    "type": "string",
+                    "enum": ["all", "app", "runner"]
+                  },
+                  "enableHooks": {
+                    "default": false,
+                    "type": "boolean"
+                  },
+                  "enableMcp": {
+                    "default": false,
+                    "type": "boolean"
+                  }
+                },
+                "required": ["previewId"],
+                "additionalProperties": false
+              }
+            }
+          }
+        }
+      }
+    },
+    "/plugins/preview": {
+      "post": {
+        "operationId": "postPluginsPreview",
+        "tags": ["plugins"],
+        "summary": "plugin を取って中身の要約を返す（まだ入れない）",
+        "responses": {
+          "200": {
+            "description": "要約と、確定に使う previewId（期限つき）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "previewId": {
+                      "type": "string"
+                    },
+                    "expiresAt": {
+                      "type": "string"
+                    },
+                    "summary": {
+                      "type": "object",
+                      "properties": {
+                        "name": {
+                          "type": "string"
+                        },
+                        "description": {
+                          "type": "string"
+                        },
+                        "source": {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "enum": ["url", "marketplace"]
+                            },
+                            "url": {
+                              "type": "string"
+                            },
+                            "path": {
+                              "type": "string"
+                            },
+                            "sha": {
+                              "type": "string"
+                            },
+                            "version": {
+                              "type": "string"
+                            },
+                            "marketplace": {
+                              "type": "string"
+                            },
+                            "plugin": {
+                              "type": "string"
+                            }
+                          },
+                          "required": ["kind", "url", "sha"]
+                        },
+                        "sha": {
+                          "type": "string"
+                        },
+                        "fileCount": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "totalBytes": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "files": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "path": {
+                                "type": "string"
+                              },
+                              "size": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "executable": {
+                                "type": "boolean"
+                              }
+                            },
+                            "required": ["path", "size", "executable"]
+                          }
+                        },
+                        "counts": {
+                          "type": "object",
+                          "properties": {
+                            "skills": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "agents": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "commands": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            }
+                          },
+                          "required": ["skills", "agents", "commands"]
+                        },
+                        "hooks": {
+                          "type": "object",
+                          "properties": {
+                            "present": {
+                              "type": "boolean"
+                            },
+                            "paths": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            }
+                          },
+                          "required": ["present", "paths"]
+                        },
+                        "modules": {
+                          "type": "object",
+                          "properties": {
+                            "present": {
+                              "type": "boolean"
+                            },
+                            "paths": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            }
+                          },
+                          "required": ["present", "paths"]
+                        },
+                        "lspServers": {
+                          "type": "object",
+                          "properties": {
+                            "present": {
+                              "type": "boolean"
+                            },
+                            "paths": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            }
+                          },
+                          "required": ["present", "paths"]
+                        },
+                        "mcp": {
+                          "type": "object",
+                          "properties": {
+                            "present": {
+                              "type": "boolean"
+                            },
+                            "paths": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            }
+                          },
+                          "required": ["present", "paths"]
+                        },
+                        "executables": {
+                          "type": "object",
+                          "properties": {
+                            "extracted": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            },
+                            "notExtracted": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            }
+                          },
+                          "required": ["extracted", "notExtracted"]
+                        },
+                        "shellExecution": {
+                          "type": "object",
+                          "properties": {
+                            "present": {
+                              "type": "boolean"
+                            },
+                            "paths": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            }
+                          },
+                          "required": ["present", "paths"]
+                        },
+                        "skipped": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "path": {
+                                "type": "string"
+                              },
+                              "reason": {
+                                "type": "string"
+                              }
+                            },
+                            "required": ["path", "reason"]
+                          }
+                        },
+                        "extractorDrops": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "path": {
+                                "type": "string"
+                              },
+                              "reason": {
+                                "type": "string"
+                              }
+                            },
+                            "required": ["path", "reason"]
+                          }
+                        },
+                        "skillExcerpts": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "path": {
+                                "type": "string"
+                              },
+                              "excerpt": {
+                                "type": "string"
+                              },
+                              "truncated": {
+                                "type": "boolean"
+                              }
+                            },
+                            "required": ["path", "excerpt", "truncated"]
+                          }
+                        }
+                      },
+                      "required": [
+                        "name",
+                        "source",
+                        "sha",
+                        "fileCount",
+                        "totalBytes",
+                        "files",
+                        "counts",
+                        "hooks",
+                        "modules",
+                        "lspServers",
+                        "mcp",
+                        "executables",
+                        "shellExecution",
+                        "skipped",
+                        "extractorDrops",
+                        "skillExcerpts"
+                      ]
+                    }
+                  },
+                  "required": ["previewId", "expiresAt", "summary"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "入力・取り元の中身が不正（上限超過・path が無い・名前が使えない など）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "許可（`access grant`）の無いアカウント。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "取り元から取れなかった（接続・時間・サイズの上限）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "取得の口が無い、または公式 marketplace の URL が未設定。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "const": "url"
+                      },
+                      "url": {
+                        "type": "string"
+                      },
+                      "path": {
+                        "type": "string"
+                      },
+                      "ref": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 256
+                      },
+                      "sha": {
+                        "type": "string",
+                        "pattern": "^[0-9a-f]{40}$"
+                      }
+                    },
+                    "required": ["kind", "url"],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "const": "marketplace"
+                      },
+                      "plugin": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z0-9_-]{1,64}$"
+                      }
+                    },
+                    "required": ["kind", "plugin"],
+                    "additionalProperties": false
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/plugins/{name}": {
+      "delete": {
+        "operationId": "deletePluginsByName",
+        "tags": ["plugins"],
+        "summary": "plugin を外す",
+        "responses": {
+          "200": {
+            "description": "外した plugin の名前と、runner ごとの配布結果。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "appliesFrom": {
+                      "type": "string"
+                    },
+                    "runners": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "runnerId": {
+                            "type": "string"
+                          },
+                          "ok": {
+                            "type": "boolean"
+                          },
+                          "plugins": {
+                            "type": "object",
+                            "properties": {
+                              "sha256": {
+                                "type": "string"
+                              },
+                              "plugins": {
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "properties": {
+                                    "name": {
+                                      "type": "string"
+                                    },
+                                    "sha": {
+                                      "type": "string"
+                                    },
+                                    "contentSha256": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": ["name", "sha", "contentSha256"]
+                                }
+                              },
+                              "updatedAt": {
+                                "type": "string"
+                              }
+                            },
+                            "required": ["sha256", "plugins", "updatedAt"]
+                          },
+                          "unsupported": {
+                            "type": "boolean",
+                            "const": true
+                          },
+                          "error": {
+                            "type": "string"
+                          }
+                        },
+                        "required": ["runnerId", "ok"]
+                      }
+                    }
+                  },
+                  "required": ["name", "appliesFrom", "runners"]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "許可（`access grant`）の無いアカウント。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "その名前の plugin は入っていない。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "日誌が書けなかったので外していない。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string",
+                      "const": "journal_write_failed"
+                    }
+                  },
+                  "required": ["error", "code"]
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "name",
+            "required": true
+          }
+        ]
       }
     },
     "/credentials": {

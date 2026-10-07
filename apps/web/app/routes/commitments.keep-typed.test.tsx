@@ -124,7 +124,10 @@ describe('本文の編集欄', () => {
     fireEvent.change(textarea, { target: { value: '直した本文' } });
     fireEvent.click(screen.getByRole('button', { name: '保存' }));
     await waitFor(() => expect(server.writes).toHaveLength(1));
-    expect(server.writes[0]).toEqual({ method: 'PATCH', body: { body: '直した本文' } });
+    expect(server.writes[0]).toEqual({
+      method: 'PATCH',
+      body: { body: '直した本文', ifMatch: ENTRY.at },
+    });
 
     fireEvent.change(textarea, { target: { value: '直した本文に打ち足す' } });
     server.releaseNext();
