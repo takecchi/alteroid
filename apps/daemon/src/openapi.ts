@@ -29,6 +29,7 @@ import {
   runnerLivenessSchema,
   runnerMcpServersFingerprintSchema,
   runnerProfileFingerprintSchema,
+  scheduledRequestSchema,
   scheduleSpecSchema,
   tokenRotationPolicySchema,
   tokenRotationSettingsSchema,
@@ -130,6 +131,7 @@ export const attachmentErrorResponseSchema = z.object({
   code: z
     .enum([
       'too_large',
+      'image_dimension_too_large',
       'magic_mismatch',
       'too_many',
       'total_too_large',
@@ -868,6 +870,17 @@ export const scheduleStatusSchema = z.object({
   lastRunAt: z.string().optional(),
 });
 
+/**
+ * `POST /schedule` の、`ifMatch`（読んだ時の版）が合わなかったときの 409（Issue #3821）。
+ * `memoryConflictResponseSchema` / `practiceConflictResponseSchema` と同じ形: `current` は
+ * **いまの依頼**（読んだ後に消されていれば null）で、その `updatedAt` が次に送る版になる。
+ * 既定の定期ジョブの名前での 409（`{ error }` だけ）とは、`current` の鍵の有無で見分ける。
+ */
+export const scheduleConflictResponseSchema = z.object({
+  error: z.string(),
+  current: scheduledRequestSchema.nullable(),
+});
+
 export const scheduleListResponseSchema = z.object({
   entries: z.array(scheduleStatusSchema),
   /**
@@ -1563,21 +1576,6 @@ export const managerSummarySchema = z.object({
    * — 「数えていない」と「0 件だった」を同じ形にしない。
    */
   denials: z.array(managerDenialSchema).optional(),
-  /**
-   * この委譲のマネージャー層が走っている provider の id（`claude` / `codex` …。
-   * #486 S9）。宛先の runner が `hello` で名乗った値（`ManagerPool.
-   * runnerReportedManagerProvider()`）を、外向きの面でだけ合流させる
-   * （`denials` と同じ作法。`ManagerSummary` には無い）。
-   *
-   * **欄が無いことは「不明」である。`claude` とは読まない。** まだどの runner にも
-   * 置かれていない委譲・名乗りをまだ受けていない runner・欄を送らない旧い runner では
-   * 載せない。経路判断が使う既定（`ManagerPool.runnerManagerProvider()` の `claude`）
-   * とは別の読み口で、取れなかったことを claude に化けさせない。
-   *
-   * **クローン層の provider は委譲ごとの値ではなく、デーモン全体で1つ**
-   * （`ALTEROID_CLONE_PROVIDER`）なので、ここには載せない。
-   */
-  managerProvider: z.string().optional(),
 });
 
 export const managersListResponseSchema = z.object({
@@ -1884,13 +1882,6 @@ export const runnersListResponseSchema = z.object({
    * 突き合わせ忘れがそのまま見逃しになる。
    */
   daemonRevision: daemonRevisionSchema,
-  /**
-   * クローン層の provider の id（`claude` …。#486 S9）。**デーモン全体で1つ**
-   * （`ALTEROID_CLONE_PROVIDER`。委譲ごとの値ではない）で、デーモンが起動時に解決して
-   * 必ず持つので、実デーモンでは常に載る（既定が `claude` であるのは仕様）。
-   * 欄が無いのは配線されていない構成だけで、**そのときは `claude` と読まず「不明」と読む。**
-   */
-  cloneProvider: z.string().optional(),
 });
 
 /**

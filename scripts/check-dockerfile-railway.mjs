@@ -1,21 +1,5 @@
 #!/usr/bin/env node
-/**
- * Railway のビルドで落ちる書き方（いまは `RUN --mount`）を Dockerfile から締め出す
- * （`pnpm check:dockerfile-railway`。Issue #2685）。
- *
- * **判定ロジックはここに置かない。** `check-dockerfile-railway-core.mjs` が正本で、
- * 規則の根拠・禁止していないもの・対象の決め方はあちらの doc に書いてある。
- * ここは「対象を列挙して、読んで、渡して、終了コードを決める」だけの薄い層
- * （`check-tracked-nul-bytes.mjs` と同じ分け方）。
- *
- * ## 終了コード
- *
- * | 状態 | コード |
- * |---|---|
- * | 違反なし | 0 |
- * | 違反あり | 1 |
- * | 対象を列挙できない・0件・読めない・`dockerfilePath` が壊れている | 1（fail-closed） |
- */
+// 使い方: pnpm check:dockerfile-railway（違反なし 0、違反あり・対象を列挙できない・0件・読めない場合は 1）
 
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -89,7 +73,6 @@ function main() {
     return;
   }
 
-  // **必ず1行出す**（出ていなければ走っていないと読める）。
   log(
     `check-dockerfile-railway: OK — ${files.length}ファイルとも RUN --mount なし: ` +
       [...targets.keys()].join(', '),

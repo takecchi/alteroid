@@ -1,11 +1,4 @@
 // @vitest-environment jsdom
-/**
- * 引き受けた仕事の一覧の取得に失敗したとき、「終わっていない仕事はない」「完了した仕事の記録はまだない」を
- * 並べない（issue #2320）。
- *
- * 失敗したのに0件の文言が並ぶと、読めていないのに引き受けた仕事が無いように読める。忘れさせない
- * ための器が空に見える（AGENTS.md の地雷「取れない軸に 0 の行を作る」）。通信・サーバの失敗である。
- */
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -27,7 +20,6 @@ afterEach(() => {
   globalThis.fetch = originalFetch;
 });
 
-/** `GET /commitments` にだけ `respond()` の応答を返す。他の URL は「繋がらない」。 */
 function stubCommitments(respond: (url: string) => Response | Promise<Response>): void {
   globalThis.fetch = (async (input: RequestInfo | URL) => {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
@@ -112,14 +104,12 @@ describe('引き受けた仕事の一覧の取得に失敗したとき（issue #
     expect(await screen.findByText('誤りを直す')).toBeTruthy();
     expect(screen.queryByRole('alert')).toBeNull();
 
-    // 再検証を起こす（SWR は focus で再検証する。足場は throttle 0。chat.revalidate-error.test.tsx と同じ）。
     act(() => {
       window.dispatchEvent(new Event('focus'));
     });
 
     await waitFor(() => expect(screen.getByRole('alert')).toBeTruthy());
     expect(calls).toBeGreaterThanOrEqual(2);
-    // 読めていた一覧は消えていない。
     expect(screen.getByText('誤りを直す')).toBeTruthy();
   });
 });

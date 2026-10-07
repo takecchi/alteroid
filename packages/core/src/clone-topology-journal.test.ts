@@ -5,13 +5,6 @@ import { createRunnerRegistry } from './runner-protocol.js';
 import { createMemoryStores, humanMessage } from './testing.js';
 import { fakeGatedSdk, fakeSdk, setup, waitFor, waitForDone } from './clone-test-harness.js';
 
-/**
- * 稼働の地図（`GET /topology`）が読む2つの面。
- *
- * - `CloneHost.activeTurn` — クローンがいまターンを走らせているか。
- * - `exchange` の `managerId` — マネージャーとの往復がどのマネージャーの線を流れたか。
- *   **`text` には手を入れていない**（`[managerId]` の表示はそのまま）。
- */
 describe('稼働の地図の材料（activeTurn と exchange.managerId）', () => {
   it('activeTurn は、ターンが走っているあいだは busy の材料を返し、終わると null', async () => {
     const stores = createMemoryStores();
@@ -63,7 +56,6 @@ describe('稼働の地図の材料（activeTurn と exchange.managerId）', () =
     );
     if (inbound?.type !== 'exchange') throw new Error('報告の行が無い');
     expect(inbound.managerId).toBe('mgr-topology');
-    // text の `[managerId/kind]` の表示は変えていない（機械が読む鍵は構造の側）。
     expect(inbound.text).toContain('[mgr-topology/report] 直しました');
 
     await s.clone.stop();

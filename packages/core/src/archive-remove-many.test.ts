@@ -5,40 +5,8 @@ import type { Stores } from './store.js';
 import { createMemoryStores } from './testing.js';
 import { createCloneTools, type ToolContext } from './tools.js';
 
-/**
- * `archive_remove_many`（issue #698 の残タスク）を固定する。
- *
- * **雛形は `commitment-close-many.test.ts` / `inbox-remove-many.test.ts`
- * である。** 選定ロジック自体（`selectArchiveRemovalTargets` の安全弁・
- * 含有の証明・優先順位）は `archive-prune.test.ts` が既に固定しているので、
- * ここで測るのは**道具としてのふるまい**——既定 dryRun・絞り込み無しの拒否・
- * 走行中の委譲の扱い（**一括からは開けない**）・数の帳尻・日誌への記録——
- * だけである。
- *
- * ⚠️ **文言ではなく実状態で測る**（`commitment-close-many.test.ts` と同じ
- * 教訓、PR #826）。消えたかどうかは `stores.archive.read()` を読み直して
- * 測り、日誌の中身は `journal.list({ types: ['decision'] })` の実データで測る。
- *
- * **`archive_remove`（単発）と違い、`selectArchiveRemovalTargets` の安全弁
- * （`isNewest` / 含有の証明）がそのまま効く。** ⟹ セッションに1行しか
- * 積んでいないと、その1行は必ず「セッションの最新行」として `skipped.newest`
- * に落ち、対象にならない。**対象を作るテストは、必ず2行以上を同じ
- * セッションへ積み、新しい行の本文が古い行の本文を前方一致で含む形にする**
- * （`continuity: 'continues'` を得るため。`classifyArchiveContinuity` の doc）。
- */
-
-/** 誰も走行中に抱えていないことにする既定の `ManagerPool` スタブ。 */
 const NO_ONE_RUNNING = { runningManagerOwning: () => undefined } as unknown as ManagerPool;
 
-/**
- * その `stores` / `managers` に配線した `archive_remove_many` を呼ぶ関数を返す。
- *
- * **`managers` を省略すると `NO_ONE_RUNNING`（誰も走行中に抱えていない）を渡す**
- * ——ほとんどのテストは guard の判定そのものを見たいわけではないので、既定は
- * 「guard は必ず `allowed` を返す」側にしておく。**`managers` を配線しない
- * 場面そのもの**（`guard.kind === 'unknown'`）を測るテストは、`null` を明示的に
- * 渡すこと。
- */
 function remover(stores: Stores, managers: ManagerPool | null = NO_ONE_RUNNING) {
   const context: ToolContext = {
     stores,
@@ -56,11 +24,6 @@ function remover(stores: Stores, managers: ManagerPool | null = NO_ONE_RUNNING) 
   };
 }
 
-/**
- * `archive_remove_many` が MCP へ差し出している入力の形（zod の shape）。
- * **JSDoc ではなく、実際に呼び出し側へ見える形**を読む（`tools.test.ts` の
- * `shapeOf` と同じ作法）。
- */
 function inputShape(stores: Stores): Record<string, unknown> {
   const tools = createCloneTools({
     stores,
@@ -73,17 +36,11 @@ function inputShape(stores: Stores): Record<string, unknown> {
   return (found?.inputSchema ?? {}) as Record<string, unknown>;
 }
 
-/** 日誌に積まれた `decision` の本文だけを取り出す。 */
 async function decisionTexts(stores: Stores): Promise<string[]> {
   const entries = await stores.journal.list({ types: ['decision'] });
   return entries.map((entry) => (entry.type === 'decision' ? entry.decision : ''));
 }
 
-/**
- * 同じセッションへ、前方一致で連なる2行を積む（`古い行` が `新しい行` に
- * 前方一致で含まれる。`新しい行` が最新行として安全弁で必ず守られ、
- * `古い行` が選定の対象になりうる唯一の形）。
- */
 async function seedRemovableSession(
   stores: Stores,
   sessionId: string,
@@ -131,29 +88,15 @@ describe('archive_remove_many（アーカイブ済み生ログの本文を絞り
 
     expect(reply).toContain('1 件');
     expect(await stores.archive.read(oldId)).toMatchObject({ kind: 'removed' });
-    // **新しい行（セッションの最新行）は安全弁で消えない。**
     expect(await stores.archive.read(newId)).toEqual({ kind: 'body', body: 'AAABBB' });
 
     const texts = await decisionTexts(stores);
     const entry = texts.find((t) => t.includes(oldId));
     expect(entry).toBeDefined();
     expect(entry).toContain('もう要らないので消した');
-    // **本文は日誌へ写さない。**
     expect(texts.some((t) => t.includes('AAABBB'))).toBe(false);
   });
 
-  /**
-   * ⚠️ ここだけは文言そのものを見る（上の doc 「文言ではなく実状態で測る」の
-   * 例外）——測りたいのが実状態ではなく、「消したバイト数」の文言が単位を
-   * 誤読させないことそのものだからである（Issue #2074）。
-   *
-   * `removedBytes`（`bytes` の合計）は本文の素の UTF-8 バイト数であって、
-   * `minStoredBytes` で絞るときの `storedBytes`（置き場の実使用量。pg は
-   * TOAST 圧縮後）とは単位が違い、置き場で解放した量でもない——pg では
-   * 圧縮が効くほど、この数字は「解放した量」を桁で大きく見せる。文言に
-   * その注意が無いと、日誌やクローンの返答を読んだ側は「置き場をこれだけ
-   * 解放した」と誤読する。
-   */
   it('消したバイト数の文言は、置き場で解放した量ではないと明記する（#2074）', async () => {
     const stores = createMemoryStores();
     await seedRemovableSession(stores, 'sess-bytes-label');
@@ -184,22 +127,12 @@ describe('archive_remove_many（アーカイブ済み生ログの本文を絞り
       dryRun: false,
     });
 
-    // 飛ばされたので何も変わっていない。
     expect(await stores.archive.read(oldId)).toEqual({ kind: 'body', body: 'AAA' });
     expect(await stores.archive.read(newId)).toEqual({ kind: 'body', body: 'AAABBB' });
     expect(reply).toContain('inUse');
     expect(reply).toContain('0 件');
   });
 
-  /**
-   * ⭐ **「一括からは開けない」という性質そのものに歯を当てる。**
-   *
-   * `POST /archive/remove` が `overrideReason` を持たないのと同じ判断
-   * （`app.ts` の doc「一括で複数件を無条件に開ける形は事故の芽が大きい」）。
-   * ⟹ 口が無いことと、万一渡ってきても開かないことの両方を撃つ。
-   * **あわせて「黙って能力を削っていない」ことも撃つ**——断り文が、単発の
-   * `archive_remove` に `overrideReason` を渡して1件ずつ名指しせよと案内する。
-   */
   it('一括に override の口は無い——入力の形に overrideReason が無く、渡しても開かない', async () => {
     const stores = createMemoryStores();
     const { oldId } = await seedRemovableSession(stores, 'sess-no-override');
@@ -208,10 +141,8 @@ describe('archive_remove_many（アーカイブ済み生ログの本文を絞り
         archiveId === oldId ? 'mgr-running-2' : undefined,
     } as unknown as ManagerPool;
 
-    // 歯1: 入力の形そのものに口が無い（クローンからは渡しようがない）。
     expect(Object.keys(inputShape(stores))).not.toContain('overrideReason');
 
-    // 歯2: それでも渡ってきたとき（＝ schema を迂回した最悪の形）でも開かない。
     const reply = await remover(
       stores,
       managers,
@@ -224,9 +155,7 @@ describe('archive_remove_many（アーカイブ済み生ログの本文を絞り
 
     expect(reply).toContain('inUse(走行中) 1');
     expect(await stores.archive.read(oldId)).toEqual({ kind: 'body', body: 'AAA' });
-    // 消していないのだから日誌にも残らない。
     expect((await decisionTexts(stores)).some((t) => t.includes(oldId))).toBe(false);
-    // **黙って能力を削ったように見せない**——開ける道は残っていると言う。
     expect(reply).toContain('archive_remove（単発）');
     expect(reply).toContain('overrideReason');
   });
@@ -234,7 +163,6 @@ describe('archive_remove_many（アーカイブ済み生ログの本文を絞り
   it('managers が配線されていない場面は安全側に倒して消さない', async () => {
     const stores = createMemoryStores();
     const { oldId } = await seedRemovableSession(stores, 'sess-no-pool');
-    // `null` を明示 ＝ context.managers は undefined（配線しない場面そのもの）。
     const call = remover(stores, null);
 
     const reply = await call({
@@ -279,31 +207,20 @@ describe('archive_remove_many（アーカイブ済み生ログの本文を絞り
     expect(reply).toContain('1件も消していない');
     expect(await stores.archive.read(oldId)).toEqual({ kind: 'body', body: 'AAA' });
   });
-  /**
-   * ⭐ **数の帳尻そのものを撃つ歯**（`app.test.ts` の同名の歯と対。#698 欠陥1・欠陥3）。
-   *
-   * 欄を1つずつ確かめる歯は「その欄が正しいか」しか言わない。**1行が0回または
-   * 2回数えられている**という壊れ方は、欄を個別に見ても見つからない——HTTP 側では
-   * 実際に、guard で飛ばした行を `targeted` と `skipped.inUse` の両方で数える
-   * 欠陥が既存の歯を全部通り抜けていた。この道具も同じ数を自前で組み立てて
-   * 文面に出すので、**同じ等式をこちら側でも撃つ。**
-   */
   it('数の帳尻: 当たった件数 === 対象 + remaining + skipped5欄（下見でも実行でも）', async () => {
     const stores = createMemoryStores();
-    // newest / alreadyRemoved / notContained / inUse が全部1以上になるよう仕込む。
     const { oldId: chainOld } = await seedRemovableSession(stores, 'sess-inv-chain');
     const { oldId: runningOld } = await seedRemovableSession(stores, 'sess-inv-run');
     const { oldId: goneOld } = await seedRemovableSession(stores, 'sess-inv-gone');
-    await stores.archive.remove(goneOld); // → alreadyRemoved
-    await stores.archive.archive('sess-inv-div', 'XYZ'); // 前方一致しない → notContained
-    await stores.archive.archive('sess-inv-div', 'QQQ'); // → newest
+    await stores.archive.remove(goneOld);
+    await stores.archive.archive('sess-inv-div', 'XYZ');
+    await stores.archive.archive('sess-inv-div', 'QQQ');
     const managers = {
       runningManagerOwning: (archiveId: string) =>
         archiveId === runningOld ? 'mgr-inv' : undefined,
     } as unknown as ManagerPool;
     const call = remover(stores, managers);
 
-    /** 文面から数だけを取り出す（文言の確認ではなく、数の帳尻を測るため）。 */
     const numbersOf = (reply: string) => {
       const pick = (re: RegExp) => {
         const hit = re.exec(reply);
@@ -337,11 +254,9 @@ describe('archive_remove_many（アーカイブ済み生ログの本文を絞り
     const preview = await call({ minStoredBytes: 0, summary: '帳尻を撃つ' });
     const previewNumbers = numbersOf(preview);
     const previewTargeted = Number(/この呼びで消すのは (\d+) 件/.exec(preview)?.[1]);
-    // 🔑 これが本体。1行は必ず1回だけ数えられる。
     expect(previewTargeted + previewNumbers.remaining + skippedTotal(previewNumbers)).toBe(
       previewNumbers.matched,
     );
-    // 仕込んだ4つの理由が実際に立っていること（全部0で等式が成り立つ空振りを防ぐ）。
     expect(previewNumbers.skipped.newest).toBeGreaterThan(0);
     expect(previewNumbers.skipped.alreadyRemoved).toBeGreaterThan(0);
     expect(previewNumbers.skipped.notContained).toBeGreaterThan(0);
@@ -350,43 +265,21 @@ describe('archive_remove_many（アーカイブ済み生ログの本文を絞り
 
     const executed = await call({ minStoredBytes: 0, summary: '帳尻を撃つ', dryRun: false });
     const executedNumbers = numbersOf(executed);
-    // 実行側では `targeted === 消した件数 + raced`（ここでは競合なし ＝ raced 0)。
     const removed = Number(/\*\*(\d+) 件の本文を tombstone した\*\*/.exec(executed)?.[1]);
-    expect(executed).not.toContain('は消せなかった'); // raced が立っていない
+    expect(executed).not.toContain('は消せなかった');
     expect(removed + executedNumbers.remaining + skippedTotal(executedNumbers)).toBe(
       executedNumbers.matched,
     );
-    // **下見は実行の予告になっている**（走行中の委譲が混ざっていても）。
     expect(removed).toBe(previewTargeted);
     expect(executedNumbers.skipped.inUse).toBe(previewNumbers.skipped.inUse);
-    // 実状態でも裏を取る。
     expect(await stores.archive.read(chainOld)).toMatchObject({ kind: 'removed' });
     expect(await stores.archive.read(runningOld)).toEqual({ kind: 'body', body: 'AAA' });
   });
 
-  /**
-   * 応答の文言「**全 id は日誌に N 件に分けて残してある**」
-   * （`hiddenRemoved > 0` のときだけ出る）の逐語どおりの主張を実測で測る——
-   * `inbox-remove-many.test.ts` の「9. 250件を一括で消すと、消した id が
-   * 全部・過不足なく日誌に残る（2件以上に分割）」と同じ手口（`chunkIdsByChars`
-   * の予算 3,600 文字を超えさせて実際に2件以上へ割れさせる）を、この道具
-   * （`archive_remove_many`）に対しても当てる——既存のこの describe には
-   * この形（1呼びで ARCHIVE_REMOVE_MANY_IDS_SHOWN=20 件を超える除去）が
-   * 無かった。
-   */
   it('多数件（220件）を一括で消すと、消した id が全部・過不足なく日誌に残る（2件以上に分割）', async () => {
     const stores = createMemoryStores();
     const ARCHIVE_REMOVE_MANY_JOURNAL_ID_CHARS_COPY = 3_600;
     const SESSION_COUNT = 220;
-    // sessionId を意図的に長くする——短い id では 3,600 文字の予算に収まって
-    // しまい「実際に複数の塊に割れること」を確かめられない
-    // （`inbox-remove-many.test.ts` の `managerEventWithUuid` の doc と同じ理由）。
-    //
-    // ⚠️ `at` を明示的に1msずつ進める（`vi.useFakeTimers`）。in-memory の id
-    // （`${sessionId}-連番`）は `archiveIdBranch`（`archive-id.ts`）が解析できず
-    // 常に枝番1へフォールバックするため、`at` が同ミリ秒だと tie-break が id の
-    // 文字列比較に落ち、連番の桁上がり（9→10 等）で old/new の前後が入れ替わる
-    // （実測: 揃えたまま220件回すと2件だけ218/220に減って赤くなった）。
     vi.useFakeTimers();
     const baseTime = new Date('2026-01-01T00:00:00.000Z').getTime();
     let tick = 0;
@@ -399,9 +292,6 @@ describe('archive_remove_many（アーカイブ済み生ログの本文を絞り
     try {
       for (let i = 0; i < SESSION_COUNT; i += 1) {
         const sessionId = `sess-archive-flood-${String(i).padStart(4, '0')}-${'x'.repeat(20)}`;
-        // `seedRemovableSession` を使わず自前で2回叩く——old と new のあいだにも
-        // 時刻を進める必要があるため（上の注記。tie はセッション内の2行の
-        // あいだで起きる）。
         const oldRow = await stores.archive.archive(sessionId, 'AAA');
         vi.setSystemTime(nextTime());
         const newRow = await stores.archive.archive(sessionId, 'AAABBB');
@@ -426,8 +316,6 @@ describe('archive_remove_many（アーカイブ済み生ログの本文を絞り
     const texts = await decisionTexts(stores);
     expect(texts.length).toBeGreaterThanOrEqual(2);
 
-    // 目印が消えると indexOf が -1 になり、下の slice が id 列でないものを切り出す（後ろの長さの上限は緑のまま残る）。
-    // 切り出す前に、全 decision に目印が在ることを確かめる（#2431）。
     for (const text of texts) expect(text).toContain('消した id: ');
 
     const seen = new Set<string>();
@@ -443,11 +331,9 @@ describe('archive_remove_many（アーカイブ済み生ログの本文を絞り
       expect(idsPart.length).toBeLessThanOrEqual(ARCHIVE_REMOVE_MANY_JOURNAL_ID_CHARS_COPY + 60);
     }
 
-    // 応答の `N 件に分けて` の N が、実際の日誌のエントリ数と一致すること。
     const claimed = Number(/全 id は日誌に (\d+) 件に分けて残してある/.exec(reply)?.[1]);
     expect(claimed).toBe(texts.length);
 
-    // 実状態でも裏を取る——全 old が実際に removed になっていること。
     for (const id of oldIds) {
       expect(await stores.archive.read(id)).toMatchObject({ kind: 'removed' });
     }

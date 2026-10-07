@@ -7,25 +7,10 @@ import { Badge, Button, Card, CardHeader, Empty, Page, Spinner } from '@alteroid
 import { ApiError, useArchive, useArchiveBody } from '@alteroid/swr';
 import { formatBytes, formatDateTime, redactBody } from '@alteroid/logic';
 
-/**
- * `/archive/:id` — 退避した生ログ1件の本文を**読むだけ**の画面（#3137）。
- *
- * CLI の `/archive <id>`（`apps/cli/src/chat.ts`）と同じ口（`GET /archive/{id}`）を読み、同じものを
- * 見せる: 本文を伏せ字に通して（`redactBody`）そのまま出す。「無い」は404だけ、5xx 等を「無い」と
- * 言わない。**消す操作はここに置かない**（一覧 `archive.tsx` の行のまま）。入口の等価性
- * （PRD「インターフェース」）が言う「見えるもの（生ログ）は同じ」を Web にも揃えるための画面。
- *
- * **ルートごとに別チャンクで読み込まれる**（React Router の route modules。一覧を開くだけの人に
- * 本文の画面のコードを運ばせない）。
- *
- * **大きな本文を一度に DOM へ載せない。** 本文は JSONL で、長い会話では数MBになりうる。全部を1つの
- * `<pre>` に入れるとブラウザが固まるので、先頭から {@link CHUNK_CHARS} 文字ずつ「続きを表示」で
- * 足す。伏せ字は**全体に一度だけ**掛け（複数行にまたがる秘密——鍵のブロック等——を取りこぼさない。
- * CLI も全体に掛けている）、掛けた後の文字列を窓で切る。
- */
+// 大きな本文を一度に DOM へ載せない: 全部を1つの <pre> に入れるとブラウザが固まるため
+// 伏せ字は窓で切る前の全体に掛ける: 複数行にまたがる秘密（鍵のブロック等）を取りこぼさないため
 const CHUNK_CHARS = 100_000;
 
-/** `limit` 文字以内で、できれば行の切れ目（改行の直後）まで。切れ目が窓の半分より前にしか無ければ硬く切る。 */
 function cutAt(text: string, from: number, limit: number): number {
   const hard = from + limit;
   if (hard >= text.length) return text.length;
@@ -60,11 +45,10 @@ function NotFound() {
 
 function Body({ id }: { id: string }) {
   const { data, error, isLoading, isValidating, mutate } = useArchiveBody(id);
-  // 見出しの添え物（日時・使用量）。取れなくても本文は読めるので、失敗は出さない。
+  // 失敗を出さない: 見出しの添え物（日時・使用量）が取れなくても本文は読めるため
   const { data: list } = useArchive();
   const entry = list?.entries.find((candidate) => candidate.id === id);
 
-  // 「無い」は404だけ。読めた後の取り直しで404になったら、読めた本文は残して知らせる。
   const notFound = error instanceof ApiError && error.status === 404;
   const unavailable = data === undefined && error !== undefined;
 
@@ -100,7 +84,6 @@ function Body({ id }: { id: string }) {
   );
 }
 
-/** 本文だけ消された行（tombstone）。失敗ではないので、エラーの形では出さない。 */
 function Removed({ removedAt, bytes }: { removedAt: string; bytes: number }) {
   return (
     <div className="p-4 text-sm">
@@ -114,10 +97,8 @@ function Removed({ removedAt, bytes }: { removedAt: string; bytes: number }) {
 }
 
 function Text({ body }: { body: string }) {
-  // 全体に一度だけ伏せ字を掛ける（本文が変わらない限り再計算しない）。
   const text = useMemo(() => redactBody(body), [body]);
   const [shown, setShown] = useState(() => cutAt(text, 0, CHUNK_CHARS));
-  // 本文が取り直しで入れ替わっても、読んだ位置は保つ（上限だけ詰める）。
   const end = Math.min(shown, text.length);
 
   if (text === '') {

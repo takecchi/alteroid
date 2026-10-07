@@ -1,8 +1,4 @@
 // @vitest-environment jsdom
-/**
- * `ChatComposer` の添付の口（Issue #3111 段1c）。選択・貼り付け・ドロップが `onAttach` に届くこと、
- * チップ（遅延読み込み）が出ること、上げているあいだは送れないこと。
- */
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -97,7 +93,6 @@ describe('ChatComposer: 添付のチップの並び（#3402 / #3401）', () => {
     const classes = (list.getAttribute('class') ?? '').split(/\s+/);
     expect(classes).toContain('overflow-y-auto');
     expect(classes.some((name) => name.startsWith('max-h-'))).toBe(true);
-    // 10 件とも並ぶ（畳んで隠さない）。
     expect(list.querySelectorAll('li')).toHaveLength(10);
   });
 

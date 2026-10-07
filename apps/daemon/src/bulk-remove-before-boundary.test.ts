@@ -4,18 +4,6 @@ import { describe, expect, it } from 'vitest';
 
 import { createApp } from './app.js';
 
-/**
- * 元に戻せない一括削除の口（`POST /inbox/remove`・`POST /archive/remove`）の `before` は、
- * `Number.isNaN(Date.parse(before))` だけで読めるかを決めている。
- *
- * - 存在しない日付（`2026-02-31T00:00:00Z`）を `Date.parse` は 3/3 へずらして読む。
- *   本人が指したつもりの 2/28 の次の日より後ろ（3/3）まで巻き込んで消す。
- * - 時差の無い形（`2026-10-06T00:00:00`）をサーバーの地方時刻として読む。
- *
- * クローンの道具 `inbox_remove_many`（`isOffsetQualifiedTimeBoundary`。#2462）と、日誌の `since` / `until`
- * （`describeUnreadableJournalTimeBoundary`。実在しない日付を断る）は、どちらも断っている。
- * 同じ操作の口が、道具と HTTP で受け付ける形が割れている。
- */
 function setup() {
   const stores = createMemoryStores();
   const clone: CloneHost = {
@@ -70,11 +58,6 @@ describe('一括削除の before の読み（存在しない日付・時差な�
   });
 });
 
-/**
- * #3390。HTTP にも道具 `inbox_remove_many` と同じ門（`isOffsetQualifiedTimeBoundary`）を通す。
- * 受け付けるのは時差（`Z` か `±hh:mm`）つきの実在する日時だけで、日付だけ・時差なしは断る。
- * 断るときは何も消さず、道具と同じ文言（`describeOffsetRequiredTimeBoundary`）を返す。
- */
 describe('一括削除の before は時差つきの時刻だけ（#3390）', () => {
   const REFUSED = [
     '2026-10-06T00:00:00',

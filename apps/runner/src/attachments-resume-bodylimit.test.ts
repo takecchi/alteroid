@@ -15,7 +15,6 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { makeTempDir } from '../../../vitest.tmpdir.js';
 import { createRunnerApp, Outbox } from './app.js';
 
-/** `POST /managers/:id/resume` が、添付つきの巨大な本文を 413 で断るか（`/managers` と `/messages` は断る）。 */
 const TOKEN = 'daemon-only-token';
 const TOKEN_SHA256 = createHash('sha256').update(TOKEN, 'utf8').digest('hex');
 
@@ -104,7 +103,6 @@ describe('POST /managers/:id/resume の本文の上限', () => {
   it('添付の上限から計算した本文の上限（runnerAttachmentBodyLimit）を超える添付つきの resume は、/messages と同じく 413 で断り、置かない', async () => {
     const { root, post } = await setup();
     const limit = runnerAttachmentBodyLimit(LIMITS);
-    // 上限を超える1つの添付（sha256 は正しいので、断られなければそのまま置かれる）。
     const huge = attachmentOf('att-1', 'huge.bin', Buffer.alloc(limit + 1024, 7));
     const res = await post('/managers/mgr-abc123/resume', {
       managerId: 'mgr-abc123',
@@ -123,7 +121,6 @@ describe('POST /managers/:id/resume の本文の上限（検める量と対象�
   it('添付の data の合計が上限ちょうどの resume は 413 にならず、通る（上限は「超えたら」断る）', async () => {
     const { post } = await setup();
     const limit = runnerAttachmentBodyLimit(LIMITS);
-    // base64 の文字数が上限以下で最大になる大きさ（4 文字 = 3 バイト）。上限ちょうどに最も近い。
     const bytes = Buffer.alloc(Math.floor(limit / 4) * 3, 7);
     const exact = attachmentOf('att-1', 'exact.bin', bytes);
     expect(exact.data.length).toBeLessThanOrEqual(limit);

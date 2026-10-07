@@ -11,12 +11,10 @@ import {
   type HeapSnapshot,
 } from './boot-footprint.js';
 
-/** 1表（区分）ぶんの「実測して0」。 */
 function emptyStats(): TableSizeStats {
   return { rows: 0, storedBytes: 0, textBytes: 0, maxStoredBytes: 0, maxTextBytes: 0 };
 }
 
-/** 5表すべてが「実測して0」の、いちばん静かな状態。 */
 function emptyFootprint(): StorageFootprint {
   return {
     jobs: emptyStats(),
@@ -44,7 +42,6 @@ describe('measureHeapSnapshot（本物の V8 から実測する）', () => {
     expect(snapshot.heapSizeLimitBytes).toBeGreaterThan(0);
     expect(snapshot.heapUsedBytes).toBeGreaterThan(0);
     expect(snapshot.rssBytes).toBeGreaterThan(0);
-    // used は limit を超えない（V8 が保証する側の関係——超えていたら既に OOM）。
     expect(snapshot.heapUsedBytes).toBeLessThan(snapshot.heapSizeLimitBytes);
   });
 });
@@ -56,7 +53,6 @@ describe('tablesExceedingHeapShare（textBytes で判定する。storedBytes で
 
   it('heap_size_limit の割合を超えた表だけを返す（textBytes 基準）', () => {
     const footprint = emptyFootprint();
-    // ratio 既定 0.1 → 閾値 100,000,000。archive だけ超える。
     footprint.archive.textBytes = 200_000_000;
     footprint.jobs.textBytes = 50_000_000;
 
@@ -65,17 +61,10 @@ describe('tablesExceedingHeapShare（textBytes で判定する。storedBytes で
     expect(exceeding).toEqual([{ name: 'archive', textBytes: 200_000_000 }]);
   });
 
-  /**
-   * ⭐ **これが今回の欠陥そのものの回帰試験である。** `storedBytes`
-   * （圧縮後。alteroid の実際の本文では実テキストの1/10〜1/80）だけを見て
-   * いたら、この表は「小さい」と判定されて警告が出ない。**判定は
-   * `textBytes` で行うので、`storedBytes` が小さくても `textBytes` が
-   * 大きければ正しく発火する。**
-   */
   it('storedBytes が小さくても textBytes が大きければ発火する（圧縮で危険度を見逃さない）', () => {
     const footprint = emptyFootprint();
-    footprint.archive.storedBytes = 5_000; // 圧縮後は小さい（実際の観測どおり）
-    footprint.archive.textBytes = 900_000_000; // 実テキストは heap の 90%
+    footprint.archive.storedBytes = 5_000;
+    footprint.archive.textBytes = 900_000_000;
 
     const exceeding = tablesExceedingHeapShare(footprint, heap);
 
@@ -86,8 +75,8 @@ describe('tablesExceedingHeapShare（textBytes で判定する。storedBytes で
     const footprint = emptyFootprint();
     footprint.archive.textBytes = 150_000_000;
 
-    const smallHeap: HeapSnapshot = { ...heap, heapSizeLimitBytes: 1_000_000_000 }; // 閾値 100,000,000 → 超える
-    const bigHeap: HeapSnapshot = { ...heap, heapSizeLimitBytes: 10_000_000_000 }; // 閾値 1,000,000,000 → 超えない
+    const smallHeap: HeapSnapshot = { ...heap, heapSizeLimitBytes: 1_000_000_000 };
+    const bigHeap: HeapSnapshot = { ...heap, heapSizeLimitBytes: 10_000_000_000 };
 
     expect(tablesExceedingHeapShare(footprint, smallHeap)).toHaveLength(1);
     expect(tablesExceedingHeapShare(footprint, bigHeap)).toHaveLength(0);
@@ -106,7 +95,7 @@ describe('tablesExceedingHeapShare（textBytes で判定する。storedBytes で
 
   it('割合は呼び出し側から指定できる（既定は HEAP_SHARE_WARNING_RATIO）', () => {
     const footprint = emptyFootprint();
-    footprint.jobs.textBytes = 300_000_000; // heap の 30%
+    footprint.jobs.textBytes = 300_000_000;
 
     expect(tablesExceedingHeapShare(footprint, heap, HEAP_SHARE_WARNING_RATIO)).toHaveLength(1);
     expect(tablesExceedingHeapShare(footprint, heap, 0.5)).toHaveLength(0);
@@ -119,7 +108,6 @@ describe('describeBootFootprint（fs 構成 — null は「測れなかった」
 
     expect(report.line).toContain('fs 構成のため測れない');
     expect(report.summary).toContain('fs 構成のため測れない');
-    // ヒープはfs構成でも測れる情報なので出す。
     expect(report.line).toMatch(/heap\(limit=/);
   });
 });
@@ -135,11 +123,9 @@ describe('describeBootFootprint（pg 構成）', () => {
 
     const report = describeBootFootprint(footprint, heap);
 
-    // 実測して0の表は数値として出る（stored/text 両方）。
     expect(report.summary).toMatch(
       /jobs\(rows=0 stored=0\.0MB text=0\.0MB maxStored=0\.0MB maxText=0\.0MB\)/,
     );
-    // 測れなかった表は null と明記され、0MB のような数値にならない。
     expect(report.summary).toMatch(
       /archive\(rows=null stored=null text=null maxStored=null maxText=null\)/,
     );
@@ -178,7 +164,7 @@ describe('describeBootFootprint（pg 構成）', () => {
 
   it('閾値を超えた表があるときだけ、警告の1行が足される（門ではない——起動は止めない）', () => {
     const footprint = emptyFootprint();
-    footprint.journal.all.textBytes = 900_000_000; // heap の 90%
+    footprint.journal.all.textBytes = 900_000_000;
 
     const report = describeBootFootprint(footprint, heap);
 
@@ -256,7 +242,6 @@ describe('reportBootFootprint（標準出力と日誌の両方へ、起動を止
 
     await expect(reportBootFootprint(stores, emptyFootprint())).resolves.toBeUndefined();
 
-    // 標準出力は日誌より先に書いているので、日誌が落ちても失われない。
     expect(stdout).toHaveBeenCalledTimes(1);
     expect(stderr).toHaveBeenCalledTimes(1);
     expect(stderr.mock.calls[0]?.[0] as string).toContain('日誌へ残せませんでした');
@@ -272,10 +257,6 @@ describe('reportBootFootprint（標準出力と日誌の両方へ、起動を止
 
     expect(stderr).toHaveBeenCalledTimes(1);
     expect(stderr.mock.calls[0]?.[0] as string).toContain('測定に失敗しました');
-    // stdout が投げたので、この回に限っては日誌へも届いていない
-    // （measureHeapSnapshot → 整形 → stdout.write → journal.append の順で
-    // 外側の catch へ抜けるため）。それでも例外は外へ漏れていない——ここが
-    // 主張したいことのすべてである。
     const entries = await stores.journal.list();
     expect(
       entries.filter(

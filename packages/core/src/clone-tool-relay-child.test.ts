@@ -11,18 +11,6 @@ import {
   runCloneToolRelayChild,
 } from './clone-tool-relay-child.js';
 
-/**
- * ここで固定するのは「中継の子プロセスは MCP を1バイトも解釈せず、
- * ただ流すだけである」こと。**実ソケットを使う**——`clone-tool-relay-host.ts`
- * が実際に相手取るのと同じ `net.Socket` を、この側は「デーモン役」として
- * 自前で listen して観測する（本物のホスト実装は使わない。ホスト側の
- * 振る舞いは `clone-tool-relay-host.test.ts` が別に固定する）。
- *
- * **一時ディレクトリは `vitest.tmpdir.ts` の `makeTempDirSync` を使う**
- * （`mkdtempSync` を直接呼ばない。`scripts/no-direct-mkdtemp.test.ts` の歯）。
- * 掃除はこのテストファイルの `afterAll` がまとめて行うので、ソケットの
- * listen を止める（`server.close()`）だけをここで行う。
- */
 describe('clone-tool-relay-child（中継の子プロセスの入口）', () => {
   let server: Server | undefined;
 
@@ -80,7 +68,6 @@ describe('clone-tool-relay-child（中継の子プロセスの入口）', () => 
     );
 
     const daemonSide = await accept;
-    // 最初の1行（token）を読み捨ててから、両方向を確かめる。
     await new Promise<void>((resolve) => daemonSide.once('data', () => resolve()));
 
     const fromChild = new Promise<string>((resolve) => {

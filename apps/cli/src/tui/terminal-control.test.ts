@@ -34,21 +34,14 @@ import { parseTranscript } from './managers-transcript.js';
 import { managerNotes } from './managers-view.js';
 import { renderFullscreen } from './test-helpers.js';
 
-/**
- * 外から来た文字列の制御文字（BEL・BS・NUL・`\r`・C1 の U+009B）が、掃除を通らずに端末へ
- * 抜けないことを測る。Ink が自分で落とすものには頼らない: 描いた全フレームの生の書き込みを調べる。
- * 新しいテストに実時間の待ちは無い（描画は同期、操作は await するだけ）。
- */
 const CSI8 = String.fromCharCode(0x9b);
 const OSC8 = String.fromCharCode(0x9d);
-/** 掃除すると `abcdef` になる。末尾は C1 の OSC（OSC 52）と、U+009B に SGR が続く列（Ink は素通しにする）。 */
 const EVIL = `a\u0007b\u0008c\u0000d\re${CSI8}2Jf${OSC8}52;c;aGk=\u0007${CSI8}31m`;
 const CLEAN = 'abcdef';
 
 // eslint-disable-next-line no-control-regex -- 制御文字の検出そのものが目的
 const CONTROL = /[\u0000-\u0008\u000b-\u001a\u001c-\u001f\u007f-\u009f\r]/;
 
-/** Ink が自分で書く SGR / CSI を除いた、全フレームの書き込み。 */
 function written(stdout: { frames: string[] }): string {
   return (
     stdout.frames
@@ -172,7 +165,6 @@ describe('委譲の一覧と詳細・追加指示の通知', () => {
     await controller.sendMessage('続き');
     const detail = controller.store.getSnapshot().detail!;
     expect(detail.notice).toBe(`o${CLEAN}: d${CLEAN}`);
-    // 状態の側にも掃除を通らない文字列が入っていても、描く直前で落ちる。
     const status = detailStatusText({ ...detail, notice: `n${EVIL}` }, 0);
     expectNoControl(status.text);
     draw(createElement(DetailStatusRow, { text: `n${EVIL}`, tone: 'dim' }));

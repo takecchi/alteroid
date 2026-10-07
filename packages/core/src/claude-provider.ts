@@ -49,75 +49,31 @@ import { classifyUsageNotice, toRateLimitFacts } from './usage-limits.js';
 import { toAccountApiKeySource } from './usage-snapshot.js';
 import { isSuccessResult, modelUsageOf } from './usage.js';
 
-/**
- * **Claude という provider の形を知っているのはこのファイルだけにする。**
- *
- * 向きが2つある。
- *
- * | 向き | 何をするか | 出入口 |
- * | --- | --- | --- |
- * | 書き側 | `Options`（SDK へ渡すセッション設定）を組み立てる | `buildCloneSessionOptions` / `buildCloneDistillOptions` / `buildManagerSessionOptions` |
- * | 読み側 | SDK のメッセージを中立イベントへ写す | `foldClaudeMessage`（→ `agent-events.ts`） |
- *
- * **provider を足すときに触る場所を1つにする**ための置き場であって、いま
- * provider は Claude だけである。呼び出し側（`clone.ts` / `runner.ts`）が持つ
- * インスタンスの状態・副作用のある前処理（記憶ドキュメントを読む・観測値を
- * 控える・実行環境プロファイルを重ねるなど）はここへは移さない — ここは
- * 「渡された値をどこへ置くか」と「届いた値が何を意味するか」だけを知っている
- * 純関数の集まりである。
- */
+// 呼び出し側が持つインスタンスの状態・副作用のある前処理をここへ移さない: ここは「渡された値をどこへ置くか」と「届いた値が何を意味するか」だけを知る純関数の集まりに保つため
 
-/** PreCompact フック内の蒸留に許す時間（秒）。超えたら compaction を待たせない。 */
-
-/**
- * マネージャーセッションの `SubagentStop` フックの matcher に明示する timeout（秒。Issue #3008）。
- *
- * **フックは、作業者が起こした背景処理の完了を最大 `SUBAGENT_BACKGROUND_WAIT_MS` まで
- * 待つ**（`RunnerSession#onSubagentStop`）。SDK のフックの timeout は、超えると
- * `SDK host SubagentStop callback hook timed out after …ms; continuing without its answer`
- * （SDK 0.3.289 のバイナリを静的に走査した文言）で**答え無しのまま作業者を畳む**。そうなると
- * `limit_reached` の経路（`recordCutOff`）を通らず、完了の配達（#1563 / #2387）が働かない。
- * だから **待ちの上限 < この timeout** を必ず守る（`claude-provider.test.ts` が不等式を固定）。
- * 120 秒は、待ちが時間切れになってから note・`recordCutOff` を終えるまでの余裕。
- *
- * ⚠️ SDK の既定値は未確認（バイナリ上は、汎用のフックの既定が 600 秒の定数らしいと読めるだけ）。
- * だから既定に頼らず明示する。
- */
+// 待ちの上限 < この timeout を守る: 超えると SDK は答え無しのまま作業者を畳み、`limit_reached` の経路（`recordCutOff`）を通らず、完了の配達が働かないため
+// SDK の既定値に頼らず matcher に明示する: 既定値は未確認のため
 export const SUBAGENT_STOP_HOOK_TIMEOUT_SECONDS =
   Math.ceil(SUBAGENT_BACKGROUND_WAIT_MS / 1000) + 120;
 export const PRE_COMPACT_HOOK_TIMEOUT_SECONDS = 120;
 
-/** いま alteroid が実際に使っている唯一の provider。capabilities は10個すべて true。 */
 export const CLAUDE_PROVIDER: AgentProvider = {
   id: 'claude',
   displayName: 'Claude',
   capabilities: {
-    permissions: true, // runner.ts の #onPermission（canUseTool）
-    toolAudit: true, // clone.ts の #onPostToolUse・#onDistillToolUse・#onPostToolUseFailure・#onDistillToolUseFailure / runner.ts の #onPostToolUse・#onPostToolUseFailure（Issue #924 はクローン側の2箇所、#929 で runner.ts 側も揃えた。ただし runner.ts 側の失敗は tool_use ではなく note として残る — runner.ts の #onPostToolUseFailure の doc）
-    compactionHook: true, // clone.ts の #onPreCompact / runner.ts の #onPreCompact（PreCompact フック）
-    resume: true, // buildCloneSessionOptions / buildManagerSessionOptions の Options.resume
-    sessionLog: true, // buildCloneSessionOptions / buildManagerSessionOptions の Options.sessionStore
-    subagents: true, // buildManagerSessionOptions の Options.agents（runner.ts の WORKER_AGENT_NAME）
-    mcpServers: true, // Options.settingSources + インプロセス MCP（tools.ts の createCloneMcpServer）+ 記憶ストアの登録（クローンは cloneMcpServers。#325 段2 / マネージャー・作業者は buildManagerSessionOptions の mcpServers。段3）
-    childUser: true, // buildManagerSessionOptions の Options.spawnClaudeCodeProcess（runner.ts の #spawnAsChildUser）
-    usage: true, // clone.ts / runner.ts の #recordUsage（result.modelUsage）
-    partialMessages: true, // buildCloneSessionOptions の Options.includePartialMessages
+    permissions: true,
+    toolAudit: true,
+    compactionHook: true,
+    resume: true,
+    sessionLog: true,
+    subagents: true,
+    mcpServers: true,
+    childUser: true,
+    usage: true,
+    partialMessages: true,
   },
 };
 
-// ---------------------------------------------------------------------------
-// 中立の口 —— ツール監査フックの包み直し（#486、`agent-hooks.ts`）
-// ---------------------------------------------------------------------------
-
-/**
- * `PostToolUse` の生入力を {@link AgentToolAuditRecord} へ写す。
- *
- * **無い欄は作り物を出さずキーごと省く**（`toAgentPermissionDenial` と同じ
- * 作法）。`toolInput` / `toolResponse` は `unknown` なので値そのものが
- * `undefined` でも構わない——「読めなかった」と「そういう値だった」を
- * 区別しない（この2つは真偽値・文字列と違い、道具ごとに形が異なる自由な
- * 値であり、`undefined` を渡すこと自体が「無かった」を表す）。
- */
 function toAgentToolAuditRecord(input: unknown): AgentToolAuditRecord {
   const raw = input as Partial<PostToolUseHookInput> | null | undefined;
   return {
@@ -128,12 +84,10 @@ function toAgentToolAuditRecord(input: unknown): AgentToolAuditRecord {
     ...(typeof raw?.effort?.level === 'string' ? { effortLevel: raw.effort.level } : {}),
     ...(typeof raw?.agent_id === 'string' ? { agentId: raw.agent_id } : {}),
     ...(typeof raw?.agent_type === 'string' ? { agentType: raw.agent_type } : {}),
-    // issue #1105。`AgentToolAuditRecord.toolUseId` の doc。
     ...(typeof raw?.tool_use_id === 'string' ? { toolUseId: raw.tool_use_id } : {}),
   };
 }
 
-/** `PostToolUseFailure` の生入力を {@link AgentToolAuditFailureRecord} へ写す。無い欄は省く（`toAgentToolAuditRecord` と同じ作法）。 */
 function toAgentToolAuditFailureRecord(input: unknown): AgentToolAuditFailureRecord {
   const raw = input as Partial<PostToolUseFailureHookInput> | null | undefined;
   return {
@@ -145,20 +99,10 @@ function toAgentToolAuditFailureRecord(input: unknown): AgentToolAuditFailureRec
     ...(typeof raw?.agent_type === 'string' ? { agentType: raw.agent_type } : {}),
     ...(typeof raw?.error === 'string' ? { error: raw.error } : {}),
     ...(raw?.is_interrupt === undefined ? {} : { isInterrupt: raw.is_interrupt }),
-    // issue #1105。`AgentToolAuditFailureRecord.toolUseId` の doc。
     ...(typeof raw?.tool_use_id === 'string' ? { toolUseId: raw.tool_use_id } : {}),
   };
 }
 
-/**
- * 中立の `PostToolUse` 観測フックを SDK の `HookCallback` へ包み直す。
- *
- * **`{ continue: true }` 固定で返す。** 包む対象は観測専用フック
- * （`agent-hooks.ts` の doc「観測専用のフックだけを対象にする」）なので、
- * 判断を返す余地はそもそも無い——`runner.ts` 側の `PostToolUse`
- * （`additionalContext` を返しうる）はこの関数を使わず、`HookCallback` の
- * ままである（`ManagerSessionOptionsRequest.onPostToolUse` の doc）。
- */
 function wrapToolAuditHook(hook: AgentObservationHook<AgentToolAuditRecord>): HookCallback {
   return async (input) => {
     await hook(toAgentToolAuditRecord(input));
@@ -166,7 +110,6 @@ function wrapToolAuditHook(hook: AgentObservationHook<AgentToolAuditRecord>): Ho
   };
 }
 
-/** `PostToolUseFailure` 版の {@link wrapToolAuditHook}。同じ理由で `{ continue: true }` 固定。 */
 function wrapToolAuditFailureHook(
   hook: AgentObservationHook<AgentToolAuditFailureRecord>,
 ): HookCallback {
@@ -176,14 +119,6 @@ function wrapToolAuditFailureHook(
   };
 }
 
-/**
- * `PreCompact` の生入力を {@link AgentPreCompactRecord} へ写す。
- *
- * **`signal` だけは `input` ではなく `HookCallback` の第3引数
- * （`options.signal`）から来る。** SDK の型では常に渡るので `undefined` には
- * ならないが、この関数の呼び出し側（`wrapPreCompactHook`）がそのまま渡した
- * ものをここへ通すだけで、値そのものの意味は変えない。
- */
 function toAgentPreCompactRecord(
   input: unknown,
   signal: AbortSignal | undefined,
@@ -196,7 +131,6 @@ function toAgentPreCompactRecord(
   };
 }
 
-/** `UserPromptSubmit` の生入力を {@link AgentUserPromptSubmitRecord} へ写す。無い欄は省く。 */
 function toAgentUserPromptSubmitRecord(input: unknown): AgentUserPromptSubmitRecord {
   const raw = input as Partial<UserPromptSubmitHookInput> | null | undefined;
   return {
@@ -205,9 +139,7 @@ function toAgentUserPromptSubmitRecord(input: unknown): AgentUserPromptSubmitRec
   };
 }
 
-/** `Stop` の生入力を {@link AgentStopRecord} へ写す。無い欄は省く。 */
 function toAgentStopRecord(input: unknown): AgentStopRecord {
-  // **読み取りの失敗は投げずに `readError` で運ぶ**（`AgentStopRecord.readError` の doc）。
   try {
     const raw = input as Partial<StopHookInput> | null | undefined;
     return {
@@ -222,14 +154,7 @@ function toAgentStopRecord(input: unknown): AgentStopRecord {
   }
 }
 
-/**
- * 中立の `PreCompact` 観測フックを SDK の `HookCallback` へ包み直す。
- *
- * **`{ continue: true }` 固定で返す**（観測専用フックなので判断を返す余地は
- * 無い）。**`await` を保つ** —— `clone.ts` 側の実装は退避・蒸留の完了を
- * 待ってから `continue: true` を返しており（compaction はこのフックの
- * 返り値を待つ）、包み直しでその待ち合わせの意味を変えない。
- */
+// `await` を保つ: compaction はこのフックの返り値を待つので、退避・蒸留の完了を待ってから返す意味を変えないため
 function wrapPreCompactHook(hook: AgentObservationHook<AgentPreCompactRecord>): HookCallback {
   return async (input, _toolUseId, options) => {
     await hook(toAgentPreCompactRecord(input, options?.signal));
@@ -237,7 +162,6 @@ function wrapPreCompactHook(hook: AgentObservationHook<AgentPreCompactRecord>): 
   };
 }
 
-/** `UserPromptSubmit` 版の {@link wrapPreCompactHook}。同じ理由で `{ continue: true }` 固定・`await` 保持。 */
 function wrapUserPromptSubmitHook(
   hook: AgentObservationHook<AgentUserPromptSubmitRecord>,
 ): HookCallback {
@@ -247,7 +171,6 @@ function wrapUserPromptSubmitHook(
   };
 }
 
-/** `Stop` 版の {@link wrapPreCompactHook}。同じ理由で `{ continue: true }` 固定・`await` 保持。 */
 function wrapStopHook(hook: AgentObservationHook<AgentStopRecord>): HookCallback {
   return async (input) => {
     await hook(toAgentStopRecord(input));
@@ -255,14 +178,6 @@ function wrapStopHook(hook: AgentObservationHook<AgentStopRecord>): HookCallback
   };
 }
 
-/**
- * `PreToolUse` の生入力を {@link AgentPreToolRecord} へ写す。無い欄は省く（他の `toAgent*Record` と同じ作法）。
- *
- * **`tool_use_id` は SDK の型（`PreToolUseHookInput`）では必須だが、ここでは
- * 他の欄と同じく `typeof === 'string'` で絞ってから渡す**（issue #1105）。
- * `runner.ts` の `#onPreToolUse` がこの id をキーに、分類器の拒否より前に
- * 見た入力の先頭を控える（`AgentPreToolRecord.toolUseId` の doc）。
- */
 function toAgentPreToolRecord(input: unknown): AgentPreToolRecord {
   const raw = input as Partial<PreToolUseHookInput> | null | undefined;
   return {
@@ -274,36 +189,13 @@ function toAgentPreToolRecord(input: unknown): AgentPreToolRecord {
   };
 }
 
-/**
- * 中立の `PreToolUse` 判断フックを SDK の `HookCallback` へ包み直す。
- *
- * **観測専用の `wrap*Hook` とは違い、判断ごとに返す形が変わる。** `allow` /
- * `deny` に足す `hookSpecificOutput` の形は、`clone.ts` の `#onPreToolUse`
- * （Issue #863）・`runner.ts` の `#onPreToolUse`（Issue #894）が今日すでに
- * 返している形とちょうど一致させてある——包み直しでその形を1文字も変えない
- * （`agent-hooks.test.ts` 側ではなく `clone-core-loop.test.ts`（旧 `clone.test.ts`。
- * #1744 で分割済み）の「issue #863」/
- * `runner-pre-tool-use.test.ts` の既存の歯がこれを固定している）。
- *
- * **`never` で網羅性を検査する。** `AgentPreToolDecision` に5つ目の `kind` が
- * 増えたら、この `switch` の `default` 節で `tsc` が落ちる（`memory.ts` の
- * `assertNeverMemoryProtectionStatus` と同じ形の型検査。AGENTS.md「テストを
- * 弱めずに直す」の「型で塞いだ分岐にも、実行時の倒れ先の歯を足す」）。
- * **ただし投げない** —— このフックは SDK のツール実行そのものの経路に
- * 載っており、ここで例外を投げるとそのターン全体が壊れる。実行時にここへ
- * 来るのは型で弾かれたはずの値が渡ったとき（provider 側の実装ミス）だけ
- * なので、安全側（`{ continue: true }` ＝ 何も決めない。ブロックも許可も
- * しない）へ倒し、`noteBackgroundFailure` で跡だけ残す。
- */
+// `default` 節で投げない: このフックは SDK のツール実行の経路に載っており、例外を投げるとそのターン全体が壊れるため。安全側（`{ continue: true }`）へ倒し、`noteBackgroundFailure` で跡だけ残す
 function wrapPreToolHook(hook: AgentPreToolHook): HookCallback {
   return async (input) => {
     const decision = await hook(toAgentPreToolRecord(input));
     switch (decision.kind) {
       case 'continue':
-        // 書き換え（issue #2088）は `permissionDecision` を付けずに返す——
-        // 確認の流れはそのまま（許可も拒否もしない）で、入力だけを変える。
-        // 付けなくても `updatedInput` が適用されることは、本物の本体で確かめてある
-        // （`real-cli-pre-tool-use-rewrite.test.ts`）。
+        // 書き換えは `permissionDecision` を付けずに返す: 確認の流れをそのままにして入力だけを変えるため
         if (decision.rewrite === undefined) return { continue: true };
         return {
           continue: true,
@@ -326,9 +218,6 @@ function wrapPreToolHook(hook: AgentPreToolHook): HookCallback {
           },
         };
       case 'ask':
-        // 確認に上げる（issue #2884）。SDK は `canUseTool` へ流し、`permissionDecisionReason` は
-        // `options.decisionReason` として確認を受ける側に届く（本物の本体で確かめてある。
-        // マネージャー本体でも作業者の呼び出しでも。`real-cli-pre-tool-use-ask.test.ts`）。
         return {
           continue: true,
           hookSpecificOutput: {
@@ -362,16 +251,6 @@ function wrapPreToolHook(hook: AgentPreToolHook): HookCallback {
   };
 }
 
-/**
- * `PermissionDenied` の生入力を {@link AgentPermissionDeniedRecord} へ写す。
- * 無い欄は省く（他の `toAgent*Record` と同じ作法。issue #1105 P1）。
- *
- * **`signal` はここで詰める。** `PermissionDeniedHookInput` 自体には `signal`
- * という欄は無い——`HookCallback` の第3引数（`options.signal`）でしか渡って
- * こない。他の `toAgent*Record` はどれも第1引数（生入力）だけを読むが、
- * この関数だけは呼び出し側（`wrapPermissionDeniedHook`）から `signal` を
- * 別に受け取って合流させる。
- */
 function toAgentPermissionDeniedRecord(
   input: unknown,
   signal: AbortSignal,
@@ -388,26 +267,8 @@ function toAgentPermissionDeniedRecord(
   };
 }
 
-/**
- * 中立の `PermissionDenied` 判断フックを SDK の `HookCallback` へ包み直す
- * （issue #1105 P1）。
- *
- * **`wrapPreToolHook` と同じ形の「中立の判断→SDK 形」の包み直しだが、
- * SDK 側が持てる語彙がそちらよりずっと狭い。** `PermissionDeniedHookSpecificOutput`
- * は `retry?: boolean` の1個しか持たない——`allow`/`deny` を運ぶ
- * `hookSpecificOutput` は無い。だから `kind: 'retry'` のときだけ
- * `retry: true` を足し、`kind: 'no-retry'` は素の `{ continue: true }`
- * （＝何も足さない。`retry` を省けば `undefined` と同じ扱いになるはずだが、
- * `false` を明示せず省く——「不在」と「明示的な false」を型のうえで
- * 区別する必要が今のところ無いので、無い方をそのまま使う）。
- *
- * **`never` で網羅性を検査する。** `wrapPreToolHook` と同じ形——
- * `AgentPermissionDeniedDecision` に3つ目の `kind` が増えたら、この
- * `switch` の `default` 節で `tsc` が落ちる。**ただし投げない**——理由も
- * 同じ（フックの中で例外を投げるとそのターンが壊れる）。安全側
- * （`{ continue: true }` ＝ retry を足さない）へ倒し、
- * `noteBackgroundFailure` で跡だけ残す。
- */
+// `retry: false` を明示せず省く: 「不在」と「明示的な false」を型のうえで区別する必要が今のところ無いため
+// `default` 節で投げない: フックの中で例外を投げるとそのターンが壊れるため。安全側（`{ continue: true }`）へ倒し、`noteBackgroundFailure` で跡だけ残す
 function wrapPermissionDeniedHook(hook: AgentPermissionDeniedHook): HookCallback {
   return async (input, _toolUseID, options) => {
     const decision = await hook(toAgentPermissionDeniedRecord(input, options.signal));
@@ -434,25 +295,7 @@ function wrapPermissionDeniedHook(hook: AgentPermissionDeniedHook): HookCallback
   };
 }
 
-/**
- * `SubagentStop` の生入力を {@link AgentSubagentStopRecord} へ写す。無い欄は
- * 省く（他の `toAgent*Record` と同じ作法）。
- *
- * **読み方は `runner.ts` の `#onSubagentStop` が今日読んでいる形と揃える。**
- * `backgroundTasks` / `sessionCrons` は配列でなければ省き、`stopHookActive`
- * は真偽値でなければ省く（`toAgentStopRecord` と同じ作法。SDK の型
- * （`SubagentStopHookInput`）ではどちらも必須だが、`#onSubagentStop` は
- * 「入力は防御的に読む」の方針で `as` で受けて型を仮定しない——ここも同じ
- * 方針を保つ）。**`agentId` / `agentType` は他の `toAgent*Record`
- * （`toAgentPreToolRecord` 等）と揃えて `typeof === 'string'` で絞る** ——
- * `#onSubagentStop` 自身はこの2欄を素通しで信頼していたが、SDK の型は
- * どちらも必須の `string` なので実質は変わらない。**万一値が崩れていても
- * 安全側に倒れる**——`agentId` が省かれれば `#onSubagentStop` は
- * `mine.length === 0` の枝（「当人が起こしたものが無い」と同じ扱い）へ
- * 落ち、何も起こし直さない。
- */
 function toAgentSubagentStopRecord(input: unknown): AgentSubagentStopRecord {
-  // **読み取りの失敗は投げずに `readError` で運ぶ**（`AgentSubagentStopRecord.readError` の doc）。
   try {
     const raw = input as Partial<SubagentStopHookInput> | null | undefined;
     return {
@@ -469,17 +312,6 @@ function toAgentSubagentStopRecord(input: unknown): AgentSubagentStopRecord {
   }
 }
 
-/**
- * `SubagentStop` 版の {@link wrapPreCompactHook}。同じ理由で `{ continue: true }`
- * 固定・`await` 保持（Issue #1803）。
- *
- * **クローン本セッション専用。** `runner.ts` 側（`ManagerSessionOptionsRequest.
- * onSubagentStop`）は起こし直しの文脈を返すことがあるので `AgentContextHook` +
- * `wrapContextHook` を使うが、`clone.ts` の `#onSubagentStop`（作業者の allow が
- * 取り残されたことを日誌へ残すだけ）はどの分岐でも `{ continue: true }` だけを
- * 返す——`wrapStopHook` / `wrapUserPromptSubmitHook` と同じ「観測専用」の形に
- * 揃える（`CloneSessionOptionsRequest.onSubagentStop` の doc）。
- */
 function wrapSubagentStopObservationHook(
   hook: AgentObservationHook<AgentSubagentStopRecord>,
 ): HookCallback {
@@ -489,28 +321,7 @@ function wrapSubagentStopObservationHook(
   };
 }
 
-/**
- * 中立の {@link AgentContextHook} を SDK の `HookCallback` へ包み直す
- * （#486 中立の口の4本目）。`ManagerSessionOptionsRequest.onPostToolUse`
- * （記録は {@link AgentToolAuditRecord}）と `.onSubagentStop`（記録は
- * {@link AgentSubagentStopRecord}）の両方がこの関数を通す——`hookEventName` /
- * `toRecord` だけを呼び出し側から渡し分ける。
- *
- * **`continue` → `{ continue: true }`、`addContext` → 同じ `hookEventName` を
- * 持つ `hookSpecificOutput.additionalContext`。** `runner.ts` の
- * `#onPostToolUse`（#901）・`#onSubagentStop`（#357 / #570）が今日すでに
- * 返している形と1文字も変えていない（`runner-subagent-stop.test.ts` の
- * 既存の歯がこれを固定している）。
- *
- * **`never` で網羅性を検査する。** `wrapPreToolHook` と同じ形——
- * `AgentContextOutcome` に3つ目の `kind` が増えたら、この `switch` の
- * `default` 節で `tsc` が落ちる。**ただし投げない**——理由も同じ
- * （このフックはツール実行・作業者継続の経路に載っており、ここで例外を
- * 投げるとそのターン・作業者のターンが壊れる）。実行時にここへ来るのは
- * 型で弾かれたはずの値が渡ったときだけなので、安全側
- * （`{ continue: true }` ＝ 何も注がない）へ倒し、`noteBackgroundFailure` で
- * 跡だけ残す。
- */
+// `default` 節で投げない: このフックはツール実行・作業者継続の経路に載っており、例外を投げるとそのターン・作業者のターンが壊れるため。安全側（`{ continue: true }`）へ倒し、`noteBackgroundFailure` で跡だけ残す
 function wrapContextHook<T>(
   hookEventName: 'PostToolUse' | 'SubagentStop',
   hook: AgentContextHook<T>,
@@ -539,35 +350,8 @@ function wrapContextHook<T>(
   };
 }
 
-// ---------------------------------------------------------------------------
-// A. クローン本セッション
-// ---------------------------------------------------------------------------
-
-/**
- * クローンへ渡す `mcpServers` を組む（#325 段2）。**自作のインプロセス MCP が
- * 必ず勝つ。**
- *
- * 人間の登録（`McpServerStore`）を先に並べ、自作（`MCP_SERVER_NAME`）を最後に
- * 置く。入口（`mcp-servers.ts` の `mcpServerNameSchema`）でも同じ名前は拒んで
- * いるが、**守りを1枚に寄せない** —— 手で書き換えた器や、将来の別の入口から
- * 同じ名前が来ても、自分の道具（記憶・日誌・委譲）が人間の登録に差し替わる
- * ことは無い（差し替われば、クローンは自分の記憶に触れなくなる）。
- *
- * **本セッションと蒸留で同じ関数を通す。** 片方だけ人間の連携が見えると、
- * 人格の書き手（蒸留）だけが別の手を持つことになる（`buildCloneDistillOptions`
- * の「本セッションと同じ配置にする」と同じ理由）。
- *
- * **いつ効くか: セッションを組むとき。** SDK はこれを `query()` の起動時に1度だけ
- * 受け取るので、走行中のセッションに後から足した登録は届かない（次のセッション
- * から効く）。実行環境プロファイルがクローンへ効く時機（`clone.ts` の
- * `#childEnv()`）と同じである。走行中に差し替える口（SDK の
- * `Query.setMcpServers`）はあるが、段2 では使っていない。
- *
- * **マネージャー・作業者（`buildManagerSessionOptions`）へは別の経路で届く**（#325 段3）
- * —— runner は記憶ストアを読めないので、デーモンが runner の名乗りのたびに降ろし、
- * runner がそれを同関数の `mcpServers` へ渡す。あちらには自作のインプロセス MCP が
- * 無いので、この関数（自作を必ず勝たせる合成）は通さない。
- */
+// 自作のインプロセス MCP を最後に置いて必ず勝たせる: 入口でも同じ名前を拒むが守りを1枚に寄せず、同じ名前が来ても自分の道具が人間の登録に差し替わらないようにするため
+// 本セッションと蒸留で同じ関数を通す: 片方だけ人間の連携が見えると、人格の書き手（蒸留）だけが別の手を持つため
 export function cloneMcpServers(
   own: McpServerConfig,
   external: Readonly<Record<string, McpServerConfig>> | undefined,
@@ -597,78 +381,23 @@ function clonePluginOptions(
 export interface CloneSessionOptionsRequest {
   model: string;
   permissionMode: PermissionModeName;
-  /** クローンの道具（インプロセス MCP）。呼び出し側が `mcpServerFactory` で組み立てて渡す。 */
   mcpServer: McpServerConfig;
-  /**
-   * 人間の MCP 連携の登録（`McpServerStore` から読んだもの。#325 段2）。省略・空なら
-   * 自作だけ。組み方は `cloneMcpServers`。
-   */
   externalMcpServers?: Readonly<Record<string, McpServerConfig>>;
   /** 展開済みの plugin（`Options.plugins` の `type: 'local'` へ写す）。省略・空なら欄ごと省く。 */
   plugins?: readonly ClonePluginRequest[];
   systemPrompt: string;
   env: NodeJS.ProcessEnv;
   cwd?: string;
-  /** `#stores.sessions.getCloneSessionId()` の結果そのまま。`null` なら resume 素材が無い。 */
   resume: string | null;
   sessionStore?: SessionStore;
-  /**
-   * **観測専用**（`agent-hooks.ts` の `AgentObservationHook`）。`clone.ts` の
-   * `#onPreCompact` は退避（生ログの保存）と蒸留（記憶への書き戻し）を行うが、
-   * SDK へ返す値はどの分岐でも `{ continue: true }` だけ——compaction を止め
-   * たり遅らせたりする判断は返さない（`wrapPreCompactHook` が包む。`await` は
-   * 保つので、退避・蒸留の完了を待ってから compaction が進む順序は変わらない）。
-   */
   onPreCompact: AgentObservationHook<AgentPreCompactRecord>;
-  /**
-   * **観測専用**（`agent-hooks.ts` の `AgentObservationHook`）。`clone.ts` の
-   * `#onPostToolUse` は日誌へ書く・`effort` や生ログの場所を控えるだけで、
-   * 常に `{ continue: true }` だけを返す（判断を返す経路は無い）。
-   * `wrapToolAuditHook` が SDK の `HookCallback` へ包み直す。
-   */
   onPostToolUse: AgentObservationHook<AgentToolAuditRecord>;
-  /**
-   * 失敗・中断した道具呼び出し（`PostToolUse` と排他）。Issue #924。
-   * **観測専用**（`onPostToolUse` と同じ理由）。
-   */
   onPostToolUseFailure: AgentObservationHook<AgentToolAuditFailureRecord>;
-  /**
-   * 人間が承認した Bash 許可（Issue #863）に一致したら `allow` を返す。
-   * 一致しなければ何も決めない（`continue`——`runner.ts` の
-   * `#onPreToolUse`（`bash-wait-guard.ts`）が `deny` 側で使っているのと
-   * 同じ判断の型（{@link AgentPreToolDecision}）を、逆向き（`allow`）に
-   * 使う）。**このセッション（クローン本セッション）にしか配線しない** —
-   * `buildCloneDistillOptions`（蒸留）・`buildManagerSessionOptions`
-   * （マネージャー・作業者。`runner.ts` 側で別に組む）はこの引数を持たない。
-   * 中身は `clone.ts` の `#onPreToolUse` の doc を見よ。
-   *
-   * **中立の型（`AgentPreToolHook`）へ移してある**（#486 中立の口の3本目）。
-   * `wrapPreToolHook` が SDK の `HookCallback` へ包み直す——`allow` /
-   * `deny` に足す `hookSpecificOutput` の形は、`clone.ts` の実装が今日
-   * 返している形と1文字も変えていない（`wrapPreToolHook` の doc）。
-   */
   onPreToolUse: AgentPreToolHook;
-  /**
-   * 作業者（サブエージェント）セッションが停止した瞬間の観測フック
-   * （Issue #1803）。**観測専用**（`onPostToolUse` と同じ理由）——`clone.ts` の
-   * `#onSubagentStop` はどの分岐でも `void` しか返さず、SDK へは常に
-   * `{ continue: true }` だけを返す（`wrapSubagentStopObservationHook` が包む）。
-   *
-   * **`runner.ts` 側（`ManagerSessionOptionsRequest.onSubagentStop`）とは型が
-   * 違う。** あちらは作業者を実際に起こし直す文脈（`addContext`）を返しうる
-   * ので `AgentContextHook` を使うが、こちらは `onPreToolUse` が控えた
-   * `AllowedByGrantRecord`（Issue #863 残項目）のうち、その作業者の
-   * `agentId` を持ち、まだ決着していない分を日誌へ残すだけ——実行・継続を
-   * 左右する判断は無い。中身は `clone.ts` の `#onSubagentStop` の doc を見よ。
-   *
-   * **`buildCloneDistillOptions`（蒸留）には配線しない** ——蒸留は `Task` を
-   * 呼ばない設計なので `SubagentStop` が発火する前提がそもそも無い
-   * （`onPreToolUse` の「このセッションにしか配線しない」と同じ絞り方）。
-   */
+  // `buildCloneDistillOptions`（蒸留）には配線しない: 蒸留は `Task` を呼ばない設計で、`SubagentStop` が発火する前提が無いため
   onSubagentStop: AgentObservationHook<AgentSubagentStopRecord>;
 }
 
-/** クローン本セッションへ渡す `Options`。組み立ての知識は `clone.ts` の旧 `#buildOptions`（いまは `#buildSessionSpec`）から移した。 */
 export function buildCloneSessionOptions(request: CloneSessionOptionsRequest): Options {
   const {
     model,
@@ -690,59 +419,26 @@ export function buildCloneSessionOptions(request: CloneSessionOptionsRequest): O
 
   return {
     model,
-    // **`tools` を渡さない ＝ preset 一式。** 明示リストで絞れば能力の削除に
-    // なり、それは層を問わず禁じられている（AGENTS.md 地雷1・7 / north_star
-    // 「適用範囲」）。委譲が原則である理由（長寿命セッションの俯瞰と判断を守る）
-    // は方針＝システムプロンプトで表す（`prompt.ts`）。
-    //
-    // **`allowedTools` は「確認なしで通す一覧」であって「使える道具の一覧」では
-    // ない。** 同じ `sdk.d.ts` の `allowedTools` 自身の doc も逐語でそう言っている。
-    //
+    // `tools` を渡さない: 明示リストで絞ると能力の削除になるため
     // [sdk-verbatim Options.allowedTools]
     // To restrict which tools are available, use the `tools` option instead.
-    //
-    // だからここに自作ツールだけを並べても組み込みツールは1つも減らない。並べて
-    // あるのは、自分の道具が権限の判断に晒されないようにするためである。
     allowedTools: CLONE_ALLOWED_TOOLS,
-    // 人間が開く Claude Code と同じ既定（`auto`）。**`default` のまま道具を渡すと
-    // 「渡したのに使えない」になる** — このセッションには `canUseTool` が無く、
-    // SDK は確認相手が居ないとき `ask` の判断をそのまま拒否で終わらせる。
-    //
-    // **`canUseTool` は繋がない（クローンだけはマネージャーと事情が違う）。**
-    // クローンは長寿命セッション1本で、受信箱のすべてのターンがそこを直列に
-    // 通る。ここで人間の回答を待って止めれば、止まるのは待っている1件ではなく
-    // 全部である（PRD「自律」の「止まるのはその仕事だけ」が壊れる）。確認が
-    // 要ると判断したなら `ask_human` に積んでから手を動かすのが、この層での
-    // 権限境界の表し方である（PRD「権限境界」）。
+    // `default` のまま道具を渡さない: このセッションには `canUseTool` が無く、SDK は確認相手が居ないとき `ask` をそのまま拒否で終わらせるため
+    // `canUseTool` を繋がない: クローンは長寿命セッション1本で全ターンが直列に通るので、人間の回答を待って止めると止まるのが全部になるため
     permissionMode,
     mcpServers: cloneMcpServers(mcpServer, externalMcpServers),
     ...clonePluginOptions(plugins),
     systemPrompt,
-    // **人間が使っているのと同じ設定・同じ `.mcp.json` を読む。** ここを `[]` に
-    // すると、人間が Claude Code で使っている MCP 連携がクローンからは1つも
-    // 見えない ＝ 能力の削除（AGENTS.md 地雷7 の後半 / PRD「業務範囲」の
-    // 「人間が使っている連携が、クローンと作業者からも使えること」）。
+    // `settingSources` を `[]` にしない: 人間が Claude Code で使っている MCP 連携がクローンから1つも見えなくなる（能力の削除）ため
     settingSources: ['user', 'project', 'local'],
-    // 参照系は `.claude/skills/` に置いてある（AGENTS.md「書く先を決める」）。
-    // **`'all'` を明示する。** 省くと SDK 側は何も設定せず CLI の既定に委ねる
-    // ことになり、器によって引けるものが変わる。**名前の列挙で絞らないのは
-    // 地雷1と同じ理由**で、スキルが増えたときに自動で追いつかせるためである。
+    // `skills: 'all'` を明示し、名前を列挙しない: 省くと CLI の既定に委ねて器によって引けるものが変わり、列挙するとスキルが増えたときに追いつかないため
     skills: 'all',
-    // 人間が置いた実行環境プロファイルを、クローンの手にも効かせる。
     env,
     includePartialMessages: true,
     ...(cwd === undefined ? {} : { cwd }),
     ...(resume === null ? {} : { resume }),
-    // セッションの生ログも記憶ストアと同じ PostgreSQL へ（M4）。器を作り直しても
-    // resume の素材が残る。**同一性はそれでも記憶に宿る** — ここが空でも、
-    // 記憶と日誌が同じならクローンは同じクローンである。
     ...(sessionStore === undefined ? {} : { sessionStore }),
     hooks: {
-      // **クローン本セッションで唯一、実際に判断（`allow`）を返しうるフック**
-      // （Issue #863）。他の3本（`PreCompact` / `PostToolUse` /
-      // `PostToolUseFailure`）は観測専用で `continue: true` しか返さない
-      // ——`CloneSessionOptionsRequest.onPreToolUse` の doc を見よ。
-      // `wrapPreToolHook` が中立の判断を SDK の `HookCallback` へ包み直す。
       PreToolUse: [
         {
           hooks: [wrapPreToolHook(onPreToolUse)],
@@ -754,39 +450,18 @@ export function buildCloneSessionOptions(request: CloneSessionOptionsRequest): O
           hooks: [wrapPreCompactHook(onPreCompact)],
         },
       ],
-      // `self_status` の effort と、**クローンが自分の手を使った跡**をここで拾う
-      // （後者は `#onPostToolUse` のコメント）。
-      //
-      // 1. **`PostToolUse` はツールの実行後に走るので、実行そのものを止められない**
-      //    （`PreToolUse` と違ってここで判断を差し込む余地が無い＝観測専用として
-      //    安全に足せる）。
-      // 2. **`PreCompact` はセッション生涯に対して1本のフックであり、effort は
-      //    載らない**（`BaseHookInput.effort` はツール実行の文脈で発火するフックに
-      //    しか付かない）。だから既存の `PreCompact` はそのままにし、別の枠へ足す。
-      // 3. **クローンは毎ターン MCP の道具を叩く。** `self_status` を呼ぶ時点までに
-      //    別の道具呼び出しが1本挟まっていれば、その回で観測済みになっている。
-      //    **例外はそのセッションで最初の道具呼び出しそのもの** — そのときはまだ
-      //    どの `PostToolUse` も発火しておらず `effort` は `null` のままである
-      //    （`CloneRuntimeFacts.effort` のコメントと同じ）。
+      // effort を `PreCompact` で拾わない: `PreCompact` はセッション生涯に対して1本のフックで、`BaseHookInput.effort` はツール実行の文脈で発火するフックにしか付かないため
       PostToolUse: [
         {
           hooks: [wrapToolAuditHook(onPostToolUse)],
         },
       ],
-      // **`PostToolUse` とは排他で発火する**（Issue #924 — 出荷済みの SDK
-      // 実行体を実測し、`try` 側で `PostToolUse` を、`catch` 側で
-      // `PostToolUseFailure` を組み立てる排他分岐を確認した）。⟹ 道具呼び出し
-      // 1回につきどちらか一方だけが呼ばれるので、両方に登録しても二重記録に
-      // ならない。**片方だけ登録しない道は無い** — 失敗・中断した道具呼び出し
-      // が日誌に1件も残らなくなる（`docs/architecture.md`「非対称な可視性」）。
+      // `PostToolUse` と `PostToolUseFailure` の片方だけを登録しない: 排他に発火するので両方登録しても二重記録にならず、片方だけだと失敗・中断した道具呼び出しが日誌に1件も残らないため
       PostToolUseFailure: [
         {
           hooks: [wrapToolAuditFailureHook(onPostToolUseFailure)],
         },
       ],
-      // 作業者（サブエージェント）が停止した瞬間の観測（Issue #1803）。
-      // **観測専用**——`CloneSessionOptionsRequest.onSubagentStop` の doc。
-      // `wrapSubagentStopObservationHook` が `{ continue: true }` 固定で包む。
       SubagentStop: [
         {
           hooks: [wrapSubagentStopObservationHook(onSubagentStop)],
@@ -796,28 +471,20 @@ export function buildCloneSessionOptions(request: CloneSessionOptionsRequest): O
   };
 }
 
-// ---------------------------------------------------------------------------
-// B. クローンの蒸留サイドクエリ
-// ---------------------------------------------------------------------------
-
 export interface CloneDistillOptionsRequest {
   model: string;
   permissionMode: PermissionModeName;
   mcpServer: McpServerConfig;
-  /** 本セッションと同じもの（`CloneSessionOptionsRequest.externalMcpServers`）。 */
   externalMcpServers?: Readonly<Record<string, McpServerConfig>>;
   /** 本セッションと同じもの（`CloneSessionOptionsRequest.plugins`）。 */
   plugins?: readonly ClonePluginRequest[];
   systemPrompt: string;
   env: NodeJS.ProcessEnv;
   cwd?: string;
-  /** **観測専用**（`CloneSessionOptionsRequest.onPostToolUse` と同じ理由）。 */
   onPostToolUse: AgentObservationHook<AgentToolAuditRecord>;
-  /** 失敗・中断した道具呼び出し（`PostToolUse` と排他）。Issue #924。**観測専用。** */
   onPostToolUseFailure: AgentObservationHook<AgentToolAuditFailureRecord>;
 }
 
-/** 蒸留のサイドクエリへ渡す `Options`。組み立ての知識は `clone.ts` の旧 `#distillFromTranscript` から移した。 */
 export function buildCloneDistillOptions(request: CloneDistillOptionsRequest): Options {
   const {
     model,
@@ -834,44 +501,30 @@ export function buildCloneDistillOptions(request: CloneDistillOptionsRequest): O
 
   return {
     model,
-    // **本セッションと同じ配置にする。** 片方だけ道具や設定が違うと、
-    // 人格の書き手（蒸留）だけが別の頭になる（モデル帯を揃えているのと
-    // まったく同じ理由）。理由は `buildCloneSessionOptions` 側に書いてある。
+    // 本セッションと同じ配置にする: 片方だけ道具や設定が違うと、人格の書き手（蒸留）だけが別の頭になるため
     allowedTools: CLONE_ALLOWED_TOOLS,
     permissionMode,
     mcpServers: cloneMcpServers(mcpServer, externalMcpServers),
     ...clonePluginOptions(plugins),
     systemPrompt,
     settingSources: ['user', 'project', 'local'],
-    // 蒸留のターンも同じものを引ける（本セッションと道具を揃えてある）。
     skills: 'all',
     env,
     persistSession: false,
     ...(cwd === undefined ? {} : { cwd }),
-    // **監査もこちら側に要る。** 道具と許可モードを本セッションと揃えた以上、
-    // 記録だけ片方に無ければ「蒸留のターンで何をしたか」がどこにも残らない
-    // （docs/architecture.md「PostToolUse フックで全ツール実行を日誌に記録」）。
-    // **effort の観測はここでは意味を持たない**（別セッションの値なので
-    // `#effort` を汚さないよう、日誌だけを書く枝を通す）。
+    // 監査も蒸留側に登録する: 記録が片方に無いと「蒸留のターンで何をしたか」がどこにも残らないため
     hooks: {
       PostToolUse: [{ hooks: [wrapToolAuditHook(onPostToolUse)] }],
-      // **本セッション側と同じ理由で登録する**（`buildCloneSessionOptions` の
-      // `PostToolUseFailure` の doc）。蒸留は `memory_write` を叩く経路なので、
-      // そこの失敗を記録しないと「記憶が書かれなかった」が静かに落ちる。
+      // 蒸留の失敗も記録する: 蒸留は `memory_write` を叩く経路で、失敗を記録しないと「記憶が書かれなかった」が静かに落ちるため
       PostToolUseFailure: [{ hooks: [wrapToolAuditFailureHook(onPostToolUseFailure)] }],
     },
   };
 }
 
-// ---------------------------------------------------------------------------
-// C. マネージャー（runner 側）
-// ---------------------------------------------------------------------------
-
 export interface ManagerSessionOptionsRequest {
   model: string;
   permissionMode: PermissionModeName;
   systemPromptAppend: string;
-  /** 作業者層の本体1個だけを置く agents レコードの key（runner.ts の `WORKER_AGENT_NAME`）。 */
   workerAgentName: string;
   workerPrompt: string;
   workerModel: string;
@@ -881,154 +534,21 @@ export interface ManagerSessionOptionsRequest {
   resume?: string;
   spawnClaudeCodeProcess?: (options: SpawnOptions) => SpawnedProcess;
   canUseTool: CanUseTool;
-  /**
-   * **`AgentObservationHook` ではなく `AgentContextHook` に載せる（#486 中立の口の
-   * 4本目）。** `runner.ts` の `#onPostToolUse` は観測（日誌・所有者控え）に
-   * 加えて、`#901` の打ち切り注記を追加の文脈として返す経路を持つ——`void`
-   * しか返せない `AgentObservationHook` には載らない。返すのは `continue` か
-   * `addContext` だけで、`wrapContextHook` が SDK の
-   * `hookSpecificOutput.additionalContext` へ包み直す。**クローン側の
-   * `onPostToolUse`（`CloneSessionOptionsRequest` / `CloneDistillOptionsRequest`）
-   * は常に `{ continue: true }` だけを返すので `AgentObservationHook` のまま。**
-   */
+  // `AgentObservationHook` ではなく `AgentContextHook` に載せる: `runner.ts` の `#onPostToolUse` は打ち切り注記を追加の文脈として返す経路を持ち、`void` しか返せない `AgentObservationHook` には載らないため
   onPostToolUse: AgentContextHook<AgentToolAuditRecord>;
-  /**
-   * 失敗・中断した道具呼び出し（`PostToolUse` と排他）。Issue #929
-   * （クローン側の同じ形は `onPostToolUse` の doc の `buildCloneSessionOptions`
-   * 側 — Issue #924）。
-   *
-   * **optional にしない。理由は直上の `onPostToolUse` と同じ** — 省略できる
-   * 形にすると、provider を足す側が「渡さない」ことで観測を静かに落とせる
-   * （可観測性は要件である。PRD「可観測性」）。中身は `runner.ts` の
-   * `#onPostToolUseFailure` の doc を見よ。**こちらは常に `{ continue: true }`
-   * だけを返す観測専用フックなので、中立の型へ移してある。**
-   */
+  // 観測フックを optional にしない: 省略できる形にすると、provider を足す側が「渡さない」ことで観測を静かに落とせるため
   onPostToolUseFailure: AgentObservationHook<AgentToolAuditFailureRecord>;
-  /**
-   * **観測専用**（`agent-hooks.ts` の `AgentObservationHook`）。`runner.ts` の
-   * `#onPreCompact` は退避（`#shipArchive`）だけを行い、どの分岐でも
-   * `{ continue: true }` だけを返す。`wrapPreCompactHook` が包む（クローン側の
-   * `CloneSessionOptionsRequest.onPreCompact` と同じ関数を使うが、マネージャー
-   * 側は `AgentPreCompactRecord.sessionId` / `.signal` を読まない）。
-   */
   onPreCompact: AgentObservationHook<AgentPreCompactRecord>;
-  /**
-   * ターンの開始を数える観測専用のフック（`worker_wait`）。
-   *
-   * **optional にしない。** 省略できる形にすると、provider を足す側が「渡さない」
-   * ことで観測を静かに落とせる（可観測性は要件である。PRD「可観測性」）。
-   * `runner.ts` の `#onUserPromptSubmit` はどの分岐でも `{ continue: true }`
-   * だけを返すので中立の型へ移してある（`wrapUserPromptSubmitHook` が包む）。
-   */
   onUserPromptSubmit: AgentObservationHook<AgentUserPromptSubmitRecord>;
-  /**
-   * 作業者セッションが停止した瞬間の背景処理の在り高を観測する専用フック
-   * （#357 の実測口）。
-   *
-   * **`AgentContextHook` に載せる（#486 中立の口の4本目）。** `runner.ts` の
-   * `#onSubagentStop` は、当人が起こした背景処理が残っていて、その完了を待ち終えた回に（待ちの
-   * 上限 30分。Issue #3008）、作業者を起こし直す文脈を
-   * 返す（`addContext`）——「起きたことをただ記録する」を超えた判断なので
-   * `AgentObservationHook` には載らない。`wrapContextHook` が SDK の
-   * `hookSpecificOutput.additionalContext` へ包み直す。optional にしない。理由は直上の `onUserPromptSubmit` と
-   * 同じ——省略できる形にすると、provider を足す側が「渡さない」ことで観測を
-   * 静かに落とせる（可観測性は要件である。PRD「可観測性」）。中身は
-   * `runner.ts` の `#onSubagentStop` の doc を見よ。
-   */
+  // `AgentContextHook` に載せる: `runner.ts` の `#onSubagentStop` は作業者を起こし直す文脈を返す判断を含み、`AgentObservationHook` には載らないため
   onSubagentStop: AgentContextHook<AgentSubagentStopRecord>;
-  /**
-   * **マネージャー自身のターンが閉じる瞬間**の背景処理の在り高を観測する専用
-   * フック（#861 の実測口）。
-   *
-   * **`onSubagentStop` とちょうど裏返しの発火条件を持つ。** あちらは「作業者が
-   * 畳んだ瞬間に**親のターンが開いていた**」ときにしか来ないので、親が先に
-   * 閉じる形（委譲は既定で `is_backgrounded: true` なので**本番ではこちらが
-   * 普通**）を1件も拾えない。こちらはその閉じる瞬間そのものに来る。
-   *
-   * **optional にしない。理由は直上の `onSubagentStop` と同じ** —— 省略できる
-   * 形にすると、provider を足す側が「渡さない」ことで観測を静かに落とせる
-   * （可観測性は要件である。PRD「可観測性」）。**`runner.ts` の `#onStop` は
-   * どの分岐でも `{ continue: true }` だけを返す**（`#onSubagentStop` とは
-   * 違い、こちらは実際に観測専用のまま）ので、中立の型へ移してある
-   * （`wrapStopHook` が包む）。中身は `runner.ts` の `#onStop` の doc を見よ。
-   */
   onStop: AgentObservationHook<AgentStopRecord>;
-  /**
-   * **上の5本と違い、これだけが実際にブロックする**（#894 段1・案(A)）。
-   *
-   * `Bash` へ渡す `command` が「無限に待つだけの形」
-   * （`bash-wait-guard.ts` の `inspectBashCommand`）だったら、SDK の型
-   * （`sdk.d.ts` の `PreToolUseHookSpecificOutput.permissionDecision`）が
-   * 持つ `'deny'` でツール実行そのものを止める。**`PreToolUseHookSpecificOutput`
-   * 自体には JSDoc の説明文が無い**ので、同じ契約だと明記している隣の型
-   * （`PreModelSwitchHookSpecificOutput`）の説明文を逐語で引く:
-   *
-   * [sdk-verbatim PreModelSwitchHookSpecificOutput]
-   * > Same contract as PreToolUse: allow proceeds (skipping the interactive cache-miss confirm), deny cancels the switch, ask asks the user to confirm (a headless session refuses instead)
-   *
-   * **optional にしない。理由は上の5本と同じ**（可観測性・安全弁は provider
-   * を足す側が黙って落とせない要件である）。中身は `runner.ts` の
-   * `#onPreToolUse` の doc を見よ。
-   *
-   * **中立の型（`AgentPreToolHook`）へ移してある**（#486 中立の口の3本目）。
-   * `wrapPreToolHook` が SDK の `HookCallback` へ包み直す——`deny` に足す
-   * `hookSpecificOutput` の形は、`runner.ts` の実装が今日返している形と
-   * 1文字も変えていない（`wrapPreToolHook` の doc、`CloneSessionOptionsRequest.
-   * onPreToolUse` の doc と同じ形）。
-   */
+  // [sdk-verbatim PreModelSwitchHookSpecificOutput]
+  // > Same contract as PreToolUse: allow proceeds (skipping the interactive cache-miss confirm), deny cancels the switch, ask asks the user to confirm (a headless session refuses instead)
   onPreToolUse: AgentPreToolHook;
-  /**
-   * **分類器（auto mode classifier）にその場で拒否された道具の呼び出しへ、
-   * クローンの判断で「1回だけの許可」を出す口**（issue #1105 P1）。
-   *
-   * SDK の `PermissionDenied` フックは `retry?: boolean` の1個しか返せない
-   * ——「もう一度試してよい」とモデルの文脈に一文足すだけで、実行そのものを
-   * 許可する力は持たない。実際に道具を通すのは、撃ち直しの後に
-   * `onPreToolUse` が同じ入力を見つけて `allow` を返す番である
-   * （`runner.ts` の `#consumeOneShotAllow`）。**この欄自身はクローンを待つ
-   * ——`retry` を返すまでに、既存の許可確認（`requestId` 付きの `ask`）と
-   * 同じ経路でクローンへ上げ、答えを待つ**（`runner.ts` の
-   * `#onPermissionDenied` の doc）。
-   *
-   * **optional にしない。理由は上の6本と同じ**（安全弁は provider を足す側が
-   * 黙って落とせない要件である。ただし黙って落とした場合の帰結はここでは
-   * 「1回限りの許可という機能が無い」というだけで、既存の分類器の拒否その
-   * ものには触れない——`AgentPermissionDeniedDecision` の `no-retry` は
-   * 「何もしない」の既定値でもある）。
-   *
-   * **中立の型（`AgentPermissionDeniedHook`）へ移してある。**
-   * `wrapPermissionDeniedHook` が SDK の `HookCallback` へ包み直す。
-   *
-   * **クローン側（`buildCloneSessionOptions` / `buildCloneDistillOptions`）
-   * には同じ引数を持たせない。** issue #1105 の依頼範囲がマネージャー層
-   * （このファイルと `runner.ts`）に限られている——クローン自身の
-   * `PreToolUse`（許可 DB の規則。issue #863）とは別の話である。
-   */
   onPermissionDenied: AgentPermissionDeniedHook;
-  /**
-   * `ALTEROID_MANAGER_AUTO_MEMORY` を解いた結果（`runner.ts` の
-   * `resolveManagerAutoMemoryEnabled`）。**このセッションが auto-memory を
-   * 開いてよいか**であって、開いたか・使ったかの観測ではない。
-   *
-   * `false`（既定）のときだけ `settings: { autoMemoryEnabled: false }` を
-   * `Options` へ載せる（#1189）。**クローン側（`buildCloneSessionOptions` /
-   * `buildCloneDistillOptions`）には同じ引数を持たせない** — auto-memory は
-   * 「書いた本人の次のセッション」に届くという前提そのものが、使い捨てで
-   * 生成し直されるマネージャーとは違い、長寿命1本のクローンでは崩れていない
-   * （#1189 の判断）。
-   */
+  // クローン側に同じ引数を持たせない: auto-memory が「書いた本人の次のセッション」に届く前提は、使い捨てのマネージャーと違い、長寿命1本のクローンでは崩れていないため
   managerAutoMemoryEnabled: boolean;
-  /**
-   * 人間の MCP 連携の登録（記憶ストアの `McpServerStore` の中身。#325 段3）。
-   *
-   * **runner は記憶ストアを読めない**ので、デーモンが runner の名乗り（`hello`）の
-   * たびに降ろしたもの（`runner.ts` の `Host#setMcpServers`）がここへ来る。省略・
-   * 空なら `mcpServers` を `Options` に載せない（段3 以前と同じく `.mcp.json` だけで走る）。
-   *
-   * **いつ効くか: このセッションを組むときの1度だけ。** SDK の `mcpServers` は
-   * `query()` の起動時に渡るので、走行中のセッションに後から降りた登録は届かない
-   * （次に開くセッション —— 新しい委譲と、resume・開き直し —— から効く）。
-   */
   mcpServers?: Readonly<Record<string, McpServerConfig>>;
   /**
    * runner が展開した plugin（`Options.plugins` の `type: 'local'` へ写す）。省略・空なら欄ごと省く。
@@ -1038,7 +558,6 @@ export interface ManagerSessionOptionsRequest {
   plugins?: readonly ClonePluginRequest[];
 }
 
-/** マネージャーへ渡す `Options`。組み立ての知識は `runner.ts` の旧 `#buildOptions` から移した。 */
 export function buildManagerSessionOptions(request: ManagerSessionOptionsRequest): Options {
   const {
     model,
@@ -1067,195 +586,80 @@ export function buildManagerSessionOptions(request: ManagerSessionOptionsRequest
   } = request;
 
   return {
-    // 既定は `opus`。人間が `ALTEROID_MANAGER_MODEL` に置いていればそれを使う
-    // （設定ではなく承認の置き場。`model-tier.ts`）。**ここが正本である** —
-    // デーモン側の自己認識に出るのは同じ env から解いた宣言であって、
-    // 実際にセッションへ渡っているのはこの値である。
     model,
-    // `tools` は渡さない = preset 全部。明示リストで絞らない（AGENTS.md 地雷1）。
-    // `maxTurns` も渡さない（地雷2）。
-    // 人間が開く Claude Code と同じ既定（Auto）。`canUseTool` は下に残してあり、
-    // `default` へ戻せば1件ずつクローンへ確認が回る。
+    // `tools` と `maxTurns` を渡さない: 明示リストで絞らず、ターン数でも止めないため
     permissionMode,
     systemPrompt: {
       type: 'preset',
       preset: 'claude_code',
       append: systemPromptAppend,
     },
-    // 作業者層の本体はこの1個だけ。`tools` を書かない = 親の全ツールを継承。
-    //
-    // **`mcpServers` も書かない = 親（マネージャー）の MCP 接続を継承する**（#325 段3）。
-    // 根拠は2つ（`@anthropic-ai/claude-agent-sdk@0.3.281`）:
-    //
+    // 作業者の `mcpServers` を書かない: 省けば親の MCP 接続を継承し、名前で書き足すと継承で届いているものを二重に起こすか、届かない指定を足すかのどちらかになるため
     // [sdk-verbatim AgentDefinition.tools]
     // Array of allowed tool names. If omitted, inherits all tools from parent.
-    //
-    // ——MCP の道具は親の道具の一部として継承される（同じ型の `disallowedTools` の doc が
-    // 「MCP server-level specs (mcp__server, mcp__server__*, mcp__*) remove every tool
-    // from the named server」と書いており、MCP の道具が継承された集合に入っている前提で
-    // ある）。`AgentDefinition.mcpServers` 自体には doc が無いので、同梱の CLI バイナリ
-    // （`claude-agent-sdk-linux-x64@0.3.281`）の実装文字列も読んだ: 定義の
-    // `mcpServers` が空なら親の接続（`clients`）をそのまま返し、在っても
-    // `clients:[...親, ...agent 専用]` と**親に足す**形である。⟹ 省けば親と同じ接続を持つ。
-    //
-    // **名前で書き足さない。** 同じ実装で、文字列の指定は「disk config」から引き直す
-    // 形（`.mcp.json` 等）で、`Options.mcpServers` で渡した登録を指すとは限らない
-    // （見つからなければ「MCP server not found」で黙って落ちる）。書けば、継承で
-    // 既に届いているものを二重に起こすか、届かない指定を足すかのどちらかになる。
-    // **⚠️ 実機では確かめていない**（型の doc とバイナリの文字列を読んだだけ）。
     agents: {
       [workerAgentName]: {
         description:
           'コストと文脈のために切り出した実作業の担い手。実装に限らず、調査・下読み・' +
-          '外部サービスの確認・レビュー・相談のたたき台づくりまで任せてよい。',
+          '外部サービスの確認・レビューの下読み・相談のたたき台づくりまで任せてよい。' +
+          '設計・デザイン・外へ出す文面のように、出力の質そのものが成果の仕事は任せない。',
         prompt: workerPrompt,
-        // **省略しない。** SDK の既定は親（マネージャー）の継承なので、
-        // 省けばマネージャーを差し替えた人が作業者まで巻き添えで動かすことになる。
+        // 省略しない: SDK の既定は親（マネージャー）の継承で、省くとマネージャーを差し替えた人が作業者まで巻き添えで動かすことになるため
         model: workerModel,
       },
     },
     cwd,
-    // 人間が使っているのと同じ設定・同じ .mcp.json を渡す（下向きは同じものが見える）
-    //
-    //
-    // **記憶ストアに置いた MCP の登録はこれとは別に `mcpServers` で渡す**（#325 段3。
-    // 下）。Railway では `.mcp.json` の置き場が再デプロイで消えるので、こちらだけでは
-    // この層の連携が0本になる。
+    // 記憶ストアの MCP 登録は `.mcp.json` とは別に `mcpServers` で渡す: Railway では `.mcp.json` の置き場が再デプロイで消え、設定だけだとこの層の連携が0本になるため
     settingSources: ['user', 'project', 'local'],
-    // **空なら載せない。** 空の `{}` を渡しても SDK 上は同じはずだが、段3 以前の
-    // `Options` と1文字も変えない形にしておく（登録を置いていない構成の挙動を
-    // この変更で動かさない）。
+    // 空なら載せない: 登録を置いていない構成の挙動を動かさないため
     ...(mcpServers === undefined || Object.keys(mcpServers).length === 0
       ? {}
       : { mcpServers: { ...mcpServers } }),
     ...clonePluginOptions(plugins),
-    // 参照系は `.claude/skills/` に置いてある（AGENTS.md「書く先を決める」）。
-    // **`'all'` を明示する。** 省くと SDK 側は何も設定せず CLI の既定に委ねる
-    // ことになり、器によって引けるものが変わる。名前の列挙で絞らないのは
-    // 地雷1と同じ理由で、スキルが増えたときに自動で追いつかせるためである。
-    //
-    // **上の `agents`（作業者）側には `skills` を書かない。**
-    // `AgentDefinition.skills` は `'all'` を受けず名前の配列しか取れないので、
-    // 書けば「明示リストで絞る」（地雷1）になり、スキルが増えても追いつかない。
-    // しかもあちらは *preload* なので、書いた分だけ作業者の文脈へ先に載る
-    // ＝ 畳んだ意味が消える。
+    // `skills: 'all'` を明示し、名前を列挙しない: 省くと CLI の既定に委ねて器によって引けるものが変わり、列挙するとスキルが増えたときに追いつかないため
+    // 上の `agents`（作業者）側には `skills` を書かない: `AgentDefinition.skills` は `'all'` を受けず、名前の配列は明示リストで絞ることになり、preload で作業者の文脈へ先に載って畳んだ意味も消えるため
     skills: 'all',
     env,
-    // 生ログはデーモンへ預ける。runner は永続化の器を持たない（記憶ストアの
-    // 鍵を runner に置かないため）。
+    // 生ログはデーモンへ預ける: runner は永続化の器を持たず、記憶ストアの鍵を runner に置かないため
     sessionStore,
-    // **開いていないときだけ載せる。** `settings` は SDK の「flag settings」層
-    // ——ユーザー側で制御できる層の中で最も優先順位が高い:
-    //
     // [sdk-verbatim Options.settings]
     // which has the highest priority among user-controlled settings.
-    //
-    // `autoMemoryEnabled: false` は auto-memory の読み書きそのものを止める:
-    //
     // [sdk-verbatim Settings.autoMemoryEnabled]
     // Enable auto-memory for this project. When false, Claude will not read from or write to the auto-memory directory.
-    //
-    // **`autoMemoryDirectory` と違い、`autoMemoryEnabled` の doc には
-    // 「Ignored if set in projectSettings」が付いていない**（この否定は
-    // `check:sdk-quotes` の印では確かめられない——不在の主張なので、次に
-    // SDK を上げる側が目で見て確かめること）。人間が
-    // `ALTEROID_MANAGER_AUTO_MEMORY=true` を置いたとき（`managerAutoMemoryEnabled`）
-    // はこのキー自体を省き、SDK の既定（開く）に委ねる（#1189）。
+    // `autoMemoryEnabled` の doc に「Ignored if set in projectSettings」が付いていないことは、SDK を上げるときに目で確かめる: 不在の主張で `check:sdk-quotes` の印では確かめられないため
     ...(managerAutoMemoryEnabled ? {} : { settings: { autoMemoryEnabled: false } }),
     ...(resume === undefined ? {} : { resume }),
-    // 子プロセスを別 UID へ降ろす。**能力は1つも削らない** — 道具も preset も
-    // そのままで、変えるのは実行する主体だけである（実行環境の境界）。
     ...(spawnClaudeCodeProcess === undefined ? {} : { spawnClaudeCodeProcess }),
     canUseTool,
     hooks: {
-      // **ブロックする唯一のフック**（#894 段1・案(A)）。`Bash` 以外は
-      // `#onPreToolUse` の内側で素通しする。理由は `runner.ts` の
-      // `#onPreToolUse` の doc を見よ。`wrapPreToolHook` が中立の判断を
-      // SDK の `HookCallback` へ包み直す。
       PreToolUse: [{ hooks: [wrapPreToolHook(onPreToolUse)] }],
-      // **分類器（auto mode classifier）の拒否に、クローンの1回だけの許可を
-      // 出す口**（issue #1105 P1）。`wrapPermissionDeniedHook` が中立の
-      // `retry`/`no-retry` を SDK の `HookCallback` へ包み直す——実際に道具を
-      // 通すのは、撃ち直しの後の `PreToolUse`（直上）の役目である。理由は
-      // `ManagerSessionOptionsRequest.onPermissionDenied` の doc と
-      // `runner.ts` の `#onPermissionDenied` の doc を見よ。
       PermissionDenied: [{ hooks: [wrapPermissionDeniedHook(onPermissionDenied)] }],
-      // 観測に加えて #901 の打ち切り注記を追加の文脈として返しうる
-      // （`ManagerSessionOptionsRequest.onPostToolUse` の doc）。`wrapContextHook` が
-      // 中立の `continue` / `addContext` を SDK の形へ包み直す。
       PostToolUse: [
         { hooks: [wrapContextHook('PostToolUse', onPostToolUse, toAgentToolAuditRecord)] },
       ],
-      // **`PostToolUse` とは排他で発火する**（Issue #924 が出荷済みの SDK
-      // 実行体を実測して確認した排他分岐。`buildCloneSessionOptions` の
-      // `PostToolUseFailure` の doc と同じ）。⟹ 道具呼び出し1回につきどちらか
-      // 一方だけが呼ばれる。**片方だけ登録しない道は無い** — 失敗・中断した
-      // 道具呼び出しが日誌に1件も残らなくなる（Issue #929）。
+      // `PostToolUse` と `PostToolUseFailure` の片方だけを登録しない: 失敗・中断した道具呼び出しが日誌に1件も残らなくなるため
       PostToolUseFailure: [{ hooks: [wrapToolAuditFailureHook(onPostToolUseFailure)] }],
-      // **観測専用**。`{ continue: true }` を返すだけで compaction を止めない
-      // （`ManagerSessionOptionsRequest.onPreCompact` の doc）。
       PreCompact: [{ hooks: [wrapPreCompactHook(onPreCompact)] }],
-      // **観測専用**（`worker_wait`）。`{ continue: true }` を返すだけで何も
-      // ブロックしない。理由は `runner.ts` の `#onUserPromptSubmit` の doc を見よ。
       UserPromptSubmit: [{ hooks: [wrapUserPromptSubmitHook(onUserPromptSubmit)] }],
-      // **観測専用ではない**（#357）。当人が起こした背景処理が残っていれば
-      // 起こし直しの文脈を返すことがある（`ManagerSessionOptionsRequest.onSubagentStop`
-      // の doc）。`wrapContextHook` が SDK の形へ包み直す。
       SubagentStop: [
         {
-          // **待つフック**（`SUBAGENT_STOP_HOOK_TIMEOUT_SECONDS` の doc）。待ちの上限より長く明示する。
           timeout: SUBAGENT_STOP_HOOK_TIMEOUT_SECONDS,
           hooks: [wrapContextHook('SubagentStop', onSubagentStop, toAgentSubagentStopRecord)],
         },
       ],
-      // **観測専用**（#861）。`{ continue: true }` を返すだけで、`decision` も
-      // `hookSpecificOutput` も返さない —— 直上の `SubagentStop` は起こし直し
-      // （`additionalContext`）を返す側へ変わっているが、**こちらは記録だけで
-      // ある。** 理由は `runner.ts` の `#onStop` の doc を見よ。
       Stop: [{ hooks: [wrapStopHook(onStop)] }],
     },
   };
 }
 
-// ---------------------------------------------------------------------------
-// D. 読み側 —— Claude のメッセージを中立イベントへ写す
-// ---------------------------------------------------------------------------
-
-/**
- * `task_notification.summary` を運ぶときの上限文字数（Issue #1373 続き）。
- *
- * SDK の型は `summary` の長さを約束していない。無上限のまま
- * `AgentDelegationNotified` へ積むと、日誌・報告本文・台帳のどれかで無制限の
- * 英語文言をそのまま抱えることになる——`excerpt()` が付ける「切った跡」込みで
- * 運べば十分な長さとして、他の抜粋（`sdk-failure.ts` の失敗文言など）と桁を
- * 揃えた。
- */
+// `summary` を無上限で運ばない: 日誌・報告本文・台帳のどれかが無制限の英語文言を抱えることになるため
 const TASK_NOTIFICATION_SUMMARY_EXCERPT_LIMIT = 500;
 
-/**
- * Claude のメッセージ1件を {@link AgentEvent} へ写す（#486「読み側の中立化」）。
- *
- * **ここが「読み取りの判断」の唯一の置き場である。** SDK の綴り（`subtype` の値・
- * `permission_denials` の欄・`modelUsage` の在り処）を知っているのはこの関数と、
- * この関数が呼ぶ既に共有済みの判定（`sdk-failure.ts` / `usage-limits.ts` /
- * `usage.ts`）だけにする。**層（`clone.ts` / `runner.ts`）はもう SDK の綴りを
- * 読まない** —— 次の provider を足すときに書くのは、この関数と同じ形の写しを
- * もう1本だけである。
- *
- * **純関数である。** 状態を持たないので、ターンを跨ぐ記憶（喋った本文を溜める・
- * 印を持ち越す・委譲の区間を開く）は層の側に残る。それは「起きたことへの反応」で
- * あって読み取りの判断ではない（`agent-events.ts` の表の (ii)）。
- *
- * **0個返すことがある。** provider が出すもののうち「見ないと決めてある」種類が
- * あるためで、間引きではなく判断である（下の `task_progress` ほかの doc）。
- */
 export function foldClaudeMessage(message: SDKMessage): AgentEvent[] {
   switch (message.type) {
     case 'system':
       return foldSystemMessage(message);
 
-    // 枠の事実（アカウント単位）。**ターンの頭ごとに来る**ので、ここが走行中の
-    // 唯一の最新情報になる（使い捨ての probe は idle 用）。
     case 'rate_limit_event': {
       const facts = toRateLimitFacts((message as { rate_limit_info?: unknown }).rate_limit_info);
       return facts === undefined ? [] : [{ type: 'rate_limit', facts }];
@@ -1267,8 +671,7 @@ export function foldClaudeMessage(message: SDKMessage): AgentEvent[] {
     }
 
     case 'assistant': {
-      // **印だけを載せ、本文は載せない。** 本文の取り出し方（ブロックをどう繋ぐか）
-      // は層によって違い、そこは表示と報告の作法＝ (ii) の側だからである。
+      // 本文を載せず印だけを載せる: 本文の取り出し方は層によって違い、表示と報告の作法の側のため
       const errorCode = (message as { error?: unknown }).error;
       const messageId = (message as { uuid?: unknown }).uuid;
       return [
@@ -1282,9 +685,7 @@ export function foldClaudeMessage(message: SDKMessage): AgentEvent[] {
       ];
     }
 
-    // 道具の結果が返った＝実行は終わり、モデルが次を考え始めた。
-    // `tool_result` を含むときだけにしているのは、人間の発言のエコーや
-    // replay（`SDKUserMessageReplay`）を「考え始めた」と読み違えないため。
+    // `tool_result` を含むときだけにする: 人間の発言のエコーや replay（`SDKUserMessageReplay`）を「考え始めた」と読み違えないため
     case 'user': {
       const returned = contentBlocksRaw((message as { message?: unknown }).message).some(
         (block) => (block as { type?: unknown }).type === 'tool_result',
@@ -1294,21 +695,11 @@ export function foldClaudeMessage(message: SDKMessage): AgentEvent[] {
 
     case 'result': {
       const sessionId = (message as { session_id?: unknown }).session_id;
-      // **成功した result の消費だけを通す。** `modelUsage` 自身の doc がそう
-      // 言っている。
-      //
       // [sdk-verbatim SDKResultSuccess.modelUsage]
       // crash/startup-error results may carry zeroed usage
-      //
-      // ゼロを「累積が 0 になった」として通すと、受け取った側の基準が下がり、
-      // 次に届いた本物の累積が丸ごと増分になる（`usage.ts` の `isSuccessResult`）。
+      // ゼロを「累積が 0 になった」として通さない: 受け取った側の基準が下がり、次に届いた本物の累積が丸ごと増分になるため
       const models = isSuccessResult(message) ? modelUsageOf(message) : undefined;
-      // **観測用の写し。台帳には使わない**（`modelUsageOf` の doc「`result.usage`
-      // は使わない」）。`models` と同じ条件（成功した result だけ）で絞る —— SDK の
-      // 「crash/startup-error では zero 埋め」という注意は `usage` にも同様に効く
-      // ので、失敗した result のこれを運ぶと存在しない消費を観測したことになる。
-      // 何のためにここへ運ぶかは `agent-events.ts` の `AgentTurnUsage.mainLoopUsage`
-      // の doc（→ `schema.ts` の `turn_usage.mainLoopUsage`）に書いてある。
+      // `result.usage` の写しも成功した result だけで絞る: 失敗した result の zero 埋めを運ぶと存在しない消費を観測したことになるため
       const mainLoopUsage = isSuccessResult(message)
         ? mainLoopUsageOf((message as { usage?: unknown }).usage)
         : undefined;
@@ -1334,9 +725,6 @@ export function foldClaudeMessage(message: SDKMessage): AgentEvent[] {
                 },
               }),
           ...(typeof id === 'string' && id.length > 0 ? { id } : {}),
-          // **`result` に載っている拒否は authoritative な側である**（走行中の
-          // 合図は取りこぼしうる）。ターンの終わりの事実として一緒に運ぶ理由は
-          // `AgentPermissionDeniedEvent` の doc。
           denials: permissionDenialsOf(message).map(toAgentPermissionDenial),
         },
       ];
@@ -1347,17 +735,8 @@ export function foldClaudeMessage(message: SDKMessage): AgentEvent[] {
   }
 }
 
-/**
- * `result.usage`（SDK の `NonNullableUsage`）を中立の形へ写す。
- *
- * **`usage.ts` の `usageTotalsSchema` とは意図的に形を揃えていない** ——
- * `NonNullableUsage` はコスト（`costUsd` に当たる欄）を持たないので、
- * 台帳の形に寄せると存在しない値を作ることになる。何のための写しかは
- * `agent-events.ts` の `AgentTurnUsage.mainLoopUsage` の doc を見よ。
- *
- * **読めなければ `undefined`。** 必須欄のどれかが数値でなければ、SDK が
- * 版で形を変えたと見て作り物を返さない（`runtimeFactsOf` と同じ作法）。
- */
+// `usageTotalsSchema` に形を揃えない: `NonNullableUsage` はコストを持たず、台帳の形に寄せると存在しない値を作ることになるため
+// 必須欄のどれかが数値でなければ `undefined`: SDK が版で形を変えたと見て作り物を返さないため
 function mainLoopUsageOf(raw: unknown): AgentTurnUsage['mainLoopUsage'] {
   if (typeof raw !== 'object' || raw === null) return undefined;
   const usage = raw as Record<string, unknown>;
@@ -1376,7 +755,6 @@ function mainLoopUsageOf(raw: unknown): AgentTurnUsage['mainLoopUsage'] {
   return { inputTokens, outputTokens, cacheReadInputTokens, cacheCreationInputTokens };
 }
 
-/** `system` の枝。**subtype ごとの見分けはここだけが知っている。** */
 function foldSystemMessage(message: SDKMessage & { type: 'system' }): AgentEvent[] {
   const subtype = (message as { subtype?: unknown }).subtype;
 
@@ -1390,21 +768,12 @@ function foldSystemMessage(message: SDKMessage & { type: 'system' }): AgentEvent
     ];
   }
 
-  // 確認へ上げずにその場で止められた1件（分類器・deny 規則・モード）。
-  //
-  // **`permissionMode: 'auto'` ではここが唯一の生の合図である。** `canUseTool` は
-  // 呼ばれないので、この合図を捨てると手が止められたことが誰にも見えない。SDK 曰く
-  // これは best-effort（取りこぼしうる）で、authoritative なのは
-  // `result.permission_denials` — だから**両方**読む。
+  // 生の合図と `result.permission_denials` の両方を読む: `permissionMode: 'auto'` では `canUseTool` が呼ばれず、この合図を捨てると手が止められたことが誰にも見えないが、合図は best-effort で取りこぼしうるため
   if (subtype === 'permission_denied') {
     return [{ type: 'permission_denied', via: 'live', denial: toAgentPermissionDenial(message) }];
   }
 
-  // compaction が1回起きた。**元々ここは `return []`（下の総取り）で落として
-  // いた** —— `task_progress` 等の「見ないと決めてある」種類とは違い、これは
-  // 判断ではなく単純な抜けである（`agent-events.ts` の `AgentCompactionEvent`
-  // の doc）。読めない形（`trigger` が2値のどちらでもない・`pre_tokens` が
-  // 数値でない）は SDK が版で形を変えたと見て0個にする —— 作り物を返さない。
+  // 読めない形（`trigger` が2値のどちらでもない・`pre_tokens` が数値でない）は0個にする: SDK が版で形を変えたと見て作り物を返さないため
   if (subtype === 'compact_boundary') {
     const metadata = (message as { compact_metadata?: unknown }).compact_metadata;
     if (typeof metadata !== 'object' || metadata === null) return [];
@@ -1422,22 +791,11 @@ function foldSystemMessage(message: SDKMessage & { type: 'system' }): AgentEvent
     ];
   }
 
-  // 委譲の区間（`worker_wait`）。**下の「上限の文言」の総取りより必ず手前で
-  // 見ること** — 後ろに置くと、`task_started` / `task_notification` はそこで
-  // 無条件に捨てられて二度と読まれない（実際にそうなっていた。マネージャーが
-  // 「残り5体を待ちます」だけのターンを40回以上回した事故で、40という回数自体は
-  // `report` から日誌に残っていたが、契機がどこにも残っていなかった原因がこれ
-  // である）。
+  // 委譲の区間は「上限の文言」の総取りより手前で見る: 後ろに置くと `task_started` / `task_notification` がそこで無条件に捨てられて二度と読まれないため
   if (subtype === 'task_started' || subtype === 'task_notification') {
     const taskId = (message as { task_id?: unknown }).task_id;
     if (subtype === 'task_started') {
-      // **Issue #2113: `task_type`（と `spawn_depth`）を読めたときだけ運ぶ。**
-      // SDK は `task_started` を作業者（`local_agent`）以外のタスク
-      // （`local_bash` 等）でも出す——`agent-events.ts` の
-      // `AgentDelegationStarted.taskType` の doc（SDK 逐語つき）を見よ。
-      // **ここで読むだけで、作業者かどうかの判定はしない**（判定は
-      // `runner.ts` 側が持つ——この層は SDK の綴りを読むだけ、という
-      // `foldClaudeMessage` 冒頭の doc の役割分担のまま）。
+      // 作業者かどうかの判定をここでしない: 判定は `runner.ts` 側が持ち、この層は SDK の綴りを読むだけのため
       const taskType = (message as { task_type?: unknown }).task_type;
       const spawnDepth = (message as { spawn_depth?: unknown }).spawn_depth;
       return [
@@ -1449,20 +807,10 @@ function foldSystemMessage(message: SDKMessage & { type: 'system' }): AgentEvent
         },
       ];
     }
-    // **#1373 続き: `status` / `summary` を捨てずに運ぶ。** 直す前はここで
-    // `taskId` だけ残し、`status`（`'completed' | 'failed' | 'stopped'`）と
-    // `summary` を捨てていた——委譲の下の作業者が枠（429）で打ち切られたときの
-    // 唯一の構造化された手がかりが、この1行で失われていた（Issue #1373 の
-    // 最新コメント。`SDKResultSuccess.subagent_stats` の doc も「Per-subagent
-    // detail is on the task_started / task_notification events.」と逐語で
-    // 言っている）。**`status` は絞らず string のまま運ぶ**（`agent-events.ts`
-    // の `AgentDelegationNotified.status` の doc）。**`summary` は `excerpt()`
-    // で切ってから運ぶ**——作業者の打ち切り文言は英語の生文言で長さが読めない。
+    // `summary` は `excerpt()` で切ってから運ぶ: 作業者の打ち切り文言は英語の生文言で長さが読めないため
     const status = (message as { status?: unknown }).status;
     const summary = (message as { summary?: unknown }).summary;
-    // **`task_notification` だけが `output_file` を運ぶ**（`SDKTaskNotificationMessage`。
-    // Issue #1554 の手順1の調査）。読めなかったら省く——作り物のパスを
-    // 主張しない（`agent-events.ts` の `AgentDelegationNotified.outputFile` の doc）。
+    // 読めなかった `output_file` は省く: 作り物のパスを主張しないため
     const outputFile = (message as { output_file?: unknown }).output_file;
     return [
       {
@@ -1477,37 +825,18 @@ function foldSystemMessage(message: SDKMessage & { type: 'system' }): AgentEvent
     ];
   }
 
-  // `task_progress` / `task_updated` は**見ないと決めてある**（間引いている
-  // のではなく、そもそも数える対象ではないという判断であることをここに
-  // 明記する）。
-  //
-  // - `task_progress` は高頻度の進捗 ping で、ターンの契機にはならない
-  // - `task_updated` は `task_started` / `task_notification` の間の状態遷移の
-  //   詳細（`pending` → `running` → `completed` 等）で、区間の開閉には要らない
+  // `task_progress` / `task_updated` は見ない: 高頻度の進捗 ping と状態遷移の詳細で、ターンの契機にも区間の開閉にも要らないため
   if (subtype === 'task_progress' || subtype === 'task_updated') {
     return [];
   }
 
-  // `background_tasks_changed` は「見ないと決めてある」から外れた
-  // ——ただし理由（level 信号なので edge と相関させるな。フォアグラウンドの
-  // まま終わる委譲はここに載らない、と SDK 自身が言っている）は**まだ
-  // 生きている**。上の2種と同じ理由でいまも `worker_wait` の区間の開閉には
-  // 使えない。**ここで新しく足すのは、その開閉とは別の問いの読み手である**
-  // ——「いま起こしっぱなしの背景処理が在るか」（`agent-events.ts` の
-  // `AgentBackgroundTasksEvent` の doc）。level 信号であることはこちらの
-  // 問いには効かないので、そのまま REPLACE 意味論で運ぶ。
-  //
-  // **`tasks` が配列でなければ0個返す**（`runtimeFactsOf` と同じ作法。
-  // 「読めた配列だけが『0本』を名乗れる」）——SDK が版で形を変えたと見て、
-  // 作り物の「0本」を主張しない。
+  // `background_tasks_changed` を `worker_wait` の区間の開閉に使わない: level 信号で edge と相関させられず、フォアグラウンドのまま終わる委譲は載らないため
+  // `tasks` が配列でなければ0個返す: SDK が版で形を変えたと見て、作り物の「0本」を主張しないため
   if (subtype === 'background_tasks_changed') {
     const tasks = liveBackgroundTasksOf(message);
     return tasks === null ? [] : [{ type: 'background_tasks', tasks }];
   }
 
-  // 上限の文言。**API エラーとしては来ない**（SDK のコメント）ので、通知・情報
-  // メッセージの本文を見るしかない。ここを見ないと「枠を使い切って課金枠に
-  // 移った」＝止まる一歩前を捉えられない。
   const said =
     subtype === 'notification'
       ? (message as { text?: unknown }).text
@@ -1519,30 +848,8 @@ function foldSystemMessage(message: SDKMessage & { type: 'system' }): AgentEvent
   return notice === undefined ? [] : [{ type: 'usage_notice', notice }];
 }
 
-/**
- * init が名乗った実行時の事実。
- *
- * **`typeof` で検査し、読めない形は `null` のままにする。** 型定義の上ではどれも
- * 必須フィールドだが、ここで読み違えて例外を投げるとセッションの起動そのものが
- * 壊れる。読めなかったことは「まだ分からない」として出せば済む。**`mcp_servers`
- * も同じ扱いにする（#324）** —— 形が読めなかったときにまで「0本」と主張する
- * 根拠は無い。読めた配列だけが「0本」を名乗れる。
- *
- * **`apiKeySource` は許可リストを通す（#706 の裏側）。** ここが読む
- * `SDKMessage.apiKeySource` は `SDKSystemMessage.apiKeySource`（`ApiKeySource`。
- * SDK 側で9値の union として宣言されている）であって、`AccountInfo.apiKeySource`
- * （型なしの `string`。`usage-snapshot.ts` の `accountApiKeySourceSchema` の doc）
- * とは別の欄だが、**同じ族の値**なので既存の許可リスト（{@link
- * toAccountApiKeySource}）をそのまま当てる。**新しい形を発明しない。** 以前は
- * `typeof raw.apiKeySource === 'string' ? raw.apiKeySource : null` で素通しして
- * おり、`self_status`（`self.ts` の `describeCloneRuntime`）が生の文字列を
- * そのまま出していた——`toAccountApiKeySource()` は既に在ったのに、この経路
- * だけがそれを通していなかった（#704 でこの関数を作ったときの積み残し）。
- * **`AgentRuntimeFacts.apiKeySource` / `clone.ts` の型は `string | null` のまま
- * 変えていない**（`AccountApiKeySource` は文字列リテラル union なので
- * `string` に代入できる）——だから `clone.ts`（触ってはいけない3本の1つ）は
- * 無改造で済む。
- */
+// `typeof` で検査し、読めない形は `null` のままにする: ここで読み違えて例外を投げるとセッションの起動そのものが壊れ、`mcp_servers` も形が読めなかったときに「0本」と主張する根拠が無いため
+// `apiKeySource` を素通しにしない: 許可リスト（`toAccountApiKeySource`）を通さないと `self_status` が生の文字列をそのまま出すため
 function runtimeFactsOf(message: SDKMessage): AgentRuntimeFacts {
   const raw = message as unknown as {
     session_id?: unknown;
@@ -1556,9 +863,6 @@ function runtimeFactsOf(message: SDKMessage): AgentRuntimeFacts {
     sessionId: typeof raw.session_id === 'string' ? raw.session_id : null,
     model: typeof raw.model === 'string' ? raw.model : null,
     agentVersion: typeof raw.claude_code_version === 'string' ? raw.claude_code_version : null,
-    // **「知らない値」（unrecognized）と「欄が無かった」（null）を区別したまま
-    // 通す。** `toAccountApiKeySource` は文字列でない／空文字を `undefined` に
-    // する——`?? null` で `AgentRuntimeFacts` の型（`string | null`）に合わせる。
     apiKeySource: toAccountApiKeySource(raw.apiKeySource) ?? null,
     permissionMode: typeof raw.permissionMode === 'string' ? raw.permissionMode : null,
     mcpServers: Array.isArray(raw.mcp_servers)
@@ -1573,25 +877,9 @@ function runtimeFactsOf(message: SDKMessage): AgentRuntimeFacts {
   };
 }
 
-/**
- * `system/background_tasks_changed` の `tasks` を中立の形へ写す。
- *
- * **防御的に読む**（`runtimeFactsOf` と同じ作法）。`raw.tasks` が配列で
- * なければ `null` を返し、呼び出し元はこれを「0個返す」ではなく
- * 「イベントそのものを出さない」に使う——読めなかった形にまで「0本」と
- * 主張する根拠は無い（`runtimeFactsOf` の doc「読めた配列だけが『0本』を
- * 名乗れる」）。
- *
- * 各要素は `task_id` が文字列でなければ落とす。`ambient === true` は除く——
- * SDK の doc がそう線引きしている。
- *
- * [sdk-verbatim SDKBackgroundTasksChangedMessage.ambient]
- * > True for tasks that are not activity (every skip_transcript task, plus every live-update watcher, requested or auto-started); hosts should exclude them from activity indicators.
- *
- * （`agent-events.ts` の `AgentBackgroundTasksEvent` の doc にも同じ逐語を
- * 引いてある）。`task_type` が文字列でなければ `'(不明)'` を当てる——欄自体が
- * 壊れていても、要素の存在（＝背景処理が1件在ること）までは捨てない。
- */
+// [sdk-verbatim SDKBackgroundTasksChangedMessage.ambient]
+// > True for tasks that are not activity (every skip_transcript task, plus every live-update watcher, requested or auto-started); hosts should exclude them from activity indicators.
+// `task_type` が文字列でなければ `'(不明)'` を当てる: 欄自体が壊れていても、要素の存在（背景処理が1件在ること）までは捨てないため
 function liveBackgroundTasksOf(raw: unknown): readonly { id: string; taskType: string }[] | null {
   if (typeof raw !== 'object' || raw === null) return null;
   const tasks = (raw as { tasks?: unknown }).tasks;
@@ -1608,14 +896,6 @@ function liveBackgroundTasksOf(raw: unknown): readonly { id: string; taskType: s
   return result;
 }
 
-/**
- * 拒否の1件を中立の形へ写す。
- *
- * **走行中の合図（`system/permission_denied`）と `result.permission_denials` の
- * 両方から呼ばれる。** 欄の揃い方は出所で違う（後者は `tool_name` /
- * `tool_use_id` / `tool_input` の3つしか持たない）が、**読み方は同じである** ——
- * だから写しは1本でよい。**無い欄は作り物を出さずキーごと省く。**
- */
 function toAgentPermissionDenial(source: unknown): AgentPermissionDenial {
   const denial = source as {
     tool_name?: unknown;
@@ -1643,19 +923,16 @@ function toAgentPermissionDenial(source: unknown): AgentPermissionDenial {
   };
 }
 
-/** `result` に載っている拒否の記録（authoritative な側）。無ければ空。 */
 function permissionDenialsOf(message: SDKMessage): unknown[] {
   const denials = (message as { permission_denials?: unknown }).permission_denials;
   return Array.isArray(denials) ? denials.filter((entry) => entry !== null) : [];
 }
 
-/** 作業者（委譲の中）の発言なら親の道具 id が付く。本体の発言は `null`。 */
 function parentToolUseIdOf(message: SDKMessage): string | null {
   const value = (message as { parent_tool_use_id?: unknown }).parent_tool_use_id;
   return typeof value === 'string' ? value : null;
 }
 
-/** 逐次配信の1片。text の delta 以外は読まない。 */
 function textDeltaOf(event: unknown): string | null {
   const candidate = event as { type?: string; delta?: { type?: string; text?: unknown } };
   if (candidate.type !== 'content_block_delta') return null;
@@ -1663,19 +940,13 @@ function textDeltaOf(event: unknown): string | null {
   return typeof candidate.delta.text === 'string' ? candidate.delta.text : null;
 }
 
-/** 中身の塊をそのまま並べる（種類の見分けは呼び出し側）。 */
 function contentBlocksRaw(message: unknown): unknown[] {
   const content = (message as { content?: unknown }).content;
   if (typeof content === 'string') return [{ type: 'text', text: content }];
   return Array.isArray(content) ? content : [];
 }
 
-/**
- * 中身の塊を中立の3種へ畳む。
- *
- * **`text` でも `tool_use` でもないものを捨てずに `other` として残す。** 数と順序が
- * 保たれるので、層の側が「読み飛ばした塊が在った」ことを見られる。
- */
+// `text` でも `tool_use` でもないものを捨てずに `other` として残す: 数と順序が保たれ、層の側が「読み飛ばした塊が在った」ことを見られるため
 function contentBlocksOf(message: unknown): AgentContentBlock[] {
   return contentBlocksRaw(message).map((block): AgentContentBlock => {
     const type = (block as { type?: unknown }).type;

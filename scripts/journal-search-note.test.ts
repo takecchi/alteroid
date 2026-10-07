@@ -13,21 +13,6 @@ import {
 
 import { collectRepoFiles } from './repo-scan-files.js';
 
-/**
- * **日誌の検索の断り（`q` で探せない種別の並び）を、表（`SEARCHABLE_FIELDS_BY_TYPE`）と結ぶ歯**
- * （#2609）。
- *
- * 断りは `journal_read` の説明文と0件の応答（`tools.ts` の2か所）・CLI の `/journal`
- * （`chat.ts`）・Web の `SEARCH_SCOPE_NOTE`（`journal-display.ts`）・`GET /journal` の
- * description（`app.ts` と、そこから生成する `openapi.json`）の6か所に手書きされていて、
- * `[]` の種別を足しても断りは増えず、どのテストも通った（#2562 / #2573 の2回ずれた）。
- * いまは `journal-search.ts` が表から導いた並びを export し、各所がそれを使う。
- *
- * この歯が守るのは次の3つ。
- * 1. 導いた並びが表と一致する（`[]` の種別がすべて載り、欄を持つ種別は載らない）
- * 2. `openapi.json`（生成物）の description が、導いた並びを含む（`pnpm build` の取り忘れ）
- * 3. 並びを手書きし直した所が無い（ソースに種別名の列を直書きしていない）
- */
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const EXCLUDE_DIRS = new Set(['node_modules', '.git', 'dist', 'build', '.react-router', '.vite']);
 const SELF = 'scripts/journal-search-note.test.ts';
@@ -44,7 +29,6 @@ describe('日誌の検索の断りの並びは、SEARCHABLE_FIELDS_BY_TYPE か�
     for (const [type, fields] of entries) {
       expect(listed.includes(type), `${type} の載り方`).toBe(fields.length === 0);
     }
-    // 表に載らない `tool_use` の `input`（欄を持つ種別だが、外している欄が在る）
     expect(listed[0]).toBe('tool_use の input');
   });
 
@@ -76,7 +60,6 @@ describe('日誌の検索の断りの並びは、SEARCHABLE_FIELDS_BY_TYPE か�
         !rel.includes('/generated/'),
     );
     expect(files.length).toBeGreaterThan(100);
-    // 空の種別を2つ以上、`・` で並べた直書き（素の文・バッククォート付きのどちらも）
     const handWritten = /`?worker_wait`?・`?turn_usage`?/;
     const offenders = files.filter((rel) =>
       handWritten.test(readFileSync(path.join(ROOT, rel), 'utf8')),

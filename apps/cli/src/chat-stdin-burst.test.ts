@@ -5,10 +5,6 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { captureStdout } from './test-support.js';
 
-/**
- * 標準入力をパイプで複数行まとめて渡したとき（#3262）。1行目の応答を待つ間に届いた
- * 2行目以降が、`question()` に渡らず黙って捨てられていた。本物の readline に PassThrough を繋ぐ。
- */
 vi.mock('./target.js', async (orig) => ({
   ...(await orig<typeof import('./target.js')>()),
   resolveTarget: async () => ({
@@ -48,7 +44,6 @@ describe('chat: 応答を待つ間に複数行が届いたとき', () => {
         const reply = sse(
           'event: open\ndata: {"conversationId":"c1"}\n\nevent: done\ndata: {"type":"done"}\n\n',
         );
-        // 1通目の応答だけ遅らせる（その間に2行目・3行目が届く）。
         if (sent.length === 1) {
           return new Promise<Response>((resolve) => {
             releaseFirst = () => {

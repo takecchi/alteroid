@@ -1,123 +1,26 @@
-/**
- * `test.mjs` の判定だけを切り出したもの（`verify.mjs` / `verify-core.mjs` と同じ分け方）。
- *
- * #311: `describe.skip` / `it.skip` で全部飛ばしても `pnpm test` が exit 0 のまま
- * 緑になる。直しは2枚に分かれている。
- *
- * - **歯A（実行の側）**: vitest の集計行（`Test Files` / `Tests`）を読み、
- *   `Tests` 行の passed が 0 なら赤くする。集計行そのものが出ていなければ、
- *   それは「1本も走らなかった」であって「1本も通らなかった」ではないので、
- *   別の文言で赤くする（`AGENTS.md`「『判定できない』という3つ目の状態を持つ」。
- *   2値にしない）。歯Aだけでは Issue の症状（1ファイルだけを `describe.skip` で
- *   丸ごと飛ばしても、他が passed なので `passed > 0` のまま）を捕まえられない。
- * - **歯B（ソースの側）**: root の `vitest.config.ts` の `include` に一致する
- *   全テストファイルを静的に走査し、**無条件の** `describe.skip` / `it.skip` /
- *   `test.skip`（`.each` や `.concurrent` のような修飾子との連鎖・tagged
- *   template 形の `.each` を含む）を検出する。**条件付き（`skipIf` / `runIf` /
- *   実行時の `ctx.skip()`）は対象外** — `describe`/`it`/`test` に続く `.` 区切り
- *   の連鎖を分解し、その要素に文字列として厳密に一致する `'skip'` が含まれる
- *   かで決める（`skipIf` は `'skip'` と文字列として等しくないので、連鎖の
- *   どこに現れても引っかからない。`SKIP_CALL_CHAIN_RE` の doc）。**歯Bも2値に
- *   しない** — 走査対象が0ファイルなら「無条件の skip が0件だった」ではなく
- *   「判定できない」（`EXIT_SCAN_EMPTY`）にする（`judgeStaticSkipScan`）。
- *
- * **この判定を vitest の中（テストや `setupFiles`）に置かない。** 置けば
- * `.skip` で判別器自身を黙らせられる。だから `test.mjs`（薄い CLI 層。vitest の
- * 外側の素の node プロセス）がここを呼ぶ形にしてある。**そして歯Bはすべての
- * テストファイルを走査するので、歯Bの単体テスト自身（`test-guard-core.test.ts`）が
- * `.skip` されたら歯Bが捕まえる。** 判別器が自分を守る形になっている。
- *
- * - **歯C（観測用テストの見直し期限）**: Issue #396。「観測用テスト」——
- *   いまの挙動を記録しただけで受け入れ基準ではない、と自分で名乗るテスト——は、
- *   終了条件を本文に書いていても腐る。実例（孤児ブランチ
- *   `packages/core/src/inbox-delivery.observed.test.ts`）は「直すと決めた時点で
- *   『基準』に書き換えるか捨てること」と書いていたが、その終了条件に到達した
- *   後もアサーションが緑のまま残り、テスト名が嘘になった。**足りなかったのは
- *   「終了条件を書かせること」ではなく「到達したかを誰が・いつ見るか」——だから
- *   歯Cは、その「見る人」を `pnpm test` にする。** 観測用テストと名乗った
- *   ファイル（パスの慣習 `.observed.` / `.scratch.` / `-scratch.`、または
- *   冒頭コメントの `@観測`）にだけ「終了条件」「見直し期限」を書かせ、期限を
- *   過ぎたら赤くする。**名乗っていない普通のテストファイルは対象外**
- *   （散文の「観測」は137ファイルが別の意味で使っており、誤検出になる —
- *   名乗りはパスの慣習と `@観測` の2形だけに絞る）。**走査対象0ファイル**
- *   （見ていない）・**申告不備**（書かせる項目が書かれていない）・**期限超過**
- *   （到達を見る番が来た）の3状態を混ぜない（歯Bと同じ作法）。
- *
- * ## 変異試験ハーネスとの関係（実装前に実測して確定させたこと）
- *
- * `.claude/skills/mutation-testing/mutate-core.mjs` の `decideJudgementCategory` は
- * **`testResult.exitCode` を1文字も見ない**。生存/検出は `testsAllPassed`
- * （＝ `Test Files` / `Tests` の集計行の文字列に `passed` / `failed` が
- * 含まれるか）だけで決まる（`exitCode` はフィールドとして保持されるだけで、
- * `decideJudgementCategory` の本体では参照されていない）。**だからこの歯が
- * 追加する exit 1（歯A・「判定できない」・歯B）は、集計行の文字列を書き換え
- * ない限り「検出」に化けない。** `test.mjs` は vitest の生出力を一切改変せず
- * 素通しするので、集計行はいつも vitest 自身が出した本物のままである。
- * 実測は PR 本文へ添えてある。
- */
+// この判定を vitest の中（テストや `setupFiles`）に置かない: 置くと `.skip` で判別器自身を黙らせられるため。`test.mjs`（vitest の外側の素の node プロセス）がここを呼ぶ。
+// 歯A・歯B・歯C は 2 値にしない: 走査対象 0 件（見ていない）・申告不備・期限超過を、無条件の skip が 0 件・合格と混ぜないため（`AGENTS.md`「『判定できない』という3つ目の状態を持つ」）。
+// 歯C は名乗ったファイルだけを対象にする: 散文の「観測」は別の意味で使われており、誤検出になるため。名乗りはパスの慣習 `.observed.` / `.scratch.` / `-scratch.` と冒頭コメントの `@観測` の 2 形だけ。
+// ## 変異試験ハーネスとの関係: `decideJudgementCategory` は `testResult.exitCode` を見ず集計行の文字列だけで判定するため、この歯が足す exit 1 は集計行を書き換えない限り「検出」に化けない。
 
 import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
 import { URL, fileURLToPath, pathToFileURL } from 'node:url';
 
-/** `scripts/` の1つ上 ＝ リポジトリ根。`process.cwd()` に依存しない
- * （`pnpm --filter <pkg> test` では cwd がそのパッケージ配下になるため）。 */
+// `process.cwd()` に依存しない: `pnpm --filter <pkg> test` では cwd がそのパッケージ配下になるため。
 export const ROOT = fileURLToPath(new URL('..', import.meta.url));
 
-/** 変異試験や本物のビルド成果物と同じ理由で、走査から外すもの。 */
 const EXCLUDE_DIRS = new Set(['node_modules', '.git', 'dist', 'build', '.react-router']);
 
-// ── 引数の正規化（vitest へ渡す前） ──────────────────────────────
-
-/**
- * `pnpm test -- <flags>` の素の `--` を落とす。
- *
- * pnpm は `pnpm test -- --maxWorkers=4 a.test.ts` と打つと、`--` を含めた
- * 右側をそのまま `test.mjs` の引数へ渡す（実測: 使い捨てのディレクトリで
- * argv を出すスクリプトを置いて確かめた。渡ってくるのは
- * `['--', '--maxWorkers=4', 'a.test.ts']`）。`test.mjs` はこれをそのまま
- * `vitest run` の後ろへ足していたため、vitest 側には
- * `vitest run -- --maxWorkers=4 a.test.ts` が渡っていた。**vitest は `--`
- * より後ろをフィルタとしても option としても読まない**ので、絞り込みが
- * 1つも効かずスイート全体が走る（実測 2026-09-24T01:05:57Z、`pnpm test --
- * --maxWorkers=4 <4ファイル>` で `Test Files 343 passed (343)` が出た——
- * 343 は当時のリポジトリ全体のファイル数で、渡した4ファイルには絞られて
- * いない）。
- *
- * `pnpm verify` 側では同じ形の `--` を `verify-core.mjs` の
- * `splitVerifyArgs` が既に落としている（`grep -Fn -- "arg === '--'" scripts/verify-core.mjs`）。
- * ここも同じ規則に揃える——**位置を問わず、すべての素の `--` 要素を落とす**
- * （先頭だけを見る形にしない）。`splitVerifyArgs` が先頭以外の `--` も
- * ループの中で無条件に読み飛ばしているのと同じ理由で、`--` が複数回や
- * 途中に現れても同じように扱う。
- *
- * **`--` そのもの以外は1文字も変えない。** `--maxWorkers=4` のような
- * option や、テストファイルのパスによる絞り込みはそのまま残る——落とすのは
- * 文字列としてちょうど `'--'` に等しい要素だけで、`--maxWorkers` のように
- * `--` で始まるが `--` そのものではない引数は対象外である。
- */
+// 位置を問わずすべての素の `--` を落とす: pnpm が `--` ごと渡し、vitest は `--` より後ろを読まないため、絞り込みが効かずスイート全体が走る。
 export function dropBareDashDash(argv) {
   return argv.filter((arg) => arg !== '--');
 }
 
-// ── 引数の正規化（続き）: パッケージの範囲（#1691） ──────────────────
-
-/**
- * 各ワークスペースの `test` script が渡す、パッケージの範囲を表す名前付き引数。
- * 値は repo の根からの相対パス（例: `apps/cli/src`）。
- *
- * #1691: 以前は範囲そのものを**位置引数**（例: `apps/cli/src`）として渡していた。
- * vitest の位置引数は **OR** で効くため、利用者が `pnpm test -- <file>` で足した
- * 位置引数と範囲の位置引数が両方フィルタとして働き、範囲（＝パッケージ全体）の
- * ほうが常に勝って絞り込みが1つも効かなかった（実測は `test.mjs` の doc、
- * PR 本文）。**範囲を named 引数へ移し、利用者の位置引数の有無で分岐する**
- * （下の `resolveScopedArgs`）ことで、この OR を無くす。
- */
+// 範囲を位置引数でなく named 引数で渡す: vitest の位置引数は OR で効き、利用者が足した絞り込みよりパッケージ全体の範囲が常に勝つため。
 export const SCOPE_FLAG = '--scope';
 
-/** argv から `--scope=<value>` を取り出す。純粋関数——`--scope=` 以外の要素は
- * 順序を保ったまま `rest` へ残す。 */
 export function extractScope(argv) {
   const scopePrefix = SCOPE_FLAG + '=';
   let scope;
@@ -132,59 +35,24 @@ export function extractScope(argv) {
   return { scope, rest };
 }
 
-/**
- * `matchScopedPositionals` が「値が別トークンに分かれて来る」と知っている
- * vitest のフラグ。**「絞り込むかどうか」ではなく「次の要素を値として飲むか」
- * だけを見るための一覧なので、`verify-core.mjs` の
- * `TEST_ARGS_THAT_DO_NOT_NARROW`（許可リストの目的が違う——あちらは「絞り込ま
- * ないと分かっているもの」）を流用しない。`-t` は名前で絞り込むが、値は
- * パスへの部分一致の対象ではないので範囲判定に持ち込まない。
- *
- * **これは「vitest を読み込まずに済ませる」ための最小の既知集合であって、
- * 網羅ではない。** ここに無いフラグ（`--testTimeout` / `--retry` / `--bail` /
- * `--project` / `--exclude` …）の直後にトークンが続いたときは、`resolveScopedArgs`
- * が vitest 自身の CLI 定義（`loadVitestFlagInfo`）を読んで判定する。読めない・
- * 定義に無いなら断る。**ここへ足していく形にしないこと**（次の vitest の版で
- * 同じ漏れが出る）。
- */
+// `verify-core.mjs` の `TEST_ARGS_THAT_DO_NOT_NARROW` を流用しない: これは「次の要素を値として飲むか」だけを見る一覧で、許可リストの目的が違うため。
+// ここへ足していく形にしない: 次の vitest の版で同じ漏れが出るため。網羅は `loadVitestFlagInfo` が vitest の CLI 定義から読む。
 const VALUE_TAKING_FLAGS = new Set([
   '--maxWorkers',
   '--minWorkers',
   '--reporter',
   '--testNamePattern',
   '-t',
-  // `--shard`（分割の口。値は `N/M` の形）を追加（#2063 の続き）。当初は
-  // 意図して外してあり、`--shard 1/3`（空白区切り）は値（`1/3`）が素の
-  // 位置引数として範囲判定に持ち込まれ、`EXIT_SCOPE_VIOLATION`（範囲内に
-  // 一致なし）で断られる形を歯として固定していた（実測は
-  // `scripts/test-guard-core.test.ts` の「実測: --shard 1/3（空白区切り）」
-  // に残っている——固定していた当時の生の文言も含めて消していない）。
-  // **足した理由**: `--shard=1/3`（`=` 形）は既に素通しされるのに、
-  // `--shard 1/3`（空白区切り）だけテストが1本も走らないまま断られるのは
-  // 利用者から見て非対称で、`--reporter` や `--maxWorkers` が両形とも
-  // 通ることと揃っていなかった。ここへ足すことで両形が同じように素通しされる。
+  // `--shard` を載せる: `--shard=1/3` が通るのに `--shard 1/3`（空白区切り）だけテストが 1 本も走らず断られる非対称を無くすため。
   '--shard',
 ]);
 
-/** 値必須フラグの値として飲んでよいか。`-` で始まるものはフラグ自身とみなし、
- * 値としては飲まない（`verify-core.mjs` の `isFlagLike` と同じ向き。飲まなければ
- * 「位置引数」側へ回るだけで、安全側に倒れる）。 */
+// `-` で始まるものは値として飲まない: 位置引数側へ回るだけで安全側に倒れるため。
 function isFlagLike(arg) {
   return arg === undefined || arg.startsWith('-');
 }
 
-/**
- * vitest 自身が知っているフラグの一覧（`loadVitestFlagInfo` の戻り値）。
- * - `valueTaking`: 値を別トークンで取る（rawName に `<…>` か `[…]` を持つ）フラグ。
- * - `booleans`: 値を取らない（rawName に値の記号が無い）フラグ。
- * どちらも `-t` / `--testNamePattern` のように別名ごとに入る。
- *
- * **なぜ手で足していく一覧だけにしないか**: `VALUE_TAKING_FLAGS` に 1つずつ足す形は、
- * 次の vitest の版で同じ漏れが出る（`--shard` を足した #2063 の後にも
- * `--testTimeout` / `--retry` / `--bail` / `--project` / `--exclude` が残っていた）。
- * 一覧の持ち主は vitest 自身の CLI 定義なので、`vitest/node` の `createCLI` から
- * 実行時に読む。
- */
+// 手で足す一覧だけにせず vitest 自身の CLI 定義（`vitest/node` の `createCLI`）を実行時に読む: 次の vitest の版で同じ漏れが出るため。
 export async function loadVitestFlagInfo() {
   try {
     const { createCLI } = await import('vitest/node');
@@ -200,27 +68,16 @@ export async function loadVitestFlagInfo() {
         }
       }
     }
-    // 同じフラグがコマンドごとに別の形で宣言されていたら、値を取る側を優先する
-    // （値を取るのに位置引数と読むと範囲判定を狂わせる。逆は安全側で断られる）。
+    // 値を取る側を優先する: 値を取るのに位置引数と読むと範囲判定を狂わせるため（逆は安全側で断られる）。
     for (const flag of valueTaking) booleans.delete(flag);
-    if (valueTaking.size === 0) return null; // 読めたのに空 ⟹ 形が変わった。信用しない
+    if (valueTaking.size === 0) return null;
     return { valueTaking, booleans };
   } catch {
-    return null; // 読めない ⟹ 「判定できない」。呼び出し側は断る側へ倒す
+    return null;
   }
 }
 
-/** `rest`（`--scope=` を除いた argv）を分類する。純粋関数。
- *
- * - `positionalIdx`: フラグでも値必須フラグの値でもない要素（＝利用者が絞り込みの
- *   ために打った位置引数）の添字。
- * - `ambiguous`: **値を取るかどうか分からないフラグ**（`VALUE_TAKING_FLAGS` にも
- *   `flagInfo` にも載っていない）の直後に `-` で始まらないトークンが続いた箇所。
- *   そのトークンを位置引数と読めば範囲の絞り込みに化け（`--bail 1` の `1` が
- *   `1` を含むパスへ差し替わる）、値と読めば本当の位置引数を落とす——どちらに
- *   倒しても黙って間違うので、**黙って範囲に持ち込まず、呼び出し側が断る**。
- *   `flagInfo` を渡せば、vitest が値を取ると知っているフラグは値として飲み、
- *   値を取らないと知っているフラグ（`--coverage` 等）の直後は位置引数として読む。 */
+// 値を取るか分からないフラグの直後のトークンは黙って範囲に持ち込まず、呼び出し側が断る: 位置引数と読めば範囲が黙って狂い、値と読めば本当の位置引数を落とすため。
 function classifyArgs(rest, flagInfo) {
   const positionalIdx = [];
   const ambiguous = [];
@@ -230,9 +87,9 @@ function classifyArgs(rest, flagInfo) {
       const eqIdx = arg.indexOf('=');
       if (eqIdx !== -1 || isFlagLike(rest[i + 1])) continue;
       if (VALUE_TAKING_FLAGS.has(arg) || flagInfo?.valueTaking.has(arg)) {
-        i += 1; // 空白区切りの値をフィルタと読み違えない
+        i += 1;
       } else if (flagInfo?.booleans.has(arg)) {
-        // 値を取らないと分かっている。次の要素は次の周回で位置引数として読む。
+        // 次の要素は次の周回で位置引数として読む。
       } else {
         ambiguous.push({ flag: arg, next: rest[i + 1] });
         i += 1;
@@ -244,7 +101,6 @@ function classifyArgs(rest, flagInfo) {
   return { positionalIdx, ambiguous };
 }
 
-/** 値を取るか分からないフラグがあったときの断り。 */
 function ambiguousFlagRefusal(ambiguous, flagInfo) {
   const listed = ambiguous.map((a) => `${a.flag} ${a.next}`).join(' / ');
   return {
@@ -261,43 +117,14 @@ function ambiguousFlagRefusal(ambiguous, flagInfo) {
   };
 }
 
-/** 歯B/歯Cの exit code（1〜7）とは別の値にする。範囲の外を指す位置引数、または
- * 範囲の中に部分一致するテストが1本も無い位置引数を断ったときに使う（#1691）。 */
 export const EXIT_SCOPE_VIOLATION = 8;
 
-/**
- * `rest`（`--scope=` を除いた argv。素の `--` も既に落ちている前提）の位置引数を、
- * 範囲（`scope`）の中にある実際のテストファイルへ解決する。
- *
- * **vitest の位置引数は「パス」ではなく、ファイルのパスへの部分一致として
- * 読まれる**（実測は PR 本文——`pnpm exec vitest run --root=../.. manager-detail`
- * は `apps/web/app/routes/manager-detail.test.tsx` の1本に絞られ、
- * `pnpm exec vitest run --root=../.. interrupt` は `apps/cli` と `apps/web` の
- * 2本にまたがって当たる）。だから各位置引数は、`path.resolve` で「パス」として
- * 解決するのではなく、範囲の中のテストファイル一覧（`filesInScope`。repo根
- * からの相対パス、`/`区切り）に対する**部分一致**で解決する——一致が1件以上
- * あれば、その一致した実ファイルのパスへ差し替える（複数一致なら複数個に
- * 展開する）。**素の部分一致文字列をそのまま vitest へ渡さない** — 範囲の外
- * にある同じ部分文字列のファイル（例: 上の `interrupt` が `apps/cli` にも
- * 当たる）まで拾ってしまうため、範囲の中で見つかった実ファイルのパスへ
- * 明示的に差し替えることで、範囲の外への漏れを断つ。
- *
- * 一致が0件のときは、黙って全体を走らせたり0本で緑を名乗ったりせず断る。
- * 断る理由は2種——(1) 打ったものが明らかに `cwd`（パッケージのディレクトリ）
- * そのものの外を指している（例: `../../packages/core/...`）⟹ 既存の「範囲外」
- * の文言 (2) `cwd` の中ではあるが、範囲の中に部分一致するテストファイルが
- * 1本も無い ⟹ 「範囲内に一致なし」の文言。**この2種を混ぜない**（歯Bの
- * 「見ていない」と「見て、無かった」を混ぜないのと同じ作法）。
- *
- * ディスクを読まない純粋関数——`filesInScope` を合成した配列で試せる
- * （`AGENTS.md`「テストが書けない構造は、テストが無いのと同じ」）。
- */
+// 素の部分一致文字列をそのまま vitest へ渡さず、範囲内の実ファイルのパスへ差し替える: 範囲の外にある同じ部分文字列のファイルまで拾うため。
+// 一致が 0 件のときは黙って全体を走らせたり 0 本で緑を名乗ったりせず断る: 「範囲外」と「範囲内に一致なし」の文言は混ぜない。
 export function matchScopedPositionals(rest, scope, { cwd, repoRoot, filesInScope, flagInfo }) {
   const { positionalIdx, ambiguous } = classifyArgs(rest, flagInfo);
   if (ambiguous.length > 0) return ambiguousFlagRefusal(ambiguous, flagInfo);
   if (positionalIdx.length === 0) {
-    // 利用者の位置引数が無い ⟹ 範囲そのものが唯一のフィルタになる
-    // （旧来の既定と同じ、パッケージ全体を走らせる）。
     return { ok: true, args: [...rest, scope] };
   }
 
@@ -307,12 +134,11 @@ export function matchScopedPositionals(rest, scope, { cwd, repoRoot, filesInScop
   const outArgs = [];
   let cursor = 0;
   for (const i of positionalIdx) {
-    // 前回の位置引数の後ろ〜今回の手前（フラグ部分）はそのまま足す。
     outArgs.push(...rest.slice(cursor, i));
     cursor = i + 1;
 
     const rawArg = rest[i];
-    const pattern = rawArg.replace(/^\.\//, ''); // 先頭の `./` は素の部分一致の邪魔になるだけ
+    const pattern = rawArg.replace(/^\.\//, '');
     const matches = [...filesInScope].filter((f) => f.includes(pattern)).sort();
 
     if (matches.length > 0) {
@@ -320,8 +146,6 @@ export function matchScopedPositionals(rest, scope, { cwd, repoRoot, filesInScop
       continue;
     }
 
-    // 一致0件。断る理由を、打った場所（cwd＝パッケージのディレクトリ）の
-    // 外を明らかに指しているかどうかで書き分ける。
     const abs = path.resolve(cwd, rawArg);
     const candidateRel = path.relative(repoRoot, abs).split(path.sep).join('/');
     const escapesPackage = !(
@@ -358,16 +182,7 @@ export function matchScopedPositionals(rest, scope, { cwd, repoRoot, filesInScop
   return { ok: true, args: outArgs };
 }
 
-/**
- * 範囲（`scope`）の中にある、root の `vitest.config.ts` の `include` に一致する
- * テストファイル一覧（repo根からの相対パス、`/`区切り）を返す。
- * `matchScopedPositionals` の `filesInScope` を作るための I/O 層——歯Bの走査
- * （`readIncludeGlobs` / `collectMatchingTestFiles`）をそのまま再利用する
- * （二重実装しない）。`include` を読めない・空なら、判定できないので空配列
- * を返す（`matchScopedPositionals` 側は「範囲内に一致なし」として扱う——
- * この経路は歯B/歯Cの `EXIT_SCAN_EMPTY` とは独立の関心事なので、ここでは
- * 混ぜない）。
- */
+// 歯Bの走査（`readIncludeGlobs` / `collectMatchingTestFiles`）を二重実装しない。`include` を読めない・空なら `EXIT_SCAN_EMPTY` と混ぜず空配列を返す。
 export async function listScopeTestFiles(root, scope) {
   let includeGlobs;
   try {
@@ -381,27 +196,13 @@ export async function listScopeTestFiles(root, scope) {
   );
 }
 
-/**
- * `test.mjs` の `main()` が呼ぶ、I/O込みの合成。
- *
- * - **`--scope` が無い** ⟹ 何もしない（root の `pnpm test <パスの一部>` は
- *   影響を受けない。ディスクも読まない）。
- * - **`--scope` はあるが利用者の位置引数が無い** ⟹ 範囲そのものがフィルタに
- *   なる（`matchScopedPositionals` の既定と同じ。ディスクを読まない）。
- * - **両方ある** ⟹ `listScopeTestFiles` で範囲の中のテストファイル一覧を
- *   読み（ここでだけディスクを読む）、`matchScopedPositionals` へ渡す。
- *
- * `cwd` はパッケージのディレクトリを渡す想定（`INIT_CWD` ではなく
- * `process.cwd()` を使う理由は `matchScopedPositionals` の doc と PR 本文）。
- */
 export async function resolveScopedArgs(argv, { cwd = process.cwd(), repoRoot = ROOT } = {}) {
   const { scope, rest } = extractScope(argv);
   if (scope === undefined) {
     return { ok: true, args: rest };
   }
 
-  // 値を取るか分からないフラグ（`VALUE_TAKING_FLAGS` に無い）があるときだけ、vitest の
-  // CLI 定義を読む（読み込みは既知のフラグだけの通常の打ち方では起きない）。
+  // vitest の CLI 定義は、値を取るか分からないフラグがあるときだけ読む: 既知のフラグだけの通常の打ち方では読み込みを起こさないため。
   let flagInfo;
   if (classifyArgs(rest).ambiguous.length > 0) {
     flagInfo = await loadVitestFlagInfo();
@@ -416,15 +217,6 @@ export async function resolveScopedArgs(argv, { cwd = process.cwd(), repoRoot = 
   return matchScopedPositionals(rest, scope, { cwd, repoRoot, filesInScope, flagInfo });
 }
 
-// ── 引数の正規化（続き）: 既定の reporter（この器の Bash（`CLAUDECODE`）のときだけ dot） ──
-
-/**
- * `--reporter` を利用者が明示しているか。**`--reporter=x`（`=` 形）と
- * `--reporter x`（空白区切りの値渡し）の両方を見る**——後者は `VALUE_TAKING_FLAGS`
- * が既に「次の要素を値として飲む」と知っている形と同じ引数なので、ここでも
- * 同じ2形を数える。値そのもの（`x` / `dot` / `verbose` 等）が何であるかは見ない
- * ——「利用者が指定したかどうか」だけが要る。
- */
 export function hasReporterFlag(argv) {
   for (const arg of argv) {
     if (arg === '--reporter' || arg.startsWith('--reporter=')) return true;
@@ -432,108 +224,27 @@ export function hasReporterFlag(argv) {
   return false;
 }
 
-/**
- * 既定の reporter を `dot` へ倒す（作業者がテストを回すと大きな出力が
- * 保存ファイルへ回され、それを読もうとして拒否で止まる問題への対策）。
- *
- * **経緯（最初の版は狙った相手に効かなかった）**: 最初の版は「`stdout` が
- * TTY でない・`CI` が未設定」の2条件だった。ところが**この器（Claude Code
- * の Bash ツール）は、非TTY のまま `CI=true` を既定で環境に持つ**（実測:
- * この器の Bash セッションで `process.env.CI` が `"true"`、観測
- * 2026-09-29）。**⟹ 狙った相手（作業者がこの Bash ツール経由で打つ
- * `pnpm test`）にちょうど効かない条件になっていた**——TTY 判定は満たすが、
- * CI 判定で毎回弾かれ、既定の reporter は変わらないままだった。
- *
- * **条件を、狙っている主体（Claude Code の Bash ツール）そのものを見る形へ
- * 変えた。** `CLAUDECODE` は Claude Code の CLI / SDK が自分の子プロセスへ
- * 注ぐ環境変数で（実測: この器の Bash セッションで `process.env.CLAUDECODE`
- * が `"1"`）、**人間が端末で直接打つときにも、GitHub Actions の runner
- * にも無い**（`GITHUB_ACTIONS` は素の GitHub Actions runner が持つ変数で、
- * この器では未設定——観測 2026-09-29）。**⟹ どちらも今までどおり vitest
- * 既定の reporter のままになる**ので、TTY・CI の判定はもう要らない。
- *
- * **条件は2つだけ**（TTY・CI の判定は外した）:
- *
- * 1. 利用者が `--reporter` を1つも渡していない（`hasReporterFlag`）
- * 2. `CLAUDECODE` が設定されている（空文字列でない）
- *
- * **`.claude/skills/mutation-testing/mutate-core.mjs` は `--reporter=default` を
- * 明示して `pnpm test` を呼ぶ**ので `hasReporterFlag` が真になり、この歯は
- * 素通りする——変異試験ハーネスの出力形は変わらない。
- *
- * 純粋関数——`CLAUDECODE` は呼び出し側（`test.mjs`）が
- * `process.env.CLAUDECODE` から渡す。ここでは環境を読まない
- * （`AGENTS.md`「テストが書けない構造は、テストが無いのと同じ」と同じ理由で、
- * env を引数化してある）。
- *
- * **足すのは末尾へ1個だけ**——既存の引数（`--scope` 解決後のものも含む）は
- * 1文字も変えない。呼び出す順序は「`resolveScopedArgs` の後」を想定している
- * （`--scope` 解決の位置引数判定には影響しない——`--reporter` は既に
- * `VALUE_TAKING_FLAGS` に載っており、この歯が足す `--reporter=dot` も同じ
- * `=` 形なので、どちらも位置引数としては読まれない）。
- */
+// TTY・CI の判定をしない: この器の Bash は非TTY のまま `CI=true` を既定で持ち、CI 判定で毎回弾かれて狙った相手に効かないため。
+// `CLAUDECODE` で見る: 人間の端末にも GitHub Actions の runner にも無く、どちらも vitest 既定の reporter のままになるため。
+// `--reporter=default` を明示する変異試験ハーネスは `hasReporterFlag` が真になり素通りするので、出力形は変わらない。
 export function resolveReporterArgs(argv, { CLAUDECODE } = {}) {
   if (hasReporterFlag(argv)) return argv;
   if (!CLAUDECODE) return argv;
   return [...argv, '--reporter=dot'];
 }
 
-// ── 引数の正規化（続き）: 締め切り（`--deadline-seconds`） ──────────────
-
-/** `--deadline-seconds=<n>` / `--deadline-seconds <n>` の口。vitest へは渡さない。 */
 const DEADLINE_FLAG = '--deadline-seconds';
 
-/** 「不正な締め切り」の exit code。歯A〜歯C・`EXIT_SCOPE_VIOLATION`（1〜8）の
- * どれとも混ざらない新規の値。vitest を起こす**前**に判定する（`EXIT_SCOPE_VIOLATION`
- * と同じ理由——不正な値を vitest 側や後段の判定に持ち込まない）。 */
 export const EXIT_BAD_DEADLINE = 9;
 
-/** 締め切りに達して打ち切ったときの exit code。歯A〜歯C・`EXIT_SCOPE_VIOLATION`・
- * `EXIT_BAD_DEADLINE`（1〜9）のどれとも混ざらない新規の値。**打ち切った回は
- * vitest が非0で終わった回と同じ扱いにする**——歯A/歯B/歯Cの判定は一切走らせない
- * （SIGTERM/SIGKILL で殺した後の vitest の出力は、集計行が「出ていない」のか
- * 「途中で切れて壊れている」のかが区別できない。判定できない材料に判定を
- * 掛けない、という歯A/歯B/歯Cと同じ作法をここでも採る）。 */
+// 打ち切った回は歯A/B/C の判定を走らせない: SIGTERM/SIGKILL の後の出力は、集計行が出ていないのか途中で切れたのか区別できず、判定できない材料に判定を掛けないため。
 export const EXIT_DEADLINE = 10;
 
-/**
- * argv から `--deadline-seconds=<n>`（`=` 形）・`--deadline-seconds <n>`
- * （空白区切り）を取り出す。純粋関数——vitest へは渡さない（`rest` から必ず
- * 落とす）。
- *
- * **なぜ足すか（実測、マネージャーが2026-09-29T07:0xZ にこの器で確認した）**:
- * GNU coreutils 9.7 の `timeout` は、時間切れのときに**パイプの読み手にも
- * SIGTERM を送る**。
- *
- * ```
- * $ timeout 3 sleep 10 | cat; echo "EXIT:${PIPESTATUS[*]}"
- * Terminated
- * EXIT:124 143
- * ```
- *
- * ⟹ 作業者がよく打つ `timeout 590 pnpm test … 2>&1 | grep -E 'Test Files|…'`
- * は、打ち切られると `grep` ごと殺され、それまでの出力も「打ち切られた」ことも
- * 1行も残らない。外側の `timeout` に頼らず、この `test.mjs` 自身が締め切りを
- * 持ち、打ち切ったことを（パイプの読み手を巻き込む前に）自分の stdout へ
- * 1行書き切ってから終わるようにする——詳細な使い方は `test.mjs` 冒頭の doc。
- *
- * **値は1以上の整数でなければならない**（小数・負・0・非数はすべて
- * `EXIT_BAD_DEADLINE` で拒否——vitest を起こす前に判定する）。**複数回
- * 指定されたら最後の値が勝つ**（`extractScope` と同じ「最後が勝つ」規約）。
- *
- * 戻り値は2形——`{ ok: true, deadlineSeconds: number | undefined, rest: string[] }`
- * （`deadlineSeconds` は未指定なら `undefined`。`rest` は `--deadline-seconds`
- * 自体とその値を取り除いた残り）、または
- * `{ ok: false, exitCode: EXIT_BAD_DEADLINE, message: string }`。
- *
- * **`--scope` の位置引数判定より前に呼ぶこと。** `--deadline-seconds` を
- * `VALUE_TAKING_FLAGS`（`resolveScopedArgs` が読む一覧）へ足す代わりに、ここで
- * 先に argv から完全に取り除く設計にした——`--scope` 解決の関心事（利用者の
- * 位置引数と範囲の絞り込み）に、締め切りという無関係な軸を混ぜないため。
- */
+// 外側の `timeout` に頼らず自前の締め切りを持つ: GNU `timeout` は時間切れでパイプの読み手（`| grep` 等）にも SIGTERM を送り、出力も打ち切りも 1 行も残らないため。
+// `VALUE_TAKING_FLAGS` に足さず `--scope` の位置引数判定より前に argv から取り除く: 範囲の絞り込みに締め切りという無関係な軸を混ぜないため。
 export function extractDeadlineSeconds(argv) {
   const eqPrefix = DEADLINE_FLAG + '=';
-  let raw; // 最後に見つかった生の値（文字列）。複数指定されたら最後が勝つ。
+  let raw;
   const rest = [];
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
@@ -554,7 +265,7 @@ export function extractDeadlineSeconds(argv) {
         };
       }
       raw = next;
-      i += 1; // 値を消費した（空白区切りの値をフラグや位置引数と読み違えない）
+      i += 1;
       continue;
     }
     rest.push(arg);
@@ -578,9 +289,7 @@ export function extractDeadlineSeconds(argv) {
   return { ok: true, deadlineSeconds: Number(raw), rest };
 }
 
-/** 打ち切ったときに stdout へ必ず出す1行。集計行が出ていないことと、
- * 「通ったのでも落ちたのでもない」ことを明示する——歯A（`EXIT_UNKNOWN`）と
- * 混同されないため。純粋関数——`test.mjs` から呼ぶ。 */
+// 集計行が出ていないことと「通ったのでも落ちたのでもない」ことを明示する: 歯A（`EXIT_UNKNOWN`）と混同されないため。
 export function formatDeadlineMessage(deadlineSeconds) {
   return (
     `test-guard: --deadline-seconds=${deadlineSeconds} で打ち切った` +
@@ -590,31 +299,12 @@ export function formatDeadlineMessage(deadlineSeconds) {
   );
 }
 
-// ── 歯A: 実行の側（vitest の集計行を読む） ──────────────────────────
-
-/**
- * ANSI エスケープシーケンス（色付け）を取り除く。
- *
- * **CI で実際に踏んだ欠陥（実測、GitHub Actions 実行）**: vitest は
- * `Test Files` / `Tests` の行を色付きで出す（`\x1b[2m Test Files \x1b[22m …`
- * のように、ラベルの前後をエスケープシーケンスで挟む）。ローカル（このリポジトリの
- * 開発機やこのハーネスからの手元実行）では標準出力がパイプになるため vitest が
- * 自動で色を消し、この問題は出ない——しかし GitHub Actions のログでは色が
- * 付いたまま出る。**`^\s*Test Files` の `^\s*` はエスケープシーケンスを
- * 空白として読まない**ため、色が付いた回だけ「集計行が見つからない」＝
- * 「判定できない」に誤って倒れ、緑のまま走り切ったテストが赤くなった
- * （CI run 32665717865、head sha `d26f5a4`、vitest 自身は
- * `Test Files 130 passed (130)` / `Tests 2493 passed (2493)` を出していたが、
- * この関数がそれを見つけられずに `EXIT_UNKNOWN` を返していた）。
- * 色の有無に判定が依存してはならないので、マッチの前に必ず剥がす。
- */
+// マッチの前に必ず剥がす: GitHub Actions では集計行が色付きで出て、`^\s*Test Files` がエスケープシーケンスを空白と読まず、緑のテストが「判定できない」に誤って倒れたため。
 function stripAnsi(s) {
   // eslint-disable-next-line no-control-regex -- ANSI エスケープの検出そのものが目的
   return s.replace(/\x1b\[[0-9;]*m/g, '');
 }
 
-/** vitest の生出力（stdout + stderr）から `Test Files` / `Tests` の集計行を取り出す。
- * どちらかが無ければ `null`（＝「判定できない」の材料）。 */
 export function parseAggregateLines(rawOutput) {
   const plain = stripAnsi(rawOutput);
   const filesLine = plain.match(/^\s*Test Files\s+.+$/m)?.[0]?.trim() ?? null;
@@ -622,36 +312,20 @@ export function parseAggregateLines(rawOutput) {
   return { filesLine, testsLine };
 }
 
-/** `Tests` 行から passed の件数を読む。`passed` という語自体が無ければ 0
- * （例: `Tests  1 skipped (1)` には `passed` が一度も出ない）。 */
 export function parsePassedCount(testsLine) {
   if (testsLine === null) return 0;
   const m = testsLine.match(/(\d+)\s+passed/);
   return m ? Number(m[1]) : 0;
 }
 
-/** 歯A・「判定できない」用の exit code。vitest 自身の exit code（0/1）と
- * 混ざらないよう、vitest が exit 0 を返した後にだけこの分岐へ入る
- * （vitest が非0で落ちたときは、その exit code をそのまま返す。`test.mjs` 側）。 */
+// vitest が exit 0 を返した後にだけこの分岐へ入る: vitest 自身の exit code（0/1）と混ざらないため。
 export const EXIT_ZERO_PASSED = 2;
 export const EXIT_UNKNOWN = 3;
 export const EXIT_STATIC_SKIP = 4;
 
-/**
- * 歯Bの走査そのものが0ファイルしか読めなかったときの exit code。
- *
- * **マネージャーの追加の枷（依頼者経由）**: `include` の glob 展開に失敗した・
- * 走査の起点がずれた・`vitest.config.ts` を読めなかった等で対象が0件になると、
- * 「無条件の静的 skip が0件だった」と**同じ見た目**になる。前者は「見ていない」、
- * 後者は「見て、無かった」で、意味が違う（`.claude/skills/tool-quirks/SKILL.md`
- * の `grep` が静かに取りこぼす形——この項は #1753 で `AGENTS.md`「静かに失敗する
- * 道具」から移った——の `grep -c` が返す 0 と同じ形）。**混ぜない** — `EXIT_STATIC_SKIP` とも
- * `EXIT_UNKNOWN`（歯Aの集計行不在）とも別の exit code にする。
- */
+// `EXIT_STATIC_SKIP` / `EXIT_UNKNOWN` と別の exit code にする: 走査対象 0 件（見ていない）は「無条件の skip が 0 件だった」（見て、無かった）と同じ見た目になり、混ぜないため。
 export const EXIT_SCAN_EMPTY = 5;
 
-/** 歯Aの判定そのもの。vitest が exit 0 を返した後に呼ぶ想定
- * （非0はそのまま伝播するので、ここには来ない）。 */
 export function judgeExecution(rawOutput) {
   const { filesLine, testsLine } = parseAggregateLines(rawOutput);
   if (filesLine === null || testsLine === null) {
@@ -682,71 +356,16 @@ export function judgeExecution(rawOutput) {
   return { ok: true, filesLine, testsLine, passed };
 }
 
-// ── 歯B: ソースの側（無条件の静的 skip を走査する） ──────────────────
-
-/**
- * `describe` / `it` / `test` に続く**修飾子の連鎖**（`.each` / `.concurrent` 等）を
- * 呼び出しの直前まで拾い、その連鎖のどこかに `skip` という**完全一致の**要素が
- * あるかを見る。連鎖は `(` だけでなく、tagged template（`` it.each`...` ``）の
- * `` ` `` でも終われる。
- *
- * **マネージャーの差し戻し（実測、`SKIP_CALL_RE` を直接抜き出して13ケースに
- * 掛けた結果）が起点**: 旧実装（`\.skip(\.\w+)?\s*\(`）は次の2形を取りこぼして
- * いた。
- *
- * 1. `it.skip.each\`テーブル\`(...)` / `describe.skip.each\`テーブル\`(...)`
- *    （tagged template 形の `.each`。終端が `` ` `` で、旧実装は `\(` しか
- *    許していなかった）
- * 2. `it.concurrent.skip(...)`（修飾子が `skip` の**前**に来る形。旧実装は
- *    `(describe|it|test)` の直後に `\.skip` が直接続くことしか許していなかった）
- *
- * **どちらも、この repo にいま現用の実例は無い**（`.each` は全部丸括弧＋配列の
- * 形、`.concurrent` は実例そのものが無い）。**それでも直す判断は変えていない**
- * — どちらも vitest 標準の構文であり、次に書かれたときに歯Bが見逃してよい
- * 理由にはならない。歯Bが「無条件の静的 skip はソースに残らない」と名乗る
- * 判別器である以上、いま使われていないという事実は保証の穴を正当化しない。
- * （当初「tagged template 形は `packages/core/src/tools.test.ts` /
- * `railway/setup.test.ts` に実在する」と grep で読んだが、ヒットの中身は
- * すべて Markdown コードスパンの散文であり実コードは無かった。取り違えた
- * 経緯と検算は PR 本文に書いてある。）
- *
- * **`skipIf` / `runIf` の除外は、文字列一致ではなく配列の完全一致で行う。**
- * 連鎖を `.` で割った要素の配列（例: `['concurrent', 'skip']`）を作り、その中に
- * 文字列として厳密に `'skip'` が含まれるかどうかだけを見る。`'skipIf'` は
- * `'skip'` と文字列として等しくないので、連鎖のどこに現れても引っかからない
- * （`\b` の境界トリックに頼らないぶん、連鎖の途中に来ても・前に来ても同じ判定
- * になる）。
- *
- * **意図して直さないもの**: `it .skip(`（識別子と `.skip` のあいだの空白）。
- * この repo は prettier を通すので、そもそもこの空白は入らない形にしか
- * ならない（`pnpm format:check` が守る）。塞ぐ価値が無いので塞がない。
- *
- * **バッククォート終端は `.each` の直後だけに絞る。** マネージャーの差し戻しへ
- * 対応する過程で、`scripts/workspace-test-scripts.test.ts` の doc コメント
- * （Markdown の逆引用符でコードスパンとして「`describe.skip`」「`it.skip`」と
- * 書いてあるだけの散文）が誤検出することが実地で分かった —— どちらも「識別子
- * ＋連鎖」の直後に**閉じる**逆引用符が来るので、素朴に「終端が `` ` `` なら
- * tagged template」と読むと、Markdown のコードスパンの閉じ記号まで tagged
- * template の開き記号として拾ってしまう。**本物の tagged template 呼び出しは
- * 必ず `.each` の直後にしか現れない**（vitest の逆引用符呼び出しは `.each`
- * にしか無い）ため、連鎖の**最後の要素が `each` であるときだけ**バッククォート
- * 終端を認める。開き括弧 `(` のほうはこの制限を掛けない（`.skip(` は連鎖の
- * 中身によらず常に本物でありうる）。
- */
+// `skipIf` / `runIf` の除外は連鎖を `.` で割った要素の完全一致で行う: `'skipIf'` は `'skip'` と等しくないので、連鎖のどこに現れても引っかからない。
+// バッククォート終端は連鎖の最後が `each` のときだけ認める: 本物の tagged template は `.each` の直後にしか現れず、Markdown のコードスパンの閉じ記号を誤検出するため。
+// `it .skip(`（識別子と `.skip` の間の空白）は塞がない: prettier を通すのでその形にならないため。
 const SKIP_CALL_CHAIN_RE = /\b(describe|it|test)((?:\.\w+)*)\s*([(`])/g;
 
-/** 連鎖（`.skip.each` のような文字列。先頭の `.` を含む）に `skip` という
- * 完全一致の要素が含まれるか。 */
 function chainHasUnconditionalSkip(chain) {
   const segments = chain.split('.').filter(Boolean);
   return segments.includes('skip');
 }
 
-/**
- * `files`（`{ path, content }` の配列）を走査し、無条件の静的 skip の箇所を返す。
- * ディスクを読まない — 合成した文字列でも試せる
- * （`AGENTS.md`「テストが書けない構造は、テストが無いのと同じ」）。
- */
 export function findUnconditionalSkips(files) {
   const hits = [];
   for (const file of files) {
@@ -760,7 +379,6 @@ export function findUnconditionalSkips(files) {
         const chain = m[2];
         const terminal = m[3];
         const segments = chain.split('.').filter(Boolean);
-        // バッククォート終端は `.each` の直後だけ（上の doc）。開き括弧は無条件。
         if (terminal === '`' && segments[segments.length - 1] !== 'each') continue;
         if (chainHasUnconditionalSkip(chain)) {
           hits.push({
@@ -775,7 +393,6 @@ export function findUnconditionalSkips(files) {
   return hits;
 }
 
-/** 歯Bが落ちたときの文言。ファイル・行・見つかった形と、次の手を書く。 */
 export function formatSkipGuardMessage(hits) {
   const lines = hits.map((h) => `  ${h.path}:${h.line}  ${h.matched}`);
   return [
@@ -786,14 +403,6 @@ export function formatSkipGuardMessage(hits) {
   ].join('\n');
 }
 
-/**
- * 歯Bの最終判定。**「0ファイルを読んだ」と「読んで、無条件の skip が0件だった」を
- * 混ぜない**（上の `EXIT_SCAN_EMPTY` の doc）。ディスクを読まない純粋関数 —
- * `matchedPaths` / `hits` を合成しても試せる。
- *
- * 3値: `matchedPaths.length === 0` → 判定できない（`EXIT_SCAN_EMPTY`) /
- * `hits.length > 0` → 検出（`EXIT_STATIC_SKIP`) / それ以外 → 合格。
- */
 export function judgeStaticSkipScan(matchedPaths, hits) {
   if (matchedPaths.length === 0) {
     return {
@@ -814,29 +423,13 @@ export function judgeStaticSkipScan(matchedPaths, hits) {
   return { ok: true, scanned: matchedPaths.length };
 }
 
-// ── 歯C: 観測用テストの見直し期限（#396） ──────────────────────────
-
-/** 歯Cが「申告不備」と判定したときの exit code（歯A/歯Bのどれとも混ざらない
- * 新規の値）。「名乗ったのに終了条件／見直し期限が無い、または見直し期限の
- * 書式が壊れている」——書かせる項目が書かれていない、という状態。 */
 export const EXIT_OBSERVATION_UNDECLARED = 6;
 
-/** 歯Cが「見直し期限を過ぎた」と判定したときの exit code。**到達を見る番が
- * 来た**という状態であって、申告不備（`EXIT_OBSERVATION_UNDECLARED`）とは
- * 別に扱う——前者は「書かれていない」、後者は「書かれてはいるが古い」。 */
 export const EXIT_OBSERVATION_DUE = 7;
 
-/** `YYYY-MM-DD`（ゼロ埋め4桁-2桁-2桁）にちょうど一致するか。`2026-9-1` の
- * ようなゼロ埋め無しは弾く——文字列比較で日付順と一致させるための前提
- * （下の `today > 見直し期限` の比較がこれに乗っている）。 */
+// ゼロ埋め無しの `2026-9-1` を弾く: `today > 見直し期限` を文字列比較で日付順と一致させる前提のため。
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
-/**
- * ファイル先頭の「コメント領域」を切り出す。**コメントでも空行でもない
- * 最初の行の直前まで**（`//`・`/*`・` *`・ブロックコメント終端（`*` に続けて
- * `/`）で始まる行と空行だけを通す）。それより後ろは見ない——`@観測` の
- * 名乗りも `終了条件` / `見直し期限` の申告も、この領域の中でだけ拾う。
- */
 function leadingCommentArea(content) {
   const areaLines = [];
   for (const line of content.split('\n')) {
@@ -855,16 +448,10 @@ function leadingCommentArea(content) {
   return areaLines.join('\n');
 }
 
-/** 行頭のコメント記号（`/**`・`/*`・ブロックコメント終端（`*` に続けて `/`）・
- * `*`・`//`）と、それに続く空白を1つだけ剥がす。
- * `" * 終了条件: xxx"` → `"終了条件: xxx"`。 */
 function stripCommentPrefix(line) {
   return line.replace(/^\s*(\/\*\*|\/\*|\*\/|\*|\/\/)\s?/, '');
 }
 
-/** コメント領域の中から `<label>: <値>` / `<label>：<値>`（全角コロンも通す）
- * の行を探し、値（前後の空白を除いたもの）を返す。見つからなければ
- * `undefined`。 */
 function extractField(area, label) {
   const re = new RegExp(`^${label}\\s*[:：]\\s*(.*)$`);
   for (const line of area.split('\n')) {
@@ -874,8 +461,6 @@ function extractField(area, label) {
   return undefined;
 }
 
-/** コメント領域の中で `<label>: …` の行が現れる行番号（1始まり）。無ければ
- * `null`（`findObservationDebts` がメッセージの `file:line` に使う）。 */
 function findFieldLine(content, label) {
   const re = new RegExp(`^${label}\\s*[:：]`);
   const lines = content.split('\n');
@@ -886,21 +471,7 @@ function findFieldLine(content, label) {
   return null;
 }
 
-/**
- * `path` / `content` が「観測用テスト」を名乗っているか。**名乗りは2形だけ**
- * （散文の「観測」「書き捨て」等では判定しない——137ファイルが「観測」を
- * 別の意味で使っており誤検出になることを実測済み）。
- *
- * 1. パスの慣習: ファイル名に `.observed.` / `.scratch.` / `-scratch.` を含む
- *    （当時実在した2例: 枝 `investigate/report-delivery` の
- *    `inbox-delivery.observed.test.ts`、枝
- *    `measure/fb1c80e3-388-signal-scaffold` の
- *    `chat.issue388-scratch.test.tsx`。⚠️ **どちらの枝も既に削除されている**
- *    ——前者は 2026-09-22、後者は 2026-09-20。⟹ 枝名で読みに行かないこと。
- *    **どちらも全文が issue のコメントへ写してある**——前者は #783、後者は
- *    #388。経緯は #1303）
- * 2. 冒頭コメント領域に `@観測` という語が在る（領域より後ろは見ない）
- */
+// 名乗りは 2 形（パスの慣習と冒頭コメント領域の `@観測`）だけにする: 散文の「観測」「書き捨て」は別の意味で使われており誤検出になるため。
 export function isObservationFile(path, content) {
   if (path.includes('.observed.') || path.includes('.scratch.') || path.includes('-scratch.')) {
     return true;
@@ -908,14 +479,6 @@ export function isObservationFile(path, content) {
   return leadingCommentArea(content).includes('@観測');
 }
 
-/**
- * 冒頭コメント領域から「終了条件」「見直し期限」を読む。**見つからない欄は
- * `undefined`**（`終了条件` は空文字列も `undefined` 扱い。`見直し期限` は
- * `YYYY-MM-DD` に一致しなければ ── 書式が壊れていても ── `undefined` 扱い）。
- * `見直し期限Raw` は書式検証前の生の値（見つからなければ `undefined`）——
- * 「見つからない」と「書式が壊れている」をメッセージで書き分けるための
- * 診断用の補助フィールドで、必須の2項目には含まれない。
- */
 export function readObservationDeclaration(content) {
   const area = leadingCommentArea(content);
   const termRaw = extractField(area, '終了条件');
@@ -927,9 +490,6 @@ export function readObservationDeclaration(content) {
   };
 }
 
-/** 歯Cが落ちたときの文言。ファイル:行と、次の手を書く（`formatSkipGuardMessage`
- * と同じ形）。`kind` ごとに次の手が違う——`undeclared` は「2項目を書くこと」
- * だけだが、`due` は3つの選択肢がある。 */
 export function formatObservationGuardMessage(debts, kind) {
   const lines = debts.map((d) => `  ${d.path}:${d.line}  ${d.detail}`);
   const header =
@@ -953,15 +513,7 @@ export function formatObservationGuardMessage(debts, kind) {
   return [header, ...lines, ...footer].join('\n');
 }
 
-/**
- * `files`（`{ path, content }` の配列）のうち `isObservationFile` に当たる
- * ものだけを見て、負債を返す。**名乗っていないファイルは中身を見ない**
- * （何を書いてあっても素通り）。`today` は `'YYYY-MM-DD'` の文字列——**この
- * 関数の中で `new Date()` を呼ばない**（呼べばテストが日付で腐る。それは
- * この Issue が直そうとしている当のものである）。日付の比較は文字列比較
- * （`today > 見直し期限`）でよい——`YYYY-MM-DD` は辞書順が日付順と一致する。
- * **期限当日はまだ赤くしない**（`>` であって `>=` ではない）。
- */
+// `today` を引数で受け、中で `new Date()` を呼ばない: 呼ぶとテストが日付で腐るため。期限当日はまだ赤くしない（`>` であって `>=` ではない）。
 export function findObservationDebts(files, today) {
   const debts = [];
   for (const file of files) {
@@ -998,16 +550,7 @@ export function findObservationDebts(files, today) {
   return debts;
 }
 
-/**
- * 歯Cの最終判定。3状態を混ぜない（`judgeStaticSkipScan` と同じ作法）:
- * `matchedPaths.length === 0` → 判定できない（`EXIT_SCAN_EMPTY`、歯Bと同じ
- * 値——「見ていない」という意味そのものが歯Bと同じ走査に乗っているため）／
- * `undeclared` な負債が1件以上 → 申告不備（`EXIT_OBSERVATION_UNDECLARED`）／
- * `due` な負債が1件以上 → 見直し期限超過（`EXIT_OBSERVATION_DUE`）／それ以外
- * → 合格。**`undeclared` を `due` より先に見る**——申告そのものが壊れている
- * ファイルは、期限の比較ができない（`見直し期限` が `undefined` のままでは
- * `today > 見直し期限` が意味を持たない）ので、先に直すべき負債として優先する。
- */
+// `undeclared` を `due` より先に見る: 申告が壊れたファイルは期限の比較ができず、先に直すべき負債のため。
 export function judgeObservationScan(matchedPaths, debts) {
   if (matchedPaths.length === 0) {
     return {
@@ -1039,14 +582,7 @@ export function judgeObservationScan(matchedPaths, debts) {
   return { ok: true, scanned: matchedPaths.length };
 }
 
-// ── I/O: include globs の読み取りとファイル走査 ──────────────────────
-
-/**
- * root の `vitest.config.ts` を直接 `import` し、`test.include` を読む。
- * **書き写さない** — `scripts/workspace-test-scripts.test.ts` と同じ理由で、
- * 二重管理はずれる。この repo の node（22.23 系、`mise.toml`）は `.ts` の型
- * ストリッピングを素で解決できるので、ビルドを挟まずに読める（実測済み）。
- */
+// `vitest.config.ts` を書き写さず直接 import する: 二重管理はずれるため。
 export async function readIncludeGlobs(root = ROOT) {
   const configPath = path.join(root, 'vitest.config.ts');
   const mod = await import(pathToFileURL(configPath).href);
@@ -1065,25 +601,17 @@ function collectFiles(dir, root, out) {
   }
 }
 
-/** repo 全体を走査し、`includeGlobs` に一致するファイルの相対パス（`/` 区切り）を返す。 */
 export function collectMatchingTestFiles(root, includeGlobs) {
   const all = [];
   collectFiles(root, root, all);
   return all.filter((f) => includeGlobs.some((g) => path.matchesGlob(f, g)));
 }
 
-/** 相対パスの配列を `{ path, content }` へ読み込む（`findUnconditionalSkips` の入力形）。 */
 export function readFilesForScan(root, relPaths) {
   return relPaths.map((p) => ({ path: p, content: readFileSync(path.join(root, p), 'utf8') }));
 }
 
-/**
- * 歯Bを実際に1回分回す（I/O込みの薄い合成）。`test.mjs` はこれを呼ぶだけにする。
- *
- * `readIncludeGlobs` が例外を投げた場合・`include` が配列でない/空だった場合も
- * `judgeStaticSkipScan([], [])` と同じ「判定できない」（`EXIT_SCAN_EMPTY`）へ倒す
- * ——「見ていない」の入口を1つに絞る。
- */
+// `readIncludeGlobs` の失敗や空の `include` も「判定できない」（`EXIT_SCAN_EMPTY`）へ倒す: 「見ていない」の入口を 1 つに絞るため。
 export async function runStaticSkipGuard(root = ROOT) {
   let includeGlobs;
   try {
@@ -1111,22 +639,10 @@ export async function runStaticSkipGuard(root = ROOT) {
   return judgeStaticSkipScan(matchedPaths, hits);
 }
 
-/** 今日の日付を `'YYYY-MM-DD'`（UTC）で作る。**I/O 層でだけ呼ぶ**——
- * `runObservationGuard` の既定引数の中だけで使い、`findObservationDebts` /
- * `judgeObservationScan` などの純粋関数の中では絶対に呼ばない。 */
 function todayUtc() {
   return new Date().toISOString().slice(0, 10);
 }
 
-/**
- * 歯Cを実際に1回分回す（I/O込みの薄い合成）。`test.mjs` はこれを呼ぶだけにする。
- * `readIncludeGlobs` / `collectMatchingTestFiles` / `readFilesForScan` は歯Bと
- * 完全に共用する——再実装しない（同じ include glob・同じ走査で「観測用テスト」
- * を名乗ったファイルだけを絞り込む）。
- *
- * `today` は引数で受ける（既定値だけがここで `new Date()` を呼ぶ）。呼び出し側
- * （`test.mjs`）は素の呼び出し（`runObservationGuard(ROOT)`）でよい。
- */
 export async function runObservationGuard(root = ROOT, today = todayUtc()) {
   let includeGlobs;
   try {

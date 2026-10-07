@@ -251,4 +251,20 @@ describe('保存・片付けが 409 で断られたとき（#3751）', () => {
     expect(screen.queryByText(/この仕事は既に片付いた/)).toBeNull();
     expect(screen.queryByText('直した')).toBeNull();
   });
+
+  it('編集の下書きを持ったまま自分で片付けたときは、「片付けた」と言い、既に片付いたとは言わない（#3842）', async () => {
+    const server = stubServer();
+    renderPage();
+    await screen.findByText('もとの本文');
+    await typeDraft('書きかけの本文を直した');
+    fireEvent.change(screen.getByLabelText(/を片付けた理由$/), { target: { value: '直した' } });
+    fireEvent.click(screen.getByRole('button', { name: /が片付いた$/ }));
+
+    expect(
+      await screen.findByText(/この仕事は片付けた。編集中だった本文の書きかけは残してある/),
+    ).toBeTruthy();
+    expect(server.writes.some((w) => w.includes('/close'))).toBe(true);
+    expect(screen.queryByText(/この仕事は既に片付いた/)).toBeNull();
+    expect(screen.getByText('書きかけの本文を直した')).toBeTruthy();
+  });
 });

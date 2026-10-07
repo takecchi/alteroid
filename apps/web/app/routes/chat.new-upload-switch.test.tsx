@@ -1,11 +1,4 @@
 // @vitest-environment jsdom
-/**
- * Issue #3766。新しい会話（`/chat`）の添付を上げているあいだに別の会話 B へ移ったら、
- * 上げ終えたあとも B にとどまる（直す前は、いま作られた新しい会話の画面へ移された）。
- *
- * アップロードは `fetch` の通り道で止め（`gate`）、止めているあいだに会話を移してから放す。
- * 実時間の待ちは使わない。
- */
 import { File as NodeFile } from 'node:buffer';
 
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
@@ -116,7 +109,6 @@ describe('新しい会話の添付を上げているあいだに別の会話へ�
       await router.navigate(`/chat/${B}`);
     });
     expect(await findShownConversation(B)).toBeTruthy();
-    // B の入力欄に書きかけを置く。上げ終えても触られない。
     fireEvent.change(screen.getByPlaceholderText(/クローンに話しかける/), {
       target: { value: 'B の書きかけ' },
     });
@@ -130,18 +122,14 @@ describe('新しい会話の添付を上げているあいだに別の会話へ�
     await act(async () => undefined);
     await act(async () => undefined);
 
-    // 新しい会話として投函された（会話 id を付けない）。
     const body = (await chatPosts()[0]?.request?.clone().json()) as {
       conversationId?: string;
       text?: string;
     };
     expect(body.conversationId).toBeUndefined();
     expect(body.text).toBe('新しい本文');
-    // B にとどまる。
     expect(router.state.location.pathname).toBe(`/chat/${B}`);
-    // B の画面に「受信中」が立たない。
     expect(screen.queryByRole('button', { name: /受信をやめる/ })).toBeNull();
-    // B の入力欄・応答の表示に触れない。
     expect((screen.getByPlaceholderText(/クローンに話しかける/) as HTMLTextAreaElement).value).toBe(
       'B の書きかけ',
     );

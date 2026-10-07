@@ -1,12 +1,4 @@
 // @vitest-environment jsdom
-/**
- * `/usage` 画面で絞り込みを替えても、読めていた中身を消さない（issue #3419）。
- *
- * 絞り込みを替えると SWR のキーが変わり、新しいキーの `data` が無い間、中身が全部
- * スピナーに入れ替わっていた。`useCommitments`（#3074）と同じく前の中身を残し、
- * 前の条件の数字を見せている間は、数字のそばで「読み込み中」と言う。
- * 初回（まだ何も読めていない）はこれまでどおりスピナーである。
- */
 import { USAGE_ESTIMATE_NOTICE, ZERO_USAGE } from '@alteroid/core/usage';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
@@ -54,7 +46,6 @@ function usageBody(costUsd: number) {
   };
 }
 
-/** `layer` を付けた要求だけ、`release()` まで応答を止める。 */
 function stubHeldLayer() {
   let release: () => void = () => {};
   const gate = new Promise<void>((resolve) => {
@@ -93,7 +84,6 @@ describe('/usage 画面 — 絞り込みを替えても前の中身を残す（#
     fireEvent.change(screen.getByLabelText('誰が'), { target: { value: 'manager' } });
 
     expect(await screen.findByText(MARK)).toBeTruthy();
-    // 前の数字はスピナーに入れ替わらず残っている。
     expect(screen.getAllByText('$12.00').length).toBeGreaterThan(0);
   });
 

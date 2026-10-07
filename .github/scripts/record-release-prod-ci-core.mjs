@@ -1,90 +1,10 @@
-/**
- * `record-release-prod-ci.mjs` の組み立てだけを切り出したもの（Issue #1207 の (3)）。
- * **ネットワークを持たない、純粋な関数だけを置く。**
- *
- * ## これは何を解決するために在るか
- *
- * `release/prod` への夜間反映（`.github/workflows/release-prod.yml` →
- * `.github/scripts/reflect-release-prod.sh`）は、`main` の CI を一切見ていない。
- * その反映先の中核は逐語で「**SHA が違えば push する。それだけである。**」
- * （`grep -Fn -- 'SHA が違えば push する。それだけである。' .github/scripts/reflect-release-prod.sh`）
- * ——ここに手を入れない、というのがこの変更全体の前提である。
- *
- * ## ⛔ 決定は「止めない。記録するだけ」である（候補B。teto の決定）
- *
- * 「赤なら止める」門は**作らない**。実測が全部不利だからである（Issue #1207 の
- * 調査。観測期間 2026-08-18〜09-17 の28日）:
- *
- * - 門が発動する場面（`main` の post-merge CI が赤い状態で夜間反映が走る）は
- *   **28日で0回**——赤い区間と反映の時刻が一度も重ならなかった
- * - 「もし発動していたら」を仮に数えても、赤くなった6件のうち**5件は flaky
- *   による誤停止**で、翌日には自然に緑へ戻っている
- * - **唯一の本物の障害（Issue #734）は、この門では拾えない**——CI 自体は緑の
- *   まま本番だけが壊れた事例で、CI の赤を見る門は最初から対象外だった
- * - 仮に発動したとすると、反映は夜1回しか無いので**止まった場合の空白は最長で
- *   丸1日**になる——デプロイが止まる損失のほうが、拾えなかった1件の障害より
- *   高くつく
- *
- * ⟹ **やるのは記録だけ。** 毎晩、実際に `release/prod` へ出た sha の CI 判定を
- * 機械可読な1行として残し、赤いときだけ既存の警報 Issue（後述）へ「この赤は
- * 本番へ出た」という一言を足す。**新しい停止機構は増やさない。**
- *
- * ## 判定器は再利用する。再実装しない
- *
- * CI が「本当に緑か」を sha から判定するロジックは `scripts/check-pr-green.mjs`
- * の `judgeSha` を**そのまま呼ぶ**（Issue #1227 で世代選びと4値化が直っている
- * 実装）。ここで2本目の判定器を書くと、世代選び（workflow名＋event の組・
- * `created_at`/`id` の tiebreak）が2箇所でじわじわずれる——
- * `check-pr-green-core.mjs` 自身がこの手の食い違いで複数回直っている
- * （#933 → #1225）。
- *
- * ## `out-of-scope` は「異常なし」である——ここが誤読しやすい
- *
- * `judgeSha` が判定する sha は、夜間反映で実際に `release/prod` へ出た sha
- * （＝ `main` への `push` イベントで作られた run）である。**`push` の run では
- * `pull_request` 専用 job（`base-overlap` / `pr-origin` 等）が設計どおり
- * skip される**ので、健全な `main` HEAD であっても `green` にはならず
- * `out-of-scope` になる（`check-pr-green-core.mjs` の `evaluatePrGreen` を
- * 参照）。⟹ **`out-of-scope` は赤でも判定不能でもなく「異常なし」の意味で
- * ある。** ここを他の非 green と同列に扱うと、毎晩ほぼ確実に鳴る偽の赤を
- * 作ることになる。
- *
- * 実測（このリポジトリの実際の sha で確認済み）:
- *
- * - 健全な main HEAD `ecd1674e09c72b245db21b225f56ac590fd336af` ⟹ `out-of-scope`
- * - 本物の赤 `3ca63973b7dae66b48b033a962a92e19c7e73e63` ⟹ `red`
- *   （`main-ci-alarm.test.ts` が使っている実測固定値と同じ sha。#1207 の表に
- *   在る、赤い区間が最長だった回）
- *
- * ## 記録行は grep で数える前提の形にしてある
- *
- * `buildRecordLine` が組み立てる1行は **`release-prod-ci-record: ` で始まる**。
- * 後からこの文字列で探す（数える手順は `record-release-prod-ci.mjs` の doc に
- * 具体的なコマンドで書いてある）。**この接頭辞を変えると、過去の記録が
- * grep から見えなくなる。**
- *
- * ## 赤のときのコメントは main-ci-alarm の鍵をそのまま使う
- *
- * `main-ci-alarm.mjs`（Issue #1207 の (1)）が `main` の post-merge CI の赤を
- * 見つけて Issue を立てる。その Issue の鍵は「workflow名 ＋ head_sha」
- * （`scripts/main-ci-alarm-core.mjs` の `alarmKey` / `alarmMarker`）——ここでは
- * その**鍵の作り方を写さず import して使う**。写すと鍵の形が2箇所でずれ、
- * 同じ sha なのに別の鍵を作って「見つからない」が起きる。
- *
- * **新しい Issue は立てない。** 見つかった警報 Issue が open で在るときだけ
- * コメントを足す。無ければ「durable な記録を付けられなかった」と1行出して
- * 終わる（門ではないので、記録できなかったこと自体は反映を止めない）。
- *
- * ## なぜ Issue 側にも残すか——run のログは90日で消える
- *
- * `gh run view --log` で読める記録は、GitHub の既定の保持期間（90日）で
- * 消える。**赤の晩だけ**、消えない場所（Issue のコメント）にも同じ情報を
- * 残しておけば、90日を過ぎても「いつ・どの赤が本番へ出たか」を Issue の
- * 検索だけで辿れる。緑の晩まで全部 Issue へ書かないのは、警報 Issue が
- * 無いところに書く先が無い（＝新しい Issue を立てることになり、それは
- * この変更が禁じている）のと、**そもそも毎晩の記録は run のログという
- * 安価な場所で足りる**ため。
- */
+// 「赤なら止める」門は作らず記録だけにする: 門が発動する場面がほぼ無く、赤の大半は flaky による誤停止で、反映は夜1回なので止まった場合の空白が最長で丸1日になるため。
+// 判定器は `scripts/check-pr-green.mjs` の `judgeSha` を呼び、再実装しない: 2本目を書くと世代選び（workflow名＋event の組・`created_at`/`id` の tiebreak）が2箇所でずれるため。
+// `out-of-scope` は異常なし: `push` の run では `pull_request` 専用 job が設計どおり skip され、健全な `main` HEAD も `green` にならず `out-of-scope` になるため。他の非 green と同列に扱わない。
+// 記録行は `release-prod-ci-record: ` で始める: 後からこの文字列で数えるので、変えると過去の記録が grep から見えなくなるため。
+// `main-ci-alarm` の鍵は写さず `main-ci-alarm-core.mjs` から import して使う: 写すと鍵の形が2箇所でずれ、同じ sha で別の鍵を作って「見つからない」が起きるため。
+// 新しい Issue は立てず、警報 Issue が open のときだけコメントを足す: 記録できなかったこと自体は反映を止めない。
+// 赤の晩だけ Issue にも残す: run のログは90日で消えるが、緑の晩は書く先が無く run のログで足りるため。
 
 import {
   CANCEL_AWARE_WORKFLOW_NAME,
@@ -92,64 +12,16 @@ import {
   isCancelledRun,
 } from '../../scripts/main-ci-alarm-core.mjs';
 
-/** 記録行の接頭辞。**この文字列で探す。** 変えると過去の記録が grep から見えなくなる。 */
 export const RECORD_LINE_PREFIX = 'release-prod-ci-record:';
 
-/**
- * verdict を「健全さ」の3値へ畳む。
- *
- * ## なぜ verdict と別にこの欄が要るか（実測された誤読が2段ある）
- *
- * `out-of-scope` は**異常なし**である（上の doc 節「`out-of-scope` は
- * 「異常なし」である」）。ところが記録行に出るのは `verdict=out-of-scope`
- * という文字列だけで、**その意味は別の行（`describeVerdict`）にしか無い。**
- *
- * ⟹ 実測（2026-09-20）: マネージャー層が `verdict=out-of-scope` を
- * 「判定できなかった」と読み、**「健全な夜の記録が1件も積まれていない」と
- * 報告した。** クローン層はそれを前提に「候補 B は半分しか着地していない」と
- * 判断を1つ下した。⛔ **注意書き（上の doc 節）は既に在ったのに、2段とも
- * 防げていない。**
- *
- * ⟹ ⭐ **技術的に正しい文字列が読み手を偽へ導く**形であり、
- * `check-pr-green` が略記 sha を `no-runs` と言っていた欠陥（PR #1260）と
- * 同じ型である。⟹ **記録行そのものに健全さを載せる。**
- *
- * ## 3値にする理由
- *
- * `ok` / `bad` の2値にすると、「判定に至れなかった」を `bad` か `ok` の
- * どちらかへ畳むことになり、**取れない軸に値を作る**ことになる
- * （`AGENTS.md`「取れない軸に 0 の行を作らない」/「『判定できない』という
- * 3つ目の状態を持つ」）。⟹ `unknown` を独立した値として持つ。
- *
- * | health | verdict | 意味 |
- * | --- | --- | --- |
- * | `ok` | `green` / `out-of-scope` | 異常なし。⭐ **健全な夜はこちら** |
- * | `bad` | `red` | 赤い main が本番へ出た |
- * | `unknown` | それ以外（`cancelled` / `skipped` / `unmeasurable` / `no-runs` / `pending` / `unknown`） | 判定に至れなかった |
- *
- * ⛔ **警報の分岐は `verdict === 'red'` のままで、この関数を使っていない。**
- * 健全さの表示を足しただけで、**本番へ出る振る舞いは1つも変えていない。**
- *
- * @param {string} verdict
- * @returns {'ok' | 'bad' | 'unknown'}
- */
+// verdict と別に health 欄を持つ: 記録行の `verdict=out-of-scope` という文字列だけでは「異常なし」と読まれず、判定できなかったと誤読されるため。
+// 3値にする: 2値だと「判定に至れなかった」を `ok` か `bad` へ畳み、取れない軸に値を作ることになるため。
 export function healthOf(verdict) {
   if (verdict === 'green' || verdict === 'out-of-scope') return 'ok';
   if (verdict === 'red') return 'bad';
   return 'unknown';
 }
 
-/**
- * 機械可読な記録行を1つ組み立てる。
- *
- * 形: `release-prod-ci-record: verdict=<verdict> health=<ok|bad|unknown> prod_sha=<40桁> main_sha=<40桁> reflect=<outcome> observed_at=<ISO8601 UTC>`
- *
- * ⚠ `health=` は後から足した欄である（実測された誤読2段への対処。`healthOf` の
- * doc を見よ）。⟹ **この欄を持たない行は、足す前の古い形式である。**
- * `verdict=` の値そのものは1文字も変えていないので、過去の記録の grep は壊れない。
- *
- * @param {{ verdict: string, prodSha: string, mainSha: string, reflectOutcome: string, observedAt: string }} input
- */
 export function buildRecordLine({ verdict, prodSha, mainSha, reflectOutcome, observedAt }) {
   return (
     `${RECORD_LINE_PREFIX} verdict=${verdict} health=${healthOf(verdict)} ` +
@@ -157,14 +29,6 @@ export function buildRecordLine({ verdict, prodSha, mainSha, reflectOutcome, obs
   );
 }
 
-/**
- * verdict ごとの意味を、人が読んで次の一手が分かる1文にする。
- *
- * `judgeSha` が返す8値（green / red / cancelled / out-of-scope / skipped /
- * pending / unmeasurable / no-runs）に加えて、`judgeSha` 自体が失敗したときの
- * `unknown`（gh api を読めなかった・prod_sha や main_sha を取得できなかった等、
- * この道具の側の都合で判定に至れなかった状態）を持つ。
- */
 export function describeVerdict(verdict) {
   switch (verdict) {
     case 'green':
@@ -194,18 +58,7 @@ export function describeVerdict(verdict) {
   }
 }
 
-/**
- * `judgeSha` が選んだ最新 run 群のうち、`conclusion === 'failure'` のものの
- * workflow 名を返す（重複除去）。
- *
- * **detail 文字列（job 単位の "name（workflow=..., run=...）= conclusion" の
- * 並び）を parse しない。** `evaluatePrGreen` の戻り値には run 自体の
- * `conclusion` がそのまま乗っているので、そちらから直接取るほうが壊れにくい
- * （detail の文言が変わっても影響を受けない）。
- *
- * @param {{name:string, conclusion:string|null}[]} latestRuns
- * @returns {string[]}
- */
+// detail 文字列を parse しない: `evaluatePrGreen` の戻り値には run 自体の `conclusion` が乗っており、detail の文言が変わっても影響を受けないため。
 export function redWorkflowNames(latestRuns) {
   const names = new Set();
   for (const run of latestRuns) {
@@ -214,36 +67,11 @@ export function redWorkflowNames(latestRuns) {
   return [...names];
 }
 
-/**
- * 赤の晩に警報 Issue へ足すコメントの印。
- *
- * `<!-- alteroid:release-prod-ci-record sha=<sha> run=<この反映 run の id> -->`
- *
- * `main-ci-alarm-core.mjs` の `alarmMarker`（`<!-- alteroid:main-ci-alarm
- * key=... -->`）とは別物——あちらは「どの警報 Issue を探すか」の鍵、こちらは
- * 「この記録コメントを重複して足さないか」を確かめるための印である。
- * `run` は落ちた CI の run ではなく、**この記録コメントを書いた
- * `release-prod.yml` 自身の反映 run の id**（`GITHUB_RUN_ID`）にする——
- * 同じ夜間反映の run が再実行されても、この印があれば二重に足さない。
- */
+// 印の `run` は落ちた CI の run ではなく `release-prod.yml` 自身の反映 run の id（`GITHUB_RUN_ID`）にする: 同じ夜間反映の run が再実行されても二重に足さないため。
 export function recordCommentMarker({ sha, runId }) {
   return `<!-- alteroid:release-prod-ci-record sha=${sha} run=${runId} -->`;
 }
 
-/**
- * 赤の晩に、既存の警報 Issue へ足すコメント本文を組み立てる。
- *
- * @param {{
- *   sha: string,
- *   runId: string | number,
- *   runUrl: string,
- *   verdict: string,
- *   redWorkflows: string[],
- *   mainSha: string,
- *   reflectOutcome: string,
- *   observedAt: string,
- * }} input
- */
 export function buildRecordComment({
   sha,
   runId,
@@ -275,39 +103,7 @@ export function buildRecordComment({
   ].join('\n');
 }
 
-/**
- * `judgeSha` が `red` と言った verdict のうち、**後続の push に取り消された
- * CI の run を見ていただけのもの**を `cancelled`（判定に至れなかった。
- * `healthOf` で `unknown`）へ倒す（Issue #3049。#3044 / #3047 の続き）。
- *
- * ## なぜ記録の側で直すか
- *
- * `ci.yml` の集約ゲート `ci` は needs が cancelled でも `exit 1` する。取り消された
- * run は job 単位では checks / test が `cancelled`、`ci` だけが `failure` になり、
- * `evaluatePrGreen` は「cancelled でも skipped でもない非 success が1本でも在れば
- * red」なのでこれを `red` と読む。**この判定は PR の緑の判定そのものなので、
- * `evaluatePrGreen` / `check-pr-green` は1行も変えない**（取り消しを通す方向へ
- * 緩める経路を作らない）。記録は「止めない・記録するだけ」の道具なので、記録の側
- * だけが、判定に使った jobs を見て `red` を `cancelled` へ倒す。
- *
- * ## 倒すのは次のすべてが成り立つときだけ（それ以外は `red` のまま）
- *
- * 1. `verdict === 'red'`（ほかの verdict には触らない）
- * 2. `latestRuns` のうち `CI` の run が1つ以上在り、その jobs が `isCancelledRun`
- *    （失敗がすべて集約ゲート `ci` で、cancelled が1つ以上）
- * 3. すべての `latestRuns` の jobs を取れている（`jobsByRunId` に配列が在る）
- * 4. 取り消された `CI` の run のゲート `ci` を除き、success / skipped /
- *    cancelled 以外の job が1つも無い（failure / timed_out / neutral 等は本物の失敗側）
- *
- * ⛔ jobs が取れない・渡されないときは倒さない（今までどおり `red`）。
- *
- * @param {{
- *   verdict: string,
- *   latestRuns: {id:number|null, name:string}[] | null | undefined,
- *   jobsByRunId: Record<number, {name:string, conclusion:string|null}[]> | null | undefined,
- * }} input
- * @returns {string}
- */
+// `red` を `cancelled` へ倒すのは記録の側だけにする: `evaluatePrGreen` / `check-pr-green` を変えると、取り消しを通す方向へ PR の緑の判定を緩める経路ができるため。jobs が取れない・渡されないときは倒さず `red` のままにする。
 export function refineVerdictForCancelledRuns({ verdict, latestRuns, jobsByRunId }) {
   if (verdict !== 'red') return verdict;
   if (!Array.isArray(latestRuns) || latestRuns.length === 0) return verdict;

@@ -1,13 +1,4 @@
 // @vitest-environment jsdom
-/**
- * **会話の一覧の「新しい会話」のボタンが、Tab の順路に残っていること。**
- *
- * 部品（`ConversationList`）の既定はこのボタンを Tab の順路から外す（`tabIndex=-1`）が、
- * 従来の画面ではリンクの中のボタンも Tab で止まっていた。**移行で変えてよいのは見た目だけ**
- * なので、画面は `newConversationTabStop` でその振る舞いを保っている。この歯はその側を押さえる。
- * 見た目（選択中の行・発言数の包み・入力欄の帯の地色）は新しいテーマの既定を採っており、
- * ここでは固定しない。
- */
 import { cleanup, render, screen } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider, useParams } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';

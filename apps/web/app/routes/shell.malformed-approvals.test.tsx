@@ -1,11 +1,4 @@
 // @vitest-environment jsdom
-/**
- * `GET /approvals` の応答が `approvals` の配列を持たない形のとき（版のずれ）の外枠。
- *
- * 測る保証は3つ — (1) 外枠が落ちない（ErrorBoundary に捕まらず、行き先の一覧が出る）
- * (2) 承認待ちは「読めていない」の札になる (3) 0件（札無し）として描かれない。
- * 型は `approvals` を配列と言っているので、ここが守るのは実行時の倒れ先だけである。
- */
 import { cleanup, render, screen } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -36,7 +29,6 @@ function renderShell() {
       {
         path: '/',
         Component: Shell,
-        // 外枠が落ちると、React Router 既定の ErrorBoundary がこれに代わって出る。
         children: [{ index: true, Component: () => <div>ダッシュボードの中身</div> }],
       },
     ],
@@ -90,11 +82,9 @@ describe('/approvals の応答が配列を持たない形のとき', () => {
 
       renderShell();
 
-      // (1) 外枠が落ちていない
       expect(await screen.findByText('ダッシュボードの中身')).toBeTruthy();
       expect(screen.queryByText(/Unexpected Application Error/)).toBeNull();
       expect(screen.getByRole('link', { name: /ホーム/ })).toBeTruthy();
-      // (2)(3) 0件（札無し）ではなく「読めていない」
       expect(await screen.findByLabelText('承認待ちを読めていない')).toBeTruthy();
       expect(screen.getByTitle('承認待ちを読めていない')).toBeTruthy();
     },
@@ -112,10 +102,6 @@ describe('/approvals の応答が配列を持たない形のとき', () => {
   });
 });
 
-/**
- * 読めない行（`unreadable`）だけのとき、ナビは「承認待ちはない」に見えてはいけない（issue #3062）。
- * 読める行は0件でも、`/approvals` が言う「読めない承認待ちが N 件ある」を警告の札で言う。
- */
 describe('読めない承認待ちだけのとき（#3062）', () => {
   const UNREADABLE = [{ id: 'ap-bad', reason: '不正な欄: createdAt' }, { reason: '不正な行' }];
 
@@ -125,7 +111,6 @@ describe('読めない承認待ちだけのとき（#3062）', () => {
     renderShell();
 
     expect(await screen.findByLabelText('読めない承認待ちが 2 件ある')).toBeTruthy();
-    // 「読めていない」（danger の ?）とは別。取れてはいる。
     expect(screen.queryByLabelText('承認待ちを読めていない')).toBeNull();
   });
 

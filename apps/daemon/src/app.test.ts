@@ -102,8 +102,6 @@ function fakeClone() {
 
   const managerList: ManagerSummary[] = [];
   const managerDenials = new Map<string, ManagerDenial[]>();
-  /** `ManagerPool.runnerReportedManagerProvider()` の返り値（#486 S9）。無ければ不明。 */
-  const runnerManagerProviders = new Map<string, string>();
   const transcripts = new Map<string, string>();
   /** `transcript()` を `kind: 'removed'` にする（#698）。 */
   const removedTranscripts = new Map<
@@ -177,9 +175,6 @@ function fakeClone() {
     },
     runnerBacklog() {
       return [];
-    },
-    runnerReportedManagerProvider(runnerId) {
-      return runnerManagerProviders.get(runnerId);
     },
     async runnerIdOf(managerId) {
       return managerList.find((manager) => manager.managerId === managerId)?.runnerId;
@@ -311,7 +306,6 @@ function fakeClone() {
     posted,
     droppedFromDelivery,
     managerList,
-    runnerManagerProviders,
     managerDenials,
     transcripts,
     removedTranscripts,
@@ -455,7 +449,6 @@ describe('managerSummarySchema と ManagerSummary のキーの一致（再発防
   it('ManagerSummary の全キーが managerSummarySchema に宣言されている', () => {
     const coverage: Record<keyof ManagerSummary, true> = {
       managerId: true,
-      managerProvider: true,
       status: true,
       live: true,
       runnerLostSince: true,
@@ -3920,45 +3913,9 @@ describe('HTTP API', () => {
    * **状態は置き換えない。** 拒否は `running` に映らない（拒否があったことしか
    * 観測していない）ので、`status` はそのままにして添える。
    */
-  it('マネージャー層の provider が、名乗りのある runner の委譲にだけ一覧と詳細へ載る（不明は欄なし。#486 S9）', async () => {
-    const base = {
-      status: 'running' as const,
-      live: true,
-      cwd: '/work/project',
-      request: '仕事',
-      startedAt: '2026-01-01T00:00:00.000Z',
-      updatedAt: '2026-01-01T00:01:00.000Z',
-      waiting: [],
-    };
-    fake.managerList.push(
-      { ...base, managerId: 'mgr-codex', runnerId: 'r-codex' },
-      { ...base, managerId: 'mgr-silent', runnerId: 'r-silent' },
-      { ...base, managerId: 'mgr-unplaced' },
-    );
-    fake.runnerManagerProviders.set('r-codex', 'codex');
-
-    const list = (await (await app.request('/managers')).json()) as {
-      managers: { managerId: string; managerProvider?: string }[];
-    };
-    const byId = new Map(list.managers.map((m) => [m.managerId, m]));
-    expect(byId.get('mgr-codex')?.managerProvider).toBe('codex');
-    // **不明は claude にしない。** 欄ごと無い。
-    expect(byId.get('mgr-silent')).not.toHaveProperty('managerProvider');
-    expect(byId.get('mgr-unplaced')).not.toHaveProperty('managerProvider');
-
-    const detail = (await (await app.request('/managers/mgr-codex')).json()) as {
-      manager: { managerProvider?: string };
-    };
-    expect(detail.manager.managerProvider).toBe('codex');
-    const silent = (await (await app.request('/managers/mgr-silent')).json()) as {
-      manager: object;
-    };
-    expect(silent.manager).not.toHaveProperty('managerProvider');
-  });
-
-  it('指名された provider は、runner の既定ではなく委譲ごとの値が一覧と詳細へ載る（#486 S7）', async () => {
+  it('一覧と詳細に managerProvider を載せない（層は常に Claude。2026-10-07 の決定）', async () => {
     fake.managerList.push({
-      managerId: 'mgr-named',
+      managerId: 'mgr-plain',
       status: 'running',
       live: true,
       cwd: '/work/project',
@@ -3966,19 +3923,18 @@ describe('HTTP API', () => {
       startedAt: '2026-01-01T00:00:00.000Z',
       updatedAt: '2026-01-01T00:01:00.000Z',
       waiting: [],
-      runnerId: 'r-claude',
-      managerProvider: 'codex',
+      runnerId: 'r-a',
     });
-    fake.runnerManagerProviders.set('r-claude', 'claude');
-
     const list = (await (await app.request('/managers')).json()) as {
-      managers: { managerId: string; managerProvider?: string }[];
+      managers: { managerId: string }[];
     };
-    expect(list.managers.find((m) => m.managerId === 'mgr-named')?.managerProvider).toBe('codex');
-    const detail = (await (await app.request('/managers/mgr-named')).json()) as {
-      manager: { managerProvider?: string };
+    expect(list.managers.find((m) => m.managerId === 'mgr-plain')).not.toHaveProperty(
+      'managerProvider',
+    );
+    const detail = (await (await app.request('/managers/mgr-plain')).json()) as {
+      manager: object;
     };
-    expect(detail.manager.managerProvider).toBe('codex');
+    expect(detail.manager).not.toHaveProperty('managerProvider');
   });
 
   it('拒否件数が、状態を置き換えずに一覧と詳細へ載る', async () => {
@@ -4799,6 +4755,117 @@ describe('HTTP API', () => {
 
     expect(response.status).toBe(409);
     expect((await stores.schedules.list()).entries).toEqual([]);
+  });
+
+  /**
+   * Issue #3821。`ifMatch`（読んだ時の `updatedAt`）で、読んだ後に変わった予定を黙って上書きしない。
+   * 記憶・やり方の `ifMatch` と同じ形（409 の本文は `{ error, current }`）。
+   */
+  describe('POST /schedule の ifMatch（Issue #3821）', () => {
+    const spec = { type: 'daily', at: '09:00' } as const;
+    const base = {
+      kind: 'issue-round',
+      spec,
+      request: '最初',
+      createdAt: '2026-08-12T00:00:00.000Z',
+      updatedAt: '2026-08-12T00:00:00.000Z',
+    };
+
+    it('版が合えば書ける。省略は従来どおり後勝ち', async () => {
+      await stores.schedules.put(base);
+      const ok = await app.request(
+        '/schedule',
+        json({ kind: 'issue-round', request: '版つき', spec, ifMatch: base.updatedAt }),
+      );
+      expect(ok.status).toBe(200);
+      expect((await stores.schedules.get('issue-round'))?.request).toBe('版つき');
+
+      const lastWins = await app.request(
+        '/schedule',
+        json({ kind: 'issue-round', request: '後勝ち', spec }),
+      );
+      expect(lastWins.status).toBe(200);
+      expect((await stores.schedules.get('issue-round'))?.request).toBe('後勝ち');
+    });
+
+    it('版が古ければ 409 で書かれず、current にいまの依頼が載る。予定の名前の 409 とは current で見分ける', async () => {
+      await stores.schedules.put(base);
+      // 読んだ後に別の書き手（クローンの道具など）が直した
+      await stores.schedules.editRequest(
+        'issue-round',
+        { request: '別の書き手', spec },
+        '2026-08-13T00:00:00.000Z',
+      );
+      const response = await app.request(
+        '/schedule',
+        json({ kind: 'issue-round', request: '古い版から', spec, ifMatch: base.updatedAt }),
+      );
+      expect(response.status).toBe(409);
+      const body = (await response.json()) as { error: string; current: unknown };
+      expect(body.current).toMatchObject({
+        kind: 'issue-round',
+        request: '別の書き手',
+        updatedAt: '2026-08-13T00:00:00.000Z',
+      });
+      expect((await stores.schedules.get('issue-round'))?.request).toBe('別の書き手');
+
+      const reserved = await app.request(
+        '/schedule',
+        json({ kind: 'daily_report', request: 'x', spec }),
+      );
+      expect(reserved.status).toBe(409);
+      expect(await reserved.json()).toEqual({ error: 'reserved kind' });
+
+      // 書いていないので、打ち消しの日誌が残る
+      const decisions = (await stores.journal.list({ types: ['decision'] })).flatMap((entry) =>
+        entry.type === 'decision' ? [entry.decision] : [],
+      );
+      expect(decisions.some((d) => d.includes('読んだ後に変わっていた'))).toBe(true);
+    });
+
+    it('発火（claimRun）を挟んでも版は変わらず、読んだ版で書ける', async () => {
+      await stores.schedules.put(base);
+      await stores.schedules.claimRun(
+        'issue-round',
+        base.updatedAt,
+        '2026-08-13T00:00:00.000Z',
+        'schedule',
+      );
+      const response = await app.request(
+        '/schedule',
+        json({ kind: 'issue-round', request: '発火の後', spec, ifMatch: base.updatedAt }),
+      );
+      expect(response.status).toBe(200);
+      expect(await stores.schedules.get('issue-round')).toMatchObject({
+        request: '発火の後',
+        pendingRun: { at: '2026-08-13T00:00:00.000Z', cause: 'schedule' },
+      });
+    });
+
+    it('ifMatch: null は無いときだけ作れる。在れば 409、読んだ後に消えていれば current は null', async () => {
+      const created = await app.request(
+        '/schedule',
+        json({ kind: 'issue-round', request: '新規', spec, ifMatch: null }),
+      );
+      expect(created.status).toBe(200);
+      const again = await app.request(
+        '/schedule',
+        json({ kind: 'issue-round', request: '二重', spec, ifMatch: null }),
+      );
+      expect(again.status).toBe(409);
+      expect(((await again.json()) as { current: { request: string } }).current.request).toBe(
+        '新規',
+      );
+      expect((await stores.schedules.get('issue-round'))?.request).toBe('新規');
+
+      const gone = await app.request(
+        '/schedule',
+        json({ kind: 'never-existed', request: 'x', spec, ifMatch: '2026-08-12T00:00:00.000Z' }),
+      );
+      expect(gone.status).toBe(409);
+      expect(await gone.json()).toMatchObject({ current: null });
+      expect(await stores.schedules.get('never-existed')).toBeNull();
+    });
   });
 
   it('継続中の依頼を外せる。無いものは 404', async () => {
@@ -12422,24 +12489,7 @@ describe('runner の生死', () => {
     await registry.stop();
   });
 
-  it('GET /runners は、デーモン全体で1つのクローン層の provider を載せる（runner が0台でも）', async () => {
-    const fake = fakeClone();
-    const stores = createMemoryStores();
-    const withProvider = createApp({
-      clone: fake.clone,
-      stores,
-      token: 'test-token',
-      shutdown: () => undefined,
-      runners: createRunnerRegistry([]),
-      cloneProvider: 'claude',
-    });
-    const body = (await (await withProvider.request('/runners')).json()) as {
-      cloneProvider?: string;
-    };
-    expect(body.cloneProvider).toBe('claude');
-  });
-
-  it('GET /runners は、provider が配線されていなければ欄を載せない（claude と推測しない）', async () => {
+  it('GET /runners はクローン層の provider を載せない（層は常に Claude。2026-10-07 の決定）', async () => {
     const fake = fakeClone();
     const without = createApp({
       clone: fake.clone,

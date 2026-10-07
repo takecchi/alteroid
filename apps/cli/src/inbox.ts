@@ -13,46 +13,6 @@ import { describeAuthFailure, resolveTarget, type Target } from './target.js';
 import { redactError } from './redact.js';
 import { shellQuote } from './shell-quote.js';
 
-/**
- * `alteroid inbox remove` — 受信箱（`inbox_events`。まだ処理し終えていない
- * 合図の器）の未読を、絞り込んでまとめて畳む（消す）。**内訳を読むだけなら
- * `alteroid inbox show`**（下の `inboxShowCommand`。issue #783 段0）——
- * こちらは書き込み系（消す）で、事情が異なるので doc も分けてある。
- *
- * issue #972: 同じ失敗の写しが数千件積もると、クローン側は既存の単発 `remove()`
- * の1ターン1件のペースでしか排出できず、排出そのものが文脈窓を食い潰す。唯一の
- * 既存の一括手段は `POST /reset`（記憶ごと全部消す）で、それでは使えない
- * （#972 本文）。`POST /inbox/remove`（PR #1007。人間の入口、絞り込みで一括して
- * 畳む）は HTTP にしか出ておらず、人間の対話面（CLI・Web UI）からは叩けなかった
- * ——ここはその CLI 側を埋める（#972 提案4「人間の入口（CLI / HTTP / Web UI）
- * から叩けること」）。
- *
- * ⛔ **クローン自身の道具ではない。** クローンの道具 `inbox_remove_many`
- * （`packages/core/src/tools.ts`。#1013）とは別の入口で、こちらは人間が直接
- * 打つ。#972 本文が「クローン自身の道具にするかは別途の判断」と保留していた
- * 経緯（#972 コメント参照）はこの CLI コマンドには関係が無い——サーバ側の
- * `POST /inbox/remove` は最初から人間の入口として作られている。
- *
- * **既定は試算（dryRun）。1件も消さない。** `--execute` を付けたときだけ実際に
- * 消す（`resetCommand` の `--yes` と似た形だが、逆向き——`reset` は既定で確認を
- * 挟み `--yes` で飛ばす。ここは既定で何も起こさず `--execute` で初めて起こす。
- * 理由は絞り込みの間違いが「消しすぎ」を作りうるため、まず件数を見せる）。
- *
- * **`types` は必須で、`commitment_close_many` / `POST /inbox/remove` と同じく
- * 「在る7種類を全部並べた呼びは断る」——サーバ側（`app.ts`）が判定するので
- * ここでは複製しない。同じ理由でエラー文言もサーバのものをそのまま出す。**
- *
- * **失敗は例外で上へ通す（＝終了コードが 0 でなくなる）。** 消す操作なので、
- * 「消えたのか消えなかったのか」を終了コードから読めない形にしない（本体の
- * `post(target, body)` を呼ぶ箇所の注釈に理由の全文が在る）。
- *
- * **サーバが 7 種類のうちどれを受けるかは、クローンの道具とは別である。**
- * `inbox_remove_many`（`packages/core/src/tools.ts`）は人間起点の合図
- * （`human_message` / `human_answer`）を構造的に除くが、**それは道具側の
- * 線引きであって、この HTTP の口の線引きではない**（逐語は
- * `grep -Fn -- 'この HTTP の口は' apps/daemon/src/openapi.ts`）。人間の入口
- * である CLI / Web UI は 7 種類とも渡せる。
- */
 export interface InboxRemoveOptions {
   types: string;
   sources?: string;
@@ -74,8 +34,7 @@ interface InboxRemoveManyResult {
 
 export async function inboxRemoveCommand(options: InboxRemoveOptions): Promise<void> {
   const target = await resolveTarget();
-  // 未ログインの note も例外にする（#2456、クローン teto の判断 2026-09-30）。
-  // 何もせず 0 で返すと「消した」と誤読される。読み取り系（`inboxShowCommand`）は今のまま。
+  // 未ログインで何もせず 0 で返さない: 「消した」と誤読されるため
   if (target.note !== null) throw new Error(target.note);
 
   const types = splitList(options.types);
@@ -98,8 +57,7 @@ export async function inboxRemoveCommand(options: InboxRemoveOptions): Promise<v
     }
   }
 
-  // 既定は試算（`dryRun !== false` をサーバ側が試算と読む——`--execute` を
-  // 付けたときだけ `false` を送る）。
+  // `--execute` を付けたときだけ `false` を送る: サーバ側は `dryRun !== false` を試算と読むため
   const dryRun = options.execute !== true;
 
   const body: Record<string, unknown> = { types, reason: options.reason, dryRun };
@@ -107,18 +65,7 @@ export async function inboxRemoveCommand(options: InboxRemoveOptions): Promise<v
   if (options.before !== undefined) body.before = options.before;
   if (limit !== undefined) body.limit = limit;
 
-  // **失敗を握り潰さない——例外はそのまま上（`index.ts` の
-  // `program.parseAsync(...).catch(...)`）へ通す。** そこで stderr へ出て
-  // `process.exit(1)` になる。ここで `catch` して stdout へ書いて正常 return
-  // すると、400（絞り込みの間違い）でも 401/403（認証・許可）でも 5xx でも、
-  // そもそも繋がらなかったときでさえ**終了コードが 0** になり、スクリプトや
-  // cron から失敗を検知できない。**消す操作なので、「消えたのか消えなかった
-  // のか」が終了コードから読めない形にしない。**
-  // 既存の変更系（`reset.ts` / `access.ts` / `token.ts`）は全部この形である
-  // （逐語は `grep -Fn -- 'if (described !== null) throw new Error(described);' apps/cli/src/reset.ts`）。
-  // 読み取り専用の `dropped.ts` だけは HTTP の失敗を stdout へ書いて return
-  // するが、あちらも「繋がらない」は同じく上へ通す（逐語は
-  // `grep -Fn -- '繋がらない（ネットワークそのものの失敗）はここで握り潰さない。' apps/cli/src/dropped.ts`）。
+  // 失敗を握り潰さない: stdout へ書いて正常 return すると終了コードが 0 になり、「消えたのか消えなかったのか」を読めないため
   const result = await post(target, body);
   report(result, dryRun, options);
 }
@@ -139,10 +86,7 @@ async function post(target: Target, body: Record<string, unknown>): Promise<Inbo
 
   if (!response.ok) {
     if (response.status === 400) {
-      // **サーバの断り文言をそのまま出す**（`/archive remove` の 409 と同じ
-      // 約束——「絞り込みが無いのと同じ呼び」「before が読めない」「limit が
-      // 上限超え」の3種を CLI 側で言い換えると、サーバ側の文言が変わったとき
-      // ここだけ古いままになる）。
+      // サーバの断り文言を言い換えない: サーバ側の文言が変わったときここだけ古いままになるため
       const errorBody = (await response.json().catch(() => ({}))) as { error?: string };
       throw new Error(
         errorBody.error === undefined
@@ -176,7 +120,6 @@ function report(result: InboxRemoveManyResult, dryRun: boolean, options: InboxRe
   for (const id of result.removedIds) stdout.write(`  ${id}\n`);
 }
 
-/** 試算の結果に添える、そのまま打てる次の一手（`--execute` 付き）。 */
 function describeExecuteCommand(options: InboxRemoveOptions): string {
   const parts = [
     'alteroid inbox remove',
@@ -190,36 +133,6 @@ function describeExecuteCommand(options: InboxRemoveOptions): string {
   return parts.join(' ');
 }
 
-/**
- * `alteroid inbox show` — 受信箱の滞留の**内訳**を読む（issue #783 段0の
- * 最後の欠落）。
- *
- * `summarizeInboxBacklog` の集計は、これまでクローンの道具 `manager_list`
- * の中にしか出ていなかった。人間の入口はここまで `alteroid inbox remove`
- * （`POST /inbox/remove`。畳む＝消す）しか持たず、内訳を*読む*口が無かった
- * ——人間が内訳を知りたければ、クローンのターンを1本使わせて `manager_list`
- * を呼ばせるほかなかった（#783 本文 1-1 の表）。
- *
- * **読み取り専用。** `GET /inbox`（`apps/daemon/src/app.ts`）を叩くだけで、
- * 何も変更しない——`claimPending()` ではなく `peekPending()` を使うので、
- * 叩いても `deliveries`（器の入れ替え回数）は1つも進まない（`GET /inbox` の
- * doc）。
- *
- * **文言はクローンの道具と共有する。** `describeInboxBacklogBreakdown` /
- * `describeHumanOriginatedInboxAlert`（`@alteroid/core`）は `manager_list`
- * が読むのと同じ関数——ここで書き直さない。口ごとに違う言葉で同じ状態が出ると、
- * 読む側は別の状態だと読む（`apps/cli/src/dropped.ts` の doc「文言は core に
- * 任せ、ここで作り直さない」と同じ判断）。**HTTP と CLI が違う数・違う文言を
- * 返すことは無い**——集計は `apps/daemon/src/app.ts` の `GET /inbox` ハンドラで
- * 1回しか行われず、CLI はその JSON をそのまま描くだけである。
- *
- * **HTTP のエラーは例外で上へ通す**（`usage.ts` と同じ。#3446）。stdout へ書いて正常終了すると、
- * cron やスクリプトからは成功に見える。未ログイン（`target.note`）の読み取りだけは、
- * #2456 の決定どおり note を出して正常終了のままである。
- * **繋がらない（ネットワークそのものの失敗）はここで握り潰さない**——それは
- * 上と同じ理由で例外のまま上（`index.ts` の
- * `program.parseAsync(...).catch(...)`）へ通す。
- */
 export async function inboxShowCommand(): Promise<void> {
   const target = await resolveTarget();
   if (target.note !== null) {
@@ -229,7 +142,7 @@ export async function inboxShowCommand(): Promise<void> {
   const client = createClient(target.baseUrl, target.headers);
   const response = await client.inbox.$get();
   if (!response.ok) {
-    // 失敗は例外で上へ通す（＝終了コードが 0 でなくなる。#3446）。
+    // 失敗を stdout へ書いて正常終了しない: cron やスクリプトからは成功に見えるため
     const described = describeAuthFailure(response.status, target);
     if (described !== null) throw new Error(described);
     throw new Error(
@@ -240,23 +153,8 @@ export async function inboxShowCommand(): Promise<void> {
   stdout.write(`${renderInboxBacklog(breakdown)}\n`);
 }
 
-/**
- * 内訳を、人間が読める形へ。
- *
- * **0件は「クローンの受信箱に未処理の合図は無い。」——`tools.ts` の
- * `describeInboxBacklog` の0件文言とそろえてある**（同じ状態には同じ言葉を
- * 使う。上の doc と同じ理由）。
- *
- * **人間起点（`human_message` / `human_answer`）の滞留は、内訳より前に
- * 単独の行で出す。** `describeHumanOriginatedInboxAlert` が0件なら空文字列を
- * 返すので、そのときは1文字も増えない（`tools.ts` の `describeInboxBacklog`
- * と同じ並び——issue #917 が「大きい数字に埋もれて読み飛ばした」と名指しした
- * 症状を、この CLI でも再現しないため）。
- */
 export function renderInboxBacklog(breakdown: InboxBacklogBreakdown): string {
   if (breakdown.total === 0) {
-    // issue #2344: 「無い」は、読めた行も読めない行も0件のときにしか言わない。
-    // `unreadable` は1件でも在るときだけ鍵が載る（`GET /inbox`）。
     return (
       describeNoReadableInboxEvents(breakdown.unreadable ?? []) ??
       'クローンの受信箱に未処理の合図は無い。'

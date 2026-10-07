@@ -15,15 +15,6 @@ import { makeTempDirSync } from '../../../vitest.tmpdir.js';
 
 import { createApp } from './app.js';
 
-/**
- * issue #2429。`PUT /profile` の 400 の `detail` は、シェルの stderr の末尾
- * （構文エラーは入力の行を引用し、`set -x` は値ごと吐く）を載せていた。
- * プロファイルは `GH_TOKEN` などの鍵を含むので、値が応答に出た。
- *
- * 偽の値だけを使う。実物の /bin/sh を通す形（`createProfileApplier`）と、
- * 出口の伏せ字だけを確かめる偽の器の形の両方を置く。
- */
-
 const FAKE_VALUE = 'FAKE_SECRET_VALUE_2429';
 
 function fakeCloneHost(stores: Stores): CloneHost {
@@ -64,7 +55,6 @@ async function putProfile(app: ReturnType<typeof createApp>, script: string) {
   });
 }
 
-/** 評価の結果として、決まった error / output を返す偽の器（出口の伏せ字だけを見る）。 */
 function rejectingApplier(failure: { error: string; output: string }): ProfileApplier {
   return {
     vessel: {} as never,
@@ -140,7 +130,6 @@ describe('PUT /profile の失敗の detail は、シェルの stderr の鍵の�
         stores,
         rejectingApplier({
           error: 'プロファイルの評価が失敗した（終了コード 3）',
-          // bash の構文エラーの形（入力の行を引用する）＋名前の形に合わない行
           output:
             `profile.sh: line 7: syntax error near unexpected token \`)'\n` +
             `profile.sh: line 7: \`export GH_TOKEN=${FAKE_VALUE} )'\n` +
@@ -162,7 +151,6 @@ describe('PUT /profile の失敗の detail は、シェルの stderr の鍵の�
 
   it('出口: 長い stderr は切られ、切り口をまたぐ値の断片も残らない', async () => {
     vi.stubEnv('DEPLOY_API_TOKEN', FAKE_VALUE);
-    // 値の中ほどが末尾4000字の切り口に当たる位置に置く（先に切ると断片が残る）。
     const output = `${'x'.repeat(10)} ${FAKE_VALUE} ${'y'.repeat(3_987)}`;
     const response = await putProfile(
       appWith(stores, rejectingApplier({ error: '失敗', output })),
@@ -174,7 +162,6 @@ describe('PUT /profile の失敗の detail は、シェルの stderr の鍵の�
     expect(body.detail).not.toContain(FAKE_VALUE);
     expect(body.detail).not.toContain('_2429');
     expect(body.detail).not.toContain('FAKE_SECRET');
-    // error（短い）＋改行＋切られた output。素の長さ（4000 超）は載らない
     expect(body.detail.length).toBeLessThan(4_100);
     expect(body.detail.startsWith('失敗\n')).toBe(true);
   });

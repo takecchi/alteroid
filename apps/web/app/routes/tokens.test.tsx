@@ -1,13 +1,4 @@
 // @vitest-environment jsdom
-/**
- * `/tokens` — 認証トークンのトークン一覧・追加・削除・無効化/有効化・切り替えの設定・
- * 切り替えの履歴を見る画面（2026-09-14 から読み取り専用ではない）。
- *
- * ここで固定したいのは「値は追加フォーム以外へ出さない」「4状態を潰さない」
- * 「不明と、そもそも無いを混ぜない」「休止は原文と絶対時刻の両方を出す」
- * 「403 に専用の文言がある」「追加・削除・無効化/有効化は既存の一覧を土台に
- * `PUT /tokens` を全置換で呼ぶ」の各点。文言の細部より、この規律が壊れていないかを見る。
- */
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -32,27 +23,10 @@ afterEach(() => {
 
 const DEFAULT_SETTINGS = { rotateOn: 'free_exhausted', cooldownMs: 18_000_000 };
 
-/**
- * `/tokens` と `/journal` の両方をまとめて配る。
- *
- * この画面は2つの経路（`GET /tokens` / `GET /journal?type=token_rotation`）を
- * 同時に叩くので、どちらも知らないと `stubFetch` が「知らない URL」として
- * reject してしまう。
- */
 function stubScreen(options: {
   tokens?: unknown[];
   settings?: unknown;
-  /**
-   * issue #2095。渡すと応答から `settings` を省き、代わりにこれを積む——
-   * `GET /tokens` が切り替える条件・休止の設定を読めなかったときと同じ形
-   * （`settings` を省いて `settingsUnreadable: { reason }` を返す。既定値では
-   * 埋めない）。
-   */
   settingsUnreadable?: { reason: string };
-  /**
-   * issue #2346。渡すと応答へ `rowsUnreadable` を足す（`GET /tokens` がプールの行を読めな
-   * かったときと同じ形。渡さなければ鍵ごと無い）。`settings` の軸とは独立。
-   */
   rowsUnreadable?: {
     count: number;
     rows: { id?: string; label?: string; reason: string }[];
@@ -87,15 +61,6 @@ async function waitForPoolLoaded(): Promise<void> {
   await screen.findByRole('heading', { name: 'トークン一覧' });
 }
 
-/**
- * **Router で包む（issue #2109）。** `Tokens`（`PoolAndSettings`）は使用量の
- * 画面から飛んできた行き先の id を `useSearchParams` で読むので、Router
- * 無しでは描けなくなった。形は `usage.test.tsx` の `renderUsage` と同じ
- * `createMemoryRouter` + `RouterProvider`。
- *
- * **`router` を返すのは、飛び先の id を URL 経由で渡すテストのためである**
- * （`initialEntries` に `/tokens?tokenId=<id>` を渡す）。
- */
 function renderTokens(initialEntries: string[] = ['/']) {
   const router = createMemoryRouter([{ path: '/', Component: Tokens }], {
     initialEntries,
@@ -116,23 +81,11 @@ interface StubTokenRow {
   disabledAt?: string;
 }
 
-/**
- * **状態を持つ** `/tokens` の stub（追加・削除・無効化/有効化を検証するため）。
- *
- * `useAddToken` / `useRemoveToken` / `useSetTokenDisabled`（`hooks/mutations.ts`）は
- * どれも「`GET /tokens` を取り直す → 加工 → `PUT /tokens`（全置換）」の形なので、
- * PUT を受けたらその場で一覧を書き換え、以降の GET（再検証も含む）がその状態を
- * 返すようにする——1回きりの応答では「置いたのに一覧に反映されない」を見逃す。
- *
- * **共有の `stubFetch` は使えない。** あちらが route へ渡すのは URL と `init` だけ
- * だが、`openapi-fetch` は `fetch(new Request(...))` の形で呼ぶので `init` が
- * `undefined` になり、method も本文も落ちる（`schedule.test.tsx` の同じ断り書きと
- * 同じ理由）。ここでは `globalThis.fetch` を自分で差し替える。
- */
+// PUT を受けたらその場で一覧を書き換える: 1回きりの応答では「置いたのに一覧に反映されない」を見逃すため
+// 共有の stubFetch を使わない: openapi-fetch は fetch(new Request(...)) の形で呼ぶので init が undefined になり、method も本文も落ちるため
 function stubCrudScreen(
   initial: StubTokenRow[],
   options: {
-    /** issue #2396。`PUT /tokens` が、保存はしたが読み直しに失敗した応答（200 + `viewUnavailable`）を返す。 */
     putViewUnavailable?: boolean;
   } = {},
 ) {
@@ -183,7 +136,6 @@ function stubCrudScreen(
         };
       });
       if (options.putViewUnavailable === true) {
-        // 保存（rows の更新）は済んでいる。応答にはプールの欄（`tokens` など）が無い。
         return json({ viewUnavailable: { reason: '保存した。保存後のプールを読み直せなかった' } });
       }
       return json({ tokens: rows, settings: DEFAULT_SETTINGS });
@@ -191,7 +143,6 @@ function stubCrudScreen(
     return json({ tokens: rows, settings: DEFAULT_SETTINGS });
   }) as typeof fetch;
 
-  /** 別のタブや CLI が先に1本消した状態を作る（画面はまだ古い一覧を持っている）。 */
   const dropRow = (id: string) => {
     rows = rows.filter((row) => row.id !== id);
   };
@@ -239,21 +190,16 @@ describe('/tokens 画面 — プールの4状態', () => {
 
     expect(screen.getByText('使用可能')).toBeTruthy();
     expect(screen.getByText('休止中')).toBeTruthy();
-    // 同じ行に「戻す」ボタンがあるので、「戻らない」と言い切らない（#3071）。デーモンは
-    // 無効化を自動では解かない（解くのは `disabled: false` を送る人間の操作だけ）ので、
-    // 「自動では戻らない」と言い、戻し方を添える。
     expect(
       screen.getByText('無効化済み（人間が外した。自動では戻らない。「戻す」で人間が戻す）'),
     ).toBeTruthy();
     expect(screen.getByText('失効（通らないと確定。人間が外すまで戻らない）')).toBeTruthy();
-    // 無効化済みの行は「戻す」を持ち、文面は「戻らない」で言い切らない。
     const disabledRow = screen.getByText('disabled-token').closest('li') as HTMLElement;
     expect(disabledRow.textContent).toContain(
       '人間が明示的に外した。自動では戻らない。「戻す」で人間が戻す',
     );
     expect(within(disabledRow).getByRole('button', { name: 'disabled-token を戻す' })).toBeTruthy();
     expect(disabledRow.textContent).not.toMatch(/外した。戻らない/);
-    // 4状態が4つとも別の label に付いていること（同じトークンに畳まれていない）。
     expect(screen.getByText('ready-token')).toBeTruthy();
     expect(screen.getByText('cooling-token')).toBeTruthy();
     expect(screen.getByText('disabled-token')).toBeTruthy();
@@ -271,8 +217,6 @@ describe('/tokens 画面 — 値を絶対に出さない', () => {
           order: 0,
           sha256: 'a'.repeat(12),
           source: 'stored',
-          // **本来サーバは value を返さない。** それでも「返ってきたら画面が
-          // うっかり描く」形になっていないかを、ここで直接確かめる。
           value: 'sk-ant-oat01-super-secret-value-should-never-render',
         },
       ],
@@ -352,15 +296,7 @@ describe('/tokens 画面 — recovery（回復の見込み）を潰さない', (
   });
 });
 
-/**
- * **送られてくる値が、この画面の知らないものだったとき。**
- *
- * `apps/web` は Vercel、デーモンは Railway で**別に配られる**ので、
- * **サーバのほうが新しい窓が必ず在る。** 実際 `token_rotation` の `event` は
- * 「5値」として書かれていたのに 2026-08-26 に6値目が足された。
- *
- * **⚠️ そこで投げると、1行の未知が一覧を丸ごと消す。**
- */
+// 未知の値で投げない: サーバのほうが新しい窓が必ず在り、投げると1行の未知が一覧を丸ごと消すため
 describe('/tokens 画面 — 知らない値が届いても落ちない', () => {
   it('recovery が知らない値でも、画面は出て、知らないことをそのまま言う', async () => {
     stubScreen({
@@ -378,7 +314,6 @@ describe('/tokens 画面 — 知らない値が届いても落ちない', () => 
           sha256: 'f'.repeat(12),
           lastRejectedAt: '2026-08-25T00:00:00.000Z',
           lastRejectedReason: 'something new',
-          // **この画面が知らない値。** 新しいデーモンが足したもの、という想定。
           recovery: 'a_value_this_bundle_does_not_know',
         },
       ],
@@ -388,10 +323,8 @@ describe('/tokens 画面 — 知らない値が届いても落ちない', () => 
 
     await waitForPoolLoaded();
 
-    // **一覧が消えていない。** 知っている行はそのまま出る。
     expect(screen.getByText('known-token')).toBeTruthy();
     expect(screen.getByText('from-newer-daemon')).toBeTruthy();
-    // **黙って既知のどれかへ寄せない。** 知らないと言う。
     expect(screen.getByText(/未知の回復の見込み/)).toBeTruthy();
     expect(screen.getByText(/a_value_this_bundle_does_not_know/)).toBeTruthy();
   });
@@ -421,9 +354,6 @@ describe('/tokens 画面 — 知らない値が届いても落ちない', () => 
 
 describe('/tokens 画面 — 休止は原文と絶対時刻の両方を出す', () => {
   it('cooldownUntil の絶対時刻と lastRejectedReason の原文が両方出る', async () => {
-    // 実測で報告されている桁の食い違い（休止は5時間なのに理由の原文は
-    // 「weekly limit resets 5pm」）を再現する fixture。相対表現だけでは
-    // この食い違いに気づけないので、絶対時刻が出ることを固定する。
     const cooldownUntil = Date.parse('2026-08-25T05:00:00.000Z');
     stubScreen({
       tokens: [
@@ -446,17 +376,9 @@ describe('/tokens 画面 — 休止は原文と絶対時刻の両方を出す', 
     const expectedAbsolute = formatDateTime(new Date(cooldownUntil).toISOString());
     expect(screen.getByText(new RegExp(expectedAbsolute.replace(/[/:]/g, '\\$&')))).toBeTruthy();
     expect(screen.getByText('weekly limit resets 5pm')).toBeTruthy();
-    // **#683**: この fixture は出所を持っていない（デーモンが返さなかった）。
-    // **黙らない** —— 何も書かないと「確かな値である」と読まれる。
     expect(screen.getByText(/記録が無い（この期限が確かな値かどうかは言えない）/)).toBeTruthy();
   });
 
-  /**
-   * **#683**: 絶対時刻だけでは「本物か推測か」が言えなかった。
-   *
-   * #678 の調査は「文言が 22:10 と言っているのに 01:42 と出ている」を人間が目で
-   * 見つけたところから始まっている —— 行が出所を持てば、その1行で終わる。
-   */
   it('休止の期限の出所を3値で言い分ける（推測のときだけ言う形にしない）', async () => {
     const cooldownUntil = Date.parse('2026-08-25T05:00:00.000Z');
     const cases = [
@@ -494,15 +416,9 @@ describe('/tokens 画面 — 空のプール', () => {
     renderTokens();
 
     expect(await screen.findByText(/登録された認証トークンがまだ1件も無い/)).toBeTruthy();
-    // 対照（issue #2346）: 読めない行が無いので、その断りは出ない。
     expect(screen.queryByText(/読めないトークンの行/)).toBeNull();
   });
 
-  /**
-   * issue #2346（`settingsUnreadable` の行版）。`GET /tokens` が `rowsUnreadable` を返す
-   * とき、読めた行が0件でも「登録された認証トークンがまだ1件も無い」「正常」と言わない。
-   * 値は出ない（応答に混ぜても画面のどこにも出ない）。
-   */
   it('読めない行が在るとき、「まだ1件も無い」と言わず、件数と id・ラベルを断る。値は出ない（#2346）', async () => {
     stubScreen({
       tokens: [],
@@ -534,14 +450,9 @@ describe('/tokens 画面 — 空のプール', () => {
     expect(await screen.findByText(/読めないトークンの行が 1 件ある/)).toBeTruthy();
     expect(screen.getByText(/id もラベルも取れない/)).toBeTruthy();
     expect(screen.getByText('first')).toBeTruthy();
-    // 設定は読めているので、設定の直し方のカードは出ない。
     expect(screen.queryByText(/切り替えの設定は読めない/)).toBeNull();
   });
 
-  /**
-   * issue #2354。書き換えは読めない行を「持ち越す」。断りは「捨てる」と言わず、消す口
-   * （id を指すボタン）を案内する。id が取れない行にはボタンが無い。
-   */
   it('断りは「持ち越す」と言い、「一緒に捨てる」と言わない。id のある行にだけ消すボタンが出る（#2354）', async () => {
     stubScreen({
       tokens: [],
@@ -560,7 +471,6 @@ describe('/tokens 画面 — 空のプール', () => {
     expect(screen.queryByText(/一緒に捨てる/)).toBeNull();
     expect(screen.getByText(/番号が取れない行は、ここでは消せない/)).toBeTruthy();
     expect(screen.getAllByRole('button', { name: / の行を消す$/ })).toHaveLength(1);
-    // どの行のボタンかが名前で分かる（#3213）。
     expect(screen.getByRole('button', { name: 'tok-bad の行を消す' })).toBeTruthy();
   });
 
@@ -597,7 +507,6 @@ describe('/tokens 画面 — 空のプール', () => {
     renderTokens();
 
     fireEvent.click(await screen.findByRole('button', { name: / の行を消す$/ }));
-    // 確認を経て初めて消す（#3067。確認のボタンは「消す」）。押しただけでは POST しない。
     const dialog = await screen.findByRole('alertdialog');
     expect(dialog.textContent).toContain('元に戻せません');
     expect(posts).toEqual([]);
@@ -612,7 +521,6 @@ describe('/tokens 画面 — 空のプール', () => {
     await waitFor(() => {
       expect(posts).toEqual([{ ids: ['tok-bad'] }]);
     });
-    // 消したあとの再取得で、読めない行の断りが消え、「まだ1件も無い」側へ戻る。
     await waitFor(() => {
       expect(screen.queryByText(/読めないトークンの行が/)).toBeNull();
     });
@@ -654,7 +562,6 @@ describe('/tokens 画面 — 空のプール', () => {
     renderTokens();
 
     fireEvent.click(await screen.findByRole('button', { name: / の行を消す$/ }));
-    // 確認を経て初めて消す（#3067。確認のボタンは「消す」）。
     fireEvent.click(
       within(await screen.findByRole('alertdialog')).getByRole('button', { name: '消す' }),
     );
@@ -680,8 +587,6 @@ describe('/tokens 画面 — 403', () => {
   });
 
   it('一覧が読めたあとの再取得だけが 403 でも、一覧は残し、上に注記を出す', async () => {
-    // 初回は読めて、フォーカス復帰の再取得だけが 403 になる。SWR は `data` を保つので、
-    // 説明カードに置き換えて読めていた一覧を消さない。
     let forbidden = false;
     stubFetch((url) => {
       if (url.includes('/tokens')) {
@@ -764,14 +669,12 @@ describe('/tokens 画面 — 追加・削除・無効化/有効化（2026-09-14�
     fireEvent.click(screen.getByRole('button', { name: '追加' }));
 
     expect(await screen.findByText('new-token')).toBeTruthy();
-    // 既存行はそのまま（label/order だけを土台にし、値は送り直さない）。
     expect(puts).toEqual([
       [
         { id: 't-existing', label: 'existing-token', order: 0 },
         { label: 'new-token', value: 'sk-ant-oat01-new-secret' },
       ],
     ]);
-    // 送った値はどこにも出ない（送信後に state から消える）。
     expect(document.body.textContent).not.toContain('sk-ant-oat01-new-secret');
   });
 
@@ -790,7 +693,6 @@ describe('/tokens 画面 — 追加・削除・無効化/有効化（2026-09-14�
     fireEvent.change(valueInput, { target: { value: 'sk-ant-oat01-new-secret' } });
     fireEvent.click(screen.getByRole('button', { name: '追加' }));
 
-    // 応答に一覧は無いが、再取得で保存後の姿（新しい行）が出る。
     expect(await screen.findByText('new-token')).toBeTruthy();
     expect(puts).toHaveLength(1);
     expect((labelInput as HTMLInputElement).value).toBe('');
@@ -811,7 +713,6 @@ describe('/tokens 画面 — 追加・削除・無効化/有効化（2026-09-14�
 
     const rows = screen.getAllByText('削除');
     fireEvent.click(rows[0]!);
-    // 確認を経て初めて消す（#3067。期待値は弱めていない）。
     fireEvent.click(
       within(await screen.findByRole('alertdialog')).getByRole('button', { name: '削除する' }),
     );
@@ -831,7 +732,6 @@ describe('/tokens 画面 — 追加・削除・無効化/有効化（2026-09-14�
 
     fireEvent.click(screen.getByText('削除'));
     const dialog = await screen.findByRole('alertdialog');
-    // 事実どおり: 戻せない・値は画面に出ていないので入れ直しには元の出力が要る。
     expect(dialog.textContent).toContain('元に戻せません');
     expect(dialog.textContent).toContain('claude setup-token の出力がもう一度要ります');
     expect(puts).toHaveLength(0);
@@ -942,20 +842,12 @@ describe('/tokens 画面 — 追加・削除・無効化/有効化（2026-09-14�
     expect(enable.textContent).toBe('戻す');
     expect(screen.getByRole('button', { name: 'token-a を削除' }).textContent).toBe('削除');
     expect(screen.getByRole('button', { name: 'token-b を削除' }).textContent).toBe('削除');
-    // 名前だけでは行を特定できない状態（同じ名前のボタンが並ぶ）には戻っていない。
     expect(screen.queryByRole('button', { name: '無効化する' })).toBeNull();
   });
 });
 
-/**
- * **状態を持つ** `/tokens` + `/tokens/policy` の stub（Issue #1123 の書き込みを
- * 検証するため）。`stubCrudScreen` と同じ理由（`openapi-fetch` が `fetch(new
- * Request(...))` の形で呼ぶので、共有の `stubFetch` では method / 本文が
- * 落ちる）で `globalThis.fetch` を自分で差し替える。
- *
- * **`/tokens/policy` を先に判定する** —— `'/tokens/policy'.includes('/tokens')`
- * が真なので、判定の順序を逆にすると素の `/tokens` 分岐に食われる。
- */
+// 共有の stubFetch を使わない: openapi-fetch は fetch(new Request(...)) の形で呼ぶので method / 本文が落ちるため
+// /tokens/policy を先に判定する: '/tokens/policy'.includes('/tokens') が真で、順序を逆にすると素の /tokens 分岐に食われるため
 function stubPolicyScreen(initial: { rotateOn: string; cooldownMs: number } = DEFAULT_SETTINGS) {
   let settings: { rotateOn: string; cooldownMs: number } = { ...initial };
   const puts: { rotateOn?: string; cooldownMs?: number }[] = [];
@@ -990,7 +882,6 @@ function stubPolicyScreen(initial: { rotateOn: string; cooldownMs: number } = DE
 
   return {
     puts,
-    /** 次の `PUT /tokens/policy` をサーバの 400 として断らせる。 */
     failNextUpdate(status: number, error: string) {
       failNext = { status, error };
     },
@@ -1025,7 +916,6 @@ describe('/tokens 画面 — 切り替えの設定を書き込む（Issue #1123�
     await waitFor(() => {
       expect(puts).toEqual([{ rotateOn: DEFAULT_SETTINGS.rotateOn, cooldownMs: 3_600_000 }]);
     });
-    // 表示（時間換算）にも反映される。
     expect(await screen.findByText(/^1時間/)).toBeTruthy();
   });
 
@@ -1044,10 +934,7 @@ describe('/tokens 画面 — 切り替えの設定を書き込む（Issue #1123�
     expect(screen.getByRole('button', { name: '保存' })).toHaveProperty('disabled', false);
   });
 
-  /**
-   * **受け入れ基準3（Issue #1123）**: 「正の整数」等の判定を画面側で先回りして
-   * 弾かない —— 送って、サーバの 400 の本文をそのまま人間へ見せる。
-   */
+  // 「正の整数」等の判定を画面側で先回りして弾かない: 送って、サーバの 400 の本文をそのまま人間へ見せるため
   it('サーバが 400 で断ったら、握り潰さずサーバの文言をそのまま出す', async () => {
     const { failNextUpdate } = stubPolicyScreen();
     failNextUpdate(400, '設定の入力の形が不正: cooldownMs は正の整数である必要がある');
@@ -1063,20 +950,10 @@ describe('/tokens 画面 — 切り替えの設定を書き込む（Issue #1123�
     expect(
       await screen.findByText(/設定の入力の形が不正: cooldownMs は正の整数である必要がある/),
     ).toBeTruthy();
-    // 断られた値は画面に残る（黙って元に戻さない——人間が直して再送できる）。
     expect(screen.getByLabelText('休止の既定を変える（ミリ秒）')).toHaveProperty('value', '-1');
   });
 });
 
-/**
- * **状態を持つ** `/tokens` の stub（設定が読めない状態からの直し方を検証するため）。
- *
- * `stubPolicyScreen` と同じ形——`PUT /tokens/policy` を受けたら、以降の
- * `GET /tokens` がその値を `settings` として返すようにする（成功したら
- * `settingsUnreadable` の代わりに読める設定へ切り替わることを見るため）。
- * 保存に**失敗**させたいときは `failNextUpdate` で 500 を挟む——読めない現在値の
- * まま据え置かれることを見る。
- */
 function stubUnreadableScreen(
   options: { reason: string; tokens?: unknown[] } = { reason: '理由' },
 ) {
@@ -1103,8 +980,7 @@ function stubUnreadableScreen(
         const { status, error } = failNext;
         return json({ error }, status);
       }
-      // **両方揃ったときだけ通る**（issue #2053 / PR #2075。読めない現在値は
-      // 片方だけの patch では埋められない）——テストの stub でも同じ形にする。
+      // 両方揃ったときだけ通す: 読めない現在値は片方だけの patch では埋められないため
       if (body.rotateOn === undefined || body.cooldownMs === undefined) {
         return json(
           { error: '設定の入力の形が不正: 読めない現在値は両方揃った patch でしか埋められない' },
@@ -1130,20 +1006,12 @@ function stubUnreadableScreen(
 
   return {
     puts,
-    /** 次の `PUT /tokens/policy` をサーバの失敗として断らせる。 */
     failNextUpdate(status: number, error: string) {
       failNext = { status, error };
     },
   };
 }
 
-/**
- * issue #2096（#2095 の表示側）。切り替える条件・休止の設定（`GET /tokens` の
- * `settings`）が壊れて読めないとき、デーモンは `settings` を省いて
- * `settingsUnreadable.reason` を返す。**この画面は理由を出したうえで、両方
- * 選ばせて直す導線を持つ**（片方だけの保存は `PUT /tokens/policy` 側が
- * 500 で断るので、画面側も両方揃うまで保存を押せなくする）。
- */
 describe('/tokens 画面 — 切り替えの設定が読めない（issue #2096）', () => {
   it('reason と「消えたのではない」旨が出て、一覧は道連れにならない。既定値は出ない', async () => {
     const REASON = 'rotateOn が enum の外（テスト用）';
@@ -1157,24 +1025,17 @@ describe('/tokens 画面 — 切り替えの設定が読めない（issue #2096�
     renderTokens();
     await waitForPoolLoaded();
 
-    // 一覧（読めている分）は出ている——道連れになっていない。
     expect(screen.getByText('ready-token')).toBeTruthy();
-    // 理由が出て、「消えたのではなく、読めない形で入っている」ことが伝わる。
     expect(
       await screen.findByText(new RegExp(`切り替えの設定は読めない（消えたのではなく.*${REASON}`)),
     ).toBeTruthy();
-    // 既定値（`free_exhausted` 等）へすり替わっていない——未選択から始まる。
     expect(screen.getByLabelText('切り替える条件を選ぶ')).toHaveProperty('value', '');
     expect(screen.getByLabelText('休止の既定を選ぶ（ミリ秒）')).toHaveProperty('value', '');
-    // 選ぶまで保存は押せない。
     expect(screen.getByRole('button', { name: '保存' })).toHaveProperty('disabled', true);
   });
 
   it('settingsUnreadable も reason も無いとき、理由不明のまま落ちない', async () => {
-    // `stubScreen` は `settings` を既定値で埋めてしまう（省略できない）ので、
-    // ここだけ生の `stubFetch` で「両方とも無い」応答を作る——実際にはこの
-    // 形は起こらないはずだが、`data.settingsUnreadable?.reason` の `??` の
-    // 倒れ先が実行時にも落ちないことを確かめる。
+    // ここだけ生の stubFetch を使う: stubScreen は settings を既定値で埋めてしまい省略できないため
     stubFetch((url) => {
       if (url.includes('/tokens')) return json({ tokens: [] });
       if (url.includes('/journal')) return json({ entries: [] });
@@ -1218,7 +1079,6 @@ describe('/tokens 画面 — 切り替えの設定が読めない（issue #2096�
     });
     fireEvent.click(screen.getByRole('button', { name: '保存' }));
 
-    // 通常の SettingsCard（読み取り表示 + 「切り替える条件を変える」欄）に戻る。
     expect(await screen.findByLabelText('切り替える条件を変える')).toBeTruthy();
     expect(screen.queryByLabelText('切り替える条件を選ぶ')).toBeNull();
     expect(puts).toEqual([{ rotateOn: 'overage_exhausted', cooldownMs: 3_600_000 }]);
@@ -1242,7 +1102,6 @@ describe('/tokens 画面 — 切り替えの設定が読めない（issue #2096�
     expect(
       await screen.findByText(/読めない現在値は両方揃った patch でしか埋められない/),
     ).toBeTruthy();
-    // 通常の設定カードには切り替わっていない（読めないまま）。
     expect(screen.getByLabelText('切り替える条件を選ぶ')).toHaveProperty('value', 'off');
   });
 });
@@ -1263,11 +1122,8 @@ describe('/tokens 画面 — 使用量からの行き先（issue #2109）', () =
     const targetRow = document.getElementById('token-t-b');
     const otherRow = document.getElementById('token-t-a');
     expect(targetRow).not.toBeNull();
-    // **強調は className（`border-primary`）で表現する**——`journal.tsx` の
-    // 選択チップのテストと同じ測り方（issue #2109）。
     expect(targetRow?.className).toContain('border-primary');
     expect(otherRow?.className).not.toContain('border-primary');
-    // 「プールに無い」の注記は出ない——id は実在する。
     expect(screen.queryByText(/はいまの一覧に無い/)).toBeNull();
   });
 
@@ -1279,9 +1135,6 @@ describe('/tokens 画面 — 使用量からの行き先（issue #2109）', () =
       ],
     });
 
-    // **`test-support.tsx` の `Element.prototype.scrollIntoView` は既に
-    // no-op で埋めてある**（jsdom に無い口を埋める共有の足場）。ここではその
-    // 上に spy を重ねて、正しい行の要素で呼ばれたことまで測る。
     const scrollIntoView = vi.spyOn(Element.prototype, 'scrollIntoView');
 
     renderTokens(['/?tokenId=t-b']);
@@ -1302,14 +1155,11 @@ describe('/tokens 画面 — 使用量からの行き先（issue #2109）', () =
     renderTokens(['/?tokenId=t-removed']);
     await waitForPoolLoaded();
 
-    // 事実だけを言う——なぜ無いかは断定しない（「外したか、別の実行環境のもの」）。
     expect(
       await screen.findByText(/はいまの一覧に無い（外したか、別の実行環境のもの）/),
     ).toBeTruthy();
     expect(screen.getByText('t-removed')).toBeTruthy();
-    // 残っている行はそのまま出る——道連れになっていない。
     expect(screen.getByText('row-a')).toBeTruthy();
-    // 実在しない id なので、どの行も強調されない。
     expect(document.getElementById('token-t-a')?.className).not.toContain('border-primary');
   });
 
@@ -1326,11 +1176,6 @@ describe('/tokens 画面 — 使用量からの行き先（issue #2109）', () =
   });
 });
 
-/**
- * 日誌が書けず、サーバが何も保存せずに 500 を返した回（#2886）。
- * 本文は `{ error: "記録（日誌）が書けなかったので、変更していません", code: "journal_write_failed" }`。
- * 保存そのものの失敗は `code` の無い `{ error }`。
- */
 describe('/tokens 画面 — 日誌が書けず保存しなかった 500（#2886）', () => {
   const JOURNAL_MESSAGE = '記録（日誌）が書けなかったので、変更していません';
   const HINT =
@@ -1382,7 +1227,6 @@ describe('/tokens 画面 — 日誌が書けず保存しなかった 500（#2886
     expect(await screen.findByText(JOURNAL_MESSAGE)).toBeTruthy();
     expect(screen.getByText(HINT)).toBeTruthy();
     expect(puts).toHaveLength(1);
-    // 保存していないので、貼り直しを強いない。
     expect(screen.getByLabelText('ラベル（人間が読む名前。秘密ではない）')).toHaveProperty(
       'value',
       'new-token',

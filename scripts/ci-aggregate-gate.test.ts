@@ -11,37 +11,6 @@ import { extractJobNames, extractJobsSection } from './workflow-scan-core.mjs';
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const CI_YML = readFileSync(path.join(ROOT, '.github/workflows/ci.yml'), 'utf8');
 
-/**
- * **`ci` 門 job の歯（#2707）。**
- *
- * `ci` は、検査の job（checks / test。#2966 で static / build-checks / typecheck / lint / mutation-selftest を `checks` 1本にまとめた）を
- * `needs` で束ね、全部が `success` のときだけ success になる門である。required のチェック名は
- * `ci` のまま（`.github/required-status-checks.json`）なので、**この門が緩むと、分けた検査の
- * どれかが落ちても `ci` が緑になる。** 以前は `ci` 1本が全 step を回していたので、step の
- * 失敗＝`ci` の失敗だった。その性質を、分けたあとも保つ。
- *
- * ## 測っているもの
- *
- * 1. `ci` の `needs` が、`ci.yml` の `ci` と `image` 以外の全 job を含む（job を足して
- *    needs に載せ忘れると、その job は落ちても `ci` に響かない）。一覧は導出する。
- * 2. `ci` の `if:` が `always()` を含む（無いと、needs が落ちたとき `ci` は failure ではなく
- *    skipped になる。skipped は green と数えない運用だが、failure の方が確実に止まる）。
- * 3. `ci` の step の実物（`run:` の bash）を、合成した `needs` の JSON で実行する:
- *    全部 success のときだけ exit 0。failure / cancelled / skipped が1つでも混じれば非0、
- *    needs が空でも非0。
- * 4. 元の `ci` が回していた検査（下の `ORIGINAL_GATES`）が、`ci` の needs に載っている
- *    どれかの job の `run:` に在る。**検査を減らして速くする、を許さない歯である。**
- *    build 済みの成果物を読むものは、同じ job で `pnpm build` の後に走ること。
- * 5. `test` は `--shard=<i>/<n>` で分かれ、分母は `strategy.job-total`（matrix の本数）から
- *    取り、matrix は 1..n を欠けなく並べる（全シャードを合わせると全テストになる）。
- *
- * ## この歯が測っていないこと
- *
- * - **GitHub 上で実際に `needs` の result がこの JSON の形で渡ること。** 形は公式 doc に
- *   従って合成した。実際の run は PR 本文の陰性対照（落とした run で `ci` が failure）で見る。
- * - **vitest の `--shard` が漏れなく割り当てること**（vitest 自身の保証に頼っている）。
- */
-
 const jobsSection: string = `\n${extractJobsSection(CI_YML) as string}`;
 const JOB_NAMES: string[] = extractJobNames(jobsSection.slice(1));
 
@@ -61,7 +30,6 @@ function needsOf(name: string): string[] {
     .filter((n) => n.length > 0);
 }
 
-/** `run:` の行（1行形式と `|` のブロック形式の両方）を、順に並べる。コメント行は除く。 */
 function runLines(name: string): string[] {
   const out: string[] = [];
   const lines = jobBlock(name).split('\n');
@@ -87,7 +55,6 @@ function runLines(name: string): string[] {
   return out;
 }
 
-/** 元の `ci` job が回していた検査（`run:` の先頭にこの文字列が在ること）。 */
 const ORIGINAL_GATES: { gate: string; needsBuild: boolean }[] = [
   { gate: 'pnpm check:agents-md-size', needsBuild: false },
   { gate: 'pnpm check:dockerfile-railway', needsBuild: false },
@@ -217,13 +184,8 @@ describe('test のシャード分割', () => {
   });
 });
 
-/**
- * **`checks` job の歯（#2966）。** 5本の job を1本にまとめたあとも、「落ちた検査が1回の run で
- * 全部見える」「落ちた step があれば job は failure」を保つ。
- */
 describe('checks job: 各 step を最後まで走らせ、落ちた検査を全部見せる', () => {
   const block = jobBlock('checks');
-  /** `- ` で始まる step ごとの本文。 */
   const steps = block
     .split(/\n {6}- /)
     .slice(1)

@@ -8,15 +8,6 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { isSecretEnvName, scrubSecretEnv } from './vitest.env-scrub.js';
 
-/**
- * `vitest.env-scrub.ts` の歯。**値はすべて偽物である**（`FAKE-…`）。
- *
- * 単体の歯は名前の規則を測る。統合の歯は、`vitest.setup.ts` が本当にテストの
- * 前に外しているかを、偽の値を環境に入れて起こした入れ子の vitest の中から測る
- * （`vitest.tmpdir.test.ts` の統合の歯と同じ形）。**`vitest.setup.ts` の
- * `scrubSecretEnv(process.env)` の1行を外すと、統合の歯が赤になる。**
- */
-
 const REPO_ROOT = dirname(fileURLToPath(import.meta.url));
 
 const FAKE_SECRETS: Record<string, string> = {
@@ -27,7 +18,6 @@ const FAKE_SECRETS: Record<string, string> = {
   ANTHROPIC_API_KEY: 'FAKE-anthropic-env-scrub',
   SOME_SERVICE_SECRET: 'FAKE-service-secret-env-scrub',
   DB_PASSWORD: 'FAKE-db-password-env-scrub',
-  // 16回目の横断レビューで、最初の規則から漏れていた名前（下の単体の歯の説明を見よ）
   PGPASSWORD: 'FAKE-pgpassword-env-scrub',
   ALTEROID_DATABASE_URL: 'postgres://alteroid:FAKE-pw-env-scrub@db:5432/alteroid',
 };
@@ -47,12 +37,6 @@ describe('isSecretEnvName / scrubSecretEnv（単体）', () => {
     }
   });
 
-  /**
-   * 16回目の横断レビューで、#1815 の最初の規則（末尾一致）から漏れていた名前。
-   * どれも、この repo のコードか設定が実際に資格として扱っている（`WITHHELD_ENV_KEYS`、
-   * `manager.test.ts` の「記憶ストアの接続情報を子プロセスへ渡さない」、`ci.yml` の
-   * `PGPASSWORD`）。
-   */
   it('語の後ろに何かが付いた名前・区切りの無い名前・接続文字列も外す（#1815 の漏れ）', () => {
     for (const name of [
       'ALTEROID_DATABASE_URL',
@@ -79,14 +63,7 @@ describe('isSecretEnvName / scrubSecretEnv（単体）', () => {
     }
   });
 
-  /**
-   * 動的 import（変換と読み込み）は、突き合わせ本体（8 個の名前の判定、実測 0.1ms 未満）と
-   * 違って器の混雑で伸びるので、歯の本体（既定 5000ms）でなく hook の寿命で払わせる（#2533）。
-   * 実測（2026-10-02、loadavg 約 16 の器）: runner.ts 約 1.5s + auth.ts 約 1.1s = 約 2.6s。
-   * 混んだ時の 5s 超えを吸収する余裕として、同種の前例（PGlite の雛形を `beforeAll` で払わせる
-   * #2337、`apps/daemon/src/permission-grant-unreadable-row-once.test.ts`）と同じ 30_000ms にする。
-   * 壁時計の打ち切りを足すものではなく、vitest の寿命を延ばすだけである（#2507）。
-   */
+  // 動的 import は歯の本体ではなく hook の寿命で払わせる: 器の混雑で伸び、混んだ時に既定の 5000ms を超えるため。
   const SOURCES: readonly { file: string; exportName: string }[] = [
     { file: 'packages/core/src/runner.ts', exportName: 'WITHHELD_ENV_KEYS' },
     { file: 'apps/daemon/src/auth.ts', exportName: 'AUTH_WITHHELD_ENV_KEYS' },
@@ -99,23 +76,8 @@ describe('isSecretEnvName / scrubSecretEnv（単体）', () => {
     }
   }, 30_000);
 
-  /**
-   * **製品が子プロセスから隠す名前（`WITHHELD_ENV_KEYS`）は、テストからも隠れているか、
-   * 資格ではないと明示してあるかの、どちらかでなければならない。** 規則とこの一覧は
-   * 別々に手で書くので、製品の側に資格の名前を足しても、規則に足し忘れると漏れる
-   * （16回目の横断レビューの `ALTEROID_DATABASE_URL` がその形だった）。ここで
-   * 突き合わせれば、足し忘れは赤になる。
-   *
-   * **一覧は、ソースの文字列ではなく、実際に import した値で読む。** 最初はソースを正規表現で
-   * 読んでいたが、それだとスプレッド（`...OTHER_KEYS`）で混ぜた名前が見えず、黙って緑になった
-   * （17回目の横断レビュー）。製品が子プロセスから隠している一覧は2つある:
-   * `packages/core/src/runner.ts` の `WITHHELD_ENV_KEYS` と、`apps/daemon/src/auth.ts` の
-   * `AUTH_WITHHELD_ENV_KEYS`（Google の OAuth の client の資格）。一覧を増やしたら、ここの
-   * `SOURCES` に足すこと。
-   *
-   * import の先を変数にしているのは、`tsconfig.vitest.json` の型検査が製品のコードまで
-   * 降りないようにするためである（製品の型は各パッケージの typecheck が見る）。
-   */
+  // 一覧はソースの文字列ではなく実際に import した値で読む: 正規表現で読むとスプレッド（`...OTHER_KEYS`）で混ぜた名前が見えず、黙って緑になるため。一覧を増やしたらここの `SOURCES` に足す。
+  // import の先を変数にする: `tsconfig.vitest.json` の型検査が製品のコードまで降りないようにするため。
   it('製品が子プロセスから隠す名前は、規則で外れるか、資格ではないと明示してある', () => {
     const withheld: string[] = [];
     for (const { file, exportName, mod } of loaded) {
@@ -134,9 +96,6 @@ describe('isSecretEnvName / scrubSecretEnv（単体）', () => {
       'ALTEROID_RUNNER_SOCKET', // Unix ソケットのパス（接続権はファイルの権限で守る）
     ]);
     const unclassified = withheld.filter((name) => !isSecretEnvName(name) && !NOT_SECRET.has(name));
-    // 【赤の意味】製品が隠している名前が、テストの中では外れていない。規則
-    // （SECRET_ENV_NAME_PATTERNS / SECRET_ENV_NAME_WORDS）に足すか、資格でないなら
-    // NOT_SECRET に理由つきで足すこと。
     expect(unclassified).toEqual([]);
   });
 
@@ -155,9 +114,7 @@ describe('vitest.setup.ts はテストの前に秘密を環境から外す（統
   let scratchRoot = '';
 
   beforeAll(() => {
-    // 根の直下ではなく `.scratch/` の下に作る（#2019。理由は `vitest.tmpdir.test.ts` の
-    // 統合の describe の doc）——ここに書く `probe.test.ts` は env 無しの子プロセスを
-    // 起こすので、根の直下に置くと、同時に走る `check-no-env-passthrough` が拾って落ちる。
+    // 根の直下ではなく `.scratch/` の下に作る: `probe.test.ts` は env 無しの子プロセスを起こすので、根の直下に置くと、同時に走る `check-no-env-passthrough` が拾って落ちるため。
     scratchRoot = join(REPO_ROOT, '.scratch', `vitest-env-scrub-itest-${randomUUID()}`);
     mkdirSync(scratchRoot, { recursive: true });
   });
@@ -172,8 +129,6 @@ describe('vitest.setup.ts はテストの前に秘密を環境から外す（統
     writeFileSync(join(scratchRoot, 'vitest.config.ts'), buildProbeConfig());
 
     const vitestBin = join(REPO_ROOT, 'node_modules', '.bin', 'vitest');
-    // 外側のこのプロセスの環境は、既に vitest.setup.ts で外されている。ここで
-    // 偽の値だけを足して子へ渡す（本物の値は、この歯のどこにも出てこない）。
     execFileSync(vitestBin, ['run', '--root', scratchRoot], {
       cwd: scratchRoot,
       stdio: 'pipe',
@@ -185,17 +140,11 @@ describe('vitest.setup.ts はテストの前に秘密を環境から外す（統
       inTest: string[];
       inChild: string[];
     };
-    // 【赤の意味】vitest.setup.ts が秘密を外していない。テストの中の process.env
-    // （と、そこから起こした子プロセス）に、偽の秘密の名前が残っている。
     expect(seen.inTest).toEqual([]);
     expect(seen.inChild).toEqual([]);
   });
 });
 
-/**
- * 入れ子の vitest で走るテスト。テストの中の `process.env` と、そこから起こした
- * 子プロセスの環境の両方で、偽の秘密の名前がまだ在るかを記録する（値は書かない）。
- */
 function buildProbe(manifest: string): string {
   const names = JSON.stringify(Object.keys(FAKE_SECRETS));
   return [
@@ -219,7 +168,6 @@ function buildProbe(manifest: string): string {
   ].join('\n');
 }
 
-/** 本物の `vitest.setup.ts` だけを setupFiles に持つ、最小の構成。 */
 function buildProbeConfig(): string {
   const setupPath = join(REPO_ROOT, 'vitest.setup.ts').replace(/\\/g, '/');
   return [

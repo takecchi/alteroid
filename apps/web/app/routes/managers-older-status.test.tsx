@@ -1,23 +1,4 @@
 // @vitest-environment jsdom
-/**
- * 受け入れ基準（issue #1998）: 背景の取り直し（`use-managers-window.ts` の
- * `runOlderRefresh`）が「もっと見る」で読み足した**最後の頁**を取り直せたとき、
- * その頁の件数で `lastOlderCount` を更新し、`olderStatus`（「もっと見る」
- * ボタンの有無）に反映すること。
- *
- * **直す前の症状。** `olderStatus` の材料は `lastOlderCount` だけで、
- * `lastOlderCount` を書くのは `loadOlder()` だけだった——PR #1629 が意図して
- * 避けた形（`use-managers-window.ts` の旧 doc「`lastOlderCount` /
- * `olderStatus`（進捗・終端の判定）は動かさない」）。⟹ 背景の取り直しで
- * 最後の頁の件数が変わっても、ボタンの有無は前回の `loadOlder()` の時点の
- * まま残った。特に「最後の頁が `MANAGERS_PAGE` 未満（end）→ 取り直しで
- * `MANAGERS_PAGE` 件」の向きでは、続きがあるのにボタンが消えたままになる
- * （#1998 の「重い」向き）。
- *
- * このファイルは並行性の無い（`loadOlder()` と重ならない）単純な形だけを
- * 見る。`loadOlder()` との競合・頁の追加中の錨変化は
- * `managers-older-status-inflight.test.tsx` を見よ。
- */
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -28,19 +9,12 @@ import { json, Providers, sse, stubFetch, storeTestBaseUrl, type Route } from '~
 
 import Managers from './managers';
 
-/**
- * 画面の文字列全体。`waitFor` で繰り返し見る条件は、要素を走査する `getByText` ではなく
- * これで見る（100 行で 1 回 10ms 超。繰り返しごとに払うと混んだ時に枠を食う）。文言は
- * どれも他の行と取り違えない長さのものだけに使うこと。
- */
+// waitFor で繰り返す条件を getByText で見ない: 100 行で1回 10ms 超となり、繰り返しごとに払うと混んだ時にテストの枠を食うため
 function pageText(): string {
   return document.body.textContent ?? '';
 }
 
-/**
- * 「もっと見る」ボタン。**`getByRole('button', { name })` にしない**（ロール照会は全要素の役割・可視性を計算するので、100 行を描いた画面では 1 回が数十 ms かかる。#2901）。
- * ラベルの文言（`もっと見る（いま N 件）`）で見つけ、ボタンであることは `closest` で確かめる。
- */
+// getByRole('button', { name }) にしない: ロール照会は全要素の役割・可視性を計算し、100 行を描いた画面では1回が数十 ms かかるため
 function moreButton(): HTMLButtonElement {
   const button = screen.getByText(/^もっと見る（いま \d+ 件）$/).closest('button');
   if (button === null) throw new Error('「もっと見る」がボタンとして描かれていない');
@@ -60,7 +34,6 @@ const BASE: ManagerSummary = {
 
 const PAGE1_ANCHOR_TIME = Date.UTC(2026, 7, 16, 3, 0, 0);
 
-/** `startedAt` の降順で N 件。頁1に相当する（先頭固定 `MANAGERS_PAGE` 件）。 */
 function firstPage(count: number): ManagerSummary[] {
   return Array.from({ length: count }, (_, index) => ({
     ...BASE,
@@ -71,7 +44,6 @@ function firstPage(count: number): ManagerSummary[] {
   }));
 }
 
-/** 「もっと見る」で読み足す頁。`prefix` で ID を頁ごとに分ける。 */
 function olderPage(prefix: string, count: number, anchorTime: number): ManagerSummary[] {
   return Array.from({ length: count }, (_, index) => ({
     ...BASE,
@@ -82,7 +54,6 @@ function olderPage(prefix: string, count: number, anchorTime: number): ManagerSu
   }));
 }
 
-/** URL から `afterId` を取り出す（部分一致ではなく厳密な query 解析）。 */
 function afterIdOf(url: string): string | null {
   return new URL(url).searchParams.get('afterId');
 }
@@ -100,14 +71,11 @@ afterEach(() => {
   globalThis.fetch = originalFetch;
 });
 
-/** SSE を張りつつ一覧を描く（`shell.tsx` が実機で両方を同時にマウントする形）。 */
 function Sentinel() {
   useJournalLive();
   return null;
 }
 
-/** SSE で頁1の再検証を1回起こす合図を作る。`with: 'manager'` が
- * `use-journal-live.ts` の `invalidate()` を `managers` の束へ落とす条件。 */
 function makeInvalidateTrigger(): { after: Promise<void>; resolve: () => void } {
   let resolve: () => void = () => undefined;
   const after = new Promise<void>((r) => {
@@ -181,7 +149,6 @@ describe('背景の取り直しが最後の頁の件数を変えたら olderStat
       expect(pageText()).toContain(`もっと見る（いま ${MANAGERS_PAGE * 2} 件）`);
     });
 
-    // 背景の取り直しでは 49 件に変わる（続きが無くなった、という想定）。
     olderCount = MANAGERS_PAGE - 1;
     trigger.resolve();
 
@@ -216,8 +183,6 @@ describe('背景の取り直しが最後の頁の件数を変えたら olderStat
     });
     expect(screen.queryByText(/^もっと見る（いま/)).toBeNull();
 
-    // 背景の取り直しでは 50 件に戻る（絞り込みに入ってくる委譲が増えた、
-    // という想定——#1998 が挙げた「続きがあるのにボタンが消える」向き）。
     olderCount = MANAGERS_PAGE;
     trigger.resolve();
 
@@ -229,10 +194,6 @@ describe('背景の取り直しが最後の頁の件数を変えたら olderStat
 
   it('最後以外（頁1個目）の取り直しの件数変化は olderStatus を動かさない', async () => {
     const trigger = makeInvalidateTrigger();
-    // 頁A（最初の「もっと見る」、錨 mgr-49）は取り直しで 5 件へ激減する。
-    // 頁B（2回目の「もっと見る」、錨 a-49 ＝頁Aの最後の行）は取り直しでも
-    // MANAGERS_PAGE 件のまま——**最後の頁**なので、olderStatus はこちらだけで
-    // 決まるはずである。
     const pageAInitial = olderPage('a', MANAGERS_PAGE, PAGE1_ANCHOR_TIME - MANAGERS_PAGE * 60_000);
     const pageARefreshed = olderPage('a2', 5, PAGE1_ANCHOR_TIME - MANAGERS_PAGE * 60_000);
     const pageBTime = PAGE1_ANCHOR_TIME - MANAGERS_PAGE * 2 * 60_000;
@@ -255,29 +216,22 @@ describe('背景の取り直しが最後の頁の件数を変えたら olderStat
 
     await waitForFirstPage();
 
-    // 1回目の「もっと見る」— 頁A。
     fireEvent.click(moreButton());
     await waitFor(() => {
       expect(pageText()).toContain(`もっと見る（いま ${MANAGERS_PAGE * 2} 件）`);
     });
 
-    // 2回目の「もっと見る」— 頁B（最後の頁になる）。
     fireEvent.click(moreButton());
     await waitFor(() => {
       expect(pageText()).toContain(`もっと見る（いま ${MANAGERS_PAGE * 3} 件）`);
     });
 
-    // 背景の取り直し——頁A（最後ではない）は 5 件へ激減、頁B（最後）は
-    // MANAGERS_PAGE 件のまま。
     refreshHappened = true;
     trigger.resolve();
 
-    // 頁Aの中身自体は取り直しで反映される（件数は 50+5+50=105）。
     await waitFor(() => {
       expect(pageText()).toContain(`もっと見る（いま ${MANAGERS_PAGE + 5 + MANAGERS_PAGE} 件）`);
     });
-    // **olderStatus は progress のまま**——頁Aの激減（5 < MANAGERS_PAGE）に
-    // 釣られて `end` にならないこと。
     expect(screen.queryByText(/これより古い委譲は無い/)).toBeNull();
     expect(moreButton()).toBeTruthy();
   });
@@ -309,7 +263,6 @@ describe('背景の取り直しが最後の頁の件数を変えたら olderStat
 
     const afterIdCallsBefore = stub.calls.filter((url) => afterIdOf(url) === 'mgr-49').length;
 
-    // 背景の取り直しは失敗する（デーモン側が一時的に 500 を返す、という想定）。
     shouldFail = true;
     trigger.resolve();
 
@@ -318,7 +271,6 @@ describe('背景の取り直しが最後の頁の件数を変えたら olderStat
       expect(afterIdCallsAfter).toBeGreaterThan(afterIdCallsBefore);
     });
 
-    // **失敗した頁は前回の値のまま**——olderStatus・件数どちらも動かない。
     expect(pageText()).toContain(`もっと見る（いま ${MANAGERS_PAGE * 2} 件）`);
     expect(screen.queryByText(/これより古い委譲は無い/)).toBeNull();
   });

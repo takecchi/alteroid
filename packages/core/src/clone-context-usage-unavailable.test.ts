@@ -6,7 +6,6 @@ import { fakeSdk, waitForDone, wireEvents } from './clone-test-harness.js';
 import { ALWAYS_REDELIVER, createClone } from './clone.js';
 import { createMemoryStores, humanMessage } from './testing.js';
 
-/** 文脈の使用状況を出せない駆動役は、毎ターンではなく最初の1回だけ「取れない」と日誌へ残す。 */
 async function contextUsageRows(unavailable: boolean): Promise<number> {
   const { fn } = fakeSdk();
   const inner = new ClaudeCloneDriver({ queryFn: fn });

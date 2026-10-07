@@ -638,6 +638,33 @@ describe('答えの後の行動（issue #847）', () => {
     expect(document.body.textContent).not.toMatch(/interrupted|failed/);
   });
 
+  /** #3870: 行動の本文も、ほかの本文と同じく伏せ字を通して出す。 */
+  it('行動の本文に混じった秘密は伏せる', async () => {
+    const secret = 'sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789';
+    stubApprovals([answered], {
+      trace: () =>
+        json(
+          traceBody({
+            state: 'paired',
+            actions: [
+              {
+                type: 'decision',
+                id: 'j-1',
+                at: '2026-08-19T11:00:01.000Z',
+                decision: `鍵 ${secret} で進めた`,
+                grounds: '人間の答え',
+                answeredApprovalId: 'a-1',
+              },
+            ],
+          }),
+        ),
+    });
+    renderPage();
+    fireEvent.click(await screen.findByText('答えの後の行動を見る'));
+    expect(await screen.findByText(/判断: 鍵 /)).not.toBeNull();
+    expect(document.body.textContent).not.toContain(secret);
+  });
+
   it('exchange with=human は「人間への返答: 」を、それ以外は「発言: 」を前に置く（core と同じ文言）', async () => {
     stubApprovals([answered], {
       trace: () =>
@@ -937,6 +964,29 @@ describe('承認カードに、確認が上がった会話を出す（issue #782
     // ④ の見出しは出ない。
     expect(screen.queryByText('この確認が上がった会話')).toBeNull();
     // 会話は読めたので、チャットで開く導線は出す（issue #2069）。
+    expect(
+      screen.getByRole('link', { name: /この会話をチャットで開く/ }).getAttribute('href'),
+    ).toBe('/chat/conv-x');
+  });
+
+  it('③ 窓が先頭に届いていない（reachedStart: false）: クローンの発言が0件でも「まだ無い」と言い切らず、確かめられなかったと出す（#3871）', async () => {
+    stubApprovals([approval({ id: 'a-1', question: '質問1', conversationId: 'conv-x' })], {
+      conversation: () =>
+        json({
+          conversationId: 'conv-x',
+          messages: [
+            { id: 'm1', at: '2026-08-19T09:00:00.000Z', role: 'inbound', text: '人間の発言だけ' },
+          ],
+          scanned: 1,
+          reachedStart: false,
+        }),
+    });
+    renderPage();
+
+    expect(
+      await screen.findByText(/取れた窓にはクローンの発言が無かった.*確かめられなかった/),
+    ).toBeTruthy();
+    expect(screen.queryByText('この会話にはまだクローンの発言が無い')).toBeNull();
     expect(
       screen.getByRole('link', { name: /この会話をチャットで開く/ }).getAttribute('href'),
     ).toBe('/chat/conv-x');

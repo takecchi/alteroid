@@ -1,21 +1,4 @@
 // @vitest-environment jsdom
-/**
- * 接続先カード（`ConnectionCard`）。
- *
- * 折り返しの付け忘れ（本2）を固定する。`storage`（記憶の置き場。ローカルの
- * パスか PostgreSQL の接続先ラベル、`apps/daemon/src/openapi.ts` の
- * `healthResponseSchema`）は空白を持たないことが多いパス/ラベルなので
- * `break-all` を当てた。`pid`（`z.number().int()` ＝ `process.pid`）は
- * Linux の `pid_max` 既定でも7桁までしか無い有界の小さい整数で、このセクション
- * の幅では折り返しが要る長さにならないため、意図して据え置いている
- * （この不在も戻す変更を黙って通さないために固定する）。
- *
- * **⚠️ これは「はみ出しが直った」ことの試験ではない。** jsdom はレイアウトを
- * 持たないので（`offsetWidth` / `scrollWidth` / `getBoundingClientRect()` は
- * すべて 0）、固定できるのは「そのクラス名が書かれていること」までである。
- *
- * この画面には、これまでテストが無かった。
- */
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -70,46 +53,10 @@ describe('折り返しの付け忘れ（本2）', () => {
 
     const el = await screen.findByText('4242');
     expect(el.className.split(/\s+/)).not.toContain('break-all');
-    // クラス自体は font-mono のまま残っていること（無指定に落ちていないか）。
     expect(el.className.split(/\s+/)).toContain('font-mono');
   });
 });
 
-/**
- * 横並びの積み替え（本4）。
- *
- * **A: `dl`（`grid-cols-[6rem_1fr]`）が breakpoint 無しで固定されていた。**
- * 375px 幅でもラベル列（6rem）が値の取り分を持っていくので、`sm:` 未満は
- * 1列、`sm:` 以上で固定幅ラベル列に切り替える。積んだときに `dt`/`dd` の
- * 対応が読めるよう、`dt` に `mt-3 first:mt-0 sm:mt-0` を足して組の境目を
- * 間隔の差で表す。
- *
- * **追記: この一覧は `KeyValueList`（`packages/ui`）へ移した。** 以前は `dl` に
- * 固定幅の列指定と、`dt` に「上の余白・先頭だけ余白なし・`sm:` で余白なし」の
- * class を手書きしていた。`KeyValueList` は同じ意図を別の形で書く — ラベル列の幅は
- * CSS 変数 `--kv-label`（この画面は 6rem）で渡し、`sm:` の grid がその変数を使い、
- * 組の境目は先頭以外の `dt` に上の余白と `sm:mt-0` を付けて作る（先頭かどうかは添字で
- * 決める。各項目が `contents` の包みに入り、`dt` が常に包みの最初の子になるため）。
- * class の文字が変わったので、下の assert は文字ではなく意図を測る形へ書き換えた。
- * 意図は3つ: (a) 狭い画面は1列（基底の grid が1列で、`sm:` で2列に切り替わる）、
- * (b) 広い画面はラベル列が固定幅（`--kv-label` に 6rem が入り、`sm:` の grid がそれを使う）、
- * (c) 積んだときの組の境目（先頭以外の `dt` に上の余白と `sm:mt-0`、先頭には無い）。
- * jsdom はレイアウトを持たないので、測れるのは class と style の有無までである
- * （上の警告のとおり。`KeyValueList` 自身の class の試験は
- * `packages/ui/src/components/features/key-value-list.test.tsx`）。
- *
- * **C: 「接続先」入力欄がボタン2つとの取り合いで潰れうる。** `input` は
- * フォームコントロールの既定の最小幅を持ち、本3で `Button` が狭い画面で
- * `h-11`（44px）になった分、この行の取り合いは悪化している。`ChatComposer`（`packages/ui/src/components/features/chat/chat-composer.tsx`）の
- * `Textarea` と同じ形（`<div className="min-w-0 flex-1">` で包む）に揃えた。
- *
- * **⚠️ どちらも「積み替わった」「潰れなくなった」ことの試験ではない。**
- * jsdom はレイアウトを持たない（`offsetWidth` / `scrollWidth` /
- * `getBoundingClientRect()` はすべて 0）ので、breakpoint が実際に効いて
- * いることも、flex の縮み方が変わったことも、ここでは1つも観測できない。
- * 固定できるのは「そのクラス名が書かれていること」までである。本2・本3 の
- * テストより歯が弱い。
- */
 describe('横並びの積み替え（本4）', () => {
   it('A: dl は狭い画面で1列、sm: 以上で固定幅ラベル列になる', async () => {
     renderCard({ storage: '/data', pid: 4242 });
@@ -118,14 +65,11 @@ describe('横並びの積み替え（本4）', () => {
     const dl = anchor.closest('dl');
     expect(dl).not.toBeNull();
     const dlTokens = dl!.className.split(/\s+/);
-    // (a) 基底は1列。
     expect(dlTokens).toContain('grid-cols-1');
-    // (b) sm: 以上はラベル列が変数の幅（固定幅）で、値の列が残りを取る。
     expect(dl!.style.getPropertyValue('--kv-label')).toBe('6rem');
     const smCols = dlTokens.filter((token) => token.startsWith('sm:grid-cols-'));
     expect(smCols).toHaveLength(1);
     expect(smCols[0]).toContain('var(--kv-label)');
-    // sm: 無しの列指定は 1 列のものだけ（残っていれば狭い画面でも2列のままになる）。
     expect(dlTokens.filter((token) => /^grid-cols-/.test(token))).toEqual(['grid-cols-1']);
   });
 
@@ -137,11 +81,9 @@ describe('横並びの積み替え（本4）', () => {
     expect(dl).not.toBeNull();
     const dts = Array.from(dl!.querySelectorAll('dt'));
     expect(dts.length).toBeGreaterThan(1);
-    // (c) 先頭には上の余白も sm:mt-0 も無い。
     const first = dts[0]!.className.split(/\s+/);
     expect(first).not.toContain('mt-3');
     expect(first).not.toContain('sm:mt-0');
-    // 先頭以外は、狭い画面で上の余白、sm: 以上で打ち消し。
     for (const dt of dts.slice(1)) {
       const tokens = dt.className.split(/\s+/);
       expect(tokens).toContain('mt-3');
@@ -152,11 +94,6 @@ describe('横並びの積み替え（本4）', () => {
     renderCard({ storage: '/data', pid: 4242 });
 
     const input = await screen.findByLabelText('接続先');
-    // `Select`（shadcn の `NativeSelect`）は `<select>` を自前の箱
-    // （`data-slot="native-select-wrapper"`、矢印の置き場）で包む。測りたいのは
-    // その外側——画面が置いた `min-w-0 flex-1` の div——なので、部品の箱を1枚だけ
-    // 飛ばす。**箱が在ることも確かめる**（無ければ部品の作りが変わったということで、
-    // 飛ばす先を読み直す必要がある）。
     const selectBox = input.closest('[data-slot="native-select-wrapper"]');
     expect(selectBox).not.toBeNull();
     expect(selectBox!.contains(input)).toBe(true);
@@ -168,12 +105,6 @@ describe('横並びの積み替え（本4）', () => {
   });
 });
 
-/**
- * PR 1 の本3: 3つの出どころ（`resolveApiBaseUrlOrigin` の 'stored' /
- * 'buildTime' / 'sameOrigin'）を画面の文言で区別する——**これがこの PR で
- * いちばん大事な歯である**（依頼文より）。文言はオーナーが読む画面の語なので、
- * 「段」「解決」のような実装側の語ではなく、画面に出す逐語で照合する。
- */
 describe('接続先の出どころを画面で区別する（本3）', () => {
   it('保存済みの値があれば「このブラウザに保存した接続先」', async () => {
     renderCard({ storage: '/data', pid: 1 });
@@ -214,13 +145,6 @@ describe('接続先の出どころを画面で区別する（本3）', () => {
   });
 });
 
-/**
- * 本3の(3): 「既定に戻す」が嘘をつく件を直す。
- *
- * ビルド時の値（`VITE_ALTEROID_API_URL`）が在るとき、`storeApiBaseUrl(null)` の
- * 後に実際に効く接続先はそちらである。以前は入力欄を無条件に `SAME_ORIGIN_BASE_URL`
- * （`/api`）へ戻していたので、実際の接続先と表示が食い違っていた。
- */
 describe('「既定に戻す」の表示（本3-3）', () => {
   it('ビルド時の値が在るとき、入力欄は /api ではなく実際に効く値になる', async () => {
     const BUILD_TIME_URL = 'https://build-time.example.com';
@@ -251,7 +175,6 @@ describe('「既定に戻す」の表示（本3-3）', () => {
     await waitFor(() => {
       expect(localStorage.getItem('alteroid.apiBaseUrl')).toBeNull();
     });
-    // ここが本体: /api ではなく、ビルド時の値が入っていること。
     expect(input.value).toBe(BUILD_TIME_URL);
     expect(input.value).not.toBe('/api');
   });
@@ -277,17 +200,6 @@ describe('「既定に戻す」の表示（本3-3）', () => {
   });
 });
 
-/**
- * 接続先を「複数持って、選ぶ」形にした分（このカードの本体の変更）。
- *
- * **これまでは入力欄1つだった。** 切り替えるたびに URL を打ち直すことになり、
- * 打ち間違いが「繋がらない」として返ってくるうえ、間違えた側の値は既に上書き
- * されているので元へ戻るにももう一度打ち直すしかなかった。
- *
- * ⚠️ ここで固定するのは**一覧の中身と、選ぶ／足す／直す／消すが実際に
- * `localStorage` に効くこと**である。見た目（幅・折り返し）は上の本2・本4 が
- * 見ており、jsdom では観測できない（レイアウトを持たないため）。
- */
 function renderWithEndpoints(options: { buildTime?: string; respondTo?: string } = {}) {
   if (options.buildTime !== undefined) vi.stubEnv('VITE_ALTEROID_API_URL', options.buildTime);
   const target = options.respondTo;
@@ -308,7 +220,6 @@ function renderWithEndpoints(options: { buildTime?: string; respondTo?: string }
   );
 }
 
-/** 一覧の `option` を、区画（`optgroup`）ごと読み出す。 */
 function readOptions(
   select: HTMLSelectElement,
 ): Array<{ group: string; value: string; text: string }> {
@@ -340,7 +251,6 @@ describe('接続先を一覧から選ぶ', () => {
       },
       { group: 'この画面と同じ場所', value: '/api', text: '/api' },
     ]);
-    // 先頭が既定（`resolveApiBaseUrl` と同じ規則）。
     expect(select.value).toBe('https://api.example.com');
   });
 
@@ -357,12 +267,6 @@ describe('接続先を一覧から選ぶ', () => {
     expect(select.value).toBe('http://127.0.0.1:4517');
   });
 
-  /**
-   * ⭐ 一覧が無かった頃に選択だけを設定した人（コンソールから手で入れた人を含む）。
-   *
-   * その先が一覧に出ないと `select` の値がどの `option` とも一致せず、ブラウザは
-   * 黙って先頭を表示する ＝ **実際の接続先と表示が食い違う。**
-   */
   it('一覧に無い接続先を選んでいても、一覧に出て選ばれた状態になる', async () => {
     localStorage.clear();
     localStorage.setItem('alteroid.apiBaseUrl', 'http://console-set.example');
@@ -383,13 +287,11 @@ describe('接続先を一覧から選ぶ', () => {
     renderWithEndpoints({ buildTime: 'https://api.example.com' });
 
     const select = await screen.findByLabelText<HTMLSelectElement>('接続先');
-    // 別の先へ切り替える。
     fireEvent.change(select, { target: { value: 'https://api.example.com' } });
 
     await waitFor(() => {
       expect(select.value).toBe('https://api.example.com');
     });
-    // 切り替えた後も、元の接続先は一覧に残っている。
     expect(readOptions(select).map((option) => option.value)).toContain(
       'http://console-set.example',
     );
@@ -411,7 +313,6 @@ describe('接続先を足す・直す・消す', () => {
     await waitFor(() => {
       expect(localStorage.getItem('alteroid.apiBaseUrl')).toBe('https://stg.example.com');
     });
-    // 末尾のスラッシュは落ちている（経路の連結で // にしないため）。
     expect(JSON.parse(localStorage.getItem('alteroid.endpoints') ?? '[]')).toContainEqual({
       url: 'https://stg.example.com',
       label: '検証',
@@ -419,7 +320,6 @@ describe('接続先を足す・直す・消す', () => {
     const select = screen.getByLabelText<HTMLSelectElement>('接続先');
     expect(select.value).toBe('https://stg.example.com');
 
-    // 足した後、入力欄は空に戻る（次の1件を打てる）。
     expect(screen.getByLabelText<HTMLInputElement>('追加する接続先の URL').value).toBe('');
     expect(screen.getByLabelText<HTMLInputElement>('追加する接続先の名前（任意）').value).toBe('');
   });
@@ -440,11 +340,6 @@ describe('接続先を足す・直す・消す', () => {
     });
   });
 
-  /**
-   * **ホスト名だけを通すと、相対 URL として画面と同じオリジンの `./example.com` を
-   * 叩きに行く**（そして 404 が「繋がらない」として返る ＝ 原因が画面から見えない）。
-   * ここで止めて、何がまずいのかを画面に書く。
-   */
   it('接続先として使えない形は足さない。理由を画面に出す', async () => {
     renderWithEndpoints();
 
@@ -454,9 +349,6 @@ describe('接続先を足す・直す・消す', () => {
     fireEvent.click(screen.getByRole('button', { name: '追加して接続' }));
 
     expect(await screen.findByText(/接続先として使えない/)).toBeTruthy();
-    // 保存も切り替えも起きていない。**一覧が空であることを測らない** —
-    // 描画の時点で「古い形の選択」が一覧へ写っている（migrate）ので、空ではない。
-    // 測るのは「弾いた値が入っていないこと」である。
     expect(JSON.parse(localStorage.getItem('alteroid.endpoints') ?? '[]')).toEqual([
       { url: TEST_BASE_URL },
     ]);
@@ -493,15 +385,9 @@ describe('接続先を足す・直す・消す', () => {
       value: TEST_BASE_URL,
       text: `手元のデーモン — ${TEST_BASE_URL}`,
     });
-    // 接続先そのものは変えていない（名前だけ）。
     expect(select.value).toBe(TEST_BASE_URL);
   });
 
-  /**
-   * 消したのが「いま選んでいる先」なら、選択も外す。
-   *
-   * **選択だけ残すと、一覧に無い接続先へ繋ぎ続けたうえで「消した」と表示される。**
-   */
   it('一覧から消すと、選択も既定へ戻る', async () => {
     renderWithEndpoints({ buildTime: 'https://api.example.com' });
 
@@ -516,10 +402,6 @@ describe('接続先を足す・直す・消す', () => {
     expect(readOptions(select).map((option) => option.value)).not.toContain(TEST_BASE_URL);
   });
 
-  /**
-   * **ビルド時の既定と同一オリジンには消す口を出さない。** 消してもビルドし直す
-   * まで戻ってくるので、押せる削除は嘘になる（押した瞬間は消え、読み込み直すと戻る）。
-   */
   it('ビルド時の既定を選んでいるときは、名前変更も削除も出ない', async () => {
     localStorage.clear();
     renderWithEndpoints({ buildTime: 'https://api.example.com' });
@@ -539,14 +421,6 @@ describe('接続先を足す・直す・消す', () => {
   });
 });
 
-/**
- * **名前の欄は日本語で打つ。だから IME の変換を確定する Enter で、足す・保存するを
- * 走らせないこと**（門の形は `packages/ui/src/components/features/chat/ime.ts` の
- * `isImeConfirmEnter`）。門が無いと、名前を確定した瞬間に接続先が足されて繋ぎ替わる。
- *
- * 同じ欄・同じキーで `isComposing` だけを反転させ、両側を1本の中で通す（変換中→
- * 何も起きない、確定後→足される／保存される）。
- */
 describe('接続先の入力欄は、IME の確定の Enter では送らない', () => {
   it('追加: 名前の欄の変換中の Enter では足さず、確定後の Enter で足す', async () => {
     renderWithEndpoints();
@@ -594,7 +468,6 @@ describe('接続先の入力欄は、IME の確定の Enter では送らない',
     fireEvent.change(input, { target: { value: 'てもと' } });
     fireEvent.keyDown(input, { key: 'Enter', isComposing: true });
 
-    // 編集欄が開いたまま（保存されていない）。
     expect(screen.getByLabelText('選択中の接続先の名前')).toBeTruthy();
     expect(JSON.parse(localStorage.getItem('alteroid.endpoints') ?? '[]')).toEqual([
       { url: TEST_BASE_URL },
@@ -611,14 +484,9 @@ describe('接続先の入力欄は、IME の確定の Enter では送らない',
   });
 });
 
-/**
- * 説明文に内部語を出さない（#2782）。環境変数名は括弧の補足としてだけ残し、
- * CORS・ヘッダ名・API のパスは「開発者向けの詳細」の先に置く。
- */
 describe('説明文の言い方（#2782）', () => {
   function visibleText(): string {
     const clone = document.body.cloneNode(true) as HTMLElement;
-    // 開いた先でしか読めない部分は、本文として数えない。
     clone.querySelectorAll('details > :not(summary)').forEach((el) => el.remove());
     return clone.textContent ?? '';
   }
@@ -631,10 +499,8 @@ describe('説明文の言い方（#2782）', () => {
     for (const word of ['CORS', 'Authorization', 'Bearer', 'curl', 'VITE_']) {
       expect(text).not.toContain(word);
     }
-    // 環境変数名は括弧の補足で残る。
     expect(text).toContain('（ALTEROID_ALLOWED_ORIGINS）');
     expect(text).toContain('この画面を開いているブラウザの場所');
-    // 値として出すものは残る（#2762）。
     expect(text).toContain('/data');
     expect(text).toContain('4242');
   });
@@ -674,10 +540,6 @@ describe('記憶の行は認証の後ろの /status から取る（#2869）', ()
   });
 });
 
-/**
- * issue #3092: `status.error` は `data` が無い枝でしか見ていなかったので、一度読めた後の
- * 取り直しの失敗が見えなかった（記憶の置き場が前回のまま出続ける）。古い値は残し、注記する。
- */
 describe('置き場の取り直しの失敗（issue #3092）', () => {
   it('取れたあとの /status の取り直しが失敗しても、置き場は残したまま、失敗を言う。通れば消える', async () => {
     let statusFailing = false;

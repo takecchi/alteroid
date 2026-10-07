@@ -7,17 +7,6 @@ import { describe, expect, it } from 'vitest';
 
 import { links } from './root';
 
-/**
- * **`public/` の SVG が XML として正しいことを測る歯。**
- *
- * `<img>` や favicon として読まれる SVG は、HTML ではなく XML として厳格にパースされる。
- * **1か所でも壊れていると、ブラウザは何も描かない**（エラーも出さずにタブが空になる）。
- * 画面の中の `BrandMark` はインラインの SVG で、HTML のパーサが寛容に読むので壊れない
- * ——**同じ形を描いていても、ファイルとして配った側だけが黙って消える。**
- *
- * 実際に `favicon.svg` の注釈へ CSS 変数の名前（ハイフン2つで始まる）を書いていて、
- * XML の注釈で禁止されている並びを含んだまま本番へ出ていた（タブに favicon が出なかった）。
- */
 const PUBLIC_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../public');
 
 function parseErrorOf(source: string): string | null {

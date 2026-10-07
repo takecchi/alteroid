@@ -1,12 +1,4 @@
 // @vitest-environment jsdom
-/**
- * 日誌の取得に失敗したとき、「この条件では何も記録されていない」を並べない（issue #2322）。
- *
- * 失敗したのに0件の文言が並ぶと、読めていないのに記録が無いように読める
- * （AGENTS.md の地雷「取れない軸に 0 の行を作る」）。手本は `approvals.fetch-error.test.tsx`
- * （#2313）。日誌の行は jsdom では描かれない（`journal.test.tsx` の冒頭）ので、
- * 再検証の失敗で一覧が残る形は、ここでは測らない。
- */
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -30,7 +22,6 @@ afterEach(() => {
   globalThis.fetch = originalFetch;
 });
 
-/** `GET /journal` にだけ `respond()` の応答を返す。他の URL は「繋がらない」。 */
 function stubJournal(respond: () => Response | Promise<Response>): void {
   globalThis.fetch = (async (input: RequestInfo | URL) => {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;

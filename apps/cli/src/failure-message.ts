@@ -1,19 +1,6 @@
 import { REMOTE_URL_ENV } from './target.js';
 import { redactError } from './redact.js';
 
-/**
- * 入口（`index.ts` の最上位の catch）が stderr へ出す、失敗の文（#2855）。
- *
- * 2つを直す。
- * - 接続できなかった（undici の `TypeError: fetch failed`）を、何が起きて次に何をするかの
- *   日本語にする。型名・`fetch failed`・cause の識別子（`ECONNREFUSED` など）は出さない。
- * - `String(error)` が付ける `Error:` / `TypeError:` の接頭辞を出さない（メッセージだけ）。
- *
- * 伏せ字（{@link redactError}）は最後に通す。接続先の URL は origin だけを載せる
- * （userinfo・パス・クエリは出さない）。
- */
-
-/** fetch が「繋がらなかった」ときの形（undici は `TypeError('fetch failed')` に cause を載せる）。 */
 function isConnectionFailure(error: unknown): error is TypeError {
   return error instanceof TypeError && error.message === 'fetch failed';
 }

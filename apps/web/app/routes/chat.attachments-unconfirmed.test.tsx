@@ -1,9 +1,4 @@
 // @vitest-environment jsdom
-/**
- * #3111 段1c × #3121。添付つきの送信が `open` の前に中断されたとき、「サーバが受け取っていた」の
- * 判定は本文ではなく、**自分が上げた添付の id を持つ人間の発言が履歴に現れたか**で行う。
- * 添付だけの発言は本文が全部 '' で、本文では別の発言と区別できない。
- */
 import { File as NodeFile } from 'node:buffer';
 
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
@@ -102,7 +97,6 @@ afterEach(() => {
   globalThis.fetch = originalFetch;
 });
 
-/** 最初の `POST /chat` に付いていた `clientMessageId`（openapi-fetch は `Request` で呼ぶ）。 */
 async function firstPostedClientMessageId(stub: ReturnType<typeof stubFetch>): Promise<string> {
   const entry = stub.entries.find((e) => e.url.endsWith('/chat') && e.request !== undefined);
   const body = (await entry?.request?.clone().json()) as { clientMessageId?: string } | undefined;
@@ -115,7 +109,6 @@ const nodeFile = () =>
     type: 'image/png',
   }) as unknown as File;
 
-/** 空本文＋添付で送り、`open` の前に会話を切り替えて中断させる。 */
 async function sendAttachmentOnlyAndAbort() {
   const view = renderChat(`/chat/${A}`);
   await screen.findByPlaceholderText(/クローンに話しかける/);
@@ -144,7 +137,6 @@ describe('添付つきの中断も、clientMessageId で受け取りを判定す
       { id: 'm1', at: '2026-08-20T00:00:00Z', role: 'inbound', text: '', attachments: [OTHER] },
     ];
     await reopenA(router);
-    // 履歴（古い控えではなく取り直した後）が描かれてから見る。
     expect(await screen.findByAltText('att-other.png')).toBeTruthy();
     expect(await screen.findByRole('button', { name: '再送' })).toBeTruthy();
     expect(posts).toBe(1);

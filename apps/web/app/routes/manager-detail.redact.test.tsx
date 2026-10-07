@@ -1,7 +1,4 @@
 // @vitest-environment jsdom
-/**
- * 委譲の画面の本文（依頼・最後の報告・生ログ）に伏せ字を掛ける（issue #2600）。
- */
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -12,7 +9,6 @@ import { json, Providers, storeTestBaseUrl } from '~/test-support';
 import type { Route } from './+types/manager-detail';
 import ManagerDetail, { clientLoader } from './manager-detail';
 
-/** 偽のトークン（本物ではない）。 */
 const TOKEN = `ghp_${'A1b2C3d4E5'.repeat(4)}`;
 const SHA = '0123456789abcdef0123456789abcdef01234567';
 

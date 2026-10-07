@@ -5,11 +5,6 @@ import type { Db } from './db.js';
 import { createPgStoresFromDb, type PgStores } from './index.js';
 import { createMigratedTestDb } from './test-db.test-support.js';
 
-/**
- * issue #2007。`PgJobStore.updateApproval` は、1つのトランザクションの中で
- * `select … for update` で承認の行を押さえてから、`mutate` の結果を書く。
- * `mutate` が `null` を返したら何も書かない。
- */
 let db: Db;
 let stores: PgStores;
 
@@ -44,7 +39,6 @@ describe('PgJobStore.updateApproval（issue #2007）', () => {
     }));
     expect(result?.answer).toBe('よい');
     expect((await stores.jobs.getApproval('ap-1'))?.answer).toBe('よい');
-    // answered_at の列も書いている（pendingOnly は列で絞る）
     expect((await stores.jobs.listApprovals({ pendingOnly: true })).entries).toEqual([]);
   });
 

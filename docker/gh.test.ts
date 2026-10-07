@@ -1,13 +1,4 @@
-/**
- * `docker/gh`（鍵の読み場所を1つ挟む `gh` のシム）を固定する。
- *
- * release-prod の起動を止める門は外した（#2884。確認は `bash-release-prod-guard.ts` が持つ）。
- *
- * **本物の `gh` にも、本物の資格（`/run/alteroid/credentials/`）にも一切触らない。**
- * `ALTEROID_GH_REAL_BIN` で「本物の gh」をテスト用の偽物に差し替え、
- * `ALTEROID_CREDENTIAL_DIR` は使い捨ての一時ディレクトリへ向ける。値はすべてダミー文字列で、
- * 環境は `process.env` を継がずに組む（`execFileSync` は `env` を渡すと丸ごと置き換える）。
- */
+// 環境は `process.env` を継がずに組む: 本物の資格に触れないよう、`execFileSync` は `env` を渡すと丸ごと置き換える。
 import { execFileSync } from 'node:child_process';
 import { chmodSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -23,7 +14,6 @@ describe('鍵の読み込み', () => {
   it('ALTEROID_CREDENTIAL_DIR のファイルから GH_TOKEN を読み、本物の gh（この場合は偽物）へ渡す', () => {
     const root = makeTempDirSync('docker-gh-cred-test.');
     const fakeGh = join(root, 'fake-real-gh');
-    // GH_TOKEN が実際に export されて渡ったかを、偽物の中で確かめる。
     writeFileSync(
       fakeGh,
       ['#!/bin/sh', 'printf "GH_TOKEN_SEEN:%s\\n" "${GH_TOKEN:-<unset>}"', 'exit 0', ''].join('\n'),
@@ -46,7 +36,6 @@ describe('鍵の読み込み', () => {
 });
 
 describe('鍵の削除が走行中の gh へ届く（2026-10-06）', () => {
-  /** 本物の gh の代わりに、GH_TOKEN / GITHUB_TOKEN が見えているかを出す偽物を置く。 */
   function setup(label: string): { root: string; fakeGh: string; credDir: string } {
     const root = makeTempDirSync(`docker-gh-removal-${label}.`);
     const fakeGh = join(root, 'fake-real-gh');
@@ -72,7 +61,7 @@ describe('鍵の削除が走行中の gh へ届く（2026-10-06）', () => {
       PATH: '/usr/bin:/bin',
       ALTEROID_GH_REAL_BIN: fakeGh,
       ALTEROID_CREDENTIAL_DIR: credDir,
-      ALTEROID_GH_TOKEN_FILE: join(credDir, 'GH_TOKEN'), // ファイルは置かない（外された）
+      ALTEROID_GH_TOKEN_FILE: join(credDir, 'GH_TOKEN'),
       ALTEROID_PROFILE_FILE: join(root, 'no-such-profile.sh'),
       GH_TOKEN: 'dummy-frozen-at-spawn',
     };
@@ -118,7 +107,7 @@ describe('鍵の削除が走行中の gh へ届く（2026-10-06）', () => {
     const env: NodeJS.ProcessEnv = {
       PATH: '/usr/bin:/bin',
       ALTEROID_GH_REAL_BIN: fakeGh,
-      ALTEROID_CREDENTIAL_DIR: credDir, // ファイルは無い。ALTEROID_GH_TOKEN_FILE も置かない
+      ALTEROID_CREDENTIAL_DIR: credDir,
       ALTEROID_PROFILE_FILE: join(root, 'no-such-profile.sh'),
       GH_TOKEN: 'dummy-from-env-only',
     };

@@ -8,18 +8,6 @@ import {
   withCgroupEventsNote,
 } from './cgroup-events.js';
 
-/**
- * `cgroupEventsDeltaOf`（開いたとき・畳んだときの2点から差分を作る）と、
- * それを人が読む一文へ整形する `formatCgroupEventsNote` / `withCgroupEventsNote`
- * を測る（Issue #1517「最小の形」1〜3）。
- *
- * **固定する4つ**（マネージャーの依頼が明示したもの）:
- *
- * 1. 差分が出る
- * 2. 読めないときは欄が無い
- * 3. 古い runner（欄なし）の `closed` が通る——`runner-protocol.test.ts` 側で測る
- * 4. 知らせの文言に数が出る
- */
 describe('cgroupEventsDeltaOf（差分の計算。#1517）', () => {
   it('1. 差分が出る（開いたときとの2点から、増えた分だけを返す）', () => {
     const delta = cgroupEventsDeltaOf({ pidsMax: 1, oomKill: 0 }, { pidsMax: 4, oomKill: 2 });
@@ -47,7 +35,6 @@ describe('cgroupEventsDeltaOf（差分の計算。#1517）', () => {
 
   it('カウンタが逆行していたら、その軸は出さない（負の差分より判定を諦める側へ倒す）', () => {
     const delta = cgroupEventsDeltaOf({ pidsMax: 5, oomKill: 1 }, { pidsMax: 2, oomKill: 3 });
-    // pids は逆行（5→2）——出さない。oom は増えている（1→3）——出す。
     expect(delta).toEqual({ oomKillDelta: 2 });
     expect(Object.hasOwn(delta as object, 'pidsMaxDelta')).toBe(false);
   });
@@ -61,7 +48,7 @@ describe('formatCgroupEventsNote / withCgroupEventsNote（知らせの文言。#
   it('4. 両方 0 のときは、断定してよい強い言い方をする', () => {
     const text = formatCgroupEventsNote({ pidsMaxDelta: 0, oomKillDelta: 0 });
     expect(text).toContain('起きていなかった');
-    expect(text).not.toMatch(/\d/); // 数を出さずに済む（0 と 0 は言葉に畳んである）
+    expect(text).not.toMatch(/\d/);
   });
 
   it('4. 正の値があれば、数がそのまま文言に出る', () => {

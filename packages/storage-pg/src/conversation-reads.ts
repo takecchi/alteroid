@@ -16,17 +16,9 @@ import {
   conversationReadBaseline,
 } from './schema.js';
 
-/** 高々1行しか持たない表なので、鍵は固定でよい（`env_profile` と同じ作法）。 */
 const BASELINE_ID = 'default';
 
-/**
- * 会話の既読の位置と基準時刻（クラウド段）。fs 版（`jobs/conversation-reads.json`）と
- * 同じものの器違いである。
- *
- * **「戻らない」は1文の upsert の中で決める**（`greatest`）。読んでから書く形にすると、
- * その間に別の入口が進めた位置を古い値で踏み戻しうる。基準時刻も `on conflict do nothing`
- * の1文で「一度決まったら変えない」を決める。
- */
+// 読んでから書く形にしない: その間に別の入口が進めた位置を古い値で踏み戻すため。1文の upsert で決める。
 export class PgConversationReadStore implements ConversationReadStore {
   readonly #db: Db;
 
@@ -85,8 +77,7 @@ export class PgConversationReadStore implements ConversationReadStore {
         target: conversationRead.conversationId,
         set: {
           readThrough: sql`greatest(${conversationRead.readThrough}, excluded.read_through)`,
-          // 位置が動いたときだけ時刻を進める（動かなかった呼びを「最後に既読にした
-          // 時刻」として残さない）。
+          // 位置が動かない呼びでは時刻を進めない: 「最後に既読にした時刻」として残らないように。
           updatedAt: sql`case when excluded.read_through > ${conversationRead.readThrough} then excluded.updated_at else ${conversationRead.updatedAt} end`,
         },
       })
@@ -133,7 +124,7 @@ export class PgConversationReadStore implements ConversationReadStore {
         });
     }
     if (update.watermark !== null) {
-      // 基準時刻の行が無ければ作らない（基準時刻は `ensureBaseline` だけが決める）。
+      // 基準時刻の行を作らない: 基準時刻は `ensureBaseline` だけが決めるため。
       await this.#db
         .update(conversationReadBaseline)
         .set({

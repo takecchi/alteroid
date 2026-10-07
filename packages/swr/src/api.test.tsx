@@ -1,18 +1,4 @@
 // @vitest-environment jsdom
-/**
- * PR 1 の本(4): 保存の後、本当に切り替わるか。
- *
- * `hooks/queries.ts` の SWR キーは接続先を含まない（`useAuth` の `authState`
- * キーだけが例外で `baseUrl` を持つ）。だから `ApiProvider.setBaseUrl` が
- * キャッシュへ何もしなければ、接続先を切り替えた後も**前の接続先で取れた
- * 応答がそのまま表示され続ける** — 次にキーが変わる・フォーカスが戻る・
- * 30秒間隔の再検証が来るまで、画面は「切り替わった」ふりだけをする。
- *
- * `ApiProvider` は接続先が変わった effect で `mutate(() => true)` を呼び、
- * 全キーを引き直す（`lib/api.tsx` の該当コメント）。ここではそれが実際に
- * 効くこと——再読み込み無しで新しい接続先の応答に置き換わること——を、
- * `useHealth`（キーに接続先を含まない代表）で確かめる。
- */
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { StrictMode } from 'react';
@@ -28,7 +14,6 @@ function health(pid: number, storage: string) {
   return { ok: true, pid, operator: false, storage, auth: { enabled: false, providers: [] } };
 }
 
-/** 接続先と、その接続先の `useHealth()` の値を出すだけの部品。 */
 function Probe() {
   const { baseUrl, setBaseUrl } = useApiContext();
   const { data } = useHealth();
@@ -79,7 +64,6 @@ describe('接続先を切り替えたら、キャッシュに残った古い応�
     screen.getByRole('button', { name: 'switch' }).click();
 
     await waitFor(() => expect(screen.getByTestId('base-url').textContent).toBe(OTHER_BASE_URL));
-    // ここが本体: 前の接続先（pid 1）に留まらず、新しい接続先（pid 2）へ変わること。
     await waitFor(() => expect(screen.getByTestId('pid').textContent).toBe('2'));
 
     expect(stub.calls.some((url) => url === `${OTHER_BASE_URL}/health`)).toBe(true);
@@ -98,8 +82,6 @@ describe('世代の紐（issue #2768）', () => {
   it('StrictMode で包んでも、通信が中断済みの紐で始まらない', async () => {
     stubFetch((url, init) => {
       if (url !== `${TEST_BASE_URL}/health`) return undefined;
-      // 本物の fetch と同じく、応答が届く前に中断されたら（呼ばれた時点で
-      // 中断済みでも）落とす。
       return new Promise<Response>((resolve, reject) => {
         setTimeout(() => {
           if (init?.signal?.aborted === true) {
@@ -127,7 +109,6 @@ describe('世代の紐（issue #2768）', () => {
     stubFetch((url, init) => {
       if (url === `${TEST_BASE_URL}/health`) {
         signals.old = init?.signal;
-        // 返事が来ないまま残る（切り替えの後に届く古い応答の役）。
         return new Promise<Response>(() => {});
       }
       if (url === `${OTHER_BASE_URL}/health`) {

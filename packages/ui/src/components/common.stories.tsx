@@ -17,10 +17,6 @@ import {
   TruncationNote,
 } from './common';
 
-/**
- * 画面が使う部品（`@alteroid/ui`）。見た目は shadcn の既定で、呼び方だけ画面に合わせてある
- * （`common.tsx` の冒頭）。
- */
 const meta = {
   title: 'UI/Common',
   parameters: { layout: 'padded' },
@@ -124,7 +120,6 @@ export const FormControls: Story = {
   ),
 };
 
-/** 送るキーつきのテキストエリア。⌘/Ctrl + Enter で送り、内容に合わせて上限（ここでは 10rem）まで伸びる。案内は OS に合わせる。 */
 export const SubmitTextarea: Story = {
   render: function Render() {
     const [value, setValue] = useState('');

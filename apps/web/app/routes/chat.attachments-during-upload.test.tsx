@@ -1,12 +1,4 @@
 // @vitest-environment jsdom
-/**
- * Issue #3215・#3248。添付を上げているあいだに足した添付・打ち足した本文が、上げ終えた時点で
- * 黙って消えないこと。消すのは「送った分」だけ（添付は送った key、本文は送った時点の値の
- * ままのときだけ）。
- *
- * アップロードは `fetch` の通り道で止め（`gate`）、止めているあいだに足してから放す。
- * 実時間の待ちは使わない。
- */
 import { File as NodeFile } from 'node:buffer';
 
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
@@ -73,7 +65,6 @@ function choose(files: File[]) {
   fireEvent.change(input);
 }
 
-/** アップロードだけを止め、放すと続きが進む。`/chat` の本文も控える。 */
 function setUp() {
   let release: () => void = () => undefined;
   const gate = new Promise<void>((resolve) => {
@@ -116,7 +107,6 @@ describe('アップロード中に足したものを、完了時に消さない�
     choose([nodeFile('first.txt')]);
     fireEvent.change(textbox, { target: { value: '本文' } });
     fireEvent.click(await screen.findByRole('button', { name: 'メッセージを送信' }));
-    // 上げている最中（送信ボタンが「添付を上げている」になる）
     await screen.findByRole('button', { name: '添付を上げている' });
 
     choose([nodeFile('second.txt')]);
@@ -154,7 +144,6 @@ describe('アップロード中に足したものを、完了時に消さない�
     await waitFor(() => {
       expect(screen.queryByRole('button', { name: 'first.txt を外す' })).toBeNull();
     });
-    // 送った分（先頭の「送る本文」）は取り除き、打ち足した分だけ残す（#3248）。
     expect(textbox.value).toBe(' と、あとから足した続き');
   });
 

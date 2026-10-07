@@ -2,12 +2,6 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { captureStderr, captureStdout } from './test-support.js';
 
-/**
- * `--json` を付けた `alteroid topology`（`--watch` も）は、未ログイン（`resolveTarget` が
- * `note` を返す）でも標準出力へ JSON でない案内を混ぜない。案内は標準エラーへ出す。
- * 終了コードは変えない（#2456: 読み取り系は note を出して正常 return）。
- * `--json` でないときは、これまでどおり note を標準出力へ出す。
- */
 const NOTE = 'https://runner.example.com にログインしていません（alteroid login）';
 
 vi.mock('./target.js', () => ({

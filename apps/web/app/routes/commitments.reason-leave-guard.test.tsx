@@ -1,8 +1,4 @@
 // @vitest-environment jsdom
-/**
- * #3750。未了の行の「片付けた理由」の書きかけも、離れる前の確認（`useReportDirty`）に知らせる。
- * 流儀は `commitments.test.tsx` の「本文の編集: 未保存のまま離れる前に確認する（#2764）」に揃える。
- */
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -22,7 +18,6 @@ afterEach(() => {
   globalThis.fetch = originalFetch;
 });
 
-/** 片付けたあとの一覧は空（行が消える）。 */
 function stubRow() {
   let closed = false;
   stubFetch((url) => {
@@ -107,7 +102,6 @@ describe('片付けた理由の書きかけ: 離れる前に確認する（#3750
     fireEvent.change(screen.getByLabelText(/を片付けた理由$/), { target: { value: '済んだ' } });
     fireEvent.click(screen.getByRole('button', { name: /が片付いた$/ }));
     await waitFor(() => expect(screen.queryByText('もとの依頼')).toBeNull());
-    // 行のアンマウントで外れる（報告の取り下げは次の描画で効くので、効くまで待つ）。
     await waitFor(() => {
       const unload = new Event('beforeunload', { cancelable: true });
       window.dispatchEvent(unload);

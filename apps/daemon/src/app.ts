@@ -33,6 +33,7 @@ import {
   memoryVersion,
   PracticeConflictError,
   practiceVersion,
+  ScheduleConflictError,
   ARCHIVE_REMOVED_BYTES_UNIT_NOTE,
   JOURNAL_SEARCH_UNCOVERED_LIST_MD,
   MCP_SERVER_NAME,
@@ -61,6 +62,7 @@ import {
   UnreadableJournalEntryError,
   UnreadablePermissionGrantError,
   UnreadablePracticeError,
+  UnreadableScheduleError,
   approvalUpdatedAt,
   chatStreamEventSchema,
   countUnread,
@@ -72,6 +74,7 @@ import {
   commitmentRespondedAt,
   commitmentUpdatedAt,
   describeUnreadableCommitment,
+  describeUnreadableScheduleEdit,
   compareApprovalPagingKey,
   compareCommitmentPosition,
   computeSupersededIds,
@@ -102,6 +105,7 @@ import {
   fingerprintOf,
   noteDroppedRecord,
   reasonOf,
+  redactErrorText,
   readConversationPage,
   readConversationWindow,
   decodeConversationCursor,
@@ -271,6 +275,7 @@ import {
   runnersListResponseSchema,
   runnersVacateCommandSchema,
   runnersVacateResponseSchema,
+  scheduleConflictResponseSchema,
   scheduleListResponseSchema,
   tokensPolicyUpdateRequestSchema,
   tokensReplaceResponseSchema,
@@ -357,11 +362,6 @@ export interface AppDeps {
    * GitHub の書き込み権が並ぶ（railway/README.md「daemon 側には置かない」）。
    */
   runners?: RunnerRegistry;
-  /**
-   * クローン層の provider の id（#486 S9）。デーモンが起動時に解決した値で、デーモン全体で
-   * 1つ（`GET /runners` の `cloneProvider`）。無ければ応答に欄を載せない（＝不明。`claude` とは読まない）。
-   */
-  cloneProvider?: string;
   /**
    * 日誌の追記を購読する口（`GET /journal/stream`）。
    *
@@ -1087,6 +1087,13 @@ const scheduleBody = z.object({
     .min(1)
     .refine((value) => stripNul(value).length > 0),
   spec: scheduleSpecSchema,
+  /**
+   * 任意（Issue #3821）。書き換える側が**読んだ時の版**（`GET /schedule` の `updatedAt`）。
+   * 書く瞬間の版と違えば書かずに 409。`null` は「読んだ時には無かった」（いまも無いときだけ
+   * 作れる）。**省略は従来どおり後勝ち**（クローンの道具・CLI を壊さない）。
+   * `memoryBody.ifMatch` / `practiceBody.ifMatch` と同じ形。
+   */
+  ifMatch: z.string().nullable().optional(),
 });
 
 /**
@@ -1699,25 +1706,10 @@ function queryParams<Schema extends z.ZodTypeAny>(
  */
 function managerView(managers: ManagerPool, summary: ManagerSummary) {
   const denials = managers.denials(summary.managerId);
-  // **取れなければ載せない（＝不明）。** `claude` へ倒さない（`managerProviderOf`）。
-  const managerProvider = managerProviderOf(managers, summary);
   return {
     ...summary,
     ...(denials.length === 0 ? {} : { denials }),
-    ...(managerProvider === undefined ? {} : { managerProvider }),
   };
-}
-
-/**
- * 委譲のマネージャー層の provider（#486 S9）。宛先の runner が名乗った値だけを返し、
- * 置き先が無い・名乗りを受けていない・旧い runner の欄なしは `undefined`（不明）。
- * 経路判断用の `runnerManagerProvider()`（既定 `claude`）は使わない。
- */
-function managerProviderOf(managers: ManagerPool, summary: ManagerSummary): string | undefined {
-  // クローンが指名した委譲は、runner の既定ではなく**実際に動いている provider**（#486 S7）。
-  if (summary.managerProvider !== undefined) return summary.managerProvider;
-  if (summary.runnerId === undefined) return undefined;
-  return managers.runnerReportedManagerProvider?.(summary.runnerId);
 }
 
 /** 一覧・詳細で返すアカウント（identity を畳んで、秘密は載せない）。 */
@@ -2491,6 +2483,34 @@ export function createApp(deps: AppDeps) {
     });
   }
 
+  /**
+   * `bindEventAttachments` で結んだ後の `clone.postPersisted`。**受信箱へ書けなかった（`'unavailable'`）ときも、
+   * 投げたときも、結んだ添付を戻す。** 戻さないと、送り直し（新しい id）が `attachment_conflict` で断られ、
+   * 死んだ id に結ばれた添付は未結び付けの掃除の対象からも外れて期限まで残る（503 は「送り直してよい」の約束）。
+   * 戻すのはこの id に結んだ分だけ（`externalEventId` 指定）なので、ほかの宛先の結び付きには触れない。
+   */
+  async function postExternalPersisted(
+    event: Parameters<CloneHost['postPersisted']>[0],
+    refs: readonly { id: string }[],
+  ): Promise<Awaited<ReturnType<CloneHost['postPersisted']>>> {
+    const release = () =>
+      refs.length === 0
+        ? Promise.resolve()
+        : stores.attachments.unbind(
+            refs.map((ref) => ref.id),
+            { externalEventId: event.id },
+          );
+    let outcome;
+    try {
+      outcome = await clone.postPersisted(event);
+    } catch (error) {
+      await release();
+      throw error;
+    }
+    if (outcome === 'unavailable') await release();
+    return outcome;
+  }
+
   // --- 稼働の地図 ---------------------------------------------------------
   // 線の活動は日誌の追記から数える。**日誌の流れが配線されていなければ線は空のまま**
   // （流れていないのではなく、観測していない）。購読はデーモンが起きている間ずっと
@@ -3064,7 +3084,8 @@ export function createApp(deps: AppDeps) {
           '**`content-type` は `application/octet-stream` だけを受ける**（それ以外は 415）——' +
           'CORS の単純リクエストにさせず、ブラウザが必ず preflight を通すため（`deliberateClient` と同じ考え）。' +
           '認証は他の経路と同じ。本文の上限は添付1つぶんの最大値（超えたら 413）。画像（png / jpeg / webp / gif）は' +
-          '宣言と中身の先頭が一致しなければ 400。0バイトの本文も 400（`code`: `empty`。Web・CLI・TUI と揃えて断る）。返った `id` を `POST /chat` の `attachments` に渡すと発言へ結び付く。' +
+          '宣言と中身の先頭が一致しなければ 400。宣言が画像で、幅か高さが 8000 px を超えるものも 400（`code`: `image_dimension_too_large`。' +
+          '寸法が読めないものは通す。宣言が画像以外ならこの検査は掛からず、ターンでファイルとして渡る）。0バイトの本文も 400（`code`: `empty`。Web・CLI・TUI と揃えて断る）。返った `id` を `POST /chat` の `attachments` に渡すと発言へ結び付く。' +
           '結び付けないまま 1 時間たったものは掃除される。' +
           '**連携の鍵（`altk_`）もこの口だけは通れる**（自分の外部イベントに付ける添付を上げるため。#3113 段3）：' +
           '`uploadedBy` は `integration:<keyId>` になり、その鍵が `POST /events` で付けられるのは自分が上げた添付だけ。' +
@@ -3084,7 +3105,7 @@ export function createApp(deps: AppDeps) {
           },
           400: {
             description:
-              'クエリが不正、または受け付けない中身（`code`: `magic_mismatch` / `media_type_missing` / `empty`＝0バイト）。',
+              'クエリが不正、または受け付けない中身（`code`: `magic_mismatch` / `image_dimension_too_large` / `media_type_missing` / `empty`＝0バイト）。',
             content: { 'application/json': { schema: resolver(attachmentErrorResponseSchema) } },
           },
           413: {
@@ -3124,8 +3145,10 @@ export function createApp(deps: AppDeps) {
           return c.json(meta, 200);
         } catch (error) {
           if (error instanceof AttachmentRejectedError) {
+            // `reasonOf` ではなく `redactErrorText`: `reasonOf` は「AttachmentRejectedError: … code=…」と包むので、
+            // Web・CLI・TUI がそのまま出す理由に型名と code が混ざる（#3697）。伏せ字は外さない。
             return c.json(
-              { error: reasonOf(error), code: error.code },
+              { error: redactErrorText(error.message, process.env), code: error.code },
               error.code === 'too_large' ? 413 : 400,
             );
           }
@@ -6557,17 +6580,20 @@ export function createApp(deps: AppDeps) {
         if (!attached.ok) return c.json(attached.body, attached.status);
         const at = new Date().toISOString();
         // **受信箱へ永続化できたときだけ 200 を返す**（#3679）。書けなかったら 503 で、受信箱のメモリにも積まない。
-        const outcome = await clone.postPersisted({
-          type: 'external',
-          id,
-          at,
-          source,
-          payload,
-          ...(principal.kind === 'integration'
-            ? { via: { keyId: principal.keyId, name: principal.name } }
-            : {}),
-          ...(attached.refs.length === 0 ? {} : { attachments: attached.refs }),
-        });
+        const outcome = await postExternalPersisted(
+          {
+            type: 'external',
+            id,
+            at,
+            source,
+            payload,
+            ...(principal.kind === 'integration'
+              ? { via: { keyId: principal.keyId, name: principal.name } }
+              : {}),
+            ...(attached.refs.length === 0 ? {} : { attachments: attached.refs }),
+          },
+          attached.refs,
+        );
         if (outcome === 'unavailable') return c.json(eventNotPersistedBody(), 503);
         // 稼働の地図の「外部サービス → クローン」を、受け付けた時刻で光らせる（#3676。
         // 日誌の external_event はクローンが取り出した時刻なので使わない。`topology-activity.ts` の冒頭）。
@@ -6657,17 +6683,20 @@ export function createApp(deps: AppDeps) {
         if (!attached.ok) return c.json(attached.body, attached.status);
         const at = new Date().toISOString();
         // **受信箱へ永続化できたときだけ 200 を返す**（#3679）。書けなかったら 503 で、受信箱のメモリにも積まない。
-        const outcome = await clone.postPersisted({
-          type: 'external',
-          id,
-          at,
-          source,
-          payload,
-          ...(principal.kind === 'integration'
-            ? { via: { keyId: principal.keyId, name: principal.name } }
-            : {}),
-          ...(attached.refs.length === 0 ? {} : { attachments: attached.refs }),
-        });
+        const outcome = await postExternalPersisted(
+          {
+            type: 'external',
+            id,
+            at,
+            source,
+            payload,
+            ...(principal.kind === 'integration'
+              ? { via: { keyId: principal.keyId, name: principal.name } }
+              : {}),
+            ...(attached.refs.length === 0 ? {} : { attachments: attached.refs }),
+          },
+          attached.refs,
+        );
         if (outcome === 'unavailable') return c.json(eventNotPersistedBody(), 503);
         // `POST /events` と同じ（#3676）。
         if (principal.kind === 'integration') {
@@ -6725,7 +6754,11 @@ export function createApp(deps: AppDeps) {
         summary: '継続中の依頼を仕込む・直す',
         description:
           '「定期的に〜しておいて」をクローンの記憶任せにせず、時刻が来れば必ず届く形で置く。' +
-          '同じ kind なら置き換わる（前回動いた時刻は保つ）。真実はストア側にあり、' +
+          '同じ kind なら置き換わる（前回動いた時刻は保つ）。' +
+          // **版（Issue #3821）。** 発火（claimRun）では `updatedAt` は動かない。
+          '任意の `ifMatch`（`GET /schedule` で読んだ時の `updatedAt`。無かったなら null）を付けると、' +
+          '版が違うときは書かずに 409。省略は従来どおり後勝ち。' +
+          '真実はストア側にあり、' +
           'スケジューラはそれを読み直すだけなので、デーモンを作り直しても残る。' +
           // **一覧を数え直さない（#701 / #756）。** ここは `RESERVED_SCHEDULE_KINDS` から
           // 導出する —— `memory_tidy` が足された後も2つのまま取り残されていた
@@ -6742,8 +6775,18 @@ export function createApp(deps: AppDeps) {
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
           409: {
-            description: '既定の定期ジョブの名前。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+            description:
+              '次の3つ。(1) 既定の定期ジョブの名前（`{ error }` だけ）。(2) `ifMatch`（読んだ時の版 =' +
+              ' `updatedAt`）が、いまの版と違う（読んでから書くまでの間に別の書き手が書いた、または' +
+              '消した。`null` を送ったのに既に在る場合も）。**何も書いていない。** `current` にいまの' +
+              '依頼を返す（消えていれば null）。見分けは `current` の鍵の有無。' +
+              '(3) その kind の行が読めない形で入っている（版ずれ・手編集。`{ error }` だけ。`ifMatch` の' +
+              '有無を問わない）。**何も書いていない。** `DELETE /schedule/{kind}` で外してから作り直す。',
+            content: {
+              'application/json': {
+                schema: resolver(z.union([scheduleConflictResponseSchema, errorResponseSchema])),
+              },
+            },
           },
         },
       }),
@@ -6757,7 +6800,7 @@ export function createApp(deps: AppDeps) {
             : ''),
       })),
       async (c) => {
-        const { kind, request, spec } = c.req.valid('json');
+        const { kind, request, spec, ifMatch } = c.req.valid('json');
         if (RESERVED_SCHEDULE_KINDS.includes(kind)) {
           return c.json({ error: 'reserved kind' as const }, 409);
         }
@@ -6784,11 +6827,51 @@ export function createApp(deps: AppDeps) {
         // この隙間が無い。無ければ `null` — その場合だけ新規に作る。
         let edited: Awaited<ReturnType<Stores['schedules']['editRequest']>>;
         try {
-          edited = await stores.schedules.editRequest(kind, { request, spec }, now);
+          edited = await stores.schedules.editRequest(kind, { request, spec }, now, { ifMatch });
           if (edited === null) {
-            await stores.schedules.put({ kind, spec, request, createdAt: now, updatedAt: now });
+            // 版つき（`ifMatch: null`）なら「無いときだけ作る」を、ストアの排他の中で行う。
+            // （文字列の版で無い kind は、`editRequest` が衝突で投げているのでここへ来ない。）
+            await stores.schedules.put(
+              { kind, spec, request, createdAt: now, updatedAt: now },
+              ifMatch === undefined ? undefined : { ifMatch: null },
+            );
           }
         } catch (error) {
+          // **黙って上書きしない（Issue #3821）。** 書いていないので、先に積んだ
+          // 「設定しようとしている」を打ち消す（下の失敗と同じ形）。
+          if (error instanceof ScheduleConflictError) {
+            await appendJournalOrDrop(
+              stores,
+              {
+                type: 'decision',
+                decision: `人間が定期の依頼を設定できなかった（読んだ後に変わっていた）: ${kind}: ${request}`,
+                grounds: '人間が直接 API から仕込もうとしたが、読んだ版と違うので書いていない',
+              },
+              '定期の依頼の打ち消しの日誌',
+              `kind=${kind}`,
+            );
+            return c.json(
+              {
+                error: '継続中の依頼が読んだ後に変わっています（書き換えていません）' as const,
+                current: error.current,
+              },
+              409,
+            );
+          }
+          if (error instanceof UnreadableScheduleError) {
+            await appendJournalOrDrop(
+              stores,
+              {
+                type: 'decision',
+                decision: `人間が定期の依頼を設定できなかった（読めない形で入っている）: ${kind}: ${request}`,
+                grounds:
+                  '人間が直接 API から仕込もうとしたが、その kind の行が読めないので書いていない',
+              },
+              '定期の依頼の打ち消しの日誌',
+              `kind=${kind}`,
+            );
+            return c.json({ error: describeUnreadableScheduleEdit(error) }, 409);
+          }
           // 日誌には「設定しようとしている」が残っているので、打ち消す
           // （grant の「アクセス許可付与の打ち消しの日誌」と同じ形）。
           await appendJournalOrDrop(
@@ -7875,16 +7958,9 @@ export function createApp(deps: AppDeps) {
         // runner の一覧が空でも、この値だけは常に出す——「自分がどの版で
         // 走っているか」は runner の登録有無と無関係な事実である。
         const daemonRevision = reportRunnerRevision(resolveBuildRevision());
-        // クローン層の provider（デーモン全体で1つ。起動時に解決済み）。runner の一覧が
-        // 空でも出す。配線されていない構成では欄ごと載せない（`claude` と推測しない）。
-        const cloneProvider =
-          deps.cloneProvider === undefined ? {} : { cloneProvider: deps.cloneProvider };
-
         const registry = deps.runners;
         if (registry === undefined) {
-          return c.json(
-            runnersListResponseSchema.parse({ runners: [], daemonRevision, ...cloneProvider }),
-          );
+          return c.json(runnersListResponseSchema.parse({ runners: [], daemonRevision }));
         }
         // **名簿に載っている全部を返す**（開けている分だけではない）。上がって
         // こない runner が一覧から消えるだけだと、人間には「設定し忘れた」のか
@@ -7938,7 +8014,6 @@ export function createApp(deps: AppDeps) {
               }),
             ),
             daemonRevision,
-            ...cloneProvider,
           }),
         );
       },

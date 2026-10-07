@@ -3,12 +3,6 @@ import { describe, expect, it } from 'vitest';
 
 import { CLAIM_INTERVAL_MS, CLAIM_MAX_RETRIES, claimOnce, claimUntilReady } from './login.js';
 
-/**
- * `client.api.POST` だけを持つ偽物。
- *
- * 引き取りの分岐（pending / ready / もう使えない）は HTTP の番号ではなく本文の
- * `status` で決まる、という約束をここで固定する。
- */
 function fakeClient(responses: { status: number; body: unknown }[]): {
   client: AlteroidClient;
   calls: unknown[];
@@ -62,8 +56,6 @@ describe('claimOnce', () => {
       displayName: '作者',
       email: 'me@example.com',
     });
-    // **許可されていないアカウントは /auth/me に届かない。** ここで控えた id が
-    // `alteroid access grant <id>` を案内する唯一の手がかりになる。
     expect(outcome.credential.grantedAtClaim).toBe(true);
 
     expect(calls[0]).toMatchObject({
@@ -73,7 +65,6 @@ describe('claimOnce', () => {
   });
 
   it('400 は「やり直しても解決しない」として返す（例外にしない）', async () => {
-    // 引き取りは一度きりなので、二度目・期限切れ・合鍵違いはここに来る。
     const { client } = fakeClient([{ status: 400, body: { error: 'もう使えない' } }]);
     const outcome = await claimOnce(client, PENDING);
 
@@ -114,7 +105,6 @@ describe('claimUntilReady', () => {
       status: 'failed',
       message: 'ログインの有効期限が切れた。やり直してほしい',
     });
-    // 期限の確認は叩く前にする。
     expect(calls).toHaveLength(0);
   });
 
@@ -138,7 +128,6 @@ describe('claimUntilReady の撃ち直し（通信の失敗と 5xx）', () => {
   const pending = () => ({ ...PENDING, expiresAt: future(), provider: 'google' });
   const noSleep = () => Promise.resolve();
 
-  /** 呼ばれるたびに、並びの次の動作（応答か通信の失敗）を実行する偽物。 */
   function scripted(steps: ('network' | { status: number; body: unknown })[]) {
     let index = 0;
     const POST = () => {
@@ -207,7 +196,6 @@ describe('claimUntilReady の撃ち直し（通信の失敗と 5xx）', () => {
     const outcome = await claimUntilReady(client, pending(), { sleep: noSleep });
 
     expect(outcome.status).toBe('failed');
-    // 最初の1回 + 撃ち直し CLAIM_MAX_RETRIES 回で打ち切る。
     expect(count()).toBe(CLAIM_MAX_RETRIES + 1);
   });
 

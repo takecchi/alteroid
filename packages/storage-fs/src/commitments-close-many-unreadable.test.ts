@@ -7,13 +7,6 @@ import { makeTempDir } from '../../../vitest.tmpdir.js';
 
 import { createFsStores } from './index.js';
 
-/**
- * 読めない行の id を `closeMany()` に渡したときの結果は、`close()`（issue #2148 で
- * fs も読めない行を閉じられるようになった）と揃っているべき。pg は `close()` も
- * `closeMany()` も読めない行を閉じる（対は
- * `packages/storage-pg/src/commitments-close-many-unreadable.test.ts`）。fs の
- * `closeMany()` だけが `file.entries` しか見ず、読めない行は `[]`（閉じていない）になる。
- */
 async function storesWithBadRow(): Promise<ReturnType<typeof createFsStores>> {
   const root = await makeTempDir('alteroid-test-');
   const stores = createFsStores(root);

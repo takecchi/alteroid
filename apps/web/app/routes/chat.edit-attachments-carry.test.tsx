@@ -1,9 +1,4 @@
 // @vitest-environment jsdom
-/**
- * #3399。添付つきの発言を編集すると、新しい版にも添付が引き継がれる。編集欄に添付のチップが出て、
- * 外せる。外せば新しい版には付かない。引き継ぐ添付は上げ直さない（サーバは同じ会話の中なら、
- * すでに結んだ添付 id を編集後の発言へ結び直せる。`attachment-batch.ts` の `isBoundElsewhere`）。
- */
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';

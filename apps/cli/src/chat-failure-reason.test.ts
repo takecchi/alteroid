@@ -4,14 +4,6 @@ import { runSlashCommand, type Listed } from './chat.js';
 import type { createClient } from './client.js';
 import { captureStdout } from './test-support.js';
 
-/**
- * `/` コマンドの読み出し・書き込みが失敗したとき、**状態コードも理由も出さずに固定の
- * 文言だけを返す口**が無いことを測る（PR #2175 / PR #2256 が直さなかった残り）。
- *
- * どの経路（`client.<何か>.$get()` など）を叩いても、指定した状態コードと本文で答える
- * クライアントを Proxy で作る。**経路ごとにスタブを手で書かない** ⟹ 口を増やしたときに
- * 「スタブを足し忘れて緑」にならず、この表に行を足すだけで守られる。
- */
 function replyingClient(status: number, rawBody: string): ReturnType<typeof createClient> {
   const respond = () =>
     Promise.resolve(
@@ -50,7 +42,6 @@ async function run(line: string, status: number, rawBody: string): Promise<strin
 
 const REASON = '理由の目印（chat-failure-reason のテスト用）';
 
-/** 失敗（500 + `{ error }`）を、理由つきで出さなければならない口。1行が1つの口。 */
 const FAILURE_MOUTHS: readonly (readonly [name: string, line: string])[] = [
   ['/report <日付>', '/report 2026-01-01'],
   ['/report', '/report'],
@@ -98,10 +89,6 @@ describe('chat の / コマンドの失敗は、状態コードか理由を出�
     },
   );
 
-  /**
-   * 「無い」を意味する 404 は、これまでの文言のまま残す（理由を足すために潰さない）。
-   * 失敗（500 等）が「無い」に化けていた口だけが、404 のときだけ「無い」と言う。
-   */
   it.each([
     ['/report 2026-01-01', 'の日報はありません'],
     ['/unschedule nightly', 'という継続中の依頼はありません'],
