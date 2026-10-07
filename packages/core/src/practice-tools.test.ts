@@ -215,6 +215,7 @@ describe('practice_* — 仕事のやり方を器に持つ道具（#1055 段3②
     expect(entry.decision).toContain('daily');
     expect(entry.decision).toContain('作った');
     expect(entry.grounds).toContain('新しい');
+    expect(entry.target).toEqual({ kind: 'practice', slug: 'daily', action: 'write' });
   });
 
   it('既存の slug に書くと「書き直した」と言う（いまの本文は全文置換だが、前の本文は版に残る）', async () => {
@@ -257,6 +258,7 @@ describe('practice_* — 仕事のやり方を器に持つ道具（#1055 段3②
     expect(entry.decision).toContain('書き直した');
     expect(entry.decision).not.toContain('作った');
     expect(entry.grounds).toContain('書き直した');
+    expect(entry.target).toEqual({ kind: 'practice', slug: 'daily', action: 'write' });
   });
 
   it('kind は自由文字列——知らない種類を弾かない', async () => {
@@ -372,6 +374,7 @@ describe('practice_* — 仕事のやり方を器に持つ道具（#1055 段3②
     if (entry?.type !== 'decision') throw new Error('unreachable');
     expect(entry.decision).toContain('daily');
     expect(entry.decision).toContain('消した');
+    expect(entry.target).toEqual({ kind: 'practice', slug: 'daily', action: 'remove' });
   });
 
   it('無い slug を消しても冪等——失敗せず、日誌も汚さない', async () => {

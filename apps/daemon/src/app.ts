@@ -4902,6 +4902,7 @@ export function createApp(deps: AppDeps) {
                 ? '人間が直接 API から新しいやり方を器に置いた'
                 : '人間が直接 API からやり方を書き直した（全文置換。前の本文は' +
                   'GET /practices/:slug/versions の版の履歴に残る——#1309）',
+            target: { kind: 'practice', slug, action: 'write' },
           },
           'やり方書き換えの日誌',
           `slug=${slug}`,
@@ -5027,6 +5028,7 @@ export function createApp(deps: AppDeps) {
               type: 'decision',
               decision: `やり方 ${slug}（${existing.kind}）を消した: ${existing.title}`,
               grounds: '人間が直接 API からやり方を消した',
+              target: { kind: 'practice', slug, action: 'remove' },
             },
             'やり方削除の日誌',
             `slug=${slug}`,

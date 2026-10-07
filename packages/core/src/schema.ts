@@ -1298,6 +1298,22 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
      * の doc に在る——ここに写さない。
      */
     answeredApprovalId: z.string().optional(),
+    /**
+     * この判断が書き込んだやり方（Issue #4065）。`practice_write` / `practice_remove` と
+     * `PUT` / `DELETE /practices/:slug` の行にだけ付く。やり方には `memory_update` に当たる専用の
+     * 種別が無いので、`decision` の文面から読む代わりに構造で持つ（文面は推測の元にしない）。
+     *
+     * **optional（後方互換）。** 無い行は「印なし」であって「やり方の書き込みではない」ではない
+     * （欄が入る前のやり方の書き込みにも無い）。`action` の値は `memory_update.action` に揃えた。
+     * `slug` を `practiceSlugSchema` にしないのは、この定義より後ろで宣言されていて参照できないため。
+     */
+    target: z
+      .object({
+        kind: z.literal('practice'),
+        slug: z.string().min(1),
+        action: z.enum(['write', 'remove']),
+      })
+      .optional(),
   }),
   /**
    * 認証トークンのプールが回った / 回らなかった（Issue #393）。

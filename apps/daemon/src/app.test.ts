@@ -1284,7 +1284,34 @@ describe('HTTP API', () => {
     expect(entries[0]).toMatchObject({
       decision: expect.stringContaining('daily-report') as unknown as string,
       grounds: expect.stringContaining('人間が直接 API から') as unknown as string,
+      target: { kind: 'practice', slug: 'daily-report', action: 'write' },
     });
+
+    // 読み口（GET /journal）にも印が載る
+    const listed = await app.request('/journal?type=decision');
+    const body2 = (await listed.json()) as { entries: { target?: unknown }[] };
+    expect(body2.entries[0]?.target).toEqual({
+      kind: 'practice',
+      slug: 'daily-report',
+      action: 'write',
+    });
+  });
+
+  it('PUT /practices/:slug の書き込みは日誌の流れ（SSE）に印つきで流れる', async () => {
+    const response = await app.request('/journal/stream?type=decision');
+    const reader = (response.body as ReadableStream<Uint8Array>).getReader();
+    const decoder = new TextDecoder();
+    await reader.read();
+
+    await app.request('/practices/streamed-one', {
+      ...json({ kind: '調査', title: '題', content: '本文' }),
+      method: 'PUT',
+    });
+
+    const { value } = await reader.read();
+    const frame = decoder.decode(value);
+    expect(frame).toContain('"target":{"kind":"practice","slug":"streamed-one","action":"write"}');
+    await reader.cancel();
   });
 
   it('PUT /practices/:slug は無ければ作る（全文置換）', async () => {
@@ -1451,6 +1478,7 @@ describe('HTTP API', () => {
     expect(entries[0]).toMatchObject({
       decision: expect.stringContaining('to-remove') as unknown as string,
       grounds: '人間が直接 API からやり方を消した',
+      target: { kind: 'practice', slug: 'to-remove', action: 'remove' },
     });
   });
 

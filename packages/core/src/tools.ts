@@ -10514,6 +10514,7 @@ export function createCloneTools(context: ToolContext) {
                 ? '新しいやり方を器に置いた'
                 : 'やり方を書き直した（全文置換。いまの本文の読み口は最新の1本だが、' +
                   '前の本文は版の履歴（practice_history）に残る——#1309）',
+            target: { kind: 'practice', slug, action: 'write' },
           },
           'act-completed',
         );
@@ -10613,6 +10614,7 @@ export function createCloneTools(context: ToolContext) {
               type: 'decision',
               decision: `やり方 ${slug}（${before.kind}）を消した: ${before.title}`,
               grounds: '不要になったと判断した',
+              target: { kind: 'practice', slug, action: 'remove' },
             },
             'act-completed',
           );
@@ -10627,6 +10629,7 @@ export function createCloneTools(context: ToolContext) {
             type: 'decision',
             decision: `読めない形で入っていたやり方 ${slug} を消した`,
             grounds: '読めない形で入っていたやり方を外した',
+            target: { kind: 'practice', slug, action: 'remove' },
           },
           'act-completed',
         );

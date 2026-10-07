@@ -458,6 +458,41 @@ describe('answeredViaSchema / pendingApprovalSchema.answeredVia（Issue #1479）
   });
 });
 
+describe('decision.target（やり方の書き込みの印、#4065）', () => {
+  const base = {
+    type: 'decision',
+    id: 'd1',
+    at: '2026-01-01T00:00:00.000Z',
+    decision: 'やり方 daily を書き直した',
+    grounds: '根拠',
+  };
+
+  it('target の無い古い行は印なしとして読める', () => {
+    const parsed = journalEntrySchema.safeParse(base);
+    expect(parsed.success).toBe(true);
+    if (parsed.success && parsed.data.type === 'decision') {
+      expect(parsed.data.target).toBeUndefined();
+    }
+  });
+
+  it('target を持つ行は値が落ちずに読める', () => {
+    const target = { kind: 'practice', slug: 'daily', action: 'remove' };
+    const parsed = journalEntrySchema.safeParse({ ...base, target });
+    expect(parsed.success).toBe(true);
+    if (parsed.success && parsed.data.type === 'decision') {
+      expect(parsed.data.target).toEqual(target);
+    }
+  });
+
+  it('知らない action は黙って読み替えず拒む', () => {
+    const parsed = journalEntrySchema.safeParse({
+      ...base,
+      target: { kind: 'practice', slug: 'daily', action: 'rename' },
+    });
+    expect(parsed.success).toBe(false);
+  });
+});
+
 /**
  * 自己評定の仕組み（#2699）を消した後も、評定を書いていた時代の行が読める。
  *

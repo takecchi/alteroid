@@ -1719,6 +1719,24 @@
                         },
                         "answeredApprovalId": {
                           "type": "string"
+                        },
+                        "target": {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "const": "practice"
+                            },
+                            "slug": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "action": {
+                              "type": "string",
+                              "enum": ["write", "remove"]
+                            }
+                          },
+                          "required": ["kind", "slug", "action"]
                         }
                       },
                       "required": ["type", "id", "at", "decision", "grounds"]
@@ -6447,6 +6465,24 @@
                               },
                               "answeredApprovalId": {
                                 "type": "string"
+                              },
+                              "target": {
+                                "type": "object",
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "const": "practice"
+                                  },
+                                  "slug": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  },
+                                  "action": {
+                                    "type": "string",
+                                    "enum": ["write", "remove"]
+                                  }
+                                },
+                                "required": ["kind", "slug", "action"]
                               }
                             },
                             "required": ["type", "id", "at", "decision", "grounds"]
@@ -10228,6 +10264,24 @@
                                 },
                                 "answeredApprovalId": {
                                   "type": "string"
+                                },
+                                "target": {
+                                  "type": "object",
+                                  "properties": {
+                                    "kind": {
+                                      "type": "string",
+                                      "const": "practice"
+                                    },
+                                    "slug": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "action": {
+                                      "type": "string",
+                                      "enum": ["write", "remove"]
+                                    }
+                                  },
+                                  "required": ["kind", "slug", "action"]
                                 }
                               },
                               "required": ["type", "id", "at", "decision", "grounds"]
@@ -11582,6 +11636,24 @@
                                 },
                                 "answeredApprovalId": {
                                   "type": "string"
+                                },
+                                "target": {
+                                  "type": "object",
+                                  "properties": {
+                                    "kind": {
+                                      "type": "string",
+                                      "const": "practice"
+                                    },
+                                    "slug": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "action": {
+                                      "type": "string",
+                                      "enum": ["write", "remove"]
+                                    }
+                                  },
+                                  "required": ["kind", "slug", "action"]
                                 }
                               },
                               "required": ["type", "id", "at", "decision", "grounds"]
@@ -12936,6 +13008,24 @@
                               },
                               "answeredApprovalId": {
                                 "type": "string"
+                              },
+                              "target": {
+                                "type": "object",
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "const": "practice"
+                                  },
+                                  "slug": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  },
+                                  "action": {
+                                    "type": "string",
+                                    "enum": ["write", "remove"]
+                                  }
+                                },
+                                "required": ["kind", "slug", "action"]
                               }
                             },
                             "required": ["type", "id", "at", "decision", "grounds"]
@@ -14278,6 +14368,24 @@
                               },
                               "answeredApprovalId": {
                                 "type": "string"
+                              },
+                              "target": {
+                                "type": "object",
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "const": "practice"
+                                  },
+                                  "slug": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  },
+                                  "action": {
+                                    "type": "string",
+                                    "enum": ["write", "remove"]
+                                  }
+                                },
+                                "required": ["kind", "slug", "action"]
                               }
                             },
                             "required": ["type", "id", "at", "decision", "grounds"]
