@@ -11,6 +11,7 @@ import { createClient } from './client.js';
 import { withErrorReason } from './format.js';
 import { describeAuthFailure, resolveTarget, type Target } from './target.js';
 import { redactError } from './redact.js';
+import { shellQuote } from './shell-quote.js';
 
 /**
  * `alteroid inbox remove` — 受信箱（`inbox_events`。まだ処理し終えていない
@@ -179,11 +180,11 @@ function report(result: InboxRemoveManyResult, dryRun: boolean, options: InboxRe
 function describeExecuteCommand(options: InboxRemoveOptions): string {
   const parts = [
     'alteroid inbox remove',
-    `--types ${options.types}`,
-    ...(options.sources === undefined ? [] : [`--sources ${options.sources}`]),
-    ...(options.before === undefined ? [] : [`--before ${options.before}`]),
-    `--reason "${options.reason}"`,
-    ...(options.limit === undefined ? [] : [`--limit ${options.limit}`]),
+    `--types ${shellQuote(options.types)}`,
+    ...(options.sources === undefined ? [] : [`--sources ${shellQuote(options.sources)}`]),
+    ...(options.before === undefined ? [] : [`--before ${shellQuote(options.before)}`]),
+    `--reason ${shellQuote(options.reason)}`,
+    ...(options.limit === undefined ? [] : [`--limit ${shellQuote(options.limit)}`]),
     '--execute',
   ];
   return parts.join(' ');

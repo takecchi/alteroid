@@ -100,6 +100,7 @@ async function acquireFileLock(
   lockPath: string,
   timeoutMs: number,
   staleMs: number,
+  createDir: boolean,
 ): Promise<string> {
   const token = randomUUID();
   const deadline = Date.now() + timeoutMs;
@@ -125,6 +126,8 @@ async function acquireFileLock(
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
       if (code === 'ENOENT') {
+        // `createDir: false` のときは作らず、ENOENT のまま呼び手へ返す（呼び手が「無い」として扱う。#3781）。
+        if (!createDir) throw error;
         // **ロック対象のディレクトリがまだ無い**（初回起動などで、対象ファイル
         // のディレクトリごと未作成）。ここで作ってから retry する。
         //
@@ -202,6 +205,15 @@ async function releaseFileLock(lockPath: string, token: string): Promise<void> {
  *
  * 取得できたロックは `finally` で必ず解放する。
  *
+ * ## `createDir: false`（#3781）
+ *
+ * 既定ではロック対象のディレクトリが無ければ作る。**「無いものを相手にしてはいけない」呼び手**
+ * （添付の `bind` / `unbind` / `prune`。無い id に空のディレクトリを残してはいけない）は
+ * `createDir: false` を渡す。ディレクトリが無ければ作らず、`ENOENT` のエラーをそのまま投げるので、
+ * 呼び手が「無い」として扱う。呼び出し側で先に存在を確かめる形にしないのは、上の `mkdir` の注釈と
+ * 同じ理由（`processChains` へ並ぶ前に `await` を挟むと到達順がずれる）に加え、確かめた後に掃除が
+ * 消せば結局この `mkdir` が空のディレクトリを作ってしまうから（確かめる形では競りを塞げない）。
+ *
  * ## 取得できなければ {@link LockTimeoutError}
  *
  * 「取れなかった」だけでは人が動けないので、ロックのパスと、そのとき
@@ -210,15 +222,16 @@ async function releaseFileLock(lockPath: string, token: string): Promise<void> {
 export async function withPathLock<T>(
   targetPath: string,
   fn: () => Promise<T>,
-  options?: { timeoutMs?: number; staleMs?: number },
+  options?: { timeoutMs?: number; staleMs?: number; createDir?: boolean },
 ): Promise<T> {
   const timeoutMs = options?.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const staleMs = options?.staleMs ?? DEFAULT_STALE_MS;
+  const createDir = options?.createDir ?? true;
   const lockPath = `${targetPath}.lock`;
 
   const prior = processChains.get(lockPath) ?? Promise.resolve();
   const attempt = prior.then(async () => {
-    const token = await acquireFileLock(lockPath, timeoutMs, staleMs);
+    const token = await acquireFileLock(lockPath, timeoutMs, staleMs, createDir);
     try {
       return await fn();
     } finally {

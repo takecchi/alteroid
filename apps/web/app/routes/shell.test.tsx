@@ -168,6 +168,31 @@ describe('フッターのログアウト（issue #1757）', () => {
     });
   });
 
+  it('送信中は読み込み中になり、二度押しでも要求は1回だけ（#3738）', async () => {
+    const logouts: string[] = [];
+    stubFetch((url) => {
+      if (url.endsWith('/health')) return json(AUTH_HEALTH);
+      if (url.endsWith('/auth/me')) {
+        return json({ kind: 'account', account: CREDENTIAL.account, granted: true });
+      }
+      if (url.endsWith('/auth/logout')) {
+        logouts.push(url);
+        return new Promise<Response>(() => undefined);
+      }
+      return undefined;
+    });
+
+    renderShell();
+
+    const button = await screen.findByRole('button', { name: 'ログアウト' });
+    fireEvent.click(button);
+    fireEvent.click(button);
+
+    await waitFor(() => expect(button.hasAttribute('disabled')).toBe(true));
+    fireEvent.click(button);
+    expect(logouts).toHaveLength(1);
+  });
+
   it('失敗 → 鍵は残したままエラーを出し、「この画面から鍵だけを捨てる」で個別に捨てられる', async () => {
     stubFetch((url) => {
       if (url.endsWith('/health')) return json(AUTH_HEALTH);

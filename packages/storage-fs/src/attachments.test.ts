@@ -121,6 +121,32 @@ describe('FsAttachmentStore', () => {
     expect(await store.get(meta.id)).toBeDefined();
   });
 
+  it('無い id の bind / bindToExternalEvent / unbind は、置き場に空のディレクトリを作らない（#3781）', async () => {
+    const root = join(dir, 'attachments');
+    const ghost = '0a60c1ad-0000-4000-8000-000000000000';
+    // 置き場そのものが無いとき
+    expect((await store.bind([ghost], 'c1')).missing).toEqual([ghost]);
+    expect((await store.bindToExternalEvent([ghost], 'e1')).missing).toEqual([ghost]);
+    expect(await store.unbind([ghost], { conversationId: 'c1' })).toEqual([]);
+    await expect(readdir(root)).rejects.toMatchObject({ code: 'ENOENT' });
+    // 置き場が在るとき
+    const meta = await store.put({ name: 'a.png', mediaType: 'image/png', bytes: PNG });
+    expect((await store.bind([ghost, meta.id], 'c1')).missing).toEqual([ghost]);
+    expect((await store.bindToExternalEvent([ghost], 'e1')).missing).toEqual([ghost]);
+    expect(await store.unbind([ghost], { externalEventId: 'e1' })).toEqual([]);
+    expect(await readdir(root)).toEqual([meta.id]);
+  });
+
+  it('prune が列挙したあとに別の掃除が dir ごと消しても、空のディレクトリを作り直さない（#3781）', async () => {
+    const meta = await store.put({ name: 'a.png', mediaType: 'image/png', bytes: PNG });
+    const later = new Date(Date.now() + ATTACHMENT_UNBOUND_TTL_MS + 60_000);
+    hooks.afterMetaRead = async () => {
+      await rm(join(dir, 'attachments', meta.id), { recursive: true, force: true });
+    };
+    expect(await store.prune(later)).toBe(0);
+    expect(await readdir(join(dir, 'attachments'))).toEqual([]);
+  });
+
   it('prune は1件の rm が失敗しても残りを掃き、消せた件数だけを返す', async () => {
     const ids = [
       (await store.put({ name: 'a.png', mediaType: 'image/png', bytes: PNG })).id,

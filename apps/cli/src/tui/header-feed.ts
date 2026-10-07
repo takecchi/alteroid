@@ -108,15 +108,27 @@ export class HeaderFeed {
   /** 件数を取り直す。失敗しても前の件数を残す（古い値のほうが「0」より情報がある）。 */
   async refetch(): Promise<void> {
     try {
-      const counts = await this.api.headerCounts();
+      const got = await this.api.headerCounts();
       if (this.stopped) return;
-      this.store.update((s) =>
-        s.counts?.pendingApprovals === counts.pendingApprovals &&
-        s.counts.unreadableApprovals === counts.unreadableApprovals &&
-        s.counts.runningManagers === counts.runningManagers
+      this.store.update((s) => {
+        // 取れなかった側の欄は前の件数を残す。まだ一度も取れていない欄が残るなら（起動直後に
+        // 片方だけ取れた）、0 と偽らず `null`（未取得）のままにする。
+        const pendingApprovals = got.pendingApprovals ?? s.counts?.pendingApprovals;
+        const unreadableApprovals = got.unreadableApprovals ?? s.counts?.unreadableApprovals;
+        const runningManagers = got.runningManagers ?? s.counts?.runningManagers;
+        if (
+          pendingApprovals === undefined ||
+          unreadableApprovals === undefined ||
+          runningManagers === undefined
+        ) {
+          return s;
+        }
+        return s.counts?.pendingApprovals === pendingApprovals &&
+          s.counts.unreadableApprovals === unreadableApprovals &&
+          s.counts.runningManagers === runningManagers
           ? s
-          : { ...s, counts },
-      );
+          : { ...s, counts: { pendingApprovals, unreadableApprovals, runningManagers } };
+      });
     } catch {
       // 次の出来事 / 再接続でまた取る。
     }

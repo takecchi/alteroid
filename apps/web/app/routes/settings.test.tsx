@@ -621,7 +621,9 @@ const CREDENTIAL: Credential = {
 };
 
 /** ログインしてある `Account` を描く（`renderSettings` は認証を対象外にしているため別立て）。 */
-function renderAuthedAccount(logoutRoute: (url: string) => Response | undefined) {
+function renderAuthedAccount(
+  logoutRoute: (url: string) => Response | Promise<Response> | undefined,
+) {
   storeCredential(TEST_BASE_URL, CREDENTIAL);
   stubFetch((url) => {
     if (url.includes('/runners')) return json({ runners: [], daemonRevision: DAEMON_UNKNOWN });
@@ -657,6 +659,23 @@ describe('Account のログアウト（issue #1757）', () => {
     await waitFor(() => {
       expect(localStorage.getItem(`alteroid.credential:${TEST_BASE_URL}`)).toBeNull();
     });
+  });
+
+  it('送信中は読み込み中になり、二度押しでも要求は1回だけ（#3738）', async () => {
+    const logouts: string[] = [];
+    renderAuthedAccount((url) => {
+      if (!url.endsWith('/auth/logout')) return undefined;
+      logouts.push(url);
+      return new Promise<Response>(() => undefined);
+    });
+
+    const button = await screen.findByRole('button', { name: 'ログアウト' });
+    fireEvent.click(button);
+    fireEvent.click(button);
+
+    await waitFor(() => expect(button.hasAttribute('disabled')).toBe(true));
+    fireEvent.click(button);
+    expect(logouts).toHaveLength(1);
   });
 
   it('失敗 → 鍵は残したままエラーを出し、「この画面から鍵だけを捨てる」で個別に捨てられる', async () => {

@@ -5,7 +5,7 @@ import { useLatest } from '~/lib/use-latest';
 import { useMinuteNow } from '~/lib/use-now';
 import { unsentInput } from '~/lib/unsent-input';
 import { AlertTriangle } from 'lucide-react';
-import { Fragment, useEffect, useId, useState } from 'react';
+import { Fragment, useCallback, useEffect, useId, useState } from 'react';
 import { Tabs } from 'radix-ui';
 import { Link } from 'react-router';
 
@@ -16,6 +16,7 @@ import {
   Button,
   Card,
   CardHeader,
+  CodeBlock,
   ConfirmDialog,
   Empty,
   ErrorNote,
@@ -86,6 +87,50 @@ function CommitmentsPage() {
    */
   const listUnavailable = data === undefined && error !== undefined;
 
+  /**
+   * **書きかけ・出したままの失敗を、行が消えても持つ**（issue #3751。承認の画面の
+   * `leftoverSources`（#3515）と同じ考え方）。行（`OpenRow`）の入力は行の state が持つが、
+   * 行が裏で片付いて一覧から外れると `OpenRow` ごと unmount され、書きかけも、押した結果の
+   * 409 の本文も消える。そこで行は書きかけと失敗をここへも写し、行が外れたらここから
+   * 「既に片付いた」と断って残す（`OrphanNotes`）。
+   */
+  const [notes, setNotes] = useState<Readonly<Record<string, RowNote>>>({});
+  const track = useCallback((commitment: Commitment, patch: RowNotePatch) => {
+    setNotes((current) => {
+      const before = current[commitment.id];
+      const merged: RowNote = { ...before, ...patch, commitment };
+      if (isEmptyNote(merged)) {
+        if (before === undefined) return current;
+        return withoutKey(current, commitment.id);
+      }
+      if (before !== undefined && sameNote(before, merged)) return current;
+      return { ...current, [commitment.id]: merged };
+    });
+  }, []);
+  /** 自分の書き込みの応答を待っている id。一覧が先に取り直されて行が消える一瞬を、断りと取り違えない。 */
+  const [settling, setSettling] = useState<ReadonlySet<string>>(new Set());
+  const markSettling = useCallback((id: string, on: boolean) => {
+    setSettling((current) => {
+      if (current.has(id) === on) return current;
+      const next = new Set(current);
+      if (on) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  }, []);
+  const dismissNote = useCallback((id: string) => {
+    setNotes((current) => withoutKey(current, id));
+  }, []);
+  // **一覧を読めているときだけ**外れたと見る（読み込み中・失敗で空に見えるだけのときは、書きかけを
+  // 断りへ変えない）。未了に載っている行は、いまも行が持っている。
+  const orphans = (() => {
+    if (data === undefined) return [];
+    const openIds = new Set(open.map((c) => c.id));
+    return Object.values(notes)
+      .filter((note) => !openIds.has(note.commitment.id) && !settling.has(note.commitment.id))
+      .map((note) => ({ note, current: all.find((c) => c.id === note.commitment.id) }));
+  })();
+
   return (
     <Page
       tabs={<WorkTabs />}
@@ -117,6 +162,8 @@ function CommitmentsPage() {
           <UnreadableJobsNote unreadableJobs={data?.unreadableJobs ?? []} />
           <TrimmedClosedNote trimmedClosed={trimmedClosed} />
 
+          <OrphanNotes orphans={orphans} onDismiss={dismissNote} />
+
           <Card className="mb-4">
             <CardHeader
               title="未了"
@@ -127,7 +174,12 @@ function CommitmentsPage() {
             ) : (
               <ul>
                 {open.map((commitment) => (
-                  <OpenRow key={commitment.id} commitment={commitment} />
+                  <OpenRow
+                    key={commitment.id}
+                    commitment={commitment}
+                    onTrack={track}
+                    onSettling={markSettling}
+                  />
                 ))}
               </ul>
             )}
@@ -1000,8 +1052,14 @@ function CommitmentBodyEditor({
   onCancel,
   onRequestCancel,
   onDirtyChange,
+  onTrack,
+  onSettling,
 }: {
   commitment: Commitment;
+  /** 下書きと失敗をページへも写す（行が一覧から外れても残すため。#3751）。 */
+  onTrack: (patch: RowNotePatch) => void;
+  /** 保存の応答を待っている間かを知らせる。 */
+  onSettling: (on: boolean) => void;
   /** 確認なしで閉じる。保存に成功したときだけ使う（保存直後は下書きが元と違って見えるため）。 */
   onCancel: () => void;
   /** 「やめる」。書きかけがあれば確認を挟むのは呼び出し側（行）。 */
@@ -1026,6 +1084,11 @@ function CommitmentBodyEditor({
     onDirtyChange(dirty);
   }, [dirty, onDirtyChange]);
   useEffect(() => () => onDirtyChange(false), [onDirtyChange]);
+  // 書きかけの下書きをページへ写す。**unmount では消さない**（行が一覧から外れたときに、ページが
+  // 断りとして残す。畳む・やめるは `OpenRow` の `closeEditor` が明示的に消す）。
+  useEffect(() => {
+    onTrack({ draft: dirty ? draft : undefined });
+  }, [dirty, draft, onTrack]);
 
   function save() {
     // 保存中は何もしない。ボタン・⌘/Ctrl+Enter・⌘/Ctrl+S のどの経路もここを通る（#3300）。
@@ -1035,17 +1098,29 @@ function CommitmentBodyEditor({
     if (draft === undefined || draft.trim() === '') return;
     setBusy(true);
     setFailure(undefined);
+    onTrack({ editFailure: undefined });
+    onSettling(true);
     // 送った値を控える。成功のあと、いまの下書きがこれと同じときだけ畳む（issue #3515）。
     const sent = draft;
     editCommitment(commitment.id, sent)
       // 成功したら編集モードを畳む。一覧は `useEditCommitment` の中で
       // 取り直されるので、この行の `commitment` はすぐ新しい本文へ差し替わる。
       // 応答を待つ間に打ち足した分があるときは畳まず、下書きを残す。
-      .then(() => {
-        if (latestDraft.current === sent) onCancel();
-      })
-      .catch(setFailure)
-      .finally(() => setBusy(false));
+      .then(
+        () => {
+          if (latestDraft.current === sent) onCancel();
+          setBusy(false);
+          onSettling(false);
+        },
+        (caught: unknown) => {
+          // 一覧の取り直しが先に行を消すことがある（409）。行の state は届かないので、ページにも渡す。
+          // 失敗の記録と「待ちが終わった」は同じ処理の中で行う（別の描画だと、行が消えた断りが失敗の無い形で一瞬出る）。
+          setFailure(caught);
+          onTrack({ editFailure: caught });
+          setBusy(false);
+          onSettling(false);
+        },
+      );
   }
 
   return (
@@ -1129,6 +1204,121 @@ function CommitmentBodyEditor({
   );
 }
 
+/**
+ * 行（`OpenRow`）がページへ写す、書きかけと出したままの失敗（issue #3751）。
+ * 行が裏で片付いて一覧から外れたとき、`OrphanNotes` がこれを断りつきで残す。
+ */
+interface RowNote {
+  /** 行が最後に見ていた依頼（外れたあとも本文を見せるため）。 */
+  commitment: Commitment;
+  /** 本文の編集の書きかけ（元の本文と違うときだけ）。 */
+  draft?: string;
+  /** 片付けた理由の書きかけ（空白だけなら無い）。 */
+  reason?: string;
+  /** 本文の保存の失敗（409 など）。 */
+  editFailure?: unknown;
+  /** 片付けるの失敗（409 など）。 */
+  closeFailure?: unknown;
+}
+type RowNotePatch = Partial<Omit<RowNote, 'commitment'>>;
+
+function isEmptyNote(note: RowNote): boolean {
+  return (
+    note.draft === undefined &&
+    note.reason === undefined &&
+    note.editFailure === undefined &&
+    note.closeFailure === undefined
+  );
+}
+
+function sameNote(a: RowNote, b: RowNote): boolean {
+  return (
+    a.commitment === b.commitment &&
+    a.draft === b.draft &&
+    a.reason === b.reason &&
+    a.editFailure === b.editFailure &&
+    a.closeFailure === b.closeFailure
+  );
+}
+
+function withoutKey<T>(record: Readonly<Record<string, T>>, key: string): Record<string, T> {
+  return Object.fromEntries(Object.entries(record).filter(([k]) => k !== key));
+}
+
+/**
+ * 一覧から外れた（裏で片付いた）行の、書きかけと失敗を残して断る（issue #3751）。
+ * 承認の画面の `LeftoverDrafts`（#3515）と同じ形——**黙って消さない**。写して、閉じられる。
+ *
+ * 書きかけ（本文の下書き・理由）が在るあいだは離れる前の確認にも載せる。消えてよいと使い手が
+ * 決める（閉じる）までは、まだ使い手が書いたものが画面にしか無いため。失敗の本文だけのときは
+ * 載せない（使い手が書いたものではなく、読めば済む）。
+ */
+function OrphanNotes({
+  orphans,
+  onDismiss,
+}: {
+  orphans: { note: RowNote; current: Commitment | undefined }[];
+  onDismiss: (id: string) => void;
+}) {
+  if (orphans.length === 0) return null;
+  return (
+    <ul className="mb-4 flex flex-col gap-3" aria-label="一覧から外れた仕事">
+      {orphans.map(({ note, current }) => (
+        <OrphanNote key={note.commitment.id} note={note} current={current} onDismiss={onDismiss} />
+      ))}
+    </ul>
+  );
+}
+
+function OrphanNote({
+  note,
+  current,
+  onDismiss,
+}: {
+  note: RowNote;
+  /** いまの一覧が持つ同じ id の行（片付いた行を見る表示のときだけ在る）。 */
+  current: Commitment | undefined;
+  onDismiss: (id: string) => void;
+}) {
+  const { commitment } = note;
+  // 行が持っていた id と同じものを使う（行の unmount と入れ替わるとき、確認が一瞬も途切れない）。
+  useReportDirty(commitment.id, note.draft !== undefined);
+  useReportDirty(`close-reason:${commitment.id}`, note.reason !== undefined);
+  return (
+    <li className="rounded-md border border-warn/40 bg-warn/10 px-3 py-2 text-sm">
+      <p className="mb-2 break-words">
+        <strong>この仕事は既に片付いた（または未了の一覧から外れた）。</strong>
+        書きかけは残してある。ここから保存や片付けはできないので、必要なら写してから閉じる。
+        <span className="mt-1 block text-xs text-muted-foreground">
+          対象: 「{snippet(commitment.body)}」
+        </span>
+        {current?.closedReason !== undefined && (
+          <span className="mt-1 block text-xs text-muted-foreground">
+            片付けた理由: {current.closedReason}
+          </span>
+        )}
+      </p>
+      {note.draft !== undefined && (
+        <CodeBlock label="書きかけの本文" maxHeight="12rem">
+          {note.draft}
+        </CodeBlock>
+      )}
+      {note.reason !== undefined && (
+        <CodeBlock label="書きかけの片付けた理由" maxHeight="12rem" className="mt-2">
+          {note.reason}
+        </CodeBlock>
+      )}
+      <ErrorNote error={note.editFailure} className="mt-2" />
+      <ErrorNote error={note.closeFailure} className="mt-2" />
+      <div className="mt-2">
+        <Button size="sm" onClick={() => onDismiss(commitment.id)}>
+          閉じる（見送る）
+        </Button>
+      </div>
+    </li>
+  );
+}
+
 const SNIPPET_MAX = 20;
 
 /** 行ごとの入力欄の名前に入れる、依頼の頭の数文字（同じ見た目の欄が並ぶので、どの行かを区別する）。 */
@@ -1137,13 +1327,35 @@ function snippet(body: string): string {
   return flat.length > SNIPPET_MAX ? `${flat.slice(0, SNIPPET_MAX)}…` : flat;
 }
 
-function OpenRow({ commitment }: { commitment: Commitment }) {
+function OpenRow({
+  commitment,
+  onTrack,
+  onSettling,
+}: {
+  commitment: Commitment;
+  onTrack: (commitment: Commitment, patch: RowNotePatch) => void;
+  onSettling: (id: string, on: boolean) => void;
+}) {
   const closeCommitment = useCloseCommitment();
   const reasonId = useId();
   const reasonHintId = useId();
   // 「N分前」を分の時計で動かす（#3748。刻みは全行で1本）。
   const now = useMinuteNow();
   const [reason, setReason] = useState('');
+  // 書きかけ・失敗をページへ写す（行が一覧から外れても残すため。#3751）。依頼が取り直しで変わったら、
+  // 写しの「最後に見ていた依頼」も差し替わる（同じ値は no-op）。
+  const track = useCallback(
+    (patch: RowNotePatch) => onTrack(commitment, patch),
+    [onTrack, commitment],
+  );
+  const settling = useCallback(
+    (on: boolean) => onSettling(commitment.id, on),
+    [onSettling, commitment.id],
+  );
+  // **unmount では消さない**（行が外れたらページが断りとして残す）。成功・やめるは明示的に消す。
+  useEffect(() => {
+    track({ reason: reason.trim() !== '' ? reason : undefined });
+  }, [reason, track]);
   // 片付けた理由の書きかけも離れる前の確認へ知らせる（#3750）。本文の編集（`commitment.id`）とは別の id。
   useReportDirty(`close-reason:${commitment.id}`, reason.trim() !== '');
   const [busy, setBusy] = useState(false);
@@ -1177,6 +1389,7 @@ function OpenRow({ commitment }: { commitment: Commitment }) {
     setEditing(false);
     setEditDirty(false);
     setConfirmingDiscard(false);
+    track({ draft: undefined, editFailure: undefined });
   }
   /** 「編集をやめる」「やめる」。書きかけがあるときだけ確かめる（#3375）。 */
   function requestCloseEditor() {
@@ -1189,13 +1402,20 @@ function OpenRow({ commitment }: { commitment: Commitment }) {
     if (busy || reason.trim() === '') return;
     setBusy(true);
     setFailure(undefined);
+    track({ closeFailure: undefined });
+    // 応答を待つ間は、行が一覧から消えても断りにしない（一覧は応答より先に取り直される）。
+    settling(true);
     try {
       await closeCommitment(commitment.id, reason.trim());
-      // 成功したら一覧から消えるので、入力を戻す必要はない（部品ごと消える）。
+      // 成功したら一覧から消える（部品ごと消える）ので、入力を戻す必要はない。ページの写しだけ消す。
+      track({ reason: undefined, closeFailure: undefined });
     } catch (caught) {
       setFailure(caught);
+      // 一覧の取り直しが先に行を消すことがある（409）。ページにも渡し、行が消えても失敗の本文を見せる。
+      track({ closeFailure: caught });
     } finally {
       setBusy(false);
+      settling(false);
     }
   }
 
@@ -1235,6 +1455,8 @@ function OpenRow({ commitment }: { commitment: Commitment }) {
           onCancel={closeEditor}
           onRequestCancel={requestCloseEditor}
           onDirtyChange={setEditDirty}
+          onTrack={track}
+          onSettling={settling}
         />
       ) : (
         <CommitmentBody commitment={commitment} />

@@ -1440,6 +1440,8 @@ export function ChatPane({
    * 問わず呼ぶ。Issue #2662）。進行中なら再生が頭から積み直し、進行中でなければ確定した
    * 本文を履歴が出す。どちらでも前の途中の行は残さない。
    */
+  /** 「受信をやめる」で止めた会話 id → 止めた時点の履歴のクローン発言数（#3761）。 */
+  const stoppedReplyRef = useRef(new Map<string, number>());
   const discardUnfinishedReply = useCallback((conversationId: string) => {
     const stale = unfinishedReplyRef.current.get(conversationId);
     if (stale === undefined) return;
@@ -1972,6 +1974,24 @@ export function ChatPane({
   useEffect(() => {
     historyLinesRef.current = historyLines;
   }, [historyLines]);
+  /*
+   * 「受信をやめる」で止めた会話の途中の返信行を、履歴がその会話の新しいクローンの発言を
+   * 出した時点で畳む（#3761）。止めた時点より履歴のクローン発言が増えていれば、完全な発言が
+   * 載ったということ。新しい受信が走っているあいだは、その受信の行を捨てないよう何もしない。
+   */
+  useEffect(() => {
+    if (shownId === undefined) return;
+    const baseline = stoppedReplyRef.current.get(shownId);
+    if (baseline === undefined) return;
+    const running = streamRef.current;
+    if (running !== undefined && !running.controller.signal.aborted) {
+      stoppedReplyRef.current.delete(shownId);
+      return;
+    }
+    if (historyLines.filter((line) => line.role === 'clone').length <= baseline) return;
+    stoppedReplyRef.current.delete(shownId);
+    discardUnfinishedReply(shownId);
+  }, [historyLines, shownId, discardUnfinishedReply]);
   const all = useMemo(() => {
     const pending = pendingOwnLines(lines, shownId, historyLines, failedTurns);
     // 手元の位置に残したカードは、履歴の側では出さない（二重にしない。#3396）。
@@ -2830,6 +2850,60 @@ export function ChatPane({
       }
 
       /*
+       * **新しい会話から送り、待つあいだに別の会話へ移っていたときも同じ（#3766）。** 送り先の
+       * 会話はまだ無いので、新しい会話として投函し、`open` で id が決まったら接続を捨てる
+       * （`followUp` と同じ。サーバは `open` の前に受信箱へ積む）。受信は張らず、`open` で
+       * 画面を奪わない。移った先の入力欄・受信の表示には触れない。送った本文の書きかけ
+       * （新しい会話の分）からは送った分を取り除く。
+       */
+      if (awaited && shownId === undefined && shownIdRef.current !== undefined) {
+        setDrafts((previous) => {
+          const kept = previous.get(undefined);
+          if (kept === undefined) return previous;
+          const rest = withoutSentText(kept, text);
+          return rest === kept ? previous : new Map(previous).set(undefined, rest);
+        });
+        const postController = new AbortController();
+        let opened = false;
+        try {
+          for await (const message of postChat(
+            api,
+            {
+              text,
+              ...(adoptedId === undefined ? {} : { conversationId: adoptedId }),
+              ...(supersedes === undefined ? {} : { supersedes }),
+              attachments: attachmentIds(attachments),
+              clientMessageId,
+            },
+            { signal: postController.signal },
+          )) {
+            if (message.event === 'open') {
+              opened = true;
+              recordOwnMessage(message.data.conversationId, text);
+              break;
+            }
+          }
+          if (!opened) throw new StreamClosedEarlyError();
+        } catch (caught) {
+          // 投函は `open` の前に終わっている。新しい会話の失敗として積み、戻ったときに文を返す。
+          setFailures((prev) => new Map(prev).set(undefined, caught));
+          giveBack(
+            undefined,
+            text,
+            '',
+            supersedes,
+            attachments,
+            isClientMessageIdMismatch(caught) ? newClientMessageId() : clientMessageId,
+            undefined,
+            adoptedId,
+          );
+        } finally {
+          postController.abort();
+        }
+        return;
+      }
+
+      /*
        * **走っているストリームがあっても、送り先の会話のものでなければ追送しない（#3395）。**
        * 別の会話のストリーム（切り替えで止める途中のもの・戻ってきた再生）へ投函すると、その会話へ
        * 届いてしまう。新しい会話（`shownId` が無い）では、送る前から走っていたものだけが自分の続き。
@@ -3407,8 +3481,11 @@ export function ChatPane({
       setEndNotice(undefined);
       try {
         await endConversation(pressedConversationId);
-        setEndNotice({ fromId: pressedConversationId });
-        navigate('/chat');
+        // 応答を待つ間に別の会話へ移っていたら、そこにとどまる（#3762）。
+        if (shownIdRef.current === pressedConversationId) {
+          setEndNotice({ fromId: pressedConversationId });
+          navigate('/chat');
+        }
       } catch (caught) {
         setEndFailure({ conversationId: pressedConversationId, error: caught });
       } finally {
@@ -3904,7 +3981,18 @@ export function ChatPane({
           setPending((current) => current.filter((item) => item.key !== key));
           setAttachNotice(undefined);
         }}
-        onStopReceiving={() => streamRef.current?.controller.abort()}
+        onStopReceiving={() => {
+          const stopping = streamRef.current;
+          if (stopping === undefined) return;
+          // 止めたあともターンはサーバで続く。途中の返信行は、履歴が新しいクローンの発言を出したら畳む（#3761）。
+          if (stopping.id !== undefined && unfinishedReplyRef.current.has(stopping.id)) {
+            stoppedReplyRef.current.set(
+              stopping.id,
+              historyLinesRef.current.filter((line) => line.role === 'clone').length,
+            );
+          }
+          stopping.controller.abort();
+        }}
         error={
           /*
            * **3つを排他にしない（#3594）。** 添付を断った理由・送信の失敗・未確認の送信の操作

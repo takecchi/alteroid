@@ -4,6 +4,8 @@ import { Navigate, useNavigate } from 'react-router';
 
 import { ConnectionCard } from '~/components/connection';
 import { LoadError } from '~/components/load-error';
+import { useLatest } from '~/lib/use-latest';
+import { useLogout } from '~/lib/use-logout';
 import {
   Badge,
   Button,
@@ -22,7 +24,12 @@ import {
   startLogin,
   type ClaimOutcome,
 } from '@alteroid/swr';
-import { readPendingLogin, storePendingLogin, type PendingLogin } from '@alteroid/logic';
+import {
+  formatTime,
+  readPendingLogin,
+  storePendingLogin,
+  type PendingLogin,
+} from '@alteroid/logic';
 
 /** 小さい補足の文字（この画面で繰り返す class）。 */
 const NOTE = 'text-xs text-muted-foreground';
@@ -57,27 +64,23 @@ export default function Login() {
    * 失敗の帯を上に足す（`shell.tsx` の `recheckFailing` と同じ考え方）。
    */
   const recheckError = auth.status === 'checking' ? undefined : auth.error;
-  const notice = (
+  /** 再試行つきの「接続先のサーバの状態」の失敗（差し替えた画面と、上に足す帯で共用）。 */
+  const loadError = (error: unknown, className: string) => (
     <LoadError
       what="接続先のサーバの状態"
-      error={recheckError}
+      error={error}
       onRetry={() => auth.revalidate()}
       retrying={auth.isValidating}
-      className="mb-4"
+      className={className}
     />
   );
+  const notice = loadError(recheckError, 'mb-4');
 
   if (auth.error !== undefined && auth.status === 'checking') {
     return (
       <Shell>
         <Heading>接続先のサーバに繋がらない</Heading>
-        <LoadError
-          what="接続先のサーバの状態"
-          error={auth.error}
-          onRetry={() => auth.revalidate()}
-          retrying={auth.isValidating}
-          className="mt-3"
-        />
+        {loadError(auth.error, 'mt-3')}
       </Shell>
     );
   }
@@ -247,7 +250,9 @@ function SignIn({ notice }: { notice: React.ReactNode }) {
       <ErrorNote error={failure} className="mt-3" />
 
       {auth.providers.length === 0 ? (
-        <div className="mt-4 rounded-md border border-border bg-background p-3 text-xs leading-relaxed text-muted-foreground">
+        <div
+          className={`mt-4 rounded-md border border-border bg-background p-3 leading-relaxed ${NOTE}`}
+        >
           <p className="mb-1.5 font-medium text-foreground">ログイン手段が設定されていない</p>
           <p>
             接続先のサーバは認証を要求しているが、ログインできるプロバイダが1つも登録されていない。
@@ -319,12 +324,27 @@ function Ungranted({ notice }: { notice: React.ReactNode }) {
    * `/auth/logout` は許可の無いアカウントも通す（`app.ts` の `authenticate`
    * の該当箇所）。失敗したら、ほかの画面と同じく鍵だけを捨てる操作を残す。
    */
-  const [logoutError, setLogoutError] = useState<string | null>(null);
-  const switchAccount = () => {
-    setLogoutError(null);
-    void auth.logout().then((result) => {
-      if (!result.ok) setLogoutError(result.message);
-    });
+  const { busy, error: logoutError, logout, discard } = useLogout();
+  /**
+   * 「許可されたか確認する」。**確かめている間は読み込み中にし、確かめた結果まだ許可が無ければ
+   * そう言う**（#3738。何も変わらないと、押せたのかどうかが分からない）。許可が下りていれば
+   * 画面ごと差し替わる。確認そのものが失敗したときは `notice` が出るので、「まだ許可されていない」
+   * とは言わない（失敗を結果のように見せない）。
+   */
+  const [checking, setChecking] = useState(false);
+  const [checkedAt, setCheckedAt] = useState<string | null>(null);
+  // 失敗しても `revalidate()` は前回の値で解決するので、失敗の有無は描き直し後の `error` で見る。
+  const latestError = useLatest(auth.error);
+  const recheck = () => {
+    if (checking) return;
+    setChecking(true);
+    void auth
+      .revalidate()
+      .then(() => {
+        if (latestError.current === undefined) setCheckedAt(new Date().toISOString());
+      })
+      .catch(() => undefined)
+      .finally(() => setChecking(false));
   };
   const command = `alteroid access grant ${auth.account?.id ?? '<アカウント id>'}`;
 
@@ -338,7 +358,7 @@ function Ungranted({ notice }: { notice: React.ReactNode }) {
           変わっていないのは「使えるようにするのは人間の明示的な操作である」の
           ほうで、下のコマンドがその操作そのものである。
         */}
-      <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+      <p className={`mt-2 leading-relaxed ${NOTE}`}>
         ログインは通っている。使えるようにするのは人間の明示的な操作なので、下のコマンドを実行してもらう必要がある。
       </p>
 
@@ -364,22 +384,22 @@ function Ungranted({ notice }: { notice: React.ReactNode }) {
       <Input readOnly value={command} className="mt-1.5 font-mono text-xs" />
 
       <div className="mt-4 flex items-center gap-2">
-        <Button variant="primary" onClick={() => void auth.revalidate()}>
+        <Button variant="primary" loading={checking} onClick={recheck}>
           許可されたか確認する
         </Button>
-        <Button onClick={switchAccount}>別のアカウントでログイン</Button>
+        <Button loading={busy} onClick={logout}>
+          別のアカウントでログイン
+        </Button>
       </div>
+      {checkedAt !== null && !checking && (
+        <p role="status" className={`mt-2 ${NOTE}`}>
+          まだ許可されていない（{formatTime(checkedAt)} に確認）
+        </p>
+      )}
       {logoutError !== null && (
         <div role="alert" className="mt-3 break-words text-xs text-destructive">
           サーバ側を失効させられなかった: {logoutError}
-          <button
-            type="button"
-            onClick={() => {
-              setLogoutError(null);
-              auth.discardCredential();
-            }}
-            className="ml-1 underline hover:text-foreground"
-          >
+          <button type="button" onClick={discard} className="ml-1 underline hover:text-foreground">
             この画面から鍵だけを捨てる
           </button>
         </div>

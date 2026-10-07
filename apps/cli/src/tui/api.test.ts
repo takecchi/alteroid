@@ -264,15 +264,13 @@ describe('JSON の口（hono/client）', () => {
     await expect(api.interrupt()).rejects.toThrow(/止められませんでした（HTTP 500）/);
   });
 
-  it('ヘッダの件数は未回答の承認待ちと、running の委譲だけを数える', async () => {
+  it('ヘッダの件数は未回答の承認待ちと、running の委譲（daemon が絞って返した行）を数える', async () => {
     const api = createTuiApi(target);
     replies.push(json({ approvals: [{ id: 'a' }, { id: 'b' }] }));
     replies.push(
       json({
         managers: [
           { managerId: '1', status: 'running' },
-          { managerId: '2', status: 'waiting_human' },
-          { managerId: '3', status: 'done' },
           { managerId: '4', status: 'running' },
         ],
       }),
@@ -285,6 +283,40 @@ describe('JSON の口（hono/client）', () => {
     const urls = sent.map((s) => s.url);
     expect(urls.some((u) => u.includes('/approvals'))).toBe(true);
     expect(urls.some((u) => u.includes('/managers'))).toBe(true);
+  });
+});
+
+describe('headerCounts の取り方（#3730）', () => {
+  it('委譲は status=running で絞って取る（全件を取り直さない）', async () => {
+    const api = createTuiApi(target);
+    replies.push(json({ approvals: [] }));
+    replies.push(json({ managers: [{ managerId: '1', status: 'running' }] }));
+    await api.headerCounts();
+    const managersUrl = sent.map((s) => new URL(s.url)).find((u) => u.pathname === '/managers');
+    expect(managersUrl?.searchParams.get('status')).toBe('running');
+    // status だけ。窓（limit / 錨）は付けない（付けると daemon が窓の opt-in と読む）
+    expect([...(managersUrl?.searchParams.keys() ?? [])]).toEqual(['status']);
+  });
+
+  it('承認待ちの取得が失敗しても、委譲の件数は捨てない', async () => {
+    const api = createTuiApi(target);
+    replies.push(json({ error: 'boom' }, 500));
+    replies.push(json({ managers: [{ managerId: '1', status: 'running' }] }));
+    expect(await api.headerCounts()).toEqual({ runningManagers: 1 });
+  });
+
+  it('委譲の取得が失敗しても、承認待ちの件数は捨てない', async () => {
+    const api = createTuiApi(target);
+    replies.push(json({ approvals: [{ id: 'a' }], unreadable: [{ reason: 'x' }] }));
+    replies.push(json({ error: 'boom' }, 500));
+    expect(await api.headerCounts()).toEqual({ pendingApprovals: 1, unreadableApprovals: 1 });
+  });
+
+  it('両方失敗したら例外（前の件数を残す側へ倒す）', async () => {
+    const api = createTuiApi(target);
+    replies.push(json({ error: 'boom' }, 500));
+    replies.push(json({ error: 'boom' }, 500));
+    await expect(api.headerCounts()).rejects.toThrow(/読めませんでした/);
   });
 });
 
