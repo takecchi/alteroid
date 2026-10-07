@@ -146,6 +146,9 @@ async function runGit(
       cwd: ctx.dir,
       env: ctx.env,
       stdio: ['pipe', 'pipe', 'pipe'],
+      // git は子（git-remote-https など）を起こす。child.kill だけでは子が残るので、
+      // 自分をグループの先頭にして、グループごと殺せるようにする。
+      detached: true,
     });
     const out: Buffer[] = [];
     let outBytes = 0;
@@ -154,7 +157,13 @@ async function runGit(
     let failure: PluginFetchError | null = null;
     const kill = (error: PluginFetchError) => {
       failure ??= error;
-      child.kill('SIGKILL');
+      try {
+        if (child.pid === undefined) child.kill('SIGKILL');
+        else process.kill(-child.pid, 'SIGKILL');
+      } catch {
+        // グループが既に無い（git が先に終わった）。残りは close で拾う。
+        child.kill('SIGKILL');
+      }
     };
 
     const timer = setTimeout(() => kill(unavailable('取得の時間の上限を超えた')), remaining);
@@ -459,6 +468,9 @@ function repoUrlOf(value: unknown, shorthandAllowed: boolean): string {
     return `https://github.com/${value.replace(/\.git$/, '')}.git`;
   }
   if (value.startsWith('-')) throw invalid('索引の source の URL が不正');
+  // 資格がクエリ・フラグメントに載っていても、取り元として日誌・DB に残さない。
+  if (/[?#]/.test(value))
+    throw invalid('索引の source の URL にクエリ・フラグメントを含められない');
   return value;
 }
 

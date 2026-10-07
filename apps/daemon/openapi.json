@@ -22073,10 +22073,37 @@
                           "required": ["present", "paths"]
                         },
                         "executables": {
-                          "type": "array",
-                          "items": {
-                            "type": "string"
-                          }
+                          "type": "object",
+                          "properties": {
+                            "extracted": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            },
+                            "notExtracted": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            }
+                          },
+                          "required": ["extracted", "notExtracted"]
+                        },
+                        "shellExecution": {
+                          "type": "object",
+                          "properties": {
+                            "present": {
+                              "type": "boolean"
+                            },
+                            "paths": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            }
+                          },
+                          "required": ["present", "paths"]
                         },
                         "skipped": {
                           "type": "array",
@@ -22140,6 +22167,7 @@
                         "lspServers",
                         "mcp",
                         "executables",
+                        "shellExecution",
                         "skipped",
                         "extractorDrops",
                         "skillExcerpts"

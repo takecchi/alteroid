@@ -4,7 +4,7 @@ import { chmod, mkdir, readFile, symlink, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { makeTempDir } from '../../../vitest.tmpdir.js';
 import { createPluginFetcher, PluginFetchError } from './plugin-fetch.js';
@@ -269,9 +269,7 @@ describe('createPluginFetcher: 任意の URL', () => {
         return false;
       }
     };
-    const until = Date.now() + 5000;
-    while (alive() && Date.now() < until) await new Promise((r) => setTimeout(r, 50));
-    expect(alive()).toBe(false);
+    await vi.waitFor(() => expect(alive()).toBe(false), { timeout: 5000, interval: 50 });
   });
 
   it('取得物のサイズが上限を超えたら打ち切る', async () => {

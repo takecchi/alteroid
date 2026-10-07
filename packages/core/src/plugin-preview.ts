@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 
 import type { FetchedPlugin, SkippedEntry } from './plugin-fetch.js';
-import { planPluginExtractionRemovals } from './plugin-extract.js';
+import { planPluginExtraction } from './plugin-extract.js';
 import type { PluginSource } from './plugins.js';
 
 /**
@@ -26,9 +26,18 @@ export interface PluginPreviewSummary {
   hooks: { present: boolean; paths: string[] };
   modules: { present: boolean; paths: string[] };
   lspServers: { present: boolean; paths: string[] };
-  /** `.mcp.json` と manifest の `mcpServers`。enableMcp のときだけ展開される。 */
+  /** `.mcp.json` と manifest・frontmatter の `mcpServers`。`.mcp.json` と manifest 側は enableMcp のときだけ展開される。 */
   mcp: { present: boolean; paths: string[] };
-  executables: string[];
+  /**
+   * 実行ファイル。`extracted` は展開される（skills/agents/commands 配下）、`notExtracted` は展開されない。
+   * 展開されるものは、plugin の中の他のファイルから呼ばれうる。
+   */
+  executables: { extracted: string[]; notExtracted: string[] };
+  /**
+   * skills / commands の本文に、シェルを実行する記法（`` !` `` と `` ```! ``）があるファイル。
+   * 本文は落とさない（読み手へ見せるだけ）。
+   */
+  shellExecution: { present: boolean; paths: string[] };
   skipped: SkippedEntry[];
   /** enableHooks / enableMcp を true にしても展開器が落とすもの。 */
   extractorDrops: { path: string; reason: string }[];
@@ -63,6 +72,17 @@ function excerptOf(bytes: Uint8Array): { excerpt: string; truncated: boolean } |
   };
 }
 
+/** `` !`cmd` ``（行内）と、`` ```! ``（ブロック）。見つけても本文は落とさない。 */
+const SHELL_EXECUTION = /!`[^`\n]|^```!/m;
+
+function bodyOf(bytes: Uint8Array): string {
+  try {
+    return stripFrontmatter(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
+  } catch {
+    return '';
+  }
+}
+
 const uniqueSorted = (values: string[]) =>
   [...new Set(values)].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
 
@@ -70,11 +90,25 @@ export function summarizeFetchedPlugin(fetched: FetchedPlugin): PluginPreviewSum
   const { files } = fetched;
   const bytesOf = (f: { content: Uint8Array }) => f.content.byteLength;
 
-  const dropsAll = planPluginExtractionRemovals(fetched, { enableHooks: true, enableMcp: true });
-  const dropsDefault = planPluginExtractionRemovals(fetched, {
+  const planAll = planPluginExtraction(fetched, { enableHooks: true, enableMcp: true });
+  const dropsAll = planAll.removed;
+  const dropsDefault = planPluginExtraction(fetched, {
     enableHooks: false,
     enableMcp: false,
-  });
+  }).removed;
+  const extractedExecutables = new Set(
+    planAll.outputs.filter((o) => o.executable).map((o) => o.path),
+  );
+  const shellPaths = uniqueSorted(
+    planAll.outputs
+      .filter(
+        (o) =>
+          /^(?:skills|commands)\//.test(o.path) &&
+          /\.md$/i.test(o.path) &&
+          SHELL_EXECUTION.test(bodyOf(o.bytes)),
+      )
+      .map((o) => o.path),
+  );
   const reasonPaths = (reason: string) =>
     uniqueSorted(dropsDefault.filter((d) => d.reason === reason).map((d) => d.path));
 
@@ -98,7 +132,12 @@ export function summarizeFetchedPlugin(fetched: FetchedPlugin): PluginPreviewSum
       .map((d) => d.path)
       .filter((path) => path === '.lsp.json' || path.endsWith('#lspServers')),
   );
-  const mcpPaths = reasonPaths('mcp-disabled');
+  const mcpPaths = uniqueSorted([
+    ...reasonPaths('mcp-disabled'),
+    ...dropsDefault
+      .map((d) => d.path)
+      .filter((path) => path.toLowerCase().endsWith('.md#mcpservers')),
+  ]);
 
   const skillExcerpts: PluginPreviewSummary['skillExcerpts'] = [];
   for (const file of files) {
@@ -124,7 +163,15 @@ export function summarizeFetchedPlugin(fetched: FetchedPlugin): PluginPreviewSum
     modules: { present: modulesPaths.length > 0, paths: modulesPaths },
     lspServers: { present: lspPaths.length > 0, paths: lspPaths },
     mcp: { present: mcpPaths.length > 0, paths: mcpPaths },
-    executables: uniqueSorted(files.filter((f) => f.executable).map((f) => f.path)),
+    executables: {
+      extracted: uniqueSorted(
+        files.filter((f) => extractedExecutables.has(f.path)).map((f) => f.path),
+      ),
+      notExtracted: uniqueSorted(
+        files.filter((f) => f.executable && !extractedExecutables.has(f.path)).map((f) => f.path),
+      ),
+    },
+    shellExecution: { present: shellPaths.length > 0, paths: shellPaths },
     skipped: fetched.skipped,
     extractorDrops: dropsAll
       .map((d) => ({ path: d.path, reason: d.reason }))

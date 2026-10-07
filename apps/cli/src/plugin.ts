@@ -52,7 +52,8 @@ interface PreviewSummary {
   modules: Presence;
   lspServers: Presence;
   mcp: Presence;
-  executables: string[];
+  executables: { extracted: string[]; notExtracted: string[] };
+  shellExecution: Presence;
   skipped: { path: string; reason: string }[];
   extractorDrops: { path: string; reason: string }[];
   skillExcerpts: { path: string; excerpt: string; truncated: boolean }[];
@@ -271,8 +272,21 @@ export function renderPluginPreview(
     ...presenceLine('modules', summary.modules, '（展開されない）'),
     ...presenceLine('lspServers', summary.lspServers, '（展開されない）'),
   );
-  if (summary.executables.length > 0) {
-    lines.push(`  実行ファイル: ${summary.executables.join(', ')}  （展開されない）`);
+  if (summary.shellExecution.present) {
+    lines.push(
+      '!! 警告: skills / commands の本文に、シェルを実行する記法（!` や ```!）があります' +
+        '（呼び出されたとき、その場でコマンドが走りうる。本文は落としません）',
+      `  該当: ${summary.shellExecution.paths.join(', ')}`,
+    );
+  }
+  if (summary.executables.extracted.length > 0) {
+    lines.push(
+      `  実行ファイル（展開される）: ${summary.executables.extracted.join(', ')}` +
+        '  （skills / agents / commands 配下。plugin の中から呼ばれうる）',
+    );
+  }
+  if (summary.executables.notExtracted.length > 0) {
+    lines.push(`  実行ファイル（展開されない）: ${summary.executables.notExtracted.join(', ')}`);
   }
   if (summary.skipped.length > 0) {
     lines.push(
