@@ -3349,19 +3349,7 @@ class Clone implements CloneHost {
     });
   }
 
-  /**
-   * 捨てる resume 素材を墓標として控える（#564 E1b）。**捨てる前に呼ぶこと。**
-   *
-   * ## 空振りする条件（どちらも黙って通す）
-   *
-   * | 条件 | なぜ黙るか |
-   * | --- | --- |
-   * | 生ログの預け先が無い（fs 構成） | 拾う材料そのものが無い。日誌へ書くと、fs で動かす
-   *   たびに同じ1行が積もる |
-   * | `projectKey` を誰も知らない | 配備してから1度も `append` が来ていない窓である
-   *   （`SessionRegistry.getProjectKey` の doc）。**そこは失うものもほぼ無い** ——
-   *   預けた生ログが1件も無いということである |
-   */
+  // 捨てる前に呼ぶ。空振りは黙って通す: 生ログの預け先が無い構成は拾う材料が無く、書くと fs で動かすたびに同じ1行が積もり、`projectKey` を誰も知らない窓は預けた生ログが1件も無く失うものもほぼ無いため
   async #noteLostSession(sessionId: string): Promise<void> {
     if (this.#stores.sessionTranscriptTail === undefined) return;
     const projectKey = this.#projectKey ?? (await this.#stores.sessions.getProjectKey());
@@ -3374,13 +3362,7 @@ class Clone implements CloneHost {
       });
   }
 
-  /**
-   * 起動時に、**捨てた resume 素材の区間を pg の生ログから拾い直す**（#564 E1b）。
-   *
-   * `#pickUpTranscriptGrave` との違いは材料だけである —— あちらは退避（`archive`）の
-   * 全文、こちらは**預けた生ログの末尾**である。**`load()` は使わない**（全件を戻すと
-   * SDK が掛けている 60 秒の予算に当たりに行く。`SessionTranscriptTail` の doc）。
-   */
+  // `load()` は使わない: 全件を戻すと SDK が掛けている 60 秒の予算に当たりに行くため
   async #pickUpLostSession(): Promise<void> {
     const tail = this.#stores.sessionTranscriptTail;
     if (tail === undefined) return;
@@ -3389,10 +3371,7 @@ class Clone implements CloneHost {
 
     const transcript = await tail.readTail(grave, DISTILL_TRANSCRIPT_TAIL_CHARS);
     if (transcript === null) {
-      // 預けた生ログが1件も無い（そのセッションは何も預けずに終わった）。
-      // **印だけを残さない** —— 残すと、拾えないものを起動のたびに引きに行く。
-      // **判定と書き込みを1操作へ畳む**（issue #1157。理由は
-      // `#pickUpTranscriptGrave` の同じ分岐に書いた）。
+      // 印だけを残さない: 残すと、拾えないものを起動のたびに引きに行くため
       const lowered = await this.#stores.sessions.clearLostSessionGraveIf(grave.sessionId);
       await this.#journal({
         type: 'exchange',
@@ -3408,8 +3387,6 @@ class Clone implements CloneHost {
       return;
     }
 
-    // **拾い直したことを日誌へ1行残す**（`#pickUpTranscriptGrave` と同じ理由 ——
-    // これが無いと compaction の蒸留と区別が付かず、後から数えられない）。
     await this.#journal({
       type: 'exchange',
       with: 'self',
@@ -3419,62 +3396,20 @@ class Clone implements CloneHost {
 
     await this.#distillFromTranscript(tailOf(transcript));
 
-    // **印を下ろすのは成功したときだけ**／**引き直してから下ろす**（`#pickUpTranscriptGrave`
-    // と同じ形。理由もそちらに書いた）。
     await this.#stores.sessions.clearLostSessionGraveIf(grave.sessionId);
   }
 
-  /**
-   * 上限の合図を1か所で扱う。**分類ごとの扱いはここでだけ決める** — 3経路
-   * （`rate_limit_event` / `system` の通知・情報メッセージ / 失敗した `result`）
-   * がそれぞれ検知して、ここへ渡す。
-   *
-   * | `kind` | どうするか |
-   * | --- | --- |
-   * | `reached` | **保持して待つ**（この機構の対象）。`#usageBlocked` を立て、
-   *   以降の合図は `#pump` がターンを回さず保持する（保持も解除も本体は
-   *   `#pump` にある。`post` は解除の印を立てるだけ）。いま処理中の会話には
-   *   `usage_limited` を届ける —
-   *   呼び出し側がこの直後に `error`（終端）を出すなら、**この `await` を
-   *   先に済ませてから**でなければならない。 |
-   * | `org_policy` | **待たないが、記録は残す。** `usage-limits.ts` が「待っても
-   *   直らないし、増やす先も違う」と明記しているので保持はしない（従来どおりの
-   *   失敗として呼び出し側の通常の失敗処理に任せる）。**ただし日誌には書く** —
-   *   直す前はここで早期 return して日誌にも残さなかったので、
-   *   `This service is disabled for your org` で止まったことがどこにも出ず、
-   *   「ただ失敗した」と区別できなかった。**「待たない」は設計判断だが、
-   *   「記録しない」はどこにも書かれていない。** |
-   * | `transition` / `warning` | **待たない**（まだ動く）。ただし日誌には残す
-   *   — そろそろ止まることが、止まる前に分かるように。 |
-   *
-   * **同じ `kind` で同じ文言が続くなら、日誌への書き込みは畳む**
-   * （`#notices` の `noteUsage`。doc は `clone-notices.ts` の `CloneNotices` の
-   * `#usage`）。`transition` / `warning` はターンが回り続ける
-   * ので `system` 通知が毎ターン届き、畳まないと同じ知らせで日誌が埋まる。
-   * **畳むのは日誌だけ** — `reached` の `#usageBlocked` を立てる処理と
-   * `usage_limited` の emit は、同じ `kind`・同じ文言が再び来ても毎回行う
-   * （2件目以降の合図は別の会話から来ているかもしれず、emit まで畳むと
-   * その送り主に何も見えなくなる）。
-   */
+  // `reached` を呼び出し側が直後に `error`（終端）で閉じるなら、`usage_limited` の `await` を先に済ませる
+  // `org_policy` は保持しないが日誌には書く: 早期 return すると「ただ失敗した」と区別できないため
+  // 畳むのは日誌だけ: 同じ `kind`・同じ文言でも `#usageBlocked` を立てる処理と `usage_limited` の emit は毎回行う（2件目以降は別の会話から来ているかもしれず、emit まで畳むと送り主に何も見えなくなるため）。`transition` / `warning` は毎ターン届き、畳まないと同じ知らせで日誌が埋まる
   async #noteUsageNotice(
     notice: UsageLimitNotice | undefined,
     conversationId: string | null,
-    /**
-     * この通知が**どこから来たか**（Issue #393 PR3）。
-     *
-     * - `text`: SDK が出した文言を `classifyUsageNotice` に通したもの
-     * - `rate_limit`: `rate_limit_event` の `rejected` を通知の形へ仕立て直したもの
-     *
-     * **回し手へ渡すのは `text` だけである**（下の分岐に理由がある）。日誌と
-     * `#usageBlocked` の扱いは今までどおり両方で同じ——**この引数で変わるのは
-     * 回し手へ渡すかどうかだけ**にしてある。
-     */
     source: 'text' | 'rate_limit',
   ): Promise<void> {
     if (notice === undefined) return;
 
-    // 枠が閉じた（あるいは近づいた）と分かった瞬間に日誌へ1件。**言い換えない**
-    // — `describeUsageNotice` がそのまま人間の検索できる文言を返す。
+    // 言い換えない: `describeUsageNotice` が人間の検索できる文言をそのまま返すため
     if (this.#notices.noteUsage(notice.kind, notice.text)) {
       await this.#journal({
         type: 'exchange',
@@ -3484,16 +3419,7 @@ class Clone implements CloneHost {
       });
     }
 
-    // **回し手へ渡すのは、文言から分類した通知だけである。**
-    //
-    // **⚠️ `rate_limit_event` 由来のものを渡さないこと。** この関数はそちらからも
-    // 呼ばれ（`rejectedRateLimitNotice`）、そこで作られる `reached` は
-    // **「その枠が尽きた」を `reached` の形へ仕立て直したもの**であって
-    // 「仕事が止まった」ではない（Issue #393 追記1 の訂正。`clone.ts` に逐語で
-    // 在る「1つぶんの状態でしかない」）。回し手へ `reached` として渡すと、
-    // **`overage_exhausted` の設定でも課金枠を1円も使わずに回ってしまう。**
-    //
-    // ⟹ 出所を引数で受ける。`source` を足したのはこの1点のためである。
+    // 回し手へ渡すのは文言から分類した通知（`source === 'text'`）だけ: `rate_limit_event` 由来の `reached` は「その枠が尽きた」を仕立て直したもので「仕事が止まった」ではなく、渡すと `overage_exhausted` の設定でも課金枠を使わずに回ってしまうため
     if (source === 'text') await this.#observeForTokenRotation({ notice });
 
     if (notice.kind !== 'reached') return;
@@ -3501,20 +3427,13 @@ class Clone implements CloneHost {
     this.#usageBlocked = withNoticeTextResetsAt(notice, Date.now());
     this.#emit(conversationId, { type: 'usage_limited', message: describeUsageNotice(notice) });
 
-    // **`source === 'text'` に限る。** `rate_limit_event` 由来（`source ===
-    // 'rate_limit'`）はターンの頭ごとに届く「1つぶんの状態」で、同じターンの
-    // 後続の `result` が成功することがある（すぐ下の成功枝のコメントと同じ
-    // 形）——ここで数えると、成功するターンの途中でも畳みにかかってしまう。
-    // **`source === 'text'` は SDK がそのターンの応答として実際に返した文言
-    // なので、`#usageBlocked` が立ったこの回はそのターン自身が失敗している。**
+    // `source === 'text'` に限って数える: `rate_limit_event` 由来はターンの頭ごとに届く「1つぶんの状態」で後続の `result` が成功することがあり、数えると成功するターンの途中でも畳みにかかるため
     if (source === 'text') await this.#noteUnproductiveUsageBlockFold();
   }
 
   async #handle(event: InboxEvent): Promise<void> {
     switch (event.type) {
       case 'human_message': {
-        // 1件だけの経路。**まとめて読む経路（`#runHumanTurn`）と同じ関数を通す** —
-        // 理由と、ここで日誌へ書かない理由はそちらの doc にある。
         await this.#runHumanTurn([event]);
         return;
       }
@@ -3565,13 +3484,7 @@ class Clone implements CloneHost {
           }
           return;
         }
-        // **前回の蒸留以降に新しいことが無ければ、同一内容の蒸留を重ねて払わない。**
-        // `endConversation()` の直後に `stop()` が来る形（デプロイの夜間再起動が
-        // これに当たる）は、`event.reason` が `conversation_end` でも `shutdown`
-        // でも `buildDistillPrompt` が同じ文面へ写す（すぐ下）ので、間に新しい
-        // ターンが1本も無ければ2回目は文字どおりの重複でしかない
-        // （`#hasUndistilledActivity` の doc）。**取りこぼしより重複を疑うこと** —
-        // 印が立っていれば必ず投げる。
+        // 前回の蒸留以降に新しいことが無ければ、同一内容の蒸留を重ねて払わない: 会話終了の直後の `stop()` は同じ文面になり、間にターンが無ければ文字どおりの重複のため。印が立っていれば必ず投げる
         if (!this.#distillMemory.hasUndistilledActivity) {
           await this.#journal({
             type: 'exchange',
@@ -3583,14 +3496,7 @@ class Clone implements CloneHost {
           });
           return;
         }
-        // **定期の棚卸しの刻みにだけ、いま測った的の一覧を添える**
-        // （`prompt.ts` の `DistillPromptOptions.tidyTargets`）。会話終了・
-        // shutdown の蒸留は「その会話を記憶へ移す」のが本題なので添えない。
-        //
-        // **測れなかったら添えない。ターンは止めない。** 記憶が読めない回に
-        // 棚卸しそのものを落とすと、いちばん畳みたい状態（ストアが不調で
-        // 溜まっている）で仕事が消える。`#memoryFloorDigestLine` の
-        // 「測れなかった」と同じ倒し方である。
+        // 的の一覧は定期の棚卸しの刻みにだけ添える: 会話終了・shutdown の蒸留は会話を記憶へ移すのが本題のため。測れなかったら添えてもターンは止めない: 記憶が読めない回に棚卸しを落とすと、いちばん畳みたい状態で仕事が消えるため
         let tidyTargets: string | undefined;
         if (event.reason === 'scheduled') {
           try {
@@ -3605,48 +3511,28 @@ class Clone implements CloneHost {
             ...(tidyTargets === undefined ? {} : { tidyTargets }),
           },
         );
-        // **このターンへ何が入ったかを残す**（#243）。本文は定型文なので長さだけ
-        // を書く（何を載せるかの判断は `turnInputEntry` に1本化してある）。
         await this.#journal(
           turnInputEntry({ type: 'distill', reason: event.reason, prompt: distillPrompt }),
         );
         const outcome = await this.#runInternal(distillPrompt, 'distill');
-        // **成功で終わった蒸留だけが印を下ろす。** 失敗した蒸留（枠で保持
-        // された場合を含む。`outcome.status === 'failed'`）で下ろすと、移せ
-        // なかった記憶を「移した」ことにして記憶を落とす（`#hasUndistilledActivity`
-        // の doc）。
+        // 成功で終わった蒸留だけが印を下ろす: 失敗した蒸留（枠で保持された場合を含む）で下ろすと、移せなかった記憶を「移した」ことにして落とすため
         if (outcome.status === 'answered') {
           this.#distillMemory.markDistilled();
-          // **「成功で終わった」を日誌へ残す**（Issue #564 の (b)）。印は器の
-          // 中にしか無く（`#hasUndistilledActivity`）、プロセスが消えれば一緒に
-          // 消えるので、次のセッションからは「前回どこまで移せたか」が引けない。
-          //
-          // **`#hasUndistilledActivity` を下ろすのと同じ条件・同じ場所に置く。**
-          // 条件を別の行へ写すと、片方だけ直して残りが古い基準のまま、という穴が
-          // できる（`distill-gap.ts` の doc）。
+          // 「成功で終わった」を日誌へ残す: 印は器の中にしか無く、プロセスが消えると「前回どこまで移せたか」が引けないため。`#hasUndistilledActivity` を下ろすのと同じ条件・同じ場所に置く: 条件を別の行へ写すと、片方だけ直して古い基準が残るため
           await this.#journal(distillSucceededEntry(event.reason));
         }
         return;
       }
 
       case 'human_answer': {
-        // **同じ回答を1回として扱う**（issue #1977。`#handledHumanAnswerIds` の
-        // doc）。決まった形の id を同じプロセスの中で既に処理していたら、
-        // 2回目はターンを起こさない——中身の無い跡だけ stderr に残す
-        // （`inboxEventShape` は本文を出さない）。
+        // 同じ id を既に処理していたら2回目はターンを起こさず、中身の無い跡だけ stderr に残す
         if (this.#handledHumanAnswerIds.has(event.id)) {
           noteDuplicateHumanAnswer(event);
           return;
         }
         this.#handledHumanAnswerIds.add(event.id);
 
-        // **片付け済みの配り直しはここへ来ない**（`#pump` が畳む。
-        // `#foldClosedRedelivery`）。かつてはここで承認待ちを読み直さずに断り書き
-        // だけを配り、その全文を `turnInputEntry`（`human_answer_closed`）で日誌へ
-        // 残していた（#243）。**残す先は消していない** —— 断り書きの全文は畳んだ側の
-        // 1行へ写している（`#foldClosedRedelivery` の doc）。
-        // **行が読めなくなっていても、回答は失わない**（`UnreadableApprovalError`。回答の
-        // 本文は `event` が持つ）。質問だけが取れないので、そう言って続きへ進む。
+        // 行が読めなくなっていても回答は失わない: 回答の本文は `event` が持ち、取れないのは質問だけなので、そう言って続きへ進む
         let approval: PendingApproval | null = null;
         let approvalUnreadable = false;
         try {
@@ -3662,9 +3548,7 @@ class Clone implements CloneHost {
           (approvalUnreadable
             ? '(不明な質問。承認待ちの行は在るが読めない形で入っている)'
             : '(不明な質問)');
-        // 宛先は managerId と requestId の対で戻す。requestId を落とすと、
-        // そのマネージャーが複数を待っているとき宛先が決まらず、人間が答えたのに
-        // 仕事が再開しない（人間へ回る経路の端から端まで id を運ぶこと）。
+        // 宛先は managerId と requestId の対で戻す: requestId を落とすと、複数を待っているマネージャーの宛先が決まらず、人間が答えたのに仕事が再開しないため
         const waiting =
           approval?.jobId === undefined
             ? ''
@@ -3672,16 +3556,12 @@ class Clone implements CloneHost {
               `回答を \`manager_send\`（許可確認なら decision 付き）で返すと、止まっていたその仕事が再開する。` +
               `\n宛先: managerId: "${approval.jobId}"` +
               (approval.requestId === undefined ? '' : `, requestId: "${approval.requestId}"`);
-        // **回答経路を短く添える（Issue #1479）。** クローンは人間の代理であり、
-        // `operator` 経由の回答が人間本人とは限らないことを、隠さず自分の判断
-        // 材料にできるようにするため——「人間が答えた」という前置きの直後に置く。
-        // `event.answeredVia` が無い（`via` を渡さずに呼んだ経路）ときは何も足さない。
+        // 回答経路を添える: `operator` 経由の回答が人間本人とは限らないことを、クローンが判断材料にできるようにするため
         const viaLine =
           event.answeredVia === undefined
             ? ''
             : `\n回答経路: ${describeAnsweredVia(event.answeredVia)}`;
-        // **構造も添える（issue #2525）。** 回答の文（上）は人間向けに畳んだもので、設問 id と
-        // 選んだ選択肢 id の対は文からは読み取れない。クローンが機械的に拾えるよう JSON で足す。
+        // 構造も JSON で添える: 回答の文は人間向けに畳んだもので、設問 id と選択肢 id の対が文から読み取れないため
         const selectionsLine =
           event.selections === undefined
             ? ''
