@@ -200,7 +200,7 @@ export function ApiProvider({ children }: { children: ReactNode }) {
 
   return (
     <ApiContext.Provider value={value}>
-      <SWRConfig value={{ onError }}>{children}</SWRConfig>
+      <SWRConfig value={{ onError, onErrorRetry }}>{children}</SWRConfig>
     </ApiContext.Provider>
   );
 }
@@ -215,6 +215,22 @@ export function useApiContext(): ApiContextValue {
 export function useApi(): AlteroidClient {
   return useApiContext().client;
 }
+
+// 待っても直らない失敗の番号: 同じ要求を繰り返しても同じ答えが返り、取り直しは負荷と記録の雑音にしかならないため
+const PERMANENT_STATUSES: ReadonlySet<number> = new Set([400, 403, 404, 409, 422]);
+
+// 止めるのは裏の自動の取り直しだけ: 人間が押す「もう一度試す」と focus での取り直しは `mutate`・再検証で、ここを通らない。
+// 既定の間隔の計算は自前で書き写さず `SWRConfig.defaultValue` のものを呼ぶ: `config.onErrorRetry` は自分自身で、呼ぶと再帰するため
+const onErrorRetry: typeof SWRConfig.defaultValue.onErrorRetry = (
+  error,
+  key,
+  config,
+  revalidate,
+  opts,
+) => {
+  if (error instanceof ApiError && PERMANENT_STATUSES.has(error.status)) return;
+  SWRConfig.defaultValue.onErrorRetry(error, key, config, revalidate, opts);
+};
 
 export class ApiError extends Error {
   readonly status: number;
