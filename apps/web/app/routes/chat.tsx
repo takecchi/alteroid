@@ -274,13 +274,18 @@ function sameAsStashed(
 /** 発言の編集の書きかけ（#3565）。 */
 interface EditDraft {
   text: string;
+  /** 引き継ぐ添付（上げ済みの控え）。 */
   attachments: MessageAttachment[];
+  /** 編集で足したファイル（`file` を持つ。確定のとき上げる。`File` は保存できない。#3779）。 */
+  added: PendingAttachment[];
+  /** 再読み込みで実体を失った、足していたファイルの名前。開いたとき案内し、閉じたら消す。 */
+  lost: string[];
 }
 
 /** 書きかけが元の発言と違うか。元のまま（開いただけ）なら「書きかけ」とは言わない。 */
 function hasEditDraft(draft: EditDraft | undefined, line: Line): boolean {
   if (draft === undefined) return false;
-  if (draft.text !== line.text) return true;
+  if (draft.text !== line.text || draft.added.length > 0 || draft.lost.length > 0) return true;
   const original = line.attachments ?? [];
   return (
     draft.attachments.length !== original.length ||
@@ -1309,7 +1314,22 @@ export function ChatPane({
    * 元のままなら残さない、間引き、ログアウトの `clearChatDrafts`・epoch に乗せる）。再読み込みの後は
    * ここへ読み戻すので、鉛筆を押せば書きかけから再開でき、書きかけの印も出る。
    */
-  const [editDrafts, setEditDrafts] = useState<ReadonlyMap<string, EditDraft>>(loadEditDrafts);
+  const [editDrafts, setEditDrafts] = useState<ReadonlyMap<string, EditDraft>>(
+    () =>
+      new Map(
+        [...loadEditDrafts()].map(([key, stored]) => [
+          key,
+          {
+            text: stored.text,
+            attachments: stored.attachments,
+            added: [],
+            lost: stored.lostNames ?? [],
+          },
+        ]),
+      ),
+  );
+  /** 編集で足そうとして断った理由（個数・大きさ）。編集を閉じる・確定するまで出す。 */
+  const [editAttachNotice, setEditAttachNotice] = useState<string>();
   const editDraft = editingKey === undefined ? '' : (editDrafts.get(editingKey)?.text ?? '');
   const editAttachments = useMemo(
     () => (editingKey === undefined ? [] : (editDrafts.get(editingKey)?.attachments ?? [])),
@@ -1318,7 +1338,7 @@ export function ChatPane({
   const updateEditDraft = useCallback(
     (key: string, change: (current: EditDraft) => EditDraft) =>
       setEditDrafts((previous) => {
-        const current = previous.get(key) ?? { text: '', attachments: [] };
+        const current = previous.get(key) ?? { text: '', attachments: [], added: [], lost: [] };
         return new Map(previous).set(key, change(current));
       }),
     [],
@@ -2005,9 +2025,17 @@ export function ChatPane({
     for (const [key, saved] of waiting.drafts) {
       const original =
         allRef.current.find((line) => line.key === key) ?? editOriginals.current.get(key);
+      // `File` は保存できない。足したファイルの名前だけ残し、再読み込み後に「外れた」と案内する（#3779）。
+      const lostNames = [...saved.lost, ...saved.added.map((item) => sizedOf(item).name)];
       saveEditDraft(
         key,
-        original !== undefined && !hasEditDraft(saved, original) ? undefined : saved,
+        original !== undefined && !hasEditDraft(saved, original)
+          ? undefined
+          : {
+              text: saved.text,
+              attachments: saved.attachments,
+              ...(lostNames.length > 0 ? { lostNames } : {}),
+            },
       );
     }
   }, []);
@@ -2664,6 +2692,8 @@ export function ChatPane({
         clientMessageId?: string;
         /** 入力欄の本文の扱い。無ければ、再送・添付を上げて待った送信は `clearSent`、それ以外は `clear`。 */
         draft?: DraftHandling;
+        /** 添付を上げるのに失敗して、何も送らずに戻るとき。編集の確定が書きかけを元へ戻す（#3779）。 */
+        onUploadFailed?: () => void;
       },
     ) => {
       // 本文が空でも添付があれば送る（サーバも添付のある空本文を受ける）。
@@ -2761,6 +2791,7 @@ export function ChatPane({
           attachments = uploaded;
         } catch (caught) {
           setFailures((prev) => new Map(prev).set(shownId, caught));
+          options?.onUploadFailed?.();
           return;
         } finally {
           adjustUploading(shownId, -1);
@@ -3288,17 +3319,58 @@ export function ChatPane({
   const confirmEdit = useCallback(
     async (line: Line) => {
       const text = editDraft.trim();
-      if ((text === '' && editAttachments.length === 0) || line.journalId === undefined) return;
+      const draft = editDrafts.get(line.key);
+      const added = draft?.added ?? [];
+      const total = editAttachments.length + added.length;
+      if ((text === '' && total === 0) || line.journalId === undefined) return;
       focusIntentRef.current = { kind: 'edit', lineKey: line.key };
       setEditingKey(undefined);
+      setEditAttachNotice(undefined);
       // 送る文は送信の側が持つ（失敗すれば入力欄へ編集の続きとして戻る。#3393）。書きかけは消す。
       dropEditDraft(line.key);
-      // 引き継ぐ添付は、すでに上げてある（`meta`）ので上げ直さない。
-      const carried = carriedAttachments(editAttachments);
+      // 引き継ぐ添付は、すでに上げてある（`meta`）ので上げ直さない。足した分は `send` が上げてから送る（#3779）。
+      const attachments = [...carriedAttachments(editAttachments), ...added];
       // 入力欄の文を送るのではないので、入力欄の書きかけには触らない（#3391）。
-      await send(text, { supersedes: line.journalId, draft: 'keep', attachments: carried });
+      await send(text, {
+        supersedes: line.journalId,
+        draft: 'keep',
+        attachments,
+        // 上げるのに失敗したら何も送られない。書きかけを消したままにせず、編集を開き直して戻す。
+        onUploadFailed: () => {
+          if (draft !== undefined)
+            setEditDrafts((previous) => new Map(previous).set(line.key, draft));
+          setEditingKey(line.key);
+        },
+      });
     },
-    [editDraft, editAttachments, send, dropEditDraft],
+    [editDraft, editAttachments, editDrafts, send, dropEditDraft],
+  );
+
+  /** 編集中の発言へ添付を足す。入力欄と同じ検査に、元の添付と足した分の合計で通す（#3779）。 */
+  const attachToEdit = useCallback(
+    (key: string, files: File[]) => {
+      const current = editDrafts.get(key);
+      const { accepted, rejected } = checkAttachments(
+        [...carriedAttachments(current?.attachments ?? []), ...(current?.added ?? [])].map(sizedOf),
+        files,
+        attachmentLimits,
+      );
+      if (accepted.length > 0) {
+        updateEditDraft(key, (draft) => ({
+          ...draft,
+          added: [
+            ...draft.added,
+            ...accepted.map((file) => ({ key: `ef-${attachSeqRef.current++}`, file })),
+          ],
+        }));
+      }
+      setEditAttachNotice(
+        rejected.length === 0
+          ? undefined
+          : rejected.map((item) => `${item.name}: ${item.reason}`).join('\n'),
+      );
+    },
+    [editDrafts, attachmentLimits, updateEditDraft],
   );
 
   /**
@@ -3765,6 +3837,8 @@ export function ChatPane({
                                   : new Map(previous).set(line.key, {
                                       text: line.text,
                                       attachments: [...(line.attachments ?? [])],
+                                      added: [],
+                                      lost: [],
                                     }),
                               );
                             }
@@ -3806,25 +3880,52 @@ export function ChatPane({
                           onChange={(text) =>
                             updateEditDraft(line.key, (current) => ({ ...current, text }))
                           }
-                          attachments={editAttachments.map((attachment) => ({
-                            id: attachment.id,
-                            name: attachment.name,
-                            sizeLabel: formatBytes(attachment.size),
-                          }))}
+                          attachments={[
+                            ...editAttachments.map((attachment) => ({
+                              id: attachment.id,
+                              name: attachment.name,
+                              sizeLabel: formatBytes(attachment.size),
+                            })),
+                            ...(editDrafts.get(line.key)?.added ?? []).map((item) => ({
+                              id: item.key,
+                              name: sizedOf(item).name,
+                              sizeLabel: formatBytes(sizedOf(item).size),
+                            })),
+                          ]}
                           onRemoveAttachment={(id) =>
                             updateEditDraft(line.key, (current) => ({
                               ...current,
                               attachments: current.attachments.filter(
                                 (attachment) => attachment.id !== id,
                               ),
+                              added: current.added.filter((item) => item.key !== id),
                             }))
+                          }
+                          onAttach={(files) => attachToEdit(line.key, files)}
+                          uploading={visibleUploading}
+                          notice={
+                            [
+                              editAttachNotice,
+                              (editDrafts.get(line.key)?.lost.length ?? 0) > 0
+                                ? `再読み込みで、足していたファイルが外れた（${editDrafts.get(line.key)?.lost.join('、')}）。必要なら足し直す`
+                                : undefined,
+                            ]
+                              .filter((part) => part !== undefined)
+                              .join('\n') || undefined
                           }
                           onConfirm={() => void confirmEdit(line)}
                           onCancel={() => {
                             // 閉じるだけで、書きかけは残す（#3565）。元のままなら残す理由が無い。
-                            if (!hasEditDraft(editDrafts.get(line.key), line)) {
+                            // 外れたファイルの案内（`lost`）は、見せたので閉じたら消す。
+                            const current = editDrafts.get(line.key);
+                            const settled =
+                              current === undefined ? undefined : { ...current, lost: [] };
+                            if (!hasEditDraft(settled, line)) {
                               dropEditDraft(line.key);
+                            } else if (settled !== undefined && current?.lost.length) {
+                              updateEditDraft(line.key, () => settled);
                             }
+                            setEditAttachNotice(undefined);
                             focusIntentRef.current = { kind: 'edit', lineKey: line.key };
                             setEditingKey(undefined);
                           }}

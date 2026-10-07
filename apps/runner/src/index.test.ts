@@ -10,6 +10,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { makeTempDirSync } from '../../../vitest.tmpdir.js';
 
 import {
+  childUserOf,
   RECLAIM_ENV_KEY,
   reclaimScanOf,
   socketOwnerOf,
@@ -294,5 +295,49 @@ describe('socketOwnerOf', () => {
     expect(
       socketOwnerOf({ ALTEROID_RUNNER_SOCKET_UID: '1000', ALTEROID_RUNNER_SOCKET_GID: '2000' }),
     ).toEqual({ uid: 1000, gid: 2000 });
+  });
+});
+
+describe('childUserOf（#3807）', () => {
+  // runner は root で動く前提。実行ユーザーに左右されないよう自身の UID は明示する。
+  const ROOT = 0;
+
+  it('未設定なら降ろさない', () => {
+    expect(childUserOf({}, ROOT)).toBeUndefined();
+    expect(childUserOf({ ALTEROID_RUNNER_CHILD_UID: '' }, ROOT)).toBeUndefined();
+  });
+
+  it('正しい値は通す。GID は UID に揃え、別々に置けばそのまま使う', () => {
+    expect(childUserOf({ ALTEROID_RUNNER_CHILD_UID: '1000' }, ROOT)).toEqual({
+      uid: 1000,
+      gid: 1000,
+    });
+    expect(
+      childUserOf(
+        {
+          ALTEROID_RUNNER_CHILD_UID: '1000',
+          ALTEROID_RUNNER_CHILD_GID: '2000',
+          ALTEROID_RUNNER_CHILD_HOME: '/home/child',
+        },
+        ROOT,
+      ),
+    ).toEqual({ uid: 1000, gid: 2000, home: '/home/child' });
+  });
+
+  it('runner 自身と同じ UID（0）は、境界にならないので断る', () => {
+    expect(() => childUserOf({ ALTEROID_RUNNER_CHILD_UID: '0' }, ROOT)).toThrow(/自身の UID/);
+    expect(() => childUserOf({ ALTEROID_RUNNER_CHILD_UID: '1000' }, 1000)).toThrow(/自身の UID/);
+  });
+
+  it.each(['abc', '-1', '1.5', '0x10', '1e3'])('UID が非負の整数でない（%s）なら断る', (value) => {
+    expect(() => childUserOf({ ALTEROID_RUNNER_CHILD_UID: value }, ROOT)).toThrow(
+      /ALTEROID_RUNNER_CHILD_UID は非負の整数/,
+    );
+  });
+
+  it.each(['abc', '-1', '1.5'])('GID が非負の整数でない（%s）なら断る', (value) => {
+    expect(() =>
+      childUserOf({ ALTEROID_RUNNER_CHILD_UID: '1000', ALTEROID_RUNNER_CHILD_GID: value }, ROOT),
+    ).toThrow(/ALTEROID_RUNNER_CHILD_GID は非負の整数/);
   });
 });
