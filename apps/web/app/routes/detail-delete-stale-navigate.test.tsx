@@ -298,7 +298,8 @@ describe('マネージャーの停止', () => {
 
     await router.navigate('/managers/mgr-b');
     const detail = screen.getByRole('region', { name: 'マネージャーの詳細' });
-    expect(await within(detail).findByRole('button', { name: '停止する' })).toBeTruthy();
+    // B の詳細が出た（A の詳細にも停止ボタンは在るので、B だけの作業ディレクトリで見分ける）。
+    expect(await within(detail).findByText('/work/b')).toBeTruthy();
     release();
 
     await settle(router, '/managers/mgr-b');
